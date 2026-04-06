@@ -59,7 +59,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const topic = await createTopic(projectId, {
+    const topic = await createTopic(project_id, {
       name,
       description,
       keywords,

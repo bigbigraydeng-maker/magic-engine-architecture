@@ -14,10 +14,12 @@ export interface SocialCaptionsV1 {
   facebook: {
     zh?: string;
     en?: string;
+    hashtags?: string;
   };
   xiaohongshu: {
     zh?: string;
     en?: string;
+    hashtags?: string;
   };
   suggested_image_keywords?: string[];
 }
@@ -29,7 +31,8 @@ export interface ContentTask {
   id: string;
   project_id: string;
   topic_id?: string;
-  status: 'pending' | 'generating' | 'completed' | 'failed';
+  source_id?: string;
+  status: 'pending' | 'generating' | 'publishing' | 'published' | 'completed' | 'failed';
   platforms: ('facebook' | 'xiaohongshu')[];
   generated_captions?: SocialCaptionsV1;
   image_url?: string;

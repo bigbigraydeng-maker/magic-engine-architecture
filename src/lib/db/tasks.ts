@@ -140,7 +140,7 @@ export async function updateTask(
   projectId: string,
   taskId: string,
   input: Partial<{
-    status: 'pending' | 'generating' | 'completed' | 'failed';
+    status: 'pending' | 'generating' | 'publishing' | 'published' | 'completed' | 'failed';
     generated_captions: any;
     image_url: string;
     scheduled_at: Date;

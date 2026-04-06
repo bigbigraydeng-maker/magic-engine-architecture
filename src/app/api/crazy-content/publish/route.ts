@@ -43,7 +43,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Check if task has generated content
-    if (!task.generated_captions || !task.generated_captions[platform]) {
+    const platformKey = platform as 'facebook' | 'xiaohongshu';
+    if (!task.generated_captions || !task.generated_captions[platformKey]) {
       return NextResponse.json(
         { success: false, error: { message: `No generated captions for ${platform}` } },
         { status: 400 }
@@ -51,7 +52,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Get the caption and hashtags for this platform
-    const platformCaptions = task.generated_captions[platform];
+    const platformCaptions = task.generated_captions[platformKey];
     const caption = platformCaptions.zh || platformCaptions.en || '';
     const hashtags = platformCaptions.hashtags?.split(' ') || [];
 
@@ -99,16 +100,22 @@ export async function POST(request: NextRequest) {
         });
       }
 
+      const responseData: any = {
+        task_id: task_id,
+        platform: platform,
+        status: 'published',
+        postId: result!.postId,
+        timestamp: new Date().toISOString(),
+      };
+
+      // Add instructions if available (Xiaohongshu only)
+      if ('instructions' in result!) {
+        responseData.instructions = result!.instructions;
+      }
+
       return NextResponse.json({
         success: true,
-        data: {
-          task_id: task_id,
-          platform: platform,
-          status: 'published',
-          postId: result.postId,
-          timestamp: new Date().toISOString(),
-          instructions: result.instructions,
-        },
+        data: responseData,
       });
     } catch (publishError) {
       // Mark task as failed
