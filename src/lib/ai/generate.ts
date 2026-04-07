@@ -136,48 +136,49 @@ function buildPrompt(input: GenerationInput): string {
 }
 
 /**
- * Parse generation response
+ * Parse generation response — robust parser with fallback
  */
 function parseGenerationResponse(content: string): { captions: string[]; hashtags: string[] } {
-  const captions: string[] = [];
   const allHashtags: Set<string> = new Set();
 
-  // Split by "Option" or numbered entries
-  const options = content.split(/(?:Option\s+\d+:|###|---)/i).filter(s => s.trim());
+  // Extract all hashtags from the entire content first
+  const hashtagMatches = content.match(/#[\w\u4e00-\u9fff\u3400-\u4dbf]+/g) || [];
+  hashtagMatches.forEach(tag => allHashtags.add(tag));
 
-  for (const option of options) {
-    // Extract caption
-    const captionMatch = option.match(/(?:Caption|主文案)[:\s]+([^\n]+(?:\n(?!(?:标签|Hashtags|Tags)))*)/i);
-    if (captionMatch) {
-      const caption = captionMatch[1]
-        .replace(/^[\s-:]+/, '') // Remove leading dashes/colons
-        .replace(/\n[\s-]/g, '\n') // Clean up lines
-        .trim();
-      if (caption.length > 0) {
-        captions.push(caption);
+  // Try to extract caption part (remove hashtag lines)
+  const captionLines: string[] = [];
+  const lines = content.split('\n');
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    // Skip metadata labels and pure hashtag lines
+    if (/^(Caption|主文案|标签|Hashtags?|Tags|Option\s*\d+)\s*[:：]/i.test(trimmed)) {
+      // If this is a caption label, grab everything after the colon
+      const afterColon = trimmed.replace(/^[^:：]+[:：]\s*/, '');
+      if (afterColon && !/^#/.test(afterColon)) {
+        captionLines.push(afterColon);
       }
+      continue;
     }
-
-    // Extract hashtags
-    const hashtagMatch = option.match(/(?:标签|Hashtags?|Tags)[:\s]+([^\n]+)/i);
-    if (hashtagMatch) {
-      const tags = hashtagMatch[1]
-        .split(/[\s,]/g)
-        .filter(tag => tag.startsWith('#') || tag.length > 0)
-        .map(tag => tag.startsWith('#') ? tag : `#${tag}`);
-      tags.forEach(tag => allHashtags.add(tag));
+    // Skip lines that are only hashtags
+    if (/^[#\s]+$/.test(trimmed) || /^(#[\w\u4e00-\u9fff]+\s*)+$/.test(trimmed)) {
+      continue;
+    }
+    if (trimmed) {
+      captionLines.push(trimmed);
     }
   }
 
-  // Fallback: if parsing failed, extract any hashtags from content
-  if (allHashtags.size === 0) {
-    const hashtagMatches = content.match(/#[\w\u4e00-\u9fa5]+/g) || [];
-    hashtagMatches.forEach(tag => allHashtags.add(tag));
+  // Build the caption: either parsed lines or the entire content as fallback
+  let caption = captionLines.join('\n').trim();
+  if (!caption || caption.length < 20) {
+    // Fallback: use original content minus hashtags at the end
+    caption = content.replace(/\n*(?:标签|Hashtags?|Tags)\s*[:：][\s\S]*$/i, '').trim();
   }
 
   return {
-    captions: captions.slice(0, 3), // Max 3 options
-    hashtags: Array.from(allHashtags).slice(0, 5), // Max 5 hashtags
+    captions: caption ? [caption] : [],
+    hashtags: Array.from(allHashtags).slice(0, 8),
   };
 }
 
