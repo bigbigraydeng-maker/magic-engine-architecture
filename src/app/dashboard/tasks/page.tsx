@@ -176,28 +176,39 @@ export default function TasksPage() {
               </div>
             )}
 
+            {selectedTask.image_url && (
+              <div>
+                <h4 className="text-sm font-semibold text-gray-300 mb-2">Image</h4>
+                <img src={selectedTask.image_url} alt="Content" className="rounded max-h-56 w-full object-cover" />
+                {selectedTask.image_metadata?.photographer && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    Photo by {selectedTask.image_metadata.photographer} on Unsplash
+                  </p>
+                )}
+              </div>
+            )}
+
             {selectedTask.generated_captions && (
               <div className="space-y-3">
                 <h4 className="text-sm font-semibold text-gray-300">Generated Captions</h4>
                 {selectedTask.generated_captions.facebook?.zh && (
                   <div className="p-3 bg-gray-700/50 rounded">
-                    <p className="text-xs text-blue-400 mb-1">Facebook (中文)</p>
-                    <p className="text-sm text-gray-200">{selectedTask.generated_captions.facebook.zh}</p>
+                    <p className="text-xs text-blue-400 mb-1">Facebook</p>
+                    <p className="text-sm text-gray-200 whitespace-pre-wrap">{selectedTask.generated_captions.facebook.zh}</p>
+                    {selectedTask.generated_captions.facebook.hashtags && (
+                      <p className="text-xs text-blue-300 mt-2">{selectedTask.generated_captions.facebook.hashtags}</p>
+                    )}
                   </div>
                 )}
                 {selectedTask.generated_captions.xiaohongshu?.zh && (
                   <div className="p-3 bg-gray-700/50 rounded">
-                    <p className="text-xs text-red-400 mb-1">小红书 (中文)</p>
-                    <p className="text-sm text-gray-200">{selectedTask.generated_captions.xiaohongshu.zh}</p>
+                    <p className="text-xs text-red-400 mb-1">小红书</p>
+                    <p className="text-sm text-gray-200 whitespace-pre-wrap">{selectedTask.generated_captions.xiaohongshu.zh}</p>
+                    {selectedTask.generated_captions.xiaohongshu.hashtags && (
+                      <p className="text-xs text-red-300 mt-2">{selectedTask.generated_captions.xiaohongshu.hashtags}</p>
+                    )}
                   </div>
                 )}
-              </div>
-            )}
-
-            {selectedTask.image_url && (
-              <div>
-                <h4 className="text-sm font-semibold text-gray-300 mb-2">Image</h4>
-                <img src={selectedTask.image_url} alt="Generated" className="rounded max-h-48 object-cover" />
               </div>
             )}
           </div>

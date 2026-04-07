@@ -41,6 +41,9 @@ export interface ContentTask {
     height?: number;
     alt_text?: string;
     source?: string;
+    photographer?: string;
+    photographer_url?: string;
+    unsplash_id?: string;
   };
   scheduled_at?: Date;
   published_at?: Date;

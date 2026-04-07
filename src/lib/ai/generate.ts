@@ -36,7 +36,7 @@ export async function generateCaptions(input: GenerationInput): Promise<Generati
 
   try {
     const response = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4o',
       messages: [
         {
           role: 'system',
@@ -47,16 +47,16 @@ export async function generateCaptions(input: GenerationInput): Promise<Generati
           content: prompt,
         },
       ],
-      temperature: 0.7,
-      max_tokens: 500,
+      temperature: 0.8,
+      max_tokens: 1200,
     });
 
     const content = response.choices[0].message.content || '';
     const { captions, hashtags } = parseGenerationResponse(content);
 
-    // Calculate cost: gpt-4o-mini is $0.15 per 1M input tokens, $0.60 per 1M output tokens
-    const inputCost = (response.usage?.prompt_tokens || 0) * 0.00000015;
-    const outputCost = (response.usage?.completion_tokens || 0) * 0.0000006;
+    // Calculate cost: gpt-4o is $2.50 per 1M input tokens, $10.00 per 1M output tokens
+    const inputCost = (response.usage?.prompt_tokens || 0) * 0.0000025;
+    const outputCost = (response.usage?.completion_tokens || 0) * 0.00001;
     const totalCost = inputCost + outputCost;
 
     return {
@@ -80,35 +80,39 @@ function getSystemPrompt(platform: Platform, language: Language): string {
   const languageName = language === 'zh' ? '简体中文' : 'English';
 
   if (platform === 'xiaohongshu') {
-    return `你是一位小红书内容创作专家。你的任务是为给定的主题创建引人入胜的小红书文案。
+    return `你是一位拥有50万粉丝的小红书头部创作者，擅长写出高互动、高收藏的爆款笔记。
 
-要求：
+核心要求：
 - 使用${languageName}
-- 文案要符合小红书的平台文化（分享、真诚、互动）
-- 包含3-5个相关的话题标签（#开头）
-- 字数控制在150-280字之间
-- 语言要亲切、自然、容易引起共鸣
-- 要提出有价值的观点或建议
-- 不要过度营销或硬广告
+- 标题要吸引眼球，使用数字、反问、悬念等技巧（如"3个月涨粉10万的秘密"）
+- 正文分段清晰，用emoji分隔段落，增加可读性
+- 开头用hook抓住读者（痛点共鸣/反常识/故事开头）
+- 中间提供干货价值（步骤、清单、对比、案例）
+- 结尾引导互动（提问、投票、"你觉得呢？"）
+- 字数控制在300-500字
+- 语气真诚、像朋友分享，不像广告
+- 包含5-8个精准话题标签
 
-输出格式：
-主文案：[文案内容]
+输出格式（严格遵守）：
+主文案：[完整文案，包含标题和正文]
 标签：[多个标签，用空格分隔]`;
   }
 
-  return `You are a Facebook content expert. Your task is to create engaging Facebook captions for the given topic.
+  return `You are a top-tier Facebook content strategist managing pages with 100K+ followers. You create viral, high-engagement posts.
 
-Requirements:
+Core Requirements:
 - Use ${languageName}
-- Write in a conversational, authentic tone
-- Include 3-5 relevant hashtags
-- Keep length between 100-200 characters
-- Make it shareable and engaging
-- Ask questions to encourage comments
-- No hard selling or aggressive promotion
+- Write a compelling hook in the first line (question, bold statement, or story opener)
+- Use storytelling or data-driven insights to provide real value
+- Include a clear call-to-action (comment, share, tag a friend)
+- Use line breaks and emojis strategically for readability
+- Length: 150-400 characters for the main caption
+- Tone should feel authentic and human, not corporate
+- Include 5-8 targeted hashtags mixing popular and niche tags
+- Add a conversation starter question at the end
 
-Output format:
-Caption: [caption content]
+Output format (follow strictly):
+Caption: [full caption with hook, body, and CTA]
 Hashtags: [space-separated hashtags]`;
 }
 
