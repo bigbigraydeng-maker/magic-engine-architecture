@@ -17,7 +17,7 @@ import { getPendingTasks, updateTask } from '@/lib/db/tasks';
 import { getTopics } from '@/lib/db/topics';
 import { logGeneration } from '@/lib/db/logs';
 import { generateCaptions, generateCaptionsMock } from '@/lib/ai/generate';
-import { supabase } from '@/lib/supabase';
+import { supabaseAdmin as supabase } from '@/lib/supabase';
 
 /**
  * Verify request is from Render background service or authorized source

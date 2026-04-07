@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Modal } from '@/components/ui/modal';
 import { Spinner } from '@/components/ui/spinner';
 import { ContentTask } from '@/types/crazy-content';
+import { triggerProcessing } from '@/lib/api/process';
 
 const STATUS_FILTERS = ['all', 'pending', 'generating', 'published', 'completed', 'failed'] as const;
 
@@ -18,9 +19,11 @@ export default function TasksPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [offset, setOffset] = useState(0);
   const [selectedTask, setSelectedTask] = useState<ContentTask | null>(null);
+  const [processing, setProcessing] = useState(false);
+  const [processResult, setProcessResult] = useState<string | null>(null);
   const limit = 10;
 
-  const { data, loading } = useApi(
+  const { data, loading, refetch } = useApi(
     () => fetchTasks(PROJECT_ID, {
       status: statusFilter === 'all' ? undefined : statusFilter,
       limit,
@@ -40,9 +43,35 @@ export default function TasksPage() {
   const tasks = data?.items || [];
   const total = data?.total || 0;
 
+  const handleProcess = async () => {
+    setProcessing(true);
+    setProcessResult(null);
+    try {
+      const result = await triggerProcessing();
+      setProcessResult(`Processed: ${result.processed}, Failed: ${result.failed}`);
+      refetch();
+    } catch (err) {
+      setProcessResult(`Error: ${err instanceof Error ? err.message : 'Unknown'}`);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-white">Tasks</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-white">Tasks</h1>
+        <div className="flex items-center gap-3">
+          {processResult && (
+            <span className={`text-xs ${processResult.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+              {processResult}
+            </span>
+          )}
+          <Button onClick={handleProcess} loading={processing} variant="secondary" size="sm">
+            Process Now
+          </Button>
+        </div>
+      </div>
 
       {/* Status Filters */}
       <div className="flex gap-2">
