@@ -2,39 +2,36 @@
 -- Created: 2026-04-07
 -- 8 new tables with RLS policies
 
--- 1. content_tasks - Content generation task queue
-CREATE TABLE IF NOT EXISTS public.content_tasks (
+-- 0. projects - Parent table (must exist first)
+CREATE TABLE IF NOT EXISTS public.projects (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id UUID NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
-  topic_id UUID REFERENCES public.content_topics(id) ON DELETE SET NULL,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'generating', 'completed', 'failed')),
-  platforms TEXT[] NOT NULL DEFAULT ARRAY['facebook', 'xiaohongshu'],
-  generated_captions JSONB,
-  image_url TEXT,
-  image_metadata JSONB,
-  scheduled_at TIMESTAMPTZ,
-  published_at TIMESTAMPTZ,
-  error_message TEXT,
+  user_id UUID NOT NULL,
+  name TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_content_tasks_project_status ON public.content_tasks(project_id, status);
-CREATE INDEX idx_content_tasks_scheduled ON public.content_tasks(scheduled_at) WHERE status = 'pending';
-ALTER TABLE public.content_tasks ENABLE ROW LEVEL SECURITY;
+CREATE INDEX idx_projects_user_id ON public.projects(user_id);
+ALTER TABLE public.projects ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "content_tasks_owner_all" ON public.content_tasks FOR ALL
+CREATE POLICY "projects_owner_read" ON public.projects FOR SELECT
   TO authenticated
-  USING (EXISTS (
-    SELECT 1 FROM public.projects p
-    WHERE p.id = content_tasks.project_id AND p.user_id = auth.uid()
-  ))
-  WITH CHECK (EXISTS (
-    SELECT 1 FROM public.projects p
-    WHERE p.id = content_tasks.project_id AND p.user_id = auth.uid()
-  ));
+  USING (user_id = auth.uid());
 
--- 2. content_topics - Topic library for content generation
+CREATE POLICY "projects_owner_insert" ON public.projects FOR INSERT
+  TO authenticated
+  WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "projects_owner_update" ON public.projects FOR UPDATE
+  TO authenticated
+  USING (user_id = auth.uid())
+  WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "projects_owner_delete" ON public.projects FOR DELETE
+  TO authenticated
+  USING (user_id = auth.uid());
+
+-- 1. content_topics - Topic library for content generation (must be before content_tasks)
 CREATE TABLE IF NOT EXISTS public.content_topics (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
@@ -61,6 +58,39 @@ CREATE POLICY "content_topics_owner_all" ON public.content_topics FOR ALL
   WITH CHECK (EXISTS (
     SELECT 1 FROM public.projects p
     WHERE p.id = content_topics.project_id AND p.user_id = auth.uid()
+  ));
+
+-- 2. content_tasks - Content generation task queue (now content_topics exists)
+CREATE TABLE IF NOT EXISTS public.content_tasks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id UUID NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
+  topic_id UUID REFERENCES public.content_topics(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'generating', 'publishing', 'published', 'completed', 'failed')),
+  platforms TEXT[] NOT NULL DEFAULT ARRAY['facebook', 'xiaohongshu'],
+  generated_captions JSONB,
+  image_url TEXT,
+  image_metadata JSONB,
+  source_id UUID,
+  scheduled_at TIMESTAMPTZ,
+  published_at TIMESTAMPTZ,
+  error_message TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_content_tasks_project_status ON public.content_tasks(project_id, status);
+CREATE INDEX idx_content_tasks_scheduled ON public.content_tasks(scheduled_at) WHERE status = 'pending';
+ALTER TABLE public.content_tasks ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "content_tasks_owner_all" ON public.content_tasks FOR ALL
+  TO authenticated
+  USING (EXISTS (
+    SELECT 1 FROM public.projects p
+    WHERE p.id = content_tasks.project_id AND p.user_id = auth.uid()
+  ))
+  WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects p
+    WHERE p.id = content_tasks.project_id AND p.user_id = auth.uid()
   ));
 
 -- 3. social_sources - Connected social media accounts
