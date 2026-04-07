@@ -15,6 +15,48 @@ import { triggerProcessing } from '@/lib/api/process';
 
 const STATUS_FILTERS = ['all', 'pending', 'generating', 'published', 'completed', 'failed'] as const;
 
+/**
+ * Split a multi-caption string into individual captions.
+ * Detects patterns like "主文案1:", "主文案2:", "Caption 1:", "Option 1:", etc.
+ */
+function splitCaptions(text: string): string[] {
+  // Try splitting by common multi-caption markers
+  const markers = /(?:^|\n)\s*(?:主文案|Caption|Option)\s*\d+\s*[:：]/gi;
+  const parts: string[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  // Collect all marker positions
+  const positions: number[] = [];
+  const regex = new RegExp(markers.source, markers.flags);
+  while ((match = regex.exec(text)) !== null) {
+    positions.push(match.index);
+  }
+
+  if (positions.length >= 2) {
+    // Split by marker positions
+    for (let i = 0; i < positions.length; i++) {
+      const start = positions[i];
+      const end = i + 1 < positions.length ? positions[i + 1] : text.length;
+      const segment = text.slice(start, end).trim();
+      if (segment) parts.push(segment);
+    }
+    // If there was content before the first marker, prepend it
+    if (positions[0] > 0) {
+      const prefix = text.slice(0, positions[0]).trim();
+      if (prefix) parts.unshift(prefix);
+    }
+    return parts;
+  }
+
+  // Fallback: try splitting by numbered lines like "1." "2." "3." at line start
+  const numbered = text.split(/\n(?=\d+[\.\)]\s)/);
+  if (numbered.length >= 2) return numbered.map(s => s.trim()).filter(Boolean);
+
+  // No splitting possible, return as single caption
+  return [text];
+}
+
 export default function TasksPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [offset, setOffset] = useState(0);
@@ -176,39 +218,88 @@ export default function TasksPage() {
               </div>
             )}
 
+            {/* Unsplash Image */}
             {selectedTask.image_url && (
               <div>
-                <h4 className="text-sm font-semibold text-gray-300 mb-2">Image</h4>
-                <img src={selectedTask.image_url} alt="Content" className="rounded max-h-56 w-full object-cover" />
+                <h4 className="text-sm font-semibold text-gray-300 mb-2">📷 配图</h4>
+                <img
+                  src={selectedTask.image_url}
+                  alt="Content"
+                  className="rounded-lg max-h-64 w-full object-cover border border-gray-600"
+                />
                 {selectedTask.image_metadata?.photographer && (
                   <p className="text-xs text-gray-500 mt-1">
-                    Photo by {selectedTask.image_metadata.photographer} on Unsplash
+                    Photo by{' '}
+                    <a
+                      href={selectedTask.image_metadata.photographer_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-400 hover:underline"
+                    >
+                      {selectedTask.image_metadata.photographer}
+                    </a>
+                    {' '}on Unsplash
                   </p>
                 )}
               </div>
             )}
 
+            {/* Generated Captions — split into individual cards */}
             {selectedTask.generated_captions && (
-              <div className="space-y-3">
-                <h4 className="text-sm font-semibold text-gray-300">Generated Captions</h4>
-                {selectedTask.generated_captions.facebook?.zh && (
-                  <div className="p-3 bg-gray-700/50 rounded">
-                    <p className="text-xs text-blue-400 mb-1">Facebook</p>
-                    <p className="text-sm text-gray-200 whitespace-pre-wrap">{selectedTask.generated_captions.facebook.zh}</p>
-                    {selectedTask.generated_captions.facebook.hashtags && (
-                      <p className="text-xs text-blue-300 mt-2">{selectedTask.generated_captions.facebook.hashtags}</p>
-                    )}
-                  </div>
-                )}
-                {selectedTask.generated_captions.xiaohongshu?.zh && (
-                  <div className="p-3 bg-gray-700/50 rounded">
-                    <p className="text-xs text-red-400 mb-1">小红书</p>
-                    <p className="text-sm text-gray-200 whitespace-pre-wrap">{selectedTask.generated_captions.xiaohongshu.zh}</p>
-                    {selectedTask.generated_captions.xiaohongshu.hashtags && (
-                      <p className="text-xs text-red-300 mt-2">{selectedTask.generated_captions.xiaohongshu.hashtags}</p>
-                    )}
-                  </div>
-                )}
+              <div className="space-y-4">
+                {/* Facebook Captions */}
+                {selectedTask.generated_captions.facebook?.zh && (() => {
+                  const captions = splitCaptions(selectedTask.generated_captions.facebook!.zh!);
+                  return (
+                    <>
+                      <h4 className="text-sm font-semibold text-blue-400 flex items-center gap-1">
+                        <span>📘</span> Facebook · {captions.length} 条文案
+                      </h4>
+                      {captions.map((caption, i) => (
+                        <div key={i} className="p-4 bg-gradient-to-br from-blue-900/20 to-gray-800/50 border border-blue-800/30 rounded-lg">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs font-medium text-blue-300 bg-blue-900/40 px-2 py-0.5 rounded">
+                              文案 {i + 1}
+                            </span>
+                          </div>
+                          <p className="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">{caption}</p>
+                        </div>
+                      ))}
+                      {selectedTask.generated_captions.facebook!.hashtags && (
+                        <div className="px-3 py-2 bg-blue-900/10 rounded border border-blue-800/20">
+                          <p className="text-xs text-blue-300">{selectedTask.generated_captions.facebook!.hashtags}</p>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
+
+                {/* Xiaohongshu Captions */}
+                {selectedTask.generated_captions.xiaohongshu?.zh && (() => {
+                  const captions = splitCaptions(selectedTask.generated_captions.xiaohongshu!.zh!);
+                  return (
+                    <>
+                      <h4 className="text-sm font-semibold text-red-400 flex items-center gap-1">
+                        <span>📕</span> 小红书 · {captions.length} 条文案
+                      </h4>
+                      {captions.map((caption, i) => (
+                        <div key={i} className="p-4 bg-gradient-to-br from-red-900/20 to-gray-800/50 border border-red-800/30 rounded-lg">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-xs font-medium text-red-300 bg-red-900/40 px-2 py-0.5 rounded">
+                              文案 {i + 1}
+                            </span>
+                          </div>
+                          <p className="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">{caption}</p>
+                        </div>
+                      ))}
+                      {selectedTask.generated_captions.xiaohongshu!.hashtags && (
+                        <div className="px-3 py-2 bg-red-900/10 rounded border border-red-800/20">
+                          <p className="text-xs text-red-300">{selectedTask.generated_captions.xiaohongshu!.hashtags}</p>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             )}
           </div>
