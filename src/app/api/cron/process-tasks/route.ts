@@ -18,7 +18,6 @@ import { getTopics } from '@/lib/db/topics';
 import { logGeneration } from '@/lib/db/logs';
 import { generateCaptions, generateCaptionsMock } from '@/lib/ai/generate';
 import { supabaseAdmin as supabase } from '@/lib/supabase';
-import { searchImagesForTopic } from '@/lib/images/unsplash';
 
 /**
  * Verify request is from Render background service or authorized source
@@ -161,35 +160,10 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Auto-search Unsplash images for the topic
-        let imageUrl: string | undefined;
-        let imageMetadata: Record<string, string> | undefined;
-        try {
-          const images = await searchImagesForTopic(
-            topic.name,
-            topic.keywords,
-            task.platforms[0] as 'facebook' | 'xiaohongshu'
-          );
-          if (images.length > 0) {
-            imageUrl = images[0].url;
-            imageMetadata = {
-              source: 'unsplash',
-              photographer: images[0].photographer,
-              photographer_url: images[0].photographerUrl,
-              unsplash_id: images[0].id,
-            };
-            console.log(`[CRON] Found Unsplash image for task ${task.id}: ${images[0].id}`);
-          }
-        } catch (imgError) {
-          console.warn(`[CRON] Unsplash search failed for task ${task.id}:`, imgError);
-        }
-
-        // Update task with generated content + image
+        // Update task with generated content (image selection is done by user in UI)
         await updateTask(task.project_id, task.id, {
           status: 'completed',
           generated_captions: generatedCaptions,
-          ...(imageUrl ? { image_url: imageUrl } : {}),
-          ...(imageMetadata ? { image_metadata: imageMetadata } : {}),
         });
 
         // Log the generation

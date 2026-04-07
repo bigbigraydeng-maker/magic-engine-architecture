@@ -8,9 +8,16 @@ interface ModalProps {
   title: string;
   children: React.ReactNode;
   footer?: React.ReactNode;
+  size?: 'md' | 'lg' | 'xl';
 }
 
-export function Modal({ open, onClose, title, children, footer }: ModalProps) {
+const SIZE_MAP = {
+  md: 'max-w-lg',
+  lg: 'max-w-2xl',
+  xl: 'max-w-4xl',
+};
+
+export function Modal({ open, onClose, title, children, footer, size = 'md' }: ModalProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -31,8 +38,8 @@ export function Modal({ open, onClose, title, children, footer }: ModalProps) {
         if (e.target === overlayRef.current) onClose();
       }}
     >
-      <div className="w-full max-w-lg bg-gray-800 border border-gray-700 rounded-lg shadow-xl">
-        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-700">
+      <div className={`w-full ${SIZE_MAP[size]} bg-gray-800 border border-gray-700 rounded-lg shadow-xl max-h-[90vh] flex flex-col`}>
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-700 shrink-0">
           <h2 className="text-base font-semibold text-gray-200">{title}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-200">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -40,7 +47,7 @@ export function Modal({ open, onClose, title, children, footer }: ModalProps) {
             </svg>
           </button>
         </div>
-        <div className="px-5 py-4">{children}</div>
+        <div className="px-5 py-4 overflow-y-auto">{children}</div>
         {footer && (
           <div className="flex justify-end gap-2 px-5 py-3 border-t border-gray-700">{footer}</div>
         )}
