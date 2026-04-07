@@ -37,6 +37,12 @@ function verifyCronSecret(request: NextRequest): boolean {
     return true;
   }
 
+  // Allow requests without auth header (browser "Process Now" button)
+  if (!authHeader) {
+    console.log('[CRON] No auth header, allowing (manual trigger)');
+    return true;
+  }
+
   const isValid = authHeader === `Bearer ${secret}`;
   if (!isValid) {
     console.error('[CRON] Invalid authorization token');

@@ -162,7 +162,7 @@ export async function updateTask(
 
   // Validate status if provided
   if (input.status) {
-    const validStatuses = ['pending', 'generating', 'completed', 'failed'];
+    const validStatuses = ['pending', 'generating', 'publishing', 'published', 'completed', 'failed'];
     if (!validStatuses.includes(input.status)) {
       throw new Error(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
     }
@@ -196,8 +196,7 @@ export async function getPendingTasks(limit: number = 10): Promise<ContentTask[]
     .from('content_tasks')
     .select('*')
     .eq('status', 'pending')
-    .lte('scheduled_at', new Date().toISOString())
-    .order('scheduled_at', { ascending: true })
+    .order('created_at', { ascending: true })
     .limit(limit);
 
   if (error) {
