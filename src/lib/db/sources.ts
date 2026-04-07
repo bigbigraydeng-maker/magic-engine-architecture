@@ -2,7 +2,7 @@
  * Social Sources Database Operations
  */
 
-import { supabase, verifyProjectOwnership } from '@/lib/supabase';
+import { supabaseAdmin as supabase, verifyProjectOwnership } from '@/lib/supabase';
 import { SocialSource } from '@/types/crazy-content';
 
 /**

@@ -2,7 +2,7 @@
  * Content Topics Database Operations
  */
 
-import { supabase, verifyProjectOwnership } from '@/lib/supabase';
+import { supabaseAdmin as supabase, verifyProjectOwnership } from '@/lib/supabase';
 import { ContentTopic } from '@/types/crazy-content';
 
 /**

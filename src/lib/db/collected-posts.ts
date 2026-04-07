@@ -2,7 +2,7 @@
  * Collected Posts Database Operations
  */
 
-import { supabase, verifyProjectOwnership } from '@/lib/supabase';
+import { supabaseAdmin as supabase, verifyProjectOwnership } from '@/lib/supabase';
 import { CollectedPost, EngagementMetrics } from '@/types/crazy-content';
 
 /**

@@ -2,7 +2,7 @@
  * Generation Logs Database Operations
  */
 
-import { supabase, verifyProjectOwnership } from '@/lib/supabase';
+import { supabaseAdmin as supabase, verifyProjectOwnership } from '@/lib/supabase';
 import { GenerationLog } from '@/types/crazy-content';
 
 /**

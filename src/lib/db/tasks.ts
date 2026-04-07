@@ -2,7 +2,7 @@
  * Content Tasks Database Operations
  */
 
-import { supabase, verifyProjectOwnership } from '@/lib/supabase';
+import { supabaseAdmin as supabase, verifyProjectOwnership } from '@/lib/supabase';
 import { ContentTask } from '@/types/crazy-content';
 
 /**
