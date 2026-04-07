@@ -8,9 +8,22 @@
  */
 
 const https = require('https');
+const http = require('http');
 
 const PROCESS_INTERVAL = 5 * 60 * 1000; // 5 minutes
-const API_ENDPOINT = process.env.RENDER_EXTERNAL_URL || 'http://localhost:3000';
+
+// Normalize the endpoint URL - ensure it has a protocol
+function getEndpoint() {
+  let base = process.env.RENDER_EXTERNAL_URL || 'http://localhost:3000';
+  // If no protocol, add https://
+  if (!base.startsWith('http://') && !base.startsWith('https://')) {
+    base = `https://${base}`;
+  }
+  // Remove trailing slash
+  return base.replace(/\/$/, '');
+}
+
+const API_ENDPOINT = getEndpoint();
 const PROCESS_TASKS_ENDPOINT = `${API_ENDPOINT}/api/cron/process-tasks`;
 const PROCESS_TASKS_SECRET = process.env.PROCESS_TASKS_SECRET || process.env.CRON_SECRET || '';
 
@@ -30,7 +43,8 @@ async function processTasks() {
       },
     };
 
-    const req = https.request(PROCESS_TASKS_ENDPOINT, options, (res) => {
+    const client = PROCESS_TASKS_ENDPOINT.startsWith('https') ? https : http;
+    const req = client.request(PROCESS_TASKS_ENDPOINT, options, (res) => {
       let data = '';
 
       res.on('data', (chunk) => {
