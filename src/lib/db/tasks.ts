@@ -143,6 +143,7 @@ export async function updateTask(
     status: 'pending' | 'generating' | 'publishing' | 'published' | 'completed' | 'failed';
     generated_captions: any;
     image_url: string;
+    image_metadata: Record<string, string>;
     scheduled_at: Date;
     published_at: Date;
     error_message: string;

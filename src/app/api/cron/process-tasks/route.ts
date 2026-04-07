@@ -189,6 +189,7 @@ export async function POST(request: NextRequest) {
           status: 'completed',
           generated_captions: generatedCaptions,
           ...(imageUrl ? { image_url: imageUrl } : {}),
+          ...(imageMetadata ? { image_metadata: imageMetadata } : {}),
         });
 
         // Log the generation
