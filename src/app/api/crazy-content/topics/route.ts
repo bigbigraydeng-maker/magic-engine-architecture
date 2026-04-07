@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getTopics, createTopic } from '@/lib/db/topics';
-import { handleSupabaseError } from '@/lib/supabase';
+import { handleSupabaseError, ensureDefaultProject } from '@/lib/supabase';
 
 export async function GET(request: NextRequest) {
   try {
@@ -19,6 +19,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    await ensureDefaultProject(projectId);
     const items = await getTopics(projectId);
 
     return NextResponse.json({
@@ -59,6 +60,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    await ensureDefaultProject(project_id);
     const topic = await createTopic(project_id, {
       name,
       description,

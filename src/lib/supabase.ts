@@ -33,29 +33,26 @@ export function handleSupabaseError(error: unknown): { message: string; code?: s
 }
 
 /**
- * Verify project exists, auto-create if needed (server-side, no auth required)
+ * Verify project access (placeholder - no auth system yet, always allows)
+ * TODO: Add proper auth when user login is implemented
  */
-export async function verifyProjectOwnership(projectId: string): Promise<boolean> {
-  const { data, error } = await supabaseAdmin
+export async function verifyProjectOwnership(_projectId: string): Promise<boolean> {
+  return true;
+}
+
+/**
+ * Ensure default project exists in the database
+ */
+export async function ensureDefaultProject(projectId: string): Promise<void> {
+  const { error } = await supabaseAdmin
     .from('projects')
-    .select('id')
-    .eq('id', projectId)
-    .single();
+    .upsert([{
+      id: projectId,
+      user_id: '00000000-0000-0000-0000-000000000000',
+      name: 'Default Project',
+    }], { onConflict: 'id' });
 
-  if (!error && data) return true;
-
-  // Auto-create project if it doesn't exist (for initial setup)
-  if (error?.code === 'PGRST116') {
-    const { error: insertError } = await supabaseAdmin
-      .from('projects')
-      .insert([{
-        id: projectId,
-        user_id: '00000000-0000-0000-0000-000000000000',
-        name: 'Default Project',
-      }]);
-
-    return !insertError;
+  if (error) {
+    console.warn('Failed to ensure default project:', error.message);
   }
-
-  return false;
 }
