@@ -35,7 +35,7 @@ async function pollJobStatus(jobId: string, maxAttempts = 18): Promise<Record<st
     const data = await res.json()
     lastStatus = data.status ?? 'no_status'
     console.log(`[publer] job ${jobId} attempt ${i + 1}: status=${lastStatus}`, JSON.stringify(data).slice(0, 200))
-    if (data.status === 'completed' || data.status === 'success' || data.status === 'done') return data
+    if (data.status === 'complete' || data.status === 'completed' || data.status === 'success' || data.status === 'done') return data
     if (data.status === 'failed' || data.status === 'error') throw new Error(`Publer job failed: ${JSON.stringify(data)}`)
     // 如果 data 中已有媒体 ID 则视为完成
     if (data.data?.id || data.id) return data
