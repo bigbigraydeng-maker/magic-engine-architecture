@@ -1,8 +1,8 @@
 // Seedance 2.0 Video Generation Client
-// Via Atlas Cloud API — $0.022/秒，Fast mode
+// Via Atlas Cloud API — $0.022/秒，Fast mode (text-to-video)
 // 异步生成，需轮询状态
 
-const ATLAS_BASE = 'https://api.atlascloud.ai/v1'
+const ATLAS_BASE = 'https://api.atlascloud.ai/api/v1'
 const API_KEY = process.env.ATLAS_CLOUD_API_KEY!
 
 export interface VideoJobResult {
@@ -27,18 +27,18 @@ export async function submitVideoGeneration(params: {
     aspect_ratio = '9:16',
   } = params
 
-  const res = await fetch(`${ATLAS_BASE}/video/generate`, {
+  const res = await fetch(`${ATLAS_BASE}/model/generateVideo`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${API_KEY}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'seedance-2.0-fast',
+      model: 'bytedance/seedance-2.0-fast/text-to-video',
       prompt,
       duration,
       resolution,
-      aspect_ratio,
+      ratio: aspect_ratio,
     }),
   })
 
@@ -48,30 +48,32 @@ export async function submitVideoGeneration(params: {
   }
 
   const data = await res.json()
-  return { job_id: data.job_id || data.id }
+  return { job_id: data.data?.id ?? data.id }
 }
 
 export async function checkVideoStatus(jobId: string): Promise<VideoJobResult> {
-  const res = await fetch(`${ATLAS_BASE}/video/status/${jobId}`, {
+  const res = await fetch(`${ATLAS_BASE}/model/prediction/${jobId}`, {
     headers: { 'Authorization': `Bearer ${API_KEY}` },
   })
 
   if (!res.ok) throw new Error(`Seedance status error: ${res.status}`)
 
   const data = await res.json()
+  const d = data.data ?? data
 
   return {
     job_id: jobId,
-    status: mapStatus(data.status),
-    video_url: data.output_url || data.video_url,
-    duration_seconds: data.duration,
-    cost_usd: data.duration ? data.duration * 0.022 : undefined,
-    error: data.error,
+    status: mapStatus(d?.status),
+    video_url: d?.outputs?.[0],
+    duration_seconds: d?.duration,
+    cost_usd: d?.duration ? d.duration * 0.022 : undefined,
+    error: d?.error || undefined,
   }
 }
 
-function mapStatus(raw: string): VideoJobResult['status'] {
+function mapStatus(raw?: string): VideoJobResult['status'] {
   const map: Record<string, VideoJobResult['status']> = {
+    created: 'pending',
     queued: 'pending',
     processing: 'processing',
     running: 'processing',
@@ -80,5 +82,5 @@ function mapStatus(raw: string): VideoJobResult['status'] {
     failed: 'failed',
     error: 'failed',
   }
-  return map[raw] || 'pending'
+  return map[raw || ''] || 'pending'
 }
