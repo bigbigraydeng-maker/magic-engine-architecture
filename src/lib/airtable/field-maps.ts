@@ -20,16 +20,16 @@ export const KEYWORD_TO_AIRTABLE = (kw: Keyword): Record<string, unknown> => ({
 })
 
 export const POST_TO_AIRTABLE = (post: ContentPost): Record<string, unknown> => ({
-  'Headline_EN':        post.title,
-  'Status':             'Draft',
-  'Platform':           post.platforms?.[0]
-                          ? capitalize(post.platforms[0])
-                          : 'Facebook',
-  'Caption_EN':         post.caption || '',
-  'Hashtags_IG':        post.hashtags?.join(' ') || '',
-  'LoveArt_Prompt_EN':  post.visual_brief || '',
-  'Video_Text_Overlay': post.script || '',
-  'URL_Organic_UTM':    post.source_video_url || '',
+  'Title':        post.title,
+  'Status':       'Draft',
+  'Route':        formatRoute(post.route),
+  'Platforms':    post.platforms?.join(', '),
+  'Script':       post.script || '',
+  'Caption':      post.caption || '',
+  'Hashtags':     post.hashtags?.join(' ') || '',
+  'Visual Brief': post.visual_brief || '',
+  'Source URL':   post.source_video_url || '',
+  'Supabase ID':  post.id,
 })
 
 function capitalize(s?: string): string {
@@ -46,3 +46,11 @@ function formatSource(s: string): string {
   return map[s] ?? s
 }
 
+function formatRoute(s: string): string {
+  const map: Record<string, string> = {
+    route_a: 'Route A - SEO Keywords',
+    route_b: 'Route B - Viral Rewrite',
+    route_c: 'Route C - Master Brief',
+  }
+  return map[s] ?? s
+}
