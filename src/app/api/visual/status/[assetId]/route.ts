@@ -4,6 +4,7 @@ import { checkImageStatus } from '@/lib/visual/wavespeed'
 import { checkVideoStatus } from '@/lib/visual/seedance'
 import { checkAvatarStatus } from '@/lib/visual/heygen'
 import { uploadFromUrl } from '@/lib/visual/storage'
+import { updateRecord } from '@/lib/airtable/client'
 
 type ProviderResult = {
   status: string
@@ -72,6 +73,32 @@ export async function GET(
         .single()
 
       if (error) throw error
+
+      // ── 回写 Airtable Content Calendar ──────────────────────────────
+      if (updated && asset.post_id) {
+        try {
+          const { data: post } = await supabaseAdmin
+            .from('content_posts')
+            .select('airtable_record_id, clients(airtable_base_id)')
+            .eq('id', asset.post_id)
+            .single()
+
+          const airtableRecordId = post?.airtable_record_id
+          const baseId = (post?.clients as Record<string, string> | null)?.airtable_base_id
+
+          if (airtableRecordId && baseId) {
+            const fields: Record<string, unknown> = { 'Visual_Status': 'Ready' }
+            if (asset.asset_type === 'image') fields['Image_URL'] = storage_url
+            else if (asset.asset_type === 'video' || asset.asset_type === 'avatar') fields['Video_URL'] = storage_url
+
+            await updateRecord(baseId, 'Content Calendar', airtableRecordId, fields)
+          }
+        } catch (atErr) {
+          // 非致命错误 — 记录日志但不阻断主响应
+          console.error('[visual/status] Airtable writeback failed:', atErr)
+        }
+      }
+      // ─────────────────────────────────────────────────────────────────
 
       return NextResponse.json({ success: true, asset: updated, just_completed: true })
     }

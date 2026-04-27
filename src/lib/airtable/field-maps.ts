@@ -15,6 +15,7 @@ export const KEYWORD_TO_AIRTABLE = (kw: Keyword): Record<string, unknown> => ({
   'Competitor Source':     kw.competitor_source || '',
   'Recommended Page Type': capitalize(kw.recommended_page_type),
   'Supabase ID':           kw.id,
+  'Client_Supabase_ID':    kw.client_id,   // Make.com 自动生成内容时使用
   'Created At':            kw.created_at?.split('T')[0],
 })
 

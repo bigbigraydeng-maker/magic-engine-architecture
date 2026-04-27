@@ -4,9 +4,9 @@ import { createPublerPost } from '@/lib/publer/client'
 
 export async function POST(req: NextRequest) {
   try {
-    const { post_id, client_id, schedule_at } = await req.json()
-    if (!post_id || !client_id) {
-      return NextResponse.json({ success: false, error: 'post_id and client_id required' }, { status: 400 })
+    const { post_id, client_id: requestClientId, schedule_at } = await req.json()
+    if (!post_id) {
+      return NextResponse.json({ success: false, error: 'post_id required' }, { status: 400 })
     }
 
     const { data: post } = await supabaseAdmin
@@ -20,6 +20,12 @@ export async function POST(req: NextRequest) {
     }
     if (post.status !== 'approved') {
       return NextResponse.json({ success: false, error: 'Post not approved' }, { status: 400 })
+    }
+
+    // client_id: 优先用请求传入的，否则从帖子自身的 client_id 取
+    const client_id = requestClientId || post.client_id
+    if (!client_id) {
+      return NextResponse.json({ success: false, error: 'client_id not found' }, { status: 400 })
     }
 
     // 取最新 ready 素材（is_selected 优先）
