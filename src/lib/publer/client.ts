@@ -26,16 +26,16 @@ export async function getAccounts(): Promise<PublerAccount[]> {
   return data.accounts ?? data ?? []
 }
 
-async function pollJobStatus(jobId: string, maxAttempts = 12): Promise<Record<string, unknown>> {
+async function pollJobStatus(jobId: string, maxAttempts = 18): Promise<Record<string, unknown>> {
   for (let i = 0; i < maxAttempts; i++) {
-    await new Promise(r => setTimeout(r, 3000))
+    await new Promise(r => setTimeout(r, 5000))
     const res = await fetch(`${PUBLER_BASE}/job_status/${jobId}`, { headers: publerHeaders() })
     if (!res.ok) continue
     const data = await res.json()
     if (data.status === 'completed') return data
     if (data.status === 'failed') throw new Error(`Publer job failed: ${JSON.stringify(data)}`)
   }
-  throw new Error('Publer job timed out after 36s')
+  throw new Error('Publer job timed out after 90s')
 }
 
 export async function uploadMediaFromUrl(url: string, name: string): Promise<string> {
