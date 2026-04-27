@@ -21,6 +21,21 @@ interface VisualAsset {
   cost_usd?: number;
   created_at: string;
   prompt_used?: string;
+  post_id?: string;
+}
+
+interface PublerAccount {
+  id: string;
+  provider: string;
+  name: string;
+  picture?: string;
+}
+
+interface PublerDraft {
+  asset: VisualAsset;
+  caption: string;
+  hashtags: string;
+  accounts: PublerAccount[];
 }
 
 // HeyGen is available if key is non-empty; server-side only, so default false on client
@@ -52,6 +67,16 @@ export default function VisualsPage() {
   const [vidGenerating, setVidGenerating] = useState(false);
   const [vidError, setVidError] = useState('');
   const [vidResult, setVidResult] = useState<{ asset_id: string; status?: string; url?: string } | null>(null);
+
+  // Publer modal
+  const [publerDraft, setPublerDraft] = useState<PublerDraft | null>(null);
+  const [publerAccountId, setPublerAccountId] = useState('');
+  const [publerScheduledAt, setPublerScheduledAt] = useState('');
+  const [publerCaption, setPublerCaption] = useState('');
+  const [publerSending, setPublerSending] = useState(false);
+  const [publerError, setPublerError] = useState('');
+  const [publerSuccess, setPublerSuccess] = useState('');
+  const [publerLoading, setPublerLoading] = useState(false);
 
   const heygenConfigured = HEYGEN_KEY;
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
@@ -186,6 +211,58 @@ export default function VisualsPage() {
     } catch (err: unknown) {
       setVidError(err instanceof Error ? err.message : 'Unknown error');
       setVidGenerating(false);
+    }
+  };
+
+  const openPublerModal = async (asset: VisualAsset) => {
+    setPublerLoading(true);
+    setPublerError('');
+    setPublerSuccess('');
+    setPublerDraft(null);
+    try {
+      const res = await fetch(`/api/publer/draft/${asset.id}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Failed to load Publer data');
+      setPublerDraft({ asset, caption: json.caption ?? '', hashtags: json.hashtags ?? '', accounts: json.accounts ?? [] });
+      const combined = [json.caption, json.hashtags].filter(Boolean).join('\n\n');
+      setPublerCaption(combined);
+      setPublerAccountId(json.accounts?.[0]?.id ?? '');
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(9, 0, 0, 0);
+      const offset = tomorrow.getTimezoneOffset();
+      const local = new Date(tomorrow.getTime() - offset * 60000);
+      setPublerScheduledAt(local.toISOString().slice(0, 16));
+    } catch (err: unknown) {
+      setPublerError(err instanceof Error ? err.message : 'Failed to load');
+      setPublerDraft({ asset, caption: '', hashtags: '', accounts: [] });
+    } finally {
+      setPublerLoading(false);
+    }
+  };
+
+  const handlePublerSubmit = async () => {
+    if (!publerDraft || !publerAccountId || !publerScheduledAt) return;
+    setPublerSending(true);
+    setPublerError('');
+    try {
+      const res = await fetch('/api/publer/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asset_id: publerDraft.asset.id,
+          account_id: publerAccountId,
+          scheduled_at: new Date(publerScheduledAt).toISOString(),
+          caption: publerCaption,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Failed');
+      setPublerSuccess(`Scheduled! Publer job: ${json.job_id}`);
+    } catch (err: unknown) {
+      setPublerError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setPublerSending(false);
     }
   };
 
@@ -476,20 +553,30 @@ export default function VisualsPage() {
                       {new Date(asset.created_at).toLocaleString()}
                     </td>
                     <td className="px-5 py-3">
-                      {asset.generation_status === 'ready' && imgClientId && (
-                        <button
-                          onClick={async () => {
-                            await fetch('/api/airtable/sync-visuals', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ client_id: imgClientId || vidClientId, asset_ids: [asset.id] }),
-                            });
-                            alert('Synced to Airtable ✓');
-                          }}
-                          className="text-xs border border-gray-300 text-gray-500 px-2 py-1 rounded hover:bg-gray-50 whitespace-nowrap"
-                        >
-                          ↑ Airtable
-                        </button>
+                      {asset.generation_status === 'ready' && (
+                        <div className="flex items-center gap-2">
+                          {(imgClientId || vidClientId) && (
+                            <button
+                              onClick={async () => {
+                                await fetch('/api/airtable/sync-visuals', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ client_id: imgClientId || vidClientId, asset_ids: [asset.id] }),
+                                });
+                                alert('Synced to Airtable ✓');
+                              }}
+                              className="text-xs border border-gray-300 text-gray-500 px-2 py-1 rounded hover:bg-gray-50 whitespace-nowrap"
+                            >
+                              ↑ Airtable
+                            </button>
+                          )}
+                          <button
+                            onClick={() => openPublerModal(asset)}
+                            className="text-xs border border-blue-300 text-blue-600 px-2 py-1 rounded hover:bg-blue-50 whitespace-nowrap"
+                          >
+                            📅 Publer
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -499,6 +586,111 @@ export default function VisualsPage() {
           </div>
         )}
       </div>
+
+      {/* Publer Schedule Modal */}
+      {publerDraft && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-lg">📅</span>
+                <h3 className="font-semibold text-gray-900">Schedule to Publer</h3>
+              </div>
+              <button onClick={() => setPublerDraft(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+            </div>
+
+            <div className="px-6 py-5 space-y-4">
+              {/* Asset preview */}
+              <div className="flex items-center gap-3 bg-gray-50 rounded-lg p-3">
+                {publerDraft.asset.asset_type === 'image' && publerDraft.asset.storage_url ? (
+                  <img src={publerDraft.asset.storage_url} alt="" className="w-14 h-14 object-cover rounded-lg flex-shrink-0" />
+                ) : (
+                  <div className="w-14 h-14 bg-gray-200 rounded-lg flex items-center justify-center flex-shrink-0 text-2xl">
+                    {publerDraft.asset.asset_type === 'video' ? '🎬' : '🖼️'}
+                  </div>
+                )}
+                <div className="text-xs text-gray-500 line-clamp-3">{publerDraft.asset.prompt_used ?? `${publerDraft.asset.asset_type} asset`}</div>
+              </div>
+
+              {publerLoading ? (
+                <div className="flex items-center gap-2 text-sm text-gray-500 py-2">
+                  <span className="animate-spin w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full inline-block" />
+                  Loading accounts...
+                </div>
+              ) : (
+                <>
+                  {/* Account selector */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">① Publer Account</label>
+                    {publerDraft.accounts.length === 0 ? (
+                      <p className="text-xs text-red-500">No Publer accounts found. Check PUBLER_API_KEY and PUBLER_WORKSPACE_ID.</p>
+                    ) : (
+                      <select
+                        value={publerAccountId}
+                        onChange={e => setPublerAccountId(e.target.value)}
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                      >
+                        {publerDraft.accounts.map(acc => (
+                          <option key={acc.id} value={acc.id}>
+                            {acc.provider.charAt(0).toUpperCase() + acc.provider.slice(1)} — {acc.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  {/* Schedule datetime */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">② Schedule Time (local)</label>
+                    <input
+                      type="datetime-local"
+                      value={publerScheduledAt}
+                      min={new Date().toISOString().slice(0, 16)}
+                      onChange={e => setPublerScheduledAt(e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+
+                  {/* Caption */}
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">③ Caption</label>
+                    <textarea
+                      rows={5}
+                      value={publerCaption}
+                      onChange={e => setPublerCaption(e.target.value)}
+                      placeholder="Caption auto-filled from content post..."
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                    />
+                  </div>
+                </>
+              )}
+
+              {publerError && <p className="text-xs text-red-600">{publerError}</p>}
+              {publerSuccess && <p className="text-xs text-green-600 font-medium">✅ {publerSuccess}</p>}
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-100 flex gap-3 justify-end">
+              <button
+                onClick={() => setPublerDraft(null)}
+                className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              {!publerSuccess && (
+                <button
+                  onClick={handlePublerSubmit}
+                  disabled={publerSending || publerLoading || !publerAccountId || !publerScheduledAt}
+                  className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium disabled:opacity-50 flex items-center gap-2"
+                >
+                  {publerSending ? (
+                    <><span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full inline-block" /> Uploading & Scheduling...</>
+                  ) : 'Schedule Post'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

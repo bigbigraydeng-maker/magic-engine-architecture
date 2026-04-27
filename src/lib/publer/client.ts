@@ -1,53 +1,88 @@
-// Publer API Client
-// 文档：https://publer.com/api/docs
+// Publer REST API v1 client
+// Auth: Bearer-API key + Publer-Workspace-Id header (not standard Bearer)
 
-const PUBLER_BASE = 'https://api.publer.com/v1'
-const API_KEY = process.env.PUBLER_API_KEY!
+const PUBLER_BASE = 'https://app.publer.com/api/v1'
 
-export interface PublerPostResult {
-  post_id: string
-  status: string
-  scheduled_at?: string
-  platforms: string[]
+function publerHeaders() {
+  return {
+    'Authorization': `Bearer-API ${process.env.PUBLER_API_KEY}`,
+    'Publer-Workspace-Id': process.env.PUBLER_WORKSPACE_ID!,
+    'Content-Type': 'application/json',
+  }
 }
 
-export async function createPublerPost(params: {
-  caption: string
-  media_urls: string[]
-  platforms: string[]
-  schedule_at?: string
-  hashtags?: string[]
-}): Promise<PublerPostResult> {
-  const { caption, media_urls, platforms, schedule_at, hashtags } = params
+export interface PublerAccount {
+  id: string
+  provider: string
+  name: string
+  picture?: string
+  type?: string
+}
 
-  const fullCaption = hashtags?.length
-    ? `${caption}\n\n${hashtags.join(' ')}`
-    : caption
+export async function getAccounts(): Promise<PublerAccount[]> {
+  const res = await fetch(`${PUBLER_BASE}/accounts`, { headers: publerHeaders() })
+  if (!res.ok) throw new Error(`Publer getAccounts error ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  return data.accounts ?? data ?? []
+}
 
-  const res = await fetch(`${PUBLER_BASE}/posts`, {
+async function pollJobStatus(jobId: string, maxAttempts = 12): Promise<Record<string, unknown>> {
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise(r => setTimeout(r, 3000))
+    const res = await fetch(`${PUBLER_BASE}/job_status/${jobId}`, { headers: publerHeaders() })
+    if (!res.ok) continue
+    const data = await res.json()
+    if (data.status === 'completed') return data
+    if (data.status === 'failed') throw new Error(`Publer job failed: ${JSON.stringify(data)}`)
+  }
+  throw new Error('Publer job timed out after 36s')
+}
+
+export async function uploadMediaFromUrl(url: string, name: string): Promise<string> {
+  const res = await fetch(`${PUBLER_BASE}/media/from-url`, {
     method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${API_KEY}`,
-      'Content-Type': 'application/json',
-    },
+    headers: publerHeaders(),
+    body: JSON.stringify({ media: [{ url, name }], type: 'single' }),
+  })
+  if (!res.ok) throw new Error(`Publer media upload error ${res.status}: ${await res.text()}`)
+  const data = await res.json()
+  const result = await pollJobStatus(data.job_id)
+  const mediaId = (result.data as { id?: string })?.id
+  if (!mediaId) throw new Error('No media ID in Publer job result')
+  return mediaId
+}
+
+export async function schedulePost(params: {
+  accountId: string
+  provider: string
+  assetType: string
+  mediaId: string
+  caption: string
+  scheduledAt: string
+}): Promise<{ job_id: string }> {
+  const { accountId, provider, assetType, mediaId, caption, scheduledAt } = params
+  const networkType = assetType === 'video' && provider === 'instagram' ? 'reel' : 'feed'
+  const mediaType = assetType === 'video' ? 'video' : 'image'
+
+  const res = await fetch(`${PUBLER_BASE}/posts/schedule`, {
+    method: 'POST',
+    headers: publerHeaders(),
     body: JSON.stringify({
-      text: fullCaption,
-      media: media_urls.map(url => ({ url })),
-      platforms,
-      scheduled_at: schedule_at,
+      bulk: {
+        state: 'scheduled',
+        posts: [{
+          networks: {
+            [provider]: {
+              type: networkType,
+              text: caption,
+              media: [{ id: mediaId, type: mediaType }],
+            },
+          },
+          accounts: [{ id: accountId, scheduled_at: scheduledAt }],
+        }],
+      },
     }),
   })
-
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Publer create error ${res.status}: ${err}`)
-  }
-
-  const data = await res.json()
-  return {
-    post_id: data.id || data.post_id,
-    status: data.status,
-    scheduled_at: data.scheduled_at,
-    platforms: data.platforms || platforms,
-  }
+  if (!res.ok) throw new Error(`Publer schedulePost error ${res.status}: ${await res.text()}`)
+  return res.json()
 }

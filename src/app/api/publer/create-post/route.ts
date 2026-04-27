@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { createPublerPost } from '@/lib/publer/client'
+import { getAccounts, uploadMediaFromUrl, schedulePost } from '@/lib/publer/client'
 
+// POST /api/publer/create-post
+// 自动化流程用：Airtable approved → webhook → 这里
+// 用 post_id 找最新 ready 素材，自动选第一个匹配平台的 Publer 账号
 export async function POST(req: NextRequest) {
   try {
     const { post_id, client_id: requestClientId, schedule_at } = await req.json()
@@ -11,53 +14,69 @@ export async function POST(req: NextRequest) {
 
     const { data: post } = await supabaseAdmin
       .from('content_posts')
-      .select('*')
+      .select('id, client_id, caption, script, hashtags, platforms, status')
       .eq('id', post_id)
       .single()
 
-    if (!post) {
-      return NextResponse.json({ success: false, error: 'Post not found' }, { status: 404 })
-    }
+    if (!post) return NextResponse.json({ success: false, error: 'Post not found' }, { status: 404 })
     if (post.status !== 'approved') {
       return NextResponse.json({ success: false, error: 'Post not approved' }, { status: 400 })
     }
 
-    // client_id: 优先用请求传入的，否则从帖子自身的 client_id 取
-    const client_id = requestClientId || post.client_id
-    if (!client_id) {
-      return NextResponse.json({ success: false, error: 'client_id not found' }, { status: 400 })
-    }
-
-    // 取最新 ready 素材（is_selected 优先）
     const { data: assets } = await supabaseAdmin
       .from('visual_assets')
-      .select('storage_url, asset_type')
+      .select('id, storage_url, asset_type')
       .eq('post_id', post_id)
       .eq('generation_status', 'ready')
       .order('is_selected', { ascending: false })
       .order('created_at', { ascending: false })
       .limit(1)
 
-    const mediaUrl = assets?.[0]?.storage_url
+    const asset = assets?.[0]
+    if (!asset?.storage_url) {
+      return NextResponse.json({ success: false, error: 'No ready asset found' }, { status: 400 })
+    }
 
-    const result = await createPublerPost({
-      caption: post.caption || post.script || '',
-      media_urls: mediaUrl ? [mediaUrl] : [],
-      platforms: post.platforms || ['facebook'],
-      schedule_at,
-      hashtags: post.hashtags,
+    const accounts = await getAccounts()
+    const postPlatforms: string[] = Array.isArray(post.platforms)
+      ? post.platforms
+      : (post.platforms ? [post.platforms] : [])
+
+    const account = postPlatforms.length > 0
+      ? accounts.find(a => postPlatforms.includes(a.provider)) ?? accounts[0]
+      : accounts[0]
+
+    if (!account) {
+      return NextResponse.json({ success: false, error: 'No Publer account found' }, { status: 400 })
+    }
+
+    const hashtags = post.hashtags ? `\n\n${post.hashtags}` : ''
+    const caption = `${post.caption || post.script || ''}${hashtags}`.trim()
+
+    const scheduledAt = schedule_at ?? new Date(Date.now() + 3600_000).toISOString()
+    const fileName = asset.storage_url.split('/').pop() ?? 'media'
+    const mediaId = await uploadMediaFromUrl(asset.storage_url, fileName)
+
+    const result = await schedulePost({
+      accountId: account.id,
+      provider: account.provider,
+      assetType: asset.asset_type,
+      mediaId,
+      caption,
+      scheduledAt,
     })
 
+    const clientId = requestClientId || post.client_id
     await supabaseAdmin
       .from('content_posts')
       .update({
         status: 'scheduled',
-        publer_post_id: result.post_id,
-        scheduled_at: schedule_at || new Date().toISOString(),
+        publer_post_id: result.job_id,
+        scheduled_at: scheduledAt,
       })
       .eq('id', post_id)
 
-    return NextResponse.json({ success: true, publer_post: result })
+    return NextResponse.json({ success: true, job_id: result.job_id, client_id: clientId })
 
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
