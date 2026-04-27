@@ -55,13 +55,13 @@ export async function POST(req: NextRequest) {
 
     const scheduledAt = schedule_at ?? new Date(Date.now() + 3600_000).toISOString()
     const fileName = asset.storage_url.split('/').pop() ?? 'media'
-    const mediaId = await uploadMediaFromUrl(asset.storage_url, fileName)
+    const media = await uploadMediaFromUrl(asset.storage_url, fileName)
 
     const result = await schedulePost({
       accountId: account.id,
       provider: account.provider,
       assetType: asset.asset_type,
-      mediaId,
+      media,
       caption,
       scheduledAt,
     })

@@ -26,48 +26,44 @@ export async function getAccounts(): Promise<PublerAccount[]> {
   return data.accounts ?? data ?? []
 }
 
-async function pollJobStatus(jobId: string, maxAttempts = 18): Promise<Record<string, unknown>> {
-  let lastStatus = 'unknown'
-  for (let i = 0; i < maxAttempts; i++) {
-    await new Promise(r => setTimeout(r, 5000))
-    const res = await fetch(`${PUBLER_BASE}/job_status/${jobId}`, { headers: publerHeaders() })
-    if (!res.ok) continue
-    const data = await res.json()
-    lastStatus = data.status ?? 'no_status'
-    console.log(`[publer] job ${jobId} attempt ${i + 1}: status=${lastStatus}`, JSON.stringify(data).slice(0, 200))
-    if (data.status === 'complete' || data.status === 'completed' || data.status === 'success' || data.status === 'done') return data
-    if (data.status === 'failed' || data.status === 'error') throw new Error(`Publer job failed: ${JSON.stringify(data)}`)
-    // 如果 data 中已有媒体 ID 则视为完成
-    if (data.data?.id || data.id) return data
-  }
-  throw new Error(`Publer job timed out (last status: ${lastStatus})`)
-}
+// 下载文件并以 multipart 上传给 Publer，直接拿到 media ID
+export async function uploadMediaFromUrl(url: string, name: string): Promise<{ id: string; type: string }> {
+  const imgRes = await fetch(url)
+  if (!imgRes.ok) throw new Error(`Failed to fetch media from storage: ${imgRes.status}`)
+  const blob = await imgRes.blob()
+  const contentType = imgRes.headers.get('content-type') || 'image/jpeg'
 
-export async function uploadMediaFromUrl(url: string, name: string): Promise<string> {
-  const res = await fetch(`${PUBLER_BASE}/media/from-url`, {
+  const form = new FormData()
+  form.append('file', blob, name)
+
+  // FormData 上传时不加 Content-Type（让浏览器/Node 自动设 boundary）
+  const { Authorization, 'Publer-Workspace-Id': workspaceId } = publerHeaders()
+  const res = await fetch(`${PUBLER_BASE}/media`, {
     method: 'POST',
-    headers: publerHeaders(),
-    body: JSON.stringify({ media: [{ url, name }], type: 'single' }),
+    headers: { Authorization, 'Publer-Workspace-Id': workspaceId },
+    body: form,
   })
   if (!res.ok) throw new Error(`Publer media upload error ${res.status}: ${await res.text()}`)
   const data = await res.json()
-  const result = await pollJobStatus(data.job_id)
-  const mediaId = (result.data as { id?: string })?.id
-  if (!mediaId) throw new Error('No media ID in Publer job result')
-  return mediaId
+  if (!data.id) throw new Error(`Publer upload returned no ID: ${JSON.stringify(data)}`)
+
+  const isVideo = contentType.startsWith('video/')
+  return { id: data.id, type: isVideo ? 'video' : 'photo' }
 }
 
 export async function schedulePost(params: {
   accountId: string
   provider: string
   assetType: string
-  mediaId: string
+  media: { id: string; type: string }
   caption: string
   scheduledAt: string
 }): Promise<{ job_id: string }> {
-  const { accountId, provider, assetType, mediaId, caption, scheduledAt } = params
-  const networkType = assetType === 'video' && provider === 'instagram' ? 'reel' : 'feed'
-  const mediaType = assetType === 'video' ? 'video' : 'image'
+  const { accountId, provider, assetType, media, caption, scheduledAt } = params
+  // Facebook: photo→"photo", video→"video", Instagram: video→"reel"
+  const networkType = assetType === 'video'
+    ? (provider === 'instagram' ? 'reel' : 'video')
+    : 'photo'
 
   const res = await fetch(`${PUBLER_BASE}/posts/schedule`, {
     method: 'POST',
@@ -80,7 +76,7 @@ export async function schedulePost(params: {
             [provider]: {
               type: networkType,
               text: caption,
-              media: [{ id: mediaId, type: mediaType }],
+              media: [{ id: media.id, type: media.type }],
             },
           },
           accounts: [{ id: accountId, scheduled_at: scheduledAt }],
@@ -89,5 +85,22 @@ export async function schedulePost(params: {
     }),
   })
   if (!res.ok) throw new Error(`Publer schedulePost error ${res.status}: ${await res.text()}`)
-  return res.json()
+
+  const result = await res.json()
+  // 等待排期 job 完成，确认无 failures
+  const jobId = result.job_id
+  if (jobId) {
+    await new Promise(r => setTimeout(r, 5000))
+    const statusRes = await fetch(`${PUBLER_BASE}/job_status/${jobId}`, { headers: publerHeaders() })
+    if (statusRes.ok) {
+      const status = await statusRes.json()
+      const failures = status.payload?.failures
+      if (failures && Object.keys(failures).length > 0) {
+        const msg = Object.values(failures as Record<string, Array<{ message: string }>>)
+          .flat()[0]?.message ?? 'Unknown Publer failure'
+        throw new Error(`Publer scheduling failed: ${msg}`)
+      }
+    }
+  }
+  return result
 }
