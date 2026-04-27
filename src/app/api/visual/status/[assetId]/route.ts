@@ -35,16 +35,29 @@ export async function GET(
     }
 
     let providerResult: ProviderResult
-    if (asset.provider === 'wavespeed') {
-      providerResult = await checkImageStatus(asset.provider_job_id)
-    } else if (asset.provider === 'seedance') {
-      const r = await checkVideoStatus(asset.provider_job_id)
-      providerResult = { ...r, image_url: undefined }
-    } else if (asset.provider === 'heygen') {
-      const r = await checkAvatarStatus(asset.provider_job_id)
-      providerResult = { ...r, image_url: undefined }
-    } else {
-      return NextResponse.json({ success: true, asset })
+    try {
+      if (asset.provider === 'wavespeed') {
+        providerResult = await checkImageStatus(asset.provider_job_id)
+      } else if (asset.provider === 'seedance') {
+        const r = await checkVideoStatus(asset.provider_job_id)
+        providerResult = { ...r, image_url: undefined }
+      } else if (asset.provider === 'heygen') {
+        const r = await checkAvatarStatus(asset.provider_job_id)
+        providerResult = { ...r, image_url: undefined }
+      } else {
+        return NextResponse.json({ success: true, asset })
+      }
+    } catch (providerErr: unknown) {
+      const ageMinutes = (Date.now() - new Date(asset.created_at).getTime()) / 60000
+      if (ageMinutes > 10) {
+        const errMsg = providerErr instanceof Error ? providerErr.message : String(providerErr)
+        await supabaseAdmin
+          .from('visual_assets')
+          .update({ generation_status: 'failed', error_message: `Provider error: ${errMsg}` })
+          .eq('id', params.assetId)
+        return NextResponse.json({ success: true, asset: { ...asset, generation_status: 'failed' }, auto_failed: true })
+      }
+      throw providerErr
     }
 
     const completedUrl = providerResult.image_url || providerResult.video_url
