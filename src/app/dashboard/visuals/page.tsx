@@ -11,6 +11,10 @@ interface ContentPost {
   id: string;
   title: string;
   visual_brief?: string;
+  caption?: string;
+  hashtags?: string;
+  platforms?: string | string[];
+  scheduled_at?: string;
 }
 
 interface VisualAsset {
@@ -36,6 +40,39 @@ interface PublerDraft {
   caption: string;
   hashtags: string;
   accounts: PublerAccount[];
+}
+
+function PostPreviewCard({ post }: { post: ContentPost }) {
+  const platforms = Array.isArray(post.platforms)
+    ? post.platforms
+    : post.platforms ? [post.platforms] : [];
+  const platformIcons: Record<string, string> = {
+    facebook: '📘', instagram: '📷', tiktok: '🎵', linkedin: '💼', twitter: '🐦',
+  };
+  return (
+    <div className="mt-2 rounded-lg border border-indigo-100 bg-indigo-50 p-3 space-y-1.5 text-xs">
+      {platforms.length > 0 && (
+        <div className="flex gap-1 flex-wrap">
+          {platforms.map(p => (
+            <span key={p} className="inline-flex items-center gap-1 bg-white border border-indigo-200 text-indigo-700 px-2 py-0.5 rounded-full font-medium">
+              {platformIcons[p.toLowerCase()] ?? '🌐'} {p}
+            </span>
+          ))}
+          {post.scheduled_at && (
+            <span className="inline-flex items-center gap-1 bg-white border border-gray-200 text-gray-500 px-2 py-0.5 rounded-full">
+              📅 {new Date(post.scheduled_at).toLocaleDateString('en-NZ', { day: 'numeric', month: 'short' })}
+            </span>
+          )}
+        </div>
+      )}
+      {post.caption && (
+        <p className="text-gray-700 line-clamp-2 leading-relaxed">{post.caption}</p>
+      )}
+      {post.visual_brief && (
+        <p className="text-gray-400 italic line-clamp-1">🖼 {post.visual_brief}</p>
+      )}
+    </div>
+  );
 }
 
 // HeyGen is available if key is non-empty; server-side only, so default false on client
@@ -320,6 +357,7 @@ export default function VisualsPage() {
                 <option value="">Select post (loads Visual Brief)...</option>
                 {posts.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
               </select>
+              {imgPostId && (() => { const p = posts.find(x => x.id === imgPostId); return p ? <PostPreviewCard post={p} /> : null; })()}
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -430,6 +468,7 @@ export default function VisualsPage() {
                   <option value="">Select post...</option>
                   {vidPosts.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
                 </select>
+                {vidPostId && (() => { const p = vidPosts.find(x => x.id === vidPostId); return p ? <PostPreviewCard post={p} /> : null; })()}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
