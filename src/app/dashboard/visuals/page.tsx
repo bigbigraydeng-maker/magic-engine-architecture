@@ -29,6 +29,7 @@ const HEYGEN_KEY = false;
 export default function VisualsPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [posts, setPosts] = useState<ContentPost[]>([]);
+  const [vidPosts, setVidPosts] = useState<ContentPost[]>([]);
   const [assets, setAssets] = useState<VisualAsset[]>([]);
   const [loadingAssets, setLoadingAssets] = useState(true);
 
@@ -77,11 +78,17 @@ export default function VisualsPage() {
     fetchAssets();
   }, [fetchAssets]);
 
-  // Load posts when client changes
+  // Load posts when image client changes
   useEffect(() => {
     if (!imgClientId) return;
     fetch(`/api/clients/${imgClientId}/posts`).then(r => r.json()).then(d => setPosts(d.posts ?? []));
   }, [imgClientId]);
+
+  // Load posts when video client changes
+  useEffect(() => {
+    if (!vidClientId) return;
+    fetch(`/api/clients/${vidClientId}/posts`).then(r => r.json()).then(d => setVidPosts(d.posts ?? []));
+  }, [vidClientId]);
 
   // Auto-fill prompt from selected post
   useEffect(() => {
@@ -320,7 +327,7 @@ export default function VisualsPage() {
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white disabled:bg-gray-50 disabled:text-gray-400"
                 >
                   <option value="">Select post...</option>
-                  {posts.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
+                  {vidPosts.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-3">
