@@ -25,6 +25,12 @@ body {
   );
 }
 
+select {
+  color: #111827;
+  background-color: #ffffff;
+  color-scheme: light;
+}
+
 option {
   color: #111827;
   background-color: #ffffff;
