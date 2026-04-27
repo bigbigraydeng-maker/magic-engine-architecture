@@ -27,15 +27,20 @@ export async function getAccounts(): Promise<PublerAccount[]> {
 }
 
 async function pollJobStatus(jobId: string, maxAttempts = 18): Promise<Record<string, unknown>> {
+  let lastStatus = 'unknown'
   for (let i = 0; i < maxAttempts; i++) {
     await new Promise(r => setTimeout(r, 5000))
     const res = await fetch(`${PUBLER_BASE}/job_status/${jobId}`, { headers: publerHeaders() })
     if (!res.ok) continue
     const data = await res.json()
-    if (data.status === 'completed') return data
-    if (data.status === 'failed') throw new Error(`Publer job failed: ${JSON.stringify(data)}`)
+    lastStatus = data.status ?? 'no_status'
+    console.log(`[publer] job ${jobId} attempt ${i + 1}: status=${lastStatus}`, JSON.stringify(data).slice(0, 200))
+    if (data.status === 'completed' || data.status === 'success' || data.status === 'done') return data
+    if (data.status === 'failed' || data.status === 'error') throw new Error(`Publer job failed: ${JSON.stringify(data)}`)
+    // 如果 data 中已有媒体 ID 则视为完成
+    if (data.data?.id || data.id) return data
   }
-  throw new Error('Publer job timed out after 90s')
+  throw new Error(`Publer job timed out (last status: ${lastStatus})`)
 }
 
 export async function uploadMediaFromUrl(url: string, name: string): Promise<string> {
