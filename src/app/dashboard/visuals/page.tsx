@@ -51,9 +51,11 @@ export default function VisualsPage() {
   const [vidAspectRatio, setVidAspectRatio] = useState('9:16');
   const [vidGenerating, setVidGenerating] = useState(false);
   const [vidError, setVidError] = useState('');
+  const [vidResult, setVidResult] = useState<{ asset_id: string; status?: string; url?: string } | null>(null);
 
   const heygenConfigured = HEYGEN_KEY;
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const vidPollingRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchAssets = useCallback(async () => {
     try {
@@ -145,11 +147,32 @@ export default function VisualsPage() {
     }
   };
 
+  const pollVideoStatus = useCallback(async (assetId: string) => {
+    try {
+      const res = await fetch(`/api/visual/status/${assetId}`);
+      const json = await res.json();
+      const status = json.asset?.generation_status ?? json.status;
+      const url = json.asset?.storage_url ?? json.storage_url;
+      if (status === 'ready' || status === 'failed') {
+        if (vidPollingRef.current) clearInterval(vidPollingRef.current);
+        setVidResult({ asset_id: assetId, status, url });
+        setVidGenerating(false);
+        fetchAssets();
+      } else {
+        setVidResult(prev => prev ? { ...prev, status } : null);
+      }
+    } catch {
+      if (vidPollingRef.current) clearInterval(vidPollingRef.current);
+      setVidGenerating(false);
+    }
+  }, [fetchAssets]);
+
   const handleVideoGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!vidPostId) { setVidError('Select a content post first'); return; }
     setVidGenerating(true);
     setVidError('');
+    setVidResult(null);
     try {
       const res = await fetch('/api/visual/video', {
         method: 'POST',
@@ -158,11 +181,10 @@ export default function VisualsPage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Failed');
-      alert(`Video generation started! Asset ID: ${json.asset_id}`);
-      fetchAssets();
+      setVidResult({ asset_id: json.asset_id, status: 'generating' });
+      vidPollingRef.current = setInterval(() => pollVideoStatus(json.asset_id), 5000);
     } catch (err: unknown) {
       setVidError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
       setVidGenerating(false);
     }
   };
@@ -357,12 +379,35 @@ export default function VisualsPage() {
                 </div>
               </div>
               {vidError && <p className="text-xs text-red-600">{vidError}</p>}
+
+              {vidResult && (
+                <div className="bg-gray-50 rounded-lg p-3 text-xs">
+                  {(vidResult.status === 'generating' || vidResult.status === 'processing' || vidResult.status === 'pending') && (
+                    <div className="flex items-center gap-2 text-yellow-700">
+                      <span className="animate-spin w-3 h-3 border-2 border-yellow-600 border-t-transparent rounded-full inline-block" />
+                      Generating video... this may take 1–3 minutes
+                    </div>
+                  )}
+                  {vidResult.status === 'ready' && (
+                    <div className="space-y-2">
+                      <p className="text-green-700 font-medium">✅ Video ready!</p>
+                      {vidResult.url && (
+                        <a href={vidResult.url} target="_blank" rel="noreferrer" className="inline-block text-indigo-600 underline">▶ Watch video</a>
+                      )}
+                    </div>
+                  )}
+                  {vidResult.status === 'failed' && <p className="text-red-600">❌ Generation failed</p>}
+                </div>
+              )}
+
               <button
                 type="submit"
                 disabled={vidGenerating}
-                className="w-full bg-gray-700 hover:bg-gray-800 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+                className="w-full bg-gray-700 hover:bg-gray-800 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {vidGenerating ? 'Starting...' : 'Generate Video'}
+                {vidGenerating ? (
+                  <><span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full inline-block" /> Generating...</>
+                ) : 'Generate Video'}
               </button>
             </form>
           </div>
