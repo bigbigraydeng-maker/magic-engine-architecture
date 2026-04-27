@@ -49,7 +49,7 @@ export async function GET(
       }
     } catch (providerErr: unknown) {
       const ageMinutes = (Date.now() - new Date(asset.created_at).getTime()) / 60000
-      if (ageMinutes > 10) {
+      if (ageMinutes > 720) {
         const errMsg = providerErr instanceof Error ? providerErr.message : String(providerErr)
         await supabaseAdmin
           .from('visual_assets')
