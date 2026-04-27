@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Content Posts ────────────────────────────────
-    if (table === 'content') {
+    if (table === 'content_posts' || table === 'content') {
       const updateData: Record<string, unknown> = { status: new_status }
       if (revision_notes) updateData.revision_notes = revision_notes
 
