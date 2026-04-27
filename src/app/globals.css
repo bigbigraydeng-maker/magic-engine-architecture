@@ -24,3 +24,8 @@ body {
     rgb(var(--background-end-rgb))
   );
 }
+
+option {
+  color: #111827;
+  background-color: #ffffff;
+}
