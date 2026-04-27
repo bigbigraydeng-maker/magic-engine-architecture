@@ -48,7 +48,7 @@ function formatSource(s: string): string {
 
 function formatRoute(s: string): string {
   const map: Record<string, string> = {
-    route_a: 'Route A - SEO Keywords',
+    route_a: 'Route A - SEO to Social',
     route_b: 'Route B - Viral Rewrite',
     route_c: 'Route C - Master Brief',
   }
