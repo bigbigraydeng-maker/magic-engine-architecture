@@ -104,13 +104,15 @@ export default function VisualsPage() {
     try {
       const res = await fetch(`/api/visual/status/${assetId}`);
       const json = await res.json();
-      if (json.status === 'ready' || json.status === 'failed') {
+      const status = json.asset?.generation_status ?? json.status;
+      const url = json.asset?.storage_url ?? json.storage_url;
+      if (status === 'ready' || status === 'failed') {
         if (pollingRef.current) clearInterval(pollingRef.current);
-        setImgResult({ asset_id: assetId, status: json.status, url: json.storage_url });
+        setImgResult({ asset_id: assetId, status, url });
         setImgGenerating(false);
         fetchAssets();
       } else {
-        setImgResult(prev => prev ? { ...prev, status: json.status } : null);
+        setImgResult(prev => prev ? { ...prev, status } : null);
       }
     } catch {
       if (pollingRef.current) clearInterval(pollingRef.current);
