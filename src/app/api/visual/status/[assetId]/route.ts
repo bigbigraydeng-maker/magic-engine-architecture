@@ -84,7 +84,8 @@ export async function GET(
             .single()
 
           const airtableRecordId = post?.airtable_record_id
-          const baseId = (post?.clients as Record<string, string> | null)?.airtable_base_id
+          const clientsArr = post?.clients as { airtable_base_id: string }[] | undefined
+          const baseId = Array.isArray(clientsArr) ? clientsArr[0]?.airtable_base_id : undefined
 
           if (airtableRecordId && baseId) {
             const fields: Record<string, unknown> = { 'Visual_Status': 'Ready' }
