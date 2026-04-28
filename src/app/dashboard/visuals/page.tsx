@@ -123,7 +123,7 @@ function EditableText({
         onChange={e => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={e => e.key === 'Enter' && commit()}
-        className="w-full text-sm px-1 py-0.5 border border-blue-400 rounded outline-none bg-white"
+        className="w-full text-sm px-1 py-0.5 border border-blue-400 rounded outline-none bg-white text-gray-900"
       />
     )
   }
@@ -156,7 +156,7 @@ function EditableTextarea({
         value={draft}
         onChange={e => setDraft(e.target.value)}
         onBlur={commit}
-        className="w-full text-xs px-1 py-0.5 border border-blue-400 rounded outline-none resize-y min-h-[64px] bg-white"
+        className="w-full text-xs px-1 py-0.5 border border-blue-400 rounded outline-none resize-y min-h-[64px] bg-white text-gray-900"
       />
     )
   }
@@ -190,7 +190,7 @@ function EditableDatetime({
         value={draft}
         onChange={e => setDraft(e.target.value)}
         onBlur={() => commit(draft)}
-        className="text-xs px-1 py-0.5 border border-blue-400 rounded outline-none w-36 bg-white"
+        className="text-xs px-1 py-0.5 border border-blue-400 rounded outline-none w-36 bg-white text-gray-900"
       />
     )
   }
@@ -225,7 +225,7 @@ function EditableHashtags({
         onBlur={commit}
         onKeyDown={e => e.key === 'Enter' && commit()}
         placeholder="#tag1 #tag2"
-        className="w-full text-xs px-1 py-0.5 border border-blue-400 rounded outline-none bg-white"
+        className="w-full text-xs px-1 py-0.5 border border-blue-400 rounded outline-none bg-white text-gray-900"
       />
     )
   }
@@ -252,7 +252,7 @@ function EditableStatus({
         value={value}
         onChange={e => { onSave(e.target.value); setEditing(false) }}
         onBlur={() => setEditing(false)}
-        className="text-xs border border-blue-400 rounded px-1 outline-none bg-white w-full"
+        className="text-xs border border-blue-400 rounded px-1 outline-none bg-white w-full text-gray-900"
       >
         {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
       </select>
