@@ -42,6 +42,48 @@ interface PublerDraft {
   accounts: PublerAccount[];
 }
 
+function GeneratingStatus({ elapsed, type }: { elapsed: number; type: 'image' | 'video' }) {
+  const stages: { until: number; icon: string; label: string }[] = type === 'image'
+    ? [
+        { until: 5,  icon: '📤', label: 'Submitting to AI...' },
+        { until: 15, icon: '🎨', label: 'AI is painting your image...' },
+        { until: 30, icon: '🖼️', label: 'Refining details...' },
+        { until: 50, icon: '⬆️', label: 'Uploading to storage...' },
+        { until: Infinity, icon: '⏳', label: 'Almost done, hang tight...' },
+      ]
+    : [
+        { until: 10,  icon: '📤', label: 'Submitting to AI...' },
+        { until: 40,  icon: '🎬', label: 'AI is generating frames...' },
+        { until: 80,  icon: '🎞️', label: 'Encoding video...' },
+        { until: 120, icon: '⬆️', label: 'Uploading to storage...' },
+        { until: Infinity, icon: '⏳', label: 'Still working, please wait...' },
+      ];
+
+  const stage = stages.find(s => elapsed < s.until)!;
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
+  const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+
+  return (
+    <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-yellow-800 text-sm font-medium">
+          <span className="animate-spin w-4 h-4 border-2 border-yellow-600 border-t-transparent rounded-full inline-block" />
+          {stage.icon} {stage.label}
+        </div>
+        <span className="text-xs text-yellow-600 font-mono tabular-nums">{timeStr}</span>
+      </div>
+      <div className="w-full bg-yellow-100 rounded-full h-1.5 overflow-hidden">
+        <div
+          className="h-full bg-yellow-400 rounded-full transition-all duration-1000"
+          style={{ width: `${Math.min(95, (elapsed / (type === 'image' ? 50 : 120)) * 100)}%` }}
+        />
+      </div>
+      <p className="text-xs text-yellow-600">Polling every {type === 'image' ? '3' : '5'}s — page is active</p>
+    </div>
+  );
+}
+
 function PostPreviewCard({ post }: { post: ContentPost }) {
   const platforms = Array.isArray(post.platforms)
     ? post.platforms
@@ -93,6 +135,7 @@ export default function VisualsPage() {
   const [imgPrompt, setImgPrompt] = useState('');
   const [showPromptEdit, setShowPromptEdit] = useState(false);
   const [imgGenerating, setImgGenerating] = useState(false);
+  const [imgElapsed, setImgElapsed] = useState(0);
   const [imgError, setImgError] = useState('');
   const [imgResult, setImgResult] = useState<{ asset_id: string; status?: string; url?: string } | null>(null);
 
@@ -102,6 +145,7 @@ export default function VisualsPage() {
   const [vidDuration, setVidDuration] = useState('5');
   const [vidAspectRatio, setVidAspectRatio] = useState('9:16');
   const [vidGenerating, setVidGenerating] = useState(false);
+  const [vidElapsed, setVidElapsed] = useState(0);
   const [vidError, setVidError] = useState('');
   const [vidResult, setVidResult] = useState<{ asset_id: string; status?: string; url?: string } | null>(null);
 
@@ -118,6 +162,30 @@ export default function VisualsPage() {
   const heygenConfigured = HEYGEN_KEY;
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
   const vidPollingRef = useRef<NodeJS.Timeout | null>(null);
+  const imgElapsedRef = useRef<NodeJS.Timeout | null>(null);
+  const vidElapsedRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 图片生成计时器
+  useEffect(() => {
+    if (imgGenerating) {
+      setImgElapsed(0);
+      imgElapsedRef.current = setInterval(() => setImgElapsed(s => s + 1), 1000);
+    } else {
+      if (imgElapsedRef.current) clearInterval(imgElapsedRef.current);
+    }
+    return () => { if (imgElapsedRef.current) clearInterval(imgElapsedRef.current); };
+  }, [imgGenerating]);
+
+  // 视频生成计时器
+  useEffect(() => {
+    if (vidGenerating) {
+      setVidElapsed(0);
+      vidElapsedRef.current = setInterval(() => setVidElapsed(s => s + 1), 1000);
+    } else {
+      if (vidElapsedRef.current) clearInterval(vidElapsedRef.current);
+    }
+    return () => { if (vidElapsedRef.current) clearInterval(vidElapsedRef.current); };
+  }, [vidGenerating]);
 
   const fetchAssets = useCallback(async () => {
     try {
@@ -450,14 +518,12 @@ export default function VisualsPage() {
 
             {imgError && <p className="text-xs text-red-600">{imgError}</p>}
 
-            {imgResult && (
+            {imgGenerating && (
+              <GeneratingStatus elapsed={imgElapsed} type="image" />
+            )}
+
+            {imgResult && !imgGenerating && (
               <div className="bg-gray-50 rounded-lg p-3 text-xs">
-                {imgResult.status === 'generating' && (
-                  <div className="flex items-center gap-2 text-yellow-700">
-                    <span className="animate-spin w-3 h-3 border-2 border-yellow-600 border-t-transparent rounded-full inline-block" />
-                    Generating... please wait
-                  </div>
-                )}
                 {imgResult.status === 'ready' && imgResult.url && (
                   <div className="space-y-2">
                     <p className="text-green-700 font-medium">✅ Image ready!</p>
@@ -474,7 +540,7 @@ export default function VisualsPage() {
               className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
             >
               {imgGenerating ? (
-                <><span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full inline-block" /> Generating...</>
+                <><span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full inline-block" /> Generating... {imgElapsed}s</>
               ) : 'Generate Image'}
             </button>
           </form>
@@ -541,14 +607,12 @@ export default function VisualsPage() {
               </div>
               {vidError && <p className="text-xs text-red-600">{vidError}</p>}
 
-              {vidResult && (
+              {vidGenerating && (
+                <GeneratingStatus elapsed={vidElapsed} type="video" />
+              )}
+
+              {vidResult && !vidGenerating && (
                 <div className="bg-gray-50 rounded-lg p-3 text-xs">
-                  {(vidResult.status === 'generating' || vidResult.status === 'processing' || vidResult.status === 'pending') && (
-                    <div className="flex items-center gap-2 text-yellow-700">
-                      <span className="animate-spin w-3 h-3 border-2 border-yellow-600 border-t-transparent rounded-full inline-block" />
-                      Generating video... this may take 1–3 minutes
-                    </div>
-                  )}
                   {vidResult.status === 'ready' && (
                     <div className="space-y-2">
                       <p className="text-green-700 font-medium">✅ Video ready!</p>
@@ -567,7 +631,7 @@ export default function VisualsPage() {
                 className="w-full bg-gray-700 hover:bg-gray-800 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
               >
                 {vidGenerating ? (
-                  <><span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full inline-block" /> Generating...</>
+                  <><span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full inline-block" /> Generating... {vidElapsed}s</>
                 ) : 'Generate Video'}
               </button>
             </form>
