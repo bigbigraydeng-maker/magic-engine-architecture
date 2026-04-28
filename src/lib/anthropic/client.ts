@@ -78,23 +78,45 @@ export async function callClaudeWithDocs(params: {
     text: userMessage,
   } as Anthropic.Beta.Messages.BetaTextBlockParam)
 
-  const betas: Beta.AnthropicBeta[] = hasPdfs ? ['pdfs-2024-09-25'] : []
+  let text: string
+  let inputTok: number
+  let outputTok: number
 
-  const message = await client.beta.messages.create({
-    model: MODEL_SONNET,
-    max_tokens: maxOutputTokens,
-    system: systemPrompt,
-    messages: [{ role: 'user', content }],
-    betas,
-  })
+  if (hasPdfs) {
+    // Beta API required for PDF document support
+    const message = await client.beta.messages.create({
+      model: MODEL_SONNET,
+      max_tokens: maxOutputTokens,
+      system: systemPrompt,
+      messages: [{ role: 'user', content }],
+      betas: ['pdfs-2024-09-25'],
+    })
+    text = message.content
+      .filter((b): b is Anthropic.Beta.Messages.BetaTextBlock => b.type === 'text')
+      .map(b => b.text)
+      .join('')
+    inputTok = message.usage.input_tokens
+    outputTok = message.usage.output_tokens
+  } else {
+    // Use stable API when no PDFs (avoids invalid empty anthropic-beta header)
+    const stableContent: Anthropic.MessageParam['content'] = content.map(b => ({
+      type: 'text',
+      text: (b as Anthropic.Beta.Messages.BetaTextBlockParam).text ?? '',
+    }))
+    const message = await client.messages.create({
+      model: MODEL_SONNET,
+      max_tokens: maxOutputTokens,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: stableContent }],
+    })
+    text = message.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map(b => b.text)
+      .join('')
+    inputTok = message.usage.input_tokens
+    outputTok = message.usage.output_tokens
+  }
 
-  const text = message.content
-    .filter((b): b is Anthropic.Beta.Messages.BetaTextBlock => b.type === 'text')
-    .map(b => b.text)
-    .join('')
-
-  const inputTok = message.usage.input_tokens
-  const outputTok = message.usage.output_tokens
   const costUsd = (inputTok / 1_000_000) * PRICE_INPUT_PER_M
     + (outputTok / 1_000_000) * PRICE_OUTPUT_PER_M
 
