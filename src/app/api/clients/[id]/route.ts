@@ -9,7 +9,7 @@ export async function GET(
   try {
     const { data, error } = await supabaseAdmin
       .from('clients')
-      .select('id, name, domain, airtable_base_id, created_at, semrush_db, plan_tier')
+      .select('id, name, domain, airtable_base_id, airtable_content_table_id, created_at, semrush_db, plan_tier')
       .eq('id', params.id)
       .single()
 

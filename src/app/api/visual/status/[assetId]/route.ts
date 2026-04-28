@@ -87,28 +87,37 @@ export async function GET(
 
       if (error) throw error
 
-      // ── 回写 Airtable Content Calendar ──────────────────────────────
+      // ── 回写 Airtable ─────────────────────────────────────────────────
       if (updated && asset.post_id) {
         try {
           const { data: post } = await supabaseAdmin
             .from('content_posts')
-            .select('airtable_record_id, clients(airtable_base_id)')
+            .select('airtable_record_id, clients(airtable_base_id, airtable_content_table_id)')
             .eq('id', asset.post_id)
             .single()
 
           const airtableRecordId = post?.airtable_record_id
-          const clientsArr = post?.clients as { airtable_base_id: string }[] | undefined
-          const baseId = Array.isArray(clientsArr) ? clientsArr[0]?.airtable_base_id : undefined
+          const clientsData = post?.clients as { airtable_base_id: string; airtable_content_table_id?: string } | { airtable_base_id: string; airtable_content_table_id?: string }[] | undefined
+          const clientObj = Array.isArray(clientsData) ? clientsData[0] : clientsData
+          const baseId = clientObj?.airtable_base_id
+          const contentTableId = clientObj?.airtable_content_table_id
 
           if (airtableRecordId && baseId) {
-            const fields: Record<string, unknown> = { 'Visual_Status': 'Ready' }
-            if (asset.asset_type === 'image') fields['Image_URL'] = storage_url
-            else if (asset.asset_type === 'video' || asset.asset_type === 'avatar') fields['Video_URL'] = storage_url
-
-            await updateRecord(baseId, 'Content Calendar', airtableRecordId, fields)
+            // 新社媒总表：写 Image_URL / Video_URL 字段
+            if (contentTableId) {
+              const fields: Record<string, unknown> = {}
+              if (asset.asset_type === 'image') fields['Image_URL'] = storage_url
+              else fields['Image_URL'] = storage_url  // 视频也先写 Image_URL 占位
+              await updateRecord(baseId, contentTableId, airtableRecordId, fields)
+            } else {
+              // 兼容旧 Content Calendar 表
+              const fields: Record<string, unknown> = { 'Visual_Status': 'Ready' }
+              if (asset.asset_type === 'image') fields['Image_URL'] = storage_url
+              else if (asset.asset_type === 'video' || asset.asset_type === 'avatar') fields['Video_URL'] = storage_url
+              await updateRecord(baseId, 'Content Calendar', airtableRecordId, fields)
+            }
           }
         } catch (atErr) {
-          // 非致命错误 — 记录日志但不阻断主响应
           console.error('[visual/status] Airtable writeback failed:', atErr)
         }
       }

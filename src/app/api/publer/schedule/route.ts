@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getAccounts, uploadMediaFromUrl, schedulePost } from '@/lib/publer/client'
+import { updateRecord } from '@/lib/airtable/client'
 
 // POST /api/publer/schedule
 // 手动从 Visuals 页面触发：用指定 asset + 账号 + 时间 发布到 Publer
@@ -52,6 +53,33 @@ export async function POST(req: NextRequest) {
       caption: finalCaption,
       scheduledAt: new Date(scheduled_at).toISOString(),
     })
+
+    // ── 写回 Airtable Publer_Post_ID ─────────────────────────────────
+    if (asset.post_id) {
+      try {
+        const { data: post } = await supabaseAdmin
+          .from('content_posts')
+          .select('airtable_record_id, clients(airtable_base_id, airtable_content_table_id)')
+          .eq('id', asset.post_id)
+          .single()
+
+        const airtableRecordId = post?.airtable_record_id
+        const clientsData = post?.clients as { airtable_base_id: string; airtable_content_table_id?: string } | { airtable_base_id: string; airtable_content_table_id?: string }[] | undefined
+        const clientObj = Array.isArray(clientsData) ? clientsData[0] : clientsData
+        const baseId = clientObj?.airtable_base_id
+        const contentTableId = clientObj?.airtable_content_table_id
+
+        if (airtableRecordId && baseId) {
+          const tableName = contentTableId ?? 'Content Calendar'
+          await updateRecord(baseId, tableName, airtableRecordId, {
+            'Publer_Post_ID': result.job_id,
+          })
+        }
+      } catch (atErr) {
+        console.error('[publer/schedule] Airtable writeback failed:', atErr)
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────
 
     return NextResponse.json({ success: true, job_id: result.job_id })
   } catch (err: unknown) {
