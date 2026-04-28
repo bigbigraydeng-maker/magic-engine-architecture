@@ -131,7 +131,7 @@ function EditableText({
     <div
       onClick={() => { setDraft(value ?? ''); setEditing(true) }}
       title={value ?? ''}
-      className="cursor-text min-h-[22px] text-sm px-1 py-0.5 rounded hover:bg-blue-50 truncate"
+      className="cursor-text min-h-[22px] text-sm text-gray-900 px-1 py-0.5 rounded hover:bg-blue-50 truncate"
     >
       {value || <span className="text-gray-300 italic text-xs">{placeholder}</span>}
     </div>
@@ -164,7 +164,7 @@ function EditableTextarea({
     <div
       onClick={() => { setDraft(value ?? ''); setEditing(true) }}
       title={value ?? ''}
-      className="cursor-text min-h-[22px] text-xs px-1 py-0.5 rounded hover:bg-blue-50 line-clamp-2 overflow-hidden"
+      className="cursor-text min-h-[22px] text-xs text-gray-900 px-1 py-0.5 rounded hover:bg-blue-50 line-clamp-2 overflow-hidden"
     >
       {value || <span className="text-gray-300 italic">{placeholder}</span>}
     </div>
@@ -197,7 +197,7 @@ function EditableDatetime({
   return (
     <div
       onClick={() => { setDraft(value ? toDatetimeLocal(value) : ''); setEditing(true) }}
-      className="cursor-text min-h-[22px] text-xs px-1 py-0.5 rounded hover:bg-blue-50 whitespace-nowrap"
+      className="cursor-text min-h-[22px] text-xs text-gray-900 px-1 py-0.5 rounded hover:bg-blue-50 whitespace-nowrap"
     >
       {fmtDateNZ(value)}
     </div>
