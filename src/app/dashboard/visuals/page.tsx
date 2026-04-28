@@ -123,7 +123,7 @@ function EditableText({
         onChange={e => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={e => e.key === 'Enter' && commit()}
-        className="w-full text-sm px-1 py-0.5 border border-blue-400 rounded outline-none bg-white text-gray-900 placeholder:text-gray-400"
+        className="w-full text-sm px-1 py-0.5 border border-blue-400 rounded focus:ring-1 focus:ring-blue-400 outline-none bg-white text-gray-900 placeholder:text-gray-500"
       />
     )
   }
@@ -156,7 +156,7 @@ function EditableTextarea({
         value={draft}
         onChange={e => setDraft(e.target.value)}
         onBlur={commit}
-        className="w-full text-xs px-1 py-0.5 border border-blue-400 rounded outline-none resize-y min-h-[64px] bg-white text-gray-900 placeholder:text-gray-400"
+        className="w-full text-xs px-1 py-0.5 border border-blue-400 rounded focus:ring-1 focus:ring-blue-400 outline-none resize-y min-h-[64px] bg-white text-gray-900 placeholder:text-gray-500"
       />
     )
   }
@@ -225,7 +225,7 @@ function EditableHashtags({
         onBlur={commit}
         onKeyDown={e => e.key === 'Enter' && commit()}
         placeholder="#tag1 #tag2"
-        className="w-full text-xs px-1 py-0.5 border border-blue-400 rounded outline-none bg-white text-gray-900 placeholder:text-gray-400"
+        className="w-full text-xs px-1 py-0.5 border border-blue-400 rounded focus:ring-1 focus:ring-blue-400 outline-none bg-white text-gray-900 placeholder:text-gray-500"
       />
     )
   }
