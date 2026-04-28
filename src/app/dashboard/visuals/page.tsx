@@ -303,6 +303,34 @@ export default function VisualsPage() {
     }
   };
 
+  // Airtable sync
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ total: number; updated: number; created: number } | null>(null);
+  const [syncError, setSyncError] = useState('');
+
+  const handleSyncFromAirtable = async () => {
+    const clientId = imgClientId || vidClientId;
+    if (!clientId) { setSyncError('Select a client first'); return; }
+    setSyncing(true);
+    setSyncError('');
+    setSyncResult(null);
+    try {
+      const res = await fetch(`/api/airtable/pull-content?client_id=${clientId}`);
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error ?? 'Sync failed');
+      setSyncResult({ total: json.total, updated: json.updated, created: json.created });
+      // Refresh posts list
+      fetch(`/api/clients/${clientId}/posts`).then(r => r.json()).then(d => {
+        setPosts(d.posts ?? []);
+        setVidPosts(d.posts ?? []);
+      });
+    } catch (err: unknown) {
+      setSyncError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const statusBadge = (s: string) => {
     const colors: Record<string, string> = {
       generating: 'bg-yellow-100 text-yellow-700',
@@ -314,9 +342,26 @@ export default function VisualsPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Visuals</h1>
-        <p className="text-sm text-gray-500 mt-1">Generate images, videos & avatar videos</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Visuals</h1>
+          <p className="text-sm text-gray-500 mt-1">Generate images, videos & avatar videos</p>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <button
+            onClick={handleSyncFromAirtable}
+            disabled={syncing}
+            className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+          >
+            {syncing
+              ? <><span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full inline-block" /> Syncing...</>
+              : '🔄 Sync from Airtable'}
+          </button>
+          {syncResult && (
+            <p className="text-xs text-green-700">✅ {syncResult.total} records — {syncResult.updated} updated, {syncResult.created} new</p>
+          )}
+          {syncError && <p className="text-xs text-red-600">{syncError}</p>}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

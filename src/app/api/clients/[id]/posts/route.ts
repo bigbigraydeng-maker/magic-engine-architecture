@@ -12,7 +12,7 @@ export async function GET(
       .select('id, title, status, route, platforms, caption, hashtags, visual_brief, scheduled_at, created_at')
       .eq('client_id', params.id)
       .order('created_at', { ascending: false })
-      .limit(10)
+      .limit(100)
 
     if (error) throw error
     return NextResponse.json({ posts: data ?? [] })
