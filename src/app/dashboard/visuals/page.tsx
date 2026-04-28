@@ -123,7 +123,7 @@ function EditableText({
         onChange={e => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={e => e.key === 'Enter' && commit()}
-        className="w-full text-sm px-1 py-0.5 border border-blue-400 rounded outline-none bg-white text-gray-900"
+        className="w-full text-sm px-1 py-0.5 border border-blue-400 rounded outline-none bg-white"
       />
     )
   }
@@ -131,9 +131,9 @@ function EditableText({
     <div
       onClick={() => { setDraft(value ?? ''); setEditing(true) }}
       title={value ?? ''}
-      className="cursor-text min-h-[22px] text-sm px-1 py-0.5 rounded hover:bg-blue-50 truncate text-gray-900"
+      className="cursor-text min-h-[22px] text-sm text-gray-900 px-1 py-0.5 rounded hover:bg-blue-50 truncate"
     >
-      {value || <span className="text-gray-400 italic text-xs">{placeholder}</span>}
+      {value || <span className="text-gray-300 italic text-xs">{placeholder}</span>}
     </div>
   )
 }
@@ -156,7 +156,7 @@ function EditableTextarea({
         value={draft}
         onChange={e => setDraft(e.target.value)}
         onBlur={commit}
-        className="w-full text-xs px-1 py-0.5 border border-blue-400 rounded outline-none resize-y min-h-[64px] bg-white text-gray-900"
+        className="w-full text-xs px-1 py-0.5 border border-blue-400 rounded outline-none resize-y min-h-[64px] bg-white"
       />
     )
   }
@@ -164,9 +164,9 @@ function EditableTextarea({
     <div
       onClick={() => { setDraft(value ?? ''); setEditing(true) }}
       title={value ?? ''}
-      className="cursor-text min-h-[22px] text-xs px-1 py-0.5 rounded hover:bg-blue-50 line-clamp-2 overflow-hidden text-gray-900"
+      className="cursor-text min-h-[22px] text-xs text-gray-900 px-1 py-0.5 rounded hover:bg-blue-50 line-clamp-2 overflow-hidden"
     >
-      {value || <span className="text-gray-400 italic">{placeholder}</span>}
+      {value || <span className="text-gray-300 italic">{placeholder}</span>}
     </div>
   )
 }
@@ -190,14 +190,14 @@ function EditableDatetime({
         value={draft}
         onChange={e => setDraft(e.target.value)}
         onBlur={() => commit(draft)}
-        className="text-xs px-1 py-0.5 border border-blue-400 rounded outline-none w-36 bg-white text-gray-900"
+        className="text-xs px-1 py-0.5 border border-blue-400 rounded outline-none w-36 bg-white"
       />
     )
   }
   return (
     <div
       onClick={() => { setDraft(value ? toDatetimeLocal(value) : ''); setEditing(true) }}
-      className="cursor-text min-h-[22px] text-xs px-1 py-0.5 rounded hover:bg-blue-50 whitespace-nowrap text-gray-900"
+      className="cursor-text min-h-[22px] text-xs text-gray-900 px-1 py-0.5 rounded hover:bg-blue-50 whitespace-nowrap"
     >
       {fmtDateNZ(value)}
     </div>
@@ -225,7 +225,7 @@ function EditableHashtags({
         onBlur={commit}
         onKeyDown={e => e.key === 'Enter' && commit()}
         placeholder="#tag1 #tag2"
-        className="w-full text-xs px-1 py-0.5 border border-blue-400 rounded outline-none bg-white text-gray-900"
+        className="w-full text-xs px-1 py-0.5 border border-blue-400 rounded outline-none bg-white"
       />
     )
   }
@@ -233,9 +233,9 @@ function EditableHashtags({
     <div
       onClick={() => { setDraft(str); setEditing(true) }}
       title={str}
-      className="cursor-text min-h-[22px] text-xs px-1 py-0.5 rounded hover:bg-blue-50 truncate text-blue-600"
+      className="cursor-text min-h-[22px] text-xs px-1 py-0.5 rounded hover:bg-blue-50 truncate text-blue-500"
     >
-      {str || <span className="text-gray-400 italic">—</span>}
+      {str || <span className="text-gray-300 italic">—</span>}
     </div>
   )
 }
@@ -252,7 +252,7 @@ function EditableStatus({
         value={value}
         onChange={e => { onSave(e.target.value); setEditing(false) }}
         onBlur={() => setEditing(false)}
-        className="text-xs border border-blue-400 rounded px-1 outline-none bg-white w-full text-gray-900"
+        className="text-xs border border-blue-400 rounded px-1 outline-none bg-white w-full"
       >
         {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
       </select>
@@ -396,23 +396,16 @@ export default function VisualsPage() {
   const pollStatus = useCallback(async (postId: string, assetId: string) => {
     try {
       const res = await fetch(`/api/visual/status/${assetId}`)
-      if (!res.ok) throw new Error(`Status check failed: HTTP ${res.status}`)
-
       const d = await res.json()
-      const status = d.asset?.generation_status
-
-      if (status === 'ready') {
+      if (d.status === 'ready') {
         stopTimers(postId)
         patchGen(postId, { generating: false, genStatus: 'ready' })
         if (selectedClientId) fetchAssets(selectedClientId)
-      } else if (status === 'failed') {
+      } else if (d.status === 'failed') {
         stopTimers(postId)
         patchGen(postId, { generating: false, genStatus: 'failed' })
       }
-      // else: still pending/processing, keep polling
-    } catch (err) {
-      console.error(`[pollStatus] Asset ${assetId}:`, err instanceof Error ? err.message : String(err))
-    }
+    } catch { /* ignore transient errors */ }
   }, [stopTimers, patchGen, selectedClientId, fetchAssets])
 
   const handleGenerate = useCallback(async (post: Post) => {
@@ -516,7 +509,7 @@ export default function VisualsPage() {
         <select
           value={selectedClientId}
           onChange={e => setSelectedClientId(e.target.value)}
-          className="text-sm border border-gray-200 rounded px-2 py-1 bg-white text-gray-900"
+          className="text-sm border border-gray-200 rounded px-2 py-1 bg-white"
         >
           <option value="">Select client…</option>
           {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -553,7 +546,7 @@ export default function VisualsPage() {
             </thead>
             <tbody>
               {posts.map((post, idx) => (
-                <tr key={post.id} className="border-b border-gray-100 hover:bg-gray-50/70 align-top group text-gray-900">
+                <tr key={post.id} className="border-b border-gray-100 hover:bg-gray-50/70 align-top group">
 
                   {/* # */}
                   <td className="px-2 py-1.5 text-gray-400 text-xs border-r border-gray-100">{idx + 1}</td>
@@ -667,7 +660,7 @@ export default function VisualsPage() {
                 <select
                   value={scheduleForm.account_id}
                   onChange={e => setScheduleForm(f => ({ ...f, account_id: e.target.value }))}
-                  className="w-full border rounded px-2 py-1.5 text-sm text-gray-900"
+                  className="w-full border rounded px-2 py-1.5 text-sm"
                 >
                   <option value="">Select account…</option>
                   {publerAccounts.map(a => (
@@ -681,7 +674,7 @@ export default function VisualsPage() {
                   type="datetime-local"
                   value={scheduleForm.scheduled_at}
                   onChange={e => setScheduleForm(f => ({ ...f, scheduled_at: e.target.value }))}
-                  className="w-full border rounded px-2 py-1.5 text-sm text-gray-900"
+                  className="w-full border rounded px-2 py-1.5 text-sm"
                 />
               </div>
               <div>
@@ -690,7 +683,7 @@ export default function VisualsPage() {
                   value={scheduleForm.caption}
                   onChange={e => setScheduleForm(f => ({ ...f, caption: e.target.value }))}
                   rows={4}
-                  className="w-full border rounded px-2 py-1.5 text-sm resize-none text-gray-900"
+                  className="w-full border rounded px-2 py-1.5 text-sm resize-none"
                 />
               </div>
             </div>
