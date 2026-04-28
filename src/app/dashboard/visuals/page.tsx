@@ -1,6 +1,8 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useGenerationQueue } from '@/hooks/useGenerationQueue'
+import { GenerationQueueItem, GENERATION_CONFIG } from '@/lib/visual/generation-config'
 
 interface Post {
   id: string
@@ -24,13 +26,21 @@ interface VisualAsset {
   storage_url: string | null
   provider_job_id: string | null
   created_at: string
+  cost_usd?: number
+  error_message?: string
 }
 
 interface GenState {
   generating: boolean
+  queued: boolean
+  queuePosition?: number
   elapsed: number
   assetId?: string
   genStatus?: string
+  errorMessage?: string
+  errorCode?: string
+  retryCount?: number
+  costUsd?: number
 }
 
 interface Client {
@@ -363,14 +373,28 @@ function EditablePlatforms({
 // ── Asset cell ─────────────────────────────────────────────────────────────────
 
 function AssetCell({
-  post, genState, readyAsset, onGenerate, onSchedule,
+  post, genState, readyAsset, onGenerate, onSchedule, onShowError,
 }: {
   post: Post
   genState?: GenState
   readyAsset?: VisualAsset
   onGenerate: () => void
   onSchedule: (assetId: string) => void
+  onShowError?: (error: {postId: string, message: string, code?: string, retryCount: number}) => void
 }) {
+  // Queued state (waiting to start generation)
+  if (genState?.queued && !genState.generating) {
+    return (
+      <div className="flex flex-col items-center gap-1 py-1">
+        <div className="w-5 h-5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+        <span className="text-[9px] text-amber-600 font-medium text-center">
+          Queued {genState.queuePosition}
+        </span>
+      </div>
+    )
+  }
+
+  // Generating state
   if (genState?.generating) {
     const stage = STAGES[Math.floor(genState.elapsed / 30) % STAGES.length]
     return (
@@ -382,6 +406,62 @@ function AssetCell({
     )
   }
 
+  // Timeout state
+  if (genState?.genStatus === 'timeout') {
+    return (
+      <div className="flex flex-col items-center gap-1">
+        <div className="text-center">
+          <div className="text-lg">⏱</div>
+          <span className="text-[9px] text-orange-600 font-medium">Timeout</span>
+        </div>
+        <button
+          onClick={onGenerate}
+          title="Retry generation"
+          className="text-[9px] px-1.5 py-0.5 bg-orange-500 text-white rounded hover:bg-orange-600"
+        >
+          ↻ Retry
+        </button>
+      </div>
+    )
+  }
+
+  // Failed state
+  if (genState?.genStatus === 'failed') {
+    return (
+      <div className="flex flex-col items-center gap-1">
+        <div className="text-center">
+          <div className="text-lg">✕</div>
+          <span className="text-[9px] text-red-600 font-medium">Failed</span>
+        </div>
+        <div className="flex gap-1 flex-col items-center text-[9px]">
+          <button
+            onClick={() => onShowError?.({
+              postId: post.id,
+              message: genState.errorMessage || 'Generation failed',
+              code: genState.errorCode,
+              retryCount: genState.retryCount ?? 0,
+            })}
+            className="px-1.5 py-0.5 bg-red-100 text-red-700 rounded hover:bg-red-200"
+          >
+            Details
+          </button>
+          <button
+            onClick={onGenerate}
+            className="px-1.5 py-0.5 bg-red-500 text-white rounded hover:bg-red-600"
+          >
+            ↻ Retry
+          </button>
+          {genState.retryCount !== undefined && (
+            <span className="text-[8px] text-gray-500">
+              Attempt {genState.retryCount + 1}/{GENERATION_CONFIG.MAX_AUTO_RETRIES}
+            </span>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  // Ready state - show image with buttons
   if (readyAsset?.storage_url) {
     return (
       <div className="flex flex-col items-center gap-1">
@@ -406,10 +486,14 @@ function AssetCell({
             ↻ Retry
           </button>
         </div>
+        {readyAsset.cost_usd && (
+          <span className="text-[8px] text-gray-500">${readyAsset.cost_usd.toFixed(2)}</span>
+        )}
       </div>
     )
   }
 
+  // Initial state - show generation button
   const type = assetTypeFromFormat(post.format)
   return (
     <button
@@ -435,9 +519,41 @@ export default function VisualsPage() {
   const [scheduleForm, setScheduleForm] = useState({ account_id: '', scheduled_at: '', caption: '' })
   const [scheduleLoading, setScheduleLoading] = useState(false)
   const [toast, setToast] = useState<{ type: 'success' | 'error', message: string } | null>(null)
+  const [errorModal, setErrorModal] = useState<{
+    postId: string
+    message: string
+    code?: string
+    retryCount: number
+  } | null>(null)
 
-  const pollingRefs = useRef<Record<string, NodeJS.Timeout>>({})
-  const elapsedRefs = useRef<Record<string, NodeJS.Timeout>>({})
+  // Generation queue management
+  const {
+    queueState,
+    submitGeneration,
+    processQueue,
+    getQueuePosition,
+    cleanup,
+  } = useGenerationQueue({
+    onStatusChange: useCallback((postId: string, state: GenerationQueueItem) => {
+      setGenStates((prev) => ({
+        ...prev,
+        [postId]: {
+          generating: state.status === 'generating',
+          queued: state.status === 'queued',
+          queuePosition: getQueuePosition(postId),
+          elapsed: state.elapsed ?? 0,
+          assetId: state.assetId,
+          genStatus: state.status === 'ready' || state.status === 'failed' || state.status === 'timeout'
+            ? state.status
+            : undefined,
+          errorMessage: state.errorMessage,
+          errorCode: state.errorCode,
+          retryCount: state.retryCount,
+          costUsd: state.costUsd,
+        },
+      }))
+    }, []),
+  })
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -475,6 +591,37 @@ export default function VisualsPage() {
     }
   }, [toast])
 
+  // Keep ref to latest queueState for cleanup
+  const queueStateRef = useRef(queueState)
+  useEffect(() => {
+    queueStateRef.current = queueState
+  }, [queueState])
+
+  // Cleanup Hook timers only on unmount
+  useEffect(() => {
+    return () => {
+      Object.keys(queueStateRef.current.activeGenerations).forEach(postId => cleanup(postId))
+      queueStateRef.current.queue.forEach(item => cleanup(item.postId))
+    }
+  }, [cleanup])
+
+  // Track which posts have already triggered asset refresh
+  const refreshedPostIdsRef = useRef<Set<string>>(new Set())
+
+  // Refresh assets after generation completes (once per post)
+  useEffect(() => {
+    const completedPostIds = Object.entries(genStates)
+      .filter(([_, state]) => state.genStatus === 'ready')
+      .map(([postId]) => postId)
+
+    const newlyCompleted = completedPostIds.filter(id => !refreshedPostIdsRef.current.has(id))
+
+    if (newlyCompleted.length > 0 && selectedClientId) {
+      newlyCompleted.forEach(id => refreshedPostIdsRef.current.add(id))
+      fetchAssets(selectedClientId)
+    }
+  }, [genStates, selectedClientId, fetchAssets])
+
   // ── Patch post ─────────────────────────────────────────────────────────────
 
   const patchPost = useCallback(async (postId: string, fields: Record<string, unknown>) => {
@@ -495,61 +642,28 @@ export default function VisualsPage() {
     }))
   }, [])
 
-  const stopTimers = useCallback((postId: string) => {
-    clearInterval(pollingRefs.current[postId])
-    clearInterval(elapsedRefs.current[postId])
-    delete pollingRefs.current[postId]
-    delete elapsedRefs.current[postId]
-  }, [])
-
-  const pollStatus = useCallback(async (postId: string, assetId: string) => {
-    try {
-      const res = await fetch(`/api/visual/status/${assetId}`)
-      const d = await res.json()
-      if (d.status === 'ready') {
-        stopTimers(postId)
-        patchGen(postId, { generating: false, genStatus: 'ready' })
-        if (selectedClientId) fetchAssets(selectedClientId)
-      } else if (d.status === 'failed') {
-        stopTimers(postId)
-        patchGen(postId, { generating: false, genStatus: 'failed' })
-      }
-    } catch { /* ignore transient errors */ }
-  }, [stopTimers, patchGen, selectedClientId, fetchAssets])
-
   const handleGenerate = useCallback(async (post: Post) => {
     const assetType = assetTypeFromFormat(post.format)
     const apiPath = assetType === 'video' ? '/api/visual/video' : '/api/visual/image'
 
-    patchGen(post.id, { generating: true, elapsed: 0 })
-
-    let elapsed = 0
-    elapsedRefs.current[post.id] = setInterval(() => {
-      elapsed++
-      patchGen(post.id, { elapsed })
-    }, 1000)
-
     try {
-      const res = await fetch(apiPath, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          post_id: post.id,
-          client_id: selectedClientId,
-          variant: 1,
-          aspect_ratio: post.ratio ?? '1:1',
-        }),
+      await submitGeneration(post.id, apiPath, {
+        post_id: post.id,
+        client_id: selectedClientId,
+        variant: 1,
+        asset_type: assetType,
+        aspect_ratio: post.ratio ?? '1:1',
       })
-      const d = await res.json()
-      if (!d.success) throw new Error(d.error)
-      patchGen(post.id, { assetId: d.asset_id })
-      pollingRefs.current[post.id] = setInterval(() => pollStatus(post.id, d.asset_id), 5000)
+      // Hook's internal effect will auto-process queue
     } catch (e) {
-      stopTimers(post.id)
-      patchGen(post.id, { generating: false, genStatus: 'failed' })
-      setToast({ type: 'error', message: `Generation failed: ${e instanceof Error ? e.message : String(e)}` })
+      patchGen(post.id, { queued: false, generating: false, genStatus: 'failed' })
+      setToast({
+        type: 'error',
+        message: `Generation failed: ${e instanceof Error ? e.message : String(e)}`,
+      })
     }
-  }, [selectedClientId, patchGen, stopTimers, pollStatus])
+  }, [selectedClientId, submitGeneration, patchGen])
+
 
   // ── Publer ─────────────────────────────────────────────────────────────────
 
@@ -742,6 +856,7 @@ export default function VisualsPage() {
                       readyAsset={readyAssetByPost[post.id]}
                       onGenerate={() => handleGenerate(post)}
                       onSchedule={assetId => openPubModal(assetId, post.id)}
+                      onShowError={setErrorModal}
                     />
                   </td>
                 </tr>
@@ -821,6 +936,47 @@ export default function VisualsPage() {
                 ) : (
                   'Schedule'
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Error detail modal */}
+      {errorModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md shadow-xl">
+            <h3 className="text-base font-semibold text-red-600 mb-2">Generation Failed</h3>
+            <p className="text-sm text-gray-700 mb-4 leading-relaxed">{errorModal.message}</p>
+            {errorModal.code && (
+              <div className="mb-4 p-2 bg-gray-50 rounded border border-gray-200">
+                <p className="text-xs text-gray-500 font-medium mb-1">Error Code:</p>
+                <p className="text-xs text-gray-700 font-mono">{errorModal.code}</p>
+              </div>
+            )}
+            <div className="mb-4 p-2 bg-gray-50 rounded border border-gray-200">
+              <p className="text-xs text-gray-500 font-medium">
+                Attempt: {errorModal.retryCount + 1} / {GENERATION_CONFIG.MAX_AUTO_RETRIES}
+              </p>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => setErrorModal(null)}
+                className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 font-medium"
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={() => {
+                  const post = posts.find(p => p.id === errorModal.postId)
+                  if (post) {
+                    handleGenerate(post)
+                    setErrorModal(null)
+                  }
+                }}
+                className="px-3 py-1.5 text-sm bg-red-500 text-white rounded hover:bg-red-600 font-medium"
+              >
+                Retry Now
               </button>
             </div>
           </div>

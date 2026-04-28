@@ -5,6 +5,7 @@ import { checkVideoStatus } from '@/lib/visual/seedance'
 import { checkAvatarStatus } from '@/lib/visual/heygen'
 import { uploadFromUrl } from '@/lib/visual/storage'
 import { updateRecord } from '@/lib/airtable/client'
+import { GenerationErrorResponse } from '@/lib/visual/generation-config'
 
 type ProviderResult = {
   status: string
@@ -13,6 +14,65 @@ type ProviderResult = {
   duration_seconds?: number
   cost_usd?: number
   error?: string
+}
+
+/**
+ * Maps provider errors to structured error responses
+ */
+function mapErrorToStructured(
+  error: string,
+  ageMinutes: number
+): GenerationErrorResponse {
+  const errorLower = error.toLowerCase()
+
+  if (errorLower.includes('quota') || errorLower.includes('rate limit')) {
+    return {
+      code: 'quota_exceeded',
+      message: 'API quota exceeded. Please try again in a few minutes.',
+      retryEligible: true,
+      suggestedAction: 'Wait 5-15 minutes before retrying',
+    }
+  }
+
+  if (errorLower.includes('auth') || errorLower.includes('unauthorized')) {
+    return {
+      code: 'auth_failed',
+      message: 'Authentication failed with provider. Contact support.',
+      retryEligible: false,
+    }
+  }
+
+  if (errorLower.includes('timeout') || errorLower.includes('connection')) {
+    return {
+      code: 'network_error',
+      message: 'Network timeout connecting to provider.',
+      retryEligible: true,
+      suggestedAction: 'Retry will be attempted automatically',
+    }
+  }
+
+  if (errorLower.includes('invalid') || errorLower.includes('malformed')) {
+    return {
+      code: 'invalid_input',
+      message: 'Invalid input parameters. Please check your prompt.',
+      retryEligible: false,
+    }
+  }
+
+  if (ageMinutes > 60) {
+    return {
+      code: 'timeout',
+      message: `Generation exceeded timeout limit (${Math.floor(ageMinutes)} minutes). The provider may have encountered an issue.`,
+      retryEligible: true,
+      suggestedAction: 'Manually retry if needed',
+    }
+  }
+
+  return {
+    code: 'provider_error',
+    message: `Provider error: ${error}`,
+    retryEligible: true,
+  }
 }
 
 export async function GET(
@@ -49,14 +109,30 @@ export async function GET(
       }
     } catch (providerErr: unknown) {
       const ageMinutes = (Date.now() - new Date(asset.created_at).getTime()) / 60000
+      const errMsg = providerErr instanceof Error ? providerErr.message : String(providerErr)
+
+      // Auto-fail after 12 hours
       if (ageMinutes > 720) {
-        const errMsg = providerErr instanceof Error ? providerErr.message : String(providerErr)
+        const errorResponse = mapErrorToStructured(errMsg, ageMinutes)
+        const failMessage = `${errorResponse.message} (Age: ${Math.floor(ageMinutes)} minutes)`
+
         await supabaseAdmin
           .from('visual_assets')
-          .update({ generation_status: 'failed', error_message: `Provider error: ${errMsg}` })
+          .update({
+            generation_status: 'failed',
+            error_message: failMessage,
+          })
           .eq('id', params.assetId)
-        return NextResponse.json({ success: true, asset: { ...asset, generation_status: 'failed' }, auto_failed: true })
+
+        return NextResponse.json({
+          success: true,
+          asset: { ...asset, generation_status: 'failed', error_message: failMessage },
+          detailed_error: errorResponse,
+          auto_failed: true,
+        })
       }
+
+      // For transient errors, throw to retry
       throw providerErr
     }
 
@@ -127,15 +203,32 @@ export async function GET(
     }
 
     if (providerResult.status === 'failed') {
+      const ageMinutes = (Date.now() - new Date(asset.created_at).getTime()) / 60000
+      const errorResponse = mapErrorToStructured(providerResult.error || 'Unknown error', ageMinutes)
+
       await supabaseAdmin
         .from('visual_assets')
-        .update({ generation_status: 'failed', error_message: providerResult.error })
+        .update({
+          generation_status: 'failed',
+          error_message: providerResult.error,
+        })
         .eq('id', params.assetId)
+
+      return NextResponse.json({
+        success: true,
+        asset: { ...asset, generation_status: 'failed', error_message: providerResult.error },
+        detailed_error: errorResponse,
+      })
     }
 
     return NextResponse.json({
       success: true,
-      asset: { ...asset, generation_status: providerResult.status },
+      asset: {
+        ...asset,
+        generation_status: providerResult.status,
+        cost_usd: providerResult.cost_usd,
+        duration_seconds: providerResult.duration_seconds,
+      },
       still_processing: providerResult.status === 'processing' || providerResult.status === 'pending',
     })
 
