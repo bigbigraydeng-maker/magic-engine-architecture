@@ -63,11 +63,24 @@ VALUES (
 )
 ON CONFLICT (id) DO NOTHING;
 
--- 7. Storage policy for brief-uploads
-CREATE POLICY IF NOT EXISTS "service_role_brief_uploads"
-  ON storage.objects FOR ALL TO service_role
-  USING (bucket_id = 'brief-uploads')
-  WITH CHECK (bucket_id = 'brief-uploads');
+-- 7. Storage policy for brief-uploads (idempotent via DO block)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage'
+      AND tablename  = 'objects'
+      AND policyname = 'service_role_brief_uploads'
+  ) THEN
+    EXECUTE $policy$
+      CREATE POLICY service_role_brief_uploads
+        ON storage.objects FOR ALL TO service_role
+        USING (bucket_id = 'brief-uploads')
+        WITH CHECK (bucket_id = 'brief-uploads')
+    $policy$;
+  END IF;
+END
+$$;
 
 -- 8. Index for efficient brief queries
 CREATE INDEX IF NOT EXISTS idx_mb_client_status
