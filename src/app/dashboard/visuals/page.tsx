@@ -332,6 +332,7 @@ export default function VisualsPage() {
   const [pubModal, setPubModal] = useState<PubModal | null>(null)
   const [publerAccounts, setPublerAccounts] = useState<PublerAccount[]>([])
   const [scheduleForm, setScheduleForm] = useState({ account_id: '', scheduled_at: '', caption: '' })
+  const [toast, setToast] = useState<{ type: 'success' | 'error', message: string } | null>(null)
 
   const pollingRefs = useRef<Record<string, NodeJS.Timeout>>({})
   const elapsedRefs = useRef<Record<string, NodeJS.Timeout>>({})
@@ -365,6 +366,12 @@ export default function VisualsPage() {
       fetchAssets(selectedClientId)
     }
   }, [selectedClientId, fetchPosts, fetchAssets])
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [toast])
 
   // ── Patch post ─────────────────────────────────────────────────────────────
 
@@ -438,7 +445,7 @@ export default function VisualsPage() {
     } catch (e) {
       stopTimers(post.id)
       patchGen(post.id, { generating: false, genStatus: 'failed' })
-      alert(`Generation failed: ${e instanceof Error ? e.message : String(e)}`)
+      setToast({ type: 'error', message: `Generation failed: ${e instanceof Error ? e.message : String(e)}` })
     }
   }, [selectedClientId, patchGen, stopTimers, pollStatus])
 
@@ -470,8 +477,12 @@ export default function VisualsPage() {
       }),
     })
     const d = await res.json()
-    if (d.success) { alert('Scheduled! Job: ' + d.job_id); setPubModal(null) }
-    else alert('Error: ' + d.error)
+    if (d.success) {
+      setToast({ type: 'success', message: 'Scheduled! Job: ' + d.job_id })
+      setPubModal(null)
+    } else {
+      setToast({ type: 'error', message: 'Error: ' + d.error })
+    }
   }, [pubModal, scheduleForm])
 
   // ── Sync ───────────────────────────────────────────────────────────────────
@@ -484,9 +495,9 @@ export default function VisualsPage() {
       const d = await res.json()
       if (d.success) {
         await fetchPosts(selectedClientId)
-        alert(`Synced: +${d.created} new, ~${d.updated} updated`)
+        setToast({ type: 'success', message: `Synced: +${d.created} new, ~${d.updated} updated` })
       } else {
-        alert('Sync failed: ' + d.error)
+        setToast({ type: 'error', message: 'Sync failed: ' + d.error })
       }
     } finally { setSyncing(false) }
   }, [selectedClientId, fetchPosts])
@@ -703,6 +714,32 @@ export default function VisualsPage() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Toast notification */}
+      {toast && (
+        <div className={`fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 z-40 animate-in fade-in-0 slide-in-from-bottom-4 ${
+          toast.type === 'success'
+            ? 'bg-green-50 text-green-800 border border-green-200'
+            : 'bg-red-50 text-red-800 border border-red-200'
+        }`}>
+          {toast.type === 'success' ? (
+            <svg className="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+            </svg>
+          ) : (
+            <svg className="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+            </svg>
+          )}
+          <span className="text-sm">{toast.message}</span>
+          <button
+            onClick={() => setToast(null)}
+            className="ml-2 text-current hover:opacity-70"
+          >
+            ×
+          </button>
         </div>
       )}
     </div>
