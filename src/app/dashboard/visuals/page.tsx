@@ -263,7 +263,7 @@ export default function VisualsPage() {
       const res = await fetch('/api/visual/image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ post_id: imgPostId, client_id: imgClientId, variant: 1 }),
+        body: JSON.stringify({ post_id: imgPostId, client_id: imgClientId, variant: 1, prompt_override: imgPrompt || undefined, aspect_ratio: imgAspectRatio }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Failed');

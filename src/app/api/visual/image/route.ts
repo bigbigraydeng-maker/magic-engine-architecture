@@ -4,7 +4,7 @@ import { submitImageGeneration } from '@/lib/visual/wavespeed'
 
 export async function POST(req: NextRequest) {
   try {
-    const { post_id, client_id, variant = 1 } = await req.json()
+    const { post_id, client_id, variant = 1, prompt_override, aspect_ratio = '1:1' } = await req.json()
 
     if (!post_id || !client_id) {
       return NextResponse.json(
@@ -19,18 +19,27 @@ export async function POST(req: NextRequest) {
       .eq('id', post_id)
       .single()
 
-    if (!post?.visual_brief) {
+    if (!post?.visual_brief && !prompt_override) {
       return NextResponse.json(
         { success: false, error: 'No visual_brief on this post' },
         { status: 400 }
       )
     }
 
-    const prompt = post.revision_notes
+    const basePrompt = prompt_override || (post?.revision_notes
       ? `${post.visual_brief}. Additional requirements: ${post.revision_notes}`
-      : post.visual_brief
+      : post?.visual_brief) || ''
 
-    const { job_id } = await submitImageGeneration({ prompt })
+    // 宽高映射
+    const dimensionMap: Record<string, { width: number; height: number }> = {
+      '1:1':  { width: 1024, height: 1024 },
+      '4:5':  { width: 1024, height: 1280 },
+      '16:9': { width: 1792, height: 1024 },
+      '9:16': { width: 1024, height: 1792 },
+    }
+    const { width, height } = dimensionMap[aspect_ratio] ?? { width: 1024, height: 1024 }
+
+    const { job_id } = await submitImageGeneration({ prompt: basePrompt, width, height })
 
     const { data: asset, error } = await supabaseAdmin
       .from('visual_assets')
@@ -39,7 +48,7 @@ export async function POST(req: NextRequest) {
         client_id,
         asset_type: 'image',
         provider: 'wavespeed',
-        prompt_used: prompt,
+        prompt_used: basePrompt,
         variant,
         generation_status: 'generating',
         provider_job_id: job_id,
@@ -49,7 +58,7 @@ export async function POST(req: NextRequest) {
 
     if (error) throw error
 
-    if (post.revision_notes) {
+    if (post?.revision_notes) {
       await supabaseAdmin
         .from('content_posts')
         .update({ revision_notes: null })
