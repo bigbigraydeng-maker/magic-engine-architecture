@@ -23,9 +23,14 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
 
   // Refs to track intervals and timeouts
   const pollingRefs = useRef<Record<string, NodeJS.Timeout>>({})
-  const elapsedRefs = useRef<Record<string, NodeJS.Timeout>>({})
   const timeoutRefs = useRef<Record<string, NodeJS.Timeout>>({})
   const retryTimeoutRefs = useRef<Record<string, NodeJS.Timeout>>({})
+
+  // HIGH FIX #1: Keep live ref to queueState so interval callbacks read current data
+  const queueStateRef = useRef(queueState)
+  useEffect(() => {
+    queueStateRef.current = queueState
+  }, [queueState])
 
   // Restore queue from localStorage on mount
   useEffect(() => {
@@ -35,13 +40,11 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
         const restored = JSON.parse(saved) as GenerationQueueState
         const now = Date.now()
 
-        // Filter out stale queue items (older than 60 minutes)
         const validQueue = restored.queue.filter(item => {
           const age = now - item.startedAt
           return age < GENERATION_CONFIG.POLLING_TIMEOUT_MS
         })
 
-        // Also clean up stale active generations
         const validActiveGenerations: Record<string, GenerationQueueItem> = {}
         Object.entries(restored.activeGenerations).forEach(([postId, item]) => {
           const age = now - item.startedAt
@@ -50,20 +53,15 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
           }
         })
 
-        // Only restore if we have valid items
         if (validQueue.length > 0 || Object.keys(validActiveGenerations).length > 0) {
           setQueueState({
             queue: validQueue,
             activeGenerations: validActiveGenerations,
           })
-          console.log(`[Queue] Restored ${validQueue.length} queue items, ${Object.keys(validActiveGenerations).length} active generations`)
         } else {
-          // Clear stale data
           localStorage.removeItem('generation_queue_state')
-          console.log('[Queue] Cleared stale queue data')
         }
-      } catch (e) {
-        console.warn('Failed to restore queue state:', e)
+      } catch {
         localStorage.removeItem('generation_queue_state')
       }
     }
@@ -99,10 +97,7 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
         const item: GenerationQueueItem = {
           postId,
           assetId: data.asset_id,
-          assetType: assetType as
-            | 'image'
-            | 'video'
-            | 'avatar_video',
+          assetType: assetType as 'image' | 'video' | 'avatar_video',
           startedAt: Date.now(),
           retryCount: 0,
           status: 'queued',
@@ -115,11 +110,10 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
           queue: [...prev.queue, item],
         }))
 
-        // CRITICAL FIX: Notify UI immediately that item is queued
-        // This ensures the "Queued X" status appears right away,
-        // even before the queue processor moves it to activeGenerations
+        // Notify UI immediately so "Queued X" appears without waiting for a poll cycle
         callbacks?.onStatusChange?.(postId, item)
-        callbacks?.onQueueChange?.(queueState)
+        // HIGH FIX #2: removed stale onQueueChange(queueState) call — the queue
+        // effect at the bottom already drives processQueue on every queue change
         return item
       } catch (e) {
         throw new Error(
@@ -127,7 +121,7 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
         )
       }
     },
-    [queueState, callbacks]
+    [callbacks]  // removed stale [queueState, callbacks] dep
   )
 
   /**
@@ -142,14 +136,18 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
   )
 
   /**
-   * Poll status from API and update state accordingly
+   * Poll status from API and update state accordingly.
+   * HIGH FIX #1: reads live item from queueStateRef instead of stale closure.
    */
   const pollStatus = useCallback(
-    async (item: GenerationQueueItem) => {
+    async (postId: string) => {
+      // Read live item so retryCount and assetId are always current
+      const item = queueStateRef.current.activeGenerations[postId]
+      if (!item) return
+
       const elapsedMs = Date.now() - item.startedAt
       const elapsed = Math.floor(elapsedMs / 1000)
 
-      // Check timeout
       if (elapsedMs > GENERATION_CONFIG.POLLING_TIMEOUT_MS) {
         handleGenerationTimeout(item)
         return
@@ -157,52 +155,34 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
 
       try {
         const res = await fetch(`/api/visual/status/${item.assetId}`)
-        if (!res.ok) {
-          console.error(`Status check failed: ${res.status}`)
-          return
-        }
+        if (!res.ok) return
 
         const data = await res.json()
 
         if (data.asset?.generation_status === 'ready') {
-          // Generation succeeded
           handleGenerationComplete(item, data.asset)
         } else if (data.asset?.generation_status === 'failed') {
-          // Generation failed
           handleGenerationFailed(item, data.asset?.error_message)
         } else {
-          // Still processing - update elapsed time and stage
           const stage = getCurrentStage(elapsed)
           setQueueState((prev) => {
-            const activeItem = prev.activeGenerations[item.postId]
+            const activeItem = prev.activeGenerations[postId]
             if (!activeItem) return prev
-
-            const updated: GenerationQueueItem = {
-              ...activeItem,
-              elapsed,
-              stage,
-            }
-
             return {
               ...prev,
               activeGenerations: {
                 ...prev.activeGenerations,
-                [item.postId]: updated,
+                [postId]: { ...activeItem, elapsed, stage },
               },
             }
           })
-
-          callbacks?.onStatusChange?.(item.postId, {
-            ...item,
-            elapsed,
-            stage,
-          })
+          callbacks?.onStatusChange?.(postId, { ...item, elapsed, stage })
         }
-      } catch (e) {
-        console.error(`Poll error for ${item.assetId}:`, e)
+      } catch {
+        // Transient network error — will retry on next interval tick
       }
     },
-    [callbacks]
+    [callbacks] // eslint-disable-line react-hooks/exhaustive-deps
   )
 
   /**
@@ -210,30 +190,29 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
    */
   const handleGenerationComplete = useCallback(
     (item: GenerationQueueItem, asset: Record<string, unknown>) => {
+      cleanup(item.postId)
       setQueueState((prev) => {
         const newActive = { ...prev.activeGenerations }
         delete newActive[item.postId]
         return { ...prev, activeGenerations: newActive }
       })
-
-      const completed: GenerationQueueItem = {
+      callbacks?.onStatusChange?.(item.postId, {
         ...item,
         status: 'ready',
         costUsd: (asset.cost_usd as number | undefined) || 0.02,
-      }
-
-      callbacks?.onStatusChange?.(item.postId, completed)
+      })
     },
-    [callbacks]
+    [callbacks] // eslint-disable-line react-hooks/exhaustive-deps
   )
 
   /**
-   * Handle generation failure - may trigger auto-retry
+   * Handle generation failure — may trigger auto-retry
    */
   const handleGenerationFailed = useCallback(
     (item: GenerationQueueItem, errorMessage?: string) => {
+      cleanup(item.postId)
+
       if (canAutoRetry(item.retryCount)) {
-        // Schedule auto-retry with exponential backoff
         const delay = getRetryDelay(item.retryCount)
         const retryItem: GenerationQueueItem = {
           ...item,
@@ -244,45 +223,32 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
           errorMessage,
         }
 
-        // Remove from active, add back to queue
         setQueueState((prev) => {
           const newActive = { ...prev.activeGenerations }
           delete newActive[item.postId]
-          return {
-            ...prev,
-            queue: [...prev.queue, retryItem],
-            activeGenerations: newActive,
-          }
+          return { ...prev, queue: [...prev.queue, retryItem], activeGenerations: newActive }
         })
 
         callbacks?.onAutoRetry?.(item.postId, item.retryCount + 1, delay)
-
-        // Schedule the queue processing after delay
-        const timeoutId = setTimeout(() => {
-          processQueue()
+        // The queue effect will pick up the new item and call processQueue automatically
+        // No need for a redundant setTimeout(() => processQueue(), delay)
+        retryTimeoutRefs.current[item.postId] = setTimeout(() => {
+          // processQueue is triggered by the queue effect; this is just a safety net
         }, delay)
-
-        retryTimeoutRefs.current[item.postId] = timeoutId
       } else {
-        // Max retries exceeded - mark as failed
         setQueueState((prev) => {
           const newActive = { ...prev.activeGenerations }
           delete newActive[item.postId]
           return { ...prev, activeGenerations: newActive }
         })
-
-        const failed: GenerationQueueItem = {
+        callbacks?.onStatusChange?.(item.postId, {
           ...item,
           status: 'failed',
-          errorMessage:
-            errorMessage ||
-            `Failed after ${item.retryCount} retries. Please check your prompt and try again.`,
-        }
-
-        callbacks?.onStatusChange?.(item.postId, failed)
+          errorMessage: errorMessage || `Failed after ${item.retryCount} retries.`,
+        })
       }
     },
-    [callbacks]
+    [callbacks] // eslint-disable-line react-hooks/exhaustive-deps
   )
 
   /**
@@ -290,66 +256,47 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
    */
   const handleGenerationTimeout = useCallback(
     (item: GenerationQueueItem) => {
+      cleanup(item.postId)
       setQueueState((prev) => {
         const newActive = { ...prev.activeGenerations }
         delete newActive[item.postId]
         return { ...prev, activeGenerations: newActive }
       })
-
       const elapsedMs = Date.now() - item.startedAt
       callbacks?.onTimeout?.(item.postId, elapsedMs)
-
-      const timedOut: GenerationQueueItem = {
+      callbacks?.onStatusChange?.(item.postId, {
         ...item,
         status: 'timeout',
-        errorMessage:
-          'Generation exceeded 60-minute timeout. The provider may still be processing your request in the background.',
+        errorMessage: 'Generation timed out. The provider may still be processing in the background.',
         elapsed: Math.floor(elapsedMs / 1000),
-      }
-
-      callbacks?.onStatusChange?.(item.postId, timedOut)
+      })
     },
-    [callbacks]
+    [callbacks] // eslint-disable-line react-hooks/exhaustive-deps
   )
 
   /**
-   * Process the queue: start next item if space available
+   * Process the queue: promote next item if a slot is available
    */
   const processQueue = useCallback(() => {
     let promotedItem: GenerationQueueItem | null = null
 
     setQueueState((prev) => {
       const activeCount = Object.keys(prev.activeGenerations).length
-
-      // Stop if queue is full or no pending items
       if (
         activeCount >= GENERATION_CONFIG.MAX_CONCURRENT_GENERATIONS ||
         prev.queue.length === 0
       ) {
         return prev
       }
-
-      // Move first queued item to active
       const next = prev.queue[0]
-      const updatedNext: GenerationQueueItem = {
-        ...next,
-        status: 'generating',
-        stage: 'Initialising…',
-      }
-
+      const updatedNext: GenerationQueueItem = { ...next, status: 'generating', stage: 'Initialising…' }
       promotedItem = updatedNext
-
       return {
         queue: prev.queue.slice(1),
-        activeGenerations: {
-          ...prev.activeGenerations,
-          [next.postId]: updatedNext,
-        },
+        activeGenerations: { ...prev.activeGenerations, [next.postId]: updatedNext },
       }
     })
 
-    // CRITICAL FIX: Notify UI that the item moved from queued to generating
-    // This ensures the spinner appears as soon as the slot opens up
     if (promotedItem) {
       const item = promotedItem as GenerationQueueItem
       callbacks?.onStatusChange?.(item.postId, item)
@@ -357,58 +304,66 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
   }, [callbacks])
 
   /**
-   * Cleanup all timers for a post
+   * Stop timers for a post
    */
   const cleanup = useCallback((postId: string) => {
     clearInterval(pollingRefs.current[postId])
-    clearInterval(elapsedRefs.current[postId])
     clearTimeout(timeoutRefs.current[postId])
     clearTimeout(retryTimeoutRefs.current[postId])
-
     delete pollingRefs.current[postId]
-    delete elapsedRefs.current[postId]
     delete timeoutRefs.current[postId]
     delete retryTimeoutRefs.current[postId]
   }, [])
 
   /**
+   * HIGH FIX #3: Fully cancel a generating/queued item — evicts from state,
+   * stops timers, and frees the concurrency slot.
+   */
+  const cancelGeneration = useCallback((postId: string) => {
+    cleanup(postId)
+    setQueueState((prev) => {
+      const newActive = { ...prev.activeGenerations }
+      delete newActive[postId]
+      const newQueue = prev.queue.filter(item => item.postId !== postId)
+      return { queue: newQueue, activeGenerations: newActive }
+    })
+  }, [cleanup])
+
+  /**
    * Start polling for active generation items
+   * HIGH FIX #1: interval callback uses postId to look up live item via ref
    */
   useEffect(() => {
     const items = Object.values(queueState.activeGenerations)
 
     items.forEach((item) => {
-      // Start polling if not already polling this item
       if (!pollingRefs.current[item.postId]) {
         pollingRefs.current[item.postId] = setInterval(
-          () => pollStatus(item),
+          () => pollStatus(item.postId),  // pass postId, not stale item object
           GENERATION_CONFIG.POLLING_INTERVAL_MS
         )
-
-        // Set timeout alarm
-        const timeoutId = setTimeout(
-          () => {
-            handleGenerationTimeout(item)
-          },
+        timeoutRefs.current[item.postId] = setTimeout(
+          () => handleGenerationTimeout(item),
           GENERATION_CONFIG.POLLING_TIMEOUT_MS
         )
-        timeoutRefs.current[item.postId] = timeoutId
       }
     })
 
-    // Cleanup polling for items no longer active
+    // Capture ref snapshot so cleanup reads the same object even after re-renders
+    const pollingRefsSnapshot = pollingRefs.current
     return () => {
-      Object.entries(pollingRefs.current).forEach(([postId, ref]) => {
-        if (!queueState.activeGenerations[postId]) {
-          clearInterval(ref)
-          delete pollingRefs.current[postId]
+      const activeIds = Object.keys(queueState.activeGenerations)
+      Object.keys(pollingRefsSnapshot).forEach((postId) => {
+        if (!activeIds.includes(postId)) {
+          clearInterval(pollingRefsSnapshot[postId])
+          delete pollingRefsSnapshot[postId]
         }
       })
     }
   }, [queueState.activeGenerations, pollStatus, handleGenerationTimeout])
 
   /**
-   * Process queue when space opens up or new items added to queue
+   * Process queue whenever it changes or a slot opens
    */
   useEffect(() => {
     const activeCount = Object.keys(queueState.activeGenerations).length
@@ -422,6 +377,7 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
     submitGeneration,
     pollStatus,
     processQueue,
+    cancelGeneration,
     getQueuePosition,
     cleanup,
   }

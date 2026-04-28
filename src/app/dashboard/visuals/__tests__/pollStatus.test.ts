@@ -1,3 +1,5 @@
+/// <reference types="vitest/globals" />
+
 /**
  * Test for pollStatus fix
  * Verifies that the correct response structure is handled
