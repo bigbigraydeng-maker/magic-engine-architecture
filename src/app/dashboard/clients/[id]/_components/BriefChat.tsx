@@ -145,7 +145,7 @@ export function BriefChat({ briefId, clientId, disabled = false, onBriefUpdated 
             placeholder={disabled ? 'Generate a brief first…' : 'Ask Claude to refine the brief…'}
             disabled={disabled || sending}
             rows={2}
-            className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none disabled:bg-gray-50 disabled:text-gray-400"
+            className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white resize-none disabled:opacity-60 disabled:text-gray-400 transition-colors"
           />
           <button
             onClick={handleSend}

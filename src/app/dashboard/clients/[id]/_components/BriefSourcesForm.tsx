@@ -117,7 +117,7 @@ export function BriefSourcesForm({ clientId, onGenerated }: Props) {
                 value={url}
                 onChange={e => handleUrlChange(i, e.target.value)}
                 placeholder="https://example.com/about"
-                className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-colors"
               />
               {urlInputs.length > 1 && (
                 <button
@@ -148,7 +148,7 @@ export function BriefSourcesForm({ clientId, onGenerated }: Props) {
           value={domain}
           onChange={e => setDomain(e.target.value)}
           placeholder="example.com"
-          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-colors"
         />
       </div>
 

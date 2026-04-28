@@ -237,7 +237,7 @@ function TextInput({ value: initial, onSave, saving }: { value: string; onSave: 
       <input
         value={val}
         onChange={e => setVal(e.target.value)}
-        className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        className="flex-1 bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-colors"
       />
       <SaveButton onClick={() => onSave(val)} saving={saving} />
     </div>
@@ -254,7 +254,7 @@ function TextArea({ value: initial, onSave, saving, rows = 4, mono = false }: {
         value={val}
         onChange={e => setVal(e.target.value)}
         rows={rows}
-        className={`w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none ${mono ? 'font-mono text-xs' : ''}`}
+        className={`w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white resize-none transition-colors ${mono ? 'font-mono text-xs' : ''}`}
       />
       <div className="flex justify-end">
         <SaveButton onClick={() => onSave(val)} saving={saving} />
@@ -286,7 +286,7 @@ function JsonField({ label, value: initial, onSave, saving, hint }: {
         value={val}
         onChange={e => { setVal(e.target.value); setParseError(''); }}
         rows={6}
-        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+        className="w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs text-gray-900 font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white resize-none transition-colors"
       />
       {parseError && <p className="text-xs text-red-500">{parseError}</p>}
       <div className="flex justify-end mt-1">
