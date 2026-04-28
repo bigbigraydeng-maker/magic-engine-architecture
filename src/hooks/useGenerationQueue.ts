@@ -115,6 +115,10 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
           queue: [...prev.queue, item],
         }))
 
+        // CRITICAL FIX: Notify UI immediately that item is queued
+        // This ensures the "Queued X" status appears right away,
+        // even before the queue processor moves it to activeGenerations
+        callbacks?.onStatusChange?.(postId, item)
         callbacks?.onQueueChange?.(queueState)
         return item
       } catch (e) {
@@ -312,6 +316,8 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
    * Process the queue: start next item if space available
    */
   const processQueue = useCallback(() => {
+    let promotedItem: GenerationQueueItem | null = null
+
     setQueueState((prev) => {
       const activeCount = Object.keys(prev.activeGenerations).length
 
@@ -331,6 +337,8 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
         stage: 'Initialising…',
       }
 
+      promotedItem = updatedNext
+
       return {
         queue: prev.queue.slice(1),
         activeGenerations: {
@@ -339,7 +347,14 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
         },
       }
     })
-  }, [])
+
+    // CRITICAL FIX: Notify UI that the item moved from queued to generating
+    // This ensures the spinner appears as soon as the slot opens up
+    if (promotedItem) {
+      const item = promotedItem as GenerationQueueItem
+      callbacks?.onStatusChange?.(item.postId, item)
+    }
+  }, [callbacks])
 
   /**
    * Cleanup all timers for a post
