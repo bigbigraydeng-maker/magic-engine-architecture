@@ -373,12 +373,13 @@ function EditablePlatforms({
 // ── Asset cell ─────────────────────────────────────────────────────────────────
 
 function AssetCell({
-  post, genState, readyAsset, onGenerate, onSchedule, onShowError,
+  post, genState, readyAsset, onGenerate, onCancel, onSchedule, onShowError,
 }: {
   post: Post
   genState?: GenState
   readyAsset?: VisualAsset
   onGenerate: () => void
+  onCancel: () => void
   onSchedule: (assetId: string) => void
   onShowError?: (error: {postId: string, message: string, code?: string, retryCount: number}) => void
 }) {
@@ -397,11 +398,23 @@ function AssetCell({
   // Generating state
   if (genState?.generating) {
     const stage = STAGES[Math.floor(genState.elapsed / 30) % STAGES.length]
+    const assetType = assetTypeFromFormat(post.format)
+    const stuckThresholdSec = assetType === 'video' ? 20 * 60 : 5 * 60 // 20 min for video, 5 min for image
+    const isStuck = (genState.elapsed ?? 0) > stuckThresholdSec
     return (
       <div className="flex flex-col items-center gap-1 py-1">
-        <div className="w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-        <span className="text-[10px] text-blue-500 font-medium">{genState.elapsed}s</span>
-        <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[80px]">{stage}</span>
+        <div className={`w-6 h-6 border-2 border-t-transparent rounded-full animate-spin ${isStuck ? 'border-orange-400' : 'border-blue-400'}`} />
+        <span className={`text-[10px] font-medium ${isStuck ? 'text-orange-500' : 'text-blue-500'}`}>{genState.elapsed}s</span>
+        <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[80px]">{isStuck ? 'Slow…' : stage}</span>
+        {isStuck && (
+          <button
+            onClick={onCancel}
+            title="Cancel stuck generation"
+            className="text-[8px] px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded hover:bg-orange-200 border border-orange-300 whitespace-nowrap"
+          >
+            ✕ Cancel
+          </button>
+        )}
       </div>
     )
   }
@@ -648,6 +661,17 @@ export default function VisualsPage() {
     }))
   }, [])
 
+  const handleCancel = useCallback((postId: string) => {
+    // Stop timers immediately
+    cleanup(postId)
+    // Clear UI state so the button re-appears and user can retry
+    setGenStates(prev => {
+      const next = { ...prev }
+      delete next[postId]
+      return next
+    })
+  }, [cleanup])
+
   const handleGenerate = useCallback(async (post: Post) => {
     const assetType = assetTypeFromFormat(post.format)
     const apiPath = assetType === 'video' ? '/api/visual/video' : '/api/visual/image'
@@ -864,6 +888,7 @@ export default function VisualsPage() {
                       }}
                       readyAsset={readyAssetByPost[post.id]}
                       onGenerate={() => handleGenerate(post)}
+                      onCancel={() => handleCancel(post.id)}
                       onSchedule={assetId => openPubModal(assetId, post.id)}
                       onShowError={setErrorModal}
                     />

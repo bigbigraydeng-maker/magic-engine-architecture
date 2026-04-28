@@ -221,6 +221,38 @@ export async function GET(
       })
     }
 
+    // Age-based timeout: auto-fail jobs stuck in processing too long
+    // Images should complete in <3 min (allow 10 min grace); videos <20 min (allow 40 min grace)
+    if (providerResult.status === 'processing' || providerResult.status === 'pending') {
+      const ageMinutes = (Date.now() - new Date(asset.created_at).getTime()) / 60000
+      const timeoutMinutes = asset.asset_type === 'video' || asset.asset_type === 'avatar_video' ? 40 : 10
+
+      if (ageMinutes > timeoutMinutes) {
+        const timeoutMsg = `Generation stuck: provider reported "processing" for ${Math.floor(ageMinutes)} minutes (limit: ${timeoutMinutes} min). The provider queue may be overloaded. Please retry.`
+
+        await supabaseAdmin
+          .from('visual_assets')
+          .update({
+            generation_status: 'failed',
+            error_message: timeoutMsg,
+            last_error_code: 'provider_timeout',
+          })
+          .eq('id', params.assetId)
+
+        return NextResponse.json({
+          success: true,
+          asset: { ...asset, generation_status: 'failed', error_message: timeoutMsg },
+          detailed_error: {
+            code: 'provider_timeout',
+            message: timeoutMsg,
+            retryEligible: true,
+            suggestedAction: 'Retry — the provider queue may have cleared',
+          },
+          auto_failed: true,
+        })
+      }
+    }
+
     return NextResponse.json({
       success: true,
       asset: {
