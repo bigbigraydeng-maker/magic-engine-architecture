@@ -391,12 +391,21 @@ function AssetCell({
           className="w-14 h-14 object-cover rounded cursor-pointer ring-1 ring-gray-200 hover:ring-blue-400 transition-all"
           onClick={() => window.open(readyAsset.storage_url!, '_blank')}
         />
-        <button
-          onClick={() => onSchedule(readyAsset.id)}
-          className="text-[10px] px-1.5 py-0.5 bg-green-500 text-white rounded hover:bg-green-600 whitespace-nowrap"
-        >
-          → Publer
-        </button>
+        <div className="flex gap-1 text-[10px]">
+          <button
+            onClick={() => onSchedule(readyAsset.id)}
+            className="px-1.5 py-0.5 bg-green-500 text-white rounded hover:bg-green-600 whitespace-nowrap"
+          >
+            → Publer
+          </button>
+          <button
+            onClick={onGenerate}
+            title="Regenerate with different settings"
+            className="px-1.5 py-0.5 bg-gray-400 text-white rounded hover:bg-gray-500 whitespace-nowrap"
+          >
+            ↻ Retry
+          </button>
+        </div>
       </div>
     )
   }
