@@ -131,9 +131,9 @@ function EditableText({
     <div
       onClick={() => { setDraft(value ?? ''); setEditing(true) }}
       title={value ?? ''}
-      className="cursor-text min-h-[22px] text-sm px-1 py-0.5 rounded hover:bg-blue-50 truncate"
+      className="cursor-text min-h-[22px] text-sm px-1 py-0.5 rounded hover:bg-blue-50 truncate text-gray-900"
     >
-      {value || <span className="text-gray-300 italic text-xs">{placeholder}</span>}
+      {value || <span className="text-gray-400 italic text-xs">{placeholder}</span>}
     </div>
   )
 }
@@ -164,9 +164,9 @@ function EditableTextarea({
     <div
       onClick={() => { setDraft(value ?? ''); setEditing(true) }}
       title={value ?? ''}
-      className="cursor-text min-h-[22px] text-xs px-1 py-0.5 rounded hover:bg-blue-50 line-clamp-2 overflow-hidden"
+      className="cursor-text min-h-[22px] text-xs px-1 py-0.5 rounded hover:bg-blue-50 line-clamp-2 overflow-hidden text-gray-900"
     >
-      {value || <span className="text-gray-300 italic">{placeholder}</span>}
+      {value || <span className="text-gray-400 italic">{placeholder}</span>}
     </div>
   )
 }
@@ -197,7 +197,7 @@ function EditableDatetime({
   return (
     <div
       onClick={() => { setDraft(value ? toDatetimeLocal(value) : ''); setEditing(true) }}
-      className="cursor-text min-h-[22px] text-xs px-1 py-0.5 rounded hover:bg-blue-50 whitespace-nowrap"
+      className="cursor-text min-h-[22px] text-xs px-1 py-0.5 rounded hover:bg-blue-50 whitespace-nowrap text-gray-900"
     >
       {fmtDateNZ(value)}
     </div>
@@ -233,9 +233,9 @@ function EditableHashtags({
     <div
       onClick={() => { setDraft(str); setEditing(true) }}
       title={str}
-      className="cursor-text min-h-[22px] text-xs px-1 py-0.5 rounded hover:bg-blue-50 truncate text-blue-500"
+      className="cursor-text min-h-[22px] text-xs px-1 py-0.5 rounded hover:bg-blue-50 truncate text-blue-600"
     >
-      {str || <span className="text-gray-300 italic">—</span>}
+      {str || <span className="text-gray-400 italic">—</span>}
     </div>
   )
 }
@@ -396,16 +396,23 @@ export default function VisualsPage() {
   const pollStatus = useCallback(async (postId: string, assetId: string) => {
     try {
       const res = await fetch(`/api/visual/status/${assetId}`)
+      if (!res.ok) throw new Error(`Status check failed: HTTP ${res.status}`)
+
       const d = await res.json()
-      if (d.status === 'ready') {
+      const status = d.asset?.generation_status
+
+      if (status === 'ready') {
         stopTimers(postId)
         patchGen(postId, { generating: false, genStatus: 'ready' })
         if (selectedClientId) fetchAssets(selectedClientId)
-      } else if (d.status === 'failed') {
+      } else if (status === 'failed') {
         stopTimers(postId)
         patchGen(postId, { generating: false, genStatus: 'failed' })
       }
-    } catch { /* ignore transient errors */ }
+      // else: still pending/processing, keep polling
+    } catch (err) {
+      console.error(`[pollStatus] Asset ${assetId}:`, err instanceof Error ? err.message : String(err))
+    }
   }, [stopTimers, patchGen, selectedClientId, fetchAssets])
 
   const handleGenerate = useCallback(async (post: Post) => {
@@ -509,7 +516,7 @@ export default function VisualsPage() {
         <select
           value={selectedClientId}
           onChange={e => setSelectedClientId(e.target.value)}
-          className="text-sm border border-gray-200 rounded px-2 py-1 bg-white"
+          className="text-sm border border-gray-200 rounded px-2 py-1 bg-white text-gray-900"
         >
           <option value="">Select client…</option>
           {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -546,7 +553,7 @@ export default function VisualsPage() {
             </thead>
             <tbody>
               {posts.map((post, idx) => (
-                <tr key={post.id} className="border-b border-gray-100 hover:bg-gray-50/70 align-top group">
+                <tr key={post.id} className="border-b border-gray-100 hover:bg-gray-50/70 align-top group text-gray-900">
 
                   {/* # */}
                   <td className="px-2 py-1.5 text-gray-400 text-xs border-r border-gray-100">{idx + 1}</td>
@@ -660,7 +667,7 @@ export default function VisualsPage() {
                 <select
                   value={scheduleForm.account_id}
                   onChange={e => setScheduleForm(f => ({ ...f, account_id: e.target.value }))}
-                  className="w-full border rounded px-2 py-1.5 text-sm"
+                  className="w-full border rounded px-2 py-1.5 text-sm text-gray-900"
                 >
                   <option value="">Select account…</option>
                   {publerAccounts.map(a => (
@@ -674,7 +681,7 @@ export default function VisualsPage() {
                   type="datetime-local"
                   value={scheduleForm.scheduled_at}
                   onChange={e => setScheduleForm(f => ({ ...f, scheduled_at: e.target.value }))}
-                  className="w-full border rounded px-2 py-1.5 text-sm"
+                  className="w-full border rounded px-2 py-1.5 text-sm text-gray-900"
                 />
               </div>
               <div>
@@ -683,7 +690,7 @@ export default function VisualsPage() {
                   value={scheduleForm.caption}
                   onChange={e => setScheduleForm(f => ({ ...f, caption: e.target.value }))}
                   rows={4}
-                  className="w-full border rounded px-2 py-1.5 text-sm resize-none"
+                  className="w-full border rounded px-2 py-1.5 text-sm resize-none text-gray-900"
                 />
               </div>
             </div>
