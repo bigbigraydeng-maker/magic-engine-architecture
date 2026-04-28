@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
       {
         maxRecords: 200,
         // 新表只拉 Ready；旧 Content Calendar 拉全部（Magic Engine 自己管状态）
-        filterByFormula: useNewTable ? "{Status} = 'Ready'" : undefined,
+        filterByFormula: useNewTable ? "LOWER({Status}) = 'ready'" : undefined,
       }
     )
 
