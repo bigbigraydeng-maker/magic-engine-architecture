@@ -543,9 +543,7 @@ export default function VisualsPage() {
   const {
     queueState,
     submitGeneration,
-    processQueue,
-    getQueuePosition,
-    cleanup,
+    cancelGeneration,
   } = useGenerationQueue({
     onStatusChange: useCallback((postId: string, state: GenerationQueueItem) => {
       setGenStates((prev) => ({
@@ -616,13 +614,13 @@ export default function VisualsPage() {
     queueStateRef.current = queueState
   }, [queueState])
 
-  // Cleanup Hook timers only on unmount
+  // Cleanup Hook timers only on unmount — use cancelGeneration to also free concurrency slots
   useEffect(() => {
     return () => {
-      Object.keys(queueStateRef.current.activeGenerations).forEach(postId => cleanup(postId))
-      queueStateRef.current.queue.forEach(item => cleanup(item.postId))
+      Object.keys(queueStateRef.current.activeGenerations).forEach(postId => cancelGeneration(postId))
+      queueStateRef.current.queue.forEach(item => cancelGeneration(item.postId))
     }
-  }, [cleanup])
+  }, [cancelGeneration])
 
   // Track which posts have already triggered asset refresh
   const refreshedPostIdsRef = useRef<Set<string>>(new Set())
@@ -644,12 +642,26 @@ export default function VisualsPage() {
   // ── Patch post ─────────────────────────────────────────────────────────────
 
   const patchPost = useCallback(async (postId: string, fields: Record<string, unknown>) => {
-    setPosts(prev => prev.map(p => p.id === postId ? { ...p, ...fields } as Post : p))
-    await fetch(`/api/posts/${postId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(fields),
+    // Optimistic update — capture previous state for rollback
+    let prevPost: Post | undefined
+    setPosts(prev => {
+      prevPost = prev.find(p => p.id === postId)
+      return prev.map(p => p.id === postId ? { ...p, ...fields } as Post : p)
     })
+    try {
+      const res = await fetch(`/api/posts/${postId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fields),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    } catch {
+      // Roll back the optimistic update on failure
+      if (prevPost) {
+        setPosts(prev => prev.map(p => p.id === postId ? prevPost! : p))
+      }
+      setToast({ type: 'error', message: 'Failed to save — changes reverted' })
+    }
   }, [])
 
   // ── Generation ─────────────────────────────────────────────────────────────
@@ -662,15 +674,15 @@ export default function VisualsPage() {
   }, [])
 
   const handleCancel = useCallback((postId: string) => {
-    // Stop timers immediately
-    cleanup(postId)
-    // Clear UI state so the button re-appears and user can retry
+    // cancelGeneration stops timers AND frees the concurrency slot atomically
+    cancelGeneration(postId)
+    // Clear UI state so the generate button re-appears
     setGenStates(prev => {
       const next = { ...prev }
       delete next[postId]
       return next
     })
-  }, [cleanup])
+  }, [cancelGeneration])
 
   const handleGenerate = useCallback(async (post: Post) => {
     const assetType = assetTypeFromFormat(post.format)

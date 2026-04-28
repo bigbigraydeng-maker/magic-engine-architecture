@@ -93,11 +93,13 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
           throw new Error(data.error || 'Failed to submit generation')
         }
 
-        const assetType = (body.asset_type as string) || 'image'
+        const rawType = body.asset_type
+        const assetType: 'image' | 'video' | 'avatar_video' =
+          rawType === 'video' || rawType === 'avatar_video' ? rawType : 'image'
         const item: GenerationQueueItem = {
           postId,
           assetId: data.asset_id,
-          assetType: assetType as 'image' | 'video' | 'avatar_video',
+          assetType,
           startedAt: Date.now(),
           retryCount: 0,
           status: 'queued',
@@ -343,7 +345,11 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
           GENERATION_CONFIG.POLLING_INTERVAL_MS
         )
         timeoutRefs.current[item.postId] = setTimeout(
-          () => handleGenerationTimeout(item),
+          () => {
+            // Read the live item from ref so timeout fires with current state
+            const liveItem = queueStateRef.current.activeGenerations[item.postId]
+            if (liveItem) handleGenerationTimeout(liveItem)
+          },
           GENERATION_CONFIG.POLLING_TIMEOUT_MS
         )
       }
