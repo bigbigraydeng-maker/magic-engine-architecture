@@ -222,10 +222,10 @@ export async function GET(
     }
 
     // Age-based timeout: auto-fail jobs stuck in processing too long
-    // Images should complete in <3 min (allow 10 min grace); videos <20 min (allow 40 min grace)
+    // Images should complete in <3 min (allow 5 min grace); videos <20 min (allow 20 min grace)
     if (providerResult.status === 'processing' || providerResult.status === 'pending') {
       const ageMinutes = (Date.now() - new Date(asset.created_at).getTime()) / 60000
-      const timeoutMinutes = asset.asset_type === 'video' || asset.asset_type === 'avatar_video' ? 40 : 10
+      const timeoutMinutes = asset.asset_type === 'video' || asset.asset_type === 'avatar_video' ? 20 : 5
 
       if (ageMinutes > timeoutMinutes) {
         const timeoutMsg = `Generation stuck: provider reported "processing" for ${Math.floor(ageMinutes)} minutes (limit: ${timeoutMinutes} min). The provider queue may be overloaded. Please retry.`
