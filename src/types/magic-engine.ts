@@ -23,12 +23,95 @@ export interface Client {
   created_at: string
 }
 
+// ── Master Brief pipeline types ───────────────────────────────────────────────
+
+export type BriefStatus = 'draft' | 'active' | 'archived'
+
+export interface ContentPillar {
+  id: string               // slug, e.g. "educational"
+  name: string             // display name
+  description: string
+  post_ratio: number       // 0–1, fraction of posts
+  content_types: string[]  // e.g. ["how-to", "tips"]
+  example_topics?: string[]
+}
+
+export interface BrandVoice {
+  tone_keywords: string[]
+  avoid_keywords: string[]
+  formality: 'casual' | 'neutral' | 'professional'
+  emoji_usage: 'none' | 'minimal' | 'moderate'
+  language_mix?: string    // e.g. "english-primary"
+}
+
+export interface TargetAudience {
+  age_range?: string
+  location?: string
+  gender?: string
+  interests: string[]
+  pain_points: string[]
+  platforms: string[]
+}
+
+export interface PlatformConfig {
+  enabled: boolean
+  post_frequency: string   // e.g. "5x/week"
+  primary_content_type: string
+}
+
+export interface VIColors {
+  primary?: string
+  secondary?: string
+  accent?: string
+  background?: string
+}
+
+export interface BriefChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+  timestamp?: string
+}
+
 export interface MasterBrief {
   id: string
   client_id: string
   version: number
-  is_active: boolean
-  brand_name: string
+  /** @deprecated use status instead */
+  is_active?: boolean
+  status: BriefStatus
+
+  // Structured fields (machine-readable)
+  brand_name?: string | null
+  core_proposition?: string | null
+  content_pillars?: ContentPillar[] | null
+  brand_voice?: BrandVoice | null
+  target_audience?: TargetAudience | null
+  platform_strategy?: Record<string, PlatformConfig> | null
+  keyword_seeds?: string[] | null
+  competitor_domains?: string[] | null
+
+  // VI visual guidelines
+  vi_colors?: VIColors | null
+  vi_style_keywords?: string[] | null
+  vi_dos?: string[] | null
+  vi_donts?: string[] | null
+
+  // Rich text
+  brand_story_md?: string | null
+  style_guide_md?: string | null
+  competitive_notes_md?: string | null
+
+  // Source data
+  source_file_urls?: string[] | null
+  source_website_urls?: string[] | null
+  semrush_snapshot?: Record<string, unknown> | null
+
+  // Generation metadata
+  generated_by?: 'claude' | 'manual'
+  input_tokens?: number | null
+  model_used?: string | null
+
+  // Legacy fields (kept for backward compat with brief-injector)
   tagline?: string
   website?: string
   primary_audience?: string
@@ -45,6 +128,36 @@ export interface MasterBrief {
   visual_style?: string
   color_palette?: string[]
   image_preference?: string
+
+  created_at?: string
+  updated_at?: string
+}
+
+// API types for brief pipeline
+export interface BriefGenerateRequest {
+  website_urls: string[]   // max 5
+  file_urls: string[]      // Supabase Storage URLs, max 10
+  domain?: string          // for SEMrush lookup
+}
+
+export interface BriefGenerateResponse {
+  success: boolean
+  brief?: MasterBrief
+  error?: string
+  job_id?: string          // for async polling
+}
+
+export interface BriefRefineRequest {
+  message: string
+  history: BriefChatMessage[]
+}
+
+export interface BriefRefineResponse {
+  success: boolean
+  patch?: Partial<MasterBrief>
+  reasoning?: string
+  updated_brief?: MasterBrief
+  error?: string
 }
 
 export interface Product {

@@ -9,7 +9,7 @@ export async function getActiveBrief(clientId: string): Promise<MasterBrief | nu
     .from('master_briefs')
     .select('*')
     .eq('client_id', clientId)
-    .eq('is_active', true)
+    .or('status.eq.active,is_active.eq.true')
     .order('version', { ascending: false })
     .limit(1)
     .single()

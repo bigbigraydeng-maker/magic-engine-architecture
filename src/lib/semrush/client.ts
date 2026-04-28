@@ -122,6 +122,60 @@ function parseSemrushResponse(text: string): SemrushKeywordData[] {
   }).filter(k => k.keyword.length > 0)
 }
 
+// Tool 5: Domain overview snapshot for Master Brief pipeline
+export interface DomainOverviewSnapshot {
+  top_keywords: SemrushKeywordData[]
+  competitor_domains: string[]
+  estimated_traffic?: number
+}
+
+export async function getDomainOverviewSnapshot(
+  domain: string,
+  db: string = DEFAULT_DB,
+  keywordLimit = 20
+): Promise<DomainOverviewSnapshot> {
+  try {
+    const [topKeywords, competitors] = await Promise.allSettled([
+      getDomainOrganicKeywords(domain, db, keywordLimit),
+      getDomainCompetitors(domain, db),
+    ])
+
+    return {
+      top_keywords: topKeywords.status === 'fulfilled' ? topKeywords.value : [],
+      competitor_domains: competitors.status === 'fulfilled' ? competitors.value : [],
+    }
+  } catch {
+    // Non-fatal: return empty snapshot rather than blocking brief generation
+    return { top_keywords: [], competitor_domains: [] }
+  }
+}
+
+async function getDomainCompetitors(
+  domain: string,
+  db: string = DEFAULT_DB,
+  limit = 5
+): Promise<string[]> {
+  const params = new URLSearchParams({
+    type: 'domain_organic_organic',
+    key: API_KEY,
+    domain,
+    database: db,
+    export_columns: 'Dn,Cr',
+    display_limit: String(limit),
+    display_sort: 'cr_desc',
+  })
+
+  const res = await fetch(`${SEMRUSH_API_BASE}/?${params}`)
+  if (!res.ok) return []
+
+  const text = await res.text()
+  const lines = text.trim().split('\n').slice(1)
+  return lines
+    .map(l => l.split(';')[0]?.trim())
+    .filter((d): d is string => Boolean(d) && d !== domain)
+    .slice(0, limit)
+}
+
 function normalizeIntent(raw?: string): string {
   const map: Record<string, string> = {
     '0': 'informational',
