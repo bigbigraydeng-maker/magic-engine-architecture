@@ -540,7 +540,7 @@ export default function VisualsPage() {
         [postId]: {
           generating: state.status === 'generating',
           queued: state.status === 'queued',
-          queuePosition: getQueuePosition(postId),
+          queuePosition: undefined, // Will be computed in AssetCell from queueState
           elapsed: state.elapsed ?? 0,
           assetId: state.assetId,
           genStatus: state.status === 'ready' || state.status === 'failed' || state.status === 'timeout'
@@ -554,6 +554,12 @@ export default function VisualsPage() {
       }))
     }, []),
   })
+
+  // Compute queue position from current queueState (for rendering)
+  const getQueuePositionForPost = useCallback((postId: string): number | undefined => {
+    const index = queueState.queue.findIndex((item) => item.postId === postId)
+    return index >= 0 ? index + 1 : undefined
+  }, [queueState.queue])
 
   // ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -852,7 +858,10 @@ export default function VisualsPage() {
                   <td className="px-2 py-1.5 text-center">
                     <AssetCell
                       post={post}
-                      genState={genStates[post.id]}
+                      genState={{
+                        ...genStates[post.id],
+                        queuePosition: getQueuePositionForPost(post.id),
+                      }}
                       readyAsset={readyAssetByPost[post.id]}
                       onGenerate={() => handleGenerate(post)}
                       onSchedule={assetId => openPubModal(assetId, post.id)}

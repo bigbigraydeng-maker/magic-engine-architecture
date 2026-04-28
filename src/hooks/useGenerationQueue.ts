@@ -33,9 +33,38 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
     if (saved) {
       try {
         const restored = JSON.parse(saved) as GenerationQueueState
-        setQueueState(restored)
+        const now = Date.now()
+
+        // Filter out stale queue items (older than 60 minutes)
+        const validQueue = restored.queue.filter(item => {
+          const age = now - item.startedAt
+          return age < GENERATION_CONFIG.POLLING_TIMEOUT_MS
+        })
+
+        // Also clean up stale active generations
+        const validActiveGenerations: Record<string, GenerationQueueItem> = {}
+        Object.entries(restored.activeGenerations).forEach(([postId, item]) => {
+          const age = now - item.startedAt
+          if (age < GENERATION_CONFIG.POLLING_TIMEOUT_MS) {
+            validActiveGenerations[postId] = item
+          }
+        })
+
+        // Only restore if we have valid items
+        if (validQueue.length > 0 || Object.keys(validActiveGenerations).length > 0) {
+          setQueueState({
+            queue: validQueue,
+            activeGenerations: validActiveGenerations,
+          })
+          console.log(`[Queue] Restored ${validQueue.length} queue items, ${Object.keys(validActiveGenerations).length} active generations`)
+        } else {
+          // Clear stale data
+          localStorage.removeItem('generation_queue_state')
+          console.log('[Queue] Cleared stale queue data')
+        }
       } catch (e) {
         console.warn('Failed to restore queue state:', e)
+        localStorage.removeItem('generation_queue_state')
       }
     }
   }, [])
@@ -364,14 +393,14 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
   }, [queueState.activeGenerations, pollStatus, handleGenerationTimeout])
 
   /**
-   * Process queue when space opens up
+   * Process queue when space opens up or new items added to queue
    */
   useEffect(() => {
     const activeCount = Object.keys(queueState.activeGenerations).length
     if (activeCount < GENERATION_CONFIG.MAX_CONCURRENT_GENERATIONS) {
       processQueue()
     }
-  }, [queueState.activeGenerations, processQueue])
+  }, [queueState.queue, queueState.activeGenerations, processQueue])
 
   return {
     queueState,
