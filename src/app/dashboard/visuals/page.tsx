@@ -229,13 +229,31 @@ function EditableHashtags({
       />
     )
   }
+
+  const tags = value ?? []
+  const displayTags = tags.slice(0, 2)
+  const hiddenCount = Math.max(0, tags.length - 2)
+
   return (
     <div
       onClick={() => { setDraft(str); setEditing(true) }}
       title={str}
-      className="cursor-text min-h-[22px] text-xs px-1 py-0.5 rounded hover:bg-blue-50 truncate text-blue-500"
+      className="cursor-text min-h-[22px] text-xs px-1 py-0.5 rounded hover:bg-blue-50 text-blue-500 flex items-center gap-1 flex-wrap"
     >
-      {str || <span className="text-gray-300 italic">—</span>}
+      {tags.length > 0 ? (
+        <>
+          {displayTags.map((tag, idx) => (
+            <span key={idx} className="whitespace-nowrap overflow-hidden text-ellipsis max-w-[80px]">
+              {tag}
+            </span>
+          ))}
+          {hiddenCount > 0 && (
+            <span className="text-gray-400 text-[10px]">+{hiddenCount}</span>
+          )}
+        </>
+      ) : (
+        <span className="text-gray-300 italic">—</span>
+      )}
     </div>
   )
 }
@@ -265,6 +283,80 @@ function EditableStatus({
     >
       {value}
     </span>
+  )
+}
+
+function EditableFormat({
+  value, onSave,
+}: { value: string | null; onSave: (v: string) => void }) {
+  const [editing, setEditing] = useState(false)
+  const formats = Object.keys(FORMAT_STYLE)
+
+  if (editing) {
+    return (
+      <select
+        autoFocus
+        value={value ?? ''}
+        onChange={e => { onSave(e.target.value); setEditing(false) }}
+        onBlur={() => setEditing(false)}
+        className="text-xs border border-blue-400 rounded px-1 outline-none bg-white w-full text-gray-900"
+      >
+        <option value="">—</option>
+        {formats.map(f => <option key={f} value={f}>{f}</option>)}
+      </select>
+    )
+  }
+  return (
+    <span
+      onClick={() => setEditing(true)}
+      className={`cursor-pointer text-xs px-1.5 py-0.5 rounded font-medium capitalize ${value ? FORMAT_STYLE[value.toLowerCase()] ?? 'bg-gray-100 text-gray-600' : 'text-gray-300'}`}
+    >
+      {value || '—'}
+    </span>
+  )
+}
+
+function EditablePlatforms({
+  value, onSave,
+}: { value: string[] | null; onSave: (v: string[]) => void }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState((value ?? []).join(' '))
+  const platforms = Object.keys(PLATFORM_EMOJI)
+
+  const commit = () => {
+    setEditing(false)
+    const arr = draft.split(/\s+/).map(s => s.trim()).filter(Boolean).filter(p => platforms.includes(p))
+    onSave(arr)
+  }
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => e.key === 'Enter' && commit()}
+        placeholder="instagram facebook tiktok…"
+        className="w-full text-xs px-1 py-0.5 border border-blue-400 rounded focus:ring-1 focus:ring-blue-400 outline-none bg-white text-gray-900 placeholder:text-gray-500"
+      />
+    )
+  }
+  return (
+    <div
+      onClick={() => { setDraft((value ?? []).join(' ')); setEditing(true) }}
+      className="cursor-text flex gap-0.5 flex-wrap min-h-[22px] px-1 py-0.5 rounded hover:bg-blue-50"
+    >
+      {(value ?? []).length > 0 ? (
+        (value ?? []).map(p => (
+          <span key={p} title={p} className="text-base leading-none">
+            {PLATFORM_EMOJI[p.toLowerCase()] ?? p.slice(0, 2).toUpperCase()}
+          </span>
+        ))
+      ) : (
+        <span className="text-gray-300 italic text-xs">—</span>
+      )}
+    </div>
   )
 }
 
@@ -332,6 +424,7 @@ export default function VisualsPage() {
   const [pubModal, setPubModal] = useState<PubModal | null>(null)
   const [publerAccounts, setPublerAccounts] = useState<PublerAccount[]>([])
   const [scheduleForm, setScheduleForm] = useState({ account_id: '', scheduled_at: '', caption: '' })
+  const [scheduleLoading, setScheduleLoading] = useState(false)
   const [toast, setToast] = useState<{ type: 'success' | 'error', message: string } | null>(null)
 
   const pollingRefs = useRef<Record<string, NodeJS.Timeout>>({})
@@ -466,22 +559,27 @@ export default function VisualsPage() {
 
   const handleSchedule = useCallback(async () => {
     if (!pubModal || !scheduleForm.account_id) return
-    const res = await fetch('/api/publer/schedule', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        asset_id: pubModal.assetId,
-        account_id: scheduleForm.account_id,
-        scheduled_at: fromDatetimeLocal(scheduleForm.scheduled_at),
-        caption: scheduleForm.caption,
-      }),
-    })
-    const d = await res.json()
-    if (d.success) {
-      setToast({ type: 'success', message: 'Scheduled! Job: ' + d.job_id })
-      setPubModal(null)
-    } else {
-      setToast({ type: 'error', message: 'Error: ' + d.error })
+    setScheduleLoading(true)
+    try {
+      const res = await fetch('/api/publer/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asset_id: pubModal.assetId,
+          account_id: scheduleForm.account_id,
+          scheduled_at: fromDatetimeLocal(scheduleForm.scheduled_at),
+          caption: scheduleForm.caption,
+        }),
+      })
+      const d = await res.json()
+      if (d.success) {
+        setToast({ type: 'success', message: 'Scheduled! Job: ' + d.job_id })
+        setPubModal(null)
+      } else {
+        setToast({ type: 'error', message: 'Error: ' + d.error })
+      }
+    } finally {
+      setScheduleLoading(false)
     }
   }, [pubModal, scheduleForm])
 
@@ -569,23 +667,19 @@ export default function VisualsPage() {
 
                   {/* Format */}
                   <td className="px-2 py-1.5 border-r border-gray-100">
-                    {post.format && (
-                      <span className={`text-xs px-1.5 py-0.5 rounded capitalize font-medium ${FORMAT_STYLE[post.format.toLowerCase()] ?? 'bg-gray-100 text-gray-600'}`}>
-                        {post.format}
-                      </span>
-                    )}
+                    <EditableFormat
+                      value={post.format}
+                      onSave={v => patchPost(post.id, { format: v })}
+                    />
                     {post.ratio && <div className="text-[10px] text-gray-400 mt-0.5">{post.ratio}</div>}
                   </td>
 
                   {/* Platform */}
-                  <td className="px-2 py-1.5 border-r border-gray-100">
-                    <div className="flex gap-0.5 flex-wrap">
-                      {(post.platforms ?? []).map(p => (
-                        <span key={p} title={p} className="text-base leading-none">
-                          {PLATFORM_EMOJI[p.toLowerCase()] ?? p.slice(0, 2).toUpperCase()}
-                        </span>
-                      ))}
-                    </div>
+                  <td className="px-2 py-1.5 border-r border-gray-100 relative">
+                    <EditablePlatforms
+                      value={post.platforms}
+                      onSave={v => patchPost(post.id, { platforms: v })}
+                    />
                   </td>
 
                   {/* Date */}
@@ -707,10 +801,17 @@ export default function VisualsPage() {
               </button>
               <button
                 onClick={handleSchedule}
-                disabled={!scheduleForm.account_id}
-                className="px-3 py-1.5 text-sm bg-green-500 text-white rounded disabled:opacity-50 hover:bg-green-600"
+                disabled={!scheduleForm.account_id || scheduleLoading}
+                className="px-3 py-1.5 text-sm bg-green-500 text-white rounded disabled:opacity-50 hover:bg-green-600 flex items-center gap-2"
               >
-                Schedule
+                {scheduleLoading ? (
+                  <>
+                    <span className="inline-block w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Scheduling…
+                  </>
+                ) : (
+                  'Schedule'
+                )}
               </button>
             </div>
           </div>
