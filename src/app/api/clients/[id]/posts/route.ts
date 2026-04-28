@@ -9,7 +9,7 @@ export async function GET(
   try {
     const { data, error } = await supabaseAdmin
       .from('content_posts')
-      .select('id, title, status, route, platforms, caption, hashtags, visual_brief, scheduled_at, created_at')
+      .select('id, title, status, route, platforms, caption, hashtags, visual_brief, scheduled_at, format, ratio, created_at')
       .eq('client_id', params.id)
       .order('created_at', { ascending: false })
       .limit(100)

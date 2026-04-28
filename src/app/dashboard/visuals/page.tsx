@@ -2,10 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-interface Client {
-  id: string;
-  name: string;
-}
+interface Client { id: string; name: string }
 
 interface ContentPost {
   id: string;
@@ -15,6 +12,8 @@ interface ContentPost {
   hashtags?: string;
   platforms?: string | string[];
   scheduled_at?: string;
+  format?: string;
+  ratio?: string;
 }
 
 interface VisualAsset {
@@ -28,13 +27,7 @@ interface VisualAsset {
   post_id?: string;
 }
 
-interface PublerAccount {
-  id: string;
-  provider: string;
-  name: string;
-  picture?: string;
-}
-
+interface PublerAccount { id: string; provider: string; name: string; picture?: string }
 interface PublerDraft {
   asset: VisualAsset;
   caption: string;
@@ -42,20 +35,57 @@ interface PublerDraft {
   accounts: PublerAccount[];
 }
 
+interface PostState {
+  generating: boolean;
+  elapsed: number;
+  promptOverride: string;
+  showPromptEdit: boolean;
+  result?: { asset_id: string; status: string; url?: string };
+}
+
+// ── helpers ────────────────────────────────────────────────────────────────
+
+const VIDEO_FORMATS = ['reel', 'video'];
+function assetTypeFromFormat(format?: string): 'image' | 'video' {
+  return VIDEO_FORMATS.includes((format ?? '').toLowerCase()) ? 'video' : 'image';
+}
+
+const RATIO_DIMS: Record<string, { w: number; h: number }> = {
+  '9:16': { w: 1024, h: 1792 },
+  '4:5':  { w: 1024, h: 1280 },
+  '1:1':  { w: 1024, h: 1024 },
+  '16:9': { w: 1792, h: 1024 },
+};
+
+const PLATFORM_ICONS: Record<string, string> = {
+  facebook: '📘', instagram: '📷', tiktok: '🎵', linkedin: '💼', twitter: '🐦',
+};
+
+const FORMAT_COLORS: Record<string, string> = {
+  reel:     'bg-purple-100 text-purple-700',
+  video:    'bg-blue-100 text-blue-700',
+  feed:     'bg-green-100 text-green-700',
+  image:    'bg-orange-100 text-orange-700',
+  story:    'bg-pink-100 text-pink-700',
+  carousel: 'bg-yellow-100 text-yellow-700',
+};
+
+// ── sub-components ─────────────────────────────────────────────────────────
+
 function GeneratingStatus({ elapsed, type }: { elapsed: number; type: 'image' | 'video' }) {
-  const stages: { until: number; icon: string; label: string }[] = type === 'image'
+  const stages = type === 'image'
     ? [
-        { until: 5,  icon: '📤', label: 'Submitting to AI...' },
-        { until: 15, icon: '🎨', label: 'AI is painting your image...' },
-        { until: 30, icon: '🖼️', label: 'Refining details...' },
-        { until: 50, icon: '⬆️', label: 'Uploading to storage...' },
+        { until: 5,        icon: '📤', label: 'Submitting to AI...' },
+        { until: 15,       icon: '🎨', label: 'AI is painting your image...' },
+        { until: 30,       icon: '🖼️', label: 'Refining details...' },
+        { until: 50,       icon: '⬆️', label: 'Uploading to storage...' },
         { until: Infinity, icon: '⏳', label: 'Almost done, hang tight...' },
       ]
     : [
-        { until: 10,  icon: '📤', label: 'Submitting to AI...' },
-        { until: 40,  icon: '🎬', label: 'AI is generating frames...' },
-        { until: 80,  icon: '🎞️', label: 'Encoding video...' },
-        { until: 120, icon: '⬆️', label: 'Uploading to storage...' },
+        { until: 10,       icon: '📤', label: 'Submitting to AI...' },
+        { until: 40,       icon: '🎬', label: 'AI is generating frames...' },
+        { until: 80,       icon: '🎞️', label: 'Encoding video...' },
+        { until: 120,      icon: '⬆️', label: 'Uploading to storage...' },
         { until: Infinity, icon: '⏳', label: 'Still working, please wait...' },
       ];
 
@@ -67,8 +97,8 @@ function GeneratingStatus({ elapsed, type }: { elapsed: number; type: 'image' | 
   return (
     <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-3 space-y-2">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 text-yellow-800 text-sm font-medium">
-          <span className="animate-spin w-4 h-4 border-2 border-yellow-600 border-t-transparent rounded-full inline-block" />
+        <div className="flex items-center gap-2 text-yellow-800 text-xs font-medium">
+          <span className="animate-spin w-3 h-3 border-2 border-yellow-600 border-t-transparent rounded-full inline-block" />
           {stage.icon} {stage.label}
         </div>
         <span className="text-xs text-yellow-600 font-mono tabular-nums">{timeStr}</span>
@@ -79,75 +109,169 @@ function GeneratingStatus({ elapsed, type }: { elapsed: number; type: 'image' | 
           style={{ width: `${Math.min(95, (elapsed / (type === 'image' ? 50 : 120)) * 100)}%` }}
         />
       </div>
-      <p className="text-xs text-yellow-600">Polling every {type === 'image' ? '3' : '5'}s — page is active</p>
     </div>
   );
 }
 
-function PostPreviewCard({ post }: { post: ContentPost }) {
+function WorkbenchCard({
+  post,
+  state,
+  readyAsset,
+  onGenerate,
+  onOpenPubler,
+  onStateChange,
+}: {
+  post: ContentPost;
+  state: PostState;
+  readyAsset?: VisualAsset;
+  onGenerate: (post: ContentPost) => void;
+  onOpenPubler: (asset: VisualAsset) => void;
+  onStateChange: (patch: Partial<PostState>) => void;
+}) {
+  const assetType = assetTypeFromFormat(post.format);
   const platforms = Array.isArray(post.platforms)
     ? post.platforms
     : post.platforms ? [post.platforms] : [];
-  const platformIcons: Record<string, string> = {
-    facebook: '📘', instagram: '📷', tiktok: '🎵', linkedin: '💼', twitter: '🐦',
-  };
+  const fmtKey = (post.format ?? '').toLowerCase();
+
   return (
-    <div className="mt-2 rounded-lg border border-indigo-100 bg-indigo-50 p-3 space-y-1.5 text-xs">
-      {platforms.length > 0 && (
-        <div className="flex gap-1 flex-wrap">
-          {platforms.map(p => (
-            <span key={p} className="inline-flex items-center gap-1 bg-white border border-indigo-200 text-indigo-700 px-2 py-0.5 rounded-full font-medium">
-              {platformIcons[p.toLowerCase()] ?? '🌐'} {p}
-            </span>
-          ))}
-          {post.scheduled_at && (
-            <span className="inline-flex items-center gap-1 bg-white border border-gray-200 text-gray-500 px-2 py-0.5 rounded-full">
-              📅 {new Date(post.scheduled_at).toLocaleDateString('en-NZ', { day: 'numeric', month: 'short' })}
-            </span>
+    <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+      {/* Header row */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <h3 className="text-sm font-semibold text-gray-900 truncate">{post.title}</h3>
+          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+            {platforms.map(p => (
+              <span key={p} className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">
+                {PLATFORM_ICONS[p.toLowerCase()] ?? '🌐'} {p}
+              </span>
+            ))}
+            {post.format && (
+              <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${FORMAT_COLORS[fmtKey] ?? 'bg-gray-100 text-gray-600'}`}>
+                {post.format}
+              </span>
+            )}
+            {post.ratio && <span className="text-xs text-gray-400">{post.ratio}</span>}
+            {post.scheduled_at && (
+              <span className="text-xs text-gray-400">
+                📅 {new Date(post.scheduled_at).toLocaleString('en-NZ', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+              </span>
+            )}
+          </div>
+        </div>
+        <span className={`text-xs px-2 py-0.5 rounded-full shrink-0 font-medium ${assetType === 'video' ? 'bg-blue-50 text-blue-600' : 'bg-purple-50 text-purple-600'}`}>
+          {assetType === 'video' ? '🎬 Video' : '🖼️ Image'}
+        </span>
+      </div>
+
+      {/* Caption */}
+      {post.caption && (
+        <p className="text-xs text-gray-600 line-clamp-2 leading-relaxed">{post.caption}</p>
+      )}
+
+      {/* Prompt / visual brief */}
+      {post.visual_brief && (
+        <div>
+          {state.showPromptEdit ? (
+            <div className="space-y-1.5">
+              <textarea
+                rows={3}
+                value={state.promptOverride !== '' ? state.promptOverride : post.visual_brief}
+                onChange={e => onStateChange({ promptOverride: e.target.value })}
+                className="w-full border border-indigo-300 rounded-lg px-2 py-1.5 text-xs font-mono resize-none focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              />
+              <button
+                onClick={() => onStateChange({ showPromptEdit: false })}
+                className="text-xs text-indigo-500 hover:text-indigo-700"
+              >
+                ▲ Collapse
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => onStateChange({ showPromptEdit: true })}
+              className="w-full text-left"
+            >
+              <p className="text-xs text-indigo-500 italic line-clamp-1 hover:line-clamp-none transition-all">
+                🎨 {state.promptOverride || post.visual_brief}
+              </p>
+            </button>
           )}
         </div>
       )}
-      {post.caption && (
-        <p className="text-gray-700 line-clamp-2 leading-relaxed">{post.caption}</p>
+
+      {/* Generation progress */}
+      {state.generating && <GeneratingStatus elapsed={state.elapsed} type={assetType} />}
+
+      {/* Ready image preview */}
+      {!state.generating && state.result?.status === 'ready' && state.result.url && assetType === 'image' && (
+        <img src={state.result.url} alt="Generated" className="rounded-lg w-full object-cover max-h-52" />
       )}
-      {post.visual_brief && (
-        <p className="text-gray-400 italic line-clamp-1">🖼 {post.visual_brief}</p>
+      {!state.generating && state.result?.status === 'ready' && assetType === 'video' && (
+        <p className="text-xs text-green-600 font-medium">✅ Video ready</p>
       )}
+      {!state.generating && state.result?.status === 'failed' && (
+        <p className="text-xs text-red-500">❌ Generation failed</p>
+      )}
+
+      {/* Action buttons */}
+      <div className="flex items-center gap-2 pt-1">
+        {readyAsset ? (
+          <>
+            <button
+              onClick={() => onOpenPubler(readyAsset)}
+              className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-xs py-2 rounded-lg font-medium"
+            >
+              📅 Schedule to Publer
+            </button>
+            <button
+              onClick={() => onGenerate(post)}
+              disabled={state.generating}
+              className="text-xs text-gray-500 hover:text-gray-700 px-3 py-2 border border-gray-200 rounded-lg disabled:opacity-50 hover:bg-gray-50"
+            >
+              ↺ Regen
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={() => onGenerate(post)}
+            disabled={state.generating}
+            className="flex-1 bg-gray-800 hover:bg-gray-900 text-white text-xs py-2 rounded-lg font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {state.generating ? (
+              <>
+                <span className="animate-spin w-3 h-3 border-2 border-white border-t-transparent rounded-full" />
+                {state.elapsed}s
+              </>
+            ) : (
+              assetType === 'video' ? '🎬 Generate Video' : '🖼️ Generate Image'
+            )}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
 
-// HeyGen is available if key is non-empty; server-side only, so default false on client
-const HEYGEN_KEY = false;
+// ── main page ──────────────────────────────────────────────────────────────
 
 export default function VisualsPage() {
   const [clients, setClients] = useState<Client[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState('');
   const [posts, setPosts] = useState<ContentPost[]>([]);
-  const [vidPosts, setVidPosts] = useState<ContentPost[]>([]);
   const [assets, setAssets] = useState<VisualAsset[]>([]);
   const [loadingAssets, setLoadingAssets] = useState(true);
+  const [loadingPosts, setLoadingPosts] = useState(false);
 
-  // Image form
-  const [imgClientId, setImgClientId] = useState('');
-  const [imgPostId, setImgPostId] = useState('');
-  const [imgAspectRatio, setImgAspectRatio] = useState('1:1');
-  const [imgStyle, setImgStyle] = useState('photorealistic');
-  const [imgPrompt, setImgPrompt] = useState('');
-  const [showPromptEdit, setShowPromptEdit] = useState(false);
-  const [imgGenerating, setImgGenerating] = useState(false);
-  const [imgElapsed, setImgElapsed] = useState(0);
-  const [imgError, setImgError] = useState('');
-  const [imgResult, setImgResult] = useState<{ asset_id: string; status?: string; url?: string } | null>(null);
+  // Per-post state
+  const [postStates, setPostStates] = useState<Record<string, PostState>>({});
+  const pollingRefs = useRef<Record<string, NodeJS.Timeout>>({});
+  const elapsedRefs = useRef<Record<string, NodeJS.Timeout>>({});
 
-  // Video form
-  const [vidClientId, setVidClientId] = useState('');
-  const [vidPostId, setVidPostId] = useState('');
-  const [vidDuration, setVidDuration] = useState('5');
-  const [vidAspectRatio, setVidAspectRatio] = useState('9:16');
-  const [vidGenerating, setVidGenerating] = useState(false);
-  const [vidElapsed, setVidElapsed] = useState(0);
-  const [vidError, setVidError] = useState('');
-  const [vidResult, setVidResult] = useState<{ asset_id: string; status?: string; url?: string } | null>(null);
+  // Airtable sync
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ total: number; updated: number; created: number } | null>(null);
+  const [syncError, setSyncError] = useState('');
 
   // Publer modal
   const [publerDraft, setPublerDraft] = useState<PublerDraft | null>(null);
@@ -159,34 +283,6 @@ export default function VisualsPage() {
   const [publerSuccess, setPublerSuccess] = useState('');
   const [publerLoading, setPublerLoading] = useState(false);
 
-  const heygenConfigured = HEYGEN_KEY;
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
-  const vidPollingRef = useRef<NodeJS.Timeout | null>(null);
-  const imgElapsedRef = useRef<NodeJS.Timeout | null>(null);
-  const vidElapsedRef = useRef<NodeJS.Timeout | null>(null);
-
-  // 图片生成计时器
-  useEffect(() => {
-    if (imgGenerating) {
-      setImgElapsed(0);
-      imgElapsedRef.current = setInterval(() => setImgElapsed(s => s + 1), 1000);
-    } else {
-      if (imgElapsedRef.current) clearInterval(imgElapsedRef.current);
-    }
-    return () => { if (imgElapsedRef.current) clearInterval(imgElapsedRef.current); };
-  }, [imgGenerating]);
-
-  // 视频生成计时器
-  useEffect(() => {
-    if (vidGenerating) {
-      setVidElapsed(0);
-      vidElapsedRef.current = setInterval(() => setVidElapsed(s => s + 1), 1000);
-    } else {
-      if (vidElapsedRef.current) clearInterval(vidElapsedRef.current);
-    }
-    return () => { if (vidElapsedRef.current) clearInterval(vidElapsedRef.current); };
-  }, [vidGenerating]);
-
   const fetchAssets = useCallback(async () => {
     try {
       const res = await fetch('/api/visual/assets');
@@ -197,133 +293,128 @@ export default function VisualsPage() {
     }
   }, []);
 
+  const fetchPosts = useCallback(async (clientId: string) => {
+    setLoadingPosts(true);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/posts`);
+      const json = await res.json();
+      setPosts(json.posts ?? []);
+    } finally {
+      setLoadingPosts(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetch('/api/clients').then(r => r.json()).then(d => {
       const list = d.clients ?? [];
       setClients(list);
-      // Auto-select only if exactly 1 client (unambiguous)
       if (list.length === 1) {
-        setImgClientId(list[0].id);
-        setVidClientId(list[0].id);
+        setSelectedClientId(list[0].id);
       }
     });
     fetchAssets();
   }, [fetchAssets]);
 
-  // Load posts when image client changes
   useEffect(() => {
-    if (!imgClientId) return;
-    fetch(`/api/clients/${imgClientId}/posts`).then(r => r.json()).then(d => setPosts(d.posts ?? []));
-  }, [imgClientId]);
+    if (!selectedClientId) return;
+    fetchPosts(selectedClientId);
+  }, [selectedClientId, fetchPosts]);
 
-  // Load posts when video client changes
-  useEffect(() => {
-    if (!vidClientId) return;
-    fetch(`/api/clients/${vidClientId}/posts`).then(r => r.json()).then(d => setVidPosts(d.posts ?? []));
-  }, [vidClientId]);
+  // Helper: update one post's state
+  const patchPostState = useCallback((postId: string, patch: Partial<PostState>) => {
+    setPostStates(prev => ({
+      ...prev,
+      [postId]: { ...({ generating: false, elapsed: 0, promptOverride: '', showPromptEdit: false }), ...prev[postId], ...patch },
+    }));
+  }, []);
 
-  // Auto-fill prompt from selected post
-  useEffect(() => {
-    const post = posts.find(p => p.id === imgPostId);
-    if (post?.visual_brief) {
-      const stylePrefix = imgStyle === 'photorealistic' ? 'Photorealistic, ' : imgStyle === 'illustration' ? 'Illustration style, ' : 'Minimal design, ';
-      setImgPrompt(`${stylePrefix}${post.visual_brief}, aspect ratio ${imgAspectRatio}, high quality`);
-    }
-  }, [imgPostId, imgStyle, imgAspectRatio, posts]);
-
-  // Poll image status
-  const pollImageStatus = useCallback(async (assetId: string) => {
+  // Poll a single post's asset status
+  const pollPostStatus = useCallback(async (postId: string, assetId: string, type: 'image' | 'video') => {
     try {
       const res = await fetch(`/api/visual/status/${assetId}`);
       const json = await res.json();
       const status = json.asset?.generation_status ?? json.status;
       const url = json.asset?.storage_url ?? json.storage_url;
+
       if (status === 'ready' || status === 'failed') {
-        if (pollingRef.current) clearInterval(pollingRef.current);
-        setImgResult({ asset_id: assetId, status, url });
-        setImgGenerating(false);
+        clearInterval(pollingRefs.current[postId]);
+        clearInterval(elapsedRefs.current[postId]);
+        patchPostState(postId, { generating: false, result: { asset_id: assetId, status, url } });
         fetchAssets();
       } else {
-        setImgResult(prev => prev ? { ...prev, status } : null);
+        patchPostState(postId, { result: { asset_id: assetId, status } });
       }
     } catch {
-      if (pollingRef.current) clearInterval(pollingRef.current);
-      setImgGenerating(false);
+      clearInterval(pollingRefs.current[postId]);
+      clearInterval(elapsedRefs.current[postId]);
+      patchPostState(postId, { generating: false });
     }
-  }, [fetchAssets]);
+  }, [patchPostState, fetchAssets]);
 
-  const handleImageGenerate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!imgPostId) { setImgError('Select a content post first'); return; }
-    setImgGenerating(true);
-    setImgError('');
-    setImgResult(null);
+  const handleGenerate = useCallback(async (post: ContentPost) => {
+    const type = assetTypeFromFormat(post.format);
+    const ratio = post.ratio ?? '1:1';
+    const { w, h } = RATIO_DIMS[ratio] ?? { w: 1024, h: 1024 };
+    const promptOverride = postStates[post.id]?.promptOverride || '';
+
+    patchPostState(post.id, { generating: true, elapsed: 0, result: undefined });
+
+    // Start elapsed counter
+    if (elapsedRefs.current[post.id]) clearInterval(elapsedRefs.current[post.id]);
+    elapsedRefs.current[post.id] = setInterval(() => {
+      setPostStates(prev => ({
+        ...prev,
+        [post.id]: { ...prev[post.id], elapsed: (prev[post.id]?.elapsed ?? 0) + 1 },
+      }));
+    }, 1000);
 
     try {
-      const res = await fetch('/api/visual/image', {
+      const endpoint = type === 'video' ? '/api/visual/video' : '/api/visual/image';
+      const body = type === 'video'
+        ? { post_id: post.id, client_id: selectedClientId, duration: 5, aspect_ratio: ratio }
+        : { post_id: post.id, client_id: selectedClientId, variant: 1, prompt_override: promptOverride || undefined, aspect_ratio: ratio, width: w, height: h };
+
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ post_id: imgPostId, client_id: imgClientId, variant: 1, prompt_override: imgPrompt || undefined, aspect_ratio: imgAspectRatio }),
+        body: JSON.stringify(body),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Failed');
-      setImgResult({ asset_id: json.asset_id, status: 'generating' });
 
-      // Start polling
-      pollingRef.current = setInterval(() => pollImageStatus(json.asset_id), 3000);
+      const assetId = json.asset_id;
+      patchPostState(post.id, { result: { asset_id: assetId, status: 'generating' } });
+
+      if (pollingRefs.current[post.id]) clearInterval(pollingRefs.current[post.id]);
+      const interval = type === 'video' ? 5000 : 3000;
+      pollingRefs.current[post.id] = setInterval(() => pollPostStatus(post.id, assetId, type), interval);
     } catch (err: unknown) {
-      setImgError(err instanceof Error ? err.message : 'Unknown error');
-      setImgGenerating(false);
+      clearInterval(elapsedRefs.current[post.id]);
+      patchPostState(post.id, { generating: false, result: { asset_id: '', status: 'failed' } });
+      console.error('Generate error:', err);
+    }
+  }, [postStates, selectedClientId, patchPostState, pollPostStatus]);
+
+  // Airtable sync
+  const handleSyncFromAirtable = async () => {
+    if (!selectedClientId) { setSyncError('Select a client first'); return; }
+    setSyncing(true); setSyncError(''); setSyncResult(null);
+    try {
+      const res = await fetch(`/api/airtable/pull-content?client_id=${selectedClientId}`);
+      const json = await res.json();
+      if (!res.ok || !json.success) throw new Error(json.error ?? 'Sync failed');
+      setSyncResult({ total: json.total, updated: json.updated, created: json.created });
+      fetchPosts(selectedClientId);
+    } catch (err: unknown) {
+      setSyncError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setSyncing(false);
     }
   };
 
-  const pollVideoStatus = useCallback(async (assetId: string) => {
-    try {
-      const res = await fetch(`/api/visual/status/${assetId}`);
-      const json = await res.json();
-      const status = json.asset?.generation_status ?? json.status;
-      const url = json.asset?.storage_url ?? json.storage_url;
-      if (status === 'ready' || status === 'failed') {
-        if (vidPollingRef.current) clearInterval(vidPollingRef.current);
-        setVidResult({ asset_id: assetId, status, url });
-        setVidGenerating(false);
-        fetchAssets();
-      } else {
-        setVidResult(prev => prev ? { ...prev, status } : null);
-      }
-    } catch {
-      if (vidPollingRef.current) clearInterval(vidPollingRef.current);
-      setVidGenerating(false);
-    }
-  }, [fetchAssets]);
-
-  const handleVideoGenerate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!vidPostId) { setVidError('Select a content post first'); return; }
-    setVidGenerating(true);
-    setVidError('');
-    setVidResult(null);
-    try {
-      const res = await fetch('/api/visual/video', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ post_id: vidPostId, client_id: vidClientId, duration: parseInt(vidDuration), aspect_ratio: vidAspectRatio }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? 'Failed');
-      setVidResult({ asset_id: json.asset_id, status: 'generating' });
-      vidPollingRef.current = setInterval(() => pollVideoStatus(json.asset_id), 5000);
-    } catch (err: unknown) {
-      setVidError(err instanceof Error ? err.message : 'Unknown error');
-      setVidGenerating(false);
-    }
-  };
-
+  // Publer modal
   const openPublerModal = async (asset: VisualAsset) => {
-    setPublerLoading(true);
-    setPublerError('');
-    setPublerSuccess('');
-    setPublerDraft(null);
+    setPublerLoading(true); setPublerError(''); setPublerSuccess(''); setPublerDraft(null);
     try {
       const res = await fetch(`/api/publer/draft/${asset.id}`);
       const json = await res.json();
@@ -339,7 +430,7 @@ export default function VisualsPage() {
       const local = new Date(tomorrow.getTime() - offset * 60000);
       setPublerScheduledAt(local.toISOString().slice(0, 16));
     } catch (err: unknown) {
-      setPublerError(err instanceof Error ? err.message : 'Failed to load');
+      setPublerError(err instanceof Error ? err.message : 'Failed');
       setPublerDraft({ asset, caption: '', hashtags: '', accounts: [] });
     } finally {
       setPublerLoading(false);
@@ -348,8 +439,7 @@ export default function VisualsPage() {
 
   const handlePublerSubmit = async () => {
     if (!publerDraft || !publerAccountId || !publerScheduledAt) return;
-    setPublerSending(true);
-    setPublerError('');
+    setPublerSending(true); setPublerError('');
     try {
       const res = await fetch('/api/publer/schedule', {
         method: 'POST',
@@ -371,34 +461,6 @@ export default function VisualsPage() {
     }
   };
 
-  // Airtable sync
-  const [syncing, setSyncing] = useState(false);
-  const [syncResult, setSyncResult] = useState<{ total: number; updated: number; created: number } | null>(null);
-  const [syncError, setSyncError] = useState('');
-
-  const handleSyncFromAirtable = async () => {
-    const clientId = imgClientId || vidClientId;
-    if (!clientId) { setSyncError('Select a client first'); return; }
-    setSyncing(true);
-    setSyncError('');
-    setSyncResult(null);
-    try {
-      const res = await fetch(`/api/airtable/pull-content?client_id=${clientId}`);
-      const json = await res.json();
-      if (!res.ok || !json.success) throw new Error(json.error ?? 'Sync failed');
-      setSyncResult({ total: json.total, updated: json.updated, created: json.created });
-      // Refresh posts list
-      fetch(`/api/clients/${clientId}/posts`).then(r => r.json()).then(d => {
-        setPosts(d.posts ?? []);
-        setVidPosts(d.posts ?? []);
-      });
-    } catch (err: unknown) {
-      setSyncError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setSyncing(false);
-    }
-  };
-
   const statusBadge = (s: string) => {
     const colors: Record<string, string> = {
       generating: 'bg-yellow-100 text-yellow-700',
@@ -408,17 +470,26 @@ export default function VisualsPage() {
     return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${colors[s] ?? 'bg-gray-100 text-gray-600'}`}>{s}</span>;
   };
 
+  // Find the most recent ready asset per post
+  const readyAssetByPost = assets.reduce<Record<string, VisualAsset>>((acc, a) => {
+    if (a.generation_status === 'ready' && a.post_id && !acc[a.post_id]) {
+      acc[a.post_id] = a;
+    }
+    return acc;
+  }, {});
+
   return (
     <div className="p-6 space-y-6">
+      {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Visuals</h1>
-          <p className="text-sm text-gray-500 mt-1">Generate images, videos & avatar videos</p>
+          <p className="text-sm text-gray-500 mt-1">Content workbench — generate & schedule visuals</p>
         </div>
         <div className="flex flex-col items-end gap-1">
           <button
             onClick={handleSyncFromAirtable}
-            disabled={syncing}
+            disabled={syncing || !selectedClientId}
             className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
           >
             {syncing
@@ -432,233 +503,51 @@ export default function VisualsPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* 7A — Image Generation */}
-        <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
-          <div className="flex items-center gap-2">
-            <span className="text-lg">🖼️</span>
-            <div>
-              <h2 className="text-base font-semibold text-gray-900">Image Generation</h2>
-              <p className="text-xs text-gray-500">Atlas Cloud Flux-dev · Available ✅</p>
-            </div>
-          </div>
-          <form onSubmit={handleImageGenerate} className="space-y-3">
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">① Client</label>
-              <select
-                value={imgClientId}
-                onChange={(e) => { setImgClientId(e.target.value); setImgPostId(''); }}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-              >
-                <option value="">— Select client —</option>
-                {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">
-                ② Content Post
-                {posts.length > 0 && imgClientId && (
-                  <span className="ml-2 text-indigo-600 font-semibold">{posts.length} available ↓</span>
-                )}
-              </label>
-              <select
-                value={imgPostId}
-                onChange={(e) => setImgPostId(e.target.value)}
-                disabled={!imgClientId}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white disabled:bg-gray-50 disabled:text-gray-400"
-              >
-                <option value="">Select post (loads Visual Brief)...</option>
-                {posts.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
-              </select>
-              {imgPostId && (() => { const p = posts.find(x => x.id === imgPostId); return p ? <PostPreviewCard post={p} /> : null; })()}
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Aspect Ratio</label>
-                <select
-                  value={imgAspectRatio}
-                  onChange={(e) => setImgAspectRatio(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                >
-                  <option value="1:1">1:1 Square</option>
-                  <option value="4:5">4:5 Portrait</option>
-                  <option value="16:9">16:9 Landscape</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Style</label>
-                <select
-                  value={imgStyle}
-                  onChange={(e) => setImgStyle(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                >
-                  <option value="photorealistic">Photorealistic</option>
-                  <option value="illustration">Illustration</option>
-                  <option value="minimal">Minimal</option>
-                </select>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setShowPromptEdit(!showPromptEdit)}
-              className="text-xs text-indigo-600 hover:text-indigo-800"
-            >
-              {showPromptEdit ? '▼' : '▶'} ✏️ Edit Prompt
-            </button>
-
-            {showPromptEdit && (
-              <textarea
-                rows={3}
-                value={imgPrompt}
-                onChange={(e) => setImgPrompt(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
-              />
-            )}
-
-            {imgError && <p className="text-xs text-red-600">{imgError}</p>}
-
-            {imgGenerating && (
-              <GeneratingStatus elapsed={imgElapsed} type="image" />
-            )}
-
-            {imgResult && !imgGenerating && (
-              <div className="bg-gray-50 rounded-lg p-3 text-xs">
-                {imgResult.status === 'ready' && imgResult.url && (
-                  <div className="space-y-2">
-                    <p className="text-green-700 font-medium">✅ Image ready!</p>
-                    <img src={imgResult.url} alt="Generated" className="rounded-lg w-full object-cover" />
-                  </div>
-                )}
-                {imgResult.status === 'failed' && <p className="text-red-600">❌ Generation failed</p>}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={imgGenerating}
-              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              {imgGenerating ? (
-                <><span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full inline-block" /> Generating... {imgElapsed}s</>
-              ) : 'Generate Image'}
-            </button>
-          </form>
-        </div>
-
-        {/* 7B — Video Generation */}
-        <div className="space-y-4">
-          <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
-            <div className="flex items-center gap-2">
-              <span className="text-lg">🎬</span>
-              <div>
-                <h2 className="text-base font-semibold text-gray-900">Video Generation</h2>
-                <p className="text-xs text-gray-500">Seedance 2.0 via Atlas Cloud</p>
-              </div>
-            </div>
-            <form onSubmit={handleVideoGenerate} className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">① Client</label>
-                <select
-                  value={vidClientId}
-                  onChange={(e) => { setVidClientId(e.target.value); setVidPostId(''); }}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-                >
-                  <option value="">— Select client —</option>
-                  {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">② Content Post</label>
-                <select
-                  value={vidPostId}
-                  onChange={(e) => setVidPostId(e.target.value)}
-                  disabled={!vidClientId}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white disabled:bg-gray-50 disabled:text-gray-400"
-                >
-                  <option value="">Select post...</option>
-                  {vidPosts.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}
-                </select>
-                {vidPostId && (() => { const p = vidPosts.find(x => x.id === vidPostId); return p ? <PostPreviewCard post={p} /> : null; })()}
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Duration</label>
-                  <select
-                    value={vidDuration}
-                    onChange={(e) => setVidDuration(e.target.value)}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="5">5 seconds</option>
-                    <option value="10">10 seconds</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">Aspect Ratio</label>
-                  <select
-                    value={vidAspectRatio}
-                    onChange={(e) => setVidAspectRatio(e.target.value)}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  >
-                    <option value="9:16">9:16 Vertical</option>
-                    <option value="16:9">16:9 Horizontal</option>
-                  </select>
-                </div>
-              </div>
-              {vidError && <p className="text-xs text-red-600">{vidError}</p>}
-
-              {vidGenerating && (
-                <GeneratingStatus elapsed={vidElapsed} type="video" />
-              )}
-
-              {vidResult && !vidGenerating && (
-                <div className="bg-gray-50 rounded-lg p-3 text-xs">
-                  {vidResult.status === 'ready' && (
-                    <div className="space-y-2">
-                      <p className="text-green-700 font-medium">✅ Video ready!</p>
-                      {vidResult.url && (
-                        <a href={vidResult.url} target="_blank" rel="noreferrer" className="inline-block text-indigo-600 underline">▶ Watch video</a>
-                      )}
-                    </div>
-                  )}
-                  {vidResult.status === 'failed' && <p className="text-red-600">❌ Generation failed</p>}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={vidGenerating}
-                className="w-full bg-gray-700 hover:bg-gray-800 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50 flex items-center justify-center gap-2"
-              >
-                {vidGenerating ? (
-                  <><span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full inline-block" /> Generating... {vidElapsed}s</>
-                ) : 'Generate Video'}
-              </button>
-            </form>
-          </div>
-
-          {/* 7C — HeyGen Avatar */}
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <div className="flex items-center gap-2 mb-3">
-              <span className="text-lg">🤖</span>
-              <div>
-                <h2 className="text-base font-semibold text-gray-900">Avatar Video (HeyGen)</h2>
-                <p className="text-xs text-gray-500">Digital human video</p>
-              </div>
-            </div>
-            {heygenConfigured ? (
-              <p className="text-sm text-gray-500">HeyGen configured. Avatar form coming soon.</p>
-            ) : (
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-                <p className="text-sm text-yellow-800 font-medium">⚠️ HeyGen API Key 未配置</p>
-                <p className="text-xs text-yellow-700 mt-1">请在 .env 中设置 <code className="font-mono bg-yellow-100 px-1 rounded">HEYGEN_API_KEY</code></p>
-              </div>
-            )}
-          </div>
-        </div>
+      {/* Client selector */}
+      <div className="flex items-center gap-3">
+        <label className="text-sm font-medium text-gray-700 whitespace-nowrap">Client</label>
+        <select
+          value={selectedClientId}
+          onChange={e => setSelectedClientId(e.target.value)}
+          className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white min-w-[200px]"
+        >
+          <option value="">— Select client —</option>
+          {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        {posts.length > 0 && (
+          <span className="text-xs text-gray-500">{posts.length} posts ready</span>
+        )}
       </div>
 
-      {/* 7D — Generation History */}
+      {/* Content Workbench */}
+      {selectedClientId && (
+        <div>
+          <h2 className="text-base font-semibold text-gray-900 mb-3">Content Workbench</h2>
+          {loadingPosts ? (
+            <div className="py-10 text-center text-gray-400 text-sm">Loading posts...</div>
+          ) : posts.length === 0 ? (
+            <div className="py-10 text-center text-gray-400 text-sm">
+              No posts yet. Click &quot;Sync from Airtable&quot; to pull ready content.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {posts.map(post => (
+                <WorkbenchCard
+                  key={post.id}
+                  post={post}
+                  state={postStates[post.id] ?? { generating: false, elapsed: 0, promptOverride: '', showPromptEdit: false }}
+                  readyAsset={readyAssetByPost[post.id]}
+                  onGenerate={handleGenerate}
+                  onOpenPubler={openPublerModal}
+                  onStateChange={patch => patchPostState(post.id, patch)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Generation History */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-100">
           <h2 className="text-base font-semibold text-gray-900">Generation History</h2>
@@ -702,29 +591,12 @@ export default function VisualsPage() {
                     </td>
                     <td className="px-5 py-3">
                       {asset.generation_status === 'ready' && (
-                        <div className="flex items-center gap-2">
-                          {(imgClientId || vidClientId) && (
-                            <button
-                              onClick={async () => {
-                                await fetch('/api/airtable/sync-visuals', {
-                                  method: 'POST',
-                                  headers: { 'Content-Type': 'application/json' },
-                                  body: JSON.stringify({ client_id: imgClientId || vidClientId, asset_ids: [asset.id] }),
-                                });
-                                alert('Synced to Airtable ✓');
-                              }}
-                              className="text-xs border border-gray-300 text-gray-500 px-2 py-1 rounded hover:bg-gray-50 whitespace-nowrap"
-                            >
-                              ↑ Airtable
-                            </button>
-                          )}
-                          <button
-                            onClick={() => openPublerModal(asset)}
-                            className="text-xs border border-blue-300 text-blue-600 px-2 py-1 rounded hover:bg-blue-50 whitespace-nowrap"
-                          >
-                            📅 Publer
-                          </button>
-                        </div>
+                        <button
+                          onClick={() => openPublerModal(asset)}
+                          className="text-xs border border-blue-300 text-blue-600 px-2 py-1 rounded hover:bg-blue-50 whitespace-nowrap"
+                        >
+                          📅 Publer
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -746,9 +618,7 @@ export default function VisualsPage() {
               </div>
               <button onClick={() => setPublerDraft(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
             </div>
-
             <div className="px-6 py-5 space-y-4">
-              {/* Asset preview */}
               <div className="flex items-center gap-3 bg-gray-50 rounded-lg p-3">
                 {publerDraft.asset.asset_type === 'image' && publerDraft.asset.storage_url ? (
                   <img src={publerDraft.asset.storage_url} alt="" className="w-14 h-14 object-cover rounded-lg flex-shrink-0" />
@@ -759,7 +629,6 @@ export default function VisualsPage() {
                 )}
                 <div className="text-xs text-gray-500 line-clamp-3">{publerDraft.asset.prompt_used ?? `${publerDraft.asset.asset_type} asset`}</div>
               </div>
-
               {publerLoading ? (
                 <div className="flex items-center gap-2 text-sm text-gray-500 py-2">
                   <span className="animate-spin w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full inline-block" />
@@ -767,11 +636,10 @@ export default function VisualsPage() {
                 </div>
               ) : (
                 <>
-                  {/* Account selector */}
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">① Publer Account</label>
                     {publerDraft.accounts.length === 0 ? (
-                      <p className="text-xs text-red-500">No Publer accounts found. Check PUBLER_API_KEY and PUBLER_WORKSPACE_ID.</p>
+                      <p className="text-xs text-red-500">No Publer accounts found.</p>
                     ) : (
                       <select
                         value={publerAccountId}
@@ -786,8 +654,6 @@ export default function VisualsPage() {
                       </select>
                     )}
                   </div>
-
-                  {/* Schedule datetime */}
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">② Schedule Time (local)</label>
                     <input
@@ -798,8 +664,6 @@ export default function VisualsPage() {
                       className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                   </div>
-
-                  {/* Caption */}
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">③ Caption</label>
                     <textarea
@@ -812,16 +676,11 @@ export default function VisualsPage() {
                   </div>
                 </>
               )}
-
               {publerError && <p className="text-xs text-red-600">{publerError}</p>}
               {publerSuccess && <p className="text-xs text-green-600 font-medium">✅ {publerSuccess}</p>}
             </div>
-
             <div className="px-6 py-4 border-t border-gray-100 flex gap-3 justify-end">
-              <button
-                onClick={() => setPublerDraft(null)}
-                className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50"
-              >
+              <button onClick={() => setPublerDraft(null)} className="px-4 py-2 text-sm text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">
                 Cancel
               </button>
               {!publerSuccess && (
@@ -830,9 +689,9 @@ export default function VisualsPage() {
                   disabled={publerSending || publerLoading || !publerAccountId || !publerScheduledAt}
                   className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium disabled:opacity-50 flex items-center gap-2"
                 >
-                  {publerSending ? (
-                    <><span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full inline-block" /> Uploading & Scheduling...</>
-                  ) : 'Schedule Post'}
+                  {publerSending
+                    ? <><span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full inline-block" /> Uploading & Scheduling...</>
+                    : 'Schedule Post'}
                 </button>
               )}
             </div>

@@ -155,6 +155,9 @@ function mapNewTableFields(f: Record<string, unknown>): Record<string, unknown> 
     f['Time_NZST'] as string | undefined
   )
 
+  const format = (f['Format'] as string) || null
+  const ratio  = (f['Ratio']  as string) || null
+
   return {
     status,
     title:        (f['Headline_EN'] as string) || '',
@@ -163,9 +166,11 @@ function mapNewTableFields(f: Record<string, unknown>): Record<string, unknown> 
     hashtags,
     visual_brief: (f['LoveArt_Prompt_EN'] as string) || null,
     platforms,
-    route:        'route_a',   // 社媒内容默认 Route A
+    route:        'route_a',
     scheduled_at: scheduledAt,
     source_video_url: null,
+    format,
+    ratio,
   }
 }
 
