@@ -34,6 +34,12 @@ const navItems = [
     emoji: '🎨',
     exact: false,
   },
+  {
+    href: '/dashboard/airtable',
+    label: 'Airtable Views',
+    emoji: '📊',
+    exact: false,
+  },
 ];
 
 function Sidebar() {
