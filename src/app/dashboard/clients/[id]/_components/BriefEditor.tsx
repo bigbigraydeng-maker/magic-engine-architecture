@@ -388,7 +388,7 @@ function VisualDisplay({ colors, styleKeywords, dos, donts }: {
           )}
           {donts.length > 0 && (
             <div>
-              <FieldLabel>Visual DON'Ts</FieldLabel>
+              <FieldLabel>Visual DON&apos;Ts</FieldLabel>
               <ul className="space-y-1">
                 {donts.map(d => <li key={d} className="text-xs text-red-600 flex gap-1"><span>✕</span>{d}</li>)}
               </ul>
