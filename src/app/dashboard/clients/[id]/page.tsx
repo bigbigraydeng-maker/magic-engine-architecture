@@ -9,6 +9,11 @@ interface Client {
   name: string;
   domain?: string;
   airtable_base_id?: string;
+  airtable_content_table_id?: string;
+  airtable_keywords_table_id?: string;
+  airtable_embed_social?: string;
+  airtable_embed_keywords?: string;
+  airtable_embed_seo?: string;
   created_at: string;
 }
 
@@ -48,6 +53,16 @@ export default function ClientDetailPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
+  const [airtableConfig, setAirtableConfig] = useState({
+    airtable_base_id: '',
+    airtable_content_table_id: '',
+    airtable_keywords_table_id: '',
+    airtable_embed_social: '',
+    airtable_embed_keywords: '',
+    airtable_embed_seo: '',
+  });
+  const [savingAirtable, setSavingAirtable] = useState(false);
+  const [airtableMsg, setAirtableMsg] = useState('');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -61,6 +76,14 @@ export default function ClientDetailPage() {
       if (clientRes.ok) {
         const { client: c } = await clientRes.json();
         setClient(c);
+        setAirtableConfig({
+          airtable_base_id: c.airtable_base_id ?? '',
+          airtable_content_table_id: c.airtable_content_table_id ?? '',
+          airtable_keywords_table_id: c.airtable_keywords_table_id ?? '',
+          airtable_embed_social: c.airtable_embed_social ?? '',
+          airtable_embed_keywords: c.airtable_embed_keywords ?? '',
+          airtable_embed_seo: c.airtable_embed_seo ?? '',
+        });
       }
       if (briefRes.ok) {
         const { brief: b } = await briefRes.json();
@@ -78,6 +101,25 @@ export default function ClientDetailPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  const handleSaveAirtable = async () => {
+    setSavingAirtable(true);
+    setAirtableMsg('');
+    try {
+      const res = await fetch(`/api/clients/${clientId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(airtableConfig),
+      });
+      if (!res.ok) throw new Error('Failed to save');
+      setAirtableMsg('Saved ✓');
+      setTimeout(() => setAirtableMsg(''), 3000);
+    } catch {
+      setAirtableMsg('Error saving');
+    } finally {
+      setSavingAirtable(false);
+    }
+  };
 
   const handleSaveBrief = async () => {
     setSaving(true);
@@ -144,6 +186,75 @@ export default function ClientDetailPage() {
           <div>
             <span className="text-gray-500">Created:</span>
             <span className="ml-2 text-gray-900">{new Date(client.created_at).toLocaleDateString()}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Airtable Configuration */}
+      <div className="bg-white rounded-xl border border-gray-200 p-5">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">Airtable Configuration</h2>
+            <p className="text-xs text-gray-400 mt-0.5">同步设置 + 嵌入视图 URL</p>
+          </div>
+          <div className="flex items-center gap-3">
+            {airtableMsg && <span className="text-sm text-green-600">{airtableMsg}</span>}
+            <button
+              onClick={handleSaveAirtable}
+              disabled={savingAirtable}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-4 py-1.5 rounded-lg disabled:opacity-50 transition-colors"
+            >
+              {savingAirtable ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {/* Sync IDs */}
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Sync Settings</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {([
+                { label: 'Airtable Base ID', key: 'airtable_base_id', placeholder: 'appXXXXXXXXXXXXXX' },
+                { label: 'Social Calendar Table ID', key: 'airtable_content_table_id', placeholder: 'tblXXXXXXXXXXXXXX' },
+                { label: 'Keywords Table ID', key: 'airtable_keywords_table_id', placeholder: 'tblXXXXXXXXX or "Keywords"' },
+              ] as { label: string; key: keyof typeof airtableConfig; placeholder: string }[]).map(({ label, key, placeholder }) => (
+                <div key={key}>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
+                  <input
+                    value={airtableConfig[key]}
+                    onChange={e => setAirtableConfig(c => ({ ...c, [key]: e.target.value }))}
+                    placeholder={placeholder}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Embed URLs */}
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+              Embed View URLs
+              <span className="ml-2 font-normal normal-case text-gray-400">Airtable → Share → Embed this view → 复制 src URL</span>
+            </p>
+            <div className="space-y-3">
+              {([
+                { label: '📅 Social Calendar', key: 'airtable_embed_social' },
+                { label: '🔑 Keywords', key: 'airtable_embed_keywords' },
+                { label: '📈 SEO Strategy', key: 'airtable_embed_seo' },
+              ] as { label: string; key: keyof typeof airtableConfig }[]).map(({ label, key }) => (
+                <div key={key}>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">{label}</label>
+                  <input
+                    value={airtableConfig[key]}
+                    onChange={e => setAirtableConfig(c => ({ ...c, [key]: e.target.value }))}
+                    placeholder="https://airtable.com/embed/shr…"
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>

@@ -50,6 +50,10 @@ export default function KeywordsPage() {
   // Optimistic status updates
   const [pendingStatus, setPendingStatus] = useState<Record<string, string>>({});
 
+  // Airtable pull
+  const [pulling, setPulling] = useState(false);
+  const [pullMsg, setPullMsg] = useState('');
+
   useEffect(() => {
     fetch('/api/clients').then(r => r.json()).then(d => {
       const list = d.clients ?? [];
@@ -123,6 +127,27 @@ export default function KeywordsPage() {
     }
   };
 
+  const handleAirtablePull = async () => {
+    if (!fetchClient) return;
+    setPulling(true);
+    setPullMsg('');
+    try {
+      const res = await fetch(`/api/airtable/pull-keywords?client_id=${fetchClient}`);
+      const d = await res.json();
+      if (d.success) {
+        setPullMsg(`✓ +${d.created} new, ~${d.updated} updated`);
+        await fetchKeywords();
+      } else {
+        setPullMsg(`Error: ${d.error}`);
+      }
+    } catch {
+      setPullMsg('Error pulling from Airtable');
+    } finally {
+      setPulling(false);
+      setTimeout(() => setPullMsg(''), 4000);
+    }
+  };
+
   const handleStatusUpdate = async (kwId: string, newStatus: 'approved' | 'rejected') => {
     // Optimistic update
     setPendingStatus(prev => ({ ...prev, [kwId]: newStatus }));
@@ -155,7 +180,20 @@ export default function KeywordsPage() {
 
       {/* SEMrush Fetch Panel */}
       <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <h2 className="text-base font-semibold text-gray-900 mb-4">🔍 SEMrush Keyword Fetch</h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-base font-semibold text-gray-900">🔍 SEMrush Keyword Fetch</h2>
+          <div className="flex items-center gap-2">
+            {pullMsg && <span className="text-xs text-green-600">{pullMsg}</span>}
+            <button
+              type="button"
+              onClick={handleAirtablePull}
+              disabled={pulling || !fetchClient}
+              className="text-sm px-3 py-1.5 bg-amber-500 text-white rounded hover:bg-amber-600 disabled:opacity-50 flex items-center gap-1"
+            >
+              {pulling ? '…' : '↓'} Pull from Airtable
+            </button>
+          </div>
+        </div>
         <form onSubmit={handleFetch} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
