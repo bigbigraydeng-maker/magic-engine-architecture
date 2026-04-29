@@ -224,6 +224,10 @@ function CampaignCard({
   const [msg, setMsg] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // SEMrush enrichment inputs
+  const [seedKeyword, setSeedKeyword] = useState(campaign.title)
+  const [semrushDb, setSemrushDb] = useState('au')
+
   // Batch generation state
   const [batchPlatforms, setBatchPlatforms] = useState<string[]>(['facebook', 'tiktok'])
   const [directionNote, setDirectionNote] = useState('')
@@ -285,7 +289,7 @@ function CampaignCard({
       const res = await fetch(`/api/clients/${clientId}/campaign/${campaign.id}/enrich`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ seed_keyword: campaign.title }),
+        body: JSON.stringify({ seed_keyword: seedKeyword.trim() || campaign.title, db: semrushDb }),
       })
       const json = await res.json()
       if (!json.success) throw new Error(json.error)
@@ -449,16 +453,34 @@ function CampaignCard({
 
           {/* SEMrush Keywords */}
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                SEMrush 关键词
-              </p>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+              SEMrush 关键词
+            </p>
+            {/* Seed keyword + DB selector */}
+            <div className="flex gap-2 mb-2">
+              <input
+                value={seedKeyword}
+                onChange={e => setSeedKeyword(e.target.value)}
+                placeholder="搜索词，例：China tour New Zealand"
+                className={`${INPUT_CLASS} flex-1 text-xs`}
+              />
+              <select
+                value={semrushDb}
+                onChange={e => setSemrushDb(e.target.value)}
+                className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="au">AU</option>
+                <option value="us">US</option>
+                <option value="gb">UK</option>
+                <option value="nz">NZ</option>
+                <option value="ca">CA</option>
+              </select>
               <button
                 onClick={handleEnrich}
-                disabled={enriching}
-                className="text-xs text-indigo-600 hover:text-indigo-800 disabled:opacity-50 transition-colors"
+                disabled={enriching || !seedKeyword.trim()}
+                className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
               >
-                {enriching ? '获取中…' : '🔍 拉取关键词'}
+                {enriching ? '获取中…' : '🔍 拉取'}
               </button>
             </div>
             {keywords.length > 0 ? (
