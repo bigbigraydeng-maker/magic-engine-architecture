@@ -181,18 +181,20 @@ export default function ContentBoardPage() {
         </select>
       </div>
 
-      {/* Batch action bar */}
+      {/* Batch feedback — always visible so it persists after selection clears */}
+      {batchMsg && (
+        <p className={`text-sm px-1 ${batchMsg.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>
+          {batchMsg}
+        </p>
+      )}
+
+      {/* Batch action bar — visible while items are selected */}
       {someSelected && (
         <div className="flex items-center gap-3 bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3">
           <span className="text-sm font-medium text-indigo-700">
             已选 {selectedIds.size} 条
           </span>
           <div className="flex gap-2 ml-auto">
-            {batchMsg && (
-              <span className={`text-sm mr-2 ${batchMsg.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>
-                {batchMsg}
-              </span>
-            )}
             <button
               onClick={() => handleBatchUpdate('approved')}
               disabled={batching}
@@ -353,13 +355,15 @@ export default function ContentBoardPage() {
                 </div>
               )}
 
-              {/* Quick actions in modal */}
+              {/* Quick actions in modal — only for drafts */}
               {(modalPost.status === 'draft') && (
                 <div className="flex gap-2 pt-2 border-t border-gray-100">
                   <button
-                    onClick={async () => {
+                    onClick={() => {
+                      // Capture ID before closing to avoid stale closure issues
+                      const id = modalPost.id;
                       setModalPost(null);
-                      await batchUpdate([modalPost.id], 'approved');
+                      batchUpdate([id], 'approved');
                     }}
                     disabled={batching}
                     className="flex-1 bg-green-600 hover:bg-green-700 text-white text-sm py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
@@ -367,9 +371,10 @@ export default function ContentBoardPage() {
                     ✓ 批准此条
                   </button>
                   <button
-                    onClick={async () => {
+                    onClick={() => {
+                      const id = modalPost.id;
                       setModalPost(null);
-                      await batchUpdate([modalPost.id], 'rejected');
+                      batchUpdate([id], 'rejected');
                     }}
                     disabled={batching}
                     className="flex-1 bg-red-500 hover:bg-red-600 text-white text-sm py-2 rounded-lg font-medium transition-colors disabled:opacity-50"

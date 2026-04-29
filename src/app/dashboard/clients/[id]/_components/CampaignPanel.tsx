@@ -301,14 +301,20 @@ function CampaignCard({
   const handleAddUrl = async () => {
     const url = urlInput.trim()
     if (!url) return
-    const newUrls = [...(campaign.source_urls ?? []), url]
-    const res = await fetch(`/api/clients/${clientId}/campaign/${campaign.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source_urls: newUrls }),
-    })
-    const json = await res.json()
-    if (json.success) { onUpdated(json.campaign); setUrlInput('') }
+    try {
+      const newUrls = [...(campaign.source_urls ?? []), url]
+      const res = await fetch(`/api/clients/${clientId}/campaign/${campaign.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_urls: newUrls }),
+      })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error ?? 'Failed to save URL')
+      onUpdated(json.campaign)
+      setUrlInput('')
+    } catch (err) {
+      setMsg(`✗ 添加失败: ${(err as Error).message}`)
+    }
   }
 
   const handleFileUpload = async (file: File) => {

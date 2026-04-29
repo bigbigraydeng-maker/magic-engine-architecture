@@ -39,9 +39,18 @@ export async function POST(
     const body: BatchGenerateRequest = await req.json()
     const { platforms, direction_note, route_a_count, route_c_count } = body
 
-    if (!platforms?.length) {
-      return NextResponse.json({ success: false, error: 'platforms required' }, { status: 400 })
+    // Validate + allowlist platforms — never store arbitrary user strings in DB
+    const VALID_PLATFORMS = ['facebook', 'tiktok', 'instagram', 'youtube', 'twitter'] as const
+    type ValidPlatform = typeof VALID_PLATFORMS[number]
+    const safePlatforms = (platforms ?? []).filter(
+      (p): p is ValidPlatform => VALID_PLATFORMS.includes(p as ValidPlatform)
+    )
+    if (safePlatforms.length === 0) {
+      return NextResponse.json({ success: false, error: 'No valid platforms provided' }, { status: 400 })
     }
+
+    // Truncate direction_note to prevent prompt injection via long inputs
+    const safeDirectionNote = (direction_note ?? '').slice(0, 300)
 
     const totalPosts = (route_a_count ?? 0) + (route_c_count ?? 0)
     if (totalPosts < 1 || totalPosts > 30) {
@@ -70,10 +79,9 @@ export async function POST(
       .map((k: { keyword: string }) => k.keyword)
       .slice(0, route_a_count)
 
-    // If not enough SEMrush keywords, supplement with direction_note segments
+    // If not enough SEMrush keywords, supplement with AI-generated angles
     const keywordsToUse: string[] = [...campaignKeywords]
     if (keywordsToUse.length < route_a_count) {
-      // Ask Claude to generate additional keyword angles
       const needed = route_a_count - keywordsToUse.length
       try {
         const supplementRes = await openai.chat.completions.create({
@@ -81,7 +89,7 @@ export async function POST(
           temperature: 0.7,
           messages: [{
             role: 'user',
-            content: `Generate ${needed} distinct SEO keyword phrases (2-5 words each) for this campaign: "${direction_note || campaign.title}"\nOutput JSON array only: ["keyword1","keyword2",...]`,
+            content: `Generate ${needed} distinct SEO keyword phrases (2-5 words each) for this campaign: "${safeDirectionNote || campaign.title}"\nOutput JSON array only: ["keyword1","keyword2",...]`,
           }],
         })
         const raw = supplementRes.choices[0].message.content ?? '[]'
@@ -104,13 +112,13 @@ export async function POST(
           temperature: 0.9,
           messages: [{
             role: 'user',
-            content: `Generate ${route_c_count} distinct social media content topic angles for this campaign: "${direction_note || campaign.title}"\nEach topic should have a different emotional hook or audience angle.\nOutput JSON array only: ["topic1","topic2",...]`,
+            content: `Generate ${route_c_count} distinct social media content topic angles for this campaign: "${safeDirectionNote || campaign.title}"\nEach topic should have a different emotional hook or audience angle.\nOutput JSON array only: ["topic1","topic2",...]`,
           }],
         })
         const raw = topicRes.choices[0].message.content ?? '[]'
         topicsToUse = JSON.parse(raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()) as string[]
       } catch {
-        topicsToUse = Array.from({ length: route_c_count }, (_, i) => `${direction_note || campaign.title} - angle ${i + 1}`)
+        topicsToUse = Array.from({ length: route_c_count }, (_, i) => `${safeDirectionNote || campaign.title} - angle ${i + 1}`)
       }
     }
 
@@ -138,21 +146,27 @@ Output ONLY valid JSON:
           {
             role: 'user',
             content: route === 'route_a'
-              ? `Create a social media post targeting keyword: "${inputText}"\nPlatforms: ${platforms.join(', ')}\n${variantHint}\nScript: 100-200 words. Caption: 50-100 words. 8-12 hashtags including keyword.`
-              : `Create a social media post about: "${inputText}"\nPlatforms: ${platforms.join(', ')}\n${variantHint}\nScript: 100-200 words. Caption: 50-100 words. 8-12 relevant hashtags.`,
+              ? `Create a social media post targeting keyword: "${inputText}"\nPlatforms: ${safePlatforms.join(', ')}\n${variantHint}\nScript: 100-200 words. Caption: 50-100 words. 8-12 hashtags including keyword.`
+              : `Create a social media post about: "${inputText}"\nPlatforms: ${safePlatforms.join(', ')}\n${variantHint}\nScript: 100-200 words. Caption: 50-100 words. 8-12 relevant hashtags.`,
           },
         ],
       })
 
       const raw = completion.choices[0].message.content ?? '{}'
-      const parsed = JSON.parse(raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim())
+      let parsed: Record<string, unknown> = {}
+      try {
+        parsed = JSON.parse(raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim())
+      } catch {
+        // Non-JSON response from model — use fallback values
+        console.warn('[batch-generate] JSON parse failed for input:', inputText, '| raw:', raw.slice(0, 200))
+      }
 
       return {
-        title: parsed.title || inputText,
-        script: parsed.script || '',
-        caption: parsed.caption || '',
-        hashtags: parsed.hashtags || [],
-        visual_brief: parsed.visual_brief || '',
+        title: (parsed.title as string) || inputText,
+        script: (parsed.script as string) || '',
+        caption: (parsed.caption as string) || '',
+        hashtags: (parsed.hashtags as string[]) || [],
+        visual_brief: (parsed.visual_brief as string) || '',
         route,
         input_used: inputText,
       }
@@ -186,15 +200,16 @@ Output ONLY valid JSON:
       }
     }
 
+    const generationFailures = tasks.length - drafts.length
     if (drafts.length === 0) {
-      throw new Error('All generation attempts failed')
+      throw new Error(`All ${tasks.length} generation attempts failed`)
     }
 
     // 6. Bulk insert to Supabase
     const rows = drafts.map(d => ({
       client_id:       clientId,
       route:           d.route,
-      platforms,
+      platforms:       safePlatforms,
       title:           d.title,
       script:          d.script,
       caption:         d.caption,
@@ -217,7 +232,8 @@ Output ONLY valid JSON:
       success: true,
       generated: drafts.length,
       saved: savedPosts?.length ?? 0,
-      failed: drafts.length - (savedPosts?.length ?? 0),
+      generation_failures: generationFailures,   // OpenAI failures (not counted in 'failed')
+      db_failures: drafts.length - (savedPosts?.length ?? 0),  // DB insert failures
       posts: savedPosts,
     })
 

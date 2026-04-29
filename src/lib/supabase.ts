@@ -18,9 +18,12 @@ if (!supabaseUrl || !supabaseAnonKey) {
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // Admin client (for server-side API routes, bypasses RLS)
-export const supabaseAdmin = supabaseServiceKey
-  ? createClient(supabaseUrl, supabaseServiceKey)
-  : supabase;
+// Fail loudly at startup rather than silently falling back to anon key,
+// which would cause all admin operations to fail with confusing RLS errors.
+if (!supabaseServiceKey) {
+  throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY — server cannot start without it');
+}
+export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
 
 /**
  * Helper function to handle Supabase errors

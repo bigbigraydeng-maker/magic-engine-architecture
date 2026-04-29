@@ -10,6 +10,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'post_ids array required' }, { status: 400 })
     }
 
+    if (!post_ids.every((id: unknown) => typeof id === 'string' && id.length > 0)) {
+      return NextResponse.json({ success: false, error: 'post_ids must be an array of non-empty strings' }, { status: 400 })
+    }
+
     if (!['approved', 'rejected'].includes(status)) {
       return NextResponse.json({ success: false, error: 'status must be approved or rejected' }, { status: 400 })
     }
