@@ -3,11 +3,12 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { getVideoTranscript } from '@/lib/supadata/client'
 import { analyzeViralVideo } from '@/lib/content/video-analyzer'
 import { getActiveBrief } from '@/lib/content/brief-injector'
+import { getCampaignById } from '@/lib/content/campaign-injector'
 import { rewriteForBrand } from '@/lib/content/route-b-rewriter'
 
 export async function POST(req: NextRequest) {
   try {
-    const { video_url, client_id, platforms } = await req.json()
+    const { video_url, client_id, platforms, campaign_id } = await req.json()
 
     if (!video_url || !client_id) {
       return NextResponse.json(
@@ -42,11 +43,14 @@ export async function POST(req: NextRequest) {
     console.log('[route-b] Analyzing viral structure...')
     const analysis = await analyzeViralVideo(transcript, metadata)
 
+    // 3b. Load Campaign Brief if provided
+    const campaign = campaign_id ? await getCampaignById(client_id, campaign_id) : null
+
     // 4. 并发生成2个变体
     console.log('[route-b] Generating content variants...')
     const [variant1, variant2] = await Promise.all([
-      rewriteForBrand({ analysis, brief, targetPlatforms, variant: 1 }),
-      rewriteForBrand({ analysis, brief, targetPlatforms, variant: 2 }),
+      rewriteForBrand({ analysis, brief, targetPlatforms, variant: 1, campaign: campaign ?? undefined }),
+      rewriteForBrand({ analysis, brief, targetPlatforms, variant: 2, campaign: campaign ?? undefined }),
     ])
 
     // 5. 写入 Supabase content_posts
@@ -56,6 +60,8 @@ export async function POST(req: NextRequest) {
       platforms: targetPlatforms,
       source_video_url: video_url,
       source_brief_id: brief.id,
+      campaign_id: campaign?.id ?? null,
+      content_mode: campaign ? 'campaign' : 'brand',
       status: 'draft' as const,
     }
 

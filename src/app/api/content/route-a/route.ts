@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getActiveBrief, formatBriefForPrompt } from '@/lib/content/brief-injector'
+import { getCampaignById, formatCampaignForPrompt } from '@/lib/content/campaign-injector'
 import { createRecord, updateRecord } from '@/lib/airtable/client'
 import { POST_TO_AIRTABLE } from '@/lib/airtable/field-maps'
 import OpenAI from 'openai'
@@ -9,7 +10,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 export async function POST(req: NextRequest) {
   try {
-    const { client_id, keyword, platforms } = await req.json()
+    const { client_id, keyword, platforms, campaign_id } = await req.json()
 
     if (!client_id || !keyword) {
       return NextResponse.json(
@@ -35,6 +36,10 @@ export async function POST(req: NextRequest) {
     }
 
     const briefText = formatBriefForPrompt(brief)
+
+    // 1b. Load Campaign Brief if provided
+    const campaign = campaign_id ? await getCampaignById(client_id, campaign_id) : null
+    const campaignText = campaign ? formatCampaignForPrompt(campaign) : ''
 
     // 2. Find keyword record if it exists (to get SEO context + ID)
     const { data: kwRecord } = await supabaseAdmin
@@ -62,7 +67,7 @@ export async function POST(req: NextRequest) {
             role: 'system',
             content: `You are a social media content strategist specializing in SEO-driven content. Create engaging posts that rank for keywords while fitting the brand DNA.
 ${briefText}
-
+${campaignText ? `\n${campaignText}` : ''}
 ${seoContext}
 
 Output ONLY valid JSON with these fields:
@@ -108,6 +113,8 @@ Visual brief: 30-50 words describing the ideal visual.`,
       platforms: targetPlatforms,
       source_brief_id: brief.id,
       source_keyword_id: kwRecord?.id ?? null,
+      campaign_id: campaign?.id ?? null,
+      content_mode: campaign ? 'campaign' : 'brand',
       status: 'draft' as const,
     }
 

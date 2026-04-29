@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { BriefPanel } from './_components/BriefPanel';
 import { CampaignPanel } from './_components/CampaignPanel';
+import { GenerationDrawer } from './_components/GenerationDrawer';
 
 interface Client {
   id: string;
@@ -45,6 +46,7 @@ export default function ClientDetailPage() {
   const [posts, setPosts] = useState<ContentPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>('brief');
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const [airtableConfig, setAirtableConfig] = useState({
     airtable_base_id: '',
@@ -147,7 +149,21 @@ export default function ClientDetailPage() {
             {client.domain} ↗
           </a>
         )}
+        <div className="ml-auto">
+          <button
+            onClick={() => setDrawerOpen(true)}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+          >
+            🚀 生成内容
+          </button>
+        </div>
       </div>
+
+      <GenerationDrawer
+        clientId={clientId}
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+      />
 
       {/* Tabs */}
       <div className="border-b border-gray-200">

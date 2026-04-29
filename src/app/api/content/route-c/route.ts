@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getActiveBrief, formatBriefForPrompt } from '@/lib/content/brief-injector'
+import { getCampaignById, formatCampaignForPrompt } from '@/lib/content/campaign-injector'
 import OpenAI from 'openai'
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
 export async function POST(req: NextRequest) {
   try {
-    const { client_id, topic, platforms } = await req.json()
+    const { client_id, topic, platforms, campaign_id } = await req.json()
 
     if (!client_id || !topic) {
       return NextResponse.json(
@@ -29,6 +30,10 @@ export async function POST(req: NextRequest) {
 
     const briefText = formatBriefForPrompt(brief)
 
+    // 1b. Load Campaign Brief if provided
+    const campaign = campaign_id ? await getCampaignById(client_id, campaign_id) : null
+    const campaignText = campaign ? formatCampaignForPrompt(campaign) : ''
+
     // 2. Generate V1 and V2 in parallel
     const generateVariant = async (variant: 1 | 2) => {
       const variantNote = variant === 1
@@ -43,6 +48,7 @@ export async function POST(req: NextRequest) {
             role: 'system',
             content: `You are a social media content strategist. Create engaging content that fits the brand DNA exactly.
 ${briefText}
+${campaignText ? `\n${campaignText}` : ''}
 
 Output ONLY valid JSON with these fields:
 {
@@ -86,6 +92,8 @@ Visual brief should describe the ideal image/video for this post in 30-50 words.
       route: 'route_c' as const,
       platforms: targetPlatforms,
       source_brief_id: brief.id,
+      campaign_id: campaign?.id ?? null,
+      content_mode: campaign ? 'campaign' : 'brand',
       status: 'draft' as const,
     }
 

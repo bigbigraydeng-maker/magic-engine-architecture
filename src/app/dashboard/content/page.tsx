@@ -47,7 +47,7 @@ export default function ContentBoardPage() {
   const [posts, setPosts] = useState<ContentPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedClient, setSelectedClient] = useState('');
-  const [selectedStatus, setSelectedStatus] = useState('');
+  const [selectedStatus, setSelectedStatus] = useState('approved');
   const [modalPost, setModalPost] = useState<ContentPost | null>(null);
   const [syncing, setSyncing] = useState<string | null>(null);
 
@@ -119,12 +119,12 @@ export default function ContentBoardPage() {
           onChange={(e) => setSelectedStatus(e.target.value)}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
         >
-          <option value="">All Status</option>
-          <option value="draft">Draft</option>
-          <option value="approved">Approved</option>
-          <option value="scheduled">Scheduled</option>
-          <option value="published">Published</option>
-          <option value="rejected">Rejected</option>
+          <option value="approved">已批准</option>
+          <option value="scheduled">已排期</option>
+          <option value="published">已发布</option>
+          <option value="">全部（含草稿）</option>
+          <option value="draft">草稿</option>
+          <option value="rejected">已拒绝</option>
         </select>
       </div>
 

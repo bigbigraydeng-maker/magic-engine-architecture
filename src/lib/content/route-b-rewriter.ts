@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 import type { VideoAnalysis } from './video-analyzer'
-import type { MasterBrief } from '@/types/magic-engine'
+import type { MasterBrief, CampaignBrief } from '@/types/magic-engine'
+import { formatCampaignForPrompt } from './campaign-injector'
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
@@ -19,8 +20,10 @@ export async function rewriteForBrand(params: {
   brief: MasterBrief
   targetPlatforms: string[]
   variant: 1 | 2
+  campaign?: CampaignBrief
 }): Promise<ContentPackage> {
-  const { analysis, brief, targetPlatforms, variant } = params
+  const { analysis, brief, targetPlatforms, variant, campaign } = params
+  const campaignText = campaign ? `\n${formatCampaignForPrompt(campaign)}` : ''
 
   const variantInstruction = variant === 1
     ? '这是变体1：保持原视频的主要结构和切入角度'
@@ -50,7 +53,7 @@ ${variantInstruction}
 - 核心信息：${analysis.core_message}
 - 主要要点：${analysis.key_points.join('；')}
 
-【客户品牌信息】
+【客户品牌信息】${campaignText}
 品牌：${brief.brand_name}
 定位：${brief.tagline || ''}
 目标客群：${brief.primary_audience || ''}
