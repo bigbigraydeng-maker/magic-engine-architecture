@@ -176,6 +176,61 @@ async function getDomainCompetitors(
     .slice(0, limit)
 }
 
+// Tool 6: 问题型关键词（FAQ / 教育内容选题）
+export async function getQuestionKeywords(
+  seedKeyword: string,
+  db: string = DEFAULT_DB,
+  limit: number = 30
+): Promise<SemrushKeywordData[]> {
+  const params = new URLSearchParams({
+    type: 'phrase_questions',
+    key: API_KEY,
+    phrase: seedKeyword,
+    database: db,
+    export_columns: 'Ph,Nq,Kd,Cp,In',
+    display_limit: String(limit),
+    display_sort: 'nq_desc',
+  })
+
+  const res = await fetch(`${SEMRUSH_API_BASE}/?${params}`)
+  if (!res.ok) throw new Error(`SEMrush API error: ${res.status}`)
+  return parseSemrushResponse(await res.text())
+}
+
+// Tool 7: 域名流量概览（SEO 健康度）
+export interface DomainMetrics {
+  organic_keywords: number
+  organic_traffic: number
+  authority_score: number
+}
+
+export async function getDomainMetrics(
+  domain: string,
+  db: string = DEFAULT_DB
+): Promise<DomainMetrics> {
+  const params = new URLSearchParams({
+    type: 'domain_ranks',
+    key: API_KEY,
+    domain,
+    database: db,
+    export_columns: 'Or,Ot,As',
+  })
+
+  const res = await fetch(`${SEMRUSH_API_BASE}/?${params}`)
+  if (!res.ok) return { organic_keywords: 0, organic_traffic: 0, authority_score: 0 }
+
+  const text = await res.text()
+  const lines = text.trim().split('\n')
+  if (lines.length < 2) return { organic_keywords: 0, organic_traffic: 0, authority_score: 0 }
+
+  const cols = lines[1].split(';')
+  return {
+    organic_keywords: parseInt(cols[0]) || 0,
+    organic_traffic:  parseInt(cols[1]) || 0,
+    authority_score:  parseInt(cols[2]) || 0,
+  }
+}
+
 function normalizeIntent(raw?: string): string {
   const map: Record<string, string> = {
     '0': 'informational',

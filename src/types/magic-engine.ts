@@ -4,13 +4,15 @@
 
 export type ClientPlan = 'starter' | 'growth' | 'enterprise'
 export type KeywordIntent = 'informational' | 'commercial' | 'transactional' | 'navigational'
-export type KeywordSource = 'semrush_batch' | 'semrush_related' | 'semrush_gap'
+export type KeywordSource = 'semrush_batch' | 'semrush_related' | 'semrush_gap' | 'campaign' | 'master_brief' | 'manual' | 'airtable'
 export type KeywordStatus = 'new' | 'reviewed' | 'approved' | 'rejected' | 'page_created' | 'published'
 export type PageType = 'hub' | 'guide' | 'landing' | 'faq'
 export type ContentRoute = 'route_a' | 'route_b' | 'route_c'
 export type ContentStatus = 'draft' | 'approved' | 'scheduled' | 'published' | 'rejected'
 export type VisualProvider = 'wavespeed' | 'seedance' | 'heygen'
 export type VisualType = 'image' | 'video' | 'avatar_video'
+export type CampaignStatus = 'active' | 'archived'
+export type ContentMode = 'brand' | 'campaign'
 
 export interface Client {
   id: string
@@ -193,6 +195,30 @@ export interface TrendPoint {
   volume: number
 }
 
+export interface CampaignKeywordSnapshot {
+  keyword: string
+  volume: number
+  kd: number
+  intent: string
+  type: 'product' | 'question' | 'related'
+}
+
+export interface CampaignBrief {
+  id: string
+  client_id: string
+  status: CampaignStatus
+  title: string
+  description?: string | null
+  source_urls?: string[] | null
+  source_file_urls?: string[] | null
+  parsed_content?: string | null
+  semrush_keywords?: CampaignKeywordSnapshot[] | null
+  valid_from?: string | null
+  valid_until?: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface ContentPost {
   id: string
   client_id: string
@@ -207,6 +233,8 @@ export interface ContentPost {
   source_keyword_id?: string
   source_video_url?: string
   source_brief_id?: string
+  campaign_id?: string | null
+  content_mode?: ContentMode
   status: ContentStatus
   scheduled_at?: string
   published_at?: string

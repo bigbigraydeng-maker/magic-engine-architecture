@@ -1,0 +1,534 @@
+'use client'
+
+import { useState, useEffect, useCallback, useRef } from 'react'
+import type { CampaignBrief, CampaignKeywordSnapshot } from '@/types/magic-engine'
+
+interface Props {
+  clientId: string
+}
+
+export function CampaignPanel({ clientId }: Props) {
+  const [campaigns, setCampaigns] = useState<CampaignBrief[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showForm, setShowForm] = useState(false)
+
+  const fetchCampaigns = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/campaign?status=active`)
+      if (res.ok) {
+        const { campaigns: list } = await res.json()
+        setCampaigns(list ?? [])
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [clientId])
+
+  useEffect(() => { fetchCampaigns() }, [fetchCampaigns])
+
+  const handleCreated = (c: CampaignBrief) => {
+    setCampaigns(prev => [c, ...prev])
+    setShowForm(false)
+  }
+
+  const handleArchived = (id: string) => {
+    setCampaigns(prev => prev.filter(c => c.id !== id))
+  }
+
+  const handleUpdated = (updated: CampaignBrief) => {
+    setCampaigns(prev => prev.map(c => c.id === updated.id ? updated : c))
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-48">
+        <p className="text-sm text-gray-400 animate-pulse">Loading campaigns…</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">推广活动</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            当前运行中的推广，内容生成时可选择注入对应活动上下文
+          </p>
+        </div>
+        <button
+          onClick={() => setShowForm(v => !v)}
+          className="text-sm bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition-colors"
+        >
+          {showForm ? '取消' : '+ 新建活动'}
+        </button>
+      </div>
+
+      {/* Create form */}
+      {showForm && (
+        <CreateCampaignForm
+          clientId={clientId}
+          onCreated={handleCreated}
+          onCancel={() => setShowForm(false)}
+        />
+      )}
+
+      {/* Campaign list */}
+      {campaigns.length === 0 && !showForm ? (
+        <div className="bg-white rounded-xl border border-dashed border-gray-200 py-14 text-center">
+          <p className="text-2xl mb-2">🎯</p>
+          <p className="text-sm font-medium text-gray-600">暂无进行中的推广活动</p>
+          <p className="text-xs text-gray-400 mt-1">新建活动后，内容生成时可选择注入推广上下文</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {campaigns.map(c => (
+            <CampaignCard
+              key={c.id}
+              campaign={c}
+              clientId={clientId}
+              onArchived={handleArchived}
+              onUpdated={handleUpdated}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Archived toggle */}
+      <ArchivedCampaigns clientId={clientId} />
+    </div>
+  )
+}
+
+// ─── Create Form ──────────────────────────────────────────────────────────────
+
+function CreateCampaignForm({
+  clientId,
+  onCreated,
+  onCancel,
+}: {
+  clientId: string
+  onCreated: (c: CampaignBrief) => void
+  onCancel: () => void
+}) {
+  const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
+  const [validFrom, setValidFrom] = useState('')
+  const [validUntil, setValidUntil] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const handleSubmit = async () => {
+    if (!title.trim()) { setError('请填写活动名称'); return }
+    setSaving(true)
+    setError('')
+    try {
+      const res = await fetch(`/api/clients/${clientId}/campaign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: title.trim(),
+          description: description.trim() || null,
+          valid_from: validFrom || null,
+          valid_until: validUntil || null,
+        }),
+      })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error)
+      onCreated(json.campaign)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-indigo-200 p-5 space-y-4">
+      <h3 className="text-sm font-semibold text-gray-800">新建推广活动</h3>
+
+      <div className="grid grid-cols-1 gap-3">
+        <Field label="活动名称 *" required>
+          <input
+            value={title}
+            onChange={e => setTitle(e.target.value)}
+            placeholder="例：Q2 新西兰团队游推广"
+            className={INPUT_CLASS}
+          />
+        </Field>
+
+        <Field label="推广描述">
+          <textarea
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            placeholder="简述推广目的、核心卖点、目标客群…"
+            rows={3}
+            className={`${INPUT_CLASS} resize-none`}
+          />
+        </Field>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="开始日期">
+            <input type="date" value={validFrom} onChange={e => setValidFrom(e.target.value)} className={INPUT_CLASS} />
+          </Field>
+          <Field label="结束日期">
+            <input type="date" value={validUntil} onChange={e => setValidUntil(e.target.value)} className={INPUT_CLASS} />
+          </Field>
+        </div>
+      </div>
+
+      {error && <p className="text-xs text-red-600">{error}</p>}
+
+      <div className="flex justify-end gap-2">
+        <button onClick={onCancel} className="text-sm text-gray-500 hover:text-gray-700 px-4 py-2">取消</button>
+        <button
+          onClick={handleSubmit}
+          disabled={saving}
+          className="text-sm bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg disabled:opacity-50 transition-colors"
+        >
+          {saving ? '创建中…' : '创建活动'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── Campaign Card ────────────────────────────────────────────────────────────
+
+const CAMPAIGN_COLORS = [
+  'border-l-blue-500',
+  'border-l-emerald-500',
+  'border-l-purple-500',
+  'border-l-amber-500',
+  'border-l-rose-500',
+]
+
+function CampaignCard({
+  campaign,
+  clientId,
+  onArchived,
+  onUpdated,
+}: {
+  campaign: CampaignBrief
+  clientId: string
+  onArchived: (id: string) => void
+  onUpdated: (c: CampaignBrief) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [enriching, setEnriching] = useState(false)
+  const [archiving, setArchiving] = useState(false)
+  const [uploadingFile, setUploadingFile] = useState(false)
+  const [urlInput, setUrlInput] = useState('')
+  const [msg, setMsg] = useState('')
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const colorClass = CAMPAIGN_COLORS[
+    campaign.id.charCodeAt(0) % CAMPAIGN_COLORS.length
+  ]
+
+  const dateLabel = (() => {
+    if (campaign.valid_from && campaign.valid_until) {
+      return `${campaign.valid_from} → ${campaign.valid_until}`
+    }
+    if (campaign.valid_from) return `${campaign.valid_from} 起`
+    if (campaign.valid_until) return `至 ${campaign.valid_until}`
+    return ''
+  })()
+
+  const keywords = (campaign.semrush_keywords ?? []) as CampaignKeywordSnapshot[]
+
+  const handleEnrich = async () => {
+    setEnriching(true)
+    setMsg('')
+    try {
+      const res = await fetch(`/api/clients/${clientId}/campaign/${campaign.id}/enrich`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seed_keyword: campaign.title }),
+      })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error)
+      onUpdated(json.campaign)
+      setMsg(`✓ 获取到 ${json.keywords_found} 个关键词`)
+    } catch (err) {
+      setMsg(`✗ ${(err as Error).message}`)
+    } finally {
+      setEnriching(false)
+    }
+  }
+
+  const handleAddUrl = async () => {
+    const url = urlInput.trim()
+    if (!url) return
+    const newUrls = [...(campaign.source_urls ?? []), url]
+    const res = await fetch(`/api/clients/${clientId}/campaign/${campaign.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_urls: newUrls }),
+    })
+    const json = await res.json()
+    if (json.success) { onUpdated(json.campaign); setUrlInput('') }
+  }
+
+  const handleFileUpload = async (file: File) => {
+    setUploadingFile(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const uploadRes = await fetch(`/api/clients/${clientId}/campaign/upload`, {
+        method: 'POST', body: fd,
+      })
+      const uploadJson = await uploadRes.json()
+      if (!uploadJson.success) throw new Error(uploadJson.error)
+
+      const newFiles = [...(campaign.source_file_urls ?? []), uploadJson.storage_path]
+      const patchRes = await fetch(`/api/clients/${clientId}/campaign/${campaign.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_file_urls: newFiles }),
+      })
+      const patchJson = await patchRes.json()
+      if (patchJson.success) onUpdated(patchJson.campaign)
+    } catch (err) {
+      setMsg(`✗ 上传失败: ${(err as Error).message}`)
+    } finally {
+      setUploadingFile(false)
+    }
+  }
+
+  const handleArchive = async () => {
+    if (!confirm(`归档活动「${campaign.title}」？归档后内容生成将不再注入此活动上下文。`)) return
+    setArchiving(true)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/campaign/${campaign.id}/archive`, { method: 'POST' })
+      const json = await res.json()
+      if (json.success) onArchived(campaign.id)
+    } finally {
+      setArchiving(false)
+    }
+  }
+
+  return (
+    <div className={`bg-white rounded-xl border border-gray-200 border-l-4 ${colorClass} overflow-hidden`}>
+      {/* Header */}
+      <div className="flex items-start justify-between px-5 py-4">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-semibold text-gray-900">{campaign.title}</span>
+            <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
+              进行中
+            </span>
+            {dateLabel && (
+              <span className="text-xs text-gray-400">{dateLabel}</span>
+            )}
+          </div>
+          {campaign.description && (
+            <p className="text-xs text-gray-500 mt-1 line-clamp-2">{campaign.description}</p>
+          )}
+          <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
+            <span>{(campaign.source_urls ?? []).length} 个网址</span>
+            <span>{(campaign.source_file_urls ?? []).length} 个文件</span>
+            <span>{keywords.length} 个关键词</span>
+          </div>
+        </div>
+        <button
+          onClick={() => setExpanded(v => !v)}
+          className="text-xs text-gray-400 hover:text-gray-600 ml-3 flex-shrink-0"
+        >
+          {expanded ? '收起 ▲' : '展开 ▼'}
+        </button>
+      </div>
+
+      {/* Expanded detail */}
+      {expanded && (
+        <div className="border-t border-gray-100 px-5 py-4 space-y-5">
+
+          {/* Source URLs */}
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+              产品 / 落地页网址
+            </p>
+            <div className="space-y-1.5 mb-2">
+              {(campaign.source_urls ?? []).map((url, i) => (
+                <a key={i} href={url} target="_blank" rel="noreferrer"
+                  className="block text-xs text-indigo-600 hover:underline truncate">
+                  {url}
+                </a>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={urlInput}
+                onChange={e => setUrlInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && handleAddUrl()}
+                placeholder="https://…"
+                className={`${INPUT_CLASS} flex-1 text-xs`}
+              />
+              <button
+                onClick={handleAddUrl}
+                disabled={!urlInput.trim()}
+                className="text-xs bg-gray-800 text-white px-3 py-1.5 rounded-lg disabled:opacity-40 hover:bg-gray-900 transition-colors"
+              >
+                添加
+              </button>
+            </div>
+          </div>
+
+          {/* File uploads */}
+          <div>
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+              资料文件（PDF / Word / TXT）
+            </p>
+            <div className="space-y-1 mb-2">
+              {(campaign.source_file_urls ?? []).map((f, i) => (
+                <p key={i} className="text-xs text-gray-600 font-mono truncate">{f.split('/').pop()}</p>
+              ))}
+            </div>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".pdf,.doc,.docx,.txt"
+              className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; if (f) handleFileUpload(f) }}
+            />
+            <button
+              onClick={() => fileRef.current?.click()}
+              disabled={uploadingFile}
+              className="text-xs border border-gray-200 text-gray-600 hover:bg-gray-50 px-3 py-1.5 rounded-lg disabled:opacity-50 transition-colors"
+            >
+              {uploadingFile ? '上传中…' : '+ 上传文件'}
+            </button>
+          </div>
+
+          {/* SEMrush Keywords */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                SEMrush 关键词
+              </p>
+              <button
+                onClick={handleEnrich}
+                disabled={enriching}
+                className="text-xs text-indigo-600 hover:text-indigo-800 disabled:opacity-50 transition-colors"
+              >
+                {enriching ? '获取中…' : '🔍 拉取关键词'}
+              </button>
+            </div>
+            {keywords.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {keywords.slice(0, 20).map((k, i) => (
+                  <span
+                    key={i}
+                    className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                      k.type === 'question'
+                        ? 'bg-amber-50 text-amber-700'
+                        : 'bg-indigo-50 text-indigo-700'
+                    }`}
+                    title={`Vol: ${k.volume} | KD: ${k.kd} | ${k.intent}`}
+                  >
+                    {k.type === 'question' ? '❓ ' : ''}{k.keyword}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-400 italic">
+                点击「拉取关键词」从 SEMrush 获取推广相关词
+              </p>
+            )}
+          </div>
+
+          {msg && (
+            <p className={`text-xs ${msg.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>
+              {msg}
+            </p>
+          )}
+
+          {/* Archive */}
+          <div className="flex justify-end pt-1 border-t border-gray-50">
+            <button
+              onClick={handleArchive}
+              disabled={archiving}
+              className="text-xs text-gray-400 hover:text-red-500 transition-colors disabled:opacity-50"
+            >
+              {archiving ? '归档中…' : '归档活动'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Archived campaigns (collapsed by default) ────────────────────────────────
+
+function ArchivedCampaigns({ clientId }: { clientId: string }) {
+  const [open, setOpen] = useState(false)
+  const [archived, setArchived] = useState<CampaignBrief[]>([])
+  const [loading, setLoading] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/campaign?status=archived`)
+      if (res.ok) {
+        const { campaigns } = await res.json()
+        setArchived(campaigns ?? [])
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const toggle = () => {
+    if (!open && archived.length === 0) load()
+    setOpen(v => !v)
+  }
+
+  return (
+    <div>
+      <button
+        onClick={toggle}
+        className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+      >
+        {open ? '▲ 隐藏已归档活动' : '▼ 查看已归档活动'}
+      </button>
+
+      {open && (
+        <div className="mt-3 space-y-2">
+          {loading && <p className="text-xs text-gray-400 animate-pulse">加载中…</p>}
+          {!loading && archived.length === 0 && (
+            <p className="text-xs text-gray-400">暂无归档活动</p>
+          )}
+          {archived.map(c => (
+            <div key={c.id} className="bg-gray-50 rounded-lg border border-gray-100 px-4 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-gray-500">{c.title}</p>
+                {c.valid_from && (
+                  <p className="text-xs text-gray-400">{c.valid_from} → {c.valid_until ?? '—'}</p>
+                )}
+              </div>
+              <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">归档</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function Field({ label, children, required }: { label: string; children: React.ReactNode; required?: boolean }) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-gray-600 mb-1">
+        {label}{required && <span className="text-red-500 ml-0.5">*</span>}
+      </label>
+      {children}
+    </div>
+  )
+}
+
+const INPUT_CLASS = 'w-full bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-colors'
