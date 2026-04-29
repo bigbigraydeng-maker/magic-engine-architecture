@@ -228,6 +228,40 @@ function CampaignCard({
   const [seedKeyword, setSeedKeyword] = useState(campaign.title)
   const [semrushDb, setSemrushDb] = useState('au')
 
+  // Edit mode
+  const [editing, setEditing] = useState(false)
+  const [editTitle, setEditTitle] = useState(campaign.title)
+  const [editDescription, setEditDescription] = useState(campaign.description ?? '')
+  const [editFrom, setEditFrom] = useState(campaign.valid_from ?? '')
+  const [editUntil, setEditUntil] = useState(campaign.valid_until ?? '')
+  const [saving, setSaving] = useState(false)
+
+  const handleSaveEdit = async () => {
+    if (!editTitle.trim()) return
+    setSaving(true)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/campaign/${campaign.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: editTitle.trim(),
+          description: editDescription.trim() || null,
+          valid_from: editFrom || null,
+          valid_until: editUntil || null,
+        }),
+      })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error)
+      onUpdated(json.campaign)
+      setEditing(false)
+      setMsg('✓ 已保存')
+    } catch (err) {
+      setMsg(`✗ ${(err as Error).message}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
   // Batch generation state
   const [batchPlatforms, setBatchPlatforms] = useState<string[]>(['facebook', 'tiktok'])
   const [directionNote, setDirectionNote] = useState('')
@@ -364,23 +398,63 @@ function CampaignCard({
       {/* Header */}
       <div className="flex items-start justify-between px-5 py-4">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold text-gray-900">{campaign.title}</span>
-            <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
-              进行中
-            </span>
-            {dateLabel && (
-              <span className="text-xs text-gray-400">{dateLabel}</span>
-            )}
-          </div>
-          {campaign.description && (
-            <p className="text-xs text-gray-500 mt-1 line-clamp-2">{campaign.description}</p>
+          {editing ? (
+            <div className="space-y-2 pr-2">
+              <input
+                value={editTitle}
+                onChange={e => setEditTitle(e.target.value)}
+                placeholder="活动名称"
+                className={`${INPUT_CLASS} text-sm font-semibold`}
+              />
+              <textarea
+                value={editDescription}
+                onChange={e => setEditDescription(e.target.value)}
+                placeholder="推广描述（可选）"
+                rows={2}
+                className={`${INPUT_CLASS} text-xs resize-none`}
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <input type="date" value={editFrom} onChange={e => setEditFrom(e.target.value)}
+                  className={`${INPUT_CLASS} text-xs`} />
+                <input type="date" value={editUntil} onChange={e => setEditUntil(e.target.value)}
+                  className={`${INPUT_CLASS} text-xs`} />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={handleSaveEdit} disabled={saving || !editTitle.trim()}
+                  className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg disabled:opacity-50 transition-colors">
+                  {saving ? '保存中…' : '保存'}
+                </button>
+                <button onClick={() => { setEditing(false); setEditTitle(campaign.title); setEditDescription(campaign.description ?? ''); setEditFrom(campaign.valid_from ?? ''); setEditUntil(campaign.valid_until ?? '') }}
+                  className="text-xs text-gray-500 hover:text-gray-700 px-3 py-1.5">
+                  取消
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-semibold text-gray-900">{campaign.title}</span>
+                <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
+                  进行中
+                </span>
+                {dateLabel && (
+                  <span className="text-xs text-gray-400">{dateLabel}</span>
+                )}
+                <button onClick={() => setEditing(true)}
+                  className="text-xs text-gray-400 hover:text-indigo-600 transition-colors ml-1">
+                  ✏️ 编辑
+                </button>
+              </div>
+              {campaign.description && (
+                <p className="text-xs text-gray-500 mt-1 line-clamp-2">{campaign.description}</p>
+              )}
+              <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
+                <span>{(campaign.source_urls ?? []).length} 个网址</span>
+                <span>{(campaign.source_file_urls ?? []).length} 个文件</span>
+                <span>{keywords.length} 个关键词</span>
+              </div>
+            </>
           )}
-          <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
-            <span>{(campaign.source_urls ?? []).length} 个网址</span>
-            <span>{(campaign.source_file_urls ?? []).length} 个文件</span>
-            <span>{keywords.length} 个关键词</span>
-          </div>
         </div>
         <button
           onClick={() => setExpanded(v => !v)}
@@ -547,30 +621,35 @@ function CampaignCard({
             </div>
 
             {/* Post counts */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">
-                  🔑 关键词文章
-                </label>
-                <input
-                  type="number"
-                  min={0} max={20}
-                  value={routeACount}
-                  onChange={e => setRouteACount(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))}
-                  className={`${INPUT_CLASS} text-center`}
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">
-                  💡 自由话题
-                </label>
-                <input
-                  type="number"
-                  min={0} max={20}
-                  value={routeCCount}
-                  onChange={e => setRouteCCount(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))}
-                  className={`${INPUT_CLASS} text-center`}
-                />
+            <div>
+              <p className="text-xs text-gray-400 mb-2">
+                数字 = 总生成条数（每条同时发布到所选全部平台）
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    🔑 关键词文章（总条数）
+                  </label>
+                  <input
+                    type="number"
+                    min={0} max={20}
+                    value={routeACount}
+                    onChange={e => setRouteACount(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))}
+                    className={`${INPUT_CLASS} text-center`}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">
+                    💡 自由话题（总条数）
+                  </label>
+                  <input
+                    type="number"
+                    min={0} max={20}
+                    value={routeCCount}
+                    onChange={e => setRouteCCount(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))}
+                    className={`${INPUT_CLASS} text-center`}
+                  />
+                </div>
               </div>
             </div>
 
