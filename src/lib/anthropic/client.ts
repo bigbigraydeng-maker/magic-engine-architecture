@@ -160,14 +160,20 @@ export async function callClaudeChat(params: {
 
 /**
  * Parse a Claude response that should be JSON.
- * Handles markdown code fences (```json ... ```) automatically.
+ * Robust extraction: finds the outermost { } block regardless of surrounding text.
+ * Handles prose before/after JSON, markdown fences, etc.
  */
 export function parseJsonResponse<T>(text: string): T {
-  // Strip markdown fences if present
-  const cleaned = text
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```\s*$/i, '')
-    .trim()
+  const trimmed = text.trim()
 
-  return JSON.parse(cleaned) as T
+  // Find the outermost JSON object by locating first { and last }
+  const start = trimmed.indexOf('{')
+  const end = trimmed.lastIndexOf('}')
+
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error(`No JSON object found in Claude response. Preview: ${trimmed.slice(0, 300)}`)
+  }
+
+  const jsonStr = trimmed.slice(start, end + 1)
+  return JSON.parse(jsonStr) as T
 }

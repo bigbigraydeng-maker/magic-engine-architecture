@@ -82,22 +82,16 @@ You will receive:
 2. A conversation history
 3. The user's latest refinement request
 
-RULES:
-1. Output ONLY valid JSON — no prose, no markdown fences outside JSON.
-2. Only include fields that need to change in "patch" — omit unchanged fields.
-3. "reasoning" must explain exactly what you changed and why (1–3 sentences).
-4. If the request is ambiguous, apply the most reasonable interpretation.
-5. If a field doesn't need changing, do NOT include it in patch.
+CRITICAL OUTPUT RULES:
+1. Your ENTIRE response must be a single valid JSON object — nothing before or after it.
+2. Start your response IMMEDIATELY with { — no preamble, no explanation, no markdown fences.
+3. Only include fields that need to change in "patch" — omit unchanged fields.
+4. "reasoning" must explain what you changed and why (1–3 sentences, plain text inside the JSON).
+5. If the request is ambiguous, apply the most reasonable interpretation.
 6. Nested objects (brand_voice, target_audience, etc.) must be FULLY REPLACED — include all sub-fields.
 
-OUTPUT JSON SCHEMA:
-{
-  "reasoning": "string — what changed and why",
-  "patch": {
-    // Only the top-level MasterBrief fields that changed.
-    // Nested objects must be complete (not partial).
-  }
-}`
+REQUIRED OUTPUT FORMAT (respond ONLY with this JSON, nothing else):
+{"reasoning":"string — what changed and why","patch":{...only changed fields...}}`
 
 // ── Message builder ────────────────────────────────────────────────────────────
 

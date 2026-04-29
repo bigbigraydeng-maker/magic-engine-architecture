@@ -69,8 +69,13 @@ export async function refineBrief(input: RefineInput): Promise<RefineResult> {
   let parsed: { reasoning: string; patch: Partial<MasterBrief> }
   try {
     parsed = parseJsonResponse(claudeResult.text)
-  } catch {
-    return { success: false, error: 'Claude returned invalid patch JSON. Please try again.' }
+  } catch (parseErr) {
+    const preview = claudeResult.text.slice(0, 200)
+    console.error('[brief/refine] JSON parse failed:', parseErr, '\nRaw preview:', preview)
+    return {
+      success: false,
+      error: `Claude returned invalid JSON. Raw preview: ${preview}`,
+    }
   }
 
   if (!parsed.patch || typeof parsed.patch !== 'object') {
