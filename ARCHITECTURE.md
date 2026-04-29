@@ -1,0 +1,451 @@
+# Magic Engine — Technical Architecture
+
+> 版本：2026-04-30 · 生产环境：https://crazycontent-27u3.onrender.com
+
+---
+
+## 1. 项目概述
+
+Magic Engine（代号 crazycontent）是一个 AI 驱动的社媒内容运营平台，面向代理公司和品牌方。核心能力：
+
+- **多客户管理**：每个客户独立配置 Airtable 基座、SEMrush 数据库、发布账户
+- **Master Brief Pipeline**：抓取客户官网 + 上传 PDF/Word + SEMrush 竞词 → Claude 生成品牌底稿
+- **Campaign 批量生成**：基于 Brief，Route A（关键词文章）+ Route C（自由话题），一键生成 N 条帖子
+- **内容审批**：Content Board 批量审批、筛选、编辑
+- **视觉生成**：Launch Hub 里对每条帖子 AI 生成图片（WaveSpeed Flux-dev）或视频（Seedance 2.0），支持手动上传
+- **发布管道**：通过 Publer API 排期发布；同时保持与 Airtable 双向同步，现有 Zapier→Publer 链路不受影响
+
+---
+
+## 2. 技术栈
+
+| 层 | 技术 |
+|----|------|
+| Framework | Next.js 14 App Router（SSR + API Routes） |
+| 语言 | TypeScript 5 strict mode |
+| 样式 | Tailwind CSS 3.4 |
+| 数据库 | Supabase（PostgreSQL + Storage + Row Level Security） |
+| AI 生成 | OpenAI GPT-4o（内容文案）、Anthropic Claude Sonnet（Brief、精炼） |
+| 图片生成 | WaveSpeed / Atlas Cloud — Flux-dev，$0.02/张 |
+| 视频生成 | Seedance 2.0 / Atlas Cloud，$0.022/秒 |
+| 头像视频 | HeyGen（2 分钟/条） |
+| 关键词数据 | SEMrush REST API |
+| 网页抓取 | Jina.ai Reader（免费，URL→Markdown） |
+| 内容发布 | Publer API（排期、账户管理） |
+| 数据同步 | Airtable REST API（双向同步） |
+| 部署 | Render（master 分支自动部署） |
+
+---
+
+## 3. 数据库表结构（Supabase）
+
+### 3.1 核心表
+
+```
+clients
+├── id (UUID PK)
+├── name
+├── domain
+├── airtable_base_id          ← 对应这个客户的 Airtable 底座
+├── airtable_content_table_id ← 内容日历表 ID
+├── semrush_db                ← 'au' | 'us' | 'gb' | 'nz' | 'ca'
+├── plan_tier                 ← 订阅级别
+└── monthly_quota             ← 月生成配额
+```
+
+```
+master_briefs
+├── id (UUID PK)
+├── client_id (FK → clients)
+├── version (INT)
+├── status: 'draft' | 'active' | 'archived'
+├── brand_name, core_proposition
+├── content_pillars (JSONB)   ← [{id, name, description, post_ratio}]
+├── brand_voice (JSONB)       ← {tone_keywords, avoid_keywords, formality}
+├── target_audience (JSONB)   ← {age_range, location, interests, pain_points}
+├── keyword_seeds (TEXT[])
+├── competitor_domains (TEXT[])
+├── vi_colors (JSONB), vi_style_keywords, vi_dos, vi_donts
+├── brand_story_md, style_guide_md, competitive_notes_md
+├── source_file_urls, source_website_urls
+├── semrush_snapshot (JSONB)
+└── model_used, input_tokens
+UNIQUE INDEX: (client_id) WHERE status = 'active'
+```
+
+```
+campaign_briefs
+├── id (UUID PK)
+├── client_id (FK → clients)
+├── title
+├── description
+├── valid_from, valid_until   ← 活动周期
+├── platforms (TEXT[])        ← ['facebook', 'instagram', 'tiktok'...]
+├── direction_note (TEXT)     ← 生成方向说明
+├── route_a_count (INT)       ← 关键词文章总条数
+├── route_c_count (INT)       ← 自由话题总条数
+├── status: 'active' | 'archived'
+└── seed_keywords (TEXT[])    ← SEMrush 拉取用种子词
+```
+
+```
+content_posts
+├── id (UUID PK)
+├── client_id (FK → clients)
+├── campaign_id (FK → campaign_briefs, nullable)
+├── airtable_record_id        ← 对应 Airtable 行 ID（用于写回）
+├── title                     ← Headline
+├── route: 'route_a' | 'route_b' | 'route_c'
+├── platforms (TEXT[])
+├── format                    ← 'reel' | 'feed' | 'story' | 'image' | 'carousel' | 'video'
+├── ratio                     ← '1:1' | '4:5' | '9:16' | '16:9'
+├── status: 'draft' | 'approved' | 'scheduled' | 'published' | 'rejected'
+├── script, caption, hashtags (TEXT[]), visual_brief
+├── scheduled_at (TIMESTAMPTZ)
+└── revision_notes            ← 图片修改备注
+```
+
+```
+visual_assets
+├── id (UUID PK)
+├── post_id (FK → content_posts)
+├── client_id (FK → clients)
+├── asset_type: 'image' | 'video' | 'avatar'
+├── provider: 'wavespeed' | 'seedance' | 'heygen' | 'upload'
+├── generation_status: 'generating' | 'ready' | 'failed'
+├── provider_job_id           ← 用于轮询生成状态
+├── storage_url               ← Supabase Storage 公开 URL
+├── provider_url              ← 提供商原始 URL
+├── prompt_used, variant
+├── file_size_kb, duration_seconds, cost_usd
+└── error_message, last_error_code
+```
+
+```
+keywords
+├── id (UUID PK)
+├── client_id (FK → clients)
+├── keyword (TEXT)
+├── volume, kd (keyword difficulty), cpc_usd
+├── intent: 'informational' | 'commercial' | 'navigational' | 'transactional'
+├── trend (JSONB)             ← 12个月趋势数据
+└── source: 'semrush' | 'manual'
+```
+
+其他表：`content_tasks`、`content_topics`、`social_sources`、`collected_posts`、`feedback_data`、`generation_logs`、`semrush_usage_logs`
+
+---
+
+## 4. API 路由总览
+
+### 客户管理
+```
+GET    /api/clients                           → 列出所有客户
+POST   /api/clients                           → 创建客户
+GET    /api/clients/[id]                      → 客户详情
+PATCH  /api/clients/[id]                      → 更新客户
+GET    /api/clients/[id]/posts?status=&       → 获取客户帖子（支持状态筛选）
+```
+
+### Master Brief Pipeline
+```
+GET    /api/clients/[id]/brief                → 获取 active brief
+POST   /api/clients/[id]/brief                → 创建 brief
+POST   /api/clients/[id]/brief/generate       → 触发 3 通道数据采集 + Claude 生成
+POST   /api/clients/[id]/brief/upload         → 上传原始文件到 Supabase Storage
+PATCH  /api/clients/[id]/brief/[briefId]      → 修改 brief 字段
+POST   /api/clients/[id]/brief/[briefId]/activate → 设为 active
+POST   /api/clients/[id]/brief/[briefId]/chat → Claude 精炼对话
+```
+
+### Campaign 批量生成
+```
+GET    /api/clients/[id]/campaign             → 列出活动
+POST   /api/clients/[id]/campaign             → 创建活动
+PATCH  /api/clients/[id]/campaign/[cid]       → 更新活动（标题/日期/参数）
+POST   /api/clients/[id]/campaign/[cid]/batch-generate → 批量生成帖子
+POST   /api/clients/[id]/campaign/[cid]/enrich         → SEMrush 关键词富化
+POST   /api/clients/[id]/campaign/[cid]/archive        → 归档活动
+POST   /api/clients/[id]/campaign/upload               → 上传活动参考文件
+```
+
+### 内容帖子
+```
+GET    /api/content/posts?client_id=&status=  → 内容板帖子列表（支持多状态 "approved,scheduled"）
+PATCH  /api/posts/[id]                        → 更新帖子字段 → 自动写回 Airtable
+POST   /api/posts/batch                       → 批量更新状态（approve/reject）
+```
+
+### 视觉资产
+```
+POST   /api/visual/image                      → 提交图片生成（WaveSpeed Flux-dev）
+POST   /api/visual/video                      → 提交视频生成（Seedance 2.0）
+POST   /api/visual/avatar                     → 提交头像视频（HeyGen）
+GET    /api/visual/status/[assetId]           → 轮询生成状态（含自动超时/写回 Airtable）
+POST   /api/visual/upload                     → 手动上传图片/视频（100MB 上限）
+GET    /api/visual/assets?client_id=          → 列出资产
+```
+
+### SEMrush 关键词
+```
+POST   /api/semrush/keyword-overview          → 批量关键词指标（量、难度、CPC、意图）
+POST   /api/semrush/related-keywords          → 从种子词扩展相关词
+POST   /api/semrush/competitor-keywords       → 竞品域名有机关键词
+POST   /api/semrush/keyword-gap               → 关键词差距分析
+```
+
+### 发布 & 同步
+```
+GET    /api/publer/draft/[assetId]            → 获取 Publer 草稿预览
+POST   /api/publer/schedule                   → 排期发布到 Publer
+POST   /api/airtable/pull-content             → 从 Airtable 拉取内容
+POST   /api/airtable/sync-content             → 将帖子推送到 Airtable
+```
+
+### Cron & Webhook
+```
+POST   /api/cron/poll-visual-jobs             → 每 30s 轮询视觉生成状态（Render 托管）
+POST   /api/cron/sync-airtable                → 定期同步 Airtable
+POST   /api/webhooks/airtable-approved        → Zapier → ME：Airtable 批准触发
+POST   /api/webhooks/publer-published         → Publer 发布后回调
+```
+
+---
+
+## 5. 前端页面（Dashboard）
+
+| 路径 | 页面名 | 功能 |
+|------|--------|------|
+| `/dashboard` | Overview | 统计卡片：总客户数、月内容量、待审批帖子、关键词数；最近帖子列表 |
+| `/dashboard/clients` | Clients | 客户列表，新建客户 |
+| `/dashboard/clients/[id]` | Client Detail | 含 4 个 Tab 面板 |
+| `/dashboard/content` | Content Board | 帖子列表视图 + 月历日历视图；批量审批；模态框编辑+生成预览图 |
+| `/dashboard/keywords` | Keywords | 关键词研究浏览器 |
+| `/dashboard/visuals` | Launch Hub 🚀 | 电子表格视图，图片/视频 AI 生成 or 手动上传，Publer 排期 |
+| `/dashboard/airtable` | Airtable Views | 各 Airtable 视图嵌入 |
+| `/dashboard/analytics` | Analytics | 数据分析（占位） |
+
+### Client Detail 面板组件
+```
+BriefPanel.tsx          → Master Brief 展示/编辑/生成
+BriefEditor.tsx         → 结构化字段编辑器
+BriefSourcesForm.tsx    → 文件上传表单
+BriefChat.tsx           → Claude 精炼对话窗口
+CampaignPanel.tsx       → 活动列表 + 新建活动 + 批量生成按钮
+GenerationDrawer.tsx    → 单条帖子生成抽屉
+OperationsConsole.tsx   → 调试/管理操作控制台
+```
+
+---
+
+## 6. 核心功能流程
+
+### 6.1 Master Brief 生成（3 通道）
+
+```
+用户输入网站 URL + 上传 PDF/Word
+         │
+         ▼
+Pipeline（/api/clients/[id]/brief/generate）
+  ├─ 通道1: Jina.ai Reader → URL → Markdown（免费）
+  ├─ 通道2: Supabase Storage 下载上传文件 → Claude 原生 PDF 读取
+  └─ 通道3: SEMrush domain-overview → 前20有机关键词 + 竞品域名
+         │
+         ▼
+Claude Sonnet → 结构化 JSON（品牌核心主张、内容支柱、品牌声调、
+                目标受众、关键词种子、VI色彩风格）
+         │
+         ▼
+写入 master_briefs 表（status='draft'）
+         │
+         ▼
+用户在 BriefChat 精炼（"语气改得更年轻"→Claude 只修改对应字段）
+         │
+         ▼
+激活（status='active'）→ 后续所有内容生成自动注入此 Brief
+```
+
+### 6.2 Campaign 批量内容生成
+
+```
+CampaignPanel 填写活动参数
+  ├─ 平台选择（facebook / tiktok / instagram 等）
+  ├─ Route A 条数（关键词文章）
+  └─ Route C 条数（自由话题）
+         │
+         ▼
+/api/clients/[id]/campaign/[cid]/batch-generate
+  ├─ 注入 active Master Brief
+  ├─ 注入 Campaign Brief（方向、平台、日期范围）
+  ├─ 注入 SEMrush 关键词（Route A）
+  ├─ 并发 5 个 Promise.allSettled → OpenAI GPT-4o
+  └─ 生成: title + script + caption + hashtags + visual_brief
+         │
+         ▼
+插入 content_posts（status='draft'）
+         │
+         ▼
+平台安全检查：platforms 白名单过滤，prompt 注入截断（300字）
+```
+
+### 6.3 内容审批流程
+
+```
+Content Board（草稿视图）
+  ├─ 单条：查看详情 → 模态框 → ✓批准 / ✕拒绝
+  └─ 批量：勾选 → 批量批准
+         │
+         ▼
+PATCH /api/posts/[id] 或 POST /api/posts/batch
+  ├─ 更新 Supabase status='approved'
+  └─ 写回 Airtable（title/caption/hashtags/scheduled_at）
+         │
+         ▼
+Launch Hub 默认展示 approved+scheduled 帖子
+```
+
+### 6.4 视觉生成 + 发布
+
+```
+Launch Hub 表格
+  ├─ 每行有 Format 列（reel/feed/story/image）+ 尺寸提示
+  ├─ 点"🖼 Gen Image" → POST /api/visual/image（WaveSpeed Flux-dev）
+  │    └─ 轮询 /api/visual/status/[assetId]（5秒一次）
+  │         ├─ ready → 显示缩略图，更新 Airtable Image_URL
+  │         └─ failed → 显示错误 + 重试按钮
+  ├─ 点"⬆ Upload" → 手动上传图片/视频 → Supabase Storage
+  └─ 点"→ Publer" → 选账户 + 时间 + Caption → POST /api/publer/schedule
+```
+
+### 6.5 Airtable 双向同步
+
+```
+ME 编辑 ──────────────────────────────────────────────→ Airtable
+（PATCH /api/posts/[id] 内自动调用 updateRecord）
+
+Airtable 编辑 ──→ 手动点"↓ Sync Airtable" ──→ /api/airtable/pull-content
+
+Airtable Webhook（via Zapier）──→ /api/webhooks/airtable-approved
+                                   └─ 更新 Supabase status
+
+Publer 发布 ──→ /api/webhooks/publer-published
+                └─ 更新 status='published'
+```
+
+---
+
+## 7. 外部服务一览
+
+| 服务 | 用途 | 计费模式 |
+|------|------|---------|
+| **OpenAI GPT-4o** | 批量文案生成（帖子正文） | Per token |
+| **Anthropic Claude Sonnet** | Master Brief 生成、精炼对话 | Per token |
+| **WaveSpeed / Atlas Cloud** | 图片生成 Flux-dev | $0.02/张 |
+| **Seedance 2.0** | 视频生成（文字→视频） | $0.022/秒 |
+| **HeyGen** | 头像讲解视频 | 按订阅 |
+| **SEMrush** | 关键词数据（量/难度/CPC/竞品） | Per API unit |
+| **Jina.ai Reader** | 网页抓取 URL→Markdown | 免费 |
+| **Airtable** | 内容数据库（双向同步底座） | 按行数/功能 |
+| **Publer** | 社媒排期发布 | 按订阅 |
+| **Supabase** | 数据库 + 文件存储 | 按用量 |
+| **Render** | 生产部署（master 自动触发） | 按实例 |
+
+---
+
+## 8. 关键环境变量
+
+```bash
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=        # 必须，启动时校验
+
+# AI
+ANTHROPIC_API_KEY=                 # Claude Brief 生成
+OPENAI_API_KEY=                    # 内容文案生成
+
+# Visual Generation
+ATLAS_CLOUD_API_KEY=               # WaveSpeed + Seedance 共用
+HEYGEN_API_KEY=
+HEYGEN_DEFAULT_AVATAR_ID=
+HEYGEN_DEFAULT_VOICE_ID=
+
+# Data
+AIRTABLE_API_KEY=
+SEMRUSH_API_KEY=
+SEMRUSH_DB=au                      # 默认 AU 数据库
+
+# Publishing
+PUBLER_API_KEY=
+PUBLER_WORKSPACE_ID=
+
+# Security
+CRON_SECRET=                       # Cron job 鉴权
+ZAPIER_WEBHOOK_SECRET=             # Airtable webhook 鉴权
+
+# App
+NEXT_PUBLIC_APP_URL=https://crazycontent-27u3.onrender.com
+```
+
+---
+
+## 9. 目录结构
+
+```
+crazycontent/
+├── src/
+│   ├── app/
+│   │   ├── api/                   # 所有 API 路由
+│   │   │   ├── clients/[id]/
+│   │   │   │   ├── brief/         # Master Brief Pipeline
+│   │   │   │   ├── campaign/      # Campaign 管理 + 批量生成
+│   │   │   │   └── posts/         # 客户帖子（Launch Hub 用）
+│   │   │   ├── content/posts/     # 内容板帖子（多状态筛选）
+│   │   │   ├── posts/[id]/        # 单帖 PATCH（含 Airtable 写回）
+│   │   │   ├── posts/batch/       # 批量状态更新
+│   │   │   ├── visual/            # 图片/视频/上传/状态轮询
+│   │   │   ├── semrush/           # 4 个关键词端点
+│   │   │   ├── publer/            # 排期发布
+│   │   │   ├── airtable/          # 双向同步
+│   │   │   ├── cron/              # 后台轮询任务
+│   │   │   └── webhooks/          # Zapier + Publer 回调
+│   │   └── dashboard/             # 前端页面
+│   │       ├── clients/[id]/
+│   │       │   └── _components/   # BriefPanel, CampaignPanel 等
+│   │       ├── content/           # 内容板（列表 + 日历视图）
+│   │       └── visuals/           # Launch Hub（电子表格视图）
+│   ├── hooks/
+│   │   ├── useGenerationQueue.ts  # 视觉生成队列（最多2并发，超时，重试）
+│   │   └── use-api.ts             # 通用数据 fetch + polling hook
+│   └── lib/
+│       ├── brief/                 # Master Brief 生成管道
+│       ├── visual/                # WaveSpeed / Seedance / HeyGen 客户端
+│       ├── semrush/               # SEMrush API 封装
+│       ├── airtable/              # Airtable API 封装
+│       ├── publer/                # Publer API 封装
+│       └── supabase.ts            # Supabase 客户端（启动时校验 service key）
+└── ARCHITECTURE.md                # 本文档
+```
+
+---
+
+## 10. 当前状态与待办
+
+### 已完成功能
+- [x] 多客户管理 + Airtable 配置
+- [x] Master Brief 生成（Jina + PDF + SEMrush + Claude）
+- [x] Campaign Brief + 批量生成（Route A + C，并发5，安全校验）
+- [x] Content Board：列表视图 + 日历视图 + 批量审批 + 模态编辑 + NEW badge
+- [x] Launch Hub：过滤已批准/已排期 + 状态筛选 + 尺寸提示 + 图片生成 + 手动上传 + Publer 发布
+- [x] 视觉生成队列（最多2并发，60分钟超时，指数退避重试）
+- [x] Airtable 写回（PATCH → Supabase + Airtable 同步）
+- [x] SEMrush 关键词拉取（种子词 + 数据库选择）
+- [x] Campaign 内联编辑（标题/描述/日期）
+
+### 待开发 / 已规划
+- [ ] Master Brief Tab（目前 Brief Panel 在客户详情页）
+- [ ] 内容日历自动排期（按 Campaign 天数分配 scheduled_at）
+- [ ] Canva API 模板自动化
+- [ ] Route B（视频内容分析再创作）完整流程
+- [ ] 服务端生成队列（当前队列在客户端 localStorage）
+- [ ] 用户认证（目前无鉴权）
