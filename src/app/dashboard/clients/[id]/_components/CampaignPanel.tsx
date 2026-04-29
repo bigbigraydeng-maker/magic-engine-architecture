@@ -224,6 +224,45 @@ function CampaignCard({
   const [msg, setMsg] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // Batch generation state
+  const [batchPlatforms, setBatchPlatforms] = useState<string[]>(['facebook', 'tiktok'])
+  const [directionNote, setDirectionNote] = useState('')
+  const [routeACount, setRouteACount] = useState(3)
+  const [routeCCount, setRouteCCount] = useState(2)
+  const [generating, setGenerating] = useState(false)
+  const [genResult, setGenResult] = useState<{ count: number } | null>(null)
+  const totalPosts = routeACount + routeCCount
+
+  const handleBatchGenerate = async () => {
+    if (totalPosts < 1) { setMsg('✗ 请设置至少 1 条'); return }
+    setGenerating(true)
+    setMsg('')
+    setGenResult(null)
+    try {
+      const res = await fetch(
+        `/api/clients/${clientId}/campaign/${campaign.id}/batch-generate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            platforms: batchPlatforms,
+            direction_note: directionNote.trim() || campaign.title,
+            route_a_count: routeACount,
+            route_c_count: routeCCount,
+          }),
+        }
+      )
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error)
+      setGenResult({ count: json.saved })
+      setMsg(`✓ 已生成 ${json.saved} 条草稿，请前往内容板检查审批`)
+    } catch (err) {
+      setMsg(`✗ ${(err as Error).message}`)
+    } finally {
+      setGenerating(false)
+    }
+  }
+
   const colorClass = CAMPAIGN_COLORS[
     campaign.id.charCodeAt(0) % CAMPAIGN_COLORS.length
   ]
@@ -436,6 +475,97 @@ function CampaignCard({
               <p className="text-xs text-gray-400 italic">
                 点击「拉取关键词」从 SEMrush 获取推广相关词
               </p>
+            )}
+          </div>
+
+          {/* ── Batch Generation ─────────────────────────────── */}
+          <div className="bg-gray-50 rounded-xl p-4 space-y-4 border border-gray-100">
+            <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+              🚀 批量生成内容
+            </p>
+
+            {/* Direction note */}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">内容方向 / 口号</label>
+              <textarea
+                value={directionNote}
+                onChange={e => setDirectionNote(e.target.value)}
+                placeholder={`默认使用活动标题："${campaign.title}"`}
+                rows={2}
+                className={`${INPUT_CLASS} resize-none text-xs`}
+              />
+            </div>
+
+            {/* Platforms */}
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">发布平台</label>
+              <div className="flex gap-2">
+                {['facebook', 'tiktok', 'instagram'].map(p => (
+                  <button
+                    key={p}
+                    onClick={() => setBatchPlatforms(prev =>
+                      prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]
+                    )}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border-2 transition-colors capitalize ${
+                      batchPlatforms.includes(p)
+                        ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                        : 'border-gray-200 text-gray-500 bg-white'
+                    }`}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Post counts */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  🔑 关键词文章
+                </label>
+                <input
+                  type="number"
+                  min={0} max={20}
+                  value={routeACount}
+                  onChange={e => setRouteACount(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))}
+                  className={`${INPUT_CLASS} text-center`}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">
+                  💡 自由话题
+                </label>
+                <input
+                  type="number"
+                  min={0} max={20}
+                  value={routeCCount}
+                  onChange={e => setRouteCCount(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))}
+                  className={`${INPUT_CLASS} text-center`}
+                />
+              </div>
+            </div>
+
+            <button
+              onClick={handleBatchGenerate}
+              disabled={generating || totalPosts < 1 || batchPlatforms.length === 0}
+              className="w-full py-2.5 rounded-xl text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 transition-colors"
+            >
+              {generating ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  生成中…（共 {totalPosts} 条）
+                </span>
+              ) : `一键生成 ${totalPosts} 条内容`}
+            </button>
+
+            {genResult && (
+              <a
+                href="/dashboard/content"
+                className="block text-center text-xs text-indigo-600 hover:underline"
+              >
+                ✓ 已生成 {genResult.count} 条草稿 → 前往内容板审批 ↗
+              </a>
             )}
           </div>
 
