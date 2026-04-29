@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-04-30 · 当前阶段：**Phase 7 — GEO + AI Tracker MVP（决策窗口）**
+> 最后更新：2026-04-30 · 当前阶段：**Phase 7.1 — AI Visibility Tracker（Week 1-2）**
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
 
 ---
@@ -8,14 +8,18 @@
 ## 当前进度速览
 
 ```
-✅ Phase 1-6   社媒内容矩阵（已完成）
-🔥 Phase 7     GEO + AI Tracker MVP（5 周）  ← 当前位置
-📋 Phase 8     博客内容线 + 客户接入向导
-📋 Phase 9     月报自动化 + 站点权威度追踪
-📋 Phase 10    多语言 + Magic Lab Academy 沉淀
+✅ Phase 1-6     社媒内容矩阵（已完成）
+✅ Phase 7.0     决策窗口（7/7 决策完成，2026-04-30）
+🔥 Phase 7.1     AI Visibility Tracker (Week 1-2)  ← 当前位置
+📋 Phase 7.2     GEO Composer (Week 3)
+📋 Phase 7.3     博客生成 + Snippet 部署 (Week 4)
+📋 Phase 7.4     月报 + PoC 验证 (Week 5)
+📋 Phase 8       博客内容线 + 客户接入向导
+📋 Phase 9       月报自动化 + 站点权威度追踪
+📋 Phase 10      多语言 + Magic Lab Academy 沉淀
 ```
 
-**Phase 7 当前状态**：⚠️ 等待 Phase 0 关键决策（见 §3.0），决策完成后立即开工。
+**Phase 7.1 当前状态**：决策完成，开工。第一步 P7.1.1（数据库 schema）进行中。
 
 ---
 
@@ -129,10 +133,9 @@ Git Commit（事实层）
   - ⚠️ **决策（2026-04-30）**：Phase 7 暂缓，Phase 8 必做（AU/NZ 市场 Google 占 95%+，AIO 流量价值高）
 - [x] **P7.0.3** 行业问句生成模式？
   - ✅ **决策（2026-04-30）**：混合模式（Strategy Engine 自动生成 + 团队编辑）
-- [ ] **P7.0.4** Tracker 跑频？
-  - 🔄 **进行中**：用户倾向每天，已分析挑战（噪音/决策疲劳/反馈延迟）
-  - 当前推荐：**混合频率** — 每周一全量基线（20 问句 × 3 模型）+ 关键 5 问句日级追踪 + 手动 Run Now
-  - 待用户最终确认
+- [x] **P7.0.4** Tracker 跑频？
+  - ✅ **决策（2026-04-30）**：每周一次全量追踪（20 问句 × 3 模型，周一执行）+ 手动 Run Now 按需触发
+  - 理由：AI 输出有随机性，周级粒度趋势清晰；GEO 注入到 AI 反应需 2-4 周，每天追踪反而放大噪音
 - [x] **P7.0.5** GEO 注入方案？
   - ✅ **决策（2026-04-30）**：A 博客内嵌 + B Snippet 复制粘贴。C 插件 Phase 10 远期再说
 - [x] **P7.0.6** PoC 客户选定？
@@ -160,7 +163,10 @@ Git Commit（事实层）
 **目标**：跑通"客户域名 → 行业问句 → 多 AI 引擎查询 → 排名表"完整链路。
 
 **数据库（Day 1）**
-- [ ] **P7.1.1** 创建 3 张 Supabase 表：`ai_visibility_queries` / `ai_visibility_runs` / `ai_visibility_snapshots`（schema 见 ARCHITECTURE.md §12.2）
+- [x] **P7.1.1** 创建 3 张 Supabase 表：`ai_visibility_queries` / `ai_visibility_runs` / `ai_visibility_snapshots`
+  - ✅ Migration: `supabase/migrations/20260430000002_ai_visibility_tracker.sql`
+  - 包含 RLS、索引、updated_at 触发器
+  - **待用户在 Supabase 控制台执行**
 
 **问句生成（Day 2）**
 - [ ] **P7.1.2** `src/lib/ai-tracker/question-generator.ts` — 调 Strategy Engine 输入 Master Brief 输出 15-20 条行业问句
@@ -400,7 +406,7 @@ Git Commit（事实层）
   - P7.0.1 ✅ AI Tracker 接 OpenAI + Claude + Perplexity
   - P7.0.2 ⚠️ Google AIO 暂缓到 Phase 8（AU/NZ 市场必做）
   - P7.0.3 ✅ 问句生成混合模式
-  - P7.0.4 🔄 跑频待最终确认（推荐混合频率：周全量 + 日核心 + 手动）
+  - P7.0.4 ✅ Tracker 跑频每周一次（周一全量 + 手动 Run Now）
   - P7.0.5 ✅ GEO 注入方案 A + B
   - P7.0.6 ✅ PoC 客户 CTS Tours（含发布权限）
   - P7.0.7 ✅ 月报形态 Web 报告页
