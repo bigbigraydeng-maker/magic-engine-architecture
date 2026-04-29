@@ -1,112 +1,212 @@
-# CrazyContent — 产品说明
+# Magic Engine — 产品总览
 
-## 公司背景
-
-**Magic Lab** 是一家 AI 产品公司，专注于为中小企业提供 AI 驱动的内容营销和业务自动化工具。  
-CrazyContent 是 Magic Lab 旗下的首款 AI 产品。
+> Magic Lab 旗下核心产品 · 2026 主力收入引擎
 
 ---
 
-## 产品定位
+## 一、战略定位
 
-**CrazyContent** 是一个多客户 AI 内容运营平台，帮助数字营销团队：
+**Magic Engine 是 Magic Lab 在 2026 年的旗舰产品**，承担两个角色：
 
-- 自动生成社交媒体图文内容（Facebook、小红书等）
-- 批量管理多个客户的内容日历
-- 对接 Airtable 进行内容审批和发布协作
-- AI 图片生成（Flux-dev via Atlas Cloud）
-- AI 视频生成（Seedance 2.0 via Atlas Cloud）
+1. **直接收入来源**：以**年度陪跑服务**形式向品牌方/代理公司交付，单客户年服务费 5–15 万人民币区间。
+2. **Magic Lab Academy 的实战载体**：所有培训案例、SOP、最佳实践都从 Magic Engine 实战中沉淀，反哺培训和咨询服务。
 
-目标用户：需要高频产出内容的社媒代运营公司或品牌内部营销团队。
-
----
-
-## 技术栈
-
-| 层级 | 技术 |
-|------|------|
-| 前端 | Next.js 14 (App Router) + Tailwind CSS |
-| 后端 | Next.js API Routes (Node.js) |
-| 数据库 | Supabase (PostgreSQL + Storage) |
-| AI 内容 | OpenAI GPT-4o-mini |
-| AI 图片 | Atlas Cloud — Flux-dev (WaveSpeed) |
-| AI 视频 | Atlas Cloud — Seedance 2.0 |
-| 协作 | Airtable (Content Calendar 同步) |
-| 部署 | Render (Web Service) |
+**与传统 SaaS 的差异**：
+- ❌ 不卖月费订阅，不做自助注册流程
+- ❌ 不依赖单纯软件功能售卖
+- ✅ 以"AI 内容资产年度建设"作为交付物
+- ✅ Magic Lab 团队作为客户的外部 AI 内容运营部
 
 ---
 
-## 部署信息
+## 二、产品愿景一句话
 
-- **生产地址：** https://crazycontent-27u3.onrender.com
-- **Git 仓库：** github.com/bigbigraydeng-maker/magiclab（`master` 分支）
-- **构建根目录：** `crazycontent/`
-- **Supabase 项目：** 独立项目（非 hibiz）
+> **让品牌在 Google 和 AI 中都被看见。**
 
-> ⚠️ Render 服务监听 `master` 分支，所有生产部署必须推送到 `master`。
+Google 时代的 SEO + AI 时代的 GEO + 全平台社媒矩阵，三位一体的内容运营操作系统。
+
+### 目标市场（2026）
+
+**主战场：澳大利亚（AU） + 新西兰（NZ）**
+
+- 服务对象：AU/NZ 本地企业商家（旅游、教育、专业服务、本地零售等）
+- 内容语言：英文为主，必要时支持中英双语（华人市场）
+- 关键词数据库：默认 `au` / `nz`
+- AI 引擎追踪：所有问句必须带本地化标签（"in New Zealand"、"for Australian travelers"）
+- 地域信号：GEO 指令、博客元数据、社媒帖子均显式声明 AU/NZ 市场定位
+
+这一定位决定了所有内容策略：本地搜索意图优先于全球意图，本地竞品分析优先于全球竞品。
 
 ---
 
-## 项目结构
+## 三、三大核心能力
+
+### 1. SEO 内容引擎（Search Engine Optimization）
+传统搜索引擎的可见度建设。
+
+- 客户网站的关键词雷达（基于客户行业自动扫描有机词、竞品词、长尾词）
+- 博客内容日历（按 SEO 难度/搜索量/竞争度自动排期）
+- 长文 + 配图一键生成（含元数据、Schema、内链）
+- 站点权威度追踪（外链、内链、域名健康度）
+
+### 2. GEO 优化层（Generative Engine Optimization）⭐ 核心差异化
+让品牌在 ChatGPT / Claude / Perplexity / Google AI Overview 中被推荐。
+
+- **AI Visibility Tracker**：每周追踪客户品牌在 4 大 AI 引擎中的排名变化
+- **GEO Composer**：基于客户品牌底稿 + 排名诊断，自动生成 AI 推荐指令
+- **隐藏指令注入**：以对人不可见、对 AI 友好的方式嵌入网站和博客
+- **月度 AI 可见度报告**：客户陪跑交付物，可视化排名提升
+
+### 3. 社媒内容矩阵（Social Content Operations）
+多平台、多客户、批量化的社媒内容生产线。
+
+- 多客户工作台（一个团队管理 N 个品牌）
+- 品牌底稿系统（一次输入，全平台复用）
+- 营销活动批量生成（一个活动生成 N 篇帖子，含图文/视频）
+- 视觉工坊（图片/视频/头像三种 AI 生成）
+- 内容协作空间（与客户审批沟通）
+- 发布管道（多平台自动排期）
+
+---
+
+## 四、用户使用路径（陪跑团队视角）
+
+借鉴 SEO 主流工具的简洁流程，重新设计为 Magic Lab 陪跑场景：
+
+### Step 1 · 客户接入（Onboarding）
+**目标**：5 分钟内完成新客户基础档案建立。
 
 ```
-crazycontent/
-├── src/
-│   ├── app/
-│   │   ├── dashboard/          # 管理后台 UI
-│   │   │   ├── overview/       # 总览
-│   │   │   ├── clients/        # 客户管理
-│   │   │   ├── content/        # 内容管理
-│   │   │   ├── keywords/       # 关键词管理
-│   │   │   └── visuals/        # 图片 / 视频生成
-│   │   └── api/                # REST API
-│   └── lib/
-│       ├── visual/             # 图片 / 视频生成逻辑
-│       ├── airtable/           # Airtable 同步
-│       └── supabase.ts         # 数据库客户端
-├── CLAUDE.md                   # 开发规范
-└── PRODUCT_OVERVIEW.md         # 本文件
+输入：客户官网 URL + 行业 + 目标受众标签
+       ↓
+系统自动：
+  ① 抓取官网核心页面 → 提取品牌核心主张、产品/服务、痛点、解决方案
+  ② 拉取该域名的关键词数据（量、难度、竞品）
+  ③ 评估当前 SEO 健康度 + AI 可见度基线
+       ↓
+输出：客户品牌底稿 v1（可编辑）
+```
+
+### Step 2 · 战略对齐（Brief Refinement）
+**目标**：陪跑团队与客户对齐方向，形成可执行的内容策略。
+
+- 品牌底稿编辑器：内容支柱、品牌声调、目标受众、视觉风格
+- AI 对话精炼：用自然语言修改底稿（"语气更年轻"、"加一个支柱"）
+- 关键词库勾选：从扫描结果中确定主攻方向
+- 启用底稿 → 后续所有内容生成都自动注入
+
+### Step 3 · 内容规划（Content Planning）
+**目标**：基于战略生成可执行的内容日历。
+
+- **博客内容日历**（SEO 视角）：标题 + 关键词 + SEO 难度 + 排期
+- **社媒内容日历**（社交视角）：营销活动 → 批量生成 N 篇帖子
+- **AI 可见度计划**（GEO 视角）：基于 Tracker 诊断生成针对性内容
+
+### Step 4 · 内容生产（Content Production）
+**目标**：把规划落地成可发布的成品。
+
+- 长文博客：标题 + 元数据 + 正文 + 配图 + 内链 + GEO 隐藏指令
+- 社媒帖子：文案 + 视觉 + 标签 + 发布时间
+- 内容审查面板：双模式重生（"重写文字"/"重生图片"分离）+ SEO 完整性检查清单
+
+### Step 5 · 发布与追踪（Launch & Track）
+**目标**：把内容推向各渠道，并持续优化。
+
+- 一键发布到客户社媒账号矩阵
+- 博客内容部署到客户网站（含 GEO 隐藏指令）
+- AI 可见度每周自动追踪
+- 月度报告自动生成（陪跑交付物）
+
+---
+
+## 五、Magic Engine 模块体系
+
+所有模块对外统一封装命名，**对客户和 UI 不暴露具体技术供应商**：
+
+| 模块 | 功能定位 |
+|------|---------|
+| **Brand Brief Studio** | 品牌底稿生成与精炼 |
+| **Site Analyzer** | 网站抓取与内容理解 |
+| **Keyword Intelligence** | 关键词与 SEO 数据中枢 |
+| **AI Visibility Tracker** ⭐ | 多 AI 引擎品牌排名追踪 |
+| **GEO Composer** ⭐ | AI 推荐指令生成器 |
+| **Content Calendar** | SEO 博客 + 社媒内容日历 |
+| **Campaign Studio** | 营销活动批量内容生成 |
+| **Visual Studio** | AI 图片生成工坊 |
+| **Video Studio** | AI 视频生成工坊 |
+| **Avatar Studio** | AI 头像视频生成 |
+| **Content Workspace** | 内容协作与审批空间 |
+| **Publishing Hub** | 多平台发布管道 |
+| **Insight Reports** | 月度可见度与表现报告 |
+
+⭐ = 2026 Q2 重点新建模块（核心差异化）
+
+---
+
+## 六、商业模式
+
+### 主要收入：年度陪跑服务
+
+```
+基础版陪跑（5–8 万/年）
+├── 1 个品牌客户
+├── 月度 AI 可见度报告
+├── 季度 SEO + GEO 战略复盘
+├── 月产 8–12 篇博客 + 30–60 条社媒内容
+└── 内容审批与发布管道
+
+高级版陪跑（10–15 万/年）
+├── 1 个品牌客户（多平台/多语言）
+├── 周度 AI 可见度追踪
+├── 月度战略会
+├── 月产 16–24 篇博客 + 60–120 条社媒内容
+├── 视频内容（AI 生成 + 头像视频）
+└── 客户网站 GEO 注入 + 持续优化
+```
+
+### 衍生收入：Magic Lab Academy
+
+```
+培训课程（基于 Magic Engine 实战 SOP）
+├── 内容运营总监课程
+├── AI 可见度优化（GEO）专项课程
+└── 企业内训定制
+
+工具授权（远期）
+└── 部分模块以 SaaS 形式向中小企业开放
 ```
 
 ---
 
-## 本地开发
+## 七、当前阶段（2026-04）
 
-```bash
-# 进入目录
-cd "magic lab/crazycontent"
+✅ **已具备**：社媒内容矩阵能力完整（多客户、品牌底稿、批量生成、图片/视频生成、内容协作、多平台发布）
 
-# 安装依赖
-npm install
+🔄 **2026 Q2 重点建设**：
+- ⭐ **AI Visibility Tracker** — 多 AI 引擎排名追踪
+- ⭐ **GEO Composer** — AI 推荐指令生成与注入
+- 长文博客生成线（SEO 视角的内容日历）
+- 客户接入向导（5 分钟新客户建档）
 
-# 启动开发服务器（端口 3001）
-npm run dev
+📋 **2026 H2 规划**：
+- 客户月度报告自动化
+- 站点权威度追踪
+- 多语言内容支持
+- Magic Lab Academy 课程化沉淀
 
-# 构建
-npm run build
-```
-
-### 必要环境变量
-
-```env
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
-OPENAI_API_KEY=
-ATLAS_API_KEY=
-AIRTABLE_API_KEY=
-```
+详见 [`ROADMAP.md`](./ROADMAP.md)。
 
 ---
 
-## Magic Lab 产品矩阵（规划中）
+## 八、文档导航
 
-| 产品 | 定位 | 状态 |
+| 文档 | 受众 | 内容 |
 |------|------|------|
-| **CrazyContent** | AI 内容运营平台 | ✅ 上线 |
-| HiBiz | 商业信息采集工具 | 开发中 |
-| 其他 | TBD | 规划中 |
+| [`PRODUCT_OVERVIEW.md`](./PRODUCT_OVERVIEW.md) | 全员 | 产品愿景、定位、能力体系（本文件） |
+| [`ROADMAP.md`](./ROADMAP.md) | 项目管理 | 阶段路线图与任务跟踪 |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | 开发团队 | 技术架构、数据模型、API |
+| [`CLAUDE.md`](./CLAUDE.md) | AI 助手 | 项目工作指南与代号映射 |
 
 ---
 
-*Magic Lab — Building AI tools for real business.*
+*Magic Lab — 让 AI 真正服务于业务增长。*
