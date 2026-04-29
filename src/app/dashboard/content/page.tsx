@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 
 interface Client {
@@ -10,6 +10,7 @@ interface Client {
 
 interface ContentPost {
   id: string;
+  client_id: string;
   title: string;
   route: string;
   platforms: string[];
@@ -42,6 +43,26 @@ const routeLabels: Record<string, string> = {
   route_c: 'Route C',
 };
 
+const RATIO_OPTIONS = [
+  { value: '1:1',  label: '方形 1:1 (通用)' },
+  { value: '4:5',  label: '竖版 4:5 (Instagram 动态)' },
+  { value: '9:16', label: '故事 9:16 (TikTok / Reels / Story)' },
+  { value: '16:9', label: '横版 16:9 (YouTube / FB 横版)' },
+];
+
+function isNewPost(created_at: string) {
+  return Date.now() - new Date(created_at).getTime() < 60 * 60 * 1000;
+}
+
+function suggestRatio(platforms: string[]): string {
+  if (platforms.includes('tiktok')) return '9:16';
+  if (platforms.includes('youtube')) return '16:9';
+  if (platforms.includes('twitter')) return '16:9';
+  if (platforms.includes('instagram')) return '4:5';
+  if (platforms.includes('facebook')) return '4:5';
+  return '1:1';
+}
+
 export default function ContentBoardPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [posts, setPosts] = useState<ContentPost[]>([]);
@@ -55,6 +76,30 @@ export default function ContentBoardPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batching, setBatching] = useState(false);
   const [batchMsg, setBatchMsg] = useState('');
+
+  // Modal edit state
+  const [editMode, setEditMode] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editScript, setEditScript] = useState('');
+  const [editCaption, setEditCaption] = useState('');
+  const [editHashtags, setEditHashtags] = useState('');
+  const [editVisualBrief, setEditVisualBrief] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [saveMsg, setSaveMsg] = useState('');
+
+  // Modal image preview state
+  const [previewRatio, setPreviewRatio] = useState('1:1');
+  const [previewStatus, setPreviewStatus] = useState<'idle' | 'generating' | 'done' | 'failed'>('idle');
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState('');
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     fetch('/api/clients').then(r => r.json()).then(d => setClients(d.clients ?? []));
@@ -79,6 +124,126 @@ export default function ContentBoardPage() {
   useEffect(() => {
     fetchPosts();
   }, [fetchPosts]);
+
+  // ─── Modal helpers ───────────────────────────────────────────────────────────
+
+  const openModal = (post: ContentPost) => {
+    setModalPost(post);
+    setEditMode(false);
+    setEditTitle(post.title);
+    setEditScript(post.script ?? '');
+    setEditCaption(post.caption ?? '');
+    setEditHashtags((post.hashtags ?? []).join(' '));
+    setEditVisualBrief(post.visual_brief ?? '');
+    setSaveMsg('');
+    setPreviewRatio(suggestRatio(post.platforms));
+    setPreviewStatus('idle');
+    setPreviewImageUrl(null);
+    setPreviewError('');
+    if (pollRef.current) clearInterval(pollRef.current);
+  };
+
+  const closeModal = () => {
+    setModalPost(null);
+    setEditMode(false);
+    setSaveMsg('');
+    setPreviewStatus('idle');
+    setPreviewImageUrl(null);
+    setPreviewError('');
+    if (pollRef.current) clearInterval(pollRef.current);
+  };
+
+  // ─── Save edits ──────────────────────────────────────────────────────────────
+
+  const handleSaveEdit = async () => {
+    if (!modalPost) return;
+    setSavingEdit(true);
+    setSaveMsg('');
+    try {
+      const body = {
+        title: editTitle,
+        script: editScript,
+        caption: editCaption,
+        hashtags: editHashtags.split(/\s+/).filter(Boolean),
+        visual_brief: editVisualBrief,
+      };
+      const res = await fetch(`/api/posts/${modalPost.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error);
+
+      const updated: ContentPost = {
+        ...modalPost,
+        title: editTitle,
+        script: editScript || undefined,
+        caption: editCaption || undefined,
+        hashtags: editHashtags.split(/\s+/).filter(Boolean),
+        visual_brief: editVisualBrief || undefined,
+      };
+      setModalPost(updated);
+      setPosts(prev => prev.map(p => p.id === updated.id ? updated : p));
+      setSaveMsg('✓ 已保存');
+      setEditMode(false);
+    } catch (err) {
+      setSaveMsg(`✗ ${(err as Error).message}`);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  // ─── Image preview generation ────────────────────────────────────────────────
+
+  const handleGeneratePreview = async () => {
+    if (!modalPost) return;
+    if (!modalPost.visual_brief && !editVisualBrief) {
+      setPreviewError('请先填写 Visual Brief 再生成图片');
+      return;
+    }
+    setPreviewStatus('generating');
+    setPreviewImageUrl(null);
+    setPreviewError('');
+    if (pollRef.current) clearInterval(pollRef.current);
+
+    try {
+      const res = await fetch('/api/visual/image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          post_id: modalPost.id,
+          client_id: modalPost.client_id,
+          aspect_ratio: previewRatio,
+        }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error);
+      const assetId: string = json.asset_id;
+
+      pollRef.current = setInterval(async () => {
+        try {
+          const pollRes = await fetch(`/api/visual/status/${assetId}`);
+          const pollJson = await pollRes.json();
+          const asset = pollJson.asset;
+          if (asset?.generation_status === 'ready') {
+            clearInterval(pollRef.current!);
+            setPreviewStatus('done');
+            setPreviewImageUrl(asset.storage_url || asset.provider_url || null);
+          } else if (asset?.generation_status === 'failed') {
+            clearInterval(pollRef.current!);
+            setPreviewStatus('failed');
+            setPreviewError(asset.error_message || '生成失败，请重试');
+          }
+        } catch {
+          // Transient poll error — keep polling
+        }
+      }, 5000);
+    } catch (err) {
+      setPreviewStatus('failed');
+      setPreviewError((err as Error).message);
+    }
+  };
 
   // ─── Selection helpers ───────────────────────────────────────────────────────
 
@@ -269,7 +434,14 @@ export default function ContentBoardPage() {
                   />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">
-                      <h3 className="text-sm font-semibold text-gray-900 leading-snug flex-1">{post.title}</h3>
+                      <div className="flex items-start gap-1.5 flex-1 min-w-0">
+                        <h3 className="text-sm font-semibold text-gray-900 leading-snug">{post.title}</h3>
+                        {isNewPost(post.created_at) && (
+                          <span className="flex-shrink-0 text-xs bg-emerald-500 text-white px-1.5 py-0.5 rounded font-bold tracking-wide">
+                            NEW
+                          </span>
+                        )}
+                      </div>
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${statusColors[post.status] ?? 'bg-gray-100 text-gray-600'}`}>
                         {post.status === 'draft' ? '草稿' :
                          post.status === 'approved' ? '已批准' :
@@ -299,7 +471,7 @@ export default function ContentBoardPage() {
                       <span className="text-xs text-gray-400">{new Date(post.created_at).toLocaleDateString()}</span>
                       <div className="flex gap-2" onClick={e => e.stopPropagation()}>
                         <button
-                          onClick={() => setModalPost(post)}
+                          onClick={() => openModal(post)}
                           className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
                         >
                           查看详情
@@ -324,46 +496,219 @@ export default function ContentBoardPage() {
 
       {/* Detail Modal */}
       {modalPost && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setModalPost(null)}>
-          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[80vh] overflow-y-auto p-6" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-start justify-between mb-4">
-              <h2 className="text-lg font-bold text-gray-900 pr-4">{modalPost.title}</h2>
-              <button onClick={() => setModalPost(null)} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={closeModal}>
+          <div
+            className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal header */}
+            <div className="sticky top-0 bg-white rounded-t-2xl border-b border-gray-100 px-6 py-4 flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-bold text-gray-900 truncate">{modalPost.title}</h2>
+                  {isNewPost(modalPost.created_at) && (
+                    <span className="text-xs bg-emerald-500 text-white px-1.5 py-0.5 rounded font-bold tracking-wide flex-shrink-0">NEW</span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {new Date(modalPost.created_at).toLocaleString()} · {modalPost.clients?.name ?? ''}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                {!editMode ? (
+                  <button
+                    onClick={() => setEditMode(true)}
+                    className="text-xs text-indigo-600 hover:text-indigo-800 border border-indigo-200 hover:border-indigo-400 px-3 py-1.5 rounded-lg font-medium transition-colors"
+                  >
+                    ✏️ 编辑
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => { setEditMode(false); setSaveMsg(''); }}
+                    className="text-xs text-gray-500 hover:text-gray-700 border border-gray-200 px-3 py-1.5 rounded-lg font-medium transition-colors"
+                  >
+                    取消
+                  </button>
+                )}
+                <button onClick={closeModal} className="text-gray-400 hover:text-gray-600 text-xl leading-none w-7 h-7 flex items-center justify-center">×</button>
+              </div>
             </div>
-            <div className="space-y-4 text-sm">
-              {modalPost.script && (
-                <div>
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Script</p>
-                  <p className="text-gray-700 whitespace-pre-wrap bg-gray-50 rounded-lg p-3 text-xs">{modalPost.script}</p>
+
+            {/* Modal body */}
+            <div className="px-6 py-4 space-y-4 text-sm">
+              {/* Script */}
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Script</p>
+                {editMode ? (
+                  <textarea
+                    value={editScript}
+                    onChange={e => setEditScript(e.target.value)}
+                    rows={5}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-y"
+                  />
+                ) : (
+                  modalPost.script ? (
+                    <p className="text-gray-700 whitespace-pre-wrap bg-gray-50 rounded-lg p-3 text-xs">{modalPost.script}</p>
+                  ) : (
+                    <p className="text-gray-400 italic text-xs">（无）</p>
+                  )
+                )}
+              </div>
+
+              {/* Caption */}
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Caption</p>
+                {editMode ? (
+                  <textarea
+                    value={editCaption}
+                    onChange={e => setEditCaption(e.target.value)}
+                    rows={4}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-y"
+                  />
+                ) : (
+                  modalPost.caption ? (
+                    <p className="text-gray-700 whitespace-pre-wrap bg-gray-50 rounded-lg p-3 text-xs">{modalPost.caption}</p>
+                  ) : (
+                    <p className="text-gray-400 italic text-xs">（无）</p>
+                  )
+                )}
+              </div>
+
+              {/* Hashtags */}
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Hashtags</p>
+                {editMode ? (
+                  <input
+                    type="text"
+                    value={editHashtags}
+                    onChange={e => setEditHashtags(e.target.value)}
+                    placeholder="#tag1 #tag2 #tag3（空格分隔）"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                ) : (
+                  modalPost.hashtags && modalPost.hashtags.length > 0 ? (
+                    <p className="text-indigo-600 text-xs">{modalPost.hashtags.join(' ')}</p>
+                  ) : (
+                    <p className="text-gray-400 italic text-xs">（无）</p>
+                  )
+                )}
+              </div>
+
+              {/* Visual Brief */}
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Visual Brief</p>
+                {editMode ? (
+                  <textarea
+                    value={editVisualBrief}
+                    onChange={e => setEditVisualBrief(e.target.value)}
+                    rows={3}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-y"
+                  />
+                ) : (
+                  modalPost.visual_brief ? (
+                    <p className="text-gray-700 bg-gray-50 rounded-lg p-3 text-xs">{modalPost.visual_brief}</p>
+                  ) : (
+                    <p className="text-gray-400 italic text-xs">（无）</p>
+                  )
+                )}
+              </div>
+
+              {/* Save button (edit mode) */}
+              {editMode && (
+                <div className="flex items-center gap-3 pt-1">
+                  <button
+                    onClick={handleSaveEdit}
+                    disabled={savingEdit}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-5 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+                  >
+                    {savingEdit ? '保存中…' : '💾 保存修改'}
+                  </button>
+                  {saveMsg && (
+                    <span className={`text-xs ${saveMsg.startsWith('✓') ? 'text-green-600' : 'text-red-500'}`}>{saveMsg}</span>
+                  )}
                 </div>
               )}
-              {modalPost.caption && (
-                <div>
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Caption</p>
-                  <p className="text-gray-700 whitespace-pre-wrap bg-gray-50 rounded-lg p-3 text-xs">{modalPost.caption}</p>
-                </div>
-              )}
-              {modalPost.hashtags && modalPost.hashtags.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Hashtags</p>
-                  <p className="text-indigo-600 text-xs">{modalPost.hashtags.join(' ')}</p>
-                </div>
-              )}
-              {modalPost.visual_brief && (
-                <div>
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Visual Brief</p>
-                  <p className="text-gray-700 bg-gray-50 rounded-lg p-3 text-xs">{modalPost.visual_brief}</p>
-                </div>
+              {!editMode && saveMsg && (
+                <p className={`text-xs ${saveMsg.startsWith('✓') ? 'text-green-600' : 'text-red-500'}`}>{saveMsg}</p>
               )}
 
-              {/* Quick actions in modal — only for drafts */}
+              {/* ── Image Preview Section ─────────────────────────────── */}
+              <div className="border-t border-gray-100 pt-4">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">图片预览生成</p>
+                <div className="flex items-center gap-2 mb-3 flex-wrap">
+                  <label className="text-xs text-gray-600 font-medium whitespace-nowrap">比例：</label>
+                  <select
+                    value={previewRatio}
+                    onChange={e => setPreviewRatio(e.target.value)}
+                    className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
+                  >
+                    {RATIO_OPTIONS.map(o => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={handleGeneratePreview}
+                    disabled={previewStatus === 'generating'}
+                    className="bg-violet-600 hover:bg-violet-700 text-white text-xs px-4 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 whitespace-nowrap"
+                  >
+                    {previewStatus === 'generating' ? (
+                      <span className="flex items-center gap-1.5">
+                        <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+                        </svg>
+                        生成中…
+                      </span>
+                    ) : '✨ 生成预览图'}
+                  </button>
+                </div>
+
+                {previewStatus === 'generating' && (
+                  <p className="text-xs text-gray-400">WaveSpeed Flux-dev 生成中，通常需要 1-3 分钟，请耐心等待…</p>
+                )}
+
+                {previewStatus === 'failed' && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                    <p className="text-xs text-red-600">{previewError}</p>
+                    <button onClick={handleGeneratePreview} className="text-xs text-red-700 underline mt-1">重试</button>
+                  </div>
+                )}
+
+                {previewStatus === 'done' && previewImageUrl && (
+                  <div className="mt-2">
+                    <img
+                      src={previewImageUrl}
+                      alt="Generated preview"
+                      className="w-full max-w-sm mx-auto rounded-xl border border-gray-200 shadow-sm"
+                    />
+                    <div className="flex gap-3 mt-2 justify-center">
+                      <a
+                        href={previewImageUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-indigo-600 hover:underline"
+                      >
+                        ↗ 查看原图
+                      </a>
+                      <button
+                        onClick={handleGeneratePreview}
+                        className="text-xs text-gray-500 hover:text-gray-700"
+                      >
+                        ↻ 重新生成
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              {/* ──────────────────────────────────────────────────────── */}
+
+              {/* Quick approve/reject — only for drafts */}
               {(modalPost.status === 'draft') && (
                 <div className="flex gap-2 pt-2 border-t border-gray-100">
                   <button
                     onClick={() => {
-                      // Capture ID before closing to avoid stale closure issues
                       const id = modalPost.id;
-                      setModalPost(null);
+                      closeModal();
                       batchUpdate([id], 'approved');
                     }}
                     disabled={batching}
@@ -374,7 +719,7 @@ export default function ContentBoardPage() {
                   <button
                     onClick={() => {
                       const id = modalPost.id;
-                      setModalPost(null);
+                      closeModal();
                       batchUpdate([id], 'rejected');
                     }}
                     disabled={batching}
