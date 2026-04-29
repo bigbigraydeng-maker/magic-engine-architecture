@@ -779,7 +779,7 @@ export default function VisualsPage() {
 
       {/* Toolbar */}
       <div className="flex items-center gap-3 px-4 py-2.5 bg-white border-b border-gray-200 flex-shrink-0">
-        <h1 className="text-sm font-semibold text-gray-700 mr-1">Content Workbench</h1>
+        <h1 className="text-sm font-semibold text-gray-700 mr-1">🚀 Launch Hub</h1>
         <select
           value={selectedClientId}
           onChange={e => setSelectedClientId(e.target.value)}

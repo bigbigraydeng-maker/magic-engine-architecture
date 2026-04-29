@@ -30,8 +30,8 @@ const navItems = [
   },
   {
     href: '/dashboard/visuals',
-    label: 'Visuals',
-    emoji: '🎨',
+    label: 'Launch Hub',
+    emoji: '🚀',
     exact: false,
   },
   {

@@ -173,6 +173,7 @@ export default function ContentBoardPage() {
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
         >
           <option value="draft">草稿（待审批）</option>
+          <option value="approved,scheduled">日历（已批准 + 已排期）</option>
           <option value="approved">已批准</option>
           <option value="scheduled">已排期</option>
           <option value="published">已发布</option>

@@ -15,7 +15,15 @@ export async function GET(req: NextRequest) {
       .limit(100)
 
     if (clientId) query = query.eq('client_id', clientId)
-    if (status) query = query.eq('status', status)
+    if (status) {
+      // Support comma-separated multi-status: "approved,scheduled"
+      const statuses = status.split(',').map(s => s.trim()).filter(Boolean)
+      if (statuses.length === 1) {
+        query = query.eq('status', statuses[0])
+      } else if (statuses.length > 1) {
+        query = query.in('status', statuses)
+      }
+    }
 
     const { data, error } = await query
     if (error) throw error
