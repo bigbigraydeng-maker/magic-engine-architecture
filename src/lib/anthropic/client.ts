@@ -161,19 +161,65 @@ export async function callClaudeChat(params: {
 /**
  * Parse a Claude response that should be JSON.
  * Robust extraction: finds the outermost { } block regardless of surrounding text.
- * Handles prose before/after JSON, markdown fences, etc.
+ * Also sanitizes literal control characters (newlines, tabs) inside JSON string values,
+ * which Claude sometimes emits — especially for non-English responses.
  */
 export function parseJsonResponse<T>(text: string): T {
   const trimmed = text.trim()
 
-  // Find the outermost JSON object by locating first { and last }
+  // Find the outermost JSON object
   const start = trimmed.indexOf('{')
   const end = trimmed.lastIndexOf('}')
-
   if (start === -1 || end === -1 || end < start) {
     throw new Error(`No JSON object found in Claude response. Preview: ${trimmed.slice(0, 300)}`)
   }
 
-  const jsonStr = trimmed.slice(start, end + 1)
-  return JSON.parse(jsonStr) as T
+  const raw = trimmed.slice(start, end + 1)
+
+  // Try direct parse first (fast path)
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    // Sanitize literal control characters inside string values
+    // Claude sometimes emits real \n / \t instead of \\n / \\t in JSON strings
+    const sanitized = sanitizeJsonControlChars(raw)
+    return JSON.parse(sanitized) as T
+  }
+}
+
+/**
+ * Walk the raw JSON text character by character.
+ * Inside string values, replace literal control characters with proper escape sequences.
+ * Ignores already-escaped sequences (e.g. \\n stays \\n).
+ */
+function sanitizeJsonControlChars(str: string): string {
+  let inString = false
+  let escaped = false
+  let result = ''
+
+  for (const char of str) {
+    if (escaped) {
+      result += char
+      escaped = false
+      continue
+    }
+    if (char === '\\' && inString) {
+      escaped = true
+      result += char
+      continue
+    }
+    if (char === '"') {
+      inString = !inString
+      result += char
+      continue
+    }
+    if (inString) {
+      if (char === '\n') { result += '\\n'; continue }
+      if (char === '\r') { result += '\\r'; continue }
+      if (char === '\t') { result += '\\t'; continue }
+    }
+    result += char
+  }
+
+  return result
 }
