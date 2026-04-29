@@ -57,7 +57,7 @@ export default function AirtablePage() {
         <select
           value={selectedId}
           onChange={e => setSelectedId(e.target.value)}
-          className="text-sm border border-gray-200 rounded px-2 py-1 bg-white"
+          className="text-sm border border-gray-200 rounded px-2 py-1 bg-white text-gray-900"
         >
           <option value="">Select client…</option>
           {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}

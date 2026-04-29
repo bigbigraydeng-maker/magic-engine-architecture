@@ -264,7 +264,7 @@ export default function ClientDetailPage() {
                       value={airtableConfig[key]}
                       onChange={e => setAirtableConfig(c => ({ ...c, [key]: e.target.value }))}
                       placeholder={placeholder}
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs font-mono text-gray-900 placeholder-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                 ))}
@@ -289,7 +289,7 @@ export default function ClientDetailPage() {
                       value={airtableConfig[key]}
                       onChange={e => setAirtableConfig(c => ({ ...c, [key]: e.target.value }))}
                       placeholder="https://airtable.com/embed/shr…"
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-xs font-mono text-gray-900 placeholder-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                     />
                   </div>
                 ))}

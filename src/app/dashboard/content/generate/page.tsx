@@ -166,7 +166,7 @@ export default function GenerateContentPage() {
               required
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               <option value="">— Select client —</option>
               {clients.map((c) => (
@@ -183,7 +183,7 @@ export default function GenerateContentPage() {
                 required
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 placeholder="e.g. New Zealand travel packages"
               />
             </div>
@@ -196,7 +196,7 @@ export default function GenerateContentPage() {
                 required
                 value={videoUrl}
                 onChange={(e) => setVideoUrl(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 placeholder="https://youtube.com/watch?v=... or TikTok URL"
               />
             </div>
@@ -209,7 +209,7 @@ export default function GenerateContentPage() {
                 required
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 placeholder="e.g. Summer travel deals 2025"
               />
             </div>

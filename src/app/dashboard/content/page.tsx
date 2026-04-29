@@ -107,7 +107,7 @@ export default function ContentBoardPage() {
         <select
           value={selectedClient}
           onChange={(e) => setSelectedClient(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+          className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
         >
           <option value="">All Clients</option>
           {clients.map((c) => (
@@ -117,7 +117,7 @@ export default function ContentBoardPage() {
         <select
           value={selectedStatus}
           onChange={(e) => setSelectedStatus(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+          className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
         >
           <option value="">All Status</option>
           <option value="draft">Draft</option>

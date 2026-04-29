@@ -90,7 +90,7 @@ export default function ClientsPage() {
                 required
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 placeholder="e.g. CTS Tours"
               />
             </div>
@@ -99,7 +99,7 @@ export default function ClientsPage() {
               <input
                 value={form.domain}
                 onChange={(e) => setForm({ ...form, domain: e.target.value })}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 placeholder="ctstours.co.nz"
               />
             </div>
@@ -108,7 +108,7 @@ export default function ClientsPage() {
               <input
                 value={form.airtable_base_id}
                 onChange={(e) => setForm({ ...form, airtable_base_id: e.target.value })}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 placeholder="appXXXXXXXXXXXXXX"
               />
             </div>

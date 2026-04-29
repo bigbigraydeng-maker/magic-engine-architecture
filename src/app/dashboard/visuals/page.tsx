@@ -783,7 +783,7 @@ export default function VisualsPage() {
         <select
           value={selectedClientId}
           onChange={e => setSelectedClientId(e.target.value)}
-          className="text-sm border border-gray-200 rounded px-2 py-1 bg-white"
+          className="text-sm border border-gray-200 rounded px-2 py-1 bg-white text-gray-900"
         >
           <option value="">Select client…</option>
           {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -935,7 +935,7 @@ export default function VisualsPage() {
                 <select
                   value={scheduleForm.account_id}
                   onChange={e => setScheduleForm(f => ({ ...f, account_id: e.target.value }))}
-                  className="w-full border rounded px-2 py-1.5 text-sm"
+                  className="w-full border rounded px-2 py-1.5 text-sm text-gray-900 bg-white"
                 >
                   <option value="">Select account…</option>
                   {publerAccounts.map(a => (
@@ -949,7 +949,7 @@ export default function VisualsPage() {
                   type="datetime-local"
                   value={scheduleForm.scheduled_at}
                   onChange={e => setScheduleForm(f => ({ ...f, scheduled_at: e.target.value }))}
-                  className="w-full border rounded px-2 py-1.5 text-sm"
+                  className="w-full border rounded px-2 py-1.5 text-sm text-gray-900 bg-white"
                 />
               </div>
               <div>
@@ -958,7 +958,7 @@ export default function VisualsPage() {
                   value={scheduleForm.caption}
                   onChange={e => setScheduleForm(f => ({ ...f, caption: e.target.value }))}
                   rows={4}
-                  className="w-full border rounded px-2 py-1.5 text-sm resize-none"
+                  className="w-full border rounded px-2 py-1.5 text-sm text-gray-900 bg-white resize-none"
                 />
               </div>
             </div>

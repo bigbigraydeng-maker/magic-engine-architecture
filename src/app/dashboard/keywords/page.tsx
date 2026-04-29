@@ -201,7 +201,7 @@ export default function KeywordsPage() {
               <select
                 value={fetchClient}
                 onChange={(e) => setFetchClient(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
               >
                 {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
@@ -211,7 +211,7 @@ export default function KeywordsPage() {
               <input
                 value={domain}
                 onChange={(e) => setDomain(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 placeholder="ctstours.co.nz"
               />
             </div>
@@ -245,7 +245,7 @@ export default function KeywordsPage() {
               rows={3}
               value={seedKeywords}
               onChange={(e) => setSeedKeywords(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
               placeholder={mode === 'related' ? 'New Zealand tours' : mode === 'gap' ? 'competitor1.com\ncompetitor2.com' : 'keyword 1\nkeyword 2'}
             />
           </div>
@@ -270,7 +270,7 @@ export default function KeywordsPage() {
         <select
           value={selectedClient}
           onChange={(e) => setSelectedClient(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
         >
           <option value="">All Clients</option>
           {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -278,7 +278,7 @@ export default function KeywordsPage() {
         <select
           value={selectedStatus}
           onChange={(e) => setSelectedStatus(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
         >
           <option value="">All Status</option>
           <option value="new">New</option>
@@ -289,7 +289,7 @@ export default function KeywordsPage() {
         <select
           value={selectedIntent}
           onChange={(e) => setSelectedIntent(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
         >
           <option value="">All Intent</option>
           <option value="informational">Informational</option>
