@@ -89,6 +89,10 @@ Visual brief should describe the ideal image/video for this post in 30-50 words.
       status: 'draft' as const,
     }
 
+    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      console.error('[route-c] SUPABASE_SERVICE_ROLE_KEY not set — using anon client, insert will be silently blocked by RLS')
+    }
+
     const { data: savedPosts, error } = await supabaseAdmin
       .from('content_posts')
       .insert([
@@ -97,7 +101,14 @@ Visual brief should describe the ideal image/video for this post in 30-50 words.
       ])
       .select()
 
-    if (error) throw error
+    if (error) {
+      console.error('[route-c] DB insert error:', JSON.stringify(error))
+      throw error
+    }
+    if (!savedPosts?.length) {
+      console.error('[route-c] DB insert returned no rows — RLS may be blocking (anon key fallback?)')
+      throw new Error('Content generated but failed to save — check Render logs for DB error')
+    }
 
     return NextResponse.json({
       success: true,

@@ -111,6 +111,11 @@ Visual brief: 30-50 words describing the ideal visual.`,
       status: 'draft' as const,
     }
 
+    // Diagnose supabaseAdmin key usage
+    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      console.error('[route-a] SUPABASE_SERVICE_ROLE_KEY not set — using anon client, insert will be silently blocked by RLS')
+    }
+
     const { data: savedPosts, error } = await supabaseAdmin
       .from('content_posts')
       .insert([
@@ -119,7 +124,14 @@ Visual brief: 30-50 words describing the ideal visual.`,
       ])
       .select()
 
-    if (error) throw error
+    if (error) {
+      console.error('[route-a] DB insert error:', JSON.stringify(error))
+      throw error
+    }
+    if (!savedPosts?.length) {
+      console.error('[route-a] DB insert returned no rows — RLS may be blocking (anon key fallback?)')
+      throw new Error('Content generated but failed to save — check Render logs for DB error')
+    }
 
     // 5. Sync to Airtable Content Calendar (non-fatal)
     if (savedPosts?.length) {

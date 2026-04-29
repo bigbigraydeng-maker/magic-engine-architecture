@@ -1,11 +1,13 @@
 'use client'
 
 import { type ReactNode, useState, useEffect, useCallback } from 'react'
+import type { MasterBrief } from '@/types/magic-engine'
 
 interface OperationsConsoleProps {
   clientId: string
 }
 
+type RouteId = 'route_a' | 'route_b' | 'route_c'
 type Platform = 'facebook' | 'tiktok' | 'instagram'
 
 interface PostResult {
@@ -26,11 +28,188 @@ interface RecentPost {
   created_at: string
 }
 
-interface BriefSummary {
-  id: string
-  brand_name?: string | null
-  status: string
+// ─── Brand Diagnosis ──────────────────────────────────────────────────────────
+
+const PILLAR_COLORS = [
+  'bg-indigo-100 text-indigo-700',
+  'bg-purple-100 text-purple-700',
+  'bg-emerald-100 text-emerald-700',
+  'bg-amber-100 text-amber-700',
+  'bg-rose-100 text-rose-700',
+]
+
+function BrandDiagnosis({ brief }: { brief: MasterBrief }) {
+  const [open, setOpen] = useState(true)
+
+  const pillars = brief.content_pillars ?? []
+  const audience = brief.target_audience
+  const platforms = brief.platform_strategy
+  const keywords = brief.keyword_seeds ?? []
+  const voice = brief.brand_voice
+
+  const activePlatforms = platforms
+    ? Object.entries(platforms).filter(([, cfg]) => cfg.enabled)
+    : []
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      {/* Header — always visible */}
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-gray-50 transition-colors"
+      >
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-gray-900">
+              {brief.brand_name ?? 'Unnamed Brand'}
+            </span>
+            <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
+              Active Brief
+            </span>
+          </div>
+          {brief.core_proposition && (
+            <p className="text-xs text-gray-500 mt-0.5 truncate pr-8">
+              {brief.core_proposition}
+            </p>
+          )}
+        </div>
+        <span className="text-gray-400 text-xs flex-shrink-0 ml-3">
+          {open ? '收起 ▲' : '展开 ▼'}
+        </span>
+      </button>
+
+      {/* Expanded diagnosis */}
+      {open && (
+        <div className="border-t border-gray-100 px-5 py-4 grid grid-cols-1 md:grid-cols-2 gap-5">
+          {/* Content Pillars */}
+          {pillars.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                内容支柱
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {pillars.map((p, i) => (
+                  <span
+                    key={p.id}
+                    className={`text-xs px-2.5 py-1 rounded-full font-medium ${PILLAR_COLORS[i % PILLAR_COLORS.length]}`}
+                  >
+                    {p.name} {Math.round(p.post_ratio * 100)}%
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Target Audience */}
+          {audience && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                目标受众
+              </p>
+              <div className="space-y-1 text-xs text-gray-700">
+                {audience.age_range && (
+                  <p>年龄：{audience.age_range}{audience.location ? ` · ${audience.location}` : ''}</p>
+                )}
+                {audience.interests?.slice(0, 3).map((i, idx) => (
+                  <p key={idx} className="text-gray-500">· {i}</p>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Active Platforms */}
+          {activePlatforms.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                发布平台
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {activePlatforms.map(([platform, cfg]) => (
+                  <span
+                    key={platform}
+                    className="text-xs bg-gray-100 text-gray-700 px-2.5 py-1 rounded-full"
+                  >
+                    {platform} · {cfg.post_frequency}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Brand Voice */}
+          {voice && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                品牌语气
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {voice.tone_keywords?.map(kw => (
+                  <span
+                    key={kw}
+                    className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded"
+                  >
+                    {kw}
+                  </span>
+                ))}
+                <span className="text-xs text-gray-400 px-2 py-0.5">
+                  {voice.formality} · emoji {voice.emoji_usage}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Keywords */}
+          {keywords.length > 0 && (
+            <div className="md:col-span-2">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                核心关键词
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {keywords.slice(0, 10).map(kw => (
+                  <span
+                    key={kw}
+                    className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded font-mono"
+                  >
+                    {kw}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
+
+// ─── Route Selector ───────────────────────────────────────────────────────────
+
+const ROUTES: { id: RouteId; icon: string; label: string; desc: string; color: string; activeClass: string }[] = [
+  {
+    id: 'route_a',
+    icon: '🔑',
+    label: 'Keyword',
+    desc: 'SEO 关键词 → 2 个帖子变体',
+    color: 'text-indigo-600',
+    activeClass: 'bg-indigo-600 text-white border-indigo-600',
+  },
+  {
+    id: 'route_b',
+    icon: '📹',
+    label: 'Video Remix',
+    desc: '爆款视频 → 转录 → 品牌改写',
+    color: 'text-purple-600',
+    activeClass: 'bg-purple-600 text-white border-purple-600',
+  },
+  {
+    id: 'route_c',
+    icon: '💡',
+    label: 'Free Topic',
+    desc: '自定义话题 → 2 个帖子变体',
+    color: 'text-emerald-600',
+    activeClass: 'bg-emerald-600 text-white border-emerald-600',
+  },
+]
 
 const PLATFORMS: { id: Platform; label: string }[] = [
   { id: 'facebook', label: 'Facebook' },
@@ -38,16 +217,16 @@ const PLATFORMS: { id: Platform; label: string }[] = [
   { id: 'instagram', label: 'Instagram' },
 ]
 
+const ROUTE_COLORS: Record<string, string> = {
+  route_a: 'bg-indigo-100 text-indigo-700',
+  route_b: 'bg-purple-100 text-purple-700',
+  route_c: 'bg-emerald-100 text-emerald-700',
+}
+
 const ROUTE_LABELS: Record<string, string> = {
   route_a: 'Route A',
   route_b: 'Route B',
   route_c: 'Route C',
-}
-
-const ROUTE_COLORS: Record<string, string> = {
-  route_a: 'bg-blue-100 text-blue-700',
-  route_b: 'bg-purple-100 text-purple-700',
-  route_c: 'bg-green-100 text-green-700',
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -58,6 +237,49 @@ const STATUS_COLORS: Record<string, string> = {
   rejected: 'bg-red-100 text-red-700',
 }
 
+// ─── Result Card ──────────────────────────────────────────────────────────────
+
+function ResultCard({ post, index }: { post: PostResult; index: number }) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <div className="border border-gray-200 rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-start justify-between px-4 py-3 bg-gray-50 hover:bg-gray-100 transition-colors text-left gap-3"
+      >
+        <div className="min-w-0">
+          <span className="text-xs font-semibold text-gray-500">V{index + 1}</span>
+          <p className="text-sm font-medium text-gray-900 truncate mt-0.5">{post.title}</p>
+        </div>
+        <span className="text-gray-400 text-xs flex-shrink-0 mt-1">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="px-4 py-4 space-y-3 text-xs">
+          <div>
+            <p className="font-semibold text-gray-500 uppercase tracking-wide mb-1">脚本</p>
+            <p className="text-gray-800 whitespace-pre-wrap leading-relaxed">{post.script}</p>
+          </div>
+          <div>
+            <p className="font-semibold text-gray-500 uppercase tracking-wide mb-1">Caption</p>
+            <p className="text-gray-800 leading-relaxed">{post.caption}</p>
+          </div>
+          <div>
+            <p className="font-semibold text-gray-500 uppercase tracking-wide mb-1">Hashtags</p>
+            <p className="text-indigo-600">{post.hashtags?.join(' ')}</p>
+          </div>
+          <div>
+            <p className="font-semibold text-gray-500 uppercase tracking-wide mb-1">视觉描述</p>
+            <p className="text-gray-600 italic">{post.visual_brief}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Platform Selector ────────────────────────────────────────────────────────
+
 function PlatformSelector({
   value,
   onChange,
@@ -66,170 +288,68 @@ function PlatformSelector({
   onChange: (v: Platform[]) => void
 }) {
   return (
-    <div className="flex gap-3 flex-wrap">
+    <div className="flex gap-4 flex-wrap">
       {PLATFORMS.map(p => (
         <label key={p.id} className="flex items-center gap-1.5 cursor-pointer select-none">
           <input
             type="checkbox"
             checked={value.includes(p.id)}
-            onChange={e => {
-              if (e.target.checked) {
-                onChange([...value, p.id])
-              } else {
-                onChange(value.filter(v => v !== p.id))
-              }
-            }}
+            onChange={e =>
+              onChange(e.target.checked ? [...value, p.id] : value.filter(v => v !== p.id))
+            }
             className="w-3.5 h-3.5 rounded border-gray-300"
           />
-          <span className="text-xs text-gray-700">{p.label}</span>
+          <span className="text-sm text-gray-700">{p.label}</span>
         </label>
       ))}
     </div>
   )
 }
 
-function ResultCard({ post, index }: { post: PostResult; index: number }) {
-  const [expanded, setExpanded] = useState(false)
+// ─── Generate Button ──────────────────────────────────────────────────────────
 
-  return (
-    <div className="border border-gray-200 rounded-lg overflow-hidden">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 hover:bg-gray-100 text-left transition-colors"
-      >
-        <span className="text-xs font-medium text-gray-900 truncate pr-4">
-          V{index + 1}: {post.title}
-        </span>
-        <span className="text-gray-400 text-xs flex-shrink-0">{expanded ? '▲' : '▼'}</span>
-      </button>
-      {expanded && (
-        <div className="px-4 py-3 space-y-3">
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Script</p>
-            <p className="text-xs text-gray-800 whitespace-pre-wrap leading-relaxed">{post.script}</p>
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Caption</p>
-            <p className="text-xs text-gray-800 leading-relaxed">{post.caption}</p>
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Hashtags</p>
-            <p className="text-xs text-indigo-600">{post.hashtags?.join(' ')}</p>
-          </div>
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Visual Brief</p>
-            <p className="text-xs text-gray-600 italic">{post.visual_brief}</p>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function RouteCard({
-  icon,
-  title,
-  description,
-  accentClass,
-  input,
-  platforms,
+function GenerateButton({
   loading,
-  result,
-  error,
-  onGenerate,
-  onPlatformChange,
+  disabled,
+  activeClass,
   children,
+  onClick,
 }: {
-  icon: string
-  title: string
-  description: string
-  accentClass: string
-  input: string
-  platforms: Platform[]
   loading: boolean
-  result: PostResult[] | null
-  error: string
-  onGenerate: () => void
-  onPlatformChange: (v: Platform[]) => void
+  disabled: boolean
+  activeClass: string
   children: ReactNode
+  onClick: () => void
 }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-5 flex flex-col gap-4">
-      <div>
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-lg">{icon}</span>
-          <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
-        </div>
-        <p className="text-xs text-gray-500">{description}</p>
-      </div>
-
-      <div className="space-y-3">
-        {children}
-        <div>
-          <label className="block text-xs font-medium text-gray-600 mb-1">Platforms</label>
-          <PlatformSelector value={platforms} onChange={onPlatformChange} />
-        </div>
-      </div>
-
-      <button
-        onClick={onGenerate}
-        disabled={loading || !input.trim()}
-        className={`mt-auto w-full ${accentClass} disabled:opacity-40 text-white text-sm font-medium py-2 rounded-lg transition-colors flex items-center justify-center gap-2`}
-      >
-        {loading ? (
-          <>
-            <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-            Generating…
-          </>
-        ) : (
-          'Generate'
-        )}
-      </button>
-
-      {error && (
-        <p className="text-xs text-red-600 bg-red-50 border border-red-100 rounded p-2">{error}</p>
-      )}
-
-      {result && result.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-            Results ({result.length} variants)
-          </p>
-          {result.map((post, i) => (
-            <ResultCard key={i} post={post} index={i} />
-          ))}
-        </div>
-      )}
-    </div>
+    <button
+      onClick={onClick}
+      disabled={loading || disabled}
+      className={`w-full ${activeClass} disabled:opacity-40 text-white text-sm font-semibold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-2`}
+    >
+      {loading ? (
+        <>
+          <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+          生成中…
+        </>
+      ) : children}
+    </button>
   )
 }
 
+// ─── Main Component ───────────────────────────────────────────────────────────
+
 export function OperationsConsole({ clientId }: OperationsConsoleProps) {
-  const [brief, setBrief] = useState<BriefSummary | null>(null)
+  const [brief, setBrief] = useState<MasterBrief | null>(null)
   const [briefLoading, setBriefLoading] = useState(true)
 
-  // Route A
-  const [aKeyword, setAKeyword] = useState('')
-  const [aPlatforms, setAPlatforms] = useState<Platform[]>(['facebook', 'tiktok'])
-  const [aLoading, setALoading] = useState(false)
-  const [aResult, setAResult] = useState<PostResult[] | null>(null)
-  const [aError, setAError] = useState('')
+  const [activeRoute, setActiveRoute] = useState<RouteId>('route_a')
+  const [input, setInput] = useState('')
+  const [platforms, setPlatforms] = useState<Platform[]>(['facebook', 'tiktok'])
+  const [loading, setLoading] = useState(false)
+  const [results, setResults] = useState<PostResult[] | null>(null)
+  const [error, setError] = useState('')
 
-  // Route B
-  const [bVideoUrl, setBVideoUrl] = useState('')
-  const [bPlatforms, setBPlatforms] = useState<Platform[]>(['facebook', 'tiktok'])
-  const [bLoading, setBLoading] = useState(false)
-  const [bResult, setBResult] = useState<PostResult[] | null>(null)
-  const [bError, setBError] = useState('')
-
-  // Route C
-  const [cTopic, setCTopic] = useState('')
-  const [cPlatforms, setCPlatforms] = useState<Platform[]>(['facebook', 'tiktok'])
-  const [cLoading, setCLoading] = useState(false)
-  const [cResult, setCResult] = useState<PostResult[] | null>(null)
-  const [cError, setCError] = useState('')
-
-  // Recent posts
   const [recentPosts, setRecentPosts] = useState<RecentPost[]>([])
   const [postsLoading, setPostsLoading] = useState(true)
 
@@ -264,218 +384,170 @@ export function OperationsConsole({ clientId }: OperationsConsoleProps) {
     fetchPosts()
   }, [fetchBrief, fetchPosts])
 
-  const handleRouteA = async () => {
-    if (!aKeyword.trim()) return
-    setALoading(true)
-    setAError('')
-    setAResult(null)
+  // Reset form when switching routes
+  useEffect(() => {
+    setInput('')
+    setResults(null)
+    setError('')
+  }, [activeRoute])
+
+  const handleGenerate = async () => {
+    if (!input.trim() || !brief) return
+    setLoading(true)
+    setError('')
+    setResults(null)
+
+    const endpoint =
+      activeRoute === 'route_a' ? '/api/content/route-a'
+      : activeRoute === 'route_b' ? '/api/content/route-b'
+      : '/api/content/route-c'
+
+    const bodyKey =
+      activeRoute === 'route_a' ? 'keyword'
+      : activeRoute === 'route_b' ? 'video_url'
+      : 'topic'
+
     try {
-      const res = await fetch('/api/content/route-a', {
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_id: clientId,
-          keyword: aKeyword.trim(),
-          platforms: aPlatforms,
-        }),
+        body: JSON.stringify({ client_id: clientId, [bodyKey]: input.trim(), platforms }),
       })
       const data = await res.json()
       if (!res.ok || !data.success) throw new Error(data.error ?? 'Generation failed')
-      setAResult(data.variants ?? [])
+      setResults(data.variants ?? [])
       void fetchPosts()
     } catch (err) {
-      setAError(err instanceof Error ? err.message : 'Unknown error')
+      setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
-      setALoading(false)
+      setLoading(false)
     }
   }
 
-  const handleRouteB = async () => {
-    if (!bVideoUrl.trim()) return
-    setBLoading(true)
-    setBError('')
-    setBResult(null)
-    try {
-      const res = await fetch('/api/content/route-b', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_id: clientId,
-          video_url: bVideoUrl.trim(),
-          platforms: bPlatforms,
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok || !data.success) throw new Error(data.error ?? 'Generation failed')
-      setBResult(data.variants ?? [])
-      void fetchPosts()
-    } catch (err) {
-      setBError(err instanceof Error ? err.message : 'Unknown error')
-    } finally {
-      setBLoading(false)
-    }
-  }
+  const activeRouteConfig = ROUTES.find(r => r.id === activeRoute)!
 
-  const handleRouteC = async () => {
-    if (!cTopic.trim()) return
-    setCLoading(true)
-    setCError('')
-    setCResult(null)
-    try {
-      const res = await fetch('/api/content/route-c', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          client_id: clientId,
-          topic: cTopic.trim(),
-          platforms: cPlatforms,
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok || !data.success) throw new Error(data.error ?? 'Generation failed')
-      setCResult(data.variants ?? data.posts ?? [])
-      void fetchPosts()
-    } catch (err) {
-      setCError(err instanceof Error ? err.message : 'Unknown error')
-    } finally {
-      setCLoading(false)
-    }
-  }
+  const inputLabel =
+    activeRoute === 'route_a' ? 'SEO 关键词'
+    : activeRoute === 'route_b' ? '视频 URL'
+    : '话题 / 创意'
+
+  const inputPlaceholder =
+    activeRoute === 'route_a' ? '例如：月子餐推荐'
+    : activeRoute === 'route_b' ? 'TikTok / YouTube / Instagram URL'
+    : '例如：新年开工大吉'
 
   return (
-    <div className="space-y-6">
-      {/* Brief status banner */}
-      <div
-        className={`rounded-xl border px-5 py-3 flex items-center gap-3 ${
-          briefLoading
-            ? 'bg-gray-50 border-gray-200'
-            : brief
-              ? 'bg-green-50 border-green-200'
-              : 'bg-amber-50 border-amber-200'
-        }`}
-      >
-        <span className="text-xl">
-          {briefLoading ? '⏳' : brief ? '✅' : '⚠️'}
-        </span>
-        <div>
-          {briefLoading && (
-            <p className="text-sm text-gray-500">Checking Master Brief…</p>
-          )}
-          {!briefLoading && brief && (
-            <p className="text-sm text-green-800">
-              Active Master Brief:{' '}
-              <span className="font-semibold">{brief.brand_name ?? 'Unnamed Brand'}</span>
-              {' '}— all generation routes ready
-            </p>
-          )}
-          {!briefLoading && !brief && (
-            <p className="text-sm text-amber-800">
-              No active Master Brief found. Switch to the{' '}
-              <span className="font-semibold">✨ Master Brief</span> tab to generate one first.
-            </p>
+    <div className="space-y-5">
+
+      {/* ── 1. Brief status / diagnosis ── */}
+      {briefLoading ? (
+        <div className="bg-gray-50 border border-gray-200 rounded-xl px-5 py-4 animate-pulse">
+          <div className="h-4 bg-gray-200 rounded w-48" />
+          <div className="h-3 bg-gray-200 rounded w-80 mt-2" />
+        </div>
+      ) : brief ? (
+        <BrandDiagnosis brief={brief} />
+      ) : (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-4 flex items-start gap-3">
+          <span className="text-xl">⚠️</span>
+          <p className="text-sm text-amber-800">
+            未找到 Active Master Brief。请先切换到{' '}
+            <span className="font-semibold">✨ Master Brief</span> 标签生成品牌档案。
+          </p>
+        </div>
+      )}
+
+      {/* ── 2. Content Generation ── */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        {/* Route pill selector */}
+        <div className="px-5 py-4 border-b border-gray-100">
+          <div className="flex gap-2 flex-wrap">
+            {ROUTES.map(route => (
+              <button
+                key={route.id}
+                onClick={() => setActiveRoute(route.id)}
+                disabled={!brief}
+                className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium border transition-all disabled:opacity-40 ${
+                  activeRoute === route.id
+                    ? route.activeClass
+                    : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:text-gray-800 bg-white'
+                }`}
+              >
+                <span>{route.icon}</span>
+                {route.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-gray-400 mt-2">{activeRouteConfig.desc}</p>
+        </div>
+
+        {/* Input form */}
+        <div className="px-5 py-5 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              {inputLabel}
+            </label>
+            <input
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleGenerate()}
+              placeholder={inputPlaceholder}
+              disabled={loading || !brief}
+              className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">发布平台</label>
+            <PlatformSelector value={platforms} onChange={setPlatforms} />
+          </div>
+
+          <GenerateButton
+            loading={loading}
+            disabled={!input.trim() || !brief}
+            activeClass={activeRouteConfig.activeClass}
+            onClick={handleGenerate}
+          >
+            生成 2 个变体
+          </GenerateButton>
+
+          {error && (
+            <div className="bg-red-50 border border-red-100 rounded-xl px-4 py-3">
+              <p className="text-sm text-red-700 font-medium">生成失败</p>
+              <p className="text-xs text-red-600 mt-0.5">{error}</p>
+            </div>
           )}
         </div>
+
+        {/* Results */}
+        {results && results.length > 0 && (
+          <div className="border-t border-gray-100 px-5 py-5">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">
+              生成结果（{results.length} 个变体）
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {results.map((post, i) => (
+                <ResultCard key={i} post={post} index={i} />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Generation cards */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Route A — Keyword */}
-        <RouteCard
-          icon="🔑"
-          title="Route A — Keyword"
-          description="SEO keyword → 2 brand-aligned social posts"
-          accentClass="bg-indigo-600 hover:bg-indigo-700"
-          input={aKeyword}
-          platforms={aPlatforms}
-          loading={aLoading}
-          result={brief ? aResult : null}
-          error={aError}
-          onGenerate={handleRouteA}
-          onPlatformChange={setAPlatforms}
-        >
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Keyword</label>
-            <input
-              value={aKeyword}
-              onChange={e => setAKeyword(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleRouteA()}
-              placeholder="e.g. 月子餐推荐"
-              disabled={aLoading || !brief}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
-            />
-          </div>
-        </RouteCard>
-
-        {/* Route B — Video Remix */}
-        <RouteCard
-          icon="📹"
-          title="Route B — Video Remix"
-          description="Viral video URL → transcribe → brand rewrite"
-          accentClass="bg-purple-600 hover:bg-purple-700"
-          input={bVideoUrl}
-          platforms={bPlatforms}
-          loading={bLoading}
-          result={brief ? bResult : null}
-          error={bError}
-          onGenerate={handleRouteB}
-          onPlatformChange={setBPlatforms}
-        >
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Video URL</label>
-            <input
-              value={bVideoUrl}
-              onChange={e => setBVideoUrl(e.target.value)}
-              placeholder="TikTok / YouTube / Instagram URL"
-              disabled={bLoading || !brief}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
-            />
-          </div>
-        </RouteCard>
-
-        {/* Route C — Free Topic */}
-        <RouteCard
-          icon="💡"
-          title="Route C — Free Topic"
-          description="Any topic or idea → 2 on-brand post variants"
-          accentClass="bg-emerald-600 hover:bg-emerald-700"
-          input={cTopic}
-          platforms={cPlatforms}
-          loading={cLoading}
-          result={brief ? cResult : null}
-          error={cError}
-          onGenerate={handleRouteC}
-          onPlatformChange={setCPlatforms}
-        >
-          <div>
-            <label className="block text-xs font-medium text-gray-600 mb-1">Topic</label>
-            <input
-              value={cTopic}
-              onChange={e => setCTopic(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleRouteC()}
-              placeholder="e.g. 新年开工大吉"
-              disabled={cLoading || !brief}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
-            />
-          </div>
-        </RouteCard>
-      </div>
-
-      {/* Recent generated posts */}
+      {/* ── 3. Recent Posts ── */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-900">Recent Generated Posts</h2>
+          <h2 className="text-sm font-semibold text-gray-900">最近生成的帖子</h2>
           <a href="/dashboard/content" className="text-xs text-indigo-600 hover:underline">
-            View all content →
+            查看全部 →
           </a>
         </div>
         {postsLoading ? (
-          <div className="py-8 text-center">
-            <div className="text-gray-400 text-sm animate-pulse">Loading posts…</div>
-          </div>
+          <div className="py-8 text-center text-gray-400 text-sm animate-pulse">加载中…</div>
         ) : recentPosts.length === 0 ? (
-          <div className="py-12 text-center">
-            <p className="text-gray-400 text-sm">No posts generated yet.</p>
-            <p className="text-gray-400 text-xs mt-1">Use a generation route above to create your first content.</p>
+          <div className="py-10 text-center">
+            <p className="text-gray-400 text-sm">还没有生成过帖子</p>
+            <p className="text-gray-400 text-xs mt-1">使用上方生成入口开始创作</p>
           </div>
         ) : (
           <div className="divide-y divide-gray-50">
@@ -491,12 +563,10 @@ export function OperationsConsole({ clientId }: OperationsConsoleProps) {
                     >
                       {ROUTE_LABELS[post.route] ?? post.route}
                     </span>
-                    <span className="text-xs text-gray-400">
-                      {post.platforms?.join(', ')}
-                    </span>
+                    <span className="text-xs text-gray-400">{post.platforms?.join(', ')}</span>
                     <span className="text-xs text-gray-300">·</span>
                     <span className="text-xs text-gray-400">
-                      {new Date(post.created_at).toLocaleDateString()}
+                      {new Date(post.created_at).toLocaleDateString('zh-CN')}
                     </span>
                   </div>
                 </div>

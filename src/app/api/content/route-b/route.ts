@@ -59,6 +59,10 @@ export async function POST(req: NextRequest) {
       status: 'draft' as const,
     }
 
+    if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      console.error('[route-b] SUPABASE_SERVICE_ROLE_KEY not set — using anon client, insert will be silently blocked by RLS')
+    }
+
     const { data: savedPosts, error } = await supabaseAdmin
       .from('content_posts')
       .insert([
@@ -81,7 +85,14 @@ export async function POST(req: NextRequest) {
       ])
       .select()
 
-    if (error) throw error
+    if (error) {
+      console.error('[route-b] DB insert error:', JSON.stringify(error))
+      throw error
+    }
+    if (!savedPosts?.length) {
+      console.error('[route-b] DB insert returned no rows — RLS may be blocking (anon key fallback?)')
+      throw new Error('Content generated but failed to save — check Render logs for DB error')
+    }
 
     return NextResponse.json({
       success: true,
