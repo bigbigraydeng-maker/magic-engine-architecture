@@ -79,10 +79,24 @@ export async function refineBrief(input: RefineInput): Promise<RefineResult> {
   }
 
   if (!parsed.patch || typeof parsed.patch !== 'object') {
-    return { success: false, error: 'Claude returned an empty or invalid patch.' }
+    return { success: false, error: 'Claude returned an invalid patch structure.' }
   }
 
-  // ── 5. Apply patch to Supabase ────────────────────────────────────────────────
+  const isEmptyPatch = Object.keys(parsed.patch).length === 0
+
+  // ── 5. Apply patch to Supabase (skip if no fields changed) ───────────────────
+  if (isEmptyPatch) {
+    // Conversational reply — no DB update needed, just return the reasoning
+    return {
+      success: true,
+      patch: {},
+      reasoning: parsed.reasoning,
+      updatedBrief: brief as MasterBrief,
+      inputTokens: claudeResult.input_tokens + claudeResult.output_tokens,
+      costUsd: claudeResult.cost_usd,
+    }
+  }
+
   const { data: updated, error: updateError } = await supabaseAdmin
     .from('master_briefs')
     .update({

@@ -86,12 +86,12 @@ CRITICAL OUTPUT RULES:
 1. Your ENTIRE response must be a single valid JSON object — nothing before or after it.
 2. Start your response IMMEDIATELY with { — no preamble, no explanation, no markdown fences.
 3. Only include fields that need to change in "patch" — omit unchanged fields.
-4. "reasoning" must explain what you changed and why (1–3 sentences, plain text inside the JSON).
-5. If the request is ambiguous, apply the most reasonable interpretation.
+4. "reasoning" must be plain text (no Markdown) inside the JSON string.
+5. If the request is purely conversational (asking a question, requesting an explanation, no changes needed), return patch as {} and put your full answer in "reasoning".
 6. Nested objects (brand_voice, target_audience, etc.) must be FULLY REPLACED — include all sub-fields.
 
 REQUIRED OUTPUT FORMAT (respond ONLY with this JSON, nothing else):
-{"reasoning":"string — what changed and why","patch":{...only changed fields...}}`
+{"reasoning":"your explanation or change summary here","patch":{...only changed fields, or empty {} if no changes...}}`
 
 // ── Message builder ────────────────────────────────────────────────────────────
 
