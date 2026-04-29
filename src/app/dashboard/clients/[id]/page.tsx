@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { BriefPanel } from './_components/BriefPanel';
+import { OperationsConsole } from './_components/OperationsConsole';
 
 interface Client {
   id: string;
@@ -26,7 +27,7 @@ interface ContentPost {
   created_at: string;
 }
 
-type Tab = 'overview' | 'airtable' | 'brief';
+type Tab = 'overview' | 'airtable' | 'brief' | 'operations';
 
 const STATUS_COLORS: Record<string, string> = {
   draft: 'bg-yellow-100 text-yellow-800',
@@ -153,6 +154,7 @@ export default function ClientDetailPage() {
         <nav className="flex gap-1">
           {([
             { id: 'brief', label: '✨ Master Brief' },
+            { id: 'operations', label: '🚀 Operations' },
             { id: 'overview', label: 'Overview' },
             { id: 'airtable', label: 'Airtable' },
           ] as { id: Tab; label: string }[]).map(tab => (
@@ -174,6 +176,10 @@ export default function ClientDetailPage() {
       {/* Tab Content */}
       {activeTab === 'brief' && (
         <BriefPanel clientId={clientId} />
+      )}
+
+      {activeTab === 'operations' && (
+        <OperationsConsole clientId={clientId} />
       )}
 
       {activeTab === 'overview' && (
