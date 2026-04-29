@@ -10,7 +10,7 @@ export async function GET(req: NextRequest) {
 
     let query = supabaseAdmin
       .from('content_posts')
-      .select('id, client_id, title, route, platforms, status, caption, script, hashtags, visual_brief, created_at, clients(name)')
+      .select('id, client_id, title, route, platforms, status, caption, script, hashtags, visual_brief, scheduled_at, created_at, clients(name)')
       .order('created_at', { ascending: false })
       .limit(100)
 

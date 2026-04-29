@@ -3,16 +3,27 @@ import { supabaseAdmin } from '@/lib/supabase'
 
 // GET /api/clients/[id]/posts
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
-    const { data, error } = await supabaseAdmin
+    const { searchParams } = new URL(req.url)
+    const statusParam = searchParams.get('status')
+
+    let query = supabaseAdmin
       .from('content_posts')
       .select('id, title, status, route, platforms, caption, hashtags, visual_brief, scheduled_at, format, ratio, created_at')
       .eq('client_id', params.id)
-      .order('created_at', { ascending: false })
-      .limit(100)
+      .order('scheduled_at', { ascending: true, nullsFirst: false })
+      .limit(200)
+
+    if (statusParam) {
+      const statuses = statusParam.split(',').map(s => s.trim()).filter(Boolean)
+      if (statuses.length === 1) query = query.eq('status', statuses[0])
+      else if (statuses.length > 1) query = query.in('status', statuses)
+    }
+
+    const { data, error } = await query
 
     if (error) throw error
     return NextResponse.json({ posts: data ?? [] })

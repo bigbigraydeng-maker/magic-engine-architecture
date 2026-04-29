@@ -48,6 +48,29 @@ interface Client {
   name: string
 }
 
+// Dimension hints shown above the visual prompt
+const RATIO_FOR_FORMAT_PLATFORM: Record<string, string> = {
+  reel_instagram: '9:16 (1080×1920)',
+  reel_tiktok:    '9:16 (1080×1920)',
+  reel_facebook:  '9:16 (1080×1920)',
+  story_instagram:'9:16 (1080×1920)',
+  story_facebook: '9:16 (1080×1920)',
+  video_youtube:  '16:9 (1920×1080)',
+  video_facebook: '16:9 (1920×1080)',
+  feed_instagram: '4:5 (1080×1350)',
+  image_instagram:'4:5 (1080×1350)',
+  image_facebook: '4:5 (1080×1350)',
+  carousel_instagram:'1:1 (1080×1080)',
+  image_twitter:  '16:9 (1200×675)',
+}
+
+function getDimensionHint(format: string | null, platforms: string[] | null): string {
+  if (!format) return ''
+  const pl = (platforms ?? [])[0]?.toLowerCase() ?? ''
+  const key = `${format.toLowerCase()}_${pl}`
+  return RATIO_FOR_FORMAT_PLATFORM[key] ?? RATIO_FOR_FORMAT_PLATFORM[`${format.toLowerCase()}_`] ?? ''
+}
+
 interface PublerAccount {
   id: string
   provider: string
@@ -373,16 +396,51 @@ function EditablePlatforms({
 // ── Asset cell ─────────────────────────────────────────────────────────────────
 
 function AssetCell({
-  post, genState, readyAsset, onGenerate, onCancel, onSchedule, onShowError,
+  post, genState, readyAsset, clientId, onGenerate, onCancel, onSchedule, onShowError, onUploaded,
 }: {
   post: Post
   genState?: GenState
   readyAsset?: VisualAsset
+  clientId: string
   onGenerate: () => void
   onCancel: () => void
   onSchedule: (assetId: string) => void
   onShowError?: (error: {postId: string, message: string, code?: string, retryCount: number}) => void
+  onUploaded: (asset: VisualAsset) => void
 }) {
+  // Hooks MUST be at the top — before any early returns
+  const [uploading, setUploading] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('post_id', post.id)
+      fd.append('client_id', clientId)
+      const res = await fetch('/api/visual/upload', { method: 'POST', body: fd })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error)
+      onUploaded({
+        id: json.asset_id,
+        post_id: post.id,
+        asset_type: json.asset_type,
+        generation_status: 'ready',
+        storage_url: json.storage_url,
+        provider_job_id: null,
+        created_at: new Date().toISOString(),
+      })
+    } catch (err) {
+      alert(`Upload failed: ${(err as Error).message}`)
+    } finally {
+      setUploading(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
   // Queued state (waiting to start generation)
   if (genState?.queued && !genState.generating) {
     return (
@@ -506,15 +564,32 @@ function AssetCell({
     )
   }
 
-  // Initial state - show generation button
+  // Initial state - show generation + upload buttons
   const type = assetTypeFromFormat(post.format)
+
   return (
-    <button
-      onClick={onGenerate}
-      className="text-xs px-2 py-1 bg-indigo-500 text-white rounded hover:bg-indigo-600 whitespace-nowrap"
-    >
-      {type === 'video' ? '▶ Video' : '🖼 Image'}
-    </button>
+    <div className="flex flex-col items-center gap-1">
+      <button
+        onClick={onGenerate}
+        className="text-xs px-2 py-1 bg-indigo-500 text-white rounded hover:bg-indigo-600 whitespace-nowrap w-full"
+      >
+        {type === 'video' ? '▶ Gen Video' : '🖼 Gen Image'}
+      </button>
+      <button
+        onClick={() => fileRef.current?.click()}
+        disabled={uploading}
+        className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded hover:bg-gray-200 whitespace-nowrap w-full disabled:opacity-50"
+      >
+        {uploading ? '上传中…' : '⬆ Upload'}
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm"
+        className="hidden"
+        onChange={handleUpload}
+      />
+    </div>
   )
 }
 
@@ -523,6 +598,7 @@ function AssetCell({
 export default function VisualsPage() {
   const [clients, setClients] = useState<Client[]>([])
   const [selectedClientId, setSelectedClientId] = useState('')
+  const [statusFilter, setStatusFilter] = useState('approved,scheduled')
   const [posts, setPosts] = useState<Post[]>([])
   const [assets, setAssets] = useState<VisualAsset[]>([])
   const [genStates, setGenStates] = useState<Record<string, GenState>>({})
@@ -582,11 +658,14 @@ export default function VisualsPage() {
     if (list.length && !selectedClientId) setSelectedClientId(list[0].id)
   }, [selectedClientId])
 
-  const fetchPosts = useCallback(async (clientId: string) => {
-    const res = await fetch(`/api/clients/${clientId}/posts`)
+  const fetchPosts = useCallback(async (clientId: string, status?: string) => {
+    const params = new URLSearchParams()
+    const s = status ?? statusFilter
+    if (s) params.set('status', s)
+    const res = await fetch(`/api/clients/${clientId}/posts?${params}`)
     const d = await res.json()
     setPosts(d.posts ?? [])
-  }, [])
+  }, [statusFilter])
 
   const fetchAssets = useCallback(async (clientId: string) => {
     const res = await fetch(`/api/visual/assets?client_id=${clientId}`)
@@ -600,7 +679,7 @@ export default function VisualsPage() {
       fetchPosts(selectedClientId)
       fetchAssets(selectedClientId)
     }
-  }, [selectedClientId, fetchPosts, fetchAssets])
+  }, [selectedClientId, fetchPosts, fetchAssets, statusFilter])
   useEffect(() => {
     if (toast) {
       const timer = setTimeout(() => setToast(null), 5000)
@@ -765,6 +844,13 @@ export default function VisualsPage() {
     } finally { setSyncing(false) }
   }, [selectedClientId, fetchPosts])
 
+  // ── Upload handler ─────────────────────────────────────────────────────────
+
+  const handleUploaded = useCallback((asset: VisualAsset) => {
+    setAssets(prev => [asset, ...prev.filter(a => a.post_id !== asset.post_id || a.generation_status !== 'ready')])
+    setToast({ type: 'success', message: `Uploaded successfully` })
+  }, [])
+
   // ── Derived ────────────────────────────────────────────────────────────────
 
   const readyAssetByPost = assets.reduce<Record<string, VisualAsset>>((acc, a) => {
@@ -787,6 +873,18 @@ export default function VisualsPage() {
         >
           <option value="">Select client…</option>
           {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <select
+          value={statusFilter}
+          onChange={e => setStatusFilter(e.target.value)}
+          className="text-sm border border-gray-200 rounded px-2 py-1 bg-white text-gray-900"
+        >
+          <option value="approved,scheduled">已批准 + 已排期</option>
+          <option value="approved">已批准</option>
+          <option value="scheduled">已排期</option>
+          <option value="">全部</option>
+          <option value="draft">草稿</option>
+          <option value="published">已发布</option>
         </select>
         <button
           onClick={handleSync}
@@ -811,9 +909,9 @@ export default function VisualsPage() {
                 <th className="w-[90px] px-2 py-2 text-left font-medium border-b border-r border-gray-200">Format</th>
                 <th className="w-16 px-2 py-2 text-left font-medium border-b border-r border-gray-200">Platform</th>
                 <th className="w-36 px-2 py-2 text-left font-medium border-b border-r border-gray-200">Date (NZT)</th>
-                <th className="min-w-[160px] px-2 py-2 text-left font-medium border-b border-r border-gray-200">Headline</th>
+                <th className="w-40 max-w-[160px] px-2 py-2 text-left font-medium border-b border-r border-gray-200">Headline</th>
                 <th className="min-w-[200px] px-2 py-2 text-left font-medium border-b border-r border-gray-200">Caption</th>
-                <th className="min-w-[200px] px-2 py-2 text-left font-medium border-b border-r border-gray-200">Prompt</th>
+                <th className="min-w-[220px] px-2 py-2 text-left font-medium border-b border-r border-gray-200">Prompt + Dimensions</th>
                 <th className="min-w-[140px] px-2 py-2 text-left font-medium border-b border-r border-gray-200">Hashtags</th>
                 <th className="w-24 px-2 py-2 text-center font-medium border-b border-gray-200">Asset</th>
               </tr>
@@ -855,8 +953,8 @@ export default function VisualsPage() {
                     />
                   </td>
 
-                  {/* Headline */}
-                  <td className="px-2 py-1.5 border-r border-gray-100">
+                  {/* Headline — capped width */}
+                  <td className="px-2 py-1.5 border-r border-gray-100 w-40 max-w-[160px]">
                     <EditableText
                       value={post.title}
                       onSave={v => patchPost(post.id, { title: v })}
@@ -873,13 +971,32 @@ export default function VisualsPage() {
                     />
                   </td>
 
-                  {/* Prompt */}
+                  {/* Prompt + Dimensions */}
                   <td className="px-2 py-1.5 border-r border-gray-100">
-                    <EditableTextarea
-                      value={post.visual_brief}
-                      onSave={v => patchPost(post.id, { visual_brief: v })}
-                      placeholder="Image / video prompt…"
-                    />
+                    {(() => {
+                      const hint = getDimensionHint(post.format, post.platforms)
+                      return (
+                        <>
+                          {(post.format || hint) && (
+                            <div className="flex items-center gap-1 mb-1 flex-wrap">
+                              {post.format && (
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium capitalize ${FORMAT_STYLE[post.format.toLowerCase()] ?? 'bg-gray-100 text-gray-600'}`}>
+                                  {post.format}
+                                </span>
+                              )}
+                              {hint && (
+                                <span className="text-[10px] text-gray-400 font-mono">{hint}</span>
+                              )}
+                            </div>
+                          )}
+                          <EditableTextarea
+                            value={post.visual_brief}
+                            onSave={v => patchPost(post.id, { visual_brief: v })}
+                            placeholder="Image / video prompt…"
+                          />
+                        </>
+                      )
+                    })()}
                   </td>
 
                   {/* Hashtags */}
@@ -899,10 +1016,12 @@ export default function VisualsPage() {
                         queuePosition: getQueuePositionForPost(post.id),
                       }}
                       readyAsset={readyAssetByPost[post.id]}
+                      clientId={selectedClientId}
                       onGenerate={() => handleGenerate(post)}
                       onCancel={() => handleCancel(post.id)}
                       onSchedule={assetId => openPubModal(assetId, post.id)}
                       onShowError={setErrorModal}
+                      onUploaded={handleUploaded}
                     />
                   </td>
                 </tr>

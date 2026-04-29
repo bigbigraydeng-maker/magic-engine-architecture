@@ -19,16 +19,25 @@ interface ContentPost {
   script?: string;
   hashtags?: string[];
   visual_brief?: string;
+  scheduled_at?: string | null;
   created_at: string;
   clients?: { name: string } | null;
 }
 
 const statusColors: Record<string, string> = {
-  draft: 'bg-yellow-100 text-yellow-800',
-  approved: 'bg-green-100 text-green-800',
+  draft:     'bg-yellow-100 text-yellow-800',
+  approved:  'bg-green-100 text-green-800',
   scheduled: 'bg-blue-100 text-blue-800',
   published: 'bg-gray-100 text-gray-700',
-  rejected: 'bg-red-100 text-red-800',
+  rejected:  'bg-red-100 text-red-800',
+};
+
+const statusDotColors: Record<string, string> = {
+  draft:     'bg-yellow-400',
+  approved:  'bg-green-500',
+  scheduled: 'bg-blue-500',
+  published: 'bg-gray-400',
+  rejected:  'bg-red-400',
 };
 
 const routeColors: Record<string, string> = {
@@ -46,9 +55,17 @@ const routeLabels: Record<string, string> = {
 const RATIO_OPTIONS = [
   { value: '1:1',  label: '方形 1:1 (通用)' },
   { value: '4:5',  label: '竖版 4:5 (Instagram 动态)' },
-  { value: '9:16', label: '故事 9:16 (TikTok / Reels / Story)' },
-  { value: '16:9', label: '横版 16:9 (YouTube / FB 横版)' },
+  { value: '9:16', label: '故事 9:16 (TikTok / Reels)' },
+  { value: '16:9', label: '横版 16:9 (YouTube)' },
 ];
+
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const MONTH_NAMES = [
+  'January','February','March','April','May','June',
+  'July','August','September','October','November','December',
+];
+
+type ViewMode = 'list' | 'calendar';
 
 function isNewPost(created_at: string) {
   return Date.now() - new Date(created_at).getTime() < 60 * 60 * 1000;
@@ -63,12 +80,97 @@ function suggestRatio(platforms: string[]): string {
   return '1:1';
 }
 
+function getCalendarDays(year: number, month: number): (number | null)[] {
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  // Monday-first week: Mon=0, Tue=1 … Sun=6
+  const startOffset = (firstDay.getDay() + 6) % 7;
+  const totalCells = startOffset + lastDay.getDate();
+  const rows = Math.ceil(totalCells / 7);
+  const cells: (number | null)[] = [];
+  for (let i = 0; i < rows * 7; i++) {
+    const day = i - startOffset + 1;
+    cells.push(day >= 1 && day <= lastDay.getDate() ? day : null);
+  }
+  return cells;
+}
+
+function ymd(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+// ── Calendar day cell ─────────────────────────────────────────────────────────
+
+function CalendarCell({
+  day, year, month, posts, onOpen,
+}: {
+  day: number | null;
+  year: number;
+  month: number;
+  posts: ContentPost[];
+  onOpen: (post: ContentPost) => void;
+}) {
+  const today = new Date();
+  const isToday = day !== null
+    && today.getFullYear() === year
+    && today.getMonth() === month
+    && today.getDate() === day;
+
+  const dayStr = day
+    ? `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+    : '';
+
+  const dayPosts = day
+    ? posts.filter(p => p.scheduled_at && ymd(p.scheduled_at) === dayStr)
+    : [];
+
+  const visible = dayPosts.slice(0, 3);
+  const hiddenCount = dayPosts.length - visible.length;
+
+  return (
+    <div className={`min-h-[96px] border-b border-r border-gray-100 p-1.5 ${
+      day ? 'bg-white hover:bg-gray-50/60' : 'bg-gray-50/40'
+    }`}>
+      {day && (
+        <>
+          <div className={`text-xs font-semibold mb-1 w-6 h-6 flex items-center justify-center rounded-full ${
+            isToday ? 'bg-indigo-600 text-white' : 'text-gray-500'
+          }`}>
+            {day}
+          </div>
+          <div className="space-y-0.5">
+            {visible.map(post => (
+              <button
+                key={post.id}
+                onClick={() => onOpen(post)}
+                title={post.title}
+                className={`w-full text-left text-[10px] leading-tight px-1.5 py-0.5 rounded flex items-center gap-1 truncate group ${statusColors[post.status] ?? 'bg-gray-100 text-gray-600'}`}
+              >
+                <span className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${statusDotColors[post.status] ?? 'bg-gray-400'}`} />
+                <span className="truncate">{post.title}</span>
+              </button>
+            ))}
+            {hiddenCount > 0 && (
+              <div className="text-[10px] text-gray-400 px-1">+{hiddenCount} more</div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+
 export default function ContentBoardPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [posts, setPosts] = useState<ContentPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedClient, setSelectedClient] = useState('');
   const [selectedStatus, setSelectedStatus] = useState('draft');
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [calYear, setCalYear] = useState(() => new Date().getFullYear());
+  const [calMonth, setCalMonth] = useState(() => new Date().getMonth());
   const [modalPost, setModalPost] = useState<ContentPost | null>(null);
   const [syncing, setSyncing] = useState<string | null>(null);
 
@@ -96,9 +198,7 @@ export default function ContentBoardPage() {
 
   // Cleanup polling on unmount
   useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
 
   useEffect(() => {
@@ -112,20 +212,26 @@ export default function ContentBoardPage() {
     try {
       const params = new URLSearchParams();
       if (selectedClient) params.set('client_id', selectedClient);
-      if (selectedStatus) params.set('status', selectedStatus);
+      // Calendar mode: always fetch approved+scheduled so dates are populated
+      const statusToFetch = viewMode === 'calendar' ? 'approved,scheduled' : selectedStatus;
+      if (statusToFetch) params.set('status', statusToFetch);
       const res = await fetch(`/api/content/posts?${params}`);
       const json = await res.json();
       setPosts(json.posts ?? []);
     } finally {
       setLoading(false);
     }
-  }, [selectedClient, selectedStatus]);
+  }, [selectedClient, selectedStatus, viewMode]);
 
-  useEffect(() => {
-    fetchPosts();
-  }, [fetchPosts]);
+  useEffect(() => { fetchPosts(); }, [fetchPosts]);
 
-  // ─── Modal helpers ───────────────────────────────────────────────────────────
+  // Switch to calendar mode → auto-set status to approved+scheduled
+  const handleViewMode = (mode: ViewMode) => {
+    setViewMode(mode);
+    if (mode === 'calendar') setSelectedStatus('approved,scheduled');
+  };
+
+  // ── Modal helpers ─────────────────────────────────────────────────────────
 
   const openModal = (post: ContentPost) => {
     setModalPost(post);
@@ -153,7 +259,7 @@ export default function ContentBoardPage() {
     if (pollRef.current) clearInterval(pollRef.current);
   };
 
-  // ─── Save edits ──────────────────────────────────────────────────────────────
+  // ── Save edits ────────────────────────────────────────────────────────────
 
   const handleSaveEdit = async () => {
     if (!modalPost) return;
@@ -194,14 +300,10 @@ export default function ContentBoardPage() {
     }
   };
 
-  // ─── Image preview generation ────────────────────────────────────────────────
+  // ── Image preview generation ──────────────────────────────────────────────
 
   const handleGeneratePreview = async () => {
     if (!modalPost) return;
-    if (!modalPost.visual_brief && !editVisualBrief) {
-      setPreviewError('请先填写 Visual Brief 再生成图片');
-      return;
-    }
     setPreviewStatus('generating');
     setPreviewImageUrl(null);
     setPreviewError('');
@@ -223,21 +325,19 @@ export default function ContentBoardPage() {
 
       pollRef.current = setInterval(async () => {
         try {
-          const pollRes = await fetch(`/api/visual/status/${assetId}`);
-          const pollJson = await pollRes.json();
-          const asset = pollJson.asset;
-          if (asset?.generation_status === 'ready') {
+          const pr = await fetch(`/api/visual/status/${assetId}`);
+          const pj = await pr.json();
+          const a = pj.asset;
+          if (a?.generation_status === 'ready') {
             clearInterval(pollRef.current!);
             setPreviewStatus('done');
-            setPreviewImageUrl(asset.storage_url || asset.provider_url || null);
-          } else if (asset?.generation_status === 'failed') {
+            setPreviewImageUrl(a.storage_url || a.provider_url || null);
+          } else if (a?.generation_status === 'failed') {
             clearInterval(pollRef.current!);
             setPreviewStatus('failed');
-            setPreviewError(asset.error_message || '生成失败，请重试');
+            setPreviewError(a.error_message || '生成失败，请重试');
           }
-        } catch {
-          // Transient poll error — keep polling
-        }
+        } catch { /* transient */ }
       }, 5000);
     } catch (err) {
       setPreviewStatus('failed');
@@ -245,23 +345,18 @@ export default function ContentBoardPage() {
     }
   };
 
-  // ─── Selection helpers ───────────────────────────────────────────────────────
+  // ── Selection helpers ─────────────────────────────────────────────────────
 
   const toggleSelect = (id: string) => {
     setSelectedIds(prev => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
   };
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === posts.length) {
-      setSelectedIds(new Set());
-    } else {
-      setSelectedIds(new Set(posts.map(p => p.id)));
-    }
+    setSelectedIds(selectedIds.size === posts.length ? new Set() : new Set(posts.map(p => p.id)));
   };
 
   const batchUpdate = async (ids: string[], status: 'approved' | 'rejected') => {
@@ -285,27 +380,36 @@ export default function ContentBoardPage() {
     }
   };
 
-  const handleBatchUpdate = (status: 'approved' | 'rejected') =>
-    batchUpdate(Array.from(selectedIds), status);
-
   const handleSyncAirtable = async (post: ContentPost) => {
     setSyncing(post.id);
     try {
       await fetch('/api/airtable/sync-content', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: post.clients?.name ? selectedClient : '', post_ids: [post.id] }),
+        body: JSON.stringify({ client_id: selectedClient, post_ids: [post.id] }),
       });
-    } finally {
-      setSyncing(null);
-    }
+    } finally { setSyncing(null); }
   };
 
   const allSelected = posts.length > 0 && selectedIds.size === posts.length;
   const someSelected = selectedIds.size > 0;
 
+  // Calendar days
+  const calDays = getCalendarDays(calYear, calMonth);
+  const prevMonth = () => {
+    if (calMonth === 0) { setCalYear(y => y - 1); setCalMonth(11); }
+    else setCalMonth(m => m - 1);
+  };
+  const nextMonth = () => {
+    if (calMonth === 11) { setCalYear(y => y + 1); setCalMonth(0); }
+    else setCalMonth(m => m + 1);
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-5">
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -320,187 +424,252 @@ export default function ContentBoardPage() {
         </Link>
       </div>
 
-      {/* Filters */}
+      {/* View toggle + filters */}
       <div className="flex gap-3 flex-wrap items-center">
+        {/* View toggle */}
+        <div className="flex rounded-lg border border-gray-200 bg-white overflow-hidden">
+          <button
+            onClick={() => handleViewMode('list')}
+            className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+              viewMode === 'list'
+                ? 'bg-indigo-600 text-white'
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            ☰ 列表
+          </button>
+          <button
+            onClick={() => handleViewMode('calendar')}
+            className={`px-3 py-1.5 text-sm font-medium transition-colors border-l border-gray-200 ${
+              viewMode === 'calendar'
+                ? 'bg-indigo-600 text-white'
+                : 'text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            📅 日历
+          </button>
+        </div>
+
+        {/* Client filter */}
         <select
           value={selectedClient}
-          onChange={(e) => setSelectedClient(e.target.value)}
+          onChange={e => setSelectedClient(e.target.value)}
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
         >
           <option value="">全部客户</option>
-          {clients.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
-          ))}
+          {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-        <select
-          value={selectedStatus}
-          onChange={(e) => setSelectedStatus(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-        >
-          <option value="draft">草稿（待审批）</option>
-          <option value="approved,scheduled">日历（已批准 + 已排期）</option>
-          <option value="approved">已批准</option>
-          <option value="scheduled">已排期</option>
-          <option value="published">已发布</option>
-          <option value="">全部</option>
-          <option value="rejected">已拒绝</option>
-        </select>
+
+        {/* Status filter — only shown in list mode */}
+        {viewMode === 'list' && (
+          <select
+            value={selectedStatus}
+            onChange={e => setSelectedStatus(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+          >
+            <option value="draft">草稿（待审批）</option>
+            <option value="approved">已批准</option>
+            <option value="scheduled">已排期</option>
+            <option value="published">已发布</option>
+            <option value="rejected">已拒绝</option>
+            <option value="">全部</option>
+          </select>
+        )}
+
+        {viewMode === 'calendar' && (
+          <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded">
+            日历显示：已批准 + 已排期
+          </span>
+        )}
       </div>
 
-      {/* Batch feedback — always visible so it persists after selection clears */}
       {batchMsg && (
         <p className={`text-sm px-1 ${batchMsg.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>
           {batchMsg}
         </p>
       )}
 
-      {/* Batch action bar — visible while items are selected */}
-      {someSelected && (
+      {/* Batch action bar */}
+      {someSelected && viewMode === 'list' && (
         <div className="flex items-center gap-3 bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3">
-          <span className="text-sm font-medium text-indigo-700">
-            已选 {selectedIds.size} 条
-          </span>
+          <span className="text-sm font-medium text-indigo-700">已选 {selectedIds.size} 条</span>
           <div className="flex gap-2 ml-auto">
-            <button
-              onClick={() => handleBatchUpdate('approved')}
-              disabled={batching}
-              className="bg-green-600 hover:bg-green-700 text-white text-sm px-4 py-1.5 rounded-lg disabled:opacity-50 transition-colors font-medium"
-            >
+            <button onClick={() => batchUpdate(Array.from(selectedIds), 'approved')} disabled={batching}
+              className="bg-green-600 hover:bg-green-700 text-white text-sm px-4 py-1.5 rounded-lg disabled:opacity-50 transition-colors font-medium">
               {batching ? '处理中…' : `✓ 批准 (${selectedIds.size})`}
             </button>
-            <button
-              onClick={() => handleBatchUpdate('rejected')}
-              disabled={batching}
-              className="bg-red-500 hover:bg-red-600 text-white text-sm px-4 py-1.5 rounded-lg disabled:opacity-50 transition-colors font-medium"
-            >
+            <button onClick={() => batchUpdate(Array.from(selectedIds), 'rejected')} disabled={batching}
+              className="bg-red-500 hover:bg-red-600 text-white text-sm px-4 py-1.5 rounded-lg disabled:opacity-50 transition-colors font-medium">
               ✕ 拒绝
             </button>
-            <button
-              onClick={() => setSelectedIds(new Set())}
-              className="text-sm text-gray-500 hover:text-gray-700 px-2"
-            >
-              取消
-            </button>
+            <button onClick={() => setSelectedIds(new Set())} className="text-sm text-gray-500 hover:text-gray-700 px-2">取消</button>
           </div>
         </div>
       )}
 
-      {/* Content Cards */}
-      {loading ? (
-        <div className="py-12 text-center text-gray-400">加载中…</div>
-      ) : posts.length === 0 ? (
-        <div className="bg-white rounded-xl border border-gray-200 py-16 text-center text-gray-400">
-          <p className="text-lg mb-2">暂无内容</p>
-          {selectedStatus === 'draft' && (
-            <p className="text-sm text-gray-400">
-              前往客户推广活动，批量生成内容草稿
-            </p>
-          )}
-        </div>
-      ) : (
-        <>
-          {/* Select all row */}
-          <div className="flex items-center gap-2 px-1">
-            <input
-              type="checkbox"
-              checked={allSelected}
-              onChange={toggleSelectAll}
-              className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-            />
-            <span className="text-xs text-gray-500">
-              {allSelected ? '取消全选' : `全选 (${posts.length})`}
-            </span>
+      {/* ── CALENDAR VIEW ─────────────────────────────────────────────────── */}
+      {viewMode === 'calendar' && (
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          {/* Month navigation */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+            <button onClick={prevMonth} className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-600">
+              ‹
+            </button>
+            <h2 className="text-sm font-semibold text-gray-800">
+              {MONTH_NAMES[calMonth]} {calYear}
+            </h2>
+            <button onClick={nextMonth} className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-600">
+              ›
+            </button>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {posts.map((post) => (
-              <div
-                key={post.id}
-                className={`bg-white rounded-xl border p-5 hover:shadow-md transition-shadow cursor-pointer ${
-                  selectedIds.has(post.id)
-                    ? 'border-indigo-400 ring-2 ring-indigo-100'
-                    : 'border-gray-200'
-                }`}
-                onClick={() => toggleSelect(post.id)}
-              >
-                {/* Card Header */}
-                <div className="flex items-start gap-3">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(post.id)}
-                    onChange={() => toggleSelect(post.id)}
-                    onClick={e => e.stopPropagation()}
-                    className="mt-0.5 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 flex-shrink-0"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-start gap-1.5 flex-1 min-w-0">
-                        <h3 className="text-sm font-semibold text-gray-900 leading-snug">{post.title}</h3>
-                        {isNewPost(post.created_at) && (
-                          <span className="flex-shrink-0 text-xs bg-emerald-500 text-white px-1.5 py-0.5 rounded font-bold tracking-wide">
-                            NEW
-                          </span>
-                        )}
+          {/* Legend */}
+          <div className="flex gap-3 px-4 py-2 border-b border-gray-100 flex-wrap">
+            {Object.entries(statusDotColors).map(([s, col]) => (
+              <span key={s} className="flex items-center gap-1 text-xs text-gray-500">
+                <span className={`w-2 h-2 rounded-full ${col}`} />
+                {s === 'draft' ? '草稿' : s === 'approved' ? '已批准' : s === 'scheduled' ? '已排期' : s === 'published' ? '已发布' : '已拒绝'}
+              </span>
+            ))}
+          </div>
+
+          {/* Weekday headers */}
+          <div className="grid grid-cols-7 border-b border-gray-100">
+            {WEEKDAYS.map(d => (
+              <div key={d} className="text-center text-xs font-medium text-gray-400 py-2 border-r border-gray-100 last:border-r-0">
+                {d}
+              </div>
+            ))}
+          </div>
+
+          {/* Calendar grid */}
+          {loading ? (
+            <div className="py-20 text-center text-gray-400 text-sm">加载中…</div>
+          ) : (
+            <div className="grid grid-cols-7">
+              {calDays.map((day, idx) => (
+                <CalendarCell
+                  key={idx}
+                  day={day}
+                  year={calYear}
+                  month={calMonth}
+                  posts={posts}
+                  onOpen={openModal}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Unscheduled posts */}
+          {!loading && (() => {
+            const unscheduled = posts.filter(p => !p.scheduled_at);
+            if (unscheduled.length === 0) return null;
+            return (
+              <div className="border-t border-gray-100 px-4 py-3">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                  未排期 ({unscheduled.length})
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {unscheduled.map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => openModal(p)}
+                      title={p.title}
+                      className={`text-xs px-2.5 py-1 rounded-full max-w-[180px] truncate ${statusColors[p.status] ?? 'bg-gray-100 text-gray-600'}`}
+                    >
+                      {p.title}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* ── LIST VIEW ─────────────────────────────────────────────────────── */}
+      {viewMode === 'list' && (
+        loading ? (
+          <div className="py-12 text-center text-gray-400">加载中…</div>
+        ) : posts.length === 0 ? (
+          <div className="bg-white rounded-xl border border-gray-200 py-16 text-center text-gray-400">
+            <p className="text-lg mb-2">暂无内容</p>
+            {selectedStatus === 'draft' && (
+              <p className="text-sm text-gray-400">前往客户推广活动，批量生成内容草稿</p>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center gap-2 px-1">
+              <input type="checkbox" checked={allSelected} onChange={toggleSelectAll}
+                className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" />
+              <span className="text-xs text-gray-500">{allSelected ? '取消全选' : `全选 (${posts.length})`}</span>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {posts.map(post => (
+                <div
+                  key={post.id}
+                  className={`bg-white rounded-xl border p-5 hover:shadow-md transition-shadow cursor-pointer ${
+                    selectedIds.has(post.id) ? 'border-indigo-400 ring-2 ring-indigo-100' : 'border-gray-200'
+                  }`}
+                  onClick={() => toggleSelect(post.id)}
+                >
+                  <div className="flex items-start gap-3">
+                    <input type="checkbox" checked={selectedIds.has(post.id)}
+                      onChange={() => toggleSelect(post.id)} onClick={e => e.stopPropagation()}
+                      className="mt-0.5 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-start gap-1.5 flex-1 min-w-0">
+                          <h3 className="text-sm font-semibold text-gray-900 leading-snug">{post.title}</h3>
+                          {isNewPost(post.created_at) && (
+                            <span className="flex-shrink-0 text-xs bg-emerald-500 text-white px-1.5 py-0.5 rounded font-bold tracking-wide">NEW</span>
+                          )}
+                        </div>
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${statusColors[post.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                          {post.status === 'draft' ? '草稿' : post.status === 'approved' ? '已批准' : post.status === 'scheduled' ? '已排期' : post.status === 'published' ? '已发布' : post.status === 'rejected' ? '已拒绝' : post.status}
+                        </span>
                       </div>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium whitespace-nowrap ${statusColors[post.status] ?? 'bg-gray-100 text-gray-600'}`}>
-                        {post.status === 'draft' ? '草稿' :
-                         post.status === 'approved' ? '已批准' :
-                         post.status === 'scheduled' ? '已排期' :
-                         post.status === 'published' ? '已发布' :
-                         post.status === 'rejected' ? '已拒绝' : post.status}
-                      </span>
-                    </div>
-
-                    {/* Tags */}
-                    <div className="flex flex-wrap gap-1.5 mt-2">
-                      <span className={`text-xs px-2 py-0.5 rounded font-medium ${routeColors[post.route] ?? 'bg-gray-100 text-gray-600'}`}>
-                        {routeLabels[post.route] ?? post.route}
-                      </span>
-                      {post.platforms?.map((p) => (
-                        <span key={p} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded capitalize">{p}</span>
-                      ))}
-                    </div>
-
-                    {/* Caption Preview */}
-                    {post.caption && (
-                      <p className="text-xs text-gray-500 mt-3 line-clamp-2">{post.caption}</p>
-                    )}
-
-                    {/* Footer */}
-                    <div className="flex items-center justify-between mt-4 pt-3 border-t border-gray-100">
-                      <span className="text-xs text-gray-400">{new Date(post.created_at).toLocaleDateString()}</span>
-                      <div className="flex gap-2" onClick={e => e.stopPropagation()}>
-                        <button
-                          onClick={() => openModal(post)}
-                          className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
-                        >
-                          查看详情
-                        </button>
-                        <span className="text-gray-300">·</span>
-                        <button
-                          onClick={() => handleSyncAirtable(post)}
-                          disabled={syncing === post.id}
-                          className="text-xs text-gray-500 hover:text-gray-700 font-medium disabled:opacity-50"
-                        >
-                          {syncing === post.id ? '同步中…' : '↑ Airtable'}
-                        </button>
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        <span className={`text-xs px-2 py-0.5 rounded font-medium ${routeColors[post.route] ?? 'bg-gray-100 text-gray-600'}`}>
+                          {routeLabels[post.route] ?? post.route}
+                        </span>
+                        {post.platforms?.map(p => (
+                          <span key={p} className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded capitalize">{p}</span>
+                        ))}
+                      </div>
+                      {post.caption && <p className="text-xs text-gray-500 mt-3 line-clamp-2">{post.caption}</p>}
+                      {post.scheduled_at && (
+                        <p className="text-xs text-blue-500 mt-2">
+                          📅 {new Date(post.scheduled_at).toLocaleDateString('en-NZ', { day: 'numeric', month: 'short', year: 'numeric' })}
+                        </p>
+                      )}
+                      <div className="flex items-center justify-between mt-4 pt-3 border-t border-gray-100">
+                        <span className="text-xs text-gray-400">{new Date(post.created_at).toLocaleDateString()}</span>
+                        <div className="flex gap-2" onClick={e => e.stopPropagation()}>
+                          <button onClick={() => openModal(post)} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium">查看详情</button>
+                          <span className="text-gray-300">·</span>
+                          <button onClick={() => handleSyncAirtable(post)} disabled={syncing === post.id}
+                            className="text-xs text-gray-500 hover:text-gray-700 font-medium disabled:opacity-50">
+                            {syncing === post.id ? '同步中…' : '↑ Airtable'}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        </>
+              ))}
+            </div>
+          </>
+        )
       )}
 
-      {/* Detail Modal */}
+      {/* ── Detail Modal ──────────────────────────────────────────────────── */}
       {modalPost && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={closeModal}>
-          <div
-            className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
-            onClick={(e) => e.stopPropagation()}
-          >
+          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+
             {/* Modal header */}
             <div className="sticky top-0 bg-white rounded-t-2xl border-b border-gray-100 px-6 py-4 flex items-start justify-between gap-3">
               <div className="flex-1 min-w-0">
@@ -512,21 +681,20 @@ export default function ContentBoardPage() {
                 </div>
                 <p className="text-xs text-gray-400 mt-0.5">
                   {new Date(modalPost.created_at).toLocaleString()} · {modalPost.clients?.name ?? ''}
+                  {modalPost.scheduled_at && (
+                    <span className="ml-2 text-blue-500">📅 {new Date(modalPost.scheduled_at).toLocaleDateString('en-NZ', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                  )}
                 </p>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 {!editMode ? (
-                  <button
-                    onClick={() => setEditMode(true)}
-                    className="text-xs text-indigo-600 hover:text-indigo-800 border border-indigo-200 hover:border-indigo-400 px-3 py-1.5 rounded-lg font-medium transition-colors"
-                  >
+                  <button onClick={() => setEditMode(true)}
+                    className="text-xs text-indigo-600 hover:text-indigo-800 border border-indigo-200 hover:border-indigo-400 px-3 py-1.5 rounded-lg font-medium transition-colors">
                     ✏️ 编辑
                   </button>
                 ) : (
-                  <button
-                    onClick={() => { setEditMode(false); setSaveMsg(''); }}
-                    className="text-xs text-gray-500 hover:text-gray-700 border border-gray-200 px-3 py-1.5 rounded-lg font-medium transition-colors"
-                  >
+                  <button onClick={() => { setEditMode(false); setSaveMsg(''); }}
+                    className="text-xs text-gray-500 hover:text-gray-700 border border-gray-200 px-3 py-1.5 rounded-lg font-medium transition-colors">
                     取消
                   </button>
                 )}
@@ -540,117 +708,72 @@ export default function ContentBoardPage() {
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Script</p>
                 {editMode ? (
-                  <textarea
-                    value={editScript}
-                    onChange={e => setEditScript(e.target.value)}
-                    rows={5}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-y"
-                  />
-                ) : (
-                  modalPost.script ? (
-                    <p className="text-gray-700 whitespace-pre-wrap bg-gray-50 rounded-lg p-3 text-xs">{modalPost.script}</p>
-                  ) : (
-                    <p className="text-gray-400 italic text-xs">（无）</p>
-                  )
-                )}
+                  <textarea value={editScript} onChange={e => setEditScript(e.target.value)} rows={5}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-y" />
+                ) : modalPost.script ? (
+                  <p className="text-gray-700 whitespace-pre-wrap bg-gray-50 rounded-lg p-3 text-xs">{modalPost.script}</p>
+                ) : <p className="text-gray-400 italic text-xs">（无）</p>}
               </div>
 
               {/* Caption */}
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Caption</p>
                 {editMode ? (
-                  <textarea
-                    value={editCaption}
-                    onChange={e => setEditCaption(e.target.value)}
-                    rows={4}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-y"
-                  />
-                ) : (
-                  modalPost.caption ? (
-                    <p className="text-gray-700 whitespace-pre-wrap bg-gray-50 rounded-lg p-3 text-xs">{modalPost.caption}</p>
-                  ) : (
-                    <p className="text-gray-400 italic text-xs">（无）</p>
-                  )
-                )}
+                  <textarea value={editCaption} onChange={e => setEditCaption(e.target.value)} rows={4}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-y" />
+                ) : modalPost.caption ? (
+                  <p className="text-gray-700 whitespace-pre-wrap bg-gray-50 rounded-lg p-3 text-xs">{modalPost.caption}</p>
+                ) : <p className="text-gray-400 italic text-xs">（无）</p>}
               </div>
 
               {/* Hashtags */}
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Hashtags</p>
                 {editMode ? (
-                  <input
-                    type="text"
-                    value={editHashtags}
-                    onChange={e => setEditHashtags(e.target.value)}
+                  <input type="text" value={editHashtags} onChange={e => setEditHashtags(e.target.value)}
                     placeholder="#tag1 #tag2 #tag3（空格分隔）"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                  />
-                ) : (
-                  modalPost.hashtags && modalPost.hashtags.length > 0 ? (
-                    <p className="text-indigo-600 text-xs">{modalPost.hashtags.join(' ')}</p>
-                  ) : (
-                    <p className="text-gray-400 italic text-xs">（无）</p>
-                  )
-                )}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                ) : modalPost.hashtags?.length ? (
+                  <p className="text-indigo-600 text-xs">{modalPost.hashtags.join(' ')}</p>
+                ) : <p className="text-gray-400 italic text-xs">（无）</p>}
               </div>
 
               {/* Visual Brief */}
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Visual Brief</p>
                 {editMode ? (
-                  <textarea
-                    value={editVisualBrief}
-                    onChange={e => setEditVisualBrief(e.target.value)}
-                    rows={3}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-y"
-                  />
-                ) : (
-                  modalPost.visual_brief ? (
-                    <p className="text-gray-700 bg-gray-50 rounded-lg p-3 text-xs">{modalPost.visual_brief}</p>
-                  ) : (
-                    <p className="text-gray-400 italic text-xs">（无）</p>
-                  )
-                )}
+                  <textarea value={editVisualBrief} onChange={e => setEditVisualBrief(e.target.value)} rows={3}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-y" />
+                ) : modalPost.visual_brief ? (
+                  <p className="text-gray-700 bg-gray-50 rounded-lg p-3 text-xs">{modalPost.visual_brief}</p>
+                ) : <p className="text-gray-400 italic text-xs">（无）</p>}
               </div>
 
-              {/* Save button (edit mode) */}
+              {/* Save button */}
               {editMode && (
                 <div className="flex items-center gap-3 pt-1">
-                  <button
-                    onClick={handleSaveEdit}
-                    disabled={savingEdit}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-5 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
-                  >
+                  <button onClick={handleSaveEdit} disabled={savingEdit}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-5 py-2 rounded-lg font-medium transition-colors disabled:opacity-50">
                     {savingEdit ? '保存中…' : '💾 保存修改'}
                   </button>
-                  {saveMsg && (
-                    <span className={`text-xs ${saveMsg.startsWith('✓') ? 'text-green-600' : 'text-red-500'}`}>{saveMsg}</span>
-                  )}
+                  {saveMsg && <span className={`text-xs ${saveMsg.startsWith('✓') ? 'text-green-600' : 'text-red-500'}`}>{saveMsg}</span>}
                 </div>
               )}
               {!editMode && saveMsg && (
                 <p className={`text-xs ${saveMsg.startsWith('✓') ? 'text-green-600' : 'text-red-500'}`}>{saveMsg}</p>
               )}
 
-              {/* ── Image Preview Section ─────────────────────────────── */}
+              {/* Image Preview */}
               <div className="border-t border-gray-100 pt-4">
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">图片预览生成</p>
                 <div className="flex items-center gap-2 mb-3 flex-wrap">
                   <label className="text-xs text-gray-600 font-medium whitespace-nowrap">比例：</label>
-                  <select
-                    value={previewRatio}
-                    onChange={e => setPreviewRatio(e.target.value)}
-                    className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white"
-                  >
-                    {RATIO_OPTIONS.map(o => (
-                      <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
+                  <select value={previewRatio} onChange={e => setPreviewRatio(e.target.value)}
+                    className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
+                    {RATIO_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
-                  <button
-                    onClick={handleGeneratePreview}
-                    disabled={previewStatus === 'generating'}
-                    className="bg-violet-600 hover:bg-violet-700 text-white text-xs px-4 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 whitespace-nowrap"
-                  >
+                  <button onClick={handleGeneratePreview} disabled={previewStatus === 'generating'}
+                    className="bg-violet-600 hover:bg-violet-700 text-white text-xs px-4 py-1.5 rounded-lg font-medium transition-colors disabled:opacity-50 whitespace-nowrap">
                     {previewStatus === 'generating' ? (
                       <span className="flex items-center gap-1.5">
                         <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
@@ -662,69 +785,35 @@ export default function ContentBoardPage() {
                     ) : '✨ 生成预览图'}
                   </button>
                 </div>
-
                 {previewStatus === 'generating' && (
-                  <p className="text-xs text-gray-400">WaveSpeed Flux-dev 生成中，通常需要 1-3 分钟，请耐心等待…</p>
+                  <p className="text-xs text-gray-400">WaveSpeed Flux-dev 生成中，通常 1-3 分钟，请耐心等待…</p>
                 )}
-
                 {previewStatus === 'failed' && (
                   <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2">
                     <p className="text-xs text-red-600">{previewError}</p>
                     <button onClick={handleGeneratePreview} className="text-xs text-red-700 underline mt-1">重试</button>
                   </div>
                 )}
-
                 {previewStatus === 'done' && previewImageUrl && (
                   <div className="mt-2">
-                    <img
-                      src={previewImageUrl}
-                      alt="Generated preview"
-                      className="w-full max-w-sm mx-auto rounded-xl border border-gray-200 shadow-sm"
-                    />
+                    <img src={previewImageUrl} alt="Generated preview" className="w-full max-w-sm mx-auto rounded-xl border border-gray-200 shadow-sm" />
                     <div className="flex gap-3 mt-2 justify-center">
-                      <a
-                        href={previewImageUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs text-indigo-600 hover:underline"
-                      >
-                        ↗ 查看原图
-                      </a>
-                      <button
-                        onClick={handleGeneratePreview}
-                        className="text-xs text-gray-500 hover:text-gray-700"
-                      >
-                        ↻ 重新生成
-                      </button>
+                      <a href={previewImageUrl} target="_blank" rel="noreferrer" className="text-xs text-indigo-600 hover:underline">↗ 查看原图</a>
+                      <button onClick={handleGeneratePreview} className="text-xs text-gray-500 hover:text-gray-700">↻ 重新生成</button>
                     </div>
                   </div>
                 )}
               </div>
-              {/* ──────────────────────────────────────────────────────── */}
 
-              {/* Quick approve/reject — only for drafts */}
-              {(modalPost.status === 'draft') && (
+              {/* Quick approve/reject */}
+              {modalPost.status === 'draft' && (
                 <div className="flex gap-2 pt-2 border-t border-gray-100">
-                  <button
-                    onClick={() => {
-                      const id = modalPost.id;
-                      closeModal();
-                      batchUpdate([id], 'approved');
-                    }}
-                    disabled={batching}
-                    className="flex-1 bg-green-600 hover:bg-green-700 text-white text-sm py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
-                  >
+                  <button onClick={() => { const id = modalPost.id; closeModal(); batchUpdate([id], 'approved'); }} disabled={batching}
+                    className="flex-1 bg-green-600 hover:bg-green-700 text-white text-sm py-2 rounded-lg font-medium transition-colors disabled:opacity-50">
                     ✓ 批准此条
                   </button>
-                  <button
-                    onClick={() => {
-                      const id = modalPost.id;
-                      closeModal();
-                      batchUpdate([id], 'rejected');
-                    }}
-                    disabled={batching}
-                    className="flex-1 bg-red-500 hover:bg-red-600 text-white text-sm py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
-                  >
+                  <button onClick={() => { const id = modalPost.id; closeModal(); batchUpdate([id], 'rejected'); }} disabled={batching}
+                    className="flex-1 bg-red-500 hover:bg-red-600 text-white text-sm py-2 rounded-lg font-medium transition-colors disabled:opacity-50">
                     ✕ 拒绝此条
                   </button>
                 </div>
