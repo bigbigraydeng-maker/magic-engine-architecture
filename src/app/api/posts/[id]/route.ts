@@ -11,7 +11,7 @@ export async function PATCH(
   try {
     const body = await req.json()
 
-    const allowed = ['title', 'caption', 'visual_brief', 'hashtags', 'scheduled_at', 'status']
+    const allowed = ['title', 'script', 'caption', 'visual_brief', 'hashtags', 'scheduled_at', 'status']
     const supabaseUpdate: Record<string, unknown> = {}
     for (const key of allowed) {
       if (key in body) supabaseUpdate[key] = body[key]

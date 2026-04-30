@@ -455,16 +455,32 @@ function AssetCell({
 
   // Generating state
   if (genState?.generating) {
-    const stage = STAGES[Math.floor(genState.elapsed / 30) % STAGES.length]
     const assetType = assetTypeFromFormat(post.format)
-    const stuckThresholdSec = assetType === 'video' ? 20 * 60 : 5 * 60 // 20 min for video, 5 min for image
-    const isStuck = (genState.elapsed ?? 0) > stuckThresholdSec
+    // Images: cancel after 10 min; videos: cancel after 20 min
+    const cancelThresholdSec = assetType === 'video' ? 20 * 60 : 10 * 60
+    // Show "slow" warning after 3 min for images, 10 min for videos
+    const slowThresholdSec = assetType === 'video' ? 10 * 60 : 3 * 60
+    const elapsed = genState.elapsed ?? 0
+    const isSlow = elapsed > slowThresholdSec
+    const isOverdue = elapsed > cancelThresholdSec
+
+    // Stage hint text shown beneath the timer
+    const stageHint = isOverdue
+      ? 'Overdue — cancel?'
+      : isSlow
+        ? 'Provider slow, still waiting…'
+        : assetType === 'video'
+          ? 'Video ~10-15 min'
+          : elapsed < 30
+            ? 'Starting…'
+            : 'Flux-dev ~3-7 min'
+
     return (
       <div className="flex flex-col items-center gap-1 py-1">
-        <div className={`w-6 h-6 border-2 border-t-transparent rounded-full animate-spin ${isStuck ? 'border-orange-400' : 'border-blue-400'}`} />
-        <span className={`text-[10px] font-medium ${isStuck ? 'text-orange-500' : 'text-blue-500'}`}>{genState.elapsed}s</span>
-        <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[80px]">{isStuck ? 'Slow…' : stage}</span>
-        {isStuck && (
+        <div className={`w-6 h-6 border-2 border-t-transparent rounded-full animate-spin ${isOverdue ? 'border-orange-400' : isSlow ? 'border-amber-400' : 'border-blue-400'}`} />
+        <span className={`text-[10px] font-medium ${isOverdue ? 'text-orange-500' : isSlow ? 'text-amber-600' : 'text-blue-500'}`}>{elapsed}s</span>
+        <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[84px]">{stageHint}</span>
+        {isOverdue && (
           <button
             onClick={onCancel}
             title="Cancel stuck generation"

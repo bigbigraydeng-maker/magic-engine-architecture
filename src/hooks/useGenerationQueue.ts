@@ -26,11 +26,18 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
   const timeoutRefs = useRef<Record<string, NodeJS.Timeout>>({})
   const retryTimeoutRefs = useRef<Record<string, NodeJS.Timeout>>({})
 
-  // HIGH FIX #1: Keep live ref to queueState so interval callbacks read current data
+  // Keep live ref to queueState so interval callbacks always read current data
   const queueStateRef = useRef(queueState)
   useEffect(() => {
     queueStateRef.current = queueState
   }, [queueState])
+
+  // Keep live ref to callbacks — prevents recreating all useCallbacks when the
+  // caller passes a new object identity on every render (e.g. inline `{onStatusChange}`)
+  const callbacksRef = useRef(callbacks)
+  useEffect(() => {
+    callbacksRef.current = callbacks
+  })
 
   // Restore queue from localStorage on mount
   useEffect(() => {
@@ -113,9 +120,7 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
         }))
 
         // Notify UI immediately so "Queued X" appears without waiting for a poll cycle
-        callbacks?.onStatusChange?.(postId, item)
-        // HIGH FIX #2: removed stale onQueueChange(queueState) call — the queue
-        // effect at the bottom already drives processQueue on every queue change
+        callbacksRef.current?.onStatusChange?.(postId, item)
         return item
       } catch (e) {
         throw new Error(
@@ -123,7 +128,7 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
         )
       }
     },
-    [callbacks]  // removed stale [queueState, callbacks] dep
+    []  // stable — reads callbacksRef.current at call time
   )
 
   /**
@@ -178,13 +183,14 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
               },
             }
           })
-          callbacks?.onStatusChange?.(postId, { ...item, elapsed, stage })
+          callbacksRef.current?.onStatusChange?.(postId, { ...item, elapsed, stage })
         }
       } catch {
         // Transient network error — will retry on next interval tick
       }
     },
-    [callbacks] // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps — handleGenerationComplete/Failed/Timeout are stable ([] deps), no re-creation needed
+    []
   )
 
   /**
@@ -198,13 +204,13 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
         delete newActive[item.postId]
         return { ...prev, activeGenerations: newActive }
       })
-      callbacks?.onStatusChange?.(item.postId, {
+      callbacksRef.current?.onStatusChange?.(item.postId, {
         ...item,
         status: 'ready',
         costUsd: (asset.cost_usd as number | undefined) || 0.02,
       })
     },
-    [callbacks] // eslint-disable-line react-hooks/exhaustive-deps
+    [] // stable — reads callbacksRef.current at call time
   )
 
   /**
@@ -231,26 +237,22 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
           return { ...prev, queue: [...prev.queue, retryItem], activeGenerations: newActive }
         })
 
-        callbacks?.onAutoRetry?.(item.postId, item.retryCount + 1, delay)
-        // The queue effect will pick up the new item and call processQueue automatically
-        // No need for a redundant setTimeout(() => processQueue(), delay)
-        retryTimeoutRefs.current[item.postId] = setTimeout(() => {
-          // processQueue is triggered by the queue effect; this is just a safety net
-        }, delay)
+        callbacksRef.current?.onAutoRetry?.(item.postId, item.retryCount + 1, delay)
+        // processQueue is driven by the queue-change effect; no manual timer needed
       } else {
         setQueueState((prev) => {
           const newActive = { ...prev.activeGenerations }
           delete newActive[item.postId]
           return { ...prev, activeGenerations: newActive }
         })
-        callbacks?.onStatusChange?.(item.postId, {
+        callbacksRef.current?.onStatusChange?.(item.postId, {
           ...item,
           status: 'failed',
           errorMessage: errorMessage || `Failed after ${item.retryCount} retries.`,
         })
       }
     },
-    [callbacks] // eslint-disable-line react-hooks/exhaustive-deps
+    [] // stable — reads callbacksRef.current at call time
   )
 
   /**
@@ -265,15 +267,15 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
         return { ...prev, activeGenerations: newActive }
       })
       const elapsedMs = Date.now() - item.startedAt
-      callbacks?.onTimeout?.(item.postId, elapsedMs)
-      callbacks?.onStatusChange?.(item.postId, {
+      callbacksRef.current?.onTimeout?.(item.postId, elapsedMs)
+      callbacksRef.current?.onStatusChange?.(item.postId, {
         ...item,
         status: 'timeout',
         errorMessage: 'Generation timed out. The provider may still be processing in the background.',
         elapsed: Math.floor(elapsedMs / 1000),
       })
     },
-    [callbacks] // eslint-disable-line react-hooks/exhaustive-deps
+    [] // stable — reads callbacksRef.current at call time
   )
 
   /**
@@ -301,9 +303,9 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
 
     if (promotedItem) {
       const item = promotedItem as GenerationQueueItem
-      callbacks?.onStatusChange?.(item.postId, item)
+      callbacksRef.current?.onStatusChange?.(item.postId, item)
     }
-  }, [callbacks])
+  }, []) // stable — reads callbacksRef.current at call time
 
   /**
    * Stop timers for a post
@@ -366,7 +368,7 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
         }
       })
     }
-  }, [queueState.activeGenerations, pollStatus, handleGenerationTimeout])
+  }, [queueState.activeGenerations, pollStatus, handleGenerationTimeout]) // pollStatus and handleGenerationTimeout are now stable (empty deps)
 
   /**
    * Process queue whenever it changes or a slot opens
