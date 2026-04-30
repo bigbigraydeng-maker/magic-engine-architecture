@@ -96,17 +96,17 @@ export async function runTracker(
     errors: [],
   }
 
-  // 3. Run each engine in parallel; within an engine, batch queries
-  const enginePromises = engines.map(engine =>
-    runEngineLane({
+  // 3. Run engines sequentially (not in parallel) to respect rate limits
+  // Each engine processes its queries in batches with delays between batches
+  for (const engine of engines) {
+    await runEngineLane({
       engine,
       queries,
       clientId: client.id,
       brandName,
       result,
     })
-  )
-  await Promise.all(enginePromises)
+  }
 
   // 4. Aggregate weekly snapshot (only if we got at least one successful run)
   if (result.runs_succeeded > 0) {
