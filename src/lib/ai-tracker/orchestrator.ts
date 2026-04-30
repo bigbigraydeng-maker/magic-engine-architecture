@@ -30,7 +30,7 @@ import type {
 // Concurrency: avoid hammering provider RPM limits. Each engine gets its
 // own "lane" so OpenAI and Claude run in parallel; within each lane we
 // process queries in batches.
-const PER_ENGINE_BATCH_SIZE = 3
+const PER_ENGINE_BATCH_SIZE = 1  // Process one query at a time to minimize concurrent load
 
 export interface RunTrackerInput {
   client_id: string
