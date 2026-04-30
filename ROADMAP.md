@@ -177,8 +177,13 @@ Git Commit（事实层）
   - ✅ `POST /api/ai-tracker/queries/generate` — Strategy Engine 生成 + 落库
   - ✅ `GET /api/ai-tracker/queries?client_id=...` — 列表
   - ✅ `POST /api/ai-tracker/queries` — 手动添加单条
-- [ ] **P7.1.4** 端到端验证：CTS Tours Brief → 生成有效问句
-  - 待用户手动验证（开发服务器 + curl/Postman）
+- [x] **P7.1.4** 端到端验证：CTS Tours Brief → 生成有效问句
+  - ✅ 2026-04-30 PoC：18 条问句生成，27.5s，成本 $0.026
+  - ✅ 100% AU/NZ 地域信号（New Zealand / Kiwi / Auckland）
+  - ✅ 100% AU/NZ 英语拼写（travellers / specialisation）
+  - ✅ 0 条提及客户品牌名（符合"看 AI 是否自发推荐"设计）
+  - ✅ 5 个分类全覆盖（comparison / how_to / recommendation / decision / discovery）
+  - ✅ GET round-trip 验证 18 条已持久化到 Supabase
 
 **LLM Runner（Day 3-5）**
 - [ ] **P7.1.5** `src/lib/ai-tracker/runners/openai.ts` — GPT-4o web search mode
