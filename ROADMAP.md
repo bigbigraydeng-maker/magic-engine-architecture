@@ -186,10 +186,10 @@ Git Commit（事实层）
   - ✅ GET round-trip 验证 18 条已持久化到 Supabase
 
 **LLM Runner（Day 3-5）**
-- [ ] **P7.1.5** `src/lib/ai-tracker/runners/openai.ts` — GPT-4o web search mode
-- [ ] **P7.1.6** `src/lib/ai-tracker/runners/claude.ts` — Claude with web search tool
-- [ ] **P7.1.7** `src/lib/ai-tracker/runners/perplexity.ts` — Sonar API
-- [ ] **P7.1.8** `src/lib/ai-tracker/parser.ts` — 自然语言回复 → 结构化排名 JSON
+- [x] **P7.1.5** `src/lib/ai-tracker/runners/openai.ts` — gpt-4o-search-preview + AU/NZ user_location
+- [x] **P7.1.6** `src/lib/ai-tracker/runners/claude.ts` — claude-sonnet-4-5 + web_search_20250305 tool
+- [ ] ⏸ **P7.1.7** `src/lib/ai-tracker/runners/perplexity.ts` — 暂缓（用户决策 2026-04-30：先做 OpenAI + Claude）
+- [x] **P7.1.8** `src/lib/ai-tracker/parser.ts` — 自然语言回复 → BrandMention[] + client_brand_rank（二次 Strategy Engine 调用）
 
 **编排与 API（Day 6-7）**
 - [ ] **P7.1.9** `src/lib/ai-tracker/orchestrator.ts` — N 问句 × 3 模型 = 3N 次并发
