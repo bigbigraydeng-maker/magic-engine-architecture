@@ -188,10 +188,11 @@ async function runEngineLane(input: EngineLaneInput): Promise<void> {
         processOne({ engine, query: q, clientId, brandName, result })
       )
     )
-    // Add 2-second delay between batches to prevent rate limiting
-    // This helps both runner calls (OpenAI/Claude) and parser calls (Claude)
+    // Add 10-second delay between batches to prevent rate limiting
+    // Claude's rate limit (30k tokens/min) is tight; even 2sec wasn't enough
+    // 10sec = 600ms per query, safer margin
     if (i + PER_ENGINE_BATCH_SIZE < queries.length) {
-      await new Promise(resolve => setTimeout(resolve, 2000))
+      await new Promise(resolve => setTimeout(resolve, 10000))
     }
   }
 }
