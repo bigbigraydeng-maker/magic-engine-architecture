@@ -1,0 +1,413 @@
+/**
+ * AI Visibility Tracker — Orchestrator.
+ *
+ * Runs one full Tracker pass for a client:
+ *   N questions × 2 engines (OpenAI + Claude) = 2N runner calls
+ *   plus 2N parser calls = ~4N total LLM round-trips per pass
+ *
+ * Pipeline per (query, engine):
+ *   1. Runner returns raw natural-language response + citations
+ *   2. Insert ai_visibility_runs row with raw_response (no rankings yet)
+ *   3. Parser converts raw_response → BrandMention[] + client_brand_rank
+ *   4. Update the row with parsed rankings
+ *
+ * After all runs complete, aggregate into a weekly ai_visibility_snapshots row.
+ *
+ * Reference: ROADMAP.md P7.1.9, ARCHITECTURE.md §12.4
+ */
+
+import { runOpenAI } from './runners/openai'
+import { runClaude } from './runners/claude'
+import { parseRanking } from './parser'
+import { supabaseAdmin } from '../supabase'
+import type {
+  AiEngine,
+  AiVisibilityQuery,
+  BrandMention,
+  MarketTag,
+} from '@/types/magic-engine'
+
+// Concurrency: avoid hammering provider RPM limits. Each engine gets its
+// own "lane" so OpenAI and Claude run in parallel; within each lane we
+// process queries in batches.
+const PER_ENGINE_BATCH_SIZE = 3
+
+export interface RunTrackerInput {
+  client_id: string
+  /** Optional subset of query IDs; defaults to all enabled queries. */
+  query_ids?: string[]
+  /** Override the engines run; defaults to both. */
+  engines?: AiEngine[]
+}
+
+export interface RunTrackerResult {
+  client_id: string
+  runs_attempted: number
+  runs_succeeded: number
+  runs_failed: number
+  client_brand_mentions: number
+  total_cost_usd: number
+  total_latency_ms: number
+  snapshot_id: string | null
+  errors: Array<{ query_id: string; engine: AiEngine; message: string }>
+}
+
+interface ClientRow {
+  id: string
+  name: string
+  domain: string | null
+}
+
+interface BriefRow {
+  brand_name: string | null
+}
+
+/**
+ * Run a complete tracker pass for a client.
+ * This is a long-running async function — typical runtime 1-5 minutes for
+ * 18 questions × 2 engines.
+ */
+export async function runTracker(
+  input: RunTrackerInput
+): Promise<RunTrackerResult> {
+  const startTime = Date.now()
+  const engines: AiEngine[] = input.engines ?? ['openai', 'anthropic']
+
+  // 1. Load client info + brand name
+  const { client, brandName } = await loadClientContext(input.client_id)
+
+  // 2. Load enabled queries (filtered by query_ids if provided)
+  const queries = await loadQueries(input.client_id, input.query_ids)
+  if (queries.length === 0) {
+    throw new Error(
+      `No enabled queries found for client ${input.client_id}. Generate questions first.`
+    )
+  }
+
+  const result: RunTrackerResult = {
+    client_id: input.client_id,
+    runs_attempted: queries.length * engines.length,
+    runs_succeeded: 0,
+    runs_failed: 0,
+    client_brand_mentions: 0,
+    total_cost_usd: 0,
+    total_latency_ms: 0,
+    snapshot_id: null,
+    errors: [],
+  }
+
+  // 3. Run each engine in parallel; within an engine, batch queries
+  const enginePromises = engines.map(engine =>
+    runEngineLane({
+      engine,
+      queries,
+      clientId: client.id,
+      brandName,
+      result,
+    })
+  )
+  await Promise.all(enginePromises)
+
+  // 4. Aggregate weekly snapshot (only if we got at least one successful run)
+  if (result.runs_succeeded > 0) {
+    result.snapshot_id = await aggregateSnapshot(client.id)
+  }
+
+  result.total_latency_ms = Date.now() - startTime
+  return result
+}
+
+// ── Internal helpers ─────────────────────────────────────────────────────────
+
+async function loadClientContext(
+  clientId: string
+): Promise<{ client: ClientRow; brandName: string }> {
+  const { data: client, error } = await supabaseAdmin
+    .from('clients')
+    .select('id, name, domain')
+    .eq('id', clientId)
+    .single<ClientRow>()
+
+  if (error || !client) {
+    throw new Error(`Client not found: ${clientId}`)
+  }
+
+  // Try active master_brief first; fall back to client.name
+  const { data: brief } = await supabaseAdmin
+    .from('master_briefs')
+    .select('brand_name')
+    .eq('client_id', clientId)
+    .eq('status', 'active')
+    .maybeSingle<BriefRow>()
+
+  const brandName = brief?.brand_name?.trim() || client.name
+  return { client, brandName }
+}
+
+async function loadQueries(
+  clientId: string,
+  queryIds?: string[]
+): Promise<AiVisibilityQuery[]> {
+  let query = supabaseAdmin
+    .from('ai_visibility_queries')
+    .select('*')
+    .eq('client_id', clientId)
+    .eq('enabled', true)
+
+  if (queryIds && queryIds.length > 0) {
+    query = query.in('id', queryIds)
+  }
+
+  const { data, error } = await query
+
+  if (error) {
+    throw new Error(`Failed to load queries: ${error.message}`)
+  }
+  return (data ?? []) as AiVisibilityQuery[]
+}
+
+interface EngineLaneInput {
+  engine: AiEngine
+  queries: AiVisibilityQuery[]
+  clientId: string
+  brandName: string
+  result: RunTrackerResult
+}
+
+/**
+ * Process all queries for one engine, in serial batches to respect RPM.
+ */
+async function runEngineLane(input: EngineLaneInput): Promise<void> {
+  const { engine, queries, clientId, brandName, result } = input
+
+  for (let i = 0; i < queries.length; i += PER_ENGINE_BATCH_SIZE) {
+    const batch = queries.slice(i, i + PER_ENGINE_BATCH_SIZE)
+    await Promise.all(
+      batch.map(q =>
+        processOne({ engine, query: q, clientId, brandName, result })
+      )
+    )
+  }
+}
+
+interface ProcessOneInput {
+  engine: AiEngine
+  query: AiVisibilityQuery
+  clientId: string
+  brandName: string
+  result: RunTrackerResult
+}
+
+/**
+ * Run + parse one (query, engine) pair, persisting results.
+ * Catches all errors so one failure doesn't kill the whole pass.
+ */
+async function processOne(input: ProcessOneInput): Promise<void> {
+  const { engine, query, clientId, brandName, result } = input
+  const market: MarketTag = (query.market_tag ?? 'au-nz') as MarketTag
+
+  try {
+    // 1. Runner call
+    const runner = engine === 'openai' ? runOpenAI : runClaude
+    const runnerOut = await runner({ question: query.question, market })
+
+    // 2. Insert ai_visibility_runs row immediately (we have raw response)
+    const { data: runRow, error: insertErr } = await supabaseAdmin
+      .from('ai_visibility_runs')
+      .insert({
+        client_id: clientId,
+        query_id: query.id,
+        ai_engine: runnerOut.ai_engine,
+        ai_model: runnerOut.ai_model,
+        raw_response: runnerOut.raw_response || null,
+        brands_mentioned: [],
+        client_brand_rank: null,
+        tokens_used: runnerOut.tokens_used,
+        cost_usd: runnerOut.cost_usd,
+        latency_ms: runnerOut.latency_ms,
+        error_message: runnerOut.error_message,
+      })
+      .select('id')
+      .single<{ id: string }>()
+
+    if (insertErr || !runRow) {
+      result.runs_failed++
+      result.errors.push({
+        query_id: query.id,
+        engine,
+        message: `DB insert failed: ${insertErr?.message ?? 'no row'}`,
+      })
+      return
+    }
+
+    if (runnerOut.error_message) {
+      // Runner itself failed — count as failed, no parse
+      result.runs_failed++
+      result.errors.push({
+        query_id: query.id,
+        engine,
+        message: runnerOut.error_message,
+      })
+      if (runnerOut.cost_usd) result.total_cost_usd += runnerOut.cost_usd
+      return
+    }
+
+    // 3. Parser call — convert raw response to structured rankings
+    let brands: BrandMention[] = []
+    let clientBrandRank: number | null = null
+    let parseCost = 0
+    try {
+      const parsed = await parseRanking({
+        rawResponse: runnerOut.raw_response,
+        clientBrandName: brandName,
+      })
+      brands = parsed.brands
+      clientBrandRank = parsed.client_brand_rank
+      parseCost = parsed.parse_cost_usd
+    } catch (parseErr) {
+      // Parser failed but runner succeeded — keep raw, log warning
+      const msg =
+        parseErr instanceof Error ? parseErr.message : 'Unknown parse error'
+      result.errors.push({
+        query_id: query.id,
+        engine,
+        message: `Parser failed: ${msg}`,
+      })
+    }
+
+    // 4. Update the run row with parsed data
+    await supabaseAdmin
+      .from('ai_visibility_runs')
+      .update({
+        brands_mentioned: brands,
+        client_brand_rank: clientBrandRank,
+        cost_usd: (runnerOut.cost_usd ?? 0) + parseCost,
+      })
+      .eq('id', runRow.id)
+
+    result.runs_succeeded++
+    result.total_cost_usd += (runnerOut.cost_usd ?? 0) + parseCost
+    if (clientBrandRank !== null) result.client_brand_mentions++
+  } catch (err: unknown) {
+    result.runs_failed++
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    result.errors.push({ query_id: query.id, engine, message: msg })
+  }
+}
+
+/**
+ * Aggregate this week's runs into ai_visibility_snapshots.
+ * Uses Monday of the current week as the snapshot key.
+ */
+async function aggregateSnapshot(clientId: string): Promise<string | null> {
+  const weekOf = mondayOfThisWeek().toISOString().slice(0, 10) // YYYY-MM-DD
+
+  // Pull all runs for this client this week
+  const weekStart = new Date(weekOf + 'T00:00:00.000Z').toISOString()
+  const { data: runs, error } = await supabaseAdmin
+    .from('ai_visibility_runs')
+    .select('ai_engine, ai_model, client_brand_rank, brands_mentioned')
+    .eq('client_id', clientId)
+    .gte('ran_at', weekStart)
+
+  if (error || !runs) return null
+
+  const totalRuns = runs.length
+  const ranks = runs
+    .map(r => (r as { client_brand_rank: number | null }).client_brand_rank)
+    .filter((r): r is number => r !== null)
+  const mentionsCount = ranks.length
+  const avgRank =
+    mentionsCount > 0 ? ranks.reduce((a, b) => a + b, 0) / mentionsCount : null
+  const modelsCovered = Array.from(
+    new Set(runs.map(r => (r as { ai_model: string }).ai_model))
+  )
+
+  // Build a compact ranking_table for reporting:
+  //   { brands: [{ name, mentions, avg_rank, by_engine }] }
+  const ranking_table = buildRankingTable(
+    runs as Array<{
+      ai_engine: string
+      brands_mentioned: BrandMention[]
+    }>
+  )
+
+  // Upsert by (client_id, week_of)
+  const { data: snapshot, error: upsertErr } = await supabaseAdmin
+    .from('ai_visibility_snapshots')
+    .upsert(
+      {
+        client_id: clientId,
+        week_of: weekOf,
+        avg_rank: avgRank,
+        mentions_count: mentionsCount,
+        total_runs: totalRuns,
+        models_covered: modelsCovered,
+        ranking_table,
+      },
+      { onConflict: 'client_id,week_of' }
+    )
+    .select('id')
+    .single<{ id: string }>()
+
+  if (upsertErr || !snapshot) return null
+  return snapshot.id
+}
+
+/** Aggregate brand mentions across all runs into a flat ranking table. */
+function buildRankingTable(
+  runs: Array<{ ai_engine: string; brands_mentioned: BrandMention[] }>
+): Record<string, unknown> {
+  const byBrand = new Map<
+    string,
+    { mentions: number; rankSum: number; byEngine: Record<string, number[]> }
+  >()
+
+  for (const run of runs) {
+    const mentions = Array.isArray(run.brands_mentioned)
+      ? run.brands_mentioned
+      : []
+    for (const m of mentions) {
+      if (!m.brand) continue
+      const key = m.brand.trim()
+      if (!key) continue
+      const entry = byBrand.get(key) ?? {
+        mentions: 0,
+        rankSum: 0,
+        byEngine: {},
+      }
+      entry.mentions++
+      entry.rankSum += m.rank
+      const ranksForEngine = entry.byEngine[run.ai_engine] ?? []
+      ranksForEngine.push(m.rank)
+      entry.byEngine[run.ai_engine] = ranksForEngine
+      byBrand.set(key, entry)
+    }
+  }
+
+  const brands = Array.from(byBrand.entries())
+    .map(([name, e]) => ({
+      name,
+      mentions: e.mentions,
+      avg_rank: e.mentions > 0 ? e.rankSum / e.mentions : null,
+      by_engine: e.byEngine,
+    }))
+    .sort((a, b) => {
+      // Higher mention count first, then lower avg_rank
+      if (b.mentions !== a.mentions) return b.mentions - a.mentions
+      return (a.avg_rank ?? 999) - (b.avg_rank ?? 999)
+    })
+
+  return { brands }
+}
+
+/** Returns this week's Monday at 00:00 UTC. */
+function mondayOfThisWeek(): Date {
+  const now = new Date()
+  const day = now.getUTCDay() // 0 = Sunday, 1 = Monday, ...
+  const diff = day === 0 ? -6 : 1 - day // ISO week starts Monday
+  const monday = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + diff)
+  )
+  return monday
+}

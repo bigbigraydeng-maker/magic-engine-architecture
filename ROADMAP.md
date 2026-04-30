@@ -192,9 +192,9 @@ Git Commit（事实层）
 - [x] **P7.1.8** `src/lib/ai-tracker/parser.ts` — 自然语言回复 → BrandMention[] + client_brand_rank（二次 Strategy Engine 调用）
 
 **编排与 API（Day 6-7）**
-- [ ] **P7.1.9** `src/lib/ai-tracker/orchestrator.ts` — N 问句 × 3 模型 = 3N 次并发
-- [ ] **P7.1.10** `POST /api/ai-tracker/run` 路由 — 手动触发一轮
-- [ ] **P7.1.11** `POST /api/cron/ai-tracker-weekly` 路由 — 每周自动跑
+- [x] **P7.1.9** `src/lib/ai-tracker/orchestrator.ts` — N 问句 × 2 引擎并行车道，批量并发，全套入库 + 周快照聚合
+- [x] **P7.1.10** `POST /api/ai-tracker/run` 路由 — 手动触发一轮（maxDuration 5 分钟）
+- [x] **P7.1.11** `GET /api/cron/ai-tracker-weekly` 路由 — Bearer CRON_SECRET 鉴权，遍历有 enabled query 的客户
 
 **前端页面（Day 8-10）**
 - [ ] **P7.1.12** 路由 `/dashboard/ai-visibility/[clientId]` 创建
