@@ -538,9 +538,9 @@ function AssetCell({
           >
             ↻ Retry
           </button>
-          {genState.retryCount !== undefined && (
+          {genState.retryCount !== undefined && genState.retryCount > 0 && (
             <span className="text-[8px] text-gray-500">
-              Attempt {genState.retryCount + 1}/{GENERATION_CONFIG.MAX_AUTO_RETRIES}
+              Attempt {genState.retryCount + 1}/{GENERATION_CONFIG.MAX_AUTO_RETRIES + 1}
             </span>
           )}
         </div>
@@ -1137,7 +1137,9 @@ export default function VisualsPage() {
             )}
             <div className="mb-4 p-2 bg-gray-50 rounded border border-gray-200">
               <p className="text-xs text-gray-500 font-medium">
-                Attempt: {errorModal.retryCount + 1} / {GENERATION_CONFIG.MAX_AUTO_RETRIES}
+                {errorModal.retryCount >= GENERATION_CONFIG.MAX_AUTO_RETRIES
+                  ? `All ${GENERATION_CONFIG.MAX_AUTO_RETRIES} auto-retries exhausted`
+                  : `Attempt: ${errorModal.retryCount + 1} / ${GENERATION_CONFIG.MAX_AUTO_RETRIES + 1}`}
               </p>
             </div>
             <div className="flex gap-2 justify-end">
