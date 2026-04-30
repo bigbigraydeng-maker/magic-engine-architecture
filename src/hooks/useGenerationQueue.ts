@@ -189,7 +189,7 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
         // Transient network error — will retry on next interval tick
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps — handleGenerationComplete/Failed/Timeout are stable ([] deps), no re-creation needed
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handleGenerationComplete/Failed/Timeout are stable ([] deps), no re-creation needed
     []
   )
 
