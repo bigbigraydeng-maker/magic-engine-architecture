@@ -176,6 +176,7 @@ interface EngineLaneInput {
 
 /**
  * Process all queries for one engine, in serial batches to respect RPM.
+ * Add delay between batches to prevent rate limiting on both runner and parser calls.
  */
 async function runEngineLane(input: EngineLaneInput): Promise<void> {
   const { engine, queries, clientId, brandName, result } = input
@@ -187,6 +188,11 @@ async function runEngineLane(input: EngineLaneInput): Promise<void> {
         processOne({ engine, query: q, clientId, brandName, result })
       )
     )
+    // Add 2-second delay between batches to prevent rate limiting
+    // This helps both runner calls (OpenAI/Claude) and parser calls (Claude)
+    if (i + PER_ENGINE_BATCH_SIZE < queries.length) {
+      await new Promise(resolve => setTimeout(resolve, 2000))
+    }
   }
 }
 
@@ -256,6 +262,7 @@ async function processOne(input: ProcessOneInput): Promise<void> {
     let brands: BrandMention[] = []
     let clientBrandRank: number | null = null
     let parseCost = 0
+    let parseError: string | null = null
     try {
       const parsed = await parseRanking({
         rawResponse: runnerOut.raw_response,
@@ -268,6 +275,7 @@ async function processOne(input: ProcessOneInput): Promise<void> {
       // Parser failed but runner succeeded — keep raw, log warning
       const msg =
         parseErr instanceof Error ? parseErr.message : 'Unknown parse error'
+      parseError = msg
       result.errors.push({
         query_id: query.id,
         engine,
@@ -276,13 +284,19 @@ async function processOne(input: ProcessOneInput): Promise<void> {
     }
 
     // 4. Update the run row with parsed data
+    const updatePayload: Record<string, unknown> = {
+      brands_mentioned: brands,
+      client_brand_rank: clientBrandRank,
+      cost_usd: (runnerOut.cost_usd ?? 0) + parseCost,
+    }
+    // Store parser error if the column exists
+    if (parseError !== null) {
+      updatePayload.parse_error_message = parseError
+    }
+
     await supabaseAdmin
       .from('ai_visibility_runs')
-      .update({
-        brands_mentioned: brands,
-        client_brand_rank: clientBrandRank,
-        cost_usd: (runnerOut.cost_usd ?? 0) + parseCost,
-      })
+      .update(updatePayload)
       .eq('id', runRow.id)
 
     result.runs_succeeded++

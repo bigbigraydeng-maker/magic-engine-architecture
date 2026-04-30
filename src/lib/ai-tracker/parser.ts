@@ -83,7 +83,17 @@ export async function parseRanking(input: {
     maxOutputTokens: 1024,
   })
 
-  const parsed = parseJsonResponse<{ brands: unknown[] }>(response.text)
+  let parsed: { brands: unknown[] }
+  try {
+    parsed = parseJsonResponse<{ brands: unknown[] }>(response.text)
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : 'Unknown JSON parse error'
+    const preview = response.text.substring(0, 200)
+    throw new Error(
+      `Parser JSON parse error: ${errorMsg}. Response preview: ${preview}`
+    )
+  }
+
   const brands = (parsed.brands ?? []).filter(isValidBrand)
 
   // Find client's own brand rank using fuzzy match (case-insensitive substring)
