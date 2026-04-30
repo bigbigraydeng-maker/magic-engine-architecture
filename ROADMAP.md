@@ -169,9 +169,16 @@ Git Commit（事实层）
   - **待用户在 Supabase 控制台执行**
 
 **问句生成（Day 2）**
-- [ ] **P7.1.2** `src/lib/ai-tracker/question-generator.ts` — 调 Strategy Engine 输入 Master Brief 输出 15-20 条行业问句
-- [ ] **P7.1.3** `POST /api/ai-tracker/queries/generate` 路由
-- [ ] **P7.1.4** 单元测试：CTS Tours Brief → 是否能生成有效问句
+- [x] **P7.1.2** `src/lib/ai-tracker/question-generator.ts` — 调 Strategy Engine 输入 Master Brief 输出 10-25 条行业问句
+  - ✅ 含 AU/NZ 地域上下文强制约束
+  - ✅ 5 种问题分类（comparison / how_to / recommendation / decision / discovery）
+  - ✅ 类型定义追加到 `src/types/magic-engine.ts`
+- [x] **P7.1.3** AI Tracker API 路由
+  - ✅ `POST /api/ai-tracker/queries/generate` — Strategy Engine 生成 + 落库
+  - ✅ `GET /api/ai-tracker/queries?client_id=...` — 列表
+  - ✅ `POST /api/ai-tracker/queries` — 手动添加单条
+- [ ] **P7.1.4** 端到端验证：CTS Tours Brief → 生成有效问句
+  - 待用户手动验证（开发服务器 + curl/Postman）
 
 **LLM Runner（Day 3-5）**
 - [ ] **P7.1.5** `src/lib/ai-tracker/runners/openai.ts` — GPT-4o web search mode

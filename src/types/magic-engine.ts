@@ -289,3 +289,85 @@ export interface ApiError {
   error: string
   code: 'SEMRUSH_API_ERROR' | 'QUOTA_EXCEEDED' | 'INVALID_INPUT' | 'SUPABASE_ERROR' | 'RATE_LIMITED'
 }
+
+// ============================================
+// AI Visibility Tracker (Phase 7.1)
+// ============================================
+// Tracks brand rankings across multiple AI engines.
+// Reference: ARCHITECTURE.md §12, ROADMAP.md P7.1.x
+
+export type AiQuerySource = 'auto_generated' | 'manual'
+export type AiEngine = 'openai' | 'anthropic' | 'perplexity' | 'google'
+export type MarketTag = 'au' | 'nz' | 'au-nz' | 'global'
+export type QueryCategory = 'comparison' | 'how_to' | 'recommendation' | 'decision' | 'discovery'
+
+export interface AiVisibilityQuery {
+  id: string
+  client_id: string
+  question: string
+  source: AiQuerySource
+  enabled: boolean
+  market_tag: MarketTag | null
+  notes: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** Brand mention extracted from a single LLM response. */
+export interface BrandMention {
+  brand: string           // e.g. "CTS Tours"
+  rank: number            // 1-based ordinal in the AI's response
+  snippet?: string        // short quote from the response
+  url?: string            // if the AI cited a URL
+}
+
+export interface AiVisibilityRun {
+  id: string
+  client_id: string
+  query_id: string
+  ai_engine: AiEngine
+  ai_model: string
+  raw_response: string | null
+  brands_mentioned: BrandMention[]
+  client_brand_rank: number | null
+  tokens_used: number | null
+  cost_usd: number | null
+  latency_ms: number | null
+  error_message: string | null
+  ran_at: string
+}
+
+export interface AiVisibilitySnapshot {
+  id: string
+  client_id: string
+  week_of: string         // ISO date (Monday)
+  avg_rank: number | null
+  mentions_count: number
+  total_runs: number
+  models_covered: string[]
+  ranking_table: Record<string, unknown>
+  created_at: string
+}
+
+// Question generator output (used internally before persisting)
+export interface GeneratedQuestion {
+  question: string
+  category: QueryCategory
+  market_tag: MarketTag
+  rationale: string       // why this question matters for the brand
+}
+
+export interface GenerateQuestionsResult {
+  questions: GeneratedQuestion[]
+  cost_usd: number
+  input_tokens: number
+  output_tokens: number
+}
+
+export interface GenerateQuestionsRequest {
+  client_id: string
+  count?: number          // default 18, range 10-25
+  market?: MarketTag      // override client's default market
+  /** Optional extra context to steer generation (e.g. specific product line). */
+  context_hint?: string
+}
