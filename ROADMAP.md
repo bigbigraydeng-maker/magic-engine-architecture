@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-01 · 当前阶段：**Phase 8.6 — Link Intelligence（开工）**
+> 最后更新：2026-05-01 · 当前阶段：**Phase 8.9 — Market Baseline（开工）**
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
 
 ---
@@ -13,15 +13,15 @@
 ✅ Phase 8.1     ESLint fix 完成
 ✅ Phase 8.6     Link Intelligence（2026-05-01 完成）
 ✅ Phase 8.7     SERP Intelligence（2026-05-01 完成）
-🔥 Phase 8.8     Local Visibility（AU/NZ 城市排名）← 当前位置
-📋 Phase 8.9     Market Baseline（市场基准数据）
+✅ Phase 8.8     Local Visibility（2026-05-01 完成）
+🔥 Phase 8.9     Market Baseline（市场基准数据）← 当前位置
 📋 Phase 8.11    Billing Monitor（成本追踪）
 📋 Phase 8.C     月报整合
 📋 Phase 9       自动化深化
 📋 Phase 10      平台扩展与沉淀
 ```
 
-**Phase 8.8 当前状态**：开工。建设本地搜索可见度模块（AU/NZ 主要城市）。
+**Phase 8.9 当前状态**：开工。建设市场基准数据模块（行业竞争水位参考）。
 
 ---
 
@@ -409,12 +409,17 @@ Git Commit（事实层）
   - ✅ Dashboard 导航：SERP Intelligence 菜单项已添加（📈 emoji）
   - **验收**：支持 100+ 关键词追踪、4 周趋势计算、Top 10/50 分类 ✅
   
-- [ ] **P8.8** Local Visibility（本地搜索可见度）
-  - 数据库：创建 `local_serp_rankings` 表（client_id, keyword, city_name, location_code, position, date）
-  - LocationCode 标准化（AU 城市：Sydney=2036, Melbourne=2157, Brisbane=2174… / NZ 城市：Auckland=2554, Wellington=2579…）
-  - API：`POST /api/clients/[id]/datasources/local/sync` — DataForSEO Local Pack API
-  - 前端：`/dashboard/clients/[id]/local-visibility` 页面（按城市 / 关键词矩阵、热力图、机会排名）
-  - **验收**：支持 AU/NZ 主要城市（Sydney, Melbourne, Brisbane, Auckland, Wellington），显示每个城市每个关键词的排名
+- [x] **P8.8** Local Visibility（本地搜索可见度）✅ 完成 2026-05-01
+  - ✅ 数据库：`supabase/migrations/20260501000005_local_serp_rankings.sql`（local_serp_rankings + local_ranking_history + local_cities 预填充）
+  - ✅ AU 城市：Sydney (2036), Melbourne (2157), Brisbane (2174), Perth (2190), Adelaide (2091), Hobart (2147), Gold Coast (2171), Canberra (2099)
+  - ✅ NZ 城市：Auckland (2554), Wellington (2579), Christchurch (2555), Dunedin (2556), Hamilton (2557), Tauranga (2558)
+  - ✅ DataForSeoClient.getLocal() 方法实现（Local Pack API）
+  - ✅ 数据解析器：`src/lib/dataforseo/local-parser.ts`（storeLocalData、calculateLocalTrends、getLocalMetrics）
+  - ✅ 同步端点：`POST /api/clients/[id]/datasources/local/sync`（多城市并行同步）
+  - ✅ 查询端点：`GET /api/clients/[id]/datasources/local/rankings`（按城市分组、支持排序）
+  - ✅ 前端页面：`src/app/dashboard/local-visibility`（城市选择器、指标卡片、排名表格、机会识别）
+  - ✅ Dashboard 导航：Local Visibility 菜单项已添加（🗺️ emoji）
+  - **验收**：支持 AU/NZ 8+6 城市、28 天趋势计算、新/失排名检测、Top 10/50 分类 ✅
   
 - [ ] **P8.9** Market Baseline（市场基准数据）
   - 用途：PoC 报告对标、行业竞争水位参考
