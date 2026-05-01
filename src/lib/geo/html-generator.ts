@@ -13,7 +13,6 @@
  * Reference: ROADMAP.md P7.2.3, ARCHITECTURE.md §11.2
  */
 
-import { supabaseAdmin } from '../supabase'
 import type { GeoDirective, GeoScenario, GeoAudienceSignals } from '@/types/magic-engine'
 
 /**
@@ -89,6 +88,9 @@ function buildInnerText(directive: GeoDirective): string {
 export async function getActiveGeoHtml(
   clientId: string
 ): Promise<{ html: string; directiveId: string } | null> {
+  // Dynamic import keeps supabaseAdmin server-side only;
+  // this function is never called from client components.
+  const { supabaseAdmin } = await import('../supabase')
   const { data } = await supabaseAdmin
     .from('geo_directives')
     .select('*')
