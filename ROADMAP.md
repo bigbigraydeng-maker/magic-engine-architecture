@@ -205,13 +205,18 @@ Git Commit（事实层）
 **验证结果（2026-05-01）**：36 queries（18 × 2 engines）：OpenAI 92% 成功 ✅，Gemini 100% ✅，Parser 100% ✅，速率限制错误 0 ✅
 
 **前端页面（Day 8-10）**
-- [ ] **P7.1.12** 路由 `/dashboard/ai-visibility/[clientId]` 创建
-- [ ] **P7.1.13** Tab 1: Rankings Table 组件
-- [ ] **P7.1.14** Tab 2: Tool Comparison 组件
-- [ ] **P7.1.15** Tab 3: By AI Model 组件
-- [ ] **P7.1.16** Tab 4: Queries 管理组件
-- [ ] **P7.1.17** 顶部 [Run Now] / [Schedule Weekly] 按钮
-- [ ] **P7.1.18** 侧边栏导航加 "AI Visibility" 菜单项
+- [x] **P7.1.12** 路由 `/dashboard/ai-visibility/[clientId]` 创建 + 入口页 `/dashboard/ai-visibility`（客户选择网格）
+- [x] **P7.1.13** Tab 1: Rankings Table 组件 — 周快照品牌排名，客户品牌 ⭐ 高亮，列展示各引擎分均
+- [x] **P7.1.14** Tab 2: Engine Comparison 组件 — ChatGPT vs Google AI 成功率/提及率/平均排名/延迟；含最近30条运行日志
+- [x] **P7.1.15** Tab 3: By AI Model 组件 — 每模型 token/成本/延迟/品牌检测率技术明细
+- [x] **P7.1.16** Tab 4: Queries 管理组件 — 查询列表 + enable/disable toggle + 生成新问题 + 每条最新排名预览
+- [x] **P7.1.17** ▶ Run Now 按钮 — 异步触发（最长5分钟）+ 进度反馈 + 完成后自动刷新数据
+- [x] **P7.1.18** 侧边栏导航加 🤖 "AI Visibility" 菜单项
+
+**支持 API（同步新增）**
+- [x] `GET /api/ai-tracker/runs` — 客户最近 N 条 runs 列表
+- [x] `GET /api/ai-tracker/snapshots` — 客户最近 N 条周快照
+- [x] `PATCH /api/ai-tracker/queries/[id]` — 更新单条查询（enabled/question/notes）
 
 **联调（Day 11-12）**
 - [ ] **P7.1.19** 端到端测试：CTS Tours 跑一次基线
