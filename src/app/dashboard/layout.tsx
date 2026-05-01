@@ -64,6 +64,12 @@ const navItems = [
     emoji: '📊',
     exact: false,
   },
+  {
+    href: '/dashboard/admin/billing-monitor',
+    label: 'Billing Monitor',
+    emoji: '💳',
+    exact: false,
+  },
 ];
 
 function Sidebar() {
