@@ -304,16 +304,23 @@ Git Commit（事实层）
 - [x] **P7.3.12** 正文区渲染 HTML，带 "Show GEO Block" toggle（仅团队可见）
 - [x] **P7.3.13** 选题面板：AI Tracker 弱项 × SEMrush 机会对照表
 
+**内容审计（Content Audit）— 防关键词蚕食（Day 23 补充，2026-05-01）**
+- [x] **P7.3.17** `src/lib/blog/content-auditor.ts` — Jina.ai 抓取客户站点 sitemap/blog，GPT-4o mini 对比 intent，返回 `upgrade | new`
+- [x] **P7.3.18** `POST /api/clients/[id]/blog` 集成审计逻辑：`skip_audit` 可绕过；`action=upgrade` 时不生成新文章，返回推荐卡片
+- [x] **P7.3.19** 博客列表页 `upgradeRec` 琥珀色推荐横幅：显示已有文章链接、置信度、"Generate Anyway" 按钮
+- [x] **P7.3.20** `GenerateBlogRequest` 增加 `skip_audit?: boolean`；新增 `ContentAuditResult` 类型到 `magic-engine.ts`
+
 **Snippet 部署助手（Day 24-26）**
-- [ ] **P7.3.14** 路由 `/dashboard/geo-composer/[clientId]/deploy` 创建（纯前端）
-- [ ] **P7.3.15** 输入要部署的页面 URL → 展示 snippet + 安装说明 + 一键标记已部署
-- [ ] **P7.3.16** 已部署页面列表（调用已有 deployments API）
+- [ ] **P7.3.21** 路由 `/dashboard/geo-composer/[clientId]/deploy` 创建（纯前端）
+- [ ] **P7.3.22** 输入要部署的页面 URL → 展示 snippet + 安装说明 + 一键标记已部署
+- [ ] **P7.3.23** 已部署页面列表（调用已有 deployments API）
 
 **验收标准**：
 - 博客选题来自 AI Tracker 弱项 × SEMrush 交叉验证，有数据依据
 - unified 模式文章同时通过 SEO checklist 和 GEO checklist
 - 博客生成时自动注入 active GEO directive HTML
 - 博客查看页有双信号 checklist 展示
+- 内容审计：客户站有同类文章时提示升级而非直接生成，防止关键词蚕食
 - Snippet 部署助手可用，部署记录写回 deployed_pages
 
 ---
@@ -336,7 +343,11 @@ Git Commit（事实层）
 - [x] **P7.4.9** AI Visibility Tracker 跑基线（36 queries，10 runs，avg_rank 1.49，snapshot 2026-04-27）
 - [x] **P7.4.10** GEO Composer 生成 v1 directive（ID: 733be532，status: active，6 scenarios，2026-05-01）
 - [x] **P7.4.11** GEO snippet 已生成 + deployed_pages 登记（首页 + china-tours + china-visa + small-group-tours）
-- [x] **P7.4.12** 生成 2 篇 GEO 博客（IDs: 259d7bc9, 84932691，mode: geo_only，~1100 words each，2026-05-01）
+- [x] **P7.4.12** 生成 GEO 博客：
+  - 小团游 vs 大巴团文章（ID: 84932691，1100词，geo_only，2026-05-01）
+  - ~~259d7bc9~~ 签证文章已删除（事实错误：GPT-4o 误以为NZ仍需签证）
+  - 替换文章（ID: e99d8de8，1240词，geo_only）：「新西兰人首次赴华攻略 — 30天免签完全指南」，包含已调研的正确免签政策，2026-05-01
+  - **经验教训**：内容生成前需提供调研事实；对政策/法规类话题不依赖模型训练数据
 - [ ] **P7.4.13** 标记基线日期 + 设置每周自动追踪
 - [ ] **P7.4.14** 第 2/4 周复跑 Tracker，观察排名变化
 - [ ] **P7.4.15** 第 4 周生成首份月度报告
