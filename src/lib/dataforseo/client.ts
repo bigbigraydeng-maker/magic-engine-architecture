@@ -103,6 +103,19 @@ export class DataForSeoClient {
       order_by: ['-domain_rank'],
     })
   }
+
+  /**
+   * Get SERP rankings for a domain (Rank Tracker)
+   * Endpoint: /ranks/google/positions
+   * Returns keyword rankings, positions, search volume, trends
+   */
+  async getSerp(domain: string, limit = 100, offset = 0) {
+    return this.request('/ranks/google/positions', {
+      target: domain,
+      limit,
+      offset,
+    })
+  }
 }
 
 export default DataForSeoClient

@@ -46,6 +46,12 @@ const navItems = [
     emoji: '🔗',
     exact: false,
   },
+  {
+    href: '/dashboard/serp-intelligence',
+    label: 'SERP Intelligence',
+    emoji: '📈',
+    exact: false,
+  },
 ];
 
 function Sidebar() {
