@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-01 · 当前阶段：**Phase 8.11 — Billing Monitor（计划中）**
+> 最后更新：2026-05-01 · 当前阶段：**Phase 8.11 — Billing Monitor（✅ 2026-05-01 完成）**
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
 
 ---
@@ -15,7 +15,7 @@
 ✅ Phase 8.7     SERP Intelligence（2026-05-01 完成）
 ✅ Phase 8.8     Local Visibility（2026-05-01 完成）
 ✅ Phase 8.9     Market Baseline（2026-05-01 完成）
-🔥 Phase 8.11    Billing Monitor（成本追踪）← 当前位置
+✅ Phase 8.11    Billing Monitor（2026-05-01 完成）
 📋 Phase 8.C     月报整合
 📋 Phase 9       自动化深化
 📋 Phase 10      平台扩展与沉淀
@@ -433,12 +433,14 @@ Git Commit（事实层）
 - [ ] **P8.10** (待定 — 可能是 DataForSEO 成本优化或其他功能)
   - 暂预留
   
-- [ ] **P8.11** Billing Monitoring（DataForSEO 成本追踪）
-  - 数据库：创建 `datasource_usage_logs` 表（client_id, service, api_calls, cost_usd, month）
-  - 用途：按客户、按服务、按月追踪 DataForSEO 的 API 成本
-  - API：`GET /api/admin/billing/datasources?month=` — 成本汇总
-  - 前端：`/dashboard/admin/billing-monitor` 页面（仅管理员可见，展示所有客户的 DataForSEO 成本）
-  - **验收**：能按客户、按月查看 DataForSEO 成本，用于计费和成本优化
+- [x] **P8.11** Billing Monitoring（DataForSEO 成本追踪）✅ **2026-05-01 完成**
+  - 数据库：创建 `datasource_usage_logs` 表（client_id, service, api_calls, cost_usd, month）✅
+  - 用途：按客户、按服务、按月追踪 DataForSEO 的 API 成本 ✅
+  - API：`GET /api/admin/billing/datasources?month=` — 成本汇总，支持降级回退（测试环境样本数据）✅
+  - 前端：`/dashboard/admin/billing-monitor` 页面（仅管理员可见，展示所有客户的 DataForSEO 成本）✅
+  - E2E 测试：11 个 billing monitor 测试，31/31 Phase 8 E2E 测试通过 ✅
+  - **验收**：✅ 能按客户、按月查看 DataForSEO 成本，用于计费和成本优化；E2E 测试全覆盖
+  - **提交**：be9e259（API 修复）+ 17e301e（E2E 测试）+ 4362658（仪表板重构）
 
 #### 8.C 跨界整合（与 Phase 7 联动）
 
