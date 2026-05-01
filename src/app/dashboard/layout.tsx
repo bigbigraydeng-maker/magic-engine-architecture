@@ -40,6 +40,12 @@ const navItems = [
     emoji: '📊',
     exact: false,
   },
+  {
+    href: '/dashboard/link-intelligence',
+    label: 'Link Intelligence',
+    emoji: '🔗',
+    exact: false,
+  },
 ];
 
 function Sidebar() {

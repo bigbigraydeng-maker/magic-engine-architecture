@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-04-30 · 当前阶段：**Phase 7.1 — AI Visibility Tracker（Week 1-2）**
+> 最后更新：2026-05-01 · 当前阶段：**Phase 8.6 — Link Intelligence（开工）**
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
 
 ---
@@ -359,12 +359,115 @@ Git Commit（事实层）
 
 ## 5. 后续 Phase（H2 规划）
 
-### Phase 8 — 客户陪跑工作流完善
-- [ ] **P8.1** 客户接入向导（5 分钟新客户建档，仿 SEOPro 3 步流程）
+### Phase 8 — DataForSEO 集成 + 客户陪跑工作流完善（11 项）
+
+**战略定位**：引入 DataForSEO，补充 SEMrush 的数据缺口（外链、SERP 追踪、本地 SEO、市场基线），构建完整的 SEO 可见度体系。AU/NZ 市场重点，地域性强。
+
+#### 8.A 客户接入向导（P8.1-P8.5）
+
+- [x] **P8.1** 客户接入向导（3 步流程：基本信息 → Airtable 配置 → SEMrush/DataForSEO 参数）
+  - ✅ 已完成：Step1BasicInfo、Step2Workspace、Step3Keywords 组件
+  - ✅ 已完成：`POST /api/clients/onboarding/route.ts`（3 步 API）
+  - 待验证：修复 ESLint 报错，集成到 Dashboard 主页
+  
 - [ ] **P8.2** 月报导出 PDF + 邮件发送
+  - 依赖 P8.6-P8.9 完成后进行
+  
 - [ ] **P8.3** 站点权威度追踪（DA / 外链 / 内链）
+  - DataForSEO 会提供外链数据；DA 可能需要 Moz API 或 DataForSEO Rank Tracker
+  
 - [ ] **P8.4** 客户 Portal（client-facing view，只看自己的内容）
+  - 与 P8.6-P8.11 并行开发
+  
 - [ ] **P8.5** Dashboard 简单鉴权（密码或 Magic Link）
+  - 与其他任务并行开发
+
+#### 8.B DataForSEO 集成核心模块（P8.6-P8.11）
+
+> **数据架构**：DataForSEO 提供 4 大数据流，均存入 Supabase，前端通过对外封装名展示。
+
+- [x] **P8.6** Link Intelligence（外链数据）
+  - ✅ 完成：数据库迁移文件 `migrations/20260501000003_dataforseo_backlinks.sql`
+  - ✅ 完成：API 客户端 `src/lib/dataforseo/client.ts`（基础认证 + 请求）
+  - ✅ 完成：数据解析器 `src/lib/dataforseo/backlinks-parser.ts`（upsert + velocity 快照）
+  - ✅ 完成：同步端点 `POST /api/clients/[id]/datasources/backlinks/sync`
+  - ✅ 完成：指标端点 `GET /api/clients/[id]/datasources/backlinks/metrics`
+  - ✅ 完成：前端页面 `src/app/dashboard/link-intelligence/page.tsx`（反链表格、同步按钮、质量指标）
+  - 待完成：添加到 Dashboard 导航栏
+  
+- [ ] **P8.7** SERP Intelligence（排名追踪）
+  - 数据库：创建 `serp_rankings` 表（client_id, keyword, position, search_volume, url, date）
+  - API：`POST /api/clients/[id]/datasources/serp/sync` — DataForSEO Rank Tracker API
+  - 前端：`/dashboard/clients/[id]/serp-intelligence` 页面（排名趋势、Top 3 变化、新机会关键词）
+  - **验收**：显示 100+ 关键词的排名位置、4 周趋势曲线
+  
+- [ ] **P8.8** Local Visibility（本地搜索可见度）
+  - 数据库：创建 `local_serp_rankings` 表（client_id, keyword, city_name, location_code, position, date）
+  - LocationCode 标准化（AU 城市：Sydney=2036, Melbourne=2157, Brisbane=2174… / NZ 城市：Auckland=2554, Wellington=2579…）
+  - API：`POST /api/clients/[id]/datasources/local/sync` — DataForSEO Local Pack API
+  - 前端：`/dashboard/clients/[id]/local-visibility` 页面（按城市 / 关键词矩阵、热力图、机会排名）
+  - **验收**：支持 AU/NZ 主要城市（Sydney, Melbourne, Brisbane, Auckland, Wellington），显示每个城市每个关键词的排名
+  
+- [ ] **P8.9** Market Baseline（市场基准数据）
+  - 用途：PoC 报告对标、行业竞争水位参考
+  - 数据来源：DataForSEO 行业快照 / Semrush Top 10 对标
+  - API：`GET /api/clients/[id]/market-baseline?industry=&region=` — 聚合行业平均数据
+  - 前端：显示在月报中（"你的排名 vs 行业平均"）
+  - **验收**：月报中有"行业基准对标"版块
+  
+- [ ] **P8.10** (待定 — 可能是 DataForSEO 成本优化或其他功能)
+  - 暂预留
+  
+- [ ] **P8.11** Billing Monitoring（DataForSEO 成本追踪）
+  - 数据库：创建 `datasource_usage_logs` 表（client_id, service, api_calls, cost_usd, month）
+  - 用途：按客户、按服务、按月追踪 DataForSEO 的 API 成本
+  - API：`GET /api/admin/billing/datasources?month=` — 成本汇总
+  - 前端：`/dashboard/admin/billing-monitor` 页面（仅管理员可见，展示所有客户的 DataForSEO 成本）
+  - **验收**：能按客户、按月查看 DataForSEO 成本，用于计费和成本优化
+
+#### 8.C 跨界整合（与 Phase 7 联动）
+
+- [ ] **P8.C.1** 月报（P7.4.1-P7.4.7）扩展，纳入 P8.6-P8.9 数据
+  - AI Visibility Tracker（Phase 7）+ Link Intelligence（P8.6）+ SERP Intelligence（P8.7）+ Local Visibility（P8.8）
+  - 一份完整月报展示"全景可见度"
+  
+- [ ] **P8.C.2** GEO Composer（Phase 7）+ DataForSEO 数据闭环
+  - 基于 Market Baseline（P8.9）优化 GEO 指令
+  
+---
+
+#### Phase 8  总体排期
+
+```
+Week 1-2: P8.1 ESLint fix + Dashboard 集成
+Week 2-3: P8.6 Link Intelligence 核心开发
+Week 3-4: P8.7 SERP Intelligence + P8.8 Local Visibility 并行
+Week 4-5: P8.9 Market Baseline + P8.11 Billing Monitor
+Week 5-6: P8.4-P8.5 鉴权 + Portal 联调
+Week 6-7: P8.2 月报 PDF + 邮件
+Week 7: 联调验证 + PoC 更新
+```
+
+---
+
+#### DataForSEO API 集成清单
+
+**需要的环境变量**：
+- `DATAFORSEO_LOGIN`
+- `DATAFORSEO_PASSWORD`
+
+**API 模块**：
+- `src/lib/dataforseo/client.ts` — API 认证 + 基础请求
+- `src/lib/dataforseo/backlinks.ts` — Link Intelligence（P8.6）
+- `src/lib/dataforseo/serp.ts` — SERP Tracking（P8.7）
+- `src/lib/dataforseo/local.ts` — Local Pack（P8.8）
+- `src/lib/dataforseo/parser.ts` — 响应解析 + Supabase 落库
+
+**UI 封装名规范**（必须）：
+- DataForSEO → "Link Intelligence" / "SERP Intelligence" / "Local Visibility" / "Market Baseline"
+- 不允许在任何用户可见界面出现 "DataForSEO" 字样
+
+---
 
 ### Phase 9 — 自动化深化
 - [ ] **P9.1** Cron：每日 sync Content Workspace → 主库
