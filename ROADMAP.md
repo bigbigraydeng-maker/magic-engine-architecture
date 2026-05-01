@@ -234,30 +234,30 @@ Git Commit（事实层）
 **目标**：基于 Brief + Tracker 弱项，自动生成 GEO 指令并提供部署 snippet。
 
 **数据库（Day 13）**
-- [ ] **P7.2.1** 创建 `geo_directives` 表（schema 见 ARCHITECTURE.md §11.3）
+- [x] **P7.2.1** 创建 `geo_directives` 表（schema 见 ARCHITECTURE.md §11.3）
 
 **核心库（Day 14-15）**
-- [ ] **P7.2.2** `src/lib/geo/composer.ts` — Strategy Engine prompt：Brief + Tracker 弱项 → directive JSON
-- [ ] **P7.2.3** `src/lib/geo/html-generator.ts` — JSON → 隐藏 div HTML
-- [ ] **P7.2.4** `src/lib/geo/snippet-builder.ts` — HTML + 安装说明（WordPress/Webflow/通用）
+- [x] **P7.2.2** `src/lib/geo/composer.ts` — GPT-4o-mini JSON 生成 + 弱项提取
+- [x] **P7.2.3** `src/lib/geo/html-generator.ts` — JSON → 隐藏 div HTML（aria-hidden）
+- [x] **P7.2.4** `src/lib/geo/snippet-builder.ts` — 平台 snippet（WordPress/Webflow/通用）
 
 **API（Day 16）**
-- [ ] **P7.2.5** `POST /api/clients/[id]/geo/generate`
-- [ ] **P7.2.6** `GET /api/clients/[id]/geo`（active directive）
-- [ ] **P7.2.7** `PATCH /api/clients/[id]/geo/[directiveId]`（编辑）
-- [ ] **P7.2.8** `POST /api/clients/[id]/geo/[directiveId]/activate`
-- [ ] **P7.2.9** `GET /api/clients/[id]/geo/snippet`
-- [ ] **P7.2.10** `POST /api/clients/[id]/geo/deployments`（记录部署 URL）
+- [x] **P7.2.5** `POST /api/clients/[id]/geo/generate`
+- [x] **P7.2.6** `GET /api/clients/[id]/geo`（all directives + active）
+- [x] **P7.2.7** `PATCH /api/clients/[id]/geo/[directiveId]`（编辑 4 字段）
+- [x] **P7.2.8** `POST /api/clients/[id]/geo/[directiveId]/activate`（原子 archive→activate）
+- [x] **P7.2.9** `GET /api/clients/[id]/geo/snippet`（HTML + 平台说明）
+- [x] **P7.2.10** `POST /api/clients/[id]/geo/deployments`（记录部署 URL）
 
 **前端页面（Day 17-19）**
-- [ ] **P7.2.11** 路由 `/dashboard/geo-composer/[clientId]` 创建
-- [ ] **P7.2.12** 顶部状态栏（Active Directive / Deployed pages）
-- [ ] **P7.2.13** 左侧结构化编辑器（4 个字段块）
-- [ ] **P7.2.14** 右侧 HTML Snippet 实时预览 + 一键复制
-- [ ] **P7.2.15** "How AI sees this" 模拟按钮（Strategy Engine 跑一次）
-- [ ] **P7.2.16** [Regenerate from Brief] / [Regenerate from Tracker] 按钮
-- [ ] **P7.2.17** [Save Draft] / [Activate] 按钮
-- [ ] **P7.2.18** 侧边栏导航加 "GEO Composer" 菜单项
+- [x] **P7.2.11** 路由 `/dashboard/geo-composer/[clientId]` 创建（含客户列表 landing）
+- [x] **P7.2.12** 顶部状态栏（Active Directive / Deployed pages 数量）
+- [x] **P7.2.13** 左侧结构化编辑器（Primary Rec / Scenarios / Audience / Competitive）
+- [x] **P7.2.14** 右侧 HTML Snippet 实时预览 + 一键复制 + 安装说明
+- [x] **P7.2.15** "How AI sees this" placeholder（Coming soon）
+- [x] **P7.2.16** [✨ Regenerate from AI Tracker] / [From Brief only] 按钮
+- [x] **P7.2.17** [Save Draft] / [⚡ Activate] 按钮（含版本历史选择器）
+- [x] **P7.2.18** 侧边栏导航加 "GEO Composer 🌐" 菜单项
 
 **验收标准**：
 - 客户详情页有 GEO Tab（或独立菜单）
