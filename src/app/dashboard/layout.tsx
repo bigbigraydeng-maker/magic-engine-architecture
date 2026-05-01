@@ -58,6 +58,12 @@ const navItems = [
     emoji: '🗺️',
     exact: false,
   },
+  {
+    href: '/dashboard/market-baseline',
+    label: 'Market Baseline',
+    emoji: '📊',
+    exact: false,
+  },
 ];
 
 function Sidebar() {
