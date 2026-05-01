@@ -2,9 +2,12 @@
  * AI Visibility Tracker — Industry question generator.
  *
  * Generates 10-25 industry questions that potential customers would ask
- * AI assistants (ChatGPT, Claude, Perplexity) about the client's category.
+ * AI assistants (ChatGPT, Google AI, Perplexity) about the client's category.
  * These questions form the basis for tracking the client's brand visibility
  * across AI engines.
+ *
+ * Uses OpenAI GPT-4o-mini (JSON mode) — consistent with parser.ts to keep
+ * all internal generation on OpenAI and avoid Claude rate limits.
  *
  * Geographic context: AU/NZ market is the 2026 default. Every generated
  * question MUST include a market signal (e.g. "in New Zealand",
@@ -13,7 +16,7 @@
  * Reference: ROADMAP.md P7.1.2, ARCHITECTURE.md §12
  */
 
-import { callClaudeChat, parseJsonResponse } from '../anthropic/client'
+import OpenAI from 'openai'
 import { supabaseAdmin } from '../supabase'
 import type {
   GenerateQuestionsRequest,
@@ -119,15 +122,37 @@ export async function generateQuestionsForClient(
     contextHint,
   })
 
-  const response = await callClaudeChat({
-    systemPrompt: QUESTION_GENERATOR_SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: userMessage }],
-    maxOutputTokens: 4096,
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY environment variable is not set')
+  }
+
+  const openai = new OpenAI({ apiKey })
+
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    response_format: { type: 'json_object' },
+    max_tokens: 4096,
+    messages: [
+      { role: 'system', content: QUESTION_GENERATOR_SYSTEM_PROMPT },
+      { role: 'user', content: userMessage },
+    ],
   })
 
-  const parsed = parseJsonResponse<{ questions: GeneratedQuestion[] }>(
-    response.text
-  )
+  const rawText = completion.choices[0]?.message?.content ?? '{}'
+  const usage = completion.usage
+  const inputTokens = usage?.prompt_tokens ?? 0
+  const outputTokens = usage?.completion_tokens ?? 0
+  // GPT-4o-mini pricing: $0.15/M input, $0.60/M output
+  const costUsd =
+    (inputTokens / 1_000_000) * 0.15 + (outputTokens / 1_000_000) * 0.60
+
+  let parsed: { questions?: GeneratedQuestion[] }
+  try {
+    parsed = JSON.parse(rawText) as { questions?: GeneratedQuestion[] }
+  } catch {
+    throw new Error('Question generator returned invalid JSON: ' + rawText.slice(0, 200))
+  }
 
   const questions = (parsed.questions ?? [])
     .filter(isValidQuestion)
@@ -136,15 +161,15 @@ export async function generateQuestionsForClient(
   if (questions.length === 0) {
     throw new Error(
       'Question generator returned no valid questions. Raw response: ' +
-        response.text.slice(0, 400)
+        rawText.slice(0, 400)
     )
   }
 
   return {
     questions,
-    cost_usd: response.cost_usd,
-    input_tokens: response.input_tokens,
-    output_tokens: response.output_tokens,
+    cost_usd: costUsd,
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
   }
 }
 
