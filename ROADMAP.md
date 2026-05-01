@@ -429,10 +429,12 @@ Git Commit（事实层）
 
 #### 8.A 客户接入向导（P8.1-P8.5）
 
-- [x] **P8.1** 客户接入向导（3 步流程：基本信息 → Airtable 配置 → SEMrush/DataForSEO 参数）
-  - ✅ 已完成：Step1BasicInfo、Step2Workspace、Step3Keywords 组件
-  - ✅ 已完成：`POST /api/clients/onboarding/route.ts`（3 步 API）
-  - 待验证：修复 ESLint 报错，集成到 Dashboard 主页
+- [x] **P8.1** 客户接入向导（3 步流程：基本信息 → Airtable 配置 → SEMrush/DataForSEO 参数）✅ 2026-05-01
+  - ✅ Step1BasicInfo、Step2Workspace（含 Skip）、Step3Keywords 组件
+  - ✅ `POST /api/clients/onboarding/route.ts`（3 步 API）
+  - ✅ Step 1 targetMarket → Step 3 defaultMarket 串联修复
+  - ✅ Step 2 Airtable 步骤可 Skip（非 Airtable 客户不再卡流程）
+  - ✅ Clients 列表页 "+ New Client" 跳转向导（migration 补 onboarding_completed_at 列）
   
 - [ ] **P8.2** 月报导出 PDF + 邮件发送
   - 依赖 P8.6-P8.9 完成后进行
