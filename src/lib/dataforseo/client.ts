@@ -116,6 +116,20 @@ export class DataForSeoClient {
       offset,
     })
   }
+
+  /**
+   * Get local pack rankings for a domain by city
+   * Endpoint: /local_pack/google/positions
+   * Returns keyword rankings in specific cities with location codes
+   */
+  async getLocal(domain: string, locationCode: number, limit = 100, offset = 0) {
+    return this.request('/local_pack/google/positions', {
+      target: domain,
+      location_code: locationCode,
+      limit,
+      offset,
+    })
+  }
 }
 
 export default DataForSeoClient

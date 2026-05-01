@@ -52,6 +52,12 @@ const navItems = [
     emoji: '📈',
     exact: false,
   },
+  {
+    href: '/dashboard/local-visibility',
+    label: 'Local Visibility',
+    emoji: '🗺️',
+    exact: false,
+  },
 ];
 
 function Sidebar() {
