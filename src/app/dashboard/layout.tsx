@@ -40,6 +40,12 @@ const navItems = [
     emoji: '📊',
     exact: false,
   },
+  {
+    href: '/dashboard/ai-visibility',
+    label: 'AI Visibility',
+    emoji: '🤖',
+    exact: false,
+  },
 ];
 
 function Sidebar() {
