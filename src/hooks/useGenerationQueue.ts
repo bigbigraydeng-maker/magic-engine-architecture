@@ -44,7 +44,23 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
     const saved = localStorage.getItem('generation_queue_state')
     if (saved) {
       try {
-        const restored = JSON.parse(saved) as GenerationQueueState
+        const data = JSON.parse(saved) as { version?: number; state?: GenerationQueueState } & GenerationQueueState
+
+        // Version check: clear if schema changed
+        const QUEUE_VERSION = 1
+        if (data.version && data.version !== QUEUE_VERSION) {
+          localStorage.removeItem('generation_queue_state')
+          return
+        }
+
+        // Use versioned state format if available, otherwise treat as old format
+        const restored = (data.version === QUEUE_VERSION) ? data.state : (data as GenerationQueueState)
+
+        if (!restored || !restored.queue) {
+          localStorage.removeItem('generation_queue_state')
+          return
+        }
+
         const now = Date.now()
 
         const validQueue = restored.queue.filter(item => {
@@ -53,7 +69,7 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
         })
 
         const validActiveGenerations: Record<string, GenerationQueueItem> = {}
-        Object.entries(restored.activeGenerations).forEach(([postId, item]) => {
+        Object.entries(restored.activeGenerations || {}).forEach(([postId, item]) => {
           const age = now - item.startedAt
           if (age < GENERATION_CONFIG.POLLING_TIMEOUT_MS) {
             validActiveGenerations[postId] = item
@@ -76,7 +92,11 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
 
   // Persist queue to localStorage on change
   useEffect(() => {
-    localStorage.setItem('generation_queue_state', JSON.stringify(queueState))
+    const QUEUE_VERSION = 1
+    localStorage.setItem('generation_queue_state', JSON.stringify({
+      version: QUEUE_VERSION,
+      state: queueState,
+    }))
   }, [queueState])
 
   /**

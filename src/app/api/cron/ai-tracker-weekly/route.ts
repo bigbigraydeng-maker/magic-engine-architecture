@@ -17,8 +17,16 @@ import { runTracker } from '@/lib/ai-tracker/orchestrator'
 export const maxDuration = 900
 
 export async function GET(req: NextRequest) {
+  const cronSecret = process.env.CRON_SECRET
+  if (!cronSecret) {
+    return NextResponse.json(
+      { error: 'Server misconfiguration: CRON_SECRET not set' },
+      { status: 500 }
+    )
+  }
+
   const authHeader = req.headers.get('authorization')
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 

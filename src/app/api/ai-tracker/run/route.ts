@@ -22,6 +22,22 @@ import type { AiEngine } from '@/types/magic-engine'
 export const maxDuration = 300 // 5 minutes — Render long-poll budget
 
 export async function POST(req: NextRequest) {
+  const cronSecret = process.env.CRON_SECRET
+  if (!cronSecret) {
+    return NextResponse.json(
+      { success: false, error: 'Server misconfiguration' },
+      { status: 500 }
+    )
+  }
+
+  const authHeader = req.headers.get('authorization')
+  if (authHeader !== `Bearer ${cronSecret}`) {
+    return NextResponse.json(
+      { success: false, error: 'Unauthorized' },
+      { status: 401 }
+    )
+  }
+
   try {
     const body = (await req.json()) as {
       client_id?: string
@@ -34,6 +50,23 @@ export async function POST(req: NextRequest) {
         { success: false, error: 'client_id is required' },
         { status: 400 }
       )
+    }
+
+    if (!/^[a-f0-9\-]{36}$/.test(body.client_id)) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid client_id format' },
+        { status: 400 }
+      )
+    }
+
+    if (body.engines) {
+      const validEngines = ['openai', 'anthropic']
+      if (!body.engines.every((e) => validEngines.includes(e))) {
+        return NextResponse.json(
+          { success: false, error: 'Invalid engine specified' },
+          { status: 400 }
+        )
+      }
     }
 
     const result = await runTracker({

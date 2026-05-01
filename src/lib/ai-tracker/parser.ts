@@ -87,11 +87,16 @@ export async function parseRanking(input: {
   const brands = (parsed.brands ?? []).filter(isValidBrand)
 
   // Find client's own brand rank using fuzzy match (case-insensitive substring)
+  // Only allow reverse match for brands ≥ 3 chars to avoid false positives
+  // (e.g., "Air" matching "Air New Zealand" and "Air China")
   const clientLower = clientBrandName.toLowerCase().trim()
-  const clientMention = brands.find(b =>
-    b.brand.toLowerCase().includes(clientLower) ||
-    clientLower.includes(b.brand.toLowerCase())
-  )
+  const clientMention = brands.find(b => {
+    const bLower = b.brand.toLowerCase()
+    return (
+      b.brand.toLowerCase().includes(clientLower) ||
+      (clientLower.length >= 3 && bLower.length >= 3 && clientLower.includes(bLower))
+    )
+  })
 
   return {
     brands,
