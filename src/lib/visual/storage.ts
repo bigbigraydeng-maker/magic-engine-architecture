@@ -2,15 +2,13 @@ import { supabaseAdmin } from '@/lib/supabase'
 
 const BUCKET = 'visual-assets'
 
-/** Create the bucket if it doesn't already exist (idempotent) */
+/** Create the bucket if it doesn't exist; always clear any size limit. */
 async function ensureBucket() {
-  const { error } = await supabaseAdmin.storage.createBucket(BUCKET, {
-    public: true,
-    fileSizeLimit: 100 * 1024 * 1024,
-  })
+  const { error } = await supabaseAdmin.storage.createBucket(BUCKET, { public: true })
   if (error && !error.message.toLowerCase().includes('already exists')) {
     throw error
   }
+  await supabaseAdmin.storage.updateBucket(BUCKET, { public: true, fileSizeLimit: null })
 }
 
 export async function uploadFromUrl(params: {

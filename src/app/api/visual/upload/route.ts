@@ -4,19 +4,26 @@ import { supabaseAdmin } from '@/lib/supabase'
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp']
 const ALLOWED_VIDEO_TYPES = ['video/mp4', 'video/quicktime', 'video/webm', 'video/mov']
 const ALLOWED_TYPES = [...ALLOWED_IMAGE_TYPES, ...ALLOWED_VIDEO_TYPES]
-const MAX_SIZE_BYTES = 100 * 1024 * 1024 // 100 MB
+const MAX_SIZE_BYTES = 500 * 1024 * 1024 // 500 MB — generous limit for video uploads
 const VISUAL_BUCKET = 'visual-assets'
 
-/** Create the bucket if it doesn't already exist (idempotent) */
+/**
+ * Create the bucket if it doesn't exist, then update the size limit.
+ * updateBucket is always called so existing buckets with old limits are fixed too.
+ */
 async function ensureBucket(bucket: string, isPublic = true) {
-  const { error } = await supabaseAdmin.storage.createBucket(bucket, {
+  // Create if not exists (ignore "already exists" error)
+  const { error: createErr } = await supabaseAdmin.storage.createBucket(bucket, {
     public: isPublic,
-    fileSizeLimit: MAX_SIZE_BYTES,
   })
-  // "already exists" is not a real error
-  if (error && !error.message.toLowerCase().includes('already exists')) {
-    throw error
+  if (createErr && !createErr.message.toLowerCase().includes('already exists')) {
+    throw createErr
   }
+  // Always update to clear any restrictive fileSizeLimit on existing buckets
+  await supabaseAdmin.storage.updateBucket(bucket, {
+    public: isPublic,
+    fileSizeLimit: null, // no bucket-level cap; project plan limit applies
+  })
 }
 
 // POST /api/visual/upload
