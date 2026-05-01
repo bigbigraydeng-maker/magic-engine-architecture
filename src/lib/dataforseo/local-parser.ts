@@ -3,7 +3,7 @@
  * Handles DataForSEO Local Pack API responses → Supabase
  */
 
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
 interface LocalPackRanking {
   keyword: string
@@ -50,7 +50,7 @@ export async function storeLocalData(
   countryCode: string,
   rankings: LocalPackRanking[],
   snapshotDate: string,
-  supabase: ReturnType<typeof createClient>
+  supabase: SupabaseClient<any>
 ): Promise<number> {
   if (rankings.length === 0) return 0
 
@@ -74,7 +74,7 @@ export async function storeLocalData(
     throw new Error(`Failed to store local rankings: ${error.message}`)
   }
 
-  return data?.length || 0
+  return (data as any)?.length || 0
 }
 
 /**
@@ -86,7 +86,7 @@ export async function calculateLocalTrends(
   locationCode: string,
   cityName: string,
   countryCode: string,
-  supabase: ReturnType<typeof createClient>
+  supabase: SupabaseClient<any>
 ): Promise<LocalTrendData[]> {
   const today = new Date()
   const thirtyDaysAgo = new Date(today)
@@ -155,7 +155,7 @@ export async function calculateLocalTrends(
  */
 export async function getLocalMetrics(
   clientId: string,
-  supabase: ReturnType<typeof createClient>
+  supabase: SupabaseClient<any>
 ): Promise<LocalMetrics> {
   // Get latest snapshot date
   const { data: latestSnapshot } = await supabase

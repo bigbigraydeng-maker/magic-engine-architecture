@@ -3,7 +3,7 @@
  * Compare client's performance against industry average
  */
 
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { batchKeywordOverview } from './client'
 
 interface KeywordBaseline {
@@ -33,7 +33,7 @@ interface MarketComparison {
 export async function getIndustryBaseline(
   keywords: string[],
   database: string,
-  supabase: ReturnType<typeof createClient>
+  supabase: SupabaseClient<any>
 ): Promise<KeywordBaseline[]> {
   if (keywords.length === 0) return []
 
@@ -57,7 +57,7 @@ export async function calculateMarketComparison(
   keywords: string[],
   clientData: Map<string, { position: number | null; volume: number | null }>,
   industryBaseline: KeywordBaseline[],
-  supabase: ReturnType<typeof createClient>
+  supabase: SupabaseClient<any>
 ): Promise<MarketComparison[]> {
   const comparisons: MarketComparison[] = []
 
@@ -119,7 +119,7 @@ export async function storeMarketBaseline(
   clientId: string,
   baseline: KeywordBaseline[],
   snapshotDate: string,
-  supabase: ReturnType<typeof createClient>
+  supabase: SupabaseClient<any>
 ): Promise<number> {
   if (baseline.length === 0) return 0
 
@@ -143,7 +143,7 @@ export async function storeMarketBaseline(
     throw new Error(`Failed to store market baseline: ${error.message}`)
   }
 
-  return data?.length || 0
+  return (data as any)?.length || 0
 }
 
 /**
@@ -153,7 +153,7 @@ export async function storeMarketComparison(
   clientId: string,
   comparisons: MarketComparison[],
   snapshotDate: string,
-  supabase: ReturnType<typeof createClient>
+  supabase: SupabaseClient<any>
 ): Promise<number> {
   if (comparisons.length === 0) return 0
 
@@ -181,7 +181,7 @@ export async function storeMarketComparison(
     throw new Error(`Failed to store market comparison: ${error.message}`)
   }
 
-  return data?.length || 0
+  return (data as any)?.length || 0
 }
 
 /**
@@ -189,7 +189,7 @@ export async function storeMarketComparison(
  */
 export async function getMarketMetrics(
   clientId: string,
-  supabase: ReturnType<typeof createClient>
+  supabase: SupabaseClient<any>
 ) {
   const today = new Date().toISOString().split('T')[0]
 

@@ -80,7 +80,7 @@ export default function LocalVisibilityPage() {
     if (clientId) {
       fetchRankings()
     }
-  }, [clientId])
+  }, [clientId, fetchRankings])
 
   const selectedCityData = rankingsByCity.find((c) => c.city_name === selectedCity)
   const trendsByCity = trends.filter((t) => t.city_name === selectedCity)
@@ -258,7 +258,7 @@ export default function LocalVisibilityPage() {
               <div className="p-8 text-center text-gray-400">Loading rankings...</div>
             ) : selectedCityData.rankings.length === 0 ? (
               <div className="p-8 text-center text-gray-400">
-                No rankings found. Click "Sync Rankings" to fetch data.
+                No rankings found. Click &quot;Sync Rankings&quot; to fetch data.
               </div>
             ) : (
               <div className="overflow-x-auto">

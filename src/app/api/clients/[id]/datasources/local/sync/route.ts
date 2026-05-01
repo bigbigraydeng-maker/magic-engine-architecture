@@ -81,8 +81,8 @@ export async function POST(
         // Extract rankings from DataForSEO response
         const rankings: LocalPackResult[] = []
         for (const task of response.tasks || []) {
-          if (task.result) {
-            rankings.push(...task.result)
+          if (task.result && Array.isArray(task.result)) {
+            rankings.push(...(task.result as LocalPackResult[]))
           }
         }
 

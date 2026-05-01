@@ -75,7 +75,7 @@ export default function MarketBaselinePage() {
     if (clientId) {
       fetchMetrics()
     }
-  }, [clientId])
+  }, [clientId, fetchMetrics])
 
   if (loading) {
     return (

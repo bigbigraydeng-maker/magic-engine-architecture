@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
-import { DataForSeoClient } from '@/lib/dataforseo/client'
-import { parseClientRankings } from '@/lib/dataforseo/client-parser'
+import DataForSeoClient from '@/lib/dataforseo/client'
 import { batchKeywordOverview } from '@/lib/semrush/client'
 import {
   getIndustryBaseline,
@@ -41,7 +40,6 @@ export async function POST(
       .from('client_serp_rankings')
       .select('keyword')
       .eq('client_id', clientId)
-      .distinct()
       .limit(100)
 
     if (!rankings || rankings.length === 0) {
@@ -56,7 +54,7 @@ export async function POST(
       )
     }
 
-    const keywords = rankings.map((r: any) => r.keyword)
+    const keywords = Array.from(new Set(rankings.map((r: any) => r.keyword)))
     const snapshotDate = new Date().toISOString().split('T')[0]
 
     // Get industry baseline from Semrush

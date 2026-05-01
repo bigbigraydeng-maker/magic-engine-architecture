@@ -79,7 +79,7 @@ export default function SerpIntelligencePage() {
     if (clientId) {
       fetchRankings()
     }
-  }, [clientId, sortBy, sortOrder])
+  }, [clientId, sortBy, sortOrder, fetchRankings])
 
   const topThreeChanges = trends
     ?.filter((t) => t.position_current && t.position_current <= 3)
@@ -202,7 +202,7 @@ export default function SerpIntelligencePage() {
         {loading ? (
           <div className="p-8 text-center text-gray-400">Loading rankings...</div>
         ) : rankings.length === 0 ? (
-          <div className="p-8 text-center text-gray-400">No rankings found. Click "Sync Rankings" to fetch data.</div>
+          <div className="p-8 text-center text-gray-400">No rankings found. Click &quot;Sync Rankings&quot; to fetch data.</div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">

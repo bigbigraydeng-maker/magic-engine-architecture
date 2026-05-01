@@ -86,11 +86,10 @@ export async function calculateSerpTrends(
     .select('keyword')
     .eq('client_id', clientId)
     .gte('date', startDate)
-    .distinct()
 
   if (keywordError) throw keywordError
 
-  const keywords = [...new Set(allKeywords?.map((k) => k.keyword) || [])]
+  const keywords = Array.from(new Set(allKeywords?.map((k) => k.keyword) || []))
 
   // For each keyword, calculate trend
   const trends = []

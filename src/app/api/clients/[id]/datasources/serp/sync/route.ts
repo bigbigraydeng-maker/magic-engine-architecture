@@ -54,15 +54,16 @@ export async function POST(
     const tasks = response.tasks || []
 
     for (const task of tasks) {
-      const results = task.result || []
-      for (const result of results) {
-        rankings.push({
-          keyword: result.keyword || '',
-          position: result.position || null,
-          search_volume: result.search_volume || null,
-          url: result.url || null,
-          snippet: result.snippet || null,
-        })
+      if (task.result && Array.isArray(task.result)) {
+        for (const result of task.result) {
+          rankings.push({
+            keyword: (result as any).keyword || '',
+            position: (result as any).position || null,
+            search_volume: (result as any).search_volume || null,
+            url: (result as any).url || null,
+            snippet: (result as any).snippet || null,
+          })
+        }
       }
     }
 
