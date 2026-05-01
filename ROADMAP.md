@@ -16,12 +16,14 @@
 ✅ Phase 8.8     Local Visibility（2026-05-01 完成）
 ✅ Phase 8.9     Market Baseline（2026-05-01 完成）
 ✅ Phase 8.11    Billing Monitor（2026-05-01 完成）
-📋 Phase 8.C     月报整合
+🔄 Phase 8.C.1   月报整合（进行中，2026-05-01 开始）
+📋 Phase 8.C.2   GEO + DataForSEO 闭环
+📋 Phase 8.2-5   其他 Phase 8 功能
 📋 Phase 9       自动化深化
 📋 Phase 10      平台扩展与沉淀
 ```
 
-**Phase 8.11 当前状态**：计划中。建设 DataForSEO 成本追踪模块。
+**Phase 8.C.1 当前状态**：设计中（6 数据源月报整合：AI Tracker + Link Intelligence + SERP Intelligence + Local Visibility + Market Baseline + Billing Monitor）。
 
 ---
 
@@ -444,9 +446,22 @@ Git Commit（事实层）
 
 #### 8.C 跨界整合（与 Phase 7 联动）
 
-- [ ] **P8.C.1** 月报（P7.4.1-P7.4.7）扩展，纳入 P8.6-P8.9 数据
-  - AI Visibility Tracker（Phase 7）+ Link Intelligence（P8.6）+ SERP Intelligence（P8.7）+ Local Visibility（P8.8）
-  - 一份完整月报展示"全景可见度"
+- [ ] **P8.C.1** 月报（P7.4.1-P7.4.7）扩展，纳入 P8.6-P8.11 数据
+  - ✅ 需求分析完成（2026-05-01）：确认 6 大数据源 + 分节设计
+  - 🔄 进行中：核心聚合器设计（26 步实现计划）
+  - **数据源**：
+    1. AI Visibility Tracker（Phase 7.1 orchestrator）
+    2. Link Intelligence（P8.6 外链数据）
+    3. SERP Intelligence（P8.7 排名追踪）
+    4. Local Visibility（P8.8 本地搜索）
+    5. Market Baseline（P8.9 市场基准）
+    6. Billing Monitor（P8.11 成本追踪）
+  - **交付物**：
+    - 6 个数据收集器模块（collectors）
+    - 1 个月报核心聚合库（aggregator）
+    - 3 个 API 端点（oversummary / monthly / trends）
+    - 1 个前端月报页面 + 6 个数据分节组件
+  - **技术债记录** → 见本文件底部 §技术债跟踪
   
 - [ ] **P8.C.2** GEO Composer（Phase 7）+ DataForSEO 数据闭环
   - 基于 Market Baseline（P8.9）优化 GEO 指令
@@ -504,12 +519,80 @@ Week 7: 联调验证 + PoC 更新
 
 ## 6. 技术债
 
+### 既有技术债
 - [ ] **TD.1** Content Workbench 编辑失败无错误提示（当前静默失败）
 - [ ] **TD.2** 图片生成失败后无法手动重试（需刷新页面）
 - [ ] **TD.3** Supabase MCP 未连接 Magic Engine 项目（需加 `glbdnayojixmexgofbsd`）
 - [ ] **TD.4** 缺少 Supabase Row Level Security 规则
 - [ ] **TD.5** 视觉生成队列在客户端 localStorage（需迁移到服务端）
 - [ ] **TD.6** 第三方真实名在部分 UI 文案中暴露（需扫描 + 替换为封装名）
+
+### P8.C.1 月报聚合器引入的技术债（后续补齐）
+
+**聚合器核心库**
+- [ ] **TD.7** 收集器模块（6 个）缺少错误重试机制
+  - 当前：单次调用失败直接返回空数据
+  - 待补：Exponential backoff + 3 次重试 + 降级策略
+  - 优先级：MEDIUM（Phase 8.C.1 MVP 不影响，Phase 9 前必须做）
+
+- [ ] **TD.8** 月报聚合库缺少事务型一致性保证
+  - 当前：6 个收集器独立落库，无全局事务
+  - 待补：Supabase transaction 或消息队列确保一致性
+  - 优先级：HIGH（数据不一致会导致报告错误，应在 Phase 8.C.1 后期补）
+
+- [ ] **TD.9** 聚合器性能未优化（N+1 查询）
+  - 当前：逐个数据源查询，串行执行
+  - 待补：并行化 + JOIN 优化 + Redis 缓存 30 min
+  - 优先级：MEDIUM（现阶段 <10 客户无压力，>50 客户前必须优化）
+
+**API 端点**
+- [ ] **TD.10** 月报查询端点缺少分页 / 排序参数
+  - 当前：返回全量数据
+  - 待补：支持 limit / offset / sort_by / order
+  - 优先级：LOW（MVP 可不做，UI 下个迭代加）
+
+- [ ] **TD.11** API 缺少速率限制（Rate Limit）
+  - 当前：无限制调用
+  - 待补：每客户 100 req/min（Phase 8.C.2 前做）
+  - 优先级：MEDIUM
+
+**前端 UI**
+- [ ] **TD.12** 月报页面缺少加载骨架屏（loading skeleton）
+  - 当前：空白等待，UX 差
+  - 待补：各分节加 skeleton loader（Tailwind 实现）
+  - 优先级：LOW（可在 Phase 8.C.2 优化）
+
+- [ ] **TD.13** 分节组件之间缺少交互（drill-down / tooltip）
+  - 当前：静态卡片展示，难以深入分析
+  - 待补：点击链接到各模块详情页、Hover tooltip 显示计算逻辑
+  - 优先级：LOW（Phase 9 增强）
+
+- [ ] **TD.14** 月报导出功能（PDF / 邮件）未实现（P8.2 任务）
+  - 当前：无导出
+  - 待补：HTML → PDF 通过 headless browser；邮件模板 + Sendgrid 集成
+  - 优先级：HIGH（P8.2 单独任务，排期 Phase 8.C.2 后）
+
+**测试覆盖**
+- [ ] **TD.15** 聚合器单元测试覆盖率 < 70%
+  - 当前：仅端到端测试
+  - 待补：Mock 各数据源，添加 20+ 单元用例
+  - 优先级：HIGH（应在 Phase 8.C.1 完成前补，目标 80%+）
+
+- [ ] **TD.16** 未做月报端到端测试（CTS Tours 实际客户）
+  - 当前：样本数据验证
+  - 待补：真实客户 1 个月数据 round-trip 验证
+  - 优先级：MEDIUM（可在 Phase 8.C.2 进行）
+
+**文档与监控**
+- [ ] **TD.17** 聚合器架构文档缺失
+  - 当前：代码注释零散
+  - 待补：ARCHITECTURE.md 新增 §13 月报聚合架构
+  - 优先级：LOW（Phase 9 前完成）
+
+- [ ] **TD.18** 缺少聚合器性能 / 错误监控仪表板
+  - 当前：无实时监控
+  - 待补：Datadog / Sentry dashboard（成本 → Phase 10）
+  - 优先级：LOW（Phase 9+ 考虑）
 
 ---
 
