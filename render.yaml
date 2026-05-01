@@ -69,3 +69,23 @@ services:
           type: web
           name: crazycontent
           property: host
+
+  # Weekly AI Visibility Tracker — runs every Monday at 1am UTC (~1pm NZST)
+  # Processes all clients with enabled queries; writes runs + weekly snapshot.
+  # Reference: ROADMAP.md P7.4.13
+  - type: cron
+    name: ai-tracker-weekly
+    env: node
+    schedule: "0 1 * * 1"
+    buildCommand: ""
+    startCommand: |
+      curl -s -H "Authorization: Bearer $CRON_SECRET" \
+        https://$RENDER_EXTERNAL_URL/api/cron/ai-tracker-weekly
+    envVars:
+      - key: CRON_SECRET
+        sync: false
+      - key: RENDER_EXTERNAL_URL
+        fromService:
+          type: web
+          name: crazycontent
+          property: host

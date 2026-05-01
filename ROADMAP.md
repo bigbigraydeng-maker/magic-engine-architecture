@@ -13,7 +13,7 @@
 ✅ Phase 7.1     AI Visibility Tracker（完成，含引擎修复 E1-E5）
 ✅ Phase 7.2     GEO Composer（完成，P7.2.1-P7.2.18 全部交付）
 ✅ Phase 7.3     双信号博客生成（完成：Blog Studio + SEO Checker + GEO注入）
-🔥 Phase 7.4     月报 + PoC 验证（P7.4.8-P7.4.12 完成，等待追踪数据）← 当前位置
+🔥 Phase 7.4     月报 + PoC 验证（P7.4.8-P7.4.13 完成，等待追踪数据）← 当前位置
 📋 Phase 8       诊断驱动内容策略（DNZ采集 → 策略层 → 执行）← 下一阶段
 📋 Phase 9       月报自动化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
@@ -353,7 +353,10 @@ Git Commit（事实层）
   - ~~259d7bc9~~ 签证文章已删除（事实错误：GPT-4o 误以为NZ仍需签证）
   - 替换文章（ID: e99d8de8，1240词，geo_only）：「新西兰人首次赴华攻略 — 30天免签完全指南」，包含已调研的正确免签政策，2026-05-01
   - **经验教训**：内容生成前需提供调研事实；对政策/法规类话题不依赖模型训练数据
-- [ ] **P7.4.13** 标记基线日期 + 设置每周自动追踪
+- [x] **P7.4.13** 标记基线日期 + 设置每周自动追踪（2026-05-01）
+  - `clients.geo_intervention_start = '2026-05-01'`（新字段，migration 20260501000003 已执行）
+  - `render.yaml` 新增 `ai-tracker-weekly` Cron（每周一 01:00 UTC ≈ 周一 13:00 NZST）
+  - Cron 路由 `GET /api/cron/ai-tracker-weekly` 已存在，自动处理所有有 enabled queries 的客户
 - [ ] **P7.4.14** 第 2/4 周复跑 Tracker，观察排名变化
 - [ ] **P7.4.15** 第 4 周生成首份月度报告
 
