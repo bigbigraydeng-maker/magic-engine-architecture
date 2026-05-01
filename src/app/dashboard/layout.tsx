@@ -52,6 +52,12 @@ const navItems = [
     emoji: '🌐',
     exact: false,
   },
+  {
+    href: '/dashboard/reports',
+    label: 'Reports',
+    emoji: '📊',
+    exact: false,
+  },
 ];
 
 function Sidebar() {
