@@ -71,8 +71,8 @@ export class SERPIntelligenceCollector extends DataSourceCollectorBase {
         : null
 
     // Find new and lost rankings
-    const newRankings = [...currentMap.keys()].filter((k) => !previousMap.has(k)).length
-    const lostRankings = [...previousMap.keys()].filter((k) => !currentMap.has(k)).length
+    const newRankings = Array.from(currentMap.keys()).filter((k) => !previousMap.has(k)).length
+    const lostRankings = Array.from(previousMap.keys()).filter((k) => !currentMap.has(k)).length
 
     // Calculate position change (average movement)
     let positionChange = null

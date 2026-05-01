@@ -52,8 +52,8 @@ export class LinkIntelligenceCollector extends DataSourceCollectorBase {
     const previousSet = new Set(previousMonth.map((b) => `${b.domain}|${b.url}`))
 
     // Calculate new and lost backlinks
-    const newBacklinks = [...currentSet].filter((b) => !previousSet.has(b)).length
-    const lostBacklinks = [...previousSet].filter((b) => !currentSet.has(b)).length
+    const newBacklinks = Array.from(currentSet).filter((b) => !previousSet.has(b)).length
+    const lostBacklinks = Array.from(previousSet).filter((b) => !currentSet.has(b)).length
 
     // Calculate quality score (average quality_score of active backlinks)
     const activeBacklinks = currentMonth.filter((b) => b.is_active)

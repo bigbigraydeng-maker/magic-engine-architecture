@@ -123,7 +123,7 @@ export abstract class DataSourceCollectorBase implements IDataSourceCollector {
       }
     }
 
-    return reportId
+    return reportId as number
   }
 
   /**
