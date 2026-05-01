@@ -14,14 +14,7 @@ interface Client {
 export default function ClientsPage() {
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showForm, setShowForm] = useState(false);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [form, setForm] = useState({
-    name: '',
-    domain: '',
-    airtable_base_id: '',
-  });
 
   const fetchClients = useCallback(async () => {
     setLoading(true);
@@ -40,28 +33,6 @@ export default function ClientsPage() {
     fetchClients();
   }, [fetchClients]);
 
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSaving(true);
-    setError('');
-    try {
-      const res = await fetch('/api/clients', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error ?? 'Failed to create client');
-      setShowForm(false);
-      setForm({ name: '', domain: '', airtable_base_id: '' });
-      await fetchClients();
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setSaving(false);
-    }
-  };
-
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -70,65 +41,17 @@ export default function ClientsPage() {
           <h1 className="text-2xl font-bold text-gray-900">Clients</h1>
           <p className="text-sm text-gray-500 mt-1">{clients.length} client(s) total</p>
         </div>
-        <button
-          onClick={() => setShowForm(!showForm)}
+        <Link
+          href="/dashboard/clients/onboarding"
           className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
         >
           + New Client
-        </button>
+        </Link>
       </div>
 
-      {/* Inline Create Form */}
-      {showForm && (
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <h2 className="text-base font-semibold text-gray-900 mb-4">New Client</h2>
-          {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
-          <form onSubmit={handleCreate} className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Client Name *</label>
-              <input
-                required
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                placeholder="e.g. CTS Tours"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Domain</label>
-              <input
-                value={form.domain}
-                onChange={(e) => setForm({ ...form, domain: e.target.value })}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                placeholder="ctstours.co.nz"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">Airtable Base ID</label>
-              <input
-                value={form.airtable_base_id}
-                onChange={(e) => setForm({ ...form, airtable_base_id: e.target.value })}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                placeholder="appXXXXXXXXXXXXXX"
-              />
-            </div>
-            <div className="sm:col-span-2 flex gap-3 justify-end">
-              <button
-                type="button"
-                onClick={() => setShowForm(false)}
-                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900 border border-gray-300 rounded-lg"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={saving}
-                className="px-4 py-2 text-sm bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-              >
-                {saving ? 'Saving...' : 'Create Client'}
-              </button>
-            </div>
-          </form>
+      {error && (
+        <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+          {error}
         </div>
       )}
 
@@ -137,8 +60,14 @@ export default function ClientsPage() {
         {loading ? (
           <div className="py-12 text-center text-gray-400 text-sm">Loading...</div>
         ) : clients.length === 0 ? (
-          <div className="py-12 text-center text-gray-400 text-sm">
-            No clients yet. Click &quot;+ New Client&quot; to add one.
+          <div className="py-12 text-center space-y-3">
+            <p className="text-gray-400 text-sm">No clients yet.</p>
+            <Link
+              href="/dashboard/clients/onboarding"
+              className="inline-block text-sm text-indigo-600 hover:text-indigo-800 font-medium underline underline-offset-2"
+            >
+              Add your first client →
+            </Link>
           </div>
         ) : (
           <table className="w-full">

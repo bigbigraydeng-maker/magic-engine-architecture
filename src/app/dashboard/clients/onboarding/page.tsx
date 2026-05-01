@@ -7,10 +7,18 @@ import Step1BasicInfo from './components/Step1BasicInfo'
 import Step2Workspace from './components/Step2Workspace'
 import Step3Keywords from './components/Step3Keywords'
 
+/** Map Step 1 market → SEMrush DB default for Step 3 */
+function toSemrushDb(market: 'au' | 'nz' | 'other'): 'au' | 'nz' | 'us' {
+  if (market === 'au') return 'au'
+  if (market === 'nz') return 'nz'
+  return 'us'
+}
+
 export default function OnboardingPage() {
   const router = useRouter()
   const [step, setStep] = useState(1)
   const [clientId, setClientId] = useState<string | null>(null)
+  const [targetMarket, setTargetMarket] = useState<'au' | 'nz' | 'other'>('au')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -40,6 +48,7 @@ export default function OnboardingPage() {
       }
 
       setClientId(result.client_id)
+      setTargetMarket(data.targetMarket) // thread market to step 3
       setStep(2)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred')
@@ -48,7 +57,7 @@ export default function OnboardingPage() {
     }
   }
 
-  // Step 2: Set up Airtable workspace
+  // Step 2: Set up Airtable workspace (optional — clients can skip)
   const handleStep2Submit = async (data: {
     airtableBaseId: string
     airtableTableId?: string
@@ -78,6 +87,12 @@ export default function OnboardingPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // Step 2: Skip Airtable — proceed without workspace connection
+  const handleStep2Skip = () => {
+    setError(null)
+    setStep(3)
   }
 
   // Step 3: Configure keywords and quota
@@ -150,22 +165,23 @@ export default function OnboardingPage() {
             <Step1BasicInfo onSubmit={handleStep1Submit} loading={loading} />
           )}
 
-          {/* Step 2 */}
+          {/* Step 2 — Airtable workspace (optional) */}
           {step === 2 && clientId && (
             <Step2Workspace
               onSubmit={handleStep2Submit}
+              onSkip={handleStep2Skip}
               loading={loading}
               onBack={handleBack}
             />
           )}
 
-          {/* Step 3 */}
+          {/* Step 3 — pre-fill market from step 1 */}
           {step === 3 && clientId && (
             <Step3Keywords
               onSubmit={handleStep3Submit}
               loading={loading}
               onBack={handleBack}
-              defaultMarket="au" // TODO: track market from step 1
+              defaultMarket={toSemrushDb(targetMarket)}
             />
           )}
         </div>

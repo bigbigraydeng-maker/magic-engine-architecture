@@ -8,12 +8,14 @@ interface Step2Props {
     airtableTableId?: string
   }) => void
   onBack: () => void
+  onSkip: () => void
   loading: boolean
 }
 
 export default function Step2Workspace({
   onSubmit,
   onBack,
+  onSkip,
   loading,
 }: Step2Props) {
   const [airtableBaseId, setAirtableBaseId] = useState('')
@@ -121,6 +123,15 @@ export default function Step2Workspace({
           className="flex-1 px-6 py-3 bg-blue-500 hover:bg-blue-600 disabled:bg-slate-400 text-white font-semibold rounded-lg transition-colors"
         >
           {loading ? 'Verifying...' : 'Continue to Step 3'}
+        </button>
+        <button
+          type="button"
+          onClick={onSkip}
+          disabled={loading}
+          className="px-4 py-3 text-sm text-slate-500 hover:text-slate-700 border border-slate-200 hover:border-slate-300 rounded-lg transition-colors disabled:opacity-50"
+          title="Skip Airtable setup — you can connect it later"
+        >
+          Skip
         </button>
       </div>
     </form>
