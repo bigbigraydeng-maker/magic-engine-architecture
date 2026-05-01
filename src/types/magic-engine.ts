@@ -483,4 +483,15 @@ export interface GenerateBlogRequest {
   source_query_id?: string     // links to the AI Tracker weak spot
   source_query_text?: string
   word_count_target?: number   // default 1000
+  skip_audit?: boolean         // bypass content audit (e.g. user confirmed override)
+}
+
+/** Result from content-auditor — returned alongside generated post */
+export interface ContentAuditResult {
+  action: 'upgrade' | 'new'
+  existing_url: string | null
+  existing_title: string | null
+  reason: string
+  confidence: number
+  discovered_urls: string[]
 }

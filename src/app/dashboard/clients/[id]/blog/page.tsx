@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
-import type { BlogOpportunity } from '@/types/magic-engine';
+import type { BlogOpportunity, ContentAuditResult } from '@/types/magic-engine';
 
 interface BlogPostSummary {
   id: string;
@@ -47,6 +47,11 @@ export default function ClientBlogPage() {
   const [generating, setGenerating] = useState<string | null>(null); // query_id being generated
   const [actionMsg, setActionMsg] = useState('');
   const [actionOk, setActionOk] = useState<boolean | null>(null);
+  // Upgrade recommendation from content audit
+  const [upgradeRec, setUpgradeRec] = useState<{
+    opp: BlogOpportunity;
+    audit: ContentAuditResult;
+  } | null>(null);
 
   const flash = (msg: string, ok: boolean) => {
     setActionMsg(msg);
@@ -81,9 +86,15 @@ export default function ClientBlogPage() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
-  const handleGenerate = async (opp: BlogOpportunity) => {
+  const handleGenerate = async (opp: BlogOpportunity, skipAudit = false) => {
     setGenerating(opp.query_id);
-    flash('✨ Generating blog post… this may take 20-30s', true);
+    setUpgradeRec(null);
+    flash(
+      skipAudit
+        ? '✨ Generating blog post (audit bypassed)… this may take 20-30s'
+        : '🔍 Auditing existing content, then generating… this may take 30s',
+      true
+    );
     try {
       const res = await fetch(`/api/clients/${clientId}/blog`, {
         method: 'POST',
@@ -94,12 +105,21 @@ export default function ClientBlogPage() {
           source_query_id: opp.query_id,
           source_query_text: opp.query_text,
           word_count_target: 1000,
+          skip_audit: skipAudit,
         }),
       });
       const j = await res.json();
       if (!res.ok || !j.success) throw new Error(j.error ?? 'Generation failed');
-      flash(`✓ Blog post created ($${j.cost_usd?.toFixed(4) ?? '?'}) — review it below`, true);
-      await fetchAll();
+
+      if (j.action === 'upgrade' && j.audit) {
+        // Content audit flagged existing content — show recommendation instead of creating post
+        setUpgradeRec({ opp, audit: j.audit as ContentAuditResult });
+        setActionMsg('');
+        setActionOk(null);
+      } else {
+        flash(`✓ Blog post created ($${j.cost_usd?.toFixed(4) ?? '?'}) — review it below`, true);
+        await fetchAll();
+      }
     } catch (err: unknown) {
       flash(err instanceof Error ? err.message : 'Generation failed', false);
     } finally {
@@ -136,6 +156,60 @@ export default function ClientBlogPage() {
           </span>
         )}
       </div>
+
+      {/* ── Content Audit: Upgrade Recommendation ─────────────────── */}
+      {upgradeRec && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl p-5 space-y-3">
+          <div className="flex items-start gap-3">
+            <span className="text-2xl flex-shrink-0">🔄</span>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-amber-900 text-sm">
+                Existing Content Detected — Upgrade Recommended
+              </p>
+              <p className="text-xs text-amber-700 mt-1">{upgradeRec.audit.reason}</p>
+              {upgradeRec.audit.existing_url && (
+                <a
+                  href={upgradeRec.audit.existing_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-indigo-600 hover:underline mt-1 block truncate"
+                >
+                  📄 {upgradeRec.audit.existing_title ?? upgradeRec.audit.existing_url}
+                </a>
+              )}
+              <p className="text-xs text-amber-600 mt-2">
+                Confidence: {Math.round(upgradeRec.audit.confidence * 100)}% ·
+                {upgradeRec.audit.discovered_urls.length} articles scanned
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              onClick={() => handleGenerate(upgradeRec.opp, true)}
+              disabled={!!generating}
+              className="px-4 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white rounded-lg transition-colors"
+            >
+              {generating ? '⏳ Generating…' : '✨ Generate New Anyway'}
+            </button>
+            <button
+              onClick={() => setUpgradeRec(null)}
+              className="px-4 py-2 text-xs font-medium text-amber-700 bg-amber-100 hover:bg-amber-200 rounded-lg transition-colors"
+            >
+              Dismiss
+            </button>
+            {upgradeRec.audit.existing_url && (
+              <a
+                href={upgradeRec.audit.existing_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-4 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-300 hover:border-gray-400 rounded-lg transition-colors"
+              >
+                Open Existing Article →
+              </a>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── AI Weak Spot Topics ────────────────────────────────────── */}
       <section>

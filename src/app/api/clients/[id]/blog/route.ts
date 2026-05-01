@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { generateBlogPost } from '@/lib/blog/generator'
+import { auditExistingContent } from '@/lib/blog/content-auditor'
 import type { BlogPost, GenerateBlogRequest } from '@/types/magic-engine'
 
 /**
@@ -13,8 +14,20 @@ import type { BlogPost, GenerateBlogRequest } from '@/types/magic-engine'
  * Generate a new blog post (stored as 'draft').
  * Body: GenerateBlogRequest
  *
+ * Content Audit:
+ *   Before generating, the handler fetches the client's domain and checks
+ *   whether a post with the same intent already exists. If so, it returns
+ *   { success: true, action: 'upgrade', audit } without generating a new post.
+ *   The caller can pass skip_audit: true to bypass this check.
+ *
  * Reference: ROADMAP.md P7.3.8
  */
+
+interface ClientRow {
+  id: string
+  name: string
+  domain: string | null
+}
 
 export async function GET(
   req: NextRequest,
@@ -65,7 +78,6 @@ export async function POST(
       )
     }
 
-    // Validate mode
     const validModes = ['unified', 'geo_only', 'seo_only']
     const mode = body.mode ?? 'geo_only'
     if (!validModes.includes(mode)) {
@@ -75,48 +87,95 @@ export async function POST(
       )
     }
 
-    // Generate via GPT-4o
-    const result = await generateBlogPost({ ...body, mode, client_id: clientId })
+    // ── Content Audit (pre-generation) ────────────────────────────────────────
+    // Skip if caller explicitly opts out (e.g. user clicked "Generate Anyway")
+    if (!body.skip_audit) {
+      const { data: clientData } = await supabaseAdmin
+        .from('clients')
+        .select('id, name, domain')
+        .eq('id', clientId)
+        .single<ClientRow>()
 
-    // Persist as draft
-    const { data: post, error: dbErr } = await supabaseAdmin
-      .from('blog_posts')
-      .insert({
-        client_id:          clientId,
-        mode,
-        topic:              body.topic.slice(0, 400),
-        source_query_id:    body.source_query_id   ?? null,
-        source_query_text:  body.source_query_text ?? null,
-        title:              result.title,
-        meta_title:         result.meta_title,
-        meta_description:   result.meta_description,
-        slug:               result.slug,
-        html_body:          result.html_body,
-        word_count:         result.word_count,
-        geo_directive_id:   result.geo_directive_id,
-        geo_html_snapshot:  result.geo_html_snapshot,
-        featured_image_prompt: result.featured_image_prompt,
-        cost_usd:           result.cost_usd,
-        model_used:         result.model_used,
-        status:             'draft',
-      })
-      .select('*')
-      .single<BlogPost>()
+      const domain = clientData?.domain
 
-    if (dbErr || !post) {
-      return NextResponse.json(
-        { success: false, error: dbErr?.message ?? 'Failed to save post' },
-        { status: 500 }
-      )
+      if (domain) {
+        const audit = await auditExistingContent(
+          domain,
+          body.topic,
+          body.source_query_text
+        ).catch(() => null) // audit failure must never block generation
+
+        if (audit?.action === 'upgrade') {
+          // Return early — UI should show upgrade recommendation card
+          return NextResponse.json({
+            success: true,
+            action: 'upgrade',
+            audit,
+            post: null,
+          })
+        }
+
+        // action === 'new' — proceed with generation, attach audit info to response
+        const result = await generateBlogPost({ ...body, mode, client_id: clientId })
+        return await persistAndReturn(clientId, body, mode, result, audit)
+      }
     }
 
-    return NextResponse.json({
-      success: true,
-      post,
-      cost_usd: result.cost_usd,
-    })
+    // ── Generate (no domain set, or audit skipped) ────────────────────────────
+    const result = await generateBlogPost({ ...body, mode, client_id: clientId })
+    return await persistAndReturn(clientId, body, mode, result, null)
+
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json({ success: false, error: message }, { status: 500 })
   }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+async function persistAndReturn(
+  clientId: string,
+  body: GenerateBlogRequest,
+  mode: string,
+  result: Awaited<ReturnType<typeof generateBlogPost>>,
+  audit: Awaited<ReturnType<typeof auditExistingContent>> | null
+) {
+  const { data: post, error: dbErr } = await supabaseAdmin
+    .from('blog_posts')
+    .insert({
+      client_id:          clientId,
+      mode,
+      topic:              body.topic.slice(0, 400),
+      source_query_id:    body.source_query_id   ?? null,
+      source_query_text:  body.source_query_text ?? null,
+      title:              result.title,
+      meta_title:         result.meta_title,
+      meta_description:   result.meta_description,
+      slug:               result.slug,
+      html_body:          result.html_body,
+      word_count:         result.word_count,
+      geo_directive_id:   result.geo_directive_id,
+      geo_html_snapshot:  result.geo_html_snapshot,
+      featured_image_prompt: result.featured_image_prompt,
+      cost_usd:           result.cost_usd,
+      model_used:         result.model_used,
+      status:             'draft',
+    })
+    .select('*')
+    .single<BlogPost>()
+
+  if (dbErr || !post) {
+    return NextResponse.json(
+      { success: false, error: dbErr?.message ?? 'Failed to save post' },
+      { status: 500 }
+    )
+  }
+
+  return NextResponse.json({
+    success: true,
+    action: 'new',
+    post,
+    audit,
+    cost_usd: result.cost_usd,
+  })
 }
