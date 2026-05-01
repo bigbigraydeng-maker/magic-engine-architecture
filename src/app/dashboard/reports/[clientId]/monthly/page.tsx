@@ -4,6 +4,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { TrendSparkline } from './_components/TrendSparkline';
+import { SectionHeader, KpiCard } from './_components/Shared';
+import { LinkIntelligencePanel } from './_components/LinkIntelligencePanel';
+import { SearchVisibilityPanel } from './_components/SearchVisibilityPanel';
+import { LocalVisibilityPanel } from './_components/LocalVisibilityPanel';
+import { MarketBenchmarkPanel } from './_components/MarketBenchmarkPanel';
+import { DataSourceUsagePanel } from './_components/DataSourceUsagePanel';
 import type { MonthlyReportData } from '@/lib/reports/monthly-aggregator';
 
 /**
@@ -340,9 +346,39 @@ export default function MonthlyReportPage() {
         </div>
       </section>
 
-      {/* ── §5 Next-Month Recommendations ───────────────────────────── */}
+      {/* ── §5 Link Intelligence ─────────────────────────────────────── */}
       <section>
-        <SectionHeader number="5" title="Next Month Recommendations" />
+        <SectionHeader number="5" title="🔗 Link Intelligence" />
+        <LinkIntelligencePanel data={report.links} />
+      </section>
+
+      {/* ── §6 Search Visibility ─────────────────────────────────────── */}
+      <section>
+        <SectionHeader number="6" title="🔍 Search Visibility" />
+        <SearchVisibilityPanel data={report.search} />
+      </section>
+
+      {/* ── §7 Local Visibility ──────────────────────────────────────── */}
+      <section>
+        <SectionHeader number="7" title="📍 Local Visibility" />
+        <LocalVisibilityPanel data={report.local} />
+      </section>
+
+      {/* ── §8 Market Benchmark ──────────────────────────────────────── */}
+      <section>
+        <SectionHeader number="8" title="🎯 Market Benchmark" />
+        <MarketBenchmarkPanel data={report.market} />
+      </section>
+
+      {/* ── §9 Data Source Usage ─────────────────────────────────────── */}
+      <section>
+        <SectionHeader number="9" title="💰 Data Source Usage" />
+        <DataSourceUsagePanel data={report.usage} />
+      </section>
+
+      {/* ── §10 Next-Month Recommendations ──────────────────────────── */}
+      <section>
+        <SectionHeader number="10" title="Next Month Recommendations" />
         <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
           {recs ? (
             <div>
@@ -383,41 +419,6 @@ export default function MonthlyReportPage() {
           )}
         </div>
       </section>
-    </div>
-  );
-}
-
-// ── Sub-components ─────────────────────────────────────────────────────────────
-
-function SectionHeader({ number, title }: { number: string; title: string }) {
-  return (
-    <div className="flex items-center gap-2 mb-3">
-      <span className="flex-shrink-0 w-6 h-6 rounded-full bg-indigo-600 text-white text-xs font-bold flex items-center justify-center">
-        {number}
-      </span>
-      <h2 className="text-base font-semibold text-gray-900">{title}</h2>
-    </div>
-  );
-}
-
-function KpiCard({
-  label,
-  value,
-  sub,
-  highlight = false,
-}: {
-  label: string;
-  value: string;
-  sub: React.ReactNode;
-  highlight?: boolean;
-}) {
-  return (
-    <div className={`rounded-xl border p-4 space-y-1 ${
-      highlight ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-white'
-    }`}>
-      <p className="text-xs text-gray-500">{label}</p>
-      <p className="text-2xl font-bold text-gray-900">{value}</p>
-      <div>{sub}</div>
     </div>
   );
 }

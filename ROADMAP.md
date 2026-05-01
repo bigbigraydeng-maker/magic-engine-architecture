@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-01 · 当前阶段：**Phase 8.C.1 月报整合（进行中）→ Phase 8.D DNZ诊断策略层（规划中）**
+> 最后更新：2026-05-01 · 当前阶段：**Phase 8.C.2 GEO+DataForSEO 闭环 → Phase 8.D DNZ诊断策略层（规划中）**
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
 
 ---
@@ -19,7 +19,7 @@
 ✅ Phase 8.8     Local Visibility（DataForSEO 本地搜索，2026-05-01 完成）
 ✅ Phase 8.9     Market Baseline（SEMrush 市场基准，2026-05-01 完成）
 ✅ Phase 8.11    Billing Monitor（DataForSEO 成本追踪，2026-05-01 完成）
-🔄 Phase 8.C.1   月报整合（进行中）← 当前位置
+✅ Phase 8.C.1   月报整合（完成，2026-05-01）
 📋 Phase 8.D     DNZ诊断策略层（域名全量采集 → 三维策略分析 → 策略驱动执行）
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
@@ -506,9 +506,12 @@ Git Commit（事实层）
 
 #### 8.C 跨界整合（与 Phase 7 联动）
 
-- [ ] **P8.C.1** 月报（P7.4.1-P7.4.7）扩展，纳入 P8.6-P8.11 数据
-  - ✅ 需求分析完成（2026-05-01）：确认 6 大数据源 + 分节设计
-  - 🔄 进行中：核心聚合器设计（26 步实现计划）
+- [x] **P8.C.1** 月报（P7.4.1-P7.4.7）扩展，纳入 P8.6-P8.11 数据 ✅ **2026-05-01 完成**
+  - ✅ 后端：`monthly-aggregator.ts` 新增 5 个 Phase 8 接口类型 + 5 个独立 collector 函数（Promise.allSettled 并行，单个失败不影响其他）
+  - ✅ 前端：`_components/Shared.tsx`（KpiCard/SectionHeader/EmptyState）+ 5 个 Panel 组件（Link/Search/Local/Market/Usage）
+  - ✅ 月报页从 5 节扩展为 10 节，所有 Phase 8 节空数据时优雅降级（中文空态提示）
+  - ✅ DataSourceUsagePanel 使用 `SERVICE_DISPLAY_MAP` 映射，不暴露真实供应商名
+  - ✅ 构建通过（npm run build ✓），TypeScript strict 编译无错
   - **数据源**：
     1. AI Visibility Tracker（Phase 7.1 orchestrator）
     2. Link Intelligence（P8.6 外链数据）
@@ -516,12 +519,6 @@ Git Commit（事实层）
     4. Local Visibility（P8.8 本地搜索）
     5. Market Baseline（P8.9 市场基准）
     6. Billing Monitor（P8.11 成本追踪）
-  - **交付物**：
-    - 6 个数据收集器模块（collectors）
-    - 1 个月报核心聚合库（aggregator）
-    - 3 个 API 端点（oversummary / monthly / trends）
-    - 1 个前端月报页面 + 6 个数据分节组件
-  - **技术债记录** → 见本文件底部 §技术债跟踪
   
 - [ ] **P8.C.2** GEO Composer（Phase 7）+ DataForSEO 数据闭环
   - 基于 Market Baseline（P8.9）优化 GEO 指令
