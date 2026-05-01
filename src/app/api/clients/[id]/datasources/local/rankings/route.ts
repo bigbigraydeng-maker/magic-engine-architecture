@@ -118,6 +118,10 @@ export async function GET(
     return NextResponse.json(
       {
         error: error instanceof Error ? error.message : 'Failed to fetch local rankings',
+        rankingsByCity: [],
+        trends: [],
+        total: 0,
+        latestDate: null,
       },
       { status: 500 }
     )

@@ -208,7 +208,7 @@ export default function GeoComposerPage() {
       <div className="flex items-center gap-3 flex-wrap">
         {activeDirective ? (
           <span className="text-sm bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded-full font-medium">
-            ✓ Active: Directive v{activeDirective.version} · {activeDirective.deployed_pages.length} page{activeDirective.deployed_pages.length !== 1 ? 's' : ''} deployed
+            ✓ Active: Directive v{activeDirective.version} · {(activeDirective.deployed_pages ?? []).length} page{(activeDirective.deployed_pages ?? []).length !== 1 ? 's' : ''} deployed
           </span>
         ) : (
           <span className="text-sm bg-amber-50 text-amber-700 border border-amber-200 px-3 py-1.5 rounded-full font-medium">

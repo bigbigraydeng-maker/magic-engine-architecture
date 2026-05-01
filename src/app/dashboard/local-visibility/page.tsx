@@ -61,10 +61,11 @@ export default function LocalVisibilityPage() {
         `/api/clients/${selectedClientId}/datasources/local/rankings?limit=100&offset=0`
       )
       const data = await res.json()
-      setRankingsByCity(data.rankingsByCity || [])
-      setTrends(data.trends || [])
-      if (data.rankingsByCity.length > 0 && !selectedCity) {
-        setSelectedCity(data.rankingsByCity[0].city_name)
+      const cityList = data.rankingsByCity ?? []
+      setRankingsByCity(cityList)
+      setTrends(data.trends ?? [])
+      if (cityList.length > 0 && !selectedCity) {
+        setSelectedCity(cityList[0].city_name)
       }
     } catch (error) {
       console.error('Failed to fetch rankings:', error)
