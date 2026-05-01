@@ -5,6 +5,17 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 
 const MAX_SIZE = 30 * 1024 * 1024 // 30 MB
+const CAMPAIGN_BUCKET = 'campaign-uploads'
+
+async function ensureBucket() {
+  const { error } = await supabaseAdmin.storage.createBucket(CAMPAIGN_BUCKET, {
+    public: false,
+    fileSizeLimit: MAX_SIZE,
+  })
+  if (error && !error.message.toLowerCase().includes('already exists')) {
+    throw error
+  }
+}
 const ALLOWED_TYPES = new Set([
   'application/pdf',
   'application/msword',
@@ -40,8 +51,10 @@ export async function POST(
     const ext = file.name.split('.').pop() ?? 'bin'
     const storagePath = `${clientId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
 
+    await ensureBucket()
+
     const { error: uploadErr } = await supabaseAdmin.storage
-      .from('campaign-uploads')
+      .from(CAMPAIGN_BUCKET)
       .upload(storagePath, await file.arrayBuffer(), {
         contentType: file.type,
         upsert: false,
@@ -50,7 +63,7 @@ export async function POST(
     if (uploadErr) throw uploadErr
 
     const { data: { publicUrl } } = supabaseAdmin.storage
-      .from('campaign-uploads')
+      .from(CAMPAIGN_BUCKET)
       .getPublicUrl(storagePath)
 
     return NextResponse.json({

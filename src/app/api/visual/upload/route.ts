@@ -5,6 +5,19 @@ const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp
 const ALLOWED_VIDEO_TYPES = ['video/mp4', 'video/quicktime', 'video/webm', 'video/mov']
 const ALLOWED_TYPES = [...ALLOWED_IMAGE_TYPES, ...ALLOWED_VIDEO_TYPES]
 const MAX_SIZE_BYTES = 100 * 1024 * 1024 // 100 MB
+const VISUAL_BUCKET = 'visual-assets'
+
+/** Create the bucket if it doesn't already exist (idempotent) */
+async function ensureBucket(bucket: string, isPublic = true) {
+  const { error } = await supabaseAdmin.storage.createBucket(bucket, {
+    public: isPublic,
+    fileSizeLimit: MAX_SIZE_BYTES,
+  })
+  // "already exists" is not a real error
+  if (error && !error.message.toLowerCase().includes('already exists')) {
+    throw error
+  }
+}
 
 // POST /api/visual/upload
 // Accepts multipart/form-data: file, post_id, client_id
@@ -40,15 +53,17 @@ export async function POST(req: NextRequest) {
     const ext = file.name.split('.').pop()?.toLowerCase() ?? (assetType === 'video' ? 'mp4' : 'jpg')
     const storagePath = `${clientId}/${postId}/upload_${Date.now()}.${ext}`
 
+    await ensureBucket(VISUAL_BUCKET)
+
     const bytes = await file.arrayBuffer()
     const { error: storageError } = await supabaseAdmin.storage
-      .from('assets')
+      .from(VISUAL_BUCKET)
       .upload(storagePath, bytes, { contentType: file.type, upsert: true })
 
     if (storageError) throw storageError
 
     const { data: { publicUrl } } = supabaseAdmin.storage
-      .from('assets')
+      .from(VISUAL_BUCKET)
       .getPublicUrl(storagePath)
 
     const { data: asset, error: dbError } = await supabaseAdmin

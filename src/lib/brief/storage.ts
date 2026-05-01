@@ -8,6 +8,16 @@ import crypto from 'crypto'
 
 export const BRIEF_BUCKET = 'brief-uploads'
 
+async function ensureBucket() {
+  const { error } = await supabaseAdmin.storage.createBucket(BRIEF_BUCKET, {
+    public: false,
+    fileSizeLimit: 30 * 1024 * 1024,
+  })
+  if (error && !error.message.toLowerCase().includes('already exists')) {
+    throw error
+  }
+}
+
 const MAX_FILE_SIZE = 30 * 1024 * 1024 // 30MB
 
 const ALLOWED_MIME_TYPES = new Set([
@@ -60,6 +70,8 @@ export async function uploadBriefFile(params: {
 
   // Compute SHA-256 for deduplication
   const sha256 = crypto.createHash('sha256').update(file).digest('hex')
+
+  await ensureBucket()
 
   const { error } = await supabaseAdmin.storage
     .from(BRIEF_BUCKET)

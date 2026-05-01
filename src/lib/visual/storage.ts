@@ -2,6 +2,17 @@ import { supabaseAdmin } from '@/lib/supabase'
 
 const BUCKET = 'visual-assets'
 
+/** Create the bucket if it doesn't already exist (idempotent) */
+async function ensureBucket() {
+  const { error } = await supabaseAdmin.storage.createBucket(BUCKET, {
+    public: true,
+    fileSizeLimit: 100 * 1024 * 1024,
+  })
+  if (error && !error.message.toLowerCase().includes('already exists')) {
+    throw error
+  }
+}
+
 export async function uploadFromUrl(params: {
   sourceUrl: string
   clientId: string
@@ -21,6 +32,8 @@ export async function uploadFromUrl(params: {
   const ext = assetType === 'image' ? 'jpg' : 'mp4'
   const timestamp = Date.now()
   const path = `${clientId}/${postId}/${assetType}-v${variant}-${timestamp}.${ext}`
+
+  await ensureBucket()
 
   const { error } = await supabaseAdmin.storage
     .from(BUCKET)
