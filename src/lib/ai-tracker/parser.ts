@@ -1,17 +1,22 @@
 /**
  * AI Visibility Tracker — Brand ranking parser.
  *
- * Takes a natural-language response from one of the runners (OpenAI / Claude)
- * and extracts structured brand mentions + the client's own brand rank.
+ * Takes a natural-language response from one of the runners and extracts
+ * structured brand mentions + the client's own brand rank.
  *
- * Implementation: a second Strategy Engine call. Cheap (small input/output)
- * and far more robust than regex/heuristics for messy real-world text.
+ * Uses OpenAI GPT-4o-mini (JSON mode) — far cheaper and faster than
+ * the Strategy Engine, with reliable structured output.
  *
- * Reference: ROADMAP.md P7.1.8, ARCHITECTURE.md §12.4
+ * Reference: ROADMAP.md P7.1.8, P7.1.12, ARCHITECTURE.md §12.4
  */
 
-import { callClaudeChat, parseJsonResponse } from '../anthropic/client'
+import OpenAI from 'openai'
 import type { BrandMention } from '@/types/magic-engine'
+
+// gpt-4o-mini pricing per million tokens
+const PRICE_INPUT_PER_M = 0.15
+const PRICE_OUTPUT_PER_M = 0.60
+const PARSER_MODEL = 'gpt-4o-mini'
 
 const PARSER_SYSTEM_PROMPT = `You are a precise data extraction assistant.
 
@@ -66,6 +71,11 @@ export async function parseRanking(input: {
     return { brands: [], client_brand_rank: null, parse_cost_usd: 0 }
   }
 
+  const apiKey = process.env.OPENAI_API_KEY
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY environment variable is not set')
+  }
+
   const userMessage = [
     `## AI assistant's response`,
     rawResponse,
@@ -77,20 +87,31 @@ export async function parseRanking(input: {
     `they appear. Return JSON in the format defined in the system prompt.`,
   ].join('\n')
 
-  const response = await callClaudeChat({
-    systemPrompt: PARSER_SYSTEM_PROMPT,
-    messages: [{ role: 'user', content: userMessage }],
-    maxOutputTokens: 1024,
+  const client = new OpenAI({ apiKey })
+  const completion = await client.chat.completions.create({
+    model: PARSER_MODEL,
+    response_format: { type: 'json_object' },
+    max_tokens: 1024,
+    messages: [
+      { role: 'system', content: PARSER_SYSTEM_PROMPT },
+      { role: 'user', content: userMessage },
+    ],
   })
+
+  const text = completion.choices[0]?.message?.content ?? ''
+  const inputTok = completion.usage?.prompt_tokens ?? 0
+  const outputTok = completion.usage?.completion_tokens ?? 0
+  const parseCostUsd =
+    (inputTok / 1_000_000) * PRICE_INPUT_PER_M +
+    (outputTok / 1_000_000) * PRICE_OUTPUT_PER_M
 
   let parsed: { brands: unknown[] }
   try {
-    parsed = parseJsonResponse<{ brands: unknown[] }>(response.text)
+    parsed = JSON.parse(text) as { brands: unknown[] }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown JSON parse error'
-    const preview = response.text.substring(0, 200)
     throw new Error(
-      `Parser JSON parse error: ${errorMsg}. Response preview: ${preview}`
+      `Parser JSON parse error: ${errorMsg}. Response preview: ${text.substring(0, 200)}`
     )
   }
 
@@ -98,15 +119,16 @@ export async function parseRanking(input: {
 
   // Find client's own brand rank using fuzzy match (case-insensitive substring)
   const clientLower = clientBrandName.toLowerCase().trim()
-  const clientMention = brands.find(b =>
-    b.brand.toLowerCase().includes(clientLower) ||
-    clientLower.includes(b.brand.toLowerCase())
+  const clientMention = brands.find(
+    b =>
+      b.brand.toLowerCase().includes(clientLower) ||
+      clientLower.includes(b.brand.toLowerCase())
   )
 
   return {
     brands,
     client_brand_rank: clientMention?.rank ?? null,
-    parse_cost_usd: response.cost_usd,
+    parse_cost_usd: parseCostUsd,
   }
 }
 

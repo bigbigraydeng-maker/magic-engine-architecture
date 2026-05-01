@@ -1,10 +1,13 @@
 /**
  * AI Visibility Tracker — Claude (Strategy Engine) runner.
  *
- * Sends one question to Claude Sonnet 4.5 with web_search tool enabled,
- * localized to the client's target market (AU/NZ).
+ * ⚠️  DISABLED (P7.1.13): Hits Anthropic 30k tokens/min rate limit under
+ * multi-query load. Code retained for future re-enablement or GEO Composer.
+ * Active engines: openai, perplexity, google (Gemini).
  *
- * Reference: ROADMAP.md P7.1.6, ARCHITECTURE.md §12.4
+ * To re-enable: set AI_TRACKER_ENABLE_CLAUDE=true in environment.
+ *
+ * Reference: ROADMAP.md P7.1.6, P7.1.13, ARCHITECTURE.md §12.4
  */
 
 import Anthropic from '@anthropic-ai/sdk'
@@ -21,6 +24,21 @@ const MAX_WEB_SEARCHES = 5
 
 export async function runClaude(input: RunnerInput): Promise<RunnerOutput> {
   const start = Date.now()
+
+  // Guard: disabled by default due to rate limit issues (P7.1.13)
+  if (process.env.AI_TRACKER_ENABLE_CLAUDE !== 'true') {
+    return {
+      ai_engine: 'anthropic',
+      ai_model: MODEL_SONNET,
+      raw_response: '',
+      citations: [],
+      tokens_used: null,
+      cost_usd: null,
+      latency_ms: 0,
+      error_message: 'Claude runner is disabled (rate limit). Set AI_TRACKER_ENABLE_CLAUDE=true to re-enable.',
+    }
+  }
+
   const { country, timezone } = marketToLocation(input.market)
 
   const userLocation =

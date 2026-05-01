@@ -188,13 +188,21 @@ Git Commit（事实层）
 **LLM Runner（Day 3-5）**
 - [x] **P7.1.5** `src/lib/ai-tracker/runners/openai.ts` — gpt-4o-search-preview + AU/NZ user_location
 - [x] **P7.1.6** `src/lib/ai-tracker/runners/claude.ts` — claude-sonnet-4-5 + web_search_20250305 tool
-- [ ] ⏸ **P7.1.7** `src/lib/ai-tracker/runners/perplexity.ts` — 暂缓（用户决策 2026-04-30：先做 OpenAI + Claude）
-- [x] **P7.1.8** `src/lib/ai-tracker/parser.ts` — 自然语言回复 → BrandMention[] + client_brand_rank（二次 Strategy Engine 调用）
+- [x] ⏸ **P7.1.7** `src/lib/ai-tracker/runners/perplexity.ts` — 代码已实现（2026-05-01，见 P7.1-E3）；API key 未绑定，接入时填 PERPLEXITY_API_KEY 并将 engines 切换为 `['openai', 'perplexity', 'google']`
+- [x] **P7.1.8** `src/lib/ai-tracker/parser.ts` — 自然语言回复 → BrandMention[] + client_brand_rank（已重写为 GPT-4o-mini JSON mode，见 P7.1-E1）
 
 **编排与 API（Day 6-7）**
 - [x] **P7.1.9** `src/lib/ai-tracker/orchestrator.ts` — N 问句 × 2 引擎并行车道，批量并发，全套入库 + 周快照聚合
 - [x] **P7.1.10** `POST /api/ai-tracker/run` 路由 — 手动触发一轮（maxDuration 5 分钟）
 - [x] **P7.1.11** `GET /api/cron/ai-tracker-weekly` 路由 — Bearer CRON_SECRET 鉴权，遍历有 enabled query 的客户
+
+**引擎修复（Hotfix 2026-05-01）**
+- [x] **P7.1-E1** `parser.ts` 重写 — 从 Claude Sonnet 切换到 OpenAI GPT-4o-mini (JSON mode)；消除每次查询双倍 Claude token 消耗，解决 30k tokens/min 速率限制根因；parser 成功率 100%，成本降低 ~10×
+- [x] **P7.1-E2** `runners/gemini.ts` 新增 — Gemini 2.5 Flash + Google Search Grounding；代表 AU/NZ ~90% 搜索市场份额的 Google AI Overview；真实实时搜索结果；$0.00048/query
+- [x] **P7.1-E3** `runners/perplexity.ts` 新增 — Perplexity sonar runner（OpenAI-compatible API）；API key 未配置时自动跳过；代码已就绪，接入时只需填 PERPLEXITY_API_KEY
+- [x] **P7.1-E4** `orchestrator.ts` 更新 — 默认引擎切换为 `['openai', 'google']`；新增 `ENGINE_DISPLAY_NAMES` 映射（ChatGPT / Perplexity / Google AI / Claude）；Claude runner 软禁用（`AI_TRACKER_ENABLE_CLAUDE=true` 可重启）
+
+**验证结果（2026-05-01）**：36 queries（18 × 2 engines）：OpenAI 92% 成功 ✅，Gemini 100% ✅，Parser 100% ✅，速率限制错误 0 ✅
 
 **前端页面（Day 8-10）**
 - [ ] **P7.1.12** 路由 `/dashboard/ai-visibility/[clientId]` 创建

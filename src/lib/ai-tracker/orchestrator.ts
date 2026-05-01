@@ -2,8 +2,8 @@
  * AI Visibility Tracker — Orchestrator.
  *
  * Runs one full Tracker pass for a client:
- *   N questions × 2 engines (OpenAI + Claude) = 2N runner calls
- *   plus 2N parser calls = ~4N total LLM round-trips per pass
+ *   N questions × 3 engines (OpenAI + Perplexity + Gemini) = 3N runner calls
+ *   plus 3N parser calls (OpenAI GPT-4o-mini) = ~6N total LLM round-trips per pass
  *
  * Pipeline per (query, engine):
  *   1. Runner returns raw natural-language response + citations
@@ -18,6 +18,8 @@
 
 import { runOpenAI } from './runners/openai'
 import { runClaude } from './runners/claude'
+import { runPerplexity } from './runners/perplexity'
+import { runGemini } from './runners/gemini'
 import { parseRanking } from './parser'
 import { supabaseAdmin } from '../supabase'
 import type {
@@ -27,10 +29,18 @@ import type {
   MarketTag,
 } from '@/types/magic-engine'
 
-// Concurrency: avoid hammering provider RPM limits. Each engine gets its
-// own "lane" so OpenAI and Claude run in parallel; within each lane we
-// process queries in batches.
-const PER_ENGINE_BATCH_SIZE = 1  // Process one query at a time to minimize concurrent load
+// Concurrency: process one query at a time per engine to respect RPM limits.
+// Engines run sequentially (not in parallel) to prevent cross-engine burst.
+const PER_ENGINE_BATCH_SIZE = 1
+
+// Display names shown in UI and reports — use real platform names for AI Tracker
+// (unlike other Magic Engine modules, the platform name IS the product value)
+export const ENGINE_DISPLAY_NAMES: Record<string, string> = {
+  openai:     'ChatGPT',
+  perplexity: 'Perplexity',
+  google:     'Google AI',
+  anthropic:  'Claude',
+}
 
 export interface RunTrackerInput {
   client_id: string
@@ -71,13 +81,20 @@ export async function runTracker(
   input: RunTrackerInput
 ): Promise<RunTrackerResult> {
   const startTime = Date.now()
-  const engines: AiEngine[] = input.engines ?? ['openai', 'anthropic']
+  const engines: AiEngine[] = input.engines ?? ['openai', 'google']
+
+  console.log('[runTracker] Starting for client:', input.client_id, 'engines:', engines)
 
   // 1. Load client info + brand name
+  console.log('[runTracker] Loading client context...')
   const { client, brandName } = await loadClientContext(input.client_id)
+  console.log('[runTracker] Client loaded:', client.name, 'brand:', brandName)
 
   // 2. Load enabled queries (filtered by query_ids if provided)
+  console.log('[runTracker] Loading queries...')
   const queries = await loadQueries(input.client_id, input.query_ids)
+  console.log('[runTracker] Queries loaded:', queries.length)
+
   if (queries.length === 0) {
     throw new Error(
       `No enabled queries found for client ${input.client_id}. Generate questions first.`
@@ -98,7 +115,9 @@ export async function runTracker(
 
   // 3. Run engines sequentially (not in parallel) to respect rate limits
   // Each engine processes its queries in batches with delays between batches
+  console.log('[runTracker] Starting engine lanes for', engines.length, 'engines')
   for (const engine of engines) {
+    console.log('[runTracker] Processing engine:', engine)
     await runEngineLane({
       engine,
       queries,
@@ -106,14 +125,17 @@ export async function runTracker(
       brandName,
       result,
     })
+    console.log(`[runTracker] Engine ${engine} completed: succeeded=${result.runs_succeeded}, failed=${result.runs_failed}`)
   }
 
   // 4. Aggregate weekly snapshot (only if we got at least one successful run)
+  console.log('[runTracker] Aggregating snapshot...')
   if (result.runs_succeeded > 0) {
     result.snapshot_id = await aggregateSnapshot(client.id)
   }
 
   result.total_latency_ms = Date.now() - startTime
+  console.log('[runTracker] Complete! Total latency:', result.total_latency_ms, 'ms')
   return result
 }
 
@@ -181,20 +203,32 @@ interface EngineLaneInput {
 async function runEngineLane(input: EngineLaneInput): Promise<void> {
   const { engine, queries, clientId, brandName, result } = input
 
+  console.log(`[runEngineLane] ${engine}: starting with ${queries.length} queries, batch size = ${PER_ENGINE_BATCH_SIZE}`)
+
   for (let i = 0; i < queries.length; i += PER_ENGINE_BATCH_SIZE) {
     const batch = queries.slice(i, i + PER_ENGINE_BATCH_SIZE)
+    console.log(`[runEngineLane] ${engine}: processing batch at index ${i}, batch size = ${batch.length}`)
+
+    const startBatch = Date.now()
     await Promise.all(
-      batch.map(q =>
-        processOne({ engine, query: q, clientId, brandName, result })
-      )
+      batch.map(q => {
+        console.log(`[runEngineLane] ${engine}: processing query ${q.id}`)
+        return processOne({ engine, query: q, clientId, brandName, result })
+      })
     )
+    const batchElapsed = Date.now() - startBatch
+    console.log(`[runEngineLane] ${engine}: batch complete in ${batchElapsed}ms`)
+
     // Add 10-second delay between batches to prevent rate limiting
     // Claude's rate limit (30k tokens/min) is tight; even 2sec wasn't enough
     // 10sec = 600ms per query, safer margin
     if (i + PER_ENGINE_BATCH_SIZE < queries.length) {
+      console.log(`[runEngineLane] ${engine}: adding 10-second delay before next batch`)
       await new Promise(resolve => setTimeout(resolve, 10000))
     }
   }
+
+  console.log(`[runEngineLane] ${engine}: complete`)
 }
 
 interface ProcessOneInput {
@@ -214,8 +248,12 @@ async function processOne(input: ProcessOneInput): Promise<void> {
   const market: MarketTag = (query.market_tag ?? 'au-nz') as MarketTag
 
   try {
-    // 1. Runner call
-    const runner = engine === 'openai' ? runOpenAI : runClaude
+    // 1. Runner call — select based on engine type
+    const runner =
+      engine === 'openai'     ? runOpenAI :
+      engine === 'perplexity' ? runPerplexity :
+      engine === 'google'     ? runGemini :
+      runClaude
     const runnerOut = await runner({ question: query.question, market })
 
     // 2. Insert ai_visibility_runs row immediately (we have raw response)
