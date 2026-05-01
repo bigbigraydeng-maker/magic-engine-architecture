@@ -39,7 +39,7 @@ export function RankingsTable({ snapshot, brandName }: Props) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 py-16 text-center space-y-1">
         <p className="text-gray-500 text-sm font-medium">No ranking data yet</p>
-        <p className="text-gray-400 text-xs">Click ▶ Run Now above to generate this week's rankings.</p>
+        <p className="text-gray-400 text-xs">Click ▶ Run Now above to generate this week&apos;s rankings.</p>
       </div>
     );
   }
@@ -50,7 +50,7 @@ export function RankingsTable({ snapshot, brandName }: Props) {
   if (brands.length === 0) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 py-16 text-center">
-        <p className="text-gray-400 text-sm">No brand mentions found in this week's runs.</p>
+        <p className="text-gray-400 text-sm">No brand mentions found in this week&apos;s runs.</p>
       </div>
     );
   }

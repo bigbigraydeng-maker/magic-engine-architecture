@@ -246,7 +246,7 @@ export default function ClientBlogPage() {
                   className={`bg-white rounded-xl border p-4 flex flex-col gap-3 ${WEAKNESS_COLORS(opp.weakness_score)}`}>
                   <div className="flex items-start justify-between gap-2">
                     <p className="text-sm font-medium text-gray-900 leading-snug flex-1">
-                      "{opp.query_text}"
+                      &quot;{opp.query_text}&quot;
                     </p>
                     <span className="text-xs font-semibold flex-shrink-0">{scoreLabel}</span>
                   </div>
@@ -279,7 +279,7 @@ export default function ClientBlogPage() {
 
         {posts.length === 0 ? (
           <div className="bg-gray-50 border border-dashed border-gray-300 rounded-xl px-5 py-8 text-center text-sm text-gray-400">
-            No posts yet. Click "✨ Generate Blog Post" on any topic above to start.
+            No posts yet. Click &quot;✨ Generate Blog Post&quot; on any topic above to start.
           </div>
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
@@ -295,7 +295,7 @@ export default function ClientBlogPage() {
                   </p>
                   {post.source_query_text && (
                     <p className="text-xs text-gray-400 mt-0.5 truncate">
-                      Topic: "{post.source_query_text}"
+                      Topic: &quot;{post.source_query_text}&quot;
                     </p>
                   )}
                 </div>

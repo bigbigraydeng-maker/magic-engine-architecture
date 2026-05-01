@@ -667,26 +667,48 @@ export default function VisualsPage() {
   // ── Data fetching ──────────────────────────────────────────────────────────
 
   const fetchClients = useCallback(async () => {
-    const res = await fetch('/api/clients')
-    const d = await res.json()
-    const list: Client[] = d.clients ?? []
-    setClients(list)
-    if (list.length && !selectedClientId) setSelectedClientId(list[0].id)
+    try {
+      const res = await fetch('/api/clients')
+      if (!res.ok) throw new Error(`Failed to load clients (${res.status})`)
+      const d = await res.json()
+      const list: Client[] = d.clients ?? []
+      setClients(list)
+      if (list.length && !selectedClientId) setSelectedClientId(list[0].id)
+    } catch (err) {
+      setToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to load clients',
+      })
+    }
   }, [selectedClientId])
 
   const fetchPosts = useCallback(async (clientId: string, status?: string) => {
-    const params = new URLSearchParams()
-    const s = status ?? statusFilter
-    if (s) params.set('status', s)
-    const res = await fetch(`/api/clients/${clientId}/posts?${params}`)
-    const d = await res.json()
-    setPosts(d.posts ?? [])
+    try {
+      const params = new URLSearchParams()
+      const s = status ?? statusFilter
+      if (s) params.set('status', s)
+      const res = await fetch(`/api/clients/${clientId}/posts?${params}`)
+      if (!res.ok) throw new Error(`Failed to load posts (${res.status})`)
+      const d = await res.json()
+      setPosts(d.posts ?? [])
+    } catch (err) {
+      setToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to load posts',
+      })
+    }
   }, [statusFilter])
 
   const fetchAssets = useCallback(async (clientId: string) => {
-    const res = await fetch(`/api/visual/assets?client_id=${clientId}`)
-    const d = await res.json()
-    setAssets(d.assets ?? [])
+    try {
+      const res = await fetch(`/api/visual/assets?client_id=${clientId}`)
+      if (!res.ok) throw new Error(`Failed to load assets (${res.status})`)
+      const d = await res.json()
+      setAssets(d.assets ?? [])
+    } catch (err) {
+      console.error('Failed to fetch assets:', err)
+      // Silent fail for assets — non-critical data
+    }
   }, [])
 
   useEffect(() => { fetchClients() }, [fetchClients])

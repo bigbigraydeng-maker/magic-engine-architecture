@@ -140,7 +140,7 @@ export function SnippetPreview({
 
       {/* How AI sees this — placeholder */}
       <div className="bg-gray-50 rounded-xl border border-dashed border-gray-300 p-5 text-center">
-        <p className="text-xs text-gray-400 font-medium">🔮 "How AI sees this" simulation</p>
+        <p className="text-xs text-gray-400 font-medium">🔮 &quot;How AI sees this&quot; simulation</p>
         <p className="text-xs text-gray-400 mt-1">Coming soon — will run a quick AI query using the directive above</p>
       </div>
     </div>

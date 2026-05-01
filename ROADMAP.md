@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-01 · 当前阶段：**Phase 7.4 PoC 观察中 → Phase 8 诊断驱动内容策略**
+> 最后更新：2026-05-01 · 当前阶段：**Phase 8.C.1 月报整合（进行中）→ Phase 8.D DNZ诊断策略层（规划中）**
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
 
 ---
@@ -13,13 +13,21 @@
 ✅ Phase 7.1     AI Visibility Tracker（完成，含引擎修复 E1-E5）
 ✅ Phase 7.2     GEO Composer（完成，P7.2.1-P7.2.18 全部交付）
 ✅ Phase 7.3     双信号博客生成（完成：Blog Studio + SEO Checker + GEO注入）
-🔥 Phase 7.4     月报 + PoC 验证（P7.4.8-P7.4.13 完成，等待追踪数据）← 当前位置
-📋 Phase 8       诊断驱动内容策略（DNZ采集 → 策略层 → 执行）← 下一阶段
-📋 Phase 9       月报自动化 + 客户 Portal
+✅ Phase 7.4     月报 + PoC 验证（P7.4.8-P7.4.13 完成，等待追踪数据）
+✅ Phase 8.6     Link Intelligence（DataForSEO 外链，2026-05-01 完成）
+✅ Phase 8.7     SERP Intelligence（DataForSEO 排名追踪，2026-05-01 完成）
+✅ Phase 8.8     Local Visibility（DataForSEO 本地搜索，2026-05-01 完成）
+✅ Phase 8.9     Market Baseline（SEMrush 市场基准，2026-05-01 完成）
+✅ Phase 8.11    Billing Monitor（DataForSEO 成本追踪，2026-05-01 完成）
+🔄 Phase 8.C.1   月报整合（进行中）← 当前位置
+📋 Phase 8.D     DNZ诊断策略层（域名全量采集 → 三维策略分析 → 策略驱动执行）
+📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
 ```
 
-**Phase 7.3 核心策略**：双信号博客（Dual-Signal Blog）— 每篇文章同时携带 SEO 信号（Google 排名）和 GEO 信号（AI 推荐），选题由 AI Tracker 弱项 × SEMrush 低KD机会交叉驱动，形成数据自强化飞轮。
+**Phase 7 核心战略**：双信号博客（Dual-Signal Blog）— 每篇文章同时携带 SEO 信号（Google 排名）和 GEO 信号（AI 推荐），选题由 AI Tracker 弱项 × SEMrush 低KD机会交叉驱动，形成数据自强化飞轮。
+
+**Phase 8 核心战略**：DataForSEO 集成补充 SEMrush 数据缺口，构建完整 SEO 可见度体系（外链、SERP 排名、本地搜索、市场基准）。Phase 8.C.1 月报整合将 6 大数据源聚合，交付完整月度洞察报告。
 
 ---
 
@@ -415,7 +423,145 @@ Git Commit（事实层）
 
 ## 5. 后续 Phase（H2 规划）
 
-### Phase 8 — 诊断驱动内容策略 ⭐
+### Phase 8 — DataForSEO 集成 + 客户陪跑工作流完善（11 项）
+
+**战略定位**：引入 DataForSEO，补充 SEMrush 的数据缺口（外链、SERP 追踪、本地 SEO、市场基线），构建完整的 SEO 可见度体系。AU/NZ 市场重点，地域性强。
+
+#### 8.A 客户接入向导（P8.1-P8.5）
+
+- [x] **P8.1** 客户接入向导（3 步流程：基本信息 → Airtable 配置 → SEMrush/DataForSEO 参数）
+  - ✅ 已完成：Step1BasicInfo、Step2Workspace、Step3Keywords 组件
+  - ✅ 已完成：`POST /api/clients/onboarding/route.ts`（3 步 API）
+  - 待验证：修复 ESLint 报错，集成到 Dashboard 主页
+  
+- [ ] **P8.2** 月报导出 PDF + 邮件发送
+  - 依赖 P8.6-P8.9 完成后进行
+  
+- [ ] **P8.3** 站点权威度追踪（DA / 外链 / 内链）
+  - DataForSEO 会提供外链数据；DA 可能需要 Moz API 或 DataForSEO Rank Tracker
+  
+- [ ] **P8.4** 客户 Portal（client-facing view，只看自己的内容）
+  - 与 P8.6-P8.11 并行开发
+  
+- [ ] **P8.5** Dashboard 简单鉴权（密码或 Magic Link）
+  - 与其他任务并行开发
+
+#### 8.B DataForSEO 集成核心模块（P8.6-P8.11）
+
+> **数据架构**：DataForSEO 提供 4 大数据流，均存入 Supabase，前端通过对外封装名展示。
+
+- [x] **P8.6** Link Intelligence（外链数据）✅ 完成 2026-05-01
+  - ✅ 数据库迁移：`supabase/migrations/20260501000004_dataforseo_backlinks.sql`
+  - ✅ API 客户端：`src/lib/dataforseo/client.ts`（Basic Auth 认证）
+  - ✅ 数据解析器：`src/lib/dataforseo/backlinks-parser.ts`（upsert + velocity 快照）
+  - ✅ 同步端点：`POST /api/clients/[id]/datasources/backlinks/sync`
+  - ✅ 指标端点：`GET /api/clients/[id]/datasources/backlinks/metrics`
+  - ✅ 前端页面：`src/app/dashboard/link-intelligence/page.tsx`（反链表格、同步按钮）
+  - ✅ Dashboard 导航：Link Intelligence 菜单项已添加
+  - ✅ 环境配置：render.yaml 已更新 DATAFORSEO_LOGIN/PASSWORD
+  - **验收**：端到端流程验证 ✅（UI 正常加载、API 可调用、Supabase 表已创建）
+  
+- [x] **P8.7** SERP Intelligence（排名追踪）✅ 完成 2026-05-01
+  - ✅ 数据库：`supabase/migrations/20260501000005_serp_rankings.sql`（serp_rankings + serp_ranking_history）
+  - ✅ DataForSeoClient.getSerp() 方法实现
+  - ✅ 数据解析器：`src/lib/dataforseo/serp-parser.ts`（storeSerpiData、calculateSerpTrends、getSerpMetrics）
+  - ✅ 同步端点：`POST /api/clients/[id]/datasources/serp/sync`
+  - ✅ 查询端点：`GET /api/clients/[id]/datasources/serp/rankings`（支持排序、分页）
+  - ✅ 前端页面：`src/app/dashboard/serp-intelligence`（关键词表格、排名变化、机会识别）
+  - ✅ Dashboard 导航：SERP Intelligence 菜单项已添加（📈 emoji）
+  - **验收**：支持 100+ 关键词追踪、4 周趋势计算、Top 10/50 分类 ✅
+  
+- [x] **P8.8** Local Visibility（本地搜索可见度）✅ 完成 2026-05-01
+  - ✅ 数据库：`supabase/migrations/20260501000006_local_serp_rankings.sql`（local_serp_rankings + local_ranking_history + local_cities 预填充）
+  - ✅ AU 城市：Sydney (2036), Melbourne (2157), Brisbane (2174), Perth (2190), Adelaide (2091), Hobart (2147), Gold Coast (2171), Canberra (2099)
+  - ✅ NZ 城市：Auckland (2554), Wellington (2579), Christchurch (2555), Dunedin (2556), Hamilton (2557), Tauranga (2558)
+  - ✅ DataForSeoClient.getLocal() 方法实现（Local Pack API）
+  - ✅ 数据解析器：`src/lib/dataforseo/local-parser.ts`（storeLocalData、calculateLocalTrends、getLocalMetrics）
+  - ✅ 同步端点：`POST /api/clients/[id]/datasources/local/sync`（多城市并行同步）
+  - ✅ 查询端点：`GET /api/clients/[id]/datasources/local/rankings`（按城市分组、支持排序）
+  - ✅ 前端页面：`src/app/dashboard/local-visibility`（城市选择器、指标卡片、排名表格、机会识别）
+  - ✅ Dashboard 导航：Local Visibility 菜单项已添加（🗺️ emoji）
+  - **验收**：支持 AU/NZ 8+6 城市、28 天趋势计算、新/失排名检测、Top 10/50 分类 ✅
+  
+- [x] **P8.9** Market Baseline（市场基准数据）✅ 完成 2026-05-01
+  - ✅ 数据库：`supabase/migrations/20260501000007_market_baseline.sql`（market_baseline + market_comparison）
+  - ✅ Semrush 集成：`src/lib/semrush/market-baseline.ts`（getIndustryBaseline、calculateMarketComparison、storeMarketBaseline、storeMarketComparison、getMarketMetrics）
+  - ✅ 同步端点：`POST /api/clients/[id]/datasources/market/sync`（拉取 Semrush 数据、计算行业对标）
+  - ✅ 查询端点：`GET /api/clients/[id]/datasources/market/rankings`（按关键词返回对标数据、支持分页）
+  - ✅ 前端页面：`src/app/dashboard/market-baseline/page.tsx`（机会评分卡片、Top Opportunities 表、Underperformers 列表、完整关键词对标表）
+  - ✅ Dashboard 导航：Market Baseline 菜单项已添加（📊 emoji）
+  - **验收**：支持 100+ 关键词对标、机会评分 0-100、竞争强度分类（领先/持平/落后）✅
+  
+- [ ] **P8.10** (待定 — 可能是 DataForSEO 成本优化或其他功能)
+  - 暂预留
+  
+- [x] **P8.11** Billing Monitoring（DataForSEO 成本追踪）✅ **2026-05-01 完成**
+  - 数据库：创建 `datasource_usage_logs` 表（client_id, service, api_calls, cost_usd, month）✅
+  - 用途：按客户、按服务、按月追踪 DataForSEO 的 API 成本 ✅
+  - API：`GET /api/admin/billing/datasources?month=` — 成本汇总，支持降级回退（测试环境样本数据）✅
+  - 前端：`/dashboard/admin/billing-monitor` 页面（仅管理员可见，展示所有客户的 DataForSEO 成本）✅
+  - E2E 测试：11 个 billing monitor 测试，31/31 Phase 8 E2E 测试通过 ✅
+  - **验收**：✅ 能按客户、按月查看 DataForSEO 成本，用于计费和成本优化；E2E 测试全覆盖
+  - **提交**：be9e259（API 修复）+ 17e301e（E2E 测试）+ 4362658（仪表板重构）
+
+#### 8.C 跨界整合（与 Phase 7 联动）
+
+- [ ] **P8.C.1** 月报（P7.4.1-P7.4.7）扩展，纳入 P8.6-P8.11 数据
+  - ✅ 需求分析完成（2026-05-01）：确认 6 大数据源 + 分节设计
+  - 🔄 进行中：核心聚合器设计（26 步实现计划）
+  - **数据源**：
+    1. AI Visibility Tracker（Phase 7.1 orchestrator）
+    2. Link Intelligence（P8.6 外链数据）
+    3. SERP Intelligence（P8.7 排名追踪）
+    4. Local Visibility（P8.8 本地搜索）
+    5. Market Baseline（P8.9 市场基准）
+    6. Billing Monitor（P8.11 成本追踪）
+  - **交付物**：
+    - 6 个数据收集器模块（collectors）
+    - 1 个月报核心聚合库（aggregator）
+    - 3 个 API 端点（oversummary / monthly / trends）
+    - 1 个前端月报页面 + 6 个数据分节组件
+  - **技术债记录** → 见本文件底部 §技术债跟踪
+  
+- [ ] **P8.C.2** GEO Composer（Phase 7）+ DataForSEO 数据闭环
+  - 基于 Market Baseline（P8.9）优化 GEO 指令
+  
+---
+
+#### Phase 8  总体排期
+
+```
+Week 1-2: P8.1 ESLint fix + Dashboard 集成
+Week 2-3: P8.6 Link Intelligence 核心开发
+Week 3-4: P8.7 SERP Intelligence + P8.8 Local Visibility 并行
+Week 4-5: P8.9 Market Baseline + P8.11 Billing Monitor
+Week 5-6: P8.4-P8.5 鉴权 + Portal 联调
+Week 6-7: P8.2 月报 PDF + 邮件
+Week 7: 联调验证 + PoC 更新
+```
+
+---
+
+#### DataForSEO API 集成清单
+
+**需要的环境变量**：
+- `DATAFORSEO_LOGIN`
+- `DATAFORSEO_PASSWORD`
+
+**API 模块**：
+- `src/lib/dataforseo/client.ts` — API 认证 + 基础请求
+- `src/lib/dataforseo/backlinks.ts` — Link Intelligence（P8.6）
+- `src/lib/dataforseo/serp.ts` — SERP Tracking（P8.7）
+- `src/lib/dataforseo/local.ts` — Local Pack（P8.8）
+- `src/lib/dataforseo/parser.ts` — 响应解析 + Supabase 落库
+
+**UI 封装名规范**（必须）：
+- DataForSEO → "Link Intelligence" / "SERP Intelligence" / "Local Visibility" / "Market Baseline"
+- 不允许在任何用户可见界面出现 "DataForSEO" 字样
+
+---
+
+### Phase 8.D — DNZ 诊断驱动内容策略 ⭐（规划中）
 
 > **设计背景（2026-05-01 确立）**
 >
@@ -531,12 +677,80 @@ Layer 3: 策略驱动执行
 
 ## 6. 技术债
 
+### 既有技术债
 - [ ] **TD.1** Content Workbench 编辑失败无错误提示（当前静默失败）
 - [ ] **TD.2** 图片生成失败后无法手动重试（需刷新页面）
 - [ ] **TD.3** Supabase MCP 未连接 Magic Engine 项目（需加 `glbdnayojixmexgofbsd`）
 - [ ] **TD.4** 缺少 Supabase Row Level Security 规则
 - [ ] **TD.5** 视觉生成队列在客户端 localStorage（需迁移到服务端）
 - [ ] **TD.6** 第三方真实名在部分 UI 文案中暴露（需扫描 + 替换为封装名）
+
+### P8.C.1 月报聚合器引入的技术债（后续补齐）
+
+**聚合器核心库**
+- [ ] **TD.7** 收集器模块（6 个）缺少错误重试机制
+  - 当前：单次调用失败直接返回空数据
+  - 待补：Exponential backoff + 3 次重试 + 降级策略
+  - 优先级：MEDIUM（Phase 8.C.1 MVP 不影响，Phase 9 前必须做）
+
+- [ ] **TD.8** 月报聚合库缺少事务型一致性保证
+  - 当前：6 个收集器独立落库，无全局事务
+  - 待补：Supabase transaction 或消息队列确保一致性
+  - 优先级：HIGH（数据不一致会导致报告错误，应在 Phase 8.C.1 后期补）
+
+- [ ] **TD.9** 聚合器性能未优化（N+1 查询）
+  - 当前：逐个数据源查询，串行执行
+  - 待补：并行化 + JOIN 优化 + Redis 缓存 30 min
+  - 优先级：MEDIUM（现阶段 <10 客户无压力，>50 客户前必须优化）
+
+**API 端点**
+- [ ] **TD.10** 月报查询端点缺少分页 / 排序参数
+  - 当前：返回全量数据
+  - 待补：支持 limit / offset / sort_by / order
+  - 优先级：LOW（MVP 可不做，UI 下个迭代加）
+
+- [ ] **TD.11** API 缺少速率限制（Rate Limit）
+  - 当前：无限制调用
+  - 待补：每客户 100 req/min（Phase 8.C.2 前做）
+  - 优先级：MEDIUM
+
+**前端 UI**
+- [ ] **TD.12** 月报页面缺少加载骨架屏（loading skeleton）
+  - 当前：空白等待，UX 差
+  - 待补：各分节加 skeleton loader（Tailwind 实现）
+  - 优先级：LOW（可在 Phase 8.C.2 优化）
+
+- [ ] **TD.13** 分节组件之间缺少交互（drill-down / tooltip）
+  - 当前：静态卡片展示，难以深入分析
+  - 待补：点击链接到各模块详情页、Hover tooltip 显示计算逻辑
+  - 优先级：LOW（Phase 9 增强）
+
+- [ ] **TD.14** 月报导出功能（PDF / 邮件）未实现（P8.2 任务）
+  - 当前：无导出
+  - 待补：HTML → PDF 通过 headless browser；邮件模板 + Sendgrid 集成
+  - 优先级：HIGH（P8.2 单独任务，排期 Phase 8.C.2 后）
+
+**测试覆盖**
+- [ ] **TD.15** 聚合器单元测试覆盖率 < 70%
+  - 当前：仅端到端测试
+  - 待补：Mock 各数据源，添加 20+ 单元用例
+  - 优先级：HIGH（应在 Phase 8.C.1 完成前补，目标 80%+）
+
+- [ ] **TD.16** 未做月报端到端测试（CTS Tours 实际客户）
+  - 当前：样本数据验证
+  - 待补：真实客户 1 个月数据 round-trip 验证
+  - 优先级：MEDIUM（可在 Phase 8.C.2 进行）
+
+**文档与监控**
+- [ ] **TD.17** 聚合器架构文档缺失
+  - 当前：代码注释零散
+  - 待补：ARCHITECTURE.md 新增 §13 月报聚合架构
+  - 优先级：LOW（Phase 9 前完成）
+
+- [ ] **TD.18** 缺少聚合器性能 / 错误监控仪表板
+  - 当前：无实时监控
+  - 待补：Datadog / Sentry dashboard（成本 → Phase 10）
+  - 优先级：LOW（Phase 9+ 考虑）
 
 ---
 

@@ -41,7 +41,6 @@ export async function runGemini(input: RunnerInput): Promise<RunnerOutput> {
       // Enable Google Search Grounding — answers are based on real-time
       // Google search results, closely mirroring Google AI Overview behaviour.
       // Cast required: SDK runtime supports googleSearch but TS types lag behind.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       tools: [{ googleSearch: {} }] as any,
     })
 

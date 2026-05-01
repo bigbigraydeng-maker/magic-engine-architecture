@@ -40,6 +40,7 @@ const navItems = [
     emoji: '📊',
     exact: false,
   },
+  // Phase 7 — AI Visibility & GEO
   {
     href: '/dashboard/ai-visibility',
     label: 'AI Visibility',
@@ -56,6 +57,37 @@ const navItems = [
     href: '/dashboard/reports',
     label: 'Reports',
     emoji: '📊',
+    exact: false,
+  },
+  // Phase 8 — Datasources & Intelligence
+  {
+    href: '/dashboard/link-intelligence',
+    label: 'Link Intelligence',
+    emoji: '🔗',
+    exact: false,
+  },
+  {
+    href: '/dashboard/serp-intelligence',
+    label: 'SERP Intelligence',
+    emoji: '📈',
+    exact: false,
+  },
+  {
+    href: '/dashboard/local-visibility',
+    label: 'Local Visibility',
+    emoji: '🗺️',
+    exact: false,
+  },
+  {
+    href: '/dashboard/market-baseline',
+    label: 'Market Baseline',
+    emoji: '📊',
+    exact: false,
+  },
+  {
+    href: '/dashboard/admin/billing-monitor',
+    label: 'Billing Monitor',
+    emoji: '💳',
     exact: false,
   },
 ];
@@ -94,7 +126,7 @@ function Sidebar() {
         })}
       </nav>
       <div className="px-4 py-4 border-t border-gray-800">
-        <p className="text-xs text-gray-600">Phase 5 · Internal Use</p>
+        <p className="text-xs text-gray-600">Phase 8 · Internal Use</p>
       </div>
     </aside>
   );

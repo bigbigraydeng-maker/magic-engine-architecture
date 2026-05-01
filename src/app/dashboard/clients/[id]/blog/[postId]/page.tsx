@@ -238,7 +238,7 @@ ${showGeoBlock && post.geo_html_snapshot
                 {post.cost_usd && <span>Cost: ${post.cost_usd.toFixed(4)}</span>}
                 {post.source_query_text && (
                   <span className="text-indigo-500">
-                    🎯 "{post.source_query_text}"
+                    🎯 &quot;{post.source_query_text}&quot;
                   </span>
                 )}
               </div>

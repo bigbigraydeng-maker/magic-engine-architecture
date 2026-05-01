@@ -307,7 +307,7 @@ export default function MonthlyReportPage() {
                     return (
                       <tr key={i} className="hover:bg-gray-50/50">
                         <td className="px-4 py-3 text-xs text-gray-800 leading-snug">
-                          "{row.question}"
+                          &quot;{row.question}&quot;
                         </td>
                         <td className="px-3 py-3 text-center">
                           <span className={`inline-block text-xs font-bold px-2 py-0.5 rounded-full ${rankBadge}`}>
@@ -367,7 +367,7 @@ export default function MonthlyReportPage() {
           ) : (
             <div className="text-center py-4 space-y-3">
               <p className="text-sm text-gray-500">
-                Generate AI-powered recommendations based on this month's performance data.
+                Generate AI-powered recommendations based on this month&apos;s performance data.
               </p>
               {recsError && (
                 <p className="text-xs text-red-500">{recsError}</p>

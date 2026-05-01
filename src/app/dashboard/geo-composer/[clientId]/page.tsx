@@ -269,7 +269,7 @@ export default function GeoComposerPage() {
       {/* Empty state */}
       {directives.length === 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-6 text-sm text-amber-700">
-          <strong>No directives yet.</strong> Click <strong>✨ Regenerate from AI Tracker</strong> to generate your first GEO directive automatically from the client's Brief and AI Visibility data.
+          <strong>No directives yet.</strong> Click <strong>✨ Regenerate from AI Tracker</strong> to generate your first GEO directive automatically from the client&apos;s Brief and AI Visibility data.
         </div>
       )}
 
