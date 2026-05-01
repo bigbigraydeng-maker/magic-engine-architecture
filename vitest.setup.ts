@@ -4,6 +4,7 @@
  */
 
 import { vi } from 'vitest'
+import '@testing-library/jest-dom'
 
 // Mock environment variables for tests
 process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://test.supabase.co'
@@ -16,7 +17,7 @@ export const createMockNextRequest = (
   url: string,
   options?: {
     method?: string
-    body?: Record<string, any>
+    body?: Record<string, unknown>
     headers?: Record<string, string>
   }
 ) => {
