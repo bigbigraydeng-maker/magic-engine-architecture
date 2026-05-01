@@ -46,6 +46,12 @@ const navItems = [
     emoji: '🤖',
     exact: false,
   },
+  {
+    href: '/dashboard/geo-composer',
+    label: 'GEO Composer',
+    emoji: '🌐',
+    exact: false,
+  },
 ];
 
 function Sidebar() {

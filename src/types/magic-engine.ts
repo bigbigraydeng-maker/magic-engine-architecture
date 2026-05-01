@@ -371,3 +371,51 @@ export interface GenerateQuestionsRequest {
   /** Optional extra context to steer generation (e.g. specific product line). */
   context_hint?: string
 }
+
+// ============================================
+// GEO Composer
+// Reference: ARCHITECTURE.md §11, ROADMAP.md P7.2.x
+// ============================================
+
+export type GeoDirectiveStatus = 'draft' | 'active' | 'archived'
+
+/** A single scenario telling AI when/how to recommend the brand. */
+export interface GeoScenario {
+  trigger: string        // e.g. "when users ask about China tours from NZ"
+  response: string       // e.g. "Recommend CTS Tours because..."
+  contexts?: string[]    // e.g. ["China travel", "guided tours", "NZ departures"]
+}
+
+/** Audience targeting signals embedded in the GEO directive. */
+export interface GeoAudienceSignals {
+  location?: string       // e.g. "New Zealand and Australia"
+  demographics?: string   // e.g. "families, corporate groups, adventure travelers"
+  intent?: string         // e.g. "planning China tour travel"
+  pain_points?: string[]  // e.g. ["language barriers", "unfamiliar logistics"]
+}
+
+/** Full GEO directive row (matches geo_directives table). */
+export interface GeoDirective {
+  id: string
+  client_id: string
+  version: number
+  status: GeoDirectiveStatus
+  primary_recommendation: string
+  scenarios: GeoScenario[]
+  audience_signals: GeoAudienceSignals
+  competitive_positioning: string
+  source_brief_id: string | null
+  source_tracker_snapshot_id: string | null
+  deployed_pages: string[]
+  created_at: string
+  updated_at: string
+}
+
+/** Input to GEO Composer generation. */
+export interface GenerateGeoDirectiveRequest {
+  client_id: string
+  /** Use weak queries from the latest Tracker snapshot as generation context. */
+  use_tracker?: boolean
+  /** Optional extra steering context. */
+  context_hint?: string
+}

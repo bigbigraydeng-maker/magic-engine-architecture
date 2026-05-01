@@ -219,8 +219,8 @@ Git Commit（事实层）
 - [x] `PATCH /api/ai-tracker/queries/[id]` — 更新单条查询（enabled/question/notes）
 
 **联调（Day 11-12）**
-- [ ] **P7.1.19** 端到端测试：CTS Tours 跑一次基线
-- [ ] **P7.1.20** 数据持久化验证
+- [x] **P7.1.19** 端到端测试：CTS Tours 跑一次基线 ✅ 2026-05-01 截图验证：#1.5 avg rank，142/1000 runs，100% engine success
+- [x] **P7.1.20** 数据持久化验证 ✅ snapshot 已生成，ranking_table 正确，UI 4 Tab 全部正常
 
 **验收标准**：
 - 进入客户 → AI Visibility 页 → 点 "Run Now" → 5 分钟内看到 3 家 AI 的排名表
