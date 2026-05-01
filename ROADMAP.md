@@ -10,16 +10,17 @@
 ```
 ✅ Phase 1-6     社媒内容矩阵（已完成）
 ✅ Phase 7.0     决策窗口（7/7 决策完成，2026-04-30）
-🔥 Phase 7.1     AI Visibility Tracker (Week 1-2)  ← 当前位置
-📋 Phase 7.2     GEO Composer (Week 3)
-📋 Phase 7.3     博客生成 + Snippet 部署 (Week 4)
-📋 Phase 7.4     月报 + PoC 验证 (Week 5)
-📋 Phase 8       博客内容线 + 客户接入向导
-📋 Phase 9       月报自动化 + 站点权威度追踪
-📋 Phase 10      多语言 + Magic Lab Academy 沉淀
+✅ Phase 8.1     ESLint fix 完成
+✅ Phase 8.6     Link Intelligence（2026-05-01 完成）
+🔥 Phase 8.7     SERP Intelligence (排名追踪) ← 当前位置
+📋 Phase 8.8-9   Local Visibility + Market Baseline
+📋 Phase 8.11    Billing Monitor
+📋 Phase 8.C     月报整合
+📋 Phase 9       自动化深化
+📋 Phase 10      平台扩展与沉淀
 ```
 
-**Phase 7.1 当前状态**：决策完成，开工。第一步 P7.1.1（数据库 schema）进行中。
+**Phase 8.7 当前状态**：开工。建设 SERP 排名追踪模块。
 
 ---
 
@@ -386,14 +387,16 @@ Git Commit（事实层）
 
 > **数据架构**：DataForSEO 提供 4 大数据流，均存入 Supabase，前端通过对外封装名展示。
 
-- [x] **P8.6** Link Intelligence（外链数据）
-  - ✅ 完成：数据库迁移文件 `migrations/20260501000003_dataforseo_backlinks.sql`
-  - ✅ 完成：API 客户端 `src/lib/dataforseo/client.ts`（基础认证 + 请求）
-  - ✅ 完成：数据解析器 `src/lib/dataforseo/backlinks-parser.ts`（upsert + velocity 快照）
-  - ✅ 完成：同步端点 `POST /api/clients/[id]/datasources/backlinks/sync`
-  - ✅ 完成：指标端点 `GET /api/clients/[id]/datasources/backlinks/metrics`
-  - ✅ 完成：前端页面 `src/app/dashboard/link-intelligence/page.tsx`（反链表格、同步按钮、质量指标）
-  - 待完成：添加到 Dashboard 导航栏
+- [x] **P8.6** Link Intelligence（外链数据）✅ 完成 2026-05-01
+  - ✅ 数据库迁移：`supabase/migrations/20260501000003_dataforseo_backlinks.sql`
+  - ✅ API 客户端：`src/lib/dataforseo/client.ts`（Basic Auth 认证）
+  - ✅ 数据解析器：`src/lib/dataforseo/backlinks-parser.ts`（upsert + velocity 快照）
+  - ✅ 同步端点：`POST /api/clients/[id]/datasources/backlinks/sync`
+  - ✅ 指标端点：`GET /api/clients/[id]/datasources/backlinks/metrics`
+  - ✅ 前端页面：`src/app/dashboard/link-intelligence/page.tsx`（反链表格、同步按钮）
+  - ✅ Dashboard 导航：Link Intelligence 菜单项已添加
+  - ✅ 环境配置：render.yaml 已更新 DATAFORSEO_LOGIN/PASSWORD
+  - **验收**：端到端流程验证 ✅（UI 正常加载、API 可调用、Supabase 表已创建）
   
 - [ ] **P8.7** SERP Intelligence（排名追踪）
   - 数据库：创建 `serp_rankings` 表（client_id, keyword, position, search_volume, url, date）
