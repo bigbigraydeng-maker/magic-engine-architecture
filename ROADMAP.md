@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-04-30 · 当前阶段：**Phase 7.1 — AI Visibility Tracker（Week 1-2）**
+> 最后更新：2026-05-01 · 当前阶段：**Phase 7.3 — 双信号博客生成（Week 4）**
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
 
 ---
@@ -10,16 +10,16 @@
 ```
 ✅ Phase 1-6     社媒内容矩阵（已完成）
 ✅ Phase 7.0     决策窗口（7/7 决策完成，2026-04-30）
-🔥 Phase 7.1     AI Visibility Tracker (Week 1-2)  ← 当前位置
-📋 Phase 7.2     GEO Composer (Week 3)
-📋 Phase 7.3     博客生成 + Snippet 部署 (Week 4)
-📋 Phase 7.4     月报 + PoC 验证 (Week 5)
-📋 Phase 8       博客内容线 + 客户接入向导
+✅ Phase 7.1     AI Visibility Tracker（完成，含引擎修复 E1-E5）
+✅ Phase 7.2     GEO Composer（完成，P7.2.1-P7.2.18 全部交付）
+🔥 Phase 7.3     双信号博客生成（Week 4）← 当前位置
+📋 Phase 7.4     月报 + PoC 验证（Week 5）
+📋 Phase 8       博客内容线规模化 + 客户接入向导
 📋 Phase 9       月报自动化 + 站点权威度追踪
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
 ```
 
-**Phase 7.1 当前状态**：决策完成，开工。第一步 P7.1.1（数据库 schema）进行中。
+**Phase 7.3 核心策略**：双信号博客（Dual-Signal Blog）— 每篇文章同时携带 SEO 信号（Google 排名）和 GEO 信号（AI 推荐），选题由 AI Tracker 弱项 × SEMrush 低KD机会交叉驱动，形成数据自强化飞轮。
 
 ---
 
@@ -267,30 +267,54 @@ Git Commit（事实层）
 
 ---
 
-### 3.3 博客生成 + Snippet 部署（Week 4）
+### 3.3 双信号博客生成 + Snippet 部署（Week 4）
 
-**目标**：把 GEO 注入到实际生产内容流。
+**目标**：把 GEO 注入到实际生产内容流，建立 SEO × GEO 双信号内容飞轮。
 
-**博客生成自动注入（Day 20-21）**
-- [ ] **P7.3.1** 改造 Campaign 批量生成 / Route A 流程，输出 HTML 时拼接 active GEO directive
-- [ ] **P7.3.2** 新增 `POST /api/clients/[id]/blog/generate`（独立长文流程）
-- [ ] **P7.3.3** 博客 HTML 模板含完整 SEO 元素（title / meta / schema / 内链 / GEO 隐藏块）
+**核心策略：双信号博客（Dual-Signal Blog）**
+
+每篇博客同时携带两套信号，互不干扰、叠加增益：
+- **SEO 信号**：关键词、meta、schema、内链 → 影响 Google 排名
+- **GEO 信号**：隐藏指令块 + 实体提及 → 影响 AI 推荐
+
+内容生成分三种模式：
+
+| 模式 | 触发条件 | 优先级 |
+|------|---------|--------|
+| `unified` | AI Tracker 弱项 **且** SEMrush 有低KD量词 | ★★★ 最高 |
+| `geo_only` | AI Tracker 弱项，SEMrush 无SEO价值词 | ★★☆ 中 |
+| `seo_only` | 纯低KD机会词，无GEO弱项对应 | ★☆☆ 低 |
+
+**博客选题与关键词质检（Day 20）**
+- [ ] **P7.3.1** `src/lib/geo/html-generator.ts` 新增 `getActiveGeoHtml(clientId)` 导出
+- [ ] **P7.3.2** `src/lib/blog/topic-selector.ts` — AI Tracker 弱项 × SEMrush 交叉分析，输出 `BlogOpportunity[]`（含 mode 分类）
+- [ ] **P7.3.3** `GET /api/clients/[id]/blog/opportunities` — 返回机会列表供编辑选题
+
+**博客生成核心（Day 21）**
+- [ ] **P7.3.4** `src/lib/blog/generator.ts` — GPT-4o 长文生成（unified/geo_only 两套 prompt 策略）
+- [ ] **P7.3.5** `src/lib/blog/html-builder.ts` — 组装完整 HTML（meta/schema/body/GEO块）
+- [ ] **P7.3.6** `src/lib/blog/seo-checker.ts` — 自动计算 SEO checklist（8 项）
+- [ ] **P7.3.7** 新建 `blog_posts` 表（含 `mode` / `geo_directive_id` / `source_query_id` 字段）
+- [ ] **P7.3.8** `POST /api/clients/[id]/blog/generate`（请求体含 mode / primary_keyword / source_query_id）
 
 **博客查看页 UI（Day 22-23）**
-- [ ] **P7.3.4** 路由 `/dashboard/clients/[id]/blog/[postId]` 创建
-- [ ] **P7.3.5** 顶部操作栏：Edit / Copy HTML / Copy Text / Regenerate Content / Regenerate Image / Reject
-- [ ] **P7.3.6** 右侧 SEO Checklist（Title / Meta / GEO Instructions / Internal Linking / Featured Image / CTA）
-- [ ] **P7.3.7** 正文区渲染 HTML，带 "Show GEO Block" toggle（仅团队可见）
+- [ ] **P7.3.9** 路由 `/dashboard/clients/[id]/blog/[postId]` 创建
+- [ ] **P7.3.10** 顶部操作栏：Approve / Copy HTML / Copy Text / Regenerate / Reject
+- [ ] **P7.3.11** 右侧双信号 Checklist（SEO 8项 + GEO 3项）
+- [ ] **P7.3.12** 正文区渲染 HTML，带 "Show GEO Block" toggle（仅团队可见）
+- [ ] **P7.3.13** 选题面板：AI Tracker 弱项 × SEMrush 机会对照表
 
 **Snippet 部署助手（Day 24-26）**
-- [ ] **P7.3.8** 路由 `/dashboard/geo-composer/[clientId]/deploy` 创建
-- [ ] **P7.3.9** 输入要部署的页面 URL → 输出 snippet + 安装说明
-- [ ] **P7.3.10** 部署记录回写到 `deployed_pages`
+- [ ] **P7.3.14** 路由 `/dashboard/geo-composer/[clientId]/deploy` 创建（纯前端）
+- [ ] **P7.3.15** 输入要部署的页面 URL → 展示 snippet + 安装说明 + 一键标记已部署
+- [ ] **P7.3.16** 已部署页面列表（调用已有 deployments API）
 
 **验收标准**：
-- 博客生成时自动包含 GEO 指令
-- 博客查看页 UI 仿 SEOPro 风格
-- Snippet 部署助手可用
+- 博客选题来自 AI Tracker 弱项 × SEMrush 交叉验证，有数据依据
+- unified 模式文章同时通过 SEO checklist 和 GEO checklist
+- 博客生成时自动注入 active GEO directive HTML
+- 博客查看页有双信号 checklist 展示
+- Snippet 部署助手可用，部署记录写回 deployed_pages
 
 ---
 

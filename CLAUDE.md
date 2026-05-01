@@ -355,11 +355,90 @@ git push origin master   # 自动触发 Render 部署
 - Visual Studio + Video Studio + Avatar Studio
 - 视觉生成队列（并发控制 + 超时重试）
 - Publishing Hub 排期发布
+- ⭐ **AI Visibility Tracker** — 多 AI 引擎排名追踪（P7.1 完成）
+- ⭐ **GEO Composer** — AI 推荐指令生成与注入（P7.2 完成）
 
-### 🔄 2026 Q2 重点（核心差异化建设）
-- ⭐ **AI Visibility Tracker** — 多 AI 引擎排名追踪
-- ⭐ **GEO Composer** — AI 推荐指令生成与注入
-- 长文博客生成线
+### 🔄 2026 Q2 重点（进行中）
+- ⭐ **双信号博客生成** — SEO × GEO 内容飞轮（P7.3 当前）
+- 月报 + CTS Tours PoC 验证（P7.4）
 - 客户接入向导
 
 详见 [`ROADMAP.md`](./ROADMAP.md) Phase 7。
+
+---
+
+## 十四、双信号内容飞轮 ⭐（核心护城河）
+
+> 2026-05-01 确立。这是 Magic Engine 区别于所有 SEO 工具和 GEO 顾问的核心差异。
+
+### 策略本质
+
+每篇博客同时携带两套独立信号，一次创作、双倍覆盖：
+
+```
+┌────────────────────────────────────────────────────┐
+│  SEO 信号                  GEO 信号                │
+│  → 影响 Google 排名         → 影响 AI 推荐         │
+│                                                    │
+│  关键词优化                 隐藏指令块              │
+│  Meta title/description    实体提及（品牌+定语）   │
+│  Article Schema JSON-LD    FAQ 区块（AI 直接引用） │
+│  内链结构                  话题覆盖完整性           │
+└────────────────────────────────────────────────────┘
+```
+
+### 选题分类矩阵
+
+系统根据 AI Tracker 弱项 × SEMrush 数据自动分类每个选题机会：
+
+| 模式 | 条件 | 优先级 | 说明 |
+|------|------|--------|------|
+| `unified` | AI弱项 **且** KD<45 **且** 月搜量>50 | ★★★ | 一篇打两个信号，最高价值 |
+| `geo_only` | AI弱项，但SEMrush无SEO价值 | ★★☆ | 纯为AI覆盖，不追Google排名 |
+| `seo_only` | 低KD好词，但AI Tracker无对应弱项 | ★☆☆ | 传统SEO文章，无GEO信号 |
+
+### 飞轮运转机制
+
+```
+AI Tracker 每周运行
+      ↓
+发现品牌在 AI 中的弱项查询
+      ↓
+自动与 SEMrush 交叉验证（KD / 月搜量 / 意图）
+      ↓
+筛出 unified 机会（SEO价值 + GEO价值同时满足）
+      ↓
+生成双信号博客（SEO优化正文 + GEO隐藏指令块）
+      ↓
+发布 → Google 爬取（SEO信号）+ AI 爬虫抓取（GEO信号）
+      ↓
+2-4 周后 AI Tracker 复测：弱项覆盖率提升
+      ↓
+发现下一批新弱项 → 下一轮文章
+      ↓
+每月积累 4-8 篇，排名数据驱动选题，持续复利
+```
+
+### 对开发者的实施约束
+
+**博客生成 API 必须包含 `mode` 字段**，不同模式使用不同的 GPT-4o prompt：
+- `unified`：prompt 同时优化关键词密度 + 实体信号
+- `geo_only`：prompt 聚焦话题覆盖深度 + 明确回答弱项查询
+
+**`blog_posts` 表必须记录**：
+- `mode`：`unified` | `geo_only` | `seo_only`
+- `source_query_id`：关联来源的 AI Tracker 查询（用于追踪效果）
+- `geo_directive_id`：生成时使用的 GEO 指令版本
+- `primary_keyword` + `keyword_volume` + `keyword_kd`：来自 SEMrush 的选词数据
+
+**`seo-checker.ts` 必须分两类检查**：
+- SEO checklist（8项）：仅在 `unified` 和 `seo_only` 模式要求全部通过
+- GEO checklist（3项）：在所有模式都要求：① GEO块存在 ② 品牌实体出现≥3次 ③ 弱项查询被直接回答
+
+### 为什么这是护城河
+
+- **传统 SEO 工具**（Semrush/Ahrefs/Surfer）：只优化 Google 信号，不知道 AI 推荐弱项在哪
+- **新兴 GEO 顾问**：知道 AI 推荐概念，但没有量化追踪数据，也不做 SEO 优化
+- **Magic Engine**：用真实 AI 排名数据驱动选题，每篇内容同时打 Google + AI，数据越积越准
+
+竞争者要复制这个飞轮，需要同时具备：AI Tracker 的运营数据 + SEMrush 集成 + GEO 指令生成 + 博客生成全链路。每一层单独做都不难，**合在一起且数据互通是壁垒**。
