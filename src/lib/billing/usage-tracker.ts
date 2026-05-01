@@ -3,7 +3,7 @@
  * Monitors API calls and calculates costs for billing
  */
 
-import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import { SupabaseClient } from '@supabase/supabase-js'
 
 interface UsageLog {
   client_id: string
@@ -24,16 +24,33 @@ function getCurrentMonth(): string {
 }
 
 /**
- * Log API usage and cost for a service
+ * Log API usage and cost for a service (accumulates calls and costs)
  */
 export async function logServiceUsage(
+  supabase: SupabaseClient,
   clientId: string,
   service: 'DataForSEO' | 'Semrush' | 'Publer',
   apiCalls: number,
-  costUsd: number,
-  supabase: SupabaseClient<any>
-): Promise<void> {
+  costUsd: number
+): Promise<{ success: boolean; error?: Error }> {
   const month = getCurrentMonth()
+
+  // First, fetch existing record to accumulate
+  const { data: existing, error: fetchError } = await supabase
+    .from('datasource_usage_logs')
+    .select('api_calls, cost_usd')
+    .eq('client_id', clientId)
+    .eq('service', service)
+    .eq('month', month)
+    .single()
+
+  if (fetchError && fetchError.code !== 'PGRST116') {
+    // PGRST116 = no rows returned (expected for new records)
+    return { success: false, error: fetchError }
+  }
+
+  const totalApiCalls = (existing?.api_calls || 0) + apiCalls
+  const totalCost = (existing?.cost_usd || 0) + costUsd
 
   const { error } = await supabase
     .from('datasource_usage_logs')
@@ -41,8 +58,8 @@ export async function logServiceUsage(
       {
         client_id: clientId,
         service,
-        api_calls: apiCalls,
-        cost_usd: costUsd,
+        api_calls: totalApiCalls,
+        cost_usd: totalCost,
         month,
       },
       {
@@ -51,20 +68,22 @@ export async function logServiceUsage(
     )
 
   if (error) {
-    console.error(`Failed to log ${service} usage:`, error)
+    return { success: false, error }
   }
+
+  return { success: true }
 }
 
 /**
  * Get billing summary for a specific month
  */
 export async function getBillingByMonth(
-  month: string,
-  supabase: SupabaseClient<any>
+  supabase: SupabaseClient,
+  month: string
 ) {
   const { data, error } = await supabase
     .from('datasource_usage_logs')
-    .select('*')
+    .select('client_id, service, api_calls, cost_usd, month')
     .eq('month', month)
     .order('cost_usd', { ascending: false })
 
@@ -79,13 +98,13 @@ export async function getBillingByMonth(
  * Get billing summary for a specific client and month
  */
 export async function getClientBillingByMonth(
+  supabase: SupabaseClient,
   clientId: string,
-  month: string,
-  supabase: SupabaseClient<any>
+  month: string
 ) {
   const { data, error } = await supabase
     .from('datasource_usage_logs')
-    .select('*')
+    .select('client_id, service, api_calls, cost_usd, month')
     .eq('client_id', clientId)
     .eq('month', month)
 
@@ -100,10 +119,10 @@ export async function getClientBillingByMonth(
  * Calculate total costs by service for a month
  */
 export async function getCostsByService(
-  month: string,
-  supabase: SupabaseClient<any>
+  supabase: SupabaseClient,
+  month: string
 ): Promise<Record<string, number>> {
-  const data = await getBillingByMonth(month, supabase)
+  const data = await getBillingByMonth(supabase, month)
 
   const costs: Record<string, number> = {}
   for (const log of data) {
@@ -120,17 +139,18 @@ export async function getCostsByService(
  * Get all unique months with usage data
  */
 export async function getAvailableMonths(
-  supabase: SupabaseClient<any>
+  supabase: SupabaseClient
 ): Promise<string[]> {
   const { data, error } = await supabase
     .from('datasource_usage_logs')
     .select('month')
-    .distinct()
     .order('month', { ascending: false })
 
   if (error) {
     throw new Error(`Failed to fetch available months: ${error.message}`)
   }
 
-  return (data || []).map((row: any) => row.month)
+  // Deduplicate months
+  const months = (data || []).map((row: any) => row.month)
+  return [...new Set(months)]
 }

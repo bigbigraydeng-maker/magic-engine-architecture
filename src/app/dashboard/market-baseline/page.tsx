@@ -1,7 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useParams } from 'next/navigation'
+import { useState, useEffect, useCallback } from 'react'
 
 interface MarketComparison {
   id: string
@@ -27,18 +26,35 @@ interface MarketMetrics {
   snapshotDate: string
 }
 
+interface Client {
+  id: string
+  name: string
+}
+
 export default function MarketBaselinePage() {
-  const params = useParams()
-  const clientId = params.id as string
+  const [clients, setClients] = useState<Client[]>([])
+  const [selectedClientId, setSelectedClientId] = useState<string>('')
   const [metrics, setMetrics] = useState<MarketMetrics | null>(null)
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
 
-  const fetchMetrics = async () => {
+  // Fetch available clients on mount
+  useEffect(() => {
+    fetch('/api/clients').then(r => r.json()).then(d => {
+      const list = d.clients ?? []
+      setClients(list)
+      if (list.length > 0) {
+        setSelectedClientId(list[0].id)
+      }
+    })
+  }, [])
+
+  const fetchMetrics = useCallback(async () => {
+    if (!selectedClientId) return
     setLoading(true)
     try {
       const res = await fetch(
-        `/api/clients/${clientId}/datasources/market/rankings?limit=100&offset=0`
+        `/api/clients/${selectedClientId}/datasources/market/rankings?limit=100&offset=0`
       )
       const data = await res.json()
       setMetrics(data)
@@ -47,13 +63,14 @@ export default function MarketBaselinePage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [selectedClientId])
 
-  const handleSync = async () => {
+  const handleSync = useCallback(async () => {
+    if (!selectedClientId) return
     setSyncing(true)
     try {
       const res = await fetch(
-        `/api/clients/${clientId}/datasources/market/sync`,
+        `/api/clients/${selectedClientId}/datasources/market/sync`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -69,13 +86,13 @@ export default function MarketBaselinePage() {
     } finally {
       setSyncing(false)
     }
-  }
+  }, [selectedClientId, fetchMetrics])
 
   useEffect(() => {
-    if (clientId) {
+    if (selectedClientId) {
       fetchMetrics()
     }
-  }, [clientId, fetchMetrics])
+  }, [selectedClientId, fetchMetrics])
 
   if (loading) {
     return (
@@ -145,14 +162,24 @@ export default function MarketBaselinePage() {
 
       {/* Control Bar */}
       <div className="flex gap-4 items-center bg-white p-4 rounded-lg border border-gray-200">
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Client</label>
+          <select
+            value={selectedClientId}
+            onChange={(e) => setSelectedClientId(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+          >
+            {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
         <button
           onClick={handleSync}
-          disabled={syncing}
+          disabled={syncing || !selectedClientId}
           className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
         >
           {syncing ? 'Syncing...' : 'Sync Market Baseline'}
         </button>
-        <div className="text-sm text-gray-500">
+        <div className="ml-auto text-sm text-gray-500">
           最后更新：{metrics.snapshotDate}
         </div>
       </div>
@@ -282,9 +309,13 @@ export default function MarketBaselinePage() {
                       {under.keyword}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <span className="font-semibold text-red-600">
-                        #{under.client_position}
-                      </span>
+                      {under.client_position ? (
+                        <span className="font-semibold text-red-600">
+                          #{under.client_position}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-center text-gray-600">
                       {under.industry_avg_position

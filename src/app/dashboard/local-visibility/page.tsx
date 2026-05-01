@@ -1,7 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useParams } from 'next/navigation'
+import { useState, useEffect, useCallback } from 'react'
 
 interface LocalRankingsByCity {
   city_name: string
@@ -29,20 +28,37 @@ interface LocalTrend {
   is_lost: boolean
 }
 
+interface Client {
+  id: string
+  name: string
+}
+
 export default function LocalVisibilityPage() {
-  const params = useParams()
-  const clientId = params.id as string
+  const [clients, setClients] = useState<Client[]>([])
+  const [selectedClientId, setSelectedClientId] = useState<string>('')
   const [rankingsByCity, setRankingsByCity] = useState<LocalRankingsByCity[]>([])
   const [trends, setTrends] = useState<LocalTrend[]>([])
   const [loading, setLoading] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [selectedCity, setSelectedCity] = useState<string | null>(null)
 
-  const fetchRankings = async () => {
+  // Fetch available clients on mount
+  useEffect(() => {
+    fetch('/api/clients').then(r => r.json()).then(d => {
+      const list = d.clients ?? []
+      setClients(list)
+      if (list.length > 0) {
+        setSelectedClientId(list[0].id)
+      }
+    })
+  }, [])
+
+  const fetchRankings = useCallback(async () => {
+    if (!selectedClientId) return
     setLoading(true)
     try {
       const res = await fetch(
-        `/api/clients/${clientId}/datasources/local/rankings?limit=100&offset=0`
+        `/api/clients/${selectedClientId}/datasources/local/rankings?limit=100&offset=0`
       )
       const data = await res.json()
       setRankingsByCity(data.rankingsByCity || [])
@@ -55,12 +71,13 @@ export default function LocalVisibilityPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [selectedClientId, selectedCity])
 
-  const handleSync = async () => {
+  const handleSync = useCallback(async () => {
+    if (!selectedClientId) return
     setSyncing(true)
     try {
-      const res = await fetch(`/api/clients/${clientId}/datasources/local/sync`, {
+      const res = await fetch(`/api/clients/${selectedClientId}/datasources/local/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ limit: 100 }),
@@ -74,13 +91,13 @@ export default function LocalVisibilityPage() {
     } finally {
       setSyncing(false)
     }
-  }
+  }, [selectedClientId, fetchRankings])
 
   useEffect(() => {
-    if (clientId) {
+    if (selectedClientId) {
       fetchRankings()
     }
-  }, [clientId, fetchRankings])
+  }, [selectedClientId, fetchRankings])
 
   const selectedCityData = rankingsByCity.find((c) => c.city_name === selectedCity)
   const trendsByCity = trends.filter((t) => t.city_name === selectedCity)
@@ -88,7 +105,7 @@ export default function LocalVisibilityPage() {
   const lostRankings = trendsByCity.filter((t) => t.is_lost)
   const topChanges = trendsByCity
     .filter((t) => t.position_current && t.position_current <= 3)
-    .sort((a, b) => (b.position_change || 0) - (a.position_change || 0))
+    .sort((a, b) => (a.position_change || 0) - (b.position_change || 0))
     .slice(0, 5)
 
   return (
@@ -100,9 +117,20 @@ export default function LocalVisibilityPage() {
 
       {/* Control Bar */}
       <div className="flex gap-4 items-center bg-white p-4 rounded-lg border border-gray-200">
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Client</label>
+          <select
+            value={selectedClientId}
+            onChange={(e) => setSelectedClientId(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+          >
+            {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+
         <button
           onClick={handleSync}
-          disabled={syncing}
+          disabled={syncing || !selectedClientId}
           className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
         >
           {syncing ? 'Syncing...' : 'Sync Rankings'}

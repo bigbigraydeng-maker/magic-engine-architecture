@@ -1,8 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { useParams } from 'next/navigation'
-import { createClient } from '@supabase/supabase-js'
+import { useState, useEffect, useCallback } from 'react'
 
 interface SerpRanking {
   id: string
@@ -23,9 +21,14 @@ interface SerpTrend {
   is_lost: boolean
 }
 
+interface Client {
+  id: string
+  name: string
+}
+
 export default function SerpIntelligencePage() {
-  const params = useParams()
-  const clientId = params.id as string
+  const [clients, setClients] = useState<Client[]>([])
+  const [selectedClientId, setSelectedClientId] = useState<string>('')
   const [rankings, setRankings] = useState<SerpRanking[]>([])
   const [trends, setTrends] = useState<SerpTrend[]>([])
   const [loading, setLoading] = useState(false)
@@ -33,17 +36,24 @@ export default function SerpIntelligencePage() {
   const [sortBy, setSortBy] = useState<'position' | 'keyword' | 'search_volume'>('position')
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc')
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
-  )
+  // Fetch available clients on mount
+  useEffect(() => {
+    fetch('/api/clients').then(r => r.json()).then(d => {
+      const list = d.clients ?? []
+      setClients(list)
+      if (list.length > 0) {
+        setSelectedClientId(list[0].id)
+      }
+    })
+  }, [])
 
   // Fetch rankings
-  const fetchRankings = async () => {
+  const fetchRankings = useCallback(async () => {
+    if (!selectedClientId) return
     setLoading(true)
     try {
       const res = await fetch(
-        `/api/clients/${clientId}/datasources/serp/rankings?sortBy=${sortBy}&sortOrder=${sortOrder}&limit=100`
+        `/api/clients/${selectedClientId}/datasources/serp/rankings?sortBy=${sortBy}&sortOrder=${sortOrder}&limit=100`
       )
       const data = await res.json()
       setRankings(data.rankings || [])
@@ -53,13 +63,14 @@ export default function SerpIntelligencePage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [selectedClientId, sortBy, sortOrder])
 
   // Sync SERP data
-  const handleSync = async () => {
+  const handleSync = useCallback(async () => {
+    if (!selectedClientId) return
     setSyncing(true)
     try {
-      const res = await fetch(`/api/clients/${clientId}/datasources/serp/sync`, {
+      const res = await fetch(`/api/clients/${selectedClientId}/datasources/serp/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ limit: 100 }),
@@ -73,13 +84,13 @@ export default function SerpIntelligencePage() {
     } finally {
       setSyncing(false)
     }
-  }
+  }, [selectedClientId, fetchRankings])
 
   useEffect(() => {
-    if (clientId) {
+    if (selectedClientId) {
       fetchRankings()
     }
-  }, [clientId, sortBy, sortOrder, fetchRankings])
+  }, [selectedClientId, sortBy, sortOrder, fetchRankings])
 
   const topThreeChanges = trends
     ?.filter((t) => t.position_current && t.position_current <= 3)
@@ -100,9 +111,19 @@ export default function SerpIntelligencePage() {
 
       {/* Control Bar */}
       <div className="flex gap-4 items-center bg-white p-4 rounded-lg border border-gray-200">
+        <div>
+          <label className="block text-xs font-medium text-gray-600 mb-1">Client</label>
+          <select
+            value={selectedClientId}
+            onChange={(e) => setSelectedClientId(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+          >
+            {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
         <button
           onClick={handleSync}
-          disabled={syncing}
+          disabled={syncing || !selectedClientId}
           className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
         >
           {syncing ? 'Syncing...' : 'Sync Rankings'}
@@ -111,7 +132,7 @@ export default function SerpIntelligencePage() {
         <div className="flex gap-2 ml-auto">
           <select
             value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as any)}
+            onChange={(e) => setSortBy(e.target.value as 'position' | 'keyword' | 'search_volume')}
             className="px-3 py-2 border border-gray-300 rounded-lg"
           >
             <option value="position">Sort by Position</option>

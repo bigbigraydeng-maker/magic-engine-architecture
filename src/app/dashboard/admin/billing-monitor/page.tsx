@@ -36,7 +36,7 @@ export default function BillingMonitorPage() {
           }
         }
       } catch (err) {
-        console.error('Failed to fetch available months:', err)
+        // Silently fail - no months available yet
       }
     }
     fetchMonths()
@@ -60,7 +60,6 @@ export default function BillingMonitorPage() {
         }
       } catch (err) {
         setError('Failed to fetch billing data')
-        console.error(err)
       } finally {
         setLoading(false)
       }
