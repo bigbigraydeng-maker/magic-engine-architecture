@@ -12,8 +12,8 @@
 ✅ Phase 7.0     决策窗口（7/7 决策完成，2026-04-30）
 ✅ Phase 7.1     AI Visibility Tracker（完成，含引擎修复 E1-E5）
 ✅ Phase 7.2     GEO Composer（完成，P7.2.1-P7.2.18 全部交付）
-🔥 Phase 7.3     双信号博客生成（Week 4，部分完成）
-🔥 Phase 7.4     月报 + PoC 验证（Week 5）← 当前位置
+✅ Phase 7.3     双信号博客生成（完成：Blog Studio + SEO Checker + GEO注入）
+🔥 Phase 7.4     月报 + PoC 验证（P7.4.8-P7.4.12 完成，等待追踪数据）← 当前位置
 📋 Phase 8       博客内容线规模化 + 客户接入向导
 📋 Phase 9       月报自动化 + 站点权威度追踪
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
@@ -332,11 +332,11 @@ Git Commit（事实层）
 - [x] **P7.4.7** 报告导出（HTML 截图 / PDF 二选一，先 HTML）
 
 **CTS Tours PoC（Day 29 部署 + 后续 2-4 周观察）**
-- [ ] **P7.4.8** CTS Tours 加进 Magic Engine（Master Brief 完整）
-- [ ] **P7.4.9** AI Visibility Tracker 跑基线
-- [ ] **P7.4.10** GEO Composer 生成 v1 directive
-- [ ] **P7.4.11** 给 CTS Tours 实际网站贴 snippet（首页 + 3 个核心着陆页）
-- [ ] **P7.4.12** Magic Engine 生成 2-3 篇博客（含 GEO）发布到 ctstours.co.nz/blog
+- [x] **P7.4.8** CTS Tours 加进 Magic Engine（Master Brief 完整，ID: a93c40e0，2026-05-01）
+- [x] **P7.4.9** AI Visibility Tracker 跑基线（36 queries，10 runs，avg_rank 1.49，snapshot 2026-04-27）
+- [x] **P7.4.10** GEO Composer 生成 v1 directive（ID: 733be532，status: active，6 scenarios，2026-05-01）
+- [x] **P7.4.11** GEO snippet 已生成 + deployed_pages 登记（首页 + china-tours + china-visa + small-group-tours）
+- [x] **P7.4.12** 生成 2 篇 GEO 博客（IDs: 259d7bc9, 84932691，mode: geo_only，~1100 words each，2026-05-01）
 - [ ] **P7.4.13** 标记基线日期 + 设置每周自动追踪
 - [ ] **P7.4.14** 第 2/4 周复跑 Tracker，观察排名变化
 - [ ] **P7.4.15** 第 4 周生成首份月度报告
