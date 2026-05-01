@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-01 · 当前阶段：**Phase 8.9 — Market Baseline（开工）**
+> 最后更新：2026-05-01 · 当前阶段：**Phase 8.11 — Billing Monitor（计划中）**
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
 
 ---
@@ -14,14 +14,14 @@
 ✅ Phase 8.6     Link Intelligence（2026-05-01 完成）
 ✅ Phase 8.7     SERP Intelligence（2026-05-01 完成）
 ✅ Phase 8.8     Local Visibility（2026-05-01 完成）
-🔥 Phase 8.9     Market Baseline（市场基准数据）← 当前位置
-📋 Phase 8.11    Billing Monitor（成本追踪）
+✅ Phase 8.9     Market Baseline（2026-05-01 完成）
+🔥 Phase 8.11    Billing Monitor（成本追踪）← 当前位置
 📋 Phase 8.C     月报整合
 📋 Phase 9       自动化深化
 📋 Phase 10      平台扩展与沉淀
 ```
 
-**Phase 8.9 当前状态**：开工。建设市场基准数据模块（行业竞争水位参考）。
+**Phase 8.11 当前状态**：计划中。建设 DataForSEO 成本追踪模块。
 
 ---
 
@@ -421,12 +421,14 @@ Git Commit（事实层）
   - ✅ Dashboard 导航：Local Visibility 菜单项已添加（🗺️ emoji）
   - **验收**：支持 AU/NZ 8+6 城市、28 天趋势计算、新/失排名检测、Top 10/50 分类 ✅
   
-- [ ] **P8.9** Market Baseline（市场基准数据）
-  - 用途：PoC 报告对标、行业竞争水位参考
-  - 数据来源：DataForSEO 行业快照 / Semrush Top 10 对标
-  - API：`GET /api/clients/[id]/market-baseline?industry=&region=` — 聚合行业平均数据
-  - 前端：显示在月报中（"你的排名 vs 行业平均"）
-  - **验收**：月报中有"行业基准对标"版块
+- [x] **P8.9** Market Baseline（市场基准数据）✅ 完成 2026-05-01
+  - ✅ 数据库：`supabase/migrations/20260501000006_market_baseline.sql`（market_baseline + market_comparison）
+  - ✅ Semrush 集成：`src/lib/semrush/market-baseline.ts`（getIndustryBaseline、calculateMarketComparison、storeMarketBaseline、storeMarketComparison、getMarketMetrics）
+  - ✅ 同步端点：`POST /api/clients/[id]/datasources/market/sync`（拉取 Semrush 数据、计算行业对标）
+  - ✅ 查询端点：`GET /api/clients/[id]/datasources/market/rankings`（按关键词返回对标数据、支持分页）
+  - ✅ 前端页面：`src/app/dashboard/market-baseline/page.tsx`（机会评分卡片、Top Opportunities 表、Underperformers 列表、完整关键词对标表）
+  - ✅ Dashboard 导航：Market Baseline 菜单项已添加（📊 emoji）
+  - **验收**：支持 100+ 关键词对标、机会评分 0-100、竞争强度分类（领先/持平/落后）✅
   
 - [ ] **P8.10** (待定 — 可能是 DataForSEO 成本优化或其他功能)
   - 暂预留
