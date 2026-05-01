@@ -35,3 +35,42 @@ option {
   color: #111827;
   background-color: #ffffff;
 }
+
+/* ── Print styles for Brief Document ── */
+@media print {
+  /* Hide dashboard chrome */
+  nav,
+  aside,
+  header,
+  [data-sidebar],
+  .print\\:hidden {
+    display: none !important;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+  }
+
+  /* Remove scrollbars, let content flow */
+  .brief-document {
+    max-width: none;
+    padding: 0;
+  }
+
+  /* Ensure section breaks are clean */
+  .print\\:break-inside-avoid {
+    break-inside: avoid;
+  }
+
+  /* Make links readable when printed */
+  a[href]::after {
+    content: ' (' attr(href) ')';
+    font-size: 10px;
+    color: #666;
+  }
+  a[href^='/']::after,
+  a[href^='#']::after {
+    content: none;
+  }
+}
