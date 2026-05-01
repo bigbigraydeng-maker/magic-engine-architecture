@@ -32,11 +32,13 @@ export async function GET(
 
     if (!comparisons || comparisons.length === 0) {
       return NextResponse.json({
+        comparisons: [],
         topOpportunities: [],
         underperformers: [],
         aligned: [],
         avgOpportunityScore: 0,
         totalKeywords: 0,
+        snapshotDate: today,
       })
     }
 

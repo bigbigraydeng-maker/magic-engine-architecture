@@ -341,7 +341,7 @@ export default function MarketBaselinePage() {
       )}
 
       {/* All Comparisons Table */}
-      {metrics.comparisons.length > 0 && (
+      {(metrics.comparisons ?? []).length > 0 && (
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
           <div className="p-4 border-b border-gray-200">
             <h3 className="font-semibold text-gray-900">All Keywords</h3>
@@ -368,7 +368,7 @@ export default function MarketBaselinePage() {
                 </tr>
               </thead>
               <tbody>
-                {metrics.comparisons.slice(0, 50).map((comp) => (
+                {(metrics.comparisons ?? []).slice(0, 50).map((comp) => (
                   <tr key={comp.id} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="px-4 py-3 font-medium text-gray-900">
                       {comp.keyword}
