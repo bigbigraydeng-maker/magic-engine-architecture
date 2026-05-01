@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-01 · 当前阶段：**Phase 7.3 — 双信号博客生成（Week 4）**
+> 最后更新：2026-05-01 · 当前阶段：**Phase 7.4 PoC 观察中 → Phase 8 诊断驱动内容策略**
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
 
 ---
@@ -14,8 +14,8 @@
 ✅ Phase 7.2     GEO Composer（完成，P7.2.1-P7.2.18 全部交付）
 ✅ Phase 7.3     双信号博客生成（完成：Blog Studio + SEO Checker + GEO注入）
 🔥 Phase 7.4     月报 + PoC 验证（P7.4.8-P7.4.12 完成，等待追踪数据）← 当前位置
-📋 Phase 8       博客内容线规模化 + 客户接入向导
-📋 Phase 9       月报自动化 + 站点权威度追踪
+📋 Phase 8       诊断驱动内容策略（DNZ采集 → 策略层 → 执行）← 下一阶段
+📋 Phase 9       月报自动化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
 ```
 
@@ -47,11 +47,16 @@ Q2: GEO 核心差异化建设        🔥 Phase 7
 ### 2026 H2（规划）
 
 ```
-Q3: 服务化 + 报告化           📋 Phase 8-9
-    ├── 月度 AI 可见度报告自动生成
-    ├── 客户接入向导优化
-    ├── 站点权威度追踪
-    └── 客户 Portal（client-facing view）
+Q3: 诊断驱动内容策略          📋 Phase 8
+    ├── DNZ 采集（客户域名全量内容快照）
+    ├── 三维策略分析（现有内容 × AI弱项 × 关键词缺口）
+    ├── 策略驱动的内容执行（升级页面 / 新建博客 / 社媒联动）
+    └── 客户接入向导（5步建档，集成 DNZ）
+
+Q3-Q4: 报告化 + 服务交付     📋 Phase 9
+    ├── 月报 PDF 自动生成 + 邮件发送
+    ├── 客户 Portal（client-facing view）
+    └── 站点权威度追踪（DA / 外链 / 内链）
 
 Q4: 沉淀 + 扩展                📋 Phase 10+
     ├── 多语言内容支持
@@ -407,26 +412,117 @@ Git Commit（事实层）
 
 ## 5. 后续 Phase（H2 规划）
 
-### Phase 8 — 客户陪跑工作流完善
-- [ ] **P8.1** 客户接入向导（5 分钟新客户建档，仿 SEOPro 3 步流程）
-- [ ] **P8.2** 月报导出 PDF + 邮件发送
-- [ ] **P8.3** 站点权威度追踪（DA / 外链 / 内链）
-- [ ] **P8.4** 客户 Portal（client-facing view，只看自己的内容）
-- [ ] **P8.5** Dashboard 简单鉴权（密码或 Magic Link）
+### Phase 8 — 诊断驱动内容策略 ⭐
 
-### Phase 9 — 自动化深化
-- [ ] **P9.1** Cron：每日 sync Content Workspace → 主库
-- [ ] **P9.2** 批量生成：一键为所有 approved 帖子生成图片
-- [ ] **P9.3** 批量发布：所有已生成帖子推送到 Publishing Hub
-- [ ] **P9.4** Publer Webhook 接收发布后数据
-- [ ] **P9.5** 互动率分析与 prompt 优化反馈循环
+> **设计背景（2026-05-01 确立）**
+>
+> CTS Tours PoC 过程中发现根本问题：Magic Engine 在不了解客户已有什么内容的情况下直接生成博客，
+> 导致两个缺陷：① 可能与客户现有页面形成关键词蚕食；② 无法判断是升级已有页面还是新建内容。
+>
+> 解决方案：**先诊断，再生成**。所有内容执行都应由数据驱动的策略层输出，而不是凭感觉选题。
+
+**三层架构**：
+
+```
+Layer 1: DNZ 采集（Domain Network Zone）
+   客户域名全量内容快照 → 知道"客户已有什么"
+
+Layer 2: 三维策略分析
+   现有内容 × AI弱项（Tracker）× 关键词缺口（SEMrush）
+   → 输出：每个机会的类型（升级/新建/社媒）+ 优先级评分
+
+Layer 3: 策略驱动执行
+   按策略面板点击生成：上下文注入、防重叠、类型匹配
+```
+
+---
+
+#### Phase 8.0 — DNZ 采集基础设施
+
+**目标**：能够抓取客户域名上的所有页面，并将其内容结构化存储，作为后续分析的基础。
+
+- [ ] **P8.0.1** 新建 `client_site_pages` 表 + 迁移文件（见 ARCHITECTURE.md §3.6）
+- [ ] **P8.0.2** `src/lib/site-audit/crawler.ts` — sitemap.xml 解析 → 提取所有 URL，对每个 URL 调用 Jina.ai 抓取正文
+- [ ] **P8.0.3** `src/lib/site-audit/classifier.ts` — GPT-4o mini 分类：页面类型（服务/博客/关于/首页）+ 话题标签 + 主关键词推断
+- [ ] **P8.0.4** `POST /api/clients/[id]/site-audit/crawl` — 触发全站采集（异步，支持限速，每次最多 100 页）
+- [ ] **P8.0.5** `GET /api/clients/[id]/site-audit/pages` — 列出已采集页面（支持 type / topic 筛选）
+- [ ] **P8.0.6** UI：`/dashboard/clients/[id]/site-audit` — 采集进度条 + 已采集页面表格（URL / 类型 / 话题 / 字数 / GEO块是否存在）
+
+**验收标准**：
+- 输入 ctstours.co.nz，能抓取 ≥ 30 个页面并完成分类
+- 每个页面有：url、page_type、topics[]、primary_keyword、word_count、has_geo_block
+
+---
+
+#### Phase 8.1 — 三维内容策略分析
+
+**目标**：将 DNZ 采集结果、AI 弱项、关键词缺口三维交叉，输出有数据依据的优先级策略列表。
+
+- [ ] **P8.1.1** 新建 `content_strategy_items` 表 + 迁移文件（见 ARCHITECTURE.md §3.7）
+- [ ] **P8.1.2** `src/lib/strategy/analyzer.ts` — 三维交叉逻辑：
+  - 维度A：AI Tracker 弱项（brand_rank = null 或 rank > 3 的 query）
+  - 维度B：SEMrush 关键词缺口（竞品排名的词，客户没有对应页面）
+  - 维度C：客户现有页面内容薄弱点（word_count < 500 或无 GEO 块）
+- [ ] **P8.1.3** `src/lib/strategy/scorer.ts` — 优先级评分：
+  - `unified` 机会（AI弱项 + SEO缺口同时满足）：最高分
+  - `geo_only` 机会（AI弱项，但 SEO 价值低）：中分
+  - `upgrade` 机会（已有页面，但内容薄弱 / 缺 GEO 块）：视缺口大小评分
+- [ ] **P8.1.4** `POST /api/clients/[id]/strategy/generate` — 触发一次完整策略分析，写入 content_strategy_items
+- [ ] **P8.1.5** `GET /api/clients/[id]/strategy` — 返回策略列表（按 priority_score 降序）
+- [ ] **P8.1.6** UI：`/dashboard/clients/[id]/strategy` — 策略面板：
+  - 顶部：三维覆盖热力图（哪些话题 AI弱项 + SEO有价值 + 无现有内容）
+  - 主列表：每条推荐有 Action Type 标签（🔄 升级 / ✨ 新建 / 📱 社媒）、优先级、理由
+  - 每条可点击执行 → 跳转到对应的生成流程
+
+**验收标准**：
+- 对 CTS Tours 跑分析，输出 ≥ 10 条策略建议，每条有 action_type + priority_score + rationale
+- "升级现有页面" 类型的推荐中，能关联到 client_site_pages 中的具体页面
+
+---
+
+#### Phase 8.2 — 策略驱动的内容执行
+
+**目标**：所有内容生成都通过策略面板触发，携带完整上下文（现有内容 + 关键词 + AI弱项），消除盲目生成问题。
+
+- [ ] **P8.2.1** 博客生成注入 `existing_pages_context`：生成前把话题相关的 client_site_pages 内容摘要注入 prompt，让 GPT-4o 写不同角度而非重叠内容
+- [ ] **P8.2.2** 升级现有页面流程：抓取原文 → Strategy Engine 生成 SEO + GEO 增强版 → UI 展示 diff 对比（原文 vs 升级版）→ 客户一键批准
+- [ ] **P8.2.3** 内容审计范围扩展：将现有 `content-auditor.ts` 的扫描范围从 blog 路径扩展到全站 `client_site_pages`（已在 Phase 8.0 采集）
+- [ ] **P8.2.4** 社媒联动：博客 approved 后，自动在策略面板生成 3 条对应社媒话题建议（Facebook / Instagram / LinkedIn）
+
+**验收标准**：
+- 从策略面板点击生成一篇博客，prompt 中包含话题相关的现有页面摘要
+- 升级流程可展示 diff，客户操作后写入 blog_posts（mode = 'seo_only' 或 'unified'）
+
+---
+
+#### Phase 8.3 — 客户接入向导（集成 DNZ）
+
+**目标**：5 分钟完成新客户建档，DNZ 采集作为标准步骤嵌入，确保每个客户上线前即有内容现状数据。
+
+- [ ] **P8.3.1** 向导 `/dashboard/clients/new`：Step 1 基本信息 → Step 2 上传 Brief 文件 → Step 3 触发 DNZ 采集 → Step 4 审核采集结果 → Step 5 激活（生成 Master Brief + active GEO Directive）
+- [ ] **P8.3.2** Dashboard 简单鉴权（Magic Link，防止数据泄露）
+
+**验收标准**：
+- 全程 < 10 分钟完成新客户建档
+- 建档完成后，客户主页显示：DNZ采集状态、已采集页面数、Master Brief 状态、GEO Directive 状态
+
+---
+
+### Phase 9 — 报告化 + 客户交付
+
+- [ ] **P9.1** 月报 PDF 导出 + 邮件自动发送（Strategy Engine 生成分析文字，Puppeteer 截图）
+- [ ] **P9.2** 客户 Portal（client-facing view，只看自己内容 + 当月月报）
+- [ ] **P9.3** 站点权威度追踪（DA / 外链 / 内链趋势）
+- [ ] **P9.4** Cron：每日 sync Content Workspace → 主库；每周一跑 AI Tracker + 更新策略建议
+- [ ] **P9.5** 批量执行：一键为所有 approved 策略条目生成对应内容
 
 ### Phase 10 — 平台扩展与沉淀
+
 - [ ] **P10.1** 小红书 / LinkedIn / TikTok 视频自动剪辑支持
-- [ ] **P10.2** 多语言内容支持
-- [ ] **P10.3** Magic Lab Academy 课程化（基于实战 SOP）
+- [ ] **P10.2** 多语言内容支持（中文市场优先）
+- [ ] **P10.3** Magic Lab Academy 课程化（基于 CTS Tours 实战 SOP）
 - [ ] **P10.4** Plugin 形态：WordPress / Webflow GEO 自动注入插件
-- [ ] **P10.5** 部分模块对外 SaaS 化（Pro 套餐）
+- [ ] **P10.5** Google AI Overview 追踪（SerpAPI，AU/NZ 市场必做）
 
 ---
 
