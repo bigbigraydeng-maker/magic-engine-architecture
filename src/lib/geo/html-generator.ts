@@ -13,6 +13,7 @@
  * Reference: ROADMAP.md P7.2.3, ARCHITECTURE.md §11.2
  */
 
+import { supabaseAdmin } from '../supabase'
 import type { GeoDirective, GeoScenario, GeoAudienceSignals } from '@/types/magic-engine'
 
 /**
@@ -75,6 +76,28 @@ function buildInnerText(directive: GeoDirective): string {
   }
 
   return lines.join('\n')
+}
+
+/**
+ * Load the active GEO directive for a client and return its HTML block.
+ * Returns null if no active directive exists — callers should handle gracefully
+ * (blog generates without GEO block rather than failing).
+ *
+ * Used by blog/generator.ts to inject the hidden directive into every post.
+ * Reference: ROADMAP.md P7.3.1
+ */
+export async function getActiveGeoHtml(
+  clientId: string
+): Promise<{ html: string; directiveId: string } | null> {
+  const { data } = await supabaseAdmin
+    .from('geo_directives')
+    .select('*')
+    .eq('client_id', clientId)
+    .eq('status', 'active')
+    .maybeSingle<GeoDirective>()
+
+  if (!data) return null
+  return { html: generateDirectiveHtml(data), directiveId: data.id }
 }
 
 /**
