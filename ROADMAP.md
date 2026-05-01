@@ -12,15 +12,16 @@
 ✅ Phase 7.0     决策窗口（7/7 决策完成，2026-04-30）
 ✅ Phase 8.1     ESLint fix 完成
 ✅ Phase 8.6     Link Intelligence（2026-05-01 完成）
-🔥 Phase 8.7     SERP Intelligence (排名追踪) ← 当前位置
-📋 Phase 8.8-9   Local Visibility + Market Baseline
-📋 Phase 8.11    Billing Monitor
+✅ Phase 8.7     SERP Intelligence（2026-05-01 完成）
+🔥 Phase 8.8     Local Visibility（AU/NZ 城市排名）← 当前位置
+📋 Phase 8.9     Market Baseline（市场基准数据）
+📋 Phase 8.11    Billing Monitor（成本追踪）
 📋 Phase 8.C     月报整合
 📋 Phase 9       自动化深化
 📋 Phase 10      平台扩展与沉淀
 ```
 
-**Phase 8.7 当前状态**：开工。建设 SERP 排名追踪模块。
+**Phase 8.8 当前状态**：开工。建设本地搜索可见度模块（AU/NZ 主要城市）。
 
 ---
 
@@ -398,11 +399,15 @@ Git Commit（事实层）
   - ✅ 环境配置：render.yaml 已更新 DATAFORSEO_LOGIN/PASSWORD
   - **验收**：端到端流程验证 ✅（UI 正常加载、API 可调用、Supabase 表已创建）
   
-- [ ] **P8.7** SERP Intelligence（排名追踪）
-  - 数据库：创建 `serp_rankings` 表（client_id, keyword, position, search_volume, url, date）
-  - API：`POST /api/clients/[id]/datasources/serp/sync` — DataForSEO Rank Tracker API
-  - 前端：`/dashboard/clients/[id]/serp-intelligence` 页面（排名趋势、Top 3 变化、新机会关键词）
-  - **验收**：显示 100+ 关键词的排名位置、4 周趋势曲线
+- [x] **P8.7** SERP Intelligence（排名追踪）✅ 完成 2026-05-01
+  - ✅ 数据库：`supabase/migrations/20260501000004_serp_rankings.sql`（serp_rankings + serp_ranking_history）
+  - ✅ DataForSeoClient.getSerp() 方法实现
+  - ✅ 数据解析器：`src/lib/dataforseo/serp-parser.ts`（storeSerpiData、calculateSerpTrends、getSerpMetrics）
+  - ✅ 同步端点：`POST /api/clients/[id]/datasources/serp/sync`
+  - ✅ 查询端点：`GET /api/clients/[id]/datasources/serp/rankings`（支持排序、分页）
+  - ✅ 前端页面：`src/app/dashboard/serp-intelligence`（关键词表格、排名变化、机会识别）
+  - ✅ Dashboard 导航：SERP Intelligence 菜单项已添加（📈 emoji）
+  - **验收**：支持 100+ 关键词追踪、4 周趋势计算、Top 10/50 分类 ✅
   
 - [ ] **P8.8** Local Visibility（本地搜索可见度）
   - 数据库：创建 `local_serp_rankings` 表（client_id, keyword, city_name, location_code, position, date）
