@@ -84,6 +84,13 @@ export function ReelsStudio({ clientId }: Props) {
   const openingFileRef = useRef<HTMLInputElement>(null)
   const closingFileRef = useRef<HTMLInputElement>(null)
 
+  // Frame generation (Visual Studio) — stores Atlas job IDs while polling
+  const [frameJobs, setFrameJobs] = useState<{ opening?: string; closing?: string }>({})
+  const [generatingFrame, setGeneratingFrame] = useState<{ opening: boolean; closing: boolean }>({
+    opening: false,
+    closing: false,
+  })
+
   // Video generation
   const [generatingVideo, setGeneratingVideo] = useState(false)
   const [pollingVideo, setPollingVideo] = useState(false)
@@ -115,6 +122,43 @@ export function ReelsStudio({ clientId }: Props) {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [activeDraft?.chat_history])
+
+  // Poll frame generation status (Visual Studio)
+  useEffect(() => {
+    const openingJobId = frameJobs.opening
+    const closingJobId = frameJobs.closing
+    if (!openingJobId && !closingJobId) return
+    if (!activeDraft) return
+
+    const pollFrame = async (frameType: 'opening' | 'closing', jobId: string) => {
+      try {
+        const res = await fetch(
+          `/api/clients/${clientId}/reels/${activeDraft.id}/frame-status?job_id=${jobId}&frame_type=${frameType}`
+        )
+        if (!res.ok) return
+        const data = await res.json()
+        if (data.status === 'completed' && data.draft) {
+          setActiveDraft(data.draft)
+          setDrafts(prev => prev.map(d => d.id === activeDraft.id ? data.draft : d))
+          setFrameJobs(prev => { const n = { ...prev }; delete n[frameType]; return n })
+          setGeneratingFrame(prev => ({ ...prev, [frameType]: false }))
+        } else if (data.status === 'failed') {
+          alert(`Visual Studio: ${frameType} frame generation failed — ${data.error ?? 'unknown error'}`)
+          setFrameJobs(prev => { const n = { ...prev }; delete n[frameType]; return n })
+          setGeneratingFrame(prev => ({ ...prev, [frameType]: false }))
+        }
+      } catch {
+        // Network error — keep polling
+      }
+    }
+
+    const interval = setInterval(() => {
+      if (openingJobId) pollFrame('opening', openingJobId)
+      if (closingJobId) pollFrame('closing', closingJobId)
+    }, 3000)
+
+    return () => clearInterval(interval)
+  }, [frameJobs.opening, frameJobs.closing, activeDraft?.id, clientId])
 
   // Poll video status while generating
   useEffect(() => {
@@ -236,6 +280,41 @@ export function ReelsStudio({ clientId }: Props) {
       alert(`Unexpected error: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setChatLoading(false)
+    }
+  }
+
+  const handleGenerateFrame = async (frameType: 'opening' | 'closing') => {
+    if (!activeDraft) return
+    const prompt = frameType === 'opening'
+      ? activeDraft.opening_frame_prompt
+      : activeDraft.closing_frame_prompt
+
+    if (!prompt?.trim()) {
+      alert(`Please write the ${frameType} frame prompt first, then generate.`)
+      return
+    }
+
+    setGeneratingFrame(prev => ({ ...prev, [frameType]: true }))
+    try {
+      const res = await fetch(
+        `/api/clients/${clientId}/reels/${activeDraft.id}/generate-frame`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ frame_type: frameType }),
+        }
+      )
+      const data = await res.json()
+      if (data.success) {
+        setFrameJobs(prev => ({ ...prev, [frameType]: data.job_id }))
+        // Note: generatingFrame stays true until polling completes
+      } else {
+        alert(data.error ?? 'Frame generation failed')
+        setGeneratingFrame(prev => ({ ...prev, [frameType]: false }))
+      }
+    } catch (err) {
+      alert(`Error: ${err instanceof Error ? err.message : String(err)}`)
+      setGeneratingFrame(prev => ({ ...prev, [frameType]: false }))
     }
   }
 
@@ -390,26 +469,34 @@ export function ReelsStudio({ clientId }: Props) {
                   />
                 ))}
 
-                {/* Reference frame uploads */}
+                {/* Reference frames — generate from prompt OR upload manually */}
                 <div className="bg-white rounded-xl border border-gray-200 p-5">
-                  <h3 className="text-sm font-semibold text-gray-900 mb-3">
+                  <h3 className="text-sm font-semibold text-gray-900 mb-0.5">
                     Reference Frames
-                    <span className="ml-2 text-xs font-normal text-gray-400">
-                      Upload images generated in Loveart
-                    </span>
                   </h3>
-                  <div className="grid grid-cols-2 gap-4">
+                  <p className="text-xs text-gray-400 mb-4">
+                    Generate from prompt with Visual Studio, or upload your own image (9:16)
+                  </p>
+                  <div className="grid grid-cols-2 gap-5">
                     {(['opening', 'closing'] as const).map(type => {
                       const url = type === 'opening'
                         ? activeDraft.opening_frame_url
                         : activeDraft.closing_frame_url
+                      const hasPrompt = !!(type === 'opening'
+                        ? activeDraft.opening_frame_prompt
+                        : activeDraft.closing_frame_prompt)
                       const fileRef = type === 'opening' ? openingFileRef : closingFileRef
+                      const isGenerating = generatingFrame[type]
+                      const isUploading = uploadingFrame === type
+                      const busy = isGenerating || isUploading
 
                       return (
                         <div key={type} className="space-y-2">
-                          <p className="text-xs font-medium text-gray-600 capitalize">
+                          <p className="text-xs font-semibold text-gray-600 capitalize">
                             {type} Frame
                           </p>
+
+                          {/* Image preview / generating placeholder / empty placeholder */}
                           {url ? (
                             <div className="relative group">
                               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -418,29 +505,63 @@ export function ReelsStudio({ clientId }: Props) {
                                 alt={`${type} frame`}
                                 className="w-full aspect-[9/16] object-cover rounded-lg border border-gray-200"
                               />
-                              <button
-                                onClick={() => fileRef.current?.click()}
-                                className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex items-center justify-center text-white text-xs font-medium"
-                              >
-                                Replace
-                              </button>
+                              {/* Hover overlay with replace options */}
+                              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg flex flex-col items-center justify-center gap-2 p-3">
+                                <button
+                                  onClick={() => handleGenerateFrame(type)}
+                                  disabled={!hasPrompt || busy}
+                                  className="w-full text-xs font-medium text-white bg-indigo-600/80 hover:bg-indigo-600 disabled:opacity-40 py-1.5 rounded-md transition-colors"
+                                >
+                                  🎨 Regenerate
+                                </button>
+                                <button
+                                  onClick={() => fileRef.current?.click()}
+                                  disabled={busy}
+                                  className="w-full text-xs font-medium text-white bg-white/20 hover:bg-white/30 disabled:opacity-40 py-1.5 rounded-md transition-colors"
+                                >
+                                  📸 Replace with upload
+                                </button>
+                              </div>
+                            </div>
+                          ) : isGenerating ? (
+                            <div className="w-full aspect-[9/16] border-2 border-indigo-200 bg-indigo-50 rounded-lg flex flex-col items-center justify-center gap-2">
+                              <span className="text-3xl animate-spin">⏳</span>
+                              <p className="text-xs text-indigo-500 text-center px-2">
+                                Visual Studio is generating…
+                              </p>
+                            </div>
+                          ) : isUploading ? (
+                            <div className="w-full aspect-[9/16] border-2 border-gray-200 bg-gray-50 rounded-lg flex flex-col items-center justify-center gap-2">
+                              <span className="text-3xl animate-pulse">📤</span>
+                              <p className="text-xs text-gray-400">Uploading…</p>
                             </div>
                           ) : (
-                            <button
-                              onClick={() => fileRef.current?.click()}
-                              disabled={uploadingFrame === type}
-                              className="w-full aspect-[9/16] border-2 border-dashed border-gray-300 rounded-lg flex flex-col items-center justify-center gap-2 hover:border-indigo-400 transition-colors disabled:opacity-50"
-                            >
-                              {uploadingFrame === type ? (
-                                <span className="text-xs text-gray-400 animate-pulse">Uploading…</span>
-                              ) : (
-                                <>
-                                  <span className="text-2xl">📸</span>
-                                  <span className="text-xs text-gray-400">Upload frame</span>
-                                </>
-                              )}
-                            </button>
+                            <div className="w-full aspect-[9/16] border-2 border-dashed border-gray-200 rounded-lg flex flex-col items-center justify-center gap-1">
+                              <span className="text-3xl">🖼️</span>
+                              <p className="text-xs text-gray-400">No frame yet</p>
+                            </div>
                           )}
+
+                          {/* Action buttons (hidden while busy or when image is shown — use hover overlay instead) */}
+                          {!url && !busy && (
+                            <div className="flex gap-1.5">
+                              <button
+                                onClick={() => handleGenerateFrame(type)}
+                                disabled={!hasPrompt}
+                                title={hasPrompt ? 'Generate from prompt' : 'Write a prompt above first'}
+                                className="flex-1 text-xs font-medium bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white py-1.5 rounded-md transition-colors"
+                              >
+                                🎨 Generate
+                              </button>
+                              <button
+                                onClick={() => fileRef.current?.click()}
+                                className="flex-1 text-xs font-medium border border-gray-300 hover:border-gray-400 text-gray-600 hover:text-gray-800 py-1.5 rounded-md transition-colors"
+                              >
+                                📸 Upload
+                              </button>
+                            </div>
+                          )}
+
                           <input
                             ref={fileRef}
                             type="file"

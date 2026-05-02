@@ -1,0 +1,95 @@
+/**
+ * GET /api/clients/[id]/reels/[draftId]/frame-status?job_id=xxx&frame_type=opening
+ *
+ * Polls Atlas Cloud for the image generation result.
+ * When completed, saves the image URL to the draft's opening_frame_url or
+ * closing_frame_url and auto-advances status to "images_ready" if both frames exist.
+ *
+ * Reference: ROADMAP.md P8.R
+ */
+
+import { NextRequest, NextResponse } from 'next/server'
+import { supabaseAdmin } from '@/lib/supabase'
+import { checkImageStatus } from '@/lib/visual/wavespeed'
+
+export async function GET(
+  req: NextRequest,
+  { params }: { params: { id: string; draftId: string } }
+) {
+  try {
+    const { searchParams } = new URL(req.url)
+    const job_id = searchParams.get('job_id')
+    const frame_type = searchParams.get('frame_type') as 'opening' | 'closing' | null
+
+    if (!job_id || !frame_type) {
+      return NextResponse.json(
+        { success: false, error: 'job_id and frame_type query params are required' },
+        { status: 400 }
+      )
+    }
+    if (frame_type !== 'opening' && frame_type !== 'closing') {
+      return NextResponse.json(
+        { success: false, error: 'frame_type must be "opening" or "closing"' },
+        { status: 400 }
+      )
+    }
+
+    const result = await checkImageStatus(job_id)
+
+    // Still pending/processing — tell client to keep polling
+    if (result.status !== 'completed' && result.status !== 'failed') {
+      return NextResponse.json({ success: true, status: result.status })
+    }
+
+    if (result.status === 'failed') {
+      return NextResponse.json({
+        success: true,
+        status: 'failed',
+        error: result.error ?? 'Visual Studio generation failed',
+      })
+    }
+
+    // Completed — save URL to draft
+    const frameUrlField = frame_type === 'opening' ? 'opening_frame_url' : 'closing_frame_url'
+    const imageUrl = result.image_url!
+
+    // Read the other frame's URL to decide new status
+    const { data: current } = await supabaseAdmin
+      .from('reels_drafts')
+      .select('opening_frame_url, closing_frame_url')
+      .eq('id', params.draftId)
+      .single()
+
+    const otherUrl = frame_type === 'opening'
+      ? current?.closing_frame_url
+      : current?.opening_frame_url
+
+    const newStatus = otherUrl ? 'images_ready' : 'draft'
+
+    const { data: draft, error } = await supabaseAdmin
+      .from('reels_drafts')
+      .update({
+        [frameUrlField]: imageUrl,
+        status: newStatus,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', params.draftId)
+      .eq('client_id', params.id)
+      .select()
+      .single()
+
+    if (error) throw error
+
+    return NextResponse.json({
+      success: true,
+      status: 'completed',
+      frame_url: imageUrl,
+      draft,
+    })
+
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    console.error('[reels/frame-status]', err)
+    return NextResponse.json({ success: false, error: message }, { status: 500 })
+  }
+}
