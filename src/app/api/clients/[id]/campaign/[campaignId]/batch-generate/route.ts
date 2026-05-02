@@ -6,6 +6,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getActiveBrief, formatBriefForPrompt } from '@/lib/content/brief-injector'
 import { getCampaignById, formatCampaignForPrompt } from '@/lib/content/campaign-injector'
+import { createRecord } from '@/lib/airtable/client'
+import { POST_TO_AIRTABLE } from '@/lib/airtable/field-maps'
+import type { ContentPost } from '@/types/magic-engine'
 import OpenAI from 'openai'
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -224,14 +227,49 @@ Output ONLY valid JSON:
     const { data: savedPosts, error } = await supabaseAdmin
       .from('content_posts')
       .insert(rows)
-      .select('id, title, route, status')
+      .select('id, title, route, status, platforms, script, caption, hashtags, visual_brief, source_video_url')
 
     if (error) throw error
+
+    // 7. Sync to Airtable Content Calendar (non-fatal — same pattern as route-a)
+    let airtableSynced = 0
+    if (savedPosts?.length) {
+      try {
+        const { data: clientRow } = await supabaseAdmin
+          .from('clients')
+          .select('airtable_base_id')
+          .eq('id', clientId)
+          .single()
+
+        if (clientRow?.airtable_base_id) {
+          const baseId = clientRow.airtable_base_id
+          for (const post of savedPosts) {
+            try {
+              const atRecord = await createRecord(
+                baseId,
+                'Content Calendar',
+                POST_TO_AIRTABLE(post as unknown as ContentPost)
+              )
+              await supabaseAdmin
+                .from('content_posts')
+                .update({ airtable_record_id: atRecord.id })
+                .eq('id', post.id)
+              airtableSynced++
+            } catch (perPostErr) {
+              console.error(`[batch-generate] Airtable sync failed for post ${post.id}:`, perPostErr)
+            }
+          }
+        }
+      } catch (atErr) {
+        console.error('[batch-generate] Airtable sync step failed:', atErr)
+      }
+    }
 
     return NextResponse.json({
       success: true,
       generated: drafts.length,
       saved: savedPosts?.length ?? 0,
+      airtable_synced: airtableSynced,
       generation_failures: generationFailures,   // OpenAI failures (not counted in 'failed')
       db_failures: drafts.length - (savedPosts?.length ?? 0),  // DB insert failures
       posts: savedPosts,
