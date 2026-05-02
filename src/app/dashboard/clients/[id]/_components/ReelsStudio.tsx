@@ -162,13 +162,21 @@ export function ReelsStudio({ clientId }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ campaign_brief_id: selectedCampaignId || undefined }),
       })
-      const data = await res.json()
+      let data: { success: boolean; draft?: ReeelsDraft; error?: string }
+      try {
+        data = await res.json()
+      } catch {
+        alert(`Server error (${res.status}): the API returned a non-JSON response. Check server logs.`)
+        return
+      }
       if (data.success && data.draft) {
-        setDrafts(prev => [data.draft, ...prev])
-        setActiveDraft(data.draft)
+        setDrafts(prev => [data.draft!, ...prev])
+        setActiveDraft(data.draft!)
       } else {
         alert(data.error ?? 'Generation failed')
       }
+    } catch (err) {
+      alert(`Unexpected error: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setGenerating(false)
     }
@@ -211,13 +219,21 @@ export function ReelsStudio({ clientId }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: msg }),
       })
-      const data = await res.json()
+      let data: { success: boolean; draft?: ReeelsDraft; error?: string }
+      try {
+        data = await res.json()
+      } catch {
+        alert(`Server error (${res.status}): non-JSON response from refine API.`)
+        return
+      }
       if (data.success && data.draft) {
         setActiveDraft(data.draft)
-        setDrafts(prev => prev.map(d => d.id === activeDraft.id ? data.draft : d))
+        setDrafts(prev => prev.map(d => d.id === activeDraft.id ? data.draft! : d))
       } else {
         alert(data.error ?? 'Refinement failed')
       }
+    } catch (err) {
+      alert(`Unexpected error: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
       setChatLoading(false)
     }

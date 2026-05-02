@@ -15,9 +15,100 @@
 import {
   callClaudeWithDocs,
   callClaudeChat,
-  parseJsonResponse,
   MODEL_SONNET,
 } from '@/lib/anthropic/client'
+
+// ─── Robust JSON parser ───────────────────────────────────────────────────────
+
+/**
+ * Extract and parse the first complete JSON object from Claude's response.
+ *
+ * Why not use the shared parseJsonResponse?
+ * It relies on lastIndexOf('}') which breaks when field values contain '}'.
+ * For example, fb_caption might contain "Use our service {today}!" — which
+ * causes lastIndexOf to land inside the string, producing invalid JSON.
+ *
+ * This implementation uses balanced-brace counting with in-string awareness,
+ * then sanitises literal control characters before JSON.parse.
+ */
+function parseReelsJson(raw: string): ReelsContent {
+  // 1. Strip markdown code fences (```json ... ``` or ``` ... ```)
+  const stripped = raw
+    .replace(/^```(?:json)?\s*/m, '')
+    .replace(/\s*```\s*$/m, '')
+    .trim()
+
+  // 2. Find the first complete JSON object using balanced-brace counting.
+  //    We track whether we're inside a string to avoid counting braces inside values.
+  let start = -1
+  let depth = 0
+  let inString = false
+  let escaped = false
+  let end = -1
+
+  for (let i = 0; i < stripped.length; i++) {
+    const ch = stripped[i]
+
+    if (escaped) { escaped = false; continue }
+    if (ch === '\\' && inString) { escaped = true; continue }
+    if (ch === '"') { inString = !inString; continue }
+    if (inString) continue
+
+    if (ch === '{') {
+      if (start === -1) start = i
+      depth++
+    } else if (ch === '}') {
+      depth--
+      if (depth === 0 && start !== -1) { end = i; break }
+    }
+  }
+
+  if (start === -1 || end === -1) {
+    throw new Error(
+      `No complete JSON object found in Claude response. Preview: ${raw.slice(0, 300)}`
+    )
+  }
+
+  const jsonStr = stripped.slice(start, end + 1)
+
+  // 3. Sanitise literal control characters inside string values
+  //    (real \n / \r / \t that Claude sometimes emits instead of \\n etc.)
+  const sanitized = sanitiseControlChars(jsonStr)
+
+  try {
+    return JSON.parse(sanitized) as ReelsContent
+  } catch (e) {
+    throw new Error(
+      `JSON.parse failed after sanitisation. Error: ${e}. Excerpt: ${sanitized.slice(0, 400)}`
+    )
+  }
+}
+
+/** Replace literal control characters inside JSON string values with escape sequences. */
+function sanitiseControlChars(str: string): string {
+  let inString = false
+  let escaped = false
+  let result = ''
+
+  for (const char of str) {
+    if (escaped) { result += char; escaped = false; continue }
+    if (char === '\\' && inString) { escaped = true; result += char; continue }
+    if (char === '"') { inString = !inString; result += char; continue }
+
+    if (inString) {
+      if (char === '\n') { result += '\\n'; continue }
+      if (char === '\r') { result += '\\r'; continue }
+      if (char === '\t') { result += '\\t'; continue }
+      // Unicode line/paragraph separators
+      if (char === ' ') { result += '\\u2028'; continue }
+      if (char === ' ') { result += '\\u2029'; continue }
+    }
+
+    result += char
+  }
+
+  return result
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -79,7 +170,7 @@ Generate four pieces of Reels content in this exact JSON format:
     maxOutputTokens: 2048,
   })
 
-  return parseJsonResponse<ReelsContent>(result.text)
+  return parseReelsJson(result.text)
 }
 
 // ─── Chat refinement ──────────────────────────────────────────────────────────
@@ -116,7 +207,7 @@ ${JSON.stringify(current, null, 2)}`
     maxOutputTokens: 2048,
   })
 
-  const updated = parseJsonResponse<ReelsContent>(result.text)
+  const updated = parseReelsJson(result.text)
 
   // Build a human-readable summary of what changed
   const changed = (Object.keys(updated) as Array<keyof ReelsContent>).filter(
@@ -175,3 +266,4 @@ export function formatMasterBriefForPrompt(brief: Record<string, unknown>): stri
 }
 
 export { MODEL_SONNET }
+export type { ReelsContent, ChatMessage }
