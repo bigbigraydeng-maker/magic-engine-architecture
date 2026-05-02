@@ -93,7 +93,9 @@ export function ReelsStudio({ clientId }: Props) {
 
   // Video generation
   const [generatingVideo, setGeneratingVideo] = useState(false)
-  const [pollingVideo, setPollingVideo] = useState(false)
+  // Use a ref (not state) so the polling flag doesn't trigger a re-render that
+  // would kill the interval via useEffect cleanup on every tick.
+  const pollingVideoRef = useRef(false)
 
   // ─── Fetch helpers ──────────────────────────────────────────────────────────
 
@@ -161,20 +163,24 @@ export function ReelsStudio({ clientId }: Props) {
   }, [frameJobs.opening, frameJobs.closing, activeDraft?.id, clientId])
 
   // Poll video status while generating
+  // Deps: only activeDraft.status / id / clientId — NOT pollingVideoRef (it's a ref,
+  // mutating it won't cause a re-render or kill the interval via cleanup).
   useEffect(() => {
-    if (!activeDraft || activeDraft.status !== 'video_generating' || pollingVideo) return
+    if (!activeDraft || activeDraft.status !== 'video_generating') return
+    if (pollingVideoRef.current) return  // already polling for this draft
 
-    setPollingVideo(true)
+    pollingVideoRef.current = true
 
     const interval = setInterval(async () => {
-      const res = await fetch(
-        `/api/clients/${clientId}/reels/${activeDraft.id}/video-status`
-      )
-      if (res.ok) {
+      try {
+        const res = await fetch(
+          `/api/clients/${clientId}/reels/${activeDraft.id}/video-status`
+        )
+        if (!res.ok) return
         const data = await res.json()
         if (data.status === 'completed' && data.video_url) {
           clearInterval(interval)
-          setPollingVideo(false)
+          pollingVideoRef.current = false
           setActiveDraft(prev =>
             prev ? { ...prev, status: 'video_ready', video_url: data.video_url } : prev
           )
@@ -187,14 +193,19 @@ export function ReelsStudio({ clientId }: Props) {
           )
         } else if (data.status === 'failed') {
           clearInterval(interval)
-          setPollingVideo(false)
+          pollingVideoRef.current = false
           setActiveDraft(prev => prev ? { ...prev, status: 'images_ready' } : prev)
         }
+      } catch {
+        // Network hiccup — keep polling
       }
     }, 8000)
 
-    return () => clearInterval(interval)
-  }, [activeDraft?.status, activeDraft?.id, clientId, pollingVideo])
+    return () => {
+      clearInterval(interval)
+      pollingVideoRef.current = false
+    }
+  }, [activeDraft?.status, activeDraft?.id, clientId])
 
   // ─── Actions ────────────────────────────────────────────────────────────────
 
