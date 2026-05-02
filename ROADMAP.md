@@ -803,24 +803,26 @@ Layer 3: 策略驱动执行
 ### 任务列表
 
 - [x] **P8.R.1** ROADMAP.md 登记 Reels Studio（2026-05-02）
-- [ ] **P8.R.2** DB Migration：`reels_drafts` 表 + `visual_assets.post_id` 可空
-  - 验收：migration SQL 能在 Supabase Dashboard 执行无报错
-- [ ] **P8.R.3** `src/lib/reels/generator.ts`：Claude prompt + JSON 解析
-  - 验收：返回 `{opening_frame_prompt, closing_frame_prompt, i2v_video_prompt, fb_caption}`
-- [ ] **P8.R.4** `src/lib/visual/seedance.ts`：新增 `submitI2VGeneration` 函数
-  - 验收：能调用 Atlas `image-to-video` 端点并返回 job_id
-- [ ] **P8.R.5** API 路由（6 个端点）
-  - `GET/POST /api/clients/[id]/reels` — 列表 + 新建
-  - `GET/PATCH /api/clients/[id]/reels/[draftId]` — 读取 + 更新
-  - `POST /api/clients/[id]/reels/[draftId]/refine` — AI 对话修改
-  - `POST /api/clients/[id]/reels/[draftId]/upload-frame` — 上传参考帧
-  - `POST /api/clients/[id]/reels/[draftId]/generate-video` — 触发 I2V
-  - `GET /api/clients/[id]/reels/[draftId]/video-status` — 轮询状态
-- [ ] **P8.R.6** `ReelsStudio.tsx` + 子组件（两栏 UI）
-  - 左栏：4 个可编辑字段 + 参考帧上传 + 视频状态
-  - 右栏：对话框修改提示词
-- [ ] **P8.R.7** 在 `/dashboard/clients/[id]/page.tsx` 加 `🎬 Reels Studio` Tab
-- [ ] **P8.R.8** Build 检查通过 + 推送到 master
+- [x] **P8.R.2** DB Migration：`reels_drafts` 表 + `visual_assets.post_id` 可空
+  - ✅ `supabase/migrations/20260502000002_create_reels_studio.sql` — **⚠️ 需在 Supabase Dashboard 执行**
+- [x] **P8.R.3** `src/lib/reels/generator.ts`：Claude prompt + JSON 解析
+  - ✅ `generateReelsContent()` + `refineReelsContent()` + `formatMasterBriefForPrompt()`
+- [x] **P8.R.4** `src/lib/visual/seedance.ts`：新增 `submitI2VGeneration` 函数
+  - ✅ 调用 `bytedance/seedance-2.0-fast/image-to-video`（first_frame_image + last_frame_image）
+- [x] **P8.R.5** API 路由（7 个端点，全部交付）
+  - ✅ `GET/POST /api/clients/[id]/reels` — 列表 + 新建
+  - ✅ `POST /api/clients/[id]/reels/generate` — Claude 生成 4 字段
+  - ✅ `GET/PATCH /api/clients/[id]/reels/[draftId]` — 读取 + 更新
+  - ✅ `POST /api/clients/[id]/reels/[draftId]/refine` — AI 对话修改
+  - ✅ `POST /api/clients/[id]/reels/[draftId]/upload-frame` — 上传参考帧
+  - ✅ `POST /api/clients/[id]/reels/[draftId]/generate-video` — 触发 I2V
+  - ✅ `GET /api/clients/[id]/reels/[draftId]/video-status` — 轮询状态
+- [x] **P8.R.6** `ReelsStudio.tsx`（两栏 UI）
+  - ✅ 左栏：4 个可编辑字段 + 参考帧上传（9:16）+ 视频播放器 + 状态轮询
+  - ✅ 右栏：Strategy Engine 对话框，乐观更新
+  - ✅ Draft 列表侧栏 + 状态徽章
+- [x] **P8.R.7** 在 `/dashboard/clients/[id]/page.tsx` 加 `🎬 Reels Studio` Tab
+- [x] **P8.R.8** Build 检查通过 + 推送到 master（commit: 5e24037，2026-05-02）
 
 ---
 
