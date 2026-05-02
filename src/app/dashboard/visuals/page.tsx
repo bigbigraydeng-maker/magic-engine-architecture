@@ -16,6 +16,7 @@ interface Post {
   format: string | null
   ratio: string | null
   created_at: string
+  airtable_record_id: string | null
 }
 
 interface VisualAsset {
@@ -619,6 +620,7 @@ export default function VisualsPage() {
   const [assets, setAssets] = useState<VisualAsset[]>([])
   const [genStates, setGenStates] = useState<Record<string, GenState>>({})
   const [syncing, setSyncing] = useState(false)
+  const [pushing, setPushing] = useState(false)
   const [pubModal, setPubModal] = useState<PubModal | null>(null)
   const [publerAccounts, setPublerAccounts] = useState<PublerAccount[]>([])
   const [scheduleForm, setScheduleForm] = useState({ account_id: '', scheduled_at: '', caption: '' })
@@ -882,6 +884,34 @@ export default function VisualsPage() {
     } finally { setSyncing(false) }
   }, [selectedClientId, fetchPosts])
 
+  // ── Push unsynced posts → Airtable ─────────────────────────────────────────
+
+  const handlePushAirtable = useCallback(async () => {
+    if (!selectedClientId) return
+    const unsyncedIds = posts.filter(p => !p.airtable_record_id).map(p => p.id)
+    if (unsyncedIds.length === 0) {
+      setToast({ type: 'success', message: 'All posts already synced to Airtable' })
+      return
+    }
+    setPushing(true)
+    try {
+      const res = await fetch('/api/airtable/sync-content', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: selectedClientId, post_ids: unsyncedIds }),
+      })
+      const d = await res.json()
+      if (d.success) {
+        await fetchPosts(selectedClientId)
+        setToast({ type: 'success', message: `↑ Pushed ${d.synced} posts to Airtable` })
+      } else {
+        setToast({ type: 'error', message: 'Push failed: ' + d.error })
+      }
+    } finally {
+      setPushing(false)
+    }
+  }, [selectedClientId, posts, fetchPosts])
+
   // ── Upload handler ─────────────────────────────────────────────────────────
 
   const handleUploaded = useCallback((asset: VisualAsset) => {
@@ -930,6 +960,14 @@ export default function VisualsPage() {
           className="text-sm px-3 py-1 bg-indigo-500 text-white rounded hover:bg-indigo-600 disabled:opacity-50"
         >
           {syncing ? 'Syncing…' : '↓ Sync Airtable'}
+        </button>
+        <button
+          onClick={handlePushAirtable}
+          disabled={!selectedClientId || pushing}
+          className="text-sm px-3 py-1 bg-emerald-500 text-white rounded hover:bg-emerald-600 disabled:opacity-50"
+          title="Push posts not yet in Airtable"
+        >
+          {pushing ? 'Pushing…' : '↑ Push to Airtable'}
         </button>
         <span className="text-xs text-gray-400 ml-auto hidden md:block">
           {posts.length} posts · Click any cell to edit · Auto-saves to Supabase + Airtable
