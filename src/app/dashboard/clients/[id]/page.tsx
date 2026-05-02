@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { BriefPanel } from './_components/BriefPanel';
 import { CampaignPanel } from './_components/CampaignPanel';
 import { GenerationDrawer } from './_components/GenerationDrawer';
+import { ReelsStudio } from './_components/ReelsStudio';
 
 interface Client {
   id: string;
@@ -28,7 +29,7 @@ interface ContentPost {
   created_at: string;
 }
 
-type Tab = 'overview' | 'airtable' | 'brief' | 'campaigns';
+type Tab = 'overview' | 'airtable' | 'brief' | 'campaigns' | 'reels';
 
 const STATUS_COLORS: Record<string, string> = {
   draft: 'bg-yellow-100 text-yellow-800',
@@ -171,6 +172,7 @@ export default function ClientDetailPage() {
           {([
             { id: 'brief', label: '✨ Master Brief' },
             { id: 'campaigns', label: '🎯 推广活动' },
+            { id: 'reels', label: '🎬 Reels Studio' },
             { id: 'overview', label: 'Overview' },
             { id: 'airtable', label: 'Airtable' },
           ] as { id: Tab; label: string }[]).map(tab => (
@@ -196,6 +198,10 @@ export default function ClientDetailPage() {
 
       {activeTab === 'campaigns' && (
         <CampaignPanel clientId={clientId} />
+      )}
+
+      {activeTab === 'reels' && (
+        <ReelsStudio clientId={clientId} />
       )}
 
       {activeTab === 'overview' && (

@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-01 · 当前阶段：**Phase 8.C.2 GEO+DataForSEO 闭环 → Phase 8.D DNZ诊断策略层（规划中）**
+> 最后更新：2026-05-02 · 当前阶段：**Phase 8.R Reels Studio（进行中）**
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
 
 ---
@@ -20,6 +20,7 @@
 ✅ Phase 8.9     Market Baseline（SEMrush 市场基准，2026-05-01 完成）
 ✅ Phase 8.11    Billing Monitor（DataForSEO 成本追踪，2026-05-01 完成）
 ✅ Phase 8.C.1   月报整合（完成，2026-05-01）
+🔄 Phase 8.R     Reels Studio（提示词生成 + 图参考帧 + I2V视频 + 对话修改，2026-05-02 进行中）
 📋 Phase 8.D     DNZ诊断策略层（域名全量采集 → 三维策略分析 → 策略驱动执行）
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
@@ -782,6 +783,46 @@ Layer 3: 策略驱动执行
   - P7.0.5 ✅ GEO 注入方案 A + B
   - P7.0.6 ✅ PoC 客户 CTS Tours（含发布权限）
   - P7.0.7 ✅ 月报形态 Web 报告页
+
+---
+
+## Phase 8.R — Reels Studio（2026-05-02 开始）
+
+> **背景**：用户在 Loveart 中用 Nano Banana（Google Imagen）生成参考图，在 Atlas Cloud 用 Seedance 2.0 I2V 做视频。
+> Reels Studio 打通从「提示词生成 → 上传参考帧 → 触发 I2V → 生成 FB 标题」的全链路。
+>
+> **对外封装名**：Video Studio（沿用），不暴露 Seedance / Atlas。
+
+### 设计约束
+- 一次生成一条（控制成本，I2V ~0.022 USD/秒）
+- 以 Master Brief + Campaign Brief 为上下文生成提示词
+- 支持对话式修改（修改某个字段而不重新生成全部）
+- 参考帧由用户在 Loveart 生成后手动上传
+- 视频生成用 Atlas `bytedance/seedance-2.0-fast/image-to-video`
+
+### 任务列表
+
+- [x] **P8.R.1** ROADMAP.md 登记 Reels Studio（2026-05-02）
+- [ ] **P8.R.2** DB Migration：`reels_drafts` 表 + `visual_assets.post_id` 可空
+  - 验收：migration SQL 能在 Supabase Dashboard 执行无报错
+- [ ] **P8.R.3** `src/lib/reels/generator.ts`：Claude prompt + JSON 解析
+  - 验收：返回 `{opening_frame_prompt, closing_frame_prompt, i2v_video_prompt, fb_caption}`
+- [ ] **P8.R.4** `src/lib/visual/seedance.ts`：新增 `submitI2VGeneration` 函数
+  - 验收：能调用 Atlas `image-to-video` 端点并返回 job_id
+- [ ] **P8.R.5** API 路由（6 个端点）
+  - `GET/POST /api/clients/[id]/reels` — 列表 + 新建
+  - `GET/PATCH /api/clients/[id]/reels/[draftId]` — 读取 + 更新
+  - `POST /api/clients/[id]/reels/[draftId]/refine` — AI 对话修改
+  - `POST /api/clients/[id]/reels/[draftId]/upload-frame` — 上传参考帧
+  - `POST /api/clients/[id]/reels/[draftId]/generate-video` — 触发 I2V
+  - `GET /api/clients/[id]/reels/[draftId]/video-status` — 轮询状态
+- [ ] **P8.R.6** `ReelsStudio.tsx` + 子组件（两栏 UI）
+  - 左栏：4 个可编辑字段 + 参考帧上传 + 视频状态
+  - 右栏：对话框修改提示词
+- [ ] **P8.R.7** 在 `/dashboard/clients/[id]/page.tsx` 加 `🎬 Reels Studio` Tab
+- [ ] **P8.R.8** Build 检查通过 + 推送到 master
+
+---
 
 ### 2026-04-28
 - **架构**：Supabase 单一数据源；Content Workspace 可选；禁止双向实时同步
