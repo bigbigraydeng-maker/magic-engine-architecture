@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { checkVideoStatus } from '@/lib/visual/seedance'
+import { uploadFromUrl } from '@/lib/visual/storage'
 
 type RouteContext = { params: { id: string; draftId: string } }
 
@@ -50,17 +51,31 @@ export async function GET(
     const result = await checkVideoStatus(draft.provider_job_id)
 
     if (result.status === 'completed' && result.video_url) {
-      // Persist video URL + flip status
+      // Upload to Supabase Storage for a permanent URL (Atlas CDN URLs expire in 24 h)
+      const { storage_url } = await uploadFromUrl({
+        sourceUrl: result.video_url,
+        clientId,
+        folder: `reels/${draftId}`,
+        assetType: 'video',
+      })
+
       await supabaseAdmin
         .from('reels_drafts')
-        .update({ status: 'video_ready', video_url: result.video_url })
+        .update({ status: 'video_ready', video_url: storage_url })
         .eq('id', draftId)
+
+      return NextResponse.json({
+        success: true,
+        status: 'completed',
+        video_url: storage_url,
+        error: null,
+      })
     }
 
     return NextResponse.json({
       success: true,
       status: result.status,
-      video_url: result.video_url ?? null,
+      video_url: null,
       error: result.error ?? null,
     })
 

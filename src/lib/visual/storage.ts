@@ -14,11 +14,12 @@ async function ensureBucket() {
 export async function uploadFromUrl(params: {
   sourceUrl: string
   clientId: string
-  postId: string
+  postId?: string        // optional — Reels drafts have no post_id
   assetType: 'image' | 'video' | 'avatar_video'
-  variant: 1 | 2
+  variant?: 1 | 2       // optional — defaults to 1
+  folder?: string        // optional override for the storage sub-path
 }): Promise<{ storage_url: string; file_size_kb: number }> {
-  const { sourceUrl, clientId, postId, assetType, variant } = params
+  const { sourceUrl, clientId, postId, assetType, variant = 1, folder } = params
 
   const response = await fetch(sourceUrl)
   if (!response.ok) throw new Error(`Failed to fetch asset from ${sourceUrl}`)
@@ -29,7 +30,8 @@ export async function uploadFromUrl(params: {
 
   const ext = assetType === 'image' ? 'jpg' : 'mp4'
   const timestamp = Date.now()
-  const path = `${clientId}/${postId}/${assetType}-v${variant}-${timestamp}.${ext}`
+  const subPath = folder ?? postId ?? 'misc'
+  const path = `${clientId}/${subPath}/${assetType}-v${variant}-${timestamp}.${ext}`
 
   await ensureBucket()
 

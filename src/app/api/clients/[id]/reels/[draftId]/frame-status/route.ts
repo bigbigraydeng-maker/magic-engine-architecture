@@ -11,6 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { checkImageStatus } from '@/lib/visual/wavespeed'
+import { uploadFromUrl } from '@/lib/visual/storage'
 
 export async function GET(
   req: NextRequest,
@@ -49,9 +50,15 @@ export async function GET(
       })
     }
 
-    // Completed — save URL to draft
+    // Completed — upload to Supabase Storage for permanent URL, then save to draft
     const frameUrlField = frame_type === 'opening' ? 'opening_frame_url' : 'closing_frame_url'
-    const imageUrl = result.image_url!
+
+    const { storage_url: imageUrl } = await uploadFromUrl({
+      sourceUrl: result.image_url!,
+      clientId: params.id,
+      folder: `reels/${params.draftId}`,
+      assetType: 'image',
+    })
 
     // Read the other frame's URL to decide new status
     const { data: current } = await supabaseAdmin
