@@ -75,13 +75,48 @@ function parseReelsJson(raw: string): ReelsContent {
   //    (real \n / \r / \t that Claude sometimes emits instead of \\n etc.)
   const sanitized = sanitiseControlChars(jsonStr)
 
+  let parsed: unknown
   try {
-    return JSON.parse(sanitized) as ReelsContent
+    parsed = JSON.parse(sanitized)
   } catch (e) {
     throw new Error(
       `JSON.parse failed after sanitisation. Error: ${e}. Excerpt: ${sanitized.slice(0, 400)}`
     )
   }
+
+  // 4. Normalise wrapper shapes Claude sometimes emits instead of the flat object.
+  //    e.g. { "reels": [{ ... }] } or { "content": { ... } }
+  return normalizeReelsShape(parsed)
+}
+
+/**
+ * Unwrap Claude's occasionally-wrong envelope shapes to the flat ReelsContent we expect.
+ *   { reels: [ { opening_frame_prompt, ... } ] }  → inner object
+ *   { content: { opening_frame_prompt, ... } }     → inner object
+ *   { opening_frame_prompt, ... }                  → as-is
+ */
+function normalizeReelsShape(parsed: unknown): ReelsContent {
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('Parsed JSON is not an object')
+  }
+  const obj = parsed as Record<string, unknown>
+
+  // Array wrapper: { reels: [{ ... }] }
+  if (Array.isArray(obj.reels) && obj.reels.length > 0) {
+    return obj.reels[0] as ReelsContent
+  }
+
+  // Single-key wrapper: { content: {...} } | { result: {...} } | { data: {...} }
+  for (const key of ['content', 'result', 'output', 'data']) {
+    const val = obj[key]
+    if (val && typeof val === 'object' && !Array.isArray(val)) {
+      const inner = val as Record<string, unknown>
+      if (inner.opening_frame_prompt) return inner as unknown as ReelsContent
+    }
+  }
+
+  // Already the flat shape we want
+  return obj as unknown as ReelsContent
 }
 
 /** Replace literal control characters inside JSON string values with escape sequences. */
@@ -128,7 +163,12 @@ export interface ChatMessage {
 
 const SYSTEM_GENERATE = `You are a Reels content strategist for AU/NZ markets.
 Given a brand brief and optional campaign context, generate four pieces of content for a Facebook Reels.
-Respond with ONLY a valid JSON object — no markdown, no explanation.`
+
+CRITICAL OUTPUT RULES:
+- Respond with ONLY a single flat JSON object — no markdown, no code fences, no explanation.
+- The JSON must have exactly these four keys at the top level: opening_frame_prompt, closing_frame_prompt, i2v_video_prompt, fb_caption.
+- Do NOT wrap the object in an array. Do NOT add any wrapper keys like "reels", "content", "result", or "data".
+- Do NOT use ` + '```' + ` code fences. Output raw JSON only.`
 
 const SYSTEM_REFINE = `You are a Reels content strategist helping refine specific fields.
 The user will ask to change one or more fields. Return ONLY the updated JSON object with ALL four fields
@@ -167,7 +207,7 @@ Generate four pieces of Reels content in this exact JSON format:
   const result = await callClaudeWithDocs({
     systemPrompt: SYSTEM_GENERATE,
     userMessage,
-    maxOutputTokens: 2048,
+    maxOutputTokens: 4096,
   })
 
   return parseReelsJson(result.text)
@@ -204,7 +244,7 @@ ${JSON.stringify(current, null, 2)}`
   const result = await callClaudeChat({
     systemPrompt: SYSTEM_REFINE,
     messages,
-    maxOutputTokens: 2048,
+    maxOutputTokens: 4096,
   })
 
   const updated = parseReelsJson(result.text)
