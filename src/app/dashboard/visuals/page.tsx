@@ -574,9 +574,25 @@ function AssetCell({
             ↻ Retry
           </button>
         </div>
+        {/* Upload to replace the current asset */}
+        <button
+          onClick={() => fileRef.current?.click()}
+          disabled={uploading}
+          title="Replace with your own image"
+          className="text-[9px] px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded hover:bg-gray-200 whitespace-nowrap disabled:opacity-50 w-full text-center"
+        >
+          {uploading ? '上传中…' : '⬆ Upload'}
+        </button>
         {readyAsset.cost_usd && (
           <span className="text-[8px] text-gray-500">${readyAsset.cost_usd.toFixed(2)}</span>
         )}
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm"
+          className="hidden"
+          onChange={handleUpload}
+        />
       </div>
     )
   }

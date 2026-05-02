@@ -86,21 +86,8 @@ export async function schedulePost(params: {
   })
   if (!res.ok) throw new Error(`Publer schedulePost error ${res.status}: ${await res.text()}`)
 
-  const result = await res.json()
-  // 等待排期 job 完成，确认无 failures
-  const jobId = result.job_id
-  if (jobId) {
-    await new Promise(r => setTimeout(r, 5000))
-    const statusRes = await fetch(`${PUBLER_BASE}/job_status/${jobId}`, { headers: publerHeaders() })
-    if (statusRes.ok) {
-      const status = await statusRes.json()
-      const failures = status.payload?.failures
-      if (failures && Object.keys(failures).length > 0) {
-        const msg = Object.values(failures as Record<string, Array<{ message: string }>>)
-          .flat()[0]?.message ?? 'Unknown Publer failure'
-        throw new Error(`Publer scheduling failed: ${msg}`)
-      }
-    }
-  }
-  return result
+  // Return immediately — the 200 response from Publer confirms the post was accepted.
+  // The previous 5 s sleep + job-status check was blocking the API response for too long
+  // and causing Render request timeouts on the UI side.
+  return await res.json()
 }
