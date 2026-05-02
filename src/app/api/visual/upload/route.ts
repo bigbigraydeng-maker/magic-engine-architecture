@@ -97,8 +97,14 @@ export async function POST(req: NextRequest) {
       asset_type: assetType,
     })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    console.error('[visual/upload]', err)
+    // Supabase errors are plain objects with .message, not Error instances
+    const message =
+      err instanceof Error
+        ? err.message
+        : typeof err === 'object' && err !== null && 'message' in err
+          ? String((err as { message: unknown }).message)
+          : JSON.stringify(err)
+    console.error('[visual/upload] error detail:', JSON.stringify(err))
     return NextResponse.json({ success: false, error: message }, { status: 500 })
   }
 }
