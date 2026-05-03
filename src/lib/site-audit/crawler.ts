@@ -1,0 +1,339 @@
+/**
+ * Site Auditor Crawler
+ *
+ * Two public functions:
+ *   discoverSitemapUrls(domain) — four-level fallback URL discovery
+ *   crawlPages(urls, opts)       — rate-limited, fault-tolerant page fetcher
+ *
+ * Reference: ROADMAP.md P8.0.2 DNZ collection infrastructure
+ */
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface CrawlOptions {
+  /** Maximum pages to crawl. Default: 100 */
+  limit?: number
+  /** Per-page fetch timeout in ms. Default: 10 000 */
+  timeout?: number
+  /** Minimum delay between requests in ms. Default: 1 000 */
+  rateLimitMs?: number
+}
+
+export interface CrawlResult {
+  url: string
+  markdown: string
+  title: string
+  statusCode: number
+  error?: string
+  crawledAt: Date
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+export const DEFAULT_LIMIT = 100
+export const DEFAULT_TIMEOUT = 10_000
+export const DEFAULT_RATE_LIMIT_MS = 1_000
+export const MAX_BFS_LINKS = 50
+
+// ---------------------------------------------------------------------------
+// Internal helpers (exported for unit testing)
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalise a domain or full URL to https://hostname (no trailing slash).
+ */
+export function normaliseDomain(input: string): string {
+  const withScheme = input.startsWith('http') ? input : `https://${input}`
+  const { protocol, hostname } = new URL(withScheme)
+  return `${protocol}//${hostname}`
+}
+
+/**
+ * Parse <loc> text nodes from a sitemap XML string.
+ */
+export function parseLocsFromXml(xml: string): string[] {
+  const locs: string[] = []
+  const re = /<loc>\s*(https?:\/\/[^\s<]+)\s*<\/loc>/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(xml)) !== null) {
+    locs.push(m[1].trim())
+  }
+  return locs
+}
+
+/**
+ * Parse "Sitemap: <url>" directives from a robots.txt string.
+ */
+export function parseSitemapDirectives(robotsTxt: string): string[] {
+  const urls: string[] = []
+  const re = /^Sitemap:\s*(\S+)/gim
+  let m: RegExpExecArray | null
+  while ((m = re.exec(robotsTxt)) !== null) {
+    urls.push(m[1].trim())
+  }
+  return urls
+}
+
+/**
+ * Returns true if robots.txt blocks all crawlers from root (/).
+ */
+export function isFullyCrawlBlocked(robotsTxt: string): boolean {
+  // Look for User-agent: * block containing Disallow: /
+  const blocks = robotsTxt.split(/(?=User-agent:)/i)
+  for (const block of blocks) {
+    if (/User-agent:\s*\*/i.test(block) && /Disallow:\s*\/\s*$/m.test(block)) {
+      return true
+    }
+  }
+  return false
+}
+
+/**
+ * Extract same-origin href values from raw HTML.
+ * Returns de-duped absolute URLs limited to `max` entries.
+ */
+export function extractSameDomainLinks(
+  html: string,
+  origin: string,
+  max: number = MAX_BFS_LINKS
+): string[] {
+  const seen = new Set<string>()
+  const re = /href=["']([^"']+)["']/gi
+  let m: RegExpExecArray | null
+  while ((m = re.exec(html)) !== null && seen.size < max) {
+    const raw = m[1].trim()
+    try {
+      const abs = new URL(raw, origin).href
+      if (abs.startsWith(origin) && !seen.has(abs)) {
+        seen.add(abs)
+      }
+    } catch {
+      // ignore malformed hrefs
+    }
+  }
+  return Array.from(seen)
+}
+
+/**
+ * Extract a page title from markdown content.
+ * Priority: first H1 → <title> tag → fallback to url hostname.
+ */
+export function extractTitle(markdown: string, url: string): string {
+  const h1 = markdown.match(/^#\s+(.+)$/m)
+  if (h1) return h1[1].trim()
+
+  const titleTag = markdown.match(/<title[^>]*>([^<]+)<\/title>/i)
+  if (titleTag) return titleTag[1].trim()
+
+  try {
+    return new URL(url).hostname
+  } catch {
+    return url
+  }
+}
+
+/**
+ * Utility sleep used for rate limiting.
+ */
+export function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/**
+ * Discover all crawlable URLs for a domain using a four-level fallback:
+ *   1. /sitemap.xml
+ *   2. /sitemap_index.xml
+ *   3. Sitemap directives in /robots.txt
+ *   4. BFS homepage link extraction (max 50 links)
+ *
+ * Returns unique, same-domain URLs only.
+ * Returns [] if robots.txt fully blocks crawling (and logs a warning).
+ */
+export async function discoverSitemapUrls(domain: string): Promise<string[]> {
+  const origin = normaliseDomain(domain)
+
+  // Check robots.txt first for crawl permission
+  try {
+    const robotsRes = await fetch(`${origin}/robots.txt`)
+    if (robotsRes.ok) {
+      const robotsTxt = await robotsRes.text()
+      if (isFullyCrawlBlocked(robotsTxt)) {
+        console.warn(`[crawler] ${origin}/robots.txt disallows all crawling. Returning empty URL list.`)
+        return []
+      }
+      // Try sitemap directives from robots.txt
+      const directives = parseSitemapDirectives(robotsTxt)
+      if (directives.length > 0) {
+        const urls = await resolveSitemapUrls(directives, origin)
+        if (urls.length > 0) {
+          return dedupeAndFilter(urls, origin)
+        }
+      }
+    }
+  } catch {
+    // robots.txt unreachable — continue with other strategies
+  }
+
+  // Level 1: /sitemap.xml
+  try {
+    const res = await fetch(`${origin}/sitemap.xml`)
+    if (res.ok) {
+      const xml = await res.text()
+      const locs = parseLocsFromXml(xml)
+      if (locs.length > 0) {
+        return dedupeAndFilter(locs, origin)
+      }
+    }
+  } catch {
+    // fall through
+  }
+
+  // Level 2: /sitemap_index.xml
+  try {
+    const res = await fetch(`${origin}/sitemap_index.xml`)
+    if (res.ok) {
+      const xml = await res.text()
+      // sitemap_index contains <loc> entries pointing to child sitemaps
+      const childSitemapUrls = parseLocsFromXml(xml)
+      const allLocs: string[] = []
+      for (const childUrl of childSitemapUrls) {
+        try {
+          const childRes = await fetch(childUrl)
+          if (childRes.ok) {
+            const childXml = await childRes.text()
+            allLocs.push(...parseLocsFromXml(childXml))
+          }
+        } catch {
+          // skip unreachable child sitemap
+        }
+      }
+      if (allLocs.length > 0) {
+        return dedupeAndFilter(allLocs, origin)
+      }
+    }
+  } catch {
+    // fall through
+  }
+
+  // Level 4: BFS homepage link extraction
+  try {
+    const res = await fetch(origin)
+    if (res.ok) {
+      const html = await res.text()
+      const links = extractSameDomainLinks(html, origin, MAX_BFS_LINKS)
+      return links
+    }
+  } catch {
+    // nothing more to try
+  }
+
+  return []
+}
+
+/**
+ * Crawl a list of URLs using Jina Reader, with rate limiting and fault tolerance.
+ * Uses Promise.allSettled so individual failures don't block the batch.
+ */
+export async function crawlPages(
+  urls: string[],
+  opts?: CrawlOptions
+): Promise<CrawlResult[]> {
+  const limit = opts?.limit ?? DEFAULT_LIMIT
+  const timeout = opts?.timeout ?? DEFAULT_TIMEOUT
+  const rateLimitMs = opts?.rateLimitMs ?? DEFAULT_RATE_LIMIT_MS
+
+  const targets = urls.slice(0, limit)
+  const results: CrawlResult[] = []
+
+  for (let i = 0; i < targets.length; i++) {
+    const url = targets[i]
+    const crawledAt = new Date()
+
+    try {
+      const { fetchUrlAsMarkdown } = await import('../brief/jina')
+      const jinaResult = await withTimeout(fetchUrlAsMarkdown(url), timeout)
+      results.push({
+        url,
+        markdown: jinaResult.markdown,
+        title: jinaResult.title || extractTitle(jinaResult.markdown, url),
+        statusCode: 200,
+        crawledAt,
+      })
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      results.push({
+        url,
+        markdown: '',
+        title: '',
+        statusCode: 0,
+        error,
+        crawledAt,
+      })
+    }
+
+    // Rate limiting: skip delay after the last request
+    if (i < targets.length - 1) {
+      await delay(rateLimitMs)
+    }
+  }
+
+  return results
+}
+
+// ---------------------------------------------------------------------------
+// Private helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a list of sitemap URLs (possibly sitemap indexes) into page URLs.
+ */
+async function resolveSitemapUrls(sitemapUrls: string[], origin: string): Promise<string[]> {
+  const all: string[] = []
+  for (const url of sitemapUrls) {
+    try {
+      const res = await fetch(url)
+      if (!res.ok) continue
+      const xml = await res.text()
+      const locs = parseLocsFromXml(xml)
+      all.push(...locs)
+    } catch {
+      // skip
+    }
+  }
+  return all
+}
+
+/**
+ * Remove duplicates and filter to same-origin URLs only.
+ */
+function dedupeAndFilter(urls: string[], origin: string): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const u of urls) {
+    if (!seen.has(u) && u.startsWith(origin)) {
+      seen.add(u)
+      result.push(u)
+    }
+  }
+  return result
+}
+
+/**
+ * Wrap a promise with a timeout rejection.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms)
+    ),
+  ])
+}
