@@ -81,9 +81,4 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, job_id: result.job_id, client_id: clientId })
 
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    console.error('[publer/create-post]', err)
-    return NextResponse.json({ success: false, error: message }, { status: 500 })
-  }
-}
+  } catch (err: unkno
