@@ -837,6 +837,8 @@ export default function VisualsPage() {
   const [posts, setPosts] = useState<Post[]>([])
   const [assets, setAssets] = useState<VisualAsset[]>([])
   const [genStates, setGenStates] = useState<Record<string, GenState>>({})
+  // Track posts whose visual_brief was recently edited — shows 🔄 Regen button
+  const [dirtyBriefs, setDirtyBriefs] = useState<Set<string>>(new Set())
   const [syncing, setSyncing] = useState(false)
   const [pushing, setPushing] = useState(false)
   const [pubModal, setPubModal] = useState<PubModal | null>(null)
@@ -985,6 +987,12 @@ export default function VisualsPage() {
       prevPost = prev.find(p => p.id === postId)
       return prev.map(p => p.id === postId ? { ...p, ...fields } as Post : p)
     })
+
+    // If visual_brief changed, mark this post as needing regeneration
+    if ('visual_brief' in fields) {
+      setDirtyBriefs(prev => new Set([...prev, postId]))
+    }
+
     try {
       const res = await fetch(`/api/posts/${postId}`, {
         method: 'PATCH',
@@ -997,6 +1005,7 @@ export default function VisualsPage() {
       if (prevPost) {
         setPosts(prev => prev.map(p => p.id === postId ? prevPost! : p))
       }
+      setDirtyBriefs(prev => { const next = new Set(prev); next.delete(postId); return next })
       setToast({ type: 'error', message: 'Failed to save — changes reverted' })
     }
   }, [])
@@ -1024,6 +1033,9 @@ export default function VisualsPage() {
   const handleGenerate = useCallback(async (post: Post) => {
     const assetType = assetTypeFromFormat(post.format)
     const apiPath = assetType === 'video' ? '/api/visual/video' : '/api/visual/image'
+
+    // Clear dirty brief flag — generation in progress, button should hide
+    setDirtyBriefs(prev => { const next = new Set(prev); next.delete(post.id); return next })
 
     try {
       await submitGeneration(post.id, apiPath, {
@@ -1275,6 +1287,8 @@ export default function VisualsPage() {
                   <td className="px-2 py-1.5 border-r border-gray-100">
                     {(() => {
                       const hint = getDimensionHint(post.format, post.platforms)
+                      const briefDirty = dirtyBriefs.has(post.id)
+                      const isGenerating = genStates[post.id]?.generating || genStates[post.id]?.queued
                       return (
                         <>
                           {(post.format || hint) && (
@@ -1294,6 +1308,21 @@ export default function VisualsPage() {
                             onSave={v => patchPost(post.id, { visual_brief: v })}
                             placeholder="Image / video prompt…"
                           />
+                          {/* Regen button — appears after brief is edited, hides when generating */}
+                          {briefDirty && !isGenerating && (
+                            <button
+                              onClick={() => handleGenerate(post)}
+                              className="mt-1 w-full text-[9px] px-1.5 py-0.5 bg-indigo-500 text-white rounded hover:bg-indigo-600 flex items-center justify-center gap-1 animate-pulse-once"
+                            >
+                              🔄 Regen with new prompt
+                            </button>
+                          )}
+                          {briefDirty && isGenerating && (
+                            <div className="mt-1 text-[9px] text-indigo-500 flex items-center gap-1">
+                              <span className="inline-block w-2.5 h-2.5 border border-indigo-400 border-t-transparent rounded-full animate-spin" />
+                              Generating…
+                            </div>
+                          )}
                         </>
                       )
                     })()}
