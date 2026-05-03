@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-02 · 当前阶段：**Phase 8.R Reels Studio（进行中）**
+> 最后更新：2026-05-03 · 当前阶段：**Phase 8.R 基本完成，规划 Phase 8.Q / 8.B**
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
 
 ---
@@ -20,7 +20,10 @@
 ✅ Phase 8.9     Market Baseline（SEMrush 市场基准，2026-05-01 完成）
 ✅ Phase 8.11    Billing Monitor（DataForSEO 成本追踪，2026-05-01 完成）
 ✅ Phase 8.C.1   月报整合（完成，2026-05-01）
-🔄 Phase 8.R     Reels Studio（提示词生成 + 图参考帧 + I2V视频 + 对话修改，2026-05-02 进行中）
+✅ Phase 8.R     Reels Studio（提示词生成 + 参考帧生成/上传 + I2V视频 + 对话修改，2026-05-02 完成）
+📋 Phase 8.Q     内容质控提升（System Design Audit 缺口修复：外编版本管理 + Visual Brief编辑 + Prompt预览）
+📋 Phase 8.B     批量生产 + 自动排期 + 无缝发布（走向 Airtable-free 运营模式）
+📋 Phase 8.M     Marketing Agent 记忆系统（每客户长期 Agent 智能化，中长期）
 📋 Phase 8.D     DNZ诊断策略层（域名全量采集 → 三维策略分析 → 策略驱动执行）
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
@@ -786,6 +789,294 @@ Layer 3: 策略驱动执行
 
 ---
 
+## Phase 8.Q — 内容质控提升（System Design Audit 缺口修复）
+
+> **背景（2026-05-03 确立）**
+>
+> 系统设计评审（SYSTEM_DESIGN_AUDIT.md）识别出 6 大缺口，影响内容管理的生产级能力：
+> 1. 🔴 外编版本管理：支持下载→编辑→上传→版本记录（最高优先级）
+> 2. 🟡 Visual Brief 编辑：Launch Hub 可编辑 visual_brief 后重新生成图片
+> 3. 🟡 Prompt 预览编辑：Campaign 生成前展示 prompt，允许修改后再执行
+> 4. 🟡 Brief 版本锁定：content_posts 记录生成时的 brief 快照
+>
+> Phase 8.Q 优先修复 🔴 高优先级缺口，逐步补全中优先级项。
+
+---
+
+### Phase 8.Q.1 — 外编版本管理（🔴 最高优先级）
+
+**目标**：为 visual_assets 建立完整的版本历史，支持"下载 → 外部编辑 → 上传最终版"完整工作流。
+
+**数据库（Day 1）**
+- [ ] **P8.Q.1** 新建 `visual_asset_versions` 表 + 迁移文件
+  ```sql
+  CREATE TABLE visual_asset_versions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    asset_id UUID NOT NULL REFERENCES visual_assets(id) ON DELETE CASCADE,
+    version_num INT NOT NULL DEFAULT 1,
+    storage_url TEXT NOT NULL,
+    uploaded_by TEXT NOT NULL DEFAULT 'system',  -- 'system' | 'user:<email>'
+    edit_type TEXT NOT NULL DEFAULT 'ai_generated',
+    -- 'ai_generated' | 'external_edit' | 'manual_replacement'
+    edit_notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+  );
+  ALTER TABLE visual_assets
+    ADD COLUMN current_version_num INT DEFAULT 1,
+    ADD COLUMN is_final BOOLEAN DEFAULT false,
+    ADD COLUMN external_edit_status TEXT;
+    -- null | 'needs_external_edit' | 'in_external_edit' | 'final'
+  ```
+- [ ] **P8.Q.2** 回填现有 `visual_assets` 数据：为每条已有 storage_url 创建 version_num=1 的历史记录
+
+**API 层（Day 2-3）**
+- [ ] **P8.Q.3** `GET /api/visual-assets/[assetId]/versions` — 返回版本历史列表
+- [ ] **P8.Q.4** `POST /api/visual-assets/[assetId]/upload-version` — 上传新版本
+  - 创建 `visual_asset_versions` 记录（version_num 自增）
+  - 更新 `visual_assets.storage_url` + `current_version_num` + `is_final=true`
+  - `edit_type='external_edit'`，记录 `edit_notes`
+- [ ] **P8.Q.5** `PATCH /api/visual-assets/[assetId]/edit-status` — 更新外编状态
+  - `{ status: 'needs_external_edit' | 'in_external_edit' | 'final' }`
+
+**前端 UI（Day 4-6）**
+- [ ] **P8.Q.6** Launch Hub 表格 Asset 列改造：
+  - 「⬇ Download」按钮 — 下载当前版本
+  - 「✏ Mark for External Edit」按钮 — 更新状态为 `needs_external_edit`（行变灰显示"外编中"标签）
+  - 「⬆ Upload Final Version」按钮（外编状态中可用）— 触发 P8.Q.4 API
+  - 「🔢 v{n}」版本徽章 — 显示当前版本号，点击展开版本历史 modal
+- [ ] **P8.Q.7** 版本历史 Modal：时间线展示所有版本（时间、类型、操作者），点击可预览或恢复特定版本
+- [ ] **P8.Q.8** Publer 排期时自动选 `is_final=true` 的版本（`publer/create-post` route 更新筛选逻辑）
+
+**验收标准**：
+- 一条 AI 生成图片的 asset，能完整走通：下载 → 标记外编 → 上传最终版 → 版本历史记录正确
+- Publer 排期时，自动取 is_final=true 的版本而非最新生成版本
+- 版本历史 Modal 能看到完整历史记录
+
+---
+
+### Phase 8.Q.2 — Visual Brief 编辑（🟡 中优先级）
+
+**目标**：Launch Hub 允许用户编辑 `visual_brief` 后重新生成图片，而不需要回到 Campaign 页面。
+
+- [ ] **P8.Q.9** `Launch Hub` 视觉资产行新增「✏ Edit Brief」按钮
+  - 点击展开 inline 编辑框，加载 `content_posts.visual_brief`
+  - 用户修改后点「🔄 Regenerate」→ 调用 `POST /api/visual/image`（已有路由）
+  - 更新 `content_posts.visual_brief` 到 Supabase
+- [ ] **P8.Q.10** Reels Studio 参考帧区域：Opening/Closing Prompt 均支持直接编辑 + 重新生成（已部分实现，确认完整性）
+
+**验收标准**：
+- 在 Launch Hub 中修改 visual_brief 后，点击 Regenerate 能生成新图片
+- 新图片作为新 asset 或替换当前 ready asset（version 记录）
+
+---
+
+### Phase 8.Q.3 — Prompt 预览与编辑（🟡 中优先级）
+
+**目标**：Campaign 批量生成前，让用户看到将要使用的 prompt，并允许修改。
+
+- [ ] **P8.Q.11** Campaign 生成按钮改为"预览 Prompt → 确认生成"两步流程
+  - 第一步：调用 `GET /api/clients/[id]/campaigns/[campaignId]/preview-prompt`，展示给用户
+  - 第二步：用户确认或修改后提交 → 执行批量生成
+- [ ] **P8.Q.12** 新建 `prompts` 表（存储历史使用过的 prompt，供分析和优化）
+  ```sql
+  CREATE TABLE prompts (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    client_id UUID REFERENCES clients(id),
+    stage TEXT NOT NULL,  -- 'campaign' | 'visual' | 'blog' | 'reels'
+    prompt_text TEXT NOT NULL,
+    variables JSONB,  -- { brief_id, campaign_id, keyword, ... }
+    used_count INT DEFAULT 1,
+    created_at TIMESTAMPTZ DEFAULT now()
+  );
+  ALTER TABLE content_posts ADD COLUMN prompt_id UUID REFERENCES prompts(id);
+  ```
+- [ ] **P8.Q.13** 博客生成流程同样引入"Prompt 预览"步骤（Blog Studio 生成前展示 prompt）
+
+**验收标准**：
+- Campaign 批量生成时，展示 prompt 预览 modal，用户可修改后确认
+- 每次生成都记录到 prompts 表，可追溯
+
+---
+
+### Phase 8.Q.4 — Brief 版本锁定（🟡 中优先级）
+
+**目标**：每条 content_post 记录生成时的 Master Brief 快照 ID，确保回溯一致。
+
+- [ ] **P8.Q.14** `content_posts` 表新增 `master_brief_version_id UUID REFERENCES master_briefs(id)`
+- [ ] **P8.Q.15** Campaign 生成时注入当前 active brief ID 到 content_post 记录
+- [ ] **P8.Q.16** Brief 变更时，提示"有 X 条帖子使用旧版 Brief，是否重新生成？"
+
+**验收标准**：
+- 每条 content_post 可追溯到生成时的 brief 版本
+- 若 brief 更新，系统能识别哪些内容基于旧版本
+
+---
+
+## Phase 8.B — 批量生产 + 自动排期 + 无缝发布
+
+> **背景（2026-05-03 确立）**
+>
+> 当前工作流仍依赖 Airtable 做内容审批和内容日历。随着 Magic Engine 功能成熟，
+> 核心目标是构建**全 ME 原生**的批量生产→审批→排期→自动发布流程：
+>
+> ```
+> Campaign 批量生成 → Launch Hub 批量生成图片
+>   → ME 原生审批（不依赖 Airtable）
+>   → 设置排期日历
+>   → 系统自动 → Publer 发布
+>   → ME 收到发布回调，标记完成
+> ```
+>
+> 这是走向「设定好排期，让系统自己跑」的关键阶段。Airtable 保留为可选输入渠道，
+> 但不再是唯一的审批和排期通道。
+
+---
+
+### Phase 8.B.1 — 客户平台配置
+
+**目标**：每个客户可独立配置社媒平台偏好、默认发布时间等，为批量排期提供基础。
+
+- [ ] **P8.B.1** `clients` 表新增平台配置字段
+  ```sql
+  ALTER TABLE clients
+    ADD COLUMN platforms TEXT[] DEFAULT ARRAY['instagram', 'facebook'],
+    ADD COLUMN default_post_time TIME DEFAULT '09:00:00',  -- 客户时区的默认发布时间
+    ADD COLUMN posting_timezone TEXT DEFAULT 'Pacific/Auckland',
+    ADD COLUMN posting_frequency TEXT DEFAULT 'daily';  -- 'daily' | '3x_week' | 'weekly'
+  ```
+- [ ] **P8.B.2** 客户详情页（`/dashboard/clients/[id]`）新增"平台设置"Tab
+  - 选择平台（Instagram / Facebook / LinkedIn / TikTok）
+  - 配置默认发布时间 + 时区
+  - 配置发布频率
+- [ ] **P8.B.3** API：`PATCH /api/clients/[id]/platform-settings` — 保存平台配置
+
+**验收标准**：
+- 每个客户有独立的平台和发布时间配置
+- 后续批量排期时能自动读取这些配置
+
+---
+
+### Phase 8.B.2 — Launch Hub 批量图片生成
+
+**目标**：在 Launch Hub 中，可以一次性选中多条帖子批量生成图片，而不是逐条点击。
+
+- [ ] **P8.B.4** Launch Hub 表格新增行选择（复选框）
+- [ ] **P8.B.5** 顶部工具栏"批量操作"区：
+  - 「🖼 批量生成图片」— 对选中的所有 `visual_brief` 非空且无 ready asset 的帖子触发生成
+  - 「📅 批量设置排期」— 对选中的 approved 帖子批量设置发布时间
+  - 「✅ 批量审批」— 对选中的 draft/pending 帖子一键审批
+- [ ] **P8.B.6** 批量生成进度展示：生成中的条目显示 spinner，完成后实时更新缩略图（轮询或 Supabase realtime）
+- [ ] **P8.B.7** API：`POST /api/visual/batch-generate` — 接收 `post_ids[]`，对每条异步触发生成（已有单条接口，包装为批量）
+
+**验收标准**：
+- 选中 10 条帖子，点"批量生成图片"，系统自动并发触发（最多 3 条同时进行，控制成本）
+- 生成完成后，缩略图在 Launch Hub 实时更新
+
+---
+
+### Phase 8.B.3 — ME 原生审批工作流
+
+**目标**：在 Magic Engine 内完成内容审批，无需依赖 Airtable 或 Zapier。Airtable 保留为可选渠道。
+
+- [ ] **P8.B.8** `content_posts` 状态机完整实现（已有 draft/approved/rejected，补充 review_requested）
+  - `draft` → `review_requested`（提交审核）→ `approved` 或 `rejected`
+  - 支持 `revision_notes` 字段（拒绝时写明原因）
+- [ ] **P8.B.9** Launch Hub 审批操作列：
+  - 「✅ 审批」按钮（当前状态：draft/review_requested）
+  - 「❌ 拒绝」按钮（弹窗填写 revision_notes）
+  - 「📝 修改」直接编辑 caption/hashtags（已有功能，确认完整性）
+- [ ] **P8.B.10** Content Board 页面新增审批视图（按 status 分列的看板视图，类似 Kanban）
+  - 列：Draft → Review → Approved → Scheduled → Published
+  - 拖拽卡片可更新状态
+- [ ] **P8.B.11** 审批后自动触发工作流（已有逻辑，确认触发链完整）：
+  - `approved` → 检查是否有 ready asset → 若有则推 Publer → 若无则先生成图片
+
+**验收标准**：
+- 全程在 ME 完成：内容生成 → 审批 → 自动推送 Publer，无需打开 Airtable
+- Kanban 视图可拖拽更新帖子状态
+
+---
+
+### Phase 8.B.4 — 内容日历与自动排期
+
+**目标**：可视化内容发布日历，支持手动和自动排期，让团队一目了然看到每天发什么。
+
+- [ ] **P8.B.12** 新路由 `/dashboard/content-calendar/[clientId]` — 月历视图
+  - 每天的格子显示当天的帖子（已排期 / 已发布）
+  - 颜色区分：蓝=待发布 / 绿=已发布 / 灰=草稿
+  - 点击日期可快速新建帖子排期
+- [ ] **P8.B.13** API：`GET /api/clients/[id]/content-calendar?month=2026-05` — 返回该月所有 content_posts（含 scheduled_at）
+- [ ] **P8.B.14** 排期操作：
+  - 批量自动排期：读取客户 `posting_frequency` + `default_post_time`，为所有 approved 帖子按频率自动分配 `scheduled_at`
+  - 单条拖拽排期：在日历上拖拽帖子到目标日期
+  - 一键推送：「🚀 推送所有排期」→ 对所有 `approved` 且 `scheduled_at` 已设置的帖子调用 Publer
+- [ ] **P8.B.15** 侧边栏导航加 📅 "Content Calendar" 菜单项
+
+**验收标准**：
+- 月历视图正确显示所有已排期内容
+- "批量自动排期"按钮能按配置的频率为 approved 帖子分配发布时间
+- "一键推送"能将所有排期内容推送到 Publer
+
+---
+
+### Phase 8.B.5 — 视频上传支持
+
+**目标**：Launch Hub 支持上传外部剪辑好的视频（替代只能 AI 生成视频的限制）。
+
+- [ ] **P8.B.16** Launch Hub 视频格式帖子（`format=video`）的 Asset 列，增加"⬆ Upload Video"按钮
+  - 支持 MP4/MOV，最大 500MB
+  - 上传到 Supabase Storage `visual-assets/{client_id}/{post_id}/`
+  - 创建 `visual_assets` 记录（`asset_type='video'`, `generation_status='ready'`）
+- [ ] **P8.B.17** 上传进度条（大文件上传体验）
+- [ ] **P8.B.18** 上传完成后，视频缩略图在 Launch Hub 实时展示（使用 HTML video 第1帧）
+
+**验收标准**：
+- 上传一个 MP4 视频，Launch Hub 显示视频缩略图
+- 推送到 Publer 时，使用该上传视频（而非 AI 生成版本）
+
+---
+
+### Phase 8.B.6 — Airtable 依赖解耦（可选渐进式）
+
+> 此阶段不是"删除 Airtable"，而是让 Airtable 成为**可选**渠道，而非必须路径。
+
+- [ ] **P8.B.19** 审查所有 Airtable 写回逻辑，标记为"可选 best-effort"（已有 `.catch()` 静默失败，确认覆盖完整）
+- [ ] **P8.B.20** `clients` 表新增 `airtable_enabled BOOLEAN DEFAULT true`
+  - 客户配置页可关闭 Airtable 同步
+  - 所有写回逻辑在 `airtable_enabled = false` 时跳过
+- [ ] **P8.B.21** 发布成功回调（`/api/webhooks/publer-published`）：移除对 Airtable 写回的强依赖，改为纯 Supabase 更新
+- [ ] **P8.B.22** 审批 webhook（`/api/webhooks/airtable-approved`）：保留兼容，但 ME 原生审批（P8.B.9）不经过此路由
+
+**验收标准**：
+- 将一个测试客户的 `airtable_enabled` 设为 false，从内容生成到发布全链路不报错
+- Airtable 写回失败时，主流程不受影响
+
+---
+
+## Phase 8.M — Marketing Agent 记忆系统（中长期）
+
+> **背景（2026-05-03 规划）**
+>
+> 当前 Claude Sonnet 作为无状态 API 调用——每次调用都是全新对话，不记得上次生成了什么，
+> 不知道这个客户哪类内容表现好，不会随时间改善对客户品牌的理解。
+>
+> Marketing Agent 记忆系统让每个客户拥有一个"长期 Agent"，随时间积累品牌知识、
+> 学习成功模式，下一次生成时自动注入最优上下文。
+
+- [ ] **P8.M.1** DB：新建 `agent_profiles` 表（每客户一个，存 personality_notes + learned_preferences）
+- [ ] **P8.M.2** DB：新建 `agent_conversations` 表（存对话历史，按 context 分类：brief_refinement / campaign_planning / strategy_review）
+- [ ] **P8.M.3** DB：新建 `agent_learnings` 表（存从已发布内容中学到的成功模式）
+- [ ] **P8.M.4** `POST /api/clients/[id]/agent/learn` — 定期（每月）分析已发布内容表现，更新 agent_learnings
+- [ ] **P8.M.5** 在 Campaign 生成 prompt 中注入 agent_learnings（高表现内容特征作为参考）
+- [ ] **P8.M.6** 在 Master Brief 精炼对话（BriefChat）中加载历史对话上下文（agent_conversations）
+- [ ] **P8.M.7** 客户详情页新增"Agent Profile" Tab：展示 Agent 学到了什么、成功模式、对话历史
+
+**验收标准**：
+- 系统能记住"这个客户的 Instagram 帖子平均点赞最高的是问答型文案 + 人物照片"
+- 下一次生成 Campaign 时，这个偏好自动体现在 prompt 中
+
+---
+
 ## Phase 8.R — Reels Studio（2026-05-02 开始）
 
 > **背景**：用户在 Loveart 中用 Nano Banana（Google Imagen）生成参考图，在 Atlas Cloud 用 Seedance 2.0 I2V 做视频。
@@ -825,6 +1116,16 @@ Layer 3: 策略驱动执行
 - [x] **P8.R.8** Build 检查通过 + 推送到 master（commit: 5e24037，2026-05-02）
 
 ---
+
+### 2026-05-03
+- **System Design Audit**：评审识别 6 大缺口（见 SYSTEM_DESIGN_AUDIT.md）：外编版本管理（🔴高）、Visual Brief编辑（🟡中）、Prompt预览（🟡中）、Brief版本锁定（🟡中）、Agent记忆系统（🟡中）
+- **Phase 8.Q 立项**：优先修复外编版本管理（直接提升内容管理生产力），再做 Visual Brief 编辑 + Prompt 预览
+- **Phase 8.B 立项（最重要战略决策）**：确立"批量生产 → ME原生审批 → 自动排期 → 自动发布"新工作流目标
+  - Airtable 解耦策略：Airtable 变为可选渠道（`airtable_enabled` 开关），不是必须路径
+  - 内容日历进入核心 UI，取代对 Airtable 内容日历的依赖
+  - 批量图片生成 + 视频上传 + 一键推送排期 是近期最高价值功能
+- **Phase 8.M 立项**：Marketing Agent 记忆系统，中长期目标，不影响近期交付
+- **Reels Studio 完成（P8.R）**：提示词生成、参考帧生成/上传、I2V视频、对话修改全链路完整交付（2026-05-02/03）
 
 ### 2026-04-28
 - **架构**：Supabase 单一数据源；Content Workspace 可选；禁止双向实时同步
