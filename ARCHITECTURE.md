@@ -1,6 +1,6 @@
 # Magic Engine — Technical Architecture
 
-> 版本：2026-05-01 · 生产环境：https://crazycontent-27u3.onrender.com
+> 版本：2026-05-01 · 生产环境：https://magic-engine.onrender.com
 > 配套文档：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [CLAUDE.md](./CLAUDE.md)（AI 工作指南）· [ROADMAP.md](./ROADMAP.md)（任务路线图）
 
 ---
@@ -22,7 +22,7 @@ Magic Engine 是 **Magic Lab 2026 旗舰产品**，承担两大角色：
 
 ## 1. 项目概述
 
-Magic Engine（代号 crazycontent）是一个 AI 驱动的社媒内容运营平台，面向代理公司和品牌方。核心能力：
+Magic Engine是一个 AI 驱动的社媒内容运营平台，面向代理公司和品牌方。核心能力：
 
 - **多客户管理**：每个客户独立配置 Content Workspace、Keyword Intelligence 数据库、发布账户
 - **Brand Brief Studio**：抓取客户官网 + 上传 PDF/Word + 竞品关键词 → Strategy Engine 生成品牌底稿
@@ -646,7 +646,7 @@ CRON_SECRET=                       # Cron job 鉴权
 ZAPIER_WEBHOOK_SECRET=             # Airtable webhook 鉴权
 
 # App
-NEXT_PUBLIC_APP_URL=https://crazycontent-27u3.onrender.com
+NEXT_PUBLIC_APP_URL=https://magic-engine.onrender.com
 ```
 
 ---
@@ -654,7 +654,7 @@ NEXT_PUBLIC_APP_URL=https://crazycontent-27u3.onrender.com
 ## 9. 目录结构
 
 ```
-crazycontent/
+magic-engine/
 ├── src/
 │   ├── app/
 │   │   ├── api/                   # 所有 API 路由

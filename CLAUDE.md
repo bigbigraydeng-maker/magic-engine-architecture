@@ -10,7 +10,7 @@
 
 ## 一、项目战略定位（必读）
 
-**Magic Engine（代码库 `crazycontent`）是 Magic Lab 2026 年的旗舰产品**，承担两个角色：
+**Magic Engine（代码库 `magic-engine`）是 Magic Lab 2026 年的旗舰产品**，承担两个角色：
 
 1. **直接收入**：以年度陪跑服务（5–15 万/客户/年）形式交付给品牌方/代理公司
 2. **Magic Lab Academy 的实战载体**：所有培训案例和 SOP 从这里沉淀
@@ -285,7 +285,7 @@ CRON_SECRET=
 ## 十、常用命令
 
 ```bash
-cd "magic lab/crazycontent"
+cd magic-engine
 
 npm run dev        # 开发服务器 :3001
 npm run build      # 生产构建（必须通过才能推送）
