@@ -40,16 +40,4 @@ export async function uploadFromUrl(params: {
     .upload(path, bytes, {
       contentType: assetType === 'image' ? 'image/jpeg' : 'video/mp4',
       upsert: true,
-    })
-
-  if (error) throw error
-
-  const { data: urlData } = supabaseAdmin.storage
-    .from(BUCKET)
-    .getPublicUrl(path)
-
-  return {
-    storage_url: urlData.publicUrl,
-    file_size_kb: fileSizeKb,
-  }
-}
+  
