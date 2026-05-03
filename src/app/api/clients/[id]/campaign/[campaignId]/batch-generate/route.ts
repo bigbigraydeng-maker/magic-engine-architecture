@@ -275,4 +275,18 @@ Output ONLY valid JSON:
     }
 
     return NextResponse.json({
-      success: t
+      success: true,
+      generated: drafts.length,
+      saved: savedPosts?.length ?? 0,
+      airtable_synced: airtableSynced,
+      generation_failures: generationFailures,   // OpenAI failures (not counted in 'failed')
+      db_failures: drafts.length - (savedPosts?.length ?? 0),  // DB insert failures
+      posts: savedPosts,
+    })
+
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    console.error('[campaign/batch-generate]', err)
+    return NextResponse.json({ success: false, error: message }, { status: 500 })
+  }
+}
