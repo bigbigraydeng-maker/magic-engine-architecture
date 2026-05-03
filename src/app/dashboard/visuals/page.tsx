@@ -29,6 +29,19 @@ interface VisualAsset {
   created_at: string
   cost_usd?: number
   error_message?: string
+  current_version_num?: number
+  is_final?: boolean
+  external_edit_status?: 'needs_external_edit' | 'in_external_edit' | 'final' | null
+}
+
+interface AssetVersion {
+  id: string
+  version_num: number
+  storage_url: string
+  uploaded_by: string
+  edit_type: 'ai_generated' | 'external_edit' | 'manual_replacement'
+  edit_notes: string | null
+  created_at: string
 }
 
 interface GenState {
@@ -397,7 +410,7 @@ function EditablePlatforms({
 // ── Asset cell ─────────────────────────────────────────────────────────────────
 
 function AssetCell({
-  post, genState, readyAsset, clientId, onGenerate, onCancel, onSchedule, onShowError, onUploaded,
+  post, genState, readyAsset, clientId, onGenerate, onCancel, onSchedule, onShowError, onUploaded, onAssetUpdated,
 }: {
   post: Post
   genState?: GenState
@@ -408,10 +421,17 @@ function AssetCell({
   onSchedule: (assetId: string) => void
   onShowError?: (error: {postId: string, message: string, code?: string, retryCount: number}) => void
   onUploaded: (asset: VisualAsset) => void
+  onAssetUpdated: (asset: VisualAsset) => void
 }) {
   // Hooks MUST be at the top — before any early returns
   const [uploading, setUploading] = useState(false)
+  const [uploadingVersion, setUploadingVersion] = useState(false)
+  const [markingEdit, setMarkingEdit] = useState(false)
+  const [showVersionModal, setShowVersionModal] = useState(false)
+  const [versions, setVersions] = useState<AssetVersion[]>([])
+  const [loadingVersions, setLoadingVersions] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const versionFileRef = useRef<HTMLInputElement>(null)
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -433,12 +453,73 @@ function AssetCell({
         storage_url: json.storage_url,
         provider_job_id: null,
         created_at: new Date().toISOString(),
+        is_final: true,
+        current_version_num: 1,
       })
     } catch (err) {
       alert(`Upload failed: ${(err as Error).message}`)
     } finally {
       setUploading(false)
       if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  const handleUploadNewVersion = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !readyAsset) return
+    setUploadingVersion(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch(`/api/visual-assets/${readyAsset.id}/upload-version`, {
+        method: 'POST',
+        body: fd,
+      })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error)
+      onAssetUpdated({ ...readyAsset, ...json.asset })
+    } catch (err) {
+      alert(`Upload failed: ${(err as Error).message}`)
+    } finally {
+      setUploadingVersion(false)
+      if (versionFileRef.current) versionFileRef.current.value = ''
+    }
+  }
+
+  const handleMarkForExternalEdit = async () => {
+    if (!readyAsset) return
+    const nextStatus = readyAsset.external_edit_status === 'needs_external_edit'
+      ? null   // toggle off
+      : 'needs_external_edit'
+    setMarkingEdit(true)
+    try {
+      const res = await fetch(`/api/visual-assets/${readyAsset.id}/edit-status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus }),
+      })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error)
+      onAssetUpdated({ ...readyAsset, external_edit_status: json.asset.external_edit_status, is_final: json.asset.is_final })
+    } catch (err) {
+      alert(`Failed: ${(err as Error).message}`)
+    } finally {
+      setMarkingEdit(false)
+    }
+  }
+
+  const openVersionHistory = async () => {
+    if (!readyAsset) return
+    setShowVersionModal(true)
+    setLoadingVersions(true)
+    try {
+      const res = await fetch(`/api/visual-assets/${readyAsset.id}/versions`)
+      const json = await res.json()
+      setVersions(json.versions ?? [])
+    } catch {
+      setVersions([])
+    } finally {
+      setLoadingVersions(false)
     }
   }
 
@@ -549,51 +630,172 @@ function AssetCell({
     )
   }
 
-  // Ready state - show image with buttons
+  // Ready state - show image with version management buttons
   if (readyAsset?.storage_url) {
+    const isExternalEdit = readyAsset.external_edit_status === 'needs_external_edit'
+      || readyAsset.external_edit_status === 'in_external_edit'
+    const versionNum = readyAsset.current_version_num ?? 1
+
     return (
-      <div className="flex flex-col items-center gap-1">
-        <img
-          src={readyAsset.storage_url}
-          alt=""
-          className="w-14 h-14 object-cover rounded cursor-pointer ring-1 ring-gray-200 hover:ring-blue-400 transition-all"
-          onClick={() => window.open(readyAsset.storage_url!, '_blank')}
-        />
-        <div className="flex gap-1 text-[10px]">
-          <button
-            onClick={() => onSchedule(readyAsset.id)}
-            className="px-1.5 py-0.5 bg-green-500 text-white rounded hover:bg-green-600 whitespace-nowrap"
+      <>
+        <div className="flex flex-col items-center gap-1">
+          {/* Thumbnail + version badge */}
+          <div className="relative">
+            <img
+              src={readyAsset.storage_url}
+              alt=""
+              className={`w-14 h-14 object-cover rounded cursor-pointer ring-1 transition-all ${isExternalEdit ? 'ring-amber-400 opacity-70' : 'ring-gray-200 hover:ring-blue-400'}`}
+              onClick={() => window.open(readyAsset.storage_url!, '_blank')}
+            />
+            {/* Version badge */}
+            <button
+              onClick={openVersionHistory}
+              title="View version history"
+              className="absolute -top-1.5 -right-1.5 bg-gray-700 text-white text-[8px] px-1 py-0 rounded-full leading-4 hover:bg-gray-900"
+            >
+              v{versionNum}
+            </button>
+            {/* External edit indicator */}
+            {isExternalEdit && (
+              <div className="absolute -bottom-1 left-0 right-0 text-center">
+                <span className="text-[8px] bg-amber-100 text-amber-700 px-1 rounded">外编中</span>
+              </div>
+            )}
+          </div>
+
+          {/* Primary actions */}
+          <div className="flex gap-1 text-[10px]">
+            <button
+              onClick={() => onSchedule(readyAsset.id)}
+              className="px-1.5 py-0.5 bg-green-500 text-white rounded hover:bg-green-600 whitespace-nowrap"
+            >
+              → Publer
+            </button>
+            <button
+              onClick={onGenerate}
+              title="Regenerate"
+              className="px-1.5 py-0.5 bg-gray-400 text-white rounded hover:bg-gray-500 whitespace-nowrap"
+            >
+              ↻
+            </button>
+          </div>
+
+          {/* Download button */}
+          <a
+            href={readyAsset.storage_url}
+            download
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[9px] px-1.5 py-0.5 bg-blue-50 text-blue-600 rounded hover:bg-blue-100 whitespace-nowrap w-full text-center"
           >
-            → Publer
-          </button>
+            ⬇ Download
+          </a>
+
+          {/* Mark for external edit toggle */}
           <button
-            onClick={onGenerate}
-            title="Regenerate with different settings"
-            className="px-1.5 py-0.5 bg-gray-400 text-white rounded hover:bg-gray-500 whitespace-nowrap"
+            onClick={handleMarkForExternalEdit}
+            disabled={markingEdit}
+            title={isExternalEdit ? 'Clear external edit flag' : 'Mark for external editing'}
+            className={`text-[9px] px-1.5 py-0.5 rounded whitespace-nowrap w-full text-center disabled:opacity-50 ${
+              isExternalEdit
+                ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
           >
-            ↻ Retry
+            {markingEdit ? '…' : isExternalEdit ? '✏ 外编中' : '✏ 标记外编'}
           </button>
+
+          {/* Upload final version (prominent when in external edit) */}
+          <button
+            onClick={() => versionFileRef.current?.click()}
+            disabled={uploadingVersion}
+            title="Upload final edited version"
+            className={`text-[9px] px-1.5 py-0.5 rounded whitespace-nowrap w-full text-center disabled:opacity-50 ${
+              isExternalEdit
+                ? 'bg-green-500 text-white hover:bg-green-600'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            {uploadingVersion ? '上传中…' : '⬆ 上传最终版'}
+          </button>
+
+          {readyAsset.cost_usd && (
+            <span className="text-[8px] text-gray-400">${readyAsset.cost_usd.toFixed(2)}</span>
+          )}
+
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm"
+            className="hidden"
+            onChange={handleUpload}
+          />
+          <input
+            ref={versionFileRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm"
+            className="hidden"
+            onChange={handleUploadNewVersion}
+          />
         </div>
-        {/* Upload to replace the current asset */}
-        <button
-          onClick={() => fileRef.current?.click()}
-          disabled={uploading}
-          title="Replace with your own image"
-          className="text-[9px] px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded hover:bg-gray-200 whitespace-nowrap disabled:opacity-50 w-full text-center"
-        >
-          {uploading ? '上传中…' : '⬆ Upload'}
-        </button>
-        {readyAsset.cost_usd && (
-          <span className="text-[8px] text-gray-500">${readyAsset.cost_usd.toFixed(2)}</span>
+
+        {/* Version History Modal */}
+        {showVersionModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setShowVersionModal(false)}>
+            <div className="bg-white rounded-xl p-5 w-full max-w-sm shadow-xl" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold text-gray-800">版本历史</h3>
+                <button onClick={() => setShowVersionModal(false)} className="text-gray-400 hover:text-gray-600 text-lg leading-none">×</button>
+              </div>
+              {loadingVersions ? (
+                <div className="flex justify-center py-6">
+                  <div className="w-5 h-5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : versions.length === 0 ? (
+                <p className="text-xs text-gray-400 text-center py-4">暂无版本记录</p>
+              ) : (
+                <div className="space-y-2 max-h-80 overflow-y-auto">
+                  {versions.map(v => (
+                    <div key={v.id} className="flex items-start gap-3 p-2 rounded-lg border border-gray-100 hover:bg-gray-50">
+                      <a href={v.storage_url} target="_blank" rel="noopener noreferrer">
+                        <img src={v.storage_url} alt={`v${v.version_num}`} className="w-12 h-12 object-cover rounded flex-shrink-0 ring-1 ring-gray-200" />
+                      </a>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-medium text-gray-700">v{v.version_num}</span>
+                          <span className={`text-[9px] px-1 py-0 rounded-full ${
+                            v.edit_type === 'ai_generated' ? 'bg-blue-100 text-blue-600' :
+                            v.edit_type === 'external_edit' ? 'bg-amber-100 text-amber-700' :
+                            'bg-gray-100 text-gray-600'
+                          }`}>
+                            {v.edit_type === 'ai_generated' ? 'AI生成' :
+                             v.edit_type === 'external_edit' ? '外编' : '手动上传'}
+                          </span>
+                        </div>
+                        {v.edit_notes && (
+                          <p className="text-[10px] text-gray-500 mt-0.5 truncate">{v.edit_notes}</p>
+                        )}
+                        <p className="text-[9px] text-gray-400 mt-0.5">
+                          {new Date(v.created_at).toLocaleString('en-NZ', { timeZone: 'Pacific/Auckland', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      </div>
+                      <a
+                        href={v.storage_url}
+                        download
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[9px] text-blue-500 hover:text-blue-700 flex-shrink-0 mt-1"
+                      >
+                        ⬇
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         )}
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm"
-          className="hidden"
-          onChange={handleUpload}
-        />
-      </div>
+      </>
     )
   }
 
@@ -935,6 +1137,12 @@ export default function VisualsPage() {
     setToast({ type: 'success', message: `Uploaded successfully` })
   }, [])
 
+  // Update an existing asset in place (used by version upload + edit-status)
+  const handleAssetUpdated = useCallback((updated: VisualAsset) => {
+    setAssets(prev => prev.map(a => a.id === updated.id ? { ...a, ...updated } : a))
+    setToast({ type: 'success', message: `Asset updated — v${updated.current_version_num ?? 1}` })
+  }, [])
+
   // ── Derived ────────────────────────────────────────────────────────────────
 
   const readyAssetByPost = assets.reduce<Record<string, VisualAsset>>((acc, a) => {
@@ -1114,6 +1322,7 @@ export default function VisualsPage() {
                       onSchedule={assetId => openPubModal(assetId, post.id)}
                       onShowError={setErrorModal}
                       onUploaded={handleUploaded}
+                      onAssetUpdated={handleAssetUpdated}
                     />
                   </td>
                 </tr>

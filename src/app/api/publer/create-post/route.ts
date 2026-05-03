@@ -23,11 +23,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: 'Post not approved' }, { status: 400 })
     }
 
+    // Prefer is_final=true assets (externally edited final versions),
+    // then fall back to most recently selected/created ready asset
     const { data: assets } = await supabaseAdmin
       .from('visual_assets')
-      .select('id, storage_url, asset_type')
+      .select('id, storage_url, asset_type, is_final, current_version_num')
       .eq('post_id', post_id)
       .eq('generation_status', 'ready')
+      .order('is_final', { ascending: false })
       .order('is_selected', { ascending: false })
       .order('created_at', { ascending: false })
       .limit(1)
