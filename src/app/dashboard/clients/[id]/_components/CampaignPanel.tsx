@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { CampaignBrief, CampaignKeywordSnapshot } from '@/types/magic-engine'
+import { PromptPreviewModal } from './PromptPreviewModal'
+import type { PreviewPost } from './PromptPreviewModal'
 
 interface Props {
   clientId: string
@@ -271,12 +273,48 @@ function CampaignCard({
   const [genResult, setGenResult] = useState<{ count: number } | null>(null)
   const totalPosts = routeACount + routeCCount
 
-  const handleBatchGenerate = async () => {
+  // Prompt preview modal state
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [showPromptModal, setShowPromptModal] = useState(false)
+  const [previewData, setPreviewData] = useState<{ system_prompt: string; posts: PreviewPost[] } | null>(null)
+
+  const handlePreviewPrompts = async () => {
+    if (totalPosts < 1) { setMsg('✗ 请设置至少 1 条'); return }
+    setPreviewLoading(true)
+    setMsg('')
+    try {
+      const res = await fetch(
+        `/api/clients/${clientId}/campaign/${campaign.id}/preview-prompt`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            platforms: batchPlatforms,
+            direction_note: directionNote.trim() || campaign.title,
+            route_a_count: routeACount,
+            route_c_count: routeCCount,
+          }),
+        }
+      )
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error)
+      setPreviewData(json)
+      setShowPromptModal(true)
+    } catch (err) {
+      setMsg(`✗ ${(err as Error).message}`)
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  const handleBatchGenerate = async (systemPromptOverride?: string, userPromptsOverride?: string[]) => {
     if (totalPosts < 1) { setMsg('✗ 请设置至少 1 条'); return }
     setGenerating(true)
+    setShowPromptModal(false)
     setMsg('')
     setGenResult(null)
     try {
+      const hasOverrides = systemPromptOverride !== undefined || userPromptsOverride !== undefined
       const res = await fetch(
         `/api/clients/${clientId}/campaign/${campaign.id}/batch-generate`,
         {
@@ -287,6 +325,12 @@ function CampaignCard({
             direction_note: directionNote.trim() || campaign.title,
             route_a_count: routeACount,
             route_c_count: routeCCount,
+            ...(hasOverrides ? {
+              prompt_overrides: {
+                system_prompt: systemPromptOverride,
+                post_user_prompts: userPromptsOverride,
+              },
+            } : {}),
           }),
         }
       )
@@ -654,16 +698,21 @@ function CampaignCard({
             </div>
 
             <button
-              onClick={handleBatchGenerate}
-              disabled={generating || totalPosts < 1 || batchPlatforms.length === 0}
+              onClick={handlePreviewPrompts}
+              disabled={previewLoading || generating || totalPosts < 1 || batchPlatforms.length === 0}
               className="w-full py-2.5 rounded-xl text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 transition-colors"
             >
-              {generating ? (
+              {previewLoading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                  准备 Prompt 预览…
+                </span>
+              ) : generating ? (
                 <span className="flex items-center justify-center gap-2">
                   <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
                   生成中…（共 {totalPosts} 条）
                 </span>
-              ) : `一键生成 ${totalPosts} 条内容`}
+              ) : `预览 Prompt → 生成 ${totalPosts} 条`}
             </button>
 
             {genResult && (
@@ -693,6 +742,17 @@ function CampaignCard({
             </button>
           </div>
         </div>
+      )}
+
+      {/* Prompt Preview Modal */}
+      {showPromptModal && previewData && (
+        <PromptPreviewModal
+          systemPrompt={previewData.system_prompt}
+          posts={previewData.posts}
+          generating={generating}
+          onConfirm={(sp, ups) => handleBatchGenerate(sp, ups)}
+          onCancel={() => setShowPromptModal(false)}
+        />
       )}
     </div>
   )

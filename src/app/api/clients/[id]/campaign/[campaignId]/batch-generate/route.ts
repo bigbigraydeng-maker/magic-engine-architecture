@@ -18,6 +18,10 @@ interface BatchGenerateRequest {
   direction_note: string       // campaign angle / tagline
   route_a_count: number        // keyword-based posts
   route_c_count: number        // free-topic posts
+  prompt_overrides?: {
+    system_prompt?: string            // full system prompt override from preview modal
+    post_user_prompts?: string[]      // per-post user prompt overrides (indexed)
+  }
 }
 
 type RouteType = 'route_a' | 'route_c'
@@ -40,7 +44,7 @@ export async function POST(
 
   try {
     const body: BatchGenerateRequest = await req.json()
-    const { platforms, direction_note, route_a_count, route_c_count } = body
+    const { platforms, direction_note, route_a_count, route_c_count, prompt_overrides } = body
 
     // Validate + allowlist platforms — never store arbitrary user strings in DB
     const VALID_PLATFORMS = ['facebook', 'tiktok', 'instagram', 'youtube', 'twitter'] as const
@@ -126,7 +130,8 @@ export async function POST(
     }
 
     // 5. Generate all posts (in controlled batches of 5 concurrent)
-    const systemPrompt = `You are a social media content strategist. Create engaging content that fits the brand DNA exactly.
+    // Use overridden system prompt if provided by Prompt Preview Modal
+    const systemPrompt = prompt_overrides?.system_prompt ?? `You are a social media content strategist. Create engaging content that fits the brand DNA exactly.
 ${briefText}
 
 ${campaignText}
@@ -140,18 +145,18 @@ Output ONLY valid JSON:
   "visual_brief": "..."
 }`
 
-    const generatePost = async (route: RouteType, inputText: string, variantHint: string): Promise<PostDraft> => {
+    const generatePost = async (route: RouteType, inputText: string, variantHint: string, userPromptOverride?: string): Promise<PostDraft> => {
+      const userPrompt = userPromptOverride ?? (
+        route === 'route_a'
+          ? `Create a social media post targeting keyword: "${inputText}"\nPlatforms: ${safePlatforms.join(', ')}\n${variantHint}\nScript: 100-200 words. Caption: 50-100 words. 8-12 hashtags including keyword.`
+          : `Create a social media post about: "${inputText}"\nPlatforms: ${safePlatforms.join(', ')}\n${variantHint}\nScript: 100-200 words. Caption: 50-100 words. 8-12 relevant hashtags.`
+      )
       const completion = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
         temperature: 0.85,
         messages: [
           { role: 'system', content: systemPrompt },
-          {
-            role: 'user',
-            content: route === 'route_a'
-              ? `Create a social media post targeting keyword: "${inputText}"\nPlatforms: ${safePlatforms.join(', ')}\n${variantHint}\nScript: 100-200 words. Caption: 50-100 words. 8-12 hashtags including keyword.`
-              : `Create a social media post about: "${inputText}"\nPlatforms: ${safePlatforms.join(', ')}\n${variantHint}\nScript: 100-200 words. Caption: 50-100 words. 8-12 relevant hashtags.`,
-          },
+          { role: 'user', content: userPrompt },
         ],
       })
 
@@ -196,7 +201,11 @@ Output ONLY valid JSON:
     for (let i = 0; i < tasks.length; i += BATCH_SIZE) {
       const batch = tasks.slice(i, i + BATCH_SIZE)
       const results = await Promise.allSettled(
-        batch.map(t => generatePost(t.route, t.input, t.hint))
+        batch.map((t, batchIdx) => {
+          const globalIdx = i + batchIdx
+          const userPromptOverride = prompt_overrides?.post_user_prompts?.[globalIdx]
+          return generatePost(t.route, t.input, t.hint, userPromptOverride)
+        })
       )
       for (const result of results) {
         if (result.status === 'fulfilled') drafts.push(result.value)
