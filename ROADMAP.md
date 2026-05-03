@@ -24,7 +24,7 @@
 🔄 Phase 8.Q     内容质控提升（8.Q.1外编版本管理✅ 8.Q.2 Brief编辑✅ 8.Q.3 Prompt预览部分✅ 8.Q.4待做）
 📋 Phase 8.B     批量生产 + 自动排期 + 无缝发布（走向 Airtable-free 运营模式）
 📋 Phase 8.M     Marketing Agent 记忆系统（每客户长期 Agent 智能化，中长期）
-📋 Phase 8.D     DNZ诊断策略层（域名全量采集 → 三维策略分析 → 策略驱动执行）
+🔄 Phase 8.D     DNZ诊断策略层（Stage 1 采集✅ P8.0.1-P8.0.3 完成，Stage 2 异步框架进行中）
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
 ```
@@ -589,16 +589,56 @@ Layer 3: 策略驱动执行
 
 ---
 
-#### Phase 8.0 — DNZ 采集基础设施
+#### Phase 8.0 — DNZ 采集基础设施 ⭐（Stage 1 完成 2026-05-04）
 
 **目标**：能够抓取客户域名上的所有页面，并将其内容结构化存储，作为后续分析的基础。
 
-- [ ] **P8.0.1** 新建 `client_site_pages` 表 + 迁移文件（见 ARCHITECTURE.md §3.6）
-- [ ] **P8.0.2** `src/lib/site-audit/crawler.ts` — sitemap.xml 解析 → 提取所有 URL，对每个 URL 调用 Jina.ai 抓取正文
-- [ ] **P8.0.3** `src/lib/site-audit/classifier.ts` — GPT-4o mini 分类：页面类型（服务/博客/关于/首页）+ 话题标签 + 主关键词推断
-- [ ] **P8.0.4** `POST /api/clients/[id]/site-audit/crawl` — 触发全站采集（异步，支持限速，每次最多 100 页）
-- [ ] **P8.0.5** `GET /api/clients/[id]/site-audit/pages` — 列出已采集页面（支持 type / topic 筛选）
-- [ ] **P8.0.6** UI：`/dashboard/clients/[id]/site-audit` — 采集进度条 + 已采集页面表格（URL / 类型 / 话题 / 字数 / GEO块是否存在）
+**Stage 1: 数据收集层** ✅ **2026-05-04 完成**
+- [x] **P8.0.1** 新建 `client_site_pages` 表 + 迁移文件 ✅
+  - ✅ Migration: `supabase/migrations/20260504000001_client_site_pages.sql`
+  - ✅ Schema: id, client_id, url, page_type, topics[], primary_keyword, word_count, has_geo_block, title, markdown_content, crawled_at, created_at, updated_at
+  - ✅ Indexes: (client_id, url) unique, (client_id, page_type), updated_at
+  - ✅ RLS policies: 4 policies for select/insert/update/delete
+  
+- [x] **P8.0.2** `src/lib/site-audit/crawler.ts` — sitemap.xml 解析 → 提取所有 URL，对每个 URL 调用 Jina.ai 抓取正文 ✅
+  - ✅ `discoverSitemapUrls(domain)`: 4-level fallback (sitemap.xml → sitemap_index.xml → robots.txt → BFS crawl)
+  - ✅ `crawlPages(urls, opts)`: Rate limiting (1 req/sec), Jina markdown extraction, returns CrawlResult[]
+  - ✅ 100% test coverage (64 tests, 100% statements, 97.05% branches)
+  - ✅ TDD: RED → GREEN → REFACTOR cycle completed
+  
+- [x] **P8.0.3** `src/lib/site-audit/classifier.ts` + `geo-detector.ts` — GPT-4o mini 分类 ✅
+  - ✅ Classifier: `classifyPage(url, title, markdown)` → { page_type, topics[], primary_keyword, confidence }
+    - Pages types: landing, product, service, blog, contact, about, other
+    - Markdown truncation: 3000 chars (token limit protection)
+    - Batch processing: `classifyPages(pages)` with fallback on failures
+    - Test coverage: 20 tests, 100% pass rate, 97.26% statements
+  - ✅ GEO Detector: `detectGEOBlock(markdown)` → { has_geo_block, detection_method, confidence }
+    - Detection priority: aria-hidden (0.95) → seo-instructions (0.9) → Instructions for AI Agents (0.85) → suspicious patterns (0.65) → code blocks (0.5)
+    - Regex: /aria-hidden\s*=\s*["'&]?(?:true|false|quot)["\';]?/i (handles HTML entities)
+    - Test coverage: 19 tests, 100% pass rate, 78.87% statements, 93.75% branches
+  
+**验收标准（Stage 1）**：✅ 完成
+- ✅ 103 个单元测试通过（crawler 64 + classifier 20 + geo-detector 19）
+- ✅ 整体覆盖率 95.14% statements，95.49% branches（目标 ≥80%）
+- ✅ 代码审查通过：Security 8/8，Performance ✅，Code Quality ✅
+- ✅ 已提交 commit 48243e1：2150 lines added
+
+**Stage 2: 异步执行框架** 🔄 进行中
+- [x] **P8.0.4** `src/lib/site-audit/job-runner.ts` — Supabase-based 状态机，无需 Redis ✅ **2026-05-04 完成**
+  - ✅ 7 个核心方法：createJob, getJob, startJob, updateProgress, completeJob, failJob, cleanupOldJobs
+  - ✅ 27 个单元测试，100% 通过率（13ms）
+  - ✅ 测试覆盖率：96.4% statements，96.2% branches（目标 ≥80%）
+  - ✅ TDD 周期完成：RED → GREEN → REFACTOR
+  
+- [ ] **P8.0.5** API endpoints:
+  - `POST /api/clients/[id]/site-audit/crawl` — 触发全站采集（异步，最多 100 页）
+  - `GET /api/clients/[id]/site-audit/status` — 查询当前 job 进度
+  - `GET /api/clients/[id]/site-audit/pages` — 列出已采集页面（支持 type / topic 筛选）
+  - `GET /api/clients/[id]/site-audit/pages/[pageId]` — 单页详情
+  - `POST /api/cron/site-audit-jobs` — Cron 清理过期 job 记录
+  
+**Stage 3: UI 仪表板** 📋 待做
+- [ ] **P8.0.6** UI：`/dashboard/clients/[id]/site-audit` — 采集进度条 + 已采集页面表格
 
 **验收标准**：
 - 输入 ctstours.co.nz，能抓取 ≥ 30 个页面并完成分类
