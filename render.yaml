@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: crazycontent
+    name: magic-engine
     env: node
     plan: standard
     buildCommand: npm install && npm run build
@@ -14,18 +14,38 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
-      - key: DATAFORSEO_LOGIN
+      - key: ANTHROPIC_API_KEY
         sync: false
-      - key: DATAFORSEO_PASSWORD
+      - key: ATLAS_API_KEY
+        sync: false
+      - key: HEYGEN_API_KEY
+        sync: false
+      - key: HEYGEN_DEFAULT_AVATAR_ID
+        sync: false
+      - key: HEYGEN_DEFAULT_VOICE_ID
+        sync: false
+      - key: SEMRUSH_API_KEY
+        sync: false
+      - key: SEMRUSH_DB
+        value: au
+      - key: AIRTABLE_API_KEY
+        sync: false
+      - key: PUBLER_API_KEY
+        sync: false
+      - key: PUBLER_WORKSPACE_ID
+        sync: false
+      - key: PERPLEXITY_API_KEY
+        sync: false
+      - key: CRON_SECRET
         sync: false
       - key: RENDER_EXTERNAL_URL
         fromService:
           type: web
-          name: crazycontent
+          name: magic-engine
           property: host
 
   - type: background
-    name: crazycontent-tasks
+    name: magic-engine-tasks
     env: node
     plan: standard
     buildCommand: npm install
@@ -39,11 +59,20 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
-      - key: DATAFORSEO_LOGIN
+      - key: ANTHROPIC_API_KEY
         sync: false
-      - key: DATAFORSEO_PASSWORD
+      - key: ATLAS_API_KEY
+        sync: false
+      - key: SEMRUSH_API_KEY
+        sync: false
+      - key: AIRTABLE_API_KEY
+        sync: false
+      - key: PUBLER_API_KEY
+        sync: false
+      - key: CRON_SECRET
         sync: false
 
+  # Poll visual generation jobs every 2 minutes
   - type: cron
     name: poll-visual-jobs
     env: node
@@ -58,9 +87,10 @@ services:
       - key: RENDER_EXTERNAL_URL
         fromService:
           type: web
-          name: crazycontent
+          name: magic-engine
           property: host
 
+  # Sync Airtable content every hour
   - type: cron
     name: sync-airtable
     env: node
@@ -75,10 +105,10 @@ services:
       - key: RENDER_EXTERNAL_URL
         fromService:
           type: web
-          name: crazycontent
+          name: magic-engine
           property: host
 
-  # Weekly AI Visibility Tracker — runs every Monday at 1am UTC (~1pm NZST)
+  # Weekly AI Visibility Tracker — every Monday at 1am UTC (~1pm NZST)
   # Processes all clients with enabled queries; writes runs + weekly snapshot.
   # Reference: ROADMAP.md P7.4.13
   - type: cron
@@ -95,5 +125,5 @@ services:
       - key: RENDER_EXTERNAL_URL
         fromService:
           type: web
-          name: crazycontent
+          name: magic-engine
           property: host
