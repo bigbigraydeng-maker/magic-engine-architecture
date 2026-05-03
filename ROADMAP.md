@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-03 · 当前阶段：**Phase 8.R 基本完成，规划 Phase 8.Q / 8.B**
+> 最后更新：2026-05-03 · 当前阶段：**Phase 8.Q 进行中（8.Q.1✅ 8.Q.2✅ 8.Q.3部分✅）**
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
 
 ---
@@ -21,7 +21,7 @@
 ✅ Phase 8.11    Billing Monitor（DataForSEO 成本追踪，2026-05-01 完成）
 ✅ Phase 8.C.1   月报整合（完成，2026-05-01）
 ✅ Phase 8.R     Reels Studio（提示词生成 + 参考帧生成/上传 + I2V视频 + 对话修改，2026-05-02 完成）
-📋 Phase 8.Q     内容质控提升（System Design Audit 缺口修复：外编版本管理 + Visual Brief编辑 + Prompt预览）
+🔄 Phase 8.Q     内容质控提升（8.Q.1外编版本管理✅ 8.Q.2 Brief编辑✅ 8.Q.3 Prompt预览部分✅ 8.Q.4待做）
 📋 Phase 8.B     批量生产 + 自动排期 + 无缝发布（走向 Airtable-free 运营模式）
 📋 Phase 8.M     Marketing Agent 记忆系统（每客户长期 Agent 智能化，中长期）
 📋 Phase 8.D     DNZ诊断策略层（域名全量采集 → 三维策略分析 → 策略驱动执行）
@@ -808,7 +808,7 @@ Layer 3: 策略驱动执行
 **目标**：为 visual_assets 建立完整的版本历史，支持"下载 → 外部编辑 → 上传最终版"完整工作流。
 
 **数据库（Day 1）**
-- [ ] **P8.Q.1** 新建 `visual_asset_versions` 表 + 迁移文件
+- [x] **P8.Q.1** 新建 `visual_asset_versions` 表 + 迁移文件 ✅ 2026-05-03
   ```sql
   CREATE TABLE visual_asset_versions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -827,25 +827,25 @@ Layer 3: 策略驱动执行
     ADD COLUMN external_edit_status TEXT;
     -- null | 'needs_external_edit' | 'in_external_edit' | 'final'
   ```
-- [ ] **P8.Q.2** 回填现有 `visual_assets` 数据：为每条已有 storage_url 创建 version_num=1 的历史记录
+- [x] **P8.Q.2** 回填现有 `visual_assets` 数据：为每条已有 storage_url 创建 version_num=1 的历史记录 ✅ 2026-05-03（migration 含回填 SQL）
 
 **API 层（Day 2-3）**
-- [ ] **P8.Q.3** `GET /api/visual-assets/[assetId]/versions` — 返回版本历史列表
-- [ ] **P8.Q.4** `POST /api/visual-assets/[assetId]/upload-version` — 上传新版本
+- [x] **P8.Q.3** `GET /api/visual-assets/[assetId]/versions` — 返回版本历史列表 ✅ 2026-05-03
+- [x] **P8.Q.4** `POST /api/visual-assets/[assetId]/upload-version` — 上传新版本 ✅ 2026-05-03
   - 创建 `visual_asset_versions` 记录（version_num 自增）
   - 更新 `visual_assets.storage_url` + `current_version_num` + `is_final=true`
   - `edit_type='external_edit'`，记录 `edit_notes`
-- [ ] **P8.Q.5** `PATCH /api/visual-assets/[assetId]/edit-status` — 更新外编状态
+- [x] **P8.Q.5** `PATCH /api/visual-assets/[assetId]/edit-status` — 更新外编状态 ✅ 2026-05-03
   - `{ status: 'needs_external_edit' | 'in_external_edit' | 'final' }`
 
 **前端 UI（Day 4-6）**
-- [ ] **P8.Q.6** Launch Hub 表格 Asset 列改造：
+- [x] **P8.Q.6** Launch Hub 表格 Asset 列改造 ✅ 2026-05-03
   - 「⬇ Download」按钮 — 下载当前版本
   - 「✏ Mark for External Edit」按钮 — 更新状态为 `needs_external_edit`（行变灰显示"外编中"标签）
   - 「⬆ Upload Final Version」按钮（外编状态中可用）— 触发 P8.Q.4 API
   - 「🔢 v{n}」版本徽章 — 显示当前版本号，点击展开版本历史 modal
-- [ ] **P8.Q.7** 版本历史 Modal：时间线展示所有版本（时间、类型、操作者），点击可预览或恢复特定版本
-- [ ] **P8.Q.8** Publer 排期时自动选 `is_final=true` 的版本（`publer/create-post` route 更新筛选逻辑）
+- [x] **P8.Q.7** 版本历史 Modal：时间线展示所有版本（时间、类型、操作者），点击可预览或恢复特定版本 ✅ 2026-05-03
+- [x] **P8.Q.8** Publer 排期时自动选 `is_final=true` 的版本（`publer/create-post` route 更新筛选逻辑）✅ 2026-05-03
 
 **验收标准**：
 - 一条 AI 生成图片的 asset，能完整走通：下载 → 标记外编 → 上传最终版 → 版本历史记录正确
@@ -858,10 +858,10 @@ Layer 3: 策略驱动执行
 
 **目标**：Launch Hub 允许用户编辑 `visual_brief` 后重新生成图片，而不需要回到 Campaign 页面。
 
-- [ ] **P8.Q.9** `Launch Hub` 视觉资产行新增「✏ Edit Brief」按钮
+- [x] **P8.Q.9** `Launch Hub` 视觉资产行新增「✏ Edit Brief」按钮 ✅ 2026-05-03
   - 点击展开 inline 编辑框，加载 `content_posts.visual_brief`
-  - 用户修改后点「🔄 Regenerate」→ 调用 `POST /api/visual/image`（已有路由）
-  - 更新 `content_posts.visual_brief` 到 Supabase
+  - 用户修改后出现「🔄 Regen with new prompt」按钮（`dirtyBriefs` 集合驱动）
+  - 更新 `content_posts.visual_brief` 到 Supabase，Regen 时清除 dirty 标记
 - [ ] **P8.Q.10** Reels Studio 参考帧区域：Opening/Closing Prompt 均支持直接编辑 + 重新生成（已部分实现，确认完整性）
 
 **验收标准**：
@@ -874,9 +874,10 @@ Layer 3: 策略驱动执行
 
 **目标**：Campaign 批量生成前，让用户看到将要使用的 prompt，并允许修改。
 
-- [ ] **P8.Q.11** Campaign 生成按钮改为"预览 Prompt → 确认生成"两步流程
-  - 第一步：调用 `GET /api/clients/[id]/campaigns/[campaignId]/preview-prompt`，展示给用户
-  - 第二步：用户确认或修改后提交 → 执行批量生成
+- [x] **P8.Q.11** Campaign 生成按钮改为"预览 Prompt → 确认生成"两步流程 ✅ 2026-05-03
+  - 新建 `POST /api/clients/[id]/campaign/[campaignId]/preview-prompt`（运行关键词/话题规划，返回 system_prompt + per-post user_prompts）
+  - `PromptPreviewModal.tsx`：全屏遮罩，可编辑 system prompt + 每条 user prompt
+  - `batch-generate` 支持 `prompt_overrides`（用户修改后的 prompt 覆盖）
 - [ ] **P8.Q.12** 新建 `prompts` 表（存储历史使用过的 prompt，供分析和优化）
   ```sql
   CREATE TABLE prompts (
