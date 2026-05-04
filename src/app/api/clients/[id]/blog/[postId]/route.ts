@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { generateBlogPost } from '@/lib/blog/generator'
+import { requireBearerToken } from '@/lib/validation-utils'
 import type { BlogPost, BlogStatus } from '@/types/magic-engine'
 
 /**
@@ -11,15 +11,25 @@ import type { BlogPost, BlogStatus } from '@/types/magic-engine'
  * Update mutable fields: status, featured_image_url, slug.
  * Body: { status?, featured_image_url?, slug? }
  *
- * POST /api/clients/[id]/blog/[postId]/regenerate  → see separate route
+ * DELETE /api/clients/[id]/blog/[postId]
+ * Permanently remove a blog post.
+ *
+ * Security: All endpoints require a valid Bearer token (INTERNAL_API_KEY).
+ * Error messages returned to callers are generic — DB schema details are
+ * only written to server-side logs.
  *
  * Reference: ROADMAP.md P7.3.9–P7.3.10
  */
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string; postId: string } }
 ) {
+  const auth = requireBearerToken(req.headers.get('authorization') ?? undefined)
+  if (!auth.ok) {
+    return NextResponse.json({ success: false, error: auth.error }, { status: auth.status })
+  }
+
   try {
     const { id: clientId, postId } = params
 
@@ -31,13 +41,15 @@ export async function GET(
       .single<BlogPost>()
 
     if (error || !data) {
+      // HIGH-3: log DB error details server-side, return generic 404 to caller
+      if (error) console.error('[blog/:postId GET] Supabase error:', error)
       return NextResponse.json({ success: false, error: 'Post not found' }, { status: 404 })
     }
 
     return NextResponse.json({ success: true, post: data })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ success: false, error: message }, { status: 500 })
+    console.error('[blog/:postId GET] Unexpected error:', err)
+    return NextResponse.json({ success: false, error: 'An unexpected error occurred' }, { status: 500 })
   }
 }
 
@@ -45,6 +57,11 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string; postId: string } }
 ) {
+  const auth = requireBearerToken(req.headers.get('authorization') ?? undefined)
+  if (!auth.ok) {
+    return NextResponse.json({ success: false, error: auth.error }, { status: auth.status })
+  }
+
   try {
     const { id: clientId, postId } = params
     const body = (await req.json()) as {
@@ -80,23 +97,30 @@ export async function PATCH(
       .single<BlogPost>()
 
     if (error || !data) {
+      // HIGH-3: log DB details server-side, return generic message to caller
+      if (error) console.error('[blog/:postId PATCH] Supabase error:', error)
       return NextResponse.json(
-        { success: false, error: error?.message ?? 'Update failed' },
+        { success: false, error: 'Failed to update blog post' },
         { status: 500 }
       )
     }
 
     return NextResponse.json({ success: true, post: data })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ success: false, error: message }, { status: 500 })
+    console.error('[blog/:postId PATCH] Unexpected error:', err)
+    return NextResponse.json({ success: false, error: 'An unexpected error occurred' }, { status: 500 })
   }
 }
 
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string; postId: string } }
 ) {
+  const auth = requireBearerToken(req.headers.get('authorization') ?? undefined)
+  if (!auth.ok) {
+    return NextResponse.json({ success: false, error: auth.error }, { status: auth.status })
+  }
+
   try {
     const { id: clientId, postId } = params
 
@@ -107,12 +131,14 @@ export async function DELETE(
       .eq('client_id', clientId)
 
     if (error) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+      // HIGH-3: log DB details server-side, return generic message to caller
+      console.error('[blog/:postId DELETE] Supabase error:', error)
+      return NextResponse.json({ success: false, error: 'Failed to delete blog post' }, { status: 500 })
     }
 
     return NextResponse.json({ success: true })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ success: false, error: message }, { status: 500 })
+    console.error('[blog/:postId DELETE] Unexpected error:', err)
+    return NextResponse.json({ success: false, error: 'An unexpected error occurred' }, { status: 500 })
   }
 }

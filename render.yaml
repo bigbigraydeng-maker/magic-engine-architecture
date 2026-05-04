@@ -108,6 +108,30 @@ services:
           name: magic-engine
           property: host
 
+  # Site Audit job maintenance (cleanup, watchdog, recovery)
+  # Runs daily at 2 AM UTC (~2 PM NZST)
+  # Functionality:
+  #   - Cleanup: Delete jobs completed > 30 days ago
+  #   - Watchdog: Detect and log failed jobs (status='failed' with error_message)
+  #   - Recovery: Resume pending jobs stuck > 1 hour
+  # Reference: ROADMAP.md P8.0.5.6
+  - type: cron
+    name: site-audit-cron
+    env: node
+    schedule: "0 2 * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -s -X POST -H "x-cron-secret: $CRON_SECRET" \
+        https://$RENDER_EXTERNAL_URL/api/cron/site-audit-jobs
+    envVars:
+      - key: CRON_SECRET
+        sync: false
+      - key: RENDER_EXTERNAL_URL
+        fromService:
+          type: web
+          name: magic-engine
+          property: host
+
   # Weekly AI Visibility Tracker — every Monday at 1am UTC (~1pm NZST)
   # Processes all clients with enabled queries; writes runs + weekly snapshot.
   # Reference: ROADMAP.md P7.4.13

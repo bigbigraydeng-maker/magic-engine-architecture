@@ -2,13 +2,14 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { generateBlogPost } from '@/lib/blog/generator'
 import { auditExistingContent } from '@/lib/blog/content-auditor'
+import { requireBearerToken, clampLimit } from '@/lib/validation-utils'
 import type { BlogPost, GenerateBlogRequest } from '@/types/magic-engine'
 
 /**
  * GET /api/clients/[id]/blog
  * List blog posts for a client, newest first.
  * Query: ?status=draft|approved|published|rejected  (omit for all)
- *        &limit=20
+ *        &limit=20  (max 100)
  *
  * POST /api/clients/[id]/blog
  * Generate a new blog post (stored as 'draft').
@@ -19,6 +20,10 @@ import type { BlogPost, GenerateBlogRequest } from '@/types/magic-engine'
  *   whether a post with the same intent already exists. If so, it returns
  *   { success: true, action: 'upgrade', audit } without generating a new post.
  *   The caller can pass skip_audit: true to bypass this check.
+ *
+ * Security: All endpoints require a valid Bearer token (INTERNAL_API_KEY).
+ * Error messages returned to callers are generic — DB schema details are
+ * only written to server-side logs.
  *
  * Reference: ROADMAP.md P7.3.8
  */
@@ -33,10 +38,16 @@ export async function GET(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const auth = requireBearerToken(req.headers.get('authorization') ?? undefined)
+  if (!auth.ok) {
+    return NextResponse.json({ success: false, error: auth.error }, { status: auth.status })
+  }
+
   try {
     const clientId = params.id
     const status = req.nextUrl.searchParams.get('status')
-    const limit  = parseInt(req.nextUrl.searchParams.get('limit') ?? '50', 10)
+    // HIGH-1: clamp limit to prevent unbounded DB queries
+    const limit = clampLimit(req.nextUrl.searchParams.get('limit'))
 
     let query = supabaseAdmin
       .from('blog_posts')
@@ -53,13 +64,15 @@ export async function GET(
     const { data, error } = await query
 
     if (error) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 500 })
+      // HIGH-3: log details server-side, return generic message to caller
+      console.error('[blog GET] Supabase error:', error)
+      return NextResponse.json({ success: false, error: 'Failed to retrieve blog posts' }, { status: 500 })
     }
 
     return NextResponse.json({ success: true, posts: data ?? [] })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ success: false, error: message }, { status: 500 })
+    console.error('[blog GET] Unexpected error:', err)
+    return NextResponse.json({ success: false, error: 'An unexpected error occurred' }, { status: 500 })
   }
 }
 
@@ -67,6 +80,11 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const auth = requireBearerToken(req.headers.get('authorization') ?? undefined)
+  if (!auth.ok) {
+    return NextResponse.json({ success: false, error: auth.error }, { status: auth.status })
+  }
+
   try {
     const clientId = params.id
     const body = (await req.json()) as GenerateBlogRequest
@@ -126,8 +144,8 @@ export async function POST(
     return await persistAndReturn(clientId, body, mode, result, null)
 
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ success: false, error: message }, { status: 500 })
+    console.error('[blog POST] Unexpected error:', err)
+    return NextResponse.json({ success: false, error: 'An unexpected error occurred' }, { status: 500 })
   }
 }
 
@@ -165,8 +183,10 @@ async function persistAndReturn(
     .single<BlogPost>()
 
   if (dbErr || !post) {
+    // HIGH-3: log DB details server-side only
+    console.error('[blog persistAndReturn] DB insert error:', dbErr)
     return NextResponse.json(
-      { success: false, error: dbErr?.message ?? 'Failed to save post' },
+      { success: false, error: 'Failed to save blog post' },
       { status: 500 }
     )
   }

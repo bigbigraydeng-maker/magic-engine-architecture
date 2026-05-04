@@ -8,8 +8,22 @@
  * The auditBlogPost() adapter wires mode → correct suite selection and
  * derives the single `approved` flag according to CLAUDE.md §十四 rules.
  *
+ * Security: All public functions enforce input size limits before running
+ * regex operations to prevent ReDoS attacks on large or crafted inputs.
+ *
  * Reference: ROADMAP.md Track 1.E, CLAUDE.md §十四
  */
+
+// ─── Input Size Limits (DoS prevention) ───────────────────────────────────────
+
+/** Maximum allowed HTML body length in characters (~1 MB). */
+const MAX_HTML_BODY_CHARS = 1_000_000
+
+/** Maximum allowed brand name length in characters. */
+const MAX_BRAND_NAME_CHARS = 200
+
+/** Maximum allowed source query text length in characters. */
+const MAX_QUERY_TEXT_CHARS = 2_000
 
 // ─── Public Types ─────────────────────────────────────────────────────────────
 
@@ -49,6 +63,16 @@ export function checkSeoCompliance(
     metaDescription: string
   }
 ): CheckResult {
+  // Guard: reject oversized inputs to prevent ReDoS
+  if (htmlBody.length > MAX_HTML_BODY_CHARS) {
+    return buildResult(
+      Array(8).fill({
+        passed: false,
+        detail: `HTML body too large: ${htmlBody.length} chars (limit: ${MAX_HTML_BODY_CHARS}). Reduce content size.`,
+      })
+    )
+  }
+
   const { primaryKeyword, metaTitle, metaDescription } = metadata
 
   const checks: Array<{ passed: boolean; detail: string }> = [
@@ -80,10 +104,43 @@ export function checkGeoCompliance(
   sourceQueryText: string | null,
   brandName: string
 ): CheckResult {
+  // Guard: reject oversized html to prevent ReDoS
+  if (htmlBody.length > MAX_HTML_BODY_CHARS) {
+    return buildResult(
+      Array(3).fill({
+        passed: false,
+        detail: `HTML body too large: ${htmlBody.length} chars (limit: ${MAX_HTML_BODY_CHARS}). Reduce content size.`,
+      })
+    )
+  }
+
+  // Guard: reject oversized brand name to prevent ReDoS via regex
+  if (brandName && brandName.length > MAX_BRAND_NAME_CHARS) {
+    return buildResult([
+      checkGeoBlock(htmlBody),
+      {
+        passed: false,
+        detail: `Brand name exceeds limit: ${brandName.length} chars (limit: ${MAX_BRAND_NAME_CHARS}).`,
+      },
+      checkWeakQueryAnswered(
+        htmlBody,
+        sourceQueryText && sourceQueryText.length <= MAX_QUERY_TEXT_CHARS
+          ? sourceQueryText
+          : null
+      ),
+    ])
+  }
+
+  // Guard: truncate oversized sourceQueryText instead of rejecting entirely
+  const safeQueryText =
+    sourceQueryText && sourceQueryText.length > MAX_QUERY_TEXT_CHARS
+      ? sourceQueryText.slice(0, MAX_QUERY_TEXT_CHARS)
+      : sourceQueryText
+
   const checks: Array<{ passed: boolean; detail: string }> = [
     checkGeoBlock(htmlBody),
     checkBrandFrequency(htmlBody, brandName),
-    checkWeakQueryAnswered(htmlBody, sourceQueryText),
+    checkWeakQueryAnswered(htmlBody, safeQueryText),
   ]
 
   return buildResult(checks)

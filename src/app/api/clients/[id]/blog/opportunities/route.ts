@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getWeakSpotOpportunities } from '@/lib/blog/topic-selector'
+import { requireBearerToken, clampLimit } from '@/lib/validation-utils'
 
 /**
  * GET /api/clients/[id]/blog/opportunities
@@ -8,7 +9,9 @@ import { getWeakSpotOpportunities } from '@/lib/blog/topic-selector'
  * These are the recommended blog topics for GEO-mode generation.
  *
  * Query params:
- *   limit?   - max results (default 20)
+ *   limit?   - max results (default 20, max 100)
+ *
+ * Security: Requires Bearer token. Error messages do not expose internals.
  *
  * Reference: ROADMAP.md P7.3.3
  */
@@ -16,15 +19,22 @@ export async function GET(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const auth = requireBearerToken(req.headers.get('authorization') ?? undefined)
+  if (!auth.ok) {
+    return NextResponse.json({ success: false, error: auth.error }, { status: auth.status })
+  }
+
   try {
     const clientId = params.id
-    const limit = parseInt(req.nextUrl.searchParams.get('limit') ?? '20', 10)
+    // HIGH-1: clamp limit to prevent unbounded queries
+    const limit = clampLimit(req.nextUrl.searchParams.get('limit'))
 
     const opportunities = await getWeakSpotOpportunities(clientId, limit)
 
     return NextResponse.json({ success: true, opportunities })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ success: false, error: message }, { status: 500 })
+    // HIGH-3: log details server-side, return generic message to caller
+    console.error('[opportunities GET] Unexpected error:', err)
+    return NextResponse.json({ success: false, error: 'Failed to retrieve opportunities' }, { status: 500 })
   }
 }

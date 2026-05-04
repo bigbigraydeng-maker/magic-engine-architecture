@@ -1,9 +1,19 @@
 // SEMrush API Client
 // 封装 4 个核心工具，对内提供统一接口
 
+import { validateEnvVar } from '@/lib/validation-utils'
+
 const SEMRUSH_API_BASE = 'https://api.semrush.com'
-const API_KEY = process.env.SEMRUSH_API_KEY!
 const DEFAULT_DB = process.env.SEMRUSH_DB || 'au'
+
+/**
+ * Retrieve the SEMrush API key at call time (not at module load time).
+ * This ensures a clear error is thrown when the key is missing,
+ * rather than silently passing `undefined` to the API.
+ */
+function getApiKey(): string {
+  return validateEnvVar('SEMRUSH_API_KEY')
+}
 
 export interface SemrushKeywordData {
   keyword: string
@@ -21,7 +31,7 @@ export async function batchKeywordOverview(
 ): Promise<SemrushKeywordData[]> {
   const params = new URLSearchParams({
     type: 'phrase_these',
-    key: API_KEY,
+    key: getApiKey(),
     phrase: keywords.join(';'),
     database: db,
     export_columns: 'Ph,Nq,Kd,Cp,In,Tr',
@@ -46,7 +56,7 @@ export async function getRelatedKeywords(
 ): Promise<SemrushKeywordData[]> {
   const params = new URLSearchParams({
     type: 'phrase_related',
-    key: API_KEY,
+    key: getApiKey(),
     phrase: seedKeyword,
     database: db,
     export_columns: 'Ph,Nq,Kd,Cp,In',
@@ -67,7 +77,7 @@ export async function getDomainOrganicKeywords(
 ): Promise<SemrushKeywordData[]> {
   const params = new URLSearchParams({
     type: 'domain_organic',
-    key: API_KEY,
+    key: getApiKey(),
     domain,
     database: db,
     export_columns: 'Ph,Nq,Kd,Cp,In,Po',
@@ -93,7 +103,7 @@ export async function getKeywordGap(
 
   const params = new URLSearchParams({
     type: 'phrase_kgap',
-    key: API_KEY,
+    key: getApiKey(),
     database: db,
     export_columns: 'Ph,Nq,Kd,Cp,In',
     display_limit: String(limit),
@@ -135,9 +145,11 @@ export async function getDomainOverviewSnapshot(
   keywordLimit = 20
 ): Promise<DomainOverviewSnapshot> {
   try {
+    // Wrap in Promise.resolve() so synchronous throws (e.g. missing API key)
+    // are captured by allSettled rather than propagating before the await.
     const [topKeywords, competitors] = await Promise.allSettled([
-      getDomainOrganicKeywords(domain, db, keywordLimit),
-      getDomainCompetitors(domain, db),
+      Promise.resolve().then(() => getDomainOrganicKeywords(domain, db, keywordLimit)),
+      Promise.resolve().then(() => getDomainCompetitors(domain, db)),
     ])
 
     return {
@@ -157,7 +169,7 @@ async function getDomainCompetitors(
 ): Promise<string[]> {
   const params = new URLSearchParams({
     type: 'domain_organic_organic',
-    key: API_KEY,
+    key: getApiKey(),
     domain,
     database: db,
     export_columns: 'Dn,Cr',
@@ -184,7 +196,7 @@ export async function getQuestionKeywords(
 ): Promise<SemrushKeywordData[]> {
   const params = new URLSearchParams({
     type: 'phrase_questions',
-    key: API_KEY,
+    key: getApiKey(),
     phrase: seedKeyword,
     database: db,
     export_columns: 'Ph,Nq,Kd,Cp,In',
@@ -210,7 +222,7 @@ export async function getDomainMetrics(
 ): Promise<DomainMetrics> {
   const params = new URLSearchParams({
     type: 'domain_ranks',
-    key: API_KEY,
+    key: getApiKey(),
     domain,
     database: db,
     export_columns: 'Or,Ot,As',

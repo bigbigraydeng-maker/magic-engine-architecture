@@ -21,6 +21,22 @@ export interface SiteAuditJob {
   updated_at: string
 }
 
+export interface SiteAuditPage {
+  id: string
+  job_id: string
+  url: string
+  page_type: 'blog' | 'landing' | 'product'
+  topics: string[]
+  has_geo_block: boolean
+  markdown_content: string
+  geo_block_info: {
+    directive_id: string
+    strategy: string
+  } | null
+  created_at: string
+  updated_at: string
+}
+
 export interface CreateJobInput {
   domain: string
   maxPages?: number
