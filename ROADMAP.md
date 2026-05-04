@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-03 · 当前阶段：**Phase 8.Q 进行中（8.Q.1✅ 8.Q.2✅ 8.Q.3部分✅）**
+> 最后更新：2026-05-04 · 当前阶段：**Phase 9.0 进行中（生成队列 UX 优化）+ Phase 8.Q 并行（8.Q.1✅ 8.Q.2✅ 8.Q.3部分✅）**
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
 
 ---
@@ -25,6 +25,7 @@
 📋 Phase 8.B     批量生产 + 自动排期 + 无缝发布（走向 Airtable-free 运营模式）
 📋 Phase 8.M     Marketing Agent 记忆系统（每客户长期 Agent 智能化，中长期）
 🔄 Phase 8.D     DNZ诊断策略层（Stage 1 采集✅ P8.0.1-P8.0.3 完成，Stage 2 异步框架进行中）
+🔄 Phase 9.0     Visual Queue UX Polish（P9.0.1-P9.0.3 进行中，1Hz平滑倒计时 + 环形进度 + 队列卡）
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
 ```
@@ -630,12 +631,27 @@ Layer 3: 策略驱动执行
   - ✅ 测试覆盖率：96.4% statements，96.2% branches（目标 ≥80%）
   - ✅ TDD 周期完成：RED → GREEN → REFACTOR
   
-- [ ] **P8.0.5** API endpoints:
-  - `POST /api/clients/[id]/site-audit/crawl` — 触发全站采集（异步，最多 100 页）
-  - `GET /api/clients/[id]/site-audit/status` — 查询当前 job 进度
-  - `GET /api/clients/[id]/site-audit/pages` — 列出已采集页面（支持 type / topic 筛选）
-  - `GET /api/clients/[id]/site-audit/pages/[pageId]` — 单页详情
-  - `POST /api/cron/site-audit-jobs` — Cron 清理过期 job 记录
+- [x] **P8.0.5.0** 规划与设计 ✅ **2026-05-05 完成**
+  - ✅ 规划文档：7 phase，13-20h 工作量估算
+  - ✅ 关键设计决策：Render 30s 超时 → fire-and-forget，Cron 兜底，多租户隔离，GIN index 优化
+  
+- [x] **P8.0.5.1** 执行编排模块 ✅ **2026-05-05 完成**
+  - ✅ 文件：`src/lib/site-audit/job-executor.ts`（286 行）
+  - ✅ 导出：`executeJob(supabase, jobId, options)` 主函数
+  - ✅ 流程：discover sitemap → crawl → classify → detect GEO → upsert pages → update progress → complete/fail job
+  - ✅ 测试：34 个单元测试，100% 通过率（15ms）
+  - ✅ 覆盖率：100% statements/lines/functions，86.36% branches（目标 ≥85%）✅
+  - ✅ TDD 周期：RED (初始 29 个测试) → GREEN (word_count 修复) → REFACTOR (追加 5 组边界测试)
+  - ✅ 安全审查：0 critical/high/medium issues，Security Risk Level: LOW
+
+- [ ] **P8.0.5.2-P8.0.5.6** API endpoints（待实现）:
+  - [ ] **P8.0.5.2** `POST /api/clients/[id]/site-audit/crawl` — 触发全站采集（异步，最多 100 页）
+  - [ ] **P8.0.5.3** `GET /api/clients/[id]/site-audit/status` — 查询当前 job 进度
+  - [ ] **P8.0.5.4** `GET /api/clients/[id]/site-audit/pages` — 列出已采集页面（支持 type / topic 筛选）
+  - [ ] **P8.0.5.5** `GET /api/clients/[id]/site-audit/pages/[pageId]` — 单页详情
+  - [ ] **P8.0.5.6** `POST /api/cron/site-audit-jobs` — Cron 清理过期 job 记录
+  - [ ] **P8.0.5.7** GIN index migration + render.yaml cron 配置
+  - [ ] **P8.0.5.8** E2E 验证（CTS Tours 真实域名）
   
 **Stage 3: UI 仪表板** 📋 待做
 - [ ] **P8.0.6** UI：`/dashboard/clients/[id]/site-audit` — 采集进度条 + 已采集页面表格
@@ -697,6 +713,66 @@ Layer 3: 策略驱动执行
 **验收标准**：
 - 全程 < 10 分钟完成新客户建档
 - 建档完成后，客户主页显示：DNZ采集状态、已采集页面数、Master Brief 状态、GEO Directive 状态
+
+---
+
+### Phase 9.0 — Visual Queue UX Polish ⭐（生成队列用户体验优化）
+
+**背景**：用户在 3–7 分钟的生成过程中无法感知进度，导致误认为系统卡顿。本阶段通过**1Hz 本地流畅倒计时 + 环形进度条 + 4步骤指示器 + 智能取消按钮**，将被动等待转化为主动跟踪。
+
+**验收标准**：
+- 倒计时 < 200ms 的网络延迟波动隐藏（本地平滑）
+- 进度环 0-95% 连贯旋转，无卡顿
+- 取消按钮在 1.5 倍预期时间后激活（用户主动权）
+- 队列概览卡支持 10+ 同步生成任务的可见性
+- 所有组件 ≥ 80% 测试覆盖率
+
+#### Phase 9.0.1 — 进度计算库 + 配置升级
+
+**目标**：提供纯函数库用于进度计算、计时格式化、阶段判断，以及升级生成配置以支持资产类型特定的生成时间估算。
+
+- [ ] **P9.0.1** 创建 `src/lib/visual/progress-utils.ts`：导出 `getProgressPercent()`（经过时间 → 0-95% 进度）、`formatCountdown()`（毫秒 → "1m 23s"）、`getStageKey()`（经过秒数 → 当前阶段 key）、`shouldEnableCancelButton()`（是否超过 1.5 倍预期时间）
+- [ ] **P9.0.2** 升级 `src/lib/visual/generation-config.ts`：GENERATION_STAGES 改为对象数组 `[{ key, label, weight_percent }]`，新增 `getStagesForType(assetType)` 返回资产类型特定的阶段序列，新增 `getCancelThresholdMs(provider, assetType)` 计算取消按钮激活时间
+- [ ] **P9.0.3** 编写 `src/lib/visual/__tests__/progress-utils.test.ts`：覆盖 4 个纯函数的边界案例（0ms、预期时间、超时时间、不同资产类型）
+
+#### Phase 9.0.2 — 核心 UI 组件
+
+**目标**：实现三层 UI 组件：环形进度条、4 步阶段指示、倒计时文本。所有组件接收 `GenerationQueueItem` 和本地平滑的 `elapsed` / `estimatedRemaining` 作为 props。
+
+- [ ] **P9.0.4** 创建 `src/components/visual/StageIndicator.tsx`：4 个圆点，当前阶段高亮，使用 Tailwind `opacity-40` 表示未来阶段、`opacity-100` 表示当前/完成
+- [ ] **P9.0.5** 创建 `src/components/visual/CountdownText.tsx`：接收 `estimatedRemainingMs`，格式化为 "2m 14s"，添加 `text-amber-600` 当接近 0 时闪烁警告样式
+- [ ] **P9.0.6** 创建 `src/components/visual/GenerationProgress.tsx`：复合组件，包含SVG 环形进度环（Tailwind 自定义动画 `animate-spin-slow`）、StageIndicator、CountdownText、取消按钮（仅当 `shouldEnableCancelButton()` 为 true）
+
+#### Phase 9.0.3 — Hook 改造 + 1Hz 本地平滑
+
+**目标**：升级 `useGenerationQueue` hook，添加 `setInterval` 实现 1Hz 本地倒计时平滑，隐藏 5 秒网络轮询的延迟感。
+
+- [x] **P9.0.7** 改造 `src/hooks/useGenerationQueue.ts`：在 activeGenerations 状态下启动 `setInterval`（每 100ms 触发），本地递减 `estimatedRemainingMs`、递增 `elapsed`，防止网络延迟导致的倒数跳跃 ✅ **2026-05-04 完成**
+  - ✅ 添加 smoothingRefs、cleanup() 扩展、polling effect 1Hz 逻辑
+  - ✅ 8 个单元测试 100% 通过（测试 1H 创建 100ms 区间、平滑计数、估算递减、无重复区间、清理、单调递增、并发独立、5s 轮询）
+  - ✅ 测试覆盖率 96.2% statements
+- [ ] **P9.0.8** 集成 Progress 组件到 `src/app/dashboard/visuals/page.tsx`：替换内联的 queued/generating 状态渲染，改用 `<GenerationProgress item={queueItem} onCancel={handleCancel} />`
+- [ ] **P9.0.9** 升级 Tailwind 配置（`tailwind.config.ts` 或 `globals.css`）：添加自定义动画 `animate-spin-slow`（6s 旋转）、`animate-pulse-soft`（柔和脉冲）
+
+#### Phase 9.0.4 — 集成测试 + 边界场景
+
+**目标**：为三个 UI 组件编写集成测试，覆盖网络延迟、超时、多提供商的边界场景。
+
+- [ ] **P9.0.10** `src/components/visual/__tests__/GenerationProgress.test.tsx`：测试进度环 0%-95% 过渡、倒计时每秒刷新、取消按钮在 1.5x 倍数时激活
+- [ ] **P9.0.11** 网络延迟模拟测试：验证本地 1Hz 平滑隐藏 5s 轮询波动
+- [ ] **P9.0.12** 多提供商时间估算测试：针对 wavespeed（3min）、seedance（4min）、heygen（2min）验证 getCancelThresholdMs() 的计算
+- [ ] **P9.0.13** 边界场景测试：0ms 倒数、NaN 估算、提供商超时重分类后的进度重置
+- [ ] **P9.0.14** 覆盖率验证：运行 `npm test --coverage`，确保 ≥ 80%
+
+#### Phase 9.0.5 — 队列概览浮动卡（Phase 3）
+
+**目标**：为长队列场景提供浮动卡片，一览所有在生成的资产，点击跳转到对应资产详情。
+
+- [ ] **P9.0.15** 创建 `src/components/visual/QueueOverviewCard.tsx`：显示 activeGenerations 列表（资产 ID、进度、倒计时），支持展开/收缩，固定在右下角（`fixed bottom-4 right-4`），点击行项目滚动到对应资产
+- [ ] **P9.0.16** Hook 集成：从 `useGenerationQueue` 获取 `activeGenerations`，支持 `showQueueCard` 状态切换（10+ 任务时自动显示）
+- [ ] **P9.0.17** E2E 测试：验证卡片在多资产生成时可用，滚动跳转功能正常
+
+**完成条件**：所有 17 项任务完成、测试覆盖 ≥ 80%、UI 无卡顿、支持 Cancel 操作。
 
 ---
 
