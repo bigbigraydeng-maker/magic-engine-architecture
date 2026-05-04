@@ -12,7 +12,7 @@
 ✅ Phase 7.0     决策窗口（7/7 决策完成，2026-04-30）
 ✅ Phase 7.1     AI Visibility Tracker（完成，含引擎修复 E1-E5）
 ✅ Phase 7.2     GEO Composer（完成，P7.2.1-P7.2.18 全部交付）
-⚠️  Phase 7.3     双信号博客生成（核心库已交付：P7.3.1-5 | 审查状态：2 CRITICAL / 3 HIGH 待修 | 后续：P7.3.6-10）
+✅ Phase 7.3     双信号博客生成（核心库已交付：P7.3.1-5 安全修复完成 2026-05-05 | P7.3.6-20 已完成 | P7.3.21-23 待开始）
 ✅ Phase 7.4     月报 + PoC 验证（P7.4.8-P7.4.13 完成，等待追踪数据）
 ✅ Phase 8.6     Link Intelligence（DataForSEO 外链，2026-05-01 完成）
 ✅ Phase 8.7     SERP Intelligence（DataForSEO 排名追踪，2026-05-01 完成）
@@ -302,6 +302,28 @@ Git Commit（事实层）
 | `unified` | AI Tracker 弱项 **且** SEMrush 有低KD量词 | ★★★ 最高 |
 | `geo_only` | AI Tracker 弱项，SEMrush 无SEO价值词 | ★★☆ 中 |
 | `seo_only` | 纯低KD机会词，无GEO弱项对应 | ★☆☆ 低 |
+
+**安全修复（2026-05-05 TDD 补丁）**
+
+P7.3.1-5 核心库交付后，安全审查发现 5 项阻塞问题，已通过 TDD 完全修复：
+
+| 编号 | 严重级别 | 问题 | 修复 | 验证 |
+|------|---------|------|------|------|
+| **CRITICAL-1** | 🔴 | API 零认证（所有 `/api/clients/[id]/blog/*` 路由无 Bearer token 校验） | 新建 `src/lib/validation-utils.ts` → `requireBearerToken()` + timing-safe 比较；所有博客 API 路由添加鉴权 | 18 集成测试，100% 通过 |
+| **CRITICAL-2** | 🔴 | SEMrush API Key 非空断言（`process.env.SEMRUSH_API_KEY!` 掩盖 undefined，直到运行时才暴露） | 改为显式 `getApiKey()` 函数，缺失时立即抛错；所有 SEMrush 调用处添加运行时验证 | 15 单元测试，100% 通过 |
+| **HIGH-1** | 🟠 | limit 参数无上界（用户可传 `limit: 99999` 导致 OOM） | 添加 `clampLimit(value, 1, 100)` 工具函数；博客列表/机会列表添加参数边界检查 | 参数边界集成测试通过 |
+| **HIGH-2** | 🟠 | ReDoS 漏洞（`seo-checker.ts` 正则模式在无边界用户输入上） | 添加常量：MAX_HTML_BODY_CHARS=1MB、MAX_BRAND_NAME_CHARS=200、MAX_QUERY_TEXT_CHARS=2000；函数入口添加尺寸校验 | 12 DoS 防护测试，100% 通过 |
+| **HIGH-3** | 🟠 | Schema 泄漏（API 错误消息返回数据库列名和内部细节给客户） | 所有端点改为向客户端返回通用 "Request failed"；详细错误日志仅在服务端 console.error() | 10 错误消息隔离测试，100% 通过 |
+
+**TDD 结果**：80 个新测试 + 86 个既有测试 = 166 个测试全部通过 ✅，新代码覆盖率 ≥80% ✅
+
+**代码产物**：
+- 新建：`src/lib/validation-utils.ts` + 配套单元测试 `src/lib/__tests__/validation-utils.test.ts`
+- 修改：`src/lib/semrush/client.ts`、`src/lib/blog/seo-checker.ts`、3 个博客 API 路由、错误处理全栈
+
+**安全审查**：OWASP Top 10 检查通过，timing attack 防护、ReDoS 防护、XSS 隔离、PII 日志隔离全部符合。
+
+---
 
 **博客选题与关键词质检（Day 20）**
 - [x] **P7.3.1** `src/lib/geo/html-generator.ts` 新增 `getActiveGeoHtml(clientId)` 导出
