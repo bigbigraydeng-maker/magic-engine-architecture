@@ -19,45 +19,65 @@ export async function submitImageGeneration(params: {
 }): Promise<{ job_id: string }> {
   const { prompt, width = 1024, height = 1024 } = params
 
-  const res = await fetch(`${ATLAS_BASE}/model/generateImage`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'black-forest-labs/flux-dev',
-      prompt,
-      width,
-      height,
-    }),
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30000)
 
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Atlas image submit error ${res.status}: ${err}`)
+  try {
+    const res = await fetch(`${ATLAS_BASE}/model/generateImage`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'black-forest-labs/flux-dev',
+        prompt,
+        width,
+        height,
+      }),
+      signal: controller.signal,
+    })
+
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`Atlas image submit error ${res.status}: ${err}`)
+    }
+
+    const data = await res.json()
+    const job_id = data.data?.id
+    if (!job_id) {
+      throw new Error('Atlas returned no job ID — response may be incomplete')
+    }
+    return { job_id }
+  } finally {
+    clearTimeout(timeout)
   }
-
-  const data = await res.json()
-  return { job_id: data.data?.id }
 }
 
 export async function checkImageStatus(jobId: string): Promise<ImageJobResult> {
-  const res = await fetch(`${ATLAS_BASE}/model/prediction/${jobId}`, {
-    headers: { 'Authorization': `Bearer ${API_KEY}` },
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 3000)
 
-  if (!res.ok) throw new Error(`Atlas image status error: ${res.status}`)
+  try {
+    const res = await fetch(`${ATLAS_BASE}/model/prediction/${jobId}`, {
+      headers: { 'Authorization': `Bearer ${API_KEY}` },
+      signal: controller.signal,
+    })
 
-  const data = await res.json()
-  const d = data.data
+    if (!res.ok) throw new Error(`Atlas image status error: ${res.status}`)
 
-  return {
-    job_id: jobId,
-    status: mapStatus(d?.status),
-    image_url: d?.outputs?.[0],
-    cost_usd: 0.02,
-    error: d?.error || undefined,
+    const data = await res.json()
+    const d = data.data
+
+    return {
+      job_id: jobId,
+      status: mapStatus(d?.status),
+      image_url: d?.outputs?.[0],
+      cost_usd: 0.02,
+      error: d?.error || undefined,
+    }
+  } finally {
+    clearTimeout(timeout)
   }
 }
 

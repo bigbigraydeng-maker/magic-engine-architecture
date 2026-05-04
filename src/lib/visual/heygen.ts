@@ -35,61 +35,81 @@ export async function submitAvatarVideo(params: {
     resolution = '720p',
   } = params
 
-  const res = await fetch(`${HEYGEN_BASE}/video/generate`, {
-    method: 'POST',
-    headers: {
-      'X-Api-Key': API_KEY,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      video_inputs: [{
-        character: {
-          type: 'avatar',
-          avatar_id,
-          avatar_style: 'normal',
-        },
-        voice: {
-          type: 'text',
-          input_text: script,
-          voice_id,
-          speed: 1.0,
-        },
-        background: {
-          type: background.startsWith('#') ? 'color' : 'image',
-          value: background,
-        },
-      }],
-      dimension: resolution === '1080p'
-        ? { width: 1920, height: 1080 }
-        : { width: 1280, height: 720 },
-    }),
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30000)
 
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`HeyGen submit error ${res.status}: ${err}`)
+  try {
+    const res = await fetch(`${HEYGEN_BASE}/video/generate`, {
+      method: 'POST',
+      headers: {
+        'X-Api-Key': API_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        video_inputs: [{
+          character: {
+            type: 'avatar',
+            avatar_id,
+            avatar_style: 'normal',
+          },
+          voice: {
+            type: 'text',
+            input_text: script,
+            voice_id,
+            speed: 1.0,
+          },
+          background: {
+            type: background.startsWith('#') ? 'color' : 'image',
+            value: background,
+          },
+        }],
+        dimension: resolution === '1080p'
+          ? { width: 1920, height: 1080 }
+          : { width: 1280, height: 720 },
+      }),
+      signal: controller.signal,
+    })
+
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`HeyGen submit error ${res.status}: ${err}`)
+    }
+
+    const data = await res.json()
+    const video_id = data.data?.video_id
+    if (!video_id) {
+      throw new Error('HeyGen returned no video ID — response may be incomplete')
+    }
+    return { video_id }
+  } finally {
+    clearTimeout(timeout)
   }
-
-  const data = await res.json()
-  return { video_id: data.data?.video_id }
 }
 
 export async function checkAvatarStatus(videoId: string): Promise<AvatarJobResult> {
-  const res = await fetch(`${HEYGEN_BASE}/video_status.get?video_id=${videoId}`, {
-    headers: { 'X-Api-Key': API_KEY },
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 3000)
 
-  if (!res.ok) throw new Error(`HeyGen status error: ${res.status}`)
+  try {
+    const res = await fetch(`${HEYGEN_BASE}/video_status.get?video_id=${videoId}`, {
+      headers: { 'X-Api-Key': API_KEY },
+      signal: controller.signal,
+    })
 
-  const data = await res.json()
-  const video = data.data
+    if (!res.ok) throw new Error(`HeyGen status error: ${res.status}`)
 
-  return {
-    video_id: videoId,
-    status: mapHeyGenStatus(video?.status),
-    video_url: video?.video_url,
-    duration_seconds: video?.duration,
-    error: video?.error,
+    const data = await res.json()
+    const video = data.data
+
+    return {
+      video_id: videoId,
+      status: mapHeyGenStatus(video?.status),
+      video_url: video?.video_url,
+      duration_seconds: video?.duration,
+      error: video?.error,
+    }
+  } finally {
+    clearTimeout(timeout)
   }
 }
 

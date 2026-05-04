@@ -25,6 +25,15 @@ function mapErrorToStructured(
 ): GenerationErrorResponse {
   const errorLower = error.toLowerCase()
 
+  if (errorLower.includes('abort') || errorLower.includes('operation was aborted')) {
+    return {
+      code: 'network_error',
+      message: 'Network timeout connecting to provider. Status check failed.',
+      retryEligible: true,
+      suggestedAction: 'Retry will be attempted automatically',
+    }
+  }
+
   if (errorLower.includes('quota') || errorLower.includes('rate limit')) {
     return {
       code: 'quota_exceeded',
@@ -222,11 +231,11 @@ export async function GET(
     }
 
     // Age-based timeout: auto-fail jobs stuck in processing too long
-    // Flux-dev images take 3-7 min under load; allow 15 min grace before auto-fail.
-    // Videos (Seedance) and avatar videos (HeyGen) allow 25 min.
+    // Flux-dev images take 3-7 min under normal load; allow 10 min grace before auto-fail.
+    // Videos (Seedance) and avatar videos (HeyGen) allow 15-20 min.
     if (providerResult.status === 'processing' || providerResult.status === 'pending') {
       const ageMinutes = (Date.now() - new Date(asset.created_at).getTime()) / 60000
-      const timeoutMinutes = asset.asset_type === 'video' || asset.asset_type === 'avatar_video' ? 25 : 15
+      const timeoutMinutes = asset.asset_type === 'video' || asset.asset_type === 'avatar_video' ? 20 : 10
 
       if (ageMinutes > timeoutMinutes) {
         const timeoutMsg = `Generation stuck: provider reported "processing" for ${Math.floor(ageMinutes)} minutes (limit: ${timeoutMinutes} min). The provider queue may be overloaded. Please retry.`

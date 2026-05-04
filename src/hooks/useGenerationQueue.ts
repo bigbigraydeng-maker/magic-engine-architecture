@@ -25,6 +25,7 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
   const pollingRefs = useRef<Record<string, NodeJS.Timeout>>({})
   const timeoutRefs = useRef<Record<string, NodeJS.Timeout>>({})
   const retryTimeoutRefs = useRef<Record<string, NodeJS.Timeout>>({})
+  const smoothingRefs = useRef<Record<string, NodeJS.Timeout>>({})
 
   // Keep live ref to queueState so interval callbacks always read current data
   const queueStateRef = useRef(queueState)
@@ -334,9 +335,11 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
     clearInterval(pollingRefs.current[postId])
     clearTimeout(timeoutRefs.current[postId])
     clearTimeout(retryTimeoutRefs.current[postId])
+    clearInterval(smoothingRefs.current[postId])
     delete pollingRefs.current[postId]
     delete timeoutRefs.current[postId]
     delete retryTimeoutRefs.current[postId]
+    delete smoothingRefs.current[postId]
   }, [])
 
   /**
@@ -354,8 +357,8 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
   }, [cleanup])
 
   /**
-   * Start polling for active generation items
-   * HIGH FIX #1: interval callback uses postId to look up live item via ref
+   * Start polling for active generation items + 100ms local smoothing
+   * P9.0.7: Added 1Hz smoothing to prevent network polling jitter
    */
   useEffect(() => {
     const items = Object.values(queueState.activeGenerations)
@@ -375,16 +378,62 @@ export function useGenerationQueue(callbacks?: GenerationQueueCallbacks) {
           GENERATION_CONFIG.POLLING_TIMEOUT_MS
         )
       }
+
+      // P9.0.7: Start 100ms local smoothing interval if not already running
+      if (!smoothingRefs.current[item.postId]) {
+        smoothingRefs.current[item.postId] = setInterval(
+          () => {
+            const liveItem = queueStateRef.current.activeGenerations[item.postId]
+            if (!liveItem) return
+
+            // Increment elapsed by 100ms locally
+            const newElapsed = (liveItem.elapsed || 0) + 0.1
+            // Decrement remaining time by 100ms
+            const currentRemaining = liveItem.estimatedRemainingMs || 0
+            const newEstimatedRemaining = Math.max(0, currentRemaining - 100)
+
+            setQueueState((prev) => {
+              const activeItem = prev.activeGenerations[item.postId]
+              if (!activeItem) return prev
+              return {
+                ...prev,
+                activeGenerations: {
+                  ...prev.activeGenerations,
+                  [item.postId]: {
+                    ...activeItem,
+                    elapsed: newElapsed,
+                    estimatedRemainingMs: newEstimatedRemaining,
+                  },
+                },
+              }
+            })
+
+            callbacksRef.current?.onStatusChange?.(item.postId, {
+              ...liveItem,
+              elapsed: newElapsed,
+              estimatedRemainingMs: newEstimatedRemaining,
+            })
+          },
+          100  // 100ms interval for smooth 1Hz updates
+        )
+      }
     })
 
     // Capture ref snapshot so cleanup reads the same object even after re-renders
     const pollingRefsSnapshot = pollingRefs.current
+    const smoothingRefsSnapshot = smoothingRefs.current
     return () => {
       const activeIds = Object.keys(queueState.activeGenerations)
       Object.keys(pollingRefsSnapshot).forEach((postId) => {
         if (!activeIds.includes(postId)) {
           clearInterval(pollingRefsSnapshot[postId])
           delete pollingRefsSnapshot[postId]
+        }
+      })
+      Object.keys(smoothingRefsSnapshot).forEach((postId) => {
+        if (!activeIds.includes(postId)) {
+          clearInterval(smoothingRefsSnapshot[postId])
+          delete smoothingRefsSnapshot[postId]
         }
       })
     }

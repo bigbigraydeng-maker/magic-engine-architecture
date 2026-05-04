@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useGenerationQueue } from '@/hooks/useGenerationQueue'
 import { GenerationQueueItem, GENERATION_CONFIG } from '@/lib/visual/generation-config'
+import { GenerationProgress } from '@/components/visual/GenerationProgress'
 
 interface Post {
   id: string
@@ -538,39 +539,24 @@ function AssetCell({
   // Generating state
   if (genState?.generating) {
     const assetType = assetTypeFromFormat(post.format)
-    // Images: cancel after 10 min; videos: cancel after 20 min
-    const cancelThresholdSec = assetType === 'video' ? 20 * 60 : 10 * 60
-    // Show "slow" warning after 3 min for images, 10 min for videos
-    const slowThresholdSec = assetType === 'video' ? 10 * 60 : 3 * 60
-    const elapsed = genState.elapsed ?? 0
-    const isSlow = elapsed > slowThresholdSec
-    const isOverdue = elapsed > cancelThresholdSec
+    const elapsedMs = (genState.elapsed ?? 0) * 1000
 
-    // Stage hint text shown beneath the timer
-    const stageHint = isOverdue
-      ? 'Overdue — cancel?'
-      : isSlow
-        ? 'Provider slow, still waiting…'
-        : assetType === 'video'
-          ? 'Video ~10-15 min'
-          : elapsed < 30
-            ? 'Starting…'
-            : 'Flux-dev ~3-7 min'
+    // Estimate expected time based on asset type
+    const expectedMs = assetType === 'video' ? 750000 : 300000 // 12.5 min for video, 5 min for image
+
+    // Calculate current stage (0-3 out of 4)
+    const progressPercent = Math.min(100, (elapsedMs / expectedMs) * 100)
+    const currentStageIndex = Math.floor((progressPercent / 100) * 4)
 
     return (
-      <div className="flex flex-col items-center gap-1 py-1">
-        <div className={`w-6 h-6 border-2 border-t-transparent rounded-full animate-spin ${isOverdue ? 'border-orange-400' : isSlow ? 'border-amber-400' : 'border-blue-400'}`} />
-        <span className={`text-[10px] font-medium ${isOverdue ? 'text-orange-500' : isSlow ? 'text-amber-600' : 'text-blue-500'}`}>{elapsed}s</span>
-        <span className="text-[10px] text-gray-400 text-center leading-tight max-w-[84px]">{stageHint}</span>
-        {isOverdue && (
-          <button
-            onClick={onCancel}
-            title="Cancel stuck generation"
-            className="text-[8px] px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded hover:bg-orange-200 border border-orange-300 whitespace-nowrap"
-          >
-            ✕ Cancel
-          </button>
-        )}
+      <div className="flex items-center justify-center py-2">
+        <GenerationProgress
+          currentStageIndex={currentStageIndex}
+          totalStages={4}
+          elapsedMs={elapsedMs}
+          expectedMs={expectedMs}
+          onCancel={onCancel}
+        />
       </div>
     )
   }

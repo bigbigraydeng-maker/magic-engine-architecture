@@ -10,8 +10,8 @@ export const GENERATION_CONFIG = {
   POLLING_INTERVAL_MS: 5000, // Poll provider status every 5 seconds
 
   // Timeout settings
-  POLLING_TIMEOUT_MS: 60 * 60 * 1000, // 60 minutes timeout for polling
-  WARNING_TIMEOUT_MS: 45 * 60 * 1000, // 45 minutes warning threshold
+  POLLING_TIMEOUT_MS: 10 * 60 * 1000, // 10 minutes timeout for polling
+  WARNING_TIMEOUT_MS: 6 * 60 * 1000, // 6 minutes warning threshold (wider window for user notification)
   PROVIDER_HARD_TIMEOUT_MS: 12 * 60 * 60 * 1000, // 12 hours (matches cron job)
 
   // Retry settings
@@ -112,21 +112,21 @@ export function formatElapsedTime(seconds: number): string {
 }
 
 /**
- * Get stages for generation progress display
+ * Generation stages with display labels and weight percentages
  */
 export const GENERATION_STAGES = [
-  'Initialising…',
-  'Generating concept…',
-  'Rendering pixels…',
-  'Finalising…',
+  { key: 'initializing', label: 'Initialising…', weight_percent: 5 },
+  { key: 'generating', label: 'Generating concept…', weight_percent: 50 },
+  { key: 'rendering', label: 'Rendering pixels…', weight_percent: 35 },
+  { key: 'finalizing', label: 'Finalising…', weight_percent: 10 },
 ] as const
 
 /**
- * Get current stage based on elapsed time
+ * Get current stage based on elapsed time (cycles every 30 seconds per stage)
  */
 export function getCurrentStage(elapsedSeconds: number): string {
   const stageIndex = Math.floor(elapsedSeconds / 30) % GENERATION_STAGES.length
-  return GENERATION_STAGES[stageIndex]
+  return GENERATION_STAGES[stageIndex].label
 }
 
 /**

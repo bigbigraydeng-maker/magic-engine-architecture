@@ -27,47 +27,67 @@ export async function submitVideoGeneration(params: {
     aspect_ratio = '9:16',
   } = params
 
-  const res = await fetch(`${ATLAS_BASE}/model/generateVideo`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'bytedance/seedance-2.0-fast/text-to-video',
-      prompt,
-      duration,
-      resolution,
-      ratio: aspect_ratio,
-    }),
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30000)
 
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Seedance submit error ${res.status}: ${err}`)
+  try {
+    const res = await fetch(`${ATLAS_BASE}/model/generateVideo`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'bytedance/seedance-2.0-fast/text-to-video',
+        prompt,
+        duration,
+        resolution,
+        ratio: aspect_ratio,
+      }),
+      signal: controller.signal,
+    })
+
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`Seedance submit error ${res.status}: ${err}`)
+    }
+
+    const data = await res.json()
+    const job_id = data.data?.id ?? data.id
+    if (!job_id) {
+      throw new Error('Seedance returned no job ID — response may be incomplete')
+    }
+    return { job_id }
+  } finally {
+    clearTimeout(timeout)
   }
-
-  const data = await res.json()
-  return { job_id: data.data?.id ?? data.id }
 }
 
 export async function checkVideoStatus(jobId: string): Promise<VideoJobResult> {
-  const res = await fetch(`${ATLAS_BASE}/model/prediction/${jobId}`, {
-    headers: { 'Authorization': `Bearer ${API_KEY}` },
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 3000)
 
-  if (!res.ok) throw new Error(`Seedance status error: ${res.status}`)
+  try {
+    const res = await fetch(`${ATLAS_BASE}/model/prediction/${jobId}`, {
+      headers: { 'Authorization': `Bearer ${API_KEY}` },
+      signal: controller.signal,
+    })
 
-  const data = await res.json()
-  const d = data.data ?? data
+    if (!res.ok) throw new Error(`Seedance status error: ${res.status}`)
 
-  return {
-    job_id: jobId,
-    status: mapStatus(d?.status),
-    video_url: d?.outputs?.[0],
-    duration_seconds: d?.duration,
-    cost_usd: d?.duration ? d.duration * 0.022 : undefined,
-    error: d?.error || undefined,
+    const data = await res.json()
+    const d = data.data ?? data
+
+    return {
+      job_id: jobId,
+      status: mapStatus(d?.status),
+      video_url: d?.outputs?.[0],
+      duration_seconds: d?.duration,
+      cost_usd: d?.duration ? d.duration * 0.022 : undefined,
+      error: d?.error || undefined,
+    }
+  } finally {
+    clearTimeout(timeout)
   }
 }
 
@@ -94,31 +114,43 @@ export async function submitI2VGeneration(params: {
     aspect_ratio = '9:16',
   } = params
 
-  const res = await fetch(`${ATLAS_BASE}/model/generateVideo`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'bytedance/seedance-2.0-fast/image-to-video',
-      prompt,
-      duration,
-      resolution,
-      ratio: aspect_ratio,
-      // Atlas I2V: first_frame_image + last_frame_image
-      first_frame_image: opening_frame_url,
-      last_frame_image: closing_frame_url,
-    }),
-  })
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30000)
 
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Seedance I2V submit error ${res.status}: ${err}`)
+  try {
+    const res = await fetch(`${ATLAS_BASE}/model/generateVideo`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'bytedance/seedance-2.0-fast/image-to-video',
+        prompt,
+        duration,
+        resolution,
+        ratio: aspect_ratio,
+        // Atlas I2V: first_frame_image + last_frame_image
+        first_frame_image: opening_frame_url,
+        last_frame_image: closing_frame_url,
+      }),
+      signal: controller.signal,
+    })
+
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`Seedance I2V submit error ${res.status}: ${err}`)
+    }
+
+    const data = await res.json()
+    const job_id = data.data?.id ?? data.id
+    if (!job_id) {
+      throw new Error('Seedance I2V returned no job ID — response may be incomplete')
+    }
+    return { job_id }
+  } finally {
+    clearTimeout(timeout)
   }
-
-  const data = await res.json()
-  return { job_id: data.data?.id ?? data.id }
 }
 
 function mapStatus(raw?: string): VideoJobResult['status'] {

@@ -443,6 +443,7 @@ export interface BlogPost {
   html_body: string
   word_count: number | null
   geo_directive_id: string | null
+  geo_directive_version_id: string | null  // track which GEO version was used
   geo_html_snapshot: string | null   // locked at generation, independent of later directive changes
   schema_json: Record<string, unknown> | null
   internal_links: BlogInternalLink[]
@@ -452,6 +453,11 @@ export interface BlogPost {
   published_at: string | null
   cost_usd: number | null
   model_used: string | null
+  // SEO/SEMrush keyword data (for dual-signal tracking)
+  primary_keyword: string | null
+  keyword_volume: number | null      // monthly search volume
+  keyword_kd: number | null          // keyword difficulty 0-100
+  keyword_intent: string | null      // comparison | how_to | recommendation | decision | discovery
   created_at: string
   updated_at: string
 }
@@ -463,8 +469,13 @@ export interface BlogInternalLink {
 }
 
 /**
- * A blog topic opportunity derived from AI Tracker weak spots.
+ * A blog topic opportunity derived from AI Tracker weak spots × SEMrush keyword data.
  * Returned by GET /api/clients/[id]/blog/opportunities.
+ *
+ * Classification logic:
+ * - unified: AI weak point AND KD < 30 AND volume > 100 (highest priority)
+ * - geo_only: AI weak point, but no SEO signal (KD >= 30 or volume <= 100)
+ * - seo_only: Strong SEO opportunity (KD < 30 AND volume > 100) with no AI weak point
  */
 export interface BlogOpportunity {
   query_id: string
@@ -473,15 +484,24 @@ export interface BlogOpportunity {
   engines_missing: string[]    // engines where brand wasn't in top 3
   total_runs_checked: number
   last_run_at: string | null
-  mode: 'geo_only'             // always geo_only for MVP
+  mode: BlogMode               // unified | geo_only | seo_only
+  // SEMrush keyword data (optional, only for unified/seo_only modes with SEO signal)
+  primary_keyword?: string
+  keyword_volume?: number      // monthly search volume
+  keyword_kd?: number          // keyword difficulty 0-100
+  keyword_intent?: string      // comparison | how_to | recommendation | decision | discovery
 }
 
 /** Request body for POST /api/clients/[id]/blog/generate */
 export interface GenerateBlogRequest {
   mode: BlogMode
   topic: string
-  source_query_id?: string     // links to the AI Tracker weak spot
+  source_query_id?: string     // links to the AI Tracker weak spot (for geo_only/unified modes)
   source_query_text?: string
+  primary_keyword?: string     // SEMrush keyword (for unified/seo_only modes)
+  keyword_volume?: number      // SEMrush monthly volume
+  keyword_kd?: number          // SEMrush keyword difficulty
+  keyword_intent?: string      // Search intent classification
   word_count_target?: number   // default 1000
   skip_audit?: boolean         // bypass content audit (e.g. user confirmed override)
 }
