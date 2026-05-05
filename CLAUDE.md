@@ -442,3 +442,128 @@ AI Tracker 每周运行
 - **Magic Engine**：用真实 AI 排名数据驱动选题，每篇内容同时打 Google + AI，数据越积越准
 
 竞争者要复制这个飞轮，需要同时具备：AI Tracker 的运营数据 + SEMrush 集成 + GEO 指令生成 + 博客生成全链路。每一层单独做都不难，**合在一起且数据互通是壁垒**。
+
+---
+
+## 十五、Phase 索引与功能日志（A+C 格式）⭐（日常查阅）
+
+> **最后更新**：2026-05-05  
+> **用途**：快速查阅所有 Phase 的目标、交付物、当前状态 + 完成功能自动记录
+
+### A. Phase 概览表（速查）
+
+| Phase ID | 名称 | 核心目标 | 状态 | 完成日期 | 关键交付 |
+|----------|------|--------|------|---------|---------|
+| **Phase 1-6** | 社媒内容矩阵 | 多客户、批量内容、多平台发布 | ✅ 完成 | 2026-04-30 | Campaign Studio + Visual/Video Studio + Publishing Hub |
+| **Phase 7.0** | 决策窗口 | 确定AI Tracker引擎、GEO方案、PoC客户 | ✅ 完成 | 2026-04-30 | 7项架构决策（OpenAI+Claude+Perplexity、CTS Tours PoC） |
+| **Phase 7.1** | AI Visibility Tracker | 多AI引擎排名追踪系统 | ✅ 完成 | 2026-05-01 | 问句生成+数据库+5个引擎Runner |
+| **Phase 7.2** | GEO Composer | AI推荐指令生成与部署 | ✅ 完成 | 2026-05-02 | Directive设计+编辑器+Snippet生成 |
+| **Phase 7.3** | 双信号博客生成 | SEO×GEO双向优化的内容引擎 | ✅ 完成 | 2026-05-05 | 核心库交付 + 安全修复 + Deployment Assistant |
+| **Phase 7.4** | 月报 + PoC验证 | CTS Tours验证、月度报告、数据收集 | 🔄 进行中 | — | P7.4.14✅ P7.4.15（待5/29） |
+| **Phase 8.6-8.9, 8.11** | SEO完整可见度 | DataForSEO外链、排名、本地、基准、成本追踪 | ✅ 完成 | 2026-05-01 | Link + SERP + Local + Baseline + Billing intelligence |
+| **Phase 8.C.1** | 月报整合 | 6大数据源聚合月度报告 | ✅ 完成 | 2026-05-01 | Unified reporting page |
+| **Phase 8.R** | Reels Studio | TikTok/Reels短视频生成全链路 | ✅ 完成 | 2026-05-02 | I2V + 提示词 + 对话修改 |
+| **Phase 8.Q** | 内容质控提升 | Brief编辑、版本管理、提示词预览 | 🔄 进行中 | — | 8.Q.1✅ 8.Q.2✅ 8.Q.3部分✅ |
+| **Phase 8.D** | DNZ诊断策略层 | 客户域名全量采集+策略分析 | ✅ 完成 | 2026-05-05 | Stage 1采集✅ Stage 2 P8.0.4-P8.0.6全完成✅ |
+| **Phase 9.0** | Visual Queue UX Polish | 生成队列UI优化（平滑倒计时、进度、卡片） | 🔄 进行中 | — | 1Hz刷新 + 环形进度 + 动画 |
+| **Phase 9** | 报告化 + 客户Portal | 月报PDF自动生成 + 客户自助门户 | 📋 规划中 | — | 权威度追踪 + 邮件发送 |
+| **Phase 10+** | 多语言 + Academy沉淀 | 国际化 + 课程化 + 可能的SaaS模块 | 📋 远期规划 | — | WordPress/Webflow插件 |
+
+---
+
+### B. 当前焦点（看这里！）
+
+**正在进行的任务**：
+
+| 项目 | 负责 | 预期完成 | 优先级 |
+|------|------|---------|--------|
+| **P7.4.14** — Week 2 CTS Tours 数据采集 | 追踪 | 2026-05-12 | ⭐⭐⭐ |
+| **Phase 8.Q.4** — 批量编辑 UI | 开发 | 2026-05-15 | ⭐⭐ |
+| **Phase 9.0** — Queue UX 动画 | 优化 | 2026-05-15 | ⭐ |
+
+---
+
+### C. 功能完成日志（自动记录）
+
+> 每当完成一个 Phase 或上线新功能时，自动在此记录。格式：**[完成日期]** — Phase ID + 功能描述 + Commit 引用
+
+#### 2026-05-05
+
+- **P8.0.6** — DNZ Async Framework API Routes & Cron 完成
+  ```
+  feat(dnz): implement P8.0.6 API routes and cron with TDD (133 tests, 99.37% coverage) [P8.0.6]
+  ```
+  核心交付：`dnz-api.ts`（业务层）+ 3条路由（POST rescan / GET+DELETE job / GET cron）+ 45个测试
+
+- **P7.3.21-23** — GEO Deployment Assistant 完成（部署页面 + API 路由 + DeployedPagesList 组件）
+  ```
+  feat(geo-composer): implement deployment assistant with revoke functionality [P7.3.21-23]
+  ```
+  核心特性：URL 记录、历史查看、软删除（revoked 状态）
+
+- **§3.3.1** — GEO Directive 部署机制决议更新
+  - Phase 1（当前）：静态快照模型（MVP 验证）
+  - Phase 2（延缓至 Q3+ 2026）：动态脚本模型（需 PoC 验证触发）
+
+#### 2026-05-02
+
+- **Phase 8.R** — Reels Studio 完成
+  ```
+  feat(reels-studio): complete video generation pipeline with editing [P8.R]
+  ```
+
+#### 2026-05-01
+
+- **Phase 8.6-8.9, 8.11** — DataForSEO 完整集成
+  ```
+  feat(seo-intelligence): add DataForSEO link, serp, local, baseline, billing [P8.6-8.9, P8.11]
+  ```
+
+- **Phase 7.1** — AI Visibility Tracker 完成（5 个 AI 引擎 Runner 上线）
+  ```
+  feat(ai-tracker): launch openai, claude, perplexity runners with weekly scheduling [P7.1]
+  ```
+
+- **Phase 8.C.1** — 月报整合完成
+  ```
+  feat(reporting): unified monthly report aggregating 6 data sources [P8.C.1]
+  ```
+
+#### 2026-04-30
+
+- **Phase 7.0** — 7 项架构决策完成
+  ```
+  docs(roadmap): finalize Phase 7.0 decisions (LLM choice, GEO strategy, PoC customer) [P7.0]
+  ```
+
+- **Phase 7.2** — GEO Composer 核心库完成
+  ```
+  feat(geo-composer): launch directive editor, generation, and snippet deployment [P7.2]
+  ```
+
+- **Phase 7.3.1-5** — 双信号博客生成库安全修复完成
+  ```
+  feat(blog-generation): dual-signal blog engine with SEO/GEO optimization [P7.3.1-5]
+  ```
+
+---
+
+### 📌 使用指南
+
+**日常查阅**：
+1. **"我们 Phase 做到哪了？"** → 看 **A 表**（概览）+ **B 当前焦点**（下一步）
+2. **"最近上线了什么新功能？"** → 看 **C 完成日志**（按日期倒序）
+3. **"Phase N 具体包含什么？"** → 查看 ROADMAP.md 对应 Phase 详细章节
+
+**更新规则**（每次新功能上线）：
+1. ✅ ROADMAP.md 中对应任务勾选 [x]
+2. ✅ 在 **C 日志** 中新增条目（日期 + 功能描述 + Commit 引用）
+3. ✅ 更新 **B 当前焦点** 表（新增/移除项目）
+4. ✅ Git commit 时引用 Phase ID：`feat(...): ... [P7.3.21]`
+
+---
+
+**关联文档**：
+- **ROADMAP.md** — 任务详细规范 & 进度追踪
+- **ARCHITECTURE.md** — 技术架构 & 数据模型
+- **PRODUCT_OVERVIEW.md** — 产品愿景 & 能力体系

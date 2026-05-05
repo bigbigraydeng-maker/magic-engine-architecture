@@ -1,6 +1,8 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-04 · 当前阶段：**Phase 9.0 进行中（生成队列 UX 优化）+ Phase 8.Q 并行（8.Q.1✅ 8.Q.2✅ 8.Q.3部分✅）**
+> 最后更新：2026-05-05 · 当前阶段：**Phase 9.0 进行中（生成队列 UX 优化）+ Phase 8.Q 并行（8.Q.1✅ 8.Q.2✅ 8.Q.3部分✅）**
+> 
+> **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
 
 ---
@@ -24,7 +26,7 @@
 🔄 Phase 8.Q     内容质控提升（8.Q.1外编版本管理✅ 8.Q.2 Brief编辑✅ 8.Q.3 Prompt预览部分✅ 8.Q.4待做）
 📋 Phase 8.B     批量生产 + 自动排期 + 无缝发布（走向 Airtable-free 运营模式）
 📋 Phase 8.M     Marketing Agent 记忆系统（每客户长期 Agent 智能化，中长期）
-🔄 Phase 8.D     DNZ诊断策略层（Stage 1 采集✅ P8.0.1-P8.0.3 完成，Stage 2 异步框架进行中）
+✅ Phase 8.D     DNZ诊断策略层（Stage 1✅ P8.0.1-P8.0.3 + Stage 2✅ P8.0.4-P8.0.6 全部完成，E2E验证 2026-05-05）
 🔄 Phase 9.0     Visual Queue UX Polish（P9.0.1-P9.0.3 进行中，1Hz平滑倒计时 + 环形进度 + 队列卡）
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
@@ -372,6 +374,80 @@ P7.3.1-5 核心库交付后，安全审查发现 5 项阻塞问题，已通过 T
 - ✅ 博客查看页有双信号 checklist 展示
 - ✅ 内容审计：客户站有同类文章时提示升级而非直接生成，防止关键词蚕食
 - ✅ Snippet 部署助手可用，部署记录写回 deployed_pages
+
+---
+
+### 3.3.1 GEO Directive 部署机制决策（2026-05-05）
+
+**决策背景**：GEO Directive 的实际部署流程涉及两种可行方案，需要明确 MVP 阶段采用哪一种。详见 [`GEO-Directive-Update-Mechanism.md`](./docs/GEO-Directive-Update-Mechanism.md)。
+
+**Phase 1（MVP）：静态快照模型 ✅ 已实现**
+
+采用 **嵌入式 JSON** 模式，无需动态基础设施投入：
+
+```
+GEO Composer （生成指令）
+    ↓
+Deploy 页面 （生成代码片段）
+    ↓
+用户复制 snippet （含完整 JSON）
+    ↓
+粘贴到客户 HTML （变成静态块）
+    ↓
+AI 爬虫读取 JSON （排名影响）
+```
+
+**优势**：
+- 零后端投入，无需新增 API 基础设施
+- 实施简单，用户即刻可用（copy-paste）
+- 与 Google Analytics / Pixel 使用体验一致（用户习惯）
+- PoC 阶段验证 GEO 概念可行性
+
+**制约**：
+- 更新已部署页面需手动重新 copy-paste
+- 无法 A/B 测试不同版本
+- 快速回滚需用户介入
+
+**MVP 验收标准**：
+- ✅ CTS Tours PoC 验证：4 周追踪数据中至少 1 家 AI（ChatGPT/Claude/Perplexity）排名提升 ≥2 位
+- ✅ 证明静态 GEO 信号对 AI 排名有实际影响
+- ✅ 收集客户部署反馈（用户体验、维护成本）
+
+---
+
+**Phase 2（Q3+ 2026 待评估）：动态脚本模型 📋 暂缓**
+
+仅在 Phase 1 PoC 验证成功后考虑实施：
+
+```
+客户网站 HTML 仅包含：
+<script src="https://magic-engine.com/api/clients/{clientId}/geo/directive/latest.js"></script>
+
+Magic Engine 动态返回：
+    自动注入最新 active directive
+    1 小时缓存周期
+    无需客户干预即可自动推送更新
+    支持 A/B 测试 + 快速回滚
+```
+
+**延缓理由**：
+1. **MVP 验证优先**：需先证明 GEO 概念对排名有实际影响，再投入基础设施
+2. **成本-收益评估**：Phase 2 需新建 API 端点 + 缓存层 + 监控，只有确认客户有"频繁更新"需求时才值得
+3. **客户反馈驱动**：从 CTS Tours 和初期客户的部署体验中收集"自动更新"的真实需求强度
+4. **架构简洁性**：Phase 1 的 MVP 约束使系统更易理解和维护，减少初期认知负荷
+
+**Phase 2 启动条件**（全部满足）：
+- [ ] CTS Tours 4 周追踪数据证明 GEO 有效
+- [ ] 至少 3 个其他客户已部署并运行 3+ 个月
+- [ ] 客户明确表达"自动更新"为关键需求（例如每周新增博客）
+- [ ] 已验证缓存策略对 AI 爬虫行为的影响
+
+**预期启动时间**：2026 Q3（7月）或更晚，取决于 PoC 结果。
+
+**技术参考**：
+- 静态模型详细设计：GEO-Directive-Update-Mechanism.md §1
+- Phase 2 API 草稿：GEO-Directive-Update-Mechanism.md §3.2
+- 部署记录数据模型：P7.3.21-23（deployments 表）
 
 ---
 
@@ -978,6 +1054,382 @@ Layer 3: 策略驱动执行
 
 ---
 
+## 6.5 待开发功能方案（2026-05-05）
+
+### 🔥 P7.4.14-15: CTS Tours PoC 追踪与月度报告
+
+**时间线**：
+- P7.4.14：第 2 周再跑（2026-05-12 执行）
+- P7.4.15：第 4 周再跑 + 生成月报（2026-05-26 执行）
+
+**开发方案**：
+```
+任务内容：
+1. 无新代码开发（追踪逻辑已就位）
+2. 手动触发 AI Tracker 重新跑 36 queries（CTS Tours）
+   - 调用 POST /api/clients/a93c40e0/ai-tracker/run
+   - 记录结果到 ai_visibility_snapshots
+3. 对比基线数据（2026-04-27）与追踪数据
+   - 计算排名变化（Δ rank）
+   - 统计有排名提升的 query 数量
+4. 生成月度报告：
+   - 调用 GET /api/clients/a93c40e0/reports/monthly
+   - 返回 5 大分节数据
+   - 导出为 HTML 快照
+
+验收标准：
+✅ CTS Tours 在 ChatGPT/Claude/Perplexity 中至少 1 家排名提升 ≥2 位
+✅ 月报页面完整显示 4 周追踪曲线
+✅ 报告导出成功
+```
+
+**技术栈**：API 调用 + 数据对比（无新代码）
+
+---
+
+### ✅ P8.0.4-P8.0.6: DNZ 诊断 Stage 2 异步框架 ✅ 完成（2026-05-05）
+
+**核心目标**：为客户网站采集结果建立后台异步处理流程，支持 Cron 自动重新扫描。
+
+#### P8.0.4: Job Runner（后台任务调度器）✅ 完成
+
+- **文件**：`src/lib/dnz/job-runner.ts`（222 行）
+- **类**：`DnzJobRunner`（Supabase 注入模式）
+- **方法**：`createJob`, `getJobStatus`, `listJobs`, `cancelJob`
+- **测试**：`src/lib/dnz/__tests__/job-runner.test.ts` — 48 个用例，100% 通过，100% 覆盖率
+- **特性**：状态机（pending→running→completed/failed/cancelled），并发隔离，软删除
+
+#### P8.0.5: Job Executor（采集执行引擎）✅ 完成
+
+- **文件**：`src/lib/dnz/job-executor.ts`（≥200 行）
+- **函数**：`executeJob`, `processPages`, `enrichPageWithGPT`
+- **流程**：Sitemap 发现 → Jina.ai 提取 → GPT-4o mini 分类 → 批量 upsert
+- **测试**：`src/lib/dnz/__tests__/job-executor.test.ts` — 40 个用例，100% 通过，98.88% 覆盖率
+- **特性**：200 页批量限流，Jina 3次重试，单页失败不中断全流程，去重（jina_extracted_at）
+
+#### P8.0.6: API Routes & Cron ✅ 完成（2026-05-05）
+
+- **业务逻辑层**：`src/lib/dnz/dnz-api.ts` — `createDnzJob`, `getDnzJobWithProgress`, `cancelDnzJob`, `createWeeklyJobs`
+- **API 路由**：
+  - `POST /api/clients/[id]/dnz/rescan` — 创建 rescan/update 类型 job（`rescan/route.ts`）
+  - `GET /api/clients/[id]/dnz/job/[jobId]` — 查询 job + progress（`processed_pages/total_pages`）
+  - `DELETE /api/clients/[id]/dnz/job/[jobId]` — 取消 pending/running job；terminal 状态返回 400
+- **Cron**：`GET /api/cron/dnz-weekly-rescan` — `x-cron-secret` 认证；为所有 active clients 创建 update jobs
+- **测试**：
+  - `src/lib/dnz/__tests__/dnz-api.test.ts` — 22 个业务逻辑单元测试，100% 通过
+  - `src/app/api/clients/[id]/dnz/__tests__/routes.test.ts` — 23 个路由契约测试，100% 通过
+  - **合计**：133 个测试全部通过，覆盖率 99.37%（目标 ≥80%）
+- **架构亮点**：
+  - 路由测试用直接 handler import + `NextRequest` mock（无需 HTTP 服务器）
+  - 业务逻辑与路由分层（dnz-api.ts 可独立测试）
+  - TypeScript strict mode，零 `any`
+  - progress = 1.0 when total_pages = 0（新 client 开始扫描前显示完成）
+
+**依赖关系**：P8.0.4 `createJob`/`cancelJob` + P8.0.5 `executeJob`  
+**实际交付物**：5 个源文件 + 3 个测试文件 + 133 个单元/集成测试
+
+---
+
+### 🔥 P8.1.1-P8.1.6: 三维内容策略分析
+
+**核心目标**：根据 AI Tracker 弱项 × SEMrush 缺口 × 现有内容薄弱点，自动生成优先级排序的内容策略建议。
+
+**开发方案**：
+
+#### P8.1.1-P8.1.2: 数据模型 + 分析库
+```typescript
+// Supabase migration：content_strategy_items 表
+CREATE TABLE content_strategy_items (
+  id UUID PRIMARY KEY,
+  client_id UUID NOT NULL,
+  topic TEXT NOT NULL,
+  action_type ENUM('unified', 'geo_only', 'seo_only', 'upgrade') NOT NULL,
+  priority_score FLOAT (0-100),
+  ai_weak_queries TEXT[],         // 在 AI 中排名差的问句数组
+  semrush_kd FLOAT,               // 关键词难度
+  semrush_volume INT,             // 月搜量
+  existing_page_id UUID NULL,     // 若是升级，指向 client_site_pages
+  rationale TEXT,                 // AI 生成的推荐理由
+  created_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ          // 建议有效期（30天）
+);
+
+// 库：src/lib/strategy/analyzer.ts
+class StrategyAnalyzer {
+  async analyze(clientId: string): Promise<StrategyItem[]> {
+    // 步骤 1：获取 AI Tracker 数据
+    const aiWeakQueries = await getAIWeakItems(clientId);
+    
+    // 步骤 2：从 SEMrush 获取竞品排名词
+    const semrushKeywords = await getSemrushCompetitorKeywords(clientId);
+    
+    // 步骤 3：获取现有页面列表
+    const existingPages = await getClientSitePages(clientId);
+    
+    // 步骤 4：交叉分析
+    return this.crossAnalyze(aiWeakQueries, semrushKeywords, existingPages);
+  }
+  
+  private crossAnalyze(...): StrategyItem[] {
+    // 维度 A：AI Tracker 弱项（rank > 3 或 null）
+    // 维度 B：SEMrush 缺口（竞品排名但客户无对应页面）
+    // 维度 C：现有页面薄弱（word_count < 500 或 no_geo_block）
+    
+    // 输出：StrategyItem[] 按优先级排序
+  }
+}
+
+// 库：src/lib/strategy/scorer.ts
+function scoreStrategy(item: AnalysisResult): StrategyItem {
+  let score = 0;
+  
+  // unified（AI弱项 + SEO缺口）：最高分 80-100
+  if (hasAIWeakness && hasSEOGap) score = 85;
+  
+  // geo_only（AI弱项，但 SEO 价值低）：中分 50-70
+  else if (hasAIWeakness) score = 60;
+  
+  // seo_only（高 SEO 价值，但无 AI 弱项）：50-60
+  else if (hasSEOGap) score = 55;
+  
+  // upgrade（现有页面薄弱）：按缺口大小 30-70
+  else score = 40 + (1 - (page.wordCount / 2000)) * 30;
+  
+  return { ...item, priority_score: score };
+}
+
+单元测试：
+  ✅ analyzer.analyze() 返回分层数组
+  ✅ 验证维度 A/B/C 的交叉识别
+  ✅ scorer 对 unified 评分 > geo_only 评分
+  ✅ 升级建议关联到 existing_page_id
+  
+目标覆盖率：>= 80%
+```
+
+#### P8.1.3-P8.1.4: API 端点
+```typescript
+// 路由：src/app/api/clients/[id]/strategy/generate/route.ts
+POST /api/clients/[id]/strategy/generate
+  请求体：{}
+  响应：
+    {
+      "success": true,
+      "strategy_items": StrategyItem[],
+      "count": number,
+      "analysis_timestamp": ISO8601
+    }
+
+  实现：
+  1. 调用 StrategyAnalyzer.analyze(clientId)
+  2. 清理旧的过期建议（expires_at < now()）
+  3. 批量写入 content_strategy_items 表
+  4. 返回新生成的建议列表
+
+// 路由：src/app/api/clients/[id]/strategy/route.ts
+GET /api/clients/[id]/strategy?limit=20&offset=0
+  响应：
+    {
+      "strategy_items": StrategyItem[],
+      "total": number,
+      "timestamp": ISO8601
+    }
+
+  实现：
+  - 查询 content_strategy_items，ORDER BY priority_score DESC
+  - 支持 limit / offset 分页
+
+单元测试：
+  ✅ POST generate：触发分析，写入数据库，返回列表
+  ✅ GET strategy：分页查询，验证排序
+  ✅ 过期建议清理（mock 时间）
+  
+目标覆盖率：>= 80%
+```
+
+#### P8.1.5-P8.1.6: 前端 UI
+```typescript
+// 组件：src/app/dashboard/clients/[id]/strategy/page.tsx
+功能：
+  1. 顶部热力图：显示 topic 维度分布
+     - X 轴：话题类别（旅游、签证、文化等）
+     - Y 轴：机会类型（unified / geo_only / seo_only / upgrade）
+     - 颜色深度：priority_score
+  
+  2. 主列表：每行一条建议
+     - 第 1 列：Action Type 标签（🔄 升级 / ✨ 新建 / 📱 社媒）
+     - 第 2 列：Topic + Rationale（文字截断）
+     - 第 3 列：优先级星标（5 星制）
+     - 第 4 列：快速 Action 按钮（生成 / 标记完成 / 删除）
+  
+  3. 点击行项目：展开详情
+     - 显示完整 rationale
+     - 若是 upgrade，显示现有页面内容摘要
+     - "生成内容" 按钮 → 跳转到博客生成页（预填 topic）
+  
+  4. 分页：limit=20，支持加载更多
+
+// Hook：src/hooks/useStrategyAnalysis.ts
+  - fetchStrategy()：GET /api/clients/[id]/strategy
+  - generateStrategy()：POST /api/clients/[id]/strategy/generate
+  - 支持刷新、错误提示、loading 状态
+
+集成测试（E2E）：
+  ✅ 页面加载显示策略列表
+  ✅ 热力图渲染无报错
+  ✅ 点击行项目展开详情
+  ✅ "生成内容" 跳转到博客生成（携带 topic 参数）
+  ✅ 分页加载更多
+  
+目标覆盖率：>= 80%
+```
+
+**依赖关系**：
+- AI Tracker 数据（P7.1 完成）✅
+- SEMrush API 集成（P8.9 完成）✅
+- client_site_pages 表（P8.0 完成）✅
+
+**时间估算**：6-8 工作日（含测试）
+**交付物**：3 个库 + 2 个 API + 1 个前端页面 + 完整测试
+
+---
+
+### 🔥 P9.0.8-P9.0.14: Visual Queue UX 核心集成
+
+**核心目标**：完成 Visual Queue 的 UI 组件集成、集成测试、边界场景验证。
+
+**开发方案**：
+
+#### P9.0.8-P9.0.9: 组件集成 + Tailwind 配置
+```typescript
+// P9.0.8：集成 GenerationProgress 到 visuals page
+// 文件：src/app/dashboard/visuals/page.tsx
+
+替换原有的进度展示：
+// 旧代码：
+{generating && <div>Generating...</div>}
+
+// 新代码：
+{queueItem && (
+  <GenerationProgress 
+    item={queueItem}
+    onCancel={handleCancel}
+  />
+)}
+
+实现细节：
+  - 导入 GenerationProgress、useGenerationQueue
+  - 绑定 queueItem = activeGenerations[0]（当前生成任务）
+  - handleCancel → 调用 useGenerationQueue.cancelGeneration()
+
+// P9.0.9：升级 Tailwind 配置
+// 文件：tailwind.config.ts 或 globals.css
+
+新增自定义动画：
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+// tailwind.config.ts
+extend: {
+  animation: {
+    'spin-slow': 'spin-slow 6s linear infinite',
+    'pulse-soft': 'pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+  }
+}
+
+单元测试：
+  ✅ 验证 GenerationProgress 组件可见
+  ✅ 验证倒计时每秒更新
+  ✅ 验证 cancel 按钮功能
+  ✅ 验证 Tailwind 类应用生效（animate-spin-slow）
+  
+目标覆盖率：>= 80%
+```
+
+#### P9.0.10-P9.0.13: 集成测试 + 边界场景
+```typescript
+// 文件：src/components/visual/__tests__/GenerationProgress.test.tsx
+
+测试用例：
+
+✅ 进度环动画测试
+  - 验证进度 0% 时环形初始状态
+  - 验证进度 50% 时环形旋转 50%
+  - 验证进度 95% 时环形旋转 95%（不超过 95%）
+  - 验证 CSS 过渡平滑（transition 属性）
+
+✅ 倒计时文本测试
+  - 输入 120000ms → 显示 "2m 0s"
+  - 输入 5400ms → 显示 "1m 30s"
+  - 输入 500ms → 显示 "0s"
+  - 倒计时每秒刷新（via timer）
+
+✅ 取消按钮激活测试
+  - 预期时间：180s，未超期时 disable
+  - 预期时间：180s，经过 270s（1.5x）时 enable
+  - 按钮点击触发 onCancel()
+
+✅ 多提供商时间估算测试
+  - Wavespeed（3min）→ 预期 180s，1.5x 阈值 270s
+  - Seedance（4min）→ 预期 240s，1.5x 阈值 360s
+  - HeyGen（2min）→ 预期 120s，1.5x 阈值 180s
+
+✅ 网络延迟模拟测试
+  - useGenerationQueue hook：
+    - 每 100ms 本地递减 estimatedRemainingMs
+    - 每 5s 网络轮询一次
+  - 验证：本地倒数不受网络延迟影响（平滑）
+  - 验证：网络轮询返回新数据时，平滑过渡
+
+✅ 边界场景测试
+  - 0ms 倒数：显示 "0s"，按钮 enable
+  - NaN 估算：fallback 到默认时长
+  - 提供商超时重分类：进度重置为 0%
+  - 并发多生成：每个任务独立计时
+
+集成测试（E2E）：
+  ✅ 用户点击生成 → 显示 progress 组件
+  ✅ 倒计时每秒更新可见
+  ✅ 超时后取消按钮可点击
+  ✅ 取消后回到初始状态
+
+目标覆盖率：>= 80%
+```
+
+#### P9.0.14: 覆盖率验证 + 部署
+```bash
+// 执行测试覆盖率检查
+npm test --coverage -- \
+  src/lib/visual/progress-utils.ts \
+  src/components/visual/
+
+// 期望输出：
+// ├─ progress-utils.ts  : 100% Statements | 100% Branches
+// ├─ StageIndicator.tsx : 85% Statements | 80% Branches
+// ├─ CountdownText.tsx  : 90% Statements | 85% Branches
+// ├─ GenerationProgress.tsx : 88% Statements | 85% Branches
+// └─ Overall : 88% Coverage ✅
+
+验收标准：
+  ✅ 整体覆盖率 >= 80%
+  ✅ 所有分支覆盖
+  ✅ 无 console.log 或 debugger
+  ✅ 无浮动元素的视觉问题（z-index 冲突）
+  ✅ 移动端 / 平板 / 桌面响应式设计验证
+```
+
+**依赖关系**：
+- useGenerationQueue hook（P9.0.7 完成）✅
+- progress-utils.ts（P9.0.1 完成）✅
+- generation-config.ts（P9.0.2 完成）✅
+
+**时间估算**：4-5 工作日（含测试）
+**交付物**：3 个 UI 组件 + 3 类测试 + 覆盖率报告
+
+---
+
 ## 7. 风险跟踪
 
 | 风险 | 影响 | 缓解策略 | 负责人 |
@@ -987,6 +1439,9 @@ Layer 3: 策略驱动执行
 | Perplexity API 限流或涨价 | Tracker 成本上升 | 准备 SerpAPI 备选；本地缓存 7 天 | 开发 |
 | PoC 客户排名无显著提升 | 商业模式不成立 | 调整 GEO 策略；可能改打"内容生产效率"卖点 | 产品 |
 | 当前未做用户认证 | 数据安全风险 | Phase 8 引入简单鉴权；陪跑模式下风险可控 | 开发 |
+| 三维策略库性能（大规模客户） | API 延迟 | N+1 查询优化、结果缓存 30min | 开发 |
+| DNZ 采集在网络不稳定环境 | 采集失败率高 | Jina.ai 重试 3 次，标记失败但不阻断流程 | 开发 |
+| Visual Queue 组件在旧浏览器 | 兼容性问题 | CSS 降级、纯 JS 倒计时备选 | 开发 |
 
 ---
 
