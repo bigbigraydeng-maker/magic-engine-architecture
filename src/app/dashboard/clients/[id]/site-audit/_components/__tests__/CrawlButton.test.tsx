@@ -157,10 +157,10 @@ describe('CrawlButton', () => {
   // Test 6 — Click calls correct API endpoint
   // =========================================================================
   describe('API call on button click', () => {
-    it('calls POST /api/clients/[clientId]/site-audit/start with JSON body', async () => {
+    it('calls POST /api/clients/[clientId]/site-audit/crawl with JSON body', async () => {
       const user = userEvent.setup()
       ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-        makeResponse(201, { data: { id: 'job-001', domain: 'client-abc', status: 'pending', created_at: '' } })
+        makeResponse(201, { jobId: 'job-001', status: 'pending', estimatedDurationSec: 200 })
       )
 
       render(<CrawlButton {...DEFAULT_PROPS} onJobStarted={vi.fn()} />)
@@ -168,7 +168,7 @@ describe('CrawlButton', () => {
 
       expect(global.fetch).toHaveBeenCalledOnce()
       expect(global.fetch).toHaveBeenCalledWith(
-        '/api/clients/client-abc/site-audit/start',
+        '/api/clients/client-abc/site-audit/crawl',
         expect.objectContaining({
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -185,7 +185,7 @@ describe('CrawlButton', () => {
       const user = userEvent.setup()
       const onJobStarted = vi.fn()
       ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-        makeResponse(201, { data: { id: 'job-xyz', domain: 'client-abc', status: 'pending', created_at: '' } })
+        makeResponse(201, { jobId: 'job-xyz', status: 'pending', estimatedDurationSec: 200 })
       )
 
       render(<CrawlButton {...DEFAULT_PROPS} onJobStarted={onJobStarted} />)
@@ -197,7 +197,7 @@ describe('CrawlButton', () => {
     it('button returns to "Start Audit" label after 201 (no active job)', async () => {
       const user = userEvent.setup()
       ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
-        makeResponse(201, { data: { id: 'job-xyz', domain: 'client-abc', status: 'pending', created_at: '' } })
+        makeResponse(201, { jobId: 'job-xyz', status: 'pending', estimatedDurationSec: 200 })
       )
 
       render(<CrawlButton {...DEFAULT_PROPS} onJobStarted={vi.fn()} />)
@@ -234,7 +234,7 @@ describe('CrawlButton', () => {
       })
 
       // Clean up: resolve the promise so no pending state leaks
-      resolveRequest(makeResponse(201, { data: { id: 'j1', domain: '', status: 'pending', created_at: '' } }))
+      resolveRequest(makeResponse(201, { jobId: 'j1', status: 'pending', estimatedDurationSec: 200 }))
       await clickPromise
     })
   })
@@ -280,11 +280,11 @@ describe('CrawlButton', () => {
   // Test 10 — Dialog "Yes, replace it" → retry with override=true
   // =========================================================================
   describe('confirmation dialog — yes override', () => {
-    it('retries the API call with override=true when user clicks "Yes, replace it"', async () => {
+    it('retries the API call with force=true when user clicks "Yes, replace it"', async () => {
       const user = userEvent.setup()
       ;(global.fetch as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce(makeResponse(409, { error: 'Job already in progress', existingJobId: 'job-existing' }))
-        .mockResolvedValueOnce(makeResponse(201, { data: { id: 'job-new', domain: '', status: 'pending', created_at: '' } }))
+        .mockResolvedValueOnce(makeResponse(201, { jobId: 'job-new', status: 'pending', estimatedDurationSec: 200 }))
 
       render(<CrawlButton {...DEFAULT_PROPS} onJobStarted={vi.fn()} />)
       await user.click(screen.getByTestId('crawl-button'))
@@ -295,14 +295,14 @@ describe('CrawlButton', () => {
       expect(global.fetch).toHaveBeenCalledTimes(2)
       const secondCall = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[1]
       const body = JSON.parse(secondCall[1].body as string)
-      expect(body).toMatchObject({ override: true })
+      expect(body).toMatchObject({ force: true })
     })
 
     it('hides the confirmation dialog after clicking Yes', async () => {
       const user = userEvent.setup()
       ;(global.fetch as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce(makeResponse(409, { error: 'Job already in progress', existingJobId: 'job-existing' }))
-        .mockResolvedValueOnce(makeResponse(201, { data: { id: 'job-new', domain: '', status: 'pending', created_at: '' } }))
+        .mockResolvedValueOnce(makeResponse(201, { jobId: 'job-new', status: 'pending', estimatedDurationSec: 200 }))
 
       render(<CrawlButton {...DEFAULT_PROPS} onJobStarted={vi.fn()} />)
       await user.click(screen.getByTestId('crawl-button'))
@@ -325,7 +325,7 @@ describe('CrawlButton', () => {
       const onJobStarted = vi.fn()
       ;(global.fetch as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce(makeResponse(409, { error: 'Job already in progress', existingJobId: 'job-existing' }))
-        .mockResolvedValueOnce(makeResponse(201, { data: { id: 'job-new-123', domain: '', status: 'pending', created_at: '' } }))
+        .mockResolvedValueOnce(makeResponse(201, { jobId: 'job-new-123', status: 'pending', estimatedDurationSec: 200 }))
 
       render(<CrawlButton {...DEFAULT_PROPS} onJobStarted={onJobStarted} />)
       await user.click(screen.getByTestId('crawl-button'))
@@ -518,13 +518,13 @@ describe('CrawlButton', () => {
       })
 
       // Cleanup
-      resolveFirst(makeResponse(201, { data: { id: 'j', domain: '', status: 'pending', created_at: '' } }))
+      resolveFirst(makeResponse(201, { jobId: 'j', status: 'pending', estimatedDurationSec: 200 }))
     })
 
     it('only makes one fetch call even if button clicked rapidly', async () => {
       const user = userEvent.setup()
       ;(global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
-        makeResponse(201, { data: { id: 'j1', domain: '', status: 'pending', created_at: '' } })
+        makeResponse(201, { jobId: 'j1', status: 'pending', estimatedDurationSec: 200 })
       )
 
       render(<CrawlButton {...DEFAULT_PROPS} onJobStarted={vi.fn()} />)

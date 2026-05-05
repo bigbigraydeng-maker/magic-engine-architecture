@@ -158,9 +158,9 @@ export function CrawlButton({
       })
 
       if (response.status === 201) {
-        const json = await response.json() as { data: { id: string } }
+        const json = await response.json() as { jobId: string; status: string; estimatedDurationSec: number }
         setIsLoading(false)
-        onJobStarted(json.data.id)
+        onJobStarted(json.jobId)
         return
       }
 
