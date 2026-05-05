@@ -7,6 +7,7 @@ import { BriefPanel } from './_components/BriefPanel';
 import { CampaignPanel } from './_components/CampaignPanel';
 import { GenerationDrawer } from './_components/GenerationDrawer';
 import { ReelsStudio } from './_components/ReelsStudio';
+import { SiteAuditPanel } from './_components/SiteAuditPanel';
 
 interface Client {
   id: string;
@@ -29,7 +30,7 @@ interface ContentPost {
   created_at: string;
 }
 
-type Tab = 'overview' | 'airtable' | 'brief' | 'campaigns' | 'reels';
+type Tab = 'overview' | 'airtable' | 'brief' | 'campaigns' | 'reels' | 'site-audit';
 
 const STATUS_COLORS: Record<string, string> = {
   draft: 'bg-yellow-100 text-yellow-800',
@@ -173,6 +174,7 @@ export default function ClientDetailPage() {
             { id: 'brief', label: '✨ Master Brief' },
             { id: 'campaigns', label: '🎯 推广活动' },
             { id: 'reels', label: '🎬 Reels Studio' },
+            { id: 'site-audit', label: '🔍 Site Audit' },
             { id: 'overview', label: 'Overview' },
             { id: 'airtable', label: 'Airtable' },
           ] as { id: Tab; label: string }[]).map(tab => (
@@ -198,6 +200,10 @@ export default function ClientDetailPage() {
 
       {activeTab === 'campaigns' && (
         <CampaignPanel clientId={clientId} />
+      )}
+
+      {activeTab === 'site-audit' && (
+        <SiteAuditPanel clientId={clientId} />
       )}
 
       {activeTab === 'reels' && (
