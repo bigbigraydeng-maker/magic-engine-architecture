@@ -12,7 +12,7 @@
 ✅ Phase 7.0     决策窗口（7/7 决策完成，2026-04-30）
 ✅ Phase 7.1     AI Visibility Tracker（完成，含引擎修复 E1-E5）
 ✅ Phase 7.2     GEO Composer（完成，P7.2.1-P7.2.18 全部交付）
-✅ Phase 7.3     双信号博客生成（核心库已交付：P7.3.1-5 安全修复完成 2026-05-05 | P7.3.6-20 已完成 | P7.3.21-23 待开始）
+✅ Phase 7.3     双信号博客生成（核心库已交付：P7.3.1-5 安全修复完成 2026-05-05 | P7.3.6-20 已完成 | P7.3.21-23 完成 2026-05-05）
 ✅ Phase 7.4     月报 + PoC 验证（P7.4.8-P7.4.13 完成，等待追踪数据）
 ✅ Phase 8.6     Link Intelligence（DataForSEO 外链，2026-05-01 完成）
 ✅ Phase 8.7     SERP Intelligence（DataForSEO 排名追踪，2026-05-01 完成）
@@ -351,17 +351,27 @@ P7.3.1-5 核心库交付后，安全审查发现 5 项阻塞问题，已通过 T
 - [x] **P7.3.20** `GenerateBlogRequest` 增加 `skip_audit?: boolean`；新增 `ContentAuditResult` 类型到 `magic-engine.ts`
 
 **Snippet 部署助手（Day 24-26）**
-- [ ] **P7.3.21** 路由 `/dashboard/geo-composer/[clientId]/deploy` 创建（纯前端）
-- [ ] **P7.3.22** 输入要部署的页面 URL → 展示 snippet + 安装说明 + 一键标记已部署
-- [ ] **P7.3.23** 已部署页面列表（调用已有 deployments API）
+- [x] **P7.3.21** 路由 `/dashboard/geo-composer/[clientId]/deploy` 创建（纯前端）✅ 2026-05-05
+  - ✅ 修复：line 76 const geoData 变量引用错误已修正
+  - ✅ 整合了 DeploymentForm + DeployedPagesList 两大核心组件
+- [x] **P7.3.22** 输入要部署的页面 URL → 展示 snippet + 安装说明 + 一键标记已部署✅ 2026-05-05
+  - ✅ DeploymentForm.tsx：URL input + snippet display + confirmation dialog
+  - ✅ UrlInput.tsx：HTTPS-only validation with real-time feedback
+  - ✅ CodeSnippetBox.tsx：Code display with copy-to-clipboard
+  - ✅ ConfirmDialog.tsx：Reusable confirmation modal
+- [x] **P7.3.23** 已部署页面列表（调用已有 deployments API）✅ 2026-05-05
+  - ✅ DeployedPagesList.tsx：List of deployed pages with status badges
+  - ✅ DeploymentStatusBadge.tsx：Status indicators (active/pending/revoked)
+  - ✅ useDeploymentApi：Custom hook for deployment API operations
+  - ✅ deployment-constants.ts：Centralized configuration
 
 **验收标准**：
-- 博客选题来自 AI Tracker 弱项 × SEMrush 交叉验证，有数据依据
-- unified 模式文章同时通过 SEO checklist 和 GEO checklist
-- 博客生成时自动注入 active GEO directive HTML
-- 博客查看页有双信号 checklist 展示
-- 内容审计：客户站有同类文章时提示升级而非直接生成，防止关键词蚕食
-- Snippet 部署助手可用，部署记录写回 deployed_pages
+- ✅ 博客选题来自 AI Tracker 弱项 × SEMrush 交叉验证，有数据依据
+- ✅ unified 模式文章同时通过 SEO checklist 和 GEO checklist
+- ✅ 博客生成时自动注入 active GEO directive HTML
+- ✅ 博客查看页有双信号 checklist 展示
+- ✅ 内容审计：客户站有同类文章时提示升级而非直接生成，防止关键词蚕食
+- ✅ Snippet 部署助手可用，部署记录写回 deployed_pages
 
 ---
 
