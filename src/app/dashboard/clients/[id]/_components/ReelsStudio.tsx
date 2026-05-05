@@ -331,12 +331,46 @@ export function ReelsStudio({ clientId }: Props) {
           const { draft } = await draftRes.json()
           setActiveDraft(draft)
           setDrafts(prev => prev.map(d => d.id === activeDraft.id ? draft : d))
+
+          // ⭐ Detect if script needs regeneration due to frame update on old draft
+          const draftAgeHours = (Date.now() - new Date(draft.created_at).getTime()) / (1000 * 60 * 60)
+          if (draftAgeHours > 24) {
+            // 草稿年龄 > 1 天，提示重新生成
+            const needsRegen = window.confirm(
+              '检测到您上传了新帧。该脚本是根据前一次上传的帧生成的（' +
+              Math.floor(draftAgeHours) +
+              ' 小时前）。\n\n是否需要根据新帧重新优化视频脚本？'
+            )
+            if (needsRegen) {
+              await handleRegeneratePrompt()
+            }
+          }
         }
       } else {
         alert(data.error ?? 'Upload failed')
       }
     } finally {
       setUploadingFrame(null)
+    }
+  }
+
+  const handleRegeneratePrompt = async () => {
+    if (!activeDraft) return
+    setGenerating(true)
+    try {
+      const res = await fetch(
+        `/api/clients/${clientId}/reels/${activeDraft.id}/regenerate-prompt`,
+        { method: 'POST' }
+      )
+      const data = await res.json()
+      if (data.success && data.draft) {
+        setActiveDraft(data.draft)
+        setDrafts(prev => prev.map(d => d.id === activeDraft.id ? data.draft : d))
+      } else {
+        alert(data.error ?? 'Failed to regenerate script')
+      }
+    } finally {
+      setGenerating(false)
     }
   }
 
