@@ -34,14 +34,20 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  // Process 1: Check generating assets
+  // Process 1: Check generating Reels videos (from reels_drafts table)
+  const { data: generatingReels } = await supabaseAdmin
+    .from('reels_drafts')
+    .select('*')
+    .eq('status', 'video_generating')
+
+  // Process 2: Check generating assets
   const { data: generatingAssets } = await supabaseAdmin
     .from('visual_assets')
     .select('*')
     .eq('generation_status', 'generating')
     .lt('retry_count', GENERATION_CONFIG.MAX_AUTO_RETRIES)
 
-  // Process 2: Check queued_for_retry assets that are ready to retry
+  // Process 3: Check queued_for_retry assets that are ready to retry
   const { data: queuedForRetry } = await supabaseAdmin
     .from('visual_assets')
     .select('*')
@@ -50,15 +56,77 @@ export async function GET(req: NextRequest) {
 
   const allAssets = [...(generatingAssets || []), ...(queuedForRetry || [])]
 
-  if (!allAssets.length) {
-    return NextResponse.json({ processed: 0, completed: 0, failed: 0, queued_for_retry: 0, auto_retried: 0 })
+  if (!allAssets.length && !generatingReels?.length) {
+    return NextResponse.json({
+      processed: 0,
+      completed: 0,
+      failed: 0,
+      queued_for_retry: 0,
+      auto_retried: 0,
+      reels_processed: 0,
+      reels_completed: 0,
+      reels_failed: 0,
+    })
   }
 
   let completed = 0
   let failed = 0
   let queuedForRetryCount = 0
   let autoRetriedCount = 0
+  let reelsCompleted = 0
+  let reelsFailed = 0
 
+  // Process Reels video generation
+  for (const reel of generatingReels || []) {
+    try {
+      const result = await checkVideoStatus(reel.provider_job_id)
+
+      if (result.status === 'completed' && result.video_url) {
+        // Upload to Supabase Storage
+        const { storage_url } = await uploadFromUrl({
+          sourceUrl: result.video_url,
+          clientId: reel.client_id,
+          folder: `reels/${reel.id}`,
+          assetType: 'video',
+        })
+
+        await supabaseAdmin
+          .from('reels_drafts')
+          .update({
+            status: 'video_ready',
+            video_url: storage_url
+          })
+          .eq('id', reel.id)
+
+        reelsCompleted++
+      } else if (result.status === 'failed') {
+        await supabaseAdmin
+          .from('reels_drafts')
+          .update({
+            status: 'images_ready',
+            video_error: result.error,
+          })
+          .eq('id', reel.id)
+
+        reelsFailed++
+      }
+      // Still processing — leave status as-is, will check again next cycle
+    } catch (err) {
+      console.error(`[poll-visual-jobs] Error polling reel ${reel.id}:`, err)
+      // On error, mark as failed
+      await supabaseAdmin
+        .from('reels_drafts')
+        .update({
+          status: 'images_ready',
+          video_error: err instanceof Error ? err.message : String(err),
+        })
+        .eq('id', reel.id)
+
+      reelsFailed++
+    }
+  }
+
+  // Process visual_assets
   for (const asset of allAssets) {
     try {
       let result: ProviderResult
@@ -208,5 +276,8 @@ export async function GET(req: NextRequest) {
     failed,
     queued_for_retry: queuedForRetryCount,
     auto_retried: autoRetriedCount,
+    reels_processed: (generatingReels || []).length,
+    reels_completed: reelsCompleted,
+    reels_failed: reelsFailed,
   })
 }

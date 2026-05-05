@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { createClient } from '@supabase/supabase-js'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -91,11 +92,8 @@ export function ReelsStudio({ clientId }: Props) {
     closing: false,
   })
 
-  // Video generation
+  // Video generation (no polling needed — Realtime subscription handles it)
   const [generatingVideo, setGeneratingVideo] = useState(false)
-  // Use a ref (not state) so the polling flag doesn't trigger a re-render that
-  // would kill the interval via useEffect cleanup on every tick.
-  const pollingVideoRef = useRef(false)
 
   // ─── Fetch helpers ──────────────────────────────────────────────────────────
 
@@ -162,50 +160,34 @@ export function ReelsStudio({ clientId }: Props) {
     return () => clearInterval(interval)
   }, [frameJobs.opening, frameJobs.closing, activeDraft?.id, clientId])
 
-  // Poll video status while generating
-  // Deps: only activeDraft.status / id / clientId — NOT pollingVideoRef (it's a ref,
-  // mutating it won't cause a re-render or kill the interval via cleanup).
+  // Subscribe to reels_drafts changes via Realtime (async background processing)
   useEffect(() => {
-    if (!activeDraft || activeDraft.status !== 'video_generating') return
-    if (pollingVideoRef.current) return  // already polling for this draft
+    if (!activeDraft?.id || !clientId) return
 
-    pollingVideoRef.current = true
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    if (!supabaseUrl || !supabaseAnonKey) return
 
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(
-          `/api/clients/${clientId}/reels/${activeDraft.id}/video-status`
-        )
-        if (!res.ok) return
-        const data = await res.json()
-        if (data.status === 'completed' && data.video_url) {
-          clearInterval(interval)
-          pollingVideoRef.current = false
-          setActiveDraft(prev =>
-            prev ? { ...prev, status: 'video_ready', video_url: data.video_url } : prev
-          )
-          setDrafts(prev =>
-            prev.map(d =>
-              d.id === activeDraft.id
-                ? { ...d, status: 'video_ready', video_url: data.video_url }
-                : d
-            )
-          )
-        } else if (data.status === 'failed') {
-          clearInterval(interval)
-          pollingVideoRef.current = false
-          setActiveDraft(prev => prev ? { ...prev, status: 'images_ready' } : prev)
-        }
-      } catch {
-        // Network hiccup — keep polling
-      }
-    }, 8000)
+    const client = createClient(supabaseUrl, supabaseAnonKey)
+
+    const subscription = client
+      .from('reels_drafts')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'reels_drafts',
+        filter: `id=eq.${activeDraft.id}`
+      }, (payload) => {
+        const updated = payload.new as ReeelsDraft
+        setActiveDraft(updated)
+        setDrafts(prev => prev.map(d => d.id === updated.id ? updated : d))
+      })
+      .subscribe()
 
     return () => {
-      clearInterval(interval)
-      pollingVideoRef.current = false
+      subscription.unsubscribe()
     }
-  }, [activeDraft?.status, activeDraft?.id, clientId])
+  }, [activeDraft?.id, clientId])
 
   // ─── Actions ────────────────────────────────────────────────────────────────
 
@@ -617,9 +599,12 @@ export function ReelsStudio({ clientId }: Props) {
                       </a>
                     </div>
                   ) : activeDraft.status === 'video_generating' ? (
-                    <div className="flex items-center gap-2 text-amber-600">
-                      <span className="animate-spin text-base">⏳</span>
-                      <span className="text-sm">Video Studio is generating your Reel…</span>
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 text-amber-600">
+                        <span className="animate-spin text-base">⏳</span>
+                        <span className="text-sm font-medium">Video Studio is generating your Reel…</span>
+                      </div>
+                      <p className="text-xs text-gray-500">You can safely close this page. We'll notify you when it's ready. Check back in the Content library.</p>
                     </div>
                   ) : (
                     <button
