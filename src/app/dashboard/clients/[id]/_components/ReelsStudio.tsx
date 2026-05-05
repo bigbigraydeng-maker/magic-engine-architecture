@@ -14,7 +14,7 @@ import { createClient } from '@supabase/supabase-js'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
-interface ReeelsDraft {
+interface ReelsDraft {
   id: string
   status: 'draft' | 'images_ready' | 'video_generating' | 'video_ready'
   opening_frame_prompt: string | null
@@ -41,14 +41,14 @@ interface Props {
 
 // ─── Status badge ──────────────────────────────────────────────────────────────
 
-const STATUS_LABELS: Record<ReeelsDraft['status'], string> = {
+const STATUS_LABELS: Record<ReelsDraft['status'], string> = {
   draft: 'Draft',
   images_ready: 'Frames Ready',
   video_generating: 'Generating…',
   video_ready: 'Video Ready ✓',
 }
 
-const STATUS_COLORS: Record<ReeelsDraft['status'], string> = {
+const STATUS_COLORS: Record<ReelsDraft['status'], string> = {
   draft: 'bg-gray-100 text-gray-600',
   images_ready: 'bg-blue-100 text-blue-700',
   video_generating: 'bg-amber-100 text-amber-700',
@@ -67,8 +67,8 @@ const FIELD_LABELS: Record<string, string> = {
 // ─── Main component ────────────────────────────────────────────────────────────
 
 export function ReelsStudio({ clientId }: Props) {
-  const [drafts, setDrafts] = useState<ReeelsDraft[]>([])
-  const [activeDraft, setActiveDraft] = useState<ReeelsDraft | null>(null)
+  const [drafts, setDrafts] = useState<ReelsDraft[]>([])
+  const [activeDraft, setActiveDraft] = useState<ReelsDraft | null>(null)
   const [campaigns, setCampaigns] = useState<CampaignBrief[]>([])
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>('')
 
@@ -171,21 +171,25 @@ export function ReelsStudio({ clientId }: Props) {
     const client = createClient(supabaseUrl, supabaseAnonKey)
 
     const subscription = client
-      .from('reels_drafts')
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'reels_drafts',
-        filter: `id=eq.${activeDraft.id}`
-      }, (payload) => {
-        const updated = payload.new as ReeelsDraft
-        setActiveDraft(updated)
-        setDrafts(prev => prev.map(d => d.id === updated.id ? updated : d))
-      })
+      .channel(`reels-draft-${activeDraft.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'reels_drafts',
+          filter: `id=eq.${activeDraft.id}`,
+        },
+        (payload) => {
+          const updated = payload.new as ReelsDraft
+          setActiveDraft(updated)
+          setDrafts(prev => prev.map(d => d.id === updated.id ? updated : d))
+        }
+      )
       .subscribe()
 
     return () => {
-      subscription.unsubscribe()
+      client.removeChannel(subscription)
     }
   }, [activeDraft?.id, clientId])
 
@@ -232,6 +236,8 @@ export function ReelsStudio({ clientId }: Props) {
       if (data.success) {
         setActiveDraft(data.draft)
         setDrafts(prev => prev.map(d => d.id === activeDraft.id ? data.draft : d))
+      } else {
+        alert(data.error ?? 'Failed to save')
       }
     } finally {
       setSavingField(null)
