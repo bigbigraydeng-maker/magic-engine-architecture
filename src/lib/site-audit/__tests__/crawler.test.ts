@@ -387,6 +387,44 @@ describe('discoverSitemapUrls', () => {
       const urls = await discoverSitemapUrls('example.com')
       expect(urls).toHaveLength(1)
     })
+
+    it('accepts sitemap URLs with www. prefix when domain has no www. (real-world case)', async () => {
+      // Many sites redirect domain.com → www.domain.com and their sitemaps use www URLs
+      // e.g. ctstours.co.nz sitemap contains https://www.ctstours.co.nz/* URLs
+      const wwwSitemap = `<?xml version="1.0"?>
+<urlset>
+  <url><loc>https://www.example.com/</loc></url>
+  <url><loc>https://www.example.com/page-1</loc></url>
+  <url><loc>https://www.example.com/page-2</loc></url>
+  <url><loc>https://other.com/external</loc></url>
+</urlset>`
+
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
+        .mockResolvedValueOnce(mockResponse(wwwSitemap))
+      )
+
+      // Domain passed without www — but sitemap uses www
+      const urls = await discoverSitemapUrls('example.com')
+      expect(urls).toHaveLength(3)  // 3 www URLs, 1 external filtered out
+      expect(urls[0]).toBe('https://www.example.com/')
+    })
+
+    it('accepts sitemap URLs without www. when domain has www.', async () => {
+      const noWwwSitemap = `<?xml version="1.0"?>
+<urlset>
+  <url><loc>https://example.com/page-a</loc></url>
+  <url><loc>https://example.com/page-b</loc></url>
+</urlset>`
+
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
+        .mockResolvedValueOnce(mockResponse(noWwwSitemap))
+      )
+
+      const urls = await discoverSitemapUrls('www.example.com')
+      expect(urls).toHaveLength(2)
+    })
   })
 
   describe('fallback 1 — sitemap.xml 404, sitemap_index.xml resolves', () => {

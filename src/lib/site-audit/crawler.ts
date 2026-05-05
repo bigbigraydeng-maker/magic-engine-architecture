@@ -108,7 +108,10 @@ export function extractSameDomainLinks(
     const raw = m[1].trim()
     try {
       const abs = new URL(raw, origin).href
-      if (abs.startsWith(origin) && !seen.has(abs)) {
+      // Treat www.domain.com and domain.com as the same origin
+      const normAbs = abs.replace(/^(https?:\/\/)www\./, '$1')
+      const normOrigin = origin.replace(/^(https?:\/\/)www\./, '$1')
+      if (normAbs.startsWith(normOrigin) && !seen.has(abs)) {
         seen.add(abs)
       }
     } catch {
@@ -312,13 +315,25 @@ async function resolveSitemapUrls(sitemapUrls: string[], origin: string): Promis
 }
 
 /**
+ * Normalise a URL's origin for comparison, stripping the www. prefix.
+ * e.g. https://www.example.com → https://example.com
+ */
+function normaliseOriginForCompare(url: string): string {
+  return url.replace(/^(https?:\/\/)www\./, '$1')
+}
+
+/**
  * Remove duplicates and filter to same-origin URLs only.
+ * Treats www.domain.com and domain.com as the same origin.
  */
 function dedupeAndFilter(urls: string[], origin: string): string[] {
   const seen = new Set<string>()
   const result: string[] = []
+  // Normalise origin for comparison (strip www.)
+  const normOrigin = normaliseOriginForCompare(origin)
   for (const u of urls) {
-    if (!seen.has(u) && u.startsWith(origin)) {
+    const normU = normaliseOriginForCompare(u)
+    if (!seen.has(u) && normU.startsWith(normOrigin)) {
       seen.add(u)
       result.push(u)
     }
