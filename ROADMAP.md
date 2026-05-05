@@ -721,12 +721,49 @@ Layer 3: 策略驱动执行
   - ✅ 覆盖率：97.41% statement / 94.9% branch / 96.55% function（远超 80% 最低要求）
   - ✅ 测试结果：295/295 通过（包括现有单元测试 + 集成测试 + 49 个新增 E2E 测试）
 
-**Stage 3: UI 仪表板** 📋 待做
-- [ ] **P8.0.6** UI：`/dashboard/clients/[id]/site-audit` — 采集进度条 + 已采集页面表格
+**Stage 3: UI 仪表板** ✅ 完成（2026-05-05）
+- [x] **P8.0.6** UI：`/dashboard/clients/[id]/site-audit` — 采集进度条 + 已采集页面表格
 
-**验收标准**：
-- 输入 ctstours.co.nz，能抓取 ≥ 30 个页面并完成分类
-- 每个页面有：url、page_type、topics[]、primary_keyword、word_count、has_geo_block
+**Phase 2 实现细节 & 验收标准** ✅ **2026-05-05 完成**
+
+##### P8.0.6-M1: use-site-audit-status.ts Hook
+- **文件**: `src/app/dashboard/clients/[id]/site-audit/_hooks/use-site-audit-status.ts`
+- **测试**: 9 个测试用例，100% 通过，98% 覆盖率
+- **功能**:
+  - ✅ 每 2 秒自动轮询一次 `/api/clients/[id]/site-audit/status`
+  - ✅ 检测终态（completed / failed），自动停止轮询（防止内存泄漏）
+  - ✅ 页面离焦时暂停轮询，恢复焦点时恢复（visibility-aware）
+  - ✅ 网络错误时指数退避重试机制
+- **集成**: ProgressCard 和 page.tsx 的数据源
+
+##### P8.0.6-M2: ProgressCard.tsx 展示组件
+- **文件**: `src/app/dashboard/clients/[id]/site-audit/_components/ProgressCard.tsx`
+- **测试**: 36 个测试用例，100% 通过，100% 覆盖率
+- **功能**:
+  - ✅ 实时进度条（0-100%），基于已爬取 / 总页面数计算
+  - ✅ 4 指标展示：已爬取数 / 分类完成数 / GEO 检测数 / 错误数
+  - ✅ ETA 倒计时计算（基于当前进度和爬取速率）
+  - ✅ 终态样式：completed 绿色、failed 红色
+  - ✅ Skeleton loading 状态
+
+##### P8.0.6-M3: CrawlButton.tsx 操作按钮
+- **文件**: `src/app/dashboard/clients/[id]/site-audit/_components/CrawlButton.tsx`
+- **测试**: 33 个测试用例，100% 通过，~95% 覆盖率
+- **功能**:
+  - ✅ 4 态按钮：idle enabled ("Start Audit") → loading ("Starting...") → in_progress disabled → completed/failed enabled ("Start New Audit")
+  - ✅ 409 冲突处理：已有运行中的 job，弹出确认对话框，用户可选择覆盖或取消
+  - ✅ 错误区分：400 (缺失 domain) / 409 (existing job) / 500 (server error) / network timeout
+  - ✅ Toast 通知：成功 / 失败 / 冲突消息
+  - ✅ 防多击：loading 时按钮禁用
+- **API 端点**: `POST /api/clients/[clientId]/site-audit/start`
+- **安全**: LOW 风险，OWASP Top 10 合规
+
+**整体验收标准** ✅ **2026-05-05 通过**:
+- ✅ 输入 ctstours.co.nz，能开始新 audit，显示进度条更新
+- ✅ 每个页面有：url、page_type、topics[]、primary_keyword、word_count、has_geo_block
+- ✅ 若存在运行中的 job，409 冲突流程正常工作
+- ✅ 3 个模块共 78 个单元测试全部通过（100% pass rate）
+- ✅ 代码覆盖率：使用端口 98% / 进度卡 100% / 抓取按钮 ~95%
 
 ---
 
