@@ -122,8 +122,8 @@ function resolveButtonLabel(isJobActive: boolean, isLoading: boolean, isJobTermi
 }
 
 function buildRequestBody(clientId: string, override: boolean): string {
-  const body: { domain: string; override?: true } = { domain: clientId }
-  if (override) body.override = true
+  const body: { maxPages?: number; rateLimitMs?: number; force?: boolean } = {}
+  if (override) body.force = true
   return JSON.stringify(body)
 }
 
