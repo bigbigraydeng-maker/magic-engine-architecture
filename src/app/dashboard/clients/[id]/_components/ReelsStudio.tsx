@@ -10,7 +10,6 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { createClient } from '@supabase/supabase-js'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -92,7 +91,7 @@ export function ReelsStudio({ clientId }: Props) {
     closing: false,
   })
 
-  // Video generation (no polling needed — Realtime subscription handles it)
+  // Video generation state
   const [generatingVideo, setGeneratingVideo] = useState(false)
 
   // ─── Fetch helpers ──────────────────────────────────────────────────────────
@@ -160,38 +159,39 @@ export function ReelsStudio({ clientId }: Props) {
     return () => clearInterval(interval)
   }, [frameJobs.opening, frameJobs.closing, activeDraft?.id, clientId])
 
-  // Subscribe to reels_drafts changes via Realtime (async background processing)
+  // Poll video status while generating (cron updates DB every 2 min; we check every 30s)
+  // Also re-checks immediately when the user returns to the browser tab.
   useEffect(() => {
-    if (!activeDraft?.id || !clientId) return
+    if (activeDraft?.status !== 'video_generating' || !activeDraft?.id) return
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-    if (!supabaseUrl || !supabaseAnonKey) return
-
-    const client = createClient(supabaseUrl, supabaseAnonKey)
-
-    const subscription = client
-      .channel(`reels-draft-${activeDraft.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'reels_drafts',
-          filter: `id=eq.${activeDraft.id}`,
-        },
-        (payload) => {
-          const updated = payload.new as ReelsDraft
-          setActiveDraft(updated)
-          setDrafts(prev => prev.map(d => d.id === updated.id ? updated : d))
+    const checkStatus = async () => {
+      try {
+        const res = await fetch(
+          `/api/clients/${clientId}/reels/${activeDraft.id}/video-status`
+        )
+        if (!res.ok) return
+        const data = await res.json()
+        if (data.status === 'completed' || data.status === 'failed') {
+          // Refresh the full draft list so state is accurate
+          fetchDrafts()
         }
-      )
-      .subscribe()
+      } catch {
+        // Network error — keep polling
+      }
+    }
+
+    const interval = setInterval(checkStatus, 30_000)
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') checkStatus()
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
 
     return () => {
-      client.removeChannel(subscription)
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', handleVisibility)
     }
-  }, [activeDraft?.id, clientId])
+  }, [activeDraft?.status, activeDraft?.id, clientId, fetchDrafts])
 
   // ─── Actions ────────────────────────────────────────────────────────────────
 
