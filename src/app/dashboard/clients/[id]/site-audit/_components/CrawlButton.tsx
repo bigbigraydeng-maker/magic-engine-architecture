@@ -151,7 +151,7 @@ export function CrawlButton({
     setToast(null)
 
     try {
-      const response = await fetch(`/api/clients/${clientId}/site-audit/start`, {
+      const response = await fetch(`/api/clients/${clientId}/site-audit/crawl`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: buildRequestBody(clientId, override),
