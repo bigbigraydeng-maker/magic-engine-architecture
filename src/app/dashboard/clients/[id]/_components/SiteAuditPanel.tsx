@@ -1,7 +1,7 @@
 'use client';
 
-import { useMemo } from 'react';
-import { CrawlButton } from '../site-audit/_components/CrawlButton';
+import { useMemo, useState } from 'react';
+import { CrawlButton, JobStatus } from '../site-audit/_components/CrawlButton';
 import { ProgressCard } from '../site-audit/_components/ProgressCard';
 
 interface SiteAuditPanelProps {
@@ -17,6 +17,13 @@ interface SiteAuditPanelProps {
  */
 export function SiteAuditPanel({ clientId }: SiteAuditPanelProps) {
   const key = useMemo(() => `site-audit-${clientId}`, [clientId]);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
+  const [currentJobStatus, setCurrentJobStatus] = useState<JobStatus | null>(null);
+
+  const handleJobStarted = (jobId: string) => {
+    setCurrentJobId(jobId);
+    setCurrentJobStatus('pending');
+  };
 
   return (
     <div className="space-y-5">
@@ -30,7 +37,11 @@ export function SiteAuditPanel({ clientId }: SiteAuditPanelProps) {
             </p>
           </div>
           <div className="flex-shrink-0">
-            <CrawlButton clientId={clientId} />
+            <CrawlButton
+              clientId={clientId}
+              currentJobStatus={currentJobStatus}
+              onJobStarted={handleJobStarted}
+            />
           </div>
         </div>
       </div>
