@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { CrawlButton, JobStatus } from '../site-audit/_components/CrawlButton';
-import { ProgressCard } from '../site-audit/_components/ProgressCard';
+import { ProgressCard, SiteAuditJob } from '../site-audit/_components/ProgressCard';
 
 interface SiteAuditPanelProps {
   clientId: string;
@@ -19,11 +19,58 @@ export function SiteAuditPanel({ clientId }: SiteAuditPanelProps) {
   const key = useMemo(() => `site-audit-${clientId}`, [clientId]);
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [currentJobStatus, setCurrentJobStatus] = useState<JobStatus | null>(null);
+  const [jobData, setJobData] = useState<SiteAuditJob | null>(null);
+  const [isLoadingJob, setIsLoadingJob] = useState(false);
+  const [jobError, setJobError] = useState<string | null>(null);
 
   const handleJobStarted = (jobId: string) => {
     setCurrentJobId(jobId);
     setCurrentJobStatus('pending');
+    setJobError(null);
   };
+
+  // 轮询 job 状态
+  useEffect(() => {
+    if (!currentJobId) return;
+
+    let pollInterval: NodeJS.Timeout;
+
+    const pollJobStatus = async () => {
+      try {
+        setIsLoadingJob(true);
+        const response = await fetch(`/api/clients/${clientId}/site-audit/status/${currentJobId}`);
+
+        if (!response.ok) {
+          throw new Error('Failed to fetch job status');
+        }
+
+        const data = await response.json() as { data: SiteAuditJob };
+        setJobData(data.data);
+        setCurrentJobStatus(data.data.status);
+        setJobError(null);
+
+        // 如果job已完成或失败，停止轮询
+        if (data.data.status === 'completed' || data.data.status === 'failed') {
+          if (pollInterval) clearInterval(pollInterval);
+        }
+      } catch (error) {
+        console.error('Error polling job status:', error);
+        setJobError(error instanceof Error ? error.message : 'Unknown error');
+      } finally {
+        setIsLoadingJob(false);
+      }
+    };
+
+    // 立即检查一次
+    pollJobStatus();
+
+    // 每2秒检查一次
+    pollInterval = setInterval(pollJobStatus, 2000);
+
+    return () => {
+      if (pollInterval) clearInterval(pollInterval);
+    };
+  }, [currentJobId, clientId]);
 
   return (
     <div className="space-y-5">
@@ -47,7 +94,7 @@ export function SiteAuditPanel({ clientId }: SiteAuditPanelProps) {
       </div>
 
       {/* Progress */}
-      <ProgressCard key={key} clientId={clientId} />
+      <ProgressCard job={jobData} isLoading={isLoadingJob} error={jobError} />
 
       {/* Info Box */}
       <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
