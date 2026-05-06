@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-06 · 当前阶段：**Phase 8.D Stage 4 待做（P8.0.7 GEO计数修复 + P8.0.8 页面清单UI）→ 完成后进入 Phase 8.1 三维策略分析**
+> 最后更新：2026-05-07 · 当前阶段：**P8.0.7 ✅ 完成，P8.0.8 页面清单UI 进行中 → 完成后进入 Phase 8.1 三维策略分析**
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -26,7 +26,7 @@
 🔄 Phase 8.Q     内容质控提升（8.Q.1外编版本管理✅ 8.Q.2 Brief编辑✅ 8.Q.3 Prompt预览部分✅ 8.Q.4待做）
 📋 Phase 8.B     批量生产 + 自动排期 + 无缝发布（走向 Airtable-free 运营模式）
 📋 Phase 8.M     Marketing Agent 记忆系统（每客户长期 Agent 智能化，中长期）
-🔄 Phase 8.D     DNZ诊断策略层（Stage 1✅ Stage 2✅ Stage 3✅ E2E验证✅，Stage 4 UI修复待做：P8.0.7 GEO计数修复 + P8.0.8 页面清单UI）
+🔄 Phase 8.D     DNZ诊断策略层（Stage 1✅ Stage 2✅ Stage 3✅ E2E验证✅，P8.0.7 GEO计数修复✅，P8.0.8 页面清单UI 进行中）
 📋 Phase 8.1     三维内容策略分析（依赖 Stage 4 完成，见下方详细规划）
 🔄 Phase 9.0     Visual Queue UX Polish（P9.0.1-P9.0.3 进行中，1Hz平滑倒计时 + 环形进度 + 队列卡）
 📋 Phase 9       报告化 + 客户 Portal
@@ -360,7 +360,7 @@ Layer 3: 策略驱动执行
 
 > E2E 验证（2026-05-05）发现两个数据展示问题，是 8.1 策略分析 UI 的前置依赖。
 
-- [ ] **P8.0.7** 修复 `SiteAuditPanel.tsx` 中 `geo_detected` 硬编码 0 的 Bug
+- [x] **P8.0.7** 修复 `SiteAuditPanel.tsx` 中 `geo_detected` 硬编码 0 的 Bug ✅ 2026-05-07
   - **问题**：`adaptJobForProgressCard()` 中 `geo_detected: 0` 是硬编码，永远显示 0
   - **原因**：`site_audit_jobs` 表不追踪 GEO 检测数，需从 `client_site_pages` 查询
   - **方案**：在 GET `/status` API 响应中额外附带 `geoDetectedCount`（query `client_site_pages WHERE job_id = ? AND has_geo_block = true`）

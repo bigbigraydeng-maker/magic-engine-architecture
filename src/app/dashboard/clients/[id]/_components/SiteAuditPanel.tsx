@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { CrawlButton, JobStatus } from '../site-audit/_components/CrawlButton';
 import { ProgressCard, SiteAuditJob } from '../site-audit/_components/ProgressCard';
 
@@ -66,6 +67,7 @@ function adaptJobForProgressCard(apiJob: ApiSiteAuditJob, geoDetectedCount = 0):
  * - ProgressCard: 实时显示爬虫进度
  */
 export function SiteAuditPanel({ clientId }: SiteAuditPanelProps) {
+  const router = useRouter();
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [currentJobStatus, setCurrentJobStatus] = useState<JobStatus | null>(null);
   const [jobData, setJobData] = useState<SiteAuditJob | null>(null);
@@ -154,7 +156,12 @@ export function SiteAuditPanel({ clientId }: SiteAuditPanelProps) {
       </div>
 
       {/* Progress */}
-      <ProgressCard job={jobData} isLoading={isLoadingJob} error={jobError} />
+      <ProgressCard
+        job={jobData}
+        isLoading={isLoadingJob}
+        error={jobError}
+        onViewPages={() => router.push(`/dashboard/clients/${clientId}/site-audit/pages`)}
+      />
 
       {/* Info Box */}
       <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">

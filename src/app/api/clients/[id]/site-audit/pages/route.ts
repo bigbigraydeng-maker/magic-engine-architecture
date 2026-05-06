@@ -47,18 +47,18 @@ export type PageType =
   | 'contact'
   | 'other'
 
-export const PAGE_TYPES: PageType[] = [
+const PAGE_TYPES: PageType[] = [
   'blog', 'product', 'service', 'landing', 'about', 'contact', 'other',
 ]
 
 export type SortColumn = 'url' | 'word_count' | 'crawled_at' | 'has_geo_block'
 export type SortOrder = 'asc' | 'desc'
 
-export const ALLOWED_SORT_COLUMNS: SortColumn[] = [
+const ALLOWED_SORT_COLUMNS: SortColumn[] = [
   'url', 'word_count', 'crawled_at', 'has_geo_block',
 ]
 
-export const ALLOWED_ORDERS: SortOrder[] = ['asc', 'desc']
+const ALLOWED_ORDERS: SortOrder[] = ['asc', 'desc']
 
 const DEFAULT_LIMIT = 50
 const MAX_LIMIT = 500
