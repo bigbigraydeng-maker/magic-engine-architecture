@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
+import Link from 'next/link'
 import type { StrategyItem, ActionType, ContentMode, StrategyPriority } from '@/lib/strategy/types'
 
 // ---------------------------------------------------------------------------
@@ -54,7 +55,15 @@ function StatCard({ label, value, sub }: { label: string; value: string | number
   )
 }
 
-function StrategyCard({ item, onDismiss }: { item: StrategyItem; onDismiss: (id: string) => void }) {
+function StrategyCard({
+  item,
+  clientId,
+  onDismiss,
+}: {
+  item: StrategyItem
+  clientId: string
+  onDismiss: (id: string) => void
+}) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-5 hover:border-indigo-200 transition-colors">
       <div className="flex items-start justify-between gap-4">
@@ -91,6 +100,18 @@ function StrategyCard({ item, onDismiss }: { item: StrategyItem; onDismiss: (id:
               <span>🔑 {item.source_keyword}</span>
               {item.keyword_volume != null && <span>月搜量 {item.keyword_volume.toLocaleString()}</span>}
               {item.keyword_kd != null && <span>难度 {item.keyword_kd}</span>}
+            </div>
+          )}
+
+          {/* Action CTA — upgrade_page links to upgrade detail page */}
+          {item.action_type === 'upgrade_page' && item.source_page_id && (
+            <div className="mt-3">
+              <Link
+                href={`/dashboard/clients/${clientId}/pages/${item.source_page_id}/upgrade?strategy_item_id=${item.id}&topic=${encodeURIComponent(item.proposed_title)}&mode=${item.content_mode}`}
+                className="inline-flex items-center gap-1 rounded-lg bg-orange-50 border border-orange-200 px-3 py-1.5 text-xs font-medium text-orange-700 hover:bg-orange-100 transition-colors"
+              >
+                升级此页面 →
+              </Link>
             </div>
           )}
         </div>
@@ -282,7 +303,7 @@ export default function StrategyPage() {
         ) : (
           <div className="space-y-3">
             {displayed.map(item => (
-              <StrategyCard key={item.id} item={item} onDismiss={handleDismiss} />
+              <StrategyCard key={item.id} item={item} clientId={clientId} onDismiss={handleDismiss} />
             ))}
           </div>
         )}

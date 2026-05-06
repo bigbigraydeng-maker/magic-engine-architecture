@@ -67,7 +67,7 @@ interface ClientRow {
 }
 
 export async function generateBlogPost(
-  req: GenerateBlogRequest & { client_id: string }
+  req: GenerateBlogRequest & { client_id: string; existing_pages_context?: string }
 ): Promise<BlogGeneratorOutput> {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY environment variable is not set')
@@ -101,6 +101,7 @@ export async function generateBlogPost(
     topic: req.topic,
     sourceQueryText: req.source_query_text ?? req.topic,
     wordCountTarget: targetWordCount,
+    existingPagesContext: req.existing_pages_context,
   })
 
   // 5. Call GPT-4o
@@ -158,11 +159,16 @@ function buildUserMessage(params: {
   topic: string
   sourceQueryText: string
   wordCountTarget: number
+  existingPagesContext?: string
 }): string {
-  const { brandName, domain, briefText, topic, sourceQueryText, wordCountTarget } = params
+  const { brandName, domain, briefText, topic, sourceQueryText, wordCountTarget, existingPagesContext } = params
+
+  const existingSection = existingPagesContext
+    ? `\n\n${existingPagesContext}\n`
+    : ''
 
   return `${briefText}
-
+${existingSection}
 TARGET QUESTION (from AI Visibility Tracker — brand is currently NOT being recommended for this):
 "${sourceQueryText}"
 

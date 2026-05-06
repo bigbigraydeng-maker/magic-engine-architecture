@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { generateBlogPost } from '@/lib/blog/generator'
 import { auditExistingContent } from '@/lib/blog/content-auditor'
+import { fetchRelatedPages, buildPagesContextBlock } from '@/lib/blog/pages-context'
 import { requireBearerToken, clampLimit } from '@/lib/validation-utils'
 import type { BlogPost, GenerateBlogRequest } from '@/types/magic-engine'
 
@@ -134,13 +135,17 @@ export async function POST(
         }
 
         // action === 'new' — proceed with generation, attach audit info to response
-        const result = await generateBlogPost({ ...body, mode, client_id: clientId })
+        const relatedPages = await fetchRelatedPages(clientId, body.topic).catch(() => [])
+        const existingPagesContext = buildPagesContextBlock(relatedPages)
+        const result = await generateBlogPost({ ...body, mode, client_id: clientId, existing_pages_context: existingPagesContext || undefined })
         return await persistAndReturn(clientId, body, mode, result, audit)
       }
     }
 
     // ── Generate (no domain set, or audit skipped) ────────────────────────────
-    const result = await generateBlogPost({ ...body, mode, client_id: clientId })
+    const relatedPages = await fetchRelatedPages(clientId, body.topic).catch(() => [])
+    const existingPagesContext = buildPagesContextBlock(relatedPages)
+    const result = await generateBlogPost({ ...body, mode, client_id: clientId, existing_pages_context: existingPagesContext || undefined })
     return await persistAndReturn(clientId, body, mode, result, null)
 
   } catch (err: unknown) {
