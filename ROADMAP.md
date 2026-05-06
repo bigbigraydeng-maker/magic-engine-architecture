@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-07 · 当前阶段：**Phase 8.D 全部完成（P8.0.7 + P8.0.8 ✅）→ 下一步：Phase 8.1 三维内容策略分析**
+> 最后更新：2026-05-07 · 当前阶段：**Phase 8.1 全部完成（P8.1.1–P8.1.6 ✅）→ 下一步：Phase 8.2 策略驱动内容执行**
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -27,7 +27,7 @@
 📋 Phase 8.B     批量生产 + 自动排期 + 无缝发布（走向 Airtable-free 运营模式）
 📋 Phase 8.M     Marketing Agent 记忆系统（每客户长期 Agent 智能化，中长期）
 ✅ Phase 8.D     DNZ诊断策略层（Stage 1✅ Stage 2✅ Stage 3✅ E2E验证✅ P8.0.7✅ P8.0.8✅ — 全部完成）
-📋 Phase 8.1     三维内容策略分析（依赖 Stage 4 完成，见下方详细规划）
+✅ Phase 8.1     三维内容策略分析（P8.1.1–P8.1.6 全部完成，2026-05-07）
 🔄 Phase 9.0     Visual Queue UX Polish（P9.0.1-P9.0.3 进行中，1Hz平滑倒计时 + 环形进度 + 队列卡）
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
@@ -390,21 +390,21 @@ Layer 3: 策略驱动执行
 - GEO block 现状：0（全站无部署），这正是我们需要改善的基线
 - 可执行策略路径：product/service 页优先部署 GEO block；blog 中 word_count < 500 的升级
 
-- [ ] **P8.1.1** 新建 `content_strategy_items` 表 + 迁移文件（见 ARCHITECTURE.md §3.7）
-- [ ] **P8.1.2** `src/lib/strategy/analyzer.ts` — 三维交叉逻辑：
+- [x] **P8.1.1** 新建 `content_strategy_items` 表 + 迁移文件 + 共享 TypeScript 类型
+- [x] **P8.1.2** `src/lib/strategy/analyzer.ts` — 三维交叉逻辑（23 tests）：
   - 维度A：AI Tracker 弱项（brand_rank = null 或 rank > 3 的 query）
   - 维度B：SEMrush 关键词缺口（竞品排名的词，客户没有对应页面）
   - 维度C：客户现有页面内容薄弱点（word_count < 500 或无 GEO 块）
-- [ ] **P8.1.3** `src/lib/strategy/scorer.ts` — 优先级评分：
+- [x] **P8.1.3** `src/lib/strategy/scorer.ts` — 优先级评分（41 tests）：
   - `unified` 机会（AI弱项 + SEO缺口同时满足）：最高分
   - `geo_only` 机会（AI弱项，但 SEO 价值低）：中分
   - `upgrade` 机会（已有页面，但内容薄弱 / 缺 GEO 块）：视缺口大小评分
-- [ ] **P8.1.4** `POST /api/clients/[id]/strategy/generate` — 触发一次完整策略分析，写入 content_strategy_items
-- [ ] **P8.1.5** `GET /api/clients/[id]/strategy` — 返回策略列表（按 priority_score 降序）
-- [ ] **P8.1.6** UI：`/dashboard/clients/[id]/strategy` — 策略面板：
-  - 顶部：三维覆盖热力图（哪些话题 AI弱项 + SEO有价值 + 无现有内容）
+- [x] **P8.1.4** `POST /api/clients/[id]/strategy/generate` — 触发一次完整策略分析，写入 content_strategy_items（16 tests）
+- [x] **P8.1.5** `GET /api/clients/[id]/strategy` — 返回策略列表（按 priority_score 降序，21 tests）
+- [x] **P8.1.6** UI：`/dashboard/clients/[id]/strategy` — 策略面板：
+  - 顶部：Stats 卡片（总建议数 / 紧急+高优 / 升级现有页面 / 新建博客）
   - 主列表：每条推荐有 Action Type 标签（🔄 升级 / ✨ 新建 / 📱 社媒）、优先级、理由
-  - 每条可点击执行 → 跳转到对应的生成流程
+  - 过滤 Tab + 一键"重新生成策略" + 忽略单条建议
 
 **验收标准**：
 - 对 CTS Tours 跑分析，输出 ≥ 10 条策略建议，每条有 action_type + priority_score + rationale

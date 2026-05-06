@@ -476,7 +476,8 @@ AI Tracker 每周运行
 | **Phase 8.C.1** | 月报整合 | 6大数据源聚合月度报告 | ✅ 完成 | 2026-05-01 | Unified reporting page |
 | **Phase 8.R** | Reels Studio | TikTok/Reels短视频生成全链路 | ✅ 完成 | 2026-05-02 | I2V + 提示词 + 对话修改 |
 | **Phase 8.Q** | 内容质控提升 | Brief编辑、版本管理、提示词预览 | 🔄 进行中 | — | 8.Q.1✅ 8.Q.2✅ 8.Q.3部分✅ |
-| **Phase 8.D** | DNZ诊断策略层 | 客户域名全量采集+策略分析 | 🔄 收尾 | — | Stage 1-3✅ Stage 4待做：P8.0.7 GEO计数 + P8.0.8 页面清单UI |
+| **Phase 8.D** | DNZ诊断策略层 | 客户域名全量采集+策略分析 | ✅ 完成 | 2026-05-07 | Stage 1-4✅ P8.0.7✅ P8.0.8✅ — 全部完成 |
+| **Phase 8.1** | 三维内容策略分析 | AI弱项×SEMrush关键词×现有页面三维交叉策略 | ✅ 完成 | 2026-05-07 | 101 tests · scorer + analyzer + generate + list + UI |
 | **Phase 9.0** | Visual Queue UX Polish | 生成队列UI优化（平滑倒计时、进度、卡片） | 🔄 进行中 | — | 1Hz刷新 + 环形进度 + 动画 |
 | **Phase 9** | 报告化 + 客户Portal | 月报PDF自动生成 + 客户自助门户 | 📋 规划中 | — | 权威度追踪 + 邮件发送 |
 | **Phase 10+** | 多语言 + Academy沉淀 | 国际化 + 课程化 + 可能的SaaS模块 | 📋 远期规划 | — | WordPress/Webflow插件 |
@@ -485,25 +486,34 @@ AI Tracker 每周运行
 
 ### B. 当前焦点（看这里！）
 
-> ⬅️ **每次打开新会话先看这里。** 最后更新：2026-05-06
+> ⬅️ **每次打开新会话先看这里。** 最后更新：2026-05-07
 
 **下一步要做的任务**（按优先级）：
 
 | 任务 ID | 内容 | 预计工时 | 优先级 |
 |---------|------|---------|--------|
-| **P8.0.7** | 修复 Site Audit GEO Detected 硬编码 0（改从 DB 查询真实值） | 1-2h | ⭐⭐⭐ |
-| **P8.0.8** | 新建 Site Audit 页面清单 UI（/site-audit/pages + 跳转 CTA） | 2-3h | ⭐⭐⭐ |
-| **P8.1** | 三维内容策略分析（依赖 P8.0.7+P8.0.8 完成） | 2-3天 | ⭐⭐ |
-| **P7.4.14** | Week 2 CTS Tours AI Tracker 复跑（2026-05-12） | 1h | ⭐⭐ |
+| **P8.2.1** | 博客生成注入 existing_pages_context（策略驱动的内容执行第一步） | 1天 | ⭐⭐⭐ |
+| **P8.2.2** | 升级现有页面流程：抓取原文 → 生成 diff 对比 → 一键批准 | 1-2天 | ⭐⭐⭐ |
+| **P7.4.15** | Week 2 CTS Tours AI Tracker 复跑（2026-05-12） | 1h | ⭐⭐ |
 | **Phase 8.Q.4** | 批量编辑 UI | 1天 | ⭐ |
 
-**完成后进入**：Phase 8.1 三维内容策略分析（详见 ROADMAP.md § Phase 8.1）
+**完成后进入**：Phase 8.2 策略驱动内容执行（详见 ROADMAP.md § Phase 8.2）
 
 ---
 
 ### C. 功能完成日志（自动记录）
 
 > 每当完成一个 Phase 或上线新功能时，自动在此记录。格式：**[完成日期]** — Phase ID + 功能描述 + Commit 引用
+
+#### 2026-05-07
+
+- **Phase 8.1** — 三维内容策略分析 全部完成（P8.1.1–P8.1.6）
+  ```
+  feat(strategy): Phase 8.1 three-dimensional content strategy analysis [P8.1]
+  ```
+  核心交付：`content_strategy_items` 表迁移 + 共享类型 + `scorer.ts`（41 tests）+ `analyzer.ts`（23 tests）+ `POST /strategy/generate`（16 tests）+ `GET /strategy`（21 tests）+ 策略面板 UI（stats卡片 + 过滤Tab + StrategyCard）· 共 101 tests，100% pass
+
+- **Phase 8.D** — DNZ 诊断策略层全部完成（P8.0.7 GEO计数修复 + P8.0.8 页面清单UI）
 
 #### 2026-05-05
 
