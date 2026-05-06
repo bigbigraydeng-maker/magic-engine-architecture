@@ -478,7 +478,7 @@ AI Tracker 每周运行
 | **Phase 8.Q** | 内容质控提升 | Brief编辑、版本管理、提示词预览 | 🔄 进行中 | — | 8.Q.1✅ 8.Q.2✅ 8.Q.3部分✅ |
 | **Phase 8.D** | DNZ诊断策略层 | 客户域名全量采集+策略分析 | ✅ 完成 | 2026-05-07 | Stage 1-4✅ P8.0.7✅ P8.0.8✅ — 全部完成 |
 | **Phase 8.1** | 三维内容策略分析 | AI弱项×SEMrush关键词×现有页面三维交叉策略 | ✅ 完成 | 2026-05-07 | 101 tests · scorer + analyzer + generate + list + UI |
-| **Phase 8.2** | 策略驱动内容执行 | existing_pages_context注入 + 升级现有页面流程 | ✅ 完成 | 2026-05-07 | 37 tests · pages-context + upgrade-generator + upgrade API + 升级UI |
+| **Phase 8.2** | 策略驱动内容执行 | existing_pages_context注入 + 升级现有页面流程 + 审计扩展 | ✅ 完成 | 2026-05-07 | 48 tests · pages-context + upgrade-generator + upgrade API + 升级UI + content-auditor扩展 |
 | **Phase 9.0** | Visual Queue UX Polish | 生成队列UI优化（平滑倒计时、进度、卡片） | 🔄 进行中 | — | 1Hz刷新 + 环形进度 + 动画 |
 | **Phase 9** | 报告化 + 客户Portal | 月报PDF自动生成 + 客户自助门户 | 📋 规划中 | — | 权威度追踪 + 邮件发送 |
 | **Phase 10+** | 多语言 + Academy沉淀 | 国际化 + 课程化 + 可能的SaaS模块 | 📋 远期规划 | — | WordPress/Webflow插件 |
@@ -493,7 +493,6 @@ AI Tracker 每周运行
 
 | 任务 ID | 内容 | 预计工时 | 优先级 |
 |---------|------|---------|--------|
-| **P8.2.3** | 内容审计范围扩展：content-auditor.ts 扫描范围加入 client_site_pages | 半天 | ⭐⭐ |
 | **P8.3.1** | 客户接入向导（5步：基本信息→Brief上传→DNZ采集→审核→激活） | 2-3天 | ⭐⭐ |
 | **P7.4.15** | Week 2 CTS Tours AI Tracker 复跑（2026-05-12） | 1h | ⭐⭐ |
 | **Phase 8.Q.4** | 批量编辑 UI | 1天 | ⭐ |
@@ -508,11 +507,12 @@ AI Tracker 每周运行
 
 #### 2026-05-07
 
-- **Phase 8.2** — 策略驱动内容执行 P8.2.1–P8.2.2 完成
+- **Phase 8.2** — 策略驱动内容执行 P8.2.1–P8.2.3 全部完成
   ```
   feat(strategy): Phase 8.2 strategy-driven content execution [P8.2]
+  feat(blog): P8.2.3 extend content-auditor to scan client_site_pages DB [P8.2.3]
   ```
-  核心交付：`pages-context.ts`（话题匹配 + prompt格式化，19 tests）+ `upgrade-generator.ts`（Jina抓取 + Claude重写，11 tests）+ `POST /pages/[pageId]/upgrade` 路由（7 tests）+ 升级详情 UI（diff对比 + 批准流程）+ StrategyCard 升级入口 · 共 37 tests
+  核心交付：`pages-context.ts`（话题匹配 + prompt格式化，19 tests）+ `upgrade-generator.ts`（Jina抓取 + Claude重写，11 tests）+ `POST /pages/[pageId]/upgrade` 路由（7 tests）+ 升级详情 UI + StrategyCard 升级入口 + `content-auditor.ts` 扩展 DB 扫描（11 tests）· 共 48 tests
 
 - **Phase 8.1** — 三维内容策略分析 全部完成（P8.1.1–P8.1.6）
   ```
