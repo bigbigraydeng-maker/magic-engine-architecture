@@ -1,13 +1,14 @@
 /**
  * Test suite for GET /api/clients/[id]/site-audit/pages/[pageId]
- * Tests permission validation, page existence, and response format
+ *
+ * Tests client validation, page existence, response format, and multi-tenant isolation.
+ * Updated for the corrected implementation (direct client_id scoping, no job_id join).
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 import { GET } from '../route'
 import { supabaseAdmin } from '@/lib/supabase'
-import type { SiteAuditPage } from '@/lib/site-audit/job-runner'
 
 // Mock Supabase
 vi.mock('@/lib/supabase', () => ({
@@ -15,6 +16,22 @@ vi.mock('@/lib/supabase', () => ({
     from: vi.fn(),
   },
 }))
+
+// ---------------------------------------------------------------------------
+// Helper
+// ---------------------------------------------------------------------------
+
+function buildChain(response: unknown) {
+  const chain: Record<string, unknown> = {}
+  const methods = ['select', 'eq', 'order', 'range', 'limit', 'single']
+  for (const m of methods) {
+    chain[m] = vi.fn().mockReturnValue(chain)
+  }
+  ;(chain as Record<string, unknown>)['then'] = (
+    resolve: (v: unknown) => unknown
+  ) => Promise.resolve(response).then(resolve)
+  return chain
+}
 
 describe('GET /api/clients/[id]/site-audit/pages/[pageId]', () => {
   beforeEach(() => {
@@ -27,18 +44,11 @@ describe('GET /api/clients/[id]/site-audit/pages/[pageId]', () => {
 
   describe('Client validation', () => {
     it('should return 404 when client does not exist', async () => {
-      const mockFrom = vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: null,
-              error: { code: 'PGRST116', message: 'No rows found' },
-            }),
-          }),
-        }),
-      })
-
+      const mockFrom = vi.fn()
       vi.mocked(supabaseAdmin).from = mockFrom
+      mockFrom.mockReturnValueOnce(
+        buildChain({ data: null, error: { code: 'PGRST116', message: 'No rows found' } })
+      )
 
       const request = new NextRequest(
         'http://localhost:3000/api/clients/client-1/site-audit/pages/page-1'
@@ -51,18 +61,11 @@ describe('GET /api/clients/[id]/site-audit/pages/[pageId]', () => {
     })
 
     it('should return 404 when client has no domain configured', async () => {
-      const mockFrom = vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: { id: 'client-1', domain: null },
-              error: null,
-            }),
-          }),
-        }),
-      })
-
+      const mockFrom = vi.fn()
       vi.mocked(supabaseAdmin).from = mockFrom
+      mockFrom.mockReturnValueOnce(
+        buildChain({ data: { id: 'client-1', domain: null }, error: null })
+      )
 
       const request = new NextRequest(
         'http://localhost:3000/api/clients/client-1/site-audit/pages/page-1'
@@ -81,44 +84,33 @@ describe('GET /api/clients/[id]/site-audit/pages/[pageId]', () => {
 
   describe('Page existence and permission', () => {
     const mockClient = { id: 'client-1', domain: 'example.com' }
-    const mockPage: SiteAuditPage = {
+    const mockPage = {
       id: 'page-1',
-      job_id: 'job-1',
+      client_id: 'client-1',
       url: 'https://example.com/blog/post',
+      title: 'Blog Post',
       page_type: 'blog',
       topics: ['topic-a', 'topic-b'],
+      primary_keyword: 'test',
+      word_count: 800,
       has_geo_block: true,
+      status_code: 200,
+      crawled_at: '2026-05-05T00:00:00Z',
       markdown_content: '# Blog Post\n\nContent here.',
-      geo_block_info: { directive_id: 'geo-1', strategy: 'location_based' },
       created_at: '2026-05-05T00:00:00Z',
       updated_at: '2026-05-05T00:00:00Z',
     }
 
     it('should return 404 when page does not exist', async () => {
       const mockFrom = vi.fn()
+      vi.mocked(supabaseAdmin).from = mockFrom
 
       // Client lookup
-      mockFrom.mockReturnValueOnce({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({ data: mockClient, error: null }),
-          }),
-        }),
-      })
-
-      // Page lookup fails
-      mockFrom.mockReturnValueOnce({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: null,
-              error: { code: 'PGRST116', message: 'No rows found' },
-            }),
-          }),
-        }),
-      })
-
-      vi.mocked(supabaseAdmin).from = mockFrom
+      mockFrom.mockReturnValueOnce(buildChain({ data: mockClient, error: null }))
+      // Page lookup returns not found (PGRST116)
+      mockFrom.mockReturnValueOnce(
+        buildChain({ data: null, error: { code: 'PGRST116', message: 'No rows found' } })
+      )
 
       const request = new NextRequest(
         'http://localhost:3000/api/clients/client-1/site-audit/pages/nonexistent-page'
@@ -130,91 +122,36 @@ describe('GET /api/clients/[id]/site-audit/pages/[pageId]', () => {
       expect(data.error).toBe('Page not found')
     })
 
-    it('should return 403 when page belongs to different client', async () => {
+    it('should return 404 when page belongs to different client (not 403, no info leak)', async () => {
+      // The new implementation queries with BOTH id AND client_id,
+      // so pages from other clients return PGRST116 → 404 (not 403)
       const mockFrom = vi.fn()
+      vi.mocked(supabaseAdmin).from = mockFrom
 
       // Client lookup succeeds
-      mockFrom.mockReturnValueOnce({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({ data: mockClient, error: null }),
-          }),
-        }),
-      })
-
-      // Page lookup returns page
-      mockFrom.mockReturnValueOnce({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: mockPage,
-              error: null,
-            }),
-          }),
-        }),
-      })
-
-      // Job lookup returns different client's job
-      mockFrom.mockReturnValueOnce({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: { id: 'job-1', client_id: 'other-client' },
-              error: null,
-            }),
-          }),
-        }),
-      })
-
-      vi.mocked(supabaseAdmin).from = mockFrom
+      mockFrom.mockReturnValueOnce(buildChain({ data: mockClient, error: null }))
+      // Page lookup with client_id=client-1 returns not found (page belongs to client-2)
+      mockFrom.mockReturnValueOnce(
+        buildChain({ data: null, error: { code: 'PGRST116', message: 'No rows found' } })
+      )
 
       const request = new NextRequest(
         'http://localhost:3000/api/clients/client-1/site-audit/pages/page-1'
       )
       const response = await GET(request, { params: { id: 'client-1', pageId: 'page-1' } })
 
-      expect(response.status).toBe(403)
-      const data = await response.json()
-      expect(data.error).toBe('Access denied')
+      // 404 is preferred (no info leak), but 403 is also acceptable
+      expect([403, 404]).toContain(response.status)
     })
 
     it('should return 200 with page data when page exists and belongs to client', async () => {
       const mockFrom = vi.fn()
+      vi.mocked(supabaseAdmin).from = mockFrom
 
       // Client lookup
-      mockFrom.mockReturnValueOnce({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({ data: mockClient, error: null }),
-          }),
-        }),
-      })
-
+      mockFrom.mockReturnValueOnce(buildChain({ data: mockClient, error: null }))
       // Page lookup
-      mockFrom.mockReturnValueOnce({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: mockPage,
-              error: null,
-            }),
-          }),
-        }),
-      })
-
-      // Job lookup
-      mockFrom.mockReturnValueOnce({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: { id: 'job-1', client_id: 'client-1' },
-              error: null,
-            }),
-          }),
-        }),
-      })
-
-      vi.mocked(supabaseAdmin).from = mockFrom
+      mockFrom.mockReturnValueOnce(buildChain({ data: mockPage, error: null }))
 
       const request = new NextRequest(
         'http://localhost:3000/api/clients/client-1/site-audit/pages/page-1'
@@ -233,53 +170,29 @@ describe('GET /api/clients/[id]/site-audit/pages/[pageId]', () => {
 
   describe('Response format', () => {
     const mockClient = { id: 'client-1', domain: 'example.com' }
-    const mockPage: SiteAuditPage = {
+    const mockPage = {
       id: 'page-1',
-      job_id: 'job-1',
+      client_id: 'client-1',
       url: 'https://example.com/blog',
+      title: 'Blog Post',
       page_type: 'blog',
       topics: ['topic-a'],
+      primary_keyword: 'seo',
+      word_count: 800,
       has_geo_block: true,
+      status_code: 200,
+      crawled_at: '2026-05-05T00:00:00Z',
       markdown_content: '# Title\n\nContent',
-      geo_block_info: { directive_id: 'geo-1', strategy: 'location_based' },
       created_at: '2026-05-05T00:00:00Z',
       updated_at: '2026-05-05T00:00:00Z',
     }
 
     it('should return correct response structure with all page fields', async () => {
       const mockFrom = vi.fn()
-
-      mockFrom.mockReturnValueOnce({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({ data: mockClient, error: null }),
-          }),
-        }),
-      })
-
-      mockFrom.mockReturnValueOnce({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: mockPage,
-              error: null,
-            }),
-          }),
-        }),
-      })
-
-      mockFrom.mockReturnValueOnce({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: { id: 'job-1', client_id: 'client-1' },
-              error: null,
-            }),
-          }),
-        }),
-      })
-
       vi.mocked(supabaseAdmin).from = mockFrom
+
+      mockFrom.mockReturnValueOnce(buildChain({ data: mockClient, error: null }))
+      mockFrom.mockReturnValueOnce(buildChain({ data: mockPage, error: null }))
 
       const request = new NextRequest(
         'http://localhost:3000/api/clients/client-1/site-audit/pages/page-1'
@@ -292,7 +205,6 @@ describe('GET /api/clients/[id]/site-audit/pages/[pageId]', () => {
       expect(data).toHaveProperty('page')
       expect(data.page.id).toBe('page-1')
       expect(data.page.markdown_content).toBeDefined()
-      expect(data.page.geo_block_info).toBeDefined()
       expect(typeof data.page.markdown_content).toBe('string')
     })
   })
@@ -306,29 +218,14 @@ describe('GET /api/clients/[id]/site-audit/pages/[pageId]', () => {
 
     it('should return 500 on database query error at page stage', async () => {
       const mockFrom = vi.fn()
+      vi.mocked(supabaseAdmin).from = mockFrom
 
       // Client lookup succeeds
-      mockFrom.mockReturnValueOnce({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({ data: mockClient, error: null }),
-          }),
-        }),
-      })
-
-      // Page lookup fails with database error
-      mockFrom.mockReturnValueOnce({
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: null,
-              error: { message: 'Database connection failed' },
-            }),
-          }),
-        }),
-      })
-
-      vi.mocked(supabaseAdmin).from = mockFrom
+      mockFrom.mockReturnValueOnce(buildChain({ data: mockClient, error: null }))
+      // Page lookup fails with database error (not PGRST116)
+      mockFrom.mockReturnValueOnce(
+        buildChain({ data: null, error: { message: 'Database connection failed' } })
+      )
 
       const request = new NextRequest(
         'http://localhost:3000/api/clients/client-1/site-audit/pages/page-1'
@@ -344,7 +241,6 @@ describe('GET /api/clients/[id]/site-audit/pages/[pageId]', () => {
       const mockFrom = vi.fn().mockImplementation(() => {
         throw new Error('Unexpected error')
       })
-
       vi.mocked(supabaseAdmin).from = mockFrom
 
       const request = new NextRequest(

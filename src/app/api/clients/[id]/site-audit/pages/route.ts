@@ -1,40 +1,92 @@
 /**
  * GET /api/clients/[id]/site-audit/pages
  *
- * Returns paginated list of crawled pages for a site-audit job.
+ * Returns paginated list of crawled pages for a client directly from
+ * the client_site_pages table (no intermediary site_audit_jobs lookup).
  *
  * Query Parameters:
- * - limit (optional): Max results per page. Must be 1-100. Default: 10
- * - offset (optional): Results to skip. Must be >= 0. Default: 0
- * - pageType (optional): Filter by page type: 'blog', 'landing', 'product'
- * - topics (optional): Comma-separated topic IDs. Matches pages with ANY topic (OR).
+ * - limit       (optional): Max results per page. 1–500. Default: 50
+ * - offset      (optional): Results to skip. >= 0. Default: 0
+ * - sort        (optional): Column to sort by. Default: crawled_at
+ *                Allowed: url | word_count | crawled_at | has_geo_block
+ * - order       (optional): Sort direction. Default: desc
+ *                Allowed: asc | desc
+ * - pageType    (optional): Filter by page type.
+ *                Allowed: blog | product | service | landing | about | contact | other
  * - hasGeoBlock (optional): Filter by GEO block presence: 'true' or 'false'
+ * - statusCode  (optional): Filter by status code range: '2xx' | '4xx' | '5xx'
  *
  * Response:
  * {
- *   pages: SiteAuditPage[],      // Array of page records
- *   total: number,               // Total count of matching pages
- *   hasMore: boolean             // Whether more pages exist beyond this batch
+ *   pages:  ClientSitePage[],
+ *   total:  number,
+ *   limit:  number,
+ *   offset: number,
+ *   sort:   string,
+ *   order:  string,
  * }
  *
- * Reference: ROADMAP.md P8.0.5.4
+ * Reference: ROADMAP.md P8.0.8-Phase1
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import type { SiteAuditPage } from '@/lib/site-audit/job-runner'
 
-// Allow up to 60 seconds
 export const maxDuration = 60
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
+export type PageType =
+  | 'blog'
+  | 'product'
+  | 'service'
+  | 'landing'
+  | 'about'
+  | 'contact'
+  | 'other'
+
+export const PAGE_TYPES: PageType[] = [
+  'blog', 'product', 'service', 'landing', 'about', 'contact', 'other',
+]
+
+export type SortColumn = 'url' | 'word_count' | 'crawled_at' | 'has_geo_block'
+export type SortOrder = 'asc' | 'desc'
+
+export const ALLOWED_SORT_COLUMNS: SortColumn[] = [
+  'url', 'word_count', 'crawled_at', 'has_geo_block',
+]
+
+export const ALLOWED_ORDERS: SortOrder[] = ['asc', 'desc']
+
+const DEFAULT_LIMIT = 50
+const MAX_LIMIT = 500
+const DEFAULT_SORT: SortColumn = 'crawled_at'
+const DEFAULT_ORDER: SortOrder = 'desc'
+
+export interface ClientSitePage {
+  id: string
+  url: string
+  title: string | null
+  page_type: PageType
+  topics: string[]
+  primary_keyword: string | null
+  word_count: number | null
+  has_geo_block: boolean
+  status_code: number | null
+  crawled_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface PagesResponse {
-  pages: SiteAuditPage[]
+  pages: ClientSitePage[]
   total: number
-  hasMore: boolean
+  limit: number
+  offset: number
+  sort: string
+  order: string
 }
 
 export interface ApiErrorResponse {
@@ -42,64 +94,25 @@ export interface ApiErrorResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Constants
+// Validation helpers
 // ---------------------------------------------------------------------------
 
-const DEFAULT_LIMIT = 10
-const MAX_LIMIT = 100
-const VALID_PAGE_TYPES = ['blog', 'landing', 'product']
-
-// ---------------------------------------------------------------------------
-// Validation
-// ---------------------------------------------------------------------------
-
-function validatePaginationParams(
-  limit?: string | null,
-  offset?: string | null
-): { valid: true; limit: number; offset: number } | { valid: false; error: string } {
-  // Parse limit
-  const parsedLimit = limit ? parseInt(limit, 10) : DEFAULT_LIMIT
-  if (isNaN(parsedLimit) || parsedLimit < 1) {
-    return { valid: false, error: 'limit must be a positive integer' }
+function parsePagination(
+  limitParam: string | null,
+  offsetParam: string | null
+): { limit: number; offset: number } | { error: string } {
+  const rawLimit = parseInt(limitParam ?? String(DEFAULT_LIMIT), 10)
+  if (isNaN(rawLimit) || rawLimit < 1) {
+    return { error: 'limit must be a positive integer' }
   }
-  if (parsedLimit > MAX_LIMIT) {
-    return { valid: false, error: `limit must be <= ${MAX_LIMIT}` }
+  const limit = Math.min(rawLimit, MAX_LIMIT)
+
+  const offset = parseInt(offsetParam ?? '0', 10)
+  if (isNaN(offset) || offset < 0) {
+    return { error: 'offset must be >= 0' }
   }
 
-  // Parse offset
-  const parsedOffset = offset ? parseInt(offset, 10) : 0
-  if (isNaN(parsedOffset) || parsedOffset < 0) {
-    return { valid: false, error: 'offset must be >= 0' }
-  }
-
-  return { valid: true, limit: parsedLimit, offset: parsedOffset }
-}
-
-function validatePageType(
-  pageType?: string | null
-): { valid: true; pageType: string } | { valid: false; error: string } {
-  if (!pageType) {
-    return { valid: true, pageType: '' } // No filter
-  }
-  if (!VALID_PAGE_TYPES.includes(pageType)) {
-    return {
-      valid: false,
-      error: `pageType must be one of: ${VALID_PAGE_TYPES.join(', ')}`,
-    }
-  }
-  return { valid: true, pageType }
-}
-
-function validateHasGeoBlock(
-  hasGeoBlock?: string | null
-): { valid: true; hasGeoBlock: boolean | null } | { valid: false; error: string } {
-  if (!hasGeoBlock) {
-    return { valid: true, hasGeoBlock: null } // No filter
-  }
-  if (hasGeoBlock !== 'true' && hasGeoBlock !== 'false') {
-    return { valid: false, error: 'hasGeoBlock must be "true" or "false"' }
-  }
-  return { valid: true, hasGeoBlock: hasGeoBlock === 'true' }
+  return { limit, offset }
 }
 
 // ---------------------------------------------------------------------------
@@ -135,118 +148,98 @@ export async function GET(
       )
     }
 
-    // 2. Validate pagination parameters
-    const paginationValidation = validatePaginationParams(
+    // 2. Parse and validate sort/order BEFORE pagination
+    //    (so invalid sort returns 400 before any DB lookup)
+    const sortParam = (searchParams.get('sort') ?? DEFAULT_SORT) as SortColumn
+    const orderParam = (searchParams.get('order') ?? DEFAULT_ORDER) as SortOrder
+
+    if (!ALLOWED_SORT_COLUMNS.includes(sortParam)) {
+      return NextResponse.json<ApiErrorResponse>(
+        { error: `Invalid sort column: ${sortParam}. Allowed: ${ALLOWED_SORT_COLUMNS.join(', ')}` },
+        { status: 400 }
+      )
+    }
+
+    if (!ALLOWED_ORDERS.includes(orderParam)) {
+      return NextResponse.json<ApiErrorResponse>(
+        { error: `Invalid order: ${orderParam}. Allowed: asc, desc` },
+        { status: 400 }
+      )
+    }
+
+    // 3. Validate pagination
+    const pagination = parsePagination(
       searchParams.get('limit'),
       searchParams.get('offset')
     )
-    if ('error' in paginationValidation) {
+    if ('error' in pagination) {
       return NextResponse.json<ApiErrorResponse>(
-        { error: paginationValidation.error },
+        { error: pagination.error },
         { status: 400 }
       )
     }
-    const { limit, offset } = paginationValidation
+    const { limit, offset } = pagination
 
-    // 3. Validate filter parameters
-    const pageTypeValidation = validatePageType(searchParams.get('pageType'))
-    if ('error' in pageTypeValidation) {
+    // 4. Validate pageType filter
+    const pageTypeParam = searchParams.get('pageType') as PageType | null
+    if (pageTypeParam && !PAGE_TYPES.includes(pageTypeParam)) {
       return NextResponse.json<ApiErrorResponse>(
-        { error: pageTypeValidation.error },
+        { error: `pageType must be one of: ${PAGE_TYPES.join(', ')}` },
         { status: 400 }
       )
     }
-    const { pageType } = pageTypeValidation
 
-    const hasGeoBlockValidation = validateHasGeoBlock(searchParams.get('hasGeoBlock'))
-    if ('error' in hasGeoBlockValidation) {
-      return NextResponse.json<ApiErrorResponse>(
-        { error: hasGeoBlockValidation.error },
-        { status: 400 }
+    // 5. Build query against client_site_pages (direct client_id scope)
+    let query = supabaseAdmin
+      .from('client_site_pages')
+      .select(
+        'id, url, title, page_type, topics, primary_keyword, word_count, has_geo_block, status_code, crawled_at, created_at, updated_at',
+        { count: 'exact' }
       )
-    }
-    const { hasGeoBlock } = hasGeoBlockValidation
-
-    // Parse topics (comma-separated)
-    const topicsParam = searchParams.get('topics')
-    const topics = topicsParam ? topicsParam.split(',').filter((t) => t.trim()) : []
-
-    // 4. Get the latest job for this client (to scope pages)
-    const { data: job, error: jobError } = await supabaseAdmin
-      .from('site_audit_jobs')
-      .select('id')
       .eq('client_id', clientId)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single()
 
-    // If no job found, return empty results
-    if (jobError || !job) {
-      return NextResponse.json<PagesResponse>(
-        {
-          pages: [],
-          total: 0,
-          hasMore: false,
-        },
-        { status: 200 }
-      )
+    // Apply optional filters
+    if (pageTypeParam) {
+      query = query.eq('page_type', pageTypeParam)
     }
 
-    // 5. Build count query
-    let countQuery = supabaseAdmin
-      .from('site_audit_pages')
-      .select('*', { count: 'exact', head: true })
-      .eq('job_id', job.id)
-
-    if (pageType) {
-      countQuery = countQuery.eq('page_type', pageType)
-    }
-    if (hasGeoBlock !== null) {
-      countQuery = countQuery.eq('has_geo_block', hasGeoBlock)
-    }
-    if (topics.length > 0) {
-      countQuery = countQuery.overlaps('topics', topics)
+    const hasGeoParam = searchParams.get('hasGeoBlock')
+    if (hasGeoParam === 'true') {
+      query = query.eq('has_geo_block', true)
+    } else if (hasGeoParam === 'false') {
+      query = query.eq('has_geo_block', false)
     }
 
-    const { count: total, error: countError } = await countQuery
-
-    if (countError) {
-      throw new Error(`Failed to count pages: ${countError.message}`)
+    const statusCodeParam = searchParams.get('statusCode')
+    if (statusCodeParam === '2xx') {
+      query = query.gte('status_code', 200).lt('status_code', 300)
+    } else if (statusCodeParam === '3xx') {
+      query = query.gte('status_code', 300).lt('status_code', 400)
+    } else if (statusCodeParam === '4xx') {
+      query = query.gte('status_code', 400).lt('status_code', 500)
+    } else if (statusCodeParam === '5xx') {
+      query = query.gte('status_code', 500).lt('status_code', 600)
     }
 
-    // 6. Build data query
-    let dataQuery = supabaseAdmin
-      .from('site_audit_pages')
-      .select('*')
-      .eq('job_id', job.id)
+    // Apply sort + pagination
+    query = query
+      .order(sortParam, { ascending: orderParam === 'asc' })
+      .range(offset, offset + limit - 1)
 
-    if (pageType) {
-      dataQuery = dataQuery.eq('page_type', pageType)
-    }
-    if (hasGeoBlock !== null) {
-      dataQuery = dataQuery.eq('has_geo_block', hasGeoBlock)
-    }
-    if (topics.length > 0) {
-      dataQuery = dataQuery.overlaps('topics', topics)
-    }
-
-    dataQuery = dataQuery.order('created_at', { ascending: false }).range(offset, offset + limit - 1)
-
-    const { data: pages, error: pagesError } = await dataQuery
+    const { data: pages, count, error: pagesError } = await query
 
     if (pagesError) {
       throw new Error(`Failed to fetch pages: ${pagesError.message}`)
     }
 
-    // 7. Calculate hasMore
-    const hasMore = (pages?.length ?? 0) === limit && (total ?? 0) > offset + limit
-
-    // 8. Return response
     return NextResponse.json<PagesResponse>(
       {
-        pages: (pages || []) as SiteAuditPage[],
-        total: total || 0,
-        hasMore,
+        pages: (pages ?? []) as ClientSitePage[],
+        total: count ?? 0,
+        limit,
+        offset,
+        sort: sortParam,
+        order: orderParam,
       },
       { status: 200 }
     )
