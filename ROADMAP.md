@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-07 · 当前阶段：**P8.0.7 ✅ 完成，P8.0.8 页面清单UI 进行中 → 完成后进入 Phase 8.1 三维策略分析**
+> 最后更新：2026-05-07 · 当前阶段：**Phase 8.D 全部完成（P8.0.7 + P8.0.8 ✅）→ 下一步：Phase 8.1 三维内容策略分析**
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -26,7 +26,7 @@
 🔄 Phase 8.Q     内容质控提升（8.Q.1外编版本管理✅ 8.Q.2 Brief编辑✅ 8.Q.3 Prompt预览部分✅ 8.Q.4待做）
 📋 Phase 8.B     批量生产 + 自动排期 + 无缝发布（走向 Airtable-free 运营模式）
 📋 Phase 8.M     Marketing Agent 记忆系统（每客户长期 Agent 智能化，中长期）
-🔄 Phase 8.D     DNZ诊断策略层（Stage 1✅ Stage 2✅ Stage 3✅ E2E验证✅，P8.0.7 GEO计数修复✅，P8.0.8 页面清单UI 进行中）
+✅ Phase 8.D     DNZ诊断策略层（Stage 1✅ Stage 2✅ Stage 3✅ E2E验证✅ P8.0.7✅ P8.0.8✅ — 全部完成）
 📋 Phase 8.1     三维内容策略分析（依赖 Stage 4 完成，见下方详细规划）
 🔄 Phase 9.0     Visual Queue UX Polish（P9.0.1-P9.0.3 进行中，1Hz平滑倒计时 + 环形进度 + 队列卡）
 📋 Phase 9       报告化 + 客户 Portal
@@ -366,7 +366,7 @@ Layer 3: 策略驱动执行
   - **方案**：在 GET `/status` API 响应中额外附带 `geoDetectedCount`（query `client_site_pages WHERE job_id = ? AND has_geo_block = true`）
   - **验收**：ProgressCard "GEO Detected" 显示真实值（CTS Tours 预计为 0，部署 GEO 指令后变为非零）
 
-- [ ] **P8.0.8** 新建 Site Audit 页面清单 UI（Site Audit 完成后的下一步 CTA）
+- [x] **P8.0.8** 新建 Site Audit 页面清单 UI（Site Audit 完成后的下一步 CTA）✅ 2026-05-07
   - **问题**：用户看到绿色完成卡片后无任何引导，93 页数据无处查看
   - **方案**：
     - 在 ProgressCard 完成态下方增加 "查看页面清单 →" 按钮
