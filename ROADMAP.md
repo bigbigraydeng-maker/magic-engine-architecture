@@ -612,6 +612,99 @@ Layer 3: 策略驱动执行
 
 ---
 
+---
+
+## Phase 11 — Creative Intelligence Engine（未来重点开发方向）
+
+> 状态：📋 规划中 · 预计启动：2026 Q3+（依赖 Phase 9/10 完成 + 足够历史数据积累）
+
+### 战略定位
+
+在 Magic Engine 现有"内容生成"能力基础上，增加**创意智能层**：不只是生成内容，而是**知道什么内容对什么人有效**，用真实绩效数据驱动下一轮创意决策。
+
+### 三层技术架构
+
+```
+Layer 1: VLM 视觉理解层（Vision Language Model）
+  → 每条 Reel/Image 生成后自动打 7 维风格向量
+  → 工具：Gemini 2.0 Flash（直接处理视频）/ GPT-4o（帧分析）
+  → 成本：~$0.03/条
+
+Layer 2: pgvector 语义记忆层
+  → 所有创意资产的高维 embedding 存入 Supabase pgvector
+  → 支持：相似创意搜索 / 风格聚类 / 跨客户迁移
+  → 基础设施：已有（Supabase），零额外成本
+
+Layer 3: XGBoost 绩效预测层
+  → 输入：7 维风格分数（VLM 输出）
+  → 标签：ROAS / CTR / CPA（Markifact 回传）
+  → 输出：新创意的预测绩效 + 最适合投放的 persona
+  → 训练触发：每月，数据量 ≥ 50 条带绩效的创意
+```
+
+### 7 维风格向量定义
+
+| 维度 | 范围 | 说明 |
+|------|------|------|
+| energy | 0-10 | 剪辑节奏/动感（3=慢镜头，8=快切） |
+| luxury | 0-10 | 高端感/制作质感 |
+| authenticity | 0-10 | 真实感（0=硬广，10=UGC风格） |
+| emotional | 0-10 | 情绪张力/共鸣深度 |
+| humor | 0-10 | 幽默感/轻松感 |
+| urgency | 0-10 | CTA紧迫感（0=纯品牌，7+=稀缺/限时） |
+| offer_signal | 0-10 | 具体卖点强度（0=纯种草，10=强促销） |
+
+### Persona 分类体系
+
+| Persona | 典型向量特征 | 适合漏斗位置 |
+|---------|------------|------------|
+| Luxury Aspirational | luxury≥7, urgency≤2 | 顶部（品牌种草） |
+| Calm Explorer | energy≤4, authenticity≥7, urgency≤2 | 顶/中部（兴趣培育） |
+| Practical Buyer - Planner | urgency 4-6, offer_signal 4-6 | 中部（考虑阶段） |
+| Practical Buyer - Converter | urgency≥6, offer_signal≥6 | 底部（转化收割） |
+
+### XGBoost 核心价值
+
+1. **投放前预测**：新 Reel 生成后，XGBoost 输出预测 ROAS，决定是否值得加预算
+2. **特征重要性**：告诉创意团队"对 Converter 受众，urgency 的影响力是 luxury 的 3 倍"
+3. **跨客户迁移**：多个旅游客户的数据合并训练，新客户冷启动借用行业经验
+4. **内容缺口检测**："高 luxury + 高 emotional 组合在库里最少但表现最好，优先生成"
+
+### 数据积累路径
+
+```
+Phase 11.0（现在开始）：VLM 打标签
+  → 每条生成的 Reel 自动获得 7 维分数
+  → 存入 visual_assets.style_scores + embedding
+  → 零额外开发成本（用现有 VLM API）
+
+Phase 11.1（2026 Q3）：Markifact 数据打通
+  → 确认 creative_parent_id 能在 Markifact 中携带和回传
+  → 建立 (7维分数 → 绩效数据) 的配对数据集
+
+Phase 11.2（数据量 ≥ 150 条后）：XGBoost v0.1
+  → 训练第一版预测模型
+  → 特征重要性报告上线（告诉用户哪种风格最有效）
+
+Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
+  → 投放前自动评分
+  → "下一批 Reels 该往哪个方向生成"决策建议
+```
+
+### 关键依赖确认（启动前必须完成）
+
+- [ ] Markifact API 能否回传 `creative_parent_id`（绑定我们的 seed creative）
+- [ ] Markifact 能否提供"创意 × 受众 × 转化"三维数据切片
+- [ ] Supabase `visual_assets` 表加 `embedding vector(512)` + `style_scores jsonb` 列
+
+### PoC 验证标准
+
+- 150 条带绩效标签的创意 → XGBoost 预测 ROAS 误差 < 30%
+- 特征重要性报告能给出 3 条可执行的创意方向建议
+- 新客户冷启动：借用行业模型，前 10 条 Reels 预测准确率 > 60%
+
+---
+
 ## 8. 决策日志
 
 > 重大决策记录在此，便于追溯。
