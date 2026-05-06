@@ -12,7 +12,8 @@
  */
 
 import OpenAI from 'openai'
-import { fetchUrlAsMarkdown } from '../brief/jina'
+import { fetchUrlAsMarkdown } from '@/lib/brief/jina'
+import { supabaseAdmin } from '@/lib/supabase'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -40,21 +41,67 @@ interface CandidateArticle {
 // ─── Main export ─────────────────────────────────────────────────────────────
 
 /**
+ * Fetch all pages for a client from client_site_pages and convert to CandidateArticle[].
+ * Returns [] on any error so callers can always safely fall through.
+ *
+ * Phase 8.2.3 — extends audit scope beyond web-crawled blog paths.
+ */
+export async function fetchSitePagesAsCandidates(clientId: string): Promise<CandidateArticle[]> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('client_site_pages')
+      .select('id, url, title, page_type, topics, primary_keyword')
+      .eq('client_id', clientId)
+
+    if (error || !data) return []
+
+    return (data as Array<{
+      id: string
+      url: string
+      title: string | null
+      page_type: string
+      topics: string[]
+      primary_keyword: string | null
+    }>).map(page => ({
+      url: page.url,
+      title: page.title ?? slugToTitle(page.url),
+    }))
+  } catch {
+    return []
+  }
+}
+
+/**
  * Audit whether the client already has content matching the given topic.
  *
- * @param domain - e.g. "https://www.ctstours.co.nz" (with or without trailing slash)
- * @param topic  - the proposed blog topic string
+ * @param domain    - e.g. "https://www.ctstours.co.nz" (with or without trailing slash)
+ * @param topic     - the proposed blog topic string
  * @param queryText - the AI Tracker question being targeted (optional, enriches comparison)
+ * @param clientId  - when provided, also checks client_site_pages DB records (Phase 8.2.3)
  */
 export async function auditExistingContent(
   domain: string,
   topic: string,
-  queryText?: string
+  queryText?: string,
+  clientId?: string
 ): Promise<ContentAuditResult> {
   const base = domain.replace(/\/$/, '')
 
-  // 1. Discover existing blog articles
-  const candidates = await discoverBlogArticles(base)
+  // 1a. Discover existing blog articles via web crawl
+  const webCandidates = await discoverBlogArticles(base)
+
+  // 1b. Merge DB-sourced pages when clientId is provided (Phase 8.2.3)
+  const dbCandidates = clientId ? await fetchSitePagesAsCandidates(clientId).catch(() => []) : []
+
+  // Deduplicate by URL (DB may overlap with web crawl)
+  const seen = new Set(webCandidates.map(c => c.url))
+  const uniqueDbCandidates = dbCandidates.filter(c => {
+    if (seen.has(c.url)) return false
+    seen.add(c.url)
+    return true
+  })
+
+  const candidates = [...webCandidates, ...uniqueDbCandidates]
 
   if (candidates.length === 0) {
     return {
@@ -210,6 +257,11 @@ function extractSignificantWords(text: string, stopWords: Set<string>): Set<stri
       .split(/\s+/)
       .filter(w => w.length >= 4 && !stopWords.has(w))
   )
+}
+
+function slugToTitle(url: string): string {
+  const slug = url.split('/').filter(Boolean).pop() ?? url
+  return slug.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
 }
 
 // ─── GPT Intent Comparison ────────────────────────────────────────────────────

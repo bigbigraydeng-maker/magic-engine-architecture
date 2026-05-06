@@ -121,7 +121,8 @@ export async function POST(
         const audit = await auditExistingContent(
           domain,
           body.topic,
-          body.source_query_text
+          body.source_query_text,
+          clientId
         ).catch(() => null) // audit failure must never block generation
 
         if (audit?.action === 'upgrade') {
