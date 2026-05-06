@@ -1,0 +1,326 @@
+'use client'
+
+import { useState, useEffect, useCallback } from 'react'
+import { useParams, useRouter } from 'next/navigation'
+import Link from 'next/link'
+import type { StrategyItem, ActionType, ContentMode, StrategyPriority } from '@/lib/strategy/types'
+
+// ---------------------------------------------------------------------------
+// Display helpers
+// ---------------------------------------------------------------------------
+
+const ACTION_LABEL: Record<ActionType, string> = {
+  upgrade_page:   '🔄 升级现有页面',
+  new_blog:       '✨ 新建博客文章',
+  social_content: '📱 社媒内容',
+}
+
+const MODE_LABEL: Record<ContentMode, string> = {
+  unified:  'SEO + GEO',
+  geo_only: 'GEO 优先',
+  seo_only: 'SEO 优先',
+}
+
+const PRIORITY_COLOR: Record<StrategyPriority, string> = {
+  critical: 'bg-red-100 text-red-700 border-red-200',
+  high:     'bg-orange-100 text-orange-700 border-orange-200',
+  medium:   'bg-yellow-100 text-yellow-700 border-yellow-200',
+  low:      'bg-gray-100 text-gray-600 border-gray-200',
+}
+
+const PRIORITY_LABEL: Record<StrategyPriority, string> = {
+  critical: '紧急',
+  high:     '高',
+  medium:   '中',
+  low:      '低',
+}
+
+const MODE_COLOR: Record<ContentMode, string> = {
+  unified:  'bg-indigo-100 text-indigo-700',
+  geo_only: 'bg-green-100 text-green-700',
+  seo_only: 'bg-blue-100 text-blue-700',
+}
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function StatCard({ label, value, sub }: { label: string; value: string | number; sub?: string }) {
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 p-4 text-center">
+      <p className="text-2xl font-bold text-gray-900">{value}</p>
+      <p className="text-xs text-gray-500 mt-1">{label}</p>
+      {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
+    </div>
+  )
+}
+
+function StrategyCard({
+  item,
+  clientId,
+  onDismiss,
+}: {
+  item: StrategyItem
+  clientId: string
+  onDismiss: (id: string) => void
+}) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-5 hover:border-indigo-200 transition-colors">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1 min-w-0">
+          {/* Header row */}
+          <div className="flex flex-wrap items-center gap-2 mb-2">
+            <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${PRIORITY_COLOR[item.priority]}`}>
+              {PRIORITY_LABEL[item.priority]}
+            </span>
+            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${MODE_COLOR[item.content_mode]}`}>
+              {MODE_LABEL[item.content_mode]}
+            </span>
+            <span className="text-xs text-gray-400">
+              {ACTION_LABEL[item.action_type]}
+            </span>
+          </div>
+
+          {/* Title */}
+          <h3 className="text-sm font-semibold text-gray-900 mb-1 truncate" title={item.proposed_title}>
+            {item.proposed_title}
+          </h3>
+
+          {/* Rationale */}
+          <p className="text-xs text-gray-500 mb-2">{item.rationale}</p>
+
+          {/* Content angle */}
+          {item.content_angle && (
+            <p className="text-xs text-indigo-600 italic">{item.content_angle}</p>
+          )}
+
+          {/* Keyword signal */}
+          {item.source_keyword && (
+            <div className="mt-2 flex flex-wrap gap-2 text-xs text-gray-400">
+              <span>🔑 {item.source_keyword}</span>
+              {item.keyword_volume != null && <span>月搜量 {item.keyword_volume.toLocaleString()}</span>}
+              {item.keyword_kd != null && <span>难度 {item.keyword_kd}</span>}
+            </div>
+          )}
+
+          {/* Action CTA — upgrade_page links to upgrade detail page */}
+          {item.action_type === 'upgrade_page' && item.source_page_id && (
+            <div className="mt-3">
+              <Link
+                href={`/dashboard/clients/${clientId}/pages/${item.source_page_id}/upgrade?strategy_item_id=${item.id}&topic=${encodeURIComponent(item.proposed_title)}&mode=${item.content_mode}`}
+                className="inline-flex items-center gap-1 rounded-lg bg-orange-50 border border-orange-200 px-3 py-1.5 text-xs font-medium text-orange-700 hover:bg-orange-100 transition-colors"
+              >
+                升级此页面 →
+              </Link>
+            </div>
+          )}
+        </div>
+
+        {/* Score badge + dismiss */}
+        <div className="flex flex-col items-end gap-2 flex-shrink-0">
+          <div className="text-center">
+            <p className="text-lg font-bold text-gray-900">{Math.round(item.priority_score)}</p>
+            <p className="text-xs text-gray-400">分</p>
+          </div>
+          <button
+            onClick={() => onDismiss(item.id)}
+            className="text-xs text-gray-300 hover:text-gray-500 transition-colors"
+            title="忽略此建议"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function EmptyState({ onGenerate, isGenerating }: { onGenerate: () => void; isGenerating: boolean }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-20 text-center">
+      <div className="text-4xl mb-4">📊</div>
+      <h3 className="text-base font-semibold text-gray-900 mb-2">暂无策略建议</h3>
+      <p className="text-sm text-gray-500 mb-6 max-w-xs">
+        运行三维分析，Magic Engine 将根据网站现状、AI 排名弱项和关键词缺口，生成个性化内容策略。
+      </p>
+      <button
+        onClick={onGenerate}
+        disabled={isGenerating}
+        className="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+      >
+        {isGenerating ? '分析中…' : '生成内容策略'}
+      </button>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
+
+type FilterMode = ActionType | 'all'
+
+export default function StrategyPage() {
+  const params = useParams()
+  const clientId = params.id as string
+  const router = useRouter()
+
+  const [items, setItems] = useState<StrategyItem[]>([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [generating, setGenerating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [filterMode, setFilterMode] = useState<FilterMode>('all')
+
+  const fetchItems = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/strategy?limit=100`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      setItems(data.items ?? [])
+      setTotal(data.total ?? 0)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '加载失败')
+    } finally {
+      setLoading(false)
+    }
+  }, [clientId])
+
+  useEffect(() => { fetchItems() }, [fetchItems])
+
+  const handleGenerate = async () => {
+    setGenerating(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/strategy/generate`, { method: 'POST' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await fetchItems()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '生成失败')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const handleDismiss = async (itemId: string) => {
+    setItems(prev => prev.filter(i => i.id !== itemId))
+    setTotal(prev => Math.max(0, prev - 1))
+  }
+
+  const displayed = filterMode === 'all'
+    ? items
+    : items.filter(i => i.action_type === filterMode)
+
+  // Summary counts
+  const counts: Record<ActionType, number> = {
+    upgrade_page:   items.filter(i => i.action_type === 'upgrade_page').length,
+    new_blog:       items.filter(i => i.action_type === 'new_blog').length,
+    social_content: items.filter(i => i.action_type === 'social_content').length,
+  }
+  const criticalCount = items.filter(i => i.priority === 'critical' || i.priority === 'high').length
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <div className="bg-white border-b border-gray-200 px-6 py-4">
+        <div className="max-w-4xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => router.back()}
+              className="text-sm text-gray-500 hover:text-gray-700 flex items-center gap-1"
+            >
+              ← 返回
+            </button>
+            <span className="text-gray-300">|</span>
+            <h1 className="text-base font-semibold text-gray-900">内容策略</h1>
+          </div>
+          <button
+            onClick={handleGenerate}
+            disabled={generating}
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+          >
+            {generating ? '分析中…' : '重新生成策略'}
+          </button>
+        </div>
+      </div>
+
+      <div className="max-w-4xl mx-auto px-6 py-6 space-y-6">
+        {/* Error banner */}
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        {/* Stats */}
+        {items.length > 0 && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <StatCard label="总建议数" value={total} />
+            <StatCard label="紧急 / 高优先" value={criticalCount} />
+            <StatCard label="升级现有页面" value={counts.upgrade_page} />
+            <StatCard label="新建博客" value={counts.new_blog} />
+          </div>
+        )}
+
+        {/* Filter tabs */}
+        {items.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {(['all', 'upgrade_page', 'new_blog', 'social_content'] as FilterMode[]).map(mode => {
+              const count = mode === 'all' ? items.length : counts[mode as ActionType]
+              const label = mode === 'all' ? '全部' : ACTION_LABEL[mode as ActionType]
+              return (
+                <button
+                  key={mode}
+                  onClick={() => setFilterMode(mode)}
+                  className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                    filterMode === mode
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {label} ({count})
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        {/* Content */}
+        {loading ? (
+          <div className="space-y-3">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-28 bg-white rounded-xl border border-gray-200 animate-pulse" />
+            ))}
+          </div>
+        ) : items.length === 0 ? (
+          <EmptyState onGenerate={handleGenerate} isGenerating={generating} />
+        ) : displayed.length === 0 ? (
+          <div className="py-12 text-center text-sm text-gray-400">
+            该分类下暂无建议
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {displayed.map(item => (
+              <StrategyCard key={item.id} item={item} clientId={clientId} onDismiss={handleDismiss} />
+            ))}
+          </div>
+        )}
+
+        {/* Info box */}
+        {items.length > 0 && (
+          <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
+            <p className="text-xs text-indigo-900">
+              <strong>❓ 三维策略分析原理</strong>
+              <br />
+              综合三个维度：① AI Tracker 弱项（哪些查询中品牌排名低于第3位）
+              ② SEMrush 关键词缺口（竞品有排名的词，客户缺少对应页面）
+              ③ 现有页面薄弱点（字数不足 / 未部署 GEO Block）。三个维度同时满足的机会优先级最高。
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}

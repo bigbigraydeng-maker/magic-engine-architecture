@@ -203,7 +203,7 @@ export function ReelsStudio({ clientId }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ campaign_brief_id: selectedCampaignId || undefined }),
       })
-      let data: { success: boolean; draft?: ReeelsDraft; error?: string }
+      let data: { success: boolean; draft?: ReelsDraft; error?: string }
       try {
         data = await res.json()
       } catch {
@@ -262,7 +262,7 @@ export function ReelsStudio({ clientId }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: msg }),
       })
-      let data: { success: boolean; draft?: ReeelsDraft; error?: string }
+      let data: { success: boolean; draft?: ReelsDraft; error?: string }
       try {
         data = await res.json()
       } catch {

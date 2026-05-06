@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-06 · 当前阶段：**Phase 8.D Stage 4 待做（P8.0.7 GEO计数修复 + P8.0.8 页面清单UI）→ 完成后进入 Phase 8.1 三维策略分析**
+> 最后更新：2026-05-07 · 当前阶段：**Phase 8.2 全部完成（P8.2.1–P8.2.3 ✅）→ 下一步：Phase 8.3 客户接入向导**
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -26,8 +26,8 @@
 🔄 Phase 8.Q     内容质控提升（8.Q.1外编版本管理✅ 8.Q.2 Brief编辑✅ 8.Q.3 Prompt预览部分✅ 8.Q.4待做）
 📋 Phase 8.B     批量生产 + 自动排期 + 无缝发布（走向 Airtable-free 运营模式）
 📋 Phase 8.M     Marketing Agent 记忆系统（每客户长期 Agent 智能化，中长期）
-🔄 Phase 8.D     DNZ诊断策略层（Stage 1✅ Stage 2✅ Stage 3✅ E2E验证✅，Stage 4 UI修复待做：P8.0.7 GEO计数修复 + P8.0.8 页面清单UI）
-📋 Phase 8.1     三维内容策略分析（依赖 Stage 4 完成，见下方详细规划）
+✅ Phase 8.D     DNZ诊断策略层（Stage 1✅ Stage 2✅ Stage 3✅ E2E验证✅ P8.0.7✅ P8.0.8✅ — 全部完成）
+✅ Phase 8.1     三维内容策略分析（P8.1.1–P8.1.6 全部完成，2026-05-07）
 🔄 Phase 9.0     Visual Queue UX Polish（P9.0.1-P9.0.3 进行中，1Hz平滑倒计时 + 环形进度 + 队列卡）
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
@@ -360,13 +360,13 @@ Layer 3: 策略驱动执行
 
 > E2E 验证（2026-05-05）发现两个数据展示问题，是 8.1 策略分析 UI 的前置依赖。
 
-- [ ] **P8.0.7** 修复 `SiteAuditPanel.tsx` 中 `geo_detected` 硬编码 0 的 Bug
+- [x] **P8.0.7** 修复 `SiteAuditPanel.tsx` 中 `geo_detected` 硬编码 0 的 Bug ✅ 2026-05-07
   - **问题**：`adaptJobForProgressCard()` 中 `geo_detected: 0` 是硬编码，永远显示 0
   - **原因**：`site_audit_jobs` 表不追踪 GEO 检测数，需从 `client_site_pages` 查询
   - **方案**：在 GET `/status` API 响应中额外附带 `geoDetectedCount`（query `client_site_pages WHERE job_id = ? AND has_geo_block = true`）
   - **验收**：ProgressCard "GEO Detected" 显示真实值（CTS Tours 预计为 0，部署 GEO 指令后变为非零）
 
-- [ ] **P8.0.8** 新建 Site Audit 页面清单 UI（Site Audit 完成后的下一步 CTA）
+- [x] **P8.0.8** 新建 Site Audit 页面清单 UI（Site Audit 完成后的下一步 CTA）✅ 2026-05-07
   - **问题**：用户看到绿色完成卡片后无任何引导，93 页数据无处查看
   - **方案**：
     - 在 ProgressCard 完成态下方增加 "查看页面清单 →" 按钮
@@ -390,21 +390,21 @@ Layer 3: 策略驱动执行
 - GEO block 现状：0（全站无部署），这正是我们需要改善的基线
 - 可执行策略路径：product/service 页优先部署 GEO block；blog 中 word_count < 500 的升级
 
-- [ ] **P8.1.1** 新建 `content_strategy_items` 表 + 迁移文件（见 ARCHITECTURE.md §3.7）
-- [ ] **P8.1.2** `src/lib/strategy/analyzer.ts` — 三维交叉逻辑：
+- [x] **P8.1.1** 新建 `content_strategy_items` 表 + 迁移文件 + 共享 TypeScript 类型
+- [x] **P8.1.2** `src/lib/strategy/analyzer.ts` — 三维交叉逻辑（23 tests）：
   - 维度A：AI Tracker 弱项（brand_rank = null 或 rank > 3 的 query）
   - 维度B：SEMrush 关键词缺口（竞品排名的词，客户没有对应页面）
   - 维度C：客户现有页面内容薄弱点（word_count < 500 或无 GEO 块）
-- [ ] **P8.1.3** `src/lib/strategy/scorer.ts` — 优先级评分：
+- [x] **P8.1.3** `src/lib/strategy/scorer.ts` — 优先级评分（41 tests）：
   - `unified` 机会（AI弱项 + SEO缺口同时满足）：最高分
   - `geo_only` 机会（AI弱项，但 SEO 价值低）：中分
   - `upgrade` 机会（已有页面，但内容薄弱 / 缺 GEO 块）：视缺口大小评分
-- [ ] **P8.1.4** `POST /api/clients/[id]/strategy/generate` — 触发一次完整策略分析，写入 content_strategy_items
-- [ ] **P8.1.5** `GET /api/clients/[id]/strategy` — 返回策略列表（按 priority_score 降序）
-- [ ] **P8.1.6** UI：`/dashboard/clients/[id]/strategy` — 策略面板：
-  - 顶部：三维覆盖热力图（哪些话题 AI弱项 + SEO有价值 + 无现有内容）
+- [x] **P8.1.4** `POST /api/clients/[id]/strategy/generate` — 触发一次完整策略分析，写入 content_strategy_items（16 tests）
+- [x] **P8.1.5** `GET /api/clients/[id]/strategy` — 返回策略列表（按 priority_score 降序，21 tests）
+- [x] **P8.1.6** UI：`/dashboard/clients/[id]/strategy` — 策略面板：
+  - 顶部：Stats 卡片（总建议数 / 紧急+高优 / 升级现有页面 / 新建博客）
   - 主列表：每条推荐有 Action Type 标签（🔄 升级 / ✨ 新建 / 📱 社媒）、优先级、理由
-  - 每条可点击执行 → 跳转到对应的生成流程
+  - 过滤 Tab + 一键"重新生成策略" + 忽略单条建议
 
 **验收标准**：
 - 对 CTS Tours 跑分析，输出 ≥ 10 条策略建议，每条有 action_type + priority_score + rationale
@@ -416,9 +416,9 @@ Layer 3: 策略驱动执行
 
 **目标**：所有内容生成都通过策略面板触发，携带完整上下文（现有内容 + 关键词 + AI弱项），消除盲目生成问题。
 
-- [ ] **P8.2.1** 博客生成注入 `existing_pages_context`：生成前把话题相关的 client_site_pages 内容摘要注入 prompt，让 GPT-4o 写不同角度而非重叠内容
-- [ ] **P8.2.2** 升级现有页面流程：抓取原文 → Strategy Engine 生成 SEO + GEO 增强版 → UI 展示 diff 对比（原文 vs 升级版）→ 客户一键批准
-- [ ] **P8.2.3** 内容审计范围扩展：将现有 `content-auditor.ts` 的扫描范围从 blog 路径扩展到全站 `client_site_pages`（已在 Phase 8.0 采集）
+- [x] **P8.2.1** 博客生成注入 `existing_pages_context`：`pages-context.ts` 话题词匹配 + `buildPagesContextBlock` prompt 格式化；blog route 自动注入（19 tests）
+- [x] **P8.2.2** 升级现有页面流程：`upgrade-generator.ts`（Jina 抓取 + Claude 重写）+ `POST /api/clients/[id]/pages/[pageId]/upgrade` + 升级详情 UI（diff 对比 + 批准→保存草稿）（18 tests）
+- [x] **P8.2.3** 内容审计范围扩展：`fetchSitePagesAsCandidates` 从 `client_site_pages` 拉取全站页面，与 web 爬取结果合并去重，blog route 自动传入 clientId（11 tests）
 - [ ] **P8.2.4** 社媒联动：博客 approved 后，自动在策略面板生成 3 条对应社媒话题建议（Facebook / Instagram / LinkedIn）
 
 **验收标准**：

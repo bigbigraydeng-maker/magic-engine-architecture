@@ -1,30 +1,52 @@
 /**
  * GET /api/clients/[id]/site-audit/pages/[pageId]
  *
- * Returns full details of a single crawled page including markdown_content and geo_block_info.
- * Validates that the page belongs to a job owned by the specified client (multi-tenant isolation).
+ * Returns full details of a single crawled page including markdown_content.
+ * Multi-tenant isolation is enforced by querying with BOTH id AND client_id,
+ * so pages from other clients automatically return 404 (no information leak).
+ *
+ * This replaces the old implementation that used a site_audit_jobs intermediate
+ * lookup (which was both incorrect and inefficient).
  *
  * Response:
  * {
- *   page: SiteAuditPage  // Full page record with markdown_content and geo_block_info
+ *   page: ClientSitePage  // Full page record with markdown_content
  * }
  *
- * Reference: ROADMAP.md P8.0.5.5
+ * Reference: ROADMAP.md P8.0.8-Phase1
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import type { SiteAuditPage } from '@/lib/site-audit/job-runner'
 
-// Allow up to 60 seconds
 export const maxDuration = 60
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
+export interface ClientSitePageDetail {
+  id: string
+  client_id: string
+  url: string
+  title: string | null
+  page_type: string
+  topics: string[]
+  primary_keyword: string | null
+  word_count: number | null
+  has_geo_block: boolean
+  status_code: number | null
+  crawled_at: string | null
+  markdown_content: string | null
+  classification_confidence?: number | null
+  geo_detection_method?: string | null
+  geo_confidence?: number | null
+  created_at: string
+  updated_at: string
+}
+
 export interface PageDetailResponse {
-  page: SiteAuditPage
+  page: ClientSitePageDetail
 }
 
 export interface ApiErrorResponse {
@@ -64,22 +86,23 @@ export async function GET(
       )
     }
 
-    // 2. Fetch the page by ID
+    // 2. Fetch the page by ID AND client_id (enforces multi-tenant isolation)
+    //    Querying with both columns means pages from other clients
+    //    automatically return PGRST116 (not found) — no 403 info leak.
     const { data: page, error: pageError } = await supabaseAdmin
-      .from('site_audit_pages')
+      .from('client_site_pages')
       .select('*')
       .eq('id', pageId)
+      .eq('client_id', clientId)
       .single()
 
     if (pageError) {
-      // PGRST116 = no rows found, treat as 404
       if (pageError.code === 'PGRST116') {
         return NextResponse.json<ApiErrorResponse>(
           { error: 'Page not found' },
           { status: 404 }
         )
       }
-      // Other errors are database errors
       throw new Error(`Failed to fetch page: ${pageError.message}`)
     }
 
@@ -90,45 +113,8 @@ export async function GET(
       )
     }
 
-    // 3. Verify the page belongs to this client
-    //    by checking that the job_id matches a job owned by this client
-    const { data: job, error: jobError } = await supabaseAdmin
-      .from('site_audit_jobs')
-      .select('id, client_id')
-      .eq('id', page.job_id)
-      .single()
-
-    if (jobError) {
-      // PGRST116 = no rows found, treat as 404
-      if (jobError.code === 'PGRST116') {
-        return NextResponse.json<ApiErrorResponse>(
-          { error: 'Job not found' },
-          { status: 404 }
-        )
-      }
-      // Other errors are database errors
-      throw new Error(`Failed to fetch job: ${jobError.message}`)
-    }
-
-    if (!job) {
-      return NextResponse.json<ApiErrorResponse>(
-        { error: 'Job not found' },
-        { status: 404 }
-      )
-    }
-
-    if (job.client_id !== clientId) {
-      return NextResponse.json<ApiErrorResponse>(
-        { error: 'Access denied' },
-        { status: 403 }
-      )
-    }
-
-    // 4. Return the page details
     return NextResponse.json<PageDetailResponse>(
-      {
-        page: page as SiteAuditPage,
-      },
+      { page: page as ClientSitePageDetail },
       { status: 200 }
     )
   } catch (err: unknown) {

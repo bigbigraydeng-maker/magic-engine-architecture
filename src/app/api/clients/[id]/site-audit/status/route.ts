@@ -1,7 +1,8 @@
 /**
  * GET /api/clients/[id]/site-audit/status
  *
- * Returns the status and progress of a site-audit job for a client.
+ * Returns the status and progress of a site-audit job for a client,
+ * plus the real GEO-detected page count from client_site_pages.
  *
  * Query Parameters:
  * - jobId (optional): If provided, return status of that specific job.
@@ -11,15 +12,17 @@
  * {
  *   job: SiteAuditJob | null,           // The job record, or null if no history
  *   progressPercent: number | null,     // 0-100, or null if no job
- *   etaSec: number | null               // Estimated seconds remaining, or null if not in_progress
+ *   etaSec: number | null,              // Estimated seconds remaining, or null if not in_progress
+ *   geoDetectedCount: number            // Pages with has_geo_block=true in client_site_pages
  * }
  *
- * Reference: ROADMAP.md P8.0.5.3
+ * Reference: ROADMAP.md P8.0.5.3, P8.0.7
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { JobRunner, type SiteAuditJob } from '@/lib/site-audit/job-runner'
+import { countGeoDetectedPages } from '@/lib/db/site-pages'
 
 // Allow up to 60 seconds
 export const maxDuration = 60
@@ -32,6 +35,7 @@ export interface StatusResponse {
   job: SiteAuditJob | null
   progressPercent: number | null
   etaSec: number | null
+  geoDetectedCount: number
 }
 
 export interface ApiErrorResponse {
@@ -112,17 +116,17 @@ export async function GET(
       )
     }
 
-    // 2. Fetch the job
+    // 2. Fetch the job and GEO count in parallel
     const runner = new JobRunner(supabaseAdmin)
     let job: SiteAuditJob | null = null
 
-    if (jobId) {
-      // Query specific job
-      job = await runner.getJob(jobId)
-    } else {
-      // Query latest job for this client
-      job = await runner.getLatestJobByClientId(clientId)
-    }
+    const [resolvedJob, geoDetectedCount] = await Promise.all([
+      jobId
+        ? runner.getJob(jobId)
+        : runner.getLatestJobByClientId(clientId),
+      countGeoDetectedPages(clientId).catch(() => 0),
+    ])
+    job = resolvedJob
 
     // 3. Calculate progress and ETA
     const progressPercent = calculateProgressPercent(job)
@@ -134,6 +138,7 @@ export async function GET(
         job,
         progressPercent,
         etaSec,
+        geoDetectedCount,
       },
       { status: 200 }
     )

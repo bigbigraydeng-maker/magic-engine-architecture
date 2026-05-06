@@ -1,0 +1,133 @@
+/**
+ * POST /api/clients/[id]/strategy/generate
+ *
+ * Generates a three-dimensional content strategy for a client by:
+ * 1. Fetching client pages, weak AI queries, and keyword opportunities
+ * 2. Analyzing them into raw opportunities
+ * 3. Scoring each opportunity
+ * 4. Inserting all items into content_strategy_items
+ *
+ * Phase 8.1
+ */
+
+import { NextRequest, NextResponse } from 'next/server'
+import { supabaseAdmin } from '@/lib/supabase'
+import {
+  fetchClientPages,
+  fetchWeakAIQueries,
+  fetchKeywordOpportunities,
+  analyzeOpportunities,
+} from '@/lib/strategy/analyzer'
+import { scoreOpportunity } from '@/lib/strategy/scorer'
+import type { StrategyItem, RawOpportunity } from '@/lib/strategy/types'
+
+export const maxDuration = 60
+
+// ---------------------------------------------------------------------------
+// Response type
+// ---------------------------------------------------------------------------
+
+export interface GenerateResponse {
+  strategy_run_id: string
+  items: StrategyItem[]
+  count: number
+}
+
+// ---------------------------------------------------------------------------
+// Route handler
+// ---------------------------------------------------------------------------
+
+export async function POST(
+  _req: NextRequest,
+  { params }: { params: { id: string } }
+): Promise<NextResponse> {
+  const clientId = params.id
+
+  try {
+    // Step 1: Verify client exists
+    const { data: client, error: clientError } = await supabaseAdmin
+      .from('clients')
+      .select('id')
+      .eq('id', clientId)
+      .single()
+
+    if (clientError || !client) {
+      return NextResponse.json({ error: 'Client not found' }, { status: 404 })
+    }
+
+    // Step 2: Fetch data in parallel
+    const [pages, weakQueries, keywords] = await Promise.all([
+      fetchClientPages(clientId),
+      fetchWeakAIQueries(clientId),
+      fetchKeywordOpportunities(clientId),
+    ])
+
+    // Step 3: Analyze opportunities
+    const rawOpportunities: RawOpportunity[] = await analyzeOpportunities(
+      clientId,
+      pages,
+      weakQueries,
+      keywords
+    )
+
+    // Generate a unique run ID for this strategy generation
+    const strategy_run_id = crypto.randomUUID()
+
+    // Handle empty results
+    if (rawOpportunities.length === 0) {
+      return NextResponse.json(
+        { strategy_run_id, items: [], count: 0 } satisfies GenerateResponse,
+        { status: 200 }
+      )
+    }
+
+    // Step 4: Score each opportunity
+    const scoredItems = rawOpportunities.map((opp) => {
+      const scored = scoreOpportunity(opp.scoring_context)
+      return {
+        client_id: clientId,
+        strategy_run_id,
+        action_type: scored.action_type,
+        content_mode: scored.content_mode,
+        priority: scored.priority,
+        priority_score: scored.priority_score,
+        proposed_title: opp.proposed_title,
+        rationale: opp.rationale,
+        content_angle: opp.content_angle,
+        source_page_id: opp.source_page_id,
+        source_query_id: opp.source_query_id,
+        source_keyword: opp.source_keyword,
+        keyword_volume: opp.keyword_volume,
+        keyword_kd: opp.keyword_kd,
+        status: 'pending' as const,
+        linked_blog_post_id: null,
+      }
+    })
+
+    // Step 5: Sort by priority_score DESC
+    scoredItems.sort((a, b) => b.priority_score - a.priority_score)
+
+    // Step 6: Bulk insert into DB, returning the server-generated rows
+    const { data: inserted, error: insertError } = await supabaseAdmin
+      .from('content_strategy_items')
+      .insert(scoredItems)
+      .select()
+
+    if (insertError || !inserted) {
+      return NextResponse.json(
+        { error: insertError?.message ?? 'Failed to insert strategy items' },
+        { status: 500 }
+      )
+    }
+
+    const items = inserted as StrategyItem[]
+
+    return NextResponse.json(
+      { strategy_run_id, items, count: items.length } satisfies GenerateResponse,
+      { status: 200 }
+    )
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Internal server error'
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
+}

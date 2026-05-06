@@ -43,6 +43,7 @@ export interface ProgressCardProps {
   job: SiteAuditJob | null
   isLoading: boolean
   error: string | null
+  onViewPages?: () => void
 }
 
 // ---------------------------------------------------------------------------
@@ -140,7 +141,7 @@ function MetricItem({ testId, label, value }: MetricItemProps): React.ReactEleme
 // Main component
 // ---------------------------------------------------------------------------
 
-export function ProgressCard({ job, isLoading, error }: ProgressCardProps): React.ReactElement {
+export function ProgressCard({ job, isLoading, error, onViewPages }: ProgressCardProps): React.ReactElement {
   // -- Loading state --
   if (isLoading) {
     return <SkeletonCard />
@@ -244,6 +245,20 @@ export function ProgressCard({ job, isLoading, error }: ProgressCardProps): Reac
         <MetricItem testId="metric-geo-detected" label="GEO Detected" value={job.geo_detected} />
         <MetricItem testId="metric-error-count" label="Errors" value={job.error_count} />
       </div>
+
+      {/* CTA: only shown after successful completion */}
+      {job.status === 'completed' && onViewPages && (
+        <div className="mt-4 pt-4 border-t border-green-100">
+          <button
+            data-testid="btn-view-pages"
+            onClick={onViewPages}
+            className="w-full flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 transition-colors"
+          >
+            查看页面清单
+            <span aria-hidden="true">→</span>
+          </button>
+        </div>
+      )}
     </div>
   )
 }

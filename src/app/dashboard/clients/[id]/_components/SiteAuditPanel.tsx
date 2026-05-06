@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { CrawlButton, JobStatus } from '../site-audit/_components/CrawlButton';
 import { ProgressCard, SiteAuditJob } from '../site-audit/_components/ProgressCard';
 
@@ -34,13 +35,14 @@ interface StatusApiResponse {
   job: ApiSiteAuditJob | null;
   progressPercent: number | null;
   etaSec: number | null;
+  geoDetectedCount?: number;
 }
 
 /**
  * Adapt the API job shape to the ProgressCard's view model.
  * ProgressCard uses simpler field names; this function bridges the gap.
  */
-function adaptJobForProgressCard(apiJob: ApiSiteAuditJob): SiteAuditJob {
+function adaptJobForProgressCard(apiJob: ApiSiteAuditJob, geoDetectedCount = 0): SiteAuditJob {
   return {
     id: apiJob.id,
     client_id: apiJob.client_id,
@@ -49,7 +51,7 @@ function adaptJobForProgressCard(apiJob: ApiSiteAuditJob): SiteAuditJob {
     total_pages: apiJob.max_pages,
     crawled_pages: apiJob.total_urls_crawled,
     classified_pages: apiJob.total_pages_classified,
-    geo_detected: 0, // not tracked per-job in current schema
+    geo_detected: geoDetectedCount,
     error_count: apiJob.failed_urls.length,
     error_message: apiJob.error_message ?? undefined,
     created_at: apiJob.created_at,
@@ -65,6 +67,7 @@ function adaptJobForProgressCard(apiJob: ApiSiteAuditJob): SiteAuditJob {
  * - ProgressCard: 实时显示爬虫进度
  */
 export function SiteAuditPanel({ clientId }: SiteAuditPanelProps) {
+  const router = useRouter();
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [currentJobStatus, setCurrentJobStatus] = useState<JobStatus | null>(null);
   const [jobData, setJobData] = useState<SiteAuditJob | null>(null);
@@ -100,7 +103,7 @@ export function SiteAuditPanel({ clientId }: SiteAuditPanelProps) {
         const data = await response.json() as StatusApiResponse;
 
         if (data.job) {
-          setJobData(adaptJobForProgressCard(data.job));
+          setJobData(adaptJobForProgressCard(data.job, data.geoDetectedCount ?? 0));
           setCurrentJobStatus(data.job.status);
         }
         setJobError(null);
@@ -153,7 +156,12 @@ export function SiteAuditPanel({ clientId }: SiteAuditPanelProps) {
       </div>
 
       {/* Progress */}
-      <ProgressCard job={jobData} isLoading={isLoadingJob} error={jobError} />
+      <ProgressCard
+        job={jobData}
+        isLoading={isLoadingJob}
+        error={jobError}
+        onViewPages={() => router.push(`/dashboard/clients/${clientId}/site-audit/pages`)}
+      />
 
       {/* Info Box */}
       <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4">
