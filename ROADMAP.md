@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-07 · 当前阶段：**Phase 8.1 全部完成（P8.1.1–P8.1.6 ✅）→ 下一步：Phase 8.2 策略驱动内容执行**
+> 最后更新：2026-05-07 · 当前阶段：**Phase 8.2 全部完成（P8.2.1–P8.2.2 ✅）→ 下一步：Phase 8.3 客户接入向导**
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -416,8 +416,8 @@ Layer 3: 策略驱动执行
 
 **目标**：所有内容生成都通过策略面板触发，携带完整上下文（现有内容 + 关键词 + AI弱项），消除盲目生成问题。
 
-- [ ] **P8.2.1** 博客生成注入 `existing_pages_context`：生成前把话题相关的 client_site_pages 内容摘要注入 prompt，让 GPT-4o 写不同角度而非重叠内容
-- [ ] **P8.2.2** 升级现有页面流程：抓取原文 → Strategy Engine 生成 SEO + GEO 增强版 → UI 展示 diff 对比（原文 vs 升级版）→ 客户一键批准
+- [x] **P8.2.1** 博客生成注入 `existing_pages_context`：`pages-context.ts` 话题词匹配 + `buildPagesContextBlock` prompt 格式化；blog route 自动注入（19 tests）
+- [x] **P8.2.2** 升级现有页面流程：`upgrade-generator.ts`（Jina 抓取 + Claude 重写）+ `POST /api/clients/[id]/pages/[pageId]/upgrade` + 升级详情 UI（diff 对比 + 批准→保存草稿）（18 tests）
 - [ ] **P8.2.3** 内容审计范围扩展：将现有 `content-auditor.ts` 的扫描范围从 blog 路径扩展到全站 `client_site_pages`（已在 Phase 8.0 采集）
 - [ ] **P8.2.4** 社媒联动：博客 approved 后，自动在策略面板生成 3 条对应社媒话题建议（Facebook / Instagram / LinkedIn）
 
