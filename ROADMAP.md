@@ -28,6 +28,7 @@
 📋 Phase 8.M     Marketing Agent 记忆系统（每客户长期 Agent 智能化，中长期）
 ✅ Phase 8.D     DNZ诊断策略层（Stage 1✅ Stage 2✅ Stage 3✅ E2E验证✅ P8.0.7✅ P8.0.8✅ — 全部完成）
 ✅ Phase 8.1     三维内容策略分析（P8.1.1–P8.1.6 全部完成，2026-05-07）
+⏸ Phase 8.P     Paid Social Studio（暂缓 — 待客户明确 Meta 广告需求触发）
 🔄 Phase 9.0     Visual Queue UX Polish（P9.0.1✅P9.0.3✅P9.0.4-9✅ 进行中 · 待：P9.0.2+P9.0.10-17集成测试+浮动卡）
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
@@ -437,6 +438,80 @@ Layer 3: 策略驱动执行
 **验收标准**：
 - 全程 < 10 分钟完成新客户建档
 - 建档完成后，客户主页显示：DNZ采集状态、已采集页面数、Master Brief 状态、GEO Directive 状态
+
+---
+
+### Phase 8.P — Paid Social Studio（Meta 广告生成器）⏸ 暂缓
+
+> **设计背景（2026-05-03 确立）**
+>
+> 借鉴外部实践："URL 输入 → Brand DNA → 40 条 Meta 广告格式 × 配图提示词"全链路。
+> Magic Engine 已有品牌底稿（Brand Brief Studio）和 Visual Studio，可直接复用；
+> 新增价值在于**结构化 Meta 广告格式矩阵**——将 Campaign Studio 扩展到付费社媒方向。
+>
+> **定位**：Campaign Studio 的"付费社媒路线"——有机内容走原有路线，Paid Social 走本 Phase。
+>
+> **当前状态**：⏸ 暂缓 — 待客户明确 Meta 广告需求后触发。规格文档已就位，随时可启动。
+
+**核心链路**：
+
+```
+客户 Brand Brief（已有）+ 可选产品图/素材
+      ↓
+Strategy Engine 提炼 Brand DNA（价值主张 / 目标受众 / 核心差异化）
+      ↓
+批量生成 N 条广告文案（按格式矩阵分类）
+      ↓
+每条广告同步输出 Visual Studio 配图提示词
+      ↓
+一键批量送入 Visual Studio 生成配图
+      ↓
+Publishing Hub 归档 / 排期
+```
+
+**广告格式矩阵（6 大类，共 ~20-40 条）**：
+
+| 格式类型 | 说明 | 数量 |
+|---------|------|------|
+| `testimonial` | 客户见证文案（引用 + 社会证明） | 6-8 |
+| `ugc_angle` | UGC 视角（第一人称体验描述） | 6-8 |
+| `review_card` | 评分卡式（星级 + 简评 + CTA） | 4-6 |
+| `stat_callout` | 数据驱动（一个核心数字 + 上下文） | 4-6 |
+| `comparison` | 对比表（客户方案 vs 通用选项） | 3-4 |
+| `us_vs_them` | 差异化对比（品牌优势 vs 竞品） | 3-4 |
+
+**任务清单**：
+
+**数据库（Day 1）**
+- [ ] **P8.P.1** 新建 `paid_ad_sets` 表（client_id / brief_id / set_name / format_matrix / status / created_at）
+- [ ] **P8.P.2** 新建 `paid_ad_copies` 表（set_id / format_type / headline / body / cta / visual_prompt / visual_asset_id / status）
+
+**核心库（Day 2-3）**
+- [ ] **P8.P.3** `src/lib/paid-social/brand-dna-extractor.ts` — 从 Master Brief 提炼 Brand DNA（价值主张 / 受众痛点 / 差异化 / 证据点），Strategy Engine（Claude）输出结构化 JSON
+- [ ] **P8.P.4** `src/lib/paid-social/ad-copy-generator.ts` — 按格式矩阵批量生成广告文案，Content Engine（GPT-4o-mini）输出，AU/NZ 本地英语拼写强制约束
+- [ ] **P8.P.5** `src/lib/paid-social/visual-prompt-builder.ts` — 为每条广告生成配图提示词（结合产品图描述 + 品牌色调 + 格式规格）
+
+**API（Day 4）**
+- [ ] **P8.P.6** `POST /api/clients/[id]/paid-social/generate` — 触发一次完整生成（brief_id + 可选 format_filter + 可选 reference_image_desc）
+- [ ] **P8.P.7** `GET /api/clients/[id]/paid-social/sets` — 广告集列表
+- [ ] **P8.P.8** `GET /api/clients/[id]/paid-social/sets/[setId]/copies` — 单集文案列表
+- [ ] **P8.P.9** `PATCH /api/clients/[id]/paid-social/copies/[copyId]` — 编辑单条文案 / 更新状态
+- [ ] **P8.P.10** `POST /api/clients/[id]/paid-social/copies/[copyId]/generate-image` — 单条文案触发 Visual Studio 配图生成
+
+**前端页面（Day 5-7）**
+- [ ] **P8.P.11** 路由 `/dashboard/paid-social/[clientId]` 创建（含客户选择 landing）
+- [ ] **P8.P.12** 生成面板：选择 Brief + 勾选格式类型 + 可选填产品图描述 → [Generate Ad Set] 按钮（预估 10 分钟）
+- [ ] **P8.P.13** 广告集列表视图（按格式分组 Tab，每条展示 headline / body / CTA / 状态）
+- [ ] **P8.P.14** 单条广告卡片：文案内联编辑 + 右侧配图提示词展示 + [Generate Image] 按钮
+- [ ] **P8.P.15** 批量操作：[Generate All Images] 一键触发全集配图生成（复用视觉生成队列）
+- [ ] **P8.P.16** 侧边栏导航加 "Paid Social 📣" 菜单项
+
+**验收标准**：
+- 输入客户 Brief，10 分钟内生成 ≥ 20 条跨格式广告文案
+- 每条文案附带可用于 Visual Studio 的配图提示词
+- 文案全部使用 AU/NZ 英语，UI 不暴露 OpenAI/Anthropic 等真实供应商名
+- 批量图片生成可触发，生成结果在广告卡片中预览
+- 对外名：界面统一显示 **"Paid Social Studio"**，AI 引擎称 **"Content Engine"** / **"Strategy Engine"**
 
 ---
 
