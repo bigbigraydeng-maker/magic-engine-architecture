@@ -792,3 +792,69 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
 - **Phase 7 决策（开工前）**：
   - P7.0.1 ✅ AI Tracker 接 OpenAI + Claude + Perplexity
   - P7.0.2 ⚠️ G
+
+---
+
+## 9. 功能完成日志
+
+> 每次上线新功能时在此追加。格式：**[完成日期]** — Phase ID + 描述 + Commit 引用。
+> 此日志从 CLAUDE.md §十五.C 迁移至此（2026-05-10），CLAUDE.md 不再维护历史日志。
+
+### 2026-05-07
+
+- **P8.3.1** — 客户接入向导（5步集成 DNZ）完成
+  `feat(onboarding): 5-step client onboarding wizard with DNZ integration [P8.3.1]`
+  交付：`/dashboard/clients/new` 5步向导 + `useSiteAuditPolling` hook + Master Brief reminder banner + 删除旧 `/onboarding` 3步流程
+
+- **Phase 9.0 P9.0.8–P9.0.9** — Visual Queue UX Polish
+  `feat(visual-queue): P9.0.1-P9.0.3 UX polish`
+  交付：`globals.css` 新增动画 · queued 状态 SVG 弧形环 · slide-in-x · scale-pop
+
+- **Phase 8.2** — 策略驱动内容执行 P8.2.1–P8.2.3 全部完成
+  `feat(strategy): Phase 8.2 strategy-driven content execution [P8.2]`
+  交付：`pages-context.ts`（19 tests）+ `upgrade-generator.ts`（11 tests）+ 升级 API（7 tests）+ 升级 UI + `content-auditor.ts` 扩展（11 tests）· 共 48 tests
+
+- **Phase 8.1** — 三维内容策略分析（P8.1.1–P8.1.6 全部完成）
+  `feat(strategy): Phase 8.1 three-dimensional content strategy analysis [P8.1]`
+  交付：`content_strategy_items` 表 + `scorer.ts`（41 tests）+ `analyzer.ts`（23 tests）+ generate/list API + 策略面板 UI · 共 101 tests
+
+- **Phase 8.D** — DNZ 诊断策略层全部完成（P8.0.7 GEO计数修复 + P8.0.8 页面清单UI）
+
+- **Phase 8.Q.4** — 内容帖子批量编辑 UI
+  `feat(content): P8.Q.4 batch edit UI with status dropdown and delete`
+  交付：批量 API（5种状态 + delete）+ 状态下拉 + 乐观更新 + 二次确认
+
+### 2026-05-05
+
+- **P8.0.6** — DNZ Async Framework API Routes & Cron
+  `feat(dnz): implement P8.0.6 API routes and cron with TDD (133 tests, 99.37% coverage) [P8.0.6]`
+
+- **P7.3.21-23** — GEO Deployment Assistant
+  `feat(geo-composer): implement deployment assistant with revoke functionality [P7.3.21-23]`
+
+### 2026-05-02
+
+- **Phase 8.R** — Reels Studio 完成
+  `feat(reels-studio): complete video generation pipeline with editing [P8.R]`
+
+### 2026-05-01
+
+- **Phase 8.6-8.9, 8.11** — DataForSEO 完整集成
+  `feat(seo-intelligence): add DataForSEO link, serp, local, baseline, billing [P8.6-8.9, P8.11]`
+
+- **Phase 7.1** — AI Visibility Tracker（5个引擎 Runner 上线）
+  `feat(ai-tracker): launch openai, claude, perplexity runners with weekly scheduling [P7.1]`
+
+- **Phase 8.C.1** — 月报整合（6大数据源聚合）
+  `feat(reporting): unified monthly report aggregating 6 data sources [P8.C.1]`
+
+### 2026-04-30
+
+- **Phase 7.0** — 7项架构决策完成
+  `docs(roadmap): finalize Phase 7.0 decisions [P7.0]`
+
+- **Phase 7.2** — GEO Composer 核心库
+  `feat(geo-composer): launch directive editor, generation, and snippet deployment [P7.2]`
+
+- **Phase 7.3.1-5** — 双信号博客生成库（安全修复）
+  `feat(blog-generation): dual-signal blog engine with SEO/GEO optimization [P7.3.1-5]`

@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
 
     if (file.size > MAX_SIZE_BYTES) {
       return NextResponse.json(
-        { success: false, error: `File too large (${Math.round(file.size / 1024 / 1024)}MB). Max 100MB.` },
+        { success: false, error: `File too large (${Math.round(file.size / 1024 / 1024)}MB). Max 500MB.` },
         { status: 400 }
       )
     }

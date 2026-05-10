@@ -1,10 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { DataSourceMonthlyReport, GenerateReportResponse } from '@/types/monthly-report'
 import { AITrackerCollector } from './collectors/ai-tracker'
-import { LinkIntelligenceCollector } from './collectors/link-intelligence'
-import { SERPIntelligenceCollector } from './collectors/serp-intelligence'
-import { LocalVisibilityCollector } from './collectors/local-visibility'
-import { MarketBaselineCollector } from './collectors/market-baseline'
 import { BillingMonitorCollector } from './collectors/billing-monitor'
 
 export class MonthlyReportAggregator {
@@ -16,10 +12,6 @@ export class MonthlyReportAggregator {
 
   private collectors = [
     new AITrackerCollector(),
-    new LinkIntelligenceCollector(),
-    new SERPIntelligenceCollector(),
-    new LocalVisibilityCollector(),
-    new MarketBaselineCollector(),
     new BillingMonitorCollector(),
   ]
 
@@ -163,37 +155,12 @@ export class MonthlyReportAggregator {
       return { healthScore: 50, healthTrend: 'stable' }
     }
 
-    // Calculate health score from metrics (0-100)
     const scores = []
 
     // AI Tracker score: ranking position (lower is better)
     if (report.ai_avg_ranking) {
       const aiScore = Math.max(0, 100 - report.ai_avg_ranking * 5)
       scores.push(aiScore)
-    }
-
-    // Link Intelligence score: backlinks and quality
-    if (report.backlinks_total > 0) {
-      const linkScore = Math.min(100, (report.backlinks_total / 100) * 50)
-      scores.push(linkScore)
-    }
-
-    // SERP score: keywords in top 10
-    if (report.serp_tracked_keywords && report.serp_top10_keywords !== undefined) {
-      const serpScore = (report.serp_top10_keywords / Math.max(1, report.serp_tracked_keywords)) * 100
-      scores.push(Math.min(100, serpScore))
-    }
-
-    // Local Visibility score
-    if (report.local_tracked_keywords && report.local_top10_keywords !== undefined) {
-      const localScore = (report.local_top10_keywords / Math.max(1, report.local_tracked_keywords)) * 100
-      scores.push(Math.min(100, localScore))
-    }
-
-    // Market Baseline score
-    if (report.market_opportunity_score) {
-      const marketScore = Math.min(100, report.market_opportunity_score)
-      scores.push(marketScore)
     }
 
     const healthScore = scores.length > 0 ? Math.round(scores.reduce((a, b) => a + b) / scores.length) : 50
@@ -239,45 +206,6 @@ export class MonthlyReportAggregator {
         }
         break
 
-      case 'link_intel':
-        if (data.new_backlinks_this_month > 0) {
-          insights.push(`Gained ${data.new_backlinks_this_month} new backlinks this month`)
-        }
-        if (data.quality_score) {
-          insights.push(`Average backlink quality score: ${data.quality_score.toFixed(2)}/100`)
-        }
-        if (data.top_referring_domains?.length > 0) {
-          insights.push(`Top referrer: ${data.top_referring_domains[0]}`)
-        }
-        break
-
-      case 'serp':
-        if (data.top10_keywords) {
-          insights.push(`${data.top10_keywords} keywords ranking in top 10`)
-        }
-        if (data.new_rankings > 0) {
-          insights.push(`${data.new_rankings} new keyword rankings this month`)
-        }
-        break
-
-      case 'local':
-        if (data.cities_covered) {
-          insights.push(`Covering ${data.cities_covered} cities`)
-        }
-        if (data.avg_position) {
-          insights.push(`Average local ranking: #${Math.round(data.avg_position)}`)
-        }
-        break
-
-      case 'market':
-        if (data.market_strength) {
-          insights.push(`Market position: ${data.market_strength}`)
-        }
-        if (data.top_opportunities > 0) {
-          insights.push(`${data.top_opportunities} top opportunities identified`)
-        }
-        break
-
       case 'billing':
         if (data.total_cost_usd > 0) {
           insights.push(`Total monthly cost: $${data.total_cost_usd.toFixed(2)}`)
@@ -304,36 +232,6 @@ export class MonthlyReportAggregator {
         }
         if (!data.top_questions || data.top_questions.length === 0) {
           recommendations.push('Generate more industry-specific questions for tracking')
-        }
-        break
-
-      case 'link_intel':
-        if (data.new_backlinks_this_month < 5) {
-          recommendations.push('Increase link-building activities to expand backlink profile')
-        }
-        if (data.quality_score && data.quality_score < 60) {
-          recommendations.push('Focus on acquiring high-quality backlinks from authority domains')
-        }
-        break
-
-      case 'serp':
-        if (data.top10_keywords === 0) {
-          recommendations.push('Target low-competition keywords to achieve faster rankings')
-        }
-        if (data.lost_rankings > data.new_rankings) {
-          recommendations.push('Review ranking decline - may need content updates')
-        }
-        break
-
-      case 'local':
-        if (data.cities_covered < 5) {
-          recommendations.push('Expand local optimization to additional geographic markets')
-        }
-        break
-
-      case 'market':
-        if (data.underperformers > data.top_opportunities) {
-          recommendations.push('Reassess market positioning strategy')
         }
         break
 
@@ -367,10 +265,6 @@ export class MonthlyReportAggregator {
   private getSectionTitle(sectionType: string): string {
     const titles: Record<string, string> = {
       ai_tracker: 'AI Visibility Tracker',
-      link_intel: 'Link Intelligence',
-      serp: 'SERP Intelligence',
-      local: 'Local Visibility',
-      market: 'Market Baseline',
       billing: 'Billing Monitor',
     }
     return titles[sectionType] || sectionType

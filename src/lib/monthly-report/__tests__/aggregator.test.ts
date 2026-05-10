@@ -47,38 +47,6 @@ vi.mock('../collectors/ai-tracker', () => ({
   })),
 }))
 
-vi.mock('../collectors/link-intelligence', () => ({
-  LinkIntelligenceCollector: vi.fn().mockImplementation(() => ({
-    datasource_type: 'link_intel',
-    name: 'Link Intelligence',
-    execute: vi.fn(),
-  })),
-}))
-
-vi.mock('../collectors/serp-intelligence', () => ({
-  SERPIntelligenceCollector: vi.fn().mockImplementation(() => ({
-    datasource_type: 'serp',
-    name: 'SERP Intelligence',
-    execute: vi.fn(),
-  })),
-}))
-
-vi.mock('../collectors/local-visibility', () => ({
-  LocalVisibilityCollector: vi.fn().mockImplementation(() => ({
-    datasource_type: 'local',
-    name: 'Local Visibility',
-    execute: vi.fn(),
-  })),
-}))
-
-vi.mock('../collectors/market-baseline', () => ({
-  MarketBaselineCollector: vi.fn().mockImplementation(() => ({
-    datasource_type: 'market',
-    name: 'Market Baseline',
-    execute: vi.fn(),
-  })),
-}))
-
 vi.mock('../collectors/billing-monitor', () => ({
   BillingMonitorCollector: vi.fn().mockImplementation(() => ({
     datasource_type: 'billing',
@@ -118,26 +86,6 @@ describe('MonthlyReportAggregator', () => {
       expect(title).toBe('AI Visibility Tracker')
     })
 
-    it('should return correct title for link_intel', () => {
-      const title = aggregator['getSectionTitle']('link_intel')
-      expect(title).toBe('Link Intelligence')
-    })
-
-    it('should return correct title for serp', () => {
-      const title = aggregator['getSectionTitle']('serp')
-      expect(title).toBe('SERP Intelligence')
-    })
-
-    it('should return correct title for local', () => {
-      const title = aggregator['getSectionTitle']('local')
-      expect(title).toBe('Local Visibility')
-    })
-
-    it('should return correct title for market', () => {
-      const title = aggregator['getSectionTitle']('market')
-      expect(title).toBe('Market Baseline')
-    })
-
     it('should return correct title for billing', () => {
       const title = aggregator['getSectionTitle']('billing')
       expect(title).toBe('Billing Monitor')
@@ -161,55 +109,6 @@ describe('MonthlyReportAggregator', () => {
 
       expect(insights.length).toBeGreaterThan(0)
       expect(insights.some((i) => i.includes('AI ranking'))).toBe(true)
-    })
-
-    it('should generate link intelligence insights', () => {
-      const data = {
-        new_backlinks_this_month: 10,
-        quality_score: 75.5,
-        top_referring_domains: ['example.com', 'test.com'],
-      }
-
-      const insights = aggregator['generateInsights']('link_intel', data)
-
-      expect(insights.length).toBeGreaterThan(0)
-      expect(insights.some((i) => i.includes('backlinks'))).toBe(true)
-    })
-
-    it('should generate SERP insights', () => {
-      const data = {
-        top10_keywords: 25,
-        new_rankings: 5,
-      }
-
-      const insights = aggregator['generateInsights']('serp', data)
-
-      expect(insights.length).toBeGreaterThan(0)
-      expect(insights.some((i) => i.includes('top 10'))).toBe(true)
-    })
-
-    it('should generate local visibility insights', () => {
-      const data = {
-        cities_covered: 5,
-        avg_position: 12.5,
-      }
-
-      const insights = aggregator['generateInsights']('local', data)
-
-      expect(insights.length).toBeGreaterThan(0)
-      expect(insights.some((i) => i.includes('cities'))).toBe(true)
-    })
-
-    it('should generate market baseline insights', () => {
-      const data = {
-        market_strength: 'ahead',
-        top_opportunities: 15,
-      }
-
-      const insights = aggregator['generateInsights']('market', data)
-
-      expect(insights.length).toBeGreaterThan(0)
-      expect(insights.some((i) => i.includes('Market'))).toBe(true)
     })
 
     it('should generate billing insights', () => {
@@ -237,53 +136,6 @@ describe('MonthlyReportAggregator', () => {
       expect(recs.length).toBeGreaterThan(0)
     })
 
-    it('should generate link intelligence recommendations for low backlink growth', () => {
-      const data = {
-        new_backlinks_this_month: 2,
-        quality_score: 50,
-      }
-
-      const recs = aggregator['generateRecommendations']('link_intel', data)
-
-      expect(recs.length).toBeGreaterThan(0)
-      expect(recs.some((r) => r.includes('link-building'))).toBe(true)
-    })
-
-    it('should generate SERP recommendations for keyword loss', () => {
-      const data = {
-        top10_keywords: 0,
-        lost_rankings: 10,
-        new_rankings: 5,
-      }
-
-      const recs = aggregator['generateRecommendations']('serp', data)
-
-      expect(recs.length).toBeGreaterThan(0)
-    })
-
-    it('should generate local recommendations for limited city coverage', () => {
-      const data = {
-        cities_covered: 2,
-      }
-
-      const recs = aggregator['generateRecommendations']('local', data)
-
-      expect(recs.length).toBeGreaterThan(0)
-      expect(recs.some((r) => r.includes('Expand'))).toBe(true)
-    })
-
-    it('should generate market recommendations for underperformance', () => {
-      const data = {
-        underperformers: 20,
-        top_opportunities: 5,
-      }
-
-      const recs = aggregator['generateRecommendations']('market', data)
-
-      expect(recs.length).toBeGreaterThan(0)
-      expect(recs.some((r) => r.includes('Reassess'))).toBe(true)
-    })
-
     it('should generate billing recommendations for high costs', () => {
       const data = {
         total_cost_usd: 1500,
@@ -295,15 +147,14 @@ describe('MonthlyReportAggregator', () => {
       expect(recs.some((r) => r.includes('optimize'))).toBe(true)
     })
 
-    it('should not recommend when metrics are good', () => {
+    it('should not recommend when AI metrics are good', () => {
       const data = {
-        new_backlinks_this_month: 10,
-        quality_score: 85,
+        ranking_change: 0,
+        top_questions: ['q1', 'q2'],
       }
 
-      const recs = aggregator['generateRecommendations']('link_intel', data)
+      const recs = aggregator['generateRecommendations']('ai_tracker', data)
 
-      // When metrics are good, no recommendations
       expect(recs.length).toBe(0)
     })
   })
@@ -330,15 +181,8 @@ describe('MonthlyReportAggregator', () => {
       expect(Array.isArray(insights)).toBe(true)
     })
 
-    it('should generate insights for all datasource types', () => {
-      const types = [
-        'ai_tracker',
-        'link_intel',
-        'serp',
-        'local',
-        'market',
-        'billing',
-      ]
+    it('should generate insights for active datasource types', () => {
+      const types = ['ai_tracker', 'billing']
 
       types.forEach((type) => {
         const insights = aggregator['generateInsights'](type, {})
@@ -346,15 +190,8 @@ describe('MonthlyReportAggregator', () => {
       })
     })
 
-    it('should generate recommendations for all datasource types', () => {
-      const types = [
-        'ai_tracker',
-        'link_intel',
-        'serp',
-        'local',
-        'market',
-        'billing',
-      ]
+    it('should generate recommendations for active datasource types', () => {
+      const types = ['ai_tracker', 'billing']
 
       types.forEach((type) => {
         const recs = aggregator['generateRecommendations'](type, {})
@@ -407,38 +244,6 @@ describe('MonthlyReportAggregator', () => {
       expect(Array.isArray(insights)).toBe(true)
     })
 
-    it('should generate insights for high backlink quality', () => {
-      const data = {
-        quality_score: 95,
-        new_backlinks_this_month: 20,
-        top_referring_domains: ['a.com', 'b.com', 'c.com'],
-      }
-
-      const insights = aggregator['generateInsights']('link_intel', data)
-      expect(insights.length).toBeGreaterThan(0)
-    })
-
-    it('should generate insights for poor local visibility', () => {
-      const data = {
-        cities_covered: 0,
-        avg_position: 100,
-      }
-
-      const insights = aggregator['generateInsights']('local', data)
-      expect(insights.length).toBeGreaterThan(0)
-    })
-
-    it('should generate insights for declining market position', () => {
-      const data = {
-        market_strength: 'behind',
-        top_opportunities: 0,
-        underperformers: 50,
-      }
-
-      const insights = aggregator['generateInsights']('market', data)
-      expect(insights.length).toBeGreaterThan(0)
-    })
-
     it('should generate insights for zero billing cost', () => {
       const data = {
         total_cost_usd: 0,
@@ -463,70 +268,33 @@ describe('MonthlyReportAggregator', () => {
       expect(recs.length).toBeGreaterThan(0)
     })
 
-    it('should recommend for zero backlinks', () => {
-      const data = {
-        total_backlinks: 0,
-        new_backlinks_this_month: 0,
-        quality_score: 0,
-      }
-
-      const recs = aggregator['generateRecommendations']('link_intel', data)
-      expect(recs.length).toBeGreaterThan(0)
-    })
-
-    it('should recommend for massive keyword loss', () => {
-      const data = {
-        lost_rankings: 100,
-        new_rankings: 0,
-        top10_keywords: 0,
-      }
-
-      const recs = aggregator['generateRecommendations']('serp', data)
-      expect(recs.length).toBeGreaterThan(0)
-    })
-
     it('should not recommend when all metrics are excellent', () => {
       const data = {
         avg_ranking: 3,
-        quality_score: 95,
-        top10_keywords: 100,
-        cities_covered: 20,
-        market_strength: 'ahead',
+        ranking_change: 0,
+        top_questions: ['q1', 'q2', 'q3'],
         total_cost_usd: 100,
       }
 
-      // When metrics are excellent, should have minimal or no recommendations
       const recs = aggregator['generateRecommendations']('ai_tracker', data)
-      const linksRecs = aggregator['generateRecommendations']('link_intel', {
-        quality_score: 95,
-        new_backlinks_this_month: 50,
-      })
-
-      // At least some should be empty or minimal
-      expect(
-        recs.length === 0 ||
-          linksRecs.length === 0 ||
-          recs.filter((r) => !r.includes('Consider')).length === 0
-      ).toBe(true)
+      expect(recs.length).toBe(0)
     })
   })
 
   describe('section title mapping completeness', () => {
-    it('should have titles for all known datasource types', () => {
-      const types = [
-        'ai_tracker',
-        'link_intel',
-        'serp',
-        'local',
-        'market',
-        'billing',
-      ]
+    it('should have titles for active datasource types', () => {
+      const types = ['ai_tracker', 'billing']
 
       types.forEach((type) => {
         const title = aggregator['getSectionTitle'](type)
-        expect(title).not.toBe(type) // Should not return the type itself
+        expect(title).not.toBe(type)
         expect(title.length).toBeGreaterThan(0)
       })
+    })
+
+    it('should return the type itself for unknown datasource types', () => {
+      const unknown = aggregator['getSectionTitle']('unknown_type')
+      expect(unknown).toBe('unknown_type')
     })
   })
 
@@ -608,17 +376,11 @@ describe('MonthlyReportAggregator', () => {
       expect(healthTrend).toBe('stable')
     })
 
-    it('should calculate health score from multiple metrics', async () => {
+    it('should calculate health score from AI ranking only', async () => {
       const mockReportData = {
         id: 1,
         month: '2026-05',
         ai_avg_ranking: 10, // Score: 100 - 10*5 = 50
-        backlinks_total: 200, // Score: (200/100)*50 = 100
-        serp_tracked_keywords: 100,
-        serp_top10_keywords: 50, // Score: 50/100 = 50
-        local_tracked_keywords: 10,
-        local_top10_keywords: 5, // Score: 5/10 = 50
-        market_opportunity_score: 75,
         overall_health_score: null,
       }
 
@@ -631,8 +393,8 @@ describe('MonthlyReportAggregator', () => {
         '2026-05'
       )
 
-      // Average of [50, 100, 50, 50, 75] = 65
-      expect(healthScore).toBe(65)
+      // Only AI ranking contributes: 100 - 10*5 = 50
+      expect(healthScore).toBe(50)
       expect(healthTrend).toBe('stable')
     })
 
@@ -844,7 +606,7 @@ describe('MonthlyReportAggregator', () => {
       const response = await aggregator.generateReport('test-client', '2026-05')
 
       expect(response.success).toBe(false)
-      expect(response.errors).toHaveLength(6)
+      expect(response.errors).toHaveLength(2)
       expect(response.warnings).toContain('All datasources failed to collect data')
     })
 
@@ -946,7 +708,7 @@ describe('MonthlyReportAggregator', () => {
     it('should have all 6 collectors instantiated', () => {
       // Verify collector array has correct length
       expect(aggregator['collectors']).toBeDefined()
-      expect(aggregator['collectors'].length).toBe(6)
+      expect(aggregator['collectors'].length).toBe(2)
     })
 
 

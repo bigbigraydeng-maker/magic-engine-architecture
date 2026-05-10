@@ -3,6 +3,9 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
+// Step 1: Client Info — onboarding + brief + strategy
+// Step 2: Generate Content — blog, social, visual, video
+// Step 3: Publish — scheduling and distribution
 const navItems = [
   {
     href: '/dashboard',
@@ -10,22 +13,18 @@ const navItems = [
     emoji: '🏠',
     exact: true,
   },
+  // ── Step 1: Client Info ──
   {
     href: '/dashboard/clients',
     label: 'Clients',
     emoji: '👥',
     exact: false,
   },
+  // ── Step 2: Generate Content ──
   {
     href: '/dashboard/content',
     label: 'Content',
     emoji: '📝',
-    exact: false,
-  },
-  {
-    href: '/dashboard/keywords',
-    label: 'Keywords',
-    emoji: '🔑',
     exact: false,
   },
   {
@@ -34,13 +33,7 @@ const navItems = [
     emoji: '🚀',
     exact: false,
   },
-  {
-    href: '/dashboard/airtable',
-    label: 'Airtable Views',
-    emoji: '📊',
-    exact: false,
-  },
-  // Phase 7 — AI Visibility & GEO
+  // ── AI Intelligence ──
   {
     href: '/dashboard/ai-visibility',
     label: 'AI Visibility',
@@ -53,37 +46,14 @@ const navItems = [
     emoji: '🌐',
     exact: false,
   },
+  // ── Reporting ──
   {
     href: '/dashboard/reports',
     label: 'Reports',
     emoji: '📊',
     exact: false,
   },
-  // Phase 8 — Datasources & Intelligence
-  {
-    href: '/dashboard/link-intelligence',
-    label: 'Link Intelligence',
-    emoji: '🔗',
-    exact: false,
-  },
-  {
-    href: '/dashboard/serp-intelligence',
-    label: 'SERP Intelligence',
-    emoji: '📈',
-    exact: false,
-  },
-  {
-    href: '/dashboard/local-visibility',
-    label: 'Local Visibility',
-    emoji: '🗺️',
-    exact: false,
-  },
-  {
-    href: '/dashboard/market-baseline',
-    label: 'Market Baseline',
-    emoji: '📊',
-    exact: false,
-  },
+  // ── Admin ──
   {
     href: '/dashboard/admin/billing-monitor',
     label: 'Billing Monitor',
