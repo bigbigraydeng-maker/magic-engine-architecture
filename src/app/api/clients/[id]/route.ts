@@ -30,10 +30,23 @@ export async function GET(
 }
 
 // DELETE /api/clients/[id]
+// TODO(P8.3.2): replace this origin guard with Magic Link session auth
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  // Minimal SSRF / external-caller guard until proper session auth lands (P8.3.2).
+  // Only allow requests that originate from the same app host.
+  const host = req.headers.get('host') ?? ''
+  const origin = req.headers.get('origin') ?? ''
+  const referer = req.headers.get('referer') ?? ''
+  const callerOk =
+    (origin && (origin.includes(host) || origin.includes('localhost'))) ||
+    (referer && (referer.includes(host) || referer.includes('localhost')))
+  if (!callerOk) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+
   try {
     const { error } = await supabaseAdmin
       .from('clients')

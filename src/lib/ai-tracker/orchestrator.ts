@@ -474,7 +474,12 @@ function mergeClientBrandVariants(
     const keyLower = key.toLowerCase().trim()
     if (keyLower === canonLower) {
       canonicalKey = key
-    } else if (keyLower.includes(canonLower) || canonLower.includes(keyLower)) {
+    } else if (keyLower.includes(canonLower)) {
+      // Only merge when the RAW CANDIDATE contains the canonical brand name
+      // (e.g. "CTS Tours - China Travel Service NZ" contains "CTS Tours").
+      // Deliberately NOT merging the reverse direction — that would absorb
+      // short competitor names into a longer client name (e.g. "Magic" into
+      // "Magic Engine"), corrupting competitor rankings in the snapshot.
       variantKeys.push(key)
     }
   }
