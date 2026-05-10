@@ -33,14 +33,6 @@ import type {
 // Engines run sequentially (not in parallel) to prevent cross-engine burst.
 const PER_ENGINE_BATCH_SIZE = 1
 
-// Display names shown in UI and reports — use real platform names for AI Tracker
-// (unlike other Magic Engine modules, the platform name IS the product value)
-export const ENGINE_DISPLAY_NAMES: Record<string, string> = {
-  openai:     'ChatGPT',
-  perplexity: 'Perplexity',
-  google:     'Google AI',
-  anthropic:  'Claude',
-}
 
 export interface RunTrackerInput {
   client_id: string
@@ -131,7 +123,7 @@ export async function runTracker(
   // 4. Aggregate weekly snapshot (only if we got at least one successful run)
   console.log('[runTracker] Aggregating snapshot...')
   if (result.runs_succeeded > 0) {
-    result.snapshot_id = await aggregateSnapshot(client.id)
+    result.snapshot_id = await aggregateSnapshot(client.id, brandName)
   }
 
   result.total_latency_ms = Date.now() - startTime
@@ -352,7 +344,7 @@ async function processOne(input: ProcessOneInput): Promise<void> {
  * Aggregate this week's runs into ai_visibility_snapshots.
  * Uses Monday of the current week as the snapshot key.
  */
-async function aggregateSnapshot(clientId: string): Promise<string | null> {
+async function aggregateSnapshot(clientId: string, brandName: string): Promise<string | null> {
   const weekOf = mondayOfThisWeek().toISOString().slice(0, 10) // YYYY-MM-DD
 
   // Pull all runs for this client this week
@@ -382,7 +374,8 @@ async function aggregateSnapshot(clientId: string): Promise<string | null> {
     runs as Array<{
       ai_engine: string
       brands_mentioned: BrandMention[]
-    }>
+    }>,
+    brandName
   )
 
   // Upsert by (client_id, week_of)
@@ -409,7 +402,8 @@ async function aggregateSnapshot(clientId: string): Promise<string | null> {
 
 /** Aggregate brand mentions across all runs into a flat ranking table. */
 function buildRankingTable(
-  runs: Array<{ ai_engine: string; brands_mentioned: BrandMention[] }>
+  runs: Array<{ ai_engine: string; brands_mentioned: BrandMention[] }>,
+  clientBrandName?: string
 ): Record<string, unknown> {
   const byBrand = new Map<
     string,
@@ -438,6 +432,12 @@ function buildRankingTable(
     }
   }
 
+  // Merge brand name variants for the client (e.g. "CTS Tours" and
+  // "CTS Tours - China Travel Service (NZ) Limited" → one canonical entry)
+  if (clientBrandName) {
+    mergeClientBrandVariants(byBrand, clientBrandName)
+  }
+
   const brands = Array.from(byBrand.entries())
     .map(([name, e]) => ({
       name,
@@ -452,6 +452,54 @@ function buildRankingTable(
     })
 
   return { brands }
+}
+
+/**
+ * Merge all brand-name variants of the client into a single canonical entry.
+ * Variants are detected by substring inclusion (case-insensitive):
+ *   "CTS Tours - China Travel Service (NZ) Limited" includes "CTS Tours"
+ *   → both collapse into the canonical client brand name.
+ */
+function mergeClientBrandVariants(
+  byBrand: Map<string, { mentions: number; rankSum: number; byEngine: Record<string, number[]> }>,
+  clientBrandName: string
+): void {
+  const canon = clientBrandName.trim()
+  const canonLower = canon.toLowerCase()
+
+  let canonicalKey = ''
+  const variantKeys: string[] = []
+
+  for (const key of Array.from(byBrand.keys())) {
+    const keyLower = key.toLowerCase().trim()
+    if (keyLower === canonLower) {
+      canonicalKey = key
+    } else if (keyLower.includes(canonLower) || canonLower.includes(keyLower)) {
+      variantKeys.push(key)
+    }
+  }
+
+  if (variantKeys.length === 0) return
+
+  const canonEntry = (canonicalKey ? byBrand.get(canonicalKey) : undefined) ?? {
+    mentions: 0,
+    rankSum: 0,
+    byEngine: {} as Record<string, number[]>,
+  }
+
+  for (const variantKey of variantKeys) {
+    const variant = byBrand.get(variantKey)
+    if (!variant) continue
+    canonEntry.mentions += variant.mentions
+    canonEntry.rankSum += variant.rankSum
+    for (const [engine, ranks] of Object.entries(variant.byEngine)) {
+      canonEntry.byEngine[engine] = [...(canonEntry.byEngine[engine] ?? []), ...ranks]
+    }
+    byBrand.delete(variantKey)
+  }
+
+  if (canonicalKey && canonicalKey !== canon) byBrand.delete(canonicalKey)
+  byBrand.set(canon, canonEntry)
 }
 
 /** Returns this week's Monday at 00:00 UTC. */

@@ -29,6 +29,25 @@ export async function GET(
   }
 }
 
+// DELETE /api/clients/[id]
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const { error } = await supabaseAdmin
+      .from('clients')
+      .delete()
+      .eq('id', params.id)
+
+    if (error) throw error
+    return NextResponse.json({ success: true })
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
+}
+
 // PATCH /api/clients/[id]
 export async function PATCH(
   req: NextRequest,
