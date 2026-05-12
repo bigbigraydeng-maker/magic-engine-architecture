@@ -71,16 +71,36 @@ export function SiteAuditPanel({ clientId }: SiteAuditPanelProps) {
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [currentJobStatus, setCurrentJobStatus] = useState<JobStatus | null>(null);
   const [jobData, setJobData] = useState<SiteAuditJob | null>(null);
-  // Only show loading skeleton on the very first fetch (before any data exists)
-  const [isLoadingJob, setIsLoadingJob] = useState(false);
+  const [isLoadingJob, setIsLoadingJob] = useState(true);
   const [jobError, setJobError] = useState<string | null>(null);
+
+  // On mount: fetch latest job so the panel isn't blank on first open
+  useEffect(() => {
+    async function fetchLatestJob() {
+      try {
+        const res = await fetch(`/api/clients/${clientId}/site-audit/status`);
+        if (!res.ok) return;
+        const data = await res.json() as StatusApiResponse;
+        if (data.job) {
+          setCurrentJobId(data.job.id);
+          setCurrentJobStatus(data.job.status);
+          setJobData(adaptJobForProgressCard(data.job, data.geoDetectedCount ?? 0));
+        }
+      } catch {
+        // Non-fatal — just leave the panel empty
+      } finally {
+        setIsLoadingJob(false);
+      }
+    }
+    fetchLatestJob();
+  }, [clientId]);
 
   const handleJobStarted = (jobId: string) => {
     setCurrentJobId(jobId);
     setCurrentJobStatus('pending');
     setJobError(null);
-    setJobData(null);    // Clear previous job data when a new job starts
-    setIsLoadingJob(true); // Show skeleton while we fetch the new job
+    setJobData(null);
+    setIsLoadingJob(true);
   };
 
   // 轮询 job 状态
