@@ -72,7 +72,7 @@ export default function Step1BasicInfo({ initial, onSubmit, loading }: Props) {
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="e.g., CTS Tours Aotearoa"
-          className={`w-full px-4 py-2 rounded-lg border transition-colors ${
+          className={`w-full px-4 py-2 rounded-lg border transition-colors text-slate-900 ${
             errors.name
               ? 'border-red-500 bg-red-50'
               : 'border-slate-300 bg-white hover:border-slate-400'
@@ -92,7 +92,7 @@ export default function Step1BasicInfo({ initial, onSubmit, loading }: Props) {
           value={domain}
           onChange={(e) => setDomain(e.target.value)}
           placeholder="e.g., ctstours.co.nz"
-          className={`w-full px-4 py-2 rounded-lg border transition-colors ${
+          className={`w-full px-4 py-2 rounded-lg border transition-colors text-slate-900 ${
             errors.domain
               ? 'border-red-500 bg-red-50'
               : 'border-slate-300 bg-white hover:border-slate-400'
