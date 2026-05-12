@@ -78,7 +78,7 @@ export default function AiVisibilityPage() {
     setRunMsg('Running… (may take up to 5 minutes)');
     setRunSuccess(null);
     try {
-      const res = await fetch('/api/ai-tracker/run', {
+      const res = await fetch('/api/ai-tracker/run-dashboard', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ client_id: clientId }),

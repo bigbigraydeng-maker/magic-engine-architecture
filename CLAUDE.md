@@ -64,6 +64,8 @@ UI / 报告 / 客户交付物中**禁止出现真实供应商名**，只用封�
 - 乐观更新：先更新 UI，再调 API
 - 可复用逻辑放 `src/lib`，路由层只放 `src/app/api`
 - UI 层禁止出现第三方供应商真实名
+- **外科手术式改动**：只改必须改的，不顺手"优化"相邻代码、注释或格式；风格与现有代码保持一致
+- **写前先读**：修改任何文件前，先读该文件的 exports、直接调用方、共享工具函数；不确定某段代码为何如此设计时，先问再改
 
 ---
 
@@ -113,13 +115,13 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-10
+> 最后更新：2026-05-12
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
 | **P8.3.2** | Dashboard Magic Link 鉴权（防止数据泄露） | ⭐⭐ |
 | **P7.4.15** | Week 2 CTS Tours AI Tracker 复跑（2026-05-12） | ⭐⭐ |
-| **P9.0.2** | `generation-config.ts` 补全 `getStagesForType` + `getCancelThresholdMs` | ⭐ |
+| **P9.0.10** | `GenerationProgress.test.tsx` 集成测试（进度环/倒计时/取消按钮）| ⭐ |
 
 完成后进入：Phase 8.3.2 简单鉴权（详见 ROADMAP.md § Phase 8.3）
 
