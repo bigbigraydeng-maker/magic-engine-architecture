@@ -733,7 +733,7 @@ export function ReelsStudio({ clientId }: Props) {
                       }}
                       placeholder="Change something…"
                       disabled={chatLoading}
-                      className="flex-1 text-xs border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                      className="flex-1 text-xs text-gray-900 border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
                     />
                     <button
                       onClick={handleChat}
