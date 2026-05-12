@@ -165,7 +165,7 @@ export default function Step2BriefUpload({
                 value={url}
                 onChange={(e) => updateUrl(i, e.target.value)}
                 placeholder="https://example.com/about"
-                className="flex-1 px-4 py-2 rounded-lg border border-slate-300 bg-white hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="flex-1 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-900 hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 disabled={loading}
               />
               {websiteUrls.length > 1 && (
