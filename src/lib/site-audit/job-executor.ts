@@ -157,14 +157,17 @@ export async function crawlAndClassifyPages(
       : 0
 
     // Step 4: Upsert to client_site_pages
+    let pagePath = '/'
+    try { pagePath = new URL(crawl.url).pathname } catch { /* keep default */ }
+
     try {
       const { error: upsertError } = await supabase
         .from('client_site_pages')
         .upsert(
           {
             client_id: clientId,
-            job_id: jobId,
             url: crawl.url,
+            path: pagePath,
             title: crawl.title,
             markdown_content: crawl.markdown,
             word_count: wordCount,
@@ -177,6 +180,7 @@ export async function crawlAndClassifyPages(
             geo_confidence: geoConfidence,
             status_code: crawl.statusCode,
             crawled_at: crawl.crawledAt.toISOString(),
+            crawl_status: 'crawled',
           },
           { onConflict: 'client_id,url' }
         )
