@@ -21,9 +21,9 @@
 
 ## 二、产品愿景一句话
 
-> **让品牌在 Google 和 AI 中都被看见。**
+> **让品牌在搜索、AI、社媒、广告四个战场同时被看见。**
 
-Google 时代的 SEO + AI 时代的 GEO + 全平台社媒矩阵，三位一体的内容运营操作系统。
+覆盖营销全链路的 AI 运营操作系统：SEO × GEO × 社媒内容 × 广告智能。
 
 ### 目标市场（2026）
 
@@ -39,33 +39,58 @@ Google 时代的 SEO + AI 时代的 GEO + 全平台社媒矩阵，三位一体�
 
 ---
 
-## 三、三大核心能力
+## 三、四大模块
 
-### 1. SEO 内容引擎（Search Engine Optimization）
-传统搜索引擎的可见度建设。
+> 模块是 Magic Engine 的产品组织单位，每个模块对应一个营销战场，对外封装独立品牌名。
 
-- 客户网站的关键词雷达（基于客户行业自动扫描有机词、竞品词、长尾词）
-- 博客内容日历（按 SEO 难度/搜索量/竞争度自动排期）
-- 长文 + 配图一键生成（含元数据、Schema、内链）
-- 站点权威度追踪（外链、内链、域名健康度）
+### 模块一：SEO ✅ 成熟
+**对外封装名：SEO 内容引擎**
 
-### 2. GEO 优化层（Generative Engine Optimization）⭐ 核心差异化
-让品牌在 ChatGPT / Claude / Perplexity / Google AI Overview 中被推荐。
+覆盖传统搜索（Google）和新一代 AI 搜索（GEO）的双轨可见度建设。
 
-- **AI Visibility Tracker**：每周追踪客户品牌在 4 大 AI 引擎中的排名变化
-- **GEO Composer**：基于客户品牌底稿 + 排名诊断，自动生成 AI 推荐指令
-- **隐藏指令注入**：以对人不可见、对 AI 友好的方式嵌入网站和博客
-- **月度 AI 可见度报告**：客户陪跑交付物，可视化排名提升
+- **Keyword Intelligence**：关键词雷达（有机词 / 竞品词 / 缺口分析 / 排名追踪）
+- **Site Analyzer**：客户域名全量采集（DNZ）→ 内容现状快照
+- **Blog Studio**：双信号博客（SEO 关键词 + GEO 隐藏指令 同时优化）
+- **AI Visibility Tracker** ⭐：4 大 AI 引擎（ChatGPT / Claude / Perplexity / Google AIO）品牌排名周度追踪
+- **GEO Composer** ⭐：基于 Tracker 弱项生成 AI 推荐指令，注入网站和博客
+- **SEO 数据中台**：外链 / SERP 排名 / 本地搜索 / 市场基准（DataForSEO + SEMrush）
 
-### 3. 社媒内容矩阵（Social Content Operations）
+### 模块二：社媒 ✅ 成熟
+**对外封装名：社媒内容矩阵**
+
 多平台、多客户、批量化的社媒内容生产线。
 
-- 多客户工作台（一个团队管理 N 个品牌）
-- 品牌底稿系统（一次输入，全平台复用）
-- 营销活动批量生成（一个活动生成 N 篇帖子，含图文/视频）
-- 视觉工坊（图片/视频/头像三种 AI 生成）
-- 内容协作空间（与客户审批沟通）
-- 发布管道（多平台自动排期）
+- **Brand Brief Studio**：品牌底稿生成与精炼（官网抓取 + PDF + AI对话精炼）
+- **Campaign Studio**：营销活动批量内容生成（Route A 关键词 / Route C 自由话题）
+- **ContentHub**：推广活动 / Reels / 图片 / Marketplace 四大内容类型统一工作区
+- **Visual Studio**：AI 图片生成（WaveSpeed Flux-dev）
+- **Video Studio**：AI 视频生成（Seedance 2.0）
+- **Avatar Studio**：AI 头像视频（HeyGen）
+- **Publishing Hub**：多平台排期发布（Publer）
+
+### 模块三：广告 🔄 建设中
+**对外封装名：Ads Intelligence**
+
+多平台广告账户连接、AI 诊断引擎、有界自动化 Fix。
+
+- **账户连接**：OAuth 接入 Google / Meta / TikTok / LinkedIn 广告账户
+- **诊断引擎**：9 维度 AI 诊断（健康度 0–100 / P0/P1/P2 优化建议）
+- **一键 Fix**：可逆 API 操作自动执行（暂停关键词 / 添加否定词 / 调整出价）
+- **Talk to Us**：复杂问题标准化交接工单（结构 → 预算 → 创意方向）
+- **Paid Social Studio**：品牌底稿 → 批量广告文案 + 配图提示词生成
+
+> 第一个测试客户：Mobilestation（NZ，Google Ads，健康度 34/100）  
+> 详细开发计划见 [ADS_MODULE_BRIEF.md](./ADS_MODULE_BRIEF.md)
+
+### 模块四：数据 📋 规划中
+**对外封装名：Insight Reports**
+
+跨模块数据聚合，形成可交付给客户的月度智能报告。
+
+- **月报 PDF 自动生成**：SEO + AI 排名 + 社媒 + 广告 六大数据源聚合，Strategy Engine 生成摘要
+- **月报定时发送**：Resend 邮件 / 客户 Portal 推送
+- **客户 Portal**：客户自助查看数据看板、内容进度、历史报告
+- **跨模块聚合视图**：四大模块 KPI 一屏汇总（当前仅内部可见）
 
 ---
 
@@ -119,27 +144,30 @@ Google 时代的 SEO + AI 时代的 GEO + 全平台社媒矩阵，三位一体�
 
 ---
 
-## 五、Magic Engine 模块体系
+## 五、功能子模块对照表
 
-所有模块对外统一封装命名，**对客户和 UI 不暴露具体技术供应商**：
+所有子模块对外统一封装命名，**对客户和 UI 不暴露具体技术供应商**：
 
-| 模块 | 功能定位 |
-|------|---------|
-| **Brand Brief Studio** | 品牌底稿生成与精炼 |
-| **Site Analyzer** | 网站抓取与内容理解 |
-| **Keyword Intelligence** | 关键词与 SEO 数据中枢 |
-| **AI Visibility Tracker** ⭐ | 多 AI 引擎品牌排名追踪 |
-| **GEO Composer** ⭐ | AI 推荐指令生成器 |
-| **Content Calendar** | SEO 博客 + 社媒内容日历 |
-| **Campaign Studio** | 营销活动批量内容生成 |
-| **Visual Studio** | AI 图片生成工坊 |
-| **Video Studio** | AI 视频生成工坊 |
-| **Avatar Studio** | AI 头像视频生成 |
-| **Content Workspace** | 内容协作与审批空间 |
-| **Publishing Hub** | 多平台发布管道 |
-| **Insight Reports** | 月度可见度与表现报告 |
+| 所属模块 | 子模块封装名 | 功能定位 | 状态 |
+|---------|------------|---------|------|
+| **SEO** | Keyword Intelligence | 关键词数据中枢（SEMrush + DataForSEO） | ✅ |
+| **SEO** | Site Analyzer | 域名全量内容采集（DNZ） | ✅ |
+| **SEO** | AI Visibility Tracker ⭐ | 4大AI引擎品牌排名追踪 | ✅ |
+| **SEO** | GEO Composer ⭐ | AI 推荐指令生成与注入 | ✅ |
+| **SEO** | Blog Studio | 双信号博客生成（SEO×GEO） | ✅ |
+| **社媒** | Brand Brief Studio | 品牌底稿生成与精炼 | ✅ |
+| **社媒** | Campaign Studio | 营销活动批量内容生成 | ✅ |
+| **社媒** | ContentHub | 内容工作区（活动/Reels/图片/Marketplace） | ✅ |
+| **社媒** | Visual Studio | AI 图片生成工坊 | ✅ |
+| **社媒** | Video Studio | AI 视频生成工坊 | ✅ |
+| **社媒** | Avatar Studio | AI 头像视频生成 | ✅ |
+| **社媒** | Publishing Hub | 多平台排期发布 | ✅ |
+| **广告** | Ads Intelligence | 账户连接 + AI 诊断 + Fix | 🔄 建设中 |
+| **广告** | Paid Social Studio | 广告文案批量生成矩阵 | ⏸ 暂缓 |
+| **数据** | Insight Reports | 月报 PDF 生成（框架已有） | 🔄 部分 |
+| **数据** | Client Portal | 客户自助数据看板 | 📋 规划 |
 
-⭐ = 2026 Q2 重点新建模块（核心差异化）
+⭐ = 核心差异化功能
 
 ---
 

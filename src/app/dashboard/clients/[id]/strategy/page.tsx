@@ -94,6 +94,28 @@ function StrategyCard({
             <p className="text-xs text-indigo-600 italic">{item.content_angle}</p>
           )}
 
+          {/* Social platform badge — only for social_content items */}
+          {item.action_type === 'social_content' && (() => {
+            const r = item.rationale ?? ''
+            const badge =
+              r.startsWith('FACEBOOK:') ? { label: 'Facebook', cls: 'bg-blue-100 text-blue-700' } :
+              r.startsWith('INSTAGRAM:') ? { label: 'Instagram', cls: 'bg-purple-100 text-purple-700' } :
+              r.startsWith('LINKEDIN:') ? { label: 'LinkedIn', cls: 'bg-sky-100 text-sky-700' } :
+              null
+            return badge ? (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${badge.cls}`}>
+                  {badge.label}
+                </span>
+                {item.linked_blog_post_id && (
+                  <span className="inline-flex items-center rounded-full bg-gray-100 text-gray-500 px-2 py-0.5 text-xs">
+                    📝 来自博客
+                  </span>
+                )}
+              </div>
+            ) : null
+          })()}
+
           {/* Keyword signal */}
           {item.source_keyword && (
             <div className="mt-2 flex flex-wrap gap-2 text-xs text-gray-400">

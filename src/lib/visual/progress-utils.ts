@@ -41,12 +41,14 @@ export function getStageKey(elapsedSeconds: number): string {
 
 /**
  * Check if cancel button should be enabled
- * Enabled when elapsed time exceeds 1.5x the expected generation time
+ * Enabled when elapsed time exceeds 1.5x the expected generation time.
+ * Returns false conservatively when expectedMs is 0 or negative.
  */
 export function shouldEnableCancelButton(
   elapsedMs: number,
   expectedMs: number,
 ): boolean {
+  if (expectedMs <= 0) return false
   const threshold = expectedMs * 1.5
   return elapsedMs >= threshold
 }

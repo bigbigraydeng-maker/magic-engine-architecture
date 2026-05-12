@@ -105,6 +105,18 @@ export async function PATCH(
       )
     }
 
+    // Fire-and-forget: generate social suggestions when a post is approved
+    if (body.status === 'approved') {
+      const baseUrl = process.env.NEXTAUTH_URL ?? process.env.NEXT_PUBLIC_BASE_URL ?? 'http://localhost:3001'
+      fetch(`${baseUrl}/api/clients/${clientId}/blog/${postId}/social-suggestions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.INTERNAL_API_KEY ?? ''}`,
+        },
+      }).catch(() => {}) // silent failure — does not affect main flow
+    }
+
     return NextResponse.json({ success: true, post: data })
   } catch (err: unknown) {
     console.error('[blog/:postId PATCH] Unexpected error:', err)

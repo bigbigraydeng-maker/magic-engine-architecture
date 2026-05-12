@@ -146,7 +146,7 @@ export const GENERATION_STAGES_BY_TYPE = {
 } as const
 
 /**
- * Typical generation durations per provider × asset type (milliseconds)
+ * Typical generation durations per provider x asset type (milliseconds)
  * Used to derive cancel thresholds and progress estimates
  */
 const TYPICAL_DURATION_MS: Record<
@@ -168,7 +168,7 @@ export function getStagesForType(
 }
 
 /**
- * Return cancel-button activation threshold (1.5× typical duration)
+ * Return cancel-button activation threshold (1.5x typical duration)
  * Falls back to POLLING_TIMEOUT_MS when provider/type combo is unknown
  */
 export function getCancelThresholdMs(
