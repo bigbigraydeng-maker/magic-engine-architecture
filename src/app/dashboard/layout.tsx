@@ -30,7 +30,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         <SidebarNav userRole={userRole} allowedClientId={allowedClientId} />
 
         <div className="px-4 py-4 border-t border-gray-800 space-y-2">
-          <p className="text-xs text-gray-500 truncate">{user.email}</p>
+          <p className="text-xs text-gray-500 truncate">{user?.email ?? ''}</p>
           <form action="/auth/signout" method="POST">
             <button
               type="submit"
