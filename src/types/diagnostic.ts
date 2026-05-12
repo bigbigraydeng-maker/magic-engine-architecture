@@ -27,6 +27,8 @@ export type SeoFindingType =
   | 'page_speed_poor'
   | 'missing_alt_text'
   | 'no_sitemap'
+  | 'keyword_gap_critical'
+  | 'low_domain_rank'
 
 export type AiVisibilityFindingType =
   | 'brand_not_mentioned'
