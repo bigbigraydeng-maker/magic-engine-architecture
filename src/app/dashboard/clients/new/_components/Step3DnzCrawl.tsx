@@ -38,14 +38,15 @@ export default function Step3DnzCrawl({
   const isTerminal = job?.status === 'completed' || job?.status === 'failed'
   const isInProgress = job?.status === 'pending' || job?.status === 'in_progress'
 
-  const startCrawl = async () => {
+  const startCrawl = async (force = false) => {
     setStarting(true)
     setError(null)
+    if (force) setJobId(null)
     try {
       const res = await fetch(`/api/clients/${clientId}/site-audit/crawl`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ maxPages: 100 }),
+        body: JSON.stringify({ maxPages: 100, force }),
       })
       const json = await res.json()
       if (!res.ok) {
@@ -159,6 +160,17 @@ export default function Step3DnzCrawl({
             <div className="p-3 bg-red-50 border border-red-200 rounded text-xs text-red-700">
               {job.error_message}
             </div>
+          )}
+
+          {isTerminal && (
+            <button
+              type="button"
+              onClick={() => startCrawl(true)}
+              disabled={starting}
+              className="text-xs text-blue-600 hover:text-blue-800 underline disabled:opacity-50"
+            >
+              {starting ? 'Starting…' : '↺ Re-crawl'}
+            </button>
           )}
         </div>
       )}
