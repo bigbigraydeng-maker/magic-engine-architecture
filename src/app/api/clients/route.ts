@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 
-// GET /api/clients — list all clients
 export async function GET() {
   try {
     const { data, error } = await supabaseAdmin
       .from('clients')
-      .select('id, name, domain, airtable_base_id, airtable_content_table_id, created_at, semrush_db, plan_tier')
+      .select('id, name, domain, created_at, semrush_db, plan_tier')
       .order('created_at', { ascending: false })
 
     if (error) throw error
@@ -17,11 +16,10 @@ export async function GET() {
   }
 }
 
-// POST /api/clients — create new client
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { name, domain, website_url, airtable_base_id } = body
+    const { name, domain, website_url } = body
 
     if (!name) {
       return NextResponse.json({ error: 'name is required' }, { status: 400 })
@@ -31,8 +29,7 @@ export async function POST(req: NextRequest) {
       .from('clients')
       .insert({
         name,
-        domain: domain || website_url || null,   // accept both field names
-        airtable_base_id: airtable_base_id || null,
+        domain: domain || website_url || null,
         semrush_db: 'au',
         monthly_quota: 1000,
         plan_tier: 'starter',

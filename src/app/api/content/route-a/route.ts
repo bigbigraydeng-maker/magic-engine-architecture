@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getActiveBrief, formatBriefForPrompt } from '@/lib/content/brief-injector'
 import { getCampaignById, formatCampaignForPrompt } from '@/lib/content/campaign-injector'
-import { createRecord, updateRecord } from '@/lib/airtable/client'
-import { POST_TO_AIRTABLE } from '@/lib/airtable/field-maps'
 import OpenAI from 'openai'
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
@@ -138,38 +136,6 @@ Visual brief: 30-50 words describing the ideal visual.`,
     if (!savedPosts?.length) {
       console.error('[route-a] DB insert returned no rows — RLS may be blocking (anon key fallback?)')
       throw new Error('Content generated but failed to save — check Render logs for DB error')
-    }
-
-    // 5. Sync to Airtable Content Calendar (non-fatal)
-    if (savedPosts?.length) {
-      try {
-        const { data: client } = await supabaseAdmin
-          .from('clients')
-          .select('airtable_base_id')
-          .eq('id', client_id)
-          .single()
-
-        if (client?.airtable_base_id) {
-          const baseId = client.airtable_base_id
-          for (const post of savedPosts) {
-            try {
-              const atRecord = await createRecord(
-                baseId,
-                'Content Calendar',
-                POST_TO_AIRTABLE(post)
-              )
-              await supabaseAdmin
-                .from('content_posts')
-                .update({ airtable_record_id: atRecord.id })
-                .eq('id', post.id)
-            } catch (perRecordErr) {
-              console.error(`[route-a] Airtable sync failed for post ${post.id}:`, perRecordErr)
-            }
-          }
-        }
-      } catch (atErr) {
-        console.error('[route-a] Airtable sync step failed:', atErr)
-      }
     }
 
     return NextResponse.json({

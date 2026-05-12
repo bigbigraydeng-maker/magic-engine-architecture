@@ -122,6 +122,66 @@ export const GENERATION_STAGES = [
 ] as const
 
 /**
+ * Asset-type-specific stage definitions
+ */
+export const GENERATION_STAGES_BY_TYPE = {
+  image: [
+    { key: 'initializing', label: 'Initialising…', weight_percent: 5 },
+    { key: 'generating', label: 'Generating concept…', weight_percent: 50 },
+    { key: 'rendering', label: 'Rendering pixels…', weight_percent: 35 },
+    { key: 'finalizing', label: 'Finalising…', weight_percent: 10 },
+  ],
+  video: [
+    { key: 'initializing', label: 'Initialising…', weight_percent: 5 },
+    { key: 'generating', label: 'Generating frames…', weight_percent: 50 },
+    { key: 'encoding', label: 'Encoding video…', weight_percent: 35 },
+    { key: 'finalizing', label: 'Finalising…', weight_percent: 10 },
+  ],
+  avatar_video: [
+    { key: 'initializing', label: 'Initialising…', weight_percent: 5 },
+    { key: 'processing', label: 'Processing avatar…', weight_percent: 40 },
+    { key: 'rendering', label: 'Rendering video…', weight_percent: 45 },
+    { key: 'finalizing', label: 'Finalising…', weight_percent: 10 },
+  ],
+} as const
+
+/**
+ * Typical generation durations per provider × asset type (milliseconds)
+ * Used to derive cancel thresholds and progress estimates
+ */
+const TYPICAL_DURATION_MS: Record<
+  'wavespeed' | 'seedance' | 'heygen',
+  Partial<Record<'image' | 'video' | 'avatar_video', number>>
+> = {
+  wavespeed: { image: 180 * 1000, video: 300 * 1000 }, // ~3 min image, ~5 min video
+  seedance: { video: 240 * 1000, avatar_video: 300 * 1000 }, // ~4 min video, ~5 min avatar
+  heygen: { avatar_video: 120 * 1000 }, // ~2 min avatar
+}
+
+/**
+ * Return stages for a given asset type
+ */
+export function getStagesForType(
+  assetType: 'image' | 'video' | 'avatar_video'
+) {
+  return GENERATION_STAGES_BY_TYPE[assetType]
+}
+
+/**
+ * Return cancel-button activation threshold (1.5× typical duration)
+ * Falls back to POLLING_TIMEOUT_MS when provider/type combo is unknown
+ */
+export function getCancelThresholdMs(
+  provider: 'wavespeed' | 'seedance' | 'heygen',
+  assetType: 'image' | 'video' | 'avatar_video'
+): number {
+  const typicalMs =
+    TYPICAL_DURATION_MS[provider][assetType] ??
+    GENERATION_CONFIG.POLLING_TIMEOUT_MS
+  return Math.round(typicalMs * 1.5)
+}
+
+/**
  * Get current stage based on elapsed time (cycles every 30 seconds per stage)
  */
 export function getCurrentStage(elapsedSeconds: number): string {
@@ -136,11 +196,10 @@ export function getEstimatedRemainingMs(
   elapsedMs: number,
   provider: 'wavespeed' | 'seedance' | 'heygen'
 ): number | undefined {
-  // Typical generation times (in milliseconds)
   const typicalDurations = {
-    wavespeed: 180 * 1000, // ~3 minutes for Flux-dev
-    seedance: 240 * 1000, // ~4 minutes for Seedance
-    heygen: 120 * 1000, // ~2 minutes for HeyGen
+    wavespeed: 180 * 1000,
+    seedance: 240 * 1000,
+    heygen: 120 * 1000,
   }
 
   const typicalMs = typicalDurations[provider]

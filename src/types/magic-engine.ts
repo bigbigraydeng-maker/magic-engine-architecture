@@ -4,7 +4,7 @@
 
 export type ClientPlan = 'starter' | 'growth' | 'enterprise'
 export type KeywordIntent = 'informational' | 'commercial' | 'transactional' | 'navigational'
-export type KeywordSource = 'semrush_batch' | 'semrush_related' | 'semrush_gap' | 'campaign' | 'master_brief' | 'manual' | 'airtable'
+export type KeywordSource = 'semrush_batch' | 'semrush_related' | 'semrush_gap' | 'campaign' | 'master_brief' | 'manual'
 export type KeywordStatus = 'new' | 'reviewed' | 'approved' | 'rejected' | 'page_created' | 'published'
 export type PageType = 'hub' | 'guide' | 'landing' | 'faq'
 export type ContentRoute = 'route_a' | 'route_b' | 'route_c'
@@ -21,7 +21,6 @@ export interface Client {
   semrush_db: string
   monthly_quota: number
   plan_tier: ClientPlan
-  airtable_base_id?: string
   created_at: string
 }
 
@@ -185,7 +184,6 @@ export interface Keyword {
   opportunity_score?: number
   recommended_page_type?: PageType
   status: KeywordStatus
-  airtable_record_id?: string
   created_at: string
   updated_at: string
 }
@@ -239,7 +237,6 @@ export interface ContentPost {
   scheduled_at?: string
   published_at?: string
   publer_post_id?: string
-  airtable_record_id?: string
 }
 
 // API Request/Response types

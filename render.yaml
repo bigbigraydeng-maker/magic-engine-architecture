@@ -28,8 +28,6 @@ services:
         sync: false
       - key: SEMRUSH_DB
         value: au
-      - key: AIRTABLE_API_KEY
-        sync: false
       - key: PUBLER_API_KEY
         sync: false
       - key: PUBLER_WORKSPACE_ID
@@ -71,8 +69,6 @@ services:
         sync: false
       - key: SEMRUSH_API_KEY
         sync: false
-      - key: AIRTABLE_API_KEY
-        sync: false
       - key: PUBLER_API_KEY
         sync: false
       - key: CRON_SECRET
@@ -87,24 +83,6 @@ services:
     startCommand: |
       curl -s -H "Authorization: Bearer $CRON_SECRET" \
         https://$RENDER_EXTERNAL_URL/api/cron/poll-visual-jobs
-    envVars:
-      - key: CRON_SECRET
-        sync: false
-      - key: RENDER_EXTERNAL_URL
-        fromService:
-          type: web
-          name: magic-engine
-          property: host
-
-  # Sync Airtable content every hour
-  - type: cron
-    name: sync-airtable
-    env: node
-    schedule: "0 * * * *"
-    buildCommand: ""
-    startCommand: |
-      curl -s -H "Authorization: Bearer $CRON_SECRET" \
-        https://$RENDER_EXTERNAL_URL/api/cron/sync-airtable
     envVars:
       - key: CRON_SECRET
         sync: false

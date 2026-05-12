@@ -4,7 +4,6 @@ import { checkImageStatus } from '@/lib/visual/wavespeed'
 import { checkVideoStatus } from '@/lib/visual/seedance'
 import { checkAvatarStatus } from '@/lib/visual/heygen'
 import { uploadFromUrl } from '@/lib/visual/storage'
-import { updateRecord } from '@/lib/airtable/client'
 import { GenerationErrorResponse } from '@/lib/visual/generation-config'
 
 type ProviderResult = {
@@ -171,42 +170,6 @@ export async function GET(
         .single()
 
       if (error) throw error
-
-      // ── 回写 Airtable ─────────────────────────────────────────────────
-      if (updated && asset.post_id) {
-        try {
-          const { data: post } = await supabaseAdmin
-            .from('content_posts')
-            .select('airtable_record_id, clients(airtable_base_id, airtable_content_table_id)')
-            .eq('id', asset.post_id)
-            .single()
-
-          const airtableRecordId = post?.airtable_record_id
-          const clientsData = post?.clients as { airtable_base_id: string; airtable_content_table_id?: string } | { airtable_base_id: string; airtable_content_table_id?: string }[] | undefined
-          const clientObj = Array.isArray(clientsData) ? clientsData[0] : clientsData
-          const baseId = clientObj?.airtable_base_id
-          const contentTableId = clientObj?.airtable_content_table_id
-
-          if (airtableRecordId && baseId) {
-            // 新社媒总表：写 Image_URL / Video_URL 字段
-            if (contentTableId) {
-              const fields: Record<string, unknown> = {}
-              if (asset.asset_type === 'image') fields['Image_URL'] = storage_url
-              else fields['Image_URL'] = storage_url  // 视频也先写 Image_URL 占位
-              await updateRecord(baseId, contentTableId, airtableRecordId, fields)
-            } else {
-              // 兼容旧 Content Calendar 表
-              const fields: Record<string, unknown> = { 'Visual_Status': 'Ready' }
-              if (asset.asset_type === 'image') fields['Image_URL'] = storage_url
-              else if (asset.asset_type === 'video' || asset.asset_type === 'avatar') fields['Video_URL'] = storage_url
-              await updateRecord(baseId, 'Content Calendar', airtableRecordId, fields)
-            }
-          }
-        } catch (atErr) {
-          console.error('[visual/status] Airtable writeback failed:', atErr)
-        }
-      }
-      // ─────────────────────────────────────────────────────────────────
 
       return NextResponse.json({ success: true, asset: updated, just_completed: true })
     }

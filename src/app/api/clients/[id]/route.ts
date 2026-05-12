@@ -1,13 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 
-const SELECT_FIELDS = [
-  'id', 'name', 'domain', 'created_at', 'semrush_db', 'plan_tier',
-  'airtable_base_id', 'airtable_content_table_id', 'airtable_keywords_table_id',
-  'airtable_embed_social', 'airtable_embed_keywords', 'airtable_embed_seo',
-].join(', ')
+const SELECT_FIELDS = 'id, name, domain, created_at, semrush_db, plan_tier'
 
-// GET /api/clients/[id]
 export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -29,14 +24,10 @@ export async function GET(
   }
 }
 
-// DELETE /api/clients/[id]
-// TODO(P8.3.2): replace this origin guard with Magic Link session auth
 export async function DELETE(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  // Minimal SSRF / external-caller guard until proper session auth lands (P8.3.2).
-  // Only allow requests that originate from the same app host.
   const host = req.headers.get('host') ?? ''
   const origin = req.headers.get('origin') ?? ''
   const referer = req.headers.get('referer') ?? ''
@@ -61,18 +52,13 @@ export async function DELETE(
   }
 }
 
-// PATCH /api/clients/[id]
 export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
     const body = await req.json()
-    const allowed = [
-      'name', 'domain', 'semrush_db', 'plan_tier',
-      'airtable_base_id', 'airtable_content_table_id', 'airtable_keywords_table_id',
-      'airtable_embed_social', 'airtable_embed_keywords', 'airtable_embed_seo',
-    ]
+    const allowed = ['name', 'domain', 'semrush_db', 'plan_tier']
     const update: Record<string, unknown> = {}
     for (const key of allowed) {
       if (key in body) update[key] = body[key]

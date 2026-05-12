@@ -1,12 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { updateRecord } from '@/lib/airtable/client'
 
-// Publer 发布成功后回调此 webhook
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { publer_post_id, published_at, post_url } = body
+    const { publer_post_id, published_at } = body
 
     if (!publer_post_id) {
       return NextResponse.json({ error: 'publer_post_id required' }, { status: 400 })
@@ -14,7 +12,7 @@ export async function POST(req: NextRequest) {
 
     const { data: post } = await supabaseAdmin
       .from('content_posts')
-      .select('*, clients(airtable_base_id)')
+      .select('id')
       .eq('publer_post_id', publer_post_id)
       .single()
 
@@ -29,21 +27,6 @@ export async function POST(req: NextRequest) {
         published_at: published_at || new Date().toISOString(),
       })
       .eq('id', post.id)
-
-    // 同步状态回 Airtable
-    const airtableBaseId = (post.clients as { airtable_base_id?: string } | null)?.airtable_base_id
-    if (post.airtable_record_id && airtableBaseId) {
-      await updateRecord(
-        airtableBaseId,
-        'Content Calendar',
-        post.airtable_record_id,
-        {
-          'Status': 'Published',
-          'Published At': (published_at || new Date().toISOString()).split('T')[0],
-          'Published URL': post_url || '',
-        }
-      )
-    }
 
     return NextResponse.json({ success: true })
 

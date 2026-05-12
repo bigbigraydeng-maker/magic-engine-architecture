@@ -172,7 +172,8 @@ export default function ContentBoardPage() {
   const [calYear, setCalYear] = useState(() => new Date().getFullYear());
   const [calMonth, setCalMonth] = useState(() => new Date().getMonth());
   const [modalPost, setModalPost] = useState<ContentPost | null>(null);
-  const [syncing, setSyncing] = useState<string | null>(null);
+  const [rejectNotesId, setRejectNotesId] = useState<string | null>(null);
+  const [rejectNotes, setRejectNotes] = useState('');
 
   // Batch selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -421,15 +422,24 @@ export default function ContentBoardPage() {
     }
   };
 
-  const handleSyncAirtable = async (post: ContentPost) => {
-    setSyncing(post.id);
-    try {
-      await fetch('/api/airtable/sync-content', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: selectedClient, post_ids: [post.id] }),
-      });
-    } finally { setSyncing(null); }
+  const handleRejectWithNotes = async () => {
+    if (!rejectNotesId) return;
+    closeModal();
+    const id = rejectNotesId;
+    const notes = rejectNotes;
+    setRejectNotesId(null);
+    setRejectNotes('');
+    // Optimistic update
+    setPosts(prev => {
+      const mapped = prev.map(p => p.id === id ? { ...p, status: 'rejected' } : p);
+      if (!selectedStatus) return mapped;
+      return mapped.filter(p => selectedStatus.split(',').includes(p.status));
+    });
+    await fetch(`/api/posts/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'rejected', revision_notes: notes }),
+    });
   };
 
   const allSelected = posts.length > 0 && selectedIds.size === posts.length;
@@ -708,11 +718,6 @@ export default function ContentBoardPage() {
                         <span className="text-xs text-gray-400">{new Date(post.created_at).toLocaleDateString()}</span>
                         <div className="flex gap-2" onClick={e => e.stopPropagation()}>
                           <button onClick={() => openModal(post)} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium">查看详情</button>
-                          <span className="text-gray-300">·</span>
-                          <button onClick={() => handleSyncAirtable(post)} disabled={syncing === post.id}
-                            className="text-xs text-gray-500 hover:text-gray-700 font-medium disabled:opacity-50">
-                            {syncing === post.id ? '同步中…' : '↑ Airtable'}
-                          </button>
                         </div>
                       </div>
                     </div>
@@ -866,15 +871,41 @@ export default function ContentBoardPage() {
 
               {/* Quick approve/reject */}
               {modalPost.status === 'draft' && (
-                <div className="flex gap-2 pt-2 border-t border-gray-100">
-                  <button onClick={() => { const id = modalPost.id; closeModal(); batchUpdate([id], 'approved'); }} disabled={batching}
-                    className="flex-1 bg-green-600 hover:bg-green-700 text-white text-sm py-2 rounded-lg font-medium transition-colors disabled:opacity-50">
-                    ✓ 批准此条
-                  </button>
-                  <button onClick={() => { const id = modalPost.id; closeModal(); batchUpdate([id], 'rejected'); }} disabled={batching}
-                    className="flex-1 bg-red-500 hover:bg-red-600 text-white text-sm py-2 rounded-lg font-medium transition-colors disabled:opacity-50">
-                    ✕ 拒绝此条
-                  </button>
+                <div className="pt-2 border-t border-gray-100 space-y-3">
+                  {rejectNotesId === modalPost.id ? (
+                    <div className="space-y-2">
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">修改意见（可选）</p>
+                      <textarea
+                        value={rejectNotes}
+                        onChange={e => setRejectNotes(e.target.value)}
+                        rows={3}
+                        placeholder="说明需要修改的地方…"
+                        className="w-full border border-red-200 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-red-300 resize-none"
+                        autoFocus
+                      />
+                      <div className="flex gap-2">
+                        <button onClick={handleRejectWithNotes}
+                          className="flex-1 bg-red-500 hover:bg-red-600 text-white text-sm py-2 rounded-lg font-medium transition-colors">
+                          确认拒绝
+                        </button>
+                        <button onClick={() => { setRejectNotesId(null); setRejectNotes(''); }}
+                          className="px-4 text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg transition-colors">
+                          取消
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2">
+                      <button onClick={() => { const id = modalPost.id; closeModal(); batchUpdate([id], 'approved'); }} disabled={batching}
+                        className="flex-1 bg-green-600 hover:bg-green-700 text-white text-sm py-2 rounded-lg font-medium transition-colors disabled:opacity-50">
+                        ✓ 批准此条
+                      </button>
+                      <button onClick={() => { setRejectNotesId(modalPost.id); setRejectNotes(''); }} disabled={batching}
+                        className="flex-1 bg-red-500 hover:bg-red-600 text-white text-sm py-2 rounded-lg font-medium transition-colors disabled:opacity-50">
+                        ✕ 拒绝此条
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

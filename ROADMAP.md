@@ -531,7 +531,7 @@ Publishing Hub 归档 / 排期
 **目标**：提供纯函数库用于进度计算、计时格式化、阶段判断，以及升级生成配置以支持资产类型特定的生成时间估算。
 
 - [x] **P9.0.1** 创建 `src/lib/visual/progress-utils.ts`：导出 `getProgressPercent()`、`formatCountdown()`、`getStageKey()`、`shouldEnableCancelButton()` ✅ **完成**
-- [ ] **P9.0.2** 升级 `src/lib/visual/generation-config.ts`：新增 `getStagesForType(assetType)` 和 `getCancelThresholdMs(provider, assetType)`（待做）
+- [x] **P9.0.2** 升级 `src/lib/visual/generation-config.ts`：新增 `getStagesForType(assetType)` 和 `getCancelThresholdMs(provider, assetType)` ✅ **2026-05-12 完成**
 - [x] **P9.0.3** `src/lib/visual/__tests__/progress-utils.test.ts` ✅ **完成**
 
 #### Phase 9.0.2 — 核心 UI 组件
