@@ -18,12 +18,7 @@ export default function LoginPage({ searchParams }: Props) {
         </div>
 
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 shadow-xl">
-          {hasError && (
-            <div className="mb-4 p-3 rounded-lg bg-red-900/40 border border-red-700 text-red-400 text-sm">
-              Authentication failed. Please try again.
-            </div>
-          )}
-          <LoginForm next={next} />
+          <LoginForm next={next} authFailed={hasError} />
         </div>
 
         <p className="mt-6 text-center text-xs text-gray-600">

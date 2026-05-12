@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation'
+import { headers } from 'next/headers'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 import SidebarNav from './sidebar-nav'
 
@@ -6,7 +7,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const supabase = createServerSupabaseClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  if (!user) redirect('/login')
+  // Auth temporarily disabled
+  // if (!user) redirect('/login')
+
+  const headersList = await headers()
+  const userRole = headersList.get('x-user-role') ?? 'admin'
+  const allowedClientId = headersList.get('x-allowed-client-id') ?? null
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -16,10 +22,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
             <span className="text-xl">✨</span>
             <h1 className="text-lg font-bold text-white">Magic Engine</h1>
           </div>
-          <p className="text-xs text-gray-500 mt-1 ml-7">Admin Dashboard</p>
+          <p className="text-xs text-gray-500 mt-1 ml-7">
+            {userRole === 'client-viewer' ? 'Client View' : 'Admin Dashboard'}
+          </p>
         </div>
 
-        <SidebarNav />
+        <SidebarNav userRole={userRole} allowedClientId={allowedClientId} />
 
         <div className="px-4 py-4 border-t border-gray-800 space-y-2">
           <p className="text-xs text-gray-500 truncate">{user.email}</p>

@@ -38,6 +38,12 @@ services:
         sync: false
       - key: CRON_SECRET
         sync: false
+      - key: NEXT_PUBLIC_APP_URL
+        value: https://crazycontent-27u3.onrender.com
+      - key: ADMIN_EMAILS
+        sync: false
+      - key: CLIENT_VIEWERS
+        sync: false
       - key: RENDER_EXTERNAL_URL
         fromService:
           type: web

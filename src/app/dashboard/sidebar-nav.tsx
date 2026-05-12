@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 
-const navItems = [
+const adminNavItems = [
   { href: '/dashboard', label: 'Overview', emoji: '🏠', exact: true },
   // ── Step 1: Client Info ──
   { href: '/dashboard/clients', label: 'Clients', emoji: '👥', exact: false },
@@ -19,8 +19,17 @@ const navItems = [
   { href: '/dashboard/admin/billing-monitor', label: 'Billing Monitor', emoji: '💳', exact: false },
 ]
 
-export default function SidebarNav() {
+interface Props {
+  userRole: string
+  allowedClientId: string | null
+}
+
+export default function SidebarNav({ userRole, allowedClientId }: Props) {
   const pathname = usePathname()
+
+  const navItems = userRole === 'client-viewer' && allowedClientId
+    ? [{ href: `/dashboard/clients/${allowedClientId}`, label: 'My Client', emoji: '👥', exact: false }]
+    : adminNavItems
 
   return (
     <nav className="flex-1 px-3 py-4 space-y-1">

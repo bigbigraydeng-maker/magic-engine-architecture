@@ -1,13 +1,28 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 
-export default function LoginForm({ next }: { next: string }) {
+export default function LoginForm({ next, authFailed }: { next: string; authFailed?: boolean }) {
   const [email, setEmail] = useState('')
   const [sent, setSent] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  // Parse Supabase hash-fragment errors (e.g. #error_code=otp_expired)
+  useEffect(() => {
+    const hash = window.location.hash
+    if (!hash) return
+    const params = new URLSearchParams(hash.slice(1))
+    const code = params.get('error_code')
+    if (code === 'otp_expired') {
+      setError('Magic link has expired. Please request a new one.')
+    } else if (code) {
+      setError('Authentication failed. Please try again.')
+    }
+    // Clean hash from URL without reload
+    window.history.replaceState(null, '', window.location.pathname + window.location.search)
+  }, [])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -65,7 +80,11 @@ export default function LoginForm({ next }: { next: string }) {
         />
       </div>
 
-      {error && <p className="text-red-400 text-sm">{error}</p>}
+      {(error || authFailed) && (
+        <p className="text-red-400 text-sm">
+          {error || 'Authentication failed. Please try again.'}
+        </p>
+      )}
 
       <button
         type="submit"
