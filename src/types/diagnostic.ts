@@ -114,7 +114,7 @@ export interface DiagnosticFinding {
 
 // ── Prescription (§2.3) ───────────────────────────────────────────────────────
 
-export type PrescriptionStatus = 'draft' | 'active' | 'completed' | 'archived'
+export type PrescriptionStatus = 'draft' | 'approved' | 'rejected' | 'superseded'
 
 export interface Prescription {
   id: string

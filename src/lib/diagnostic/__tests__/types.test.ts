@@ -59,18 +59,18 @@ describe('isValidScore', () => {
 describe('computeOverallScore', () => {
   it('computes weighted average across all six dimensions', () => {
     const breakdown = {
-      seo: 80,           // × 0.30 = 24.0
-      ai_visibility: 60, // × 0.25 = 15.0
-      reputation: 70,    // × 0.20 = 14.0
-      social: 50,        // × 0.10 =  5.0
-      ads: 40,           // × 0.10 =  4.0
-      competitor: 30,    // × 0.05 =  1.5
-    }                    // sum = 63.5, totalWeight = 1.0 → Math.round(63.5) = 64
-    expect(computeOverallScore(breakdown)).toBe(64)
+      seo: 80,           // × 0.25 = 20.0
+      ai_visibility: 60, // × 0.20 = 12.0
+      ads: 40,           // × 0.20 =  8.0
+      social: 50,        // × 0.15 =  7.5
+      reputation: 70,    // × 0.10 =  7.0
+      competitor: 30,    // × 0.10 =  3.0
+    }                    // sum = 57.5, totalWeight = 1.0 → Math.round(57.5) = 58
+    expect(computeOverallScore(breakdown)).toBe(58)
   })
 
   it('re-normalises weights for partial breakdowns', () => {
-    // seo=80 (w=0.30) + ai_visibility=40 (w=0.25) → 34 / 0.55 ≈ 61.82 → 62
+    // seo=80 (w=0.25) + ai_visibility=40 (w=0.20) → 28 / 0.45 ≈ 62.22 → 62
     expect(computeOverallScore({ seo: 80, ai_visibility: 40 })).toBe(62)
   })
 

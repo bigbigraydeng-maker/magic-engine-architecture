@@ -25,7 +25,7 @@ CREATE TYPE diagnostic_trigger AS ENUM (
 );
 
 CREATE TYPE prescription_status AS ENUM (
-  'draft', 'active', 'completed', 'archived'
+  'draft', 'approved', 'rejected', 'superseded'
 );
 
 CREATE TYPE execution_item_status AS ENUM (

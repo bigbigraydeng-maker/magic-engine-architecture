@@ -2,12 +2,12 @@ import type { DiagnosticDimension } from '@/types/diagnostic'
 
 // §3.2 — dimension weights must sum to 1.0
 export const DIMENSION_WEIGHTS: Record<DiagnosticDimension, number> = {
-  seo:           0.30,
-  ai_visibility: 0.25,
-  reputation:    0.20,
-  social:        0.10,
-  ads:           0.10,
-  competitor:    0.05,
+  seo:           0.25,
+  ai_visibility: 0.20,
+  ads:           0.20,
+  social:        0.15,
+  reputation:    0.10,
+  competitor:    0.10,
 }
 
 // Scores ≥ green → healthy; ≥ amber → warning; below amber → critical
