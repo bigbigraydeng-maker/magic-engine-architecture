@@ -58,6 +58,7 @@ export type ReputationFindingType =
   | 'missing_review_responses'
   | 'insufficient_review_count'
   | 'inconsistent_business_info'
+  | 'no_review_platform'
 
 export type CompetitorFindingType =
   | 'competitor_keyword_gap'

@@ -6,9 +6,19 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 // ---------------------------------------------------------------------------
 
 const mockSeoCollect = vi.fn()
+const mockSocialCollect = vi.fn()
+const mockReputationCollect = vi.fn()
 
 vi.mock('../collectors/seo-collector', () => ({
   SeoCollector: vi.fn(() => ({ collect: mockSeoCollect })),
+}))
+
+vi.mock('../collectors/social-collector', () => ({
+  SocialCollector: vi.fn(() => ({ collect: mockSocialCollect })),
+}))
+
+vi.mock('../collectors/reputation-collector', () => ({
+  ReputationCollector: vi.fn(() => ({ collect: mockReputationCollect })),
 }))
 
 // ---------------------------------------------------------------------------
@@ -65,6 +75,15 @@ function makeSupabase(opts: MockOptions = {}): SupabaseClient {
       if (table === 'diagnostic_findings') {
         return {
           insert: vi.fn().mockResolvedValue({ error: null }),
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                gte: vi.fn().mockReturnValue({
+                  limit: vi.fn().mockResolvedValue({ data: [], error: null }),
+                }),
+              }),
+            }),
+          }),
         }
       }
       if (table === 'clients') {
@@ -72,7 +91,7 @@ function makeSupabase(opts: MockOptions = {}): SupabaseClient {
           select: vi.fn().mockReturnValue({
             eq: vi.fn().mockReturnValue({
               single: vi.fn().mockResolvedValue({
-                data: { domain: clientDomain },
+                data: { domain: clientDomain, instagram_handle: null },
                 error: null,
               }),
             }),
@@ -102,6 +121,8 @@ function makeSupabase(opts: MockOptions = {}): SupabaseClient {
 beforeEach(() => {
   vi.clearAllMocks()
   mockSeoCollect.mockResolvedValue({ score: 75, findings: [] })
+  mockSocialCollect.mockResolvedValue({ score: 60, findings: [] })
+  mockReputationCollect.mockResolvedValue({ score: 80, findings: [] })
 })
 
 // ---------------------------------------------------------------------------
@@ -110,6 +131,9 @@ beforeEach(() => {
 
 describe('isValidModule()', () => {
   it('returns true for "seo"', () => expect(isValidModule('seo')).toBe(true))
+  it('returns true for "social"', () => expect(isValidModule('social')).toBe(true))
+  it('returns true for "reputation"', () => expect(isValidModule('reputation')).toBe(true))
+  it('returns true for "full"', () => expect(isValidModule('full')).toBe(true))
   it('returns false for unknown modules', () => {
     expect(isValidModule('ads')).toBe(false)
     expect(isValidModule('')).toBe(false)
@@ -136,15 +160,14 @@ describe('createDiagnosticRun()', () => {
 })
 
 // ---------------------------------------------------------------------------
-// executeDiagnosticRun — status transitions
+// executeDiagnosticRun — seo module
 // ---------------------------------------------------------------------------
 
-describe('executeDiagnosticRun() — happy path', () => {
+describe('executeDiagnosticRun() — seo module', () => {
   it('transitions run from pending → running → completed', async () => {
     const supabase = makeSupabase()
     await executeDiagnosticRun(supabase, 'run-test-123', 'client-1', 'seo')
 
-    // Two updates should have occurred: running, then completed
     const updates = (supabase as unknown as { _updates: unknown[] })._updates
     expect(updates.length).toBeGreaterThanOrEqual(2)
     expect(updates[0]).toMatchObject({ status: 'running' })
@@ -155,6 +178,8 @@ describe('executeDiagnosticRun() — happy path', () => {
     const supabase = makeSupabase()
     await executeDiagnosticRun(supabase, 'run-test-123', 'client-1', 'seo')
     expect(mockSeoCollect).toHaveBeenCalledOnce()
+    expect(mockSocialCollect).not.toHaveBeenCalled()
+    expect(mockReputationCollect).not.toHaveBeenCalled()
   })
 
   it('overall_score equals seo score when only seo runs (re-normalised weight)', async () => {
@@ -187,13 +212,126 @@ describe('executeDiagnosticRun() — happy path', () => {
 })
 
 // ---------------------------------------------------------------------------
-// executeDiagnosticRun — failure path
+// executeDiagnosticRun — full module
+// ---------------------------------------------------------------------------
+
+describe('executeDiagnosticRun() — full module', () => {
+  it('runs all three collectors concurrently', async () => {
+    const supabase = makeSupabase()
+    await executeDiagnosticRun(supabase, 'run-test-123', 'client-1', 'full')
+    expect(mockSeoCollect).toHaveBeenCalledOnce()
+    expect(mockSocialCollect).toHaveBeenCalledOnce()
+    expect(mockReputationCollect).toHaveBeenCalledOnce()
+  })
+
+  it('overall_score is weighted average of all three dimensions', async () => {
+    mockSeoCollect.mockResolvedValue({ score: 80, findings: [] })
+    mockSocialCollect.mockResolvedValue({ score: 60, findings: [] })
+    mockReputationCollect.mockResolvedValue({ score: 40, findings: [] })
+
+    const supabase = makeSupabase()
+    await executeDiagnosticRun(supabase, 'run-test-123', 'client-1', 'full')
+
+    const updates = (supabase as unknown as { _updates: unknown[] })._updates
+    const completedUpdate = updates.find(
+      (u): u is Record<string, unknown> =>
+        typeof u === 'object' && u !== null && (u as Record<string, unknown>).status === 'completed',
+    )
+    // seo=80 (weight 0.25), social=60 (weight 0.15), reputation=40 (weight 0.10)
+    // re-normalised total weight = 0.50; (80*0.25 + 60*0.15 + 40*0.10) / 0.50 = (20+9+4)/0.5 = 33/0.5 = 66
+    expect(completedUpdate?.overall_score).toBe(66)
+  })
+
+  it('dimension_scores contains all three dimensions', async () => {
+    const supabase = makeSupabase()
+    await executeDiagnosticRun(supabase, 'run-test-123', 'client-1', 'full')
+
+    const updates = (supabase as unknown as { _updates: unknown[] })._updates
+    const completedUpdate = updates.find(
+      (u): u is Record<string, unknown> =>
+        typeof u === 'object' && u !== null && (u as Record<string, unknown>).status === 'completed',
+    )
+    const scores = completedUpdate?.dimension_scores as Record<string, number>
+    expect(scores).toHaveProperty('seo')
+    expect(scores).toHaveProperty('social')
+    expect(scores).toHaveProperty('reputation')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// executeDiagnosticRun — social module
+// ---------------------------------------------------------------------------
+
+describe('executeDiagnosticRun() — social module', () => {
+  it('only calls SocialCollector', async () => {
+    const supabase = makeSupabase()
+    await executeDiagnosticRun(supabase, 'run-test-123', 'client-1', 'social')
+    expect(mockSocialCollect).toHaveBeenCalledOnce()
+    expect(mockSeoCollect).not.toHaveBeenCalled()
+    expect(mockReputationCollect).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// executeDiagnosticRun — reputation module
+// ---------------------------------------------------------------------------
+
+describe('executeDiagnosticRun() — reputation module', () => {
+  it('only calls ReputationCollector', async () => {
+    const supabase = makeSupabase()
+    await executeDiagnosticRun(supabase, 'run-test-123', 'client-1', 'reputation')
+    expect(mockReputationCollect).toHaveBeenCalledOnce()
+    expect(mockSeoCollect).not.toHaveBeenCalled()
+    expect(mockSocialCollect).not.toHaveBeenCalled()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// executeDiagnosticRun — collector failure (graceful degradation)
 // ---------------------------------------------------------------------------
 
 describe('executeDiagnosticRun() — collector failure', () => {
-  it('marks run as failed when collector throws', async () => {
+  it('completes with score=0 when a collector throws (Promise.allSettled graceful degradation)', async () => {
     mockSeoCollect.mockRejectedValue(new Error('collector exploded'))
     const supabase = makeSupabase()
+    await executeDiagnosticRun(supabase, 'run-test-123', 'client-1', 'seo')
+
+    const updates = (supabase as unknown as { _updates: unknown[] })._updates
+    const completedUpdate = updates.find(
+      (u): u is Record<string, unknown> =>
+        typeof u === 'object' && u !== null && (u as Record<string, unknown>).status === 'completed',
+    )
+    expect(completedUpdate).toBeDefined()
+    expect(completedUpdate?.overall_score).toBe(0)
+  })
+
+  it('marks run as failed when fetchClientData throws (DB failure)', async () => {
+    // Simulate DB failure by making clients table throw
+    const supabase = {
+      _updates: [] as unknown[],
+      from: vi.fn((table: string) => {
+        if (table === 'diagnostic_runs') {
+          return {
+            update: vi.fn().mockImplementation((data: unknown) => {
+              (supabase._updates as unknown[]).push(data)
+              return { eq: vi.fn().mockResolvedValue({ error: null }) }
+            }),
+          }
+        }
+        // clients table throws
+        if (table === 'clients') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                single: vi.fn().mockRejectedValue(new Error('DB connection lost')),
+              }),
+            }),
+          }
+        }
+        return {}
+      }),
+    } as unknown as SupabaseClient
+
     await executeDiagnosticRun(supabase, 'run-test-123', 'client-1', 'seo')
 
     const updates = (supabase as unknown as { _updates: unknown[] })._updates

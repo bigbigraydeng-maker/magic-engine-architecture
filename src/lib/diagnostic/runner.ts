@@ -2,17 +2,25 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { DiagnosticDimension } from '@/types/diagnostic'
 import type { CollectorResult, NewFinding } from './types'
 import { SeoCollector } from './collectors/seo-collector'
-import { computeOverallScore } from './guards'
+import { SocialCollector } from './collectors/social-collector'
+import { ReputationCollector } from './collectors/reputation-collector'
+import { computeOverallScore, isDiagnosticDimension } from './guards'
 
 // ---------------------------------------------------------------------------
 // Module registry
 // ---------------------------------------------------------------------------
 
-const VALID_MODULES = ['seo'] as const
+const VALID_MODULES = ['seo', 'social', 'reputation', 'full'] as const
 export type DiagnosticModule = (typeof VALID_MODULES)[number]
 
 export function isValidModule(module: string): module is DiagnosticModule {
   return (VALID_MODULES as readonly string[]).includes(module)
+}
+
+/** Map 'full' to the concrete dimensions it runs. */
+function resolveDimensions(module: DiagnosticModule): DiagnosticDimension[] {
+  if (module === 'full') return ['seo', 'social', 'reputation']
+  return [module as DiagnosticDimension]
 }
 
 // ---------------------------------------------------------------------------
@@ -31,7 +39,7 @@ export async function createDiagnosticRun(
       client_id: clientId,
       triggered_by: 'user' as const,
       status: 'pending' as const,
-      dimensions_requested: [module] as DiagnosticDimension[],
+      dimensions_requested: resolveDimensions(module) as DiagnosticDimension[],
     })
     .select('id')
     .single()
@@ -56,8 +64,8 @@ export async function executeDiagnosticRun(
 
   try {
     const [domain, keywords] = await fetchClientData(supabase, clientId)
-    const result = await runCollectors(clientId, domain, keywords, module)
-    await persistResult(supabase, runId, module, result)
+    const resultMap = await runCollectors(supabase, clientId, domain, keywords, module)
+    await persistResult(supabase, runId, resultMap)
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
     await supabase
@@ -104,35 +112,54 @@ async function fetchClientData(
 }
 
 async function runCollectors(
+  supabase: SupabaseClient,
   clientId: string,
   domain: string,
   keywords: string[],
   module: DiagnosticModule,
-): Promise<CollectorResult> {
-  const [settled] = await Promise.allSettled([
-    new SeoCollector().collect(clientId, domain, keywords),
-  ])
+): Promise<Record<string, CollectorResult>> {
+  const jobs: Array<{ dim: string; promise: Promise<CollectorResult> }> = []
 
-  if (settled.status === 'rejected') {
-    const msg = settled.reason instanceof Error ? settled.reason.message : 'Collector failed'
-    throw new Error(msg)
+  if (module === 'seo' || module === 'full') {
+    jobs.push({ dim: 'seo', promise: new SeoCollector().collect(clientId, domain, keywords) })
   }
-  return settled.value
+  if (module === 'social' || module === 'full') {
+    jobs.push({ dim: 'social', promise: new SocialCollector(supabase).collect(clientId, domain, keywords) })
+  }
+  if (module === 'reputation' || module === 'full') {
+    jobs.push({ dim: 'reputation', promise: new ReputationCollector().collect(clientId, domain, keywords) })
+  }
+
+  const settled = await Promise.allSettled(jobs.map(j => j.promise))
+  const resultMap: Record<string, CollectorResult> = {}
+
+  jobs.forEach((job, i) => {
+    const s = settled[i]
+    resultMap[job.dim] = s.status === 'fulfilled' ? s.value : { score: 0, findings: [] }
+  })
+
+  return resultMap
 }
 
 async function persistResult(
   supabase: SupabaseClient,
   runId: string,
-  module: DiagnosticModule,
-  result: CollectorResult,
+  resultMap: Record<string, CollectorResult>,
 ): Promise<void> {
-  const { score, findings } = result
-  const dimensionScores = { [module]: score }
+  const dimensionScores: Partial<Record<DiagnosticDimension, number>> = {}
+  const allFindings: (NewFinding & { run_id: string })[] = []
+
+  for (const [dim, result] of Object.entries(resultMap)) {
+    if (isDiagnosticDimension(dim)) {
+      dimensionScores[dim] = result.score
+    }
+    allFindings.push(...result.findings.map(f => ({ ...f, run_id: runId })))
+  }
+
   const overallScore = computeOverallScore(dimensionScores)
 
-  if (findings.length > 0) {
-    const rows: (NewFinding & { run_id: string })[] = findings.map(f => ({ ...f, run_id: runId }))
-    await supabase.from('diagnostic_findings').insert(rows)
+  if (allFindings.length > 0) {
+    await supabase.from('diagnostic_findings').insert(allFindings)
   }
 
   await supabase
@@ -141,9 +168,9 @@ async function persistResult(
       status: 'completed',
       overall_score: overallScore,
       dimension_scores: dimensionScores,
-      findings_count: findings.length,
-      critical_count: findings.filter(f => f.severity === 'critical').length,
-      high_count: findings.filter(f => f.severity === 'high').length,
+      findings_count: allFindings.length,
+      critical_count: allFindings.filter(f => f.severity === 'critical').length,
+      high_count: allFindings.filter(f => f.severity === 'high').length,
       completed_at: new Date().toISOString(),
     })
     .eq('id', runId)
