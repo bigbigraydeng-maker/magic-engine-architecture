@@ -66,6 +66,8 @@ export type CompetitorFindingType =
   | 'competitor_backlink_gap'
   | 'competitor_ranking_advantage'
   | 'market_share_loss'
+  | 'traffic_gap_large'
+  | 'no_competitor_data'
 
 export type FindingType =
   | SeoFindingType
