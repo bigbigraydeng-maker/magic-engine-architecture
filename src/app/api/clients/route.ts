@@ -11,7 +11,7 @@ export async function GET() {
     if (error) throw error
     return NextResponse.json({ clients: data ?? [] })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
+    const message = err instanceof Error ? err.message : (err as { message?: string })?.message ?? String(err)
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }
@@ -40,7 +40,8 @@ export async function POST(req: NextRequest) {
     if (error) throw error
     return NextResponse.json({ client: data }, { status: 201 })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
+    const message = err instanceof Error ? err.message : (err as { message?: string })?.message ?? String(err)
+    console.error('[POST /api/clients]', err)
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }
