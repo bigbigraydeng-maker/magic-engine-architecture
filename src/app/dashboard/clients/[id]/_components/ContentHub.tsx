@@ -18,11 +18,52 @@ const TABS: { id: ContentTab; label: string }[] = [
   { id: 'marketplace',  label: '🛒 Marketplace' },
 ]
 
+// Shortcut links to key client sub-pages (shown above tabs)
+function ClientShortcuts({ clientId }: { clientId: string }) {
+  return (
+    <div className="flex flex-wrap gap-2 mb-4">
+      <Link
+        href={`/dashboard/clients/${clientId}/diagnostic`}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
+      >
+        🩺 诊断报告
+      </Link>
+      <Link
+        href={`/dashboard/clients/${clientId}/site-audit/pages`}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
+      >
+        🔍 网站审计
+      </Link>
+      <Link
+        href={`/dashboard/clients/${clientId}/strategy`}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
+      >
+        📋 策略建议
+      </Link>
+      <Link
+        href={`/dashboard/clients/${clientId}/prescription/new`}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
+      >
+        💊 生成处方
+      </Link>
+      <Link
+        href={`/dashboard/clients/${clientId}/execution`}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
+      >
+        📊 执行看板
+      </Link>
+    </div>
+  )
+}
+
 export function ContentHub({ clientId }: Props) {
   const [active, setActive] = useState<ContentTab>('campaigns')
 
   return (
     <div className="space-y-0">
+      {/* Quick navigation shortcuts */}
+      <ClientShortcuts clientId={clientId} />
+
       {/* Sub-tab bar */}
       <div className="flex gap-1 border-b border-gray-200 mb-5">
         {TABS.map(tab => (
