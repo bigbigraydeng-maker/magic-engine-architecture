@@ -122,6 +122,42 @@ export function extractSameDomainLinks(
 }
 
 /**
+ * Extract absolute same-origin URLs from Jina Reader markdown output.
+ * Matches both markdown links [text](url) and bare https:// URLs.
+ */
+export function extractMarkdownLinks(
+  markdown: string,
+  origin: string,
+  max: number = MAX_BFS_LINKS
+): string[] {
+  const seen = new Set<string>()
+  const normOrigin = origin.replace(/^(https?:\/\/)www\./, '$1')
+
+  // Match markdown links: [text](https://...)
+  const mdRe = /\]\((https?:\/\/[^\s)]+)\)/g
+  let m: RegExpExecArray | null
+  while ((m = mdRe.exec(markdown)) !== null && seen.size < max) {
+    try {
+      const abs = new URL(m[1]).href
+      const normAbs = abs.replace(/^(https?:\/\/)www\./, '$1')
+      if (normAbs.startsWith(normOrigin)) seen.add(abs)
+    } catch { /* skip */ }
+  }
+
+  // Match bare URLs: https://domain/path
+  const bareRe = /https?:\/\/[^\s)"'<>]+/g
+  while ((m = bareRe.exec(markdown)) !== null && seen.size < max) {
+    try {
+      const abs = new URL(m[0]).href
+      const normAbs = abs.replace(/^(https?:\/\/)www\./, '$1')
+      if (normAbs.startsWith(normOrigin)) seen.add(abs)
+    } catch { /* skip */ }
+  }
+
+  return Array.from(seen)
+}
+
+/**
  * Extract a page title from markdown content.
  * Priority: first H1 → <title> tag → fallback to url hostname.
  */
@@ -232,7 +268,23 @@ export async function discoverSitemapUrls(domain: string): Promise<string[]> {
     if (res.ok) {
       const html = await res.text()
       const links = extractSameDomainLinks(html, origin, MAX_BFS_LINKS)
-      return links
+      if (links.length > 0) return links
+    }
+  } catch {
+    // fall through to Level 5
+  }
+
+  // Level 5: Jina Reader — bypasses WAF / bot-blocking for homepage link extraction
+  try {
+    const { fetchUrlAsMarkdown } = await import('../brief/jina')
+    const jinaResult = await fetchUrlAsMarkdown(origin)
+    if (jinaResult.markdown) {
+      // Jina returns markdown; extract absolute URLs from markdown links [text](url)
+      const links = extractMarkdownLinks(jinaResult.markdown, origin, MAX_BFS_LINKS)
+      if (links.length > 0) {
+        console.info(`[crawler] Level 5 Jina fallback found ${links.length} URLs for ${origin}`)
+        return links
+      }
     }
   } catch {
     // nothing more to try

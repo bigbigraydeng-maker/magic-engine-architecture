@@ -261,8 +261,12 @@ export async function executeJob(
     await runner.updateProgress(jobId, { totalUrlsDiscovered: urls.length })
 
     if (urls.length === 0) {
-      // No URLs found — complete with zero counts
-      await runner.completeJob(jobId)
+      // No URLs found — fail with a user-visible message so the UI can surface it
+      await runner.failJob(
+        jobId,
+        'No pages found. The site may block automated access (WAF/robots.txt) or the domain may be unreachable. Check that the domain is correct and publicly accessible.',
+        [],
+      )
       return
     }
 
