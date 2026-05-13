@@ -13,7 +13,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getAnthropicClient, parseJsonResponse, MODEL_SONNET } from '@/lib/anthropic/client'
+import Anthropic from '@anthropic-ai/sdk'
+import { parseJsonResponse, MODEL_SONNET } from '@/lib/anthropic/client'
 import type { DiscoveryReport } from '@/lib/zhangqian/types'
 import type { PrescriptionContent, PrescriptionIntake } from '@/types/diagnostic'
 import type {
@@ -41,6 +42,32 @@ export const HUATUO_AGENT_VERSION = '1.0.0'
 const MAX_OUTPUT_TOKENS_GENERATION = 8192
 const MAX_OUTPUT_TOKENS_SELFGRADE = 2048
 
+// 单次 Claude 调用硬超时（毫秒）。Anthropic SDK 默认 10 分钟 + 默认重试 2 次
+// = 最坏 30 分钟挂起。这里强制 60–75s 上限并禁用 SDK 重试。
+const CLAUDE_TIMEOUT_GENERATION_MS = 75_000
+const CLAUDE_TIMEOUT_SELFGRADE_MS = 30_000
+
+/** 给华佗专用的 Anthropic client — 显式 timeout + 禁用重试，避免挂起。 */
+function getHuatuoAnthropicClient(): Anthropic {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY environment variable is not set')
+  return new Anthropic({
+    apiKey,
+    timeout: CLAUDE_TIMEOUT_GENERATION_MS,  // SDK 层兜底
+    maxRetries: 1,                          // 默认是 2，太激进
+  })
+}
+
+/** Promise.race 兜底 — 即使 SDK timeout 失效也保证主流程不挂死。 */
+async function withHardTimeout<T>(label: string, p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} 调用超过 ${(ms / 1000) | 0}s 硬超时`)), ms),
+    ),
+  ])
+}
+
 const REFINE_THRESHOLD = 7.0       // 自评低于此分触发 refine
 const MAX_PASSES = 2                // 最多生成两次（不含 self-grade）
 
@@ -51,9 +78,12 @@ const PRICE_OUTPUT_PER_M = 15.0
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export interface RunHuatuoOptions {
-  /** 跳过 self-grade（用于测试或预览） */
+  /** 跳过 self-grade（用于测试或预览） — 默认 false（执行自评） */
   skipSelfGrade?: boolean
-  /** 跳过 refine 即使自评低分（用于 A/B 测试） */
+  /**
+   * 是否精修。**默认 true（跳过）**——避免 Render 100s 超时。
+   * 显式传 false 才会在自评低分时触发第 2 轮生成。
+   */
   skipRefine?: boolean
   /** 进度回调（UI 显示阶段提示） */
   onProgress?: (note: string) => void | Promise<void>
@@ -99,10 +129,14 @@ export async function runHuatuo(
 
   // ── Step 2: Generate（pass 1）────────────────────────────────────────────
   await onProgress('华佗正在开方…')
-  const client = getAnthropicClient()
+  const client = getHuatuoAnthropicClient()
   let pass1
   try {
-    pass1 = await generatePrescription(client, discovery, intake, lookup)
+    pass1 = await withHardTimeout(
+      '处方生成',
+      generatePrescription(client, discovery, intake, lookup),
+      CLAUDE_TIMEOUT_GENERATION_MS,
+    )
   } catch (err) {
     throw wrapError(err, '华佗生成第1轮失败')
   }
@@ -117,7 +151,11 @@ export async function runHuatuo(
   if (!options.skipSelfGrade) {
     await onProgress('华佗自检处方…')
     try {
-      const grade1 = await selfGradePrescription(client, content, intake, lookup, { pass: 1 })
+      const grade1 = await withHardTimeout(
+        '处方自评',
+        selfGradePrescription(client, content, intake, lookup, { pass: 1 }),
+        CLAUDE_TIMEOUT_SELFGRADE_MS,
+      )
       totalInputTokens += grade1.usage.input
       totalOutputTokens += grade1.usage.output
       selfGrade = grade1.grade
@@ -128,17 +166,23 @@ export async function runHuatuo(
     }
 
     // ── Step 4: Refine if grade too low ──────────────────────────────────
+    // 默认 skipRefine = true（避免 Render 100s 请求超时）。用户想要精修需在 UI 显式开启。
+    const shouldRefine = options.skipRefine === false  // 明确 false 才精修
     if (
-      !options.skipRefine &&
+      shouldRefine &&
       selfGrade.overall < REFINE_THRESHOLD &&
-      selfGrade.overall > 0 &&        // 不对降级的默认分数触发 refine
+      selfGrade.overall > 0 &&
       passes < MAX_PASSES
     ) {
       await onProgress(`首轮自评 ${selfGrade.overall}/10 偏低，华佗精修中…`)
       try {
-        const pass2 = await generatePrescriptionWithFeedback(
-          client, discovery, intake, lookup,
-          { previousContent: content, weaknesses: selfGrade.weaknesses },
+        const pass2 = await withHardTimeout(
+          '处方精修',
+          generatePrescriptionWithFeedback(
+            client, discovery, intake, lookup,
+            { previousContent: content, weaknesses: selfGrade.weaknesses },
+          ),
+          CLAUDE_TIMEOUT_GENERATION_MS,
         )
         passes = 2
         totalInputTokens += pass2.usage.input
@@ -146,10 +190,14 @@ export async function runHuatuo(
         content = pass2.content
 
         // Re-grade pass 2
-        const grade2 = await selfGradePrescription(client, content, intake, lookup, {
-          pass: 2,
-          previousWeaknesses: selfGrade.weaknesses,
-        })
+        const grade2 = await withHardTimeout(
+          '精修后自评',
+          selfGradePrescription(client, content, intake, lookup, {
+            pass: 2,
+            previousWeaknesses: selfGrade.weaknesses,
+          }),
+          CLAUDE_TIMEOUT_SELFGRADE_MS,
+        )
         totalInputTokens += grade2.usage.input
         totalOutputTokens += grade2.usage.output
         selfGrade = grade2.grade
@@ -193,7 +241,7 @@ interface ClaudeCallResult<T> {
 }
 
 async function generatePrescription(
-  client: ReturnType<typeof getAnthropicClient>,
+  client: Anthropic,
   discovery: DiscoveryReport,
   intake: PrescriptionIntake,
   lookup: HuatuoLookupContext,
@@ -251,7 +299,7 @@ function normalizePrescriptionContent(p: Partial<PrescriptionContent>): Prescrip
 }
 
 async function generatePrescriptionWithFeedback(
-  client: ReturnType<typeof getAnthropicClient>,
+  client: Anthropic,
   discovery: DiscoveryReport,
   intake: PrescriptionIntake,
   lookup: HuatuoLookupContext,
@@ -282,7 +330,7 @@ interface GradeCallResult {
 }
 
 async function selfGradePrescription(
-  client: ReturnType<typeof getAnthropicClient>,
+  client: Anthropic,
   prescription: PrescriptionContent,
   intake: PrescriptionIntake,
   lookup: HuatuoLookupContext,
