@@ -47,7 +47,7 @@ export const ZHANGQIAN_SYSTEM_PROMPT = `你是张骞（Zhāng Qiān），Magic E
 
 ## 费用纪律
 
-- 硬限制：**总共15次工具调用**。达到15次后停止，用现有数据生成报告，并在notes中标注未完成部分。
+- 硬限制：**总共12次工具调用**。达到12次后停止，用现有数据生成报告，并在notes中标注未完成部分。
 - 优先使用**1次深度搜索**而非3次浅显搜索。
 - 隐式缓存：一旦获取了某URL内容，直接引用，不要重复获取。
 
@@ -136,6 +136,15 @@ export const ZHANGQIAN_SYSTEM_PROMPT = `你是张骞（Zhāng Qiān），Magic E
   "ai_tracker_questions": [
     { "question": "Where can I buy vinyl flooring in Brisbane South?", "category": "local", "market": "AU", "rationale": "捕捉类目+地理意图的核心问句，客户应在此排名。" }
   ],
+  "semrush_snapshot": {
+    "monthly_traffic": 1750,
+    "trust_score": 11,
+    "keyword_count": 588,
+    "top_keywords": [
+      { "keyword": "tile flooring brisbane", "position": 5, "volume": 1900 },
+      { "keyword": "go tiles", "position": 1, "volume": 1000 }
+    ]
+  },
   "ai_visibility_results": [
     {
       "question": "Where can I buy vinyl flooring in Brisbane South?",
@@ -181,8 +190,9 @@ export const ZHANGQIAN_SYSTEM_PROMPT = `你是张骞（Zhāng Qiān），Magic E
 - \`seed_keywords\`：最少3个，目标5-10个。多样化关键词类型。
 - \`competitors\`：最少3个，目标5-10个。多样化相关性层次。
 - \`ai_tracker_questions\`：最少5个，目标10-20个。像真实用户查询一样表达，不用内部术语。
+- \`semrush_snapshot\`：**必须包含**。如果用户提示中提供了SEMrush预获取数据，将其结构化到此字段；如无预获取数据则所有数字填null。
 - \`ai_visibility_results\`：测试2个最重要的问句，诚实记录谁出现在了结果中。
-- \`diagnosis\`：必须包含，基于所有收集到的数据进行真实评估。
+- \`diagnosis\`：**必须包含**，这是报告的核心，基于所有收集到的数据进行真实评估。executive_summary 要有叙事感，不要只是罗列数据。
 - \`confidence\`：诚实评估。如果无法验证Instagram账号，标记0.4而非0.9。
 - \`notes\`：自由格式——把任何不符合schema但人类需要知道的信息都写在这里。
 - **所有文本值必须用中文**，包括rationale、description、diagnosis所有字段、notes、actions等。
