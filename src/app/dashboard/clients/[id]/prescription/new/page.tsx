@@ -131,6 +131,35 @@ export default function NewPrescriptionPage() {
     if (elapsedRef.current) clearInterval(elapsedRef.current)
   }, [])
 
+  // 安全网：万一 step=3 但 content 还是 null（缓存/竞态/其他原因），主动重拉一次
+  useEffect(() => {
+    if (step !== 3 || content !== null || !prescriptionId) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await fetch(`/api/clients/${clientId}/prescription/${prescriptionId}`, {
+          headers: { Authorization: `Bearer ${API_KEY}` },
+          cache: 'no-store',
+        })
+        if (!res.ok || cancelled) return
+        const data = await res.json() as { prescription: Prescription }
+        const p = data.prescription
+        if (cancelled || !p.content) return
+        setContent(p.content)
+        const sg = (p as Prescription & { self_grade?: SelfGrade }).self_grade
+        if (sg) setSelfGrade(sg)
+        const meta = (p as Prescription & { generation_meta?: HuatuoGenerationMeta & { trend_summary?: TrendSummaryLite } }).generation_meta
+        if (meta) {
+          setGenMeta(meta)
+          if (meta.trend_summary) setTrendSummary(meta.trend_summary)
+        }
+      } catch (err) {
+        console.warn('[prescription safety-fetch] failed', err)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [step, content, prescriptionId, clientId])
+
   // 轮询处方状态直到完成或失败
   const pollPrescriptionStatus = useCallback((pId: string, onDone: () => void, onFail: (err: string) => void) => {
     const startTime = Date.now()
@@ -150,6 +179,7 @@ export default function NewPrescriptionPage() {
       try {
         const res = await fetch(`/api/clients/${clientId}/prescription/${pId}`, {
           headers: { Authorization: `Bearer ${API_KEY}` },
+          cache: 'no-store',     // 关键：禁用浏览器缓存，否则永远拿到第一次的 generating 状态
         })
         if (!res.ok) return
         const data = await res.json() as { prescription: Prescription }
@@ -162,7 +192,11 @@ export default function NewPrescriptionPage() {
           onFail(p.error_message ?? '处方生成失败')
           return
         }
-        // 成功（draft / approved / 等）
+        // 成功（draft / approved / 等）— 兜底：content 应该有；如无则报错
+        if (!p.content) {
+          onFail('处方生成完成但内容为空，请刷新页面或重新生成')
+          return
+        }
         setContent(p.content)
         setSelfGrade((p as Prescription & { self_grade?: SelfGrade }).self_grade ?? null)
         const meta = (p as Prescription & { generation_meta?: HuatuoGenerationMeta & { trend_summary?: TrendSummaryLite } }).generation_meta
@@ -171,8 +205,8 @@ export default function NewPrescriptionPage() {
           if (meta.trend_summary) setTrendSummary(meta.trend_summary)
         }
         onDone()
-      } catch {
-        // 网络瞬断不停止 — 下一轮会继续
+      } catch (err) {
+        console.warn('[prescription poll] fetch failed, retrying next tick', err)
       }
     }
 
@@ -203,6 +237,36 @@ export default function NewPrescriptionPage() {
         setDiscoveryLoading(false)
       }
     })()
+  }, [clientId])
+
+  // ── 加载最近一份草稿处方（防止用户刚生成完刷新页面就丢失结果）─────────────
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch(`/api/clients/${clientId}/prescriptions/latest-draft`, {
+          headers: { Authorization: `Bearer ${API_KEY}` },
+          cache: 'no-store',
+        })
+        if (!res.ok) return
+        const data = await res.json() as { prescription?: Prescription }
+        const p = data.prescription
+        if (!p || !p.content) return
+        // 仅当用户还在第1步且没生成中时才自动恢复
+        if (step !== 1 || isGenerating) return
+        setPrescriptionId(p.id)
+        setContent(p.content)
+        const sg = (p as Prescription & { self_grade?: SelfGrade }).self_grade
+        if (sg) setSelfGrade(sg)
+        const meta = (p as Prescription & { generation_meta?: HuatuoGenerationMeta & { trend_summary?: TrendSummaryLite } }).generation_meta
+        if (meta) {
+          setGenMeta(meta)
+          if (meta.trend_summary) setTrendSummary(meta.trend_summary)
+        }
+        setStep(3)
+      } catch {/* 找不到草稿就保持表单 */}
+    })()
+    // 只跑一次（mount 时）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientId])
 
   // ── Generate prescription (异步：dispatch + poll) ─────────────────────────

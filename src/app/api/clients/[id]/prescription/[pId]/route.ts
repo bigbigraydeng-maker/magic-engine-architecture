@@ -18,6 +18,10 @@ import { requireBearerToken } from '@/lib/validation-utils'
 import { generateExecutionItems } from '@/lib/diagnostic/execution-generator'
 import type { Prescription, PrescriptionStatus } from '@/types/diagnostic'
 
+// 关键：禁用 Next.js 路由缓存，否则华佗异步 polling 拿不到刚写入的 content。
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 // ---------------------------------------------------------------------------
 // GET — fetch prescription
 // ---------------------------------------------------------------------------
@@ -45,7 +49,12 @@ export async function GET(
       return NextResponse.json({ success: false, error: 'Prescription not found' }, { status: 404 })
     }
 
-    return NextResponse.json({ success: true, prescription: data })
+    return NextResponse.json({ success: true, prescription: data }, {
+      headers: {
+        // 双重保险：浏览器也不要缓存
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+      },
+    })
   } catch (err: unknown) {
     console.error('[prescription GET] Error:', err)
     return NextResponse.json({ success: false, error: 'An unexpected error occurred' }, { status: 500 })
