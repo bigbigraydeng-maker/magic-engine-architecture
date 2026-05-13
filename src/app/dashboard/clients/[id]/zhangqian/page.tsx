@@ -6,71 +6,22 @@ import { useParams, useRouter } from 'next/navigation'
 import type {
   ClientDiscoveryRow,
   DiscoveryJob,
-  DiscoveredKeyword,
-  DiscoveredCompetitor,
-  DiscoveredSocial,
-  DiscoveredAiQuestion,
-  KeywordType,
-  CompetitorRelevance,
-  AiQuestionCategory,
-  SocialPlatform,
 } from '@/lib/zhangqian/types'
+import {
+  BusinessCard,
+  KeywordsCard,
+  CompetitorsCard,
+  SocialCard,
+  GbpCard,
+  AiVisibilityCard,
+  ActionPlanCard,
+  DiagnosisCard,
+  NotesCard,
+} from './cards'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''
-
-const KEYWORD_TYPE_STYLES: Record<KeywordType, string> = {
-  brand:         'bg-purple-100 text-purple-700',
-  category:      'bg-blue-100 text-blue-700',
-  long_tail:     'bg-green-100 text-green-700',
-  local:         'bg-orange-100 text-orange-700',
-  transactional: 'bg-red-100 text-red-700',
-}
-
-const KEYWORD_TYPE_LABELS: Record<KeywordType, string> = {
-  brand:         '品牌',
-  category:      '类目',
-  long_tail:     '长尾',
-  local:         '本地',
-  transactional: '购买意图',
-}
-
-const RELEVANCE_STYLES: Record<CompetitorRelevance, string> = {
-  direct:      'bg-red-100 text-red-700',
-  adjacent:    'bg-yellow-100 text-yellow-700',
-  aspirational: 'bg-blue-100 text-blue-700',
-}
-
-const RELEVANCE_LABELS: Record<CompetitorRelevance, string> = {
-  direct:      '直接竞品',
-  adjacent:    '相邻竞品',
-  aspirational: '标杆',
-}
-
-const AI_CATEGORY_STYLES: Record<AiQuestionCategory, string> = {
-  brand:      'bg-purple-100 text-purple-700',
-  category:   'bg-blue-100 text-blue-700',
-  comparison: 'bg-amber-100 text-amber-700',
-  local:      'bg-orange-100 text-orange-700',
-}
-
-const AI_CATEGORY_LABELS: Record<AiQuestionCategory, string> = {
-  brand:      '品牌',
-  category:   '类目',
-  comparison: '对比',
-  local:      '本地',
-}
-
-const PLATFORM_ICONS: Record<SocialPlatform, string> = {
-  instagram:  '📸',
-  facebook:   '👤',
-  linkedin:   '💼',
-  youtube:    '▶️',
-  tiktok:     '🎵',
-  twitter:    '🐦',
-  pinterest:  '📌',
-}
 
 // ─── Page state type ──────────────────────────────────────────────────────────
 
@@ -101,38 +52,6 @@ interface ConfirmResponse {
   error?: string
 }
 
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-function Badge({ className, children }: { className: string; children: React.ReactNode }) {
-  return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${className}`}>
-      {children}
-    </span>
-  )
-}
-
-function CardShell({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-xl border border-gray-200 bg-white p-5 flex flex-col gap-3">
-      <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">{title}</h3>
-      {children}
-    </div>
-  )
-}
-
-function ConfidenceBar({ value }: { value: number }) {
-  const pct = Math.round(value * 100)
-  const color = pct >= 70 ? 'bg-green-500' : pct >= 40 ? 'bg-yellow-400' : 'bg-red-400'
-  return (
-    <div className="flex items-center gap-2">
-      <div className="flex-1 h-1.5 rounded-full bg-gray-100 overflow-hidden">
-        <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="text-xs text-gray-400 w-8 text-right">{pct}%</span>
-    </div>
-  )
-}
-
 // ─── DispatchPanel ────────────────────────────────────────────────────────────
 
 function DispatchPanel({
@@ -149,7 +68,7 @@ function DispatchPanel({
       <div className="text-5xl mb-4">🗺️</div>
       <h2 className="text-xl font-semibold text-gray-900 mb-2">派遣张骞</h2>
       <p className="text-sm text-gray-500 mb-2 max-w-sm">
-        仅需一个域名，张骞将自动发现品牌数据
+        仅需一个域名，张骞将自动生成品牌健康诊断报告
       </p>
       <div className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-200 px-3 py-1.5 text-xs text-amber-700 font-medium mb-6">
         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -202,194 +121,6 @@ function ProgressPanel({ note, elapsedSec }: { note: string | null; elapsedSec: 
   )
 }
 
-// ─── BusinessCard ─────────────────────────────────────────────────────────────
-
-function BusinessCard({ discovery }: { discovery: ClientDiscoveryRow }) {
-  const biz = discovery.payload.business
-  return (
-    <CardShell title="品牌概览">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="font-semibold text-gray-900 text-base">{biz.name}</p>
-          <p className="text-xs text-gray-500 mt-0.5">
-            {[biz.location.city, biz.location.region, biz.location.country].filter(Boolean).join(', ')}
-          </p>
-        </div>
-        <Badge className={biz.confidence >= 0.7 ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}>
-          置信度 {Math.round(biz.confidence * 100)}%
-        </Badge>
-      </div>
-      <ConfidenceBar value={biz.confidence} />
-      <div className="flex flex-wrap gap-1">
-        {biz.industry.map(tag => (
-          <Badge key={tag} className="bg-gray-100 text-gray-600">{tag}</Badge>
-        ))}
-      </div>
-      <p className="text-xs text-gray-600 leading-relaxed">{biz.description}</p>
-      {biz.unique_selling_points.length > 0 && (
-        <div>
-          <p className="text-xs font-medium text-gray-500 mb-1">核心卖点</p>
-          <ul className="space-y-0.5">
-            {biz.unique_selling_points.map((usp, i) => (
-              <li key={i} className="text-xs text-gray-600 flex items-start gap-1">
-                <span className="text-indigo-400 mt-0.5">•</span>{usp}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </CardShell>
-  )
-}
-
-// ─── KeywordsCard ─────────────────────────────────────────────────────────────
-
-function KeywordsCard({ keywords }: { keywords: DiscoveredKeyword[] }) {
-  return (
-    <CardShell title="种子关键词">
-      <ul className="space-y-2">
-        {keywords.map((kw, i) => (
-          <li key={i} className="flex items-center justify-between gap-2">
-            <span className="text-sm text-gray-800 flex-1 truncate">{kw.keyword}</span>
-            <Badge className={KEYWORD_TYPE_STYLES[kw.type]}>
-              {KEYWORD_TYPE_LABELS[kw.type]}
-            </Badge>
-          </li>
-        ))}
-      </ul>
-    </CardShell>
-  )
-}
-
-// ─── CompetitorsCard ──────────────────────────────────────────────────────────
-
-function CompetitorsCard({ competitors }: { competitors: DiscoveredCompetitor[] }) {
-  return (
-    <CardShell title="竞争对手">
-      <ul className="space-y-3">
-        {competitors.map((c, i) => (
-          <li key={i} className="flex items-start justify-between gap-2">
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-900 truncate">{c.name}</p>
-              <p className="text-xs text-gray-400 truncate">{c.domain}</p>
-            </div>
-            <Badge className={RELEVANCE_STYLES[c.relevance]}>
-              {RELEVANCE_LABELS[c.relevance]}
-            </Badge>
-          </li>
-        ))}
-      </ul>
-    </CardShell>
-  )
-}
-
-// ─── SocialCard ───────────────────────────────────────────────────────────────
-
-function SocialCard({ socials }: { socials: DiscoveredSocial[] }) {
-  if (socials.length === 0) {
-    return (
-      <CardShell title="社媒账号">
-        <p className="text-sm text-gray-400 text-center py-4">未发现社媒账号</p>
-      </CardShell>
-    )
-  }
-  return (
-    <CardShell title="社媒账号">
-      <ul className="space-y-2">
-        {socials.map((s, i) => (
-          <li key={i} className="flex items-center gap-3">
-            <span className="text-lg">{PLATFORM_ICONS[s.platform]}</span>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium text-gray-700 capitalize">{s.platform}</p>
-              {s.handle && <p className="text-xs text-gray-400">{s.handle}</p>}
-              <a
-                href={s.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-indigo-500 hover:underline truncate block"
-              >
-                {s.url}
-              </a>
-            </div>
-            <ConfidenceBar value={s.confidence} />
-          </li>
-        ))}
-      </ul>
-    </CardShell>
-  )
-}
-
-// ─── GbpCard ──────────────────────────────────────────────────────────────────
-
-function GbpCard({ gbp }: { gbp: ClientDiscoveryRow['payload']['gbp'] }) {
-  if (!gbp) {
-    return (
-      <CardShell title="Google 商业档案">
-        <p className="text-sm text-gray-400 text-center py-4">未发现</p>
-      </CardShell>
-    )
-  }
-  const stars = gbp.rating != null ? Math.round(gbp.rating) : 0
-  return (
-    <CardShell title="Google 商业档案">
-      <p className="text-sm font-medium text-gray-900">{gbp.business_name}</p>
-      <p className="text-xs text-gray-500">{gbp.address}</p>
-      {gbp.rating != null && (
-        <div className="flex items-center gap-2">
-          <div className="flex text-yellow-400 text-sm">
-            {'★'.repeat(stars)}{'☆'.repeat(5 - stars)}
-          </div>
-          <span className="text-xs text-gray-600">{gbp.rating.toFixed(1)}</span>
-          {gbp.review_count != null && (
-            <span className="text-xs text-gray-400">({gbp.review_count} 条评价)</span>
-          )}
-        </div>
-      )}
-      <ConfidenceBar value={gbp.confidence} />
-      {gbp.google_maps_url && (
-        <a
-          href={gbp.google_maps_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-xs text-indigo-500 hover:underline"
-        >
-          在 Google Maps 查看 →
-        </a>
-      )}
-    </CardShell>
-  )
-}
-
-// ─── AiQuestionsCard ──────────────────────────────────────────────────────────
-
-function AiQuestionsCard({ questions }: { questions: DiscoveredAiQuestion[] }) {
-  return (
-    <CardShell title="AI Tracker 问句">
-      <ul className="space-y-2">
-        {questions.map((q, i) => (
-          <li key={i} className="flex items-start gap-2">
-            <Badge className={AI_CATEGORY_STYLES[q.category]}>
-              {AI_CATEGORY_LABELS[q.category]}
-            </Badge>
-            <p className="text-xs text-gray-700 flex-1 leading-relaxed">{q.question}</p>
-          </li>
-        ))}
-      </ul>
-    </CardShell>
-  )
-}
-
-// ─── NotesCard ────────────────────────────────────────────────────────────────
-
-function NotesCard({ notes }: { notes: string }) {
-  if (!notes.trim()) return null
-  return (
-    <CardShell title="探索备注">
-      <p className="text-xs text-gray-600 leading-relaxed whitespace-pre-wrap">{notes}</p>
-    </CardShell>
-  )
-}
-
 // ─── DiscoveryReviewCards ─────────────────────────────────────────────────────
 
 function DiscoveryReviewCards({
@@ -409,18 +140,34 @@ function DiscoveryReviewCards({
         <span>域名: <strong className="text-gray-700">{discovery.domain}</strong></span>
         <span>费用: <strong className="text-gray-700">${discovery.cost_usd.toFixed(3)}</strong></span>
         <span>工具调用: <strong className="text-gray-700">{discovery.tool_calls}</strong></span>
-        <span>生成时间: <strong className="text-gray-700">{new Date(discovery.generated_at).toLocaleString('zh-CN', { timeZone: 'Pacific/Auckland' })}</strong></span>
+        <span>生成时间: <strong className="text-gray-700">
+          {new Date(discovery.generated_at).toLocaleString('zh-CN', { timeZone: 'Pacific/Auckland' })}
+        </strong></span>
       </div>
+
+      {/* Diagnosis card — full width at top */}
+      {p.diagnosis && (
+        <DiagnosisCard diagnosis={p.diagnosis} />
+      )}
 
       {/* Cards grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <BusinessCard discovery={discovery} />
-        <KeywordsCard keywords={p.seed_keywords} />
+        <KeywordsCard keywords={p.seed_keywords} semrushSnapshot={p.semrush_snapshot} />
         <CompetitorsCard competitors={p.competitors} />
+        <AiVisibilityCard
+          questions={p.ai_tracker_questions}
+          visibilityResults={p.ai_visibility_results}
+        />
         <SocialCard socials={p.social_profiles} />
         <GbpCard gbp={p.gbp} />
-        <AiQuestionsCard questions={p.ai_tracker_questions} />
       </div>
+
+      {/* Action plan — full width */}
+      {p.diagnosis?.actions && (
+        <ActionPlanCard actions={p.diagnosis.actions} />
+      )}
+
       {p.notes && <NotesCard notes={p.notes} />}
 
       {/* Confirm button */}
@@ -435,7 +182,7 @@ function DiscoveryReviewCards({
               <span className="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
               导入中…
             </>
-          ) : '确认并导入'}
+          ) : '确认发现内容，导入系统 →'}
         </button>
       </div>
     </div>
@@ -540,9 +287,10 @@ export default function ZhangqianPage() {
 
     const poll = async () => {
       try {
-        const res = await fetch(`/api/clients/${clientId}/zhangqian/status?job_id=${encodeURIComponent(jid)}`, {
-          headers: { Authorization: `Bearer ${API_KEY}` },
-        })
+        const res = await fetch(
+          `/api/clients/${clientId}/zhangqian/status?job_id=${encodeURIComponent(jid)}`,
+          { headers: { Authorization: `Bearer ${API_KEY}` } },
+        )
         if (!res.ok) return
         const data: StatusResponse = await res.json()
         if (!data.success) return
@@ -603,7 +351,6 @@ export default function ZhangqianPage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: ConfirmResponse = await res.json()
       if (!data.success) throw new Error(data.error ?? '确认失败')
-      // Redirect to client workspace after confirmation
       router.push(`/dashboard/clients/${clientId}`)
     } catch (e) {
       setPageError(e instanceof Error ? e.message : '确认失败')

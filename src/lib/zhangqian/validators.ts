@@ -22,6 +22,7 @@ import type {
   CompetitorRelevance,
   AiQuestionCategory,
   Market,
+  DiagnosisBlock,
 } from './types'
 
 // ─── Result type ──────────────────────────────────────────────────────────────
@@ -258,6 +259,10 @@ export function validateDiscoveryReport(
       competitors: v.competitors,
       ai_tracker_questions: v.ai_tracker_questions,
       notes: v.notes,
+      // New optional fields — pass through as-is (no strict validation)
+      semrush_snapshot: isRecord(v.semrush_snapshot) ? v.semrush_snapshot as DiscoveryReport['semrush_snapshot'] : null,
+      ai_visibility_results: Array.isArray(v.ai_visibility_results) ? v.ai_visibility_results as DiscoveryReport['ai_visibility_results'] : null,
+      diagnosis: isRecord(v.diagnosis) ? v.diagnosis as DiagnosisBlock : null,
     },
   }
 }

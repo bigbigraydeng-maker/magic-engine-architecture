@@ -22,6 +22,7 @@ export interface SemrushKeywordData {
   cpc: number
   intent: string
   trend: { month: string; volume: number }[]
+  position?: number | null  // organic rank position (from Po export column)
 }
 
 // Tool 1: 批量关键词概览（最多100个）
@@ -121,6 +122,8 @@ function parseSemrushResponse(text: string): SemrushKeywordData[] {
 
   return lines.slice(1).map(line => {
     const cols = line.split(';')
+    const posRaw = cols[5]?.trim()
+    const position = posRaw && posRaw !== '' ? (parseInt(posRaw) || null) : null
     return {
       keyword: cols[0]?.trim() || '',
       volume: parseInt(cols[1]) || 0,
@@ -128,6 +131,7 @@ function parseSemrushResponse(text: string): SemrushKeywordData[] {
       cpc: parseFloat(cols[3]) || 0,
       intent: normalizeIntent(cols[4]?.trim()),
       trend: [],
+      position,
     }
   }).filter(k => k.keyword.length > 0)
 }

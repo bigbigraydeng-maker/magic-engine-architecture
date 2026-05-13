@@ -78,6 +78,8 @@ export interface RunZhangqianOptions {
   maxCostUsd?: number
   /** Per-iteration callback for progress UI (e.g. "fetching homepage…") */
   onProgress?: (note: string) => void | Promise<void>
+  /** Pre-fetched SEMrush context string to include in the user prompt. */
+  semrushContext?: string
 }
 
 export interface RunZhangqianResult {
@@ -109,7 +111,7 @@ export async function runZhangqian(
 
   // Conversation messages — grows each turn
   const messages: Anthropic.Messages.MessageParam[] = [
-    { role: 'user', content: buildUserPrompt(domain) },
+    { role: 'user', content: buildUserPrompt(domain, options.semrushContext) },
   ]
 
   let totalInputTokens = 0

@@ -52,6 +52,8 @@ export interface DiscoveredKeyword {
   type: KeywordType
   rationale: string                 // why Claude picked this
   estimated_volume?: number | null  // optional: rough volume guess
+  semrush_rank?: number | null      // current organic rank from SEMrush
+  semrush_volume?: number | null    // verified monthly search volume from SEMrush
 }
 
 export type CompetitorRelevance = 'direct' | 'adjacent' | 'aspirational'
@@ -62,6 +64,9 @@ export interface DiscoveredCompetitor {
   relevance: CompetitorRelevance
   rationale: string                 // why this competitor matters
   location?: string | null          // city/region if local-market relevant
+  monthly_traffic?: number | null   // estimated monthly organic traffic from SEMrush
+  keyword_count?: number | null     // number of ranking keywords from SEMrush
+  trust_score?: number | null       // domain authority score from SEMrush
 }
 
 export type AiQuestionCategory = 'brand' | 'category' | 'comparison' | 'local'
@@ -88,6 +93,40 @@ export interface DiscoveredBusiness {
   confidence: number                 // 0–1
 }
 
+// ─── New diagnostic types ─────────────────────────────────────────────────────
+
+export interface SemrushSnapshot {
+  monthly_traffic: number | null
+  trust_score: number | null
+  keyword_count: number | null
+  top_keywords: Array<{ keyword: string; position: number; volume: number | null }>
+}
+
+export interface AiVisibilityResult {
+  question: string
+  top_brands: string[]       // brands that appeared in search results for this query
+  client_mentioned: boolean
+}
+
+export interface DiagnosisBlock {
+  executive_summary: string  // Chinese narrative ~3-5 sentences
+  crisis_type: string | null // e.g. "TYPE_E 声誉陷阱" or null if no crisis
+  scores: {
+    seo: number             // 0-100
+    social: number
+    reputation: number
+    ai_visibility: number
+    overall: number
+  }
+  money_flow: string        // Chinese "钱去了哪里" narrative
+  key_finding: string       // one-line Chinese diagnosis
+  actions: {
+    quick_fix: string[]     // 立即可做 (客户自助)
+    important: string[]     // 重要建设 (1-3个月)
+    talk_to_us: string[]    // 需要专业支持
+  }
+}
+
 // ─── Top-level report ─────────────────────────────────────────────────────────
 
 export interface DiscoveryReport {
@@ -105,6 +144,15 @@ export interface DiscoveryReport {
 
   /** Free-form research notes / caveats the agent wants the human to know */
   notes: string
+
+  /** SEMrush pre-fetched domain snapshot (populated server-side before agent run) */
+  semrush_snapshot?: SemrushSnapshot | null
+
+  /** AI visibility test results — agent tests 2-3 questions and records who appears */
+  ai_visibility_results?: AiVisibilityResult[] | null
+
+  /** Deep diagnostic block with scores, narrative, and action plan */
+  diagnosis?: DiagnosisBlock | null
 
   /** Run telemetry — written by agent.ts, not by Claude */
   meta: {

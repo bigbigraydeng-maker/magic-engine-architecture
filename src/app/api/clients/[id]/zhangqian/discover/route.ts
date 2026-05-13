@@ -20,6 +20,7 @@ import {
   completeJob,
   failJob,
 } from '@/lib/zhangqian/persistor'
+import { getDomainMetrics, getDomainOrganicKeywords } from '@/lib/semrush/client'
 
 // Render — agent itself runs in fire-and-forget; this handler returns in <1s
 export const maxDuration = 60
@@ -84,11 +85,47 @@ async function executeDiscoveryJob(
   await updateJobProgress(supabaseAdmin, jobId, {
     status: 'running',
     started_at: new Date().toISOString(),
-    progress_note: 'Zhangqian dispatched…',
+    progress_note: '正在预取 SEMrush 数据…',
   })
+
+  // Pre-fetch SEMrush data before starting the agent — never block on failure
+  let semrushContext: string | undefined
+  try {
+    const [metricsResult, keywordsResult] = await Promise.allSettled([
+      getDomainMetrics(domain),
+      getDomainOrganicKeywords(domain, undefined, 20),
+    ])
+
+    const metrics = metricsResult.status === 'fulfilled' ? metricsResult.value : null
+    const keywords = keywordsResult.status === 'fulfilled' ? keywordsResult.value : []
+
+    if (metrics && (metrics.organic_traffic > 0 || metrics.organic_keywords > 0)) {
+      const trafficStr = metrics.organic_traffic.toLocaleString()
+      const kwCountStr = metrics.organic_keywords.toLocaleString()
+      const lines: string[] = [
+        `月有机流量：${trafficStr}次 | 域名权威分（Authority Score）：${metrics.authority_score}/100 | 有机关键词数：${kwCountStr}`,
+      ]
+
+      if (keywords.length > 0) {
+        lines.push('')
+        lines.push('当前 TOP 关键词排名（SEMrush 实时数据）：')
+        lines.push('| 关键词 | 当前排名 | 月搜索量 | 难度 |')
+        lines.push('|--------|---------|---------|------|')
+        for (const kw of keywords.slice(0, 15)) {
+          const rank = kw.position != null ? `#${kw.position}` : 'N/A'
+          lines.push(`| ${kw.keyword} | ${rank} | ${kw.volume.toLocaleString()} | ${kw.kd} |`)
+        }
+      }
+
+      semrushContext = lines.join('\n')
+    }
+  } catch {
+    // Non-fatal — continue without SEMrush context
+  }
 
   try {
     const { report, validation_error, raw_output } = await runZhangqian(domain, {
+      semrushContext,
       onProgress: async (note) => {
         await updateJobProgress(supabaseAdmin, jobId, { progress_note: note })
       },
