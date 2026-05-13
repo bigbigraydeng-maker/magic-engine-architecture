@@ -115,6 +115,10 @@ export default function NewPrescriptionPage() {
   const [isApproving, setIsApproving]   = useState(false)
   const [approveError, setApproveError] = useState<string | null>(null)
 
+  // Refine state (P8.10.S3 让华佗精修)
+  const [isRefining, setIsRefining]     = useState(false)
+  const [refineError, setRefineError]   = useState<string | null>(null)
+
   // ── Load Zhangqian discovery on mount ─────────────────────────────────────
   useEffect(() => {
     void (async () => {
@@ -208,6 +212,42 @@ export default function NewPrescriptionPage() {
       setApproveError(e instanceof Error ? e.message : '批准失败')
     } finally {
       setIsApproving(false)
+    }
+  }
+
+  const handleRefine = async () => {
+    if (!prescriptionId) return
+    setIsRefining(true)
+    setRefineError(null)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/prescription/${prescriptionId}/refine`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
+        body: JSON.stringify({}),
+      })
+      if (!res.ok) {
+        let errText = `HTTP ${res.status}`
+        try {
+          const errBody = await res.json() as { error?: string }
+          if (errBody?.error) errText = `${errText} — ${errBody.error}`
+        } catch {/* ignore */}
+        throw new Error(errText)
+      }
+      const data = await res.json() as {
+        content: PrescriptionContent
+        self_grade?: SelfGrade
+        meta?: HuatuoGenerationMeta
+        trend_summary?: TrendSummaryLite | null
+      }
+      // 用新结果替换本地状态
+      setContent(data.content)
+      setSelfGrade(data.self_grade ?? null)
+      setGenMeta(data.meta ?? null)
+      if (data.trend_summary !== undefined) setTrendSummary(data.trend_summary ?? null)
+    } catch (e) {
+      setRefineError(e instanceof Error ? e.message : '精修失败')
+    } finally {
+      setIsRefining(false)
     }
   }
 
@@ -411,7 +451,13 @@ export default function NewPrescriptionPage() {
           <div className="space-y-4">
             {/* 华佗自评卡 — 仅当存在 self_grade 时显示 */}
             {selfGrade && genMeta && (
-              <HuatuoMetaCard selfGrade={selfGrade} meta={genMeta} />
+              <HuatuoMetaCard
+                selfGrade={selfGrade}
+                meta={genMeta}
+                onRefine={selfGrade.weaknesses.length > 0 ? handleRefine : undefined}
+                isRefining={isRefining}
+                refineError={refineError}
+              />
             )}
 
             {/* 历史趋势卡 — 让用户看到 target_value 是基于真实历史锚定 */}
@@ -561,9 +607,15 @@ const GRADE_LABELS: Record<keyof SelfGrade['dimensions'], string> = {
 function HuatuoMetaCard({
   selfGrade,
   meta,
+  onRefine,
+  isRefining,
+  refineError,
 }: {
   selfGrade: SelfGrade
   meta: HuatuoGenerationMeta
+  onRefine?: () => void
+  isRefining?: boolean
+  refineError?: string | null
 }) {
   const overall = selfGrade.overall
   const gradeColor =
@@ -575,16 +627,24 @@ function HuatuoMetaCard({
     overall >= 6 ? '可接受' :
                    '需注意'
 
+  // 已经精修过（passes >= 2）就不再显示精修按钮
+  const canRefine = Boolean(onRefine) && meta.passes < 2 && overall < 9
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-5">
       <div className="flex items-start justify-between gap-3 mb-4">
-        <div className="flex items-center gap-3">
-          <div className={`px-3 py-1.5 rounded-lg border font-bold text-lg tabular-nums ${gradeColor}`}>
+        <div className="flex items-center gap-3 flex-1 min-w-0">
+          <div className={`px-3 py-1.5 rounded-lg border font-bold text-lg tabular-nums shrink-0 ${gradeColor}`}>
             {overall.toFixed(1)} / 10
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-sm font-semibold text-gray-900">
               华佗自评：{gradeLabel}
+              {meta.passes >= 2 && (
+                <span className="ml-2 text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full">
+                  ✓ 已精修
+                </span>
+              )}
             </p>
             <p className="text-xs text-gray-400">
               {meta.passes === 1 ? '一次过关' : `经过 ${meta.passes} 轮精修`}
@@ -596,7 +656,32 @@ function HuatuoMetaCard({
             </p>
           </div>
         </div>
+
+        {/* 精修按钮 — 仅当有 onRefine 回调、未精修过、分数未满 9 时显示 */}
+        {canRefine && (
+          <button
+            onClick={onRefine}
+            disabled={isRefining}
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="基于华佗自检指出的薄弱点，让华佗针对性修改处方（约 90s）"
+          >
+            {isRefining ? (
+              <>
+                <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-indigo-300 border-t-transparent rounded-full" />
+                精修中…
+              </>
+            ) : (
+              <>🔄 让华佗精修一次</>
+            )}
+          </button>
+        )}
       </div>
+
+      {refineError && (
+        <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs text-red-700">
+          精修失败：{refineError}
+        </div>
+      )}
 
       {/* 7 维评分网格 */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 mb-3">

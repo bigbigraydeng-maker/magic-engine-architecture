@@ -233,6 +233,111 @@ export async function runHuatuo(
   }
 }
 
+// ─── Public: Refine an existing prescription (called by /prescription/[pId]/refine) ──
+
+export interface RefineHuatuoOptions {
+  onProgress?: (note: string) => void | Promise<void>
+}
+
+/**
+ * 重新精修一份已生成的处方。流程：
+ *   1. 重新 lookup（基准库 + SEMrush trend 可能变了）
+ *   2. 用 previousContent + previousWeaknesses 触发 refine pass
+ *   3. 重新自评 pass 2
+ *
+ * 适合放在独立 API 请求里调用，避免主生成请求超时。
+ */
+export async function refineHuatuoPrescription(
+  supabase: SupabaseClient,
+  discovery: DiscoveryReport,
+  intake: PrescriptionIntake,
+  previousContent: PrescriptionContent,
+  previousWeaknesses: string[],
+  options: RefineHuatuoOptions = {},
+): Promise<HuatuoPrescriptionResult> {
+  const startedAt = Date.now()
+  const onProgress = options.onProgress ?? (() => undefined)
+
+  let totalInputTokens = 0
+  let totalOutputTokens = 0
+
+  // Step 1: re-lookup
+  await onProgress('重新查询基准库和趋势…')
+  const industryCategory = mapIndustryToCategory(discovery.business.industry)
+  const [benchmarks, trendPoints] = await Promise.all([
+    fetchBenchmarks(supabase, {
+      industryCategory,
+      businessSize: 'small',
+      market: 'AU_NZ',
+    }),
+    getDomainTrafficTrend(discovery.domain, undefined, 12),
+  ])
+  const trendSummary = summarizeTrend(trendPoints)
+  const lookup: HuatuoLookupContext = {
+    benchmarks,
+    industry_category: industryCategory,
+    trend_summary: trendSummary,
+  }
+
+  const client = getHuatuoAnthropicClient()
+
+  // Step 2: refine
+  await onProgress('华佗针对薄弱点精修…')
+  const refinePass = await withHardTimeout(
+    '处方精修',
+    generatePrescriptionWithFeedback(
+      client, discovery, intake, lookup,
+      { previousContent, weaknesses: previousWeaknesses },
+    ),
+    CLAUDE_TIMEOUT_GENERATION_MS,
+  )
+  totalInputTokens += refinePass.usage.input
+  totalOutputTokens += refinePass.usage.output
+
+  // Step 3: re-grade (pass 2)
+  await onProgress('华佗复检精修结果…')
+  let selfGrade: SelfGrade
+  try {
+    const grade = await withHardTimeout(
+      '精修后自评',
+      selfGradePrescription(client, refinePass.content, intake, lookup, {
+        pass: 2,
+        previousWeaknesses,
+      }),
+      CLAUDE_TIMEOUT_SELFGRADE_MS,
+    )
+    totalInputTokens += grade.usage.input
+    totalOutputTokens += grade.usage.output
+    selfGrade = grade.grade
+  } catch (err) {
+    console.warn('[huatuo] refine re-grade failed, keeping refine content', err)
+    selfGrade = makeDefaultGrade()
+  }
+
+  // Clamp budget
+  clampBudgetAllocation(refinePass.content, intake.monthly_budget_aud)
+
+  const costUsd =
+    (totalInputTokens / 1_000_000) * PRICE_INPUT_PER_M +
+    (totalOutputTokens / 1_000_000) * PRICE_OUTPUT_PER_M
+
+  return {
+    content: refinePass.content,
+    self_grade: selfGrade,
+    benchmarks_used: extractBenchmarkIds(benchmarks),
+    trend_summary: trendSummary,
+    meta: {
+      agent_version: HUATUO_AGENT_VERSION,
+      passes: 2,
+      total_input_tokens: totalInputTokens,
+      total_output_tokens: totalOutputTokens,
+      cost_usd: Number(costUsd.toFixed(4)),
+      duration_ms: Date.now() - startedAt,
+      industry_category_used: industryCategory,
+    },
+  }
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 interface ClaudeCallResult<T> {
