@@ -10,7 +10,8 @@ import { SCORE_THRESHOLDS } from '@/lib/diagnostic/constants'
 type ScoreTier = 'green' | 'amber' | 'red'
 
 export interface ScoreGaugeProps {
-  score: number
+  /** 0–100 numeric score, or `null` when the dimension has no data (rendered as "未配置"). */
+  score: number | null
   dimension?: string
   loading?: boolean
 }
@@ -61,6 +62,39 @@ export function ScoreGauge({ score, dimension, loading = false }: ScoreGaugeProp
         <div className="h-8 w-12 bg-gray-200 rounded" />
         <div className="h-3 w-16 bg-gray-200 rounded" />
         <div className="h-3 w-10 bg-gray-200 rounded" />
+      </div>
+    )
+  }
+
+  // P8.5.25: null = data not available → render gray "未配置" gauge (not "0 危险")
+  if (score === null) {
+    return (
+      <div
+        data-testid="score-gauge"
+        data-tier="unknown"
+        className="rounded-xl border border-gray-200 bg-gray-50 p-5 flex flex-col items-center gap-1 text-center text-gray-500"
+      >
+        <span
+          data-testid="score-value"
+          className="text-3xl font-bold tabular-nums text-gray-400"
+          aria-label="not configured"
+        >
+          —
+        </span>
+        <span
+          data-testid="score-label"
+          className="text-xs font-semibold uppercase tracking-wide opacity-80"
+        >
+          未配置
+        </span>
+        {dimension && (
+          <span
+            data-testid="score-dimension"
+            className="text-xs font-medium text-gray-400 mt-0.5"
+          >
+            {dimension}
+          </span>
+        )}
       </div>
     )
   }

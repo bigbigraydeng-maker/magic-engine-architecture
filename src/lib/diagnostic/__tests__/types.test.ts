@@ -103,4 +103,20 @@ describe('computeOverallScore', () => {
   it('handles single-dimension breakdown', () => {
     expect(computeOverallScore({ reputation: 55 })).toBe(55)
   })
+
+  // P8.5.24: null dimension scores must be excluded (data unavailable)
+  it('excludes null scores from weighting (re-normalises)', () => {
+    // seo=80 (w=0.25), reputation=null skipped, ai_visibility=40 (w=0.20)
+    // → (80*0.25 + 40*0.20) / (0.25 + 0.20) = 28 / 0.45 = 62.22 → 62
+    expect(computeOverallScore({ seo: 80, reputation: null, ai_visibility: 40 })).toBe(62)
+  })
+
+  it('returns 0 when all scores are null', () => {
+    expect(computeOverallScore({ seo: null, reputation: null, social: null })).toBe(0)
+  })
+
+  it('null and undefined are both excluded', () => {
+    // Only seo counts → 70
+    expect(computeOverallScore({ seo: 70, ai_visibility: null, ads: undefined })).toBe(70)
+  })
 })

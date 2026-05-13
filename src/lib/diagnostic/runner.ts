@@ -154,12 +154,16 @@ async function persistResult(
   runId: string,
   resultMap: Record<string, CollectorResult>,
 ): Promise<void> {
-  const dimensionScores: Partial<Record<DiagnosticDimension, number>> = {}
+  // P8.5.24: dimensionScores stores number | null — null means "data unavailable"
+  // and is excluded from computeOverallScore (weights re-normalised).
+  const dimensionScores: Partial<Record<DiagnosticDimension, number | null>> = {}
+  const dimensionsSkipped: DiagnosticDimension[] = []
   const allFindings: (NewFinding & { run_id: string })[] = []
 
   for (const [dim, result] of Object.entries(resultMap)) {
     if (isDiagnosticDimension(dim)) {
       dimensionScores[dim] = result.score
+      if (result.score === null) dimensionsSkipped.push(dim)
     }
     allFindings.push(...result.findings.map(f => ({ ...f, run_id: runId })))
   }
@@ -176,6 +180,7 @@ async function persistResult(
       status: 'completed',
       overall_score: overallScore,
       dimension_scores: dimensionScores,
+      dimensions_skipped: dimensionsSkipped,
       findings_count: allFindings.length,
       critical_count: allFindings.filter(f => f.severity === 'critical').length,
       high_count: allFindings.filter(f => f.severity === 'high').length,

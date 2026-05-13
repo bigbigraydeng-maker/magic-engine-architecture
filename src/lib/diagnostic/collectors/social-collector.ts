@@ -32,7 +32,8 @@ export class SocialCollector {
     _domain: string,
     _keywords: string[],
   ): Promise<CollectorResult> {
-    const fallback: CollectorResult = { score: 0, findings: [] }
+    // P8.5.23: errors / no handle → cannot evaluate, not "zero"
+    const fallback: CollectorResult = { score: null, findings: [] }
 
     try {
       // ── Cache check ────────────────────────────────────────────────────────
@@ -44,7 +45,7 @@ export class SocialCollector {
       const handle = await this.fetchInstagramHandle(clientId)
       if (!handle) {
         return {
-          score: 0,
+          score: null,
           findings: [this.makeMissingPresenceFinding(clientId)],
         }
       }
@@ -56,7 +57,7 @@ export class SocialCollector {
 
       return await Promise.race([this.scrapeAndScore(clientId, handle), timeout])
     } catch {
-      return fallback
+      return { score: null, findings: [] }
     }
   }
 
@@ -173,14 +174,16 @@ export class SocialCollector {
     return {
       client_id: clientId,
       dimension: 'social',
-      finding_type: 'missing_platform_presence',
+      finding_type: 'social_accounts_not_linked',
       severity: 'high',
-      title: 'No social media profiles configured',
-      description: 'No Instagram handle is set in the client profile. Social performance cannot be assessed.',
-      evidence: null,
-      recommendation: 'Add the Instagram handle and Facebook page URL to the client profile to enable social diagnostics.',
+      title: 'Social media accounts not linked',
+      description:
+        'No Instagram handle is linked for this client, so social performance (post frequency, engagement, content diversity) cannot be measured. This may mean the brand has no social presence at all, or the accounts simply haven\'t been connected to Magic Engine yet.',
+      evidence: { instagram_handle: null, facebook_page: null },
+      recommendation:
+        'Open Client Settings → Social and add the Instagram handle + Facebook page URL. If the brand has no social accounts yet, prioritise launching at least Instagram (highest reach for visual-heavy categories like flooring/tiles).',
       fix_type: 'fde_manual',
-      priority_score: 60,
+      priority_score: 75,
     }
   }
 }

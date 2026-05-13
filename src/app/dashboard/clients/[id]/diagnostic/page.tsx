@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { ScoreGauge } from '@/components/diagnostic/ScoreGauge'
 import { DiagnosticFindingCard } from '@/components/diagnostic/DiagnosticFindingCard'
@@ -199,7 +200,7 @@ export default function DiagnosticPage() {
     return f.dimension === dimFilter
   })
 
-  const dimensionScores = (run?.dimension_scores ?? {}) as Partial<Record<DiagnosticDimension, number>>
+  const dimensionScores = (run?.dimension_scores ?? {}) as Partial<Record<DiagnosticDimension, number | null>>
 
   // ---------------------------------------------------------------------------
   // Render states
@@ -237,13 +238,25 @@ export default function DiagnosticPage() {
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-10">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-semibold text-gray-900">诊断报告</h1>
-            {run?.completed_at && (
-              <p className="text-xs text-gray-400 mt-0.5">
-                上次运行：{new Date(run.completed_at).toLocaleString('zh-CN', { timeZone: 'Pacific/Auckland' })}
-              </p>
-            )}
+          <div className="flex items-center gap-3">
+            <Link
+              href={`/dashboard/clients/${clientId}`}
+              className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors"
+              aria-label="返回客户页"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+              </svg>
+              返回
+            </Link>
+            <div>
+              <h1 className="text-lg font-semibold text-gray-900">诊断报告</h1>
+              {run?.completed_at && (
+                <p className="text-xs text-gray-400 mt-0.5">
+                  上次运行：{new Date(run.completed_at).toLocaleString('zh-CN', { timeZone: 'Pacific/Auckland' })}
+                </p>
+              )}
+            </div>
           </div>
           <button
             onClick={() => void handleRunDiagnostic()}
@@ -284,14 +297,18 @@ export default function DiagnosticPage() {
               综合评分
             </h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-              {ALL_DIMENSIONS.map(dim => (
-                <ScoreGauge
-                  key={dim}
-                  score={dimensionScores[dim] ?? 0}
-                  dimension={DIMENSION_LABELS[dim]}
-                  loading={isRunning && dimensionScores[dim] === undefined}
-                />
-              ))}
+              {ALL_DIMENSIONS.map(dim => {
+                // null = data not available; undefined = still loading
+                const raw = dimensionScores[dim]
+                return (
+                  <ScoreGauge
+                    key={dim}
+                    score={raw === undefined ? null : raw}
+                    dimension={DIMENSION_LABELS[dim]}
+                    loading={isRunning && raw === undefined}
+                  />
+                )
+              })}
             </div>
             {run?.overall_score != null && (
               <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 flex items-center justify-between">

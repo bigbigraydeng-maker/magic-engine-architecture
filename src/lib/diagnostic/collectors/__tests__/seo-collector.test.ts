@@ -99,27 +99,30 @@ describe('SeoCollector.collect()', () => {
     expect(finding).toBeUndefined()
   })
 
-  it('returns degraded result (score=0, findings=[]) on timeout', async () => {
+  it('returns degraded result (score=null, findings=[]) on timeout', async () => {
     // Simulate hanging API — never-resolving promise
     mockMetrics.mockReturnValue(new Promise(() => {}))
     const collector = new SeoCollector(10)   // 10 ms timeout for fast tests
     const result = await collector.collect(CLIENT_ID, DOMAIN, KEYWORDS)
-    expect(result.score).toBe(0)
+    // P8.5.19: degraded path returns null (not 0) so dimension is skipped
+    expect(result.score).toBeNull()
     expect(result.findings).toHaveLength(0)
   })
 
   it('returns degraded result when external API throws', async () => {
     mockMetrics.mockRejectedValue(new Error('SEMrush 503'))
     const result = await new SeoCollector().collect(CLIENT_ID, DOMAIN, KEYWORDS)
-    expect(result.score).toBe(0)
+    expect(result.score).toBeNull()
     expect(result.findings).toHaveLength(0)
   })
 
-  it('handles empty keywords list (no coverage check, no gap finding)', async () => {
+  it('handles empty keywords list — score=null + keywords_not_configured finding', async () => {
+    // P8.5.19: no keywords configured → cannot evaluate SEO; emit guidance finding
     const result = await new SeoCollector().collect(CLIENT_ID, DOMAIN, [])
-    expect(result.score).toBeGreaterThanOrEqual(0)
-    expect(result.score).toBeLessThanOrEqual(100)
-    expect(result.findings.find(f => f.finding_type === 'keyword_gap_critical')).toBeUndefined()
+    expect(result.score).toBeNull()
+    expect(result.findings).toHaveLength(1)
+    expect(result.findings[0].finding_type).toBe('keywords_not_configured')
+    expect(result.findings[0].severity).toBe('high')
   })
 
   it('all findings carry client_id and fix_type', async () => {

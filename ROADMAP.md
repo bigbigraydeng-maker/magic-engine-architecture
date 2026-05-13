@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-07 · 当前阶段：**Phase 8.3.1 完成（5步客户接入向导 ✅）→ 下一步：P8.3.2 Magic Link 鉴权**
+> 最后更新：2026-05-13 · 当前阶段：**P8.5 上线后 Oztop 实测发现评分缺陷 → Sprint 1 紧急修复（P8.5.19-26）+ 规划 Phase 8.10 Synthesis Layer（deep-research 级报告）**
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -29,6 +29,8 @@
 ✅ Phase 8.D     DNZ诊断策略层（Stage 1✅ Stage 2✅ Stage 3✅ E2E验证✅ P8.0.7✅ P8.0.8✅ — 全部完成）
 ✅ Phase 8.1     三维内容策略分析（P8.1.1–P8.1.6 全部完成，2026-05-07）
 ⏸ Phase 8.P     Paid Social Studio（暂缓 — 待客户明确 Meta 广告需求触发）
+🔄 Phase 8.5+   Sprint 1 评分修复（P8.5.19-26，紧急 2026-05-13，~2小时）
+📋 Phase 8.10   Synthesis Layer + Deep Research 报告（Claude 主导研究合成，~9工作日）
 🔄 Phase 9.0     Visual Queue UX Polish（P9.0.1✅P9.0.3✅P9.0.4-9✅ 进行中 · 待：P9.0.2+P9.0.10-17集成测试+浮动卡）
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
@@ -512,6 +514,100 @@ Publishing Hub 归档 / 排期
 - 文案全部使用 AU/NZ 英语，UI 不暴露 OpenAI/Anthropic 等真实供应商名
 - 批量图片生成可触发，生成结果在广告卡片中预览
 - 对外名：界面统一显示 **"Paid Social Studio"**，AI 引擎称 **"Content Engine"** / **"Strategy Engine"**
+
+---
+
+### Phase 8.5+ Sprint 1 — 评分可信度修复 ⭐（紧急，2026-05-13）
+
+**背景**：Oztop 实测发现 P8.5 评分逻辑有严重缺陷——客户没做过 SEO，分数显示 70 「健康」；口碑 0 findings 却 71 分；缺失数据时各 collector 默认给高分。**这导致诊断结论完全不可信**，必须立即修复才能正式投入客户使用。
+
+**根因**：所有 collector 缺少「未配置 / 未找到数据」的状态机，把空数据当满分处理。
+
+**任务清单**：
+- [ ] **P8.5.19** `SeoCollector`: 无关键词配置 → `score: null` + finding `keywords_not_configured`（severity: high, fix_type: fde_manual）
+- [ ] **P8.5.20** `ReputationCollector`: Google Place 未找到商家 → `score: null` + finding `business_not_listed`（severity: critical, fix_type: fde_manual）
+- [ ] **P8.5.21** `CompetitorCollector`: 竞品 < 3 → `score: null` + finding `competitor_data_insufficient`（severity: medium, fix_type: me_auto，建议跑 SEMrush competitive research）
+- [ ] **P8.5.22** `AiVisibilityCollector`: 无 snapshot 数据 → `score: null` + finding `ai_visibility_not_tracked`（severity: critical, fix_type: me_auto，引导启用 AI Tracker 周跑）
+- [ ] **P8.5.23** `SocialCollector`: 无 IG/FB 账号配置 → `score: null` + finding `social_accounts_not_linked`（severity: high, fix_type: fde_manual）
+- [ ] **P8.5.24** `computeOverallScore`: 忽略 `null` 维度，权重重新归一化；UI 显示「N/A」灰色图标
+- [ ] **P8.5.25** UI `/diagnostic` 加返回按钮 + null 维度引导链接（「立即配置」跳转客户设置抽屉）
+- [ ] **P8.5.26** `DiagnosticRun` 增加 `dimensions_skipped: string[]` 字段，记录哪些维度因数据缺失被跳过
+
+**验收标准**：
+- Oztop（未配置 SEMrush 关键词、未关联 IG）重跑诊断，SEO/口碑/社媒/AI 显示「未配置」灰色，不影响 overall_score
+- overall_score 只基于实际有数据的维度加权计算
+- 每个 null 维度配套 finding 告诉用户「下一步该做什么」
+- 评分相关单元测试更新（types.test.ts、guards.test.ts、各 collector test）
+
+**工作量**：~2 小时 · **必须在投入正式客户前完成**
+
+---
+
+### Phase 8.10 — Synthesis Layer（Claude 主导的研究/合成层）⭐⭐⭐（核心战略升级）
+
+**背景**：当前 P8.5 诊断引擎是「数据聚合器 + 算术评分」——5 个 collector 把 API 数据变成 0-100 分，Claude 只在处方阶段参与一次。对比客户提供的 deep-research 报告（Oztop 品牌健康诊断 / Mobile Station / gotilesqld），差距在于**缺少 Claude 主导的研究合成层**：竞品深度画像、市场结构归纳、敘事性结论、证据引用追溯都没有。
+
+**目标**：在 Collectors 和 Prescription 之间插入 **Synthesis Layer**，让 Claude Sonnet 把 silo 数据合成 deep-research 级别报告。
+
+**新增分层**：
+
+```
+Layer 1: Collectors（保留并增强，见 P8.10.S2）
+       ↓
+Layer 2: Synthesis（新增，Claude Sonnet）— P8.10.S3 ⭐
+       ├─ competitor-analyst: 5 个竞品 evidence → 「市场结构」+「对标路径」
+       ├─ dimension-narrator: 每维度 200-400 字「现状 + 根因 + 机会」
+       ├─ score-explainer: 每个分数的「为什么是这分」
+       └─ market-context: Anthropic Web Search 抓行业现状
+       ↓
+Layer 3: Report Composer（新增，Claude Sonnet）— P8.10.S4
+       └─ 合成 Markdown 报告（执行摘要 / 6 维度 / 竞品表 / 处方 / 证据附录）
+       ↓
+Layer 4: Prescription（保留，注入 synthesis context）
+       ↓
+Layer 5: Export（新增）— P8.10.S5
+       └─ Markdown → DOCX/PDF（用 anthropic-skills:docx）
+```
+
+**Sprint 2 — 数据源深化（P8.10.S2，~2 天）**：
+- [ ] **P8.10.S2.1** SEO Collector 加 DataForSEO backlinks 详情 + SERP rankings 抓取
+- [ ] **P8.10.S2.2** Competitor Collector 加 Jina 抓竞品官网（解析 USP / CTA / 落地页类型 / 类目深度）
+- [ ] **P8.10.S2.3** Social Collector 加最近 30 天热门 3 条 post 内容采样（含点赞 / 评论 / hashtag）
+- [ ] **P8.10.S2.4** Ads Collector 从零实现（Apify Meta Ad Library + Google Ads Transparency）
+- [ ] **P8.10.S2.5** AI Visibility 加实时调用层（诊断时同步跑 3 个核心问句，不只读 cron snapshot）
+- [ ] **P8.10.S2.6** 统一 evidence schema：`{ raw, parsed, sources: [{url, fetched_at}], collected_at }`
+
+**Sprint 3 — Synthesis 层（P8.10.S3，~3 天，核心）**：
+- [ ] **P8.10.S3.1** 新增 `src/lib/diagnostic/synthesis/competitor-analyst.ts`（Claude Sonnet 合成市场结构 + 对标路径）
+- [ ] **P8.10.S3.2** 新增 `src/lib/diagnostic/synthesis/dimension-narrator.ts`（每维度 narrative）
+- [ ] **P8.10.S3.3** 新增 `src/lib/diagnostic/synthesis/score-explainer.ts`（每个分数的解释段落）
+- [ ] **P8.10.S3.4** 新增 `src/lib/diagnostic/synthesis/market-context.ts`（Anthropic Web Search 抓行业现状）
+- [ ] **P8.10.S3.5** 新增 `diagnostic_narratives` 表：`run_id, dimension, narrative_md, generated_at, model, cost_usd`
+- [ ] **P8.10.S3.6** Synthesis 结果注入 prescription-generator prompt（让处方更精准）
+
+**Sprint 4 — Report Composer（P8.10.S4，~2 天）**：
+- [ ] **P8.10.S4.1** `src/lib/diagnostic/report-generator.ts` — 合成完整 Markdown 报告
+- [ ] **P8.10.S4.2** 报告结构：执行摘要 / 客户基线 / 6 维度深度分析 / 竞品对比表 / 处方摘要 / 证据附录
+- [ ] **P8.10.S4.3** 新增页面 `/dashboard/clients/[id]/diagnostic/report` 渲染 Markdown（含目录 / 表格 / 折叠段）
+- [ ] **P8.10.S4.4** **保留** `/dashboard/clients/[id]/diagnostic` 6 维度评分卡作为「速览」入口
+
+**Sprint 5 — 引用/证据追溯层（P8.10.S5，~1 天）**：
+- [ ] **P8.10.S5.1** 每个 finding / narrative 段落带 `evidence_refs: string[]`
+- [ ] **P8.10.S5.2** UI 上标 `[1]` 可点开证据抽屉（类似 deep-research `citeturn`）
+- [ ] **P8.10.S5.3** 导出 DOCX 按钮（用 `anthropic-skills:docx` 渲染）
+
+**验收标准**：
+- 同一客户（Oztop）诊断报告深度 ≥ 附件 `oztop 品牌健康诊断报告.docx` 的 80%
+- 每段叙事可追溯到原始证据
+- 报告可导出 DOCX 直接交给客户
+- 6 维度评分卡保留作为速览，与深度报告共存
+
+**工作量**：合计 ~9 工作日 · **核心战略升级，必须做**
+
+**第三方服务成本估算**（每次诊断）：
+- Claude Sonnet（synthesis + report 合成）：~30K input + 8K output ≈ $0.21
+- Anthropic Web Search：~10 次 ≈ $0.10
+- 合计 ≈ **$0.31 / 诊断报告**（每月 100 客户约 $31）
 
 ---
 

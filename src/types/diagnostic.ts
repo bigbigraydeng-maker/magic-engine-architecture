@@ -29,6 +29,7 @@ export type SeoFindingType =
   | 'no_sitemap'
   | 'keyword_gap_critical'
   | 'low_domain_rank'
+  | 'keywords_not_configured'  // P8.5.19: no target keywords set up
 
 export type AiVisibilityFindingType =
   | 'brand_not_mentioned'
@@ -37,6 +38,7 @@ export type AiVisibilityFindingType =
   | 'geo_directive_outdated'
   | 'missing_faq_content'
   | 'insufficient_entity_coverage'
+  | 'ai_visibility_not_tracked'  // P8.5.22: AI Tracker never ran for this client
 
 export type AdsFindingType =
   | 'high_cpc'
@@ -51,6 +53,7 @@ export type SocialFindingType =
   | 'missing_platform_presence'
   | 'inconsistent_brand_voice'
   | 'no_content_calendar'
+  | 'social_accounts_not_linked'  // P8.5.23: IG/FB handles not configured
 
 export type ReputationFindingType =
   | 'negative_reviews'
@@ -59,6 +62,7 @@ export type ReputationFindingType =
   | 'insufficient_review_count'
   | 'inconsistent_business_info'
   | 'no_review_platform'
+  | 'business_not_listed'  // P8.5.20: no Google Business Profile found
 
 export type CompetitorFindingType =
   | 'competitor_keyword_gap'
@@ -68,6 +72,7 @@ export type CompetitorFindingType =
   | 'market_share_loss'
   | 'traffic_gap_large'
   | 'no_competitor_data'
+  | 'competitor_data_insufficient'  // P8.5.21: < 3 competitors detected
 
 export type FindingType =
   | SeoFindingType
@@ -88,8 +93,11 @@ export interface DiagnosticRun {
   triggered_by: DiagnosticTrigger
   status: DiagnosticRunStatus
   dimensions_requested: DiagnosticDimension[]
+  /** P8.5.26: dimensions excluded from overall_score due to missing data */
+  dimensions_skipped: DiagnosticDimension[]
   overall_score: number | null
-  dimension_scores: Partial<Record<DiagnosticDimension, number>> | null
+  /** Score per dimension. `null` value = data not available (excluded from overall_score). */
+  dimension_scores: Partial<Record<DiagnosticDimension, number | null>> | null
   findings_count: number
   critical_count: number
   high_count: number

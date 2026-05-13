@@ -165,15 +165,26 @@ describe('CompetitorCollector.collect() — competitive', () => {
 // No competitor data
 // ---------------------------------------------------------------------------
 
-describe('CompetitorCollector.collect() — no competitors', () => {
-  it('score=50 (neutral) and emits no_competitor_data (info) when DataForSEO returns empty', async () => {
+describe('CompetitorCollector.collect() — insufficient competitor data', () => {
+  it('score=null and emits competitor_data_insufficient (high) when DataForSEO returns empty', async () => {
+    // P8.5.21: 0 competitors → cannot evaluate competitive position; score=null
     mockGetCompetitorDomains.mockResolvedValue([])
 
     const result = await new CompetitorCollector().collect(CLIENT_ID, DOMAIN, KEYWORDS)
-    expect(result.score).toBe(50)
-    const f = result.findings.find(x => x.finding_type === 'no_competitor_data')
+    expect(result.score).toBeNull()
+    const f = result.findings.find(x => x.finding_type === 'competitor_data_insufficient')
     expect(f).toBeDefined()
-    expect(f?.severity).toBe('info')
+    expect(f?.severity).toBe('high')
+  })
+
+  it('score=null when only 2 competitors found (below minimum 3)', async () => {
+    mockGetCompetitorDomains.mockResolvedValue([
+      { domain: 'a.co.nz', overlap_score: 0.5, organic_traffic: 1000, authority_score: 20 },
+      { domain: 'b.co.nz', overlap_score: 0.4, organic_traffic: 800, authority_score: 18 },
+    ])
+    const result = await new CompetitorCollector().collect(CLIENT_ID, DOMAIN, KEYWORDS)
+    expect(result.score).toBeNull()
+    expect(result.findings[0].finding_type).toBe('competitor_data_insufficient')
   })
 
   it('competitorList is empty when no competitors found', async () => {

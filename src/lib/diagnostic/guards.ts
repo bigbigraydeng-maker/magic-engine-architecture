@@ -28,17 +28,22 @@ export function isValidScore(value: unknown): value is number {
 
 /**
  * Weighted average of dimension scores using DIMENSION_WEIGHTS.
- * Only includes dimensions present in the breakdown; weights are re-normalised
- * so partial breakdowns still produce a meaningful 0–100 result.
+ * Only includes dimensions with a non-null numeric score; weights are
+ * re-normalised so partial breakdowns still produce a meaningful 0–100 result.
+ *
+ * `null` scores mean "data not available" (e.g. no keywords configured,
+ * business not on Google) — they MUST be excluded so missing data never
+ * inflates the overall score.
  */
 export function computeOverallScore(
-  breakdown: Partial<Record<DiagnosticDimension, number>>,
+  breakdown: Partial<Record<DiagnosticDimension, number | null>>,
 ): number {
   let weighted = 0
   let totalWeight = 0
 
   for (const [dim, score] of Object.entries(breakdown)) {
-    if (!isDiagnosticDimension(dim) || score === undefined) continue
+    if (!isDiagnosticDimension(dim)) continue
+    if (score === undefined || score === null) continue
     const weight = DIMENSION_WEIGHTS[dim]
     weighted += score * weight
     totalWeight += weight

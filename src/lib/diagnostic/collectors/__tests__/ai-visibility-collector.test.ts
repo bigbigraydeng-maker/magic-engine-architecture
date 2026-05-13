@@ -79,18 +79,20 @@ describe('AiVisibilityCollector.collect() — basic shape', () => {
 // ---------------------------------------------------------------------------
 
 describe('AiVisibilityCollector.collect() — no data', () => {
-  it('returns score=0 and not_mentioned_by_ai finding when no snapshot exists', async () => {
+  it('returns score=null and ai_visibility_not_tracked when no snapshot exists', async () => {
+    // P8.5.22: no snapshot = AI Tracker never ran for this client → score is unknowable
     const supabase = makeSupabase({ snapshot: null })
     const { score, findings } = await new AiVisibilityCollector(supabase).collect(
       CLIENT_ID, DOMAIN, KEYWORDS,
     )
-    expect(score).toBe(0)
-    const f = findings.find(x => x.finding_type === 'brand_not_mentioned')
+    expect(score).toBeNull()
+    const f = findings.find(x => x.finding_type === 'ai_visibility_not_tracked')
     expect(f).toBeDefined()
     expect(f?.severity).toBe('critical')
   })
 
-  it('returns score=0 and not_mentioned_by_ai when mentions_count=0', async () => {
+  it('returns score=0 and brand_not_mentioned when snapshot exists but mentions_count=0', async () => {
+    // Snapshot exists with 0 mentions = real signal: brand IS invisible to AI
     const supabase = makeSupabase({
       snapshot: { avg_rank: null, mentions_count: 0, total_runs: 10, week_of: '2026-05-12' },
     })
@@ -161,7 +163,7 @@ describe('AiVisibilityCollector.collect() — low rank', () => {
 // ---------------------------------------------------------------------------
 
 describe('AiVisibilityCollector.collect() — DB failure', () => {
-  it('returns degraded { score: 0, findings: [] } when Supabase throws', async () => {
+  it('returns degraded { score: null, findings: [] } when Supabase throws', async () => {
     const supabase = {
       from: vi.fn().mockReturnValue({
         select: vi.fn().mockReturnValue({
@@ -175,7 +177,7 @@ describe('AiVisibilityCollector.collect() — DB failure', () => {
     } as unknown as SupabaseClient
 
     const result = await new AiVisibilityCollector(supabase).collect(CLIENT_ID, DOMAIN, KEYWORDS)
-    expect(result.score).toBe(0)
+    expect(result.score).toBeNull()
     expect(result.findings).toHaveLength(0)
   })
 })

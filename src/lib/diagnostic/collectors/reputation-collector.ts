@@ -26,7 +26,7 @@ export class ReputationCollector {
     domain: string,
     _keywords: string[],
   ): Promise<CollectorResult> {
-    const fallback: CollectorResult = { score: 0, findings: [] }
+    const fallback: CollectorResult = { score: null, findings: [] }
 
     const timeout = new Promise<CollectorResult>(resolve =>
       setTimeout(() => resolve(fallback), this.timeoutMs),
@@ -46,9 +46,10 @@ export class ReputationCollector {
   private async fetchAndScore(clientId: string, domain: string): Promise<CollectorResult> {
     const data = await getBusinessReviews(domain)
 
+    // P8.5.20: business not listed on Google → score is unknowable
     if (!data) {
       return {
-        score: 0,
+        score: null,
         findings: [this.makeNoReviewPlatformFinding(clientId)],
       }
     }
@@ -105,12 +106,12 @@ export class ReputationCollector {
     return {
       client_id: clientId,
       dimension: 'reputation',
-      finding_type: 'no_review_platform',
-      severity: 'high',
-      title: 'No Google Business Profile found',
-      description: 'No Google Business Profile was found for this domain. Online reviews are a critical trust signal.',
+      finding_type: 'business_not_listed',
+      severity: 'critical',
+      title: 'Business not listed on Google',
+      description: 'No Google Business Profile was found for this domain. Reputation cannot be measured until the business is verified on Google. Online reviews are a critical trust signal and a major local SEO factor.',
       evidence: null,
-      recommendation: 'Create and verify a Google Business Profile to start collecting reviews and appearing in local search results.',
+      recommendation: 'Create and verify a Google Business Profile at https://business.google.com — this is a 30-minute setup that unlocks reviews, Google Maps presence, and local pack rankings.',
       fix_type: 'fde_manual',
       priority_score: 75,
     }

@@ -3,6 +3,8 @@ import type { DomainMetrics } from '@/lib/semrush/client'
 import type { CollectorResult, NewFinding } from '../types'
 import { MAX_COLLECTOR_TIMEOUT_MS } from '../constants'
 
+// NewFinding is imported above; the helper makes a finding inline.
+
 const KW_COVERAGE_WEIGHT = 70
 const AUTHORITY_WEIGHT = 30
 const LOW_AUTHORITY_THRESHOLD = 20
@@ -20,7 +22,15 @@ export class SeoCollector {
     clientDomain: string,
     keywords: string[],
   ): Promise<CollectorResult> {
-    const fallback: CollectorResult = { score: 0, findings: [] }
+    // P8.5.19: no target keywords configured → score is unknowable, not "perfect"
+    if (keywords.length === 0) {
+      return {
+        score: null,
+        findings: [this.makeKeywordsNotConfiguredFinding(clientId)],
+      }
+    }
+
+    const fallback: CollectorResult = { score: null, findings: [] }
 
     const timeout = new Promise<CollectorResult>(resolve =>
       setTimeout(() => resolve(fallback), this.timeoutMs),
@@ -45,17 +55,32 @@ export class SeoCollector {
 
     const [metrics, rankedKwData] = await Promise.all([
       getDomainMetrics(domain),
-      keywords.length > 0
-        ? getDomainOrganicKeywords(domain, db, ORGANIC_KW_LIMIT)
-        : Promise.resolve([]),
+      getDomainOrganicKeywords(domain, db, ORGANIC_KW_LIMIT),
     ])
 
     const rankedSet = new Set(rankedKwData.map(k => k.keyword.toLowerCase()))
     const matched = keywords.filter(k => rankedSet.has(k.toLowerCase())).length
     const total = keywords.length
-    const coverageRatio = total === 0 ? 1 : matched / total
+    const coverageRatio = matched / total
 
     return this.buildResult(clientId, metrics, coverageRatio, total, matched)
+  }
+
+  private makeKeywordsNotConfiguredFinding(clientId: string): NewFinding {
+    return {
+      client_id: clientId,
+      dimension: 'seo',
+      finding_type: 'keywords_not_configured',
+      severity: 'high',
+      title: 'Target keywords not configured',
+      description:
+        'No target keywords are configured for this client, so SEO performance cannot be measured. Add 10–20 priority keywords (mix of brand, category, and long-tail) to enable visibility tracking.',
+      evidence: { configured_keywords: 0 },
+      recommendation:
+        'Open Client Settings → SEO Keywords and add 10–20 keywords prioritising local intent ("flooring brisbane", "vinyl flooring qld"). Re-run diagnostic afterwards.',
+      fix_type: 'fde_manual',
+      priority_score: 90,
+    }
   }
 
   private buildResult(

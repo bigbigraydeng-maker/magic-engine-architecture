@@ -32,11 +32,21 @@ export class AiVisibilityCollector {
         .order('week_of', { ascending: false })
         .limit(1)
 
-      if (error) return { score: 0, findings: [] }
+      // P8.5.22: DB error → cannot evaluate, not "zero score"
+      if (error) return { score: null, findings: [] }
 
       const snapshot = (data as VisibilitySnapshot[] | null)?.[0] ?? null
 
-      if (!snapshot || snapshot.mentions_count === 0) {
+      // No snapshot at all → AI Tracker has never run for this client
+      if (!snapshot) {
+        return {
+          score: null,
+          findings: [this.makeAiVisibilityNotTrackedFinding(clientId)],
+        }
+      }
+
+      // Snapshot exists with 0 mentions → real signal: client is invisible to AI
+      if (snapshot.mentions_count === 0) {
         return {
           score: 0,
           findings: [this.makeNotMentionedFinding(clientId)],
@@ -45,7 +55,24 @@ export class AiVisibilityCollector {
 
       return this.buildResult(clientId, snapshot)
     } catch {
-      return { score: 0, findings: [] }
+      return { score: null, findings: [] }
+    }
+  }
+
+  private makeAiVisibilityNotTrackedFinding(clientId: string): import('../types').NewFinding {
+    return {
+      client_id: clientId,
+      dimension: 'ai_visibility',
+      finding_type: 'ai_visibility_not_tracked',
+      severity: 'critical',
+      title: 'AI Visibility Tracker not yet enabled',
+      description:
+        'No AI Visibility snapshot exists for this client — AI Tracker has never queried ChatGPT / Perplexity / Gemini for this brand. AI engine visibility is a core differentiator in the current GEO landscape; without tracking we cannot measure or improve it.',
+      evidence: { snapshots: 0 },
+      recommendation:
+        'Enable weekly AI Tracker: configure 10–20 priority brand/category questions in Client Settings → AI Visibility, then wait for the next Monday cron run (or trigger an ad-hoc run via Run-once button).',
+      fix_type: 'me_auto',
+      priority_score: 88,
     }
   }
 

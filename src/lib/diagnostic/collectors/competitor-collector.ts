@@ -35,11 +35,12 @@ export class CompetitorCollector {
       competitors = []
     }
 
-    if (competitors.length === 0) {
+    // P8.5.21: insufficient competitor data → score is unknowable, not "average"
+    if (competitors.length < 3) {
       return {
-        score: 50,
-        findings: [this.makeNoCompetitorDataFinding(clientId)],
-        competitorList: [],
+        score: null,
+        findings: [this.makeCompetitorDataInsufficientFinding(clientId, competitors.length)],
+        competitorList: competitors as CompetitorEntry[],
       }
     }
 
@@ -119,20 +120,30 @@ export class CompetitorCollector {
   // Private helpers
   // ---------------------------------------------------------------------------
 
-  private makeNoCompetitorDataFinding(clientId: string): NewFinding {
+  private makeCompetitorDataInsufficientFinding(
+    clientId: string,
+    found: number,
+  ): NewFinding {
     return {
       client_id: clientId,
       dimension: 'competitor',
-      finding_type: 'no_competitor_data',
-      severity: 'info',
-      title: 'No Competitor Data Available',
+      finding_type: 'competitor_data_insufficient',
+      severity: 'high',
+      title:
+        found === 0
+          ? 'No organic competitors detected'
+          : `Only ${found} organic competitor${found === 1 ? '' : 's'} detected (minimum 3 required)`,
       description:
-        'No organic competitors were identified for this domain. This may indicate a very niche market or limited online presence.',
-      evidence: null,
+        found === 0
+          ? 'DataForSEO returned zero competitor domains. The domain likely has no organic keyword rankings yet, so the competitive landscape cannot be measured.'
+          : `Only ${found} competitor domain${found === 1 ? '' : 's'} found — not enough signal to score the competitive landscape (minimum 3 needed for meaningful comparison).`,
+      evidence: { competitors_found: found, competitors_required: 3 },
       recommendation:
-        'Verify the domain is indexed by Google and has organic keyword rankings before running a competitor analysis.',
-      fix_type: 'fde_manual',
-      priority_score: 30,
+        found === 0
+          ? 'Get the site indexed and earn organic keyword rankings first (see SEO dimension). Re-run competitor analysis once any keywords rank in top 100.'
+          : 'Run SEMrush competitive research manually to identify a broader competitive set; supplement with industry-known competitors via Client Settings → Competitors.',
+      fix_type: found === 0 ? 'fde_manual' : 'me_auto',
+      priority_score: found === 0 ? 70 : 50,
     }
   }
 }

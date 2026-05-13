@@ -188,13 +188,14 @@ describe('SocialCollector.collect() — engagement', () => {
 // ---------------------------------------------------------------------------
 
 describe('SocialCollector.collect() — missing Instagram handle', () => {
-  it('returns score=0 and missing_platform_presence (high) when no instagram_handle', async () => {
+  it('returns score=null and social_accounts_not_linked (high) when no instagram_handle', async () => {
+    // P8.5.23: no social accounts linked → cannot evaluate; dimension skipped
     const supabase = makeSupabase({ instagramHandle: null })
     const { score, findings } = await new SocialCollector(supabase).collect(
       CLIENT_ID, DOMAIN, KEYWORDS,
     )
-    expect(score).toBe(0)
-    const f = findings.find(x => x.finding_type === 'missing_platform_presence')
+    expect(score).toBeNull()
+    const f = findings.find(x => x.finding_type === 'social_accounts_not_linked')
     expect(f).toBeDefined()
     expect(f?.severity).toBe('high')
   })
@@ -211,11 +212,11 @@ describe('SocialCollector.collect() — missing Instagram handle', () => {
 // ---------------------------------------------------------------------------
 
 describe('SocialCollector.collect() — Apify failure', () => {
-  it('returns degraded { score: 0, findings: [] } when Apify throws', async () => {
+  it('returns degraded { score: null, findings: [] } when Apify throws', async () => {
     mockScrapeInstagramProfile.mockRejectedValue(new Error('Apify down'))
     const supabase = makeSupabase({})
     const result = await new SocialCollector(supabase, 30_000).collect(CLIENT_ID, DOMAIN, KEYWORDS)
-    expect(result.score).toBe(0)
+    expect(result.score).toBeNull()
     expect(result.findings).toHaveLength(0)
   })
 })

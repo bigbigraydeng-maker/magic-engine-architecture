@@ -138,11 +138,12 @@ describe('ReputationCollector.collect() — few reviews', () => {
 // ---------------------------------------------------------------------------
 
 describe('ReputationCollector.collect() — no review platform', () => {
-  it('returns score=0 and no_review_platform finding when Places returns null', async () => {
+  it('returns score=null and business_not_listed finding when Places returns null', async () => {
+    // P8.5.20: business not on Google → score is unknowable, dimension is skipped
     mockGetBusinessReviews.mockResolvedValue(null)
     const { score, findings } = await new ReputationCollector().collect(CLIENT_ID, DOMAIN, KEYWORDS)
-    expect(score).toBe(0)
-    expect(findings.find(x => x.finding_type === 'no_review_platform')).toBeDefined()
+    expect(score).toBeNull()
+    expect(findings.find(x => x.finding_type === 'business_not_listed')).toBeDefined()
   })
 })
 
@@ -151,17 +152,17 @@ describe('ReputationCollector.collect() — no review platform', () => {
 // ---------------------------------------------------------------------------
 
 describe('ReputationCollector.collect() — failure', () => {
-  it('returns degraded { score: 0, findings: [] } when API throws', async () => {
+  it('returns degraded { score: null, findings: [] } when API throws', async () => {
     mockGetBusinessReviews.mockRejectedValue(new Error('Places timeout'))
     const result = await new ReputationCollector(10).collect(CLIENT_ID, DOMAIN, KEYWORDS)
-    expect(result.score).toBe(0)
+    expect(result.score).toBeNull()
     expect(result.findings).toHaveLength(0)
   })
 
   it('returns degraded result on timeout', async () => {
     mockGetBusinessReviews.mockReturnValue(new Promise(() => {}))  // never resolves
     const result = await new ReputationCollector(10).collect(CLIENT_ID, DOMAIN, KEYWORDS)
-    expect(result.score).toBe(0)
+    expect(result.score).toBeNull()
     expect(result.findings).toHaveLength(0)
   })
 })
