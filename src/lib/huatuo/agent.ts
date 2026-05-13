@@ -98,7 +98,12 @@ export async function runHuatuo(
   // ── Step 2: Generate（pass 1）────────────────────────────────────────────
   await onProgress('华佗正在开方…')
   const client = getAnthropicClient()
-  const pass1 = await generatePrescription(client, discovery, intake, lookup)
+  let pass1
+  try {
+    pass1 = await generatePrescription(client, discovery, intake, lookup)
+  } catch (err) {
+    throw wrapError(err, '华佗生成第1轮失败')
+  }
   passes = 1
   totalInputTokens += pass1.usage.input
   totalOutputTokens += pass1.usage.output
@@ -109,35 +114,47 @@ export async function runHuatuo(
   // ── Step 3: Self-grade ───────────────────────────────────────────────────
   if (!options.skipSelfGrade) {
     await onProgress('华佗自检处方…')
-    const grade1 = await selfGradePrescription(client, content, intake, lookup, { pass: 1 })
-    totalInputTokens += grade1.usage.input
-    totalOutputTokens += grade1.usage.output
-    selfGrade = grade1.grade
+    try {
+      const grade1 = await selfGradePrescription(client, content, intake, lookup, { pass: 1 })
+      totalInputTokens += grade1.usage.input
+      totalOutputTokens += grade1.usage.output
+      selfGrade = grade1.grade
+    } catch (err) {
+      // 自评失败不阻塞主流程 — 标记降级并继续
+      console.warn('[huatuo] self-grade pass 1 failed, falling back', err)
+      selfGrade = makeDefaultGrade()
+    }
 
     // ── Step 4: Refine if grade too low ──────────────────────────────────
     if (
       !options.skipRefine &&
       selfGrade.overall < REFINE_THRESHOLD &&
+      selfGrade.overall > 0 &&        // 不对降级的默认分数触发 refine
       passes < MAX_PASSES
     ) {
       await onProgress(`首轮自评 ${selfGrade.overall}/10 偏低，华佗精修中…`)
-      const pass2 = await generatePrescriptionWithFeedback(
-        client, discovery, intake, lookup,
-        { previousContent: content, weaknesses: selfGrade.weaknesses },
-      )
-      passes = 2
-      totalInputTokens += pass2.usage.input
-      totalOutputTokens += pass2.usage.output
-      content = pass2.content
+      try {
+        const pass2 = await generatePrescriptionWithFeedback(
+          client, discovery, intake, lookup,
+          { previousContent: content, weaknesses: selfGrade.weaknesses },
+        )
+        passes = 2
+        totalInputTokens += pass2.usage.input
+        totalOutputTokens += pass2.usage.output
+        content = pass2.content
 
-      // Re-grade pass 2
-      const grade2 = await selfGradePrescription(client, content, intake, lookup, {
-        pass: 2,
-        previousWeaknesses: selfGrade.weaknesses,
-      })
-      totalInputTokens += grade2.usage.input
-      totalOutputTokens += grade2.usage.output
-      selfGrade = grade2.grade
+        // Re-grade pass 2
+        const grade2 = await selfGradePrescription(client, content, intake, lookup, {
+          pass: 2,
+          previousWeaknesses: selfGrade.weaknesses,
+        })
+        totalInputTokens += grade2.usage.input
+        totalOutputTokens += grade2.usage.output
+        selfGrade = grade2.grade
+      } catch (err) {
+        // refine 失败保持 pass 1 结果
+        console.warn('[huatuo] refine pass failed, keeping pass 1 result', err)
+      }
     }
   }
 
@@ -187,10 +204,30 @@ async function generatePrescription(
     messages: [{ role: 'user', content: userPrompt }],
   })
   const rawText = extractText(message.content)
-  const parsed = parseJsonResponse<PrescriptionContent>(rawText)
+  const parsed = parseJsonResponse<Partial<PrescriptionContent>>(rawText)
   return {
-    content: parsed,
+    content: normalizePrescriptionContent(parsed),
     usage: { input: message.usage.input_tokens, output: message.usage.output_tokens },
+  }
+}
+
+/**
+ * Defensive normalization — Claude sometimes omits arrays or returns null where empty arrays expected.
+ * This shields downstream code (UI rendering, .map() calls) from runtime explosions.
+ */
+function normalizePrescriptionContent(p: Partial<PrescriptionContent>): PrescriptionContent {
+  return {
+    summary: typeof p.summary === 'string' ? p.summary : '',
+    phases: Array.isArray(p.phases)
+      ? p.phases.map(ph => ({
+          phase_number:   typeof ph.phase_number === 'number' ? ph.phase_number : 0,
+          name:           typeof ph.name === 'string' ? ph.name : '',
+          duration_weeks: typeof ph.duration_weeks === 'number' ? ph.duration_weeks : 0,
+          actions:        Array.isArray(ph.actions) ? ph.actions : [],
+        }))
+      : [],
+    kpi_targets: Array.isArray(p.kpi_targets) ? p.kpi_targets : [],
+    budget_allocation: Array.isArray(p.budget_allocation) ? p.budget_allocation : [],
   }
 }
 
@@ -212,9 +249,9 @@ async function generatePrescriptionWithFeedback(
     messages: [{ role: 'user', content: userPrompt }],
   })
   const rawText = extractText(message.content)
-  const parsed = parseJsonResponse<PrescriptionContent>(rawText)
+  const parsed = parseJsonResponse<Partial<PrescriptionContent>>(rawText)
   return {
-    content: parsed,
+    content: normalizePrescriptionContent(parsed),
     usage: { input: message.usage.input_tokens, output: message.usage.output_tokens },
   }
 }
@@ -239,18 +276,38 @@ async function selfGradePrescription(
     messages: [{ role: 'user', content: userPrompt }],
   })
   const rawText = extractText(message.content)
-  const parsed = parseJsonResponse<SelfGrade>(rawText)
-  // Sanity-clamp to 0–10
-  parsed.overall = clamp(parsed.overall, 0, 10)
-  if (parsed.dimensions) {
-    for (const key of Object.keys(parsed.dimensions) as Array<keyof typeof parsed.dimensions>) {
-      parsed.dimensions[key] = clamp(parsed.dimensions[key], 0, 10)
-    }
+  const parsed = parseJsonResponse<Partial<SelfGrade>>(rawText)
+
+  // Normalize all fields defensively — Claude may omit some keys
+  const normalized: SelfGrade = {
+    overall: clamp(parsed.overall ?? 0, 0, 10),
+    dimensions: {
+      realism:          clamp(parsed.dimensions?.realism ?? 0, 0, 10),
+      completeness:     clamp(parsed.dimensions?.completeness ?? 0, 0, 10),
+      fde_actionability:clamp(parsed.dimensions?.fde_actionability ?? 0, 0, 10),
+      roi_alignment:    clamp(parsed.dimensions?.roi_alignment ?? 0, 0, 10),
+      prioritization:   clamp(parsed.dimensions?.prioritization ?? 0, 0, 10),
+      resource_match:   clamp(parsed.dimensions?.resource_match ?? 0, 0, 10),
+      innovation:       clamp(parsed.dimensions?.innovation ?? 0, 0, 10),
+    },
+    weaknesses: Array.isArray(parsed.weaknesses) ? parsed.weaknesses.filter(w => typeof w === 'string') : [],
+    improvements_made: Array.isArray(parsed.improvements_made) ? parsed.improvements_made.filter(w => typeof w === 'string') : [],
   }
+
   return {
-    grade: parsed,
+    grade: normalized,
     usage: { input: message.usage.input_tokens, output: message.usage.output_tokens },
   }
+}
+
+/** Wrap an error with a stage context so the API can show "stage: X failed: reason" */
+function wrapError(err: unknown, stage: string): Error {
+  const original = err instanceof Error ? err.message : String(err)
+  const wrapped = new Error(`${stage}: ${original}`)
+  if (err instanceof Error && err.stack) {
+    wrapped.stack = err.stack
+  }
+  return wrapped
 }
 
 function extractText(blocks: Array<{ type: string; text?: string }>): string {

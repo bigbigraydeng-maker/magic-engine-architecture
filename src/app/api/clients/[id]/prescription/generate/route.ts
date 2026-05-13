@@ -137,8 +137,13 @@ export async function POST(
       { status: 400 },
     )
   } catch (err: unknown) {
-    console.error('[prescription/generate] Error:', err)
-    const message = err instanceof Error ? err.message : 'Failed to generate prescription'
-    return NextResponse.json({ success: false, error: message }, { status: 500 })
+    // 详细日志：消息 + stack + cause（如有）
+    const message = err instanceof Error ? err.message : String(err)
+    const stack = err instanceof Error ? err.stack : undefined
+    console.error('[prescription/generate] ERROR:', { message, stack, err })
+    return NextResponse.json(
+      { success: false, error: message, stage: 'generate' },
+      { status: 500 },
+    )
   }
 }

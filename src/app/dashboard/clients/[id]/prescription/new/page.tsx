@@ -161,7 +161,15 @@ export default function NewPrescriptionPage() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
         body:    JSON.stringify(body),
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) {
+        // 把后端真实错误消息显示出来
+        let errText = `HTTP ${res.status}`
+        try {
+          const errBody = await res.json() as { error?: string }
+          if (errBody?.error) errText = `${errText} — ${errBody.error}`
+        } catch {/* response 不是 JSON 时忽略 */}
+        throw new Error(errText)
+      }
       const data = await res.json() as {
         prescription_id: string
         content: PrescriptionContent
