@@ -79,9 +79,13 @@ function isBusiness(v: unknown): v is DiscoveredBusiness {
   if (!isStringArray(v.industry) || v.industry.length === 0) return false
   if (!isRecord(v.location)) return false
   const loc = v.location
-  if (loc.city !== null && !isString(loc.city)) return false
-  if (loc.region !== null && !isString(loc.region)) return false
-  if (!isString(loc.country) || !COUNTRIES.has(loc.country as Market)) return false
+  if (loc.city !== undefined && loc.city !== null && !isString(loc.city)) return false
+  if (loc.region !== undefined && loc.region !== null && !isString(loc.region)) return false
+  if (!isString(loc.country)) return false
+  if (!COUNTRIES.has(loc.country as Market)) {
+    const upper = loc.country.toUpperCase().slice(0, 2)
+    loc.country = (COUNTRIES.has(upper as Market) ? upper : 'AU') as Market
+  }
   if (!isString(v.description) || v.description.length === 0) return false
   if (!isStringArray(v.target_audience)) return false
   if (!isStringArray(v.unique_selling_points)) return false
@@ -92,7 +96,8 @@ function isBusiness(v: unknown): v is DiscoveredBusiness {
 function isSocial(v: unknown): v is DiscoveredSocial {
   if (!isRecord(v)) return false
   if (!isString(v.platform) || !SOCIAL_PLATFORMS.has(v.platform as SocialPlatform)) return false
-  if (v.handle !== null && !isString(v.handle)) return false
+  // handle is optional nullable (some platforms expose URL only)
+  if (v.handle !== undefined && v.handle !== null && !isString(v.handle)) return false
   if (!isString(v.url) || !v.url.startsWith('http')) return false
   if (!isNumber(v.confidence) || !inRange(v.confidence, 0, 1)) return false
   return true
@@ -100,29 +105,48 @@ function isSocial(v: unknown): v is DiscoveredSocial {
 
 function isGbp(v: unknown): v is DiscoveredGbp {
   if (!isRecord(v)) return false
-  if (v.place_id !== null && !isString(v.place_id)) return false
+  // Optional nullable fields: allow undefined too (Claude may omit instead of null)
+  if (v.place_id !== undefined && v.place_id !== null && !isString(v.place_id)) return false
   if (!isString(v.business_name)) return false
   if (!isString(v.address)) return false
-  if (v.rating !== null && (!isNumber(v.rating) || !inRange(v.rating, 0, 5))) return false
-  if (v.review_count !== null && (!isNumber(v.review_count) || v.review_count < 0)) return false
-  if (v.google_maps_url !== null && !isString(v.google_maps_url)) return false
+  if (v.rating !== undefined && v.rating !== null
+      && (!isNumber(v.rating) || !inRange(v.rating, 0, 5))) return false
+  if (v.review_count !== undefined && v.review_count !== null
+      && (!isNumber(v.review_count) || v.review_count < 0)) return false
+  if (v.google_maps_url !== undefined && v.google_maps_url !== null
+      && !isString(v.google_maps_url)) return false
   if (!isNumber(v.confidence) || !inRange(v.confidence, 0, 1)) return false
   return true
 }
 
 function isReviewPlatform(v: unknown): v is DiscoveredReviewPlatform {
   if (!isRecord(v)) return false
-  if (!isString(v.platform) || !REVIEW_PLATFORMS.has(v.platform as DiscoveredReviewPlatform['platform'])) return false
+  // Be lenient on platform — fall back to 'other' if Claude returns something
+  // outside our enum (e.g. 'g2', 'capterra'); we'd rather keep the row than
+  // throw the whole report away over an enum mismatch.
+  if (!isString(v.platform)) return false
+  if (!REVIEW_PLATFORMS.has(v.platform as DiscoveredReviewPlatform['platform'])) {
+    v.platform = 'other'  // coerce
+  }
   if (!isString(v.url)) return false
-  if (v.rating !== null && !isNumber(v.rating)) return false
-  if (v.review_count !== null && !isNumber(v.review_count)) return false
+  // rating/review_count are optional: allow undefined, null, or number
+  if (v.rating !== undefined && v.rating !== null && !isNumber(v.rating)) return false
+  if (v.review_count !== undefined && v.review_count !== null && !isNumber(v.review_count)) return false
   return true
 }
 
 function isKeyword(v: unknown): v is DiscoveredKeyword {
   if (!isRecord(v)) return false
   if (!isString(v.keyword) || v.keyword.length === 0) return false
-  if (!isString(v.type) || !KEYWORD_TYPES.has(v.type as KeywordType)) return false
+  if (!isString(v.type)) return false
+  // Coerce unknown / compound types (e.g. "category-geo", "local-transactional")
+  // to closest match in our enum. Take the first hyphen-separated token that
+  // matches a known type; fall back to 'category' as the most generic bucket.
+  if (!KEYWORD_TYPES.has(v.type as KeywordType)) {
+    const tokens = v.type.toLowerCase().split(/[-_/\s]+/)
+    const match = tokens.find(t => KEYWORD_TYPES.has(t as KeywordType))
+    v.type = (match ?? 'category') as KeywordType
+  }
   if (!isString(v.rationale)) return false
   if (v.estimated_volume !== undefined && v.estimated_volume !== null && !isNumber(v.estimated_volume)) return false
   return true
@@ -132,7 +156,10 @@ function isCompetitor(v: unknown): v is DiscoveredCompetitor {
   if (!isRecord(v)) return false
   if (!isString(v.domain) || v.domain.length === 0) return false
   if (!isString(v.name) || v.name.length === 0) return false
-  if (!isString(v.relevance) || !COMPETITOR_RELEVANCE.has(v.relevance as CompetitorRelevance)) return false
+  if (!isString(v.relevance)) return false
+  if (!COMPETITOR_RELEVANCE.has(v.relevance as CompetitorRelevance)) {
+    v.relevance = 'adjacent' as CompetitorRelevance  // safe default
+  }
   if (!isString(v.rationale)) return false
   if (v.location !== undefined && v.location !== null && !isString(v.location)) return false
   return true
@@ -141,8 +168,18 @@ function isCompetitor(v: unknown): v is DiscoveredCompetitor {
 function isAiQuestion(v: unknown): v is DiscoveredAiQuestion {
   if (!isRecord(v)) return false
   if (!isString(v.question) || v.question.length === 0) return false
-  if (!isString(v.category) || !AI_QUESTION_CATEGORIES.has(v.category as AiQuestionCategory)) return false
-  if (!isString(v.market) || !MARKETS.has(v.market as Market)) return false
+  if (!isString(v.category)) return false
+  if (!AI_QUESTION_CATEGORIES.has(v.category as AiQuestionCategory)) {
+    const tokens = v.category.toLowerCase().split(/[-_/\s]+/)
+    const match = tokens.find(t => AI_QUESTION_CATEGORIES.has(t as AiQuestionCategory))
+    v.category = (match ?? 'category') as AiQuestionCategory
+  }
+  if (!isString(v.market)) return false
+  if (!MARKETS.has(v.market as Market)) {
+    // 'au', 'nz', 'australia' etc. → uppercase + extract first 2 letters
+    const upper = v.market.toUpperCase().slice(0, 2)
+    v.market = (MARKETS.has(upper as Market) ? upper : 'AU') as Market
+  }
   if (!isString(v.rationale)) return false
   return true
 }

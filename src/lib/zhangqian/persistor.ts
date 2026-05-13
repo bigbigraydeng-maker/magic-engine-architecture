@@ -122,15 +122,15 @@ export async function failJob(
   supabase: SupabaseClient,
   jobId: string,
   errorMessage: string,
+  rawOutput?: string,
 ): Promise<void> {
-  await supabase
-    .from('client_discovery_jobs')
-    .update({
-      status: 'failed',
-      error_message: errorMessage,
-      completed_at: new Date().toISOString(),
-    })
-    .eq('id', jobId)
+  const patch: Record<string, unknown> = {
+    status: 'failed',
+    error_message: errorMessage,
+    completed_at: new Date().toISOString(),
+  }
+  if (rawOutput !== undefined) patch.raw_output = rawOutput
+  await supabase.from('client_discovery_jobs').update(patch).eq('id', jobId)
 }
 
 // ─── getLatestDiscovery ──────────────────────────────────────────────────────

@@ -7,8 +7,8 @@ export interface MetaAdData {
 }
 
 export async function scrapeCompetitorMetaAds(domain: string): Promise<MetaAdData> {
-  const apiToken = process.env.APIFY_API_TOKEN
-  if (!apiToken) throw new Error('APIFY_API_TOKEN is not set')
+  const apiToken = process.env.APIFY_API_KEY
+  if (!apiToken) throw new Error('APIFY_API_KEY is not set')
 
   const res = await fetch(
     `https://api.apify.com/v2/acts/apify~facebook-ads-scraper/runs?token=${apiToken}`,

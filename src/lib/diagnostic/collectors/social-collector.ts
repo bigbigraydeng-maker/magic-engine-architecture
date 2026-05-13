@@ -1,26 +1,33 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { scrapeInstagramProfile } from '@/lib/apify/social-scraper'
-import type { InstagramProfile } from '@/lib/apify/social-scraper'
+import {
+  scrapeInstagramProfile,
+  scrapeFacebookPage,
+  scrapeTiktokProfile,
+} from '@/lib/apify/social-scraper'
 import type { CollectorResult, NewFinding } from '../types'
 import { MAX_COLLECTOR_TIMEOUT_MS, SOCIAL_CACHE_TTL_DAYS } from '../constants'
 
-// ---------------------------------------------------------------------------
-// Scoring constants
-// ---------------------------------------------------------------------------
+// ─── Scoring constants ────────────────────────────────────────────────────────
+// FREQ + ENGAGE intentionally sum to 0.80, not 1.0.
+// The remaining 20 points come from the multi-platform diversity bonus
+// (+10 per extra platform, max +20), so a fully-configured 3-platform
+// client with ideal metrics can still reach 100.
+const FREQ_WEIGHT    = 0.40
+const ENGAGE_WEIGHT  = 0.40
+const DIVERSITY_BONUS_PER_PLATFORM = 10   // +10 pts per extra platform (max 20)
 
-const FREQ_WEIGHT = 0.30
-const ENGAGE_WEIGHT = 0.40
-const DIVERSITY_WEIGHT = 0.30
+const LOW_ENGAGE_THRESHOLD = 0.005
+const HIGH_POST_THRESHOLD  = 12
+const LOW_POST_HIGH        = 4
 
-const LOW_ENGAGE_THRESHOLD = 0.005   // 0.5%
-const HIGH_POST_THRESHOLD = 12       // ≥12/month → no finding
-const LOW_POST_HIGH = 4              // <4 → high severity
-// <1 → critical severity (handled by 0-check)
+// ─── Client social handles shape ─────────────────────────────────────────────
+interface SocialHandles {
+  instagramHandle: string | null
+  facebookPageUrl: string | null
+  tiktokHandle:    string | null
+}
 
-// ---------------------------------------------------------------------------
-// SocialCollector
-// ---------------------------------------------------------------------------
-
+// ─── SocialCollector ─────────────────────────────────────────────────────────
 export class SocialCollector {
   constructor(
     private readonly supabase: SupabaseClient,
@@ -32,44 +39,138 @@ export class SocialCollector {
     _domain: string,
     _keywords: string[],
   ): Promise<CollectorResult> {
-    // P8.5.23: errors / no handle → cannot evaluate, not "zero"
-    const fallback: CollectorResult = { score: null, findings: [] }
-
     try {
-      // ── Cache check ────────────────────────────────────────────────────────
-      if (await this.hasFreshCache(clientId)) {
-        return fallback  // data was collected recently; skip re-analysis this run
+      if (await this.hasFreshCache(clientId)) return { score: null, findings: [] }
+
+      const handles = await this.fetchSocialHandles(clientId)
+      const configured = [
+        handles.instagramHandle,
+        handles.facebookPageUrl,
+        handles.tiktokHandle,
+      ].filter(Boolean)
+
+      if (configured.length === 0) {
+        return { score: null, findings: [this.makeMissingPresenceFinding(clientId)] }
       }
 
-      // ── Fetch Instagram handle ─────────────────────────────────────────────
-      const handle = await this.fetchInstagramHandle(clientId)
-      if (!handle) {
-        return {
-          score: null,
-          findings: [this.makeMissingPresenceFinding(clientId)],
-        }
-      }
-
-      // ── Scrape with timeout ────────────────────────────────────────────────
       const timeout = new Promise<CollectorResult>(resolve =>
-        setTimeout(() => resolve(fallback), this.timeoutMs),
+        setTimeout(() => resolve({ score: null, findings: [] }), this.timeoutMs),
       )
 
-      return await Promise.race([this.scrapeAndScore(clientId, handle), timeout])
+      return await Promise.race([this.collectAndScore(clientId, handles), timeout])
     } catch {
       return { score: null, findings: [] }
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Private helpers
-  // ---------------------------------------------------------------------------
+  // ─── Private helpers ────────────────────────────────────────────────────────
+
+  private async fetchSocialHandles(clientId: string): Promise<SocialHandles> {
+    const { data } = await this.supabase
+      .from('clients')
+      .select('instagram_handle, facebook_page_url, tiktok_handle')
+      .eq('id', clientId)
+      .single()
+
+    const row = data as {
+      instagram_handle: string | null
+      facebook_page_url: string | null
+      tiktok_handle: string | null
+    } | null
+
+    return {
+      instagramHandle: row?.instagram_handle ?? null,
+      facebookPageUrl: row?.facebook_page_url ?? null,
+      tiktokHandle:    row?.tiktok_handle ?? null,
+    }
+  }
+
+  private async collectAndScore(
+    clientId: string,
+    handles: SocialHandles,
+  ): Promise<CollectorResult> {
+    const platformScores: number[] = []
+    const findings: NewFinding[] = []
+
+    // Run configured platforms concurrently; each is fault-tolerant
+    const jobs = await Promise.allSettled([
+      handles.instagramHandle
+        ? scrapeInstagramProfile(handles.instagramHandle).then(p => ({
+            platform: 'Instagram',
+            posts: p.postsLast30Days,
+            engagementRate: p.engagementRate,
+          }))
+        : Promise.resolve(null),
+      handles.facebookPageUrl
+        ? scrapeFacebookPage(handles.facebookPageUrl).then(p => ({
+            platform: 'Facebook',
+            posts: p.postsLast30Days,
+            engagementRate: p.engagementRate,
+          }))
+        : Promise.resolve(null),
+      handles.tiktokHandle
+        ? scrapeTiktokProfile(handles.tiktokHandle).then(p => ({
+            platform: 'TikTok',
+            posts: p.postsLast30Days,
+            engagementRate: p.engagementRate,
+          }))
+        : Promise.resolve(null),
+    ])
+
+    for (const result of jobs) {
+      if (result.status !== 'fulfilled' || !result.value) continue
+      const { platform, posts, engagementRate } = result.value
+
+      const freqScore   = this.postFrequencyScore(posts)
+      const engageScore = this.engagementScore(engagementRate)
+      const pScore      = Math.round(freqScore * FREQ_WEIGHT + engageScore * ENGAGE_WEIGHT)
+      platformScores.push(pScore)
+
+      if (posts < HIGH_POST_THRESHOLD) {
+        const severity = posts === 0 ? 'critical' : posts < LOW_POST_HIGH ? 'high' : 'medium'
+        findings.push({
+          client_id: clientId,
+          dimension: 'social',
+          finding_type: 'low_posting_frequency',
+          severity,
+          title: `Low posting frequency on ${platform}`,
+          description: `Only ${posts} post${posts === 1 ? '' : 's'} published in the last 30 days on ${platform}.`,
+          evidence: { platform, posts_last_30_days: posts },
+          recommendation: 'Aim for at least 3 posts per week to maintain audience engagement.',
+          fix_type: 'fde_manual',
+          priority_score: posts === 0 ? 90 : posts < LOW_POST_HIGH ? 70 : 50,
+        })
+      }
+
+      if (engagementRate < LOW_ENGAGE_THRESHOLD) {
+        findings.push({
+          client_id: clientId,
+          dimension: 'social',
+          finding_type: 'low_engagement_rate',
+          severity: 'high',
+          title: `Low engagement rate on ${platform}`,
+          description: `Engagement rate is ${(engagementRate * 100).toFixed(2)}% on ${platform} — below 0.5% threshold.`,
+          evidence: { platform, engagement_rate: engagementRate },
+          recommendation: 'Create more interactive content (polls, Q&A, calls-to-action) to boost engagement.',
+          fix_type: 'fde_manual',
+          priority_score: 65,
+        })
+      }
+    }
+
+    if (platformScores.length === 0) return { score: null, findings }
+
+    const avgScore = platformScores.reduce((a, b) => a + b, 0) / platformScores.length
+    const diversityBonus = Math.min(20, (platformScores.length - 1) * DIVERSITY_BONUS_PER_PLATFORM)
+    const score = Math.min(100, Math.round(avgScore + diversityBonus))
+
+    return { score, findings }
+  }
 
   private async hasFreshCache(clientId: string): Promise<boolean> {
     const cutoff = new Date(
       Date.now() - SOCIAL_CACHE_TTL_DAYS * 24 * 60 * 60 * 1000,
     ).toISOString()
-
     const { data } = await this.supabase
       .from('diagnostic_findings')
       .select('id')
@@ -77,73 +178,7 @@ export class SocialCollector {
       .eq('dimension', 'social')
       .gte('created_at', cutoff)
       .limit(1)
-
     return (data as unknown[])?.length > 0
-  }
-
-  private async fetchInstagramHandle(clientId: string): Promise<string | null> {
-    const { data } = await this.supabase
-      .from('clients')
-      .select('instagram_handle')
-      .eq('id', clientId)
-      .single()
-
-    return (data as { instagram_handle: string | null } | null)?.instagram_handle ?? null
-  }
-
-  private async scrapeAndScore(clientId: string, handle: string): Promise<CollectorResult> {
-    const profile = await scrapeInstagramProfile(handle)
-    return this.buildResult(clientId, profile)
-  }
-
-  private buildResult(clientId: string, profile: InstagramProfile): CollectorResult {
-    const findings: NewFinding[] = []
-
-    // ── Posting frequency ──────────────────────────────────────────────────
-    const posts = profile.postsLast30Days
-    if (posts < HIGH_POST_THRESHOLD) {
-      const severity = posts === 0 ? 'critical' : posts < LOW_POST_HIGH ? 'high' : 'medium'
-      findings.push({
-        client_id: clientId,
-        dimension: 'social',
-        finding_type: 'low_posting_frequency',
-        severity,
-        title: 'Low posting frequency',
-        description: `Only ${posts} post${posts === 1 ? '' : 's'} published in the last 30 days.`,
-        evidence: { posts_last_30_days: posts },
-        recommendation: 'Aim for at least 3 posts per week to maintain audience engagement.',
-        fix_type: 'fde_manual',
-        priority_score: posts === 0 ? 90 : posts < LOW_POST_HIGH ? 70 : 50,
-      })
-    }
-
-    // ── Engagement rate ────────────────────────────────────────────────────
-    if (profile.engagementRate < LOW_ENGAGE_THRESHOLD) {
-      findings.push({
-        client_id: clientId,
-        dimension: 'social',
-        finding_type: 'low_engagement_rate',
-        severity: 'high',
-        title: 'Low engagement rate',
-        description: `Engagement rate is ${(profile.engagementRate * 100).toFixed(2)}% — below the healthy threshold of 0.5%.`,
-        evidence: { engagement_rate: profile.engagementRate },
-        recommendation: 'Create more interactive content (polls, Q&A, calls-to-action) to boost engagement.',
-        fix_type: 'fde_manual',
-        priority_score: 65,
-      })
-    }
-
-    const score = this.computeScore(profile)
-    return { score, findings }
-  }
-
-  private computeScore(profile: InstagramProfile): number {
-    const freqScore = this.postFrequencyScore(profile.postsLast30Days)
-    const engageScore = this.engagementScore(profile.engagementRate)
-    const diversityScore = this.diversityScore(profile.contentTypes)
-
-    const raw = freqScore * FREQ_WEIGHT + engageScore * ENGAGE_WEIGHT + diversityScore * DIVERSITY_WEIGHT
-    return Math.min(100, Math.max(0, Math.round(raw)))
   }
 
   private postFrequencyScore(posts: number): number {
@@ -162,14 +197,6 @@ export class SocialCollector {
     return 100
   }
 
-  private diversityScore(types: string[]): number {
-    const unique = new Set(types).size
-    if (unique === 0) return 0
-    if (unique === 1) return 33
-    if (unique === 2) return 67
-    return 100
-  }
-
   private makeMissingPresenceFinding(clientId: string): NewFinding {
     return {
       client_id: clientId,
@@ -178,10 +205,10 @@ export class SocialCollector {
       severity: 'high',
       title: 'Social media accounts not linked',
       description:
-        'No Instagram handle is linked for this client, so social performance (post frequency, engagement, content diversity) cannot be measured. This may mean the brand has no social presence at all, or the accounts simply haven\'t been connected to Magic Engine yet.',
-      evidence: { instagram_handle: null, facebook_page: null },
+        'No Instagram, Facebook Page, or TikTok account is linked for this client. Social performance (post frequency, engagement) cannot be measured until at least one platform is connected.',
+      evidence: { instagram_handle: null, facebook_page_url: null, tiktok_handle: null },
       recommendation:
-        'Open Client Settings → Social and add the Instagram handle + Facebook page URL. If the brand has no social accounts yet, prioritise launching at least Instagram (highest reach for visual-heavy categories like flooring/tiles).',
+        'Open Client Settings → Social and add the Instagram handle, Facebook Page URL, and/or TikTok handle. Prioritise Instagram + Facebook for AU/NZ markets.',
       fix_type: 'fde_manual',
       priority_score: 75,
     }

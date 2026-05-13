@@ -15,16 +15,18 @@
  */
 
 import type Anthropic from '@anthropic-ai/sdk'
-import { getAnthropicClient, MODEL_SONNET } from '@/lib/anthropic/client'
+import { getAnthropicClient, MODEL_SONNET, parseJsonResponse } from '@/lib/anthropic/client'
 import { fetchUrlAsMarkdown } from '@/lib/brief/jina'
 import type { DiscoveryReport } from './types'
 import { ZHANGQIAN_SYSTEM_PROMPT, buildUserPrompt } from './prompts'
-import { validateDiscoveryReport, stripJsonFences } from './validators'
+import { validateDiscoveryReport } from './validators'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const MAX_TOOL_CALLS = 15
-const MAX_COST_USD = 1.0
+// Lowered to 8 calls (~$0.50) during debugging — raise back to 15 once
+// validator stabilises. Web search max_uses below is independently capped.
+const MAX_TOOL_CALLS = 8
+const MAX_COST_USD = 0.75
 const MAX_OUTPUT_TOKENS = 8096
 const FETCH_URL_TIMEOUT_MS = 15_000
 
@@ -44,7 +46,7 @@ const PRICE_WEB_SEARCH_PER_CALL = 0.01
 const WEB_SEARCH_TOOL = {
   type: 'web_search_20250305',
   name: 'web_search',
-  max_uses: 10,                     // separate cap inside the 15-call budget
+  max_uses: 5,                      // separate cap inside the 8-call budget
 } as unknown as Anthropic.Messages.Tool
 
 /**
@@ -82,6 +84,8 @@ export interface RunZhangqianResult {
   report: DiscoveryReport
   /** True if validation failed at the end; report.notes will contain the error. */
   validation_error: string | null
+  /** Raw final assistant text — persisted on validation failure for debugging. */
+  raw_output: string
 }
 
 /**
@@ -324,15 +328,17 @@ function finalizeReport(args: FinalizeArgs): RunZhangqianResult {
     truncated: args.truncated,
   }
 
-  // Parse + validate
+  // Parse + validate — use parseJsonResponse which finds the outermost { ... }
+  // block (tolerates leading narrative text like "Now let me emit the JSON…")
   let parsed: unknown
   try {
-    parsed = JSON.parse(stripJsonFences(args.finalText))
+    parsed = parseJsonResponse<unknown>(args.finalText)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return {
       report: makeEmptyReport(args.domain, meta, `JSON parse failed: ${message}`),
       validation_error: `JSON parse failed: ${message}`,
+      raw_output: args.finalText,
     }
   }
 
@@ -341,12 +347,14 @@ function finalizeReport(args: FinalizeArgs): RunZhangqianResult {
     return {
       report: makeEmptyReport(args.domain, meta, `Schema validation failed: ${validation.error}`),
       validation_error: validation.error,
+      raw_output: args.finalText,
     }
   }
 
   return {
     report: { ...validation.value, meta },
     validation_error: null,
+    raw_output: args.finalText,
   }
 }
 
