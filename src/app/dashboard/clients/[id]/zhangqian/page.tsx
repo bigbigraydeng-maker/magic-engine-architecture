@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
+
 import type {
   ClientDiscoveryRow,
   DiscoveryJob,
@@ -182,7 +183,7 @@ function DiscoveryReviewCards({
               <span className="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
               导入中…
             </>
-          ) : '确认发现内容，导入系统 →'}
+          ) : '✓ 确认发现，前往生成处方 →'}
         </button>
       </div>
     </div>
@@ -191,20 +192,34 @@ function DiscoveryReviewCards({
 
 // ─── ConfirmedBanner ─────────────────────────────────────────────────────────
 
-function ConfirmedBanner({ onRerun }: { onRerun: () => void }) {
+function ConfirmedBanner({
+  clientId,
+  onRerun,
+}: {
+  clientId: string
+  onRerun: () => void
+}) {
   return (
-    <div className="flex flex-col items-center justify-center min-h-[420px] bg-white rounded-xl border border-green-200 p-12 text-center">
-      <div className="text-5xl mb-4">✅</div>
-      <h2 className="text-xl font-semibold text-gray-900 mb-2">发现结果已确认</h2>
-      <p className="text-sm text-gray-500 mb-6 max-w-sm">
-        张骞发现的数据已成功导入客户档案。
+    <div className="flex flex-col items-center justify-center min-h-[200px] bg-white rounded-xl border border-green-200 p-8 text-center">
+      <div className="text-4xl mb-3">✅</div>
+      <h2 className="text-lg font-semibold text-gray-900 mb-1">发现结果已确认 — 播种完成</h2>
+      <p className="text-sm text-gray-500 mb-5 max-w-sm">
+        品牌健康数据已导入客户档案。下一步：基于诊断生成个性化处方。
       </p>
-      <button
-        onClick={onRerun}
-        className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-5 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-      >
-        重新运行
-      </button>
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onRerun}
+          className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+        >
+          重新运行发现
+        </button>
+        <Link
+          href={`/dashboard/clients/${clientId}/prescription/new`}
+          className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors"
+        >
+          生成处方 →
+        </Link>
+      </div>
     </div>
   )
 }
@@ -351,7 +366,8 @@ export default function ZhangqianPage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: ConfirmResponse = await res.json()
       if (!data.success) throw new Error(data.error ?? '确认失败')
-      router.push(`/dashboard/clients/${clientId}`)
+      // Redirect to prescription flow — seeding is complete, time to generate the treatment plan
+      router.push(`/dashboard/clients/${clientId}/prescription/new`)
     } catch (e) {
       setPageError(e instanceof Error ? e.message : '确认失败')
     } finally {
@@ -453,7 +469,7 @@ export default function ZhangqianPage() {
 
         {pageState === 'confirmed' && (
           <div className="space-y-5">
-            <ConfirmedBanner onRerun={handleRerun} />
+            <ConfirmedBanner clientId={clientId} onRerun={handleRerun} />
             {discovery && (
               <DiscoveryReviewCards
                 discovery={discovery}

@@ -17,6 +17,7 @@ import type {
   PrescriptionContent,
   PrescriptionIntake,
 } from '@/types/diagnostic'
+import type { DiscoveryReport } from '@/lib/zhangqian/types'
 import { getAnthropicClient, parseJsonResponse, MODEL_SONNET } from '@/lib/anthropic/client'
 
 // ---------------------------------------------------------------------------
@@ -117,7 +118,7 @@ export async function generatePrescription(
   // Clamp budget allocation so it never exceeds intake budget
   clampBudgetAllocation(content, intake.monthly_budget_aud)
 
-  const prescriptionId = await savePrescription(supabase, runId, clientId, intake, content)
+  const prescriptionId = await savePrescription(supabase, { runId }, clientId, intake, content)
 
   return { prescriptionId, content }
 }
@@ -222,7 +223,7 @@ function clampBudgetAllocation(content: PrescriptionContent, maxBudget: number):
 
 async function savePrescription(
   supabase: SupabaseClient,
-  runId: string,
+  source: { runId?: string; discoveryId?: string },
   clientId: string,
   intake: PrescriptionIntake,
   content: PrescriptionContent,
@@ -231,7 +232,8 @@ async function savePrescription(
     .from('prescriptions')
     .insert({
       client_id:    clientId,
-      run_id:       runId,
+      run_id:       source.runId ?? null,
+      discovery_id: source.discoveryId ?? null,
       status:       'draft',
       intake,
       content,
@@ -245,4 +247,122 @@ async function savePrescription(
   }
 
   return (data as { id: string }).id
+}
+
+// ---------------------------------------------------------------------------
+// Discovery-sourced prescription (Zhangqian → Prescription)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a prescription prompt from a confirmed Zhangqian DiscoveryReport.
+ * Translates the diagnosis block into the same format the prescription
+ * generator expects, so the same Claude prompt template applies.
+ */
+export function buildPrescriptionPromptFromDiscovery(
+  discovery: DiscoveryReport,
+  intake: PrescriptionIntake,
+): string {
+  const d = discovery.diagnosis
+  const scores = d?.scores
+  const dimensionScoresText = scores
+    ? [
+        `  seo: ${scores.seo}/100`,
+        `  social: ${scores.social}/100`,
+        `  reputation: ${scores.reputation}/100`,
+        `  ai_visibility: ${scores.ai_visibility}/100`,
+        `  overall: ${scores.overall}/100`,
+      ].join('\n')
+    : '  (no dimension scores)'
+
+  // Flatten action blocks into finding-like items
+  const actions = d?.actions
+  const findingLines: string[] = []
+  if (actions) {
+    for (const text of actions.quick_fix ?? []) {
+      findingLines.push(`  [HIGH] [quick_fix] ${text}`)
+    }
+    for (const text of actions.important ?? []) {
+      findingLines.push(`  [HIGH] [important] ${text}`)
+    }
+    for (const text of actions.talk_to_us ?? []) {
+      findingLines.push(`  [CRITICAL] [talk_to_us] ${text}`)
+    }
+  }
+  const findingsText = findingLines.length > 0
+    ? findingLines.join('\n')
+    : '  (no action items from discovery)'
+
+  const crisisContext = d?.crisis_type
+    ? `Crisis Type: ${d.crisis_type}\nKey Finding: ${d.key_finding ?? '(none)'}\n`
+    : ''
+
+  const priorityDims = intake.priority_dimensions.length > 0
+    ? intake.priority_dimensions.join(', ')
+    : 'all dimensions'
+
+  return `## Brand Health Discovery (Zhangqian)
+
+Domain: ${discovery.domain}
+Business: ${discovery.business.name} — ${discovery.business.industry.join(', ')}
+${crisisContext}
+Overall Score: ${scores?.overall ?? 'N/A'}/100
+
+Dimension Scores:
+${dimensionScoresText}
+
+## Recommended Actions (from discovery)
+${findingsText}
+
+## Client Intake
+
+Business Goal: ${intake.business_goal}
+Timeline Urgency: ${intake.timeline_urgency}
+Monthly Budget: AUD ${intake.monthly_budget_aud}
+Priority Dimensions: ${priorityDims}
+Additional Notes: ${intake.notes ?? 'None'}
+
+## Instructions
+
+Generate a 3-phase prescription JSON for this AU/NZ business.
+Budget: AUD ${intake.monthly_budget_aud}/month — allocations must NOT exceed this total.
+Focus on the crisis type and recommended actions listed above.`
+}
+
+/**
+ * Generate a prescription from a confirmed Zhangqian discovery (no diagnostic run needed).
+ */
+export async function generatePrescriptionFromDiscovery(
+  supabase: SupabaseClient,
+  discoveryId: string,
+  clientId: string,
+  intake: PrescriptionIntake,
+  discovery: DiscoveryReport,
+): Promise<GeneratePrescriptionResult> {
+  const prompt = buildPrescriptionPromptFromDiscovery(discovery, intake)
+
+  const client = getAnthropicClient()
+  const message = await client.messages.create({
+    model: MODEL_SONNET,
+    max_tokens: 4096,
+    system: SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: prompt }],
+  })
+
+  const rawText = message.content
+    .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+    .map(b => b.text)
+    .join('')
+
+  const content = parseJsonResponse<PrescriptionContent>(rawText)
+  clampBudgetAllocation(content, intake.monthly_budget_aud)
+
+  const prescriptionId = await savePrescription(
+    supabase,
+    { discoveryId },
+    clientId,
+    intake,
+    content,
+  )
+
+  return { prescriptionId, content }
 }

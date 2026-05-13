@@ -1,23 +1,30 @@
 /**
  * POST /api/clients/[id]/prescription/generate
  *
- * Generates a Claude Sonnet prescription from a completed diagnostic run.
+ * Generates a prescription from either:
+ *   A) a completed diagnostic run  → body.run_id
+ *   B) a confirmed Zhangqian discovery → body.discovery_id
  *
  * Body: {
- *   run_id: string            — must belong to this client
- *   intake: PrescriptionIntake
+ *   run_id?:       string   — diagnostic run (legacy source)
+ *   discovery_id?: string   — Zhangqian discovery (primary source)
+ *   intake:        PrescriptionIntake
  * }
  *
  * Returns: { success, prescription_id, content }
  * Security: Bearer token (INTERNAL_API_KEY)
- * Reference: ROADMAP.md P8.5.16
+ * Reference: ROADMAP.md P8.5.16 / P8.10.S2
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireBearerToken } from '@/lib/validation-utils'
-import { generatePrescription } from '@/lib/diagnostic/prescription-generator'
+import {
+  generatePrescription,
+  generatePrescriptionFromDiscovery,
+} from '@/lib/diagnostic/prescription-generator'
 import type { PrescriptionIntake } from '@/types/diagnostic'
+import type { DiscoveryReport } from '@/lib/zhangqian/types'
 
 export const maxDuration = 60
 
@@ -32,16 +39,16 @@ export async function POST(
 
   try {
     const { id: clientId } = params
-    const body = (await req.json()) as { run_id?: string; intake?: PrescriptionIntake }
-
-    if (!body.run_id) {
-      return NextResponse.json({ success: false, error: 'run_id is required' }, { status: 400 })
+    const body = (await req.json()) as {
+      run_id?: string
+      discovery_id?: string
+      intake?: PrescriptionIntake
     }
+
     if (!body.intake) {
       return NextResponse.json({ success: false, error: 'intake is required' }, { status: 400 })
     }
 
-    // Validate intake required fields
     const { intake } = body
     if (!intake.business_goal || typeof intake.monthly_budget_aud !== 'number') {
       return NextResponse.json(
@@ -50,29 +57,69 @@ export async function POST(
       )
     }
 
-    // Verify run belongs to this client and is completed
-    const { data: run, error: runError } = await supabaseAdmin
-      .from('diagnostic_runs')
-      .select('id, status')
-      .eq('id', body.run_id)
-      .eq('client_id', clientId)
-      .single()
+    // ── Path A: Zhangqian discovery source ──────────────────────────────────
+    if (body.discovery_id) {
+      const { data: row, error: discErr } = await supabaseAdmin
+        .from('client_discovery')
+        .select('id, payload, confirmed_at')
+        .eq('id', body.discovery_id)
+        .eq('client_id', clientId)
+        .single<{ id: string; payload: DiscoveryReport; confirmed_at: string | null }>()
 
-    if (runError || !run) {
-      return NextResponse.json(
-        { success: false, error: 'Diagnostic run not found' },
-        { status: 404 },
+      if (discErr || !row) {
+        return NextResponse.json(
+          { success: false, error: 'Discovery not found' },
+          { status: 404 },
+        )
+      }
+      if (!row.confirmed_at) {
+        return NextResponse.json(
+          { success: false, error: 'Discovery must be confirmed before generating a prescription' },
+          { status: 422 },
+        )
+      }
+
+      const { prescriptionId, content } = await generatePrescriptionFromDiscovery(
+        supabaseAdmin,
+        row.id,
+        clientId,
+        intake,
+        row.payload,
       )
+
+      return NextResponse.json({ success: true, prescription_id: prescriptionId, content })
     }
 
-    const { prescriptionId, content } = await generatePrescription(
-      supabaseAdmin,
-      body.run_id,
-      clientId,
-      intake,
-    )
+    // ── Path B: Diagnostic run source (legacy) ───────────────────────────────
+    if (body.run_id) {
+      const { data: run, error: runError } = await supabaseAdmin
+        .from('diagnostic_runs')
+        .select('id, status')
+        .eq('id', body.run_id)
+        .eq('client_id', clientId)
+        .single()
 
-    return NextResponse.json({ success: true, prescription_id: prescriptionId, content })
+      if (runError || !run) {
+        return NextResponse.json(
+          { success: false, error: 'Diagnostic run not found' },
+          { status: 404 },
+        )
+      }
+
+      const { prescriptionId, content } = await generatePrescription(
+        supabaseAdmin,
+        body.run_id,
+        clientId,
+        intake,
+      )
+
+      return NextResponse.json({ success: true, prescription_id: prescriptionId, content })
+    }
+
+    return NextResponse.json(
+      { success: false, error: 'Either run_id or discovery_id is required' },
+      { status: 400 },
+    )
   } catch (err: unknown) {
     console.error('[prescription/generate] Error:', err)
     return NextResponse.json(

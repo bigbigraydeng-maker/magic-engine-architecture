@@ -2,7 +2,9 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import type { DiagnosticRun, PrescriptionContent, PrescriptionIntake, DiagnosticDimension } from '@/types/diagnostic'
+import Link from 'next/link'
+import type { PrescriptionContent, PrescriptionIntake, DiagnosticDimension } from '@/types/diagnostic'
+import type { ClientDiscoveryRow } from '@/lib/zhangqian/types'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -10,10 +12,10 @@ import type { DiagnosticRun, PrescriptionContent, PrescriptionIntake, Diagnostic
 
 const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''
 
-const URGENCY_OPTIONS: Array<{ value: PrescriptionIntake['timeline_urgency']; label: string }> = [
-  { value: 'immediate',   label: '⚡ 即刻（1–2 周内启动）' },
-  { value: 'short_term',  label: '📅 短期（1–3 个月）' },
-  { value: 'long_term',   label: '🗓️ 长期（3–6 个月）' },
+const URGENCY_OPTIONS: Array<{ value: PrescriptionIntake['timeline_urgency']; label: string; desc: string }> = [
+  { value: 'immediate',  label: '⚡ 即刻',   desc: '1–2 周内启动' },
+  { value: 'short_term', label: '📅 短期',   desc: '1–3 个月' },
+  { value: 'long_term',  label: '🗓️ 长期',  desc: '3–6 个月' },
 ]
 
 const DIMENSION_OPTIONS: Array<{ value: DiagnosticDimension; label: string }> = [
@@ -25,7 +27,14 @@ const DIMENSION_OPTIONS: Array<{ value: DiagnosticDimension; label: string }> = 
   { value: 'ads',           label: '广告' },
 ]
 
-type Step = 1 | 2 | 3 | 4
+const CRISIS_COLOR: Record<string, string> = {
+  'TYPE_E 声誉陷阱': 'bg-red-50 border-red-200 text-red-800',
+  'TYPE_D 数字缺失': 'bg-orange-50 border-orange-200 text-orange-800',
+  'TYPE_B 社媒空洞': 'bg-yellow-50 border-yellow-200 text-yellow-800',
+  'TYPE_A AI不可见': 'bg-purple-50 border-purple-200 text-purple-800',
+}
+
+type Step = 1 | 2 | 3
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -33,13 +42,12 @@ type Step = 1 | 2 | 3 | 4
 
 function StepIndicator({ current }: { current: Step }) {
   const steps = [
-    { n: 1, label: '选择快照' },
-    { n: 2, label: '填写意向' },
-    { n: 3, label: '生成处方' },
-    { n: 4, label: '审阅批准' },
+    { n: 1, label: '填写意向' },
+    { n: 2, label: '生成处方' },
+    { n: 3, label: '审阅批准' },
   ]
   return (
-    <div className="flex items-center gap-0 mb-8">
+    <div className="flex items-center gap-0 mb-6">
       {steps.map((s, i) => (
         <div key={s.n} className="flex items-center">
           <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
@@ -59,6 +67,17 @@ function StepIndicator({ current }: { current: Step }) {
   )
 }
 
+function ScoreChip({ label, value }: { label: string; value: number }) {
+  const color = value >= 60 ? 'bg-green-100 text-green-700' :
+                value >= 40 ? 'bg-yellow-100 text-yellow-700' :
+                              'bg-red-100 text-red-700'
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${color}`}>
+      {label} {value}
+    </span>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
@@ -68,52 +87,57 @@ export default function NewPrescriptionPage() {
   const router   = useRouter()
   const clientId = params.id as string
 
-  const [step, setStep]             = useState<Step>(1)
-  const [runs, setRuns]             = useState<DiagnosticRun[]>([])
-  const [selectedRunId, setSelectedRunId] = useState<string>('')
-  const [isLoadingRuns, setIsLoadingRuns] = useState(true)
+  // Discovery source (Zhangqian)
+  const [discovery, setDiscovery]             = useState<ClientDiscoveryRow | null>(null)
+  const [discoveryLoading, setDiscoveryLoading] = useState(true)
+  const [discoveryId, setDiscoveryId]         = useState<string | null>(null)
+
+  const [step, setStep] = useState<Step>(1)
 
   // Intake form state
-  const [businessGoal, setBusinessGoal]   = useState('')
-  const [urgency, setUrgency]             = useState<PrescriptionIntake['timeline_urgency']>('short_term')
-  const [budget, setBudget]               = useState<number>(3000)
-  const [priorityDims, setPriorityDims]   = useState<DiagnosticDimension[]>([])
-  const [notes, setNotes]                 = useState('')
+  const [businessGoal, setBusinessGoal]     = useState('')
+  const [urgency, setUrgency]               = useState<PrescriptionIntake['timeline_urgency']>('short_term')
+  const [budget, setBudget]                 = useState<number>(3000)
+  const [priorityDims, setPriorityDims]     = useState<DiagnosticDimension[]>([])
+  const [notes, setNotes]                   = useState('')
 
   // Generation state
-  const [isGenerating, setIsGenerating]   = useState(false)
-  const [generateError, setGenerateError] = useState<string | null>(null)
-  const [prescriptionId, setPrescriptionId] = useState<string | null>(null)
-  const [content, setContent]             = useState<PrescriptionContent | null>(null)
+  const [isGenerating, setIsGenerating]       = useState(false)
+  const [generateError, setGenerateError]     = useState<string | null>(null)
+  const [prescriptionId, setPrescriptionId]   = useState<string | null>(null)
+  const [content, setContent]                 = useState<PrescriptionContent | null>(null)
 
   // Approval state
-  const [isApproving, setIsApproving]     = useState(false)
-  const [approveError, setApproveError]   = useState<string | null>(null)
+  const [isApproving, setIsApproving]   = useState(false)
+  const [approveError, setApproveError] = useState<string | null>(null)
 
-  // ── Step 1: Load completed diagnostic runs ────────────────────────────────
+  // ── Load Zhangqian discovery on mount ─────────────────────────────────────
   useEffect(() => {
-    void fetchRuns()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    void (async () => {
+      setDiscoveryLoading(true)
+      try {
+        const res = await fetch(`/api/clients/${clientId}/zhangqian/latest`, {
+          headers: { Authorization: `Bearer ${API_KEY}` },
+        })
+        if (!res.ok) return
+        const data = await res.json() as { success: boolean; discovery: ClientDiscoveryRow }
+        if (data.success && data.discovery?.confirmed_at) {
+          setDiscovery(data.discovery)
+          setDiscoveryId(data.discovery.id)
+          // Pre-fill crisis type as a note hint
+          const crisis = data.discovery.payload?.diagnosis?.crisis_type
+          if (crisis) {
+            setNotes(`诊断危机类型：${crisis}`)
+          }
+        }
+      } finally {
+        setDiscoveryLoading(false)
+      }
+    })()
   }, [clientId])
 
-  const fetchRuns = useCallback(async () => {
-    setIsLoadingRuns(true)
-    try {
-      const res = await fetch(`/api/clients/${clientId}/diagnostic/runs?status=completed`, {
-        headers: { Authorization: `Bearer ${API_KEY}` },
-      })
-      if (!res.ok) return
-      const data = await res.json() as { runs: DiagnosticRun[] }
-      const completed = data.runs ?? []
-      setRuns(completed)
-      if (completed.length > 0) setSelectedRunId(completed[0].id)
-    } finally {
-      setIsLoadingRuns(false)
-    }
-  }, [clientId])
-
-  // ── Step 3: Generate prescription ────────────────────────────────────────
-  const handleGenerate = async () => {
+  // ── Generate prescription ─────────────────────────────────────────────────
+  const handleGenerate = useCallback(async () => {
     setIsGenerating(true)
     setGenerateError(null)
     try {
@@ -124,24 +148,29 @@ export default function NewPrescriptionPage() {
         priority_dimensions: priorityDims,
         notes:               notes || null,
       }
+      const body = discoveryId
+        ? { discovery_id: discoveryId, intake }
+        : { intake }          // fallback (no source — will 400, but shouldn't reach here)
+
       const res = await fetch(`/api/clients/${clientId}/prescription/generate`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
-        body:    JSON.stringify({ run_id: selectedRunId, intake }),
+        body:    JSON.stringify(body),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json() as { prescription_id: string; content: PrescriptionContent }
       setPrescriptionId(data.prescription_id)
       setContent(data.content)
-      setStep(4)
+      setStep(3)
     } catch (e) {
       setGenerateError(e instanceof Error ? e.message : '处方生成失败')
+      setStep(1) // back to form on error
     } finally {
       setIsGenerating(false)
     }
-  }
+  }, [businessGoal, urgency, budget, priorityDims, notes, discoveryId, clientId])
 
-  // ── Step 4: Approve prescription ─────────────────────────────────────────
+  // ── Approve prescription ──────────────────────────────────────────────────
   const handleApprove = async () => {
     if (!prescriptionId) return
     setIsApproving(true)
@@ -168,7 +197,7 @@ export default function NewPrescriptionPage() {
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
       body:    JSON.stringify({ status: 'rejected', rejection_note: '用户要求重新生成' }),
     })
-    setStep(2)
+    setStep(1)
     setContent(null)
     setPrescriptionId(null)
   }
@@ -179,88 +208,53 @@ export default function NewPrescriptionPage() {
     )
   }
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-10">
-        <div className="max-w-3xl mx-auto">
-          <h1 className="text-lg font-semibold text-gray-900">生成处方</h1>
-          <p className="text-xs text-gray-400 mt-0.5">基于诊断结果，由 Strategy Engine 生成三阶段营销处方</p>
+        <div className="max-w-3xl mx-auto flex items-center gap-3">
+          <Link
+            href={`/dashboard/clients/${clientId}`}
+            className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            返回
+          </Link>
+          <div>
+            <h1 className="text-lg font-semibold text-gray-900">生成处方</h1>
+            <p className="text-xs text-gray-400 mt-0.5">基于品牌健康发现，由 Strategy Engine 生成三阶段营销方案</p>
+          </div>
         </div>
       </div>
 
       <div className="max-w-3xl mx-auto px-6 py-6">
         <StepIndicator current={step} />
 
-        {/* ── Step 1: 选择诊断快照 ──────────────────────────────────────── */}
-        {step === 1 && (
-          <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-4">
-            <h2 className="font-semibold text-gray-900">选择诊断快照</h2>
-            <p className="text-sm text-gray-500">选择用于生成处方的诊断运行记录（默认使用最新完成的运行）。</p>
+        {/* ── Discovery Context Card (always visible when confirmed) ────── */}
+        {!discoveryLoading && discovery && (
+          <DiscoveryContextCard discovery={discovery} />
+        )}
 
-            {isLoadingRuns ? (
-              <div className="animate-pulse space-y-2">
-                {[1, 2].map(i => <div key={i} className="h-12 bg-gray-100 rounded-lg" />)}
-              </div>
-            ) : runs.length === 0 ? (
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
-                尚无完成的诊断运行。请先在
-                <a href={`/dashboard/clients/${clientId}/diagnostic`} className="underline mx-1">诊断页面</a>
-                运行诊断。
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {runs.map(run => (
-                  <label
-                    key={run.id}
-                    className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${
-                      selectedRunId === run.id
-                        ? 'border-indigo-300 bg-indigo-50'
-                        : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="run_id"
-                      value={run.id}
-                      checked={selectedRunId === run.id}
-                      onChange={() => setSelectedRunId(run.id)}
-                      className="text-indigo-600"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-900">
-                        综合得分：{run.overall_score ?? '—'}/100
-                      </div>
-                      <div className="text-xs text-gray-400">
-                        {run.completed_at
-                          ? new Date(run.completed_at).toLocaleString('zh-CN', { timeZone: 'Pacific/Auckland' })
-                          : '时间未知'}
-                        &nbsp;·&nbsp;{run.findings_count} 条发现
-                      </div>
-                    </div>
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">
-                      已完成
-                    </span>
-                  </label>
-                ))}
-              </div>
-            )}
-
-            <div className="flex justify-end pt-2">
-              <button
-                onClick={() => setStep(2)}
-                disabled={!selectedRunId}
-                className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-              >
-                下一步
-              </button>
-            </div>
+        {/* ── No discovery warning ──────────────────────────────────────── */}
+        {!discoveryLoading && !discovery && (
+          <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            <p className="font-semibold mb-1">⚠️ 尚无确认的发现报告</p>
+            <p className="text-xs">
+              建议先运行
+              <Link href={`/dashboard/clients/${clientId}/zhangqian`} className="underline mx-1">
+                张骞发现
+              </Link>
+              再生成处方，以获得最精准的诊断依据。
+            </p>
           </div>
         )}
 
-        {/* ── Step 2: Intake Form ───────────────────────────────────────── */}
-        {step === 2 && (
+        {/* ── Step 1: Intent Form ────────────────────────────────────────── */}
+        {step === 1 && (
           <div className="bg-white rounded-xl border border-gray-200 p-6 space-y-5">
             <h2 className="font-semibold text-gray-900">填写业务意向</h2>
 
@@ -289,13 +283,14 @@ export default function NewPrescriptionPage() {
                     key={opt.value}
                     type="button"
                     onClick={() => setUrgency(opt.value)}
-                    className={`rounded-lg border px-3 py-2 text-xs font-medium text-left transition-colors ${
+                    className={`rounded-lg border px-3 py-2.5 text-left transition-colors ${
                       urgency === opt.value
                         ? 'border-indigo-400 bg-indigo-50 text-indigo-700'
                         : 'border-gray-200 text-gray-600 hover:border-gray-300'
                     }`}
                   >
-                    {opt.label}
+                    <div className="text-xs font-semibold">{opt.label}</div>
+                    <div className="text-xs text-gray-400 mt-0.5">{opt.desc}</div>
                   </button>
                 ))}
               </div>
@@ -358,43 +353,40 @@ export default function NewPrescriptionPage() {
               />
             </div>
 
-            <div className="flex justify-between pt-2">
+            {generateError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {generateError}
+              </div>
+            )}
+
+            <div className="flex justify-end pt-2">
               <button
-                onClick={() => setStep(1)}
-                className="text-sm text-gray-500 hover:text-gray-700"
-              >
-                ← 返回
-              </button>
-              <button
-                onClick={() => { setStep(3); void handleGenerate() }}
+                onClick={() => { setStep(2); void handleGenerate() }}
                 disabled={!businessGoal.trim() || budget <= 0}
-                className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
-                生成处方
+                生成处方 →
               </button>
             </div>
           </div>
         )}
 
-        {/* ── Step 3: 生成中 ────────────────────────────────────────────── */}
-        {step === 3 && (
+        {/* ── Step 2: 生成中 ──────────────────────────────────────────────── */}
+        {step === 2 && (
           <div className="bg-white rounded-xl border border-gray-200 p-12 text-center space-y-4">
             <div className="animate-spin w-10 h-10 border-4 border-indigo-400 border-t-transparent rounded-full mx-auto" />
             <h2 className="font-semibold text-gray-900">Strategy Engine 正在分析…</h2>
             <p className="text-sm text-gray-500">
-              正在基于诊断数据和业务目标，生成个性化三阶段处方。通常需要 15–30 秒。
+              正在基于品牌健康数据和业务目标，生成个性化三阶段处方。通常需要 15–30 秒。
             </p>
-            {generateError && (
-              <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-                {generateError}
-                <button onClick={() => setStep(2)} className="ml-2 underline">返回修改</button>
-              </div>
+            {isGenerating && (
+              <p className="text-xs text-gray-400">请勿关闭此页面</p>
             )}
           </div>
         )}
 
-        {/* ── Step 4: 处方审阅 ──────────────────────────────────────────── */}
-        {step === 4 && content && (
+        {/* ── Step 3: 处方审阅 ─────────────────────────────────────────────── */}
+        {step === 3 && content && (
           <div className="space-y-4">
             {/* Summary */}
             <div className="bg-white rounded-xl border border-gray-200 p-5">
@@ -416,7 +408,7 @@ export default function NewPrescriptionPage() {
                           style={{ width: `${b.percentage}%` }}
                         />
                       </div>
-                      <span className="text-xs font-medium text-gray-700 w-20 text-right">
+                      <span className="text-xs font-medium text-gray-700 w-24 text-right">
                         AUD ${b.amount_aud} ({b.percentage}%)
                       </span>
                     </div>
@@ -440,10 +432,10 @@ export default function NewPrescriptionPage() {
                 <div className="space-y-2 pl-10">
                   {phase.actions.map(action => (
                     <div key={action.id} className="flex items-start gap-2">
-                      <span className={`mt-0.5 text-xs px-2 py-0.5 rounded font-medium ${
-                        action.fix_type === 'me_auto'     ? 'bg-blue-100 text-blue-700' :
-                        action.fix_type === 'fde_manual'  ? 'bg-purple-100 text-purple-700' :
-                                                            'bg-gray-100 text-gray-600'
+                      <span className={`mt-0.5 text-xs px-2 py-0.5 rounded font-medium shrink-0 ${
+                        action.fix_type === 'me_auto'    ? 'bg-blue-100 text-blue-700' :
+                        action.fix_type === 'fde_manual' ? 'bg-purple-100 text-purple-700' :
+                                                           'bg-gray-100 text-gray-600'
                       }`}>
                         {action.fix_type === 'me_auto' ? 'ME' : action.fix_type === 'fde_manual' ? 'FDE' : '第三方'}
                       </span>
@@ -504,6 +496,47 @@ export default function NewPrescriptionPage() {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Discovery Context Card (shown above the form when Zhangqian data exists)
+// ---------------------------------------------------------------------------
+
+function DiscoveryContextCard({ discovery }: { discovery: ClientDiscoveryRow }) {
+  const diag = discovery.payload?.diagnosis
+  const scores = diag?.scores
+  const crisisType = diag?.crisis_type ?? null
+  const crisisCls = crisisType ? CRISIS_COLOR[crisisType] : null
+
+  return (
+    <div className="mb-5 rounded-xl border border-gray-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">诊断依据 — 张骞发现</p>
+          <p className="text-sm text-gray-700 font-medium">{discovery.payload?.business?.name ?? discovery.domain}</p>
+          {diag?.key_finding && (
+            <p className="text-xs text-gray-500 mt-0.5">{diag.key_finding}</p>
+          )}
+        </div>
+        {crisisType && crisisCls && (
+          <span className={`shrink-0 text-xs font-semibold border rounded-full px-2.5 py-1 ${crisisCls}`}>
+            {crisisType.split(' ')[1] ?? crisisType}
+          </span>
+        )}
+      </div>
+      {scores && (
+        <div className="flex flex-wrap gap-1.5">
+          <ScoreChip label="SEO" value={scores.seo} />
+          <ScoreChip label="社媒" value={scores.social} />
+          <ScoreChip label="口碑" value={scores.reputation} />
+          <ScoreChip label="AI可见" value={scores.ai_visibility} />
+          <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold bg-gray-100 text-gray-700">
+            综合 {scores.overall}
+          </span>
+        </div>
+      )}
     </div>
   )
 }
