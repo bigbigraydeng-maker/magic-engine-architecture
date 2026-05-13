@@ -36,8 +36,10 @@ import {
 
 export const HUATUO_AGENT_VERSION = '1.0.0'
 
-const MAX_OUTPUT_TOKENS_GENERATION = 4096
-const MAX_OUTPUT_TOKENS_SELFGRADE = 1024
+// Sonnet 4.5 supports up to 8192 output tokens. 3 阶段中文处方含 FDE 字段
+// 经常超过 4096 → 必须用 8192，否则 JSON 被截断在中间数组里。
+const MAX_OUTPUT_TOKENS_GENERATION = 8192
+const MAX_OUTPUT_TOKENS_SELFGRADE = 2048
 
 const REFINE_THRESHOLD = 7.0       // 自评低于此分触发 refine
 const MAX_PASSES = 2                // 最多生成两次（不含 self-grade）
@@ -203,11 +205,28 @@ async function generatePrescription(
     system: HUATUO_GENERATION_SYSTEM_PROMPT,
     messages: [{ role: 'user', content: userPrompt }],
   })
+
+  assertNotTruncated(message, 'generation')
+
   const rawText = extractText(message.content)
   const parsed = parseJsonResponse<Partial<PrescriptionContent>>(rawText)
   return {
     content: normalizePrescriptionContent(parsed),
     usage: { input: message.usage.input_tokens, output: message.usage.output_tokens },
+  }
+}
+
+/**
+ * 提前捕获 max_tokens 截断 — 给出明确错误，而非让下游 JSON.parse 报神秘的位置错误。
+ */
+function assertNotTruncated(
+  message: { stop_reason?: string | null; usage: { output_tokens: number } },
+  stage: string,
+): void {
+  if (message.stop_reason === 'max_tokens') {
+    throw new Error(
+      `Claude 输出在 ${stage} 阶段被 max_tokens 截断（已输出 ${message.usage.output_tokens} tokens）。处方复杂度过高，请减少 action 数量或缩短 description，或在代码里继续上调 max_tokens。`
+    )
   }
 }
 
@@ -248,6 +267,7 @@ async function generatePrescriptionWithFeedback(
     system: HUATUO_GENERATION_SYSTEM_PROMPT,
     messages: [{ role: 'user', content: userPrompt }],
   })
+  assertNotTruncated(message, 'refine')
   const rawText = extractText(message.content)
   const parsed = parseJsonResponse<Partial<PrescriptionContent>>(rawText)
   return {
@@ -275,6 +295,7 @@ async function selfGradePrescription(
     system: HUATUO_SELFGRADE_SYSTEM_PROMPT,
     messages: [{ role: 'user', content: userPrompt }],
   })
+  assertNotTruncated(message, 'self-grade')
   const rawText = extractText(message.content)
   const parsed = parseJsonResponse<Partial<SelfGrade>>(rawText)
 
