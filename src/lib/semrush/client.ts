@@ -247,6 +247,67 @@ export async function getDomainMetrics(
   }
 }
 
+// Tool 8: 域名历史流量趋势（华佗 Agent 使用，P8.10.S3.2）
+export interface DomainTrendPoint {
+  /** 'YYYY-MM' 格式 */
+  month: string
+  /** 当月有机关键词数 */
+  organic_keywords: number
+  /** 当月有机流量估算 */
+  organic_traffic: number
+}
+
+/**
+ * 拉取域名过去 N 个月的有机流量和关键词数趋势。
+ * 用于华佗 Agent 把"过去实际增长率"作为 KPI target 的锚点。
+ *
+ * @param months 拉取月数（默认 12）。SEMrush 实际可拉 ~24 个月。
+ * @returns 按时间升序排列（最早→最新）的趋势点；若域名无历史返回空数组。
+ */
+export async function getDomainTrafficTrend(
+  domain: string,
+  db: string = DEFAULT_DB,
+  months: number = 12,
+): Promise<DomainTrendPoint[]> {
+  const params = new URLSearchParams({
+    type: 'domain_rank_history',
+    key: getApiKey(),
+    domain,
+    database: db,
+    export_columns: 'Or,Ot,Dt',
+    display_limit: String(Math.min(months, 24)),
+    display_sort: 'dt_asc',
+  })
+
+  try {
+    const res = await fetch(`${SEMRUSH_API_BASE}/?${params}`)
+    if (!res.ok) return []
+
+    const text = await res.text()
+    const lines = text.trim().split('\n')
+    if (lines.length < 2) return []
+
+    // Header: Or;Ot;Dt; data rows follow
+    const points: DomainTrendPoint[] = []
+    for (const line of lines.slice(1)) {
+      const cols = line.split(';').map(c => c.trim())
+      // Dt format: YYYYMMDD → take YYYY-MM
+      const dt = cols[2]
+      if (!dt || dt.length < 6) continue
+      const month = `${dt.slice(0, 4)}-${dt.slice(4, 6)}`
+      points.push({
+        month,
+        organic_keywords: parseInt(cols[0]) || 0,
+        organic_traffic:  parseInt(cols[1]) || 0,
+      })
+    }
+    return points
+  } catch (err) {
+    console.error('[semrush] getDomainTrafficTrend error', err)
+    return []
+  }
+}
+
 function normalizeIntent(raw?: string): string {
   const map: Record<string, string> = {
     '0': 'informational',

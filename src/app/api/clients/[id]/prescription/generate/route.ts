@@ -88,7 +88,7 @@ export async function POST(
           agent_version:     result.meta.agent_version,
           self_grade:        result.self_grade,
           benchmarks_used:   result.benchmarks_used,
-          generation_meta:   result.meta,
+          generation_meta:   { ...result.meta, trend_summary: result.trend_summary },
           generated_at:      new Date().toISOString(),
         })
         .select('id')
@@ -108,6 +108,7 @@ export async function POST(
         content: result.content,
         self_grade: result.self_grade,
         meta: result.meta,
+        trend_summary: result.trend_summary,
       })
     }
 

@@ -81,6 +81,8 @@ export interface HuatuoPrescriptionResult {
   self_grade: SelfGrade
   benchmarks_used: string[]      // industry_benchmarks.id 列表
   meta: HuatuoGenerationMeta
+  /** P8.10.S3.2: 让前端能展示"基于真实历史"的趋势卡 */
+  trend_summary: TrendSummaryLite | null
 }
 
 export interface HuatuoGenerationMeta {
@@ -100,12 +102,22 @@ export interface HuatuoLookupContext {
   benchmarks: Record<BenchmarkDimension, IndustryBenchmarkRow | null>
   /** 映射后的行业代码（null 表示没匹配到，会用通用基准） */
   industry_category: string | null
-  /** SEMrush 历史趋势（可选，P8.10.S3.2 接入） */
-  traffic_trend?: TrafficTrendPoint[]
+  /** SEMrush 历史趋势摘要（P8.10.S3.2 接入；null 表示无数据） */
+  trend_summary?: TrendSummaryLite | null
 }
 
-export interface TrafficTrendPoint {
-  month: string       // 'YYYY-MM'
-  organic_traffic: number
-  organic_keywords: number
+/**
+ * Minimal trend summary shape consumed by huatuo agent + prompts.
+ * (Full implementation in src/lib/huatuo/trends.ts to avoid circular deps.)
+ */
+export interface TrendSummaryLite {
+  has_data: boolean
+  latest: { month: string; organic_traffic: number; organic_keywords: number } | null
+  earliest: { month: string; organic_traffic: number; organic_keywords: number } | null
+  growth_pct_3m: number | null
+  growth_pct_6m: number | null
+  growth_pct_12m: number | null
+  trajectory: 'rising' | 'flat' | 'declining' | 'no_data'
+  monthly_avg_traffic: number | null
+  data_points: number
 }

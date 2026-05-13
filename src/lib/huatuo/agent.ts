@@ -23,6 +23,8 @@ import type {
 } from './types'
 import { fetchBenchmarks, extractBenchmarkIds } from './benchmarks'
 import { mapIndustryToCategory } from './industry-mapper'
+import { getDomainTrafficTrend } from '@/lib/semrush/client'
+import { summarizeTrend } from './trends'
 import {
   HUATUO_GENERATION_SYSTEM_PROMPT,
   HUATUO_SELFGRADE_SYSTEM_PROMPT,
@@ -71,17 +73,26 @@ export async function runHuatuo(
   let totalOutputTokens = 0
   let passes = 0
 
-  // ── Step 1: Lookup（基准库 + 行业映射）────────────────────────────────────
-  await onProgress('查询行业基准库…')
+  // ── Step 1: Lookup（基准库 + SEMrush 历史趋势，并行）──────────────────────
+  await onProgress('查询行业基准库 + SEMrush 历史趋势…')
   const industryCategory = mapIndustryToCategory(discovery.business.industry)
-  const benchmarks = await fetchBenchmarks(supabase, {
-    industryCategory,
-    businessSize: 'small',
-    market: 'AU_NZ',
-  })
+
+  const [benchmarks, trendPoints] = await Promise.all([
+    fetchBenchmarks(supabase, {
+      industryCategory,
+      businessSize: 'small',
+      market: 'AU_NZ',
+    }),
+    // 趋势失败不阻塞 — getDomainTrafficTrend 内部已 try/catch 返回 []
+    getDomainTrafficTrend(discovery.domain, undefined, 12),
+  ])
+
+  const trendSummary = summarizeTrend(trendPoints)
+
   const lookup: HuatuoLookupContext = {
     benchmarks,
     industry_category: industryCategory,
+    trend_summary: trendSummary,
   }
 
   // ── Step 2: Generate（pass 1）────────────────────────────────────────────
@@ -142,6 +153,7 @@ export async function runHuatuo(
     content,
     self_grade: selfGrade ?? makeDefaultGrade(),
     benchmarks_used: extractBenchmarkIds(benchmarks),
+    trend_summary: trendSummary,
     meta: {
       agent_version: HUATUO_AGENT_VERSION,
       passes,

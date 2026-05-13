@@ -10,9 +10,10 @@
 
 import type { DiscoveryReport } from '@/lib/zhangqian/types'
 import type { PrescriptionIntake, PrescriptionContent } from '@/types/diagnostic'
-import type { HuatuoLookupContext } from './types'
+import type { HuatuoLookupContext, TrendSummaryLite } from './types'
 import { formatBenchmarksForPrompt } from './benchmarks'
 import { categoryToChineseName } from './industry-mapper'
+import { formatTrendForPrompt, type TrendSummary } from './trends'
 
 // ─── Generation prompt（生成阶段）──────────────────────────────────────────────
 
@@ -192,10 +193,21 @@ export function buildHuatuoGenerationPrompt(
 
   const industryName = categoryToChineseName(lookup.industry_category)
   const benchmarksTable = formatBenchmarksForPrompt(lookup.benchmarks, industryName)
+  const trendSection = lookup.trend_summary
+    ? formatTrendForPrompt(lookup.trend_summary as TrendSummary)
+    : '## 域名历史流量趋势（SEMrush）\n\n**未拉取**（趋势数据可选）。'
 
   const priorityDims = intake.priority_dimensions.length > 0
     ? intake.priority_dimensions.join(', ')
     : '所有维度'
+
+  // 把"真实增长率"作为强硬约束写进 instructions
+  const ts = lookup.trend_summary
+  const trendConstraint = ts?.has_data && ts.growth_pct_6m != null
+    ? `\n6. 该域名过去 6 个月有机流量增长率为 ${ts.growth_pct_6m}%（轨迹：${ts.trajectory}）。SEO 类 KPI 的 6 个月目标增长不应超过 ${Math.max(ts.growth_pct_6m * 2, 30)}%（即实际增速 × 2 倍兜底 30%），否则 realism_confidence ≤ 0.4 并解释。`
+    : ts?.has_data
+      ? `\n6. 域名历史数据存在但增长率无法计算（流量基数过低）。请保守估算 target_value。`
+      : `\n6. 域名无历史数据，target_value 严格按行业 P50–P75 区间估算。`
 
   return `# 任务：为以下客户开具 90 天三阶段数字营销处方
 
@@ -214,6 +226,8 @@ ${findingsText}
 
 ${benchmarksTable}
 
+${trendSection}
+
 ## 客户意向
 - **业务目标**：${intake.business_goal}
 - **时间紧迫度**：${intake.timeline_urgency}
@@ -224,11 +238,12 @@ ${benchmarksTable}
 ## 现在生成处方 JSON
 
 记住：
-1. KPI target_value 必须引用上方基准表的 P50–P90 区间
-2. 预算分配各项之和 ≤ AUD ${intake.monthly_budget_aud}
-3. 每个 action 必须有 estimated_hours / required_skills / measurement_method / module
-4. 危机类型「${d?.crisis_type ?? '未指定'}」决定预算重心
-5. 全部中文（除枚举值）`
+1. KPI current_value 必须使用 SEMrush 趋势表的最近真实数字（如有），不要凭空估算
+2. KPI target_value 必须引用基准表的 P50–P90 区间
+3. 预算分配各项之和 ≤ AUD ${intake.monthly_budget_aud}
+4. 每个 action 必须有 estimated_hours / required_skills / measurement_method / module
+5. 危机类型「${d?.crisis_type ?? '未指定'}」决定预算重心${trendConstraint}
+7. 全部中文（除枚举值）`
 }
 
 /**

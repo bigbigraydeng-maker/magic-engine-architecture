@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import type { PrescriptionContent, PrescriptionIntake, DiagnosticDimension, PrescriptionAction } from '@/types/diagnostic'
 import type { ClientDiscoveryRow } from '@/lib/zhangqian/types'
-import type { SelfGrade, HuatuoGenerationMeta } from '@/lib/huatuo/types'
+import type { SelfGrade, HuatuoGenerationMeta, TrendSummaryLite } from '@/lib/huatuo/types'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -109,6 +109,7 @@ export default function NewPrescriptionPage() {
   const [content, setContent]                 = useState<PrescriptionContent | null>(null)
   const [selfGrade, setSelfGrade]             = useState<SelfGrade | null>(null)
   const [genMeta, setGenMeta]                 = useState<HuatuoGenerationMeta | null>(null)
+  const [trendSummary, setTrendSummary]       = useState<TrendSummaryLite | null>(null)
 
   // Approval state
   const [isApproving, setIsApproving]   = useState(false)
@@ -166,11 +167,13 @@ export default function NewPrescriptionPage() {
         content: PrescriptionContent
         self_grade?: SelfGrade
         meta?: HuatuoGenerationMeta
+        trend_summary?: TrendSummaryLite | null
       }
       setPrescriptionId(data.prescription_id)
       setContent(data.content)
       setSelfGrade(data.self_grade ?? null)
       setGenMeta(data.meta ?? null)
+      setTrendSummary(data.trend_summary ?? null)
       setStep(3)
     } catch (e) {
       setGenerateError(e instanceof Error ? e.message : '处方生成失败')
@@ -403,6 +406,11 @@ export default function NewPrescriptionPage() {
               <HuatuoMetaCard selfGrade={selfGrade} meta={genMeta} />
             )}
 
+            {/* 历史趋势卡 — 让用户看到 target_value 是基于真实历史锚定 */}
+            {trendSummary && trendSummary.has_data && (
+              <TrendCard summary={trendSummary} />
+            )}
+
             {/* Summary */}
             <div className="bg-white rounded-xl border border-gray-200 p-5">
               <h2 className="font-semibold text-gray-900 mb-2">处方摘要</h2>
@@ -632,6 +640,96 @@ function HuatuoMetaCard({
           </ul>
         </div>
       )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// TrendCard — SEMrush 12 月历史趋势（华佗 P8.10.S3.2 真实数据锚点）
+// ---------------------------------------------------------------------------
+
+const TRAJECTORY_STYLE: Record<TrendSummaryLite['trajectory'], { icon: string; label: string; cls: string }> = {
+  rising:    { icon: '📈', label: '上升',  cls: 'bg-green-50 border-green-200 text-green-800' },
+  flat:      { icon: '➡️', label: '平稳',  cls: 'bg-gray-50 border-gray-200 text-gray-700' },
+  declining: { icon: '📉', label: '下降',  cls: 'bg-red-50 border-red-200 text-red-800' },
+  no_data:   { icon: '—',  label: '无数据', cls: 'bg-gray-50 border-gray-200 text-gray-500' },
+}
+
+function TrendCard({ summary }: { summary: TrendSummaryLite }) {
+  const tj = TRAJECTORY_STYLE[summary.trajectory]
+  const growthCells: Array<{ label: string; value: number | null }> = [
+    { label: '近 3 月',  value: summary.growth_pct_3m },
+    { label: '近 6 月',  value: summary.growth_pct_6m },
+    { label: '12 月首尾', value: summary.growth_pct_12m },
+  ]
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-5">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <p className="text-sm font-semibold text-gray-900">
+            SEMrush 历史流量趋势
+          </p>
+          <p className="text-xs text-gray-400">
+            过去 {summary.data_points} 个月 · 华佗已用作 KPI 锚点
+          </p>
+        </div>
+        <span className={`shrink-0 text-xs font-semibold border rounded-full px-2.5 py-1 ${tj.cls}`}>
+          {tj.icon} {tj.label}
+        </span>
+      </div>
+
+      {/* 关键指标行 */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+        <MetricCell
+          label={`最近月（${summary.latest?.month ?? ''}）`}
+          value={summary.latest?.organic_traffic.toLocaleString() ?? '—'}
+          unit="次/月有机流量"
+        />
+        <MetricCell
+          label="月均流量"
+          value={summary.monthly_avg_traffic?.toLocaleString() ?? '—'}
+          unit="次/月"
+        />
+        <MetricCell
+          label={`最早月（${summary.earliest?.month ?? ''}）`}
+          value={summary.earliest?.organic_traffic.toLocaleString() ?? '—'}
+          unit="次/月"
+        />
+        <MetricCell
+          label="最近关键词数"
+          value={summary.latest?.organic_keywords.toLocaleString() ?? '—'}
+          unit="个"
+        />
+      </div>
+
+      {/* 增长率 chip 行 */}
+      <div className="flex flex-wrap gap-2 pt-3 border-t border-gray-100">
+        <span className="text-xs text-gray-500">实际增长率：</span>
+        {growthCells.map(c => {
+          const v = c.value
+          const cls =
+            v == null  ? 'bg-gray-100 text-gray-500' :
+            v >= 10    ? 'bg-green-100 text-green-700' :
+            v <= -10   ? 'bg-red-100 text-red-700' :
+                         'bg-amber-100 text-amber-700'
+          return (
+            <span key={c.label} className={`text-xs font-medium rounded-full px-2.5 py-0.5 tabular-nums ${cls}`}>
+              {c.label} {v == null ? '数据不足' : `${v >= 0 ? '+' : ''}${v}%`}
+            </span>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function MetricCell({ label, value, unit }: { label: string; value: string; unit: string }) {
+  return (
+    <div className="bg-gray-50 rounded-lg p-2.5">
+      <div className="text-[10px] uppercase tracking-wide text-gray-400 truncate">{label}</div>
+      <div className="text-base font-bold text-gray-900 tabular-nums leading-tight">{value}</div>
+      <div className="text-[10px] text-gray-400 mt-0.5">{unit}</div>
     </div>
   )
 }
