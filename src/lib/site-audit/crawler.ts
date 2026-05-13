@@ -187,11 +187,13 @@ export function delay(ms: number): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Discover all crawlable URLs for a domain using a four-level fallback:
- *   1. /sitemap.xml
- *   2. /sitemap_index.xml
- *   3. Sitemap directives in /robots.txt
- *   4. BFS homepage link extraction (max 50 links)
+ * Discover all crawlable URLs for a domain using a five-level fallback:
+ *   0. robots.txt check + sitemap directives
+ *   1. /sitemap.xml (direct fetch)
+ *   2. /sitemap_index.xml (direct fetch)
+ *   4. BFS homepage link extraction (direct fetch, max 50 links)
+ *   5a. Jina Reader fetch of /sitemap.xml — bypasses WAF/bot-blocking
+ *   5b. Jina Reader fetch of homepage — extracts links from markdown
  *
  * Returns unique, same-domain URLs only.
  * Returns [] if robots.txt fully blocks crawling (and logs a warning).
@@ -274,15 +276,30 @@ export async function discoverSitemapUrls(domain: string): Promise<string[]> {
     // fall through to Level 5
   }
 
-  // Level 5: Jina Reader — bypasses WAF / bot-blocking for homepage link extraction
+  // Level 5a: Jina Reader — fetch sitemap.xml bypassing WAF
+  // Jina proxies the request; the raw XML is preserved in the markdown response.
+  try {
+    const { fetchUrlAsMarkdown } = await import('../brief/jina')
+    const jinaXml = await fetchUrlAsMarkdown(`${origin}/sitemap.xml`)
+    if (jinaXml.markdown) {
+      const locs = parseLocsFromXml(jinaXml.markdown)
+      if (locs.length > 0) {
+        console.info(`[crawler] Level 5a Jina sitemap found ${locs.length} URLs for ${origin}`)
+        return dedupeAndFilter(locs, origin)
+      }
+    }
+  } catch {
+    // fall through to Level 5b
+  }
+
+  // Level 5b: Jina Reader — fetch homepage and extract same-origin links from markdown
   try {
     const { fetchUrlAsMarkdown } = await import('../brief/jina')
     const jinaResult = await fetchUrlAsMarkdown(origin)
     if (jinaResult.markdown) {
-      // Jina returns markdown; extract absolute URLs from markdown links [text](url)
       const links = extractMarkdownLinks(jinaResult.markdown, origin, MAX_BFS_LINKS)
       if (links.length > 0) {
-        console.info(`[crawler] Level 5 Jina fallback found ${links.length} URLs for ${origin}`)
+        console.info(`[crawler] Level 5b Jina homepage found ${links.length} URLs for ${origin}`)
         return links
       }
     }
