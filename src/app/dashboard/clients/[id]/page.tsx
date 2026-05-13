@@ -24,14 +24,14 @@ type ZhangqianStatus = 'loading' | 'none' | 'reviewing' | 'confirmed';
 function ScoreBar({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <div className="flex items-center gap-2 min-w-0">
-      <span className="text-xs text-gray-500 w-14 shrink-0">{label}</span>
-      <div className="flex-1 bg-gray-100 rounded-full h-1.5">
+      <span className="text-xs text-gray-500 w-12 shrink-0">{label}</span>
+      <div className="flex-1 bg-gray-100 rounded-full h-1.5 min-w-[40px]">
         <div
           className={`h-1.5 rounded-full ${color}`}
           style={{ width: `${value}%` }}
         />
       </div>
-      <span className="text-xs font-semibold text-gray-700 w-7 text-right">{value}</span>
+      <span className="text-xs font-semibold text-gray-700 w-6 text-right tabular-nums">{value}</span>
     </div>
   );
 }
@@ -159,7 +159,7 @@ function BrandHealthWidget({ clientId }: { clientId: string }) {
       </div>
 
       {scores && (
-        <div className="grid grid-cols-2 gap-x-6 gap-y-1.5">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-5 gap-y-2">
           <ScoreBar label="SEO" value={scores.seo}
             color={scores.seo >= 60 ? 'bg-green-400' : scores.seo >= 40 ? 'bg-yellow-400' : 'bg-red-400'} />
           <ScoreBar label="社媒" value={scores.social}

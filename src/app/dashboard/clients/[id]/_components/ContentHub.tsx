@@ -18,33 +18,24 @@ const TABS: { id: ContentTab; label: string }[] = [
   { id: 'marketplace',  label: '🛒 Marketplace' },
 ]
 
-// Shortcut links to key client sub-pages (shown above tabs)
+// Shortcut links to key client sub-pages (shown above tabs).
+// Note: Brand health + "生成处方" are surfaced in the Brand Health Widget on the
+// parent page; this row is just for sibling utilities (audit, execution, etc.).
 function ClientShortcuts({ clientId }: { clientId: string }) {
   return (
-    <div className="flex flex-wrap gap-2 mb-4">
+    <div className="flex flex-wrap items-center gap-2 mb-4">
+      <span className="text-xs text-gray-400 mr-1">辅助工具：</span>
       <Link
-        href={`/dashboard/clients/${clientId}/diagnostic`}
+        href={`/dashboard/clients/${clientId}/zhangqian`}
         className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
       >
-        🩺 诊断报告
+        🗺️ 张骞发现
       </Link>
       <Link
         href={`/dashboard/clients/${clientId}/site-audit/pages`}
         className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
       >
         🔍 网站审计
-      </Link>
-      <Link
-        href={`/dashboard/clients/${clientId}/strategy`}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
-      >
-        📋 策略建议
-      </Link>
-      <Link
-        href={`/dashboard/clients/${clientId}/prescription/new`}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
-      >
-        💊 生成处方
       </Link>
       <Link
         href={`/dashboard/clients/${clientId}/execution`}
