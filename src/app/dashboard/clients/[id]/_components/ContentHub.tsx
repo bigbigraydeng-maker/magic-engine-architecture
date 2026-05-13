@@ -40,6 +40,18 @@ function ClientShortcuts({ clientId }: { clientId: string }) {
       >
         📋 策略建议
       </Link>
+      <Link
+        href={`/dashboard/clients/${clientId}/prescription/new`}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
+      >
+        💊 生成处方
+      </Link>
+      <Link
+        href={`/dashboard/clients/${clientId}/execution`}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
+      >
+        📊 执行看板
+      </Link>
     </div>
   )
 }

@@ -144,10 +144,12 @@ export interface ExecutionItem {
   client_id: string
   finding_id: string | null
   dimension: DiagnosticDimension
+  phase: number
   title: string
   description: string
   fix_type: FixType
   status: ExecutionItemStatus
+  steps_json: Record<string, unknown> | null
   assigned_to: string | null
   due_date: string | null
   completed_at: string | null
@@ -158,14 +160,13 @@ export interface ExecutionItem {
 
 // ── PrescriptionIntake (§4.1) ─────────────────────────────────────────────────
 
-export type BudgetRange = 'minimal' | 'moderate' | 'significant' | 'unlimited'
+export type TimelineUrgency = 'immediate' | 'short_term' | 'long_term'
 
 export interface PrescriptionIntake {
-  client_goals: string[]
-  budget_range: BudgetRange | null
-  timeline_weeks: number | null
+  business_goal: string
+  timeline_urgency: TimelineUrgency
+  monthly_budget_aud: number
   priority_dimensions: DiagnosticDimension[]
-  existing_resources: string[]
   notes: string | null
 }
 
@@ -179,6 +180,7 @@ export interface PrescriptionAction {
   description: string
   dimension: DiagnosticDimension
   fix_type: FixType
+  phase: number
   effort: EffortLevel
   impact: EffortLevel
   finding_ids: string[]
@@ -199,8 +201,15 @@ export interface KPITarget {
   dimension: DiagnosticDimension
 }
 
+export interface BudgetAllocationItem {
+  dimension: DiagnosticDimension
+  amount_aud: number
+  percentage: number
+}
+
 export interface PrescriptionContent {
   summary: string
   phases: PrescriptionPhase[]
   kpi_targets: KPITarget[]
+  budget_allocation: BudgetAllocationItem[]
 }
