@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import type {
   ClientDiscoveryRow,
   DiscoveryJob,
@@ -467,6 +467,7 @@ function ConfirmedBanner({ onRerun }: { onRerun: () => void }) {
 export default function ZhangqianPage() {
   const params = useParams()
   const clientId = params.id as string
+  const router = useRouter()
 
   const [pageState, setPageState] = useState<PageState>('idle')
   const [discovery, setDiscovery] = useState<ClientDiscoveryRow | null>(null)
@@ -602,7 +603,8 @@ export default function ZhangqianPage() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data: ConfirmResponse = await res.json()
       if (!data.success) throw new Error(data.error ?? '确认失败')
-      setPageState('confirmed')
+      // Redirect to client workspace after confirmation
+      router.push(`/dashboard/clients/${clientId}`)
     } catch (e) {
       setPageError(e instanceof Error ? e.message : '确认失败')
     } finally {

@@ -65,9 +65,8 @@ export default function NewClientWizard() {
         })
       }
 
-      setClientId(newId)
-      setStep1(data)
-      setStep(2)
+      // Skip the manual Brief/SiteAudit steps — redirect to Zhangqian for auto-discovery
+      router.push(`/dashboard/clients/${newId}/zhangqian`)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
