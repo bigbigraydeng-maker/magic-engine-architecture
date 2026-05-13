@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-13 · 当前阶段：**P8.5 上线后 Oztop 实测发现评分缺陷 → Sprint 1 紧急修复（P8.5.19-26）+ 规划 Phase 8.10 Synthesis Layer（deep-research 级报告）**
+> 最后更新：2026-05-13 · 当前阶段：**P8.5 Sprint 1 修复完成 ✅ → 开发 Phase 8.10 张骞 Zhangqian Discovery Agent（让客户接入从 5 步降至 2 步）**
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -29,8 +29,13 @@
 ✅ Phase 8.D     DNZ诊断策略层（Stage 1✅ Stage 2✅ Stage 3✅ E2E验证✅ P8.0.7✅ P8.0.8✅ — 全部完成）
 ✅ Phase 8.1     三维内容策略分析（P8.1.1–P8.1.6 全部完成，2026-05-07）
 ⏸ Phase 8.P     Paid Social Studio（暂缓 — 待客户明确 Meta 广告需求触发）
-🔄 Phase 8.5+   Sprint 1 评分修复（P8.5.19-26，紧急 2026-05-13，~2小时）
-📋 Phase 8.10   Synthesis Layer + Deep Research 报告（Claude 主导研究合成，~9工作日）
+✅ Phase 8.5+   Sprint 1 评分修复（P8.5.19-26，2026-05-13 完成）
+🔥 Phase 8.10   Synthesis Layer + Deep Research 报告（5 Sprints，~12 工作日）
+                ├─ S0 张骞 Discovery Agent（最先做，~3 天）⭐⭐⭐
+                ├─ S2 数据源深化（~2 天）
+                ├─ S3 Synthesis 层（~3 天）
+                ├─ S4 Report Composer（~2 天）
+                └─ S5 引用/证据追溯（~1 天）
 🔄 Phase 9.0     Visual Queue UX Polish（P9.0.1✅P9.0.3✅P9.0.4-9✅ 进行中 · 待：P9.0.2+P9.0.10-17集成测试+浮动卡）
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
@@ -549,9 +554,21 @@ Publishing Hub 归档 / 排期
 
 **目标**：在 Collectors 和 Prescription 之间插入 **Synthesis Layer**，让 Claude Sonnet 把 silo 数据合成 deep-research 级别报告。
 
+**关键洞察（2026-05-13）**：对比 Cowork（Claude.ai/Claude Code）只需输入域名即可生成 deep-research 级报告，根因是 Cowork 用「研究 Agent」模式——Claude 带 Web Search/URL Fetch 工具自主发现+合成；而 Magic Engine 当前是「被动 API 客户端」模式——必须预先配置数据源。**解决方案：新增 Layer 0「张骞 Zhangqian Discovery Agent」**，在所有 Collector 前面，让 Claude 自主把「需要配置」的东西全部发现出来，彻底消除「未配置」用户体验。
+
 **新增分层**：
 
 ```
+Layer 0: 张骞 Zhangqian Discovery Agent（新增，最高优先级）— P8.10.S0 ⭐⭐⭐
+       └─ 输入：只要域名 → Claude Sonnet + Web Search + URL Fetch
+          ├─ 业务识别（名称 / 行业 / 地点 / 一句话描述）
+          ├─ 社媒发现（IG / FB / LinkedIn / YouTube / TikTok handle）
+          ├─ Google Business Profile 定位
+          ├─ 评论平台发现（GBP / ProductReview / Trustpilot）
+          ├─ 种子关键词提取（5-10 个 brand / category / long-tail）
+          ├─ 竞品发现（5-10 个 direct / adjacent / aspirational）
+          └─ AI Tracker 问句生成（10-20 个 brand / category / comparison）
+       ↓
 Layer 1: Collectors（保留并增强，见 P8.10.S2）
        ↓
 Layer 2: Synthesis（新增，Claude Sonnet）— P8.10.S3 ⭐
@@ -560,7 +577,7 @@ Layer 2: Synthesis（新增，Claude Sonnet）— P8.10.S3 ⭐
        ├─ score-explainer: 每个分数的「为什么是这分」
        └─ market-context: Anthropic Web Search 抓行业现状
        ↓
-Layer 3: Report Composer（新增，Claude Sonnet）— P8.10.S4
+Layer 3: Report Composer（新增,Claude Sonnet）— P8.10.S4
        └─ 合成 Markdown 报告（执行摘要 / 6 维度 / 竞品表 / 处方 / 证据附录）
        ↓
 Layer 4: Prescription（保留，注入 synthesis context）
@@ -568,6 +585,57 @@ Layer 4: Prescription（保留，注入 synthesis context）
 Layer 5: Export（新增）— P8.10.S5
        └─ Markdown → DOCX/PDF（用 anthropic-skills:docx）
 ```
+
+**Sprint 0 — 张骞 Zhangqian Discovery Agent（P8.10.S0，~3 天，最先做）⭐⭐⭐**
+
+> 命名由来：张骞乃汉武帝时期出使西域第一人，13 年凿空丝绸之路，首次把未知世界绘制成图。Discovery Agent 之于客户接入 = 张骞之于西域。
+
+**核心目标**：用户只输入域名 → Agent 5 分钟内交付完整客户画像 + 配置建议 → 用户一键确认/编辑后入库。**彻底取代「5 步接入向导」，简化为 2 步**。
+
+**数据库（Day 1）**：
+- [ ] **P8.10.S0.1** 新建 `client_discovery` 表
+  - 字段：`id, client_id, domain, status, payload(JSONB), generated_at, cost_usd, model, expires_at`
+  - JSONB payload 结构：`{ business, social_profiles[], gbp, review_platforms[], seed_keywords[], competitors[], ai_tracker_questions[] }`
+  - 单客户单条（UPSERT），expires_at = generated_at + 30 天
+- [ ] **P8.10.S0.2** 新建 `client_discovery_jobs` 表用于异步任务追踪（status / error_message / cost_usd / tool_call_count）
+
+**核心库（Day 2-3）**：
+- [ ] **P8.10.S0.3** `src/lib/zhangqian/types.ts` — DiscoveryReport / DiscoveredCompetitor / DiscoveredSocial 等类型
+- [ ] **P8.10.S0.4** `src/lib/zhangqian/agent.ts` — 主入口 `runZhangqian(domain): Promise<DiscoveryReport>`
+  - Claude Sonnet + Anthropic Web Search tool + URL Fetch tool（Jina Reader）
+  - System prompt 严格定义输出 JSON schema
+  - Tool loop：最多 15 轮工具调用，超过则截断
+  - 成本上限：单次 $1（超过则提前终止）
+- [ ] **P8.10.S0.5** `src/lib/zhangqian/prompts.ts` — 拆分系统提示词（business / social / competitor / keywords 四段）
+- [ ] **P8.10.S0.6** `src/lib/zhangqian/validators.ts` — Zod schema 验证 Claude 输出
+- [ ] **P8.10.S0.7** `src/lib/zhangqian/persistor.ts` — 把 DiscoveryReport 写入 `client_discovery` + 触发后续 collector
+
+**API（Day 3-4）**：
+- [ ] **P8.10.S0.8** `POST /api/clients/[id]/zhangqian/discover` — 触发异步发现（返回 202 + job_id）
+- [ ] **P8.10.S0.9** `GET /api/clients/[id]/zhangqian/status` — 轮询任务状态
+- [ ] **P8.10.S0.10** `GET /api/clients/[id]/zhangqian/latest` — 读取最新 DiscoveryReport
+- [ ] **P8.10.S0.11** `PATCH /api/clients/[id]/zhangqian/confirm` — 用户编辑确认后写入 clients/keywords/competitors 等表
+
+**前端（Day 4-5）**：
+- [ ] **P8.10.S0.12** 客户接入向导**简化为 2 步**：
+  - Step 1: 输入域名 + 「🧭 派遣张骞」按钮
+  - Step 2: 展示发现结果（卡片式，可编辑：业务信息 / 社媒 / 关键词 / 竞品 / AI 问句） → 「确认入库」
+- [ ] **P8.10.S0.13** 张骞进度面板（实时显示「正在搜索 Instagram… / 正在分析竞品官网…」）—— 复用 P9.0 的环形进度组件
+- [ ] **P8.10.S0.14** 已有客户加 `/dashboard/clients/[id]/zhangqian` 页面，可手动重跑张骞（更新过期发现）
+
+**验收标准**：
+- 输入 `oztopbuildingsupplies.com.au` → 5 分钟内交付：业务一句话描述 + IG handle + GBP + 5-10 竞品 + 10-20 关键词 + 15 AI 问句
+- 报告深度匹配 Cowork 生成的 deep research（80%+）
+- 「未配置」灰色卡片场景消失（所有维度都有数据）
+- 客户接入从 5 步降到 2 步
+
+**成本估算（每次跑张骞）**：
+- Claude Sonnet：~50K input + 5K output ≈ $0.23
+- Web Search：~15 次 ≈ $0.15
+- URL Fetch（Jina）：~10 次（免费）
+- **合计 ≈ $0.40 / 客户**（一次性 onboarding 成本）
+
+---
 
 **Sprint 2 — 数据源深化（P8.10.S2，~2 天）**：
 - [ ] **P8.10.S2.1** SEO Collector 加 DataForSEO backlinks 详情 + SERP rankings 抓取
