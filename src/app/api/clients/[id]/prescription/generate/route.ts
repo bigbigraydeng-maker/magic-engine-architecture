@@ -1,16 +1,24 @@
 /**
  * POST /api/clients/[id]/prescription/generate
  *
- * 处方生成入口。优先用「华佗 Agent」（基于张骞 discovery）；
- * 兼容旧 diagnostic_run 路径作为 fallback。
+ * **异步模式**（P8.10.S3 修复 Render 100s 请求超时）：
+ *   1. 校验输入 + discovery
+ *   2. 立即插入一行 status='generating' 的处方草稿，返回 prescription_id
+ *   3. 后台 fire-and-forget 执行华佗 agent
+ *   4. 完成后 UPDATE 处方记录（status='draft' + content + self_grade）
+ *   5. 失败时 UPDATE status='failed' + error_message
+ *
+ * 前端：拿到 prescription_id 后轮询 GET /prescription/[pId]，直到
+ * status !== 'generating'。
  *
  * Body: {
+ *   run_id?:       string   — diagnostic run（legacy）
  *   discovery_id?: string   — Zhangqian discovery（华佗主路径）
- *   run_id?:       string   — diagnostic run（legacy，调旧 generator）
  *   intake:        PrescriptionIntake
  * }
  *
- * Returns: { success, prescription_id, content, self_grade?, meta? }
+ * Returns: { success, prescription_id, status: 'generating' }   HTTP 202
+ *
  * Security: Bearer token (INTERNAL_API_KEY)
  * Reference: ROADMAP.md P8.10.S3
  */
@@ -23,7 +31,8 @@ import { runHuatuo } from '@/lib/huatuo/agent'
 import type { PrescriptionIntake } from '@/types/diagnostic'
 import type { DiscoveryReport } from '@/lib/zhangqian/types'
 
-export const maxDuration = 120 // 华佗 多步可能跑 60-90s
+// 入站请求本身只需要几秒（DB insert + dispatch background）
+export const maxDuration = 30
 
 export async function POST(
   req: NextRequest,
@@ -53,7 +62,7 @@ export async function POST(
       )
     }
 
-    // ── Path A: 华佗（Zhangqian discovery 源）───────────────────────────────
+    // ── Path A: 华佗（Zhangqian discovery 源，异步）────────────────────────
     if (body.discovery_id) {
       const { data: row, error: discErr } = await supabaseAdmin
         .from('client_discovery')
@@ -72,47 +81,43 @@ export async function POST(
         )
       }
 
-      const result = await runHuatuo(supabaseAdmin, row.payload, intake)
-
-      // Save prescription with 华佗 metadata
+      // 立即插入 generating 行
       const { data: inserted, error: insertErr } = await supabaseAdmin
         .from('prescriptions')
         .insert({
-          client_id:         clientId,
-          discovery_id:      row.id,
-          run_id:            null,
-          status:            'draft',
+          client_id:     clientId,
+          discovery_id:  row.id,
+          run_id:        null,
+          status:        'generating',
           intake,
-          content:           result.content,
-          agent_name:        'huatuo',
-          agent_version:     result.meta.agent_version,
-          self_grade:        result.self_grade,
-          benchmarks_used:   result.benchmarks_used,
-          generation_meta:   { ...result.meta, trend_summary: result.trend_summary },
-          generated_at:      new Date().toISOString(),
+          content:       null,
+          agent_name:    'huatuo',
+          progress_note: '排队中…',
+          generated_at:  new Date().toISOString(),
         })
         .select('id')
         .single<{ id: string }>()
 
       if (insertErr || !inserted) {
-        console.error('[prescription/generate] huatuo save failed', insertErr)
+        console.error('[prescription/generate] insert generating row failed', insertErr)
         return NextResponse.json(
-          { success: false, error: 'Failed to save prescription' },
+          { success: false, error: 'Failed to create prescription draft' },
           { status: 500 },
         )
       }
 
-      return NextResponse.json({
-        success: true,
-        prescription_id: inserted.id,
-        content: result.content,
-        self_grade: result.self_grade,
-        meta: result.meta,
-        trend_summary: result.trend_summary,
+      // Fire-and-forget 后台执行
+      void executeHuatuoAsync(inserted.id, clientId, row.payload, intake).catch(err => {
+        console.error('[huatuo/async] uncaught', err)
       })
+
+      return NextResponse.json(
+        { success: true, prescription_id: inserted.id, status: 'generating' },
+        { status: 202 },
+      )
     }
 
-    // ── Path B: legacy diagnostic run 源 ────────────────────────────────────
+    // ── Path B: legacy diagnostic run（同步保留）────────────────────────────
     if (body.run_id) {
       const { data: run, error: runError } = await supabaseAdmin
         .from('diagnostic_runs')
@@ -121,10 +126,7 @@ export async function POST(
         .eq('client_id', clientId)
         .single()
       if (runError || !run) {
-        return NextResponse.json(
-          { success: false, error: 'Diagnostic run not found' },
-          { status: 404 },
-        )
+        return NextResponse.json({ success: false, error: 'Diagnostic run not found' }, { status: 404 })
       }
       const { prescriptionId, content } = await generatePrescription(
         supabaseAdmin, body.run_id, clientId, intake,
@@ -137,13 +139,62 @@ export async function POST(
       { status: 400 },
     )
   } catch (err: unknown) {
-    // 详细日志：消息 + stack + cause（如有）
     const message = err instanceof Error ? err.message : String(err)
     const stack = err instanceof Error ? err.stack : undefined
     console.error('[prescription/generate] ERROR:', { message, stack, err })
     return NextResponse.json(
-      { success: false, error: message, stage: 'generate' },
+      { success: false, error: message, stage: 'generate-dispatch' },
       { status: 500 },
     )
+  }
+}
+
+// ─── Background async executor ────────────────────────────────────────────────
+
+async function executeHuatuoAsync(
+  prescriptionId: string,
+  clientId: string,
+  discovery: DiscoveryReport,
+  intake: PrescriptionIntake,
+): Promise<void> {
+  try {
+    const result = await runHuatuo(supabaseAdmin, discovery, intake, {
+      onProgress: async (note) => {
+        await supabaseAdmin
+          .from('prescriptions')
+          .update({ progress_note: note })
+          .eq('id', prescriptionId)
+          .eq('client_id', clientId)
+      },
+    })
+
+    // 成功 → 写回 draft 状态 + 完整内容
+    await supabaseAdmin
+      .from('prescriptions')
+      .update({
+        status:          'draft',
+        content:         result.content,
+        self_grade:      result.self_grade,
+        agent_version:   result.meta.agent_version,
+        benchmarks_used: result.benchmarks_used,
+        generation_meta: { ...result.meta, trend_summary: result.trend_summary },
+        progress_note:   null,
+        error_message:   null,
+      })
+      .eq('id', prescriptionId)
+      .eq('client_id', clientId)
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[huatuo/async] failed', { prescriptionId, message, err })
+
+    await supabaseAdmin
+      .from('prescriptions')
+      .update({
+        status:        'failed',
+        error_message: message,
+        progress_note: null,
+      })
+      .eq('id', prescriptionId)
+      .eq('client_id', clientId)
   }
 }

@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import type { PrescriptionContent, PrescriptionIntake, DiagnosticDimension, PrescriptionAction } from '@/types/diagnostic'
+import type { PrescriptionContent, PrescriptionIntake, DiagnosticDimension, PrescriptionAction, Prescription, PrescriptionStatus } from '@/types/diagnostic'
 import type { ClientDiscoveryRow } from '@/lib/zhangqian/types'
 import type { SelfGrade, HuatuoGenerationMeta, TrendSummaryLite } from '@/lib/huatuo/types'
 
@@ -119,6 +119,67 @@ export default function NewPrescriptionPage() {
   const [isRefining, setIsRefining]     = useState(false)
   const [refineError, setRefineError]   = useState<string | null>(null)
 
+  // 异步生成进度（华佗后台执行时实时更新）
+  const [progressNote, setProgressNote] = useState<string | null>(null)
+  const [elapsedSec, setElapsedSec]     = useState(0)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // 清理定时器
+  useEffect(() => () => {
+    if (pollRef.current) clearInterval(pollRef.current)
+    if (elapsedRef.current) clearInterval(elapsedRef.current)
+  }, [])
+
+  // 轮询处方状态直到完成或失败
+  const pollPrescriptionStatus = useCallback((pId: string, onDone: () => void, onFail: (err: string) => void) => {
+    const startTime = Date.now()
+    setElapsedSec(0)
+
+    if (elapsedRef.current) clearInterval(elapsedRef.current)
+    elapsedRef.current = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - startTime) / 1000))
+    }, 1000)
+
+    const stopAll = () => {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+      if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null }
+    }
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/clients/${clientId}/prescription/${pId}`, {
+          headers: { Authorization: `Bearer ${API_KEY}` },
+        })
+        if (!res.ok) return
+        const data = await res.json() as { prescription: Prescription }
+        const p = data.prescription
+        if (p.progress_note) setProgressNote(p.progress_note)
+        const status = p.status as PrescriptionStatus
+        if (status === 'generating') return  // 继续轮询
+        stopAll()
+        if (status === 'failed') {
+          onFail(p.error_message ?? '处方生成失败')
+          return
+        }
+        // 成功（draft / approved / 等）
+        setContent(p.content)
+        setSelfGrade((p as Prescription & { self_grade?: SelfGrade }).self_grade ?? null)
+        const meta = (p as Prescription & { generation_meta?: HuatuoGenerationMeta & { trend_summary?: TrendSummaryLite } }).generation_meta
+        if (meta) {
+          setGenMeta(meta)
+          if (meta.trend_summary) setTrendSummary(meta.trend_summary)
+        }
+        onDone()
+      } catch {
+        // 网络瞬断不停止 — 下一轮会继续
+      }
+    }
+
+    void poll()  // 立刻拉一次
+    pollRef.current = setInterval(() => { void poll() }, 3000)
+  }, [clientId])
+
   // ── Load Zhangqian discovery on mount ─────────────────────────────────────
   useEffect(() => {
     void (async () => {
@@ -144,10 +205,11 @@ export default function NewPrescriptionPage() {
     })()
   }, [clientId])
 
-  // ── Generate prescription ─────────────────────────────────────────────────
+  // ── Generate prescription (异步：dispatch + poll) ─────────────────────────
   const handleGenerate = useCallback(async () => {
     setIsGenerating(true)
     setGenerateError(null)
+    setProgressNote('排队中…')
     try {
       const intake: PrescriptionIntake = {
         business_goal:       businessGoal,
@@ -158,42 +220,47 @@ export default function NewPrescriptionPage() {
       }
       const body = discoveryId
         ? { discovery_id: discoveryId, intake }
-        : { intake }          // fallback (no source — will 400, but shouldn't reach here)
+        : { intake }
 
       const res = await fetch(`/api/clients/${clientId}/prescription/generate`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
         body:    JSON.stringify(body),
       })
-      if (!res.ok) {
-        // 把后端真实错误消息显示出来
+      // 202 也是成功——异步派遣 OK
+      if (!res.ok && res.status !== 202) {
         let errText = `HTTP ${res.status}`
         try {
           const errBody = await res.json() as { error?: string }
           if (errBody?.error) errText = `${errText} — ${errBody.error}`
-        } catch {/* response 不是 JSON 时忽略 */}
+        } catch {/* */}
         throw new Error(errText)
       }
-      const data = await res.json() as {
-        prescription_id: string
-        content: PrescriptionContent
-        self_grade?: SelfGrade
-        meta?: HuatuoGenerationMeta
-        trend_summary?: TrendSummaryLite | null
-      }
+      const data = await res.json() as { prescription_id: string; status: string }
       setPrescriptionId(data.prescription_id)
-      setContent(data.content)
-      setSelfGrade(data.self_grade ?? null)
-      setGenMeta(data.meta ?? null)
-      setTrendSummary(data.trend_summary ?? null)
-      setStep(3)
+
+      // 开始轮询直到完成
+      pollPrescriptionStatus(
+        data.prescription_id,
+        () => {                    // 成功
+          setIsGenerating(false)
+          setProgressNote(null)
+          setStep(3)
+        },
+        (err) => {                 // 失败
+          setIsGenerating(false)
+          setProgressNote(null)
+          setGenerateError(err)
+          setStep(1)
+        },
+      )
     } catch (e) {
       setGenerateError(e instanceof Error ? e.message : '处方生成失败')
-      setStep(1) // back to form on error
-    } finally {
       setIsGenerating(false)
+      setProgressNote(null)
+      setStep(1)
     }
-  }, [businessGoal, urgency, budget, priorityDims, notes, discoveryId, clientId])
+  }, [businessGoal, urgency, budget, priorityDims, notes, discoveryId, clientId, pollPrescriptionStatus])
 
   // ── Approve prescription ──────────────────────────────────────────────────
   const handleApprove = async () => {
@@ -219,35 +286,38 @@ export default function NewPrescriptionPage() {
     if (!prescriptionId) return
     setIsRefining(true)
     setRefineError(null)
+    setProgressNote('排队精修中…')
     try {
       const res = await fetch(`/api/clients/${clientId}/prescription/${prescriptionId}/refine`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
         body: JSON.stringify({}),
       })
-      if (!res.ok) {
+      if (!res.ok && res.status !== 202) {
         let errText = `HTTP ${res.status}`
         try {
           const errBody = await res.json() as { error?: string }
           if (errBody?.error) errText = `${errText} — ${errBody.error}`
-        } catch {/* ignore */}
+        } catch {/* */}
         throw new Error(errText)
       }
-      const data = await res.json() as {
-        content: PrescriptionContent
-        self_grade?: SelfGrade
-        meta?: HuatuoGenerationMeta
-        trend_summary?: TrendSummaryLite | null
-      }
-      // 用新结果替换本地状态
-      setContent(data.content)
-      setSelfGrade(data.self_grade ?? null)
-      setGenMeta(data.meta ?? null)
-      if (data.trend_summary !== undefined) setTrendSummary(data.trend_summary ?? null)
+      // 派遣成功，开始轮询
+      pollPrescriptionStatus(
+        prescriptionId,
+        () => {                    // 成功 — 新 content 已通过轮询写入 state
+          setIsRefining(false)
+          setProgressNote(null)
+        },
+        (err) => {                 // 失败
+          setIsRefining(false)
+          setProgressNote(null)
+          setRefineError(err)
+        },
+      )
     } catch (e) {
       setRefineError(e instanceof Error ? e.message : '精修失败')
-    } finally {
       setIsRefining(false)
+      setProgressNote(null)
     }
   }
 
@@ -432,16 +502,23 @@ export default function NewPrescriptionPage() {
           </div>
         )}
 
-        {/* ── Step 2: 生成中 ──────────────────────────────────────────────── */}
+        {/* ── Step 2: 异步生成中（带进度+计时）─────────────────────────────── */}
         {step === 2 && (
           <div className="bg-white rounded-xl border border-gray-200 p-12 text-center space-y-4">
             <div className="animate-spin w-10 h-10 border-4 border-indigo-400 border-t-transparent rounded-full mx-auto" />
-            <h2 className="font-semibold text-gray-900">Strategy Engine 正在分析…</h2>
-            <p className="text-sm text-gray-500">
-              正在基于品牌健康数据和业务目标，生成个性化三阶段处方。通常需要 15–30 秒。
+            <h2 className="font-semibold text-gray-900">华佗正在开方…</h2>
+            <p className="text-sm text-gray-500 min-h-[1.5em]">
+              {progressNote ?? '正在基于品牌健康数据和行业基准生成处方'}
             </p>
-            {isGenerating && (
-              <p className="text-xs text-gray-400">请勿关闭此页面</p>
+            <p className="text-xs text-gray-400 tabular-nums">
+              已用时 {Math.floor(elapsedSec / 60)}:{String(elapsedSec % 60).padStart(2, '0')}
+              {' · '}通常 60–150 秒
+            </p>
+            {generateError && (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {generateError}
+                <button onClick={() => setStep(1)} className="ml-2 underline">返回修改</button>
+              </div>
             )}
           </div>
         )}
@@ -457,6 +534,8 @@ export default function NewPrescriptionPage() {
                 onRefine={selfGrade.weaknesses.length > 0 ? handleRefine : undefined}
                 isRefining={isRefining}
                 refineError={refineError}
+                refineProgress={isRefining ? (progressNote ?? '排队中…') : null}
+                refineElapsedSec={isRefining ? elapsedSec : null}
               />
             )}
 
@@ -610,12 +689,16 @@ function HuatuoMetaCard({
   onRefine,
   isRefining,
   refineError,
+  refineProgress,
+  refineElapsedSec,
 }: {
   selfGrade: SelfGrade
   meta: HuatuoGenerationMeta
   onRefine?: () => void
   isRefining?: boolean
   refineError?: string | null
+  refineProgress?: string | null
+  refineElapsedSec?: number | null
 }) {
   const overall = selfGrade.overall
   const gradeColor =
@@ -680,6 +763,19 @@ function HuatuoMetaCard({
       {refineError && (
         <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs text-red-700">
           精修失败：{refineError}
+        </div>
+      )}
+
+      {/* 精修中进度提示 */}
+      {isRefining && (
+        <div className="mb-3 rounded-lg border border-indigo-200 bg-indigo-50 p-2.5 text-xs text-indigo-700 flex items-center gap-2">
+          <span className="animate-spin w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full" />
+          <span className="flex-1">{refineProgress ?? '华佗精修中…'}</span>
+          {refineElapsedSec != null && (
+            <span className="tabular-nums text-indigo-500">
+              {Math.floor(refineElapsedSec / 60)}:{String(refineElapsedSec % 60).padStart(2, '0')}
+            </span>
+          )}
         </div>
       )}
 

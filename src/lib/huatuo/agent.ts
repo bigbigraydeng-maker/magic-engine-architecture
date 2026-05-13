@@ -43,9 +43,10 @@ const MAX_OUTPUT_TOKENS_GENERATION = 8192
 const MAX_OUTPUT_TOKENS_SELFGRADE = 2048
 
 // 单次 Claude 调用硬超时（毫秒）。Anthropic SDK 默认 10 分钟 + 默认重试 2 次
-// = 最坏 30 分钟挂起。这里强制 60–75s 上限并禁用 SDK 重试。
-const CLAUDE_TIMEOUT_GENERATION_MS = 75_000
-const CLAUDE_TIMEOUT_SELFGRADE_MS = 30_000
+// = 最坏 30 分钟挂起。这里给充足空间但仍禁用 SDK 重试。
+// 现在异步执行，不再受 Render 100s 请求超时约束。
+const CLAUDE_TIMEOUT_GENERATION_MS = 240_000   // 4 分钟（中文 8192 tokens 需要 ~120s）
+const CLAUDE_TIMEOUT_SELFGRADE_MS = 90_000     // 1.5 分钟
 
 /** 给华佗专用的 Anthropic client — 显式 timeout + 禁用重试，避免挂起。 */
 function getHuatuoAnthropicClient(): Anthropic {
@@ -53,8 +54,8 @@ function getHuatuoAnthropicClient(): Anthropic {
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY environment variable is not set')
   return new Anthropic({
     apiKey,
-    timeout: CLAUDE_TIMEOUT_GENERATION_MS,  // SDK 层兜底
-    maxRetries: 1,                          // 默认是 2，太激进
+    timeout: CLAUDE_TIMEOUT_GENERATION_MS,  // SDK 层兜底（4 分钟）
+    maxRetries: 0,                          // 异步执行下我们自己控制重试
   })
 }
 

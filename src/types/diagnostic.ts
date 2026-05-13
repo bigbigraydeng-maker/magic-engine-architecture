@@ -127,17 +127,26 @@ export interface DiagnosticFinding {
 
 // ── Prescription (§2.3) ───────────────────────────────────────────────────────
 
-export type PrescriptionStatus = 'draft' | 'approved' | 'rejected' | 'superseded'
+export type PrescriptionStatus =
+  | 'generating'   // 华佗后台异步执行中
+  | 'failed'       // 异步执行失败
+  | 'draft'
+  | 'approved'
+  | 'rejected'
+  | 'superseded'
 
 export interface Prescription {
   id: string
   client_id: string
-  run_id: string
+  run_id: string | null
+  discovery_id: string | null
   status: PrescriptionStatus
   intake: PrescriptionIntake | null
   content: PrescriptionContent | null
   generated_at: string | null
   approved_at: string | null
+  error_message: string | null
+  progress_note: string | null
   created_at: string
   updated_at: string
 }
