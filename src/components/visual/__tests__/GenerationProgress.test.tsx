@@ -15,11 +15,9 @@ describe('GenerationProgress', () => {
         onCancel={() => {}}
       />
     )
-
     const stageIndicator = container.querySelector('[data-testid="stage-dots-container"]')
     const countdownText = container.querySelector('[data-testid="countdown-text"]')
     const progressRing = container.querySelector('[data-testid="progress-ring"]')
-
     expect(stageIndicator).toBeInTheDocument()
     expect(countdownText).toBeInTheDocument()
     expect(progressRing).toBeInTheDocument()
@@ -35,7 +33,6 @@ describe('GenerationProgress', () => {
         onCancel={() => {}}
       />
     )
-
     const progressRing = container.querySelector('[data-testid="progress-ring"]')
     expect(progressRing).toBeInTheDocument()
     const circles = progressRing?.querySelectorAll('circle')
@@ -52,7 +49,6 @@ describe('GenerationProgress', () => {
         onCancel={() => {}}
       />
     )
-
     const cancelButton = container.querySelector('[data-testid="cancel-button"]') as HTMLButtonElement
     expect(cancelButton?.disabled).toBe(true)
   })
@@ -67,7 +63,6 @@ describe('GenerationProgress', () => {
         onCancel={() => {}}
       />
     )
-
     const cancelButton = container.querySelector('[data-testid="cancel-button"]') as HTMLButtonElement
     expect(cancelButton?.disabled).toBe(false)
   })
@@ -75,7 +70,6 @@ describe('GenerationProgress', () => {
   it('should call onCancel when cancel button is clicked', async () => {
     const onCancel = vi.fn()
     const user = userEvent.setup()
-
     const { container } = render(
       <GenerationProgress
         currentStageIndex={0}
@@ -85,7 +79,6 @@ describe('GenerationProgress', () => {
         onCancel={onCancel}
       />
     )
-
     const cancelButton = container.querySelector('[data-testid="cancel-button"]')
     if (cancelButton) {
       await user.click(cancelButton)
@@ -103,7 +96,6 @@ describe('GenerationProgress', () => {
         onCancel={() => {}}
       />
     )
-
     const dots = container.querySelectorAll('[data-testid="stage-dot"]')
     expect(dots.length).toBe(4)
     expect(dots[2]).toHaveClass('opacity-100')
@@ -119,7 +111,6 @@ describe('GenerationProgress', () => {
         onCancel={() => {}}
       />
     )
-
     const countdownText = container.querySelector('[data-testid="countdown-text"]')
     expect(countdownText?.textContent).toMatch(/[0-9]+[ms]/)
   })
@@ -134,9 +125,7 @@ describe('GenerationProgress', () => {
         onCancel={() => {}}
       />
     )
-
     const initialText = container.querySelector('[data-testid="countdown-text"]')?.textContent
-
     rerender(
       <GenerationProgress
         currentStageIndex={1}
@@ -146,7 +135,6 @@ describe('GenerationProgress', () => {
         onCancel={() => {}}
       />
     )
-
     const updatedText = container.querySelector('[data-testid="countdown-text"]')?.textContent
     expect(updatedText).not.toBe(initialText)
   })
@@ -161,7 +149,6 @@ describe('GenerationProgress', () => {
         onCancel={() => {}}
       />
     )
-
     const progressRing = container.querySelector('[data-testid="progress-ring"]')
     expect(progressRing).toBeInTheDocument()
     const progressCircle = progressRing?.querySelectorAll('circle')[1]
@@ -178,8 +165,113 @@ describe('GenerationProgress', () => {
         onCancel={() => {}}
       />
     )
-
     const countdownText = container.querySelector('[data-testid="countdown-text"]')
     expect(countdownText?.textContent).toBe('3m 0s')
+  })
+
+  // P9.0.10 — progress ring data-value assertions
+  it('progress ring data-value is 0 when elapsed=0', () => {
+    const { container } = render(
+      <GenerationProgress
+        currentStageIndex={0}
+        totalStages={4}
+        elapsedMs={0}
+        expectedMs={180000}
+        onCancel={() => {}}
+      />
+    )
+    const circle = container.querySelector('[data-value]')
+    expect(Number(circle?.getAttribute('data-value'))).toBe(0)
+  })
+
+  it('progress ring data-value is 50 when elapsed=expectedMs/2', () => {
+    const expectedMs = 180000
+    const { container } = render(
+      <GenerationProgress
+        currentStageIndex={0}
+        totalStages={4}
+        elapsedMs={expectedMs / 2}
+        expectedMs={expectedMs}
+        onCancel={() => {}}
+      />
+    )
+    const circle = container.querySelector('[data-value]')
+    expect(Number(circle?.getAttribute('data-value'))).toBe(50)
+  })
+
+  it('progress ring data-value caps at 95 when elapsed=expectedMs', () => {
+    const expectedMs = 180000
+    const { container } = render(
+      <GenerationProgress
+        currentStageIndex={0}
+        totalStages={4}
+        elapsedMs={expectedMs}
+        expectedMs={expectedMs}
+        onCancel={() => {}}
+      />
+    )
+    const circle = container.querySelector('[data-value]')
+    const val = Number(circle?.getAttribute('data-value'))
+    expect(val).toBeLessThanOrEqual(95)
+    expect(val).toBeGreaterThan(90)
+  })
+
+  it('cancel button disabled when elapsed < 1.5x expected (P9.0.10)', () => {
+    const { container } = render(
+      <GenerationProgress
+        currentStageIndex={0}
+        totalStages={4}
+        elapsedMs={Math.floor(180000 * 1.4)}
+        expectedMs={180000}
+        onCancel={() => {}}
+      />
+    )
+    const btn = container.querySelector('[data-testid="cancel-button"]') as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+  })
+
+  it('cancel button enabled when elapsed >= 1.5x expected (P9.0.10)', () => {
+    const { container } = render(
+      <GenerationProgress
+        currentStageIndex={0}
+        totalStages={4}
+        elapsedMs={180000 * 1.5}
+        expectedMs={180000}
+        onCancel={() => {}}
+      />
+    )
+    const btn = container.querySelector('[data-testid="cancel-button"]') as HTMLButtonElement
+    expect(btn.disabled).toBe(false)
+  })
+
+  it('onCancel is called when enabled cancel button clicked (P9.0.10)', async () => {
+    const onCancel = vi.fn()
+    const user = userEvent.setup()
+    const { container } = render(
+      <GenerationProgress
+        currentStageIndex={0}
+        totalStages={4}
+        elapsedMs={180000 * 2}
+        expectedMs={180000}
+        onCancel={onCancel}
+      />
+    )
+    const btn = container.querySelector('[data-testid="cancel-button"]')!
+    await user.click(btn)
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders without crash when progressPercent=0 (P9.0.10)', () => {
+    expect(() =>
+      render(
+        <GenerationProgress
+          currentStageIndex={0}
+          totalStages={4}
+          elapsedMs={0}
+          expectedMs={180000}
+          onCancel={() => {}}
+        />
+      )
+    ).not.toThrow()
   })
 })

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useGenerationQueue } from '@/hooks/useGenerationQueue'
 import { GenerationQueueItem, GENERATION_CONFIG } from '@/lib/visual/generation-config'
 import { GenerationProgress } from '@/components/visual/GenerationProgress'
+import { QueueOverviewCard } from '@/components/visual/QueueOverviewCard'
 
 interface Post {
   id: string
@@ -1233,7 +1234,7 @@ export default function VisualsPage() {
             </thead>
             <tbody>
               {posts.map((post, idx) => (
-                <tr key={post.id} className="border-b border-gray-100 hover:bg-gray-50/70 align-top group">
+                <tr key={post.id} id={post.id} className="border-b border-gray-100 hover:bg-gray-50/70 align-top group">
 
                   {/* # */}
                   <td className="px-2 py-1.5 text-gray-400 text-xs border-r border-gray-100">{idx + 1}</td>
@@ -1482,6 +1483,14 @@ export default function VisualsPage() {
           </div>
         </div>
       )}
+
+      {/* Queue overview floating card */}
+      <QueueOverviewCard
+        activeGenerations={queueState.activeGenerations}
+        onScrollTo={(postId) => {
+          document.getElementById(postId)?.scrollIntoView({ behavior: 'smooth' })
+        }}
+      />
 
       {/* Toast notification */}
       {toast && (
