@@ -23,10 +23,11 @@ import { validateDiscoveryReport } from './validators'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-// Lowered to 8 calls (~$0.50) during debugging — raise back to 15 once
-// validator stabilises. Web search max_uses below is independently capped.
-const MAX_TOOL_CALLS = 8
-const MAX_COST_USD = 0.75
+// 12 iterations gives room for: homepage + social (2) + GBP/reviews + competitors (2)
+// + competitor homepages (2) + AI visibility web searches (2) + final synthesis.
+// Web search max_uses below is an independent per-tool cap.
+const MAX_TOOL_CALLS = 12
+const MAX_COST_USD = 1.0
 const MAX_OUTPUT_TOKENS = 8096
 const FETCH_URL_TIMEOUT_MS = 15_000
 
@@ -46,7 +47,7 @@ const PRICE_WEB_SEARCH_PER_CALL = 0.01
 const WEB_SEARCH_TOOL = {
   type: 'web_search_20250305',
   name: 'web_search',
-  max_uses: 5,                      // separate cap inside the 8-call budget
+  max_uses: 8,                      // separate cap inside the 12-call budget
 } as unknown as Anthropic.Messages.Tool
 
 /**
