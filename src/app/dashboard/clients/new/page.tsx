@@ -120,7 +120,7 @@ export default function NewClientWizard() {
       <div className="max-w-3xl mx-auto">
         <div className="text-center mb-10">
           <h1 className="text-3xl font-bold text-slate-900 mb-2">Add a New Client</h1>
-          <p className="text-slate-600 text-sm">5 steps · ~10 minutes</p>
+          <p className="text-slate-600 text-sm">Fill in basic info · 张骞 auto-discovers the rest (~2 min)</p>
         </div>
 
         <StepIndicator currentStep={step} totalSteps={5} labels={STEP_LABELS} />

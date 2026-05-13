@@ -100,7 +100,7 @@ export default function Step1BasicInfo({ initial, onSubmit, loading }: Props) {
           disabled={loading}
         />
         <p className="mt-1 text-xs text-slate-400">
-          We&apos;ll crawl this domain in Step 3 to build the content baseline.
+          张骞发现 Agent will auto-scan this domain and gather business intelligence.
         </p>
         {errors.domain && <p className="mt-1 text-sm text-red-600">{errors.domain}</p>}
       </div>
@@ -128,7 +128,7 @@ export default function Step1BasicInfo({ initial, onSubmit, loading }: Props) {
           disabled={loading}
           className="w-full px-6 py-3 bg-blue-500 hover:bg-blue-600 disabled:bg-slate-400 text-white font-semibold rounded-lg transition-colors"
         >
-          {loading ? 'Creating client…' : 'Continue to Step 2 →'}
+          {loading ? 'Creating client…' : 'Start Discovery →'}
         </button>
       </div>
     </form>
