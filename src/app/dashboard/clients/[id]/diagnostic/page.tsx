@@ -1,0 +1,340 @@
+'use client'
+
+import { useState, useEffect, useCallback } from 'react'
+import { useParams } from 'next/navigation'
+import { ScoreGauge } from '@/components/diagnostic/ScoreGauge'
+import { DiagnosticFindingCard } from '@/components/diagnostic/DiagnosticFindingCard'
+import { useDiagnosticStatus } from './_hooks/use-diagnostic-status'
+import type { DiagnosticRun, DiagnosticFinding, DiagnosticDimension } from '@/types/diagnostic'
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface LatestResponse {
+  success: boolean
+  run: DiagnosticRun
+  findings: DiagnosticFinding[]
+  error?: string
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''
+
+const DIMENSION_LABELS: Record<DiagnosticDimension, string> = {
+  seo:           'SEO',
+  ai_visibility: 'AI 可见度',
+  ads:           '广告',
+  social:        '社媒',
+  reputation:    '口碑',
+  competitor:    '竞品',
+}
+
+const ALL_DIMENSIONS: DiagnosticDimension[] = [
+  'seo', 'ai_visibility', 'social', 'reputation', 'competitor', 'ads',
+]
+
+const VALID_DIMENSIONS: DiagnosticDimension[] = [
+  'seo', 'ai_visibility', 'social', 'reputation', 'competitor',
+]
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function EmptyState({ onRun, isRunning }: { onRun: () => void; isRunning: boolean }) {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[400px] bg-white rounded-xl border border-gray-200 p-12 text-center">
+      <div className="text-5xl mb-4">🩺</div>
+      <h2 className="text-lg font-semibold text-gray-900 mb-2">尚未运行诊断</h2>
+      <p className="text-sm text-gray-500 mb-6 max-w-sm">
+        运行首次全面诊断，获取 SEO、AI 可见度、社媒、口碑和竞品分析的综合评分。
+      </p>
+      <button
+        onClick={onRun}
+        disabled={isRunning}
+        className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+      >
+        {isRunning ? (
+          <>
+            <span className="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+            正在运行…
+          </>
+        ) : '运行首次诊断'}
+      </button>
+    </div>
+  )
+}
+
+function DimensionFilterTabs({
+  active,
+  onChange,
+}: {
+  active: DiagnosticDimension | 'all'
+  onChange: (dim: DiagnosticDimension | 'all') => void
+}) {
+  const tabs: Array<{ key: DiagnosticDimension | 'all'; label: string }> = [
+    { key: 'all', label: '全部' },
+    ...VALID_DIMENSIONS.map(d => ({ key: d, label: DIMENSION_LABELS[d] })),
+  ]
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {tabs.map(tab => (
+        <button
+          key={tab.key}
+          onClick={() => onChange(tab.key)}
+          className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+            active === tab.key
+              ? 'bg-indigo-600 text-white'
+              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+          }`}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
+
+export default function DiagnosticPage() {
+  const params = useParams()
+  const clientId = params.id as string
+
+  const [run, setRun] = useState<DiagnosticRun | null>(null)
+  const [findings, setFindings] = useState<DiagnosticFinding[]>([])
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
+  const [pageLoading, setPageLoading] = useState(true)
+  const [pageError, setPageError] = useState<string | null>(null)
+  const [activeRunId, setActiveRunId] = useState<string | null>(null)
+  const [isLaunching, setIsLaunching] = useState(false)
+  const [dimFilter, setDimFilter] = useState<DiagnosticDimension | 'all'>('all')
+
+  // Poll active run status while running
+  const { status: pollStatus, run: polledRun } = useDiagnosticStatus(clientId, activeRunId)
+
+  // When polling completes, refresh latest data
+  useEffect(() => {
+    if (pollStatus === 'completed') {
+      setActiveRunId(null)
+      void fetchLatest()
+    }
+    if (pollStatus === 'failed') {
+      setActiveRunId(null)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pollStatus])
+
+  // Update run scores in real-time while polling
+  useEffect(() => {
+    if (polledRun && activeRunId) {
+      setRun(prev => prev ? { ...prev, ...(polledRun as Partial<DiagnosticRun>) } : prev)
+    }
+  }, [polledRun, activeRunId])
+
+  const fetchLatest = useCallback(async () => {
+    setPageLoading(true)
+    setPageError(null)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/diagnostic/latest`, {
+        headers: { Authorization: `Bearer ${API_KEY}` },
+      })
+      if (res.status === 404) {
+        setRun(null)
+        setFindings([])
+        return
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data: LatestResponse = await res.json()
+      if (data.success) {
+        setRun(data.run)
+        setFindings(data.findings ?? [])
+      }
+    } catch (e) {
+      setPageError(e instanceof Error ? e.message : '加载失败')
+    } finally {
+      setPageLoading(false)
+    }
+  }, [clientId])
+
+  useEffect(() => { void fetchLatest() }, [fetchLatest])
+
+  const handleRunDiagnostic = async () => {
+    setIsLaunching(true)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/diagnostic/run`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${API_KEY}`,
+        },
+        body: JSON.stringify({ module: 'full' }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json() as { run_id: string }
+      setActiveRunId(data.run_id)
+    } catch {
+      // non-fatal: UI stays in current state
+    } finally {
+      setIsLaunching(false)
+    }
+  }
+
+  const handleDismiss = (id: string) => {
+    setDismissedIds(prev => new Set(Array.from(prev).concat(id)))
+  }
+
+  const isRunning = Boolean(activeRunId) || pollStatus === 'running'
+
+  const visibleFindings = findings.filter(f => {
+    if (dismissedIds.has(f.id)) return false
+    if (dimFilter === 'all') return true
+    return f.dimension === dimFilter
+  })
+
+  const dimensionScores = (run?.dimension_scores ?? {}) as Partial<Record<DiagnosticDimension, number>>
+
+  // ---------------------------------------------------------------------------
+  // Render states
+  // ---------------------------------------------------------------------------
+
+  if (pageLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6 animate-pulse">
+        <div className="max-w-5xl mx-auto space-y-6">
+          <div className="h-7 w-48 bg-gray-200 rounded" />
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="h-24 rounded-xl bg-gray-200" />
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (pageError) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-6">
+        <div className="max-w-5xl mx-auto">
+          <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-center text-sm text-red-700">
+            {pageError}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <div className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-10">
+        <div className="max-w-5xl mx-auto flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-semibold text-gray-900">诊断报告</h1>
+            {run?.completed_at && (
+              <p className="text-xs text-gray-400 mt-0.5">
+                上次运行：{new Date(run.completed_at).toLocaleString('zh-CN', { timeZone: 'Pacific/Auckland' })}
+              </p>
+            )}
+          </div>
+          <button
+            onClick={() => void handleRunDiagnostic()}
+            disabled={isRunning || isLaunching}
+            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {isRunning || isLaunching ? (
+              <>
+                <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full" />
+                运行中…
+              </>
+            ) : run ? '运行新诊断' : '运行首次诊断'}
+          </button>
+        </div>
+      </div>
+
+      <div className="max-w-5xl mx-auto px-6 py-6 space-y-6">
+        {/* Empty state */}
+        {!run && !isRunning && (
+          <EmptyState onRun={() => void handleRunDiagnostic()} isRunning={isLaunching} />
+        )}
+
+        {/* Running progress banner */}
+        {isRunning && (
+          <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 flex items-center gap-3">
+            <span className="animate-spin w-5 h-5 border-2 border-indigo-500 border-t-transparent rounded-full" />
+            <div>
+              <p className="text-sm font-semibold text-indigo-700">诊断进行中…</p>
+              <p className="text-xs text-indigo-500">正在采集 SEO、AI 可见度、社媒、口碑和竞品数据</p>
+            </div>
+          </div>
+        )}
+
+        {/* Score grid — 2×3 */}
+        {(run || isRunning) && (
+          <section>
+            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+              综合评分
+            </h2>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              {ALL_DIMENSIONS.map(dim => (
+                <ScoreGauge
+                  key={dim}
+                  score={dimensionScores[dim] ?? 0}
+                  dimension={DIMENSION_LABELS[dim]}
+                  loading={isRunning && dimensionScores[dim] === undefined}
+                />
+              ))}
+            </div>
+            {run?.overall_score != null && (
+              <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 flex items-center justify-between">
+                <span className="text-sm font-medium text-gray-700">综合得分</span>
+                <ScoreGauge score={run.overall_score} />
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* Findings */}
+        {run && findings.length > 0 && (
+          <section>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide">
+                诊断发现 ({visibleFindings.length})
+              </h2>
+            </div>
+
+            {/* Dimension filter tabs */}
+            <div className="bg-white rounded-xl border border-gray-200 p-3 mb-4">
+              <DimensionFilterTabs active={dimFilter} onChange={setDimFilter} />
+            </div>
+
+            {/* Findings list */}
+            <div className="space-y-3">
+              {visibleFindings.length === 0 ? (
+                <div className="rounded-xl border border-gray-200 bg-white p-8 text-center text-sm text-gray-400">
+                  该维度暂无发现
+                </div>
+              ) : (
+                visibleFindings.map(finding => (
+                  <DiagnosticFindingCard
+                    key={finding.id}
+                    finding={finding}
+                    onDismiss={handleDismiss}
+                  />
+                ))
+              )}
+            </div>
+          </section>
+        )}
+      </div>
+    </div>
+  )
+}
