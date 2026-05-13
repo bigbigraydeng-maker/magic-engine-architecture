@@ -1,32 +1,29 @@
 /**
  * POST /api/clients/[id]/prescription/generate
  *
- * Generates a prescription from either:
- *   A) a completed diagnostic run  → body.run_id
- *   B) a confirmed Zhangqian discovery → body.discovery_id
+ * 处方生成入口。优先用「华佗 Agent」（基于张骞 discovery）；
+ * 兼容旧 diagnostic_run 路径作为 fallback。
  *
  * Body: {
- *   run_id?:       string   — diagnostic run (legacy source)
- *   discovery_id?: string   — Zhangqian discovery (primary source)
+ *   discovery_id?: string   — Zhangqian discovery（华佗主路径）
+ *   run_id?:       string   — diagnostic run（legacy，调旧 generator）
  *   intake:        PrescriptionIntake
  * }
  *
- * Returns: { success, prescription_id, content }
+ * Returns: { success, prescription_id, content, self_grade?, meta? }
  * Security: Bearer token (INTERNAL_API_KEY)
- * Reference: ROADMAP.md P8.5.16 / P8.10.S2
+ * Reference: ROADMAP.md P8.10.S3
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireBearerToken } from '@/lib/validation-utils'
-import {
-  generatePrescription,
-  generatePrescriptionFromDiscovery,
-} from '@/lib/diagnostic/prescription-generator'
+import { generatePrescription } from '@/lib/diagnostic/prescription-generator'
+import { runHuatuo } from '@/lib/huatuo/agent'
 import type { PrescriptionIntake } from '@/types/diagnostic'
 import type { DiscoveryReport } from '@/lib/zhangqian/types'
 
-export const maxDuration = 60
+export const maxDuration = 120 // 华佗 多步可能跑 60-90s
 
 export async function POST(
   req: NextRequest,
@@ -48,7 +45,6 @@ export async function POST(
     if (!body.intake) {
       return NextResponse.json({ success: false, error: 'intake is required' }, { status: 400 })
     }
-
     const { intake } = body
     if (!intake.business_goal || typeof intake.monthly_budget_aud !== 'number') {
       return NextResponse.json(
@@ -57,7 +53,7 @@ export async function POST(
       )
     }
 
-    // ── Path A: Zhangqian discovery source ──────────────────────────────────
+    // ── Path A: 华佗（Zhangqian discovery 源）───────────────────────────────
     if (body.discovery_id) {
       const { data: row, error: discErr } = await supabaseAdmin
         .from('client_discovery')
@@ -67,10 +63,7 @@ export async function POST(
         .single<{ id: string; payload: DiscoveryReport; confirmed_at: string | null }>()
 
       if (discErr || !row) {
-        return NextResponse.json(
-          { success: false, error: 'Discovery not found' },
-          { status: 404 },
-        )
+        return NextResponse.json({ success: false, error: 'Discovery not found' }, { status: 404 })
       }
       if (!row.confirmed_at) {
         return NextResponse.json(
@@ -79,18 +72,46 @@ export async function POST(
         )
       }
 
-      const { prescriptionId, content } = await generatePrescriptionFromDiscovery(
-        supabaseAdmin,
-        row.id,
-        clientId,
-        intake,
-        row.payload,
-      )
+      const result = await runHuatuo(supabaseAdmin, row.payload, intake)
 
-      return NextResponse.json({ success: true, prescription_id: prescriptionId, content })
+      // Save prescription with 华佗 metadata
+      const { data: inserted, error: insertErr } = await supabaseAdmin
+        .from('prescriptions')
+        .insert({
+          client_id:         clientId,
+          discovery_id:      row.id,
+          run_id:            null,
+          status:            'draft',
+          intake,
+          content:           result.content,
+          agent_name:        'huatuo',
+          agent_version:     result.meta.agent_version,
+          self_grade:        result.self_grade,
+          benchmarks_used:   result.benchmarks_used,
+          generation_meta:   result.meta,
+          generated_at:      new Date().toISOString(),
+        })
+        .select('id')
+        .single<{ id: string }>()
+
+      if (insertErr || !inserted) {
+        console.error('[prescription/generate] huatuo save failed', insertErr)
+        return NextResponse.json(
+          { success: false, error: 'Failed to save prescription' },
+          { status: 500 },
+        )
+      }
+
+      return NextResponse.json({
+        success: true,
+        prescription_id: inserted.id,
+        content: result.content,
+        self_grade: result.self_grade,
+        meta: result.meta,
+      })
     }
 
-    // ── Path B: Diagnostic run source (legacy) ───────────────────────────────
+    // ── Path B: legacy diagnostic run 源 ────────────────────────────────────
     if (body.run_id) {
       const { data: run, error: runError } = await supabaseAdmin
         .from('diagnostic_runs')
@@ -98,21 +119,15 @@ export async function POST(
         .eq('id', body.run_id)
         .eq('client_id', clientId)
         .single()
-
       if (runError || !run) {
         return NextResponse.json(
           { success: false, error: 'Diagnostic run not found' },
           { status: 404 },
         )
       }
-
       const { prescriptionId, content } = await generatePrescription(
-        supabaseAdmin,
-        body.run_id,
-        clientId,
-        intake,
+        supabaseAdmin, body.run_id, clientId, intake,
       )
-
       return NextResponse.json({ success: true, prescription_id: prescriptionId, content })
     }
 
@@ -122,9 +137,7 @@ export async function POST(
     )
   } catch (err: unknown) {
     console.error('[prescription/generate] Error:', err)
-    return NextResponse.json(
-      { success: false, error: 'Failed to generate prescription' },
-      { status: 500 },
-    )
+    const message = err instanceof Error ? err.message : 'Failed to generate prescription'
+    return NextResponse.json({ success: false, error: message }, { status: 500 })
   }
 }

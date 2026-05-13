@@ -3,8 +3,9 @@
 import { useState, useCallback, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
-import type { PrescriptionContent, PrescriptionIntake, DiagnosticDimension } from '@/types/diagnostic'
+import type { PrescriptionContent, PrescriptionIntake, DiagnosticDimension, PrescriptionAction } from '@/types/diagnostic'
 import type { ClientDiscoveryRow } from '@/lib/zhangqian/types'
+import type { SelfGrade, HuatuoGenerationMeta } from '@/lib/huatuo/types'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -106,6 +107,8 @@ export default function NewPrescriptionPage() {
   const [generateError, setGenerateError]     = useState<string | null>(null)
   const [prescriptionId, setPrescriptionId]   = useState<string | null>(null)
   const [content, setContent]                 = useState<PrescriptionContent | null>(null)
+  const [selfGrade, setSelfGrade]             = useState<SelfGrade | null>(null)
+  const [genMeta, setGenMeta]                 = useState<HuatuoGenerationMeta | null>(null)
 
   // Approval state
   const [isApproving, setIsApproving]   = useState(false)
@@ -158,9 +161,16 @@ export default function NewPrescriptionPage() {
         body:    JSON.stringify(body),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = await res.json() as { prescription_id: string; content: PrescriptionContent }
+      const data = await res.json() as {
+        prescription_id: string
+        content: PrescriptionContent
+        self_grade?: SelfGrade
+        meta?: HuatuoGenerationMeta
+      }
       setPrescriptionId(data.prescription_id)
       setContent(data.content)
+      setSelfGrade(data.self_grade ?? null)
+      setGenMeta(data.meta ?? null)
       setStep(3)
     } catch (e) {
       setGenerateError(e instanceof Error ? e.message : '处方生成失败')
@@ -388,6 +398,11 @@ export default function NewPrescriptionPage() {
         {/* ── Step 3: 处方审阅 ─────────────────────────────────────────────── */}
         {step === 3 && content && (
           <div className="space-y-4">
+            {/* 华佗自评卡 — 仅当存在 self_grade 时显示 */}
+            {selfGrade && genMeta && (
+              <HuatuoMetaCard selfGrade={selfGrade} meta={genMeta} />
+            )}
+
             {/* Summary */}
             <div className="bg-white rounded-xl border border-gray-200 p-5">
               <h2 className="font-semibold text-gray-900 mb-2">处方摘要</h2>
@@ -429,39 +444,52 @@ export default function NewPrescriptionPage() {
                     <p className="text-xs text-gray-400">{phase.duration_weeks} 周</p>
                   </div>
                 </div>
-                <div className="space-y-2 pl-10">
+                <div className="space-y-3 pl-10">
                   {phase.actions.map(action => (
-                    <div key={action.id} className="flex items-start gap-2">
-                      <span className={`mt-0.5 text-xs px-2 py-0.5 rounded font-medium shrink-0 ${
-                        action.fix_type === 'me_auto'    ? 'bg-blue-100 text-blue-700' :
-                        action.fix_type === 'fde_manual' ? 'bg-purple-100 text-purple-700' :
-                                                           'bg-gray-100 text-gray-600'
-                      }`}>
-                        {action.fix_type === 'me_auto' ? 'ME' : action.fix_type === 'fde_manual' ? 'FDE' : '第三方'}
-                      </span>
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">{action.title}</p>
-                        <p className="text-xs text-gray-500 mt-0.5">{action.description}</p>
-                      </div>
-                    </div>
+                    <ActionRow key={action.id} action={action} />
                   ))}
                 </div>
               </div>
             ))}
 
-            {/* KPI targets */}
+            {/* KPI targets — 含 realism_confidence 和 timeframe */}
             {content.kpi_targets.length > 0 && (
               <div className="bg-white rounded-xl border border-gray-200 p-5">
-                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">KPI 目标</h3>
-                <div className="space-y-2">
-                  {content.kpi_targets.map((kpi, i) => (
-                    <div key={i} className="flex items-center justify-between text-sm">
-                      <span className="text-gray-700">{kpi.metric}</span>
-                      <span className="font-medium text-indigo-700">
-                        {kpi.current_value != null ? `${kpi.current_value} → ` : ''}{kpi.target_value} {kpi.unit}
-                      </span>
-                    </div>
-                  ))}
+                <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+                  KPI 目标
+                  <span className="ml-2 text-xs font-normal text-gray-400 normal-case">
+                    （绿/黄/红 = 现实性置信度）
+                  </span>
+                </h3>
+                <div className="space-y-2.5">
+                  {content.kpi_targets.map((kpi, i) => {
+                    const conf = kpi.realism_confidence
+                    const confDot =
+                      conf == null ? 'bg-gray-300' :
+                      conf >= 0.7  ? 'bg-green-400' :
+                      conf >= 0.4  ? 'bg-yellow-400' :
+                                     'bg-red-400'
+                    return (
+                      <div key={i} className="flex items-start gap-2.5">
+                        <span
+                          className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${confDot}`}
+                          title={conf != null ? `现实性置信度 ${(conf * 100).toFixed(0)}%` : '无置信度数据'}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-baseline justify-between gap-3">
+                            <span className="text-sm text-gray-800">{kpi.metric}</span>
+                            <span className="text-sm font-medium text-indigo-700 shrink-0 tabular-nums">
+                              {kpi.current_value != null ? `${kpi.current_value} → ` : ''}
+                              <strong>{kpi.target_value}</strong> {kpi.unit}
+                            </span>
+                          </div>
+                          {kpi.timeframe && (
+                            <p className="text-xs text-gray-400 mt-0.5">⏱ {kpi.timeframe}</p>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )}
@@ -496,6 +524,180 @@ export default function NewPrescriptionPage() {
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// 华佗 自评卡 — 显示在审阅页顶部，让 FDE 一眼看到处方质量
+// ---------------------------------------------------------------------------
+
+const GRADE_LABELS: Record<keyof SelfGrade['dimensions'], string> = {
+  realism:          '现实性',
+  completeness:     '完整性',
+  fde_actionability:'FDE可执行性',
+  roi_alignment:    'ROI合理性',
+  prioritization:   '优先级',
+  resource_match:   '资源匹配',
+  innovation:       '创新性',
+}
+
+function HuatuoMetaCard({
+  selfGrade,
+  meta,
+}: {
+  selfGrade: SelfGrade
+  meta: HuatuoGenerationMeta
+}) {
+  const overall = selfGrade.overall
+  const gradeColor =
+    overall >= 8 ? 'text-green-700 bg-green-50 border-green-200' :
+    overall >= 6 ? 'text-amber-700 bg-amber-50 border-amber-200' :
+                   'text-red-700 bg-red-50 border-red-200'
+  const gradeLabel =
+    overall >= 8 ? '高质量' :
+    overall >= 6 ? '可接受' :
+                   '需注意'
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-5">
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div className="flex items-center gap-3">
+          <div className={`px-3 py-1.5 rounded-lg border font-bold text-lg tabular-nums ${gradeColor}`}>
+            {overall.toFixed(1)} / 10
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-gray-900">
+              华佗自评：{gradeLabel}
+            </p>
+            <p className="text-xs text-gray-400">
+              {meta.passes === 1 ? '一次过关' : `经过 ${meta.passes} 轮精修`}
+              {' · '}
+              ${meta.cost_usd.toFixed(3)}
+              {' · '}
+              {(meta.duration_ms / 1000).toFixed(1)}s
+              {meta.industry_category_used && ` · 行业 ${meta.industry_category_used}`}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* 7 维评分网格 */}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 mb-3">
+        {(Object.keys(GRADE_LABELS) as Array<keyof typeof GRADE_LABELS>).map(key => {
+          const v = selfGrade.dimensions[key] ?? 0
+          const color =
+            v >= 8 ? 'bg-green-100 text-green-700' :
+            v >= 6 ? 'bg-amber-100 text-amber-700' :
+                     'bg-red-100 text-red-700'
+          return (
+            <div key={key} className={`rounded-md px-2 py-1.5 text-center ${color}`}>
+              <div className="text-[10px] uppercase tracking-wide opacity-75">{GRADE_LABELS[key]}</div>
+              <div className="text-sm font-bold tabular-nums">{v}</div>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* 薄弱点 */}
+      {selfGrade.weaknesses && selfGrade.weaknesses.length > 0 && (
+        <div className="border-t border-gray-100 pt-3">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+            华佗指出的薄弱点
+          </p>
+          <ul className="text-xs text-gray-600 space-y-1">
+            {selfGrade.weaknesses.map((w, i) => (
+              <li key={i} className="flex gap-1.5">
+                <span className="text-amber-500 shrink-0">⚠</span>
+                <span>{w}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* 精修说明 */}
+      {selfGrade.improvements_made && selfGrade.improvements_made.length > 0 && (
+        <div className="border-t border-gray-100 pt-3 mt-3">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
+            本轮针对性修复
+          </p>
+          <ul className="text-xs text-gray-600 space-y-1">
+            {selfGrade.improvements_made.map((w, i) => (
+              <li key={i} className="flex gap-1.5">
+                <span className="text-green-500 shrink-0">✓</span>
+                <span>{w}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// ActionRow — 一个 action 的丰富展示（含 FDE 字段）
+// ---------------------------------------------------------------------------
+
+const MODULE_LABEL: Record<string, string> = {
+  seo_engine:        'SEO引擎',
+  social_matrix:     '社媒矩阵',
+  ads_intelligence:  '广告',
+  insight_reports:   '数据报告',
+  manual:            '手工执行',
+}
+
+function ActionRow({ action }: { action: PrescriptionAction }) {
+  const fixTypeBadge =
+    action.fix_type === 'me_auto'    ? { label: 'ME', cls: 'bg-blue-100 text-blue-700' } :
+    action.fix_type === 'fde_manual' ? { label: 'FDE', cls: 'bg-purple-100 text-purple-700' } :
+                                       { label: '第三方', cls: 'bg-gray-100 text-gray-600' }
+
+  const impactDot =
+    action.impact === 'high'   ? 'bg-green-500' :
+    action.impact === 'medium' ? 'bg-amber-500' :
+                                 'bg-gray-300'
+
+  return (
+    <div className="border border-gray-100 rounded-lg p-3 hover:border-gray-200 transition-colors">
+      <div className="flex items-start gap-2 mb-2">
+        <span className={`mt-0.5 text-xs px-2 py-0.5 rounded font-medium shrink-0 ${fixTypeBadge.cls}`}>
+          {fixTypeBadge.label}
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <p className="text-sm font-medium text-gray-900">{action.title}</p>
+            <span className={`w-1.5 h-1.5 rounded-full ${impactDot}`} title={`影响：${action.impact}`} />
+            {action.module && (
+              <span className="text-[10px] uppercase tracking-wide text-indigo-600 bg-indigo-50 rounded px-1.5 py-0.5">
+                {MODULE_LABEL[action.module] ?? action.module}
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-gray-500 mt-1 leading-relaxed">{action.description}</p>
+        </div>
+      </div>
+
+      {/* FDE 元数据行 */}
+      {(action.estimated_hours != null || action.required_skills?.length || action.measurement_method) && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-gray-500 pl-8 pt-1.5 border-t border-gray-50">
+          {action.estimated_hours != null && (
+            <span>⏱ <strong className="text-gray-700">{action.estimated_hours}h</strong></span>
+          )}
+          {action.required_skills && action.required_skills.length > 0 && (
+            <span>🛠 {action.required_skills.join(' / ')}</span>
+          )}
+          {action.measurement_method && (
+            <span title={action.measurement_method} className="truncate max-w-[300px]">
+              📏 {action.measurement_method}
+            </span>
+          )}
+          {action.dependencies && action.dependencies.length > 0 && (
+            <span className="text-amber-600">↳ 依赖 {action.dependencies.length} 项</span>
+          )}
+        </div>
+      )}
     </div>
   )
 }

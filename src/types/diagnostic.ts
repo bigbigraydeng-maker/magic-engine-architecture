@@ -192,6 +192,18 @@ export interface PrescriptionAction {
   effort: EffortLevel
   impact: EffortLevel
   finding_ids: string[]
+
+  // ── 华佗 Agent 扩展字段（P8.10.S3 FDE-ready）─────────────────────
+  /** FDE 预计工时（小时） */
+  estimated_hours?: number
+  /** 执行所需技能标签（中文，如「SEO 文案」「WordPress 开发」「Photoshop」） */
+  required_skills?: string[]
+  /** 如何度量这个动作是否生效（中文，如「GA4 月有机会话数」） */
+  measurement_method?: string
+  /** 依赖的其他 action.id（必须先完成才能做这个） */
+  dependencies?: string[]
+  /** 由哪个 Magic Engine 模块承接（决定路由到哪个工作台） */
+  module?: 'seo_engine' | 'social_matrix' | 'ads_intelligence' | 'insight_reports' | 'manual'
 }
 
 export interface PrescriptionPhase {
@@ -207,6 +219,12 @@ export interface KPITarget {
   target_value: number
   unit: string
   dimension: DiagnosticDimension
+  /** 华佗：目标对应的时间窗口（如「6 个月」） */
+  timeframe?: string
+  /** 华佗：目标值的现实性置信度 0–1（基于行业基准） */
+  realism_confidence?: number
+  /** 华佗：参考的基准 ID（来自 industry_benchmarks） */
+  benchmark_id?: string
 }
 
 export interface BudgetAllocationItem {
