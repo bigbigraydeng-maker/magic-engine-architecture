@@ -59,12 +59,30 @@ export interface SelfGradeBreakdown {
   innovation: number
 }
 
+/** 七维度的英文键 — 用作薄弱点的 dimension 标签 */
+export type SelfGradeDimension = keyof SelfGradeBreakdown
+
+export type WeaknessSeverity = 'high' | 'medium' | 'low'
+
+/**
+ * 结构化薄弱点 — 注意：这是「处方（方案）的薄弱」，不是「企业的薄弱」。
+ * 即华佗对自己开出的处方的自我质检，不是对客户的诊断。
+ */
+export interface SelfGradeWeakness {
+  /** 归属哪个评分维度（与 SelfGradeBreakdown 的键一一对应） */
+  dimension: SelfGradeDimension
+  /** 严重程度 */
+  severity: WeaknessSeverity
+  /** 中文描述，需具体到 action id / KPI 字段 */
+  text: string
+}
+
 export interface SelfGrade {
   /** 0–10 总分（七维加权平均） */
   overall: number
   dimensions: SelfGradeBreakdown
-  /** 自评出的薄弱点（中文，1–4 条） */
-  weaknesses: string[]
+  /** 处方（方案）的待改进项 — 结构化，每条挂在某个维度下 */
+  weaknesses: SelfGradeWeakness[]
   /** 如果是 refine pass，列出针对 weaknesses 做的具体调整 */
   improvements_made: string[]
 }

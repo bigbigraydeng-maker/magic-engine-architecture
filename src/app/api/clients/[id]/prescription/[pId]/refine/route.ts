@@ -17,10 +17,10 @@
 import { NextRequest } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireBearerToken } from '@/lib/validation-utils'
-import { refineHuatuoPrescription } from '@/lib/huatuo/agent'
+import { refineHuatuoPrescription, coerceWeaknesses } from '@/lib/huatuo/agent'
 import type { PrescriptionIntake, PrescriptionContent } from '@/types/diagnostic'
 import type { DiscoveryReport } from '@/lib/zhangqian/types'
-import type { SelfGrade } from '@/lib/huatuo/types'
+import type { SelfGrade, SelfGradeWeakness } from '@/lib/huatuo/types'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
@@ -83,7 +83,8 @@ export async function POST(
     return errorResponse(422, '处方数据不完整（缺 discovery / intake / content）')
   }
 
-  const previousWeaknesses = presc.self_grade?.weaknesses ?? []
+  // coerceWeaknesses 兼容 DB 里旧 prescription 的 string[] 格式
+  const previousWeaknesses = coerceWeaknesses(presc.self_grade?.weaknesses)
   if (previousWeaknesses.length === 0) {
     return errorResponse(422, '上一轮无明确薄弱点，无需精修')
   }
@@ -135,7 +136,7 @@ function makeRefineStream(
   discovery: DiscoveryReport,
   intake: PrescriptionIntake,
   previousContent: PrescriptionContent,
-  previousWeaknesses: string[],
+  previousWeaknesses: SelfGradeWeakness[],
   humanComments?: string,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder()

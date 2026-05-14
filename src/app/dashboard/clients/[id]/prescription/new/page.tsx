@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import type { PrescriptionContent, PrescriptionIntake, DiagnosticDimension, PrescriptionAction, Prescription, PrescriptionStatus } from '@/types/diagnostic'
 import type { ClientDiscoveryRow } from '@/lib/zhangqian/types'
-import type { SelfGrade, HuatuoGenerationMeta, TrendSummaryLite } from '@/lib/huatuo/types'
+import type { SelfGrade, HuatuoGenerationMeta, TrendSummaryLite, SelfGradeWeakness, SelfGradeDimension } from '@/lib/huatuo/types'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -874,6 +874,23 @@ function HuatuoMetaCard({
   selfGrade: SelfGrade
   meta: HuatuoGenerationMeta
 }) {
+  // 点击维度 chip 筛选下方待改进项；再点一次清除
+  const [activeDim, setActiveDim] = useState<SelfGradeDimension | null>(null)
+
+  // 把 weaknesses 按维度分组（兼容旧 DB 里的 string[] 格式）
+  const weaknessesByDim = ((): Record<SelfGradeDimension, SelfGradeWeakness[]> => {
+    const groups = {} as Record<SelfGradeDimension, SelfGradeWeakness[]>
+    const rawList = (selfGrade.weaknesses ?? []) as unknown as Array<string | SelfGradeWeakness>
+    for (const raw of rawList) {
+      const w: SelfGradeWeakness = typeof raw === 'string'
+        ? { dimension: 'completeness', severity: 'medium', text: raw }
+        : raw
+      if (!w || !w.text) continue
+      ;(groups[w.dimension] ??= []).push(w)
+    }
+    return groups
+  })()
+
   const overall = selfGrade.overall
   const gradeColor =
     overall >= 8 ? 'text-green-700 bg-green-50 border-green-200' :
@@ -910,37 +927,104 @@ function HuatuoMetaCard({
         </div>
       </div>
 
-      {/* 7 维评分网格 */}
+      {/* 7 维评分网格 — 可点击，点击筛选下方对应维度的待改进项 */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 mb-3">
-        {(Object.keys(GRADE_LABELS) as Array<keyof typeof GRADE_LABELS>).map(key => {
+        {(Object.keys(GRADE_LABELS) as SelfGradeDimension[]).map(key => {
           const v = selfGrade.dimensions[key] ?? 0
+          const wkCount = weaknessesByDim[key]?.length ?? 0
+          const isActive = activeDim === key
           const color =
             v >= 8 ? 'bg-green-100 text-green-700' :
             v >= 6 ? 'bg-amber-100 text-amber-700' :
                      'bg-red-100 text-red-700'
           return (
-            <div key={key} className={`rounded-md px-2 py-1.5 text-center ${color}`}>
+            <button
+              key={key}
+              type="button"
+              onClick={() => setActiveDim(isActive ? null : key)}
+              className={`relative rounded-md px-2 py-1.5 text-center transition-all ${color} ${
+                isActive ? 'ring-2 ring-indigo-500 ring-offset-1' : 'hover:opacity-80'
+              }`}
+              title={wkCount > 0 ? `${wkCount} 条待改进项 — 点击查看` : '该维度无明显问题'}
+            >
               <div className="text-[10px] uppercase tracking-wide opacity-75">{GRADE_LABELS[key]}</div>
               <div className="text-sm font-bold tabular-nums">{v}</div>
-            </div>
+              {wkCount > 0 && (
+                <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-gray-700 text-white text-[9px] font-bold flex items-center justify-center">
+                  {wkCount}
+                </span>
+              )}
+            </button>
           )
         })}
       </div>
 
-      {/* 薄弱点 */}
+      {/* 处方待改进项（华佗自检）— 按维度分组 */}
       {selfGrade.weaknesses && selfGrade.weaknesses.length > 0 && (
         <div className="border-t border-gray-100 pt-3">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">
-            华佗指出的薄弱点
-          </p>
-          <ul className="text-xs text-gray-600 space-y-1">
-            {selfGrade.weaknesses.map((w, i) => (
-              <li key={i} className="flex gap-1.5">
-                <span className="text-amber-500 shrink-0">⚠</span>
-                <span>{w}</span>
-              </li>
-            ))}
-          </ul>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+              处方待改进项 · 华佗自检
+              <span className="ml-1.5 normal-case text-gray-400 font-normal">
+                （指<strong>本方案</strong>的问题，不是客户企业的问题）
+              </span>
+            </p>
+            {activeDim && (
+              <button
+                onClick={() => setActiveDim(null)}
+                className="text-xs text-indigo-600 hover:text-indigo-800"
+              >
+                清除筛选 ✕
+              </button>
+            )}
+          </div>
+
+          {/* 按维度分组渲染（activeDim 有值时只显示该组） */}
+          <div className="space-y-2.5">
+            {(Object.keys(GRADE_LABELS) as SelfGradeDimension[])
+              .filter(dim => (activeDim ? dim === activeDim : true))
+              .filter(dim => (weaknessesByDim[dim]?.length ?? 0) > 0)
+              .map(dim => (
+                <div
+                  key={dim}
+                  className={`rounded-lg p-2.5 ${
+                    activeDim === dim ? 'bg-indigo-50 ring-1 ring-indigo-200' : 'bg-gray-50'
+                  }`}
+                >
+                  <p className="text-xs font-semibold text-gray-700 mb-1">
+                    {GRADE_LABELS[dim]}
+                    <span className="ml-1.5 text-gray-400 font-normal">
+                      （得分 {selfGrade.dimensions[dim] ?? 0}/10）
+                    </span>
+                  </p>
+                  <ul className="text-xs text-gray-600 space-y-1">
+                    {weaknessesByDim[dim].map((w, i) => {
+                      const sevDot =
+                        w.severity === 'high'   ? 'text-red-500' :
+                        w.severity === 'medium' ? 'text-amber-500' :
+                                                  'text-gray-400'
+                      const sevLabel =
+                        w.severity === 'high'   ? '严重' :
+                        w.severity === 'medium' ? '中等' :
+                                                  '轻微'
+                      return (
+                        <li key={i} className="flex gap-1.5">
+                          <span className={`shrink-0 ${sevDot}`} title={sevLabel}>●</span>
+                          <span>{w.text}</span>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              ))}
+          </div>
+
+          {/* activeDim 选中但该维度无问题 */}
+          {activeDim && (weaknessesByDim[activeDim]?.length ?? 0) === 0 && (
+            <div className="rounded-lg bg-green-50 p-2.5 text-xs text-green-700">
+              ✓ {GRADE_LABELS[activeDim]}（{selfGrade.dimensions[activeDim] ?? 0}/10）— 该维度无明显问题
+            </div>
+          )}
         </div>
       )}
 

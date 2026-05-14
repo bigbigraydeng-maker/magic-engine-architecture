@@ -10,7 +10,7 @@
 
 import type { DiscoveryReport } from '@/lib/zhangqian/types'
 import type { PrescriptionIntake, PrescriptionContent } from '@/types/diagnostic'
-import type { HuatuoLookupContext, TrendSummaryLite } from './types'
+import type { HuatuoLookupContext, TrendSummaryLite, SelfGradeWeakness } from './types'
 import { formatBenchmarksForPrompt } from './benchmarks'
 import { categoryToChineseName } from './industry-mapper'
 import { formatTrendForPrompt, type TrendSummary } from './trends'
@@ -133,6 +133,19 @@ export const HUATUO_SELFGRADE_SYSTEM_PROMPT = `你是华佗的"质检者"——�
 
 **overall 计算**：七维加权平均（realism × 1.5 + 其他 × 1.0），保留一位小数。
 
+## 关于 weaknesses（⚠️ 重要概念）
+
+weaknesses 是「**这份处方（方案）的待改进项**」，**不是客户企业的弱点**。
+即：你在自我质检自己刚开出的处方，挑出哪里还不够好。
+每条 weakness 必须挂在某个评分维度下（dimension 字段），并具体到 action id / KPI 字段。
+
+- **severity 判定**：
+  - "high" — 严重问题，处方不修不能交付（如预算严重超支、关键维度遗漏）
+  - "medium" — 明显瑕疵，建议修复（如某 KPI 偏乐观、某动作工时估算偏差）
+  - "low" — 小优化点（如措辞、排序微调）
+- 一个维度可以有 0 条或多条 weakness。得分 ≥ 9 的维度通常 0 条。
+- 总条数控制在 3–8 条，聚焦最重要的。
+
 ## 输出格式
 
 只输出原始 JSON：
@@ -148,8 +161,11 @@ export const HUATUO_SELFGRADE_SYSTEM_PROMPT = `你是华佗的"质检者"——�
     "innovation": 6
   },
   "weaknesses": [
-    "中文薄弱点 1（具体到字段或动作 id）",
-    "中文薄弱点 2"
+    {
+      "dimension": "realism|completeness|fde_actionability|roi_alignment|prioritization|resource_match|innovation",
+      "severity": "high|medium|low",
+      "text": "中文薄弱点描述，具体到 action id / KPI 字段"
+    }
   ],
   "improvements_made": []
 }
@@ -253,7 +269,7 @@ export function buildHuatuoSelfGradePrompt(
   prescription: PrescriptionContent,
   intake: PrescriptionIntake,
   lookup: HuatuoLookupContext,
-  options?: { pass?: number; previousWeaknesses?: string[] },
+  options?: { pass?: number; previousWeaknesses?: SelfGradeWeakness[] },
 ): string {
   const passNum = options?.pass ?? 1
   const prevWeaknesses = options?.previousWeaknesses ?? []
@@ -262,7 +278,7 @@ export function buildHuatuoSelfGradePrompt(
   const benchmarksTable = formatBenchmarksForPrompt(lookup.benchmarks, industryName)
 
   const prevSection = passNum > 1 && prevWeaknesses.length > 0
-    ? `\n## PASS=${passNum}\n## PREVIOUS_WEAKNESSES（上一轮自评指出的问题，本轮应已修复）\n${prevWeaknesses.map((w, i) => `${i + 1}. ${w}`).join('\n')}\n`
+    ? `\n## PASS=${passNum}\n## PREVIOUS_WEAKNESSES（上一轮自评指出的问题，本轮应已修复）\n${prevWeaknesses.map((w, i) => `${i + 1}. [${w.dimension} | ${w.severity}] ${w.text}`).join('\n')}\n`
     : `\n## PASS=${passNum}\n`
 
   return `# 任务：对以下处方做苛刻的质检评分
