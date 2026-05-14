@@ -169,10 +169,32 @@ export interface ExecutionItem {
   steps_json: Record<string, unknown> | null
   assigned_to: string | null
   due_date: string | null
+  started_at: string | null
   completed_at: string | null
   sort_order: number
   created_at: string
   updated_at: string
+}
+
+// ── ExecutionLog (鲁班执行代理 — P8.10.S4) ────────────────────────────────────
+
+export type ExecutionLogAuthor = 'fde' | 'luban' | 'system'
+export type ExecutionLogKind =
+  | 'note'           // FDE 手写进度记录
+  | 'status_change'  // 状态流转（system 自动写）
+  | 'ai_assist'      // 鲁班 AI 协助产出
+  | 'blocker'        // FDE 标记的卡点
+  | 'adjustment'     // 对 action 的调整建议
+
+export interface ExecutionLog {
+  id: string
+  execution_item_id: string
+  client_id: string
+  author: ExecutionLogAuthor
+  kind: ExecutionLogKind
+  content: string
+  meta: Record<string, unknown> | null
+  created_at: string
 }
 
 // ── PrescriptionIntake (§4.1) ─────────────────────────────────────────────────

@@ -14,7 +14,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireBearerToken } from '@/lib/validation-utils'
-import type { ExecutionItem } from '@/types/diagnostic'
+import type { ExecutionItem, ExecutionLog } from '@/types/diagnostic'
+
+export const dynamic = 'force-dynamic'
+
+/** 返回时每个 item 附带它的 logs（鲁班 P8.10.S4.1） */
+export interface ExecutionItemWithLogs extends ExecutionItem {
+  logs: ExecutionLog[]
+}
 
 export async function GET(
   req: NextRequest,
@@ -47,8 +54,36 @@ export async function GET(
       return NextResponse.json({ success: false, error: 'Failed to fetch execution items' }, { status: 500 })
     }
 
-    const items = (data ?? []) as ExecutionItem[]
-    return NextResponse.json({ success: true, items, count: items.length })
+    const baseItems = (data ?? []) as ExecutionItem[]
+
+    // 拉取这些 item 的所有 logs，一次查完按 item 分组
+    let logsByItem: Record<string, ExecutionLog[]> = {}
+    if (baseItems.length > 0) {
+      const { data: logRows, error: logErr } = await supabaseAdmin
+        .from('execution_logs')
+        .select('*')
+        .in('execution_item_id', baseItems.map(i => i.id))
+        .order('created_at', { ascending: true })
+
+      if (logErr) {
+        console.error('[execution GET] logs fetch error (non-fatal):', logErr)
+      } else {
+        logsByItem = (logRows ?? []).reduce((acc, row) => {
+          const log = row as ExecutionLog
+          ;(acc[log.execution_item_id] ??= []).push(log)
+          return acc
+        }, {} as Record<string, ExecutionLog[]>)
+      }
+    }
+
+    const items: ExecutionItemWithLogs[] = baseItems.map(it => ({
+      ...it,
+      logs: logsByItem[it.id] ?? [],
+    }))
+
+    return NextResponse.json({ success: true, items, count: items.length }, {
+      headers: { 'Cache-Control': 'no-store' },
+    })
   } catch (err: unknown) {
     console.error('[execution GET] Unexpected error:', err)
     return NextResponse.json({ success: false, error: 'An unexpected error occurred' }, { status: 500 })
