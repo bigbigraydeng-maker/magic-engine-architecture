@@ -6,6 +6,8 @@ import Link from 'next/link'
 import type { ExecutionItem, ExecutionItemStatus, ExecutionLog, PrescriptionStatus } from '@/types/diagnostic'
 import { LubanChatDrawer } from './_components/LubanChatDrawer'
 import { InlinePrescriptionDrawer } from './_components/InlinePrescriptionDrawer'
+import { ProjectLubanDrawer } from './_components/ProjectLubanDrawer'
+import { ProjectReviewDrawer } from './_components/ProjectReviewDrawer'
 
 interface PrescriptionMeta {
   id: string
@@ -671,6 +673,9 @@ export default function ExecutionPage() {
   const [deriveDrawer, setDeriveDrawer] = useState<
     { mode: 'supplement' | 'revision'; priorId: string; priorLabel: string } | null
   >(null)
+  // 项目级鲁班 / 三代理复盘抽屉（S5.3 / S6）
+  const [projectLubanOpen, setProjectLubanOpen] = useState(false)
+  const [reviewOpen, setReviewOpen] = useState(false)
 
   const fetchItems = useCallback(async () => {
     setLoading(true)
@@ -884,12 +889,26 @@ export default function ExecutionPage() {
             <h1 className="text-lg font-semibold text-gray-900">执行看板</h1>
             <p className="text-xs text-gray-400 mt-0.5">鲁班执行代理 · 按阶段跟踪处方落地进度</p>
           </div>
-          <Link
-            href={`/dashboard/clients/${clientId}/prescription/new`}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
-          >
-            ＋ 新处方
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setReviewOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
+            >
+              📋 复盘
+            </button>
+            <button
+              onClick={() => setProjectLubanOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
+            >
+              🔨 项目级鲁班
+            </button>
+            <Link
+              href={`/dashboard/clients/${clientId}/prescription/new`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
+            >
+              ＋ 新处方
+            </Link>
+          </div>
         </div>
       </div>
 
@@ -943,6 +962,20 @@ export default function ExecutionPage() {
           onApproved={() => void fetchItems()}
         />
       )}
+
+      {/* 项目级鲁班对话抽屉（S5.3） */}
+      <ProjectLubanDrawer
+        clientId={clientId}
+        isOpen={projectLubanOpen}
+        onClose={() => setProjectLubanOpen(false)}
+      />
+
+      {/* 三代理复盘抽屉（S6） */}
+      <ProjectReviewDrawer
+        clientId={clientId}
+        isOpen={reviewOpen}
+        onClose={() => setReviewOpen(false)}
+      />
     </div>
   )
 }
