@@ -181,10 +181,12 @@ function makeRefineStream(
         const message = err instanceof Error ? err.message : String(err)
         console.error('[huatuo/refine-stream] failed', { prescriptionId, message })
 
+        // 精修失败：原 content/self_grade 仍然是好的，把状态回滚到 draft，
+        // 只记录 error_message。用户可以继续看原处方、重试精修或直接批准。
         await supabaseAdmin
           .from('prescriptions')
           .update({
-            status:        'failed',
+            status:        'draft',           // ← 回滚到草稿（不是 failed）
             error_message: message,
             progress_note: null,
           })

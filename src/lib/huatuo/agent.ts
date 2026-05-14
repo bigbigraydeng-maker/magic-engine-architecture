@@ -411,8 +411,29 @@ async function generatePrescriptionWithFeedback(
   lookup: HuatuoLookupContext,
   feedback: { previousContent: PrescriptionContent; weaknesses: string[] },
 ): Promise<ClaudeCallResult<PrescriptionContent>> {
+  // 精修 prompt 强调"针对性修复 + 保持紧凑"
+  // 防止 Claude 看到 8 条 weaknesses 后过度扩写超出 8192 max_tokens
   const basePrompt = buildHuatuoGenerationPrompt(discovery, intake, lookup)
-  const feedbackBlock = `\n\n## 上一轮的处方与自检反馈\n\n上一轮你生成的处方有以下问题，请在本轮**针对性修复**（不要重新发明，保留好的部分，只改薄弱处）：\n\n${feedback.weaknesses.map((w, i) => `${i + 1}. ${w}`).join('\n')}\n\n上一轮处方 JSON：\n\`\`\`json\n${JSON.stringify(feedback.previousContent, null, 2)}\n\`\`\`\n\n现在输出修订后的完整处方 JSON。`
+  const feedbackBlock = `\n\n## 上一轮的处方与自检反馈
+
+上一轮你生成的处方有以下问题，请**针对性修复**（不要重新发明，保留好的部分，只改薄弱处）：
+
+${feedback.weaknesses.map((w, i) => `${i + 1}. ${w}`).join('\n')}
+
+上一轮处方 JSON（保留你认为合理的部分）：
+\`\`\`json
+${JSON.stringify(feedback.previousContent, null, 2)}
+\`\`\`
+
+## ⚠️ 输出约束（重要 — 防止超 max_tokens）
+
+1. **保持原 description 简洁度**：每个 action.description 不超过 80 字，title 不超过 20 字
+2. **不要扩写 measurement_method**：保持 1 句话，不超过 30 字
+3. **总 actions 数量不增加**：原处方有 N 个 actions，新处方 ≤ N 个
+4. **kpi_targets ≤ 8 个**：精挑关键 KPI，不堆砌
+5. **如需新增 action**，必删另一个低优先级 action（保持总数不变）
+
+现在输出**修订后的完整处方 JSON**（精炼版）。`
   const userPrompt = basePrompt + feedbackBlock
 
   const message = await client.messages.create({

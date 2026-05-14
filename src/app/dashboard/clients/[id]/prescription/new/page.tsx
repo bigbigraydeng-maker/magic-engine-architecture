@@ -258,7 +258,8 @@ export default function NewPrescriptionPage() {
         throw new Error(errText)
       }
 
-      // 流式读取
+      // 流式读取 — 任何错误（包括服务端 SSE error 事件）都通过 onError 上报
+      let streamErr: string | null = null
       const ok = await readHuatuoStream(res, {
         onStarted: (id) => setPrescriptionId(id),
         onProgress: (note) => setProgressNote(note),
@@ -268,18 +269,20 @@ export default function NewPrescriptionPage() {
           if (payload.meta) {
             setGenMeta(payload.meta)
             if (payload.meta.trend_summary) setTrendSummary(payload.meta.trend_summary)
-            // trend_summary 也可能在顶层
             if (payload.trend_summary) setTrendSummary(payload.trend_summary)
           }
           setStep(3)
         },
-        onError: (err) => {
-          throw new Error(err)
-        },
+        onError: (err) => { streamErr = err },
       })
 
-      if (!ok) {
-        throw new Error('华佗流意外关闭，请刷新页面查看处方状态')
+      if (streamErr) {
+        // 处方生成失败的情况——回到表单
+        setGenerateError(streamErr)
+        setStep(1)
+      } else if (!ok) {
+        setGenerateError('华佗流意外关闭，请刷新页面查看处方状态')
+        setStep(1)
       }
     } catch (e) {
       setGenerateError(e instanceof Error ? e.message : '处方生成失败')
@@ -340,6 +343,7 @@ export default function NewPrescriptionPage() {
         throw new Error(errText)
       }
 
+      let streamErr: string | null = null
       const ok = await readHuatuoStream(res, {
         onStarted: () => {/* prescriptionId 已知，不更新 */},
         onProgress: (note) => setProgressNote(note),
@@ -352,10 +356,11 @@ export default function NewPrescriptionPage() {
             if (payload.trend_summary) setTrendSummary(payload.trend_summary)
           }
         },
-        onError: (err) => { throw new Error(err) },
+        onError: (err) => { streamErr = err },
       })
 
-      if (!ok) throw new Error('华佗流意外关闭，请刷新页面查看处方状态')
+      if (streamErr) setRefineError(streamErr)
+      else if (!ok) setRefineError('华佗流意外关闭，请刷新页面查看处方状态')
     } catch (e) {
       setRefineError(e instanceof Error ? e.message : '精修失败')
     } finally {
@@ -748,8 +753,9 @@ async function readHuatuoStream(res: Response, handlers: HuatuoStreamHandlers): 
   const decoder = new TextDecoder('utf-8')
   let buffer = ''
   let sawDoneOrError = false
+  let streamError: string | null = null   // 把 error 事件存起来，结束后再上报
 
-  while (true) {
+  outer: while (true) {
     const { done, value } = await reader.read()
     if (done) break
     buffer += decoder.decode(value, { stream: true })
@@ -771,30 +777,40 @@ async function readHuatuoStream(res: Response, handlers: HuatuoStreamHandlers): 
       }
       if (!dataPayload) continue
 
+      // JSON.parse 失败时仅记日志、跳过——绝不影响 handler 调用
+      let parsed: { type: string } & Record<string, unknown>
       try {
-        const parsed = JSON.parse(dataPayload) as { type: string } & Record<string, unknown>
-        switch (parsed.type) {
-          case 'started':
-            handlers.onStarted?.(parsed.prescription_id as string)
-            break
-          case 'progress':
-            handlers.onProgress?.((parsed.note as string) ?? '')
-            break
-          case 'done':
-            sawDoneOrError = true
-            handlers.onDone(parsed as unknown as Parameters<HuatuoStreamHandlers['onDone']>[0])
-            break
-          case 'error':
-            sawDoneOrError = true
-            handlers.onError((parsed.error as string) ?? '未知错误')
-            break
-        }
+        parsed = JSON.parse(dataPayload) as { type: string } & Record<string, unknown>
       } catch (err) {
         console.warn('[huatuo stream] bad event JSON', dataPayload, err)
+        continue
+      }
+
+      // Handler 调用在 try/catch 外，避免吞掉 handler 内部抛出
+      switch (parsed.type) {
+        case 'started':
+          handlers.onStarted?.(parsed.prescription_id as string)
+          break
+        case 'progress':
+          handlers.onProgress?.((parsed.note as string) ?? '')
+          break
+        case 'done':
+          sawDoneOrError = true
+          handlers.onDone(parsed as unknown as Parameters<HuatuoStreamHandlers['onDone']>[0])
+          break
+        case 'error':
+          sawDoneOrError = true
+          streamError = (parsed.error as string) ?? '未知错误'
+          break outer  // 立即跳出所有循环
       }
     }
   }
 
+  // 流结束后再上报错误（避免在循环中 throw 影响后续清理）
+  if (streamError) {
+    handlers.onError(streamError)
+    return false
+  }
   return sawDoneOrError
 }
 
