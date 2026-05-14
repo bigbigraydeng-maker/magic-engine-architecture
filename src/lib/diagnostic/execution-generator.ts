@@ -103,6 +103,15 @@ interface ExecutionRow {
   sort_order:      number
 }
 
+// execution_items.finding_id 是 UUID 列。但华佗处方的 finding_ids 是
+// 张骞诊断里的字符串标识符（如 "gbp-missing"），不是真 UUID。
+// 只有合法 UUID 才填入 finding_id，否则置 null，原始字符串存到 steps_json 留溯源。
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function asUuidOrNull(v: string | undefined): string | null {
+  return v && UUID_RE.test(v) ? v : null
+}
+
 function buildExecutionRows(
   content: PrescriptionContent,
   prescriptionId: string,
@@ -112,10 +121,11 @@ function buildExecutionRows(
 
   for (const phase of content.phases) {
     phase.actions.forEach((action, idx) => {
+      const findingIds = Array.isArray(action.finding_ids) ? action.finding_ids : []
       rows.push({
         prescription_id: prescriptionId,
         client_id:       clientId,
-        finding_id:      action.finding_ids[0] ?? null,
+        finding_id:      asUuidOrNull(findingIds[0]),
         dimension:       action.dimension,
         phase:           phase.phase_number,
         title:           action.title,
@@ -123,7 +133,16 @@ function buildExecutionRows(
         fix_type:        action.fix_type,
         status:          'pending',
         sort_order:      (phase.phase_number - 1) * 100 + idx,
-        steps_json:      buildStepsJson(action),
+        // 原始 finding_ids 字符串 + 华佗 FDE 字段存进 steps_json 留溯源
+        steps_json: {
+          ...buildStepsJson(action),
+          source_finding_ids: findingIds,
+          ...(action.estimated_hours != null    ? { estimated_hours: action.estimated_hours } : {}),
+          ...(action.required_skills?.length    ? { required_skills: action.required_skills } : {}),
+          ...(action.measurement_method         ? { measurement_method: action.measurement_method } : {}),
+          ...(action.dependencies?.length       ? { dependencies: action.dependencies } : {}),
+          ...(action.module                     ? { module: action.module } : {}),
+        },
       })
     })
   }

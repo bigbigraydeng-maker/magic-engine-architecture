@@ -111,6 +111,21 @@ export async function PATCH(
       )
     }
 
+    // ── 批准：先生成 execution_items，成功后才标记 approved ──────────────
+    // （顺序很重要：若生成失败，status 保持 draft，不会卡在"已批准但无执行项"）
+    if (body.status === 'approved') {
+      try {
+        await generateExecutionItems(supabaseAdmin, pId, clientId)
+      } catch (genErr: unknown) {
+        const msg = genErr instanceof Error ? genErr.message : String(genErr)
+        console.error('[prescription PATCH] generateExecutionItems failed:', msg, genErr)
+        return NextResponse.json(
+          { success: false, error: `生成执行计划失败：${msg}` },
+          { status: 500 },
+        )
+      }
+    }
+
     // Build update payload
     const patch: Record<string, unknown> = { status: body.status }
     if (body.status === 'approved') {
@@ -132,11 +147,6 @@ export async function PATCH(
     if (updateError || !updated) {
       console.error('[prescription PATCH] Update error:', updateError)
       return NextResponse.json({ success: false, error: 'Failed to update prescription' }, { status: 500 })
-    }
-
-    // Approval → synchronously generate execution items before returning
-    if (body.status === 'approved') {
-      await generateExecutionItems(supabaseAdmin, pId, clientId)
     }
 
     return NextResponse.json({ success: true, prescription: updated })
