@@ -73,6 +73,13 @@ textarea:-webkit-autofill:focus {
 .animate-slide-in-x  { animation: slide-in-x  0.3s ease-out forwards; }
 .animate-pulse-subtle { animation: pulse-subtle 2s ease-in-out infinite; }
 
+/* 移动端底部抽屉上滑 */
+@keyframes slide-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+.animate-slide-up    { animation: slide-up    0.25s cubic-bezier(0.32, 0.72, 0, 1) forwards; }
+
 /* ── Print styles for Brief Document ── */
 @media print {
   /* Hide dashboard chrome */

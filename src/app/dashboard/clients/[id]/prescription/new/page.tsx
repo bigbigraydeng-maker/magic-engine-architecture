@@ -120,6 +120,8 @@ export default function NewPrescriptionPage() {
   const [refineError, setRefineError]   = useState<string | null>(null)
   // 人工修改建议（每次精修可选注入，作为最高优先级反馈）
   const [humanComments, setHumanComments] = useState('')
+  // 移动端「我的建议」抽屉开关
+  const [mobileFeedbackOpen, setMobileFeedbackOpen] = useState(false)
 
   // 异步生成进度（华佗后台执行时实时更新）
   const [progressNote, setProgressNote] = useState<string | null>(null)
@@ -413,16 +415,16 @@ export default function NewPrescriptionPage() {
         </div>
       </div>
 
-      <div className="max-w-3xl mx-auto px-6 py-6">
+      <div className={`mx-auto px-6 py-6 ${step === 3 ? 'max-w-3xl lg:max-w-6xl' : 'max-w-3xl'}`}>
         <StepIndicator current={step} />
 
-        {/* ── Discovery Context Card (always visible when confirmed) ────── */}
-        {!discoveryLoading && discovery && (
+        {/* ── Discovery Context Card (步骤 1/2 显示在顶部；步骤 3 移到左列内部) ── */}
+        {step !== 3 && !discoveryLoading && discovery && (
           <DiscoveryContextCard discovery={discovery} />
         )}
 
-        {/* ── No discovery warning ──────────────────────────────────────── */}
-        {!discoveryLoading && !discovery && (
+        {/* ── No discovery warning (步骤 1/2) ──────────────────────────── */}
+        {step !== 3 && !discoveryLoading && !discovery && (
           <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
             <p className="font-semibold mb-1">⚠️ 尚无确认的发现报告</p>
             <p className="text-xs">
@@ -574,9 +576,16 @@ export default function NewPrescriptionPage() {
           </div>
         )}
 
-        {/* ── Step 3: 处方审阅 ─────────────────────────────────────────────── */}
+        {/* ── Step 3: 处方审阅（双栏布局：左侧处方 + 右侧悬浮"我的建议") ── */}
         {step === 3 && content && (
-          <div className="space-y-4">
+          <div className="lg:grid lg:grid-cols-3 lg:gap-6">
+            {/* ─── 左栏：处方内容（移动端全宽） ─── */}
+            <div className="lg:col-span-2 space-y-4">
+            {/* 诊断依据 — 步骤 3 移到左栏内部 */}
+            {!discoveryLoading && discovery && (
+              <DiscoveryContextCard discovery={discovery} />
+            )}
+
             {/* 华佗自评卡 — 只显示评分 + 薄弱点。精修在「我的修改建议」卡触发 */}
             {selfGrade && genMeta && (
               <HuatuoMetaCard selfGrade={selfGrade} meta={genMeta} />
@@ -678,26 +687,14 @@ export default function NewPrescriptionPage() {
               </div>
             )}
 
-            {/* 👤 人工修改建议 — 让 FDE/顾问把人类经验注入处方 */}
-            <HumanFeedbackCard
-              comments={humanComments}
-              setComments={setHumanComments}
-              onRefine={handleRefine}
-              isRefining={isRefining}
-              refineError={refineError}
-              progress={isRefining ? (progressNote ?? '排队中…') : null}
-              elapsedSec={isRefining ? elapsedSec : null}
-              passes={genMeta?.passes ?? 1}
-            />
-
-            {/* Approval buttons */}
+            {/* Approval buttons — 批准/拒绝（不含精修，精修在右侧/抽屉里） */}
             {approveError && (
               <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
                 {approveError}
               </div>
             )}
 
-            <div className="flex gap-3 pt-2">
+            <div className="flex gap-3 pt-2 pb-20 lg:pb-2">
               <button
                 onClick={() => void handleReject()}
                 className="flex-1 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
@@ -717,9 +714,45 @@ export default function NewPrescriptionPage() {
                 ) : '✓ 批准并生成执行计划'}
               </button>
             </div>
+            </div>
+            {/* ─── 右栏：sticky"我的修改建议"（仅桌面 lg+） ─── */}
+            <aside className="hidden lg:block lg:col-span-1">
+              <div className="sticky top-20">
+                <HumanFeedbackCard
+                  comments={humanComments}
+                  setComments={setHumanComments}
+                  onRefine={handleRefine}
+                  isRefining={isRefining}
+                  refineError={refineError}
+                  progress={isRefining ? (progressNote ?? '排队中…') : null}
+                  elapsedSec={isRefining ? elapsedSec : null}
+                  passes={genMeta?.passes ?? 1}
+                />
+              </div>
+            </aside>
           </div>
         )}
       </div>
+
+      {/* ─── 移动端：浮动按钮 + 底部抽屉（lg 以下） ─── */}
+      {step === 3 && content && (
+        <MobileFeedbackSheet
+          isOpen={mobileFeedbackOpen}
+          onOpen={() => setMobileFeedbackOpen(true)}
+          onClose={() => setMobileFeedbackOpen(false)}
+          comments={humanComments}
+          setComments={setHumanComments}
+          onRefine={async () => {
+            await handleRefine()
+            setMobileFeedbackOpen(false)
+          }}
+          isRefining={isRefining}
+          refineError={refineError}
+          progress={isRefining ? (progressNote ?? '排队中…') : null}
+          elapsedSec={isRefining ? elapsedSec : null}
+          passes={genMeta?.passes ?? 1}
+        />
+      )}
     </div>
   )
 }
@@ -944,6 +977,7 @@ function HumanFeedbackCard({
   progress,
   elapsedSec,
   passes,
+  compact = false,
 }: {
   comments: string
   setComments: (s: string) => void
@@ -953,25 +987,36 @@ function HumanFeedbackCard({
   progress: string | null
   elapsedSec: number | null
   passes: number
+  compact?: boolean
 }) {
   const maxRefines = 5
   const refinesUsed = Math.max(0, passes - 1)
   const refinesLeft = Math.max(0, maxRefines - refinesUsed)
   const exhausted = refinesLeft <= 0
 
+  const containerCls = compact
+    ? 'bg-white p-0'                                          // 移动端抽屉内：无外框
+    : 'bg-white rounded-xl border-2 border-indigo-100 p-5'    // 桌面 sticky：完整卡
+
   return (
-    <div className="bg-white rounded-xl border-2 border-indigo-100 p-5">
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div className="flex items-center gap-2.5">
-          <span className="text-xl">👤</span>
-          <div>
-            <p className="text-sm font-semibold text-gray-900">我的修改建议</p>
-            <p className="text-xs text-gray-400">
-              FDE / 顾问的人类经验作为<strong className="text-indigo-700">最高优先级反馈</strong>注入华佗，
-              比 AI 自评 weaknesses 更优先采纳
-            </p>
+    <div className={containerCls}>
+      <div className={`flex items-start justify-between gap-3 ${compact ? 'mb-2' : 'mb-3'}`}>
+        {!compact && (
+          <div className="flex items-center gap-2.5">
+            <span className="text-xl">👤</span>
+            <div>
+              <p className="text-sm font-semibold text-gray-900">我的修改建议</p>
+              <p className="text-xs text-gray-400">
+                FDE / 顾问的人类经验作为<strong className="text-indigo-700">最高优先级反馈</strong>注入华佗
+              </p>
+            </div>
           </div>
-        </div>
+        )}
+        {compact && (
+          <p className="text-xs text-gray-500 flex-1">
+            FDE / 顾问的人类经验作为<strong className="text-indigo-700">最高优先级反馈</strong>注入华佗
+          </p>
+        )}
         <div className="text-xs text-gray-400 shrink-0 tabular-nums">
           已精修 {refinesUsed}/{maxRefines}
         </div>
@@ -980,7 +1025,7 @@ function HumanFeedbackCard({
       <textarea
         value={comments}
         onChange={e => setComments(e.target.value)}
-        rows={4}
+        rows={compact ? 6 : 8}
         placeholder={`例：
 
 1. 总工时还是偏高，把第二阶段博客频率从每周 2 篇降到每周 1 篇
@@ -1026,6 +1071,109 @@ function HumanFeedbackCard({
         </button>
       </div>
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// MobileFeedbackSheet — 移动端浮动按钮 + 底部抽屉（lg 以下显示）
+// ---------------------------------------------------------------------------
+
+function MobileFeedbackSheet({
+  isOpen,
+  onOpen,
+  onClose,
+  comments,
+  setComments,
+  onRefine,
+  isRefining,
+  refineError,
+  progress,
+  elapsedSec,
+  passes,
+}: {
+  isOpen: boolean
+  onOpen: () => void
+  onClose: () => void
+  comments: string
+  setComments: (s: string) => void
+  onRefine: () => void
+  isRefining: boolean
+  refineError: string | null
+  progress: string | null
+  elapsedSec: number | null
+  passes: number
+}) {
+  const hasComments = comments.trim().length > 0
+
+  // 锁定 body 滚动（抽屉打开时）
+  useEffect(() => {
+    if (!isOpen) return
+    const orig = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = orig }
+  }, [isOpen])
+
+  return (
+    <>
+      {/* 浮动按钮 — 固定在右下角，lg 以下显示 */}
+      {!isOpen && (
+        <button
+          onClick={onOpen}
+          className="lg:hidden fixed bottom-4 right-4 z-30 inline-flex items-center gap-2 rounded-full bg-indigo-600 text-white px-4 py-3 shadow-lg hover:bg-indigo-700 transition-colors"
+          aria-label="打开修改建议"
+        >
+          <span className="text-base">👤</span>
+          <span className="text-sm font-semibold">
+            {hasComments ? `修改建议（${comments.trim().split(/\n/).filter(Boolean).length} 条）` : '我的修改建议'}
+          </span>
+          {isRefining && (
+            <span className="animate-spin w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full ml-1" />
+          )}
+        </button>
+      )}
+
+      {/* 底部抽屉 + 背景遮罩 */}
+      {isOpen && (
+        <div className="lg:hidden fixed inset-0 z-40 flex flex-col justify-end">
+          {/* 背景遮罩 */}
+          <button
+            onClick={onClose}
+            aria-label="关闭"
+            className="absolute inset-0 bg-black/50 backdrop-blur-[1px]"
+          />
+          {/* 抽屉本体 — 底部上滑 */}
+          <div className="relative bg-white rounded-t-2xl shadow-2xl max-h-[85vh] flex flex-col animate-slide-up">
+            {/* 顶部 handle + 关闭 */}
+            <div className="flex items-center justify-between px-5 pt-3 pb-2 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <span className="text-lg">👤</span>
+                <h3 className="text-sm font-semibold text-gray-900">我的修改建议</h3>
+              </div>
+              <button
+                onClick={onClose}
+                className="rounded-md text-gray-400 hover:text-gray-700 px-2 py-1"
+              >
+                ✕
+              </button>
+            </div>
+            {/* 内容（可滚动） */}
+            <div className="flex-1 overflow-y-auto p-4">
+              <HumanFeedbackCard
+                comments={comments}
+                setComments={setComments}
+                onRefine={onRefine}
+                isRefining={isRefining}
+                refineError={refineError}
+                progress={progress}
+                elapsedSec={elapsedSec}
+                passes={passes}
+                compact
+              />
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   )
 }
 
