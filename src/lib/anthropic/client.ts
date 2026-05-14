@@ -158,6 +158,174 @@ export async function callClaudeChat(params: {
   return { text, input_tokens: inputTok, output_tokens: outputTok, cost_usd: costUsd }
 }
 
+// ─── callClaudeWithTools — 通用 tool loop（鲁班执行代理 P8.12.S3.1）────────────
+
+export interface ClaudeToolCall {
+  name: string
+  input: unknown
+  result: string
+  is_error: boolean
+}
+
+export interface ClaudeToolLoopResult {
+  text: string
+  input_tokens: number
+  output_tokens: number
+  cost_usd: number
+  /** 实际执行了几轮工具（不含纯文本轮） */
+  tool_rounds: number
+  /** 全部工具调用明细 — 供持久化进 meta */
+  tool_calls: ClaudeToolCall[]
+}
+
+const DEFAULT_MAX_TOOL_ROUNDS = 6
+const DEFAULT_PER_CALL_TIMEOUT_MS = 20_000
+
+/** Promise.race 硬超时兜底，避免单轮 Claude 调用挂死。 */
+function withClaudeTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label}超过 ${(ms / 1000) | 0}s 超时`)), ms),
+    ),
+  ])
+}
+
+function extractTextFromBlocks(content: Anthropic.ContentBlock[]): string {
+  return content
+    .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+    .map(b => b.text)
+    .join('')
+}
+
+function buildToolLoopResult(
+  text: string,
+  inputTok: number,
+  outputTok: number,
+  toolRounds: number,
+  toolCalls: ClaudeToolCall[],
+): ClaudeToolLoopResult {
+  const costUsd = (inputTok / 1_000_000) * PRICE_INPUT_PER_M
+    + (outputTok / 1_000_000) * PRICE_OUTPUT_PER_M
+  return {
+    text,
+    input_tokens: inputTok,
+    output_tokens: outputTok,
+    cost_usd: costUsd,
+    tool_rounds: toolRounds,
+    tool_calls: toolCalls,
+  }
+}
+
+/**
+ * Call Claude in a tool-use loop. Claude decides which tools to call; we resolve
+ * the client-side handlers and feed results back until it emits a final text
+ * answer or hits `maxToolRounds` (then one final tool-free call forces text).
+ *
+ * 通用 helper — 鲁班对话代理使用，华佗未来 tool 化也可复用。
+ * 不影响 callClaudeChat（brief refinement 仍走无工具路径）。
+ */
+export async function callClaudeWithTools(params: {
+  systemPrompt: string
+  messages: Anthropic.MessageParam[]
+  tools: Anthropic.Tool[]
+  toolHandlers: Record<string, (input: unknown) => Promise<string>>
+  maxOutputTokens?: number
+  maxToolRounds?: number
+  perCallTimeoutMs?: number
+}): Promise<ClaudeToolLoopResult> {
+  const {
+    systemPrompt, messages, tools, toolHandlers,
+    maxOutputTokens = 4096,
+    maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
+    perCallTimeoutMs = DEFAULT_PER_CALL_TIMEOUT_MS,
+  } = params
+
+  const client = getAnthropicClient()
+  const convo: Anthropic.MessageParam[] = [...messages]
+
+  let totalInput = 0
+  let totalOutput = 0
+  let toolRounds = 0
+  const toolCalls: ClaudeToolCall[] = []
+
+  for (let round = 0; round < maxToolRounds; round++) {
+    const message = await withClaudeTimeout(
+      client.messages.create({
+        model: MODEL_SONNET,
+        max_tokens: maxOutputTokens,
+        system: systemPrompt,
+        tools,
+        messages: convo,
+      }),
+      perCallTimeoutMs,
+      `Claude tool-loop 第 ${round + 1} 轮`,
+    )
+
+    totalInput += message.usage.input_tokens
+    totalOutput += message.usage.output_tokens
+    convo.push({ role: 'assistant', content: message.content })
+
+    // end_turn / max_tokens / refusal — 不再用工具，收尾返回
+    if (message.stop_reason !== 'tool_use') {
+      return buildToolLoopResult(
+        extractTextFromBlocks(message.content),
+        totalInput, totalOutput, toolRounds, toolCalls,
+      )
+    }
+
+    const toolUseBlocks = message.content.filter(
+      (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+    )
+    if (toolUseBlocks.length === 0) {
+      // stop_reason 是 tool_use 但没有 tool_use block — 轻推继续
+      convo.push({ role: 'user', content: 'Continue.' })
+      continue
+    }
+
+    toolRounds++
+    const toolResults: Anthropic.ToolResultBlockParam[] = []
+    for (const tu of toolUseBlocks) {
+      const handler = toolHandlers[tu.name]
+      if (!handler) {
+        const msg = `Unknown tool: ${tu.name}`
+        toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: msg, is_error: true })
+        toolCalls.push({ name: tu.name, input: tu.input, result: msg, is_error: true })
+        continue
+      }
+      try {
+        const result = await handler(tu.input)
+        toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: result })
+        toolCalls.push({ name: tu.name, input: tu.input, result, is_error: false })
+      } catch (err) {
+        const msg = `Tool failed: ${err instanceof Error ? err.message : String(err)}`
+        toolResults.push({ type: 'tool_result', tool_use_id: tu.id, content: msg, is_error: true })
+        toolCalls.push({ name: tu.name, input: tu.input, result: msg, is_error: true })
+      }
+    }
+    convo.push({ role: 'user', content: toolResults })
+  }
+
+  // 撞 maxToolRounds — 去掉 tools 再调一次，强制 Claude 给最终文本回复
+  const finalMessage = await withClaudeTimeout(
+    client.messages.create({
+      model: MODEL_SONNET,
+      max_tokens: maxOutputTokens,
+      system: systemPrompt,
+      messages: convo,
+    }),
+    perCallTimeoutMs,
+    'Claude tool-loop 收尾',
+  )
+  totalInput += finalMessage.usage.input_tokens
+  totalOutput += finalMessage.usage.output_tokens
+
+  return buildToolLoopResult(
+    extractTextFromBlocks(finalMessage.content),
+    totalInput, totalOutput, toolRounds, toolCalls,
+  )
+}
+
 /**
  * Parse a Claude response that should be JSON.
  * Robust extraction: finds the outermost { } block regardless of surrounding text.

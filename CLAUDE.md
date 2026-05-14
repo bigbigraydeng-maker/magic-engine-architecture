@@ -124,10 +124,11 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-12
+> 最后更新：2026-05-14
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
+| **P8.12.S3.1** | 鲁班 tool loop 升级（Phase 8.12 MVP，开发中） | ⭐⭐⭐ |
 | **P8.3.2** | Dashboard Magic Link 鉴权（防止数据泄露） | ⭐⭐ |
 | **P7.4.15** | Week 2 CTS Tours AI Tracker 复跑（2026-05-12） | ⭐⭐ |
 | **P9.0.10** | `GenerationProgress.test.tsx` 集成测试（进度环/倒计时/取消按钮）| ⭐ |

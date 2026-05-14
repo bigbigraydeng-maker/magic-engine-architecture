@@ -45,9 +45,9 @@ export function InlinePrescriptionDrawer({
 }: Props) {
   const [step, setStep] = useState<Step>('form')
 
-  // 表单
+  // 表单 — 预算可选（空 = 不涉及额外预算）
   const [goal, setGoal]       = useState('')
-  const [budget, setBudget]   = useState(1500)
+  const [budget, setBudget]   = useState<string>('')   // 字符串，空表示未填
   const [urgency, setUrgency] = useState<PrescriptionIntake['timeline_urgency']>('short_term')
   const [notes, setNotes]     = useState('')
 
@@ -78,7 +78,7 @@ export function InlinePrescriptionDrawer({
   const goalPlaceholder = mode === 'supplement'
     ? '例：客户决定也要做 LinkedIn B2B 内容，需要补充对应动作'
     : '例：客户预算砍半，需要聚焦最高 ROI 的动作，砍掉视频拍摄类'
-  const budgetLabel = mode === 'supplement' ? '本次补充的月度增量预算（AUD）' : '修订后月度预算（AUD）'
+  const budgetLabel = mode === 'supplement' ? '本次补充的月度增量预算' : '修订后月度预算'
 
   // ── 生成 ────────────────────────────────────────────────────────────────
   const handleGenerate = useCallback(async () => {
@@ -94,7 +94,8 @@ export function InlinePrescriptionDrawer({
       const intake: PrescriptionIntake = {
         business_goal:       goal.trim(),
         timeline_urgency:    urgency,
-        monthly_budget_aud:  budget,
+        // 预算可选：空 → 0（华佗理解为"不涉及额外预算，在现有资源内完成"）
+        monthly_budget_aud:  budget.trim() ? Math.max(0, Number(budget)) : 0,
         priority_dimensions: [],
         notes:               notes.trim() || null,
       }
@@ -216,17 +217,21 @@ export function InlinePrescriptionDrawer({
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">{budgetLabel} <span className="text-red-500">*</span></label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {budgetLabel} <span className="text-xs font-normal text-gray-400">（可选）</span>
+                </label>
                 <div className="flex items-center gap-2">
                   <span className="text-gray-500 text-sm">AUD $</span>
                   <input
-                    type="number" min={200} max={50000} step={100}
+                    type="number" min={0} max={50000} step={100}
                     value={budget}
-                    onChange={e => setBudget(Number(e.target.value))}
+                    onChange={e => setBudget(e.target.value)}
+                    placeholder="0"
                     className="w-36 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
                   />
                   <span className="text-xs text-gray-400">/月</span>
                 </div>
+                <p className="text-xs text-gray-400 mt-1">留空或填 0 = 本次调整不涉及额外预算</p>
               </div>
 
               <div>
@@ -354,7 +359,7 @@ export function InlinePrescriptionDrawer({
           {step === 'form' && (
             <button
               onClick={() => void handleGenerate()}
-              disabled={!goal.trim() || budget <= 0}
+              disabled={!goal.trim()}
               className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               生成{modeTitle} →
