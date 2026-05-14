@@ -147,8 +147,25 @@ export interface Prescription {
   approved_at: string | null
   error_message: string | null
   progress_note: string | null
+  /** 本处方补充了哪份处方（增量，原处方保持有效）。NULL = 原始处方 */
+  supplements_id: string | null
+  /** 本处方修订/替代了哪份处方（批准后原处方置 superseded）。NULL = 非修订 */
+  supersedes_id: string | null
   created_at: string
   updated_at: string
+}
+
+/**
+ * 华佗"补充/修订"模式的上下文 — 让华佗知道原处方做了啥、执行到哪了。
+ */
+export type PriorPrescriptionMode = 'supplement' | 'revision'
+
+export interface PriorPrescriptionContext {
+  mode: PriorPrescriptionMode
+  /** 被补充/修订的处方全文 */
+  priorContent: PrescriptionContent
+  /** 原处方的执行进度摘要（已完成/进行中/待处理 + 已完成动作清单） */
+  executionSummary: string
 }
 
 // ── ExecutionItem (§2.4) ──────────────────────────────────────────────────────

@@ -3,8 +3,16 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import type { ExecutionItem, ExecutionItemStatus, ExecutionLog } from '@/types/diagnostic'
+import type { ExecutionItem, ExecutionItemStatus, ExecutionLog, PrescriptionStatus } from '@/types/diagnostic'
 import { LubanChatDrawer } from './_components/LubanChatDrawer'
+
+interface PrescriptionMeta {
+  id: string
+  status: PrescriptionStatus
+  supplements_id: string | null
+  supersedes_id: string | null
+  generated_at: string | null
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -363,6 +371,109 @@ function PhaseAccordion({
 }
 
 // ---------------------------------------------------------------------------
+// PrescriptionGroup — 一个处方的执行项分组（P8.10.S5）
+// ---------------------------------------------------------------------------
+
+interface GroupData {
+  pid: string
+  items: ItemWithLogs[]
+  meta?: PrescriptionMeta
+  label: string
+  weight: number
+  archived: boolean
+  derivable: boolean   // 是否可派生（补充/修订）—— 仅 approved 且非归档
+}
+
+function PrescriptionGroup({
+  clientId,
+  group,
+  defaultOpen,
+  onStatusChange,
+  onAddLog,
+  onOpenChat,
+}: {
+  clientId: string
+  group: GroupData
+  defaultOpen: boolean
+  onStatusChange: (id: string, status: ExecutionItemStatus) => void
+  onAddLog: (id: string, content: string, kind: 'note' | 'blocker') => Promise<void>
+  onOpenChat: (item: ItemWithLogs) => void
+}) {
+  const { items, label, archived, derivable, pid, meta } = group
+
+  // 该处方内按 phase 分组
+  const byPhase: Record<number, ItemWithLogs[]> = {}
+  for (const it of items) {
+    ;(byPhase[it.phase ?? 1] ??= []).push(it)
+  }
+  const completed = items.filter(i => i.status === 'completed').length
+  const genDate = meta?.generated_at
+    ? new Date(meta.generated_at).toLocaleDateString('zh-CN', { timeZone: 'Pacific/Auckland' })
+    : null
+
+  const labelCls =
+    label === '原处方'   ? 'bg-indigo-100 text-indigo-700' :
+    label === '补充处方' ? 'bg-blue-100 text-blue-700' :
+    label === '修订版'   ? 'bg-amber-100 text-amber-700' :
+                           'bg-gray-200 text-gray-500'
+
+  return (
+    <div className={`rounded-xl border ${archived ? 'border-gray-200 opacity-75' : 'border-gray-300'} bg-white overflow-hidden`}>
+      {/* 处方组头 */}
+      <div className="px-5 py-3 border-b border-gray-100 flex items-center gap-3 flex-wrap">
+        <span className={`text-xs font-semibold rounded-full px-2.5 py-1 ${labelCls}`}>
+          {label}
+        </span>
+        {genDate && <span className="text-xs text-gray-400">生成于 {genDate}</span>}
+        <span className="text-xs text-gray-400">{completed}/{items.length} 完成</span>
+
+        {/* 派生按钮 — 仅已批准的活跃处方 */}
+        {derivable && (
+          <div className="ml-auto flex items-center gap-2">
+            <Link
+              href={`/dashboard/clients/${clientId}/prescription/new?supplement_of=${pid}`}
+              className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 transition-colors"
+              title="为这份处方生成增量动作，原处方不动"
+            >
+              🧩 补充处方
+            </Link>
+            <Link
+              href={`/dashboard/clients/${clientId}/prescription/new?revise=${pid}`}
+              className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100 transition-colors"
+              title="生成修订版 v2，批准后这份处方归档"
+            >
+              ↻ 修订处方
+            </Link>
+          </div>
+        )}
+        {archived && (
+          <span className="ml-auto text-xs text-gray-400">此处方已被修订版取代，仅供存档参考</span>
+        )}
+      </div>
+
+      {/* 该处方的 3 个 phase */}
+      <div className="p-4 space-y-3 bg-gray-50">
+        {[1, 2, 3].map(phase => {
+          const phaseItems = byPhase[phase] ?? []
+          if (phaseItems.length === 0) return null
+          return (
+            <PhaseAccordion
+              key={phase}
+              phase={phase}
+              items={phaseItems}
+              defaultOpen={defaultOpen && phase === 1}
+              onStatusChange={onStatusChange}
+              onAddLog={onAddLog}
+              onOpenChat={onOpenChat}
+            />
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -373,6 +484,7 @@ export default function ExecutionPage() {
   const prescriptionId = searchParams.get('prescription_id') ?? undefined
 
   const [items, setItems]     = useState<ItemWithLogs[]>([])
+  const [prescriptions, setPrescriptions] = useState<PrescriptionMeta[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)       // 页面加载错误（整页）
   const [opError, setOpError] = useState<string | null>(null)       // 操作错误（内联横幅）
@@ -389,8 +501,9 @@ export default function ExecutionPage() {
         cache: 'no-store',
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const data = await res.json() as { items: ItemWithLogs[] }
+      const data = await res.json() as { items: ItemWithLogs[]; prescriptions?: PrescriptionMeta[] }
       setItems(data.items ?? [])
+      setPrescriptions(data.prescriptions ?? [])
     } catch (e) {
       setError(e instanceof Error ? e.message : '加载失败')
     } finally {
@@ -449,13 +562,34 @@ export default function ExecutionPage() {
     }
   }, [clientId])
 
-  // 按 phase 分组
-  const byPhase: Record<number, ItemWithLogs[]> = {}
-  for (const item of items) {
-    const ph = item.phase ?? 1
-    ;(byPhase[ph] ??= []).push(item)
-  }
   const completedCount = items.filter(i => i.status === 'completed').length
+
+  // ── 按处方分组（P8.10.S5）──────────────────────────────────────────────
+  const presMap = new Map(prescriptions.map(p => [p.id, p]))
+
+  // items 先按 prescription_id 分组
+  const itemsByPrescription: Record<string, ItemWithLogs[]> = {}
+  for (const item of items) {
+    ;(itemsByPrescription[item.prescription_id] ??= []).push(item)
+  }
+
+  // 每个处方组：label + 排序权重 + 是否可派生（补充/修订）
+  const prescriptionGroups = Object.entries(itemsByPrescription)
+    .map(([pid, groupItems]) => {
+      const meta = presMap.get(pid)
+      let label = '处方'; let weight = 5; let archived = false; let derivable = false
+      if (meta) {
+        if (meta.status === 'superseded') { label = '已归档 · 被修订取代'; weight = 9; archived = true }
+        else if (meta.supersedes_id)      { label = '修订版';   weight = 2; derivable = meta.status === 'approved' }
+        else if (meta.supplements_id)     { label = '补充处方'; weight = 3; derivable = meta.status === 'approved' }
+        else                              { label = '原处方';   weight = 1; derivable = meta.status === 'approved' }
+      }
+      return { pid, items: groupItems, meta, label, weight, archived, derivable }
+    })
+    .sort((a, b) =>
+      a.weight - b.weight ||
+      (a.meta?.generated_at ?? '').localeCompare(b.meta?.generated_at ?? ''),
+    )
 
   // ── Loading ───────────────────────────────────────────────────────────────
   if (loading) {
@@ -536,12 +670,13 @@ export default function ExecutionPage() {
 
         <ProgressBar completed={completedCount} total={items.length} />
 
-        {[1, 2, 3].map(phase => (
-          <PhaseAccordion
-            key={phase}
-            phase={phase}
-            items={byPhase[phase] ?? []}
-            defaultOpen={phase === 1}
+        {/* 按处方分组 — 原处方 / 补充 / 修订 / 已归档 各成一组 */}
+        {prescriptionGroups.map((group, gi) => (
+          <PrescriptionGroup
+            key={group.pid}
+            clientId={clientId}
+            group={group}
+            defaultOpen={gi === 0}
             onStatusChange={handleStatusChange}
             onAddLog={handleAddLog}
             onOpenChat={setChatItem}

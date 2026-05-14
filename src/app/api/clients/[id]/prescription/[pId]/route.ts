@@ -91,13 +91,13 @@ export async function PATCH(
       )
     }
 
-    // Fetch current prescription
+    // Fetch current prescription（含 supersedes_id — 修订处方批准时要归档原处方）
     const { data: current, error: fetchError } = await supabaseAdmin
       .from('prescriptions')
-      .select('id, status, client_id')
+      .select('id, status, client_id, supersedes_id')
       .eq('id', pId)
       .eq('client_id', clientId)
-      .single<Pick<Prescription, 'id' | 'status' | 'client_id'>>()
+      .single<Pick<Prescription, 'id' | 'status' | 'client_id' | 'supersedes_id'>>()
 
     if (fetchError || !current) {
       return NextResponse.json({ success: false, error: 'Prescription not found' }, { status: 404 })
@@ -123,6 +123,19 @@ export async function PATCH(
           { success: false, error: `生成执行计划失败：${msg}` },
           { status: 500 },
         )
+      }
+
+      // 修订处方批准 → 把被修订的原处方置 superseded（归档）
+      if (current.supersedes_id) {
+        const { error: supErr } = await supabaseAdmin
+          .from('prescriptions')
+          .update({ status: 'superseded' })
+          .eq('id', current.supersedes_id)
+          .eq('client_id', clientId)
+        if (supErr) {
+          console.error('[prescription PATCH] supersede prior failed:', supErr)
+          // 非致命 — 新处方已批准，原处方归档失败只记日志
+        }
       }
     }
 

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import type { PrescriptionContent, PrescriptionIntake, DiagnosticDimension, PrescriptionAction, Prescription, PrescriptionStatus } from '@/types/diagnostic'
 import type { ClientDiscoveryRow } from '@/lib/zhangqian/types'
@@ -85,9 +85,17 @@ function ScoreChip({ label, value }: { label: string; value: number }) {
 // ---------------------------------------------------------------------------
 
 export default function NewPrescriptionPage() {
-  const params   = useParams()
-  const router   = useRouter()
-  const clientId = params.id as string
+  const params       = useParams()
+  const router       = useRouter()
+  const searchParams = useSearchParams()
+  const clientId     = params.id as string
+
+  // 补充/修订模式：URL 带 ?supplement_of=<id> 或 ?revise=<id>
+  const supplementOf = searchParams.get('supplement_of')
+  const reviseOf     = searchParams.get('revise')
+  const priorMode: 'supplement' | 'revision' | null =
+    supplementOf ? 'supplement' : reviseOf ? 'revision' : null
+  const priorId = supplementOf ?? reviseOf
 
   // Discovery source (Zhangqian)
   const [discovery, setDiscovery]             = useState<ClientDiscoveryRow | null>(null)
@@ -197,7 +205,9 @@ export default function NewPrescriptionPage() {
   }, [clientId])
 
   // ── 加载最近一份草稿处方（防止用户刚生成完刷新页面就丢失结果）─────────────
+  // 补充/修订模式不自动恢复草稿 —— 用户是来新建增量/修订版的
   useEffect(() => {
+    if (priorMode) return
     void (async () => {
       try {
         const res = await fetch(`/api/clients/${clientId}/prescriptions/latest-draft`, {
@@ -247,9 +257,12 @@ export default function NewPrescriptionPage() {
         priority_dimensions: priorityDims,
         notes:               notes || null,
       }
-      const body = discoveryId
-        ? { discovery_id: discoveryId, intake }
-        : { intake }
+      // 补充/修订模式优先 —— 从原处方 derive discovery，body 只带关系字段
+      const body: Record<string, unknown> =
+        priorMode === 'supplement' ? { supplement_of: priorId, intake } :
+        priorMode === 'revision'   ? { revise: priorId, intake } :
+        discoveryId                ? { discovery_id: discoveryId, intake } :
+                                     { intake }
 
       const res = await fetch(`/api/clients/${clientId}/prescription/generate`, {
         method:  'POST',
@@ -303,7 +316,7 @@ export default function NewPrescriptionPage() {
       setProgressNote(null)
       if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null }
     }
-  }, [businessGoal, urgency, budget, priorityDims, notes, discoveryId, clientId])
+  }, [businessGoal, urgency, budget, priorityDims, notes, discoveryId, clientId, priorMode, priorId])
 
   // ── Approve prescription ──────────────────────────────────────────────────
   const handleApprove = async () => {
@@ -468,14 +481,35 @@ export default function NewPrescriptionPage() {
             返回
           </Link>
           <div>
-            <h1 className="text-lg font-semibold text-gray-900">生成处方</h1>
-            <p className="text-xs text-gray-400 mt-0.5">基于品牌健康发现，由 Strategy Engine 生成三阶段营销方案</p>
+            <h1 className="text-lg font-semibold text-gray-900">
+              {priorMode === 'supplement' ? '补充处方' : priorMode === 'revision' ? '修订处方' : '生成处方'}
+            </h1>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {priorMode === 'supplement'
+                ? '为已有处方生成增量动作 — 原处方与执行进度不受影响'
+                : priorMode === 'revision'
+                  ? '为方向需调整的处方生成 v2 — 批准后原处方归档，已完成动作保留'
+                  : '基于品牌健康发现，由 Strategy Engine 生成三阶段营销方案'}
+            </p>
           </div>
         </div>
       </div>
 
       <div className={`mx-auto px-6 py-6 ${step === 3 ? 'max-w-3xl lg:max-w-6xl' : 'max-w-3xl'}`}>
         <StepIndicator current={step} />
+
+        {/* 补充/修订模式提示横幅 */}
+        {priorMode && (
+          <div className={`mb-4 rounded-xl border p-3.5 text-sm ${
+            priorMode === 'supplement'
+              ? 'border-blue-200 bg-blue-50 text-blue-800'
+              : 'border-amber-200 bg-amber-50 text-amber-800'
+          }`}>
+            {priorMode === 'supplement'
+              ? '🧩 补充模式：华佗会读取原处方的全部动作和执行进度，只生成"还缺的"新动作，不重复已有内容。原处方与已完成的工作不受任何影响。'
+              : '↻ 修订模式：华佗会基于原处方 + 执行进度生成完整的修订版（v2）。已完成的动作会被承接。批准这份修订后，原处方将归档为"已被取代"。'}
+          </div>
+        )}
 
         {/* ── Discovery Context Card (步骤 1/2 显示在顶部；步骤 3 移到左列内部) ── */}
         {step !== 3 && !discoveryLoading && discovery && (

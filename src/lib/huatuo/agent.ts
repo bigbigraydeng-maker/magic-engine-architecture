@@ -16,7 +16,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import Anthropic from '@anthropic-ai/sdk'
 import { parseJsonResponse, MODEL_SONNET } from '@/lib/anthropic/client'
 import type { DiscoveryReport } from '@/lib/zhangqian/types'
-import type { PrescriptionContent, PrescriptionIntake } from '@/types/diagnostic'
+import type { PrescriptionContent, PrescriptionIntake, PriorPrescriptionContext } from '@/types/diagnostic'
 import type {
   HuatuoPrescriptionResult,
   HuatuoLookupContext,
@@ -93,6 +93,8 @@ export interface RunHuatuoOptions {
   skipRefine?: boolean
   /** 进度回调（UI 显示阶段提示） */
   onProgress?: (note: string) => void | Promise<void>
+  /** 补充/修订模式：携带原处方全文 + 执行进度（P8.10.S5） */
+  priorContext?: PriorPrescriptionContext
 }
 
 /**
@@ -140,7 +142,7 @@ export async function runHuatuo(
   try {
     pass1 = await withHardTimeout(
       '处方生成',
-      generatePrescription(client, discovery, intake, lookup),
+      generatePrescription(client, discovery, intake, lookup, options.priorContext),
       CLAUDE_TIMEOUT_GENERATION_MS,
     )
   } catch (err) {
@@ -186,7 +188,7 @@ export async function runHuatuo(
           '处方精修',
           generatePrescriptionWithFeedback(
             client, discovery, intake, lookup,
-            { previousContent: content, weaknesses: selfGrade.weaknesses },
+            { previousContent: content, weaknesses: selfGrade.weaknesses, priorContext: options.priorContext },
           ),
           CLAUDE_TIMEOUT_GENERATION_MS,
         )
@@ -367,8 +369,9 @@ async function generatePrescription(
   discovery: DiscoveryReport,
   intake: PrescriptionIntake,
   lookup: HuatuoLookupContext,
+  priorContext?: PriorPrescriptionContext,
 ): Promise<ClaudeCallResult<PrescriptionContent>> {
-  const userPrompt = buildHuatuoGenerationPrompt(discovery, intake, lookup)
+  const userPrompt = buildHuatuoGenerationPrompt(discovery, intake, lookup, priorContext)
   const message = await client.messages.create({
     model: MODEL_SONNET,
     max_tokens: MAX_OUTPUT_TOKENS_GENERATION,
@@ -429,11 +432,12 @@ async function generatePrescriptionWithFeedback(
     previousContent: PrescriptionContent
     weaknesses: SelfGradeWeakness[]
     humanComments?: string
+    priorContext?: PriorPrescriptionContext
   },
 ): Promise<ClaudeCallResult<PrescriptionContent>> {
   // 精修 prompt 强调"针对性修复 + 保持紧凑"
   // 防止 Claude 看到 8 条 weaknesses 后过度扩写超出 8192 max_tokens
-  const basePrompt = buildHuatuoGenerationPrompt(discovery, intake, lookup)
+  const basePrompt = buildHuatuoGenerationPrompt(discovery, intake, lookup, feedback.priorContext)
 
   // 人工意见（如有）— 比 AI 自评 weaknesses 优先级更高
   const humanCommentsBlock = feedback.humanComments && feedback.humanComments.trim()

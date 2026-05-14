@@ -9,7 +9,7 @@
  */
 
 import type { DiscoveryReport } from '@/lib/zhangqian/types'
-import type { PrescriptionIntake, PrescriptionContent } from '@/types/diagnostic'
+import type { PrescriptionIntake, PrescriptionContent, PriorPrescriptionContext } from '@/types/diagnostic'
 import type { HuatuoLookupContext, TrendSummaryLite, SelfGradeWeakness } from './types'
 import { formatBenchmarksForPrompt } from './benchmarks'
 import { categoryToChineseName } from './industry-mapper'
@@ -183,12 +183,78 @@ weaknesses 是「**这份处方（方案）的待改进项**」，**不是客户
 // ─── User prompt builders ──────────────────────────────────────────────────────
 
 /**
+ * 构建"补充/修订"模式的上下文段落。普通生成时 prior 为空，返回空串。
+ */
+function buildPriorSection(prior?: PriorPrescriptionContext): {
+  block: string
+  instruction: string
+} {
+  if (!prior) return { block: '', instruction: '' }
+
+  const priorJson = JSON.stringify(prior.priorContent, null, 2)
+
+  if (prior.mode === 'supplement') {
+    return {
+      block: `
+## ⚠️ 补充处方模式（重要）
+
+你现在不是从零开方，而是为一份**已批准、正在执行的处方**生成**补充动作**。
+
+### 原处方全文
+\`\`\`json
+${priorJson}
+\`\`\`
+
+### 原处方执行进度
+${prior.executionSummary}
+
+### 补充模式规则
+1. **只生成"还缺的"新动作** —— 绝不重复原处方已有的 action
+2. 新动作要与原处方**互补**，不冲突
+3. phases 仍然是 1/2/3，但只放新动作（原处方的动作不要复制进来）
+4. budget_allocation 是**这次补充的增量预算**，不是总预算
+5. kpi_targets 只列补充动作对应的新 KPI
+6. summary 要说明"这是对原处方的补充，针对 [客户新发现的需求]"
+`,
+      instruction: '\n8. 这是补充处方 —— 只输出新增动作，不要复制原处方已有的内容',
+    }
+  }
+
+  // revision
+  return {
+    block: `
+## ⚠️ 修订处方模式（重要）
+
+你现在要为一份**方向需要调整的处方**生成**修订版（v2）**。
+
+### 原处方全文
+\`\`\`json
+${priorJson}
+\`\`\`
+
+### 原处方执行进度
+${prior.executionSummary}
+
+### 修订模式规则
+1. **已完成的动作要承接** —— 不要让客户白做，已完成的成果作为新处方的起点
+2. **进行中/待处理的动作**可以保留、调整或删除，取决于新方向
+3. 输出一份**完整的新处方**（不是增量），但要体现"在原处方基础上修订"
+4. summary 要说明"这是对原处方的修订，原因：[根据 intake.notes]，调整方向：..."
+5. budget_allocation / kpi_targets 是修订后的完整版本
+`,
+    instruction: '\n8. 这是修订处方 —— 输出完整新处方，但承接已完成的动作，体现方向调整',
+  }
+}
+
+/**
  * 构建生成阶段的 user message。
+ * priorContext 非空时进入"补充/修订"模式。
  */
 export function buildHuatuoGenerationPrompt(
   discovery: DiscoveryReport,
   intake: PrescriptionIntake,
   lookup: HuatuoLookupContext,
+  priorContext?: PriorPrescriptionContext,
 ): string {
   const d = discovery.diagnosis
   const scores = d?.scores
@@ -233,7 +299,15 @@ export function buildHuatuoGenerationPrompt(
       ? `\n6. 域名历史数据存在但增长率无法计算（流量基数过低）。请保守估算 target_value。`
       : `\n6. 域名无历史数据，target_value 严格按行业 P50–P75 区间估算。`
 
-  return `# 任务：为以下客户开具 90 天三阶段数字营销处方
+  // 补充/修订模式段落（普通生成时为空）
+  const prior = buildPriorSection(priorContext)
+  const taskTitle = priorContext?.mode === 'supplement'
+    ? '# 任务：为已有处方生成补充动作'
+    : priorContext?.mode === 'revision'
+      ? '# 任务：生成处方的修订版（v2）'
+      : '# 任务：为以下客户开具 90 天三阶段数字营销处方'
+
+  return `${taskTitle}
 
 ## 客户画像
 - 域名：${discovery.domain}
@@ -251,7 +325,7 @@ ${findingsText}
 ${benchmarksTable}
 
 ${trendSection}
-
+${prior.block}
 ## 客户意向
 - **业务目标**：${intake.business_goal}
 - **时间紧迫度**：${intake.timeline_urgency}
@@ -267,7 +341,7 @@ ${trendSection}
 3. 预算分配各项之和 ≤ AUD ${intake.monthly_budget_aud}
 4. 每个 action 必须有 estimated_hours / required_skills / measurement_method / module
 5. 危机类型「${d?.crisis_type ?? '未指定'}」决定预算重心${trendConstraint}
-7. 全部中文（除枚举值）`
+7. 全部中文（除枚举值）${prior.instruction}`
 }
 
 /**

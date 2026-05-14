@@ -14,13 +14,22 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireBearerToken } from '@/lib/validation-utils'
-import type { ExecutionItem, ExecutionLog } from '@/types/diagnostic'
+import type { ExecutionItem, ExecutionLog, PrescriptionStatus } from '@/types/diagnostic'
 
 export const dynamic = 'force-dynamic'
 
 /** 返回时每个 item 附带它的 logs（鲁班 P8.10.S4.1） */
 export interface ExecutionItemWithLogs extends ExecutionItem {
   logs: ExecutionLog[]
+}
+
+/** 执行项涉及的处方元数据 — 用于看板按处方分组（P8.10.S5） */
+export interface ExecutionPrescriptionMeta {
+  id: string
+  status: PrescriptionStatus
+  supplements_id: string | null
+  supersedes_id: string | null
+  generated_at: string | null
 }
 
 export async function GET(
@@ -81,7 +90,23 @@ export async function GET(
       logs: logsByItem[it.id] ?? [],
     }))
 
-    return NextResponse.json({ success: true, items, count: items.length }, {
+    // 拉取这些 item 涉及的处方元数据（按处方分组 + 补充/修订按钮用）
+    let prescriptions: ExecutionPrescriptionMeta[] = []
+    const prescriptionIds = Array.from(new Set(baseItems.map(i => i.prescription_id)))
+    if (prescriptionIds.length > 0) {
+      const { data: presRows, error: presErr } = await supabaseAdmin
+        .from('prescriptions')
+        .select('id, status, supplements_id, supersedes_id, generated_at')
+        .in('id', prescriptionIds)
+        .order('generated_at', { ascending: true })
+      if (presErr) {
+        console.error('[execution GET] prescriptions fetch error (non-fatal):', presErr)
+      } else {
+        prescriptions = (presRows ?? []) as ExecutionPrescriptionMeta[]
+      }
+    }
+
+    return NextResponse.json({ success: true, items, prescriptions, count: items.length }, {
       headers: { 'Cache-Control': 'no-store' },
     })
   } catch (err: unknown) {

@@ -1,29 +1,18 @@
 /**
  * POST /api/clients/[id]/prescription/generate
  *
- * **流式响应模式** (P8.10.S3 修复 Render 进程回收问题)
+ * **流式响应模式**（SSE）。3 种生成模式：
+ *   - 普通生成    body.discovery_id      — 从张骞 discovery 全新开方
+ *   - 补充处方    body.supplement_of     — 为已有处方生成增量动作（原处方不动）
+ *   - 修订处方    body.revise            — 为方向需调整的处方生成 v2
+ *   - legacy      body.run_id            — diagnostic run（同步小路径）
  *
- * 之前用 fire-and-forget 后台任务，但 Render serverless 在 HTTP 响应返回后
- * 会回收 Node 进程，导致 Promise 被杀。
- *
- * 解决方案：HTTP 连接保持开启直到任务完成。响应体是 SSE 流：
- *   - 每 8 秒发心跳 `: heartbeat\n\n` 防止任何代理超时
- *   - 进度更新：`data: {"type":"progress","note":"..."}\n\n`
- *   - 完成：`data: {"type":"done","prescription_id":"...","content":...,...}\n\n`
- *   - 失败：`data: {"type":"error","error":"..."}\n\n`
- *
- * 连接保持开启 → Render 不会杀进程 → 华佗能完整执行。
- *
- * Body: {
- *   discovery_id?: string   — Zhangqian discovery（华佗主路径）
- *   run_id?:       string   — diagnostic run（legacy）
- *   intake:        PrescriptionIntake
- * }
+ * 补充/修订模式：从原处方 derive discovery_id，加载原处方全文 + 执行进度，
+ * 作为 priorContext 传给华佗。
  *
  * Response: text/event-stream（SSE）
- *
  * Security: Bearer token (INTERNAL_API_KEY)
- * Reference: ROADMAP.md P8.10.S3
+ * Reference: ROADMAP.md P8.10.S3 / S5
  */
 
 import { NextRequest } from 'next/server'
@@ -31,17 +20,25 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { requireBearerToken } from '@/lib/validation-utils'
 import { generatePrescription } from '@/lib/diagnostic/prescription-generator'
 import { runHuatuo } from '@/lib/huatuo/agent'
-import type { PrescriptionIntake } from '@/types/diagnostic'
+import type {
+  PrescriptionIntake, PrescriptionContent, PriorPrescriptionContext,
+  ExecutionItem,
+} from '@/types/diagnostic'
 import type { DiscoveryReport } from '@/lib/zhangqian/types'
 
-// 关键：禁用 Next.js 缓存
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
-
-// 流式响应不受 maxDuration 普通约束；Render 上保持连接活的请求可以跑很久。
 export const maxDuration = 300
 
 const HEARTBEAT_INTERVAL_MS = 8_000
+
+// 补充/修订时，新处方要写的关系字段
+interface PriorMeta {
+  priorContext: PriorPrescriptionContext
+  /** 新处方记录上要 set 的字段 */
+  relationField: 'supplements_id' | 'supersedes_id'
+  priorPrescriptionId: string
+}
 
 export async function POST(
   req: NextRequest,
@@ -57,8 +54,13 @@ export async function POST(
 
   const { id: clientId } = params
 
-  // ── 同步校验 body 和源数据（这部分快，不需要流式）─────────────────────────
-  let body: { run_id?: string; discovery_id?: string; intake?: PrescriptionIntake }
+  let body: {
+    run_id?: string
+    discovery_id?: string
+    supplement_of?: string
+    revise?: string
+    intake?: PrescriptionIntake
+  }
   try {
     body = await req.json()
   } catch {
@@ -70,7 +72,25 @@ export async function POST(
     return errorResponse(400, 'intake must include business_goal and monthly_budget_aud')
   }
 
-  // ── Path A: 华佗（discovery 源）─ 流式 ──────────────────────────────────
+  // ── Path: 补充 / 修订 — 从原处方 derive 上下文 ─────────────────────────────
+  const priorId = body.supplement_of ?? body.revise
+  if (priorId) {
+    const mode = body.supplement_of ? 'supplement' : 'revision'
+    const prep = await preparePriorContext(clientId, priorId, mode)
+    if ('error' in prep) return errorResponse(prep.status, prep.error)
+
+    const priorMeta: PriorMeta = {
+      priorContext: prep.priorContext,
+      relationField: mode === 'supplement' ? 'supplements_id' : 'supersedes_id',
+      priorPrescriptionId: priorId,
+    }
+    return new Response(
+      makeHuatuoStream(clientId, prep.discoveryId, prep.discovery, intake, priorMeta),
+      { headers: streamHeaders() },
+    )
+  }
+
+  // ── Path A: 普通生成（discovery 源）─ 流式 ────────────────────────────────
   if (body.discovery_id) {
     const { data: row, error: discErr } = await supabaseAdmin
       .from('client_discovery')
@@ -89,7 +109,7 @@ export async function POST(
     })
   }
 
-  // ── Path B: legacy diagnostic run（同步小路径，输出量小不需要流）────────
+  // ── Path B: legacy diagnostic run（同步小路径）────────────────────────────
   if (body.run_id) {
     try {
       const { data: run, error: runError } = await supabaseAdmin
@@ -111,7 +131,100 @@ export async function POST(
     }
   }
 
-  return errorResponse(400, 'Either run_id or discovery_id is required')
+  return errorResponse(400, 'discovery_id / supplement_of / revise / run_id 至少要有一个')
+}
+
+// ─── 补充/修订：从原处方加载上下文 ────────────────────────────────────────────
+
+type PreparePriorResult =
+  | { discoveryId: string; discovery: DiscoveryReport; priorContext: PriorPrescriptionContext }
+  | { error: string; status: number }
+
+async function preparePriorContext(
+  clientId: string,
+  priorId: string,
+  mode: 'supplement' | 'revision',
+): Promise<PreparePriorResult> {
+  // 1. 加载原处方
+  const { data: prior, error: pErr } = await supabaseAdmin
+    .from('prescriptions')
+    .select('id, status, discovery_id, content')
+    .eq('id', priorId)
+    .eq('client_id', clientId)
+    .single<{
+      id: string
+      status: string
+      discovery_id: string | null
+      content: PrescriptionContent | null
+    }>()
+
+  if (pErr || !prior) return { error: '原处方不存在', status: 404 }
+  if (!prior.content) return { error: '原处方内容为空，无法补充/修订', status: 422 }
+  if (!prior.discovery_id) return { error: '原处方缺少 discovery 关联', status: 422 }
+  // 只能补充/修订已批准的处方（执行中）
+  if (prior.status !== 'approved') {
+    return { error: `只能补充/修订"已批准"的处方（当前状态：${prior.status}）`, status: 422 }
+  }
+
+  // 2. 加载 discovery
+  const { data: disc, error: dErr } = await supabaseAdmin
+    .from('client_discovery')
+    .select('id, payload')
+    .eq('id', prior.discovery_id)
+    .eq('client_id', clientId)
+    .single<{ id: string; payload: DiscoveryReport }>()
+
+  if (dErr || !disc) return { error: '原处方的 discovery 不存在', status: 404 }
+
+  // 3. 加载原处方的执行进度 → 摘要
+  const { data: execRows } = await supabaseAdmin
+    .from('execution_items')
+    .select('title, status, phase')
+    .eq('prescription_id', priorId)
+    .eq('client_id', clientId)
+    .order('sort_order', { ascending: true })
+
+  const execItems = (execRows ?? []) as Pick<ExecutionItem, 'title' | 'status' | 'phase'>[]
+  const executionSummary = buildExecutionSummary(execItems)
+
+  return {
+    discoveryId: disc.id,
+    discovery: disc.payload,
+    priorContext: {
+      mode,
+      priorContent: prior.content,
+      executionSummary,
+    },
+  }
+}
+
+function buildExecutionSummary(
+  items: Pick<ExecutionItem, 'title' | 'status' | 'phase'>[],
+): string {
+  if (items.length === 0) return '（原处方暂无执行项记录）'
+
+  const done = items.filter(i => i.status === 'completed')
+  const inProgress = items.filter(i => i.status === 'in_progress')
+  const pending = items.filter(i => i.status === 'pending')
+  const skipped = items.filter(i => i.status === 'skipped')
+
+  const lines: string[] = [
+    `共 ${items.length} 项：已完成 ${done.length} / 进行中 ${inProgress.length} / 待处理 ${pending.length} / 已跳过 ${skipped.length}`,
+    '',
+  ]
+  if (done.length > 0) {
+    lines.push('**已完成的动作（成果已落地，不要重复）**：')
+    done.forEach(i => lines.push(`  - ✓ [P${i.phase}] ${i.title}`))
+  }
+  if (inProgress.length > 0) {
+    lines.push('**进行中的动作**：')
+    inProgress.forEach(i => lines.push(`  - ◐ [P${i.phase}] ${i.title}`))
+  }
+  if (pending.length > 0) {
+    lines.push('**待处理的动作**：')
+    pending.forEach(i => lines.push(`  - ○ [P${i.phase}] ${i.title}`))
+  }
+  return lines.join('\n')
 }
 
 // ─── SSE Stream builder ───────────────────────────────────────────────────────
@@ -121,7 +234,7 @@ function streamHeaders(): HeadersInit {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-store, no-cache, must-revalidate',
     'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no',     // 禁用 nginx buffering，确保即时刷出
+    'X-Accel-Buffering': 'no',
   }
 }
 
@@ -137,12 +250,12 @@ function makeHuatuoStream(
   discoveryId: string,
   discovery: DiscoveryReport,
   intake: PrescriptionIntake,
+  priorMeta?: PriorMeta,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder()
 
   return new ReadableStream<Uint8Array>({
     async start(controller) {
-      // 心跳 — 防止任何中间代理（nginx / cloudflare）因为 idle 杀连接
       const heartbeat = setInterval(() => {
         try { controller.enqueue(encoder.encode(': heartbeat\n\n')) } catch {/* */}
       }, HEARTBEAT_INTERVAL_MS)
@@ -153,22 +266,27 @@ function makeHuatuoStream(
         } catch {/* connection closed */}
       }
 
-      // 1. 先插入 generating 行（拿到 prescription_id 告诉前端）
+      // 1. 插入 generating 行（补充/修订时带上关系字段）
       let prescriptionId: string | null = null
       try {
+        const insertRow: Record<string, unknown> = {
+          client_id:     clientId,
+          discovery_id:  discoveryId,
+          run_id:        null,
+          status:        'generating',
+          intake,
+          content:       null,
+          agent_name:    'huatuo',
+          progress_note: '排队中…',
+          generated_at:  new Date().toISOString(),
+        }
+        if (priorMeta) {
+          insertRow[priorMeta.relationField] = priorMeta.priorPrescriptionId
+        }
+
         const { data: inserted, error: insertErr } = await supabaseAdmin
           .from('prescriptions')
-          .insert({
-            client_id:     clientId,
-            discovery_id:  discoveryId,
-            run_id:        null,
-            status:        'generating',
-            intake,
-            content:       null,
-            agent_name:    'huatuo',
-            progress_note: '排队中…',
-            generated_at:  new Date().toISOString(),
-          })
+          .insert(insertRow)
           .select('id')
           .single<{ id: string }>()
 
@@ -187,12 +305,12 @@ function makeHuatuoStream(
         return
       }
 
-      // 2. 执行华佗（连接保持开启 → 进程不会被杀）
+      // 2. 执行华佗（补充/修订模式带 priorContext）
       try {
         const result = await runHuatuo(supabaseAdmin, discovery, intake, {
+          priorContext: priorMeta?.priorContext,
           onProgress: async (note) => {
             sendEvent({ type: 'progress', note })
-            // 也写到 DB 一份，方便用户刷新页面后看到历史
             if (prescriptionId) {
               await supabaseAdmin
                 .from('prescriptions')
@@ -219,7 +337,7 @@ function makeHuatuoStream(
           .eq('id', prescriptionId!)
           .eq('client_id', clientId)
 
-        // 4. 通过流发完整结果给前端（避免前端还要二次拉）
+        // 4. 通过流发完整结果给前端
         sendEvent({
           type: 'done',
           prescription_id: prescriptionId,
