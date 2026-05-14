@@ -13,16 +13,19 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { callClaudeChat } from '@/lib/anthropic/client'
+import { callClaudeWithTools, type ClaudeToolCall } from '@/lib/anthropic/client'
 import type { ExecutionItem, ExecutionLog, PrescriptionContent } from '@/types/diagnostic'
 import type { DiscoveryReport } from '@/lib/zhangqian/types'
 import { buildLubanSystemPrompt, type LubanContext } from './prompts'
+import { buildLubanTools } from './tools'
 
 export interface LubanChatResult {
   reply: string
   input_tokens: number
   output_tokens: number
   cost_usd: number
+  /** 本轮鲁班调用的工具明细（无工具调用时为空数组） */
+  tool_calls: ClaudeToolCall[]
 }
 
 const MAX_HISTORY_MESSAGES = 20   // 只带最近 N 条历史，控制 token
@@ -129,11 +132,14 @@ export async function chatWithLuban(
 
   const history = (historyRows ?? []) as Array<{ role: 'user' | 'assistant'; content: string }>
 
-  // 3. 调 Claude
+  // 3. 调 Claude（tool loop — 鲁班可自主调用 add_work_log 等工具）
   const systemPrompt = buildLubanSystemPrompt(ctx)
-  const result = await callClaudeChat({
+  const { tools, handlers } = buildLubanTools({ supabase, itemId, clientId })
+  const result = await callClaudeWithTools({
     systemPrompt,
     messages: [...history, { role: 'user', content: trimmed }],
+    tools,
+    toolHandlers: handlers,
     maxOutputTokens: 2048,
   })
 
@@ -151,6 +157,8 @@ export async function chatWithLuban(
           input_tokens: result.input_tokens,
           output_tokens: result.output_tokens,
           cost_usd: result.cost_usd,
+          tool_rounds: result.tool_rounds,
+          tool_calls: result.tool_calls,
         },
       },
     ])
@@ -163,5 +171,6 @@ export async function chatWithLuban(
     input_tokens: result.input_tokens,
     output_tokens: result.output_tokens,
     cost_usd: result.cost_usd,
+    tool_calls: result.tool_calls,
   }
 }

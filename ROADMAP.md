@@ -36,6 +36,7 @@
                 ├─ S3 Synthesis 层（~3 天）
                 ├─ S4 Report Composer（~2 天）
                 └─ S5 引用/证据追溯（~1 天）
+🔥 Phase 8.12    AU/NZ 本地化能力扩展（MVP：S3.1 鲁班 tool loop 开发中 · 其余 13 项 MVP 后补充）
 🔄 Phase 9.0     Visual Queue UX Polish（P9.0.1✅P9.0.3✅P9.0.4-9✅ 进行中 · 待：P9.0.2+P9.0.10-17集成测试+浮动卡）
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
@@ -679,6 +680,61 @@ Layer 5: Export（新增）— P8.10.S5
 
 ---
 
+### Phase 8.12 — AU/NZ 本地化能力扩展 ⭐⭐⭐（三 Agent 护城河）
+
+**背景**：张骞 / 华佗 / 鲁班三个 Agent 目前依赖通用大模型能力。普通大模型对 AU/NZ 本地企业有四个硬伤：① 没有本地实时结构化数据（编造 ABN / 评分 / 竞品）② 不懂本地规则（财年 7/1、EOFY、南半球季节、合规）③ 没有行业基准 ④ 没有记忆。本 Phase 通过一组**本地化 connector + skill + 数据飞轮**，让三个 Agent 对 AU/NZ 本地企业的诊断 / 处方 / 执行显著优于普通大模型 —— 这是 Magic Engine 真正抄不走的护城河。
+
+**架构判断**：张骞是 tool loop，加 connector 零架构改动；华佗是 3 步管线，在 Lookup 阶段加数据源即可；鲁班是单轮对话，升级成 tool loop 是本 Phase 唯一的真架构改动。
+
+**🔥 MVP 范围（2026-05-14 定）**：仅 **S3.1 鲁班 tool loop 升级**——它是鲁班后续所有 connector/skill 的基础设施，且本身是可独立上线的小功能。其余 13 项（S1 全部、S2 全部、S3.2–S3.5）为 MVP 上线后的「补充」，按三个 agent 逐一扩展。
+
+**Sprint 1 — 快速差异化（P8.12.S1，~8–11 人天，低风险不碰架构）📋 补充（MVP 上线后）**：
+- [ ] **P8.12.S1.1** ABN/NZBN 商业注册验证 connector（`src/lib/abr/`）+ 张骞 `verify_business_registration` skill — 官方免费 API，验证企业真实性 / 注册年限 / GST 状态 / 实体类型 ⭐ 性价比最高
+- [ ] **P8.12.S1.2** 本地评价聚合 connector（`src/lib/local-reviews/`，GBP via SerpAPI + ProductReview.com.au via Jina）+ 张骞 `fetch_local_reviews` skill
+- [ ] **P8.12.S1.3** 华佗 `apply_seasonal_calendar` skill（`src/lib/huatuo/seasonal-calendar.ts`）— 澳洲财年 7/1、EOFY、南半球季节、行业旺季静态日历注入处方 ⭐ 纯静态知识零依赖
+- [ ] **P8.12.S1.4** 华佗 `lookup_local_budget_benchmark` skill — 客户预算 vs 行业基准对比强化进 prompt（`benchmarks.ts` 增强）
+- [ ] **P8.12.S1.5** Google Trends 本地热度 connector（`src/lib/gtrends/`，gl=au/nz via SerpAPI）接入华佗 Lookup
+- 依赖：S1.1/S1.2/S1.5 三个 connector 互相独立可并行；S1.3/S1.4 同在华佗侧建议同人顺序做
+
+**Sprint 2 — 数据飞轮（P8.12.S2，~10–14 人天，真护城河）📋 补充（MVP 上线后）**：
+- [ ] **P8.12.S2.1** Case Library schema：新建 `prescription_cases` / `prescription_outcomes` / `local_data_cache` 三表 + RLS ⭐ 所有其他条目的硬前置，建议 S1 收尾时并行启动
+- [ ] **P8.12.S2.2** 华佗 `retrieve_similar_cases` skill（`src/lib/case-library/retriever.ts`）— 按行业 / 危机类型 / 预算档结构化检索历史处方（v0 不用 embedding）
+- [ ] **P8.12.S2.3** 效果反馈闭环：处方 KPI 90 天实际回流（`prescription_outcomes` 录入 API + cron 提醒，SEMrush 可测指标自动回填）
+- [ ] **P8.12.S2.4** 行业基准自动累积：从 outcome 聚合 P50/P75/P90 写回 `industry_benchmarks`（cron，需最低样本阈值）
+- 依赖：S2.1 必须最先做；S2.2/S2.3 可并行（一读一写）；S2.4 串行收尾
+
+**Sprint 3 — 深化（P8.12.S3，~12–16 人天）**：
+
+🔥 **MVP（先上线）— S3.1 鲁班架构升级：单轮对话 → tool loop**（~4 人天，独立 PR，抄张骞 `agent.ts` 模式）
+- [x] **P8.12.S3.1.1** `src/lib/anthropic/client.ts` 新增 `callClaudeWithTools` helper（通用 tool loop，不动 `callClaudeChat`）+ 单元测试
+- [x] **P8.12.S3.1.2** 新建 `src/lib/luban/tools.ts` — `buildLubanTools()` + 首个工具 `add_work_log`（写 execution_logs，author=luban / kind=ai_assist，与现有 log route 一致）
+- [x] **P8.12.S3.1.3** 改造 `chatWithLuban`（`src/lib/luban/agent.ts`）内部改用 `callClaudeWithTools`，签名 + 返回结构保持不变
+- [x] **P8.12.S3.1.4** 更新 `buildLubanSystemPrompt`（`src/lib/luban/prompts.ts`）加「## 你的工具」段，说明何时调 add_work_log
+- [x] **P8.12.S3.1.5** `luban_messages.meta` 持久化加 `tool_calls`（不改表结构，meta 是 jsonb）
+- [x] **P8.12.S3.1.6** 回归测试：build 通过 + 5 单元测试通过 + `callClaudeChat` 未动（brief refinement 不受影响）；⚠️ UI 端到端实测待 dev 环境
+
+📋 **补充（MVP 上线后）**
+- [ ] **P8.12.S3.2** 鲁班 `generate_content` skill — 执行类任务直接产出并落库到 SEO/社媒模块（依赖 S3.1）
+- [ ] **P8.12.S3.3** 跨 Agent `check_local_compliance` skill（`src/lib/compliance/`）— AU 广告法 / trades license / AFSL 合规风险提示（定位风险提示非背书）
+- [ ] **P8.12.S3.4** 鲁班 `publish_to_gbp` skill — 依赖 GBP API 写权限申请，未通过则降级为「生成草稿 + 人工发布」（弹性项）
+- [ ] **P8.12.S3.5** 本地行业目录竞品发现 connector（Yellow Pages AU / Localsearch via Jina）— 优先级最低，弹性缓冲
+
+**新建数据库表**（S2.1）：
+- `prescription_cases` — 处方 + 诊断快照作可检索案例，索引 `(industry_category, crisis_type, monthly_budget_aud)`
+- `prescription_outcomes` — 处方批准后 30/60/90 天实际 KPI 达成
+- `local_data_cache` — ABN/GBP/Trends 结果缓存，带 `expires_at` 控成本
+
+**关键风险**：
+- ProductReview / 本地目录反爬 → 走 Jina + 优雅降级返回 null
+- GBP API 写权限申请周期不可控 → 与开发并行申请，不通过就降级
+- Case Library 冷启动为空 → 检索空时华佗 prompt 优雅退化，需积累 5–10 客户后显价值
+- 效果反馈靠人工录入 → 录入做到极轻量 + SEMrush 自动回填
+- 鲁班 tool loop 改造破坏 S4.1 执行看板 → 保持 `chatWithLuban` 签名/返回结构不变，独立 PR + 回归测试
+
+**工作量**：合计 ~30–41 人天 · **三 Agent 核心价值，AU/NZ 市场优先**
+
+---
+
 ### Phase 9.0 — Visual Queue UX Polish ⭐（生成队列用户体验优化）
 
 **背景**：用户在 3–7 分钟的生成过程中无法感知进度，导致误认为系统卡顿。本阶段通过**1Hz 本地流畅倒计时 + 环形进度条 + 4步骤指示器 + 智能取消按钮**，将被动等待转化为主动跟踪。
@@ -963,6 +1019,12 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
 
 > 每次上线新功能时在此追加。格式：**[完成日期]** — Phase ID + 描述 + Commit 引用。
 > 此日志从 CLAUDE.md §十五.C 迁移至此（2026-05-10），CLAUDE.md 不再维护历史日志。
+
+### 2026-05-14
+
+- **P8.12.S3.1** — 鲁班 tool loop 升级（Phase 8.12 MVP）：`callClaudeChat` 单轮对话 → `callClaudeWithTools` 通用 tool loop。新增 `src/lib/luban/tools.ts` + 首个工具 `add_work_log`（鲁班自主把对话结论写入 execution_logs）。`chatWithLuban` 签名/返回结构保持兼容，`callClaudeChat` 未动（brief refinement 不受影响）。新增 5 个单元测试覆盖 tool loop 核心路径。
+  待办：UI 端到端实测「鲁班自主调用 add_work_log」需在 dev 环境完成。
+  `feat(luban): tool loop 升级 — 鲁班可自主调用工具 [P8.12.S3.1]`
 
 ### 2026-05-07
 
