@@ -87,6 +87,8 @@ export async function PATCH(
     if (hasStatus) {
       patch.status = body.status
       if (body.status === 'completed') patch.completed_at = nowIso
+      // 从"已完成"退回其他状态 → 清空 completed_at（误点可改回）
+      else if (current.status === 'completed') patch.completed_at = null
       if (body.status === 'in_progress' && !current.started_at) patch.started_at = nowIso
     }
     if (newTitle !== undefined && newTitle) patch.title = newTitle
