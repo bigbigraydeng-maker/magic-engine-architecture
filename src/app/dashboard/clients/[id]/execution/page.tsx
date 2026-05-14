@@ -5,6 +5,7 @@ import { useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import type { ExecutionItem, ExecutionItemStatus, ExecutionLog, PrescriptionStatus } from '@/types/diagnostic'
 import { LubanChatDrawer } from './_components/LubanChatDrawer'
+import { InlinePrescriptionDrawer } from './_components/InlinePrescriptionDrawer'
 
 interface PrescriptionMeta {
   id: string
@@ -385,19 +386,19 @@ interface GroupData {
 }
 
 function PrescriptionGroup({
-  clientId,
   group,
   defaultOpen,
   onStatusChange,
   onAddLog,
   onOpenChat,
+  onDerive,
 }: {
-  clientId: string
   group: GroupData
   defaultOpen: boolean
   onStatusChange: (id: string, status: ExecutionItemStatus) => void
   onAddLog: (id: string, content: string, kind: 'note' | 'blocker') => Promise<void>
   onOpenChat: (item: ItemWithLogs) => void
+  onDerive: (mode: 'supplement' | 'revision', priorId: string, priorLabel: string) => void
 }) {
   const { items, label, archived, derivable, pid, meta } = group
 
@@ -427,23 +428,23 @@ function PrescriptionGroup({
         {genDate && <span className="text-xs text-gray-400">生成于 {genDate}</span>}
         <span className="text-xs text-gray-400">{completed}/{items.length} 完成</span>
 
-        {/* 派生按钮 — 仅已批准的活跃处方 */}
+        {/* 派生按钮 — 仅已批准的活跃处方。内联抽屉，不跳转 */}
         {derivable && (
           <div className="ml-auto flex items-center gap-2">
-            <Link
-              href={`/dashboard/clients/${clientId}/prescription/new?supplement_of=${pid}`}
+            <button
+              onClick={() => onDerive('supplement', pid, label)}
               className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100 transition-colors"
               title="为这份处方生成增量动作，原处方不动"
             >
               🧩 补充处方
-            </Link>
-            <Link
-              href={`/dashboard/clients/${clientId}/prescription/new?revise=${pid}`}
+            </button>
+            <button
+              onClick={() => onDerive('revision', pid, label)}
               className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100 transition-colors"
               title="生成修订版 v2，批准后这份处方归档"
             >
               ↻ 修订处方
-            </Link>
+            </button>
           </div>
         )}
         {archived && (
@@ -490,6 +491,10 @@ export default function ExecutionPage() {
   const [opError, setOpError] = useState<string | null>(null)       // 操作错误（内联横幅）
   // 当前打开鲁班对话的执行项（null = 抽屉关闭）
   const [chatItem, setChatItem] = useState<ItemWithLogs | null>(null)
+  // 内联补充/修订抽屉
+  const [deriveDrawer, setDeriveDrawer] = useState<
+    { mode: 'supplement' | 'revision'; priorId: string; priorLabel: string } | null
+  >(null)
 
   const fetchItems = useCallback(async () => {
     setLoading(true)
@@ -674,12 +679,12 @@ export default function ExecutionPage() {
         {prescriptionGroups.map((group, gi) => (
           <PrescriptionGroup
             key={group.pid}
-            clientId={clientId}
             group={group}
             defaultOpen={gi === 0}
             onStatusChange={handleStatusChange}
             onAddLog={handleAddLog}
             onOpenChat={setChatItem}
+            onDerive={(mode, priorId, priorLabel) => setDeriveDrawer({ mode, priorId, priorLabel })}
           />
         ))}
       </div>
@@ -693,6 +698,18 @@ export default function ExecutionPage() {
           isOpen={true}
           onClose={() => setChatItem(null)}
           onLogSaved={() => void fetchItems()}
+        />
+      )}
+
+      {/* 内联补充/修订处方抽屉 */}
+      {deriveDrawer && (
+        <InlinePrescriptionDrawer
+          clientId={clientId}
+          mode={deriveDrawer.mode}
+          priorPrescriptionId={deriveDrawer.priorId}
+          priorLabel={deriveDrawer.priorLabel}
+          onClose={() => setDeriveDrawer(null)}
+          onApproved={() => void fetchItems()}
         />
       )}
     </div>
