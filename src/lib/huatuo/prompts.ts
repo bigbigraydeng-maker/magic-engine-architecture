@@ -146,6 +146,14 @@ weaknesses 是「**这份处方（方案）的待改进项**」，**不是客户
 - 一个维度可以有 0 条或多条 weakness。得分 ≥ 9 的维度通常 0 条。
 - 总条数控制在 3–8 条，聚焦最重要的。
 
+### ⚠️ dimension 字段必须准确（关键）
+
+- 每条 weakness 的 \`dimension\` 字段必须**精确**填该问题真正所属的维度。
+- **不要**把所有 weakness 都填同一个 dimension。如果一条讲的是工时/预算承载力 → \`resource_match\`；
+  讲内容是否独特 → \`innovation\`；讲 KPI 是否现实 → \`realism\`，以此类推。
+- **text 字段不要**以维度名开头（不要写 "resource_match 隐性风险..."）。
+  维度信息只放在 dimension 字段，text 直接写问题本身（如 "phase2 单阶段工时 54h 接近满负荷..."）。
+
 ## 输出格式
 
 只输出原始 JSON：
@@ -164,7 +172,7 @@ weaknesses 是「**这份处方（方案）的待改进项**」，**不是客户
     {
       "dimension": "realism|completeness|fde_actionability|roi_alignment|prioritization|resource_match|innovation",
       "severity": "high|medium|low",
-      "text": "中文薄弱点描述，具体到 action id / KPI 字段"
+      "text": "中文薄弱点描述，具体到 action id / KPI 字段。不要以维度名开头。"
     }
   ],
   "improvements_made": []

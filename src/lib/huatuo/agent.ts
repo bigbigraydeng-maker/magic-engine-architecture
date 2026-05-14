@@ -22,12 +22,15 @@ import type {
   HuatuoLookupContext,
   SelfGrade,
   SelfGradeWeakness,
-  SelfGradeDimension,
 } from './types'
 import { fetchBenchmarks, extractBenchmarkIds } from './benchmarks'
 import { mapIndustryToCategory } from './industry-mapper'
 import { getDomainTrafficTrend } from '@/lib/semrush/client'
 import { summarizeTrend } from './trends'
+import { coerceWeaknesses } from './weakness-utils'
+
+// re-export 供 refine route 等使用
+export { coerceWeaknesses } from './weakness-utils'
 import {
   HUATUO_GENERATION_SYSTEM_PROMPT,
   HUATUO_SELFGRADE_SYSTEM_PROMPT,
@@ -528,60 +531,6 @@ async function selfGradePrescription(
   }
 }
 
-// 七维有效键 — 用于校验 coerceWeaknesses 的 dimension
-const VALID_DIMENSIONS: SelfGradeDimension[] = [
-  'realism', 'completeness', 'fde_actionability', 'roi_alignment',
-  'prioritization', 'resource_match', 'innovation',
-]
-
-/**
- * 把 Claude 返回的 / DB 里旧格式的 weaknesses 归一成结构化 SelfGradeWeakness[]。
- * 兼容三种输入：
- *   1. 新结构化格式 [{ dimension, severity, text }]
- *   2. 旧字符串格式 ["realism 边际风险：..."] — 从前缀推断 dimension
- *   3. 异常 — 返回 []
- *
- * 也被 refine route 用来兼容 DB 里旧 prescription 的 string[] weaknesses。
- */
-export function coerceWeaknesses(raw: unknown): SelfGradeWeakness[] {
-  if (!Array.isArray(raw)) return []
-
-  const result: SelfGradeWeakness[] = []
-  for (const item of raw) {
-    // 新格式：对象
-    if (item && typeof item === 'object' && 'text' in item) {
-      const obj = item as Record<string, unknown>
-      const dim = typeof obj.dimension === 'string' && VALID_DIMENSIONS.includes(obj.dimension as SelfGradeDimension)
-        ? obj.dimension as SelfGradeDimension
-        : inferDimensionFromText(String(obj.text ?? ''))
-      const sev = obj.severity === 'high' || obj.severity === 'medium' || obj.severity === 'low'
-        ? obj.severity
-        : 'medium'
-      const text = typeof obj.text === 'string' ? obj.text.trim() : ''
-      if (text) result.push({ dimension: dim, severity: sev, text })
-      continue
-    }
-    // 旧格式：纯字符串 — 从开头前缀推断维度
-    if (typeof item === 'string' && item.trim()) {
-      const text = item.trim()
-      result.push({
-        dimension: inferDimensionFromText(text),
-        severity: 'medium',
-        text,
-      })
-    }
-  }
-  return result
-}
-
-/** 从薄弱点文本开头的英文前缀推断维度，推断不出则归到 completeness */
-function inferDimensionFromText(text: string): SelfGradeDimension {
-  const lower = text.toLowerCase()
-  for (const dim of VALID_DIMENSIONS) {
-    if (lower.startsWith(dim)) return dim
-  }
-  return 'completeness'
-}
 
 /** Wrap an error with a stage context so the API can show "stage: X failed: reason" */
 function wrapError(err: unknown, stage: string): Error {

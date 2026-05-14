@@ -6,6 +6,7 @@ import Link from 'next/link'
 import type { PrescriptionContent, PrescriptionIntake, DiagnosticDimension, PrescriptionAction, Prescription, PrescriptionStatus } from '@/types/diagnostic'
 import type { ClientDiscoveryRow } from '@/lib/zhangqian/types'
 import type { SelfGrade, HuatuoGenerationMeta, TrendSummaryLite, SelfGradeWeakness, SelfGradeDimension } from '@/lib/huatuo/types'
+import { coerceWeaknesses } from '@/lib/huatuo/weakness-utils'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -930,15 +931,11 @@ function HuatuoMetaCard({
   // 点击维度 chip 筛选下方待改进项；再点一次清除
   const [activeDim, setActiveDim] = useState<SelfGradeDimension | null>(null)
 
-  // 把 weaknesses 按维度分组（兼容旧 DB 里的 string[] 格式）
+  // 把 weaknesses 按维度分组。coerceWeaknesses 会以「文字前缀」为最可信来源
+  // 纠正 Claude 填错的 dimension 字段，并剥掉冗余前缀（兼容旧 DB string[] 格式）。
   const weaknessesByDim = ((): Record<SelfGradeDimension, SelfGradeWeakness[]> => {
     const groups = {} as Record<SelfGradeDimension, SelfGradeWeakness[]>
-    const rawList = (selfGrade.weaknesses ?? []) as unknown as Array<string | SelfGradeWeakness>
-    for (const raw of rawList) {
-      const w: SelfGradeWeakness = typeof raw === 'string'
-        ? { dimension: 'completeness', severity: 'medium', text: raw }
-        : raw
-      if (!w || !w.text) continue
+    for (const w of coerceWeaknesses(selfGrade.weaknesses)) {
       ;(groups[w.dimension] ??= []).push(w)
     }
     return groups
