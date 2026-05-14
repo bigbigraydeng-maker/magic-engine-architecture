@@ -1,8 +1,10 @@
 /**
  * GET /api/clients/[id]/prescriptions/latest-draft
  *
- * 返回该客户最近一份非废弃的处方（status IN draft/generating/failed）。
- * 用于前端 mount 时恢复"刚生成的草稿"，避免用户刷新后丢失结果。
+ * 返回该客户最近一份非废弃的处方（status IN draft/generating/failed/approved）。
+ * 前端 mount 时用来恢复状态：
+ *   - draft/generating/failed → 可编辑的审阅态
+ *   - approved → 只读态（前端会切到"已批准"UI）
  *
  * 404 若没有任何处方。
  * Security: Bearer token (INTERNAL_API_KEY)
@@ -32,7 +34,7 @@ export async function GET(
       .from('prescriptions')
       .select('*')
       .eq('client_id', clientId)
-      .in('status', ['draft', 'generating', 'failed'])
+      .in('status', ['draft', 'generating', 'failed', 'approved'])
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle<Prescription>()

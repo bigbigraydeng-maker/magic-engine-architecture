@@ -111,6 +111,8 @@ export default function NewPrescriptionPage() {
   const [selfGrade, setSelfGrade]             = useState<SelfGrade | null>(null)
   const [genMeta, setGenMeta]                 = useState<HuatuoGenerationMeta | null>(null)
   const [trendSummary, setTrendSummary]       = useState<TrendSummaryLite | null>(null)
+  // 处方状态 — approved 时切只读，禁用精修/批准
+  const [prescriptionStatus, setPrescriptionStatus] = useState<PrescriptionStatus | null>(null)
 
   // Approval state
   const [isApproving, setIsApproving]   = useState(false)
@@ -209,6 +211,7 @@ export default function NewPrescriptionPage() {
         // 仅当用户还在第1步且没生成中时才自动恢复
         if (step !== 1 || isGenerating) return
         setPrescriptionId(p.id)
+        setPrescriptionStatus(p.status)
         setContent(p.content)
         const sg = (p as Prescription & { self_grade?: SelfGrade }).self_grade
         if (sg) setSelfGrade(sg)
@@ -278,6 +281,7 @@ export default function NewPrescriptionPage() {
             if (payload.meta.trend_summary) setTrendSummary(payload.meta.trend_summary)
             if (payload.trend_summary) setTrendSummary(payload.trend_summary)
           }
+          setPrescriptionStatus('draft')
           setStep(3)
         },
         onError: (err) => { streamErr = err },
@@ -312,7 +316,20 @@ export default function NewPrescriptionPage() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
         body:    JSON.stringify({ status: 'approved' }),
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      // 409 = 已经批准过 → 自愈：切到已批准态，不报错
+      if (res.status === 409) {
+        setPrescriptionStatus('approved')
+        return
+      }
+      if (!res.ok) {
+        let errText = `HTTP ${res.status}`
+        try {
+          const errBody = await res.json() as { error?: string }
+          if (errBody?.error) errText = `${errText} — ${errBody.error}`
+        } catch {/* */}
+        throw new Error(errText)
+      }
+      setPrescriptionStatus('approved')
       router.push(`/dashboard/clients/${clientId}/execution`)
     } catch (e) {
       setApproveError(e instanceof Error ? e.message : '批准失败')
@@ -348,6 +365,12 @@ export default function NewPrescriptionPage() {
         cache: 'no-store',
       })
 
+      // 409 = 处方已批准，无法再精修 → 自愈：切到已批准态
+      if (res.status === 409) {
+        setPrescriptionStatus('approved')
+        setRefineBanner({ kind: 'error', text: '处方已批准，无法再精修 — 请前往执行看板' })
+        return false
+      }
       if (!res.ok) {
         let errText = `HTTP ${res.status}`
         try {
@@ -374,6 +397,7 @@ export default function NewPrescriptionPage() {
             if (payload.meta.trend_summary) setTrendSummary(payload.meta.trend_summary)
             if (payload.trend_summary) setTrendSummary(payload.trend_summary)
           }
+          setPrescriptionStatus('draft')
         },
         onError: (err) => { captured.streamErr = err },
       })
@@ -423,6 +447,9 @@ export default function NewPrescriptionPage() {
       prev.includes(dim) ? prev.filter(d => d !== dim) : [...prev, dim]
     )
   }
+
+  // 处方已批准 → 切只读态：隐藏精修卡 + 批准/拒绝按钮，改为"前往执行看板"
+  const isApproved = prescriptionStatus === 'approved'
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -611,8 +638,25 @@ export default function NewPrescriptionPage() {
         {/* ── Step 3: 处方审阅（双栏布局：左侧处方 + 右侧悬浮"我的建议") ── */}
         {step === 3 && content && (
           <div className="lg:grid lg:grid-cols-3 lg:gap-6">
-            {/* ─── 左栏：处方内容（移动端全宽） ─── */}
-            <div className="lg:col-span-2 space-y-4">
+            {/* ─── 左栏：处方内容（移动端全宽；已批准时占满 3 列） ─── */}
+            <div className={`space-y-4 ${isApproved ? 'lg:col-span-3' : 'lg:col-span-2'}`}>
+            {/* 已批准横幅 — 只读态，引导去执行看板 */}
+            {isApproved && (
+              <div className="rounded-xl border border-green-200 bg-green-50 p-4 flex items-center gap-3">
+                <span className="text-2xl shrink-0">✅</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-green-900">此处方已批准</p>
+                  <p className="text-xs text-green-700">处方已锁定，不能再精修或修改。执行计划已生成。</p>
+                </div>
+                <Link
+                  href={`/dashboard/clients/${clientId}/execution`}
+                  className="shrink-0 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 transition-colors"
+                >
+                  前往执行看板 →
+                </Link>
+              </div>
+            )}
+
             {/* 精修结果横幅 — 桌面/移动端都能看到（不依赖抽屉/sidebar） */}
             {refineBanner && (
               <div className={`rounded-xl border p-3.5 flex items-start gap-2.5 ${
@@ -740,55 +784,68 @@ export default function NewPrescriptionPage() {
               </div>
             )}
 
-            {/* Approval buttons — 批准/拒绝（不含精修，精修在右侧/抽屉里） */}
+            {/* Approval buttons — 批准/拒绝。已批准时改为"前往执行看板" */}
             {approveError && (
               <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
                 {approveError}
               </div>
             )}
 
-            <div className="flex gap-3 pt-2 pb-20 lg:pb-2">
-              <button
-                onClick={() => void handleReject()}
-                className="flex-1 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
-              >
-                要求修改
-              </button>
-              <button
-                onClick={() => void handleApprove()}
-                disabled={isApproving}
-                className="flex-1 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              >
-                {isApproving ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
-                    处理中…
-                  </span>
-                ) : '✓ 批准并生成执行计划'}
-              </button>
-            </div>
-            </div>
-            {/* ─── 右栏：sticky"我的修改建议"（仅桌面 lg+） ─── */}
-            <aside className="hidden lg:block lg:col-span-1">
-              <div className="sticky top-20">
-                <HumanFeedbackCard
-                  comments={humanComments}
-                  setComments={setHumanComments}
-                  onRefine={handleRefine}
-                  isRefining={isRefining}
-                  refineError={refineError}
-                  progress={isRefining ? (progressNote ?? '排队中…') : null}
-                  elapsedSec={isRefining ? elapsedSec : null}
-                  passes={genMeta?.passes ?? 1}
-                />
+            {isApproved ? (
+              <div className="pt-2 pb-20 lg:pb-2">
+                <Link
+                  href={`/dashboard/clients/${clientId}/execution`}
+                  className="block w-full rounded-lg bg-green-600 px-4 py-2.5 text-center text-sm font-semibold text-white hover:bg-green-700 transition-colors"
+                >
+                  ✓ 处方已批准 — 前往执行看板 →
+                </Link>
               </div>
-            </aside>
+            ) : (
+              <div className="flex gap-3 pt-2 pb-20 lg:pb-2">
+                <button
+                  onClick={() => void handleReject()}
+                  className="flex-1 rounded-lg border border-gray-300 px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  要求修改
+                </button>
+                <button
+                  onClick={() => void handleApprove()}
+                  disabled={isApproving}
+                  className="flex-1 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {isApproving ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <span className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+                      处理中…
+                    </span>
+                  ) : '✓ 批准并生成执行计划'}
+                </button>
+              </div>
+            )}
+            </div>
+            {/* ─── 右栏：sticky"我的修改建议"（仅桌面 lg+，已批准则隐藏） ─── */}
+            {!isApproved && (
+              <aside className="hidden lg:block lg:col-span-1">
+                <div className="sticky top-20">
+                  <HumanFeedbackCard
+                    comments={humanComments}
+                    setComments={setHumanComments}
+                    onRefine={handleRefine}
+                    isRefining={isRefining}
+                    refineError={refineError}
+                    progress={isRefining ? (progressNote ?? '排队中…') : null}
+                    elapsedSec={isRefining ? elapsedSec : null}
+                    passes={genMeta?.passes ?? 1}
+                  />
+                </div>
+              </aside>
+            )}
           </div>
         )}
       </div>
 
-      {/* ─── 移动端：浮动按钮 + 底部抽屉（lg 以下） ─── */}
-      {step === 3 && content && (
+      {/* ─── 移动端：浮动按钮 + 底部抽屉（lg 以下，已批准则隐藏） ─── */}
+      {step === 3 && content && !isApproved && (
         <MobileFeedbackSheet
           isOpen={mobileFeedbackOpen}
           onOpen={() => setMobileFeedbackOpen(true)}
