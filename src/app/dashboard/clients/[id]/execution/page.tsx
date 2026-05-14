@@ -316,10 +316,10 @@ function ExecutionItemRow({
 }
 
 // ---------------------------------------------------------------------------
-// Phase 折叠卡
+// Phase 看板列（kanban column — 可折叠）
 // ---------------------------------------------------------------------------
 
-function PhaseAccordion({
+function PhaseColumn({
   phase,
   items,
   defaultOpen,
@@ -339,21 +339,23 @@ function PhaseAccordion({
   const completed = items.filter(i => i.status === 'completed').length
 
   return (
-    <div className="rounded-xl border border-gray-200 overflow-hidden">
+    <div className="rounded-xl border border-gray-200 bg-white overflow-hidden flex flex-col">
+      {/* 列头 — 点击折叠/展开 */}
       <button
         onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 px-5 py-4 bg-white hover:bg-gray-50 transition-colors"
+        className="w-full flex items-center gap-2 px-3.5 py-3 bg-white hover:bg-gray-50 transition-colors border-b border-gray-100"
       >
-        <span className={`w-2 h-2 rounded-full ${meta.color}`} />
-        <span className="font-semibold text-gray-900 flex-1 text-left">{meta.name}</span>
-        <span className="text-xs text-gray-400">{completed}/{items.length} 完成</span>
-        <span className="text-gray-400">{open ? '▲' : '▼'}</span>
+        <span className={`w-2 h-2 rounded-full shrink-0 ${meta.color}`} />
+        <span className="font-semibold text-sm text-gray-900 flex-1 text-left truncate">{meta.name}</span>
+        <span className="text-xs text-gray-400 shrink-0">{completed}/{items.length}</span>
+        <span className="text-gray-400 text-xs shrink-0">{open ? '▲' : '▼'}</span>
       </button>
 
+      {/* 列体 — 卡片纵向堆叠 */}
       {open && (
-        <div className="bg-gray-50 border-t border-gray-100 p-4 space-y-3">
+        <div className="bg-gray-50 p-2.5 space-y-2.5 flex-1 min-h-[80px]">
           {items.length === 0 ? (
-            <p className="text-sm text-gray-400 text-center py-4">此阶段暂无执行项</p>
+            <p className="text-xs text-gray-400 text-center py-6">此阶段暂无执行项</p>
           ) : (
             items.map(item => (
               <ExecutionItemRow
@@ -452,23 +454,21 @@ function PrescriptionGroup({
         )}
       </div>
 
-      {/* 该处方的 3 个 phase */}
-      <div className="p-4 space-y-3 bg-gray-50">
-        {[1, 2, 3].map(phase => {
-          const phaseItems = byPhase[phase] ?? []
-          if (phaseItems.length === 0) return null
-          return (
-            <PhaseAccordion
+      {/* 该处方的 3 个 phase — kanban 并列列布局 */}
+      <div className="p-4 bg-gray-50">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 items-start">
+          {[1, 2, 3].map(phase => (
+            <PhaseColumn
               key={phase}
               phase={phase}
-              items={phaseItems}
-              defaultOpen={defaultOpen && phase === 1}
+              items={byPhase[phase] ?? []}
+              defaultOpen={defaultOpen}
               onStatusChange={onStatusChange}
               onAddLog={onAddLog}
               onOpenChat={onOpenChat}
             />
-          )
-        })}
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -650,7 +650,7 @@ export default function ExecutionPage() {
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <div className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto flex items-center justify-between">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div>
             <h1 className="text-lg font-semibold text-gray-900">执行看板</h1>
             <p className="text-xs text-gray-400 mt-0.5">鲁班执行代理 · 按阶段跟踪处方落地进度</p>
@@ -664,7 +664,7 @@ export default function ExecutionPage() {
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto px-6 py-6 space-y-4">
+      <div className="max-w-7xl mx-auto px-6 py-6 space-y-4">
         {/* 操作错误提示（状态变更 / 加日志失败时） */}
         {opError && (
           <div className="rounded-xl border border-red-200 bg-red-50 p-3 flex items-center justify-between gap-3 text-sm text-red-700">
