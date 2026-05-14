@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import type { ExecutionItem, ExecutionItemStatus, ExecutionLog } from '@/types/diagnostic'
+import { LubanChatDrawer } from './_components/LubanChatDrawer'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -138,10 +139,12 @@ function ExecutionItemRow({
   item,
   onStatusChange,
   onAddLog,
+  onOpenChat,
 }: {
   item: ItemWithLogs
   onStatusChange: (id: string, status: ExecutionItemStatus) => void
   onAddLog: (id: string, content: string, kind: 'note' | 'blocker') => Promise<void>
+  onOpenChat: (item: ItemWithLogs) => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const [noteText, setNoteText] = useState('')
@@ -215,9 +218,19 @@ function ExecutionItemRow({
         </div>
       </div>
 
-      {/* 展开区：状态流转 + 工作日志 */}
+      {/* 展开区：鲁班对话入口 + 状态流转 + 工作日志 */}
       {expanded && (
         <div className="border-t border-gray-100 bg-gray-50 p-4 space-y-4">
+          {/* 鲁班对话入口 — 醒目 */}
+          <button
+            onClick={() => onOpenChat(item)}
+            className="w-full flex items-center gap-2.5 rounded-lg border-2 border-indigo-200 bg-indigo-50 px-3.5 py-2.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300 transition-colors"
+          >
+            <span className="text-base">🔨</span>
+            <span className="flex-1 text-left">与鲁班对话 — 让 AI 帮你起草内容、分析卡点、拆解下一步</span>
+            <span className="text-indigo-400">→</span>
+          </button>
+
           {/* 状态流转按钮 */}
           <div>
             <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">状态</p>
@@ -303,12 +316,14 @@ function PhaseAccordion({
   defaultOpen,
   onStatusChange,
   onAddLog,
+  onOpenChat,
 }: {
   phase: number
   items: ItemWithLogs[]
   defaultOpen: boolean
   onStatusChange: (id: string, status: ExecutionItemStatus) => void
   onAddLog: (id: string, content: string, kind: 'note' | 'blocker') => Promise<void>
+  onOpenChat: (item: ItemWithLogs) => void
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const meta      = PHASE_LABELS[phase] ?? { name: `Phase ${phase}`, color: 'bg-gray-600' }
@@ -337,6 +352,7 @@ function PhaseAccordion({
                 item={item}
                 onStatusChange={onStatusChange}
                 onAddLog={onAddLog}
+                onOpenChat={onOpenChat}
               />
             ))
           )}
@@ -359,6 +375,8 @@ export default function ExecutionPage() {
   const [items, setItems]     = useState<ItemWithLogs[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
+  // 当前打开鲁班对话的执行项（null = 抽屉关闭）
+  const [chatItem, setChatItem] = useState<ItemWithLogs | null>(null)
 
   const fetchItems = useCallback(async () => {
     setLoading(true)
@@ -499,9 +517,22 @@ export default function ExecutionPage() {
             defaultOpen={phase === 1}
             onStatusChange={handleStatusChange}
             onAddLog={handleAddLog}
+            onOpenChat={setChatItem}
           />
         ))}
       </div>
+
+      {/* 鲁班对话抽屉 */}
+      {chatItem && (
+        <LubanChatDrawer
+          clientId={clientId}
+          itemId={chatItem.id}
+          itemTitle={chatItem.title}
+          isOpen={true}
+          onClose={() => setChatItem(null)}
+          onLogSaved={() => void fetchItems()}
+        />
+      )}
     </div>
   )
 }

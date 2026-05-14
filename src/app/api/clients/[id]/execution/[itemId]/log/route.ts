@@ -4,8 +4,9 @@
  * FDE 给执行项添加一条工作日志（鲁班执行代理 P8.10.S4.1）。
  *
  * Body: {
- *   kind:    'note' | 'blocker'   — 默认 'note'
- *   content: string              — 日志内容
+ *   kind:    'note' | 'blocker' | 'ai_assist'   — 默认 'note'
+ *   content: string                            — 日志内容
+ *   author?: 'fde' | 'luban'                   — 默认 'fde'；存鲁班回复时传 'luban'
  * }
  *
  * Returns: { success, log }
@@ -15,12 +16,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireBearerToken } from '@/lib/validation-utils'
-import type { ExecutionLog, ExecutionLogKind } from '@/types/diagnostic'
+import type { ExecutionLog, ExecutionLogKind, ExecutionLogAuthor } from '@/types/diagnostic'
 
 export const dynamic = 'force-dynamic'
 
-// FDE 手动可写的类型（ai_assist/status_change/adjustment 由系统/鲁班写）
-const FDE_KINDS: ExecutionLogKind[] = ['note', 'blocker']
+// 经此端点可写的类型（status_change/adjustment 由系统写）
+// ai_assist = FDE 把鲁班的对话回复"存为工作记录"
+const ALLOWED_KINDS: ExecutionLogKind[] = ['note', 'blocker', 'ai_assist']
 
 export async function POST(
   req: NextRequest,
@@ -33,10 +35,16 @@ export async function POST(
 
   try {
     const { id: clientId, itemId } = params
-    const body = (await req.json()) as { kind?: ExecutionLogKind; content?: string }
+    const body = (await req.json()) as {
+      kind?: ExecutionLogKind
+      content?: string
+      author?: ExecutionLogAuthor
+    }
 
     const kind: ExecutionLogKind =
-      body.kind && FDE_KINDS.includes(body.kind) ? body.kind : 'note'
+      body.kind && ALLOWED_KINDS.includes(body.kind) ? body.kind : 'note'
+    const author: ExecutionLogAuthor =
+      body.author === 'luban' ? 'luban' : 'fde'
     const content = (body.content ?? '').trim()
 
     if (!content) {
@@ -60,7 +68,7 @@ export async function POST(
       .insert({
         execution_item_id: itemId,
         client_id:         clientId,
-        author:            'fde',
+        author,
         kind,
         content,
         meta:              null,
