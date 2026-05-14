@@ -146,18 +146,27 @@ function FdeMetaRow({ stepsJson }: { stepsJson: Record<string, unknown> | null }
 
 function ExecutionItemRow({
   item,
+  editable,
   onStatusChange,
   onAddLog,
   onOpenChat,
+  onEditItem,
 }: {
   item: ItemWithLogs
+  editable: boolean
   onStatusChange: (id: string, status: ExecutionItemStatus) => void
   onAddLog: (id: string, content: string, kind: 'note' | 'blocker') => Promise<void>
   onOpenChat: (item: ItemWithLogs) => void
+  onEditItem: (itemId: string, fields: { title?: string; description?: string }) => Promise<boolean>
 }) {
   const [expanded, setExpanded] = useState(false)
   const [noteText, setNoteText] = useState('')
   const [addingLog, setAddingLog] = useState(false)
+  // 编辑模式
+  const [editing, setEditing]   = useState(false)
+  const [eTitle, setETitle]     = useState(item.title)
+  const [eDesc, setEDesc]       = useState(item.description)
+  const [savingEdit, setSavingEdit] = useState(false)
 
   const stepsJson = item.steps_json as Record<string, unknown> | null
   const fixMeta   = FIX_TYPE_META[item.fix_type] ?? { icon: '❓', label: item.fix_type, cls: 'bg-gray-100 text-gray-600' }
@@ -177,6 +186,14 @@ function ExecutionItemRow({
     }
   }
 
+  const submitEdit = async () => {
+    if (!eTitle.trim()) return
+    setSavingEdit(true)
+    const ok = await onEditItem(item.id, { title: eTitle.trim(), description: eDesc.trim() })
+    setSavingEdit(false)
+    if (ok) setEditing(false)
+  }
+
   return (
     <div className={`rounded-lg border bg-white ${isDone ? 'opacity-70' : ''}`}>
       {/* 头部行 */}
@@ -184,46 +201,93 @@ function ExecutionItemRow({
         <span className="text-xl mt-0.5" title={fixMeta.label}>{fixMeta.icon}</span>
 
         <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <p className={`text-sm font-semibold ${isDone ? 'line-through text-gray-400' : 'text-gray-900'}`}>
-                {item.title}
-              </p>
-              <p className="text-xs text-gray-500 mt-0.5">{item.description}</p>
+          {editing ? (
+            /* ── 编辑模式 ── */
+            <div className="space-y-2">
+              <input
+                value={eTitle}
+                onChange={e => setETitle(e.target.value)}
+                placeholder="执行项标题"
+                className="w-full rounded border border-indigo-300 px-2 py-1.5 text-sm focus:border-indigo-400 focus:outline-none"
+              />
+              <textarea
+                value={eDesc}
+                onChange={e => setEDesc(e.target.value)}
+                rows={2}
+                placeholder="说明"
+                className="w-full rounded border border-indigo-300 px-2 py-1.5 text-xs focus:border-indigo-400 focus:outline-none"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setEditing(false); setETitle(item.title); setEDesc(item.description) }}
+                  className="flex-1 rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => void submitEdit()}
+                  disabled={!eTitle.trim() || savingEdit}
+                  className="flex-1 rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {savingEdit ? '保存中…' : '保存'}
+                </button>
+              </div>
             </div>
-            <span className={`shrink-0 text-xs px-2 py-0.5 rounded-full font-medium ${statusM.color}`}>
-              {statusM.label}
-            </span>
-          </div>
+          ) : (
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className={`text-sm font-semibold ${isDone ? 'line-through text-gray-400' : 'text-gray-900'}`}>
+                  {item.title}
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">{item.description}</p>
+              </div>
+              <span className={`shrink-0 text-xs px-2 py-0.5 rounded-full font-medium ${statusM.color}`}>
+                {statusM.label}
+              </span>
+            </div>
+          )}
 
           {/* FDE 元数据 */}
           <div className="mt-2">
             <FdeMetaRow stepsJson={stepsJson} />
           </div>
 
-          {/* 标签行 + 展开按钮 */}
-          <div className="flex items-center gap-3 mt-2 flex-wrap">
-            <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${fixMeta.cls}`}>
-              {fixMeta.label}
-            </span>
-            {moduleRoute && (
-              <Link
-                href={moduleRoute.path(item.client_id)}
-                className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium"
-              >
-                在 {moduleRoute.label} 中执行 →
-              </Link>
-            )}
-            {item.logs.length > 0 && (
-              <span className="text-[11px] text-gray-400">{item.logs.length} 条工作记录</span>
-            )}
-            <button
-              onClick={() => setExpanded(e => !e)}
-              className="text-xs text-gray-500 hover:text-gray-800 ml-auto"
-            >
-              {expanded ? '收起 ▲' : '展开详情 ▼'}
-            </button>
-          </div>
+          {/* 标签行 + 展开按钮（编辑模式下隐藏） */}
+          {!editing && (
+            <div className="flex items-center gap-3 mt-2 flex-wrap">
+              <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${fixMeta.cls}`}>
+                {fixMeta.label}
+              </span>
+              {moduleRoute && (
+                <Link
+                  href={moduleRoute.path(item.client_id)}
+                  className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+                >
+                  在 {moduleRoute.label} 中执行 →
+                </Link>
+              )}
+              {item.logs.length > 0 && (
+                <span className="text-[11px] text-gray-400">{item.logs.length} 条工作记录</span>
+              )}
+              <div className="ml-auto flex items-center gap-2">
+                {editable && !isDone && (
+                  <button
+                    onClick={() => { setEditing(true); setETitle(item.title); setEDesc(item.description) }}
+                    className="text-xs text-gray-400 hover:text-indigo-600"
+                    title="编辑标题和说明"
+                  >
+                    ✏️ 编辑
+                  </button>
+                )}
+                <button
+                  onClick={() => setExpanded(e => !e)}
+                  className="text-xs text-gray-500 hover:text-gray-800"
+                >
+                  {expanded ? '收起 ▲' : '展开详情 ▼'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -319,24 +383,67 @@ function ExecutionItemRow({
 // Phase 看板列（kanban column — 可折叠）
 // ---------------------------------------------------------------------------
 
+const DIMENSION_OPTIONS: { v: string; label: string }[] = [
+  { v: 'seo', label: 'SEO' },
+  { v: 'ai_visibility', label: 'AI可见度' },
+  { v: 'social', label: '社媒' },
+  { v: 'reputation', label: '口碑' },
+  { v: 'ads', label: '广告' },
+  { v: 'competitor', label: '竞品' },
+]
+const FIX_TYPE_OPTIONS: { v: string; label: string }[] = [
+  { v: 'fde_manual', label: 'FDE 手动' },
+  { v: 'me_auto', label: 'ME 自动' },
+  { v: 'third_party', label: '第三方' },
+]
+
 function PhaseColumn({
   phase,
   items,
   defaultOpen,
+  prescriptionId,
+  editable,
   onStatusChange,
   onAddLog,
   onOpenChat,
+  onAddItem,
+  onEditItem,
 }: {
   phase: number
   items: ItemWithLogs[]
   defaultOpen: boolean
+  prescriptionId: string
+  editable: boolean
   onStatusChange: (id: string, status: ExecutionItemStatus) => void
   onAddLog: (id: string, content: string, kind: 'note' | 'blocker') => Promise<void>
   onOpenChat: (item: ItemWithLogs) => void
+  onAddItem: (prescriptionId: string, phase: number, fields: AddItemFields) => Promise<boolean>
+  onEditItem: (itemId: string, fields: { title?: string; description?: string }) => Promise<boolean>
 }) {
   const [open, setOpen] = useState(defaultOpen)
+  const [adding, setAdding] = useState(false)       // 是否展开"加执行项"表单
+  const [aTitle, setATitle] = useState('')
+  const [aDesc, setADesc]   = useState('')
+  const [aDim, setADim]     = useState('seo')
+  const [aFix, setAFix]     = useState('fde_manual')
+  const [submitting, setSubmitting] = useState(false)
+
   const meta      = PHASE_LABELS[phase] ?? { name: `Phase ${phase}`, color: 'bg-gray-600' }
   const completed = items.filter(i => i.status === 'completed').length
+
+  const submitAdd = async () => {
+    if (!aTitle.trim()) return
+    setSubmitting(true)
+    const ok = await onAddItem(prescriptionId, phase, {
+      title: aTitle.trim(), description: aDesc.trim() || aTitle.trim(),
+      dimension: aDim, fix_type: aFix,
+    })
+    setSubmitting(false)
+    if (ok) {
+      setATitle(''); setADesc(''); setADim('seo'); setAFix('fde_manual')
+      setAdding(false)
+    }
+  }
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white overflow-hidden flex flex-col">
@@ -354,18 +461,77 @@ function PhaseColumn({
       {/* 列体 — 卡片纵向堆叠 */}
       {open && (
         <div className="bg-gray-50 p-2.5 space-y-2.5 flex-1 min-h-[80px]">
-          {items.length === 0 ? (
+          {items.length === 0 && !adding && (
             <p className="text-xs text-gray-400 text-center py-6">此阶段暂无执行项</p>
-          ) : (
-            items.map(item => (
-              <ExecutionItemRow
-                key={item.id}
-                item={item}
-                onStatusChange={onStatusChange}
-                onAddLog={onAddLog}
-                onOpenChat={onOpenChat}
+          )}
+          {items.map(item => (
+            <ExecutionItemRow
+              key={item.id}
+              item={item}
+              editable={editable}
+              onStatusChange={onStatusChange}
+              onAddLog={onAddLog}
+              onOpenChat={onOpenChat}
+              onEditItem={onEditItem}
+            />
+          ))}
+
+          {/* 加执行项表单 */}
+          {editable && adding && (
+            <div className="rounded-lg border-2 border-dashed border-indigo-200 bg-white p-2.5 space-y-2">
+              <input
+                value={aTitle}
+                onChange={e => setATitle(e.target.value)}
+                placeholder="执行项标题"
+                className="w-full rounded border border-gray-300 px-2 py-1.5 text-xs focus:border-indigo-400 focus:outline-none"
               />
-            ))
+              <textarea
+                value={aDesc}
+                onChange={e => setADesc(e.target.value)}
+                rows={2}
+                placeholder="说明（可选，留空用标题）"
+                className="w-full rounded border border-gray-300 px-2 py-1.5 text-xs focus:border-indigo-400 focus:outline-none"
+              />
+              <div className="flex gap-2">
+                <select
+                  value={aDim} onChange={e => setADim(e.target.value)}
+                  className="flex-1 rounded border border-gray-300 px-1.5 py-1 text-xs"
+                >
+                  {DIMENSION_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+                </select>
+                <select
+                  value={aFix} onChange={e => setAFix(e.target.value)}
+                  className="flex-1 rounded border border-gray-300 px-1.5 py-1 text-xs"
+                >
+                  {FIX_TYPE_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+                </select>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setAdding(false); setATitle(''); setADesc('') }}
+                  className="flex-1 rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => void submitAdd()}
+                  disabled={!aTitle.trim() || submitting}
+                  className="flex-1 rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {submitting ? '添加中…' : '添加'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* + 加执行项 触发按钮 */}
+          {editable && !adding && (
+            <button
+              onClick={() => setAdding(true)}
+              className="w-full rounded-lg border border-dashed border-gray-300 py-2 text-xs text-gray-500 hover:border-indigo-300 hover:text-indigo-600 transition-colors"
+            >
+              ＋ 加执行项
+            </button>
           )}
         </div>
       )}
@@ -387,6 +553,8 @@ interface GroupData {
   derivable: boolean   // 是否可派生（补充/修订）—— 仅 approved 且非归档
 }
 
+type AddItemFields = { title: string; description: string; dimension: string; fix_type: string }
+
 function PrescriptionGroup({
   group,
   defaultOpen,
@@ -394,6 +562,8 @@ function PrescriptionGroup({
   onAddLog,
   onOpenChat,
   onDerive,
+  onAddItem,
+  onEditItem,
 }: {
   group: GroupData
   defaultOpen: boolean
@@ -401,6 +571,8 @@ function PrescriptionGroup({
   onAddLog: (id: string, content: string, kind: 'note' | 'blocker') => Promise<void>
   onOpenChat: (item: ItemWithLogs) => void
   onDerive: (mode: 'supplement' | 'revision', priorId: string, priorLabel: string) => void
+  onAddItem: (prescriptionId: string, phase: number, fields: AddItemFields) => Promise<boolean>
+  onEditItem: (itemId: string, fields: { title?: string; description?: string }) => Promise<boolean>
 }) {
   const { items, label, archived, derivable, pid, meta } = group
 
@@ -463,9 +635,13 @@ function PrescriptionGroup({
               phase={phase}
               items={byPhase[phase] ?? []}
               defaultOpen={defaultOpen}
+              prescriptionId={pid}
+              editable={!archived}
               onStatusChange={onStatusChange}
               onAddLog={onAddLog}
               onOpenChat={onOpenChat}
+              onAddItem={onAddItem}
+              onEditItem={onEditItem}
             />
           ))}
         </div>
@@ -566,6 +742,59 @@ export default function ExecutionPage() {
       setOpError('工作记录保存失败，请重试')
     }
   }, [clientId])
+
+  // 新增执行项（处方活化 S5.2）
+  const handleAddItem = useCallback(async (
+    prescriptionId: string,
+    phase: number,
+    fields: { title: string; description: string; dimension: string; fix_type: string },
+  ): Promise<boolean> => {
+    setOpError(null)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/execution`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
+        body:    JSON.stringify({ prescription_id: prescriptionId, phase, ...fields }),
+        cache:   'no-store',
+      })
+      if (!res.ok) {
+        let msg = `新增执行项失败（HTTP ${res.status}）`
+        try { const eb = await res.json() as { error?: string }; if (eb?.error) msg = eb.error } catch {/* */}
+        setOpError(msg)
+        return false
+      }
+      await fetchItems()
+      return true
+    } catch {
+      setOpError('新增执行项失败，请重试')
+      return false
+    }
+  }, [clientId, fetchItems])
+
+  // 编辑执行项标题/说明（处方活化 S5.2）
+  const handleEditItem = useCallback(async (
+    itemId: string,
+    fields: { title?: string; description?: string },
+  ): Promise<boolean> => {
+    setOpError(null)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/execution/${itemId}`, {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
+        body:    JSON.stringify(fields),
+        cache:   'no-store',
+      })
+      if (!res.ok) {
+        setOpError(`编辑执行项失败（HTTP ${res.status}）`)
+        return false
+      }
+      await fetchItems()
+      return true
+    } catch {
+      setOpError('编辑执行项失败，请重试')
+      return false
+    }
+  }, [clientId, fetchItems])
 
   const completedCount = items.filter(i => i.status === 'completed').length
 
@@ -685,6 +914,8 @@ export default function ExecutionPage() {
             onAddLog={handleAddLog}
             onOpenChat={setChatItem}
             onDerive={(mode, priorId, priorLabel) => setDeriveDrawer({ mode, priorId, priorLabel })}
+            onAddItem={handleAddItem}
+            onEditItem={handleEditItem}
           />
         ))}
       </div>

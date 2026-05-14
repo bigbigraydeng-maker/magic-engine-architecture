@@ -1,15 +1,18 @@
 /**
  * PATCH /api/clients/[id]/execution/[itemId]
  *
- * 更新执行项状态。状态变更会自动写入 execution_logs 时间线（鲁班 P8.10.S4）。
+ * 更新执行项 —— 支持状态变更 + 标题/说明编辑（处方"活化" P8.10.S5.2）。
+ * 所有变更自动写入 execution_logs 时间线。
  *
- * Body: {
- *   status: 'pending' | 'in_progress' | 'completed' | 'skipped'
- *   note?:  string   — 可选，附带一条 FDE 备注（写入 execution_logs）
+ * Body（status / title / description 至少一项）: {
+ *   status?:      'pending' | 'in_progress' | 'completed' | 'skipped'
+ *   title?:       string   — 编辑标题
+ *   description?: string   — 编辑说明
+ *   note?:        string   — 可选，附带一条 FDE 备注
  * }
  *
  * Security: Bearer token (INTERNAL_API_KEY)
- * Reference: ROADMAP.md P8.10.S4.1
+ * Reference: ROADMAP.md P8.10.S4.1 / S5.2
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -39,36 +42,55 @@ export async function PATCH(
 
   try {
     const { id: clientId, itemId } = params
-    const body = (await req.json()) as { status?: ExecutionItemStatus; note?: string }
+    const body = (await req.json()) as {
+      status?: ExecutionItemStatus
+      title?: string
+      description?: string
+      note?: string
+    }
 
-    if (!body.status || !VALID_STATUSES.includes(body.status)) {
+    const newTitle = typeof body.title === 'string' ? body.title.trim() : undefined
+    const newDesc = typeof body.description === 'string' ? body.description.trim() : undefined
+    const hasStatus = body.status != null
+    const hasEdit = newTitle !== undefined || newDesc !== undefined
+
+    if (!hasStatus && !hasEdit) {
+      return NextResponse.json(
+        { success: false, error: 'status / title / description 至少要有一项' },
+        { status: 400 },
+      )
+    }
+    if (hasStatus && !VALID_STATUSES.includes(body.status!)) {
       return NextResponse.json(
         { success: false, error: `status must be one of: ${VALID_STATUSES.join(', ')}` },
         { status: 400 },
       )
     }
 
-    // 先读当前状态（用于 status_change 日志的 from 字段）
+    // 先读当前记录（status_change / 编辑前后对比）
     const { data: current, error: readErr } = await supabaseAdmin
       .from('execution_items')
-      .select('status, started_at')
+      .select('status, started_at, title, description')
       .eq('id', itemId)
       .eq('client_id', clientId)
-      .single<{ status: ExecutionItemStatus; started_at: string | null }>()
+      .single<{
+        status: ExecutionItemStatus; started_at: string | null
+        title: string; description: string
+      }>()
 
     if (readErr || !current) {
       return NextResponse.json({ success: false, error: 'Execution item not found' }, { status: 404 })
     }
 
-    const patch: Record<string, unknown> = { status: body.status }
+    const patch: Record<string, unknown> = {}
     const nowIso = new Date().toISOString()
-    if (body.status === 'completed') {
-      patch.completed_at = nowIso
+    if (hasStatus) {
+      patch.status = body.status
+      if (body.status === 'completed') patch.completed_at = nowIso
+      if (body.status === 'in_progress' && !current.started_at) patch.started_at = nowIso
     }
-    // 首次进入 in_progress → 记 started_at
-    if (body.status === 'in_progress' && !current.started_at) {
-      patch.started_at = nowIso
-    }
+    if (newTitle !== undefined && newTitle) patch.title = newTitle
+    if (newDesc !== undefined && newDesc) patch.description = newDesc
 
     const { data, error } = await supabaseAdmin
       .from('execution_items')
@@ -89,14 +111,28 @@ export async function PATCH(
     // ── 写工作日志（execution_logs）──────────────────────────────────────
     const logs: Array<Record<string, unknown>> = []
     // 状态变更日志（仅当真的变了）
-    if (current.status !== body.status) {
+    if (hasStatus && current.status !== body.status) {
       logs.push({
         execution_item_id: itemId,
         client_id:         clientId,
         author:            'system',
         kind:              'status_change',
-        content:           `状态：${STATUS_LABEL[current.status]} → ${STATUS_LABEL[body.status]}`,
+        content:           `状态：${STATUS_LABEL[current.status]} → ${STATUS_LABEL[body.status!]}`,
         meta:              { from: current.status, to: body.status },
+      })
+    }
+    // 编辑标题/说明 → adjustment 日志
+    const editedFields: string[] = []
+    if (newTitle !== undefined && newTitle && newTitle !== current.title) editedFields.push('标题')
+    if (newDesc !== undefined && newDesc && newDesc !== current.description) editedFields.push('说明')
+    if (editedFields.length > 0) {
+      logs.push({
+        execution_item_id: itemId,
+        client_id:         clientId,
+        author:            'fde',
+        kind:              'adjustment',
+        content:           `FDE 修改了执行项的${editedFields.join('、')}`,
+        meta:              { adjustment: 'edit', fields: editedFields },
       })
     }
     // 可选 FDE 备注
