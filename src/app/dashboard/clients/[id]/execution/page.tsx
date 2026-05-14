@@ -374,7 +374,8 @@ export default function ExecutionPage() {
 
   const [items, setItems]     = useState<ItemWithLogs[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError]     = useState<string | null>(null)
+  const [error, setError]     = useState<string | null>(null)       // 页面加载错误（整页）
+  const [opError, setOpError] = useState<string | null>(null)       // 操作错误（内联横幅）
   // 当前打开鲁班对话的执行项（null = 抽屉关闭）
   const [chatItem, setChatItem] = useState<ItemWithLogs | null>(null)
 
@@ -399,35 +400,53 @@ export default function ExecutionPage() {
 
   useEffect(() => { void fetchItems() }, [fetchItems])
 
-  // 状态变更
+  // 状态变更 — 乐观更新（点击立即变）+ 失败回滚并报错
   const handleStatusChange = useCallback(async (itemId: string, status: ExecutionItemStatus) => {
+    // 1. 乐观更新：立即把 UI 改成新状态
+    setItems(cur => cur.map(i => i.id === itemId ? { ...i, status } : i))
+    setOpError(null)
     try {
       const res = await fetch(`/api/clients/${clientId}/execution/${itemId}`, {
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
         body:    JSON.stringify({ status }),
+        cache:   'no-store',
       })
-      if (!res.ok) return
-      // 重新拉取（拿到新的 status_change 日志）
+      if (!res.ok) {
+        setOpError(`状态更新失败（HTTP ${res.status}）`)
+        await fetchItems()   // 回滚到服务器真实状态
+        return
+      }
+      // 成功 — 重新拉取拿到新的 status_change 日志
       await fetchItems()
-    } catch {/* non-fatal */}
+    } catch {
+      setOpError('状态更新失败，请重试')
+      await fetchItems()     // 回滚
+    }
   }, [clientId, fetchItems])
 
-  // 加工作日志
+  // 加工作日志 — 失败可见
   const handleAddLog = useCallback(async (itemId: string, content: string, kind: 'note' | 'blocker') => {
+    setOpError(null)
     try {
       const res = await fetch(`/api/clients/${clientId}/execution/${itemId}/log`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
         body:    JSON.stringify({ content, kind }),
+        cache:   'no-store',
       })
-      if (!res.ok) return
+      if (!res.ok) {
+        setOpError(`工作记录保存失败（HTTP ${res.status}）`)
+        return
+      }
       const data = await res.json() as { log: ExecutionLog }
-      // 乐观更新：把新 log 追加到对应 item
+      // 把新 log 追加到对应 item
       setItems(prev => prev.map(it =>
         it.id === itemId ? { ...it, logs: [...it.logs, data.log] } : it
       ))
-    } catch {/* non-fatal */}
+    } catch {
+      setOpError('工作记录保存失败，请重试')
+    }
   }, [clientId])
 
   // 按 phase 分组
@@ -507,6 +526,14 @@ export default function ExecutionPage() {
       </div>
 
       <div className="max-w-4xl mx-auto px-6 py-6 space-y-4">
+        {/* 操作错误提示（状态变更 / 加日志失败时） */}
+        {opError && (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-3 flex items-center justify-between gap-3 text-sm text-red-700">
+            <span>{opError}</span>
+            <button onClick={() => setOpError(null)} className="text-red-400 hover:text-red-600 text-lg leading-none">×</button>
+          </div>
+        )}
+
         <ProgressBar completed={completedCount} total={items.length} />
 
         {[1, 2, 3].map(phase => (
