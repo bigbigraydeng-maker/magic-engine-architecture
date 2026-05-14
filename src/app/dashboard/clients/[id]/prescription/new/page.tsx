@@ -118,6 +118,8 @@ export default function NewPrescriptionPage() {
   // Refine state (P8.10.S3 让华佗精修)
   const [isRefining, setIsRefining]     = useState(false)
   const [refineError, setRefineError]   = useState<string | null>(null)
+  // 精修结果横幅 — 显示在主内容区，桌面/移动端都能看到
+  const [refineBanner, setRefineBanner] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
   // 人工修改建议（每次精修可选注入，作为最高优先级反馈）
   const [humanComments, setHumanComments] = useState('')
   // 移动端「我的建议」抽屉开关
@@ -318,11 +320,17 @@ export default function NewPrescriptionPage() {
     }
   }
 
-  const handleRefine = async () => {
-    if (!prescriptionId) return
+  /**
+   * 精修。返回 true=成功 / false=失败。
+   * 结果通过 refineBanner（主内容区醒目横幅）反馈，桌面/移动端都能看到。
+   */
+  const handleRefine = async (): Promise<boolean> => {
+    if (!prescriptionId) return false
     setIsRefining(true)
     setRefineError(null)
+    setRefineBanner(null)
     setProgressNote('连接华佗…')
+    const prevOverall = selfGrade?.overall ?? null
     const startTime = Date.now()
     setElapsedSec(0)
     if (elapsedRef.current) clearInterval(elapsedRef.current)
@@ -330,6 +338,7 @@ export default function NewPrescriptionPage() {
       setElapsedSec(Math.floor((Date.now() - startTime) / 1000))
     }, 1000)
 
+    let succeeded = false
     try {
       const res = await fetch(`/api/clients/${clientId}/prescription/${prescriptionId}/refine`, {
         method: 'POST',
@@ -347,31 +356,53 @@ export default function NewPrescriptionPage() {
         throw new Error(errText)
       }
 
-      let streamErr: string | null = null
+      // 用对象包裹避免 TS 闭包内变异的 never 收窄问题
+      const captured: { streamErr: string | null; newOverall: number | null } = {
+        streamErr: null,
+        newOverall: null,
+      }
       const ok = await readHuatuoStream(res, {
         onStarted: () => {/* prescriptionId 已知，不更新 */},
         onProgress: (note) => setProgressNote(note),
         onDone: (payload) => {
           setContent(payload.content)
           setSelfGrade(payload.self_grade ?? null)
+          captured.newOverall = payload.self_grade?.overall ?? null
           if (payload.meta) {
             setGenMeta(payload.meta)
             if (payload.meta.trend_summary) setTrendSummary(payload.meta.trend_summary)
             if (payload.trend_summary) setTrendSummary(payload.trend_summary)
           }
         },
-        onError: (err) => { streamErr = err },
+        onError: (err) => { captured.streamErr = err },
       })
 
-      if (streamErr) setRefineError(streamErr)
-      else if (!ok) setRefineError('华佗流意外关闭，请刷新页面查看处方状态')
+      if (captured.streamErr) {
+        setRefineError(captured.streamErr)
+        setRefineBanner({ kind: 'error', text: captured.streamErr })
+      } else if (!ok) {
+        const msg = '华佗流意外关闭 — 处方可能已在后台更新，请刷新页面查看'
+        setRefineError(msg)
+        setRefineBanner({ kind: 'error', text: msg })
+      } else {
+        succeeded = true
+        const nv = captured.newOverall
+        const delta = prevOverall != null && nv != null
+          ? `评分 ${prevOverall.toFixed(1)} → ${nv.toFixed(1)}`
+          : (nv != null ? `当前评分 ${nv.toFixed(1)}/10` : '处方已更新')
+        setRefineBanner({ kind: 'success', text: `✓ 精修完成 — ${delta}` })
+        setHumanComments('')   // 成功后清空意见框
+      }
     } catch (e) {
-      setRefineError(e instanceof Error ? e.message : '精修失败')
+      const msg = e instanceof Error ? e.message : '精修失败'
+      setRefineError(msg)
+      setRefineBanner({ kind: 'error', text: msg })
     } finally {
       setIsRefining(false)
       setProgressNote(null)
       if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null }
     }
+    return succeeded
   }
 
   const handleReject = async () => {
@@ -581,6 +612,27 @@ export default function NewPrescriptionPage() {
           <div className="lg:grid lg:grid-cols-3 lg:gap-6">
             {/* ─── 左栏：处方内容（移动端全宽） ─── */}
             <div className="lg:col-span-2 space-y-4">
+            {/* 精修结果横幅 — 桌面/移动端都能看到（不依赖抽屉/sidebar） */}
+            {refineBanner && (
+              <div className={`rounded-xl border p-3.5 flex items-start gap-2.5 ${
+                refineBanner.kind === 'success'
+                  ? 'border-green-200 bg-green-50 text-green-800'
+                  : 'border-red-200 bg-red-50 text-red-700'
+              }`}>
+                <span className="text-lg shrink-0">
+                  {refineBanner.kind === 'success' ? '🎉' : '⚠️'}
+                </span>
+                <p className="text-sm flex-1 font-medium">{refineBanner.text}</p>
+                <button
+                  onClick={() => setRefineBanner(null)}
+                  className="shrink-0 text-lg leading-none opacity-50 hover:opacity-100"
+                  aria-label="关闭"
+                >
+                  ×
+                </button>
+              </div>
+            )}
+
             {/* 诊断依据 — 步骤 3 移到左栏内部 */}
             {!discoveryLoading && discovery && (
               <DiscoveryContextCard discovery={discovery} />
@@ -743,8 +795,9 @@ export default function NewPrescriptionPage() {
           comments={humanComments}
           setComments={setHumanComments}
           onRefine={async () => {
-            await handleRefine()
-            setMobileFeedbackOpen(false)
+            const ok = await handleRefine()
+            // 仅成功时关抽屉；失败保持打开让用户看到错误并重试
+            if (ok) setMobileFeedbackOpen(false)
           }}
           isRefining={isRefining}
           refineError={refineError}

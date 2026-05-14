@@ -242,6 +242,8 @@ export interface RefineHuatuoOptions {
   onProgress?: (note: string) => void | Promise<void>
   /** P8.10.S3: 用户的修改建议，比 AI 自评 weaknesses 优先级更高 */
   humanComments?: string
+  /** 上一版处方的 passes 值；新结果 = previousPasses + 1。默认 1。 */
+  previousPasses?: number
 }
 
 /**
@@ -340,7 +342,7 @@ export async function refineHuatuoPrescription(
     trend_summary: trendSummary,
     meta: {
       agent_version: HUATUO_AGENT_VERSION,
-      passes: 2,
+      passes: (options.previousPasses ?? 1) + 1,
       total_input_tokens: totalInputTokens,
       total_output_tokens: totalOutputTokens,
       cost_usd: Number(costUsd.toFixed(4)),

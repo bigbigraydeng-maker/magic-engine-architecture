@@ -37,6 +37,7 @@ interface PrescriptionRow {
   intake: PrescriptionIntake | null
   content: PrescriptionContent | null
   self_grade: SelfGrade | null
+  generation_meta: { passes?: number } | null
 }
 
 interface DiscoveryRow {
@@ -70,7 +71,7 @@ export async function POST(
   // 加载 + 校验（同步部分）
   const { data: presc, error: pErr } = await supabaseAdmin
     .from('prescriptions')
-    .select('id, client_id, discovery_id, status, agent_name, intake, content, self_grade')
+    .select('id, client_id, discovery_id, status, agent_name, intake, content, self_grade, generation_meta')
     .eq('id', pId)
     .eq('client_id', clientId)
     .single<PrescriptionRow>()
@@ -106,8 +107,13 @@ export async function POST(
     .eq('id', pId)
     .eq('client_id', clientId)
 
+  const previousPasses = presc.generation_meta?.passes ?? 1
+
   return new Response(
-    makeRefineStream(pId, clientId, disc.payload, presc.intake, presc.content, previousWeaknesses, humanComments),
+    makeRefineStream(
+      pId, clientId, disc.payload, presc.intake, presc.content,
+      previousWeaknesses, humanComments, previousPasses,
+    ),
     { headers: streamHeaders() },
   )
 }
@@ -137,7 +143,8 @@ function makeRefineStream(
   intake: PrescriptionIntake,
   previousContent: PrescriptionContent,
   previousWeaknesses: SelfGradeWeakness[],
-  humanComments?: string,
+  humanComments: string | undefined,
+  previousPasses: number,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder()
 
@@ -159,6 +166,7 @@ function makeRefineStream(
           supabaseAdmin, discovery, intake, previousContent, previousWeaknesses,
           {
             humanComments,
+            previousPasses,
             onProgress: async (note) => {
               sendEvent({ type: 'progress', note })
               await supabaseAdmin
