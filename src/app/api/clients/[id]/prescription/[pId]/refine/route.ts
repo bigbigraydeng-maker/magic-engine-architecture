@@ -56,6 +56,17 @@ export async function POST(
 
   const { id: clientId, pId } = params
 
+  // 读 body（可选 human_comments）
+  let humanComments: string | undefined
+  try {
+    const body = await req.json() as { human_comments?: string }
+    if (body?.human_comments && typeof body.human_comments === 'string') {
+      humanComments = body.human_comments.trim() || undefined
+    }
+  } catch {
+    // body 不是 JSON 或为空都可以接受
+  }
+
   // 加载 + 校验（同步部分）
   const { data: presc, error: pErr } = await supabaseAdmin
     .from('prescriptions')
@@ -95,7 +106,7 @@ export async function POST(
     .eq('client_id', clientId)
 
   return new Response(
-    makeRefineStream(pId, clientId, disc.payload, presc.intake, presc.content, previousWeaknesses),
+    makeRefineStream(pId, clientId, disc.payload, presc.intake, presc.content, previousWeaknesses, humanComments),
     { headers: streamHeaders() },
   )
 }
@@ -125,6 +136,7 @@ function makeRefineStream(
   intake: PrescriptionIntake,
   previousContent: PrescriptionContent,
   previousWeaknesses: string[],
+  humanComments?: string,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder()
 
@@ -145,6 +157,7 @@ function makeRefineStream(
         const result = await refineHuatuoPrescription(
           supabaseAdmin, discovery, intake, previousContent, previousWeaknesses,
           {
+            humanComments,
             onProgress: async (note) => {
               sendEvent({ type: 'progress', note })
               await supabaseAdmin

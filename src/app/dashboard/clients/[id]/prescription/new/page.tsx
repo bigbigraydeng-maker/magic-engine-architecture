@@ -118,6 +118,8 @@ export default function NewPrescriptionPage() {
   // Refine state (P8.10.S3 让华佗精修)
   const [isRefining, setIsRefining]     = useState(false)
   const [refineError, setRefineError]   = useState<string | null>(null)
+  // 人工修改建议（每次精修可选注入，作为最高优先级反馈）
+  const [humanComments, setHumanComments] = useState('')
 
   // 异步生成进度（华佗后台执行时实时更新）
   const [progressNote, setProgressNote] = useState<string | null>(null)
@@ -330,7 +332,7 @@ export default function NewPrescriptionPage() {
       const res = await fetch(`/api/clients/${clientId}/prescription/${prescriptionId}/refine`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ human_comments: humanComments.trim() || undefined }),
         cache: 'no-store',
       })
 
@@ -575,17 +577,9 @@ export default function NewPrescriptionPage() {
         {/* ── Step 3: 处方审阅 ─────────────────────────────────────────────── */}
         {step === 3 && content && (
           <div className="space-y-4">
-            {/* 华佗自评卡 — 仅当存在 self_grade 时显示 */}
+            {/* 华佗自评卡 — 只显示评分 + 薄弱点。精修在「我的修改建议」卡触发 */}
             {selfGrade && genMeta && (
-              <HuatuoMetaCard
-                selfGrade={selfGrade}
-                meta={genMeta}
-                onRefine={selfGrade.weaknesses.length > 0 ? handleRefine : undefined}
-                isRefining={isRefining}
-                refineError={refineError}
-                refineProgress={isRefining ? (progressNote ?? '排队中…') : null}
-                refineElapsedSec={isRefining ? elapsedSec : null}
-              />
+              <HuatuoMetaCard selfGrade={selfGrade} meta={genMeta} />
             )}
 
             {/* 历史趋势卡 — 让用户看到 target_value 是基于真实历史锚定 */}
@@ -683,6 +677,18 @@ export default function NewPrescriptionPage() {
                 </div>
               </div>
             )}
+
+            {/* 👤 人工修改建议 — 让 FDE/顾问把人类经验注入处方 */}
+            <HumanFeedbackCard
+              comments={humanComments}
+              setComments={setHumanComments}
+              onRefine={handleRefine}
+              isRefining={isRefining}
+              refineError={refineError}
+              progress={isRefining ? (progressNote ?? '排队中…') : null}
+              elapsedSec={isRefining ? elapsedSec : null}
+              passes={genMeta?.passes ?? 1}
+            />
 
             {/* Approval buttons */}
             {approveError && (
@@ -831,19 +837,9 @@ const GRADE_LABELS: Record<keyof SelfGrade['dimensions'], string> = {
 function HuatuoMetaCard({
   selfGrade,
   meta,
-  onRefine,
-  isRefining,
-  refineError,
-  refineProgress,
-  refineElapsedSec,
 }: {
   selfGrade: SelfGrade
   meta: HuatuoGenerationMeta
-  onRefine?: () => void
-  isRefining?: boolean
-  refineError?: string | null
-  refineProgress?: string | null
-  refineElapsedSec?: number | null
 }) {
   const overall = selfGrade.overall
   const gradeColor =
@@ -855,74 +851,31 @@ function HuatuoMetaCard({
     overall >= 6 ? '可接受' :
                    '需注意'
 
-  // 已经精修过（passes >= 2）就不再显示精修按钮
-  const canRefine = Boolean(onRefine) && meta.passes < 2 && overall < 9
-
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-5">
-      <div className="flex items-start justify-between gap-3 mb-4">
-        <div className="flex items-center gap-3 flex-1 min-w-0">
-          <div className={`px-3 py-1.5 rounded-lg border font-bold text-lg tabular-nums shrink-0 ${gradeColor}`}>
-            {overall.toFixed(1)} / 10
-          </div>
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-gray-900">
-              华佗自评：{gradeLabel}
-              {meta.passes >= 2 && (
-                <span className="ml-2 text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full">
-                  ✓ 已精修
-                </span>
-              )}
-            </p>
-            <p className="text-xs text-gray-400">
-              {meta.passes === 1 ? '一次过关' : `经过 ${meta.passes} 轮精修`}
-              {' · '}
-              ${meta.cost_usd.toFixed(3)}
-              {' · '}
-              {(meta.duration_ms / 1000).toFixed(1)}s
-              {meta.industry_category_used && ` · 行业 ${meta.industry_category_used}`}
-            </p>
-          </div>
+      <div className="flex items-start gap-3 mb-4">
+        <div className={`px-3 py-1.5 rounded-lg border font-bold text-lg tabular-nums shrink-0 ${gradeColor}`}>
+          {overall.toFixed(1)} / 10
         </div>
-
-        {/* 精修按钮 — 仅当有 onRefine 回调、未精修过、分数未满 9 时显示 */}
-        {canRefine && (
-          <button
-            onClick={onRefine}
-            disabled={isRefining}
-            className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            title="基于华佗自检指出的薄弱点，让华佗针对性修改处方（约 90s）"
-          >
-            {isRefining ? (
-              <>
-                <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-indigo-300 border-t-transparent rounded-full" />
-                精修中…
-              </>
-            ) : (
-              <>🔄 让华佗精修一次</>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-gray-900">
+            华佗自评：{gradeLabel}
+            {meta.passes >= 2 && (
+              <span className="ml-2 text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full">
+                ✓ 经过 {meta.passes - 1} 轮精修
+              </span>
             )}
-          </button>
-        )}
+          </p>
+          <p className="text-xs text-gray-400">
+            {meta.passes === 1 ? '一次过关' : `共 ${meta.passes} 轮生成`}
+            {' · '}
+            ${meta.cost_usd.toFixed(3)}
+            {' · '}
+            {(meta.duration_ms / 1000).toFixed(1)}s
+            {meta.industry_category_used && ` · 行业 ${meta.industry_category_used}`}
+          </p>
+        </div>
       </div>
-
-      {refineError && (
-        <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs text-red-700">
-          精修失败：{refineError}
-        </div>
-      )}
-
-      {/* 精修中进度提示 */}
-      {isRefining && (
-        <div className="mb-3 rounded-lg border border-indigo-200 bg-indigo-50 p-2.5 text-xs text-indigo-700 flex items-center gap-2">
-          <span className="animate-spin w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full" />
-          <span className="flex-1">{refineProgress ?? '华佗精修中…'}</span>
-          {refineElapsedSec != null && (
-            <span className="tabular-nums text-indigo-500">
-              {Math.floor(refineElapsedSec / 60)}:{String(refineElapsedSec % 60).padStart(2, '0')}
-            </span>
-          )}
-        </div>
-      )}
 
       {/* 7 维评分网格 */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 mb-3">
@@ -974,6 +927,104 @@ function HuatuoMetaCard({
           </ul>
         </div>
       )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// HumanFeedbackCard — FDE/顾问写人工意见，触发基于人类经验的精修
+// ---------------------------------------------------------------------------
+
+function HumanFeedbackCard({
+  comments,
+  setComments,
+  onRefine,
+  isRefining,
+  refineError,
+  progress,
+  elapsedSec,
+  passes,
+}: {
+  comments: string
+  setComments: (s: string) => void
+  onRefine: () => void
+  isRefining: boolean
+  refineError: string | null
+  progress: string | null
+  elapsedSec: number | null
+  passes: number
+}) {
+  const maxRefines = 5
+  const refinesUsed = Math.max(0, passes - 1)
+  const refinesLeft = Math.max(0, maxRefines - refinesUsed)
+  const exhausted = refinesLeft <= 0
+
+  return (
+    <div className="bg-white rounded-xl border-2 border-indigo-100 p-5">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="flex items-center gap-2.5">
+          <span className="text-xl">👤</span>
+          <div>
+            <p className="text-sm font-semibold text-gray-900">我的修改建议</p>
+            <p className="text-xs text-gray-400">
+              FDE / 顾问的人类经验作为<strong className="text-indigo-700">最高优先级反馈</strong>注入华佗，
+              比 AI 自评 weaknesses 更优先采纳
+            </p>
+          </div>
+        </div>
+        <div className="text-xs text-gray-400 shrink-0 tabular-nums">
+          已精修 {refinesUsed}/{maxRefines}
+        </div>
+      </div>
+
+      <textarea
+        value={comments}
+        onChange={e => setComments(e.target.value)}
+        rows={4}
+        placeholder={`例：
+
+1. 总工时还是偏高，把第二阶段博客频率从每周 2 篇降到每周 1 篇
+2. 客户没有视频拍摄设备，删掉 Reels 系列动作或改用 AI 视频工具
+3. CRM 选 HubSpot 免费版，不要 Mailchimp（客户已有 HubSpot 账户）
+4. AI 引用率目标 18% 太乐观，调到 10%`}
+        disabled={isRefining || exhausted}
+        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 disabled:bg-gray-50 disabled:text-gray-400"
+      />
+
+      {refineError && (
+        <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs text-red-700">
+          精修失败：{refineError}
+        </div>
+      )}
+
+      {isRefining && (
+        <div className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50 p-2.5 text-xs text-indigo-700 flex items-center gap-2">
+          <span className="animate-spin w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full" />
+          <span className="flex-1">{progress ?? '华佗精修中…'}</span>
+          {elapsedSec != null && (
+            <span className="tabular-nums text-indigo-500">
+              {Math.floor(elapsedSec / 60)}:{String(elapsedSec % 60).padStart(2, '0')}
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="flex items-center justify-between mt-3 gap-3">
+        <p className="text-xs text-gray-400 flex-1">
+          {exhausted
+            ? `已达 ${maxRefines} 轮精修上限，请批准或要求重新生成。`
+            : comments.trim()
+              ? '✓ 华佗将明确采纳上述意见'
+              : '留空也可触发精修（华佗仅根据 AI 自评薄弱点修复）'}
+        </p>
+        <button
+          onClick={onRefine}
+          disabled={isRefining || exhausted}
+          className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {isRefining ? '精修中…' : comments.trim() ? '🔄 基于我的意见再精修' : '🔄 让华佗再精修一次'}
+        </button>
+      </div>
     </div>
   )
 }

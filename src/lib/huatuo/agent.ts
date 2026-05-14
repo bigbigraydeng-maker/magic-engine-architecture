@@ -238,6 +238,8 @@ export async function runHuatuo(
 
 export interface RefineHuatuoOptions {
   onProgress?: (note: string) => void | Promise<void>
+  /** P8.10.S3: 用户的修改建议，比 AI 自评 weaknesses 优先级更高 */
+  humanComments?: string
 }
 
 /**
@@ -282,13 +284,20 @@ export async function refineHuatuoPrescription(
 
   const client = getHuatuoAnthropicClient()
 
-  // Step 2: refine
-  await onProgress('华佗针对薄弱点精修…')
+  // Step 2: refine（融入人工意见，如有）
+  const progressMsg = options.humanComments
+    ? '华佗根据您的意见精修…'
+    : '华佗针对自检薄弱点精修…'
+  await onProgress(progressMsg)
   const refinePass = await withHardTimeout(
     '处方精修',
     generatePrescriptionWithFeedback(
       client, discovery, intake, lookup,
-      { previousContent, weaknesses: previousWeaknesses },
+      {
+        previousContent,
+        weaknesses: previousWeaknesses,
+        humanComments: options.humanComments,
+      },
     ),
     CLAUDE_TIMEOUT_GENERATION_MS,
   )
@@ -409,14 +418,33 @@ async function generatePrescriptionWithFeedback(
   discovery: DiscoveryReport,
   intake: PrescriptionIntake,
   lookup: HuatuoLookupContext,
-  feedback: { previousContent: PrescriptionContent; weaknesses: string[] },
+  feedback: {
+    previousContent: PrescriptionContent
+    weaknesses: string[]
+    humanComments?: string
+  },
 ): Promise<ClaudeCallResult<PrescriptionContent>> {
   // 精修 prompt 强调"针对性修复 + 保持紧凑"
   // 防止 Claude 看到 8 条 weaknesses 后过度扩写超出 8192 max_tokens
   const basePrompt = buildHuatuoGenerationPrompt(discovery, intake, lookup)
-  const feedbackBlock = `\n\n## 上一轮的处方与自检反馈
 
-上一轮你生成的处方有以下问题，请**针对性修复**（不要重新发明，保留好的部分，只改薄弱处）：
+  // 人工意见（如有）— 比 AI 自评 weaknesses 优先级更高
+  const humanCommentsBlock = feedback.humanComments && feedback.humanComments.trim()
+    ? `\n\n## 👤 用户的修改建议（**最高优先级，必须采纳**）
+
+用户审阅了上一版处方后给出以下修改意见：
+
+\`\`\`
+${feedback.humanComments.trim()}
+\`\`\`
+
+这些是来自实际服务该客户的 FDE / 顾问的人类经验判断，**比下面的 AI 自评 weaknesses 优先级更高**。本轮处方必须明确反映用户的意见。
+`
+    : ''
+
+  const feedbackBlock = `\n\n## 上一轮的处方与 AI 自检反馈
+${humanCommentsBlock}
+上一轮 AI 自检指出的问题（次优先级，结合用户意见酌情修复）：
 
 ${feedback.weaknesses.map((w, i) => `${i + 1}. ${w}`).join('\n')}
 
@@ -433,7 +461,7 @@ ${JSON.stringify(feedback.previousContent, null, 2)}
 4. **kpi_targets ≤ 8 个**：精挑关键 KPI，不堆砌
 5. **如需新增 action**，必删另一个低优先级 action（保持总数不变）
 
-现在输出**修订后的完整处方 JSON**（精炼版）。`
+现在输出**修订后的完整处方 JSON**（精炼版${feedback.humanComments ? '，并明确体现用户的修改建议' : ''}）。`
   const userPrompt = basePrompt + feedbackBlock
 
   const message = await client.messages.create({
