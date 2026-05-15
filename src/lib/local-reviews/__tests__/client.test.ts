@@ -131,6 +131,79 @@ describe('fetchGbpReviews', () => {
 
     await expect(fetchGbpReviews('anything')).rejects.toThrow(/Invalid API key/)
   })
+
+  // ── brand-token verification (P8.12.S1.7 — Apapaya regression) ────────────
+
+  it('returns null when SerpAPI place title does not match the brand (Apapaya regression)', async () => {
+    process.env.SERPAPI_API_KEY = 'test-key'
+    // SerpAPI returns a fuzzy match — a same-city unrelated business with a
+    // different name. Without brand verification we'd surface it as "Apapaya".
+    mockFetch.mockImplementation(() =>
+      jsonResponse({
+        place_results: {
+          title: 'Some Unrelated Cafe',
+          rating: 4.2,
+          reviews: 1744,
+          place_id: 'ChIJwrong',
+        },
+      }),
+    )
+    const { fetchGbpReviews } = await import('../client')
+
+    expect(await fetchGbpReviews('Apapaya Wantirna South VIC')).toBeNull()
+  })
+
+  it('matches title case-insensitively', async () => {
+    process.env.SERPAPI_API_KEY = 'test-key'
+    mockFetch.mockImplementation(() =>
+      jsonResponse({
+        place_results: {
+          title: 'APAPAYA Wantirna',
+          rating: 4.2,
+          reviews: 1744,
+          place_id: 'ChIJright',
+        },
+      }),
+    )
+    const { fetchGbpReviews } = await import('../client')
+
+    const result = await fetchGbpReviews('Apapaya Wantirna South VIC')
+    expect(result).not.toBeNull()
+    expect(result!.rating).toBe(4.2)
+  })
+
+  it('drops a local_results fallback when no entry title matches the brand', async () => {
+    process.env.SERPAPI_API_KEY = 'test-key'
+    mockFetch.mockImplementation(() =>
+      jsonResponse({
+        local_results: [
+          { title: 'Random Other Business', rating: 4.0, reviews: 50, place_id: 'ChIJfuzzy' },
+        ],
+      }),
+    )
+    const { fetchGbpReviews } = await import('../client')
+
+    expect(await fetchGbpReviews('Apapaya Melbourne')).toBeNull()
+  })
+
+  it('scans all local_results and picks the first brand-matching entry, not just [0]', async () => {
+    process.env.SERPAPI_API_KEY = 'test-key'
+    // Codex review P2 on PR #24: real match may not be local_results[0].
+    mockFetch.mockImplementation(() =>
+      jsonResponse({
+        local_results: [
+          { title: 'Some Other Business', rating: 3.0, reviews: 10, place_id: 'ChIJfirst' },
+          { title: 'Apapaya Cafe', rating: 4.5, reviews: 200, place_id: 'ChIJsecond' },
+        ],
+      }),
+    )
+    const { fetchGbpReviews } = await import('../client')
+
+    const result = await fetchGbpReviews('Apapaya Melbourne')
+    expect(result).not.toBeNull()
+    expect(result!.rating).toBe(4.5)
+    expect(result!.url).toContain('place_id:ChIJsecond')
+  })
 })
 
 // ─── fetchProductReviewReviews ───────────────────────────────────────────────
