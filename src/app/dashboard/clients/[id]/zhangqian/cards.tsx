@@ -81,6 +81,45 @@ export const PLATFORM_ICONS: Record<SocialPlatform, string> = {
 
 // ─── Shared primitives ────────────────────────────────────────────────────────
 
+export function ConfigureCTA({
+  clientId,
+  anchor,
+  label = '立即配置 →',
+}: {
+  clientId: string
+  anchor: string
+  label?: string
+}) {
+  if (!clientId) return null
+  return (
+    <a
+      href={`/dashboard/clients/${clientId}/connectors#${anchor}`}
+      className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800"
+    >
+      {label}
+    </a>
+  )
+}
+
+function EmptyWithCTA({
+  text,
+  clientId,
+  anchor,
+  ctaLabel,
+}: {
+  text: string
+  clientId?: string
+  anchor: string
+  ctaLabel?: string
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center py-6 gap-2">
+      <p className="text-sm text-gray-400">{text}</p>
+      {clientId && <ConfigureCTA clientId={clientId} anchor={anchor} label={ctaLabel} />}
+    </div>
+  )
+}
+
 export function Badge({ className, children }: { className: string; children: React.ReactNode }) {
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${className}`}>
@@ -467,11 +506,16 @@ export function CompetitorsCard({ competitors }: { competitors: DiscoveredCompet
 
 // ─── SocialCard ───────────────────────────────────────────────────────────────
 
-export function SocialCard({ socials }: { socials: DiscoveredSocial[] }) {
+export function SocialCard({ socials, clientId }: { socials: DiscoveredSocial[]; clientId?: string }) {
   if (socials.length === 0) {
     return (
       <CardShell title="社交媒体">
-        <p className="text-sm text-gray-400 text-center py-4">未发现社媒账号</p>
+        <EmptyWithCTA
+          text="未发现社媒账号"
+          clientId={clientId}
+          anchor="social"
+          ctaLabel="授权客户社媒账号 →"
+        />
       </CardShell>
     )
   }
@@ -516,11 +560,22 @@ export function SocialCard({ socials }: { socials: DiscoveredSocial[] }) {
 
 // ─── GbpCard ──────────────────────────────────────────────────────────────────
 
-export function GbpCard({ gbp }: { gbp: ClientDiscoveryRow['payload']['gbp'] }) {
+export function GbpCard({
+  gbp,
+  clientId,
+}: {
+  gbp: ClientDiscoveryRow['payload']['gbp']
+  clientId?: string
+}) {
   if (!gbp) {
     return (
       <CardShell title="品牌档案（Google）">
-        <p className="text-sm text-gray-400 text-center py-4">未发现 Google 商业档案</p>
+        <EmptyWithCTA
+          text="未发现 Google 商业档案"
+          clientId={clientId}
+          anchor="gbp"
+          ctaLabel="接入 GBP →"
+        />
       </CardShell>
     )
   }
@@ -727,11 +782,22 @@ function ReviewPlatformItem({ platform }: { platform: DiscoveredReviewPlatform }
   )
 }
 
-export function ReviewPlatformsCard({ platforms }: { platforms: DiscoveredReviewPlatform[] }) {
+export function ReviewPlatformsCard({
+  platforms,
+  clientId,
+}: {
+  platforms: DiscoveredReviewPlatform[]
+  clientId?: string
+}) {
   if (!platforms || platforms.length === 0) {
     return (
       <CardShell title="评价平台">
-        <p className="text-sm text-gray-400 text-center py-4">未发现第三方评价平台</p>
+        <EmptyWithCTA
+          text="未发现第三方评价平台"
+          clientId={clientId}
+          anchor="reviews"
+          ctaLabel="接入评价平台 →"
+        />
       </CardShell>
     )
   }
@@ -753,11 +819,22 @@ const SPEND_LABELS: Record<DiscoveredMetaAds['estimated_spend'], string> = {
   unknown: '未知',
 }
 
-export function MetaAdsCard({ ads }: { ads: DiscoveredMetaAds | null | undefined }) {
+export function MetaAdsCard({
+  ads,
+  clientId,
+}: {
+  ads: DiscoveredMetaAds | null | undefined
+  clientId?: string
+}) {
   if (!ads) {
     return (
       <CardShell title="Meta 广告投放">
-        <p className="text-sm text-gray-400 text-center py-4">未检测到 Facebook/Instagram 广告投放</p>
+        <EmptyWithCTA
+          text="未检测到 Facebook/Instagram 广告投放"
+          clientId={clientId}
+          anchor="meta-ads"
+          ctaLabel="接入 Meta Ads 账户 →"
+        />
       </CardShell>
     )
   }
@@ -833,11 +910,22 @@ function SerpResultItem({ serp }: { serp: DiscoveredSerpResult }) {
   )
 }
 
-export function SerpResultsCard({ results }: { results: DiscoveredSerpResult[] | null | undefined }) {
+export function SerpResultsCard({
+  results,
+  clientId,
+}: {
+  results: DiscoveredSerpResult[] | null | undefined
+  clientId?: string
+}) {
   if (!results || results.length === 0) {
     return (
       <CardShell title="Google 搜索结果">
-        <p className="text-sm text-gray-400 text-center py-4">未抓取 Google 搜索结果</p>
+        <EmptyWithCTA
+          text="未抓取 Google 搜索结果"
+          clientId={clientId}
+          anchor="gsc"
+          ctaLabel="接入 Google Search Console →"
+        />
       </CardShell>
     )
   }

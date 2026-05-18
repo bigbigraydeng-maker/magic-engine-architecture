@@ -175,10 +175,12 @@ function ProgressPanel({
 
 function DiscoveryReviewCards({
   discovery,
+  clientId,
   onConfirm,
   isConfirming,
 }: {
   discovery: ClientDiscoveryRow
+  clientId: string
   onConfirm: () => void
   isConfirming: boolean
 }) {
@@ -209,11 +211,11 @@ function DiscoveryReviewCards({
           questions={p.ai_tracker_questions}
           visibilityResults={p.ai_visibility_results}
         />
-        <SocialCard socials={p.social_profiles} />
-        <GbpCard gbp={p.gbp} />
-        <ReviewPlatformsCard platforms={p.review_platforms} />
-        <MetaAdsCard ads={p.meta_ads} />
-        <SerpResultsCard results={p.serp_results} />
+        <SocialCard socials={p.social_profiles} clientId={clientId} />
+        <GbpCard gbp={p.gbp} clientId={clientId} />
+        <ReviewPlatformsCard platforms={p.review_platforms} clientId={clientId} />
+        <MetaAdsCard ads={p.meta_ads} clientId={clientId} />
+        <SerpResultsCard results={p.serp_results} clientId={clientId} />
       </div>
 
       {/* Action plan — full width */}
@@ -575,6 +577,7 @@ export default function ZhangqianPage() {
         {pageState === 'reviewing' && discovery && (
           <DiscoveryReviewCards
             discovery={discovery}
+            clientId={clientId}
             onConfirm={() => void handleConfirm()}
             isConfirming={isConfirming}
           />
@@ -586,6 +589,7 @@ export default function ZhangqianPage() {
             {discovery && (
               <DiscoveryReviewCards
                 discovery={discovery}
+                clientId={clientId}
                 onConfirm={() => void handleConfirm()}
                 isConfirming={isConfirming}
               />
