@@ -77,7 +77,9 @@ export async function POST(req: NextRequest) {
       .from('content_posts')
       .update({
         status: 'scheduled',
-        publer_post_id: result.job_id,
+        // 注意：result.job_id 是 Publer 异步调度任务的 ID，不是真正的 post_id。
+        // 真正的 publer_post_id 需要后续 polling /job_status/:job_id 解析（见 /api/publer/sync/[postId]）
+        publer_job_id: result.job_id,
         scheduled_at: scheduledAt,
       })
       .eq('id', post_id)
