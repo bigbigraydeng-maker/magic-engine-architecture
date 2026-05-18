@@ -836,7 +836,10 @@ function AssetCell({
 
 export default function VisualsPage() {
   const [clients, setClients] = useState<Client[]>([])
-  const [selectedClientId, setSelectedClientId] = useState('')
+  const [selectedClientId, setSelectedClientId] = useState(() => {
+    if (typeof window === 'undefined') return ''
+    return new URLSearchParams(window.location.search).get('client') ?? ''
+  })
   const [statusFilter, setStatusFilter] = useState('approved,scheduled')
   const [posts, setPosts] = useState<Post[]>([])
   const [assets, setAssets] = useState<VisualAsset[]>([])
@@ -1124,7 +1127,7 @@ export default function VisualsPage() {
     if (!selectedClientId) return
     const unsyncedIds = posts.filter(p => !p.airtable_record_id).map(p => p.id)
     if (unsyncedIds.length === 0) {
-      setToast({ type: 'success', message: 'All posts already synced to Airtable' })
+      setToast({ type: 'success', message: 'All posts already synced to Content Workspace' })
       return
     }
     setPushing(true)
@@ -1137,7 +1140,7 @@ export default function VisualsPage() {
       const d = await res.json()
       if (d.success) {
         await fetchPosts(selectedClientId)
-        setToast({ type: 'success', message: `↑ Pushed ${d.synced} posts to Airtable` })
+        setToast({ type: 'success', message: `↑ Pushed ${d.synced} posts to Content Workspace` })
       } else {
         setToast({ type: 'error', message: 'Push failed: ' + d.error })
       }

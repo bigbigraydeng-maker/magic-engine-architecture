@@ -8,6 +8,15 @@ export async function GET(req: NextRequest) {
     const clientId = searchParams.get('client_id')
     const status = searchParams.get('status')
 
+    // 自动把过期的 scheduled 翻成 published — Publer 已经发出去了，我们的状态机跟上
+    // status='scheduled' 且 scheduled_at < now() → status='published'
+    // → DB trigger 20260518000003 自动把关联 execution_item mark completed
+    await supabaseAdmin
+      .from('content_posts')
+      .update({ status: 'published', published_at: new Date().toISOString() })
+      .eq('status', 'scheduled')
+      .lt('scheduled_at', new Date().toISOString())
+
     let query = supabaseAdmin
       .from('content_posts')
       .select('id, client_id, title, route, platforms, status, caption, script, hashtags, visual_brief, scheduled_at, created_at, execution_item_id, clients(name)')

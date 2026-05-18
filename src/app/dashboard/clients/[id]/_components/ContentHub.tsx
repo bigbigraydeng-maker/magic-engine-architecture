@@ -79,9 +79,11 @@ export function ContentHub({ clientId }: Props) {
       {active === 'visuals' && (
         <div className="bg-white rounded-xl border border-gray-200 p-10 text-center space-y-4">
           <p className="text-5xl">🖼️</p>
-          <h3 className="text-lg font-semibold text-gray-900">Image Studio</h3>
-          <p className="text-sm text-gray-500 max-w-sm mx-auto">
-            生成和管理客户的社媒图片素材。在 Visual Studio 中操作。
+          <h3 className="text-lg font-semibold text-gray-900">Visual Studio</h3>
+          <p className="text-sm text-gray-500 max-w-sm mx-auto leading-relaxed">
+            在 Visual Studio 中生成图片素材。图片生成完成后，点击表格行中的{' '}
+            <span className="font-semibold text-green-600">→ Publer</span>{' '}
+            按钮即可安排发布到社媒平台。
           </p>
           <Link
             href={`/dashboard/visuals?client=${clientId}`}
