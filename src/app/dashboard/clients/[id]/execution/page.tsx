@@ -848,30 +848,6 @@ export default function ExecutionPage() {
     }
   }
 
-  const handleDownloadDocx = async () => {
-    setIsDocxLoading(true)
-    try {
-      const qs = prescriptionId ? `?prescription_id=${prescriptionId}` : ''
-      const res = await fetch(`/api/clients/${clientId}/execution/docx${qs}`, {
-        headers: { Authorization: `Bearer ${API_KEY}` },
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      const cd = res.headers.get('Content-Disposition') ?? ''
-      const match = /filename="([^"]+)"/.exec(cd)
-      a.download = match?.[1] ?? 'luban_execution.docx'
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch (e) {
-      setOpError(e instanceof Error ? e.message : '下载失败')
-    } finally {
-      setIsDocxLoading(false)
-    }
-  }
-
   // silent=true 时不触发整页 loading skeleton — 用于状态切换/加日志后的静默刷新，
   // 避免每次操作都把整个看板替换成 skeleton 一闪（也保留了卡片的 expanded 状态）。
   const fetchItems = useCallback(async (silent = false) => {
