@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-17 · 当前阶段：**🔥 Phase 12 飞轮数据闭环（活跃）— 建立 actions/metrics/outcomes 数据骨架，让 4 飞轮（SEO/GEO/Ads/社媒）执行后数据回流并自动归因。试点：CTS（GEO+SEO+Ads）/ Oztop（SEO+GEO）**
+> 最后更新：2026-05-19 · 当前阶段：**🔒 P8.3.2 Dashboard Magic Link 鉴权（当前阻塞）+ Phase 8.S SEMrush → DataForSEO 关键词接口迁移（下一成本优化）**。Phase 12.A 已完成；Phase 12.B.1–B.4 已完成（SEO / Ads / 社媒 adapter + SEMrush 周快照 cron）。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -38,7 +38,7 @@
                 └─ S5 引用/证据追溯（~1 天）
 🔥 Phase 8.12    AU/NZ 本地化能力扩展（MVP：S3.1 鲁班 tool loop 开发中 · 其余 13 项 MVP 后补充）
 ✅ Phase 12.A    飞轮数据骨架 + CTS GEO 端到端 demo（15 任务全部完成，2026-05-17）
-🔄 Phase 12.B    SEO/Ads/社媒 adapter 接入（待细化）
+✅ Phase 12.B    SEO/Ads/社媒 adapter 接入（B.1–B.4 已完成，2026-05-18；后续扩展转 Phase 12.C / 新任务登记）
 🔄 Phase 9.0     Visual Queue UX Polish（P9.0.1✅P9.0.3✅P9.0.4-9✅ 进行中 · 待：P9.0.2+P9.0.10-17集成测试+浮动卡）
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
@@ -1081,6 +1081,8 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
 ### Phase 12.B — SEO / Ads / 社媒 adapter 接入
 
 每个任务 = 1 commit。
+
+> **状态校准（2026-05-19）**：B.1–B.4 已完成。Phase 12 的数据闭环主干已经跑通；除非 PM 明确要求继续扩 adapter，当前不再作为下一 session 的默认焦点。下一阻塞项回到 P8.3.2 Dashboard Magic Link 鉴权。
 
 - [x] **P12.B.1** — SEO adapter（`SeoContentAdapter`）：vocabulary 填 SEO_ACTION_TYPE + SEO_METRIC_KEY；execute() 落 flywheel_actions；pullMetrics() 拉 SEMrush domain_ranks + blog_posts 计数写 flywheel_metrics；9 个单元测试全过；build 通过 ✅ 2026-05-18
 - [x] **P12.B.2** — Meta Ads adapter（`MetaAdsAdapter`）：CTS 真实广告账户接入，Meta MCP；execute() 落 flywheel_actions；pullMetrics() 拉 ROAS / spend / impressions ✅ 2026-05-18

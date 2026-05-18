@@ -213,11 +213,13 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-18（**P8.12.S3.5 完成** — 鲁班 discover_local_competitors：Yellow Pages AU + Localsearch via Jina，31 测试全过，build 通过）
+> 最后更新：2026-05-19（文档轻量校准：Phase 12.A 已完成，Phase 12.B.1–B.4 已完成；当前阻塞焦点回到 P8.3.2 Dashboard Magic Link 鉴权）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
 | **P8.3.2** | Dashboard Magic Link 鉴权 | ⭐ |
+
+**状态校准（2026-05-19）**：Phase 12.A 已完成；Phase 12.B.1–B.4 已完成（SEO / Meta Ads / Social adapter + SEMrush 周快照 cron）。明天继续开发时，若没有新的 PM 指令，优先处理 **P8.3.2 Dashboard Magic Link 鉴权**，因为它是客户数据安全的当前阻塞项。
 
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 
