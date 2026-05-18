@@ -343,6 +343,7 @@ export default function NewPrescriptionPage() {
         throw new Error(errText)
       }
       setPrescriptionStatus('approved')
+      router.refresh()
       router.push(`/dashboard/clients/${clientId}/execution`)
     } catch (e) {
       setApproveError(e instanceof Error ? e.message : '批准失败')

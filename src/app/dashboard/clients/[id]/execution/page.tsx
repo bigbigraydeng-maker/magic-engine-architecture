@@ -1182,7 +1182,7 @@ export default function ExecutionPage() {
           <PrescriptionGroup
             key={group.pid}
             group={group}
-            defaultOpen={gi === 0}
+            defaultOpen={true}
             onStatusChange={handleStatusChange}
             onAddLog={handleAddLog}
             onOpenChat={setChatItem}
