@@ -213,11 +213,10 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-18（**P8.12.S2.3 完成** — KPI 反馈闭环：outcome-recorder + outcomes API + kpi-backfill cron，22 测试全过；下一步 P8.12.S2.4 行业基准累积）
+> 最后更新：2026-05-18（**P8.12.S2.4 完成** — 行业基准自动累积：benchmark-accumulator + cron endpoint，19 测试全过；Sprint 2 数据飞轮全部完成）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P8.12.S2.4** | 行业基准自动累积（从 outcome 聚合 P50/P75/P90） | ⭐⭐ |
 | **P8.3.2** | Dashboard Magic Link 鉴权 | ⭐ |
 
 **Phase 12.B PR #33 已合并**(2026-05-18 02:47)，旧焦点表过期已修。
