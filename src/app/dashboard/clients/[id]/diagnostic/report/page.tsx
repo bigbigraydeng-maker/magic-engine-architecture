@@ -183,6 +183,7 @@ export default function DiagnosticReportPage() {
   const [toc, setToc] = useState<TocEntry[]>([])
   const [activeSection, setActiveSection] = useState<string | null>(null)
   const [citation, setCitation] = useState<CitationPanel | null>(null)
+  const [docxLoading, setDocxLoading] = useState(false)
 
   const fetchReport = useCallback(async () => {
     setLoading(true)
@@ -223,6 +224,35 @@ export default function DiagnosticReportPage() {
 
   const handlePrint = () => {
     iframeRef.current?.contentWindow?.print()
+  }
+
+  const handleDownloadDocx = async () => {
+    if (!reportData) return
+    setDocxLoading(true)
+    try {
+      const qs = runIdParam ? `?run_id=${encodeURIComponent(runIdParam)}` : ''
+      const res = await fetch(`/api/clients/${clientId}/diagnostic/report/docx${qs}`, {
+        headers: { Authorization: `Bearer ${API_KEY}` },
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string }
+        throw new Error(body.error ?? `HTTP ${res.status}`)
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `diagnostic-report-${reportData.run_id.slice(0, 8)}.docx`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      console.error('[docx download]', e)
+      alert(e instanceof Error ? e.message : '导出失败，请重试')
+    } finally {
+      setDocxLoading(false)
+    }
   }
 
   const handleDownloadEvidence = () => {
@@ -299,6 +329,28 @@ export default function DiagnosticReportPage() {
             </svg>
             <span className="hidden sm:inline">Evidence</span>
             <span className="sm:hidden">↓</span>
+          </button>
+
+          {/* Export DOCX */}
+          <button
+            onClick={() => void handleDownloadDocx()}
+            disabled={!reportData || docxLoading}
+            title="导出 Word 文档"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {docxLoading ? (
+              <span className="w-3.5 h-3.5 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                />
+              </svg>
+            )}
+            <span className="hidden sm:inline">{docxLoading ? '生成中…' : 'DOCX'}</span>
           </button>
 
           {/* Print / Export PDF */}
