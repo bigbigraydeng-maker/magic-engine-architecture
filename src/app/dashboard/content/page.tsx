@@ -204,6 +204,13 @@ export default function ContentBoardPage() {
   const [linkingItem, setLinkingItem] = useState(false);
   const [linkMsg, setLinkMsg] = useState('');
 
+  // Image generation state
+  const [imageAspectRatio, setImageAspectRatio] = useState('1:1');
+  const [generatingImage, setGeneratingImage] = useState(false);
+  const [imageGenMsg, setImageGenMsg] = useState('');
+  const [pendingAssetId, setPendingAssetId] = useState<string | null>(null);
+  const [pendingPostId, setPendingPostId] = useState<string | null>(null);
+
 
   useEffect(() => {
     fetch('/api/clients').then(r => r.json()).then(d => setClients(d.clients ?? []));
@@ -229,6 +236,70 @@ export default function ContentBoardPage() {
 
   useEffect(() => { fetchPosts(); }, [fetchPosts]);
 
+  // Poll image generation status
+  useEffect(() => {
+    if (!pendingAssetId || !pendingPostId) return;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/visual/status/${pendingAssetId}`);
+        const json = await res.json();
+        if (!json.success) return;
+        const asset = json.asset;
+        if (asset.generation_status === 'ready' && asset.storage_url) {
+          setGeneratingImage(false);
+          setPendingAssetId(null);
+          setPendingPostId(null);
+          setImageGenMsg('✓ 图片已生成');
+          const url: string = asset.storage_url;
+          const type: string = asset.asset_type;
+          setModalPost(prev => prev?.id === pendingPostId ? { ...prev, visual_asset_url: url, visual_asset_type: type } : prev);
+          setPosts(prev => prev.map(p => p.id === pendingPostId ? { ...p, visual_asset_url: url, visual_asset_type: type } : p));
+        } else if (asset.generation_status === 'failed') {
+          setGeneratingImage(false);
+          setPendingAssetId(null);
+          setPendingPostId(null);
+          setImageGenMsg(`✗ 生成失败：${asset.error_message || '未知错误'}`);
+        } else {
+          setImageGenMsg('⏳ 生成中，请稍候…');
+        }
+      } catch {
+        // ignore transient network errors during polling
+      }
+    };
+    poll();
+    const id = setInterval(poll, 4000);
+    return () => clearInterval(id);
+  // pendingPostId is stable once set; exclude modalPost/posts to avoid restart
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAssetId, pendingPostId]);
+
+  const handleGenerateImage = async () => {
+    if (!modalPost) return;
+    setGeneratingImage(true);
+    setImageGenMsg('');
+    setPendingAssetId(null);
+    setPendingPostId(null);
+    try {
+      const res = await fetch('/api/visual/image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          post_id: modalPost.id,
+          client_id: modalPost.client_id,
+          aspect_ratio: imageAspectRatio,
+        }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || '提交失败');
+      setPendingPostId(modalPost.id);
+      setPendingAssetId(json.asset_id);
+      setImageGenMsg('⏳ 已提交，生成中…');
+    } catch (err) {
+      setGeneratingImage(false);
+      setImageGenMsg(`✗ ${(err as Error).message}`);
+    }
+  };
+
   // Switch to calendar mode → auto-set status to approved+scheduled
   const handleViewMode = (mode: ViewMode) => {
     setViewMode(mode);
@@ -251,6 +322,11 @@ export default function ContentBoardPage() {
     setScheduleMsg('');
     setPublishMsg('');
     setLinkMsg('');
+    setImageAspectRatio('1:1');
+    setImageGenMsg('');
+    setGeneratingImage(false);
+    setPendingAssetId(null);
+    setPendingPostId(null);
     // Fire-and-forget: 拉取该客户的执行项给关联下拉框用
     setExecItems([]);
     fetch(`/api/clients/${post.client_id}/execution`, {
@@ -293,6 +369,10 @@ export default function ContentBoardPage() {
     setScheduleMsg('');
     setPublishMsg('');
     setLinkMsg('');
+    setImageGenMsg('');
+    setGeneratingImage(false);
+    setPendingAssetId(null);
+    setPendingPostId(null);
   };
 
   const handleSaveSchedule = async () => {
@@ -977,13 +1057,42 @@ export default function ContentBoardPage() {
 
               {/* Visual Brief */}
               <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Visual Brief</p>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Visual Brief</p>
+                  {!editMode && modalPost.visual_brief && (
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={imageAspectRatio}
+                        onChange={e => setImageAspectRatio(e.target.value)}
+                        disabled={generatingImage}
+                        className="border border-gray-300 rounded px-2 py-1 text-xs text-gray-700 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400 disabled:opacity-50"
+                      >
+                        <option value="1:1">1:1 方形</option>
+                        <option value="4:5">4:5 竖版</option>
+                        <option value="9:16">9:16 故事</option>
+                        <option value="16:9">16:9 横版</option>
+                      </select>
+                      <button
+                        onClick={() => void handleGenerateImage()}
+                        disabled={generatingImage}
+                        className="bg-violet-600 hover:bg-violet-700 text-white text-xs px-3 py-1.5 rounded-lg font-medium disabled:opacity-50 transition-colors whitespace-nowrap"
+                      >
+                        {generatingImage ? '生成中…' : '🎨 生成图片'}
+                      </button>
+                    </div>
+                  )}
+                </div>
                 {editMode ? (
                   <textarea value={editVisualBrief} onChange={e => setEditVisualBrief(e.target.value)} rows={3}
                     className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-400 resize-y" />
                 ) : modalPost.visual_brief ? (
                   <p className="text-gray-700 bg-gray-50 rounded-lg p-3 text-xs">{modalPost.visual_brief}</p>
                 ) : <p className="text-gray-400 italic text-xs">（无）</p>}
+                {imageGenMsg && (
+                  <p className={`text-[11px] mt-1.5 ${imageGenMsg.startsWith('✓') ? 'text-green-600' : imageGenMsg.startsWith('✗') ? 'text-red-500' : 'text-amber-600'}`}>
+                    {imageGenMsg}
+                  </p>
+                )}
               </div>
 
               {/* Save button */}
