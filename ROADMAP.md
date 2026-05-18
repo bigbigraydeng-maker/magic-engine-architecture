@@ -660,7 +660,7 @@ Layer 5: Export（新增）— P8.10.S5
 - [x] **P8.10.S3.1** 新增 `src/lib/diagnostic/synthesis/competitor-analyst.ts`（Claude Sonnet 合成市场结构 + 对标路径）
 - [x] **P8.10.S3.2** 新增 `src/lib/diagnostic/synthesis/dimension-narrator.ts`（每维度 narrative）
 - [x] **P8.10.S3.3** 新增 `src/lib/diagnostic/synthesis/score-explainer.ts`（每个分数的解释段落）
-- [ ] **P8.10.S3.4** 新增 `src/lib/diagnostic/synthesis/market-context.ts`（Anthropic Web Search 抓行业现状）
+- [x] **P8.10.S3.4** 新增 `src/lib/diagnostic/synthesis/market-context.ts`（Anthropic Web Search 抓行业现状）
 - [ ] **P8.10.S3.5** 新增 `diagnostic_narratives` 表：`run_id, dimension, narrative_md, generated_at, model, cost_usd`
 - [ ] **P8.10.S3.6** Synthesis 结果注入 prescription-generator prompt（让处方更精准）
 
@@ -1232,6 +1232,8 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
 - **P8.10.S3.2** — Dimension Narrator (Synthesis 层第 2 个模块)：新增 `src/lib/diagnostic/synthesis/dimension-narrator.ts` + `narrateDimension()` / `narrateAllDimensions()`，对单个 `DiagnosticDimension` (seo/ai_visibility/ads/social/reputation/competitor) 用 Claude Sonnet 4.6 生成 200–400 字三段式 Markdown 叙事「Current state / Root cause / Opportunities」，注入 findings 的 severity/recommendation/fix_type/evidence；score=null（未配置）也能产出说明；批量入口对空 findings 维度静默跳过。TDD 15 个单测全过；diagnostic 222 测试全过；build 通过
 - **P8.10.S3.3** — Score Explainer (Synthesis 层第 3 个模块)：新增 `src/lib/diagnostic/synthesis/score-explainer.ts` + `explainScores()`，单次 Claude Sonnet 4.6 调用为 overall + 每个维度产出 60–120 字 Markdown caption「为什么是这分」，锚定 findings 的 drag-down/lift-up 与 weight × gap；输入校验 0–100 + 非空维度 + null 容忍；输出 reconcile（剔除未请求的 target、查重、强制 overall 必含）；TDD 21 单测全过；diagnostic 243 测试全过
   `feat(diagnostic): P8.10.S3.3 — score explainer synthesis [P8.10.S3.3]`
+- **P8.10.S3.4** — Market Context (Synthesis 层第 4 个模块)：在 `src/lib/anthropic/client.ts` 新增 `callClaudeWithWebSearch` helper（server-side `web_search_20250305` 工具 + citation 抓取 + cost 计算）；新增 `src/lib/diagnostic/synthesis/market-context.ts` + `gatherMarketContext()`，Claude Sonnet 用 Anthropic Web Search 抓行业现状，按 market (au→AU+Sydney / nz→NZ+Auckland) 路由 user_location，产出 `industry_overview_md` / `key_trends[3-6]` / `category_benchmarks_md` / `opportunities_md` + citations + cost；输入校验 brand/industry/market/maxSearches + focusTopics 上限 10；TDD 24 单测全过；diagnostic 267 测试全过
+  `feat(diagnostic): P8.10.S3.4 — market context synthesis [P8.10.S3.4]`
 - **P8.10.S0.15–S0.20** — 张骞/MB/视觉 brief 收尾增强（**并行 session 完成，commit message 误标 `[P8.10.S2.1]`–`[P8.10.S2.6]`，实际属于 P8.10.S0 范畴**）：Content modal 简化、`/content/generate` 重定向、张骞 confirm 跳转 `?brief=1`、MB 加视觉 DNA、BriefSourcesForm 自动预填、`visual_brief` 拆成独立第二步生成器
   - `refactor(content): remove image preview ... [P8.10.S2.1]` (2a10979) → 实际 S0.15
   - `refactor(content): redirect /content/generate ... [P8.10.S2.2]` (742d0f7) → 实际 S0.16
