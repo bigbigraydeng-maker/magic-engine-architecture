@@ -117,6 +117,7 @@ export default function DiagnosticPage() {
   const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const [isLaunching, setIsLaunching] = useState(false)
   const [dimFilter, setDimFilter] = useState<DiagnosticDimension | 'all'>('all')
+  const [isDocxLoading, setIsDocxLoading] = useState(false)
 
   // Poll active run status while running
   const { status: pollStatus, run: polledRun } = useDiagnosticStatus(clientId, activeRunId)
@@ -185,6 +186,29 @@ export default function DiagnosticPage() {
       // non-fatal: UI stays in current state
     } finally {
       setIsLaunching(false)
+    }
+  }
+
+  const handleDownloadDocx = async () => {
+    setIsDocxLoading(true)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/diagnostic/report/docx`, {
+        headers: { Authorization: `Bearer ${API_KEY}` },
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const cd = res.headers.get('Content-Disposition') ?? ''
+      const match = /filename="([^"]+)"/.exec(cd)
+      a.download = match?.[1] ?? 'diagnostic-report.docx'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setPageError(e instanceof Error ? e.message : '下载失败')
+    } finally {
+      setIsDocxLoading(false)
     }
   }
 
@@ -260,12 +284,28 @@ export default function DiagnosticPage() {
           </div>
           <div className="flex items-center gap-2">
             {run && (
-              <Link
-                href={`/dashboard/clients/${clientId}/diagnostic/report`}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
-              >
-                查看完整报告 →
-              </Link>
+              <>
+                <button
+                  onClick={() => void handleDownloadDocx()}
+                  disabled={isDocxLoading}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {isDocxLoading ? (
+                    <span className="animate-spin inline-block w-3.5 h-3.5 border-2 border-gray-400 border-t-transparent rounded-full" />
+                  ) : (
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                  )}
+                  下载报告
+                </button>
+                <Link
+                  href={`/dashboard/clients/${clientId}/diagnostic/report`}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+                >
+                  查看完整报告 →
+                </Link>
+              </>
             )}
             <button
               onClick={() => void handleRunDiagnostic()}
