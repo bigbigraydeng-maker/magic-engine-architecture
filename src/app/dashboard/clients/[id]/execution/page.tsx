@@ -387,6 +387,15 @@ function ExecutionItemRow({
               </span>
               {item.outcome && <OutcomeChip outcome={item.outcome} />}
               {execButton}
+              {item.logs.some(l => l.kind === 'ai_assist') && (
+                <button
+                  onClick={() => setExpanded(true)}
+                  className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600 font-medium border border-indigo-200 hover:bg-indigo-100"
+                  title="鲁班已产出内容，点击查看工作记录"
+                >
+                  🤖 AI草稿
+                </button>
+              )}
               {item.logs.length > 0 && (
                 <span className="text-[11px] text-gray-400">{item.logs.length} 条工作记录</span>
               )}
@@ -794,6 +803,8 @@ export default function ExecutionPage() {
   const [opError, setOpError] = useState<string | null>(null)       // 操作错误（内联横幅）
   // 当前打开鲁班对话的执行项（null = 抽屉关闭）
   const [chatItem, setChatItem] = useState<ItemWithLogs | null>(null)
+  // FlywheelDrawer done 后转交给鲁班的预填充消息
+  const [lubanInitialMessage, setLubanInitialMessage] = useState('')
   // 当前打开飞轮执行抽屉的执行项 + target
   const [flywheelState, setFlywheelState] = useState<{ item: ItemWithLogs; target: ExecutionTarget } | null>(null)
   // 内联补充/修订抽屉
@@ -803,6 +814,31 @@ export default function ExecutionPage() {
   // 项目级鲁班 / 三代理复盘抽屉（S5.3 / S6）
   const [projectLubanOpen, setProjectLubanOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
+  const [isDocxLoading, setIsDocxLoading] = useState(false)
+
+  const handleDownloadDocx = async () => {
+    setIsDocxLoading(true)
+    try {
+      const qs = prescriptionId ? `?prescription_id=${prescriptionId}` : ''
+      const res = await fetch(`/api/clients/${clientId}/execution/docx${qs}`, {
+        headers: { Authorization: `Bearer ${API_KEY}` },
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const cd = res.headers.get('Content-Disposition') ?? ''
+      const match = /filename="([^"]+)"/.exec(cd)
+      a.download = match?.[1] ?? 'luban_execution.docx'
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setOpError(e instanceof Error ? e.message : '下载失败')
+    } finally {
+      setIsDocxLoading(false)
+    }
+  }
 
   const fetchItems = useCallback(async () => {
     setLoading(true)
@@ -1017,6 +1053,22 @@ export default function ExecutionPage() {
             <p className="text-xs text-gray-400 mt-0.5">鲁班执行代理 · 按阶段跟踪处方落地进度</p>
           </div>
           <div className="flex items-center gap-2">
+            {items.length > 0 && (
+              <button
+                onClick={() => void handleDownloadDocx()}
+                disabled={isDocxLoading}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {isDocxLoading ? (
+                  <span className="animate-spin inline-block w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full" />
+                ) : (
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                )}
+                下载执行方案
+              </button>
+            )}
             <button
               onClick={() => setReviewOpen(true)}
               className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
@@ -1074,6 +1126,11 @@ export default function ExecutionPage() {
           item={flywheelState.item}
           target={flywheelState.target}
           onClose={() => setFlywheelState(null)}
+          onOpenLuban={(msg) => {
+            setLubanInitialMessage(msg)
+            setChatItem(flywheelState.item)
+            setFlywheelState(null)
+          }}
         />
       )}
 
@@ -1084,8 +1141,9 @@ export default function ExecutionPage() {
           itemId={chatItem.id}
           itemTitle={chatItem.title}
           isOpen={true}
-          onClose={() => setChatItem(null)}
+          onClose={() => { setChatItem(null); setLubanInitialMessage('') }}
           onLogSaved={() => void fetchItems()}
+          initialMessage={lubanInitialMessage}
         />
       )}
 
