@@ -217,8 +217,9 @@ git push origin master   # 触发 Render 部署
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P8.10.S2 PR** | 开 PR `feat/phase-8-10-s2` → main（含 S2.1–S2.6 + S0.15–S0.20） | ⭐⭐⭐ |
-| P8.10.S3.1 | `competitor-analyst.ts`（Claude Sonnet 合成市场结构 + 对标路径） | ⭐⭐ |
+| **P8.10.S3.2** | `dimension-narrator.ts`（每维度 200–400 字「现状 + 根因 + 机会」） | ⭐⭐⭐ |
+| P8.10.S3.3 | `score-explainer.ts`（每分数解释段落） | ⭐⭐ |
+| P8.10.S3.4 | `market-context.ts`（Anthropic Web Search 抓行业现状） | ⭐⭐ |
 | P8.3.2 | Dashboard Magic Link 鉴权 | ⭐ |
 
 **Phase 12.B PR #33 已合并**(2026-05-18 02:47)，旧焦点表过期已修。
