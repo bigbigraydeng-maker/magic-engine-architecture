@@ -213,15 +213,15 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-18（**P12.B.4 完成** — SEMrush 周快照 cron 上线；Phase 12.B 4/4 任务全部完成 🎉）
+> 最后更新：2026-05-18（**P8.10.S2 全部完成** — 6/6：S2.1 SEO / S2.2 Competitor / S2.3 Social / S2.4 Ads / S2.5 AI Visibility live probe / S2.6 unified evidence envelope；已 push 到 `feat/phase-8-10-s2`）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **M3 验证** | PM 确认 CTS execution 看板有 outcome chip | ⭐⭐⭐ |
-| **Phase 12.B PR** | 开 PR 合并 feat/phase-12b-adapters → main | ⭐⭐⭐ |
-| P8.3.2 | Dashboard Magic Link 鉴权 | ⭐⭐ |
+| **P8.10.S2 PR** | 开 PR `feat/phase-8-10-s2` → main（含 S2.1–S2.6 + S0.15–S0.20） | ⭐⭐⭐ |
+| P8.10.S3.1 | `competitor-analyst.ts`（Claude Sonnet 合成市场结构 + 对标路径） | ⭐⭐ |
+| P8.3.2 | Dashboard Magic Link 鉴权 | ⭐ |
 
-**Phase 12 工作协议见上方专节**。Phase 12.A 完成后回到 Phase 8.3.2 简单鉴权。
+**Phase 12.B PR #33 已合并**(2026-05-18 02:47)，旧焦点表过期已修。
 
 **更新规则**（每次上线新功能）：
 1. ROADMAP.md 勾选对应任务 checkbox

@@ -3,7 +3,14 @@ import { getCompetitorDomains } from '@/lib/dataforseo/client'
 import type { CompetitorDomain } from '@/lib/dataforseo/client'
 import { scrapeCompetitorMetaAds } from '@/lib/apify/ad-library'
 import type { MetaAdData } from '@/lib/apify/ad-library'
+import { analyzeCompetitorSite } from '@/lib/diagnostic/competitor-site-analyzer'
+import type { CompetitorSiteSignals } from '@/lib/diagnostic/competitor-site-analyzer'
 import type { CollectorResult, NewFinding } from '../types'
+import { makeEvidence, evidenceSource } from '../types'
+
+function urlFor(domain: string): string {
+  return domain.startsWith('http') ? domain : `https://${domain}`
+}
 
 // ---------------------------------------------------------------------------
 // Extended return type
@@ -11,7 +18,11 @@ import type { CollectorResult, NewFinding } from '../types'
 
 export interface CompetitorEntry extends CompetitorDomain {
   meta_ads?: MetaAdData
+  site_signals?: CompetitorSiteSignals  // P8.10.S2.2
 }
+
+// P8.10.S2.2: emit content_gap when competitor avg CTA count is ≥2x client's
+const CONTENT_GAP_RATIO = 2
 
 export interface CompetitorCollectorResult extends CollectorResult {
   competitorList: CompetitorEntry[]
@@ -78,6 +89,16 @@ export class CompetitorCollector {
       }
     }
 
+    // 3b. P8.10.S2.2: Fetch homepage signals for client + top 3 competitors in parallel
+    const [clientSignals, ...competitorSignals] = await Promise.all([
+      analyzeCompetitorSite(domain).catch(() => null),
+      ...top3.map(c => analyzeCompetitorSite(c.domain).catch(() => null)),
+    ])
+    top3.forEach((comp, i) => {
+      const sig = competitorSignals[i]
+      if (sig) comp.site_signals = sig
+    })
+
     // 4. Compute score
     const clientTraffic = clientMetrics?.organic_traffic ?? 0
     const avgCompetitorTraffic =
@@ -97,20 +118,68 @@ export class CompetitorCollector {
         severity: 'critical',
         title: 'Large Organic Traffic Gap vs Competitors',
         description: `Your organic traffic is only ${Math.round(ratio * 100)}% of the average competitor traffic. This represents a significant competitive disadvantage.`,
-        evidence: {
-          client_traffic: clientTraffic,
-          avg_competitor_traffic: Math.round(avgCompetitorTraffic),
-          ratio: Math.round(ratio * 1000) / 1000,
-          top_competitors: competitorList.slice(0, 3).map(c => ({
-            domain: c.domain,
-            traffic: c.organic_traffic,
-          })),
-        },
+        evidence: makeEvidence({
+          parsed: {
+            client_traffic: clientTraffic,
+            avg_competitor_traffic: Math.round(avgCompetitorTraffic),
+            ratio: Math.round(ratio * 1000) / 1000,
+            top_competitors: competitorList.slice(0, 3).map(c => ({
+              domain: c.domain,
+              traffic: c.organic_traffic,
+            })),
+          },
+          sources: [
+            evidenceSource(urlFor(domain)),
+            ...competitorList.slice(0, 3).map(c => evidenceSource(urlFor(c.domain))),
+          ],
+        }),
         recommendation:
           'Invest in content marketing and SEO to close the traffic gap. Focus on high-intent keywords where competitors rank but you do not.',
         fix_type: 'fde_manual',
         priority_score: 90,
       })
+    }
+
+    // P8.10.S2.2: Content gap — competitors carry significantly more CTAs than client
+    if (clientSignals && competitorSignals.filter(Boolean).length >= 2) {
+      const competitorCtas = competitorSignals
+        .filter((s): s is CompetitorSiteSignals => s !== null)
+        .map(s => s.cta_count)
+      const avgCompCta = competitorCtas.reduce((a, b) => a + b, 0) / competitorCtas.length
+      if (clientSignals.cta_count > 0 && avgCompCta >= clientSignals.cta_count * CONTENT_GAP_RATIO) {
+        findings.push({
+          client_id: clientId,
+          dimension: 'competitor',
+          finding_type: 'competitor_content_gap',
+          severity: 'medium',
+          title: 'Competitors run richer conversion paths',
+          description: `Top competitors expose ~${Math.round(avgCompCta)} call-to-action links on their homepage vs your ${clientSignals.cta_count}. Visitors arriving from search have ${Math.round((avgCompCta / Math.max(1, clientSignals.cta_count)) * 100) / 100}× more conversion entry points.`,
+          evidence: makeEvidence({
+            parsed: {
+              client_cta_count: clientSignals.cta_count,
+              client_cta_examples: clientSignals.cta_examples,
+              avg_competitor_cta_count: Math.round(avgCompCta * 10) / 10,
+              competitor_signals: competitorSignals
+                .filter((s): s is CompetitorSiteSignals => s !== null)
+                .map(s => ({
+                  domain: s.domain,
+                  cta_count: s.cta_count,
+                  cta_examples: s.cta_examples.slice(0, 3),
+                  landing_page_type: s.landing_page_type,
+                })),
+            },
+            sources: [
+              evidenceSource(urlFor(domain)),
+              ...competitorSignals
+                .filter((s): s is CompetitorSiteSignals => s !== null)
+                .map(s => evidenceSource(urlFor(s.domain))),
+            ],
+          }),
+          recommendation: 'Audit homepage and key landing pages — add primary CTAs (Book / Enquire / Get a quote) above the fold and in the footer. Aim for 5–8 distinct conversion paths.',
+          fix_type: 'fde_manual',
+          priority_score: 55,
+        })
+      }
     }
 
     return { score, findings, competitorList }
@@ -137,7 +206,7 @@ export class CompetitorCollector {
         found === 0
           ? 'DataForSEO returned zero competitor domains. The domain likely has no organic keyword rankings yet, so the competitive landscape cannot be measured.'
           : `Only ${found} competitor domain${found === 1 ? '' : 's'} found — not enough signal to score the competitive landscape (minimum 3 needed for meaningful comparison).`,
-      evidence: { competitors_found: found, competitors_required: 3 },
+      evidence: makeEvidence({ parsed: { competitors_found: found, competitors_required: 3 } }),
       recommendation:
         found === 0
           ? 'Get the site indexed and earn organic keyword rankings first (see SEO dimension). Re-run competitor analysis once any keywords rank in top 100.'
