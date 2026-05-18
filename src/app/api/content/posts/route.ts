@@ -28,7 +28,39 @@ export async function GET(req: NextRequest) {
     const { data, error } = await query
     if (error) throw error
 
-    return NextResponse.json({ posts: data ?? [] })
+    const posts = (data ?? []) as Array<{
+      id: string
+      [k: string]: unknown
+    }>
+
+    // 附带每篇 post 的视觉资产（final 优先，否则最新 ready）
+    let assetByPost: Record<string, { url: string; type: string }> = {}
+    if (posts.length > 0) {
+      const { data: assetRows } = await supabaseAdmin
+        .from('visual_assets')
+        .select('post_id, storage_url, asset_type, is_final, generation_status, created_at')
+        .in('post_id', posts.map(p => p.id))
+        .eq('generation_status', 'ready')
+        .not('storage_url', 'is', null)
+        .order('is_final', { ascending: false })
+        .order('created_at', { ascending: false })
+
+      for (const row of (assetRows ?? []) as Array<{
+        post_id: string; storage_url: string; asset_type: string; is_final: boolean
+      }>) {
+        if (!assetByPost[row.post_id]) {
+          assetByPost[row.post_id] = { url: row.storage_url, type: row.asset_type }
+        }
+      }
+    }
+
+    const enriched = posts.map(p => ({
+      ...p,
+      visual_asset_url: assetByPost[p.id]?.url ?? null,
+      visual_asset_type: assetByPost[p.id]?.type ?? null,
+    }))
+
+    return NextResponse.json({ posts: enriched })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json({ error: message }, { status: 500 })

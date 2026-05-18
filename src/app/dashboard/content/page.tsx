@@ -22,6 +22,9 @@ interface ContentPost {
   scheduled_at?: string | null;
   created_at: string;
   clients?: { name: string } | null;
+  // 视觉资产（API enriched，新增）
+  visual_asset_url?: string | null;
+  visual_asset_type?: string | null;
 }
 
 const statusColors: Record<string, string> = {
@@ -178,6 +181,13 @@ export default function ContentBoardPage() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
 
+  // Schedule + Publer publish state
+  const [scheduleAt, setScheduleAt] = useState('');
+  const [savingSchedule, setSavingSchedule] = useState(false);
+  const [scheduleMsg, setScheduleMsg] = useState('');
+  const [publishing, setPublishing] = useState(false);
+  const [publishMsg, setPublishMsg] = useState('');
+
 
   useEffect(() => {
     fetch('/api/clients').then(r => r.json()).then(d => setClients(d.clients ?? []));
@@ -220,12 +230,72 @@ export default function ContentBoardPage() {
     setEditHashtags((post.hashtags ?? []).join(' '));
     setEditVisualBrief(post.visual_brief ?? '');
     setSaveMsg('');
+    // 排期 init：取已有 scheduled_at，转换成 datetime-local input 接受的格式 (YYYY-MM-DDTHH:mm)
+    setScheduleAt(post.scheduled_at ? post.scheduled_at.slice(0, 16) : '');
+    setScheduleMsg('');
+    setPublishMsg('');
   };
 
   const closeModal = () => {
     setModalPost(null);
     setEditMode(false);
     setSaveMsg('');
+    setScheduleMsg('');
+    setPublishMsg('');
+  };
+
+  const handleSaveSchedule = async () => {
+    if (!modalPost) return;
+    setSavingSchedule(true);
+    setScheduleMsg('');
+    try {
+      const iso = scheduleAt ? new Date(scheduleAt).toISOString() : null;
+      const res = await fetch(`/api/posts/${modalPost.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scheduled_at: iso, status: iso ? 'scheduled' : modalPost.status }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || '保存失败');
+      const updated: ContentPost = {
+        ...modalPost,
+        scheduled_at: iso,
+        status: iso ? 'scheduled' : modalPost.status,
+      };
+      setModalPost(updated);
+      setPosts(prev => prev.map(p => p.id === updated.id ? updated : p));
+      setScheduleMsg(iso ? '✓ 已排期' : '✓ 已取消排期');
+    } catch (err) {
+      setScheduleMsg(`✗ ${(err as Error).message}`);
+    } finally {
+      setSavingSchedule(false);
+    }
+  };
+
+  const handlePublishToPubler = async () => {
+    if (!modalPost) return;
+    setPublishing(true);
+    setPublishMsg('');
+    try {
+      const body: { post_id: string; schedule_at?: string } = { post_id: modalPost.id };
+      if (scheduleAt) body.schedule_at = new Date(scheduleAt).toISOString();
+      const res = await fetch('/api/publer/create-post', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || '发布失败');
+      const newStatus = scheduleAt ? 'scheduled' : 'published';
+      const updated: ContentPost = { ...modalPost, status: newStatus };
+      setModalPost(updated);
+      setPosts(prev => prev.map(p => p.id === updated.id ? updated : p));
+      setPublishMsg(`✓ 已${scheduleAt ? '调度' : '发布'}到 Publer (job=${json.job_id ?? json.job_ids?.join(',') ?? 'ok'})`);
+    } catch (err) {
+      setPublishMsg(`✗ ${(err as Error).message}`);
+    } finally {
+      setPublishing(false);
+    }
   };
 
   // ── Save edits ────────────────────────────────────────────────────────────
@@ -609,6 +679,25 @@ export default function ContentBoardPage() {
                     <input type="checkbox" checked={selectedIds.has(post.id)}
                       onChange={() => toggleSelect(post.id)} onClick={e => e.stopPropagation()}
                       className="mt-0.5 w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 flex-shrink-0" />
+                    {/* 视觉资产缩略图 */}
+                    {post.visual_asset_url ? (
+                      <div className="relative w-20 h-20 flex-shrink-0 rounded-lg overflow-hidden bg-gray-100 border border-gray-200">
+                        {post.visual_asset_type === 'video' ? (
+                          // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/media-has-caption
+                          <video src={post.visual_asset_url} className="w-full h-full object-cover" muted />
+                        ) : (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={post.visual_asset_url} alt={post.title} className="w-full h-full object-cover" />
+                        )}
+                        {post.visual_asset_type === 'video' && (
+                          <span className="absolute bottom-0.5 right-0.5 bg-black/60 text-white text-[10px] px-1 rounded">▶</span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="w-20 h-20 flex-shrink-0 rounded-lg bg-gray-50 border border-dashed border-gray-300 flex items-center justify-center text-2xl text-gray-300">
+                        📝
+                      </div>
+                    )}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-start gap-1.5 flex-1 min-w-0">
@@ -689,6 +778,62 @@ export default function ContentBoardPage() {
 
             {/* Modal body */}
             <div className="px-6 py-4 space-y-4 text-sm">
+              {/* Visual asset preview */}
+              {modalPost.visual_asset_url && (
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">视觉资产</p>
+                  <div className="rounded-lg overflow-hidden border border-gray-200 bg-gray-50 max-h-80 flex items-center justify-center">
+                    {modalPost.visual_asset_type === 'video' ? (
+                      // eslint-disable-next-line jsx-a11y/media-has-caption
+                      <video src={modalPost.visual_asset_url} controls className="max-h-80 object-contain" />
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={modalPost.visual_asset_url} alt={modalPost.title} className="max-h-80 object-contain" />
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 排期 + 发布到 Publer */}
+              <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3 space-y-2.5">
+                <p className="text-xs font-semibold text-indigo-700 uppercase tracking-wider">排期与发布</p>
+                <div className="flex items-end gap-2 flex-wrap">
+                  <div className="flex-1 min-w-[200px]">
+                    <label className="block text-[11px] text-gray-500 mb-1">计划发布时间</label>
+                    <input
+                      type="datetime-local"
+                      value={scheduleAt}
+                      onChange={e => setScheduleAt(e.target.value)}
+                      className="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-xs text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    />
+                  </div>
+                  <button
+                    onClick={() => void handleSaveSchedule()}
+                    disabled={savingSchedule}
+                    className="bg-white border border-indigo-300 hover:bg-indigo-50 text-indigo-700 text-xs px-3 py-1.5 rounded-lg font-medium disabled:opacity-50"
+                  >
+                    {savingSchedule ? '保存中…' : '💾 保存排期'}
+                  </button>
+                  <button
+                    onClick={() => void handlePublishToPubler()}
+                    disabled={publishing || modalPost.status === 'draft' || modalPost.status === 'rejected'}
+                    title={modalPost.status === 'draft' ? '需先批准才能发布' : modalPost.status === 'rejected' ? '已拒绝的内容不能发布' : ''}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs px-4 py-1.5 rounded-lg font-semibold disabled:opacity-50"
+                  >
+                    {publishing ? '发布中…' : scheduleAt ? '🚀 调度到 Publer' : '🚀 立即发布到 Publer'}
+                  </button>
+                </div>
+                {(modalPost.status === 'draft' || modalPost.status === 'rejected') && (
+                  <p className="text-[11px] text-amber-600">⚠ 当前状态为「{modalPost.status === 'draft' ? '草稿' : '已拒绝'}」，需先批准才能发布到 Publer。</p>
+                )}
+                {scheduleMsg && (
+                  <p className={`text-[11px] ${scheduleMsg.startsWith('✓') ? 'text-green-600' : 'text-red-500'}`}>{scheduleMsg}</p>
+                )}
+                {publishMsg && (
+                  <p className={`text-[11px] ${publishMsg.startsWith('✓') ? 'text-green-600' : 'text-red-500'}`}>{publishMsg}</p>
+                )}
+              </div>
+
               {/* Script */}
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Script</p>
