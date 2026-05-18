@@ -319,7 +319,7 @@ export default function DiagnosticPage() {
                     />
                     {raw === null && (
                       <Link
-                        href={`/dashboard/clients/${clientId}/settings`}
+                        href={`/dashboard/clients/${clientId}/zhangqian`}
                         className="text-xs text-indigo-500 hover:text-indigo-700 hover:underline"
                       >
                         立即配置 →
