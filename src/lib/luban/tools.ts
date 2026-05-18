@@ -1,15 +1,14 @@
 /**
- * 鲁班 Lǔ Bān — 工具层（P8.12.S3.1 / S3.2 / S3.4）
+ * 鲁班 Lǔ Bān — 工具层（P8.12.S3.1 / S3.2 / S3.4 / S3.5）
  *
  * buildLubanTools(ctx) 返回 Anthropic 工具定义 + handler 映射，注入 callClaudeWithTools。
  *
  * 工具清单：
- *   - add_work_log      鲁班自主把对话结论写进 execution_logs（S3.1）
- *   - generate_content  根据执行项的 module 字段调用对应模块的内容生成能力，
- *                       直接产出内容并落库（S3.2）——目前直连「SEO 内容引擎」。
- *   - publish_to_gbp    发布 GBP 本地贴子；无写权限时降级为草稿 + 人工发布（S3.4）。
- *
- * 后续 connector/skill（check_local_compliance 等）在此扩展。
+ *   - add_work_log               鲁班自主把对话结论写进 execution_logs（S3.1）
+ *   - generate_content           根据执行项的 module 字段调用对应模块的内容生成能力，
+ *                                直接产出内容并落库（S3.2）——目前直连「SEO 内容引擎」。
+ *   - publish_to_gbp             发布 GBP 本地贴子；无写权限时降级为草稿 + 人工发布（S3.4）。
+ *   - discover_local_competitors 从 Yellow Pages AU / Localsearch 抓本地竞品列表（S3.5）。
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -18,6 +17,11 @@ import type { ExecutionItem, ExecutionLogKind } from '@/types/diagnostic'
 import type { BlogPost } from '@/types/magic-engine'
 import { generateBlogPost } from '@/lib/blog/generator'
 import { publishToGbp, type GbpPostInput } from '@/lib/gbp/publisher'
+import {
+  discoverLocalCompetitors,
+  buildYellowPagesUrl,
+  buildLocalsearchUrl,
+} from '@/lib/local-directory/client'
 
 export interface LubanToolContext {
   supabase: SupabaseClient
@@ -248,6 +252,54 @@ function isPublishToGbpInput(input: unknown): input is GbpPostInput {
   return typeof o.post_text === 'string' && o.post_text.trim().length > 0
 }
 
+// ─── discover_local_competitors（S3.5）──────────────────────────────────────
+
+const DISCOVER_LOCAL_COMPETITORS_TOOL: Anthropic.Tool = {
+  name: 'discover_local_competitors',
+  description:
+    '从 Yellow Pages AU 和 Localsearch.com.au 搜索本地同行竞品列表，获取名称、电话、地址、评分等信息。' +
+    '数据通过 Jina Reader 从公开目录抓取，无需额外 API key；被反爬时优雅降级，只返回能拿到的数据。' +
+    '何时用：FDE 要了解客户所在地区的竞争格局，或执行项需要竞品调研时。',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      industry: {
+        type: 'string',
+        description: '行业/职业类别，英文（如 "travel agent"、"plumber"、"dentist"）。',
+      },
+      location: {
+        type: 'string',
+        description: '地点，英文（如 "Sydney NSW"、"Melbourne VIC"、"Auckland NZ"）。',
+      },
+      limit: {
+        type: 'number',
+        description: '最多返回几家，默认 8，最多 20。',
+      },
+    },
+    required: ['industry', 'location'],
+  },
+}
+
+interface DiscoverLocalCompetitorsInput {
+  industry: string
+  location: string
+  limit?: number
+}
+
+function isDiscoverLocalCompetitorsInput(
+  input: unknown,
+): input is DiscoverLocalCompetitorsInput {
+  if (typeof input !== 'object' || input === null) return false
+  const o = input as Record<string, unknown>
+  return (
+    typeof o.industry === 'string' &&
+    o.industry.trim().length > 0 &&
+    typeof o.location === 'string' &&
+    o.location.trim().length > 0 &&
+    (o.limit === undefined || typeof o.limit === 'number')
+  )
+}
+
 // ─── buildLubanTools ─────────────────────────────────────────────────────────
 
 /**
@@ -255,7 +307,7 @@ function isPublishToGbpInput(input: unknown): input is GbpPostInput {
  */
 export function buildLubanTools(ctx: LubanToolContext): LubanToolset {
   return {
-    tools: [ADD_WORK_LOG_TOOL, GENERATE_CONTENT_TOOL, PUBLISH_TO_GBP_TOOL],
+    tools: [ADD_WORK_LOG_TOOL, GENERATE_CONTENT_TOOL, PUBLISH_TO_GBP_TOOL, DISCOVER_LOCAL_COMPETITORS_TOOL],
     handlers: {
       publish_to_gbp: async (input: unknown): Promise<string> => {
         if (!isPublishToGbpInput(input)) {
@@ -346,6 +398,60 @@ export function buildLubanTools(ctx: LubanToolContext): LubanToolset {
       },
 
       generate_content: (input: unknown): Promise<string> => handleGenerateContent(ctx, input),
+
+      discover_local_competitors: async (input: unknown): Promise<string> => {
+        if (!isDiscoverLocalCompetitorsInput(input)) {
+          return 'discover_local_competitors 调用失败：需要 { industry: string, location: string }。'
+        }
+        const { industry, location, limit = 8 } = input
+
+        const result = await discoverLocalCompetitors(industry, location, limit)
+
+        if (result.entries.length === 0) {
+          return (
+            `在 Yellow Pages AU 和 Localsearch.com.au 搜索「${industry}」（${location}）未能抓到数据` +
+            `（可能被反爬拦截，或该地区无结果）。\n\n` +
+            `可以手动访问以下 URL 查看：\n` +
+            `- Yellow Pages AU：${buildYellowPagesUrl(industry, location)}\n` +
+            `- Localsearch：${buildLocalsearchUrl(industry, location)}`
+          )
+        }
+
+        const lines = result.entries.map((e, i) => {
+          const rating = e.rating !== null ? ` ⭐ ${e.rating}` : ''
+          const reviews = e.reviewCount !== null ? `（${e.reviewCount} 评价）` : ''
+          const phone = e.phone ? ` | 📞 ${e.phone}` : ''
+          const addr = e.address ? ` | 📍 ${e.address}` : ''
+          const src = e.source === 'yellowpages_au' ? 'YP' : 'LS'
+          return `${i + 1}. **${e.name}**${rating}${reviews}${phone}${addr} [${src}]`
+        })
+
+        void (ctx.supabase
+          .from('execution_logs')
+          .insert({
+            execution_item_id: ctx.itemId,
+            client_id:         ctx.clientId,
+            author:            'luban',
+            kind:              'ai_assist' satisfies ExecutionLogKind,
+            content:           `竞品调研：${industry}（${location}）共 ${result.entries.length} 家`,
+            meta:              {
+              tool: 'discover_local_competitors',
+              industry,
+              location,
+              count: result.entries.length,
+            },
+          })
+          .then(
+            () => undefined,
+            (err: unknown) => console.error('[luban/discover_local_competitors] log write failed:', err),
+          ))
+
+        return (
+          `找到 **${result.entries.length}** 家本地竞品（${industry}，${location}）：\n\n` +
+          lines.join('\n') +
+          `\n\n数据来源：${result.sources.map(s => s.url).join('、')}`
+        )
+      },
     },
   }
 }
