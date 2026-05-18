@@ -213,12 +213,11 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-18（**P8.10.S5.2 完成** — 证据上标抽屉：`<sup>[N]</sup>` 注入 + postMessage + EvidenceDrawer；296 tests 全绿；下一步 S5.3 DOCX 导出）
+> 最后更新：2026-05-18（**P8.10.S5.3 完成** — 导出 DOCX：新 `/report/docx` API + report 页 DOCX 按钮；build 通过；Sprint 5 全部完成）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P8.10.S5.3** | 导出 DOCX 按钮（用 `anthropic-skills:docx` 渲染） | ⭐⭐⭐ |
-| P8.3.2 | Dashboard Magic Link 鉴权 | ⭐ |
+| **P8.3.2** | Dashboard Magic Link 鉴权 | ⭐ |
 
 **Phase 12.B PR #33 已合并**(2026-05-18 02:47)，旧焦点表过期已修。
 
