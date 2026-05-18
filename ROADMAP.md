@@ -662,7 +662,7 @@ Layer 5: Export（新增）— P8.10.S5
 - [x] **P8.10.S3.3** 新增 `src/lib/diagnostic/synthesis/score-explainer.ts`（每个分数的解释段落）
 - [x] **P8.10.S3.4** 新增 `src/lib/diagnostic/synthesis/market-context.ts`（Anthropic Web Search 抓行业现状）
 - [x] **P8.10.S3.5** 新增 `diagnostic_narratives` 表：`run_id, dimension, narrative_md, generated_at, model, cost_usd`
-- [ ] **P8.10.S3.6** Synthesis 结果注入 prescription-generator prompt（让处方更精准）
+- [x] **P8.10.S3.6** Synthesis 结果注入 prescription-generator prompt（让处方更精准）
 
 **Sprint 4 — Report Composer（P8.10.S4，~2 天）**：
 - [ ] **P8.10.S4.1** `src/lib/diagnostic/report-generator.ts` — 合成完整 Markdown 报告
@@ -1236,6 +1236,8 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
   `feat(diagnostic): P8.10.S3.4 — market context synthesis [P8.10.S3.4]`
 - **P8.10.S3.5** — Synthesis 持久化层：新增 migration `20260518000002_diagnostic_narratives.sql`（表 `diagnostic_narratives`：`run_id / client_id / kind / dimension / narrative_md / metadata / model / cost_usd / generated_at`，CHECK 约束 kind 枚举，UNIQUE INDEX 用 `COALESCE(dimension, '')` 处理 NULL，RLS 沿用 client_team）；新增 `src/lib/diagnostic/synthesis/persistence.ts`：`saveCompetitorAnalysis` / `saveDimensionNarrative(s)` / `saveScoreExplanations`（cost 只挂 overall 防重复求和）/ `saveMarketContext`（dimension=NULL + metadata 存 citations/trends）/ `loadNarrativesForRun`，全部走 `upsert(onConflict='run_id,kind,dimension')`，错误只 warn 不抛；TDD 11 单测全过；diagnostic 278 测试全过；build 通过
   `feat(diagnostic): P8.10.S3.5 — diagnostic_narratives table + persistence [P8.10.S3.5]`
+- **P8.10.S3.6** — Synthesis 结果注入 prescription-generator：`generatePrescription` 在加载 run+findings 后通过 `loadNarrativesForRun(supabase, runId)` 拉取 narratives；`buildPrescriptionPrompt` 签名加 `narratives` 可选参数；新增 `formatNarrativesForPrompt()` 按 kind 分桶渲染 4 段（Market Context / Competitor Analysis / Dimension Narratives / Score Explanations）注入 prompt；SYSTEM_PROMPT 加硬指令"必须将 Synthesis Insights 作为撰写处方的主要依据"（action description / KPI target_value / 阶段 1 快速动作 / summary 必须呼应）；narratives 为空时段落整体省略，对老 run 零影响；新增 2 个 TDD 单测 + 更新 supabase mock 支持 `diagnostic_narratives` 表的 `.eq().order().order()` 链；prescription-generator 10 测试全过 + diagnostic 280 测试全过；build 通过
+  `feat(diagnostic): P8.10.S3.6 — inject synthesis narratives into prescription prompt [P8.10.S3.6]`
 - **P8.10.S0.15–S0.20** — 张骞/MB/视觉 brief 收尾增强（**并行 session 完成，commit message 误标 `[P8.10.S2.1]`–`[P8.10.S2.6]`，实际属于 P8.10.S0 范畴**）：Content modal 简化、`/content/generate` 重定向、张骞 confirm 跳转 `?brief=1`、MB 加视觉 DNA、BriefSourcesForm 自动预填、`visual_brief` 拆成独立第二步生成器
   - `refactor(content): remove image preview ... [P8.10.S2.1]` (2a10979) → 实际 S0.15
   - `refactor(content): redirect /content/generate ... [P8.10.S2.2]` (742d0f7) → 实际 S0.16

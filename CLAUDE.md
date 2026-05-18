@@ -213,12 +213,12 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-18（**P8.10.S3.5 完成** — `diagnostic_narratives` 表 + 持久化层：migration + `persistence.ts`（5 个 save helper + load helper + upsert on conflict），11 个单测 + diagnostic 278 测试全过；在 `feat/phase-8-10-s3` 分支）
+> 最后更新：2026-05-18（**P8.10.S3.6 完成** — Synthesis 结果注入 prescription-generator：`generatePrescription` 自动 `loadNarrativesForRun` → `formatNarrativesForPrompt` 按 kind 分 4 桶（market_context / competitor / dimension / score）写入 prompt + SYSTEM_PROMPT 硬指令；narratives 为空时段落省略；prescription-generator 10 测试 + diagnostic 280 测试全过；Sprint 3 全部完成）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P8.10.S3.6** | Synthesis 结果注入 prescription-generator | ⭐⭐⭐ |
-| P8.10.S4.1 | Report Composer 起步 | ⭐⭐ |
+| **P8.10.S4.1** | Report Composer 起步（`report-generator.ts` 合成完整 Markdown 报告） | ⭐⭐⭐ |
+| P8.10.S4.2 | 报告结构：摘要 / 基线 / 6 维度 / 竞品 / 处方 / 证据附录 | ⭐⭐ |
 | P8.3.2 | Dashboard Magic Link 鉴权 | ⭐ |
 
 **Phase 12.B PR #33 已合并**(2026-05-18 02:47)，旧焦点表过期已修。
