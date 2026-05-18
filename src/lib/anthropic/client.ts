@@ -8,6 +8,7 @@
 
 import Anthropic from '@anthropic-ai/sdk'
 import type { Beta } from '@anthropic-ai/sdk/resources/beta/beta'
+import { jsonrepair } from 'jsonrepair'
 
 export const MODEL_SONNET = 'claude-sonnet-4-6'
 
@@ -453,8 +454,10 @@ export async function callClaudeWithTools(params: {
 /**
  * Parse a Claude response that should be JSON.
  * Robust extraction: finds the outermost { } block regardless of surrounding text.
- * Also sanitizes literal control characters (newlines, tabs) inside JSON string values,
- * which Claude sometimes emits — especially for non-English responses.
+ * Three-level fallback:
+ *   1. Direct JSON.parse (fast path)
+ *   2. sanitizeJsonControlChars → handles literal \n/\r/\t inside string values
+ *   3. jsonrepair → handles unescaped quotes, trailing commas, and other LLM quirks
  */
 export function parseJsonResponse<T>(text: string): T {
   const trimmed = text.trim()
@@ -468,15 +471,19 @@ export function parseJsonResponse<T>(text: string): T {
 
   const raw = trimmed.slice(start, end + 1)
 
-  // Try direct parse first (fast path)
+  // Level 1: direct parse (fast path)
   try {
     return JSON.parse(raw) as T
-  } catch {
-    // Sanitize literal control characters inside string values
-    // Claude sometimes emits real \n / \t instead of \\n / \\t in JSON strings
-    const sanitized = sanitizeJsonControlChars(raw)
+  } catch { /* fall through */ }
+
+  // Level 2: sanitize literal control characters
+  const sanitized = sanitizeJsonControlChars(raw)
+  try {
     return JSON.parse(sanitized) as T
-  }
+  } catch { /* fall through */ }
+
+  // Level 3: jsonrepair handles unescaped quotes, trailing commas, etc.
+  return JSON.parse(jsonrepair(sanitized)) as T
 }
 
 /**
