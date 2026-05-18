@@ -141,6 +141,7 @@ export async function chatWithLuban(
     tools,
     toolHandlers: handlers,
     maxOutputTokens: 2048,
+    perCallTimeoutMs: 60_000,   // 带历史+工具的首轮调用需要更多时间，默认 20s 不够
   })
 
   // 4. 持久化用户消息 + 鲁班回复（写失败不阻塞返回）

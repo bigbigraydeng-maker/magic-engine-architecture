@@ -301,12 +301,21 @@ export default function DiagnosticPage() {
                 // null = data not available; undefined = still loading
                 const raw = dimensionScores[dim]
                 return (
-                  <ScoreGauge
-                    key={dim}
-                    score={raw === undefined ? null : raw}
-                    dimension={DIMENSION_LABELS[dim]}
-                    loading={isRunning && raw === undefined}
-                  />
+                  <div key={dim} className="flex flex-col items-center gap-1">
+                    <ScoreGauge
+                      score={raw === undefined ? null : raw}
+                      dimension={DIMENSION_LABELS[dim]}
+                      loading={isRunning && raw === undefined}
+                    />
+                    {raw === null && (
+                      <Link
+                        href={`/dashboard/clients/${clientId}/settings`}
+                        className="text-xs text-indigo-500 hover:text-indigo-700 hover:underline"
+                      >
+                        立即配置 →
+                      </Link>
+                    )}
+                  </div>
                 )
               })}
             </div>

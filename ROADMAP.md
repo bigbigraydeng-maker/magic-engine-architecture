@@ -532,14 +532,14 @@ Publishing Hub 归档 / 排期
 **根因**：所有 collector 缺少「未配置 / 未找到数据」的状态机，把空数据当满分处理。
 
 **任务清单**：
-- [ ] **P8.5.19** `SeoCollector`: 无关键词配置 → `score: null` + finding `keywords_not_configured`（severity: high, fix_type: fde_manual）
-- [ ] **P8.5.20** `ReputationCollector`: Google Place 未找到商家 → `score: null` + finding `business_not_listed`（severity: critical, fix_type: fde_manual）
-- [ ] **P8.5.21** `CompetitorCollector`: 竞品 < 3 → `score: null` + finding `competitor_data_insufficient`（severity: medium, fix_type: me_auto，建议跑 SEMrush competitive research）
-- [ ] **P8.5.22** `AiVisibilityCollector`: 无 snapshot 数据 → `score: null` + finding `ai_visibility_not_tracked`（severity: critical, fix_type: me_auto，引导启用 AI Tracker 周跑）
-- [ ] **P8.5.23** `SocialCollector`: 无 IG/FB 账号配置 → `score: null` + finding `social_accounts_not_linked`（severity: high, fix_type: fde_manual）
-- [ ] **P8.5.24** `computeOverallScore`: 忽略 `null` 维度，权重重新归一化；UI 显示「N/A」灰色图标
-- [ ] **P8.5.25** UI `/diagnostic` 加返回按钮 + null 维度引导链接（「立即配置」跳转客户设置抽屉）
-- [ ] **P8.5.26** `DiagnosticRun` 增加 `dimensions_skipped: string[]` 字段，记录哪些维度因数据缺失被跳过
+- [x] **P8.5.19** `SeoCollector`: 无关键词配置 → `score: null` + finding `keywords_not_configured`（severity: high, fix_type: fde_manual）
+- [x] **P8.5.20** `ReputationCollector`: Google Place 未找到商家 → `score: null` + finding `business_not_listed`（severity: critical, fix_type: fde_manual）
+- [x] **P8.5.21** `CompetitorCollector`: 竞品 < 3 → `score: null` + finding `competitor_data_insufficient`（severity: medium, fix_type: me_auto，建议跑 SEMrush competitive research）
+- [x] **P8.5.22** `AiVisibilityCollector`: 无 snapshot 数据 → `score: null` + finding `ai_visibility_not_tracked`（severity: critical, fix_type: me_auto，引导启用 AI Tracker 周跑）
+- [x] **P8.5.23** `SocialCollector`: 无 IG/FB 账号配置 → `score: null` + finding `social_accounts_not_linked`（severity: high, fix_type: fde_manual）
+- [x] **P8.5.24** `computeOverallScore`: 忽略 `null` 维度，权重重新归一化；UI 显示「N/A」灰色图标
+- [x] **P8.5.25** UI `/diagnostic` 加返回按钮 + null 维度引导链接（「立即配置」跳转客户设置抽屉）
+- [x] **P8.5.26** `DiagnosticRun` 增加 `dimensions_skipped: string[]` 字段，记录哪些维度因数据缺失被跳过
 
 **验收标准**：
 - Oztop（未配置 SEMrush 关键词、未关联 IG）重跑诊断，SEO/口碑/社媒/AI 显示「未配置」灰色，不影响 overall_score
