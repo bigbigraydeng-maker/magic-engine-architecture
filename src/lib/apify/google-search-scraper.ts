@@ -13,6 +13,8 @@
  */
 
 const APIFY_BASE = 'https://api.apify.com/v2'
+const APIFY_ACTOR_TIMEOUT_SEC = 90
+const APIFY_FETCH_TIMEOUT_MS = (APIFY_ACTOR_TIMEOUT_SEC + 15) * 1000
 
 export interface SerpOrganicResult {
   position: number
@@ -81,10 +83,11 @@ export async function scrapeGoogleSerp(
   if (!token) throw new Error('APIFY_API_KEY not configured')
 
   const res = await fetch(
-    `${APIFY_BASE}/acts/apify~google-search-scraper/run-sync-get-dataset-items?token=${token}&timeout=90`,
+    `${APIFY_BASE}/acts/apify~google-search-scraper/run-sync-get-dataset-items?token=${token}&timeout=${APIFY_ACTOR_TIMEOUT_SEC}`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
+      signal: AbortSignal.timeout(APIFY_FETCH_TIMEOUT_MS),
       body: JSON.stringify({
         queries: query,
         countryCode,

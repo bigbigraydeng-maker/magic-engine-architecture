@@ -11,7 +11,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireBearerToken } from '@/lib/validation-utils'
-import { getJob } from '@/lib/zhangqian/persistor'
+import { failJob, getJob } from '@/lib/zhangqian/persistor'
+
+const STALE_JOB_TIMEOUT_MS = 10 * 60 * 1000
+
+function isStaleRunningJob(job: { status: string; started_at: string | null; created_at: string }): boolean {
+  if (job.status !== 'pending' && job.status !== 'running') return false
+  const started = job.started_at ? Date.parse(job.started_at) : Date.parse(job.created_at)
+  return Number.isFinite(started) && Date.now() - started > STALE_JOB_TIMEOUT_MS
+}
 
 export async function GET(
   req: NextRequest,
@@ -35,6 +43,20 @@ export async function GET(
     const job = await getJob(supabaseAdmin, jobId)
     if (!job) {
       return NextResponse.json({ success: false, error: 'Job not found' }, { status: 404 })
+    }
+
+    if (isStaleRunningJob(job)) {
+      const error = 'Discovery timed out after 10 minutes. Please retry.'
+      await failJob(supabaseAdmin, job.id, error)
+      return NextResponse.json({
+        success: true,
+        job: {
+          ...job,
+          status: 'failed',
+          error_message: error,
+          completed_at: new Date().toISOString(),
+        },
+      })
     }
 
     return NextResponse.json({ success: true, job })
