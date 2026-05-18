@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import type { ExecutionItem, ExecutionItemStatus, ExecutionLog, PrescriptionStatus, ExecutionTarget } from '@/types/diagnostic'
+import type { ExecutionItem, ExecutionItemStatus, ExecutionLog, PrescriptionStatus, ExecutionTarget, LinkedContentPost } from '@/types/diagnostic'
 import { FlywheelDrawer } from './_components/FlywheelDrawer'
 import { LubanChatDrawer } from './_components/LubanChatDrawer'
 import { InlinePrescriptionDrawer } from './_components/InlinePrescriptionDrawer'
@@ -33,7 +33,67 @@ interface OutcomeSummary {
   computed_at: string
 }
 
-type ItemWithLogs = ExecutionItem & { logs: ExecutionLog[]; outcome?: OutcomeSummary | null }
+type ItemWithLogs = ExecutionItem & {
+  logs: ExecutionLog[]
+  outcome?: OutcomeSummary | null
+  linked_post?: LinkedContentPost | null
+}
+
+// ── 帖子状态徽章配色（与 content 板对齐）─────────────────────────────────────────
+
+const POST_STATUS_META: Record<string, { label: string; cls: string }> = {
+  draft:     { label: '草稿',   cls: 'bg-yellow-100 text-yellow-700' },
+  approved:  { label: '已批准', cls: 'bg-green-100 text-green-700' },
+  scheduled: { label: '已排期', cls: 'bg-blue-100 text-blue-700' },
+  published: { label: '已发布', cls: 'bg-gray-100 text-gray-700' },
+  rejected:  { label: '已拒绝', cls: 'bg-red-100 text-red-700' },
+}
+
+function LinkedContentCard({ post }: { post: LinkedContentPost }) {
+  const meta = POST_STATUS_META[post.status] ?? { label: post.status, cls: 'bg-gray-100 text-gray-600' }
+  const scheduledLabel = post.scheduled_at
+    ? new Date(post.scheduled_at).toLocaleDateString('en-NZ', { day: 'numeric', month: 'short', year: 'numeric' })
+    : null
+  return (
+    <div className="mt-2 rounded-lg border border-indigo-100 bg-indigo-50/40 p-2.5 flex gap-3 items-start">
+      {/* Thumbnail */}
+      {post.visual_asset_url ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={post.visual_asset_url}
+          alt={post.title}
+          className="w-16 h-16 rounded-md object-cover border border-indigo-200 flex-shrink-0 bg-white"
+        />
+      ) : (
+        <div className="w-16 h-16 rounded-md bg-white border border-dashed border-indigo-200 flex items-center justify-center text-2xl flex-shrink-0">
+          📝
+        </div>
+      )}
+      {/* Body */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-start justify-between gap-2 mb-1">
+          <p className="text-xs font-semibold text-gray-900 truncate">{post.title}</p>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium whitespace-nowrap ${meta.cls}`}>
+            {meta.label}
+          </span>
+        </div>
+        {post.caption && (
+          <p className="text-[11px] text-gray-500 line-clamp-2 leading-snug">{post.caption}</p>
+        )}
+        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+          {post.platforms.slice(0, 4).map(p => (
+            <span key={p} className="text-[10px] bg-white border border-gray-200 px-1.5 py-0.5 rounded capitalize text-gray-600">
+              {p}
+            </span>
+          ))}
+          {scheduledLabel && (
+            <span className="text-[10px] text-blue-600 font-medium">📅 {scheduledLabel}</span>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 const FIX_TYPE_META: Record<string, { icon: string; label: string; cls: string }> = {
   me_auto:     { icon: '🤖', label: 'ME 自动',  cls: 'bg-blue-100 text-blue-700' },
@@ -378,6 +438,9 @@ function ExecutionItemRow({
           <div className="mt-2">
             <FdeMetaRow stepsJson={stepsJson} />
           </div>
+
+          {/* 关联的内容帖子（内容飞轮闭环）*/}
+          {item.linked_post && <LinkedContentCard post={item.linked_post} />}
 
           {/* 标签行 + 展开按钮（编辑模式下隐藏） */}
           {!editing && (
