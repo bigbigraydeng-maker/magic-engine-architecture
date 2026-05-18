@@ -204,10 +204,6 @@ export default function ContentBoardPage() {
   const [linkingItem, setLinkingItem] = useState(false);
   const [linkMsg, setLinkMsg] = useState('');
 
-  // Publer 状态同步（替代 webhook）
-  const [syncingPubler, setSyncingPubler] = useState(false);
-  const [syncPublerMsg, setSyncPublerMsg] = useState('');
-
   // Image generation state
   const [imageAspectRatio, setImageAspectRatio] = useState('1:1');
   const [generatingImage, setGeneratingImage] = useState(false);
@@ -326,7 +322,6 @@ export default function ContentBoardPage() {
     setScheduleMsg('');
     setPublishMsg('');
     setLinkMsg('');
-    setSyncPublerMsg('');
     setImageAspectRatio('1:1');
     setImageGenMsg('');
     setGeneratingImage(false);
@@ -405,29 +400,6 @@ export default function ContentBoardPage() {
       setScheduleMsg(`✗ ${(err as Error).message}`);
     } finally {
       setSavingSchedule(false);
-    }
-  };
-
-  const handleSyncPublerStatus = async () => {
-    if (!modalPost) return;
-    setSyncingPubler(true);
-    setSyncPublerMsg('');
-    try {
-      const res = await fetch(`/api/publer/sync/${modalPost.id}`, { method: 'POST' });
-      const json = await res.json();
-      if (!json.success) throw new Error(json.error || '同步失败');
-      if (json.published || (json.state === 'published')) {
-        const updated: ContentPost = { ...modalPost, status: 'published' };
-        setModalPost(updated);
-        setPosts(prev => prev.map(p => p.id === updated.id ? updated : p));
-        setSyncPublerMsg(`✓ Publer 已发布，已同步状态（关联执行项将自动标记完成）`);
-      } else {
-        setSyncPublerMsg(`ℹ Publer state=${json.state ?? 'unknown'}${json.message ? '：' + json.message : ''}`);
-      }
-    } catch (err) {
-      setSyncPublerMsg(`✗ ${(err as Error).message}`);
-    } finally {
-      setSyncingPubler(false);
     }
   };
 
@@ -1046,27 +1018,6 @@ export default function ContentBoardPage() {
                 )}
                 {publishMsg && (
                   <p className={`text-[11px] ${publishMsg.startsWith('✓') ? 'text-green-600' : 'text-red-500'}`}>{publishMsg}</p>
-                )}
-                {/* 状态同步按钮：Publer 没在 UI 暴露 webhook，需要主动 polling */}
-                {(modalPost.status === 'scheduled' || modalPost.status === 'published') && (
-                  <div className="pt-2 border-t border-indigo-100/60 flex items-center gap-2 flex-wrap">
-                    <button
-                      onClick={() => void handleSyncPublerStatus()}
-                      disabled={syncingPubler}
-                      className="text-xs text-indigo-700 hover:text-indigo-900 border border-indigo-300 bg-white px-3 py-1 rounded-lg font-medium disabled:opacity-50"
-                      title="从 Publer 拉取最新状态。Publer 没在 UI 暴露 webhook，需要手动 / cron 同步"
-                    >
-                      {syncingPubler ? '同步中…' : '🔄 同步 Publer 状态'}
-                    </button>
-                    <span className="text-[10px] text-gray-400">
-                      cron 每 10 分钟自动同步一次，也可手动点
-                    </span>
-                    {syncPublerMsg && (
-                      <p className={`w-full text-[11px] ${syncPublerMsg.startsWith('✓') ? 'text-green-600' : syncPublerMsg.startsWith('✗') ? 'text-red-500' : 'text-gray-500'}`}>
-                        {syncPublerMsg}
-                      </p>
-                    )}
-                  </div>
                 )}
               </div>
 

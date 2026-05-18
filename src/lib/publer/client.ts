@@ -51,60 +51,6 @@ export async function uploadMediaFromUrl(url: string, name: string): Promise<{ i
   return { id: data.id, type: isVideo ? 'video' : 'photo' }
 }
 
-/**
- * 查询一个 schedule job 的处理状态。
- * Publer 的 /posts/schedule 是异步的：返回 job_id 后，Publer 在后台真正调度/发布。
- * 这个端点告诉我们 job 当前的状态以及（如果已完成）发布到 Publer 的 post IDs。
- *
- * Publer API: GET /api/v1/job_status/:job_id
- * 返回示例：{ status: 'working' | 'completed' | 'failed', payload?: { post_ids?: string[] }, ... }
- */
-export async function getJobStatus(jobId: string): Promise<{
-  status: string
-  publerPostIds: string[]
-  raw: Record<string, unknown>
-}> {
-  const res = await fetch(`${PUBLER_BASE}/job_status/${encodeURIComponent(jobId)}`, {
-    headers: publerHeaders(),
-  })
-  if (!res.ok) throw new Error(`Publer getJobStatus error ${res.status}: ${await res.text()}`)
-  const data = (await res.json()) as Record<string, unknown>
-  // payload 形态在 Publer 版本间略有差异，尽可能宽容地解析 post_ids
-  const payload = (data.payload ?? {}) as Record<string, unknown>
-  const ids = Array.isArray(payload.post_ids) ? payload.post_ids
-    : Array.isArray(payload.posts) ? payload.posts
-    : []
-  return {
-    status: typeof data.status === 'string' ? data.status : 'unknown',
-    publerPostIds: ids.filter((x): x is string => typeof x === 'string'),
-    raw: data,
-  }
-}
-
-/**
- * 查询一个已经被调度/发布的 Publer post 的当前状态。
- *
- * Publer API: GET /api/v1/posts/:post_id
- * 返回示例：{ id, state: 'scheduled' | 'published' | 'failed', published_at?: ISO, ... }
- */
-export async function getPostStatus(publerPostId: string): Promise<{
-  state: string
-  publishedAt: string | null
-  raw: Record<string, unknown>
-}> {
-  const res = await fetch(`${PUBLER_BASE}/posts/${encodeURIComponent(publerPostId)}`, {
-    headers: publerHeaders(),
-  })
-  if (!res.ok) throw new Error(`Publer getPostStatus error ${res.status}: ${await res.text()}`)
-  const data = (await res.json()) as Record<string, unknown>
-  const post = (data.post ?? data) as Record<string, unknown>
-  return {
-    state: typeof post.state === 'string' ? post.state : 'unknown',
-    publishedAt: typeof post.published_at === 'string' ? post.published_at : null,
-    raw: post,
-  }
-}
-
 export async function schedulePost(params: {
   accountId: string
   provider: string
