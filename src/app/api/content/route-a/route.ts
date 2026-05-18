@@ -11,7 +11,7 @@ function getOpenAIClient() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { client_id, keyword, platforms, campaign_id } = await req.json()
+    const { client_id, keyword, platforms, campaign_id, execution_item_id } = await req.json()
 
     if (!client_id || !keyword) {
       return NextResponse.json(
@@ -124,6 +124,7 @@ The script should be 100-200 words. Caption 50-100 words. 8-12 hashtags includin
       campaign_id: campaign?.id ?? null,
       content_mode: campaign ? 'campaign' : 'brand',
       status: 'draft' as const,
+      execution_item_id: execution_item_id ?? null,
     }
 
     // Diagnose supabaseAdmin key usage

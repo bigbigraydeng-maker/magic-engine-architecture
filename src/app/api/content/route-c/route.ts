@@ -11,7 +11,7 @@ function getOpenAIClient() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { client_id, topic, platforms, campaign_id } = await req.json()
+    const { client_id, topic, platforms, campaign_id, execution_item_id } = await req.json()
 
     if (!client_id || !topic) {
       return NextResponse.json(
@@ -105,6 +105,7 @@ The script should be 100-200 words. Caption should be 50-100 words. Include 8-12
       campaign_id: campaign?.id ?? null,
       content_mode: campaign ? 'campaign' : 'brand',
       status: 'draft' as const,
+      execution_item_id: execution_item_id ?? null,
     }
 
     if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {

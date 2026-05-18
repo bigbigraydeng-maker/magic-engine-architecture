@@ -8,7 +8,7 @@ import { rewriteForBrand } from '@/lib/content/route-b-rewriter'
 
 export async function POST(req: NextRequest) {
   try {
-    const { video_url, client_id, platforms, campaign_id } = await req.json()
+    const { video_url, client_id, platforms, campaign_id, execution_item_id } = await req.json()
 
     if (!video_url || !client_id) {
       return NextResponse.json(
@@ -63,6 +63,7 @@ export async function POST(req: NextRequest) {
       campaign_id: campaign?.id ?? null,
       content_mode: campaign ? 'campaign' : 'brand',
       status: 'draft' as const,
+      execution_item_id: execution_item_id ?? null,
     }
 
     if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {

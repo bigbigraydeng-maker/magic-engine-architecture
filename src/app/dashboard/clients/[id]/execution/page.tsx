@@ -115,11 +115,12 @@ const PHASE_LABELS: Record<number, { name: string; color: string }> = {
 }
 
 // module → 工作台跳转（legacy fallback，适用于 execution_target 为 null 的旧数据）
-const MODULE_ROUTE: Record<string, { label: string; path: (clientId: string) => string }> = {
-  seo_engine:       { label: 'SEO 引擎',  path: c => `/dashboard/clients/${c}/site-audit/pages` },
-  social_matrix:    { label: '社媒矩阵',  path: c => `/dashboard/clients/${c}?tab=reels` },
-  ads_intelligence: { label: '广告',      path: c => `/dashboard/clients/${c}?tab=campaigns` },
-  insight_reports:  { label: '数据报告',  path: c => `/dashboard/clients/${c}` },
+// path 接 (clientId, itemId) — itemId 透传给目标页（ContentHub 等）用于自动关联生成的内容
+const MODULE_ROUTE: Record<string, { label: string; path: (clientId: string, itemId: string) => string }> = {
+  seo_engine:       { label: 'SEO 引擎',  path: (c, i) => `/dashboard/clients/${c}/site-audit/pages?exec=${i}` },
+  social_matrix:    { label: '社媒矩阵',  path: (c, i) => `/dashboard/clients/${c}?tab=reels&exec=${i}` },
+  ads_intelligence: { label: '广告',      path: (c, i) => `/dashboard/clients/${c}?tab=campaigns&exec=${i}` },
+  insight_reports:  { label: '数据报告',  path: (c, _i) => `/dashboard/clients/${c}` },
 }
 
 // flywheel → in_house 按钮标签
@@ -131,11 +132,12 @@ const FLYWHEEL_IN_HOUSE_LABEL: Record<string, string> = {
 }
 
 // flywheel → third_party 跳转路由
-const FLYWHEEL_THIRD_PARTY_ROUTE: Record<string, { label: string; path: (clientId: string) => string }> = {
-  ads:    { label: '广告平台',  path: c => `/dashboard/clients/${c}?tab=campaigns` },
-  social: { label: '社媒平台',  path: c => `/dashboard/clients/${c}?tab=reels` },
-  seo:    { label: 'SEO 工具', path: c => `/dashboard/clients/${c}/site-audit/pages` },
-  geo:    { label: 'GEO 工具', path: c => `/dashboard/clients/${c}` },
+// path 接 (clientId, itemId) — itemId 透传给目标页用于自动关联生成的内容到执行项
+const FLYWHEEL_THIRD_PARTY_ROUTE: Record<string, { label: string; path: (clientId: string, itemId: string) => string }> = {
+  ads:    { label: '广告平台',  path: (c, i) => `/dashboard/clients/${c}?tab=campaigns&exec=${i}` },
+  social: { label: '社媒平台',  path: (c, i) => `/dashboard/clients/${c}?tab=reels&exec=${i}` },
+  seo:    { label: 'SEO 工具', path: (c, i) => `/dashboard/clients/${c}/site-audit/pages?exec=${i}` },
+  geo:    { label: 'GEO 工具', path: (c, _i) => `/dashboard/clients/${c}` },
 }
 
 const LOG_KIND_META: Record<string, { icon: string; cls: string }> = {
@@ -332,7 +334,7 @@ function ExecutionItemRow({
       return (
         <span className="inline-flex items-center gap-1.5 flex-wrap">
           <Link
-            href={route.path(item.client_id)}
+            href={route.path(item.client_id, item.id)}
             className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium"
           >
             在 {route.label} 中执行 →
@@ -352,7 +354,7 @@ function ExecutionItemRow({
     if (moduleRoute) {
       return (
         <Link
-          href={moduleRoute.path(item.client_id)}
+          href={moduleRoute.path(item.client_id, item.id)}
           className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium"
         >
           在 {moduleRoute.label} 中执行 →

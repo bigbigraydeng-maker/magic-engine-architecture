@@ -7,6 +7,8 @@ interface Props {
   clientId: string
   open: boolean
   onClose: () => void
+  /** 内容飞轮闭环：从执行看板跳转过来时，生成的 content_post 自动关联到这个执行项 */
+  executionItemId?: string | null
 }
 
 type RouteId = 'route_a' | 'route_b' | 'route_c'
@@ -25,7 +27,7 @@ const CAMPAIGN_BORDER_COLORS = [
   'border-l-amber-500', 'border-l-rose-500',
 ]
 
-export function GenerationDrawer({ clientId, open, onClose }: Props) {
+export function GenerationDrawer({ clientId, open, onClose, executionItemId }: Props) {
   const [route, setRoute] = useState<RouteId>('route_a')
   const [mode, setMode] = useState<ContentMode>('brand')
   const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null)
@@ -109,6 +111,7 @@ export function GenerationDrawer({ clientId, open, onClose }: Props) {
           [bodyKey]: input.trim(),
           platforms,
           campaign_id: selectedCampaignId ?? undefined,
+          execution_item_id: executionItemId ?? undefined,
         }),
       })
       const json = await res.json()
@@ -151,6 +154,19 @@ export function GenerationDrawer({ clientId, open, onClose }: Props) {
 
         {/* Scrollable body */}
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
+
+          {/* 来自执行看板的提示横幅 */}
+          {executionItemId && (
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2.5 flex items-start gap-2">
+              <span className="text-base">🔗</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-indigo-800">来自执行看板</p>
+                <p className="text-[11px] text-indigo-600 leading-relaxed mt-0.5">
+                  生成的内容会自动关联回该执行项；帖子发布后，执行项会自动标记为「已完成」。
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Step 1: Route */}
           <div>

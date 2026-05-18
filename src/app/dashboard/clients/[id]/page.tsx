@@ -185,7 +185,10 @@ export default function ClientDetailPage() {
   const [loading, setLoading] = useState(true);
   const [hasActiveBrief, setHasActiveBrief] = useState<boolean | null>(null);
 
-  const [generationOpen, setGenerationOpen] = useState(false);
+  // ?exec=<itemId> 来自执行看板的「在社媒矩阵中执行」跳转：
+  // 自动打开 GenerationDrawer 并把生成的内容关联回该执行项（内容飞轮闭环）
+  const execItemId = searchParams.get('exec');
+  const [generationOpen, setGenerationOpen] = useState(Boolean(execItemId));
   // ?brief=1 (from 张骞 confirm) auto-opens the brief settings drawer
   const [settingsOpen, setSettingsOpen] = useState(searchParams.get('brief') === '1');
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('brief');
@@ -306,6 +309,7 @@ export default function ClientDetailPage() {
         clientId={clientId}
         open={generationOpen}
         onClose={() => setGenerationOpen(false)}
+        executionItemId={execItemId}
       />
 
       {/* Settings drawer */}

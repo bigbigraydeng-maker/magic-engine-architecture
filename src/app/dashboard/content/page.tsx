@@ -25,6 +25,17 @@ interface ContentPost {
   // 视觉资产（API enriched，新增）
   visual_asset_url?: string | null;
   visual_asset_type?: string | null;
+  // 内容飞轮闭环：关联的处方执行项
+  execution_item_id?: string | null;
+}
+
+interface ExecutionItemLite {
+  id: string;
+  title: string;
+  status: string;
+  dimension: string;
+  phase: number;
+  content_post_id: string | null;
 }
 
 const statusColors: Record<string, string> = {
@@ -188,6 +199,11 @@ export default function ContentBoardPage() {
   const [publishing, setPublishing] = useState(false);
   const [publishMsg, setPublishMsg] = useState('');
 
+  // 关联执行项 state（内容飞轮闭环）
+  const [execItems, setExecItems] = useState<ExecutionItemLite[]>([]);
+  const [linkingItem, setLinkingItem] = useState(false);
+  const [linkMsg, setLinkMsg] = useState('');
+
 
   useEffect(() => {
     fetch('/api/clients').then(r => r.json()).then(d => setClients(d.clients ?? []));
@@ -234,6 +250,40 @@ export default function ContentBoardPage() {
     setScheduleAt(post.scheduled_at ? post.scheduled_at.slice(0, 16) : '');
     setScheduleMsg('');
     setPublishMsg('');
+    setLinkMsg('');
+    // Fire-and-forget: 拉取该客户的执行项给关联下拉框用
+    setExecItems([]);
+    fetch(`/api/clients/${post.client_id}/execution`, {
+      headers: { Authorization: `Bearer ${process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''}` },
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d?.items) setExecItems(d.items as ExecutionItemLite[]);
+      })
+      .catch(() => { /* 静默：拉取失败时降级为「无可关联项」*/ });
+  };
+
+  const handleLinkExecutionItem = async (newItemId: string | null) => {
+    if (!modalPost) return;
+    setLinkingItem(true);
+    setLinkMsg('');
+    try {
+      const res = await fetch(`/api/posts/${modalPost.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ execution_item_id: newItemId }),
+      });
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error || '关联失败');
+      const updated: ContentPost = { ...modalPost, execution_item_id: newItemId };
+      setModalPost(updated);
+      setPosts(prev => prev.map(p => p.id === updated.id ? updated : p));
+      setLinkMsg(newItemId ? '✓ 已关联执行项' : '✓ 已解除关联');
+    } catch (err) {
+      setLinkMsg(`✗ ${(err as Error).message}`);
+    } finally {
+      setLinkingItem(false);
+    }
   };
 
   const closeModal = () => {
@@ -242,6 +292,7 @@ export default function ContentBoardPage() {
     setSaveMsg('');
     setScheduleMsg('');
     setPublishMsg('');
+    setLinkMsg('');
   };
 
   const handleSaveSchedule = async () => {
@@ -793,6 +844,62 @@ export default function ContentBoardPage() {
                   </div>
                 </div>
               )}
+
+              {/* 关联执行项（内容飞轮闭环）*/}
+              {(() => {
+                const linkedItem = modalPost.execution_item_id
+                  ? execItems.find(it => it.id === modalPost.execution_item_id)
+                  : null;
+                // 可关联的执行项：未关联其他帖子 + 非 completed/skipped
+                const linkable = execItems.filter(it =>
+                  it.content_post_id == null
+                  && it.status !== 'completed'
+                  && it.status !== 'skipped'
+                );
+                return (
+                  <div className="rounded-lg border border-purple-100 bg-purple-50/40 p-3 space-y-2">
+                    <p className="text-xs font-semibold text-purple-700 uppercase tracking-wider">🔗 关联处方执行项</p>
+                    {modalPost.execution_item_id ? (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-gray-700 bg-white rounded-lg border border-purple-200 px-2.5 py-1">
+                          {linkedItem
+                            ? `Phase ${linkedItem.phase} · ${linkedItem.title}`
+                            : `已关联执行项 #${modalPost.execution_item_id.slice(0, 8)}`}
+                        </span>
+                        <button
+                          onClick={() => void handleLinkExecutionItem(null)}
+                          disabled={linkingItem}
+                          className="text-xs text-red-600 hover:text-red-800 underline disabled:opacity-50"
+                        >
+                          解除关联
+                        </button>
+                      </div>
+                    ) : linkable.length > 0 ? (
+                      <select
+                        onChange={e => { if (e.target.value) void handleLinkExecutionItem(e.target.value); }}
+                        disabled={linkingItem}
+                        defaultValue=""
+                        className="w-full border border-purple-300 rounded-lg px-3 py-1.5 text-xs text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-purple-400 disabled:opacity-50"
+                      >
+                        <option value="">— 选择要关联的处方执行项 —</option>
+                        {linkable.map(it => (
+                          <option key={it.id} value={it.id}>
+                            Phase {it.phase} · [{it.dimension}] {it.title}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <p className="text-[11px] text-gray-400">该客户暂无可关联的待办执行项</p>
+                    )}
+                    {linkMsg && (
+                      <p className={`text-[11px] ${linkMsg.startsWith('✓') ? 'text-green-600' : 'text-red-500'}`}>{linkMsg}</p>
+                    )}
+                    <p className="text-[10px] text-purple-600/70 leading-relaxed">
+                      关联后：帖子发布到 Publer 成功（→ status=published），执行项会自动 mark 完成 + 写工作日志。
+                    </p>
+                  </div>
+                );
+              })()}
 
               {/* 排期 + 发布到 Publer */}
               <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 p-3 space-y-2.5">
