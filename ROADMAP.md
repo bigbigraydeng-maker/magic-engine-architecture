@@ -732,7 +732,7 @@ Layer 5: Export（新增）— P8.10.S5
 📋 **补充（MVP 上线后）**
 - [x] **P8.12.S3.2** 鲁班 `generate_content` skill — 执行类任务直接产出并落库到 SEO/社媒模块（依赖 S3.1）
 - [x] **P8.12.S3.3** 跨 Agent `check_local_compliance` skill（`src/lib/compliance/`）— AU 广告法 / trades license / AFSL 合规风险提示（定位风险提示非背书）【规则库部分已完成：types.ts + au-rules.ts + checkLocalCompliance；注册为鲁班 tool 待后续】
-- [ ] **P8.12.S3.4** 鲁班 `publish_to_gbp` skill — 依赖 GBP API 写权限申请，未通过则降级为「生成草稿 + 人工发布」（弹性项）
+- [x] **P8.12.S3.4** 鲁班 `publish_to_gbp` skill — 依赖 GBP API 写权限申请，未通过则降级为「生成草稿 + 人工发布」（弹性项）
 - [ ] **P8.12.S3.5** 本地行业目录竞品发现 connector（Yellow Pages AU / Localsearch via Jina）— 优先级最低，弹性缓冲
 
 **新建数据库表**（S2.1）：
@@ -1301,6 +1301,9 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
   - **S1.5 Google Trends connector**：新增 `src/lib/gtrends/client.ts`（SerpAPI `google_trends` engine，TIMESERIES 12 个月搜索兴趣曲线，gl=AU/NZ），高层 `getIndustryInterestTrend` 非致命兜底，`HuatuoLookupContext.industry_interest` 字段，agent.ts Lookup 并入 Promise.all，prompts.ts 嵌入「行业搜索热度趋势」段落。
   - 三项共新增 43 个单元测试（seasonal-calendar 16 + benchmarks 9 + gtrends 18），build 通过。
   `feat(huatuo): AU/NZ 本地化三连 — 季节日历 + 预算定位 + Google Trends [P8.12.S1.3/S1.4/S1.5]`
+
+- **P8.12.S3.4** — 鲁班 `publish_to_gbp` skill：新增 `src/lib/gbp/publisher.ts`（`publishToGbp`），优先调 GBP Management API 实时发帖；`GOOGLE_GBP_ACCESS_TOKEN` / `location_name` 缺失或 API 失败时降级为草稿模式，格式化草稿落库到 execution_logs，FDE 手动发布。注册为鲁班第三个工具。10 单元测试（4 降级 + 4 实时 + 2 草稿格式），build 通过。
+  `feat(luban): P8.12.S3.4 — publish_to_gbp skill (draft degradation) [P8.12.S3.4]`
 
 - **P8.12.S3.1** — 鲁班 tool loop 升级（Phase 8.12 MVP）：`callClaudeChat` 单轮对话 → `callClaudeWithTools` 通用 tool loop。新增 `src/lib/luban/tools.ts` + 首个工具 `add_work_log`（鲁班自主把对话结论写入 execution_logs）。`chatWithLuban` 签名/返回结构保持兼容，`callClaudeChat` 未动（brief refinement 不受影响）。新增 5 个单元测试覆盖 tool loop 核心路径。
   待办：UI 端到端实测「鲁班自主调用 add_work_log」需在 dev 环境完成。

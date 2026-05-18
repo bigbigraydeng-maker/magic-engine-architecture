@@ -213,7 +213,7 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-18（**P8.12.S2.4 完成** — 行业基准自动累积：benchmark-accumulator + cron endpoint，19 测试全过；Sprint 2 数据飞轮全部完成）
+> 最后更新：2026-05-18（**P8.12.S3.4 完成** — 鲁班 publish_to_gbp skill：GBP 直发 + 草稿降级，10 测试全过，build 通过）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
