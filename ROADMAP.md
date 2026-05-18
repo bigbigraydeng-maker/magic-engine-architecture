@@ -733,7 +733,7 @@ Layer 5: Export（新增）— P8.10.S5
 - [x] **P8.12.S3.2** 鲁班 `generate_content` skill — 执行类任务直接产出并落库到 SEO/社媒模块（依赖 S3.1）
 - [x] **P8.12.S3.3** 跨 Agent `check_local_compliance` skill（`src/lib/compliance/`）— AU 广告法 / trades license / AFSL 合规风险提示（定位风险提示非背书）【规则库部分已完成：types.ts + au-rules.ts + checkLocalCompliance；注册为鲁班 tool 待后续】
 - [x] **P8.12.S3.4** 鲁班 `publish_to_gbp` skill — 依赖 GBP API 写权限申请，未通过则降级为「生成草稿 + 人工发布」（弹性项）
-- [ ] **P8.12.S3.5** 本地行业目录竞品发现 connector（Yellow Pages AU / Localsearch via Jina）— 优先级最低，弹性缓冲
+- [x] **P8.12.S3.5** 本地行业目录竞品发现 connector（Yellow Pages AU / Localsearch via Jina）— 优先级最低，弹性缓冲
 
 **新建数据库表**（S2.1）：
 - `prescription_cases` — 处方 + 诊断快照作可检索案例，索引 `(industry_category, crisis_type, monthly_budget_aud)`
@@ -1248,6 +1248,8 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
   `feat(huatuo): P8.12.S2.2 — retrieve_similar_cases skill + case saver [P8.12.S2.2]`
 - **P8.12.S2.4** — 行业基准自动累积：`benchmark-accumulator.ts`（`calcPercentiles` P50/P75/P90 线性插值 + `accumulateBenchmarks` 按 industry_category/business_size/market/kpi_metric 分组）；`/api/cron/benchmark-accumulator` CRON_SECRET 鉴权；MIN_SAMPLE_THRESHOLD=5 冷启动保护；confidence 随样本量增长（封顶 0.95）；check-then-insert/update 无需 UNIQUE 约束；19 测试全过；build 通过
   `feat(huatuo): P8.12.S2.4 — benchmark accumulator (P50/P75/P90 from outcomes → industry_benchmarks) [P8.12.S2.4]`
+- **P8.12.S3.5** — 本地行业目录竞品发现：新增 `src/lib/local-directory/`（types.ts + client.ts，Yellow Pages AU + Localsearch via Jina）；parseDirectoryMarkdown 解析 H2/H3 段、AU 电话 / 评分 / 地址、跳过导航 heading、上限 20 条；discoverLocalCompetitors 双源 Promise.allSettled + 去重 + limit；鲁班新工具 discover_local_competitors（prompts.ts 补 发按需调用段落）；31 测试全过；build 通过
+  `feat(luban): P8.12.S3.5 — local directory competitor connector (Yellow Pages AU + Localsearch via Jina) [P8.12.S3.5]`
 - **P8.12.S2.3** — 处方 KPI 反馈闭环：`outcome-recorder.ts`（`recordOutcome` + `backfillSemrushKpisForPrescription`，30/60/90 天节点 ±7 天窗口，去重写入）；`/api/clients/[id]/prescription/[pId]/outcomes` GET+POST；`/api/cron/kpi-backfill` SEMrush 自动回填（organic_keywords / organic_traffic / authority_score）；22 测试全过；build 通过
   `feat(huatuo): P8.12.S2.3 — KPI feedback loop (outcomes API + SEMrush cron backfill) [P8.12.S2.3]`
 - **P8.10.S5.1** — 证据引用数据层：4 个 synthesis 结果类型（DimensionNarrativeResult / ScoreExplanation / CompetitorAnalystResult / MarketContextResult）加 `evidence_refs: string[]`；NarrativeRow 加 `evidence_refs` 字段，save helpers 写入 `metadata.evidence_refs`，load 时自动提取；lib/diagnostic/types.ts 新增 `extractEvidenceRefs` 工具函数；report-generator evidence.json findings + narratives 均带 refs；292 tests 全绿

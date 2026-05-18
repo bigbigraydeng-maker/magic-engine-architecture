@@ -213,13 +213,13 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-18（**P8.12.S3.4 完成** — 鲁班 publish_to_gbp skill：GBP 直发 + 草稿降级，10 测试全过，build 通过）
+> 最后更新：2026-05-18（**P8.12.S3.5 完成** — 鲁班 discover_local_competitors：Yellow Pages AU + Localsearch via Jina，31 测试全过，build 通过）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
 | **P8.3.2** | Dashboard Magic Link 鉴权 | ⭐ |
 
-**Phase 12.B PR #33 已合并**(2026-05-18 02:47)，旧焦点表过期已修。
+**Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 
 **更新规则**（每次上线新功能）：
 1. ROADMAP.md 勾选对应任务 checkbox
