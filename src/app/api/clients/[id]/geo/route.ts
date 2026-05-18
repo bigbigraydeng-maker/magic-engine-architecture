@@ -30,12 +30,10 @@ export async function GET(
     const directives = (data ?? []) as GeoDirective[]
     const active = directives.find(d => d.status === 'active') ?? null
 
-    return NextResponse.json({
-      success: true,
-      directives,
-      active,
-      count: directives.length,
-    })
+    return NextResponse.json(
+      { success: true, directives, active, count: directives.length },
+      { headers: { 'Cache-Control': 'no-store' } },
+    )
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
     return NextResponse.json({ success: false, error: message }, { status: 500 })

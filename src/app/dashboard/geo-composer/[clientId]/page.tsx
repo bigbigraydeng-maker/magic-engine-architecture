@@ -59,9 +59,9 @@ export default function GeoComposerPage() {
     setLoading(true);
     try {
       const [clientRes, geoRes, briefRes] = await Promise.all([
-        fetch(`/api/clients/${clientId}`),
-        fetch(`/api/clients/${clientId}/geo`),
-        fetch(`/api/clients/${clientId}/brief?status=active`),
+        fetch(`/api/clients/${clientId}`, { cache: 'no-store' }),
+        fetch(`/api/clients/${clientId}/geo`, { cache: 'no-store' }),
+        fetch(`/api/clients/${clientId}/brief?status=active`, { cache: 'no-store' }),
       ]);
       if (clientRes.ok) {
         const j = await clientRes.json();
@@ -110,15 +110,14 @@ export default function GeoComposerPage() {
     setIsDirty(true);
   };
 
-  // Generate from AI Tracker
-  const handleGenerate = async (useTracker: boolean) => {
+  // Generate from AI Tracker + Brief
+  const handleGenerate = async () => {
     setGenerating(true);
-    flashMsg(useTracker ? 'Generating from AI Tracker data…' : 'Generating from Brief…', true);
     try {
       const res = await fetch(`/api/clients/${clientId}/geo/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ use_tracker: useTracker }),
+        body: JSON.stringify({ use_tracker: true }),
       });
       const j = await res.json();
       if (!res.ok || !j.success) throw new Error(j.error ?? 'Generation failed');
@@ -254,22 +253,14 @@ export default function GeoComposerPage() {
           </span>
         )}
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto">
           <button
-            onClick={() => handleGenerate(true)}
+            onClick={handleGenerate}
             disabled={generating}
             title={directives.length === 0 ? '基于 AI Tracker 弱点 + Master Brief 生成指令' : '基于最新 AI Tracker 数据重新生成'}
             className="text-sm font-medium px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white rounded-lg transition-colors flex items-center gap-1.5"
           >
-            {generating ? '⏳ 生成中…' : directives.length === 0 ? '✨ 从 AI Tracker 生成' : '✨ 从 AI Tracker 重新生成'}
-          </button>
-          <button
-            onClick={() => handleGenerate(false)}
-            disabled={generating}
-            title="仅使用 Master Brief 生成，不读取 AI Tracker 数据"
-            className="text-sm font-medium px-4 py-2 bg-white border border-gray-300 hover:border-indigo-400 text-gray-700 hover:text-indigo-700 rounded-lg transition-colors"
-          >
-            仅从 Brief 生成
+            {generating ? '⏳ 生成中…' : directives.length === 0 ? '✨ 生成 GEO 指令' : '✨ 重新生成'}
           </button>
         </div>
       </div>
