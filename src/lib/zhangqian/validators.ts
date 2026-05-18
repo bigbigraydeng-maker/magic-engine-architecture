@@ -47,6 +47,25 @@ const isNumber = (v: unknown): v is number => typeof v === 'number' && !Number.i
 const isStringArray = (v: unknown): v is string[] =>
   Array.isArray(v) && v.every(isString)
 
+function normalizeNotes(v: unknown): string {
+  if (v === undefined || v === null) return ''
+  if (isString(v)) return v
+  if (Array.isArray(v)) {
+    return v
+      .map(item => isString(item) ? item : JSON.stringify(item))
+      .filter((item): item is string => Boolean(item))
+      .join('\n')
+  }
+  if (isRecord(v)) {
+    try {
+      return JSON.stringify(v, null, 2)
+    } catch {
+      return String(v)
+    }
+  }
+  return String(v)
+}
+
 const inRange = (n: number, min: number, max: number): boolean =>
   n >= min && n <= max
 
@@ -456,9 +475,7 @@ export function validateDiscoveryReport(
     return { ok: false, error: `ai_tracker_questions must contain at least 5 valid entries (got ${aiQuestions.length})` }
   }
 
-  if (!isString(v.notes)) {
-    return { ok: false, error: 'notes must be a string (empty string allowed)' }
-  }
+  const notes = normalizeNotes(v.notes)
 
   return {
     ok: true,
@@ -472,7 +489,7 @@ export function validateDiscoveryReport(
       seed_keywords: seedKeywords,
       competitors: competitorsArr,
       ai_tracker_questions: aiQuestions,
-      notes: v.notes,
+      notes,
       // Optional pass-through fields — deep-coerced so the UI never crashes on null nested arrays.
       semrush_snapshot: isSemrushSnapshot(v.semrush_snapshot) ? v.semrush_snapshot : null,
       ai_visibility_results: Array.isArray(v.ai_visibility_results)

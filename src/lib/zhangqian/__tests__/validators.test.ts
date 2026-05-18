@@ -134,6 +134,33 @@ describe('validateDiscoveryReport — social_profiles 宽容处理', () => {
   })
 })
 
+describe('validateDiscoveryReport - notes coercion', () => {
+  it('coerces notes array to newline-separated string', () => {
+    const report = makeValidReport([validSocial])
+    report.notes = ['Meta ads checked', 'Google Ads Transparency URL found']
+
+    const r = validateDiscoveryReport(report)
+
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.value.notes).toBe('Meta ads checked\nGoogle Ads Transparency URL found')
+    }
+  })
+
+  it('coerces notes object to JSON string instead of failing the report', () => {
+    const report = makeValidReport([validSocial])
+    report.notes = { caveat: 'partial run', missing: ['GBP'] }
+
+    const r = validateDiscoveryReport(report)
+
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.value.notes).toContain('"caveat": "partial run"')
+      expect(r.value.notes).toContain('"GBP"')
+    }
+  })
+})
+
 // ---------------------------------------------------------------------------
 // 2. 回归：合规报告仍通过，损坏报告仍被拒
 // ---------------------------------------------------------------------------
