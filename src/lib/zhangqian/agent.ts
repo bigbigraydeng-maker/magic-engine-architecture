@@ -40,6 +40,7 @@ const MAX_TOOL_CALLS = 22
 const MAX_COST_USD = 1.80
 const MAX_OUTPUT_TOKENS = 8096
 const FETCH_URL_TIMEOUT_MS = 15_000
+const LOCAL_REVIEWS_TIMEOUT_MS = 45_000
 // Hard wall-clock cap: trigger graceful finalization at 4.5 min so the
 // full round-trip (final Claude call + overhead) lands under 5 min.
 const GLOBAL_TIMEOUT_MS = 270_000
@@ -696,10 +697,13 @@ async function handleFetchLocalReviews(
   await onProgress('聚合本地评价数据…')
 
   // aggregateLocalReviews is non-fatal by contract — never throws.
-  const snapshots = await aggregateLocalReviews({
+  const snapshots = await withTimeout(aggregateLocalReviews({
     businessQuery,
     productReviewUrl:
       typeof input.productreview_url === 'string' ? input.productreview_url : undefined,
+  }), LOCAL_REVIEWS_TIMEOUT_MS).catch(err => {
+    console.error('[zhangqian] fetch_local_reviews timed out or failed', err)
+    return []
   })
 
   return {

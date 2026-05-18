@@ -24,6 +24,7 @@ import type {
 const SERPAPI_BASE = 'https://serpapi.com/search.json'
 const NEGATIVE_RATING_CEILING = 2          // reviews at or below this are "negative"
 const MAX_NEGATIVE_SAMPLES = 5
+const SERPAPI_FETCH_TIMEOUT_MS = 30_000
 
 function getSerpApiKey(): string {
   return validateEnvVar('SERPAPI_API_KEY')
@@ -78,7 +79,9 @@ export async function fetchGbpReviews(
     api_key: getSerpApiKey(),
   })
 
-  const res = await fetch(`${SERPAPI_BASE}?${params}`)
+  const res = await fetch(`${SERPAPI_BASE}?${params}`, {
+    signal: AbortSignal.timeout(SERPAPI_FETCH_TIMEOUT_MS),
+  })
   if (!res.ok) throw new Error(`SerpAPI error: ${res.status}`)
 
   const data = (await res.json()) as SerpApiMapsRaw

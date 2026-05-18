@@ -93,6 +93,10 @@ describe('fetchGbpReviews', () => {
     // 5-star review excluded; only the 1- and 2-star reviews kept.
     expect(result!.recent_negative_samples).toHaveLength(2)
     expect(result!.recent_negative_samples.every(r => r.rating <= 2)).toBe(true)
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    )
   })
 
   it('falls back to the first local_results entry when no place_results', async () => {
