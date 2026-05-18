@@ -213,12 +213,11 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-18（**P8.10.S3.2 完成** — Dimension Narrator：每维度 200–400 字「Current state / Root cause / Opportunities」，15 个单测 + diagnostic 222 测试全过；在 `feat/phase-8-10-s3` 分支）
+> 最后更新：2026-05-18（**P8.10.S3.3 完成** — Score Explainer：overall + 每维度 60–120 字「为什么是这分」caption，21 个单测 + diagnostic 243 测试全过；在 `feat/phase-8-10-s3` 分支）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P8.10.S3.3** | `score-explainer.ts`（每分数解释段落） | ⭐⭐⭐ |
-| P8.10.S3.4 | `market-context.ts`（Anthropic Web Search 抓行业现状） | ⭐⭐ |
+| **P8.10.S3.4** | `market-context.ts`（Anthropic Web Search 抓行业现状） | ⭐⭐⭐ |
 | P8.10.S3.5 | `diagnostic_narratives` 表 + 持久化 | ⭐⭐ |
 | P8.10.S3.6 | Synthesis 结果注入 prescription-generator | ⭐⭐ |
 | P8.3.2 | Dashboard Magic Link 鉴权 | ⭐ |
