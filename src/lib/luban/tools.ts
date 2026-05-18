@@ -1,5 +1,5 @@
 /**
- * 鲁班 Lǔ Bān — 工具层（P8.12.S3.1 / S3.2）
+ * 鲁班 Lǔ Bān — 工具层（P8.12.S3.1 / S3.2 / S3.4）
  *
  * buildLubanTools(ctx) 返回 Anthropic 工具定义 + handler 映射，注入 callClaudeWithTools。
  *
@@ -7,6 +7,7 @@
  *   - add_work_log      鲁班自主把对话结论写进 execution_logs（S3.1）
  *   - generate_content  根据执行项的 module 字段调用对应模块的内容生成能力，
  *                       直接产出内容并落库（S3.2）——目前直连「SEO 内容引擎」。
+ *   - publish_to_gbp    发布 GBP 本地贴子；无写权限时降级为草稿 + 人工发布（S3.4）。
  *
  * 后续 connector/skill（check_local_compliance 等）在此扩展。
  */
@@ -16,6 +17,7 @@ import type Anthropic from '@anthropic-ai/sdk'
 import type { ExecutionItem, ExecutionLogKind } from '@/types/diagnostic'
 import type { BlogPost } from '@/types/magic-engine'
 import { generateBlogPost } from '@/lib/blog/generator'
+import { publishToGbp, type GbpPostInput } from '@/lib/gbp/publisher'
 
 export interface LubanToolContext {
   supabase: SupabaseClient
@@ -199,6 +201,53 @@ async function handleGenerateContent(
   }
 }
 
+// ─── publish_to_gbp（S3.4）───────────────────────────────────────────────────
+
+const PUBLISH_TO_GBP_TOOL: Anthropic.Tool = {
+  name: 'publish_to_gbp',
+  description:
+    '向客户的 Google Business Profile 发布一条本地贴子（动态/优惠/活动）。' +
+    '若 GBP API 写权限尚未配置，自动降级为「生成草稿 + 人工发布」模式——' +
+    '降级时鲁班会把格式化草稿写进工作日志，并告知 FDE 登录 GBP 后台手动发布。' +
+    '何时用：执行项要求发布或更新 GBP 贴子，FDE 让你「发到 GBP」「更新 Google 主页」时。',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      post_text: {
+        type: 'string',
+        description: '贴子正文，建议 150–500 字，使用 AU/NZ 英语。',
+      },
+      post_type: {
+        type: 'string',
+        enum: ['STANDARD', 'OFFER'],
+        description: 'STANDARD = 普通动态；OFFER = 优惠贴（需要标题和日期）。默认 STANDARD。',
+      },
+      cta_type: {
+        type: 'string',
+        enum: ['CALL', 'BOOK', 'SHOP', 'SIGN_UP', 'ORDER', 'LEARN_MORE'],
+        description: '可选：行动按钮类型。',
+      },
+      cta_url: {
+        type: 'string',
+        description: '可选：行动按钮跳转 URL（cta_type 有值时填写）。',
+      },
+      location_name: {
+        type: 'string',
+        description:
+          '可选：GBP 位置资源名称，格式 accounts/{accountId}/locations/{locationId}。' +
+          '若未提供或 API 权限未申请，工具自动降级为草稿模式。',
+      },
+    },
+    required: ['post_text'],
+  },
+}
+
+function isPublishToGbpInput(input: unknown): input is GbpPostInput {
+  if (typeof input !== 'object' || input === null) return false
+  const o = input as Record<string, unknown>
+  return typeof o.post_text === 'string' && o.post_text.trim().length > 0
+}
+
 // ─── buildLubanTools ─────────────────────────────────────────────────────────
 
 /**
@@ -206,8 +255,66 @@ async function handleGenerateContent(
  */
 export function buildLubanTools(ctx: LubanToolContext): LubanToolset {
   return {
-    tools: [ADD_WORK_LOG_TOOL, GENERATE_CONTENT_TOOL],
+    tools: [ADD_WORK_LOG_TOOL, GENERATE_CONTENT_TOOL, PUBLISH_TO_GBP_TOOL],
     handlers: {
+      publish_to_gbp: async (input: unknown): Promise<string> => {
+        if (!isPublishToGbpInput(input)) {
+          return 'publish_to_gbp 调用失败：post_text 不能为空。'
+        }
+        const gbpInput: GbpPostInput = {
+          post_text: (input as GbpPostInput).post_text.trim(),
+          post_type: (input as GbpPostInput).post_type,
+          cta_type: (input as GbpPostInput).cta_type,
+          cta_url: (input as GbpPostInput).cta_url,
+          location_name: (input as GbpPostInput).location_name,
+        }
+        const result = await publishToGbp(gbpInput)
+
+        if (result.mode === 'live') {
+          const postRef = result.post_name ?? '（ID 不可用）'
+          await ctx.supabase
+            .from('execution_logs')
+            .insert({
+              execution_item_id: ctx.itemId,
+              client_id:         ctx.clientId,
+              author:            'luban',
+              kind:              'ai_assist' satisfies ExecutionLogKind,
+              content:           `GBP 贴子已成功发布：${postRef}`,
+              meta:              { tool: 'publish_to_gbp', post_name: result.post_name },
+            })
+          return (
+            `✅ GBP 贴子已实时发布。\n` +
+            `- 资源名称：${postRef}\n` +
+            `贴子已在 Google Business Profile 上线，请告知 FDE 可登录 GBP 后台查看。`
+          )
+        }
+
+        // 草稿降级模式 — 写进工作日志供 FDE 手动发布
+        const draftContent = result.draft_text ?? ''
+        await ctx.supabase
+          .from('execution_logs')
+          .insert({
+            execution_item_id: ctx.itemId,
+            client_id:         ctx.clientId,
+            author:            'luban',
+            kind:              'ai_assist' satisfies ExecutionLogKind,
+            content:           `GBP 贴子草稿（人工发布）：\n${draftContent}`,
+            meta:              {
+              tool: 'publish_to_gbp',
+              mode: 'draft',
+              degradation_reason: result.degradation_reason,
+            },
+          })
+          .catch(err => console.error('[luban/publish_to_gbp] log write failed:', err))
+
+        return (
+          `📋 GBP 直接发布条件未满足（${result.degradation_reason ?? '权限未配置'}），` +
+          `已生成草稿并写入工作日志。\n\n` +
+          `${draftContent}\n\n` +
+          `请告知 FDE：按上方草稿登录 business.google.com → 选择地点 → 发帖 → 新建帖子，完成发布。`
+        )
+      },
+
       add_work_log: async (input: unknown): Promise<string> => {
         if (!isAddWorkLogInput(input)) {
           return 'add_work_log 调用失败：需要 { kind: string, content: string }。'
