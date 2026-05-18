@@ -213,12 +213,12 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-18（**P8.10.S3.6 完成** — Synthesis 结果注入 prescription-generator：`generatePrescription` 自动 `loadNarrativesForRun` → `formatNarrativesForPrompt` 按 kind 分 4 桶（market_context / competitor / dimension / score）写入 prompt + SYSTEM_PROMPT 硬指令；narratives 为空时段落省略；prescription-generator 10 测试 + diagnostic 280 测试全过；Sprint 3 全部完成）
+> 最后更新：2026-05-18（**P8.10.S4.1 + S4.2 完成** — Report Composer 落地：`generateReport()` 并发拉 run/client/findings/narratives，prescription 优先读 `prescriptions` 表、缺时用 intake fallback 到 `generatePrescription`；产出 Markdown + 可打印 HTML（@page A4 + h2 page-break）+ 独立 `evidence-{run_id}.json`，narrative 桶为空则段落省略；零外部 MD 依赖（内置极简 MD→HTML：headings/bold/italic/lists/GFM tables）；TDD 12 单测 + diagnostic 292 测试全过）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P8.10.S4.1** | Report Composer 起步（`report-generator.ts` 合成完整 Markdown 报告） | ⭐⭐⭐ |
-| P8.10.S4.2 | 报告结构：摘要 / 基线 / 6 维度 / 竞品 / 处方 / 证据附录 | ⭐⭐ |
+| **P8.10.S4.3** | 新增页面 `/dashboard/clients/[id]/diagnostic/report` 渲染 HTML（含目录、打印按钮、evidence.json 下载） | ⭐⭐⭐ |
+| P8.10.S4.4 | 保留 `/dashboard/clients/[id]/diagnostic` 6 维度评分卡作为「速览」入口 | ⭐⭐ |
 | P8.3.2 | Dashboard Magic Link 鉴权 | ⭐ |
 
 **Phase 12.B PR #33 已合并**(2026-05-18 02:47)，旧焦点表过期已修。
