@@ -213,10 +213,12 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-18（**P8.10.S5.3 完成** — 导出 DOCX：新 `/report/docx` API + report 页 DOCX 按钮；build 通过；Sprint 5 全部完成）
+> 最后更新：2026-05-18（**P8.12.S2.2 完成** — 华佗案例库检索 skill：retriever + saver + 16 新测试 + 华佗 agent/prompts 集成；下一步 P8.12.S2.3 KPI 反馈闭环）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
+| **P8.12.S2.3** | 处方 KPI 90 天实际回流（outcomes 录入 API + cron + SEMrush 自动回填） | ⭐⭐ |
+| **P8.12.S2.4** | 行业基准自动累积（从 outcome 聚合 P50/P75/P90） | ⭐⭐ |
 | **P8.3.2** | Dashboard Magic Link 鉴权 | ⭐ |
 
 **Phase 12.B PR #33 已合并**(2026-05-18 02:47)，旧焦点表过期已修。

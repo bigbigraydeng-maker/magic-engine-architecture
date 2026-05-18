@@ -714,7 +714,7 @@ Layer 5: Export（新增）— P8.10.S5
 
 **Sprint 2 — 数据飞轮（P8.12.S2，~10–14 人天，真护城河）📋 补充（MVP 上线后）**：
 - [x] **P8.12.S2.1** Case Library schema：新建 `prescription_cases` / `prescription_outcomes` / `local_data_cache` 三表 + RLS ⭐ 所有其他条目的硬前置，建议 S1 收尾时并行启动
-- [ ] **P8.12.S2.2** 华佗 `retrieve_similar_cases` skill（`src/lib/case-library/retriever.ts`）— 按行业 / 危机类型 / 预算档结构化检索历史处方（v0 不用 embedding）
+- [x] **P8.12.S2.2** 华佗 `retrieve_similar_cases` skill（`src/lib/case-library/retriever.ts`）— 按行业 / 危机类型 / 预算档结构化检索历史处方（v0 不用 embedding）
 - [ ] **P8.12.S2.3** 效果反馈闭环：处方 KPI 90 天实际回流（`prescription_outcomes` 录入 API + cron 提醒，SEMrush 可测指标自动回填）
 - [ ] **P8.12.S2.4** 行业基准自动累积：从 outcome 聚合 P50/P75/P90 写回 `industry_benchmarks`（cron，需最低样本阈值）
 - 依赖：S2.1 必须最先做；S2.2/S2.3 可并行（一读一写）；S2.4 串行收尾
@@ -1244,6 +1244,8 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
   `feat(diagnostic): P8.10.S5.2 — evidence citation drawer ([N] superscript + postMessage) [P8.10.S5.2]`
 - **P8.10.S5.3** — 导出 DOCX 按钮：新增 GET `/api/clients/[id]/diagnostic/report/docx`，拉 markdown artifact → `docx` npm 包生成 A4 Word 文档（Arial、样式化 H1-H3、bullet 列表、GFM 表格、inline bold/italic/code）；report 页头部新增 DOCX 按钮含 loading spinner，置于 Evidence 与打印按钮之间；build 通过
   `feat(diagnostic): P8.10.S5.3 — export DOCX button + /report/docx API [P8.10.S5.3]`
+- **P8.12.S2.2** — 华佗案例库检索 skill：新增 `retriever.ts`（`retrieveSimilarCases`：industry_category 精确 + crisis_type 可选 + 预算 ±50% 区间 + market 筛选，附 outcomes KPI；`formatCasesForPrompt` 渲染案例段落）+ `saver.ts`（`savePrescriptionCase` 静默写库 + `deriveCrisisType` 从 priority_dimensions 提取）；`HuatuoLookupContext` 加 `similar_cases` 字段；agent.ts 在 Lookup Step 并行调 retriever；prompts.ts 注入案例段落；generate/route.ts `.catch()` hook 案例存档；16 新测试全过；41 case-library+huatuo 测试全过；build 通过
+  `feat(huatuo): P8.12.S2.2 — retrieve_similar_cases skill + case saver [P8.12.S2.2]`
 - **P8.10.S5.1** — 证据引用数据层：4 个 synthesis 结果类型（DimensionNarrativeResult / ScoreExplanation / CompetitorAnalystResult / MarketContextResult）加 `evidence_refs: string[]`；NarrativeRow 加 `evidence_refs` 字段，save helpers 写入 `metadata.evidence_refs`，load 时自动提取；lib/diagnostic/types.ts 新增 `extractEvidenceRefs` 工具函数；report-generator evidence.json findings + narratives 均带 refs；292 tests 全绿
   `feat(diagnostic): P8.10.S5.1 — evidence_refs data layer on findings/narratives [P8.10.S5.1]`
 - **P8.10.S4.1 + S4.2** — Report Composer 落地：新增 `src/lib/diagnostic/report-generator.ts`，`generateReport(supabase, runId, clientId, opts)` 并发拉 run / client / findings / narratives，prescription 优先从 `prescriptions` 表按 (run_id, client_id) 读最新，缺时用 `intake` 调 `generatePrescription` fallback、无 intake 则段落省略；产出 3 件套：（1）完整 Markdown（标题 / 摘要 / 基线快照 / 6 维度详情含 score_explanation + dimension_narrative + 关键问题 / 竞品分析 / 市场上下文 / 处方建议 含 phases + KPI 表 + 预算表），narrative bucket 空则段落整体省略；（2）可打印 self-contained HTML，内嵌 `@page A4 + @media print` 规则 + h2 page-break-before + table page-break-inside avoid + 内置极简 MD→HTML 转换器（headings / paragraphs / 粗体斜体 / 列表 / GFM 表格）零外部依赖；（3）独立 `evidence-{run_id}.json`（findings 全量 + narratives 元数据），**不内嵌**到报告；TDD 12 单测全过（段落顺序 / 缺失数据"无数据"占位 / 空 narratives 段落省略 / prescription 优先读库 + fallback / HTML print CSS 校验 / 证据独立文件 / run 缺失抛错）；diagnostic 292 测试全过；tsc 无误
