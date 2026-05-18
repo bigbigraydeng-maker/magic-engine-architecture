@@ -438,6 +438,59 @@ describe('generateReport — P8.10.S4.1', () => {
     expect(parsed.narratives[0]).toHaveProperty('kind')
   })
 
+  // ── P8.10.S5.2 — citation injection ──────────────────────────────────────
+
+  it('injects <sup class="cite"> in HTML when narrative has evidence_refs', async () => {
+    const narrativesWithRefs = MOCK_NARRATIVES.map(n =>
+      n.kind === 'dimension_narrative' && n.dimension === 'seo'
+        ? { ...n, evidence_refs: ['https://ctstours.co.nz', 'https://semrush.com/x'] }
+        : { ...n, evidence_refs: [] },
+    )
+    mockLoadNarratives.mockResolvedValue(narrativesWithRefs)
+    const supabase = buildSupabase()
+    const { html } = await generateReport(supabase as never, RUN_ID, CLIENT_ID)
+    expect(html).toContain('<sup class="cite"')
+    expect(html).toContain('data-idx="1"')
+    expect(html).toContain('[1]')
+  })
+
+  it('embeds __cite_data__ JSON script when evidence_refs exist', async () => {
+    const narrativesWithRefs = MOCK_NARRATIVES.map(n =>
+      n.kind === 'score_explanation' && n.dimension === 'seo'
+        ? { ...n, evidence_refs: ['https://ctstours.co.nz'] }
+        : { ...n, evidence_refs: [] },
+    )
+    mockLoadNarratives.mockResolvedValue(narrativesWithRefs)
+    const supabase = buildSupabase()
+    const { html } = await generateReport(supabase as never, RUN_ID, CLIENT_ID)
+    expect(html).toContain('__cite_data__')
+    const match = /<script id="__cite_data__"[^>]*>([\s\S]*?)<\/script>/.exec(html)
+    expect(match).not.toBeNull()
+    const data = JSON.parse(match![1]) as Record<string, string[]>
+    expect(data['1']).toContain('https://ctstours.co.nz')
+  })
+
+  it('strips [[cite:...]] markers from markdown artifact', async () => {
+    const narrativesWithRefs = MOCK_NARRATIVES.map(n =>
+      n.kind === 'dimension_narrative' && n.dimension === 'seo'
+        ? { ...n, evidence_refs: ['https://example.com'] }
+        : { ...n, evidence_refs: [] },
+    )
+    mockLoadNarratives.mockResolvedValue(narrativesWithRefs)
+    const supabase = buildSupabase()
+    const { markdown } = await generateReport(supabase as never, RUN_ID, CLIENT_ID)
+    expect(markdown).not.toContain('[[cite:')
+  })
+
+  it('produces no <sup> and no __cite_data__ when all evidence_refs are empty', async () => {
+    const narrativesNoRefs = MOCK_NARRATIVES.map(n => ({ ...n, evidence_refs: [] }))
+    mockLoadNarratives.mockResolvedValue(narrativesNoRefs)
+    const supabase = buildSupabase()
+    const { html } = await generateReport(supabase as never, RUN_ID, CLIENT_ID)
+    expect(html).not.toContain('<sup class="cite"')
+    expect(html).not.toContain('__cite_data__')
+  })
+
   it('throws when diagnostic run is missing', async () => {
     const supabase = buildSupabase({ run: null })
     await expect(

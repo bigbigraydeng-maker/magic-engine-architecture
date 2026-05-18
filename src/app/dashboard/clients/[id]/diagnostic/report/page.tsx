@@ -25,6 +25,11 @@ interface TocEntry {
   label: string
 }
 
+interface CitationPanel {
+  idx: string
+  refs: string[]
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -62,6 +67,65 @@ function LoadingScreen() {
         <p className="text-sm">正在生成诊断报告…</p>
       </div>
     </div>
+  )
+}
+
+function EvidenceDrawer({
+  citation,
+  onClose,
+}: {
+  citation: CitationPanel | null
+  onClose: () => void
+}) {
+  if (!citation) return null
+  return (
+    <>
+      <div
+        className="fixed inset-0 z-30 bg-black/20"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+      <aside
+        className="fixed right-0 top-0 bottom-0 z-40 w-80 bg-white shadow-xl border-l border-gray-200 flex flex-col"
+        role="complementary"
+        aria-label={`引用来源 ${citation.idx}`}
+      >
+        <header className="flex items-center justify-between px-4 py-3 border-b border-gray-100 flex-shrink-0">
+          <h2 className="text-sm font-semibold text-gray-900">
+            引用来源&nbsp;[{citation.idx}]
+          </h2>
+          <button
+            onClick={onClose}
+            className="rounded-md p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
+            aria-label="关闭证据抽屉"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </header>
+        <div className="flex-1 overflow-y-auto px-4 py-3">
+          {citation.refs.length === 0 ? (
+            <p className="text-xs text-gray-400">无来源记录</p>
+          ) : (
+            <ul className="space-y-2">
+              {citation.refs.map((url, i) => (
+                <li key={i}>
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-indigo-600 hover:text-indigo-800 break-all leading-relaxed"
+                  >
+                    {url}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </aside>
+    </>
   )
 }
 
@@ -118,6 +182,7 @@ export default function DiagnosticReportPage() {
   const [processedHtml, setProcessedHtml] = useState('')
   const [toc, setToc] = useState<TocEntry[]>([])
   const [activeSection, setActiveSection] = useState<string | null>(null)
+  const [citation, setCitation] = useState<CitationPanel | null>(null)
 
   const fetchReport = useCallback(async () => {
     setLoading(true)
@@ -145,6 +210,16 @@ export default function DiagnosticReportPage() {
   }, [clientId, runIdParam])
 
   useEffect(() => { void fetchReport() }, [fetchReport])
+
+  useEffect(() => {
+    const handleMessage = (e: MessageEvent<{ type?: string; idx?: string; refs?: string[] }>) => {
+      if (e.data?.type === 'cite:click') {
+        setCitation({ idx: e.data.idx ?? '', refs: e.data.refs ?? [] })
+      }
+    }
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
+  }, [])
 
   const handlePrint = () => {
     iframeRef.current?.contentWindow?.print()
@@ -284,6 +359,8 @@ export default function DiagnosticReportPage() {
           sandbox="allow-same-origin allow-scripts allow-modals"
         />
       </div>
+
+      <EvidenceDrawer citation={citation} onClose={() => setCitation(null)} />
     </div>
   )
 }
