@@ -70,12 +70,15 @@ export interface FacebookPage {
   topPosts30d: SocialPostSample[]  // P8.10.S2.3
 }
 
+// Apify actor-level timeout in seconds; separate from the Node fetch abort below.
+const APIFY_ACTOR_TIMEOUT_SEC = 60
+
 export async function scrapeInstagramProfile(handle: string): Promise<InstagramProfile> {
   const token = process.env.APIFY_API_KEY
   if (!token) throw new Error('APIFY_API_KEY not configured')
 
   const res = await fetch(
-    `${APIFY_BASE}/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${token}`,
+    `${APIFY_BASE}/acts/apify~instagram-scraper/run-sync-get-dataset-items?token=${token}&timeout=${APIFY_ACTOR_TIMEOUT_SEC}`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -83,6 +86,7 @@ export async function scrapeInstagramProfile(handle: string): Promise<InstagramP
         directUrls: [`https://www.instagram.com/${handle}/`],
         resultsType: 'details',
       }),
+      signal: AbortSignal.timeout((APIFY_ACTOR_TIMEOUT_SEC + 15) * 1000),
     },
   )
 
@@ -146,11 +150,12 @@ export async function scrapeFacebookPage(pageUrl: string): Promise<FacebookPage>
   if (!token) throw new Error('APIFY_API_KEY not configured')
 
   const res = await fetch(
-    `${APIFY_BASE}/acts/apify~facebook-pages-scraper/run-sync-get-dataset-items?token=${token}`,
+    `${APIFY_BASE}/acts/apify~facebook-pages-scraper/run-sync-get-dataset-items?token=${token}&timeout=${APIFY_ACTOR_TIMEOUT_SEC}`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ startUrls: [{ url: pageUrl }] }),
+      signal: AbortSignal.timeout((APIFY_ACTOR_TIMEOUT_SEC + 15) * 1000),
     },
   )
 

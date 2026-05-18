@@ -40,6 +40,9 @@ const MAX_TOOL_CALLS = 22
 const MAX_COST_USD = 1.80
 const MAX_OUTPUT_TOKENS = 8096
 const FETCH_URL_TIMEOUT_MS = 15_000
+// Hard wall-clock cap: trigger graceful finalization at 4.5 min so the
+// full round-trip (final Claude call + overhead) lands under 5 min.
+const GLOBAL_TIMEOUT_MS = 270_000
 
 // Sonnet 4.5 pricing per million tokens (must match anthropic/client.ts)
 const PRICE_INPUT_PER_M = 3.0
@@ -252,6 +255,7 @@ export async function runZhangqian(
 
   const client = getAnthropicClient()
   const startedAt = Date.now()
+  const deadline = startedAt + GLOBAL_TIMEOUT_MS
 
   // Conversation messages — grows each turn
   const messages: Anthropic.Messages.MessageParam[] = [
@@ -269,13 +273,19 @@ export async function runZhangqian(
   await onProgress('张骞已派遣 — 抓取主页…')
 
   for (let iteration = 0; iteration < maxToolCalls; iteration++) {
-    // ── Cost gate ──────────────────────────────────────────────────────────
+    // ── Cost gate + deadline gate ──────────────────────────────────────────
     const costSoFar =
       (totalInputTokens / 1_000_000) * PRICE_INPUT_PER_M +
       (totalOutputTokens / 1_000_000) * PRICE_OUTPUT_PER_M +
       webSearchCalls * PRICE_WEB_SEARCH_PER_CALL
 
     if (costSoFar >= maxCostUsd) {
+      truncated = true
+      break
+    }
+
+    // Leave 30 s for the final summary Claude call before the 4.5-min deadline
+    if (Date.now() + 30_000 >= deadline) {
       truncated = true
       break
     }
@@ -367,44 +377,39 @@ export async function runZhangqian(
       continue
     }
 
-    const toolResults: Anthropic.Messages.ToolResultBlockParam[] = []
-
-    for (const toolUse of toolUseBlocks) {
-      switch (toolUse.name) {
-        case 'fetch_url':
-          fetchUrlCalls++
-          toolResults.push(await handleFetchUrl(toolUse, onProgress))
-          break
-        case 'verify_business_registration':
-          connectorCalls++
-          toolResults.push(await handleVerifyRegistration(toolUse, onProgress))
-          break
-        case 'fetch_local_reviews':
-          connectorCalls++
-          toolResults.push(await handleFetchLocalReviews(toolUse, onProgress))
-          break
-        case 'fetch_social_metrics':
-          apifyCalls++
-          toolResults.push(await handleFetchSocialMetrics(toolUse, onProgress))
-          break
-        case 'fetch_meta_ads':
-          apifyCalls++
-          toolResults.push(await handleFetchMetaAds(toolUse, onProgress))
-          break
-        case 'fetch_serp_results':
-          apifyCalls++
-          toolResults.push(await handleFetchSerpResults(toolUse, onProgress))
-          break
-        default:
-          // Unknown tool — return error so Claude can recover
-          toolResults.push({
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: `Unknown tool: ${toolUse.name}. 'web_search' is server-side; client-handled tools are 'fetch_url', 'verify_business_registration', 'fetch_local_reviews', 'fetch_social_metrics', 'fetch_meta_ads', 'fetch_serp_results'.`,
-            is_error: true,
-          })
-      }
-    }
+    // Resolve all tool calls for this turn concurrently — counters are
+    // incremented synchronously before any await, so no race condition.
+    const toolResults = await Promise.all(
+      toolUseBlocks.map(toolUse => {
+        switch (toolUse.name) {
+          case 'fetch_url':
+            fetchUrlCalls++
+            return handleFetchUrl(toolUse, onProgress)
+          case 'verify_business_registration':
+            connectorCalls++
+            return handleVerifyRegistration(toolUse, onProgress)
+          case 'fetch_local_reviews':
+            connectorCalls++
+            return handleFetchLocalReviews(toolUse, onProgress)
+          case 'fetch_social_metrics':
+            apifyCalls++
+            return handleFetchSocialMetrics(toolUse, onProgress)
+          case 'fetch_meta_ads':
+            apifyCalls++
+            return handleFetchMetaAds(toolUse, onProgress)
+          case 'fetch_serp_results':
+            apifyCalls++
+            return handleFetchSerpResults(toolUse, onProgress)
+          default:
+            return Promise.resolve<Anthropic.Messages.ToolResultBlockParam>({
+              type: 'tool_result',
+              tool_use_id: toolUse.id,
+              content: `Unknown tool: ${toolUse.name}. 'web_search' is server-side; client-handled tools are 'fetch_url', 'verify_business_registration', 'fetch_local_reviews', 'fetch_social_metrics', 'fetch_meta_ads', 'fetch_serp_results'.`,
+              is_error: true,
+            })
+        }
+      })
+    )
 
     // Feed tool results back into the conversation
     messages.push({ role: 'user', content: toolResults })
@@ -727,16 +732,19 @@ async function handleFetchSocialMetrics(
 
   await onProgress(`抓取 ${platform} 真实指标…`)
 
+  // 75 s = Apify actor timeout (60 s) + 15 s HTTP buffer
+  const SOCIAL_METRICS_TIMEOUT_MS = 75_000
+
   try {
     // Each scraper returns followersCount / postsLast30Days / engagementRate;
     // normalise to the snake_case fields Claude writes into DiscoveredSocial.
     let raw: { followersCount: number; postsLast30Days: number; engagementRate: number }
     if (platform === 'instagram') {
-      raw = await scrapeInstagramProfile(target.replace(/^@/, ''))
+      raw = await withTimeout(scrapeInstagramProfile(target.replace(/^@/, '')), SOCIAL_METRICS_TIMEOUT_MS)
     } else if (platform === 'tiktok') {
-      raw = await scrapeTiktokProfile(target)
+      raw = await withTimeout(scrapeTiktokProfile(target), SOCIAL_METRICS_TIMEOUT_MS)
     } else {
-      raw = await scrapeFacebookPage(target)
+      raw = await withTimeout(scrapeFacebookPage(target), SOCIAL_METRICS_TIMEOUT_MS)
     }
     return {
       type: 'tool_result',
