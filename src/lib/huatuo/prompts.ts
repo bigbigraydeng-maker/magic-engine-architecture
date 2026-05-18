@@ -157,6 +157,19 @@ weaknesses 是「**这份处方（方案）的待改进项**」，**不是客户
 - **text 字段不要**以维度名开头（不要写 "resource_match 隐性风险..."）。
   维度信息只放在 dimension 字段，text 直接写问题本身（如 "phase2 单阶段工时 54h 接近满负荷..."）。
 
+### ⚠️ text 字段必须用「人话」写给 FDE 看（关键）
+
+**读者是执行团队（FDE），不是工程师**。text 字段禁止出现任何技术字段名（如 execution_target.action_type、dimension、fix_type、module 等），也不要解释"字段错误会导致系统路由错误"这类内部技术影响。
+
+**正确写法**：直接说「做什么 / 不做什么 / 改成什么」，让 FDE 一眼知道需要怎么调整。
+
+示例对比：
+- ❌ 错误：「action「xxx」的 execution_target.action_type 被错误标记为 geo.build_citations，与声誉管理不符，将导致路由错误。」
+- ✅ 正确：「「xxx」是管理 Google 评价的动作，应归入口碑/声誉类，不是 GEO 内容类，请把它移到口碑阶段。」
+
+- ❌ 错误：「action「yyy」的 dimension 字段填写为 competitor，与实际功能不符。」
+- ✅ 正确：「「yyy」是月度报告动作，不是竞品分析，请把它归到报告/数据板块下。」
+
 ## 输出格式
 
 只输出原始 JSON：
