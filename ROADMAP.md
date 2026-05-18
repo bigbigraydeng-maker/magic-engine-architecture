@@ -658,7 +658,7 @@ Layer 5: Export（新增）— P8.10.S5
 
 **Sprint 3 — Synthesis 层（P8.10.S3，~3 天，核心）**：
 - [x] **P8.10.S3.1** 新增 `src/lib/diagnostic/synthesis/competitor-analyst.ts`（Claude Sonnet 合成市场结构 + 对标路径）
-- [ ] **P8.10.S3.2** 新增 `src/lib/diagnostic/synthesis/dimension-narrator.ts`（每维度 narrative）
+- [x] **P8.10.S3.2** 新增 `src/lib/diagnostic/synthesis/dimension-narrator.ts`（每维度 narrative）
 - [ ] **P8.10.S3.3** 新增 `src/lib/diagnostic/synthesis/score-explainer.ts`（每个分数的解释段落）
 - [ ] **P8.10.S3.4** 新增 `src/lib/diagnostic/synthesis/market-context.ts`（Anthropic Web Search 抓行业现状）
 - [ ] **P8.10.S3.5** 新增 `diagnostic_narratives` 表：`run_id, dimension, narrative_md, generated_at, model, cost_usd`
@@ -1229,6 +1229,7 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
   `feat(blog): P8.10.S2.F.2 — blog hero image uses generateVisualBrief() with MB visual DNA [P8.10.S2.F.2]`
 - **P8.10.S3.1** — Competitor Analyst (Synthesis 层第 1 个模块)：新增 `src/lib/diagnostic/synthesis/competitor-analyst.ts` + `analyzeCompetitorLandscape()`，Claude Sonnet 4.6 把 `CompetitorEntry[]`（含 site_signals + meta_ads）合成两段 Markdown 叙事「Market Structure」+「Benchmarking Path」，输出 JSON + cost/model/generated_at；TDD 写 12 个单测（happy path / guard rails / 输出解析 / brief 注入），全过；diagnostic 207 测试全过；build 通过
   `feat(diagnostic): P8.10.S3.1 — competitor analyst synthesis [P8.10.S3.1]`
+- **P8.10.S3.2** — Dimension Narrator (Synthesis 层第 2 个模块)：新增 `src/lib/diagnostic/synthesis/dimension-narrator.ts` + `narrateDimension()` / `narrateAllDimensions()`，对单个 `DiagnosticDimension` (seo/ai_visibility/ads/social/reputation/competitor) 用 Claude Sonnet 4.6 生成 200–400 字三段式 Markdown 叙事「Current state / Root cause / Opportunities」，注入 findings 的 severity/recommendation/fix_type/evidence；score=null（未配置）也能产出说明；批量入口对空 findings 维度静默跳过。TDD 15 个单测全过；diagnostic 222 测试全过；build 通过
 - **P8.10.S0.15–S0.20** — 张骞/MB/视觉 brief 收尾增强（**并行 session 完成，commit message 误标 `[P8.10.S2.1]`–`[P8.10.S2.6]`，实际属于 P8.10.S0 范畴**）：Content modal 简化、`/content/generate` 重定向、张骞 confirm 跳转 `?brief=1`、MB 加视觉 DNA、BriefSourcesForm 自动预填、`visual_brief` 拆成独立第二步生成器
   - `refactor(content): remove image preview ... [P8.10.S2.1]` (2a10979) → 实际 S0.15
   - `refactor(content): redirect /content/generate ... [P8.10.S2.2]` (742d0f7) → 实际 S0.16
