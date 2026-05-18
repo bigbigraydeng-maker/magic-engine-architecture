@@ -112,7 +112,7 @@ export async function POST(
   return new Response(
     makeRefineStream(
       pId, clientId, disc.payload, presc.intake, presc.content,
-      previousWeaknesses, humanComments, previousPasses,
+      previousWeaknesses, humanComments, previousPasses, presc.self_grade,
     ),
     { headers: streamHeaders() },
   )
@@ -145,6 +145,7 @@ function makeRefineStream(
   previousWeaknesses: SelfGradeWeakness[],
   humanComments: string | undefined,
   previousPasses: number,
+  previousSelfGrade: SelfGrade | null,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder()
 
@@ -167,6 +168,7 @@ function makeRefineStream(
           {
             humanComments,
             previousPasses,
+            previousSelfGrade,
             onProgress: async (note) => {
               sendEvent({ type: 'progress', note })
               await supabaseAdmin

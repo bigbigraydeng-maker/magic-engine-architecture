@@ -49,7 +49,7 @@ export const HUATUO_AGENT_VERSION = '1.0.0'
 // Sonnet 4.5 supports up to 8192 output tokens. 3 阶段中文处方含 FDE 字段
 // 经常超过 4096 → 必须用 8192，否则 JSON 被截断在中间数组里。
 const MAX_OUTPUT_TOKENS_GENERATION = 8192
-const MAX_OUTPUT_TOKENS_SELFGRADE = 2048
+const MAX_OUTPUT_TOKENS_SELFGRADE = 4096
 
 // 单次 Claude 调用硬超时（毫秒）。Anthropic SDK 默认 10 分钟 + 默认重试 2 次
 // = 最坏 30 分钟挂起。这里给充足空间但仍禁用 SDK 重试。
@@ -275,6 +275,8 @@ export interface RefineHuatuoOptions {
   humanComments?: string
   /** 上一版处方的 passes 值；新结果 = previousPasses + 1。默认 1。 */
   previousPasses?: number
+  /** 上一轮自评结果；自评失败时作为兜底，防止评分归零。 */
+  previousSelfGrade?: SelfGrade | null
 }
 
 /**
@@ -355,8 +357,9 @@ export async function refineHuatuoPrescription(
     totalOutputTokens += grade.usage.output
     selfGrade = grade.grade
   } catch (err) {
-    console.warn('[huatuo] refine re-grade failed, keeping refine content', err)
-    selfGrade = makeDefaultGrade()
+    console.warn('[huatuo] refine re-grade failed:', err instanceof Error ? err.message : String(err))
+    // 自评失败时优先保留上一轮分数，避免精修后评分归零
+    selfGrade = options.previousSelfGrade ?? makeDefaultGrade()
   }
 
   // Clamp budget
