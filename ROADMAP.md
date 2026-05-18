@@ -672,7 +672,7 @@ Layer 5: Export（新增）— P8.10.S5
 
 **Sprint 5 — 引用/证据追溯层（P8.10.S5，~1 天）**：
 - [x] **P8.10.S5.1** 每个 finding / narrative 段落带 `evidence_refs: string[]`
-- [ ] **P8.10.S5.2** UI 上标 `[1]` 可点开证据抽屉（类似 deep-research `citeturn`）
+- [x] **P8.10.S5.2** UI 上标 `[1]` 可点开证据抽屉（类似 deep-research `citeturn`）
 - [ ] **P8.10.S5.3** 导出 DOCX 按钮（用 `anthropic-skills:docx` 渲染）
 
 **验收标准**：
@@ -1240,6 +1240,8 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
   `feat(diagnostic): P8.10.S3.6 — inject synthesis narratives into prescription prompt [P8.10.S3.6]`
 - **P8.10.S4.3 + S4.4** — `/diagnostic/report` 页落地 + 速览入口保留：新增 `src/app/dashboard/clients/[id]/diagnostic/report/page.tsx`，iframe 渲染 print-HTML + 浮层目录（H2 自动提取 + IntersectionObserver 高亮）+ 打印按钮 + evidence.json 下载；原 `/diagnostic` 6 维度评分卡作「速览入口」保留，Report 按钮从评分卡跳转到新页；S4.4 随 S4.3 一起完成
   `feat(diagnostic): P8.10.S4.3 — /diagnostic/report page (iframe + TOC + print + evidence download) [P8.10.S4.3]`
+- **P8.10.S5.2** — 证据引用上标抽屉：report-generator 注入 `[[cite:kind:dim]]` 标记 → HTML 替换为 `<sup class="cite" data-idx>[N]</sup>`；`buildCitationRegistry` 分组 evidence_refs、顺序编号；`__cite_data__` JSON + postMessage JS 仅在有引用时注入；report/page.tsx 监听 `cite:click` message，EvidenceDrawer 展示来源 URL 列表；markdown artifact 自动 strip 标记；+4 tests，296 全绿，build 通过
+  `feat(diagnostic): P8.10.S5.2 — evidence citation drawer ([N] superscript + postMessage) [P8.10.S5.2]`
 - **P8.10.S5.1** — 证据引用数据层：4 个 synthesis 结果类型（DimensionNarrativeResult / ScoreExplanation / CompetitorAnalystResult / MarketContextResult）加 `evidence_refs: string[]`；NarrativeRow 加 `evidence_refs` 字段，save helpers 写入 `metadata.evidence_refs`，load 时自动提取；lib/diagnostic/types.ts 新增 `extractEvidenceRefs` 工具函数；report-generator evidence.json findings + narratives 均带 refs；292 tests 全绿
   `feat(diagnostic): P8.10.S5.1 — evidence_refs data layer on findings/narratives [P8.10.S5.1]`
 - **P8.10.S4.1 + S4.2** — Report Composer 落地：新增 `src/lib/diagnostic/report-generator.ts`，`generateReport(supabase, runId, clientId, opts)` 并发拉 run / client / findings / narratives，prescription 优先从 `prescriptions` 表按 (run_id, client_id) 读最新，缺时用 `intake` 调 `generatePrescription` fallback、无 intake 则段落省略；产出 3 件套：（1）完整 Markdown（标题 / 摘要 / 基线快照 / 6 维度详情含 score_explanation + dimension_narrative + 关键问题 / 竞品分析 / 市场上下文 / 处方建议 含 phases + KPI 表 + 预算表），narrative bucket 空则段落整体省略；（2）可打印 self-contained HTML，内嵌 `@page A4 + @media print` 规则 + h2 page-break-before + table page-break-inside avoid + 内置极简 MD→HTML 转换器（headings / paragraphs / 粗体斜体 / 列表 / GFM 表格）零外部依赖；（3）独立 `evidence-{run_id}.json`（findings 全量 + narratives 元数据），**不内嵌**到报告；TDD 12 单测全过（段落顺序 / 缺失数据"无数据"占位 / 空 narratives 段落省略 / prescription 优先读库 + fallback / HTML print CSS 校验 / 证据独立文件 / run 缺失抛错）；diagnostic 292 测试全过；tsc 无误
