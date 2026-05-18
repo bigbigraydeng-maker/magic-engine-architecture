@@ -661,7 +661,7 @@ Layer 5: Export（新增）— P8.10.S5
 - [x] **P8.10.S3.2** 新增 `src/lib/diagnostic/synthesis/dimension-narrator.ts`（每维度 narrative）
 - [x] **P8.10.S3.3** 新增 `src/lib/diagnostic/synthesis/score-explainer.ts`（每个分数的解释段落）
 - [x] **P8.10.S3.4** 新增 `src/lib/diagnostic/synthesis/market-context.ts`（Anthropic Web Search 抓行业现状）
-- [ ] **P8.10.S3.5** 新增 `diagnostic_narratives` 表：`run_id, dimension, narrative_md, generated_at, model, cost_usd`
+- [x] **P8.10.S3.5** 新增 `diagnostic_narratives` 表：`run_id, dimension, narrative_md, generated_at, model, cost_usd`
 - [ ] **P8.10.S3.6** Synthesis 结果注入 prescription-generator prompt（让处方更精准）
 
 **Sprint 4 — Report Composer（P8.10.S4，~2 天）**：
@@ -1234,6 +1234,8 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
   `feat(diagnostic): P8.10.S3.3 — score explainer synthesis [P8.10.S3.3]`
 - **P8.10.S3.4** — Market Context (Synthesis 层第 4 个模块)：在 `src/lib/anthropic/client.ts` 新增 `callClaudeWithWebSearch` helper（server-side `web_search_20250305` 工具 + citation 抓取 + cost 计算）；新增 `src/lib/diagnostic/synthesis/market-context.ts` + `gatherMarketContext()`，Claude Sonnet 用 Anthropic Web Search 抓行业现状，按 market (au→AU+Sydney / nz→NZ+Auckland) 路由 user_location，产出 `industry_overview_md` / `key_trends[3-6]` / `category_benchmarks_md` / `opportunities_md` + citations + cost；输入校验 brand/industry/market/maxSearches + focusTopics 上限 10；TDD 24 单测全过；diagnostic 267 测试全过
   `feat(diagnostic): P8.10.S3.4 — market context synthesis [P8.10.S3.4]`
+- **P8.10.S3.5** — Synthesis 持久化层：新增 migration `20260518000002_diagnostic_narratives.sql`（表 `diagnostic_narratives`：`run_id / client_id / kind / dimension / narrative_md / metadata / model / cost_usd / generated_at`，CHECK 约束 kind 枚举，UNIQUE INDEX 用 `COALESCE(dimension, '')` 处理 NULL，RLS 沿用 client_team）；新增 `src/lib/diagnostic/synthesis/persistence.ts`：`saveCompetitorAnalysis` / `saveDimensionNarrative(s)` / `saveScoreExplanations`（cost 只挂 overall 防重复求和）/ `saveMarketContext`（dimension=NULL + metadata 存 citations/trends）/ `loadNarrativesForRun`，全部走 `upsert(onConflict='run_id,kind,dimension')`，错误只 warn 不抛；TDD 11 单测全过；diagnostic 278 测试全过；build 通过
+  `feat(diagnostic): P8.10.S3.5 — diagnostic_narratives table + persistence [P8.10.S3.5]`
 - **P8.10.S0.15–S0.20** — 张骞/MB/视觉 brief 收尾增强（**并行 session 完成，commit message 误标 `[P8.10.S2.1]`–`[P8.10.S2.6]`，实际属于 P8.10.S0 范畴**）：Content modal 简化、`/content/generate` 重定向、张骞 confirm 跳转 `?brief=1`、MB 加视觉 DNA、BriefSourcesForm 自动预填、`visual_brief` 拆成独立第二步生成器
   - `refactor(content): remove image preview ... [P8.10.S2.1]` (2a10979) → 实际 S0.15
   - `refactor(content): redirect /content/generate ... [P8.10.S2.2]` (742d0f7) → 实际 S0.16
