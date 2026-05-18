@@ -53,6 +53,8 @@ export interface ScoreExplanation {
   score: number | null
   /** Short Markdown paragraph — ~60–120 words. */
   explanation_md: string
+  /** finding_type values that backed this explanation ('overall' = union of all dimensions). */
+  evidence_refs: string[]
 }
 
 export interface ScoreExplainerResult {
@@ -281,6 +283,14 @@ function reconcileExplanations(
     return input.dimensions.find(d => d.dimension === target)?.score ?? null
   }
 
+  const refsFor = (target: ScoreExplanationTarget): string[] => {
+    if (target === 'overall') {
+      return input.dimensions.flatMap(d => d.findings.map(f => f.finding_type as string))
+    }
+    const dim = input.dimensions.find(d => d.dimension === target)
+    return dim ? dim.findings.map(f => f.finding_type as string) : []
+  }
+
   const out: ScoreExplanation[] = []
   const seen = new Set<ScoreExplanationTarget>()
 
@@ -302,6 +312,7 @@ function reconcileExplanations(
       target,
       score: scoreFor(target),
       explanation_md: entry.explanation_md,
+      evidence_refs: refsFor(target),
     })
     seen.add(target)
   }

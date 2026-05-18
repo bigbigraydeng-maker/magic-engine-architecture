@@ -42,6 +42,8 @@ export interface CompetitorAnalystInput {
 export interface CompetitorAnalystResult {
   market_structure_md: string
   benchmarking_path_md: string
+  /** Competitor domain names used as input evidence for these narratives. */
+  evidence_refs: string[]
   cost_usd: number
   model_used: string
   generated_at: string
@@ -113,6 +115,7 @@ export async function analyzeCompetitorLandscape(
   return {
     market_structure_md: parsed.market_structure_md,
     benchmarking_path_md: parsed.benchmarking_path_md,
+    evidence_refs: input.competitors.map(c => c.domain),
     cost_usd: claudeResult.cost_usd,
     model_used: MODEL_SONNET,
     generated_at: new Date().toISOString(),

@@ -250,7 +250,7 @@ describe('narrateDimension — return shape', () => {
     const dim: DiagnosticDimension = result.dimension
     expect(dim).toBe('seo')
     expect(Object.keys(result).sort()).toEqual(
-      ['cost_usd', 'dimension', 'generated_at', 'model_used', 'narrative_md'].sort(),
+      ['cost_usd', 'dimension', 'evidence_refs', 'generated_at', 'model_used', 'narrative_md'].sort(),
     )
   })
 })

@@ -177,7 +177,7 @@ describe('analyzeCompetitorLandscape — return shape', () => {
   it('result shape matches CompetitorAnalystResult', async () => {
     const result: CompetitorAnalystResult = await analyzeCompetitorLandscape(buildInput())
     expect(Object.keys(result).sort()).toEqual(
-      ['benchmarking_path_md', 'cost_usd', 'generated_at', 'market_structure_md', 'model_used'].sort(),
+      ['benchmarking_path_md', 'cost_usd', 'evidence_refs', 'generated_at', 'market_structure_md', 'model_used'].sort(),
     )
   })
 })

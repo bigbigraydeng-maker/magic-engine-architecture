@@ -60,6 +60,8 @@ export interface MarketContextResult {
   category_benchmarks_md: string
   opportunities_md: string
   citations: WebSearchCitation[]
+  /** Citation URLs used as web-search evidence for this narrative. */
+  evidence_refs: string[]
   web_search_calls: number
   cost_usd: number
   model_used: string
@@ -150,6 +152,7 @@ export async function gatherMarketContext(
     category_benchmarks_md: parsed.category_benchmarks_md,
     opportunities_md: parsed.opportunities_md,
     citations: result.citations,
+    evidence_refs: result.citations.map(c => c.url),
     web_search_calls: result.web_search_calls,
     cost_usd: result.cost_usd,
     model_used: MODEL_SONNET,

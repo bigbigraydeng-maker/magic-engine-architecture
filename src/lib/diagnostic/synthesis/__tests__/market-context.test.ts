@@ -333,6 +333,7 @@ describe('gatherMarketContext — return shape', () => {
         'category_benchmarks_md',
         'citations',
         'cost_usd',
+        'evidence_refs',
         'generated_at',
         'industry_overview_md',
         'key_trends',

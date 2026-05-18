@@ -354,7 +354,7 @@ describe('explainScores — return shape', () => {
     )
     for (const e of result.explanations) {
       expect(Object.keys(e).sort()).toEqual(
-        ['explanation_md', 'score', 'target'].sort(),
+        ['evidence_refs', 'explanation_md', 'score', 'target'].sort(),
       )
     }
   })

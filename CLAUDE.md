@@ -213,12 +213,11 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-18（**P8.10.S4.3 + S4.4 完成** — `/diagnostic/report` 页落地：iframe 渲染 print-HTML + 浮层目录 + 打印按钮 + evidence.json 下载；原 `/diagnostic` 6 维度评分卡保留作速览入口；**Phase 8.10 Sprint 4 全部完成，下一步 S5 证据追溯层**）
+> 最后更新：2026-05-18（**P8.10.S5.1 完成** — 证据引用数据层：synthesis 4 类结果 + NarrativeRow + evidence.json 均携带 `evidence_refs: string[]`；292 tests 全绿；下一步 S5.2 UI 证据抽屉）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P8.10.S5.1** | 每个 finding / narrative 段落带 `evidence_refs: string[]` | ⭐⭐⭐ |
-| P8.10.S5.2 | UI 上标 `[1]` 可点开证据抽屉（类似 deep-research `citeturn`） | ⭐⭐ |
+| **P8.10.S5.2** | UI 上标 `[1]` 可点开证据抽屉（类似 deep-research `citeturn`） | ⭐⭐⭐ |
 | P8.10.S5.3 | 导出 DOCX 按钮（用 `anthropic-skills:docx` 渲染） | ⭐⭐ |
 | P8.3.2 | Dashboard Magic Link 鉴权 | ⭐ |
 

@@ -34,6 +34,7 @@ import {
   type NarrativeRow,
   type NarrativeKind,
 } from './synthesis/persistence'
+import { extractEvidenceRefs } from './types'
 import { generatePrescription } from './prescription-generator'
 
 // ---------------------------------------------------------------------------
@@ -544,11 +545,15 @@ function composeEvidence(input: ComposeInput): { filename: string; json: string 
     generated_at: new Date().toISOString(),
     overall_score: run.overall_score,
     dimension_scores: run.dimension_scores,
-    findings,
+    findings: findings.map(f => ({
+      ...f,
+      evidence_refs: extractEvidenceRefs(f.evidence),
+    })),
     narratives: narratives.map(n => ({
       id: n.id,
       kind: n.kind,
       dimension: n.dimension,
+      evidence_refs: n.evidence_refs,
       model: n.model,
       cost_usd: n.cost_usd,
       generated_at: n.generated_at,

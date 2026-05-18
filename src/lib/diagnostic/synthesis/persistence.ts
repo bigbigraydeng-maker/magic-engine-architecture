@@ -41,6 +41,8 @@ export interface NarrativeRow {
   dimension: string | null
   narrative_md: string
   metadata: Record<string, unknown> | null
+  /** Extracted from metadata.evidence_refs on load. Empty array when absent. */
+  evidence_refs: string[]
   model: string
   cost_usd: number
   generated_at: string
@@ -90,7 +92,7 @@ export async function saveCompetitorAnalysis(
       kind: 'competitor_market_structure',
       dimension: 'competitor',
       narrative_md: result.market_structure_md,
-      metadata: null,
+      metadata: { evidence_refs: result.evidence_refs },
       model: result.model_used,
       cost_usd: result.cost_usd,
       generated_at: result.generated_at,
@@ -101,7 +103,7 @@ export async function saveCompetitorAnalysis(
       kind: 'competitor_benchmarking_path',
       dimension: 'competitor',
       narrative_md: result.benchmarking_path_md,
-      metadata: null,
+      metadata: { evidence_refs: result.evidence_refs },
       model: result.model_used,
       cost_usd: result.cost_usd,
       generated_at: result.generated_at,
@@ -121,7 +123,7 @@ export async function saveDimensionNarrative(
     kind: 'dimension_narrative',
     dimension: result.dimension,
     narrative_md: result.narrative_md,
-    metadata: null,
+    metadata: { evidence_refs: result.evidence_refs },
     model: result.model_used,
     cost_usd: result.cost_usd,
     generated_at: result.generated_at,
@@ -141,7 +143,7 @@ export async function saveDimensionNarratives(
     kind: 'dimension_narrative',
     dimension: r.dimension,
     narrative_md: r.narrative_md,
-    metadata: null,
+    metadata: { evidence_refs: r.evidence_refs },
     model: r.model_used,
     cost_usd: r.cost_usd,
     generated_at: r.generated_at,
@@ -164,7 +166,7 @@ export async function saveScoreExplanations(
     kind: 'score_explanation',
     dimension: exp.target,
     narrative_md: exp.explanation_md,
-    metadata: { score: exp.score },
+    metadata: { score: exp.score, evidence_refs: exp.evidence_refs },
     model: result.model_used,
     cost_usd: exp.target === 'overall' ? result.cost_usd : 0,
     generated_at: result.generated_at,
@@ -198,6 +200,7 @@ export async function saveMarketContext(
       key_trends: result.key_trends,
       citations: result.citations,
       web_search_calls: result.web_search_calls,
+      evidence_refs: result.evidence_refs,
     },
     model: result.model_used,
     cost_usd: result.cost_usd,
@@ -225,7 +228,14 @@ export async function loadNarrativesForRun(
     console.warn('[synthesis-persistence] loadNarrativesForRun failed:', error.message)
     return []
   }
-  return (data ?? []) as NarrativeRow[]
+  return (data ?? []).map(row => {
+    const r = row as Omit<NarrativeRow, 'evidence_refs'>
+    const refs = (r.metadata as Record<string, unknown> | null)?.evidence_refs
+    return {
+      ...r,
+      evidence_refs: Array.isArray(refs) ? (refs as string[]) : [],
+    } satisfies NarrativeRow
+  })
 }
 
 // ---------------------------------------------------------------------------

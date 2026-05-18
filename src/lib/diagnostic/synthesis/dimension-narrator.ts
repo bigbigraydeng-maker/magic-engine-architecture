@@ -40,6 +40,8 @@ export interface DimensionNarratorInput {
 export interface DimensionNarrativeResult {
   dimension: DiagnosticDimension
   narrative_md: string
+  /** finding_type values of the findings that backed this narrative. */
+  evidence_refs: string[]
   cost_usd: number
   model_used: string
   generated_at: string
@@ -113,6 +115,7 @@ export async function narrateDimension(
   return {
     dimension: input.dimension,
     narrative_md: parsed.narrative_md,
+    evidence_refs: input.findings.map(f => f.finding_type as string),
     cost_usd: claudeResult.cost_usd,
     model_used: MODEL_SONNET,
     generated_at: new Date().toISOString(),
