@@ -47,16 +47,18 @@ export async function PATCH(
       title?: string
       description?: string
       note?: string
+      content_post_id?: string | null // 内容飞轮闭环：关联/解除关联 content_post
     }
 
     const newTitle = typeof body.title === 'string' ? body.title.trim() : undefined
     const newDesc = typeof body.description === 'string' ? body.description.trim() : undefined
     const hasStatus = body.status != null
     const hasEdit = newTitle !== undefined || newDesc !== undefined
+    const hasContentLink = body.content_post_id !== undefined // null 表示解除关联
 
-    if (!hasStatus && !hasEdit) {
+    if (!hasStatus && !hasEdit && !hasContentLink) {
       return NextResponse.json(
-        { success: false, error: 'status / title / description 至少要有一项' },
+        { success: false, error: 'status / title / description / content_post_id 至少要有一项' },
         { status: 400 },
       )
     }
@@ -70,12 +72,13 @@ export async function PATCH(
     // 先读当前记录（status_change / 编辑前后对比）
     const { data: current, error: readErr } = await supabaseAdmin
       .from('execution_items')
-      .select('status, started_at, title, description')
+      .select('status, started_at, title, description, content_post_id')
       .eq('id', itemId)
       .eq('client_id', clientId)
       .single<{
         status: ExecutionItemStatus; started_at: string | null
         title: string; description: string
+        content_post_id: string | null
       }>()
 
     if (readErr || !current) {
@@ -93,6 +96,24 @@ export async function PATCH(
     }
     if (newTitle !== undefined && newTitle) patch.title = newTitle
     if (newDesc !== undefined && newDesc) patch.description = newDesc
+    if (hasContentLink) {
+      // 校验 content_post 归属于同一客户（防止跨客户挂载）
+      if (body.content_post_id) {
+        const { data: post } = await supabaseAdmin
+          .from('content_posts')
+          .select('id')
+          .eq('id', body.content_post_id)
+          .eq('client_id', clientId)
+          .maybeSingle<{ id: string }>()
+        if (!post) {
+          return NextResponse.json(
+            { success: false, error: '内容帖子不存在或不属于该客户' },
+            { status: 400 },
+          )
+        }
+      }
+      patch.content_post_id = body.content_post_id
+    }
 
     const { data, error } = await supabaseAdmin
       .from('execution_items')
@@ -121,6 +142,19 @@ export async function PATCH(
         kind:              'status_change',
         content:           `状态：${STATUS_LABEL[current.status]} → ${STATUS_LABEL[body.status!]}`,
         meta:              { from: current.status, to: body.status },
+      })
+    }
+    // 内容关联变更 → adjustment 日志
+    if (hasContentLink && body.content_post_id !== current.content_post_id) {
+      logs.push({
+        execution_item_id: itemId,
+        client_id:         clientId,
+        author:            'fde',
+        kind:              'adjustment',
+        content:           body.content_post_id
+          ? `关联内容帖子 ${body.content_post_id}`
+          : '解除内容关联',
+        meta:              { adjustment: 'link_content', content_post_id: body.content_post_id },
       })
     }
     // 编辑标题/说明 → adjustment 日志

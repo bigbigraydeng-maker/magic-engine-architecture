@@ -18,7 +18,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { requireBearerToken } from '@/lib/validation-utils'
 import type {
   ExecutionItem, ExecutionLog, PrescriptionStatus,
-  DiagnosticDimension, FixType,
+  DiagnosticDimension, FixType, LinkedContentPost,
 } from '@/types/diagnostic'
 import type { OutcomeVerdict } from '@/lib/flywheel/adapters/types'
 
@@ -39,10 +39,11 @@ const VALID_FIX_TYPES: FixType[] = ['me_auto', 'fde_manual', 'third_party']
 
 export const dynamic = 'force-dynamic'
 
-/** 返回时每个 item 附带它的 logs（鲁班 P8.10.S4.1）和最新 outcome（P12.A.10） */
+/** 返回时每个 item 附带它的 logs（鲁班 P8.10.S4.1）和最新 outcome（P12.A.10）+ 关联内容（飞轮闭环） */
 export interface ExecutionItemWithLogs extends ExecutionItem {
   logs: ExecutionLog[]
   outcome: ItemOutcomeSummary | null
+  linked_post: LinkedContentPost | null
 }
 
 /** 执行项涉及的处方元数据 — 用于看板按处方分组（P8.10.S5） */
@@ -150,10 +151,64 @@ export async function GET(
       }
     }
 
+    // 拉取关联的 content_posts + 最终视觉资产（内容飞轮闭环）
+    const linkedPostByItem: Record<string, LinkedContentPost> = {}
+    const postIds = Array.from(new Set(
+      baseItems.map(i => i.content_post_id).filter((x): x is string => !!x),
+    ))
+    if (postIds.length > 0) {
+      const { data: postRows } = await supabaseAdmin
+        .from('content_posts')
+        .select('id, title, status, platforms, caption, scheduled_at')
+        .in('id', postIds)
+
+      // 取每篇 post 的最终视觉资产（is_final=true 或 latest）
+      const { data: assetRows } = await supabaseAdmin
+        .from('visual_assets')
+        .select('post_id, storage_url, is_final, created_at')
+        .in('post_id', postIds)
+        .not('storage_url', 'is', null)
+        .order('created_at', { ascending: false })
+
+      const assetByPost = new Map<string, string>()
+      for (const row of (assetRows ?? []) as { post_id: string; storage_url: string; is_final: boolean }[]) {
+        // Final 优先；否则取最新的
+        if (row.is_final) assetByPost.set(row.post_id, row.storage_url)
+        else if (!assetByPost.has(row.post_id)) assetByPost.set(row.post_id, row.storage_url)
+      }
+
+      const postById = new Map<string, {
+        id: string; title: string; status: string
+        platforms: string[] | null; caption: string | null; scheduled_at: string | null
+      }>()
+      for (const row of (postRows ?? []) as Array<{
+        id: string; title: string; status: string
+        platforms: string[] | null; caption: string | null; scheduled_at: string | null
+      }>) {
+        postById.set(row.id, row)
+      }
+
+      for (const it of baseItems) {
+        if (!it.content_post_id) continue
+        const post = postById.get(it.content_post_id)
+        if (!post) continue
+        linkedPostByItem[it.id] = {
+          id: post.id,
+          title: post.title,
+          status: post.status,
+          platforms: post.platforms ?? [],
+          caption: post.caption,
+          scheduled_at: post.scheduled_at,
+          visual_asset_url: assetByPost.get(post.id) ?? null,
+        }
+      }
+    }
+
     const items: ExecutionItemWithLogs[] = baseItems.map(it => ({
       ...it,
       logs: logsByItem[it.id] ?? [],
       outcome: outcomeByItem[it.id] ?? null,
+      linked_post: linkedPostByItem[it.id] ?? null,
     }))
 
     // 拉取这些 item 涉及的处方元数据（按处方分组 + 补充/修订按钮用）

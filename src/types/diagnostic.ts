@@ -198,6 +198,19 @@ export interface ExecutionItem {
   sort_order: number
   created_at: string
   updated_at: string
+  /** 关联的内容帖子 ID。社媒/SEO 内容类执行项的产出物。published 后自动 mark completed。 */
+  content_post_id: string | null
+}
+
+/** 内容飞轮闭环 — 执行看板 row 上展示的关联内容预览（execution GET 时 embed） */
+export interface LinkedContentPost {
+  id: string
+  title: string
+  status: string
+  platforms: string[]
+  caption: string | null
+  scheduled_at: string | null
+  visual_asset_url: string | null // 取 final 版本或 latest version 的 storage_url
 }
 
 // ── ExecutionLog (鲁班执行代理 — P8.10.S4) ────────────────────────────────────
