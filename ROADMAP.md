@@ -31,7 +31,7 @@
 ⏸ Phase 8.P     Paid Social Studio（暂缓 — 待客户明确 Meta 广告需求触发）
 ✅ Phase 8.5+   Sprint 1 评分修复（P8.5.19-26，2026-05-13 完成）
 🔥 Phase 8.10   Synthesis Layer + Deep Research 报告（5 Sprints，~12 工作日）
-                ├─ S0 张骞 Discovery Agent（最先做，~3 天）⭐⭐⭐
+                ├─ S0 张骞 Discovery Agent ✅（14/14 任务完成，2026-05-18）
                 ├─ S2 数据源深化（~2 天）
                 ├─ S3 Synthesis 层（~3 天）
                 ├─ S4 Report Composer（~2 天）
@@ -596,35 +596,35 @@ Layer 5: Export（新增）— P8.10.S5
 **核心目标**：用户只输入域名 → Agent 5 分钟内交付完整客户画像 + 配置建议 → 用户一键确认/编辑后入库。**彻底取代「5 步接入向导」，简化为 2 步**。
 
 **数据库（Day 1）**：
-- [ ] **P8.10.S0.1** 新建 `client_discovery` 表
+- [x] **P8.10.S0.1** 新建 `client_discovery` 表
   - 字段：`id, client_id, domain, status, payload(JSONB), generated_at, cost_usd, model, expires_at`
   - JSONB payload 结构：`{ business, social_profiles[], gbp, review_platforms[], seed_keywords[], competitors[], ai_tracker_questions[] }`
   - 单客户单条（UPSERT），expires_at = generated_at + 30 天
-- [ ] **P8.10.S0.2** 新建 `client_discovery_jobs` 表用于异步任务追踪（status / error_message / cost_usd / tool_call_count）
+- [x] **P8.10.S0.2** 新建 `client_discovery_jobs` 表用于异步任务追踪（status / error_message / cost_usd / tool_call_count）
 
 **核心库（Day 2-3）**：
-- [ ] **P8.10.S0.3** `src/lib/zhangqian/types.ts` — DiscoveryReport / DiscoveredCompetitor / DiscoveredSocial 等类型
-- [ ] **P8.10.S0.4** `src/lib/zhangqian/agent.ts` — 主入口 `runZhangqian(domain): Promise<DiscoveryReport>`
+- [x] **P8.10.S0.3** `src/lib/zhangqian/types.ts` — DiscoveryReport / DiscoveredCompetitor / DiscoveredSocial 等类型
+- [x] **P8.10.S0.4** `src/lib/zhangqian/agent.ts` — 主入口 `runZhangqian(domain): Promise<DiscoveryReport>`
   - Claude Sonnet + Anthropic Web Search tool + URL Fetch tool（Jina Reader）
   - System prompt 严格定义输出 JSON schema
-  - Tool loop：最多 15 轮工具调用，超过则截断
-  - 成本上限：单次 $1（超过则提前终止）
-- [ ] **P8.10.S0.5** `src/lib/zhangqian/prompts.ts` — 拆分系统提示词（business / social / competitor / keywords 四段）
-- [ ] **P8.10.S0.6** `src/lib/zhangqian/validators.ts` — Zod schema 验证 Claude 输出
-- [ ] **P8.10.S0.7** `src/lib/zhangqian/persistor.ts` — 把 DiscoveryReport 写入 `client_discovery` + 触发后续 collector
+  - Tool loop：最多 22 轮工具调用，超过则截断
+  - 成本上限：$1.80（超过则提前终止）
+- [x] **P8.10.S0.5** `src/lib/zhangqian/prompts.ts` — 拆分系统提示词（business / social / competitor / keywords 四段）
+- [x] **P8.10.S0.6** `src/lib/zhangqian/validators.ts` — Zod schema 验证 Claude 输出
+- [x] **P8.10.S0.7** `src/lib/zhangqian/persistor.ts` — 把 DiscoveryReport 写入 `client_discovery` + 触发后续 collector
 
 **API（Day 3-4）**：
-- [ ] **P8.10.S0.8** `POST /api/clients/[id]/zhangqian/discover` — 触发异步发现（返回 202 + job_id）
-- [ ] **P8.10.S0.9** `GET /api/clients/[id]/zhangqian/status` — 轮询任务状态
-- [ ] **P8.10.S0.10** `GET /api/clients/[id]/zhangqian/latest` — 读取最新 DiscoveryReport
-- [ ] **P8.10.S0.11** `PATCH /api/clients/[id]/zhangqian/confirm` — 用户编辑确认后写入 clients/keywords/competitors 等表
+- [x] **P8.10.S0.8** `POST /api/clients/[id]/zhangqian/discover` — 触发异步发现（返回 202 + job_id）
+- [x] **P8.10.S0.9** `GET /api/clients/[id]/zhangqian/status` — 轮询任务状态
+- [x] **P8.10.S0.10** `GET /api/clients/[id]/zhangqian/latest` — 读取最新 DiscoveryReport
+- [x] **P8.10.S0.11** `PATCH /api/clients/[id]/zhangqian/confirm` — 用户编辑确认后写入 clients/keywords/competitors 等表
 
 **前端（Day 4-5）**：
-- [ ] **P8.10.S0.12** 客户接入向导**简化为 2 步**：
+- [x] **P8.10.S0.12** 客户接入向导**简化为 2 步**：
   - Step 1: 输入域名 + 「🧭 派遣张骞」按钮
   - Step 2: 展示发现结果（卡片式，可编辑：业务信息 / 社媒 / 关键词 / 竞品 / AI 问句） → 「确认入库」
-- [ ] **P8.10.S0.13** 张骞进度面板（实时显示「正在搜索 Instagram… / 正在分析竞品官网…」）—— 复用 P9.0 的环形进度组件
-- [ ] **P8.10.S0.14** 已有客户加 `/dashboard/clients/[id]/zhangqian` 页面，可手动重跑张骞（更新过期发现）
+- [x] **P8.10.S0.13** 张骞进度面板（实时显示「正在搜索 Instagram… / 正在分析竞品官网…」）—— 复用 P9.0 的环形进度组件
+- [x] **P8.10.S0.14** 已有客户加 `/dashboard/clients/[id]/zhangqian` 页面，可手动重跑张骞（更新过期发现）
 
 **验收标准**：
 - 输入 `oztopbuildingsupplies.com.au` → 5 分钟内交付：业务一句话描述 + IG handle + GBP + 5-10 竞品 + 10-20 关键词 + 15 AI 问句
@@ -1204,6 +1204,11 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
   `feat(flywheel): P12.B.3 — SocialContentAdapter 社媒飞轮落库 [P12.B.3]`
 - **P12.B.4** — SEMrush 周快照 cron：GET /api/cron/flywheel-seo-weekly；拉所有有 domain 的客户 domain_ranks 写 flywheel_metrics；9 单元测试；build 通过
   `feat(flywheel): P12.B.4 — SEMrush 周快照 cron [P12.B.4]`
+
+### 2026-05-18
+
+- **P8.10.S0.12** — 新客户向导简化为真正 2 步：移除 5 步 StepIndicator + Steps 2-5 死代码；page.tsx 重写为纯净单页；按钮改为「🧭 派遣张骞」；ROADMAP P8.10.S0.1–14 全部勾选
+  `feat(onboarding): P8.10.S0.12 — 2 步接入向导替换 5 步向导 [P8.10.S0.12]`
 
 #### 🎉 Phase 12.A 总结（2026-05-17 完成，15 commits / 1 天）
 

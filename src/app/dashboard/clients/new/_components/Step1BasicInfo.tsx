@@ -40,7 +40,7 @@ export default function Step1BasicInfo({ initial, onSubmit, loading }: Props) {
     const newErrors: Record<string, string> = {}
     if (!name.trim()) newErrors.name = 'Customer name is required'
     if (!domain.trim()) {
-      newErrors.domain = 'Domain is required for Site Audit (Step 3)'
+      newErrors.domain = '请输入域名'
     } else if (!isValidDomain(domain)) {
       newErrors.domain = 'Please enter a valid domain (e.g., example.com)'
     }
@@ -100,7 +100,7 @@ export default function Step1BasicInfo({ initial, onSubmit, loading }: Props) {
           disabled={loading}
         />
         <p className="mt-1 text-xs text-slate-400">
-          张骞发现 Agent will auto-scan this domain and gather business intelligence.
+          张骞将自动扫描该域名，生成业务画像、竞品、关键词和 AI 问句。
         </p>
         {errors.domain && <p className="mt-1 text-sm text-red-600">{errors.domain}</p>}
       </div>
@@ -126,9 +126,9 @@ export default function Step1BasicInfo({ initial, onSubmit, loading }: Props) {
         <button
           type="submit"
           disabled={loading}
-          className="w-full px-6 py-3 bg-blue-500 hover:bg-blue-600 disabled:bg-slate-400 text-white font-semibold rounded-lg transition-colors"
+          className="w-full px-6 py-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-400 text-white font-semibold rounded-lg transition-colors"
         >
-          {loading ? 'Creating client…' : 'Start Discovery →'}
+          {loading ? '正在创建客户…' : '🧭 派遣张骞'}
         </button>
       </div>
     </form>
