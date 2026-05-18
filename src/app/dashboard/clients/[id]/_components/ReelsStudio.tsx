@@ -417,6 +417,7 @@ export function ReelsStudio({ clientId }: Props) {
         body: JSON.stringify({
           account_id: reelScheduleForm.account_id,
           scheduled_at: new Date(reelScheduleForm.scheduled_at).toISOString(),
+          caption: reelScheduleForm.caption,
         }),
       })
       const d = await res.json()

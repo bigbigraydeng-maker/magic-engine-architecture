@@ -32,6 +32,7 @@ export default function GeoComposerPage() {
   const [directives, setDirectives] = useState<GeoDirective[]>([]);
   const [selected, setSelected] = useState<GeoDirective | null>(null);
   const [loading, setLoading] = useState(true);
+  const [hasMasterBrief, setHasMasterBrief] = useState<boolean | null>(null);
 
   // Editor state (tracks edits to selected directive)
   const [primaryRecommendation, setPrimaryRecommendation] = useState('');
@@ -57,9 +58,10 @@ export default function GeoComposerPage() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [clientRes, geoRes] = await Promise.all([
+      const [clientRes, geoRes, briefRes] = await Promise.all([
         fetch(`/api/clients/${clientId}`),
         fetch(`/api/clients/${clientId}/geo`),
+        fetch(`/api/clients/${clientId}/brief?status=active`),
       ]);
       if (clientRes.ok) {
         const j = await clientRes.json();
@@ -72,6 +74,12 @@ export default function GeoComposerPage() {
         // Auto-select: active first, then latest draft
         const toSelect = list.find(d => d.status === 'active') ?? list[0] ?? null;
         if (toSelect) loadDirective(toSelect);
+      }
+      if (briefRes.ok) {
+        const j = await briefRes.json();
+        setHasMasterBrief(!!(j.brief));
+      } else {
+        setHasMasterBrief(false);
       }
     } finally {
       setLoading(false);
@@ -204,15 +212,38 @@ export default function GeoComposerPage() {
         )}
       </div>
 
+      {/* Master Brief warning */}
+      {hasMasterBrief === false && (
+        <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-4 py-2.5 text-sm text-amber-700">
+          <span>⚠</span>
+          <span>
+            此客户尚未创建 Master Brief，生成内容质量会受影响。
+            建议先完成{' '}
+            <Link href={`/dashboard/clients/${clientId}/strategy`} className="underline font-medium">
+              Master Brief
+            </Link>{' '}
+            再生成 GEO 指令。
+          </span>
+        </div>
+      )}
+
       {/* Status strip */}
       <div className="flex items-center gap-3 flex-wrap">
         {activeDirective ? (
-          <span className="text-sm bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded-full font-medium">
-            ✓ Active: Directive v{activeDirective.version} · {(activeDirective.deployed_pages ?? []).length} page{(activeDirective.deployed_pages ?? []).length !== 1 ? 's' : ''} deployed
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm bg-green-50 text-green-700 border border-green-200 px-3 py-1.5 rounded-full font-medium">
+              ✓ Active: Directive v{activeDirective.version} · {(activeDirective.deployed_pages ?? []).length} page{(activeDirective.deployed_pages ?? []).length !== 1 ? 's' : ''} deployed
+            </span>
+            <Link
+              href={`/dashboard/geo-composer/${clientId}/deploy`}
+              className="text-sm font-medium px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"
+            >
+              部署 Snippet →
+            </Link>
+          </div>
         ) : (
           <span className="text-sm bg-amber-50 text-amber-700 border border-amber-200 px-3 py-1.5 rounded-full font-medium">
-            ⚠ No active directive — generate and activate one below
+            ⚠ 尚无 active 指令 — 在下方生成并激活
           </span>
         )}
 
@@ -227,18 +258,18 @@ export default function GeoComposerPage() {
           <button
             onClick={() => handleGenerate(true)}
             disabled={generating}
-            title="Generate directive using AI Tracker weak spots + Master Brief"
+            title={directives.length === 0 ? '基于 AI Tracker 弱点 + Master Brief 生成指令' : '基于最新 AI Tracker 数据重新生成'}
             className="text-sm font-medium px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white rounded-lg transition-colors flex items-center gap-1.5"
           >
-            {generating ? '⏳ Generating…' : '✨ Regenerate from AI Tracker'}
+            {generating ? '⏳ 生成中…' : directives.length === 0 ? '✨ 从 AI Tracker 生成' : '✨ 从 AI Tracker 重新生成'}
           </button>
           <button
             onClick={() => handleGenerate(false)}
             disabled={generating}
-            title="Generate directive using Master Brief only"
+            title="仅使用 Master Brief 生成，不读取 AI Tracker 数据"
             className="text-sm font-medium px-4 py-2 bg-white border border-gray-300 hover:border-indigo-400 text-gray-700 hover:text-indigo-700 rounded-lg transition-colors"
           >
-            From Brief only
+            仅从 Brief 生成
           </button>
         </div>
       </div>

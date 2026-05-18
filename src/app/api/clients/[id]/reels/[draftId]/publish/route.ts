@@ -9,7 +9,7 @@ export async function POST(
   { params }: { params: { id: string; draftId: string } }
 ) {
   try {
-    const { account_id, scheduled_at } = await req.json()
+    const { account_id, scheduled_at, caption: captionOverride } = await req.json()
     if (!account_id || !scheduled_at) {
       return NextResponse.json({ error: 'account_id and scheduled_at are required' }, { status: 400 })
     }
@@ -36,19 +36,20 @@ export async function POST(
     const fileName = draft.video_url.split('/').pop() ?? 'reel.mp4'
     const media = await uploadMediaFromUrl(draft.video_url, fileName)
 
+    const finalCaption = typeof captionOverride === 'string' ? captionOverride : (draft.fb_caption ?? '')
+
     const result = await schedulePost({
       accountId: account_id,
       provider: account.provider,
       assetType: 'video',
       media,
-      caption: draft.fb_caption ?? '',
+      caption: finalCaption,
       scheduledAt: new Date(scheduled_at).toISOString(),
     })
 
     return NextResponse.json({ success: true, job_id: result.job_id })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
     console.error('[reels/publish]', err)
-    return NextResponse.json({ error: message }, { status: 500 })
+    return NextResponse.json({ error: 'Failed to schedule post. Please try again.' }, { status: 500 })
   }
 }

@@ -14,6 +14,7 @@ import { UrlInput } from './UrlInput';
 import { CodeSnippetBox } from './CodeSnippetBox';
 import { ConfirmDialog } from './ConfirmDialog';
 import { DEPLOYMENT_CONFIG } from '@/lib/deployment-constants';
+import { generateDirectiveHtml } from '@/lib/geo/html-generator';
 import type { GeoDirective } from '@/types/magic-engine';
 
 interface DeploymentFormProps {
@@ -35,13 +36,9 @@ export function DeploymentForm({
   const [isRecording, setIsRecording] = useState(false);
   const [feedback, setFeedback] = useState<{ message: string; isSuccess: boolean } | null>(null);
 
-  // Generate snippet from directive
   const snippet = useMemo(() => {
     if (!directive) return '';
-    return DEPLOYMENT_CONFIG.SNIPPET_TEMPLATE.replace(
-      '{directiveJson}',
-      JSON.stringify(directive, null, 2)
-    ).replace('{versionId}', directive.id || 'latest');
+    return generateDirectiveHtml(directive);
   }, [directive]);
 
   const handleRecordDeployment = async () => {
