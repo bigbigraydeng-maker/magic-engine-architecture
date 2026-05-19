@@ -176,12 +176,12 @@ const defaultConnectors: Connector[] = [
   },
   {
     anchor: 'meta-ads',
-    name: 'Meta 广告（Facebook/Instagram）',
+    name: 'Facebook 主页',
     emoji: '📊',
-    description: '客户广告账户的真实花费、ROAS、受众、创意表现',
+    description: '公开粉丝数、互动率、Meta 广告库投放记录',
     status: 'not_connected',
-    statusLabel: '未连接',
-    setupHint: '通过 Meta Business Manager 系统用户接入。接入后，诊断 ads 维度、Talk to Us 触发、归因数据回流全部自动。Meta MCP 已就位，等待客户授权 token。',
+    statusLabel: '未添加',
+    setupHint: '添加客户的 Facebook 主页 URL，张骞将自动抓取公开粉丝数、互动率及 Meta 广告库投放记录（无需 API token）。',
   },
   {
     anchor: 'reviews',

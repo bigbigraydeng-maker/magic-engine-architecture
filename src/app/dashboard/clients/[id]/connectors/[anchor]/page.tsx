@@ -17,13 +17,19 @@ interface ConnectorMeta {
   /** Anchors that trigger advanced discovery on connect. */
   triggersAdvanced: boolean
   advancedHint: string
+  /** Override for the submit button label (default: "确认连接 →") */
+  buttonLabel?: string
+  /** Override for the success message title (default: "✓ Connector 已连接") */
+  successLabel?: string
+  /** Override for the success sub-message when no advanced job triggered */
+  savedLabel?: string
 }
 
 const CONNECTOR_META: Record<string, ConnectorMeta> = {
   'meta-ads': {
-    name: 'Meta 广告（Facebook/Instagram）',
+    name: 'Facebook 主页',
     emoji: '📊',
-    description: '接入后，张骞将自动补跑 Meta 广告库扫描（客户是否在 Facebook 投广告）+ Facebook 主页真实粉丝和互动数据。',
+    description: '添加客户的 Facebook 主页 URL 后，张骞将自动抓取公开可见的粉丝数、互动率，以及 Meta 广告库中的投放记录（无需 API token，仅读取公开数据）。',
     fields: [
       {
         key: 'page_url',
@@ -33,7 +39,10 @@ const CONNECTOR_META: Record<string, ConnectorMeta> = {
       },
     ],
     triggersAdvanced: true,
-    advancedHint: '保存后张骞将在后台自动补跑高级发现，通常 2–5 分钟完成。',
+    advancedHint: '保存后张骞将在后台自动补跑 Facebook 数据，通常 2–5 分钟完成。',
+    buttonLabel: '添加 Facebook 主页 →',
+    successLabel: '✓ Facebook 主页已添加',
+    savedLabel: '主页已添加。如果还没有基础发现报告，请先运行张骞发现，高级发现将自动补跑。',
   },
   gbp: {
     name: 'Google 商业档案 (GBP)',
@@ -234,14 +243,14 @@ export default function ConnectorDetailPage() {
           >
             {result.ok ? (
               <div className="space-y-1">
-                <p className="text-sm font-semibold text-green-800">✓ Connector 已连接</p>
+                <p className="text-sm font-semibold text-green-800">{meta.successLabel ?? '✓ 已保存'}</p>
                 {result.advancedJobId ? (
                   <p className="text-xs text-green-700">
-                    高级发现已在后台启动（Job ID: {result.advancedJobId}）。张骞将补跑 Facebook / Meta 广告数据，完成后自动写入发现报告。
+                    张骞正在后台补跑数据（Job ID: {result.advancedJobId}），通常 2–5 分钟完成后自动写入发现报告。
                   </p>
                 ) : meta.triggersAdvanced ? (
                   <p className="text-xs text-green-700">
-                    连接已保存。如果还没有基础发现报告，请先运行张骞发现，然后高级发现将自动补跑。
+                    {meta.savedLabel ?? '已保存。如果还没有基础发现报告，请先运行张骞发现，高级发现将自动补跑。'}
                   </p>
                 ) : null}
               </div>
@@ -258,7 +267,7 @@ export default function ConnectorDetailPage() {
             disabled={saving || missingRequired}
             className="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {saving ? '正在保存…' : '确认连接 →'}
+            {saving ? '正在保存…' : (meta.buttonLabel ?? '确认连接 →')}
           </button>
         )}
 

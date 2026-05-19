@@ -32,10 +32,10 @@ const CONNECTOR_CATALOGUE = [
   },
   {
     anchor: 'meta-ads',
-    name: 'Meta 广告（Facebook/Instagram）',
+    name: 'Facebook 主页',
     emoji: '📊',
-    description: '客户广告账户的真实花费、ROAS、受众、创意表现',
-    setupHint: '在下方输入 Facebook 主页 URL，保存后张骞将自动补跑 Meta 广告库扫描 + FB 主页指标。',
+    description: '公开粉丝数、互动率、Meta 广告库投放记录',
+    setupHint: '添加客户的 Facebook 主页 URL，张骞将自动抓取公开粉丝数、互动率及 Meta 广告库投放记录（无需 API token）。',
   },
   {
     anchor: 'reviews',
