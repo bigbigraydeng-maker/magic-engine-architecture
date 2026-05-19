@@ -9,13 +9,15 @@ interface Client {
   domain?: string;
 }
 
-/**
- * /dashboard/ai-visibility
- *
- * Landing page: pick a client to view their AI Visibility Tracker.
- * Reference: ROADMAP.md P7.1.12
- */
+type Tab = 'tracker' | 'geo';
+
+const TABS: { id: Tab; label: string; desc: string }[] = [
+  { id: 'tracker', label: 'AI Tracker',    desc: 'Track how clients rank across AI assistants and search responses.' },
+  { id: 'geo',     label: 'GEO Composer',  desc: 'Generate AI recommendation directives and embed them in client websites.' },
+];
+
 export default function AiVisibilityIndexPage() {
+  const [tab, setTab] = useState<Tab>('tracker');
   const [clients, setClients] = useState<Client[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -37,14 +39,38 @@ export default function AiVisibilityIndexPage() {
 
   useEffect(() => { fetchClients(); }, [fetchClients]);
 
+  const active = TABS.find(t => t.id === tab)!;
+
+  const clientHref = (id: string) =>
+    tab === 'tracker'
+      ? `/dashboard/ai-visibility/${id}`
+      : `/dashboard/geo-composer/${id}`;
+
+  const badgeLabel = tab === 'tracker' ? 'View Rankings' : 'Open Composer';
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">AI Visibility Tracker</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Track how your clients rank across major AI assistants and search responses.
-        </p>
+        <h1 className="text-2xl font-bold text-gray-900">AI 可见度</h1>
+        <p className="text-sm text-gray-500 mt-1">{active.desc}</p>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 bg-gray-100 p-1 rounded-lg w-fit">
+        {TABS.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              tab === t.id
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
       </div>
 
       {/* Error */}
@@ -54,7 +80,7 @@ export default function AiVisibilityIndexPage() {
         </div>
       )}
 
-      {/* Loading */}
+      {/* Client Grid */}
       {loading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {[1, 2, 3].map(i => (
@@ -73,7 +99,7 @@ export default function AiVisibilityIndexPage() {
           {clients.map(client => (
             <Link
               key={client.id}
-              href={`/dashboard/ai-visibility/${client.id}`}
+              href={clientHref(client.id)}
               className="bg-white rounded-xl border border-gray-200 p-5 hover:border-indigo-300 hover:shadow-sm transition-all group"
             >
               <div className="flex items-start justify-between">
@@ -88,8 +114,12 @@ export default function AiVisibilityIndexPage() {
                 <span className="text-gray-300 group-hover:text-indigo-400 text-lg ml-2 flex-shrink-0">→</span>
               </div>
               <div className="mt-3 flex items-center gap-2">
-                <span className="text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full">
-                  View Rankings
+                <span className={`text-xs px-2 py-0.5 rounded-full ${
+                  tab === 'tracker'
+                    ? 'bg-indigo-50 text-indigo-600'
+                    : 'bg-violet-50 text-violet-600'
+                }`}>
+                  {badgeLabel}
                 </span>
               </div>
             </Link>

@@ -29,16 +29,15 @@ const adminSections: NavSection[] = [
       { href: '/dashboard/keywords',      label: 'SEO Intelligence', emoji: '🔍' },
       { href: '/dashboard/ai-visibility', label: 'AI 可见度',        emoji: '🤖' },
       { href: '/dashboard/content',       label: 'Social Matrix',    emoji: '📱' },
-      { href: '/dashboard/geo-composer',  label: 'GEO Composer',     emoji: '🌐' },
       { label: 'Ads Intelligence', emoji: '📢', soon: true },
+      { label: '口碑管理',          emoji: '⭐', soon: true },
+      { label: '竞品分析',          emoji: '🏆', soon: true },
     ],
   },
   {
     title: '工具',
     items: [
       { href: '/dashboard/visuals',               label: 'Launch Hub',     emoji: '🚀' },
-      { href: '/dashboard/topics',                label: 'Topics',         emoji: '💡' },
-      { href: '/dashboard/tasks',                 label: 'Tasks',          emoji: '✅' },
       { href: '/dashboard/analytics',             label: 'Analytics',      emoji: '📈' },
       { href: '/dashboard/reports',               label: 'Reports',        emoji: '📊' },
       { href: '/dashboard/admin/billing-monitor', label: 'Billing Monitor',emoji: '💳' },
