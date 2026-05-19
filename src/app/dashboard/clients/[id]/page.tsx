@@ -263,6 +263,90 @@ function DiagnosticPanel({ clientId }: { clientId: string }) {
   )
 }
 
+// ─── Workflow Progress ────────────────────────────────────────────────────────
+
+function WorkflowProgress({
+  discoveryConfirmed,
+  hasActiveBrief,
+  clientId,
+}: {
+  discoveryConfirmed: boolean
+  hasActiveBrief: boolean | null
+  clientId: string
+}) {
+  const steps = [
+    {
+      label: '品牌扫描',
+      sublabel: '张骞',
+      done: discoveryConfirmed,
+      href: `/dashboard/clients/${clientId}/zhangqian`,
+    },
+    {
+      label: 'Master Brief',
+      sublabel: '华佗',
+      done: hasActiveBrief === true,
+      href: null,
+    },
+    {
+      label: '执行优化',
+      sublabel: '鲁班',
+      done: false,
+      href: `/dashboard/clients/${clientId}/execution`,
+    },
+  ]
+
+  const firstPending = steps.findIndex(s => !s.done)
+
+  return (
+    <div className="flex items-center gap-0 bg-white border border-gray-200 rounded-xl px-5 py-3">
+      {steps.map((step, i) => {
+        const isActive = i === firstPending
+        const isDone   = step.done
+        const inner = (
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors ${
+            isActive ? 'bg-indigo-50' : ''
+          }`}>
+            <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold flex-shrink-0 ${
+              isDone  ? 'bg-green-500 text-white'
+              : isActive ? 'bg-indigo-600 text-white'
+              : 'bg-gray-200 text-gray-400'
+            }`}>
+              {isDone ? '✓' : i + 1}
+            </div>
+            <div>
+              <p className={`text-xs font-semibold leading-none ${
+                isDone ? 'text-green-700' : isActive ? 'text-indigo-700' : 'text-gray-400'
+              }`}>{step.label}</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">{step.sublabel}</p>
+            </div>
+          </div>
+        )
+        return (
+          <div key={step.label} className="flex items-center">
+            {step.href && !isDone
+              ? <a href={step.href}>{inner}</a>
+              : inner
+            }
+            {i < steps.length - 1 && (
+              <div className={`w-8 h-px mx-1 flex-shrink-0 ${
+                steps[i].done ? 'bg-green-300' : 'bg-gray-200'
+              }`} />
+            )}
+          </div>
+        )
+      })}
+      <div className="ml-auto">
+        <a
+          href={`/dashboard/clients/${clientId}/execution`}
+          className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+        >
+          执行看板 →
+        </a>
+      </div>
+    </div>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ClientDetailPage() {
@@ -273,6 +357,7 @@ export default function ClientDetailPage() {
   const [client, setClient] = useState<Client | null>(null);
   const [loading, setLoading] = useState(true);
   const [hasActiveBrief, setHasActiveBrief] = useState<boolean | null>(null);
+  const [discoveryConfirmed, setDiscoveryConfirmed] = useState<boolean>(false);
 
   // ?exec=<itemId> 来自执行看板的「在社媒矩阵中执行」跳转：
   // 自动打开 GenerationDrawer 并把生成的内容关联回该执行项（内容飞轮闭环）
@@ -286,9 +371,12 @@ export default function ClientDetailPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [clientRes, briefRes] = await Promise.all([
+      const [clientRes, briefRes, discoveryRes] = await Promise.all([
         fetch(`/api/clients/${clientId}`),
         fetch(`/api/clients/${clientId}/brief?status=active`),
+        fetch(`/api/clients/${clientId}/zhangqian/latest`, {
+          headers: { Authorization: `Bearer ${API_KEY}` },
+        }).catch(() => null),
       ]);
       if (clientRes.ok) {
         const { client: c } = await clientRes.json();
@@ -299,6 +387,10 @@ export default function ClientDetailPage() {
         setHasActiveBrief(Boolean(brief));
       } else {
         setHasActiveBrief(false);
+      }
+      if (discoveryRes?.ok) {
+        const data = await discoveryRes.json();
+        setDiscoveryConfirmed(Boolean(data?.discovery?.confirmed_at));
       }
     } finally {
       setLoading(false);
@@ -368,6 +460,13 @@ export default function ClientDetailPage() {
           </button>
         </div>
       </div>
+
+      {/* Workflow progress — 张骞 → MB → 执行 */}
+      <WorkflowProgress
+        discoveryConfirmed={discoveryConfirmed}
+        hasActiveBrief={hasActiveBrief}
+        clientId={clientId}
+      />
 
       {/* Brand Health Widget — plays seeding role, links to prescription */}
       <BrandHealthWidget clientId={clientId} />

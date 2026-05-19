@@ -38,7 +38,7 @@ export default function KeywordsPage() {
   const [selectedStatus, setSelectedStatus] = useState('');
   const [selectedIntent, setSelectedIntent] = useState('');
 
-  // SEMrush Fetch Panel
+  // Keyword fetch panel
   const [fetchClient, setFetchClient] = useState('');
   const [domain, setDomain] = useState('');
   const [seedKeywords, setSeedKeywords] = useState('');
@@ -149,14 +149,14 @@ export default function KeywordsPage() {
   return (
     <div className="p-6 space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Keywords</h1>
-        <p className="text-sm text-gray-500 mt-1">SEO keyword library & SEMrush operations</p>
+        <h1 className="text-2xl font-bold text-gray-900">关键词情报</h1>
+        <p className="text-sm text-gray-500 mt-1">SEO keyword library — discover, approve & track keywords across clients</p>
       </div>
 
-      {/* SEMrush Fetch Panel */}
+      {/* Keyword Fetch Panel */}
       <div className="bg-white rounded-xl border border-gray-200 p-5">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-base font-semibold text-gray-900">🔍 SEMrush Keyword Fetch</h2>
+          <h2 className="text-base font-semibold text-gray-900">🔍 关键词抓取</h2>
         </div>
         <form onSubmit={handleFetch} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -269,7 +269,7 @@ export default function KeywordsPage() {
         {loading ? (
           <div className="py-12 text-center text-gray-400 text-sm">Loading...</div>
         ) : displayedKeywords.length === 0 ? (
-          <div className="py-12 text-center text-gray-400 text-sm">No keywords found. Use SEMrush Fetch above to get keywords.</div>
+          <div className="py-12 text-center text-gray-400 text-sm">No keywords found. Use the keyword fetch panel above to get started.</div>
         ) : (
           <table className="w-full min-w-[800px]">
             <thead>
