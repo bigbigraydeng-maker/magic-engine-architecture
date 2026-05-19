@@ -269,6 +269,7 @@ export interface CompetitorKeywordsRequest {
   limit?: number
   min_volume?: number
   db?: string
+  production_package_id?: string
 }
 
 export interface KeywordGapRequest {

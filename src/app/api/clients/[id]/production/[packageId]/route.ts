@@ -61,7 +61,7 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
   const reelIds     = safeItems.filter(i => i.content_type === 'reel').map(i => i.reel_id as string)
   const visualIds   = safeItems.filter(i => i.content_type === 'visual_asset').map(i => i.visual_asset_id as string)
 
-  const [postsResult, blogsResult, reelsResult, visualsResult, adsSnapshotsResult, reputationReviewsResult] = await Promise.all([
+  const [postsResult, blogsResult, reelsResult, visualsResult, adsSnapshotsResult, reputationReviewsResult, competitorSnapshotsResult] = await Promise.all([
     postIds.length
       ? supabaseAdmin
           .from('content_posts')
@@ -98,6 +98,12 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
       .select('id, status, summary, created_at')
       .eq('production_package_id', packageId)
       .order('created_at', { ascending: false }),
+    // P13.E-pre: competitor snapshots linked to this package (dimension='competitor')
+    supabaseAdmin
+      .from('competitor_snapshots')
+      .select('id, competitor_domains, semrush_db, min_volume, keywords_count, units_consumed, top_keywords, created_at')
+      .eq('production_package_id', packageId)
+      .order('created_at', { ascending: false }),
   ])
 
   // 5. Build lookup maps for O(1) merge
@@ -125,7 +131,8 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
     campaign:            campaignResult.data      ?? null,
     execution_item:      executionItemResult.data ?? null,
     items:               enrichedItems,
-    ads_snapshots:       adsSnapshotsResult.data  ?? [],
-    reputation_reviews:  reputationReviewsResult.data ?? [],
+    ads_snapshots:         adsSnapshotsResult.data       ?? [],
+    reputation_reviews:    reputationReviewsResult.data   ?? [],
+    competitor_snapshots:  competitorSnapshotsResult.data ?? [],
   })
 }
