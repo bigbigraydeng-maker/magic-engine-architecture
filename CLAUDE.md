@@ -217,10 +217,10 @@ git push origin master   # 触发 Render 部署
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P13.C** | Reels + Visual 接入 production package（`/api/clients/[id]/reels/generate` + visual asset 路由接入 `production_package_id`） | ⭐ |
+| **P13.D** | Ads + Competitor + Reputation 接入 production package（13.C 完成，13.D 待排期） | 📋 |
 | **P8.10.S0.23 Env 配置** | Render 加 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS`（JSON 字符串），并让客户将服务账号邮箱加入 GSC 验证用户 | 📋 |
 
-**状态校准（2026-05-21）**：P13.B 全部 2 个任务完成（Blog 路由接入 + 列表页，build ✅）。P13.A + P13.B 全部完成。P8.3.2 + P8.10.S0.22 生产环境手动操作已完成。
+**状态校准（2026-05-21）**：P13.C 完成（reels/generate + visual/image + visual/video 三条链路接入 production_package_id，build ✅）。P13.A + P13.B + P13.C 全部完成。P8.3.2 + P8.10.S0.22 生产环境手动操作已完成。
 
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 

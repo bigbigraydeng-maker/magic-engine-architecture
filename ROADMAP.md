@@ -1227,11 +1227,14 @@ Production Item    = 订单里的具体产物
 - [x] **P13.B.1** — Blog 生成路由接入 `production_package_id`：`GenerateBlogRequest` 新增字段；`persistAndReturn` 落库后自动创建 `production_items` 行（content_type='blog_post'）并回写 `blog_posts.production_item_id`；覆盖 SEO（seo_only/unified）+ AI Visibility（geo_only/unified）两个 dimension
 - [x] **P13.B.2** — 客户级生产包列表页：`GET /api/clients/[id]/production`（支持 dimension/status 过滤，2 次查询批量计算 item_count）；`/dashboard/clients/[id]/production` 列表页（维度 tab 过滤、全部模式按 dimension 分组展示，点击跳转详情页）
 
-### Phase 13.C–E（预告，未排期）
+### Phase 13.C — Reels + Visual 接入（3 commit，已完成）
+
+- [x] **P13.C** — Reels + Visual 生成路由接入 `production_package_id`：`reels/generate` POST body 新增字段，插入 reels_drafts 后异步创建 `production_items`(content_type='reel') + 回写 `reels_drafts.production_item_id`；`visual/image` + `visual/video` 同理，content_type='visual_asset'；三条链路错误均非阻断，build ✅
+
+### Phase 13.D–E（预告，未排期）
 
 | Phase | 内容 | 触发条件 |
 |---|---|---|
-| 13.C | Reels + Visual 接入 | 13.B 完成 |
 | 13.D | Ads + Competitor + Reputation 接入 | 13.C 完成 |
 | 13.E | Flywheel feedback 闭环（package → flywheel_actions → outcomes） | 13.D 完成 |
 
@@ -1550,6 +1553,10 @@ AU / NZ（当前）          新市场（未来）
 
 > 每次上线新功能时在此追加。格式：**[完成日期]** — Phase ID + 描述 + Commit 引用。
 > 此日志从 CLAUDE.md §十五.C 迁移至此（2026-05-10），CLAUDE.md 不再维护历史日志。
+
+### 2026-05-21（续）
+
+- **P13.C** — Reels/generate + visual/image + visual/video 三条生成链路接入 production_package_id，异步创建 production_items + 回写 production_item_id，build ✅
 
 ### 2026-05-21
 
