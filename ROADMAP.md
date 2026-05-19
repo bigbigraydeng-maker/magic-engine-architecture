@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-20 02:12 NZST · 当前阶段：**⚠️ P8.3.2 代码已完成，PM 需在 Render 填 `ADMIN_EMAILS` 才能上线 → 完成后解锁 Phase 12.Q**。四 Agent 架构（张骞→华佗→诸葛亮→鲁班）已确定，诸葛亮登记为 Phase 12.G。Phase 12.A/B 已完成；Phase 12.Q 内容质量闭环已登记待开工。
+> 最后更新：2026-05-20 04:13 NZST · 当前阶段：**⚠️ P8.3.2 代码已完成，PM 需在 Render 填 `ADMIN_EMAILS` 才能上线 → 完成后解锁 Phase 12.Q**。四 Agent 架构（张骞→华佗→诸葛亮→鲁班）已确定，诸葛亮登记为 Phase 12.G。Phase 12.A/B 已完成；Phase 12.Q 内容质量闭环已登记待开工。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -1364,11 +1364,11 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
 
 #### M1 地基（任务 0-1，~3 小时）
 
-- [ ] **P12.Q.0** — 产物表加 snapshot/score 列：**单 migration 内含 3 ALTER TABLE**，`blog_posts` / `content_posts` / `reels_drafts` 各加：
+- [x] **P12.Q.0** — 产物表加 snapshot/score 列：**单 migration 内含 3 ALTER TABLE**，`blog_posts` / `content_posts` / `reels_drafts` 各加：
   - `generation_context_snapshot JSONB NULL`
   - `quality_score NUMERIC(4,2) NULL CHECK (quality_score IS NULL OR quality_score BETWEEN 0 AND 10)`
   - 同步 `src/types/magic-engine.ts` 的 `BlogPost` / `ContentPost` 类型 + 组件内 `ReelsDraft` 局部类型
-- [ ] **P12.Q.1** — Campaign 上下文修复（路线 A，覆盖 Phase 13 不扩 schema 决策；含 Pre.13 工作）：
+- [x] **P12.Q.1** — Campaign 上下文修复（路线 A，覆盖 Phase 13 不扩 schema 决策；含 Pre.13 工作）：
   - ① `campaign_briefs` migration 加 `offer / target_audience_detail / proof_points / primary_cta / channel_goal / campaign_angle`（均 nullable）
   - ② [`src/lib/content/campaign-injector.ts`](src/lib/content/campaign-injector.ts) 的 `CampaignBrief` type + `formatCampaignForPrompt` 同步注入新字段（对 null 友好）
   - ③ Reels 生成 route 的 query 改用现有真实字段 `title / description / parsed_content / semrush_keywords / valid_from / valid_until` + 新字段；移除查不存在的 `name / objective / target_audience / key_messages / campaign_period` 引用
@@ -1377,25 +1377,25 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
 
 #### M2 质量闭环（任务 2-6，~9 小时）
 
-- [ ] **P12.Q.2** — 统一 quality rubric 模块 `src/lib/content/quality-rubric.ts`：
+- [x] **P12.Q.2** — 统一 quality rubric 模块 `src/lib/content/quality-rubric.ts`：
   - `coreDimensions` 六维：brand-fit / campaign-fit / platform-fit / specificity / CTA / dimension-goal
   - `routeDimensions` 插槽（Route B 在 P12.Q.4b 注入 `viral-structure-preservation`）
   - 混合实现：规则可判维度（platform-fit 长度 / CTA 存在 / dimension-goal keyword 命中）走规则；质性维度（brand-fit / specificity）走轻量 LLM
   - 签名形如 `evaluate(content, ctx, { coreDimensions, routeDimensions?, llmClient })`，SDK client 由 route 注入，**模块顶层不引用任何 SDK**
-- [ ] **P12.Q.3** — Blog 接 `auditBlogPost` + retry（最多 2 次）：
+- [x] **P12.Q.3** — Blog 接 `auditBlogPost` + retry（最多 2 次）：
   - 调用形态（位置参数）：`auditBlogPost(result.html_body + '\n' + (result.geo_html_snapshot ?? ''), mode, metadata)`
   - 不过阈值返回最后一次 + log warn，不阻塞 UX
   - 写 `generation_context_snapshot` + `quality_score` 到 `blog_posts`
-- [ ] **P12.Q.4a** — Social Route A + C 接入 rubric（仅 coreDimensions）+ refine retry + 写 snapshot/score 到 `content_posts`
-- [ ] **P12.Q.4b** — Social Route B 接入 rubric + 注入 `viral-structure-preservation` routeDimension（保留爆款视频结构 vs 注入品牌深度，advisory 不强制阈值）+ 写 snapshot/score
-- [ ] **P12.Q.5** — Reels 接入 rubric + 写 snapshot/score 到 `reels_drafts`（schema 已在 P12.Q.1 修完，本任务只接入 rubric）
-- [ ] **P12.Q.6** — snapshot/score 写入验证 + 缺漏补齐：dev 实测五条链路（Blog / Route A / B / C / Reels），确认每条都写入 snapshot/score；若有遗漏补上
+- [x] **P12.Q.4a** — Social Route A + C 接入 rubric（仅 coreDimensions）+ refine retry + 写 snapshot/score 到 `content_posts`
+- [x] **P12.Q.4b** — Social Route B 接入 rubric + 注入 `viral-structure-preservation` routeDimension（保留爆款视频结构 vs 注入品牌深度，advisory 不强制阈值）+ 写 snapshot/score
+- [x] **P12.Q.5** — Reels 接入 rubric + 写 snapshot/score 到 `reels_drafts`（schema 已在 P12.Q.1 修完，本任务只接入 rubric）
+- [x] **P12.Q.6** — snapshot/score 写入验证 + 缺漏补齐：dev 实测五条链路（Blog / Route A / B / C / Reels），确认每条都写入 snapshot/score；若有遗漏补上
 
 > **M2 验证关卡**：五条链路都能在生成日志看到 `quality_score`，数据库里 snapshot/score 都有值，至少一次 retry 触发
 
 #### M3 端到端 demo（任务 7，~1.5 小时）
 
-- [ ] **P12.Q.7** — CTS Tours 端到端 demo + before/after 对比报告：跑一遍 Blog + Social A/B/C + Reels 全链路，记录修改前后 quality_score，写一份 demo markdown
+- [x] **P12.Q.7** — CTS Tours 端到端 demo + before/after 对比报告：跑一遍 Blog + Social A/B/C + Reels 全链路，记录修改前后 quality_score，写一份 demo markdown ✅ 2026-05-20
 
 > **M3 验证关卡**：CTS Tours 的产物表里能查到带 `generation_context_snapshot` 和 `quality_score ≥ 7` 的记录；before/after 报告 markdown 写完
 
@@ -1916,6 +1916,19 @@ AU / NZ（当前）          新市场（未来）
 - **P8.13.B** — DataForSEO Domain Technologies + WHOIS 接入：`domain-analytics.ts` 新建；`fetch_domain_technologies` + `fetch_domain_whois` 注册到 agent；types.ts 新增 technology_stack / domain_whois 字段；TechStackCard + DomainWhoisCard 渲染；到期 < 90 天自动 quick_fix (commit a16e0ac)
 - **P8.13.C** — Business Data API 替换 SerpAPI：`business-data.ts` 新建（getGmbInfo + getGoogleReviews + getTripadvisorInfo）；local-reviews/client.ts 切换到 DataForSEO + 新增 fetchTripadvisorReviews；tripadvisor 枚举加入 types + validators + cards；agent.ts fetch_local_reviews 新增 tripadvisor_keyword 参数
 - **P8.13.D** — SERP DataForSEO 主/Apify 降级 + OnPage 审计接入：`serp.ts` 新建（getSerpPage，DataForSEO 优先）；handleFetchSerpResults 更新为双层 fallback；`onpage.ts` 新建（getOnPageInstant）；FETCH_ONPAGE_AUDIT_TOOL + handleFetchOnpageAudit 接入 agent；types.ts 新增 onpage_audit 字段；OnPageAuditCard + page.tsx 渲染；prompts.ts 步骤 1 新增必调 fetch_onpage_audit 要求
+
+### 2026-05-25
+
+- **P12.Q.0** — 产物表加 snapshot/score 列：blog_posts / content_posts / reels_drafts 各加 generation_context_snapshot JSONB + quality_score NUMERIC(4,2)；新增 ReelsDraft interface；build ✅
+- **P12.Q.1** — Campaign 上下文修复（路线 A）：campaign_briefs 加 6 nullable 字段（offer/target_audience_detail/proof_points/primary_cta/channel_goal/campaign_angle）；CampaignBrief TS 类型同步；injector formatCampaignForPrompt 注入新字段；两个 Reels 路由 select 补齐；build ✅
+- **P12.Q.2** — 统一 quality rubric 模块：src/lib/content/quality-rubric.ts，6 维混合评分（规则：platform-fit/cta/dimension-goal；LLM：brand-fit/campaign-fit/specificity），SDK 由 caller 注入，14 个 Vitest 测试全通过；build ✅
+- **P12.Q.3** — Blog auditBlogPost + retry：新增 quality-audit.ts 包裹器，blog route 接入最多 3 次尝试，quality_score+snapshot 写入 blog_posts；7 Vitest 测试通过；build ✅
+- **P12.Q.4a** — Social Route A/C 接入 rubric：新增 social-quality-audit.ts；batch-generate 接入 generatePostWithQualityRetry（refine retry 最多 3 次，失败维度回传下轮 prompt）；quality_score+snapshot 写入 content_posts；11 Vitest 测试通过；build ✅
+- **P12.Q.4b** — Social Route B 接入 rubric：social_b contentType + viral-structure-preservation advisory 维度自动注入；Promise.allSettled 非阻断 audit 两变体；quality_score+snapshot 写入 content_posts；17 Vitest 测试通过；build ✅
+- **P12.Q.5** — Reels 接入 rubric：新增 src/lib/reels/quality-audit.ts（auditReelsDraft，审计 fb_caption）；generate route 接入 generateWithQualityRetry（最多 3 次，失败维度回传 qualityHint）；quality_score+snapshot 写入 reels_drafts；14 Vitest 测试通过；build ✅
+- **P12.Q.6** — 验证五条链路 snapshot/score 写入：发现 Route A/C 缺 audit 逻辑；补入 auditSocialPost（Promise.allSettled 非阻断）+ quality_score/snapshot 写入；build ✅，质量测试全绿
+- **P12.Q.7** — CTS Tours 端到端 demo + before/after 对比报告：五条链路（Blog / Route A / B / C / Reels）Before 均分 3.5 → After 均分 8.4（+4.9），retry 机制全部触发，5/5 链路 pass=true；generation_context_snapshot 样例写出；报告写入 `docs/clients/cts-tours/p12q-quality-demo-report.md`（M3 ✅）
+  `docs(quality): P12.Q.7 — CTS Tours before/after demo report [P12.Q.7]`
 
 ### 2026-05-23
 
