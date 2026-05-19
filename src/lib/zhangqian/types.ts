@@ -291,6 +291,37 @@ export interface DiscoveryReport {
   } | null
 
   /**
+   * On-page technical SEO audit for the homepage (P8.13.D.3).
+   * Populated by the fetch_onpage_audit tool; null when not checked.
+   */
+  onpage_audit?: {
+    status_code:     number | null
+    title:           string | null
+    description:     string | null
+    canonical:       string | null
+    h1:              string | null
+    internal_links:  number | null
+    external_links:  number | null
+    images_no_alt:   number | null
+    images_total:    number | null
+    word_count:      number | null
+    core_web_vitals: {
+      lcp: number | null
+      cls: number | null
+      tbt: number | null
+    } | null
+    checks: {
+      no_title:         boolean
+      no_description:   boolean
+      no_h1:            boolean
+      missing_alt_text: boolean
+      broken_links:     boolean
+      redirect_chain:   boolean
+      https:            boolean
+    }
+  } | null
+
+  /**
    * Advanced discovery payload — populated after a connector (meta-ads / gbp)
    * is authorized and the advanced pass runs. Never overwrites the basic fields.
    */

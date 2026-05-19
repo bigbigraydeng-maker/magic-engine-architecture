@@ -26,6 +26,7 @@ import {
   AdvancedFacebookCard,
   TechStackCard,
   DomainWhoisCard,
+  OnPageAuditCard,
 } from './cards'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -240,6 +241,11 @@ function DiscoveryReviewCards({
         )}
         {p.domain_whois && (
           <DomainWhoisCard data={p.domain_whois} />
+        )}
+
+        {/* P8.13.D — On-page SEO audit */}
+        {p.onpage_audit && (
+          <OnPageAuditCard data={p.onpage_audit} />
         )}
       </div>
 

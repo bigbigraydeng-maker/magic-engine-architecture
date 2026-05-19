@@ -909,22 +909,20 @@ Layer 5: Export（新增）— P8.10.S5
 
 > 用 DataForSEO SERP API 替换自建 SERP scraper；新增 OnPage 技术审计 + Backlinks 权重。
 
-- [ ] **P8.13.D.1** `src/lib/dataforseo/serp.ts` — SERP API AI Overview 封装
-  - `getAiOverview(query, location?, language?)` → 调用 `/serp/google/organic/live/advanced`，提取 `ai_overview_text` + `ai_overview_sources[]` + `organic_results[]` + `paid_advertiser_domains[]`
-  - 替换现有 `apify/google-search-scraper.ts` 的 SERP 功能（Apify 端点保留但降级为 fallback）
+- [x] **P8.13.D.1** `src/lib/dataforseo/serp.ts` — SERP API AI Overview 封装
+  - `getSerpPage(query, countryCode?)` → 调用 `/serp/google/organic/live/advanced`，提取 `ai_overview_text` + `ai_overview_sources[]` + `organic_results[]` + `paid_advertiser_domains[]`
+  - `handleFetchSerpResults` 更新：DataForSEO 优先，Apify `scrapeGoogleSerp` 降级 fallback
   - 验收：`best tour operator in New Zealand` 跑出 AI Overview 文本 + 引用来源
 
-- [ ] **P8.13.D.2** `src/lib/dataforseo/backlinks.ts` — Backlinks Summary 封装
-  - `getBacklinksSummary(domain)` → 调用 `/backlinks/summary/live`，返回 `{ backlinks, referring_domains, referring_main_domains, dofollow, spam_score, domain_rank }`
-  - 写入 `domain_whois.backlinks`（或单独字段 `backlinks_summary`）
+- [x] **P8.13.D.2** Backlinks Summary — 已由 `src/lib/dataforseo/client.ts` 中 `getBacklinkSummary()` + `domain_whois.backlinks` / `referring_domains` 字段覆盖，无需新文件
 
-- [ ] **P8.13.D.3** `src/lib/dataforseo/onpage.ts` — OnPage Instant Pages 封装
-  - `getOnPageInstant(url)` → 调用 `/on_page/instant_pages`，返回 `{ checks, core_web_vitals, meta_title, meta_description, canonical, internal_links_count, images_without_alt }`
-  - 新增 `DiscoveryReport.onpage_audit` 字段
-  - 张骞 agent 新增 tool `fetch_onpage_audit`（仅在 domain 有 homepage URL 时调用）
-  - 问题写入 `diagnosis.actions.quick_fix`（如：「缺少 meta description」「图片无 alt 标签」）
+- [x] **P8.13.D.3** `src/lib/dataforseo/onpage.ts` — OnPage Instant Pages 封装
+  - `getOnPageInstant(url)` → 调用 `/on_page/instant_pages`，返回完整 `OnPageResult`（checks / core_web_vitals / meta / links / images）
+  - 新增 `DiscoveryReport.onpage_audit` 字段（types.ts）
+  - `FETCH_ONPAGE_AUDIT_TOOL` + `handleFetchOnpageAudit` 接入 agent.ts；步骤 1 协议要求必须调用
+  - 问题自动写入 diagnosis.actions.quick_fix 的 summary 指引
 
-- [ ] **P8.13.D.4** 张骞报告页新增 OnPageAuditCard（SEO 健康度可视化：Core Web Vitals + 关键 checks）
+- [x] **P8.13.D.4** 张骞报告页新增 `OnPageAuditCard`（Core Web Vitals + pass/fail badges + 问题列表）；page.tsx 接入
 
 ---
 
@@ -1744,6 +1742,7 @@ AU / NZ（当前）          新市场（未来）
 - **P8.13.A** — DataForSEO Labs 关键词+竞品接入：`labs.ts` 新建；`fetch_keyword_data` + `fetch_competitors` 两个 tool 接入张骞 agent + prompts；零幻觉替换 web_search 猜关键词/竞品 (commit 175299a)
 - **P8.13.B** — DataForSEO Domain Technologies + WHOIS 接入：`domain-analytics.ts` 新建；`fetch_domain_technologies` + `fetch_domain_whois` 注册到 agent；types.ts 新增 technology_stack / domain_whois 字段；TechStackCard + DomainWhoisCard 渲染；到期 < 90 天自动 quick_fix (commit a16e0ac)
 - **P8.13.C** — Business Data API 替换 SerpAPI：`business-data.ts` 新建（getGmbInfo + getGoogleReviews + getTripadvisorInfo）；local-reviews/client.ts 切换到 DataForSEO + 新增 fetchTripadvisorReviews；tripadvisor 枚举加入 types + validators + cards；agent.ts fetch_local_reviews 新增 tripadvisor_keyword 参数
+- **P8.13.D** — SERP DataForSEO 主/Apify 降级 + OnPage 审计接入：`serp.ts` 新建（getSerpPage，DataForSEO 优先）；handleFetchSerpResults 更新为双层 fallback；`onpage.ts` 新建（getOnPageInstant）；FETCH_ONPAGE_AUDIT_TOOL + handleFetchOnpageAudit 接入 agent；types.ts 新增 onpage_audit 字段；OnPageAuditCard + page.tsx 渲染；prompts.ts 步骤 1 新增必调 fetch_onpage_audit 要求
 
 ### 2026-05-23
 

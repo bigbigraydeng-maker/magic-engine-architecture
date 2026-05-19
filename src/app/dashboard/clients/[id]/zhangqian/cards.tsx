@@ -1254,3 +1254,145 @@ export function DomainWhoisCard({ data }: { data: DomainWhoisData }) {
     </CardShell>
   )
 }
+
+// ─── OnPageAuditCard ──────────────────────────────────────────────────────────
+
+interface OnPageAuditData {
+  status_code:     number | null
+  title:           string | null
+  description:     string | null
+  canonical:       string | null
+  h1:              string | null
+  internal_links:  number | null
+  external_links:  number | null
+  images_no_alt:   number | null
+  images_total:    number | null
+  word_count:      number | null
+  core_web_vitals: {
+    lcp: number | null
+    cls: number | null
+    tbt: number | null
+  } | null
+  checks: {
+    no_title:         boolean
+    no_description:   boolean
+    no_h1:            boolean
+    missing_alt_text: boolean
+    broken_links:     boolean
+    redirect_chain:   boolean
+    https:            boolean
+  }
+}
+
+export function OnPageAuditCard({ data }: { data: OnPageAuditData }) {
+  const issues = [
+    data.checks.no_title        && '缺少 <title>',
+    data.checks.no_description  && '缺少 meta description',
+    data.checks.no_h1           && '缺少 H1',
+    data.checks.missing_alt_text && `${data.images_no_alt ?? '?'} 张图片缺 alt`,
+    data.checks.redirect_chain  && '存在重定向链',
+    !data.checks.https          && '未启用 HTTPS',
+    data.checks.broken_links    && '有断链',
+  ].filter(Boolean) as string[]
+
+  const formatMs = (ms: number | null) => (ms !== null ? `${ms.toFixed(0)} ms` : '—')
+  const formatNum = (n: number | null) => (n !== null ? n.toLocaleString() : '—')
+
+  return (
+    <CardShell title="页面 SEO 审计">
+      <div className="flex flex-col gap-3">
+
+        {/* Pass/fail badges */}
+        <div className="flex flex-wrap gap-1.5">
+          {[
+            { label: 'HTTPS',       ok: data.checks.https },
+            { label: 'Title',       ok: !data.checks.no_title },
+            { label: 'Description', ok: !data.checks.no_description },
+            { label: 'H1',          ok: !data.checks.no_h1 },
+            { label: 'Alt Text',    ok: !data.checks.missing_alt_text },
+          ].map(({ label, ok }) => (
+            <span
+              key={label}
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
+                ok
+                  ? 'bg-green-50 text-green-700 border border-green-200'
+                  : 'bg-red-50 text-red-700 border border-red-200'
+              }`}
+            >
+              {ok ? '✓' : '✗'} {label}
+            </span>
+          ))}
+        </div>
+
+        {/* Issues list */}
+        {issues.length > 0 && (
+          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
+            <p className="text-xs font-semibold text-amber-700 mb-1">需修复 ({issues.length})</p>
+            <ul className="space-y-0.5">
+              {issues.map(issue => (
+                <li key={issue} className="text-xs text-amber-800">• {issue}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Core Web Vitals */}
+        {data.core_web_vitals && (
+          <div>
+            <p className="text-xs text-gray-400 mb-1.5">Core Web Vitals</p>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { label: 'LCP', value: formatMs(data.core_web_vitals.lcp), warn: (data.core_web_vitals.lcp ?? 0) > 2500 },
+                { label: 'TBT', value: formatMs(data.core_web_vitals.tbt), warn: (data.core_web_vitals.tbt ?? 0) > 200 },
+                { label: 'CLS', value: data.core_web_vitals.cls !== null ? data.core_web_vitals.cls.toFixed(3) : '—', warn: (data.core_web_vitals.cls ?? 0) > 0.1 },
+              ].map(({ label, value, warn }) => (
+                <div key={label} className="text-center">
+                  <p className={`text-sm font-bold ${warn ? 'text-amber-600' : 'text-gray-700'}`}>{value}</p>
+                  <p className="text-xs text-gray-400">{label}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Counts */}
+        <div className="pt-2 border-t border-gray-100 grid grid-cols-2 gap-2 text-sm">
+          <div>
+            <p className="font-bold text-gray-700">{formatNum(data.internal_links)}</p>
+            <p className="text-xs text-gray-400">内部链接</p>
+          </div>
+          <div>
+            <p className="font-bold text-gray-700">{formatNum(data.external_links)}</p>
+            <p className="text-xs text-gray-400">外部链接</p>
+          </div>
+          <div>
+            <p className="font-bold text-gray-700">{formatNum(data.word_count)}</p>
+            <p className="text-xs text-gray-400">字数</p>
+          </div>
+          <div>
+            <p className="font-bold text-gray-700">{formatNum(data.images_total)}</p>
+            <p className="text-xs text-gray-400">图片总数</p>
+          </div>
+        </div>
+
+        {/* Title / H1 preview */}
+        {(data.title || data.h1) && (
+          <div className="pt-1 border-t border-gray-100 space-y-1">
+            {data.title && (
+              <p className="text-xs">
+                <span className="text-gray-400">Title: </span>
+                <span className="text-gray-700 truncate">{data.title}</span>
+              </p>
+            )}
+            {data.h1 && (
+              <p className="text-xs">
+                <span className="text-gray-400">H1: </span>
+                <span className="text-gray-700 truncate">{data.h1}</span>
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    </CardShell>
+  )
+}

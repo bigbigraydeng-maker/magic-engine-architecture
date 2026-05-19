@@ -27,6 +27,8 @@ import { scrapeInstagramProfile, scrapeTiktokProfile } from '@/lib/apify/social-
 import { scrapeGoogleSerp } from '@/lib/apify/google-search-scraper'
 import { getKeywordsForSite, getSerpCompetitors } from '@/lib/dataforseo/labs'
 import { getDomainTechnologies, getDomainWhois } from '@/lib/dataforseo/domain-analytics'
+import { getSerpPage } from '@/lib/dataforseo/serp'
+import { getOnPageInstant } from '@/lib/dataforseo/onpage'
 import type { DiscoveryReport } from './types'
 import { ZHANGQIAN_SYSTEM_PROMPT, buildUserPrompt } from './prompts'
 import { validateDiscoveryReport } from './validators'
@@ -294,13 +296,14 @@ const FETCH_DOMAIN_WHOIS_TOOL: Anthropic.Messages.Tool = {
 }
 
 /**
- * Client-side tool: scrape a Google SERP for a query via the Apify Google
- * Search scraper. Backed by src/lib/apify/google-search-scraper.ts.
+ * Client-side tool: fetch a Google SERP page via DataForSEO (primary) with
+ * Apify google-search-scraper as fallback. Returns organic ranking,
+ * paid advertisers, and the Google AI Overview answer.
  */
 const FETCH_SERP_RESULTS_TOOL: Anthropic.Messages.Tool = {
   name: 'fetch_serp_results',
   description:
-    'Scrape a real Google search results page for a query — organic ranking, paid advertiser domains, and the Google AI Mode answer. Use this for the 1-2 most important category/local queries to see who ranks, who buys ads, and whether the brand appears in Google\'s AI answer. Each call is a paid API call — pick high-signal queries, do not run it for every keyword.',
+    'Fetch a real Google SERP page via DataForSEO — organic ranking, paid advertiser domains, and the Google AI Overview answer. Use for 1-2 high-signal category/local queries to diagnose visibility. Each call is a paid API call (~$0.005), pick queries carefully.',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -315,6 +318,32 @@ const FETCH_SERP_RESULTS_TOOL: Anthropic.Messages.Tool = {
       },
     },
     required: ['query'],
+  },
+}
+
+/**
+ * Client-side tool: run an instant on-page SEO audit for the target homepage
+ * via DataForSEO OnPage Instant Pages API. Returns meta tags, Core Web Vitals,
+ * link counts, image alt coverage, and binary check flags.
+ */
+const FETCH_ONPAGE_AUDIT_TOOL: Anthropic.Messages.Tool = {
+  name: 'fetch_onpage_audit',
+  description:
+    '通过 DataForSEO OnPage API 对目标主页进行即时技术 SEO 审计：' +
+    '检测 title / description / H1 缺失、Core Web Vitals（LCP / CLS / TBT）、' +
+    '内外链数量、图片 alt 缺失、是否 HTTPS、是否重定向链。' +
+    '**在抓取完主页内容后调用一次**——成本约 $0.003，返回 OnPageResult 结构。' +
+    '审计发现的问题（如缺少 description）要写入 diagnosis.actions.quick_fix。' +
+    '若返回 null，继续正常流程，set onpage_audit to null。',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      url: {
+        type: 'string',
+        description: '目标主页完整 URL，例如 "https://oztop.com.au/"',
+      },
+    },
+    required: ['url'],
   },
 }
 
@@ -405,6 +434,7 @@ export async function runZhangqian(
           FETCH_LOCAL_REVIEWS_TOOL,
           FETCH_SOCIAL_METRICS_TOOL,
           FETCH_SERP_RESULTS_TOOL,
+          FETCH_ONPAGE_AUDIT_TOOL,
           FETCH_KEYWORD_DATA_TOOL,
           FETCH_COMPETITORS_TOOL,
           FETCH_DOMAIN_TECHNOLOGIES_TOOL,
@@ -505,6 +535,9 @@ export async function runZhangqian(
           case 'fetch_serp_results':
             apifyCalls++
             return handleFetchSerpResults(toolUse, onProgress)
+          case 'fetch_onpage_audit':
+            connectorCalls++
+            return handleFetchOnpageAudit(toolUse, onProgress)
           case 'fetch_keyword_data':
             connectorCalls++
             return handleFetchKeywordData(toolUse, onProgress)
@@ -521,7 +554,7 @@ export async function runZhangqian(
             return Promise.resolve<Anthropic.Messages.ToolResultBlockParam>({
               type: 'tool_result',
               tool_use_id: toolUse.id,
-              content: `Unknown tool: ${toolUse.name}. 'web_search' is server-side; client-handled tools are 'fetch_url', 'verify_business_registration', 'fetch_local_reviews', 'fetch_social_metrics', 'fetch_serp_results', 'fetch_keyword_data', 'fetch_competitors', 'fetch_domain_technologies', 'fetch_domain_whois'. (Meta Ad Library + Facebook profile scrapers are gated to Phase 8.10.S5 advanced discovery.)`,
+              content: `Unknown tool: ${toolUse.name}. 'web_search' is server-side; client-handled tools are 'fetch_url', 'verify_business_registration', 'fetch_local_reviews', 'fetch_social_metrics', 'fetch_serp_results', 'fetch_onpage_audit', 'fetch_keyword_data', 'fetch_competitors', 'fetch_domain_technologies', 'fetch_domain_whois'. (Meta Ad Library + Facebook profile scrapers are gated to Phase 8.10.S5 advanced discovery.)`,
               is_error: true,
             })
         }
@@ -897,7 +930,7 @@ async function handleFetchSocialMetrics(
   }
 }
 
-/** Resolve a `fetch_serp_results` tool call via the Apify Google Search scraper. */
+/** Resolve a `fetch_serp_results` tool call — DataForSEO primary, Apify fallback. */
 async function handleFetchSerpResults(
   toolUse: Anthropic.Messages.ToolUseBlock,
   onProgress: ProgressFn,
@@ -917,8 +950,19 @@ async function handleFetchSerpResults(
 
   await onProgress(`抓取 Google 搜索结果 "${query}"…`)
 
+  // Try DataForSEO first (~$0.005/call); fall back to Apify if credentials missing or API errors.
   try {
-    // scrapeGoogleSerp already returns the snake_case DiscoveredSerpResult shape.
+    const serp = await getSerpPage(query, country)
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: JSON.stringify(serp),
+    }
+  } catch (dfseErr) {
+    console.warn(`[zhangqian] DataForSEO SERP failed for "${query}", falling back to Apify:`, dfseErr)
+  }
+
+  try {
     const serp = await scrapeGoogleSerp(query, country)
     return {
       type: 'tool_result',
@@ -927,7 +971,6 @@ async function handleFetchSerpResults(
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    // Non-fatal: let Claude continue without this SERP snapshot.
     return {
       type: 'tool_result',
       tool_use_id: toolUse.id,
@@ -1088,6 +1131,66 @@ async function handleFetchDomainWhois(
       type: 'tool_result',
       tool_use_id: toolUse.id,
       content: `fetch_domain_whois failed: ${message}. Set domain_whois to null and continue.`,
+    }
+  }
+}
+
+/** Resolve a `fetch_onpage_audit` tool call via DataForSEO OnPage Instant Pages API. */
+async function handleFetchOnpageAudit(
+  toolUse: Anthropic.Messages.ToolUseBlock,
+  onProgress: ProgressFn,
+): Promise<Anthropic.Messages.ToolResultBlockParam> {
+  const input = toolUse.input as { url?: string }
+  const url = typeof input.url === 'string' ? input.url.trim() : ''
+
+  if (!url) {
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: 'fetch_onpage_audit requires a `url` string (full https:// URL).',
+      is_error: true,
+    }
+  }
+
+  await onProgress(`DataForSEO OnPage：审计 ${truncateForProgress(url)}…`)
+
+  try {
+    const audit = await getOnPageInstant(url)
+    if (!audit) {
+      return {
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content:
+          'No on-page audit data returned (URL may be unreachable). ' +
+          'Set onpage_audit to null and continue.',
+      }
+    }
+
+    // Build a plain-English summary so Claude gets actionable context immediately
+    const issues: string[] = []
+    if (audit.checks.no_title) issues.push('missing <title>')
+    if (audit.checks.no_description) issues.push('missing meta description')
+    if (audit.checks.no_h1) issues.push('missing H1')
+    if (audit.checks.missing_alt_text) issues.push(`${audit.images_no_alt} images missing alt text`)
+    if (audit.checks.redirect_chain) issues.push('redirect chain detected')
+    if (!audit.checks.https) issues.push('not on HTTPS')
+
+    const summary = issues.length > 0
+      ? `Issues found: ${issues.join(', ')}. Add relevant issues to diagnosis.actions.quick_fix.`
+      : 'No critical on-page issues detected.'
+
+    await onProgress(`OnPage 审计完成 — ${issues.length} 个问题`)
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: JSON.stringify(audit) + `\n\nSummary: ${summary}`,
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: `fetch_onpage_audit failed: ${message}. Set onpage_audit to null and continue.`,
     }
   }
 }
