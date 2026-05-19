@@ -213,7 +213,7 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-19（**P8.10.S0.23 Advanced Discovery Phase 2 完成**；P8.3.2 + P8.10.S0.22 DB 迁移剩生产环境手动操作）
+> 最后更新：2026-05-19（**P8.10.S0.24 Advanced Discovery Phase 3 完成**；P8.3.2 + P8.10.S0.22 DB 迁移剩生产环境手动操作；P8.10.S0.23 需 Render env var）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
@@ -221,7 +221,7 @@ git push origin master   # 触发 Render 部署
 | **P8.10.S0.22 DB 迁移** | 在 Supabase 后台执行 `20260519000001_client_connectors.sql`（client_connectors 表 + job_type 列） | ⭐ |
 | **P8.10.S0.23 Env 配置** | Render 加 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS`（JSON 字符串），并让客户将服务账号邮箱加入 GSC 验证用户 | 📋 |
 
-**状态校准（2026-05-19）**：P8.10.S0.23 代码层已完成（GSC client + Google Ads connector + advanced-agent 分流 + UI 全更新，build ✅）；GSC 生产使用需 PM 在 Render 配置 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` env var。P8.10.S0.22 和 P8.3.2 代码层已完成，剩生产环境手动操作。
+**状态校准（2026-05-19）**：P8.10.S0.24 代码层已完成（GSC / Google Ads / Facebook 三张 advanced 卡片注入报告页 + MetaAdsCard 优先 advanced 数据 + banner 双态，build ✅）。P8.10.S0.23 代码层已完成，生产 GSC 需 PM 配置 Render env var。P8.10.S0.22 和 P8.3.2 代码层已完成，剩生产环境手动操作。
 
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 

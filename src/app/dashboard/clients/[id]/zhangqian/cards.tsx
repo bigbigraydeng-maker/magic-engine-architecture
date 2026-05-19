@@ -22,6 +22,9 @@ import type {
   DiscoveredRegistration,
   DiscoveredMetaAds,
   DiscoveredSerpResult,
+  GscSearchData,
+  DiscoveredGoogleAdsData,
+  AdvancedFacebookProfile,
 } from '@/lib/zhangqian/types'
 import { useState } from 'react'
 
@@ -933,6 +936,163 @@ export function SerpResultsCard({
     <CardShell title="Google 搜索结果">
       <ul className="space-y-2.5">
         {results.map((s, i) => <SerpResultItem key={i} serp={s} />)}
+      </ul>
+    </CardShell>
+  )
+}
+
+// ─── GscDataCard ──────────────────────────────────────────────────────────────
+
+export function GscDataCard({ gscData }: { gscData: GscSearchData }) {
+  const totalClicks = gscData.rows.reduce((s, r) => s + r.clicks, 0)
+  const totalImpressions = gscData.rows.reduce((s, r) => s + r.impressions, 0)
+  const displayed = gscData.rows.slice(0, 15)
+
+  return (
+    <CardShell title="GSC 搜索表现（真实数据）">
+      {/* Summary metrics */}
+      <div className="rounded-lg bg-green-50 border border-green-100 p-3 flex flex-wrap gap-4">
+        <div className="text-center">
+          <p className="text-lg font-bold text-green-700">{totalClicks.toLocaleString()}</p>
+          <p className="text-xs text-green-600">总点击（{gscData.date_range_days}天）</p>
+        </div>
+        <div className="text-center">
+          <p className="text-lg font-bold text-green-700">{totalImpressions.toLocaleString()}</p>
+          <p className="text-xs text-green-600">总展示</p>
+        </div>
+        <div className="text-center">
+          <p className="text-lg font-bold text-green-700">{gscData.rows.length}</p>
+          <p className="text-xs text-green-600">查询词数</p>
+        </div>
+      </div>
+
+      <p className="text-xs text-gray-400">
+        站点：<span className="text-gray-600">{gscData.site_url}</span>
+      </p>
+
+      {/* Query table */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-gray-100">
+              <th className="text-left py-1 pr-2 text-gray-500 font-medium">查询词</th>
+              <th className="text-right py-1 px-2 text-gray-500 font-medium">点击</th>
+              <th className="text-right py-1 px-2 text-gray-500 font-medium">展示</th>
+              <th className="text-right py-1 px-2 text-gray-500 font-medium">CTR</th>
+              <th className="text-right py-1 pl-2 text-gray-500 font-medium">排名</th>
+            </tr>
+          </thead>
+          <tbody>
+            {displayed.map((row, i) => (
+              <tr key={i} className="border-b border-gray-50">
+                <td className="py-1 pr-2 text-gray-800 break-all">{row.query}</td>
+                <td className="py-1 px-2 text-right font-medium text-gray-700">{row.clicks}</td>
+                <td className="py-1 px-2 text-right text-gray-500">{row.impressions.toLocaleString()}</td>
+                <td className="py-1 px-2 text-right text-gray-500">{(row.ctr * 100).toFixed(1)}%</td>
+                <td className="py-1 pl-2 text-right">
+                  <span className={`font-medium ${
+                    row.position <= 3 ? 'text-green-600' :
+                    row.position <= 10 ? 'text-blue-600' :
+                    'text-gray-400'
+                  }`}>
+                    {row.position.toFixed(1)}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {gscData.rows.length > 15 && (
+        <p className="text-xs text-gray-400 text-right">
+          显示前 15 条，共 {gscData.rows.length} 条
+        </p>
+      )}
+    </CardShell>
+  )
+}
+
+// ─── GoogleAdsCard ────────────────────────────────────────────────────────────
+
+export function GoogleAdsCard({ adsData }: { adsData: DiscoveredGoogleAdsData }) {
+  return (
+    <CardShell title="Google Ads 透明中心">
+      <div className="flex flex-wrap gap-4">
+        <div className="text-center">
+          <p className="text-2xl font-bold text-blue-600">{adsData.active_ads_count}</p>
+          <p className="text-xs text-gray-500">活跃广告数</p>
+        </div>
+        {adsData.regions.length > 0 && (
+          <div>
+            <p className="text-xs text-gray-500 mb-1.5">投放地区</p>
+            <div className="flex flex-wrap gap-1">
+              {adsData.regions.map((r, i) => (
+                <Badge key={i} className="bg-blue-50 text-blue-700">{r}</Badge>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+      {adsData.ad_formats.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-gray-500 mb-1.5">广告格式</p>
+          <div className="flex flex-wrap gap-1">
+            {adsData.ad_formats.map((f, i) => (
+              <Badge key={i} className="bg-gray-100 text-gray-600">{f}</Badge>
+            ))}
+          </div>
+        </div>
+      )}
+      {adsData.top_ad_previews.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-gray-500 mb-1.5">广告文案预览</p>
+          <ul className="space-y-1">
+            {adsData.top_ad_previews.map((preview, i) => (
+              <li key={i} className="text-xs text-gray-700 leading-relaxed flex items-start gap-1">
+                <span className="text-blue-400 mt-0.5 shrink-0">•</span>
+                <span>{preview}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </CardShell>
+  )
+}
+
+// ─── AdvancedFacebookCard ─────────────────────────────────────────────────────
+
+export function AdvancedFacebookCard({ profiles }: { profiles: AdvancedFacebookProfile[] }) {
+  if (profiles.length === 0) return null
+  return (
+    <CardShell title="Facebook 深度数据">
+      <ul className="space-y-3">
+        {profiles.map((p, i) => (
+          <li key={i} className="rounded-lg border border-gray-100 p-3">
+            <a
+              href={p.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm font-medium text-indigo-600 hover:underline block mb-2"
+            >
+              {p.page_name}
+            </a>
+            <div className="flex flex-wrap gap-4">
+              <div className="text-center">
+                <p className="text-base font-bold text-gray-700">{p.followers_count.toLocaleString()}</p>
+                <p className="text-xs text-gray-400">粉丝</p>
+              </div>
+              <div className="text-center">
+                <p className="text-base font-bold text-gray-700">{p.posts_last_30d}</p>
+                <p className="text-xs text-gray-400">近30天帖文</p>
+              </div>
+              <div className="text-center">
+                <p className="text-base font-bold text-gray-700">{(p.engagement_rate * 100).toFixed(2)}%</p>
+                <p className="text-xs text-gray-400">互动率</p>
+              </div>
+            </div>
+          </li>
+        ))}
       </ul>
     </CardShell>
   )

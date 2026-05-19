@@ -666,6 +666,12 @@ Layer 5: Export（新增）— P8.10.S5
   - Connectors 列表页 + 详情页 + API status route 同步加入 `google-ads` 条目；gsc 详情页增加 `site_url` 必填字段
   - build ✅ 零错误（P8.10.S0.23 env var 依赖：`GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` JSON，GSC 不配置时自动降级返回 null）
 
+- [x] **P8.10.S0.24** Advanced Discovery — Phase 3：Advanced 结果注入张骞报告页
+  - `cards.tsx` 新增 `GscDataCard`（28天 top-25 查询词表：点击 / 展示 / CTR / 排名）、`GoogleAdsCard`（活跃广告数 / 地区 / 格式 / 文案预览）、`AdvancedFacebookCard`（FB 主页粉丝 / 帖文 / 互动率）
+  - `page.tsx`：`MetaAdsCard` 优先读 `p.advanced?.meta_ads`（basic 层自 S0.21 起为 null）；grid 末尾条件渲染三张 advanced 卡片
+  - CTA banner 改为双态：`p.advanced` 存在 → 绿色「Advanced Discovery 已完成」+ 触发来源 + 运行时间；否则 → 蓝色「接通数据源」CTA
+  - build ✅ 零错误
+
 **验收标准**：
 - 输入 `oztopbuildingsupplies.com.au` → 5 分钟内交付：业务一句话描述 + IG handle + GBP + 5-10 竞品 + 10-20 关键词 + 15 AI 问句
 - 报告深度匹配 Cowork 生成的 deep research（80%+）
@@ -1544,6 +1550,7 @@ AU / NZ（当前）          新市场（未来）
 - **P8.3.2** — Dashboard Magic Link 鉴权重新启用：middleware matcher 改回 `/dashboard/:path*` + layout `redirect('/login')` 取消注释；whitelist.ts + middleware.ts 新增 23 个单元测试（fail-closed / admin / client-viewer scoping / 边界）；`/unauthorized` 已存在无需新建；Supabase 后台 Redirect URLs 白名单 + Render `ADMIN_EMAILS` 需 PM 上线前配齐
 - **P8.10.S0.21** — 张骞首跑硬化 + Advanced Discovery 入口：HTTP 超时全封（Anthropic SDK 90s / SEMrush 20s / Apify ad-library 30s）+ `GLOBAL_TIMEOUT_MS` 270s→300s + stale-timeout 10min→6min + 新增 `/api/cron/zhangqian-sweeper` 兜底孤儿 job + 首跑工具瘦身（删 `fetch_meta_ads` + `fetch_social_metrics` 去 facebook，`MAX_TOOL_CALLS` 22→18，`MAX_COST_USD` $1.80→$1.50）+ prompts.ts 同步 + 报告页 Advanced Discovery CTA banner
 - **P8.10.S0.23** — Advanced Discovery Phase 2：GSC connector（Service Account JWT + Search Analytics API，返回 28 天 top-25 query）+ Google Ads connector（Apify 透明度中心，公开数据）；`advanced-agent.ts` 按 triggeredBy 分流；types 新增 GscSearchData + DiscoveredGoogleAdsData；build ✅
+- **P8.10.S0.24** — Advanced Discovery Phase 3：张骞报告页可视化 advanced 数据；新增 GscDataCard / GoogleAdsCard / AdvancedFacebookCard；MetaAdsCard 优先读 advanced.meta_ads；CTA banner 双态（已跑→绿色成功，未跑→蓝色 CTA）；build ✅
 - **P8.10.S0.22** — Advanced Discovery Phase 1：新建 `client_connectors` 表 + `client_discovery_jobs.job_type` 列；`advanced-agent.ts` 实现 `runZhangqianAdvanced()`（Meta 广告库 + FB 主页抓取）；`persistor.ts` 加 `mergeAdvancedPayload()`（写入 payload.advanced 不覆盖 basic）；connectors status/connect API；`/dashboard/clients/[id]/connectors/[anchor]` 详情页；connector 授权自动触发高级发现（commit 94d8eaa）
 
 ### 2026-05-17
