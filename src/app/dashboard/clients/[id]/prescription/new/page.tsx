@@ -329,9 +329,10 @@ export default function NewPrescriptionPage() {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
         body:    JSON.stringify({ status: 'approved' }),
       })
-      // 409 = 已经批准过 → 自愈：切到已批准态，不报错
+      // 409 = 已经批准过 → 自愈：切到已批准态并跳转看板
       if (res.status === 409) {
         setPrescriptionStatus('approved')
+        router.push(`/dashboard/clients/${clientId}/execution`)
         return
       }
       if (!res.ok) {
@@ -343,7 +344,6 @@ export default function NewPrescriptionPage() {
         throw new Error(errText)
       }
       setPrescriptionStatus('approved')
-      router.refresh()
       router.push(`/dashboard/clients/${clientId}/execution`)
     } catch (e) {
       setApproveError(e instanceof Error ? e.message : '批准失败')

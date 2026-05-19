@@ -1135,9 +1135,80 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
 
 ---
 
+## Phase 13 — Production Package（生产订单聚合层）📋 已登记，未开工
+
+> **背景**：当前 `content_posts / blog_posts / reels_drafts / visual_assets` 各自为政，`execution_items.content_post_id` 是 1:1 链路，无法表达"一个执行项 → 一组产物"的批次语义。Production Package 是六维诊断后的**统一生产订单聚合层**，把分散产物按维度 + 上下文聚合成可审核、可追溯、可归因的批次。
+>
+> **完整 RFC**：[docs/production-package-rfc.md](docs/production-package-rfc.md)
+>
+> **登记日期**：2026-05-19
+> **当前状态**：草案收敛完成，**未排期开工**。等 P8.3.2 / Phase 12.B 收尾后再决定何时启动。
+
+### Phase 13 核心心智
+
+```
+Master Brief    = 品牌 DNA
+Diagnostic      = 发现问题（六维）
+Prescription    = 决定做什么
+Execution Item  = 单个动作
+Production Package = 把一组动作的产物打包成"生产订单"
+Production Item    = 订单里的具体产物
+```
+
+### Phase 13 已确认的关键决策（不重新讨论）
+
+- `dimension` 复用 `diagnostic_dimension` enum（6 元组）
+- `context_mode` **不存**，由 `dimension` 派生（`seo/social/ads` → campaign_bound；其余 → dna_bound）
+- `production_items` 用多 FK，**不**用多态 `target_type/target_id`
+- 现有内容表只加 `production_item_id`，**不**加 `production_package_id`
+- `campaign_id` 应用层校验（approved 前补齐），**不**做 DB 硬约束
+- `production_item_assets` 关联表 MVP **不做**
+- `campaign_briefs` schema **不扩**；Reels drift 改 Reels 代码适配现有 schema
+- `package_type` 字段 MVP **不做**（先验证 ai_visibility/competitor/reputation 形态是否真的不同）
+
+### Phase 13.A — Social-only MVP（6 commit）
+
+每个任务 = 1 commit。完成顺序按依赖：
+
+- [ ] **Pre.13** — `fix(reels)`：修 Reels 代码读 `title/description/parsed_content/semrush_keywords`，对齐现有 `campaign_briefs` schema（不扩 schema）
+- [ ] **P13.A.1** — 新增 `production_packages` migration（含 RLS、index、`diagnostic_dimension` enum 复用、`generation_context_snapshot` jsonb）
+- [ ] **P13.A.2** — 新增 `production_items` migration（多 FK 到 4 张内容表、RLS、index）
+- [ ] **P13.A.3** — `ALTER content_posts / blog_posts / reels_drafts / visual_assets` 各加 `production_item_id` 单列 FK + index
+- [ ] **P13.A.4** — Social 生成链路（Route A/C）接收 `production_package_id`，生成时创建对应 `production_items` 行
+- [ ] **P13.A.5** — `/dashboard/clients/[id]/production/[packageId]` 只读详情页（展示 dimension / campaign / execution_item / items 列表 / context snapshot）
+
+> **Phase 13.A 验收关卡**：
+> 1. 一条 Social post 能归属到 production item，item 能归属到 package
+> 2. Package Detail Page 能展示完整上下文 + 关联 items 列表
+> 3. 旧 Social post 没 `production_item_id` 也能正常显示（不破坏 ContentHub）
+
+### Phase 13.B–E（预告，未排期）
+
+| Phase | 内容 | 触发条件 |
+|---|---|---|
+| 13.B | SEO + AI Visibility 接入 | 13.A 验收通过 + 隐藏陷阱已验证（见 RFC §6） |
+| 13.C | Reels + Visual 接入 | 13.B 完成 |
+| 13.D | Ads + Competitor + Reputation 接入 | 13.C 完成 |
+| 13.E | Flywheel feedback 闭环（package → flywheel_actions → outcomes） | 13.D 完成 |
+
+### Phase 13 不做清单（明确划界，避免 scope creep）
+
+- ❌ 改写任何现有内容生成器
+- ❌ 统一 generation queue
+- ❌ 内容质量自动 review / retry 闭环（独立 Phase）
+- ❌ Master Brief 自动更新
+- ❌ Campaign Brief schema 扩展
+- ❌ `package_type` 字段、`production_item_assets` 关联表、DB 层 campaign_id 硬约束、聚合状态字段
+
+---
+
 ## 8. 决策日志
 
 > 重大决策记录在此，便于追溯。
+
+### 2026-05-19
+
+- **Phase 13 Production Package 登记（不开工）**：完成两轮 RFC 评审，方案从"完整产品蓝图"收敛为"Social-only MVP 工程切片"。核心决策：(1) `dimension` 复用 `diagnostic_dimension` enum；(2) `context_mode` 不持久化，由 dimension 派生；(3) 现有内容表只加 `production_item_id` 单链，避免 `package_id + item_id` 两列冗余；(4) `campaign_id` 应用层校验而非 DB 硬约束；(5) `production_item_assets` / `package_type` / `campaign_briefs` schema 扩展 MVP 全部不做；(6) Reels schema drift 改 Reels 代码适配 `campaign_briefs`，**不**反过来扩 campaign。MVP = 6 个 commit 单 sprint 内完成。完整 RFC 见 [docs/production-package-rfc.md](docs/production-package-rfc.md)。当前未排期，等 P8.3.2 / Phase 12.B 收尾后再决定启动时机。
 
 ### 2026-05-18
 
