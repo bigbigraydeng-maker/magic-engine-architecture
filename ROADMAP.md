@@ -1220,11 +1220,17 @@ Production Item    = 订单里的具体产物
 > 2. Package Detail Page 能展示完整上下文 + 关联 items 列表
 > 3. 旧 Social post 没 `production_item_id` 也能正常显示（不破坏 ContentHub）
 
-### Phase 13.B–E（预告，未排期）
+### Phase 13.B — SEO + AI Visibility 接入（2 commit）
+
+每个任务 = 1 commit。
+
+- [x] **P13.B.1** — Blog 生成路由接入 `production_package_id`：`GenerateBlogRequest` 新增字段；`persistAndReturn` 落库后自动创建 `production_items` 行（content_type='blog_post'）并回写 `blog_posts.production_item_id`；覆盖 SEO（seo_only/unified）+ AI Visibility（geo_only/unified）两个 dimension
+- [x] **P13.B.2** — 客户级生产包列表页：`GET /api/clients/[id]/production`（支持 dimension/status 过滤，2 次查询批量计算 item_count）；`/dashboard/clients/[id]/production` 列表页（维度 tab 过滤、全部模式按 dimension 分组展示，点击跳转详情页）
+
+### Phase 13.C–E（预告，未排期）
 
 | Phase | 内容 | 触发条件 |
 |---|---|---|
-| 13.B | SEO + AI Visibility 接入 | 13.A 验收通过 + 隐藏陷阱已验证（见 RFC §6） |
 | 13.C | Reels + Visual 接入 | 13.B 完成 |
 | 13.D | Ads + Competitor + Reputation 接入 | 13.C 完成 |
 | 13.E | Flywheel feedback 闭环（package → flywheel_actions → outcomes） | 13.D 完成 |
@@ -1547,6 +1553,8 @@ AU / NZ（当前）          新市场（未来）
 
 ### 2026-05-21
 
+- **P13.B.2** — 客户级生产包列表页 + `GET /api/clients/[id]/production`：维度 tab 过滤、按 dimension 分组展示、item_count 批量计算，build ✅
+- **P13.B.1** — Blog 生成路由接入 `production_package_id`：`GenerateBlogRequest` 加字段，`persistAndReturn` 创建 production_items 行 + 回写 production_item_id，覆盖 SEO + AI Visibility 两个 dimension，build ✅
 - **P13.A.5** — 生产包只读详情页 + GET API 路由：展示 dimension/campaign/execution_item/items 列表/context snapshot，build ✅
 - **P13.A.4** — Route A/C 接收 `production_package_id`，生成后创建 `production_items` 行并回写 `production_item_id`，build ✅
 - **P13.A.3** — 四张内容表各加 `production_item_id` nullable FK → `production_items` + partial index，build ✅
