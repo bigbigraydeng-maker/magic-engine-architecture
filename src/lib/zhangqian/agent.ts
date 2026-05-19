@@ -25,6 +25,7 @@ import { aggregateLocalReviews } from '@/lib/local-reviews/client'
 // pass, gated behind explicit user connector authorisation.
 import { scrapeInstagramProfile, scrapeTiktokProfile } from '@/lib/apify/social-scraper'
 import { scrapeGoogleSerp } from '@/lib/apify/google-search-scraper'
+import { getKeywordsForSite, getSerpCompetitors } from '@/lib/dataforseo/labs'
 import type { DiscoveryReport } from './types'
 import { ZHANGQIAN_SYSTEM_PROMPT, buildUserPrompt } from './prompts'
 import { validateDiscoveryReport } from './validators'
@@ -182,6 +183,62 @@ const FETCH_SOCIAL_METRICS_TOOL: Anthropic.Messages.Tool = {
 // re-introduce it on the advanced pass once the user authorises the connector).
 
 /**
+ * Client-side tool: fetch real keyword data from DataForSEO Labs.
+ * Replaces web_search guessing for seed keyword discovery.
+ */
+const FETCH_KEYWORD_DATA_TOOL: Anthropic.Messages.Tool = {
+  name: 'fetch_keyword_data',
+  description:
+    '从 DataForSEO Labs 获取某个域名的真实有机排名关键词（含搜索量、难度、CPC）。' +
+    '用这个工具**代替 web_search 猜关键词**——返回的是 Google 真实搜索数据，零幻觉风险。' +
+    '调用一次即可，最多返回 50 条关键词，按搜索量降序排列。' +
+    '如果域名太新或流量极低，返回空数组；此时再用 web_search 补充。',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      domain: {
+        type: 'string',
+        description: '目标域名，不带协议和路径，如 "oztop.com.au"',
+      },
+      location: {
+        type: 'string',
+        enum: ['AU', 'NZ'],
+        description: '搜索市场（默认 AU）',
+      },
+    },
+    required: ['domain'],
+  },
+}
+
+/**
+ * Client-side tool: discover competitor domains from DataForSEO Labs.
+ * Replaces web_search guessing for competitor discovery.
+ */
+const FETCH_COMPETITORS_TOOL: Anthropic.Messages.Tool = {
+  name: 'fetch_competitors',
+  description:
+    '从 DataForSEO Labs 获取某个域名的有机搜索竞品列表（含共同关键词数、月流量估算）。' +
+    '用这个工具**代替 web_search 猜竞品**——基于真实 Google 有机排名数据，比 AI 猜测准确得多。' +
+    '调用一次即可，返回 top-10 竞品域名。' +
+    '如果数据不足，再用 web_search 补充。返回的竞品需结合行业背景进行人工判断，排除明显不相关的结果。',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      domain: {
+        type: 'string',
+        description: '目标域名，不带协议和路径，如 "oztop.com.au"',
+      },
+      location: {
+        type: 'string',
+        enum: ['AU', 'NZ'],
+        description: '搜索市场（默认 AU）',
+      },
+    },
+    required: ['domain'],
+  },
+}
+
+/**
  * Client-side tool: scrape a Google SERP for a query via the Apify Google
  * Search scraper. Backed by src/lib/apify/google-search-scraper.ts.
  */
@@ -293,6 +350,8 @@ export async function runZhangqian(
           FETCH_LOCAL_REVIEWS_TOOL,
           FETCH_SOCIAL_METRICS_TOOL,
           FETCH_SERP_RESULTS_TOOL,
+          FETCH_KEYWORD_DATA_TOOL,
+          FETCH_COMPETITORS_TOOL,
         ],
         messages,
       },
@@ -389,11 +448,17 @@ export async function runZhangqian(
           case 'fetch_serp_results':
             apifyCalls++
             return handleFetchSerpResults(toolUse, onProgress)
+          case 'fetch_keyword_data':
+            connectorCalls++
+            return handleFetchKeywordData(toolUse, onProgress)
+          case 'fetch_competitors':
+            connectorCalls++
+            return handleFetchCompetitors(toolUse, onProgress)
           default:
             return Promise.resolve<Anthropic.Messages.ToolResultBlockParam>({
               type: 'tool_result',
               tool_use_id: toolUse.id,
-              content: `Unknown tool: ${toolUse.name}. 'web_search' is server-side; client-handled tools are 'fetch_url', 'verify_business_registration', 'fetch_local_reviews', 'fetch_social_metrics', 'fetch_serp_results'. (Meta Ad Library + Facebook profile scrapers are gated to Phase 8.10.S5 advanced discovery.)`,
+              content: `Unknown tool: ${toolUse.name}. 'web_search' is server-side; client-handled tools are 'fetch_url', 'verify_business_registration', 'fetch_local_reviews', 'fetch_social_metrics', 'fetch_serp_results', 'fetch_keyword_data', 'fetch_competitors'. (Meta Ad Library + Facebook profile scrapers are gated to Phase 8.10.S5 advanced discovery.)`,
               is_error: true,
             })
         }
@@ -794,6 +859,100 @@ async function handleFetchSerpResults(
       type: 'tool_result',
       tool_use_id: toolUse.id,
       content: `fetch_serp_results failed for "${query}": ${message}. Continue without this SERP snapshot.`,
+    }
+  }
+}
+
+/** Resolve a `fetch_keyword_data` tool call via DataForSEO Labs. */
+async function handleFetchKeywordData(
+  toolUse: Anthropic.Messages.ToolUseBlock,
+  onProgress: ProgressFn,
+): Promise<Anthropic.Messages.ToolResultBlockParam> {
+  const input = toolUse.input as { domain?: string; location?: string }
+  const domain = typeof input.domain === 'string' ? input.domain.trim() : ''
+  const locationCode = input.location === 'NZ' ? 2554 : 2036
+
+  if (!domain) {
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: 'fetch_keyword_data requires a `domain` string.',
+      is_error: true,
+    }
+  }
+
+  await onProgress(`DataForSEO Labs：获取 ${domain} 关键词数据…`)
+
+  try {
+    const keywords = await getKeywordsForSite(domain, locationCode, 50)
+    if (keywords.length === 0) {
+      return {
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content:
+          'No keyword data found in DataForSEO Labs for this domain. ' +
+          'The domain may be too new or have very low traffic. Fall back to web_search to identify seed keywords.',
+      }
+    }
+    await onProgress(`DataForSEO Labs：返回 ${keywords.length} 条关键词`)
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: JSON.stringify(keywords),
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: `fetch_keyword_data failed: ${message}. Fall back to web_search for keyword discovery.`,
+    }
+  }
+}
+
+/** Resolve a `fetch_competitors` tool call via DataForSEO Labs. */
+async function handleFetchCompetitors(
+  toolUse: Anthropic.Messages.ToolUseBlock,
+  onProgress: ProgressFn,
+): Promise<Anthropic.Messages.ToolResultBlockParam> {
+  const input = toolUse.input as { domain?: string; location?: string }
+  const domain = typeof input.domain === 'string' ? input.domain.trim() : ''
+  const locationCode = input.location === 'NZ' ? 2554 : 2036
+
+  if (!domain) {
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: 'fetch_competitors requires a `domain` string.',
+      is_error: true,
+    }
+  }
+
+  await onProgress(`DataForSEO Labs：发现 ${domain} 竞品…`)
+
+  try {
+    const competitors = await getSerpCompetitors(domain, locationCode, 10)
+    if (competitors.length === 0) {
+      return {
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content:
+          'No competitor data found in DataForSEO Labs for this domain. ' +
+          'The domain may be too new. Fall back to web_search to identify competitors.',
+      }
+    }
+    await onProgress(`DataForSEO Labs：发现 ${competitors.length} 个竞品域名`)
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: JSON.stringify(competitors),
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: `fetch_competitors failed: ${message}. Fall back to web_search for competitor discovery.`,
     }
   }
 }
