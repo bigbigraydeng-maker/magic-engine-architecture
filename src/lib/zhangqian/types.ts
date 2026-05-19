@@ -253,6 +253,12 @@ export interface DiscoveryReport {
     donts: string[]            // 3–5 visual DON'T guidelines, e.g. 'no stock photos'
   } | null
 
+  /**
+   * Advanced discovery payload — populated after a connector (meta-ads / gbp)
+   * is authorized and the advanced pass runs. Never overwrites the basic fields.
+   */
+  advanced?: AdvancedDiscoveryPayload | null
+
   /** Run telemetry — written by agent.ts, not by Claude */
   meta: {
     model: string
@@ -260,6 +266,36 @@ export interface DiscoveryReport {
     cost_usd: number
     duration_ms: number
     truncated: boolean              // true if hit tool-call cap before finishing
+  }
+}
+
+// ─── Advanced discovery ───────────────────────────────────────────────────────
+
+/** Facebook profile metrics fetched during advanced discovery. */
+export interface AdvancedFacebookProfile {
+  url: string
+  page_name: string
+  followers_count: number
+  posts_last_30d: number
+  engagement_rate: number
+}
+
+/**
+ * Payload written to `client_discovery.payload.advanced` after a connector
+ * (meta-ads or gbp) is authorised. Does NOT overwrite the basic DiscoveryReport
+ * fields — it sits alongside them under the `advanced` key.
+ */
+export interface AdvancedDiscoveryPayload {
+  /** Meta Ad Library data — null when scrape failed or no ads found */
+  meta_ads: DiscoveredMetaAds | null
+  /** Facebook Page metrics — one entry per FB profile found in basic discovery */
+  facebook_profiles: AdvancedFacebookProfile[]
+  meta: {
+    duration_ms: number
+    /** Apify cost is tracked externally; Claude cost is 0 for advanced pass */
+    cost_usd: number
+    ran_at: string
+    triggered_by: string  // connector anchor that triggered this run, e.g. 'meta-ads'
   }
 }
 
