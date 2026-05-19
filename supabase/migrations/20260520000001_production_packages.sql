@@ -63,20 +63,6 @@ CREATE TRIGGER production_packages_updated_at_trigger
 
 ALTER TABLE production_packages ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users can view production packages for their clients"
-  ON production_packages FOR SELECT
-  USING (auth.uid() IN (
-    SELECT user_id FROM client_team WHERE client_id = production_packages.client_id
-  ));
-
-CREATE POLICY "Users can insert production packages for their clients"
-  ON production_packages FOR INSERT
-  WITH CHECK (auth.uid() IN (
-    SELECT user_id FROM client_team WHERE client_id = production_packages.client_id
-  ));
-
-CREATE POLICY "Users can update production packages for their clients"
-  ON production_packages FOR UPDATE
-  USING (auth.uid() IN (
-    SELECT user_id FROM client_team WHERE client_id = production_packages.client_id
-  ));
+CREATE POLICY "service_role_full"
+  ON production_packages FOR ALL TO service_role
+  USING (true) WITH CHECK (true);
