@@ -39,7 +39,10 @@ import { ensureSerpCoverage } from './serp-coverage'
 // + competitors + their homepages (4-5) + SERP scrapes (2-3) + final synthesis.
 const MAX_TOOL_CALLS = 18
 const MAX_COST_USD = 1.50
-const MAX_OUTPUT_TOKENS = 8096
+// 24K covers full discovery JSON (business + 15 keywords + competitors + AI
+// questions + diagnosis + actions, including long-form Chinese descriptions).
+// 8096 was hitting truncation at ~14K chars, leaving JSON unparseable mid-string.
+const MAX_OUTPUT_TOKENS = 24_000
 const FETCH_URL_TIMEOUT_MS = 15_000
 const LOCAL_REVIEWS_TIMEOUT_MS = 45_000
 // Per-turn Anthropic call cap. Anthropic SDK default is 10 min, which can
