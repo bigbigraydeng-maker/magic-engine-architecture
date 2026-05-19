@@ -501,6 +501,7 @@ export interface GenerateBlogRequest {
   keyword_intent?: string      // Search intent classification
   word_count_target?: number   // default 1000
   skip_audit?: boolean         // bypass content audit (e.g. user confirmed override)
+  production_package_id?: string  // if set, link generated post to this package
 }
 
 /** Result from content-auditor — returned alongside generated post */
