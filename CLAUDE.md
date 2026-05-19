@@ -213,16 +213,16 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-20（**P13.A.2 production_items migration 完成**；P8.3.2 + P8.10.S0.22 DB 迁移剩生产环境手动操作；P8.10.S0.23 需 Render env var）
+> 最后更新：2026-05-21（**P13.A.3 四张内容表 production_item_id FK 完成**；P8.3.2 + P8.10.S0.22 DB 迁移剩生产环境手动操作；P8.10.S0.23 需 Render env var）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P13.A.3** | `ALTER content_posts / blog_posts / reels_drafts / visual_assets` 各加 `production_item_id` 单列 FK + index | ⭐ |
+| **P13.A.4** | Social 生成链路（Route A/C）接收 `production_package_id`，生成时创建对应 `production_items` 行 | ⭐ |
 | **P8.3.2 收尾** | PM 在 Render 填 `ADMIN_EMAILS` + Supabase 后台白名单 Redirect URL，自测磁链可登录 | ⭐ |
 | **P8.10.S0.22 DB 迁移** | 在 Supabase 后台执行 `20260519000001_client_connectors.sql`（client_connectors 表 + job_type 列） | ⭐ |
 | **P8.10.S0.23 Env 配置** | Render 加 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS`（JSON 字符串），并让客户将服务账号邮箱加入 GSC 验证用户 | 📋 |
 
-**状态校准（2026-05-20）**：P13.A.2 代码层已完成（`production_items` 表 migration + 跨 FK 一致性约束 + 6 索引 + trigger + RLS，build ✅）。P13.A.3 为下一个任务。P8.3.2 / P8.10.S0.22 / P8.10.S0.23 剩生产环境手动操作。
+**状态校准（2026-05-21）**：P13.A.3 代码层已完成（四张内容表各加 `production_item_id` nullable FK + partial index，build ✅）。P13.A.4 为下一个任务。P8.3.2 / P8.10.S0.22 / P8.10.S0.23 剩生产环境手动操作。
 
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 
