@@ -4,7 +4,7 @@ import { submitImageGeneration } from '@/lib/visual/wavespeed'
 
 export async function POST(req: NextRequest) {
   try {
-    const { post_id, client_id, variant = 1, prompt_override, aspect_ratio = '1:1' } = await req.json()
+    const { post_id, client_id, variant = 1, prompt_override, aspect_ratio = '1:1', production_package_id } = await req.json()
 
     if (!post_id || !client_id) {
       return NextResponse.json(
@@ -63,6 +63,37 @@ export async function POST(req: NextRequest) {
         .from('content_posts')
         .update({ revision_notes: null })
         .eq('id', post_id)
+    }
+
+    // Link to production package if provided (non-blocking)
+    if (production_package_id && asset) {
+      supabaseAdmin
+        .from('production_items')
+        .insert({
+          package_id: production_package_id,
+          client_id,
+          content_type: 'visual_asset',
+          visual_asset_id: asset.id,
+          sort_order: 0,
+          status: 'ready',
+        })
+        .select('id')
+        .single()
+        .then(({ data: item, error: itemErr }) => {
+          if (itemErr) {
+            console.error('[visual/image] production_items insert failed:', itemErr)
+            return
+          }
+          if (item) {
+            supabaseAdmin
+              .from('visual_assets')
+              .update({ production_item_id: item.id })
+              .eq('id', asset.id)
+              .then(({ error: upErr }) => {
+                if (upErr) console.error('[visual/image] production_item_id back-ref failed:', upErr)
+              })
+          }
+        })
     }
 
     return NextResponse.json({

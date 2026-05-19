@@ -22,7 +22,10 @@ export async function POST(
   const clientId = params.id
 
   try {
-    const body = await req.json().catch(() => ({})) as { campaign_brief_id?: string }
+    const body = await req.json().catch(() => ({})) as {
+      campaign_brief_id?: string
+      production_package_id?: string
+    }
 
     // 1. Fetch active master brief
     const { data: brief, error: briefErr } = await supabaseAdmin
@@ -83,6 +86,37 @@ export async function POST(
       .single()
 
     if (insertErr) throw insertErr
+
+    // Link to production package if provided (non-blocking)
+    if (body.production_package_id && draft) {
+      supabaseAdmin
+        .from('production_items')
+        .insert({
+          package_id: body.production_package_id,
+          client_id: clientId,
+          content_type: 'reel',
+          reel_id: draft.id,
+          sort_order: 0,
+          status: 'ready',
+        })
+        .select('id')
+        .single()
+        .then(({ data: item, error: itemErr }) => {
+          if (itemErr) {
+            console.error('[reels/generate] production_items insert failed:', itemErr)
+            return
+          }
+          if (item) {
+            supabaseAdmin
+              .from('reels_drafts')
+              .update({ production_item_id: item.id })
+              .eq('id', draft.id)
+              .then(({ error: upErr }) => {
+                if (upErr) console.error('[reels/generate] production_item_id back-ref failed:', upErr)
+              })
+          }
+        })
+    }
 
     return NextResponse.json({ success: true, draft })
 
