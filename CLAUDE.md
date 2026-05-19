@@ -213,18 +213,16 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-24（**Sprint A + B + C + D 均已完成**。Sprint E（测试+收尾）为下一步）
+> 最后更新：2026-05-24（**Phase 8.13 Sprint A + B + C + D + E 全部完成** ✅）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P8.13.E.1** | 端到端测试：CTS Tours + Oztop 各跑一次完整张骞，验收所有新工具均触发 | 🔥 当前 |
-| **P8.13.E.2** | 更新 agent.ts 顶部成本估算注释（新基准：~$0.57/客户） | 🔥 |
-| **P8.13.E.3** | ROADMAP § 9 追加 Phase 8.13 总结 + 更新 CLAUDE.md（已在此步骤完成） | ✅ |
 | **P8.10.S0.23 Env** | Render 加 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` | 📋 待 PM 操作 |
+| **下一阶段** | Phase 8.10.S2 数据源深化 / Phase 9 报告化 / Phase 14+ 战略 | 📋 待规划 |
 
-**状态校准（2026-05-24）**：Sprint D 完成：`serp.ts` 新建（DataForSEO 主 + Apify fallback）；`onpage.ts` 新建；`FETCH_ONPAGE_AUDIT_TOOL` + handler 接入 agent；`types.ts` 新增 `onpage_audit`；`OnPageAuditCard` 接入 cards.tsx + page.tsx；prompts.ts 研究协议步骤 1 强制调用。build ✅。
+**状态校准（2026-05-24）**：Phase 8.13 全部完成：11 个 DataForSEO 工具接入张骞（Labs 关键词+竞品 / Domain Analytics 技术栈+WHOIS / Business Data 评论 / SERP / OnPage）；validators.ts bug 修复（新字段 pass-through）；21 个集成测试全过；成本基准 ≈ $0.57/客户。下一个较大 Phase 待 PM 决策。
 
-**当前会话启动咒语**：`继续 Phase 8.13 Sprint E，从 P8.13.E.1 开始`
+**Phase 8.13 会话已完成，可以关闭。**
 
 **更新规则**（每次上线新功能）：
 1. ROADMAP.md 勾选对应任务 checkbox

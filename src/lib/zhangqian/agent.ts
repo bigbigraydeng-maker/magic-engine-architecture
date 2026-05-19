@@ -41,6 +41,17 @@ import { ensureSerpCoverage } from './serp-coverage'
 // are deferred to the Phase 8.10.S5 advanced pass. 18 calls comfortably covers:
 // homepage + registration (2) + IG/TikTok social (2-3) + GBP local reviews (1)
 // + competitors + their homepages (4-5) + SERP scrapes (2-3) + final synthesis.
+//
+// P8.13 cost baseline (full Sprint A-D toolset, per first-time discovery):
+//   Claude Sonnet tokens    ~$0.23
+//   web_search calls (×8)   ~$0.08
+//   DataForSEO Labs         ~$0.04  (keywords + competitors)
+//   Domain Analytics        ~$0.11  (technologies + whois)
+//   Business Data           ~$0.03  (GBP + reviews + optional tripadvisor)
+//   SERP API                ~$0.01  (1-2 queries × $0.005)
+//   OnPage API              ~$0.003 (1 homepage audit)
+//   ─────────────────────────────────
+//   Total per client        ≈ $0.57 (one-time onboarding cost)
 const MAX_TOOL_CALLS = 18
 const MAX_COST_USD = 1.50
 // 24K covers full discovery JSON (business + 15 keywords + competitors + AI

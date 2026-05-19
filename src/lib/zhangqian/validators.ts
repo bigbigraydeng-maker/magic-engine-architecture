@@ -499,6 +499,11 @@ export function validateDiscoveryReport(
       serp_results: Array.isArray(v.serp_results) ? v.serp_results.filter(isSerpResult) : null,
       diagnosis: isDiagnosis(v.diagnosis) ? v.diagnosis : null,
       visual_dna: isVisualDna(v.visual_dna) ? v.visual_dna : null,
+      // Sprint B — DataForSEO Domain Analytics pass-throughs (P8.13.B.2)
+      technology_stack: isRecord(v.technology_stack) ? v.technology_stack as DiscoveryReport['technology_stack'] : null,
+      domain_whois: isRecord(v.domain_whois) ? v.domain_whois as DiscoveryReport['domain_whois'] : null,
+      // Sprint D — OnPage audit pass-through (P8.13.D.3)
+      onpage_audit: isRecord(v.onpage_audit) ? v.onpage_audit as DiscoveryReport['onpage_audit'] : null,
     },
   }
 }

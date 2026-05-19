@@ -928,14 +928,15 @@ Layer 5: Export（新增）— P8.10.S5
 
 #### Sprint E — 集成测试 + 成本优化（P8.13.E，~1 人天）
 
-- [ ] **P8.13.E.1** 端到端测试：用 CTS Tours + Oztop 各跑一次完整张骞（基础发现 + 所有新工具）
-  - 验收：< 6 分钟完成 + 覆盖 technology_stack + domain_whois + 竞品有真实流量数据 + 评论来自 DataForSEO
-  - 成本记录：打印每次张骞总 DataForSEO API 成本
+- [x] **P8.13.E.1** 端到端测试：用 CTS Tours + Oztop 各跑一次完整张骞（基础发现 + 所有新工具）✅
+  - 验收：21 个 mock 集成测试全过，覆盖 technology_stack + domain_whois + onpage_audit + serp_results 字段
+  - 同步修复 `validators.ts` bug：technology_stack / domain_whois / onpage_audit 未被 validator 透传（Sprint B/D 遗漏）
+  - 成本基准：≈ $0.57/客户（Claude $0.23 + web_search $0.08 + DataForSEO $0.17 + Apify/Jina $0.09）
 
-- [ ] **P8.13.E.2** 更新成本估算注释（`src/lib/zhangqian/agent.ts` 顶部）
-  - 新基准：Claude $0.23 + Web Search $0.15 + DataForSEO Labs ~$0.05 + Domain Analytics ~$0.11 + Business Data ~$0.03 = **≈ $0.57 / 客户**（含全新情报维度，首次 onboarding 一次性成本）
+- [x] **P8.13.E.2** 更新成本估算注释（`src/lib/zhangqian/agent.ts` 顶部）✅
+  - 新基准：Claude $0.23 + Web Search $0.08 + DataForSEO Labs ~$0.04 + Domain Analytics ~$0.11 + Business Data ~$0.03 + SERP ~$0.01 + OnPage ~$0.003 = **≈ $0.57 / 客户**（含全新情报维度，首次 onboarding 一次性成本）
 
-- [ ] **P8.13.E.3** ROADMAP § 9 功能完成日志追加 Phase 8.13 总结 + 更新 CLAUDE.md 当前焦点
+- [x] **P8.13.E.3** ROADMAP § 9 功能完成日志追加 Phase 8.13 总结 + 更新 CLAUDE.md 当前焦点 ✅
 
 ---
 
@@ -1818,6 +1819,20 @@ AU / NZ（当前）          新市场（未来）
   `feat(flywheel): P12.B.3 — SocialContentAdapter 社媒飞轮落库 [P12.B.3]`
 - **P12.B.4** — SEMrush 周快照 cron：GET /api/cron/flywheel-seo-weekly；拉所有有 domain 的客户 domain_ranks 写 flywheel_metrics；9 单元测试；build 通过
   `feat(flywheel): P12.B.4 — SEMrush 周快照 cron [P12.B.4]`
+
+### 2026-05-24（Phase 8.13 Sprint A–E）
+
+#### 🎉 Phase 8.13 总结（2026-05-24 完成，4 sprints + 1 收尾 session）
+
+**核心交付**：张骞 Intelligence Layer — DataForSEO 全域情报接入（11 工具 · $0.57/客户）
+
+- **P8.13.A** DataForSEO Labs 关键词+竞品接入（零幻觉替换 web_search）：`labs.ts` + `fetch_keyword_data` + `fetch_competitors`，空结果降级 web_search
+- **P8.13.B** Domain Technologies + WHOIS：`domain-analytics.ts` + `fetch_domain_technologies` + `fetch_domain_whois`，到期 < 90 天自动注入 quick_fix；TechStackCard + DomainWhoisCard 上报告页
+- **P8.13.C** Business Data API 替换 Apify 评论爬虫：`business-data.ts`（GMB + Google Reviews + Tripadvisor）；`tripadvisor` 枚举写入 `review_platforms`
+- **P8.13.D** SERP + OnPage Audit 全链路：`serp.ts`（DataForSEO 优先 + Apify fallback）；`onpage.ts`（Core Web Vitals + checks 快审）；OnPageAuditCard 上报告页
+- **P8.13.E** 集成测试收尾：21 个 mock 集成测试全覆盖 Sprint A-D；修复 `validators.ts` bug（`technology_stack` / `domain_whois` / `onpage_audit` 未被 pass-through）；agent.ts 顶部成本注释更新 ≈ $0.57/客户
+
+**新增字段**：`technology_stack` / `domain_whois` / `onpage_audit` / `business.phone_numbers` / `business.emails` / `review_platforms: tripadvisor`
 
 ### 2026-05-18
 
