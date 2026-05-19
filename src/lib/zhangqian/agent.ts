@@ -44,8 +44,9 @@ const FETCH_URL_TIMEOUT_MS = 15_000
 const LOCAL_REVIEWS_TIMEOUT_MS = 45_000
 // Per-turn Anthropic call cap. Anthropic SDK default is 10 min, which can
 // blow past our 4.5 min global wall-clock when a single tool turn stalls
-// server-side. Cap it at 90 s; a turn that needs more is almost certainly hung.
-const CLAUDE_CALL_TIMEOUT_MS = 90_000
+// server-side. 150 s covers web_search turns where Anthropic searches multiple
+// queries server-side; 90 s was too tight and caused spurious timeout failures.
+const CLAUDE_CALL_TIMEOUT_MS = 150_000
 // Hard wall-clock cap: trigger graceful finalization at 5 min so the
 // full round-trip (final Claude call + overhead) lands under the 6-min
 // stale-job threshold. First-time users should never wait longer than this —
