@@ -213,23 +213,20 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-24（**Sprint A 已 commit+push** — fetch_keyword_data + fetch_competitors 已接入张骞 agent，Sprint B 进行中）
+> 最后更新：2026-05-24（**Sprint A + Sprint B 均已 commit+push**。Sprint C 为下一步）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P8.13.B.1** | `src/lib/dataforseo/domain-analytics.ts` — Domain Technologies + Whois 封装 | 🔥 当前 |
-| **P8.13.B.2** | `src/lib/zhangqian/types.ts` 新增 `technology_stack` + `domain_whois` + `DiscoveredBusiness.phone_numbers/emails` | 🔥 |
-| **P8.13.B.3** | `agent.ts` 新增 `fetch_domain_technologies` tool + handler | 🔥 |
-| **P8.13.B.4** | `agent.ts` 新增 `fetch_domain_whois` tool + handler（域名快到期 → 写 quick_fix） | 🔥 |
-| **P8.13.B.5** | 张骞报告页新增 `TechStackCard` + `DomainWhoisCard` | ⭐ |
-| **P8.13.C.1–C.3** | Business Data API 替换 GBP/评论 Apify 爬虫 + Tripadvisor（CTS Tours） | ⭐ |
+| **P8.13.C.1** | `src/lib/dataforseo/business-data.ts` — Business Data API 封装（GMB + Google Reviews + Tripadvisor） | 🔥 当前 |
+| **P8.13.C.2** | `src/lib/local-reviews/client.ts` 升级 — GBP 源从 SerpAPI 切换到 DataForSEO Business Data | 🔥 |
+| **P8.13.C.3** | types.ts 新增 `tripadvisor` 枚举 + ReviewCard 展示 Tripadvisor | 🔥 |
 | **P8.13.D.1–D.4** | SERP AI Overview + Backlinks + OnPage Audit + 报告页卡片 | 📋 |
 | **P8.13.E.1–E.3** | 端到端测试 + 成本更新 + 日志收尾 | 📋 |
 | **P8.10.S0.23 Env** | Render 加 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` | 📋 待 PM 操作 |
 
-**状态校准（2026-05-24）**：Sprint A（P8.13.A.1–A.3）已实现并 commit+push（commit 175299a）。labs.ts 新建，agent.ts + prompts.ts 已更新，build ✅。Sprint B 当前进行中：创建 `domain-analytics.ts`，新增 technology_stack + domain_whois 到 types.ts，接入 agent，然后加报告页卡片。
+**状态校准（2026-05-24）**：Sprint A（commit 175299a）+ Sprint B（commit a16e0ac）均已完成并 push 到 main。Sprint C 为下一步：用 DataForSEO Business Data API 替换当前不稳定的 Apify GBP+评论爬虫，同时为 CTS Tours 接入 Tripadvisor 数据。
 
-**当前会话启动咒语**：`继续 Phase 8.13 Sprint B，从 P8.13.B.1 开始`
+**当前会话启动咒语**：`继续 Phase 8.13 Sprint C，从 P8.13.C.1 开始`
 
 **更新规则**（每次上线新功能）：
 1. ROADMAP.md 勾选对应任务 checkbox

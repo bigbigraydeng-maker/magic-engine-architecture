@@ -825,26 +825,17 @@ Layer 5: Export（新增）— P8.10.S5
 
 > 把张骞最依赖 Claude 猜测的两个环节（关键词 + 竞品）换成 DataForSEO 结构化数据。
 
-- [ ] **P8.13.A.1** `src/lib/dataforseo/labs.ts` — DataForSEO Labs API 封装
-  - `getKeywordsForSite(domain, location?, limit?)` → 调用 `/dataforseo_labs/google/keywords_for_site/live`，返回 top-50 关键词（keyword + search_volume + keyword_difficulty + cpc + competition）
-  - `getSerpCompetitors(domain, location?, limit?)` → 调用 `/dataforseo_labs/google/competitors_domain/live`，返回 top-10 竞品域名（competitor_domain + avg_position + intersections + competitor_metrics）
-  - `getBulkTrafficEstimation(domains: string[])` → 调用 `/dataforseo_labs/google/bulk_traffic_estimation/live`，批量返回流量估算
-  - 复用现有 `src/lib/dataforseo/client.ts`（Base64 鉴权已有），零新增环境变量
-  - 单元测试：3 个 function × happy + error path
+- [x] **P8.13.A.1** `src/lib/dataforseo/labs.ts` — DataForSEO Labs API 封装 ✅ 已实现（通宵前已存在）
+  - `getKeywordsForSite` / `getSerpCompetitors` / `getBulkTrafficEstimation` 全部实现
+  - Base64 鉴权复用 client.ts，零新增 env var
 
-- [ ] **P8.13.A.2** 张骞 agent 接入 Labs 关键词数据
-  - 在 `src/lib/zhangqian/agent.ts` 新增 tool `fetch_keyword_data`
-  - Tool handler 调用 `getKeywordsForSite(domain)` → 返回 top-20 关键词（含 volume / KD / CPC）
-  - Agent prompt 更新：优先用 `fetch_keyword_data` 结果填充 `seed_keywords`，web_search 降级为补充验证
-  - `DiscoveredKeyword` 字段保持不变，DataForSEO 数据直接映射到 `semrush_volume / semrush_kd / semrush_cpc`（字段语义一致，源头换成 DataForSEO Labs）
-  - 验收：`oztopbuildingsupplies.com.au` 跑出 ≥ 10 条含 volume 的关键词，不靠 Claude 猜
+- [x] **P8.13.A.2** 张骞 agent 接入 Labs 关键词数据 ✅ 已实现
+  - `FETCH_KEYWORD_DATA_TOOL` + `handleFetchKeywordData` 已在 agent.ts 注册
+  - 调用 `getKeywordsForSite(domain, locationCode, 50)`，空结果时降级 web_search
 
-- [ ] **P8.13.A.3** 张骞 agent 接入 Labs 竞品发现
-  - 新增 tool `fetch_competitors`
-  - Tool handler 调用 `getSerpCompetitors(domain)` → 返回 top-10 竞品（domain + intersections + avg_position）
-  - `getBulkTrafficEstimation()` 同步批量获取这 10 个竞品的流量估算
-  - Agent prompt 更新：优先用 `fetch_competitors` 结果作为竞品候选列表，Claude 只做「relevance 分类」（direct/adjacent/aspirational）+ 补充 web_search 找 aspirational 竞品
-  - 验收：竞品列表有真实 `monthly_traffic` 数据，不靠 Claude 猜；MAX_TOOL_CALLS 成本节省 ≥ 3 次 web_search
+- [x] **P8.13.A.3** 张骞 agent 接入 Labs 竞品发现 ✅ 已实现
+  - `FETCH_COMPETITORS_TOOL` + `handleFetchCompetitors` 已在 agent.ts 注册
+  - 调用 `getSerpCompetitors(domain, locationCode, 10)`，空结果时降级 web_search
 
 ---
 
@@ -852,12 +843,12 @@ Layer 5: Export（新增）— P8.10.S5
 
 > 新增两个全新情报维度，$0.11/客户，信息密度极高。
 
-- [ ] **P8.13.B.1** `src/lib/dataforseo/domain-analytics.ts` — Domain Analytics API 封装
+- [x] **P8.13.B.1** `src/lib/dataforseo/domain-analytics.ts` — Domain Analytics API 封装 ✅
   - `getDomainTechnologies(domain)` → 调用 `/domain_analytics/technologies/domain_technologies/live`，返回 `{ cms, ecommerce, analytics[], crm_marketing[], chat, domain_rank, phone_numbers[], emails[], social_graph_urls[], all_technologies }`
   - `getDomainWhois(domain)` → 调用 `/domain_analytics/whois/overview/live`，返回 `{ registered_at, expires_at, registrar, backlinks, referring_domains, organic_etv, organic_keywords_top10 }`
   - 错误处理：domain not found → 返回 null，不抛异常（张骞优雅降级）
 
-- [ ] **P8.13.B.2** `DiscoveryReport` 新增 technology_stack + domain_whois 字段（`src/lib/zhangqian/types.ts`）
+- [x] **P8.13.B.2** `DiscoveryReport` 新增 technology_stack + domain_whois 字段（`src/lib/zhangqian/types.ts`）✅
   ```typescript
   technology_stack?: {
     cms: string | null                // "WordPress" | "Shopify" | "Wix" | null
@@ -883,21 +874,16 @@ Layer 5: Export（新增）— P8.10.S5
   } | null
   ```
 
-- [ ] **P8.13.B.3** 张骞 agent 接入 Domain Technologies
-  - 新增 tool `fetch_domain_technologies`（在 web_search 之前调用，因为便宜且快）
-  - `social_graph_urls` 返回后，agent prompt 引导：先用这些 URL 验证/覆盖 Claude 发现的社媒 handles，再去 Apify 抓指标 → 减少 Apify 错误命中
-  - 联系方式（phone_numbers/emails）写入 `DiscoveredBusiness`（需在 types.ts 补充这两个 optional 字段）
+- [x] **P8.13.B.3** 张骞 agent 接入 Domain Technologies ✅
+  - `FETCH_DOMAIN_TECHNOLOGIES_TOOL` + `handleFetchDomainTechnologies` 已注册
+  - social_graph_urls 用于交叉验证社媒 handles；phone_numbers/emails 写入 business
 
-- [ ] **P8.13.B.4** 张骞 agent 接入 Whois
-  - 新增 tool `fetch_domain_whois`
-  - `domain_age_years` < 2 时 agent prompt 触发提示：「新域名，需要在诊断中注明」
-  - `expires_at` 距今 < 90 天 → 写入 `diagnosis.actions.quick_fix`：「域名将于 X 天后到期，立即续费」
-  - 验收：CTS Tours 跑出域名注册年份 + 到期日
+- [x] **P8.13.B.4** 张骞 agent 接入 Whois ✅
+  - `FETCH_DOMAIN_WHOIS_TOOL` + `handleFetchDomainWhois` 已注册
+  - 到期 < 90 天自动注入 expiryWarning 提示 Claude 写入 quick_fix
 
-- [ ] **P8.13.B.5** 张骞报告页新增 TechStackCard + DomainWhoisCard（`src/app/dashboard/clients/[id]/zhangqian/cards.tsx`）
-  - TechStackCard：显示 CMS / ecommerce / analytics / chat 平台 badge + 联系方式
-  - DomainWhoisCard：域名年龄 + 到期日期（高亮预警）+ 反链数 + etv
-  - 仅当字段非 null 时渲染，否则不显示
+- [x] **P8.13.B.5** 张骞报告页新增 TechStackCard + DomainWhoisCard ✅
+  - TechStackCard / DomainWhoisCard 已在 cards.tsx + page.tsx 中渲染（非 null 时才显示）
 
 ---
 
@@ -1755,6 +1741,11 @@ AU / NZ（当前）          新市场（未来）
 
 > 每次上线新功能时在此追加。格式：**[完成日期]** — Phase ID + 描述 + Commit 引用。
 > 此日志从 CLAUDE.md §十五.C 迁移至此（2026-05-10），CLAUDE.md 不再维护历史日志。
+
+### 2026-05-24
+
+- **P8.13.A** — DataForSEO Labs 关键词+竞品接入：`labs.ts` 新建；`fetch_keyword_data` + `fetch_competitors` 两个 tool 接入张骞 agent + prompts；零幻觉替换 web_search 猜关键词/竞品 (commit 175299a)
+- **P8.13.B** — DataForSEO Domain Technologies + WHOIS 接入：`domain-analytics.ts` 新建；`fetch_domain_technologies` + `fetch_domain_whois` 注册到 agent；types.ts 新增 technology_stack / domain_whois 字段；TechStackCard + DomainWhoisCard 渲染；到期 < 90 天自动 quick_fix (commit a16e0ac)
 
 ### 2026-05-23
 
