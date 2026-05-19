@@ -40,11 +40,13 @@ export async function POST(
   const { id: clientId } = params
 
   let triggeredBy = 'unknown'
+  let siteUrl: string | undefined
   try {
-    const body = await req.json() as { triggered_by?: string }
+    const body = await req.json() as { triggered_by?: string; site_url?: string }
     triggeredBy = body.triggered_by ?? 'unknown'
+    siteUrl = body.site_url
   } catch {
-    // No body — fine, keep default
+    // No body — fine, keep defaults
   }
 
   // Resolve client domain
@@ -83,6 +85,7 @@ export async function POST(
     client.domain,
     basicDiscovery.payload,
     triggeredBy,
+    siteUrl,
   ).catch((err: unknown) => {
     console.error('[zhangqian/advanced-discover] background failure', err)
   })
@@ -101,6 +104,7 @@ async function executeAdvancedDiscoveryJob(
   domain: string,
   basicReport: import('@/lib/zhangqian/types').DiscoveryReport,
   triggeredBy: string,
+  siteUrl?: string,
 ): Promise<void> {
   await updateJobProgress(supabaseAdmin, jobId, {
     status: 'running',
@@ -116,6 +120,7 @@ async function executeAdvancedDiscoveryJob(
       async (note) => {
         await updateJobProgress(supabaseAdmin, jobId, { progress_note: note })
       },
+      siteUrl,
     )
 
     await mergeAdvancedPayload(supabaseAdmin, clientId, advancedPayload)

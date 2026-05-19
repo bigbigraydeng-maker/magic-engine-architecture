@@ -18,7 +18,7 @@ import { requireBearerToken } from '@/lib/validation-utils'
 import { getLatestDiscovery } from '@/lib/zhangqian/persistor'
 
 // Anchors that unlock advanced discovery when connected.
-const ADVANCED_DISCOVERY_TRIGGERS = new Set(['meta-ads', 'gbp'])
+const ADVANCED_DISCOVERY_TRIGGERS = new Set(['meta-ads', 'gbp', 'gsc', 'google-ads'])
 
 export async function POST(
   req: NextRequest,
@@ -60,7 +60,7 @@ export async function POST(
     return NextResponse.json({ success: false, error: upsertError.message }, { status: 500 })
   }
 
-  // Trigger advanced discovery for meta-ads and gbp connectors
+  // Trigger advanced discovery for supported connectors
   if (!ADVANCED_DISCOVERY_TRIGGERS.has(anchor)) {
     return NextResponse.json({ success: true })
   }
@@ -76,8 +76,14 @@ export async function POST(
     })
   }
 
+  // For gsc, forward site_url from config so the agent can call the correct property
+  const extraConfig: Record<string, unknown> = {}
+  if (anchor === 'gsc' && typeof config?.site_url === 'string' && config.site_url) {
+    extraConfig.site_url = config.site_url
+  }
+
   // Fire-and-forget: POST to the advanced-discover endpoint internally
-  const advancedJobId = await enqueueAdvancedDiscovery(clientId, anchor)
+  const advancedJobId = await enqueueAdvancedDiscovery(clientId, anchor, extraConfig)
 
   return NextResponse.json({ success: true, advanced_job_id: advancedJobId })
 }
@@ -87,6 +93,7 @@ export async function POST(
 async function enqueueAdvancedDiscovery(
   clientId: string,
   triggeredBy: string,
+  extra: Record<string, unknown> = {},
 ): Promise<string | null> {
   try {
     // Use the advanced-discover route for job creation + execution
@@ -102,7 +109,7 @@ async function enqueueAdvancedDiscovery(
           'Content-Type': 'application/json',
           Authorization: `Bearer ${process.env.INTERNAL_API_KEY ?? ''}`,
         },
-        body: JSON.stringify({ triggered_by: triggeredBy }),
+        body: JSON.stringify({ triggered_by: triggeredBy, ...extra }),
       },
     )
 

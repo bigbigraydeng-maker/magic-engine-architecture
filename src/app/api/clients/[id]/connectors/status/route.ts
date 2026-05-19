@@ -21,7 +21,14 @@ const CONNECTOR_CATALOGUE = [
     name: 'Google Search Console',
     emoji: '🔎',
     description: '客户网站的真实搜索表现：展示量、点击量、关键词排名',
-    setupHint: '需要客户在 GSC 后台把 magic-engine 服务账号添加为验证用户。',
+    setupHint: '在下方填入 GSC Property URL，并确保客户已将 magic-engine 服务账号加为验证用户。接入后，张骞将用真实 GSC 数据替代 SEMrush 估算。',
+  },
+  {
+    anchor: 'google-ads',
+    name: 'Google 广告',
+    emoji: '🔵',
+    description: '通过 Google Ads 透明度中心扫描，获取在投广告数量、格式及地区分布（公开数据，无需 API 凭证）',
+    setupHint: '无需提供 API 凭证。保存后张骞将自动扫描 Google 广告透明度中心，分析品牌当前 Google 广告投放情况。',
   },
   {
     anchor: 'gbp',

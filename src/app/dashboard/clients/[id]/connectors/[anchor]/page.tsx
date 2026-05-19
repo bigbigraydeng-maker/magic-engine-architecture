@@ -62,10 +62,29 @@ const CONNECTOR_META: Record<string, ConnectorMeta> = {
   gsc: {
     name: 'Google Search Console',
     emoji: '🔎',
-    description: '需要客户在 GSC 后台将 magic-engine 服务账号加为验证用户后，在此标记为已连接。',
+    description: '接入 GSC 后，张骞将拉取真实 query、展示量、点击率、平均排名，替代 SEMrush 关键词估算。\n\n前提：客户需在 GSC 后台（Settings → Users & Permissions）将 magic-engine 服务账号加为验证用户（Restricted 权限即可）。服务账号邮箱请联系管理员确认。',
+    fields: [
+      {
+        key: 'site_url',
+        label: 'GSC Property URL',
+        placeholder: 'https://example.com.au/',
+        required: true,
+      },
+    ],
+    triggersAdvanced: true,
+    advancedHint: '保存后张骞将在后台自动拉取过去 28 天的真实搜索数据（query / 展示量 / 点击率 / 排名），通常 1–2 分钟完成。',
+    buttonLabel: '连接 Google Search Console →',
+    successLabel: '✓ Google Search Console 已连接',
+  },
+  'google-ads': {
+    name: 'Google 广告',
+    emoji: '🔵',
+    description: '通过 Google Ads 透明度中心（公开数据）扫描品牌当前的 Google 广告投放情况，包括活跃广告数量、创意格式及投放地区。无需提供任何 API 凭证或广告账户授权。',
     fields: [],
-    triggersAdvanced: false,
-    advancedHint: '',
+    triggersAdvanced: true,
+    advancedHint: '保存后张骞将在后台扫描 Google 广告透明度中心，通常 2–5 分钟完成。',
+    buttonLabel: '开启 Google 广告扫描 →',
+    successLabel: '✓ Google 广告扫描已启用',
   },
   ga4: {
     name: 'Google Analytics 4',

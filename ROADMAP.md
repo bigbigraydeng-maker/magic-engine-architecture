@@ -43,6 +43,9 @@
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
 📋 Phase 14      Website Connector / 网站直连执行闭环（战略确认，待排期）
+📋 Phase 15      Reputation Engine / 口碑监控与执行闭环（战略确认，待排期）
+📋 Phase 16      Competitor Intelligence / 竞品雷达 + 信号驱动执行（战略确认，待排期）
+📋 Phase 17      Unified Data Pullback / 统一数据回流层（战略确认，待排期）
 ```
 
 **Phase 7 核心战略**：双信号博客（Dual-Signal Blog）— 每篇文章同时携带 SEO 信号（Google 排名）和 GEO 信号（AI 推荐），选题由 AI Tracker 弱项 × SEMrush 低KD机会交叉驱动，形成数据自强化飞轮。
@@ -655,9 +658,13 @@ Layer 5: Export（新增）— P8.10.S5
   - 复用 `runZhangqian()` 的 Tool 集，但首次跑被屏蔽的 `fetch_meta_ads` / Facebook 真实指标在此重新接入
   - Advanced report 写入 `client_discovery.payload.advanced`（不覆盖 basic）
 
-- [ ] **P8.10.S0.23** Advanced Discovery — Phase 2：GSC / Google Ads Connector
-  - GSC 拉真实 query / impressions / CTR / position（替代 SEMrush 估算）
-  - Google Ads Transparency API 拉真实 advertiser ID + active campaigns
+- [x] **P8.10.S0.23** Advanced Discovery — Phase 2：GSC / Google Ads Connector
+  - `src/lib/gsc/client.ts`：Service Account JWT（内置 crypto，无额外依赖）→ GSC Search Analytics API，返回过去 28 天 top-25 query / impressions / CTR / position
+  - `google-ads` connector：复用 `apify/google-ads-transparency.ts`，触发后台 Apify 扫描（公开数据，无需凭证）
+  - `advanced-agent.ts`：按 `triggeredBy` 分流，gsc → GSC fetch，google-ads → Transparency 扫描，meta-ads/gbp → 原有 Meta/FB 流程
+  - `AdvancedDiscoveryPayload` 新增 `gsc_data?` 和 `google_ads_data?`（向后兼容，旧行不需迁移）
+  - Connectors 列表页 + 详情页 + API status route 同步加入 `google-ads` 条目；gsc 详情页增加 `site_url` 必填字段
+  - build ✅ 零错误（P8.10.S0.23 env var 依赖：`GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` JSON，GSC 不配置时自动降级返回 null）
 
 **验收标准**：
 - 输入 `oztopbuildingsupplies.com.au` → 5 分钟内交付：业务一句话描述 + IG handle + GBP + 5-10 竞品 + 10-20 关键词 + 15 AI 问句
@@ -1322,6 +1329,173 @@ website_publish_jobs
 
 ---
 
+## Phase 15 — Reputation Engine（口碑监控与执行闭环）📋 战略确认，待排期
+
+> **登记日期**：2026-05-19 · **状态**：战略方向已确认，待深入讨论后排期
+>
+> **背景**：口碑不只是 Reputation 维度的问题——一条 TripAdvisor 好评同时影响 SEO（Google 显示星级）、GEO（AI 引用真实评价）、Reputation（客户信任）三个维度。ME 目前完全没有监控和响应评论的能力，FDE 只能手动巡查各平台。
+>
+> **核心原则**：Scan（监控）→ Analyze（情感分析）→ Recommend（AI 起草回复）→ **ACT（一键发布回复 + 触发修复内容）**
+
+### Phase 15 核心能力
+
+```
+Platform Authority Intelligence（行业权威平台图谱）
+  → 根据客户行业 + AU/NZ 地区，映射哪些平台 AI 最信任
+  → 餐饮：Google Maps / Zomato
+  → 旅游：TripAdvisor / Tourism NZ
+  → 建筑：ProductReview.com.au (AU) / Houzz
+  → 所有行业：Reddit（r/australia, r/newzealand 等）
+
+Review Monitor（评论持续监控）
+  → 每日拉取 GBP / TripAdvisor / Trustpilot 新评论
+  → 情感分类：正面 / 中性 / 负面
+  → 负面评论即时预警 FDE
+
+Response Engine（AI 回复生成）
+  → AI 基于品牌底稿起草回复草稿
+  → FDE 审核修改 → 一键发布到对应平台
+
+Reputation Score（跨平台权威综合评分）
+  → 各平台评分 × 行业权重 = 综合分
+  → 直接预测 AI 被问到相关问题时推荐客户的概率
+
+Counter-Content Trigger（修复内容触发）
+  → 检测到高频投诉类型 → 触发 Blog Studio 生成信任建立内容
+  → 通过 Phase 14 Website Connector 发布到客户网站
+```
+
+### 数据源
+
+| 平台 | API 可用性 | 覆盖市场 |
+|------|-----------|---------|
+| Google Business Profile | ✅ 免费官方 API | AU + NZ |
+| TripAdvisor | ⚠️ 内容 API 部分受限 | AU + NZ |
+| Trustpilot | ✅ 公开 API | AU + NZ |
+| ProductReview.com.au | ❌ 需爬虫 | AU |
+| Reddit | ✅ 官方 API | AU + NZ |
+| Zomato / Google Maps | ✅ | AU + NZ |
+
+### 不做清单
+
+- ❌ 自动发布回复（必须 FDE 审核，不做 bypass）
+- ❌ 伪造评论或刷好评（违反平台 ToS）
+- ❌ Reddit 自动发帖（保持真实性，只做监控 + 预警）
+
+---
+
+## Phase 16 — Competitor Intelligence（竞品雷达 + 信号驱动执行）📋 战略确认，待排期
+
+> **登记日期**：2026-05-19 · **状态**：战略方向已确认，待深入讨论后排期
+>
+> **背景**：ME 目前有竞品 SEO 数据（SEMrush），但停在"数据展示"层，没有"信号 → 自动触发执行"的逻辑。Competitor Intelligence 的真正角色是 ME 的**雷达系统**——不只是告诉 FDE 竞品在做什么，而是直接触发其他模块采取行动。
+>
+> **核心原则**：竞品情报不是独立仪表盘，是驱动 SEO / GEO / Social / Ads / Reputation 五个执行模块的触发层。
+
+### 可获取的竞品数据
+
+```
+SEO 层（已有 ✅）
+  → 竞品关键词排名 / 域名权威 / 外链 / 新内容发布
+
+社媒层
+  → 粉丝增长趋势 / 发帖频率 / 互动率 / 内容主题
+
+广告层 ⭐（免费，大多数公司没用起来）
+  → Meta Ad Library API：所有正在投放的广告创意 + 投放时长
+  → Google Ads 透明度中心：搜索广告文案
+  → 投放时长越长 = 这个广告越有效（倒推高转化创意方向）
+
+AI 可见度层（ME 独有 ✅）
+  → AI Tracker 同时追踪客户 + 竞品
+  → 哪些问题 AI 推荐竞品不推荐我
+
+口碑层
+  → 竞品 GBP 评分趋势 / TripAdvisor 排名变化 / Reddit 情感
+```
+
+### 信号 → 行动触发逻辑
+
+| 竞品信号 | 自动触发 |
+|---------|---------|
+| 竞品排上新关键词 | 建议 Blog Studio 生成对应内容 |
+| AI 推荐竞品但不推荐客户 | 触发 GEO Composer 优化指令 |
+| 竞品 Meta 广告投放 > 30 天 | 预警 FDE：这是高效广告，参考创意方向 |
+| 竞品评分本月下降 | 建议社媒发布差异化优势内容 |
+| 竞品发布新内容主题 | 分析关键词机会，决定是否跟进 |
+
+### 数据源
+
+| 来源 | 内容 | ME 现状 |
+|------|------|---------|
+| SEMrush + DataForSEO | 竞品 SEO 全貌 | ✅ 已有 |
+| Jina.ai | 竞品新内容爬取 | ✅ 已有，未自动化 |
+| Meta Ad Library API | 竞品广告创意库 | ❌ 未接入 |
+| Google Ads 透明度 | 竞品搜索广告 | ❌ 未接入 |
+| AI Tracker 扩展 | 竞品 AI 可见度对比 | ⚠️ 有基础，需扩展 |
+| GBP / TripAdvisor | 竞品口碑趋势 | ❌ 未接入 |
+
+### 不做清单
+
+- ❌ 获取竞品内部数据（只用公开数据源）
+- ❌ 自动执行反制行动（信号 → 建议，FDE 决定是否执行）
+- ❌ 广告投放金额估算（数据不可靠，不展示）
+
+---
+
+## Phase 17 — Unified Data Pullback（统一数据回流层）📋 战略确认，待排期
+
+> **登记日期**：2026-05-19 · **状态**：战略方向已确认，是月报和飞轮归因的基础设施
+>
+> **背景**：ME 现在的月报数据是孤岛——SEO 数据、社媒数据、广告数据分散在各平台，无法在 ME 内做跨渠道归因。Unified Data Pullback 是把所有执行结果拉回 ME、驱动飞轮真实归因的基础设施层。
+
+### 需要接入的数据源
+
+| 渠道 | 数据内容 | API |
+|------|---------|-----|
+| Google Search Console | 自然搜索排名 / 点击 / 展示 | ✅ 免费官方 |
+| Google Analytics 4 | 网站流量 / 转化 / 用户行为 | ✅ 免费官方 |
+| Meta Insights | 社媒帖子表现 / 粉丝增长 | ✅ Graph API |
+| Google Ads API | 广告 ROAS / CTR / 转化 | 🔄 申请中 |
+| Meta Ads Insights | 广告效果数据 | ✅ 已有 MCP |
+| GBP API | 搜索展示 / 电话 / 路线请求 | ✅ 免费官方 |
+
+### 输出到
+
+1. **月报自动生成**（Insight Reports 模块）
+2. **飞轮归因**（action → outcome 真实数据验证）
+3. **Client Portal**（客户自助查看跨渠道数据看板）
+
+---
+
+## ME 战略扩张模型（2026-05-19 确立）
+
+> **通用布线板原则**：ME 平台核心不变，通过插入本地化配置快速进入新市场。
+
+```
+ME 平台核心（语言无关 / 市场无关）
+  ├─ 六维执行引擎（SEO/GEO/Social/Ads/Reputation/Competitor）
+  ├─ Scan → Analyze → Recommend → ACT 四步闭环
+  ├─ 飞轮归因系统
+  └─ 行动触发逻辑
+
+AU / NZ（当前）          新市场（未来）
+插件配置：               插件配置：
+  数据源 → SEMrush AU/NZ   数据源 → 本地 SEO 工具
+  平台 → TripAdvisor/GBP   平台 → 本地评论/社媒平台
+  行业 → 旅游/餐饮/建筑     行业 → 按当地需求配置
+  BD 团队 → 本地           BD 团队 → 本地招募
+```
+
+**种子行业（AU/NZ 冷启动）**：
+- 旅游业（CTS 已是真实客户）
+- 餐饮业（Google Maps / Zomato 数据密度高）
+- 建筑业（ProductReview.com.au / Houzz）
+
+**冷启动策略**：免费层先跑 → 积累真实行业数据 → 建立 AU/NZ 行业权威图谱 → 转化付费 VIP 客户 → 复制模型到新市场。
+
+---
+
 ## 8. 决策日志
 
 > 重大决策记录在此，便于追溯。
@@ -1369,6 +1543,7 @@ website_publish_jobs
 
 - **P8.3.2** — Dashboard Magic Link 鉴权重新启用：middleware matcher 改回 `/dashboard/:path*` + layout `redirect('/login')` 取消注释；whitelist.ts + middleware.ts 新增 23 个单元测试（fail-closed / admin / client-viewer scoping / 边界）；`/unauthorized` 已存在无需新建；Supabase 后台 Redirect URLs 白名单 + Render `ADMIN_EMAILS` 需 PM 上线前配齐
 - **P8.10.S0.21** — 张骞首跑硬化 + Advanced Discovery 入口：HTTP 超时全封（Anthropic SDK 90s / SEMrush 20s / Apify ad-library 30s）+ `GLOBAL_TIMEOUT_MS` 270s→300s + stale-timeout 10min→6min + 新增 `/api/cron/zhangqian-sweeper` 兜底孤儿 job + 首跑工具瘦身（删 `fetch_meta_ads` + `fetch_social_metrics` 去 facebook，`MAX_TOOL_CALLS` 22→18，`MAX_COST_USD` $1.80→$1.50）+ prompts.ts 同步 + 报告页 Advanced Discovery CTA banner
+- **P8.10.S0.23** — Advanced Discovery Phase 2：GSC connector（Service Account JWT + Search Analytics API，返回 28 天 top-25 query）+ Google Ads connector（Apify 透明度中心，公开数据）；`advanced-agent.ts` 按 triggeredBy 分流；types 新增 GscSearchData + DiscoveredGoogleAdsData；build ✅
 - **P8.10.S0.22** — Advanced Discovery Phase 1：新建 `client_connectors` 表 + `client_discovery_jobs.job_type` 列；`advanced-agent.ts` 实现 `runZhangqianAdvanced()`（Meta 广告库 + FB 主页抓取）；`persistor.ts` 加 `mergeAdvancedPayload()`（写入 payload.advanced 不覆盖 basic）；connectors status/connect API；`/dashboard/clients/[id]/connectors/[anchor]` 详情页；connector 授权自动触发高级发现（commit 94d8eaa）
 
 ### 2026-05-17

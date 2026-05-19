@@ -280,22 +280,71 @@ export interface AdvancedFacebookProfile {
   engagement_rate: number
 }
 
+/** One row from the Google Search Console Search Analytics API. */
+export interface GscQueryRow {
+  query: string
+  impressions: number
+  clicks: number
+  /** Click-through rate as a 0–1 decimal (0.05 = 5%). */
+  ctr: number
+  /** Average position in Google search results (1 = top). */
+  position: number
+}
+
+/**
+ * GSC search performance data fetched during advanced discovery (gsc connector).
+ * Replaces SEMrush keyword estimates with real GSC query data.
+ */
+export interface GscSearchData {
+  /** The GSC site URL exactly as entered by the user, e.g. "https://example.com.au/" */
+  site_url: string
+  /** Number of calendar days covered (default 28). */
+  date_range_days: number
+  /** Top queries ordered by clicks descending (up to 25 rows). */
+  rows: GscQueryRow[]
+  fetched_at: string
+}
+
+/**
+ * Google Ads Transparency Center data fetched during advanced discovery
+ * (google-ads connector). Public data — no credentials required.
+ */
+export interface DiscoveredGoogleAdsData {
+  /** Advertiser name or domain queried. */
+  advertiser: string
+  /** Count of active ads observed in the Transparency Center. */
+  active_ads_count: number
+  /** Distinct creative formats — e.g. ['text', 'image', 'video', 'shopping']. */
+  ad_formats: string[]
+  /** Distinct regions where ads were running (ISO country codes). */
+  regions: string[]
+  /** Sample headlines / preview text (up to 3). */
+  top_ad_previews: string[]
+}
+
 /**
  * Payload written to `client_discovery.payload.advanced` after a connector
- * (meta-ads or gbp) is authorised. Does NOT overwrite the basic DiscoveryReport
- * fields — it sits alongside them under the `advanced` key.
+ * is authorised. Does NOT overwrite the basic DiscoveryReport fields — it
+ * sits alongside them under the `advanced` key.
+ *
+ * Fields are optional so old rows (only meta_ads/facebook_profiles) remain
+ * valid without schema migration.
  */
 export interface AdvancedDiscoveryPayload {
   /** Meta Ad Library data — null when scrape failed or no ads found */
   meta_ads: DiscoveredMetaAds | null
   /** Facebook Page metrics — one entry per FB profile found in basic discovery */
   facebook_profiles: AdvancedFacebookProfile[]
+  /** GSC search performance — populated by gsc connector trigger; null otherwise */
+  gsc_data?: GscSearchData | null
+  /** Google Ads Transparency scan — populated by google-ads connector; null otherwise */
+  google_ads_data?: DiscoveredGoogleAdsData | null
   meta: {
     duration_ms: number
     /** Apify cost is tracked externally; Claude cost is 0 for advanced pass */
     cost_usd: number
     ran_at: string
-    triggered_by: string  // connector anchor that triggered this run, e.g. 'meta-ads'
+    triggered_by: string  // connector anchor that triggered this run
   }
 }
 
