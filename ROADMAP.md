@@ -1237,12 +1237,16 @@ Production Item    = 订单里的具体产物
 
 > **Competitor 接入** 延后登记为 **P13.E-pre**（competitor snapshot persistence）：`semrush/competitor-keywords` 当前无状态 GET，需先建 `competitor_snapshots` 表再接入，本期不做。
 
-### Phase 13.E（预告，未排期）
+### Phase 13.E（已完成）
 
-| Phase | 内容 | 触发条件 |
+| Phase | 内容 | 状态 |
 |---|---|---|
-| 13.E | Flywheel feedback 闭环（package → flywheel_actions → outcomes） | 13.D 完成 |
-| 13.E-pre | Competitor snapshot persistence + 接入 production package | 独立可排期 |
+| 13.E-pre | Competitor snapshot persistence + 接入 production package | ✅ 完成 |
+| 13.E | Flywheel feedback 闭环（package → flywheel_actions → outcomes） | ✅ 完成 |
+
+**P13.E-pre 完成内容**：新增 `competitor_snapshots` 表（migration）；`semrush/competitor-keywords` POST 接受可选 `production_package_id`，落库 snapshot；production package 详情 GET 回读 `competitor_snapshots` 数组；build ✅
+
+**P13.E 完成内容**：`flywheel_actions` 加 `production_package_id` FK（migration）；`ExecuteActionInput`/`FlywheelActionRow` 类型加字段；4 个 adapter execute() 传 `production_package_id`；`flywheel/execute` route 转发字段；新增 `src/lib/flywheel/package-publish.ts`（dimension → flywheel + action_type 映射，on-publish 非阻断落 flywheel_action）；`PATCH /api/clients/[id]/production/[packageId]` 状态更新 + publish 触发 hook；build ✅
 
 ### Phase 13 不做清单（明确划界，避免 scope creep）
 
@@ -1559,6 +1563,11 @@ AU / NZ（当前）          新市场（未来）
 
 > 每次上线新功能时在此追加。格式：**[完成日期]** — Phase ID + 描述 + Commit 引用。
 > 此日志从 CLAUDE.md §十五.C 迁移至此（2026-05-10），CLAUDE.md 不再维护历史日志。
+
+### 2026-05-23
+
+- **P13.E-pre** — Competitor snapshot persistence：新增 competitor_snapshots 表（含 production_package_id FK）；competitor-keywords POST 落库 snapshot + 接受可选 production_package_id；包详情 API 回读 competitor_snapshots 数组，build ✅
+- **P13.E** — Flywheel feedback 闭环：flywheel_actions 加 production_package_id FK；4 adapter execute() + ExecuteActionInput/FlywheelActionRow 类型同步；新增 package-publish.ts（dimension→flywheel 映射 + on-publish 非阻断落 flywheel_action）；PATCH /api/clients/[id]/production/[packageId] 状态更新 + publish hook，build ✅
 
 ### 2026-05-22
 

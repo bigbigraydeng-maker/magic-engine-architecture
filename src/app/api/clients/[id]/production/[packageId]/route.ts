@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
+import { logPackagePublishedAction } from '@/lib/flywheel/package-publish'
 
 type RouteContext = { params: { id: string; packageId: string } }
+
+const VALID_STATUSES = new Set([
+  'draft', 'generating', 'ready_for_review', 'revision_requested',
+  'approved', 'scheduled', 'published', 'measured', 'archived', 'failed',
+])
 
 // GET /api/clients/[id]/production/[packageId]
 // Returns the production package with linked items and content previews.
@@ -135,4 +141,66 @@ export async function GET(_req: NextRequest, { params }: RouteContext) {
     reputation_reviews:    reputationReviewsResult.data   ?? [],
     competitor_snapshots:  competitorSnapshotsResult.data ?? [],
   })
+}
+
+// PATCH /api/clients/[id]/production/[packageId]
+// Updates production package status. On transition to "published", fires
+// a flywheel_action (non-blocking) to start the attribution window.
+export async function PATCH(req: NextRequest, { params }: RouteContext) {
+  const { id: clientId, packageId } = params
+
+  let body: { status?: string }
+  try {
+    body = await req.json()
+  } catch {
+    return NextResponse.json({ success: false, error: 'Invalid JSON body' }, { status: 400 })
+  }
+
+  const { status } = body
+  if (!status) {
+    return NextResponse.json({ success: false, error: 'status is required' }, { status: 400 })
+  }
+  if (!VALID_STATUSES.has(status)) {
+    return NextResponse.json({ success: false, error: `Invalid status: ${status}` }, { status: 400 })
+  }
+
+  // Fetch current package to validate ownership and get dimension
+  const { data: current, error: fetchErr } = await supabaseAdmin
+    .from('production_packages')
+    .select('id, client_id, dimension, execution_item_id, status')
+    .eq('id', packageId)
+    .eq('client_id', clientId)
+    .single()
+
+  if (fetchErr || !current) {
+    return NextResponse.json({ success: false, error: 'Production package not found' }, { status: 404 })
+  }
+
+  const { data: updated, error: updateErr } = await supabaseAdmin
+    .from('production_packages')
+    .update({ status })
+    .eq('id', packageId)
+    .select('id, status, dimension, updated_at')
+    .single()
+
+  if (updateErr || !updated) {
+    console.error('[production PATCH] update error:', updateErr?.message)
+    return NextResponse.json({ success: false, error: 'Failed to update package status' }, { status: 500 })
+  }
+
+  // P13.E: on publish transition, log flywheel_action (non-blocking)
+  if (status === 'published' && current.status !== 'published') {
+    logPackagePublishedAction({
+      packageId,
+      clientId,
+      dimension:        current.dimension as string,
+      executionItemId:  current.execution_item_id ?? undefined,
+    }).then(actionId => {
+      if (actionId) {
+        console.log(`[production PATCH] flywheel_action logged: ${actionId} for package ${packageId}`)
+      }
+    })
+  }
+
+  return NextResponse.json({ success: true, package: updated })
 }
