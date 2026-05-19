@@ -4,9 +4,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // Mocks — declared before imports (hoisting requirement)
 // ---------------------------------------------------------------------------
 
-vi.mock('@/lib/semrush/client', () => ({
-  getDomainMetrics: vi.fn(),
-  getDomainOrganicKeywords: vi.fn(),
+vi.mock('@/lib/dataforseo/labs', () => ({
+  getKeywordsForSite: vi.fn(),
 }))
 
 vi.mock('@/lib/dataforseo/client', () => ({
@@ -23,13 +22,12 @@ vi.mock('@/lib/diagnostic/technical-seo', () => ({
 // ---------------------------------------------------------------------------
 
 import { SeoCollector } from '../seo-collector'
-import { getDomainMetrics, getDomainOrganicKeywords } from '@/lib/semrush/client'
+import { getKeywordsForSite } from '@/lib/dataforseo/labs'
 import { getBacklinkSummary, getSerpRankings } from '@/lib/dataforseo/client'
 import { auditTechnicalSeo } from '@/lib/diagnostic/technical-seo'
 import type { TechnicalSeoSignals } from '@/lib/diagnostic/technical-seo'
 
-const mockMetrics = vi.mocked(getDomainMetrics)
-const mockOrganicKws = vi.mocked(getDomainOrganicKeywords)
+const mockKeywordsForSite = vi.mocked(getKeywordsForSite)
 const mockBacklinks = vi.mocked(getBacklinkSummary)
 const mockSerp = vi.mocked(getSerpRankings)
 const mockTech = vi.mocked(auditTechnicalSeo)
@@ -60,11 +58,13 @@ const DOMAIN = 'example.co.nz'
 const KEYWORDS = ['china tours nz', 'beijing tours', 'nz travel china']
 
 function kwData(keyword: string) {
-  return { keyword, volume: 200, kd: 25, cpc: 1.5, intent: 'commercial', trend: [] }
+  return { keyword, search_volume: 200, keyword_difficulty: 25, cpc: 1.5, competition: 0.3, intent: 'commercial', position: null }
 }
 
-const HEALTHY_METRICS = { organic_keywords: 800, organic_traffic: 12000, authority_score: 45 }
-const LOW_AUTHORITY_METRICS = { organic_keywords: 50, organic_traffic: 300, authority_score: 12 }
+// authority_score is now derived from backlinks.rank / 10.
+// HEALTHY_BACKLINKS.rank = 320 → authority_score = 32 (above LOW_AUTHORITY_THRESHOLD=20)
+// LOW_AUTHORITY_BACKLINKS.rank = 150 → authority_score = 15 (below threshold)
+const LOW_AUTHORITY_BACKLINKS = { ...HEALTHY_BACKLINKS, rank: 150 }
 
 // ---------------------------------------------------------------------------
 // Setup
@@ -72,8 +72,7 @@ const LOW_AUTHORITY_METRICS = { organic_keywords: 50, organic_traffic: 300, auth
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mockMetrics.mockResolvedValue(HEALTHY_METRICS)
-  mockOrganicKws.mockResolvedValue(KEYWORDS.map(kwData))
+  mockKeywordsForSite.mockResolvedValue(KEYWORDS.map(kwData))
   mockBacklinks.mockResolvedValue(HEALTHY_BACKLINKS)
   mockSerp.mockResolvedValue(
     KEYWORDS.map(k => ({ keyword: k, position: 5, url: `https://${DOMAIN}/${k.replace(/\s/g, '-')}`, fetched_at: '2026-05-18T00:00:00Z' })),
@@ -98,14 +97,14 @@ describe('SeoCollector.collect()', () => {
   })
 
   it('returns no keyword_gap_critical when all keywords are ranked', async () => {
-    mockOrganicKws.mockResolvedValue(KEYWORDS.map(kwData))
+    mockKeywordsForSite.mockResolvedValue(KEYWORDS.map(kwData))
     const result = await new SeoCollector().collect(CLIENT_ID, DOMAIN, KEYWORDS)
     const gap = result.findings.find(f => f.finding_type === 'keyword_gap_critical')
     expect(gap).toBeUndefined()
   })
 
   it('produces keyword_gap_critical (critical) when coverage is zero', async () => {
-    mockOrganicKws.mockResolvedValue([])  // domain ranks for none of our keywords
+    mockKeywordsForSite.mockResolvedValue([])  // domain ranks for none of our keywords
     const result = await new SeoCollector().collect(CLIENT_ID, DOMAIN, KEYWORDS)
     const gap = result.findings.find(f => f.finding_type === 'keyword_gap_critical')
     expect(gap).toBeDefined()
@@ -114,15 +113,15 @@ describe('SeoCollector.collect()', () => {
   })
 
   it('score is 0 when coverage=0, authority=0, and technical=0', async () => {
-    mockMetrics.mockResolvedValue({ organic_keywords: 0, organic_traffic: 0, authority_score: 0 })
-    mockOrganicKws.mockResolvedValue([])
+    mockBacklinks.mockResolvedValue({ ...HEALTHY_BACKLINKS, rank: 0 })
+    mockKeywordsForSite.mockResolvedValue([])
     mockTech.mockResolvedValue({ ...HEALTHY_TECH, score: 0, issues: [] })
     const result = await new SeoCollector().collect(CLIENT_ID, DOMAIN, KEYWORDS)
     expect(result.score).toBe(0)
   })
 
   it('produces low_domain_rank (high) when authority_score < 20', async () => {
-    mockMetrics.mockResolvedValue(LOW_AUTHORITY_METRICS)
+    mockBacklinks.mockResolvedValue(LOW_AUTHORITY_BACKLINKS)
     const result = await new SeoCollector().collect(CLIENT_ID, DOMAIN, KEYWORDS)
     const finding = result.findings.find(f => f.finding_type === 'low_domain_rank')
     expect(finding).toBeDefined()
@@ -131,7 +130,7 @@ describe('SeoCollector.collect()', () => {
   })
 
   it('does NOT produce low_domain_rank when authority_score >= 20', async () => {
-    mockMetrics.mockResolvedValue({ ...HEALTHY_METRICS, authority_score: 20 })
+    mockBacklinks.mockResolvedValue({ ...HEALTHY_BACKLINKS, rank: 200 })  // 200/10 = 20 exactly
     const result = await new SeoCollector().collect(CLIENT_ID, DOMAIN, KEYWORDS)
     const finding = result.findings.find(f => f.finding_type === 'low_domain_rank')
     expect(finding).toBeUndefined()
@@ -139,7 +138,7 @@ describe('SeoCollector.collect()', () => {
 
   it('returns degraded result (score=null, findings=[]) on timeout', async () => {
     // Simulate hanging API — never-resolving promise
-    mockMetrics.mockReturnValue(new Promise(() => {}))
+    mockKeywordsForSite.mockReturnValue(new Promise(() => {}))
     const collector = new SeoCollector(10)   // 10 ms timeout for fast tests
     const result = await collector.collect(CLIENT_ID, DOMAIN, KEYWORDS)
     // P8.5.19: degraded path returns null (not 0) so dimension is skipped
@@ -148,7 +147,7 @@ describe('SeoCollector.collect()', () => {
   })
 
   it('returns degraded result when external API throws', async () => {
-    mockMetrics.mockRejectedValue(new Error('SEMrush 503'))
+    mockKeywordsForSite.mockRejectedValue(new Error('DataForSEO 503'))
     const result = await new SeoCollector().collect(CLIENT_ID, DOMAIN, KEYWORDS)
     expect(result.score).toBeNull()
     expect(result.findings).toHaveLength(0)
@@ -226,8 +225,8 @@ describe('SeoCollector.collect()', () => {
   })
 
   it('all findings carry client_id and fix_type', async () => {
-    mockMetrics.mockResolvedValue(LOW_AUTHORITY_METRICS)
-    mockOrganicKws.mockResolvedValue([])
+    mockBacklinks.mockResolvedValue(LOW_AUTHORITY_BACKLINKS)
+    mockKeywordsForSite.mockResolvedValue([])
     const result = await new SeoCollector().collect(CLIENT_ID, DOMAIN, KEYWORDS)
     for (const f of result.findings) {
       expect(f.client_id).toBe(CLIENT_ID)

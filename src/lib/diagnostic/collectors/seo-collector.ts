@@ -1,5 +1,5 @@
-import { getDomainMetrics, getDomainOrganicKeywords } from '@/lib/semrush/client'
-import type { DomainMetrics } from '@/lib/semrush/client'
+import { getKeywordsForSite } from '@/lib/dataforseo/labs'
+import type { LabsKeyword } from '@/lib/dataforseo/labs'
 import { getBacklinkSummary, getSerpRankings } from '@/lib/dataforseo/client'
 import type { BacklinkSummary, SerpRanking } from '@/lib/dataforseo/client'
 import { auditTechnicalSeo } from '@/lib/diagnostic/technical-seo'
@@ -64,30 +64,35 @@ export class SeoCollector {
     domain: string,
     keywords: string[],
   ): Promise<CollectorResult> {
+    // Map SEMRUSH_DB region env var to DataForSEO location code (AU=2036, NZ=2554).
+    const locationCode = process.env.SEMRUSH_DB === 'nz' ? 2554 : 2036
     const db = process.env.SEMRUSH_DB ?? 'au'
     const serpKeywords = keywords.slice(0, SERP_SAMPLE_KEYWORDS)
 
-    // P8.10.S2.1: DataForSEO calls are optional — failure must NOT collapse SEO score.
-    const [metrics, rankedKwData, technical, backlinks, serpRankings] = await Promise.all([
-      getDomainMetrics(domain),
-      getDomainOrganicKeywords(domain, db, ORGANIC_KW_LIMIT),
+    // getKeywordsForSite is critical — let it throw so the outer catch degrades gracefully.
+    // Backlink + SERP calls are optional — failures return fallback values.
+    const [rankedKwData, technical, backlinks, serpRankings] = await Promise.all([
+      getKeywordsForSite(domain, locationCode, ORGANIC_KW_LIMIT),
       auditTechnicalSeo(domain),
-      getBacklinkSummary(domain).catch(() => null),
+      getBacklinkSummary(domain).catch(() => null as typeof backlinks),
       getSerpRankings(domain, serpKeywords, db).catch(() => [] as SerpRanking[]),
     ])
 
-    const rankedSet = new Set(rankedKwData.map(k => k.keyword.toLowerCase()))
+    // Derive authority score from DataForSEO backlink rank (0–1000 → 0–100).
+    const authorityScore = backlinks ? Math.round(backlinks.rank / 10) : 0
+
+    const rankedSet = new Set(rankedKwData.map((k: LabsKeyword) => k.keyword.toLowerCase()))
     const matched = keywords.filter(k => rankedSet.has(k.toLowerCase())).length
     const total = keywords.length
     const coverageRatio = matched / total
 
-    return this.buildResult(clientId, domain, metrics, coverageRatio, total, matched, technical, backlinks, serpRankings)
+    return this.buildResult(clientId, domain, authorityScore, coverageRatio, total, matched, technical, backlinks, serpRankings)
   }
 
   private buildResult(
     clientId: string,
     domain: string,
-    metrics: DomainMetrics,
+    authorityScore: number,
     coverageRatio: number,
     total: number,
     matched: number,
@@ -96,7 +101,7 @@ export class SeoCollector {
     serpRankings: SerpRanking[],
   ): CollectorResult {
     const sources = domainSources(domain)
-    const authority = Math.min(100, Math.max(0, metrics.authority_score))
+    const authority = Math.min(100, Math.max(0, authorityScore))
     const raw =
       coverageRatio * KW_COVERAGE_WEIGHT +
       (authority / 100) * AUTHORITY_WEIGHT +
@@ -122,15 +127,15 @@ export class SeoCollector {
     }
 
     // ── Authority finding ─────────────────────────────────────────────────────
-    if (metrics.authority_score < LOW_AUTHORITY_THRESHOLD) {
+    if (authorityScore < LOW_AUTHORITY_THRESHOLD) {
       findings.push({
         client_id: clientId,
         dimension: 'seo',
         finding_type: 'low_domain_rank',
         severity: 'high',
         title: 'Low domain authority score',
-        description: `Domain authority is ${metrics.authority_score}/100 — below the healthy threshold of ${LOW_AUTHORITY_THRESHOLD}.`,
-        evidence: makeEvidence({ parsed: { authority_score: metrics.authority_score }, sources }),
+        description: `Domain authority is ${authorityScore}/100 — below the healthy threshold of ${LOW_AUTHORITY_THRESHOLD}.`,
+        evidence: makeEvidence({ parsed: { authority_score: authorityScore }, sources }),
         recommendation: 'Build quality backlinks through digital PR and content partnerships.',
         fix_type: 'fde_manual',
         priority_score: 75,
