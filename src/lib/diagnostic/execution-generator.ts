@@ -41,24 +41,7 @@ export async function generateExecutionItems(
   prescriptionId: string,
   clientId: string,
 ): Promise<ExecutionItem[]> {
-  // ── Idempotency check ────────────────────────────────────────────────────
-  const existingCheck = await supabase
-    .from('execution_items')
-    .select('id')
-    .eq('prescription_id', prescriptionId)
-    .limit(1)
-
-  if (existingCheck.data && existingCheck.data.length > 0) {
-    // Already generated — return all existing items
-    const { data } = await supabase
-      .from('execution_items')
-      .select('*')
-      .eq('prescription_id', prescriptionId)
-      .order('sort_order', { ascending: true })
-    return (data ?? []) as ExecutionItem[]
-  }
-
-  // ── Fetch prescription ───────────────────────────────────────────────────
+  // ── Fetch prescription first (needed for expected count) ─────────────────
   const { data: prescription, error } = await supabase
     .from('prescriptions')
     .select('content, client_id')
@@ -70,6 +53,23 @@ export async function generateExecutionItems(
   }
 
   const content = prescription.content as PrescriptionContent
+
+  // ── Idempotency check — only skip if existing count matches expected ──────
+  // A partial set (e.g. stray manually-inserted item) is NOT treated as done.
+  const expectedCount = content.phases.reduce((sum, p) => sum + p.actions.length, 0)
+  const { count: existingCount } = await supabase
+    .from('execution_items')
+    .select('id', { count: 'exact', head: true })
+    .eq('prescription_id', prescriptionId)
+
+  if ((existingCount ?? 0) >= expectedCount && expectedCount > 0) {
+    const { data } = await supabase
+      .from('execution_items')
+      .select('*')
+      .eq('prescription_id', prescriptionId)
+      .order('sort_order', { ascending: true })
+    return (data ?? []) as ExecutionItem[]
+  }
 
   // ── Map actions → execution items ────────────────────────────────────────
   const rows = buildExecutionRows(content, prescriptionId, clientId)
