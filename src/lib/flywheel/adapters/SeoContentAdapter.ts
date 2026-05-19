@@ -10,7 +10,7 @@
  */
 
 import { supabaseAdmin } from '../../supabase'
-import { getDomainMetrics } from '../../semrush/client'
+import { getDomainMetrics } from '../../dataforseo/labs'
 import { isValidSeoActionType, SEO_METRIC_KEY } from '../vocabulary'
 import { registerAdapter } from './registry'
 import type {

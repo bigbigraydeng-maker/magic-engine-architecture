@@ -20,7 +20,7 @@ import {
   completeJob,
   failJob,
 } from '@/lib/zhangqian/persistor'
-import { getDomainMetrics, getDomainOrganicKeywords, batchKeywordOverview } from '@/lib/semrush/client'
+import { getDomainMetrics, getKeywordsForSite, bulkKeywordVolume } from '@/lib/dataforseo/labs'
 
 // Render — agent itself runs in fire-and-forget; this handler returns in <1s
 export const maxDuration = 60
@@ -85,19 +85,25 @@ async function executeDiscoveryJob(
   await updateJobProgress(supabaseAdmin, jobId, {
     status: 'running',
     started_at: new Date().toISOString(),
-    progress_note: '正在预取 SEMrush 数据…',
+    progress_note: '正在预取域名数据…',
   })
 
-  // Pre-fetch SEMrush data before starting the agent — never block on failure
+  // Pre-fetch domain data before starting the agent — never block on failure
   let semrushContext: string | undefined
   try {
     const [metricsResult, keywordsResult] = await Promise.allSettled([
       getDomainMetrics(domain),
-      getDomainOrganicKeywords(domain, undefined, 20),
+      getKeywordsForSite(domain, 2036, 20),
     ])
 
-    const metrics = metricsResult.status === 'fulfilled' ? metricsResult.value : null
-    const keywords = keywordsResult.status === 'fulfilled' ? keywordsResult.value : []
+    const metrics  = metricsResult.status  === 'fulfilled' ? metricsResult.value  : null
+    const rawKws   = keywordsResult.status === 'fulfilled' ? keywordsResult.value : []
+    const keywords = rawKws.map(k => ({
+      keyword:  k.keyword,
+      volume:   k.search_volume      ?? 0,
+      kd:       k.keyword_difficulty ?? 0,
+      position: k.position,
+    }))
 
     if (metrics && (metrics.organic_traffic > 0 || metrics.organic_keywords > 0)) {
       const trafficStr = metrics.organic_traffic.toLocaleString()
@@ -108,7 +114,7 @@ async function executeDiscoveryJob(
 
       if (keywords.length > 0) {
         lines.push('')
-        lines.push('当前 TOP 关键词排名（SEMrush 实时数据）：')
+        lines.push('当前 TOP 关键词排名（实时数据）：')
         lines.push('| 关键词 | 当前排名 | 月搜索量 | 难度 |')
         lines.push('|--------|---------|---------|------|')
         for (const kw of keywords.slice(0, 15)) {
@@ -120,7 +126,7 @@ async function executeDiscoveryJob(
       semrushContext = lines.join('\n')
     }
   } catch {
-    // Non-fatal — continue without SEMrush context
+    // Non-fatal — continue without domain context
   }
 
   try {
@@ -143,23 +149,23 @@ async function executeDiscoveryJob(
 
     // Enrich seed keywords with per-keyword SEMrush metrics (volume / KD / CPC)
     if (report.seed_keywords.length > 0) {
-      await updateJobProgress(supabaseAdmin, jobId, { progress_note: '正在获取种子关键词 SEMrush 数据…' })
+      await updateJobProgress(supabaseAdmin, jobId, { progress_note: '正在获取种子关键词数据…' })
       try {
         const kwTexts = report.seed_keywords.map(kw => kw.keyword)
-        const enriched = await batchKeywordOverview(kwTexts)
+        const enriched = await bulkKeywordVolume(kwTexts)
         const enrichMap = new Map(enriched.map(d => [d.keyword.toLowerCase(), d]))
         report.seed_keywords = report.seed_keywords.map(kw => {
           const d = enrichMap.get(kw.keyword.toLowerCase())
           if (!d) return kw
           return {
             ...kw,
-            semrush_volume: d.volume || kw.semrush_volume,
-            semrush_kd: d.kd,
-            semrush_cpc: d.cpc,
+            semrush_volume: (d.search_volume ?? 0) || kw.semrush_volume,
+            semrush_kd:  d.keyword_difficulty ?? 0,
+            semrush_cpc: d.cpc ?? 0,
           }
         })
       } catch {
-        // Non-fatal — seed keywords saved without per-keyword SEMrush metrics
+        // Non-fatal — seed keywords saved without per-keyword metrics
       }
     }
 

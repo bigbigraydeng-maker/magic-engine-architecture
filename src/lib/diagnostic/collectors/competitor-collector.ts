@@ -1,4 +1,4 @@
-import { getDomainMetrics } from '@/lib/semrush/client'
+import { getDomainMetrics } from '@/lib/dataforseo/labs'
 import { getCompetitorDomains } from '@/lib/dataforseo/client'
 import type { CompetitorDomain } from '@/lib/dataforseo/client'
 import { scrapeCompetitorMetaAds } from '@/lib/apify/ad-library'

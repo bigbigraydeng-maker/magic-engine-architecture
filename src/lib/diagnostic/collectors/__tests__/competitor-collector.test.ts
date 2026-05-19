@@ -17,7 +17,7 @@ vi.mock('@/lib/dataforseo/client', () => ({
   getCompetitorDomains: mockGetCompetitorDomains,
 }))
 
-vi.mock('@/lib/semrush/client', () => ({
+vi.mock('@/lib/dataforseo/labs', () => ({
   getDomainMetrics: mockGetDomainMetrics,
 }))
 

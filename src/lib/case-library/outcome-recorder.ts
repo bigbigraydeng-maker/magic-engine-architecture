@@ -11,7 +11,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getDomainMetrics, type DomainMetrics } from '@/lib/semrush/client'
+import { getDomainMetrics, type DomainMetrics } from '@/lib/dataforseo/labs'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -207,7 +207,8 @@ export async function backfillSemrushKpisForPrescription(
   let skipped = 0
 
   try {
-    const metrics = await getDomainMetrics(domain, semrushDb)
+    const locationCode = semrushDb === 'nz' ? 2554 : 2036
+    const metrics = await getDomainMetrics(domain, locationCode)
 
     for (const kpiDef of SEMRUSH_KPI_MAP) {
       const alreadyRecorded = await fetchRecordedCheckpoints(supabase, prescriptionId, kpiDef.kpiMetric)

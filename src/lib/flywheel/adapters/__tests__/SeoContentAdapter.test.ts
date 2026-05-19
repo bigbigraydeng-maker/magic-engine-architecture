@@ -45,7 +45,7 @@ vi.mock('@/lib/supabase', () => ({
 
 // ── Mock getDomainMetrics ─────────────────────────────────────────────────────
 
-vi.mock('@/lib/semrush/client', () => ({
+vi.mock('@/lib/dataforseo/labs', () => ({
   getDomainMetrics: vi.fn().mockResolvedValue({
     organic_keywords: 1200,
     organic_traffic: 8500,
@@ -190,7 +190,7 @@ describe('SeoContentAdapter', () => {
   })
 
   it('pullMetrics still returns blog count when SEMrush fails', async () => {
-    const { getDomainMetrics } = await import('@/lib/semrush/client')
+    const { getDomainMetrics } = await import('@/lib/dataforseo/labs')
     vi.mocked(getDomainMetrics).mockRejectedValueOnce(new Error('SEMrush timeout'))
 
     mockClientSingle.mockResolvedValueOnce({ data: { domain: 'cts.com.au' }, error: null })

@@ -547,6 +547,97 @@ export async function getDomainTrafficHistory(
   return points.slice(-Math.min(months, 24))
 }
 
+// ─── Domain metrics composite (replaces SEMrush getDomainMetrics) ─────────────
+
+export interface DomainMetrics {
+  organic_keywords: number
+  organic_traffic:  number
+  /** Approximated from DataForSEO backlink rank (0–100). */
+  authority_score:  number
+}
+
+/**
+ * Composite domain health snapshot: organic keyword count, estimated monthly
+ * traffic, and an authority score derived from the DataForSEO backlink rank.
+ * Replaces: SEMrush getDomainMetrics (domain_ranks endpoint)
+ *
+ * Composed from:
+ *   1. /dataforseo_labs/google/domain_rank_overview/live — organic_keywords + organic_traffic
+ *   2. /backlinks/summary/live                          — authority_score (rank / 10, max 100)
+ */
+export async function getDomainMetrics(
+  domain: string,
+  locationCode: number = DEFAULT_LOCATION_CODE,
+): Promise<DomainMetrics> {
+  const [overviewResult, rankResult] = await Promise.allSettled([
+    fetchDomainRankOverview(domain, locationCode),
+    fetchBacklinkRank(domain),
+  ])
+
+  const overview     = overviewResult.status === 'fulfilled' ? overviewResult.value : null
+  const backlinkRank = rankResult.status     === 'fulfilled' ? rankResult.value     : 0
+
+  return {
+    organic_keywords: overview?.organic_keywords ?? 0,
+    organic_traffic:  overview?.organic_traffic  ?? 0,
+    authority_score:  Math.min(100, Math.round(backlinkRank / 10)),
+  }
+}
+
+async function fetchDomainRankOverview(
+  domain: string,
+  locationCode: number,
+): Promise<{ organic_keywords: number; organic_traffic: number }> {
+  const res = await fetch(
+    `${DATAFORSEO_API_BASE}/dataforseo_labs/google/domain_rank_overview/live`,
+    {
+      method:  'POST',
+      headers: { Authorization: authHeader(), 'Content-Type': 'application/json' },
+      body: JSON.stringify([
+        {
+          target:        domain,
+          location_code: locationCode,
+          language_code: DEFAULT_LANGUAGE_CODE,
+        },
+      ]),
+    },
+  )
+
+  if (!res.ok) throw new Error(`DataForSEO domain_rank_overview error: ${res.status}`)
+
+  const json = await res.json() as {
+    tasks?: Array<{
+      result?: Array<{
+        metrics?: {
+          organic?: { count?: number | null; etv?: number | null }
+        }
+      }>
+    }>
+  }
+
+  const organic = json.tasks?.[0]?.result?.[0]?.metrics?.organic
+  return {
+    organic_keywords: Math.round(organic?.count ?? 0),
+    organic_traffic:  Math.round(organic?.etv   ?? 0),
+  }
+}
+
+async function fetchBacklinkRank(domain: string): Promise<number> {
+  const res = await fetch(`${DATAFORSEO_API_BASE}/backlinks/summary/live`, {
+    method:  'POST',
+    headers: { Authorization: authHeader(), 'Content-Type': 'application/json' },
+    body: JSON.stringify([{ target: domain, internal_list_limit: 10 }]),
+  })
+
+  if (!res.ok) throw new Error(`DataForSEO backlinks error: ${res.status}`)
+
+  const json = await res.json() as {
+    tasks?: Array<{ result?: Array<{ rank?: number }> }>
+  }
+
+  return json.tasks?.[0]?.result?.[0]?.rank ?? 0
+}
+
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
 /**

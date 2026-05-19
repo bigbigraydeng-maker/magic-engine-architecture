@@ -16,7 +16,7 @@ import {
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-vi.mock('@/lib/semrush/client', () => ({
+vi.mock('@/lib/dataforseo/labs', () => ({
   getDomainMetrics: vi.fn().mockResolvedValue({
     organic_keywords: 1200,
     organic_traffic: 8500,
@@ -342,7 +342,7 @@ describe('backfillSemrushKpisForPrescription', () => {
   })
 
   it('returns error field on SEMrush failure', async () => {
-    const { getDomainMetrics } = await import('@/lib/semrush/client')
+    const { getDomainMetrics } = await import('@/lib/dataforseo/labs')
     vi.mocked(getDomainMetrics).mockRejectedValueOnce(new Error('SEMrush API error: 403'))
 
     const approvedAt = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
