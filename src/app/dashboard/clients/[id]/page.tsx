@@ -8,6 +8,17 @@ import { GenerationDrawer } from './_components/GenerationDrawer';
 import { SettingsDrawer, type SettingsTab } from './_components/SettingsDrawer';
 import type { ClientDiscoveryRow } from '@/lib/zhangqian/types';
 
+type PillarTab = 'social' | 'seo' | 'ai_visibility' | 'ads' | 'reputation' | 'competitor'
+
+const PILLAR_TABS: { id: PillarTab; label: string }[] = [
+  { id: 'social',        label: '📱 Social' },
+  { id: 'seo',           label: '🔍 SEO' },
+  { id: 'ai_visibility', label: '🤖 AI 可见度' },
+  { id: 'ads',           label: '📢 Ads' },
+  { id: 'reputation',    label: '⭐ 口碑' },
+  { id: 'competitor',    label: '🏆 竞品' },
+]
+
 const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? '';
 
 interface Client {
@@ -174,6 +185,85 @@ function BrandHealthWidget({ clientId }: { clientId: string }) {
   );
 }
 
+// ─── Pillar Tab Content Components ───────────────────────────────────────────
+
+function PillarCard({ href, icon, title, desc }: { href: string; icon: string; title: string; desc: string }) {
+  return (
+    <Link
+      href={href}
+      className="flex items-center gap-3 p-4 rounded-xl border border-gray-200 bg-white hover:border-indigo-300 hover:shadow-sm transition-all group"
+    >
+      <span className="text-2xl">{icon}</span>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-gray-900">{title}</p>
+        <p className="text-xs text-gray-500 mt-0.5">{desc}</p>
+      </div>
+      <span className="text-gray-300 group-hover:text-indigo-400 transition-colors">→</span>
+    </Link>
+  )
+}
+
+function ComingSoonCard({ icon, title }: { icon: string; title: string }) {
+  return (
+    <div className="flex items-center gap-3 p-4 rounded-xl border border-dashed border-gray-200 bg-gray-50">
+      <span className="text-2xl opacity-50">{icon}</span>
+      <div>
+        <p className="text-sm font-semibold text-gray-400">{title}</p>
+        <p className="text-xs text-gray-400 mt-0.5">即将推出</p>
+      </div>
+    </div>
+  )
+}
+
+function SeoPanel({ clientId }: { clientId: string }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <PillarCard href={`/dashboard/clients/${clientId}/site-audit/pages`} icon="🔍" title="站点审计" desc="爬取分析网站页面健康度" />
+      <PillarCard href={`/dashboard/clients/${clientId}/seo-gap`} icon="📊" title="SEO Gap 分析" desc="发现关键词覆盖缺口" />
+      <PillarCard href={`/dashboard/clients/${clientId}/strategy`} icon="🎯" title="内容策略" desc="基于数据制定内容方向" />
+      <PillarCard href={`/dashboard/clients/${clientId}/blog`} icon="📝" title="博客管理" desc="双信号博客生产与管理" />
+    </div>
+  )
+}
+
+function AiVisibilityPanel({ clientId }: { clientId: string }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <PillarCard href={`/dashboard/clients/${clientId}/zhangqian`} icon="🗺️" title="张骞发现" desc="品牌健康全面扫描与诊断" />
+      <PillarCard href={`/dashboard/ai-visibility/${clientId}`} icon="🤖" title="AI 可见度追踪" desc="监控 AI 搜索中的品牌曝光" />
+      <PillarCard href={`/dashboard/geo-composer/${clientId}`} icon="🌐" title="GEO Composer" desc="部署 AI 搜索优化指令" />
+    </div>
+  )
+}
+
+function AdsPanel({ clientId }: { clientId: string }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <PillarCard href={`/dashboard/clients/${clientId}/connectors`} icon="🔗" title="广告连接器" desc="连接 Meta · Google 广告账户" />
+      <ComingSoonCard icon="📊" title="Google Ads 诊断" />
+      <ComingSoonCard icon="🎵" title="TikTok Ads 诊断" />
+    </div>
+  )
+}
+
+function ReputationPanel({ clientId }: { clientId: string }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <PillarCard href={`/dashboard/clients/${clientId}/diagnostic`} icon="🩺" title="声誉诊断" desc="来自张骞的口碑维度分析" />
+      <ComingSoonCard icon="⭐" title="评价监控" />
+    </div>
+  )
+}
+
+function CompetitorPanel({ clientId }: { clientId: string }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <PillarCard href={`/dashboard/clients/${clientId}/diagnostic`} icon="🔍" title="竞品诊断" desc="竞争对手对比与差距分析" />
+      <PillarCard href={`/dashboard/clients/${clientId}/diagnostic/report`} icon="📋" title="完整诊断报告" desc="六维度详细诊断结果" />
+    </div>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ClientDetailPage() {
@@ -192,6 +282,7 @@ export default function ClientDetailPage() {
   // ?brief=1 (from 张骞 confirm) auto-opens the brief settings drawer
   const [settingsOpen, setSettingsOpen] = useState(searchParams.get('brief') === '1');
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('brief');
+  const [pillar, setPillar] = useState<PillarTab>('social');
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -301,8 +392,32 @@ export default function ClientDetailPage() {
         </div>
       )}
 
-      {/* Content Hub — main workspace */}
-      <ContentHub clientId={clientId} />
+      {/* Six Pillar Tabs */}
+      <div>
+        <div className="flex gap-1 border-b border-gray-200 overflow-x-auto">
+          {PILLAR_TABS.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setPillar(tab.id)}
+              className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${
+                pillar === tab.id
+                  ? 'border-indigo-500 text-indigo-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="pt-4">
+          {pillar === 'social'        && <ContentHub clientId={clientId} />}
+          {pillar === 'seo'           && <SeoPanel clientId={clientId} />}
+          {pillar === 'ai_visibility' && <AiVisibilityPanel clientId={clientId} />}
+          {pillar === 'ads'           && <AdsPanel clientId={clientId} />}
+          {pillar === 'reputation'    && <ReputationPanel clientId={clientId} />}
+          {pillar === 'competitor'    && <CompetitorPanel clientId={clientId} />}
+        </div>
+      </div>
 
       {/* Generation drawer */}
       <GenerationDrawer

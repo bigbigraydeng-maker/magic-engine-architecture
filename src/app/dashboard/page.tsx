@@ -123,29 +123,39 @@ export default async function OverviewPage() {
         )}
       </div>
 
-      {/* Quick Actions */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Link href="/dashboard/content/generate">
-          <div className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl p-5 cursor-pointer transition-colors">
-            <div className="text-2xl mb-2">⚡</div>
-            <p className="font-semibold">Generate Content</p>
-            <p className="text-xs text-indigo-200 mt-1">Route A / B / C</p>
-          </div>
-        </Link>
-        <Link href="/dashboard/keywords">
-          <div className="bg-white hover:bg-gray-50 border border-gray-200 rounded-xl p-5 cursor-pointer transition-colors">
-            <div className="text-2xl mb-2">🔍</div>
-            <p className="font-semibold text-gray-900">SEMrush Fetch</p>
-            <p className="text-xs text-gray-500 mt-1">Grab new keywords</p>
-          </div>
-        </Link>
-        <Link href="/dashboard/visuals">
-          <div className="bg-white hover:bg-gray-50 border border-gray-200 rounded-xl p-5 cursor-pointer transition-colors">
-            <div className="text-2xl mb-2">🎨</div>
-            <p className="font-semibold text-gray-900">Generate Visuals</p>
-            <p className="text-xs text-gray-500 mt-1">Images & Videos</p>
-          </div>
-        </Link>
+      {/* Six Pillars */}
+      <div>
+        <h2 className="text-base font-semibold text-gray-900 mb-3">六大支柱</h2>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+          {(
+            [
+              { emoji: '🔍', title: 'SEO Intelligence', desc: '关键词情报 · 站点审计 · 内容策略',   href: '/dashboard/keywords' as string | null,      color: 'bg-blue-50   border-blue-200   hover:border-blue-400   hover:shadow-md' },
+              { emoji: '🤖', title: 'AI 可见度',         desc: 'AI 搜索追踪 · GEO 指令部署',        href: '/dashboard/ai-visibility' as string | null, color: 'bg-violet-50 border-violet-200 hover:border-violet-400 hover:shadow-md' },
+              { emoji: '📢', title: 'Ads Intelligence',  desc: 'Meta · Google · TikTok 广告诊断',  href: null,                                        color: 'bg-orange-50 border-orange-200 opacity-50' },
+              { emoji: '📱', title: 'Social Matrix',     desc: '多平台内容生产 · Campaign 管理',     href: '/dashboard/content' as string | null,       color: 'bg-pink-50   border-pink-200   hover:border-pink-400   hover:shadow-md' },
+              { emoji: '⭐', title: '口碑管理',           desc: '评价监控 · 声誉诊断',               href: null,                                        color: 'bg-yellow-50 border-yellow-200 opacity-50' },
+              { emoji: '🏆', title: '竞品分析',           desc: '竞争对手追踪 · 差距分析',            href: null,                                        color: 'bg-emerald-50 border-emerald-200 opacity-50' },
+            ] as const
+          ).map((p) => {
+            const card = (
+              <div className={`border rounded-xl p-5 transition-all ${p.color}`}>
+                <div className="text-2xl mb-2">{p.emoji}</div>
+                <div className="flex items-center gap-2 mb-1">
+                  <p className="text-sm font-semibold text-gray-900">{p.title}</p>
+                  {!p.href && (
+                    <span className="text-[10px] bg-gray-200 text-gray-500 px-1.5 py-0.5 rounded-full">Soon</span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 leading-relaxed">{p.desc}</p>
+              </div>
+            )
+            return p.href ? (
+              <Link key={p.title} href={p.href}>{card}</Link>
+            ) : (
+              <div key={p.title} className="cursor-not-allowed">{card}</div>
+            )
+          })}
+        </div>
       </div>
     </div>
   );

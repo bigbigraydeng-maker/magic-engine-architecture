@@ -18,49 +18,11 @@ const TABS: { id: ContentTab; label: string }[] = [
   { id: 'marketplace',  label: '🛒 Marketplace' },
 ]
 
-// Shortcut links to key client sub-pages (shown above tabs).
-// Note: Brand health + "生成处方" are surfaced in the Brand Health Widget on the
-// parent page; this row is just for sibling utilities (audit, execution, etc.).
-function ClientShortcuts({ clientId }: { clientId: string }) {
-  return (
-    <div className="flex flex-wrap items-center gap-2 mb-4">
-      <span className="text-xs text-gray-400 mr-1">辅助工具：</span>
-      <Link
-        href={`/dashboard/clients/${clientId}/zhangqian`}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
-      >
-        🗺️ 张骞发现
-      </Link>
-      <Link
-        href={`/dashboard/clients/${clientId}/site-audit/pages`}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
-      >
-        🔍 网站审计
-      </Link>
-      <Link
-        href={`/dashboard/clients/${clientId}/execution`}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
-      >
-        📊 执行看板
-      </Link>
-      <Link
-        href={`/dashboard/clients/${clientId}/production`}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:border-indigo-400 hover:bg-indigo-100 transition-colors"
-      >
-        📦 生产包
-      </Link>
-    </div>
-  )
-}
-
 export function ContentHub({ clientId }: Props) {
   const [active, setActive] = useState<ContentTab>('campaigns')
 
   return (
     <div className="space-y-0">
-      {/* Quick navigation shortcuts */}
-      <ClientShortcuts clientId={clientId} />
-
       {/* Sub-tab bar */}
       <div className="flex gap-1 border-b border-gray-200 mb-5">
         {TABS.map(tab => (
