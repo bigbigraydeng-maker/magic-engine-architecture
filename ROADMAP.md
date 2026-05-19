@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-20 02:07 NZST · 当前阶段：**🔒 P8.3.2 Dashboard Magic Link 鉴权（当前阻塞）+ Phase 8.S SEMrush → DataForSEO 关键词接口迁移（下一成本优化）**。Phase 12.A 已完成；Phase 12.B.1–B.4 已完成（SEO / Ads / 社媒 adapter + SEMrush 周快照 cron）。
+> 最后更新：2026-05-20 02:12 NZST · 当前阶段：**⚠️ P8.3.2 代码已完成，PM 需在 Render 填 `ADMIN_EMAILS` 才能上线 → 完成后解锁 Phase 12.Q**。四 Agent 架构（张骞→华佗→诸葛亮→鲁班）已确定，诸葛亮登记为 Phase 12.G。Phase 12.A/B 已完成；Phase 12.Q 内容质量闭环已登记待开工。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -38,15 +38,19 @@
                 └─ S5 引用/证据追溯（~1 天）
 🔥 Phase 8.12    AU/NZ 本地化能力扩展（MVP：S3.1 鲁班 tool loop 开发中 · 其余 13 项 MVP 后补充）
 ✅ Phase 12.A    飞轮数据骨架 + CTS GEO 端到端 demo（15 任务全部完成，2026-05-17）
-✅ Phase 12.B    SEO/Ads/社媒 adapter 接入（B.1–B.4 已完成，2026-05-18；后续扩展转 Phase 12.C / 新任务登记）
-🔄 Phase 9.0     Visual Queue UX Polish（P9.0.1✅P9.0.3✅P9.0.4-9✅ 进行中 · 待：P9.0.2+P9.0.10-17集成测试+浮动卡）
-🔥 Phase 8.13    张骞 Intelligence Layer — DataForSEO 全域情报接入（当前通宵 Sprint，2026-05-24 启动）
-📋 Phase 9       报告化 + 客户 Portal
-📋 Phase 10      多语言 + Magic Lab Academy 沉淀
-📋 Phase 14      Website Connector / 网站直连执行闭环（战略确认，待排期）
-📋 Phase 15      Reputation Engine / 口碑监控与执行闭环（战略确认，待排期）
-📋 Phase 16      Competitor Intelligence / 竞品雷达 + 信号驱动执行（战略确认，待排期）
-📋 Phase 17      Unified Data Pullback / 统一数据回流层（战略确认，待排期）
+✅ Phase 12.B    SEO/Ads/社媒 adapter 接入（B.1–B.4 已完成，2026-05-18）
+✅ UX 基础修复   全站标题/Login try-catch/客户可见供应商名/WorkflowProgress/ContentHub 简化（2026-05-20）
+⚠️  P8.3.2       代码完成，等 PM 在 Render 填 ADMIN_EMAILS（解锁 Phase 12.Q）
+📋 Phase 12.Q   内容质量闭环（已登记，前置阻塞 P8.3.2 Render 配置）
+📋 Phase 12.G   诸葛亮策略调度引擎（已登记，前置 Phase 12.Q，约 3 session）
+📋 Phase 13     Production Package / 生产订单聚合层（已登记，待排期）
+🔄 Phase 9.0    Visual Queue UX Polish（部分完成，未收尾）
+📋 Phase 9      报告化 + 客户 Portal
+📋 Phase 10     多语言 + Magic Lab Academy 沉淀
+📋 Phase 14     Website Connector / 网站直连执行闭环（战略确认，待排期）
+📋 Phase 15     Reputation Engine / 口碑监控与执行闭环（战略确认，待排期）
+📋 Phase 16     Competitor Intelligence / 竞品雷达 + 信号驱动执行（战略确认，待排期）
+📋 Phase 17     Unified Data Pullback / 统一数据回流层（战略确认，待排期）
 ```
 
 **Phase 7 核心战略**：双信号博客（Dual-Signal Blog）— 每篇文章同时携带 SEO 信号（Google 排名）和 GEO 信号（AI 推荐），选题由 AI Tracker 弱项 × SEMrush 低KD机会交叉驱动，形成数据自强化飞轮。
@@ -1432,6 +1436,81 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
 
 ---
 
+## Phase 12.G — 诸葛亮 策略调度引擎 📋 已登记，未开工（2026-05-20 架构确认）
+
+> **命名来源**：「运筹帷幄，决胜千里」。诸葛亮是四 Agent 链中的决策层，夹在数据（张骞）、诊断（华佗）与执行（鲁班）之间，负责「先做哪个、为什么、现在能不能执行」。
+
+### 战略定位
+
+```
+张骞 Scout       → 收集数据与证据
+华佗 Doctor      → 诊断评分 + 发现问题
+诸葛亮 Conductor → 决定优先级 + 生成 work order  ← 本 Phase
+鲁班 Builder     → 把 work order 执行出来
+```
+
+Magic Engine 护城河 = 这条链完整闭合。当前链条：张骞 ✅、华佗 ✅、鲁班 ✅，**诸葛亮是唯一缺口**——现在依赖 FDE 人脑做优先级判断，诸葛亮将其自动化。
+
+### 核心接口规范（已确认，不重新讨论）
+
+**输入（结构化包）：**
+```ts
+{
+  client: ClientRecord,
+  discoveryEvidence: ZhangqianPayload,    // 张骞最新快照
+  diagnosticScores: DiagnosticScores,     // 华佗 6 维评分
+  findings: DiagnosticFinding[],          // 华佗发现列表
+  availableLubanTools: LubanTool[],       // 鲁班当前可执行工具
+  businessContext: BusinessContext,       // 行业/目标/预算约束
+}
+```
+
+**输出（结构化 work order）：**
+```ts
+{
+  top_actions: PriorityAction[],
+  // PriorityAction:
+  // {
+  //   rank: number,
+  //   dimension: 'seo' | 'geo' | 'ads' | 'social' | 'reputation' | 'competitor',
+  //   action_type: string,
+  //   why_now: string,               // 人读得懂的理由
+  //   evidence_refs: string[],       // 指向张骞/华佗具体数据点
+  //   expected_impact: 'low' | 'medium' | 'high',
+  //   effort: 'low' | 'medium' | 'high',
+  //   execution_mode: 'in_house' | 'third_party' | 'external_manual',
+  //   executable_by: string | null,  // e.g. 'luban.generate_content'
+  // }
+}
+```
+
+**数据写入目标**：`flywheel_actions` 表（Phase 12.A 已建好）
+
+### 与现有系统的关系
+
+| 关系方 | 交互 |
+|--------|------|
+| Phase 12 飞轮表 | 诸葛亮写入 `flywheel_actions`；与 `flywheel_metrics` / `flywheel_outcomes` 共用同一骨架 |
+| 首页驾驶舱 | 消费诸葛亮输出的 `priority_actions` 做跨客户聚合展示 |
+| 鲁班看板 | 展示单客户的 `flywheel_actions` 明细，FDE 在这里执行 |
+| AI 抽屉 | 诸葛亮可作为抽屉后端：用户问「这周先做什么」→ 诸葛亮计算 → 抽屉展示 + 可直接触发鲁班 |
+| Phase 13 Production Package | 诸葛亮决定做什么 → Phase 13 组织怎么生产，两者不冲突 |
+
+### 前置条件
+
+- **P8.3.2** Render `ADMIN_EMAILS` 配置完成（PM 操作）
+- **Phase 12.Q** 内容质量闭环完成（诸葛亮需要高质量 `quality_score` 作为输入信号）
+
+### 任务清单（待排期，估约 3 session）
+
+- [ ] **P12.G.1** 诸葛亮 prompt 工程 + 接口层（`src/lib/zhuge/conductor.ts`）
+- [ ] **P12.G.2** 接入华佗诊断输出 + 张骞证据包，输出 `priority_actions`
+- [ ] **P12.G.3** 写入 `flywheel_actions` + 幂等性保护
+- [ ] **P12.G.4** 首页驾驶舱消费诸葛亮数据（替换当前静态卡片）
+- [ ] **P12.G.5** AI 抽屉集成：「问诸葛亮」→ 实时计算优先级 + 一键触发鲁班
+
+---
+
 ## Phase 13 — Production Package（生产订单聚合层）📋 已登记，未开工
 
 > **背景**：当前 `content_posts / blog_posts / reels_drafts / visual_assets` 各自为政，`execution_items.content_post_id` 是 1:1 链路，无法表达"一个执行项 → 一组产物"的批次语义。Production Package 是六维诊断后的**统一生产订单聚合层**，把分散产物按维度 + 上下文聚合成可审核、可追溯、可归因的批次。
@@ -1824,6 +1903,12 @@ AU / NZ（当前）          新市场（未来）
 
 > 每次上线新功能时在此追加。格式：**[完成日期]** — Phase ID + 描述 + Commit 引用。
 > 此日志从 CLAUDE.md §十五.C 迁移至此（2026-05-10），CLAUDE.md 不再维护历史日志。
+
+### 2026-05-20
+
+- **UX 基础修复（两个 session）** — 全站标题 CrazyContent→Magic Engine；login-form try/finally 防卡死；BriefSourcesForm/zhangqian cards/Step2BriefUpload 客户可见供应商名替换；ContentHub 移除内嵌 Reels/图片 子Tab 改跳转快捷卡；客户页新增 WorkflowProgress（张骞→MB→执行）进度条；SEO 页标题/注释去 SEMrush 改 Keyword Intelligence（commits 34fe7fb, e7b2aff）
+- **架构确认：四 Agent 链 + 诸葛亮命名** — C Agent 正式命名为「诸葛亮」（策略调度引擎）；确认定位：输入张骞证据+华佗诊断→输出 priority_actions→flywheel_actions，不直接执行；AI 抽屉为 UX 层（正交），首页驾驶舱与鲁班看板为两个缩放层级（不冲突）；登记为 Phase 12.G（接口规范已确认）
+- **P8.3.2 代码收尾** — login try-catch 修复；middleware+whitelist 测试已在代码库；**剩余 PM 操作**：Render 后台填 `ADMIN_EMAILS=你的邮箱` + Supabase Auth Redirect URLs 加 `/auth/callback`
 
 ### 2026-05-24
 

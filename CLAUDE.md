@@ -215,12 +215,11 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-20 02:07 NZST （**Phase 8.13 Sprint A + B + C + D + E 全部完成** ✅；**Phase 12.Q 内容质量闭环已登记**）
+> 最后更新：2026-05-20 02:12 NZST （**UX 基础修复全部完成** ✅；**四 Agent 架构确认**：张骞→华佗→诸葛亮→鲁班；**诸葛亮登记为 Phase 12.G**；**P8.3.2 代码完成，等 PM Render 操作**）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P8.10.S0.23 Env** | Render 加 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` | 📋 待 PM 操作 |
-| **P8.3.2** | Dashboard Magic Link 鉴权（前置阻塞，Phase 12.Q 开工前必须完成） | ⭐⭐⭐ |
+| **P8.3.2 Render** | Render 后台填 `ADMIN_EMAILS=你的邮箱`（PM 手动，5 分钟，解锁 Phase 12.Q） | ⭐⭐⭐ PM 操作 |
 | **P12.Q.0** | 产物表加 snapshot/score 列 + TS 类型同步（单 migration 含 3 ALTER） | ⭐⭐ |
 | **P12.Q.1** | Campaign 上下文修复（路线 A 扩 schema + injector + Reels query） | ⭐⭐ |
 | **P12.Q.2** | 统一 quality rubric 模块（混合模式：规则 + 轻量 LLM） | ⭐⭐ |
@@ -230,14 +229,20 @@ git push origin master   # 触发 Render 部署
 | **P12.Q.5** | Reels 接入 rubric + 写 snapshot/score | ⭐⭐ |
 | **P12.Q.6** | snapshot/score 写入验证 + 缺漏补齐 | ⭐⭐ |
 | **P12.Q.7** | CTS Tours 端到端 demo + before/after 报告 | ⭐⭐ |
+| **P12.G.1–5** | 诸葛亮策略调度引擎（前置 Phase 12.Q，约 3 session） | 📋 排队 |
 
-**状态校准（2026-05-24）**：Phase 8.13 全部完成：11 个 DataForSEO 工具接入张骞；Phase 12.Q **已登记未开工**（详见 [ROADMAP § Phase 12.Q](./ROADMAP.md)）；P8.3.2 为 Phase 12.Q 前置阻塞。下一 session 第一句话：
+**状态校准（2026-05-20）**：
+- ✅ UX 修复：全站标题、Login 防卡、客户页 WorkflowProgress、ContentHub 简化、供应商名清洁
+- ✅ P8.3.2 代码：middleware + whitelist 测试已在库，login try-catch 已加
+- ⚠️ **PM 待操作**：Render → Environment → 加 `ADMIN_EMAILS=你的邮箱`（不操作则任何人都进不了 dashboard）
+- 📋 Phase 12.Q：P8.3.2 Render 配置完成后即可开工
+- 📋 Phase 12.G（诸葛亮）：接口规范已锁定，Phase 12.Q 完成后开工
 
-- 如果 P8.10.S0.23 未操作 → 先到 Render Dashboard 加环境变量
-- 如果 P8.3.2 还没完成 → `继续 P8.3.2 Dashboard Magic Link 鉴权`
-- 如果 P8.3.2 已完成 → `继续 Phase 12.Q 第 0 任务 P12.Q.0`
+下一 session 第一句话：
+- 如果 P8.3.2 Render 还没操作 → 先去 Render 加环境变量，再回来说「开始 Phase 12.Q」
+- 如果 Render 已配好 → `继续 Phase 12.Q 第 0 任务 P12.Q.0`
 
-**Phase 8.13 会话已完成，可以关闭。**
+**本 session 已完成，可以关闭。**
 
 **更新规则**（每次上线新功能）：
 1. ROADMAP.md 勾选对应任务 checkbox
