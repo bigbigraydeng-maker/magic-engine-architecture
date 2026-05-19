@@ -20,8 +20,8 @@ vi.mock('@/lib/supabase', () => ({
   supabaseAdmin: { from: vi.fn() },
 }))
 
-vi.mock('@/lib/semrush/client', () => ({
-  batchKeywordOverview: vi.fn(),
+vi.mock('@/lib/dataforseo/labs', () => ({
+  bulkKeywordVolume: vi.fn(),
 }))
 
 vi.mock('@/lib/blog/keyword-candidates', () => ({
@@ -31,14 +31,14 @@ vi.mock('@/lib/blog/keyword-candidates', () => ({
 // ─── Import after mocks ───────────────────────────────────────────────────────
 
 import { supabaseAdmin } from '@/lib/supabase'
-import { batchKeywordOverview } from '@/lib/semrush/client'
+import { bulkKeywordVolume } from '@/lib/dataforseo/labs'
 import { extractKeywordCandidates } from '@/lib/blog/keyword-candidates'
 import { getWeakSpotOpportunities } from '../topic-selector'
 
 // ─── Typed mock aliases ───────────────────────────────────────────────────────
 
 const mockFrom = vi.mocked(supabaseAdmin.from)
-const mockBatchKeywordOverview = vi.mocked(batchKeywordOverview)
+const mockBulkKeywordVolume = vi.mocked(bulkKeywordVolume)
 const mockExtractKeywordCandidates = vi.mocked(extractKeywordCandidates)
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -112,8 +112,8 @@ describe('getWeakSpotOpportunities', () => {
   beforeEach(() => {
     vi.clearAllMocks()
 
-    // Default: SEMrush returns empty (individual tests override when needed)
-    mockBatchKeywordOverview.mockResolvedValue([])
+    // Default: DataForSEO returns empty (individual tests override when needed)
+    mockBulkKeywordVolume.mockResolvedValue([])
 
     // Default: keyword extractor returns the input text as a candidate (pass-through)
     // Individual tests that need specific keyword matching override this.
@@ -185,13 +185,14 @@ describe('getWeakSpotOpportunities', () => {
           makeRuns('q-1', 5, true)   // 5/5 weak → score = 1.0
         )
 
-        mockBatchKeywordOverview.mockResolvedValue([{
+        mockBulkKeywordVolume.mockResolvedValue([{
           keyword: 'best china tour operators in new zealand',
-          volume: 500,
-          kd: 15,
+          search_volume: 500,
+          keyword_difficulty: 15,
           cpc: 1.2,
+          competition: 0.3,
           intent: 'commercial',
-          trend: [],
+          position: null,
         }])
 
         const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
@@ -210,13 +211,14 @@ describe('getWeakSpotOpportunities', () => {
           makeRuns('q-1', 3, true)
         )
 
-        mockBatchKeywordOverview.mockResolvedValue([{
+        mockBulkKeywordVolume.mockResolvedValue([{
           keyword: 'china tours nz',
-          volume: 101,
-          kd: 29,
+          search_volume: 101,
+          keyword_difficulty: 29,
           cpc: 0.8,
+          competition: 0.2,
           intent: 'commercial',
-          trend: [],
+          position: null,
         }])
 
         const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
@@ -235,13 +237,14 @@ describe('getWeakSpotOpportunities', () => {
           makeRuns('q-1', 4, true)   // 4/4 weak → score = 1.0
         )
 
-        mockBatchKeywordOverview.mockResolvedValue([{
+        mockBulkKeywordVolume.mockResolvedValue([{
           keyword: 'best tour operator for china travel from nz',
-          volume: 500,
-          kd: 55,   // KD too high → geo_only
+          search_volume: 500,
+          keyword_difficulty: 55,   // KD too high → geo_only
           cpc: 2.0,
+          competition: 0.4,
           intent: 'commercial',
-          trend: [],
+          position: null,
         }])
 
         const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
@@ -257,13 +260,14 @@ describe('getWeakSpotOpportunities', () => {
           makeRuns('q-1', 4, true)
         )
 
-        mockBatchKeywordOverview.mockResolvedValue([{
+        mockBulkKeywordVolume.mockResolvedValue([{
           keyword: 'specialised china visa nz travelers',
-          volume: 80,   // volume too low → geo_only
-          kd: 10,
+          search_volume: 80,   // volume too low → geo_only
+          keyword_difficulty: 10,
           cpc: 0.5,
+          competition: 0.1,
           intent: 'informational',
-          trend: [],
+          position: null,
         }])
 
         const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
@@ -277,7 +281,7 @@ describe('getWeakSpotOpportunities', () => {
           makeRuns('q-1', 3, true)
         )
 
-        mockBatchKeywordOverview.mockResolvedValue([])   // no SEMrush results
+        mockBulkKeywordVolume.mockResolvedValue([])   // no DataForSEO results
 
         const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
 
@@ -295,10 +299,10 @@ describe('getWeakSpotOpportunities', () => {
           makeRuns('q-1', 5, true)
         )
 
-        // SEMrush should NOT be called
+        // DataForSEO should NOT be called
         const result = await getWeakSpotOpportunities('client-1', 20, 10, false)
 
-        expect(mockBatchKeywordOverview).not.toHaveBeenCalled()
+        expect(mockBulkKeywordVolume).not.toHaveBeenCalled()
         expect(result[0].mode).toBe('geo_only')
       })
     })
@@ -316,13 +320,14 @@ describe('getWeakSpotOpportunities', () => {
           makeRuns('q-1', 5, false)   // all runs: brand ranked #1 → not weak
         )
 
-        mockBatchKeywordOverview.mockResolvedValue([{
+        mockBulkKeywordVolume.mockResolvedValue([{
           keyword: 'china tours new zealand packages',
-          volume: 800,
-          kd: 20,
+          search_volume: 800,
+          keyword_difficulty: 20,
           cpc: 3.0,
+          competition: 0.5,
           intent: 'transactional',
-          trend: [],
+          position: null,
         }])
 
         const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
@@ -384,13 +389,14 @@ describe('getWeakSpotOpportunities', () => {
         makeRuns('q-1', 5, true)
       )
 
-      mockBatchKeywordOverview.mockResolvedValue([{
+      mockBulkKeywordVolume.mockResolvedValue([{
         keyword: 'china tour packages nz',
-        volume: 500,
-        kd: 30,   // exactly at boundary — NOT < 30 → geo_only
+        search_volume: 500,
+        keyword_difficulty: 30,   // exactly at boundary — NOT < 30 → geo_only
         cpc: 1.0,
+        competition: 0.3,
         intent: 'commercial',
-        trend: [],
+        position: null,
       }])
 
       const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
@@ -404,13 +410,14 @@ describe('getWeakSpotOpportunities', () => {
         makeRuns('q-1', 5, true)
       )
 
-      mockBatchKeywordOverview.mockResolvedValue([{
+      mockBulkKeywordVolume.mockResolvedValue([{
         keyword: 'china package holidays nz',
-        volume: 500,
-        kd: 29,   // just below boundary
+        search_volume: 500,
+        keyword_difficulty: 29,   // just below boundary
         cpc: 1.0,
+        competition: 0.3,
         intent: 'commercial',
-        trend: [],
+        position: null,
       }])
 
       const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
@@ -424,13 +431,14 @@ describe('getWeakSpotOpportunities', () => {
         makeRuns('q-1', 5, true)
       )
 
-      mockBatchKeywordOverview.mockResolvedValue([{
+      mockBulkKeywordVolume.mockResolvedValue([{
         keyword: 'guided china tours nz',
-        volume: 100,   // exactly at boundary — NOT > 100 → geo_only
-        kd: 15,
+        search_volume: 100,   // exactly at boundary — NOT > 100 → geo_only
+        keyword_difficulty: 15,
         cpc: 0.8,
+        competition: 0.2,
         intent: 'commercial',
-        trend: [],
+        position: null,
       }])
 
       const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
@@ -444,13 +452,14 @@ describe('getWeakSpotOpportunities', () => {
         makeRuns('q-1', 5, true)
       )
 
-      mockBatchKeywordOverview.mockResolvedValue([{
+      mockBulkKeywordVolume.mockResolvedValue([{
         keyword: 'luxury china tours nz',
-        volume: 101,   // just above boundary
-        kd: 15,
+        search_volume: 101,   // just above boundary
+        keyword_difficulty: 15,
         cpc: 1.2,
+        competition: 0.3,
         intent: 'commercial',
-        trend: [],
+        position: null,
       }])
 
       const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
@@ -459,12 +468,12 @@ describe('getWeakSpotOpportunities', () => {
   })
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // 4. SEMrush Failure / Degradation
+  // 4. DataForSEO Failure / Degradation
   // ═══════════════════════════════════════════════════════════════════════════
 
-  describe('SEMrush failure degradation', () => {
+  describe('DataForSEO failure degradation', () => {
 
-    it('returns geo_only opportunities when SEMrush throws (quota exceeded)', async () => {
+    it('returns geo_only opportunities when DataForSEO throws (quota exceeded)', async () => {
       setupSupabaseMock(
         [{ id: 'q-1', question: 'best travel agents for china from nz' }],
         null,
@@ -472,7 +481,7 @@ describe('getWeakSpotOpportunities', () => {
       )
 
       // Simulate quota exceeded / network failure
-      mockBatchKeywordOverview.mockRejectedValue(new Error('SEMrush API error: 429'))
+      mockBulkKeywordVolume.mockRejectedValue(new Error('DataForSEO API error: 429'))
 
       const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
 
@@ -484,14 +493,14 @@ describe('getWeakSpotOpportunities', () => {
       expect(result[0].keyword_kd).toBeUndefined()
     })
 
-    it('returns geo_only opportunities when SEMrush returns empty array', async () => {
+    it('returns geo_only opportunities when DataForSEO returns empty array', async () => {
       setupSupabaseMock(
         [{ id: 'q-1', question: 'china group tour nz' }],
         null,
         makeRuns('q-1', 4, true)
       )
 
-      mockBatchKeywordOverview.mockResolvedValue([])
+      mockBulkKeywordVolume.mockResolvedValue([])
 
       const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
 
@@ -499,7 +508,7 @@ describe('getWeakSpotOpportunities', () => {
       expect(result[0].keyword_kd).toBeUndefined()
     })
 
-    it('does not call SEMrush at all when includeSemrush is false', async () => {
+    it('does not call DataForSEO at all when includeSemrush is false', async () => {
       setupSupabaseMock(
         [{ id: 'q-1', question: 'china tours' }],
         null,
@@ -508,15 +517,15 @@ describe('getWeakSpotOpportunities', () => {
 
       await getWeakSpotOpportunities('client-1', 20, 10, false)
 
-      expect(mockBatchKeywordOverview).not.toHaveBeenCalled()
+      expect(mockBulkKeywordVolume).not.toHaveBeenCalled()
     })
 
-    it('does not call SEMrush when no queries are found', async () => {
+    it('does not call DataForSEO when no queries are found', async () => {
       setupSupabaseMock([])
 
       await getWeakSpotOpportunities('client-1', 20, 10, true)
 
-      expect(mockBatchKeywordOverview).not.toHaveBeenCalled()
+      expect(mockBulkKeywordVolume).not.toHaveBeenCalled()
     })
   })
 
@@ -541,22 +550,24 @@ describe('getWeakSpotOpportunities', () => {
         ]
       )
 
-      mockBatchKeywordOverview.mockResolvedValue([
+      mockBulkKeywordVolume.mockResolvedValue([
         {
           keyword: 'best china tours nz unified',
-          volume: 500,
-          kd: 15,
+          search_volume: 500,
+          keyword_difficulty: 15,
           cpc: 1.5,
+          competition: 0.3,
           intent: 'commercial',
-          trend: [],
+          position: null,
         },
         {
           keyword: 'niche geo only query',
-          volume: 20,   // too low → geo_only
-          kd: 5,
+          search_volume: 20,   // too low → geo_only
+          keyword_difficulty: 5,
           cpc: 0.2,
+          competition: 0.1,
           intent: 'informational',
-          trend: [],
+          position: null,
         },
       ])
 
@@ -586,8 +597,8 @@ describe('getWeakSpotOpportunities', () => {
         ]
       )
 
-      // Both get no SEMrush data → both geo_only
-      mockBatchKeywordOverview.mockResolvedValue([])
+      // Both get no DataForSEO data → both geo_only
+      mockBulkKeywordVolume.mockResolvedValue([])
 
       const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
 
@@ -616,7 +627,7 @@ describe('getWeakSpotOpportunities', () => {
         ]
       )
 
-      mockBatchKeywordOverview.mockResolvedValue([])
+      mockBulkKeywordVolume.mockResolvedValue([])
 
       const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
 
@@ -643,7 +654,7 @@ describe('getWeakSpotOpportunities', () => {
         ]
       )
 
-      mockBatchKeywordOverview.mockResolvedValue([])
+      mockBulkKeywordVolume.mockResolvedValue([])
 
       const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
 
@@ -668,13 +679,14 @@ describe('getWeakSpotOpportunities', () => {
         makeRuns('q-1', 5, true)
       )
 
-      mockBatchKeywordOverview.mockResolvedValue([{
+      mockBulkKeywordVolume.mockResolvedValue([{
         keyword: 'recommended china tour companies nz',
-        volume: 320,
-        kd: 22,
+        search_volume: 320,
+        keyword_difficulty: 22,
         cpc: 1.8,
+        competition: 0.3,
         intent: 'commercial',
-        trend: [],
+        position: null,
       }])
 
       const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
@@ -699,7 +711,7 @@ describe('getWeakSpotOpportunities', () => {
         ]
       )
 
-      mockBatchKeywordOverview.mockResolvedValue([])
+      mockBulkKeywordVolume.mockResolvedValue([])
 
       const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
       expect(result[0].weakness_score).toBe(0.67)
@@ -721,7 +733,7 @@ describe('getWeakSpotOpportunities', () => {
       const runs = queries.flatMap(q => makeRuns(q.id, 3, true))
 
       setupSupabaseMock(queries, null, runs)
-      mockBatchKeywordOverview.mockResolvedValue([])
+      mockBulkKeywordVolume.mockResolvedValue([])
 
       const result = await getWeakSpotOpportunities('client-1', 3, 10, false)
 
@@ -742,7 +754,7 @@ describe('getWeakSpotOpportunities', () => {
         allRuns
       )
 
-      mockBatchKeywordOverview.mockResolvedValue([])
+      mockBulkKeywordVolume.mockResolvedValue([])
 
       const result = await getWeakSpotOpportunities('client-1', 20, 5, false)
 
@@ -765,7 +777,7 @@ describe('getWeakSpotOpportunities', () => {
         [{ query_id: 'q-1', ai_engine: 'openai', client_brand_rank: null, ran_at: '2026-05-01T10:00:00Z' }]
       )
 
-      mockBatchKeywordOverview.mockResolvedValue([])
+      mockBulkKeywordVolume.mockResolvedValue([])
       const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
       expect(result[0].weakness_score).toBe(1)
     })
@@ -777,7 +789,7 @@ describe('getWeakSpotOpportunities', () => {
         [{ query_id: 'q-1', ai_engine: 'openai', client_brand_rank: 4, ran_at: '2026-05-01T10:00:00Z' }]
       )
 
-      mockBatchKeywordOverview.mockResolvedValue([])
+      mockBulkKeywordVolume.mockResolvedValue([])
       const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
       expect(result[0].weakness_score).toBe(1)
     })
@@ -790,7 +802,7 @@ describe('getWeakSpotOpportunities', () => {
         [{ query_id: 'q-1', ai_engine: 'openai', client_brand_rank: 3, ran_at: '2026-05-01T10:00:00Z' }]
       )
 
-      mockBatchKeywordOverview.mockResolvedValue([])
+      mockBulkKeywordVolume.mockResolvedValue([])
       const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
       expect(result).toEqual([])
     })
@@ -806,7 +818,7 @@ describe('getWeakSpotOpportunities', () => {
         ]
       )
 
-      mockBatchKeywordOverview.mockResolvedValue([])
+      mockBulkKeywordVolume.mockResolvedValue([])
 
       const result = await getWeakSpotOpportunities('client-1', 20, 10, true)
       expect(result[0].last_run_at).toBe('2026-05-04T15:00:00Z')
@@ -838,16 +850,17 @@ describe('getWeakSpotOpportunities', () => {
         ]
       )
 
-      mockBatchKeywordOverview.mockImplementation(async (keywords: string[]) => {
+      mockBulkKeywordVolume.mockImplementation(async (keywords: string[]) => {
         return keywords
           .filter(k => k.includes('unified'))
           .map(k => ({
             keyword: k,
-            volume: 400,
-            kd: 18,
+            search_volume: 400,
+            keyword_difficulty: 18,
             cpc: 2.0,
+            competition: 0.4,
             intent: 'commercial',
-            trend: [],
+            position: null,
           }))
       })
 

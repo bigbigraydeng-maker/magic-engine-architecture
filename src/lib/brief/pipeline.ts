@@ -12,10 +12,11 @@
 
 import { fetchMultipleUrls } from './jina'
 import { downloadBriefFile } from './storage'
-import { getDomainOverviewSnapshot } from '../semrush/client'
+import { getKeywordsForSite, getSerpCompetitors } from '../dataforseo/labs'
 import { callClaudeWithDocs, parseJsonResponse, MODEL_SONNET } from '../anthropic/client'
 import type { ClaudeDocInput } from '../anthropic/client'
 import { buildBriefUserMessage, BRIEF_SYSTEM_PROMPT } from './prompts'
+import type { DomainSnapshot } from './prompts'
 import { supabaseAdmin } from '../supabase'
 import type { MasterBrief } from '@/types/magic-engine'
 
@@ -60,7 +61,7 @@ export async function runBriefPipeline(input: PipelineInput): Promise<PipelineRe
     fetchMultipleUrls(input.websiteUrls),
     downloadFiles(input.storagePaths),
     input.domain
-      ? getDomainOverviewSnapshot(input.domain)
+      ? buildDomainSnapshot(input.domain)
       : Promise.resolve(null),
   ])
 
@@ -102,7 +103,7 @@ export async function runBriefPipeline(input: PipelineInput): Promise<PipelineRe
   // SEMrush snapshot
   const semrushSnapshot = semrushResult.status === 'fulfilled' ? semrushResult.value : null
   if (semrushResult.status === 'rejected') {
-    warnings.push(`SEMrush snapshot failed: ${semrushResult.reason?.message ?? 'unknown'}`)
+    warnings.push(`DataForSEO keyword snapshot failed: ${semrushResult.reason?.message ?? 'unknown'}`)
   }
 
   // Safety check: need at least one data source
@@ -110,7 +111,7 @@ export async function runBriefPipeline(input: PipelineInput): Promise<PipelineRe
   if (!hasData) {
     return {
       success: false,
-      error: 'No data sources available — all of website scraping, file download, and SEMrush failed.',
+      error: 'No data sources available — all of website scraping, file download, and DataForSEO failed.',
       warnings,
     }
   }
@@ -270,4 +271,27 @@ function guessContentType(ext: string): string {
     md: 'text/plain',
   }
   return map[ext] ?? 'text/plain'
+}
+
+async function buildDomainSnapshot(domain: string): Promise<DomainSnapshot | null> {
+  const [kwsResult, compsResult] = await Promise.allSettled([
+    getKeywordsForSite(domain, 2036, 20),
+    getSerpCompetitors(domain, 2036, 5),
+  ])
+
+  const keywords     = kwsResult.status   === 'fulfilled' ? kwsResult.value   : []
+  const competitors  = compsResult.status === 'fulfilled' ? compsResult.value : []
+
+  if (keywords.length === 0 && competitors.length === 0) return null
+
+  return {
+    top_keywords: keywords.map(k => ({
+      keyword: k.keyword,
+      volume:  k.search_volume ?? 0,
+      kd:      k.keyword_difficulty ?? 0,
+      cpc:     k.cpc ?? 0,
+      intent:  k.intent,
+    })),
+    competitor_domains: competitors.map(c => c.domain),
+  }
 }

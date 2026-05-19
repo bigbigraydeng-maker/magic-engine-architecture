@@ -4,7 +4,11 @@
  */
 
 import type { JinaFetchResult } from './jina'
-import type { DomainOverviewSnapshot } from '../semrush/client'
+
+export interface DomainSnapshot {
+  top_keywords: Array<{ keyword: string; volume: number; kd: number; cpc: number; intent: string }>
+  competitor_domains: string[]
+}
 
 // ── Generation ────────────────────────────────────────────────────────────────
 
@@ -97,7 +101,7 @@ REQUIRED OUTPUT FORMAT (respond ONLY with this JSON, nothing else):
 
 export interface BriefBuilderInput {
   websitePages: JinaFetchResult[]
-  semrushSnapshot: DomainOverviewSnapshot | null
+  semrushSnapshot: DomainSnapshot | null
   domain?: string
   // P8.11.F.1: high-confidence anchors from 张骞 discovery. When supplied,
   // Claude is told to treat these as fixed inputs rather than rederive them.

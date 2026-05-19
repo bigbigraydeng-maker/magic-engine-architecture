@@ -14,10 +14,9 @@
  */
 
 import { supabaseAdmin } from '../supabase'
-import { batchKeywordOverview } from '../semrush/client'
+import { bulkKeywordVolume } from '../dataforseo/labs'
 import { extractKeywordCandidates } from './keyword-candidates'
 import type { BlogOpportunity, BlogMode } from '@/types/magic-engine'
-import type { SemrushKeywordData } from '../semrush/client'
 
 // ─── Internal interfaces ──────────────────────────────────────────────────────
 
@@ -54,7 +53,7 @@ const UNIFIED_MIN_VOLUME = 100        // volume must be > 100
  * @param clientId       - client UUID
  * @param limit          - max opportunities to return (default 20)
  * @param lookback       - how many recent runs per query to consider (default 10)
- * @param includeSemrush - whether to call SEMrush API for keyword enrichment (default true)
+ * @param includeSemrush - whether to call DataForSEO API for keyword enrichment (default true)
  */
 export async function getWeakSpotOpportunities(
   clientId: string,
@@ -193,8 +192,8 @@ function populateSummaries(
 }
 
 /**
- * Fetch SEMrush keyword data for a batch of AI-weak summaries.
- * Returns a map: keyword string → SEMrush data.
+ * Fetch DataForSEO keyword volume data for a batch of AI-weak summaries.
+ * Returns a map: keyword string → DataForSEO data.
  * Silently fails on API error, returning empty map (degrades to geo_only).
  */
 async function fetchKeywordData(
@@ -222,13 +221,13 @@ async function fetchKeywordData(
   if (keywords.length === 0) return result
 
   try {
-    const semrushData = await batchKeywordOverview(keywords)
-    for (const row of semrushData) {
+    const dfseData = await bulkKeywordVolume(keywords)
+    for (const row of dfseData) {
       result.set(row.keyword.toLowerCase(), {
         keyword: row.keyword,
-        volume: row.volume,
-        kd: row.kd,
-        intent: row.intent,
+        volume:  row.search_volume ?? 0,
+        kd:      row.keyword_difficulty ?? 0,
+        intent:  row.intent,
       })
     }
   } catch {
