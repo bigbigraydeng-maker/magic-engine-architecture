@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-20 01:46 NZST · 当前阶段：**🔒 P8.3.2 Dashboard Magic Link 鉴权（当前阻塞）+ Phase 8.S SEMrush → DataForSEO 关键词接口迁移（下一成本优化）**。Phase 12.A 已完成；Phase 12.B.1–B.4 已完成（SEO / Ads / 社媒 adapter + SEMrush 周快照 cron）。
+> 最后更新：2026-05-20 02:07 NZST · 当前阶段：**🔒 P8.3.2 Dashboard Magic Link 鉴权（当前阻塞）+ Phase 8.S SEMrush → DataForSEO 关键词接口迁移（下一成本优化）**。Phase 12.A 已完成；Phase 12.B.1–B.4 已完成（SEO / Ads / 社媒 adapter + SEMrush 周快照 cron）。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）

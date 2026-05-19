@@ -150,7 +150,7 @@ export function BriefSourcesForm({ clientId, onGenerated }: Props) {
     const filePaths = uploadedFiles.map(f => f.storagePath);
 
     if (!websiteUrls.length && !filePaths.length && !domain.trim()) {
-      setError('Please provide at least one website URL, file, or SEMrush domain.');
+      setError('Please provide at least one website URL, file, or domain.');
       return;
     }
 
@@ -235,10 +235,10 @@ export function BriefSourcesForm({ clientId, onGenerated }: Props) {
         )}
       </div>
 
-      {/* SEMrush Domain */}
+      {/* Domain */}
       <div>
         <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-          SEMrush Domain <span className="font-normal normal-case text-gray-400">(for keyword + competitor data)</span>
+          Domain <span className="font-normal normal-case text-gray-400">(for keyword + competitor data)</span>
         </label>
         <input
           value={domain}

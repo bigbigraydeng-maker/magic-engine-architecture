@@ -196,7 +196,7 @@ export default function Step2BriefUpload({
       {!hasInputs && (
         <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
           ⚠️ You can skip this step, but the Master Brief will rely solely on Site Audit
-          and SEMrush. We strongly recommend uploading at least one document or URL.
+          and Keyword Intelligence. We strongly recommend uploading at least one document or URL.
         </div>
       )}
 

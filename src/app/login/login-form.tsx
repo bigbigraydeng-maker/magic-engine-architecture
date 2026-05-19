@@ -29,24 +29,28 @@ export default function LoginForm({ next, authFailed }: { next: string; authFail
     setLoading(true)
     setError('')
 
-    const supabase = createBrowserClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-    )
+    try {
+      const supabase = createBrowserClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+      )
 
-    const redirectTo = `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`
+      const redirectTo = `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`
 
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: redirectTo, shouldCreateUser: false },
-    })
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: { emailRedirectTo: redirectTo, shouldCreateUser: false },
+      })
 
-    setLoading(false)
-
-    if (error) {
-      setError('Unable to send link. Check your email address.')
-    } else {
-      setSent(true)
+      if (error) {
+        setError('Unable to send link. Check your email address.')
+      } else {
+        setSent(true)
+      }
+    } catch {
+      setError('Unable to send link. Please try again.')
+    } finally {
+      setLoading(false)
     }
   }
 

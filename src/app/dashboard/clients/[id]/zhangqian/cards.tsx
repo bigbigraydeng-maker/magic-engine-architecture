@@ -323,7 +323,7 @@ export function KeywordsCard({
       {/* Top keywords from SEMrush */}
       {semrushSnapshot && (semrushSnapshot.top_keywords ?? []).length > 0 && (
         <div>
-          <p className="text-xs font-semibold text-gray-500 mb-2">SEMrush 实时排名 TOP 词</p>
+          <p className="text-xs font-semibold text-gray-500 mb-2">Keyword Intelligence 实时排名 TOP 词</p>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
