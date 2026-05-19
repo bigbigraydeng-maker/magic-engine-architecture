@@ -1210,7 +1210,7 @@ Production Item    = 订单里的具体产物
 
 - [x] **Pre.13** — `fix(reels)`：修 Reels 代码读 `title/description/parsed_content/semrush_keywords`，对齐现有 `campaign_briefs` schema（不扩 schema）
 - [x] **P13.A.1** — 新增 `production_packages` migration（含 RLS、index、`diagnostic_dimension` enum 复用、`generation_context_snapshot` jsonb）
-- [ ] **P13.A.2** — 新增 `production_items` migration（多 FK 到 4 张内容表、RLS、index）
+- [x] **P13.A.2** — 新增 `production_items` migration（多 FK 到 4 张内容表、RLS、index）
 - [ ] **P13.A.3** — `ALTER content_posts / blog_posts / reels_drafts / visual_assets` 各加 `production_item_id` 单列 FK + index
 - [ ] **P13.A.4** — Social 生成链路（Route A/C）接收 `production_package_id`，生成时创建对应 `production_items` 行
 - [ ] **P13.A.5** — `/dashboard/clients/[id]/production/[packageId]` 只读详情页（展示 dimension / campaign / execution_item / items 列表 / context snapshot）
@@ -1547,6 +1547,7 @@ AU / NZ（当前）          新市场（未来）
 
 ### 2026-05-20
 
+- **P13.A.2** — `production_items` migration：建表 + content_type CHECK + 跨 FK 一致性约束（chk_item_fk_matches_type）+ 6 索引 + updated_at trigger + RLS，build ✅
 - **P13.A.1** — `production_packages` migration：建表（复用 `diagnostic_dimension` enum）+ 4 索引 + updated_at trigger + RLS 三策略（SELECT/INSERT/UPDATE via client_team），build ✅
 
 ### 2026-05-19
