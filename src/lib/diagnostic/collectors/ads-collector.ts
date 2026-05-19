@@ -1,8 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { scrapeCompetitorMetaAds } from '@/lib/apify/ad-library'
 import type { MetaAdData } from '@/lib/apify/ad-library'
-import { scrapeGoogleAdsTransparency } from '@/lib/apify/google-ads-transparency'
-import type { GoogleAdsData } from '@/lib/apify/google-ads-transparency'
+import { getGoogleAdsPresence } from '@/lib/dataforseo/serp'
+import type { GoogleAdsData } from '@/lib/dataforseo/serp'
 import type { CollectorResult, NewFinding } from '../types'
 import { makeEvidence, evidenceSource } from '../types'
 import { MAX_COLLECTOR_TIMEOUT_MS } from '../constants'
@@ -66,7 +66,7 @@ export class AdsCollector {
     )
 
     try {
-      return await Promise.race([this.collectAndScore(clientId, searchTerm, handles.market), timeout])
+      return await Promise.race([this.collectAndScore(clientId, searchTerm, handles.market, handles.domain), timeout])
     } catch {
       return fallback
     }
@@ -98,16 +98,17 @@ export class AdsCollector {
     clientId: string,
     searchTerm: string,
     market: string,
+    domain: string,
   ): Promise<AdsCollectorResult> {
     const [metaSettled, googleSettled] = await Promise.allSettled([
       scrapeCompetitorMetaAds(searchTerm, market),
-      scrapeGoogleAdsTransparency(searchTerm, market),
+      getGoogleAdsPresence(searchTerm, market, domain),
     ])
 
     const meta_ads = metaSettled.status === 'fulfilled' ? metaSettled.value : null
     const google_ads = googleSettled.status === 'fulfilled' ? googleSettled.value : null
 
-    // If both Apify calls failed, we cannot evaluate — degrade gracefully.
+    // If both provider calls failed, we cannot evaluate — degrade gracefully.
     if (!meta_ads && !google_ads) {
       return { score: null, findings: [], meta_ads: null, google_ads: null }
     }
@@ -144,7 +145,9 @@ export class AdsCollector {
     if (metaActive && metaTypes <= 1) {
       findings.push(this.makeWeakCreativeFinding(clientId, 'Meta', meta_ads?.adTypes ?? []))
     }
-    if (googleActive && googleFmts <= 1) {
+    // Only emit creative finding when format data is available (adFormats > 0).
+    // DataForSEO SERP returns adFormats:[] — skip rather than false-positive.
+    if (googleActive && googleFmts > 0 && googleFmts <= 1) {
       findings.push(this.makeWeakCreativeFinding(clientId, 'Google', google_ads?.adFormats ?? []))
     }
 
@@ -180,8 +183,8 @@ export class AdsCollector {
       return 100
     }
     const creativeScores: number[] = []
-    if (metaActive)   creativeScores.push(creativeFor(metaTypes))
-    if (googleActive) creativeScores.push(creativeFor(googleFmts))
+    if (metaActive)                  creativeScores.push(creativeFor(metaTypes))
+    if (googleActive && googleFmts > 0) creativeScores.push(creativeFor(googleFmts))
     const creativeScore = creativeScores.length === 0 ? 0
       : creativeScores.reduce((a, b) => a + b, 0) / creativeScores.length
 

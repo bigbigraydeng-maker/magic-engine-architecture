@@ -14,8 +14,8 @@ vi.mock('@/lib/apify/ad-library', () => ({
   scrapeCompetitorMetaAds: mockMetaScrape,
 }))
 
-vi.mock('@/lib/apify/google-ads-transparency', () => ({
-  scrapeGoogleAdsTransparency: mockGoogleScrape,
+vi.mock('@/lib/dataforseo/serp', () => ({
+  getGoogleAdsPresence: mockGoogleScrape,
 }))
 
 // ---------------------------------------------------------------------------
@@ -91,13 +91,13 @@ describe('AdsCollector.collect() — basic shape', () => {
   it('uses client.name as search term, not domain', async () => {
     await new AdsCollector(makeSupabase({ name: 'Big Brand Co' })).collect(CLIENT_ID, DOMAIN, KEYWORDS)
     expect(mockMetaScrape).toHaveBeenCalledWith('Big Brand Co', expect.any(String))
-    expect(mockGoogleScrape).toHaveBeenCalledWith('Big Brand Co', expect.any(String))
+    expect(mockGoogleScrape).toHaveBeenCalledWith('Big Brand Co', expect.any(String), expect.any(String))
   })
 
   it('passes NZ market when client semrush_db = nz', async () => {
     await new AdsCollector(makeSupabase({ semrush_db: 'nz' })).collect(CLIENT_ID, DOMAIN, KEYWORDS)
     expect(mockMetaScrape).toHaveBeenCalledWith(expect.any(String), 'NZ')
-    expect(mockGoogleScrape).toHaveBeenCalledWith(expect.any(String), 'NZ')
+    expect(mockGoogleScrape).toHaveBeenCalledWith(expect.any(String), 'NZ', expect.any(String))
   })
 })
 
@@ -205,17 +205,17 @@ describe('AdsCollector.collect() — creative diversity', () => {
 // Degraded result on Apify failure
 // ---------------------------------------------------------------------------
 
-describe('AdsCollector.collect() — Apify failure', () => {
-  it('returns degraded { score: null, findings: [] } when BOTH Apify calls throw', async () => {
-    mockMetaScrape.mockRejectedValue(new Error('Apify down'))
-    mockGoogleScrape.mockRejectedValue(new Error('Apify down'))
+describe('AdsCollector.collect() — provider failure', () => {
+  it('returns degraded { score: null, findings: [] } when BOTH provider calls throw', async () => {
+    mockMetaScrape.mockRejectedValue(new Error('provider down'))
+    mockGoogleScrape.mockRejectedValue(new Error('provider down'))
     const result = await new AdsCollector(makeSupabase(), 30_000).collect(CLIENT_ID, DOMAIN, KEYWORDS)
     expect(result.score).toBeNull()
     expect(result.findings).toEqual([])
   })
 
   it('still scores when ONE provider succeeds', async () => {
-    mockMetaScrape.mockRejectedValue(new Error('Apify down'))
+    mockMetaScrape.mockRejectedValue(new Error('provider down'))
     const result = await new AdsCollector(makeSupabase()).collect(CLIENT_ID, DOMAIN, KEYWORDS)
     expect(result.score).not.toBeNull()
     expect(result.meta_ads).toBeNull()

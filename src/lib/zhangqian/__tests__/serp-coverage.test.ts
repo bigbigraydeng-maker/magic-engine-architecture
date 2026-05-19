@@ -8,8 +8,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const mockScrape = vi.fn()
 
-vi.mock('../../apify/google-search-scraper', () => ({
-  scrapeGoogleSerp: (...args: unknown[]) => mockScrape(...args),
+vi.mock('../../dataforseo/serp', () => ({
+  getSerpPage: (...args: unknown[]) => mockScrape(...args),
 }))
 
 import { ensureSerpCoverage, pickFallbackQueries } from '../serp-coverage'
@@ -183,7 +183,7 @@ describe('ensureSerpCoverage', () => {
     const { report: out, result } = await ensureSerpCoverage(report)
     expect(result.applied).toBe(true)
     expect(result.queriesAdded).toBe(2)
-    expect(result.apifyCallsAdded).toBe(2)
+    expect(result.serpCallsAdded).toBe(2)
     expect(out.serp_results).toHaveLength(2)
     expect(mockScrape).toHaveBeenCalledTimes(2)
     expect(mockScrape).toHaveBeenCalledWith('luxury dresses Auckland', 'nz')
@@ -202,7 +202,7 @@ describe('ensureSerpCoverage', () => {
     const { report: out, result } = await ensureSerpCoverage(report)
     expect(result.applied).toBe(true)
     expect(result.queriesAdded).toBe(1)         // 只成功 1 次
-    expect(result.apifyCallsAdded).toBe(2)      // 但 quota 花了 2 次
+    expect(result.serpCallsAdded).toBe(2)      // 但 quota 花了 2 次
     expect(result.errors).toHaveLength(1)
     expect(result.errors[0]).toMatch(/Apify 502/)
     expect(out.serp_results).toHaveLength(1)

@@ -70,21 +70,11 @@ vi.mock('@/lib/apify/social-scraper', () => ({
   scrapeInstagramProfile: vi.fn().mockResolvedValue({ followersCount: 1000, postsLast30Days: 8, engagementRate: 0.03 }),
   scrapeTiktokProfile:    vi.fn().mockResolvedValue({ followersCount: 500,  postsLast30Days: 4, engagementRate: 0.02 }),
 }))
-vi.mock('@/lib/apify/google-search-scraper', () => ({
-  scrapeGoogleSerp: vi.fn().mockResolvedValue({
-    query: 'fallback',
-    organic_results: [],
-    paid_advertiser_domains: [],
-    ai_overview_text: null,
-    ai_overview_sources: [],
-  }),
-}))
-
-// SERP coverage post-processor — avoid duplicate Apify calls in tests
+// SERP coverage post-processor — avoid duplicate DataForSEO calls in tests
 vi.mock('../serp-coverage', () => ({
   ensureSerpCoverage: (report: unknown) => Promise.resolve({
     report,
-    result: { applied: false, queriesAdded: 0, apifyCallsAdded: 0, estimatedExtraCostUsd: 0, errors: [] },
+    result: { applied: false, queriesAdded: 0, serpCallsAdded: 0, estimatedExtraCostUsd: 0, errors: [] },
   }),
 }))
 
@@ -666,20 +656,6 @@ describe('E.1.6 错误降级 — DataForSEO 故障不中断主流程', () => {
       .find(m => m.role === 'user' && Array.isArray(m.content))
     const content = (toolResultMsg!.content as Array<{ content?: string }>)[0].content
     expect(content).toMatch(/Fall back to web_search/)
-  })
-
-  it('fetch_serp_results DataForSEO 失败时 fallback 到 Apify（scrapeGoogleSerp 被调用）', async () => {
-    const { scrapeGoogleSerp } = await import('@/lib/apify/google-search-scraper')
-    mockGetSerpPage.mockRejectedValue(new Error('DataForSEO SERP 403'))
-    mockCreate
-      .mockResolvedValueOnce(buildToolUseResponse([
-        toolUseBlock('fetch_serp_results', { query: 'nz tour packages' }),
-      ]))
-      .mockResolvedValueOnce(buildEndTurnResponse(FINAL_REPORT_JSON))
-
-    await runZhangqian(DOMAIN_CTS)
-
-    expect(scrapeGoogleSerp).toHaveBeenCalled()
   })
 
   it('fetch_onpage_audit API 抛出异常 → 优雅降级不崩溃', async () => {

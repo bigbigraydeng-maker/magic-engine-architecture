@@ -43,6 +43,12 @@ function ClientShortcuts({ clientId }: { clientId: string }) {
       >
         📊 执行看板
       </Link>
+      <Link
+        href={`/dashboard/clients/${clientId}/production`}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-700 hover:border-indigo-400 hover:bg-indigo-100 transition-colors"
+      >
+        📦 生产包
+      </Link>
     </div>
   )
 }

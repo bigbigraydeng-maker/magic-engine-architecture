@@ -21,7 +21,7 @@ import type {
   DiscoveredAiQuestion,
   DiscoveredSerpResult,
 } from './types'
-import { scrapeGoogleSerp } from '../apify/google-search-scraper'
+import { getSerpPage } from '../dataforseo/serp'
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -93,7 +93,7 @@ export function pickFallbackQueries(
 export interface SerpCoverageResult {
   applied: boolean
   queriesAdded: number
-  apifyCallsAdded: number
+  serpCallsAdded: number
   estimatedExtraCostUsd: number
   errors: string[]
 }
@@ -117,7 +117,7 @@ export async function ensureSerpCoverage(
       result: {
         applied: false,
         queriesAdded: 0,
-        apifyCallsAdded: 0,
+        serpCallsAdded: 0,
         estimatedExtraCostUsd: 0,
         errors: [],
       },
@@ -131,7 +131,7 @@ export async function ensureSerpCoverage(
       result: {
         applied: false,
         queriesAdded: 0,
-        apifyCallsAdded: 0,
+        serpCallsAdded: 0,
         estimatedExtraCostUsd: 0,
         errors: ['no fallback queries available — seed_keywords + ai_tracker_questions empty or all brand'],
       },
@@ -143,7 +143,7 @@ export async function ensureSerpCoverage(
 
   for (const { query, country } of queries) {
     try {
-      const scraped = await withTimeout(scrapeGoogleSerp(query, country), PER_QUERY_TIMEOUT_MS)
+      const scraped = await withTimeout(getSerpPage(query, country), PER_QUERY_TIMEOUT_MS)
       newResults.push(scraped)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
@@ -161,7 +161,7 @@ export async function ensureSerpCoverage(
     result: {
       applied: newResults.length > 0,
       queriesAdded: newResults.length,
-      apifyCallsAdded: queries.length,  // 不管成败都算花了 apify quota
+      serpCallsAdded: queries.length,
       estimatedExtraCostUsd: Number((queries.length * SERP_COST_PER_CALL).toFixed(4)),
       errors,
     },

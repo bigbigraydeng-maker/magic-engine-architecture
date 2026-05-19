@@ -137,3 +137,58 @@ export async function getSerpPage(
     ai_overview_sources:     aiOverviewSources,
   }
 }
+
+// ─── Google Ads presence (replaces Apify google-ads-transparency.ts) ─────────
+
+/**
+ * Mirrors the GoogleAdsData shape from the deleted Apify scraper so callers
+ * (ads-collector.ts, advanced-agent.ts) require no structural changes.
+ *
+ * adFormats / regions / topAdPreviews are always [] — DataForSEO SERP does not
+ * return that level of detail. Callers must handle empty adFormats gracefully.
+ */
+export interface GoogleAdsData {
+  advertiser:      string
+  activeAdsCount:  number
+  adFormats:       string[]   // always [] — not available via SERP endpoint
+  regions:         string[]   // always [] — not available via SERP endpoint
+  topAdPreviews:   string[]   // always [] — not available via SERP endpoint
+}
+
+/**
+ * Detect whether a brand is running Google Ads by searching their brand name
+ * and checking if their domain appears in paid results.
+ *
+ * Replaces: scrapeGoogleAdsTransparency (Apify easyapi actor).
+ *
+ * @param brandName    Brand name or domain to search.
+ * @param market       'AU' or 'NZ' (case-insensitive).
+ * @param clientDomain Client's own domain (used to match paid_advertiser_domains).
+ */
+export async function getGoogleAdsPresence(
+  brandName:    string,
+  market:       string = 'AU',
+  clientDomain?: string,
+): Promise<GoogleAdsData> {
+  const countryCode = market.toLowerCase() === 'nz' ? 'nz' : 'au' as const
+  const serp = await getSerpPage(brandName, countryCode)
+
+  // Derive a stem to match against paid_advertiser_domains.
+  // Prefer explicit clientDomain; fall back to stripping brandName to a slug.
+  const stem = clientDomain
+    ? clientDomain.replace(/^https?:\/\//, '').split('/')[0].toLowerCase()
+    : brandName.toLowerCase().replace(/\s+/g, '').substring(0, 12)
+
+  const isAdvertising = serp.paid_advertiser_domains.some(d => {
+    const dl = d.toLowerCase()
+    return dl.includes(stem) || stem.includes(dl.replace(/\.[^.]+$/, ''))
+  })
+
+  return {
+    advertiser:     brandName,
+    activeAdsCount: isAdvertising ? 1 : 0,
+    adFormats:      [],
+    regions:        [],
+    topAdPreviews:  [],
+  }
+}

@@ -14,7 +14,7 @@
 
 import { scrapeCompetitorMetaAds } from '@/lib/apify/ad-library'
 import { scrapeFacebookPage } from '@/lib/apify/social-scraper'
-import { scrapeGoogleAdsTransparency } from '@/lib/apify/google-ads-transparency'
+import { getGoogleAdsPresence } from '@/lib/dataforseo/serp'
 import { fetchGscSearchPerformance } from '@/lib/gsc/client'
 import type {
   AdvancedDiscoveryPayload,
@@ -174,7 +174,7 @@ async function scrapeGoogleAdsWithTimeout(
 ): Promise<DiscoveredGoogleAdsData | null> {
   try {
     const raw = await withTimeout(
-      scrapeGoogleAdsTransparency(domain),
+      getGoogleAdsPresence(domain, 'AU', domain),
       GOOGLE_ADS_TIMEOUT_MS,
       'Google Ads Transparency timeout',
     )

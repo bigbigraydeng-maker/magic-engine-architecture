@@ -7,7 +7,7 @@
  */
 
 import { scrapeCompetitorMetaAds } from '../src/lib/apify/ad-library'
-import { scrapeGoogleSerp } from '../src/lib/apify/google-search-scraper'
+import { getSerpPage as scrapeGoogleSerp } from '../src/lib/dataforseo/serp'
 
 const DOMAIN = 'cyhbnz.com'
 const BRAND = 'CYHB'

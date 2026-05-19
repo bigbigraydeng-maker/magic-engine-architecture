@@ -24,7 +24,6 @@ import { aggregateLocalReviews } from '@/lib/local-reviews/client'
 // hit rate on cold domains. They re-appear in the Phase 8.10.S5 advanced
 // pass, gated behind explicit user connector authorisation.
 import { scrapeInstagramProfile, scrapeTiktokProfile } from '@/lib/apify/social-scraper'
-import { scrapeGoogleSerp } from '@/lib/apify/google-search-scraper'
 import { getKeywordsForSite, getSerpCompetitors } from '@/lib/dataforseo/labs'
 import { getDomainTechnologies, getDomainWhois } from '@/lib/dataforseo/domain-analytics'
 import { getSerpPage } from '@/lib/dataforseo/serp'
@@ -694,22 +693,22 @@ async function applyPostProcessing(
   await onProgress('检查 SERP 覆盖率…')
   const { report: coveredReport, result: cov } = await ensureSerpCoverage(result.report)
 
-  if (cov.apifyCallsAdded === 0) {
+  if (cov.serpCallsAdded === 0) {
     // LLM 已经跑过 SERP（最常见路径） — 直接返回
     return { ...result, report: coveredReport }
   }
 
   console.log(
-    `[zhangqian/postProcess] SERP fallback fired: ${cov.queriesAdded}/${cov.apifyCallsAdded} queries 成功 ` +
+    `[zhangqian/postProcess] SERP fallback fired: ${cov.queriesAdded}/${cov.serpCallsAdded} queries 成功 ` +
     `(+$${cov.estimatedExtraCostUsd}). errors: ${cov.errors.join(' | ') || '无'}`,
   )
 
-  // 把补跑的 apify call + cost 加进 meta，保证 telemetry 真实
+  // 把补跑的 SERP call + cost 加进 meta，保证 telemetry 真实
   const updatedReport: DiscoveryReport = {
     ...coveredReport,
     meta: {
       ...coveredReport.meta,
-      tool_calls: coveredReport.meta.tool_calls + cov.apifyCallsAdded,
+      tool_calls: coveredReport.meta.tool_calls + cov.serpCallsAdded,
       cost_usd: Number((coveredReport.meta.cost_usd + cov.estimatedExtraCostUsd).toFixed(4)),
     },
   }
@@ -961,20 +960,8 @@ async function handleFetchSerpResults(
 
   await onProgress(`抓取 Google 搜索结果 "${query}"…`)
 
-  // Try DataForSEO first (~$0.005/call); fall back to Apify if credentials missing or API errors.
   try {
     const serp = await getSerpPage(query, country)
-    return {
-      type: 'tool_result',
-      tool_use_id: toolUse.id,
-      content: JSON.stringify(serp),
-    }
-  } catch (dfseErr) {
-    console.warn(`[zhangqian] DataForSEO SERP failed for "${query}", falling back to Apify:`, dfseErr)
-  }
-
-  try {
-    const serp = await scrapeGoogleSerp(query, country)
     return {
       type: 'tool_result',
       tool_use_id: toolUse.id,
