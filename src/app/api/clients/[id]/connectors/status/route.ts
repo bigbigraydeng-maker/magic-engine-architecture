@@ -21,7 +21,7 @@ const CONNECTOR_CATALOGUE = [
     name: 'Google Search Console',
     emoji: '🔎',
     description: '客户网站的真实搜索表现：展示量、点击量、关键词排名',
-    setupHint: '在下方填入 GSC Property URL，并确保客户已将 magic-engine 服务账号加为验证用户。接入后，张骞将用真实 GSC 数据替代 SEMrush 估算。',
+    setupHint: '点击"立即配置"，用客户的 Google 账号授权后填入 GSC Property URL。接入后，张骞将用真实搜索数据替代 SEMrush 估算。',
   },
   {
     anchor: 'google-ads',

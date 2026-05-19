@@ -121,6 +121,7 @@ async function executeAdvancedDiscoveryJob(
         await updateJobProgress(supabaseAdmin, jobId, { progress_note: note })
       },
       siteUrl,
+      clientId,
     )
 
     await mergeAdvancedPayload(supabaseAdmin, clientId, advancedPayload)

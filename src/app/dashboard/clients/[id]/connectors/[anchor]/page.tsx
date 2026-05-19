@@ -1,8 +1,8 @@
 'use client'
 
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''
 
@@ -23,6 +23,8 @@ interface ConnectorMeta {
   successLabel?: string
   /** Override for the success sub-message when no advanced job triggered */
   savedLabel?: string
+  /** When set, this connector uses Google OAuth before showing the form fields. */
+  oauthAnchor?: string
 }
 
 const CONNECTOR_META: Record<string, ConnectorMeta> = {
@@ -62,7 +64,7 @@ const CONNECTOR_META: Record<string, ConnectorMeta> = {
   gsc: {
     name: 'Google Search Console',
     emoji: '🔎',
-    description: '接入 GSC 后，张骞将拉取真实 query、展示量、点击率、平均排名，替代 SEMrush 关键词估算。\n\n前提：客户需在 GSC 后台（Settings → Users & Permissions）将 magic-engine 服务账号加为验证用户（Restricted 权限即可）。服务账号邮箱请联系管理员确认。',
+    description: '接入 GSC 后，张骞将拉取真实 query、展示量、点击率、平均排名，替代 SEMrush 关键词估算。\n\n点击下方按钮用 Google 账号授权，授权完成后填入 GSC Property URL 即可完成连接。',
     fields: [
       {
         key: 'site_url',
@@ -75,6 +77,7 @@ const CONNECTOR_META: Record<string, ConnectorMeta> = {
     advancedHint: '保存后张骞将在后台自动拉取过去 28 天的真实搜索数据（query / 展示量 / 点击率 / 排名），通常 1–2 分钟完成。',
     buttonLabel: '连接 Google Search Console →',
     successLabel: '✓ Google Search Console 已连接',
+    oauthAnchor: 'gsc',
   },
   'google-ads': {
     name: 'Google 广告',
@@ -130,20 +133,58 @@ const CONNECTOR_META: Record<string, ConnectorMeta> = {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ConnectorDetailPage() {
-  const params = useParams()
-  const router = useRouter()
-  const clientId = params.id as string
-  const anchor = params.anchor as string
+  const params       = useParams()
+  const router       = useRouter()
+  const searchParams = useSearchParams()
+  const clientId     = params.id as string
+  const anchor       = params.anchor as string
 
   const meta = CONNECTOR_META[anchor]
 
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({})
-  const [saving, setSaving] = useState(false)
-  const [result, setResult] = useState<{
+  const [saving, setSaving]           = useState(false)
+  const [result, setResult]           = useState<{
     ok: boolean
     advancedJobId?: string | null
     error?: string
   } | null>(null)
+
+  // For OAuth connectors: track whether the Google auth step is done
+  const [oauthEmail, setOauthEmail]   = useState<string | null>(null)
+  const [oauthChecked, setOauthChecked] = useState(false)
+
+  // On mount for OAuth connectors: check existing status + handle ?oauth= param
+  useEffect(() => {
+    if (!meta?.oauthAnchor) return
+
+    const oauthParam = searchParams.get('oauth')
+
+    void (async () => {
+      try {
+        const res  = await fetch(`/api/clients/${clientId}/connectors/status`, {
+          headers: { Authorization: `Bearer ${API_KEY}` },
+        })
+        if (!res.ok) return
+        const data = await res.json() as {
+          connectors: Array<{ anchor: string; status: string; config: Record<string, unknown> | null }>
+        }
+        const row = data.connectors.find(c => c.anchor === anchor)
+        if (row && (row.status === 'partial' || row.status === 'connected')) {
+          const email = (row.config?.google_email as string | undefined) ?? null
+          setOauthEmail(email)
+          if (row.config?.site_url) {
+            setFieldValues({ site_url: row.config.site_url as string })
+          }
+        }
+        if (oauthParam === 'error') {
+          setResult({ ok: false, error: 'Google 授权失败，请重试' })
+        }
+      } finally {
+        setOauthChecked(true)
+      }
+    })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   if (!meta) {
     return (
@@ -174,7 +215,9 @@ export default function ConnectorDetailPage() {
             Authorization: `Bearer ${API_KEY}`,
           },
           body: JSON.stringify({
-            config: meta.fields.length > 0 ? fieldValues : null,
+            config: meta.fields.length > 0
+              ? { ...fieldValues, ...(oauthEmail ? { google_email: oauthEmail } : {}) }
+              : null,
           }),
         },
       )
@@ -191,9 +234,11 @@ export default function ConnectorDetailPage() {
     }
   }
 
-  const missingRequired = meta.fields
-    .filter(f => f.required && !fieldValues[f.key]?.trim())
-    .length > 0
+  const missingRequired =
+    (meta.oauthAnchor !== undefined && !oauthEmail) ||
+    meta.fields
+      .filter(f => f.required && !fieldValues[f.key]?.trim())
+      .length > 0
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -215,11 +260,47 @@ export default function ConnectorDetailPage() {
       <div className="max-w-2xl mx-auto px-6 py-6 space-y-5">
         {/* Description */}
         <div className="rounded-xl border border-gray-200 bg-white p-5">
-          <p className="text-sm text-gray-700 leading-relaxed">{meta.description}</p>
+          <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-line">{meta.description}</p>
         </div>
 
-        {/* Form fields */}
-        {meta.fields.length > 0 && (
+        {/* ── OAuth step (GSC and future Google connectors) ── */}
+        {meta.oauthAnchor && oauthChecked && (
+          <div className="rounded-xl border border-gray-200 bg-white p-5 space-y-3">
+            <h2 className="text-sm font-semibold text-gray-900">第 1 步：Google 账号授权</h2>
+            {oauthEmail ? (
+              <div className="flex items-center gap-2">
+                <span className="text-green-600 font-semibold text-sm">✓ 已授权</span>
+                <span className="text-sm text-gray-600">{oauthEmail}</span>
+                <button
+                  onClick={() => {
+                    window.location.href = `/api/auth/google/connect?client_id=${clientId}`
+                  }}
+                  className="ml-auto text-xs text-indigo-600 hover:underline"
+                >
+                  重新授权
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => {
+                  window.location.href = `/api/auth/google/connect?client_id=${clientId}`
+                }}
+                className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/>
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                </svg>
+                使用 Google 账号授权
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Form fields — for OAuth connectors, only show after OAuth step */}
+        {meta.fields.length > 0 && (!meta.oauthAnchor || oauthEmail) && (
           <div className="rounded-xl border border-gray-200 bg-white p-5 space-y-4">
             <h2 className="text-sm font-semibold text-gray-900">配置信息</h2>
             {meta.fields.map(f => (

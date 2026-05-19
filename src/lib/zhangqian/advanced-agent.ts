@@ -5,7 +5,7 @@
  *
  * Each connector trigger runs only the scrapers relevant to that data source:
  *   meta-ads / gbp → Meta Ad Library + Facebook page metrics
- *   gsc            → Google Search Console Search Analytics (service account)
+ *   gsc            → Google Search Console Search Analytics (OAuth per-client)
  *   google-ads     → Google Ads Transparency Center (Apify, public data)
  *
  * Returns an AdvancedDiscoveryPayload merged into
@@ -59,6 +59,7 @@ export async function runZhangqianAdvanced(
   triggeredBy: string,
   onProgress?: (note: string) => void | Promise<void>,
   siteUrl?: string,
+  clientId?: string,
 ): Promise<AdvancedDiscoveryPayload> {
   const startedAt = Date.now()
   const notify = onProgress ?? (() => undefined)
@@ -72,11 +73,11 @@ export async function runZhangqianAdvanced(
     // ── GSC: fetch real search performance data ────────────────────────────
     const effectiveSiteUrl = siteUrl ?? `https://${domain}/`
     await notify(`高级发现：正在从 Google Search Console 拉取搜索数据（${effectiveSiteUrl}）…`)
-    gsc_data = await fetchGscSearchPerformance(effectiveSiteUrl)
+    gsc_data = await fetchGscSearchPerformance(effectiveSiteUrl, clientId)
     if (gsc_data) {
       await notify(`高级发现：GSC 数据已获取（${gsc_data.rows.length} 条关键词，过去 ${gsc_data.date_range_days} 天）`)
     } else {
-      await notify('高级发现：GSC 数据拉取失败（请检查服务账号权限），继续…')
+      await notify('高级发现：GSC 数据拉取失败（请检查 Google 授权），继续…')
     }
   } else if (triggeredBy === 'google-ads') {
     // ── Google Ads Transparency: public Apify scrape ───────────────────────
