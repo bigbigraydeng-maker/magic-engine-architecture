@@ -42,6 +42,7 @@
 🔄 Phase 9.0     Visual Queue UX Polish（P9.0.1✅P9.0.3✅P9.0.4-9✅ 进行中 · 待：P9.0.2+P9.0.10-17集成测试+浮动卡）
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
+📋 Phase 14      Website Connector / 网站直连执行闭环（战略确认，待排期）
 ```
 
 **Phase 7 核心战略**：双信号博客（Dual-Signal Blog）— 每篇文章同时携带 SEO 信号（Google 排名）和 GEO 信号（AI 推荐），选题由 AI Tracker 弱项 × SEMrush 低KD机会交叉驱动，形成数据自强化飞轮。
@@ -649,7 +650,7 @@ Layer 5: Export（新增）— P8.10.S5
   - `prompts.ts` 同步：研究协议步骤 2 + 费用纪律 + JSON 示例 + 质量要求段落
   - zhangqian 报告页加 Advanced Discovery CTA banner（链接到 connectors 页）
 
-- [ ] **P8.10.S0.22** Advanced Discovery — Phase 1：FB / GBP Connector 触发后台再跑
+- [x] **P8.10.S0.22** Advanced Discovery — Phase 1：FB / GBP Connector 触发后台再跑
   - Connector 授权回调时检测客户是否已有 basic discovery → 自动 enqueue advanced_discovery_job
   - 复用 `runZhangqian()` 的 Tool 集，但首次跑被屏蔽的 `fetch_meta_ads` / Facebook 真实指标在此重新接入
   - Advanced report 写入 `client_discovery.payload.advanced`（不覆盖 basic）
@@ -1226,6 +1227,101 @@ Production Item    = 订单里的具体产物
 
 ---
 
+## Phase 14 — Website Connector（网站直连执行闭环）📋 战略确认，待排期
+
+> **登记日期**：2026-05-19 · **状态**：战略方向已确认，尚未排期开工
+>
+> **背景**：Magic Engine 现有能力止步于"内容生产 + 存库"；VIP 客户（$2.5k–$3k/月 FDE 嵌入服务）需要 FDE 能在 ME 界面内一键把内容推送到客户网站，无需手动复制粘贴。Website Connector 是 ME 从"内容生产工具"升级为"执行引擎"的关键拼图，同时补全飞轮闭环：诊断 → 生成 → **发布** → 指标回流 → outcome 归因。
+>
+> **架构原则**：通过各平台官方 API 推送，ME 服务器不接触客户源代码；发布必须 draft-first，FDE 确认预览后再 publish；每次执行有完整快照 + payload hash，支持审计和回滚。
+
+### Phase 14 商业场景
+
+```
+Free 层（自助）
+  诊断报告 / 竞品分析 → 内容止步于 ME 数据库
+
+VIP 层（FDE 嵌入，$2.5k–$3k/月起）
+  ME 生成内容 → FDE 点"发布到网站" → 内容直接上线
+  覆盖：Shopify / WordPress / Webflow / GitHub 托管的 Next.js
+```
+
+### Phase 14 新增数据表
+
+```
+client_website_connections
+├── id (UUID PK)
+├── client_id (FK → clients)
+├── platform: 'shopify' | 'wordpress' | 'webflow' | 'github'
+├── credentials_encrypted (TEXT)   ← KMS/应用层加密，DB 只存密文
+├── scope (TEXT[])                 ← 已授权 scope 列表
+├── status: 'active' | 'needs_reconnect' | 'revoked'
+├── site_url (TEXT)                ← HTTPS + 公网域名校验（防 SSRF）
+└── connected_at, last_verified_at
+
+website_publish_jobs
+├── id (UUID PK)
+├── client_id (FK → clients)
+├── connection_id (FK → client_website_connections)
+├── source_type: 'blog_post' | 'campaign_lp'
+├── source_id (UUID)               ← 对应 blog_posts.id 或 campaign_lp.id
+├── platform_post_id (TEXT)        ← 外部平台返回的 page/article id
+├── target_url (TEXT)
+├── content_snapshot (JSONB)       ← 推送时的内容快照
+├── payload_hash (TEXT)            ← SHA-256，用于完整性校验
+├── status: 'draft' | 'published' | 'failed' | 'rolled_back'
+├── idempotency_key (TEXT)         ← 防止重复推送
+├── retry_count (INT)
+├── error_message (TEXT)
+└── published_at, created_at
+```
+
+### Phase 14.A — 第一版 8 个任务（Shopify + WordPress）
+
+| ID | 任务 | 依赖 |
+|----|------|------|
+| **P14.A.1** | 新增 `client_website_connections` 表 + 凭证加密/解密工具 | — |
+| **P14.A.2** | 新增 `website_publish_jobs` 表 + 幂等 key + 状态机 | P14.A.1 |
+| **P14.A.3** | 连接管理 UI（客户设置页 → 连接平台入口） | P14.A.1 |
+| **P14.A.4** | Shopify connector（`write_content` scope，draft-first，blog article + page） | P14.A.2 |
+| **P14.A.5** | WordPress connector（专用用户 + Application Password，最小权限 role） | P14.A.2 |
+| **P14.A.6** | Blog Studio 新增"发布到网站"按钮（Draft → Preview → Publish 三步流程） | P14.A.4/5 |
+| **P14.A.7** | HTML sanitize + payload hash + audit snapshot（防 XSS/注入） | P14.A.4/5 |
+| **P14.A.8** | 发布成功回写 `flywheel_actions` / `flywheel_outcomes` | P14.A.6 |
+
+### Phase 14.A 验收关卡
+
+1. FDE 能在 ME 界面完成从"生成博客"到"网站上线"全流程，不需要离开 ME
+2. Shopify 和 WordPress 均先创建 draft，FDE 确认预览后再 publish
+3. 每次发布在 `website_publish_jobs` 有完整记录（快照 + hash + 状态）
+4. 发布成功后 `flywheel_actions` 有对应记录
+
+### Phase 14.B（预告，未排期）
+
+| Phase | 内容 | 触发条件 |
+|---|---|---|
+| 14.B | Webflow CMS connector | 14.A 验收通过 |
+| 14.C | GitHub connector（Next.js / Vercel 代码型站点） | 14.B 完成 |
+| 14.D | Campaign LP 生成器（高转化落地页，noindex + 活动结束 301） | 14.C 完成 |
+| 14.E | 权限漂移检测（定期校验 token scope，失效自动标 `needs_reconnect`） | 14.A 完成 |
+
+### Phase 14 安全边界（不可降级）
+
+- 凭证 KMS 加密，DB 只存密文，日志禁止输出 token 明文
+- 所有 publish API 强制校验 `client_id` + connection ownership（防租户穿越）
+- WordPress 站点 URL 只允许 HTTPS + 公网域名（防 SSRF / 内网 IP）
+- AI 生成内容发布前必须 sanitize HTML（防 script/iframe 注入）
+- WordPress 专用用户只给内容 capability，禁止 `activate_plugins` / `edit_themes`
+
+### Phase 14 不做清单
+
+- ❌ 客户端直接连接（ME 服务器中转，客户凭证不落前端）
+- ❌ 主题 / 插件 / 模板修改（超出内容范围，需人工介入）
+- ❌ 全自动无审核发布（Draft-first 是强制约束，不做 bypass 开关）
+- ❌ 非 HTTPS 站点接入
+
+---
+
 ## 8. 决策日志
 
 > 重大决策记录在此，便于追溯。
@@ -1273,6 +1369,7 @@ Production Item    = 订单里的具体产物
 
 - **P8.3.2** — Dashboard Magic Link 鉴权重新启用：middleware matcher 改回 `/dashboard/:path*` + layout `redirect('/login')` 取消注释；whitelist.ts + middleware.ts 新增 23 个单元测试（fail-closed / admin / client-viewer scoping / 边界）；`/unauthorized` 已存在无需新建；Supabase 后台 Redirect URLs 白名单 + Render `ADMIN_EMAILS` 需 PM 上线前配齐
 - **P8.10.S0.21** — 张骞首跑硬化 + Advanced Discovery 入口：HTTP 超时全封（Anthropic SDK 90s / SEMrush 20s / Apify ad-library 30s）+ `GLOBAL_TIMEOUT_MS` 270s→300s + stale-timeout 10min→6min + 新增 `/api/cron/zhangqian-sweeper` 兜底孤儿 job + 首跑工具瘦身（删 `fetch_meta_ads` + `fetch_social_metrics` 去 facebook，`MAX_TOOL_CALLS` 22→18，`MAX_COST_USD` $1.80→$1.50）+ prompts.ts 同步 + 报告页 Advanced Discovery CTA banner
+- **P8.10.S0.22** — Advanced Discovery Phase 1：新建 `client_connectors` 表 + `client_discovery_jobs.job_type` 列；`advanced-agent.ts` 实现 `runZhangqianAdvanced()`（Meta 广告库 + FB 主页抓取）；`persistor.ts` 加 `mergeAdvancedPayload()`（写入 payload.advanced 不覆盖 basic）；connectors status/connect API；`/dashboard/clients/[id]/connectors/[anchor]` 详情页；connector 授权自动触发高级发现（commit 94d8eaa）
 
 ### 2026-05-17
 

@@ -213,14 +213,15 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-19（**P8.3.2 Magic Link 鉴权代码层完成**，剩生产环境配置 + PM 自测；P8.10.S0.22 仍是另一阻塞项）
+> 最后更新：2026-05-19（**P8.10.S0.22 Advanced Discovery Phase 1 完成**；P8.3.2 剩生产环境配置 + PM 自测）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P8.10.S0.22** | Advanced Discovery Phase 1：FB / GBP Connector 触发后台再跑 | ⭐ |
 | **P8.3.2 收尾** | PM 在 Render 填 `ADMIN_EMAILS` + Supabase 后台白名单 Redirect URL，自测磁链可登录 | ⭐ |
+| **P8.10.S0.22 DB 迁移** | 在 Supabase 后台执行 `20260519000001_client_connectors.sql`（client_connectors 表 + job_type 列） | ⭐ |
+| **P8.10.S0.23** | Advanced Discovery Phase 2：GSC / Google Ads Connector | 📋 |
 
-**状态校准（2026-05-19）**：P8.3.2 代码层已完成（middleware matcher + layout 守卫重新启用，23 单元测试全过，本地 dev server 验证未登录 307 跳 `/login`、`/unauthorized` 渲染正常）；剩 PM 在生产 Render 配 `ADMIN_EMAILS` + Supabase 后台加 `https://crazycontent-27u3.onrender.com/auth/callback` 到 Redirect URLs 白名单。P8.10.S0.21 已完成。Phase 12.A 已完成；Phase 12.B.1–B.4 已完成（SEO / Meta Ads / Social adapter + SEMrush 周快照 cron）。
+**状态校准（2026-05-19）**：P8.10.S0.22 代码层已完成（advanced-agent.ts + 5 个 API + connector 详情页 + migration，build ✅，commit 94d8eaa）；需 PM 在 Supabase 执行 migration 文件。P8.3.2 代码层已完成，剩 Render 配 `ADMIN_EMAILS` + Supabase 加 callback URL 白名单。
 
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 
