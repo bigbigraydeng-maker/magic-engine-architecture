@@ -40,6 +40,7 @@
 ✅ Phase 12.A    飞轮数据骨架 + CTS GEO 端到端 demo（15 任务全部完成，2026-05-17）
 ✅ Phase 12.B    SEO/Ads/社媒 adapter 接入（B.1–B.4 已完成，2026-05-18；后续扩展转 Phase 12.C / 新任务登记）
 🔄 Phase 9.0     Visual Queue UX Polish（P9.0.1✅P9.0.3✅P9.0.4-9✅ 进行中 · 待：P9.0.2+P9.0.10-17集成测试+浮动卡）
+🔥 Phase 8.13    张骞 Intelligence Layer — DataForSEO 全域情报接入（当前通宵 Sprint，2026-05-24 启动）
 📋 Phase 9       报告化 + 客户 Portal
 📋 Phase 10      多语言 + Magic Lab Academy 沉淀
 📋 Phase 14      Website Connector / 网站直连执行闭环（战略确认，待排期）
@@ -786,6 +787,197 @@ Layer 5: Export（新增）— P8.10.S5
 - 鲁班 tool loop 改造破坏 S4.1 执行看板 → 保持 `chatWithLuban` 签名/返回结构不变，独立 PR + 回归测试
 
 **工作量**：合计 ~30–41 人天 · **三 Agent 核心价值，AU/NZ 市场优先**
+
+---
+
+### Phase 8.13 — 张骞 Intelligence Layer（DataForSEO 全域情报接入）⭐⭐⭐
+
+**启动日期**：2026-05-24 通宵 Sprint
+
+**背景**：张骞 Discovery Agent（P8.10.S0）已交付基础版本，但当前客户情报高度依赖：① Claude web_search 猜关键词和竞品（幻觉风险高）② 不稳定的 Apify 爬虫抓 GBP/评论（命中率低）③ SEMrush 独家数据源（成本高、配额有限）。DataForSEO 全 API 盘点后，发现可系统性填补这三个缺口，同时新增「技术栈」「域名健康」「品牌情感」三个全新情报维度，让张骞从「找到客户」升级为「真正读懂客户」。
+
+**核心目标**：
+- 用 DataForSEO Labs 替代 Claude web_search 发现竞品 + 种子关键词（数据驱动，零幻觉）
+- 用 Business Data API 替代 Apify 爬虫抓 GBP + 评论（稳定、结构化）
+- 新增技术栈检测（客户用 WordPress/Shopify/Wix？）
+- 新增域名健康（注册年龄、到期预警）
+- 每次张骞额外 DataForSEO 成本约 $0.22，远低于当前 Apify 不稳定成本
+
+**API 接入清单**（按优先级）：
+
+| API | 端点 | 替换/新增 | 每次成本 |
+|-----|------|----------|---------|
+| DataForSEO Labs | Keywords For Site | 替代 web_search 猜关键词 | ~$0.02 |
+| DataForSEO Labs | SERP Competitors | 替代 web_search 找竞品 | ~$0.02 |
+| DataForSEO Labs | Bulk Traffic Estimation | 批量填充竞品 monthly_traffic | ~$0.01 |
+| Domain Analytics | Domain Technologies | 新增：技术栈+联系方式+社媒验证 | $0.01 |
+| Domain Analytics | Whois Overview | 新增：域名年龄+到期预警+反链数 | $0.10 |
+| Business Data | GMB Info | 替代 SerpAPI GBP scraper | ~$0.01 |
+| Business Data | Google Reviews | 替代 Apify 评论抓取 | ~$0.01 |
+| Business Data | Trustpilot + Tripadvisor | 新增旅游业客户评分（CTS Tours） | ~$0.01 |
+| SERP API | AI Overview | 替代自建 SERP scraper（GEO 核心） | ~$0.02/查询 |
+| Backlinks API | Summary | 新增：客户域名反链权重 | ~$0.01 |
+| OnPage API | Instant Pages | 新增：单页技术 SEO 快速审计 | ~$0.01/页 |
+
+---
+
+#### Sprint A — 核心情报引擎替换（P8.13.A，~3 人天）🔥 最先做
+
+> 把张骞最依赖 Claude 猜测的两个环节（关键词 + 竞品）换成 DataForSEO 结构化数据。
+
+- [ ] **P8.13.A.1** `src/lib/dataforseo/labs.ts` — DataForSEO Labs API 封装
+  - `getKeywordsForSite(domain, location?, limit?)` → 调用 `/dataforseo_labs/google/keywords_for_site/live`，返回 top-50 关键词（keyword + search_volume + keyword_difficulty + cpc + competition）
+  - `getSerpCompetitors(domain, location?, limit?)` → 调用 `/dataforseo_labs/google/competitors_domain/live`，返回 top-10 竞品域名（competitor_domain + avg_position + intersections + competitor_metrics）
+  - `getBulkTrafficEstimation(domains: string[])` → 调用 `/dataforseo_labs/google/bulk_traffic_estimation/live`，批量返回流量估算
+  - 复用现有 `src/lib/dataforseo/client.ts`（Base64 鉴权已有），零新增环境变量
+  - 单元测试：3 个 function × happy + error path
+
+- [ ] **P8.13.A.2** 张骞 agent 接入 Labs 关键词数据
+  - 在 `src/lib/zhangqian/agent.ts` 新增 tool `fetch_keyword_data`
+  - Tool handler 调用 `getKeywordsForSite(domain)` → 返回 top-20 关键词（含 volume / KD / CPC）
+  - Agent prompt 更新：优先用 `fetch_keyword_data` 结果填充 `seed_keywords`，web_search 降级为补充验证
+  - `DiscoveredKeyword` 字段保持不变，DataForSEO 数据直接映射到 `semrush_volume / semrush_kd / semrush_cpc`（字段语义一致，源头换成 DataForSEO Labs）
+  - 验收：`oztopbuildingsupplies.com.au` 跑出 ≥ 10 条含 volume 的关键词，不靠 Claude 猜
+
+- [ ] **P8.13.A.3** 张骞 agent 接入 Labs 竞品发现
+  - 新增 tool `fetch_competitors`
+  - Tool handler 调用 `getSerpCompetitors(domain)` → 返回 top-10 竞品（domain + intersections + avg_position）
+  - `getBulkTrafficEstimation()` 同步批量获取这 10 个竞品的流量估算
+  - Agent prompt 更新：优先用 `fetch_competitors` 结果作为竞品候选列表，Claude 只做「relevance 分类」（direct/adjacent/aspirational）+ 补充 web_search 找 aspirational 竞品
+  - 验收：竞品列表有真实 `monthly_traffic` 数据，不靠 Claude 猜；MAX_TOOL_CALLS 成本节省 ≥ 3 次 web_search
+
+---
+
+#### Sprint B — 技术栈 + 域名健康（P8.13.B，~2 人天）
+
+> 新增两个全新情报维度，$0.11/客户，信息密度极高。
+
+- [ ] **P8.13.B.1** `src/lib/dataforseo/domain-analytics.ts` — Domain Analytics API 封装
+  - `getDomainTechnologies(domain)` → 调用 `/domain_analytics/technologies/domain_technologies/live`，返回 `{ cms, ecommerce, analytics[], crm_marketing[], chat, domain_rank, phone_numbers[], emails[], social_graph_urls[], all_technologies }`
+  - `getDomainWhois(domain)` → 调用 `/domain_analytics/whois/overview/live`，返回 `{ registered_at, expires_at, registrar, backlinks, referring_domains, organic_etv, organic_keywords_top10 }`
+  - 错误处理：domain not found → 返回 null，不抛异常（张骞优雅降级）
+
+- [ ] **P8.13.B.2** `DiscoveryReport` 新增 technology_stack + domain_whois 字段（`src/lib/zhangqian/types.ts`）
+  ```typescript
+  technology_stack?: {
+    cms: string | null                // "WordPress" | "Shopify" | "Wix" | null
+    ecommerce: string | null          // "WooCommerce" | "Magento" | null
+    analytics: string[]               // ["Google Analytics 4", "GTM"]
+    crm_marketing: string[]           // ["Mailchimp", "HubSpot"]
+    chat: string | null               // "Intercom" | "Tidio" | null
+    domain_rank: number | null
+    phone_numbers: string[]
+    emails: string[]
+    social_graph_urls: string[]       // 用于交叉验证 social_profiles
+  } | null
+
+  domain_whois?: {
+    registered_at: string | null
+    expires_at: string | null
+    registrar: string | null
+    domain_age_years: number | null
+    referring_domains: number | null
+    backlinks: number | null
+    organic_etv: number | null
+    organic_keywords_top10: number | null
+  } | null
+  ```
+
+- [ ] **P8.13.B.3** 张骞 agent 接入 Domain Technologies
+  - 新增 tool `fetch_domain_technologies`（在 web_search 之前调用，因为便宜且快）
+  - `social_graph_urls` 返回后，agent prompt 引导：先用这些 URL 验证/覆盖 Claude 发现的社媒 handles，再去 Apify 抓指标 → 减少 Apify 错误命中
+  - 联系方式（phone_numbers/emails）写入 `DiscoveredBusiness`（需在 types.ts 补充这两个 optional 字段）
+
+- [ ] **P8.13.B.4** 张骞 agent 接入 Whois
+  - 新增 tool `fetch_domain_whois`
+  - `domain_age_years` < 2 时 agent prompt 触发提示：「新域名，需要在诊断中注明」
+  - `expires_at` 距今 < 90 天 → 写入 `diagnosis.actions.quick_fix`：「域名将于 X 天后到期，立即续费」
+  - 验收：CTS Tours 跑出域名注册年份 + 到期日
+
+- [ ] **P8.13.B.5** 张骞报告页新增 TechStackCard + DomainWhoisCard（`src/app/dashboard/clients/[id]/zhangqian/cards.tsx`）
+  - TechStackCard：显示 CMS / ecommerce / analytics / chat 平台 badge + 联系方式
+  - DomainWhoisCard：域名年龄 + 到期日期（高亮预警）+ 反链数 + etv
+  - 仅当字段非 null 时渲染，否则不显示
+
+---
+
+#### Sprint C — 替换不稳定 Apify 评论爬虫（P8.13.C，~2 人天）
+
+> 用 DataForSEO Business Data API 替代当前 Apify GBP + 评论 scraper，提升稳定性。
+
+- [ ] **P8.13.C.1** `src/lib/dataforseo/business-data.ts` — Business Data API 封装
+  - `getGmbInfo(keyword, location?)` → 调用 `/business_data/google/my_business_info/live`，返回 `{ place_id, name, address, phone, website, rating, review_count, maps_url }`
+  - `getGoogleReviews(place_id, limit?)` → 调用 `/business_data/google/reviews/live`，返回评论列表（rating + text + date + author）
+  - `getTrustpilotInfo(domain)` → 调用 `/business_data/trustpilot/search/live`，返回评分 + 评论数
+  - `getTripadvisorInfo(keyword, location?)` → 调用 `/business_data/tripadvisor/search/live`，仅旅游业客户使用（CTS Tours）
+
+- [ ] **P8.13.C.2** `src/lib/local-reviews/client.ts` 升级
+  - 现有函数 `fetchLocalReviews()` 内部：GBP 数据源切换为 `getGmbInfo()` + `getGoogleReviews()`（当前用 SerpAPI）
+  - Trustpilot 补充 DataForSEO 回落（当前 Jina 抓取不稳定）
+  - Tripadvisor 新增（行业 = travel 时触发）
+  - 保持函数签名不变（对张骞 tool 层零感知）
+  - 验收：CTS Tours 跑出 Google + Trustpilot + Tripadvisor 三平台评分
+
+- [ ] **P8.13.C.3** `review_platforms` 新增 `tripadvisor` 枚举值（`src/lib/zhangqian/types.ts`）+ 张骞报告页 ReviewCard 展示 Tripadvisor
+
+---
+
+#### Sprint D — SERP + 技术审计（P8.13.D，~2 人天）
+
+> 用 DataForSEO SERP API 替换自建 SERP scraper；新增 OnPage 技术审计 + Backlinks 权重。
+
+- [ ] **P8.13.D.1** `src/lib/dataforseo/serp.ts` — SERP API AI Overview 封装
+  - `getAiOverview(query, location?, language?)` → 调用 `/serp/google/organic/live/advanced`，提取 `ai_overview_text` + `ai_overview_sources[]` + `organic_results[]` + `paid_advertiser_domains[]`
+  - 替换现有 `apify/google-search-scraper.ts` 的 SERP 功能（Apify 端点保留但降级为 fallback）
+  - 验收：`best tour operator in New Zealand` 跑出 AI Overview 文本 + 引用来源
+
+- [ ] **P8.13.D.2** `src/lib/dataforseo/backlinks.ts` — Backlinks Summary 封装
+  - `getBacklinksSummary(domain)` → 调用 `/backlinks/summary/live`，返回 `{ backlinks, referring_domains, referring_main_domains, dofollow, spam_score, domain_rank }`
+  - 写入 `domain_whois.backlinks`（或单独字段 `backlinks_summary`）
+
+- [ ] **P8.13.D.3** `src/lib/dataforseo/onpage.ts` — OnPage Instant Pages 封装
+  - `getOnPageInstant(url)` → 调用 `/on_page/instant_pages`，返回 `{ checks, core_web_vitals, meta_title, meta_description, canonical, internal_links_count, images_without_alt }`
+  - 新增 `DiscoveryReport.onpage_audit` 字段
+  - 张骞 agent 新增 tool `fetch_onpage_audit`（仅在 domain 有 homepage URL 时调用）
+  - 问题写入 `diagnosis.actions.quick_fix`（如：「缺少 meta description」「图片无 alt 标签」）
+
+- [ ] **P8.13.D.4** 张骞报告页新增 OnPageAuditCard（SEO 健康度可视化：Core Web Vitals + 关键 checks）
+
+---
+
+#### Sprint E — 集成测试 + 成本优化（P8.13.E，~1 人天）
+
+- [ ] **P8.13.E.1** 端到端测试：用 CTS Tours + Oztop 各跑一次完整张骞（基础发现 + 所有新工具）
+  - 验收：< 6 分钟完成 + 覆盖 technology_stack + domain_whois + 竞品有真实流量数据 + 评论来自 DataForSEO
+  - 成本记录：打印每次张骞总 DataForSEO API 成本
+
+- [ ] **P8.13.E.2** 更新成本估算注释（`src/lib/zhangqian/agent.ts` 顶部）
+  - 新基准：Claude $0.23 + Web Search $0.15 + DataForSEO Labs ~$0.05 + Domain Analytics ~$0.11 + Business Data ~$0.03 = **≈ $0.57 / 客户**（含全新情报维度，首次 onboarding 一次性成本）
+
+- [ ] **P8.13.E.3** ROADMAP § 9 功能完成日志追加 Phase 8.13 总结 + 更新 CLAUDE.md 当前焦点
+
+---
+
+**新增 DiscoveryReport 字段汇总**：
+
+```
+technology_stack    — 客户技术栈（CMS/ecommerce/analytics/chat）
+domain_whois        — 域名年龄/到期/注册商/反链数/流量值
+onpage_audit        — 技术 SEO 快速体检（Core Web Vitals/checks）
+DiscoveredBusiness.phone_numbers  — 从 Domain Technologies 提取
+DiscoveredBusiness.emails          — 从 Domain Technologies 提取
+DiscoveredReviewPlatform: 新增 tripadvisor
+```
+
+**工作量**：合计 ~10 人天（Sprint A 3天 → Sprint B 2天 → Sprint C 2天 → Sprint D 2天 → Sprint E 1天）
+
+**每次张骞成本升级后**：~$0.57/客户（基础版 $0.40 + DataForSEO 增量 $0.17），全部一次性 onboarding 成本，可接受。
+
+**验收关卡**：
+- M1：DataForSEO Labs 返回 Oztop 关键词 ≥ 10 条（含真实 volume）+ 竞品 ≥ 5 个（含真实流量）
+- M2：Domain Technologies 返回 Oztop 技术栈（至少识别出 CMS）+ Whois 返回域名年龄
+- M3：CTS Tours 完整跑出 Google + Trustpilot + Tripadvisor 三平台评分
+- M4：OnPage Audit 返回 CTS Tours 首页 Core Web Vitals + ≥ 3 个 SEO checks
 
 ---
 
