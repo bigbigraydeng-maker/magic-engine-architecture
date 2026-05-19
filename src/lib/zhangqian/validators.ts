@@ -108,7 +108,7 @@ const COUNTRIES: ReadonlySet<DiscoveredBusiness['location']['country']> = new Se
 
 const REVIEW_PLATFORMS: ReadonlySet<DiscoveredReviewPlatform['platform']> = new Set<
   DiscoveredReviewPlatform['platform']
->(['google', 'productreview', 'trustpilot', 'yelp', 'facebook', 'other'])
+>(['google', 'productreview', 'tripadvisor', 'trustpilot', 'yelp', 'facebook', 'other'])
 
 const REGISTRATION_STATUSES: ReadonlySet<DiscoveredRegistration['status']> = new Set<
   DiscoveredRegistration['status']

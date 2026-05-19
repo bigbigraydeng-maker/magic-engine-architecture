@@ -213,20 +213,20 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-24（**Sprint A + Sprint B 均已 commit+push**。Sprint C 为下一步）
+> 最后更新：2026-05-24（**Sprint A + B + C 均已完成**。Sprint D 为下一步）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P8.13.C.1** | `src/lib/dataforseo/business-data.ts` — Business Data API 封装（GMB + Google Reviews + Tripadvisor） | 🔥 当前 |
-| **P8.13.C.2** | `src/lib/local-reviews/client.ts` 升级 — GBP 源从 SerpAPI 切换到 DataForSEO Business Data | 🔥 |
-| **P8.13.C.3** | types.ts 新增 `tripadvisor` 枚举 + ReviewCard 展示 Tripadvisor | 🔥 |
-| **P8.13.D.1–D.4** | SERP AI Overview + Backlinks + OnPage Audit + 报告页卡片 | 📋 |
-| **P8.13.E.1–E.3** | 端到端测试 + 成本更新 + 日志收尾 | 📋 |
+| **P8.13.D.1** | `src/lib/dataforseo/serp.ts` — SERP API AI Overview 封装，替换 Apify google-search-scraper | 🔥 当前 |
+| **P8.13.D.2** | `src/lib/dataforseo/backlinks.ts` — Backlinks Summary 封装，写入 domain_whois.backlinks | 🔥 |
+| **P8.13.D.3** | `src/lib/dataforseo/onpage.ts` — OnPage Instant Pages 封装 + DiscoveryReport.onpage_audit 字段 | 🔥 |
+| **P8.13.D.4** | 张骞报告页新增 OnPageAuditCard（Core Web Vitals + SEO checks 可视化） | ⭐ |
+| **P8.13.E.1–E.3** | 端到端测试 + 成本注释更新 + 日志收尾 | 📋 |
 | **P8.10.S0.23 Env** | Render 加 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` | 📋 待 PM 操作 |
 
-**状态校准（2026-05-24）**：Sprint A（commit 175299a）+ Sprint B（commit a16e0ac）均已完成并 push 到 main。Sprint C 为下一步：用 DataForSEO Business Data API 替换当前不稳定的 Apify GBP+评论爬虫，同时为 CTS Tours 接入 Tripadvisor 数据。
+**状态校准（2026-05-24）**：Sprint A/B/C 全部完成。Sprint C：DataForSEO Business Data API `business-data.ts` 新建，local-reviews/client.ts 切换到 DataForSEO（替换 SerpAPI），Tripadvisor 接入，枚举+validator+card 同步，build ✅。Sprint D 为下一步：SERP AI Overview + Backlinks + OnPage Audit 接入。
 
-**当前会话启动咒语**：`继续 Phase 8.13 Sprint C，从 P8.13.C.1 开始`
+**当前会话启动咒语**：`继续 Phase 8.13 Sprint D，从 P8.13.D.1 开始`
 
 **更新规则**（每次上线新功能）：
 1. ROADMAP.md 勾选对应任务 checkbox

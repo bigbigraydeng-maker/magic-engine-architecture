@@ -54,7 +54,7 @@ export interface ReviewSample {
 }
 
 export interface DiscoveredReviewPlatform {
-  platform: 'google' | 'productreview' | 'trustpilot' | 'yelp' | 'facebook' | 'other'
+  platform: 'google' | 'productreview' | 'tripadvisor' | 'trustpilot' | 'yelp' | 'facebook' | 'other'
   url: string
   rating: number | null             // platform-specific scale
   review_count: number | null

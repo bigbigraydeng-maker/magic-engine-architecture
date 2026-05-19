@@ -713,6 +713,7 @@ export function NotesCard({ notes }: { notes: string }) {
 const REVIEW_PLATFORM_LABELS: Record<DiscoveredReviewPlatform['platform'], string> = {
   google:        'Google',
   productreview: 'ProductReview',
+  tripadvisor:   'Tripadvisor',
   trustpilot:    'Trustpilot',
   yelp:          'Yelp',
   facebook:      'Facebook',

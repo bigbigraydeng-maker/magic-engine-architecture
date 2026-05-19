@@ -130,12 +130,13 @@ const VERIFY_BUSINESS_REGISTRATION_TOOL: Anthropic.Messages.Tool = {
 
 /**
  * Client-side tool: aggregate real review data from Google Business
- * Profile and ProductReview.com.au. Backed by src/lib/local-reviews/client.ts.
+ * Profile, ProductReview.com.au, and optionally Tripadvisor.
+ * Backed by src/lib/local-reviews/client.ts.
  */
 const FETCH_LOCAL_REVIEWS_TOOL: Anthropic.Messages.Tool = {
   name: 'fetch_local_reviews',
   description:
-    'Aggregate real review data from Google Business Profile and ProductReview.com.au. Returns verified ratings, review counts, and sample negative reviews. Use this instead of guessing reputation numbers.',
+    'Aggregate real review data from Google Business Profile (DataForSEO), ProductReview.com.au, and optionally Tripadvisor. Returns verified ratings, review counts, and sample negative reviews. Use this instead of guessing reputation numbers. For tourism clients (e.g. CTS Tours), pass tripadvisor_keyword to also fetch the Tripadvisor listing.',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -148,6 +149,11 @@ const FETCH_LOCAL_REVIEWS_TOOL: Anthropic.Messages.Tool = {
         type: 'string',
         description:
           'Optional ProductReview.com.au listing URL, if you have already found it.',
+      },
+      tripadvisor_keyword: {
+        type: 'string',
+        description:
+          'Optional keyword to search Tripadvisor (for tourism clients). E.g. "CTS Tours New Zealand". Omit for non-tourism businesses.',
       },
     },
     required: ['business_query'],
@@ -789,12 +795,16 @@ async function handleVerifyRegistration(
   }
 }
 
-/** Resolve a `fetch_local_reviews` tool call via the GBP + ProductReview connector. */
+/** Resolve a `fetch_local_reviews` tool call via DataForSEO Business Data + Jina. */
 async function handleFetchLocalReviews(
   toolUse: Anthropic.Messages.ToolUseBlock,
   onProgress: ProgressFn,
 ): Promise<Anthropic.Messages.ToolResultBlockParam> {
-  const input = toolUse.input as { business_query?: string; productreview_url?: string }
+  const input = toolUse.input as {
+    business_query?: string
+    productreview_url?: string
+    tripadvisor_keyword?: string
+  }
   const businessQuery =
     typeof input.business_query === 'string' ? input.business_query.trim() : ''
 
@@ -807,13 +817,19 @@ async function handleFetchLocalReviews(
     }
   }
 
-  await onProgress('聚合本地评价数据…')
+  const tripadvisorKeyword =
+    typeof input.tripadvisor_keyword === 'string' && input.tripadvisor_keyword.trim()
+      ? input.tripadvisor_keyword.trim()
+      : undefined
+
+  await onProgress(`聚合本地评价数据${tripadvisorKeyword ? ' + Tripadvisor' : ''}…`)
 
   // aggregateLocalReviews is non-fatal by contract — never throws.
   const snapshots = await withTimeout(aggregateLocalReviews({
     businessQuery,
     productReviewUrl:
       typeof input.productreview_url === 'string' ? input.productreview_url : undefined,
+    tripadvisorKeyword,
   }), LOCAL_REVIEWS_TIMEOUT_MS).catch(err => {
     console.error('[zhangqian] fetch_local_reviews timed out or failed', err)
     return []

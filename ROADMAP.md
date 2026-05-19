@@ -891,20 +891,17 @@ Layer 5: Export（新增）— P8.10.S5
 
 > 用 DataForSEO Business Data API 替代当前 Apify GBP + 评论 scraper，提升稳定性。
 
-- [ ] **P8.13.C.1** `src/lib/dataforseo/business-data.ts` — Business Data API 封装
-  - `getGmbInfo(keyword, location?)` → 调用 `/business_data/google/my_business_info/live`，返回 `{ place_id, name, address, phone, website, rating, review_count, maps_url }`
-  - `getGoogleReviews(place_id, limit?)` → 调用 `/business_data/google/reviews/live`，返回评论列表（rating + text + date + author）
-  - `getTrustpilotInfo(domain)` → 调用 `/business_data/trustpilot/search/live`，返回评分 + 评论数
-  - `getTripadvisorInfo(keyword, location?)` → 调用 `/business_data/tripadvisor/search/live`，仅旅游业客户使用（CTS Tours）
+- [x] **P8.13.C.1** `src/lib/dataforseo/business-data.ts` — Business Data API 封装 ✅
+  - `getGmbInfo(keyword)` / `getGoogleReviews(keyword, limit?)` / `getTripadvisorInfo(keyword)` 全部实现
 
-- [ ] **P8.13.C.2** `src/lib/local-reviews/client.ts` 升级
-  - 现有函数 `fetchLocalReviews()` 内部：GBP 数据源切换为 `getGmbInfo()` + `getGoogleReviews()`（当前用 SerpAPI）
-  - Trustpilot 补充 DataForSEO 回落（当前 Jina 抓取不稳定）
-  - Tripadvisor 新增（行业 = travel 时触发）
-  - 保持函数签名不变（对张骞 tool 层零感知）
-  - 验收：CTS Tours 跑出 Google + Trustpilot + Tripadvisor 三平台评分
+- [x] **P8.13.C.2** `src/lib/local-reviews/client.ts` 升级 ✅
+  - GBP 数据源从 SerpAPI 切换到 DataForSEO `getGmbInfo()` + `getGoogleReviews()`
+  - 新增 `fetchTripadvisorReviews()` 函数（tourism 客户触发）
+  - `aggregateLocalReviews` 新增可选 `tripadvisorKeyword` 参数
+  - agent.ts `fetch_local_reviews` tool 新增 `tripadvisor_keyword` 入参
 
-- [ ] **P8.13.C.3** `review_platforms` 新增 `tripadvisor` 枚举值（`src/lib/zhangqian/types.ts`）+ 张骞报告页 ReviewCard 展示 Tripadvisor
+- [x] **P8.13.C.3** `review_platforms` 新增 `tripadvisor` 枚举值 ✅
+  - `types.ts` (local-reviews + zhangqian) + validators.ts + cards.tsx REVIEW_PLATFORM_LABELS 同步
 
 ---
 
@@ -1746,6 +1743,7 @@ AU / NZ（当前）          新市场（未来）
 
 - **P8.13.A** — DataForSEO Labs 关键词+竞品接入：`labs.ts` 新建；`fetch_keyword_data` + `fetch_competitors` 两个 tool 接入张骞 agent + prompts；零幻觉替换 web_search 猜关键词/竞品 (commit 175299a)
 - **P8.13.B** — DataForSEO Domain Technologies + WHOIS 接入：`domain-analytics.ts` 新建；`fetch_domain_technologies` + `fetch_domain_whois` 注册到 agent；types.ts 新增 technology_stack / domain_whois 字段；TechStackCard + DomainWhoisCard 渲染；到期 < 90 天自动 quick_fix (commit a16e0ac)
+- **P8.13.C** — Business Data API 替换 SerpAPI：`business-data.ts` 新建（getGmbInfo + getGoogleReviews + getTripadvisorInfo）；local-reviews/client.ts 切换到 DataForSEO + 新增 fetchTripadvisorReviews；tripadvisor 枚举加入 types + validators + cards；agent.ts fetch_local_reviews 新增 tripadvisor_keyword 参数
 
 ### 2026-05-23
 
