@@ -1097,3 +1097,159 @@ export function AdvancedFacebookCard({ profiles }: { profiles: AdvancedFacebookP
     </CardShell>
   )
 }
+
+// ─── TechStackCard ────────────────────────────────────────────────────────────
+
+interface TechStackData {
+  cms:               string | null
+  ecommerce:         string | null
+  analytics:         string[]
+  crm_marketing:     string[]
+  chat:              string | null
+  domain_rank:       number | null
+  phone_numbers:     string[]
+  emails:            string[]
+  social_graph_urls: string[]
+}
+
+export function TechStackCard({ data }: { data: TechStackData }) {
+  const rows: Array<{ label: string; value: string | null }> = [
+    { label: 'CMS',      value: data.cms },
+    { label: '电商平台', value: data.ecommerce },
+    { label: '聊天插件', value: data.chat },
+  ]
+
+  return (
+    <CardShell title="技术栈">
+      <div className="flex flex-col gap-2">
+        {rows.map(r =>
+          r.value ? (
+            <div key={r.label} className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 w-16 shrink-0">{r.label}</span>
+              <Badge className="bg-indigo-50 text-indigo-700">{r.value}</Badge>
+            </div>
+          ) : null,
+        )}
+
+        {data.analytics.length > 0 && (
+          <div className="flex items-start gap-2">
+            <span className="text-xs text-gray-500 w-16 shrink-0 mt-0.5">分析工具</span>
+            <div className="flex flex-wrap gap-1">
+              {data.analytics.map(a => (
+                <Badge key={a} className="bg-blue-50 text-blue-700">{a}</Badge>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {data.crm_marketing.length > 0 && (
+          <div className="flex items-start gap-2">
+            <span className="text-xs text-gray-500 w-16 shrink-0 mt-0.5">CRM/营销</span>
+            <div className="flex flex-wrap gap-1">
+              {data.crm_marketing.map(c => (
+                <Badge key={c} className="bg-green-50 text-green-700">{c}</Badge>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {data.domain_rank !== null && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500 w-16 shrink-0">域名权重</span>
+            <span className="text-sm font-semibold text-gray-700">{data.domain_rank}</span>
+          </div>
+        )}
+
+        {(data.phone_numbers.length > 0 || data.emails.length > 0) && (
+          <div className="mt-1 pt-2 border-t border-gray-100 flex flex-col gap-1">
+            {data.phone_numbers.map(p => (
+              <p key={p} className="text-xs text-gray-600">📞 {p}</p>
+            ))}
+            {data.emails.map(e => (
+              <p key={e} className="text-xs text-gray-600">✉️ {e}</p>
+            ))}
+          </div>
+        )}
+      </div>
+    </CardShell>
+  )
+}
+
+// ─── DomainWhoisCard ──────────────────────────────────────────────────────────
+
+interface DomainWhoisData {
+  registered_at:          string | null
+  expires_at:             string | null
+  registrar:              string | null
+  domain_age_years:       number | null
+  referring_domains:      number | null
+  backlinks:              number | null
+  organic_etv:            number | null
+  organic_keywords_top10: number | null
+}
+
+export function DomainWhoisCard({ data }: { data: DomainWhoisData }) {
+  const daysToExpiry = data.expires_at
+    ? Math.floor((Date.parse(data.expires_at) - Date.now()) / (24 * 60 * 60 * 1000))
+    : null
+  const expiryWarning = daysToExpiry !== null && daysToExpiry < 90
+
+  const formatDate = (iso: string | null) =>
+    iso ? new Date(iso).toLocaleDateString('zh-CN', { year: 'numeric', month: 'short', day: 'numeric' }) : '—'
+
+  const formatNum = (n: number | null) =>
+    n !== null ? n.toLocaleString() : '—'
+
+  return (
+    <CardShell title="域名健康">
+      <div className="flex flex-col gap-2">
+        {data.domain_age_years !== null && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500 w-20 shrink-0">域名年龄</span>
+            <span className="text-sm font-semibold text-gray-700">{data.domain_age_years} 年</span>
+          </div>
+        )}
+
+        {data.expires_at && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500 w-20 shrink-0">到期日期</span>
+            <span className={`text-sm font-semibold ${expiryWarning ? 'text-red-600' : 'text-gray-700'}`}>
+              {formatDate(data.expires_at)}
+              {expiryWarning && (
+                <span className="ml-1 text-xs font-medium text-red-600">⚠️ 即将到期</span>
+              )}
+            </span>
+          </div>
+        )}
+
+        {data.registrar && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500 w-20 shrink-0">注册商</span>
+            <span className="text-xs text-gray-600 truncate max-w-[180px]" title={data.registrar}>
+              {data.registrar}
+            </span>
+          </div>
+        )}
+
+        <div className="mt-1 pt-2 border-t border-gray-100 grid grid-cols-2 gap-2">
+          <div>
+            <p className="text-base font-bold text-gray-700">{formatNum(data.referring_domains)}</p>
+            <p className="text-xs text-gray-400">外链域名数</p>
+          </div>
+          <div>
+            <p className="text-base font-bold text-gray-700">{formatNum(data.backlinks)}</p>
+            <p className="text-xs text-gray-400">反链总数</p>
+          </div>
+          <div>
+            <p className="text-base font-bold text-gray-700">{formatNum(data.organic_etv)}</p>
+            <p className="text-xs text-gray-400">月流量估算</p>
+          </div>
+          <div>
+            <p className="text-base font-bold text-gray-700">{formatNum(data.organic_keywords_top10)}</p>
+            <p className="text-xs text-gray-400">Top10 关键词数</p>
+          </div>
+        </div>
+      </div>
+    </CardShell>
+  )
+}

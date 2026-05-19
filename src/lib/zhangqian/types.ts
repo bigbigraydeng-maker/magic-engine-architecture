@@ -133,6 +133,10 @@ export interface DiscoveredBusiness {
   confidence: number                 // 0–1
   /** Verified registry record (ABR/NZBN); null when not found or not checked. */
   registration?: DiscoveredRegistration | null
+  /** Phone numbers extracted via DataForSEO Domain Technologies (P8.13.B.3). */
+  phone_numbers?: string[]
+  /** Email addresses extracted via DataForSEO Domain Technologies (P8.13.B.3). */
+  emails?: string[]
 }
 
 // ─── New diagnostic types ─────────────────────────────────────────────────────
@@ -251,6 +255,39 @@ export interface DiscoveryReport {
     style_keywords: string[]   // 3–5 adjectives, e.g. 'minimalist', 'warm', 'bold'
     colors: string[]           // 2–4 hex codes or color names sampled from the site
     donts: string[]            // 3–5 visual DON'T guidelines, e.g. 'no stock photos'
+  } | null
+
+  /**
+   * Technology stack detected via DataForSEO Domain Technologies (P8.13.B.1).
+   * CMS, ecommerce, analytics, chat, contact info, social graph URLs.
+   * null when not checked or domain not found.
+   */
+  technology_stack?: {
+    cms:               string | null
+    ecommerce:         string | null
+    analytics:         string[]
+    crm_marketing:     string[]
+    chat:              string | null
+    domain_rank:       number | null
+    phone_numbers:     string[]
+    emails:            string[]
+    social_graph_urls: string[]
+  } | null
+
+  /**
+   * WHOIS domain registration data via DataForSEO (P8.13.B.1).
+   * Domain age, expiry, registrar, backlink count, organic traffic estimate.
+   * null when not checked or domain not found.
+   */
+  domain_whois?: {
+    registered_at:          string | null
+    expires_at:             string | null
+    registrar:              string | null
+    domain_age_years:       number | null
+    referring_domains:      number | null
+    backlinks:              number | null
+    organic_etv:            number | null
+    organic_keywords_top10: number | null
   } | null
 
   /**

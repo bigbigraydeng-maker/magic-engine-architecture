@@ -24,6 +24,8 @@ import {
   GscDataCard,
   GoogleAdsCard,
   AdvancedFacebookCard,
+  TechStackCard,
+  DomainWhoisCard,
 } from './cards'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -230,6 +232,14 @@ function DiscoveryReviewCards({
         )}
         {p.advanced?.facebook_profiles && p.advanced.facebook_profiles.length > 0 && (
           <AdvancedFacebookCard profiles={p.advanced.facebook_profiles} />
+        )}
+
+        {/* P8.13.B — Technology stack + Domain WHOIS */}
+        {p.technology_stack && (
+          <TechStackCard data={p.technology_stack} />
+        )}
+        {p.domain_whois && (
+          <DomainWhoisCard data={p.domain_whois} />
         )}
       </div>
 

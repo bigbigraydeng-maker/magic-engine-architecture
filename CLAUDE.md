@@ -213,15 +213,23 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-23（**P13.E-pre + P13.E 完成**；P8.10.S0.23 需 Render env var）
+> 最后更新：2026-05-24（**Sprint A 已 commit+push** — fetch_keyword_data + fetch_competitors 已接入张骞 agent，Sprint B 进行中）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P8.10.S0.23 Env 配置** | Render 加 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS`（JSON 字符串），并让客户将服务账号邮箱加入 GSC 验证用户 | 📋 |
+| **P8.13.B.1** | `src/lib/dataforseo/domain-analytics.ts` — Domain Technologies + Whois 封装 | 🔥 当前 |
+| **P8.13.B.2** | `src/lib/zhangqian/types.ts` 新增 `technology_stack` + `domain_whois` + `DiscoveredBusiness.phone_numbers/emails` | 🔥 |
+| **P8.13.B.3** | `agent.ts` 新增 `fetch_domain_technologies` tool + handler | 🔥 |
+| **P8.13.B.4** | `agent.ts` 新增 `fetch_domain_whois` tool + handler（域名快到期 → 写 quick_fix） | 🔥 |
+| **P8.13.B.5** | 张骞报告页新增 `TechStackCard` + `DomainWhoisCard` | ⭐ |
+| **P8.13.C.1–C.3** | Business Data API 替换 GBP/评论 Apify 爬虫 + Tripadvisor（CTS Tours） | ⭐ |
+| **P8.13.D.1–D.4** | SERP AI Overview + Backlinks + OnPage Audit + 报告页卡片 | 📋 |
+| **P8.13.E.1–E.3** | 端到端测试 + 成本更新 + 日志收尾 | 📋 |
+| **P8.10.S0.23 Env** | Render 加 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS` | 📋 待 PM 操作 |
 
-**状态校准（2026-05-23）**：P13.E-pre 完成（competitor_snapshots 表 + competitor-keywords 落库 + package 详情 API 回读，build ✅）。P13.E 完成（flywheel_actions.production_package_id FK + 4 adapter 更新 + package-publish.ts hook + PATCH endpoint，build ✅）。P13.A + P13.B + P13.C + P13.D + P13.E-pre + P13.E 全部完成。
+**状态校准（2026-05-24）**：Sprint A（P8.13.A.1–A.3）已实现并 commit+push（commit 175299a）。labs.ts 新建，agent.ts + prompts.ts 已更新，build ✅。Sprint B 当前进行中：创建 `domain-analytics.ts`，新增 technology_stack + domain_whois 到 types.ts，接入 agent，然后加报告页卡片。
 
-**Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
+**当前会话启动咒语**：`继续 Phase 8.13 Sprint B，从 P8.13.B.1 开始`
 
 **更新规则**（每次上线新功能）：
 1. ROADMAP.md 勾选对应任务 checkbox

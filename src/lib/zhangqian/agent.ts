@@ -26,6 +26,7 @@ import { aggregateLocalReviews } from '@/lib/local-reviews/client'
 import { scrapeInstagramProfile, scrapeTiktokProfile } from '@/lib/apify/social-scraper'
 import { scrapeGoogleSerp } from '@/lib/apify/google-search-scraper'
 import { getKeywordsForSite, getSerpCompetitors } from '@/lib/dataforseo/labs'
+import { getDomainTechnologies, getDomainWhois } from '@/lib/dataforseo/domain-analytics'
 import type { DiscoveryReport } from './types'
 import { ZHANGQIAN_SYSTEM_PROMPT, buildUserPrompt } from './prompts'
 import { validateDiscoveryReport } from './validators'
@@ -239,6 +240,54 @@ const FETCH_COMPETITORS_TOOL: Anthropic.Messages.Tool = {
 }
 
 /**
+ * Client-side tool: detect the technology stack of a domain via DataForSEO
+ * Domain Analytics. Returns CMS, ecommerce, analytics, chat, contact info,
+ * social graph URLs. Backed by domain-analytics.ts.
+ */
+const FETCH_DOMAIN_TECHNOLOGIES_TOOL: Anthropic.Messages.Tool = {
+  name: 'fetch_domain_technologies',
+  description:
+    '通过 DataForSEO Domain Analytics 检测某个域名的技术栈（CMS / 电商平台 / 分析工具 / 聊天插件），' +
+    '同时返回网站上能探测到的电话号码、邮件地址、社媒主页 URL。' +
+    '**在抓取主页之后立即调用**（步骤 1 完成后）——返回的 social_graph_urls 可直接验证/补充 social_profiles，' +
+    '比盲目搜索更高效；phone_numbers / emails 写入 business 字段。' +
+    '仅需调用一次，成本约 $0.01。若返回 null，说明域名数据不足，继续正常流程。',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      domain: {
+        type: 'string',
+        description: '目标域名，不带协议和路径，如 "oztop.com.au"',
+      },
+    },
+    required: ['domain'],
+  },
+}
+
+/**
+ * Client-side tool: fetch WHOIS domain registration data via DataForSEO.
+ * Returns domain age, expiry date, registrar, backlinks, organic ETV.
+ * Backed by domain-analytics.ts.
+ */
+const FETCH_DOMAIN_WHOIS_TOOL: Anthropic.Messages.Tool = {
+  name: 'fetch_domain_whois',
+  description:
+    '通过 DataForSEO WHOIS API 获取域名注册信息：注册日期、到期日期、注册商、反链数量、有机流量估算。' +
+    '**关键用途**：① 域名年龄（判断品牌成熟度）② 到期预警（< 90 天须写入 quick_fix） ③ 反链权重（SEO 诊断依据）。' +
+    '在步骤 1（识别业务）完成后调用，仅需一次，成本约 $0.10。若返回 null 继续正常流程。',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      domain: {
+        type: 'string',
+        description: '目标域名，不带协议和路径，如 "oztop.com.au"',
+      },
+    },
+    required: ['domain'],
+  },
+}
+
+/**
  * Client-side tool: scrape a Google SERP for a query via the Apify Google
  * Search scraper. Backed by src/lib/apify/google-search-scraper.ts.
  */
@@ -352,6 +401,8 @@ export async function runZhangqian(
           FETCH_SERP_RESULTS_TOOL,
           FETCH_KEYWORD_DATA_TOOL,
           FETCH_COMPETITORS_TOOL,
+          FETCH_DOMAIN_TECHNOLOGIES_TOOL,
+          FETCH_DOMAIN_WHOIS_TOOL,
         ],
         messages,
       },
@@ -454,11 +505,17 @@ export async function runZhangqian(
           case 'fetch_competitors':
             connectorCalls++
             return handleFetchCompetitors(toolUse, onProgress)
+          case 'fetch_domain_technologies':
+            connectorCalls++
+            return handleFetchDomainTechnologies(toolUse, onProgress)
+          case 'fetch_domain_whois':
+            connectorCalls++
+            return handleFetchDomainWhois(toolUse, onProgress)
           default:
             return Promise.resolve<Anthropic.Messages.ToolResultBlockParam>({
               type: 'tool_result',
               tool_use_id: toolUse.id,
-              content: `Unknown tool: ${toolUse.name}. 'web_search' is server-side; client-handled tools are 'fetch_url', 'verify_business_registration', 'fetch_local_reviews', 'fetch_social_metrics', 'fetch_serp_results', 'fetch_keyword_data', 'fetch_competitors'. (Meta Ad Library + Facebook profile scrapers are gated to Phase 8.10.S5 advanced discovery.)`,
+              content: `Unknown tool: ${toolUse.name}. 'web_search' is server-side; client-handled tools are 'fetch_url', 'verify_business_registration', 'fetch_local_reviews', 'fetch_social_metrics', 'fetch_serp_results', 'fetch_keyword_data', 'fetch_competitors', 'fetch_domain_technologies', 'fetch_domain_whois'. (Meta Ad Library + Facebook profile scrapers are gated to Phase 8.10.S5 advanced discovery.)`,
               is_error: true,
             })
         }
@@ -906,6 +963,115 @@ async function handleFetchKeywordData(
       type: 'tool_result',
       tool_use_id: toolUse.id,
       content: `fetch_keyword_data failed: ${message}. Fall back to web_search for keyword discovery.`,
+    }
+  }
+}
+
+/** Resolve a `fetch_domain_technologies` tool call via DataForSEO Domain Analytics. */
+async function handleFetchDomainTechnologies(
+  toolUse: Anthropic.Messages.ToolUseBlock,
+  onProgress: ProgressFn,
+): Promise<Anthropic.Messages.ToolResultBlockParam> {
+  const input = toolUse.input as { domain?: string }
+  const domain = typeof input.domain === 'string' ? input.domain.trim() : ''
+
+  if (!domain) {
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: 'fetch_domain_technologies requires a `domain` string.',
+      is_error: true,
+    }
+  }
+
+  await onProgress(`DataForSEO：检测 ${domain} 技术栈…`)
+
+  try {
+    const tech = await getDomainTechnologies(domain)
+    if (!tech) {
+      return {
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content:
+          'No technology data found for this domain in DataForSEO. ' +
+          'Set technology_stack to null and continue.',
+      }
+    }
+    const parts: string[] = []
+    if (tech.cms) parts.push(`CMS: ${tech.cms}`)
+    if (tech.ecommerce) parts.push(`Ecommerce: ${tech.ecommerce}`)
+    await onProgress(`DataForSEO：技术栈检测完成（${parts.join(', ') || '已获取'}）`)
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: JSON.stringify(tech),
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: `fetch_domain_technologies failed: ${message}. Set technology_stack to null and continue.`,
+    }
+  }
+}
+
+/** Resolve a `fetch_domain_whois` tool call via DataForSEO WHOIS API. */
+async function handleFetchDomainWhois(
+  toolUse: Anthropic.Messages.ToolUseBlock,
+  onProgress: ProgressFn,
+): Promise<Anthropic.Messages.ToolResultBlockParam> {
+  const input = toolUse.input as { domain?: string }
+  const domain = typeof input.domain === 'string' ? input.domain.trim() : ''
+
+  if (!domain) {
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: 'fetch_domain_whois requires a `domain` string.',
+      is_error: true,
+    }
+  }
+
+  await onProgress(`DataForSEO WHOIS：获取 ${domain} 域名注册信息…`)
+
+  try {
+    const whois = await getDomainWhois(domain)
+    if (!whois) {
+      return {
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content:
+          'No WHOIS data found for this domain in DataForSEO. ' +
+          'Set domain_whois to null and continue.',
+      }
+    }
+
+    // Inject expiry warning so Claude can write it into quick_fix automatically
+    let expiryWarning = ''
+    if (whois.expires_at) {
+      const daysToExpiry = Math.floor(
+        (Date.parse(whois.expires_at) - Date.now()) / (24 * 60 * 60 * 1000),
+      )
+      if (daysToExpiry < 90) {
+        expiryWarning =
+          ` IMPORTANT: domain expires in ${daysToExpiry} days (${whois.expires_at}). ` +
+          'Add to diagnosis.actions.quick_fix: "域名将于 X 天后到期，请立即续费".'
+      }
+    }
+
+    await onProgress(`DataForSEO WHOIS：域名年龄 ${whois.domain_age_years ?? '?'} 年，到期 ${whois.expires_at ?? '未知'}`)
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: JSON.stringify(whois) + expiryWarning,
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: `fetch_domain_whois failed: ${message}. Set domain_whois to null and continue.`,
     }
   }
 }
