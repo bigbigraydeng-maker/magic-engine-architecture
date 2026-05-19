@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { batchKeywordOverview } from '@/lib/semrush/client'
+import { bulkKeywordVolume } from '@/lib/dataforseo/labs'
 import { calculateOpportunityScore, recommendPageType } from '@/lib/scoring/opportunity-score'
 import type { KeywordOverviewRequest, KeywordIntent } from '@/types/magic-engine'
 
@@ -22,9 +22,19 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const rawData = await batchKeywordOverview(keywords, db)
+    const locationCode = db === 'nz' ? 2554 : 2036
+    const rawData = await bulkKeywordVolume(keywords, locationCode)
 
-    const records = rawData.map(item => ({
+    const mapped = rawData.map(item => ({
+      keyword: item.keyword,
+      volume:  item.search_volume ?? 0,
+      kd:      item.keyword_difficulty ?? 0,
+      cpc:     item.cpc ?? 0,
+      intent:  item.intent,
+      trend:   [] as unknown[],
+    }))
+
+    const records = mapped.map(item => ({
       client_id,
       keyword:               item.keyword,
       volume:                item.volume,

@@ -26,7 +26,7 @@ import type {
 } from './types'
 import { fetchBenchmarks, extractBenchmarkIds } from './benchmarks'
 import { mapIndustryToCategory } from './industry-mapper'
-import { getDomainTrafficTrend } from '@/lib/semrush/client'
+import { getDomainTrafficHistory } from '@/lib/dataforseo/labs'
 import { summarizeTrend } from './trends'
 import { getSeasonalCalendar } from './seasonal-calendar'
 import { getIndustryInterestTrend } from '@/lib/gtrends/client'
@@ -132,8 +132,8 @@ export async function runHuatuo(
       businessSize: 'small',
       market: 'AU_NZ',
     }),
-    // 趋势失败不阻塞 — getDomainTrafficTrend 内部已 try/catch 返回 []
-    getDomainTrafficTrend(discovery.domain, undefined, 12),
+    // 趋势失败不阻塞 — catch 返回 []
+    getDomainTrafficHistory(discovery.domain, 2036, 12).catch(() => []),
     // Google Trends 失败不阻塞 — getIndustryInterestTrend 内部已兜底返回 no_data
     getIndustryInterestTrend(interestQuery, 'AU'),
     // 案例库检索失败静默返回 [] — retrieveSimilarCases 内部已 try/catch

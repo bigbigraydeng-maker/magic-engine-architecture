@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { getDomainOrganicKeywords } from '@/lib/semrush/client'
+import { getKeywordsForSite } from '@/lib/dataforseo/labs'
 import { calculateOpportunityScore, recommendPageType } from '@/lib/scoring/opportunity-score'
 import type { CompetitorKeywordsRequest, KeywordIntent } from '@/types/magic-engine'
 
@@ -22,32 +22,36 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    const locationCode = db === 'nz' ? 2554 : 2036
     const allRaw = await Promise.all(
-      competitor_domains.map(domain => getDomainOrganicKeywords(domain, db, limit))
+      competitor_domains.map(domain => getKeywordsForSite(domain, locationCode, limit))
     )
 
     const records: object[] = []
     allRaw.forEach((rawData, idx) => {
       const domain = competitor_domains[idx]
       rawData
-        .filter(k => k.volume >= min_volume)
+        .filter(k => (k.search_volume ?? 0) >= min_volume)
         .forEach(item => {
+          const volume = item.search_volume ?? 0
+          const kd     = item.keyword_difficulty ?? 0
+          const cpc    = item.cpc ?? 0
           records.push({
             client_id,
             keyword:               item.keyword,
-            volume:                item.volume,
-            kd:                    item.kd,
-            cpc:                   item.cpc,
+            volume,
+            kd,
+            cpc,
             intent:                item.intent as KeywordIntent,
-            trend:                 item.trend,
+            trend:                 [],
             source:                'semrush_batch' as const,
             competitor_source:     domain,
             semrush_db:            db || 'au',
             opportunity_score:     calculateOpportunityScore({
-              volume: item.volume, kd: item.kd, cpc: item.cpc,
+              volume, kd, cpc,
               intent: item.intent as KeywordIntent,
             }),
-            recommended_page_type: recommendPageType(item.keyword, item.intent as KeywordIntent, item.volume),
+            recommended_page_type: recommendPageType(item.keyword, item.intent as KeywordIntent, volume),
             status:                'new' as const,
           })
         })

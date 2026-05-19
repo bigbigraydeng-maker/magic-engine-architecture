@@ -13,14 +13,14 @@
  * 而不是纯凭基准库猜测。
  */
 
-import type { DomainTrendPoint } from '@/lib/semrush/client'
+import type { DomainTrendPoint } from '@/lib/dataforseo/labs'
 
 export type Trajectory = 'rising' | 'flat' | 'declining' | 'no_data'
 
 export interface TrendSummary {
   has_data: boolean
-  latest: { month: string; organic_traffic: number; organic_keywords: number } | null
-  earliest: { month: string; organic_traffic: number; organic_keywords: number } | null
+  latest: DomainTrendPoint | null
+  earliest: DomainTrendPoint | null
   growth_pct_3m: number | null     // 最近 3 月 vs 之前 3 月的环比
   growth_pct_6m: number | null     // 最近 6 月 vs 之前 6 月的环比
   growth_pct_12m: number | null    // 12 个月首尾比
@@ -121,8 +121,8 @@ export function formatTrendForPrompt(summary: TrendSummary): string {
   const lines: string[] = [
     `## 域名历史流量趋势（SEMrush 过去 ${summary.data_points} 个月）`,
     '',
-    `**最近月份（${summary.latest?.month}）**：有机流量 ${summary.latest?.organic_traffic.toLocaleString()} 次 / 关键词数 ${summary.latest?.organic_keywords.toLocaleString()}`,
-    `**最早月份（${summary.earliest?.month}）**：有机流量 ${summary.earliest?.organic_traffic.toLocaleString()} 次 / 关键词数 ${summary.earliest?.organic_keywords.toLocaleString()}`,
+    `**最近月份（${summary.latest?.month}）**：有机流量 ${summary.latest?.organic_traffic.toLocaleString()} 次`,
+    `**最早月份（${summary.earliest?.month}）**：有机流量 ${summary.earliest?.organic_traffic.toLocaleString()} 次`,
     `**月均流量**：${summary.monthly_avg_traffic?.toLocaleString()} 次`,
     '',
     `**实际增长率**：`,

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { getKeywordGap } from '@/lib/semrush/client'
+import { getKeywordsGap } from '@/lib/dataforseo/labs'
 import { calculateOpportunityScore, recommendPageType } from '@/lib/scoring/opportunity-score'
 import type { KeywordGapRequest, KeywordIntent } from '@/types/magic-engine'
 
@@ -28,9 +28,19 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const rawData = await getKeywordGap(client_domain, competitor_domains, db, limit)
+    const locationCode = db === 'nz' ? 2554 : 2036
+    const rawData = await getKeywordsGap(client_domain, competitor_domains, locationCode, limit)
 
-    const filtered = rawData.filter(k => k.volume >= min_volume && k.kd <= max_kd)
+    const mapped = rawData.map(item => ({
+      keyword: item.keyword,
+      volume:  item.search_volume ?? 0,
+      kd:      item.keyword_difficulty ?? 0,
+      cpc:     item.cpc ?? 0,
+      intent:  item.intent,
+      trend:   [] as unknown[],
+    }))
+
+    const filtered = mapped.filter(k => k.volume >= min_volume && k.kd <= max_kd)
 
     const records = filtered.map(item => ({
       client_id,

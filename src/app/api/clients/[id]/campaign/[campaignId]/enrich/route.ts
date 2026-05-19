@@ -1,10 +1,10 @@
-// Enrich Campaign Brief with SEMrush data + URL parsing
+// Enrich Campaign Brief with DataForSEO keyword data + URL parsing
 // Pulls question keywords + related keywords for the campaign topic
 // Parses source URLs via Jina Reader
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { getQuestionKeywords, getRelatedKeywords } from '@/lib/semrush/client'
+import { getKeywordIdeas } from '@/lib/dataforseo/labs'
 import type { CampaignKeywordSnapshot } from '@/types/magic-engine'
 
 type RouteContext = { params: { id: string; campaignId: string } }
@@ -55,32 +55,45 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       }
     }
 
-    // 3. SEMrush: question + related keywords (non-fatal)
+    // 3. DataForSEO: question + related keywords (non-fatal)
+    const locationCode = db === 'nz' ? 2554 : 2036
     const semrush_keywords: CampaignKeywordSnapshot[] = []
 
     try {
       const [questions, related] = await Promise.allSettled([
-        getQuestionKeywords(seedKeyword, db, 20),
-        getRelatedKeywords(seedKeyword, db, 20),
+        getKeywordIdeas(seedKeyword, locationCode, 20, true),
+        getKeywordIdeas(seedKeyword, locationCode, 20),
       ])
 
       if (questions.status === 'fulfilled') {
         for (const k of questions.value) {
-          semrush_keywords.push({ ...k, type: 'question' })
+          semrush_keywords.push({
+            keyword: k.keyword,
+            volume:  k.search_volume ?? 0,
+            kd:      k.keyword_difficulty ?? 0,
+            intent:  k.intent,
+            type:    'question',
+          })
         }
       } else {
-        warnings.push(`SEMrush questions: ${questions.reason}`)
+        warnings.push(`Keyword questions: ${questions.reason}`)
       }
 
       if (related.status === 'fulfilled') {
         for (const k of related.value) {
-          semrush_keywords.push({ ...k, type: 'related' })
+          semrush_keywords.push({
+            keyword: k.keyword,
+            volume:  k.search_volume ?? 0,
+            kd:      k.keyword_difficulty ?? 0,
+            intent:  k.intent,
+            type:    'related',
+          })
         }
       } else {
-        warnings.push(`SEMrush related: ${related.reason}`)
+        warnings.push(`Keyword related: ${related.reason}`)
       }
     } catch (semErr) {
-      warnings.push(`SEMrush enrichment skipped: ${String(semErr)}`)
+      warnings.push(`Keyword enrichment skipped: ${String(semErr)}`)
     }
 
     // 4. Save enriched data back to campaign

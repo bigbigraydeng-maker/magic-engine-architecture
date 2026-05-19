@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { getRelatedKeywords } from '@/lib/semrush/client'
+import { getKeywordIdeas } from '@/lib/dataforseo/labs'
 import { calculateOpportunityScore, recommendPageType } from '@/lib/scoring/opportunity-score'
 import type { RelatedKeywordsRequest, KeywordIntent } from '@/types/magic-engine'
 
@@ -22,9 +22,19 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const rawData = await getRelatedKeywords(seed_keyword, db, Math.min(limit, 100))
+    const locationCode = db === 'nz' ? 2554 : 2036
+    const rawData = await getKeywordIdeas(seed_keyword, locationCode, Math.min(limit, 100))
 
-    const filtered = rawData.filter(k => k.volume >= min_volume && k.kd <= max_kd)
+    const mapped = rawData.map(item => ({
+      keyword: item.keyword,
+      volume:  item.search_volume ?? 0,
+      kd:      item.keyword_difficulty ?? 0,
+      cpc:     item.cpc ?? 0,
+      intent:  item.intent,
+      trend:   [] as unknown[],
+    }))
+
+    const filtered = mapped.filter(k => k.volume >= min_volume && k.kd <= max_kd)
 
     const records = filtered.map(item => ({
       client_id,
