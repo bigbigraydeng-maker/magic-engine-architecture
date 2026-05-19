@@ -8,15 +8,14 @@ import { GenerationDrawer } from './_components/GenerationDrawer';
 import { SettingsDrawer, type SettingsTab } from './_components/SettingsDrawer';
 import type { ClientDiscoveryRow } from '@/lib/zhangqian/types';
 
-type PillarTab = 'social' | 'seo' | 'ai_visibility' | 'ads' | 'reputation' | 'competitor'
+type PillarTab = 'social' | 'seo' | 'ai_visibility' | 'ads' | 'diagnostic'
 
-const PILLAR_TABS: { id: PillarTab; label: string }[] = [
+const PILLAR_TABS: { id: PillarTab; label: string; soon?: boolean }[] = [
   { id: 'social',        label: '📱 Social' },
   { id: 'seo',           label: '🔍 SEO' },
   { id: 'ai_visibility', label: '🤖 AI 可见度' },
-  { id: 'ads',           label: '📢 Ads' },
-  { id: 'reputation',    label: '⭐ 口碑' },
-  { id: 'competitor',    label: '🏆 竞品' },
+  { id: 'ads',           label: '📢 Ads',  soon: true },
+  { id: 'diagnostic',    label: '🩺 诊断' },
 ]
 
 const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? '';
@@ -238,28 +237,28 @@ function AiVisibilityPanel({ clientId }: { clientId: string }) {
 
 function AdsPanel({ clientId }: { clientId: string }) {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      <PillarCard href={`/dashboard/clients/${clientId}/connectors`} icon="🔗" title="广告连接器" desc="连接 Meta · Google 广告账户" />
-      <ComingSoonCard icon="📊" title="Google Ads 诊断" />
-      <ComingSoonCard icon="🎵" title="TikTok Ads 诊断" />
+    <div className="space-y-3">
+      <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
+        <span className="text-sm">🚧</span>
+        <p className="text-xs text-amber-700">Ads Intelligence 即将推出，广告连接器目前可提前配置。</p>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <PillarCard href={`/dashboard/clients/${clientId}/connectors`} icon="🔗" title="广告连接器" desc="连接 Meta · Google 广告账户" />
+        <ComingSoonCard icon="📢" title="Meta Ads 诊断" />
+        <ComingSoonCard icon="📊" title="Google Ads 诊断" />
+        <ComingSoonCard icon="🎵" title="TikTok Ads 诊断" />
+      </div>
     </div>
   )
 }
 
-function ReputationPanel({ clientId }: { clientId: string }) {
+function DiagnosticPanel({ clientId }: { clientId: string }) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      <PillarCard href={`/dashboard/clients/${clientId}/diagnostic`} icon="🩺" title="声誉诊断" desc="来自张骞的口碑维度分析" />
-      <ComingSoonCard icon="⭐" title="评价监控" />
-    </div>
-  )
-}
-
-function CompetitorPanel({ clientId }: { clientId: string }) {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      <PillarCard href={`/dashboard/clients/${clientId}/diagnostic`} icon="🔍" title="竞品诊断" desc="竞争对手对比与差距分析" />
+      <PillarCard href={`/dashboard/clients/${clientId}/diagnostic`} icon="🩺" title="品牌诊断" desc="口碑与竞品六维度诊断分析" />
       <PillarCard href={`/dashboard/clients/${clientId}/diagnostic/report`} icon="📋" title="完整诊断报告" desc="六维度详细诊断结果" />
+      <ComingSoonCard icon="⭐" title="评价监控" />
+      <ComingSoonCard icon="🏆" title="竞品追踪" />
     </div>
   )
 }
@@ -399,13 +398,16 @@ export default function ClientDetailPage() {
             <button
               key={tab.id}
               onClick={() => setPillar(tab.id)}
-              className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${
                 pillar === tab.id
                   ? 'border-indigo-500 text-indigo-700'
                   : 'border-transparent text-gray-500 hover:text-gray-700'
               }`}
             >
               {tab.label}
+              {tab.soon && (
+                <span className="text-[10px] bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded-full leading-none">Soon</span>
+              )}
             </button>
           ))}
         </div>
@@ -414,8 +416,7 @@ export default function ClientDetailPage() {
           {pillar === 'seo'           && <SeoPanel clientId={clientId} />}
           {pillar === 'ai_visibility' && <AiVisibilityPanel clientId={clientId} />}
           {pillar === 'ads'           && <AdsPanel clientId={clientId} />}
-          {pillar === 'reputation'    && <ReputationPanel clientId={clientId} />}
-          {pillar === 'competitor'    && <CompetitorPanel clientId={clientId} />}
+          {pillar === 'diagnostic'    && <DiagnosticPanel clientId={clientId} />}
         </div>
       </div>
 
