@@ -109,7 +109,10 @@ export async function POST(req: NextRequest) {
     })
 
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
+    const message =
+      err instanceof Error
+        ? err.message
+        : (err as { message?: string })?.message ?? String(err)
     console.error('[visual/image]', err)
     return NextResponse.json({ success: false, error: message }, { status: 500 })
   }
