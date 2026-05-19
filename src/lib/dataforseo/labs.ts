@@ -34,6 +34,17 @@ export interface LabsKeyword {
   cpc: number | null
   /** Competition density 0–1 (paid search competition). null = no data */
   competition: number | null
+  /** Search intent — derived from CPC when not provided by API.
+   *  'informational' | 'navigational' | 'commercial' | 'transactional' */
+  intent: string
+  /** Organic rank position when returned by ranked-keywords endpoints */
+  position?: number | null
+}
+
+export interface DomainTrendPoint {
+  /** 'YYYY-MM' format */
+  month: string
+  organic_traffic: number
 }
 
 export interface LabsCompetitor {
@@ -119,12 +130,15 @@ export async function getKeywordsForSite(
     .filter(it => it.keyword_data?.keyword)
     .map(it => {
       const kd = it.keyword_data!
+      const cpc = kd.keyword_info?.cpc ?? null
       return {
         keyword:            kd.keyword ?? '',
         search_volume:      kd.keyword_info?.search_volume ?? null,
         keyword_difficulty: kd.keyword_difficulty ?? null,
-        cpc:                kd.keyword_info?.cpc ?? null,
+        cpc,
         competition:        kd.keyword_info?.competition ?? null,
+        intent:             deriveIntent(cpc),
+        position:           null,
       }
     })
 }
@@ -240,4 +254,308 @@ export async function getBulkTrafficEstimation(
       domain:          r.target ?? '',
       monthly_traffic: r.metrics?.organic?.etv ?? null,
     }))
+}
+
+// ─── Keyword volume + ideas (replaces SEMrush batchKeywordOverview / getRelatedKeywords) ──
+
+/**
+ * Batch search volume + difficulty for a list of keywords.
+ * Replaces: SEMrush batchKeywordOverview
+ *
+ * DataForSEO endpoint: /dataforseo_labs/google/bulk_keyword_search_volume/live
+ *
+ * @param keywords     Up to 1 000 keywords
+ * @param locationCode DataForSEO location_code (default 2036 = AU)
+ */
+export async function bulkKeywordVolume(
+  keywords: string[],
+  locationCode: number = DEFAULT_LOCATION_CODE,
+): Promise<LabsKeyword[]> {
+  if (keywords.length === 0) return []
+
+  const res = await fetch(
+    `${DATAFORSEO_API_BASE}/dataforseo_labs/google/bulk_keyword_search_volume/live`,
+    {
+      method:  'POST',
+      headers: { Authorization: authHeader(), 'Content-Type': 'application/json' },
+      body: JSON.stringify([
+        {
+          keywords:      keywords,
+          location_code: locationCode,
+          language_code: DEFAULT_LANGUAGE_CODE,
+        },
+      ]),
+    },
+  )
+
+  if (!res.ok) throw new Error(`DataForSEO bulk_keyword_search_volume error: ${res.status}`)
+
+  const json = await res.json() as {
+    tasks?: Array<{
+      result?: Array<{
+        items?: Array<{
+          keyword?:            string
+          keyword_info?: {
+            search_volume?: number | null
+            cpc?:           number | null
+            competition?:   number | null
+          }
+          keyword_difficulty?: number | null
+        }>
+      }>
+    }>
+  }
+
+  const items = json.tasks?.[0]?.result?.[0]?.items ?? []
+
+  return items
+    .filter(it => it.keyword)
+    .map(it => {
+      const cpc = it.keyword_info?.cpc ?? null
+      return {
+        keyword:            it.keyword ?? '',
+        search_volume:      it.keyword_info?.search_volume ?? null,
+        keyword_difficulty: it.keyword_difficulty ?? null,
+        cpc,
+        competition:        it.keyword_info?.competition ?? null,
+        intent:             deriveIntent(cpc),
+        position:           null,
+      }
+    })
+}
+
+/**
+ * Keyword ideas for a seed term — related keywords with volume, difficulty, CPC.
+ * Replaces: SEMrush getRelatedKeywords + getQuestionKeywords
+ *
+ * DataForSEO endpoint: /dataforseo_labs/google/keyword_ideas/live
+ *
+ * @param seed         Seed keyword, e.g. "vinyl flooring"
+ * @param locationCode DataForSEO location_code (default 2036 = AU)
+ * @param limit        Max keywords to return (default 50)
+ * @param questionsOnly If true, filters for question-form keywords (who/what/how…)
+ */
+export async function getKeywordIdeas(
+  seed: string,
+  locationCode: number = DEFAULT_LOCATION_CODE,
+  limit: number = 50,
+  questionsOnly = false,
+): Promise<LabsKeyword[]> {
+  const res = await fetch(
+    `${DATAFORSEO_API_BASE}/dataforseo_labs/google/keyword_ideas/live`,
+    {
+      method:  'POST',
+      headers: { Authorization: authHeader(), 'Content-Type': 'application/json' },
+      body: JSON.stringify([
+        {
+          keyword:       seed,
+          location_code: locationCode,
+          language_code: DEFAULT_LANGUAGE_CODE,
+          limit,
+        },
+      ]),
+    },
+  )
+
+  if (!res.ok) throw new Error(`DataForSEO keyword_ideas error: ${res.status}`)
+
+  const json = await res.json() as {
+    tasks?: Array<{
+      result?: Array<{
+        items?: Array<{
+          keyword_data?: {
+            keyword?: string
+            keyword_info?: {
+              search_volume?: number | null
+              cpc?:           number | null
+              competition?:   number | null
+            }
+            keyword_difficulty?: number | null
+          }
+        }>
+      }>
+    }>
+  }
+
+  const QUESTION_STARTERS = /^(who|what|where|when|why|how|can|is|are|does|do|will|should|which)\b/i
+
+  const items = json.tasks?.[0]?.result?.[0]?.items ?? []
+
+  return items
+    .filter(it => it.keyword_data?.keyword)
+    .filter(it => !questionsOnly || QUESTION_STARTERS.test(it.keyword_data!.keyword!))
+    .map(it => {
+      const kd  = it.keyword_data!
+      const cpc = kd.keyword_info?.cpc ?? null
+      return {
+        keyword:            kd.keyword ?? '',
+        search_volume:      kd.keyword_info?.search_volume ?? null,
+        keyword_difficulty: kd.keyword_difficulty ?? null,
+        cpc,
+        competition:        kd.keyword_info?.competition ?? null,
+        intent:             deriveIntent(cpc),
+        position:           null,
+      }
+    })
+}
+
+// ─── Keyword gap (replaces SEMrush getKeywordGap) ───────────────────────────
+
+/**
+ * Find keywords where competitors rank but the client does not.
+ * Replaces: SEMrush getKeywordGap
+ *
+ * DataForSEO endpoint: /dataforseo_labs/google/keywords_gap/live
+ *
+ * @param clientDomain       Primary domain to find gaps for
+ * @param competitorDomains  Up to 9 competitor domains to compare against
+ * @param locationCode       DataForSEO location_code (default 2036 = AU)
+ * @param limit              Max gap keywords to return (default 100)
+ */
+export async function getKeywordsGap(
+  clientDomain: string,
+  competitorDomains: string[],
+  locationCode: number = DEFAULT_LOCATION_CODE,
+  limit: number = 100,
+): Promise<LabsKeyword[]> {
+  if (competitorDomains.length === 0) return []
+
+  const targets = [clientDomain, ...competitorDomains].map(d => ({
+    target: d,
+    type:   'site' as const,
+  }))
+
+  const res = await fetch(
+    `${DATAFORSEO_API_BASE}/dataforseo_labs/google/keywords_gap/live`,
+    {
+      method:  'POST',
+      headers: { Authorization: authHeader(), 'Content-Type': 'application/json' },
+      body: JSON.stringify([
+        {
+          targets,
+          location_code: locationCode,
+          language_code: DEFAULT_LANGUAGE_CODE,
+          limit,
+          // Only keywords where client is not ranking but ≥1 competitor is
+          filters: [
+            ['ranked_serp_element.serp_item.domain', 'not_like', `%${clientDomain}%`],
+            'and',
+            ['keyword_data.keyword_info.search_volume', '>', 0],
+          ],
+        },
+      ]),
+    },
+  )
+
+  if (!res.ok) throw new Error(`DataForSEO keywords_gap error: ${res.status}`)
+
+  const json = await res.json() as {
+    tasks?: Array<{
+      result?: Array<{
+        items?: Array<{
+          keyword_data?: {
+            keyword?: string
+            keyword_info?: {
+              search_volume?: number | null
+              cpc?:           number | null
+              competition?:   number | null
+            }
+            keyword_difficulty?: number | null
+          }
+        }>
+      }>
+    }>
+  }
+
+  const items = json.tasks?.[0]?.result?.[0]?.items ?? []
+
+  return items
+    .filter(it => it.keyword_data?.keyword)
+    .map(it => {
+      const kd  = it.keyword_data!
+      const cpc = kd.keyword_info?.cpc ?? null
+      return {
+        keyword:            kd.keyword ?? '',
+        search_volume:      kd.keyword_info?.search_volume ?? null,
+        keyword_difficulty: kd.keyword_difficulty ?? null,
+        cpc,
+        competition:        kd.keyword_info?.competition ?? null,
+        intent:             deriveIntent(cpc),
+        position:           null,
+      }
+    })
+}
+
+// ─── Domain traffic history (replaces SEMrush getDomainTrafficTrend) ─────────
+
+/**
+ * Monthly organic traffic estimates over a rolling window.
+ * Replaces: SEMrush getDomainTrafficTrend
+ *
+ * DataForSEO endpoint: /dataforseo_labs/google/historical_bulk_traffic/live
+ *
+ * @param domain       Target domain, e.g. "oztop.com.au"
+ * @param locationCode DataForSEO location_code (default 2036 = AU)
+ * @param months       How many months to fetch (default 12, max 24)
+ */
+export async function getDomainTrafficHistory(
+  domain: string,
+  locationCode: number = DEFAULT_LOCATION_CODE,
+  months: number = 12,
+): Promise<DomainTrendPoint[]> {
+  const res = await fetch(
+    `${DATAFORSEO_API_BASE}/dataforseo_labs/google/historical_bulk_traffic/live`,
+    {
+      method:  'POST',
+      headers: { Authorization: authHeader(), 'Content-Type': 'application/json' },
+      body: JSON.stringify([
+        {
+          targets:       [domain],
+          location_code: locationCode,
+          language_code: DEFAULT_LANGUAGE_CODE,
+        },
+      ]),
+    },
+  )
+
+  if (!res.ok) throw new Error(`DataForSEO historical_bulk_traffic error: ${res.status}`)
+
+  const json = await res.json() as {
+    tasks?: Array<{
+      result?: Array<{
+        target?:  string
+        metrics?: Array<{
+          year?:    number
+          month?:   number
+          organic?: { etv?: number | null }
+        }>
+      }>
+    }>
+  }
+
+  const result = json.tasks?.[0]?.result?.[0]
+  if (!result?.metrics) return []
+
+  const points = result.metrics
+    .filter(m => m.year && m.month)
+    .map(m => ({
+      month:           `${m.year}-${String(m.month).padStart(2, '0')}`,
+      organic_traffic: Math.round(m.organic?.etv ?? 0),
+    }))
+    .sort((a, b) => a.month.localeCompare(b.month))
+
+  return points.slice(-Math.min(months, 24))
+}
+
+// ─── Internal helpers ────────────────────────────────────────────────────────
+
+/**
+ * Derive search intent from CPC as a proxy when the API doesn't return intent.
+ * CPC proxy: high CPC → commercial/transactional, low → informational.
+ */
+function deriveIntent(cpc: number | null): string {
+  if (cpc === null || cpc === 0) return 'informational'
+  if (cpc < 1)  return 'informational'
+  if (cpc < 3)  return 'commercial'
+  return 'transactional'
 }
