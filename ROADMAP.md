@@ -1231,12 +1231,18 @@ Production Item    = 订单里的具体产物
 
 - [x] **P13.C** — Reels + Visual 生成路由接入 `production_package_id`：`reels/generate` POST body 新增字段，插入 reels_drafts 后异步创建 `production_items`(content_type='reel') + 回写 `reels_drafts.production_item_id`；`visual/image` + `visual/video` 同理，content_type='visual_asset'；三条链路错误均非阻断，build ✅
 
-### Phase 13.D–E（预告，未排期）
+### Phase 13.D — Ads + Reputation 接入（已完成）
+
+- [x] **P13.D** — `meta_ads_snapshots` + `project_reviews` 各加 `production_package_id` nullable FK + partial index（migration）；`meta-ads/sync` 路由接受可选 `production_package_id` 并异步写回；`/clients/[id]/review` POST 接受可选 `production_package_id` 并透传 `runProjectReview`；生产包详情 GET 回读 `ads_snapshots` + `reputation_reviews` 数组；Competitor 延后至 P13.E；build ✅
+
+> **Competitor 接入** 延后登记为 **P13.E-pre**（competitor snapshot persistence）：`semrush/competitor-keywords` 当前无状态 GET，需先建 `competitor_snapshots` 表再接入，本期不做。
+
+### Phase 13.E（预告，未排期）
 
 | Phase | 内容 | 触发条件 |
 |---|---|---|
-| 13.D | Ads + Competitor + Reputation 接入 | 13.C 完成 |
 | 13.E | Flywheel feedback 闭环（package → flywheel_actions → outcomes） | 13.D 完成 |
+| 13.E-pre | Competitor snapshot persistence + 接入 production package | 独立可排期 |
 
 ### Phase 13 不做清单（明确划界，避免 scope creep）
 
@@ -1553,6 +1559,10 @@ AU / NZ（当前）          新市场（未来）
 
 > 每次上线新功能时在此追加。格式：**[完成日期]** — Phase ID + 描述 + Commit 引用。
 > 此日志从 CLAUDE.md §十五.C 迁移至此（2026-05-10），CLAUDE.md 不再维护历史日志。
+
+### 2026-05-22
+
+- **P13.D** — Ads + Reputation 接入 production package：meta_ads_snapshots + project_reviews 加 production_package_id FK；两条路由接受可选参数；包详情页回读 ads_snapshots + reputation_reviews，build ✅
 
 ### 2026-05-21（续）
 

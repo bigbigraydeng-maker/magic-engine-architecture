@@ -213,14 +213,15 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-21（**P13.B 全部完成**；P8.3.2 + P8.10.S0.22 生产环境手动操作已完成；P8.10.S0.23 需 Render env var）
+> 最后更新：2026-05-22（**P13.D 完成**；P8.10.S0.23 需 Render env var）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P13.D** | Ads + Competitor + Reputation 接入 production package（13.C 完成，13.D 待排期） | 📋 |
+| **P13.E** | Flywheel feedback 闭环（package → flywheel_actions → outcomes） | 📋 |
+| **P13.E-pre** | Competitor snapshot persistence + 接入 production package（semrush/competitor-keywords 落库） | 📋 |
 | **P8.10.S0.23 Env 配置** | Render 加 `GOOGLE_SERVICE_ACCOUNT_CREDENTIALS`（JSON 字符串），并让客户将服务账号邮箱加入 GSC 验证用户 | 📋 |
 
-**状态校准（2026-05-21）**：P13.C 完成（reels/generate + visual/image + visual/video 三条链路接入 production_package_id，build ✅）。P13.A + P13.B + P13.C 全部完成。P8.3.2 + P8.10.S0.22 生产环境手动操作已完成。
+**状态校准（2026-05-22）**：P13.D 完成（meta_ads_snapshots + project_reviews 加 production_package_id FK；meta-ads/sync + review 路由接受可选参数；包详情 API 回读 ads_snapshots + reputation_reviews，build ✅）。P13.A + P13.B + P13.C + P13.D 全部完成。
 
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 
