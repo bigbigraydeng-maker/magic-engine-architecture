@@ -1,0 +1,196 @@
+'use client'
+
+/**
+ * NextStepCard — dynamic single-action guidance card (UX overhaul)
+ *
+ * Always shows FDE exactly one next action based on the client's current
+ * pipeline state. Replaces the "none" and "reviewing" states that were
+ * previously scattered across BrandHealthWidget.
+ *
+ * State machine:
+ *   none       → Start 张骞 discovery
+ *   reviewing  → Confirm 张骞 report
+ *   confirmed, no diagnostic, no rx  → Run 华佗 diagnostic (+ skip option)
+ *   confirmed, diagnostic done, no rx → Generate 华佗 prescription
+ *   rx generating   → In-progress pulse
+ *   rx failed       → Re-generate
+ *   rx draft        → Approve prescription
+ *   rx approved     → Go to 鲁班 execution board
+ */
+
+import Link from 'next/link'
+
+export type DiscoveryStatus    = 'none' | 'reviewing' | 'confirmed'
+export type PrescriptionStatus = 'none' | 'generating' | 'failed' | 'draft' | 'approved'
+
+interface Props {
+  discoveryStatus:      DiscoveryStatus
+  hasCompletedDiagnostic: boolean
+  prescriptionStatus:   PrescriptionStatus
+  clientId:             string
+}
+
+interface CardConfig {
+  wrapCls:        string   // border + bg
+  dotCls:         string   // status dot colour (+ optional animate-pulse)
+  badge:          string
+  title:          string
+  desc:           string
+  primaryHref?:   string
+  primaryLabel?:  string
+  primaryCls:     string   // button bg/text
+  secondaryHref?: string
+  secondaryLabel?: string
+}
+
+function resolve(
+  discoveryStatus:        DiscoveryStatus,
+  hasCompletedDiagnostic: boolean,
+  prescriptionStatus:     PrescriptionStatus,
+  clientId:               string,
+): CardConfig {
+
+  if (discoveryStatus === 'none') return {
+    wrapCls:      'bg-rose-50 border-rose-200',
+    dotCls:       'bg-rose-500',
+    badge:        '未开始',
+    title:        '启动张骞品牌发现',
+    desc:         '品牌数据缺失，华佗诊断与诸葛亮分析均无法运行。扫描约 3 分钟完成。',
+    primaryHref:  `/dashboard/clients/${clientId}/zhangqian`,
+    primaryLabel: '启动品牌发现 →',
+    primaryCls:   'bg-rose-600 hover:bg-rose-700 text-white',
+  }
+
+  if (discoveryStatus === 'reviewing') return {
+    wrapCls:      'bg-amber-50 border-amber-200',
+    dotCls:       'bg-amber-400',
+    badge:        '待确认',
+    title:        '确认张骞发现报告',
+    desc:         '张骞已完成品牌扫描，请核查数据后确认导入，才能运行华佗分析。',
+    primaryHref:  `/dashboard/clients/${clientId}/zhangqian`,
+    primaryLabel: '查看 & 确认报告 →',
+    primaryCls:   'bg-amber-600 hover:bg-amber-700 text-white',
+  }
+
+  // ── discovery confirmed ───────────────────────────────────────────────────
+
+  if (prescriptionStatus === 'generating') return {
+    wrapCls:      'bg-indigo-50 border-indigo-200',
+    dotCls:       'bg-indigo-400 animate-pulse',
+    badge:        '生成中',
+    title:        '华佗处方生成中…',
+    desc:         '华佗正在基于诊断数据撰写处方，通常需 1–2 分钟，页面将自动更新。',
+    primaryHref:  `/dashboard/clients/${clientId}/prescription/new`,
+    primaryLabel: '查看进度 →',
+    primaryCls:   'bg-indigo-600 hover:bg-indigo-700 text-white',
+  }
+
+  if (prescriptionStatus === 'failed') return {
+    wrapCls:      'bg-rose-50 border-rose-200',
+    dotCls:       'bg-rose-500',
+    badge:        '生成失败',
+    title:        '处方生成失败，请重新生成',
+    desc:         '上次华佗处方生成遇到错误。可重新发起生成，或先补充诊断数据后再试。',
+    primaryHref:  `/dashboard/clients/${clientId}/prescription/new`,
+    primaryLabel: '重新生成处方 →',
+    primaryCls:   'bg-rose-600 hover:bg-rose-700 text-white',
+    secondaryHref:  `/dashboard/clients/${clientId}/diagnostic`,
+    secondaryLabel: '先补充诊断',
+  }
+
+  if (prescriptionStatus === 'draft') return {
+    wrapCls:      'bg-violet-50 border-violet-200',
+    dotCls:       'bg-violet-500',
+    badge:        '待审批',
+    title:        '华佗处方草稿待审批',
+    desc:         '处方已生成，请审阅处方内容并批准，才能将行动推送至鲁班执行看板。',
+    primaryHref:  `/dashboard/clients/${clientId}/prescription/new`,
+    primaryLabel: '审阅 & 批准处方 →',
+    primaryCls:   'bg-violet-600 hover:bg-violet-700 text-white',
+  }
+
+  if (prescriptionStatus === 'approved') return {
+    wrapCls:      'bg-green-50 border-green-200',
+    dotCls:       'bg-green-500',
+    badge:        '就绪',
+    title:        '处方已批准，执行追踪中',
+    desc:         '华佗处方已进入鲁班执行阶段。查看执行看板追踪进度，或询问诸葛亮获取本周战略建议。',
+    primaryHref:  `/dashboard/clients/${clientId}/execution`,
+    primaryLabel: '查看执行看板 →',
+    primaryCls:   'bg-green-600 hover:bg-green-700 text-white',
+    secondaryHref:  `/dashboard/clients/${clientId}/prescription/new`,
+    secondaryLabel: '查看处方',
+  }
+
+  // confirmed + no prescription yet
+  if (hasCompletedDiagnostic) return {
+    wrapCls:      'bg-indigo-50 border-indigo-200',
+    dotCls:       'bg-indigo-600',
+    badge:        '下一步',
+    title:        '生成华佗处方',
+    desc:         '六维度诊断已完成，华佗可基于诊断结果生成针对性处方行动路线图。',
+    primaryHref:  `/dashboard/clients/${clientId}/prescription/new`,
+    primaryLabel: '生成华佗处方 →',
+    primaryCls:   'bg-indigo-600 hover:bg-indigo-700 text-white',
+    secondaryHref:  `/dashboard/clients/${clientId}/diagnostic/report`,
+    secondaryLabel: '先查看诊断报告',
+  }
+
+  // confirmed + no diagnostic + no prescription
+  return {
+    wrapCls:      'bg-blue-50 border-blue-200',
+    dotCls:       'bg-blue-500',
+    badge:        '下一步',
+    title:        '运行华佗深度诊断',
+    desc:         '张骞发现已确认。建议先运行六维度深度诊断，华佗处方将更精准（约 3–5 分钟）。',
+    primaryHref:  `/dashboard/clients/${clientId}/diagnostic`,
+    primaryLabel: '运行华佗诊断 →',
+    primaryCls:   'bg-blue-600 hover:bg-blue-700 text-white',
+    secondaryHref:  `/dashboard/clients/${clientId}/prescription/new`,
+    secondaryLabel: '跳过，直接生成处方',
+  }
+}
+
+export function NextStepCard({ discoveryStatus, hasCompletedDiagnostic, prescriptionStatus, clientId }: Props) {
+  const c = resolve(discoveryStatus, hasCompletedDiagnostic, prescriptionStatus, clientId)
+
+  return (
+    <div className={`rounded-xl border px-5 py-4 ${c.wrapCls}`}>
+      <div className="flex items-start justify-between gap-4 flex-wrap sm:flex-nowrap">
+
+        {/* Left: status dot + text */}
+        <div className="flex items-start gap-3 min-w-0">
+          <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${c.dotCls}`} />
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-0.5">
+              {c.badge}
+            </p>
+            <p className="text-sm font-semibold text-gray-900">{c.title}</p>
+            <p className="text-xs text-gray-600 mt-0.5 leading-relaxed">{c.desc}</p>
+          </div>
+        </div>
+
+        {/* Right: CTAs */}
+        <div className="flex items-center gap-2 flex-shrink-0 pl-5 sm:pl-0">
+          {c.secondaryHref && (
+            <Link
+              href={c.secondaryHref}
+              className="text-xs text-gray-500 hover:text-gray-700 transition-colors whitespace-nowrap"
+            >
+              {c.secondaryLabel}
+            </Link>
+          )}
+          {c.primaryHref && (
+            <Link
+              href={c.primaryHref}
+              className={`text-xs font-semibold rounded-lg px-3 py-1.5 transition-colors whitespace-nowrap ${c.primaryCls}`}
+            >
+              {c.primaryLabel}
+            </Link>
+          )}
+        </div>
+
+      </div>
+    </div>
+  )
+}

@@ -8,6 +8,7 @@ import { GenerationDrawer } from './_components/GenerationDrawer';
 import { SettingsDrawer, type SettingsTab } from './_components/SettingsDrawer';
 import { ZhugePriorityWidget } from './_components/ZhugePriorityWidget';
 import { ZhugeDrawer } from './_components/ZhugeDrawer';
+import { NextStepCard, type DiscoveryStatus, type PrescriptionStatus } from './_components/NextStepCard';
 import type { ClientDiscoveryRow } from '@/lib/zhangqian/types';
 
 
@@ -325,11 +326,12 @@ export default function ClientDetailPage() {
   const [client, setClient] = useState<Client | null>(null);
   const [loading, setLoading] = useState(true);
   const [hasActiveBrief, setHasActiveBrief] = useState<boolean | null>(null);
-  const [discoveryConfirmed, setDiscoveryConfirmed] = useState<boolean>(false);
+  const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatus>('none');
   const [hasCompletedDiagnostic, setHasCompletedDiagnostic] = useState<boolean>(false);
-  const [hasPrescription, setHasPrescription] = useState<boolean>(false);
-  // Derived: 华佗 analysis is "done" if either diagnostic ran or prescription generated
-  const huatuoDone = hasCompletedDiagnostic || hasPrescription;
+  const [prescriptionStatus, setPrescriptionStatus] = useState<PrescriptionStatus>('none');
+  // Derived shorthands
+  const discoveryConfirmed = discoveryStatus === 'confirmed';
+  const huatuoDone = hasCompletedDiagnostic || prescriptionStatus !== 'none';
 
   // ?exec=<itemId> 来自执行看板的「在社媒矩阵中执行」跳转：
   // 自动打开 GenerationDrawer 并把生成的内容关联回该执行项（内容飞轮闭环）
@@ -367,12 +369,23 @@ export default function ClientDetailPage() {
       } else {
         setHasActiveBrief(false);
       }
+      // discovery status: none / reviewing / confirmed
       if (discoveryRes?.ok) {
         const data = await discoveryRes.json();
-        setDiscoveryConfirmed(Boolean(data?.discovery?.confirmed_at));
+        setDiscoveryStatus(data?.discovery?.confirmed_at ? 'confirmed' : 'reviewing');
+      } else {
+        setDiscoveryStatus('none');
       }
       setHasCompletedDiagnostic(diagnosticRes?.ok ?? false);
-      setHasPrescription(prescriptionRes?.ok ?? false);
+      // prescription status: granular
+      if (prescriptionRes?.ok) {
+        const pData = await prescriptionRes.json();
+        const raw = pData?.prescription?.status as string | undefined;
+        const valid: PrescriptionStatus[] = ['generating', 'failed', 'draft', 'approved'];
+        setPrescriptionStatus(valid.includes(raw as PrescriptionStatus) ? (raw as PrescriptionStatus) : 'none');
+      } else {
+        setPrescriptionStatus('none');
+      }
     } finally {
       setLoading(false);
     }
@@ -442,18 +455,26 @@ export default function ClientDetailPage() {
         </div>
       </div>
 
-      {/* Workflow progress — 张骞 → 华佗分析 → 鲁班执行 */}
+      {/* Workflow progress bar — 3-step overview */}
       <WorkflowProgress
         discoveryConfirmed={discoveryConfirmed}
         hasCompletedDiagnostic={hasCompletedDiagnostic}
-        hasPrescription={hasPrescription}
+        hasPrescription={prescriptionStatus !== 'none'}
         clientId={clientId}
       />
 
-      {/* Brand Health Widget — plays seeding role, links to prescription */}
-      <BrandHealthWidget clientId={clientId} />
+      {/* Dynamic next-step guidance — always shows one clear action */}
+      <NextStepCard
+        discoveryStatus={discoveryStatus}
+        hasCompletedDiagnostic={hasCompletedDiagnostic}
+        prescriptionStatus={prescriptionStatus}
+        clientId={clientId}
+      />
 
-      {/* Zhuge Priority Actions — dynamic strategic work order */}
+      {/* Brand Health mini scorecard — only shown after discovery confirmed */}
+      {discoveryStatus === 'confirmed' && <BrandHealthWidget clientId={clientId} />}
+
+      {/* Zhuge Priority Actions */}
       <ZhugePriorityWidget
         clientId={clientId}
         discoveryConfirmed={discoveryConfirmed}
