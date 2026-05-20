@@ -308,10 +308,16 @@ function ExecutionItemRow({
   const [noteText, setNoteText] = useState('')
   const [addingLog, setAddingLog] = useState(false)
   // 编辑模式
-  const [editing, setEditing]   = useState(false)
-  const [eTitle, setETitle]     = useState(item.title)
-  const [eDesc, setEDesc]       = useState(item.description)
+  const [editing, setEditing]       = useState(false)
+  const [eTitle, setETitle]         = useState(item.title)
+  const [eDesc, setEDesc]           = useState(item.description)
   const [savingEdit, setSavingEdit] = useState(false)
+  const [seoFixOpen, setSeoFixOpen] = useState(false)
+  const [seoFixing, setSeoFixing]   = useState(false)
+  const [seoFixMsg, setSeoFixMsg]   = useState<{ text: string; ok: boolean; prUrl?: string } | null>(null)
+  const [seoForm, setSeoForm]       = useState({
+    file_path: '', slug: '', field: 'metaTitle', old_value: '', new_value: '',
+  })
 
   const stepsJson = item.steps_json as Record<string, unknown> | null
   const fixMeta   = FIX_TYPE_META[item.fix_type] ?? { icon: '❓', label: item.fix_type, cls: 'bg-gray-100 text-gray-600' }
@@ -387,6 +393,35 @@ function ExecutionItemRow({
     const ok = await onEditItem(item.id, { title: eTitle.trim(), description: eDesc.trim() })
     setSavingEdit(false)
     if (ok) setEditing(false)
+  }
+
+  const submitSeoFix = async () => {
+    const { file_path, slug, field, old_value, new_value } = seoForm
+    if (!file_path.trim() || !slug.trim() || !old_value.trim() || !new_value.trim()) return
+    setSeoFixing(true)
+    setSeoFixMsg(null)
+    try {
+      const res = await fetch(`/api/clients/${item.client_id}/seo-fix`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${API_KEY}`,
+        },
+        body: JSON.stringify({
+          file_path, slug, field, old_value, new_value,
+          reason: item.title,
+          execution_item_id: item.id,
+        }),
+      })
+      const j = await res.json()
+      if (!res.ok || !j.success) throw new Error(j.error ?? 'Fix failed')
+      setSeoFixMsg({ text: `PR #${j.pr_number} 已创建`, ok: true, prUrl: j.pr_url })
+      setSeoFixOpen(false)
+    } catch (err: unknown) {
+      setSeoFixMsg({ text: err instanceof Error ? err.message : 'Fix failed', ok: false })
+    } finally {
+      setSeoFixing(false)
+    }
   }
 
   return (
@@ -467,6 +502,19 @@ function ExecutionItemRow({
                   ✨ 生成内容
                 </button>
               )}
+              {item.dimension === 'seo' && !isDone && (
+                seoFixMsg?.ok ? (
+                  <a href={seoFixMsg.prUrl} target="_blank" rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-green-50 border border-green-200 text-green-700 hover:bg-green-100">
+                    ✓ {seoFixMsg.text} →
+                  </a>
+                ) : (
+                  <button type="button" onClick={() => setSeoFixOpen(v => !v)}
+                    className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-100">
+                    ⚡ SEO Fix
+                  </button>
+                )
+              )}
               {execButton}
               {item.logs.some(l => l.kind === 'ai_assist') && (
                 <button
@@ -513,6 +561,62 @@ function ExecutionItemRow({
           )}
         </div>
       </div>
+
+      {/* SEO Fix inline 表单 */}
+      {seoFixOpen && (
+        <div className="border-t border-amber-100 bg-amber-50/40 px-4 py-3 space-y-2">
+          <p className="text-xs font-semibold text-amber-700">⚡ SEO Fix — 推送元数据修改到 GitHub PR</p>
+          {seoFixMsg && !seoFixMsg.ok && (
+            <p className="text-xs text-red-600">{seoFixMsg.text}</p>
+          )}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] text-gray-500 font-medium">文件路径</label>
+              <input value={seoForm.file_path} placeholder="src/lib/data/guides.ts"
+                onChange={e => setSeoForm(f => ({ ...f, file_path: e.target.value }))}
+                className="w-full mt-0.5 rounded border border-gray-300 px-2 py-1 text-xs font-mono focus:border-amber-400 focus:outline-none" />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 font-medium">Slug</label>
+              <input value={seoForm.slug} placeholder="china-small-group-tours-nz"
+                onChange={e => setSeoForm(f => ({ ...f, slug: e.target.value }))}
+                className="w-full mt-0.5 rounded border border-gray-300 px-2 py-1 text-xs font-mono focus:border-amber-400 focus:outline-none" />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 font-medium">字段</label>
+              <select value={seoForm.field}
+                onChange={e => setSeoForm(f => ({ ...f, field: e.target.value }))}
+                className="w-full mt-0.5 rounded border border-gray-300 px-2 py-1 text-xs focus:border-amber-400 focus:outline-none bg-white">
+                <option value="metaTitle">metaTitle</option>
+                <option value="metaDescription">metaDescription</option>
+              </select>
+            </div>
+            <div />
+            <div>
+              <label className="text-[10px] text-gray-500 font-medium">当前值 (old)</label>
+              <input value={seoForm.old_value} placeholder="当前 meta title"
+                onChange={e => setSeoForm(f => ({ ...f, old_value: e.target.value }))}
+                className="w-full mt-0.5 rounded border border-gray-300 px-2 py-1 text-xs focus:border-amber-400 focus:outline-none" />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 font-medium">新值 (new)</label>
+              <input value={seoForm.new_value} placeholder="优化后的 meta title"
+                onChange={e => setSeoForm(f => ({ ...f, new_value: e.target.value }))}
+                className="w-full mt-0.5 rounded border border-gray-300 px-2 py-1 text-xs focus:border-amber-400 focus:outline-none" />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button type="button" onClick={() => setSeoFixOpen(false)}
+              className="px-3 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50">
+              取消
+            </button>
+            <button type="button" onClick={() => void submitSeoFix()} disabled={seoFixing}
+              className="px-3 py-1 text-xs font-semibold rounded bg-amber-500 hover:bg-amber-600 disabled:bg-amber-300 text-white">
+              {seoFixing ? '提交中…' : '提交 Fix → GitHub PR'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 展开区：状态流转 + 工作日志（鲁班对话入口已移到卡片头部） */}
       {expanded && (

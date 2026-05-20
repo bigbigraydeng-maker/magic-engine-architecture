@@ -122,10 +122,8 @@ export class GithubClient {
   // ── File commit ─────────────────────────────────────────────────────────────
 
   /**
-   * Commit an updated file to a branch.
-   *
-   * @param blobSha  The SHA of the existing blob (from getFileContent).
-   *                 Required by GitHub to prevent overwrite conflicts.
+   * Commit a file to a branch. Creates a new file if blobSha is omitted;
+   * updates an existing file when blobSha (from getFileContent) is supplied.
    */
   async commitFile(
     owner:       string,
@@ -134,12 +132,12 @@ export class GithubClient {
     branch:      string,
     content:     string,  // UTF-8 content (will be base64-encoded for the API)
     message:     string,
-    blobSha:     string,
+    blobSha?:    string,  // omit to create a new file
   ): Promise<void> {
     await this.request('PUT', `/repos/${owner}/${repo}/contents/${encodeFilePath(path)}`, {
       message,
       content: Buffer.from(content, 'utf8').toString('base64'),
-      sha:     blobSha,
+      ...(blobSha !== undefined ? { sha: blobSha } : {}),
       branch,
     })
   }

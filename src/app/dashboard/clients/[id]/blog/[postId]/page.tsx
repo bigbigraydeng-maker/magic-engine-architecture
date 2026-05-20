@@ -29,9 +29,11 @@ export default function BlogPostPage() {
   const [loading, setLoading]     = useState(true);
   const [showGeoBlock, setShowGeoBlock] = useState(false);
   const [copied, setCopied]       = useState<'html' | 'text' | null>(null);
-  const [saving, setSaving]       = useState(false);
-  const [actionMsg, setActionMsg] = useState('');
-  const [actionOk, setActionOk]   = useState<boolean | null>(null);
+  const [saving, setSaving]             = useState(false);
+  const [publishing, setPublishing]     = useState(false);
+  const [prUrl, setPrUrl]               = useState<string | null>(null);
+  const [actionMsg, setActionMsg]       = useState('');
+  const [actionOk, setActionOk]         = useState<boolean | null>(null);
 
   const flash = (msg: string, ok: boolean) => {
     setActionMsg(msg); setActionOk(ok);
@@ -77,6 +79,29 @@ export default function BlogPostPage() {
       flash(err instanceof Error ? err.message : 'Update failed', false);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handlePublishToGitHub = async () => {
+    if (!post) return;
+    setPublishing(true);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/cms/publish-blog`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''}`,
+        },
+        body: JSON.stringify({ blog_post_id: postId }),
+      });
+      const j = await res.json();
+      if (!res.ok || !j.success) throw new Error(j.error ?? 'Publish failed');
+      setPrUrl(j.pr_url);
+      flash(`✓ PR #${j.pr_number} 已创建`, true);
+    } catch (err: unknown) {
+      flash(err instanceof Error ? err.message : 'Publish failed', false);
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -190,6 +215,17 @@ ${showGeoBlock && post.geo_html_snapshot
             }`}>
             {copied === 'text' ? '✓ Copied!' : 'Copy Text'}
           </button>
+          {prUrl ? (
+            <a href={prUrl} target="_blank" rel="noopener noreferrer"
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-green-50 border border-green-300 text-green-700 hover:bg-green-100 transition-colors">
+              ✓ 查看 PR →
+            </a>
+          ) : (
+            <button onClick={() => void handlePublishToGitHub()} disabled={publishing}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white transition-colors">
+              {publishing ? '推送中…' : '📤 推送到网站'}
+            </button>
+          )}
           <button onClick={() => setShowGeoBlock(v => !v)}
             className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
               showGeoBlock ? 'bg-indigo-100 text-indigo-700 border-indigo-300'
