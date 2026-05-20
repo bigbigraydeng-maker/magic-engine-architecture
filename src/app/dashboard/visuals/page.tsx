@@ -846,8 +846,7 @@ export default function VisualsPage() {
   const [genStates, setGenStates] = useState<Record<string, GenState>>({})
   // Track posts whose visual_brief was recently edited — shows 🔄 Regen button
   const [dirtyBriefs, setDirtyBriefs] = useState<Set<string>>(new Set())
-  const [syncing, setSyncing] = useState(false)
-  const [pushing, setPushing] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [pubModal, setPubModal] = useState<PubModal | null>(null)
   const [publerAccounts, setPublerAccounts] = useState<PublerAccount[]>([])
   const [scheduleForm, setScheduleForm] = useState({ account_id: '', scheduled_at: '', caption: '' })
@@ -1104,50 +1103,20 @@ export default function VisualsPage() {
     }
   }, [pubModal, scheduleForm])
 
-  // ── Sync ───────────────────────────────────────────────────────────────────
+  // ── Refresh ────────────────────────────────────────────────────────────────
 
-  const handleSync = useCallback(async () => {
+  const handleRefresh = useCallback(async () => {
     if (!selectedClientId) return
-    setSyncing(true)
+    setRefreshing(true)
     try {
-      const res = await fetch(`/api/airtable/pull-content?client_id=${selectedClientId}`)
-      const d = await res.json()
-      if (d.success) {
-        await fetchPosts(selectedClientId)
-        setToast({ type: 'success', message: `Synced: +${d.created} new, ~${d.updated} updated` })
-      } else {
-        setToast({ type: 'error', message: 'Sync failed: ' + d.error })
-      }
-    } finally { setSyncing(false) }
-  }, [selectedClientId, fetchPosts])
-
-  // ── Push unsynced posts → Airtable ─────────────────────────────────────────
-
-  const handlePushAirtable = useCallback(async () => {
-    if (!selectedClientId) return
-    const unsyncedIds = posts.filter(p => !p.airtable_record_id).map(p => p.id)
-    if (unsyncedIds.length === 0) {
-      setToast({ type: 'success', message: 'All posts already synced to Content Workspace' })
-      return
-    }
-    setPushing(true)
-    try {
-      const res = await fetch('/api/airtable/sync-content', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: selectedClientId, post_ids: unsyncedIds }),
-      })
-      const d = await res.json()
-      if (d.success) {
-        await fetchPosts(selectedClientId)
-        setToast({ type: 'success', message: `↑ Pushed ${d.synced} posts to Content Workspace` })
-      } else {
-        setToast({ type: 'error', message: 'Push failed: ' + d.error })
-      }
+      await Promise.all([
+        fetchPosts(selectedClientId),
+        fetchAssets(selectedClientId),
+      ])
     } finally {
-      setPushing(false)
+      setRefreshing(false)
     }
-  }, [selectedClientId, posts, fetchPosts])
+  }, [selectedClientId, fetchPosts, fetchAssets])
 
   // ── Upload handler ─────────────────────────────────────────────────────────
 
@@ -1198,19 +1167,11 @@ export default function VisualsPage() {
           <option value="published">已发布</option>
         </select>
         <button
-          onClick={handleSync}
-          disabled={!selectedClientId || syncing}
+          onClick={handleRefresh}
+          disabled={!selectedClientId || refreshing}
           className="text-sm px-3 py-1 bg-indigo-500 text-white rounded hover:bg-indigo-600 disabled:opacity-50"
         >
-          {syncing ? 'Syncing…' : '↓ Sync Content Workspace'}
-        </button>
-        <button
-          onClick={handlePushAirtable}
-          disabled={!selectedClientId || pushing}
-          className="text-sm px-3 py-1 bg-emerald-500 text-white rounded hover:bg-emerald-600 disabled:opacity-50"
-          title="Push posts not yet synced to Content Workspace"
-        >
-          {pushing ? 'Pushing…' : '↑ Push to Content Workspace'}
+          {refreshing ? '刷新中…' : '↻ 刷新'}
         </button>
         <span className="text-xs text-gray-400 ml-auto hidden md:block">
           {posts.length} posts · Click any cell to edit · Auto-saves
