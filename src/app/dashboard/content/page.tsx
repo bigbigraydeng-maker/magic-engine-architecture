@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 
 interface Client {
@@ -163,10 +164,11 @@ function CalendarCell({
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ContentBoardPage() {
+  const searchParams = useSearchParams();
   const [clients, setClients] = useState<Client[]>([]);
   const [posts, setPosts] = useState<ContentPost[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedClient, setSelectedClient] = useState('');
+  const [selectedClient, setSelectedClient] = useState(() => searchParams.get('client') ?? '');
   const [selectedStatus, setSelectedStatus] = useState('draft');
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [calYear, setCalYear] = useState(() => new Date().getFullYear());

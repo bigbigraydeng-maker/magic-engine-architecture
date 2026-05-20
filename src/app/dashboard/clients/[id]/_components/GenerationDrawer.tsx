@@ -308,7 +308,7 @@ export function GenerationDrawer({ clientId, open, onClose, executionItemId }: P
                 前往内容板批量检查和审批
               </p>
               <a
-                href="/dashboard/content"
+                href={`/dashboard/content?client=${clientId}`}
                 className="inline-block text-xs bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
               >
                 前往内容板 →

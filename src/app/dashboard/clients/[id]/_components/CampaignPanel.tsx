@@ -718,7 +718,7 @@ function CampaignCard({
             {genResult && (
               <div className="flex flex-col gap-1.5">
                 <a
-                  href="/dashboard/content"
+                  href={`/dashboard/content?client=${clientId}`}
                   className="block text-center text-xs text-indigo-600 hover:underline"
                 >
                   ✓ 已生成 {genResult.count} 条草稿 → 前往内容板审批 ↗

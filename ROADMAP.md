@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-21 03:35 NZST · 当前阶段：**⚠️ P8.3.2 代码已完成，PM 需在 Render 填 `ADMIN_EMAILS` 才能上线 → 完成后解锁 Phase 12.Q**。四 Agent 架构（张骞→华佗→诸葛亮→鲁班）已确定，诸葛亮登记为 Phase 12.G。Phase 12.A/B 已完成；Phase 12.Q 内容质量闭环已登记待开工。
+> 最后更新：2026-05-21 04:12 NZST · 当前阶段：**Phase 12.H — GitHub CMS 执行闭环（P1 博客推PR + P2 SEO Fix UI），当前 session 开工**。Phase 12.Q + 12.G 已完成；GitHub CMS 连接器已接通（CTS Tours chinatravel 仓库）。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -40,17 +40,18 @@
 ✅ Phase 12.A    飞轮数据骨架 + CTS GEO 端到端 demo（15 任务全部完成，2026-05-17）
 ✅ Phase 12.B    SEO/Ads/社媒 adapter 接入（B.1–B.4 已完成，2026-05-18）
 ✅ UX 基础修复   全站标题/Login try-catch/客户可见供应商名/WorkflowProgress/ContentHub 简化（2026-05-20）
-⚠️  P8.3.2       代码完成，等 PM 在 Render 填 ADMIN_EMAILS（解锁 Phase 12.Q）
-📋 Phase 12.Q   内容质量闭环（已登记，前置阻塞 P8.3.2 Render 配置）
-📋 Phase 12.G   诸葛亮策略调度引擎（已登记，前置 Phase 12.Q，约 3 session）
+✅ Phase 12.Q   内容质量闭环（已完成，2026-05-21）
+✅ Phase 12.G   诸葛亮策略调度引擎（P12.G.1–G.5 全部完成，2026-05-21）
+🔥 Phase 12.H   GitHub CMS 执行闭环（P1 博客推PR + P2 SEO Fix UI，当前 session）
 📋 Phase 13     Production Package / 生产订单聚合层（已登记，待排期）
 🔄 Phase 9.0    Visual Queue UX Polish（部分完成，未收尾）
 📋 Phase 9      报告化 + 客户 Portal
 📋 Phase 10     多语言 + Magic Lab Academy 沉淀
-📋 Phase 14     Website Connector / 网站直连执行闭环（战略确认，待排期）
+📋 Phase 14     Website Connector / 网站直连执行闭环（⭐ WordPress 连接器近期优先 — P14.A.5）
 📋 Phase 15     Reputation Engine / 口碑监控与执行闭环（战略确认，待排期）
 📋 Phase 16     Competitor Intelligence / 竞品雷达 + 信号驱动执行（战略确认，待排期）
 📋 Phase 17     Unified Data Pullback / 统一数据回流层（战略确认，待排期）
+📋 Phase 18     Ads Execution Engine / 广告执行引擎（Meta + Google + TikTok，已登记）
 ```
 
 **Phase 7 核心战略**：双信号博客（Dual-Signal Blog）— 每篇文章同时携带 SEO 信号（Google 排名）和 GEO 信号（AI 推荐），选题由 AI Tracker 弱项 × SEMrush 低KD机会交叉驱动，形成数据自强化飞轮。
@@ -1511,6 +1512,33 @@ Magic Engine 护城河 = 这条链完整闭合。当前链条：张骞 ✅、华
 
 ---
 
+## Phase 12.H — GitHub CMS 执行闭环 🔥 当前 session 开工（2026-05-21）
+
+> **背景**：GitHub CMS 连接器已接通（CTS Tours chinatravel 仓库），但"执行"按钮尚未连线——博客生成结果只存 Supabase DB，SEO 修复后端已建但没有 UI 入口。Phase 12.H 把这两个缺口补上，让 ME 真正从「给建议的工具」变成「替你改网站的引擎」。
+
+### 核心目标
+
+```
+博客生成 → 推 GitHub PR → 客户 merge → 网站上线
+SEO 诊断 → Fix 按钮 → 推 GitHub PR → 客户 merge → 元数据修复
+```
+
+### 任务清单
+
+| ID | 任务 | 依赖 | 状态 |
+|----|------|------|------|
+| **P12.H.1** | `blog-publisher.ts` — 把 `blog_posts` 记录序列化为仓库文件格式，调 `github-client.commitFile` + `createPullRequest`，回写 `flywheel_actions` | GitHub CMS 连接器 ✅ | 📋 |
+| **P12.H.2** | Blog Studio UI — 博客详情页加「推送到网站」按钮，调 `/api/clients/[id]/cms/publish-blog`，显示 PR 链接 | P12.H.1 | 📋 |
+| **P12.H.3** | SEO Fix UI — 执行看板 SEO 类 action 加「Fix」按钮，调现有 `/api/clients/[id]/seo-fix`，显示 PR 链接 | 后端已有 ✅ | 📋 |
+
+### 验收关卡
+
+1. FDE 在 Blog Studio 点「推送到网站」→ CTS chinatravel 仓库出现新 PR，包含文章内容
+2. FDE 在执行看板点 SEO action 的「Fix」→ 仓库出现元数据修改 PR
+3. `flywheel_actions` 有对应记录（含 PR URL）
+
+---
+
 ## Phase 13 — Production Package（生产订单聚合层）📋 已登记，未开工
 
 > **背景**：当前 `content_posts / blog_posts / reels_drafts / visual_assets` 各自为政，`execution_items.content_post_id` 是 1:1 链路，无法表达"一个执行项 → 一组产物"的批次语义。Production Package 是六维诊断后的**统一生产订单聚合层**，把分散产物按维度 + 上下文聚合成可审核、可追溯、可归因的批次。
@@ -1828,6 +1856,68 @@ AI 可见度层（ME 独有 ✅）
 1. **月报自动生成**（Insight Reports 模块）
 2. **飞轮归因**（action → outcome 真实数据验证）
 3. **Client Portal**（客户自助查看跨渠道数据看板）
+
+---
+
+## Phase 18 — Ads Execution Engine（广告执行引擎）📋 已登记，待排期
+
+> **登记日期**：2026-05-21 · **状态**：战略方向确认，三平台优先级已定
+>
+> **背景**：诊断层已能发现广告问题（华佗 Ads 维度），诸葛亮能输出广告优先行动，但鲁班目前没有广告执行能力。Phase 18 补上这块缺口，让 ME 能替客户在三个广告平台上自动执行「安全可逆」的操作，同时保留人工审核入口。
+
+### 三平台优先级
+
+| 优先级 | 平台 | 状态 | 执行渠道 |
+|--------|------|------|---------|
+| **P1** | Meta Ads | ✅ Meta MCP 已有 | Meta Graph API |
+| **P2** | Google Ads | 🔄 Developer token 申请中 | Google Ads API |
+| **P3** | TikTok Ads | ❌ 未接入 | TikTok Marketing API |
+
+### Fix vs Talk to Us 边界（不可降级）
+
+```
+✅ 自动执行（Fix）：
+  - 暂停亏损广告 / 关键词
+  - 调整出价（±20% 安全幅度）
+  - 添加否定关键词
+  - 启停已有广告组
+  - 调整受众排除
+
+🔴 人工介入（Talk to Us）：
+  - 重构广告系列结构
+  - 预算策略调整（超过阈值）
+  - 创意方向决策
+  - 跨账户操作
+  - 新建广告系列
+```
+
+### Phase 18.A — Meta Ads MVP（优先开工）
+
+| ID | 任务 | 依赖 |
+|----|------|------|
+| **P18.A.1** | 广告诊断 → Fix 按钮：执行看板 Ads action 接线 Meta MCP | 诸葛亮 ✅ |
+| **P18.A.2** | 暂停亏损广告 / 调整出价 — 调用 Meta Graph API，回写 `flywheel_actions` | P18.A.1 |
+| **P18.A.3** | 操作审计日志：每次广告变更记录 before/after snapshot，支持回滚 | P18.A.2 |
+
+### Phase 18.B — Google Ads（Developer token 到位后开工）
+
+| ID | 任务 |
+|----|------|
+| **P18.B.1** | Google Ads API 接入（Service Account + developer token） |
+| **P18.B.2** | 关键词出价调整 + 否定词添加 |
+| **P18.B.3** | 广告系列启停 |
+
+### Phase 18.C — TikTok Ads（Phase 18.B 完成后排期）
+
+- TikTok Marketing API 接入
+- 广告投放效果数据回流
+- 暂停 / 调整出价操作
+
+### 安全边界
+
+- 所有操作必须校验 `client_id` + 广告账户 ownership（防租户穿越）
+- 出价调整幅度硬限 ±20%（超出必须走 Talk to Us）
+- 每次操作在 `flywheel_actions` 有完整记录 + before/after snapshot
 
 ---
 

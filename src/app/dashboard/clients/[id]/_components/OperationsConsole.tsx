@@ -538,7 +538,7 @@ export function OperationsConsole({ clientId }: OperationsConsoleProps) {
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
           <h2 className="text-sm font-semibold text-gray-900">最近生成的帖子</h2>
-          <a href="/dashboard/content" className="text-xs text-indigo-600 hover:underline">
+          <a href={`/dashboard/content?client=${clientId}`} className="text-xs text-indigo-600 hover:underline">
             查看全部 →
           </a>
         </div>
