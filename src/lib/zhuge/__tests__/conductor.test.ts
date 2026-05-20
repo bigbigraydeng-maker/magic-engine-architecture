@@ -251,6 +251,11 @@ describe('validateAction()', () => {
     expect(result.executable_by).toBe('luban.generate_blog_post')
   })
 
+  it('normalises "geo" to "ai_visibility" (prompt schema alias)', () => {
+    const result = validateAction({ ...SAMPLE_ACTION, dimension: 'geo' }, 1)
+    expect(result.dimension).toBe('ai_visibility')
+  })
+
   it('defaults invalid dimension to "seo"', () => {
     const result = validateAction({ ...SAMPLE_ACTION, dimension: 'unknown' }, 1)
     expect(result.dimension).toBe('seo')

@@ -192,7 +192,9 @@ function parseOutput(raw: string): PriorityAction[] {
   return parsed.top_actions.map((item, i) => validateAction(item, i + 1))
 }
 
-const VALID_DIMENSIONS = new Set(['seo', 'geo', 'ai_visibility', 'ads', 'social'])
+// Prompt schema uses 'geo'; runtime must normalise to canonical 'ai_visibility'
+const GEO_ALIASES: Record<string, string> = { geo: 'ai_visibility' }
+const VALID_DIMENSIONS = new Set(['seo', 'ai_visibility', 'ads', 'social'])
 const VALID_IMPACTS = new Set(['low', 'medium', 'high'])
 const VALID_MODES = new Set(['in_house', 'third_party', 'external_manual'])
 
@@ -200,8 +202,9 @@ function validateAction(raw: unknown, fallbackRank: number): PriorityAction {
   if (!raw || typeof raw !== 'object') throw new Error(`Action ${fallbackRank} is not an object`)
   const a = raw as Record<string, unknown>
 
-  const dimension = typeof a.dimension === 'string' && VALID_DIMENSIONS.has(a.dimension)
-    ? (a.dimension as PriorityAction['dimension'])
+  const rawDim = typeof a.dimension === 'string' ? (GEO_ALIASES[a.dimension] ?? a.dimension) : ''
+  const dimension = VALID_DIMENSIONS.has(rawDim)
+    ? (rawDim as PriorityAction['dimension'])
     : 'seo'
 
   return {

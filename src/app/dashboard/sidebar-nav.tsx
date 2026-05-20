@@ -24,17 +24,6 @@ const adminSections: NavSection[] = [
     ],
   },
   {
-    title: '六大支柱',
-    items: [
-      { href: '/dashboard/keywords',      label: 'SEO Intelligence', emoji: '🔍' },
-      { href: '/dashboard/ai-visibility', label: 'AI 可见度',        emoji: '🤖' },
-      { href: '/dashboard/content',       label: 'Social Matrix',    emoji: '📱' },
-      { label: 'Ads Intelligence', emoji: '📢', soon: true },
-      { label: '口碑管理',          emoji: '⭐', soon: true },
-      { label: '竞品分析',          emoji: '🏆', soon: true },
-    ],
-  },
-  {
     title: '工具',
     items: [
       { href: '/dashboard/visuals',               label: 'Launch Hub',     emoji: '🚀' },

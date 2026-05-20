@@ -10,15 +10,6 @@ import { ZhugePriorityWidget } from './_components/ZhugePriorityWidget';
 import { ZhugeDrawer } from './_components/ZhugeDrawer';
 import type { ClientDiscoveryRow } from '@/lib/zhangqian/types';
 
-type PillarTab = 'social' | 'seo' | 'ai_visibility' | 'ads' | 'diagnostic'
-
-const PILLAR_TABS: { id: PillarTab; label: string; soon?: boolean }[] = [
-  { id: 'social',        label: '📱 Social' },
-  { id: 'seo',           label: '🔍 SEO' },
-  { id: 'ai_visibility', label: '🤖 AI 可见度' },
-  { id: 'ads',           label: '📢 Ads',  soon: true },
-  { id: 'diagnostic',    label: '🩺 诊断' },
-]
 
 const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? '';
 
@@ -186,94 +177,63 @@ function BrandHealthWidget({ clientId }: { clientId: string }) {
   );
 }
 
-// ─── Pillar Tab Content Components ───────────────────────────────────────────
+// ─── ToolCard ─────────────────────────────────────────────────────────────────
 
-function PillarCard({ href, icon, title, desc }: { href: string; icon: string; title: string; desc: string }) {
-  return (
-    <Link
-      href={href}
-      className="flex items-center gap-3 p-4 rounded-xl border border-gray-200 bg-white hover:border-indigo-300 hover:shadow-sm transition-all group"
-    >
-      <span className="text-2xl">{icon}</span>
+type ToolBadge = 'in_house' | 'external'
+
+const BADGE_CONFIG: Record<ToolBadge, { icon: string; label: string; cls: string }> = {
+  in_house: { icon: '🖥️', label: '系统内',  cls: 'bg-indigo-50 text-indigo-600 border-indigo-100' },
+  external: { icon: '📞', label: '外部执行', cls: 'bg-amber-50  text-amber-600  border-amber-100'  },
+}
+
+function ToolCard({
+  href, icon, title, desc, badge, soon,
+}: {
+  href?: string
+  icon: string
+  title: string
+  desc: string
+  badge: ToolBadge
+  soon?: boolean
+}) {
+  const b = BADGE_CONFIG[badge]
+  const inner = (
+    <div className={`flex items-center gap-3 p-4 rounded-xl border bg-white transition-all ${
+      soon
+        ? 'border-dashed border-gray-200 opacity-60 cursor-not-allowed'
+        : href
+          ? 'border-gray-200 hover:border-indigo-300 hover:shadow-sm group cursor-pointer'
+          : 'border-gray-200'
+    }`}>
+      <span className="text-2xl flex-shrink-0">{icon}</span>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-gray-900">{title}</p>
-        <p className="text-xs text-gray-500 mt-0.5">{desc}</p>
+        <div className="flex items-center gap-2 mb-0.5">
+          <p className="text-sm font-semibold text-gray-900">{title}</p>
+          <span className={`text-[10px] font-medium border rounded-full px-1.5 py-0.5 leading-none ${b.cls}`}>
+            {b.icon} {b.label}
+          </span>
+          {soon && <span className="text-[10px] bg-gray-100 text-gray-400 rounded-full px-1.5 py-0.5 leading-none">Soon</span>}
+        </div>
+        <p className="text-xs text-gray-500">{desc}</p>
       </div>
-      <span className="text-gray-300 group-hover:text-indigo-400 transition-colors">→</span>
-    </Link>
-  )
-}
-
-function ComingSoonCard({ icon, title }: { icon: string; title: string }) {
-  return (
-    <div className="flex items-center gap-3 p-4 rounded-xl border border-dashed border-gray-200 bg-gray-50">
-      <span className="text-2xl opacity-50">{icon}</span>
-      <div>
-        <p className="text-sm font-semibold text-gray-400">{title}</p>
-        <p className="text-xs text-gray-400 mt-0.5">即将推出</p>
-      </div>
+      {href && !soon && <span className="text-gray-300 group-hover:text-indigo-400 transition-colors flex-shrink-0">→</span>}
     </div>
   )
-}
-
-function SeoPanel({ clientId }: { clientId: string }) {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      <PillarCard href={`/dashboard/clients/${clientId}/site-audit/pages`} icon="🔍" title="站点审计" desc="爬取分析网站页面健康度" />
-      <PillarCard href={`/dashboard/clients/${clientId}/seo-gap`} icon="📊" title="SEO Gap 分析" desc="发现关键词覆盖缺口" />
-      <PillarCard href={`/dashboard/clients/${clientId}/strategy`} icon="🎯" title="内容策略" desc="基于数据制定内容方向" />
-      <PillarCard href={`/dashboard/clients/${clientId}/blog`} icon="📝" title="博客管理" desc="双信号博客生产与管理" />
-    </div>
-  )
-}
-
-function AiVisibilityPanel({ clientId }: { clientId: string }) {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      <PillarCard href={`/dashboard/clients/${clientId}/zhangqian`} icon="🗺️" title="张骞发现" desc="品牌健康全面扫描与诊断" />
-      <PillarCard href={`/dashboard/ai-visibility/${clientId}`} icon="🤖" title="AI 可见度追踪" desc="监控 AI 搜索中的品牌曝光" />
-      <PillarCard href={`/dashboard/geo-composer/${clientId}`} icon="🌐" title="GEO Composer" desc="部署 AI 搜索优化指令" />
-    </div>
-  )
-}
-
-function AdsPanel({ clientId }: { clientId: string }) {
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg">
-        <span className="text-sm">🚧</span>
-        <p className="text-xs text-amber-700">Ads Intelligence 即将推出，广告连接器目前可提前配置。</p>
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <PillarCard href={`/dashboard/clients/${clientId}/connectors`} icon="🔗" title="广告连接器" desc="连接 Meta · Google 广告账户" />
-        <ComingSoonCard icon="📢" title="Meta Ads 诊断" />
-        <ComingSoonCard icon="📊" title="Google Ads 诊断" />
-        <ComingSoonCard icon="🎵" title="TikTok Ads 诊断" />
-      </div>
-    </div>
-  )
-}
-
-function DiagnosticPanel({ clientId }: { clientId: string }) {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      <PillarCard href={`/dashboard/clients/${clientId}/diagnostic`} icon="🩺" title="品牌诊断" desc="口碑与竞品六维度诊断分析" />
-      <PillarCard href={`/dashboard/clients/${clientId}/diagnostic/report`} icon="📋" title="完整诊断报告" desc="六维度详细诊断结果" />
-      <ComingSoonCard icon="⭐" title="评价监控" />
-      <ComingSoonCard icon="🏆" title="竞品追踪" />
-    </div>
-  )
+  if (href && !soon) return <Link href={href}>{inner}</Link>
+  return inner
 }
 
 // ─── Workflow Progress ────────────────────────────────────────────────────────
 
 function WorkflowProgress({
   discoveryConfirmed,
-  hasActiveBrief,
+  hasCompletedDiagnostic,
+  hasPrescription,
   clientId,
 }: {
   discoveryConfirmed: boolean
-  hasActiveBrief: boolean | null
+  hasCompletedDiagnostic: boolean
+  hasPrescription: boolean
   clientId: string
 }) {
   const steps = [
@@ -284,13 +244,19 @@ function WorkflowProgress({
       href: `/dashboard/clients/${clientId}/zhangqian`,
     },
     {
-      label: 'Master Brief',
+      label: '深度诊断',
       sublabel: '华佗',
-      done: hasActiveBrief === true,
-      href: null,
+      done: hasCompletedDiagnostic,
+      href: `/dashboard/clients/${clientId}/diagnostic`,
     },
     {
-      label: '执行优化',
+      label: '处方制定',
+      sublabel: '诸葛亮',
+      done: hasPrescription,
+      href: `/dashboard/clients/${clientId}/prescription/new`,
+    },
+    {
+      label: '执行追踪',
       sublabel: '鲁班',
       done: false,
       href: `/dashboard/clients/${clientId}/execution`,
@@ -360,6 +326,10 @@ export default function ClientDetailPage() {
   const [loading, setLoading] = useState(true);
   const [hasActiveBrief, setHasActiveBrief] = useState<boolean | null>(null);
   const [discoveryConfirmed, setDiscoveryConfirmed] = useState<boolean>(false);
+  const [hasCompletedDiagnostic, setHasCompletedDiagnostic] = useState<boolean>(false);
+  const [hasPrescription, setHasPrescription] = useState<boolean>(false);
+  // Derived: 华佗 analysis is "done" if either diagnostic ran or prescription generated
+  const huatuoDone = hasCompletedDiagnostic || hasPrescription;
 
   // ?exec=<itemId> 来自执行看板的「在社媒矩阵中执行」跳转：
   // 自动打开 GenerationDrawer 并把生成的内容关联回该执行项（内容飞轮闭环）
@@ -368,17 +338,22 @@ export default function ClientDetailPage() {
   // ?brief=1 (from 张骞 confirm) auto-opens the brief settings drawer
   const [settingsOpen, setSettingsOpen] = useState(searchParams.get('brief') === '1');
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('brief');
-  const [pillar, setPillar] = useState<PillarTab>('social');
   const [zhugeDrawerOpen, setZhugeDrawerOpen] = useState(false);
   const [zhugeRefreshKey, setZhugeRefreshKey] = useState(0);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [clientRes, briefRes, discoveryRes] = await Promise.all([
+      const [clientRes, briefRes, discoveryRes, diagnosticRes, prescriptionRes] = await Promise.all([
         fetch(`/api/clients/${clientId}`),
         fetch(`/api/clients/${clientId}/brief?status=active`),
         fetch(`/api/clients/${clientId}/zhangqian/latest`, {
+          headers: { Authorization: `Bearer ${API_KEY}` },
+        }).catch(() => null),
+        fetch(`/api/clients/${clientId}/diagnostic/latest`, {
+          headers: { Authorization: `Bearer ${API_KEY}` },
+        }).catch(() => null),
+        fetch(`/api/clients/${clientId}/prescriptions/latest-draft`, {
           headers: { Authorization: `Bearer ${API_KEY}` },
         }).catch(() => null),
       ]);
@@ -396,6 +371,8 @@ export default function ClientDetailPage() {
         const data = await discoveryRes.json();
         setDiscoveryConfirmed(Boolean(data?.discovery?.confirmed_at));
       }
+      setHasCompletedDiagnostic(diagnosticRes?.ok ?? false);
+      setHasPrescription(prescriptionRes?.ok ?? false);
     } finally {
       setLoading(false);
     }
@@ -465,10 +442,11 @@ export default function ClientDetailPage() {
         </div>
       </div>
 
-      {/* Workflow progress — 张骞 → MB → 执行 */}
+      {/* Workflow progress — 张骞 → 华佗分析 → 鲁班执行 */}
       <WorkflowProgress
         discoveryConfirmed={discoveryConfirmed}
-        hasActiveBrief={hasActiveBrief}
+        hasCompletedDiagnostic={hasCompletedDiagnostic}
+        hasPrescription={hasPrescription}
         clientId={clientId}
       />
 
@@ -502,34 +480,41 @@ export default function ClientDetailPage() {
         </div>
       )}
 
-      {/* Six Pillar Tabs */}
-      <div>
-        <div className="flex gap-1 border-b border-gray-200 overflow-x-auto">
-          {PILLAR_TABS.map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setPillar(tab.id)}
-              className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${
-                pillar === tab.id
-                  ? 'border-indigo-500 text-indigo-700'
-                  : 'border-transparent text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              {tab.label}
-              {tab.soon && (
-                <span className="text-[10px] bg-amber-100 text-amber-600 px-1.5 py-0.5 rounded-full leading-none">Soon</span>
-              )}
-            </button>
-          ))}
+      {/* ── Zone A: 内容生产 ─────────────────────────────────────────────────── */}
+      <section>
+        <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">内容生产</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <ToolCard href={`/dashboard/clients/${clientId}/blog`}           icon="📝" title="博客"           desc="双信号博客生产与管理"            badge="in_house" />
+          <ToolCard href={`/dashboard/content?client=${clientId}`}         icon="📱" title="社媒矩阵"       desc="Campaign · 排期 · 多平台发布"    badge="in_house" />
+          <ToolCard href={`/dashboard/geo-composer/${clientId}`}           icon="🌐" title="GEO Composer"  desc="部署 AI 搜索优化指令"            badge="in_house" />
+          <ToolCard href={`/dashboard/ai-visibility/${clientId}`}          icon="🤖" title="AI 可见度追踪" desc="监控 AI 搜索中的品牌曝光"         badge="in_house" />
+          <ToolCard href={`/dashboard/clients/${clientId}/connectors`}     icon="🔗" title="广告连接器"    desc="连接 Meta · Google 广告账户"      badge="in_house" />
+          <ToolCard href={`/dashboard/visuals?client=${clientId}`}         icon="🚀" title="Launch Hub"    desc="Reels · 图片 · 视频素材生产"      badge="in_house" />
         </div>
-        <div className="pt-4">
-          {pillar === 'social'        && <ContentHub clientId={clientId} />}
-          {pillar === 'seo'           && <SeoPanel clientId={clientId} />}
-          {pillar === 'ai_visibility' && <AiVisibilityPanel clientId={clientId} />}
-          {pillar === 'ads'           && <AdsPanel clientId={clientId} />}
-          {pillar === 'diagnostic'    && <DiagnosticPanel clientId={clientId} />}
+      </section>
+
+      {/* ── Zone B: 诊断与分析 ───────────────────────────────────────────────── */}
+      <section>
+        <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">诊断与分析</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <ToolCard href={`/dashboard/clients/${clientId}/zhangqian`}          icon="🗺️" title="张骞发现"       desc="品牌健康全面扫描"                 badge="in_house" />
+          <ToolCard href={`/dashboard/clients/${clientId}/diagnostic`}         icon="🩺" title="华佗深度诊断"   desc="六维度诊断分析"                   badge="in_house" />
+          <ToolCard href={`/dashboard/clients/${clientId}/prescription/new`}   icon="💊" title="华佗处方"       desc="基于诊断的行动路线图"             badge="in_house" />
+          <ToolCard href={`/dashboard/clients/${clientId}/site-audit/pages`}   icon="🔍" title="站点审计"       desc="网站页面健康度分析"               badge="in_house" />
+          <ToolCard href={`/dashboard/clients/${clientId}/seo-gap`}            icon="📊" title="SEO Gap 分析"   desc="发现关键词覆盖缺口"               badge="in_house" />
+          <ToolCard                                                             icon="⭐" title="口碑管理"       desc="Google 评价 · 公众号舆情"        badge="external" soon />
+          <ToolCard                                                             icon="🏆" title="竞品追踪"       desc="持续监控竞品动态"                 badge="external" soon />
         </div>
-      </div>
+      </section>
+
+      {/* ── Zone C: SEO 工具 ──────────────────────────────────────────────────── */}
+      <section>
+        <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">SEO 工具</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <ToolCard href={`/dashboard/clients/${clientId}/strategy`}  icon="🎯" title="内容策略"   desc="基于数据制定内容方向"  badge="in_house" />
+          <ToolCard href={`/dashboard/clients/${clientId}/blog`}      icon="🔑" title="关键词管理" desc="目标关键词与排名追踪"  badge="in_house" />
+        </div>
+      </section>
 
       {/* Generation drawer */}
       <GenerationDrawer

@@ -83,10 +83,16 @@ export function buildSessionKey(
 // ── Persister ─────────────────────────────────────────────────────────────────
 
 /**
- * Persists ZhugeOutput.top_actions to flywheel_actions.
+ * Persists ZhugeOutput in two places:
  *
- * Returns immediately without inserting if an identical session key already
- * exists in flywheel_actions (idempotency guard).
+ * 1. `zhuge_sessions` — stores the FULL output (all 6 dimensions) so the
+ *    ZhugePriorityWidget can restore after navigation. Uses upsert so a
+ *    fresh conduct call always overwrites the previous session for the same
+ *    (client, session_key) pair.
+ *
+ * 2. `flywheel_actions` — still inserts the 4 flywheel-mapped dimensions
+ *    (seo / geo / ads / social) for the data flywheel pipeline. Idempotency
+ *    guard prevents duplicates on repeated opens of the drawer.
  */
 export async function persistZhugeActions(
   supabase: SupabaseClient,
@@ -98,7 +104,25 @@ export async function persistZhugeActions(
     input.diagnosticRunId,
   )
 
-  // Idempotency check — did we already persist actions for this conductor run?
+  // ── 1. Upsert full output into zhuge_sessions (all dimensions) ──────────────
+  const { error: sessionError } = await supabase
+    .from('zhuge_sessions')
+    .upsert(
+      {
+        client_id:    input.clientId,
+        session_key:  sessionKey,
+        output:       input.output,
+        generated_at: input.output.generated_at,
+      },
+      { onConflict: 'client_id,session_key' },
+    )
+
+  if (sessionError) {
+    // Non-fatal: log but continue — flywheel_actions insert still proceeds
+    console.warn('[action-persister] zhuge_sessions upsert failed:', sessionError.message)
+  }
+
+  // ── 2. Idempotency check for flywheel_actions ───────────────────────────────
   const { data: existing, error: checkError } = await supabase
     .from('flywheel_actions')
     .select('id')
@@ -119,7 +143,7 @@ export async function persistZhugeActions(
     }
   }
 
-  // Filter to dimensions that map to a flywheel
+  // Filter to dimensions that map to a flywheel (reputation/competitor skipped here)
   const insertable = input.output.top_actions.filter(
     (a) => DIMENSION_TO_FLYWHEEL[a.dimension] !== undefined,
   )

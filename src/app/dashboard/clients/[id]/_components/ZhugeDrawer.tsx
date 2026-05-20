@@ -82,15 +82,15 @@ function ActionDetailCard({
           onClick={onNavigate}
           className="flex items-center justify-center gap-1.5 w-full py-2.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition-colors"
         >
-          🔨 {route.label}
+          🖥️ 前往工作台 · {route.label}
         </a>
       ) : (
         <div className="flex items-center gap-2 text-xs text-gray-400 bg-gray-50 rounded-lg px-3 py-2">
-          <span>{action.execution_mode === 'external_manual' ? '👤' : '🔗'}</span>
+          <span>{action.execution_mode === 'external_manual' ? '📞' : '🔗'}</span>
           <span>
             {action.execution_mode === 'external_manual'
-              ? 'FDE 负责执行，无法自动触发'
-              : '需要第三方平台操作'}
+              ? '外部执行 · FDE 在系统外完成，请记录后返回更新进度'
+              : '第三方平台 · 需在对应平台操作'}
           </span>
         </div>
       )}
@@ -189,10 +189,10 @@ export function ZhugeDrawer({ clientId, isOpen, onClose, onComplete }: ZhugeDraw
         <div className="shrink-0 border-b border-gray-200 px-5 py-4 flex items-center gap-3">
           <span className="text-xl">🧠</span>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-gray-900">诸葛亮 · 实时优先行动分析</p>
+            <p className="text-sm font-semibold text-gray-900">诸葛亮 · 本周战略建议</p>
             <p className="text-xs text-gray-400 mt-0.5">
               {phase === 'loading' && '正在分析张骞证据 + 华佗诊断，约 20–40 秒…'}
-              {phase === 'done' && output && `已生成 ${output.top_actions.length} 条优先行动`}
+              {phase === 'done' && output && `已生成 ${output.top_actions.length} 条建议 · 点击「前往工作台」直接执行`}
               {phase === 'error' && '分析失败，请检查张骞扫描是否已完成'}
               {phase === 'idle' && ''}
             </p>
@@ -238,7 +238,7 @@ export function ZhugeDrawer({ clientId, isOpen, onClose, onComplete }: ZhugeDraw
           {phase === 'done' && output && (
             <>
               <p className="text-xs text-gray-500 pb-1">
-                优先行动清单 · 按重要程度排序 · 点击「触发鲁班」直接跳转对应工作台
+                本周战略建议 · 按紧迫程度排序 · 点击「前往工作台」执行对应任务
               </p>
 
               {output.top_actions.map((action) => (
