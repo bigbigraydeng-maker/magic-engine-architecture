@@ -329,9 +329,8 @@ export default function ClientDetailPage() {
 
   // ?exec=<itemId> 来自执行看板的「在社媒矩阵中执行」跳转：
   // 自动打开 GenerationDrawer 并把生成的内容关联回该执行项（内容飞轮闭环）
-  // ?generate=1 来自内容板的「+ 生成内容」按钮跳转：直接弹开抽屉
   const execItemId = searchParams.get('exec');
-  const [generationOpen, setGenerationOpen] = useState(Boolean(execItemId) || searchParams.get('generate') === '1');
+  const [generationOpen, setGenerationOpen] = useState(Boolean(execItemId));
   // ?brief=1 (from 张骞 confirm) auto-opens the brief settings drawer
   const [settingsOpen, setSettingsOpen] = useState(searchParams.get('brief') === '1');
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('brief');

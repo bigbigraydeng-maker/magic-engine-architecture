@@ -18,7 +18,6 @@ interface Post {
   format: string | null
   ratio: string | null
   created_at: string
-  airtable_record_id: string | null
 }
 
 interface VisualAsset {

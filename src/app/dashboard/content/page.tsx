@@ -592,7 +592,7 @@ export default function ContentBoardPage() {
           <p className="text-sm text-gray-500 mt-1">{posts.length} 条内容</p>
         </div>
         <Link
-          href="/dashboard/clients"
+          href={selectedClient ? `/dashboard/clients/${selectedClient}/execution` : '/dashboard/clients'}
           className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
         >
           + 生成内容
