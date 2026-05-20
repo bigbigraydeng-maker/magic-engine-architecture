@@ -84,8 +84,16 @@ export async function generatePageUpgrade(
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY environment variable is not set')
 
-  // Step 1: Fetch original content via Jina
-  const jinaResult = await fetchUrlAsMarkdown(req.page_url)
+  // Step 1: Fetch original content via Jina — non-fatal; fall back to title/URL stub
+  let jinaResult: { markdown: string }
+  try {
+    jinaResult = await fetchUrlAsMarkdown(req.page_url)
+  } catch (jinaErr) {
+    console.warn('[upgrade-generator] Jina fetch failed, using stub content:', (jinaErr as Error).message)
+    jinaResult = {
+      markdown: `# ${req.page_title ?? req.topic}\n\nPage URL: ${req.page_url}\n\nContent could not be fetched. Please generate an upgrade based on the brand brief and topic.`,
+    }
+  }
 
   // Step 2: Load brand brief
   const brief = await getActiveBrief(req.client_id)
@@ -114,14 +122,20 @@ export async function generatePageUpgrade(
   const message = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 4096,
+    system: SYSTEM_PROMPT,
     messages: [
-      { role: 'user', content: `${SYSTEM_PROMPT}\n\n${userMessage}` },
+      { role: 'user', content: userMessage },
     ],
   })
 
-  // Step 5: Parse response
-  const raw = message.content[0]?.type === 'text' ? message.content[0].text : '{}'
-  const parsed = JSON.parse(raw) as Partial<{
+  // Step 5: Parse response — strip markdown fences Claude may add despite instructions
+  const rawText = message.content[0]?.type === 'text' ? message.content[0].text : '{}'
+  const raw = rawText
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```\s*$/i, '')
+    .trim()
+
+  let parsed: Partial<{
     enhanced_title: string
     enhanced_meta_title: string
     enhanced_meta_description: string
@@ -129,7 +143,15 @@ export async function generatePageUpgrade(
     word_count: number
     changes_summary: string
     geo_block_html: string
-  }>
+  }> = {}
+
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    // Claude returned non-JSON (e.g. apology text or truncated output).
+    // Fall through with empty parsed — defaults below produce a usable stub.
+    console.error('[upgrade-generator] JSON.parse failed. Raw response:', raw.slice(0, 300))
+  }
 
   // Step 6: Compute cost
   const usage = message.usage

@@ -95,6 +95,6 @@ export async function POST(
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Internal server error'
     console.error('[upgrade POST]', message)
-    return NextResponse.json({ error: 'Upgrade generation failed' }, { status: 500 })
+    return NextResponse.json({ error: `Upgrade generation failed: ${message}` }, { status: 500 })
   }
 }
