@@ -9,6 +9,7 @@ import { LubanChatDrawer } from './_components/LubanChatDrawer'
 import { InlinePrescriptionDrawer } from './_components/InlinePrescriptionDrawer'
 import { ProjectLubanDrawer } from './_components/ProjectLubanDrawer'
 import { ProjectReviewDrawer } from './_components/ProjectReviewDrawer'
+import { ContentStudioDrawer } from './_components/ContentStudioDrawer'
 
 interface PrescriptionMeta {
   id: string
@@ -107,6 +108,9 @@ const STATUS_META: Record<ExecutionItemStatus, { label: string; color: string }>
   completed:   { label: '已完成', color: 'bg-green-100 text-green-700' },
   skipped:     { label: '已跳过', color: 'bg-yellow-100 text-yellow-700' },
 }
+
+// 可在内容工作台（ContentStudioDrawer）生成内容的诊断维度
+const CONTENT_STUDIO_DIMENSIONS = new Set<string>(['seo', 'ai_visibility', 'social'])
 
 const PHASE_LABELS: Record<number, { name: string; color: string }> = {
   1: { name: 'Phase 1 — 即时修复',  color: 'bg-indigo-600' },
@@ -288,6 +292,7 @@ function ExecutionItemRow({
   onAddLog,
   onOpenChat,
   onOpenFlywheel,
+  onOpenStudio,
   onEditItem,
 }: {
   item: ItemWithLogs
@@ -296,6 +301,7 @@ function ExecutionItemRow({
   onAddLog: (id: string, content: string, kind: 'note' | 'blocker') => Promise<void>
   onOpenChat: (item: ItemWithLogs) => void
   onOpenFlywheel: (item: ItemWithLogs, target: ExecutionTarget) => void
+  onOpenStudio: (item: ItemWithLogs) => void
   onEditItem: (itemId: string, fields: { title?: string; description?: string }) => Promise<boolean>
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -451,6 +457,16 @@ function ExecutionItemRow({
                 {fixMeta.label}
               </span>
               {item.outcome && <OutcomeChip outcome={item.outcome} />}
+              {CONTENT_STUDIO_DIMENSIONS.has(item.dimension) && (
+                <button
+                  type="button"
+                  onClick={() => onOpenStudio(item)}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 px-2.5 py-1 rounded-lg transition-colors"
+                  title="打开内容工作台 — 生成 SEO 文章或社媒视频"
+                >
+                  ✨ 生成内容
+                </button>
+              )}
               {execButton}
               {item.logs.some(l => l.kind === 'ai_assist') && (
                 <button
@@ -610,6 +626,7 @@ function PhaseColumn({
   onAddLog,
   onOpenChat,
   onOpenFlywheel,
+  onOpenStudio,
   onAddItem,
   onEditItem,
 }: {
@@ -622,6 +639,7 @@ function PhaseColumn({
   onAddLog: (id: string, content: string, kind: 'note' | 'blocker') => Promise<void>
   onOpenChat: (item: ItemWithLogs) => void
   onOpenFlywheel: (item: ItemWithLogs, target: ExecutionTarget) => void
+  onOpenStudio: (item: ItemWithLogs) => void
   onAddItem: (prescriptionId: string, phase: number, fields: AddItemFields) => Promise<boolean>
   onEditItem: (itemId: string, fields: { title?: string; description?: string }) => Promise<boolean>
 }) {
@@ -678,6 +696,7 @@ function PhaseColumn({
               onAddLog={onAddLog}
               onOpenChat={onOpenChat}
               onOpenFlywheel={onOpenFlywheel}
+              onOpenStudio={onOpenStudio}
               onEditItem={onEditItem}
             />
           ))}
@@ -768,6 +787,7 @@ function PrescriptionGroup({
   onAddLog,
   onOpenChat,
   onOpenFlywheel,
+  onOpenStudio,
   onDerive,
   onAddItem,
   onEditItem,
@@ -778,6 +798,7 @@ function PrescriptionGroup({
   onAddLog: (id: string, content: string, kind: 'note' | 'blocker') => Promise<void>
   onOpenChat: (item: ItemWithLogs) => void
   onOpenFlywheel: (item: ItemWithLogs, target: ExecutionTarget) => void
+  onOpenStudio: (item: ItemWithLogs) => void
   onDerive: (mode: 'supplement' | 'revision', priorId: string, priorLabel: string) => void
   onAddItem: (prescriptionId: string, phase: number, fields: AddItemFields) => Promise<boolean>
   onEditItem: (itemId: string, fields: { title?: string; description?: string }) => Promise<boolean>
@@ -849,6 +870,7 @@ function PrescriptionGroup({
               onAddLog={onAddLog}
               onOpenChat={onOpenChat}
               onOpenFlywheel={onOpenFlywheel}
+              onOpenStudio={onOpenStudio}
               onAddItem={onAddItem}
               onEditItem={onEditItem}
             />
@@ -880,6 +902,8 @@ export default function ExecutionPage() {
   const [lubanInitialMessage, setLubanInitialMessage] = useState('')
   // 当前打开飞轮执行抽屉的执行项 + target
   const [flywheelState, setFlywheelState] = useState<{ item: ItemWithLogs; target: ExecutionTarget } | null>(null)
+  // 当前打开内容工作台的执行项（null = 关闭）
+  const [studioItem, setStudioItem] = useState<ItemWithLogs | null>(null)
   // 内联补充/修订抽屉
   const [deriveDrawer, setDeriveDrawer] = useState<
     { mode: 'supplement' | 'revision'; priorId: string; priorLabel: string } | null
@@ -1187,6 +1211,7 @@ export default function ExecutionPage() {
             onAddLog={handleAddLog}
             onOpenChat={setChatItem}
             onOpenFlywheel={(item, target) => setFlywheelState({ item, target })}
+            onOpenStudio={setStudioItem}
             onDerive={(mode, priorId, priorLabel) => setDeriveDrawer({ mode, priorId, priorLabel })}
             onAddItem={handleAddItem}
             onEditItem={handleEditItem}
@@ -1247,6 +1272,16 @@ export default function ExecutionPage() {
         isOpen={reviewOpen}
         onClose={() => setReviewOpen(false)}
       />
+
+      {/* 内容工作台抽屉 — 诊断驱动的内容生成（SEO 文章 / 社媒视频） */}
+      {studioItem && (
+        <ContentStudioDrawer
+          clientId={clientId}
+          item={studioItem}
+          onClose={() => setStudioItem(null)}
+          onContentGenerated={() => void fetchItems(true)}
+        />
+      )}
     </div>
   )
 }

@@ -5,6 +5,8 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import type { BlogOpportunity, ContentAuditResult } from '@/types/magic-engine';
 
+const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? '';
+
 interface BlogPostSummary {
   id: string;
   mode: string;
@@ -53,6 +55,13 @@ export default function ClientBlogPage() {
     audit: ContentAuditResult;
   } | null>(null);
 
+  // ── Free keyword generation form ──────────────────────────────────────────
+  const [freeFormOpen, setFreeFormOpen] = useState(false);
+  const [freeKeyword, setFreeKeyword] = useState('');
+  const [freeMode, setFreeMode] = useState<'unified' | 'geo_only'>('unified');
+  const [freeWordCount, setFreeWordCount] = useState(1200);
+  const [freeGenerating, setFreeGenerating] = useState(false);
+
   const flash = (msg: string, ok: boolean) => {
     setActionMsg(msg);
     setActionOk(ok);
@@ -86,6 +95,42 @@ export default function ClientBlogPage() {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
+  const handleFreeGenerate = async () => {
+    const kw = freeKeyword.trim();
+    if (!kw) return;
+    setFreeGenerating(true);
+    flash('✨ Generating blog post… this may take 20–30s', true);
+    try {
+      const res = await fetch(`/api/clients/${clientId}/blog`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
+        body: JSON.stringify({
+          mode: freeMode,
+          topic: kw,
+          source_query_text: kw,
+          word_count_target: freeWordCount,
+          skip_audit: false,
+        }),
+      });
+      const j = await res.json();
+      if (!res.ok || !j.success) throw new Error(j.error ?? 'Generation failed');
+      if (j.action === 'upgrade' && j.audit) {
+        setUpgradeRec({ opp: { query_id: kw, query_text: kw, weakness_score: 0, engines_missing: [], total_runs_checked: 0 }, audit: j.audit as ContentAuditResult });
+        setActionMsg('');
+        setActionOk(null);
+      } else {
+        flash(`✓ Blog post created ($${j.cost_usd?.toFixed(4) ?? '?'}) — review it below`, true);
+        setFreeKeyword('');
+        setFreeFormOpen(false);
+        await fetchAll();
+      }
+    } catch (err: unknown) {
+      flash(err instanceof Error ? err.message : 'Generation failed', false);
+    } finally {
+      setFreeGenerating(false);
+    }
+  };
+
   const handleGenerate = async (opp: BlogOpportunity, skipAudit = false) => {
     setGenerating(opp.query_id);
     setUpgradeRec(null);
@@ -98,7 +143,7 @@ export default function ClientBlogPage() {
     try {
       const res = await fetch(`/api/clients/${clientId}/blog`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
         body: JSON.stringify({
           mode: 'geo_only',
           topic: opp.query_text,
@@ -154,6 +199,100 @@ export default function ClientBlogPage() {
           <span className={`text-sm font-medium ml-2 ${actionOk ? 'text-green-600' : 'text-red-600'}`}>
             {actionMsg}
           </span>
+        )}
+      </div>
+
+      {/* ── Free Keyword Generation ───────────────────────────────── */}
+      <div className="bg-white rounded-xl border border-gray-200">
+        <button
+          onClick={() => setFreeFormOpen(v => !v)}
+          className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-gray-50 transition-colors rounded-xl"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-lg">✍️</span>
+            <div>
+              <p className="text-sm font-semibold text-gray-900">Generate Article from Keyword</p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Uses active Master Brief + current Campaign — results stay on-brand &amp; on-campaign
+              </p>
+            </div>
+          </div>
+          <span className="text-gray-400 text-sm">{freeFormOpen ? '▲' : '▼'}</span>
+        </button>
+
+        {freeFormOpen && (
+          <div className="border-t border-gray-100 px-5 py-4 space-y-4">
+            {/* Keyword input */}
+            <div>
+              <label className="block text-xs font-semibold text-gray-600 mb-1">
+                Keyword / Topic <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={freeKeyword}
+                onChange={e => setFreeKeyword(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !freeGenerating) void handleFreeGenerate(); }}
+                placeholder='e.g. "best guided tours New Zealand" or "NZ travel itinerary 14 days"'
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div className="flex flex-wrap gap-4">
+              {/* Mode */}
+              <div className="flex-1 min-w-[160px]">
+                <label className="block text-xs font-semibold text-gray-600 mb-1">Mode</label>
+                <div className="flex gap-2">
+                  {([['unified', '🔀 SEO + GEO'], ['geo_only', '🤖 GEO only']] as const).map(([val, label]) => (
+                    <button
+                      key={val}
+                      onClick={() => setFreeMode(val)}
+                      className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-medium border transition-colors ${
+                        freeMode === val
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-gray-400 mt-1">
+                  {freeMode === 'unified' ? 'SEO keywords + AI entity signals' : 'AI visibility signals only'}
+                </p>
+              </div>
+
+              {/* Word count */}
+              <div className="flex-1 min-w-[120px]">
+                <label className="block text-xs font-semibold text-gray-600 mb-1">
+                  Target words
+                </label>
+                <select
+                  value={freeWordCount}
+                  onChange={e => setFreeWordCount(Number(e.target.value))}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-800 focus:border-indigo-500 focus:outline-none"
+                >
+                  <option value={800}>~800</option>
+                  <option value={1000}>~1,000</option>
+                  <option value={1200}>~1,200</option>
+                  <option value={1500}>~1,500</option>
+                  <option value={2000}>~2,000</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                onClick={() => void handleFreeGenerate()}
+                disabled={freeGenerating || !freeKeyword.trim()}
+                className="px-5 py-2 text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg transition-colors"
+              >
+                {freeGenerating ? '⏳ Generating…' : '✨ Generate'}
+              </button>
+              <p className="text-[11px] text-gray-400">
+                ~20–30s · Brief + Campaign context auto-injected
+              </p>
+            </div>
+          </div>
         )}
       </div>
 

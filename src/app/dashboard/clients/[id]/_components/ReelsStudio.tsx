@@ -36,6 +36,10 @@ interface CampaignBrief {
 
 interface Props {
   clientId: string
+  /** Pre-select this campaign in the dropdown — keeps generated reels on-campaign. */
+  defaultCampaignId?: string
+  /** Fired after a new draft is generated — lets a host (Content Studio) link it back. */
+  onDraftGenerated?: () => void
 }
 
 // ─── Status badge ──────────────────────────────────────────────────────────────
@@ -65,11 +69,11 @@ const FIELD_LABELS: Record<string, string> = {
 
 // ─── Main component ────────────────────────────────────────────────────────────
 
-export function ReelsStudio({ clientId }: Props) {
+export function ReelsStudio({ clientId, defaultCampaignId, onDraftGenerated }: Props) {
   const [drafts, setDrafts] = useState<ReelsDraft[]>([])
   const [activeDraft, setActiveDraft] = useState<ReelsDraft | null>(null)
   const [campaigns, setCampaigns] = useState<CampaignBrief[]>([])
-  const [selectedCampaignId, setSelectedCampaignId] = useState<string>('')
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string>(defaultCampaignId ?? '')
 
   const [generating, setGenerating] = useState(false)
   const [savingField, setSavingField] = useState<string | null>(null)
@@ -219,6 +223,7 @@ export function ReelsStudio({ clientId }: Props) {
       if (data.success && data.draft) {
         setDrafts(prev => [data.draft!, ...prev])
         setActiveDraft(data.draft!)
+        onDraftGenerated?.()
       } else {
         alert(data.error ?? 'Generation failed')
       }

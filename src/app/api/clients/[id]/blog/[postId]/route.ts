@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireBearerToken } from '@/lib/validation-utils'
+import { countWords } from '@/lib/blog/generator'
 import type { BlogPost, BlogStatus } from '@/types/magic-engine'
 
 /**
@@ -8,8 +9,9 @@ import type { BlogPost, BlogStatus } from '@/types/magic-engine'
  * Full blog post detail (including html_body + geo_html_snapshot).
  *
  * PATCH /api/clients/[id]/blog/[postId]
- * Update mutable fields: status, featured_image_url, slug.
- * Body: { status?, featured_image_url?, slug? }
+ * Update mutable fields: status, featured_image_url, slug, and article content
+ * (title, meta_title, meta_description, html_body) for manual FDE edits.
+ * Body: { status?, featured_image_url?, slug?, title?, meta_title?, meta_description?, html_body? }
  *
  * DELETE /api/clients/[id]/blog/[postId]
  * Permanently remove a blog post.
@@ -68,6 +70,10 @@ export async function PATCH(
       status?: BlogStatus
       featured_image_url?: string
       slug?: string
+      title?: string
+      meta_title?: string
+      meta_description?: string
+      html_body?: string
     }
 
     const VALID_STATUSES: BlogStatus[] = ['draft', 'approved', 'published', 'rejected']
@@ -83,6 +89,14 @@ export async function PATCH(
     if (body.featured_image_url !== undefined) patch.featured_image_url = body.featured_image_url
     if (body.slug !== undefined)               patch.slug = body.slug?.slice(0, 120)
     if (body.status === 'published')           patch.published_at = new Date().toISOString()
+    // Manual FDE content edits
+    if (body.title !== undefined)              patch.title = body.title.slice(0, 200)
+    if (body.meta_title !== undefined)         patch.meta_title = body.meta_title.slice(0, 60)
+    if (body.meta_description !== undefined)   patch.meta_description = body.meta_description.slice(0, 155)
+    if (body.html_body !== undefined) {
+      patch.html_body  = body.html_body
+      patch.word_count = countWords(body.html_body)
+    }
 
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ success: false, error: 'No valid fields to update' }, { status: 400 })

@@ -13,6 +13,7 @@
 
 import { supabaseAdmin } from '../supabase'
 import { getActiveBrief, formatBriefForPrompt } from '../content/brief-injector'
+import { getActiveCampaigns, formatCampaignForPrompt } from '../content/campaign-injector'
 import { getActiveGeoHtml } from '../geo/html-generator'
 import { callClaudeWithDocs, parseJsonResponse } from '../anthropic/client'
 import { generateVisualBrief } from '../content/visual-brief-generator'
@@ -79,11 +80,17 @@ export async function generateBlogPost(
 
   if (!clientData) throw new Error('Client not found')
 
-  // 2. Load Master Brief
-  const brief = await getActiveBrief(req.client_id)
+  // 2. Load Master Brief + active Campaign in parallel
+  const [brief, campaigns] = await Promise.all([
+    getActiveBrief(req.client_id),
+    getActiveCampaigns(req.client_id).catch(() => []),
+  ])
   const briefText = brief
     ? formatBriefForPrompt(brief)
     : `Brand: ${clientData.name} (${clientData.domain ?? 'no domain'})`
+  const campaignText = campaigns[0]
+    ? formatCampaignForPrompt(campaigns[0])
+    : undefined
 
   // 3. Load active GEO directive HTML (non-blocking)
   const geoResult = await getActiveGeoHtml(req.client_id)
@@ -94,6 +101,8 @@ export async function generateBlogPost(
     brandName: clientData.name,
     domain: clientData.domain,
     briefText,
+    campaignText,
+    fdeContext: req.fde_context,
     topic: req.topic,
     sourceQueryText: req.source_query_text ?? req.topic,
     wordCountTarget: targetWordCount,
@@ -187,20 +196,31 @@ function buildUserMessage(params: {
   brandName: string
   domain: string | null
   briefText: string
+  campaignText?: string
+  fdeContext?: string
   topic: string
   sourceQueryText: string
   wordCountTarget: number
   existingPagesContext?: string
 }): string {
-  const { brandName, domain, briefText, topic, sourceQueryText, wordCountTarget, existingPagesContext } = params
+  const { brandName, domain, briefText, campaignText, fdeContext, topic, sourceQueryText, wordCountTarget, existingPagesContext } = params
+
+  const campaignSection = campaignText
+    ? `\n\n${campaignText}\n`
+    : ''
+
+  // FDE-supplied context comes from real customer conversations — knowledge the
+  // Master Brief / Campaign cannot capture. Treat it as a high-priority directive.
+  const fdeSection = fdeContext?.trim()
+    ? `\n\nFDE 来自客户对话的补充要求（高优先级，必须在文章中落实）：\n${fdeContext.trim()}\n`
+    : ''
 
   const existingSection = existingPagesContext
     ? `\n\n${existingPagesContext}\n`
     : ''
 
-  return `${briefText}
-${existingSection}
-TARGET QUESTION (from AI Visibility Tracker — brand is currently NOT being recommended for this):
+  return `${briefText}${campaignSection}${fdeSection}${existingSection}
+TARGET QUESTION:
 "${sourceQueryText}"
 
 BLOG TOPIC: ${topic}
@@ -211,7 +231,7 @@ MARKET: New Zealand and Australia
 CRITICAL: The brand "${brandName}" must be mentioned naturally at least 3 times.
 The article should directly answer "${sourceQueryText}" so that when AI systems read this page,
 they learn to associate "${brandName}" with this topic.
-
+${campaignText ? `Where relevant, weave in the current campaign's offer and CTA naturally — do not make it feel like an ad.` : ''}
 Generate the blog post JSON now.`
 }
 
@@ -224,6 +244,7 @@ function slugify(text: string): string {
     .replace(/^-|-$/g, '')
 }
 
-function countWords(html: string): number {
+/** Count words in an HTML string (tags stripped). Exported for blog refine / manual edits. */
+export function countWords(html: string): number {
   return html.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length
 }
