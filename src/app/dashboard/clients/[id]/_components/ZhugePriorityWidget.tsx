@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import type { ZhugeActionRow } from '@/app/api/clients/[id]/zhuge/latest-actions/route';
 import {
   FLYWHEEL_BADGE,
@@ -9,6 +10,7 @@ import {
   IMPACT_ZH,
   EFFORT_ZH,
 } from '@/lib/zhuge/display-constants';
+import { getLubanRoute } from '@/lib/zhuge/luban-router';
 
 export type { ZhugeActionRow };
 
@@ -20,15 +22,31 @@ const EXEC_MODE_ZH: Record<string, { icon: string; label: string }> = {
   external_manual: { icon: '👤', label: 'FDE 人工执行' },
 };
 
+const ACTION_TYPE_ZH: Record<string, string> = {
+  generate_seo_geo_blog_post:       '生成 SEO+GEO 双信号博客',
+  generate_geo_directive:           '部署 GEO 搜索优化指令',
+  publish_geo_snippet:              '发布 GEO 内容片段',
+  launch_social_campaign:           '启动社媒营销活动',
+  generate_social_post:             '生成社媒帖子',
+  generate_review_solicitation_post:'发布口碑邀评帖子',
+  setup_google_ads:                 '搭建 Google Ads 广告',
+  setup_meta_ads:                   '搭建 Meta 广告系列',
+  fix_site_seo_issues:              '修复站点 SEO 技术问题',
+  improve_ai_visibility:            '提升 AI 搜索品牌曝光',
+  update_google_business_profile:   '完善 Google 商业档案',
+};
+
 // ── Action card (cached results display) ─────────────────────────────────────
 
-function ActionCard({ action }: { action: ZhugeActionRow }) {
+function ActionCard({ action, clientId }: { action: ZhugeActionRow; clientId: string }) {
   const fw = FLYWHEEL_BADGE[action.flywheel] ?? {
     label: action.flywheel,
     cls: 'bg-gray-100 text-gray-600 border-gray-200',
   };
   const p = action.payload;
   const execMode = EXEC_MODE_ZH[action.execution_mode] ?? { icon: '❓', label: action.execution_mode };
+  const actionNameZh = ACTION_TYPE_ZH[action.action_type] ?? action.action_type;
+  const route = getLubanRoute(p.executable_by ?? null, clientId);
 
   return (
     <div className="flex gap-3 p-4 rounded-xl border border-gray-200 bg-white hover:border-indigo-200 hover:shadow-sm transition-all">
@@ -41,8 +59,8 @@ function ActionCard({ action }: { action: ZhugeActionRow }) {
           <span className={`text-xs font-semibold border rounded-full px-2 py-0.5 ${fw.cls}`}>
             {fw.label}
           </span>
-          <span className="text-sm font-semibold text-gray-800 font-mono">
-            {action.action_type}
+          <span className="text-sm font-semibold text-gray-800">
+            {actionNameZh}
           </span>
           <div className="ml-auto flex items-center gap-1.5 flex-shrink-0">
             <span className={`text-xs font-medium rounded px-1.5 py-0.5 ${IMPACT_CLS[p.expected_impact] ?? ''}`}>
@@ -56,11 +74,18 @@ function ActionCard({ action }: { action: ZhugeActionRow }) {
 
         <p className="text-sm text-gray-600 leading-relaxed mb-2">{p.why_now}</p>
 
-        <div className="flex items-center gap-1.5 text-xs text-gray-400">
-          <span>{execMode.icon}</span>
-          <span>{execMode.label}</span>
-          {p.executable_by && (
-            <span className="font-mono text-indigo-500">· {p.executable_by}</span>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-xs text-gray-400">
+            <span>{execMode.icon}</span>
+            <span>{execMode.label}</span>
+          </div>
+          {route.kind === 'navigate' && (
+            <Link
+              href={route.href}
+              className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 border border-indigo-200 hover:border-indigo-400 rounded-lg px-3 py-1 transition-colors shrink-0"
+            >
+              {route.label}
+            </Link>
           )}
         </div>
       </div>
@@ -184,7 +209,7 @@ export function ZhugePriorityWidget({
       {/* Cached action cards */}
       <div className="space-y-2">
         {actions.map((action) => (
-          <ActionCard key={action.id} action={action} />
+          <ActionCard key={action.id} action={action} clientId={clientId} />
         ))}
       </div>
     </div>

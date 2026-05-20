@@ -129,41 +129,25 @@ function BrandHealthWidget({ clientId }: { clientId: string }) {
 
   return (
     <div className="rounded-xl border border-green-200 bg-white p-4">
-      <div className="flex items-start justify-between gap-4 mb-3">
-        <div className="flex items-center gap-2.5">
-          <span className="text-xl">🩺</span>
-          <div>
-            <p className="text-sm font-semibold text-gray-900">品牌健康快照</p>
-            {discovery?.generated_at && (
-              <p className="text-xs text-gray-400">
-                发现于 {new Date(discovery.generated_at).toLocaleDateString('zh-CN', { timeZone: 'Pacific/Auckland' })}
-              </p>
-            )}
-          </div>
-          {crisisBadge && (
-            <span className={`text-xs font-semibold border rounded-full px-2 py-0.5 ${crisisBadge.cls}`}>
-              {crisisBadge.label}
-            </span>
+      <div className="flex items-center gap-2.5 mb-3">
+        <span className="text-xl">🩺</span>
+        <div>
+          <p className="text-sm font-semibold text-gray-900">品牌健康快照</p>
+          {discovery?.generated_at && (
+            <p className="text-xs text-gray-400">
+              发现于 {new Date(discovery.generated_at).toLocaleDateString('zh-CN', { timeZone: 'Pacific/Auckland' })}
+            </p>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <Link
-            href={`/dashboard/clients/${clientId}/zhangqian`}
-            className="text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5 hover:border-gray-300 transition-colors"
-          >
-            查看报告
-          </Link>
-          <Link
-            href={`/dashboard/clients/${clientId}/prescription/new`}
-            className="text-xs font-semibold rounded-lg bg-indigo-600 px-3 py-1.5 text-white hover:bg-indigo-700 transition-colors"
-          >
-            生成处方 →
-          </Link>
-        </div>
+        {crisisBadge && (
+          <span className={`text-xs font-semibold border rounded-full px-2 py-0.5 ${crisisBadge.cls}`}>
+            {crisisBadge.label}
+          </span>
+        )}
       </div>
 
       {scores && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-x-5 gap-y-2">
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-x-5 gap-y-2">
           <ScoreBar label="SEO" value={scores.seo}
             color={scores.seo >= 60 ? 'bg-green-400' : scores.seo >= 40 ? 'bg-yellow-400' : 'bg-red-400'} />
           <ScoreBar label="社媒" value={scores.social}
@@ -172,6 +156,24 @@ function BrandHealthWidget({ clientId }: { clientId: string }) {
             color={scores.reputation >= 60 ? 'bg-green-400' : scores.reputation >= 40 ? 'bg-yellow-400' : 'bg-red-400'} />
           <ScoreBar label="AI可见" value={scores.ai_visibility}
             color={scores.ai_visibility >= 60 ? 'bg-green-400' : scores.ai_visibility >= 40 ? 'bg-yellow-400' : 'bg-red-400'} />
+          {typeof (scores as Record<string, number>).ads === 'number' ? (
+            <ScoreBar label="广告" value={(scores as Record<string, number>).ads}
+              color={(scores as Record<string, number>).ads >= 60 ? 'bg-green-400' : (scores as Record<string, number>).ads >= 40 ? 'bg-yellow-400' : 'bg-red-400'} />
+          ) : (
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xs text-gray-400 w-12 shrink-0">广告</span>
+              <span className="text-xs text-gray-300">暂无数据</span>
+            </div>
+          )}
+          {typeof (scores as Record<string, number>).competitor === 'number' ? (
+            <ScoreBar label="竞品" value={(scores as Record<string, number>).competitor}
+              color={(scores as Record<string, number>).competitor >= 60 ? 'bg-green-400' : (scores as Record<string, number>).competitor >= 40 ? 'bg-yellow-400' : 'bg-red-400'} />
+          ) : (
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xs text-gray-400 w-12 shrink-0">竞品</span>
+              <span className="text-xs text-gray-300">暂无数据</span>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -304,14 +306,6 @@ function WorkflowProgress({
           </div>
         )
       })}
-      <div className="ml-auto">
-        <a
-          href={`/dashboard/clients/${clientId}/execution`}
-          className="text-xs text-indigo-600 hover:text-indigo-800 font-medium"
-        >
-          执行看板 →
-        </a>
-      </div>
     </div>
   )
 }
@@ -335,8 +329,9 @@ export default function ClientDetailPage() {
 
   // ?exec=<itemId> 来自执行看板的「在社媒矩阵中执行」跳转：
   // 自动打开 GenerationDrawer 并把生成的内容关联回该执行项（内容飞轮闭环）
+  // ?generate=1 来自内容板的「+ 生成内容」按钮跳转：直接弹开抽屉
   const execItemId = searchParams.get('exec');
-  const [generationOpen, setGenerationOpen] = useState(Boolean(execItemId));
+  const [generationOpen, setGenerationOpen] = useState(Boolean(execItemId) || searchParams.get('generate') === '1');
   // ?brief=1 (from 张骞 confirm) auto-opens the brief settings drawer
   const [settingsOpen, setSettingsOpen] = useState(searchParams.get('brief') === '1');
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('brief');
@@ -518,11 +513,11 @@ export default function ClientDetailPage() {
       <section>
         <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">诊断与分析</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          <ToolCard href={`/dashboard/clients/${clientId}/zhangqian`}          icon="🗺️" title="张骞发现"       desc="品牌健康全面扫描"                 badge="in_house" />
-          <ToolCard href={`/dashboard/clients/${clientId}/diagnostic`}         icon="🩺" title="华佗深度诊断"   desc="六维度诊断分析"                   badge="in_house" />
-          <ToolCard href={`/dashboard/clients/${clientId}/prescription/new`}   icon="💊" title="华佗处方"       desc="基于诊断的行动路线图"             badge="in_house" />
-          <ToolCard href={`/dashboard/clients/${clientId}/site-audit/pages`}   icon="🔍" title="站点审计"       desc="网站页面健康度分析"               badge="in_house" />
-          <ToolCard href={`/dashboard/clients/${clientId}/seo-gap`}            icon="📊" title="SEO Gap 分析"   desc="发现关键词覆盖缺口"               badge="in_house" />
+          <ToolCard href={`/dashboard/clients/${clientId}/zhangqian`}          icon="🗺️" title="张骞发现"       desc="扫描社媒、评价、关键词、竞品，生成品牌现状全景报告"  badge="in_house" />
+          <ToolCard href={`/dashboard/clients/${clientId}/diagnostic`}         icon="🩺" title="华佗深度诊断"   desc="从 SEO/社媒/口碑/广告/AI可见/竞品六维打分，找到核心病灶"  badge="in_house" />
+          <ToolCard href={`/dashboard/clients/${clientId}/prescription/new`}   icon="💊" title="华佗处方"       desc="基于诊断结果，生成优先级排序的具体执行行动路线图"  badge="in_house" />
+          <ToolCard href={`/dashboard/clients/${clientId}/site-audit/pages`}   icon="🔍" title="站点审计"       desc="逐页检查标题/描述/H1/图片ALT等 SEO 技术项，输出修复清单"  badge="in_house" />
+          <ToolCard href={`/dashboard/clients/${clientId}/seo-gap`}            icon="📊" title="SEO Gap 分析"   desc="对比竞品，找出客户未覆盖但流量大的关键词机会"  badge="in_house" />
           <ToolCard                                                             icon="⭐" title="口碑管理"       desc="Google 评价 · 公众号舆情"        badge="external" soon />
           <ToolCard                                                             icon="🏆" title="竞品追踪"       desc="持续监控竞品动态"                 badge="external" soon />
         </div>
@@ -532,8 +527,7 @@ export default function ClientDetailPage() {
       <section>
         <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">SEO 工具</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <ToolCard href={`/dashboard/clients/${clientId}/strategy`}  icon="🎯" title="内容策略"   desc="基于数据制定内容方向"  badge="in_house" />
-          <ToolCard href={`/dashboard/clients/${clientId}/blog`}      icon="🔑" title="关键词管理" desc="目标关键词与排名追踪"  badge="in_house" />
+          <ToolCard href={`/dashboard/clients/${clientId}/strategy`}  icon="🎯" title="内容策略"   desc="根据关键词机会和竞品数据，制定博客选题与内容发布计划"  badge="in_house" />
         </div>
       </section>
 

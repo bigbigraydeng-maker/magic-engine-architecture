@@ -49,7 +49,7 @@ Given a structured evidence package, produce a prioritised list of up to ${MAX_A
 - Each action MUST include all required fields (see schema below)
 - evidence_refs must cite real data from the input (keyword names, dimension names, finding types, metric values) — never invent references
 - action_type must be a short snake_case slug, e.g. "publish_geo_directive", "fix_meta_titles", "pause_losing_keywords"
-- why_now must be a concise English sentence (1–2 sentences) a non-technical client can understand
+- why_now must be a concise Chinese sentence (1–2 sentences) a non-technical client can understand — write in Simplified Chinese
 - executable_by: use the exact tool name from availableLubanTools if one matches; otherwise null
 - Do NOT recommend actions for "reputation" or "competitor" dimensions — those are FDE-only external tasks
 
