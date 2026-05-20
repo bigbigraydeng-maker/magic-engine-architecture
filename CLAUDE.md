@@ -215,27 +215,23 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-20 04:13 NZST （**Phase 12.Q 全部完成** 🎉；P12.Q.7 CTS Tours before/after 报告写完，Before 均分 3.5 → After 均分 8.4，M3 ✅；下一任务 P12.G.1）
+> 最后更新：2026-05-20 13:45 NZST （**P12.G.5 完成** — ZhugeDrawer + luban-router + 一键触发鲁班，57 Vitest 全绿，build ✅；Phase 12.G 全部任务完成）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P12.G.1–5** | 诸葛亮策略调度引擎（前置 Phase 12.Q 已完成，约 3 session） | ⭐⭐ 当前 |
+| **Phase 12.G 已完成** | P12.G.1–G.5 全部 done | ✅ |
 
 **状态校准（2026-05-20）**：
-- ✅ P12.Q.0：migration + TS 类型同步完成
-- ✅ P12.Q.1：campaign_briefs 6 字段扩展 + injector + Reels route select，build 通过
-- ✅ P12.Q.2：quality-rubric 模块（6 维混合），14 Vitest 测试全通过，build 通过
-- ✅ P12.Q.3：Blog auditBlogPost + generateWithQualityRetry，quality_score/snapshot 写入 blog_posts，7 测试通过；build 通过
-- ✅ P12.Q.4a：Social Route A/C 接入 rubric（batch-generate 层），11 测试通过；build 通过
-- ✅ P12.Q.4b：Social Route B 接入 rubric，viral-structure-preservation advisory 维度自动注入，quality_score+snapshot 写入 content_posts；17 测试通过；build 通过
-- ✅ P12.Q.5：Reels 接入 rubric，auditReelsDraft 审计 fb_caption，quality_score+snapshot 写入 reels_drafts；14 测试通过；build 通过
-- ✅ P12.Q.6：审计五条链路，Route A/C route.ts 缺 audit；补入 auditSocialPost + quality_score/snapshot；build 通过，质量测试全绿
-- ✅ **P12.Q.7**：CTS Tours 端到端 demo before/after 报告，五链路 Before 均分 3.5 → After 均分 8.4（+4.9），5/5 pass，M3 验证关卡通过；报告写入 `docs/clients/cts-tours/p12q-quality-demo-report.md`
+- ✅ P12.Q.0–Q.7：Phase 12.Q 全部完成（内容质量闭环）
+- ✅ **P12.G.1**：诸葛亮接口层 — types.ts + conductor.ts；26 Vitest 全通过；build ✅
+- ✅ **P12.G.2**：assembler.ts + tools-catalog.ts + POST /api/clients/[id]/zhuge/conduct；34 Vitest 全通过；build ✅
+- ✅ **P12.G.3**：action-persister.ts（buildSessionKey + persistZhugeActions + idempotency guard）；49 Vitest 全通过；build ✅
+- ✅ **P12.G.4**：GET /api/clients/[id]/zhuge/latest-actions + ZhugePriorityWidget；54 Vitest 全通过；build ✅
+- ✅ **P12.G.5**：ZhugeDrawer（AI 抽屉）+ luban-router（纯函数路由）+ display-constants（DRY）；Widget 改 onAskZhuge+refreshKey；57 Vitest 全通过；build ✅
 - ⚠️ **PM 待操作**：Render → Environment → 加 `ADMIN_EMAILS=你的邮箱`（若还未做）
 - ⚠️ **PM 待操作**：Supabase 跑 migration `20260525000001_content_quality_snapshot_score.sql` + `20260526000001_campaign_briefs_extend.sql`
-- 📋 Phase 12.G（诸葛亮）：Phase 12.Q 已全部完成，可以开工
 
-下一 session 第一句话：`继续 Phase 12.G 第 1 任务 P12.G.1`
+下一 session：Phase 12.G 全部完成，可以合 PR 到 main 或开始下一个 Phase（待 PM 决策）
 
 **本 session 已完成，可以关闭。**
 
