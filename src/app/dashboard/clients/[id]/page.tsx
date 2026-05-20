@@ -25,18 +25,71 @@ interface Client {
 
 type ZhangqianStatus = 'loading' | 'none' | 'reviewing' | 'confirmed';
 
-function ScoreBar({ label, value, color }: { label: string; value: number; color: string }) {
+const HEALTH_DIMS = [
+  { key: 'seo',            label: 'SEO' },
+  { key: 'social',         label: '社媒' },
+  { key: 'ai_visibility',  label: 'AI可见' },
+  { key: 'ads',            label: '广告' },
+  { key: 'competitor',     label: '竞品' },
+  { key: 'reputation',     label: '口碑' },
+] as const;
+
+function scoreColor(v: number | null): string {
+  if (v == null) return '#9ca3af';
+  if (v >= 60) return '#16a34a';
+  if (v >= 40) return '#d97706';
+  return '#dc2626';
+}
+
+function RadarChart({ scores }: { scores: Record<string, number> }) {
+  const cx = 110, cy = 110, maxR = 78;
+  const n = HEALTH_DIMS.length;
+  const angle = (i: number) => (i / n) * 2 * Math.PI - Math.PI / 2;
+  const pt = (i: number, r: number): [number, number] => [
+    cx + r * Math.cos(angle(i)),
+    cy + r * Math.sin(angle(i)),
+  ];
+
+  const rings = [25, 50, 75, 100];
+
+  const scorePoly = HEALTH_DIMS
+    .map((d, i) => pt(i, ((scores[d.key] ?? 0) / 100) * maxR))
+    .map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`)
+    .join(' ');
+
   return (
-    <div className="flex items-center gap-2 min-w-0">
-      <span className="text-xs text-gray-500 w-12 shrink-0">{label}</span>
-      <div className="flex-1 bg-gray-100 rounded-full h-1.5 min-w-[40px]">
-        <div
-          className={`h-1.5 rounded-full ${color}`}
-          style={{ width: `${value}%` }}
-        />
-      </div>
-      <span className="text-xs font-semibold text-gray-700 w-6 text-right tabular-nums">{value}</span>
-    </div>
+    <svg viewBox="0 0 220 220" className="w-full" style={{ maxHeight: 190 }}>
+      {rings.map(pct => {
+        const pts = HEALTH_DIMS.map((_, i) => {
+          const [x, y] = pt(i, (pct / 100) * maxR);
+          return `${x.toFixed(1)},${y.toFixed(1)}`;
+        }).join(' ');
+        return (
+          <polygon key={pct} points={pts}
+            fill={pct === 100 ? '#f9fafb' : 'none'}
+            stroke="#e5e7eb" strokeWidth="0.75" />
+        );
+      })}
+      {HEALTH_DIMS.map((_, i) => {
+        const [x, y] = pt(i, maxR);
+        return <line key={i} x1={cx} y1={cy} x2={x.toFixed(1)} y2={y.toFixed(1)} stroke="#e5e7eb" strokeWidth="0.75" />;
+      })}
+      <polygon points={scorePoly} fill="rgba(99,102,241,0.18)" stroke="#6366f1" strokeWidth="2" strokeLinejoin="round" />
+      {HEALTH_DIMS.map((d, i) => {
+        const [x, y] = pt(i, ((scores[d.key] ?? 0) / 100) * maxR);
+        return <circle key={i} cx={x.toFixed(1)} cy={y.toFixed(1)} r="3.5" fill="#6366f1" stroke="white" strokeWidth="1.5" />;
+      })}
+      {HEALTH_DIMS.map((d, i) => {
+        const [lx, ly] = pt(i, maxR + 19);
+        const v = scores[d.key] as number | undefined ?? null;
+        return (
+          <g key={i}>
+            <text x={lx.toFixed(1)} y={(ly - 4).toFixed(1)} textAnchor="middle" fontSize="9" fill="#4b5563" fontWeight="600">{d.label}</text>
+            <text x={lx.toFixed(1)} y={(ly + 8).toFixed(1)} textAnchor="middle" fontSize="9" fill={scoreColor(v)} fontWeight="700">{v ?? '—'}</text>
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 
@@ -121,59 +174,44 @@ function BrandHealthWidget({ clientId }: { clientId: string }) {
     );
   }
 
-  // ── Confirmed — show mini scorecard ──
+  // ── Confirmed — show radar chart ──
   const diag = discovery?.payload?.diagnosis;
-  const scores = diag?.scores;
+  const scores = diag?.scores as Record<string, number> | undefined;
   const crisisType = diag?.crisis_type ?? null;
   const crisisBadge = crisisType ? CRISIS_BADGE[crisisType] : null;
 
   return (
     <div className="rounded-xl border border-green-200 bg-white p-4">
-      <div className="flex items-center gap-2.5 mb-3">
-        <span className="text-xl">🩺</span>
-        <div>
-          <p className="text-sm font-semibold text-gray-900">品牌健康快照</p>
-          {discovery?.generated_at && (
-            <p className="text-xs text-gray-400">
-              发现于 {new Date(discovery.generated_at).toLocaleDateString('zh-CN', { timeZone: 'Pacific/Auckland' })}
-            </p>
-          )}
-        </div>
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-lg">🩺</span>
+        <p className="text-sm font-semibold text-gray-900">品牌健康快照</p>
         {crisisBadge && (
-          <span className={`text-xs font-semibold border rounded-full px-2 py-0.5 ${crisisBadge.cls}`}>
+          <span className={`ml-auto text-xs font-semibold border rounded-full px-2 py-0.5 ${crisisBadge.cls}`}>
             {crisisBadge.label}
           </span>
         )}
       </div>
+      {discovery?.generated_at && (
+        <p className="text-xs text-gray-400 mb-3">
+          发现于 {new Date(discovery.generated_at).toLocaleDateString('zh-CN', { timeZone: 'Pacific/Auckland' })}
+        </p>
+      )}
+
+      {scores && <RadarChart scores={scores} />}
 
       {scores && (
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-x-5 gap-y-2">
-          <ScoreBar label="SEO" value={scores.seo}
-            color={scores.seo >= 60 ? 'bg-green-400' : scores.seo >= 40 ? 'bg-yellow-400' : 'bg-red-400'} />
-          <ScoreBar label="社媒" value={scores.social}
-            color={scores.social >= 60 ? 'bg-green-400' : scores.social >= 40 ? 'bg-yellow-400' : 'bg-red-400'} />
-          <ScoreBar label="口碑" value={scores.reputation}
-            color={scores.reputation >= 60 ? 'bg-green-400' : scores.reputation >= 40 ? 'bg-yellow-400' : 'bg-red-400'} />
-          <ScoreBar label="AI可见" value={scores.ai_visibility}
-            color={scores.ai_visibility >= 60 ? 'bg-green-400' : scores.ai_visibility >= 40 ? 'bg-yellow-400' : 'bg-red-400'} />
-          {typeof (scores as Record<string, number>).ads === 'number' ? (
-            <ScoreBar label="广告" value={(scores as Record<string, number>).ads}
-              color={(scores as Record<string, number>).ads >= 60 ? 'bg-green-400' : (scores as Record<string, number>).ads >= 40 ? 'bg-yellow-400' : 'bg-red-400'} />
-          ) : (
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-xs text-gray-400 w-12 shrink-0">广告</span>
-              <span className="text-xs text-gray-300">暂无数据</span>
-            </div>
-          )}
-          {typeof (scores as Record<string, number>).competitor === 'number' ? (
-            <ScoreBar label="竞品" value={(scores as Record<string, number>).competitor}
-              color={(scores as Record<string, number>).competitor >= 60 ? 'bg-green-400' : (scores as Record<string, number>).competitor >= 40 ? 'bg-yellow-400' : 'bg-red-400'} />
-          ) : (
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-xs text-gray-400 w-12 shrink-0">竞品</span>
-              <span className="text-xs text-gray-300">暂无数据</span>
-            </div>
-          )}
+        <div className="mt-2 grid grid-cols-3 gap-x-2 gap-y-1 border-t border-gray-100 pt-3">
+          {HEALTH_DIMS.map(({ key, label }) => {
+            const v = scores[key] as number | undefined ?? null;
+            return (
+              <div key={key} className="flex items-center justify-between gap-1">
+                <span className="text-[11px] text-gray-400">{label}</span>
+                <span className="text-[11px] font-bold tabular-nums" style={{ color: scoreColor(v) }}>
+                  {v ?? '—'}
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -465,16 +503,25 @@ export default function ClientDetailPage() {
         clientId={clientId}
       />
 
-      {/* Brand Health mini scorecard — only shown after discovery confirmed */}
-      {discoveryStatus === 'confirmed' && <BrandHealthWidget clientId={clientId} />}
-
-      {/* Zhuge Priority Actions */}
-      <ZhugePriorityWidget
-        clientId={clientId}
-        discoveryConfirmed={discoveryConfirmed}
-        refreshKey={zhugeRefreshKey}
-        onAskZhuge={() => setZhugeDrawerOpen(true)}
-      />
+      {/* Brand Health (left) + Zhuge Priority Actions (right) — side-by-side cards */}
+      {discoveryStatus === 'confirmed' ? (
+        <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-4 items-start">
+          <BrandHealthWidget clientId={clientId} />
+          <ZhugePriorityWidget
+            clientId={clientId}
+            discoveryConfirmed={discoveryConfirmed}
+            refreshKey={zhugeRefreshKey}
+            onAskZhuge={() => setZhugeDrawerOpen(true)}
+          />
+        </div>
+      ) : (
+        <ZhugePriorityWidget
+          clientId={clientId}
+          discoveryConfirmed={discoveryConfirmed}
+          refreshKey={zhugeRefreshKey}
+          onAskZhuge={() => setZhugeDrawerOpen(true)}
+        />
+      )}
 
       {/* Master Brief warning banner */}
       {hasActiveBrief === false && (
