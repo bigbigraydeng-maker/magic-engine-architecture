@@ -23,6 +23,9 @@ import type { BlogPost, BlogStatus } from '@/types/magic-engine'
  * Reference: ROADMAP.md P7.3.9–P7.3.10
  */
 
+/** Upper bound on a manually-edited article body (~200 kB) — rejects oversized payloads. */
+const MAX_HTML_BODY_CHARS = 200_000
+
 export async function GET(
   req: NextRequest,
   { params }: { params: { id: string; postId: string } }
@@ -94,6 +97,12 @@ export async function PATCH(
     if (body.meta_title !== undefined)         patch.meta_title = body.meta_title.slice(0, 60)
     if (body.meta_description !== undefined)   patch.meta_description = body.meta_description.slice(0, 155)
     if (body.html_body !== undefined) {
+      if (body.html_body.length > MAX_HTML_BODY_CHARS) {
+        return NextResponse.json(
+          { success: false, error: 'html_body exceeds the maximum allowed size' },
+          { status: 400 },
+        )
+      }
       patch.html_body  = body.html_body
       patch.word_count = countWords(body.html_body)
     }

@@ -3,29 +3,25 @@
 /**
  * StudioArticleTab — SEO article generation inside the Content Studio drawer.
  *
- * The topic is pre-filled from the execution item (the diagnosed problem this
- * content is meant to solve). Master Brief (client DNA) + the active Campaign
- * are auto-injected server-side by /api/clients/[id]/blog — see blog/generator.ts.
+ * Pre-generation channels:
+ *   - keyword/topic (pre-filled from the execution item)
+ *   - FDE free-text "customer feedback" — knowledge from real customer
+ *     conversations that the Master Brief / Campaign cannot capture
+ * Master Brief + active Campaign are auto-injected server-side.
+ *
+ * Post-generation: hands off to StudioArticleWorkbench — editable fields plus
+ * an AI conversation panel — so the FDE always keeps a manual + AI channel.
  *
  * Reference: Content Studio MVP — diagnosis-driven content generation.
  */
 
 import { useState } from 'react'
-import Link from 'next/link'
 import type { ExecutionItem } from '@/types/diagnostic'
+import { StudioArticleWorkbench, toArticlePost, type ArticlePost } from './StudioArticleWorkbench'
 
 const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''
 
 const WORD_COUNT_OPTIONS = [800, 1000, 1200, 1500, 2000] as const
-
-interface GeneratedArticle {
-  id: string
-  title: string
-  meta_description: string
-  word_count: number | null
-  cost_usd: number | null
-  html_body: string
-}
 
 interface UpgradeNotice {
   existing_url: string | null
@@ -42,16 +38,16 @@ interface Props {
 }
 
 export function StudioArticleTab({ clientId, item, hasActiveCampaign, onGenerated }: Props) {
-  const [keyword, setKeyword]   = useState(item.title)
-  const [mode, setMode]         = useState<'unified' | 'geo_only'>(
+  const [keyword, setKeyword]       = useState(item.title)
+  const [fdeContext, setFdeContext] = useState('')
+  const [mode, setMode]             = useState<'unified' | 'geo_only'>(
     item.dimension === 'ai_visibility' ? 'geo_only' : 'unified',
   )
-  const [wordCount, setWordCount]     = useState<number>(1200)
-  const [generating, setGenerating]   = useState(false)
-  const [error, setError]             = useState('')
-  const [result, setResult]           = useState<GeneratedArticle | null>(null)
-  const [upgrade, setUpgrade]         = useState<UpgradeNotice | null>(null)
-  const [showPreview, setShowPreview] = useState(false)
+  const [wordCount, setWordCount]   = useState<number>(1200)
+  const [generating, setGenerating] = useState(false)
+  const [error, setError]           = useState('')
+  const [post, setPost]             = useState<ArticlePost | null>(null)
+  const [upgrade, setUpgrade]       = useState<UpgradeNotice | null>(null)
 
   const generate = async (skipAudit = false) => {
     const kw = keyword.trim()
@@ -72,6 +68,7 @@ export function StudioArticleTab({ clientId, item, hasActiveCampaign, onGenerate
           source_query_text: kw,
           word_count_target: wordCount,
           skip_audit: skipAudit,
+          fde_context: fdeContext.trim() || undefined,
         }),
       })
       const j = await res.json()
@@ -84,15 +81,8 @@ export function StudioArticleTab({ clientId, item, hasActiveCampaign, onGenerate
           reason:         j.audit.reason ?? '检测到相似的已有内容，建议升级而非新建',
         })
       } else if (j.post) {
-        const article: GeneratedArticle = {
-          id:               j.post.id,
-          title:            j.post.title,
-          meta_description: j.post.meta_description ?? '',
-          word_count:       j.post.word_count ?? null,
-          cost_usd:         j.cost_usd ?? j.post.cost_usd ?? null,
-          html_body:        j.post.html_body ?? '',
-        }
-        setResult(article)
+        const article = toArticlePost(j.post)
+        setPost(article)
         onGenerated(`🤖 已在内容工作台生成 SEO 文章草稿：「${article.title}」`)
       } else {
         throw new Error('生成返回为空，请重试')
@@ -104,62 +94,20 @@ export function StudioArticleTab({ clientId, item, hasActiveCampaign, onGenerate
     }
   }
 
-  // ── Result view ─────────────────────────────────────────────────────────────
-  if (result) {
+  // ── Post-generation → editable + AI-conversation workbench ──────────────────
+  if (post) {
     return (
-      <div className="space-y-4 max-w-3xl">
-        <div className="rounded-xl border border-green-200 bg-green-50 p-5">
-          <div className="flex items-start gap-3">
-            <span className="text-2xl shrink-0">✅</span>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-green-900">SEO 文章草稿已生成并入库</p>
-              <h3 className="text-base font-bold text-gray-900 mt-1.5">{result.title}</h3>
-              {result.meta_description && (
-                <p className="text-xs text-gray-600 mt-1">{result.meta_description}</p>
-              )}
-              <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
-                {result.word_count != null && <span>{result.word_count} 字</span>}
-                {result.cost_usd != null && <span>成本 ${result.cost_usd.toFixed(4)}</span>}
-                <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">草稿</span>
-              </div>
-            </div>
-          </div>
-          <div className="flex items-center gap-3 mt-4 flex-wrap">
-            <Link
-              href={`/dashboard/clients/${clientId}/blog/${result.id}`}
-              className="px-4 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors"
-            >
-              查看 / 编辑全文 →
-            </Link>
-            <button
-              onClick={() => setShowPreview(v => !v)}
-              className="px-4 py-2 text-xs font-medium text-gray-600 bg-white border border-gray-300 hover:border-gray-400 rounded-lg transition-colors"
-            >
-              {showPreview ? '收起预览' : '预览正文'}
-            </button>
-            <button
-              onClick={() => { setResult(null); setShowPreview(false) }}
-              className="px-4 py-2 text-xs font-medium text-gray-500 hover:text-gray-700 transition-colors"
-            >
-              再生成一篇
-            </button>
-          </div>
-        </div>
-
-        {showPreview && (
-          <div className="rounded-xl border border-gray-200 bg-white p-6 max-h-[480px] overflow-y-auto">
-            {/* Trusted internal content — generated by our own blog API (Claude), not user-submitted. */}
-            <div
-              className="prose prose-sm max-w-none"
-              dangerouslySetInnerHTML={{ __html: result.html_body }}
-            />
-          </div>
-        )}
-      </div>
+      <StudioArticleWorkbench
+        clientId={clientId}
+        post={post}
+        executionItemId={item.id}
+        onPostUpdated={setPost}
+        onRegenerate={() => setPost(null)}
+      />
     )
   }
 
-  // ── Form view ───────────────────────────────────────────────────────────────
+  // ── Pre-generation form ─────────────────────────────────────────────────────
   return (
     <div className="space-y-5 max-w-2xl">
       {/* Keyword / topic */}
@@ -176,6 +124,23 @@ export function StudioArticleTab({ clientId, item, hasActiveCampaign, onGenerate
           className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
         <p className="mt-1 text-[11px] text-gray-400">话题已自动预填充自当前执行项，可按需修改。</p>
+      </div>
+
+      {/* FDE context — the manual input channel for customer-conversation knowledge */}
+      <div>
+        <label className="block text-xs font-semibold text-gray-600 mb-1">
+          客户反馈 / 补充要求 <span className="text-gray-400">（选填）</span>
+        </label>
+        <textarea
+          value={fdeContext}
+          onChange={e => setFdeContext(e.target.value)}
+          rows={3}
+          placeholder="把你从客户对话里了解到的写在这里 —— 例：客户强调主打小团、家庭友好，不要写得太官方"
+          className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none"
+        />
+        <p className="mt-1 text-[11px] text-gray-400">
+          这段会作为<strong className="text-gray-500">高优先级要求</strong>写进文章 —— 生成后还能继续用 AI 对话调整。
+        </p>
       </div>
 
       <div className="flex flex-wrap gap-4">

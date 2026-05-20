@@ -200,7 +200,11 @@ function ConnectForm({ clientId, onConnected, onCancel }: ConnectFormProps) {
         <FormField label="仓库名称 (Repo Name)" required>
           <input
             value={repoName}
-            onChange={e => setRepoName(e.target.value)}
+            onChange={e => {
+              let val = e.target.value
+              if (val.includes('github.com/')) val = val.split('/').filter(Boolean).pop() ?? val
+              setRepoName(val)
+            }}
             placeholder="e.g. chinatravel"
             className={INPUT_CLASS}
             required

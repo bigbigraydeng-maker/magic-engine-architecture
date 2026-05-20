@@ -22,8 +22,12 @@ import { getActiveBrief, formatBriefForPrompt } from '@/lib/content/brief-inject
 import { getActiveCampaigns, formatCampaignForPrompt } from '@/lib/content/campaign-injector'
 import type { BlogPost } from '@/types/magic-engine'
 
-/** Cap on client-supplied chat history to bound prompt size. */
+/** Cap on client-supplied chat history turns to bound prompt size. */
 const MAX_HISTORY = 12
+/** Per-instruction character cap — bounds prompt size, cost and injection surface. */
+const MAX_MESSAGE_CHARS = 2000
+/** Per-history-turn character cap. */
+const MAX_TURN_CHARS = 4000
 
 export async function POST(
   req: NextRequest,
@@ -38,12 +42,12 @@ export async function POST(
     const { id: clientId, postId } = params
     const body = (await req.json()) as { message?: string; history?: unknown }
 
-    const message = (body.message ?? '').trim()
+    const message = (body.message ?? '').trim().slice(0, MAX_MESSAGE_CHARS)
     if (!message) {
       return NextResponse.json({ success: false, error: 'message is required' }, { status: 400 })
     }
 
-    // Sanitise client-supplied chat history — shape-checked and capped.
+    // Sanitise client-supplied chat history — shape-checked, count- and length-capped.
     const history: ChatMessage[] = Array.isArray(body.history)
       ? (body.history as unknown[])
           .filter((m): m is ChatMessage =>
@@ -51,6 +55,7 @@ export async function POST(
             ((m as ChatMessage).role === 'user' || (m as ChatMessage).role === 'assistant') &&
             typeof (m as ChatMessage).content === 'string')
           .slice(-MAX_HISTORY)
+          .map(m => ({ role: m.role, content: m.content.slice(0, MAX_TURN_CHARS) }))
       : []
 
     // 1. Load the post (ownership check via client_id)

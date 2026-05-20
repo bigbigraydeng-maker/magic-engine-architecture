@@ -397,7 +397,8 @@ function ExecutionItemRow({
 
   const submitSeoFix = async () => {
     const { file_path, slug, field, old_value, new_value } = seoForm
-    if (!file_path.trim() || !slug.trim() || !old_value.trim() || !new_value.trim()) return
+    // old_value may be empty string when patching a previously missing field
+    if (!file_path.trim() || !slug.trim() || typeof old_value !== 'string' || !new_value.trim()) return
     setSeoFixing(true)
     setSeoFixMsg(null)
     try {

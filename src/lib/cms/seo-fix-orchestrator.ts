@@ -189,7 +189,7 @@ export async function orchestrateSeoFix(input: SeoFixInput): Promise<SeoFixResul
         production_package_id:  productionPackageId  ?? null,
         flywheel:               'seo',
         action_type:            CMS_ACTION_TYPE.META_UPDATE,
-        execution_mode:         'me_auto',
+        execution_mode:         'third_party',
         vendor:                 'github',
         payload: {
           filePath:   fix.filePath,

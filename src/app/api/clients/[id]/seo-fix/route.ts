@@ -61,15 +61,22 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     execution_item_id, production_package_id,
   } = body as Record<string, unknown>
 
-  // Validate required fields
-  const stringFields = { file_path, slug, field, old_value, new_value, reason }
-  for (const [key, val] of Object.entries(stringFields)) {
+  // Validate required non-empty string fields
+  const requiredFields = { file_path, slug, field, new_value, reason }
+  for (const [key, val] of Object.entries(requiredFields)) {
     if (typeof val !== 'string' || !val.trim()) {
       return NextResponse.json(
         { success: false, error: `${key} required`, code: 'INVALID_INPUT' },
         { status: 400 },
       )
     }
+  }
+  // old_value may be empty string (legitimate when patching a missing field)
+  if (typeof old_value !== 'string') {
+    return NextResponse.json(
+      { success: false, error: 'old_value must be a string', code: 'INVALID_INPUT' },
+      { status: 400 },
+    )
   }
 
   const fix: CmsSeoFixPayload = {
