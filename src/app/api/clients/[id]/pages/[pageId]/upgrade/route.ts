@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { generatePageUpgrade } from '@/lib/blog/upgrade-generator'
+import { getPageSeoIntelligence } from '@/lib/blog/page-seo-intelligence'
 import { requireBearerToken } from '@/lib/validation-utils'
 
 export const maxDuration = 60
@@ -75,7 +76,10 @@ export async function POST(
 
     const mode = body.mode ?? 'unified'
 
-    // Step 3: Generate upgrade
+    // Step 3: Fetch real SEO + GEO intelligence (non-fatal — falls back gracefully)
+    const seoIntelligence = await getPageSeoIntelligence(clientId, page.url).catch(() => undefined)
+
+    // Step 4: Generate upgrade using data-driven weakness signals
     const output = await generatePageUpgrade({
       client_id: clientId,
       page_id: pageId,
@@ -88,6 +92,7 @@ export async function POST(
       mode,
       primary_keyword: body.primary_keyword ?? page.primary_keyword ?? undefined,
       source_query_text: body.source_query_text,
+      seo_intelligence: seoIntelligence,
     })
 
     return NextResponse.json(output, { status: 200 })

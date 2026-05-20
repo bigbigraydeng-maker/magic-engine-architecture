@@ -12,6 +12,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { fetchUrlAsMarkdown } from '@/lib/brief/jina'
 import { getActiveBrief, formatBriefForPrompt } from '@/lib/content/brief-injector'
+import type { PageSeoIntelligence } from './page-seo-intelligence'
 
 // Claude Sonnet 4.6 pricing (2026)
 const PRICE_INPUT_PER_M  = 3.00
@@ -58,6 +59,7 @@ export interface PageUpgradeRequest {
   mode: 'unified' | 'geo_only' | 'seo_only'
   primary_keyword?: string
   source_query_text?: string
+  seo_intelligence?: PageSeoIntelligence
 }
 
 export interface PageUpgradeOutput {
@@ -113,6 +115,7 @@ export async function generatePageUpgrade(
     primaryKeyword: req.primary_keyword,
     sourceQueryText: req.source_query_text,
     mode: req.mode,
+    seoIntelligence: req.seo_intelligence,
   })
 
   // Step 4: Call Claude
@@ -190,16 +193,58 @@ function buildUpgradeMessage(params: {
   primaryKeyword?: string
   sourceQueryText?: string
   mode: string
+  seoIntelligence?: PageSeoIntelligence
 }): string {
   const {
     briefText, topic, originalMarkdown, pageUrl, pageType,
     currentWordCount, hasGeoBlock, primaryKeyword, sourceQueryText, mode,
+    seoIntelligence,
   } = params
 
-  const weaknesses: string[] = []
-  if ((currentWordCount ?? 0) < 500) weaknesses.push(`thin content (${currentWordCount ?? 0} words — needs expansion to 900+)`)
-  if (!hasGeoBlock) weaknesses.push('no GEO signals block (AI assistants cannot extract brand entity signals)')
-  if (weaknesses.length === 0) weaknesses.push('general quality improvement for SEO + AI visibility')
+  // Use real DataForSEO + GEO signals when available; fall back to heuristics
+  let weaknesses: string[]
+  if (seoIntelligence && seoIntelligence.weakness_signals.length > 0) {
+    weaknesses = seoIntelligence.weakness_signals
+    // Append basic content signals that DataForSEO doesn't cover
+    if ((currentWordCount ?? 0) < 500) {
+      weaknesses = [
+        `Content: only ${currentWordCount ?? 0} words — expand to 900+ for topical authority`,
+        ...weaknesses,
+      ]
+    }
+    if (!hasGeoBlock) {
+      weaknesses = [
+        ...weaknesses,
+        'Technical: no GEO signals block present — add structured entity section',
+      ]
+    }
+  } else {
+    // Fallback: original heuristics when no DataForSEO data yet
+    weaknesses = []
+    if ((currentWordCount ?? 0) < 500) weaknesses.push(`thin content (${currentWordCount ?? 0} words — needs expansion to 900+)`)
+    if (!hasGeoBlock) weaknesses.push('no GEO signals block (AI assistants cannot extract brand entity signals)')
+    if (weaknesses.length === 0) weaknesses.push('general quality improvement for SEO + AI visibility')
+  }
+
+  // Build the SERP context block when real data is available
+  const serpContext = seoIntelligence?.has_serp_data
+    ? `\nCURRENT GOOGLE RANKINGS (DataForSEO):\n${
+        seoIntelligence.ranking_keywords
+          .slice(0, 5)
+          .map(k => `- "${k.keyword}" → position #${k.position ?? 'not ranking'}${k.search_volume ? ` | ${k.search_volume.toLocaleString()} searches/mo` : ''}`)
+          .join('\n')
+      }\n`
+    : ''
+
+  // Build the GEO context block when real data is available
+  const geoContext = seoIntelligence?.has_geo_data
+    ? `\nAI VISIBILITY GAPS (GEO):\n${
+        seoIntelligence.geo_gaps
+          .slice(0, 3)
+          .map(g => `- "${g.question}" → brand rank: ${g.brand_rank ?? 'NOT MENTIONED'}`)
+          .join('\n')
+      }\n`
+    : ''
 
   return `${briefText}
 
@@ -211,12 +256,12 @@ Mode: ${mode}
 ${primaryKeyword ? `Primary keyword: ${primaryKeyword}` : ''}
 ${sourceQueryText ? `Target AI query: "${sourceQueryText}"` : ''}
 Topic: ${topic}
-
-WEAKNESSES TO FIX:
+${serpContext}${geoContext}
+WEAKNESSES TO FIX (data-driven):
 ${weaknesses.map(w => `- ${w}`).join('\n')}
 
 ORIGINAL CONTENT:
 ${originalMarkdown.slice(0, 8000)}
 
-Upgrade the page to fix all weaknesses above. Generate the JSON upgrade now.`
+Upgrade the page to fix all weaknesses above. Use the real keyword ranking data and AI visibility gaps to guide which keywords to target and which FAQ questions to add. Generate the JSON upgrade now.`
 }
