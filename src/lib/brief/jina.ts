@@ -12,15 +12,16 @@ export interface JinaFetchResult {
 }
 
 const MAX_CHARS = 30_000   // ~7.5K tokens — prevents context explosion
-const TIMEOUT_MS = 30_000
-const MAX_RETRIES = 3
+const TIMEOUT_MS = 15_000  // 15s per attempt — faster fallback for non-existent pages
+const MAX_RETRIES = 2       // 2 attempts max — total wait ≤ 31s before fallback
 
 /**
  * Fetch a URL and return clean Markdown via Jina Reader.
  * Truncates content to MAX_CHARS to keep Claude token usage bounded.
  */
 export async function fetchUrlAsMarkdown(url: string): Promise<JinaFetchResult> {
-  const jinaUrl = `https://r.jina.ai/${encodeURIComponent(url)}`
+  // Jina Reader expects the raw URL appended to the base path — no encoding.
+  const jinaUrl = `https://r.jina.ai/${url}`
 
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {

@@ -9,14 +9,10 @@
  * Phase 8.2.2
  */
 
-import Anthropic from '@anthropic-ai/sdk'
+import { callClaudeWithDocs, parseJsonResponse, MODEL_SONNET } from '@/lib/anthropic/client'
 import { fetchUrlAsMarkdown } from '@/lib/brief/jina'
 import { getActiveBrief, formatBriefForPrompt } from '@/lib/content/brief-injector'
 import type { PageSeoIntelligence } from './page-seo-intelligence'
-
-// Claude Sonnet 4.6 pricing (2026)
-const PRICE_INPUT_PER_M  = 3.00
-const PRICE_OUTPUT_PER_M = 15.00
 
 const SYSTEM_PROMPT = `You are an expert SEO and GEO content strategist for AU/NZ markets.
 You will receive an existing page and upgrade it to include:
@@ -83,31 +79,33 @@ export interface PageUpgradeOutput {
 export async function generatePageUpgrade(
   req: PageUpgradeRequest
 ): Promise<PageUpgradeOutput> {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY environment variable is not set')
-
   // Step 1: Fetch original content via Jina — non-fatal; fall back to title/URL stub
-  let jinaResult: { markdown: string }
+  let jinaMarkdown: string
   try {
-    jinaResult = await fetchUrlAsMarkdown(req.page_url)
+    const jinaResult = await fetchUrlAsMarkdown(req.page_url)
+    jinaMarkdown = jinaResult.markdown
   } catch (jinaErr) {
-    console.warn('[upgrade-generator] Jina fetch failed, using stub content:', (jinaErr as Error).message)
-    jinaResult = {
-      markdown: `# ${req.page_title ?? req.topic}\n\nPage URL: ${req.page_url}\n\nContent could not be fetched. Please generate an upgrade based on the brand brief and topic.`,
-    }
+    console.warn('[upgrade-generator] Jina fetch failed, using stub:', (jinaErr as Error).message)
+    jinaMarkdown = `# ${req.page_title ?? req.topic}\n\nPage URL: ${req.page_url}\n\nContent could not be fetched. Generate the upgrade from the brand brief and topic only.`
   }
 
-  // Step 2: Load brand brief
-  const brief = await getActiveBrief(req.client_id)
-  const briefText = brief
-    ? formatBriefForPrompt(brief)
-    : `Brand context: ${req.page_title ?? req.page_url}`
+  // Step 2: Load brand brief — non-fatal
+  let briefText: string
+  try {
+    const brief = await getActiveBrief(req.client_id)
+    briefText = brief
+      ? formatBriefForPrompt(brief)
+      : `Brand context: ${req.page_title ?? req.page_url}`
+  } catch (briefErr) {
+    console.warn('[upgrade-generator] brief load failed:', (briefErr as Error).message)
+    briefText = `Brand context: ${req.page_title ?? req.page_url}`
+  }
 
   // Step 3: Build prompt
   const userMessage = buildUpgradeMessage({
     briefText,
     topic: req.topic,
-    originalMarkdown: jinaResult.markdown,
+    originalMarkdown: jinaMarkdown,
     pageUrl: req.page_url,
     pageType: req.page_type,
     currentWordCount: req.word_count,
@@ -118,63 +116,43 @@ export async function generatePageUpgrade(
     seoIntelligence: req.seo_intelligence,
   })
 
-  // Step 4: Call Claude
-  const anthropic = new Anthropic({ apiKey })
-  const MODEL = 'claude-sonnet-4-6'
-
-  const message = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: 4096,
-    system: SYSTEM_PROMPT,
-    messages: [
-      { role: 'user', content: userMessage },
-    ],
+  // Step 4: Call Claude via shared client (handles init, errors, and JSON repair)
+  const result = await callClaudeWithDocs({
+    systemPrompt: SYSTEM_PROMPT,
+    userMessage,
+    maxOutputTokens: 4096,
   })
 
-  // Step 5: Parse response — strip markdown fences Claude may add despite instructions
-  const rawText = message.content[0]?.type === 'text' ? message.content[0].text : '{}'
-  const raw = rawText
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```\s*$/i, '')
-    .trim()
-
-  let parsed: Partial<{
-    enhanced_title: string
-    enhanced_meta_title: string
-    enhanced_meta_description: string
-    enhanced_html_body: string
-    word_count: number
-    changes_summary: string
-    geo_block_html: string
-  }> = {}
-
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    // Claude returned non-JSON (e.g. apology text or truncated output).
-    // Fall through with empty parsed — defaults below produce a usable stub.
-    console.error('[upgrade-generator] JSON.parse failed. Raw response:', raw.slice(0, 300))
+  // Step 5: Parse response with robust fallback
+  type UpgradeJson = {
+    enhanced_title?: string
+    enhanced_meta_title?: string
+    enhanced_meta_description?: string
+    enhanced_html_body?: string
+    word_count?: number
+    changes_summary?: string
+    geo_block_html?: string
   }
 
-  // Step 6: Compute cost
-  const usage = message.usage
-  const costUsd = usage
-    ? (usage.input_tokens / 1_000_000) * PRICE_INPUT_PER_M +
-      (usage.output_tokens / 1_000_000) * PRICE_OUTPUT_PER_M
-    : 0
+  let parsed: UpgradeJson = {}
+  try {
+    parsed = parseJsonResponse<UpgradeJson>(result.text)
+  } catch {
+    console.error('[upgrade-generator] JSON parse failed. Preview:', result.text.slice(0, 300))
+  }
 
   return {
-    enhanced_title:        parsed.enhanced_title ?? req.page_title ?? req.topic,
-    enhanced_meta_title:   (parsed.enhanced_meta_title ?? '').slice(0, 60),
+    enhanced_title:            parsed.enhanced_title ?? req.page_title ?? req.topic,
+    enhanced_meta_title:       (parsed.enhanced_meta_title ?? '').slice(0, 60),
     enhanced_meta_description: (parsed.enhanced_meta_description ?? '').slice(0, 155),
-    enhanced_html_body:    parsed.enhanced_html_body ?? `<h1>${req.page_title ?? req.topic}</h1>`,
-    word_count:            parsed.word_count ?? 0,
-    changes_summary:       parsed.changes_summary ?? '',
-    geo_block_html:        parsed.geo_block_html ?? null,
-    original_excerpt:      jinaResult.markdown.slice(0, 500),
-    source_page_url:       req.page_url,
-    cost_usd:              Math.round(costUsd * 1_000_000) / 1_000_000,
-    model_used:            MODEL,
+    enhanced_html_body:        parsed.enhanced_html_body ?? `<h1>${req.page_title ?? req.topic}</h1>`,
+    word_count:                parsed.word_count ?? 0,
+    changes_summary:           parsed.changes_summary ?? '',
+    geo_block_html:            parsed.geo_block_html ?? null,
+    original_excerpt:          jinaMarkdown.slice(0, 500),
+    source_page_url:           req.page_url,
+    cost_usd:                  Math.round(result.cost_usd * 1_000_000) / 1_000_000,
+    model_used:                MODEL_SONNET,
   }
 }
 
