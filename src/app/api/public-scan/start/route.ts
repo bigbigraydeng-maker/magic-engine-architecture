@@ -214,11 +214,12 @@ async function runScan(jobId: string, domain: string): Promise<void> {
       .eq('id', jobId)
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
-    await supabaseAdmin
-      .from('public_scan_jobs')
-      .update({ status: 'failed', error: msg, completed_at: new Date().toISOString() })
-      .eq('id', jobId)
-      .catch(() => {})
+    await Promise.resolve(
+      supabaseAdmin
+        .from('public_scan_jobs')
+        .update({ status: 'failed', error: msg, completed_at: new Date().toISOString() })
+        .eq('id', jobId),
+    ).catch(() => {})
   }
 }
 
@@ -250,10 +251,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   // Save lead (email capture)
   if (email) {
-    await supabaseAdmin
-      .from('discovery_leads')
-      .insert({ url, name: name || null, email, created_at: new Date().toISOString() })
-      .catch(() => {})
+    await Promise.resolve(
+      supabaseAdmin
+        .from('discovery_leads')
+        .insert({ url, name: name || null, email, created_at: new Date().toISOString() }),
+    ).catch(() => {})
   }
 
   // Create job
