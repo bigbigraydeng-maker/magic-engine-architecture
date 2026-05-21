@@ -68,11 +68,11 @@ const CLAUDE_CALL_TIMEOUT_MS = 150_000
 // Complex domains (many tools used) can take 3+ min to generate 24 K JSON,
 // so we give the final call more headroom than regular tool-use turns.
 const CLAUDE_FINAL_TIMEOUT_MS = 240_000
-// Hard wall-clock cap: trigger graceful finalization at 4.5 min so the
-// full round-trip (final Claude call + overhead) lands under the 9-min
-// Render hard-timeout. Buffer is 60 s (not 30 s) to leave adequate room for
-// a slow synthesis turn on complex domains.
-const GLOBAL_TIMEOUT_MS = 270_000
+// Hard wall-clock cap: 5 min wall-clock for the loop so the full round-trip
+// (final Claude call + overhead) lands well under the 9-min Render hard-timeout.
+// Buffer is 30 s — just enough to detect the deadline before starting another
+// tool turn; the final synthesis already has its own CLAUDE_FINAL_TIMEOUT_MS.
+const GLOBAL_TIMEOUT_MS = 300_000
 
 // Sonnet 4.5 pricing per million tokens (must match anthropic/client.ts)
 const PRICE_INPUT_PER_M = 3.0
@@ -429,10 +429,10 @@ export async function runZhangqian(
       break
     }
 
-    // Leave 60 s for the final summary Claude call before the deadline.
-    // Larger buffer so the synthesis turn has room to start before the
-    // 9-min Render hard timeout fires.
-    if (Date.now() + 60_000 >= deadline) {
+    // Leave 30 s before the deadline before triggering forced finalization.
+    // The final synthesis call has its own CLAUDE_FINAL_TIMEOUT_MS (240 s);
+    // 30 s is enough to detect the boundary without cutting the loop early.
+    if (Date.now() + 30_000 >= deadline) {
       truncated = true
       break
     }
