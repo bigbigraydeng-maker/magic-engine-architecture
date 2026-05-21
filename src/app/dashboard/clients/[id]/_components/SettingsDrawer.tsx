@@ -5,8 +5,9 @@ import Link from 'next/link'
 import { BriefPanel } from './BriefPanel'
 import { SiteAuditPanel } from './SiteAuditPanel'
 import { CmsPanel } from './CmsPanel'
+import { UsersPanel } from './UsersPanel'
 
-export type SettingsTab = 'brief' | 'site-audit' | 'seo-gap' | 'client-info' | 'cms'
+export type SettingsTab = 'brief' | 'site-audit' | 'seo-gap' | 'client-info' | 'cms' | 'users'
 
 interface Client {
   id: string
@@ -30,6 +31,7 @@ const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'seo-gap',     label: '📊 SEO Gap' },
   { id: 'client-info', label: '👤 客户信息' },
   { id: 'cms',         label: '🔗 网站连接' },
+  { id: 'users',       label: '🔑 用户权限' },
 ]
 
 export function SettingsDrawer({ open, onClose, clientId, client, activeTab, onTabChange }: Props) {
@@ -108,6 +110,10 @@ export function SettingsDrawer({ open, onClose, clientId, client, activeTab, onT
 
           {activeTab === 'cms' && (
             <CmsPanel clientId={clientId} />
+          )}
+
+          {activeTab === 'users' && (
+            <UsersPanel clientId={clientId} />
           )}
 
           {activeTab === 'client-info' && (

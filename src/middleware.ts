@@ -54,25 +54,44 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl)
   }
 
-  const permissions = getUserPermissions(user.email ?? '')
+  // Admin check (fast env-var path: ADMIN_EMAILS / ADMIN_EMAIL_DOMAIN)
+  const adminPerms = getUserPermissions(user.email ?? '')
+  if (adminPerms?.role === 'admin') {
+    requestHeaders.set('x-user-role', 'admin')
+    return NextResponse.next({ request: { headers: requestHeaders } })
+  }
 
-  if (!permissions) {
+  // Client-viewer check via DB (replaces CLIENT_VIEWERS env var)
+  const email = (user.email ?? '').toLowerCase()
+  const { data: clientUsers } = await supabaseAdmin
+    .from('client_portal_users')
+    .select('client_id')
+    .eq('email', email)
+    .in('access_type', ['dashboard', 'both'])
+
+  if (!clientUsers || clientUsers.length === 0) {
     return NextResponse.redirect(new URL('/unauthorized', request.url))
   }
 
-  // Restrict client-viewer to their assigned client only
-  if (permissions.role === 'client-viewer' && permissions.allowedClientId) {
-    const allowedBase = `/dashboard/clients/${permissions.allowedClientId}`
-    if (!path.startsWith(allowedBase)) {
-      return NextResponse.redirect(new URL(allowedBase, request.url))
+  const allowedClientIds = clientUsers.map((u) => u.client_id)
+  const pathClientId = path.split('/')[3] // /dashboard/clients/{clientId}/...
+
+  // Restrict to allowed clients only
+  if (pathClientId && path.startsWith('/dashboard/clients/')) {
+    if (!allowedClientIds.includes(pathClientId)) {
+      return NextResponse.redirect(
+        new URL(`/dashboard/clients/${allowedClientIds[0]}`, request.url)
+      )
     }
+    requestHeaders.set('x-allowed-client-id', pathClientId)
+  } else {
+    // Non-client path (e.g. /dashboard/content) — redirect to first allowed client
+    return NextResponse.redirect(
+      new URL(`/dashboard/clients/${allowedClientIds[0]}`, request.url)
+    )
   }
 
-  requestHeaders.set('x-user-role', permissions.role)
-  if (permissions.allowedClientId) {
-    requestHeaders.set('x-allowed-client-id', permissions.allowedClientId)
-  }
-
+  requestHeaders.set('x-user-role', 'client-viewer')
   return NextResponse.next({ request: { headers: requestHeaders } })
 }
 
