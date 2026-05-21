@@ -79,20 +79,27 @@ export async function middleware(request: NextRequest) {
     ? clientUsers.map((u) => u.client_id)
     : [envPerms!.allowedClientId!]
 
-  const pathClientId = path.split('/')[3] // /dashboard/clients/{clientId}/...
+  const firstClientId = allowedClientIds[0]
 
-  // Restrict to allowed clients only
-  if (pathClientId && path.startsWith('/dashboard/clients/')) {
+  // Paths client-viewers are allowed beyond their own client page
+  const CLIENT_VIEWER_ALLOWED = ['/dashboard/content', '/dashboard/visuals']
+
+  if (path.startsWith('/dashboard/clients/')) {
+    // Restrict to their own client only
+    const pathClientId = path.split('/')[3]
     if (!allowedClientIds.includes(pathClientId)) {
       return NextResponse.redirect(
-        new URL(`/dashboard/clients/${allowedClientIds[0]}`, request.url)
+        new URL(`/dashboard/clients/${firstClientId}`, request.url)
       )
     }
     requestHeaders.set('x-allowed-client-id', pathClientId)
+  } else if (CLIENT_VIEWER_ALLOWED.some((p) => path === p || path.startsWith(p + '/'))) {
+    // Allow social matrix + launch hub — pages filter by client internally
+    requestHeaders.set('x-allowed-client-id', firstClientId)
   } else {
-    // Non-client path (e.g. /dashboard/content) — redirect to first allowed client
+    // Any other dashboard path → redirect to their client home
     return NextResponse.redirect(
-      new URL(`/dashboard/clients/${allowedClientIds[0]}`, request.url)
+      new URL(`/dashboard/clients/${firstClientId}`, request.url)
     )
   }
 
