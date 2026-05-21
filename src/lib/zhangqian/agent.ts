@@ -59,16 +59,20 @@ const MAX_COST_USD = 1.50
 const MAX_OUTPUT_TOKENS = 24_000
 const FETCH_URL_TIMEOUT_MS = 15_000
 const LOCAL_REVIEWS_TIMEOUT_MS = 45_000
-// Per-turn Anthropic call cap. Anthropic SDK default is 10 min, which can
-// blow past our 4.5 min global wall-clock when a single tool turn stalls
-// server-side. 150 s covers web_search turns where Anthropic searches multiple
-// queries server-side; 90 s was too tight and caused spurious timeout failures.
+// Per-turn Anthropic call cap for tool-use iterations. Anthropic SDK default
+// is 10 min, which can blow past our global wall-clock when a single tool turn
+// stalls server-side. 150 s covers web_search turns where Anthropic searches
+// multiple queries server-side; 90 s was too tight and caused spurious failures.
 const CLAUDE_CALL_TIMEOUT_MS = 150_000
-// Hard wall-clock cap: trigger graceful finalization at 5 min so the
-// full round-trip (final Claude call + overhead) lands under the 6-min
-// stale-job threshold. First-time users should never wait longer than this —
-// deeper analysis lives behind authorized connectors (Phase 8.10.S5).
-const GLOBAL_TIMEOUT_MS = 300_000
+// Separate timeout for the final synthesis call (no tools, pure JSON output).
+// Complex domains (many tools used) can take 3+ min to generate 24 K JSON,
+// so we give the final call more headroom than regular tool-use turns.
+const CLAUDE_FINAL_TIMEOUT_MS = 240_000
+// Hard wall-clock cap: trigger graceful finalization at 4.5 min so the
+// full round-trip (final Claude call + overhead) lands under the 9-min
+// Render hard-timeout. Buffer is 60 s (not 30 s) to leave adequate room for
+// a slow synthesis turn on complex domains.
+const GLOBAL_TIMEOUT_MS = 270_000
 
 // Sonnet 4.5 pricing per million tokens (must match anthropic/client.ts)
 const PRICE_INPUT_PER_M = 3.0
@@ -425,8 +429,10 @@ export async function runZhangqian(
       break
     }
 
-    // Leave 30 s for the final summary Claude call before the 4.5-min deadline
-    if (Date.now() + 30_000 >= deadline) {
+    // Leave 60 s for the final summary Claude call before the deadline.
+    // Larger buffer so the synthesis turn has room to start before the
+    // 9-min Render hard timeout fires.
+    if (Date.now() + 60_000 >= deadline) {
       truncated = true
       break
     }
@@ -590,6 +596,7 @@ export async function runZhangqian(
       'using whatever you have gathered. Set `notes` to flag any incomplete sections.',
   })
 
+  // Use the longer synthesis timeout — no tools means one big JSON response.
   const finalResponse = await client.messages.create(
     {
       model: MODEL_SONNET,
@@ -598,7 +605,7 @@ export async function runZhangqian(
       // Omit tools on the final call so Claude can't loop again
       messages,
     },
-    { timeout: CLAUDE_CALL_TIMEOUT_MS },
+    { timeout: CLAUDE_FINAL_TIMEOUT_MS },
   )
 
   totalInputTokens += finalResponse.usage.input_tokens
