@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-22 00:38 NZST · 当前阶段：**Phase 12.H — GitHub CMS 执行闭环（P1 博客推PR + P2 SEO Fix UI），当前 session 开工**。Phase 12.Q + 12.G 已完成；GitHub CMS 连接器已接通（CTS Tours chinatravel 仓库）。
+> 最后更新：2026-05-22 00:56 NZST · 当前阶段：**Phase 12.I — SEO Intelligence 页面 + 飞轮接线（P12.I.1–I.5 ✅，博客生成已接入 SEO 飞轮；P12.I.6「自主行动」执行泳道为下一步）**。M1 deadline 6/19。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -42,7 +42,8 @@
 ✅ UX 基础修复   全站标题/Login try-catch/客户可见供应商名/WorkflowProgress/ContentHub 简化（2026-05-20）
 ✅ Phase 12.Q   内容质量闭环（已完成，2026-05-21）
 ✅ Phase 12.G   诸葛亮策略调度引擎（P12.G.1–G.5 全部完成，2026-05-21）
-🔥 Phase 12.H   GitHub CMS 执行闭环（P1 博客推PR + P2 SEO Fix UI，当前 session）
+📋 Phase 12.H   GitHub CMS 执行闭环（P1 博客推PR + P2 SEO Fix UI，已登记未开工）
+🔥 Phase 12.I   SEO Intelligence 页面 + 飞轮闭环接线（P12.I.1–I.5 ✅，10 任务，M1 deadline 6/19）
 📋 Phase 13     Production Package / 生产订单聚合层（已登记，待排期）
 🔄 Phase 9.0    Visual Queue UX Polish（部分完成，未收尾）
 📋 Phase 9      报告化 + 客户 Portal
@@ -1539,6 +1540,47 @@ SEO 诊断 → Fix 按钮 → 推 GitHub PR → 客户 merge → 元数据修复
 
 ---
 
+## Phase 12.I — SEO Intelligence 页面 + 飞轮闭环接线 🔥 进行中（2026-05-21）
+
+> **背景**：DataForSEO 数据（200 排名关键词、流量历史、竞品对比、关键词缺口、Intent、KD）已全面接入，但用户只能看到一个 0–100 分数 —— 排名表、流量趋势、竞品界面、关键词缺口全部不可见；SEO Gap 页还要手动上传 SEMrush CSV。Phase 12.I 建一个 SEO Intelligence 页面把数据直接呈现，并把「Untapped 词一键生成博客」接回飞轮（`flywheel_actions` / `flywheel_outcomes`）与执行看板，让 SEO 内容执行不再是孤岛。
+
+### 核心目标
+
+```
+了解自己：排名关键词表 + Intent 分布 + 流量趋势（Cron 快照积累）
+了解对手：竞品并排对比 + 关键词缺口自动拉取 + Venn 图
+内容执行：Untapped 词 → 一键生成博客 → 写 flywheel_actions → 执行看板「自主行动」泳道 → 归因回流
+```
+
+> **截止约束**：Oztop SEMrush 订阅 2026-06-19 到期，M1（页面快照展示版）必须在此之前上线。
+
+### 任务清单（每个任务 = 1 commit）
+
+| ID | 任务 | 依赖 | 状态 |
+|----|------|------|------|
+| **P12.I.1** | `/dashboard/clients/[id]/seo-intelligence` 页面路由 + 顶部指标栏（读 `flywheel_metrics` WHERE flywheel='seo'） | flywheel_metrics ✅ | ✅ |
+| **P12.I.2** | Panel A「了解自己」— Organic Rankings 关键词表 + Intent 分布图 | P12.I.1 | ✅ |
+| **P12.I.3** | Panel B「了解对手」— 竞品并排对比 + 关键词缺口自动 DataForSEO 拉取 + Venn 图 | P12.I.1 | ✅ |
+| **P12.I.4** | SEO Gap 页改用 DataForSEO `getKeywordsGap()` 自动拉取，移除 SEMrush CSV 上传 | DataForSEO ✅ | ✅ |
+| **P12.I.5** | 接线缺口 1+2 — 博客生成 route `persistAndReturn()` 写 `flywheel_actions(flywheel='seo')` + 持久化 `primary_keyword/volume/kd/intent` | — | ✅ |
+| **P12.I.6** | 接线缺口 4 — 执行看板新增「自主行动」泳道，支持无处方来源的 `execution_item` 渲染 + OutcomeChip | P12.I.5 | 📋 |
+| **P12.I.7** | 接线缺口 3 — Untapped 词 / `/strategy` `new_blog` 卡片加「生成博客」按钮，一键接入 POST /blog | P12.I.3, P12.I.5 | 📋 |
+| **P12.I.8** | `keyword_snapshots` 表 migration + weekly Cron（每周存关键词排名快照，为趋势图积累数据） | — | 📋 |
+| **P12.I.9** | Position Changes 计算（New / Lost / Improved / Declined），Panel A 展示 | P12.I.8 | 📋 |
+| **P12.I.10** | Intent 优先内容策略（Transactional 置顶）+ Branded vs Non-Branded 流量分拆 | P12.I.2 | 📋 |
+
+### 里程碑关卡
+
+- **M1 页面快照展示版**（P12.I.1–4，⚠️ **6/19 前必须上线**）：SEO Intelligence 页面上线，Panel A + B 展示真实 DataForSEO 数据，SEO Gap 改自动拉取
+- **M2 内容执行闭环**（P12.I.5–7）：Untapped 词一键生成博客 → 写 `flywheel_actions` → 执行看板「自主行动」泳道能看到该任务卡片
+- **M3 趋势与追踪**（P12.I.8–10）：Cron 周快照跑起来，Position Changes 有数据，Intent 优先策略生效
+
+### 工作分支
+
+- 实施分支：`claude/reverent-brown-3345c7`（本 session worktree）
+
+---
+
 ## Phase 13 — Production Package（生产订单聚合层）📋 已登记，未开工
 
 > **背景**：当前 `content_posts / blog_posts / reels_drafts / visual_assets` 各自为政，`execution_items.content_post_id` 是 1:1 链路，无法表达"一个执行项 → 一组产物"的批次语义。Production Package 是六维诊断后的**统一生产订单聚合层**，把分散产物按维度 + 上下文聚合成可审核、可追溯、可归因的批次。
@@ -2038,6 +2080,18 @@ AU / NZ（当前）          新市场（未来）
 ### 2026-05-22
 
 - **P13.D** — Ads + Reputation 接入 production package：meta_ads_snapshots + project_reviews 加 production_package_id FK；两条路由接受可选参数；包详情页回读 ads_snapshots + reputation_reviews，build ✅
+
+### 2026-05-21（续 2）
+
+- **P12.I.5** — 博客生成接入 SEO 飞轮（接线缺口 1+2）：`blog/route.ts` 的 `persistAndReturn()` 持久化 `primary_keyword/keyword_volume/keyword_kd/keyword_intent` 到 `blog_posts`，并在博客落库后非阻断写一条 `flywheel_actions(flywheel='seo', action_type='seo.publish_blog', execution_mode='in_house')`；复用 `SeoContentAdapter.execute()`，try/catch 包裹保证飞轮写入失败不影响主流程；零 schema 改动；build ✅；未引入新测试失败
+
+- **P12.I.3** — Panel B「了解对手」竞品并排对比 + 关键词缺口 Venn 图：GET `/api/clients/[id]/seo-intelligence/competitors-gap`（getSerpCompetitors top5 + getKeywordsGap top3 竞品，24h cache）；竞品卡片横向滚动；SVG Venn 图（你独有/共同词/缺口）；缺口词筛选表（意图/搜索）；TS 无新错误；build ✅
+
+- **P12.I.4** — SEO Gap 页移除 SEMrush CSV 上传，改用 DataForSEO 自动拉取：route.ts POST 改为 JSON body，调 `getSerpCompetitors→getKeywordsGap`，`LabsKeyword→ParsedKeyword` 映射（search_volume/keyword_difficulty/intent）；前端移除 drag-drop/文件列表/useRef/useCallback，一键「Run」按钮；AI 分析链路+DOCX 生成+Storage 上传不变；TS 无新增错误
+
+- **P12.I.2** — Panel A「了解自己」Organic Rankings 关键词表 + Intent 分布图：`getRankedKeywords()` 调 DataForSEO ranked_keywords/live（200 词含 position）；GET `/api/clients/[id]/seo-intelligence/rankings`（24h cache）；Panel A 完整 UI：Intent 分布徽章、Intent/排名段位/品牌词三维过滤器、搜索框、50 条分页表格（关键词/排名/月搜量/KD/意图）；TS 无新增错误；build ✅
+
+- **P12.I.1** — SEO Intelligence 页面路由 + 顶部指标栏：新增 `/dashboard/clients/[id]/seo-intelligence` 页面；GET `/api/clients/[id]/seo-intelligence/metrics` 读 `flywheel_metrics(flywheel='seo')` 最新快照（4 指标：收录关键词/月均流量/权威分/已发布博客）；客户详情页「SEO 工具」区块新增导航入口；Panel A/B 占位面板；build ✅
 
 ### 2026-05-21（续）
 
