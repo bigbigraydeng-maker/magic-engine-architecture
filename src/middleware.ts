@@ -61,7 +61,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next({ request: { headers: requestHeaders } })
   }
 
-  // Client-viewer check via DB (replaces CLIENT_VIEWERS env var)
+  // Client-viewer: DB lookup (new UI-managed path)
   const email = (user.email ?? '').toLowerCase()
   const { data: clientUsers } = await supabaseAdmin
     .from('client_portal_users')
@@ -69,11 +69,16 @@ export async function middleware(request: NextRequest) {
     .eq('email', email)
     .in('access_type', ['dashboard', 'both'])
 
-  if (!clientUsers || clientUsers.length === 0) {
+  // Fallback: CLIENT_VIEWERS env var (backward compat — keeps existing Render configs working)
+  const envPerms = getUserPermissions(email)
+  if ((!clientUsers || clientUsers.length === 0) && envPerms?.role !== 'client-viewer') {
     return NextResponse.redirect(new URL('/unauthorized', request.url))
   }
 
-  const allowedClientIds = clientUsers.map((u) => u.client_id)
+  const allowedClientIds = clientUsers && clientUsers.length > 0
+    ? clientUsers.map((u) => u.client_id)
+    : [envPerms!.allowedClientId!]
+
   const pathClientId = path.split('/')[3] // /dashboard/clients/{clientId}/...
 
   // Restrict to allowed clients only
