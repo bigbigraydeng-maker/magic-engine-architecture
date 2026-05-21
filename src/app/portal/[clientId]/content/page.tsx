@@ -22,7 +22,7 @@ export default async function PortalContentPage({ params, searchParams }: Props)
   // Social posts
   const { data: socials } = await supabaseAdmin
     .from('content_posts')
-    .select('id, title, caption, platforms, route, status, scheduled_at, created_at')
+    .select('id, title, caption, script, platforms, route, status, scheduled_at, created_at')
     .eq('client_id', clientId)
     .in('status', ['approved', 'published', 'scheduled'])
     .order('created_at', { ascending: false })
@@ -137,10 +137,23 @@ export default async function PortalContentPage({ params, searchParams }: Props)
                         <span className="text-xs text-gray-400 uppercase">{post.route}</span>
                       )}
                     </div>
+                    {post.title && (
+                      <p className="text-sm font-semibold text-gray-900 mb-1">{post.title}</p>
+                    )}
                     {post.caption && (
                       <p className="text-sm text-gray-700 leading-relaxed line-clamp-2">
                         {post.caption}
                       </p>
+                    )}
+                    {post.script && (
+                      <details className="mt-2">
+                        <summary className="text-xs font-medium text-indigo-600 cursor-pointer hover:text-indigo-700 select-none">
+                          Video Script ▾
+                        </summary>
+                        <pre className="mt-2 whitespace-pre-wrap text-xs text-gray-700 bg-gray-50 rounded-lg p-3 leading-relaxed border border-gray-200">
+                          {post.script}
+                        </pre>
+                      </details>
                     )}
                   </div>
                   <span className={`flex-shrink-0 rounded-full px-2 py-0.5 text-xs font-medium capitalize ${STATUS_STYLES[post.status] ?? 'bg-gray-100 text-gray-500'}`}>
