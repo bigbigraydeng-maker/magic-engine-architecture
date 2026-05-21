@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>China Tours 2026–2027 | CTS Tours</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --red:   #c5162e;
+      --navy:  #0b1830;
+      --gold:  #c9a35a;
+      --light: #F7F7F7;
+    }
+
+    body { font-family: Arial, Helvetica, sans-serif; color: #333; }
+
+    /* ── Header ── */
+    .header {
+      position: sticky; top: 0; z-index: 100;
+      background: var(--navy);
+      padding: 12px 40px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .logo-name  { color: #fff; font-size: 26px; font-weight: 900; }
+    .logo-name span { color: var(--red); }
+    .logo-sub   { color: rgba(255,255,255,.5); font-size: 10px; letter-spacing: 2px; text-transform: uppercase; }
+    .hdr-contact { text-align: right; }
+    .hdr-phone  { font-size: 20px; font-weight: 700; color: var(--red); }
+    .hdr-email  { font-size: 13px; color: rgba(255,255,255,.75); text-decoration: none; }
+
+    /* ── Tagline bar ── */
+    .tagline-bar {
+      background: var(--red); color: #fff;
+      text-align: center; padding: 9px;
+      font-style: italic; font-weight: 600; font-size: 15px; letter-spacing: .8px;
+    }
+
+    /* ── Hero: Silk Road ── */
+    .hero {
+      position: relative; min-height: 560px;
+      background: linear-gradient(130deg, #3d2200 0%, #7a4a00 35%, #2a1600 70%, #0d0800 100%);
+      display: flex; align-items: center;
+    }
+    .hero::before {
+      content: '';
+      position: absolute; inset: 0;
+      background:
+        radial-gradient(ellipse at 65% 45%, rgba(212,168,71,.25) 0%, transparent 55%),
+        repeating-linear-gradient(18deg, transparent, transparent 22px, rgba(255,255,255,.018) 22px, rgba(255,255,255,.018) 44px);
+    }
+    .hero-overlay {
+      position: absolute; inset: 0;
+      background: linear-gradient(to right, rgba(0,0,0,.72) 0%, rgba(0,0,0,.28) 55%, transparent 100%);
+    }
+    .hero-inner {
+      position: relative; z-index: 1;
+      max-width: 1160px; margin: 0 auto; padding: 64px 40px;
+      display: grid; grid-template-columns: 1fr 420px; gap: 60px; align-items: center; width: 100%;
+    }
+
+    /* left */
+    .hero-badge {
+      display: inline-block; background: var(--red); color: #fff;
+      padding: 5px 14px; font-size: 11px; font-weight: 700;
+      letter-spacing: 2px; text-transform: uppercase; margin-bottom: 20px;
+    }
+    .hero-title { font-size: 50px; font-weight: 900; color: #fff; line-height: 1.08; margin-bottom: 18px; }
+    .hero-title em { color: var(--gold); font-style: normal; }
+    .hero-desc  { color: rgba(255,255,255,.82); font-size: 15px; line-height: 1.75; margin-bottom: 28px; }
+    .hero-hl    { display: flex; flex-direction: column; gap: 8px; }
+    .hero-hl li {
+      color: rgba(255,255,255,.88); font-size: 14px;
+      display: flex; align-items: center; gap: 10px; list-style: none;
+    }
+    .hero-hl li::before {
+      content: '✓'; width: 20px; height: 20px; line-height: 20px; text-align: center;
+      background: var(--red); border-radius: 50%; font-size: 11px; font-weight: 700; flex-shrink: 0;
+    }
+
+    /* right card */
+    .hero-card {
+      background: rgba(255,255,255,.1);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,.18);
+      padding: 36px; text-align: center;
+    }
+    .hc-duration { font-size: 13px; color: rgba(255,255,255,.65); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 6px; font-weight: 600; }
+    .hc-dates    { font-size: 20px; font-weight: 800; color: #fff; margin-bottom: 24px; line-height: 1.4; }
+    .hc-label    { font-size: 12px; color: rgba(255,255,255,.6); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+    .price-box   { background: var(--red); padding: 14px 20px; margin-bottom: 10px; }
+    .price-big   { font-size: 52px; font-weight: 900; color: #fff; line-height: 1; }
+    .price-big sup { font-size: 22px; vertical-align: super; }
+    .price-pp    { font-size: 18px; font-weight: 600; color: rgba(255,255,255,.8); }
+    .price-note  { font-size: 11px; color: rgba(255,255,255,.55); font-style: italic; margin-bottom: 24px; line-height: 1.6; }
+    .btn-white {
+      display: block; background: #fff; color: var(--navy);
+      padding: 15px; font-size: 15px; font-weight: 800;
+      text-decoration: none; text-transform: uppercase; letter-spacing: 1px;
+      transition: background .2s, color .2s; margin-bottom: 10px;
+    }
+    .btn-white:hover { background: var(--gold); color: #fff; }
+    .btn-outline-white {
+      display: block; background: transparent; color: #fff;
+      padding: 13px; font-size: 13px; font-weight: 600;
+      text-decoration: none; border: 2px solid rgba(255,255,255,.4);
+      transition: border-color .2s, background .2s; text-align: center;
+    }
+    .btn-outline-white:hover { border-color: #fff; background: rgba(255,255,255,.1); }
+
+    /* ── Section title ── */
+    .sec-title { text-align: center; padding: 52px 40px 28px; }
+    .sec-title h2 { font-size: 30px; font-weight: 800; color: var(--navy); }
+    .sec-title p  { color: #666; margin-top: 8px; font-size: 15px; }
+    .red-bar { width: 48px; height: 4px; background: var(--red); margin: 14px auto 0; }
+
+    /* ── Three tour cards ── */
+    .tours-grid {
+      max-width: 1160px; margin: 0 auto; padding: 0 40px 60px;
+      display: grid; grid-template-columns: repeat(3,1fr); gap: 24px;
+    }
+    .tcard { border: 1px solid #e0e0e0; border-top: 4px solid var(--red); background: #fff; transition: box-shadow .2s; }
+    .tcard:hover { box-shadow: 0 8px 28px rgba(0,0,0,.11); }
+    .tcard-img { height: 200px; overflow: hidden; }
+    .tcard-img img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform .35s ease; }
+    .tcard:hover .tcard-img img { transform: scale(1.04); }
+    .tcard-body { padding: 22px; }
+    .tcard-title { font-size: 17px; font-weight: 800; color: var(--navy); margin-bottom: 12px; line-height: 1.35; }
+    .tcard-meta  { display: flex; flex-direction: column; gap: 5px; margin-bottom: 18px; }
+    .tcard-meta span { font-size: 13px; color: #555; }
+    .tcard-foot  { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #eee; padding-top: 14px; }
+    .tcard-price { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: .5px; }
+    .tcard-price strong { display: block; font-size: 26px; font-weight: 900; color: var(--red); line-height: 1.1; }
+    .tcard-price strong span { font-size: 13px; font-weight: 600; }
+    .btn-enquire {
+      background: var(--navy); color: #fff;
+      padding: 10px 18px; font-size: 13px; font-weight: 700;
+      text-decoration: none; border: none; cursor: pointer; transition: background .2s;
+    }
+    .btn-enquire:hover { background: var(--red); }
+
+    /* ── Enquiry form ── */
+    .form-section { background: var(--light); padding: 60px 40px; }
+    .form-inner   { max-width: 680px; margin: 0 auto; }
+    .form-title   { font-size: 26px; font-weight: 800; color: var(--navy); margin-bottom: 6px; }
+    .form-sub     { color: #666; margin-bottom: 28px; font-size: 14px; }
+    .frow { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+    .frow.full-row { grid-template-columns: 1fr; }
+    .fg { display: flex; flex-direction: column; }
+    .fg label { font-size: 12px; font-weight: 700; color: #444; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 5px; }
+    .fg input, .fg select, .fg textarea {
+      padding: 11px 14px; border: 1px solid #ddd; font-size: 14px;
+      color: #333; background: #fff; outline: none; transition: border-color .2s; width: 100%;
+    }
+    .fg input:focus, .fg select:focus, .fg textarea:focus { border-color: var(--navy); }
+    .fg textarea { min-height: 90px; resize: vertical; }
+    .btn-submit {
+      width: 100%; background: var(--red); color: #fff; border: none;
+      padding: 16px; font-size: 16px; font-weight: 800; cursor: pointer;
+      text-transform: uppercase; letter-spacing: 1px; margin-top: 6px; transition: background .2s;
+    }
+    .btn-submit:hover { background: #a00020; }
+
+    /* ── CTA footer band ── */
+    .cta-band {
+      background: var(--navy); padding: 56px 40px; text-align: center;
+    }
+    .cta-band h2 { font-size: 34px; font-weight: 800; color: #fff; margin-bottom: 12px; }
+    .cta-band p  { color: rgba(255,255,255,.7); font-size: 15px; margin-bottom: 36px; }
+    .cta-btns { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-bottom: 44px; }
+    .btn-cta-red {
+      background: var(--red); color: #fff; padding: 17px 44px;
+      font-size: 15px; font-weight: 800; text-decoration: none;
+      text-transform: uppercase; letter-spacing: 1px; transition: background .2s;
+    }
+    .btn-cta-red:hover { background: #a00020; }
+    .btn-cta-outline {
+      background: transparent; color: #fff; padding: 17px 44px;
+      font-size: 15px; font-weight: 700; text-decoration: none;
+      border: 2px solid rgba(255,255,255,.45); text-transform: uppercase; letter-spacing: 1px;
+      transition: border-color .2s, background .2s;
+    }
+    .btn-cta-outline:hover { border-color: #fff; background: rgba(255,255,255,.08); }
+    .contact-strip { display: flex; justify-content: center; gap: 48px; flex-wrap: wrap; }
+    .cs-item { text-align: center; }
+    .cs-label { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: rgba(255,255,255,.45); margin-bottom: 4px; }
+    .cs-value { font-size: 18px; font-weight: 700; color: #fff; }
+    .cs-value a { color: #fff; text-decoration: none; }
+    .cs-value a:hover { color: var(--gold); }
+    .cs-value.small { font-size: 14px; }
+
+    /* ── Footer ── */
+    .footer {
+      background: #0d1929; padding: 26px 40px;
+      display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px;
+    }
+    .footer-copy { color: rgba(255,255,255,.4); font-size: 12px; font-style: italic; max-width: 600px; }
+    .footer-logo { color: #fff; font-size: 18px; font-weight: 900; text-align: right; }
+    .footer-logo span { color: var(--red); }
+    .footer-logo small { display: block; font-size: 9px; font-weight: 400; color: rgba(255,255,255,.35); letter-spacing: 2px; }
+
+    /* ── Responsive ── */
+    @media (max-width: 960px) {
+      .hero-inner { grid-template-columns: 1fr; }
+      .hero-title { font-size: 36px; }
+      .tours-grid { grid-template-columns: 1fr; padding: 0 24px 40px; }
+      .frow       { grid-template-columns: 1fr; }
+      .header     { padding: 12px 20px; }
+      .hero-inner { padding: 44px 24px; }
+    }
+    @media (max-width: 600px) {
+      .hdr-phone  { font-size: 16px; }
+      .contact-strip { flex-direction: column; gap: 22px; }
+      .footer     { flex-direction: column; text-align: center; }
+      .footer-logo { text-align: center; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ══ HEADER ══ -->
+<header class="header">
+  <div>
+    <img src="https://www.ctstours.co.nz/logo.png" alt="CTS Tours – Experience The Real Asia" style="height:52px; display:block;">
+  </div>
+  <div class="hdr-contact">
+    <div class="hdr-phone">(09) 375 1717</div>
+    <a class="hdr-email" href="mailto:ctstours1@chinatravel.co.nz">ctstours1@chinatravel.co.nz</a>
+  </div>
+</header>
+
+<!-- ══ TAGLINE ══ -->
+<div class="tagline-bar">Visa-free travel. &nbsp;Small group touring. &nbsp;Incredible value.</div>
+
+<!-- ══ HERO: SILK ROAD ══ -->
+<section class="hero" id="silk-road">
+  <div class="hero-overlay"></div>
+  <div class="hero-inner">
+
+    <!-- Left copy -->
+    <div>
+      <div class="hero-badge">Featured Journey 2027</div>
+      <h1 class="hero-title">Experience the History,<br>Culture &amp; Beauty of<br>the <em>Silk Road</em></h1>
+      <p class="hero-desc">Journey through some of China's most breathtaking and historic landscapes on this unforgettable 18-day adventure — from Urumqi all the way to Xi'an.</p>
+      <ul class="hero-hl">
+        <li>Heavenly Lake &amp; the Flaming Mountains</li>
+        <li>World-famous Mogao Caves</li>
+        <li>Colourful Danxia Landforms</li>
+        <li>Bingling Temple Grottoes</li>
+        <li>Legendary Terracotta Warriors</li>
+      </ul>
+    </div>
+
+    <!-- Right price card -->
+    <div class="hero-card">
+      <div class="hc-duration">18 Days &nbsp;|&nbsp; Urumqi → Xi'an</div>
+      <div class="hc-dates">Departures:<br>13 May 2027 &nbsp;&amp;&nbsp; 21 Oct 2027</div>
+      <div class="hc-label">All-inclusive from</div>
+      <div class="price-box">
+        <div class="price-big"><sup>$</sup>7,999<span class="price-pp">pp</span></div>
+      </div>
+      <p class="price-note">Includes international flights, accommodation,<br>guided touring, all meals and more.</p>
+      <a class="btn-white" href="#enquiry-form">Enquire Now →</a>
+      <a class="btn-outline-white" href="https://www.ctstours.co.nz/tours/china/signature/silk-road" target="_blank">View Full Itinerary</a>
+    </div>
+
+  </div>
+</section>
+
+<!-- ══ THREE TOURS ══ -->
+<div class="sec-title">
+  <h2>More China Tours — Departing 2026</h2>
+  <p>Expert-led small group tours with everything taken care of.</p>
+  <div class="red-bar"></div>
+</div>
+
+<div class="tours-grid">
+
+  <!-- Shanghai -->
+  <div class="tcard">
+    <div class="tcard-img"><img src="https://qbturrydultenhlfmdcm.supabase.co/storage/v1/render/image/public/tour-images/tours/wuzhen-canal/wuzhen-canal.jpg?quality=75&width=800" alt="Wuzhen water town canal, Shanghai tour"></div>
+    <div class="tcard-body">
+      <div class="tcard-title">Shanghai &amp; Surroundings</div>
+      <div class="tcard-meta">
+        <span>📅 &nbsp;Departure: 14 October 2026</span>
+        <span>⏱ &nbsp;10 Days</span>
+        <span>👥 &nbsp;Small group tour</span>
+      </div>
+      <div class="tcard-foot">
+        <div class="tcard-price">
+          From
+          <strong>$3,399<span>pp</span></strong>
+        </div>
+        <a class="btn-enquire" href="#enquiry-form">Enquire</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Beijing & Xi'an -->
+  <div class="tcard">
+    <div class="tcard-img"><img src="https://qbturrydultenhlfmdcm.supabase.co/storage/v1/render/image/public/tour-images/tours/forbidden-city-gold-lion/forbidden-city-gold-lion.jpg?quality=75&width=800" alt="Golden lion at the Forbidden City, Beijing"></div>
+    <div class="tcard-body">
+      <div class="tcard-title">A Tale of Two Cities — Beijing &amp; Xi'an</div>
+      <div class="tcard-meta">
+        <span>📅 &nbsp;Departure: 15 October 2026</span>
+        <span>⏱ &nbsp;10 Days</span>
+        <span>👥 &nbsp;Small group tour</span>
+      </div>
+      <div class="tcard-foot">
+        <div class="tcard-price">
+          From
+          <strong>$3,480<span>pp</span></strong>
+        </div>
+        <a class="btn-enquire" href="#enquiry-form">Enquire</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chongqing & Chengdu -->
+  <div class="tcard">
+    <div class="tcard-img"><img src="https://qbturrydultenhlfmdcm.supabase.co/storage/v1/render/image/public/tour-images/migrated/unsplash/photo-1581252584837-95f73fd23574.jpg?quality=75&width=800" alt="Chongqing and Chengdu China tour"></div>
+    <div class="tcard-body">
+      <div class="tcard-title">From Cyberpunk Chongqing to Panda Chengdu</div>
+      <div class="tcard-meta">
+        <span>📅 &nbsp;Departure: 1 November 2026</span>
+        <span>⏱ &nbsp;10 Days</span>
+        <span>👥 &nbsp;Small group tour</span>
+      </div>
+      <div class="tcard-foot">
+        <div class="tcard-price">
+          From
+          <strong>$2,999<span>pp</span></strong>
+        </div>
+        <a class="btn-enquire" href="#enquiry-form">Enquire</a>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ══ ENQUIRY FORM ══ -->
+<div class="form-section" id="enquiry-form">
+  <div class="form-inner">
+    <div class="form-title">Request More Information</div>
+    <div class="form-sub">Our team will get back to you within one business day.</div>
+
+    <div class="frow">
+      <div class="fg"><label>First Name</label><input type="text" placeholder="Jane"></div>
+      <div class="fg"><label>Last Name</label><input type="text" placeholder="Smith"></div>
+    </div>
+    <div class="frow">
+      <div class="fg"><label>Email</label><input type="email" placeholder="jane@agency.co.nz"></div>
+      <div class="fg"><label>Phone</label><input type="tel" placeholder="(09) 000 0000"></div>
+    </div>
+    <div class="frow full-row">
+      <div class="fg">
+        <label>Tour of Interest</label>
+        <select>
+          <option value="">— Select a tour —</option>
+          <option>Silk Road — 18 Days | from $7,999pp (May 2027)</option>
+          <option>Silk Road — 18 Days | from $7,999pp (Oct 2027)</option>
+          <option>Shanghai &amp; Surroundings — 10 Days | from $3,399pp (Oct 2026)</option>
+          <option>Beijing &amp; Xi'an — 10 Days | from $3,480pp (Oct 2026)</option>
+          <option>Chongqing &amp; Chengdu — 10 Days | from $2,999pp (Nov 2026)</option>
+        </select>
+      </div>
+    </div>
+    <div class="frow">
+      <div class="fg">
+        <label>Number of Travellers</label>
+        <select>
+          <option>1</option>
+          <option selected>2</option>
+          <option>3</option>
+          <option>4+</option>
+        </select>
+      </div>
+      <div class="fg">
+        <label>Preferred Contact</label>
+        <select>
+          <option>Email</option>
+          <option>Phone</option>
+          <option>Either</option>
+        </select>
+      </div>
+    </div>
+    <div class="frow full-row">
+      <div class="fg">
+        <label>Message (optional)</label>
+        <textarea placeholder="Any questions or special requirements…"></textarea>
+      </div>
+    </div>
+    <button class="btn-submit" type="submit">Send Enquiry →</button>
+  </div>
+</div>
+
+<!-- ══ CTA BAND ══ -->
+<div class="cta-band">
+  <h2>Ready to Experience the Real Asia?</h2>
+  <p>Our China travel specialists are here to help plan the perfect journey.</p>
+  <div class="cta-btns">
+    <a class="btn-cta-red" href="tel:0093751717">Call (09) 375 1717</a>
+    <a class="btn-cta-outline" href="mailto:ctstours1@chinatravel.co.nz">Email Us</a>
+  </div>
+  <div class="contact-strip">
+    <div class="cs-item">
+      <div class="cs-label">Phone</div>
+      <div class="cs-value"><a href="tel:0093751717">(09) 375 1717</a></div>
+    </div>
+    <div class="cs-item">
+      <div class="cs-label">Email</div>
+      <div class="cs-value small"><a href="mailto:ctstours1@chinatravel.co.nz">ctstours1@chinatravel.co.nz</a></div>
+    </div>
+    <div class="cs-item">
+      <div class="cs-label">Website</div>
+      <div class="cs-value small"><a href="https://ctstours.co.nz" target="_blank">ctstours.co.nz</a></div>
+    </div>
+    <div class="cs-item">
+      <div class="cs-label">Address</div>
+      <div class="cs-value small">Level 2, CTS House<br>175 Queen St, Auckland</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ FOOTER ══ -->
+<footer class="footer">
+  <div class="footer-copy">
+    CTS Tours is proud to support New Zealand travel agents with trusted China travel expertise, competitive packages, and curated itineraries.
+  </div>
+  <div class="footer-logo">
+    CTS <span>Tours</span>
+    <small>EXPERIENCE THE REAL ASIA</small>
+  </div>
+</footer>
+
+</body>
+</html>
