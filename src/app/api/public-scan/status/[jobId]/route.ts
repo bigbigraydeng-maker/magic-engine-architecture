@@ -7,6 +7,9 @@
  * Returns progress_log always; result only when status = 'completed'.
  */
 
+// Must never be cached — this is a live-polling endpoint
+export const dynamic = 'force-dynamic'
+
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 
@@ -47,5 +50,7 @@ export async function GET(
     completed_at: data.completed_at,
     // Only send full result payload when done (keep polling responses small)
     result: data.status === 'completed' ? data.result : null,
+  }, {
+    headers: { 'Cache-Control': 'no-store' },
   })
 }
