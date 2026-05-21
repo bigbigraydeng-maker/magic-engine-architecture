@@ -19,25 +19,31 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(loginUrl)
     }
 
-    // Look up portal access in DB
-    const { data: portalUser } = await supabaseAdmin
+    // Look up ALL clients this user can access
+    const { data: portalUsers } = await supabaseAdmin
       .from('client_portal_users')
       .select('client_id')
       .eq('email', (user.email ?? '').toLowerCase())
-      .maybeSingle()
 
-    if (!portalUser?.client_id) {
+    if (!portalUsers || portalUsers.length === 0) {
       return NextResponse.redirect(new URL('/unauthorized', request.url))
     }
 
-    // Enforce URL matches their assigned client
-    const allowedBase = `/portal/${portalUser.client_id}`
-    if (path !== '/portal' && !path.startsWith(allowedBase)) {
-      return NextResponse.redirect(new URL(allowedBase, request.url))
+    const allowedClientIds = portalUsers.map((p) => p.client_id)
+
+    // /portal root → redirect to first allowed client
+    if (path === '/portal') {
+      return NextResponse.redirect(new URL(`/portal/${allowedClientIds[0]}`, request.url))
+    }
+
+    // Extract clientId from /portal/{clientId}/...
+    const pathClientId = path.split('/')[2]
+    if (!pathClientId || !allowedClientIds.includes(pathClientId)) {
+      return NextResponse.redirect(new URL(`/portal/${allowedClientIds[0]}`, request.url))
     }
 
     requestHeaders.set('x-user-role', 'client-viewer')
-    requestHeaders.set('x-allowed-client-id', portalUser.client_id)
+    requestHeaders.set('x-allowed-client-id', pathClientId)
     return NextResponse.next({ request: { headers: requestHeaders } })
   }
 
