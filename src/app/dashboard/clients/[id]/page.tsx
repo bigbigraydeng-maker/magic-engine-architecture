@@ -552,6 +552,7 @@ export default function ClientDetailPage() {
           <ToolCard href={`/dashboard/ai-visibility/${clientId}`}          icon="🤖" title="AI 可见度追踪" desc="监控 AI 搜索中的品牌曝光"         badge="in_house" />
           <ToolCard href={`/dashboard/clients/${clientId}/connectors`}     icon="🔗" title="广告连接器"    desc="连接 Meta · Google 广告账户"      badge="in_house" />
           <ToolCard href={`/dashboard/visuals?client=${clientId}`}         icon="🚀" title="Launch Hub"    desc="Reels · 图片 · 视频素材生产"      badge="in_house" />
+          <ToolCard href={`/dashboard/clients/${clientId}/production`}     icon="📦" title="内容生产包"    desc="查看各维度内容包状态 · 生成内容后自动归集" badge="in_house" />
         </div>
       </section>
 
