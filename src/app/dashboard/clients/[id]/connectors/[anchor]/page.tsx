@@ -151,6 +151,7 @@ export default function ConnectorDetailPage() {
 
   // For OAuth connectors: track whether the Google auth step is done
   const [oauthEmail, setOauthEmail]   = useState<string | null>(null)
+  const [oauthDone, setOauthDone]     = useState(false)
   const [oauthChecked, setOauthChecked] = useState(false)
 
   // On mount for OAuth connectors: check existing status + handle ?oauth= param
@@ -172,6 +173,7 @@ export default function ConnectorDetailPage() {
         if (row && (row.status === 'partial' || row.status === 'connected')) {
           const email = (row.config?.google_email as string | undefined) ?? null
           setOauthEmail(email)
+          setOauthDone(true)
           if (row.config?.site_url) {
             setFieldValues({ site_url: row.config.site_url as string })
           }
@@ -235,7 +237,7 @@ export default function ConnectorDetailPage() {
   }
 
   const missingRequired =
-    (meta.oauthAnchor !== undefined && !oauthEmail) ||
+    (meta.oauthAnchor !== undefined && !oauthDone) ||
     meta.fields
       .filter(f => f.required && !fieldValues[f.key]?.trim())
       .length > 0
@@ -267,10 +269,10 @@ export default function ConnectorDetailPage() {
         {meta.oauthAnchor && oauthChecked && (
           <div className="rounded-xl border border-gray-200 bg-white p-5 space-y-3">
             <h2 className="text-sm font-semibold text-gray-900">第 1 步：Google 账号授权</h2>
-            {oauthEmail ? (
+            {oauthDone ? (
               <div className="flex items-center gap-2">
                 <span className="text-green-600 font-semibold text-sm">✓ 已授权</span>
-                <span className="text-sm text-gray-600">{oauthEmail}</span>
+                {oauthEmail && <span className="text-sm text-gray-600">{oauthEmail}</span>}
                 <button
                   onClick={() => {
                     window.location.href = `/api/auth/google/connect?client_id=${clientId}`
@@ -300,7 +302,7 @@ export default function ConnectorDetailPage() {
         )}
 
         {/* Form fields — for OAuth connectors, only show after OAuth step */}
-        {meta.fields.length > 0 && (!meta.oauthAnchor || oauthEmail) && (
+        {meta.fields.length > 0 && (!meta.oauthAnchor || oauthDone) && (
           <div className="rounded-xl border border-gray-200 bg-white p-5 space-y-4">
             <h2 className="text-sm font-semibold text-gray-900">配置信息</h2>
             {meta.fields.map(f => (
