@@ -42,6 +42,13 @@ interface ClientRow {
   domain: string | null
 }
 
+interface SupabaseErrorLike {
+  code?: string
+  message?: string
+  details?: string
+  hint?: string
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: { id: string } }
@@ -252,36 +259,45 @@ async function persistAndReturn(
   qualityScore: number | null,
   contextSnapshot: Record<string, unknown> | null,
 ) {
-  const { data: post, error: dbErr } = await supabaseAdmin
-    .from('blog_posts')
-    .insert({
-      client_id:          clientId,
-      mode,
-      topic:              body.topic.slice(0, 400),
-      source_query_id:    body.source_query_id   ?? null,
-      source_query_text:  body.source_query_text ?? null,
-      // P12.I.5: persist keyword metadata (SEMrush signal for SEO/unified posts)
-      primary_keyword:    body.primary_keyword   ?? null,
-      keyword_volume:     body.keyword_volume    ?? null,
-      keyword_kd:         body.keyword_kd        ?? null,
-      keyword_intent:     body.keyword_intent    ?? null,
-      title:              result.title,
-      meta_title:         result.meta_title,
-      meta_description:   result.meta_description,
-      slug:               result.slug,
-      html_body:          result.html_body,
-      word_count:         result.word_count,
-      geo_directive_id:   result.geo_directive_id,
-      geo_html_snapshot:  result.geo_html_snapshot,
-      featured_image_prompt: result.featured_image_prompt,
-      cost_usd:           result.cost_usd,
-      model_used:         result.model_used,
-      status:             'draft',
-      generation_context_snapshot: contextSnapshot,
-      quality_score:      qualityScore,
-    })
-    .select('*')
-    .single<BlogPost>()
+  const insertPayload: Record<string, unknown> = {
+    client_id:          clientId,
+    mode,
+    topic:              body.topic.slice(0, 400),
+    source_query_id:    body.source_query_id   ?? null,
+    source_query_text:  body.source_query_text ?? null,
+    // P12.I.5: persist keyword metadata (SEMrush signal for SEO/unified posts)
+    primary_keyword:    body.primary_keyword   ?? null,
+    keyword_volume:     body.keyword_volume    ?? null,
+    keyword_kd:         body.keyword_kd        ?? null,
+    keyword_intent:     body.keyword_intent    ?? null,
+    title:              result.title,
+    meta_title:         result.meta_title,
+    meta_description:   result.meta_description,
+    slug:               result.slug,
+    html_body:          result.html_body,
+    word_count:         result.word_count,
+    geo_directive_id:   result.geo_directive_id,
+    geo_html_snapshot:  result.geo_html_snapshot,
+    featured_image_prompt: result.featured_image_prompt,
+    cost_usd:           result.cost_usd,
+    model_used:         result.model_used,
+    status:             'draft',
+    generation_context_snapshot: contextSnapshot,
+    quality_score:      qualityScore,
+  }
+
+  let { data: post, error: dbErr } = await insertBlogPost(insertPayload)
+
+  if (dbErr && isMissingQualityColumnsError(dbErr)) {
+    console.warn('[blog persistAndReturn] quality columns missing; retrying insert without quality metadata')
+    const fallbackPayload = { ...insertPayload }
+    delete fallbackPayload.generation_context_snapshot
+    delete fallbackPayload.quality_score
+
+    const fallback = await insertBlogPost(fallbackPayload)
+    post = fallback.data
+    dbErr = fallback.error
+  }
 
   if (dbErr || !post) {
     // HIGH-3: log DB details server-side only
@@ -349,4 +365,29 @@ async function persistAndReturn(
     audit,
     cost_usd: result.cost_usd,
   })
+}
+
+async function insertBlogPost(payload: Record<string, unknown>) {
+  return supabaseAdmin
+    .from('blog_posts')
+    .insert(payload)
+    .select('*')
+    .single<BlogPost>()
+}
+
+function isMissingQualityColumnsError(err: SupabaseErrorLike): boolean {
+  const text = [err.code, err.message, err.details, err.hint]
+    .filter((value): value is string => typeof value === 'string')
+    .join(' ')
+    .toLowerCase()
+
+  const mentionsQualityColumn =
+    text.includes('generation_context_snapshot') || text.includes('quality_score')
+
+  return mentionsQualityColumn && (
+    text.includes('pgrst204') ||
+    text.includes('42703') ||
+    text.includes('schema cache') ||
+    text.includes('column')
+  )
 }

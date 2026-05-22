@@ -30,6 +30,29 @@ vi.mock('@/lib/blog/content-auditor', () => ({
   auditExistingContent: vi.fn(),
 }))
 
+vi.mock('@/lib/blog/pages-context', () => ({
+  fetchRelatedPages: vi.fn().mockResolvedValue([]),
+  buildPagesContextBlock: vi.fn().mockReturnValue(''),
+}))
+
+vi.mock('@/lib/blog/quality-audit', () => ({
+  auditBlogPost: vi.fn().mockResolvedValue(null),
+}))
+
+vi.mock('@/lib/content/brief-injector', () => ({
+  getActiveBrief: vi.fn().mockResolvedValue(null),
+}))
+
+vi.mock('@/lib/content/campaign-injector', () => ({
+  getActiveCampaigns: vi.fn().mockResolvedValue([]),
+}))
+
+vi.mock('@/lib/flywheel/adapters/SeoContentAdapter', () => ({
+  SeoContentAdapter: vi.fn().mockImplementation(() => ({
+    execute: vi.fn().mockResolvedValue(null),
+  })),
+}))
+
 vi.mock('@/lib/blog/topic-selector', () => ({
   getWeakSpotOpportunities: vi.fn(),
 }))
@@ -43,6 +66,11 @@ import { GET as opportunitiesGET } from '../opportunities/route'
 import { GET as postDetailGET, PATCH as postDetailPATCH, DELETE as postDetailDELETE } from '../[postId]/route'
 import { supabaseAdmin } from '@/lib/supabase'
 import { generateBlogPost } from '@/lib/blog/generator'
+import { fetchRelatedPages, buildPagesContextBlock } from '@/lib/blog/pages-context'
+import { auditBlogPost } from '@/lib/blog/quality-audit'
+import { getActiveBrief } from '@/lib/content/brief-injector'
+import { getActiveCampaigns } from '@/lib/content/campaign-injector'
+import { SeoContentAdapter } from '@/lib/flywheel/adapters/SeoContentAdapter'
 import { getWeakSpotOpportunities } from '@/lib/blog/topic-selector'
 
 // ---------------------------------------------------------------------------
@@ -96,6 +124,12 @@ function assertNoSchemaLeak(body: Record<string, unknown>): void {
 
 const mockFrom = vi.mocked(supabaseAdmin.from)
 const mockGenerateBlogPost = vi.mocked(generateBlogPost)
+const mockFetchRelatedPages = vi.mocked(fetchRelatedPages)
+const mockBuildPagesContextBlock = vi.mocked(buildPagesContextBlock)
+const mockAuditBlogPost = vi.mocked(auditBlogPost)
+const mockGetActiveBrief = vi.mocked(getActiveBrief)
+const mockGetActiveCampaigns = vi.mocked(getActiveCampaigns)
+const mockSeoContentAdapter = vi.mocked(SeoContentAdapter)
 const mockGetWeakSpotOpportunities = vi.mocked(getWeakSpotOpportunities)
 
 beforeEach(() => {
@@ -114,6 +148,14 @@ beforeEach(() => {
     delete: vi.fn().mockReturnThis(),
   }
   mockFrom.mockReturnValue(mockChain as any)
+  mockFetchRelatedPages.mockResolvedValue([])
+  mockBuildPagesContextBlock.mockReturnValue('')
+  mockAuditBlogPost.mockResolvedValue(null)
+  mockGetActiveBrief.mockResolvedValue(null)
+  mockGetActiveCampaigns.mockResolvedValue([])
+  mockSeoContentAdapter.mockImplementation(() => ({
+    execute: vi.fn().mockResolvedValue(null),
+  }) as unknown as InstanceType<typeof SeoContentAdapter>)
 })
 
 // ---------------------------------------------------------------------------
@@ -227,6 +269,98 @@ describe('POST /api/clients/[id]/blog — database error sanitisation', () => {
 
     expect(body.success).toBe(false)
     assertNoSchemaLeak(body)
+  })
+
+  it('retries without quality metadata when deployed DB is missing Phase 12.Q columns', async () => {
+    mockGenerateBlogPost.mockResolvedValue({
+      title: 'Test Title',
+      meta_title: 'Test Meta Title',
+      meta_description: 'Test meta description',
+      slug: 'test-title',
+      html_body: '<p>Content</p>',
+      word_count: 100,
+      geo_directive_id: null,
+      geo_html_snapshot: null,
+      featured_image_prompt: 'hero image prompt',
+      cost_usd: 0.01,
+      model_used: 'gpt-4o-mini',
+    })
+
+    const firstInsert = vi.fn().mockReturnThis()
+    const firstInsertChain = {
+      insert: firstInsert,
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: null,
+        error: {
+          message: "Could not find the 'generation_context_snapshot' column of 'blog_posts' in the schema cache",
+          code: 'PGRST204',
+        },
+      }),
+    }
+
+    const secondInsert = vi.fn().mockReturnThis()
+    const secondInsertChain = {
+      insert: secondInsert,
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: {
+          id: 'post-1',
+          client_id: 'client-1',
+          mode: 'geo_only',
+          topic: 'china tours',
+          source_query_id: null,
+          source_query_text: null,
+          title: 'Test Title',
+          meta_title: 'Test Meta Title',
+          meta_description: 'Test meta description',
+          slug: 'test-title',
+          html_body: '<p>Content</p>',
+          word_count: 100,
+          geo_directive_id: null,
+          geo_directive_version_id: null,
+          geo_html_snapshot: null,
+          schema_json: null,
+          internal_links: [],
+          featured_image_prompt: 'hero image prompt',
+          featured_image_url: null,
+          status: 'draft',
+          published_at: null,
+          cost_usd: 0.01,
+          model_used: 'gpt-4o-mini',
+          primary_keyword: null,
+          keyword_volume: null,
+          keyword_kd: null,
+          keyword_intent: null,
+          created_at: '2026-05-22T00:00:00.000Z',
+          updated_at: '2026-05-22T00:00:00.000Z',
+        },
+        error: null,
+      }),
+    }
+
+    mockFrom
+      .mockReturnValueOnce(firstInsertChain as any)
+      .mockReturnValueOnce(secondInsertChain as any)
+
+    const req = makeAuthedRequest('/api/clients/client-1/blog', {
+      method: 'POST',
+      body: { topic: 'china tours', mode: 'geo_only', skip_audit: true },
+    })
+    const res = await blogListPOST(req, { params })
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.success).toBe(true)
+    expect(firstInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ generation_context_snapshot: null, quality_score: null })
+    )
+    expect(secondInsert).toHaveBeenCalledWith(
+      expect.not.objectContaining({ generation_context_snapshot: expect.anything() })
+    )
+    expect(secondInsert).toHaveBeenCalledWith(
+      expect.not.objectContaining({ quality_score: expect.anything() })
+    )
   })
 })
 
