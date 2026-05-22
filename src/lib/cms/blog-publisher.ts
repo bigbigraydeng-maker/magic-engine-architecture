@@ -19,6 +19,7 @@ import { getConnection } from './connection-store'
 import { GithubClient, GitHubApiError } from './github-client'
 import { CMS_ACTION_TYPE } from './vocabulary'
 import { supabaseAdmin } from '../supabase'
+import { buildBlogBodyHtml } from '../blog/html-builder'
 
 const ME_BLOG_BRANCH_PREFIX = 'feat/me-blog-'
 
@@ -53,7 +54,8 @@ interface BlogPostRow {
   word_count:       number | null
   status:           string
   source_query_text?: string | null
-  geo_html_snapshot?: string | null
+  geo_html_snapshot: string | null
+  featured_image_url: string | null
 }
 
 // ─── publishBlogToGitHub ──────────────────────────────────────────────────────
@@ -81,7 +83,7 @@ export async function publishBlogToGitHub(
   // Step 2: Fetch blog post
   const { data: post, error: postErr } = await supabaseAdmin
     .from('blog_posts')
-    .select('id,client_id,title,meta_title,meta_description,slug,html_body,word_count,status,source_query_text,geo_html_snapshot')
+    .select('id,client_id,title,meta_title,meta_description,slug,html_body,word_count,status,source_query_text,geo_html_snapshot,featured_image_url')
     .eq('id', blogPostId)
     .eq('client_id', clientId)
     .single()
@@ -186,7 +188,7 @@ status: "draft"
 wordCount: ${post.word_count ?? 0}
 ---
 
-${post.html_body}
+${buildBlogBodyHtml(post)}
 `
 }
 

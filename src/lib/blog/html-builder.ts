@@ -22,6 +22,8 @@ export interface BuiltBlogHtml {
   schema_json_str: string
 }
 
+type BlogBodyPost = Pick<BlogPost, 'html_body' | 'geo_html_snapshot' | 'featured_image_url' | 'title'>
+
 /**
  * Assemble the complete HTML package for a blog post.
  */
@@ -31,15 +33,44 @@ export function buildBlogHtml(post: BlogPost, siteUrl = ''): BuiltBlogHtml {
 
   const schemaBlock = `<script type="application/ld+json">\n${schemaStr}\n</script>`
 
-  const bodyOnly = post.html_body + (post.geo_html_snapshot
-    ? `\n\n${post.geo_html_snapshot}`
-    : '')
+  const bodyOnly = buildBlogBodyHtml(post)
 
-  const fullHtml = [schemaBlock, '', post.html_body, post.geo_html_snapshot ?? '']
+  const fullHtml = [schemaBlock, '', bodyOnly]
     .filter(Boolean)
     .join('\n\n')
 
   return { full_html: fullHtml, body_only: bodyOnly, schema_json_str: schemaStr }
+}
+
+export function buildBlogBodyHtml(post: BlogBodyPost): string {
+  const parts = [
+    buildHeroFigure(post),
+    post.html_body,
+    post.geo_html_snapshot ?? '',
+  ]
+
+  return parts.filter(Boolean).join('\n\n')
+}
+
+function buildHeroFigure(post: BlogBodyPost): string {
+  if (!post.featured_image_url) return ''
+
+  const src = escapeHtmlAttribute(post.featured_image_url)
+  const alt = escapeHtmlAttribute(post.title || 'Blog hero image')
+
+  return [
+    '<figure class="me-blog-hero">',
+    `  <img src="${src}" alt="${alt}" loading="lazy" />`,
+    '</figure>',
+  ].join('\n')
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
 }
 
 /**
