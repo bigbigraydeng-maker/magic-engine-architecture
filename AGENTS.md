@@ -215,17 +215,16 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-23（**P12.I.7 一键生成博客已完成**；Phase 12.I 剩余趋势任务继续）
+> 最后更新：2026-05-23（**P12.I.8 关键词周快照已完成**；Phase 12.I 剩余趋势任务继续）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P12.I.8** | `keyword_snapshots` 表 migration + weekly Cron（每周存关键词排名快照，为趋势图积累数据） | ⭐⭐ |
 | **P12.I.9** | Position Changes 计算（New / Lost / Improved / Declined），Panel A 展示 | ⭐⭐ |
 | **P12.I.10** | Intent 优先内容策略（Transactional 置顶）+ Branded vs Non-Branded 流量分拆 | ⭐⭐ |
 
-**状态校准（2026-05-23）**：Phase 12.Q 已完成；P12.I.1–I.7 已完成；Phase 12.I 剩余 P12.I.8–I.10。下一 session 第一句话：
+**状态校准（2026-05-23）**：Phase 12.Q 已完成；P12.I.1–I.8 已完成；Phase 12.I 剩余 P12.I.9–I.10。下一 session 第一句话：
 
-- `继续 Phase 12.I 第 8 任务 P12.I.8`
+- `继续 Phase 12.I 第 9 任务 P12.I.9`
 
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 
