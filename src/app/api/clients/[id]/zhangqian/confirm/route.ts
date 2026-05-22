@@ -14,7 +14,8 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { requireBearerToken } from '@/lib/validation-utils'
 import { getLatestDiscovery } from '@/lib/zhangqian/persistor'
 import { syncAiTrackerQuestions } from '@/lib/zhangqian/sync-ai-visibility'
-import type { KeywordType } from '@/lib/zhangqian/types'
+import { getActiveBrief } from '@/lib/content/brief-injector'
+import type { KeywordType, DiscoveryPayload } from '@/lib/zhangqian/types'
 
 // ─── Request body types ───────────────────────────────────────────────────────
 
@@ -79,11 +80,20 @@ export async function PATCH(
       console.error('[zhangqian/confirm] AI Visibility sync failed (non-fatal)', syncErr)
     }
 
+    // Merge discovered competitors into the active master brief. Non-fatal.
+    let competitorsMerged = 0
+    try {
+      competitorsMerged = await mergeCompetitorsIntoBrief(clientId, discovery.payload as DiscoveryPayload)
+    } catch (mergeErr) {
+      console.error('[zhangqian/confirm] competitor merge failed (non-fatal)', mergeErr)
+    }
+
     return NextResponse.json({
       success: true,
       keywords_added: keywordsAdded,
       client_updated: clientUpdated,
       ai_visibility_queries_added: aiVisibilityQueriesAdded,
+      competitors_merged: competitorsMerged,
     })
   } catch (err: unknown) {
     console.error('[zhangqian/confirm] error', err)
@@ -146,4 +156,51 @@ async function stampConfirmed(discoveryId: string, confirmedBy: string): Promise
     .eq('id', discoveryId)
 
   if (error) throw new Error(`Failed to stamp confirmation: ${error.message}`)
+}
+
+// Generic high-traffic domains that are not real business competitors
+const COMPETITOR_BLOCKLIST = new Set([
+  'facebook.com', 'instagram.com', 'youtube.com', 'twitter.com', 'x.com',
+  'reddit.com', 'linkedin.com', 'pinterest.com', 'tiktok.com',
+  'google.com', 'google.com.au', 'google.co.nz',
+  'wikipedia.org', 'amazon.com', 'amazon.com.au', 'ebay.com', 'ebay.com.au',
+  'tripadvisor.com', 'tripadvisor.com.au', 'tripadvisor.co.nz',
+  'booking.com', 'expedia.com', 'expedia.com.au', 'airbnb.com',
+])
+
+/**
+ * Merges Zhangqian-discovered competitors (direct + adjacent) into the active
+ * master brief's competitor_domains. Preserves any manually entered domains.
+ * Returns the number of new domains added.
+ */
+async function mergeCompetitorsIntoBrief(
+  clientId: string,
+  payload: DiscoveryPayload,
+): Promise<number> {
+  const activeBrief = await getActiveBrief(clientId)
+  if (!activeBrief) return 0
+
+  const discovered = (payload.competitors ?? [])
+    .filter(c => c.relevance === 'direct' || c.relevance === 'adjacent')
+    .map(c => c.domain.replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase())
+    .filter(d => !COMPETITOR_BLOCKLIST.has(d))
+
+  if (discovered.length === 0) return 0
+
+  const existing: string[] = ((activeBrief.competitor_domains as string[] | null) ?? [])
+    .map(d => d.replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase())
+
+  const existingSet = new Set(existing)
+  const toAdd = discovered.filter(d => !existingSet.has(d))
+  if (toAdd.length === 0) return 0
+
+  const merged = [...existing, ...toAdd]
+
+  const { error } = await supabaseAdmin
+    .from('master_briefs')
+    .update({ competitor_domains: merged })
+    .eq('id', activeBrief.id)
+
+  if (error) throw new Error(`Failed to update brief competitor_domains: ${error.message}`)
+  return toAdd.length
 }
