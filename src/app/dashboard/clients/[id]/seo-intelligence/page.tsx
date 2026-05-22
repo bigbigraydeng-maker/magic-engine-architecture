@@ -472,8 +472,9 @@ export default function SeoIntelligencePage() {
     void (async () => {
       try {
         const res = await fetch(`/api/clients/${clientId}/seo-intelligence/metrics`)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        setMetrics(await res.json())
+        const data = await res.json() as SeoMetrics & { error?: string }
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+        setMetrics(data)
       } catch (e) {
         setError(e instanceof Error ? e.message : '加载失败')
       } finally {
@@ -486,10 +487,10 @@ export default function SeoIntelligencePage() {
     void (async () => {
       try {
         const res = await fetch(`/api/clients/${clientId}/seo-intelligence/rankings`)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json() as { domain: string; keywords: RankedKeyword[] }
-        setRankings(data.keywords)
-        setRankingsDomain(data.domain)
+        const data = await res.json() as { domain?: string; keywords?: RankedKeyword[]; error?: string }
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+        setRankings(data.keywords ?? [])
+        setRankingsDomain(data.domain ?? '')
       } catch (e) {
         setRankingsError(e instanceof Error ? e.message : '排名数据加载失败')
       } finally {
@@ -502,10 +503,10 @@ export default function SeoIntelligencePage() {
     void (async () => {
       try {
         const res = await fetch(`/api/clients/${clientId}/seo-intelligence/competitors-gap`)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json() as { competitors: Competitor[]; gapKeywords: GapKeyword[] }
-        setCompetitors(data.competitors)
-        setGapKeywords(data.gapKeywords)
+        const data = await res.json() as { competitors?: Competitor[]; gapKeywords?: GapKeyword[]; error?: string }
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+        setCompetitors(data.competitors ?? [])
+        setGapKeywords(data.gapKeywords ?? [])
       } catch (e) {
         setCompError(e instanceof Error ? e.message : '竞品数据加载失败')
       } finally {

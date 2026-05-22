@@ -120,7 +120,8 @@ export async function POST(
 
     if (insertErr || !record) {
       console.error('[seo-gap POST] insert error', insertErr)
-      return NextResponse.json({ success: false, error: 'Failed to create analysis record' }, { status: 500 })
+      const detail = insertErr?.message ?? 'no record returned'
+      return NextResponse.json({ success: false, error: `Failed to create analysis record: ${detail}` }, { status: 500 })
     }
 
     analysisId = record.id
