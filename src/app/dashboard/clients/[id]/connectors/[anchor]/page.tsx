@@ -363,7 +363,7 @@ export default function ConnectorDetailPage() {
         {/* Action buttons */}
         {!result?.ok && (
           <button
-            onClick={void handleConnect}
+            onClick={() => void handleConnect()}
             disabled={saving || missingRequired}
             className="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
