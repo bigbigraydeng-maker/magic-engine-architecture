@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
+import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 
 /**
  * GET /api/ai-tracker/snapshots?client_id=...&limit=4
@@ -19,6 +20,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(
         { success: false, error: 'client_id is required' },
         { status: 400 }
+      )
+    }
+
+    const access = await requireDashboardClientAccess(clientId)
+    if (!access.ok) {
+      return NextResponse.json(
+        { success: false, error: access.error },
+        { status: access.status },
       )
     }
 

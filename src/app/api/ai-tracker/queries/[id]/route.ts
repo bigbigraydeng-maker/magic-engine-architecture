@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
+import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 
 /**
  * PATCH /api/ai-tracker/queries/[id]
@@ -48,10 +49,33 @@ export async function PATCH(
       )
     }
 
+    const { data: existing, error: findErr } = await supabaseAdmin
+      .from('ai_visibility_queries')
+      .select('client_id')
+      .eq('id', queryId)
+      .single()
+
+    if (findErr || !existing) {
+      return NextResponse.json(
+        { success: false, error: 'Query not found' },
+        { status: 404 }
+      )
+    }
+
+    const clientId = existing.client_id as string
+    const access = await requireDashboardClientAccess(clientId)
+    if (!access.ok) {
+      return NextResponse.json(
+        { success: false, error: access.error },
+        { status: access.status },
+      )
+    }
+
     const { data, error } = await supabaseAdmin
       .from('ai_visibility_queries')
       .update(update)
       .eq('id', queryId)
+      .eq('client_id', clientId)
       .select('*')
       .single()
 

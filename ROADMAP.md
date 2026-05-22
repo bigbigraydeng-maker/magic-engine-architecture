@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-23 22:34 NZST · 当前阶段：**Phase 12.I 全部完成 ✅（P12.I.1–I.10 + P12.J.1 + P12.J.2 + P12.K.1 + P12.I.fix）；待 PM 决策下一 Phase**。
+> 最后更新：2026-05-23 22:36 NZST · 当前阶段：**Phase 12.I 全部完成 ✅（P12.I.1–I.10 + P12.J.1 + P12.J.2 + P12.K.1 + P12.I.fix）；待 PM 决策下一 Phase**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -457,7 +457,7 @@ Layer 3: 策略驱动执行
 **目标**：5 分钟完成新客户建档，DNZ 采集作为标准步骤嵌入，确保每个客户上线前即有内容现状数据。
 
 - [x] **P8.3.1** 向导 `/dashboard/clients/new`：Step 1 基本信息 → Step 2 上传 Brief 文件 → Step 3 触发 DNZ 采集 → Step 4 审核采集结果 → Step 5 激活（生成 Master Brief + active GEO Directive）✅ **2026-05-07 完成**
-- [x] **P8.3.2** Dashboard 简单鉴权（Magic Link，防止数据泄露）✅ **2026-05-19 完成** — middleware matcher + layout 守卫重新启用；23 个单元测试（whitelist + middleware 三层守卫）全过；生产前 PM 需在 Render 填 `ADMIN_EMAILS` + Supabase Auth 后台白名单 `https://crazycontent-27u3.onrender.com/auth/callback`
+- [x] **P8.3.2** Dashboard 简单鉴权（Magic Link，防止数据泄露）✅ **2026-05-22 收尾** — middleware matcher + layout 守卫重新启用；AI Tracker dashboard API 加 session + client scope 守卫；38 个 auth 相关测试全过；生产前 PM 需在 Render 填 `ADMIN_EMAILS` + Supabase Auth 后台白名单 `https://crazycontent-27u3.onrender.com/auth/callback`
 
 **验收标准**：
 - 全程 < 10 分钟完成新客户建档
@@ -1365,7 +1365,7 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
 
 #### M0 前置（必须先完成，不在 P12.Q 编号内）
 
-- [ ] **P8.3.2** — Dashboard Magic Link 鉴权（独立 phase；完成后才能开工 P12.Q.0）
+- [x] **P8.3.2** — Dashboard Magic Link 鉴权（独立 phase；完成后才能开工 P12.Q.0）✅ 2026-05-22 收尾：AI Tracker dashboard API 加 session + client scope 守卫
 
 #### M1 地基（任务 0-1，~3 小时）
 
@@ -2175,6 +2175,7 @@ AU / NZ（当前）          新市场（未来）
 - **P12.I.7** — Untapped 词与 strategy `new_blog` 卡片接入一键生成博客：复用 POST /blog，成功后回写 strategy item，测试 + build ✅
 - **P12.I.6** — 执行看板新增「自主行动」泳道：无 execution_item 来源的 flywheel_actions 合成只读卡片，复用 OutcomeChip，测试 + build ✅
 - **P12.J.2** — 博客推送 HTML 注入 hero figure：`buildBlogHtml`/CMS 推送共用 body builder，预览/复制/推送都带头图，目标测试 ✅
+- **P8.3.2** — Dashboard Magic Link 鉴权收尾：AI Tracker dashboard API 加 session + client scope 守卫；38 个 auth 相关测试通过
 - **P13.D** — Ads + Reputation 接入 production package：meta_ads_snapshots + project_reviews 加 production_package_id FK；两条路由接受可选参数；包详情页回读 ads_snapshots + reputation_reviews，build ✅
 
 ### 2026-05-21（续 2）

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { runTracker } from '@/lib/ai-tracker/orchestrator'
+import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import type { AiEngine } from '@/types/magic-engine'
 
 /**
@@ -7,9 +8,8 @@ import type { AiEngine } from '@/types/magic-engine'
  *
  * Dashboard-facing wrapper around runTracker. Called by the "Run Now" button
  * in /dashboard/ai-visibility/[clientId]. Does not require CRON_SECRET.
- *
- * Auth note: currently open while P8.3.2 session auth is pending.
- * TODO(P8.3.2): add session/cookie check once dashboard auth lands.
+ * Requires a valid Magic Link session with dashboard access to the requested
+ * client.
  *
  * Body:  { client_id: string }
  * Response: same shape as /api/ai-tracker/run on success
@@ -35,6 +35,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { success: false, error: 'Invalid client_id format' },
         { status: 400 }
+      )
+    }
+
+    const access = await requireDashboardClientAccess(body.client_id)
+    if (!access.ok) {
+      return NextResponse.json(
+        { success: false, error: access.error },
+        { status: access.status },
       )
     }
 

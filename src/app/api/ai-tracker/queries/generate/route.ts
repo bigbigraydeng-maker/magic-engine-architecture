@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { generateQuestionsForClient } from '@/lib/ai-tracker/question-generator'
 import { supabaseAdmin } from '@/lib/supabase'
+import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import type {
   GenerateQuestionsRequest,
   AiVisibilityQuery,
@@ -40,6 +41,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { success: false, error: 'client_id is required' },
         { status: 400 }
+      )
+    }
+
+    const access = await requireDashboardClientAccess(body.client_id)
+    if (!access.ok) {
+      return NextResponse.json(
+        { success: false, error: access.error },
+        { status: access.status },
       )
     }
 

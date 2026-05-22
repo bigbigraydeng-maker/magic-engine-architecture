@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
+import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import type {
   AiVisibilityQuery,
   AiQuerySource,
@@ -24,6 +25,14 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(
         { success: false, error: 'client_id query parameter is required' },
         { status: 400 }
+      )
+    }
+
+    const access = await requireDashboardClientAccess(clientId)
+    if (!access.ok) {
+      return NextResponse.json(
+        { success: false, error: access.error },
+        { status: access.status },
       )
     }
 
@@ -87,6 +96,15 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       )
     }
+
+    const access = await requireDashboardClientAccess(body.client_id)
+    if (!access.ok) {
+      return NextResponse.json(
+        { success: false, error: access.error },
+        { status: access.status },
+      )
+    }
+
     if (!body.question || body.question.trim().length < 10) {
       return NextResponse.json(
         {
