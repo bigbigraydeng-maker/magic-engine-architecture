@@ -13,9 +13,9 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { requireBearerToken } from '@/lib/validation-utils'
 import { failJob, getJob } from '@/lib/zhangqian/persistor'
 
-// First-time discovery should never make a user wait beyond this. The agent
-// itself is capped at 5 min internally (GLOBAL_TIMEOUT_MS in agent.ts); the
-// extra minute is buffer for the final Claude summarisation + DB write.
+// First-time discovery should never make a user wait beyond this. GLOBAL_TIMEOUT_MS
+// in agent.ts caps the tool-use loop at 5 min, but the final synthesis call adds up
+// to CLAUDE_FINAL_TIMEOUT_MS (90 s) on top. 6 min covers both with headroom.
 // Deeper analysis lives behind connector authorisation (Phase 8.10.S5).
 const STALE_JOB_TIMEOUT_MS = 6 * 60 * 1000
 
@@ -50,7 +50,7 @@ export async function GET(
     }
 
     if (isStaleRunningJob(job)) {
-      const error = 'Discovery timed out after 10 minutes. Please retry.'
+      const error = 'Discovery timed out after 6 minutes. Please retry.'
       await failJob(supabaseAdmin, job.id, error)
       return NextResponse.json({
         success: true,

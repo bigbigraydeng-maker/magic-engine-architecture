@@ -65,9 +65,9 @@ const LOCAL_REVIEWS_TIMEOUT_MS = 45_000
 // multiple queries server-side; 90 s was too tight and caused spurious failures.
 const CLAUDE_CALL_TIMEOUT_MS = 150_000
 // Separate timeout for the final synthesis call (no tools, pure JSON output).
-// Complex domains (many tools used) can take 3+ min to generate 24 K JSON,
-// so we give the final call more headroom than regular tool-use turns.
-const CLAUDE_FINAL_TIMEOUT_MS = 240_000
+// Without a diagnosis block the output is much smaller (~8-12 K), so 90 s is
+// generous and keeps total agent runtime well under the 6-min watchdog.
+const CLAUDE_FINAL_TIMEOUT_MS = 90_000
 // Hard wall-clock cap: 5 min wall-clock for the loop so the full round-trip
 // (final Claude call + overhead) lands well under the 9-min Render hard-timeout.
 // Buffer is 30 s — just enough to detect the deadline before starting another
@@ -295,7 +295,7 @@ const FETCH_DOMAIN_WHOIS_TOOL: Anthropic.Messages.Tool = {
   name: 'fetch_domain_whois',
   description:
     '通过 DataForSEO WHOIS API 获取域名注册信息：注册日期、到期日期、注册商、反链数量、有机流量估算。' +
-    '**关键用途**：① 域名年龄（判断品牌成熟度）② 到期预警（< 90 天须写入 quick_fix） ③ 反链权重（SEO 诊断依据）。' +
+    '**关键用途**：① 域名年龄（判断品牌成熟度）② 到期预警（< 90 天须在 notes 中标注） ③ 反链权重（SEO 诊断依据）。' +
     '在步骤 1（识别业务）完成后调用，仅需一次，成本约 $0.10。若返回 null 继续正常流程。',
   input_schema: {
     type: 'object' as const,
@@ -347,7 +347,7 @@ const FETCH_ONPAGE_AUDIT_TOOL: Anthropic.Messages.Tool = {
     '检测 title / description / H1 缺失、Core Web Vitals（LCP / CLS / TBT）、' +
     '内外链数量、图片 alt 缺失、是否 HTTPS、是否重定向链。' +
     '**在抓取完主页内容后调用一次**——成本约 $0.003，返回 OnPageResult 结构。' +
-    '审计发现的问题（如缺少 description）要写入 diagnosis.actions.quick_fix。' +
+    '审计发现的问题（如缺少 description）要写入 notes 字段。' +
     '若返回 null，继续正常流程，set onpage_audit to null。',
   input_schema: {
     type: 'object' as const,
@@ -972,7 +972,7 @@ async function handleFetchSerpResults(
   await onProgress(`抓取 Google 搜索结果 "${query}"…`)
 
   try {
-    const serp = await getSerpPage(query, country)
+    const serp = await withTimeout(getSerpPage(query, country), 30_000)
     return {
       type: 'tool_result',
       tool_use_id: toolUse.id,
@@ -1009,7 +1009,7 @@ async function handleFetchKeywordData(
   await onProgress(`DataForSEO Labs：获取 ${domain} 关键词数据…`)
 
   try {
-    const keywords = await getKeywordsForSite(domain, locationCode, 50)
+    const keywords = await withTimeout(getKeywordsForSite(domain, locationCode, 50), 30_000)
     if (keywords.length === 0) {
       return {
         type: 'tool_result',
@@ -1055,7 +1055,7 @@ async function handleFetchDomainTechnologies(
   await onProgress(`DataForSEO：检测 ${domain} 技术栈…`)
 
   try {
-    const tech = await getDomainTechnologies(domain)
+    const tech = await withTimeout(getDomainTechnologies(domain), 30_000)
     if (!tech) {
       return {
         type: 'tool_result',
@@ -1104,7 +1104,7 @@ async function handleFetchDomainWhois(
   await onProgress(`DataForSEO WHOIS：获取 ${domain} 域名注册信息…`)
 
   try {
-    const whois = await getDomainWhois(domain)
+    const whois = await withTimeout(getDomainWhois(domain), 30_000)
     if (!whois) {
       return {
         type: 'tool_result',
@@ -1124,7 +1124,7 @@ async function handleFetchDomainWhois(
       if (daysToExpiry < 90) {
         expiryWarning =
           ` IMPORTANT: domain expires in ${daysToExpiry} days (${whois.expires_at}). ` +
-          'Add to diagnosis.actions.quick_fix: "域名将于 X 天后到期，请立即续费".'
+          'Add a note in the notes field: "域名将于 X 天后到期，请立即续费".'
       }
     }
 
@@ -1164,7 +1164,7 @@ async function handleFetchOnpageAudit(
   await onProgress(`DataForSEO OnPage：审计 ${truncateForProgress(url)}…`)
 
   try {
-    const audit = await getOnPageInstant(url)
+    const audit = await withTimeout(getOnPageInstant(url), 30_000)
     if (!audit) {
       return {
         type: 'tool_result',
@@ -1185,7 +1185,7 @@ async function handleFetchOnpageAudit(
     if (!audit.checks.https) issues.push('not on HTTPS')
 
     const summary = issues.length > 0
-      ? `Issues found: ${issues.join(', ')}. Add relevant issues to diagnosis.actions.quick_fix.`
+      ? `Issues found: ${issues.join(', ')}. Add relevant issues to the notes field.`
       : 'No critical on-page issues detected.'
 
     await onProgress(`OnPage 审计完成 — ${issues.length} 个问题`)
@@ -1225,7 +1225,7 @@ async function handleFetchCompetitors(
   await onProgress(`DataForSEO Labs：发现 ${domain} 竞品…`)
 
   try {
-    const competitors = await getSerpCompetitors(domain, locationCode, 10)
+    const competitors = await withTimeout(getSerpCompetitors(domain, locationCode, 10), 30_000)
     if (competitors.length === 0) {
       return {
         type: 'tool_result',

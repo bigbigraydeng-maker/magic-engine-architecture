@@ -18,8 +18,6 @@ import {
   MetaAdsCard,
   SerpResultsCard,
   AiVisibilityCard,
-  ActionPlanCard,
-  DiagnosisCard,
   NotesCard,
   GscDataCard,
   GoogleAdsCard,
@@ -78,13 +76,13 @@ function DispatchPanel({
       <div className="text-5xl mb-4">🗺️</div>
       <h2 className="text-xl font-semibold text-gray-900 mb-2">派遣张骞</h2>
       <p className="text-sm text-gray-500 mb-2 max-w-sm">
-        仅需一个域名，张骞将自动生成品牌健康诊断报告
+        仅需一个域名，张骞将自动生成品牌现状调研报告
       </p>
       <div className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-200 px-3 py-1.5 text-xs text-amber-700 font-medium mb-6">
         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
-        预计费用 ~$1.50 / 约 5-8 分钟
+        预计费用 ~$1.50 / 约 3-4 分钟
       </div>
       <button
         onClick={onDispatch}
@@ -138,7 +136,7 @@ function ProgressPanel({
       <div className="text-center max-w-sm">
         <h2 className="text-lg font-semibold text-gray-900 mb-1.5">张骞正在探索…</h2>
         <p className="text-xs text-gray-500 leading-relaxed">
-          通常需要 <strong className="text-gray-700">5-8 分钟</strong>。可以先去做别的事——完成后页面会自动更新。
+          通常需要 <strong className="text-gray-700">3-4 分钟</strong>。可以先去做别的事——完成后页面会自动更新。
         </p>
       </div>
 
@@ -203,10 +201,22 @@ function DiscoveryReviewCards({
         </strong></span>
       </div>
 
-      {/* Diagnosis card — full width at top */}
-      {p.diagnosis && (
-        <DiagnosisCard diagnosis={p.diagnosis} />
-      )}
+      {/* Diagnosis gate — 完整诊断需注册会员 */}
+      <div className="rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-white p-5 flex items-start gap-4">
+        <div className="text-3xl shrink-0">⭐</div>
+        <div className="flex-1">
+          <h3 className="text-sm font-semibold text-indigo-900 mb-1">解锁完整诊断方案</h3>
+          <p className="text-xs text-indigo-800 leading-relaxed mb-3">
+            注册会员后，华佗将基于以上发现数据生成 SEO / 社媒 / 声誉 / AI 可见度四维评分、危机类型判断，以及个性化三级行动计划。
+          </p>
+          <a
+            href="/pricing"
+            className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 transition-colors"
+          >
+            查看会员方案 →
+          </a>
+        </div>
+      </div>
 
       {/* Cards grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -298,11 +308,6 @@ function DiscoveryReviewCards({
         </div>
       )}
 
-      {/* Action plan — full width */}
-      {p.diagnosis?.actions && (
-        <ActionPlanCard actions={p.diagnosis.actions} />
-      )}
-
       {p.notes && <NotesCard notes={p.notes} />}
 
       {/* Confirm button */}
@@ -338,7 +343,7 @@ function ConfirmedBanner({
       <div className="text-4xl mb-3">✅</div>
       <h2 className="text-lg font-semibold text-gray-900 mb-1">发现结果已确认 — 播种完成</h2>
       <p className="text-sm text-gray-500 mb-5 max-w-sm">
-        品牌健康数据已导入客户档案。下一步：基于诊断生成个性化处方。
+        品牌调研数据已导入客户档案。下一步：生成专属品牌处方。
       </p>
       <div className="flex items-center gap-3">
         <button
