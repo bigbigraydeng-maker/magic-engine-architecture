@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireSession } from '@/lib/auth/require-session'
 import { getSerpCompetitors, getKeywordsGap, type LabsCompetitor, type LabsKeyword } from '@/lib/dataforseo/labs'
+import { getActiveBrief } from '@/lib/content/brief-injector'
 
 const LOCATION_CODE_BY_DB: Record<string, number> = { au: 2036, nz: 2554 }
 
@@ -30,7 +31,7 @@ const GENERIC_DOMAIN_BLOCKLIST = new Set([
  * rank but the client does not).
  *
  * Competitor selection priority:
- *   1. clients.competitor_domains (Brand Brief / Discovery — most accurate)
+ *   1. active master_briefs.competitor_domains (Brand Brief / Discovery — most accurate)
  *   2. DataForSEO auto-discovery, filtered by GENERIC_DOMAIN_BLOCKLIST
  *
  * Response shape:
@@ -55,7 +56,7 @@ export async function GET(
 
   const { data: client, error: clientError } = await supabaseAdmin
     .from('clients')
-    .select('id, domain, semrush_db, competitor_domains')
+    .select('id, domain, semrush_db')
     .eq('id', clientId)
     .single()
 
@@ -71,7 +72,10 @@ export async function GET(
   }
 
   const locationCode = LOCATION_CODE_BY_DB[(client.semrush_db as string | null) ?? 'au'] ?? LOCATION_CODE_BY_DB.au
-  const knownDomains: string[] = ((client.competitor_domains as string[] | null) ?? [])
+
+  // Read competitor_domains from active master brief (written by Zhangqian discovery + manual brief)
+  const activeBrief = await getActiveBrief(clientId)
+  const knownDomains: string[] = ((activeBrief?.competitor_domains as string[] | null) ?? [])
     .map(d => d.replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase())
 
   try {
@@ -82,7 +86,7 @@ export async function GET(
     const serpMap        = new Map(filteredSerp.map(c => [c.domain, c]))
 
     // ── Step 2: Build final competitor list
-    //   Priority A — use clients.competitor_domains when available
+    //   Priority A — active master_briefs.competitor_domains when available
     //   Priority B — fall back to filtered DataForSEO results
     let competitors: LabsCompetitor[]
 
