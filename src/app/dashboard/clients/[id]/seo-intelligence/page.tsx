@@ -3,6 +3,9 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { buildGapKeywordBlogRequest } from '@/lib/blog/request-builders'
+
+const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''
 
 // ─── Shared types ────────────────────────────────────────────────────────────
 
@@ -38,6 +41,15 @@ interface GapKeyword {
   keyword_difficulty: number | null
   cpc:                number | null
   intent:             string
+}
+
+interface BlogGenerationResponse {
+  success: boolean
+  action?: 'new' | 'upgrade'
+  post?: { id: string; cost_usd?: number | null } | null
+  audit?: { reason?: string } | null
+  error?: string
+  cost_usd?: number | null
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -166,7 +178,15 @@ function CompetitorCard({ comp, rank }: { comp: Competitor; rank: number }) {
 
 // ─── Gap keywords table ───────────────────────────────────────────────────────
 
-function GapTable({ keywords }: { keywords: GapKeyword[] }) {
+function GapTable({
+  keywords,
+  onGenerateBlog,
+  generatingKeyword,
+}: {
+  keywords: GapKeyword[]
+  onGenerateBlog: (keyword: GapKeyword) => void
+  generatingKeyword: string | null
+}) {
   const [search, setSearch] = useState('')
   const [intentFilter, setIntentFilter] = useState('all')
   const [shown, setShown] = useState(50)
@@ -210,13 +230,15 @@ function GapTable({ keywords }: { keywords: GapKeyword[] }) {
               <th className="text-right px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-20">月搜量</th>
               <th className="text-right px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-16">KD</th>
               <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-32">意图</th>
+              <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-28">生成</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {page.length === 0 ? (
-              <tr><td colSpan={4} className="text-center py-8 text-sm text-gray-400">没有符合条件的缺口词</td></tr>
+              <tr><td colSpan={5} className="text-center py-8 text-sm text-gray-400">没有符合条件的缺口词</td></tr>
             ) : page.map((kw, i) => {
               const style = INTENT_STYLE[kw.intent] ?? INTENT_STYLE.informational
+              const isGenerating = generatingKeyword === kw.keyword
               return (
                 <tr key={i} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-2.5 font-medium text-gray-900 max-w-xs truncate">{kw.keyword}</td>
@@ -224,6 +246,16 @@ function GapTable({ keywords }: { keywords: GapKeyword[] }) {
                   <td className={`px-3 py-2.5 text-right tabular-nums ${kdCls(kw.keyword_difficulty)}`}>{kw.keyword_difficulty ?? '—'}</td>
                   <td className="px-3 py-2.5">
                     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${style.bg}`}>{style.label}</span>
+                  </td>
+                  <td className="px-4 py-2.5 text-right">
+                    <button
+                      type="button"
+                      onClick={() => onGenerateBlog(kw)}
+                      disabled={!!generatingKeyword}
+                      className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:bg-indigo-300 transition-colors"
+                    >
+                      {isGenerating ? '生成中…' : '生成博客'}
+                    </button>
                   </td>
                 </tr>
               )
@@ -467,6 +499,9 @@ export default function SeoIntelligencePage() {
   const [gapKeywords,  setGapKeywords]  = useState<GapKeyword[]>([])
   const [compLoading,  setCompLoading]  = useState(true)
   const [compError,    setCompError]    = useState<string | null>(null)
+  const [generatingKeyword, setGeneratingKeyword] = useState<string | null>(null)
+  const [actionMsg, setActionMsg] = useState('')
+  const [actionOk, setActionOk] = useState<boolean | null>(null)
 
   useEffect(() => {
     void (async () => {
@@ -515,6 +550,37 @@ export default function SeoIntelligencePage() {
     })()
   }, [clientId])
 
+  const flash = (msg: string, ok: boolean) => {
+    setActionMsg(msg)
+    setActionOk(ok)
+    setTimeout(() => { setActionMsg(''); setActionOk(null) }, 7000)
+  }
+
+  const handleGenerateGapBlog = async (keyword: GapKeyword) => {
+    setGeneratingKeyword(keyword.keyword)
+    flash('正在生成博客草稿…', true)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/blog`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
+        body: JSON.stringify(buildGapKeywordBlogRequest(keyword)),
+      })
+      const data = await res.json() as BlogGenerationResponse
+      if (!res.ok || !data.success) throw new Error(data.error ?? 'Generation failed')
+
+      if (data.action === 'upgrade') {
+        flash(data.audit?.reason ?? '已有内容可升级，未新建博客。', false)
+        return
+      }
+
+      flash(`博客草稿已生成${data.cost_usd != null ? ` ($${data.cost_usd.toFixed(4)})` : ''}`, true)
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Generation failed', false)
+    } finally {
+      setGeneratingKeyword(null)
+    }
+  }
+
   const lastUpdatedLabel = metrics?.last_updated
     ? new Date(metrics.last_updated).toLocaleDateString('zh-CN', {
         timeZone: 'Pacific/Auckland',
@@ -547,6 +613,13 @@ export default function SeoIntelligencePage() {
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
             {error}
+          </div>
+        )}
+        {actionMsg && (
+          <div className={`border rounded-lg px-4 py-3 text-sm ${
+            actionOk ? 'bg-green-50 border-green-200 text-green-700' : 'bg-amber-50 border-amber-200 text-amber-800'
+          }`}>
+            {actionMsg}
           </div>
         )}
 
@@ -662,7 +735,11 @@ export default function SeoIntelligencePage() {
 
                 {/* Gap keywords table */}
                 {gapKeywords.length > 0 ? (
-                  <GapTable keywords={gapKeywords} />
+                  <GapTable
+                    keywords={gapKeywords}
+                    onGenerateBlog={handleGenerateGapBlog}
+                    generatingKeyword={generatingKeyword}
+                  />
                 ) : (
                   <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
                     未找到明显关键词缺口，你的覆盖已相当全面。

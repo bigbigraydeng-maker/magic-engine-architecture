@@ -537,6 +537,7 @@ export interface GenerateBlogRequest {
   word_count_target?: number   // default 1000
   skip_audit?: boolean         // bypass content audit (e.g. user confirmed override)
   production_package_id?: string  // if set, link generated post to this package
+  strategy_item_id?: string       // if set, mark originating strategy item done after generation
   fde_context?: string         // FDE free-text input from customer conversations — injected into the prompt
 }
 
