@@ -17,6 +17,10 @@ const GENERIC_DOMAIN_BLOCKLIST = new Set([
   'amazon.com', 'amazon.com.au', 'ebay.com', 'ebay.com.au',
   'yelp.com', 'trustpilot.com', 'glassdoor.com',
   'apple.com', 'microsoft.com',
+  // Travel aggregators — high-DA sites that co-rank on travel terms but are not direct competitors
+  'tripadvisor.com', 'tripadvisor.com.au', 'tripadvisor.co.nz',
+  'booking.com', 'expedia.com', 'expedia.com.au', 'expedia.co.nz',
+  'hotels.com', 'agoda.com', 'airbnb.com', 'hostelworld.com',
 ])
 
 /**
@@ -67,7 +71,8 @@ export async function GET(
   }
 
   const locationCode = LOCATION_CODE_BY_DB[(client.semrush_db as string | null) ?? 'au'] ?? LOCATION_CODE_BY_DB.au
-  const knownDomains: string[] = (client.competitor_domains as string[] | null) ?? []
+  const knownDomains: string[] = ((client.competitor_domains as string[] | null) ?? [])
+    .map(d => d.replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase())
 
   try {
     // ── Step 1: Discover competitors via DataForSEO (fetch more so we have

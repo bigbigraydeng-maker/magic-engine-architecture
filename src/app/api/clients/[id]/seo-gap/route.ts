@@ -22,11 +22,26 @@ import type { ParsedKeyword } from '@/lib/seo-gap/csv-parser'
 
 const LOCATION_CODE_BY_DB: Record<string, number> = { au: 2036, nz: 2554 }
 
+const GENERIC_DOMAIN_BLOCKLIST = new Set([
+  'facebook.com', 'instagram.com', 'youtube.com', 'twitter.com', 'x.com',
+  'reddit.com', 'linkedin.com', 'pinterest.com', 'tiktok.com', 'snapchat.com',
+  'google.com', 'google.com.au', 'google.co.nz',
+  'wikipedia.org', 'wikimedia.org',
+  'amazon.com', 'amazon.com.au', 'ebay.com', 'ebay.com.au',
+  'yelp.com', 'trustpilot.com', 'glassdoor.com',
+  'apple.com', 'microsoft.com',
+  // Travel aggregators — high-DA sites that co-rank on travel terms but are not direct competitors
+  'tripadvisor.com', 'tripadvisor.com.au', 'tripadvisor.co.nz',
+  'booking.com', 'expedia.com', 'expedia.com.au', 'expedia.co.nz',
+  'hotels.com', 'agoda.com', 'airbnb.com', 'hostelworld.com',
+])
+
 interface ClientRow {
   id: string
   name: string
   domain: string | null
   semrush_db: string | null
+  competitor_domains: string[] | null
 }
 
 function labsKeywordToParsed(kw: LabsKeyword, competitorDomains: string[]): ParsedKeyword {
@@ -89,7 +104,7 @@ export async function POST(
     // ── 1. Load client ────────────────────────────────────────────────────────
     const { data: client } = await supabaseAdmin
       .from('clients')
-      .select('id, name, domain, semrush_db')
+      .select('id, name, domain, semrush_db, competitor_domains')
       .eq('id', clientId)
       .single<ClientRow>()
 
@@ -126,9 +141,24 @@ export async function POST(
 
     analysisId = record.id
 
-    // ── 4. Fetch competitors + keyword gap from DataForSEO ────────────────────
-    const serpCompetitors = await getSerpCompetitors(client.domain, locationCode, 5)
-    const competitorDomains = serpCompetitors.slice(0, 3).map(c => c.domain)
+    // ── 4. Determine competitors (priority: known domains → filtered DataForSEO)
+    const knownDomains: string[] = ((client.competitor_domains as string[] | null) ?? [])
+      .map(d => d.replace(/^https?:\/\//, '').replace(/\/$/, '').toLowerCase())
+
+    let competitorDomains: string[]
+    if (knownDomains.length >= 3) {
+      // Skip SERP call — enough known competitors already configured
+      competitorDomains = knownDomains.filter(d => !GENERIC_DOMAIN_BLOCKLIST.has(d)).slice(0, 3)
+    } else {
+      const rawSerp = await getSerpCompetitors(client.domain, locationCode, 20)
+      const filteredSerp = rawSerp.filter(c => !GENERIC_DOMAIN_BLOCKLIST.has(c.domain))
+      const knownFiltered = knownDomains.filter(d => !GENERIC_DOMAIN_BLOCKLIST.has(d))
+      const knownSet = new Set(knownFiltered)
+      const extras = filteredSerp
+        .filter(c => !knownSet.has(c.domain))
+        .slice(0, Math.max(0, 3 - knownFiltered.length))
+      competitorDomains = [...knownFiltered, ...extras.map(c => c.domain)].slice(0, 3)
+    }
 
     const gapKeywords: LabsKeyword[] = competitorDomains.length > 0
       ? await getKeywordsGap(client.domain, competitorDomains, locationCode, 100)
