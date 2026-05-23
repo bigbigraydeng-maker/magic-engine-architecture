@@ -146,7 +146,7 @@ export default function BlogPostPage() {
   }
 
   const checks = computeGeoChecklist(post, clientName);
-  const { full_html } = buildBlogHtml(post);
+  const { body_only } = buildBlogHtml(post);
 
   // Compose HTML for iframe preview (adds minimal styling)
   const previewHtml = `<!DOCTYPE html>
@@ -163,6 +163,8 @@ export default function BlogPostPage() {
   h3 { font-size: 1rem; font-weight: 600; margin-top: 1.5rem; }
   p  { margin: 0.75rem 0; }
   ul, ol { padding-left: 1.5rem; }
+  .me-blog-hero { margin: 0 0 1.75rem; }
+  .me-blog-hero img { width: 100%; height: auto; border-radius: 12px; display: block; }
   .faq { background: #f8fafc; border-radius: 8px; padding: 16px 20px; margin-top: 2rem; }
   .faq h2, .faq h3 { margin-top: 0.5rem; }
   .geo-block-highlight { background: #fef9c3; border: 1px solid #fde047;
@@ -171,7 +173,7 @@ export default function BlogPostPage() {
 </style>
 </head>
 <body>
-${post.html_body}
+${body_only}
 ${showGeoBlock && post.geo_html_snapshot
   ? `<div class="geo-block-highlight">
        <strong>🤖 GEO Directive Block (team-visible only)</strong>
