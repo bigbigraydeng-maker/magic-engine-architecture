@@ -100,7 +100,7 @@ function PlatformBadge({ platform }: { platform: ViralReference['platform'] }) {
 
 // ─── Reference card ───────────────────────────────────────────────────────────
 
-function ReferenceCard({ ref: r }: { ref: ViralReference }) {
+function ReferenceCard({ item: r }: { item: ViralReference }) {
   const shortUrl = r.source_url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 50)
 
   return (
@@ -317,7 +317,7 @@ export default function ViralReferencesPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filtered.map(r => (
-            <ReferenceCard key={r.id} ref={r} />
+            <ReferenceCard key={r.id} item={r} />
           ))}
         </div>
       )}
