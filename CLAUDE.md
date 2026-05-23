@@ -215,7 +215,7 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-23 19:18 NZST （**P12.I.fix ✅** — 张骞超时根治：免费层移除 diagnosis、6个 DataForSEO 调用加 30s timeout、CLAUDE_FINAL_TIMEOUT_MS 240s→90s；下一步 P12.I.6「自主行动」执行泳道）
+> 最后更新：2026-05-23 19:19 NZST （**P12.I.fix ✅** — 张骞超时根治：免费层移除 diagnosis、6个 DataForSEO 调用加 30s timeout、CLAUDE_FINAL_TIMEOUT_MS 240s→90s；下一步 P12.I.6「自主行动」执行泳道）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
