@@ -199,6 +199,12 @@ export default function ViralReferencesPage() {
   const [triggerMsg, setTriggerMsg] = useState('')
   const [filter, setFilter] = useState<'all' | 'done' | 'pending' | 'error'>('all')
 
+  // Add video form
+  const [addUrls, setAddUrls] = useState('')
+  const [addIndustry, setAddIndustry] = useState<'travel' | 'flooring'>('travel')
+  const [adding, setAdding] = useState(false)
+  const [addMsg, setAddMsg] = useState('')
+
   const fetchRefs = useCallback(async () => {
     try {
       const res = await fetch('/api/admin/viral-references')
@@ -226,6 +232,42 @@ export default function ViralReferencesPage() {
     const t = setInterval(fetchRefs, 5000)
     return () => clearInterval(t)
   }, [refs, fetchRefs])
+
+  const addVideos = async () => {
+    const urls = addUrls
+      .split('\n')
+      .map(l => l.trim())
+      .filter(l => l.startsWith('http'))
+
+    if (urls.length === 0) {
+      setAddMsg('请粘贴至少一条视频链接（每行一条）')
+      return
+    }
+
+    setAdding(true)
+    setAddMsg('')
+    try {
+      const res = await fetch('/api/admin/viral-references', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          videos: urls.map(url => ({ url, industry: addIndustry })),
+        }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        setAddMsg(`✅ ${data.queued} 条视频已加入分析队列`)
+        setAddUrls('')
+        fetchRefs()
+      } else {
+        setAddMsg(`❌ ${data.error}`)
+      }
+    } catch {
+      setAddMsg('❌ 网络错误，请重试')
+    } finally {
+      setAdding(false)
+    }
+  }
 
   const triggerAnalysis = async () => {
     setTriggering(true)
@@ -274,6 +316,42 @@ export default function ViralReferencesPage() {
         >
           {triggering ? 'Starting…' : `Analyze Pending (${pending})`}
         </button>
+      </div>
+
+      {/* Add Video Panel */}
+      <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">
+        <p className="text-sm font-medium text-white">投喂新视频</p>
+        <div className="flex gap-3">
+          <textarea
+            value={addUrls}
+            onChange={e => setAddUrls(e.target.value)}
+            placeholder={"每行粘贴一条链接：\nhttps://youtube.com/shorts/...\nhttps://www.facebook.com/share/..."}
+            rows={3}
+            className="flex-1 bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 resize-none focus:outline-none focus:border-indigo-500"
+          />
+          <div className="flex flex-col gap-2 shrink-0">
+            <select
+              value={addIndustry}
+              onChange={e => setAddIndustry(e.target.value as 'travel' | 'flooring')}
+              className="bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+            >
+              <option value="travel">✈️ Travel</option>
+              <option value="flooring">🪵 Flooring</option>
+            </select>
+            <button
+              onClick={addVideos}
+              disabled={adding || !addUrls.trim()}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              {adding ? 'Adding…' : 'Add & Analyze'}
+            </button>
+          </div>
+        </div>
+        {addMsg && (
+          <p className={`text-sm ${addMsg.startsWith('✅') ? 'text-green-400' : 'text-red-400'}`}>
+            {addMsg}
+          </p>
+        )}
       </div>
 
       {/* Fetch error */}
