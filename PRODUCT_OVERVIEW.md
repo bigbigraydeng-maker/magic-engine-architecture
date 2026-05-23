@@ -2,6 +2,8 @@
 
 > Magic Lab 旗下核心产品 · 2026 主力收入引擎
 
+> 最后更新：2026-05-23
+
 ---
 
 ## 一、战略定位
@@ -68,7 +70,7 @@
 - **Avatar Studio**：AI 头像视频（HeyGen）
 - **Publishing Hub**：多平台排期发布（Publer）
 
-### 模块三：广告 🔄 建设中
+### 模块三：广告 🔄 建设中（Meta 广告数据已接入，Google Ads 申请中）
 **对外封装名：Ads Intelligence**
 
 多平台广告账户连接、AI 诊断引擎、有界自动化 Fix。
@@ -162,7 +164,7 @@
 | **社媒** | Video Studio | AI 视频生成工坊 | ✅ |
 | **社媒** | Avatar Studio | AI 头像视频生成 | ✅ |
 | **社媒** | Publishing Hub | 多平台排期发布 | ✅ |
-| **广告** | Ads Intelligence | 账户连接 + AI 诊断 + Fix | 🔄 建设中 |
+| **广告** | Ads Intelligence | 账户连接 + AI 诊断 + Fix | 🔄 建设中（Meta 已接入） |
 | **广告** | Paid Social Studio | 广告文案批量生成矩阵 | ⏸ 暂缓 |
 | **数据** | Insight Reports | 月报 PDF 生成（框架已有） | 🔄 部分 |
 | **数据** | Client Portal | 客户自助数据看板 | 📋 规划 |
@@ -238,3 +240,34 @@
 ---
 
 *Magic Lab — 让 AI 真正服务于业务增长。*
+
+---
+
+## 九、Phase 12 执行自动化飞轮（2026-05 建设）
+
+> 核心护城河：Magic Engine 不只是内容生产工具，更是**执行-归因-飞轮**闭环平台。
+
+### 飞轮架构
+
+诊断发现问题 → 自动生成执行动作 → 结果指标快照 → 归因计算 → 飞轮迭代。
+
+四个飞轮方向：
+- **SEO 飞轮**：关键词排名追踪 → 博客生成 → 外链/内链优化
+- **GEO 飞轮**：AI 可见度追踪 → GEO 指令生成 → 指令注入 → 下次追踪对比
+- **社媒飞轮**：发布数据回流 → 内容策略调整 → 下一批 Campaign
+- **广告飞轮**：Meta 广告诊断 → 自动 Fix（暂停/调价）→ 效果归因
+
+### 已完成里程碑（Phase 12.I，2026-05-23）
+
+| 功能 | 描述 |
+|------|------|
+| SEO Intelligence | Position Changes 追踪、Intent 优先内容策略、每周关键词快照 Cron |
+| 自主行动泳道 | 执行看板新增「飞轮自主行动」泳道，记录平台自动执行的动作 |
+| 一键生成博客 | 从 SEO Intelligence 缺口直接触发博客生成 |
+| GEO Composer | 博客头图 HTML 注入（P12.J.1）、Campaign 视觉方向（P12.K.1）|
+| 归因 Cron | 每 6 小时计算 baseline→after→verdict |
+
+### 试点客户
+
+- **CTS Tours**：GEO + SEO + Ads（Meta 广告真实数据已接入）
+- **Oztop**：SEO + GEO
