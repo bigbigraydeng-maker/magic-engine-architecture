@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-23 01:54 NZST · 当前阶段：**Phase 12.I — SEO Intelligence 页面 + 飞轮接线（P12.I.1–I.8 ✅，关键词周快照地基已完成；P12.I.9 Position Changes 为下一步）**。M1 deadline 6/19。
+> 最后更新：2026-05-23 15:52 NZST · 当前阶段：**Phase 12.I — SEO Intelligence 页面 + 飞轮接线（P12.I.1–I.9 ✅，Position Changes 已接入 Panel A；P12.I.10 Intent 优先策略为下一步）**。M1 deadline 6/19。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -43,7 +43,7 @@
 ✅ Phase 12.Q   内容质量闭环（已完成，2026-05-21）
 ✅ Phase 12.G   诸葛亮策略调度引擎（P12.G.1–G.5 全部完成，2026-05-21）
 📋 Phase 12.H   GitHub CMS 执行闭环（P1 博客推PR + P2 SEO Fix UI，已登记未开工）
-🔥 Phase 12.I   SEO Intelligence 页面 + 飞轮闭环接线（P12.I.1–I.8 ✅，10 任务，M1 deadline 6/19）
+🔥 Phase 12.I   SEO Intelligence 页面 + 飞轮闭环接线（P12.I.1–I.9 ✅，10 任务，M1 deadline 6/19）
 ✅ Phase 12.J   博客头图配图生成（P12.J.1 ✅，P12.J.2 暂缓）
 📋 Phase 13     Production Package / 生产订单聚合层（已登记，待排期）
 🔄 Phase 9.0    Visual Queue UX Polish（部分完成，未收尾）
@@ -1568,7 +1568,7 @@ SEO 诊断 → Fix 按钮 → 推 GitHub PR → 客户 merge → 元数据修复
 | **P12.I.6** | 接线缺口 4 — 执行看板新增「自主行动」泳道，支持无处方来源的 `execution_item` 渲染 + OutcomeChip | P12.I.5 | ✅ |
 | **P12.I.7** | 接线缺口 3 — Untapped 词 / `/strategy` `new_blog` 卡片加「生成博客」按钮，一键接入 POST /blog | P12.I.3, P12.I.5 | ✅ |
 | **P12.I.8** | `keyword_snapshots` 表 migration + weekly Cron（每周存关键词排名快照，为趋势图积累数据） | — | ✅ |
-| **P12.I.9** | Position Changes 计算（New / Lost / Improved / Declined），Panel A 展示 | P12.I.8 | 📋 |
+| **P12.I.9** | Position Changes 计算（New / Lost / Improved / Declined），Panel A 展示 | P12.I.8 | ✅ |
 | **P12.I.10** | Intent 优先内容策略（Transactional 置顶）+ Branded vs Non-Branded 流量分拆 | P12.I.2 | 📋 |
 
 ### 里程碑关卡
@@ -2149,6 +2149,8 @@ AU / NZ（当前）          新市场（未来）
 - **P12.J.1** — 博客头图配图：新增 `/api/clients/[id]/blog/[postId]/image` 路由（gpt-image-1 16:9 + Supabase blog-hero/ 存储）+ 工作台「🖼 头图配图」面板（一键生成/重新生成/编辑提示词）+ `generateVisualBrief()` 注入 Campaign 视觉线索，build ✅
 
 ### 2026-05-22
+
+- **P12.I.9** — Position Changes 接入 SEO Intelligence：基于 `keyword_snapshots` 最近两期计算 New/Lost/Improved/Declined，Panel A 展示摘要 + movement 列表，测试 + build ✅
 
 - **P12.I.8** — `keyword_snapshots` 趋势地基：新增快照表 migration、DataForSEO ranked keyword upsert service、weekly cron + Render 调度，10 tests + build ✅
 - **P12.I.7** — Untapped 词与 strategy `new_blog` 卡片接入一键生成博客：复用 POST /blog，成功后回写 strategy item，测试 + build ✅

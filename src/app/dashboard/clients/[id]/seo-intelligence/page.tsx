@@ -52,6 +52,27 @@ interface BlogGenerationResponse {
   cost_usd?: number | null
 }
 
+type PositionChangeType = 'new' | 'lost' | 'improved' | 'declined'
+
+interface PositionChange {
+  keyword: string
+  change_type: PositionChangeType
+  previous_position: number | null
+  current_position: number | null
+  position_delta: number | null
+  search_volume: number | null
+  keyword_difficulty: number | null
+  intent: string | null
+}
+
+interface PositionChangesResponse {
+  current_date: string | null
+  previous_date: string | null
+  summary: Record<PositionChangeType, number>
+  changes: PositionChange[]
+  error?: string
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmt(v: number | null, decimals = 0): string {
@@ -92,6 +113,13 @@ function kdCls(kd: number | null): string {
   if (kd <= 30)  return 'text-green-600 font-medium'
   if (kd <= 60)  return 'text-yellow-600 font-medium'
   return 'text-red-600 font-medium'
+}
+
+const CHANGE_META: Record<PositionChangeType, { label: string; cls: string }> = {
+  new:      { label: 'New',      cls: 'bg-green-50 text-green-700 border-green-200' },
+  improved: { label: 'Improved', cls: 'bg-blue-50 text-blue-700 border-blue-200'   },
+  declined: { label: 'Declined', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+  lost:     { label: 'Lost',     cls: 'bg-red-50 text-red-700 border-red-200'      },
 }
 
 // ─── Stat Card ────────────────────────────────────────────────────────────────
@@ -320,6 +348,110 @@ function IntentDistribution({ keywords }: { keywords: RankedKeyword[] }) {
 
 const PAGE_SIZE = 50
 
+function PositionChangesPanel({
+  data,
+  loading,
+  error,
+}: {
+  data: PositionChangesResponse | null
+  loading: boolean
+  error: string | null
+}) {
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3">
+        <div className="h-4 w-40 bg-gray-200 rounded animate-pulse" />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-16 bg-white rounded-lg border border-gray-100 animate-pulse" />
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        Position Changes failed to load: {error}
+      </div>
+    )
+  }
+
+  if (!data?.previous_date) {
+    return (
+      <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
+        Position Changes will appear after two weekly keyword snapshots are available.
+      </div>
+    )
+  }
+
+  const visibleChanges = data.changes.slice(0, 8)
+  const dateRange = `${data.previous_date} -> ${data.current_date ?? 'latest'}`
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900">Position Changes</h3>
+          <p className="text-xs text-gray-400">{dateRange}</p>
+        </div>
+        <span className="text-xs text-gray-500">{data.changes.length} movement{data.changes.length === 1 ? '' : 's'}</span>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        {(['new', 'improved', 'declined', 'lost'] as PositionChangeType[]).map(type => {
+          const meta = CHANGE_META[type]
+          return (
+            <div key={type} className={`rounded-lg border bg-white px-3 py-2 ${meta.cls}`}>
+              <p className="text-xs font-medium opacity-80">{meta.label}</p>
+              <p className="text-2xl font-bold tabular-nums">{data.summary[type]}</p>
+            </div>
+          )
+        })}
+      </div>
+
+      {visibleChanges.length > 0 ? (
+        <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-white border-b border-gray-100">
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Keyword</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide w-24">Change</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide w-24">Before</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide w-24">Now</th>
+                <th className="text-right px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide w-20">Move</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {visibleChanges.map(change => {
+                const meta = CHANGE_META[change.change_type]
+                const delta = change.position_delta
+                const deltaLabel = delta == null ? '-' : `${delta > 0 ? '+' : ''}${delta}`
+                return (
+                  <tr key={`${change.change_type}-${change.keyword}`} className="hover:bg-gray-50">
+                    <td className="px-3 py-2 font-medium text-gray-900 max-w-xs truncate">{change.keyword}</td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${meta.cls}`}>{meta.label}</span>
+                    </td>
+                    <td className="px-3 py-2 text-center tabular-nums text-gray-600">{posLabel(change.previous_position)}</td>
+                    <td className="px-3 py-2 text-center tabular-nums text-gray-900">{posLabel(change.current_position)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums font-semibold ${delta != null && delta < 0 ? 'text-amber-600' : 'text-green-600'}`}>
+                      {deltaLabel}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="text-sm text-gray-500">No ranking movement between the latest two snapshots.</p>
+      )}
+    </div>
+  )
+}
+
 function RankingsTable({
   keywords,
   brandRoot,
@@ -493,6 +625,9 @@ export default function SeoIntelligencePage() {
   const [rankingsDomain,  setRankingsDomain]  = useState('')
   const [rankingsLoading, setRankingsLoading] = useState(true)
   const [rankingsError,   setRankingsError]   = useState<string | null>(null)
+  const [positionChanges, setPositionChanges] = useState<PositionChangesResponse | null>(null)
+  const [positionLoading, setPositionLoading] = useState(true)
+  const [positionError,   setPositionError]   = useState<string | null>(null)
 
   // Competitors + gap keywords (Panel B)
   const [competitors,  setCompetitors]  = useState<Competitor[]>([])
@@ -530,6 +665,21 @@ export default function SeoIntelligencePage() {
         setRankingsError(e instanceof Error ? e.message : '排名数据加载失败')
       } finally {
         setRankingsLoading(false)
+      }
+    })()
+  }, [clientId])
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch(`/api/clients/${clientId}/seo-intelligence/position-changes`)
+        const data = await res.json() as PositionChangesResponse
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+        setPositionChanges(data)
+      } catch (e) {
+        setPositionError(e instanceof Error ? e.message : 'Position change data failed to load')
+      } finally {
+        setPositionLoading(false)
       }
     })()
   }, [clientId])
@@ -679,10 +829,17 @@ export default function SeoIntelligencePage() {
                 暂无排名数据。DataForSEO 未检测到该域名的自然排名词，可能域名未开始收录或流量极低。
               </div>
             ) : (
-              <RankingsTable
-                keywords={rankings}
-                brandRoot={domainRoot(rankingsDomain)}
-              />
+              <div className="space-y-4">
+                <PositionChangesPanel
+                  data={positionChanges}
+                  loading={positionLoading}
+                  error={positionError}
+                />
+                <RankingsTable
+                  keywords={rankings}
+                  brandRoot={domainRoot(rankingsDomain)}
+                />
+              </div>
             )}
           </div>
         </section>
