@@ -20,6 +20,7 @@ import { useState, useEffect, useCallback } from 'react'
 import type { ExecutionItem } from '@/types/diagnostic'
 import { ReelsStudio } from '../../_components/ReelsStudio'
 import { StudioArticleTab } from './StudioArticleTab'
+import { SocialPlanSection } from './SocialPlanSection'
 
 const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''
 
@@ -158,13 +159,20 @@ export function ContentStudioDrawer({ clientId, item, onClose, onContentGenerate
               onGenerated={linkContentToItem}
             />
           ) : (
-            <ReelsStudio
-              clientId={clientId}
-              defaultCampaignId={campaign?.id}
-              onDraftGenerated={() =>
-                linkContentToItem('🤖 已在内容工作台生成社媒视频草稿（Reel）')
-              }
-            />
+            <div className="space-y-2">
+              <SocialPlanSection
+                clientId={clientId}
+                campaignId={campaign?.id}
+                campaignName={campaign?.name}
+              />
+              <ReelsStudio
+                clientId={clientId}
+                defaultCampaignId={campaign?.id}
+                onDraftGenerated={() =>
+                  linkContentToItem('🤖 已在内容工作台生成社媒视频草稿（Reel）')
+                }
+              />
+            </div>
           )}
         </div>
       </div>
