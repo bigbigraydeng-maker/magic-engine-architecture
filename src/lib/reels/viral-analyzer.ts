@@ -18,7 +18,7 @@ import path from 'path'
 import { supabaseAdmin } from '@/lib/supabase'
 
 const execAsync = promisify(exec)
-const ANALYSIS_MODEL = 'gemini-2.0-flash'
+const ANALYSIS_MODEL = 'gemini-2.5-flash'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
