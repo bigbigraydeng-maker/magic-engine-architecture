@@ -308,6 +308,8 @@ async function persistAndReturn(
     )
   }
 
+  await linkStrategyItemToPost(clientId, body.strategy_item_id, post.id)
+
   // Link to production package if specified (best-effort, non-blocking on error)
   if (body.production_package_id) {
     const { data: item, error: itemErr } = await supabaseAdmin
@@ -365,6 +367,28 @@ async function persistAndReturn(
     audit,
     cost_usd: result.cost_usd,
   })
+}
+
+async function linkStrategyItemToPost(
+  clientId: string,
+  strategyItemId: string | undefined,
+  postId: string,
+) {
+  if (!strategyItemId) return
+
+  const { error } = await supabaseAdmin
+    .from('content_strategy_items')
+    .update({
+      status: 'done',
+      linked_blog_post_id: postId,
+    })
+    .eq('id', strategyItemId)
+    .eq('client_id', clientId)
+    .eq('action_type', 'new_blog')
+
+  if (error) {
+    console.error('[blog persistAndReturn] strategy item link failed (non-blocking):', error)
+  }
 }
 
 async function insertBlogPost(payload: Record<string, unknown>) {

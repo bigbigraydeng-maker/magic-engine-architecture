@@ -6,9 +6,10 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { formatOutcomeLabel } from '../page'
+import { AUTONOMOUS_GROUP_ID, buildExecutionGroups, formatOutcomeLabel } from '../execution-view-model'
 
 type OutcomeSummary = Parameters<typeof formatOutcomeLabel>[0]
+type ExecutionGroupItem = Parameters<typeof buildExecutionGroups>[0][number]
 
 const base: OutcomeSummary = {
   verdict: 'confirmed',
@@ -81,5 +82,61 @@ describe('formatOutcomeLabel', () => {
     const label = formatOutcomeLabel({ ...base, delta_pct: -5.3, verdict: 'reversed', confidence: 0.5 })
     expect(label).toContain('-5%')
     expect(label).not.toContain('+-')
+  })
+})
+
+describe('buildExecutionGroups', () => {
+  const itemBase: ExecutionGroupItem = {
+    id: 'item-1',
+    prescription_id: 'prescription-1',
+    client_id: 'client-1',
+    finding_id: null,
+    dimension: 'seo',
+    phase: 1,
+    title: 'Fix title',
+    description: 'Fix the title',
+    fix_type: 'me_auto',
+    status: 'pending',
+    steps_json: null,
+    execution_target: null,
+    assigned_to: null,
+    due_date: null,
+    started_at: null,
+    completed_at: null,
+    sort_order: 1,
+    created_at: '2026-05-22T00:00:00Z',
+    updated_at: '2026-05-22T00:00:00Z',
+    content_post_id: null,
+    logs: [],
+    outcome: null,
+    linked_post: null,
+  }
+
+  it('puts autonomous flywheel actions in the first lane', () => {
+    const groups = buildExecutionGroups([
+      itemBase,
+      {
+        ...itemBase,
+        id: 'action-1',
+        prescription_id: AUTONOMOUS_GROUP_ID,
+        title: '生成博客：NZ tours',
+        status: 'completed',
+        source_kind: 'flywheel_action',
+        flywheel_action_id: 'action-1',
+      },
+    ], [
+      {
+        id: 'prescription-1',
+        status: 'approved',
+        supplements_id: null,
+        supersedes_id: null,
+        generated_at: '2026-05-21T00:00:00Z',
+      },
+    ])
+
+    expect(groups[0].pid).toBe(AUTONOMOUS_GROUP_ID)
+    expect(groups[0].label).toBe('自主行动')
+    expect(groups[0].items).toHaveLength(1)
+    expect(groups[1].label).toBe('原处方')
   })
 })

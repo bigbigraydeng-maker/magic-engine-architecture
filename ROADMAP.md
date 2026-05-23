@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-22 18:44 NZST · 当前阶段：**Phase 12.I — SEO Intelligence 页面 + 飞轮接线（P12.I.1–I.5 ✅，博客生成已接入 SEO 飞轮；P12.J.1 ✅ 博客头图配图；P12.I.6「自主行动」执行泳道为下一步）**。M1 deadline 6/19。
+> 最后更新：2026-05-23 16:24 NZST · 当前阶段：**Phase 12.I — SEO Intelligence 页面 + 飞轮接线（P12.I.1–I.10 ✅，M3 趋势与追踪代码完成；下一步 PM 验证 + PR 准备）**。M1 deadline 6/19。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -43,7 +43,7 @@
 ✅ Phase 12.Q   内容质量闭环（已完成，2026-05-21）
 ✅ Phase 12.G   诸葛亮策略调度引擎（P12.G.1–G.5 全部完成，2026-05-21）
 📋 Phase 12.H   GitHub CMS 执行闭环（P1 博客推PR + P2 SEO Fix UI，已登记未开工）
-🔥 Phase 12.I   SEO Intelligence 页面 + 飞轮闭环接线（P12.I.1–I.5 ✅，10 任务，M1 deadline 6/19）
+✅ Phase 12.I   SEO Intelligence 页面 + 飞轮闭环接线（P12.I.1–I.10 全部完成，M3 待 PM 验证）
 ✅ Phase 12.J   博客头图配图生成（P12.J.1 ✅，P12.J.2 暂缓）
 📋 Phase 13     Production Package / 生产订单聚合层（已登记，待排期）
 🔄 Phase 9.0    Visual Queue UX Polish（部分完成，未收尾）
@@ -1542,7 +1542,7 @@ SEO 诊断 → Fix 按钮 → 推 GitHub PR → 客户 merge → 元数据修复
 
 ---
 
-## Phase 12.I — SEO Intelligence 页面 + 飞轮闭环接线 🔥 进行中（2026-05-21）
+## Phase 12.I — SEO Intelligence 页面 + 飞轮闭环接线 ✅ 代码完成（2026-05-21）
 
 > **背景**：DataForSEO 数据（200 排名关键词、流量历史、竞品对比、关键词缺口、Intent、KD）已全面接入，但用户只能看到一个 0–100 分数 —— 排名表、流量趋势、竞品界面、关键词缺口全部不可见；SEO Gap 页还要手动上传 SEMrush CSV。Phase 12.I 建一个 SEO Intelligence 页面把数据直接呈现，并把「Untapped 词一键生成博客」接回飞轮（`flywheel_actions` / `flywheel_outcomes`）与执行看板，让 SEO 内容执行不再是孤岛。
 
@@ -1565,11 +1565,11 @@ SEO 诊断 → Fix 按钮 → 推 GitHub PR → 客户 merge → 元数据修复
 | **P12.I.3** | Panel B「了解对手」— 竞品并排对比 + 关键词缺口自动 DataForSEO 拉取 + Venn 图 | P12.I.1 | ✅ |
 | **P12.I.4** | SEO Gap 页改用 DataForSEO `getKeywordsGap()` 自动拉取，移除 SEMrush CSV 上传 | DataForSEO ✅ | ✅ |
 | **P12.I.5** | 接线缺口 1+2 — 博客生成 route `persistAndReturn()` 写 `flywheel_actions(flywheel='seo')` + 持久化 `primary_keyword/volume/kd/intent` | — | ✅ |
-| **P12.I.6** | 接线缺口 4 — 执行看板新增「自主行动」泳道，支持无处方来源的 `execution_item` 渲染 + OutcomeChip | P12.I.5 | 📋 |
-| **P12.I.7** | 接线缺口 3 — Untapped 词 / `/strategy` `new_blog` 卡片加「生成博客」按钮，一键接入 POST /blog | P12.I.3, P12.I.5 | 📋 |
-| **P12.I.8** | `keyword_snapshots` 表 migration + weekly Cron（每周存关键词排名快照，为趋势图积累数据） | — | 📋 |
-| **P12.I.9** | Position Changes 计算（New / Lost / Improved / Declined），Panel A 展示 | P12.I.8 | 📋 |
-| **P12.I.10** | Intent 优先内容策略（Transactional 置顶）+ Branded vs Non-Branded 流量分拆 | P12.I.2 | 📋 |
+| **P12.I.6** | 接线缺口 4 — 执行看板新增「自主行动」泳道，支持无处方来源的 `execution_item` 渲染 + OutcomeChip | P12.I.5 | ✅ |
+| **P12.I.7** | 接线缺口 3 — Untapped 词 / `/strategy` `new_blog` 卡片加「生成博客」按钮，一键接入 POST /blog | P12.I.3, P12.I.5 | ✅ |
+| **P12.I.8** | `keyword_snapshots` 表 migration + weekly Cron（每周存关键词排名快照，为趋势图积累数据） | — | ✅ |
+| **P12.I.9** | Position Changes 计算（New / Lost / Improved / Declined），Panel A 展示 | P12.I.8 | ✅ |
+| **P12.I.10** | Intent 优先内容策略（Transactional 置顶）+ Branded vs Non-Branded 流量分拆 | P12.I.2 | ✅ |
 
 ### 里程碑关卡
 
@@ -2150,6 +2150,13 @@ AU / NZ（当前）          新市场（未来）
 
 ### 2026-05-22
 
+- **P12.I.10** — Intent 优先内容策略：SEO Intelligence Panel A 新增 Branded vs Non-Branded 估算流量拆分 + Intent Priority Content；排名表/缺口词表 Transactional 优先；11 tests + build ✅
+
+- **P12.I.9** — Position Changes 接入 SEO Intelligence：基于 `keyword_snapshots` 最近两期计算 New/Lost/Improved/Declined，Panel A 展示摘要 + movement 列表，测试 + build ✅
+
+- **P12.I.8** — `keyword_snapshots` 趋势地基：新增快照表 migration、DataForSEO ranked keyword upsert service、weekly cron + Render 调度，10 tests + build ✅
+- **P12.I.7** — Untapped 词与 strategy `new_blog` 卡片接入一键生成博客：复用 POST /blog，成功后回写 strategy item，测试 + build ✅
+- **P12.I.6** — 执行看板新增「自主行动」泳道：无 execution_item 来源的 flywheel_actions 合成只读卡片，复用 OutcomeChip，测试 + build ✅
 - **P13.D** — Ads + Reputation 接入 production package：meta_ads_snapshots + project_reviews 加 production_package_id FK；两条路由接受可选参数；包详情页回读 ads_snapshots + reputation_reviews，build ✅
 
 ### 2026-05-21（续 2）

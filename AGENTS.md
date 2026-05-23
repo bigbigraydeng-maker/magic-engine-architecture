@@ -215,25 +215,15 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-19（**Phase 12.Q 内容质量闭环已登记**；P8.3.2 仍为前置阻塞）
+> 最后更新：2026-05-23（**P12.I.10 已完成**；Phase 12.I 代码完成，下一步 PM 验证 + PR 准备）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P8.3.2** | Dashboard Magic Link 鉴权（前置阻塞，Phase 12.Q 开工前必须完成） | ⭐⭐⭐ |
-| **P12.Q.0** | 产物表加 snapshot/score 列 + TS 类型同步（单 migration 含 3 ALTER） | ⭐⭐ |
-| **P12.Q.1** | Campaign 上下文修复（路线 A 扩 schema + injector + Reels query） | ⭐⭐ |
-| **P12.Q.2** | 统一 quality rubric 模块（混合模式：规则 + 轻量 LLM） | ⭐⭐ |
-| **P12.Q.3** | Blog `auditBlogPost` 接入 retry（含 GEO snapshot 合并） | ⭐⭐ |
-| **P12.Q.4a** | Social Route A/C 接入 rubric + refine retry | ⭐⭐ |
-| **P12.Q.4b** | Social Route B 接入 rubric + viral-structure-preservation 维度 | ⭐⭐ |
-| **P12.Q.5** | Reels 接入 rubric + 写 snapshot/score | ⭐⭐ |
-| **P12.Q.6** | snapshot/score 写入验证 + 缺漏补齐 | ⭐⭐ |
-| **P12.Q.7** | CTS Tours 端到端 demo + before/after 报告 | ⭐⭐ |
+| **P12.I.M3** | PM 验证 SEO Intelligence：周快照、Position Changes、Intent 优先策略；通过后准备 PR | ⭐⭐ |
 
-**状态校准（2026-05-19）**：Phase 12.A 已完成；Phase 12.B.1–B.4 已完成（SEO / Meta Ads / Social adapter + SEMrush 周快照 cron）；**Phase 12.Q 已登记未开工**（详见 [ROADMAP § Phase 12.Q](./ROADMAP.md)）。下一 session 第一句话：
+**状态校准（2026-05-23）**：Phase 12.Q 已完成；P12.I.1–I.10 已完成；Phase 12.I 进入 M3 验证 + PR 准备。下一 session 第一句话：
 
-- 如果 P8.3.2 还没完成 → `继续 P8.3.2 Dashboard Magic Link 鉴权`
-- 如果 P8.3.2 已完成 → `继续 Phase 12.Q 第 0 任务 P12.Q.0`
+- `继续 Phase 12.I M3 验证与 PR 准备`
 
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 
