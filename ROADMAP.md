@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-22 18:44 NZST · 当前阶段：**Phase 12.I — SEO Intelligence 页面 + 飞轮接线（P12.I.1–I.5 ✅，博客生成已接入 SEO 飞轮；P12.J.1 ✅ 博客头图配图；P12.I.6「自主行动」执行泳道为下一步）**。M1 deadline 6/19。
+> 最后更新：2026-05-23 19:18 NZST · 当前阶段：**Phase 12.I — SEO Intelligence 页面 + 飞轮接线（P12.I.1–I.5 ✅；P12.J.1 ✅ 博客头图；P12.K.1 ✅ Campaign 视觉方向；P12.I.fix ✅ 张骞超时根治 + 免费层范围收窄；P12.I.6「自主行动」执行泳道为下一步）**。M1 deadline 6/19。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -2147,6 +2147,9 @@ AU / NZ（当前）          新市场（未来）
 - **P13.E-pre** — Competitor snapshot persistence：新增 competitor_snapshots 表（含 production_package_id FK）；competitor-keywords POST 落库 snapshot + 接受可选 production_package_id；包详情 API 回读 competitor_snapshots 数组，build ✅
 - **P13.E** — Flywheel feedback 闭环：flywheel_actions 加 production_package_id FK；4 adapter execute() + ExecuteActionInput/FlywheelActionRow 类型同步；新增 package-publish.ts（dimension→flywheel 映射 + on-publish 非阻断落 flywheel_action）；PATCH /api/clients/[id]/production/[packageId] 状态更新 + publish hook，build ✅
 - **P12.J.1** — 博客头图配图：新增 `/api/clients/[id]/blog/[postId]/image` 路由（gpt-image-1 16:9 + Supabase blog-hero/ 存储）+ 工作台「🖼 头图配图」面板（一键生成/重新生成/编辑提示词）+ `generateVisualBrief()` 注入 Campaign 视觉线索，build ✅
+- **P12.K.1** — Campaign 视觉方向（两层视觉继承体系）：`campaign_briefs` 加 5 nullable 字段（vi_mood/vi_color_accent/vi_specific_dos/vi_specific_donts/vi_reference_note）；新增 POST `/api/clients/[id]/campaign/[campaignId]/generate-visual`（读 MB vi_* 为品牌宪法 → Claude Sonnet 生成活动专化视觉方向，仅预览不落库）；CampaignPanel 新增 VisualDirectionSection（AI 生成按钮 + 5 字段编辑 + Save 触发 PATCH）；migration 20260523000003；commit `3f4e09e`
+- **P12.I.fix** — 张骞 free tier 瘦身 + 超时根治：① `prompts.ts` 移除 `诊断评分标准`/`危机类型分类` 两节（~50行）+ JSON 示例中 diagnosis 块 + 所有 `diagnosis.actions.quick_fix` 引用改为 `notes`；② `agent.ts` `CLAUDE_FINAL_TIMEOUT_MS` 240s→90s + 6 个 DataForSEO 调用加 `withTimeout(30s)` 保护；③ `status/route.ts` 错误文案 "10 min"→"6 min"；④ `page.tsx` 用「⭐ 解锁完整诊断方案」会员 CTA 替换 DiagnosisCard/ActionPlanCard，时间估计 5-8分→3-4分；build ✅；commit `b3982b5`；push → Render 已触发部署
+- **PR#61 review fix (P12.I.6 前置)** — `page.tsx` 的 `GroupData` 接口新增 `editable: boolean`，将可编辑性与归档状态解耦；`PrescriptionGroup` 改用 `group.editable` 传给 `PhaseColumn`；`prescriptionGroups.map()` 显式设 `editable: !archived`。自主行动泳道 view model 只需返回 `editable: false` 即可阻断 `prescription_id="__autonomous__"` 404 路径。
 
 ### 2026-05-22
 
