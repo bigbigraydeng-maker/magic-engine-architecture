@@ -219,6 +219,13 @@ export interface CampaignBrief {
   primary_cta?: string | null
   channel_goal?: string | null
   campaign_angle?: string | null
+  // Visual direction — campaign-level specialisation of MB vi_*
+  // Rule: can narrow/extend brand DNA, never contradict it
+  vi_mood?: string | null
+  vi_color_accent?: string | null
+  vi_specific_dos?: string[] | null
+  vi_specific_donts?: string[] | null
+  vi_reference_note?: string | null
   created_at: string
   updated_at: string
 }
@@ -538,15 +545,5 @@ export interface GenerateBlogRequest {
   skip_audit?: boolean         // bypass content audit (e.g. user confirmed override)
   production_package_id?: string  // if set, link generated post to this package
   strategy_item_id?: string       // if set, mark originating strategy item done after generation
-  fde_context?: string         // FDE free-text input from customer conversations — injected into the prompt
-}
-
-/** Result from content-auditor — returned alongside generated post */
-export interface ContentAuditResult {
-  action: 'upgrade' | 'new'
-  existing_url: string | null
-  existing_title: string | null
-  reason: string
-  confidence: number
-  discovered_urls: string[]
+  fde_context?: string         // FDE free-text input from customer conversations — injected into blog generation
 }

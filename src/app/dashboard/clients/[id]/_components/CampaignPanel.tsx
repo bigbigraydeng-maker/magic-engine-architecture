@@ -624,6 +624,13 @@ function CampaignCard({
             )}
           </div>
 
+          {/* ── Visual Direction ─────────────────────────────── */}
+          <VisualDirectionSection
+            campaign={campaign}
+            clientId={clientId}
+            onUpdated={onUpdated}
+          />
+
           {/* ── Batch Generation ─────────────────────────────── */}
           <div className="bg-gray-50 rounded-xl p-4 space-y-4 border border-gray-100">
             <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
@@ -823,7 +830,204 @@ function ArchivedCampaigns({ clientId }: { clientId: string }) {
   )
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Visual Direction Section ─────────────────────────────────────────────────
+
+function VisualDirectionSection({
+  campaign,
+  clientId,
+  onUpdated,
+}: {
+  campaign: CampaignBrief
+  clientId: string
+  onUpdated: (c: CampaignBrief) => void
+}) {
+  const hasExisting = !!(campaign.vi_mood || campaign.vi_color_accent || campaign.vi_specific_dos?.length)
+
+  // Draft state populated by AI or manual edit
+  const [draft, setDraft] = useState({
+    vi_mood:           campaign.vi_mood           ?? '',
+    vi_color_accent:   campaign.vi_color_accent   ?? '',
+    vi_specific_dos:   (campaign.vi_specific_dos  ?? []).join('\n'),
+    vi_specific_donts: (campaign.vi_specific_donts ?? []).join('\n'),
+    vi_reference_note: campaign.vi_reference_note ?? '',
+  })
+
+  const [generating, setGenerating] = useState(false)
+  const [saving,     setSaving]     = useState(false)
+  const [msg,        setMsg]        = useState('')
+  const [dirty,      setDirty]      = useState(false)
+
+  const update = (key: string, value: string) => {
+    setDraft(d => ({ ...d, [key]: value }))
+    setDirty(true)
+  }
+
+  const handleGenerate = async () => {
+    setGenerating(true)
+    setMsg('')
+    try {
+      const res = await fetch(
+        `/api/clients/${clientId}/campaign/${campaign.id}/generate-visual`,
+        { method: 'POST' }
+      )
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error)
+      const g = json.generated
+      setDraft({
+        vi_mood:           g.vi_mood           ?? '',
+        vi_color_accent:   g.vi_color_accent   ?? '',
+        vi_specific_dos:   (g.vi_specific_dos  ?? []).join('\n'),
+        vi_specific_donts: (g.vi_specific_donts ?? []).join('\n'),
+        vi_reference_note: g.vi_reference_note ?? '',
+      })
+      setDirty(true)
+      setMsg('AI generated visual direction -- please review before saving')
+    } catch (err) {
+      setMsg(`Error: ${(err as Error).message}`)
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    setMsg('')
+    try {
+      const res = await fetch(`/api/clients/${clientId}/campaign/${campaign.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vi_mood:           draft.vi_mood.trim()           || null,
+          vi_color_accent:   draft.vi_color_accent.trim()   || null,
+          vi_specific_dos:   draft.vi_specific_dos.trim()
+            ? draft.vi_specific_dos.split('\n').map((s: string) => s.trim()).filter(Boolean)
+            : null,
+          vi_specific_donts: draft.vi_specific_donts.trim()
+            ? draft.vi_specific_donts.split('\n').map((s: string) => s.trim()).filter(Boolean)
+            : null,
+          vi_reference_note: draft.vi_reference_note.trim() || null,
+        }),
+      })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error)
+      onUpdated(json.campaign)
+      setDirty(false)
+      setMsg('Saved')
+    } catch (err) {
+      setMsg(`Error: ${(err as Error).message}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="border border-gray-100 rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between bg-gray-50 px-4 py-3">
+        <div>
+          <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+            Visual Direction
+          </p>
+          <p className="text-xs text-gray-400 mt-0.5">
+            Inherits brand visual DNA and specialises for this campaign. AI-generated, manually adjustable.
+          </p>
+        </div>
+        <button
+          onClick={handleGenerate}
+          disabled={generating}
+          className="flex items-center gap-1.5 text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
+        >
+          {generating ? (
+            <>
+              <span className="w-3 h-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+              Generating...
+            </>
+          ) : (
+            <>{hasExisting ? 'AI Regenerate' : 'AI Generate'}</>
+          )}
+        </button>
+      </div>
+
+      <div className="px-4 py-4 space-y-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Visual Mood</label>
+            <input
+              value={draft.vi_mood}
+              onChange={e => update('vi_mood', e.target.value)}
+              placeholder="e.g. Autumn imperial Beijing, misty morning, sense of history"
+              className={`${INPUT_CLASS} text-xs`}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Campaign Accent Colour</label>
+            <input
+              value={draft.vi_color_accent}
+              onChange={e => update('vi_color_accent', e.target.value)}
+              placeholder="e.g. Harvest gold #C9A84C"
+              className={`${INPUT_CLASS} text-xs`}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">
+              Visual Dos <span className="text-gray-400 font-normal">(one per line)</span>
+            </label>
+            <textarea
+              value={draft.vi_specific_dos}
+              onChange={e => update('vi_specific_dos', e.target.value)}
+              placeholder={"Autumn foliage\nMorning mist atmosphere\nAncient architecture close-ups"}
+              rows={3}
+              className={`${INPUT_CLASS} text-xs resize-none`}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">
+              Visual Don'ts <span className="text-gray-400 font-normal">(one per line)</span>
+            </label>
+            <textarea
+              value={draft.vi_specific_donts}
+              onChange={e => update('vi_specific_donts', e.target.value)}
+              placeholder={"Summer green foliage\nModern city backgrounds"}
+              rows={3}
+              className={`${INPUT_CLASS} text-xs resize-none`}
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">
+            Image Generation Reference <span className="text-gray-400 font-normal">(English, for ChatGPT / Midjourney)</span>
+          </label>
+          <input
+            value={draft.vi_reference_note}
+            onChange={e => update('vi_reference_note', e.target.value)}
+            placeholder="e.g. Warm cinematic autumn travel photography, Palace Museum editorial style, harvest gold tones"
+            className={`${INPUT_CLASS} text-xs`}
+          />
+        </div>
+
+        <div className="flex items-center justify-between pt-1">
+          {msg ? (
+            <p className={`text-xs ${msg === 'Saved' || msg.startsWith('AI') ? 'text-green-600' : 'text-red-600'}`}>{msg}</p>
+          ) : <span />}
+          {dirty && (
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="text-xs bg-gray-900 hover:bg-gray-800 text-white px-4 py-1.5 rounded-lg disabled:opacity-50 transition-colors"
+            >
+              {saving ? 'Saving...' : 'Save Visual Direction'}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// --- Helpers ---
 
 function Field({ label, children, required }: { label: string; children: React.ReactNode; required?: boolean }) {
   return (
