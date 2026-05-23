@@ -215,23 +215,24 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-23 19:19 NZST （**P12.I.fix ✅** — 张骞超时根治：免费层移除 diagnosis、6个 DataForSEO 调用加 30s timeout、CLAUDE_FINAL_TIMEOUT_MS 240s→90s；下一步 P12.I.6「自主行动」执行泳道）
+> 最后更新：2026-05-23 19:23 NZST （**Phase 12.I 全部完成 ✅** — P12.I.1–I.10 + P12.J.1 + P12.K.1 + P12.I.fix 均已合并到 main；待 PM 决策下一 Phase）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P12.I.6** | 执行看板「自主行动」泳道 — 从 `flywheel_actions` 读取 `status=pending` 卡片，支持 FDE 一键确认/拒绝 | 🔥 M2 |
+| **PM 决策** | Phase 12.I 全部完成，确认 M3 验证（Cron 快照 / Position Changes / Intent 策略）后，决定下一步方向 | ⚠️ PM 操作 |
 
 **状态校准（2026-05-23）**：
 - ✅ P12.Q.0–Q.7：Phase 12.Q 全部完成（内容质量闭环）
 - ✅ P12.G.1–G.5：诸葛亮策略调度引擎全部完成
-- ✅ **P12.I.1–I.5**：SEO Intelligence 页面全部完成 + 博客接入 SEO 飞轮
-- ✅ **P12.J.1**：博客头图配图面板 + Campaign 视觉注入
+- ✅ **P12.I.1–I.10**：Phase 12.I 全部完成（SEO Intelligence + 飞轮闭环接线），commits `d4e9a88` + `27d9caf`
+- ✅ **P12.J.1**：博客头图配图面板 + Campaign 视觉注入，commit `32034af`
 - ✅ **P12.K.1**：Campaign vi_* 视觉方向（migration + API + UI），commit `3f4e09e`
-- ✅ **P12.I.fix**：张骞超时根治 + 免费层 diagnosis 下线，commit `b3982b5`，已 push → Render 重新部署
+- ✅ **P12.I.fix**：张骞超时根治 + 免费层 diagnosis 下线，commit `b3982b5`，已 push → Render
 - ⚠️ **PM 待操作**：Render → Environment → 加 `ADMIN_EMAILS=你的邮箱`（若还未做）
-- ⚠️ **PM 待操作**：Supabase 跑 migration `20260525000001_content_quality_snapshot_score.sql` + `20260526000001_campaign_briefs_extend.sql` + `20260523000003_campaign_visual_direction.sql`
+- ⚠️ **PM 待操作**：Supabase 跑 migration `20260523000003_campaign_visual_direction.sql`（及此前未跑的 quality + campaign_briefs_extend migrations）
+- ⚠️ **PM 待验证 M3**：打开客户 SEO Intelligence 页面，确认 Position Changes 有数据、Intent 优先内容策略显示正常、Cron 周快照任务在 Render 后台已注册
 
-下一 session：`继续 Phase 12.I 第 6 任务 P12.I.6`
+下一 session：`决定 Phase 12 下一步，或告诉我新需求`
 
 **本 session 已完成，可以关闭。**
 

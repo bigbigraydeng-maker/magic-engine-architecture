@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-23 19:19 NZST · 当前阶段：**Phase 12.I — SEO Intelligence 页面 + 飞轮接线（P12.I.1–I.5 ✅；P12.J.1 ✅ 博客头图；P12.K.1 ✅ Campaign 视觉方向；P12.I.fix ✅ 张骞超时根治 + 免费层范围收窄；P12.I.6「自主行动」执行泳道为下一步）**。M1 deadline 6/19。
+> 最后更新：2026-05-23 19:23 NZST · 当前阶段：**Phase 12.I 全部完成 ✅（P12.I.1–I.10 + P12.J.1 + P12.K.1 + P12.I.fix）；待 PM 决策下一 Phase**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -45,6 +45,7 @@
 📋 Phase 12.H   GitHub CMS 执行闭环（P1 博客推PR + P2 SEO Fix UI，已登记未开工）
 ✅ Phase 12.I   SEO Intelligence 页面 + 飞轮闭环接线（P12.I.1–I.10 全部完成，M3 待 PM 验证）
 ✅ Phase 12.J   博客头图配图生成（P12.J.1 ✅，P12.J.2 暂缓）
+✅ Phase 12.K   Campaign 视觉方向（P12.K.1 ✅，2026-05-23）
 📋 Phase 13     Production Package / 生产订单聚合层（已登记，待排期）
 🔄 Phase 9.0    Visual Queue UX Polish（部分完成，未收尾）
 📋 Phase 9      报告化 + 客户 Portal
@@ -1573,13 +1574,13 @@ SEO 诊断 → Fix 按钮 → 推 GitHub PR → 客户 merge → 元数据修复
 
 ### 里程碑关卡
 
-- **M1 页面快照展示版**（P12.I.1–4，⚠️ **6/19 前必须上线**）：SEO Intelligence 页面上线，Panel A + B 展示真实 DataForSEO 数据，SEO Gap 改自动拉取
-- **M2 内容执行闭环**（P12.I.5–7）：Untapped 词一键生成博客 → 写 `flywheel_actions` → 执行看板「自主行动」泳道能看到该任务卡片
-- **M3 趋势与追踪**（P12.I.8–10）：Cron 周快照跑起来，Position Changes 有数据，Intent 优先策略生效
+- **M1 页面快照展示版** ✅（P12.I.1–4）：SEO Intelligence 页面上线，Panel A + B 展示真实 DataForSEO 数据，SEO Gap 改自动拉取
+- **M2 内容执行闭环** ✅（P12.I.5–7）：Untapped 词一键生成博客 → 写 `flywheel_actions` → 执行看板「自主行动」泳道能看到该任务卡片
+- **M3 趋势与追踪** ⚠️ 待 PM 验证（P12.I.8–10 代码已完成）：Cron 周快照跑起来，Position Changes 有数据，Intent 优先策略生效
 
 ### 工作分支
 
-- 实施分支：`claude/reverent-brown-3345c7`（本 session worktree）
+- 实施分支：`main`（历史 worktree `claude/reverent-brown-3345c7` 已合并，`d4e9a88` + `27d9caf`）
 
 ---
 
@@ -1593,6 +1594,18 @@ SEO 诊断 → Fix 按钮 → 推 GitHub PR → 客户 merge → 元数据修复
 |---------|------|------|------|
 | **P12.J.1** | 新增 `POST /api/clients/[id]/blog/[postId]/image` 路由（gpt-image-1 生成 + Supabase storage 上传）+ 工作台「🖼 头图配图」面板（展示 / 生成 / 编辑提示词）+ Campaign 视觉线索注入 `generateVisualBrief()` | — | ✅ |
 | **P12.J.2** | `buildBlogHtml` 正文前加 hero `<figure>` — 让配图真正进推送 HTML（槽位留存，暂缓） | P12.J.1 | 📋 |
+
+---
+
+## Phase 12.K — Campaign 视觉方向（两层视觉继承体系） ✅ 已完成
+
+> **背景**：Campaign Brief 缺少活动专属视觉方向——当前只有 MB 级别 `vi_*` 品牌宪法，但每次活动的色调、氛围、创意约束无处记录，导致博客头图 / Reels / 社媒配图风格飘移。Phase 12.K 在 `campaign_briefs` 表加 5 个 nullable 视觉字段，并接入 AI 一键生成活动视觉方向。
+>
+> **登记日期**：2026-05-23
+
+| 任务 ID | 内容 | 依赖 | 状态 |
+|---------|------|------|------|
+| **P12.K.1** | `campaign_briefs` 加 `vi_mood / vi_color_accent / vi_specific_dos / vi_specific_donts / vi_reference_note`（5 nullable）；POST `/api/clients/[id]/campaign/[campaignId]/generate-visual`（读 MB `vi_*` 为品牌宪法 → Claude Sonnet 生成活动专化视觉方向，仅预览不落库）；CampaignPanel 新增 `VisualDirectionSection`（AI 生成 + 5 字段编辑 + Save/PATCH）；migration `20260523000003`；commit `3f4e09e` | P12.J.1 | ✅ |
 
 ---
 
