@@ -12,7 +12,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai'
 import { GoogleAIFileManager } from '@google/generative-ai/server'
 import { exec } from 'child_process'
 import { promisify } from 'util'
-import { unlink } from 'fs/promises'
+import { unlink, access } from 'fs/promises'
 import { tmpdir } from 'os'
 import path from 'path'
 import { supabaseAdmin } from '@/lib/supabase'
@@ -147,9 +147,20 @@ export async function analyzeLocalVideoFile(
 async function downloadAndAnalyzeVideo(url: string, apiKey: string): Promise<ViralAnalysisResult> {
   const tmpFile = path.join(tmpdir(), `viral_ref_${Date.now()}.mp4`)
 
+  // yt-dlp lives in project root on Render (downloaded by build command).
+  // Falls back to system PATH for local dev where yt-dlp is installed globally.
+  const ytDlpBin = path.join(process.cwd(), 'yt-dlp')
+  let cmd = 'yt-dlp'
+  try {
+    await access(ytDlpBin)
+    cmd = `"${ytDlpBin}"`
+  } catch {
+    // local binary missing — fall back to PATH
+  }
+
   try {
     await execAsync(
-      `yt-dlp -f "best[height<=720][ext=mp4]/best[height<=720]/best" -o "${tmpFile}" "${url}"`,
+      `${cmd} -f "best[height<=720][ext=mp4]/best[height<=720]/best" -o "${tmpFile}" "${url}"`,
       { timeout: 180_000 }
     )
 
