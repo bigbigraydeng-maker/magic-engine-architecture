@@ -23,7 +23,6 @@ import { aggregateLocalReviews } from '@/lib/local-reviews/client'
 // first-time discovery — they are the slowest connectors and have the lowest
 // hit rate on cold domains. They re-appear in the Phase 8.10.S5 advanced
 // pass, gated behind explicit user connector authorisation.
-import { scrapeInstagramProfile, scrapeTiktokProfile } from '@/lib/apify/social-scraper'
 import { getKeywordsForSite, getSerpCompetitors } from '@/lib/dataforseo/labs'
 import { getDomainTechnologies, getDomainWhois } from '@/lib/dataforseo/domain-analytics'
 import { getSerpPage } from '@/lib/dataforseo/serp'
@@ -176,31 +175,7 @@ const FETCH_LOCAL_REVIEWS_TOOL: Anthropic.Messages.Tool = {
   },
 }
 
-/**
- * Client-side tool: fetch real social metrics (followers, recent posts,
- * engagement) for a profile via Apify scrapers. Backed by
- * src/lib/apify/social-scraper.ts.
- */
-const FETCH_SOCIAL_METRICS_TOOL: Anthropic.Messages.Tool = {
-  name: 'fetch_social_metrics',
-  description:
-    'Fetch real follower count, recent post volume, and engagement rate for a social profile via Apify scrapers. Supports instagram and tiktok. (Facebook is intentionally excluded from first-time discovery — it is the slowest scraper and re-appears in the Phase 8.10.S5 advanced pass once the user authorises a connector.) Call this for the 1-2 most important social accounts you found — it returns hard numbers instead of guesses. Each call is a paid API call, so do not call it for every minor profile.',
-  input_schema: {
-    type: 'object' as const,
-    properties: {
-      platform: {
-        type: 'string',
-        enum: ['instagram', 'tiktok'],
-        description: 'Which platform the profile is on.',
-      },
-      handle_or_url: {
-        type: 'string',
-        description: 'The handle (with or without @).',
-      },
-    },
-    required: ['platform', 'handle_or_url'],
-  },
-}
+// fetch_social_metrics removed — social metrics now discovered via web_search + fetch_url
 
 // fetch_meta_ads tool removed for first-time discovery (Phase 8.10.S5 will
 // re-introduce it on the advanced pass once the user authorises the connector).
@@ -452,7 +427,6 @@ export async function runZhangqian(
           FETCH_URL_TOOL,
           VERIFY_BUSINESS_REGISTRATION_TOOL,
           FETCH_LOCAL_REVIEWS_TOOL,
-          FETCH_SOCIAL_METRICS_TOOL,
           FETCH_SERP_RESULTS_TOOL,
           FETCH_ONPAGE_AUDIT_TOOL,
           FETCH_KEYWORD_DATA_TOOL,
@@ -549,9 +523,6 @@ export async function runZhangqian(
           case 'fetch_local_reviews':
             connectorCalls++
             return handleFetchLocalReviews(toolUse, onProgress)
-          case 'fetch_social_metrics':
-            apifyCalls++
-            return handleFetchSocialMetrics(toolUse, onProgress)
           case 'fetch_serp_results':
             apifyCalls++
             return handleFetchSerpResults(toolUse, onProgress)
@@ -574,7 +545,7 @@ export async function runZhangqian(
             return Promise.resolve<Anthropic.Messages.ToolResultBlockParam>({
               type: 'tool_result',
               tool_use_id: toolUse.id,
-              content: `Unknown tool: ${toolUse.name}. 'web_search' is server-side; client-handled tools are 'fetch_url', 'verify_business_registration', 'fetch_local_reviews', 'fetch_social_metrics', 'fetch_serp_results', 'fetch_onpage_audit', 'fetch_keyword_data', 'fetch_competitors', 'fetch_domain_technologies', 'fetch_domain_whois'. (Meta Ad Library + Facebook profile scrapers are gated to Phase 8.10.S5 advanced discovery.)`,
+              content: `Unknown tool: ${toolUse.name}. 'web_search' is server-side; client-handled tools are 'fetch_url', 'verify_business_registration', 'fetch_local_reviews', 'fetch_serp_results', 'fetch_onpage_audit', 'fetch_keyword_data', 'fetch_competitors', 'fetch_domain_technologies', 'fetch_domain_whois'. Social metrics use web_search + fetch_url instead.`,
               is_error: true,
             })
         }
@@ -895,59 +866,6 @@ async function handleFetchLocalReviews(
     content: snapshots.length > 0
       ? JSON.stringify(snapshots)
       : 'No local review data found. Base gbp / review_platforms on other sources — do not guess ratings.',
-  }
-}
-
-/** Resolve a `fetch_social_metrics` tool call via the Apify social scrapers. */
-async function handleFetchSocialMetrics(
-  toolUse: Anthropic.Messages.ToolUseBlock,
-  onProgress: ProgressFn,
-): Promise<Anthropic.Messages.ToolResultBlockParam> {
-  const input = toolUse.input as { platform?: string; handle_or_url?: string }
-  const platform = input.platform
-  const target = typeof input.handle_or_url === 'string' ? input.handle_or_url.trim() : ''
-
-  if (!target || (platform !== 'instagram' && platform !== 'tiktok')) {
-    return {
-      type: 'tool_result',
-      tool_use_id: toolUse.id,
-      content:
-        'fetch_social_metrics requires `platform` ("instagram" | "tiktok") and `handle_or_url`. Facebook scraping is gated to Phase 8.10.S5 advanced discovery.',
-      is_error: true,
-    }
-  }
-
-  await onProgress(`抓取 ${platform} 真实指标…`)
-
-  // 75 s = Apify actor timeout (60 s) + 15 s HTTP buffer
-  const SOCIAL_METRICS_TIMEOUT_MS = 75_000
-
-  try {
-    // Each scraper returns followersCount / postsLast30Days / engagementRate;
-    // normalise to the snake_case fields Claude writes into DiscoveredSocial.
-    let raw: { followersCount: number; postsLast30Days: number; engagementRate: number }
-    if (platform === 'instagram') {
-      raw = await withTimeout(scrapeInstagramProfile(target.replace(/^@/, '')), SOCIAL_METRICS_TIMEOUT_MS)
-    } else {
-      raw = await withTimeout(scrapeTiktokProfile(target), SOCIAL_METRICS_TIMEOUT_MS)
-    }
-    return {
-      type: 'tool_result',
-      tool_use_id: toolUse.id,
-      content: JSON.stringify({
-        followers_count: raw.followersCount,
-        posts_last_30d: raw.postsLast30Days,
-        engagement_rate: raw.engagementRate,
-      }),
-    }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    // Non-fatal: let Claude continue and leave that profile's metric fields null.
-    return {
-      type: 'tool_result',
-      tool_use_id: toolUse.id,
-      content: `fetch_social_metrics failed for ${platform}: ${message}. Leave that profile's metric fields null — do not guess.`,
-    }
   }
 }
 

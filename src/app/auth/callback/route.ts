@@ -42,6 +42,24 @@ export async function GET(request: NextRequest) {
             new URL(`/portal/${portalUser.client_id}`, origin)
           )
         }
+
+        // If the next path is /prospect (magic link from /discover), honour it
+        if (safePath === '/prospect') {
+          return NextResponse.redirect(new URL('/prospect', origin))
+        }
+
+        // Check if this is a prospect (has a public_scan_jobs record)
+        // but no portal/dashboard access — redirect them to /prospect
+        const { data: scanJob } = await supabaseAdmin
+          .from('public_scan_jobs')
+          .select('id')
+          .eq('email', user.email.toLowerCase())
+          .limit(1)
+          .maybeSingle()
+
+        if (scanJob?.id && safePath === '/dashboard') {
+          return NextResponse.redirect(new URL('/prospect', origin))
+        }
       }
 
       return NextResponse.redirect(new URL(safePath, origin))

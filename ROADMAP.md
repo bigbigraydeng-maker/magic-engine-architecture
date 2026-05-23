@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-23 22:45 NZST · 当前阶段：**Phase 12.I 全部完成 ✅（P12.I.1–I.10 + P12.J.1 + P12.J.2 + P12.K.1 + P12.I.fix）；待 PM 决策下一 Phase**。
+> 最后更新：2026-05-24 00:40 NZST · 当前阶段：**Phase 12.I 全部完成 ✅（P12.I.1–I.10 + P12.J.1 + P12.J.2 + P12.K.1 + P12.I.fix）；待 PM 决策下一 Phase**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -46,6 +46,7 @@
 ✅ Phase 12.I   SEO Intelligence 页面 + 飞轮闭环接线（P12.I.1–I.10 全部完成，M3 待 PM 验证）
 ✅ Phase 12.J   博客头图配图生成（P12.J.1 ✅，P12.J.2 ✅）
 ✅ Phase 12.K   Campaign 视觉方向（P12.K.1 ✅，2026-05-23）
+🔥 Phase 13.A   Prospect 注册流程（/discover Magic Link + 报告看板 + 处方门控）
 📋 Phase 13     Production Package / 生产订单聚合层（已登记，待排期）
 🔄 Phase 9.0    Visual Queue UX Polish（部分完成，未收尾）
 📋 Phase 9      报告化 + 客户 Portal
@@ -2124,6 +2125,15 @@ AU / NZ（当前）          新市场（未来）
 - **UX 基础修复（两个 session）** — 全站标题 CrazyContent→Magic Engine；login-form try/finally 防卡死；BriefSourcesForm/zhangqian cards/Step2BriefUpload 客户可见供应商名替换；ContentHub 移除内嵌 Reels/图片 子Tab 改跳转快捷卡；客户页新增 WorkflowProgress（张骞→MB→执行）进度条；SEO 页标题/注释去 SEMrush 改 Keyword Intelligence（commits 34fe7fb, e7b2aff）
 - **架构确认：四 Agent 链 + 诸葛亮命名** — C Agent 正式命名为「诸葛亮」（策略调度引擎）；确认定位：输入张骞证据+华佗诊断→输出 priority_actions→flywheel_actions，不直接执行；AI 抽屉为 UX 层（正交），首页驾驶舱与鲁班看板为两个缩放层级（不冲突）；登记为 Phase 12.G（接口规范已确认）
 - **P8.3.2 代码收尾** — login try-catch 修复；middleware+whitelist 测试已在代码库；**剩余 PM 操作**：Render 后台填 `ADMIN_EMAILS=你的邮箱` + Supabase Auth Redirect URLs 加 `/auth/callback`
+
+### 2026-05-25（Phase 13.A — Prospect 注册流程）
+
+- **P13.A.1（去 Apify）** — `agent.ts` 移除 `scrapeInstagramProfile`/`scrapeTiktokProfile` import + `FETCH_SOCIAL_METRICS_TOOL` + `handleFetchSocialMetrics()`；从 tools 数组和 switch case 中删除；社媒指标改由 web_search + fetch_url（Jina）原生发现；零外部 API 调用
+- **P13.A.2（register API）** — 新建 `POST /api/discover/register`：validate → rate-limit → save discovery_leads → create public_scan_jobs → fire background Zhang Qian scan → `supabaseAdmin.auth.signInWithOtp(shouldCreateUser:true)` 发 magic link（redirectTo=/auth/callback?next=/prospect）→ 返回 202
+- **P13.A.3（/discover 改版）** — `/discover` 表单切换到 `/api/discover/register`；成功后展示「Check your email」确认屏（不再跳扫描进度页）；移除 `useRouter` 依赖；按钮文案更新
+- **P13.A.4（prospect 报告看板）** — 新建 `/prospect/page.tsx`：轮询 `/api/prospect/report`（按 email 查最新 scan）→ 扫描中显示 LoadingView + 实时日志流 → 完成显示 Discovery Report（含健康评分 / 竞品 / 关键词 / 社媒评价）→ 处方区域显示 `PrescriptionGate`（Talk to Us CTA）
+- **P13.A.5（prospect report API）** — 新建 `GET /api/prospect/report`：Supabase session 鉴权 → 按 user.email 查 public_scan_jobs 最新行 → 返回 status + progress_log + result
+- **P13.A.6（middleware + auth callback）** — middleware 加 `/prospect` 路由块（仅验证 Supabase auth，无角色要求）；matcher 加 `/prospect/:path*`；auth/callback 加 prospect 检测（有 public_scan_jobs 记录 + 无 portal/dashboard 权限 → 重定向 /prospect）；build ✅
 
 ### 2026-05-24
 

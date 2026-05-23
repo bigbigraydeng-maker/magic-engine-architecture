@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import Link from 'next/link';
 
@@ -28,7 +28,6 @@ const SCAN_INCLUDES = [
 
 function DiscoverForm() {
   const searchParams = useSearchParams();
-  const router = useRouter();
   const prefillUrl = searchParams.get('url') ?? '';
 
   const [url, setUrl] = useState(prefillUrl);
@@ -36,6 +35,7 @@ function DiscoverForm() {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [sent, setSent] = useState(false);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -47,25 +47,45 @@ function DiscoverForm() {
     setLoading(true);
 
     try {
-      const res = await fetch('/api/public-scan/start', {
+      const res = await fetch('/api/discover/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url.trim(), name: name.trim(), email: email.trim() }),
       });
 
-      const data = await res.json() as { job_id?: string; error?: string };
+      const data = await res.json() as { success?: boolean; error?: string };
 
-      if (!res.ok || !data.job_id) {
+      if (!res.ok) {
         setError(data.error ?? 'Something went wrong. Please try again.');
         setLoading(false);
         return;
       }
 
-      router.push(`/scan/report/${data.job_id}`);
+      setSent(true);
     } catch {
       setError('Network error. Please check your connection and try again.');
       setLoading(false);
     }
+  }
+
+  if (sent) {
+    return (
+      <div className="text-center py-6">
+        <div className="text-[48px] mb-4">📬</div>
+        <h2 className="text-[20px] font-black mb-2" style={{ color: '#ECF3FF' }}>
+          Check your email
+        </h2>
+        <p className="text-[13px] leading-relaxed mb-2" style={{ color: 'rgba(160,200,255,0.6)' }}>
+          We&apos;ve sent a magic link to <span style={{ color: '#7ABFFF', fontWeight: 600 }}>{email}</span>.
+        </p>
+        <p className="text-[12px]" style={{ color: 'rgba(120,170,230,0.4)' }}>
+          Your Discovery Report is scanning now — click the link to view it when it&apos;s ready.
+        </p>
+        <p className="text-[11px] mt-4" style={{ color: 'rgba(255,255,255,0.15)' }}>
+          Link expires in 15 minutes · Check your spam folder if you don&apos;t see it
+        </p>
+      </div>
+    );
   }
 
   const inputStyle = {
@@ -141,11 +161,11 @@ function DiscoverForm() {
           cursor: loading ? 'default' : 'pointer',
         }}
       >
-        {loading ? 'Starting your scan…' : 'Start My Free Discovery Report →'}
+        {loading ? 'Sending your magic link…' : 'Get My Free Discovery Report →'}
       </button>
 
       <p className="text-[11px] text-center" style={{ color: 'rgba(255,255,255,0.18)' }}>
-        Takes 3–5 minutes &middot; No credit card &middot; No spam
+        Free &middot; No credit card &middot; Magic link sent to your email
       </p>
     </form>
   );
@@ -207,7 +227,7 @@ export default function DiscoverPage() {
               <div className="p-4 rounded-xl text-[12px] leading-relaxed"
                    style={{ background: 'rgba(22,45,90,0.3)', border: '1px solid rgba(70,125,215,0.15)', color: 'rgba(120,170,230,0.5)' }}>
                 <span style={{ color: 'rgba(160,200,255,0.7)' }}>⏱ What happens next:</span>{' '}
-                After you submit, our AI starts scanning immediately. You&apos;ll watch discoveries appear in real time — then see your full report when it&apos;s done.
+                Submit your details — we start scanning immediately and send a magic link to your email. Click it to view your full Discovery Report (ready in 3–5 min).
               </div>
             </div>
 

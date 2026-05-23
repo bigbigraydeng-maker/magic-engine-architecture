@@ -11,6 +11,18 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   const path = request.nextUrl.pathname
 
+  // ── Prospect routes (/prospect/*) ────────────────────────────────────────
+  // Any authenticated Supabase user (no role requirement) can access /prospect.
+  if (path.startsWith('/prospect')) {
+    if (!user) {
+      const loginUrl = new URL('/login', request.url)
+      loginUrl.searchParams.set('next', path)
+      return NextResponse.redirect(loginUrl)
+    }
+    requestHeaders.set('x-user-role', 'prospect')
+    return NextResponse.next({ request: { headers: requestHeaders } })
+  }
+
   // ── Portal routes (/portal/*) ─────────────────────────────────────────────
   if (path.startsWith('/portal')) {
     if (!user) {
@@ -108,5 +120,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*', '/portal/:path*'],
+  matcher: ['/dashboard/:path*', '/portal/:path*', '/prospect/:path*', '/prospect'],
 }
