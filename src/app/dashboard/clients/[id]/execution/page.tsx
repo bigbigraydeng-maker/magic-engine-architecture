@@ -979,10 +979,11 @@ function PrescriptionGroup({
     : null
 
   const labelCls =
-    label === '原处方'   ? 'bg-indigo-100 text-indigo-700' :
-    label === '补充处方' ? 'bg-blue-100 text-blue-700' :
-    label === '修订版'   ? 'bg-amber-100 text-amber-700' :
-                           'bg-gray-200 text-gray-500'
+    label === '原处方'        ? 'bg-indigo-100 text-indigo-700' :
+    label === '补充处方'      ? 'bg-blue-100 text-blue-700' :
+    label === '修订版'        ? 'bg-amber-100 text-amber-700' :
+    label === '飞轮自主行动'  ? 'bg-green-100 text-green-700' :
+                                'bg-gray-200 text-gray-500'
 
   return (
     <div className={`rounded-xl border ${archived ? 'border-gray-200 opacity-75' : 'border-gray-300'} bg-white overflow-hidden`}>
@@ -1241,7 +1242,7 @@ export default function ExecutionPage() {
   const prescriptionGroups = Object.entries(itemsByPrescription)
     .map(([pid, groupItems]) => {
       const meta = presMap.get(pid)
-      let label = '处方'; let weight = 5; let archived = false; let derivable = false
+      let label = '飞轮自主行动'; let weight = 5; let archived = false; let derivable = false
       if (meta) {
         if (meta.status === 'superseded') { label = '已归档 · 被修订取代'; weight = 9; archived = true }
         else if (meta.supersedes_id)      { label = '修订版';   weight = 2; derivable = meta.status === 'approved' }
