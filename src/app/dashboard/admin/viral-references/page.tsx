@@ -1,0 +1,326 @@
+'use client'
+
+import { useState, useEffect, useCallback } from 'react'
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface StyleScores {
+  energy: number
+  luxury: number
+  authenticity: number
+  emotional: number
+  humor: number
+  urgency: number
+  offer_signal: number
+}
+
+interface ViralReference {
+  id: string
+  source_url: string
+  platform: 'youtube' | 'facebook' | 'tiktok' | 'instagram'
+  industry: string
+  analysis_status: 'pending' | 'analyzing' | 'done' | 'error'
+  analysis_error: string | null
+  style_scores: StyleScores | null
+  style_tags: string[] | null
+  style_description: string | null
+  persona_fit: string[] | null
+  key_techniques: string[] | null
+  notes: string | null
+  created_at: string
+  analyzed_at: string | null
+}
+
+// ─── Score bar ────────────────────────────────────────────────────────────────
+
+const SCORE_LABELS: Record<keyof StyleScores, string> = {
+  energy: 'Energy',
+  luxury: 'Luxury',
+  authenticity: 'Authentic',
+  emotional: 'Emotional',
+  humor: 'Humor',
+  urgency: 'Urgency',
+  offer_signal: 'Offer',
+}
+
+const SCORE_COLORS: Record<keyof StyleScores, string> = {
+  energy:       'bg-orange-500',
+  luxury:       'bg-purple-500',
+  authenticity: 'bg-green-500',
+  emotional:    'bg-pink-500',
+  humor:        'bg-yellow-500',
+  urgency:      'bg-red-500',
+  offer_signal: 'bg-blue-500',
+}
+
+function ScoreBar({ dimension, value }: { dimension: keyof StyleScores; value: number }) {
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-gray-400 w-20 shrink-0">{SCORE_LABELS[dimension]}</span>
+      <div className="flex-1 bg-gray-700 rounded-full h-1.5">
+        <div
+          className={`${SCORE_COLORS[dimension]} h-1.5 rounded-full transition-all`}
+          style={{ width: `${(value / 10) * 100}%` }}
+        />
+      </div>
+      <span className="text-xs text-gray-300 w-6 text-right">{value}</span>
+    </div>
+  )
+}
+
+// ─── Status badge ─────────────────────────────────────────────────────────────
+
+function StatusBadge({ status }: { status: ViralReference['analysis_status'] }) {
+  const config = {
+    pending:   { label: 'Pending',   cls: 'bg-gray-700 text-gray-300' },
+    analyzing: { label: 'Analyzing…', cls: 'bg-yellow-900 text-yellow-300 animate-pulse' },
+    done:      { label: 'Done',      cls: 'bg-green-900 text-green-300' },
+    error:     { label: 'Error',     cls: 'bg-red-900 text-red-300' },
+  }
+  const { label, cls } = config[status]
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cls}`}>{label}</span>
+  )
+}
+
+// ─── Platform badge ───────────────────────────────────────────────────────────
+
+function PlatformBadge({ platform }: { platform: ViralReference['platform'] }) {
+  const config = {
+    youtube:   { label: 'YouTube',   cls: 'bg-red-900/60 text-red-300' },
+    facebook:  { label: 'Facebook',  cls: 'bg-blue-900/60 text-blue-300' },
+    tiktok:    { label: 'TikTok',    cls: 'bg-gray-700 text-gray-200' },
+    instagram: { label: 'Instagram', cls: 'bg-pink-900/60 text-pink-300' },
+  }
+  const { label, cls } = config[platform] ?? { label: platform, cls: 'bg-gray-700 text-gray-300' }
+  return (
+    <span className={`text-xs px-2 py-0.5 rounded font-medium ${cls}`}>{label}</span>
+  )
+}
+
+// ─── Reference card ───────────────────────────────────────────────────────────
+
+function ReferenceCard({ ref: r }: { ref: ViralReference }) {
+  const shortUrl = r.source_url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 50)
+
+  return (
+    <div className="bg-gray-800 rounded-xl p-4 border border-gray-700 space-y-3">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <PlatformBadge platform={r.platform} />
+            <StatusBadge status={r.analysis_status} />
+            <span className="text-xs text-gray-500 capitalize">{r.industry}</span>
+          </div>
+          <a
+            href={r.source_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block mt-1.5 text-xs text-blue-400 hover:text-blue-300 truncate"
+          >
+            {shortUrl}
+          </a>
+        </div>
+      </div>
+
+      {/* Error */}
+      {r.analysis_status === 'error' && r.analysis_error && (
+        <p className="text-xs text-red-400 bg-red-950/30 rounded p-2">{r.analysis_error}</p>
+      )}
+
+      {/* Analysis results */}
+      {r.analysis_status === 'done' && r.style_scores && (
+        <>
+          {/* Style description */}
+          {r.style_description && (
+            <p className="text-sm text-gray-200 leading-relaxed">{r.style_description}</p>
+          )}
+
+          {/* 7-dim scores */}
+          <div className="space-y-1.5">
+            {(Object.keys(r.style_scores) as Array<keyof StyleScores>).map(dim => (
+              <ScoreBar key={dim} dimension={dim} value={r.style_scores![dim]} />
+            ))}
+          </div>
+
+          {/* Tags + techniques + personas */}
+          <div className="space-y-2">
+            {r.key_techniques && r.key_techniques.length > 0 && (
+              <div>
+                <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">Key Techniques</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {r.key_techniques.map(t => (
+                    <span key={t} className="text-xs bg-indigo-900/50 text-indigo-300 px-2 py-0.5 rounded">
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {r.style_tags && r.style_tags.length > 0 && (
+              <div>
+                <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">Style Tags</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {r.style_tags.map(t => (
+                    <span key={t} className="text-xs bg-gray-700 text-gray-300 px-2 py-0.5 rounded">
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {r.persona_fit && r.persona_fit.length > 0 && (
+              <div>
+                <p className="text-[10px] text-gray-500 uppercase tracking-widest mb-1">Persona Fit</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {r.persona_fit.map(p => (
+                    <span key={p} className="text-xs bg-emerald-900/50 text-emerald-300 px-2 py-0.5 rounded">
+                      {p}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
+
+export default function ViralReferencesPage() {
+  const [refs, setRefs] = useState<ViralReference[]>([])
+  const [loading, setLoading] = useState(true)
+  const [triggering, setTriggering] = useState(false)
+  const [triggerMsg, setTriggerMsg] = useState('')
+  const [filter, setFilter] = useState<'all' | 'done' | 'pending' | 'error'>('all')
+
+  const fetchRefs = useCallback(async () => {
+    try {
+      const res = await fetch('/api/admin/viral-references')
+      const data = await res.json()
+      if (data.success) setRefs(data.references)
+    } catch {
+      // silently retry
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  // Initial load
+  useEffect(() => { fetchRefs() }, [fetchRefs])
+
+  // Auto-poll while any are analyzing
+  useEffect(() => {
+    const hasAnalyzing = refs.some(r => r.analysis_status === 'analyzing')
+    if (!hasAnalyzing) return
+    const t = setInterval(fetchRefs, 5000)
+    return () => clearInterval(t)
+  }, [refs, fetchRefs])
+
+  const triggerAnalysis = async () => {
+    setTriggering(true)
+    setTriggerMsg('')
+    try {
+      const res = await fetch('/api/admin/viral-references/analyze-pending', { method: 'POST' })
+      const data = await res.json()
+      if (data.success) {
+        setTriggerMsg(data.queued > 0
+          ? `${data.queued} videos queued for analysis — refreshing every 5s…`
+          : 'No pending videos found.'
+        )
+        fetchRefs()
+      }
+    } catch {
+      setTriggerMsg('Failed to trigger analysis.')
+    } finally {
+      setTriggering(false)
+    }
+  }
+
+  // Stats
+  const total     = refs.length
+  const done      = refs.filter(r => r.analysis_status === 'done').length
+  const pending   = refs.filter(r => r.analysis_status === 'pending').length
+  const analyzing = refs.filter(r => r.analysis_status === 'analyzing').length
+  const errors    = refs.filter(r => r.analysis_status === 'error').length
+
+  const filtered = filter === 'all' ? refs
+    : refs.filter(r => r.analysis_status === filter)
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Viral Reference Library</h1>
+          <p className="text-sm text-gray-400 mt-1">
+            爆款视频风格参考库 — FDE 参考使用 · 分析结果自动注入 Reel 生成
+          </p>
+        </div>
+        <button
+          onClick={triggerAnalysis}
+          disabled={triggering || pending === 0}
+          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors shrink-0"
+        >
+          {triggering ? 'Starting…' : `Analyze Pending (${pending})`}
+        </button>
+      </div>
+
+      {/* Trigger message */}
+      {triggerMsg && (
+        <p className="text-sm text-indigo-300 bg-indigo-950/40 rounded-lg px-4 py-2.5">
+          {triggerMsg}
+        </p>
+      )}
+
+      {/* Stats */}
+      <div className="grid grid-cols-4 gap-3">
+        {[
+          { label: 'Total',     value: total,     cls: 'text-white' },
+          { label: 'Analyzed',  value: done,      cls: 'text-green-400' },
+          { label: 'Analyzing', value: analyzing, cls: 'text-yellow-400' },
+          { label: 'Errors',    value: errors,    cls: 'text-red-400' },
+        ].map(s => (
+          <div key={s.label} className="bg-gray-800 rounded-xl p-4 border border-gray-700 text-center">
+            <p className={`text-2xl font-bold ${s.cls}`}>{s.value}</p>
+            <p className="text-xs text-gray-500 mt-1">{s.label}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Filter tabs */}
+      <div className="flex gap-2">
+        {(['all', 'done', 'pending', 'error'] as const).map(f => (
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors capitalize ${
+              filter === f
+                ? 'bg-gray-700 text-white'
+                : 'text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            {f === 'all' ? `All (${total})` : f === 'done' ? `Done (${done})` : f === 'pending' ? `Pending (${pending})` : `Errors (${errors})`}
+          </button>
+        ))}
+      </div>
+
+      {/* Grid */}
+      {loading ? (
+        <div className="text-center py-12 text-gray-500">Loading…</div>
+      ) : filtered.length === 0 ? (
+        <div className="text-center py-12 text-gray-500">No references found.</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {filtered.map(r => (
+            <ReferenceCard key={r.id} ref={r} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
