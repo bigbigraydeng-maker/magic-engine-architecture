@@ -4,42 +4,28 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useParams, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import type { ExecutionItem, ExecutionItemStatus, ExecutionLog, PrescriptionStatus, ExecutionTarget, LinkedContentPost } from '@/types/diagnostic'
+import type { ExecutionItemStatus, ExecutionLog, ExecutionTarget, LinkedContentPost } from '@/types/diagnostic'
 import { FlywheelDrawer } from './_components/FlywheelDrawer'
 import { LubanChatDrawer } from './_components/LubanChatDrawer'
 import { InlinePrescriptionDrawer } from './_components/InlinePrescriptionDrawer'
 import { ProjectLubanDrawer } from './_components/ProjectLubanDrawer'
 import { ProjectReviewDrawer } from './_components/ProjectReviewDrawer'
 import { ContentStudioDrawer } from './_components/ContentStudioDrawer'
-
-interface PrescriptionMeta {
-  id: string
-  status: PrescriptionStatus
-  supplements_id: string | null
-  supersedes_id: string | null
-  generated_at: string | null
-}
+import {
+  buildExecutionGroups,
+  formatOutcomeLabel,
+  isAutonomousItem,
+  type GroupData,
+  type ItemWithLogs,
+  type OutcomeSummary,
+  type PrescriptionMeta,
+} from './execution-view-model'
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''
-
-interface OutcomeSummary {
-  verdict: 'confirmed' | 'inconclusive' | 'reversed'
-  metric_key: string
-  delta: number | null
-  delta_pct: number | null
-  confidence: number
-  computed_at: string
-}
-
-type ItemWithLogs = ExecutionItem & {
-  logs: ExecutionLog[]
-  outcome?: OutcomeSummary | null
-  linked_post?: LinkedContentPost | null
-}
 
 // ── 帖子状态徽章配色（与 content 板对齐）─────────────────────────────────────────
 
@@ -167,33 +153,10 @@ const LOG_KIND_META: Record<string, { icon: string; cls: string }> = {
 // OutcomeChip — P12.A.10
 // ---------------------------------------------------------------------------
 
-const METRIC_DISPLAY: Record<string, string> = {
-  'geo.query.mention_rate':      'Mention rate',
-  'geo.query.brand_prominence':  'Brand prominence',
-  'geo.query.sentiment_score':   'Sentiment score',
-  'seo.keyword.ranking':         'Keyword ranking',
-  'ads.roas':                    'ROAS',
-  'social.engagement_rate':      'Engagement rate',
-}
-
 const VERDICT_META: Record<string, { icon: string; cls: string }> = {
   confirmed:    { icon: '✅', cls: 'bg-green-50 border-green-200 text-green-700' },
   inconclusive: { icon: '⚠️', cls: 'bg-yellow-50 border-yellow-200 text-yellow-700' },
   reversed:     { icon: '❌', cls: 'bg-red-50 border-red-200 text-red-700' },
-}
-
-/** Pure helper — exported for unit tests (P12.A.10) */
-export function formatOutcomeLabel(outcome: OutcomeSummary): string {
-  const metricLabel = METRIC_DISPLAY[outcome.metric_key] ?? outcome.metric_key
-  const deltaPctStr = outcome.delta_pct !== null
-    ? `${outcome.delta_pct > 0 ? '+' : ''}${Math.round(outcome.delta_pct)}%`
-    : outcome.delta !== null
-      ? `${outcome.delta > 0 ? '+' : ''}${Number(outcome.delta).toFixed(2)}`
-      : ''
-  const confidenceStr = `confidence ${outcome.confidence.toFixed(2)}`
-  return deltaPctStr
-    ? `${metricLabel} ${deltaPctStr}, ${outcome.verdict} (${confidenceStr})`
-    : `${metricLabel} ${outcome.verdict} (${confidenceStr})`
 }
 
 function OutcomeChip({ outcome }: { outcome: OutcomeSummary }) {
@@ -420,6 +383,7 @@ function ExecutionItemRow({
   const moduleRoute = moduleKey ? MODULE_ROUTE[moduleKey] : null
   const isDone    = item.status === 'completed' || item.status === 'skipped'
   const execTarget = item.execution_target
+  const isReadonly = isAutonomousItem(item)
 
   // 按 execution_target.mode 分发"执行"按钮 UI
   const execButton = (() => {
@@ -520,7 +484,7 @@ function ExecutionItemRow({
   }
 
   return (
-    <div className={`rounded-lg border bg-white ${isDone ? 'opacity-70' : ''}`}>
+    <div className={`rounded-lg border bg-white ${isDone && !isReadonly ? 'opacity-70' : ''}`}>
       {/* 头部行 */}
       <div className="p-4 flex items-start gap-3">
         <span className="text-xl mt-0.5" title={fixMeta.label}>{fixMeta.icon}</span>
@@ -561,12 +525,18 @@ function ExecutionItemRow({
           ) : (
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className={`text-sm font-semibold ${isDone ? 'line-through text-gray-400' : 'text-gray-900'}`}>
+                <p className={`text-sm font-semibold ${isDone && !isReadonly ? 'line-through text-gray-400' : 'text-gray-900'}`}>
                   {item.title}
                 </p>
                 <p className="text-xs text-gray-500 mt-0.5">{item.description}</p>
               </div>
-              <StatusDropdown status={item.status} onChange={s => onStatusChange(item.id, s)} />
+              {isReadonly ? (
+                <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_META[item.status].color}`}>
+                  {STATUS_META[item.status].label}
+                </span>
+              ) : (
+                <StatusDropdown status={item.status} onChange={s => onStatusChange(item.id, s)} />
+              )}
             </div>
           )}
 
@@ -585,7 +555,7 @@ function ExecutionItemRow({
                 {fixMeta.label}
               </span>
               {item.outcome && <OutcomeChip outcome={item.outcome} />}
-              {CONTENT_STUDIO_DIMENSIONS.has(item.dimension) && (
+              {CONTENT_STUDIO_DIMENSIONS.has(item.dimension) && !isReadonly && (
                 <button
                   type="button"
                   onClick={() => onOpenStudio(item)}
@@ -595,7 +565,7 @@ function ExecutionItemRow({
                   ✨ 生成内容
                 </button>
               )}
-              {item.dimension === 'seo' && !isDone && (
+              {item.dimension === 'seo' && !isDone && !isReadonly && (
                 seoFixMsg?.ok ? (
                   <a href={seoFixMsg.prUrl} target="_blank" rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-green-50 border border-green-200 text-green-700 hover:bg-green-100">
@@ -622,7 +592,7 @@ function ExecutionItemRow({
                 <span className="text-[11px] text-gray-400">{item.logs.length} 条工作记录</span>
               )}
               <div className="ml-auto flex items-center gap-2">
-                {!isDone && (
+                {!isDone && !isReadonly && (
                   <button
                     type="button"
                     onClick={() => onOpenChat(item)}
@@ -632,7 +602,7 @@ function ExecutionItemRow({
                     🔨 鲁班
                   </button>
                 )}
-                {editable && !isDone && (
+                {editable && !isDone && !isReadonly && (
                   <button
                     type="button"
                     onClick={() => { setEditing(true); setETitle(item.title); setEDesc(item.description) }}
@@ -723,7 +693,7 @@ function ExecutionItemRow({
           </div>
 
           {/* 加记录输入框 */}
-          {!isDone && (
+          {!isDone && !isReadonly && (
             <div className="flex items-start gap-2">
               <textarea
                 value={noteText}
@@ -929,17 +899,6 @@ function PhaseColumn({
 // ---------------------------------------------------------------------------
 // PrescriptionGroup — 一个处方的执行项分组（P8.10.S5）
 // ---------------------------------------------------------------------------
-
-interface GroupData {
-  pid: string
-  items: ItemWithLogs[]
-  meta?: PrescriptionMeta
-  label: string
-  weight: number
-  archived: boolean
-  derivable: boolean   // 是否可派生（补充/修订）—— 仅 approved 且非归档
-  editable: boolean    // 是否允许新增/编辑执行项（自主行动泳道为 false）
-}
 
 type AddItemFields = { title: string; description: string; dimension: string; fix_type: string }
 
@@ -1228,33 +1187,7 @@ export default function ExecutionPage() {
   }, [clientId, fetchItems])
 
   const completedCount = items.filter(i => i.status === 'completed').length
-
-  // ── 按处方分组（P8.10.S5）──────────────────────────────────────────────
-  const presMap = new Map(prescriptions.map(p => [p.id, p]))
-
-  // items 先按 prescription_id 分组
-  const itemsByPrescription: Record<string, ItemWithLogs[]> = {}
-  for (const item of items) {
-    ;(itemsByPrescription[item.prescription_id] ??= []).push(item)
-  }
-
-  // 每个处方组：label + 排序权重 + 是否可派生（补充/修订）
-  const prescriptionGroups = Object.entries(itemsByPrescription)
-    .map(([pid, groupItems]) => {
-      const meta = presMap.get(pid)
-      let label = '飞轮自主行动'; let weight = 5; let archived = false; let derivable = false
-      if (meta) {
-        if (meta.status === 'superseded') { label = '已归档 · 被修订取代'; weight = 9; archived = true }
-        else if (meta.supersedes_id)      { label = '修订版';   weight = 2; derivable = meta.status === 'approved' }
-        else if (meta.supplements_id)     { label = '补充处方'; weight = 3; derivable = meta.status === 'approved' }
-        else                              { label = '原处方';   weight = 1; derivable = meta.status === 'approved' }
-      }
-      return { pid, items: groupItems, meta, label, weight, archived, derivable, editable: !archived }
-    })
-    .sort((a, b) =>
-      a.weight - b.weight ||
-      (a.meta?.generated_at ?? '').localeCompare(b.meta?.generated_at ?? ''),
-    )
+  const prescriptionGroups = buildExecutionGroups(items, prescriptions)
 
   // ── Loading ───────────────────────────────────────────────────────────────
   if (loading) {

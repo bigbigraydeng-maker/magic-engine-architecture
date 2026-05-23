@@ -40,6 +40,7 @@ export interface GroupData {
   weight: number
   archived: boolean
   derivable: boolean
+  editable: boolean    // 是否允许新增/编辑执行项（自主行动泳道为 false）
 }
 
 const METRIC_DISPLAY: Record<string, string> = {
@@ -95,8 +96,8 @@ function buildGroup(
 ): GroupData {
   if (pid === AUTONOMOUS_GROUP_ID) {
     return {
-      pid, items: groupItems, label: '自主行动',
-      weight: 0, archived: false, derivable: false,
+      pid, items: groupItems, label: '飞轮自主行动',
+      weight: 0, archived: false, derivable: false, editable: false,
     }
   }
 
@@ -108,5 +109,5 @@ function buildGroup(
     else                              { label = '原处方';   weight = 1; derivable = meta.status === 'approved' }
   }
 
-  return { pid, items: groupItems, meta, label, weight, archived, derivable }
+  return { pid, items: groupItems, meta, label, weight, archived, derivable, editable: !archived }
 }
