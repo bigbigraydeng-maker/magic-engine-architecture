@@ -42,12 +42,11 @@ export type ContentStructure =
 
 export type PacingType = 'fast' | 'medium' | 'slow'
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-
 export async function analyzeViralVideo(
   transcript: string,
   metadata: { title?: string; duration?: number; platform: string }
 ): Promise<VideoAnalysis> {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   const prompt = `你是一位顶级社媒内容策略师，专门分析爆款视频的内容结构。
 
 分析以下视频的转录文本，提炼出7个维度的关键信息。
