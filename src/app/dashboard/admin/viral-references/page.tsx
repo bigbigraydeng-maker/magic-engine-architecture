@@ -194,6 +194,7 @@ function ReferenceCard({ item: r }: { item: ViralReference }) {
 export default function ViralReferencesPage() {
   const [refs, setRefs] = useState<ViralReference[]>([])
   const [loading, setLoading] = useState(true)
+  const [fetchError, setFetchError] = useState<string | null>(null)
   const [triggering, setTriggering] = useState(false)
   const [triggerMsg, setTriggerMsg] = useState('')
   const [filter, setFilter] = useState<'all' | 'done' | 'pending' | 'error'>('all')
@@ -202,9 +203,14 @@ export default function ViralReferencesPage() {
     try {
       const res = await fetch('/api/admin/viral-references')
       const data = await res.json()
-      if (data.success) setRefs(data.references)
-    } catch {
-      // silently retry
+      if (data.success) {
+        setRefs(data.references ?? [])
+        setFetchError(null)
+      } else {
+        setFetchError(data.error ?? 'API returned success: false')
+      }
+    } catch (e) {
+      setFetchError(e instanceof Error ? e.message : 'Network error')
     } finally {
       setLoading(false)
     }
@@ -269,6 +275,13 @@ export default function ViralReferencesPage() {
           {triggering ? 'Starting…' : `Analyze Pending (${pending})`}
         </button>
       </div>
+
+      {/* Fetch error */}
+      {fetchError && (
+        <p className="text-sm text-red-400 bg-red-950/40 rounded-lg px-4 py-2.5">
+          API Error: {fetchError}
+        </p>
+      )}
 
       {/* Trigger message */}
       {triggerMsg && (
