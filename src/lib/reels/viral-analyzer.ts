@@ -39,6 +39,7 @@ export interface ViralAnalysisResult {
   style_description: string
   persona_fit: string[]
   key_techniques: string[]
+  detected_content_goal: 'brand' | 'sales' | 'ugc' | 'education'
 }
 
 // ─── Prompt ───────────────────────────────────────────────────────────────────
@@ -59,6 +60,11 @@ Also provide:
 - style_description: 1–2 sentences describing the video's style and why it works
 - persona_fit: which buyer personas this targets (choose from: "Luxury Aspirational", "Calm Explorer", "Practical Buyer - Planner", "Practical Buyer - Converter")
 - key_techniques: 2–4 specific production/editing techniques (e.g. "drone-aerial-opening", "testimonial-overlay", "ugc-selfie-style")
+- detected_content_goal: classify the video's PRIMARY marketing intent. Choose ONE:
+    * "brand"     — pure brand/inspiration content, no specific offer or CTA, builds desire
+    * "sales"     — pushes a specific product/tour/package with clear CTA (book/buy/reserve), often urgency or pricing
+    * "ugc"       — user-generated style content, authentic testimonial-like, social proof
+    * "education" — how-to/tips/explainer content that teaches viewers
 
 Respond ONLY with valid JSON — no markdown, no explanation:
 {
@@ -66,7 +72,8 @@ Respond ONLY with valid JSON — no markdown, no explanation:
   "style_tags": [],
   "style_description": "",
   "persona_fit": [],
-  "key_techniques": []
+  "key_techniques": [],
+  "detected_content_goal": "brand"
 }`
 
 // ─── Platform detection ───────────────────────────────────────────────────────
@@ -204,18 +211,14 @@ export async function analyzeUploadedReference(
   try {
     const result = await analyzeLocalVideoFile(filePath, apiKey, mimeType)
 
-    await supabaseAdmin
-      .from('viral_reference_library')
-      .update({
-        style_scores: result.style_scores,
-        style_tags: result.style_tags,
-        style_description: result.style_description,
-        persona_fit: result.persona_fit,
-        key_techniques: result.key_techniques,
-        analysis_status: 'done',
-        analyzed_at: new Date().toISOString(),
-      })
-      .eq('id', referenceId)
+    // Uploaded files have no YouTube metadata
+    await finalizeAnalysis(referenceId, result, {
+      view_count: null,
+      like_count: null,
+      published_at: null,
+      video_title: null,
+      channel_title: null,
+    })
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : String(err)
     console.error(`[viral-analyzer/upload] ${referenceId} failed:`, errorMsg)
@@ -236,6 +239,12 @@ function parseAnalysisResponse(raw: string): ViralAnalysisResult {
 
   const clamp = (v: unknown) => Math.min(10, Math.max(0, Number(v) || 0))
 
+  const validGoals = ['brand', 'sales', 'ugc', 'education'] as const
+  const rawGoal = String(parsed.detected_content_goal ?? '').toLowerCase()
+  const detected_content_goal = (validGoals as readonly string[]).includes(rawGoal)
+    ? (rawGoal as 'brand' | 'sales' | 'ugc' | 'education')
+    : 'brand'
+
   return {
     style_scores: {
       energy: clamp(s.energy),
@@ -250,7 +259,63 @@ function parseAnalysisResponse(raw: string): ViralAnalysisResult {
     style_description: typeof parsed.style_description === 'string' ? parsed.style_description : '',
     persona_fit: Array.isArray(parsed.persona_fit) ? parsed.persona_fit : [],
     key_techniques: Array.isArray(parsed.key_techniques) ? parsed.key_techniques : [],
+    detected_content_goal,
   }
+}
+
+// ─── Shared finalize: compute derived fields + save analysis to DB ──────────
+
+const DEFAULT_VIEW_THRESHOLD = 5000
+
+/**
+ * Save analysis results to DB with derived fields:
+ * - content_goal: keep user override if provided, else use detected
+ * - is_learnable: false if our_video OR (view_count known AND < threshold)
+ */
+async function finalizeAnalysis(
+  referenceId: string,
+  result: ViralAnalysisResult,
+  metadata: { view_count: number | null; like_count: number | null; published_at: string | null; video_title: string | null; channel_title: string | null },
+): Promise<void> {
+  // Read existing row to honor user-set fields (content_goal override, is_our_video)
+  const { data: existing } = await supabaseAdmin
+    .from('viral_reference_library')
+    .select('content_goal, is_our_video, view_threshold_min')
+    .eq('id', referenceId)
+    .maybeSingle()
+
+  const isOurVideo = existing?.is_our_video ?? false
+  const userGoal = existing?.content_goal as string | null
+  const threshold = (existing?.view_threshold_min ?? DEFAULT_VIEW_THRESHOLD) as number
+
+  // content_goal: use detected unless user explicitly picked something other than 'brand' (the default)
+  // (if user picked 'brand' it might just be the default — we trust Gemini)
+  const finalGoal = userGoal && userGoal !== 'brand' ? userGoal : result.detected_content_goal
+
+  // is_learnable: our own videos NEVER, low-view videos NEVER
+  const viewCountKnown = metadata.view_count !== null
+  const isLearnable = !isOurVideo && (!viewCountKnown || (metadata.view_count ?? 0) >= threshold)
+
+  await supabaseAdmin
+    .from('viral_reference_library')
+    .update({
+      style_scores: result.style_scores,
+      style_tags: result.style_tags,
+      style_description: result.style_description,
+      persona_fit: result.persona_fit,
+      key_techniques: result.key_techniques,
+      detected_content_goal: result.detected_content_goal,
+      content_goal: finalGoal,
+      is_learnable: isLearnable,
+      view_count:    metadata.view_count,
+      like_count:    metadata.like_count,
+      published_at:  metadata.published_at,
+      video_title:   metadata.video_title,
+      channel_title: metadata.channel_title,
+      analysis_status: 'done',
+      analyzed_at: new Date().toISOString(),
+    })
+    .eq('id', referenceId)
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
@@ -286,26 +351,10 @@ export async function analyzeViralReference(referenceId: string, url: string): P
       ? await analyzeYouTubeVideo(url, apiKey)
       : await downloadAndAnalyzeVideo(url, apiKey)
 
-    // Fetch YouTube metadata in parallel (non-blocking — returns nulls if no API key)
+    // Fetch YouTube metadata (returns nulls for non-YouTube or no API key)
     const metadata = await fetchYouTubeMetadata(url)
 
-    await supabaseAdmin
-      .from('viral_reference_library')
-      .update({
-        style_scores: result.style_scores,
-        style_tags: result.style_tags,
-        style_description: result.style_description,
-        persona_fit: result.persona_fit,
-        key_techniques: result.key_techniques,
-        view_count:    metadata.view_count,
-        like_count:    metadata.like_count,
-        published_at:  metadata.published_at,
-        video_title:   metadata.video_title,
-        channel_title: metadata.channel_title,
-        analysis_status: 'done',
-        analyzed_at: new Date().toISOString(),
-      })
-      .eq('id', referenceId)
+    await finalizeAnalysis(referenceId, result, metadata)
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : String(err)
     console.error(`[viral-analyzer] ${referenceId} failed:`, errorMsg)

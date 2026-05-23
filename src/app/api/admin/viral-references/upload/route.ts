@@ -40,6 +40,7 @@ export async function POST(req: NextRequest) {
   const file = formData.get('file')
   const industry = String(formData.get('industry') ?? '').trim()
   const contentGoal = String(formData.get('content_goal') ?? 'brand').trim()
+  const isOurVideo = String(formData.get('is_our_video') ?? 'false') === 'true'
   const notes = (formData.get('notes') as string | null)?.trim() || null
 
   if (!(file instanceof File)) {
@@ -63,6 +64,7 @@ export async function POST(req: NextRequest) {
       source_url: sourceLabel,
       industry,
       content_goal: contentGoal,
+      is_our_video: isOurVideo,
       platform: 'upload',
       notes,
       video_title: file.name,

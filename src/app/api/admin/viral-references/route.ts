@@ -16,6 +16,7 @@ interface VideoInput {
   url: string
   industry: string
   content_goal?: 'brand' | 'sales' | 'ugc' | 'education'
+  is_our_video?: boolean
   client_id?: string
   notes?: string
 }
@@ -61,6 +62,7 @@ export async function POST(req: NextRequest) {
     source_url: v.url,
     industry: v.industry,
     content_goal: v.content_goal ?? 'brand',
+    is_our_video: v.is_our_video ?? false,
     client_id: v.client_id ?? null,
     platform: detectPlatform(v.url),
     notes: v.notes ?? null,

@@ -19,22 +19,27 @@ export async function getViralStyleHint(
   contentGoal: ContentGoal = 'brand'
 ): Promise<string | null> {
   // Try with exact content_goal match first
+  // Filter: only learnable (good views) and NOT our own videos
   let { data: refs } = await supabaseAdmin
     .from('viral_reference_library')
     .select('style_description, style_tags, key_techniques, persona_fit, view_count, video_title, channel_title')
     .eq('industry', industry)
     .eq('analysis_status', 'done')
     .eq('content_goal', contentGoal)
+    .eq('is_learnable', true)
+    .eq('is_our_video', false)
     .order('view_count', { ascending: false, nullsFirst: false })
     .limit(5)
 
-  // Fallback: if no goal-specific refs, fall back to any so we always inject some signal
+  // Fallback: if no goal-specific refs, fall back to any goal (but still learnable + not ours)
   if (!refs || refs.length === 0) {
     const fallback = await supabaseAdmin
       .from('viral_reference_library')
       .select('style_description, style_tags, key_techniques, persona_fit, view_count, video_title, channel_title')
       .eq('industry', industry)
       .eq('analysis_status', 'done')
+      .eq('is_learnable', true)
+      .eq('is_our_video', false)
       .order('view_count', { ascending: false, nullsFirst: false })
       .limit(5)
     refs = fallback.data ?? null

@@ -22,6 +22,10 @@ interface ViralReference {
   platform: 'youtube' | 'facebook' | 'tiktok' | 'instagram' | 'upload'
   industry: string
   content_goal: ContentGoal
+  detected_content_goal: ContentGoal | null
+  is_our_video: boolean
+  is_learnable: boolean
+  view_threshold_min: number
   analysis_status: 'pending' | 'analyzing' | 'done' | 'error'
   analysis_error: string | null
   style_scores: StyleScores | null
@@ -123,19 +127,36 @@ function PlatformBadge({ platform }: { platform: ViralReference['platform'] }) {
 
 // ─── Reference card ───────────────────────────────────────────────────────────
 
-function ReferenceCard({ item: r, onRetry }: { item: ViralReference; onRetry: (id: string) => void }) {
+function ReferenceCard({ item: r, onRetry, learnableAvgScores }: {
+  item: ViralReference
+  onRetry: (id: string) => void
+  learnableAvgScores: StyleScores | null
+}) {
   const shortUrl = r.source_url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 50)
   const goalCfg = GOAL_CONFIG[r.content_goal]
   const views = formatViews(r.view_count)
+  const isOurs = r.is_our_video
+  const showGap = isOurs && r.style_scores && learnableAvgScores
 
   return (
-    <div className="bg-gray-800 rounded-xl p-4 border border-gray-700 space-y-3">
+    <div className={`rounded-xl p-4 border space-y-3 ${
+      isOurs
+        ? 'bg-rose-950/30 border-rose-800/60'
+        : !r.is_learnable && r.analysis_status === 'done'
+          ? 'bg-gray-900/60 border-gray-700/60 opacity-70'
+          : 'bg-gray-800 border-gray-700'
+    }`}>
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <PlatformBadge platform={r.platform} />
             <StatusBadge status={r.analysis_status} />
+            {isOurs && (
+              <span className="text-xs px-2 py-0.5 rounded font-bold bg-rose-700 text-white">
+                🎯 OUR VIDEO
+              </span>
+            )}
             <span className={`text-xs px-2 py-0.5 rounded font-medium ${goalCfg.cls}`}>
               {goalCfg.emoji} {goalCfg.label}
             </span>
@@ -143,6 +164,11 @@ function ReferenceCard({ item: r, onRetry }: { item: ViralReference; onRetry: (i
             {views && (
               <span className="text-xs text-yellow-300 font-medium">
                 ▶ {views}
+              </span>
+            )}
+            {!isOurs && !r.is_learnable && r.analysis_status === 'done' && (
+              <span className="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-400" title={`view count below threshold (${r.view_threshold_min})`}>
+                ⊘ Not learnable
               </span>
             )}
           </div>
@@ -185,6 +211,33 @@ function ReferenceCard({ item: r, onRetry }: { item: ViralReference; onRetry: (i
           {/* Style description */}
           {r.style_description && (
             <p className="text-sm text-gray-200 leading-relaxed">{r.style_description}</p>
+          )}
+
+          {/* Gap analysis (only for OUR videos) */}
+          {showGap && (
+            <div className="rounded-lg border border-rose-700/50 bg-rose-950/40 p-3">
+              <p className="text-xs font-semibold text-rose-300 mb-2">
+                Gap vs Top Viral References ({r.industry} {r.content_goal})
+              </p>
+              <div className="space-y-1">
+                {(Object.keys(r.style_scores) as Array<keyof StyleScores>).map(dim => {
+                  const ours = r.style_scores![dim]
+                  const avg = learnableAvgScores![dim]
+                  const diff = ours - avg
+                  const sign = diff > 0 ? '+' : ''
+                  const cls = Math.abs(diff) < 1 ? 'text-gray-400'
+                            : diff > 0 ? 'text-green-400' : 'text-amber-400'
+                  return (
+                    <div key={dim} className="flex justify-between text-xs">
+                      <span className="text-gray-400 capitalize">{SCORE_LABELS[dim]}</span>
+                      <span className={`font-mono ${cls}`}>
+                        {ours.toFixed(1)} vs {avg.toFixed(1)} ({sign}{diff.toFixed(1)})
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
           )}
 
           {/* 7-dim scores */}
@@ -252,7 +305,8 @@ export default function ViralReferencesPage() {
   // Add video form
   const [addUrls, setAddUrls] = useState('')
   const [addIndustry, setAddIndustry] = useState<'travel' | 'flooring'>('travel')
-  const [addGoal, setAddGoal] = useState<ContentGoal>('brand')
+  const [addGoal, setAddGoal] = useState<ContentGoal>('brand')   // 'brand' = auto-detect default
+  const [addIsOur, setAddIsOur] = useState(false)
   const [adding, setAdding] = useState(false)
   const [addMsg, setAddMsg] = useState('')
 
@@ -307,7 +361,12 @@ export default function ViralReferencesPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          videos: urls.map(url => ({ url, industry: addIndustry, content_goal: addGoal })),
+          videos: urls.map(url => ({
+            url,
+            industry: addIndustry,
+            content_goal: addGoal,
+            is_our_video: addIsOur,
+          })),
         }),
       })
       const data = await res.json()
@@ -337,6 +396,7 @@ export default function ViralReferencesPage() {
       fd.append('file', uploadFile)
       fd.append('industry', addIndustry)
       fd.append('content_goal', addGoal)
+      fd.append('is_our_video', String(addIsOur))
 
       const res = await fetch('/api/admin/viral-references/upload', {
         method: 'POST',
@@ -395,6 +455,49 @@ export default function ViralReferencesPage() {
   const filtered = filter === 'all' ? refs
     : refs.filter(r => r.analysis_status === filter)
 
+  // Compute avg scores per (industry, content_goal) from learnable references
+  // Used for gap analysis on OUR videos
+  const learnableAvgByKey = new Map<string, StyleScores>()
+  const learnable = refs.filter(r =>
+    r.analysis_status === 'done' &&
+    r.is_learnable &&
+    !r.is_our_video &&
+    r.style_scores
+  )
+  const groupKey = (ind: string, goal: ContentGoal) => `${ind}::${goal}`
+  const groups = new Map<string, ViralReference[]>()
+  for (const r of learnable) {
+    const k = groupKey(r.industry, r.content_goal)
+    if (!groups.has(k)) groups.set(k, [])
+    groups.get(k)!.push(r)
+  }
+  for (const [k, arr] of groups) {
+    if (arr.length === 0) continue
+    const sum: StyleScores = { energy: 0, luxury: 0, authenticity: 0, emotional: 0, humor: 0, urgency: 0, offer_signal: 0 }
+    for (const r of arr) {
+      const s = r.style_scores!
+      sum.energy += s.energy
+      sum.luxury += s.luxury
+      sum.authenticity += s.authenticity
+      sum.emotional += s.emotional
+      sum.humor += s.humor
+      sum.urgency += s.urgency
+      sum.offer_signal += s.offer_signal
+    }
+    const n = arr.length
+    learnableAvgByKey.set(k, {
+      energy: sum.energy / n,
+      luxury: sum.luxury / n,
+      authenticity: sum.authenticity / n,
+      emotional: sum.emotional / n,
+      humor: sum.humor / n,
+      urgency: sum.urgency / n,
+      offer_signal: sum.offer_signal / n,
+    })
+  }
+  const avgFor = (r: ViralReference): StyleScores | null =>
+    learnableAvgByKey.get(groupKey(r.industry, r.content_goal)) ?? null
+
   return (
     <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
       {/* Header */}
@@ -416,7 +519,20 @@ export default function ViralReferencesPage() {
 
       {/* Add Video Panel */}
       <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">
-        <p className="text-sm font-medium text-white">投喂新视频</p>
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-medium text-white">投喂新视频</p>
+          <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={addIsOur}
+              onChange={e => setAddIsOur(e.target.checked)}
+              className="w-4 h-4 rounded border-gray-600 bg-gray-900 accent-rose-500"
+            />
+            <span className={addIsOur ? 'text-rose-300 font-medium' : 'text-gray-400'}>
+              🎯 This is OUR video (gap analysis, not learning)
+            </span>
+          </label>
+        </div>
         <div className="flex gap-3">
           <textarea
             value={addUrls}
@@ -438,11 +554,12 @@ export default function ViralReferencesPage() {
               value={addGoal}
               onChange={e => setAddGoal(e.target.value as ContentGoal)}
               className="bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+              title="Default 'Auto-detect' lets Gemini classify the video. Pick a specific goal to override."
             >
-              <option value="brand">🎨 Brand / Inspiration</option>
-              <option value="sales">💰 Sales / Conversion</option>
-              <option value="ugc">📱 UGC / Social Proof</option>
-              <option value="education">🎓 Education / How-to</option>
+              <option value="brand">🤖 Auto-detect (recommended)</option>
+              <option value="sales">💰 Force: Sales</option>
+              <option value="ugc">📱 Force: UGC</option>
+              <option value="education">🎓 Force: Education</option>
             </select>
             <button
               onClick={addVideos}
@@ -550,7 +667,12 @@ export default function ViralReferencesPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filtered.map(r => (
-            <ReferenceCard key={r.id} item={r} onRetry={handleRetry} />
+            <ReferenceCard
+              key={r.id}
+              item={r}
+              onRetry={handleRetry}
+              learnableAvgScores={avgFor(r)}
+            />
           ))}
         </div>
       )}
