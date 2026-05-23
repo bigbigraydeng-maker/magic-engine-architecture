@@ -50,6 +50,15 @@ interface GapKeyword {
   intent:             string
 }
 
+interface RankingsResponse {
+  domain?: string
+  keywords?: RankedKeyword[]
+  source?: 'live' | 'snapshot'
+  snapshot_date?: string | null
+  warning?: string
+  error?: string
+}
+
 interface BlogGenerationResponse {
   success: boolean
   action?: 'new' | 'upgrade'
@@ -725,6 +734,7 @@ export default function SeoIntelligencePage() {
   const [rankingsDomain,  setRankingsDomain]  = useState('')
   const [rankingsLoading, setRankingsLoading] = useState(true)
   const [rankingsError,   setRankingsError]   = useState<string | null>(null)
+  const [rankingsWarning, setRankingsWarning] = useState<string | null>(null)
   const [positionChanges, setPositionChanges] = useState<PositionChangesResponse | null>(null)
   const [positionLoading, setPositionLoading] = useState(true)
   const [positionError,   setPositionError]   = useState<string | null>(null)
@@ -757,12 +767,13 @@ export default function SeoIntelligencePage() {
     void (async () => {
       try {
         const res = await fetch(`/api/clients/${clientId}/seo-intelligence/rankings`)
-        const data = await res.json() as { domain?: string; keywords?: RankedKeyword[]; error?: string }
+        const data = await res.json() as RankingsResponse
         if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
         setRankings(data.keywords ?? [])
         setRankingsDomain(data.domain ?? '')
+        setRankingsWarning(data.warning ?? null)
       } catch (e) {
-        setRankingsError(e instanceof Error ? e.message : '排名数据加载失败')
+        setRankingsError(e instanceof Error ? e.message : 'Keyword Intelligence data failed to load')
       } finally {
         setRankingsLoading(false)
       }
@@ -793,7 +804,7 @@ export default function SeoIntelligencePage() {
         setCompetitors(data.competitors ?? [])
         setGapKeywords(data.gapKeywords ?? [])
       } catch (e) {
-        setCompError(e instanceof Error ? e.message : '竞品数据加载失败')
+        setCompError(e instanceof Error ? e.message : 'Competitor data failed to load')
       } finally {
         setCompLoading(false)
       }
@@ -894,7 +905,7 @@ export default function SeoIntelligencePage() {
           )}
           {!loading && !error && metrics?.last_updated == null && (
             <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
-              尚无 SEO 指标快照。周 Cron 任务将自动拉取数据，或联系 FDE 手动触发一次 SEMrush 同步。
+              尚无 SEO 指标快照。周 Cron 任务将自动拉取数据，或联系 FDE 手动触发一次 Keyword Intelligence 同步。
             </div>
           )}
         </section>
@@ -925,11 +936,28 @@ export default function SeoIntelligencePage() {
                 {rankingsError}
               </div>
             ) : rankings.length === 0 ? (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
-                暂无排名数据。DataForSEO 未检测到该域名的自然排名词，可能域名未开始收录或流量极低。
+              <div className="space-y-4">
+                {rankingsWarning && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+                    {rankingsWarning}
+                  </div>
+                )}
+                <PositionChangesPanel
+                  data={positionChanges}
+                  loading={positionLoading}
+                  error={positionError}
+                />
+                <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+                  No ranking data yet. Keyword Intelligence has not detected organic ranking terms for this domain, or the latest weekly snapshot has not been written.
+                </div>
               </div>
             ) : (
               <div className="space-y-4">
+                {rankingsWarning && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+                    {rankingsWarning}
+                  </div>
+                )}
                 <PositionChangesPanel
                   data={positionChanges}
                   loading={positionLoading}
@@ -962,7 +990,7 @@ export default function SeoIntelligencePage() {
               <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">{compError}</div>
             ) : competitors.length === 0 ? (
               <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
-                DataForSEO 未检测到该域名的有机竞品，可能域名流量较低或尚未被收录。
+                Keyword Intelligence 未检测到该域名的有机竞品，可能域名流量较低或尚未被收录。
               </div>
             ) : (
               <>

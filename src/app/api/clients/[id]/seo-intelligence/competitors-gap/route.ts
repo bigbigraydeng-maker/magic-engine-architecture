@@ -126,8 +126,10 @@ export async function GET(
         },
       },
     )
-  } catch (err) {
-    const message = err instanceof Error ? err.message : 'DataForSEO error'
-    return NextResponse.json({ error: message }, { status: 502 })
+  } catch {
+    return NextResponse.json(
+      { error: 'Keyword Intelligence is temporarily unavailable. Competitor discovery will retry after billing or API access is restored.' },
+      { status: 502 },
+    )
   }
 }

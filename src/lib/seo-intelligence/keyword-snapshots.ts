@@ -35,6 +35,12 @@ export interface KeywordSnapshotResult {
   snapshots_written: number
 }
 
+export interface LatestKeywordSnapshotResult {
+  domain: string
+  snapshot_date: string | null
+  keywords: LabsKeyword[]
+}
+
 export function locationCodeForDb(semrushDb: string | null | undefined): number {
   return LOCATION_CODE_BY_DB[semrushDb ?? 'au'] ?? LOCATION_CODE_BY_DB.au
 }
@@ -102,5 +108,67 @@ export async function snapshotRankedKeywordsForClient(
     location_code: locationCode,
     keywords_seen: keywords.length,
     snapshots_written: data?.length ?? rows.length,
+  }
+}
+
+export async function getLatestKeywordSnapshotForClient(
+  client: KeywordSnapshotClient,
+): Promise<LatestKeywordSnapshotResult> {
+  const locationCode = locationCodeForDb(client.semrush_db)
+  const { data: latest, error: latestError } = await supabaseAdmin
+    .from('keyword_snapshots')
+    .select('snapshot_date')
+    .eq('client_id', client.id)
+    .eq('location_code', locationCode)
+    .order('snapshot_date', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (latestError) {
+    throw new Error(`keyword_snapshots latest fetch failed: ${latestError.message}`)
+  }
+
+  const snapshotDate = (latest as { snapshot_date?: string } | null)?.snapshot_date ?? null
+  if (!snapshotDate) {
+    return {
+      domain: client.domain,
+      snapshot_date: null,
+      keywords: [],
+    }
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from('keyword_snapshots')
+    .select('keyword, position, search_volume, keyword_difficulty, cpc, competition, intent')
+    .eq('client_id', client.id)
+    .eq('location_code', locationCode)
+    .eq('snapshot_date', snapshotDate)
+    .order('position', { ascending: true, nullsFirst: false })
+    .limit(SNAPSHOT_LIMIT)
+
+  if (error) {
+    throw new Error(`keyword_snapshots rows fetch failed: ${error.message}`)
+  }
+
+  return {
+    domain: client.domain,
+    snapshot_date: snapshotDate,
+    keywords: ((data ?? []) as Array<{
+      keyword: string
+      position: number | null
+      search_volume: number | null
+      keyword_difficulty: number | null
+      cpc: number | null
+      competition: number | null
+      intent: string | null
+    }>).map(row => ({
+      keyword: row.keyword,
+      position: row.position,
+      search_volume: row.search_volume,
+      keyword_difficulty: row.keyword_difficulty,
+      cpc: row.cpc,
+      competition: row.competition,
+      intent: row.intent ?? 'informational',
+    })),
   }
 }

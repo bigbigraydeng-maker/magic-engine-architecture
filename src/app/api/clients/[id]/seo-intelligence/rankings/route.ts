@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireSession } from '@/lib/auth/require-session'
 import { getRankedKeywords } from '@/lib/dataforseo/labs'
+import { getLatestKeywordSnapshotForClient } from '@/lib/seo-intelligence/keyword-snapshots'
 
 const LOCATION_CODE_BY_DB: Record<string, number> = { au: 2036, nz: 2554 }
 
@@ -61,7 +62,33 @@ export async function GET(
       },
     )
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'DataForSEO error'
-    return NextResponse.json({ error: message }, { status: 502 })
+    try {
+      const snapshot = await getLatestKeywordSnapshotForClient({
+        id: client.id,
+        domain: client.domain,
+        semrush_db: client.semrush_db,
+      })
+      return NextResponse.json(
+        {
+          domain: client.domain,
+          keywords: snapshot.keywords,
+          source: 'snapshot',
+          snapshot_date: snapshot.snapshot_date,
+          warning: snapshot.snapshot_date
+            ? 'Live Keyword Intelligence is temporarily unavailable. Showing the latest saved weekly snapshot.'
+            : 'Live Keyword Intelligence is temporarily unavailable and no saved weekly snapshot exists yet.',
+        },
+        {
+          headers: {
+            'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=300',
+          },
+        },
+      )
+    } catch {
+      return NextResponse.json(
+        { error: 'Keyword Intelligence is temporarily unavailable. Try again after the next saved snapshot.' },
+        { status: 502 },
+      )
+    }
   }
 }
