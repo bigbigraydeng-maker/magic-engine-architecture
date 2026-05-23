@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { InsightsPanel } from './InsightsPanel'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -641,6 +642,9 @@ export default function ViralReferencesPage() {
           </div>
         ))}
       </div>
+
+      {/* Insights Panel */}
+      <InsightsPanel refs={refs} />
 
       {/* Filter tabs */}
       <div className="flex gap-2">
