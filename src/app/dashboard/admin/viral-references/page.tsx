@@ -14,11 +14,14 @@ interface StyleScores {
   offer_signal: number
 }
 
+type ContentGoal = 'brand' | 'sales' | 'ugc' | 'education'
+
 interface ViralReference {
   id: string
   source_url: string
   platform: 'youtube' | 'facebook' | 'tiktok' | 'instagram'
   industry: string
+  content_goal: ContentGoal
   analysis_status: 'pending' | 'analyzing' | 'done' | 'error'
   analysis_error: string | null
   style_scores: StyleScores | null
@@ -26,9 +29,28 @@ interface ViralReference {
   style_description: string | null
   persona_fit: string[] | null
   key_techniques: string[] | null
+  view_count: number | null
+  like_count: number | null
+  published_at: string | null
+  video_title: string | null
+  channel_title: string | null
   notes: string | null
   created_at: string
   analyzed_at: string | null
+}
+
+const GOAL_CONFIG: Record<ContentGoal, { label: string; emoji: string; cls: string }> = {
+  brand:     { label: 'Brand',     emoji: '🎨', cls: 'bg-purple-900/60 text-purple-300' },
+  sales:     { label: 'Sales',     emoji: '💰', cls: 'bg-amber-900/60 text-amber-300' },
+  ugc:       { label: 'UGC',       emoji: '📱', cls: 'bg-teal-900/60 text-teal-300' },
+  education: { label: 'Education', emoji: '🎓', cls: 'bg-sky-900/60 text-sky-300' },
+}
+
+function formatViews(n: number | null): string | null {
+  if (n == null) return null
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
 }
 
 // ─── Score bar ────────────────────────────────────────────────────────────────
@@ -102,6 +124,8 @@ function PlatformBadge({ platform }: { platform: ViralReference['platform'] }) {
 
 function ReferenceCard({ item: r, onRetry }: { item: ViralReference; onRetry: (id: string) => void }) {
   const shortUrl = r.source_url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 50)
+  const goalCfg = GOAL_CONFIG[r.content_goal]
+  const views = formatViews(r.view_count)
 
   return (
     <div className="bg-gray-800 rounded-xl p-4 border border-gray-700 space-y-3">
@@ -111,15 +135,28 @@ function ReferenceCard({ item: r, onRetry }: { item: ViralReference; onRetry: (i
           <div className="flex items-center gap-2 flex-wrap">
             <PlatformBadge platform={r.platform} />
             <StatusBadge status={r.analysis_status} />
+            <span className={`text-xs px-2 py-0.5 rounded font-medium ${goalCfg.cls}`}>
+              {goalCfg.emoji} {goalCfg.label}
+            </span>
             <span className="text-xs text-gray-500 capitalize">{r.industry}</span>
+            {views && (
+              <span className="text-xs text-yellow-300 font-medium">
+                ▶ {views}
+              </span>
+            )}
           </div>
+          {r.video_title && (
+            <p className="mt-1.5 text-xs text-gray-300 truncate" title={r.video_title}>
+              {r.video_title}
+            </p>
+          )}
           <a
             href={r.source_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="block mt-1.5 text-xs text-blue-400 hover:text-blue-300 truncate"
+            className="block mt-0.5 text-xs text-blue-400 hover:text-blue-300 truncate"
           >
-            {shortUrl}
+            {r.channel_title ? `${r.channel_title} · ${shortUrl}` : shortUrl}
           </a>
         </div>
       </div>
@@ -214,6 +251,7 @@ export default function ViralReferencesPage() {
   // Add video form
   const [addUrls, setAddUrls] = useState('')
   const [addIndustry, setAddIndustry] = useState<'travel' | 'flooring'>('travel')
+  const [addGoal, setAddGoal] = useState<ContentGoal>('brand')
   const [adding, setAdding] = useState(false)
   const [addMsg, setAddMsg] = useState('')
 
@@ -263,7 +301,7 @@ export default function ViralReferencesPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          videos: urls.map(url => ({ url, industry: addIndustry })),
+          videos: urls.map(url => ({ url, industry: addIndustry, content_goal: addGoal })),
         }),
       })
       const data = await res.json()
@@ -346,7 +384,7 @@ export default function ViralReferencesPage() {
             rows={3}
             className="flex-1 bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 resize-none focus:outline-none focus:border-indigo-500"
           />
-          <div className="flex flex-col gap-2 shrink-0">
+          <div className="flex flex-col gap-2 shrink-0 w-44">
             <select
               value={addIndustry}
               onChange={e => setAddIndustry(e.target.value as 'travel' | 'flooring')}
@@ -354,6 +392,16 @@ export default function ViralReferencesPage() {
             >
               <option value="travel">✈️ Travel</option>
               <option value="flooring">🪵 Flooring</option>
+            </select>
+            <select
+              value={addGoal}
+              onChange={e => setAddGoal(e.target.value as ContentGoal)}
+              className="bg-gray-900 border border-gray-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+            >
+              <option value="brand">🎨 Brand / Inspiration</option>
+              <option value="sales">💰 Sales / Conversion</option>
+              <option value="ugc">📱 UGC / Social Proof</option>
+              <option value="education">🎓 Education / How-to</option>
             </select>
             <button
               onClick={addVideos}

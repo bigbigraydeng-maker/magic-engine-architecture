@@ -16,6 +16,7 @@ import { unlink } from 'fs/promises'
 import { tmpdir } from 'os'
 import path from 'path'
 import { supabaseAdmin } from '@/lib/supabase'
+import { fetchYouTubeMetadata } from './youtube-metadata'
 
 const execAsync = promisify(exec)
 const ANALYSIS_MODEL = 'gemini-2.5-flash'
@@ -205,6 +206,9 @@ export async function analyzeViralReference(referenceId: string, url: string): P
       ? await analyzeYouTubeVideo(url, apiKey)
       : await downloadAndAnalyzeVideo(url, apiKey)
 
+    // Fetch YouTube metadata in parallel (non-blocking — returns nulls if no API key)
+    const metadata = await fetchYouTubeMetadata(url)
+
     await supabaseAdmin
       .from('viral_reference_library')
       .update({
@@ -213,6 +217,11 @@ export async function analyzeViralReference(referenceId: string, url: string): P
         style_description: result.style_description,
         persona_fit: result.persona_fit,
         key_techniques: result.key_techniques,
+        view_count:    metadata.view_count,
+        like_count:    metadata.like_count,
+        published_at:  metadata.published_at,
+        video_title:   metadata.video_title,
+        channel_title: metadata.channel_title,
         analysis_status: 'done',
         analyzed_at: new Date().toISOString(),
       })
