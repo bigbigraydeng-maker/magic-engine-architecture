@@ -173,8 +173,20 @@ function parseAnalysisResponse(raw: string): ViralAnalysisResult {
  * Updates `viral_reference_library` row with results (or error).
  */
 export async function analyzeViralReference(referenceId: string, url: string): Promise<void> {
+  // Helper: always persist errors to DB so UI reflects actual state
+  const saveError = (msg: string) =>
+    supabaseAdmin
+      .from('viral_reference_library')
+      .update({ analysis_status: 'error', analysis_error: msg })
+      .eq('id', referenceId)
+      .then(() => {})
+      .catch(() => {})
+
   const apiKey = process.env.GEMINI_API_KEY
-  if (!apiKey) throw new Error('GEMINI_API_KEY not configured')
+  if (!apiKey) {
+    await saveError('GEMINI_API_KEY not configured on server')
+    return
+  }
 
   await supabaseAdmin
     .from('viral_reference_library')
@@ -201,10 +213,7 @@ export async function analyzeViralReference(referenceId: string, url: string): P
       .eq('id', referenceId)
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : String(err)
-    await supabaseAdmin
-      .from('viral_reference_library')
-      .update({ analysis_status: 'error', analysis_error: errorMsg })
-      .eq('id', referenceId)
-    throw err
+    console.error(`[viral-analyzer] ${referenceId} failed:`, errorMsg)
+    await saveError(errorMsg)
   }
 }
