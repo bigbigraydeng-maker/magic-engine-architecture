@@ -20,7 +20,7 @@ import type {
   ExecutionItem, ExecutionLog, PrescriptionStatus,
   DiagnosticDimension, FixType, LinkedContentPost,
 } from '@/types/diagnostic'
-import type { OutcomeVerdict } from '@/lib/flywheel/adapters/types'
+import type { ExecutionMode, FlywheelName, OutcomeVerdict } from '@/lib/flywheel/adapters/types'
 
 /** Summary of the latest attribution outcome for an execution item. */
 export interface ItemOutcomeSummary {
@@ -38,12 +38,29 @@ const VALID_DIMENSIONS: DiagnosticDimension[] = [
 const VALID_FIX_TYPES: FixType[] = ['me_auto', 'fde_manual', 'third_party']
 
 export const dynamic = 'force-dynamic'
+const AUTONOMOUS_PRESCRIPTION_ID = '__autonomous__'
 
 /** 返回时每个 item 附带它的 logs（鲁班 P8.10.S4.1）和最新 outcome（P12.A.10）+ 关联内容（飞轮闭环） */
 export interface ExecutionItemWithLogs extends ExecutionItem {
   logs: ExecutionLog[]
   outcome: ItemOutcomeSummary | null
   linked_post: LinkedContentPost | null
+  source_kind?: 'execution_item' | 'flywheel_action'
+  flywheel_action_id?: string
+}
+
+interface FlywheelActionForExecution {
+  id: string
+  client_id: string
+  flywheel: FlywheelName
+  action_type: string
+  execution_mode: ExecutionMode
+  vendor: string | null
+  payload: Record<string, unknown> | null
+  expected_metric: string | null
+  expected_delta: number | null
+  executed_at: string | null
+  created_at: string
 }
 
 /** 执行项涉及的处方元数据 — 用于看板按处方分组（P8.10.S5） */
@@ -123,29 +140,11 @@ export async function GET(
             .map(a => [a.id, a.execution_item_id])
         )
 
-        const { data: outcomeRows } = await supabaseAdmin
-          .from('flywheel_outcomes')
-          .select('action_id, metric_key, delta, delta_pct, confidence, verdict, computed_at')
-          .in('action_id', actionRows.map(a => a.id))
-          .order('computed_at', { ascending: false })
-
-        if (outcomeRows?.length) {
-          for (const row of outcomeRows as {
-            action_id: string; metric_key: string; delta: number | null
-            delta_pct: number | null; confidence: number
-            verdict: string; computed_at: string
-          }[]) {
-            const itemId = actionToItem.get(row.action_id)
-            if (itemId && !outcomeByItem[itemId]) {
-              outcomeByItem[itemId] = {
-                verdict: row.verdict as ItemOutcomeSummary['verdict'],
-                metric_key: row.metric_key,
-                delta: row.delta,
-                delta_pct: row.delta_pct,
-                confidence: row.confidence,
-                computed_at: row.computed_at,
-              }
-            }
+        const outcomeByAction = await fetchLatestOutcomesByAction(actionRows.map(a => a.id))
+        for (const [actionId, outcome] of Object.entries(outcomeByAction)) {
+          const itemId = actionToItem.get(actionId)
+          if (itemId) {
+            outcomeByItem[itemId] = outcome
           }
         }
       }
@@ -206,10 +205,13 @@ export async function GET(
 
     const items: ExecutionItemWithLogs[] = baseItems.map(it => ({
       ...it,
+      source_kind: 'execution_item',
       logs: logsByItem[it.id] ?? [],
       outcome: outcomeByItem[it.id] ?? null,
       linked_post: linkedPostByItem[it.id] ?? null,
     }))
+    const autonomousItems = prescriptionId ? [] : await fetchAutonomousActionItems(clientId)
+    const allItems = [...autonomousItems, ...items]
 
     // 拉取这些 item 涉及的处方元数据（按处方分组 + 补充/修订按钮用）
     let prescriptions: ExecutionPrescriptionMeta[] = []
@@ -227,13 +229,125 @@ export async function GET(
       }
     }
 
-    return NextResponse.json({ success: true, items, prescriptions, count: items.length }, {
+    return NextResponse.json({ success: true, items: allItems, prescriptions, count: allItems.length }, {
       headers: { 'Cache-Control': 'no-store' },
     })
   } catch (err: unknown) {
     console.error('[execution GET] Unexpected error:', err)
     return NextResponse.json({ success: false, error: 'An unexpected error occurred' }, { status: 500 })
   }
+}
+
+async function fetchLatestOutcomesByAction(actionIds: string[]): Promise<Record<string, ItemOutcomeSummary>> {
+  if (actionIds.length === 0) return {}
+
+  const { data: outcomeRows } = await supabaseAdmin
+    .from('flywheel_outcomes')
+    .select('action_id, metric_key, delta, delta_pct, confidence, verdict, computed_at')
+    .in('action_id', actionIds)
+    .order('computed_at', { ascending: false })
+
+  const outcomeByAction: Record<string, ItemOutcomeSummary> = {}
+  for (const row of (outcomeRows ?? []) as Array<{
+    action_id: string; metric_key: string; delta: number | null
+    delta_pct: number | null; confidence: number
+    verdict: string; computed_at: string
+  }>) {
+    if (outcomeByAction[row.action_id]) continue
+    outcomeByAction[row.action_id] = {
+      verdict: row.verdict as ItemOutcomeSummary['verdict'],
+      metric_key: row.metric_key,
+      delta: row.delta,
+      delta_pct: row.delta_pct,
+      confidence: row.confidence,
+      computed_at: row.computed_at,
+    }
+  }
+
+  return outcomeByAction
+}
+
+async function fetchAutonomousActionItems(clientId: string): Promise<ExecutionItemWithLogs[]> {
+  const { data: actionRows, error } = await supabaseAdmin
+    .from('flywheel_actions')
+    .select('id, client_id, flywheel, action_type, execution_mode, vendor, payload, expected_metric, expected_delta, executed_at, created_at')
+    .eq('client_id', clientId)
+    .is('execution_item_id', null)
+    .order('executed_at', { ascending: false })
+    .limit(50)
+
+  if (error) {
+    console.error('[execution GET] autonomous actions fetch error (non-fatal):', error)
+    return []
+  }
+
+  const actions = (actionRows ?? []) as FlywheelActionForExecution[]
+  const outcomeByAction = await fetchLatestOutcomesByAction(actions.map(a => a.id))
+  return actions.map(action => buildAutonomousItem(action, outcomeByAction[action.id] ?? null))
+}
+
+function buildAutonomousItem(
+  action: FlywheelActionForExecution,
+  outcome: ItemOutcomeSummary | null,
+): ExecutionItemWithLogs {
+  const payload = action.payload ?? {}
+  const executedAt = action.executed_at ?? action.created_at
+  const keyword = typeof payload.primary_keyword === 'string' ? payload.primary_keyword : null
+  const title = action.action_type === 'seo.publish_blog'
+    ? keyword ? `生成博客：${keyword}` : '生成博客'
+    : `${action.flywheel.toUpperCase()} · ${action.action_type}`
+
+  return {
+    id: action.id,
+    prescription_id: AUTONOMOUS_PRESCRIPTION_ID,
+    client_id: action.client_id,
+    finding_id: null,
+    dimension: flywheelToDimension(action.flywheel),
+    phase: 1,
+    title,
+    description: `自主行动 · ${action.action_type} · ${formatDate(executedAt)}`,
+    fix_type: modeToFixType(action.execution_mode),
+    status: 'completed',
+    steps_json: {
+      source: 'flywheel_action',
+      action_type: action.action_type,
+      measurement_method: action.expected_metric ? `追踪 ${action.expected_metric}` : undefined,
+    },
+    execution_target: {
+      flywheel: action.flywheel,
+      mode: action.execution_mode,
+      vendor: action.vendor ?? undefined,
+      action_type: action.action_type,
+    },
+    assigned_to: null,
+    due_date: null,
+    started_at: executedAt,
+    completed_at: executedAt,
+    sort_order: 0,
+    created_at: action.created_at,
+    updated_at: action.created_at,
+    content_post_id: null,
+    logs: [],
+    outcome,
+    linked_post: null,
+    source_kind: 'flywheel_action',
+    flywheel_action_id: action.id,
+  }
+}
+
+function flywheelToDimension(flywheel: FlywheelName): DiagnosticDimension {
+  if (flywheel === 'geo') return 'ai_visibility'
+  return flywheel
+}
+
+function modeToFixType(mode: ExecutionMode): FixType {
+  if (mode === 'third_party') return 'third_party'
+  if (mode === 'external_manual') return 'fde_manual'
+  return 'me_auto'
+}
+
+function formatDate(value: string): string {
+  return new Date(value).toLocaleDateString('zh-CN', { timeZone: 'Pacific/Auckland' })
 }
 
 // ─── POST — FDE 手动新增执行项（处方活化）──────────────────────────────────────

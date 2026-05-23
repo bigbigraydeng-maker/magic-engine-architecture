@@ -3,6 +3,16 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
+import { buildGapKeywordBlogRequest } from '@/lib/blog/request-builders'
+import {
+  buildBrandTrafficSplit,
+  prioritizeContentKeywords,
+  sortByIntentPriority,
+  type BrandTrafficSplit,
+  type ContentPriorityKeyword,
+} from '@/lib/seo-intelligence/intent-strategy'
+
+const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''
 
 // ─── Shared types ────────────────────────────────────────────────────────────
 
@@ -38,6 +48,45 @@ interface GapKeyword {
   keyword_difficulty: number | null
   cpc:                number | null
   intent:             string
+}
+
+interface RankingsResponse {
+  domain?: string
+  keywords?: RankedKeyword[]
+  source?: 'live' | 'snapshot'
+  snapshot_date?: string | null
+  warning?: string
+  error?: string
+}
+
+interface BlogGenerationResponse {
+  success: boolean
+  action?: 'new' | 'upgrade'
+  post?: { id: string; cost_usd?: number | null } | null
+  audit?: { reason?: string } | null
+  error?: string
+  cost_usd?: number | null
+}
+
+type PositionChangeType = 'new' | 'lost' | 'improved' | 'declined'
+
+interface PositionChange {
+  keyword: string
+  change_type: PositionChangeType
+  previous_position: number | null
+  current_position: number | null
+  position_delta: number | null
+  search_volume: number | null
+  keyword_difficulty: number | null
+  intent: string | null
+}
+
+interface PositionChangesResponse {
+  current_date: string | null
+  previous_date: string | null
+  summary: Record<PositionChangeType, number>
+  changes: PositionChange[]
+  error?: string
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -80,6 +129,13 @@ function kdCls(kd: number | null): string {
   if (kd <= 30)  return 'text-green-600 font-medium'
   if (kd <= 60)  return 'text-yellow-600 font-medium'
   return 'text-red-600 font-medium'
+}
+
+const CHANGE_META: Record<PositionChangeType, { label: string; cls: string }> = {
+  new:      { label: 'New',      cls: 'bg-green-50 text-green-700 border-green-200' },
+  improved: { label: 'Improved', cls: 'bg-blue-50 text-blue-700 border-blue-200'   },
+  declined: { label: 'Declined', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+  lost:     { label: 'Lost',     cls: 'bg-red-50 text-red-700 border-red-200'      },
 }
 
 // ─── Stat Card ────────────────────────────────────────────────────────────────
@@ -166,7 +222,15 @@ function CompetitorCard({ comp, rank }: { comp: Competitor; rank: number }) {
 
 // ─── Gap keywords table ───────────────────────────────────────────────────────
 
-function GapTable({ keywords }: { keywords: GapKeyword[] }) {
+function GapTable({
+  keywords,
+  onGenerateBlog,
+  generatingKeyword,
+}: {
+  keywords: GapKeyword[]
+  onGenerateBlog: (keyword: GapKeyword) => void
+  generatingKeyword: string | null
+}) {
   const [search, setSearch] = useState('')
   const [intentFilter, setIntentFilter] = useState('all')
   const [shown, setShown] = useState(50)
@@ -179,7 +243,8 @@ function GapTable({ keywords }: { keywords: GapKeyword[] }) {
     }),
     [keywords, intentFilter, search],
   )
-  const page = filtered.slice(0, shown)
+  const prioritized = useMemo(() => sortByIntentPriority(filtered, ''), [filtered])
+  const page = prioritized.slice(0, shown)
 
   return (
     <div className="space-y-3 mt-4">
@@ -210,13 +275,15 @@ function GapTable({ keywords }: { keywords: GapKeyword[] }) {
               <th className="text-right px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-20">月搜量</th>
               <th className="text-right px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-16">KD</th>
               <th className="text-left px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-32">意图</th>
+              <th className="text-right px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wide w-28">生成</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {page.length === 0 ? (
-              <tr><td colSpan={4} className="text-center py-8 text-sm text-gray-400">没有符合条件的缺口词</td></tr>
+              <tr><td colSpan={5} className="text-center py-8 text-sm text-gray-400">没有符合条件的缺口词</td></tr>
             ) : page.map((kw, i) => {
               const style = INTENT_STYLE[kw.intent] ?? INTENT_STYLE.informational
+              const isGenerating = generatingKeyword === kw.keyword
               return (
                 <tr key={i} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-2.5 font-medium text-gray-900 max-w-xs truncate">{kw.keyword}</td>
@@ -224,6 +291,16 @@ function GapTable({ keywords }: { keywords: GapKeyword[] }) {
                   <td className={`px-3 py-2.5 text-right tabular-nums ${kdCls(kw.keyword_difficulty)}`}>{kw.keyword_difficulty ?? '—'}</td>
                   <td className="px-3 py-2.5">
                     <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium ${style.bg}`}>{style.label}</span>
+                  </td>
+                  <td className="px-4 py-2.5 text-right">
+                    <button
+                      type="button"
+                      onClick={() => onGenerateBlog(kw)}
+                      disabled={!!generatingKeyword}
+                      className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:bg-indigo-300 transition-colors"
+                    >
+                      {isGenerating ? '生成中…' : '生成博客'}
+                    </button>
                   </td>
                 </tr>
               )
@@ -288,6 +365,189 @@ function IntentDistribution({ keywords }: { keywords: RankedKeyword[] }) {
 
 const PAGE_SIZE = 50
 
+function PositionChangesPanel({
+  data,
+  loading,
+  error,
+}: {
+  data: PositionChangesResponse | null
+  loading: boolean
+  error: string | null
+}) {
+  if (loading) {
+    return (
+      <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-3">
+        <div className="h-4 w-40 bg-gray-200 rounded animate-pulse" />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-16 bg-white rounded-lg border border-gray-100 animate-pulse" />
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        Position Changes failed to load: {error}
+      </div>
+    )
+  }
+
+  if (!data?.previous_date) {
+    return (
+      <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
+        Position Changes will appear after two weekly keyword snapshots are available.
+      </div>
+    )
+  }
+
+  const visibleChanges = data.changes.slice(0, 8)
+  const dateRange = `${data.previous_date} -> ${data.current_date ?? 'latest'}`
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900">Position Changes</h3>
+          <p className="text-xs text-gray-400">{dateRange}</p>
+        </div>
+        <span className="text-xs text-gray-500">{data.changes.length} movement{data.changes.length === 1 ? '' : 's'}</span>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        {(['new', 'improved', 'declined', 'lost'] as PositionChangeType[]).map(type => {
+          const meta = CHANGE_META[type]
+          return (
+            <div key={type} className={`rounded-lg border bg-white px-3 py-2 ${meta.cls}`}>
+              <p className="text-xs font-medium opacity-80">{meta.label}</p>
+              <p className="text-2xl font-bold tabular-nums">{data.summary[type]}</p>
+            </div>
+          )
+        })}
+      </div>
+
+      {visibleChanges.length > 0 ? (
+        <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-white border-b border-gray-100">
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">Keyword</th>
+                <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide w-24">Change</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide w-24">Before</th>
+                <th className="text-center px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide w-24">Now</th>
+                <th className="text-right px-3 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide w-20">Move</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {visibleChanges.map(change => {
+                const meta = CHANGE_META[change.change_type]
+                const delta = change.position_delta
+                const deltaLabel = delta == null ? '-' : `${delta > 0 ? '+' : ''}${delta}`
+                return (
+                  <tr key={`${change.change_type}-${change.keyword}`} className="hover:bg-gray-50">
+                    <td className="px-3 py-2 font-medium text-gray-900 max-w-xs truncate">{change.keyword}</td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${meta.cls}`}>{meta.label}</span>
+                    </td>
+                    <td className="px-3 py-2 text-center tabular-nums text-gray-600">{posLabel(change.previous_position)}</td>
+                    <td className="px-3 py-2 text-center tabular-nums text-gray-900">{posLabel(change.current_position)}</td>
+                    <td className={`px-3 py-2 text-right tabular-nums font-semibold ${delta != null && delta < 0 ? 'text-amber-600' : 'text-green-600'}`}>
+                      {deltaLabel}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="text-sm text-gray-500">No ranking movement between the latest two snapshots.</p>
+      )}
+    </div>
+  )
+}
+
+function IntentStrategyPanel({
+  split,
+  priorities,
+}: {
+  split: BrandTrafficSplit
+  priorities: ContentPriorityKeyword[]
+}) {
+  const totalEstimatedTraffic = split.branded.estimated_traffic + split.non_branded.estimated_traffic
+  return (
+    <div className="border-y border-gray-100 py-4 space-y-4">
+      <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900">Branded vs Non-Branded Traffic</h3>
+              <p className="text-xs text-gray-400">Estimated from ranking position and monthly volume</p>
+            </div>
+            <span className="text-xs font-semibold text-gray-500 tabular-nums">{fmt(totalEstimatedTraffic)}</span>
+          </div>
+          <TrafficSplitRow label="Branded" bucket={split.branded} tone="brand" />
+          <TrafficSplitRow label="Non-Branded" bucket={split.non_branded} tone="growth" />
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900">Intent Priority Content</h3>
+            <p className="text-xs text-gray-400">Transactional terms stay first, then commercial opportunities</p>
+          </div>
+          {priorities.length > 0 ? (
+            <div className="divide-y divide-gray-100">
+              {priorities.slice(0, 5).map(item => {
+                const style = INTENT_STYLE[item.intent] ?? INTENT_STYLE.informational
+                return (
+                  <div key={item.keyword} className="flex items-center gap-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-gray-900">{item.keyword}</p>
+                      <p className="text-xs text-gray-400">
+                        Pos {posLabel(item.position ?? null)} · Vol {fmt(item.search_volume)} · Est. traffic {fmt(item.estimated_traffic)}
+                      </p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${style.bg}`}>{style.label}</span>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">No non-branded content opportunities in the current ranking set.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function TrafficSplitRow({
+  label,
+  bucket,
+  tone,
+}: {
+  label: string
+  bucket: BrandTrafficSplit['branded']
+  tone: 'brand' | 'growth'
+}) {
+  const barCls = tone === 'brand' ? 'bg-indigo-500' : 'bg-emerald-500'
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between text-xs">
+        <span className="font-medium text-gray-600">{label}</span>
+        <span className="text-gray-400">
+          {bucket.share}% · {bucket.keywords} kw · {fmt(bucket.search_volume)} vol
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-gray-100">
+        <div className={`h-full rounded-full ${barCls}`} style={{ width: `${bucket.share}%` }} />
+      </div>
+    </div>
+  )
+}
+
 function RankingsTable({
   keywords,
   brandRoot,
@@ -325,11 +585,24 @@ function RankingsTable({
     })
   }, [keywords, intentFilter, posFilter, brandFilter, search, brandRoot])
 
-  const page = filtered.slice(0, shown)
+  const trafficSplit = useMemo(
+    () => buildBrandTrafficSplit(keywords, brandRoot),
+    [keywords, brandRoot],
+  )
+  const contentPriorities = useMemo(
+    () => prioritizeContentKeywords(keywords, brandRoot, 5),
+    [keywords, brandRoot],
+  )
+  const prioritized = useMemo(
+    () => sortByIntentPriority(filtered, brandRoot),
+    [filtered, brandRoot],
+  )
+  const page = prioritized.slice(0, shown)
 
   return (
     <div className="space-y-3">
       <IntentDistribution keywords={keywords} />
+      <IntentStrategyPanel split={trafficSplit} priorities={contentPriorities} />
 
       {/* Filters */}
       <div className="flex flex-wrap gap-2">
@@ -461,12 +734,19 @@ export default function SeoIntelligencePage() {
   const [rankingsDomain,  setRankingsDomain]  = useState('')
   const [rankingsLoading, setRankingsLoading] = useState(true)
   const [rankingsError,   setRankingsError]   = useState<string | null>(null)
+  const [rankingsWarning, setRankingsWarning] = useState<string | null>(null)
+  const [positionChanges, setPositionChanges] = useState<PositionChangesResponse | null>(null)
+  const [positionLoading, setPositionLoading] = useState(true)
+  const [positionError,   setPositionError]   = useState<string | null>(null)
 
   // Competitors + gap keywords (Panel B)
   const [competitors,  setCompetitors]  = useState<Competitor[]>([])
   const [gapKeywords,  setGapKeywords]  = useState<GapKeyword[]>([])
   const [compLoading,  setCompLoading]  = useState(true)
   const [compError,    setCompError]    = useState<string | null>(null)
+  const [generatingKeyword, setGeneratingKeyword] = useState<string | null>(null)
+  const [actionMsg, setActionMsg] = useState('')
+  const [actionOk, setActionOk] = useState<boolean | null>(null)
 
   useEffect(() => {
     void (async () => {
@@ -487,14 +767,30 @@ export default function SeoIntelligencePage() {
     void (async () => {
       try {
         const res = await fetch(`/api/clients/${clientId}/seo-intelligence/rankings`)
-        const data = await res.json() as { domain?: string; keywords?: RankedKeyword[]; error?: string }
+        const data = await res.json() as RankingsResponse
         if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
         setRankings(data.keywords ?? [])
         setRankingsDomain(data.domain ?? '')
+        setRankingsWarning(data.warning ?? null)
       } catch (e) {
-        setRankingsError(e instanceof Error ? e.message : '排名数据加载失败')
+        setRankingsError(e instanceof Error ? e.message : 'Keyword Intelligence data failed to load')
       } finally {
         setRankingsLoading(false)
+      }
+    })()
+  }, [clientId])
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch(`/api/clients/${clientId}/seo-intelligence/position-changes`)
+        const data = await res.json() as PositionChangesResponse
+        if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+        setPositionChanges(data)
+      } catch (e) {
+        setPositionError(e instanceof Error ? e.message : 'Position change data failed to load')
+      } finally {
+        setPositionLoading(false)
       }
     })()
   }, [clientId])
@@ -508,12 +804,43 @@ export default function SeoIntelligencePage() {
         setCompetitors(data.competitors ?? [])
         setGapKeywords(data.gapKeywords ?? [])
       } catch (e) {
-        setCompError(e instanceof Error ? e.message : '竞品数据加载失败')
+        setCompError(e instanceof Error ? e.message : 'Competitor data failed to load')
       } finally {
         setCompLoading(false)
       }
     })()
   }, [clientId])
+
+  const flash = (msg: string, ok: boolean) => {
+    setActionMsg(msg)
+    setActionOk(ok)
+    setTimeout(() => { setActionMsg(''); setActionOk(null) }, 7000)
+  }
+
+  const handleGenerateGapBlog = async (keyword: GapKeyword) => {
+    setGeneratingKeyword(keyword.keyword)
+    flash('正在生成博客草稿…', true)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/blog`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
+        body: JSON.stringify(buildGapKeywordBlogRequest(keyword)),
+      })
+      const data = await res.json() as BlogGenerationResponse
+      if (!res.ok || !data.success) throw new Error(data.error ?? 'Generation failed')
+
+      if (data.action === 'upgrade') {
+        flash(data.audit?.reason ?? '已有内容可升级，未新建博客。', false)
+        return
+      }
+
+      flash(`博客草稿已生成${data.cost_usd != null ? ` ($${data.cost_usd.toFixed(4)})` : ''}`, true)
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Generation failed', false)
+    } finally {
+      setGeneratingKeyword(null)
+    }
+  }
 
   const lastUpdatedLabel = metrics?.last_updated
     ? new Date(metrics.last_updated).toLocaleDateString('zh-CN', {
@@ -549,6 +876,13 @@ export default function SeoIntelligencePage() {
             {error}
           </div>
         )}
+        {actionMsg && (
+          <div className={`border rounded-lg px-4 py-3 text-sm ${
+            actionOk ? 'bg-green-50 border-green-200 text-green-700' : 'bg-amber-50 border-amber-200 text-amber-800'
+          }`}>
+            {actionMsg}
+          </div>
+        )}
 
         {/* ── 顶部指标栏 ─────────────────────────────────────────────────────── */}
         <section>
@@ -571,7 +905,7 @@ export default function SeoIntelligencePage() {
           )}
           {!loading && !error && metrics?.last_updated == null && (
             <div className="mt-3 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
-              尚无 SEO 指标快照。周 Cron 任务将自动拉取数据，或联系 FDE 手动触发一次 SEMrush 同步。
+              尚无 SEO 指标快照。周 Cron 任务将自动拉取数据，或联系 FDE 手动触发一次 Keyword Intelligence 同步。
             </div>
           )}
         </section>
@@ -602,14 +936,38 @@ export default function SeoIntelligencePage() {
                 {rankingsError}
               </div>
             ) : rankings.length === 0 ? (
-              <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
-                暂无排名数据。DataForSEO 未检测到该域名的自然排名词，可能域名未开始收录或流量极低。
+              <div className="space-y-4">
+                {rankingsWarning && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+                    {rankingsWarning}
+                  </div>
+                )}
+                <PositionChangesPanel
+                  data={positionChanges}
+                  loading={positionLoading}
+                  error={positionError}
+                />
+                <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+                  No ranking data yet. Keyword Intelligence has not detected organic ranking terms for this domain, or the latest weekly snapshot has not been written.
+                </div>
               </div>
             ) : (
-              <RankingsTable
-                keywords={rankings}
-                brandRoot={domainRoot(rankingsDomain)}
-              />
+              <div className="space-y-4">
+                {rankingsWarning && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+                    {rankingsWarning}
+                  </div>
+                )}
+                <PositionChangesPanel
+                  data={positionChanges}
+                  loading={positionLoading}
+                  error={positionError}
+                />
+                <RankingsTable
+                  keywords={rankings}
+                  brandRoot={domainRoot(rankingsDomain)}
+                />
+              </div>
             )}
           </div>
         </section>
@@ -632,7 +990,7 @@ export default function SeoIntelligencePage() {
               <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">{compError}</div>
             ) : competitors.length === 0 ? (
               <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
-                DataForSEO 未检测到该域名的有机竞品，可能域名流量较低或尚未被收录。
+                Keyword Intelligence 未检测到该域名的有机竞品，可能域名流量较低或尚未被收录。
               </div>
             ) : (
               <>
@@ -662,7 +1020,11 @@ export default function SeoIntelligencePage() {
 
                 {/* Gap keywords table */}
                 {gapKeywords.length > 0 ? (
-                  <GapTable keywords={gapKeywords} />
+                  <GapTable
+                    keywords={gapKeywords}
+                    onGenerateBlog={handleGenerateGapBlog}
+                    generatingKeyword={generatingKeyword}
+                  />
                 ) : (
                   <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
                     未找到明显关键词缺口，你的覆盖已相当全面。

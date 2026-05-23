@@ -4,6 +4,18 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import type { StrategyItem, ActionType, ContentMode, StrategyPriority } from '@/lib/strategy/types'
+import { buildStrategyBlogRequest } from '@/lib/blog/request-builders'
+
+const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''
+
+interface BlogGenerationResponse {
+  success: boolean
+  action?: 'new' | 'upgrade'
+  post?: { id: string; cost_usd?: number | null } | null
+  audit?: { reason?: string } | null
+  error?: string
+  cost_usd?: number | null
+}
 
 // ---------------------------------------------------------------------------
 // Display helpers
@@ -59,11 +71,17 @@ function StrategyCard({
   item,
   clientId,
   onDismiss,
+  onGenerateBlog,
+  generatingBlogId,
 }: {
   item: StrategyItem
   clientId: string
   onDismiss: (id: string) => void
+  onGenerateBlog: (item: StrategyItem) => void
+  generatingBlogId: string | null
 }) {
+  const isGeneratingBlog = generatingBlogId === item.id
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-5 hover:border-indigo-200 transition-colors">
       <div className="flex items-start justify-between gap-4">
@@ -136,6 +154,28 @@ function StrategyCard({
               </Link>
             </div>
           )}
+
+          {item.action_type === 'new_blog' && (
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {item.linked_blog_post_id ? (
+                <Link
+                  href={`/dashboard/clients/${clientId}/blog/${item.linked_blog_post_id}`}
+                  className="inline-flex items-center gap-1 rounded-lg bg-green-50 border border-green-200 px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-100 transition-colors"
+                >
+                  查看博客 →
+                </Link>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onGenerateBlog(item)}
+                  disabled={!!generatingBlogId}
+                  className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 disabled:bg-indigo-300 transition-colors"
+                >
+                  {isGeneratingBlog ? '生成中…' : '生成博客'}
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Score badge + dismiss */}
@@ -191,7 +231,10 @@ export default function StrategyPage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
+  const [generatingBlogId, setGeneratingBlogId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [actionMsg, setActionMsg] = useState('')
+  const [actionOk, setActionOk] = useState<boolean | null>(null)
   const [filterMode, setFilterMode] = useState<FilterMode>('all')
 
   const fetchItems = useCallback(async () => {
@@ -229,6 +272,44 @@ export default function StrategyPage() {
   const handleDismiss = async (itemId: string) => {
     setItems(prev => prev.filter(i => i.id !== itemId))
     setTotal(prev => Math.max(0, prev - 1))
+  }
+
+  const flash = (msg: string, ok: boolean) => {
+    setActionMsg(msg)
+    setActionOk(ok)
+    setTimeout(() => { setActionMsg(''); setActionOk(null) }, 7000)
+  }
+
+  const handleGenerateBlog = async (item: StrategyItem) => {
+    setGeneratingBlogId(item.id)
+    flash('正在生成博客草稿…', true)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/blog`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
+        body: JSON.stringify(buildStrategyBlogRequest(item)),
+      })
+      const data = await res.json() as BlogGenerationResponse
+      if (!res.ok || !data.success) throw new Error(data.error ?? 'Generation failed')
+
+      if (data.action === 'upgrade') {
+        flash(data.audit?.reason ?? '已有内容可升级，未新建博客。', false)
+        return
+      }
+
+      const postId = data.post?.id ?? null
+      setItems(prev => prev.map(i =>
+        i.id === item.id
+          ? { ...i, status: 'done', linked_blog_post_id: postId ?? i.linked_blog_post_id }
+          : i
+      ))
+      flash(`博客草稿已生成${data.cost_usd != null ? ` ($${data.cost_usd.toFixed(4)})` : ''}`, true)
+      await fetchItems()
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Generation failed', false)
+    } finally {
+      setGeneratingBlogId(null)
+    }
   }
 
   const displayed = filterMode === 'all'
@@ -273,6 +354,13 @@ export default function StrategyPage() {
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
             {error}
+          </div>
+        )}
+        {actionMsg && (
+          <div className={`border rounded-lg px-4 py-3 text-sm ${
+            actionOk ? 'bg-green-50 border-green-200 text-green-700' : 'bg-amber-50 border-amber-200 text-amber-800'
+          }`}>
+            {actionMsg}
           </div>
         )}
 
@@ -325,7 +413,14 @@ export default function StrategyPage() {
         ) : (
           <div className="space-y-3">
             {displayed.map(item => (
-              <StrategyCard key={item.id} item={item} clientId={clientId} onDismiss={handleDismiss} />
+              <StrategyCard
+                key={item.id}
+                item={item}
+                clientId={clientId}
+                onDismiss={handleDismiss}
+                onGenerateBlog={handleGenerateBlog}
+                generatingBlogId={generatingBlogId}
+              />
             ))}
           </div>
         )}
