@@ -100,7 +100,7 @@ function PlatformBadge({ platform }: { platform: ViralReference['platform'] }) {
 
 // ─── Reference card ───────────────────────────────────────────────────────────
 
-function ReferenceCard({ item: r }: { item: ViralReference }) {
+function ReferenceCard({ item: r, onRetry }: { item: ViralReference; onRetry: (id: string) => void }) {
   const shortUrl = r.source_url.replace(/^https?:\/\/(www\.)?/, '').slice(0, 50)
 
   return (
@@ -125,8 +125,20 @@ function ReferenceCard({ item: r }: { item: ViralReference }) {
       </div>
 
       {/* Error */}
-      {r.analysis_status === 'error' && r.analysis_error && (
-        <p className="text-xs text-red-400 bg-red-950/30 rounded p-2">{r.analysis_error}</p>
+      {r.analysis_status === 'error' && (
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-xs text-red-400 bg-red-950/30 rounded p-2 flex-1">
+            {r.analysis_error ?? 'Unknown error'}
+          </p>
+          {r.platform === 'youtube' && (
+            <button
+              onClick={() => onRetry(r.id)}
+              className="shrink-0 px-2.5 py-1.5 bg-gray-700 hover:bg-gray-600 text-xs text-white rounded-lg transition-colors"
+            >
+              Retry
+            </button>
+          )}
+        </div>
       )}
 
       {/* Analysis results */}
@@ -269,6 +281,11 @@ export default function ViralReferencesPage() {
     }
   }
 
+  const handleRetry = async (id: string) => {
+    await fetch(`/api/admin/viral-references/${id}/retry`, { method: 'POST' })
+    fetchRefs()
+  }
+
   const triggerAnalysis = async () => {
     setTriggering(true)
     setTriggerMsg('')
@@ -408,7 +425,7 @@ export default function ViralReferencesPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filtered.map(r => (
-            <ReferenceCard key={r.id} item={r} />
+            <ReferenceCard key={r.id} item={r} onRetry={handleRetry} />
           ))}
         </div>
       )}

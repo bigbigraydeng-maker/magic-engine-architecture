@@ -195,6 +195,12 @@ export async function analyzeViralReference(referenceId: string, url: string): P
 
   try {
     const platform = detectPlatform(url)
+
+    if (platform !== 'youtube') {
+      await saveError('仅支持 YouTube 链接。Facebook/TikTok/Instagram 请改用 YouTube 同款视频链接投喂。')
+      return
+    }
+
     const result = platform === 'youtube'
       ? await analyzeYouTubeVideo(url, apiKey)
       : await downloadAndAnalyzeVideo(url, apiKey)
