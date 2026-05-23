@@ -281,6 +281,20 @@ export function formatMasterBriefForPrompt(brief: Record<string, unknown>): stri
   if (brief.tone)            lines.push(`Tone: ${brief.tone}`)
   if (brief.visual_style)    lines.push(`Visual Style: ${brief.visual_style}`)
 
+  if (brief.vi_color_palette) {
+    const palette = typeof brief.vi_color_palette === 'string'
+      ? brief.vi_color_palette
+      : JSON.stringify(brief.vi_color_palette)
+    lines.push(`Color Palette: ${palette}`)
+  }
+  if (brief.vi_typography) lines.push(`Typography: ${brief.vi_typography}`)
+  if (Array.isArray(brief.vi_dos) && (brief.vi_dos as string[]).length > 0) {
+    lines.push(`Visual Dos: ${(brief.vi_dos as string[]).join('; ')}`)
+  }
+  if (Array.isArray(brief.vi_donts) && (brief.vi_donts as string[]).length > 0) {
+    lines.push(`Visual Don'ts: ${(brief.vi_donts as string[]).join('; ')}`)
+  }
+
   if (Array.isArray(brief.pain_points) && brief.pain_points.length > 0) {
     lines.push(`Pain Points: ${(brief.pain_points as string[]).join('; ')}`)
   }
