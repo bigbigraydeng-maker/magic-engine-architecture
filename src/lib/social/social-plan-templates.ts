@@ -28,26 +28,21 @@ export interface ChannelStrategy {
 }
 
 /**
- * Exactly 9 panel strings for a Reels storyboard.
+ * One Facebook Reel script — matches the ReelsStudio production format so
+ * each card in the Social Plan is immediately actionable:
  *
- * Panels 1–8 format:
- *   "Thumbnail: 9:16 vertical — [vivid description, no faces] | STORY: [overlay text] | CAMERA: [camera direction] | MOOD: [mood/emotion]"
- *
- * Panel 9 (brand close) format:
- *   "BRAND PANEL: [brand color] background. [Brand name] in large serif. [Key anchor 1]. [Key anchor 2]. Minimal."
- *
- * All English. No human faces. No Chinese.
+ *   opening_frame_prompt  → paste into Visual Studio (opening frame)
+ *   closing_frame_prompt  → paste into Visual Studio (closing / CTA frame)
+ *   i2v_video_prompt      → paste into Video Studio (image-to-video)
+ *   caption               → Facebook Reels caption with hashtags embedded
+ *   hashtags              → standalone hashtag list
  */
-export type SceneStructure = [
-  string, string, string, string,
-  string, string, string, string,
-  string
-]
-
 export interface ReelsScript {
   title: string
   hook: string
-  scene_structure: SceneStructure
+  opening_frame_prompt: string
+  closing_frame_prompt: string
+  i2v_video_prompt: string
   caption: string
   hashtags: string[]
 }
@@ -117,14 +112,19 @@ const SYSTEM_STRATEGY = `You are a senior social media strategist specialising i
 Analyse the brand brief and produce a Facebook channel strategy as a single JSON object.
 Return ONLY raw JSON — no markdown, no code fences, no explanation.`
 
-const SYSTEM_REELS = `You are a Facebook Reels scriptwriter for AU/NZ brands.
+const SYSTEM_REELS = `You are a Facebook Reels content strategist for AU/NZ brands.
 Produce 3 Reels scripts as a JSON array.
 
-scene_structure MUST be EXACTLY 9 strings:
-  Panels 1–8: "Thumbnail: 9:16 vertical — [vivid visual description, no faces] | STORY: [on-screen text] | CAMERA: [camera direction] | MOOD: [mood/emotion]"
-  Panel 9: "BRAND PANEL: [brand color] background. [Brand name] in large serif. [Key anchor 1]. [Key anchor 2]. Minimal."
+Each object must have exactly these keys:
+  title: string — descriptive concept title
+  hook: string — opening hook shown in first 3 seconds (≤15 words)
+  opening_frame_prompt: string — detailed AI image-generation prompt for the opening frame (9:16 vertical, cinematic, NO human faces, vivid environment)
+  closing_frame_prompt: string — detailed AI image-generation prompt for the closing/CTA frame (9:16 vertical, brand colours prominent, NO human faces)
+  i2v_video_prompt: string — image-to-video prompt in this exact format: "Opening: <motion description> | Middle: <visual journey, transitions, mood> | Closing: <final moments and CTA>"
+  caption: string — Facebook Reels caption (AU/NZ English, 2–3 short paragraphs, clear CTA, 5–8 hashtags embedded)
+  hashtags: string[] — standalone array of 5–8 hashtags matching caption
 
-Rules: all English, no human faces, no Chinese text.
+Rules: all English, no human faces in image prompts, no Chinese text.
 Return ONLY a raw JSON array — no markdown, no code fences.`
 
 const SYSTEM_POSTS = `You are a Facebook copywriter for AU/NZ brands.
@@ -181,11 +181,10 @@ Campaign Focus: ${strategy.campaign_focus}
 Tone: ${strategy.tone_guidance}
 
 Produce 3 Reels scripts as a JSON array. Each script must have:
-  title (string), hook (string), scene_structure (EXACTLY 9 strings), caption (≤2200 chars, AU/NZ English), hashtags (string[])
+  title, hook, opening_frame_prompt, closing_frame_prompt, i2v_video_prompt, caption (≤2200 chars), hashtags (string[])
 
-scene_structure format:
-  Panels 1–8: "Thumbnail: 9:16 vertical — [vivid description, no faces] | STORY: [overlay text] | CAMERA: [camera action] | MOOD: [mood]"
-  Panel 9: "BRAND PANEL: [brand color] background. [Brand name] in large serif. [Anchor 1]. [Anchor 2]. Minimal."`
+Image prompts must be 9:16 vertical, cinematic, no human faces.
+i2v_video_prompt format: "Opening: <motion> | Middle: <journey + transitions> | Closing: <CTA moment>"`
 }
 
 export function buildPostPrompt(
@@ -261,12 +260,7 @@ export async function generateReelsScripts(
   })
 
   const raw = resp.choices[0].message.content ?? '[]'
-  const scripts = parseOpenAIJson<ReelsScript[]>(raw)
-
-  return scripts.map(s => ({
-    ...s,
-    scene_structure: normaliseSceneStructure(s.scene_structure),
-  }))
+  return parseOpenAIJson<ReelsScript[]>(raw)
 }
 
 export async function generatePosts(
@@ -315,10 +309,3 @@ export async function generateStories(
   return parseOpenAIJson<Story[]>(raw)
 }
 
-// ─── Internal helpers ──────────────────────────────────────────────────────────
-
-function normaliseSceneStructure(raw: unknown): SceneStructure {
-  const arr = Array.isArray(raw) ? raw.map(String) : []
-  while (arr.length < 9) arr.push('')
-  return arr.slice(0, 9) as SceneStructure
-}

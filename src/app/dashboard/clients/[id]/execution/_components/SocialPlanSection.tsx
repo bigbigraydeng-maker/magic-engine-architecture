@@ -11,7 +11,7 @@
  * Requires an active campaign (campaign_brief_id); shows a warning if none.
  */
 
-import { useState } from 'react'
+import { useState, useCallback } from 'react'
 import type { SocialPlanOutput, ReelsScript, Post, Story } from '@/lib/social/social-plan-templates'
 
 interface Props {
@@ -192,10 +192,31 @@ export function SocialPlanSection({ clientId, campaignId, campaignName }: Props)
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
 
+/** One-click copy helper shown next to each field label. */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }).catch(() => { /* silent */ })
+  }, [text])
+  return (
+    <button
+      onClick={handleCopy}
+      className="text-[10px] text-indigo-500 hover:text-indigo-700 font-medium ml-1 transition-colors"
+      title="Copy to clipboard"
+    >
+      {copied ? '✓ Copied' : 'Copy'}
+    </button>
+  )
+}
+
 function ReelCard({ index, reel }: { index: number; reel: ReelsScript }) {
   const [open, setOpen] = useState(false)
   return (
     <div className="border border-gray-200 rounded-lg overflow-hidden">
+      {/* Accordion header */}
       <button
         onClick={() => setOpen(o => !o)}
         className="w-full flex items-center gap-3 px-4 py-3 bg-gray-50 hover:bg-gray-100 text-left transition-colors"
@@ -205,27 +226,60 @@ function ReelCard({ index, reel }: { index: number; reel: ReelsScript }) {
         </span>
         <div className="flex-1 min-w-0">
           <p className="text-xs font-semibold text-gray-800 truncate">{reel.title}</p>
-          <p className="text-[11px] text-gray-500 truncate">{reel.hook}</p>
+          <p className="text-[11px] text-gray-500 truncate">🎣 {reel.hook}</p>
         </div>
         <span className="text-gray-400 text-xs">{open ? '▲' : '▼'}</span>
       </button>
+
+      {/* Expanded: ReelsStudio-compatible fields */}
       {open && (
-        <div className="px-4 py-3 space-y-2.5 border-t border-gray-100 bg-white">
+        <div className="px-4 py-3 space-y-3 border-t border-gray-100 bg-white">
+
+          {/* Opening frame prompt */}
           <div>
-            <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Scene Structure (9 panels)</p>
-            <ol className="space-y-1">
-              {reel.scene_structure.map((panel, pi) => (
-                <li key={pi} className="text-[11px] text-gray-600 leading-relaxed">
-                  <span className="font-semibold text-indigo-600 mr-1">P{pi + 1}</span>
-                  {panel}
-                </li>
-              ))}
-            </ol>
+            <div className="flex items-center mb-1">
+              <p className="text-[10px] font-bold text-gray-400 uppercase">🖼️ Opening Frame Prompt</p>
+              <CopyButton text={reel.opening_frame_prompt} />
+            </div>
+            <p className="text-[11px] text-gray-700 leading-relaxed bg-gray-50 rounded p-2 italic">
+              {reel.opening_frame_prompt}
+            </p>
           </div>
+
+          {/* Closing frame prompt */}
           <div>
-            <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Caption</p>
-            <p className="text-[11px] text-gray-700 leading-relaxed whitespace-pre-line line-clamp-4">{reel.caption}</p>
+            <div className="flex items-center mb-1">
+              <p className="text-[10px] font-bold text-gray-400 uppercase">🖼️ Closing Frame Prompt</p>
+              <CopyButton text={reel.closing_frame_prompt} />
+            </div>
+            <p className="text-[11px] text-gray-700 leading-relaxed bg-gray-50 rounded p-2 italic">
+              {reel.closing_frame_prompt}
+            </p>
           </div>
+
+          {/* i2v video prompt */}
+          <div>
+            <div className="flex items-center mb-1">
+              <p className="text-[10px] font-bold text-gray-400 uppercase">🎬 Video Prompt (I2V)</p>
+              <CopyButton text={reel.i2v_video_prompt} />
+            </div>
+            <p className="text-[11px] text-gray-700 leading-relaxed bg-indigo-50 rounded p-2">
+              {reel.i2v_video_prompt}
+            </p>
+          </div>
+
+          {/* Caption */}
+          <div>
+            <div className="flex items-center mb-1">
+              <p className="text-[10px] font-bold text-gray-400 uppercase">📝 Caption</p>
+              <CopyButton text={reel.caption} />
+            </div>
+            <p className="text-[11px] text-gray-700 leading-relaxed whitespace-pre-line line-clamp-5">
+              {reel.caption}
+            </p>
+          </div>
+
+          {/* Hashtags */}
           <div className="flex flex-wrap gap-1">
             {reel.hashtags.map((h, hi) => (
               <span key={hi} className="text-[10px] bg-blue-50 text-blue-600 rounded px-1.5 py-0.5">{h}</span>
