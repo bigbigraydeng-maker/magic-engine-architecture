@@ -4,6 +4,13 @@ import { useState, useEffect, useMemo } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { buildGapKeywordBlogRequest } from '@/lib/blog/request-builders'
+import {
+  buildBrandTrafficSplit,
+  prioritizeContentKeywords,
+  sortByIntentPriority,
+  type BrandTrafficSplit,
+  type ContentPriorityKeyword,
+} from '@/lib/seo-intelligence/intent-strategy'
 
 const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''
 
@@ -227,7 +234,8 @@ function GapTable({
     }),
     [keywords, intentFilter, search],
   )
-  const page = filtered.slice(0, shown)
+  const prioritized = useMemo(() => sortByIntentPriority(filtered, ''), [filtered])
+  const page = prioritized.slice(0, shown)
 
   return (
     <div className="space-y-3 mt-4">
@@ -452,6 +460,85 @@ function PositionChangesPanel({
   )
 }
 
+function IntentStrategyPanel({
+  split,
+  priorities,
+}: {
+  split: BrandTrafficSplit
+  priorities: ContentPriorityKeyword[]
+}) {
+  const totalEstimatedTraffic = split.branded.estimated_traffic + split.non_branded.estimated_traffic
+  return (
+    <div className="border-y border-gray-100 py-4 space-y-4">
+      <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.35fr)]">
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900">Branded vs Non-Branded Traffic</h3>
+              <p className="text-xs text-gray-400">Estimated from ranking position and monthly volume</p>
+            </div>
+            <span className="text-xs font-semibold text-gray-500 tabular-nums">{fmt(totalEstimatedTraffic)}</span>
+          </div>
+          <TrafficSplitRow label="Branded" bucket={split.branded} tone="brand" />
+          <TrafficSplitRow label="Non-Branded" bucket={split.non_branded} tone="growth" />
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900">Intent Priority Content</h3>
+            <p className="text-xs text-gray-400">Transactional terms stay first, then commercial opportunities</p>
+          </div>
+          {priorities.length > 0 ? (
+            <div className="divide-y divide-gray-100">
+              {priorities.slice(0, 5).map(item => {
+                const style = INTENT_STYLE[item.intent] ?? INTENT_STYLE.informational
+                return (
+                  <div key={item.keyword} className="flex items-center gap-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-gray-900">{item.keyword}</p>
+                      <p className="text-xs text-gray-400">
+                        Pos {posLabel(item.position ?? null)} · Vol {fmt(item.search_volume)} · Est. traffic {fmt(item.estimated_traffic)}
+                      </p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${style.bg}`}>{style.label}</span>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">No non-branded content opportunities in the current ranking set.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function TrafficSplitRow({
+  label,
+  bucket,
+  tone,
+}: {
+  label: string
+  bucket: BrandTrafficSplit['branded']
+  tone: 'brand' | 'growth'
+}) {
+  const barCls = tone === 'brand' ? 'bg-indigo-500' : 'bg-emerald-500'
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between text-xs">
+        <span className="font-medium text-gray-600">{label}</span>
+        <span className="text-gray-400">
+          {bucket.share}% · {bucket.keywords} kw · {fmt(bucket.search_volume)} vol
+        </span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-gray-100">
+        <div className={`h-full rounded-full ${barCls}`} style={{ width: `${bucket.share}%` }} />
+      </div>
+    </div>
+  )
+}
+
 function RankingsTable({
   keywords,
   brandRoot,
@@ -489,11 +576,24 @@ function RankingsTable({
     })
   }, [keywords, intentFilter, posFilter, brandFilter, search, brandRoot])
 
-  const page = filtered.slice(0, shown)
+  const trafficSplit = useMemo(
+    () => buildBrandTrafficSplit(keywords, brandRoot),
+    [keywords, brandRoot],
+  )
+  const contentPriorities = useMemo(
+    () => prioritizeContentKeywords(keywords, brandRoot, 5),
+    [keywords, brandRoot],
+  )
+  const prioritized = useMemo(
+    () => sortByIntentPriority(filtered, brandRoot),
+    [filtered, brandRoot],
+  )
+  const page = prioritized.slice(0, shown)
 
   return (
     <div className="space-y-3">
       <IntentDistribution keywords={keywords} />
+      <IntentStrategyPanel split={trafficSplit} priorities={contentPriorities} />
 
       {/* Filters */}
       <div className="flex flex-wrap gap-2">

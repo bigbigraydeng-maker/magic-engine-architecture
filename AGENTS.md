@@ -215,15 +215,15 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-23（**P12.I.9 Position Changes 已完成**；Phase 12.I 剩余 P12.I.10）
+> 最后更新：2026-05-23（**P12.I.10 已完成**；Phase 12.I 代码完成，下一步 PM 验证 + PR 准备）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P12.I.10** | Intent 优先内容策略（Transactional 置顶）+ Branded vs Non-Branded 流量分拆 | ⭐⭐ |
+| **P12.I.M3** | PM 验证 SEO Intelligence：周快照、Position Changes、Intent 优先策略；通过后准备 PR | ⭐⭐ |
 
-**状态校准（2026-05-23）**：Phase 12.Q 已完成；P12.I.1–I.9 已完成；Phase 12.I 剩余 P12.I.10。下一 session 第一句话：
+**状态校准（2026-05-23）**：Phase 12.Q 已完成；P12.I.1–I.10 已完成；Phase 12.I 进入 M3 验证 + PR 准备。下一 session 第一句话：
 
-- `继续 Phase 12.I 第 10 任务 P12.I.10`
+- `继续 Phase 12.I M3 验证与 PR 准备`
 
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 
