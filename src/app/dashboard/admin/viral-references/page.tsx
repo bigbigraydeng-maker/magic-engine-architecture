@@ -19,7 +19,7 @@ type ContentGoal = 'brand' | 'sales' | 'ugc' | 'education'
 interface ViralReference {
   id: string
   source_url: string
-  platform: 'youtube' | 'facebook' | 'tiktok' | 'instagram'
+  platform: 'youtube' | 'facebook' | 'tiktok' | 'instagram' | 'upload'
   industry: string
   content_goal: ContentGoal
   analysis_status: 'pending' | 'analyzing' | 'done' | 'error'
@@ -113,6 +113,7 @@ function PlatformBadge({ platform }: { platform: ViralReference['platform'] }) {
     facebook:  { label: 'Facebook',  cls: 'bg-blue-900/60 text-blue-300' },
     tiktok:    { label: 'TikTok',    cls: 'bg-gray-700 text-gray-200' },
     instagram: { label: 'Instagram', cls: 'bg-pink-900/60 text-pink-300' },
+    upload:    { label: 'Uploaded',  cls: 'bg-emerald-900/60 text-emerald-300' },
   }
   const { label, cls } = config[platform] ?? { label: platform, cls: 'bg-gray-700 text-gray-300' }
   return (
@@ -255,6 +256,11 @@ export default function ViralReferencesPage() {
   const [adding, setAdding] = useState(false)
   const [addMsg, setAddMsg] = useState('')
 
+  // Upload file form
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadMsg, setUploadMsg] = useState('')
+
   const fetchRefs = useCallback(async () => {
     try {
       const res = await fetch('/api/admin/viral-references')
@@ -316,6 +322,41 @@ export default function ViralReferencesPage() {
       setAddMsg('❌ 网络错误，请重试')
     } finally {
       setAdding(false)
+    }
+  }
+
+  const uploadVideo = async () => {
+    if (!uploadFile) {
+      setUploadMsg('请先选择视频文件')
+      return
+    }
+    setUploading(true)
+    setUploadMsg('')
+    try {
+      const fd = new FormData()
+      fd.append('file', uploadFile)
+      fd.append('industry', addIndustry)
+      fd.append('content_goal', addGoal)
+
+      const res = await fetch('/api/admin/viral-references/upload', {
+        method: 'POST',
+        body: fd,
+      })
+      const data = await res.json()
+      if (data.success) {
+        setUploadMsg(`✅ ${uploadFile.name} 已上传，正在分析…`)
+        setUploadFile(null)
+        // Reset the file input
+        const input = document.getElementById('viral-upload-input') as HTMLInputElement | null
+        if (input) input.value = ''
+        fetchRefs()
+      } else {
+        setUploadMsg(`❌ ${data.error}`)
+      }
+    } catch {
+      setUploadMsg('❌ 上传失败，文件可能太大或网络中断')
+    } finally {
+      setUploading(false)
     }
   }
 
@@ -415,6 +456,42 @@ export default function ViralReferencesPage() {
         {addMsg && (
           <p className={`text-sm ${addMsg.startsWith('✅') ? 'text-green-400' : 'text-red-400'}`}>
             {addMsg}
+          </p>
+        )}
+      </div>
+
+      {/* Upload File Panel */}
+      <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-medium text-white">📁 直接上传视频文件</p>
+          <p className="text-xs text-gray-500">
+            行业 / 类型用上方的选择 · 适合 Facebook 短链 / 私密视频 / 手机录屏
+          </p>
+        </div>
+        <div className="flex gap-3 items-center">
+          <input
+            id="viral-upload-input"
+            type="file"
+            accept="video/mp4,video/quicktime,video/webm,video/x-matroska,video/mpeg"
+            onChange={e => setUploadFile(e.target.files?.[0] ?? null)}
+            className="flex-1 text-sm text-gray-300 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-gray-700 file:text-white hover:file:bg-gray-600 file:cursor-pointer"
+          />
+          <button
+            onClick={uploadVideo}
+            disabled={uploading || !uploadFile}
+            className="shrink-0 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            {uploading ? 'Uploading…' : 'Upload & Analyze'}
+          </button>
+        </div>
+        {uploadFile && !uploadMsg && (
+          <p className="text-xs text-gray-400">
+            已选：{uploadFile.name} ({(uploadFile.size / 1024 / 1024).toFixed(1)} MB)
+          </p>
+        )}
+        {uploadMsg && (
+          <p className={`text-sm ${uploadMsg.startsWith('✅') ? 'text-green-400' : 'text-red-400'}`}>
+            {uploadMsg}
           </p>
         )}
       </div>
