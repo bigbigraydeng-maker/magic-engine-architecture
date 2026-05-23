@@ -1,6 +1,6 @@
 # Magic Engine — Technical Architecture
 
-> 版本：2026-05-01 · 生产环境：https://magic-engine.onrender.com
+> 版本：2026-05-23 · 生产环境：https://magic-engine.onrender.com
 > 配套文档：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [CLAUDE.md](./CLAUDE.md)（AI 工作指南）· [ROADMAP.md](./ROADMAP.md)（任务路线图）
 
 ---
@@ -48,6 +48,7 @@ Magic Engine是一个 AI 驱动的社媒内容运营平台，面向代理公司�
 | 视频生成 | Seedance 2.0 / Atlas Cloud，$0.022/秒 |
 | 头像视频 | HeyGen（2 分钟/条） |
 | 关键词数据 | SEMrush REST API |
+| 关键词数据（补充） | DataForSEO REST API（排名追踪 / 竞品缺口 / SERP 分析，替代 SEMrush 高成本场景） |
 | 网页抓取 | Jina.ai Reader（免费，URL→Markdown） |
 | 内容发布 | Publer API（排期、账户管理） |
 | 数据同步 | Airtable REST API（双向同步） |
@@ -295,6 +296,70 @@ INDEX: (client_id, strategy_run_id)
 INDEX: (client_id, priority_score DESC)
 ```
 
+### 3.8 飞轮数据闭环（Phase 12，2026-05-17 起）
+
+飞轮三表是 Magic Engine 执行自动化护城河的核心数据层，记录「动作→指标→结果」完整链路。
+
+```
+flywheel_actions          ← 执行动作记录
+├── id (UUID PK)
+├── client_id (FK → clients)
+├── execution_item_id (FK → execution_items, nullable)  ← 触发该动作的执行项
+├── flywheel: 'seo' | 'geo' | 'ads' | 'social'         ← flywheel_name enum
+├── action_type (TEXT)       ← 动作分类，如 'geo.deploy_directive', 'blog_publish'
+├── execution_mode: 'in_house' | 'third_party' | 'external_manual'
+├── vendor (TEXT, nullable)  ← 第三方供应商代号，如 'publer'（in_house 时为 null）
+├── payload (JSONB)          ← 动作参数
+├── expected_metric (TEXT)   ← 预期影响的指标 key（app 层校验，无 DB FK）
+├── expected_delta (NUMERIC) ← 预期变化量（正值 = 改善）
+├── production_package_id (FK → production_packages, nullable)  ← P13.E 闭环关联
+├── executed_at (TIMESTAMPTZ)
+└── created_at (TIMESTAMPTZ)
+
+INDEX: (client_id), (flywheel), (executed_at DESC), (expected_metric), (production_package_id)
+```
+
+```
+flywheel_metrics          ← 指标快照（AI Tracker / SEMrush Cron / 手动触发写入）
+├── id (UUID PK)
+├── client_id (FK → clients)
+├── flywheel (flywheel_name)
+├── metric_key (TEXT)        ← 指标名，如 'geo.query.mention_rate', 'keyword_rank'
+├── metric_value (NUMERIC)
+├── source (TEXT)            ← 数据来源，如 'ai_tracker', 'semrush', 'manual'
+├── source_ref (JSONB)       ← {run_id, query, ...} 溯源信息
+└── measured_at (TIMESTAMPTZ)
+
+INDEX: (client_id), (client_id, metric_key, measured_at DESC), (measured_at DESC)
+```
+
+```
+flywheel_outcomes         ← 归因结果（attribution cron 每 6 小时运算）
+├── id (UUID PK)
+├── action_id (FK → flywheel_actions)
+├── client_id (FK → clients)
+├── metric_key (TEXT)
+├── baseline (NUMERIC)       ← 动作前指标值
+├── after_value (NUMERIC)    ← 动作后指标值
+├── delta (NUMERIC)          ← after_value - baseline
+├── delta_pct (NUMERIC)      ← 百分比变化
+├── confidence (NUMERIC)     ← 0–1 置信度
+├── verdict: 'confirmed' | 'inconclusive' | 'reversed'
+├── window_days (SMALLINT)   ← 归因窗口，默认 30 天
+└── computed_at (TIMESTAMPTZ)
+
+INDEX: (action_id), (client_id), (computed_at DESC)
+```
+
+**归因 Cron**：`POST /api/cron/attribution`，每 6 小时运行，对所有 `expected_metric` 非空的 `flywheel_actions` 记录计算 baseline→after_value→verdict，写入 `flywheel_outcomes`。
+
+**执行形态三分法**：
+- `in_house`：Magic Engine 内自研工作台（SEO 内容、GEO Composer、社媒内容制作）
+- `third_party`：编排第三方平台（如 Publer、Meta Ads Manager）
+- `external_manual`：FDE 完全外部完成（reputation、newsletter 等），只记录不自动执行
+
+**`execution_items` 扩展**（同一 migration）：新增 `execution_target JSONB` 列，编码执行路由 `{flywheel, mode, vendor?, action_type?}`，已对所有历史行按 dimension 反推回填。
+
 ---
 
 ## 4. API 路由总览
@@ -379,6 +444,9 @@ POST   /api/clients/[id]/strategy/[itemId]/execute → 按策略项触发内容�
 POST   /api/cron/poll-visual-jobs             → 每 30s 轮询视觉生成状态（Render 托管）
 POST   /api/cron/sync-airtable                → 定期同步 Airtable
 POST   /api/cron/weekly-tracker               → 每周一：跑 AI Tracker + 更新策略建议
+POST   /api/cron/attribution                  → 每 6h：飞轮归因运算（flywheel_outcomes）← Phase 12 新增
+POST   /api/cron/flywheel-seo-weekly          → 每周：SEO 飞轮快照（keyword 排名写入 flywheel_metrics）← Phase 12.I 新增
+POST   /api/cron/keyword-snapshots-weekly     → 每周：DataForSEO 关键词排名快照 ← Phase 12.I 新增
 POST   /api/webhooks/airtable-approved        → Zapier → ME：Airtable 批准触发
 POST   /api/webhooks/publer-published         → Publer 发布后回调
 ```
