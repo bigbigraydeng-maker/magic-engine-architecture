@@ -16,11 +16,19 @@ export async function GET(request: NextRequest) {
   const next = searchParams.get('next') ?? '/dashboard'
   const safePath = next.startsWith('/') && !next.startsWith('//') ? next : '/dashboard'
 
-  // Use explicit env var first; otherwise reconstruct from forwarded headers
-  // (request.nextUrl.origin returns Render's internal localhost:PORT, not the public URL)
-  const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? 'localhost:3001'
-  const proto = request.headers.get('x-forwarded-proto')?.split(',')[0] ?? (host.startsWith('localhost') ? 'http' : 'https')
-  const origin = (process.env.NEXT_PUBLIC_APP_URL ?? `${proto}://${host}`).replace(/\/$/, '')
+  // APP_URL (server-only) takes priority; NEXT_PUBLIC_APP_URL is fallback.
+  // Header-based detection is last resort — Render's internal origin is localhost:PORT,
+  // so we MUST have an explicit env var set for production deployments.
+  const explicitOrigin = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL
+  let origin: string
+  if (explicitOrigin) {
+    origin = explicitOrigin.replace(/\/$/, '')
+  } else {
+    const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? 'localhost:3001'
+    const proto = request.headers.get('x-forwarded-proto')?.split(',')[0] ?? (host.startsWith('localhost') ? 'http' : 'https')
+    origin = `${proto}://${host}`
+    console.warn(`[google-login] APP_URL not set — inferred origin: ${origin}`)
+  }
   const redirectTo = `${origin}/auth/callback?next=${encodeURIComponent(safePath)}`
 
   const cookieStore = cookies()
