@@ -230,7 +230,7 @@ export function SocialPlanSection({ clientId, campaignId, campaignName }: Props)
           {planTab === 'reels' && (
             <div className="space-y-3">
               {plan.reels.map((reel, i) => (
-                <ReelCard key={i} index={i} reel={reel} />
+                <ReelCard key={i} index={i} reel={reel} clientId={clientId} campaignId={campaignId} />
               ))}
             </div>
           )}
@@ -307,9 +307,25 @@ type AnyReel = ReelsScript & {
   i2v_video_prompt?: string      // legacy field
 }
 
-function ReelCard({ index, reel }: { index: number; reel: ReelsScript }) {
-  const [open, setOpen]         = useState(false)
+type MakeStep = 'idle' | 'creating' | 'frame' | 'video' | 'done' | 'error'
+
+function ReelCard({
+  index, reel, clientId, campaignId,
+}: {
+  index: number
+  reel: ReelsScript
+  clientId: string
+  campaignId: string | undefined
+}) {
+  const [open, setOpen]           = useState(false)
   const [showScene, setShowScene] = useState(false)
+
+  // Production state machine
+  const [makeStep, setMakeStep]   = useState<MakeStep>('idle')
+  const [draftId, setDraftId]     = useState<string | null>(null)
+  const [frameJobId, setFrameJobId] = useState<string | null>(null)
+  const [videoUrl, setVideoUrl]   = useState<string | null>(null)
+  const [makeError, setMakeError] = useState<string | null>(null)
 
   const r = reel as AnyReel
   const hookLine       = r.hook_line ?? r.hook ?? ''
@@ -318,6 +334,101 @@ function ReelCard({ index, reel }: { index: number; reel: ReelsScript }) {
   const angleColor     = ANGLE_TAG_COLOR[r.angle_tag ?? ''] ?? 'bg-gray-50 text-gray-600 border-gray-200'
   const hasNewFormat   = Boolean(storyboardPmt)
   const hasLegacyFormat = Boolean(r.opening_frame_prompt)
+
+  // ── Step 1: poll frame generation ──────────────────────────────────────────
+  useEffect(() => {
+    if (makeStep !== 'frame' || !frameJobId || !draftId) return
+    const id = setInterval(async () => {
+      try {
+        const res = await fetch(
+          `/api/clients/${clientId}/reels/${draftId}/frame-status?job_id=${frameJobId}&frame_type=opening`
+        )
+        const d = await res.json() as { status: string; error?: string }
+        if (d.status === 'completed') {
+          clearInterval(id)
+          // Trigger video generation immediately
+          const vr = await fetch(
+            `/api/clients/${clientId}/reels/${draftId}/generate-video`,
+            { method: 'POST' }
+          )
+          const vd = await vr.json() as { success: boolean; error?: string }
+          if (!vd.success) {
+            setMakeError(vd.error ?? 'Failed to start video generation')
+            setMakeStep('error')
+          } else {
+            setMakeStep('video')
+          }
+        } else if (d.status === 'failed') {
+          clearInterval(id)
+          setMakeError(d.error ?? 'Frame generation failed')
+          setMakeStep('error')
+        }
+      } catch { /* keep polling on network error */ }
+    }, 3000)
+    return () => clearInterval(id)
+  }, [makeStep, frameJobId, draftId, clientId])
+
+  // ── Step 2: poll video generation ──────────────────────────────────────────
+  useEffect(() => {
+    if (makeStep !== 'video' || !draftId) return
+    const id = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/clients/${clientId}/reels/${draftId}/video-status`)
+        const d = await res.json() as { status: string; video_url?: string; error?: string }
+        if (d.status === 'completed' && d.video_url) {
+          clearInterval(id)
+          setVideoUrl(d.video_url)
+          setMakeStep('done')
+        } else if (d.status === 'failed') {
+          clearInterval(id)
+          setMakeError(d.error ?? 'Video generation failed')
+          setMakeStep('error')
+        }
+      } catch { /* keep polling */ }
+    }, 15000)
+    return () => clearInterval(id)
+  }, [makeStep, draftId, clientId])
+
+  // ── Kick off the whole pipeline ─────────────────────────────────────────────
+  const handleMake = useCallback(async () => {
+    if (!storyboardPmt || !seedancePmt) return
+    setMakeStep('creating')
+    setMakeError(null)
+    try {
+      // 1. Create reels_draft from plan data
+      const cr = await fetch(`/api/clients/${clientId}/reels/create-from-plan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          storyboard_prompt: storyboardPmt,
+          i2v_prompt:        seedancePmt,
+          caption:           reel.caption,
+          campaign_brief_id: campaignId,
+        }),
+      })
+      const cd = await cr.json() as { success: boolean; draft?: { id: string }; error?: string }
+      if (!cd.success || !cd.draft) throw new Error(cd.error ?? 'Failed to create draft')
+      setDraftId(cd.draft.id)
+
+      // 2. Start storyboard image generation (Visual Studio)
+      const fr = await fetch(
+        `/api/clients/${clientId}/reels/${cd.draft.id}/generate-frame`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ frame_type: 'opening' }),
+        }
+      )
+      const fd = await fr.json() as { success: boolean; job_id?: string; error?: string }
+      if (!fd.success || !fd.job_id) throw new Error(fd.error ?? 'Failed to start frame generation')
+      setFrameJobId(fd.job_id)
+      setMakeStep('frame')
+
+    } catch (e) {
+      setMakeError(e instanceof Error ? e.message : String(e))
+      setMakeStep('error')
+    }
+  }, [storyboardPmt, seedancePmt, reel.caption, clientId, campaignId])
 
   return (
     <div className="border border-gray-200 rounded-lg overflow-hidden">
@@ -470,6 +581,72 @@ function ReelCard({ index, reel }: { index: number; reel: ReelsScript }) {
               </span>
             ))}
           </div>
+
+          {/* ── One-click production pipeline ──────────────────────────── */}
+          {hasNewFormat && makeStep === 'idle' && (
+            <button
+              onClick={handleMake}
+              className="w-full py-2 text-xs font-bold bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-lg transition-all"
+            >
+              🚀 一键制作 Reel（Visual Studio → Seedance）
+            </button>
+          )}
+
+          {makeStep !== 'idle' && (
+            <div className="rounded-lg border bg-gray-50 px-3 py-2.5 space-y-1.5">
+              {makeStep === 'creating' && (
+                <p className="text-xs text-gray-500 flex items-center gap-1.5">
+                  <span className="w-3.5 h-3.5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin inline-block" />
+                  创建草稿…
+                </p>
+              )}
+              {makeStep === 'frame' && (
+                <p className="text-xs text-indigo-600 flex items-center gap-1.5">
+                  <span className="w-3.5 h-3.5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin inline-block" />
+                  🎨 Visual Studio 生成故事板图片中…（约 30–60s）
+                </p>
+              )}
+              {makeStep === 'video' && (
+                <p className="text-xs text-purple-600 flex items-center gap-1.5">
+                  <span className="w-3.5 h-3.5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin inline-block" />
+                  🎬 Seedance 生成视频中…（约 2–3 分钟）
+                </p>
+              )}
+              {makeStep === 'error' && (
+                <p className="text-xs text-red-600">⚠ {makeError}</p>
+              )}
+              {makeStep === 'done' && videoUrl && (
+                <div className="space-y-2">
+                  <p className="text-xs text-green-600 font-semibold">✅ 视频生成完成！</p>
+                  <video
+                    src={videoUrl}
+                    controls
+                    className="w-full max-w-[200px] rounded-lg border border-gray-200"
+                  />
+                  <div className="flex gap-2 flex-wrap">
+                    <a
+                      href={videoUrl}
+                      download
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[11px] text-indigo-600 hover:underline font-medium"
+                    >
+                      ↓ 下载视频
+                    </a>
+                    {draftId && (
+                      <a
+                        href={`#reels-studio`}
+                        onClick={() => window.scrollTo({ top: document.getElementById('reels-studio')?.offsetTop ?? 0, behavior: 'smooth' })}
+                        className="text-[11px] text-gray-400 hover:text-gray-600"
+                      >
+                        → 在 Reels Studio 中查看
+                      </a>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

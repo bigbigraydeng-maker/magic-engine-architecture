@@ -32,12 +32,9 @@ export async function POST(
       return NextResponse.json({ success: false, error: 'Draft not found' }, { status: 404 })
     }
 
-    if (!draft.opening_frame_url || !draft.closing_frame_url) {
+    if (!draft.opening_frame_url) {
       return NextResponse.json(
-        {
-          success: false,
-          error: 'Both reference frames must be uploaded before generating video.',
-        },
+        { success: false, error: 'Opening frame must be generated before creating video.' },
         { status: 400 }
       )
     }
@@ -60,7 +57,7 @@ export async function POST(
     const { job_id } = await submitI2VGeneration({
       prompt: draft.i2v_video_prompt,
       opening_frame_url: draft.opening_frame_url,
-      closing_frame_url: draft.closing_frame_url,
+      closing_frame_url: draft.closing_frame_url ?? draft.opening_frame_url, // storyboard uses same image
       duration: 6,
       aspect_ratio: '9:16',
     })
