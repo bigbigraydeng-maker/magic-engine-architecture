@@ -15,13 +15,6 @@ const PRODUCTION_SHORTCUTS = [
     href: (id: string) => `/dashboard/content?client=${id}`,
     color: 'hover:border-indigo-300',
   },
-  {
-    icon: '🚀',
-    label: 'Launch Hub',
-    desc: 'Reels · 图片 · 视频素材生产',
-    href: (id: string) => `/dashboard/visuals?client=${id}`,
-    color: 'hover:border-pink-300',
-  },
 ]
 
 export function ContentHub({ clientId }: Props) {

@@ -76,11 +76,12 @@ function sha256(input: string): string {
   return createHash('sha256').update(input).digest('hex')
 }
 
-async function fetchBlogPost(blogPostId: string): Promise<Record<string, unknown> | null> {
+async function fetchBlogPost(blogPostId: string, clientId: string): Promise<Record<string, unknown> | null> {
   const { data } = await supabaseAdmin
     .from('blog_posts')
     .select('*')
     .eq('id', blogPostId)
+    .eq('client_id', clientId)
     .maybeSingle()
   return data as Record<string, unknown> | null
 }
@@ -175,7 +176,7 @@ async function handleDraft(clientId: string, body: DraftRequestBody): Promise<Ne
   const connRow = await findConnectionRow(clientId)
   if (!connRow) throw new Error('Connection row not found')
 
-  const post = await fetchBlogPost(source_id)
+  const post = await fetchBlogPost(source_id, clientId)
   if (!post) {
     return NextResponse.json(
       { success: false, error: 'Blog post not found', code: 'NOT_FOUND' },
@@ -262,19 +263,16 @@ async function handleDraft(clientId: string, body: DraftRequestBody): Promise<Ne
 // ─── handlePublish ────────────────────────────────────────────────────────────
 
 async function handlePublish(clientId: string, body: PublishRequestBody): Promise<NextResponse> {
-  const { job_id, platform_id } = body
+  const { job_id } = body
 
   if (typeof job_id !== 'string' || !job_id.trim()) {
     return badInput('job_id required')
-  }
-  if (typeof platform_id !== 'string' || !platform_id.trim()) {
-    return badInput('platform_id required')
   }
 
   // Verify the job belongs to this client (tenant isolation).
   const { data: job } = await supabaseAdmin
     .from('website_publish_jobs')
-    .select('id, client_id, status, content_snapshot, connection_id')
+    .select('id, client_id, status, content_snapshot, connection_id, platform_post_id')
     .eq('id', job_id)
     .eq('client_id', clientId)
     .maybeSingle()
@@ -285,9 +283,12 @@ async function handlePublish(clientId: string, body: PublishRequestBody): Promis
       { status: 404 },
     )
   }
+
+  const platformId = job.platform_post_id as string
+
   if (job.status === 'published') {
     return NextResponse.json({
-      success: true, job_id, platform_id, status: 'published', note: 'already published',
+      success: true, job_id, platform_id: platformId, status: 'published', note: 'already published',
     })
   }
   if (job.status === 'rolled_back' || job.status === 'failed') {
@@ -297,7 +298,22 @@ async function handlePublish(clientId: string, body: PublishRequestBody): Promis
     )
   }
 
-  const conn = await findConnection(clientId)
+  const conn    = await findConnection(clientId)
+  const connRow = await findConnectionRow(clientId)
+  if (!connRow) throw new Error('Connection row not found')
+
+  // Ensure the job targets the current WP connection (guards against stale or swapped connections).
+  if (job.connection_id !== connRow.id) {
+    return NextResponse.json(
+      {
+        success: false,
+        error:   'Job connection mismatch — re-draft against the current WordPress connection',
+        code:    'CONNECTION_MISMATCH',
+      },
+      { status: 409 },
+    )
+  }
+
   const config = {
     siteUrl:     conn.siteUrl,
     username:    conn.username,
@@ -308,9 +324,9 @@ async function handlePublish(clientId: string, body: PublishRequestBody): Promis
   const targetType = (snapshot.target_type as string) ?? 'post'
 
   if (targetType === 'post') {
-    await publishWordpressPost(config, platform_id)
+    await publishWordpressPost(config, platformId)
   } else {
-    await publishWordpressPage(config, platform_id)
+    await publishWordpressPage(config, platformId)
   }
 
   const now = new Date().toISOString()
@@ -331,14 +347,14 @@ async function handlePublish(clientId: string, body: PublishRequestBody): Promis
       status:         'done',
       payload:        {
         job_id,
-        platform:  'wordpress',
-        platform_id,
-        source_id: job.content_snapshot ? (job.content_snapshot as Record<string, unknown>).source_id : null,
+        platform:    'wordpress',
+        platform_id: platformId,
+        source_id:   snapshot.source_id ?? null,
       },
     })
     .then(({ error }) => {
       if (error) console.error('[publish-wordpress] flywheel insert failed', error.message)
     })
 
-  return NextResponse.json({ success: true, job_id, platform_id, status: 'published' })
+  return NextResponse.json({ success: true, job_id, platform_id: platformId, status: 'published' })
 }
