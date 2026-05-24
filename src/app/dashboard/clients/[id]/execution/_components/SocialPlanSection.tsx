@@ -307,7 +307,7 @@ type AnyReel = ReelsScript & {
   i2v_video_prompt?: string      // legacy field
 }
 
-type MakeStep = 'idle' | 'creating' | 'frame' | 'video' | 'done' | 'error'
+type MakeStep = 'idle' | 'creating' | 'storyboard' | 'video' | 'done' | 'error'
 
 function ReelCard({
   index, reel, clientId, campaignId,
@@ -323,7 +323,7 @@ function ReelCard({
   // Production state machine
   const [makeStep, setMakeStep]   = useState<MakeStep>('idle')
   const [draftId, setDraftId]     = useState<string | null>(null)
-  const [frameJobId, setFrameJobId] = useState<string | null>(null)
+  const [storyboardUrl, setStoryboardUrl] = useState<string | null>(null)
   const [videoUrl, setVideoUrl]   = useState<string | null>(null)
   const [makeError, setMakeError] = useState<string | null>(null)
 
@@ -335,40 +335,7 @@ function ReelCard({
   const hasNewFormat   = Boolean(storyboardPmt)
   const hasLegacyFormat = Boolean(r.opening_frame_prompt)
 
-  // ── Step 1: poll frame generation ──────────────────────────────────────────
-  useEffect(() => {
-    if (makeStep !== 'frame' || !frameJobId || !draftId) return
-    const id = setInterval(async () => {
-      try {
-        const res = await fetch(
-          `/api/clients/${clientId}/reels/${draftId}/frame-status?job_id=${frameJobId}&frame_type=opening`
-        )
-        const d = await res.json() as { status: string; error?: string }
-        if (d.status === 'completed') {
-          clearInterval(id)
-          // Trigger video generation immediately
-          const vr = await fetch(
-            `/api/clients/${clientId}/reels/${draftId}/generate-video`,
-            { method: 'POST' }
-          )
-          const vd = await vr.json() as { success: boolean; error?: string }
-          if (!vd.success) {
-            setMakeError(vd.error ?? 'Failed to start video generation')
-            setMakeStep('error')
-          } else {
-            setMakeStep('video')
-          }
-        } else if (d.status === 'failed') {
-          clearInterval(id)
-          setMakeError(d.error ?? 'Frame generation failed')
-          setMakeStep('error')
-        }
-      } catch { /* keep polling on network error */ }
-    }, 3000)
-    return () => clearInterval(id)
-  }, [makeStep, frameJobId, draftId, clientId])
-
-  // ── Step 2: poll video generation ──────────────────────────────────────────
+  // ── Poll video generation (Seedance, every 15s) ─────────────────────────────
   useEffect(() => {
     if (makeStep !== 'video' || !draftId) return
     const id = setInterval(async () => {
@@ -390,12 +357,15 @@ function ReelCard({
   }, [makeStep, draftId, clientId])
 
   // ── Kick off the whole pipeline ─────────────────────────────────────────────
+  // Step 1: create draft  (instant)
+  // Step 2: gpt-image-1 storyboard  (~15s, synchronous — no polling)
+  // Step 3: Seedance I2V video  (~2–3 min, poll every 15s)
   const handleMake = useCallback(async () => {
     if (!storyboardPmt || !seedancePmt) return
     setMakeStep('creating')
     setMakeError(null)
     try {
-      // 1. Create reels_draft from plan data
+      // 1. Create reels_draft
       const cr = await fetch(`/api/clients/${clientId}/reels/create-from-plan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -408,21 +378,27 @@ function ReelCard({
       })
       const cd = await cr.json() as { success: boolean; draft?: { id: string }; error?: string }
       if (!cd.success || !cd.draft) throw new Error(cd.error ?? 'Failed to create draft')
-      setDraftId(cd.draft.id)
+      const newDraftId = cd.draft.id
+      setDraftId(newDraftId)
 
-      // 2. Start storyboard image generation (Visual Studio)
-      const fr = await fetch(
-        `/api/clients/${clientId}/reels/${cd.draft.id}/generate-frame`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ frame_type: 'opening' }),
-        }
+      // 2. Generate storyboard image via gpt-image-1 (synchronous, awaits result)
+      setMakeStep('storyboard')
+      const sr = await fetch(
+        `/api/clients/${clientId}/reels/${newDraftId}/generate-storyboard`,
+        { method: 'POST' },
       )
-      const fd = await fr.json() as { success: boolean; job_id?: string; error?: string }
-      if (!fd.success || !fd.job_id) throw new Error(fd.error ?? 'Failed to start frame generation')
-      setFrameJobId(fd.job_id)
-      setMakeStep('frame')
+      const sd = await sr.json() as { success: boolean; image_url?: string; error?: string }
+      if (!sd.success) throw new Error(sd.error ?? 'Storyboard generation failed')
+      setStoryboardUrl(sd.image_url ?? null)
+
+      // 3. Kick off Seedance I2V video generation
+      const vr = await fetch(
+        `/api/clients/${clientId}/reels/${newDraftId}/generate-video`,
+        { method: 'POST' },
+      )
+      const vd = await vr.json() as { success: boolean; error?: string }
+      if (!vd.success) throw new Error(vd.error ?? 'Failed to start video generation')
+      setMakeStep('video')
 
     } catch (e) {
       setMakeError(e instanceof Error ? e.message : String(e))
@@ -588,55 +564,77 @@ function ReelCard({
           )}
 
           {makeStep !== 'idle' && (
-            <div className="rounded-lg border bg-gray-50 px-3 py-2.5 space-y-1.5">
+            <div className="rounded-lg border bg-gray-50 px-3 py-2.5 space-y-2">
+
+              {/* Progress steps */}
+              <div className="flex items-center gap-2 text-[10px] font-medium">
+                <StepDot active={makeStep === 'creating'} done={['storyboard','video','done','error'].includes(makeStep)} label="草稿" />
+                <span className="text-gray-300">→</span>
+                <StepDot active={makeStep === 'storyboard'} done={['video','done','error'].includes(makeStep)} label="故事板" />
+                <span className="text-gray-300">→</span>
+                <StepDot active={makeStep === 'video'} done={makeStep === 'done'} label="视频" />
+              </div>
+
               {makeStep === 'creating' && (
                 <p className="text-xs text-gray-500 flex items-center gap-1.5">
-                  <span className="w-3.5 h-3.5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin inline-block" />
-                  创建草稿…
+                  <Spinner color="indigo" /> 创建草稿…
                 </p>
               )}
-              {makeStep === 'frame' && (
-                <p className="text-xs text-indigo-600 flex items-center gap-1.5">
-                  <span className="w-3.5 h-3.5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin inline-block" />
-                  🎨 Visual Studio 生成故事板图片中…（约 30–60s）
+              {makeStep === 'storyboard' && (
+                <p className="text-xs text-indigo-700 flex items-center gap-1.5">
+                  <Spinner color="indigo" /> 🎨 Visual Studio 生成9格故事板图片中…（约 15–25s）
                 </p>
               )}
               {makeStep === 'video' && (
-                <p className="text-xs text-purple-600 flex items-center gap-1.5">
-                  <span className="w-3.5 h-3.5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin inline-block" />
-                  🎬 Seedance 生成视频中…（约 2–3 分钟）
-                </p>
+                <div className="space-y-1.5">
+                  {storyboardUrl && (
+                    <div>
+                      <p className="text-[10px] text-gray-400 mb-1">✅ 故事板图片已生成</p>
+                      <img
+                        src={storyboardUrl}
+                        alt="9-panel storyboard"
+                        className="w-full max-w-[160px] rounded border border-gray-200"
+                      />
+                    </div>
+                  )}
+                  <p className="text-xs text-purple-600 flex items-center gap-1.5">
+                    <Spinner color="purple" /> 🎬 Video Studio 生成 Reel 视频中…（约 2–3 分钟）
+                  </p>
+                </div>
               )}
               {makeStep === 'error' && (
-                <p className="text-xs text-red-600">⚠ {makeError}</p>
+                <div className="space-y-1">
+                  <p className="text-xs text-red-600">⚠ {makeError}</p>
+                  <button
+                    onClick={() => { setMakeStep('idle'); setMakeError(null) }}
+                    className="text-[10px] text-gray-400 hover:text-gray-600 underline"
+                  >
+                    重试
+                  </button>
+                </div>
               )}
               {makeStep === 'done' && videoUrl && (
                 <div className="space-y-2">
-                  <p className="text-xs text-green-600 font-semibold">✅ 视频生成完成！</p>
-                  <video
-                    src={videoUrl}
-                    controls
-                    className="w-full max-w-[200px] rounded-lg border border-gray-200"
-                  />
-                  <div className="flex gap-2 flex-wrap">
-                    <a
-                      href={videoUrl}
-                      download
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[11px] text-indigo-600 hover:underline font-medium"
-                    >
-                      ↓ 下载视频
-                    </a>
-                    {draftId && (
-                      <a
-                        href={`#reels-studio`}
-                        onClick={() => window.scrollTo({ top: document.getElementById('reels-studio')?.offsetTop ?? 0, behavior: 'smooth' })}
-                        className="text-[11px] text-gray-400 hover:text-gray-600"
-                      >
-                        → 在 Reels Studio 中查看
-                      </a>
+                  <p className="text-xs text-green-600 font-semibold">✅ Reel 视频生成完成！</p>
+                  <div className="flex gap-3 items-start flex-wrap">
+                    {storyboardUrl && (
+                      <img
+                        src={storyboardUrl}
+                        alt="storyboard"
+                        className="w-[80px] rounded border border-gray-200 shrink-0"
+                      />
                     )}
+                    <video
+                      src={videoUrl}
+                      controls
+                      className="w-full max-w-[180px] rounded-lg border border-gray-200"
+                    />
+                  </div>
+                  <div className="flex gap-3 flex-wrap">
+                    <a href={storyboardUrl ?? '#'} download target="_blank" rel="noreferrer"
+                       className="text-[11px] text-indigo-500 hover:underline">↓ 故事板图片</a>
+                    <a href={videoUrl} download target="_blank" rel="noreferrer"
+                       className="text-[11px] text-purple-600 hover:underline font-medium">↓ 下载视频</a>
                   </div>
                 </div>
               )}
@@ -700,5 +698,38 @@ function StoryCard({ index, story }: { index: number; story: Story }) {
         <p className="text-[11px] text-gray-400 italic truncate">{story.visual_prompt}</p>
       </div>
     </div>
+  )
+}
+
+// ─── Utility micro-components ──────────────────────────────────────────────────
+
+function Spinner({ color }: { color: 'indigo' | 'purple' }) {
+  const ring = color === 'purple'
+    ? 'border-purple-400 border-t-transparent'
+    : 'border-indigo-400 border-t-transparent'
+  return (
+    <span className={`w-3.5 h-3.5 border-2 ${ring} rounded-full animate-spin inline-block shrink-0`} />
+  )
+}
+
+function StepDot({
+  active, done, label,
+}: { active: boolean; done: boolean; label: string }) {
+  const base = 'flex items-center gap-1'
+  const dot = done
+    ? 'w-3 h-3 rounded-full bg-green-400 shrink-0'
+    : active
+      ? 'w-3 h-3 rounded-full bg-indigo-500 animate-pulse shrink-0'
+      : 'w-3 h-3 rounded-full bg-gray-200 shrink-0'
+  const text = done
+    ? 'text-green-600'
+    : active
+      ? 'text-indigo-700 font-semibold'
+      : 'text-gray-400'
+  return (
+    <span className={base}>
+      <span className={dot} />
+      <span className={text}>{label}</span>
+    </span>
   )
 }
