@@ -190,7 +190,7 @@ export function SocialPlanSection({ clientId, campaignId, campaignName }: Props)
             </div>
             <p className="text-sm text-gray-800 font-medium leading-snug">{plan.strategy.theme}</p>
             <div className="flex flex-wrap gap-1.5 mt-1">
-              {plan.strategy.content_pillars.map((p, i) => (
+              {(plan.strategy.content_pillars ?? []).map((p, i) => (
                 <span key={i} className="text-[11px] bg-white border border-indigo-200 text-indigo-700 rounded-full px-2.5 py-0.5">
                   {p}
                 </span>
@@ -546,7 +546,7 @@ function ReelCard({
 
           {/* Hashtags */}
           <div className="flex flex-wrap gap-1">
-            {reel.hashtags.map((h, hi) => (
+            {(reel.hashtags ?? []).map((h, hi) => (
               <span key={hi} className="text-[10px] bg-blue-50 text-blue-600 rounded px-1.5 py-0.5">
                 {h}
               </span>
@@ -665,7 +665,7 @@ function PostCard({ post }: { post: Post }) {
         <span className={`text-[10px] font-bold border rounded px-1.5 py-0.5 shrink-0 ${colorClass}`}>
           {post.content_type}
         </span>
-        <p className="flex-1 text-xs text-gray-700 truncate">{post.copy.slice(0, 80)}…</p>
+        <p className="flex-1 text-xs text-gray-700 truncate">{(post.copy ?? '').slice(0, 80)}…</p>
         <span className="text-gray-400 text-xs">{open ? '▲' : '▼'}</span>
       </button>
       {open && (
