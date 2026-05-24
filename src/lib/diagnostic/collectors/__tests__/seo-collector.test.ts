@@ -233,4 +233,20 @@ describe('SeoCollector.collect()', () => {
       expect(['me_auto', 'fde_manual', 'third_party']).toContain(f.fix_type)
     }
   })
+
+  // ── GSC fallback ──────────────────────────────────────────────────────────
+
+  it('uses gscQueries as fallback when no target keywords configured', async () => {
+    const GSC_QUERIES = ['cts tours nz', 'china travel nz', 'beijing tours auckland']
+    mockKeywordsForSite.mockResolvedValue(GSC_QUERIES.map(kwData))
+    const result = await new SeoCollector().collect(CLIENT_ID, DOMAIN, [], GSC_QUERIES)
+    expect(result.score).not.toBeNull()
+    expect(result.findings.find(f => f.finding_type === 'keywords_not_configured')).toBeUndefined()
+  })
+
+  it('returns score=null when both keywords and gscQueries are empty', async () => {
+    const result = await new SeoCollector().collect(CLIENT_ID, DOMAIN, [], [])
+    expect(result.score).toBeNull()
+    expect(result.findings[0].finding_type).toBe('keywords_not_configured')
+  })
 })

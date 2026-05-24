@@ -67,8 +67,8 @@ export async function executeDiagnosticRun(
     .eq('id', runId)
 
   try {
-    const [domain, keywords] = await fetchClientData(supabase, clientId)
-    const resultMap = await runCollectors(supabase, clientId, domain, keywords, module)
+    const [domain, keywords, gscQueries] = await fetchClientData(supabase, clientId)
+    const resultMap = await runCollectors(supabase, clientId, domain, keywords, gscQueries, module)
     await persistResult(supabase, runId, resultMap)
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
@@ -101,10 +101,11 @@ export async function runDiagnostic(
 async function fetchClientData(
   supabase: SupabaseClient,
   clientId: string,
-): Promise<[string, string[]]> {
-  const [clientRes, kwRes] = await Promise.all([
+): Promise<[string, string[], string[]]> {
+  const [clientRes, kwRes, discoveryRes] = await Promise.all([
     supabase.from('clients').select('domain').eq('id', clientId).single(),
     supabase.from('keywords').select('keyword').eq('client_id', clientId).eq('status', 'approved'),
+    supabase.from('client_discovery').select('payload').eq('client_id', clientId).maybeSingle(),
   ])
 
   const domain =
@@ -112,7 +113,12 @@ async function fetchClientData(
   const keywords =
     (kwRes.data as { keyword: string }[] | null)?.map(k => k.keyword) ?? []
 
-  return [domain, keywords]
+  // Extract real search queries from GSC advanced discovery payload
+  type DiscoveryPayload = { advanced?: { gsc_data?: { rows?: Array<{ query: string }> } } }
+  const payload = (discoveryRes.data as { payload?: DiscoveryPayload } | null)?.payload
+  const gscQueries = payload?.advanced?.gsc_data?.rows?.map(r => r.query) ?? []
+
+  return [domain, keywords, gscQueries]
 }
 
 async function runCollectors(
@@ -120,12 +126,13 @@ async function runCollectors(
   clientId: string,
   domain: string,
   keywords: string[],
+  gscQueries: string[],
   module: DiagnosticModule,
 ): Promise<Record<string, CollectorResult>> {
   const jobs: Array<{ dim: string; promise: Promise<CollectorResult> }> = []
 
   if (module === 'seo' || module === 'full') {
-    jobs.push({ dim: 'seo', promise: new SeoCollector().collect(clientId, domain, keywords) })
+    jobs.push({ dim: 'seo', promise: new SeoCollector().collect(clientId, domain, keywords, gscQueries) })
   }
   if (module === 'social' || module === 'full') {
     jobs.push({ dim: 'social', promise: new SocialCollector(supabase).collect(clientId, domain, keywords) })

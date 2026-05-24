@@ -38,9 +38,13 @@ export class SeoCollector {
     clientId: string,
     clientDomain: string,
     keywords: string[],
+    gscQueries: string[] = [],
   ): Promise<CollectorResult> {
-    // P8.5.19: no target keywords configured → score is unknowable, not "perfect"
-    if (keywords.length === 0) {
+    // Use approved target keywords first; fall back to real GSC queries when
+    // no target keywords are configured but the client has authorised GSC.
+    const effectiveKeywords = keywords.length > 0 ? keywords : gscQueries
+
+    if (effectiveKeywords.length === 0) {
       return {
         score: null,
         findings: [this.makeKeywordsNotConfiguredFinding(clientId)],
@@ -53,7 +57,7 @@ export class SeoCollector {
     )
 
     try {
-      return await Promise.race([this.fetchAndScore(clientId, clientDomain, keywords), timeout])
+      return await Promise.race([this.fetchAndScore(clientId, clientDomain, effectiveKeywords), timeout])
     } catch {
       return fallback
     }
