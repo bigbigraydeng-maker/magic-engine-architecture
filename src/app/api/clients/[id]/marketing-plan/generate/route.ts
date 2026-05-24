@@ -60,7 +60,7 @@ export async function POST(
       .limit(1)
       .maybeSingle()
 
-    if (briefErr) throw briefErr
+    if (briefErr) throw new Error(briefErr.message || 'Database error fetching master brief')
     if (!brief) {
       return NextResponse.json({
         success: false,
@@ -126,13 +126,17 @@ export async function POST(
       .select('*')
       .single()
 
-    if (insertErr) throw insertErr
+    if (insertErr) throw new Error(insertErr.message || 'Database error saving marketing plan')
 
     return NextResponse.json({ success: true, plan: saved })
 
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error'
-    console.error('[marketing-plan generate] error:', message)
+    const message = err instanceof Error
+      ? err.message
+      : typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : String(err) || 'Unknown error'
+    console.error('[marketing-plan generate] error:', err)
     return NextResponse.json({ success: false, error: message }, { status: 500 })
   }
 }
