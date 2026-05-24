@@ -16,7 +16,11 @@ export async function GET(request: NextRequest) {
   const next = searchParams.get('next') ?? '/dashboard'
   const safePath = next.startsWith('/') && !next.startsWith('//') ? next : '/dashboard'
 
-  const origin = process.env.NEXT_PUBLIC_APP_URL ?? request.nextUrl.origin
+  // Use explicit env var first; otherwise reconstruct from forwarded headers
+  // (request.nextUrl.origin returns Render's internal localhost:PORT, not the public URL)
+  const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? 'localhost:3001'
+  const proto = request.headers.get('x-forwarded-proto')?.split(',')[0] ?? (host.startsWith('localhost') ? 'http' : 'https')
+  const origin = (process.env.NEXT_PUBLIC_APP_URL ?? `${proto}://${host}`).replace(/\/$/, '')
   const redirectTo = `${origin}/auth/callback?next=${encodeURIComponent(safePath)}`
 
   const cookieStore = cookies()
