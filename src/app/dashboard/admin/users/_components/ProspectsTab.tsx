@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { ReportView } from '@/components/prospect/ProspectReportView'
+import type { DiscoveryReport } from '@/lib/zhangqian/types'
 
 interface Prospect {
   id: string
@@ -220,13 +222,14 @@ export default function ProspectsTab() {
                 </div>
               )}
 
-              {/* Result JSON */}
+              {/* Report preview — same view as the prospect sees */}
               {selected.result && (
                 <div>
                   <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Scan Result</h4>
-                  <pre className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-xs text-gray-700 overflow-x-auto max-h-[500px] overflow-y-auto leading-relaxed">
-                    {JSON.stringify(selected.result, null, 2)}
-                  </pre>
+                  <div className="rounded-xl overflow-hidden overflow-y-auto max-h-[600px]"
+                       style={{ background: '#060E1A' }}>
+                    <ReportView report={selected.result as DiscoveryReport} />
+                  </div>
                 </div>
               )}
             </div>
