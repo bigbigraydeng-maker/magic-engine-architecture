@@ -471,17 +471,12 @@ function ReelCard({
               {/* Step 1: ChatGPT Image */}
               <div className="rounded-lg border border-blue-100 overflow-hidden">
                 <div className="flex items-start justify-between gap-2 px-3 py-2 bg-blue-50 border-b border-blue-100">
-                  <div>
-                    <p className="text-[10px] font-bold text-blue-800 uppercase">
-                      Step 1 · 生成9格故事板图片
-                    </p>
-                    <p className="text-[10px] text-blue-600 mt-0.5">
-                      复制以下提示词 → 粘贴到 <strong>ChatGPT Image</strong> → 保存输出的故事板图片
-                    </p>
-                  </div>
+                  <p className="text-[10px] font-bold text-blue-800 leading-snug">
+                    📋 Step 1 — 复制以下提示词 → 粘贴到 <span className="underline">ChatGPT Image</span> → 生成9格故事板图片
+                  </p>
                   <CopyButton text={storyboardPmt!} label="📋 复制" />
                 </div>
-                <div className="px-3 py-2.5 max-h-40 overflow-y-auto bg-white">
+                <div className="px-3 py-2.5 max-h-64 overflow-y-auto bg-white">
                   <p className="text-[10px] text-blue-900 leading-relaxed whitespace-pre-wrap font-mono">
                     {storyboardPmt}
                   </p>
