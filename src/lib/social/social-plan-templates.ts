@@ -27,24 +27,35 @@ export interface ChannelStrategy {
   }
 }
 
+/** Content angle — drives visual style and messaging for each Reel. */
+export type AngleTag =
+  | 'price_attack'
+  | 'speed_attack'
+  | 'trust_attack'
+  | 'pet_floor'
+  | 'scarcity'
+  | 'seasonal'
+
 /**
- * One Facebook Reel script — matches the ReelsStudio production format so
- * each card in the Social Plan is immediately actionable:
+ * One Facebook Reel script — 9-panel storyboard format.
  *
- *   opening_frame_prompt  → paste into Visual Studio (opening frame)
- *   closing_frame_prompt  → paste into Visual Studio (closing / CTA frame)
- *   i2v_video_prompt      → paste into Video Studio (image-to-video)
- *   caption               → Facebook Reels caption with hashtags embedded
- *   hashtags              → standalone hashtag list
+ * Production flow:
+ *   1. FDE copies storyboard_image_prompt → ChatGPT Image → generates 9-panel storyboard image
+ *   2. FDE uploads storyboard image + copies seedance_i2v_prompt → Seedance 2.0 → 15-second Reel video
+ *
+ * scene_structure: exactly 9 strings (Panels 1–8 + Brand Panel)
+ * storyboard_image_prompt: complete standalone ChatGPT Image prompt (200–400 words)
+ * seedance_i2v_prompt: complete Seedance I2V prompt (200–350 words, 8 sections)
  */
 export interface ReelsScript {
   title: string
-  hook: string
-  opening_frame_prompt: string
-  closing_frame_prompt: string
-  i2v_video_prompt: string
+  hook_line: string
+  scene_structure: string[]
+  storyboard_image_prompt: string
+  seedance_i2v_prompt: string
   caption: string
   hashtags: string[]
+  angle_tag: AngleTag
 }
 
 export type PostType = 'educational' | 'promotional' | 'storytelling' | 'engagement'
@@ -112,20 +123,66 @@ const SYSTEM_STRATEGY = `You are a senior social media strategist specialising i
 Analyse the brand brief and produce a Facebook channel strategy as a single JSON object.
 Return ONLY raw JSON — no markdown, no code fences, no explanation.`
 
-const SYSTEM_REELS = `You are a Facebook Reels content strategist for AU/NZ brands.
-Produce 3 Reels scripts as a JSON array.
+const SYSTEM_REELS = `You are a senior Facebook Reels director and storyboard artist for AU/NZ brands.
+Produce 3 Reels scripts as a JSON array. Each targets a 15-second Facebook Reel.
 
-Each object must have exactly these keys:
-  title: string — descriptive concept title
-  hook: string — opening hook shown in first 3 seconds (≤15 words)
-  opening_frame_prompt: string — detailed AI image-generation prompt for the opening frame (9:16 vertical, cinematic, NO human faces, vivid environment)
-  closing_frame_prompt: string — detailed AI image-generation prompt for the closing/CTA frame (9:16 vertical, brand colours prominent, NO human faces)
-  i2v_video_prompt: string — image-to-video prompt in this exact format: "Opening: <motion description> | Middle: <visual journey, transitions, mood> | Closing: <final moments and CTA>"
-  caption: string — Facebook Reels caption (AU/NZ English, 2–3 short paragraphs, clear CTA, 5–8 hashtags embedded)
-  hashtags: string[] — standalone array of 5–8 hashtags matching caption
+Each JSON object MUST have ALL of these keys (no omissions):
 
-Rules: all English, no human faces in image prompts, no Chinese text.
-Return ONLY a raw JSON array — no markdown, no code fences.`
+1. title: string — short descriptive concept title (max 8 words)
+
+2. hook_line: string — opening hook for first 1.5 seconds (max 15 words).
+   MUST start with a number OR create immediate curiosity/surprise.
+   Examples: "7 signs your lawn needs help now", "Most homeowners never know this trick…"
+
+3. scene_structure: string[] — EXACTLY 9 strings.
+   Panels 1–8: "Thumbnail: 9:16 vertical — [vivid environment, NO human faces] | STORY: [overlay text] | CAMERA: [camera action] | MOOD: [emotional tone]"
+   Panel 9: "BRAND PANEL: [hex color] background. [Brand name] in large serif. [Benefit anchor 1]. [Benefit anchor 2]. No faces."
+   All English. No Chinese. No human faces or bodies anywhere.
+
+4. storyboard_image_prompt: string — A COMPLETE, SELF-CONTAINED ChatGPT Image prompt (200–400 words).
+   This will be pasted DIRECTLY into ChatGPT Image with no editing — include every detail needed.
+   Use this structure:
+   "Create a professional video production storyboard document as a single image. This is for [ACTUAL BRAND NAME]'s '[ACTUAL CAMPAIGN TITLE]' Facebook Reels (15 seconds, [angle_tag] concept: [title]).
+   DOCUMENT LAYOUT: Portrait orientation. Dark charcoal #1a1a1a background. Clean sans-serif typography. Title header bar: '[Brand] | [Campaign] | 15-sec Reel Storyboard'.
+   3×3 PANEL GRID — 9 panels total, each labeled SCENE [N]:
+   SCENE 1: [Expand scene_structure[0] into 3–4 sentences of precise visual direction — colors, objects, composition, lighting. 9:16 vertical thumbnail. No faces.]
+   SCENE 2: [Same for scene_structure[1].]
+   SCENE 3: [Same for scene_structure[2].]
+   SCENE 4: [Same for scene_structure[3].]
+   SCENE 5: [Same for scene_structure[4].]
+   SCENE 6: [Same for scene_structure[5].]
+   SCENE 7: [Same for scene_structure[6].]
+   SCENE 8: [Same for scene_structure[7].]
+   SCENE 9 — BRAND LOGO PANEL: [Expand scene_structure[8] — brand hex color background, brand name typography, anchor text, minimal layout.]
+   BOTTOM STYLE GUIDE BAR: Color swatches ([brand hex colors if known]), font specimen, brand tagline.
+   RENDERING REQUIREMENTS: English text labels only. Each panel thumbnail 9:16 vertical. No human faces or bodies. Photorealistic environments and objects. Print-ready quality."
+
+5. seedance_i2v_prompt: string — A COMPLETE Seedance 2.0 Image-to-Video prompt (200–350 words).
+   Used AFTER the storyboard image is generated to animate it into a 15-second video.
+   MUST include all 8 sections with these exact labels:
+   OVERALL NARRATIVE ARC: [2–3 sentences on the emotional journey from panel 1 to panel 9.]
+   PACING AND TIMING: [Precise timing: "0–2s: ... 2–4s: ... 4–7s: ... 7–10s: ... 10–12s: ... 12–15s: ..." Total = 15s.]
+   CAMERA MOVEMENT STYLE: [Specific moves per scene: "Scene 1: slow push-in. Scene 2: gentle pan right." etc.]
+   COLOR GRADE: [Overall color treatment and LUT style.]
+   LIGHTING: [Quality and direction of light across the video.]
+   TRANSITIONS: [How scenes cut or flow: dissolves, hard cuts, zoom transitions, etc.]
+   BRAND PANEL: Hold final brand panel for 3 seconds. [Describe brand panel appearance.]
+   TECHNICAL REQUIREMENTS: 9:16 vertical. 15 seconds total. Facebook Reels silent autoplay optimised. No human faces. English only.
+
+6. caption: string — Facebook Reels caption. AU/NZ English. 2–3 short paragraphs. Clear CTA. 5–8 hashtags at end.
+
+7. hashtags: string[] — standalone array of 5–8 hashtags.
+
+8. angle_tag: one of "price_attack"|"speed_attack"|"trust_attack"|"pet_floor"|"scarcity"|"seasonal"
+   Choose 3 different angle_tags across the 3 reels.
+
+CRITICAL RULES:
+- All text fields in English only — zero Chinese characters
+- scene_structure MUST be EXACTLY 9 strings
+- storyboard_image_prompt MUST be 200–400 words (complete standalone prompt)
+- seedance_i2v_prompt MUST be 200–350 words with all 8 labelled sections
+- No human faces or bodies in any visual description
+Return ONLY a raw JSON array — no markdown, no code fences, no explanation.`
 
 const SYSTEM_POSTS = `You are a Facebook copywriter for AU/NZ brands.
 Produce 5 Facebook posts as a JSON array. Each post object must have:
@@ -172,7 +229,8 @@ export function buildReelsPrompt(
 ): string {
   const campaign = campaignText ? `\n\n## Campaign Context\n${campaignText}` : ''
   const viral = viralInsightsText ? `\n\n${viralInsightsText}` : ''
-  return `## Brand Brief\n${briefText}${campaign}${viral}
+  return `## Brand Brief
+${briefText}${campaign}${viral}
 
 ## Channel Strategy
 Theme: ${strategy.theme}
@@ -180,11 +238,14 @@ Content Pillars: ${strategy.content_pillars.join(', ')}
 Campaign Focus: ${strategy.campaign_focus}
 Tone: ${strategy.tone_guidance}
 
-Produce 3 Reels scripts as a JSON array. Each script must have:
-  title, hook, opening_frame_prompt, closing_frame_prompt, i2v_video_prompt, caption (≤2200 chars), hashtags (string[])
+Generate 3 Facebook Reels scripts with ALL required fields.
 
-Image prompts must be 9:16 vertical, cinematic, no human faces.
-i2v_video_prompt format: "Opening: <motion> | Middle: <journey + transitions> | Closing: <CTA moment>"`
+IMPORTANT:
+- Use the ACTUAL brand name and campaign title from the brief above when writing storyboard_image_prompt (not placeholders).
+- scene_structure MUST be exactly 9 strings; index 8 MUST be the brand panel.
+- storyboard_image_prompt: write as a complete, ready-to-paste ChatGPT Image prompt (200–400 words) — expand each scene_structure entry into 3–4 sentences of visual direction.
+- seedance_i2v_prompt: write exactly 200–350 words covering all 8 required sections (OVERALL NARRATIVE ARC, PACING AND TIMING, CAMERA MOVEMENT STYLE, COLOR GRADE, LIGHTING, TRANSITIONS, BRAND PANEL, TECHNICAL REQUIREMENTS).
+- Choose 3 distinct angle_tags across the 3 reels.`
 }
 
 export function buildPostPrompt(
@@ -251,8 +312,8 @@ export async function generateReelsScripts(
 
   const resp = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
-    temperature: 0.8,
-    max_tokens: 3000,
+    temperature: 0.75,
+    max_tokens: 8000,  // storyboard + seedance prompts are verbose (3 reels × ~900 words each)
     messages: [
       { role: 'system', content: SYSTEM_REELS },
       { role: 'user', content: buildReelsPrompt(strategy, briefText, campaignText, viralInsightsText) },
@@ -260,7 +321,11 @@ export async function generateReelsScripts(
   })
 
   const raw = resp.choices[0].message.content ?? '[]'
-  return parseOpenAIJson<ReelsScript[]>(raw)
+  const scripts = parseOpenAIJson<ReelsScript[]>(raw)
+  return scripts.map(s => ({
+    ...s,
+    scene_structure: normaliseSceneStructure(s.scene_structure),
+  }))
 }
 
 export async function generatePosts(
@@ -307,5 +372,14 @@ export async function generateStories(
 
   const raw = resp.choices[0].message.content ?? '[]'
   return parseOpenAIJson<Story[]>(raw)
+}
+
+// ─── Internal helpers ──────────────────────────────────────────────────────────
+
+/** Ensure scene_structure is always exactly 9 non-empty-padded strings. */
+function normaliseSceneStructure(raw: unknown): string[] {
+  const arr = Array.isArray(raw) ? raw.map(String) : []
+  while (arr.length < 9) arr.push('')
+  return arr.slice(0, 9)
 }
 

@@ -1,4 +1,10 @@
 /**
+ * GET  /api/clients/[id]/social-plan?campaign_id=<uuid>
+ *
+ * Returns the 5 most recent social plans for this client.
+ * If campaign_id is provided, filters to that campaign only.
+ * Returns: { success: true, plans: { id, campaign_id, wave_number, created_at, plan_data }[] }
+ *
  * POST /api/clients/[id]/social-plan
  *
  * Generate a Facebook social content plan (strategy + reels + posts + stories)
@@ -46,7 +52,44 @@ function formatViralInsights(refs: ViralRef[]): string {
   return `VIRAL REFERENCE INSIGHTS (study these — mirror what works):\n${lines.join('\n')}`
 }
 
-// ─── Route handler ─────────────────────────────────────────────────────────────
+// ─── GET: plan history ─────────────────────────────────────────────────────────
+
+export async function GET(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  const clientId = params.id
+  const { searchParams } = new URL(req.url)
+  const campaignId = searchParams.get('campaign_id')
+
+  try {
+    let query = supabaseAdmin
+      .from('social_plans')
+      .select('id, campaign_id, wave_number, created_at, plan_data')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false })
+      .limit(5)
+
+    if (campaignId) {
+      query = query.eq('campaign_id', campaignId)
+    }
+
+    const { data, error } = await query
+    if (error) throw error
+
+    return NextResponse.json({ success: true, plans: data ?? [] })
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error
+        ? err.message
+        : typeof err === 'object' && err !== null && 'message' in err
+          ? String((err as { message: unknown }).message)
+          : JSON.stringify(err)
+    return NextResponse.json({ success: false, error: message }, { status: 500 })
+  }
+}
+
+// ─── POST: generate plan ───────────────────────────────────────────────────────
 
 export async function POST(
   req: NextRequest,
