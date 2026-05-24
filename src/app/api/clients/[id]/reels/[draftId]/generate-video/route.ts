@@ -58,7 +58,7 @@ export async function POST(
       prompt: draft.i2v_video_prompt,
       opening_frame_url: draft.opening_frame_url,
       closing_frame_url: draft.closing_frame_url ?? draft.opening_frame_url, // storyboard uses same image
-      duration: 6,
+      duration: 15,
       aspect_ratio: '9:16',
     })
 
