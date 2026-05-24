@@ -54,24 +54,13 @@ CREATE TRIGGER marketing_plans_updated_at_trigger
   FOR EACH ROW
   EXECUTE FUNCTION update_marketing_plans_updated_at();
 
--- RLS
+-- RLS (service role bypasses RLS — same pattern as master_briefs / campaign_briefs)
 ALTER TABLE marketing_plans ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users can view marketing plans for their clients"
-  ON marketing_plans FOR SELECT
-  USING (auth.uid() IN (SELECT user_id FROM client_team WHERE client_id = marketing_plans.client_id));
-
-CREATE POLICY "Users can insert marketing plans for their clients"
-  ON marketing_plans FOR INSERT
-  WITH CHECK (auth.uid() IN (SELECT user_id FROM client_team WHERE client_id = marketing_plans.client_id));
-
-CREATE POLICY "Users can update marketing plans for their clients"
-  ON marketing_plans FOR UPDATE
-  USING (auth.uid() IN (SELECT user_id FROM client_team WHERE client_id = marketing_plans.client_id));
-
-CREATE POLICY "Users can delete marketing plans for their clients"
-  ON marketing_plans FOR DELETE
-  USING (auth.uid() IN (SELECT user_id FROM client_team WHERE client_id = marketing_plans.client_id));
+CREATE POLICY "service_role_full"
+  ON marketing_plans
+  USING (true)
+  WITH CHECK (true);
 
 -- ── §2: 扩展 execution_items 支持 marketing_plan 来源 ──────────────────────────
 

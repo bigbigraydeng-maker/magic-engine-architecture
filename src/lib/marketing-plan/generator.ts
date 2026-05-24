@@ -71,6 +71,12 @@ Output a single JSON object with these exact keys (no markdown, no code fences):
   ]
 }
 
+SCOPE NOTE — Marketing Plan is the SOLE owner of content production:
+- Social content (posts / reels / stories) across Facebook, Instagram, TikTok
+- SEO blog articles and long-form content
+- Ad creative briefs (copy direction, visual concept) for paid campaigns
+The diagnostic system handles technical fixes only. Do NOT hold back on content tasks here.
+
 CRITICAL RULES:
 - The "tasks" array MUST be derived from the social mix + blog count. Spread tasks evenly across the date range.
 - Each blog topic MUST produce exactly one task with kind="blog_article". Set platform to null.
