@@ -27,14 +27,34 @@ export interface ChannelStrategy {
   }
 }
 
+// ─── Generation config ─────────────────────────────────────────────────────────
+
+/** FDE-configurable params sent from the UI before hitting Generate. */
+export interface GenerationConfig {
+  platform:      'facebook' | 'instagram' | 'tiktok'
+  reels_count:   number   // 1–5
+  posts_count:   number   // 0–10
+  stories_count: number   // 0–5
+  angle_focus?:  string   // optional free-text hint, e.g. "seasonal promotion"
+}
+
+export const DEFAULT_CONFIG: GenerationConfig = {
+  platform:      'facebook',
+  reels_count:   3,
+  posts_count:   5,
+  stories_count: 3,
+}
+
 /** Content angle — drives visual style and messaging for each Reel. */
 export type AngleTag =
   | 'price_attack'
   | 'speed_attack'
   | 'trust_attack'
-  | 'pet_floor'
   | 'scarcity'
   | 'seasonal'
+  | 'education'
+  | 'social_proof'
+  | 'aspirational'
 
 /**
  * One Facebook Reel script — 9-panel storyboard format.
@@ -47,7 +67,7 @@ export type AngleTag =
  * scene_structure: exactly 9 strings (Panels 1–8 + Brand Panel) (AI generated)
  * style_guide:    visual direction for the whole piece (AI generated)
  * storyboard_image_prompt: assembled programmatically by buildStoryboardImagePrompt()
- * seedance_i2v_prompt: complete Seedance I2V prompt (200–350 words, 8 sections)
+ * seedance_i2v_prompt: complete Seedance I2V prompt (450–700 words, v2.0 standard)
  */
 export interface ReelsScript {
   title: string
@@ -190,14 +210,30 @@ function parseOpenAIJson<T>(raw: string): T {
   return JSON.parse(stripped.slice(start, end + 1)) as T
 }
 
-// ─── System prompts ────────────────────────────────────────────────────────────
+// ─── System prompt builders (dynamic per GenerationConfig) ────────────────────
 
-const SYSTEM_STRATEGY = `You are a senior social media strategist specialising in AU/NZ markets.
-Analyse the brand brief and produce a Facebook channel strategy as a single JSON object.
+function platformLabel(p: GenerationConfig['platform']): string {
+  return p === 'facebook' ? 'Facebook' : p === 'instagram' ? 'Instagram' : 'TikTok'
+}
+
+function buildStrategySystemPrompt(config: GenerationConfig): string {
+  const pl = platformLabel(config.platform)
+  return `You are a senior social media strategist specialising in AU/NZ markets.
+Analyse the brand brief and produce a ${pl} channel strategy as a single JSON object.
 Return ONLY raw JSON — no markdown, no code fences, no explanation.`
+}
 
-const SYSTEM_REELS = `You are a senior Facebook Reels director and storyboard artist for AU/NZ brands.
-Produce 3 Reels scripts as a JSON array. Each targets a 15-second Facebook Reel.
+function buildReelsSystemPrompt(config: GenerationConfig): string {
+  const pl   = platformLabel(config.platform)
+  const n    = config.reels_count
+  const hint = config.angle_focus
+    ? `\nCONTENT FOCUS HINT from FDE: "${config.angle_focus}" — let this guide your angle selection.`
+    : ''
+
+  const angleTags = `"price_attack"|"speed_attack"|"trust_attack"|"scarcity"|"seasonal"|"education"|"social_proof"|"aspirational"`
+
+  return `You are a senior ${pl} Reels director and storyboard artist for AU/NZ brands.
+Produce ${n} Reels script${n > 1 ? 's' : ''} as a JSON array. Each targets a 15-second ${pl} Reel.${hint}
 
 Each JSON object MUST have ALL of these keys (no omissions):
 
@@ -352,8 +388,8 @@ Each JSON object MUST have ALL of these keys (no omissions):
 
 8. hashtags: string[] — standalone array of 5–8 hashtags.
 
-9. angle_tag: one of "price_attack"|"speed_attack"|"trust_attack"|"pet_floor"|"scarcity"|"seasonal"
-   Choose 3 different angle_tags across the 3 reels.
+9. angle_tag: one of ${angleTags}
+   Choose ${n} different angle_tag${n > 1 ? 's' : ''} across the ${n} reel${n > 1 ? 's' : ''}.
 
 CRITICAL RULES:
 - All text fields in English only — zero Chinese characters
@@ -362,31 +398,42 @@ CRITICAL RULES:
 - seedance_i2v_prompt MUST be 450–700 words following the v2.0 standard template (PROJECT METADATA / GLOBAL SPECIFICATIONS / ⚠️ CRITICAL START INSTRUCTION / SCENE 1–8 / TIMING VERIFICATION / FINAL CHECKLIST)
 - No human faces or bodies in any visual description
 Return ONLY a raw JSON array — no markdown, no code fences, no explanation.`
+}
 
-const SYSTEM_POSTS = `You are a Facebook copywriter for AU/NZ brands.
-Produce 5 Facebook posts as a JSON array. Each post object must have:
+function buildPostsSystemPrompt(config: GenerationConfig): string {
+  const pl = platformLabel(config.platform)
+  const n  = config.posts_count
+  return `You are a ${pl} copywriter for AU/NZ brands.
+Produce ${n} ${pl} post${n > 1 ? 's' : ''} as a JSON array. Each post object must have:
   content_type: "educational"|"promotional"|"storytelling"|"engagement"
-  copy: Facebook post copy (AU/NZ English, 80–300 words, include a clear CTA)
+  copy: ${pl} post copy (AU/NZ English, 80–300 words, include a clear CTA)
   image_prompt: detailed AI image-generation prompt (9:16 vertical, no human faces, vivid, cinematic)
   hashtags: array of 5–8 relevant hashtags
+Cover a variety of content types across the ${n} post${n > 1 ? 's' : ''}.
 Return ONLY a raw JSON array — no markdown, no code fences.`
+}
 
-const SYSTEM_STORIES = `You are a Facebook Stories copywriter for AU/NZ brands.
-Produce 3 Stories as a JSON array. Each story object must have:
+function buildStoriesSystemPrompt(config: GenerationConfig): string {
+  const pl = platformLabel(config.platform)
+  const n  = config.stories_count
+  return `You are a ${pl} Stories copywriter for AU/NZ brands.
+Produce ${n} ${pl} Stories as a JSON array. Each story object must have:
   copy: short punchy overlay text (≤30 words, AU/NZ English)
   cta: swipe-up or tap call-to-action text (≤10 words)
   visual_prompt: AI image-generation prompt (9:16 portrait, no human faces, vivid)
 Return ONLY a raw JSON array — no markdown, no code fences.`
+}
 
 // ─── Prompt builders ───────────────────────────────────────────────────────────
 
-export function buildChannelStrategyPrompt(briefText: string, campaignText?: string): string {
+export function buildChannelStrategyPrompt(briefText: string, campaignText?: string, config: GenerationConfig = DEFAULT_CONFIG): string {
+  const pl = platformLabel(config.platform)
   const campaign = campaignText ? `\n\n## Campaign Context\n${campaignText}` : ''
   return `## Brand Brief\n${briefText}${campaign}
 
-Produce a Facebook channel strategy JSON object with exactly these keys:
+Produce a ${pl} channel strategy JSON object with exactly these keys:
 {
-  "platform": "facebook",
+  "platform": "${config.platform}",
   "theme": "<one-sentence content theme for this period>",
   "content_pillars": ["<pillar 1>", "<pillar 2>", "<pillar 3>"],
   "posting_frequency": "<e.g. 5 posts/week + 3 stories + 2 reels>",
@@ -405,7 +452,10 @@ export function buildReelsPrompt(
   briefText: string,
   campaignText?: string,
   viralInsightsText?: string,
+  config: GenerationConfig = DEFAULT_CONFIG,
 ): string {
+  const pl = platformLabel(config.platform)
+  const n  = config.reels_count
   const campaign = campaignText ? `\n\n## Campaign Context\n${campaignText}` : ''
   const viral = viralInsightsText ? `\n\n${viralInsightsText}` : ''
   return `## Brand Brief
@@ -417,21 +467,24 @@ Content Pillars: ${strategy.content_pillars.join(', ')}
 Campaign Focus: ${strategy.campaign_focus}
 Tone: ${strategy.tone_guidance}
 
-Generate 3 Facebook Reels scripts with ALL required fields.
+Generate ${n} ${pl} Reel${n > 1 ? 's' : ''} script${n > 1 ? 's' : ''} with ALL required fields.
 
 IMPORTANT:
 - scene_names: exactly 8 short evocative titles for Panels 1–8 (Panel 9 is always the brand panel).
 - scene_structure MUST be exactly 9 strings; index 8 MUST be the brand panel.
 - style_guide: fill all 4 keys with specific, concrete visual direction (not generic).
 - seedance_i2v_prompt: write 450–700 words following the v2.0 standard template exactly: PROJECT METADATA → GLOBAL SPECIFICATIONS (Color Grade/Lighting/Music arc/Pacing) → ⚠️ CRITICAL START INSTRUCTION → SCENE 1–8 each with (Visual/Action/Audio/Text Overlay/Color Grade/Mood) → TIMING VERIFICATION (must total 15.0s ✓) → FINAL CHECKLIST. All text overlays must be bottom subtitles. No contact info in video. Per-scene color grade with emotional reasoning. Music must include full arc.
-- Choose 3 distinct angle_tags across the 3 reels.`
+- Choose ${n} distinct angle_tag${n > 1 ? 's' : ''} across the ${n} reel${n > 1 ? 's' : ''}.`
 }
 
 export function buildPostPrompt(
   strategy: ChannelStrategy,
   briefText: string,
   campaignText?: string,
+  config: GenerationConfig = DEFAULT_CONFIG,
 ): string {
+  const pl = platformLabel(config.platform)
+  const n  = config.posts_count
   const campaign = campaignText ? `\n\n## Campaign Context\n${campaignText}` : ''
   return `## Brand Brief\n${briefText}${campaign}
 
@@ -441,17 +494,20 @@ Content Pillars: ${strategy.content_pillars.join(', ')}
 Campaign Focus: ${strategy.campaign_focus}
 Tone: ${strategy.tone_guidance}
 
-Produce 5 Facebook posts covering a variety of content types (educational, promotional, storytelling, engagement).
+Produce ${n} ${pl} post${n > 1 ? 's' : ''} covering a variety of content types (educational, promotional, storytelling, engagement).
 Each post must have copy (AU/NZ English, 80–300 words, with a clear CTA), image_prompt (9:16 vertical, no faces), and 5–8 hashtags.
 
-Return a JSON array of 5 Post objects.`
+Return a JSON array of ${n} Post object${n > 1 ? 's' : ''}.`
 }
 
 export function buildStoryPrompt(
   strategy: ChannelStrategy,
   briefText: string,
   campaignText?: string,
+  config: GenerationConfig = DEFAULT_CONFIG,
 ): string {
+  const pl = platformLabel(config.platform)
+  const n  = config.stories_count
   const campaign = campaignText ? `\n\n## Campaign Context\n${campaignText}` : ''
   return `## Brand Brief\n${briefText}${campaign}
 
@@ -460,9 +516,9 @@ Theme: ${strategy.theme}
 Campaign Focus: ${strategy.campaign_focus}
 Tone: ${strategy.tone_guidance}
 
-Produce 3 Facebook Stories. Each must have copy (≤30 words, AU/NZ English), cta (≤10 words), and visual_prompt (9:16 portrait, no faces).
+Produce ${n} ${pl} Stories. Each must have copy (≤30 words, AU/NZ English), cta (≤10 words), and visual_prompt (9:16 portrait, no faces).
 
-Return a JSON array of 3 Story objects.`
+Return a JSON array of ${n} Story object${n > 1 ? 's' : ''}.`
 }
 
 // ─── Content generators ────────────────────────────────────────────────────────
@@ -470,10 +526,11 @@ Return a JSON array of 3 Story objects.`
 export async function generateChannelStrategy(
   briefText: string,
   campaignText?: string,
+  config: GenerationConfig = DEFAULT_CONFIG,
 ): Promise<ChannelStrategy> {
   const result = await callClaudeWithDocs({
-    systemPrompt: SYSTEM_STRATEGY,
-    userMessage: buildChannelStrategyPrompt(briefText, campaignText),
+    systemPrompt: buildStrategySystemPrompt(config),
+    userMessage: buildChannelStrategyPrompt(briefText, campaignText, config),
     maxOutputTokens: 1024,
   })
   return parseJsonResponse<ChannelStrategy>(result.text)
@@ -484,6 +541,7 @@ export async function generateReelsScripts(
   briefText: string,
   campaignText?: string,
   viralInsightsText?: string,
+  config: GenerationConfig = DEFAULT_CONFIG,
 ): Promise<ReelsScript[]> {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY environment variable is not set')
@@ -492,10 +550,10 @@ export async function generateReelsScripts(
   const resp = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     temperature: 0.75,
-    max_tokens: 10000,  // v2.0: seedance_i2v_prompt 450–700 words × 3 reels + storyboard prompts
+    max_tokens: Math.min(16000, Math.max(5000, config.reels_count * 3500)),  // v2.0: seedance_i2v_prompt 450–700 words per reel
     messages: [
-      { role: 'system', content: SYSTEM_REELS },
-      { role: 'user', content: buildReelsPrompt(strategy, briefText, campaignText, viralInsightsText) },
+      { role: 'system', content: buildReelsSystemPrompt(config) },
+      { role: 'user', content: buildReelsPrompt(strategy, briefText, campaignText, viralInsightsText, config) },
     ],
   })
 
@@ -543,6 +601,7 @@ export async function generatePosts(
   strategy: ChannelStrategy,
   briefText: string,
   campaignText?: string,
+  config: GenerationConfig = DEFAULT_CONFIG,
 ): Promise<Post[]> {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY environment variable is not set')
@@ -551,10 +610,10 @@ export async function generatePosts(
   const resp = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     temperature: 0.8,
-    max_tokens: 3500,
+    max_tokens: Math.max(2000, config.posts_count * 700),
     messages: [
-      { role: 'system', content: SYSTEM_POSTS },
-      { role: 'user', content: buildPostPrompt(strategy, briefText, campaignText) },
+      { role: 'system', content: buildPostsSystemPrompt(config) },
+      { role: 'user', content: buildPostPrompt(strategy, briefText, campaignText, config) },
     ],
   })
 
@@ -566,6 +625,7 @@ export async function generateStories(
   strategy: ChannelStrategy,
   briefText: string,
   campaignText?: string,
+  config: GenerationConfig = DEFAULT_CONFIG,
 ): Promise<Story[]> {
   const apiKey = process.env.OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY environment variable is not set')
@@ -574,10 +634,10 @@ export async function generateStories(
   const resp = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     temperature: 0.8,
-    max_tokens: 1500,
+    max_tokens: Math.max(1000, config.stories_count * 400),
     messages: [
-      { role: 'system', content: SYSTEM_STORIES },
-      { role: 'user', content: buildStoryPrompt(strategy, briefText, campaignText) },
+      { role: 'system', content: buildStoriesSystemPrompt(config) },
+      { role: 'user', content: buildStoryPrompt(strategy, briefText, campaignText, config) },
     ],
   })
 

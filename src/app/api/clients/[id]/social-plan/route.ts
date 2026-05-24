@@ -23,8 +23,9 @@ import {
   generateReelsScripts,
   generatePosts,
   generateStories,
+  DEFAULT_CONFIG,
 } from '@/lib/social/social-plan-templates'
-import type { SocialPlanOutput } from '@/lib/social/social-plan-templates'
+import type { SocialPlanOutput, GenerationConfig } from '@/lib/social/social-plan-templates'
 import { evaluate } from '@/lib/content/quality-rubric'
 import type { RubricContext } from '@/lib/content/quality-rubric'
 import type { MasterBrief } from '@/types/magic-engine'
@@ -130,9 +131,16 @@ export async function POST(
   const clientId = params.id
 
   try {
-    const body = await req.json().catch(() => ({})) as { campaign_brief_id?: string }
+    const body = await req.json().catch(() => ({})) as {
+      campaign_brief_id?: string
+      platform?:          string
+      reels_count?:       number
+      posts_count?:       number
+      stories_count?:     number
+      angle_focus?:       string
+    }
 
-    // ── Update 3: campaign_brief_id is required ────────────────────────────────
+    // ── campaign_brief_id is required ─────────────────────────────────────────
     if (!body.campaign_brief_id) {
       return NextResponse.json(
         { success: false, error: 'Social Plan must be tied to a Campaign. Please select a campaign first.' },
@@ -227,12 +235,22 @@ export async function POST(
     // 3. Build brief text
     const briefText = formatBriefForPrompt(brief as unknown as MasterBrief)
 
+    // 3b. Build generation config — FDE values override defaults
+    const genConfig: GenerationConfig = {
+      platform:      (body.platform === 'instagram' || body.platform === 'tiktok')
+                       ? body.platform : DEFAULT_CONFIG.platform,
+      reels_count:   (typeof body.reels_count   === 'number' && body.reels_count   >= 1 && body.reels_count   <= 5)  ? body.reels_count   : DEFAULT_CONFIG.reels_count,
+      posts_count:   (typeof body.posts_count   === 'number' && body.posts_count   >= 0 && body.posts_count   <= 10) ? body.posts_count   : DEFAULT_CONFIG.posts_count,
+      stories_count: (typeof body.stories_count === 'number' && body.stories_count >= 0 && body.stories_count <= 5)  ? body.stories_count : DEFAULT_CONFIG.stories_count,
+      ...(body.angle_focus ? { angle_focus: body.angle_focus } : {}),
+    }
+
     // 4. Strategy first, then parallel content generation
-    const strategy = await generateChannelStrategy(briefText, campaignText)
+    const strategy = await generateChannelStrategy(briefText, campaignText, genConfig)
     const [reels, posts, stories] = await Promise.all([
-      generateReelsScripts(strategy, briefText, campaignText, viralInsightsText),
-      generatePosts(strategy, briefText, campaignText),
-      generateStories(strategy, briefText, campaignText),
+      generateReelsScripts(strategy, briefText, campaignText, viralInsightsText, genConfig),
+      generatePosts(strategy, briefText, campaignText, genConfig),
+      generateStories(strategy, briefText, campaignText, genConfig),
     ])
 
     // 5. Quality rubric on each post — silent failure, non-blocking
