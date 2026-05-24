@@ -10,25 +10,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { getPublicOrigin } from '@/lib/auth/public-origin'
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const next = searchParams.get('next') ?? '/dashboard'
   const safePath = next.startsWith('/') && !next.startsWith('//') ? next : '/dashboard'
 
-  // APP_URL (server-only) takes priority; NEXT_PUBLIC_APP_URL is fallback.
-  // Header-based detection is last resort — Render's internal origin is localhost:PORT,
-  // so we MUST have an explicit env var set for production deployments.
-  const explicitOrigin = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL
-  let origin: string
-  if (explicitOrigin) {
-    origin = explicitOrigin.replace(/\/$/, '')
-  } else {
-    const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? 'localhost:3001'
-    const proto = request.headers.get('x-forwarded-proto')?.split(',')[0] ?? (host.startsWith('localhost') ? 'http' : 'https')
-    origin = `${proto}://${host}`
-    console.warn(`[google-login] APP_URL not set — inferred origin: ${origin}`)
-  }
+  const origin = getPublicOrigin(request)
   const redirectTo = `${origin}/auth/callback?next=${encodeURIComponent(safePath)}`
 
   const cookieStore = cookies()
@@ -56,7 +45,7 @@ export async function GET(request: NextRequest) {
   })
 
   if (error || !data.url) {
-    return NextResponse.redirect(new URL('/login?error=auth_failed', request.url))
+    return NextResponse.redirect(`${origin}/login?error=auth_failed`)
   }
 
   // Redirect to Google OAuth URL, carrying the PKCE code verifier in cookies

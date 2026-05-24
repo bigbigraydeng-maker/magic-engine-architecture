@@ -5,6 +5,9 @@
  * entirely on the server so the code verifier is read from the incoming
  * request cookies (set by /api/auth/google-login) — no client-side
  * createBrowserClient needed, no localStorage/cookie mismatch.
+ *
+ * All redirects use APP_URL (via getPublicOrigin) instead of request.url
+ * because on Render, request.url is the internal localhost:PORT address.
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -12,15 +15,17 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getUserPermissions } from '@/lib/auth/whitelist'
+import { getPublicOrigin } from '@/lib/auth/public-origin'
 
 export async function GET(request: NextRequest) {
+  const origin = getPublicOrigin(request)
   const { searchParams } = new URL(request.url)
   const code = searchParams.get('code')
   const next = searchParams.get('next') ?? '/dashboard'
   const safePath = next.startsWith('/') && !next.startsWith('//') ? next : '/dashboard'
 
   if (!code) {
-    return NextResponse.redirect(new URL('/login?error=auth_failed', request.url))
+    return NextResponse.redirect(`${origin}/login?error=auth_failed`)
   }
 
   const cookieStore = cookies()
@@ -45,7 +50,7 @@ export async function GET(request: NextRequest) {
 
   if (error) {
     console.error('[auth/callback] exchangeCodeForSession:', error.message)
-    return NextResponse.redirect(new URL('/login?error=auth_failed', request.url))
+    return NextResponse.redirect(`${origin}/login?error=auth_failed`)
   }
 
   // Determine redirect destination based on user type
@@ -90,7 +95,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const response = NextResponse.redirect(new URL(destination, request.url))
+  const response = NextResponse.redirect(`${origin}${destination}`)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   pendingCookies.forEach(({ name, value, options }) => response.cookies.set(name, value, options as any))
   return response
