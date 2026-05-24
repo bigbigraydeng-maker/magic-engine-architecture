@@ -37,19 +37,51 @@ interface ViralRef {
   style_description: string | null
   key_techniques:    string[] | null
   persona_fit:       string[] | null
+  view_count?:       number | null
+  video_title?:      string | null
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
+function fmtViews(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000)     return `${Math.round(n / 1_000)}K`
+  return String(n)
+}
+
+/**
+ * Formats viral reference data into a structured block for injection into the
+ * Reels generation prompt. Includes Style Scores so SYSTEM_REELS can map them
+ * directly to Seedance prompt fields (pacing, music arc, color grade, etc.).
+ */
 function formatViralInsights(refs: ViralRef[]): string {
   if (refs.length === 0) return ''
-  const lines = refs.map((r, i) => {
+  const blocks = refs.map((r, i) => {
+    const viewBadge  = r.view_count ? ` [${fmtViews(r.view_count)} views]` : ''
+    const titlePart  = r.video_title ? ` "${r.video_title}"` : ''
     const desc       = r.style_description ?? 'N/A'
     const techniques = r.key_techniques?.join(', ') ?? 'N/A'
     const tags       = r.style_tags?.join(', ') ?? 'N/A'
-    return `Ref ${i + 1}: ${desc}. Techniques: ${techniques}. Tags: ${tags}.`
+    const personas   = r.persona_fit?.join(', ') ?? 'N/A'
+    const scores     = r.style_scores
+      ? Object.entries(r.style_scores)
+          .map(([k, v]) => `${k}:${v}/10`)
+          .join(' | ')
+      : null
+
+    const lines = [
+      `REF ${i + 1}${titlePart}${viewBadge}: ${desc}`,
+      `  Key Techniques : ${techniques}`,
+      `  Style Tags     : ${tags}`,
+      `  Target Persona : ${personas}`,
+    ]
+    if (scores) lines.push(`  Style Scores   : ${scores}`)
+    return lines.join('\n')
   })
-  return `VIRAL REFERENCE INSIGHTS (study these — mirror what works):\n${lines.join('\n')}`
+  return [
+    'VIRAL REFERENCE INSIGHTS (mirror what works in your seedance_i2v_prompt):',
+    ...blocks,
+  ].join('\n\n')
 }
 
 // ─── GET: plan history ─────────────────────────────────────────────────────────
@@ -143,18 +175,50 @@ export async function POST(
       target_audience_detail: campaign.target_audience_detail ?? null,
     }
 
-    // ── Update 1: viral reference library (best-effort, silent on error) ───────
+    // ── Viral reference library (best-effort, silent on error) ──────────────
+    // Strategy:
+    //   1. Fetch client's industry so we find relevant viral references
+    //   2. Filter by industry + most viral (view_count DESC)
+    //   3. If no industry match, fall back to global top references
+    //   4. Include style_scores + persona_fit so AI can map scores to Seedance fields
     let viralInsightsText = ''
     try {
-      const { data: viralRefs } = await supabaseAdmin
-        .from('viral_reference_library')
-        .select('style_scores, style_tags, style_description, key_techniques, persona_fit')
-        .eq('analysis_status', 'done')
-        .order('analyzed_at', { ascending: false })
-        .limit(3)
+      const SELECT_FIELDS = 'style_scores, style_tags, style_description, key_techniques, persona_fit, view_count, video_title'
 
-      if (viralRefs && viralRefs.length > 0) {
-        viralInsightsText = formatViralInsights(viralRefs as ViralRef[])
+      // Step 1: get client's industry for targeted matching
+      const { data: clientRow } = await supabaseAdmin
+        .from('clients')
+        .select('industry')
+        .eq('id', clientId)
+        .maybeSingle()
+      const industry = clientRow?.industry ?? null
+
+      // Step 2: industry-filtered query (most viral first)
+      let refs: ViralRef[] | null = null
+      if (industry) {
+        const { data } = await supabaseAdmin
+          .from('viral_reference_library')
+          .select(SELECT_FIELDS)
+          .eq('analysis_status', 'done')
+          .eq('industry', industry)
+          .order('view_count', { ascending: false, nullsFirst: false })
+          .limit(3)
+        refs = (data as ViralRef[]) ?? null
+      }
+
+      // Step 3: fallback to global top refs if industry filter yielded nothing
+      if (!refs || refs.length === 0) {
+        const { data } = await supabaseAdmin
+          .from('viral_reference_library')
+          .select(SELECT_FIELDS)
+          .eq('analysis_status', 'done')
+          .order('view_count', { ascending: false, nullsFirst: false })
+          .limit(3)
+        refs = (data as ViralRef[]) ?? null
+      }
+
+      if (refs && refs.length > 0) {
+        viralInsightsText = formatViralInsights(refs)
       }
     } catch (viralErr) {
       console.warn('[social-plan] viral_reference_library fetch failed (non-blocking):', viralErr)

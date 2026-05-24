@@ -224,17 +224,129 @@ Each JSON object MUST have ALL of these keys (no omissions):
      "atmosphere": "<emotional tone of the visual world: e.g. 'aspirational calm, quiet luxury, energetic optimism'>"
    }
 
-6. seedance_i2v_prompt: string — A COMPLETE Seedance 2.0 Image-to-Video prompt (200–350 words).
+6. seedance_i2v_prompt: string — A COMPLETE Seedance 2.0 v2.0 Standard Video Generation Prompt (450–700 words).
    Used AFTER the storyboard image is generated to animate it into a 15-second video.
-   MUST include all 8 sections with these exact labels:
-   OVERALL NARRATIVE ARC: [2–3 sentences on the emotional journey from panel 1 to panel 9.]
-   PACING AND TIMING: [Precise timing: "0–2s: ... 2–4s: ... 4–7s: ... 7–10s: ... 10–12s: ... 12–15s: ..." Total = 15s.]
-   CAMERA MOVEMENT STYLE: [Specific moves per scene: "Scene 1: slow push-in. Scene 2: gentle pan right." etc.]
-   COLOR GRADE: [Overall color treatment and LUT style.]
-   LIGHTING: [Quality and direction of light across the video.]
-   TRANSITIONS: [How scenes cut or flow: dissolves, hard cuts, zoom transitions, etc.]
-   BRAND PANEL: Hold final brand panel for 3 seconds. [Describe brand panel appearance.]
-   TECHNICAL REQUIREMENTS: 9:16 vertical. 15 seconds total. Facebook Reels silent autoplay optimised. No human faces. English only.
+   MUST follow this EXACT v2.0 template structure (copy the structure, fill in brand-specific content):
+
+   SEEDANCE 2.0 VIDEO GENERATION PROMPT (v2.0 STANDARD)
+   ==============================================================
+
+   PROJECT METADATA:
+   - Brand: [brand name]
+   - Campaign: [campaign title from reel title]
+   - Duration: EXACTLY 15 seconds. Do not shorten. Do not cut scenes early.
+   - Format: 9:16 vertical (Reels)
+   - Style: [1-sentence tone — e.g. "warm, aspirational, problem-to-solution"]
+
+   GLOBAL SPECIFICATIONS:
+   Color Grade: [specific color strategy with emotional reasoning — e.g. "slightly desaturated warm tones, amber-brown with cooler shadows — frustration feels real but not depressing"]
+   Lighting: [quality and direction throughout — e.g. "soft natural window light, warm diffused"]
+   Music: [full emotional arc — e.g. "starts sad and empathetic (minor key) → builds confidence → peaks at triumph → resolves warmly. Arc: defeated → curious → impressed → triumphant → warm"]
+   Pacing: [rhythm — e.g. "slow and heavy at open, accelerates at solution reveal, settles at brand card"]
+
+   ⚠️ CRITICAL START INSTRUCTION:
+   The video MUST BEGIN with Scene 1 — [exact opening visual from scene_structure[0]].
+   Frame 1 of the video = [precise first-frame description]. This is non-negotiable.
+   Do NOT start with storyboard preview, showroom, or text card.
+
+   =====================================
+
+   SCENE 1 (0.0–[end]s) | [scene_names[0]]
+   Visual: [detailed description of exactly what is on screen — environment, subject, no human faces]
+   Action: [camera move: e.g. "slow push-in" / "static wide" / "gentle pan right". What physically happens.]
+   Audio: [music cue and mood. No voiceover unless essential.]
+   Text Overlay: "[hook text]" — white sans-serif SUBTITLE at VERY BOTTOM of screen, appears at 0.0s. One line only.
+   Color Grade: [per-scene color with emotional reasoning]
+   Mood: [1–3 words]
+
+   SCENE 2 ([start]–[end]s) | [scene_names[1]]
+   Visual: [...]
+   Action: [...]
+   Audio: [...]
+   Text Overlay: "[text]" — white sans-serif SUBTITLE at VERY BOTTOM of screen, appears at [X]s. One line only.
+   Color Grade: [...]
+   Mood: [...]
+
+   [Repeat SCENE 3 through SCENE 8 with the same structure, using scene_names[2–7] and timing that totals to 12.0s across all 8 scenes]
+
+   BRAND PANEL (12.0–15.0s) | Brand End Card
+   Visual: [brand colors, logo centered, tagline. No contact details — phone/website go to Instagram/Facebook caption only.]
+   Action: Hold static for 3 seconds.
+   Audio: Music resolves warmly and fades.
+   Text Overlay: "[brand tagline]" — white sans-serif SUBTITLE at VERY BOTTOM. One line only.
+   Color Grade: Clean, premium, on-brand.
+   Mood: Confident, warm, resolved.
+
+   =====================================
+
+   TIMING VERIFICATION (MUST ADD TO EXACTLY 15.0s):
+   Scene 1: [X.X]s
+   Scene 2: [X.X]s
+   Scene 3: [X.X]s
+   Scene 4: [X.X]s
+   Scene 5: [X.X]s
+   Scene 6: [X.X]s
+   Scene 7: [X.X]s
+   Scene 8: [X.X]s
+   Brand Panel: 3.0s
+   TOTAL: 15.0s ✓
+
+   =====================================
+
+   FINAL CHECKLIST:
+   ☑ Video starts at 0.0s with [opening scene one-line description]
+   ☑ ALL text overlays are subtitles at the very bottom of screen (lower 20%)
+   ☑ Total duration is exactly 15.0 seconds
+   ☑ [scene-specific visual physics check — e.g. "product detail is clearly visible in hero scene"]
+   ☑ No storyboard preview frame at beginning
+   ☑ No phone numbers, websites, or contact details in video
+   ☑ Music emotional arc maps to visual progression
+   ☑ Color grading supports emotional storytelling
+   ==============================================================
+
+   CRITICAL RULES for seedance_i2v_prompt (violations will cause Seedance rendering failures):
+   - Text overlays: ALWAYS bottom subtitles, lower 20% of screen, one line only — NEVER centre-screen
+   - Contact info (phone, website, email): NEVER inside video — goes in caption field only
+   - Timing: MUST total exactly 15.0 seconds — no "around 15s", no approximation
+   - Color grade: per-scene with emotional reasoning — NEVER generic phrases like "warm lighting"
+   - Music: MUST include full emotional arc mapped to scenes — not a genre label only
+   - Visual physics: be specific — "droplets bead up and roll sideways" not "water beads up"
+   - Opening: MUST include ⚠️ CRITICAL START INSTRUCTION block
+
+   VIRAL REFERENCE INTEGRATION — when "VIRAL REFERENCE INSIGHTS" appear in the user message,
+   map Style Scores (0–10) directly into seedance_i2v_prompt fields using these translation rules:
+
+   energy score:
+     ≥ 7  → Pacing: "fast cuts, rapid scene changes, high-energy editing — each scene ≤1.5s"
+     4–6  → Pacing: "medium pace, purposeful transitions, confident rhythm"
+     ≤ 3  → Pacing: "slow cinematic, held shots, deliberate flow — hero scene 3+ seconds"
+
+   emotional score:
+     ≥ 7  → Music: "strong emotional arc — opens minor key, builds confidently, peaks at hero scene, resolves warmly"
+     4–6  → Music: "moderate emotional build — noticeable lift at solution reveal, gentle resolution"
+     ≤ 3  → Music: "subtle consistent mood, understated background texture, no dramatic swings"
+
+   urgency score:
+     ≥ 6  → Text Overlays: use action verbs (e.g. "Book now", "Limited spots"); Pacing accelerates in final 3 scenes
+     ≤ 3  → Text Overlays: calm and aspirational language; no rush in pacing
+
+   luxury score:
+     ≥ 7  → Color Grade: "slightly desaturated, premium cool-warm contrast, cinematic feel — avoid oversaturation"
+     4–6  → Color Grade: "balanced warm tones, clean midtones, aspirational but accessible"
+     ≤ 3  → Color Grade: "bright, warm, saturated, approachable and friendly"
+
+   key_techniques → mirror in CAMERA MOVEMENT STYLE and per-scene Action fields:
+     "drone-aerial-opening"   → Scene 1 Action: slow aerial drone descent
+     "ugc-selfie-style"       → Action: handheld slightly shaky, intimate close framing
+     "testimonial-overlay"    → hero scene Text Overlay carries a direct quote-style statement
+     "fast-cut"               → Action: hard cuts every 0.8–1.2s through transformation sequence
+     "before-after-reveal"    → dedicate scenes 3–5 to explicit before/after transition
+
+   persona_fit → shape emotional arc tone:
+     "Luxury Aspirational"         → aspirational slow build, premium color grade, restrained text
+     "Calm Explorer"               → peaceful pacing, nature/landscape visual cues, discovery arc
+     "Practical Buyer - Planner"   → clear problem-to-solution arc, benefit-forward text overlays
+     "Practical Buyer - Converter" → fast pace, explicit offer in scene 6–7, urgent CTA at scene 8
 
 7. caption: string — Facebook Reels caption. AU/NZ English. 2–3 short paragraphs. Clear CTA. 5–8 hashtags at end.
 
@@ -247,7 +359,7 @@ CRITICAL RULES:
 - All text fields in English only — zero Chinese characters
 - scene_names MUST be EXACTLY 8 strings
 - scene_structure MUST be EXACTLY 9 strings
-- seedance_i2v_prompt MUST be 200–350 words with all 8 labelled sections
+- seedance_i2v_prompt MUST be 450–700 words following the v2.0 standard template (PROJECT METADATA / GLOBAL SPECIFICATIONS / ⚠️ CRITICAL START INSTRUCTION / SCENE 1–8 / TIMING VERIFICATION / FINAL CHECKLIST)
 - No human faces or bodies in any visual description
 Return ONLY a raw JSON array — no markdown, no code fences, no explanation.`
 
@@ -311,7 +423,7 @@ IMPORTANT:
 - scene_names: exactly 8 short evocative titles for Panels 1–8 (Panel 9 is always the brand panel).
 - scene_structure MUST be exactly 9 strings; index 8 MUST be the brand panel.
 - style_guide: fill all 4 keys with specific, concrete visual direction (not generic).
-- seedance_i2v_prompt: write exactly 200–350 words covering all 8 required sections (OVERALL NARRATIVE ARC, PACING AND TIMING, CAMERA MOVEMENT STYLE, COLOR GRADE, LIGHTING, TRANSITIONS, BRAND PANEL, TECHNICAL REQUIREMENTS).
+- seedance_i2v_prompt: write 450–700 words following the v2.0 standard template exactly: PROJECT METADATA → GLOBAL SPECIFICATIONS (Color Grade/Lighting/Music arc/Pacing) → ⚠️ CRITICAL START INSTRUCTION → SCENE 1–8 each with (Visual/Action/Audio/Text Overlay/Color Grade/Mood) → TIMING VERIFICATION (must total 15.0s ✓) → FINAL CHECKLIST. All text overlays must be bottom subtitles. No contact info in video. Per-scene color grade with emotional reasoning. Music must include full arc.
 - Choose 3 distinct angle_tags across the 3 reels.`
 }
 
@@ -380,7 +492,7 @@ export async function generateReelsScripts(
   const resp = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     temperature: 0.75,
-    max_tokens: 8000,  // storyboard + seedance prompts are verbose (3 reels × ~900 words each)
+    max_tokens: 10000,  // v2.0: seedance_i2v_prompt 450–700 words × 3 reels + storyboard prompts
     messages: [
       { role: 'system', content: SYSTEM_REELS },
       { role: 'user', content: buildReelsPrompt(strategy, briefText, campaignText, viralInsightsText) },
