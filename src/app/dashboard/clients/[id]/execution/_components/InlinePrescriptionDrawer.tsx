@@ -72,8 +72,8 @@ export function InlinePrescriptionDrawer({
 
   const modeTitle  = mode === 'supplement' ? '补充处方' : '修订处方'
   const modeHint   = mode === 'supplement'
-    ? '华佗只生成"还缺的"增量动作，原处方与执行进度不受影响'
-    : '华佗生成完整修订版（v2），承接已完成的动作；批准后原处方归档'
+    ? '诸葛亮只生成"还缺的"增量动作，原处方与执行进度不受影响'
+    : '诸葛亮生成完整修订版（v2），承接已完成的动作；批准后原处方归档'
   const goalLabel  = mode === 'supplement' ? '需要补充什么？' : '为什么要修订？新方向是什么？'
   const goalPlaceholder = mode === 'supplement'
     ? '例：客户决定也要做 LinkedIn B2B 内容，需要补充对应动作'
@@ -85,7 +85,7 @@ export function InlinePrescriptionDrawer({
     if (!goal.trim()) return
     setStep('generating')
     setError(null)
-    setProgress('连接华佗…')
+    setProgress('连接诸葛亮…')
     const startTime = Date.now()
     setElapsed(0)
     const timer = setInterval(() => setElapsed(Math.floor((Date.now() - startTime) / 1000)), 1000)
@@ -135,7 +135,7 @@ export function InlinePrescriptionDrawer({
         setError(streamErr)
         setStep('form')
       } else if (!ok) {
-        setError('华佗流意外关闭，请重试')
+        setError('诸葛亮流意外关闭，请重试')
         setStep('form')
       } else {
         setStep('review')
@@ -275,7 +275,7 @@ export function InlinePrescriptionDrawer({
           {step === 'generating' && (
             <div className="py-12 text-center space-y-3">
               <div className="animate-spin w-10 h-10 border-4 border-indigo-400 border-t-transparent rounded-full mx-auto" />
-              <p className="text-sm font-medium text-gray-900">华佗正在{modeTitle}…</p>
+              <p className="text-sm font-medium text-gray-900">诸葛亮正在{modeTitle}…</p>
               <p className="text-sm text-gray-500 min-h-[1.5em]">{progress ?? ''}</p>
               <p className="text-xs text-gray-400 tabular-nums">
                 已用时 {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')} · 通常 60–150 秒
@@ -286,14 +286,14 @@ export function InlinePrescriptionDrawer({
           {/* ── Step: review ── */}
           {step === 'review' && content && (
             <div className="space-y-4">
-              {/* 华佗自评 */}
+              {/* 诸葛亮自评 */}
               {selfGrade && genMeta && (
                 <div className="flex items-center gap-3 rounded-lg bg-gray-50 p-3">
                   <span className={`px-2.5 py-1 rounded-lg font-bold text-base tabular-nums ${gradeCls}`}>
                     {overall?.toFixed(1)} / 10
                   </span>
                   <div className="text-xs text-gray-500">
-                    华佗自评 · ${genMeta.cost_usd.toFixed(3)} · {(genMeta.duration_ms / 1000).toFixed(0)}s
+                    诸葛亮自评 · ${genMeta.cost_usd.toFixed(3)} · {(genMeta.duration_ms / 1000).toFixed(0)}s
                   </div>
                 </div>
               )}
@@ -367,7 +367,7 @@ export function InlinePrescriptionDrawer({
           )}
           {step === 'generating' && (
             <button disabled className="w-full rounded-lg bg-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-400">
-              华佗工作中…
+              诸葛亮工作中…
             </button>
           )}
           {step === 'review' && (

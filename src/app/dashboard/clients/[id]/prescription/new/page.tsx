@@ -241,7 +241,7 @@ export default function NewPrescriptionPage() {
   const handleGenerate = useCallback(async () => {
     setIsGenerating(true)
     setGenerateError(null)
-    setProgressNote('连接华佗…')
+    setProgressNote('连接诸葛亮…')
     const startTime = Date.now()
     setElapsedSec(0)
     if (elapsedRef.current) clearInterval(elapsedRef.current)
@@ -305,7 +305,7 @@ export default function NewPrescriptionPage() {
         setGenerateError(streamErr)
         setStep(1)
       } else if (!ok) {
-        setGenerateError('华佗流意外关闭，请刷新页面查看处方状态')
+        setGenerateError('诸葛亮流意外关闭，请刷新页面查看处方状态')
         setStep(1)
       }
     } catch (e) {
@@ -361,7 +361,7 @@ export default function NewPrescriptionPage() {
     setIsRefining(true)
     setRefineError(null)
     setRefineBanner(null)
-    setProgressNote('连接华佗…')
+    setProgressNote('连接诸葛亮…')
     const prevOverall = selfGrade?.overall ?? null
     const startTime = Date.now()
     setElapsedSec(0)
@@ -420,7 +420,7 @@ export default function NewPrescriptionPage() {
         setRefineError(captured.streamErr)
         setRefineBanner({ kind: 'error', text: captured.streamErr })
       } else if (!ok) {
-        const msg = '华佗流意外关闭 — 处方可能已在后台更新，请刷新页面查看'
+        const msg = '诸葛亮流意外关闭 — 处方可能已在后台更新，请刷新页面查看'
         setRefineError(msg)
         setRefineBanner({ kind: 'error', text: msg })
       } else {
@@ -507,8 +507,8 @@ export default function NewPrescriptionPage() {
               : 'border-amber-200 bg-amber-50 text-amber-800'
           }`}>
             {priorMode === 'supplement'
-              ? '🧩 补充模式：华佗会读取原处方的全部动作和执行进度，只生成"还缺的"新动作，不重复已有内容。原处方与已完成的工作不受任何影响。'
-              : '↻ 修订模式：华佗会基于原处方 + 执行进度生成完整的修订版（v2）。已完成的动作会被承接。批准这份修订后，原处方将归档为"已被取代"。'}
+              ? '🧩 补充模式：诸葛亮会读取原处方的全部动作和执行进度，只生成"还缺的"新动作，不重复已有内容。原处方与已完成的工作不受任何影响。'
+              : '↻ 修订模式：诸葛亮会基于原处方 + 执行进度生成完整的修订版（v2）。已完成的动作会被承接。批准这份修订后，原处方将归档为"已被取代"。'}
           </div>
         )}
 
@@ -653,7 +653,7 @@ export default function NewPrescriptionPage() {
         {step === 2 && (
           <div className="bg-white rounded-xl border border-gray-200 p-12 text-center space-y-4">
             <div className="animate-spin w-10 h-10 border-4 border-indigo-400 border-t-transparent rounded-full mx-auto" />
-            <h2 className="font-semibold text-gray-900">华佗正在开方…</h2>
+            <h2 className="font-semibold text-gray-900">诸葛亮正在开方…</h2>
             <p className="text-sm text-gray-500 min-h-[1.5em]">
               {progressNote ?? '正在基于品牌健康数据和行业基准生成处方'}
             </p>
@@ -1051,7 +1051,7 @@ function HuatuoMetaCard({
         </div>
         <div className="min-w-0">
           <p className="text-sm font-semibold text-gray-900">
-            华佗自评：{gradeLabel}
+            诸葛亮自评：{gradeLabel}
             {meta.passes >= 2 && (
               <span className="ml-2 text-xs font-medium text-green-700 bg-green-100 px-2 py-0.5 rounded-full">
                 ✓ 经过 {meta.passes - 1} 轮精修
@@ -1106,7 +1106,7 @@ function HuatuoMetaCard({
         <div className="border-t border-gray-100 pt-3">
           <div className="flex items-center justify-between mb-2">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-              处方待改进项 · 华佗自检
+              处方待改进项 · 诸葛亮自检
               <span className="ml-1.5 normal-case text-gray-400 font-normal">
                 （指<strong>本方案</strong>的问题，不是客户企业的问题）
               </span>
@@ -1233,14 +1233,14 @@ function HumanFeedbackCard({
             <div>
               <p className="text-sm font-semibold text-gray-900">我的修改建议</p>
               <p className="text-xs text-gray-400">
-                FDE / 顾问的人类经验作为<strong className="text-indigo-700">最高优先级反馈</strong>注入华佗
+                FDE / 顾问的人类经验作为<strong className="text-indigo-700">最高优先级反馈</strong>注入诸葛亮
               </p>
             </div>
           </div>
         )}
         {compact && (
           <p className="text-xs text-gray-500 flex-1">
-            FDE / 顾问的人类经验作为<strong className="text-indigo-700">最高优先级反馈</strong>注入华佗
+            FDE / 顾问的人类经验作为<strong className="text-indigo-700">最高优先级反馈</strong>注入诸葛亮
           </p>
         )}
         <div className="text-xs text-gray-400 shrink-0 tabular-nums">
@@ -1271,7 +1271,7 @@ function HumanFeedbackCard({
       {isRefining && (
         <div className="mt-3 rounded-lg border border-indigo-200 bg-indigo-50 p-2.5 text-xs text-indigo-700 flex items-center gap-2">
           <span className="animate-spin w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full" />
-          <span className="flex-1">{progress ?? '华佗精修中…'}</span>
+          <span className="flex-1">{progress ?? '诸葛亮精修中…'}</span>
           {elapsedSec != null && (
             <span className="tabular-nums text-indigo-500">
               {Math.floor(elapsedSec / 60)}:{String(elapsedSec % 60).padStart(2, '0')}
@@ -1285,15 +1285,15 @@ function HumanFeedbackCard({
           {exhausted
             ? `已达 ${maxRefines} 轮精修上限，请批准或要求重新生成。`
             : comments.trim()
-              ? '✓ 华佗将明确采纳上述意见'
-              : '留空也可触发精修（华佗仅根据 AI 自评薄弱点修复）'}
+              ? '✓ 诸葛亮将明确采纳上述意见'
+              : '留空也可触发精修（诸葛亮仅根据 AI 自评薄弱点修复）'}
         </p>
         <button
           onClick={onRefine}
           disabled={isRefining || exhausted}
           className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
-          {isRefining ? '精修中…' : comments.trim() ? '🔄 基于我的意见再精修' : '🔄 让华佗再精修一次'}
+          {isRefining ? '精修中…' : comments.trim() ? '🔄 基于我的意见再精修' : '🔄 让诸葛亮再精修一次'}
         </button>
       </div>
     </div>
@@ -1430,7 +1430,7 @@ function TrendCard({ summary }: { summary: TrendSummaryLite }) {
             SEMrush 历史流量趋势
           </p>
           <p className="text-xs text-gray-400">
-            过去 {summary.data_points} 个月 · 华佗已用作 KPI 锚点
+            过去 {summary.data_points} 个月 · 诸葛亮已用作 KPI 锚点
           </p>
         </div>
         <span className={`shrink-0 text-xs font-semibold border rounded-full px-2.5 py-1 ${tj.cls}`}>

@@ -571,7 +571,7 @@ export default function ClientDetailPage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           <ToolCard href={`/dashboard/clients/${clientId}/zhangqian`}          icon="🗺️" title="张骞发现"       desc="扫描社媒、评价、关键词、竞品，生成品牌现状全景报告"  badge="in_house" />
           <ToolCard href={`/dashboard/clients/${clientId}/diagnostic`}         icon="🩺" title="华佗深度诊断"   desc="从 SEO/社媒/口碑/广告/AI可见/竞品六维打分，找到核心病灶"  badge="in_house" />
-          <ToolCard href={`/dashboard/clients/${clientId}/prescription/new`}   icon="💊" title="华佗处方"       desc="基于诊断结果，生成优先级排序的具体执行行动路线图"  badge="in_house" />
+          <ToolCard href={`/dashboard/clients/${clientId}/prescription/new`}   icon="💊" title="诸葛亮处方"     desc="基于华佗诊断结果，生成优先级排序的具体执行行动路线图"  badge="in_house" />
           <ToolCard href={`/dashboard/clients/${clientId}/site-audit/pages`}   icon="🔍" title="站点审计"       desc="逐页检查标题/描述/H1/图片ALT等 SEO 技术项，输出修复清单"  badge="in_house" />
           <ToolCard href={`/dashboard/clients/${clientId}/seo-gap`}            icon="📊" title="SEO Gap 分析"   desc="对比竞品，找出客户未覆盖但流量大的关键词机会"  badge="in_house" />
           <ToolCard                                                             icon="⭐" title="口碑管理"       desc="Google 评价 · 公众号舆情"        badge="external" soon />

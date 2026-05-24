@@ -11,7 +11,7 @@
  *   none       → Start 张骞 discovery
  *   reviewing  → Confirm 张骞 report
  *   confirmed, no diagnostic, no rx  → Run 华佗 diagnostic (+ skip option)
- *   confirmed, diagnostic done, no rx → Generate 华佗 prescription
+ *   confirmed, diagnostic done, no rx → Generate 诸葛亮 prescription
  *   rx generating   → In-progress pulse
  *   rx failed       → Re-generate
  *   rx draft        → Approve prescription
@@ -78,8 +78,8 @@ function resolve(
     wrapCls:      'bg-indigo-50 border-indigo-200',
     dotCls:       'bg-indigo-400 animate-pulse',
     badge:        '生成中',
-    title:        '华佗处方生成中…',
-    desc:         '华佗正在基于诊断数据撰写处方，通常需 1–2 分钟，页面将自动更新。',
+    title:        '诸葛亮处方生成中…',
+    desc:         '诸葛亮正在基于诊断数据开方，通常需 1–2 分钟，页面将自动更新。',
     primaryHref:  `/dashboard/clients/${clientId}/prescription/new`,
     primaryLabel: '查看进度 →',
     primaryCls:   'bg-indigo-600 hover:bg-indigo-700 text-white',
@@ -90,7 +90,7 @@ function resolve(
     dotCls:       'bg-rose-500',
     badge:        '生成失败',
     title:        '处方生成失败，请重新生成',
-    desc:         '上次华佗处方生成遇到错误。可重新发起生成，或先补充诊断数据后再试。',
+    desc:         '上次诸葛亮处方生成遇到错误。可重新发起生成，或先补充诊断数据后再试。',
     primaryHref:  `/dashboard/clients/${clientId}/prescription/new`,
     primaryLabel: '重新生成处方 →',
     primaryCls:   'bg-rose-600 hover:bg-rose-700 text-white',
@@ -102,7 +102,7 @@ function resolve(
     wrapCls:      'bg-violet-50 border-violet-200',
     dotCls:       'bg-violet-500',
     badge:        '待审批',
-    title:        '华佗处方草稿待审批',
+    title:        '诸葛亮处方草稿待审批',
     desc:         '处方已生成，请审阅处方内容并批准，才能将行动推送至鲁班执行看板。',
     primaryHref:  `/dashboard/clients/${clientId}/prescription/new`,
     primaryLabel: '审阅 & 批准处方 →',
@@ -114,7 +114,7 @@ function resolve(
     dotCls:       'bg-green-500',
     badge:        '就绪',
     title:        '处方已批准，执行追踪中',
-    desc:         '华佗处方已进入鲁班执行阶段。查看执行看板追踪进度，或询问诸葛亮获取本周战略建议。',
+    desc:         '诸葛亮处方已进入鲁班执行阶段。查看执行看板追踪进度，或询问诸葛亮获取本周战略建议。',
     primaryHref:  `/dashboard/clients/${clientId}/execution`,
     primaryLabel: '查看执行看板 →',
     primaryCls:   'bg-green-600 hover:bg-green-700 text-white',
@@ -127,10 +127,10 @@ function resolve(
     wrapCls:      'bg-indigo-50 border-indigo-200',
     dotCls:       'bg-indigo-600',
     badge:        '下一步',
-    title:        '生成华佗处方',
-    desc:         '六维度诊断已完成，华佗可基于诊断结果生成针对性处方行动路线图。',
+    title:        '生成诸葛亮处方',
+    desc:         '六维度诊断已完成，诸葛亮可基于诊断结果生成针对性处方行动路线图。',
     primaryHref:  `/dashboard/clients/${clientId}/prescription/new`,
-    primaryLabel: '生成华佗处方 →',
+    primaryLabel: '生成诸葛亮处方 →',
     primaryCls:   'bg-indigo-600 hover:bg-indigo-700 text-white',
     secondaryHref:  `/dashboard/clients/${clientId}/diagnostic/report`,
     secondaryLabel: '先查看诊断报告',
@@ -142,7 +142,7 @@ function resolve(
     dotCls:       'bg-blue-500',
     badge:        '下一步',
     title:        '运行华佗深度诊断',
-    desc:         '张骞发现已确认。建议先运行六维度深度诊断，华佗处方将更精准（约 3–5 分钟）。',
+    desc:         '张骞发现已确认。建议先运行六维度深度诊断，诸葛亮处方将更精准（约 3–5 分钟）。',
     primaryHref:  `/dashboard/clients/${clientId}/diagnostic`,
     primaryLabel: '运行华佗诊断 →',
     primaryCls:   'bg-blue-600 hover:bg-blue-700 text-white',
