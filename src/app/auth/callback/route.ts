@@ -55,14 +55,25 @@ export async function GET(request: NextRequest) {
   if (user?.email) {
     const email = user.email.toLowerCase()
 
-    const { data: portalUser } = await supabaseAdmin
+    // Fetch all access rows for this email in one query
+    const { data: accessRows } = await supabaseAdmin
       .from('client_portal_users')
-      .select('client_id')
+      .select('client_id, access_type')
       .eq('email', email)
-      .maybeSingle()
 
-    if (portalUser?.client_id) {
-      destination = `/portal/${portalUser.client_id}`
+    // Portal users (access_type = 'portal' | 'both') → /portal/[clientId]
+    const portalRow = accessRows?.find(r =>
+      r.access_type === 'portal' || r.access_type === 'both'
+    )
+    // Dashboard/FDE users (access_type = 'dashboard' | 'fde' | 'both') → /dashboard/clients/[clientId]
+    const dashboardRow = accessRows?.find(r =>
+      r.access_type === 'dashboard' || r.access_type === 'fde' || r.access_type === 'both'
+    )
+
+    if (portalRow?.client_id) {
+      destination = `/portal/${portalRow.client_id}`
+    } else if (dashboardRow?.client_id) {
+      destination = `/dashboard/clients/${dashboardRow.client_id}`
     } else if (safePath === '/prospect') {
       destination = '/prospect'
     } else {
