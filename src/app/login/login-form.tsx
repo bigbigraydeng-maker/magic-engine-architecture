@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
 
 export default function LoginForm({ next, authFailed }: { next: string; authFailed?: boolean }) {
   const [email, setEmail] = useState('')
@@ -30,20 +29,18 @@ export default function LoginForm({ next, authFailed }: { next: string; authFail
     setError('')
 
     try {
-      const supabase = createBrowserClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-      )
-
       const redirectTo = `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`
 
-      const { error } = await supabase.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: redirectTo, shouldCreateUser: false },
+      // Send magic link server-side (no PKCE) so it works regardless of which
+      // browser or email client the user clicks the link from.
+      const res = await fetch('/api/auth/magic-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim().toLowerCase(), redirectTo }),
       })
 
-      if (error) {
-        setError('Unable to send link. Check your email address.')
+      if (!res.ok) {
+        setError('Unable to send link. Please try again.')
       } else {
         setSent(true)
       }
