@@ -31,6 +31,7 @@ const adminSections: NavSection[] = [
       { href: '/dashboard/reports',               label: 'Reports',        emoji: '📊' },
       { href: '/dashboard/admin/billing-monitor',   label: 'Billing Monitor',  emoji: '💳' },
       { href: '/dashboard/admin/viral-references',  label: 'Viral References', emoji: '🎬' },
+      { href: '/dashboard/admin/users',             label: 'User Console',     emoji: '👤' },
     ],
   },
 ]
