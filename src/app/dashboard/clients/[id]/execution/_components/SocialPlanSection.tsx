@@ -328,12 +328,18 @@ function ReelCard({
   const [makeError, setMakeError] = useState<string | null>(null)
 
   const r = reel as AnyReel
-  const hookLine       = r.hook_line ?? r.hook ?? ''
-  const storyboardPmt  = r.storyboard_image_prompt
-  const seedancePmt    = r.seedance_i2v_prompt
-  const angleColor     = ANGLE_TAG_COLOR[r.angle_tag ?? ''] ?? 'bg-gray-50 text-gray-600 border-gray-200'
-  const hasNewFormat   = Boolean(storyboardPmt)
+  const hookLine    = r.hook_line ?? r.hook ?? ''
+  const angleColor  = ANGLE_TAG_COLOR[r.angle_tag ?? ''] ?? 'bg-gray-50 text-gray-600 border-gray-200'
+  const hasNewFormat    = Boolean(r.storyboard_image_prompt)
   const hasLegacyFormat = Boolean(r.opening_frame_prompt)
+
+  // Editable prompts — user can tweak before generating
+  const [editStoryboard, setEditStoryboard] = useState(r.storyboard_image_prompt ?? '')
+  const [editSeedance,   setEditSeedance]   = useState(r.seedance_i2v_prompt ?? '')
+
+  // Video generation parameters
+  const [duration,    setDuration]    = useState<6 | 10 | 15>(15)
+  const [resolution,  setResolution]  = useState<'720p' | '1080p'>('720p')
 
   // ── Poll video generation (Seedance, every 15s) ─────────────────────────────
   useEffect(() => {
@@ -361,17 +367,17 @@ function ReelCard({
   // Step 2: gpt-image-1 storyboard  (~15s, synchronous — no polling)
   // Step 3: Seedance I2V video  (~2–3 min, poll every 15s)
   const handleMake = useCallback(async () => {
-    if (!storyboardPmt || !seedancePmt) return
+    if (!editStoryboard || !editSeedance) return
     setMakeStep('creating')
     setMakeError(null)
     try {
-      // 1. Create reels_draft
+      // 1. Create reels_draft (uses the user-edited prompts)
       const cr = await fetch(`/api/clients/${clientId}/reels/create-from-plan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          storyboard_prompt: storyboardPmt,
-          i2v_prompt:        seedancePmt,
+          storyboard_prompt: editStoryboard,
+          i2v_prompt:        editSeedance,
           caption:           reel.caption,
           campaign_brief_id: campaignId,
         }),
@@ -381,7 +387,7 @@ function ReelCard({
       const newDraftId = cd.draft.id
       setDraftId(newDraftId)
 
-      // 2. Generate storyboard image via gpt-image-1 (synchronous, awaits result)
+      // 2. Generate storyboard image via gpt-image-1 (synchronous, ~15–25s)
       setMakeStep('storyboard')
       const sr = await fetch(
         `/api/clients/${clientId}/reels/${newDraftId}/generate-storyboard`,
@@ -391,10 +397,14 @@ function ReelCard({
       if (!sd.success) throw new Error(sd.error ?? 'Storyboard generation failed')
       setStoryboardUrl(sd.image_url ?? null)
 
-      // 3. Kick off Seedance I2V video generation
+      // 3. Kick off Seedance I2V with user-selected params
       const vr = await fetch(
         `/api/clients/${clientId}/reels/${newDraftId}/generate-video`,
-        { method: 'POST' },
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ duration, resolution }),
+        },
       )
       const vd = await vr.json() as { success: boolean; error?: string }
       if (!vd.success) throw new Error(vd.error ?? 'Failed to start video generation')
@@ -404,7 +414,7 @@ function ReelCard({
       setMakeError(e instanceof Error ? e.message : String(e))
       setMakeStep('error')
     }
-  }, [storyboardPmt, seedancePmt, reel.caption, clientId, campaignId])
+  }, [editStoryboard, editSeedance, reel.caption, clientId, campaignId, duration, resolution])
 
   return (
     <div className="border border-gray-200 rounded-lg overflow-hidden">
@@ -444,39 +454,40 @@ function ReelCard({
           {/* ── NEW FORMAT: storyboard 2-step flow ─────────────────────── */}
           {hasNewFormat && (
             <>
-              {/* Step 1: ChatGPT Image */}
+              {/* Step 1: Storyboard prompt (editable) */}
               <div className="rounded-lg border border-blue-100 overflow-hidden">
                 <div className="flex items-start justify-between gap-2 px-3 py-2 bg-blue-50 border-b border-blue-100">
                   <p className="text-[10px] font-bold text-blue-800 leading-snug">
-                    📋 Step 1 — 复制以下提示词 → 粘贴到 <span className="underline">ChatGPT Image</span> → 生成9格故事板图片
+                    🎨 Storyboard 提示词
+                    <span className="ml-1 font-normal text-blue-500">（可直接编辑）</span>
                   </p>
-                  <CopyButton text={storyboardPmt!} label="📋 复制" />
+                  <CopyButton text={editStoryboard} label="📋 复制" />
                 </div>
-                <div className="px-3 py-2.5 max-h-64 overflow-y-auto bg-white">
-                  <p className="text-[10px] text-blue-900 leading-relaxed whitespace-pre-wrap font-mono">
-                    {storyboardPmt}
-                  </p>
-                </div>
+                <textarea
+                  value={editStoryboard}
+                  onChange={e => setEditStoryboard(e.target.value)}
+                  rows={10}
+                  className="w-full px-3 py-2.5 text-[10px] text-blue-900 leading-relaxed font-mono bg-white resize-y border-0 outline-none focus:ring-1 focus:ring-blue-200"
+                  spellCheck={false}
+                />
               </div>
 
-              {/* Step 2: Seedance I2V */}
+              {/* Step 2: Seedance prompt (editable) */}
               <div className="rounded-lg border border-purple-100 overflow-hidden">
                 <div className="flex items-start justify-between gap-2 px-3 py-2 bg-purple-50 border-b border-purple-100">
-                  <div>
-                    <p className="text-[10px] font-bold text-purple-800 uppercase">
-                      Step 2 · Seedance 2.0 生成视频
-                    </p>
-                    <p className="text-[10px] text-purple-600 mt-0.5">
-                      上传 Step 1 故事板图片 + 复制以下提示词 → <strong>Seedance 2.0</strong> → 15秒 Reel 视频
-                    </p>
-                  </div>
-                  <CopyButton text={seedancePmt!} label="🎬 复制" />
-                </div>
-                <div className="px-3 py-2.5 max-h-40 overflow-y-auto bg-white">
-                  <p className="text-[10px] text-purple-900 leading-relaxed whitespace-pre-wrap font-mono">
-                    {seedancePmt}
+                  <p className="text-[10px] font-bold text-purple-800 leading-snug">
+                    🎬 Seedance I2V 提示词
+                    <span className="ml-1 font-normal text-purple-500">（可直接编辑）</span>
                   </p>
+                  <CopyButton text={editSeedance} label="🎬 复制" />
                 </div>
+                <textarea
+                  value={editSeedance}
+                  onChange={e => setEditSeedance(e.target.value)}
+                  rows={8}
+                  className="w-full px-3 py-2.5 text-[10px] text-purple-900 leading-relaxed font-mono bg-white resize-y border-0 outline-none focus:ring-1 focus:ring-purple-200"
+                  spellCheck={false}
+                />
               </div>
             </>
           )}
@@ -553,14 +564,55 @@ function ReelCard({
             ))}
           </div>
 
-          {/* ── One-click production pipeline ──────────────────────────── */}
+          {/* ── Video params + generate button ─────────────────────────── */}
           {hasNewFormat && makeStep === 'idle' && (
-            <button
-              onClick={handleMake}
-              className="w-full py-2 text-xs font-bold bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-lg transition-all"
-            >
-              🚀 一键制作 Reel（Visual Studio → Seedance）
-            </button>
+            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 space-y-2.5">
+              {/* Duration */}
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold text-gray-500 uppercase w-14 shrink-0">时长</span>
+                <div className="flex gap-1">
+                  {([6, 10, 15] as const).map(s => (
+                    <button
+                      key={s}
+                      onClick={() => setDuration(s)}
+                      className={`text-[10px] font-semibold px-2 py-1 rounded border transition-colors ${
+                        duration === s
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300'
+                      }`}
+                    >
+                      {s}s
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {/* Resolution */}
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold text-gray-500 uppercase w-14 shrink-0">分辨率</span>
+                <div className="flex gap-1">
+                  {(['720p', '1080p'] as const).map(r => (
+                    <button
+                      key={r}
+                      onClick={() => setResolution(r)}
+                      className={`text-[10px] font-semibold px-2 py-1 rounded border transition-colors ${
+                        resolution === r
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300'
+                      }`}
+                    >
+                      {r}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {/* Generate button */}
+              <button
+                onClick={handleMake}
+                className="w-full py-2 text-xs font-bold bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-lg transition-all"
+              >
+                🚀 生成 Reel &nbsp;·&nbsp; {duration}s · {resolution} · 9:16
+              </button>
+            </div>
           )}
 
           {makeStep !== 'idle' && (
