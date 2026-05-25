@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-26 04:43 NZST · 当前阶段：**Phase 14.A Website Connector 全部完成 ✅（P14.A.1–8）；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S（P8.S.1–7 SEMrush→DataForSEO 全部已实现）、Phase 9.0（P9.0.10–17 Visual Queue 测试 + QueueOverviewCard 全部已实现）、Phase 12.H（P12.H.1–3 GitHub CMS 闭环全部已实现）。
+> 最后更新：2026-05-26 05:04 NZST · 当前阶段：**Phase 14.A Website Connector 全部完成 ✅（P14.A.1–8）；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S（P8.S.1–7 SEMrush→DataForSEO 全部已实现）、Phase 9.0（P9.0.10–17 Visual Queue 测试 + QueueOverviewCard 全部已实现）、Phase 12.H（P12.H.1–3 GitHub CMS 闭环全部已实现）。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -33,7 +33,7 @@
 ✅ Phase 8.R     Reels Studio（提示词生成 + 参考帧生成/上传 + I2V视频 + 对话修改，2026-05-02 完成）
 🔄 Phase 8.Q     内容质控提升（8.Q.1外编版本管理✅ 8.Q.2 Brief编辑✅ 8.Q.3 Prompt预览部分✅ 8.Q.4待做）
 📋 Phase 8.B     批量生产 + 自动排期 + 无缝发布（走向 Airtable-free 运营模式）
-📋 Phase 8.M     Marketing Agent 记忆系统（每客户长期 Agent 智能化，中长期）
+↗ Phase 8.M     Marketing Agent 记忆系统 — **升级整合至 Phase 23**（2026-05-26 重新定义为 Cross-Agent Memory Layer）
 ✅ Phase 8.D     DNZ诊断策略层（Stage 1✅ Stage 2✅ Stage 3✅ E2E验证✅ P8.0.7✅ P8.0.8✅ — 全部完成）
 ✅ Phase 8.1     三维内容策略分析（P8.1.1–P8.1.6 全部完成，2026-05-07）
 ⏸ Phase 8.P     Paid Social Studio（暂缓 — 待客户明确 Meta 广告需求触发）
@@ -66,7 +66,8 @@
 📋 Phase 18     Ads Execution Engine / 广告执行引擎（Meta + Google + TikTok，已登记）
 📋 Phase 19     API 鉴权整改 / IDOR 修复（🔴 CRITICAL 安全 — 19.A+B 须在客户建号前完成）
 📋 Phase 21     AI Content Factory / AI 内容工厂（旗舰能力 — FDE 客户默认产能引擎）
-📋 Phase 22     Data Intelligence Engine / 数据智能引擎（旗舰能力 — 与 AI Factory 同级别双引擎）
+📋 Phase 22     Data Intelligence Engine / 数据智能引擎（旗舰能力 — 学习引擎）
+📋 Phase 23     Cross-Agent Memory Layer / 跨 Agent 记忆层（旗舰能力 — 升级自 Phase 8.M，补 L3 长期学习）
 ```
 
 **Phase 7 核心战略**：双信号博客（Dual-Signal Blog）— 每篇文章同时携带 SEO 信号（Google 排名）和 GEO 信号（AI 推荐），选题由 AI Tracker 弱项 × SEMrush 低KD机会交叉驱动，形成数据自强化飞轮。
@@ -2332,6 +2333,101 @@ AI Content Factory  ←──反馈──  Data Engine  ←──分析──  �
 ### Phase 22 不做清单
 - ❌ 不依赖第三方仪表盘（Looker、Tableau 等）— 数据归属 ME 是核心护城河
 - ❌ 不只服务 AI Factory 产出 — 6 大支柱所有执行都要被采集和学习
+
+---
+
+## Phase 23 — Cross-Agent Memory Layer（旗舰能力 · 升级自 Phase 8.M）📋 战略确认，待排期
+
+> **登记日期**：2026-05-26 · **状态**：战略方向已确认，由旧 Phase 8.M 升级整合，PM 拍板
+>
+> **战略定位**：ME 三大旗舰能力之一（生产 Phase 21 + 学习 Phase 22 + 记忆 Phase 23）。让 ME 从"每次重新生成的工具"升级为"每客户持续学习的共生体"，定义 FDE 服务的真正壁垒。
+>
+> **背景**：2025 年原 Phase 8.M 是"建一个 Marketing Agent 加记忆"的单 Agent 思路。2026 重新定义为**跨 Agent 共享记忆层**（L3 长期学习），整合现有的 L1/L2 记忆机制。
+
+### Phase 23 现状盘点（code audit 2026-05-26）
+
+**已存在的 L1/L2 记忆基础设施（无需重建）：**
+
+| 层次 | 机制 | 代码位置 | 状态 |
+|---|---|---|---|
+| L1 工作记忆 | `luban_messages`（per-execution-item chat） | `src/lib/luban/agent.ts` | ✅ 实战使用，18 条记录 |
+| L1 工作记忆 | `luban_project_messages`（project-level chat） | `src/lib/luban/project-agent.ts` | 🟡 脚手架已建，0 条记录 |
+| L2 短期缓存 | `zhuge_sessions`（每次输出快照） | `src/lib/zhuge/action-persister.ts` | ✅ 写入实战，2 条记录；读取仅取"最新" |
+| L3 长期学习 | — | — | ❌ **完全缺失** |
+| 张骞 / 华佗记忆 | — | — | ❌ **完全无状态** |
+
+### Phase 23 核心交付（L3 长期学习层）
+
+**新增数据表：**
+```sql
+client_learned_preferences   -- FDE 标注 + 客户反馈累积
+client_proven_patterns       -- 该客户跑赢过的 hook/角度/CTA
+client_failed_experiments    -- 失败实验记录，避免重复犯错
+client_decision_history      -- 为什么之前选 X 不选 Y
+```
+
+**喂养源（不重写采集层）：**
+- Phase 22 Data Engine 输出 → 自动抽取"哪种内容跑赢"
+- FDE 手动标注 UI → 让 FDE 给生成结果打"成功 / 失败 / 喜欢 / 不喜欢"标签
+- flywheel_outcomes 表 → 历史结果即学习材料
+- luban_messages + zhuge_sessions → 提取决策上下文
+
+**被消费方（不改既有 prompt 结构，只增加可选注入）：**
+- 张骞 (`src/lib/zhangqian/agent.ts`)：新增 memory 注入入口
+- 华佗（diagnostic）：新增 memory 注入入口
+- 诸葛亮 (`src/lib/zhuge/`)：增强 buildUserPrompt 注入历史决策
+- 鲁班 (`src/lib/luban/agent.ts`)：从 per-execution chat 升级为 cross-execution 学习
+- Phase 21 AI Factory：生成时注入"该客户的获胜模式"
+
+### Phase 23 五个子任务
+
+| 子任务 | 内容 | 工作量 |
+|---|---|---|
+| 23.A | 4 张新表 migration + Memory Service 接口层 | ~3 天 |
+| 23.B | FDE 标注 UI（在 luban 看板 + 生成结果卡片上加"标记好/差/为何"按钮） | ~2 天 |
+| 23.C | 自动抽取器：从 flywheel_outcomes + Data Engine 输出抽取 learned_preferences | ~3 天 |
+| 23.D | 5 个 Agent 接入 memory 注入（zhangqian / huatuo / zhuge / luban / AI Factory） | ~3 天 |
+| 23.E | Memory 浏览/编辑/导出（FDE 可看到客户的累积记忆，可纠正可清除） | ~2 天 |
+
+**总工作量预估：~13 天 / 2-3 周**
+
+### Phase 23 与现有代码的兼容性（已审计 ✅）
+
+| 维度 | 状态 |
+|---|---|
+| 不删除任何现有表 | ✅ |
+| 不改现有 agent 函数签名 | ✅（注入为可选参数） |
+| `luban_messages` | ✅ 保留并复用为 L3 数据源 |
+| `luban_project_messages` | ✅ 启用并喂养 L3 |
+| `zhuge_sessions` | ✅ 保留并扩展（不再只取最新，而是聚合学习） |
+| `master_briefs` | ✅ 不动（DNA 静态 vs Memory 动态，分工不重叠） |
+| `content_strategy_items` | ✅ 作为 Memory 的输入之一 |
+| `flywheel_*` 三表 | ✅ 作为 Memory 的核心喂养源 |
+| `generation_context_snapshot` | ✅ 作为 Memory 的细粒度证据 |
+
+### Phase 23 不做清单
+- ❌ 不重写 luban/zhuge 现有记忆机制（向后兼容）
+- ❌ 不让 Memory 自动覆盖 Master Brief（DNA 由 FDE 显式维护）
+- ❌ 不向客户暴露原始 Memory（仅 FDE 可见和编辑）
+- ❌ 不依赖第三方向量数据库（pgvector 已够用，避免供应商绑定）
+
+### Phase 23 与 Phase 21/22 的协同关系
+
+```
+        Phase 23 Memory Layer
+        ┌─────────────────────────────┐
+        │ L3 长期学习                  │
+        │ ├─ 偏好 ├─ 模式             │
+        │ ├─ 失败 ├─ 决策              │
+        └────┬──────────────────┬─────┘
+             │ 读              │ 写
+             ▼                  ▲
+   Phase 21 AI Factory  ←──  Phase 22 Data Engine
+   （生成时注入获胜模式）    （从执行结果抽取学习信号）
+             │
+             ▼
+         产出更聪明的内容 → 飞轮自强化
+```
 
 ---
 
