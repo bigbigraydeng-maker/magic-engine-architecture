@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-26 05:04 NZST · 当前阶段：**Phase 14.A Website Connector 全部完成 ✅（P14.A.1–8）；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S（P8.S.1–7 SEMrush→DataForSEO 全部已实现）、Phase 9.0（P9.0.10–17 Visual Queue 测试 + QueueOverviewCard 全部已实现）、Phase 12.H（P12.H.1–3 GitHub CMS 闭环全部已实现）。
+> 最后更新：2026-05-26 05:27 NZST · 当前阶段：**Phase 14.A Website Connector 全部完成 ✅（P14.A.1–8）；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S（P8.S.1–7 SEMrush→DataForSEO 全部已实现）、Phase 9.0（P9.0.10–17 Visual Queue 测试 + QueueOverviewCard 全部已实现）、Phase 12.H（P12.H.1–3 GitHub CMS 闭环全部已实现）。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -2452,6 +2452,9 @@ client_decision_history      -- 为什么之前选 X 不选 Y
   - 当前模型问题：Week 5 任务在 Week 1 就写死，5 周内无法响应实际数据；浪费 LLM token 生成大概率会被改写的远期任务；FDE 拿到 33 个任务批量派发，与"先验证再投入"的现代营销原则冲突
   - 改造方向：Plan 保留策略层（exec summary + KPI + 社媒矩阵规格）；Tasks 字段从「全期任务」改为「当前波次任务」；新增「波次复盘 → 下一波次生成」按钮；后端在生成下一波次时注入上一波次的真实表现数据
   - 优先级比 MP-GEN-1/2/3 更根本，建议升级为独立 Phase（Phase 12.W 波次执行模型 或并入 Phase 8.M Marketing Agent 记忆系统），2-3 周内落地
+- **Campaign 字段注入缺口两个 Bug**（Oztop 清仓配置时 PM 现场审计 `campaign-injector.ts` 发现，2026-05-26）：
+  - `MP-GEN-4` ⚠️ **Visual Direction（vi_mood / vi_color_accent / vi_specific_dos / vi_specific_donts / vi_reference_note）完全未被注入 prompt** — 这些字段只在 UI 面板和 AI Generate 按钮里使用，`src/lib/content/campaign-injector.ts` 的 `formatCampaignForPrompt` 没有引用，因此 Marketing Plan 生成的任务 description 完全不知道这次活动的视觉方向。FDE 即使在 ME 里精心填写 Visual Direction（或点 AI Generate 让 ME 自动起草），生成的社媒任务 description 里也不会出现"深胡桃木色 + 浅墙 + 黄铜灯具"等关键视觉指令。**Visual Direction 当前是死端输入**。修复：在 `formatCampaignForPrompt` 添加 vi_* 字段块；下游 Reel/Post/Story 任务的视觉相关描述应受其约束。同时该数据应注入到 Phase 21 AI Factory 的图片/视频生成 prompt（更关键）
+  - `MP-GEN-5` Campaign 的产品/落地页 URL（source_urls）也未被注入 prompt — Marketing Plan 任务即使提到产品也不知道客户网站的对应产品页 URL，无法生成内链锚点。修复：在 prompt 注入产品页清单，让 Claude 在任务 description 里使用（与 Phase 14.F Site Knowledge Graph 协同）
 
 > 每次上线新功能时在此追加。格式：**[完成日期]** — Phase ID + 描述 + Commit 引用。
 > 此日志从 CLAUDE.md §十五.C 迁移至此（2026-05-10），CLAUDE.md 不再维护历史日志。
