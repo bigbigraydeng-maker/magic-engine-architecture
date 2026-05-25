@@ -250,70 +250,81 @@ export function BriefSourcesForm({ clientId, onGenerated }: Props) {
 
       {/* Visual DNA */}
       <div className="border border-gray-100 rounded-xl p-4 bg-gray-50 space-y-3">
-        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-          视觉品牌 DNA <span className="font-normal normal-case text-gray-400">（可选 — 用于图片/视频生成）</span>
-        </p>
         <div>
-          <label className="block text-xs text-gray-500 mb-1">视觉风格关键词</label>
-          <input
-            value={visualStyle}
-            onChange={e => setVisualStyle(e.target.value)}
-            placeholder="e.g. clean, minimalist, warm, luxury, adventure"
-            className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
-          />
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+            视觉品牌 DNA <span className="font-normal normal-case text-gray-400">（用于图片/视频生成 — 文件或手动输入均可）</span>
+          </p>
+          <p className="text-xs text-gray-400 mt-0.5">
+            上传品牌 VI 手册 / 视觉指南，系统将从中自动提取色系、风格和禁忌；也可在下方手动填写覆盖
+          </p>
         </div>
+
+        {/* Visual system file upload */}
         <div>
-          <label className="block text-xs text-gray-500 mb-1">品牌色（逗号分隔 hex 或色名）</label>
-          <input
-            value={brandColors}
-            onChange={e => setBrandColors(e.target.value)}
-            placeholder="e.g. #1A3C5E, #F5A623, navy blue"
-            className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
-          />
+          <label className="block text-xs text-gray-500 mb-1 font-medium">
+            视觉系统文件 <span className="font-normal text-gray-400">（VI 手册、品牌指南 PDF / DOCX）</span>
+          </label>
+          <div
+            className="border-2 border-dashed border-indigo-200 rounded-lg p-3 text-center cursor-pointer hover:border-indigo-400 bg-white transition-colors"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <p className="text-xs text-gray-500">
+              {uploading ? '上传中…' : '点击上传品牌 VI / 视觉指南文件（Claude 将从中提炼视觉 DNA）'}
+            </p>
+          </div>
+          {uploadedFiles.length > 0 && (
+            <ul className="mt-2 space-y-1">
+              {uploadedFiles.map((f, i) => (
+                <li key={i} className="flex items-center justify-between text-xs text-gray-600 bg-white rounded px-3 py-1.5 border border-gray-100">
+                  <span className="truncate max-w-xs">{f.filename} ({(f.sizeBytes / 1024).toFixed(0)} KB)</span>
+                  <button onClick={() => removeFile(i)} className="text-gray-400 hover:text-red-500 ml-2">×</button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
-        <div>
-          <label className="block text-xs text-gray-500 mb-1">视觉禁止（逗号分隔）</label>
-          <input
-            value={visualAvoid}
-            onChange={e => setVisualAvoid(e.target.value)}
-            placeholder="e.g. dark backgrounds, stock photos, text overlays"
-            className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
-          />
+
+        <div className="border-t border-gray-200 pt-3 space-y-2">
+          <p className="text-xs text-gray-400">或手动填写（会覆盖文件中提取的值）</p>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">视觉风格关键词</label>
+            <input
+              value={visualStyle}
+              onChange={e => setVisualStyle(e.target.value)}
+              placeholder="e.g. clean, minimalist, warm, luxury, adventure"
+              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">品牌色（逗号分隔 hex 或色名）</label>
+            <input
+              value={brandColors}
+              onChange={e => setBrandColors(e.target.value)}
+              placeholder="e.g. #1A3C5E, #F5A623, navy blue"
+              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">视觉禁止（逗号分隔）</label>
+            <input
+              value={visualAvoid}
+              onChange={e => setVisualAvoid(e.target.value)}
+              placeholder="e.g. dark backgrounds, stock photos, text overlays"
+              className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-colors"
+            />
+          </div>
         </div>
       </div>
 
-      {/* File Upload */}
-      <div>
-        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-          Upload Documents <span className="font-normal normal-case text-gray-400">(PDF, DOCX, TXT — max 30MB each)</span>
-        </label>
-        <div
-          className="border-2 border-dashed border-gray-200 rounded-lg p-4 text-center cursor-pointer hover:border-indigo-400 transition-colors"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <p className="text-sm text-gray-500">
-            {uploading ? 'Uploading…' : 'Click to upload brand guidelines, strategy docs, etc.'}
-          </p>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept=".pdf,.doc,.docx,.txt"
-            onChange={handleFileSelect}
-            className="hidden"
-          />
-        </div>
-        {uploadedFiles.length > 0 && (
-          <ul className="mt-2 space-y-1">
-            {uploadedFiles.map((f, i) => (
-              <li key={i} className="flex items-center justify-between text-xs text-gray-600 bg-gray-50 rounded px-3 py-1.5">
-                <span className="truncate max-w-xs">{f.filename} ({(f.sizeBytes / 1024).toFixed(0)} KB)</span>
-                <button onClick={() => removeFile(i)} className="text-gray-400 hover:text-red-500 ml-2">×</button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      {/* hidden file input shared by the Visual DNA upload button above */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept=".pdf,.doc,.docx,.txt"
+        onChange={handleFileSelect}
+        className="hidden"
+      />
 
       {/* Errors / Warnings */}
       {error && <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>}

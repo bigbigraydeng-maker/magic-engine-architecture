@@ -226,6 +226,9 @@ export interface CampaignBrief {
   vi_specific_dos?: string[] | null
   vi_specific_donts?: string[] | null
   vi_reference_note?: string | null
+  // Visual inputs — user-supplied context that drives AI generation
+  vi_input_notes?: string | null
+  vi_input_file_urls?: string[] | null
   created_at: string
   updated_at: string
 }

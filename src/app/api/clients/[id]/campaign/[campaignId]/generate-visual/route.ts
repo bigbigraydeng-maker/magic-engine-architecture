@@ -7,9 +7,10 @@ type RouteContext = { params: { id: string; campaignId: string } }
 // POST /api/clients/[id]/campaign/[campaignId]/generate-visual
 // AI-assisted generation of campaign visual direction fields.
 // Reads MB vi_* as the immutable brand guardrail, then specialises
-// for this campaign's context. Returns a preview — does NOT save.
+// for this campaign's context + any user-supplied campaign visual inputs.
+// Returns a preview — does NOT save.
 // Saving is done via PATCH /api/clients/[id]/campaign/[campaignId].
-export async function POST(_req: NextRequest, { params }: RouteContext) {
+export async function POST(req: NextRequest, { params }: RouteContext) {
   const { id: clientId, campaignId } = params
 
   // 1. Fetch campaign
@@ -24,7 +25,23 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
     return NextResponse.json({ success: false, error: 'Campaign not found' }, { status: 404 })
   }
 
-  // 2. Fetch Master Brief (vi_* is the brand visual constitution)
+  // 2. Read optional campaign visual inputs from request body
+  //    Fall back to values already saved on the campaign record
+  let bodyInputNotes: string | null = null
+  let bodyInputFilePaths: string[] = []
+  try {
+    const body = await req.json()
+    bodyInputNotes = body.vi_input_notes ?? null
+    bodyInputFilePaths = Array.isArray(body.vi_input_file_urls) ? body.vi_input_file_urls : []
+  } catch {
+    // no body is fine
+  }
+  const viInputNotes: string | null = bodyInputNotes ?? campaign.vi_input_notes ?? null
+  const viInputFilePaths: string[] = bodyInputFilePaths.length > 0
+    ? bodyInputFilePaths
+    : (campaign.vi_input_file_urls ?? [])
+
+  // 3. Fetch Master Brief (vi_* is the brand visual constitution)
   const { data: brief } = await supabaseAdmin
     .from('master_briefs')
     .select('brand_name, vi_colors, vi_style_keywords, vi_dos, vi_donts, visual_style, color_palette')
@@ -34,7 +51,7 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
     .limit(1)
     .single()
 
-  // 3. Serialise MB visual DNA (gracefully handles missing fields)
+  // 4. Serialise MB visual DNA (gracefully handles missing fields)
   const mbColors = brief?.vi_colors
     ? Object.values(brief.vi_colors as Record<string, string>).filter(Boolean).join(', ')
     : brief?.color_palette?.join(', ') ?? '未设置'
@@ -46,7 +63,7 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
   const mbDos   = brief?.vi_dos?.join('\n- ') ?? '未设置'
   const mbDonts = brief?.vi_donts?.join('\n- ') ?? '未设置'
 
-  // 4. Serialise campaign context
+  // 5. Serialise campaign context
   const campaignContext = [
     `活动标题: ${campaign.title}`,
     campaign.description        ? `活动描述: ${campaign.description}` : null,
@@ -57,15 +74,47 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
     campaign.valid_from         ? `活动时段: ${campaign.valid_from} → ${campaign.valid_until ?? '?'}` : null,
   ].filter(Boolean).join('\n')
 
-  // 5. Call Claude
-  const client = new Anthropic()
+  // 6. Download campaign visual reference files (text + PDF)
+  const campaignDocsBlocks: Anthropic.DocumentBlockParam[] = []
+  const campaignTextSnippets: string[] = []
 
-  const message = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 1024,
-    messages: [{
-      role: 'user',
-      content: `你是一位品牌视觉策略师。请为以下推广活动生成视觉方向。
+  for (const filePath of viInputFilePaths.slice(0, 3)) {
+    try {
+      const { data: blob, error: dlErr } = await supabaseAdmin.storage
+        .from('campaign-uploads')
+        .download(filePath)
+      if (dlErr || !blob) continue
+
+      const ext = filePath.split('.').pop()?.toLowerCase() ?? ''
+      if (ext === 'pdf') {
+        const buffer = Buffer.from(await blob.arrayBuffer())
+        campaignDocsBlocks.push({
+          type: 'document',
+          source: { type: 'base64', media_type: 'application/pdf', data: buffer.toString('base64') },
+        })
+      } else {
+        // txt / docx treated as plain text
+        campaignTextSnippets.push(await blob.text())
+      }
+    } catch {
+      // skip individual file failures silently
+    }
+  }
+
+  // 7. Build Claude message content
+  const campaignVisualInputSection = [
+    viInputNotes
+      ? `## 本次活动视觉要点（用户输入）— 高优先级，请重点体现\n${viInputNotes}`
+      : null,
+    campaignTextSnippets.length > 0
+      ? `## 活动参考文件内容\n${campaignTextSnippets.join('\n\n---\n\n')}`
+      : null,
+    campaignDocsBlocks.length > 0
+      ? `## 参考文件（PDF，见附件）\n请参考已附上的 ${campaignDocsBlocks.length} 份 PDF 参考文件提炼视觉方向。`
+      : null,
+  ].filter(Boolean).join('\n\n')
+
+  const promptText = `你是一位品牌视觉策略师。请为以下推广活动生成视觉方向。
 
 ## 品牌视觉宪法（Master Brief）— 不可违背，只能在此范围内专化
 品牌: ${brief?.brand_name ?? '未知'}
@@ -78,12 +127,14 @@ export async function POST(_req: NextRequest, { params }: RouteContext) {
 
 ## 本次推广活动上下文
 ${campaignContext}
+${campaignVisualInputSection ? `\n${campaignVisualInputSection}` : ''}
 
 ## 任务
 基于品牌视觉宪法，为这次活动生成专属视觉方向。要求：
 1. 活动视觉必须在品牌色系和风格范围内（不能违背）
-2. 可以更具体、更有季节感/主题感，但不能偏离品牌基调
-3. vi_specific_dos 和 vi_specific_donts 是对 MB 的追加，不是替换
+2. 如用户提供了"活动视觉要点"，必须将其核心元素体现在输出中
+3. 可以更具体、更有季节感/主题感，但不能偏离品牌基调
+4. vi_specific_dos 和 vi_specific_donts 是对 MB 的追加，不是替换
 
 请严格输出以下 JSON，不要有任何其他文字：
 {
@@ -92,11 +143,22 @@ ${campaignContext}
   "vi_specific_dos": ["活动专属视觉要做1", "要做2", "要做3"],
   "vi_specific_donts": ["活动专属视觉禁止1", "禁止2"],
   "vi_reference_note": "给AI图片生成工具的一句话视觉参考（英文，用于ChatGPT/Midjourney提示词）"
-}`,
-    }],
+}`
+
+  // 8. Call Claude — include PDF doc blocks if any
+  const client = new Anthropic()
+  const userContent: Anthropic.MessageParam['content'] = [
+    ...campaignDocsBlocks,
+    { type: 'text', text: promptText },
+  ]
+
+  const message = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 1024,
+    messages: [{ role: 'user', content: userContent }],
   })
 
-  // 6. Parse response
+  // 9. Parse response
   const raw = message.content[0].type === 'text' ? message.content[0].text : ''
   let generated: {
     vi_mood: string
