@@ -16,6 +16,7 @@
  */
 
 import { useState } from 'react'
+import Link from 'next/link'
 import type { ExecutionItem } from '@/types/diagnostic'
 import { StudioArticleWorkbench, toArticlePost, type ArticlePost } from './StudioArticleWorkbench'
 
@@ -33,8 +34,8 @@ interface Props {
   clientId: string
   item: ExecutionItem
   hasActiveCampaign: boolean
-  /** Called after a draft is persisted — lets the drawer log it back to the execution item. */
-  onGenerated: (summary: string) => void
+  /** Called after a draft is queued/persisted — lets the drawer log it back to the execution item. */
+  onGenerated: (summary: string, blogPostId?: string) => void
 }
 
 export function StudioArticleTab({ clientId, item, hasActiveCampaign, onGenerated }: Props) {
@@ -48,6 +49,7 @@ export function StudioArticleTab({ clientId, item, hasActiveCampaign, onGenerate
   const [error, setError]           = useState('')
   const [post, setPost]             = useState<ArticlePost | null>(null)
   const [upgrade, setUpgrade]       = useState<UpgradeNotice | null>(null)
+  const [queuedPostId, setQueuedPostId] = useState<string | null>(null)
 
   const generate = async (skipAudit = false) => {
     const kw = keyword.trim()
@@ -80,10 +82,14 @@ export function StudioArticleTab({ clientId, item, hasActiveCampaign, onGenerate
           existing_title: j.audit.existing_title ?? null,
           reason:         j.audit.reason ?? '检测到相似的已有内容，建议升级而非新建',
         })
+      } else if (j.action === 'queued' && j.post_id) {
+        // Background generation queued — log immediately, show link to blog page
+        setQueuedPostId(j.post_id as string)
+        onGenerated(`🤖 已在内容工作台生成 SEO 文章草稿：「${kw}」`, j.post_id as string)
       } else if (j.post) {
         const article = toArticlePost(j.post)
         setPost(article)
-        onGenerated(`🤖 已在内容工作台生成 SEO 文章草稿：「${article.title}」`)
+        onGenerated(`🤖 已在内容工作台生成 SEO 文章草稿：「${article.title}」`, article.id)
       } else {
         throw new Error('生成返回为空，请重试')
       }
@@ -104,6 +110,37 @@ export function StudioArticleTab({ clientId, item, hasActiveCampaign, onGenerate
         onPostUpdated={setPost}
         onRegenerate={() => setPost(null)}
       />
+    )
+  }
+
+  // ── Queued: background generation in progress ──────────────────────────────
+  if (queuedPostId) {
+    return (
+      <div className="max-w-2xl rounded-xl border border-green-200 bg-green-50 p-5 space-y-3">
+        <div className="flex items-center gap-3">
+          <span className="text-2xl">⏳</span>
+          <div>
+            <p className="text-sm font-semibold text-green-800">文章已提交后台生成</p>
+            <p className="text-xs text-green-700 mt-0.5">
+              AI 正在撰写中（约 30–60 秒），完成后可在 Blog Posts 页面查看。
+            </p>
+          </div>
+        </div>
+        <Link
+          href={`/dashboard/clients/${clientId}/blog/${queuedPostId}`}
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800 underline underline-offset-2"
+        >
+          前往查看文章 →
+        </Link>
+        <div className="pt-1">
+          <button
+            onClick={() => setQueuedPostId(null)}
+            className="text-xs text-green-700 hover:text-green-900 underline"
+          >
+            再生成一篇
+          </button>
+        </div>
+      </div>
     )
   }
 

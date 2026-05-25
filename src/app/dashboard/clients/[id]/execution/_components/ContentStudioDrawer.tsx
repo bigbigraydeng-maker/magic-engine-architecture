@@ -73,11 +73,12 @@ export function ContentStudioDrawer({ clientId, item, onClose, onContentGenerate
 
   // Log generated content back to the execution item + bump status to in_progress.
   // Both calls are best-effort: a logging failure must never block content work.
-  const linkContentToItem = useCallback((summary: string) => {
+  const linkContentToItem = useCallback((summary: string, blogPostId?: string) => {
+    const content = blogPostId ? `${summary} [blog:${blogPostId}]` : summary
     fetch(`/api/clients/${clientId}/execution/${item.id}/log`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
-      body: JSON.stringify({ kind: 'ai_assist', author: 'luban', content: summary }),
+      body: JSON.stringify({ kind: 'ai_assist', author: 'luban', content }),
     }).catch(() => { /* non-blocking */ })
 
     if (item.status === 'pending') {

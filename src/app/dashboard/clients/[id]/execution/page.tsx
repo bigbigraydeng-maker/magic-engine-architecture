@@ -324,7 +324,9 @@ function ProgressBar({ completed, total }: { completed: number; total: number })
 // 工作日志时间线
 // ---------------------------------------------------------------------------
 
-function WorklogTimeline({ logs }: { logs: ExecutionLog[] }) {
+const BLOG_REF_RE = /\s*\[blog:([a-zA-Z0-9_-]+)\]/
+
+function WorklogTimeline({ logs, clientId }: { logs: ExecutionLog[]; clientId: string }) {
   if (logs.length === 0) {
     return <p className="text-xs text-gray-400 py-2">暂无工作记录</p>
   }
@@ -337,11 +339,22 @@ function WorklogTimeline({ logs }: { logs: ExecutionLog[] }) {
           hour: '2-digit', minute: '2-digit',
         })
         const authorLabel = log.author === 'fde' ? 'FDE' : log.author === 'luban' ? '鲁班' : '系统'
+        const blogMatch = BLOG_REF_RE.exec(log.content)
+        const blogPostId = blogMatch?.[1]
+        const displayContent = log.content.replace(BLOG_REF_RE, '')
         return (
           <li key={log.id} className="flex gap-2 text-xs">
             <span className="shrink-0">{m.icon}</span>
             <div className="flex-1 min-w-0">
-              <span className={`${m.cls} break-words`}>{log.content}</span>
+              <span className={`${m.cls} break-words`}>{displayContent}</span>
+              {blogPostId && (
+                <Link
+                  href={`/dashboard/clients/${clientId}/blog/${blogPostId}`}
+                  className="ml-1.5 inline-flex items-center gap-0.5 text-indigo-600 hover:text-indigo-800 font-medium underline underline-offset-2"
+                >
+                  查看文章 →
+                </Link>
+              )}
               <span className="text-gray-300 ml-2 whitespace-nowrap">{authorLabel} · {when}</span>
             </div>
           </li>
@@ -808,7 +821,7 @@ function ExecutionItemRow({
             <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">
               工作记录时间线
             </p>
-            <WorklogTimeline logs={item.logs} />
+            <WorklogTimeline logs={item.logs} clientId={item.client_id} />
           </div>
 
           {/* 加记录输入框 */}
