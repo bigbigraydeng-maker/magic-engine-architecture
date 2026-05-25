@@ -239,6 +239,20 @@ function CampaignCard({
   const [editUntil, setEditUntil] = useState(campaign.valid_until ?? '')
   const [saving, setSaving] = useState(false)
 
+  // Batch generation state
+  const [batchPlatforms, setBatchPlatforms] = useState<string[]>(['facebook', 'tiktok'])
+  const [directionNote, setDirectionNote] = useState('')
+  const [routeACount, setRouteACount] = useState(3)
+  const [routeCCount, setRouteCCount] = useState(2)
+  const [generating, setGenerating] = useState(false)
+  const [genResult, setGenResult] = useState<{ count: number } | null>(null)
+  const totalPosts = routeACount + routeCCount
+
+  // Prompt preview modal state
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [showPromptModal, setShowPromptModal] = useState(false)
+  const [previewData, setPreviewData] = useState<{ system_prompt: string; posts: PreviewPost[] } | null>(null)
+
   const handleSaveEdit = async () => {
     if (!editTitle.trim()) return
     setSaving(true)
@@ -265,19 +279,20 @@ function CampaignCard({
     }
   }
 
-  // Batch generation state
-  const [batchPlatforms, setBatchPlatforms] = useState<string[]>(['facebook', 'tiktok'])
-  const [directionNote, setDirectionNote] = useState('')
-  const [routeACount, setRouteACount] = useState(3)
-  const [routeCCount, setRouteCCount] = useState(2)
-  const [generating, setGenerating] = useState(false)
-  const [genResult, setGenResult] = useState<{ count: number } | null>(null)
-  const totalPosts = routeACount + routeCCount
+  const colorClass = CAMPAIGN_COLORS[
+    campaign.id.charCodeAt(0) % CAMPAIGN_COLORS.length
+  ]
 
-  // Prompt preview modal state
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [showPromptModal, setShowPromptModal] = useState(false)
-  const [previewData, setPreviewData] = useState<{ system_prompt: string; posts: PreviewPost[] } | null>(null)
+  const dateLabel = (() => {
+    if (campaign.valid_from && campaign.valid_until) {
+      return `${campaign.valid_from} → ${campaign.valid_until}`
+    }
+    if (campaign.valid_from) return `${campaign.valid_from} 起`
+    if (campaign.valid_until) return `至 ${campaign.valid_until}`
+    return ''
+  })()
+
+  const keywords = (campaign.semrush_keywords ?? []) as CampaignKeywordSnapshot[]
 
   const handlePreviewPrompts = async () => {
     if (totalPosts < 1) { setMsg('✗ 请设置至少 1 条'); return }
@@ -345,21 +360,6 @@ function CampaignCard({
       setGenerating(false)
     }
   }
-
-  const colorClass = CAMPAIGN_COLORS[
-    campaign.id.charCodeAt(0) % CAMPAIGN_COLORS.length
-  ]
-
-  const dateLabel = (() => {
-    if (campaign.valid_from && campaign.valid_until) {
-      return `${campaign.valid_from} → ${campaign.valid_until}`
-    }
-    if (campaign.valid_from) return `${campaign.valid_from} 起`
-    if (campaign.valid_until) return `至 ${campaign.valid_until}`
-    return ''
-  })()
-
-  const keywords = (campaign.semrush_keywords ?? []) as CampaignKeywordSnapshot[]
 
   const handleEnrich = async () => {
     setEnriching(true)
@@ -583,10 +583,10 @@ function CampaignCard({
             </button>
           </div>
 
-          {/* SEMrush Keywords */}
+          {/* Keyword Enrichment */}
           <div>
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-              SEMrush 关键词
+              推广关键词
             </p>
             {/* Seed keyword + DB selector */}
             <div className="flex gap-2 mb-2">
@@ -633,7 +633,7 @@ function CampaignCard({
               </div>
             ) : (
               <p className="text-xs text-gray-400 italic">
-                点击「拉取关键词」从 SEMrush 获取推广相关词
+                点击「拉取」从 Keyword Intelligence 获取推广相关词
               </p>
             )}
           </div>
@@ -651,7 +651,6 @@ function CampaignCard({
               🚀 批量生成内容
             </p>
 
-            {/* Direction note */}
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">内容方向 / 口号</label>
               <textarea
@@ -663,7 +662,6 @@ function CampaignCard({
               />
             </div>
 
-            {/* Platforms */}
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">发布平台</label>
               <div className="flex gap-2">
@@ -685,7 +683,6 @@ function CampaignCard({
               </div>
             </div>
 
-            {/* Post counts */}
             <div>
               <p className="text-xs text-gray-400 mb-2">
                 数字 = 总生成条数（每条同时发布到所选全部平台）
@@ -864,6 +861,14 @@ function VisualDirectionSection({
 }) {
   const hasExisting = !!(campaign.vi_mood || campaign.vi_color_accent || campaign.vi_specific_dos?.length)
 
+  // Campaign visual inputs — drive AI generation
+  const [inputNotes, setInputNotes] = useState(campaign.vi_input_notes ?? '')
+  const [inputFiles, setInputFiles] = useState<{ storagePath: string; filename: string }[]>(
+    (campaign.vi_input_file_urls ?? []).map(p => ({ storagePath: p, filename: p.split('/').pop() ?? p }))
+  )
+  const [uploadingInput, setUploadingInput] = useState(false)
+  const inputFileRef = useRef<HTMLInputElement>(null)
+
   // Draft state populated by AI or manual edit
   const [draft, setDraft] = useState({
     vi_mood:           campaign.vi_mood           ?? '',
@@ -883,13 +888,42 @@ function VisualDirectionSection({
     setDirty(true)
   }
 
+  const handleInputFileUpload = async (file: File) => {
+    setUploadingInput(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch(`/api/clients/${clientId}/campaign/upload`, { method: 'POST', body: fd })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error)
+      setInputFiles(prev => [...prev, { storagePath: json.storage_path, filename: file.name }])
+      setDirty(true)
+    } catch (err) {
+      setMsg(`✗ 上传失败: ${(err as Error).message}`)
+    } finally {
+      setUploadingInput(false)
+    }
+  }
+
+  const removeInputFile = (i: number) => {
+    setInputFiles(prev => prev.filter((_, idx) => idx !== i))
+    setDirty(true)
+  }
+
   const handleGenerate = async () => {
     setGenerating(true)
     setMsg('')
     try {
       const res = await fetch(
         `/api/clients/${clientId}/campaign/${campaign.id}/generate-visual`,
-        { method: 'POST' }
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            vi_input_notes: inputNotes.trim() || null,
+            vi_input_file_urls: inputFiles.map(f => f.storagePath),
+          }),
+        }
       )
       const json = await res.json()
       if (!json.success) throw new Error(json.error)
@@ -918,6 +952,8 @@ function VisualDirectionSection({
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          vi_input_notes:     inputNotes.trim() || null,
+          vi_input_file_urls: inputFiles.map(f => f.storagePath),
           vi_mood:           draft.vi_mood.trim()           || null,
           vi_color_accent:   draft.vi_color_accent.trim()   || null,
           vi_specific_dos:   draft.vi_specific_dos.trim()
@@ -968,6 +1004,48 @@ function VisualDirectionSection({
         </button>
       </div>
 
+      {/* ── Campaign Visual Inputs ── */}
+      <div className="px-4 pt-4 pb-3 space-y-2 border-b border-gray-100 bg-amber-50/40">
+        <p className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+          活动视觉要点 <span className="font-normal normal-case text-gray-400">— 填写后点 AI Generate，系统将结合品牌 DNA 生成方向</span>
+        </p>
+        <textarea
+          value={inputNotes}
+          onChange={e => { setInputNotes(e.target.value); setDirty(true) }}
+          placeholder="描述本次活动的视觉元素：主色调、主题风格、特定场景、情绪基调…例：节日红金配色，温馨家庭聚餐场景，年味十足"
+          rows={3}
+          className={`${INPUT_CLASS} text-xs resize-none`}
+        />
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            ref={inputFileRef}
+            type="file"
+            accept=".pdf,.doc,.docx,.txt"
+            className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) handleInputFileUpload(f) }}
+          />
+          <button
+            onClick={() => inputFileRef.current?.click()}
+            disabled={uploadingInput}
+            className="text-xs border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 px-3 py-1.5 rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
+          >
+            {uploadingInput ? '上传中…' : '+ 上传参考文件'}
+          </button>
+          <span className="text-xs text-gray-400">PDF / DOCX / TXT（活动创意简报、视觉参考等）</span>
+        </div>
+        {inputFiles.length > 0 && (
+          <ul className="space-y-1">
+            {inputFiles.map((f, i) => (
+              <li key={i} className="flex items-center gap-2 text-xs text-gray-600 bg-white rounded px-2 py-1 border border-gray-100">
+                <span className="truncate flex-1">{f.filename}</span>
+                <button onClick={() => removeInputFile(i)} className="text-gray-400 hover:text-red-500">×</button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* ── AI-generated / manually editable fields ── */}
       <div className="px-4 py-4 space-y-3">
         <div className="grid grid-cols-2 gap-3">
           <div>
