@@ -473,12 +473,78 @@ function StatusDropdown({
 }
 
 // ---------------------------------------------------------------------------
-// 单个执行项（可展开）
+// ExecutionItemCard — 紧凑卡片（点击打开右侧详情抽屉）
 // ---------------------------------------------------------------------------
 
-function ExecutionItemRow({
+const DIMENSION_CARD_META: Record<string, { label: string; cls: string }> = {
+  seo:           { label: 'SEO',  cls: 'bg-blue-50 text-blue-600' },
+  ai_visibility: { label: 'GEO', cls: 'bg-violet-50 text-violet-600' },
+  social:        { label: '社媒', cls: 'bg-pink-50 text-pink-600' },
+  ads:           { label: '广告', cls: 'bg-orange-50 text-orange-600' },
+  reputation:    { label: '口碑', cls: 'bg-teal-50 text-teal-600' },
+  competitor:    { label: '竞品', cls: 'bg-yellow-50 text-yellow-600' },
+}
+
+function ExecutionItemCard({
+  item,
+  isActive,
+  onOpenDetail,
+}: {
+  item:         ItemWithLogs
+  isActive:     boolean
+  onOpenDetail: (item: ItemWithLogs) => void
+}) {
+  const fixMeta     = FIX_TYPE_META[item.fix_type ?? ''] ?? FIX_TYPE_META.fde_manual
+  const statusMeta  = STATUS_META[item.status]
+  const dimMeta     = DIMENSION_CARD_META[item.dimension ?? '']
+  const dueDate     = item.due_date
+  const hasAiAssist = item.logs?.some(l => l.kind === 'ai_assist') ?? false
+  const logCount    = item.logs?.length ?? 0
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpenDetail(item)}
+      onKeyDown={e => e.key === 'Enter' && onOpenDetail(item)}
+      className={`rounded-lg border p-2.5 cursor-pointer transition-all select-none ${
+        isActive
+          ? 'border-indigo-400 bg-indigo-50 shadow-sm'
+          : 'border-gray-200 bg-white hover:border-indigo-200 hover:shadow-sm'
+      }`}
+    >
+      <div className="flex items-start gap-2">
+        <span className="text-base shrink-0 mt-0.5">{fixMeta.icon}</span>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-medium text-gray-900 line-clamp-2 leading-tight">{item.title}</p>
+          {item.description && (
+            <p className="text-[11px] text-gray-400 line-clamp-1 mt-0.5">{item.description}</p>
+          )}
+        </div>
+        <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded font-medium ${statusMeta.color}`}>
+          {statusMeta.label}
+        </span>
+      </div>
+      <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+        {dimMeta && (
+          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${dimMeta.cls}`}>{dimMeta.label}</span>
+        )}
+        {dueDate && <span className="text-[10px] text-gray-400">{dueDate}</span>}
+        {hasAiAssist && <span className="text-[10px] text-indigo-600 font-medium">🤖 AI草稿</span>}
+        {logCount > 0 && <span className="text-[10px] text-gray-400">{logCount} 条日志</span>}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// TaskDetailDrawer — 右侧详情抽屉（FDE 工作台，不离开看板）
+// ---------------------------------------------------------------------------
+
+function TaskDetailDrawer({
   item,
   editable,
+  onClose,
   onStatusChange,
   onAddLog,
   onOpenChat,
@@ -487,83 +553,72 @@ function ExecutionItemRow({
   onEditItem,
   onDeleteItem,
 }: {
-  item: ItemWithLogs
-  editable: boolean
+  item:           ItemWithLogs | null
+  editable:       boolean
+  onClose:        () => void
   onStatusChange: (id: string, status: ExecutionItemStatus) => void
-  onAddLog: (id: string, content: string, kind: 'note' | 'blocker') => Promise<void>
-  onOpenChat: (item: ItemWithLogs) => void
+  onAddLog:       (id: string, content: string, kind: 'note' | 'blocker') => Promise<void>
+  onOpenChat:     (item: ItemWithLogs) => void
   onOpenFlywheel: (item: ItemWithLogs, target: ExecutionTarget) => void
-  onOpenStudio: (item: ItemWithLogs) => void
-  onEditItem: (itemId: string, fields: { title?: string; description?: string }) => Promise<boolean>
-  onDeleteItem: (itemId: string) => Promise<void>
+  onOpenStudio:   (item: ItemWithLogs) => void
+  onEditItem:     (itemId: string, fields: { title?: string; description?: string }) => Promise<boolean>
+  onDeleteItem:   (itemId: string) => Promise<void>
 }) {
-  const [expanded, setExpanded] = useState(false)
-  const [noteText, setNoteText] = useState('')
-  const [addingLog, setAddingLog] = useState(false)
-  // 编辑模式
-  const [editing, setEditing]       = useState(false)
-  const [eTitle, setETitle]         = useState(item.title)
-  const [eDesc, setEDesc]           = useState(item.description)
-  const [savingEdit, setSavingEdit] = useState(false)
-  const [seoFixOpen, setSeoFixOpen] = useState(false)
-  const [seoFixing, setSeoFixing]   = useState(false)
-  const [seoFixMsg, setSeoFixMsg]   = useState<{ text: string; ok: boolean; prUrl?: string } | null>(null)
-  const [seoForm, setSeoForm]       = useState({
-    file_path: '', slug: '', field: 'metaTitle', old_value: '', new_value: '',
-  })
+  const [mounted, setMounted]           = useState(false)
+  const [addingLog, setAddingLog]       = useState(false)
+  const [noteText, setNoteText]         = useState('')
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [editTitle, setEditTitle]       = useState('')
+  const [editingDesc, setEditingDesc]   = useState(false)
+  const [editDesc, setEditDesc]         = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
-  const stepsJson = item.steps_json as Record<string, unknown> | null
-  const fixMeta   = FIX_TYPE_META[item.fix_type] ?? { icon: '❓', label: item.fix_type, cls: 'bg-gray-100 text-gray-600' }
-  const moduleKey = typeof stepsJson?.module === 'string' ? stepsJson.module : null
-  const moduleRoute = moduleKey ? MODULE_ROUTE[moduleKey] : null
-  const isDone    = item.status === 'completed' || item.status === 'skipped'
+  useEffect(() => { setMounted(true) }, [])
+
+  useEffect(() => {
+    setNoteText('')
+    setEditingTitle(false)
+    setEditingDesc(false)
+    setConfirmDelete(false)
+  }, [item?.id])
+
+  if (!mounted || !item) return null
+
+  const fixMeta      = FIX_TYPE_META[item.fix_type ?? ''] ?? FIX_TYPE_META.fde_manual
+  const isDone       = item.status === 'completed' || item.status === 'skipped'
+  const isReadonly   = !editable || isAutonomousItem(item)
   const execTarget = item.execution_target
-  const isReadonly = isAutonomousItem(item)
 
-  // 按 execution_target.mode 分发"执行"按钮 UI
   const execButton = (() => {
-    if (execTarget?.mode === 'in_house') {
+    if (!execTarget) return null
+    if (execTarget.mode === 'in_house') {
       const label = FLYWHEEL_IN_HOUSE_LABEL[execTarget.flywheel] ?? execTarget.flywheel
       return (
         <button
           onClick={() => onOpenFlywheel(item, execTarget)}
-          className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 border border-indigo-200 rounded-lg px-3 py-1.5 hover:bg-indigo-50 transition-colors"
         >
-          在 {label} 中执行 →
+          ▶ 在 {label} 中执行
         </button>
       )
     }
-    if (execTarget?.mode === 'third_party') {
+    if (execTarget.mode === 'third_party') {
       const route = FLYWHEEL_THIRD_PARTY_ROUTE[execTarget.flywheel]
       if (!route) return null
       return (
-        <span className="inline-flex items-center gap-1.5 flex-wrap">
-          <Link
-            href={route.path(item.client_id, item.id)}
-            className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium"
-          >
-            在 {route.label} 中执行 →
-          </Link>
-          <span className="text-[10px] text-amber-600 font-medium">完成后请回来打勾 ✓</span>
-        </span>
+        <a href={route.path(item.client_id, item.id)}
+          target="_blank" rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-xs font-medium text-indigo-700 border border-indigo-200 rounded-lg px-3 py-1.5 hover:bg-indigo-50 transition-colors"
+        >
+          ↗ 在 {route.label} 中执行
+        </a>
       )
     }
-    if (execTarget?.mode === 'external_manual') {
+    if (execTarget.mode === 'external_manual') {
       return (
         <span className="inline-flex items-center gap-1 text-[11px] text-gray-400 border border-gray-200 rounded px-1.5 py-0.5">
           👤 FDE 完成后请打勾
         </span>
-      )
-    }
-    // Fallback：旧数据用 moduleRoute
-    if (moduleRoute) {
-      return (
-        <Link
-          href={moduleRoute.path(item.client_id, item.id)}
-          className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium"
-        >
-          在 {moduleRoute.label} 中执行 →
-        </Link>
       )
     }
     return null
@@ -572,307 +627,182 @@ function ExecutionItemRow({
   const submitNote = async (kind: 'note' | 'blocker') => {
     if (!noteText.trim()) return
     setAddingLog(true)
-    try {
-      await onAddLog(item.id, noteText.trim(), kind)
-      setNoteText('')
-    } finally {
-      setAddingLog(false)
-    }
+    await onAddLog(item.id, noteText.trim(), kind)
+    setNoteText('')
+    setAddingLog(false)
   }
 
-  const submitEdit = async () => {
-    if (!eTitle.trim()) return
-    setSavingEdit(true)
-    const ok = await onEditItem(item.id, { title: eTitle.trim(), description: eDesc.trim() })
-    setSavingEdit(false)
-    if (ok) setEditing(false)
-  }
-
-  const submitSeoFix = async () => {
-    const { file_path, slug, field, old_value, new_value } = seoForm
-    // old_value may be empty string when patching a previously missing field
-    if (!file_path.trim() || !slug.trim() || typeof old_value !== 'string' || !new_value.trim()) return
-    setSeoFixing(true)
-    setSeoFixMsg(null)
-    try {
-      const res = await fetch(`/api/clients/${item.client_id}/seo-fix`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${API_KEY}`,
-        },
-        body: JSON.stringify({
-          file_path, slug, field, old_value, new_value,
-          reason: item.title,
-          execution_item_id: item.id,
-        }),
-      })
-      const j = await res.json()
-      if (!res.ok || !j.success) throw new Error(j.error ?? 'Fix failed')
-      setSeoFixMsg({ text: `PR #${j.pr_number} 已创建`, ok: true, prUrl: j.pr_url })
-      setSeoFixOpen(false)
-    } catch (err: unknown) {
-      setSeoFixMsg({ text: err instanceof Error ? err.message : 'Fix failed', ok: false })
-    } finally {
-      setSeoFixing(false)
-    }
-  }
-
-  return (
-    <div className={`rounded-lg border bg-white ${isDone && !isReadonly ? 'opacity-70' : ''}`}>
-      {/* 头部行 */}
-      <div className="p-4 flex items-start gap-3">
-        <span className="text-xl mt-0.5" title={fixMeta.label}>{fixMeta.icon}</span>
-
+  const drawerContent = (
+    <div className="fixed right-0 top-[73px] bottom-0 z-30 flex flex-col w-full sm:w-[440px] bg-white border-l border-gray-200 shadow-2xl overflow-hidden">
+      {/* 抽屉头 */}
+      <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-200 shrink-0">
+        <span className="text-lg">{fixMeta.icon}</span>
         <div className="flex-1 min-w-0">
-          {editing ? (
-            /* ── 编辑模式 ── */
-            <div className="space-y-2">
+          {editingTitle ? (
+            <div className="flex items-center gap-1.5">
               <input
-                value={eTitle}
-                onChange={e => setETitle(e.target.value)}
-                placeholder="执行项标题"
-                className="w-full rounded border border-indigo-300 px-2 py-1.5 text-sm focus:border-indigo-400 focus:outline-none"
+                autoFocus
+                value={editTitle}
+                onChange={e => setEditTitle(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    if (editTitle.trim() && editTitle.trim() !== item.title) {
+                      void onEditItem(item.id, { title: editTitle.trim() })
+                    }
+                    setEditingTitle(false)
+                  }
+                  if (e.key === 'Escape') setEditingTitle(false)
+                }}
+                className="flex-1 text-sm font-medium border-b border-indigo-400 focus:outline-none px-0 py-0 bg-transparent"
               />
+              <button onClick={() => setEditingTitle(false)} className="text-gray-400 text-xs">✕</button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1 group/title">
+              <p className="text-sm font-semibold text-gray-900 truncate">{item.title}</p>
+              {!isReadonly && (
+                <button
+                  onClick={() => { setEditTitle(item.title); setEditingTitle(true) }}
+                  className="opacity-0 group-hover/title:opacity-100 text-gray-400 hover:text-indigo-500 text-xs transition-opacity"
+                  title="编辑标题"
+                >✎</button>
+              )}
+            </div>
+          )}
+          <FdeMetaRow stepsJson={item.steps_json} />
+        </div>
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none shrink-0 ml-1">×</button>
+      </div>
+
+      {/* 主体（可滚动） */}
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+        {/* 状态控制 */}
+        {!isReadonly
+          ? <StatusDropdown status={item.status} onChange={status => onStatusChange(item.id, status)} />
+          : <span className={`inline-block text-xs px-2 py-1 rounded-full font-medium ${STATUS_META[item.status].color}`}>{STATUS_META[item.status].label}</span>
+        }
+
+        {/* 说明 */}
+        <div>
+          <div className="flex items-center gap-1 mb-1 group/desc">
+            <p className="text-xs font-medium text-gray-500">说明</p>
+            {!isReadonly && !editingDesc && (
+              <button
+                onClick={() => { setEditDesc(item.description ?? ''); setEditingDesc(true) }}
+                className="opacity-0 group-hover/desc:opacity-100 text-gray-400 hover:text-indigo-500 text-xs transition-opacity"
+              >✎</button>
+            )}
+          </div>
+          {editingDesc ? (
+            <div className="space-y-1.5">
               <textarea
-                value={eDesc}
-                onChange={e => setEDesc(e.target.value)}
-                rows={2}
-                placeholder="说明"
-                className="w-full rounded border border-indigo-300 px-2 py-1.5 text-xs focus:border-indigo-400 focus:outline-none"
+                autoFocus
+                value={editDesc}
+                onChange={e => setEditDesc(e.target.value)}
+                rows={4}
+                className="w-full rounded-lg border border-gray-300 px-2.5 py-2 text-xs focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
               />
               <div className="flex gap-2">
-                <button
-                  onClick={() => { setEditing(false); setETitle(item.title); setEDesc(item.description) }}
+                <button onClick={() => setEditingDesc(false)}
                   className="flex-1 rounded border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
-                >
-                  取消
-                </button>
+                >取消</button>
                 <button
-                  onClick={() => void submitEdit()}
-                  disabled={!eTitle.trim() || savingEdit}
-                  className="flex-1 rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-                >
-                  {savingEdit ? '保存中…' : '保存'}
-                </button>
+                  onClick={async () => {
+                    if (editDesc.trim() !== (item.description ?? '')) {
+                      await onEditItem(item.id, { description: editDesc.trim() })
+                    }
+                    setEditingDesc(false)
+                  }}
+                  className="flex-1 rounded bg-indigo-600 px-2 py-1 text-xs font-medium text-white hover:bg-indigo-700"
+                >保存</button>
               </div>
             </div>
           ) : (
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className={`text-sm font-semibold ${isDone && !isReadonly ? 'line-through text-gray-400' : 'text-gray-900'}`}>
-                  {item.title}
-                </p>
-                <p className="text-xs text-gray-500 mt-0.5">{item.description}</p>
-              </div>
-              {isReadonly ? (
-                <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_META[item.status].color}`}>
-                  {STATUS_META[item.status].label}
-                </span>
-              ) : (
-                <StatusDropdown status={item.status} onChange={s => onStatusChange(item.id, s)} />
-              )}
-            </div>
-          )}
-
-          {/* FDE 元数据 */}
-          <div className="mt-2">
-            <FdeMetaRow stepsJson={stepsJson} />
-          </div>
-
-          {/* 关联的内容帖子（内容飞轮闭环）*/}
-          {item.linked_post && <LinkedContentCard post={item.linked_post} />}
-
-          {/* 标签行 + 展开按钮（编辑模式下隐藏） */}
-          {!editing && (
-            <div className="flex items-center gap-3 mt-2 flex-wrap">
-              <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${fixMeta.cls}`}>
-                {fixMeta.label}
-              </span>
-              {item.outcome && <OutcomeChip outcome={item.outcome} />}
-              {CONTENT_STUDIO_DIMENSIONS.has(item.dimension) && !isReadonly && (
-                <button
-                  type="button"
-                  onClick={() => onOpenStudio(item)}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 px-2.5 py-1 rounded-lg transition-colors"
-                  title="打开内容工作台 — 生成 SEO 文章或社媒视频"
-                >
-                  ✨ 生成内容
-                </button>
-              )}
-              {item.dimension === 'seo' && !isDone && !isReadonly && (
-                seoFixMsg?.ok ? (
-                  <a href={seoFixMsg.prUrl} target="_blank" rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-green-50 border border-green-200 text-green-700 hover:bg-green-100">
-                    ✓ {seoFixMsg.text} →
-                  </a>
-                ) : (
-                  <button type="button" onClick={() => setSeoFixOpen(v => !v)}
-                    className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700 hover:bg-amber-100">
-                    ⚡ SEO Fix
-                  </button>
-                )
-              )}
-              {execButton}
-              {item.logs.some(l => l.kind === 'ai_assist') && (
-                <button
-                  onClick={() => setExpanded(true)}
-                  className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-600 font-medium border border-indigo-200 hover:bg-indigo-100"
-                  title="鲁班已产出内容，点击查看工作记录"
-                >
-                  🤖 AI草稿
-                </button>
-              )}
-              {item.logs.length > 0 && (
-                <span className="text-[11px] text-gray-400">{item.logs.length} 条工作记录</span>
-              )}
-              <div className="ml-auto flex items-center gap-2">
-                {!isDone && !isReadonly && (
-                  <button
-                    type="button"
-                    onClick={() => onOpenChat(item)}
-                    className="text-xs text-indigo-500 hover:text-indigo-700"
-                    title="与鲁班对话 — 起草内容、分析卡点、拆解下一步"
-                  >
-                    🔨 鲁班
-                  </button>
-                )}
-                {editable && !isDone && !isReadonly && (
-                  <button
-                    type="button"
-                    onClick={() => { setEditing(true); setETitle(item.title); setEDesc(item.description) }}
-                    className="text-xs text-gray-400 hover:text-indigo-600"
-                    title="编辑标题和说明"
-                  >
-                    ✏️ 编辑
-                  </button>
-                )}
-                {editable && item.status === 'pending' && !isReadonly && (
-                  <button
-                    type="button"
-                    onClick={() => void onDeleteItem(item.id)}
-                    className="text-xs text-gray-400 hover:text-red-600"
-                    title="移除此任务（仅限待处理）"
-                  >
-                    🗑 移除
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setExpanded(e => !e)}
-                  className="text-xs text-gray-500 hover:text-gray-800"
-                >
-                  {expanded ? '收起 ▲' : '展开详情 ▼'}
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* SEO Fix inline 表单 */}
-      {seoFixOpen && (
-        <div className="border-t border-amber-100 bg-amber-50/40 px-4 py-3 space-y-2">
-          <p className="text-xs font-semibold text-amber-700">⚡ SEO Fix — 推送元数据修改到 GitHub PR</p>
-          {seoFixMsg && !seoFixMsg.ok && (
-            <p className="text-xs text-red-600">{seoFixMsg.text}</p>
-          )}
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-[10px] text-gray-500 font-medium">文件路径</label>
-              <input value={seoForm.file_path} placeholder="src/lib/data/guides.ts"
-                onChange={e => setSeoForm(f => ({ ...f, file_path: e.target.value }))}
-                className="w-full mt-0.5 rounded border border-gray-300 px-2 py-1 text-xs font-mono focus:border-amber-400 focus:outline-none" />
-            </div>
-            <div>
-              <label className="text-[10px] text-gray-500 font-medium">Slug</label>
-              <input value={seoForm.slug} placeholder="china-small-group-tours-nz"
-                onChange={e => setSeoForm(f => ({ ...f, slug: e.target.value }))}
-                className="w-full mt-0.5 rounded border border-gray-300 px-2 py-1 text-xs font-mono focus:border-amber-400 focus:outline-none" />
-            </div>
-            <div>
-              <label className="text-[10px] text-gray-500 font-medium">字段</label>
-              <select value={seoForm.field}
-                onChange={e => setSeoForm(f => ({ ...f, field: e.target.value }))}
-                className="w-full mt-0.5 rounded border border-gray-300 px-2 py-1 text-xs focus:border-amber-400 focus:outline-none bg-white">
-                <option value="metaTitle">metaTitle</option>
-                <option value="metaDescription">metaDescription</option>
-              </select>
-            </div>
-            <div />
-            <div>
-              <label className="text-[10px] text-gray-500 font-medium">当前值 (old)</label>
-              <input value={seoForm.old_value} placeholder="当前 meta title"
-                onChange={e => setSeoForm(f => ({ ...f, old_value: e.target.value }))}
-                className="w-full mt-0.5 rounded border border-gray-300 px-2 py-1 text-xs focus:border-amber-400 focus:outline-none" />
-            </div>
-            <div>
-              <label className="text-[10px] text-gray-500 font-medium">新值 (new)</label>
-              <input value={seoForm.new_value} placeholder="优化后的 meta title"
-                onChange={e => setSeoForm(f => ({ ...f, new_value: e.target.value }))}
-                className="w-full mt-0.5 rounded border border-gray-300 px-2 py-1 text-xs focus:border-amber-400 focus:outline-none" />
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <button type="button" onClick={() => setSeoFixOpen(false)}
-              className="px-3 py-1 text-xs rounded border border-gray-300 text-gray-600 hover:bg-gray-50">
-              取消
-            </button>
-            <button type="button" onClick={() => void submitSeoFix()} disabled={seoFixing}
-              className="px-3 py-1 text-xs font-semibold rounded bg-amber-500 hover:bg-amber-600 disabled:bg-amber-300 text-white">
-              {seoFixing ? '提交中…' : '提交 Fix → GitHub PR'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* 展开区：工作日志时间线（状态切换已移到卡片头部徽章） */}
-      {expanded && (
-        <div className="border-t border-gray-100 bg-gray-50 p-4 space-y-4">
-          {/* 工作日志时间线 */}
-          <div>
-            <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">
-              工作记录时间线
+            <p className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap">
+              {item.description || <span className="text-gray-400 italic">暂无说明</span>}
             </p>
-            <WorklogTimeline logs={item.logs} clientId={item.client_id} />
-          </div>
-
-          {/* 加记录输入框 */}
-          {!isDone && !isReadonly && (
-            <div className="flex items-start gap-2">
-              <textarea
-                value={noteText}
-                onChange={e => setNoteText(e.target.value)}
-                rows={2}
-                placeholder="记录执行进度，或标记卡点…"
-                className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-xs focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
-              />
-              <div className="flex flex-col gap-1.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => void submitNote('note')}
-                  disabled={addingLog || !noteText.trim()}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 disabled:opacity-50"
-                  title="普通进度笔记 — 灰色显示在时间线"
-                >
-                  📝 记录
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void submitNote('blocker')}
-                  disabled={addingLog || !noteText.trim()}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-red-50 border border-red-200 text-red-700 font-medium hover:bg-red-100 disabled:opacity-50"
-                  title="标记被阻塞 — 红色显示在时间线，方便扫描"
-                >
-                  🚧 卡点
-                </button>
-              </div>
-            </div>
           )}
         </div>
-      )}
+
+        {/* 关联内容 */}
+        {item.linked_post && <LinkedContentCard post={item.linked_post} />}
+
+        {/* Outcome chip */}
+        {item.outcome && <OutcomeChip outcome={item.outcome} />}
+
+        {/* 操作按钮区 */}
+        <div className="flex flex-wrap gap-2 pt-1">
+          <button
+            onClick={() => onOpenChat(item)}
+            className="inline-flex items-center gap-1 text-xs font-medium text-gray-700 border border-gray-200 rounded-lg px-3 py-1.5 hover:border-indigo-300 hover:text-indigo-700 transition-colors"
+          >
+            🔨 鲁班
+          </button>
+          {CONTENT_STUDIO_DIMENSIONS.has(item.dimension ?? '') && (
+            <button
+              onClick={() => onOpenStudio(item)}
+              className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 border border-emerald-200 rounded-lg px-3 py-1.5 hover:bg-emerald-50 transition-colors"
+            >
+              ✨ 生成内容
+            </button>
+          )}
+          {execButton}
+        </div>
+
+        {/* 工作日志时间线 */}
+        {(item.logs?.length ?? 0) > 0 && (
+          <WorklogTimeline logs={item.logs!} clientId={item.client_id} />
+        )}
+
+        {/* 加日志 */}
+        {!isDone && !isReadonly && (
+          <div className="flex items-start gap-2 pt-1">
+            <textarea
+              value={noteText}
+              onChange={e => setNoteText(e.target.value)}
+              rows={2}
+              placeholder="记录执行进度，或标记卡点…"
+              className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-xs focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            />
+            <div className="flex flex-col gap-1.5 shrink-0">
+              <button type="button" onClick={() => void submitNote('note')}
+                disabled={addingLog || !noteText.trim()}
+                className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-medium hover:bg-indigo-700 disabled:opacity-50"
+              >📝 记录</button>
+              <button type="button" onClick={() => void submitNote('blocker')}
+                disabled={addingLog || !noteText.trim()}
+                className="text-xs px-3 py-1.5 rounded-lg bg-red-50 border border-red-200 text-red-700 font-medium hover:bg-red-100 disabled:opacity-50"
+              >🚧 卡点</button>
+            </div>
+          </div>
+        )}
+
+        {/* 删除区 — 仅限 pending 状态 */}
+        {!isReadonly && item.status === 'pending' && (
+          <div className="pt-2 border-t border-gray-100">
+            {confirmDelete ? (
+              <div className="flex items-center gap-2">
+                <p className="text-xs text-gray-500 flex-1">确认移除此任务？</p>
+                <button onClick={() => setConfirmDelete(false)}
+                  className="text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                >取消</button>
+                <button
+                  onClick={async () => { await onDeleteItem(item.id); onClose() }}
+                  className="text-xs px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700"
+                >移除</button>
+              </div>
+            ) : (
+              <button onClick={() => setConfirmDelete(true)}
+                className="text-xs text-red-400 hover:text-red-600 transition-colors"
+              >🗑 移除此任务</button>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
+
+  return createPortal(drawerContent, document.body)
 }
 
 // ---------------------------------------------------------------------------
@@ -910,14 +840,9 @@ function PhaseColumn({
   prescriptionId,
   editable,
   isMarketingPlan,
-  onStatusChange,
-  onAddLog,
-  onOpenChat,
-  onOpenFlywheel,
-  onOpenStudio,
+  activeDetailId,
+  onOpenDetail,
   onAddItem,
-  onEditItem,
-  onDeleteItem,
 }: {
   phase: number
   items: ItemWithLogs[]
@@ -925,14 +850,9 @@ function PhaseColumn({
   prescriptionId: string
   editable: boolean
   isMarketingPlan: boolean
-  onStatusChange: (id: string, status: ExecutionItemStatus) => void
-  onAddLog: (id: string, content: string, kind: 'note' | 'blocker') => Promise<void>
-  onOpenChat: (item: ItemWithLogs) => void
-  onOpenFlywheel: (item: ItemWithLogs, target: ExecutionTarget) => void
-  onOpenStudio: (item: ItemWithLogs) => void
+  activeDetailId: string | null
+  onOpenDetail: (item: ItemWithLogs) => void
   onAddItem: (prescriptionId: string, phase: number, fields: AddItemFields) => Promise<boolean>
-  onEditItem: (itemId: string, fields: { title?: string; description?: string }) => Promise<boolean>
-  onDeleteItem: (itemId: string) => Promise<void>
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const [adding, setAdding] = useState(false)
@@ -996,17 +916,11 @@ function PhaseColumn({
             <p className="text-xs text-gray-400 text-center py-6">此阶段暂无执行项</p>
           )}
           {items.map(item => (
-            <ExecutionItemRow
+            <ExecutionItemCard
               key={item.id}
               item={item}
-              editable={editable}
-              onStatusChange={onStatusChange}
-              onAddLog={onAddLog}
-              onOpenChat={onOpenChat}
-              onOpenFlywheel={onOpenFlywheel}
-              onOpenStudio={onOpenStudio}
-              onEditItem={onEditItem}
-              onDeleteItem={onDeleteItem}
+              isActive={activeDetailId === item.id}
+              onOpenDetail={onOpenDetail}
             />
           ))}
 
@@ -1101,27 +1015,17 @@ type AddItemFields = { title: string; description: string; dimension: string; fi
 function PrescriptionGroup({
   group,
   defaultOpen,
-  onStatusChange,
-  onAddLog,
-  onOpenChat,
-  onOpenFlywheel,
-  onOpenStudio,
+  activeDetailId,
   onDerive,
+  onOpenDetail,
   onAddItem,
-  onEditItem,
-  onDeleteItem,
 }: {
   group: GroupData
   defaultOpen: boolean
-  onStatusChange: (id: string, status: ExecutionItemStatus) => void
-  onAddLog: (id: string, content: string, kind: 'note' | 'blocker') => Promise<void>
-  onOpenChat: (item: ItemWithLogs) => void
-  onOpenFlywheel: (item: ItemWithLogs, target: ExecutionTarget) => void
-  onOpenStudio: (item: ItemWithLogs) => void
+  activeDetailId: string | null
   onDerive: (mode: 'supplement' | 'revision', priorId: string, priorLabel: string) => void
+  onOpenDetail: (item: ItemWithLogs) => void
   onAddItem: (prescriptionId: string, phase: number, fields: AddItemFields) => Promise<boolean>
-  onEditItem: (itemId: string, fields: { title?: string; description?: string }) => Promise<boolean>
-  onDeleteItem: (itemId: string) => Promise<void>
 }) {
   const { items, label, archived, derivable, pid, meta, marketingPlanMeta, editable, kind } = group
 
@@ -1203,14 +1107,9 @@ function PrescriptionGroup({
               prescriptionId={pid}
               editable={editable}
               isMarketingPlan={kind === 'marketing_plan'}
-              onStatusChange={onStatusChange}
-              onAddLog={onAddLog}
-              onOpenChat={onOpenChat}
-              onOpenFlywheel={onOpenFlywheel}
-              onOpenStudio={onOpenStudio}
+              activeDetailId={activeDetailId}
+              onOpenDetail={onOpenDetail}
               onAddItem={onAddItem}
-              onEditItem={onEditItem}
-              onDeleteItem={onDeleteItem}
             />
           ))}
         </div>
@@ -1251,6 +1150,11 @@ export default function ExecutionPage() {
   const [projectLubanOpen, setProjectLubanOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [isDocxLoading, setIsDocxLoading] = useState(false)
+  // 右侧详情抽屉
+  const [detailItem, setDetailItem]       = useState<ItemWithLogs | null>(null)
+  const [detailEditable, setDetailEditable] = useState(false)
+  // 维度过滤
+  const [activeDimension, setActiveDimension] = useState<string>('all')
 
   const handleDownloadDocx = async () => {
     setIsDocxLoading(true)
@@ -1319,6 +1223,14 @@ export default function ExecutionPage() {
   }, [clientId, prescriptionId])
 
   useEffect(() => { void fetchItems() }, [fetchItems])
+
+  // 静默刷新后同步 detailItem（保持抽屉内容最新）
+  useEffect(() => {
+    if (!detailItem) return
+    const fresh = items.find(i => i.id === detailItem.id)
+    if (fresh && fresh !== detailItem) setDetailItem(fresh)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items])
 
   // 状态变更 — 乐观更新（点击立即变）+ 失败回滚并报错
   const handleStatusChange = useCallback(async (itemId: string, status: ExecutionItemStatus) => {
@@ -1447,8 +1359,11 @@ export default function ExecutionPage() {
     }
   }, [clientId])
 
-  const completedCount = items.filter(i => i.status === 'completed').length
-  const prescriptionGroups = buildExecutionGroups(items, prescriptions, marketingPlans)
+  const filteredItems       = activeDimension === 'all' ? items : items.filter(i => i.dimension === activeDimension)
+  const availableDimensions = Array.from(new Set(items.map(i => i.dimension).filter(Boolean))) as string[]
+  const completedCount      = filteredItems.filter(i => i.status === 'completed').length
+  const prescriptionGroups  = buildExecutionGroups(filteredItems, prescriptions, marketingPlans)
+    .filter(g => g.items.length > 0)
 
   // ── Loading ───────────────────────────────────────────────────────────────
   if (loading) {
@@ -1560,7 +1475,7 @@ export default function ExecutionPage() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-6 py-6 space-y-4">
+      <div className={`max-w-7xl mx-auto px-6 py-6 space-y-4 transition-all duration-200 ${detailItem ? 'pr-[452px]' : ''}`}>
         {/* 操作错误提示（状态变更 / 加日志失败时） */}
         {opError && (
           <div className="rounded-xl border border-red-200 bg-red-50 p-3 flex items-center justify-between gap-3 text-sm text-red-700">
@@ -1572,26 +1487,65 @@ export default function ExecutionPage() {
         {/* Campaign 上下文锚点 — FDE 执行任务时随时可见 */}
         <ActiveCampaignBanner clientId={clientId} />
 
-        <ProgressBar completed={completedCount} total={items.length} />
+        {/* 维度过滤 tabs */}
+        {availableDimensions.length > 1 && (() => {
+          const DIM_TABS = [
+            { v: 'all',           label: '全部' },
+            { v: 'social',        label: '📱 社媒' },
+            { v: 'seo',           label: '🔍 SEO' },
+            { v: 'ai_visibility', label: '🤖 GEO' },
+            { v: 'ads',           label: '📢 广告' },
+            { v: 'reputation',    label: '⭐ 口碑' },
+            { v: 'competitor',    label: '🔭 竞品' },
+          ].filter(t => t.v === 'all' || (availableDimensions as string[]).includes(t.v))
+          return (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {DIM_TABS.map(t => (
+                <button
+                  key={t.v}
+                  onClick={() => setActiveDimension(t.v)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    activeDimension === t.v
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-white border border-gray-200 text-gray-600 hover:border-indigo-300 hover:text-indigo-700'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          )
+        })()}
+
+        <ProgressBar completed={completedCount} total={filteredItems.length} />
 
         {/* 按处方分组 — 原处方 / 补充 / 修订 / 已归档 各成一组 */}
-        {prescriptionGroups.map((group, gi) => (
+        {prescriptionGroups.map(group => (
           <PrescriptionGroup
             key={group.pid}
             group={group}
             defaultOpen={true}
-            onStatusChange={handleStatusChange}
-            onAddLog={handleAddLog}
-            onOpenChat={setChatItem}
-            onOpenFlywheel={(item, target) => setFlywheelState({ item, target })}
-            onOpenStudio={setStudioItem}
+            activeDetailId={detailItem?.id ?? null}
             onDerive={(mode, priorId, priorLabel) => setDeriveDrawer({ mode, priorId, priorLabel })}
+            onOpenDetail={item => { setDetailItem(item); setDetailEditable(group.editable) }}
             onAddItem={handleAddItem}
-            onEditItem={handleEditItem}
-            onDeleteItem={handleDeleteItem}
           />
         ))}
       </div>
+
+      {/* 右侧任务详情抽屉 */}
+      <TaskDetailDrawer
+        item={detailItem}
+        editable={detailEditable}
+        onClose={() => setDetailItem(null)}
+        onStatusChange={handleStatusChange}
+        onAddLog={handleAddLog}
+        onOpenChat={item => setChatItem(item)}
+        onOpenFlywheel={(item, target) => setFlywheelState({ item, target })}
+        onOpenStudio={item => setStudioItem(item)}
+        onEditItem={handleEditItem}
+        onDeleteItem={handleDeleteItem}
+      />
 
       {/* 飞轮执行抽屉（in_house 模式） */}
       {flywheelState && (

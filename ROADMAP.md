@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-26 03:42 NZST · 当前阶段：**Phase 14.A Website Connector 全部完成 ✅（P14.A.1–8）；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S（P8.S.1–7 SEMrush→DataForSEO 全部已实现）、Phase 9.0（P9.0.10–17 Visual Queue 测试 + QueueOverviewCard 全部已实现）、Phase 12.H（P12.H.1–3 GitHub CMS 闭环全部已实现）。
+> 最后更新：2026-05-26 04:18 NZST · 当前阶段：**Phase 14.A Website Connector 全部完成 ✅（P14.A.1–8）；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S（P8.S.1–7 SEMrush→DataForSEO 全部已实现）、Phase 9.0（P9.0.10–17 Visual Queue 测试 + QueueOverviewCard 全部已实现）、Phase 12.H（P12.H.1–3 GitHub CMS 闭环全部已实现）。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -2262,6 +2262,13 @@ AU / NZ（当前）          新市场（未来）
 
 - **Oztop Pet Flooring 发布** — 手动发布「Pet Friendly Flooring in Brisbane」至 oztopbuildingsupplies.com.au；确认 SiteGround IP 封锁根因（nginx ipr 封 Render IP 74.220.48.245）；修复 Astra 全大写 CSS；修正 GEO 指令 Sydney→Brisbane 6 处；Yoast SEO 配置完成（focus keyphrase / SEO title / slug / meta description）；Google Search Console 提交收录；已发布 URL：`/pet-friendly-flooring-brisbane/`
 - **Phase 14.F 登记** — 客户网站知识图谱（Site Knowledge Graph）：ME 生成博客缺内链根因确认 → 设计 `client_site_pages` 表 + sitemap 爬取流程 + 博客生成集成点；Oztop 38 个产品分类 URL 已首次爬取记录
+- **Marketing Plan UX 两个待修 Bug**（Oztop 清仓 campaign 配置时发现）：
+  - `MP-UX-1` Marketing Plan 日期应从关联 Campaign 自动继承（当前需手动填，无场景需求差异化）；选了 Campaign 后字段应只读或锁定到 Campaign 周期内
+  - `MP-UX-2` Marketing Plan「FDE 关注点」缺 AI Generate 按钮；应基于 MB + Campaign + 上传文件自动起草，类似 Visual Direction 的体验；降低 FDE 起草门槛
+- **Marketing Plan 生成质量三个根因 Bug**（Oztop 清仓 Plan 输出后发现，根因已定位至 `src/lib/marketing-plan/generator.ts`）：
+  - `MP-GEN-1` 内容强度参数过于模糊：`intensity === 'aggressive'` 只是单句 prompt 提示「high volume, accept some lower-quality tasks」，没有给 Claude 具体数量基准。应改为：light=2-3/周，standard=4-6/周，aggressive=8-12/周，且按 campaign 类型（清仓/launch/sustain）有不同 baseline
+  - `MP-GEN-2` System prompt 有「prefer fewer high-quality tasks」一句话，导致 Claude 识别到"premium positioning"就自动降量，与清仓/促销场景直接冲突，导致博客 monthly_count 永远偏低（Oztop 5 周清仓只生成 1 篇博客）。应根据 campaign 类型动态调整该指令
+  - `MP-GEN-3` ⚠️ **viral_reference_library 表完全未被引用** — `generate/route.ts` 只读 master_briefs / campaign_briefs / content_strategy_items 三张表，Viral Reference 数据虽然采集了但从未注入 Marketing Plan 生成。应在 Reel 任务生成时拉取行业相关的爆款 hook 结构，注入 prompt 让 Claude 借鉴而非通用模板
 
 > 每次上线新功能时在此追加。格式：**[完成日期]** — Phase ID + 描述 + Commit 引用。
 > 此日志从 CLAUDE.md §十五.C 迁移至此（2026-05-10），CLAUDE.md 不再维护历史日志。
