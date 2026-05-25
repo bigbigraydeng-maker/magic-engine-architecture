@@ -15,6 +15,7 @@ import {
   buildExecutionGroups,
   formatOutcomeLabel,
   isAutonomousItem,
+  MARKETING_PLAN_GROUP_PREFIX,
   type GroupData,
   type ItemWithLogs,
   type MarketingPlanMeta,
@@ -484,6 +485,7 @@ function ExecutionItemRow({
   onOpenFlywheel,
   onOpenStudio,
   onEditItem,
+  onDeleteItem,
 }: {
   item: ItemWithLogs
   editable: boolean
@@ -493,6 +495,7 @@ function ExecutionItemRow({
   onOpenFlywheel: (item: ItemWithLogs, target: ExecutionTarget) => void
   onOpenStudio: (item: ItemWithLogs) => void
   onEditItem: (itemId: string, fields: { title?: string; description?: string }) => Promise<boolean>
+  onDeleteItem: (itemId: string) => Promise<void>
 }) {
   const [expanded, setExpanded] = useState(false)
   const [noteText, setNoteText] = useState('')
@@ -744,6 +747,16 @@ function ExecutionItemRow({
                     ✏️ 编辑
                   </button>
                 )}
+                {editable && item.status === 'pending' && !isReadonly && (
+                  <button
+                    type="button"
+                    onClick={() => void onDeleteItem(item.id)}
+                    className="text-xs text-gray-400 hover:text-red-600"
+                    title="移除此任务（仅限待处理）"
+                  >
+                    🗑 移除
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setExpanded(e => !e)}
@@ -879,6 +892,16 @@ const FIX_TYPE_OPTIONS: { v: string; label: string }[] = [
   { v: 'me_auto', label: 'ME 自动' },
   { v: 'third_party', label: '第三方' },
 ]
+const SOCIAL_PLATFORM_OPTIONS: { v: string; label: string }[] = [
+  { v: 'facebook',  label: 'Facebook' },
+  { v: 'instagram', label: 'Instagram' },
+  { v: 'tiktok',    label: 'TikTok' },
+]
+const SOCIAL_KIND_OPTIONS: { v: string; label: string }[] = [
+  { v: 'social_post',  label: '帖子' },
+  { v: 'social_reel',  label: 'Reel 视频' },
+  { v: 'social_story', label: 'Story' },
+]
 
 function PhaseColumn({
   phase,
@@ -886,6 +909,7 @@ function PhaseColumn({
   defaultOpen,
   prescriptionId,
   editable,
+  isMarketingPlan,
   onStatusChange,
   onAddLog,
   onOpenChat,
@@ -893,12 +917,14 @@ function PhaseColumn({
   onOpenStudio,
   onAddItem,
   onEditItem,
+  onDeleteItem,
 }: {
   phase: number
   items: ItemWithLogs[]
   defaultOpen: boolean
   prescriptionId: string
   editable: boolean
+  isMarketingPlan: boolean
   onStatusChange: (id: string, status: ExecutionItemStatus) => void
   onAddLog: (id: string, content: string, kind: 'note' | 'blocker') => Promise<void>
   onOpenChat: (item: ItemWithLogs) => void
@@ -906,13 +932,16 @@ function PhaseColumn({
   onOpenStudio: (item: ItemWithLogs) => void
   onAddItem: (prescriptionId: string, phase: number, fields: AddItemFields) => Promise<boolean>
   onEditItem: (itemId: string, fields: { title?: string; description?: string }) => Promise<boolean>
+  onDeleteItem: (itemId: string) => Promise<void>
 }) {
   const [open, setOpen] = useState(defaultOpen)
-  const [adding, setAdding] = useState(false)       // 是否展开"加执行项"表单
+  const [adding, setAdding] = useState(false)
   const [aTitle, setATitle] = useState('')
   const [aDesc, setADesc]   = useState('')
   const [aDim, setADim]     = useState('seo')
   const [aFix, setAFix]     = useState('fde_manual')
+  const [aPlatform, setAPlatform] = useState('facebook')
+  const [aKind, setAKind]         = useState('social_post')
   const [submitting, setSubmitting] = useState(false)
 
   const meta      = PHASE_LABELS[phase] ?? { name: `Phase ${phase}`, color: 'bg-gray-600' }
@@ -921,13 +950,14 @@ function PhaseColumn({
   const submitAdd = async () => {
     if (!aTitle.trim()) return
     setSubmitting(true)
-    const ok = await onAddItem(prescriptionId, phase, {
-      title: aTitle.trim(), description: aDesc.trim() || aTitle.trim(),
-      dimension: aDim, fix_type: aFix,
-    })
+    const fields: AddItemFields = isMarketingPlan
+      ? { title: aTitle.trim(), description: aDesc.trim() || aTitle.trim(), dimension: 'social', fix_type: 'fde_manual', platform: aPlatform, kind: aKind }
+      : { title: aTitle.trim(), description: aDesc.trim() || aTitle.trim(), dimension: aDim, fix_type: aFix }
+    const ok = await onAddItem(prescriptionId, phase, fields)
     setSubmitting(false)
     if (ok) {
       setATitle(''); setADesc(''); setADim('seo'); setAFix('fde_manual')
+      setAPlatform('facebook'); setAKind('social_post')
       setAdding(false)
     }
   }
@@ -976,6 +1006,7 @@ function PhaseColumn({
               onOpenFlywheel={onOpenFlywheel}
               onOpenStudio={onOpenStudio}
               onEditItem={onEditItem}
+              onDeleteItem={onDeleteItem}
             />
           ))}
 
@@ -996,18 +1027,37 @@ function PhaseColumn({
                 className="w-full rounded border border-gray-300 px-2 py-1.5 text-xs focus:border-indigo-400 focus:outline-none"
               />
               <div className="flex gap-2">
-                <select
-                  value={aDim} onChange={e => setADim(e.target.value)}
-                  className="flex-1 rounded border border-gray-300 px-1.5 py-1 text-xs"
-                >
-                  {DIMENSION_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
-                </select>
-                <select
-                  value={aFix} onChange={e => setAFix(e.target.value)}
-                  className="flex-1 rounded border border-gray-300 px-1.5 py-1 text-xs"
-                >
-                  {FIX_TYPE_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
-                </select>
+                {isMarketingPlan ? (
+                  <>
+                    <select
+                      value={aPlatform} onChange={e => setAPlatform(e.target.value)}
+                      className="flex-1 rounded border border-gray-300 px-1.5 py-1 text-xs"
+                    >
+                      {SOCIAL_PLATFORM_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+                    </select>
+                    <select
+                      value={aKind} onChange={e => setAKind(e.target.value)}
+                      className="flex-1 rounded border border-gray-300 px-1.5 py-1 text-xs"
+                    >
+                      {SOCIAL_KIND_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+                    </select>
+                  </>
+                ) : (
+                  <>
+                    <select
+                      value={aDim} onChange={e => setADim(e.target.value)}
+                      className="flex-1 rounded border border-gray-300 px-1.5 py-1 text-xs"
+                    >
+                      {DIMENSION_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+                    </select>
+                    <select
+                      value={aFix} onChange={e => setAFix(e.target.value)}
+                      className="flex-1 rounded border border-gray-300 px-1.5 py-1 text-xs"
+                    >
+                      {FIX_TYPE_OPTIONS.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+                    </select>
+                  </>
+                )}
               </div>
               <div className="flex gap-2">
                 <button
@@ -1046,7 +1096,7 @@ function PhaseColumn({
 // PrescriptionGroup — 一个处方的执行项分组（P8.10.S5）
 // ---------------------------------------------------------------------------
 
-type AddItemFields = { title: string; description: string; dimension: string; fix_type: string }
+type AddItemFields = { title: string; description: string; dimension: string; fix_type: string; platform?: string; kind?: string }
 
 function PrescriptionGroup({
   group,
@@ -1059,6 +1109,7 @@ function PrescriptionGroup({
   onDerive,
   onAddItem,
   onEditItem,
+  onDeleteItem,
 }: {
   group: GroupData
   defaultOpen: boolean
@@ -1070,6 +1121,7 @@ function PrescriptionGroup({
   onDerive: (mode: 'supplement' | 'revision', priorId: string, priorLabel: string) => void
   onAddItem: (prescriptionId: string, phase: number, fields: AddItemFields) => Promise<boolean>
   onEditItem: (itemId: string, fields: { title?: string; description?: string }) => Promise<boolean>
+  onDeleteItem: (itemId: string) => Promise<void>
 }) {
   const { items, label, archived, derivable, pid, meta, marketingPlanMeta, editable, kind } = group
 
@@ -1150,6 +1202,7 @@ function PrescriptionGroup({
               defaultOpen={defaultOpen}
               prescriptionId={pid}
               editable={editable}
+              isMarketingPlan={kind === 'marketing_plan'}
               onStatusChange={onStatusChange}
               onAddLog={onAddLog}
               onOpenChat={onOpenChat}
@@ -1157,6 +1210,7 @@ function PrescriptionGroup({
               onOpenStudio={onOpenStudio}
               onAddItem={onAddItem}
               onEditItem={onEditItem}
+              onDeleteItem={onDeleteItem}
             />
           ))}
         </div>
@@ -1315,18 +1369,22 @@ export default function ExecutionPage() {
     }
   }, [clientId])
 
-  // 新增执行项（处方活化 S5.2）
+  // 新增执行项（处方活化 S5.2 / Marketing Plan 看板加任务）
   const handleAddItem = useCallback(async (
     prescriptionId: string,
     phase: number,
-    fields: { title: string; description: string; dimension: string; fix_type: string },
+    fields: AddItemFields,
   ): Promise<boolean> => {
     setOpError(null)
     try {
+      const isMP = prescriptionId.startsWith(MARKETING_PLAN_GROUP_PREFIX)
+      const body = isMP
+        ? { marketing_plan_id: prescriptionId.slice(MARKETING_PLAN_GROUP_PREFIX.length), phase, ...fields }
+        : { prescription_id: prescriptionId, phase, ...fields }
       const res = await fetch(`/api/clients/${clientId}/execution`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
-        body:    JSON.stringify({ prescription_id: prescriptionId, phase, ...fields }),
+        body:    JSON.stringify(body),
         cache:   'no-store',
       })
       if (!res.ok) {
@@ -1367,6 +1425,27 @@ export default function ExecutionPage() {
       return false
     }
   }, [clientId, fetchItems])
+
+  // 移除执行项（仅限 pending 状态）
+  const handleDeleteItem = useCallback(async (itemId: string): Promise<void> => {
+    setOpError(null)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/execution/${itemId}`, {
+        method:  'DELETE',
+        headers: { Authorization: `Bearer ${API_KEY}` },
+        cache:   'no-store',
+      })
+      if (!res.ok) {
+        let msg = `移除失败（HTTP ${res.status}）`
+        try { const eb = await res.json() as { error?: string }; if (eb?.error) msg = eb.error } catch {/* */}
+        setOpError(msg)
+        return
+      }
+      setItems(prev => prev.filter(i => i.id !== itemId))
+    } catch {
+      setOpError('移除失败，请重试')
+    }
+  }, [clientId])
 
   const completedCount = items.filter(i => i.status === 'completed').length
   const prescriptionGroups = buildExecutionGroups(items, prescriptions, marketingPlans)
@@ -1509,6 +1588,7 @@ export default function ExecutionPage() {
             onDerive={(mode, priorId, priorLabel) => setDeriveDrawer({ mode, priorId, priorLabel })}
             onAddItem={handleAddItem}
             onEditItem={handleEditItem}
+            onDeleteItem={handleDeleteItem}
           />
         ))}
       </div>

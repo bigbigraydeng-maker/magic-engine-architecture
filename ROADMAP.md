@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-26 01:22 NZST · 当前阶段：**Phase 14.A Website Connector 全部完成 ✅（P14.A.1–8）；Phase 13.A Prospect 注册流程 ✅**。
+> 最后更新：2026-05-26 03:06 NZST · 当前阶段：**Phase 14.A Website Connector 全部完成 ✅（P14.A.1–8）；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S（P8.S.1–7 SEMrush→DataForSEO 全部已实现）、Phase 9.0（P9.0.10–17 Visual Queue 测试 + QueueOverviewCard 全部已实现）、Phase 12.H（P12.H.1–3 GitHub CMS 闭环全部已实现）。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -50,13 +50,13 @@
 ✅ UX 基础修复   全站标题/Login try-catch/客户可见供应商名/WorkflowProgress/ContentHub 简化（2026-05-20）
 ✅ Phase 12.Q   内容质量闭环（已完成，2026-05-21）
 ✅ Phase 12.G   诸葛亮策略调度引擎（P12.G.1–G.5 全部完成，2026-05-21）
-📋 Phase 12.H   GitHub CMS 执行闭环（P1 博客推PR + P2 SEO Fix UI，已登记未开工）
+✅ Phase 12.H   GitHub CMS 执行闭环（P12.H.1-3 全部完成，2026-05-25 核实）
 ✅ Phase 12.I   SEO Intelligence 页面 + 飞轮闭环接线（P12.I.1–I.10 全部完成，M3 待 PM 验证）
 ✅ Phase 12.J   博客头图配图生成（P12.J.1 ✅，P12.J.2 ✅）
 ✅ Phase 12.K   Campaign 视觉方向（P12.K.1 ✅，2026-05-23）
 🔥 Phase 13.A   Prospect 注册流程（/discover Magic Link + 报告看板 + 处方门控）
 📋 Phase 13     Production Package / 生产订单聚合层（已登记，待排期）
-🔄 Phase 9.0    Visual Queue UX Polish（部分完成，未收尾）
+✅ Phase 9.0    Visual Queue UX Polish（全部完成，含测试 P9.0.10-14 + QueueOverviewCard P9.0.15-17，2026-05-25 核实）
 📋 Phase 9      报告化 + 客户 Portal
 📋 Phase 10     多语言 + Magic Lab Academy 沉淀
 📋 Phase 14     Website Connector / 网站直连执行闭环（⭐ WordPress 连接器近期优先 — P14.A.5）
@@ -1023,19 +1023,19 @@ DiscoveredReviewPlatform: 新增 tripadvisor
 
 **目标**：为三个 UI 组件编写集成测试，覆盖网络延迟、超时、多提供商的边界场景。
 
-- [ ] **P9.0.10** `src/components/visual/__tests__/GenerationProgress.test.tsx`：测试进度环 0%-95% 过渡、倒计时每秒刷新、取消按钮在 1.5x 倍数时激活
-- [ ] **P9.0.11** 网络延迟模拟测试：验证本地 1Hz 平滑隐藏 5s 轮询波动
-- [ ] **P9.0.12** 多提供商时间估算测试：针对 wavespeed（3min）、seedance（4min）、heygen（2min）验证 getCancelThresholdMs() 的计算
-- [ ] **P9.0.13** 边界场景测试：0ms 倒数、NaN 估算、提供商超时重分类后的进度重置
-- [ ] **P9.0.14** 覆盖率验证：运行 `npm test --coverage`，确保 ≥ 80%
+- [x] **P9.0.10** `src/components/visual/__tests__/GenerationProgress.test.tsx`：测试进度环 0%-95% 过渡、倒计时每秒刷新、取消按钮在 1.5x 倍数时激活 ✅
+- [x] **P9.0.11** 网络延迟模拟测试：验证本地 1Hz 平滑隐藏 5s 轮询波动 ✅
+- [x] **P9.0.12** 多提供商时间估算测试：针对 wavespeed（3min）、seedance（4min）、heygen（2min）验证 getCancelThresholdMs() 的计算 ✅
+- [x] **P9.0.13** 边界场景测试：0ms 倒数、NaN 估算、提供商超时重分类后的进度重置 ✅
+- [x] **P9.0.14** 覆盖率验证：运行 `npm test --coverage`，确保 ≥ 80% ✅
 
 #### Phase 9.0.5 — 队列概览浮动卡（Phase 3）
 
 **目标**：为长队列场景提供浮动卡片，一览所有在生成的资产，点击跳转到对应资产详情。
 
-- [ ] **P9.0.15** 创建 `src/components/visual/QueueOverviewCard.tsx`：显示 activeGenerations 列表（资产 ID、进度、倒计时），支持展开/收缩，固定在右下角（`fixed bottom-4 right-4`），点击行项目滚动到对应资产
-- [ ] **P9.0.16** Hook 集成：从 `useGenerationQueue` 获取 `activeGenerations`，支持 `showQueueCard` 状态切换（10+ 任务时自动显示）
-- [ ] **P9.0.17** E2E 测试：验证卡片在多资产生成时可用，滚动跳转功能正常
+- [x] **P9.0.15** 创建 `src/components/visual/QueueOverviewCard.tsx`：显示 activeGenerations 列表（资产 ID、进度、倒计时），支持展开/收缩，固定在右下角（`fixed bottom-4 right-4`），点击行项目滚动到对应资产 ✅
+- [x] **P9.0.16** Hook 集成：从 `useGenerationQueue` 获取 `activeGenerations`，支持 `showQueueCard` 状态切换（10+ 任务时自动显示）✅
+- [x] **P9.0.17** E2E 测试：验证卡片在多资产生成时可用，滚动跳转功能正常 ✅
 
 **完成条件**：所有 17 项任务完成、测试覆盖 ≥ 80%、UI 无卡顿、支持 Cancel 操作。
 
@@ -1323,24 +1323,17 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
 
 ### Phase 8.S — SEMrush → DataForSEO 关键词接口迁移（成本优化）
 
-> 登记于 2026-05-18。背景：SEMrush 关键词 API 按 units 计费（10 units/词 ≈ $0.05/词），DataForSEO Labs 同等接口按 task 计费（$0.01–0.02/task，批量无限词）；实测相同数据量节省 96–99%。
+> 登记于 2026-05-18；**P8.S.1–7 已全部实现，2026-05-25 代码核实**（`src/lib/dataforseo/labs.ts` 全部替换函数已存在且被调用）。P8.S.8（`batchKeywordOverview`）低优先级，暂缓。
+> 背景：SEMrush 关键词 API 按 units 计费（10 units/词 ≈ $0.05/词），DataForSEO Labs 同等接口按 task 计费（$0.01–0.02/task，批量无限词）；实测相同数据量节省 96–99%。
 > 迁移优先级：按当前用量成本从高到低排序。
 
-- [ ] **P8.S.1** — `getRelatedKeywords`（`phrase_related`）→ `dataforseo_labs/google/related_keywords/live`
-  - 最高优先：500 units/次，日志里已有 4 次重复调用（浪费 1500 units）
-  - 验收：同一种子词返回 50 条关键词，含 volume / KD / CPC / intent，单次成本 ≤ $0.02
-- [ ] **P8.S.2** — `getDomainOrganicKeywords`（`domain_organic`）→ `dataforseo_labs/google/ranked_keywords/live`
-  - 验收：输入域名返回 ≥50 条排名词，含 position，格式与现有 `SemrushKeywordData` 接口兼容
-- [ ] **P8.S.3** — `getKeywordGap`（`phrase_kgap`）→ `dataforseo_labs/google/domain_intersection/live`
-  - 验收：输入客户域名 + 3 竞品域名，返回竞品有排名但客户无排名的关键词列表
-- [ ] **P8.S.4** — `getDomainCompetitors`（`domain_organic_organic`）→ `dataforseo_labs/google/competitors_domain/live`
-  - 验收：输入域名返回 ≥5 个竞品域名，含 overlap_score
-- [ ] **P8.S.5** — `getQuestionKeywords`（`phrase_questions`）→ `dataforseo_labs/google/keyword_suggestions/live`（过滤 question intent）
-  - 验收：FAQ 内容选题流程产出结果正常，含 "how/what/why" 类问题词
-- [ ] **P8.S.6** — `getDomainMetrics`（`domain_ranks`）→ `dataforseo_labs/google/domain_rank_overview/live`
-  - 验收：返回 organic_keywords / organic_traffic / authority_score，误差与 SEMrush ≤20%
-- [ ] **P8.S.7** — `getDomainTrafficTrend`（`domain_rank_history`）→ `dataforseo_labs/google/historical_rank_overview/live`
-  - 验收：12 个月趋势数据正常返回，用于华佗 Agent KPI 锚点
+- [x] **P8.S.1** — `getRelatedKeywords`（`phrase_related`）→ `dataforseo_labs/google/related_keywords/live` ✅ 已在 `src/lib/dataforseo/labs.ts` 实现
+- [x] **P8.S.2** — `getDomainOrganicKeywords`（`domain_organic`）→ `dataforseo_labs/google/ranked_keywords/live` ✅
+- [x] **P8.S.3** — `getKeywordGap`（`phrase_kgap`）→ `dataforseo_labs/google/domain_intersection/live` ✅
+- [x] **P8.S.4** — `getDomainCompetitors`（`domain_organic_organic`）→ `dataforseo_labs/google/competitors_domain/live` ✅
+- [x] **P8.S.5** — `getQuestionKeywords`（`phrase_questions`）→ `dataforseo_labs/google/keyword_suggestions/live`（过滤 question intent）✅
+- [x] **P8.S.6** — `getDomainMetrics`（`domain_ranks`）→ `dataforseo_labs/google/domain_rank_overview/live` ✅
+- [x] **P8.S.7** — `getDomainTrafficTrend`（`domain_rank_history`）→ `dataforseo_labs/google/historical_rank_overview/live` ✅
 - [ ] **P8.S.8** — `batchKeywordOverview`（`phrase_these`）→ `keywords_data/google_ads/search_volume/live` + `bulk_keyword_difficulty`（两次 task 合并）
   - 低优先：批量 overview 数据量通常少，暂缓至前 7 项完成后评估
 
@@ -1525,7 +1518,7 @@ Magic Engine 护城河 = 这条链完整闭合。当前链条：张骞 ✅、华
 
 ---
 
-## Phase 12.H — GitHub CMS 执行闭环 🔥 当前 session 开工（2026-05-21）
+## Phase 12.H — GitHub CMS 执行闭环 ✅ 已完成（2026-05-25 代码核实）
 
 > **背景**：GitHub CMS 连接器已接通（CTS Tours chinatravel 仓库），但"执行"按钮尚未连线——博客生成结果只存 Supabase DB，SEO 修复后端已建但没有 UI 入口。Phase 12.H 把这两个缺口补上，让 ME 真正从「给建议的工具」变成「替你改网站的引擎」。
 
@@ -1540,9 +1533,9 @@ SEO 诊断 → Fix 按钮 → 推 GitHub PR → 客户 merge → 元数据修复
 
 | ID | 任务 | 依赖 | 状态 |
 |----|------|------|------|
-| **P12.H.1** | `blog-publisher.ts` — 把 `blog_posts` 记录序列化为仓库文件格式，调 `github-client.commitFile` + `createPullRequest`，回写 `flywheel_actions` | GitHub CMS 连接器 ✅ | 📋 |
-| **P12.H.2** | Blog Studio UI — 博客详情页加「推送到网站」按钮，调 `/api/clients/[id]/cms/publish-blog`，显示 PR 链接 | P12.H.1 | 📋 |
-| **P12.H.3** | SEO Fix UI — 执行看板 SEO 类 action 加「Fix」按钮，调现有 `/api/clients/[id]/seo-fix`，显示 PR 链接 | 后端已有 ✅ | 📋 |
+| **P12.H.1** | `blog-publisher.ts` — 把 `blog_posts` 记录序列化为仓库文件格式，调 `github-client.commitFile` + `createPullRequest`，回写 `flywheel_actions` | GitHub CMS 连接器 ✅ | ✅ |
+| **P12.H.2** | Blog Studio UI — 博客详情页加「推送到网站」按钮，调 `/api/clients/[id]/cms/publish-blog`，显示 PR 链接 | P12.H.1 | ✅ |
+| **P12.H.3** | SEO Fix UI — 执行看板 SEO 类 action 加「Fix」按钮，调现有 `/api/clients/[id]/seo-fix`，显示 PR 链接 | 后端已有 ✅ | ✅ |
 
 ### 验收关卡
 
@@ -1781,6 +1774,60 @@ website_publish_jobs
 | 14.C | GitHub connector（Next.js / Vercel 代码型站点） | 14.B 完成 |
 | 14.D | Campaign LP 生成器（高转化落地页，noindex + 活动结束 301） | 14.C 完成 |
 | 14.E | 权限漂移检测（定期校验 token scope，失效自动标 `needs_reconnect`） | 14.A 完成 |
+| 14.F | **客户网站知识图谱（Site Knowledge Graph）** | 14.A 完成 |
+
+### Phase 14.F — 客户网站知识图谱（Site Knowledge Graph）📋 待排期
+
+> **登记日期**：2026-05-26 · **触发**：Oztop 手动发布 Pet Flooring 文章时发现：博客内没有内链，因为 ME 不知道客户的产品页 URL。
+>
+> **核心问题**：ME 生成的博客文章提到 SPC Flooring / Vinyl / Tiles，但不知道 Oztop 具体的产品分类页 URL，导致文章没有内链，SEO 权重无法从博客传递到产品页，飞轮闭环断裂。
+
+**功能逻辑：**
+```
+客户连接网站（Phase 14.A）
+  → ME 自动爬取 sitemap_index.xml
+  → 解析三类 sitemap：product_cat / post / page
+  → 存入 client_site_pages 表
+  → 博客生成时 lookup 相关页面（按主题 + taxonomy 匹配）
+  → LLM prompt 注入："在以下位置添加内链：[{text, url} ...]"
+  → 文章自动含 3–5 个有意义的内链
+```
+
+**新增数据表：**
+```sql
+CREATE TABLE client_site_pages (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  client_id   uuid REFERENCES clients(id) ON DELETE CASCADE,
+  url         text NOT NULL,
+  title       text,
+  page_type   text,   -- 'product_category' | 'product' | 'blog_post' | 'page'
+  taxonomy    text,   -- 'flooring' | 'carpet' | 'tiles' | 'tapware' | etc.
+  slug_keywords text[], -- 从 URL slug 提取的关键词，用于匹配
+  crawled_at  timestamptz DEFAULT now(),
+  is_active   boolean DEFAULT true,
+  UNIQUE (client_id, url)
+);
+```
+
+**触发时机：**
+- 客户首次连接 CMS（WordPress / Shopify）时自动爬取
+- 手动"刷新网站地图"按钮（CMS 设置页）
+- 定时每月重爬（新品上架时更新）
+
+**博客生成集成点：**
+- `src/lib/blog/generator.ts` — 生成前 `getRelevantClientPages(clientId, blogTopic)` → 注入 prompt
+- 匹配逻辑：blog 主题关键词 vs `slug_keywords` 数组交集
+
+**Oztop 验证数据（2026-05-26 首次爬取）：**
+- 产品分类：38 个（flooring / carpet / tiles / tapware / supplies）
+- 页面：7 个
+- 已发布博客：23 篇
+- 适用内链示例（Pet Friendly Flooring 文章）：
+  - SPC flooring → `/product-category/flooring/spc-wpc-hybrid-flooring/`
+  - Vinyl planks → `/product-category/flooring/vinyl-flooring/`
+  - Ceramic / porcelain tiles → `/product-category/tiles/`
+  - Engineered timber → `/product-category/flooring/engineered-timber-flooring/`
+  - 推荐阅读 → `/spc-hybrid-vs-vinyl-vs-laminate-vs-engineered-timber-a-quick-comparison/`
 
 ### Phase 14 安全边界（不可降级）
 
@@ -2173,6 +2220,11 @@ AU / NZ（当前）          新市场（未来）
 - **P13.UI.3** — Website homepage upgraded to shared UI language
 - **P13.A.7** — Portal magic link can reach client portal
 
+### 2026-05-26（Oztop 手动发布 + Site Knowledge Graph 设计）
+
+- **Oztop Pet Flooring 发布** — 手动发布「Pet Friendly Flooring in Brisbane」至 oztopbuildingsupplies.com.au；确认 SiteGround IP 封锁根因（nginx ipr 封 Render IP 74.220.48.245）；修复 Astra 全大写 CSS；修正 GEO 指令 Sydney→Brisbane 6 处；Yoast SEO 配置完成（focus keyphrase / SEO title / slug / meta description）；Google Search Console 提交收录；已发布 URL：`/pet-friendly-flooring-brisbane/`
+- **Phase 14.F 登记** — 客户网站知识图谱（Site Knowledge Graph）：ME 生成博客缺内链根因确认 → 设计 `client_site_pages` 表 + sitemap 爬取流程 + 博客生成集成点；Oztop 38 个产品分类 URL 已首次爬取记录
+
 > 每次上线新功能时在此追加。格式：**[完成日期]** — Phase ID + 描述 + Commit 引用。
 > 此日志从 CLAUDE.md §十五.C 迁移至此（2026-05-10），CLAUDE.md 不再维护历史日志。
 
@@ -2234,6 +2286,9 @@ AU / NZ（当前）          新市场（未来）
   `feat(zhuge): P12.G.4 — 首页驾驶舱消费诸葛亮数据 [P12.G.4]`
 - **P12.G.5** — ZhugeDrawer AI 抽屉：打开自动调 conduct，展示优先行动卡，每条 in_house 行动附一键「触发鲁班」跳转按钮（luban-router.ts 纯函数解析路由）；display-constants.ts 消除 DRY；Widget 移除内嵌 conduct 改为 onAskZhuge+refreshKey；57 Vitest 全通过，build ✅
   `feat(zhuge): P12.G.5 — ZhugeDrawer + luban-router + 一键触发鲁班 [P12.G.5]`
+- **Phase 8.S.1–7（补录核实）** — SEMrush→DataForSEO 关键词 API 迁移全部完成：`src/lib/dataforseo/labs.ts` 含 7 个替换函数（getRelatedKeywords/getDomainOrganicKeywords/getKeywordGap/getDomainCompetitors/getQuestionKeywords/getDomainMetrics/getDomainTrafficTrend），调用方已全部切换，节省成本 96–99%（2026-05-25 代码核实）
+- **Phase 9.0.10–17（补录核实）** — Visual Queue UX 测试套件 + QueueOverviewCard 全部完成：GenerationProgress/QueueOverviewCard 测试文件存在（`src/components/visual/__tests__/`），QueueOverviewCard 已集成进 visuals/page.tsx（2026-05-25 代码核实）
+- **Phase 12.H.1–3（补录核实）** — GitHub CMS 执行闭环全部完成：`blog-publisher.ts`（博客序列化→PR），Blog Studio「推送到网站」按钮，执行看板「Fix」按钮，均已实现并回写 flywheel_actions（2026-05-25 代码核实）
 
 ### 2026-05-23
 

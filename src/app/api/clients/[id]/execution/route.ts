@@ -367,43 +367,123 @@ export async function POST(
     const { id: clientId } = params
     const body = (await req.json()) as {
       prescription_id?: string
+      marketing_plan_id?: string
       phase?: number
       title?: string
       description?: string
       dimension?: DiagnosticDimension
       fix_type?: FixType
+      platform?: string
+      kind?: string
     }
 
     const title = (body.title ?? '').trim()
     const description = (body.description ?? '').trim()
-    if (!body.prescription_id || !title) {
+    const isMarketingPlan = !!body.marketing_plan_id && !body.prescription_id
+
+    if (!isMarketingPlan && !body.prescription_id) {
       return NextResponse.json(
-        { success: false, error: 'prescription_id 和 title 必填' },
+        { success: false, error: 'prescription_id 或 marketing_plan_id 必填' },
         { status: 400 },
       )
     }
+    if (!title) {
+      return NextResponse.json({ success: false, error: 'title 必填' }, { status: 400 })
+    }
+
     const phase = body.phase && [1, 2, 3].includes(body.phase) ? body.phase : 1
+
+    // ── Marketing Plan 任务新增 ────────────────────────────────────────────────
+    if (isMarketingPlan) {
+      const { data: plan, error: planErr } = await supabaseAdmin
+        .from('marketing_plans')
+        .select('id')
+        .eq('id', body.marketing_plan_id!)
+        .eq('client_id', clientId)
+        .single<{ id: string }>()
+      if (planErr || !plan) {
+        return NextResponse.json({ success: false, error: 'Marketing Plan 不存在' }, { status: 404 })
+      }
+
+      const { data: maxRow } = await supabaseAdmin
+        .from('execution_items')
+        .select('sort_order')
+        .eq('marketing_plan_id', body.marketing_plan_id!)
+        .order('sort_order', { ascending: false })
+        .limit(1)
+        .maybeSingle<{ sort_order: number }>()
+      const sortOrder = (maxRow?.sort_order ?? (phase - 1) * 100) + 1
+
+      const kind = body.kind ?? 'social_post'
+      const platform = body.platform ?? null
+      const stepsJson = {
+        source: 'fde_manual_add',
+        kind,
+        platform,
+        estimated_hours: 1,
+        required_skills: kind === 'social_reel' ? ['video direction', 'social copywriting'] : ['social copywriting'],
+      }
+
+      const { data: item, error: insertErr } = await supabaseAdmin
+        .from('execution_items')
+        .insert({
+          prescription_id:   null,
+          marketing_plan_id: body.marketing_plan_id!,
+          source:            'marketing_plan',
+          client_id:         clientId,
+          finding_id:        null,
+          dimension:         'social',
+          phase,
+          title,
+          description:       description || title,
+          fix_type:          'fde_manual',
+          status:            'pending',
+          steps_json:        stepsJson,
+          execution_target:  { mode: 'in_house', flywheel: 'social', module: 'social_matrix' },
+          sort_order:        sortOrder,
+        })
+        .select('*')
+        .single<ExecutionItem>()
+
+      if (insertErr || !item) {
+        console.error('[execution POST] mp insert failed:', insertErr)
+        return NextResponse.json({ success: false, error: '新增执行项失败' }, { status: 500 })
+      }
+
+      await supabaseAdmin.from('execution_logs').insert({
+        execution_item_id: item.id,
+        client_id:         clientId,
+        author:            'fde',
+        kind:              'adjustment',
+        content:           `FDE 手动新增执行项：${title}`,
+        meta:              { adjustment: 'add', source: 'marketing_plan' },
+      }).then(({ error: logErr }) => {
+        if (logErr) console.error('[execution POST] log insert failed:', logErr)
+      })
+
+      return NextResponse.json({ success: true, item })
+    }
+
+    // ── 处方任务新增（原有逻辑）────────────────────────────────────────────────
     const dimension: DiagnosticDimension =
       body.dimension && VALID_DIMENSIONS.includes(body.dimension) ? body.dimension : 'seo'
     const fix_type: FixType =
       body.fix_type && VALID_FIX_TYPES.includes(body.fix_type) ? body.fix_type : 'fde_manual'
 
-    // 校验处方归属
     const { data: presc, error: pErr } = await supabaseAdmin
       .from('prescriptions')
       .select('id')
-      .eq('id', body.prescription_id)
+      .eq('id', body.prescription_id!)
       .eq('client_id', clientId)
       .single<{ id: string }>()
     if (pErr || !presc) {
       return NextResponse.json({ success: false, error: '处方不存在' }, { status: 404 })
     }
 
-    // sort_order：该处方现有最大值 + 1
     const { data: maxRow } = await supabaseAdmin
       .from('execution_items')
       .select('sort_order')
-      .eq('prescription_id', body.prescription_id)
+      .eq('prescription_id', body.prescription_id!)
       .order('sort_order', { ascending: false })
       .limit(1)
       .maybeSingle<{ sort_order: number }>()
@@ -412,7 +492,7 @@ export async function POST(
     const { data: item, error: insertErr } = await supabaseAdmin
       .from('execution_items')
       .insert({
-        prescription_id: body.prescription_id,
+        prescription_id: body.prescription_id!,
         client_id:       clientId,
         finding_id:      null,
         dimension,
@@ -432,7 +512,6 @@ export async function POST(
       return NextResponse.json({ success: false, error: '新增执行项失败' }, { status: 500 })
     }
 
-    // 写审计日志
     await supabaseAdmin.from('execution_logs').insert({
       execution_item_id: item.id,
       client_id:         clientId,

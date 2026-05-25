@@ -196,3 +196,52 @@ export async function PATCH(
     return NextResponse.json({ success: false, error: 'An unexpected error occurred' }, { status: 500 })
   }
 }
+
+// DELETE /api/clients/[id]/execution/[itemId]
+// 移除执行项 — 仅限 pending 状态（未开工的任务才可撤销）
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: { id: string; itemId: string } },
+): Promise<NextResponse> {
+  const auth = requireBearerToken(req.headers.get('authorization') ?? undefined)
+  if (!auth.ok) {
+    return NextResponse.json({ success: false, error: auth.error }, { status: auth.status })
+  }
+
+  try {
+    const { id: clientId, itemId } = params
+
+    const { data: current, error: readErr } = await supabaseAdmin
+      .from('execution_items')
+      .select('status, title')
+      .eq('id', itemId)
+      .eq('client_id', clientId)
+      .single<{ status: ExecutionItemStatus; title: string }>()
+
+    if (readErr || !current) {
+      return NextResponse.json({ success: false, error: 'Execution item not found' }, { status: 404 })
+    }
+    if (current.status !== 'pending') {
+      return NextResponse.json(
+        { success: false, error: `只能移除待处理任务，当前状态：${STATUS_LABEL[current.status]}` },
+        { status: 400 },
+      )
+    }
+
+    const { error: deleteErr } = await supabaseAdmin
+      .from('execution_items')
+      .delete()
+      .eq('id', itemId)
+      .eq('client_id', clientId)
+
+    if (deleteErr) {
+      console.error('[execution/:itemId DELETE] Supabase error:', deleteErr)
+      return NextResponse.json({ success: false, error: 'Failed to delete execution item' }, { status: 500 })
+    }
+
+    return NextResponse.json({ success: true, deleted_id: itemId })
+  } catch (err: unknown) {
+    console.error('[execution/:itemId DELETE] Unexpected error:', err)
+    return NextResponse.json({ success: false, error: 'An unexpected error occurred' }, { status: 500 })
+  }
+}
