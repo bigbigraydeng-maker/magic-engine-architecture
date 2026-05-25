@@ -241,12 +241,12 @@ export function PublishToWebsitePanel({ clientId, postId, onSuccess }: Props) {
   // Error state.
   if (phase === 'error') {
     return (
-      <div className="flex items-center gap-2">
-        <span className="text-xs text-red-600 max-w-xs truncate" title={errorMsg ?? ''}>
+      <div className="flex flex-col gap-1.5 max-w-sm">
+        <span className="text-xs text-red-600 leading-relaxed">
           ❌ {errorMsg}
         </span>
         <button onClick={handleReset}
-          className="text-xs text-indigo-600 hover:underline">
+          className="text-xs text-indigo-600 hover:underline self-start">
           重试
         </button>
       </div>

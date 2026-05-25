@@ -150,8 +150,30 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     if (code === 'NO_CONNECTION' || code === 'CONNECTION_NOT_VERIFIED') {
       return NextResponse.json({ success: false, error: message, code }, { status: 422 })
     }
+
+    // Surface crypto / auth errors so FDE knows to re-enter credentials.
+    if (
+      message.includes('authenticate') ||
+      message.includes('decrypt') ||
+      message.includes('Unsupported state')
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:   'WordPress credential decryption failed — please re-enter the Application Password in Settings → Website Connection → WordPress.',
+          code:    'DECRYPT_ERROR',
+        },
+        { status: 422 },
+      )
+    }
+
+    // WordPress API errors (e.g. 401, 403, unreachable host).
+    if (message.startsWith('WordPress ')) {
+      return NextResponse.json({ success: false, error: message, code: 'WP_API_ERROR' }, { status: 502 })
+    }
+
     return NextResponse.json(
-      { success: false, error: 'Unexpected error', code: 'INTERNAL' },
+      { success: false, error: message, code: 'INTERNAL' },
       { status: 500 },
     )
   }
