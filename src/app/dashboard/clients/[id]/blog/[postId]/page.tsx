@@ -8,11 +8,15 @@ import { PublishToWebsitePanel } from './_components/PublishToWebsitePanel';
 import { buildBlogHtml, computeGeoChecklist } from '@/lib/blog/html-builder';
 import type { BlogPost } from '@/types/magic-engine';
 
+const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''
+
 const STATUS_COLORS: Record<string, string> = {
-  draft:     'bg-amber-100 text-amber-700',
-  approved:  'bg-blue-100 text-blue-700',
-  published: 'bg-green-100 text-green-700',
-  rejected:  'bg-gray-100 text-gray-500',
+  draft:      'bg-amber-100 text-amber-700',
+  approved:   'bg-blue-100 text-blue-700',
+  published:  'bg-green-100 text-green-700',
+  rejected:   'bg-gray-100 text-gray-500',
+  generating: 'bg-purple-100 text-purple-700',
+  failed:     'bg-red-100 text-red-700',
 };
 
 /**
@@ -39,12 +43,14 @@ export default function BlogPostPage() {
     setTimeout(() => { setActionMsg(''); setActionOk(null); }, 5000);
   };
 
+  const authHeader = { Authorization: `Bearer ${API_KEY}` }
+
   const fetchPost = useCallback(async () => {
     setLoading(true);
     try {
       const [clientRes, postRes] = await Promise.all([
-        fetch(`/api/clients/${clientId}`),
-        fetch(`/api/clients/${clientId}/blog/${postId}`),
+        fetch(`/api/clients/${clientId}`, { headers: authHeader }),
+        fetch(`/api/clients/${clientId}/blog/${postId}`, { headers: authHeader }),
       ]);
       if (clientRes.ok) {
         const j = await clientRes.json();
@@ -57,9 +63,21 @@ export default function BlogPostPage() {
     } finally {
       setLoading(false);
     }
-  }, [clientId, postId]);
+  }, [clientId, postId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { fetchPost(); }, [fetchPost]);
+
+  // Poll every 5 s while still generating
+  useEffect(() => {
+    if (!post || post.status !== 'generating') return
+    const timer = setInterval(() => {
+      fetch(`/api/clients/${clientId}/blog/${postId}`, { headers: authHeader })
+        .then(r => r.ok ? r.json() : null)
+        .then(j => { if (j?.post) setPost(j.post) })
+        .catch(() => {})
+    }, 5000)
+    return () => clearInterval(timer)
+  }, [post?.status, clientId, postId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleStatusChange = async (newStatus: string) => {
     if (!post) return;
@@ -67,7 +85,7 @@ export default function BlogPostPage() {
     try {
       const res = await fetch(`/api/clients/${clientId}/blog/${postId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${API_KEY}` },
         body: JSON.stringify({ status: newStatus }),
       });
       const j = await res.json();
@@ -104,6 +122,41 @@ export default function BlogPostPage() {
             <div className="h-[600px] bg-gray-200 rounded-xl" />
             <div className="h-[400px] bg-gray-200 rounded-xl" />
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (post?.status === 'generating') {
+    return (
+      <div className="p-6 max-w-lg">
+        <Link href={`/dashboard/clients/${clientId}/blog`}
+          className="text-gray-400 hover:text-gray-600 text-sm block mb-4">
+          ← Blog Posts
+        </Link>
+        <div className="rounded-xl border border-purple-200 bg-purple-50 p-6 flex items-start gap-4">
+          <div className="w-6 h-6 border-2 border-purple-500 border-t-transparent rounded-full animate-spin shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-purple-900">文章生成中…</p>
+            <p className="text-xs text-purple-700 mt-1">
+              AI 正在撰写「{post.topic}」，通常需要 30–90 秒。页面将自动刷新。
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (post?.status === 'failed') {
+    return (
+      <div className="p-6 max-w-lg">
+        <Link href={`/dashboard/clients/${clientId}/blog`}
+          className="text-gray-400 hover:text-gray-600 text-sm block mb-4">
+          ← Blog Posts
+        </Link>
+        <div className="rounded-xl border border-red-200 bg-red-50 p-6">
+          <p className="text-sm font-semibold text-red-900">❌ 生成失败</p>
+          <p className="text-xs text-red-700 mt-1">话题：「{post.topic}」。请返回执行看板重新生成。</p>
         </div>
       </div>
     );
