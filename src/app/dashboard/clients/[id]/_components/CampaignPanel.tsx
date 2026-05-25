@@ -227,9 +227,8 @@ function CampaignCard({
   const [msg, setMsg] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
-  // SEMrush enrichment inputs
-  const [seedKeyword, setSeedKeyword] = useState(campaign.title)
-  const [semrushDb, setSemrushDb] = useState('au')
+  // Keyword enrichment — seeds come automatically from Master Brief
+  const [enrichDb, setEnrichDb] = useState('au')
 
   // Edit mode
   const [editing, setEditing] = useState(false)
@@ -368,12 +367,13 @@ function CampaignCard({
       const res = await fetch(`/api/clients/${clientId}/campaign/${campaign.id}/enrich`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ seed_keyword: seedKeyword.trim() || campaign.title, db: semrushDb }),
+        body: JSON.stringify({ db: enrichDb }),
       })
       const json = await res.json()
       if (!json.success) throw new Error(json.error)
       onUpdated(json.campaign)
-      setMsg(`✓ 获取到 ${json.keywords_found} 个关键词`)
+      const seedsLabel = json.seeds_used?.join(', ') ?? ''
+      setMsg(`✓ 获取到 ${json.keywords_found} 个关键词（种子词：${seedsLabel}）`)
     } catch (err) {
       setMsg(`✗ ${(err as Error).message}`)
     } finally {
@@ -585,31 +585,27 @@ function CampaignCard({
 
           {/* Keyword Enrichment */}
           <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
               推广关键词
             </p>
-            {/* Seed keyword + DB selector */}
+            <p className="text-xs text-gray-400 mb-2">
+              种子词自动来自 Master Brief，点「拉取」即可
+            </p>
             <div className="flex gap-2 mb-2">
-              <input
-                value={seedKeyword}
-                onChange={e => setSeedKeyword(e.target.value)}
-                placeholder="搜索词，例：China tour New Zealand"
-                className={`${INPUT_CLASS} flex-1 text-xs`}
-              />
               <select
-                value={semrushDb}
-                onChange={e => setSemrushDb(e.target.value)}
+                value={enrichDb}
+                onChange={e => setEnrichDb(e.target.value)}
                 className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
               >
                 <option value="au">AU</option>
+                <option value="nz">NZ</option>
                 <option value="us">US</option>
                 <option value="gb">UK</option>
-                <option value="nz">NZ</option>
                 <option value="ca">CA</option>
               </select>
               <button
                 onClick={handleEnrich}
-                disabled={enriching || !seedKeyword.trim()}
+                disabled={enriching}
                 className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg disabled:opacity-50 transition-colors whitespace-nowrap"
               >
                 {enriching ? '获取中…' : '🔍 拉取'}

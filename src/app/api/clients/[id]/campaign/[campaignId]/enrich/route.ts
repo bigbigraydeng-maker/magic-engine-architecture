@@ -26,11 +26,22 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
     }
 
     const body = await req.json().catch(() => ({}))
-    const seedKeyword: string = body.seed_keyword ?? campaign.title
     const db: string = body.db ?? 'au'
     const warnings: string[] = []
 
-    // 2. Parse source URLs with Jina (non-fatal)
+    // 2. Load active Master Brief to get curated keyword seeds
+    const { data: brief } = await supabaseAdmin
+      .from('master_briefs')
+      .select('keyword_seeds')
+      .eq('client_id', clientId)
+      .eq('status', 'active')
+      .maybeSingle()
+
+    // Seed priority: Master Brief keyword_seeds (top 3) → campaign title fallback
+    const briefSeeds: string[] = (brief?.keyword_seeds ?? []).slice(0, 3)
+    const seeds: string[] = briefSeeds.length > 0 ? briefSeeds : [campaign.title]
+
+    // 3. Parse source URLs with Jina (non-fatal)
     let parsed_content = campaign.parsed_content ?? ''
     const urlsToParse: string[] = (campaign.source_urls ?? []).filter(Boolean)
 
@@ -55,45 +66,48 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       }
     }
 
-    // 3. DataForSEO: question + related keywords (non-fatal)
+    // 4. DataForSEO: run questions + related for each seed in parallel (non-fatal)
     const locationCode = db === 'nz' ? 2554 : 2036
     const semrush_keywords: CampaignKeywordSnapshot[] = []
 
     try {
-      const [questions, related] = await Promise.allSettled([
-        getKeywordIdeas(seedKeyword, locationCode, 20, true),
-        getKeywordIdeas(seedKeyword, locationCode, 20),
+      // Each seed fires 2 calls (questions + related), all in parallel
+      const seedCalls = seeds.flatMap(seed => [
+        getKeywordIdeas(seed, locationCode, 15, true),   // question-form keywords
+        getKeywordIdeas(seed, locationCode, 15, false),  // related keywords
       ])
+      const results = await Promise.allSettled(seedCalls)
 
-      if (questions.status === 'fulfilled') {
-        for (const k of questions.value) {
-          semrush_keywords.push({
-            keyword: k.keyword,
-            volume:  k.search_volume ?? 0,
-            kd:      k.keyword_difficulty ?? 0,
-            intent:  k.intent,
-            type:    'question',
-          })
+      // Deduplicate by keyword string, keeping highest volume entry
+      const byKeyword = new Map<string, CampaignKeywordSnapshot>()
+      results.forEach((result, idx) => {
+        if (result.status !== 'fulfilled') {
+          warnings.push(`Keyword fetch failed for seed "${seeds[Math.floor(idx / 2)]}": ${result.reason}`)
+          return
         }
-      } else {
-        warnings.push(`Keyword questions: ${questions.reason}`)
-      }
+        const isQuestion = idx % 2 === 0
+        for (const k of result.value) {
+          const existing = byKeyword.get(k.keyword)
+          if (!existing || (k.search_volume ?? 0) > (existing.volume ?? 0)) {
+            byKeyword.set(k.keyword, {
+              keyword: k.keyword,
+              volume:  k.search_volume ?? 0,
+              kd:      k.keyword_difficulty ?? 0,
+              intent:  k.intent,
+              type:    isQuestion ? 'question' : 'related',
+            })
+          }
+        }
+      })
 
-      if (related.status === 'fulfilled') {
-        for (const k of related.value) {
-          semrush_keywords.push({
-            keyword: k.keyword,
-            volume:  k.search_volume ?? 0,
-            kd:      k.keyword_difficulty ?? 0,
-            intent:  k.intent,
-            type:    'related',
-          })
-        }
-      } else {
-        warnings.push(`Keyword related: ${related.reason}`)
-      }
-    } catch (semErr) {
-      warnings.push(`Keyword enrichment skipped: ${String(semErr)}`)
+      // Sort by volume desc, keep top 40
+      semrush_keywords.push(
+        ...[...byKeyword.values()]
+          .sort((a, b) => (b.volume ?? 0) - (a.volume ?? 0))
+          .slice(0, 40)
+      )
+    } catch (err) {
+      warnings.push(`Keyword enrichment skipped: ${String(err)}`)
     }
 
     // 4. Save enriched data back to campaign
@@ -114,6 +128,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
       success: true,
       campaign: updated,
       keywords_found: semrush_keywords.length,
+      seeds_used: seeds,
       urls_parsed: urlsToParse.length,
       warnings,
     })

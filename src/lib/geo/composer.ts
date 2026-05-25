@@ -279,11 +279,19 @@ function buildUserMessage(input: {
   contextHint?: string
 }): string {
   const { client, brief, weakSpots, contextHint } = input
+
+  // Extract city from target_audience.location to enforce correct geography in scenarios
+  const audienceLocation = (brief?.target_audience as { location?: string } | null)?.location ?? null
+
   const lines: string[] = [
     '## Brand Information',
     `Name: ${brief?.brand_name ?? client.name}`,
     `Website: ${client.domain ?? '(not provided)'}`,
   ]
+
+  if (audienceLocation) {
+    lines.push(`Location: ${audienceLocation} — IMPORTANT: use this city/region (not Sydney or any other city) in all scenario trigger questions and response text.`)
+  }
 
   if (brief?.core_proposition) {
     lines.push(`Core proposition: ${brief.core_proposition}`)
