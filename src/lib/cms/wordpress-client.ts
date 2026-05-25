@@ -99,7 +99,13 @@ async function expectJson(
   try {
     return JSON.parse(text) as Record<string, unknown>
   } catch {
-    throw new Error(`WordPress ${context}: invalid JSON response`)
+    // Show the first 300 chars of the non-JSON response so FDE can diagnose
+    // (common causes: Cloudflare challenge, security plugin block, maintenance page).
+    const preview = text.slice(0, 300).replace(/\s+/g, ' ').trim()
+    throw new Error(
+      `WordPress ${context}: response is not JSON — the site may be blocking REST API access ` +
+      `(Cloudflare, security plugin, or maintenance mode). Response preview: "${preview}"`
+    )
   }
 }
 
