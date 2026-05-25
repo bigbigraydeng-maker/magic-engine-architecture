@@ -532,6 +532,29 @@ interface WordpressConnectedViewProps {
 function WordpressConnectedView({ clientId, status, onDisconnect }: WordpressConnectedViewProps) {
   const [disconnecting, setDisconnecting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [testing,       setTesting]       = useState(false)
+  const [testResult,    setTestResult]    = useState<string | null>(null)
+
+  const handleTest = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const res  = await fetch(`/api/clients/${clientId}/cms/wordpress/test`, {
+        method:  'POST',
+        headers: { Authorization: `Bearer ${process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''}` },
+      })
+      const json = await res.json() as { success: boolean; ok: boolean; displayName?: string; error?: string }
+      if (json.success && json.ok) {
+        setTestResult(`✅ 连接正常${json.displayName ? ` — 用户 ${json.displayName}` : ''}`)
+      } else {
+        setTestResult(`❌ ${json.error ?? '连接失败'}`)
+      }
+    } catch {
+      setTestResult('❌ 网络错误，请重试')
+    } finally {
+      setTesting(false)
+    }
+  }
 
   const handleDisconnect = async () => {
     setDisconnecting(true)
@@ -560,23 +583,19 @@ function WordpressConnectedView({ clientId, status, onDisconnect }: WordpressCon
             label: '最后测试',
             value: status.lastTestedAt
               ? new Date(status.lastTestedAt).toLocaleString('zh-CN')
-              : '尚未测试（P14.A.5 上线后将启用）',
+              : '尚未测试',
           },
         ]}
       />
 
       {status.lastError && <LastErrorRow message={status.lastError} />}
-
-      <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-xs text-amber-800">
-        ⚠️ 连接已保存，但「测试连接」与「推送到 WordPress」功能将在 P14.A.5 上线。
-      </div>
+      {testResult       && <TestResultRow message={testResult} />}
 
       <ConnectionActions
-        testing={false}
-        testDisabled
+        testing={testing}
         confirmDelete={confirmDelete}
         disconnecting={disconnecting}
-        onTest={() => { /* disabled until A.5 */ }}
+        onTest={handleTest}
         onConfirmDeleteRequest={() => setConfirmDelete(true)}
         onConfirmDelete={handleDisconnect}
       />
