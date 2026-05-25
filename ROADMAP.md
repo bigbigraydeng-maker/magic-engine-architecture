@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-26 04:18 NZST · 当前阶段：**Phase 14.A Website Connector 全部完成 ✅（P14.A.1–8）；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S（P8.S.1–7 SEMrush→DataForSEO 全部已实现）、Phase 9.0（P9.0.10–17 Visual Queue 测试 + QueueOverviewCard 全部已实现）、Phase 12.H（P12.H.1–3 GitHub CMS 闭环全部已实现）。
+> 最后更新：2026-05-26 04:43 NZST · 当前阶段：**Phase 14.A Website Connector 全部完成 ✅（P14.A.1–8）；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S（P8.S.1–7 SEMrush→DataForSEO 全部已实现）、Phase 9.0（P9.0.10–17 Visual Queue 测试 + QueueOverviewCard 全部已实现）、Phase 12.H（P12.H.1–3 GitHub CMS 闭环全部已实现）。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -65,6 +65,8 @@
 📋 Phase 17     Unified Data Pullback / 统一数据回流层（战略确认，待排期）
 📋 Phase 18     Ads Execution Engine / 广告执行引擎（Meta + Google + TikTok，已登记）
 📋 Phase 19     API 鉴权整改 / IDOR 修复（🔴 CRITICAL 安全 — 19.A+B 须在客户建号前完成）
+📋 Phase 21     AI Content Factory / AI 内容工厂（旗舰能力 — FDE 客户默认产能引擎）
+📋 Phase 22     Data Intelligence Engine / 数据智能引擎（旗舰能力 — 与 AI Factory 同级别双引擎）
 ```
 
 **Phase 7 核心战略**：双信号博客（Dual-Signal Blog）— 每篇文章同时携带 SEO 信号（Google 排名）和 GEO 信号（AI 推荐），选题由 AI Tracker 弱项 × SEMrush 低KD机会交叉驱动，形成数据自强化飞轮。
@@ -2253,6 +2255,86 @@ AU / NZ（当前）          新市场（未来）
 
 ---
 
+## Phase 21 — AI Content Factory（旗舰能力 · FDE 默认产能引擎）📋 战略确认，待排期
+
+> **登记日期**：2026-05-26 · **状态**：战略方向已确认，PM 拍板，待 Phase 20/19 收尾后排期
+>
+> **战略定位**：AI Content Factory 是 ME 的**产能上限**，类比"能产 100 万双鞋的鞋厂可以接 1 万双小单"。FDE 客户（$2.5K-3K/月）默认走 AI Factory；非 FDE 客户按 token 自助调用各模块。
+>
+> **颠覆点**：2026 年 AI 内容成本崩塌 100x，传统 marketing "10 帖/月 = aggressive" 思维过时。真正护城河是 **生产 × 分发 × 学习** 飞轮速度，不是单条内容质量。
+
+### Phase 21 产能基线（FDE 客户默认）
+
+| 平台 | 频次基线 | 月产能 |
+|---|---|---|
+| TikTok | 3-5/天 | 90-150 |
+| YouTube Shorts | 2-3/天 | 60-90 |
+| FB Reels | 3-5/天 | 90-150 |
+| IG Reels | 3-5/天（多数复用 FB） | 90-150 |
+| FB Posts | 1-2/天 | 30-60 |
+| IG Posts | 1-2/天（复用 FB） | 30-60 |
+| FB Stories | 3-5/天 | 90-150 |
+| IG Stories | 3-5/天 | 90-150 |
+| YouTube Long | 4-6/月 | 4-6 |
+| Google SEO Blog | 2-3/天 ≥1500 字 | 60-90 |
+
+**单客户月度产能上限：~800-1100 条内容**（非全部强制，FDE 按客户阶段调配）
+
+### Phase 21 五大子系统
+
+| 子系统 | 内容 |
+|---|---|
+| **21.A 产能引擎** | Prompt 体系 + Claude/GPT/Haiku 分层调用 + 变体生成 |
+| **21.B 素材库 × 复用引擎** | 50 个真实素材 × 100 个 AI 变体 × 多平台 reformat |
+| **21.C 多平台发布管道** | Meta Reels API / TikTok Content API / YouTube Data API + rate limit + 重试 |
+| **21.D Token 预算治理** | 每客户月度成本上限 + 模型分层（战略层 Sonnet，生产层 Haiku/4o-mini）|
+| **21.E intensity = ai_factory 新档位** | 在 `light/standard/aggressive` 后加 `ai_factory` |
+
+### Phase 21 不做清单
+- ❌ 不强制非 FDE 客户走 AI Factory（按 token 自由调用）
+- ❌ 不脱离 Data Engine 单独跑（Factory 是生产，Data 是反馈，必须双引擎并行）
+
+---
+
+## Phase 22 — Data Intelligence Engine（旗舰能力 · 与 AI Factory 同级别双引擎）📋 战略确认，待排期
+
+> **登记日期**：2026-05-26 · **状态**：战略方向已确认，PM 明确为"与 AI Factory 同等量级独立旗舰"
+>
+> **战略定位**：Data Engine 不是 AI Factory 的子模块，是 ME 商业护城河的**双引擎之一**。AI Factory 解决"产出"，Data Engine 解决"学习"。两者结合 = 自强化飞轮。
+>
+> **覆盖范围**：6 大功能支柱全覆盖（SEO / GEO / Ads / Social / Reputation / Competitor），不限于 AI Factory 产出的内容。
+
+### Phase 22 三层架构
+
+| 层 | 职责 | 数据源 |
+|---|---|---|
+| **22.A 采集层** | 持续抓取所有执行产出的真实表现数据 | FB/IG Graph API · TikTok Insights · YouTube Analytics · DataForSEO · AI Tracker · GBP · Trustpilot |
+| **22.B 分析层** | 归类、归因、学习、异常检测 | 哪种 hook 跑赢、哪个时段最优、哪类客户对哪种角度敏感 |
+| **22.C 反馈层** | 把学习结果回流到执行决策 | → AI Factory（生成什么内容）· → FDE 仪表盘 · → 客户 Portal 月报 |
+
+### Phase 22 与 AI Factory 的关系
+
+```
+AI Content Factory  ──生产──→  内容产出  ──发布──→  各平台
+                                                       │
+                                                       │ 抓取
+                                                       ▼
+AI Content Factory  ←──反馈──  Data Engine  ←──分析──  原始数据
+（下一波次生成时         （22.C 反馈层）      （22.A 采集 + 22.B 分析）
+ 注入获胜角度）
+```
+
+### Phase 22 客户分层
+
+- **FDE 客户**：完整 Data Engine 能力（采集 + 分析 + 反馈 + 仪表盘 + 月报）
+- **非 FDE 客户（MTC）**：只看摘要级指标，不享受反馈层
+
+### Phase 22 不做清单
+- ❌ 不依赖第三方仪表盘（Looker、Tableau 等）— 数据归属 ME 是核心护城河
+- ❌ 不只服务 AI Factory 产出 — 6 大支柱所有执行都要被采集和学习
+
+---
+
 ## 9. 功能完成日志
 
 - **P13.UI.3** — Website homepage upgraded to shared UI language
@@ -2269,6 +2351,11 @@ AU / NZ（当前）          新市场（未来）
   - `MP-GEN-1` 内容强度参数过于模糊：`intensity === 'aggressive'` 只是单句 prompt 提示「high volume, accept some lower-quality tasks」，没有给 Claude 具体数量基准。应改为：light=2-3/周，standard=4-6/周，aggressive=8-12/周，且按 campaign 类型（清仓/launch/sustain）有不同 baseline
   - `MP-GEN-2` System prompt 有「prefer fewer high-quality tasks」一句话，导致 Claude 识别到"premium positioning"就自动降量，与清仓/促销场景直接冲突，导致博客 monthly_count 永远偏低（Oztop 5 周清仓只生成 1 篇博客）。应根据 campaign 类型动态调整该指令
   - `MP-GEN-3` ⚠️ **viral_reference_library 表完全未被引用** — `generate/route.ts` 只读 master_briefs / campaign_briefs / content_strategy_items 三张表，Viral Reference 数据虽然采集了但从未注入 Marketing Plan 生成。应在 Reel 任务生成时拉取行业相关的爆款 hook 结构，注入 prompt 让 Claude 借鉴而非通用模板
+- **Marketing Plan 架构级洞察 — 波次执行模型**（PM 现场提出，2026-05-26）：
+  - `MP-ARCH-1` ⚡ ME 当前是「一次性生成 5 周 33 任务」的预生成模型，与真实 marketing manager 工作方式背离。专业营销人的实际流程是：① 策略层（5周方向 + KPI + 渠道骨架，固定）② 波次层（1-2 周详细任务，迭代式生成）③ 波次结束后收集真实数据/反馈 → 重新生成下一波次任务
+  - 当前模型问题：Week 5 任务在 Week 1 就写死，5 周内无法响应实际数据；浪费 LLM token 生成大概率会被改写的远期任务；FDE 拿到 33 个任务批量派发，与"先验证再投入"的现代营销原则冲突
+  - 改造方向：Plan 保留策略层（exec summary + KPI + 社媒矩阵规格）；Tasks 字段从「全期任务」改为「当前波次任务」；新增「波次复盘 → 下一波次生成」按钮；后端在生成下一波次时注入上一波次的真实表现数据
+  - 优先级比 MP-GEN-1/2/3 更根本，建议升级为独立 Phase（Phase 12.W 波次执行模型 或并入 Phase 8.M Marketing Agent 记忆系统），2-3 周内落地
 
 > 每次上线新功能时在此追加。格式：**[完成日期]** — Phase ID + 描述 + Commit 引用。
 > 此日志从 CLAUDE.md §十五.C 迁移至此（2026-05-10），CLAUDE.md 不再维护历史日志。

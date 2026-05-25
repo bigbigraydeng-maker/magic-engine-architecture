@@ -85,7 +85,8 @@ CRITICAL RULES:
 - due_date MUST fall between start_date and end_date.
 - Tone, voice, and angle MUST reflect the brand brief and (if present) campaign angle.
 - All output text in AU/NZ English unless brand brief specifies otherwise.
-- Be realistic: prefer fewer high-quality tasks over many shallow ones if the brief suggests a premium positioning.
+- Volume follows the Intensity setting (see Plan Parameters). Quality bar follows the brand brief — premium brands deserve premium-quality tasks at WHATEVER volume the intensity dictates. Do NOT lower volume just because the brand is premium.
+- Platform coverage: for consumer-facing brands (home/interior, fashion, food, beauty, retail, design, lifestyle, hospitality), ALL THREE platforms (Facebook, Instagram, TikTok) MUST have non-zero presence — Instagram is critical for visual/lifestyle products and cannot be set to 0. Exclude a platform only when the brand brief explicitly states the audience does not use it, or for clear B2B-industrial cases (then TikTok can be 0).
 - Return ONLY raw JSON. No markdown, no code fences, no explanation.`
 
 // ─── User prompt builder ──────────────────────────────────────────────────────
@@ -118,10 +119,13 @@ ${strategySuggestions ? `## SEO Topic Suggestions (data-driven candidates — re
 ## Plan Parameters
 - Plan Title: ${request.title}
 - Period: ${request.start_date} → ${request.end_date} (~${weeks} week${weeks > 1 ? 's' : ''}, ${days} days)
-- Intensity: ${intensity}  ← ${
-    intensity === 'light' ? 'conservative volumes, premium quality' :
-    intensity === 'aggressive' ? 'high volume, accept some lower-quality tasks' :
-    'balanced volume and quality'
+- Intensity: ${intensity}
+${
+    intensity === 'light'
+      ? `  → CONSERVATIVE cadence per active platform: posts_per_week=2-3, reels_per_month=2-3, stories_per_week=2-3. Blogs: 1 per 4 weeks. Use when brand wants premium scarcity feel.`
+      : intensity === 'aggressive'
+        ? `  → HIGH VOLUME cadence per active platform: posts_per_week=5-7, reels_per_month=6-10, stories_per_week=5-7. Blogs: 2-3 per 4 weeks. Use for launches, clearances, rapid-cycle campaigns. Volume is critical — quality should still be high, but do NOT under-deliver on quantity. For sub-2-week campaign windows, scale volumes proportionally but keep daily cadence high.`
+        : `  → BALANCED cadence per active platform: posts_per_week=3-5, reels_per_month=4-6, stories_per_week=3-5. Blogs: 1-2 per 4 weeks. Sustainable steady-state cadence.`
   }
 ${request.focus_note ? `- FDE Focus Note: ${request.focus_note}` : ''}
 
@@ -179,7 +183,7 @@ export async function generatePlanData(params: {
     plan_data: planData,
     meta: {
       model: 'claude-sonnet-4-6',
-      prompt_version: 'mp-v1',
+      prompt_version: 'mp-v2-intensity-volumes',
       generation_cost_usd: result.cost_usd,
       input_tokens: result.input_tokens,
       output_tokens: result.output_tokens,
