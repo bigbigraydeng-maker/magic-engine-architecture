@@ -16,23 +16,21 @@ import type { BlogPost, GenerateBlogRequest } from '@/types/magic-engine'
 /**
  * GET /api/clients/[id]/blog
  * List blog posts for a client, newest first.
- * Query: ?status=draft|approved|published|rejected  (omit for all)
+ * Query: ?status=draft|approved|published|rejected|generating|failed  (omit for all)
  *        &limit=20  (max 100)
  *
  * POST /api/clients/[id]/blog
- * Generate a new blog post (stored as 'draft').
- * Body: GenerateBlogRequest
+ * Queue a new blog post for background generation.
+ * Returns immediately with { action: 'queued', post_id } while AI runs in background.
+ * The post appears in the list with status='generating' then transitions to 'draft'.
  *
  * Content Audit:
- *   Before generating, the handler fetches the client's domain and checks
- *   whether a post with the same intent already exists. If so, it returns
- *   { success: true, action: 'upgrade', audit } without generating a new post.
+ *   Before queuing, the handler synchronously checks whether a post with the same
+ *   intent already exists on the client's domain. If so, returns
+ *   { success: true, action: 'upgrade', audit } without creating a post.
  *   The caller can pass skip_audit: true to bypass this check.
  *
  * Security: All endpoints require a valid Bearer token (INTERNAL_API_KEY).
- * Error messages returned to callers are generic — DB schema details are
- * only written to server-side logs.
- *
  * Reference: ROADMAP.md P7.3.8
  */
 
@@ -61,7 +59,6 @@ export async function GET(
   try {
     const clientId = params.id
     const status = req.nextUrl.searchParams.get('status')
-    // HIGH-1: clamp limit to prevent unbounded DB queries
     const limit = clampLimit(req.nextUrl.searchParams.get('limit'))
 
     let query = supabaseAdmin
@@ -79,7 +76,6 @@ export async function GET(
     const { data, error } = await query
 
     if (error) {
-      // HIGH-3: log details server-side, return generic message to caller
       console.error('[blog GET] Supabase error:', error)
       return NextResponse.json({ success: false, error: 'Failed to retrieve blog posts' }, { status: 500 })
     }
@@ -120,8 +116,7 @@ export async function POST(
       )
     }
 
-    // ── Content Audit (pre-generation) ────────────────────────────────────────
-    // Skip if caller explicitly opts out (e.g. user clicked "Generate Anyway")
+    // ── Content Audit (synchronous — fast feedback before queuing) ─────────────
     if (!body.skip_audit) {
       const { data: clientData } = await supabaseAdmin
         .from('clients')
@@ -129,45 +124,50 @@ export async function POST(
         .eq('id', clientId)
         .single<ClientRow>()
 
-      const domain = clientData?.domain
-
-      if (domain) {
+      if (clientData?.domain) {
         const audit = await auditExistingContent(
-          domain,
+          clientData.domain,
           body.topic,
           body.source_query_text,
           clientId
-        ).catch(() => null) // audit failure must never block generation
+        ).catch(() => null)
 
         if (audit?.action === 'upgrade') {
-          // Return early — UI should show upgrade recommendation card
-          return NextResponse.json({
-            success: true,
-            action: 'upgrade',
-            audit,
-            post: null,
-          })
+          return NextResponse.json({ success: true, action: 'upgrade', audit, post: null })
         }
-
-        // action === 'new' — proceed with generation, attach audit info to response
-        const relatedPages = await fetchRelatedPages(clientId, body.topic).catch(() => [])
-        const existingPagesContext = buildPagesContextBlock(relatedPages)
-        const { result, qualityScore, contextSnapshot } = await generateWithQualityRetry(
-          { ...body, mode, client_id: clientId, existing_pages_context: existingPagesContext || undefined },
-          mode,
-        )
-        return await persistAndReturn(clientId, body, mode, result, audit, qualityScore, contextSnapshot)
       }
     }
 
-    // ── Generate (no domain set, or audit skipped) ────────────────────────────
-    const relatedPages = await fetchRelatedPages(clientId, body.topic).catch(() => [])
-    const existingPagesContext = buildPagesContextBlock(relatedPages)
-    const { result, qualityScore, contextSnapshot } = await generateWithQualityRetry(
-      { ...body, mode, client_id: clientId, existing_pages_context: existingPagesContext || undefined },
-      mode,
-    )
-    return await persistAndReturn(clientId, body, mode, result, null, qualityScore, contextSnapshot)
+    // ── Insert placeholder with status='generating', return immediately ────────
+    const { data: placeholder, error: insertErr } = await supabaseAdmin
+      .from('blog_posts')
+      .insert({
+        client_id:         clientId,
+        mode,
+        topic:             body.topic.slice(0, 400),
+        source_query_id:   body.source_query_id   ?? null,
+        source_query_text: body.source_query_text ?? null,
+        primary_keyword:   body.primary_keyword   ?? null,
+        keyword_volume:    body.keyword_volume    ?? null,
+        keyword_kd:        body.keyword_kd        ?? null,
+        keyword_intent:    body.keyword_intent    ?? null,
+        status:            'generating',
+      })
+      .select('id')
+      .single()
+
+    if (insertErr || !placeholder) {
+      console.error('[blog POST] placeholder insert error:', insertErr)
+      return NextResponse.json(
+        { success: false, error: 'Failed to queue blog post' },
+        { status: 500 }
+      )
+    }
+
+    // Fire background generation — intentionally not awaited
+    void runGenerationBackground(clientId, body, mode, placeholder.id)
+
+    return NextResponse.json({ success: true, action: 'queued', post_id: placeholder.id })
 
   } catch (err: unknown) {
     console.error('[blog POST] Unexpected error:', err)
@@ -175,13 +175,139 @@ export async function POST(
   }
 }
 
+// ─── Background generation ────────────────────────────────────────────────────
+
+async function runGenerationBackground(
+  clientId: string,
+  body: GenerateBlogRequest,
+  mode: string,
+  postId: string,
+) {
+  try {
+    const relatedPages = await fetchRelatedPages(clientId, body.topic).catch(() => [])
+    const existingPagesContext = buildPagesContextBlock(relatedPages)
+
+    const { result, qualityScore, contextSnapshot } = await generateWithQualityRetry(
+      { ...body, mode, client_id: clientId, existing_pages_context: existingPagesContext || undefined },
+      mode,
+    )
+
+    await updateGeneratedPost(postId, result, qualityScore, contextSnapshot)
+    await linkStrategyItemToPost(clientId, body.strategy_item_id, postId)
+
+    if (body.production_package_id) {
+      await linkProductionPackage(clientId, body.production_package_id, postId)
+    }
+
+    try {
+      await new SeoContentAdapter().execute({
+        clientId,
+        actionType:          SEO_ACTION_TYPE.PUBLISH_BLOG,
+        executionMode:       'in_house',
+        payload: {
+          triggered_by:    'blog_generation',
+          blog_post_id:    postId,
+          mode,
+          primary_keyword: body.primary_keyword ?? null,
+        },
+        expectedMetric:      SEO_METRIC_KEY.ORGANIC_TRAFFIC,
+        productionPackageId: body.production_package_id,
+      })
+    } catch (err) {
+      console.error('[blog background] flywheel action failed (non-blocking):', err)
+    }
+
+  } catch (err) {
+    console.error('[blog background] Generation failed for post', postId, ':', err)
+    await supabaseAdmin
+      .from('blog_posts')
+      .update({ status: 'failed' })
+      .eq('id', postId)
+      .catch(e => console.error('[blog background] status→failed update error:', e))
+  }
+}
+
+async function updateGeneratedPost(
+  postId: string,
+  result: BlogGeneratorOutput,
+  qualityScore: number | null,
+  contextSnapshot: Record<string, unknown> | null,
+) {
+  const payload: Record<string, unknown> = {
+    title:                       result.title,
+    meta_title:                  result.meta_title,
+    meta_description:            result.meta_description,
+    slug:                        result.slug,
+    html_body:                   result.html_body,
+    word_count:                  result.word_count,
+    geo_directive_id:            result.geo_directive_id,
+    geo_html_snapshot:           result.geo_html_snapshot,
+    featured_image_prompt:       result.featured_image_prompt,
+    cost_usd:                    result.cost_usd,
+    model_used:                  result.model_used,
+    status:                      'draft',
+    generation_context_snapshot: contextSnapshot,
+    quality_score:               qualityScore,
+  }
+
+  let { error } = await supabaseAdmin
+    .from('blog_posts')
+    .update(payload)
+    .eq('id', postId)
+
+  if (error && isMissingQualityColumnsError(error)) {
+    console.warn('[blog background] quality columns missing; retrying without quality metadata')
+    const fallback = { ...payload }
+    delete fallback.generation_context_snapshot
+    delete fallback.quality_score
+    const { error: e2 } = await supabaseAdmin
+      .from('blog_posts').update(fallback).eq('id', postId)
+    error = e2
+  }
+
+  if (error) {
+    console.error('[blog background] DB update error:', error)
+    throw new Error('Failed to save generated post')
+  }
+}
+
+async function linkProductionPackage(
+  clientId: string,
+  productionPackageId: string,
+  postId: string,
+) {
+  const { data: item, error: itemErr } = await supabaseAdmin
+    .from('production_items')
+    .insert({
+      package_id:   productionPackageId,
+      client_id:    clientId,
+      content_type: 'blog_post',
+      blog_post_id: postId,
+      sort_order:   0,
+      status:       'ready',
+    })
+    .select('id')
+    .single()
+
+  if (itemErr) {
+    console.error('[blog background] production_items insert error:', JSON.stringify(itemErr))
+    return
+  }
+
+  if (item) {
+    supabaseAdmin
+      .from('blog_posts')
+      .update({ production_item_id: item.id })
+      .eq('id', postId)
+      .then(
+        () => {},
+        (err: unknown) => console.error('[blog background] production_item_id back-ref error:', err)
+      )
+  }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Generate a blog post with up to 2 quality-rubric retries (3 attempts total).
- * If the post never passes the quality threshold, returns the last result + logs a warning.
- * On any audit error, proceeds immediately with the last generated result (non-blocking).
- */
 async function generateWithQualityRetry(
   req: GenerateBlogRequest & { client_id: string; mode: string; existing_pages_context?: string },
   mode: string,
@@ -224,13 +350,10 @@ async function generateWithQualityRetry(
       const content = lastResult.html_body + '\n' + (lastResult.geo_html_snapshot ?? '')
       const audit = await auditBlogPost(content, mode, metadata)
 
-      if (!audit) break  // skipped (no API key) — proceed without retry
+      if (!audit) break
 
       qualityScore = audit.rubricResult.overallScore
-      contextSnapshot = {
-        ...audit.contextSnapshot,
-        attempts: attempt,
-      }
+      contextSnapshot = { ...audit.contextSnapshot, attempts: attempt }
 
       if (audit.rubricResult.pass || attempt === MAX_ATTEMPTS) {
         if (!audit.rubricResult.pass) {
@@ -250,125 +373,6 @@ async function generateWithQualityRetry(
   return { result: lastResult!, qualityScore, contextSnapshot }
 }
 
-async function persistAndReturn(
-  clientId: string,
-  body: GenerateBlogRequest,
-  mode: string,
-  result: BlogGeneratorOutput,
-  audit: Awaited<ReturnType<typeof auditExistingContent>> | null,
-  qualityScore: number | null,
-  contextSnapshot: Record<string, unknown> | null,
-) {
-  const insertPayload: Record<string, unknown> = {
-    client_id:          clientId,
-    mode,
-    topic:              body.topic.slice(0, 400),
-    source_query_id:    body.source_query_id   ?? null,
-    source_query_text:  body.source_query_text ?? null,
-    // P12.I.5: persist keyword metadata (SEMrush signal for SEO/unified posts)
-    primary_keyword:    body.primary_keyword   ?? null,
-    keyword_volume:     body.keyword_volume    ?? null,
-    keyword_kd:         body.keyword_kd        ?? null,
-    keyword_intent:     body.keyword_intent    ?? null,
-    title:              result.title,
-    meta_title:         result.meta_title,
-    meta_description:   result.meta_description,
-    slug:               result.slug,
-    html_body:          result.html_body,
-    word_count:         result.word_count,
-    geo_directive_id:   result.geo_directive_id,
-    geo_html_snapshot:  result.geo_html_snapshot,
-    featured_image_prompt: result.featured_image_prompt,
-    cost_usd:           result.cost_usd,
-    model_used:         result.model_used,
-    status:             'draft',
-    generation_context_snapshot: contextSnapshot,
-    quality_score:      qualityScore,
-  }
-
-  let { data: post, error: dbErr } = await insertBlogPost(insertPayload)
-
-  if (dbErr && isMissingQualityColumnsError(dbErr)) {
-    console.warn('[blog persistAndReturn] quality columns missing; retrying insert without quality metadata')
-    const fallbackPayload = { ...insertPayload }
-    delete fallbackPayload.generation_context_snapshot
-    delete fallbackPayload.quality_score
-
-    const fallback = await insertBlogPost(fallbackPayload)
-    post = fallback.data
-    dbErr = fallback.error
-  }
-
-  if (dbErr || !post) {
-    // HIGH-3: log DB details server-side only
-    console.error('[blog persistAndReturn] DB insert error:', dbErr)
-    return NextResponse.json(
-      { success: false, error: 'Failed to save blog post' },
-      { status: 500 }
-    )
-  }
-
-  await linkStrategyItemToPost(clientId, body.strategy_item_id, post.id)
-
-  // Link to production package if specified (best-effort, non-blocking on error)
-  if (body.production_package_id) {
-    const { data: item, error: itemErr } = await supabaseAdmin
-      .from('production_items')
-      .insert({
-        package_id:    body.production_package_id,
-        client_id:     clientId,
-        content_type:  'blog_post',
-        blog_post_id:  post.id,
-        sort_order:    0,
-        status:        'ready',
-      })
-      .select('id')
-      .single()
-
-    if (itemErr) {
-      console.error('[blog persistAndReturn] production_items insert error:', JSON.stringify(itemErr))
-    } else if (item) {
-      supabaseAdmin
-        .from('blog_posts')
-        .update({ production_item_id: item.id })
-        .eq('id', post.id)
-        .then(
-          () => {},
-          (err: unknown) => console.error('[blog persistAndReturn] production_item_id back-ref error:', err)
-        )
-    }
-  }
-
-  // P12.I.5: record an SEO flywheel action so blog generation feeds the flywheel
-  // data loop. Non-blocking — the post is already persisted, so a flywheel write
-  // failure must never fail the request.
-  try {
-    await new SeoContentAdapter().execute({
-      clientId,
-      actionType:    SEO_ACTION_TYPE.PUBLISH_BLOG,
-      executionMode: 'in_house',
-      payload: {
-        triggered_by:    'blog_generation',
-        blog_post_id:    post.id,
-        mode,
-        primary_keyword: body.primary_keyword ?? null,
-      },
-      expectedMetric:      SEO_METRIC_KEY.ORGANIC_TRAFFIC,
-      productionPackageId: body.production_package_id,
-    })
-  } catch (err) {
-    console.error('[blog persistAndReturn] flywheel action write failed (non-blocking):', err)
-  }
-
-  return NextResponse.json({
-    success: true,
-    action: 'new',
-    post,
-    audit,
-    cost_usd: result.cost_usd,
-  })
-}
-
 async function linkStrategyItemToPost(
   clientId: string,
   strategyItemId: string | undefined,
@@ -378,25 +382,14 @@ async function linkStrategyItemToPost(
 
   const { error } = await supabaseAdmin
     .from('content_strategy_items')
-    .update({
-      status: 'done',
-      linked_blog_post_id: postId,
-    })
+    .update({ status: 'done', linked_blog_post_id: postId })
     .eq('id', strategyItemId)
     .eq('client_id', clientId)
     .eq('action_type', 'new_blog')
 
   if (error) {
-    console.error('[blog persistAndReturn] strategy item link failed (non-blocking):', error)
+    console.error('[blog background] strategy item link failed (non-blocking):', error)
   }
-}
-
-async function insertBlogPost(payload: Record<string, unknown>) {
-  return supabaseAdmin
-    .from('blog_posts')
-    .insert(payload)
-    .select('*')
-    .single<BlogPost>()
 }
 
 function isMissingQualityColumnsError(err: SupabaseErrorLike): boolean {
