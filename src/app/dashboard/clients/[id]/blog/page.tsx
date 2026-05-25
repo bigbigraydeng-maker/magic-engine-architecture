@@ -30,10 +30,12 @@ interface BlogPostSummary {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  draft:     'bg-amber-100 text-amber-700',
-  approved:  'bg-blue-100 text-blue-700',
-  published: 'bg-green-100 text-green-700',
-  rejected:  'bg-gray-100 text-gray-500',
+  draft:      'bg-amber-100 text-amber-700',
+  approved:   'bg-blue-100 text-blue-700',
+  published:  'bg-green-100 text-green-700',
+  rejected:   'bg-gray-100 text-gray-500',
+  generating: 'bg-purple-100 text-purple-700',
+  failed:     'bg-red-100 text-red-700',
 };
 
 const WEAKNESS_COLORS = (score: number) =>
@@ -41,11 +43,8 @@ const WEAKNESS_COLORS = (score: number) =>
   score >= 0.5 ? 'text-amber-600 bg-amber-50 border-amber-200' :
                  'text-yellow-600 bg-yellow-50 border-yellow-200';
 
-/**
- * /dashboard/clients/[id]/blog
- * Blog list + GEO weak-spot topic selector.
- * Reference: ROADMAP.md P7.3.9, P7.3.13
- */
+const POLL_INTERVAL_MS = 5000;
+
 export default function ClientBlogPage() {
   const params = useParams();
   const clientId = params.id as string;
@@ -54,16 +53,14 @@ export default function ClientBlogPage() {
   const [posts, setPosts] = useState<BlogPostSummary[]>([]);
   const [clientName, setClientName] = useState('');
   const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState<string | null>(null); // query_id being generated
+  const [generating, setGenerating] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState('');
   const [actionOk, setActionOk] = useState<boolean | null>(null);
-  // Upgrade recommendation from content audit
   const [upgradeRec, setUpgradeRec] = useState<{
     opp: BlogOpportunity;
     audit: ContentAuditResult;
   } | null>(null);
 
-  // ── Free keyword generation form ──────────────────────────────────────────
   const [freeFormOpen, setFreeFormOpen] = useState(false);
   const [selectedKeyword, setSelectedKeyword] = useState<KeywordSuggestion | null>(null);
   const [seoKeywords, setSeoKeywords] = useState<KeywordSuggestion[]>([]);
@@ -75,16 +72,17 @@ export default function ClientBlogPage() {
   const flash = (msg: string, ok: boolean) => {
     setActionMsg(msg);
     setActionOk(ok);
-    setTimeout(() => { setActionMsg(''); setActionOk(null); }, 6000);
+    setTimeout(() => { setActionMsg(''); setActionOk(null); }, 8000);
   };
 
   const fetchAll = useCallback(async () => {
-    setLoading(true);
     try {
       const [clientRes, opRes, postsRes] = await Promise.all([
         fetch(`/api/clients/${clientId}`),
         fetch(`/api/clients/${clientId}/blog/opportunities`),
-        fetch(`/api/clients/${clientId}/blog?limit=50`),
+        fetch(`/api/clients/${clientId}/blog?limit=50`, {
+          headers: { Authorization: `Bearer ${API_KEY}` },
+        }),
       ]);
       if (clientRes.ok) {
         const j = await clientRes.json();
@@ -121,11 +119,18 @@ export default function ClientBlogPage() {
   useEffect(() => { fetchAll(); }, [fetchAll]);
   useEffect(() => { fetchKeywordSuggestions(); }, [fetchKeywordSuggestions]);
 
+  // Auto-poll while any post is generating
+  const hasGenerating = posts.some(p => p.status === 'generating');
+  useEffect(() => {
+    if (!hasGenerating) return;
+    const timer = setInterval(() => { void fetchAll(); }, POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [hasGenerating, fetchAll]);
+
   const handleFreeGenerate = async () => {
     if (!selectedKeyword) return;
     const kw = selectedKeyword.keyword;
     setFreeGenerating(true);
-    flash('✨ Generating blog post… this may take 20–30s', true);
     try {
       const res = await fetch(`/api/clients/${clientId}/blog`, {
         method: 'POST',
@@ -140,14 +145,19 @@ export default function ClientBlogPage() {
       });
       const j = await res.json();
       if (!res.ok || !j.success) throw new Error(j.error ?? 'Generation failed');
+
       if (j.action === 'upgrade' && j.audit) {
-        setUpgradeRec({ opp: { query_id: kw, query_text: kw, weakness_score: 0, engines_missing: [], total_runs_checked: 0, last_run_at: null, mode: 'seo_only' }, audit: j.audit as ContentAuditResult });
+        setUpgradeRec({
+          opp: { query_id: kw, query_text: kw, weakness_score: 0, engines_missing: [], total_runs_checked: 0, last_run_at: null, mode: 'seo_only' },
+          audit: j.audit as ContentAuditResult,
+        });
         setActionMsg('');
         setActionOk(null);
       } else {
-        flash(`✓ Blog post created ($${j.cost_usd?.toFixed(4) ?? '?'}) — review it below`, true);
+        // action === 'queued'
         setSelectedKeyword(null);
         setFreeFormOpen(false);
+        flash('⏳ 正在后台生成，稍后可在下方查看结果', true);
         await fetchAll();
       }
     } catch (err: unknown) {
@@ -160,12 +170,6 @@ export default function ClientBlogPage() {
   const handleGenerate = async (opp: BlogOpportunity, skipAudit = false) => {
     setGenerating(opp.query_id);
     setUpgradeRec(null);
-    flash(
-      skipAudit
-        ? '✨ Generating blog post (audit bypassed)… this may take 20-30s'
-        : '🔍 Auditing existing content, then generating… this may take 30s',
-      true
-    );
     try {
       const res = await fetch(`/api/clients/${clientId}/blog`, {
         method: 'POST',
@@ -183,12 +187,11 @@ export default function ClientBlogPage() {
       if (!res.ok || !j.success) throw new Error(j.error ?? 'Generation failed');
 
       if (j.action === 'upgrade' && j.audit) {
-        // Content audit flagged existing content — show recommendation instead of creating post
         setUpgradeRec({ opp, audit: j.audit as ContentAuditResult });
         setActionMsg('');
         setActionOk(null);
       } else {
-        flash(`✓ Blog post created ($${j.cost_usd?.toFixed(4) ?? '?'}) — review it below`, true);
+        flash('⏳ 正在后台生成，稍后可在下方查看结果', true);
         await fetchAll();
       }
     } catch (err: unknown) {
@@ -211,6 +214,8 @@ export default function ClientBlogPage() {
     );
   }
 
+  const generatingCount = posts.filter(p => p.status === 'generating').length;
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -221,6 +226,12 @@ export default function ClientBlogPage() {
         </Link>
         <span className="text-gray-300">/</span>
         <h1 className="text-2xl font-bold text-gray-900">Blog Posts</h1>
+        {generatingCount > 0 && (
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse" />
+            {generatingCount} 正在生成
+          </span>
+        )}
         {actionMsg && (
           <span className={`text-sm font-medium ml-2 ${actionOk ? 'text-green-600' : 'text-red-600'}`}>
             {actionMsg}
@@ -368,10 +379,10 @@ export default function ClientBlogPage() {
                 disabled={freeGenerating || !selectedKeyword}
                 className="px-5 py-2 text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-lg transition-colors"
               >
-                {freeGenerating ? '⏳ Generating…' : '✨ Generate'}
+                {freeGenerating ? '⏳ 提交中…' : '✨ Generate'}
               </button>
               <p className="text-[11px] text-gray-400">
-                ~20–30s · Brief + Campaign context auto-injected
+                后台生成，提交后即可离开此页面
               </p>
             </div>
           </div>
@@ -410,7 +421,7 @@ export default function ClientBlogPage() {
               disabled={!!generating}
               className="px-4 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white rounded-lg transition-colors"
             >
-              {generating ? '⏳ Generating…' : '✨ Generate New Anyway'}
+              {generating ? '⏳ 提交中…' : '✨ Generate New Anyway'}
             </button>
             <button
               onClick={() => setUpgradeRec(null)}
@@ -480,7 +491,7 @@ export default function ClientBlogPage() {
                     disabled={!!generating}
                     className="mt-auto w-full py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white rounded-lg transition-colors"
                   >
-                    {isGenerating ? '⏳ Generating…' : '✨ Generate Blog Post'}
+                    {isGenerating ? '⏳ 提交中…' : '✨ Generate Blog Post'}
                   </button>
                 </div>
               );
@@ -495,7 +506,15 @@ export default function ClientBlogPage() {
           <h2 className="text-base font-semibold text-gray-900">
             📝 Generated Posts
           </h2>
-          <span className="text-xs text-gray-400">{posts.length} posts</span>
+          <div className="flex items-center gap-3">
+            {hasGenerating && (
+              <span className="text-xs text-purple-600 flex items-center gap-1">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse" />
+                每 5 秒自动刷新
+              </span>
+            )}
+            <span className="text-xs text-gray-400">{posts.length} posts</span>
+          </div>
         </div>
 
         {posts.length === 0 ? (
@@ -504,32 +523,65 @@ export default function ClientBlogPage() {
           </div>
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
-            {posts.map(post => (
-              <Link
-                key={post.id}
-                href={`/dashboard/clients/${clientId}/blog/${post.id}`}
-                className="flex items-center gap-4 px-5 py-4 hover:bg-gray-50 transition-colors group"
-              >
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 group-hover:text-indigo-700 truncate">
-                    {post.title || post.topic}
-                  </p>
-                  {post.source_query_text && (
-                    <p className="text-xs text-gray-400 mt-0.5 truncate">
-                      Topic: &quot;{post.source_query_text}&quot;
+            {posts.map(post => {
+              const isPostGenerating = post.status === 'generating';
+              const isPostFailed = post.status === 'failed';
+
+              const inner = (
+                <div className={`flex items-center gap-4 px-5 py-4 ${!isPostGenerating && !isPostFailed ? 'hover:bg-gray-50 group' : ''} transition-colors`}>
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-sm font-semibold truncate ${
+                      isPostGenerating ? 'text-purple-700' :
+                      isPostFailed ? 'text-red-600' :
+                      'text-gray-900 group-hover:text-indigo-700'
+                    }`}>
+                      {isPostGenerating
+                        ? <span className="flex items-center gap-2">
+                            <svg className="animate-spin h-3.5 w-3.5 text-purple-500 flex-shrink-0" viewBox="0 0 24 24" fill="none">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z" />
+                            </svg>
+                            {post.topic}
+                          </span>
+                        : (post.title || post.topic)
+                      }
                     </p>
-                  )}
+                    {post.source_query_text && (
+                      <p className="text-xs text-gray-400 mt-0.5 truncate">
+                        Topic: &quot;{post.source_query_text}&quot;
+                      </p>
+                    )}
+                    {isPostGenerating && (
+                      <p className="text-[10px] text-purple-500 mt-0.5">AI 正在撰写中，完成后自动显示…</p>
+                    )}
+                    {isPostFailed && (
+                      <p className="text-[10px] text-red-500 mt-0.5">生成失败，请重新触发</p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 flex-shrink-0 text-xs text-gray-500">
+                    {post.word_count && <span>{post.word_count} words</span>}
+                    {post.cost_usd && <span>${post.cost_usd.toFixed(4)}</span>}
+                    <span className={`px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[post.status] ?? 'bg-gray-100 text-gray-500'}`}>
+                      {post.status === 'generating' ? '生成中' :
+                       post.status === 'failed' ? '失败' : post.status}
+                    </span>
+                    {!isPostGenerating && !isPostFailed && (
+                      <span className="text-gray-300 group-hover:text-indigo-400">→</span>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-3 flex-shrink-0 text-xs text-gray-500">
-                  {post.word_count && <span>{post.word_count} words</span>}
-                  {post.cost_usd && <span>${post.cost_usd.toFixed(4)}</span>}
-                  <span className={`px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[post.status] ?? 'bg-gray-100 text-gray-500'}`}>
-                    {post.status}
-                  </span>
-                  <span className="text-gray-300 group-hover:text-indigo-400">→</span>
-                </div>
-              </Link>
-            ))}
+              );
+
+              if (isPostGenerating || isPostFailed) {
+                return <div key={post.id}>{inner}</div>;
+              }
+
+              return (
+                <Link key={post.id} href={`/dashboard/clients/${clientId}/blog/${post.id}`}>
+                  {inner}
+                </Link>
+              );
+            })}
           </div>
         )}
       </section>

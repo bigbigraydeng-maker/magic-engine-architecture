@@ -2,8 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { CampaignBrief, CampaignKeywordSnapshot } from '@/types/magic-engine'
-import { PromptPreviewModal } from './PromptPreviewModal'
-import type { PreviewPost } from './PromptPreviewModal'
 
 interface Props {
   clientId: string
@@ -238,20 +236,6 @@ function CampaignCard({
   const [editUntil, setEditUntil] = useState(campaign.valid_until ?? '')
   const [saving, setSaving] = useState(false)
 
-  // Batch generation state
-  const [batchPlatforms, setBatchPlatforms] = useState<string[]>(['facebook', 'tiktok'])
-  const [directionNote, setDirectionNote] = useState('')
-  const [routeACount, setRouteACount] = useState(3)
-  const [routeCCount, setRouteCCount] = useState(2)
-  const [generating, setGenerating] = useState(false)
-  const [genResult, setGenResult] = useState<{ count: number } | null>(null)
-  const totalPosts = routeACount + routeCCount
-
-  // Prompt preview modal state
-  const [previewLoading, setPreviewLoading] = useState(false)
-  const [showPromptModal, setShowPromptModal] = useState(false)
-  const [previewData, setPreviewData] = useState<{ system_prompt: string; posts: PreviewPost[] } | null>(null)
-
   const handleSaveEdit = async () => {
     if (!editTitle.trim()) return
     setSaving(true)
@@ -292,73 +276,6 @@ function CampaignCard({
   })()
 
   const keywords = (campaign.semrush_keywords ?? []) as CampaignKeywordSnapshot[]
-
-  const handlePreviewPrompts = async () => {
-    if (totalPosts < 1) { setMsg('✗ 请设置至少 1 条'); return }
-    setPreviewLoading(true)
-    setMsg('')
-    try {
-      const res = await fetch(
-        `/api/clients/${clientId}/campaign/${campaign.id}/preview-prompt`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            platforms: batchPlatforms,
-            direction_note: directionNote.trim() || campaign.title,
-            route_a_count: routeACount,
-            route_c_count: routeCCount,
-          }),
-        }
-      )
-      const json = await res.json()
-      if (!json.success) throw new Error(json.error)
-      setPreviewData(json)
-      setShowPromptModal(true)
-    } catch (err) {
-      setMsg(`✗ ${(err as Error).message}`)
-    } finally {
-      setPreviewLoading(false)
-    }
-  }
-
-  const handleBatchGenerate = async (systemPromptOverride?: string, userPromptsOverride?: string[]) => {
-    if (totalPosts < 1) { setMsg('✗ 请设置至少 1 条'); return }
-    setGenerating(true)
-    setShowPromptModal(false)
-    setMsg('')
-    setGenResult(null)
-    try {
-      const hasOverrides = systemPromptOverride !== undefined || userPromptsOverride !== undefined
-      const res = await fetch(
-        `/api/clients/${clientId}/campaign/${campaign.id}/batch-generate`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            platforms: batchPlatforms,
-            direction_note: directionNote.trim() || campaign.title,
-            route_a_count: routeACount,
-            route_c_count: routeCCount,
-            ...(hasOverrides ? {
-              prompt_overrides: {
-                system_prompt: systemPromptOverride,
-                post_user_prompts: userPromptsOverride,
-              },
-            } : {}),
-          }),
-        }
-      )
-      const json = await res.json()
-      if (!json.success) throw new Error(json.error)
-      setGenResult({ count: json.saved })
-      setMsg(`✓ 已生成 ${json.saved} 条草稿，请前往内容板检查审批`)
-    } catch (err) {
-      setMsg(`✗ ${(err as Error).message}`)
-    } finally {
-      setGenerating(false)
-    }
-  }
 
   const handleEnrich = async () => {
     setEnriching(true)
@@ -641,112 +558,6 @@ function CampaignCard({
             onUpdated={onUpdated}
           />
 
-          {/* ── Batch Generation ─────────────────────────────── */}
-          <div className="bg-gray-50 rounded-xl p-4 space-y-4 border border-gray-100">
-            <p className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
-              🚀 批量生成内容
-            </p>
-
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">内容方向 / 口号</label>
-              <textarea
-                value={directionNote}
-                onChange={e => setDirectionNote(e.target.value)}
-                placeholder={`默认使用活动标题："${campaign.title}"`}
-                rows={2}
-                className={`${INPUT_CLASS} resize-none text-xs`}
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-gray-600 mb-1">发布平台</label>
-              <div className="flex gap-2">
-                {['facebook', 'tiktok', 'instagram'].map(p => (
-                  <button
-                    key={p}
-                    onClick={() => setBatchPlatforms(prev =>
-                      prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]
-                    )}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border-2 transition-colors capitalize ${
-                      batchPlatforms.includes(p)
-                        ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
-                        : 'border-gray-200 text-gray-500 bg-white'
-                    }`}
-                  >
-                    {p}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <p className="text-xs text-gray-400 mb-2">
-                数字 = 总生成条数（每条同时发布到所选全部平台）
-              </p>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
-                    🔑 关键词文章（总条数）
-                  </label>
-                  <input
-                    type="number"
-                    min={0} max={20}
-                    value={routeACount}
-                    onChange={e => setRouteACount(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))}
-                    className={`${INPUT_CLASS} text-center`}
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-600 mb-1">
-                    💡 自由话题（总条数）
-                  </label>
-                  <input
-                    type="number"
-                    min={0} max={20}
-                    value={routeCCount}
-                    onChange={e => setRouteCCount(Math.max(0, Math.min(20, parseInt(e.target.value) || 0)))}
-                    className={`${INPUT_CLASS} text-center`}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <button
-              onClick={handlePreviewPrompts}
-              disabled={previewLoading || generating || totalPosts < 1 || batchPlatforms.length === 0}
-              className="w-full py-2.5 rounded-xl text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white disabled:opacity-50 transition-colors"
-            >
-              {previewLoading ? (
-                <span className="flex items-center justify-center gap-2">
-                  <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                  准备 Prompt 预览…
-                </span>
-              ) : generating ? (
-                <span className="flex items-center justify-center gap-2">
-                  <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                  生成中…（共 {totalPosts} 条）
-                </span>
-              ) : `预览 Prompt → 生成 ${totalPosts} 条`}
-            </button>
-
-            {genResult && (
-              <div className="flex flex-col gap-1.5">
-                <a
-                  href={`/dashboard/content?client=${clientId}`}
-                  className="block text-center text-xs text-indigo-600 hover:underline"
-                >
-                  ✓ 已生成 {genResult.count} 条草稿 → 前往内容板审批 ↗
-                </a>
-                <a
-                  href={`/dashboard/clients/${clientId}/execution`}
-                  className="block text-center text-xs text-gray-500 hover:text-indigo-600 hover:underline"
-                >
-                  ← 返回执行看板
-                </a>
-              </div>
-            )}
-          </div>
-
           {msg && (
             <p className={`text-xs ${msg.startsWith('✓') ? 'text-green-600' : 'text-red-600'}`}>
               {msg}
@@ -773,16 +584,6 @@ function CampaignCard({
         </div>
       )}
 
-      {/* Prompt Preview Modal */}
-      {showPromptModal && previewData && (
-        <PromptPreviewModal
-          systemPrompt={previewData.system_prompt}
-          posts={previewData.posts}
-          generating={generating}
-          onConfirm={(sp, ups) => handleBatchGenerate(sp, ups)}
-          onCancel={() => setShowPromptModal(false)}
-        />
-      )}
     </div>
   )
 }
