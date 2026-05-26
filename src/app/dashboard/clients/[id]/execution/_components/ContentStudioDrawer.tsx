@@ -15,7 +15,7 @@ import { SocialPlanSection } from './SocialPlanSection'
 
 const API_KEY = process.env.NEXT_PUBLIC_INTERNAL_API_KEY ?? ''
 
-type StudioTab = 'article' | 'video'
+type StudioTab = 'article' | 'social' | 'video'
 
 interface ActiveCampaign {
   id: string
@@ -30,9 +30,8 @@ interface Props {
   onContentGenerated: () => void
 }
 
-/** Social-dimension items default to the video tab; everything else to article. */
 function defaultTabFor(dimension: string): StudioTab {
-  return dimension === 'social' ? 'video' : 'article'
+  return dimension === 'social' ? 'social' : 'article'
 }
 
 export function ContentStudioDrawer({ clientId, item, onClose, onContentGenerated }: Props) {
@@ -125,7 +124,11 @@ export function ContentStudioDrawer({ clientId, item, onClose, onContentGenerate
         {/* Tabs */}
         <div className="border-b border-slate-200 bg-white px-4 sm:px-6">
           <div className="flex gap-2 overflow-x-auto">
-            {([['article', 'SEO article'], ['video', 'Social video']] as const).map(([val, label]) => (
+            {([
+              ['article', 'SEO 文章'],
+              ['social',  '图文帖子'],
+              ['video',   '短视频'],
+            ] as const).map(([val, label]) => (
               <button
                 key={val}
                 onClick={() => setTab(val)}
@@ -154,9 +157,20 @@ export function ContentStudioDrawer({ clientId, item, onClose, onContentGenerate
               hasActiveCampaign={!!campaign}
               onGenerated={linkContentToItem}
             />
+          ) : tab === 'social' ? (
+            // 图文帖子：Posts + Stories（含文字与图片生成）
+            // TODO: 平台 tab（Facebook / Instagram / TikTok）→ 对应不同内容格式
+            <SocialPlanSection
+              mode="social"
+              clientId={clientId}
+              campaignId={campaign?.id}
+              campaignName={campaign?.name}
+            />
           ) : (
+            // 短视频：Reels 脚本 + Video Studio
             <div className="space-y-2">
               <SocialPlanSection
+                mode="video"
                 clientId={clientId}
                 campaignId={campaign?.id}
                 campaignName={campaign?.name}

@@ -24,6 +24,12 @@ interface Props {
   clientId: string
   campaignId: string | undefined
   campaignName: string | undefined
+  /** Controls which sub-tabs are visible.
+   *  'social' → Posts + Stories only (图文帖子 tab)
+   *  'video'  → Reels only (短视频 tab)
+   *  'all'    → all three (default, legacy usage)
+   */
+  mode?: 'all' | 'social' | 'video'
 }
 
 interface PlanRecord {
@@ -35,12 +41,12 @@ interface PlanRecord {
 
 type PlanTab = 'reels' | 'posts' | 'stories'
 
-export function SocialPlanSection({ clientId, campaignId, campaignName }: Props) {
+export function SocialPlanSection({ clientId, campaignId, campaignName, mode = 'all' }: Props) {
   const [loading, setLoading]               = useState(false)
   const [plan, setPlan]                     = useState<SocialPlanOutput | null>(null)
   const [planId, setPlanId]                 = useState<string | null>(null)
   const [error, setError]                   = useState<string | null>(null)
-  const [planTab, setPlanTab]               = useState<PlanTab>('reels')
+  const [planTab, setPlanTab]               = useState<PlanTab>(mode === 'video' ? 'reels' : 'posts')
   const [planHistory, setPlanHistory]       = useState<PlanRecord[]>([])
   const [historyLoaded, setHistoryLoaded]   = useState(false)
 
@@ -145,7 +151,12 @@ export function SocialPlanSection({ clientId, campaignId, campaignName }: Props)
         <div className="min-w-0">
           <h3 className="text-base font-black text-slate-950">Social Plan Studio</h3>
           <p className="mt-1 text-xs font-semibold text-slate-500">
-            Strategy to {config.reels_count} Reels, {config.posts_count} Posts, {config.stories_count} Stories
+            {mode === 'video'
+              ? `Strategy to ${config.reels_count} Reels`
+              : mode === 'social'
+                ? `Strategy to ${config.posts_count} Posts, ${config.stories_count} Stories`
+                : `Strategy to ${config.reels_count} Reels, ${config.posts_count} Posts, ${config.stories_count} Stories`
+            }
             <span className="mx-2 text-slate-300">/</span>
             <span className="capitalize text-cyan-700">{config.platform}</span>
           </p>
@@ -360,13 +371,17 @@ export function SocialPlanSection({ clientId, campaignId, campaignName }: Props)
             )}
           </div>
 
-          {/* Sub-tabs */}
+          {/* Sub-tabs — filtered by mode */}
           <div className="-mx-4 flex gap-2 overflow-x-auto border-b border-slate-200 px-4 sm:-mx-5 sm:px-5">
             {([
               ['reels',   `Reels (${plan.reels.length})`],
               ['posts',   `Posts (${plan.posts.length})`],
               ['stories', `Stories (${plan.stories.length})`],
-            ] as const).map(([val, label]) => (
+            ] as const).filter(([val]) =>
+              mode === 'social' ? val !== 'reels' :
+              mode === 'video'  ? val === 'reels' :
+              true
+            ).map(([val, label]) => (
               <button
                 key={val}
                 onClick={() => setPlanTab(val)}
