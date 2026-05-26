@@ -213,6 +213,14 @@ export default function ContentBoardPage() {
   const [pendingAssetId, setPendingAssetId] = useState<string | null>(null);
   const [pendingPostId, setPendingPostId] = useState<string | null>(null);
 
+  // Batch image generation state
+  const [batchImgRunning, setBatchImgRunning] = useState(false);
+  const [batchImgMsg, setBatchImgMsg] = useState('');
+
+  // Batch Publer publish state
+  const [batchPubRunning, setBatchPubRunning] = useState(false);
+  const [batchPubMsg, setBatchPubMsg] = useState('');
+
 
   useEffect(() => {
     fetch('/api/clients').then(r => r.json()).then(d => setClients(d.clients ?? []));
@@ -274,6 +282,71 @@ export default function ContentBoardPage() {
   // pendingPostId is stable once set; exclude modalPost/posts to avoid restart
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingAssetId, pendingPostId]);
+
+  const handleBatchGenerateImages = async () => {
+    const needImg = Array.from(selectedIds).filter(id => {
+      const p = posts.find(p => p.id === id);
+      return p && !p.visual_asset_url && p.visual_brief;
+    });
+    if (needImg.length === 0) {
+      setBatchImgMsg('所有选中条目已有图片或无 Visual Brief');
+      return;
+    }
+    setBatchImgRunning(true);
+    setBatchImgMsg(`生成中（共 ${needImg.length} 条）…`);
+    try {
+      const res = await fetch('/api/visual/batch-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ post_ids: needImg }),
+      });
+      const json = await res.json() as {
+        success: boolean;
+        results?: { post_id: string; ok: boolean; error?: string }[];
+        error?: string;
+      };
+      if (!json.success) throw new Error(json.error ?? '批量生成失败');
+      const ok = (json.results ?? []).filter(r => r.ok).length;
+      const fail = (json.results ?? []).filter(r => !r.ok).length;
+      setBatchImgMsg(`✓ 成功 ${ok} 条${fail > 0 ? `，失败 ${fail} 条` : ''}`);
+      await fetchPosts();
+    } catch (err) {
+      setBatchImgMsg(`✗ ${(err as Error).message}`);
+    } finally {
+      setBatchImgRunning(false);
+    }
+  };
+
+  const handleBatchPublish = async () => {
+    const toPublish = Array.from(selectedIds).filter(id => {
+      const p = posts.find(p => p.id === id);
+      return p && p.status === 'approved' && p.visual_asset_url;
+    });
+    if (toPublish.length === 0) {
+      setBatchPubMsg('无可发布条目（需状态=已批准且有图片）');
+      return;
+    }
+    setBatchPubRunning(true);
+    setBatchPubMsg(`发布中（共 ${toPublish.length} 条）…`);
+    let ok = 0;
+    let fail = 0;
+    for (const postId of toPublish) {
+      try {
+        const res = await fetch('/api/publer/create-post', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ post_id: postId }),
+        });
+        const json = await res.json() as { success: boolean; error?: string };
+        if (json.success) ok++; else fail++;
+      } catch {
+        fail++;
+      }
+    }
+    setBatchPubMsg(`✓ 成功 ${ok} 条${fail > 0 ? `，失败 ${fail} 条` : ''}`);
+    setBatchPubRunning(false);
+    if (ok > 0) await fetchPosts();
+  };
 
   const handleGenerateImage = async () => {
     if (!modalPost) return;
@@ -689,6 +762,20 @@ export default function ContentBoardPage() {
               {batching ? '处理中…' : '应用'}
             </button>
             <button
+              onClick={() => void handleBatchGenerateImages()}
+              disabled={batchImgRunning || batching}
+              className="bg-violet-600 hover:bg-violet-700 text-white text-sm px-4 py-1.5 rounded-lg disabled:opacity-50 transition-colors font-medium"
+            >
+              {batchImgRunning ? '生成中…' : '🎨 生成全部图片'}
+            </button>
+            <button
+              onClick={() => void handleBatchPublish()}
+              disabled={batchPubRunning || batching}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white text-sm px-4 py-1.5 rounded-lg disabled:opacity-50 transition-colors font-medium"
+            >
+              {batchPubRunning ? '发布中…' : '🚀 发布全部到 Publer'}
+            </button>
+            <button
               onClick={() => setShowDeleteConfirm(true)}
               disabled={batching}
               className="bg-red-500 hover:bg-red-600 text-white text-sm px-4 py-1.5 rounded-lg disabled:opacity-50 transition-colors font-medium"
@@ -697,6 +784,20 @@ export default function ContentBoardPage() {
             </button>
             <button onClick={() => setSelectedIds(new Set())} className="text-sm text-gray-500 hover:text-gray-700 px-2">取消</button>
           </div>
+        </div>
+      )}
+      {(batchImgMsg || batchPubMsg) && (
+        <div className="flex gap-4 flex-wrap">
+          {batchImgMsg && (
+            <p className={`text-sm ${batchImgMsg.startsWith('✓') ? 'text-green-600' : batchImgMsg.startsWith('✗') ? 'text-red-600' : 'text-amber-600'}`}>
+              🎨 {batchImgMsg}
+            </p>
+          )}
+          {batchPubMsg && (
+            <p className={`text-sm ${batchPubMsg.startsWith('✓') ? 'text-green-600' : 'text-amber-600'}`}>
+              🚀 {batchPubMsg}
+            </p>
+          )}
         </div>
       )}
 
