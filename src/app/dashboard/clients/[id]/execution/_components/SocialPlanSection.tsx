@@ -49,6 +49,10 @@ export function SocialPlanSection({ clientId, campaignId, campaignName }: Props)
   const [settingsOpen, setSettingsOpen]     = useState(false)
   const [angleFocusInput, setAngleFocusInput] = useState('')
 
+  // Save-to-board state
+  const [savingBoard, setSavingBoard]       = useState(false)
+  const [boardMsg, setBoardMsg]             = useState<string | null>(null)
+
   // Load history on mount / when campaign changes
   useEffect(() => {
     if (!campaignId) { setHistoryLoaded(true); return }
@@ -67,6 +71,25 @@ export function SocialPlanSection({ clientId, campaignId, campaignName }: Props)
       .catch(() => { /* non-fatal */ })
       .finally(() => setHistoryLoaded(true))
   }, [clientId, campaignId])
+
+  async function handleSaveToBoard(type: 'posts' | 'stories') {
+    if (!planId) return
+    setSavingBoard(true)
+    setBoardMsg(null)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/social-plan/${planId}/save-to-board`, {
+        method: 'POST',
+      })
+      const json = await res.json() as { success: boolean; saved_posts?: number; saved_stories?: number; error?: string }
+      if (!json.success) throw new Error(json.error ?? 'Save failed')
+      const count = type === 'posts' ? (json.saved_posts ?? 0) : (json.saved_stories ?? 0)
+      setBoardMsg(`saved:${count}:${type}`)
+    } catch (e) {
+      setBoardMsg(`error:${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setSavingBoard(false)
+    }
+  }
 
   async function generate() {
     if (!campaignId) return
@@ -368,6 +391,15 @@ export function SocialPlanSection({ clientId, campaignId, campaignName }: Props)
 
           {planTab === 'posts' && (
             <div className="space-y-3">
+              <SaveToBoardBar
+                label="Posts"
+                count={plan.posts.length}
+                saving={savingBoard}
+                msg={boardMsg}
+                clientId={clientId}
+                onSave={() => void handleSaveToBoard('posts')}
+                type="posts"
+              />
               {plan.posts.map((post, i) => (
                 <PostCard key={i} post={post} />
               ))}
@@ -376,6 +408,15 @@ export function SocialPlanSection({ clientId, campaignId, campaignName }: Props)
 
           {planTab === 'stories' && (
             <div className="space-y-2">
+              <SaveToBoardBar
+                label="Stories"
+                count={plan.stories.length}
+                saving={savingBoard}
+                msg={boardMsg}
+                clientId={clientId}
+                onSave={() => void handleSaveToBoard('stories')}
+                type="stories"
+              />
               {plan.stories.map((story, i) => (
                 <StoryCard key={i} index={i} story={story} />
               ))}
@@ -396,6 +437,51 @@ export function SocialPlanSection({ clientId, campaignId, campaignName }: Props)
         <div className="px-5 py-4 flex justify-center">
           <div className="w-5 h-5 border-2 border-indigo-300 border-t-transparent rounded-full animate-spin" />
         </div>
+      )}
+    </div>
+  )
+}
+
+// ─── SaveToBoardBar ────────────────────────────────────────────────────────────
+
+function SaveToBoardBar({
+  label, count, saving, msg, clientId, onSave, type,
+}: {
+  label: string
+  count: number
+  saving: boolean
+  msg: string | null
+  clientId: string
+  onSave: () => void
+  type: 'posts' | 'stories'
+}) {
+  const isSuccess = msg?.startsWith('saved:') && msg.includes(`:${type}`)
+  const isError   = msg?.startsWith('error:')
+  const savedCount = isSuccess ? parseInt(msg!.split(':')[1], 10) : 0
+
+  return (
+    <div className="flex items-center gap-3 flex-wrap">
+      <button
+        onClick={onSave}
+        disabled={saving || count === 0}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 transition-colors"
+      >
+        {saving ? (
+          <><span className="w-3 h-3 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" /> 保存中…</>
+        ) : (
+          <>💾 保存全部 {label} 到内容板</>
+        )}
+      </button>
+      {isSuccess && (
+        <span className="text-xs text-emerald-700">
+          ✓ 已保存 {savedCount} 条 {label}，
+          <a href={`/dashboard/content?client=${clientId}`} className="underline font-medium ml-1">
+            前往内容板生成图片 →
+          </a>
+        </span>
+      )}
+      {isError && (
+        <span className="text-xs text-red-600">⚠ {msg!.replace('error:', '')}</span>
       )}
     </div>
   )
