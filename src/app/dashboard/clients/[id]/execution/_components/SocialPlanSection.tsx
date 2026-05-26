@@ -401,7 +401,7 @@ export function SocialPlanSection({ clientId, campaignId, campaignName }: Props)
                 type="posts"
               />
               {plan.posts.map((post, i) => (
-                <PostCard key={i} post={post} />
+                <PostCard key={i} post={post} clientId={clientId} />
               ))}
             </div>
           )}
@@ -418,7 +418,7 @@ export function SocialPlanSection({ clientId, campaignId, campaignName }: Props)
                 type="stories"
               />
               {plan.stories.map((story, i) => (
-                <StoryCard key={i} index={i} story={story} />
+                <StoryCard key={i} index={i} story={story} clientId={clientId} />
               ))}
             </div>
           )}
@@ -1059,51 +1059,195 @@ const POST_TYPE_COLOR: Record<string, string> = {
   engagement:   'bg-blue-50 text-blue-700 border-blue-200',
 }
 
-function PostCard({ post }: { post: Post }) {
-  const [open, setOpen] = useState(false)
+function PostCard({ post, clientId }: { post: Post; clientId: string }) {
+  const [open, setOpen]             = useState(false)
+  const [generatingImg, setGen]     = useState(false)
+  const [imgUrl, setImgUrl]         = useState<string | null>(null)
+  const [imgError, setImgError]     = useState<string | null>(null)
+  const [lightboxOpen, setLightbox] = useState(false)
+
   const colorClass = POST_TYPE_COLOR[post.content_type] ?? 'bg-gray-50 text-gray-700 border-gray-200'
+
+  const handleGenerate = async () => {
+    setGen(true)
+    setImgError(null)
+    try {
+      const res = await fetch('/api/visual/image-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: post.image_prompt, client_id: clientId, aspect_ratio: '1:1' }),
+      })
+      const json = await res.json() as { success: boolean; image_url?: string; error?: string }
+      if (!json.success) throw new Error(json.error ?? '生成失败')
+      setImgUrl(json.image_url ?? null)
+    } catch (e) {
+      setImgError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setGen(false)
+    }
+  }
+
   return (
-    <div className="border border-gray-200 rounded-lg overflow-hidden">
-      <button
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 px-4 py-3 bg-gray-50 hover:bg-gray-100 text-left transition-colors"
-      >
-        <span className={`text-[10px] font-bold border rounded px-1.5 py-0.5 shrink-0 ${colorClass}`}>
-          {post.content_type}
-        </span>
-        <p className="flex-1 text-xs text-gray-700 truncate">{(post.copy ?? '').slice(0, 80)}…</p>
-        <span className="text-gray-400 text-xs">{open ? '▲' : '▼'}</span>
-      </button>
-      {open && (
-        <div className="px-4 py-3 space-y-2.5 border-t border-gray-100 bg-white">
-          <p className="text-[11px] text-gray-700 leading-relaxed whitespace-pre-line">{post.copy}</p>
-          <div>
-            <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Image Prompt</p>
-            <p className="text-[11px] text-gray-500 italic leading-relaxed">{post.image_prompt}</p>
-          </div>
-          <div className="flex flex-wrap gap-1">
-            {post.hashtags.map((h, hi) => (
-              <span key={hi} className="text-[10px] bg-blue-50 text-blue-600 rounded px-1.5 py-0.5">{h}</span>
-            ))}
+    <>
+      {lightboxOpen && imgUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setLightbox(false)}
+        >
+          <div className="relative max-w-sm w-full" onClick={e => e.stopPropagation()}>
+            <button onClick={() => setLightbox(false)} className="absolute -top-8 right-0 text-white text-sm font-bold hover:text-gray-300">✕ 关闭</button>
+            <img src={imgUrl} alt="generated" className="w-full rounded-lg shadow-2xl" />
+            <a href={imgUrl} download target="_blank" rel="noreferrer" className="mt-2 block text-center text-[11px] text-indigo-300 hover:text-white" onClick={e => e.stopPropagation()}>↓ 下载图片</a>
           </div>
         </div>
       )}
-    </div>
+      <div className="border border-gray-200 rounded-lg overflow-hidden">
+        <button
+          onClick={() => setOpen(o => !o)}
+          className="w-full flex items-center gap-3 px-4 py-3 bg-gray-50 hover:bg-gray-100 text-left transition-colors"
+        >
+          {imgUrl && (
+            <img src={imgUrl} alt="" className="w-8 h-8 rounded object-cover border border-gray-200 shrink-0" />
+          )}
+          <span className={`text-[10px] font-bold border rounded px-1.5 py-0.5 shrink-0 ${colorClass}`}>
+            {post.content_type}
+          </span>
+          <p className="flex-1 text-xs text-gray-700 truncate">{(post.copy ?? '').slice(0, 80)}…</p>
+          <span className="text-gray-400 text-xs">{open ? '▲' : '▼'}</span>
+        </button>
+        {open && (
+          <div className="px-4 py-3 space-y-2.5 border-t border-gray-100 bg-white">
+            <p className="text-[11px] text-gray-700 leading-relaxed whitespace-pre-line">{post.copy}</p>
+
+            {/* Image prompt + generate */}
+            <div className="rounded-lg border border-violet-100 overflow-hidden">
+              <div className="flex items-start justify-between gap-2 px-3 py-2 bg-violet-50 border-b border-violet-100">
+                <p className="text-[10px] font-bold text-violet-800">🎨 Image Prompt</p>
+                <CopyButton text={post.image_prompt} label="📋 复制" />
+              </div>
+              <p className="px-3 py-2.5 text-[10px] text-violet-900 italic leading-relaxed font-mono bg-white">{post.image_prompt}</p>
+            </div>
+
+            {/* Generation button / result */}
+            {!imgUrl && (
+              <div className="space-y-1.5">
+                <button
+                  onClick={() => void handleGenerate()}
+                  disabled={generatingImg}
+                  className="w-full py-2 text-xs font-bold bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700 disabled:opacity-50 text-white rounded-lg transition-all"
+                >
+                  {generatingImg ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <Spinner color="indigo" /> Visual Studio 生成图片中…（约 15s）
+                    </span>
+                  ) : '🎨 生成图片（Visual Studio）'}
+                </button>
+                {imgError && <p className="text-[11px] text-red-500">⚠ {imgError}</p>}
+              </div>
+            )}
+
+            {imgUrl && (
+              <div className="rounded-lg border border-green-200 bg-green-50 p-2.5 space-y-2">
+                <p className="text-[10px] font-bold text-green-700">✅ 图片已生成 — 点击放大</p>
+                <button onClick={() => setLightbox(true)} className="block group relative w-fit">
+                  <img src={imgUrl} alt="generated" className="w-full max-w-[180px] rounded border border-green-200 group-hover:opacity-90 transition-opacity" />
+                  <span className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                    <span className="bg-black/60 text-white text-[10px] font-bold rounded px-2 py-1">🔍 放大</span>
+                  </span>
+                </button>
+                <button
+                  onClick={() => { setImgUrl(null); setImgError(null) }}
+                  className="text-[10px] text-gray-400 hover:text-gray-600 underline"
+                >重新生成</button>
+              </div>
+            )}
+
+            <div className="flex flex-wrap gap-1">
+              {post.hashtags.map((h, hi) => (
+                <span key={hi} className="text-[10px] bg-blue-50 text-blue-600 rounded px-1.5 py-0.5">{h}</span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </>
   )
 }
 
-function StoryCard({ index, story }: { index: number; story: Story }) {
+function StoryCard({ index, story, clientId }: { index: number; story: Story; clientId: string }) {
+  const [generatingImg, setGen]     = useState(false)
+  const [imgUrl, setImgUrl]         = useState<string | null>(null)
+  const [imgError, setImgError]     = useState<string | null>(null)
+  const [lightboxOpen, setLightbox] = useState(false)
+
+  const handleGenerate = async () => {
+    setGen(true)
+    setImgError(null)
+    try {
+      const res = await fetch('/api/visual/image-preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: story.visual_prompt, client_id: clientId, aspect_ratio: '9:16' }),
+      })
+      const json = await res.json() as { success: boolean; image_url?: string; error?: string }
+      if (!json.success) throw new Error(json.error ?? '生成失败')
+      setImgUrl(json.image_url ?? null)
+    } catch (e) {
+      setImgError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setGen(false)
+    }
+  }
+
   return (
-    <div className="border border-gray-200 rounded-lg px-4 py-3 bg-white flex gap-3">
-      <span className="w-5 h-5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
-        {index + 1}
-      </span>
-      <div className="flex-1 min-w-0 space-y-1">
-        <p className="text-xs font-semibold text-gray-800">{story.copy}</p>
-        <p className="text-[11px] text-indigo-600 font-medium">→ {story.cta}</p>
-        <p className="text-[11px] text-gray-400 italic truncate">{story.visual_prompt}</p>
+    <>
+      {lightboxOpen && imgUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setLightbox(false)}
+        >
+          <div className="relative max-w-xs w-full" onClick={e => e.stopPropagation()}>
+            <button onClick={() => setLightbox(false)} className="absolute -top-8 right-0 text-white text-sm font-bold hover:text-gray-300">✕ 关闭</button>
+            <img src={imgUrl} alt="story" className="w-full rounded-lg shadow-2xl" />
+            <a href={imgUrl} download target="_blank" rel="noreferrer" className="mt-2 block text-center text-[11px] text-indigo-300 hover:text-white" onClick={e => e.stopPropagation()}>↓ 下载图片</a>
+          </div>
+        </div>
+      )}
+      <div className="border border-gray-200 rounded-lg px-4 py-3 bg-white flex gap-3">
+        <span className="w-5 h-5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
+          {index + 1}
+        </span>
+        <div className="flex-1 min-w-0 space-y-1.5">
+          <p className="text-xs font-semibold text-gray-800">{story.copy}</p>
+          <p className="text-[11px] text-indigo-600 font-medium">→ {story.cta}</p>
+          <p className="text-[11px] text-gray-400 italic leading-relaxed">{story.visual_prompt}</p>
+
+          {/* Image preview or generate button */}
+          {imgUrl ? (
+            <div className="pt-1 space-y-1.5">
+              <button onClick={() => setLightbox(true)} className="block group relative w-fit">
+                <img src={imgUrl} alt="story" className="h-24 rounded border border-purple-200 object-cover group-hover:opacity-90 transition-opacity" style={{ aspectRatio: '9/16' }} />
+                <span className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                  <span className="bg-black/60 text-white text-[9px] font-bold rounded px-1.5 py-0.5">🔍 放大</span>
+                </span>
+              </button>
+              <button onClick={() => { setImgUrl(null); setImgError(null) }} className="text-[10px] text-gray-400 hover:text-gray-600 underline">重新生成</button>
+            </div>
+          ) : (
+            <div className="pt-1 space-y-1">
+              <button
+                onClick={() => void handleGenerate()}
+                disabled={generatingImg}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200 disabled:opacity-50 transition-colors"
+              >
+                {generatingImg ? <><Spinner color="purple" /> 生成中…</> : '🎨 生成 Story 图片'}
+              </button>
+              {imgError && <p className="text-[11px] text-red-500">⚠ {imgError}</p>}
+            </div>
+          )}
+        </div>
       </div>
-    </div>
+    </>
   )
 }
 
