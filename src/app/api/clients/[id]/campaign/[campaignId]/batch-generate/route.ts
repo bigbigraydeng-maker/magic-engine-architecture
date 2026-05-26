@@ -78,7 +78,33 @@ export async function POST(
     if (!campaign) {
       return NextResponse.json({ success: false, error: 'Campaign not found' }, { status: 404 })
     }
-    const campaignText = formatCampaignForPrompt(campaign)
+    let campaignText = formatCampaignForPrompt(campaign)
+
+    // 2b. Append plain-text campaign files (TXT only — GPT-4o-mini has no PDF doc API)
+    // PDF/DOCX files are noted by count so the model knows richer context exists
+    const filePaths = (campaign.source_file_urls ?? []).filter(Boolean).slice(0, 3)
+    if (filePaths.length > 0) {
+      const textSnippets: string[] = []
+      let binaryCount = 0
+      for (const storagePath of filePaths) {
+        const isTxt = storagePath.toLowerCase().endsWith('.txt')
+        if (!isTxt) { binaryCount++; continue }
+        try {
+          const { data, error } = await supabaseAdmin.storage
+            .from('campaign-uploads')
+            .download(storagePath)
+          if (!data || error) continue
+          const text = Buffer.from(await data.arrayBuffer()).toString('utf-8').slice(0, 1500)
+          textSnippets.push(text)
+        } catch { /* non-fatal */ }
+      }
+      if (textSnippets.length > 0) {
+        campaignText += `\n\n- 活动资料文件内容：\n${textSnippets.join('\n---\n')}`
+      }
+      if (binaryCount > 0) {
+        campaignText += `\n- 注：另有 ${binaryCount} 个 PDF/DOCX 格式的活动资料，详细内容见 Marketing Plan。`
+      }
+    }
 
     // 3. Build keyword list for Route A
     const campaignKeywords = (campaign.semrush_keywords ?? [])

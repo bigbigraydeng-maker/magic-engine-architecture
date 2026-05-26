@@ -71,9 +71,8 @@ export function formatCampaignForPrompt(campaign: CampaignPromptFields): string 
   }
 
   if (campaign.parsed_content) {
-    // Trim to avoid excessive prompt length
-    const content = campaign.parsed_content.slice(0, 800)
-    lines.push(`- 产品/活动详情：\n${content}${campaign.parsed_content.length > 800 ? '…' : ''}`)
+    const content = campaign.parsed_content.slice(0, 2000)
+    lines.push(`- 产品/活动详情：\n${content}${campaign.parsed_content.length > 2000 ? '…' : ''}`)
   }
 
   if (campaign.offer) {

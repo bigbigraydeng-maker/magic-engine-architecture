@@ -34,6 +34,34 @@ export function formatBriefForPrompt(brief: MasterBrief): string {
   const visualDos   = brief.vi_dos?.join('、') || '未设置'
   const visualDonts = brief.vi_donts?.join('、') || brief.image_preference || '无'
 
+  // P4: platform strategy — which platforms are explicitly enabled/disabled
+  const platformStrategyText = (() => {
+    const ps = brief.platform_strategy as Record<string, { enabled?: boolean; post_frequency?: string; primary_content_type?: string }> | null
+    if (!ps) return null
+    const lines = Object.entries(ps)
+      .map(([platform, cfg]) => {
+        const status = cfg.enabled === false ? '❌ disabled' : '✅ enabled'
+        const freq = cfg.post_frequency ? ` (${cfg.post_frequency})` : ''
+        return `  ${platform}: ${status}${freq}`
+      })
+    return lines.length > 0 ? lines.join('\n') : null
+  })()
+
+  // P1: content pillars — defines content type distribution and example topics
+  const pillarsText = (() => {
+    if (!brief.content_pillars?.length) return null
+    return brief.content_pillars.map((p: { name: string; description: string; post_ratio: number; example_topics?: string[] }) => {
+      const pct = Math.round(p.post_ratio * 100)
+      const examples = p.example_topics?.slice(0, 3).join(' / ') || ''
+      return `  [${pct}%] ${p.name}: ${p.description}${examples ? ` (e.g. ${examples})` : ''}`
+    }).join('\n')
+  })()
+
+  // P3: brand story — rich narrative context for tone/angle alignment
+  const brandStory = brief.brand_story_md
+    ? brief.brand_story_md.slice(0, 1500) + (brief.brand_story_md.length > 1500 ? '…' : '')
+    : null
+
   return `
 客户品牌信息（必须严格遵守）：
 - 品牌名称：${brief.brand_name}
@@ -46,6 +74,9 @@ export function formatBriefForPrompt(brief: MasterBrief): string {
 - 禁止使用的词：${brief.avoid_words?.join('、') || '无'}
 - 主力产品：${brief.products?.map((p: { name: string; usp?: string }) => `${p.name}（${p.usp}）`).join('；') || '未设置'}
 - 发布平台：${brief.platforms?.join('、') || 'Facebook, TikTok'}
+${platformStrategyText ? `\n平台策略（严格遵守启用/禁用设置）：\n${platformStrategyText}` : ''}
+${pillarsText ? `\n内容支柱分布（内容比例和主题方向必须遵守）：\n${pillarsText}` : ''}
+${brandStory ? `\n品牌故事背景（用于把握语气和角度）：\n${brandStory}` : ''}
 
 视觉品牌 DNA（图片/视频生成必须遵守）：
 - 视觉风格：${styleKeywords}

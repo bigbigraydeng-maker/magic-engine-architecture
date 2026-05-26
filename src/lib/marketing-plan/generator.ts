@@ -12,6 +12,7 @@
  */
 
 import { callClaudeWithDocs, parseJsonResponse } from '@/lib/anthropic/client'
+import type { ClaudeDocInput } from '@/lib/anthropic/client'
 import type {
   GeneratePlanRequest,
   MarketingPlanData,
@@ -77,6 +78,9 @@ SCOPE NOTE — Marketing Plan is the SOLE owner of content production:
 - Ad creative briefs (copy direction, visual concept) for paid campaigns
 The diagnostic system handles technical fixes only. Do NOT hold back on content tasks here.
 
+CAMPAIGN PRIORITY RULE:
+- When an Active Campaign Brief is present, its specific requirements (dates, offers, target audience, creative angle, uploaded materials) OVERRIDE the Brand Brief defaults. Let the campaign shape the content calendar, KPI targets, task angles, and CTAs. The Brand Brief provides background DNA only.
+
 CRITICAL RULES:
 - The "tasks" array MUST be derived from the social mix + blog count. Spread tasks evenly across the date range.
 - Each blog topic MUST produce exactly one task with kind="blog_article". Set platform to null.
@@ -86,7 +90,7 @@ CRITICAL RULES:
 - Tone, voice, and angle MUST reflect the brand brief and (if present) campaign angle.
 - All output text in AU/NZ English unless brand brief specifies otherwise.
 - Volume follows the Intensity setting (see Plan Parameters). Quality bar follows the brand brief — premium brands deserve premium-quality tasks at WHATEVER volume the intensity dictates. Do NOT lower volume just because the brand is premium.
-- Platform coverage: for consumer-facing brands (home/interior, fashion, food, beauty, retail, design, lifestyle, hospitality), ALL THREE platforms (Facebook, Instagram, TikTok) MUST have non-zero presence — Instagram is critical for visual/lifestyle products and cannot be set to 0. Exclude a platform only when the brand brief explicitly states the audience does not use it, or for clear B2B-industrial cases (then TikTok can be 0).
+- Platform coverage: if the Brand Brief includes a Platform Strategy section with explicit enabled/disabled settings, you MUST honour them — a platform marked disabled gets 0 for all values. If no platform strategy is set, apply the default for consumer-facing brands (home/interior, fashion, food, beauty, retail, design, lifestyle, hospitality): ALL THREE platforms (Facebook, Instagram, TikTok) MUST have non-zero presence. Exclude a platform only for clear B2B-industrial cases (then TikTok can be 0).
 - Return ONLY raw JSON. No markdown, no code fences, no explanation.`
 
 // ─── User prompt builder ──────────────────────────────────────────────────────
@@ -94,12 +98,14 @@ CRITICAL RULES:
 interface BuildPromptParams {
   briefText: string
   campaignText: string | null
+  campaignDocs?: ClaudeDocInput[]            // 上传文件已作为 doc 附件传入 Claude，此处仅标注
   strategySuggestions: string | null         // 已格式化的 SEO 主题清单（可选）
+  viralReferences: string | null             // 已格式化的爆款风格参考（可选）
   request: GeneratePlanRequest
 }
 
 function buildUserPrompt(p: BuildPromptParams): string {
-  const { briefText, campaignText, strategySuggestions, request } = p
+  const { briefText, campaignText, campaignDocs, strategySuggestions, viralReferences, request } = p
   const days = Math.max(
     1,
     Math.round(
@@ -110,12 +116,14 @@ function buildUserPrompt(p: BuildPromptParams): string {
   const weeks = Math.max(1, Math.round(days / 7))
   const intensity = request.intensity ?? 'standard'
 
-  return `## Brand Brief (long-term DNA)
+  return `${campaignText ? `## Active Campaign Brief — HIGH PRIORITY (overrides Brand Brief where they differ)
+${campaignText}
+${(campaignDocs?.length ?? 0) > 0 ? `[${campaignDocs!.length} campaign file(s) attached above — treat their content as authoritative campaign material]\n` : ''}
+` : ''}## Brand Brief${campaignText ? ' (background DNA — subordinate to Campaign Brief above)' : ' (long-term DNA)'}
 ${briefText}
 
-${campaignText ? `## Active Campaign Brief (this period's focus)\n${campaignText}\n` : ''}
 ${strategySuggestions ? `## SEO Topic Suggestions (data-driven candidates — reuse uuids in source_strategy_item_id)\n${strategySuggestions}\n` : ''}
-
+${viralReferences ? `## Viral Style References (high-performing content in this niche — use as style/technique inspiration for social task descriptions)\n${viralReferences}\n` : ''}
 ## Plan Parameters
 - Plan Title: ${request.title}
 - Period: ${request.start_date} → ${request.end_date} (~${weeks} week${weeks > 1 ? 's' : ''}, ${days} days)
@@ -149,7 +157,9 @@ export interface GenerateResult {
 export async function generatePlanData(params: {
   briefText: string
   campaignText: string | null
+  campaignDocs?: ClaudeDocInput[]
   strategySuggestions: string | null
+  viralReferences: string | null
   request: GeneratePlanRequest
 }): Promise<GenerateResult> {
   const userPrompt = buildUserPrompt(params)
@@ -157,6 +167,7 @@ export async function generatePlanData(params: {
   const result = await callClaudeWithDocs({
     systemPrompt: SYSTEM_PROMPT,
     userMessage: userPrompt,
+    docs: params.campaignDocs,
     maxOutputTokens: 8000,
   })
 
@@ -217,6 +228,37 @@ export function formatStrategySuggestions(items: StrategySuggestion[]): string {
         ? `Keyword: "${it.source_keyword}" (vol=${it.keyword_volume ?? '?'}, kd=${it.keyword_kd ?? '?'})`
         : 'No keyword'
       return `- [${it.id}] "${it.proposed_title}" (score=${it.priority_score}) — ${kw}. ${it.rationale}`
+    })
+  return lines.join('\n')
+}
+
+// ─── Viral Reference Library 格式化（供调用方使用）─────────────────────────────
+
+interface ViralReference {
+  id: string
+  platform: string
+  content_goal: string
+  style_tags: string[] | null
+  key_techniques: string[] | null
+  style_description: string | null
+}
+
+/**
+ * 把 viral_reference_library 表数据格式化为 prompt 注入文本。
+ * 给 AI 提供「爆款内容的风格与技法」参考，用于丰富社媒任务描述。
+ * 调用方负责从数据库拉数据。
+ */
+export function formatViralReferences(items: ViralReference[]): string {
+  if (items.length === 0) return ''
+  const lines = items
+    .slice(0, 8)               // 最多注入 8 条，控制 prompt 大小
+    .map(it => {
+      const tags = it.style_tags?.slice(0, 5).join(', ') ?? '—'
+      const techniques = it.key_techniques?.slice(0, 4).join(', ') ?? '—'
+      const desc = it.style_description
+        ? it.style_description.slice(0, 120).replace(/\n/g, ' ')
+        : ''
+      return `- [${it.platform}/${it.content_goal}] Style: ${tags} | Techniques: ${techniques}${desc ? ` | "${desc}…"` : ''}`
     })
   return lines.join('\n')
 }

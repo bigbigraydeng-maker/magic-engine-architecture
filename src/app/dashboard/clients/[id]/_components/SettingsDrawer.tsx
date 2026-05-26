@@ -1,13 +1,11 @@
 'use client'
 
 import { useEffect } from 'react'
-import Link from 'next/link'
 import { BriefPanel } from './BriefPanel'
-import { SiteAuditPanel } from './SiteAuditPanel'
 import { CmsPanel } from './CmsPanel'
 import { UsersPanel } from './UsersPanel'
 
-export type SettingsTab = 'brief' | 'site-audit' | 'seo-gap' | 'client-info' | 'cms' | 'users'
+export type SettingsTab = 'brief' | 'client-info' | 'cms' | 'users'
 
 interface Client {
   id: string
@@ -27,8 +25,6 @@ interface Props {
 
 const TABS: { id: SettingsTab; label: string }[] = [
   { id: 'brief',       label: '✨ Master Brief' },
-  { id: 'site-audit',  label: '🔍 Site Audit' },
-  { id: 'seo-gap',     label: '📊 SEO Gap' },
   { id: 'client-info', label: '👤 客户信息' },
   { id: 'cms',         label: '🔗 网站连接' },
   { id: 'users',       label: '🔑 用户权限' },
@@ -88,24 +84,6 @@ export function SettingsDrawer({ open, onClose, clientId, client, activeTab, onT
         <div className="flex-1 overflow-y-auto p-6">
           {activeTab === 'brief' && (
             <BriefPanel clientId={clientId} />
-          )}
-
-          {activeTab === 'site-audit' && (
-            <SiteAuditPanel clientId={clientId} />
-          )}
-
-          {activeTab === 'seo-gap' && (
-            <div className="flex flex-col items-center justify-center py-16 gap-4">
-              <p className="text-4xl">📊</p>
-              <p className="text-sm text-gray-500 text-center">SEO Gap 分析在独立页面中查看</p>
-              <Link
-                href={`/dashboard/clients/${clientId}/seo-gap`}
-                onClick={onClose}
-                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold rounded-lg transition-colors"
-              >
-                打开 SEO Gap 分析 →
-              </Link>
-            </div>
           )}
 
           {activeTab === 'cms' && (

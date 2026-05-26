@@ -20,9 +20,13 @@ import { formatCampaignForPrompt, getCampaignById } from '@/lib/content/campaign
 import {
   generatePlanData,
   formatStrategySuggestions,
+  formatViralReferences,
 } from '@/lib/marketing-plan/generator'
+import type { ClaudeDocInput } from '@/lib/anthropic/client'
 import type { GeneratePlanRequest } from '@/lib/marketing-plan/types'
 import type { MasterBrief } from '@/types/magic-engine'
+
+const CAMPAIGN_BUCKET = 'campaign-uploads'
 
 export const maxDuration = 90  // Plan 生成耗时较长（Claude 大 token 输出）
 
@@ -72,6 +76,8 @@ export async function POST(
 
     // ── 2. Campaign Brief（可选）─────────────────────────────────────────────
     let campaignText: string | null = null
+    const campaignDocs: ClaudeDocInput[] = []
+
     if (body.campaign_id) {
       const campaign = await getCampaignById(clientId, body.campaign_id)
       if (!campaign) {
@@ -81,6 +87,27 @@ export async function POST(
         }, { status: 400 })
       }
       campaignText = formatCampaignForPrompt(campaign)
+
+      // ── 2b. Download campaign files and pass directly to Claude ───────────
+      const filePaths = (campaign.source_file_urls ?? []).filter(Boolean).slice(0, 3)
+      for (const storagePath of filePaths) {
+        try {
+          const { data, error } = await supabaseAdmin.storage
+            .from(CAMPAIGN_BUCKET)
+            .download(storagePath)
+          if (!data || error) continue
+          const buffer = Buffer.from(await data.arrayBuffer())
+          const filename = storagePath.split('/').pop() ?? storagePath
+          const isPdf = storagePath.toLowerCase().endsWith('.pdf')
+          campaignDocs.push({
+            type: isPdf ? 'pdf' : 'text',
+            content: isPdf ? buffer.toString('base64') : buffer.toString('utf-8'),
+            filename,
+          })
+        } catch {
+          // non-fatal — campaign text fields still provide context
+        }
+      }
     }
 
     // ── 3. Strategy 建议主题（最新 pending）────────────────────────────────────
@@ -101,11 +128,32 @@ export async function POST(
       console.warn('[marketing-plan generate] strategy items fetch failed (non-blocking):', strategyErr)
     }
 
+    // ── 3b. Viral Reference Library（爆款风格参考）────────────────────────────
+    let viralReferences: string | null = null
+    try {
+      const { data: viralItems } = await supabaseAdmin
+        .from('viral_reference_library')
+        .select('id, platform, content_goal, style_tags, key_techniques, style_description')
+        .eq('is_learnable', true)
+        .eq('analysis_status', 'done')
+        .or(`client_id.eq.${clientId},client_id.is.null`)
+        .order('client_id', { ascending: false })   // client-specific 优先
+        .limit(8)
+
+      if (viralItems && viralItems.length > 0) {
+        viralReferences = formatViralReferences(viralItems)
+      }
+    } catch (viralErr) {
+      console.warn('[marketing-plan generate] viral references fetch failed (non-blocking):', viralErr)
+    }
+
     // ── 4. AI 生成 plan_data ─────────────────────────────────────────────────
     const { plan_data, meta } = await generatePlanData({
       briefText,
       campaignText,
+      campaignDocs: campaignDocs.length > 0 ? campaignDocs : undefined,
       strategySuggestions,
+      viralReferences,
       request: body as GeneratePlanRequest,
     })
 
