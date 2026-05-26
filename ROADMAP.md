@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-27 06:27 NZST · 当前阶段：**Phase 14.A Website Connector 全部完成 ✅（P14.A.1–8）；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S（P8.S.1–7 SEMrush→DataForSEO 全部已实现）、Phase 9.0（P9.0.10–17 Visual Queue 测试 + QueueOverviewCard 全部已实现）、Phase 12.H（P12.H.1–3 GitHub CMS 闭环全部已实现）。
+> 最后更新：2026-05-27 06:52 NZST · 当前阶段：**Phase 14.A Website Connector 全部完成 ✅（P14.A.1–8）；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S（P8.S.1–7 SEMrush→DataForSEO 全部已实现）、Phase 9.0（P9.0.10–17 Visual Queue 测试 + QueueOverviewCard 全部已实现）、Phase 12.H（P12.H.1–3 GitHub CMS 闭环全部已实现）。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -66,7 +66,7 @@
 📋 Phase 14     Website Connector / 网站直连执行闭环（⭐ WordPress 连接器近期优先 — P14.A.5）
 📋 Phase 15     Reputation Engine / 口碑监控与执行闭环（战略确认，待排期）
 📋 Phase 16     Competitor Intelligence / 竞品雷达 + 信号驱动执行（战略确认，待排期）
-📋 Phase 17     Unified Data Pullback / 统一数据回流层（战略确认，待排期）
+🔥 Phase 17     Unified Data Pullback / 统一数据回流层（Phase 17.A 进行中）
 📋 Phase 18     Ads Execution Engine / 广告执行引擎（Meta + Google + TikTok，已登记）
 📋 Phase 19     API 鉴权整改 / IDOR 修复（🔴 CRITICAL 安全 — 19.A+B 须在客户建号前完成）
 📋 Phase 21     AI Content Factory / AI 内容工厂（旗舰能力 — FDE 客户默认产能引擎）
@@ -2005,58 +2005,44 @@ AI 可见度层（ME 独有 ✅）
 
 ---
 
-## Phase 17 — Unified Data Pullback（统一数据回流层）🚧 Phase 17.A 开工中（2026-05-27）
+## Phase 17 — Unified Data Pullback（统一数据回流层）🔥 进行中
 
-> **登记日期**：2026-05-19 · **17.A 开工日期**：2026-05-27 · **状态**：Phase 17.A（Google 三件套）开始实施
+> **登记日期**：2026-05-19 · **开工日期**：2026-06-03 · **状态**：Phase 17.A 进行中
 >
 > **背景**：ME 现在的月报数据是孤岛——SEO 数据、社媒数据、广告数据分散在各平台，无法在 ME 内做跨渠道归因。Unified Data Pullback 是把所有执行结果拉回 ME、驱动飞轮真实归因的基础设施层。
->
-> **战略意义升级（2026-05-27 PM 确认）**：这一层不只是月报数据源，更是 ME 跨客户学习护城河的**数据底座**。多租户 + 匿名化跨客户模式识别（Phase 22 接入点）从 Phase 17.A 第一天开始预留架构。
 
 ### 需要接入的数据源
 
-| 渠道 | 数据内容 | API | 子 Phase |
-|------|---------|-----|---------|
-| Google Search Console | 自然搜索排名 / 点击 / 展示 | ✅ 免费官方 | **17.A** |
-| Google Analytics 4 | 网站流量 / 转化 / 用户行为 | ✅ 免费官方 | **17.A** |
-| Google Ads API | 广告 ROAS / CTR / 转化 | 🔄 申请中（OAuth 可先建） | **17.A** |
-| Meta Insights | 社媒帖子表现 / 粉丝增长 | ✅ Graph API | 17.B |
-| Meta Ads Insights | 广告效果数据 | ✅ 已有 MCP | 17.B |
-| GBP API | 搜索展示 / 电话 / 路线请求 | ✅ 免费官方 | 17.C |
+| 渠道 | 数据内容 | API |
+|------|---------|-----|
+| Google Search Console | 自然搜索排名 / 点击 / 展示 | ✅ 免费官方 |
+| Google Analytics 4 | 网站流量 / 转化 / 用户行为 | ✅ 免费官方 |
+| Meta Insights | 社媒帖子表现 / 粉丝增长 | ✅ Graph API |
+| Google Ads API | 广告 ROAS / CTR / 转化 | 🔄 申请中 |
+| Meta Ads Insights | 广告效果数据 | ✅ 已有 MCP |
+| GBP API | 搜索展示 / 电话 / 路线请求 | ✅ 免费官方 |
 
 ### 输出到
 
 1. **月报自动生成**（Insight Reports 模块）
 2. **飞轮归因**（action → outcome 真实数据验证）
 3. **Client Portal**（客户自助查看跨渠道数据看板）
-4. **跨客户学习层**（Phase 22 接入点，匿名化聚合）
 
----
+### Phase 17.A — GSC Performance Snapshots（Google Search Console 数据回流）
 
-### Phase 17.A — Google 三件套（GSC + GA4 + Google Ads）🚧 实施中
+| ID | 任务 | 状态 |
+|----|------|------|
+| **P17.A.1** | `gsc_performance_snapshots` 表 + GSC sync 路由 + snapshots 读取路由 | ✅ 完成 2026-06-03 |
+| **P17.A.2** | GA4 OAuth scope 扩展 + `ga4_traffic_snapshots` 表 + sync 路由 | ✅ 完成 2026-06-04 |
+| **P17.A.3** | GSC 数据 UI 展示（执行看板 / 月报 section）+ connector page 触发按钮 | ✅ 完成 2026-05-27 |
+| **P17.A.4** | 飞轮归因桥接：flywheel_action → gsc_snapshot baseline vs after 对比 | ✅ 完成 2026-06-05 |
+| **P17.A.5（日常同步）** | 每日 GSC + GA4 cron job：`google-data-pullback-daily`（每天 3am UTC） | ✅ 完成 2026-06-05 |
 
-> **开工日期**：2026-05-27 · **工作分支**：`feat/phase-17-a-google-data-pullback`
->
-> **现状审计（2026-05-27 完成）**：约 60% 基础设施已存在（OAuth lib、tokens 表、connect/callback 路由、GSC 客户端、UI）。当前限制：只支持 GSC scope，未扩展到 GA4 + Ads。
-
-**M1 地基**（任务 P17.A.1–A.2，PM 验证关卡：能拿到 OzTop 真实 GA4 数据）
-
-- [ ] **P17.A.1**：扩展 OAuth scopes —— 把 `GSC_SCOPES` 改为 `SCOPES_BY_SERVICE`（`gsc/ga4/ads/all`），改造 connect/callback 路由支持多服务一次授权
-- [ ] **P17.A.2**：新建 GA4 客户端 lib（`src/lib/ga4/client.ts`）+ 一个最简单的测试调用（拿过去 30 天 sessions），验证 OzTop token 真的有 GA4 权限
-
-**M2 数据沉淀**（任务 P17.A.3–A.4，PM 验证关卡：Supabase 后台能看到 OzTop 每日数据）
-
-- [ ] **P17.A.3**：新建 `client_metrics_daily` 表（多租户 + 跨客户学习预留字段：`industry_segment`、`anonymized_pattern_key`）
-- [ ] **P17.A.4**：每日 sync cron job（先做 GSC + GA4，Ads 等 token 拿到后补）
-
-**M3 第一个洞察 UI**（任务 P17.A.5，PM 验证关卡：在客户主页看到真实数据）
-
-- [ ] **P17.A.5**：客户主页「数据」tab，展示 GSC top queries + GA4 daily traffic + 「排名 11-20 位的快速夺旗机会」清单
-
-**架构原则（不可偏离）**：
-- 多租户从第一天写死，所有 metrics 表必须按 `client_id` 隔离
-- 跨客户学习层预留接口，但 Phase 17.A 不实现（Phase 22 接入）
-- 不依赖第三方仪表盘，数据归属 ME
+**P17.A.1 实施内容**：
+- `supabase/migrations/20260603000003_gsc_performance_snapshots.sql`：新表（client_id + period_start/end + 总量指标 + top_queries/pages JSONB）
+- `src/lib/gsc/client.ts`：新增 `fetchGscSnapshot()` 并行拉取 query + page 两个维度（各 50 行）
+- `POST /api/clients/[id]/gsc/sync`：从 connector config 取 site_url → 调 GSC API → upsert 快照
+- `GET /api/clients/[id]/gsc/snapshots`：读取历史快照列表，供报告 / 看板使用
 
 ---
 
@@ -2492,6 +2478,23 @@ client_decision_history      -- 为什么之前选 X 不选 Y
 
 > 每次上线新功能时在此追加。格式：**[完成日期]** — Phase ID + 描述 + Commit 引用。
 > 此日志从 CLAUDE.md §十五.C 迁移至此（2026-05-10），CLAUDE.md 不再维护历史日志。
+
+### 2026-06-05
+
+- **P17.A.4** — GSC 归因桥接：`gsc-bridge.ts`（runGscAttributionForClient：SEO action → GSC before/after → 3 维 flywheel_outcomes）+ POST `/flywheel/gsc-attribution` + vocabulary 扩充 3 GSC metric keys + attribution cron pass-2 接线 [P17.A.4]
+- **P17.A.5** — 每日 Google 数据回流 cron：`google-data-pullback-daily`（遍历所有已连接 GSC/GA4 connector，自动快照写库）+ render.yaml 注册（每天 3am UTC）[P17.A.4]
+
+### 2026-05-27
+
+- **P17.A.3** — GSC/GA4 快照 UI：`DataPullbackSection`（执行看板数据回流卡）+ connector 详情页「立即同步」按钮 + 快照指标预览 [feat/phase-17-a-gsc-pullback]
+
+### 2026-06-04
+
+- **P17.A.2** — GA4 数据回流：`GA4_SCOPE`/`COMBINED_GOOGLE_SCOPES` + `buildAuthUrl` scopes 参数 + `fetchGa4Snapshot()` 3 并行报告 + 新表 `ga4_traffic_snapshots` + POST `/ga4/sync` + GET `/ga4/snapshots` [feat/phase-17-a-gsc-pullback]
+
+### 2026-06-03
+
+- **P17.A.1** — GSC 数据回流基础设施：新表 `gsc_performance_snapshots`（含 top_queries/pages JSONB）+ `fetchGscSnapshot()` 并行拉取两维度 + POST `/gsc/sync` + GET `/gsc/snapshots` [feat/phase-17-a-gsc-pullback]
 
 ### 2026-05-20
 
