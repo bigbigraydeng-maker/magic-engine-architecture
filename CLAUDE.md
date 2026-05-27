@@ -215,13 +215,14 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-28 03:26 NZST （**Phase 17.A P17.A.1–A.6 全部 ✅ 完成 + merge**；Phase 19 IDOR 修复 ✅ 完成；等 PM 决定下一 Phase）
+> 最后更新：2026-05-28 03:48 NZST （**Phase 12.C ✅ merge；Phase 17.A ✅ merge；Phase 19 IDOR ✅**；等 PM 决定下一 Phase）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
 | **PM 决定** | 选择下一个 Phase：Phase 18.A（Meta Ads MVP）或 Phase 17.B（Meta Insights 社媒数据回流）| ⚠️ PM 决定 |
 
-**已完成全景（最近两个 Phase）**：
+**已完成全景（最近几个 Phase）**：
+- ✅ **Phase 12.C**（P12.C.1–3 merge）：飞轮聚合视图 + 华佗置信度反哺 + Publer engagement 回流
 - ✅ **Phase 17.A**（P17.A.1–A.6 全部 merge）：GSC/GA4 数据回流 + 飞轮归因桥接 + 每日 cron + 客户「数据」tab
 - ✅ **Phase 19.A–E**（PR #95）：89 个 `/api/clients/[id]/*` 路由 IDOR 封堵 + NEXT_PUBLIC 密钥泄漏清除
 

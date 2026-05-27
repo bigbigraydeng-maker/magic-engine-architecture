@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-28 03:26 NZST · 当前阶段：**Phase 14.A Website Connector 全部完成 ✅（P14.A.1–8）；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S（P8.S.1–7 SEMrush→DataForSEO 全部已实现）、Phase 9.0（P9.0.10–17 Visual Queue 测试 + QueueOverviewCard 全部已实现）、Phase 12.H（P12.H.1–3 GitHub CMS 闭环全部已实现）。
+> 最后更新：2026-05-28 03:48 NZST · 当前阶段：**Phase 14.A Website Connector 全部完成 ✅（P14.A.1–8）；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S（P8.S.1–7 SEMrush→DataForSEO 全部已实现）、Phase 9.0（P9.0.10–17 Visual Queue 测试 + QueueOverviewCard 全部已实现）、Phase 12.H（P12.H.1–3 GitHub CMS 闭环全部已实现）。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -1349,12 +1349,17 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
 > **⚠️ 注意**：DataForSEO KD 分数算法与 SEMrush 不同，数值不可横向比较。切换后需在客户报告 + UI 中注明口径变更，或统一改用 DataForSEO KD 标准。
 > **保留 SEMrush API key**：`batchKeywordOverview` P8.S.8 完成前 + 任何降级回退用。
 
-### Phase 12.C —（预告）
+### Phase 12.C — 飞轮数据闭环（聚合 + 置信度 + 社媒回流）
 
-- 跨客户 outcome 聚合视图（`action_type × crisis_type × verdict_rate`）
-- 反哺华佗：处方生成时查询历史 outcome 给推荐打置信度
-- markisfact adapter（如商务谈成）
-- 社媒发布数据回流（Publer + 平台 API）
+> 启动：2026-05-28。飞轮骨架（12.A）+ adapter（12.B）已就绪，现在让数据「活起来」。
+>
+> 工作分支：`feat/phase-12-c-flywheel-closure`
+
+- [x] **P12.C.1** — 跨客户 outcome 聚合视图：GET /api/admin/flywheel/aggregate，按 action_type 统计 verdict_rate；Admin Dashboard「飞轮成效」卡片展示 top 5
+- [x] **P12.C.2** — 反哺华佗置信度：`src/lib/case-library/outcome-confidence.ts` 计算历史成功率，注入处方生成 prompt（含「历史成功率 X%，基于 N 案例」标签）
+- [x] **P12.C.3** — 社媒发布数据回流：Publer API 拉取帖子 likes/comments/shares，写入 flywheel_metrics；cron `social-engagement-pullback` 每日 4am UTC
+
+> **范围说明**：markisfact adapter 已从 Phase 12.C scope 移除，待商务谈成后单独登记。
 
 ### Phase 12.Q — 内容质量闭环 ⭐⭐⭐（已登记，未开工，2026-05-19 启动登记）
 
@@ -2668,6 +2673,12 @@ client_decision_history      -- 为什么之前选 X 不选 Y
   `feat(flywheel): P12.B.3 — SocialContentAdapter 社媒飞轮落库 [P12.B.3]`
 - **P12.B.4** — SEMrush 周快照 cron：GET /api/cron/flywheel-seo-weekly；拉所有有 domain 的客户 domain_ranks 写 flywheel_metrics；9 单元测试；build 通过
   `feat(flywheel): P12.B.4 — SEMrush 周快照 cron [P12.B.4]`
+- **P12.C.1** — 跨客户 outcome 聚合：outcome-aggregate.ts 纯函数层（7 测试）；GET /api/admin/flywheel/aggregate；/dashboard/admin/flywheel 飞轮成效卡片（verdict bar + 置信度 badge）
+  `feat(flywheel): outcome aggregate API + Admin 飞轮成效卡片 [P12.C.1]`
+- **P12.C.2** — 反哺华佗置信度：outcome-confidence.ts（8 测试）；HuatuoLookupContext 新增 outcome_confidence；agent.ts 并行拉取；prompts.ts 注入「历史成效数据」段落；处方 action 末尾附置信度标签
+  `feat(huatuo): 飞轮归因置信度反哺处方生成 [P12.C.2]`
+- **P12.C.3** — 社媒 engagement 回流：engagement-pullback.ts（7 测试）；Publer GET /posts/{id}；GET /api/cron/social-engagement-pullback；vocabulary 新增 POST_LIKES/COMMENTS/SHARES；render.yaml 注册每日 4am UTC cron
+  `feat(social): Publer engagement pullback → flywheel_metrics [P12.C.3]`
 
 ### 2026-05-24（Phase 8.13 Sprint A–E）
 
