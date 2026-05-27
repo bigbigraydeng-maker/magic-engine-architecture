@@ -10,6 +10,7 @@
 
 import { callClaudeChat } from '@/lib/anthropic/client'
 import { jsonrepair } from 'jsonrepair'
+import { formatMemoryForPrompt } from '@/lib/memory/format'
 import type {
   ZhugeInput,
   ZhugeOutput,
@@ -42,6 +43,7 @@ Given a structured evidence package, produce a prioritised list of up to ${MAX_A
 3. Actions that are auto-executable by 鲁班 (prefer these — they move fast)
 4. Actions that unblock other dimensions (e.g. fixing AI visibility unlocks GEO content)
 5. Business-context fit: respect budget constraints, market (AU vs NZ), and known blockers
+6. Client Memory (when provided): prefer proven patterns, avoid failed experiments, respect past decisions
 
 ## Output rules
 - Respond with ONLY a valid JSON object — no markdown, no commentary outside the JSON
@@ -73,13 +75,14 @@ Given a structured evidence package, produce a prioritised list of up to ${MAX_A
 // ── Prompt builder ────────────────────────────────────────────────────────────
 
 function buildUserPrompt(input: ZhugeInput): string {
-  const { client, discoveryEvidence, diagnosticScores, findings, availableLubanTools, businessContext } = input
+  const { client, discoveryEvidence, diagnosticScores, findings, availableLubanTools, businessContext, memoryContext } = input
 
   const scoreLines = formatScores(diagnosticScores)
   const findingLines = formatFindings(findings)
   const toolLines = formatTools(availableLubanTools)
   const contextLines = formatBusinessContext(businessContext)
   const evidenceSummary = formatEvidenceSummary(input)
+  const memorySection = formatMemoryForPrompt(memoryContext)
 
   return `## Client
 Name: ${client.name}
@@ -101,7 +104,7 @@ ${evidenceSummary}
 
 ## 鲁班 Available Tools
 ${toolLines}
-
+${memorySection}
 ---
 Produce the prioritised work order now. Return ONLY the JSON object.`
 }

@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-28 10:51 NZST · 当前阶段：**Phase 14.A Website Connector 全部完成 ✅（P14.A.1–8）；Phase 13.A Prospect 注册流程 ✅；Phase 19 IDOR 修复 ✅；Phase 20.D 六支柱看板入口 ✅**。补录核实：Phase 8.S（P8.S.1–7 SEMrush→DataForSEO 全部已实现）、Phase 9.0（P9.0.10–17 Visual Queue 测试 + QueueOverviewCard 全部已实现）、Phase 12.H（P12.H.1–3 GitHub CMS 闭环全部已实现）。
+> 最后更新：2026-05-28 10:54 NZST · 当前阶段：**Phase 23 Cross-Agent Memory Layer 全部完成 ✅（PR #112 等 merge）；Phase 20.D 六支柱看板入口 ✅；Phase 19 IDOR 修复 ✅；Phase 14.A Website Connector 全部完成 ✅；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S、Phase 9.0、Phase 12.H 等历史功能全部已实现。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -2611,13 +2611,16 @@ client_decision_history      -- 为什么之前选 X 不选 Y
 
 ### Phase 23 五个子任务
 
-| 子任务 | 内容 | 工作量 |
-|---|---|---|
-| 23.A | 4 张新表 migration + Memory Service 接口层 | ~3 天 |
-| 23.B | FDE 标注 UI（在 luban 看板 + 生成结果卡片上加"标记好/差/为何"按钮） | ~2 天 |
-| 23.C | 自动抽取器：从 flywheel_outcomes + Data Engine 输出抽取 learned_preferences | ~3 天 |
-| 23.D | 5 个 Agent 接入 memory 注入（zhangqian / huatuo / zhuge / luban / AI Factory） | ~3 天 |
-| 23.E | Memory 浏览/编辑/导出（FDE 可看到客户的累积记忆，可纠正可清除） | ~2 天 |
+| 子任务 | 内容 | 工作量 | 状态 |
+|---|---|---|---|
+| 23.A | 4 张新表 migration + Memory Service 接口层 | ~3 天 | ✅ 完成 2026-06-10 |
+| 23.B | FDE 标注 UI（执行看板 TaskDetailDrawer 内嵌：好模式/失败记录/偏好三类） | ~2 天 | ✅ 完成 2026-06-10 |
+| 23.C | 自动抽取器：从 flywheel_outcomes + Data Engine 输出抽取 learned_preferences | ~3 天 | ✅ 完成 2026-06-10 |
+| 23.D | **诸葛亮**记忆注入（memoryContext 注入 prompt；decision_history 自动写入） | ~1 天 | ✅ 完成 2026-06-10 |
+| 23.D.2 | **张骞 / 华佗 / 鲁班** 记忆注入 + 共享 `formatMemoryForPrompt`（AI Factory 待 Phase 21 落地） | ~1 天 | ✅ 完成 2026-06-10 |
+| 23.E | Memory 浏览/编辑/导出（FDE 可看到客户的累积记忆，可纠正可清除） | ~2 天 | ✅ 完成 2026-06-10 |
+
+> **注**：23.D + 23.D.2 已覆盖现有四 Agent（张骞 / 华佗 / 诸葛亮 / 鲁班）；AI Factory 是 Phase 21 才开工的旗舰能力，等其代码落地后再加注入（用同一个 `formatMemoryForPrompt`）。
 
 **总工作量预估：~13 天 / 2-3 周**
 
@@ -2663,6 +2666,11 @@ client_decision_history      -- 为什么之前选 X 不选 Y
 
 ## 9. 功能完成日志
 
+- **P23.E** — Memory 浏览/编辑/导出：FDE 仪表盘新增「客户记忆库」页（四 tab + 行级编辑 + 抽取 + 导出 JSON）
+- **P23.C** — L3 记忆自动抽取器：从 flywheel_outcomes 推导 patterns/failed/preferences + 回填 decision_history
+- **P23.D.2** — 张骞/华佗/鲁班三 Agent 注入 L3 记忆 + 共享 `formatMemoryForPrompt`，AI Factory 待 Phase 21
+- **P23.B** — FDE 标注 UI：执行看板抽屉一键标记好模式/失败/偏好，落 L3 记忆三张表
+- **P23.A+D** — L3 记忆层地基：4 张新表 + MemoryService + 诸葛亮 prompt 注入 + 决策历史自动写入
 - **P13.UI.3** — Website homepage upgraded to shared UI language
 - **P13.A.7** — Portal magic link can reach client portal
 

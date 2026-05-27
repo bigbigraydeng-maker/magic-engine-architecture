@@ -25,6 +25,7 @@ import {
 } from './execution-view-model'
 import { FdeManualEntryModal } from './_components/FdeManualEntryModal'
 import { DataPullbackSection } from './_components/DataPullbackSection'
+import { MemoryAnnotationPanel } from './_components/MemoryAnnotationPanel'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -795,6 +796,16 @@ function TaskDetailDrawer({
 
         {/* Outcome chip */}
         {item.outcome && <OutcomeChip outcome={item.outcome} />}
+
+        {/* Phase 23.B — 记忆标注（completed / in_progress 项可见） */}
+        {(isDone || item.status === 'in_progress') && (
+          <MemoryAnnotationPanel
+            clientId={clientId}
+            itemId={item.id}
+            dimension={item.dimension ?? null}
+            flywheel={(item.execution_target as { flywheel?: string } | null)?.flywheel ?? null}
+          />
+        )}
 
         {/* 操作按钮区 */}
         <div className="flex flex-wrap gap-2 pt-1">
