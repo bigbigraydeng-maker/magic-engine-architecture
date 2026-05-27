@@ -45,14 +45,14 @@ export async function GET(
   }
 
   try {
-    const reportDate = new Date(discovery.generated_at).toLocaleDateString('zh-CN', {
+    const reportDate = new Date(discovery.generated_at).toLocaleDateString('en-AU', {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
     })
     const buffer = await generateZhangqianDocx(discovery.payload, client.name, reportDate)
-    const slug = client.name.replace(/\s+/g, '_').slice(0, 30)
-    const filename = `zhangqian_${slug}_${discovery.generated_at.slice(0, 10)}.docx`
+    const slug = client.name.replace(/[^a-z0-9-]+/gi, '_').replace(/^_+|_+$/g, '').slice(0, 40)
+    const filename = `magic_engine_discovery_${slug || 'client'}_${discovery.generated_at.slice(0, 10)}.docx`
 
     return new NextResponse(buffer, {
       status: 200,
