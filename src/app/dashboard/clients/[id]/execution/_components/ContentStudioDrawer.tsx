@@ -169,6 +169,7 @@ export function ContentStudioDrawer({ clientId, item, onClose, onContentGenerate
               clientId={clientId}
               campaignId={campaign?.id}
               campaignName={campaign?.name}
+              item={item}
             />
           ) : (
             // 短视频：Reels 脚本 + Video Studio
@@ -178,6 +179,7 @@ export function ContentStudioDrawer({ clientId, item, onClose, onContentGenerate
                 clientId={clientId}
                 campaignId={campaign?.id}
                 campaignName={campaign?.name}
+                item={item}
               />
               <ReelsStudio
                 clientId={clientId}
