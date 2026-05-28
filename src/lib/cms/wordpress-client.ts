@@ -159,6 +159,16 @@ export interface CreateWordpressPostPayload {
   excerpt?:    string
   /** WordPress category IDs. Defaults to uncategorized (1). */
   categories?: number[]
+  /** Custom permalink slug (e.g. "engineered-timber-flooring-brisbane"). */
+  slug?:             string
+  /**
+   * Yoast SEO fields — written via WP REST API meta object.
+   * Requires Yoast SEO 14.0+ with REST API meta enabled.
+   * Silently skipped if Yoast is not active.
+   */
+  seoTitle?:         string   // → _yoast_wpseo_title
+  seoDescription?:   string   // → _yoast_wpseo_metadesc
+  focusKeyphrase?:   string   // → _yoast_wpseo_focuskw
 }
 
 /**
@@ -179,6 +189,18 @@ export async function createWordpressPostDraft(
   if (payload.categories && payload.categories.length > 0) {
     body.categories = payload.categories
   }
+
+  if (payload.slug) {
+    body.slug = payload.slug
+  }
+
+  // Yoast SEO meta — requires Yoast SEO 14.0+ with REST API enabled.
+  // WP silently ignores unknown meta keys, so this is safe on non-Yoast installs.
+  const yoastMeta: Record<string, string> = {}
+  if (payload.seoTitle)       yoastMeta._yoast_wpseo_title    = payload.seoTitle
+  if (payload.seoDescription) yoastMeta._yoast_wpseo_metadesc = payload.seoDescription
+  if (payload.focusKeyphrase) yoastMeta._yoast_wpseo_focuskw  = payload.focusKeyphrase
+  if (Object.keys(yoastMeta).length > 0) body.meta = yoastMeta
 
   const res  = await wpFetch(config, '/posts', { method: 'POST', body: JSON.stringify(body) })
   const data = await expectJson(res, 'createPostDraft')
