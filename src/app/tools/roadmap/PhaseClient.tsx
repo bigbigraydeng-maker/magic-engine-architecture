@@ -2,6 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { Phase, PhaseStatus, FlywheelTag, searchPhases, PHASES } from './phaseData'
+import ArchDiagram from './ArchDiagram'
+
+type ViewMode = 'phases' | 'arch'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -40,6 +43,7 @@ interface Commit { sha: string; message: string; author: string; date: string; u
 
 // ── Main Component ────────────────────────────────────────────────────────────
 export default function PhaseClient() {
+  const [view, setView] = useState<ViewMode>('phases')
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<PhaseStatus | 'all'>('all')
   const [tagFilter, setTagFilter] = useState<FlywheelTag | 'all'>('all')
@@ -89,147 +93,185 @@ export default function PhaseClient() {
       <div style={{ background: '#1e293b', borderBottom: '1px solid #334155', padding: '12px 20px', position: 'sticky', top: 0, zIndex: 50, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
         <div>
           <div style={{ fontWeight: 800, fontSize: 15, color: '#f1f5f9' }}>⚙️ Magic Engine — Roadmap Dictionary</div>
-          <div style={{ fontSize: 11, color: '#64748b', marginTop: 1 }}>Phase 搜索 · 依赖链 · Git 动态 · 实时更新</div>
+          <div style={{ fontSize: 11, color: '#64748b', marginTop: 1 }}>Phase 搜索 · 依赖链 · 架构图 · Git 动态</div>
         </div>
-        <div style={{ flex: 1, minWidth: 240 }}>
-          <input
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder='搜索 Phase ID（如 12.a, 7.3, 22）或关键词（如 memory, ads, flywheel）…'
+
+        {/* Search — only relevant in phases view */}
+        {view === 'phases' && (
+          <div style={{ flex: 1, minWidth: 240 }}>
+            <input
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder='搜索 Phase ID（如 phase 18, 12.a, 7.3）或关键词（如 memory, ads）…'
+              style={{
+                width: '100%', padding: '8px 14px', borderRadius: 8,
+                background: '#0f172a', border: '1px solid #334155',
+                color: '#f1f5f9', fontSize: 13, outline: 'none',
+              }}
+              autoFocus
+            />
+          </div>
+        )}
+        {view === 'arch' && <div style={{ flex: 1 }} />}
+
+        {/* View toggle tabs */}
+        <div style={{ display: 'flex', background: '#0f172a', borderRadius: 8, padding: 2, gap: 2 }}>
+          <button
+            onClick={() => setView('phases')}
             style={{
-              width: '100%', padding: '8px 14px', borderRadius: 8,
-              background: '#0f172a', border: '1px solid #334155',
-              color: '#f1f5f9', fontSize: 13, outline: 'none',
+              padding: '4px 14px', borderRadius: 6, border: 'none', cursor: 'pointer',
+              fontSize: 12, fontWeight: 600,
+              background: view === 'phases' ? '#3b82f6' : 'transparent',
+              color: view === 'phases' ? '#fff' : '#64748b',
             }}
-            autoFocus
-          />
+          >
+            📋 Phase 字典
+          </button>
+          <button
+            onClick={() => setView('arch')}
+            style={{
+              padding: '4px 14px', borderRadius: 6, border: 'none', cursor: 'pointer',
+              fontSize: 12, fontWeight: 600,
+              background: view === 'arch' ? '#7c3aed' : 'transparent',
+              color: view === 'arch' ? '#fff' : '#64748b',
+            }}
+          >
+            🗺️ 架构图
+          </button>
         </div>
+
         <a href="https://github.com/bigbigraydeng-maker/magic-engine" target="_blank" rel="noopener noreferrer"
           style={{ fontSize: 12, color: '#94a3b8', textDecoration: 'none', whiteSpace: 'nowrap' }}>
-          📂 GitHub →
+          📂 GitHub
         </a>
       </div>
 
-      <div style={{ display: 'flex', gap: 0 }}>
-        {/* ── Left Panel: Phase Dictionary ── */}
-        <div style={{ flex: 1, minWidth: 0, padding: '16px 20px', overflowX: 'hidden' }}>
-          {/* Filters */}
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-            {(['all', 'done', 'active', 'planned', 'paused'] as const).map(s => (
-              <button key={s} onClick={() => setStatusFilter(s)}
-                style={{
-                  padding: '4px 12px', borderRadius: 20, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                  background: statusFilter === s ? '#3b82f6' : '#1e293b',
-                  color: statusFilter === s ? '#fff' : '#94a3b8',
-                }}>
-                {s === 'all' ? '全部' : STATUS_META[s].label}
-              </button>
-            ))}
-            <div style={{ width: 1, background: '#334155', margin: '0 4px' }} />
-            {(['all', 'seo', 'geo', 'ads', 'social', 'infra', 'security'] as const).map(t => (
-              <button key={t} onClick={() => setTagFilter(t as FlywheelTag | 'all')}
-                style={{
-                  padding: '4px 12px', borderRadius: 20, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
-                  background: tagFilter === t ? '#7c3aed' : '#1e293b',
-                  color: tagFilter === t ? '#fff' : '#94a3b8',
-                }}>
-                {t === 'all' ? '全飞轮' : t.toUpperCase()}
-              </button>
-            ))}
-            <span style={{ marginLeft: 'auto', fontSize: 11, color: '#475569', alignSelf: 'center' }}>
-              {results.length} / {PHASES.length} 个 Phase
-            </span>
-          </div>
+      {/* ── Architecture View ── */}
+      {view === 'arch' && <ArchDiagram />}
 
-          {/* Phase Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
-            {results.map(phase => {
-              const sm = STATUS_META[phase.status]
-              const isSelected = selected?.id === phase.id
-              return (
-                <div key={phase.id} onClick={() => setSelected(isSelected ? null : phase)}
+      {/* ── Phase Dictionary View ── */}
+      {view === 'phases' && (
+        <div style={{ display: 'flex', gap: 0 }}>
+          {/* Left Panel: Phase Dictionary */}
+          <div style={{ flex: 1, minWidth: 0, padding: '16px 20px', overflowX: 'hidden' }}>
+            {/* Filters */}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+              {(['all', 'done', 'active', 'planned', 'paused'] as const).map(s => (
+                <button key={s} onClick={() => setStatusFilter(s)}
                   style={{
-                    background: isSelected ? '#1e3a5f' : '#1e293b',
-                    border: `1.5px solid ${isSelected ? '#3b82f6' : '#334155'}`,
-                    borderRadius: 10, padding: '12px 14px', cursor: 'pointer',
-                    transition: 'all .15s',
-                    boxShadow: isSelected ? '0 0 0 3px rgba(59,130,246,.2)' : 'none',
+                    padding: '4px 12px', borderRadius: 20, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                    background: statusFilter === s ? '#3b82f6' : '#1e293b',
+                    color: statusFilter === s ? '#fff' : '#94a3b8',
                   }}>
-                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
-                    <span style={{ background: '#0f172a', color: '#94a3b8', fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 5, whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
-                      Phase {phase.id}
-                    </span>
-                    <span style={{ background: sm.bg, color: sm.color, fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 5, whiteSpace: 'nowrap' }}>
-                      {sm.label}
-                    </span>
-                    {phase.pr && (
-                      <span style={{ background: '#312e81', color: '#a5b4fc', fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 5, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
-                        {phase.pr}
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ fontWeight: 700, fontSize: 13, color: '#f1f5f9', marginBottom: 4, lineHeight: 1.4 }}>{phase.name}</div>
-                  <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5, marginBottom: 8 }}>{phase.description}</div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                    {phase.tags.map(t => (
-                      <span key={t} style={{ background: TAG_COLORS[t], color: '#374151', fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 10 }}>{t}</span>
-                    ))}
-                    {phase.completedDate && (
-                      <span style={{ fontSize: 10, color: '#475569', marginLeft: 'auto' }}>{phase.completedDate}</span>
-                    )}
-                  </div>
-                  {phase.notes && (
-                    <div style={{ marginTop: 8, fontSize: 11, color: '#fbbf24', background: '#292524', borderRadius: 5, padding: '4px 8px' }}>{phase.notes}</div>
-                  )}
-                </div>
-              )
-            })}
-            {results.length === 0 && (
-              <div style={{ gridColumn: '1/-1', textAlign: 'center', color: '#475569', padding: '40px 0', fontSize: 14 }}>
-                没有找到 &ldquo;{query}&rdquo; 相关的 Phase。试试 &ldquo;12&rdquo; / &ldquo;7.3&rdquo; / &ldquo;memory&rdquo;
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* ── Right Panel: Detail + Git Feed ── */}
-        <div style={{ width: 360, flexShrink: 0, borderLeft: '1px solid #1e293b', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 65px)', position: 'sticky', top: 65 }}>
-          {/* Phase Detail */}
-          <div style={{ flex: selected ? '0 0 auto' : '0 0 0', overflow: 'hidden', transition: 'flex .2s', maxHeight: selected ? 500 : 0, overflowY: 'auto', background: '#1e293b', borderBottom: selected ? '1px solid #334155' : 'none' }}>
-            {selected && <PhaseDetail phase={selected} onClose={() => setSelected(null)} />}
-          </div>
-
-          {/* Git Feed */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <span style={{ fontWeight: 700, fontSize: 13, color: '#f1f5f9' }}>📡 Git 最新推送</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 10, color: '#475569' }}>更新于 {lastRefresh.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
-                <button onClick={fetchCommits}
-                  style={{ background: '#0f172a', border: '1px solid #334155', color: '#94a3b8', fontSize: 11, padding: '3px 8px', borderRadius: 5, cursor: 'pointer' }}>
-                  ↺
+                  {s === 'all' ? '全部' : STATUS_META[s].label}
                 </button>
-              </div>
+              ))}
+              <div style={{ width: 1, background: '#334155', margin: '0 4px' }} />
+              {(['all', 'seo', 'geo', 'ads', 'social', 'infra', 'security'] as const).map(t => (
+                <button key={t} onClick={() => setTagFilter(t as FlywheelTag | 'all')}
+                  style={{
+                    padding: '4px 12px', borderRadius: 20, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                    background: tagFilter === t ? '#7c3aed' : '#1e293b',
+                    color: tagFilter === t ? '#fff' : '#94a3b8',
+                  }}>
+                  {t === 'all' ? '全飞轮' : t.toUpperCase()}
+                </button>
+              ))}
+              <span style={{ marginLeft: 'auto', fontSize: 11, color: '#475569', alignSelf: 'center' }}>
+                {results.length} / {PHASES.length} 个 Phase
+              </span>
             </div>
 
-            {commitsLoading && (
-              <div style={{ color: '#475569', fontSize: 13, textAlign: 'center', padding: '20px 0' }}>加载中…</div>
-            )}
-            {commitsError && !commitsLoading && (
-              <div style={{ color: '#fbbf24', fontSize: 12, background: '#292524', borderRadius: 6, padding: '8px 10px', marginBottom: 8 }}>
-                ⚠️ {commitsError}<br />
-                <span style={{ color: '#6b7280', fontSize: 11 }}>请在 Render 后台添加 GITHUB_TOKEN 环境变量</span>
+            {/* Phase Grid */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
+              {results.map(phase => {
+                const sm = STATUS_META[phase.status]
+                const isSelected = selected?.id === phase.id
+                return (
+                  <div key={phase.id} onClick={() => setSelected(isSelected ? null : phase)}
+                    style={{
+                      background: isSelected ? '#1e3a5f' : '#1e293b',
+                      border: `1.5px solid ${isSelected ? '#3b82f6' : '#334155'}`,
+                      borderRadius: 10, padding: '12px 14px', cursor: 'pointer',
+                      transition: 'all .15s',
+                      boxShadow: isSelected ? '0 0 0 3px rgba(59,130,246,.2)' : 'none',
+                    }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
+                      <span style={{ background: '#0f172a', color: '#94a3b8', fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 5, whiteSpace: 'nowrap', fontFamily: 'monospace' }}>
+                        Phase {phase.id}
+                      </span>
+                      <span style={{ background: sm.bg, color: sm.color, fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 5, whiteSpace: 'nowrap' }}>
+                        {sm.label}
+                      </span>
+                      {phase.pr && (
+                        <span style={{ background: '#312e81', color: '#a5b4fc', fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 5, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+                          {phase.pr}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: '#f1f5f9', marginBottom: 4, lineHeight: 1.4 }}>{phase.name}</div>
+                    <div style={{ fontSize: 12, color: '#94a3b8', lineHeight: 1.5, marginBottom: 8 }}>{phase.description}</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      {phase.tags.map(t => (
+                        <span key={t} style={{ background: TAG_COLORS[t], color: '#374151', fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 10 }}>{t}</span>
+                      ))}
+                      {phase.completedDate && (
+                        <span style={{ fontSize: 10, color: '#475569', marginLeft: 'auto' }}>{phase.completedDate}</span>
+                      )}
+                    </div>
+                    {phase.notes && (
+                      <div style={{ marginTop: 8, fontSize: 11, color: '#fbbf24', background: '#292524', borderRadius: 5, padding: '4px 8px' }}>{phase.notes}</div>
+                    )}
+                  </div>
+                )
+              })}
+              {results.length === 0 && (
+                <div style={{ gridColumn: '1/-1', textAlign: 'center', color: '#475569', padding: '40px 0', fontSize: 14 }}>
+                  没有找到 &ldquo;{query}&rdquo; 相关的 Phase。试试 &ldquo;18&rdquo; / &ldquo;phase 12&rdquo; / &ldquo;memory&rdquo;
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right Panel: Detail + Git Feed */}
+          <div style={{ width: 360, flexShrink: 0, borderLeft: '1px solid #1e293b', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 65px)', position: 'sticky', top: 65 }}>
+            {/* Phase Detail */}
+            <div style={{ flex: selected ? '0 0 auto' : '0 0 0', overflow: 'hidden', transition: 'flex .2s', maxHeight: selected ? 500 : 0, overflowY: 'auto', background: '#1e293b', borderBottom: selected ? '1px solid #334155' : 'none' }}>
+              {selected && <PhaseDetail phase={selected} onClose={() => setSelected(null)} />}
+            </div>
+
+            {/* Git Feed */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                <span style={{ fontWeight: 700, fontSize: 13, color: '#f1f5f9' }}>📡 Git 最新推送</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 10, color: '#475569' }}>更新于 {lastRefresh.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+                  <button onClick={fetchCommits}
+                    style={{ background: '#0f172a', border: '1px solid #334155', color: '#94a3b8', fontSize: 11, padding: '3px 8px', borderRadius: 5, cursor: 'pointer' }}>
+                    ↺
+                  </button>
+                </div>
               </div>
-            )}
-            {commits.map((c, i) => (
-              <CommitCard key={i} commit={c} />
-            ))}
-            {!commitsLoading && commits.length === 0 && !commitsError && (
-              <div style={{ color: '#475569', fontSize: 12, textAlign: 'center', padding: '20px 0' }}>暂无提交记录</div>
-            )}
+
+              {commitsLoading && (
+                <div style={{ color: '#475569', fontSize: 13, textAlign: 'center', padding: '20px 0' }}>加载中…</div>
+              )}
+              {commitsError && !commitsLoading && (
+                <div style={{ color: '#fbbf24', fontSize: 12, background: '#292524', borderRadius: 6, padding: '8px 10px', marginBottom: 8 }}>
+                  ⚠️ {commitsError}<br />
+                  <span style={{ color: '#6b7280', fontSize: 11 }}>请在 Render 后台添加 GITHUB_TOKEN 环境变量</span>
+                </div>
+              )}
+              {commits.map((c, i) => (
+                <CommitCard key={i} commit={c} />
+              ))}
+              {!commitsLoading && commits.length === 0 && !commitsError && (
+                <div style={{ color: '#475569', fontSize: 12, textAlign: 'center', padding: '20px 0' }}>暂无提交记录</div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -332,7 +374,6 @@ function DetailSection({ title, children }: { title: string; children: React.Rea
 
 // ── Commit Card ───────────────────────────────────────────────────────────────
 function CommitCard({ commit }: { commit: Commit }) {
-  // color based on commit type
   const type = commit.message.split(':')[0].toLowerCase()
   const typeColors: Record<string, string> = {
     feat: '#86efac', fix: '#fca5a5', refactor: '#c4b5fd',

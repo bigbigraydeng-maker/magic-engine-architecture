@@ -670,15 +670,20 @@ export const PHASES: Phase[] = [
 
 export function searchPhases(query: string): Phase[] {
   if (!query.trim()) return PHASES
-  const q = query.toLowerCase().replace(/\s+/g, '')
+  // Strip "phase " prefix: "phase 18" becomes "18", "Phase 12.A" becomes "12.a"
+  const stripped = query.toLowerCase().trim().replace(/^phase\s+/i, '')
+  const q = stripped.replace(/\s+/g, '')
+  if (!q) return PHASES
   return PHASES.filter(p => {
     const idNorm = p.id.toLowerCase().replace(/\s+/g, '')
-    // Exact / prefix phase ID match: "12.a", "12", "7.3"
-    if (idNorm.startsWith(q) || idNorm === q) return true
-    // Also match without dot: "12a" → "12.A"
-    if (idNorm.replace('.', '').startsWith(q.replace('.', ''))) return true
-    // Keyword match in name/description
-    const text = (p.name + ' ' + p.description + ' ' + p.id).toLowerCase()
+    // Exact or prefix ID match: "12.a", "12", "7.3"
+    if (idNorm === q || idNorm.startsWith(q)) return true
+    // Match without dot: "12a" matches "12.A", "18a" matches "18.A"
+    const idNoDot = idNorm.split('.').join('')
+    const qNoDot = q.split('.').join('')
+    if (idNoDot.startsWith(qNoDot)) return true
+    // Keyword match in name, description, tags
+    const text = (p.name + ' ' + p.description + ' ' + p.id + ' ' + p.tags.join(' ')).toLowerCase()
     return text.includes(q)
   })
 }
