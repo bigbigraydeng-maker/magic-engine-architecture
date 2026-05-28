@@ -70,25 +70,40 @@ export async function fetchRelatedPages(
 // ---------------------------------------------------------------------------
 
 /**
- * Formats related pages as a GPT-4o prompt section.
+ * Formats related pages as a prompt section with two distinct directives:
+ *
+ *   1. INTERNAL LINK OPPORTUNITIES — instructs Claude to weave real <a href>
+ *      links into the body using the exact URLs from client_site_pages.
+ *      This is the primary SEO signal that differentiates ME-generated content
+ *      from generic AI output (rule 8 in the blog generator system prompt).
+ *
+ *   2. SIMILAR TOPIC PAGES — same page list framed as "write from a different
+ *      angle" to prevent duplicate-content issues across the site.
+ *
  * Returns empty string when there are no pages (safe to concat).
  */
 export function buildPagesContextBlock(pages: RelatedPageSummary[]): string {
   if (pages.length === 0) return ''
 
-  const lines: string[] = [
-    'EXISTING CONTENT ON SIMILAR TOPICS — write from a DIFFERENT angle, do NOT duplicate:',
-  ]
-
-  pages.forEach((page, i) => {
+  const formatted = pages.map((page, i) => {
     const title = page.title ?? hostname(page.url)
     const wordInfo = page.word_count != null
       ? `${page.word_count.toLocaleString()} words`
       : 'unknown length'
-    lines.push(`${i + 1}. "${title}" (${page.url}) — ${page.page_type}, ${wordInfo}`)
+    return `${i + 1}. "${title}" (${page.url}) — ${page.page_type}, ${wordInfo}`
   })
 
-  return lines.join('\n')
+  const linkSection = [
+    'INTERNAL LINK OPPORTUNITIES — weave 3–5 of these into the body as <a href="FULL_URL">keyword-rich anchor text</a>:',
+    ...formatted,
+  ].join('\n')
+
+  const similarSection = [
+    'EXISTING CONTENT ON SIMILAR TOPICS — write from a DIFFERENT angle, do NOT duplicate:',
+    ...formatted,
+  ].join('\n')
+
+  return `${linkSection}\n\n${similarSection}`
 }
 
 // ---------------------------------------------------------------------------

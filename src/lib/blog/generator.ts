@@ -34,6 +34,7 @@ The article must:
 5. End with a CTA that mentions the brand naturally
 6. Use New Zealand / Australian English spelling and idioms
 7. Write for a human reader first, AI optimisation is structural not stuffed
+8. Where the context includes INTERNAL LINK OPPORTUNITIES, weave 3–5 natural <a href="FULL_URL">descriptive anchor text</a> links into the body using the exact URLs listed. Use keyword-rich anchor text. Never use generic text like "click here" or "read more".
 
 OUTPUT: valid JSON only, no markdown fences. Schema:
 {
