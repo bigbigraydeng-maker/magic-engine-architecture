@@ -1965,6 +1965,7 @@ export default function ExecutionPage() {
           onContentGenerated={() => void fetchItems(true)}
           onBackgroundGenerate={handleBackgroundGenerate}
           onImageGeneratingChange={handleImageGeneratingChange}
+          readonly={isAutonomousItem(studioItem)}
         />
       )}
 

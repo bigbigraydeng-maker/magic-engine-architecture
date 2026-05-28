@@ -40,6 +40,8 @@ interface Props {
   defaultCampaignId?: string
   /** Fired after a new draft is generated — lets a host (Content Studio) link it back. */
   onDraftGenerated?: () => void
+  /** When true, hides the Generate button — used for autonomous flywheel tasks. */
+  readonly?: boolean
 }
 
 // ─── Status badge ──────────────────────────────────────────────────────────────
@@ -69,7 +71,7 @@ const FIELD_LABELS: Record<string, string> = {
 
 // ─── Main component ────────────────────────────────────────────────────────────
 
-export function ReelsStudio({ clientId, defaultCampaignId, onDraftGenerated }: Props) {
+export function ReelsStudio({ clientId, defaultCampaignId, onDraftGenerated, readonly = false }: Props) {
   const [drafts, setDrafts] = useState<ReelsDraft[]>([])
   const [activeDraft, setActiveDraft] = useState<ReelsDraft | null>(null)
   const [campaigns, setCampaigns] = useState<CampaignBrief[]>([])
@@ -473,40 +475,42 @@ export function ReelsStudio({ clientId, defaultCampaignId, onDraftGenerated }: P
             读取 Master Brief + Campaign Brief → 生成提示词 → 参考帧 → 视频 → Publishing Hub
           </p>
         </div>
-        <div className="ml-auto flex items-center gap-2">
-          {campaigns.length > 0 && (
-            <select
-              value={selectedCampaignId}
-              onChange={e => setSelectedCampaignId(e.target.value)}
-              className="text-xs border border-gray-200 rounded-lg px-3 py-2 text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="">No campaign (brief only)</option>
-              {campaigns.map(c => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          )}
-          <button
-            onClick={handleGenerate}
-            disabled={generating}
-            className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5"
-          >
-            {generating ? (
-              <>
-                <span className="animate-spin text-base">⏳</span> Generating…
-              </>
-            ) : (
-              '✨ Generate New Reel'
+        {!readonly && (
+          <div className="ml-auto flex items-center gap-2">
+            {campaigns.length > 0 && (
+              <select
+                value={selectedCampaignId}
+                onChange={e => setSelectedCampaignId(e.target.value)}
+                className="text-xs border border-gray-200 rounded-lg px-3 py-2 text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">No campaign (brief only)</option>
+                {campaigns.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
             )}
-          </button>
-        </div>
+            <button
+              onClick={handleGenerate}
+              disabled={generating}
+              className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors flex items-center gap-1.5"
+            >
+              {generating ? (
+                <>
+                  <span className="animate-spin text-base">⏳</span> Generating…
+                </>
+              ) : (
+                '✨ Generate New Reel'
+              )}
+            </button>
+          </div>
+        )}
       </div>
 
       {drafts.length === 0 && !generating ? (
         <div className="bg-white rounded-xl border border-dashed border-gray-300 py-16 flex flex-col items-center gap-3">
           <p className="text-3xl">🎬</p>
           <p className="text-sm font-medium text-gray-700">No Reels yet</p>
-          <p className="text-xs text-gray-400">Click &ldquo;Generate New Reel&rdquo; to get started</p>
+          <p className="text-xs text-gray-400">{readonly ? 'This task was executed automatically.' : 'Click “Generate New Reel” to get started'}</p>
         </div>
       ) : (
         <div className="flex gap-4">

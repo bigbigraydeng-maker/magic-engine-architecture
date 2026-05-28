@@ -40,6 +40,8 @@ interface Props {
   onBackgroundGenerate?: (itemId: string, params: BackgroundGenerateParams) => void
   /** Called when any Post/Story image generation starts (true) or all finish (false). */
   onImageGeneratingChange?: (itemId: string, active: boolean) => void
+  /** When true, hides content-generation controls — used for autonomous flywheel tasks. */
+  readonly?: boolean
 }
 
 /**
@@ -74,7 +76,7 @@ function tabsForItem(item: ExecutionItem): { tabs: TabDef[]; defaultTab: StudioT
   }
 }
 
-export function ContentStudioDrawer({ clientId, item, onClose, onContentGenerated, onBackgroundGenerate, onImageGeneratingChange }: Props) {
+export function ContentStudioDrawer({ clientId, item, onClose, onContentGenerated, onBackgroundGenerate, onImageGeneratingChange, readonly = false }: Props) {
   const { tabs: visibleTabs, defaultTab } = tabsForItem(item)
   const [tab, setTab]               = useState<StudioTab>(defaultTab)
   const [campaign, setCampaign]     = useState<ActiveCampaign | null>(null)
@@ -261,6 +263,7 @@ export function ContentStudioDrawer({ clientId, item, onClose, onContentGenerate
                 onDraftGenerated={() =>
                   linkContentToItem('Generated a social video draft in Content Studio')
                 }
+                readonly={readonly}
               />
             </div>
           )}
