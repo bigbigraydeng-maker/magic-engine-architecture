@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-29 00:07 NZST · 当前阶段：**Phase 23 Cross-Agent Memory Layer 全部完成 ✅（PR #112 等 merge）；Phase 20.D 六支柱看板入口 ✅；Phase 19 IDOR 修复 ✅；Phase 14.A Website Connector 全部完成 ✅；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S、Phase 9.0、Phase 12.H 等历史功能全部已实现。
+> 最后更新：2026-05-29 00:23 NZST · 当前阶段：**Phase 23 Cross-Agent Memory Layer 全部完成 ✅（PR #112 等 merge）；Phase 20.D 六支柱看板入口 ✅；Phase 19 IDOR 修复 ✅；Phase 14.A Website Connector 全部完成 ✅；Phase 13.A Prospect 注册流程 ✅**。补录核实：Phase 8.S、Phase 9.0、Phase 12.H 等历史功能全部已实现。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -2057,11 +2057,17 @@ AI 可见度层（ME 独有 ✅）
 
 ---
 
-## Phase 18 — Ads Execution Engine（广告执行引擎）📋 已登记，待排期
+## Phase 18 — Ads Execution Engine（广告执行引擎）🚀 Phase 18.A 下一个开工
 
-> **登记日期**：2026-05-21 · **状态**：战略方向确认，三平台优先级已定
+> **登记日期**：2026-05-21 · **状态（更新 2026-05-29）**：Phase 18.A 确认为最高优先级，原因见下
 >
 > **背景**：诊断层已能发现广告问题（华佗 Ads 维度），诸葛亮能输出广告优先行动，但鲁班目前没有广告执行能力。Phase 18 补上这块缺口，让 ME 能替客户在三个广告平台上自动执行「安全可逆」的操作，同时保留人工审核入口。
+>
+> **为什么 Phase 18.A 是当前最高优先级（2026-05-29 战略升级）**：
+> Phase 21（AI 内容工厂飞轮）需要干净的转化数据作为学习信号。有机帖子的点赞/分享信噪比太低——
+> 付费广告（Meta Ads）的 CTR / 转化 / ROAS 才是真正可用于机器学习的信号。
+> 因此 Phase 18.A 不只是"广告执行"，同时是 Phase 21 飞轮的**数据地基**。
+> 路径：Phase 18.A（干净数据）→ 归因保真度机制（Attribution Fidelity）→ Phase 21（内容飞轮学习）。
 
 ### 三平台优先级
 
@@ -2089,13 +2095,22 @@ AI 可见度层（ME 独有 ✅）
   - 新建广告系列
 ```
 
-### Phase 18.A — Meta Ads MVP（优先开工）
+### Phase 18.A — Meta Ads MVP + 飞轮数据地基（下一个开工）
 
-| ID | 任务 | 依赖 |
-|----|------|------|
-| **P18.A.1** | 广告诊断 → Fix 按钮：执行看板 Ads action 接线 Meta MCP | 诸葛亮 ✅ |
-| **P18.A.2** | 暂停亏损广告 / 调整出价 — 调用 Meta Graph API，回写 `flywheel_actions` | P18.A.1 |
-| **P18.A.3** | 操作审计日志：每次广告变更记录 before/after snapshot，支持回滚 | P18.A.2 |
+> **开工分支**：`feat/phase-18a-meta-ads`
+> **里程碑 M1**：执行看板 Ads 任务出现"Fix"按钮，点击能调用 Meta MCP 暂停一条广告
+> **里程碑 M2**：广告变更有 before/after 审计日志，可回滚
+> **里程碑 M3**：Ads CTR/转化数据回流 `flywheel_metrics`，ME 内容创意标签与表现数据成功 JOIN
+
+| ID | 任务 | 依赖 | 说明 |
+|----|------|------|------|
+| **P18.A.0** | **归因保真度机制**：PostCard / StoryCard 发布时记录 Publer post_id + fidelity score（0-100）；只有 fidelity ≥ 70 的发布才回流进飞轮学习 | - | 解决"AI 生成的内容被 FDE 大幅修改后发布，表现数据不能归因给 AI"的根本问题 |
+| **P18.A.1** | 广告诊断 → Fix 按钮：执行看板 Ads action 接线 Meta MCP | 诸葛亮 ✅ | 鲁班获得广告执行能力 |
+| **P18.A.2** | 暂停亏损广告 / 调整出价 — 调用 Meta Graph API，回写 `flywheel_actions` | P18.A.1 | Fix 边界：仅安全可逆操作（暂停/出价±20%/否定词） |
+| **P18.A.3** | 操作审计日志：每次广告变更记录 before/after snapshot，支持回滚 | P18.A.2 | 不可逆操作的安全网 |
+| **P18.A.4** | **Ads 表现数据回流**：定期拉取 Meta Ads insights（CTR / 转化 / ROAS）→ 写入 `flywheel_metrics`，关联 ME 内容创意标签（angle_tag + image_subject 摘要）→ 为 Phase 21 ContentPatternExtractor 提供输入 | P18.A.2 | **这是 Phase 21 飞轮的前置数据源** |
+
+**Phase 18.A 完成定义**：M1 + M2 + M3 均通过 PM 验收，且 `flywheel_metrics` 中有至少一条真实 CTS Meta Ads 数据。
 
 ### Phase 18.B — Google Ads（Developer token 到位后开工）
 
@@ -2461,12 +2476,25 @@ AU / NZ（当前）          新市场（未来）
 
 ---
 
-## Phase 21 — AI Content Factory（旗舰能力 · FDE 默认产能引擎）📋 战略确认，待排期
+## Phase 21 — AI Content Factory（旗舰能力 · FDE 默认产能引擎）📋 待 Phase 18.A 完成后开工
 
-> **登记日期**：2026-05-26 · **状态**：战略方向已确认，PM 拍板，待 Phase 20/19 收尾后排期
+> **登记日期**：2026-05-26 · **状态（更新 2026-05-29）**：前置依赖已明确，Phase 18.A 完成后立即开工
+>
+> ⚠️ **前置依赖（不可跳过）**：
+> - **Phase 18.A.0**（归因保真度机制）必须完成——否则飞轮学到的是"FDE 改过的内容"的表现，不是 ME 生成质量的表现
+> - **Phase 18.A.4**（Ads 表现数据回流）必须完成——付费广告 CTR/转化才是有效学习信号；有机帖子点赞信噪比太低，不能作为主信号
 >
 > **战略定位**：AI Content Factory 是 ME 的**产能上限**，类比"能产 100 万双鞋的鞋厂可以接 1 万双小单"。FDE 客户（$2.5K-3K/月）默认走 AI Factory；非 FDE 客户按 token 自助调用各模块。
 >
+> **飞轮学习架构（2026-05-29 更新）**：
+> ```
+> Phase 18.A.4：Meta Ads CTR/转化 → flywheel_metrics
+>     + ME 创意标签（angle_tag × image_subject 关键词 × 光线类型）
+>     → ContentPatternExtractor（Phase 21 新建）：JOIN 出"什么创意组合对这个客户有效"
+>     → 注入 generatePosts() memoryContext 参数
+>     → 下一次生成优先选历史高效组合
+>     → 发布 → 表现数据 → 循环
+> ```
 > **颠覆点**：2026 年 AI 内容成本崩塌 100x，传统 marketing "10 帖/月 = aggressive" 思维过时。真正护城河是 **生产 × 分发 × 学习** 飞轮速度，不是单条内容质量。
 
 ### Phase 21 产能基线（FDE 客户默认）
