@@ -207,8 +207,10 @@ export async function createWordpressPostDraft(
 
   const postId     = String(data.id)
   const link       = typeof data.link === 'string' ? data.link : undefined
+  // Draft links often already contain a query string (e.g. /?p=123), so we must
+  // use '&' instead of '?' when appending the preview parameter.
   const previewUrl = link
-    ? `${link}?preview=true`
+    ? (link.includes('?') ? `${link}&preview=true` : `${link}?preview=true`)
     : `${config.siteUrl}/?p=${postId}&preview=true`
 
   return { platformId: postId, previewUrl }
@@ -263,7 +265,7 @@ export async function createWordpressPageDraft(
   const pageId     = String(data.id)
   const link       = typeof data.link === 'string' ? data.link : undefined
   const previewUrl = link
-    ? `${link}?preview=true`
+    ? (link.includes('?') ? `${link}&preview=true` : `${link}?preview=true`)
     : `${config.siteUrl}/?page_id=${pageId}&preview=true`
 
   return { platformId: pageId, previewUrl }
