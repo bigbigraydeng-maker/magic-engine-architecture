@@ -54,7 +54,7 @@ export async function fetchRelatedPages(
     if (topicWords.length === 0) return []
 
     const matched = (data as RelatedPageSummary[]).filter(page =>
-      hasTopicOverlap(page, topicWords)
+      isUsablePage(page) && hasTopicOverlap(page, topicWords)
     )
 
     matched.sort((a, b) => (b.word_count ?? 0) - (a.word_count ?? 0))
@@ -109,6 +109,21 @@ export function buildPagesContextBlock(pages: RelatedPageSummary[]): string {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Exclude junk pages that would pollute internal-link suggestions:
+ *  - word_count ≤ 100: robot-challenge intercepts (63 words) and raw image/media URLs
+ *  - /wp-content/ paths: media library files that ended up in the sitemap
+ *  - title "Robot Challenge Screen": SiteGround WAF intercept page
+ */
+function isUsablePage(page: RelatedPageSummary): boolean {
+  // Exclude pages where we know the content is junk (robot-challenge intercepts,
+  // media files). null word_count = unknown length = keep (don't exclude blindly).
+  if (page.word_count !== null && page.word_count <= 100) return false
+  if (page.url.includes('/wp-content/')) return false
+  if (page.title?.toLowerCase().includes('robot challenge')) return false
+  return true
+}
 
 function extractWords(text: string): string[] {
   return text
