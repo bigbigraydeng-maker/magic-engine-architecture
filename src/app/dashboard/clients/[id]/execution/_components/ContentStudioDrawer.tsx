@@ -14,6 +14,7 @@ import { StudioArticleTab } from './StudioArticleTab'
 import { SocialPlanSection } from './SocialPlanSection'
 
 type StudioTab = 'article' | 'social' | 'video'
+type TabDef = readonly [StudioTab, string]
 
 interface ActiveCampaign {
   id: string
@@ -41,12 +42,41 @@ interface Props {
   onImageGeneratingChange?: (itemId: string, active: boolean) => void
 }
 
-function defaultTabFor(dimension: string): StudioTab {
-  return dimension === 'social' ? 'social' : 'article'
+/**
+ * Returns the default tab and the visible tab list for this item.
+ *
+ * FDE should only see tabs that are relevant to their task:
+ *   social_post / social_story → only 图文帖子
+ *   social_reel               → only 短视频
+ *   social dimension (generic)→ 图文帖子 + 短视频
+ *   everything else           → all 3 tabs
+ *
+ * Single-tab tasks hide the tab bar entirely — no distracting chrome.
+ */
+function tabsForItem(item: ExecutionItem): { tabs: TabDef[]; defaultTab: StudioTab } {
+  const kind = item.steps_json?.kind as string | undefined
+  if (kind === 'social_post' || kind === 'social_story') {
+    return { tabs: [['social', '图文帖子']], defaultTab: 'social' }
+  }
+  if (kind === 'social_reel') {
+    return { tabs: [['video', '短视频']], defaultTab: 'video' }
+  }
+  if (item.dimension === 'social') {
+    return {
+      tabs: [['social', '图文帖子'], ['video', '短视频']],
+      defaultTab: 'social',
+    }
+  }
+  // SEO, ai_visibility, ads, reputation, competitor, or unknown → show all 3
+  return {
+    tabs: [['article', 'SEO 文章'], ['social', '图文帖子'], ['video', '短视频']],
+    defaultTab: item.dimension === 'social' ? 'social' : 'article',
+  }
 }
 
 export function ContentStudioDrawer({ clientId, item, onClose, onContentGenerated, onBackgroundGenerate, onImageGeneratingChange }: Props) {
-  const [tab, setTab]               = useState<StudioTab>(defaultTabFor(item.dimension))
+  const { tabs: visibleTabs, defaultTab } = tabsForItem(item)
+  const [tab, setTab]               = useState<StudioTab>(defaultTab)
   const [campaign, setCampaign]     = useState<ActiveCampaign | null>(null)
   const [campaignLoaded, setCampaignLoaded] = useState(false)
 
@@ -165,28 +195,26 @@ export function ContentStudioDrawer({ clientId, item, onClose, onContentGenerate
           </div>
         </div>
 
-        {/* Tabs */}
-        <div className="border-b border-slate-200 bg-white px-4 sm:px-6">
-          <div className="flex gap-2 overflow-x-auto">
-            {([
-              ['article', 'SEO 文章'],
-              ['social',  '图文帖子'],
-              ['video',   '短视频'],
-            ] as const).map(([val, label]) => (
-              <button
-                key={val}
-                onClick={() => setTab(val)}
-                className={`shrink-0 border-b-2 px-3 py-3 text-sm font-black transition-colors ${
-                  tab === val
-                    ? 'border-slate-950 text-slate-950'
-                    : 'border-transparent text-slate-500 hover:text-slate-800'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+        {/* Tabs — hidden when only one tab is relevant to this task */}
+        {visibleTabs.length > 1 && (
+          <div className="border-b border-slate-200 bg-white px-4 sm:px-6">
+            <div className="flex gap-2 overflow-x-auto">
+              {visibleTabs.map(([val, label]) => (
+                <button
+                  key={val}
+                  onClick={() => setTab(val)}
+                  className={`shrink-0 border-b-2 px-3 py-3 text-sm font-black transition-colors ${
+                    tab === val
+                      ? 'border-slate-950 text-slate-950'
+                      : 'border-transparent text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Body */}
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6">

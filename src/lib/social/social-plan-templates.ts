@@ -807,6 +807,21 @@ CRITICAL RULES (violations will fail brand review and block publication):
 - Generic descriptions ("a market scene", "a beautiful temple") will FAIL — be specific or rewrite
 - Could this image_subject describe a competitor's content? If yes → rewrite until it can only be this brand
 
+OVERUSED LANDMARK BAN — applies to ALL travel / tourism brands:
+The #1 most-famous landmark of any destination is BANNED. It exists in millions of stock libraries
+and cannot differentiate a premium brand.
+  China/Asia BANNED: Great Wall, Forbidden City, Tiananmen Square, Temple of Heaven,
+    Terracotta Warriors, Potala Palace, generic Bund skyline panorama, panda with bamboo.
+  New Zealand BANNED: generic Milford Sound panorama, Sky Tower exterior, Hobbiton wide.
+  Australia BANNED: Sydney Opera House exterior, generic Uluru at sunset, Bondi Beach wide.
+Instead choose a SPECIFIC lesser-known but photogenic alternative that earns brand differentiation:
+  China alternatives: a specific hutong tea house courtyard with weathered timber lattice,
+    the named Xingping bend of the Li River with karst peaks reflected in still water,
+    Xi'an's South Gate wall-top walkway at pre-dawn before tourists arrive,
+    Chengdu Jinli alley cobblestones with dew at 6am, Zhangjiajie walkway level with cloud.
+SELF-CHECK before finalising image_subject: "Does this exact photo exist in Getty for under $50?"
+  — if yes, make it 3× more specific (exact location + exact time + exact foreground detail).
+
 Return ONLY a raw JSON array — no markdown, no code fences, no explanation.`
 }
 
@@ -872,6 +887,15 @@ CRITICAL RULES (violations will fail brand review and block publication):
 - No text, signs, watermarks, logos in any story_subject
 - Format is locked to 9:16 vertical — leave clean upper 20% and lower 20% margins for overlay text
 - Generic descriptions will FAIL — be specific or rewrite
+
+OVERUSED LANDMARK BAN (same rules as Posts — Stories travel even faster):
+  China/Asia BANNED: Great Wall, Forbidden City, Tiananmen, Temple of Heaven, Terracotta Warriors,
+    Potala Palace, generic Bund skyline, panda with bamboo.
+  NZ BANNED: generic Milford Sound, Sky Tower exterior, Hobbiton wide shot.
+  AU BANNED: Opera House exterior, Uluru at sunset, Bondi wide.
+Stories must STOP SCROLL — a landmark everyone has seen cannot do that. Choose unexpected,
+hyper-specific, brand-differentiated locations. 9:16 vertical rewards depth and drama over
+famous-landmark recognition — use it.
 
 Return ONLY a raw JSON array — no markdown, no code fences, no explanation.`
 }
