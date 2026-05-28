@@ -28,6 +28,8 @@ services:
         sync: false
       - key: SEMRUSH_DB
         value: au
+      - key: GITHUB_TOKEN
+        sync: false
       - key: PUBLER_API_KEY
         sync: false
       - key: PUBLER_WORKSPACE_ID
