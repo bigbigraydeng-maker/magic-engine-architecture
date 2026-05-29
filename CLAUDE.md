@@ -215,14 +215,15 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-29 19:50 NZST （**Phase 14.B P14.B.0–7 全部完成** ✅，等 PM 验收 + merge）
+> 最后更新：2026-05-29 20:06 NZST （**Phase 14.C P14.C.1–6 全部完成** ✅，等 PM 验收 + merge）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **PM 操作 🔴** | Supabase 跑 migration：`20260530000002_phase14b_wp_publish_quality.sql` | ⚠️ 待操作 |
-| **PM 验收 P14.B** | M1：WP Settings → Yoast 卡 + 验证安装；分类 ID 编辑器；M2：发布测试 rollback / GSC 按钮 | ⚠️ PM 验收 |
-| **go merge** | PM 输入 `go merge` 合并 Phase 14.B PR #120 到 main | ⚠️ PM 授权 |
-| **PM 决定** | 下一 Phase：Phase 21（AI Factory）/ Phase 22（Data Engine）/ Phase 18.A（Meta Ads） | ⚠️ PM 决定 |
+| **PM 操作 🔴** | Supabase 跑 migration：`20260530000003_strategy_items_unique_title.sql` | ⚠️ 待操作 |
+| **PM 配置 🔴** | Render 加环境变量 `GITHUB_WEBHOOK_SECRET`；CTS GitHub repo 加 webhook 指向 `/api/cms/github/webhook` | ⚠️ 待操作 |
+| **PM 验收** | Phase 14.C 全部 6 项：连续 3 篇无殭尸 / 忽略持久 / WP JSON-LD / PR merge 后 published_at 自动 | ⚠️ PM 验收 |
+| **go merge** | PM 输入 `go merge` 合并 Phase 14.C PR 到 main | ⚠️ PM 授权 |
+| **Phase 14.D** | SEMrush 残留清理，全面接入 DataForSEO（14.C 完成后） | 📋 已登记 |
 
 **已完成全景（最近几个 Phase）**：
 - ✅ **Phase 14.B 全部 P14.B.0–7**（PR #120，2 commit）：
