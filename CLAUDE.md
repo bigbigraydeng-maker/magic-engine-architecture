@@ -74,7 +74,7 @@ UI / 报告 / 客户交付物中**禁止出现真实供应商名**，只用封�
 | 网页抓取 | Jina.ai Reader |
 | 内容协作 | Airtable REST API |
 | 社媒发布 | Publer API v1 |
-| 部署 | Render（`git push origin master` 触发） |
+| 部署 | Render（监听 `main`，PR 合并后自动部署） |
 
 ---
 
@@ -206,7 +206,7 @@ Claude 不能替你做这些（无法跨 session 自驱动），需要你当"调
 npm run dev        # 开发服务器 :3001
 npm run build      # 生产构建（推送前必须通过）
 npm test           # 测试套件
-git push origin master   # 触发 Render 部署
+# Render 监听 main，PR 合并后自动部署，无需手动推
 ```
 
 文档：[ROADMAP.md](./ROADMAP.md) · [ARCHITECTURE.md](./ARCHITECTURE.md) · [PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)
@@ -215,7 +215,7 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-29 23:09 NZST （**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成**，PR #125 等 PM merge）
+> 最后更新：2026-05-29 23:50 NZST （**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成**，PR #125 等 PM merge）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
