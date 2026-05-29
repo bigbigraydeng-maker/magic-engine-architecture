@@ -159,8 +159,11 @@ export function SocialPlanSection({ clientId, campaignId, campaignName, mode = '
         const records = data.plans ?? []
         if (records.length) {
           setPlanHistory(records)
-          setPlan(records[0].plan_data)
-          setPlanId(records[0].id)
+          // In task mode, don't pre-load historical plan — only show explicitly generated content
+          if (!isTaskMode) {
+            setPlan(records[0].plan_data)
+            setPlanId(records[0].id)
+          }
         }
       })
       .catch(() => { /* non-fatal */ })
