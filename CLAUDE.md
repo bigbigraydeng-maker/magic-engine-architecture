@@ -215,7 +215,7 @@ npm test           # 测试套件
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-30 21:16 NZST （**Phase 20 MTC 自助计费 ✅ PR #146 merged；website 注册入口修复 ✅ PR #144 merged**）
+> 最后更新：2026-05-30 21:51 NZST （**Phase 20 MTC 自助计费 ✅ PR #146 merged；website 注册入口修复 ✅ PR #144 merged**）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
