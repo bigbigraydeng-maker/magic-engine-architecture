@@ -32,8 +32,7 @@
       </ul>
       <div class="nav-actions">
         <button class="btn-lang" id="lang-toggle" onclick="toggleLang()" aria-label="Switch language">中文</button>
-        <a href="https://app.magicengine.com.au/portal/register" class="btn-register" data-en="Sign up free" data-zh="免费注册">Sign up free</a>
-        <a href="https://app.magicengine.com.au/login?next=/portal" class="btn-portal" data-en="Client portal" data-zh="客户入口">Client portal</a>
+        <a href="https://app.magicengine.com.au/portal/login" class="btn-portal" data-en="Client portal" data-zh="客户入口">Client portal</a>
       </div>
     </div>
   </div>
@@ -66,6 +65,7 @@
               data-en="yourwebsite.com.au"
               data-zh="yourwebsite.com.au"
             >
+            <button type="submit" id="discover-btn" class="btn-primary" data-en="Start discovery →" data-zh="开始探查 →">Start discovery →</button>
           </div>
 
           <!-- No website toggle -->
@@ -86,9 +86,6 @@
               <textarea id="nw-who" rows="2" placeholder="e.g. Small businesses, homeowners, parents…" data-en="e.g. Small businesses, homeowners, parents…" data-zh="例：小企业、房主、家长…"></textarea>
             </div>
           </div>
-
-          <!-- Submit — always visible below whichever mode is active -->
-          <button type="submit" id="discover-btn" class="btn-primary disc-submit-btn" data-en="Start discovery →" data-zh="开始探查 →">Start discovery →</button>
         </form>
 
         <p class="url-hint" style="text-align:center;margin-top:14px;" data-en="Takes about 2 minutes · Results appear on-screen · Full report sent by email" data-zh="约 2 分钟 · 结果直接显示 · 完整报告发送到邮箱">Takes about 2 minutes · Results appear on-screen · Full report sent by email</p>
@@ -155,12 +152,9 @@
       <div class="portal-bridge">
         <div>
           <strong id="opportunity-title" data-en="Your top opportunity is waiting" data-zh="你的最大机会正在等待">Your top opportunity is waiting</strong>
-          <p data-en="Create your free account to get the full report and start fixing your visibility." data-zh="创建免费账户，获取完整报告并开始修复你的可见度。">Create your free account to get the full report and start fixing your visibility.</p>
+          <p data-en="Create your portal to get the full report and start executing fixes." data-zh="创建入口，获取完整报告并开始执行修复。">Create your portal to get the full report and start executing fixes.</p>
         </div>
-        <div style="display:flex;flex-direction:column;gap:10px;align-items:center;">
-          <a href="https://app.magicengine.com.au/portal/register" class="btn-primary portal-register-link" data-en="Create free account →" data-zh="创建免费账户 →">Create free account →</a>
-          <a href="https://app.magicengine.com.au/login?next=/portal" class="portal-signin-link portal-link" data-en="Already a client? Sign in" data-zh="已有账户？立即登录">Already a client? Sign in</a>
-        </div>
+        <a href="https://app.magicengine.com.au/portal/login" class="btn-primary portal-link" data-en="Open portal →" data-zh="打开工作台 →">Open portal →</a>
       </div>
 
       <!-- Email capture -->
