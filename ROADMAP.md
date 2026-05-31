@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-01 03:37 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-01 03:41 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -16,7 +16,8 @@
 - [x] **P29.SEO.5** training page scaffold - add the first public training landing page / section with bilingual messaging and a local CTA once the homepage SEO foundation is live.
 - [x] **P29.SEO.6** training page polish - add a light proof strip and stronger lead path so the new training page can capture AU/NZ workshop enquiries without growing into a full course system yet.
 - [x] **P29.SEO.7** training enquiry tracking - add a lightweight handoff and CTA click tracking so the training page keeps converting without introducing a full form builder.
-- [ ] **P29.SEO.8** training follow-up polish - add a dedicated thank-you state and next-step copy for training enquiries so the handoff feels closed-loop without growing into a CRM.
+- [x] **P29.SEO.8** training follow-up polish - add a dedicated thank-you state and next-step copy for training enquiries so the handoff feels closed-loop without growing into a CRM.
+- [ ] **P29.SEO.9** training conversion tidy-up - add one more small follow-through step only if needed after the new thank-you state proves useful.
 
 ### Active hotfix registration - 2026-05-25
 
@@ -3100,6 +3101,10 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 ### 2026-06-01（Website SEO Optimization P29.SEO.7 完成）
 
 - **P29.SEO.7** — 训练页 CTA 加上点击记录与 training 来源 handoff，咨询页和邮件 brief 现在都能带着来源进入
+
+### 2026-06-01（Website SEO Optimization P29.SEO.8 完成）
+
+- **P29.SEO.8** — 训练咨询成功态改成专用 thank-you card，下一步不再是通用表单回执
 
 ### 2026-06-01（Phase 29 战略决策登记 + P21.B 看板来源标记上线）
 

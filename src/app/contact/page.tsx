@@ -60,6 +60,10 @@ export default function ContactPage({ searchParams }: ContactPageProps) {
               You came from the training page. Tell us your team size, language mix, and what
               workshop outcome you want, and we will scope the right session from there.
             </p>
+            <p className="mt-3 text-sm leading-6 text-cyan-900">
+              After you send it, we will reply with a clear next step instead of dumping you into
+              a generic sales flow.
+            </p>
           </div>
         )}
 

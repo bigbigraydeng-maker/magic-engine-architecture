@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useState } from 'react'
 
 type Status = 'idle' | 'submitting' | 'success' | 'error'
@@ -12,6 +13,7 @@ type ContactFormProps = {
 export default function ContactForm({ source, defaultMessage }: ContactFormProps) {
   const [status, setStatus] = useState<Status>('idle')
   const [errorMsg, setErrorMsg] = useState('')
+  const isTrainingLead = source === 'training'
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -47,6 +49,51 @@ export default function ContactForm({ source, defaultMessage }: ContactFormProps
   }
 
   if (status === 'success') {
+    if (isTrainingLead) {
+      return (
+        <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-8">
+          <div className="flex items-start gap-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-cyan-100">
+              <svg className="h-6 w-6 text-cyan-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-lg font-black text-cyan-950">Training enquiry received</h3>
+              <p className="mt-2 text-sm leading-6 text-cyan-900">
+                Thanks. We&rsquo;ll reply within one business day with a suggested workshop format,
+                the right language setup, and the next step that fits your team.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-3 rounded-lg border border-cyan-200 bg-white p-4 text-sm text-cyan-950 sm:grid-cols-2">
+            <p className="font-semibold">What happens next</p>
+            <ul className="grid gap-2 text-cyan-900">
+              <li>We review your team size, language mix, and timing.</li>
+              <li>We suggest a workshop shape that stays practical and local.</li>
+              <li>If needed, we keep it to a consult before anything bigger.</li>
+            </ul>
+          </div>
+
+          <div className="mt-6 flex flex-wrap gap-3">
+            <Link
+              href="/training"
+              className="inline-flex h-11 items-center rounded-lg bg-cyan-950 px-4 text-sm font-bold text-white"
+            >
+              Back to training
+            </Link>
+            <a
+              href="mailto:raydeng@magicengine.com.au"
+              className="inline-flex h-11 items-center rounded-lg border border-cyan-300 px-4 text-sm font-bold text-cyan-950"
+            >
+              Email us directly
+            </a>
+          </div>
+        </div>
+      )
+    }
+
     return (
       <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-8 text-center">
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100">

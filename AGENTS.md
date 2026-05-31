@@ -215,15 +215,15 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-06-01（Website SEO Optimization P29.SEO.7 已完成，下一步是 training follow-up polish）
+> 最后更新：2026-06-01（Website SEO Optimization P29.SEO.8 已完成，下一步是 training conversion tidy-up）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P29.SEO.8** | Training follow-up polish：给 training enquiry 加一个更完整的 thank-you state 和下一步提示，继续保持轻量 | ⭐⭐ |
+| **P29.SEO.9** | Training conversion tidy-up：在新的 thank-you state 之外只补一个小的 follow-through，继续保持不做 CRM | ⭐⭐ |
 
-**状态校准（2026-06-01）**：P29.SEO.7 已完成并通过 build 验证；下一步转向 training follow-up polish。下一 session 第一句话：
+**状态校准（2026-06-01）**：P29.SEO.8 已完成并通过 build 验证；下一步转向 training conversion tidy-up。下一 session 第一句话：
 
-- `继续 Website SEO Optimization P29.SEO.8`
+- `继续 Website SEO Optimization P29.SEO.9`
 
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 
