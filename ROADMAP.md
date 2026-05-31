@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-05-31 13:28 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-05-31 13:46 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -1266,7 +1266,7 @@ Phase 11.3（数据量 ≥ 500 条 / 跨 3+ 客户）：XGBoost v1.0
 
 ---
 
-## Phase 12 — 飞轮数据闭环 ⭐⭐⭐（活跃 · 三层骨架 + 四飞轮 adapter ✅ 已交付 · 剩 12.G 诸葛亮调度 / 12.Q 内容质量闭环，2026-05-17 启动）
+## Phase 12 — 飞轮数据闭环 ⭐⭐⭐（活跃，2026-05-17 启动）
 
 > **背景**：当前诊断→处方→执行链路已建好，但 4 飞轮（SEO/GEO/Ads/社媒）执行后**没有数据回流**，没法学习、没法归因、没法沉淀经验。Phase 12 建立统一的 `actions / metrics / outcomes` 三层数据骨架 + adapter 抽象，让任何 vendor（自研 / markisfact / Publer / Meta MCP）的数据都能回流并自动归因。
 >
@@ -1714,9 +1714,9 @@ Production Item    = 订单里的具体产物
 
 ---
 
-## Phase 14 — Website Connector（网站直连执行闭环）🔥 14.B WordPress 连接器 ✅ 已交付（PR #120）· 14.C 其余平台待排期
+## Phase 14 — Website Connector（网站直连执行闭环）📋 战略确认，待排期
 
-> **登记日期**：2026-05-19 · **状态**：14.B WordPress 连接器已交付上线（PR #120）· 14.C 其余平台（Shopify / Webflow）待排期
+> **登记日期**：2026-05-19 · **状态**：战略方向已确认，尚未排期开工
 >
 > **背景**：Magic Engine 现有能力止步于"内容生产 + 存库"；VIP 客户（$2.5k–$3k/月 FDE 嵌入服务）需要 FDE 能在 ME 界面内一键把内容推送到客户网站，无需手动复制粘贴。Website Connector 是 ME 从"内容生产工具"升级为"执行引擎"的关键拼图，同时补全飞轮闭环：诊断 → 生成 → **发布** → 指标回流 → outcome 归因。
 >
@@ -2075,11 +2075,9 @@ AI 可见度层（ME 独有 ✅）
 
 ---
 
-## Phase 17 — Unified Data Pullback（统一数据回流层）🔥 17.A ✅ 已交付上线 · 其余数据源持续接入
+## Phase 17 — Unified Data Pullback（统一数据回流层）🔥 进行中
 
-> **登记日期**：2026-05-19 · **开工日期**：2026-06-03 · **状态**：Phase 17.A ✅ 全部完成（P17.A.1–A.6 均已 merge，2026-05-27）；GSC + GA4 数据回流已上线，Meta / Google Ads / GBP 数据源陆续接入。
->
-> **Linear**：Project「Phase 17 — Unified Data Pullback」(MAG-27 ~ MAG-32 已交付 · 扩展面 = Meta Insights / Google Ads / GBP 数据源)
+> **登记日期**：2026-05-19 · **开工日期**：2026-06-03 · **状态**：Phase 17.A ✅ 全部完成（P17.A.1–A.6 均已 merge，2026-05-27）
 >
 > **背景**：ME 现在的月报数据是孤岛——SEO 数据、社媒数据、广告数据分散在各平台，无法在 ME 内做跨渠道归因。Unified Data Pullback 是把所有执行结果拉回 ME、驱动飞轮真实归因的基础设施层。
 
@@ -2352,24 +2350,7 @@ Body: { title, description, dimension, fix_type?, due_date?, notes? }
 
 ---
 
-## Phase 24 — GBP / Google Business Profile 接入 📋 24.A ✅ · 24.B 待开始
-
-> **状态**：24.A Platform OAuth Connector ✅（PR #125，8/8 任务，详见 §9 2026-05-29）；24.B GBP 数据摄取 📋 待开始（被 GBP.0 配额闸门阻塞）。
->
-> **范围**：通过 Platform OAuth Connector 连接 GBP，摄取 reviews / insights / location data 写入 DB。
->
-> **前置闸门 GBP.0（⚠️ PM 操作 · 关键路径）**：Google Cloud 启用 Business Profile API + Account Management API + OAuth consent screen + env vars。GBP API 默认 0 QPM，须填表申请正式配额（3-7 天审核），否则调用全部被拒。
->
-> **子任务**：
-> - [x] **24.A** Platform OAuth Connector（8 任务，PR #125）
-> - [ ] **GBP.0** Google Cloud 启用 API + OAuth consent + env vars（⚠️ PM 操作）
-> - [ ] **24.B** GBP 数据摄取（reviews / insights / location data → DB；被 GBP.0 阻塞）
->
-> **Linear**：Project「Phase 24 — GBP」(MAG-21 GBP.0 · MAG-22 24.B)
-
----
-
-## Phase 26 — Execution Loop Closure（执行闭环修复）📋 已登记，2026-06-06 启动
+## Phase 24 — Execution Loop Closure（执行闭环修复）📋 已登记，2026-06-06 启动
 
 > **登记日期**：2026-06-06 · **状态**：开发中
 >
@@ -2379,11 +2360,11 @@ Body: { title, description, dimension, fix_type?, due_date?, notes? }
 
 | ID | 内容 | 文件 |
 |----|------|------|
-| **P26.A** | 诸葛亮推荐自动写入执行看板 | `action-persister.ts` + migration |
-| **P26.B** | 诸葛亮每周定时重新计算 | `cron/zhuge-recalculate/route.ts` + `render.yaml` |
-| **P26.C** | GEO 部署页接入 CMS connector 一键部署 | `deploy/page.tsx` + `DeploymentForm.tsx` |
+| **P24.A** | 诸葛亮推荐自动写入执行看板 | `action-persister.ts` + migration |
+| **P24.B** | 诸葛亮每周定时重新计算 | `cron/zhuge-recalculate/route.ts` + `render.yaml` |
+| **P24.C** | GEO 部署页接入 CMS connector 一键部署 | `deploy/page.tsx` + `DeploymentForm.tsx` |
 
-### P26.A — 诸葛亮推荐写入执行看板
+### P24.A — 诸葛亮推荐写入执行看板
 
 **Schema 变更**（`execution_items` 表）：
 - `prescription_id` 改为 nullable（支持无处方来源的 zhuge 行）
@@ -2397,21 +2378,21 @@ Body: { title, description, dimension, fix_type?, due_date?, notes? }
 - 若已有 pending 的 zhuge 行（旧 session）→ 先标记为 `superseded` 再插新行
 - 同一 session 重复调用（幂等）→ 跳过
 
-- [ ] P26.A.1 migration: `20260606000001_execution_items_zhuge_source.sql`
-- [ ] P26.A.2 `action-persister.ts` 新增 `writeExecutionItems` + 接入 `persistZhugeActions`
-- [ ] P26.A.3 `__tests__/action-persister.test.ts` 补充测试（TDD 先写）
+- [ ] P24.A.1 migration: `20260606000001_execution_items_zhuge_source.sql`
+- [ ] P24.A.2 `action-persister.ts` 新增 `writeExecutionItems` + 接入 `persistZhugeActions`
+- [ ] P24.A.3 `__tests__/action-persister.test.ts` 补充测试（TDD 先写）
 
-### P26.B — 诸葛亮每周定时重新计算
+### P24.B — 诸葛亮每周定时重新计算
 
 - 查询 `client_discovery` 有 `confirmed_at IS NOT NULL` 的客户
-- 对每个客户调用 `assembleZhugeInput` → `conductPriorityActions` → `persistZhugeActions`（触发 P26.A 看板写入）
+- 对每个客户调用 `assembleZhugeInput` → `conductPriorityActions` → `persistZhugeActions`（触发 P24.A 看板写入）
 - `x-cron-secret` 验证（与现有 cron 一致）
 - `render.yaml` 新增 `zhuge-weekly-recalculate`，每周一 3am UTC
 
-- [ ] P26.B.1 `src/app/api/cron/zhuge-recalculate/route.ts`
-- [ ] P26.B.2 `render.yaml` 追加 cron 定义
+- [ ] P24.B.1 `src/app/api/cron/zhuge-recalculate/route.ts`
+- [ ] P24.B.2 `render.yaml` 追加 cron 定义
 
-### P26.C — GEO 部署页接入 CMS connector
+### P24.C — GEO 部署页接入 CMS connector
 
 - `deploy/page.tsx`：加载时并行拉取 `/api/clients/[id]/cms/providers`
 - `DeploymentForm.tsx`：
@@ -2420,8 +2401,8 @@ Body: { title, description, dimension, fix_type?, due_date?, notes? }
   - 点击后调用 `/api/clients/[id]/cms/publish-geo-snippet` 注入 snippet 并自动 `recordDeployment`
 - 新增 `src/app/api/clients/[id]/cms/publish-geo-snippet/route.ts`（复用 wordpress-client / shopify-client 底层逻辑）
 
-- [ ] P26.C.1 `deploy/page.tsx` + `DeploymentForm.tsx` 改造
-- [ ] P26.C.2 `publish-geo-snippet/route.ts` 新增路由
+- [ ] P24.C.1 `deploy/page.tsx` + `DeploymentForm.tsx` 改造
+- [ ] P24.C.2 `publish-geo-snippet/route.ts` 新增路由
 
 ---
 
@@ -2531,9 +2512,9 @@ Phase 25 是 Phase 20 的前置基础：
 
 ---
 
-## Phase 20 — Magic Token Coin & Self-Serve Portal（C 端变现引擎）🔥 20.0 / 20.A / 20.B ✅ 已交付（PR #144/#146）· 剩 Tier 2 自助生产工作区 + 20.C 收尾
+## Phase 20 — Magic Token Coin & Self-Serve Portal（C 端变现引擎）📋 已登记，待排期
 
-> **登记日期**：2026-05-25 · **状态**：MTC 地基 + 注册/钱包界面已交付上线（PR #144/#146，注册→magic-link→wallet 500 MTC 已验证 2026-05-31）· 剩 Tier 2 客户自助生产工作区（核心）+ 20.C 收尾
+> **登记日期**：2026-05-25 · **状态**：方案已完整讨论，所有关键决策已拍板，待 PM 排期开工
 >
 > **背景**：Magic Engine 当前只服务 FDE 陪跑客户（人工建档、月度合约）。Phase 20 新增 C 端自助层，让 AU/NZ 本地商家从广告进来后，用 Magic Token Coin（MTC）自助体验和购买内容生成服务，形成 Tier 1（免费 Discovery）→ Tier 2（MTC 自助）→ Tier 3（FDE 全托管）的完整漏斗。
 >
@@ -2732,10 +2713,10 @@ AU / NZ（当前）          新市场（未来）
 | 子任务 | 内容 | 对应原子系统 | 现状 |
 |---|---|---|---|
 | **chore** | ROADMAP 校正登记（本 PR） | — | 🚧 进行中 |
-| **P21.1** | 模型分层路由：`anthropic/client.ts` 加 `MODEL_HAIKU` + 新建 `src/lib/ai/model-router.ts` | 21.A | 📋 |
-| **P21.2** | AI Factory 服务层 + 记忆注入：新建 `src/lib/ai-factory/`，量产调用接 `formatMemoryForPrompt` | 21.A | 📋 |
-| **P21.3** | 变体扇出 + 多平台 reformat 引擎（一主题 → N 平台变体） | 21.B 缺口 | 📋 |
-| **P21.4** | `ai_factory` intensity 档位：`marketing-plan/types.ts:147` + plan generator | 21.E | 📋 |
+| **P21.1** | 模型分层路由：`anthropic/client.ts` 加 `MODEL_HAIKU` + 新建 `src/lib/ai/model-router.ts` | 21.A | ✅ 完成 |
+| **P21.2** | AI Factory 服务层 + 记忆注入：新建 `src/lib/ai-factory/`，量产调用接 `formatMemoryForPrompt` | 21.A | ✅ 完成 |
+| **P21.3** | 变体扇出 + 多平台 reformat 引擎（一主题 → N 平台变体） | 21.B 缺口 | ✅ 完成 |
+| **P21.4** | `ai_factory` intensity 档位：`marketing-plan/types.ts:147` + plan generator | 21.E | ✅ 完成 |
 | **P21.5** | 量产编排器 + `production_packages` 聚合 | 21.A/21.C | 📋 |
 | **P21.6** | Token 预算治理 + 熔断（叠在 `deductMtc` 上，月度成本上限） | 21.D | 📋 |
 | **P21.7** | 发布 + 飞轮 outcome 回流接线 | 21.C | 📋 |
@@ -2923,14 +2904,6 @@ client_decision_history      -- 为什么之前选 X 不选 Y
 
 ## 9. 功能完成日志
 
-### 2026-05-31（Phase 20 Tier 2 — 注册→登录→Wallet 500 MTC 闭环打通 ✅）
-
-- **根因排查链** — 三层 bug 串联：① `self-register` 路由写错列名 `website_url`→`domain`（#159）→ 注册落库失败；② SMTP 未配置 → magic-link 邮件发不出去；③ 500 MTC bonus 只挂在 PKCE callback，magic-link/Google OAuth 路径没触发（#160 补到 `session-route`）
-- **P20.E 系列 hotfix（5 个 PR）** — #155 C 端登录入口统一 `/portal/login` + nav 注册入口；#158 website Google Ads API 重申请合规（企业邮箱 + About Us + Footer）；#159 列名 bug 修复；#160 bonus 路径修复（session-route 覆盖 magic-link + Google 路径）
-- **基础设施补齐** — Supabase 配 SMTP（Resend）；RLS 策略确认 portal_users 读权限
-- **✅ 验证通过** — 注册测试账户 → 收验证邮件 → 点链接 → 跳转 `/portal/[id]/wallet?welcome=1` → 显示 500 MTC 余额
-- **遗留待优化（不阻塞后续）** — (a) callback 改 `verifyOtp(token_hash)` 让注册确认直达 wallet；(b) #157 结果页 PR 待 merge；(c) ROADMAP 行数超 3300 行待拆 CHANGELOG/DECISIONS/archive
-
 ### 2026-05-31（Phase 18.A — Meta Ads 执行引擎 ✅ 完成 + ±20% 安全闸补齐）
 
 - **盘点确认** — P18.A.1/2/3 代码早已建成（execute / actions / sync / snapshots 路由 + AdsFixDrawer + AdsAuditSection，均已接线执行看板），属 ROADMAP 漏勾的 drift
@@ -2939,7 +2912,17 @@ client_decision_history      -- 为什么之前选 X 不选 Y
 ### 2026-05-31（Phase 21 MVP 计划登记 + 21.B 视觉素材层补登记）
 
 - **chore** — 盘点代码后确认 Phase 21 大部分积木已存在，真正缺 3 块连接组织（模型分层路由 / 变体扇出 reformat / 量产编排+熔断）；原五大子系统拆成 P21.1-9 可执行子任务 + MVP 垂直闭环 + M1/M2/M3 里程碑写入 ROADMAP
+- **P21.1** — `MODEL_HAIKU` 常量 + `src/lib/ai/model-router.ts`（routeModel / calcCost，strategy→Sonnet / production→Haiku，11 单测全绿）
+- **P21.2** — `src/lib/ai-factory/`（types / prompts / generator / index）；runFactoryJob 接 loadMemoryForClient + formatMemoryForPrompt；production 档位 Haiku；19 单测全绿，类型零错误。M1 产能内核完成
 - **21.B 视觉素材智能层补登记** — `client_assets`+`asset_storyboards` 表、vision-analyzer cron、assets/storyboard API、素材库 UI 早已建成但从未登记（migration `20260612000001`）；⚠️ DB 是否已 apply 待 PM 在 Supabase 确认
+
+### 2026-05-31（Phase 21 P21.4 — ai_factory intensity 档位 ✅）
+
+- **P21.4** — Marketing Plan 加第 4 档强度 `ai_factory`（全速量产）：`types.ts` 联合类型 + `generator.ts` 新 cadence 分支（posts 7-8/周，对齐 MVP 20-30/周上限）+ `PlanGenerator.tsx` UI 加「AI 工厂」按钮（grid 3→4 列）；编译通过
+
+### 2026-05-31（Phase 21 P21.3 — 变体扇出 + 多平台 reformat 引擎 ✅）
+
+- **P21.3** — `fan-out.ts`（fanOutToPlatforms，Promise.allSettled 并发，单平台失败不阻断）+ `reformat.ts`（reformatForPlatform，Haiku reformat，5 平台专属格式规则）；22 单测全绿，TypeScript 零新增错误
 
 ### 2026-05-31（Phase 19.F — 修复 Phase 20.D 引入的鉴权回归）
 

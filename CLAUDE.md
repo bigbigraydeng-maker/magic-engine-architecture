@@ -215,39 +215,35 @@ npm test           # 测试套件
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-05-31 11:15 NZST （**Phase 18.A Meta Ads 执行引擎 ✅ 完成 — ±20% 安全闸补齐，待 PR；Phase 20 MTC 自助计费 ✅ PR #146 merged**）
+> 最后更新：2026-05-31 13:46 NZST （**P21.4 ai_factory intensity 档位 ✅ — M2 扇出闭环进行中；P21.1/2/3/4 已完成，下一步 P21.5 量产编排器**）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **Phase 21 P21.1** | AI Content Factory MVP 已规划（见 ROADMAP）；开工第一步 = 模型分层路由（`anthropic/client.ts` 加 `MODEL_HAIKU` + 新建 `src/lib/ai/model-router.ts`） | 🚀 进行中 |
+| **Phase 21 P21.5** | 量产编排器 + `production_packages` 聚合（M2 扇出闭环收尾任务） | 🚀 进行中 |
 | **PM 操作（Meta Ads）🔴** | Render 设 `META_SYSTEM_USER_TOKEN`（长效 System User Token），否则执行看板「直接执行 (Meta API)」返回 424 | ⚠️ 待操作 |
-| **✅ Phase 20 Tier 2 闭环** | 注册 → magic-link 登录 → wallet 500 MTC 已验证通（2026-05-31）；前置已补：SMTP/RLS/列名(#159)/bonus 路径(#160)/登录入口(#155) | ✅ 完成 |
-| **Phase 20 下一步 🚀** | **客户自助生产工作区**（Tier 2 核心 — portal 当前只读，客户登录后无处"花 MTC 干活"，从零建） | 📋 待开始 |
-| **统一后台架构（方向 A）** | admin/FDE/client 同壳 + capability 显隐 + 多租户隔离；前置 = 授权地基（统一 `resolveAccess` + repository scope + 逐表 RLS）。下次 architect 出完整方案 | 📋 待设计 |
-| **P20 收尾优化** | (a) callback 改 `verifyOtp(token_hash)`+ 邮件模板，让注册确认直接进 wallet；(b) #157 结果页待 merge；(c) ROADMAP 3353 行拆分（CHANGELOG/DECISIONS/archive） | 📋 待优化 |
+| **PM 验收 P20** | Render 部署完成后：`https://app.magicengine.com.au/portal/register` 注册测试账户 → 验证邮件 → 跳转 `/wallet?welcome=1` 显示 500 MTC | ⚠️ PM 验收 |
 | **PM 操作 🔴** | Supabase 跑 migration `20260603000001_platform_oauth_connections.sql`（Phase 24.A） | ⚠️ 待操作 |
 | **GBP.0** | Google Cloud：enable Business Profile API + Account Management API，配置 OAuth consent screen，设 env vars | ⚠️ PM 操作 |
 | **Phase 24.B** | GBP 数据摄取（reviews、insights、location data 写入 DB） | 📋 待开始 |
 | **PM 操作（旧）** | Supabase 跑 `20260530000003_strategy_items_unique_title.sql`；Render 加 `GITHUB_WEBHOOK_SECRET`；合并 Phase 14.C PR | ⚠️ 待操作 |
 
 **已完成全景（最近几个 Phase）**：
+- ✅ **Phase 21 P21.4 ai_factory intensity 档位**（2026-05-31）：Marketing Plan 加第 4 档强度「AI 工厂/全速量产」（types + generator cadence + UI 按钮）；编译通过
+- ✅ **Phase 21 P21.3 变体扇出引擎**（2026-05-31）：`fanOutToPlatforms`（5 平台并发，单平台失败不阻断）+ `reformatForPlatform`（Haiku reformat，5 平台格式规则）；22 单测全绿
+- ✅ **Phase 21 P21.1/P21.2 AI Factory 内核**（2026-05-31）：MODEL_HAIKU + 模型分层路由 + AI Factory 服务层 + 记忆注入；M1 产能内核完成
 - ✅ **Phase 18.A Meta Ads 执行引擎**（待 PR，2026-05-31）：执行看板「直接执行 (Meta API)」→ 暂停/调预算/恢复 → 写 `flywheel_actions` + 审计撤销；±20% 出价硬限补齐（`lib/meta/guardrails.ts`，服务端强拦 + 12 单测）
-- ✅ **Phase 20 MTC 自助计费**（PR #144 + #146，2026-05-31）：
-  - 注册页 `/portal/register`、钱包页 `/portal/[id]/wallet`
-  - Stripe Checkout 三档套餐（$99/$249/$599 NZD）
-  - 500 MTC 欢迎礼包自动发放（首次登录）
-  - website 修复：无网站模式提交按钮 + 导航注册入口
+- ✅ **Phase 20 MTC 自助计费**（PR #144 + #146，2026-05-31）：注册页 + 钱包页 + Stripe Checkout 三档套餐 + 500 MTC 欢迎礼包
 - ✅ **Phase 24.A 全部 8 任务**（PR #125）：Platform OAuth Connector
 - ✅ **Phase 14.B 全部 P14.B.0–7**（PR #120）：WP 连接器扩展
 - ✅ **Phase 23 完整闭环**（PR #112）：L3 记忆四表 + MemoryService
 
 **下一候选**：
-- 🚀 **Phase 21** — AI Factory（MVP 计划已登记，开工 P21.1）
+- 🚀 **Phase 21 P21.5** — 量产编排器 + production_packages 聚合（M2 扇出闭环收尾）
 - 📋 **Phase 22** — Data Engine（与 Phase 21 双引擎并行）
 - 📋 **Phase 24.B** — GBP 数据摄取
 - 📋 **Phase 18.B** — Google Ads（Developer token 到位后）
 
-下一 session：`继续 Phase 21 第 1 任务 P21.1`（模型分层路由）
+下一 session：`继续 Phase 21 第 5 任务 P21.5`（量产编排器 + production_packages 聚合）
 
 **更新规则**（每次上线新功能）：
 1. ROADMAP.md 勾选对应任务 checkbox
