@@ -14,6 +14,7 @@ export default function ContactForm({ source, defaultMessage }: ContactFormProps
   const [status, setStatus] = useState<Status>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const isTrainingLead = source === 'training'
+  const isAdsLead = source === 'ads'
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
@@ -86,6 +87,51 @@ export default function ContactForm({ source, defaultMessage }: ContactFormProps
             <a
               href="mailto:raydeng@magicengine.com.au"
               className="inline-flex h-11 items-center rounded-lg border border-cyan-300 px-4 text-sm font-bold text-cyan-950"
+            >
+              Email us directly
+            </a>
+          </div>
+        </div>
+      )
+    }
+
+    if (isAdsLead) {
+      return (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-8">
+          <div className="flex items-start gap-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-amber-100">
+              <svg className="h-6 w-6 text-amber-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-lg font-black text-amber-950">Ads enquiry received</h3>
+              <p className="mt-2 text-sm leading-6 text-amber-900">
+                Thanks. We&rsquo;ll reply within one business day with a suggested AU/NZ campaign
+                shape, the right market focus, and the next step that fits your launch window.
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-3 rounded-lg border border-amber-200 bg-white p-4 text-sm text-amber-950 sm:grid-cols-2">
+            <p className="font-semibold">What happens next</p>
+            <ul className="grid gap-2 text-amber-900">
+              <li>We review target market, offer, budget, and timing.</li>
+              <li>We suggest a light launch path that stays practical and local.</li>
+              <li>If needed, we keep it as a consult before any heavier build.</li>
+            </ul>
+          </div>
+
+          <div className="mt-6 flex flex-wrap gap-3">
+            <Link
+              href="/"
+              className="inline-flex h-11 items-center rounded-lg bg-amber-950 px-4 text-sm font-bold text-white"
+            >
+              Back to home
+            </Link>
+            <a
+              href="mailto:raydeng@magicengine.com.au"
+              className="inline-flex h-11 items-center rounded-lg border border-amber-300 px-4 text-sm font-bold text-amber-950"
             >
               Email us directly
             </a>

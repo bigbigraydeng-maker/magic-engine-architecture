@@ -14,9 +14,13 @@ type ContactPageProps = {
 }
 
 export default function ContactPage({ searchParams }: ContactPageProps) {
-  const isTrainingLead = searchParams?.source === 'training'
+  const source = searchParams?.source
+  const isTrainingLead = source === 'training'
+  const isAdsLead = source === 'ads'
   const defaultMessage = isTrainingLead
     ? 'We are interested in AI training for our team. Please tell us the best next step, plus what details you need from us.'
+    : isAdsLead
+      ? 'We are planning paid media for our AU/NZ business. Please tell us the best next step, what launch shape you recommend, and what details you need from us.'
     : ''
 
   return (
@@ -51,14 +55,15 @@ export default function ContactPage({ searchParams }: ContactPageProps) {
           get back to you within one business day.
         </p>
 
-        {isTrainingLead && (
+        {(isTrainingLead || isAdsLead) && (
           <div className="mt-8 rounded-xl border border-cyan-200 bg-cyan-50 p-6">
             <p className="text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">
-              Training enquiry
+              {isTrainingLead ? 'Training enquiry' : 'Ads launch enquiry'}
             </p>
             <p className="mt-2 text-sm leading-6 text-cyan-900">
-              You came from the training page. Tell us your team size, language mix, and what
-              workshop outcome you want, and we will scope the right session from there.
+              {isTrainingLead
+                ? 'You came from the training page. Tell us your team size, language mix, and what workshop outcome you want, and we will scope the right session from there.'
+                : 'You came from the ads launch path. Tell us your target market, monthly budget, and launch timing, and we will scope the first campaign from there.'}
             </p>
             <p className="mt-3 text-sm leading-6 text-cyan-900">
               After you send it, we will reply with a clear next step instead of dumping you into
@@ -68,7 +73,7 @@ export default function ContactPage({ searchParams }: ContactPageProps) {
         )}
 
         <div className="mt-10 rounded-xl border border-slate-200 bg-white p-6 sm:p-8">
-          <ContactForm source={isTrainingLead ? 'training' : undefined} defaultMessage={defaultMessage} />
+          <ContactForm source={source} defaultMessage={defaultMessage} />
         </div>
 
         <div className="mt-8 flex items-start gap-4 rounded-xl border border-slate-200 bg-white p-6">

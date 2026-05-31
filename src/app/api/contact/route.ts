@@ -31,7 +31,12 @@ export async function POST(req: NextRequest) {
   }
 
   const sourceLabel = source?.trim() || ''
-  const subjectPrefix = sourceLabel === 'training' ? 'New training enquiry' : 'New enquiry'
+  const subjectPrefix =
+    sourceLabel === 'training'
+      ? 'New training enquiry'
+      : sourceLabel === 'ads'
+        ? 'New ads enquiry'
+        : 'New enquiry'
 
   const resend = new Resend(apiKey)
 

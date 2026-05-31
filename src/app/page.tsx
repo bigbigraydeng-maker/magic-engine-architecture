@@ -57,8 +57,8 @@ const audienceCards = [
     body: 'Bilingual English/中文 messaging helps local Chinese-speaking and English-speaking audiences understand the offer without extra friction.',
   },
   {
-    title: 'Training-ready rollout',
-    body: 'The training page is live now. For now, the site is already set up to capture consults, adoption help, and workshop enquiries.',
+    title: 'Launch-ready rollout',
+    body: 'The site is already set up to capture consults, workshop enquiries, and paid media launch discussions for AU/NZ campaigns.',
   },
 ]
 
@@ -292,6 +292,12 @@ export default async function HomePage() {
                 className="flex h-12 items-center rounded-lg border border-white/20 px-5 text-sm font-bold text-white"
               >
                 Explore training
+              </Link>
+              <Link
+                href="/contact?source=ads"
+                className="flex h-12 items-center rounded-lg border border-cyan-300/40 px-5 text-sm font-bold text-cyan-100"
+              >
+                Start ads launch
               </Link>
             </div>
             <p className="mt-4 text-xs font-medium uppercase tracking-[0.14em] text-slate-400">
