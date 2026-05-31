@@ -215,15 +215,15 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-06-01（Website SEO Optimization P29.SEO.5 已完成，下一步是 training page polish）
+> 最后更新：2026-06-01（Website SEO Optimization P29.SEO.6 已完成，下一步是 training enquiry tracking）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P29.SEO.6** | Training page polish：为 /training 补一条轻量证明信息和更强 lead path，继续保持 AU/NZ 双语定位 | ⭐⭐ |
+| **P29.SEO.7** | Training enquiry tracking：给 /training 加轻量 handoff 和 CTA 点击追踪，继续保持不做完整表单系统 | ⭐⭐ |
 
-**状态校准（2026-06-01）**：P29.SEO.5 已完成并通过 build 验证；下一步转向 training page polish。下一 session 第一句话：
+**状态校准（2026-06-01）**：P29.SEO.6 已完成并通过 build 验证；下一步转向 training enquiry tracking。下一 session 第一句话：
 
-- `继续 Website SEO Optimization P29.SEO.6`
+- `继续 Website SEO Optimization P29.SEO.7`
 
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 

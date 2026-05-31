@@ -40,11 +40,33 @@ const formats = [
   },
 ]
 
+const proofPoints = [
+  'AU/NZ-first training',
+  'English and \u4e2d\u6587 delivery',
+  'Workshop-first format',
+  'Rollout support after the session',
+]
+
 const outcomes = [
   'What AI is worth using now',
   'How to make your team faster without adding chaos',
   'How to improve search and AI visibility while you adopt new tools',
-  'How to communicate the change in English and 中文',
+  'How to communicate the change in English and \u4e2d\u6587',
+]
+
+const leadSteps = [
+  {
+    title: 'Share the basics',
+    body: 'Tell us your team size, location, and whether the workshop should be delivered in English, \u4e2d\u6587, or both.',
+  },
+  {
+    title: 'Pick the outcome',
+    body: 'Adoption planning, prompt use, rollout guardrails, or a practical AI workshop for managers and teams.',
+  },
+  {
+    title: 'Choose the path',
+    body: 'Book a consult or email a short brief and we will scope the right session from there.',
+  },
 ]
 
 const faqs = [
@@ -144,7 +166,7 @@ export default function TrainingPage() {
               for English and Chinese-speaking teams.
             </p>
             <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-400">
-              面向澳洲和新西兰企业的 AI 培训。先让团队用起来，再把流程做稳。
+              {'\u9762\u5411\u6fb3\u6d32\u548c\u65b0\u897f\u5170\u4f01\u4e1a\u7684 AI \u57f9\u8bad\u3002\u5148\u8ba9\u56e2\u961f\u7528\u8d77\u6765\uff0c\u518d\u628a\u6d41\u7a0b\u505a\u7a33\u3002'}
             </p>
 
             <div className="mt-8 flex flex-wrap gap-3">
@@ -179,6 +201,20 @@ export default function TrainingPage() {
         </div>
       </section>
 
+      <section className="-mt-6 px-5 sm:px-8">
+        <div className="mx-auto grid max-w-6xl gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:grid-cols-4">
+          {proofPoints.map(point => (
+            <div
+              key={point}
+              className="flex items-center gap-3 rounded-xl bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700"
+            >
+              <span className="h-2.5 w-2.5 rounded-full bg-cyan-500" />
+              <span>{point}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
       <section className="grid gap-5 px-5 py-8 sm:px-8 lg:grid-cols-[0.9fr_1.1fr]">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
@@ -190,7 +226,10 @@ export default function TrainingPage() {
         </div>
         <ul className="grid gap-3 sm:grid-cols-2">
           {outcomes.map(item => (
-            <li key={item} className="rounded-lg border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-700">
+            <li
+              key={item}
+              className="rounded-lg border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-700"
+            >
               {item}
             </li>
           ))}
@@ -203,7 +242,7 @@ export default function TrainingPage() {
             Bilingual support
           </p>
           <h2 className="mt-2 max-w-2xl text-3xl font-black leading-tight">
-            English and 中文 support, without splitting the experience too early.
+            English and \u4e2d\u6587 support, without splitting the experience too early.
           </h2>
           <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-600">
             The training page is designed for mixed audiences: local Chinese-speaking teams,
@@ -222,6 +261,53 @@ export default function TrainingPage() {
             This keeps the entry point light and works well for AU/NZ businesses that want to
             start with a practical conversation before committing to a bigger training rollout.
           </p>
+        </div>
+      </section>
+
+      <section className="px-5 pb-12 sm:px-8">
+        <div className="grid gap-6 rounded-2xl border border-slate-950 bg-slate-950 p-6 text-white lg:grid-cols-[1fr_0.95fr]">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-200">
+              Lead path
+            </p>
+            <h2 className="mt-2 text-3xl font-black leading-tight">
+              Make it easy to brief the right workshop.
+            </h2>
+            <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-300">
+              If you already know the team, the language mix, and the outcome you want, we can
+              move straight to a consult. If not, we keep the first step light and help you scope
+              it quickly.
+            </p>
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Link
+                href="/contact"
+                className="flex h-11 items-center rounded-lg bg-white px-4 text-sm font-bold text-slate-950"
+              >
+                Book a consult
+              </Link>
+              <a
+                href="mailto:raydeng@magicengine.com.au?subject=Training%20enquiry%20-%20Magic%20Engine"
+                className="flex h-11 items-center rounded-lg border border-white/20 px-4 text-sm font-bold text-white"
+              >
+                Email training brief
+              </a>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-white/5 p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-cyan-200">
+              What to include
+            </p>
+            <ol className="mt-4 grid gap-3">
+              {leadSteps.map(step => (
+                <li key={step.title} className="rounded-lg border border-white/10 bg-white/[0.06] p-4">
+                  <h3 className="text-base font-bold text-white">{step.title}</h3>
+                  <p className="mt-2 text-sm leading-6 text-slate-300">{step.body}</p>
+                </li>
+              ))}
+            </ol>
+          </div>
         </div>
       </section>
 

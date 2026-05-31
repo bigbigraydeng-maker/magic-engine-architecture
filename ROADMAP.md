@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-01 03:16 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-01 03:30 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -14,7 +14,8 @@
 - [x] **P29.SEO.3** soft conversion path - add a light training-ready CTA and internal links that support discovery, contact, and future training content without building a full i18n system yet.
 - [x] **P29.SEO.4** verification pass - confirm the homepage renders cleanly, build passes, and the SEO changes do not disturb the existing dashboard or portal flows.
 - [x] **P29.SEO.5** training page scaffold - add the first public training landing page / section with bilingual messaging and a local CTA once the homepage SEO foundation is live.
-- [ ] **P29.SEO.6** training page polish - add a light proof strip and stronger lead path so the new training page can capture AU/NZ workshop enquiries without growing into a full course system yet.
+- [x] **P29.SEO.6** training page polish - add a light proof strip and stronger lead path so the new training page can capture AU/NZ workshop enquiries without growing into a full course system yet.
+- [ ] **P29.SEO.7** training enquiry tracking - add a lightweight handoff and CTA click tracking so the training page keeps converting without introducing a full form builder.
 
 ### Active hotfix registration - 2026-05-25
 
@@ -3090,9 +3091,10 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 
 ## 9. 功能完成日志
 
-### 2026-06-01（Website SEO Optimization P29.SEO.5 完成）
+### 2026-06-01（Website SEO Optimization P29.SEO.6 完成）
 
 - **P29.SEO.5** — 首个公开 training landing page 上线：/training 路由、双语培训定位、AU/NZ 本地 CTA、FAQ 和 sitemap 内链全部接通
+- **P29.SEO.6** — 训练页补上 proof strip 和 lead path，直接把咨询与邮件入口放到首屏后面
 
 ### 2026-06-01（Phase 29 战略决策登记 + P21.B 看板来源标记上线）
 
