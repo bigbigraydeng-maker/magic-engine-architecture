@@ -4,7 +4,12 @@ import { useState } from 'react'
 
 type Status = 'idle' | 'submitting' | 'success' | 'error'
 
-export default function ContactForm() {
+type ContactFormProps = {
+  source?: string
+  defaultMessage?: string
+}
+
+export default function ContactForm({ source, defaultMessage }: ContactFormProps) {
   const [status, setStatus] = useState<Status>('idle')
   const [errorMsg, setErrorMsg] = useState('')
 
@@ -19,6 +24,7 @@ export default function ContactForm() {
       email: (form.elements.namedItem('email') as HTMLInputElement).value,
       company: (form.elements.namedItem('company') as HTMLInputElement).value,
       message: (form.elements.namedItem('message') as HTMLTextAreaElement).value,
+      source: (form.elements.namedItem('source') as HTMLInputElement).value,
     }
 
     try {
@@ -58,6 +64,7 @@ export default function ContactForm() {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
+      <input type="hidden" name="source" value={source ?? ''} />
       <div className="grid gap-5 sm:grid-cols-2">
         <div>
           <label htmlFor="name" className="mb-1.5 block text-sm font-semibold text-slate-700">
@@ -112,6 +119,7 @@ export default function ContactForm() {
           name="message"
           required
           rows={6}
+          defaultValue={defaultMessage}
           placeholder="Tell us about your business and what you're looking for…"
           className="w-full resize-none rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200"
         />

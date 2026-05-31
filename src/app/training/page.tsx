@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import TrainingLeadLink from './_components/TrainingLeadLink'
 
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'https://magicengine.com.au'
 const pageTitle = 'AI Training for AU/NZ Teams'
@@ -148,9 +149,14 @@ export default function TrainingPage() {
               Contact
             </Link>
           </nav>
-          <Link href="/contact" className="rounded-lg bg-white px-4 py-2 text-sm font-bold text-slate-950">
+          <TrainingLeadLink
+            href="/contact?source=training"
+            ctaKey="header_consult"
+            destination="contact"
+            className="rounded-lg bg-white px-4 py-2 text-sm font-bold text-slate-950"
+          >
             Book consult
-          </Link>
+          </TrainingLeadLink>
         </header>
 
         <div className="grid gap-10 px-5 pb-14 pt-16 sm:px-8 lg:grid-cols-[1.05fr_0.95fr] lg:items-start lg:pb-20">
@@ -170,12 +176,14 @@ export default function TrainingPage() {
             </p>
 
             <div className="mt-8 flex flex-wrap gap-3">
-              <Link
-                href="/contact"
+              <TrainingLeadLink
+                href="/contact?source=training"
+                ctaKey="hero_consult"
+                destination="contact"
                 className="flex h-12 items-center rounded-lg bg-white px-5 text-sm font-bold text-slate-950"
               >
                 Book a training consult
-              </Link>
+              </TrainingLeadLink>
               <Link
                 href="/discover"
                 className="flex h-12 items-center rounded-lg border border-white/20 px-5 text-sm font-bold text-white"
@@ -280,18 +288,22 @@ export default function TrainingPage() {
             </p>
 
             <div className="mt-6 flex flex-wrap gap-3">
-              <Link
-                href="/contact"
+              <TrainingLeadLink
+                href="/contact?source=training"
+                ctaKey="lead_consult"
+                destination="contact"
                 className="flex h-11 items-center rounded-lg bg-white px-4 text-sm font-bold text-slate-950"
               >
                 Book a consult
-              </Link>
-              <a
-                href="mailto:raydeng@magicengine.com.au?subject=Training%20enquiry%20-%20Magic%20Engine"
+              </TrainingLeadLink>
+              <TrainingLeadLink
+                href="mailto:raydeng@magicengine.com.au?subject=Training%20enquiry%20-%20Magic%20Engine&body=Hi%20Magic%20Engine%2C%0A%0AWe%20would%20like%20to%20talk%20about%20AI%20training%20for%20our%20team.%20Please%20share%20your%20recommended%20next%20step.%0A%0ATeam%20size%3A%0ALanguage%20mix%3A%0AOutcome%3A%0ATiming%3A%0A"
+                ctaKey="lead_email"
+                destination="email"
                 className="flex h-11 items-center rounded-lg border border-white/20 px-4 text-sm font-bold text-white"
               >
                 Email training brief
-              </a>
+              </TrainingLeadLink>
             </div>
           </div>
 

@@ -7,7 +7,18 @@ export const metadata: Metadata = {
   description: 'Get in touch with the Magic Engine team. We help AU/NZ marketing agencies and businesses grow through AI-powered execution.',
 }
 
-export default function ContactPage() {
+type ContactPageProps = {
+  searchParams?: {
+    source?: string
+  }
+}
+
+export default function ContactPage({ searchParams }: ContactPageProps) {
+  const isTrainingLead = searchParams?.source === 'training'
+  const defaultMessage = isTrainingLead
+    ? 'We are interested in AI training for our team. Please tell us the best next step, plus what details you need from us.'
+    : ''
+
   return (
     <div className="min-h-screen bg-[#f6f7f2] text-slate-950">
       <header className="flex items-center justify-between bg-slate-950 px-5 py-5 sm:px-8">
@@ -40,8 +51,20 @@ export default function ContactPage() {
           get back to you within one business day.
         </p>
 
+        {isTrainingLead && (
+          <div className="mt-8 rounded-xl border border-cyan-200 bg-cyan-50 p-6">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">
+              Training enquiry
+            </p>
+            <p className="mt-2 text-sm leading-6 text-cyan-900">
+              You came from the training page. Tell us your team size, language mix, and what
+              workshop outcome you want, and we will scope the right session from there.
+            </p>
+          </div>
+        )}
+
         <div className="mt-10 rounded-xl border border-slate-200 bg-white p-6 sm:p-8">
-          <ContactForm />
+          <ContactForm source={isTrainingLead ? 'training' : undefined} defaultMessage={defaultMessage} />
         </div>
 
         <div className="mt-8 flex items-start gap-4 rounded-xl border border-slate-200 bg-white p-6">
