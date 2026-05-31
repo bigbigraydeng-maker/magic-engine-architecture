@@ -58,7 +58,7 @@ const audienceCards = [
   },
   {
     title: 'Training-ready rollout',
-    body: 'The training board will come later. For now, the site is already set up to capture consults, adoption help, and workshop enquiries.',
+    body: 'The training page is live now. For now, the site is already set up to capture consults, adoption help, and workshop enquiries.',
   },
 ]
 
@@ -253,6 +253,7 @@ export default async function HomePage() {
               <a href="#product">Product</a>
               <a href="#visibility">AI visibility</a>
               <a href="#faq">FAQ</a>
+              <Link href="/training">Training</Link>
               <Link href="/about">About</Link>
               <Link href="/portal/login">Portal</Link>
             </nav>
@@ -287,10 +288,10 @@ export default async function HomePage() {
                 Get free diagnosis
               </Link>
               <Link
-                href="/contact"
+                href="/training"
                 className="flex h-12 items-center rounded-lg border border-white/20 px-5 text-sm font-bold text-white"
               >
-                Discuss training
+                Explore training
               </Link>
             </div>
             <p className="mt-4 text-xs font-medium uppercase tracking-[0.14em] text-slate-400">
@@ -353,11 +354,11 @@ export default async function HomePage() {
             </p>
             <p className="mt-3 text-sm leading-6 text-emerald-900">
               We are keeping the scope small for now: a stronger homepage, clear contact path, and
-              SEO signals that help the public site rank while the training board is added later.
+              SEO signals that help the public site rank while the training page is live.
             </p>
             <p className="mt-4 text-sm leading-6 text-emerald-900">
               If you want bilingual workshops, AI adoption planning, or rollout support, start with
-              a consult and we can scope it from there.
+              the <Link href="/training" className="font-bold underline underline-offset-4">training page</Link> or a consult and we can scope it from there.
             </p>
           </div>
         </section>
@@ -421,6 +422,9 @@ export default async function HomePage() {
               </Link>
               <Link href="/contact" className="hover:text-slate-950">
                 Contact
+              </Link>
+              <Link href="/training" className="hover:text-slate-950">
+                Training
               </Link>
               <Link href="/portal/login" className="hover:text-slate-950">
                 Portal
