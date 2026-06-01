@@ -27,6 +27,8 @@ import {
 } from './execution-view-model'
 import { FdeManualEntryModal } from './_components/FdeManualEntryModal'
 import { DataPullbackSection } from './_components/DataPullbackSection'
+import { AnomalySignalPanel } from './_components/AnomalySignalPanel'
+import { BriefGateBanner } from '../_components/BriefGateBanner'
 // MemoryAnnotationPanel removed — Phase 20.D item 6: system handles flywheel recording automatically
 
 // ---------------------------------------------------------------------------
@@ -581,6 +583,9 @@ function ExecutionItemCard({
             制作中
           </span>
         )}
+        {item.source === 'proactive_signal' && (
+          <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">⚡ 系统检测</span>
+        )}
         {!isBackgroundGenerating && hasAiAssist && <span className="text-[10px] font-bold text-cyan-700">AI 草稿</span>}
         {logCount > 0 && <span className="text-[10px] text-gray-400">{logCount} 条日志</span>}
       </div>
@@ -633,6 +638,9 @@ function TaskDetailDrawer({
   const [factoryLoading, setFactoryLoading] = useState(false)
   const [factoryResult, setFactoryResult]   = useState<{ successCount: number; packageId: string | null } | null>(null)
   const [factoryError, setFactoryError]     = useState<string | null>(null)
+  // 「存入工作台」补救按钮（方案 A：socialDone 但 content_posts 未入库时使用）
+  const [saveToBoardLoading, setSaveToboardLoading] = useState(false)
+  const [saveToBoard_done, setSaveToBoardDone]      = useState(false)
 
   useEffect(() => { setMounted(true) }, [])
 
@@ -641,7 +649,28 @@ function TaskDetailDrawer({
     setEditingTitle(false)
     setEditingDesc(false)
     setConfirmDelete(false)
+    setSaveToboardLoading(false)
+    setSaveToBoardDone(false)
   }, [item?.id])
+
+  const handleSaveToBoard = useCallback(async () => {
+    if (!item) return
+    setSaveToboardLoading(true)
+    try {
+      // Fetch the most recent social plan for this client
+      const planRes = await fetch(`/api/clients/${clientId}/social-plan`)
+      const planJson = await planRes.json() as { success: boolean; plans?: { id: string }[] }
+      const planId = planJson.plans?.[0]?.id
+      if (!planId) { setSaveToboardLoading(false); return }
+      await fetch(`/api/clients/${clientId}/social-plan/${planId}/save-to-board`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      setSaveToBoardDone(true)
+    } catch { /* non-fatal */ } finally {
+      setSaveToboardLoading(false)
+    }
+  }, [item, clientId])
 
   if (!mounted || !item) return null
 
@@ -782,6 +811,9 @@ function TaskDetailDrawer({
             </div>
           )}
           <FdeMetaRow stepsJson={item.steps_json} />
+          {item.source === 'proactive_signal' && (
+            <span className="mt-1 inline-block text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">⚡ 系统检测 · 诸葛亮主动发现</span>
+          )}
         </div>
         <button
           onClick={onClose}
@@ -860,12 +892,25 @@ function TaskDetailDrawer({
               <div className="w-full rounded-lg border border-green-100 bg-green-50/60 px-3 py-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-black text-green-700 uppercase tracking-wide">已生成</span>
-                  <a
-                    href={`/dashboard/content?client=${clientId}`}
-                    className="text-[11px] font-bold text-cyan-600 hover:text-cyan-800 underline"
-                  >
-                    查看社媒工作台 →
-                  </a>
+                  <div className="flex items-center gap-3">
+                    {!saveToBoard_done ? (
+                      <button
+                        onClick={() => void handleSaveToBoard()}
+                        disabled={saveToBoardLoading}
+                        className="text-[11px] font-bold text-amber-600 hover:text-amber-800 underline disabled:opacity-50"
+                      >
+                        {saveToBoardLoading ? '同步中…' : '存入工作台'}
+                      </button>
+                    ) : (
+                      <span className="text-[11px] font-bold text-green-600">✓ 已同步</span>
+                    )}
+                    <a
+                      href={`/dashboard/content?client=${clientId}`}
+                      className="text-[11px] font-bold text-cyan-600 hover:text-cyan-800 underline"
+                    >
+                      查看社媒工作台 →
+                    </a>
+                  </div>
                 </div>
               </div>
             )
@@ -1803,20 +1848,29 @@ export default function ExecutionPage() {
             ...(params.angle_focus ? { angle_focus: params.angle_focus } : {}),
           }),
         })
-        const json = await res.json() as { success: boolean; error?: string }
+        const json = await res.json() as { success: boolean; plan_id?: string; error?: string }
         if (json.success) {
+          // Save generated plan to content_posts so it appears in Launch Hub
+          if (json.plan_id) {
+            await fetch(`/api/clients/${clientId}/social-plan/${json.plan_id}/save-to-board`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+            }).catch(() => {})
+          }
           await fetch(`/api/clients/${clientId}/execution/${itemId}/log`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ kind: 'ai_assist', author: 'luban', content: '社媒内容已在后台生成完成，可打开工作台查看' }),
           }).catch(() => {})
-          const curItem = items.find(i => i.id === itemId)
-          if (curItem?.status === 'pending') {
+          // 读取 DB 最新状态（不依赖可能已过期的 items 快照），确保状态持久写入后再刷新
+          const statusRes = await fetch(`/api/clients/${clientId}/execution/${itemId}`).catch(() => null)
+          const statusJson = statusRes?.ok ? await statusRes.json() as { item?: { status: string } } : null
+          if (!statusJson?.item || statusJson.item.status === 'pending') {
             await fetch(`/api/clients/${clientId}/execution/${itemId}`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ status: 'in_progress' }),
-            }).catch(() => {})
+            })
           }
         }
       } catch { /* non-fatal */ } finally {
@@ -1905,6 +1959,7 @@ export default function ExecutionPage() {
 
   // ── Main render ───────────────────────────────────────────────────────────
   return (
+    <BriefGateBanner featureLabel="execution kanban">
     <div className="min-h-screen bg-[#f6f7f2]">
       {/* Header */}
       <div className="sticky top-0 z-10 border-b border-slate-200 bg-[#f6f7f2]/95 px-4 py-3 backdrop-blur md:px-6">
@@ -1947,6 +2002,13 @@ export default function ExecutionPage() {
             >
               Marketing Plan
             </Link>
+            {/* 项目级鲁班 — 常驻按钮 */}
+            <button
+              onClick={() => setProjectLubanOpen(true)}
+              className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 text-xs font-black text-violet-800 transition-colors hover:bg-violet-100"
+            >
+              🤖 鲁班
+            </button>
             {/* 溢出菜单 */}
             <div className="relative">
               <button
@@ -1965,12 +2027,6 @@ export default function ExecutionPage() {
                       className="w-full px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50"
                     >
                       复盘
-                    </button>
-                    <button
-                      onClick={() => { setProjectLubanOpen(true); setShowOverflow(false) }}
-                      className="w-full px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                    >
-                      项目级鲁班
                     </button>
                     {items.length > 0 && (
                       <button
@@ -2072,6 +2128,9 @@ export default function ExecutionPage() {
         })()}
 
         <ProgressBar completed={completedCount} total={filteredItems.length} />
+
+        {/* Phase 22.D — AnomalyDetector 信号面板 */}
+        <AnomalySignalPanel clientId={clientId} />
 
         <DataPullbackSection clientId={clientId} />
 
@@ -2237,5 +2296,6 @@ export default function ExecutionPage() {
         onCreated={() => { setShowManualEntry(false); void fetchItems(true) }}
       />
     </div>
+    </BriefGateBanner>
   )
 }
