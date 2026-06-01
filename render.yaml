@@ -28,6 +28,10 @@ services:
         sync: false
       - key: SEMRUSH_DB
         value: au
+      - key: DATAFORSEO_LOGIN
+        sync: false
+      - key: DATAFORSEO_PASSWORD
+        sync: false
       - key: GITHUB_TOKEN
         sync: false
       - key: GITHUB_WEBHOOK_SECRET
@@ -80,6 +84,10 @@ services:
       - key: ATLAS_API_KEY
         sync: false
       - key: SEMRUSH_API_KEY
+        sync: false
+      - key: DATAFORSEO_LOGIN
+        sync: false
+      - key: DATAFORSEO_PASSWORD
         sync: false
       - key: PUBLER_API_KEY
         sync: false
