@@ -153,6 +153,12 @@ export default function GeoPage() {
               >
                 Start with diagnosis
               </Link>
+              <Link
+                href="/geo/glossary"
+                className="flex h-12 items-center rounded-lg border border-white/20 px-5 text-sm font-bold text-white"
+              >
+                GEO glossary
+              </Link>
             </div>
           </div>
 
@@ -202,6 +208,14 @@ export default function GeoPage() {
             The goal is not more pages. The goal is clearer signal: one public definition, one local
             audience, one simple next step.
           </p>
+          <div className="mt-6">
+            <Link
+              href="/geo/glossary"
+              className="inline-flex rounded-lg border border-slate-300 px-4 py-2 text-sm font-bold text-slate-900"
+            >
+              Open the GEO glossary
+            </Link>
+          </div>
         </div>
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-6">
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-700">
