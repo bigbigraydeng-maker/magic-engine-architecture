@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-01 20:29 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-01 20:44 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -19,7 +19,8 @@
 - [x] **P29.SEO.8** training follow-up polish - add a dedicated thank-you state and next-step copy for training enquiries so the handoff feels closed-loop without growing into a CRM.
 - [x] **P29.SEO.9** training conversion tidy-up - add one more small follow-through step only if needed after the new thank-you state proves useful.
 - [x] **P29.SEO.10** AU/NZ keyword gap baseline - use DataForSEO to discover Magic Engine's public-domain keyword gap across Australia and New Zealand, focusing on AI upgrade / GEO / training / ads intents, and keep the first pass as a reusable research report rather than a large content build-out.
-- [ ] **P29.SEO.11** AU/NZ service page map - turn the baseline into a focused page/brief map for `ai marketing agency`, `ai training for business`, `ai automation for business`, and GEO so the next content pass stays narrow and useful.
+- [x] **P29.SEO.11** AU/NZ service page map - turn the baseline into a focused page/brief map for `ai marketing agency`, `ai training for business`, `ai automation for business`, and GEO so the next content pass stays narrow and useful.
+- [ ] **P29.SEO.12** AU/NZ SME service briefs - draft the first small-business-first page briefs from the map so we can publish focused service pages without drifting into a large-agency positioning.
 
 ### Website Ads Launch Prep - 2026-06-01
 
@@ -3621,3 +3622,8 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 ### 2026-06-01（Website SEO Gap Research P29.SEO.10 完成）
 
 - `docs/seo-gap-au-nz-2026-06-01.md` 落成，Magic Engine 公共站 AU/NZ 机会词 baseline 已整理成可复用报告
+
+### 2026-06-01 (Website SEO Service Page Map P29.SEO.11 ���)
+
+- docs/seo-service-page-map-au-nz-2026-06-01.md ��ɣ�ҳ�涨λ�ĳ� SME-first�����ʹ� agency ���澺��
+

@@ -4,7 +4,7 @@ import ContactForm from './_components/ContactForm'
 
 export const metadata: Metadata = {
   title: 'Contact Us',
-  description: 'Get in touch with the Magic Engine team. We help AU/NZ marketing agencies and businesses grow through AI-powered execution.',
+  description: 'Get in touch with the Magic Engine team. We help AU/NZ SMEs and growth teams grow through AI-powered execution.',
 }
 
 type ContactPageProps = {
@@ -51,8 +51,8 @@ export default function ContactPage({ searchParams }: ContactPageProps) {
         </p>
         <h1 className="mt-4 text-5xl font-black leading-tight">Contact us</h1>
         <p className="mt-5 text-base leading-7 text-slate-600">
-          Interested in Magic Engine for your agency or business? Fill in the form and we&rsquo;ll
-          get back to you within one business day.
+          Interested in Magic Engine for your SME, in-house team, or growth business? Fill in the
+          form and we&rsquo;ll get back to you within one business day.
         </p>
 
         {(isTrainingLead || isAdsLead) && (
