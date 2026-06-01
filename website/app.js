@@ -94,6 +94,9 @@ const PAGE_TITLES = {
   '/ai-search': {
     zh: 'AI 搜索可见度 - 面向 AU/NZ 企业 | Magic Engine',
   },
+  '/ai-search-faq': {
+    zh: 'AI 搜索 FAQ 支持页 - 面向 AU/NZ 企业 | Magic Engine',
+  },
   '/about': {
     zh: '关于 Magic Engine — AI 升级、GEO 与培训',
   },

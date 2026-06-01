@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-02 00:44 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-02 01:00 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -43,7 +43,8 @@
 - [x] **P29.GEO.2** homepage linkage - add one small GEO mention/link on the homepage and include `/geo` in sitemap/navigation so the new page is discoverable without overhauling the public IA.
 - [x] **P29.GEO.3** optional GEO support content - add one small supporting FAQ or glossary page only if the `/geo` page needs extra search support later; keep the public IA lean for now.
 - [x] **P29.GEO.4** AI search foundation page - add a lightweight `/ai-search` page that explains how ChatGPT, Gemini, DeepSeek, and Google AI read the AU/NZ business surface, with bilingual support and a clear CTA.
-- [ ] **P29.GEO.5** AI search support hub - add one small follow-up answer page or FAQ hub for the same AU/NZ AI search surface, keeping the public IA lean while giving ChatGPT / Gemini / DeepSeek more reusable snippets.
+- [x] **P29.GEO.5** AI search support hub - add one small follow-up answer page or FAQ hub for the same AU/NZ AI search surface, keeping the public IA lean while giving ChatGPT / Gemini / DeepSeek more reusable snippets.
+- [ ] **P29.GEO.6** AI search proof snippets - add one tiny quote-bank or comparison snippet page only if the support hub still needs more reusable answers; keep the IA lean.
 
 ### Website Public Root Sync - 2026-06-01
 
@@ -3657,6 +3658,10 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 ### 2026-06-02 (Website GEO Visibility P29.GEO.4 完成)
 
 - `website/ai-search.html` 和 `website/cn/ai-search.html` 上线，首页与 `/geo` 都接入了 AI search 导流，ChatGPT / Gemini / DeepSeek / Google AI 的 AU/NZ 基础页已补齐。
+
+### 2026-06-02 (Website GEO Visibility P29.GEO.5 完成)
+
+- `website/ai-search-faq.html` 和 `website/cn/ai-search-faq.html` 上线，AI search 现在有 support hub 和可复用答案库，模型更容易抽到短句和本地化信号。
 
 ### 2026-06-01 (Website hreflang / Language Targeting P29.SEO.16 完成)
 
