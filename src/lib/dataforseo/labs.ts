@@ -110,14 +110,17 @@ export async function getKeywordsForSite(
     tasks?: Array<{
       result?: Array<{
         items?: Array<{
-          keyword_data?: {
-            keyword?: string
-            keyword_info?: {
-              search_volume?: number | null
-              cpc?:           number | null
-              competition?:   number | null
-            }
+          keyword?: string
+          keyword_info?: {
+            search_volume?: number | null
+            cpc?:           number | null
+            competition?:   number | null
+          }
+          keyword_properties?: {
             keyword_difficulty?: number | null
+          }
+          search_intent_info?: {
+            main_intent?: string | null
           }
         }>
       }>
@@ -347,12 +350,12 @@ export async function getKeywordIdeas(
       method:  'POST',
       headers: { Authorization: authHeader(), 'Content-Type': 'application/json' },
       body: JSON.stringify([
-        {
-          keyword:       seed,
-          location_code: locationCode,
-          language_code: DEFAULT_LANGUAGE_CODE,
-          limit,
-        },
+      {
+        keywords:      [seed],
+        location_code: locationCode,
+        language_code: DEFAULT_LANGUAGE_CODE,
+        limit,
+      },
       ]),
     },
   )
@@ -382,18 +385,89 @@ export async function getKeywordIdeas(
   const items = json.tasks?.[0]?.result?.[0]?.items ?? []
 
   return items
-    .filter(it => it.keyword_data?.keyword)
-    .filter(it => !questionsOnly || QUESTION_STARTERS.test(it.keyword_data!.keyword!))
+    .filter(it => it.keyword)
+    .filter(it => !questionsOnly || QUESTION_STARTERS.test(it.keyword!))
     .map(it => {
-      const kd  = it.keyword_data!
-      const cpc = kd.keyword_info?.cpc ?? null
+      const cpc = it.keyword_info?.cpc ?? null
+      const intent = normalizeDataForSeoIntent(it.search_intent_info?.main_intent, cpc)
       return {
-        keyword:            kd.keyword ?? '',
-        search_volume:      kd.keyword_info?.search_volume ?? null,
-        keyword_difficulty: kd.keyword_difficulty ?? null,
+        keyword:            it.keyword ?? '',
+        search_volume:      it.keyword_info?.search_volume ?? null,
+        keyword_difficulty: it.keyword_properties?.keyword_difficulty ?? null,
         cpc,
-        competition:        kd.keyword_info?.competition ?? null,
-        intent:             deriveIntent(cpc),
+        competition:        it.keyword_info?.competition ?? null,
+        intent,
+        position:           null,
+      }
+    })
+}
+
+/**
+ * Keyword suggestions for a seed term - long-tail keywords that contain the
+ * specified phrase, useful for service-led opportunity baselines.
+ *
+ * DataForSEO endpoint: /dataforseo_labs/google/keyword_suggestions/live
+ */
+export async function getKeywordSuggestions(
+  seed: string,
+  locationCode: number = DEFAULT_LOCATION_CODE,
+  limit: number = 50,
+  includeSeedKeyword = false,
+): Promise<LabsKeyword[]> {
+  const res = await fetch(
+    `${DATAFORSEO_API_BASE}/dataforseo_labs/google/keyword_suggestions/live`,
+    {
+      method:  'POST',
+      headers: { Authorization: authHeader(), 'Content-Type': 'application/json' },
+      body: JSON.stringify([
+        {
+          keyword:              seed,
+          location_code:        locationCode,
+          language_code:        DEFAULT_LANGUAGE_CODE,
+          limit,
+          include_seed_keyword: includeSeedKeyword,
+        },
+      ]),
+    },
+  )
+
+  if (!res.ok) throw new Error(`DataForSEO keyword_suggestions error: ${res.status}`)
+
+  const json = await res.json() as {
+    tasks?: Array<{
+      result?: Array<{
+        items?: Array<{
+          keyword?: string
+          keyword_info?: {
+            search_volume?: number | null
+            cpc?:           number | null
+            competition?:   number | null
+          }
+          keyword_properties?: {
+            keyword_difficulty?: number | null
+          }
+          search_intent_info?: {
+            main_intent?: string | null
+          }
+        }>
+      }>
+    }>
+  }
+
+  const items = json.tasks?.[0]?.result?.[0]?.items ?? []
+
+  return items
+    .filter(it => it.keyword)
+    .map(it => {
+      const cpc = it.keyword_info?.cpc ?? null
+      const intent = normalizeDataForSeoIntent(it.search_intent_info?.main_intent, cpc)
+      return {
+        keyword:            it.keyword ?? '',
+        search_volume:      it.keyword_info?.search_volume ?? null,
+        keyword_difficulty: it.keyword_properties?.keyword_difficulty ?? null,
+        cpc,
+        competition:        it.keyword_info?.competition ?? null,
+        intent,
         position:           null,
       }
     })
@@ -760,4 +834,12 @@ function deriveIntent(cpc: number | null): string {
   if (cpc < 1)  return 'informational'
   if (cpc < 3)  return 'commercial'
   return 'transactional'
+}
+
+function normalizeDataForSeoIntent(intent: string | null | undefined, cpc: number | null): string {
+  if (intent === 'informational' || intent === 'commercial' || intent === 'transactional' || intent === 'navigational') {
+    return intent
+  }
+
+  return deriveIntent(cpc)
 }

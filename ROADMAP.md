@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-01 20:18 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-01 21:20 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -18,6 +18,11 @@
 - [x] **P29.SEO.7** training enquiry tracking - add a lightweight handoff and CTA click tracking so the training page keeps converting without introducing a full form builder.
 - [x] **P29.SEO.8** training follow-up polish - add a dedicated thank-you state and next-step copy for training enquiries so the handoff feels closed-loop without growing into a CRM.
 - [x] **P29.SEO.9** training conversion tidy-up - add one more small follow-through step only if needed after the new thank-you state proves useful.
+- [x] **P29.SEO.10** AU/NZ keyword gap baseline - use DataForSEO to discover Magic Engine's public-domain keyword gap across Australia and New Zealand, focusing on AI upgrade / GEO / training / ads intents, and keep the first pass as a reusable research report rather than a large content build-out.
+- [x] **P29.SEO.11** AU/NZ service page map - turn the baseline into a focused page/brief map for `ai marketing agency`, `ai training for business`, `ai automation for business`, and GEO so the next content pass stays narrow and useful.
+- [x] **P29.SEO.12** AU/NZ SME service briefs - draft the first small-business-first page briefs from the map so we can publish focused service pages without drifting into a large-agency positioning.
+- [x] **P29.SEO.13** AU/NZ SME service page drafts - turn the four briefs into first-pass public page copy for `/ai-marketing-smes`, `/ai-training`, `/ai-automation`, and optionally a GEO landing refinement if needed.
+- [ ] **P29.SEO.14** AU/NZ SME service page QA pass - verify titles, canonicals, internal links, sitemap exposure, and only make tiny fixes if the new service pages need one more polish pass.
 
 ### Website Ads Launch Prep - 2026-06-01
 
@@ -3109,13 +3114,6 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 
 ## 9. 功能完成日志
 
-### 2026-06-01（Phase 22.A.2 ✅ GA4 → flywheel_metrics 闭环 + cron 集成测试）
-
-- **P22.A.2** — GA4 每日采集 → `flywheel_metrics` 通路在 main 已运行（`google-data-pullback-daily` cron 每天 3am UTC，`fetchGa4Snapshot()` → `ga4_traffic_snapshots` upsert → `Ga4Adapter.pullMetrics()` 写入 5 个 GA4 metric_key：sessions/users/pageviews/avg_session_duration/bounce_rate）
-- 本 PR 补 `src/app/api/cron/google-data-pullback-daily/__tests__/route.test.ts`（8 单测，覆盖 auth gate + 空 work map + GA4 happy path + snapshot null + flywheel_metrics 写失败 non-fatal + bad config skip），让 P22.A.2 在 cron route 级别有显式回归保护
-- AnomalyDetector 已有 `seo-ga4-sessions-drop` / `seo-ga4-bounce-rate-spike` 两条 GA4 规则消费这些指标，端到端闭环达成
-- 旧 PR #196（feat/phase-22-a2-ga4-flywheel）已被 PR #206 (Phase 22.B) + 本 PR 取代，建议关闭
-
 ### 2026-06-01（Website SEO Optimization P29.SEO.6 完成）
 
 - **P29.SEO.5** — 首个公开 training landing page 上线：/training 路由、双语培训定位、AU/NZ 本地 CTA、FAQ 和 sitemap 内链全部接通
@@ -3623,3 +3621,21 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 
 - **Phase 7.3.1-5** — 双信号博客生成库（安全修复）
   `feat(blog-generation): dual-signal blog engine with SEO/GEO optimization [P7.3.1-5]`
+### 2026-06-01（Website SEO Gap Research P29.SEO.10 完成）
+
+- `docs/seo-gap-au-nz-2026-06-01.md` 落成，Magic Engine 公共站 AU/NZ 机会词 baseline 已整理成可复用报告
+
+### 2026-06-01 (Website SEO Service Page Map P29.SEO.11 ���)
+
+- docs/seo-service-page-map-au-nz-2026-06-01.md ��ɣ�ҳ�涨λ�ĳ� SME-first�����ʹ� agency ���澺��
+
+
+### 2026-06-01 (Website SEO SME Service Briefs P29.SEO.12 ���)
+
+- docs/seo-sme-service-briefs-au-nz-2026-06-01.md ��ɣ��ĸ� service brief ����ȷ SME-first ������ AU/NZ ҳ��˳��
+
+### 2026-06-01 (Website SEO SME Service Page Drafts P29.SEO.13 完成)
+
+- `website/ai-training.html`、`website/ai-automation.html`、`website/ai-marketing-smes.html` 以及 `/cn/` 对应页已上线，SME-first public surface 补齐
+- `website/index.html`、`website/cn/index.html`、`website/robots.txt`、`website/sitemap.xml` 已同步新页面入口与抓取路径
+
