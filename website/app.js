@@ -91,6 +91,9 @@ const PAGE_TITLES = {
   '/ai-marketing-smes': {
     zh: 'AI营销 — 面向澳洲和新西兰 SME | Magic Engine',
   },
+  '/ai-search': {
+    zh: 'AI 搜索可见度 - 面向 AU/NZ 企业 | Magic Engine',
+  },
   '/about': {
     zh: '关于 Magic Engine — AI 升级、GEO 与培训',
   },
