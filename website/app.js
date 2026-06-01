@@ -1,26 +1,152 @@
 /* Magic Engine — Marketing Site JS
    Responsibilities:
-   1. EN/中文 language toggle
+   1. English / Chinese page routing
    2. Discover state machine (form → progress → result)
    3. API calls to /api/scout and /api/report
    4. Hero URL form redirect
 */
 
-/* ── Language toggle ── */
-let currentLang = 'en';
+const CN_PREFIX = '/cn';
 
-function toggleLang() {
-  currentLang = currentLang === 'en' ? 'zh' : 'en';
+/* ── Language routing ── */
+function isChinesePath(pathname = window.location.pathname) {
+  const normalized = normalizePath(pathname);
+  return normalized === CN_PREFIX || normalized.startsWith(`${CN_PREFIX}/`);
+}
+
+function normalizePath(pathname) {
+  if (!pathname) return '/';
+  let next = pathname;
+  if (next.endsWith('/index.html')) {
+    next = next.slice(0, -('/index.html'.length)) || '/';
+  } else if (next.endsWith('.html')) {
+    next = next.slice(0, -5) || '/';
+  }
+  return next === '' ? '/' : next;
+}
+
+function stripCnPrefix(pathname) {
+  const normalized = normalizePath(pathname);
+  if (normalized === CN_PREFIX) return '/';
+  if (normalized.startsWith(`${CN_PREFIX}/`)) return normalized.slice(CN_PREFIX.length) || '/';
+  return normalized;
+}
+
+function localizePath(pathname, lang) {
+  const clean = stripCnPrefix(pathname);
+  if (lang === 'zh') {
+    return clean === '/' ? '/cn.html' : `${CN_PREFIX}${clean}`;
+  }
+  return clean;
+}
+
+let currentLang = isChinesePath(window.location.pathname) ? 'zh' : 'en';
+
+function shouldRewriteLink(href) {
+  if (!href) return false;
+  return !href.startsWith('http')
+    && !href.startsWith('mailto:')
+    && !href.startsWith('tel:')
+    && !href.startsWith('javascript:')
+    && !href.startsWith('#');
+}
+
+function localizeHref(href, lang) {
+  if (!shouldRewriteLink(href)) return href;
+
+  const url = new URL(href, window.location.origin);
+  const pathname = normalizePath(url.pathname);
+
+  if (
+    pathname.startsWith('/api/') ||
+    pathname.startsWith('/assets/') ||
+    pathname === '/app.js' ||
+    pathname === '/styles.css' ||
+    pathname === '/robots.txt' ||
+    pathname === '/sitemap.xml'
+  ) {
+    return href;
+  }
+
+  url.pathname = localizePath(pathname, lang);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+const PAGE_TITLES = {
+  '/': {
+    zh: 'Magic Engine — AI 升级、GEO 与培训',
+  },
+  '/geo': {
+    zh: 'GEO — AI 可见度（澳洲和新西兰） | Magic Engine',
+  },
+  '/training': {
+    zh: '培训 — 面向澳洲和新西兰团队 | Magic Engine',
+  },
+  '/about': {
+    zh: '关于 Magic Engine — AI 升级、GEO 与培训',
+  },
+  '/discover': {
+    zh: '免费诊断 — Magic Engine',
+  },
+  '/ads': {
+    zh: '广告投放启动 — Magic Engine',
+  },
+  '/features': {
+    zh: '功能 — Magic Engine',
+  },
+  '/privacy': {
+    zh: '隐私政策 — Magic Engine',
+  },
+  '/terms': {
+    zh: '服务条款 — Magic Engine',
+  },
+};
+
+function updatePageMeta(lang) {
+  if (lang !== 'zh') return;
+
+  const pageKey = stripCnPrefix(window.location.pathname);
+  const meta = PAGE_TITLES[pageKey];
+  if (meta?.zh) document.title = meta.zh;
+}
+
+function rewritePageLinks(lang) {
+  document.querySelectorAll('a[href]').forEach(link => {
+    const href = link.getAttribute('href');
+    if (!href) return;
+    const nextHref = localizeHref(href, lang);
+    if (nextHref !== href) link.setAttribute('href', nextHref);
+  });
+}
+
+function applyLanguage(lang) {
+  currentLang = lang === 'zh' ? 'zh' : 'en';
+  document.documentElement.lang = currentLang === 'zh' ? 'zh' : 'en';
+
   const toggle = document.getElementById('lang-toggle');
   if (toggle) toggle.textContent = currentLang === 'en' ? '中文' : 'EN';
+
   document.querySelectorAll('[data-en]').forEach(el => {
     const val = el.getAttribute(`data-${currentLang}`) || el.getAttribute('data-en');
+    if (!val) return;
     if (el.tagName === 'INPUT' && el.getAttribute('placeholder')) {
       el.placeholder = val;
     } else {
       el.textContent = val;
     }
   });
+
+  updatePageMeta(currentLang);
+  rewritePageLinks(currentLang);
+}
+
+function toggleLang() {
+  const nextLang = currentLang === 'en' ? 'zh' : 'en';
+  const target = new URL(window.location.href);
+  target.pathname = localizePath(window.location.pathname, nextLang);
+  target.search = window.location.search;
+  target.hash = window.location.hash;
+  window.location.href = target.toString();
 }
 
 /* ── Demo data (shown when API fails or times out) ── */
@@ -299,10 +425,11 @@ function toggleNoWebsite() {
 function handleHeroSubmit(e) {
   e.preventDefault();
   const url = document.getElementById('hero-url-input')?.value?.trim() || '';
+  const discoverPath = localizePath('/discover', currentLang);
   if (url) {
-    window.location.href = `/discover?url=${encodeURIComponent(url)}`;
+    window.location.href = `${discoverPath}?url=${encodeURIComponent(url)}`;
   } else {
-    window.location.href = '/discover';
+    window.location.href = discoverPath;
   }
 }
 
@@ -361,6 +488,8 @@ document.addEventListener('DOMContentLoaded', () => {
     mobileNav.querySelectorAll('a').forEach(a => a.addEventListener('click', closeMobileMenu));
     navEl.insertAdjacentElement('afterend', mobileNav);
   }
+
+  applyLanguage(currentLang);
 
   // Hero form
   document.getElementById('hero-url-form')?.addEventListener('submit', handleHeroSubmit);
