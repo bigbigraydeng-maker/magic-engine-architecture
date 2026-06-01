@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-01 03:51 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-01 16:06 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -23,6 +23,12 @@
 
 - [x] **P29.ADS.1** public ads intake path - add a lightweight AU/NZ paid-media CTA and contact-source handling so campaign traffic lands on the same handoff without building a separate CRM or portal.
 - [ ] **P29.ADS.2** optional ads landing page - if paid-media demand justifies it, add a dedicated `/ads` landing page later; keep the first launch loop light for now.
+
+### Website GEO Visibility - 2026-06-01
+
+- [x] **P29.GEO.1** public GEO landing page - add a lightweight `/geo` page that explains AI visibility / GEO for AU/NZ businesses in plain English and Chinese with FAQ and a clear CTA.
+- [x] **P29.GEO.2** homepage linkage - add one small GEO mention/link on the homepage and include `/geo` in sitemap/navigation so the new page is discoverable without overhauling the public IA.
+- [ ] **P29.GEO.3** optional GEO support content - add one small supporting FAQ or glossary page only if the `/geo` page needs extra search support later; keep the public IA lean for now.
 
 ### Active hotfix registration - 2026-05-25
 
@@ -3116,6 +3122,9 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 
 ### 2026-06-01（Website Ads Launch Prep P29.ADS.1 完成）
 - 首页补了 ads launch CTA，contact flow 也能识别 paid-media enquiry
+
+### 2026-06-01（Website GEO Visibility P29.GEO.1-2 完成）
+- 新增 /geo 公共页，首页和 sitemap 都接上了 GEO 导流
 
 ### 2026-06-01（Phase 29 战略决策登记 + P21.B 看板来源标记上线）
 

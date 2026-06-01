@@ -253,6 +253,7 @@ export default async function HomePage() {
               <a href="#product">Product</a>
               <a href="#visibility">AI visibility</a>
               <a href="#faq">FAQ</a>
+              <Link href="/geo">GEO</Link>
               <Link href="/training">Training</Link>
               <Link href="/about">About</Link>
               <Link href="/portal/login">Portal</Link>
@@ -292,6 +293,12 @@ export default async function HomePage() {
                 className="flex h-12 items-center rounded-lg border border-white/20 px-5 text-sm font-bold text-white"
               >
                 Explore training
+              </Link>
+              <Link
+                href="/geo"
+                className="flex h-12 items-center rounded-lg border border-cyan-300/40 px-5 text-sm font-bold text-cyan-100"
+              >
+                Explore GEO
               </Link>
               <Link
                 href="/contact?source=ads"
@@ -341,6 +348,13 @@ export default async function HomePage() {
               Search engines and answer engines need clear entities, plain answers, and a clean
               structure. This homepage now does that with direct service language, bilingual
               messaging, structured data, and a simple FAQ.
+            </p>
+            <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-600">
+              If you want the GEO layer in one place, start with the{' '}
+              <Link href="/geo" className="font-bold underline underline-offset-4">
+                GEO page
+              </Link>{' '}
+              and we can tune from there.
             </p>
             <ul className="mt-5 grid gap-3 text-sm leading-6 text-slate-700">
               {visibilitySignals.map(signal => (
