@@ -215,18 +215,17 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> Last updated: 2026-06-02 (P29.C.3 content generation gates complete; next is execution dashboard gate)
+> Last updated: 2026-06-02 (P29.C.4 execution dashboard gate complete; next is Launch Hub gate)
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P29.C.4** | Connect Brief gate to execution dashboard top area | HIGH |
 | **P29.C.5** | Connect Brief gate to Launch Hub / workspace entry points | MEDIUM |
 | **P29.SEO.17** | GSC indexing watch for sitemap, hreflang, and SME service pages | MEDIUM |
 | **P29.GEO.7** | Tiny AU/NZ AI search local use-case page if snippet bank still needs concrete scenarios | LOW |
 
-**Status check (2026-06-02):** P29.SEO.9, P29.ADS.1-2, P29.GEO.1-6, P29.WEB.1-2, P29.SEO.14-16, P29.E.1-6, and P29.C.1-3 are done. Brief gate now covers Blog, Marketing Plan, single social generation, and Reels Studio for self_serve users with incomplete briefs. Growth work keeps P29.GEO.7 and P29.SEO.17 open, but the next product pass should connect the gate to the execution dashboard top area. Next session first line:
+**Status check (2026-06-02):** P29.SEO.9, P29.ADS.1-2, P29.GEO.1-6, P29.WEB.1-2, P29.SEO.14-16, P29.E.1-6, and P29.C.1-4 are done. Brief gate now covers Blog, Marketing Plan, single social generation, Reels Studio, and the execution dashboard top action area for self_serve users with incomplete briefs. Growth work keeps P29.GEO.7 and P29.SEO.17 open, but the next product pass should connect the gate to Launch Hub / workspace entry points. Next session first line:
 
-- `继续 Phase 29 Brief Gate P29.C.4`
+- `继续 Phase 29 Brief Gate P29.C.5`
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 
 **更新规则**（每次上线新功能）：

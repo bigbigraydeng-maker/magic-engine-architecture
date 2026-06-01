@@ -2018,7 +2018,6 @@ export default function ExecutionPage() {
 
   // ── Main render ───────────────────────────────────────────────────────────
   return (
-    <BriefGateBanner featureLabel="execution kanban">
     <div className="min-h-screen bg-[#f6f7f2]">
       {/* 悬浮：图片后台生成 toast — 关抽屉/刷新页面都不影响 */}
       {bgImageGenCount > 0 && (
@@ -2052,75 +2051,77 @@ export default function ExecutionPage() {
             <span className="font-black text-slate-800">执行看板</span>
           </nav>
         </div>
-        <div className="mx-auto flex max-w-7xl flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <h1 className="text-xl font-black text-slate-950">{clientName ?? '执行看板'}</h1>
-            <p className="mt-0.5 text-xs font-semibold text-slate-500">按阶段跟踪处方落地、内容生成与执行证明</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {/* 主操作：录入工作 */}
-            <button
-              onClick={() => setShowManualEntry(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 transition-colors"
-            >
-              ＋ 录入工作
-            </button>
-            {/* 主操作：Marketing Plan */}
-            <Link
-              href={`/dashboard/clients/${clientId}/marketing-plan`}
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-cyan-200 bg-cyan-50 px-3 text-xs font-black text-cyan-800 transition-colors hover:bg-cyan-100"
-            >
-              Marketing Plan
-            </Link>
-            {/* 项目级鲁班 — 常驻按钮 */}
-            <button
-              onClick={() => setProjectLubanOpen(true)}
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 text-xs font-black text-violet-800 transition-colors hover:bg-violet-100"
-            >
-              🤖 鲁班
-            </button>
-            {/* 溢出菜单 */}
-            <div className="relative">
+        <BriefGateBanner clientId={clientId} featureLabel="execution dashboard actions">
+          <div className="mx-auto flex max-w-7xl flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h1 className="text-xl font-black text-slate-950">{clientName ?? '执行看板'}</h1>
+              <p className="mt-0.5 text-xs font-semibold text-slate-500">按阶段跟踪处方落地、内容生成与执行证明</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* 主操作：录入工作 */}
               <button
-                onClick={() => setShowOverflow(v => !v)}
-                className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-black text-slate-700 transition-colors hover:border-slate-300 hover:text-slate-950"
+                onClick={() => setShowManualEntry(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 transition-colors"
               >
-                ···
+                ＋ 录入工作
               </button>
-              {showOverflow && (
-                <>
-                  {/* 透明遮罩：点击外部关闭 */}
-                  <div className="fixed inset-0 z-10" onClick={() => setShowOverflow(false)} />
-                  <div className="absolute right-0 top-full z-20 mt-1 w-44 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
-                    <button
-                      onClick={() => { setReviewOpen(true); setShowOverflow(false) }}
-                      className="w-full px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                    >
-                      复盘
-                    </button>
-                    {items.length > 0 && (
+              {/* 主操作：Marketing Plan */}
+              <Link
+                href={`/dashboard/clients/${clientId}/marketing-plan`}
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-cyan-200 bg-cyan-50 px-3 text-xs font-black text-cyan-800 transition-colors hover:bg-cyan-100"
+              >
+                Marketing Plan
+              </Link>
+              {/* 项目级鲁班 — 常驻按钮 */}
+              <button
+                onClick={() => setProjectLubanOpen(true)}
+                className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 text-xs font-black text-violet-800 transition-colors hover:bg-violet-100"
+              >
+                🤖 鲁班
+              </button>
+              {/* 溢出菜单 */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowOverflow(v => !v)}
+                  className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-xs font-black text-slate-700 transition-colors hover:border-slate-300 hover:text-slate-950"
+                >
+                  ···
+                </button>
+                {showOverflow && (
+                  <>
+                    {/* 透明遮罩：点击外部关闭 */}
+                    <div className="fixed inset-0 z-10" onClick={() => setShowOverflow(false)} />
+                    <div className="absolute right-0 top-full z-20 mt-1 w-44 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
                       <button
-                        onClick={() => { void handleDownloadDocx(); setShowOverflow(false) }}
-                        disabled={isDocxLoading}
-                        className="w-full px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        onClick={() => { setReviewOpen(true); setShowOverflow(false) }}
+                        className="w-full px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50"
                       >
-                        {isDocxLoading ? '下载中…' : '↓ 下载执行方案'}
+                        复盘
                       </button>
-                    )}
-                    <div className="my-1 border-t border-slate-100" />
-                    <Link
-                      href={`/dashboard/clients/${clientId}/prescription/new`}
-                      onClick={() => setShowOverflow(false)}
-                      className="block px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                    >
-                      ＋ 新处方
-                    </Link>
-                  </div>
-                </>
-              )}
+                      {items.length > 0 && (
+                        <button
+                          onClick={() => { void handleDownloadDocx(); setShowOverflow(false) }}
+                          disabled={isDocxLoading}
+                          className="w-full px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          {isDocxLoading ? '下载中…' : '↓ 下载执行方案'}
+                        </button>
+                      )}
+                      <div className="my-1 border-t border-slate-100" />
+                      <Link
+                        href={`/dashboard/clients/${clientId}/prescription/new`}
+                        onClick={() => setShowOverflow(false)}
+                        className="block px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        ＋ 新处方
+                      </Link>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        </BriefGateBanner>
       </div>
 
       <div className="mx-auto max-w-7xl space-y-4 px-4 py-6 transition-all duration-200 md:px-6">
@@ -2367,6 +2368,5 @@ export default function ExecutionPage() {
         onCreated={() => { setShowManualEntry(false); void fetchItems(true) }}
       />
     </div>
-    </BriefGateBanner>
   )
 }
