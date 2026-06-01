@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-01 21:20 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-01 23:13 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -23,6 +23,7 @@
 - [x] **P29.SEO.12** AU/NZ SME service briefs - draft the first small-business-first page briefs from the map so we can publish focused service pages without drifting into a large-agency positioning.
 - [x] **P29.SEO.13** AU/NZ SME service page drafts - turn the four briefs into first-pass public page copy for `/ai-marketing-smes`, `/ai-training`, `/ai-automation`, and optionally a GEO landing refinement if needed.
 - [ ] **P29.SEO.14** AU/NZ SME service page QA pass - verify titles, canonicals, internal links, sitemap exposure, and only make tiny fixes if the new service pages need one more polish pass.
+- [x] **P29.SEO.15** AU/NZ bilingual keyword expansion - widen the seed set around AI infrastructure, AI training, corporate AI upgrade, and automation AI, then map English and Chinese variants to page intent without drifting into large-agency positioning.
 
 ### Website Ads Launch Prep - 2026-06-01
 
@@ -3638,4 +3639,9 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 
 - `website/ai-training.html`、`website/ai-automation.html`、`website/ai-marketing-smes.html` 以及 `/cn/` 对应页已上线，SME-first public surface 补齐
 - `website/index.html`、`website/cn/index.html`、`website/robots.txt`、`website/sitemap.xml` 已同步新页面入口与抓取路径
+
+### 2026-06-01 (Website Bilingual Keyword Expansion P29.SEO.15 完成)
+
+- `docs/seo-bilingual-keyword-clusters-au-nz-2026-06-01.md` 落成，AI infrastructure / training / corporate upgrade / automation 的中英关键词簇已整理
+- 英文词组以 DataForSEO AU/NZ 量级为准，中文词组作为双语落页映射与 FAQ/H1 备选
 
