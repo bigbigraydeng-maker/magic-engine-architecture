@@ -1,5 +1,12 @@
 import { calculateOpportunityScore, recommendPageType } from '@/lib/scoring/opportunity-score'
-import { getKeywordsGap, getSerpCompetitors, type LabsCompetitor, type LabsKeyword } from '@/lib/dataforseo/labs'
+import {
+  getKeywordIdeas,
+  getKeywordSuggestions,
+  getKeywordsGap,
+  getSerpCompetitors,
+  type LabsCompetitor,
+  type LabsKeyword,
+} from '@/lib/dataforseo/labs'
 import type { KeywordIntent, PageType } from '@/types/magic-engine'
 
 export type PublicGapMarket = 'au' | 'nz'
@@ -38,10 +45,13 @@ export interface PublicGapMarketResult {
   location_code: number
   competitors: LabsCompetitor[]
   keyword_gap: PublicGapKeyword[]
+  seed_opportunities: PublicGapKeyword[]
   summary: {
     competitor_count: number
     gap_count: number
+    seed_opportunity_count: number
     top_keyword_count: number
+    fallback_used: boolean
   }
 }
 
@@ -93,15 +103,22 @@ export async function getPublicKeywordGapMarket(
     })
     .slice(0, limit)
 
+  const seedOpportunities = keywordGap.length > 0
+    ? []
+    : await getSeedOpportunities(market, limit)
+
   return {
     market,
     location_code: locationCode,
     competitors: competitors.slice(0, 5),
     keyword_gap: keywordGap,
+    seed_opportunities: seedOpportunities,
     summary: {
       competitor_count: competitors.length,
       gap_count: gapKeywords.length,
+      seed_opportunity_count: seedOpportunities.length,
       top_keyword_count: keywordGap.length,
+      fallback_used: keywordGap.length === 0,
     },
   }
 }
@@ -131,4 +148,61 @@ function normalizeDomain(raw: string): string {
 function normalizeIntent(intent?: string | null): KeywordIntent {
   if (intent === 'commercial' || intent === 'transactional' || intent === 'navigational') return intent
   return 'informational'
+}
+
+const PUBLIC_GAP_SEEDS: Record<PublicGapMarket, string[]> = {
+  au: [
+    'ai upgrade for business',
+    'generative engine optimization',
+    'geo ai visibility',
+    'ai training for business',
+    'ai workshop for business',
+    'ai consulting for business',
+    'ai strategy for business',
+    'ai marketing agency',
+  ],
+  nz: [
+    'ai upgrade for business',
+    'generative engine optimization',
+    'geo ai visibility',
+    'ai training for business',
+    'ai workshop for business',
+    'ai consulting for business',
+    'ai strategy for business',
+    'ai marketing agency',
+  ],
+}
+
+async function getSeedOpportunities(
+  market: PublicGapMarket,
+  limit: number,
+): Promise<PublicGapKeyword[]> {
+  const locationCode = LOCATION_CODE_BY_MARKET[market]
+  const seeds = PUBLIC_GAP_SEEDS[market]
+  const perSeedLimit = Math.max(10, Math.ceil(limit / seeds.length) + 5)
+
+  const keywordBatches = await Promise.allSettled(
+    seeds.map(async seed => {
+      const ideas = await getKeywordSuggestions(seed, locationCode, perSeedLimit)
+      return ideas.map(kw => toPublicGapKeyword(kw, [seed]))
+    }),
+  )
+
+  const byKeyword = new Map<string, PublicGapKeyword>()
+  for (const batch of keywordBatches) {
+    if (batch.status !== 'fulfilled') continue
+    for (const kw of batch.value) {
+      const existing = byKeyword.get(kw.keyword)
+      if (!existing || kw.opportunity_score > existing.opportunity_score || (kw.opportunity_score === existing.opportunity_score && kw.volume > existing.volume)) {
+        byKeyword.set(kw.keyword, kw)
+      }
+    }
+  }
+
+  return [...byKeyword.values()]
+    .sort((a, b) => {
+      if (b.opportunity_score !== a.opportunity_score) return b.opportunity_score - a.opportunity_score
+      return b.volume - a.volume
+    })
+    .slice(0, limit)
 }

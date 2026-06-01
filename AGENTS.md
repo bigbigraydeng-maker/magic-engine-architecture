@@ -215,15 +215,15 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-06-01（Website SEO Gap Research P29.SEO.10 已登记，下一步先做 AU/NZ keyword gap baseline）
+> 最后更新：2026-06-01（Website SEO Gap Research P29.SEO.10 已完成，下一步做 AU/NZ service page map）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P29.SEO.10** | AU/NZ keyword gap baseline：先用 DataForSEO 抓 Magic Engine 公共站在澳洲 / 新西兰的 keyword gap，输出可复用研究底稿，暂不扩成内容大站 | ⭐⭐⭐ |
+| **P29.SEO.11** | AU/NZ service page map：把 baseline 收敛成 `ai marketing agency`、`ai training for business`、`ai automation for business`、GEO 的小型页面/brief map | ⭐⭐⭐ |
 
-**状态校准（2026-06-01）**：P29.SEO.9 已完成，P29.ADS.1 已完成，P29.ADS.2 已完成，P29.GEO.1-3 已完成，P29.WEB.1 已完成，P29.WEB.2 已完成；当前先做 AU/NZ keyword gap baseline。下一 session 第一句话：
+**状态校准（2026-06-01）**：P29.SEO.9 已完成，P29.ADS.1 已完成，P29.ADS.2 已完成，P29.GEO.1-3 已完成，P29.WEB.1 已完成，P29.WEB.2 已完成；当前转向 AU/NZ service page map。下一 session 第一句话：
 
-- `继续 Website SEO Gap Research P29.SEO.10`
+- `继续 Website SEO Gap Research P29.SEO.11`
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 
 **更新规则**（每次上线新功能）：
