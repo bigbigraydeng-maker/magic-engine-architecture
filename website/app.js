@@ -82,6 +82,15 @@ const PAGE_TITLES = {
   '/training': {
     zh: '培训 — 面向澳洲和新西兰团队 | Magic Engine',
   },
+  '/ai-training': {
+    zh: 'AI培训 — 面向澳洲和新西兰团队 | Magic Engine',
+  },
+  '/ai-automation': {
+    zh: 'AI自动化 — 面向澳洲和新西兰团队 | Magic Engine',
+  },
+  '/ai-marketing-smes': {
+    zh: 'AI营销 — 面向澳洲和新西兰 SME | Magic Engine',
+  },
   '/about': {
     zh: '关于 Magic Engine — AI 升级、GEO 与培训',
   },
