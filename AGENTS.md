@@ -215,15 +215,15 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-06-01（Website SEO Service Page Map P29.SEO.11 已完成，下一步做 AU/NZ SME service briefs）
+> 最后更新：2026-06-01（Website SEO SME Service Briefs P29.SEO.12 已完成，下一步做 AU/NZ SME service page drafts）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P29.SEO.12** | AU/NZ SME service briefs：把 page map 落成面向小型和中型企业的首批页面草案，避免继续往传统大 agency 方向扩展 | ⭐⭐⭐ |
+| **P29.SEO.13** | AU/NZ SME service page drafts：把 briefs 落成首批公开页面草稿，保留 SME-first 语气与 AU/NZ 定位 | ⭐⭐⭐ |
 
-**状态校准（2026-06-01）**：P29.SEO.9 已完成，P29.ADS.1 已完成，P29.ADS.2 已完成，P29.GEO.1-3 已完成，P29.WEB.1 已完成，P29.WEB.2 已完成；当前转向 AU/NZ SME service briefs。下一 session 第一句话：
+**状态校准（2026-06-01）**：P29.SEO.9 已完成，P29.ADS.1 已完成，P29.ADS.2 已完成，P29.GEO.1-3 已完成，P29.WEB.1 已完成，P29.WEB.2 已完成；当前转向 AU/NZ SME service page drafts。下一 session 第一句话：
 
-- `继续 Website SEO Gap Research P29.SEO.12`
+- `继续 Website SEO Gap Research P29.SEO.13`
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 
 **更新规则**（每次上线新功能）：
