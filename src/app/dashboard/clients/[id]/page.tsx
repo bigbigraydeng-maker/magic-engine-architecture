@@ -12,6 +12,7 @@ import { NextStepCard, type DiscoveryStatus, type PrescriptionStatus } from './_
 import type { ClientDiscoveryRow } from '@/lib/zhangqian/types';
 import { ClientDataTab } from './_components/ClientDataTab';
 import { LocaleConfirmBanner } from './_components/LocaleConfirmBanner';
+import { BriefGateBanner } from '@/components/brief/BriefGateBanner';
 
 
 interface Client {
@@ -564,10 +565,12 @@ export default function ClientDetailPage() {
           {/* ── 推广活动（Campaign 基座）──────────────────────────────────────────
               Master Brief × Campaign = FDE 工作的上下文基座。
               所有内容生产（社媒/博客/广告）应当在某个活跃 Campaign 下进行。 */}
-          <section>
-            <p className="mb-3 text-xs font-black uppercase tracking-[0.14em] text-me-ochre">推广活动</p>
-            <ContentHub clientId={clientId} />
-          </section>
+          <BriefGateBanner clientId={clientId} featureLabel="workspace production entry points">
+            <section>
+              <p className="mb-3 text-xs font-black uppercase tracking-[0.14em] text-me-ochre">推广活动</p>
+              <ContentHub clientId={clientId} />
+            </section>
+          </BriefGateBanner>
         </>
       )}
 
@@ -582,21 +585,23 @@ export default function ClientDetailPage() {
       {activeTab === 'tools' && (
         <>
           {/* Zone A: 内容生产 */}
-          <section>
-            <p className="mb-3 text-xs font-black uppercase tracking-[0.14em] text-me-ochre">内容生产</p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              <ToolCard href={`/dashboard/clients/${clientId}/marketing-plan`} title="Marketing Plan" desc="AI 生成营销计划 → 派发任务到鲁班"   badge="in_house" />
-              <ToolCard href={`/dashboard/clients/${clientId}/blog`}           title="博客"           desc="双信号博客生产与管理"            badge="in_house" />
-              <ToolCard href={`/dashboard/content?client=${clientId}`}         title="社媒矩阵"       desc="Campaign · 排期 · 多平台发布"    badge="in_house" />
-              <ToolCard href={`/dashboard/geo-composer/${clientId}`}           title="GEO Composer"  desc="部署 AI 搜索优化指令"            badge="in_house" />
-              <ToolCard href={`/dashboard/ai-visibility/${clientId}`}          title="AI 可见度追踪" desc="监控 AI 搜索中的品牌曝光"         badge="in_house" />
-              <ToolCard href={`/dashboard/clients/${clientId}/connectors`}     title="广告连接器"    desc="连接 Meta · Google 广告账户"      badge="in_house" />
-              <ToolCard href={`/dashboard/clients/${clientId}/assets`}          title="素材库"        desc="上传图片 → Vision AI 自动分析 → Hook/Middle/CTA 评分 → 视频提示词"  badge="in_house" />
-              <ToolCard href={`/dashboard/visuals?client=${clientId}`}         title="Launch Hub"    desc="Reels · 图片 · 视频素材生产"      badge="in_house" />
-              <ToolCard href={`/dashboard/clients/${clientId}/production`}     title="内容生产包"    desc="查看各维度内容包状态 · 生成内容后自动归集" badge="in_house" />
-              <ToolCard onClick={() => setGenerationOpen(true)}              title="生成单条内容" desc="按关键词 · 视频 · 话题快速生成一条社媒帖子"  badge="in_house" />
-            </div>
-          </section>
+          <BriefGateBanner clientId={clientId} featureLabel="workspace production entry points">
+            <section>
+              <p className="mb-3 text-xs font-black uppercase tracking-[0.14em] text-me-ochre">内容生产</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <ToolCard href={`/dashboard/clients/${clientId}/marketing-plan`} title="Marketing Plan" desc="AI 生成营销计划 → 派发任务到鲁班"   badge="in_house" />
+                <ToolCard href={`/dashboard/clients/${clientId}/blog`}           title="博客"           desc="双信号博客生产与管理"            badge="in_house" />
+                <ToolCard href={`/dashboard/content?client=${clientId}`}         title="社媒矩阵"       desc="Campaign · 排期 · 多平台发布"    badge="in_house" />
+                <ToolCard href={`/dashboard/geo-composer/${clientId}`}           title="GEO Composer"  desc="部署 AI 搜索优化指令"            badge="in_house" />
+                <ToolCard href={`/dashboard/ai-visibility/${clientId}`}          title="AI 可见度追踪" desc="监控 AI 搜索中的品牌曝光"         badge="in_house" />
+                <ToolCard href={`/dashboard/clients/${clientId}/connectors`}     title="广告连接器"    desc="连接 Meta · Google 广告账户"      badge="in_house" />
+                <ToolCard href={`/dashboard/clients/${clientId}/assets`}          title="素材库"        desc="上传图片 → Vision AI 自动分析 → Hook/Middle/CTA 评分 → 视频提示词"  badge="in_house" />
+                <ToolCard href={`/dashboard/visuals?client=${clientId}`}         title="Launch Hub"    desc="Reels · 图片 · 视频素材生产"      badge="in_house" />
+                <ToolCard href={`/dashboard/clients/${clientId}/production`}     title="内容生产包"    desc="查看各维度内容包状态 · 生成内容后自动归集" badge="in_house" />
+                <ToolCard onClick={() => setGenerationOpen(true)}              title="生成单条内容" desc="按关键词 · 视频 · 话题快速生成一条社媒帖子"  badge="in_house" />
+              </div>
+            </section>
+          </BriefGateBanner>
 
           {/* Zone B: 诊断与分析 */}
           <section>

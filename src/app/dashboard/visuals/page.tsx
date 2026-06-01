@@ -5,6 +5,7 @@ import { useGenerationQueue } from '@/hooks/useGenerationQueue'
 import { GenerationQueueItem, GENERATION_CONFIG } from '@/lib/visual/generation-config'
 import { GenerationProgress } from '@/components/visual/GenerationProgress'
 import { QueueOverviewCard } from '@/components/visual/QueueOverviewCard'
+import { BriefGateBanner } from '@/components/brief/BriefGateBanner'
 
 interface Post {
   id: string
@@ -1209,6 +1210,11 @@ export default function VisualsPage() {
 
       {/* Table */}
       {selectedClientId ? (
+        <BriefGateBanner
+          clientId={selectedClientId}
+          featureLabel="Launch Hub visual production"
+          className="flex min-h-0 flex-1 flex-col"
+        >
         <div className="flex-1 overflow-auto">
           <table className="border-collapse bg-white text-sm" style={{ minWidth: 1280, width: '100%' }}>
             <thead className="sticky top-0 z-10 bg-me-ivory">
@@ -1371,6 +1377,7 @@ export default function VisualsPage() {
             </tbody>
           </table>
         </div>
+        </BriefGateBanner>
       ) : (
         <div className="flex-1 flex items-center justify-center text-me-charcoal/45 text-sm">
           Select a client to view their content
