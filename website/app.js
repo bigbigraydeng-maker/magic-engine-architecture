@@ -315,8 +315,12 @@ function renderResult(data) {
 
   // Portal bridge CTA
   const base = 'https://app.magicengine.com.au/portal/login?next=/prospect';
+  const registerBase = 'https://app.magicengine.com.au/portal/register?next=/prospect';
   document.querySelectorAll('.portal-link').forEach(a => {
     a.href = base;
+  });
+  document.querySelectorAll('.portal-register-link').forEach(a => {
+    a.href = registerBase;
   });
 
   // Show top opportunity in portal bridge if present

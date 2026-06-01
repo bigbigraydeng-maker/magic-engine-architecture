@@ -15,7 +15,7 @@ export async function middleware(request: NextRequest) {
   // Any authenticated Supabase user (no role requirement) can access /prospect.
   if (path.startsWith('/prospect')) {
     if (!user) {
-      const loginUrl = new URL('/login', request.url)
+      const loginUrl = new URL('/portal/login', request.url)
       loginUrl.searchParams.set('next', path)
       return NextResponse.redirect(loginUrl)
     }
@@ -84,7 +84,7 @@ export async function middleware(request: NextRequest) {
     .from('client_portal_users')
     .select('client_id')
     .eq('email', email)
-    .in('access_type', ['dashboard', 'fde', 'both'])
+    .in('access_type', ['dashboard', 'fde', 'both', 'self_serve'])
 
   // Fallback: CLIENT_VIEWERS env var (backward compat — keeps existing Render configs working)
   const envPerms = getUserPermissions(email)

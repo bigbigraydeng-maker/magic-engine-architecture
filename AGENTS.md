@@ -215,15 +215,20 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> Last updated: 2026-06-02 (Website to Self-Serve onboarding funnel P29.E.1-5 is complete; authenticated QA is next)
+> Last updated: 2026-06-02 (P29.E.6 authenticated onboarding QA complete; next is Brief gate rollout)
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P29.E.6** | Authenticated end-to-end QA from website discovery to saved brief and dashboard entry | HIGH |
+| **P29.C.2** | BriefGateBanner: show clear gate/banner for self_serve users until the brief is complete | HIGH |
+| **P29.C.3** | Connect Brief gate to content generation pages | HIGH |
+| **P29.C.4** | Connect Brief gate to execution dashboard top area | HIGH |
+| **P29.C.5** | Connect Brief gate to Launch Hub / workspace entry points | MEDIUM |
+| **P29.SEO.17** | GSC indexing watch for sitemap, hreflang, and SME service pages | MEDIUM |
+| **P29.GEO.7** | Tiny AU/NZ AI search local use-case page if snippet bank still needs concrete scenarios | LOW |
 
-**Status check (2026-06-02):** P29.SEO.9, P29.ADS.1-2, P29.GEO.1-6, P29.WEB.1-2, P29.SEO.14-16, and P29.E.1-5 are done. Growth work keeps P29.GEO.7 and P29.SEO.17 open, and the next product pass is authenticated onboarding QA. Next session first line:
+**Status check (2026-06-02):** P29.SEO.9, P29.ADS.1-2, P29.GEO.1-6, P29.WEB.1-2, P29.SEO.14-16, P29.E.1-6, and P29.C.1 are done. Authenticated onboarding QA passed from website discovery to saved brief and dashboard entry. Growth work keeps P29.GEO.7 and P29.SEO.17 open, but the next product pass should finish the Brief gate rollout. Next session first line:
 
-- `Continue Website Self-Serve Funnel P29.E.6`
+- `继续 Phase 29 Brief Gate P29.C.2`
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 
 **更新规则**（每次上线新功能）：
