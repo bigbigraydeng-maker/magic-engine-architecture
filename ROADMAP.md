@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-02 04:24 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-02 04:33 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -25,7 +25,13 @@
 - [x] **P29.SEO.14** AU/NZ SME service page QA pass - verify titles, canonicals, internal links, sitemap exposure, and only make tiny fixes if the new service pages need one more polish pass.
 - [x] **P29.SEO.15** AU/NZ bilingual keyword expansion - widen the seed set around AI infrastructure, AI training, corporate AI upgrade, and automation AI, then map English and Chinese variants to page intent without drifting into large-agency positioning.
 - [x] **P29.SEO.16** hreflang / language targeting pass - add bilingual alternate links and language targeting hints so the AU/NZ English and Chinese surfaces are easier for Google to separate correctly.
-- [ ] **P29.SEO.17** GSC indexing watch - recheck Search Console coverage for sitemap, hreflang, and the new SME service pages, then only make tiny follow-up fixes if coverage surfaces canonical or indexing issues.
+- [x] **P29.SEO.17** GSC indexing watch - recheck Search Console coverage for sitemap, hreflang, and the new SME service pages, then only make tiny follow-up fixes if coverage surfaces canonical or indexing issues.
+
+### 2026-06-02 (Website SEO Optimization P29.SEO.17 complete)
+
+- Public `https://magicengine.com.au/sitemap.xml` now returns XML instead of the old HTML sitemap error; local static sitemap was tightened from 30 to 28 canonical URLs.
+- Removed non-published `/geo/glossary` sitemap entries and changed the Chinese homepage sitemap URL from `/cn.html` to canonical `/cn/`.
+- Local sitemap QA now confirms every listed URL maps to a real static HTML file, matches its canonical, and carries English / Chinese alternate links.
 
 ### 2026-06-02 (Website SEO Gap Research P29.SEO.14 完成)
 
