@@ -215,15 +215,15 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-06-01（Website Public Root Sync P29.WEB.1 已完成，下一步还是 optional ads landing page）
+> 最后更新：2026-06-01（Website Ads Launch Prep P29.ADS.2 已完成，下一步是广告投放首周监测）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P29.ADS.2** | Optional ads landing page：如果投放跑顺，再补一个独立 `/ads` landing page；当前先保持 contact flow 轻量 | ⭐⭐ |
+| **P29.ADS.2** | Ads landing page + pre-launch conversion QA | ✅ 完成 |
 
-**状态校准（2026-06-01）**：P29.SEO.9 已完成，P29.ADS.1 已完成，P29.GEO.1-3 已完成，P29.WEB.1 已完成；下一步转向 optional ads landing page。下一 session 第一句话：
+**状态校准（2026-06-01）**：P29.SEO.9 已完成，P29.ADS.1 已完成，P29.GEO.1-3 已完成，P29.WEB.1 已完成；P29.ADS.2 也已完成，下一步转向广告投放首周监测。下一 session 第一句话：
 
-- `继续 Website Ads Launch Prep P29.ADS.2`
+- `继续广告投放首周监测`
 
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 

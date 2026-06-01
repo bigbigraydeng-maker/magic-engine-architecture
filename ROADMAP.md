@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-01 17:36 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-01 18:05 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -22,7 +22,7 @@
 ### Website Ads Launch Prep - 2026-06-01
 
 - [x] **P29.ADS.1** public ads intake path - add a lightweight AU/NZ paid-media CTA and contact-source handling so campaign traffic lands on the same handoff without building a separate CRM or portal.
-- [ ] **P29.ADS.2** optional ads landing page - if paid-media demand justifies it, add a dedicated `/ads` landing page later; keep the first launch loop light for now.
+- [x] **P29.ADS.2** optional ads landing page - if paid-media demand justifies it, add a dedicated `/ads` landing page later; keep the first launch loop light for now.
 
 ### Website GEO Visibility - 2026-06-01
 
@@ -3138,6 +3138,9 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 
 ### 2026-06-01（Website Public Root Sync P29.WEB.1 完成）
 - 线上根域对应的 `website/` 站点已切到 AI upgrade / GEO / training 口径，并补了 `/geo`、`/training` 两个静态公开页
+
+### 2026-06-01（Website Ads Launch Prep P29.ADS.2 完成）
+- 新增 `/ads` landing page，并在首页补上 `Start ads launch` 入口，投放前转化路径已跑通
 
 ### 2026-06-01（Phase 29 战略决策登记 + P21.B 看板来源标记上线）
 
