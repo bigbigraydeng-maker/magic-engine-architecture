@@ -106,8 +106,24 @@ interface Props {
    *  Parent uses this to show "制作中" badge on the kanban card. */
   onImageGeneratingChange?: (active: boolean) => void
   /** When set, image generation is handed off to the parent (runs in background after drawer closes).
-   *  Parent receives the prompt + aspectRatio, handles fetch + DB write, returns image_url via promise. */
-  onBackgroundImageGenerate?: (params: { prompt: string; aspectRatio: string }) => Promise<string>
+   *  Parent receives the prompt + aspectRatio + post_id (optional), persists to visual_assets DB,
+   *  returns the created asset. When post_id is omitted, parent falls back to non-persistent preview
+   *  (used in batch mode where no specific content_post is bound to the card). */
+  onBackgroundImageGenerate?: (params: ImageGenerateParams) => Promise<GalleryAsset>
+}
+
+export interface GalleryAsset {
+  id: string
+  storage_url: string
+  prompt_used: string | null
+  is_selected: boolean
+  created_at: string
+}
+
+interface ImageGenerateParams {
+  prompt: string
+  aspectRatio: string
+  postId?: string
 }
 
 interface PlanRecord {
@@ -150,6 +166,30 @@ export function SocialPlanSection({ clientId, campaignId, campaignName, mode = '
   // Save-to-board state
   const [savingBoard, setSavingBoard]       = useState(false)
   const [boardMsg, setBoardMsg]             = useState<string | null>(null)
+
+  // Task mode: bound content_post id + its existing assets (used to restore
+  // the gallery after drawer closes / page reloads).
+  const [taskPostId, setTaskPostId]         = useState<string | undefined>(undefined)
+  const [taskAssets, setTaskAssets]         = useState<GalleryAsset[] | undefined>(undefined)
+
+  // Load the persisted content_post for this execution item (task mode only).
+  useEffect(() => {
+    if (!isTaskMode || !item?.id) return
+    fetch(`/api/clients/${clientId}/posts?execution_item_id=${item.id}`)
+      .then(r => r.json() as Promise<{ posts?: { id: string }[] }>)
+      .then(data => {
+        const postId = data.posts?.[0]?.id
+        if (postId) {
+          setTaskPostId(postId)
+          // Now load this post's gallery
+          fetch(`/api/clients/${clientId}/visual-assets?post_id=${postId}`)
+            .then(r => r.json() as Promise<{ success: boolean; assets?: GalleryAsset[] }>)
+            .then(data => { if (data.success) setTaskAssets(data.assets ?? []) })
+            .catch(() => { /* non-fatal */ })
+        }
+      })
+      .catch(() => { /* non-fatal */ })
+  }, [isTaskMode, clientId, item?.id])
 
   // Load history on mount / when campaign changes
   useEffect(() => {
@@ -514,6 +554,8 @@ export function SocialPlanSection({ clientId, campaignId, campaignName, mode = '
                 onGenStart={incImageGen}
                 onGenEnd={decImageGen}
                 onBackgroundImageGenerate={onBackgroundImageGenerate}
+                postId={taskPostId}
+                initialAssets={taskAssets}
               />
             )}
             {taskKind === 'social_story' && plan.stories[0] && (
@@ -522,6 +564,8 @@ export function SocialPlanSection({ clientId, campaignId, campaignName, mode = '
                 onGenStart={incImageGen}
                 onGenEnd={decImageGen}
                 onBackgroundImageGenerate={onBackgroundImageGenerate}
+                postId={taskPostId}
+                initialAssets={taskAssets}
               />
             )}
             {taskKind === 'social_reel' && plan.reels[0] && (
@@ -1289,33 +1333,79 @@ const POST_TYPE_COLOR: Record<string, string> = {
   engagement:   'bg-blue-50 text-blue-700 border-blue-200',
 }
 
-function PostCard({ post, clientId, launchHubPlatform, onGenStart, onGenEnd, onBackgroundImageGenerate }: {
+function PostCard({ post, clientId, launchHubPlatform, onGenStart, onGenEnd, onBackgroundImageGenerate, postId, initialAssets }: {
   post: Post
   clientId: string
   launchHubPlatform?: string
   onGenStart?: () => void
   onGenEnd?: () => void
-  onBackgroundImageGenerate?: (params: { prompt: string; aspectRatio: string }) => Promise<string>
+  onBackgroundImageGenerate?: (params: ImageGenerateParams) => Promise<GalleryAsset>
+  /** Persisted content_post id — when present, the gallery is loaded from / saved to visual_assets. */
+  postId?: string
+  /** Pre-fetched gallery assets (avoids a per-card fetch when the parent already loaded them). */
+  initialAssets?: GalleryAsset[]
 }) {
   const [open, setOpen]             = useState(false)
   const [generatingImg, setGen]     = useState(false)
-  const [imgUrl, setImgUrl]         = useState<string | null>(null)
+  const [assets, setAssets]         = useState<GalleryAsset[]>(initialAssets ?? [])
   const [imgError, setImgError]     = useState<string | null>(null)
-  const [lightboxOpen, setLightbox] = useState(false)
+  const [lightboxUrl, setLightbox]  = useState<string | null>(null)
   const [editedCopy, setEditedCopy]           = useState(post.copy)
   const [editedImagePrompt, setEditedImagePrompt] = useState(post.image_prompt)
+  const [selecting, setSelecting]   = useState(false)
+  // 素材库选图 modal
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickingFromLibrary, setPickingFromLibrary] = useState(false)
 
-  const colorClass = POST_TYPE_COLOR[post.content_type] ?? 'bg-gray-50 text-gray-700 border-gray-200'
+  // Load gallery on mount when bound to a persisted post but parent didn't pre-fetch.
+  useEffect(() => {
+    if (!postId || initialAssets) return
+    fetch(`/api/clients/${clientId}/visual-assets?post_id=${postId}`)
+      .then(r => r.json() as Promise<{ success: boolean; assets?: GalleryAsset[] }>)
+      .then(data => { if (data.success && data.assets) setAssets(data.assets) })
+      .catch(() => { /* non-fatal */ })
+  }, [clientId, postId, initialAssets])
+
+  // 从素材库选定一张 → 入画廊
+  const handlePickFromLibrary = async (clientAssetId: string) => {
+    if (!postId || pickingFromLibrary) return
+    setPickingFromLibrary(true)
+    setImgError(null)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/visual-assets/from-library`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ post_id: postId, client_asset_id: clientAssetId }),
+      })
+      const json = await res.json() as { success: boolean; asset?: GalleryAsset; error?: string }
+      if (!json.success || !json.asset) throw new Error(json.error ?? '入库失败')
+      setAssets(prev => [...prev, json.asset!])
+      setPickerOpen(false)
+    } catch (e) {
+      setImgError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPickingFromLibrary(false)
+    }
+  }
+
+  const selectedAsset = assets.find(a => a.is_selected) ?? assets[0] ?? null
+  const selectedUrl   = selectedAsset?.storage_url ?? null
+  const colorClass    = POST_TYPE_COLOR[post.content_type] ?? 'bg-gray-50 text-gray-700 border-gray-200'
 
   const handleGenerate = async () => {
     setGen(true)
     setImgError(null)
     onGenStart?.()
     try {
-      let imageUrl: string
       if (onBackgroundImageGenerate) {
-        imageUrl = await onBackgroundImageGenerate({ prompt: editedImagePrompt, aspectRatio: '1:1' })
+        const asset = await onBackgroundImageGenerate({
+          prompt: editedImagePrompt,
+          aspectRatio: '1:1',
+          ...(postId ? { postId } : {}),
+        })
+        setAssets(prev => [...prev, asset])
       } else {
+        // Fallback: legacy single-image preview (batch mode, no parent handler).
         const res = await fetch('/api/visual/image-preview', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1323,9 +1413,16 @@ function PostCard({ post, clientId, launchHubPlatform, onGenStart, onGenEnd, onB
         })
         const json = await res.json() as { success: boolean; image_url?: string; error?: string }
         if (!json.success) throw new Error(json.error ?? '生成失败')
-        imageUrl = json.image_url ?? ''
+        if (json.image_url) {
+          setAssets(prev => [...prev, {
+            id: `local-${prev.length + 1}`,
+            storage_url: json.image_url!,
+            prompt_used: editedImagePrompt,
+            is_selected: prev.length === 0,
+            created_at: new Date().toISOString(),
+          }])
+        }
       }
-      setImgUrl(imageUrl)
     } catch (e) {
       setImgError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -1334,32 +1431,37 @@ function PostCard({ post, clientId, launchHubPlatform, onGenStart, onGenEnd, onB
     }
   }
 
+  const handleSelect = async (assetId: string) => {
+    if (selecting) return
+    // 乐观更新
+    setAssets(prev => prev.map(a => ({ ...a, is_selected: a.id === assetId })))
+    if (!postId || assetId.startsWith('local-')) return // 本地态/batch 不落库
+    setSelecting(true)
+    try {
+      await fetch(`/api/visual-assets/${assetId}/select`, { method: 'PATCH' })
+    } catch { /* 乐观更新已生效 */ } finally {
+      setSelecting(false)
+    }
+  }
+
   return (
     <>
-      {lightboxOpen && imgUrl && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
-          onClick={() => setLightbox(false)}
-        >
-          <div className="relative max-w-sm w-full" onClick={e => e.stopPropagation()}>
-            <button onClick={() => setLightbox(false)} className="absolute -top-8 right-0 text-white text-sm font-bold hover:text-gray-300">✕ 关闭</button>
-            <img src={imgUrl} alt="generated" className="w-full rounded-lg shadow-2xl" />
-            <a href={imgUrl} download target="_blank" rel="noreferrer" className="mt-2 block text-center text-[11px] text-indigo-300 hover:text-white" onClick={e => e.stopPropagation()}>↓ 下载图片</a>
-          </div>
-        </div>
-      )}
+      <ImageLightbox url={lightboxUrl} onClose={() => setLightbox(null)} maxWidth="max-w-sm" />
       <div className="border border-gray-200 rounded-lg overflow-hidden">
         <button
           onClick={() => setOpen(o => !o)}
           className="w-full flex items-center gap-3 px-4 py-3 bg-gray-50 hover:bg-gray-100 text-left transition-colors"
         >
-          {imgUrl && (
-            <img src={imgUrl} alt="" className="w-8 h-8 rounded object-cover border border-gray-200 shrink-0" />
+          {selectedUrl && (
+            <img src={selectedUrl} alt="" className="w-8 h-8 rounded object-cover border border-gray-200 shrink-0" />
           )}
           <span className={`text-[10px] font-bold border rounded px-1.5 py-0.5 shrink-0 ${colorClass}`}>
             {post.content_type}
           </span>
           <p className="flex-1 text-xs text-gray-700 truncate">{(post.copy ?? '').slice(0, 80)}…</p>
+          {assets.length > 0 && (
+            <span className="text-[10px] font-bold text-purple-600 shrink-0">{assets.length} 张图</span>
+          )}
           <span className="text-gray-400 text-xs">{open ? '▲' : '▼'}</span>
         </button>
         {open && (
@@ -1375,7 +1477,7 @@ function PostCard({ post, clientId, launchHubPlatform, onGenStart, onGenEnd, onB
               />
             </div>
 
-            {/* 可编辑 Image prompt */}
+            {/* 可编辑 Image prompt — 始终可见，便于改提示词再生成 */}
             <div className="rounded-lg border border-violet-100 overflow-hidden">
               <div className="flex items-start justify-between gap-2 px-3 py-2 bg-violet-50 border-b border-violet-100">
                 <p className="text-[10px] font-bold text-violet-800">🎨 Image Prompt</p>
@@ -1389,38 +1491,56 @@ function PostCard({ post, clientId, launchHubPlatform, onGenStart, onGenEnd, onB
               />
             </div>
 
-            {/* Generation button / result */}
-            {!imgUrl && (
-              <div className="space-y-1.5">
+            {/* 画廊：已生成的所有图片 */}
+            {assets.length > 0 && (
+              <ImageGalleryGrid
+                assets={assets}
+                aspectRatio="1:1"
+                onSelect={handleSelect}
+                onOpenLightbox={url => setLightbox(url)}
+                selecting={selecting}
+              />
+            )}
+
+            {/* 生成按钮 — 常驻，每次点击追加一张 */}
+            <div className="space-y-1.5">
+              <div className="flex gap-1.5">
                 <button
                   onClick={() => void handleGenerate()}
                   disabled={generatingImg}
-                  className="w-full py-2 text-xs font-bold bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700 disabled:opacity-50 text-white rounded-lg transition-all"
+                  className="flex-1 py-2 text-xs font-bold bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700 disabled:opacity-50 text-white rounded-lg transition-all"
                 >
                   {generatingImg ? (
                     <span className="flex items-center justify-center gap-2">
-                      <Spinner color="indigo" /> Visual Studio 生成图片中…（约 15s）
+                      <Spinner color="indigo" /> Visual Studio 生成中…（约 15s）
                     </span>
-                  ) : '🎨 生成图片（Visual Studio）'}
+                  ) : assets.length === 0
+                    ? '🎨 生成图片（Visual Studio）'
+                    : `🎨 再生成一张（已有 ${assets.length} 张）`
+                  }
                 </button>
-                {imgError && <p className="text-[11px] text-red-500">⚠ {imgError}</p>}
+                {postId && (
+                  <button
+                    onClick={() => setPickerOpen(true)}
+                    title="从客户素材库选一张真实照片"
+                    className="shrink-0 px-3 py-2 text-xs font-bold border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 rounded-lg transition-colors"
+                  >
+                    📚 从素材库选
+                  </button>
+                )}
               </div>
-            )}
+              {imgError && <p className="text-[11px] text-red-500">⚠ {imgError}</p>}
+            </div>
 
-            {imgUrl && (
-              <div className="rounded-lg border border-green-200 bg-green-50 p-2.5 space-y-2">
-                <p className="text-[10px] font-bold text-green-700">✅ 图片已生成 — 点击放大</p>
-                <button onClick={() => setLightbox(true)} className="block group relative w-fit">
-                  <img src={imgUrl} alt="generated" className="w-full max-w-[180px] rounded border border-green-200 group-hover:opacity-90 transition-opacity" />
-                  <span className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                    <span className="bg-black/60 text-white text-[10px] font-bold rounded px-2 py-1">🔍 放大</span>
-                  </span>
-                </button>
-                <button
-                  onClick={() => { setImgUrl(null); setImgError(null) }}
-                  className="text-[10px] text-gray-400 hover:text-gray-600 underline"
-                >重新生成</button>
-              </div>
+            {/* 素材库选图 Modal */}
+            {pickerOpen && postId && (
+              <AssetLibraryPicker
+                clientId={clientId}
+                imagePrompt={editedImagePrompt}
+                onClose={() => setPickerOpen(false)}
+                onPick={handlePickFromLibrary}
+                picking={pickingFromLibrary}
+              />
             )}
 
             <div className="flex flex-wrap gap-1">
@@ -1435,7 +1555,7 @@ function PostCard({ post, clientId, launchHubPlatform, onGenStart, onGenEnd, onB
                 platform={launchHubPlatform}
                 caption={editedCopy}
                 hashtags={post.hashtags}
-                imageUrl={imgUrl}
+                imageUrl={selectedUrl}
               />
             )}
           </div>
@@ -1445,30 +1565,71 @@ function PostCard({ post, clientId, launchHubPlatform, onGenStart, onGenEnd, onB
   )
 }
 
-function StoryCard({ index, story, clientId, launchHubPlatform, onGenStart, onGenEnd, onBackgroundImageGenerate }: {
+function StoryCard({ index, story, clientId, launchHubPlatform, onGenStart, onGenEnd, onBackgroundImageGenerate, postId, initialAssets }: {
   index: number
   story: Story
   clientId: string
   launchHubPlatform?: string
   onGenStart?: () => void
   onGenEnd?: () => void
-  onBackgroundImageGenerate?: (params: { prompt: string; aspectRatio: string }) => Promise<string>
+  onBackgroundImageGenerate?: (params: ImageGenerateParams) => Promise<GalleryAsset>
+  postId?: string
+  initialAssets?: GalleryAsset[]
 }) {
   const [generatingImg, setGen]               = useState(false)
-  const [imgUrl, setImgUrl]                   = useState<string | null>(null)
+  const [assets, setAssets]                   = useState<GalleryAsset[]>(initialAssets ?? [])
   const [imgError, setImgError]               = useState<string | null>(null)
-  const [lightboxOpen, setLightbox]           = useState(false)
+  const [lightboxUrl, setLightbox]            = useState<string | null>(null)
   const [editedCopy, setEditedCopy]           = useState(story.copy)
   const [editedVisualPrompt, setEditedVisualPrompt] = useState(story.visual_prompt)
+  const [selecting, setSelecting]             = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickingFromLibrary, setPickingFromLibrary] = useState(false)
+
+  useEffect(() => {
+    if (!postId || initialAssets) return
+    fetch(`/api/clients/${clientId}/visual-assets?post_id=${postId}`)
+      .then(r => r.json() as Promise<{ success: boolean; assets?: GalleryAsset[] }>)
+      .then(data => { if (data.success && data.assets) setAssets(data.assets) })
+      .catch(() => { /* non-fatal */ })
+  }, [clientId, postId, initialAssets])
+
+  const handlePickFromLibrary = async (clientAssetId: string) => {
+    if (!postId || pickingFromLibrary) return
+    setPickingFromLibrary(true)
+    setImgError(null)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/visual-assets/from-library`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ post_id: postId, client_asset_id: clientAssetId }),
+      })
+      const json = await res.json() as { success: boolean; asset?: GalleryAsset; error?: string }
+      if (!json.success || !json.asset) throw new Error(json.error ?? '入库失败')
+      setAssets(prev => [...prev, json.asset!])
+      setPickerOpen(false)
+    } catch (e) {
+      setImgError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPickingFromLibrary(false)
+    }
+  }
+
+  const selectedAsset = assets.find(a => a.is_selected) ?? assets[0] ?? null
+  const selectedUrl   = selectedAsset?.storage_url ?? null
 
   const handleGenerate = async () => {
     setGen(true)
     setImgError(null)
     onGenStart?.()
     try {
-      let imageUrl: string
       if (onBackgroundImageGenerate) {
-        imageUrl = await onBackgroundImageGenerate({ prompt: editedVisualPrompt, aspectRatio: '9:16' })
+        const asset = await onBackgroundImageGenerate({
+          prompt: editedVisualPrompt,
+          aspectRatio: '9:16',
+          ...(postId ? { postId } : {}),
+        })
+        setAssets(prev => [...prev, asset])
       } else {
         const res = await fetch('/api/visual/image-preview', {
           method: 'POST',
@@ -1477,9 +1638,16 @@ function StoryCard({ index, story, clientId, launchHubPlatform, onGenStart, onGe
         })
         const json = await res.json() as { success: boolean; image_url?: string; error?: string }
         if (!json.success) throw new Error(json.error ?? '生成失败')
-        imageUrl = json.image_url ?? ''
+        if (json.image_url) {
+          setAssets(prev => [...prev, {
+            id: `local-${prev.length + 1}`,
+            storage_url: json.image_url!,
+            prompt_used: editedVisualPrompt,
+            is_selected: prev.length === 0,
+            created_at: new Date().toISOString(),
+          }])
+        }
       }
-      setImgUrl(imageUrl)
     } catch (e) {
       setImgError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -1488,20 +1656,21 @@ function StoryCard({ index, story, clientId, launchHubPlatform, onGenStart, onGe
     }
   }
 
+  const handleSelect = async (assetId: string) => {
+    if (selecting) return
+    setAssets(prev => prev.map(a => ({ ...a, is_selected: a.id === assetId })))
+    if (!postId || assetId.startsWith('local-')) return
+    setSelecting(true)
+    try {
+      await fetch(`/api/visual-assets/${assetId}/select`, { method: 'PATCH' })
+    } catch { /* 乐观更新已生效 */ } finally {
+      setSelecting(false)
+    }
+  }
+
   return (
     <>
-      {lightboxOpen && imgUrl && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
-          onClick={() => setLightbox(false)}
-        >
-          <div className="relative max-w-xs w-full" onClick={e => e.stopPropagation()}>
-            <button onClick={() => setLightbox(false)} className="absolute -top-8 right-0 text-white text-sm font-bold hover:text-gray-300">✕ 关闭</button>
-            <img src={imgUrl} alt="story" className="w-full rounded-lg shadow-2xl" />
-            <a href={imgUrl} download target="_blank" rel="noreferrer" className="mt-2 block text-center text-[11px] text-indigo-300 hover:text-white" onClick={e => e.stopPropagation()}>↓ 下载图片</a>
-          </div>
-        </div>
-      )}
+      <ImageLightbox url={lightboxUrl} onClose={() => setLightbox(null)} maxWidth="max-w-xs" />
       <div className="border border-gray-200 rounded-lg px-4 py-3 bg-white flex gap-3">
         <span className="w-5 h-5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
           {index + 1}
@@ -1519,7 +1688,7 @@ function StoryCard({ index, story, clientId, launchHubPlatform, onGenStart, onGe
           </div>
           <p className="text-[11px] text-indigo-600 font-medium">→ {story.cta}</p>
 
-          {/* 可编辑 visual prompt */}
+          {/* 可编辑 visual prompt — 始终可见 */}
           <div>
             <label className="text-[10px] font-bold text-purple-600 uppercase tracking-wide">🎨 Visual Prompt</label>
             <textarea
@@ -1530,28 +1699,52 @@ function StoryCard({ index, story, clientId, launchHubPlatform, onGenStart, onGe
             />
           </div>
 
-          {/* Image preview or generate button */}
-          {imgUrl ? (
-            <div className="space-y-1.5">
-              <button onClick={() => setLightbox(true)} className="block group relative w-fit">
-                <img src={imgUrl} alt="story" className="h-24 rounded border border-purple-200 object-cover group-hover:opacity-90 transition-opacity" style={{ aspectRatio: '9/16' }} />
-                <span className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                  <span className="bg-black/60 text-white text-[9px] font-bold rounded px-1.5 py-0.5">🔍 放大</span>
-                </span>
-              </button>
-              <button onClick={() => { setImgUrl(null); setImgError(null) }} className="text-[10px] text-gray-400 hover:text-gray-600 underline">重新生成</button>
-            </div>
-          ) : (
-            <div className="space-y-1">
+          {/* 画廊 */}
+          {assets.length > 0 && (
+            <ImageGalleryGrid
+              assets={assets}
+              aspectRatio="9:16"
+              onSelect={handleSelect}
+              onOpenLightbox={url => setLightbox(url)}
+              selecting={selecting}
+            />
+          )}
+
+          {/* 生成按钮 — 常驻 */}
+          <div className="space-y-1">
+            <div className="flex flex-wrap gap-1.5">
               <button
                 onClick={() => void handleGenerate()}
                 disabled={generatingImg}
                 className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200 disabled:opacity-50 transition-colors"
               >
-                {generatingImg ? <><Spinner color="purple" /> 生成中…</> : '🎨 生成 Story 图片'}
+                {generatingImg
+                  ? <><Spinner color="purple" /> 生成中…</>
+                  : assets.length === 0 ? '🎨 生成 Story 图片' : `🎨 再生成一张（已有 ${assets.length} 张）`
+                }
               </button>
-              {imgError && <p className="text-[11px] text-red-500">⚠ {imgError}</p>}
+              {postId && (
+                <button
+                  onClick={() => setPickerOpen(true)}
+                  title="从客户素材库选一张真实照片"
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors"
+                >
+                  📚 从素材库选
+                </button>
+              )}
             </div>
+            {imgError && <p className="text-[11px] text-red-500">⚠ {imgError}</p>}
+          </div>
+
+          {/* 素材库选图 Modal */}
+          {pickerOpen && postId && (
+            <AssetLibraryPicker
+              clientId={clientId}
+              imagePrompt={editedVisualPrompt}
+              onClose={() => setPickerOpen(false)}
+              onPick={handlePickFromLibrary}
+              picking={pickingFromLibrary}
+            />
           )}
 
           {launchHubPlatform && (
@@ -1561,7 +1754,7 @@ function StoryCard({ index, story, clientId, launchHubPlatform, onGenStart, onGe
                 platform={launchHubPlatform}
                 caption={editedCopy}
                 hashtags={[]}
-                imageUrl={imgUrl}
+                imageUrl={selectedUrl}
               />
             </div>
           )}
@@ -1650,6 +1843,207 @@ function LaunchHubScheduler({
 }
 
 // ─── Utility micro-components ──────────────────────────────────────────────────
+
+interface AssetRecommendation {
+  id: string
+  storage_url: string
+  original_filename: string | null
+  reason: string
+  quality_score: number
+}
+
+function AssetLibraryPicker({ clientId, imagePrompt, onClose, onPick, picking }: {
+  clientId: string
+  imagePrompt: string
+  onClose: () => void
+  onPick: (clientAssetId: string) => void
+  picking: boolean
+}) {
+  const [loading, setLoading]             = useState(true)
+  const [recommendations, setRecs]        = useState<AssetRecommendation[]>([])
+  const [error, setError]                 = useState<string | null>(null)
+  const [zoomUrl, setZoomUrl]             = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    fetch(`/api/clients/${clientId}/asset-library/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_prompt: imagePrompt, limit: 12 }),
+    })
+      .then(r => r.json() as Promise<{ success: boolean; recommendations?: AssetRecommendation[]; error?: string }>)
+      .then(data => {
+        if (cancelled) return
+        if (!data.success) {
+          setError(data.error ?? '加载失败')
+          setRecs([])
+        } else {
+          setRecs(data.recommendations ?? [])
+        }
+      })
+      .catch(e => {
+        if (cancelled) return
+        setError(e instanceof Error ? e.message : String(e))
+      })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [clientId, imagePrompt])
+
+  return (
+    <>
+      <ImageLightbox url={zoomUrl} onClose={() => setZoomUrl(null)} maxWidth="max-w-2xl" />
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+        onClick={onClose}
+      >
+        <div
+          className="relative w-full max-w-3xl max-h-[85vh] flex flex-col bg-white rounded-xl shadow-2xl overflow-hidden"
+          onClick={e => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="flex items-start justify-between gap-3 px-5 py-3 border-b border-gray-200 bg-emerald-50">
+            <div className="min-w-0">
+              <h3 className="text-sm font-black text-emerald-900">📚 从客户素材库选图</h3>
+              <p className="text-[11px] text-emerald-700 mt-0.5 truncate">
+                AI 根据 image prompt 推荐：「{imagePrompt.slice(0, 80)}…」
+              </p>
+            </div>
+            <button
+              onClick={onClose}
+              className="shrink-0 text-gray-400 hover:text-gray-700 text-xl font-bold"
+              aria-label="关闭"
+            >✕</button>
+          </div>
+
+          {/* Body */}
+          <div className="flex-1 overflow-y-auto px-5 py-4">
+            {loading && (
+              <div className="flex items-center justify-center gap-2 py-12 text-xs text-gray-500">
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-emerald-400 border-t-emerald-800" />
+                Content Engine 正在匹配素材…
+              </div>
+            )}
+            {error && (
+              <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700">
+                ⚠ {error}
+              </div>
+            )}
+            {!loading && !error && recommendations.length === 0 && (
+              <div className="text-center py-12 text-xs text-gray-500">
+                <p className="font-semibold mb-1">素材库为空</p>
+                <p className="text-[11px]">该客户尚未上传或分析素材。</p>
+              </div>
+            )}
+            {!loading && recommendations.length > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {recommendations.map(rec => (
+                  <div
+                    key={rec.id}
+                    className="border border-gray-200 rounded-lg overflow-hidden bg-white hover:border-emerald-400 transition-colors"
+                  >
+                    <div className="relative aspect-square bg-gray-100">
+                      <img src={rec.storage_url} alt={rec.original_filename ?? ''} className="w-full h-full object-cover" />
+                      <button
+                        onClick={() => setZoomUrl(rec.storage_url)}
+                        className="absolute top-1 right-1 bg-black/60 text-white text-[9px] font-bold rounded px-1.5 py-0.5 hover:bg-black/80"
+                      >🔍</button>
+                    </div>
+                    <div className="px-2 py-2 space-y-1">
+                      <p className="text-[10px] text-gray-700 line-clamp-2 leading-tight">{rec.reason}</p>
+                      {rec.original_filename && (
+                        <p className="text-[9px] text-gray-400 truncate">{rec.original_filename}</p>
+                      )}
+                      <button
+                        onClick={() => onPick(rec.id)}
+                        disabled={picking}
+                        className="w-full mt-1 py-1.5 text-[11px] font-bold rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                      >
+                        {picking ? '加入中…' : '✓ 选这张'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Footer */}
+          <div className="px-5 py-2.5 border-t border-gray-200 bg-gray-50">
+            <p className="text-[10px] text-gray-500">
+              💡 来自客户素材库的真实照片 — 比 AI 生图更可信，特别适合旅游、产品等需要真实场景的内容
+            </p>
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
+function ImageLightbox({ url, onClose, maxWidth }: {
+  url: string | null
+  onClose: () => void
+  maxWidth: string
+}) {
+  if (!url) return null
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+      onClick={onClose}
+    >
+      <div className={`relative ${maxWidth} w-full`} onClick={e => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute -top-8 right-0 text-white text-sm font-bold hover:text-gray-300">✕ 关闭</button>
+        <img src={url} alt="preview" className="w-full rounded-lg shadow-2xl" />
+        <a href={url} download target="_blank" rel="noreferrer" className="mt-2 block text-center text-[11px] text-indigo-300 hover:text-white" onClick={e => e.stopPropagation()}>↓ 下载图片</a>
+      </div>
+    </div>
+  )
+}
+
+function ImageGalleryGrid({ assets, aspectRatio, onSelect, onOpenLightbox, selecting }: {
+  assets: GalleryAsset[]
+  aspectRatio: '1:1' | '9:16'
+  onSelect: (assetId: string) => void
+  onOpenLightbox: (url: string) => void
+  selecting: boolean
+}) {
+  const sizeClass = aspectRatio === '9:16' ? 'h-32' : 'h-24'
+  const ratioStyle = aspectRatio === '9:16' ? { aspectRatio: '9/16' } : { aspectRatio: '1/1' }
+  return (
+    <div className="rounded-lg border border-purple-100 bg-purple-50/40 p-2.5">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-[10px] font-bold text-purple-700 uppercase tracking-wide">已生成 — 点击图片选定主图</p>
+        <span className="text-[10px] text-purple-500">{assets.length} 张</span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {assets.map(asset => (
+          <div key={asset.id} className="relative">
+            <button
+              onClick={() => onSelect(asset.id)}
+              disabled={selecting}
+              className={`block rounded border-2 transition-all overflow-hidden ${
+                asset.is_selected
+                  ? 'border-green-500 ring-2 ring-green-200'
+                  : 'border-gray-200 hover:border-purple-400'
+              } disabled:opacity-60`}
+              style={ratioStyle}
+            >
+              <img src={asset.storage_url} alt="" className={`${sizeClass} object-cover`} style={ratioStyle} />
+            </button>
+            {asset.is_selected && (
+              <span className="absolute -top-1.5 -right-1.5 bg-green-500 text-white text-[10px] font-bold rounded-full w-5 h-5 flex items-center justify-center shadow">✓</span>
+            )}
+            <button
+              onClick={() => onOpenLightbox(asset.storage_url)}
+              className="absolute bottom-0.5 right-0.5 bg-black/60 text-white text-[9px] font-bold rounded px-1.5 py-0.5 hover:bg-black/80"
+            >🔍</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 function Spinner({ color }: { color: 'indigo' | 'purple' }) {
   const ring = color === 'purple'

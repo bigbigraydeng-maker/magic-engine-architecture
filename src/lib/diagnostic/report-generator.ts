@@ -125,7 +125,7 @@ function buildCitationRegistry(
   }
   const registry = new Map<string, { idx: number; refs: string[] }>()
   let counter = 0
-  for (const [key, refs] of grouped) {
+  for (const [key, refs] of Array.from(grouped)) {
     registry.set(key, { idx: ++counter, refs })
   }
   return registry
@@ -152,7 +152,7 @@ function buildCitationJsonData(
 ): string | null {
   if (registry.size === 0) return null
   const data: Record<string, string[]> = {}
-  for (const { idx, refs } of registry.values()) {
+  for (const { idx, refs } of Array.from(registry.values())) {
     data[String(idx)] = refs
   }
   return JSON.stringify(data)

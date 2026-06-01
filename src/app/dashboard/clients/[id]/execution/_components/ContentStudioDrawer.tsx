@@ -12,6 +12,7 @@ import type { ExecutionItem } from '@/types/diagnostic'
 import { ReelsStudio } from '../../_components/ReelsStudio'
 import { StudioArticleTab } from './StudioArticleTab'
 import { SocialPlanSection } from './SocialPlanSection'
+import type { GalleryAsset } from './SocialPlanSection'
 
 type StudioTab = 'article' | 'social' | 'video'
 type TabDef = readonly [StudioTab, string]
@@ -40,8 +41,8 @@ interface Props {
   onBackgroundGenerate?: (itemId: string, params: BackgroundGenerateParams) => void
   /** Called when any Post/Story image generation starts (true) or all finish (false). */
   onImageGeneratingChange?: (itemId: string, active: boolean) => void
-  /** When set, image generation runs in background after drawer closes; returns image_url. */
-  onBackgroundImageGenerate?: (itemId: string, params: { prompt: string; aspectRatio: string }) => Promise<string>
+  /** When set, image generation runs in background after drawer closes; returns the persisted GalleryAsset. */
+  onBackgroundImageGenerate?: (itemId: string, params: { prompt: string; aspectRatio: string; postId?: string }) => Promise<GalleryAsset>
   /** When true, hides content-generation controls — used for autonomous flywheel tasks. */
   readonly?: boolean
 }
@@ -74,7 +75,7 @@ function tabsForItem(item: ExecutionItem): { tabs: TabDef[]; defaultTab: StudioT
   // SEO, ai_visibility, ads, reputation, competitor, or unknown → show all 3
   return {
     tabs: [['article', 'SEO 文章'], ['social', '图文帖子'], ['video', '短视频']],
-    defaultTab: item.dimension === 'social' ? 'social' : 'article',
+    defaultTab: 'article',
   }
 }
 
