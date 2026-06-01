@@ -23,6 +23,12 @@ interface ReportResponse {
   result: import('@/lib/zhangqian/types').DiscoveryReport | null
 }
 
+interface ClaimWorkspaceResponse {
+  client_id?: string
+  error?: string
+  welcome_bonus_granted?: boolean
+}
+
 const stages = [
   { label: 'Discovery scan', description: 'Reading website, search, social, and review signals.' },
   { label: 'Diagnosis model', description: 'Turning raw signals into business-facing priorities.' },
@@ -234,12 +240,16 @@ function ClaimWorkspaceBanner() {
     setError('')
     try {
       const res = await fetch('/api/onboard/self', { method: 'POST' })
-      const data = await res.json() as { client_id?: string; error?: string }
+      const data = await res.json() as ClaimWorkspaceResponse
       if (!res.ok || !data.client_id) {
         setError(data.error ?? 'Something went wrong. Please try again.')
         return
       }
-      router.push(`/portal/${data.client_id}`)
+      const params = new URLSearchParams({ from: 'prospect' })
+      if (data.welcome_bonus_granted) {
+        params.set('welcome', '1')
+      }
+      router.push(`/dashboard/clients/${data.client_id}/brief?${params.toString()}`)
     } catch {
       setError('Network error. Please try again.')
     } finally {
@@ -256,11 +266,11 @@ function ClaimWorkspaceBanner() {
               Your workspace is ready
             </p>
             <h2 className="mt-3 text-2xl font-black leading-tight sm:text-3xl">
-              Turn this report into an action plan.
+              Turn this report into your workspace.
             </h2>
             <p className="mt-3 text-sm leading-6 text-slate-300">
-              Save your Discovery Report, track your diagnosis scores, and see the recommended
-              growth actions — all in one place.
+              Save this Discovery Report, complete your brand brief, and unlock the tools
+              that turn findings into shipped action.
             </p>
             {error && (
               <p className="mt-3 text-sm font-semibold text-red-300">{error}</p>
@@ -275,7 +285,7 @@ function ClaimWorkspaceBanner() {
                 : 'bg-white text-slate-950 hover:bg-slate-100'
             }`}
           >
-            {loading ? 'Setting up…' : 'Enter my workspace →'}
+            {loading ? 'Setting up…' : 'Continue to workspace →'}
           </button>
         </div>
       </div>

@@ -17,6 +17,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { getUserPermissions } from '@/lib/auth/whitelist'
 import { getPublicOrigin } from '@/lib/auth/public-origin'
 import { grantSignupBonus } from '@/lib/mtc/grant-signup-bonus'
+import { resolveSelfServeLanding } from '@/lib/auth/self-serve-routing'
 
 export async function GET(request: NextRequest) {
   const origin = getPublicOrigin(request)
@@ -24,7 +25,7 @@ export async function GET(request: NextRequest) {
   const code = searchParams.get('code')
   const next = searchParams.get('next') ?? '/dashboard'
   const safePath = next.startsWith('/') && !next.startsWith('//') ? next : '/dashboard'
-  const loginPath = safePath.startsWith('/portal') ? '/portal/login' : '/login'
+  const loginPath = safePath.startsWith('/portal') || safePath === '/prospect' ? '/portal/login' : '/login'
   const failedUrl = `${origin}${loginPath}?error=auth_failed&next=${encodeURIComponent(safePath)}`
 
   if (!code) {
@@ -74,20 +75,19 @@ export async function GET(request: NextRequest) {
         .eq('email', email)
 
       // Portal users (access_type = 'portal' | 'both' | 'self_serve') → /portal/[clientId]
-      const portalRow = accessRows?.find(r =>
-        r.access_type === 'portal' || r.access_type === 'both' || r.access_type === 'self_serve'
-      )
+      const selfServeRow = accessRows?.find(r => r.access_type === 'self_serve')
+      const portalRow = accessRows?.find(r => r.access_type === 'portal' || r.access_type === 'both')
       // Dashboard/FDE users (access_type = 'dashboard' | 'fde' | 'both') → /dashboard/clients/[clientId]
       const dashboardRow = accessRows?.find(r =>
         r.access_type === 'dashboard' || r.access_type === 'fde' || r.access_type === 'both'
       )
 
-      if (portalRow?.client_id) {
+      if (selfServeRow?.client_id) {
         // Grant 500 MTC welcome bonus on first login for self_serve clients
-        const bonusGranted = await grantSignupBonus(portalRow.client_id).catch(() => false)
-        destination = bonusGranted
-          ? `/dashboard/clients/${portalRow.client_id}/wallet?welcome=1`
-          : `/portal/${portalRow.client_id}`
+        const bonusGranted = await grantSignupBonus(selfServeRow.client_id).catch(() => false)
+        destination = await resolveSelfServeLanding(selfServeRow.client_id, safePath, bonusGranted)
+      } else if (portalRow?.client_id) {
+        destination = `/portal/${portalRow.client_id}`
       } else if (dashboardRow?.client_id) {
         destination = `/dashboard/clients/${dashboardRow.client_id}`
       } else if (safePath === '/prospect') {

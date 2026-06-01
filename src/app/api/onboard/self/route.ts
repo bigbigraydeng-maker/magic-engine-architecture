@@ -21,6 +21,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireSession } from '@/lib/auth/require-session'
 import type { DiscoveryReport } from '@/lib/zhangqian/types'
+import { grantSignupBonus } from '@/lib/mtc/grant-signup-bonus'
 
 export async function POST(_req: NextRequest): Promise<NextResponse> {
   const session = await requireSession()
@@ -46,7 +47,12 @@ export async function POST(_req: NextRequest): Promise<NextResponse> {
 
   // 2. Already onboarded — return existing client_id
   if (job.client_id) {
-    return NextResponse.json({ client_id: job.client_id, already_onboarded: true })
+    const bonusGranted = await grantSignupBonus(job.client_id).catch(() => false)
+    return NextResponse.json({
+      client_id: job.client_id,
+      already_onboarded: true,
+      welcome_bonus_granted: bonusGranted,
+    })
   }
 
   // 3. Check via client_portal_users in case of partial prior run
@@ -58,7 +64,12 @@ export async function POST(_req: NextRequest): Promise<NextResponse> {
     .maybeSingle()
 
   if (existingAccess?.client_id) {
-    return NextResponse.json({ client_id: existingAccess.client_id, already_onboarded: true })
+    const bonusGranted = await grantSignupBonus(existingAccess.client_id).catch(() => false)
+    return NextResponse.json({
+      client_id: existingAccess.client_id,
+      already_onboarded: true,
+      welcome_bonus_granted: bonusGranted,
+    })
   }
 
   // 4. Create client record from discovery report business info
@@ -68,7 +79,7 @@ export async function POST(_req: NextRequest): Promise<NextResponse> {
 
   const { data: client, error: clientErr } = await supabaseAdmin
     .from('clients')
-    .insert({ name: clientName, domain, plan_tier: 'starter' })
+    .insert({ name: clientName, domain, plan_tier: 'starter', source: 'self_serve' })
     .select('id')
     .single<{ id: string }>()
 
@@ -98,7 +109,7 @@ export async function POST(_req: NextRequest): Promise<NextResponse> {
     .insert({
       email,
       client_id: clientId,
-      access_type: 'portal',
+      access_type: 'self_serve',
       display_name: job.name ?? null,
     })
     .then(() => undefined, (err) => console.error('[onboard/self] portal_users insert', err))
@@ -110,5 +121,7 @@ export async function POST(_req: NextRequest): Promise<NextResponse> {
     .eq('id', job.id)
     .then(() => undefined, (err) => console.error('[onboard/self] scan job bind', err))
 
-  return NextResponse.json({ client_id: clientId }, { status: 201 })
+  const bonusGranted = await grantSignupBonus(clientId).catch(() => false)
+
+  return NextResponse.json({ client_id: clientId, welcome_bonus_granted: bonusGranted }, { status: 201 })
 }

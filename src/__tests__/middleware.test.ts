@@ -19,11 +19,24 @@ import type { NextRequest } from 'next/server'
 // ─── Mocks (must be declared before importing the SUT) ──────────────────────
 
 const getUserMock = vi.fn()
+const mockSupabaseIn = vi.fn()
 
 vi.mock('@/lib/supabase-server', () => ({
   createMiddlewareSupabaseClient: () => ({
     auth: { getUser: getUserMock },
   }),
+}))
+
+vi.mock('@/lib/supabase', () => ({
+  supabaseAdmin: {
+    from: vi.fn(() => ({
+      select: vi.fn(() => ({
+        eq: vi.fn(() => ({
+          in: mockSupabaseIn,
+        })),
+      })),
+    })),
+  },
 }))
 
 // Use the real whitelist module so we exercise the integration with env vars.
@@ -52,6 +65,8 @@ describe('dashboard auth middleware', () => {
       delete process.env[k]
     }
     getUserMock.mockReset()
+    mockSupabaseIn.mockReset()
+    mockSupabaseIn.mockResolvedValue({ data: [], error: null })
   })
 
   afterEach(() => {
@@ -93,6 +108,17 @@ describe('dashboard auth middleware', () => {
 
     expect(res.status).toBe(200)
     expect(res.headers.get('location')).toBeNull()
+  })
+
+  it('redirects unauthenticated prospect pages to the portal login page', async () => {
+    getUserMock.mockResolvedValue({ data: { user: null } })
+
+    const res = await middleware(buildRequest('/prospect'))
+
+    expect(res.status).toBe(307)
+    const url = new URL(res.headers.get('location')!)
+    expect(url.pathname).toBe('/portal/login')
+    expect(url.searchParams.get('next')).toBe('/prospect')
   })
 
   it('redirects unauthenticated portal pages to the portal login page', async () => {
@@ -153,6 +179,34 @@ describe('dashboard auth middleware', () => {
     expect(
       res.headers.get('x-middleware-request-x-allowed-client-id'),
     ).toBe('client-x-uuid')
+  })
+
+  it('lets a self-serve user through to their client brief page', async () => {
+    mockSupabaseIn.mockResolvedValueOnce({
+      data: [{ client_id: 'client-self-uuid' }],
+      error: null,
+    })
+    getUserMock.mockResolvedValue({
+      data: { user: { email: 'self@x.com' } },
+    })
+
+    const res = await middleware(
+      buildRequest('/dashboard/clients/client-self-uuid/brief'),
+    )
+
+    expect(mockSupabaseIn).toHaveBeenCalledWith('access_type', [
+      'dashboard',
+      'fde',
+      'both',
+      'self_serve',
+    ])
+    expect(res.status).toBe(200)
+    expect(res.headers.get('x-middleware-request-x-user-role')).toBe(
+      'client-viewer',
+    )
+    expect(
+      res.headers.get('x-middleware-request-x-allowed-client-id'),
+    ).toBe('client-self-uuid')
   })
 
   it('lets a client-viewer through on nested paths within their scope', async () => {

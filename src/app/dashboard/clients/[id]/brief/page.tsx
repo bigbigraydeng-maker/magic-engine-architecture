@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 
 const BRAND_VOICE_OPTIONS = ['Professional', 'Friendly', 'Bold', 'Witty'] as const
 const INDUSTRY_OPTIONS = [
@@ -30,6 +30,7 @@ interface BriefFields {
 export default function BriefPage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [fields, setFields] = useState<BriefFields>({
     company_name: '',
     industry: '',
@@ -41,6 +42,12 @@ export default function BriefPage() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState('')
+  const cameFromProspect = searchParams.get('from') === 'prospect'
+  const hasWelcome = searchParams.get('welcome') === '1'
+  const requestedNext = searchParams.get('next')
+  const nextPath = requestedNext && requestedNext.startsWith('/dashboard/') && !requestedNext.startsWith('//')
+    ? requestedNext
+    : `/dashboard/clients/${id}`
 
   useEffect(() => {
     fetch(`/api/clients/${id}/light-brief`)
@@ -68,7 +75,7 @@ export default function BriefPage() {
         return
       }
       setSaved(true)
-      setTimeout(() => router.back(), 1200)
+      setTimeout(() => router.push(nextPath), 1200)
     } catch {
       setError('Unable to save. Check your connection.')
     } finally {
@@ -93,6 +100,17 @@ export default function BriefPage() {
           These 5 fields unlock content generation, the execution kanban, and Launch Hub. Takes 2 minutes.
         </p>
       </div>
+
+      {(hasWelcome || cameFromProspect) && (
+        <div className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-900">
+          <p className="font-bold">
+            {hasWelcome ? 'Your workspace is active and your welcome MTC is ready.' : 'Your discovery report is now attached to this workspace.'}
+          </p>
+          <p className="mt-1 leading-6 text-emerald-900/80">
+            Finish these 5 fields and we will take you into your working dashboard.
+          </p>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-5">
         <Field label="Company name" required>
@@ -172,7 +190,7 @@ export default function BriefPage() {
           disabled={saving || saved}
           className="flex h-11 w-full items-center justify-center rounded-lg bg-amber-500 text-sm font-bold text-white transition hover:bg-amber-600 disabled:opacity-60"
         >
-          {saved ? '✓ Saved — redirecting…' : saving ? 'Saving…' : 'Save brief & unlock platform'}
+          {saved ? '✓ Saved — opening workspace…' : saving ? 'Saving…' : 'Save brief & unlock platform'}
         </button>
       </form>
     </div>

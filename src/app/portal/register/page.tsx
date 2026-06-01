@@ -20,7 +20,19 @@ const benefits = [
   },
 ]
 
-export default function RegisterPage() {
+interface Props {
+  searchParams: {
+    next?: string
+  }
+}
+
+export default function RegisterPage({ searchParams }: Props) {
+  const next = searchParams.next?.startsWith('/') && !searchParams.next.startsWith('//')
+    ? searchParams.next
+    : '/dashboard'
+  const fromProspect = next === '/prospect'
+  const signInHref = `/portal/login?next=${encodeURIComponent(next)}`
+
   return (
     <main className="flex min-h-screen">
       <MeMarkDefs />
@@ -37,13 +49,19 @@ export default function RegisterPage() {
 
         <div className="mt-auto mb-10">
           <div className="mb-5 text-xs font-bold uppercase tracking-[0.16em] text-me-gold">
-            Free to start
+            {fromProspect ? 'Discovery to workspace' : 'Free to start'}
           </div>
           <h1 className="font-display text-[2.6rem] font-bold leading-[1.08] tracking-tight text-white">
-            500 MTC.<br />On us.
+            {fromProspect ? (
+              <>Save your report.<br />Open your workspace.</>
+            ) : (
+              <>500 MTC.<br />On us.</>
+            )}
           </h1>
           <p className="mt-4 text-sm leading-[1.75] text-white/60">
-            Magic Token Coins power every content, SEO, and AI visibility action on the platform. Start free, top up when you need more.
+            {fromProspect
+              ? 'We will carry your latest Discovery Report into a new workspace, then guide you through a short brand brief before you unlock the tools.'
+              : 'Magic Token Coins power every content, SEO, and AI visibility action on the platform. Start free, top up when you need more.'}
           </p>
 
           <div className="mt-8 flex flex-col gap-3">
@@ -80,18 +98,20 @@ export default function RegisterPage() {
         <div className="w-full max-w-[360px]">
           <div className="mb-7">
             <h2 className="font-display text-[2rem] font-bold leading-tight tracking-tight text-me-charcoal">
-              Create your account.
+              {fromProspect ? 'Create your workspace.' : 'Create your account.'}
             </h2>
             <p className="mt-2 text-sm leading-6 text-me-charcoal/60">
-              Free to start — no credit card required.
+              {fromProspect
+                ? 'Verify your email, then we will take you from your Discovery Report into your workspace brief.'
+                : 'Free to start — no credit card required.'}
             </p>
           </div>
 
-          <RegisterForm />
+          <RegisterForm next={next} fromProspect={fromProspect} />
 
           <p className="mt-7 text-center text-xs text-me-charcoal/45">
             Already have an account?{' '}
-            <Link href="/portal/login" className="font-semibold text-me-ochre no-underline hover:underline">
+            <Link href={signInHref} className="font-semibold text-me-ochre no-underline hover:underline">
               Sign in →
             </Link>
           </p>

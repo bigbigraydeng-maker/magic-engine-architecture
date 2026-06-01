@@ -25,10 +25,12 @@ const portalLoops = [
 ]
 
 export default function PortalLoginPage({ searchParams }: Props) {
-  const next = searchParams.next?.startsWith('/portal')
+  const next = searchParams.next?.startsWith('/') && !searchParams.next.startsWith('//')
     ? searchParams.next
     : '/portal'
   const hasError = searchParams.error === 'auth_failed'
+  const fromProspect = next === '/prospect'
+  const registerHref = `/portal/register?next=${encodeURIComponent(next)}`
 
   return (
     <main className="flex min-h-screen">
@@ -46,13 +48,19 @@ export default function PortalLoginPage({ searchParams }: Props) {
 
         <div className="mt-auto mb-10">
           <div className="mb-5 text-xs font-bold uppercase tracking-[0.16em] text-me-gold">
-            Client portal
+            {fromProspect ? 'Discovery report access' : 'Workspace access'}
           </div>
           <h1 className="font-display text-[2.6rem] font-bold leading-[1.08] tracking-tight text-white">
-            See what has<br />shipped.
+            {fromProspect ? (
+              <>Open your report.<br />Then keep going.</>
+            ) : (
+              <>See what has<br />shipped.</>
+            )}
           </h1>
           <p className="mt-4 text-sm leading-[1.75] text-white/60">
-            Your portal brings monthly reports, approved content, and execution proof into one view.
+            {fromProspect
+              ? 'Sign in to view your Discovery Report, then move it into a workspace whenever you are ready.'
+              : 'Your portal brings monthly reports, approved content, and execution proof into one view.'}
           </p>
 
           <div className="mt-8 flex flex-col gap-3">
@@ -90,10 +98,12 @@ export default function PortalLoginPage({ searchParams }: Props) {
         <div className="w-full max-w-[360px]">
           <div className="mb-7">
             <h2 className="font-display text-[2rem] font-bold leading-tight tracking-tight text-me-charcoal">
-              Welcome back.
+              {fromProspect ? 'Open your Discovery Report.' : 'Enter your workspace.'}
             </h2>
             <p className="mt-2 text-sm leading-6 text-me-charcoal/60">
-              Enter your email to receive a secure login link.
+              {fromProspect
+                ? 'Use your email to receive a secure link back to your saved report.'
+                : 'Use your email to receive a secure link back to your report or dashboard.'}
             </p>
           </div>
 
@@ -101,7 +111,7 @@ export default function PortalLoginPage({ searchParams }: Props) {
 
           <p className="mt-7 text-center text-xs text-me-charcoal/45">
             New customer?{' '}
-            <Link href="/portal/register" className="font-semibold text-me-ochre no-underline hover:underline">
+            <Link href={registerHref} className="font-semibold text-me-ochre no-underline hover:underline">
               Create a free account →
             </Link>
           </p>

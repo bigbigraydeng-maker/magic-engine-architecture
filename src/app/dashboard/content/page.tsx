@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { BriefGateBanner } from '@/components/brief/BriefGateBanner';
 
 interface Client {
   id: string;
@@ -735,6 +736,7 @@ export default function ContentBoardPage() {
         </p>
       )}
 
+      <BriefGateBanner clientId={selectedClient} featureLabel="Launch Hub content approval" className="space-y-5">
       {/* Batch action bar */}
       {someSelected && viewMode === 'list' && (
         <div className="flex items-center gap-3 bg-me-ochre/10 border border-me-ochre/30 rounded-xl px-4 py-3 flex-wrap gap-y-2">
@@ -1301,6 +1303,7 @@ export default function ContentBoardPage() {
           </div>
         </div>
       )}
+      </BriefGateBanner>
     </div>
   );
 }

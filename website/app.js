@@ -91,6 +91,15 @@ const PAGE_TITLES = {
   '/ai-marketing-smes': {
     zh: 'AI营销 — 面向澳洲和新西兰 SME | Magic Engine',
   },
+  '/ai-search': {
+    zh: 'AI 搜索可见度 - 面向 AU/NZ 企业 | Magic Engine',
+  },
+  '/ai-search-faq': {
+    zh: 'AI 搜索 FAQ 支持页 - 面向 AU/NZ 企业 | Magic Engine',
+  },
+  '/ai-search-snippets': {
+    zh: 'AI 搜索 Snippet Bank - 面向 AU/NZ 企业 | Magic Engine',
+  },
   '/about': {
     zh: '关于 Magic Engine — AI 升级、GEO 与培训',
   },
@@ -305,9 +314,13 @@ function renderResult(data) {
   container.innerHTML = html;
 
   // Portal bridge CTA
-  const base = 'https://app.magicengine.com.au/portal/login';
+  const base = 'https://app.magicengine.com.au/portal/login?next=/prospect';
+  const registerBase = 'https://app.magicengine.com.au/portal/register?next=/prospect';
   document.querySelectorAll('.portal-link').forEach(a => {
-    a.href = leadId ? `${base}?lead=${encodeURIComponent(leadId)}` : base;
+    a.href = base;
+  });
+  document.querySelectorAll('.portal-register-link').forEach(a => {
+    a.href = registerBase;
   });
 
   // Show top opportunity in portal bridge if present

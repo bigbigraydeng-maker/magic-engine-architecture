@@ -2,13 +2,24 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { supabaseAdmin } from '@/lib/supabase'
 
+function sanitizeNext(next: unknown): string {
+  if (typeof next !== 'string') {
+    return '/dashboard'
+  }
+
+  return next.startsWith('/') && !next.startsWith('//')
+    ? next
+    : '/dashboard'
+}
+
 // POST /api/auth/self-register
 // Body: { email, password, businessName, websiteUrl? }
 // Creates a self_serve client + Supabase auth user + portal access.
 // Does NOT grant MTC yet — that happens on first login via auth/callback.
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => null)
-  const { email, password, businessName, websiteUrl } = body ?? {}
+  const { email, password, businessName, websiteUrl, next } = body ?? {}
+  const safeNext = sanitizeNext(next)
 
   if (!email || !password || !businessName) {
     return NextResponse.json(
@@ -62,7 +73,7 @@ export async function POST(request: NextRequest) {
     email: email.toLowerCase().trim(),
     password,
     options: {
-      emailRedirectTo: `${appUrl}/auth/callback?next=/dashboard`,
+      emailRedirectTo: `${appUrl}/auth/callback?next=${encodeURIComponent(safeNext)}`,
     },
   })
 
@@ -106,6 +117,37 @@ export async function POST(request: NextRequest) {
   if (portalError) {
     console.error('[self-register] portal user insert failed:', portalError)
     // Non-fatal: client exists, they can still be added manually
+  }
+
+  const { data: latestScan } = await supabaseAdmin
+    .from('public_scan_jobs')
+    .select('id, domain, result, client_id')
+    .eq('email', email.toLowerCase().trim())
+    .eq('status', 'completed')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (latestScan?.id && !latestScan.client_id) {
+    if (latestScan.result) {
+      await supabaseAdmin
+        .from('client_discovery')
+        .insert({
+          client_id: client.id,
+          domain: latestScan.domain ?? client.id,
+          payload: latestScan.result,
+          cost_usd: 0,
+          model: 'public-scan',
+          tool_calls: 0,
+        })
+        .then(() => undefined, (err) => console.error('[self-register] client_discovery insert failed:', err))
+    }
+
+    await supabaseAdmin
+      .from('public_scan_jobs')
+      .update({ client_id: client.id })
+      .eq('id', latestScan.id)
+      .then(() => undefined, (err) => console.error('[self-register] public_scan_jobs bind failed:', err))
   }
 
   return NextResponse.json({
