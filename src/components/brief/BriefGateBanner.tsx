@@ -15,10 +15,12 @@ interface Props {
   featureLabel: string
   /** Optional explicit client id. Falls back to the dashboard route param. */
   clientId?: string
+  /** Optional layout classes for surfaces that need to preserve flex sizing while locked. */
+  className?: string
   children: React.ReactNode
 }
 
-export function BriefGateBanner({ featureLabel, clientId, children }: Props) {
+export function BriefGateBanner({ featureLabel, clientId, className, children }: Props) {
   const params = useParams<{ id?: string; clientId?: string }>()
   const resolvedClientId = clientId ?? params.id ?? params.clientId ?? ''
   const [status, setStatus] = useState<'checking' | 'open' | 'locked'>('checking')
@@ -57,7 +59,7 @@ export function BriefGateBanner({ featureLabel, clientId, children }: Props) {
   const href = briefUrl || `/dashboard/clients/${resolvedClientId}/brief`
 
   return (
-    <div className="relative" data-testid="brief-gate">
+    <div className={['relative', className].filter(Boolean).join(' ')} data-testid="brief-gate">
       <div
         className="pointer-events-none select-none opacity-30 blur-[2px]"
         aria-hidden="true"

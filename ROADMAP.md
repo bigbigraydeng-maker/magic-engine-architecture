@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-02 03:51 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-02 04:02 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -3099,7 +3099,7 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 
 - [x] **P29.C.1** — Brief 填写页 `/dashboard/clients/[id]/brief`：5 字段表单 + 保存 → `brief_completed_at = NOW()` ✅ 2026-06-02（P29.E.6 E2E verified）
 - [x] **P29.C.2** — `BriefGateBanner` 通用组件：检查 `isBriefComplete`，未完成时显示 Banner + 内容操作区覆盖半透明蒙层 ✅ 2026-06-02
-- [ ] **P29.C.3** — 接入内容生成页（博客 / 社媒 / Reels Studio）
+- [x] **P29.C.3** — 接入内容生成页（博客 / 社媒 / Reels Studio） ✅ 2026-06-02
 - [ ] **P29.C.4** — 接入执行看板顶部
 - [ ] **P29.C.5** — 接入 Launch Hub
 
@@ -3134,6 +3134,10 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 ---
 
 ## 9. 功能完成日志
+
+### 2026-06-02（Phase 29 Brief Gate P29.C.3 完成）
+
+- 内容生成门槛已补齐：Blog / Marketing Plan 已接入，社媒单条生成抽屉与 Reels Studio 现在也会要求 self_serve 用户先完成 Brief
 
 ### 2026-06-02（Website Self-Serve Funnel P29.E.1-5 完成）
 

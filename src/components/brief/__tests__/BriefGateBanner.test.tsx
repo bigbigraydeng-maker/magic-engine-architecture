@@ -83,6 +83,23 @@ describe('BriefGateBanner', () => {
     expect(screen.getByTestId('brief-gate-content')).toHaveAttribute('aria-hidden', 'true')
   })
 
+  it('uses the explicit client id when provided', async () => {
+    mockFetch({ complete: true, gated: false })
+
+    render(
+      <BriefGateBanner clientId="client-explicit" featureLabel="Social generation">
+        <button>Generate</button>
+      </BriefGateBanner>,
+    )
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/clients/client-explicit/brief-status',
+        { cache: 'no-store' },
+      )
+    })
+  })
+
   it('fails open when the status endpoint is unavailable', async () => {
     vi.mocked(fetch).mockRejectedValueOnce(new Error('network down'))
 

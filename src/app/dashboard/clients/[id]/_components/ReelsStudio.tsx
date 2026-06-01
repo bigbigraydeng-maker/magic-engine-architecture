@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { BriefGateBanner } from '@/components/brief/BriefGateBanner'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -466,7 +467,7 @@ export function ReelsStudio({ clientId, defaultCampaignId, onDraftGenerated, rea
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 
-  return (
+  const reelsStudio = (
     <div className="space-y-4">
       {/* Header: campaign selector + generate button */}
       <div className="flex items-center gap-3 flex-wrap">
@@ -897,6 +898,14 @@ export function ReelsStudio({ clientId, defaultCampaignId, onDraftGenerated, rea
         </div>
       )}
     </div>
+  )
+
+  if (readonly) return reelsStudio
+
+  return (
+    <BriefGateBanner clientId={clientId} featureLabel="Reels Studio">
+      {reelsStudio}
+    </BriefGateBanner>
   )
 }
 

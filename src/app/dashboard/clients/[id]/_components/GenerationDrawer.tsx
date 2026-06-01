@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import type { CampaignBrief } from '@/types/magic-engine'
+import { BriefGateBanner } from '@/components/brief/BriefGateBanner'
 
 interface Props {
   clientId: string
@@ -152,6 +153,11 @@ export function GenerationDrawer({ clientId, open, onClose, executionItemId }: P
           <button onClick={onClose} className="text-me-charcoal/45 hover:text-me-charcoal/60 text-xl leading-none">×</button>
         </div>
 
+        <BriefGateBanner
+          clientId={clientId}
+          featureLabel="single social content generation"
+          className="flex min-h-0 flex-1 flex-col"
+        >
         {/* Scrollable body */}
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-6">
 
@@ -344,6 +350,7 @@ export function GenerationDrawer({ clientId, open, onClose, executionItemId }: P
             批量生成请前往「推广活动」tab 使用一键生成
           </p>
         </div>
+        </BriefGateBanner>
       </div>
     </>
   )
