@@ -9,7 +9,7 @@ interface SessionRouteResponse {
 }
 
 function loginPathFor(next: string): string {
-  return next.startsWith('/portal') ? '/portal/login' : '/login'
+  return next.startsWith('/portal') || next === '/prospect' ? '/portal/login' : '/login'
 }
 
 function safeNext(value: string | null): string {

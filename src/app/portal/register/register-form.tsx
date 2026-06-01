@@ -5,7 +5,12 @@ import { useState } from 'react'
 const INPUT_CLS = 'mt-1.5 h-12 w-full rounded-xl border-[1.5px] border-me-charcoal/14 bg-white px-3 text-sm text-me-charcoal outline-none transition focus:border-me-ochre focus:shadow-[0_0_0_3px_rgba(196,145,46,.12)]'
 const LABEL_CLS = 'text-xs font-bold uppercase tracking-[0.12em] text-me-charcoal/55'
 
-export default function RegisterForm() {
+interface RegisterFormProps {
+  next: string
+  fromProspect: boolean
+}
+
+export default function RegisterForm({ next, fromProspect }: RegisterFormProps) {
   const [form, setForm] = useState({
     businessName: '',
     email: '',
@@ -34,6 +39,7 @@ export default function RegisterForm() {
           password: form.password,
           businessName: form.businessName.trim(),
           websiteUrl: form.websiteUrl.trim() || undefined,
+          next,
         }),
       })
 
@@ -62,7 +68,12 @@ export default function RegisterForm() {
         <p className="mt-2 text-sm leading-6 text-me-charcoal/60">
           Confirmation link sent to{' '}
           <span className="font-semibold text-me-charcoal">{form.email}</span>.
-          {' '}Click the link to activate your account and receive your <strong>500 MTC</strong> welcome bonus.
+          {' '}
+          {fromProspect
+            ? 'Verify it to save your Discovery Report, open your workspace, and receive your '
+            : 'Click the link to activate your account and receive your '}
+          <strong>500 MTC</strong>
+          {fromProspect ? ' welcome bonus.' : ' welcome bonus.'}
         </p>
       </div>
     )

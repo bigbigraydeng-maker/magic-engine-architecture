@@ -314,9 +314,9 @@ function renderResult(data) {
   container.innerHTML = html;
 
   // Portal bridge CTA
-  const base = 'https://app.magicengine.com.au/portal/login';
+  const base = 'https://app.magicengine.com.au/portal/login?next=/prospect';
   document.querySelectorAll('.portal-link').forEach(a => {
-    a.href = leadId ? `${base}?lead=${encodeURIComponent(leadId)}` : base;
+    a.href = base;
   });
 
   // Show top opportunity in portal bridge if present

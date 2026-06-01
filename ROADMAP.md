@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-02 01:45 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-02 03:07 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -3108,6 +3108,15 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 - [ ] **P29.D.1** — AI Agent 辅助补 Brief：给出公司名 / 网址后 AI 自动提议 5 字段（可编辑确认）
 - [ ] **P29.D.2** — Brief 完成后可随时在 Settings 页完善为 Full Brief
 
+#### P29.E — Website to Self-Serve Onboarding Funnel
+
+- [x] **P29.E.1** — Funnel audit and redirect alignment across website CTA, `/discover`, `/prospect`, `/portal/register`, `/portal/login`, and `/auth/callback`
+- [x] **P29.E.2** — Merge prospect claim into self_serve so both direct register and report claim land on the same workspace path
+- [x] **P29.E.3** — First-login landing now routes self-serve users to `/dashboard/clients/[id]/brief`
+- [x] **P29.E.4** — Align website CTA and copy around one path: diagnose first, then open workspace
+- [x] **P29.E.5** — Add a clear post-brief next step so new users do not stall after saving
+- [ ] **P29.E.6** — Run an authenticated end-to-end QA pass from website discovery to saved brief and dashboard entry
+
 ### 里程碑
 
 | 里程碑 | 完成条件 |
@@ -3125,6 +3134,10 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 ---
 
 ## 9. 功能完成日志
+
+### 2026-06-02（Website Self-Serve Funnel P29.E.1-5 完成）
+
+- 官网 discover、报告邮件、prospect claim、register/login、callback 与 brief 已统一成一条 self-serve workspace 路径
 
 ### 2026-06-01（Website SEO Optimization P29.SEO.6 完成）
 

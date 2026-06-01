@@ -215,15 +215,15 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-06-02（基础工作转向 AI search / GEO 页面建设）
+> Last updated: 2026-06-02 (Website to Self-Serve onboarding funnel P29.E.1-5 is complete; authenticated QA is next)
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P29.GEO.7** | AI search local use cases：加一个更轻的 AU/NZ use-case page，补 2-3 个本地化场景，让 snippet bank 后面还有真实落点 | ⭐⭐ |
+| **P29.E.6** | Authenticated end-to-end QA from website discovery to saved brief and dashboard entry | HIGH |
 
-**状态校准（2026-06-02）**：P29.SEO.9 已完成，P29.ADS.1 已完成，P29.ADS.2 已完成，P29.GEO.1-6 已完成，P29.WEB.1 已完成，P29.WEB.2 已完成；P29.SEO.14、P29.SEO.15 与 P29.SEO.16 已完成，当前转向 AI search local use cases。下一 session 第一句话：
+**Status check (2026-06-02):** P29.SEO.9, P29.ADS.1-2, P29.GEO.1-6, P29.WEB.1-2, P29.SEO.14-16, and P29.E.1-5 are done. Growth work keeps P29.GEO.7 and P29.SEO.17 open, and the next product pass is authenticated onboarding QA. Next session first line:
 
-- `继续 Website GEO Visibility P29.GEO.7`
+- `Continue Website Self-Serve Funnel P29.E.6`
 **Phase 8.12 Sprint 3 全部完成（S3.1–S3.5）**，P8.12.S1.6b（小红书 scraper）为下一可选扩展项。
 
 **更新规则**（每次上线新功能）：

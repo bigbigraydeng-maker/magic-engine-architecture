@@ -4,6 +4,7 @@ import { NextRequest } from 'next/server'
 const mocks = vi.hoisted(() => ({
   getUser: vi.fn(),
   from: vi.fn(),
+  grantSignupBonus: vi.fn(),
 }))
 
 vi.mock('@/lib/supabase-server', () => ({
@@ -16,6 +17,10 @@ vi.mock('@/lib/supabase', () => ({
   supabaseAdmin: {
     from: mocks.from,
   },
+}))
+
+vi.mock('@/lib/mtc/grant-signup-bonus', () => ({
+  grantSignupBonus: mocks.grantSignupBonus,
 }))
 
 import { GET } from '../route'
@@ -31,6 +36,14 @@ function accessRows(rows: Array<{ client_id: string; access_type: string }>) {
   }
 }
 
+function briefStatusRow(brief_completed_at: string | null) {
+  return {
+    select: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockReturnThis(),
+    maybeSingle: vi.fn().mockResolvedValue({ data: { brief_completed_at } }),
+  }
+}
+
 describe('/api/auth/session-route', () => {
   beforeEach(() => {
     delete process.env.ADMIN_EMAILS
@@ -38,6 +51,8 @@ describe('/api/auth/session-route', () => {
     delete process.env.CLIENT_VIEWERS
     mocks.getUser.mockReset()
     mocks.from.mockReset()
+    mocks.grantSignupBonus.mockReset()
+    mocks.grantSignupBonus.mockResolvedValue(false)
   })
 
   it('routes admin users to dashboard before portal bindings', async () => {
@@ -71,5 +86,33 @@ describe('/api/auth/session-route', () => {
     const body = await res.json() as { redirect: string }
 
     expect(body.redirect).toBe('/portal/client-123')
+  })
+
+  it('routes self_serve users without a completed brief to the brief page', async () => {
+    mocks.getUser.mockResolvedValue({ data: { user: { email: 'selfserve@example.com' } } })
+    mocks.from
+      .mockReturnValueOnce(accessRows([
+        { client_id: 'client-123', access_type: 'self_serve' },
+      ]))
+      .mockReturnValueOnce(briefStatusRow(null))
+
+    const res = await GET(request('/dashboard'))
+    const body = await res.json() as { redirect: string }
+
+    expect(body.redirect).toBe('/dashboard/clients/client-123/brief')
+  })
+
+  it('preserves deep dashboard targets for self_serve users after the brief is complete', async () => {
+    mocks.getUser.mockResolvedValue({ data: { user: { email: 'selfserve@example.com' } } })
+    mocks.from
+      .mockReturnValueOnce(accessRows([
+        { client_id: 'client-123', access_type: 'self_serve' },
+      ]))
+      .mockReturnValueOnce(briefStatusRow('2026-06-02T01:00:00.000Z'))
+
+    const res = await GET(request('/dashboard/clients/client-123/execution'))
+    const body = await res.json() as { redirect: string }
+
+    expect(body.redirect).toBe('/dashboard/clients/client-123/execution')
   })
 })

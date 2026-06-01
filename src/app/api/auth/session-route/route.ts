@@ -11,6 +11,7 @@ import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getUserPermissions } from '@/lib/auth/whitelist'
 import { grantSignupBonus } from '@/lib/mtc/grant-signup-bonus'
+import { resolveSelfServeLanding } from '@/lib/auth/self-serve-routing'
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
@@ -38,22 +39,24 @@ export async function GET(request: NextRequest) {
     .select('client_id, access_type')
     .eq('email', email)
 
+  const selfServeUser = accessRows?.find(row => row.access_type === 'self_serve')
   const portalUser = accessRows?.find(row =>
-    row.access_type === 'portal' || row.access_type === 'both' || row.access_type === 'self_serve'
+    row.access_type === 'portal' || row.access_type === 'both'
   )
 
-  if (portalUser?.client_id) {
+  if (selfServeUser?.client_id) {
     // Grant 500 MTC welcome bonus on first login for self_serve clients.
     // Idempotent (checks email_verified_at internally). Covers magic-link + Google
     // login paths — /auth/callback's grant only fires on the PKCE confirmation flow,
     // which fails for server-side signUp, so the bonus must also live here.
-    const bonusGranted = await grantSignupBonus(portalUser.client_id).catch(() => false)
-    // P29.B.1 — unified into dashboard; portal routes do a 308 permanentRedirect
+    const bonusGranted = await grantSignupBonus(selfServeUser.client_id).catch(() => false)
     return NextResponse.json({
-      redirect: bonusGranted
-        ? `/dashboard/clients/${portalUser.client_id}/wallet?welcome=1`
-        : `/dashboard/clients/${portalUser.client_id}`,
+      redirect: await resolveSelfServeLanding(selfServeUser.client_id, safePath, bonusGranted),
     })
+  }
+
+  if (portalUser?.client_id) {
+    return NextResponse.json({ redirect: `/portal/${portalUser.client_id}` })
   }
 
   // Honour explicit /prospect next param (magic link from /discover)
