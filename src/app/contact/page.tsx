@@ -3,7 +3,7 @@ import Link from 'next/link'
 import ContactForm from './_components/ContactForm'
 
 export const metadata: Metadata = {
-  title: 'Contact Us — Magic Engine',
+  title: 'Contact Us',
   description: 'Get in touch with the Magic Engine team. We help AU/NZ marketing agencies and businesses grow through AI-powered execution.',
 }
 
