@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-01 18:05 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-01 18:25 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -33,6 +33,7 @@
 ### Website Public Root Sync - 2026-06-01
 
 - [x] **P29.WEB.1** public root site alignment - update the `website/` homepage, about page, and discovery flow to the current AI upgrade / GEO / training positioning, then add dedicated static `/geo` and `/training` pages so the real public site matches the current offer.
+- [x] **P29.WEB.2** bilingual route split - add dedicated `/cn/` public pages and language-aware link routing so English and Chinese browsing stay within the same language.
 
 ### Active hotfix registration - 2026-05-25
 
@@ -3141,6 +3142,9 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 
 ### 2026-06-01（Website Ads Launch Prep P29.ADS.2 完成）
 - 新增 `/ads` landing page，并在首页补上 `Start ads launch` 入口，投放前转化路径已跑通
+
+### 2026-06-01（Website Bilingual Routing P29.WEB.2 完成）
+- 公开站已切成英文 `/` 和中文 `/cn.html` 两套 HTML 页面，切换语言后链接会继续留在同一语言里
 
 ### 2026-06-01（Phase 29 战略决策登记 + P21.B 看板来源标记上线）
 

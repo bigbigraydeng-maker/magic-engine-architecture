@@ -215,13 +215,13 @@ git push origin master   # 触发 Render 部署
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-06-01（Website Ads Launch Prep P29.ADS.2 已完成，下一步是广告投放首周监测）
+> 最后更新：2026-06-01（Website Bilingual Routing P29.WEB.2 已完成，下一步先看广告投放首周）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **P29.ADS.2** | Ads landing page + pre-launch conversion QA | ✅ 完成 |
+| **P29.WEB.2** | Bilingual route split：`/` 与 `/cn.html` 两套 HTML 页面，链接保持同语种 | ✅ 完成 |
 
-**状态校准（2026-06-01）**：P29.SEO.9 已完成，P29.ADS.1 已完成，P29.GEO.1-3 已完成，P29.WEB.1 已完成；P29.ADS.2 也已完成，下一步转向广告投放首周监测。下一 session 第一句话：
+**状态校准（2026-06-01）**：P29.SEO.9 已完成，P29.ADS.1 已完成，P29.ADS.2 已完成，P29.GEO.1-3 已完成，P29.WEB.1 已完成，P29.WEB.2 已完成；下一步先看广告投放首周。下一 session 第一句话：
 
 - `继续广告投放首周监测`
 
