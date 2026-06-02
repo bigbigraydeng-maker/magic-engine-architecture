@@ -9,13 +9,13 @@
  * Poll the same /zhangqian/status?job_id=... endpoint for progress.
  *
  * Body: { triggered_by?: string }  (connector anchor, e.g. 'meta-ads')
- * Security: Bearer token (INTERNAL_API_KEY)
+ * Security: session-cookie via requireDashboardClientAccess (Phase 19 pattern)
  * Reference: ROADMAP.md P8.10.S0.22
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { requireBearerToken } from '@/lib/validation-utils'
+import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { runZhangqianAdvanced } from '@/lib/zhangqian/advanced-agent'
 import {
   createDiscoveryJob,
@@ -32,12 +32,11 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { id: string } },
 ): Promise<NextResponse> {
-  const auth = requireBearerToken(req.headers.get('authorization') ?? undefined)
-  if (!auth.ok) {
-    return NextResponse.json({ success: false, error: auth.error }, { status: auth.status })
-  }
-
   const { id: clientId } = params
+  const access = await requireDashboardClientAccess(clientId)
+  if (!access.ok) {
+    return NextResponse.json({ success: false, error: access.error }, { status: access.status })
+  }
 
   let triggeredBy = 'unknown'
   let siteUrl: string | undefined
