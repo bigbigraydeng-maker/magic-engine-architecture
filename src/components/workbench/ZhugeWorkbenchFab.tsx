@@ -329,8 +329,34 @@ export function ZhugeWorkbenchFab({
     setFeedbackNotice('已恢复当前批次建议。')
   }
 
+  // Hover-fan: quick links pop out above the FAB button when mouse hovers the
+  // button area, so the user can jump to any sub-page without opening the panel.
+  const [hoverFan, setHoverFan] = useState(false)
+
   return (
-    <div className={`fixed z-[99] ${anchorClassName}`}>
+    <div
+      className={`fixed z-[99] ${anchorClassName}`}
+      onMouseLeave={() => setHoverFan(false)}
+    >
+      {/* Hover-fan quick links (above the FAB, only visible on hover when panel is closed) */}
+      {!open && quickLinks.length > 0 && hoverFan && (
+        <div className="absolute bottom-14 right-0 flex flex-col items-end gap-1.5 pb-2">
+          {quickLinks.map((link, i) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              style={{
+                animation: `zhugeFanIn 220ms ease-out ${i * 35}ms both`,
+              }}
+              className="whitespace-nowrap rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-[12px] font-bold text-slate-700 shadow-md hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-700"
+            >
+              {link.label}
+            </Link>
+          ))}
+          <style>{`@keyframes zhugeFanIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}`}</style>
+        </div>
+      )}
+
       {open && (
         <>
           <div className="fixed inset-0" onClick={() => setOpen(false)} />
@@ -346,6 +372,25 @@ export function ZhugeWorkbenchFab({
             </div>
 
             <div className="max-h-[75vh] space-y-4 overflow-y-auto px-4 py-4">
+              {/* ── Quick switch — moved to top per PM request ── */}
+              {quickLinks.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">快捷切换</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {quickLinks.map(link => (
+                      <Link
+                        key={link.href}
+                        href={link.href}
+                        className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+                        onClick={() => setOpen(false)}
+                      >
+                        {link.label}
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">当前工作线程</p>
                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -515,23 +560,6 @@ export function ZhugeWorkbenchFab({
                 </div>
               )}
 
-              {quickLinks.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">快捷切换</p>
-                  <div className="flex flex-wrap gap-2">
-                    {quickLinks.map(link => (
-                      <Link
-                        key={link.href}
-                        href={link.href}
-                        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
-                        onClick={() => setOpen(false)}
-                      >
-                        {link.label}
-                      </Link>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </>
@@ -539,7 +567,8 @@ export function ZhugeWorkbenchFab({
 
       <button
         onClick={() => setOpen(v => !v)}
-        title="打开诸葛亮工作台"
+        onMouseEnter={() => setHoverFan(true)}
+        title="打开诸葛亮工作台（鼠标悬停查看快捷切换）"
         className={`inline-flex h-12 items-center gap-2 rounded-full border px-4 shadow-lg transition-all duration-200 ${
           open
             ? 'border-slate-800 bg-slate-950 text-white shadow-slate-900/30'
