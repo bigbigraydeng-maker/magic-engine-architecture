@@ -338,9 +338,15 @@ export function ZhugeWorkbenchFab({
       className={`fixed z-[99] ${anchorClassName}`}
       onMouseLeave={() => setHoverFan(false)}
     >
-      {/* Hover-fan quick links (above the FAB, only visible on hover when panel is closed) */}
+      {/* Hover-fan quick links (above the FAB, only visible on hover when panel is closed)
+          The wrapper extends ALL the way down to the button (bottom-12, the FAB height)
+          and uses pb-14 padding so the hoverable area is continuous from fan → button.
+          Without this, the mouse crosses an unhoverable gap and the fan disappears. */}
       {!open && quickLinks.length > 0 && hoverFan && (
-        <div className="absolute bottom-14 right-0 flex flex-col items-end gap-1.5 pb-2">
+        <div
+          className="absolute bottom-12 right-0 flex flex-col items-end gap-1.5 pb-3"
+          onMouseEnter={() => setHoverFan(true)}
+        >
           {quickLinks.map((link, i) => (
             <Link
               key={link.href}
