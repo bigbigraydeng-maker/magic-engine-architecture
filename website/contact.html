@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Contact — Magic Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+.nav { position: sticky; top: 0; z-index: 50; background: rgba(251,248,243,.8); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+.nav-inner { display: flex; align-items: center; justify-content: space-between; height: 72px; gap: 20px; }
+.logo-row { display: flex; align-items: center; gap: 11px; }
+.logo-mark { width: 38px; height: 34px; }
+.logo-text .name { font-family: var(--font-display); font-weight: 700; font-size: 18px; }
+.logo-text .sub { font-size: 11px; color: var(--ink-60); margin-top: 2px; }
+.nav-links { display: flex; gap: 28px; }
+.nav-links a { font-size: 14.5px; font-weight: 500; color: var(--ink-60); }
+.nav-links a:hover { color: var(--ink); }
+@media (max-width: 760px){ .nav-links { display: none; } }
+
+.c-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; padding-block: 72px; align-items: start; }
+.c-left h1 { font-family: var(--font-display); font-size: clamp(34px,4.4vw,52px); font-weight: 600; letter-spacing: -.02em; }
+.c-left p { font-size: 18px; color: var(--ink-60); margin-top: 18px; line-height: 1.6; max-width: 30em; }
+.c-opts { margin-top: 34px; display: grid; gap: 14px; }
+.c-opt { display: flex; align-items: center; gap: 14px; padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
+.c-opt .ic { width: 44px; height: 44px; border-radius: 11px; flex: none; display: grid; place-items: center; background: var(--surface-warm); border: 1px solid var(--line); color: var(--accent); }
+.c-opt .ic svg { width: 20px; height: 20px; }
+.c-opt .t { font-weight: 600; font-size: 15px; }
+.c-opt .m { font-size: 13.5px; color: var(--ink-60); margin-top: 2px; }
+
+.c-card { background: var(--surface); border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow-soft); padding: 30px; }
+.lbl { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-40); margin-bottom: 9px; display: block; }
+.inp { width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 11px; padding: 13px 15px; font-family: var(--font-ui); font-size: 15px; color: var(--ink); }
+.inp::placeholder { color: var(--ink-40); }
+.frow { margin-bottom: 18px; }
+textarea.inp { resize: vertical; min-height: 120px; }
+.hint { font-size: 13px; color: var(--status-track); margin-top: 14px; display: none; align-items: center; gap: 7px; }
+.hint.show { display: flex; }
+
+.footer { border-top: 1px solid var(--line); padding-block: 32px; }
+.footer-in { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--ink-40); }
+.footer-in nav { display: flex; gap: 22px; }
+.footer-in a:hover { color: var(--ink); }
+@media (max-width: 820px){ .c-grid { grid-template-columns: 1fr; gap: 32px; padding-block: 48px; } }
+</style>
+
+<meta name="description" content="Request a free growth diagnosis from Magic Engine. Tell us your market, channels and goals — we respond within 48 hours." />
+<link rel="canonical" href="https://YOUR-DOMAIN/contact" />
+<meta name="theme-color" content="#0D0D0D" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Magic Engine" />
+<meta property="og:title" content="Contact — Magic Engine" />
+<meta property="og:description" content="Request a free growth diagnosis from Magic Engine. Tell us your market, channels and goals — we respond within 48 hours." />
+<meta property="og:url" content="https://YOUR-DOMAIN/contact" />
+<meta property="og:image" content="https://YOUR-DOMAIN/og-image.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Contact — Magic Engine" />
+<meta name="twitter:description" content="Request a free growth diagnosis from Magic Engine. Tell us your market, channels and goals — we respond within 48 hours." />
+<meta name="twitter:image" content="https://YOUR-DOMAIN/og-image.png" />
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="logo-row" href="/">
+      <svg class="logo-mark" viewBox="0 0 200 180" fill="none" aria-hidden="true"><use href="#me-mark"/></svg>
+      <span class="logo-text"><span class="name">Magic Engine</span><span class="sub">by Magic Lab</span></span>
+    </a>
+    <nav class="nav-links">
+      <a href="/#modules">Product</a>
+      <a href="/#proof">Pilots</a>
+      <a href="/about">About</a>
+      <a href="/portal/login">Portal</a>
+    </nav>
+    <a href="/#cta" class="btn btn-primary btn-sm">Get free diagnosis</a>
+  </div>
+</header>
+
+<main class="wrap c-grid">
+  <div class="c-left">
+    <span class="eyebrow">Talk to Magic Lab</span>
+    <h1 style="margin-top:14px">Let's see what's possible.</h1>
+    <p>Tell us about your brand and your market. We'll come back with a free, prioritised diagnosis — usually within 48 hours.</p>
+    <div class="c-opts">
+      <div class="c-opt"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v14H4z"/><path d="m4 8 8 5 8-5"/></svg></span><div><div class="t">Email</div><div class="m">hello@magicengine.com.au</div></div></div>
+      <div class="c-opt"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 17l5-5 4 3 6-7"/><path d="M3 21h18"/></svg></span><div><div class="t">Book a diagnosis call</div><div class="m">30 minutes, no commitment</div></div></div>
+      <div class="c-opt"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="11" r="3"/><path d="M12 2a8 8 0 0 0-8 8c0 5 8 12 8 12s8-7 8-12a8 8 0 0 0-8-8z"/></svg></span><div><div class="t">Based in</div><div class="m">Australia &amp; New Zealand</div></div></div>
+    </div>
+  </div>
+
+  <form class="c-card" id="diagnosisForm" action="https://formspree.io/f/YOUR_FORM_ID" method="POST">
+    <div class="frow"><label class="lbl">Your name</label><input class="inp" type="text" name="name" placeholder="Jordan Smith" required /></div>
+    <div class="frow"><label class="lbl">Work email</label><input class="inp" type="email" name="email" placeholder="you@company.com" required /></div>
+    <div class="frow"><label class="lbl">Company website</label><input class="inp" type="text" name="website" placeholder="https://" /></div>
+    <div class="frow"><label class="lbl">What are you hoping to grow?</label><textarea class="inp" name="goals" placeholder="Tell us about your market, channels and goals…"></textarea></div>
+    <button class="btn btn-primary" style="width:100%" id="send">Request free diagnosis</button>
+    <div class="hint" id="hint"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Thanks — we'll be in touch within 48 hours.</div>
+  </form>
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-in">
+    <span>© 2026 Magic Lab. Powered by Magic Engine.</span>
+    <nav>
+      <a href="/about">About</a>
+      <a href="/contact">Contact</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+    </nav>
+  </div>
+</footer>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <linearGradient id="meGrad" x1="20" y1="20" x2="180" y2="160" gradientUnits="userSpaceOnUse"><stop stop-color="#EBCB8B"/><stop offset="0.55" stop-color="#C4912E"/><stop offset="1" stop-color="#A6781F"/></linearGradient>
+  <radialGradient id="meNode" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#FFFFFF"/><stop offset="0.45" stop-color="#FBEFD2"/><stop offset="1" stop-color="#EBCB8B"/></radialGradient>
+  <g id="me-mark">
+    <g stroke="url(#meGrad)" fill="none" stroke-linecap="round" stroke-width="7"><path d="M22,38 C70,50 110,78 150,92"/><path d="M22,62 C72,68 112,84 150,92"/><path d="M22,86 C76,90 112,90 150,92"/><path d="M22,110 C76,102 112,98 150,92"/><path d="M22,134 C70,122 112,104 150,92"/></g>
+    <g fill="url(#meGrad)"><circle cx="22" cy="38" r="6"/><circle cx="22" cy="62" r="6"/><circle cx="22" cy="86" r="6"/><circle cx="22" cy="110" r="6"/><circle cx="22" cy="134" r="6"/></g>
+    <rect x="150" y="76" width="32" height="32" rx="9" fill="url(#meNode)"/>
+  </g>
+</defs></svg>
+
+<script>
+  (function(){
+    var form = document.getElementById('diagnosisForm');
+    var hint = document.getElementById('hint');
+    var btn  = document.getElementById('send');
+    form.addEventListener('submit', function(e){
+      e.preventDefault();
+      if (form.action.indexOf('YOUR_FORM_ID') !== -1) {
+        hint.classList.add('show'); btn.textContent = 'Request sent';
+        return; // no endpoint configured yet — show success locally
+      }
+      btn.textContent = 'Sending…'; btn.disabled = true;
+      fetch(form.action, { method:'POST', body:new FormData(form), headers:{ Accept:'application/json' } })
+        .then(function(r){
+          if (r.ok){ hint.classList.add('show'); btn.textContent = 'Request sent'; form.reset(); }
+          else { btn.textContent = 'Try again'; btn.disabled = false; }
+        })
+        .catch(function(){ btn.textContent = 'Try again'; btn.disabled = false; });
+    });
+  })();
+</script>
+</body>
+</html>

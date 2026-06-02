@@ -1,415 +1,764 @@
-﻿<!DOCTYPE html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="en" data-motion="on">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Magic Engine — AI Upgrade, GEO & Training for AU/NZ Businesses</title>
-  <meta name="description" content="Magic Engine helps Australian and New Zealand businesses upgrade with AI, GEO, and training. Bilingual English and Chinese support for local teams.">
-  <meta property="og:title" content="Magic Engine — AI Upgrade, GEO & Training for AU/NZ Businesses">
-  <meta property="og:description" content="AI upgrade, GEO, and training for Australian and New Zealand businesses. Bilingual English and Chinese support for local teams.">
-  <meta property="og:type" content="website">
-  <meta property="og:url" content="https://magicengine.com.au/">
-  <link rel="canonical" href="https://magicengine.com.au/">
-  <link rel="alternate" hreflang="en" href="https://magicengine.com.au/">
-  <link rel="alternate" hreflang="zh-Hans" href="https://magicengine.com.au/cn/">
-  <link rel="alternate" hreflang="x-default" href="https://magicengine.com.au/">
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Magic Engine — Turns diagnosis into visible execution</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+/* ===================== Mark / logo ===================== */
+.logo-row { display: flex; align-items: center; gap: 11px; }
+.logo-mark { width: 40px; height: 36px; flex: none; }
+.logo-text { line-height: 1; }
+.logo-text .name { font-family: var(--font-display); font-weight: 700; font-size: 19px; letter-spacing: -.02em; }
+.logo-text .sub { font-size: 11px; color: var(--ink-60); font-weight: 500; margin-top: 2px; }
+
+/* ===================== Nav ===================== */
+.nav {
+  position: sticky; top: 0; z-index: 50;
+  background: rgba(251, 248, 243, 0.78);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid transparent;
+  transition: border-color .3s var(--ease), background .3s var(--ease);
+}
+.nav.scrolled { border-bottom-color: var(--line); }
+.nav-inner { display: flex; align-items: center; justify-content: space-between; height: 74px; gap: 20px; }
+.nav-links { display: flex; align-items: center; gap: 26px; flex: none; }
+.nav-links a { font-size: 14.5px; font-weight: 500; color: var(--ink-60); transition: color .2s; white-space: nowrap; }
+.nav-links a:hover { color: var(--ink); }
+.nav-cta { display: flex; align-items: center; gap: 12px; flex: none; }
+@media (max-width: 1024px) { .nav-links { display: none; } }
+@media (max-width: 560px) { .nav-cta .btn-ghost { display: none; } }
+
+/* ===================== Hero ===================== */
+.hero { padding-top: 64px; padding-bottom: 96px; overflow: hidden; }
+.hero-grid {
+  display: grid; grid-template-columns: 1.05fr .95fr; gap: 56px; align-items: center;
+}
+.hero h1 { font-size: clamp(40px, 5.4vw, 70px); font-weight: 600; }
+.hero h1 .grad {
+  background: var(--accent-grad); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.hero-sub { font-size: 18.5px; color: var(--ink-60); margin-top: 24px; max-width: 30em; line-height: 1.6; }
+.hero-actions { display: flex; gap: 14px; margin-top: 34px; flex-wrap: wrap; }
+.hero-note { display: flex; align-items: center; gap: 9px; margin-top: 22px; font-size: 13.5px; color: var(--ink-60); }
+.hero-note .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--status-track); }
+
+.hero-visual { position: relative; display: flex; align-items: center; justify-content: center; min-height: 420px; }
+.hero-mark { width: min(100%, 460px); height: auto; position: relative; z-index: 2; }
+.hero-glow {
+  position: absolute; right: 4%; top: 50%; transform: translateY(-50%);
+  width: 340px; height: 340px; background: var(--glow); z-index: 1; pointer-events: none;
+  animation: breathe 6s ease-in-out infinite;
+}
+@keyframes breathe { 0%,100% { opacity: .8; transform: translateY(-50%) scale(1);} 50% { opacity: 1; transform: translateY(-50%) scale(1.08);} }
+html[data-motion="off"] .hero-glow { animation: none; }
+
+@media (max-width: 880px) {
+  .hero-grid { grid-template-columns: 1fr; gap: 24px; }
+  .hero-visual { min-height: 300px; order: -1; }
+}
+
+/* ===================== Trust strip ===================== */
+.trust {
+  border-block: 1px solid var(--line);
+  background: linear-gradient(0deg, rgba(234,230,223,.4), rgba(234,230,223,.4));
+}
+.trust-inner { display: flex; align-items: center; justify-content: space-between; gap: 40px; padding-block: 28px; flex-wrap: wrap; }
+.trust-au { display: flex; align-items: center; gap: 14px; }
+.trust-au svg { width: 46px; height: auto; flex: none; }
+.trust-au .label { font-family: var(--font-display); font-weight: 600; font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); line-height: 1.5; }
+.trust-stats { display: flex; gap: 48px; }
+.trust-stats .ts { }
+.trust-stats .ts .n { font-family: var(--font-display); font-weight: 600; font-size: 26px; }
+.trust-stats .ts .l { font-size: 12.5px; color: var(--ink-60); margin-top: 2px; }
+@media (max-width: 720px){ .trust-stats { gap: 28px; } }
+
+/* ===================== Section heads ===================== */
+.shead { max-width: 720px; }
+.shead h2 { font-size: clamp(30px, 3.6vw, 44px); margin-bottom: 16px; }
+.shead p { font-size: 17.5px; color: var(--ink-60); line-height: 1.6; }
+.shead.center { margin-inline: auto; text-align: center; }
+.shead.center .kicker-row { justify-content: center; }
+
+/* ===================== Flywheel ===================== */
+.fly-grid { display: grid; grid-template-columns: 440px 1fr; gap: 64px; align-items: center; margin-top: 56px; }
+.fly-stage { position: relative; aspect-ratio: 1; width: 100%; max-width: 440px; }
+.fly-svg { width: 100%; height: 100%; }
+.fly-center {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none;
+}
+.fly-center .lbl { font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-40); font-weight: 600; }
+.fly-center .big { font-family: var(--font-display); font-weight: 700; font-size: 34px; margin-top: 4px; }
+.fly-node {
+  position: absolute; width: 130px; padding: 14px; border-radius: 16px;
+  background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-soft);
+  cursor: pointer; transition: transform .3s var(--ease), box-shadow .3s var(--ease), border-color .3s;
+  text-align: center;
+}
+.fly-node:hover, .fly-node.active { transform: scale(1.05); box-shadow: var(--shadow-gold); border-color: var(--accent-soft); }
+.fly-node .num { font-family: var(--font-display); font-size: 12px; font-weight: 700; color: var(--accent); }
+.fly-node .nm { font-family: var(--font-display); font-weight: 600; font-size: 16px; margin-top: 3px; }
+.fly-node.n1 { top: -2%; left: 50%; transform: translateX(-50%); }
+.fly-node.n2 { top: 50%; right: -8%; transform: translateY(-50%); }
+.fly-node.n3 { bottom: -2%; left: 50%; transform: translateX(-50%); }
+.fly-node.n4 { top: 50%; left: -8%; transform: translateY(-50%); }
+.fly-node.n1:hover, .fly-node.n1.active { transform: translateX(-50%) scale(1.05); }
+.fly-node.n2:hover, .fly-node.n2.active { transform: translateY(-50%) scale(1.05); }
+.fly-node.n3:hover, .fly-node.n3.active { transform: translateX(-50%) scale(1.05); }
+.fly-node.n4:hover, .fly-node.n4.active { transform: translateY(-50%) scale(1.05); }
+
+.fly-detail { }
+.fly-detail .step-no { font-family: var(--font-display); font-weight: 700; font-size: 14px; color: var(--accent); letter-spacing: .04em; }
+.fly-detail h3 { font-size: 30px; margin: 8px 0 14px; }
+.fly-detail p { font-size: 17px; color: var(--ink-60); line-height: 1.65; max-width: 30em; }
+.fly-detail ul { list-style: none; padding: 0; margin: 24px 0 0; display: grid; gap: 12px; }
+.fly-detail li { display: flex; align-items: flex-start; gap: 11px; font-size: 15px; }
+.fly-detail li svg { width: 18px; height: 18px; flex: none; margin-top: 1px; color: var(--accent); }
+.fly-tabs { display: flex; gap: 8px; margin-top: 28px; }
+.fly-tabs button {
+  font-family: var(--font-ui); font-size: 13px; font-weight: 600; padding: 8px 14px;
+  border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--ink-60); cursor: pointer; transition: all .2s;
+}
+.fly-tabs button.active { background: var(--charcoal); color: var(--warm-ivory); border-color: var(--charcoal); }
+@media (max-width: 920px){ .fly-grid { grid-template-columns: 1fr; gap: 48px; } .fly-stage { margin-inline: auto; max-width: 360px; } }
+
+/* ===================== Dashboard preview (dark) ===================== */
+.dark { background: var(--deep-black); color: var(--warm-ivory); }
+.dark .shead p, .dark .muted { color: rgba(251,248,243,.62); }
+.dark .eyebrow { color: var(--soft-gold); }
+.dark .kicker-row .line { background: var(--soft-gold); }
+
+.dash-wrap { margin-top: 52px; position: relative; }
+.dash-glow { position: absolute; right: 8%; top: 10%; width: 360px; height: 360px; background: var(--glow); opacity: .5; pointer-events: none; }
+.browser {
+  position: relative; z-index: 2; border-radius: 18px; overflow: hidden;
+  background: #141414; border: 1px solid rgba(251,248,243,.10);
+  box-shadow: 0 40px 120px rgba(0,0,0,.55);
+}
+.browser-bar { display: flex; align-items: center; gap: 8px; padding: 13px 16px; background: #1c1c1c; border-bottom: 1px solid rgba(251,248,243,.07); }
+.browser-bar .tl { display: flex; gap: 7px; }
+.browser-bar .tl i { width: 11px; height: 11px; border-radius: 50%; display: block; }
+.browser-bar .addr { margin-left: 12px; font-size: 12px; color: rgba(251,248,243,.4); font-family: var(--font-ui); display: flex; align-items: center; gap: 7px; }
+
+.dash { padding: 26px; display: grid; grid-template-columns: 200px 1fr; gap: 22px; background: #141414; }
+.dash-side { display: flex; flex-direction: column; gap: 5px; }
+.dash-side .si { display: flex; align-items: center; gap: 11px; padding: 9px 11px; border-radius: 10px; font-size: 13.5px; color: rgba(251,248,243,.55); font-weight: 500; }
+.dash-side .si.on { background: rgba(196,145,46,.16); color: var(--soft-gold); }
+.dash-side .si .ic { width: 16px; height: 16px; flex: none; }
+.dash-main { display: grid; gap: 16px; }
+.dash-topline { display: flex; align-items: center; justify-content: space-between; }
+.dash-topline h4 { font-family: var(--font-display); font-size: 17px; }
+.dash-cards { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; }
+.dcard { background: #1b1b1b; border: 1px solid rgba(251,248,243,.08); border-radius: 14px; padding: 16px; }
+.dcard .lbl { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: rgba(251,248,243,.42); font-weight: 600; }
+.dcard .val { font-family: var(--font-display); font-weight: 700; font-size: 30px; margin-top: 8px; }
+.dcard .val.gold { color: var(--soft-gold); }
+.dcard .delta { font-size: 12px; margin-top: 4px; color: var(--status-track); display:flex; align-items:center; gap:4px;}
+
+.flow-card { background: #1b1b1b; border: 1px solid rgba(251,248,243,.08); border-radius: 14px; padding: 18px; }
+.flow-card .fh { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.flow-card .fh .t { font-size: 13.5px; font-weight: 600; }
+.flow-card .fh .c { font-size: 12px; color: var(--soft-gold); }
+.flow-steps { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; }
+.fstep .fname { font-size: 12.5px; font-weight: 600; margin-bottom: 8px; }
+.fstep .ftrack { height: 6px; border-radius: 999px; background: rgba(251,248,243,.10); overflow: hidden; }
+.fstep .ftrack i { display: block; height: 100%; border-radius: 999px; background: var(--accent-grad); width: 0; transition: width 1.1s var(--ease); }
+
+.chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.bars { display: flex; align-items: flex-end; gap: 9px; height: 84px; padding-top: 6px; }
+.bars i { flex: 1; border-radius: 5px 5px 0 0; background: var(--accent-grad); height: var(--h,40%); opacity: .9; transition: height 1s var(--ease); }
+.donut-wrap { display: flex; align-items: center; gap: 14px; }
+.donut { width: 78px; height: 78px; flex: none; }
+.donut-meta .big { font-family: var(--font-display); font-weight: 700; font-size: 22px; color: var(--soft-gold); }
+.donut-meta .sm { font-size: 12px; color: rgba(251,248,243,.5); }
+
+@media (max-width: 820px){
+  .dash { grid-template-columns: 1fr; }
+  .dash-side { flex-direction: row; flex-wrap: wrap; }
+  .dash-cards { grid-template-columns: 1fr 1fr; }
+  .chart-row { grid-template-columns: 1fr; }
+}
+
+/* ===================== How it works ===================== */
+.how-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 22px; margin-top: 52px; }
+.how-card { padding: 30px; }
+.how-card .ic { width: 56px; height: 56px; border-radius: 14px; display: grid; place-items: center; background: var(--surface-warm); border: 1px solid var(--line); margin-bottom: 22px; }
+.how-card .ic svg { width: 30px; height: 28px; }
+.how-card h3 { font-size: 21px; margin-bottom: 10px; }
+.how-card p { font-size: 15.5px; color: var(--ink-60); line-height: 1.6; }
+.how-card .tag { display:inline-block; margin-top:18px; font-size:12px; font-weight:600; color: var(--accent); letter-spacing:.04em; }
+@media (max-width: 820px){ .how-grid { grid-template-columns: 1fr; } }
+
+/* ===================== Modules ===================== */
+.mods-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 18px; margin-top: 52px; }
+.mod { padding: 26px; display: flex; flex-direction: column; }
+.mod-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.mod h3 { font-size: 20px; margin-bottom: 10px; }
+.mod p { font-size: 14px; color: var(--ink-60); line-height: 1.62; }
+.mod .feat { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 7px; }
+.mod .feat span { font-size: 11.5px; font-weight: 600; color: var(--ink-60); background: var(--surface-warm); border: 1px solid var(--line); padding: 4px 9px; border-radius: 7px; }
+@media (max-width: 980px){ .mods-grid { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 560px){ .mods-grid { grid-template-columns: 1fr; } }
+
+/* ===================== Outcomes / metrics ===================== */
+.metrics { display: grid; grid-template-columns: repeat(4,1fr); gap: 22px; margin-top: 52px; }
+.metric { text-align: left; }
+.metric .n { font-family: var(--font-display); font-weight: 700; font-size: clamp(40px,4.4vw,56px); line-height: 1; background: var(--accent-grad); -webkit-background-clip:text; background-clip:text; color: transparent; }
+.metric .l { font-size: 14.5px; color: var(--ink-60); margin-top: 12px; line-height: 1.5; }
+@media (max-width: 820px){ .metrics { grid-template-columns: 1fr 1fr; gap: 32px; } }
+
+/* ===================== Testimonials ===================== */
+.tg { display: grid; grid-template-columns: 1.3fr 1fr; gap: 22px; margin-top: 52px; }
+.quote-card { padding: 40px; display: flex; flex-direction: column; justify-content: space-between; }
+.quote-card.feature { background: var(--charcoal); color: var(--warm-ivory); }
+.quote-card .q { font-family: var(--font-display); font-weight: 500; font-size: 23px; line-height: 1.45; letter-spacing: -.01em; }
+.quote-card.feature .q { font-size: 26px; }
+.quote-card .by { display: flex; align-items: center; gap: 12px; margin-top: 28px; }
+.quote-card .av { width: 44px; height: 44px; border-radius: 50%; background: var(--accent-grad); flex: none; display:grid; place-items:center; color:#2A2008; font-weight:700; font-family:var(--font-display); }
+.quote-card .who .nm { font-weight: 600; font-size: 14.5px; }
+.quote-card .who .rl { font-size: 13px; color: var(--ink-60); }
+.quote-card.feature .who .rl { color: rgba(251,248,243,.55); }
+.tcol { display: grid; gap: 22px; }
+.tcol .quote-card { padding: 28px; }
+.tcol .quote-card .q { font-size: 17px; font-weight: 500; font-family: var(--font-ui); line-height: 1.55; }
+@media (max-width: 820px){ .tg { grid-template-columns: 1fr; } }
+
+/* ===================== FAQ ===================== */
+.faq { max-width: 820px; margin-inline: auto; margin-top: 44px; }
+.faq-item { border-bottom: 1px solid var(--line); }
+.faq-q { width: 100%; text-align: left; background: none; border: none; cursor: pointer; padding: 24px 0; display: flex; align-items: center; justify-content: space-between; gap: 20px; font-family: var(--font-display); font-weight: 600; font-size: 19px; color: var(--ink); }
+.faq-q .pm { width: 22px; height: 22px; flex: none; position: relative; transition: transform .3s var(--ease); }
+.faq-q .pm::before, .faq-q .pm::after { content:""; position:absolute; background: var(--accent); border-radius:2px; }
+.faq-q .pm::before { top:50%; left:0; right:0; height:2px; transform: translateY(-50%); }
+.faq-q .pm::after { left:50%; top:0; bottom:0; width:2px; transform: translateX(-50%); transition: opacity .3s; }
+.faq-item.open .faq-q .pm::after { opacity: 0; }
+.faq-a { overflow: hidden; max-height: 0; transition: max-height .4s var(--ease); }
+.faq-a p { padding-bottom: 24px; font-size: 16px; color: var(--ink-60); line-height: 1.65; max-width: 62ch; }
+
+/* ===================== Final CTA ===================== */
+.cta { background: var(--deep-black); color: var(--warm-ivory); border-radius: 36px; padding: 72px 56px; position: relative; overflow: hidden; text-align: center; }
+.cta-glow { position:absolute; left:50%; top:-30%; transform:translateX(-50%); width:520px; height:520px; background: var(--glow); opacity:.6; pointer-events:none; }
+.cta h2 { font-size: clamp(32px,4.4vw,52px); position: relative; z-index: 2; }
+.cta p { font-size: 18px; color: rgba(251,248,243,.66); margin: 18px auto 0; max-width: 40em; position: relative; z-index: 2; }
+.cta-actions { display: flex; gap: 14px; justify-content: center; margin-top: 34px; position: relative; z-index: 2; flex-wrap: wrap; }
+.cta .btn-ghost { color: var(--warm-ivory); border-color: rgba(251,248,243,.24); }
+.cta .btn-ghost:hover { background: rgba(251,248,243,.08); border-color: rgba(251,248,243,.4); }
+
+/* ===================== Footer ===================== */
+.footer { padding-block: 56px 40px; }
+.footer-grid { display: grid; grid-template-columns: 1.4fr 1fr 1fr 1fr; gap: 32px; }
+.footer h5 { font-family: var(--font-ui); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-40); margin: 0 0 16px; font-weight: 600; }
+.footer a { display: block; font-size: 14.5px; color: var(--ink-60); margin-bottom: 11px; transition: color .2s; }
+.footer a:hover { color: var(--ink); }
+.footer .blurb { font-size: 14.5px; color: var(--ink-60); line-height: 1.6; margin-top: 16px; max-width: 28em; }
+.footer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-40); flex-wrap: wrap; }
+@media (max-width: 820px){ .footer-grid { grid-template-columns: 1fr 1fr; gap: 28px; } }
+
+/* ===================== Tweaks ===================== */
+#tweaks-root { position: fixed; right: 18px; bottom: 18px; z-index: 100; }
+</style>
+
+<meta name="description" content="Done-for-you SEO, social and AI-visibility execution for travel operators. Magic Engine turns growth diagnosis into visible, shipped execution." />
+<link rel="canonical" href="https://YOUR-DOMAIN/" />
+<meta name="theme-color" content="#0D0D0D" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Magic Engine" />
+<meta property="og:title" content="Magic Engine — Turns diagnosis into visible execution" />
+<meta property="og:description" content="Done-for-you SEO, social and AI-visibility execution for travel operators. Magic Engine turns growth diagnosis into visible, shipped execution." />
+<meta property="og:url" content="https://YOUR-DOMAIN/" />
+<meta property="og:image" content="https://YOUR-DOMAIN/og-image.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Magic Engine — Turns diagnosis into visible execution" />
+<meta name="twitter:description" content="Done-for-you SEO, social and AI-visibility execution for travel operators. Magic Engine turns growth diagnosis into visible, shipped execution." />
+<meta name="twitter:image" content="https://YOUR-DOMAIN/og-image.png" />
 </head>
 <body>
 
-<!-- ── Navigation ── -->
-<nav class="nav">
-  <div class="container">
-    <div class="nav-inner">
-      <a href="/" class="nav-logo">
-        <svg width="28" height="26" viewBox="0 0 68 64" fill="none" aria-hidden="true">
-          <polygon points="3,60 13,6 22,6 12,60" fill="#BE8A2E"/>
-          <polygon points="13,6 22,6 33,38 24,38" fill="#9A6F1E"/>
-          <polygon points="46,6 55,6 44,38 35,38" fill="#9A6F1E"/>
-          <polygon points="46,6 55,6 65,60 55,60" fill="#BE8A2E"/>
-          <polygon points="24,38 33,38 34,48 35,38 44,38 34,60" fill="#7A5518"/>
-        </svg>
-        <span data-en="Magic Engine" data-zh="魔力引擎">Magic Engine</span>
-      </a>
-      <ul class="nav-links">
-        <li><a href="/discover" data-en="Free Discovery" data-zh="免费探查">Free Discovery</a></li>
-        <li><a href="/geo" data-en="GEO" data-zh="GEO">GEO</a></li>
-        <li><a href="/training" data-en="Training" data-zh="培训">Training</a></li>
-        <li><a href="/about" data-en="About" data-zh="关于">About</a></li>
-      </ul>
-      <div class="nav-actions">
-        <button class="btn-lang" id="lang-toggle" onclick="toggleLang()" aria-label="Switch language">中文</button>
-        <a href="/discover" class="btn-register" data-en="Get diagnosis" data-zh="开始诊断">Get diagnosis</a>
-        <a href="https://app.magicengine.com.au/portal/login" class="btn-portal" data-en="Client portal" data-zh="客户入口">Client portal</a>
-      </div>
+<!-- ===================== NAV ===================== -->
+<header class="nav" id="nav">
+  <div class="wrap nav-inner">
+    <a class="logo-row" href="#top" aria-label="Magic Engine home">
+      <svg class="logo-mark" viewBox="0 0 200 180" fill="none" aria-hidden="true">
+        <use href="#me-mark" />
+      </svg>
+      <span class="logo-text">
+        <span class="name">Magic Engine</span>
+        <span class="sub">by Magic Lab</span>
+      </span>
+    </a>
+    <nav class="nav-links">
+      <a href="#flywheel">How it works</a>
+      <a href="#modules">Product</a>
+      <a href="#proof">Pilots</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <div class="nav-cta">
+      <a href="/portal/login" class="btn btn-ghost btn-sm">View client portal</a>
+      <a href="/contact" class="btn btn-primary btn-sm">Get free diagnosis</a>
     </div>
   </div>
-</nav>
+</header>
 
-<!-- ── Hero ── -->
+<main id="top">
+
+<!-- ===================== HERO ===================== -->
 <section class="hero">
-  <div class="container">
-    <div class="hero-badge" data-en="AU/NZ · Bilingual · GEO ready" data-zh="AU/NZ · 双语 · GEO 就绪">AU/NZ · Bilingual · GEO ready</div>
-    <h1 class="serif" data-en="AI upgrades for AU/NZ businesses." data-zh="为澳新企业做 AI 升级。">
-      AI upgrades for AU/NZ businesses.
-    </h1>
-    <p class="hero-sub" data-en="Magic Engine helps English and Chinese-speaking teams improve SEO, GEO, training, and launch-ready execution in one place." data-zh="Magic Engine 帮助英语和中文团队把 SEO、GEO、培训和上线执行放在一个地方。">
-      Magic Engine helps English and Chinese-speaking teams improve SEO, GEO, training, and launch-ready execution in one place.
-    </p>
-
-    <!-- Inline URL form -->
-    <form id="hero-url-form">
-      <div class="url-bar">
-        <input type="text" id="hero-url-input" placeholder="yourwebsite.com.au" autocomplete="off"
-               data-en="yourwebsite.com.au" data-zh="yourwebsite.com.au" aria-label="Your website URL">
-        <button type="submit" class="btn-primary" data-en="Get free diagnosis →" data-zh="开始免费诊断 →">Get free diagnosis →</button>
+  <div class="wrap hero-grid">
+    <div>
+      <div class="reveal">
+        <span class="eyebrow">AI Execution Engine — for AU/NZ growth teams</span>
       </div>
-    </form>
-    <p class="url-hint" data-en="Need GEO, training, or paid media instead? Start with diagnosis, or go straight to the new pages." data-zh="如果你更需要 GEO、培训或广告投放，也可以先做诊断，或直接进入新页面。">Need GEO, training, or paid media instead? <a href="/discover" style="color:var(--gold-dark);text-decoration:underline;text-decoration-color:rgba(190,138,46,.4)">Start with diagnosis</a>, or go straight to the new pages.</p>
-
-    <!-- Secondary CTA -->
-    <div class="hero-ctas" style="margin-top:24px;margin-bottom:0;">
-      <a href="/geo" class="btn-secondary" data-en="Explore GEO" data-zh="查看 GEO">Explore GEO</a>
-      <a href="/training" class="btn-secondary" data-en="Explore training" data-zh="查看培训">Explore training</a>
-      <a href="/ads" class="btn-secondary" data-en="Start ads launch" data-zh="开始广告投放">Start ads launch</a>
+      <h1 class="reveal d1">Turns diagnosis into <span class="grad">visible execution.</span></h1>
+      <p class="hero-sub reveal d2">Discover opportunities, execute the work, and show customers what changed — across search, AI visibility, social, ads, reputation and competitor signals. One managed loop, run by Magic Lab as your external AI content team.</p>
+      <div class="hero-actions reveal d3">
+        <a href="/contact" class="btn btn-primary">Get free diagnosis <svg class="arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+        <a href="#dashboard" class="btn btn-secondary">See the client portal</a>
+      </div>
+      <div class="hero-note reveal d3"><span class="dot"></span> No commitment · Diagnosis delivered in 48 hours</div>
+    </div>
+    <div class="hero-visual reveal d2">
+      <div class="hero-glow"></div>
+      <svg class="hero-mark" viewBox="0 0 200 180" fill="none" aria-label="Magic Engine mark"><use href="#me-mark-lg" /></svg>
     </div>
   </div>
 </section>
 
-<div class="divider"></div>
-
-<!-- ── What it does ── -->
-<section>
-  <div class="container">
-    <div class="center">
-      <div class="section-label" data-en="How we help" data-zh="我们怎么帮">How we help</div>
-      <h2 class="serif section-heading" data-en="Diagnose. Execute. Prove." data-zh="先诊断，再执行，再证明。">Diagnose. Execute. Prove.</h2>
-      <p class="section-sub" data-en="Built for AU/NZ teams that need AI upgrade, GEO, training, and a clear next step." data-zh="为需要 AI 升级、GEO、培训和明确下一步的澳新团队而建。">Built for AU/NZ teams that need AI upgrade, GEO, training, and a clear next step.</p>
+<!-- ===================== TRUST STRIP ===================== -->
+<section class="trust">
+  <div class="wrap trust-inner">
+    <div class="trust-au">
+      <svg viewBox="0 0 80 70" fill="none" aria-hidden="true">
+        <path d="M14 30 C20 18 34 12 46 16 C56 19 60 28 68 30 C72 31 74 36 70 40 C64 46 58 40 54 44 C50 48 52 56 46 58 C40 60 38 52 32 52 C26 52 22 60 17 56 C12 52 18 46 16 40 C14 35 10 36 14 30 Z" fill="#C4912E" opacity="0.9"/>
+        <circle cx="62" cy="50" r="4" fill="#C4912E"/>
+      </svg>
+      <span class="label">Built for<br/>Australia &amp; New Zealand</span>
     </div>
-    <div class="three-grid">
-      <div class="card">
-        <div class="card-icon ci-gold" aria-hidden="true">🔍</div>
-        <h3 data-en="Diagnose" data-zh="诊断">Diagnose</h3>
-        <p data-en="Score SEO, GEO, social, ads, reputation, and competitor signals for AU/NZ businesses without overcomplicating the stack." data-zh="为澳新企业评分 SEO、GEO、社媒、广告、口碑和竞品信号，同时不把系统做复杂。">
-          Score SEO, GEO, social, ads, reputation, and competitor signals for AU/NZ businesses without overcomplicating the stack.
-        </p>
+    <div class="trust-stats">
+      <div class="ts"><div class="n" data-count="4" data-suffix="">0</div><div class="l">Marketing battlefronts covered</div></div>
+      <div class="ts"><div class="n" data-count="23" data-suffix="%" data-prefix="+">0</div><div class="l">AI visibility lift (GEO pilot)</div></div>
+      <div class="ts"><div class="n" data-count="48" data-suffix="h">0</div><div class="l">From signup to diagnosis</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== FLYWHEEL ===================== -->
+<section class="section-pad" id="flywheel">
+  <div class="wrap">
+    <div class="shead reveal">
+      <div class="kicker-row"><span class="line"></span><span class="eyebrow">The execution flywheel</span></div>
+      <h2>One loop, turning continuously.</h2>
+      <p>Most tools stop at the report. Magic Engine connects insight to impact — so the work that matters actually ships, and the results stay visible.</p>
+    </div>
+
+    <div class="fly-grid">
+      <div class="fly-stage reveal d1">
+        <svg class="fly-svg" viewBox="0 0 320 320" fill="none" aria-hidden="true">
+          <circle cx="160" cy="160" r="120" stroke="rgba(26,26,26,.10)" stroke-width="2" stroke-dasharray="2 8" stroke-linecap="round"/>
+          <circle id="fly-arc" cx="160" cy="160" r="120" stroke="url(#flyGrad)" stroke-width="3" stroke-linecap="round" fill="none"
+                  stroke-dasharray="565" stroke-dashoffset="565" transform="rotate(-90 160 160)"/>
+          <defs>
+            <linearGradient id="flyGrad" x1="0" y1="0" x2="320" y2="320" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#EBCB8B"/><stop offset="1" stop-color="#C4912E"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        <div class="fly-center">
+          <span class="lbl">Active loops</span>
+          <span class="big">4</span>
+        </div>
+        <div class="fly-node n1 active" data-step="0"><span class="num">01</span><div class="nm">Diagnose</div></div>
+        <div class="fly-node n2" data-step="1"><span class="num">02</span><div class="nm">Prioritise</div></div>
+        <div class="fly-node n3" data-step="2"><span class="num">03</span><div class="nm">Execute</div></div>
+        <div class="fly-node n4" data-step="3"><span class="num">04</span><div class="nm">Measure</div></div>
       </div>
-      <div class="card">
-        <div class="card-icon ci-green" aria-hidden="true">🔧</div>
-        <h3 data-en="Execute" data-zh="执行">Execute</h3>
-        <p data-en="Turn findings into website fixes, bilingual updates, training tasks, social assets, and ad decisions customers can approve." data-zh="把发现转化为网站修复、双语更新、培训任务、社媒素材和可审批的广告决策。">
-          Turn findings into website fixes, bilingual updates, training tasks, social assets, and ad decisions customers can approve.
-        </p>
-      </div>
-      <div class="card">
-        <div class="card-icon ci-ink" aria-hidden="true">📈</div>
-        <h3 data-en="Prove" data-zh="证明">Prove</h3>
-        <p data-en="Bring outcomes back into one portal your team can actually use for approvals, reports, and next-step decisions." data-zh="把结果带回一个团队真正会用的门户，用于审批、报告和下一步决策。">
-          Bring outcomes back into one portal your team can actually use for approvals, reports, and next-step decisions.
-        </p>
+
+      <div class="fly-detail reveal d2" id="fly-detail">
+        <!-- filled by JS -->
       </div>
     </div>
   </div>
 </section>
 
-<div class="divider"></div>
+<!-- ===================== DASHBOARD (dark) ===================== -->
+<section class="dark section-pad" id="dashboard">
+  <div class="wrap">
+    <div class="shead reveal">
+      <div class="kicker-row"><span class="line"></span><span class="eyebrow">The client portal</span></div>
+      <h2>Everyone sees what's being executed.</h2>
+      <p>A single source of truth for opportunities, the work in flight, and the results delivered — built so your customers can watch progress in real time.</p>
+    </div>
 
-<!-- ── GEO / AI visibility hook ── -->
-<section style="background:var(--paper-dim);">
-  <div class="container">
-    <div class="local-grid">
-      <div>
-        <div class="section-label" data-en="GEO / AI visibility" data-zh="GEO / AI 可见度">GEO / AI visibility</div>
-        <h2 class="serif section-heading" data-en="Make the right pages easier for Google and AI to understand." data-zh="让 Google 和 AI 更容易看懂正确的页面。">Make the right pages easier for Google and AI to understand.</h2>
-        <p class="section-sub" style="margin-bottom:24px;" data-en="GEO helps your homepage, service pages, training pages, and contact flow stay readable for search engines and answer engines. The goal is not more pages — it is clearer signal." data-zh="GEO 让你的首页、服务页、培训页和联系路径更容易被搜索引擎和答案引擎读懂。目标不是更多页面，而是更清晰的信号。">
-          GEO helps your homepage, service pages, training pages, and contact flow stay readable for search engines and answer engines. The goal is not more pages — it is clearer signal.
-        </p>
-        <p class="muted small" style="margin-bottom:32px;" data-en="Bilingual English and Chinese messaging, AU/NZ context, and a simple next step keep the surface practical." data-zh="中英双语、澳新语境和简单下一步，让公开页面更实用。">
-          Bilingual English and Chinese messaging, AU/NZ context, and a simple next step keep the surface practical.
-        </p>
-        <div class="hero-ctas" style="margin-top:0;">
-          <a href="/geo" class="btn-primary" data-en="Explore GEO →" data-zh="查看 GEO →">Explore GEO →</a>
-          <a href="/ai-search" class="btn-secondary" data-en="Open AI search →" data-zh="打开 AI 搜索 →">Open AI search →</a>
+    <div class="dash-wrap reveal d1">
+      <div class="dash-glow"></div>
+      <div class="browser">
+        <div class="browser-bar">
+          <span class="tl"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></span>
+          <span class="addr">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+            app.magicengine.com.au/portal
+          </span>
+        </div>
+        <div class="dash">
+          <aside class="dash-side">
+            <div class="si on"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg> Overview</div>
+            <div class="si"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3-3"/></svg> Diagnoses</div>
+            <div class="si"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg> Execution</div>
+            <div class="si"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17l5-5 4 3 6-7"/><path d="M3 21h18"/></svg> Results</div>
+            <div class="si"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/><circle cx="12" cy="12" r="4"/></svg> Settings</div>
+          </aside>
+          <div class="dash-main">
+            <div class="dash-topline">
+              <div><h4>CTS Tours NZ</h4><div style="font-size:12px;color:rgba(251,248,243,.5);margin-top:2px">Client operating cockpit</div></div>
+              <span class="pill" style="background:rgba(92,138,74,.18);color:#9CC2AE">+23% AI visibility</span>
+            </div>
+            <div class="dash-cards">
+              <div class="dcard"><div class="lbl">Visibility actions shipped</div><div class="val">15</div><div class="delta"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 15l6-6 6 6"/></svg> +6 this week</div></div>
+              <div class="dcard"><div class="lbl">Approval items waiting</div><div class="val">3</div><div class="delta" style="color:var(--status-attn)">Needs attention</div></div>
+              <div class="dcard"><div class="lbl">Active execution loops</div><div class="val gold">4</div><div class="delta" style="color:var(--soft-gold)">Executing now</div></div>
+            </div>
+            <div class="flow-card">
+              <div class="fh"><span class="t">This quarter's loop</span><span class="c">On track</span></div>
+              <div class="flow-steps">
+                <div class="fstep"><div class="fname">Diagnose</div><div class="ftrack"><i data-w="100%"></i></div></div>
+                <div class="fstep"><div class="fname">Prioritise</div><div class="ftrack"><i data-w="100%"></i></div></div>
+                <div class="fstep"><div class="fname">Execute</div><div class="ftrack"><i data-w="64%"></i></div></div>
+                <div class="fstep"><div class="fname">Measure</div><div class="ftrack"><i data-w="22%"></i></div></div>
+              </div>
+            </div>
+            <div class="chart-row">
+              <div class="dcard">
+                <div class="lbl" style="margin-bottom:10px">Actions shipped / week</div>
+                <div class="bars">
+                  <i style="--h:36%"></i><i style="--h:52%"></i><i style="--h:44%"></i><i style="--h:68%"></i><i style="--h:60%"></i><i style="--h:84%"></i><i style="--h:96%"></i>
+                </div>
+              </div>
+              <div class="dcard">
+                <div class="lbl" style="margin-bottom:10px">AI visibility</div>
+                <div class="donut-wrap">
+                  <svg class="donut" viewBox="0 0 42 42">
+                    <circle cx="21" cy="21" r="15.9" fill="none" stroke="rgba(251,248,243,.12)" stroke-width="5"/>
+                    <circle class="donut-arc" cx="21" cy="21" r="15.9" fill="none" stroke="url(#flyGrad)" stroke-width="5" stroke-linecap="round" stroke-dasharray="100" stroke-dashoffset="100" transform="rotate(-90 21 21)"/>
+                  </svg>
+                  <div class="donut-meta"><div class="big">72%</div><div class="sm">of buildable<br/>opportunities live</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-      <div>
-        <ul class="local-checks">
-          <li class="local-check">
-            <div class="chk-icon" aria-hidden="true">✓</div>
-            <div class="chk-text">
-              <strong data-en="Google search visibility" data-zh="Google 搜索可见度">Google search visibility</strong>
-              <span data-en="Where you rank for the searches that matter in AU/NZ" data-zh="你在澳新相关搜索中的排名">Where you rank for the searches that matter in AU/NZ</span>
-            </div>
-          </li>
-          <li class="local-check">
-            <div class="chk-icon" aria-hidden="true">✓</div>
-            <div class="chk-text">
-              <strong data-en="AI assistant mentions" data-zh="AI 助手提及">AI assistant mentions</strong>
-              <span data-en="Whether ChatGPT, Gemini, DeepSeek and Google AI cite your business" data-zh="ChatGPT、Gemini、DeepSeek 和 Google AI 是否引用你的业务">Whether ChatGPT, Gemini, DeepSeek and Google AI cite your business</span>
-            </div>
-          </li>
-          <li class="local-check">
-            <div class="chk-icon" aria-hidden="true">✓</div>
-            <div class="chk-text">
-              <strong data-en="Social & review footprint" data-zh="社媒与评价足迹">Social & review footprint</strong>
-              <span data-en="Your presence and reputation across key platforms" data-zh="你在各主要平台的存在与声誉">Your presence and reputation across key platforms</span>
-            </div>
-          </li>
-          <li class="local-check">
-            <div class="chk-icon" aria-hidden="true">✓</div>
-            <div class="chk-text">
-              <strong data-en="Competitor intelligence" data-zh="竞争对手情报">Competitor intelligence</strong>
-              <span data-en="Where they're outranking you and how to close the gap" data-zh="他们在哪些地方超过你以及如何弥补差距">Where they're outranking you and how to close the gap</span>
-            </div>
-          </li>
-        </ul>
-      </div>
     </div>
   </div>
 </section>
 
-<div class="divider"></div>
-
-<!-- ── Why AU/NZ ── -->
-<section>
-  <div class="container">
-    <div class="local-grid">
-      <div>
-        <div class="section-label" data-en="Built for AU/NZ" data-zh="专为澳新打造">Built for AU/NZ</div>
-        <h2 class="serif section-heading" data-en="The tool that actually understands your market." data-zh="真正懂你市场的工具。">The tool that actually understands your market.</h2>
-        <p class="section-sub" style="margin-bottom:0;" data-en="Generic tools give you generic results. Magic Engine knows the difference between a 30 June EOFY and a 31 March one — and so do your customers." data-zh="通用工具给你通用结果。Magic Engine 知道 6 月 30 日财年末和 3 月 31 日的区别——你的客户也知道。">
-          Generic tools give you generic results. Magic Engine knows the difference between a 30 June EOFY and a 31 March one — and so do your customers.
-        </p>
-      </div>
-      <div>
-        <ul class="local-checks">
-          <li class="local-check">
-            <div class="chk-icon" aria-hidden="true">✓</div>
-            <div class="chk-text">
-              <strong data-en="Correct EOFY awareness" data-zh="正确的财年末意识">Correct EOFY awareness</strong>
-              <span data-en="AU: 30 June · NZ: 31 March — never confused" data-zh="澳大利亚：6月30日 · 新西兰：3月31日——绝不混淆">AU: 30 June · NZ: 31 March — never confused</span>
-            </div>
-          </li>
-          <li class="local-check">
-            <div class="chk-icon" aria-hidden="true">✓</div>
-            <div class="chk-text">
-              <strong data-en="Local GST rates" data-zh="本地 GST 税率">Local GST rates</strong>
-              <span data-en="10% AU · 15% NZ — correct in every report and campaign" data-zh="澳大利亚 10% · 新西兰 15%——每份报告和活动均正确">10% AU · 15% NZ — correct in every report and campaign</span>
-            </div>
-          </li>
-          <li class="local-check">
-            <div class="chk-icon" aria-hidden="true">✓</div>
-            <div class="chk-text">
-              <strong data-en="Your actual platforms" data-zh="你的实际平台">Your actual platforms</strong>
-              <span data-en="Gumtree, TradeMe, Seek, Facebook Marketplace — not US defaults" data-zh="Gumtree、TradeMe、Seek、Facebook Marketplace——不是美国默认平台">Gumtree, TradeMe, Seek, Facebook Marketplace — not US defaults</span>
-            </div>
-          </li>
-          <li class="local-check">
-            <div class="chk-icon" aria-hidden="true">✓</div>
-            <div class="chk-text">
-              <strong data-en="Local seasonal moments" data-zh="本地季节性节点">Local seasonal moments</strong>
-              <span data-en="ANZAC Day, Matariki, Melbourne Cup — the moments that move AU/NZ buyers" data-zh="澳新日、茅利基节、墨尔本杯——推动澳新买家的关键节点">ANZAC Day, Matariki, Melbourne Cup — the moments that move AU/NZ buyers</span>
-            </div>
-          </li>
-        </ul>
-      </div>
+<!-- ===================== MODULES ===================== -->
+<section class="section-pad" id="modules" style="background:var(--surface-warm); border-block:1px solid var(--line);">
+  <div class="wrap">
+    <div class="shead reveal">
+      <div class="kicker-row"><span class="line"></span><span class="eyebrow">Four battlefronts, one engine</span></div>
+      <h2>Be seen everywhere your customers look.</h2>
+      <p>Magic Engine covers the full marketing surface — traditional search, AI answers, social and paid — as one connected operating system.</p>
+    </div>
+    <div class="mods-grid">
+      <article class="mod card reveal d1">
+        <div class="mod-top"><span class="eyebrow">01 · SEO</span><span class="pill pill-track">Live</span></div>
+        <h3>SEO Content Engine</h3>
+        <p>Dual-track visibility across Google and the new AI search. Keyword intelligence, dual-signal blogs, and weekly brand tracking across the engines that answer your customers.</p>
+        <div class="feat"><span>Keyword Intelligence</span><span>AI Visibility Tracker</span><span>GEO Composer</span><span>Blog Studio</span></div>
+      </article>
+      <article class="mod card reveal d2">
+        <div class="mod-top"><span class="eyebrow">02 · Social</span><span class="pill pill-track">Live</span></div>
+        <h3>Social Content Matrix</h3>
+        <p>A multi-platform, multi-client production line. Brand briefs, batch campaign generation, AI visuals and video, then scheduled straight to your client accounts.</p>
+        <div class="feat"><span>Brand Brief Studio</span><span>Campaign Studio</span><span>Visual &amp; Video</span><span>Publishing Hub</span></div>
+      </article>
+      <article class="mod card reveal d3">
+        <div class="mod-top"><span class="eyebrow">03 · Ads</span><span class="pill pill-exec">Building</span></div>
+        <h3>Ads Intelligence</h3>
+        <p>Connect ad accounts, run a 9-dimension AI diagnosis with a 0–100 health score, and apply reversible one-click fixes — or hand complex calls to the team.</p>
+        <div class="feat"><span>Account connect</span><span>AI diagnosis</span><span>One-click fix</span></div>
+      </article>
+      <article class="mod card reveal d4">
+        <div class="mod-top"><span class="eyebrow">04 · Data</span><span class="pill pill-attn">In progress</span></div>
+        <h3>Insight Reports</h3>
+        <p>Every battlefront, aggregated. Monthly intelligence reports delivered to the same portal your clients use for approvals and decisions.</p>
+        <div class="feat"><span>Monthly PDF</span><span>Client Portal</span><span>Cross-module KPIs</span></div>
+      </article>
     </div>
   </div>
 </section>
 
-<div class="divider"></div>
-
-<section>
-  <div class="container">
-    <div class="center">
-      <div class="section-label" data-en="SME service pages" data-zh="SME 服务页">SME service pages</div>
-      <h2 class="serif section-heading" data-en="Clear landing pages for the work smaller teams actually buy." data-zh="给小团队真正会买的服务，配上清晰落地页。">Clear landing pages for the work smaller teams actually buy.</h2>
-      <p class="section-sub" data-en="Built for digital marketing SMEs, founders, and lean growth teams - not large-agency retainers." data-zh="面向数字营销 SME、创始人和精简增长团队，不走大型 agency retainers 那套。">Built for digital marketing SMEs, founders, and lean growth teams - not large-agency retainers.</p>
-    </div>
-    <div class="three-grid">
-      <div class="card">
-        <div class="card-icon ci-gold" aria-hidden="true">1</div>
-        <h3 data-en="AI Training for Business" data-zh="企业 AI 培训">AI Training for Business</h3>
-        <p data-en="Workshop-first rollout support for teams that need practical adoption, not theory." data-zh="以工作坊为先，帮助团队真正落地，而不是停留在理论。">Workshop-first rollout support for teams that need practical adoption, not theory.</p>
-        <a href="/ai-training" class="btn-secondary" style="margin-top:12px;" data-en="View page" data-zh="查看页面">View page</a>
-      </div>
-      <div class="card">
-        <div class="card-icon ci-green" aria-hidden="true">2</div>
-        <h3 data-en="AI Automation for Business" data-zh="企业 AI 自动化">AI Automation for Business</h3>
-        <p data-en="Practical workflow fixes for repetitive tasks, handoffs, and reporting." data-zh="为重复任务、交接和报告流程做实用修复。">Practical workflow fixes for repetitive tasks, handoffs, and reporting.</p>
-        <a href="/ai-automation" class="btn-secondary" style="margin-top:12px;" data-en="View page" data-zh="查看页面">View page</a>
-      </div>
-      <div class="card">
-        <div class="card-icon ci-ink" aria-hidden="true">3</div>
-        <h3 data-en="AI Marketing for SMEs" data-zh="SME AI 营销">AI Marketing for SMEs</h3>
-        <p data-en="A smaller, clearer alternative to big-agency retainers for AU/NZ teams." data-zh="面向澳新团队，比大型 agency retainers 更小、更清晰。">A smaller, clearer alternative to big-agency retainers for AU/NZ teams.</p>
-        <a href="/ai-marketing-smes" class="btn-secondary" style="margin-top:12px;" data-en="View page" data-zh="查看页面">View page</a>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- ── AU/NZ identity strip ── -->
-<div class="identity-strip">
-  <p data-en="🇦🇺 Built for Australian &amp; New Zealand businesses" data-zh="🇦🇺 专为澳大利亚和新西兰企业打造">🇦🇺 Built for Australian &amp; New Zealand businesses</p>
-</div>
-
-<div class="divider"></div>
-
-<!-- ── How it works ── -->
-<section style="background:var(--paper-dim);">
-  <div class="container">
-    <div class="center">
-      <div class="section-label" data-en="How it works" data-zh="如何运作">How it works</div>
-      <h2 class="serif section-heading" data-en="From invisible to unmissable in three steps." data-zh="三步从隐形到无处不在。">From invisible to unmissable in three steps.</h2>
-      <p class="section-sub" data-en="No agency middlemen. No lock-in contracts. You're in control at every step." data-zh="没有中间代理，没有锁定合同，每一步你都掌控。">No agency middlemen. No lock-in contracts. You're in control at every step.</p>
+<!-- ===================== HOW IT WORKS ===================== -->
+<section class="section-pad" id="how">
+  <div class="wrap">
+    <div class="shead center reveal">
+      <div class="kicker-row"><span class="line"></span><span class="eyebrow">From insight to impact</span></div>
+      <h2>Diagnose. Execute. Prove.</h2>
+      <p>The operating model behind every loop — the same language prospects see on the site and clients see in the portal.</p>
     </div>
     <div class="how-grid">
-      <div class="how-step">
-        <h3 data-en="Submit your URL" data-zh="提交你的网址">Submit your URL</h3>
-        <p data-en="Enter your website. 张骞 scouts every corner of your digital presence — Google, AI search, social, ads, reviews. Takes about 2 minutes. Completely free." data-zh="输入你的网址，张骞探查你数字存在的每个角落——Google、AI 搜索、社媒、广告、评价。大约 2 分钟，完全免费。">
-          Enter your website. 张骞 scouts every corner of your digital presence — Google, AI search, social, ads, reviews. Takes about 2 minutes. Completely free.
-        </p>
-      </div>
-      <div class="how-step">
-        <h3 data-en="Review your report" data-zh="查看你的报告">Review your report</h3>
-        <p data-en="Get a plain-English report of exactly where you stand — what's strong, what's missing, and the one opportunity you should act on first." data-zh="收到一份直白的报告，清楚说明你的现状——哪里强，哪里缺，以及最应该优先采取行动的一个机会。">
-          Get a plain-English report of exactly where you stand — what's strong, what's missing, and the one opportunity you should act on first.
-        </p>
-      </div>
-      <div class="how-step">
-        <h3 data-en="Approve and we execute" data-zh="审批，我们执行">Approve and we execute</h3>
-        <p data-en="Magic Engine turns your findings into real improvements — content created, ads adjusted, listings fixed — that you approve before anything goes live." data-zh="Magic Engine 将你的发现转化为实际改进——创作内容、调整广告、修复列表——一切上线前都需要你审批。">
-          Magic Engine turns your findings into real improvements — content created, ads adjusted, listings fixed — that you approve before anything goes live.
-        </p>
-      </div>
+      <article class="how-card card reveal d1">
+        <div class="ic"><svg viewBox="0 0 200 180" fill="none"><use href="#me-mark-icon"/></svg></div>
+        <h3>Diagnose</h3>
+        <p>Score search, AI visibility, social, ads, reputation and competitors — without ever exposing the supplier names behind the data.</p>
+        <span class="tag">Unify signals →</span>
+      </article>
+      <article class="how-card card reveal d2">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#C4912E" stroke-width="1.8"><path d="M12 3l2.5 5.5L20 11l-5.5 2.5L12 19l-2.5-5.5L4 11l5.5-2.5z"/></svg></div>
+        <h3>Execute</h3>
+        <p>Turn priority findings into content, website fixes, social assets and ad decisions your customers can review and approve.</p>
+        <span class="tag">Ship the work →</span>
+      </article>
+      <article class="how-card card reveal d3">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="#C4912E" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h13M11 6l6 6-6 6"/><path d="M19 5v14" opacity=".5"/></svg></div>
+        <h3>Prove</h3>
+        <p>Bring outcomes back into the same portal customers use for approvals, reports and next-step decisions. Promise on the site, proof in the portal.</p>
+        <span class="tag">Show what changed →</span>
+      </article>
     </div>
   </div>
 </section>
 
-<div class="divider"></div>
-
-<!-- ── Social proof ── -->
-<section>
-  <div class="container">
-    <div class="center">
-      <div class="section-label" data-en="What business owners say" data-zh="企业主说什么">What business owners say</div>
-      <h2 class="serif section-heading" data-en="Loved by AU/NZ business owners." data-zh="深受澳新企业主喜爱。">Loved by AU/NZ business owners.</h2>
-      <!-- TODO: Replace placeholders with real testimonials before launch -->
+<!-- ===================== OUTCOMES ===================== -->
+<section class="section-tight" id="outcomes" style="background:var(--surface-warm); border-block:1px solid var(--line);">
+  <div class="wrap">
+    <div class="shead reveal">
+      <div class="kicker-row"><span class="line"></span><span class="eyebrow">The product promise</span></div>
+      <h2>Not another dashboard. A managed execution system.</h2>
+      <p>Magic Engine starts with diagnosis — but the product is the execution loop after it: prioritised work, customer approvals, shipped actions and monthly proof.</p>
     </div>
-    <div class="testi-grid">
-      <div class="testi">
-        <p class="testi-quote" data-en='"I had no idea my Google Business Profile was missing half the information. The report found it in minutes — and told me exactly what to fix."' data-zh='"我不知道我的 Google 商业资料缺少一半信息。报告几分钟就找到了——还告诉我到底该怎么修。"'>
-          "I had no idea my Google Business Profile was missing half the information. The report found it in minutes — and told me exactly what to fix."
-        </p>
-        <div class="testi-author">
-          <div class="t-avatar" aria-hidden="true">S</div>
-          <div>
-            <div class="t-name">Sarah M.</div>
-            <div class="t-biz" data-en="Café owner, Brisbane QLD" data-zh="咖啡馆老板，布里斯班 QLD">Café owner, Brisbane QLD</div>
-          </div>
-        </div>
+    <div class="metrics">
+      <div class="metric reveal d1"><div class="n" data-count="23" data-prefix="+" data-suffix="%">0</div><div class="l">AI visibility lift for our first GEO pilot, CTS Tours NZ</div></div>
+      <div class="metric reveal d2"><div class="n" data-count="15" data-suffix="">0</div><div class="l">Visibility actions shipped in the current execution loop</div></div>
+      <div class="metric reveal d3"><div class="n" data-count="48" data-suffix="h">0</div><div class="l">From signing up to a prioritised diagnosis in hand</div></div>
+      <div class="metric reveal d4"><div class="n" data-count="100" data-suffix="%">0</div><div class="l">Of execution visible to the client, in real time</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== PILOTS ===================== -->
+<section class="section-pad" id="proof">
+  <div class="wrap">
+    <div class="shead reveal">
+      <div class="kicker-row"><span class="line"></span><span class="eyebrow">Live with pilot clients</span></div>
+      <h2>Running today across AU &amp; NZ.</h2>
+    </div>
+    <div class="tg">
+      <div class="quote-card feature card reveal d1">
+        <p class="q">Magic Engine isn't a tool you buy and operate alone — Magic Lab runs it as your external AI content team, against an annual visibility build, not a monthly subscription.</p>
+        <div class="by"><span class="av">ML</span><span class="who"><span class="nm">Magic Lab</span><span class="rl">Your external AI content operations team</span></span></div>
       </div>
-      <div class="testi">
-        <p class="testi-quote" data-en='"The EOFY campaign Magic Engine drafted for us went live in a week. We saw more enquiries in that month than the previous three combined."' data-zh='"Magic Engine 为我们起草的 EOFY 活动一周后上线，那个月的询价量超过了前三个月的总和。"'>
-          "The EOFY campaign Magic Engine drafted for us went live in a week. We saw more enquiries in that month than the previous three combined."
-        </p>
-        <div class="testi-author">
-          <div class="t-avatar" aria-hidden="true">T</div>
-          <div>
-            <div class="t-name">Tane W.</div>
-            <div class="t-biz" data-en="Trade services, Auckland NZ" data-zh="贸易服务，奥克兰 NZ">Trade services, Auckland NZ</div>
-          </div>
+      <div class="tcol">
+        <div class="quote-card card reveal d2">
+          <p class="q"><strong>CTS Tours NZ</strong> — GEO + SEO + Ads. Full execution loop live, with Meta ad data connected and AI visibility tracked weekly.</p>
+          <div class="by"><span class="av">CT</span><span class="who"><span class="nm">Travel &amp; tourism</span><span class="rl">New Zealand · pilot</span></span></div>
         </div>
-      </div>
-      <div class="testi">
-        <p class="testi-quote" data-en='"Finally a tool that knows we\'re in Melbourne, not Milwaukee. Every recommendation was relevant — EOFY, local platforms, all of it."' data-zh='"终于有一个知道我们在墨尔本而不是密尔沃基的工具了。每一条建议都切实可行——财年末、本地平台，全都对。"'>
-          "Finally a tool that knows we're in Melbourne, not Milwaukee. Every recommendation was relevant — EOFY, local platforms, all of it."
-        </p>
-        <div class="testi-author">
-          <div class="t-avatar" aria-hidden="true">D</div>
-          <div>
-            <div class="t-name">David K.</div>
-            <div class="t-biz" data-en="Retail, Melbourne VIC" data-zh="零售，墨尔本 VIC">Retail, Melbourne VIC</div>
-          </div>
+        <div class="quote-card card reveal d3">
+          <p class="q"><strong>Oztop</strong> — SEO + GEO. Dual-signal blogs and AI-recommendation instructions building search and AI-answer visibility.</p>
+          <div class="by"><span class="av">OZ</span><span class="who"><span class="nm">Local business</span><span class="rl">Australia · pilot</span></span></div>
         </div>
       </div>
     </div>
   </div>
 </section>
 
-<div class="divider"></div>
-
-<!-- ── Final CTA ── -->
-<section class="cta-photo">
-  <div class="container">
-    <div class="cta-block">
-      <h2 class="serif" data-en="Start with diagnosis, then go deeper." data-zh="先诊断，再深入。">Start with diagnosis, then go deeper.</h2>
-      <p data-en="If you are ready for GEO or training, the new pages are live. If you want the free diagnosis first, start there and we will point you to the right next step." data-zh="如果你已经准备好看 GEO 或培训，新页面已经上线。如果你想先做免费诊断，也可以先从那里开始。">
-        If you are ready for GEO or training, the new pages are live. If you want the free diagnosis first, start there and we will point you to the right next step.
-      </p>
-      <div class="hero-ctas" style="margin-top:26px;">
-        <a href="/discover" class="btn-primary" style="font-size:1rem;padding:15px 28px;" data-en="Run free diagnosis →" data-zh="开始免费诊断 →">Run free diagnosis →</a>
-        <a href="/geo" class="btn-secondary" style="font-size:1rem;padding:14px 26px;" data-en="Explore GEO" data-zh="查看 GEO">Explore GEO</a>
-        <a href="/training" class="btn-secondary" style="font-size:1rem;padding:14px 26px;" data-en="Explore training" data-zh="查看培训">Explore training</a>
-        <a href="/ads" class="btn-secondary" style="font-size:1rem;padding:14px 26px;" data-en="Start ads launch" data-zh="开始广告投放">Start ads launch</a>
+<!-- ===================== FAQ ===================== -->
+<section class="section-tight" id="faq" style="background:var(--surface-warm); border-top:1px solid var(--line);">
+  <div class="wrap">
+    <div class="shead center reveal">
+      <div class="kicker-row"><span class="line"></span><span class="eyebrow">Questions</span></div>
+      <h2>Good to know.</h2>
+    </div>
+    <div class="faq reveal d1">
+      <div class="faq-item open">
+        <button class="faq-q">What exactly is a "free diagnosis"? <span class="pm"></span></button>
+        <div class="faq-a"><p>We connect to your data, run it through the engine, and return a prioritised map of your highest-leverage growth opportunities — usually within 48 hours, with no commitment to continue.</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q">Who is Magic Engine built for? <span class="pm"></span></button>
+        <div class="faq-a"><p>Growth teams, founders and agencies across Australia and New Zealand who are tired of audits that gather dust. If you need diagnosis to actually turn into shipped, visible execution, this is for you.</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q">How is this different from a dashboard or an audit tool? <span class="pm"></span></button>
+        <div class="faq-a"><p>Most tools stop at the report. Magic Engine closes the loop — it prioritises the work, ships content, website fixes and ad decisions, and brings the measurable change back into the same portal your customers approve from.</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q">Is this software I run myself, or a service? <span class="pm"></span></button>
+        <div class="faq-a"><p>It's a managed annual engagement, not a self-serve subscription. Magic Lab operates Magic Engine as your external AI content team — building search, AI, social and ad visibility across the year, with monthly reporting and approvals.</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q">Can our clients see their own portal? <span class="pm"></span></button>
+        <div class="faq-a"><p>Yes. The client portal gives each customer a real-time view of opportunities, the work in flight and the results delivered — so progress is never a mystery between updates.</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q">Which channels does Magic Engine cover? <span class="pm"></span></button>
+        <div class="faq-a"><p>Four battlefronts: SEO content (Google + AI search), a social content matrix across platforms, Ads Intelligence for paid accounts, and Insight Reports that aggregate it all. You can start with one and expand.</p></div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q">Is our data and content localised for AU/NZ? <span class="pm"></span></button>
+        <div class="faq-a"><p>Yes — Magic Engine is built AU/NZ-first. Keyword databases default to AU and NZ, AI-visibility tracking carries local signals, and content uses AU/NZ English spelling and timezones.</p></div>
       </div>
     </div>
   </div>
 </section>
 
-<!-- ── Footer ── -->
-<footer class="site-footer">
-  <div class="container">
-    <div class="footer-inner">
-      <div class="footer-brand">
-        <a href="/" class="nav-logo" style="color:rgba(255,255,255,.8);text-decoration:none;">
-          <svg width="24" height="22" viewBox="0 0 68 64" fill="none" aria-hidden="true">
-            <polygon points="3,60 13,6 22,6 12,60" fill="#BE8A2E"/>
-            <polygon points="13,6 22,6 33,38 24,38" fill="#9A6F1E"/>
-            <polygon points="46,6 55,6 44,38 35,38" fill="#9A6F1E"/>
-            <polygon points="46,6 55,6 65,60 55,60" fill="#BE8A2E"/>
-            <polygon points="24,38 33,38 34,48 35,38 44,38 34,60" fill="#7A5518"/>
-          </svg>
-          <span style="color:rgba(255,255,255,.8);">Magic Engine</span>
+<!-- ===================== FINAL CTA ===================== -->
+<section class="section-pad" id="cta">
+  <div class="wrap">
+    <div class="cta reveal">
+      <div class="cta-glow"></div>
+      <h2>See your growth, executing.</h2>
+      <p>Get a free, prioritised diagnosis of your biggest opportunities — and watch Magic Engine turn it into visible work.</p>
+      <div class="cta-actions">
+        <a href="/contact" class="btn btn-primary">Get free diagnosis <svg class="arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+        <a href="/portal/login" class="btn btn-ghost">View client portal</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<!-- ===================== FOOTER ===================== -->
+<footer class="footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div>
+        <a class="logo-row" href="#top">
+          <svg class="logo-mark" viewBox="0 0 200 180" fill="none" aria-hidden="true"><use href="#me-mark"/></svg>
+          <span class="logo-text"><span class="name">Magic Engine</span><span class="sub">by Magic Lab</span></span>
         </a>
-        <p data-en="AI-era visibility for ambitious Australian and New Zealand businesses." data-zh="为有野心的澳新企业提供 AI 时代可见度解决方案。">AI-era visibility for ambitious Australian and New Zealand businesses.</p>
+        <p class="blurb">The AI execution engine for Australia &amp; New Zealand growth teams. Turns diagnosis into visible execution.</p>
       </div>
-      <div class="footer-col">
-        <h4 data-en="Product" data-zh="产品">Product</h4>
-        <ul>
-          <li><a href="/discover" data-en="Free Discovery" data-zh="免费探查">Free Discovery</a></li>
-          <li><a href="/geo" data-en="GEO" data-zh="GEO">GEO</a></li>
-          <li><a href="/training" data-en="Training" data-zh="培训">Training</a></li>
-          <li><a href="/ads" data-en="Ads Launch" data-zh="广告投放">Ads Launch</a></li>
-          <li><a href="https://app.magicengine.com.au/portal/login" data-en="Client portal" data-zh="客户入口">Client portal</a></li>
-        </ul>
+      <div>
+        <h5>Product</h5>
+        <a href="#modules">Four modules</a>
+        <a href="#flywheel">The flywheel</a>
+        <a href="#dashboard">Client portal</a>
+        <a href="#proof">Pilot clients</a>
       </div>
-      <div class="footer-col">
-        <h4 data-en="Company" data-zh="公司">Company</h4>
-        <ul>
-          <li><a href="/about" data-en="About" data-zh="关于我们">About</a></li>
-          <li><a href="mailto:raydeng@magicengine.com.au" data-en="Contact" data-zh="联系我们">Contact</a></li>
-        </ul>
+      <div>
+        <h5>Company</h5>
+        <a href="/about">About Magic Lab</a>
+        <a href="/privacy">Privacy Policy</a>
+        <a href="/terms">Terms of Service</a>
+        <a href="/contact">Contact</a>
       </div>
-      <div class="footer-col">
-        <h4 data-en="Legal" data-zh="法律">Legal</h4>
-        <ul>
-          <li><a href="/privacy" data-en="Privacy Policy" data-zh="隐私政策">Privacy Policy</a></li>
-          <li><a href="/terms" data-en="Terms of Service" data-zh="服务条款">Terms of Service</a></li>
-        </ul>
+      <div>
+        <h5>Get started</h5>
+        <a href="/contact">Get free diagnosis</a>
+        <a href="/portal/login">Sign in to portal</a>
+        <a href="/contact">Book a call</a>
       </div>
     </div>
     <div class="footer-bottom">
-      <div class="footer-entity">
-        ABC Plus Home Pty Limited · ABN 45 674 442 445 · 98 Beatrice Ave, Ascot, Brisbane QLD 4007, Australia · raydeng@magicengine.com.au
-      </div>
-      <div class="footer-copy">© 2026 Magic Engine</div>
+      <span>© 2026 Magic Lab. Powered by Magic Engine.</span>
+      <span>Made in Australia &amp; New Zealand 🇦🇺 🇳🇿</span>
     </div>
   </div>
 </footer>
 
-<script src="/app.js"></script>
+<!-- ===================== SVG DEFS (the mark) ===================== -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="meGrad" x1="20" y1="20" x2="180" y2="160" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#EBCB8B"/><stop offset="0.55" stop-color="#C4912E"/><stop offset="1" stop-color="#A6781F"/>
+    </linearGradient>
+    <radialGradient id="meNode" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFFFFF"/><stop offset="0.45" stop-color="#FBEFD2"/><stop offset="1" stop-color="#EBCB8B"/>
+    </radialGradient>
+    <radialGradient id="meGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#EBCB8B" stop-opacity="0.55"/><stop offset="1" stop-color="#EBCB8B" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Standard mark (gradient) -->
+    <g id="me-mark">
+      <g stroke="url(#meGrad)" fill="none" stroke-linecap="round" stroke-width="7">
+        <path d="M22,38 C70,50 110,78 150,92"/>
+        <path d="M22,62 C72,68 112,84 150,92"/>
+        <path d="M22,86 C76,90 112,90 150,92"/>
+        <path d="M22,110 C76,102 112,98 150,92"/>
+        <path d="M22,134 C70,122 112,104 150,92"/>
+      </g>
+      <g fill="url(#meGrad)">
+        <circle cx="22" cy="38" r="6"/><circle cx="22" cy="62" r="6"/><circle cx="22" cy="86" r="6"/><circle cx="22" cy="110" r="6"/><circle cx="22" cy="134" r="6"/>
+      </g>
+      <rect x="150" y="76" width="32" height="32" rx="9" fill="url(#meNode)"/>
+    </g>
+
+    <!-- Large mark with glow: many inputs -> intelligence layer -> action -->
+    <g id="me-mark-lg">
+      <circle cx="171" cy="92" r="60" fill="url(#meGlow)"/>
+
+      <!-- 5 converging input streams, each from an independent data point -->
+      <g stroke="url(#meGrad)" fill="none" stroke-linecap="round" stroke-width="7">
+        <path d="M20,38 C68,50 108,78 149,92"/>
+        <path d="M20,62 C70,68 110,84 149,92"/>
+        <path d="M20,86 C74,90 110,90 149,92"/>
+        <path d="M20,110 C74,102 110,98 149,92"/>
+        <path d="M20,134 C68,122 110,104 149,92"/>
+      </g>
+      <g fill="url(#meGrad)">
+        <circle cx="20" cy="38" r="6"/><circle cx="20" cy="62" r="6"/><circle cx="20" cy="86" r="6"/><circle cx="20" cy="110" r="6"/><circle cx="20" cy="134" r="6"/>
+      </g>
+
+      <!-- glowing intelligence container holding a chip -->
+      <rect x="149" y="70" width="44" height="44" rx="13" fill="#FFFCF5" stroke="url(#meGrad)" stroke-width="3.5"/>
+      <rect x="160" y="81" width="22" height="22" rx="5" fill="url(#meNode)"/>
+      <g stroke="url(#meGrad)" stroke-width="2.6" stroke-linecap="round">
+        <path d="M166,77 v4"/><path d="M171,77 v4"/><path d="M176,77 v4"/>
+        <path d="M166,103 v4"/><path d="M171,103 v4"/><path d="M176,103 v4"/>
+        <path d="M156,87 h4"/><path d="M156,92 h4"/><path d="M156,97 h4"/>
+        <path d="M182,87 h4"/><path d="M182,92 h4"/><path d="M182,97 h4"/>
+      </g>
+      <circle cx="171" cy="92" r="4.5" fill="#fff"/>
+    </g>
+
+    <!-- Icon-only (smaller stroke balance, same gradient) -->
+    <g id="me-mark-icon">
+      <g stroke="url(#meGrad)" fill="none" stroke-linecap="round" stroke-width="8">
+        <path d="M22,38 C70,50 110,78 148,92"/>
+        <path d="M22,62 C72,68 112,84 148,92"/>
+        <path d="M22,86 C76,90 112,90 148,92"/>
+        <path d="M22,110 C76,102 112,98 148,92"/>
+        <path d="M22,134 C70,122 112,104 148,92"/>
+      </g>
+      <g fill="url(#meGrad)">
+        <circle cx="22" cy="38" r="6.5"/><circle cx="22" cy="62" r="6.5"/><circle cx="22" cy="86" r="6.5"/><circle cx="22" cy="110" r="6.5"/><circle cx="22" cy="134" r="6.5"/>
+      </g>
+      <rect x="148" y="74" width="36" height="36" rx="10" fill="url(#meNode)"/>
+    </g>
+  </defs>
+</svg>
+
+<div id="tweaks-root"></div>
+
+<template id="__bundler_thumbnail" data-bg-color="#FBF8F3">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#FBF8F3"/>
+    <circle cx="760" cy="400" r="200" fill="#EBCB8B" opacity="0.35"/>
+    <g stroke="#C4912E" stroke-width="26" stroke-linecap="round" fill="none">
+      <path d="M250,300 C420,340 560,420 700,400"/>
+      <path d="M250,360 C430,380 560,400 700,400"/>
+      <path d="M250,400 C440,406 560,402 700,400"/>
+      <path d="M250,440 C440,432 560,400 700,400"/>
+      <path d="M250,500 C420,460 560,420 700,400"/>
+    </g>
+    <g fill="#C4912E">
+      <circle cx="250" cy="300" r="22"/><circle cx="250" cy="360" r="22"/><circle cx="250" cy="400" r="22"/><circle cx="250" cy="440" r="22"/><circle cx="250" cy="500" r="22"/>
+    </g>
+    <rect x="700" y="330" width="140" height="140" rx="38" fill="#FFFCF5" stroke="#C4912E" stroke-width="12"/>
+    <rect x="735" y="365" width="70" height="70" rx="16" fill="#EBCB8B"/>
+    <circle cx="770" cy="400" r="14" fill="#fff"/>
+  </svg>
+</template>
+
+<script src="app.js"></script>
+
 </body>
 </html>

@@ -1,142 +1,170 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>About Magic Engine — AI Upgrade, GEO & Training for AU/NZ Business</title>
-  <meta name="description" content="Magic Engine helps Australian and New Zealand businesses upgrade with AI, GEO, and training. Bilingual English and Chinese support for local teams.">
-  <link rel="canonical" href="https://magicengine.com.au/about">
-  <meta property="og:url" content="https://magicengine.com.au/about">
-  <link rel="alternate" hreflang="en" href="https://magicengine.com.au/about">
-  <link rel="alternate" hreflang="zh-Hans" href="https://magicengine.com.au/cn/about">
-  <link rel="stylesheet" href="/styles.css">
-  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>About — Magic Lab &amp; Magic Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+<style>
+.nav { position: sticky; top: 0; z-index: 50; background: rgba(251,248,243,.8); backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+.nav-inner { display: flex; align-items: center; justify-content: space-between; height: 72px; gap: 20px; }
+.logo-row { display: flex; align-items: center; gap: 11px; }
+.logo-mark { width: 38px; height: 34px; }
+.logo-text .name { font-family: var(--font-display); font-weight: 700; font-size: 18px; }
+.logo-text .sub { font-size: 11px; color: var(--ink-60); margin-top: 2px; }
+.nav-links { display: flex; gap: 28px; }
+.nav-links a { font-size: 14.5px; font-weight: 500; color: var(--ink-60); }
+.nav-links a:hover { color: var(--ink); }
+@media (max-width: 760px){ .nav-links { display: none; } }
+
+.about-hero { padding: 80px 0 56px; text-align: center; position: relative; overflow: hidden; }
+.about-hero .glow { position: absolute; left: 50%; top: -40%; transform: translateX(-50%); width: 520px; height: 520px; background: var(--glow); opacity: .6; pointer-events: none; }
+.about-hero .mk { width: 90px; height: 80px; margin: 0 auto 26px; display: block; position: relative; z-index: 2; }
+.about-hero h1 { font-family: var(--font-display); font-size: clamp(36px, 5vw, 60px); font-weight: 600; letter-spacing: -.02em; position: relative; z-index: 2; }
+.about-hero h1 .grad { background: var(--accent-grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.about-hero p { font-size: 19px; color: var(--ink-60); max-width: 34em; margin: 22px auto 0; line-height: 1.6; position: relative; z-index: 2; }
+
+.prose { max-width: 720px; margin: 0 auto; }
+.prose h2 { font-family: var(--font-display); font-size: 28px; font-weight: 600; letter-spacing: -.02em; margin-bottom: 14px; }
+.prose p { font-size: 17px; line-height: 1.7; color: var(--ink-70, #3a3a38); }
+.prose p + p { margin-top: 16px; }
+.block { padding-block: 28px; }
+
+.bfront { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 28px; }
+.bf { padding: 24px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); }
+.bf .n { font-size: 12px; font-weight: 600; letter-spacing: .04em; color: var(--accent); }
+.bf h3 { font-family: var(--font-display); font-size: 18px; margin: 8px 0 8px; }
+.bf p { font-size: 14px; color: var(--ink-60); line-height: 1.6; }
+@media (max-width: 640px){ .bfront { grid-template-columns: 1fr; } }
+
+.au-band { background: var(--surface-warm); border-block: 1px solid var(--line); text-align: center; }
+.au-band svg.flag { width: 54px; margin: 0 auto 16px; display: block; }
+.cta-band { text-align: center; }
+.cta-band h2 { font-family: var(--font-display); font-size: clamp(28px,4vw,42px); font-weight: 600; letter-spacing: -.02em; }
+.cta-actions { display: flex; gap: 14px; justify-content: center; margin-top: 26px; flex-wrap: wrap; }
+
+.footer { border-top: 1px solid var(--line); padding-block: 32px; }
+.footer-in { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--ink-40); }
+.footer-in nav { display: flex; gap: 22px; }
+.footer-in a:hover { color: var(--ink); }
+</style>
+
+<meta name="description" content="Magic Lab builds Magic Engine — the execution engine that turns growth diagnosis into shipped content and real AI visibility." />
+<link rel="canonical" href="https://YOUR-DOMAIN/about" />
+<meta name="theme-color" content="#0D0D0D" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="Magic Engine" />
+<meta property="og:title" content="About — Magic Lab &amp; Magic Engine" />
+<meta property="og:description" content="Magic Lab builds Magic Engine — the execution engine that turns growth diagnosis into shipped content and real AI visibility." />
+<meta property="og:url" content="https://YOUR-DOMAIN/about" />
+<meta property="og:image" content="https://YOUR-DOMAIN/og-image.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="About — Magic Lab &amp; Magic Engine" />
+<meta name="twitter:description" content="Magic Lab builds Magic Engine — the execution engine that turns growth diagnosis into shipped content and real AI visibility." />
+<meta name="twitter:image" content="https://YOUR-DOMAIN/og-image.png" />
 </head>
 <body>
 
-<!-- ── Navigation ── -->
-<nav class="nav">
-  <div class="container">
-    <div class="nav-inner">
-      <a href="/" class="nav-logo">
-        <svg width="28" height="26" viewBox="0 0 68 64" fill="none" aria-hidden="true">
-          <polygon points="3,60 13,6 22,6 12,60" fill="#BE8A2E"/>
-          <polygon points="13,6 22,6 33,38 24,38" fill="#9A6F1E"/>
-          <polygon points="46,6 55,6 44,38 35,38" fill="#9A6F1E"/>
-          <polygon points="46,6 55,6 65,60 55,60" fill="#BE8A2E"/>
-          <polygon points="24,38 33,38 34,48 35,38 44,38 34,60" fill="#7A5518"/>
-        </svg>
-        <span>Magic Engine</span>
-      </a>
-      <ul class="nav-links">
-        <li><a href="/discover">Free Discovery</a></li>
-        <li><a href="/geo">GEO</a></li>
-        <li><a href="/training">Training</a></li>
-        <li><a href="/about" style="color:var(--ink);">About</a></li>
-      </ul>
-      <div class="nav-actions">
-        <button class="btn-lang" id="lang-toggle" onclick="toggleLang()">中文</button>
-        <a href="https://app.magicengine.com.au/portal/login" class="btn-portal">Client portal</a>
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="logo-row" href="/">
+      <svg class="logo-mark" viewBox="0 0 200 180" fill="none" aria-hidden="true"><use href="#me-mark"/></svg>
+      <span class="logo-text"><span class="name">Magic Engine</span><span class="sub">by Magic Lab</span></span>
+    </a>
+    <nav class="nav-links">
+      <a href="/#modules">Product</a>
+      <a href="/#proof">Pilots</a>
+      <a href="/about">About</a>
+      <a href="/portal/login">Portal</a>
+    </nav>
+    <a href="/#cta" class="btn btn-primary btn-sm">Get free diagnosis</a>
+  </div>
+</header>
+
+<main>
+  <section class="about-hero">
+    <div class="wrap">
+      <div class="glow"></div>
+      <svg class="mk" viewBox="0 0 200 180" fill="none" aria-label="Magic Engine"><use href="#me-mark-lg"/></svg>
+      <h1>We make AI actually <span class="grad">serve growth.</span></h1>
+      <p>Magic Lab builds Magic Engine — the AI execution engine for Australia &amp; New Zealand growth teams.</p>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="wrap prose">
+      <h2>Not a tool you operate alone.</h2>
+      <p>Most marketing software stops at the dashboard. You get a report, a backlog, and the same question you started with: <em>now what?</em> Magic Engine was built to close that gap. It's the operating system behind an annual visibility build — and Magic Lab runs it as your external AI content team.</p>
+      <p>We diagnose the highest-leverage opportunities across your whole marketing surface, execute the work, and prove what changed in the same portal your customers use for approvals. Promise on the site, proof in the portal.</p>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="wrap prose">
+      <h2>Four battlefronts, one engine.</h2>
+      <p>Be seen everywhere your customers look — traditional search, AI answers, social and paid — managed as one connected system.</p>
+      <div class="bfront">
+        <div class="bf"><div class="n">01 · SEO</div><h3>SEO Content Engine</h3><p>Keyword intelligence, dual-signal blogs, and weekly AI-visibility tracking across ChatGPT, Claude, Perplexity &amp; Google AIO.</p></div>
+        <div class="bf"><div class="n">02 · Social</div><h3>Social Content Matrix</h3><p>Brand briefs, batch campaigns, AI visuals &amp; video, scheduled across your client accounts.</p></div>
+        <div class="bf"><div class="n">03 · Ads</div><h3>Ads Intelligence</h3><p>Connect ad accounts, run AI diagnosis with a 0–100 health score, apply reversible fixes.</p></div>
+        <div class="bf"><div class="n">04 · Data</div><h3>Insight Reports</h3><p>Every battlefront aggregated into a monthly report, delivered to the client portal.</p></div>
       </div>
     </div>
-  </div>
-</nav>
+  </section>
 
-<!-- ── Content ── -->
-<main>
-  <div class="legal-wrap">
-
-    <h1 class="serif">About Magic Engine</h1>
-
-    <h2>Who we are</h2>
-    <p>
-      Magic Engine is an AI upgrade, GEO, and training company built for ambitious Australian and New Zealand businesses — especially for founders and operators who know their product is good but want a clearer public surface in Google, AI assistants, social feeds, and review sites.
-    </p>
-    <p>
-      We started Magic Engine on a simple observation: most businesses have no idea how they actually appear online. They've never seen the version of themselves that lives in search results and AI answers — but their customers and competitors have. We use free diagnosis, GEO, and training to close that gap.
-    </p>
-
-    <h2>Our name</h2>
-    <p>
-      GEO helps your homepage, service pages, training pages, and contact flow stay readable for search engines and answer engines. The goal is not more pages — it is clearer signal.
-    </p>
-
-    <h2>What we do</h2>
-    <p>We help businesses do three things:</p>
-    <ul>
-      <li><strong>Diagnose it</strong> — A free discovery report reveals how you show up across search, AI search, social, ads, reputation and against your competitors.</li>
-      <li><strong>Fix it</strong> — Magic Engine turns each finding into real work — content, website fixes, bilingual updates, training tasks and ad decisions — that you approve and we execute.</li>
-      <li><strong>Prove it</strong> — You watch your visibility improve over time inside one simple portal.</li>
-    </ul>
-
-    <h2>Who we serve</h2>
-    <p>
-      We work with small and growing businesses across Australia and New Zealand, including Chinese-speaking and English-speaking teams that want one public surface to support both audiences.
-    </p>
-
-    <h2>Contact</h2>
-    <p>
-      Have a question or want to talk to a human? Email us at <a href="mailto:raydeng@magicengine.com.au" style="color:var(--gold-dark);text-decoration:underline;">raydeng@magicengine.com.au</a>.
-    </p>
-
-    <div class="entity-block">
-      ABC Plus Home Pty Limited · ABN 45 674 442 445<br>
-      98 Beatrice Ave, Ascot, Brisbane QLD 4007, Australia<br>
-      raydeng@magicengine.com.au
+  <section class="block au-band">
+    <div class="wrap prose">
+      <svg class="flag" viewBox="0 0 80 70" fill="none" aria-hidden="true"><path d="M14 30 C20 18 34 12 46 16 C56 19 60 28 68 30 C72 31 74 36 70 40 C64 46 58 40 54 44 C50 48 52 56 46 58 C40 60 38 52 32 52 C26 52 22 60 17 56 C12 52 18 46 16 40 C14 35 10 36 14 30 Z" fill="#C4912E" opacity="0.9"/><circle cx="62" cy="50" r="4" fill="#C4912E"/></svg>
+      <h2>Built for Australia &amp; New Zealand.</h2>
+      <p>Keyword databases default to AU and NZ. AI-visibility tracking carries local signals. Content uses AU/NZ English and timezones. We optimise for local search intent and local competitors first — because that's where your customers actually are.</p>
     </div>
+  </section>
 
-  </div>
+  <section class="block cta-band">
+    <div class="wrap">
+      <h2>See your growth, executing.</h2>
+      <div class="cta-actions">
+        <a href="/#cta" class="btn btn-primary">Get free diagnosis</a>
+        <a href="/portal/login" class="btn btn-ghost">View client portal</a>
+      </div>
+    </div>
+  </section>
 </main>
 
-<!-- ── Footer ── -->
-<footer class="site-footer">
-  <div class="container">
-    <div class="footer-inner">
-      <div class="footer-brand">
-        <a href="/" class="nav-logo" style="color:rgba(255,255,255,.8);text-decoration:none;">
-          <svg width="24" height="22" viewBox="0 0 68 64" fill="none" aria-hidden="true">
-            <polygon points="3,60 13,6 22,6 12,60" fill="#BE8A2E"/>
-            <polygon points="13,6 22,6 33,38 24,38" fill="#9A6F1E"/>
-            <polygon points="46,6 55,6 44,38 35,38" fill="#9A6F1E"/>
-            <polygon points="46,6 55,6 65,60 55,60" fill="#BE8A2E"/>
-            <polygon points="24,38 33,38 34,48 35,38 44,38 34,60" fill="#7A5518"/>
-          </svg>
-          <span style="color:rgba(255,255,255,.8);">Magic Engine</span>
-        </a>
-        <p>AI upgrade, GEO, and training for ambitious Australian and New Zealand businesses.</p>
-      </div>
-      <div class="footer-col">
-        <h4>Product</h4>
-        <ul>
-          <li><a href="/discover">Free Discovery</a></li>
-          <li><a href="/geo">GEO</a></li>
-          <li><a href="/training">Training</a></li>
-        </ul>
-      </div>
-      <div class="footer-col">
-        <h4>Company</h4>
-        <ul>
-          <li><a href="/about">About</a></li>
-          <li><a href="mailto:raydeng@magicengine.com.au">Contact</a></li>
-        </ul>
-      </div>
-      <div class="footer-col">
-        <h4>Legal</h4>
-        <ul>
-          <li><a href="/privacy">Privacy Policy</a></li>
-          <li><a href="/terms">Terms of Service</a></li>
-        </ul>
-      </div>
-    </div>
-    <div class="footer-bottom">
-      <div class="footer-entity">
-        ABC Plus Home Pty Limited · ABN 45 674 442 445 · 98 Beatrice Ave, Ascot, Brisbane QLD 4007, Australia · raydeng@magicengine.com.au
-      </div>
-      <div class="footer-copy">© 2026 Magic Engine</div>
-    </div>
+<footer class="footer">
+  <div class="wrap footer-in">
+    <span>© 2026 Magic Lab. Powered by Magic Engine.</span>
+    <nav>
+      <a href="/about">About</a>
+      <a href="/contact">Contact</a>
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+    </nav>
   </div>
 </footer>
 
-<script src="/app.js"></script>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <linearGradient id="meGrad" x1="20" y1="20" x2="180" y2="160" gradientUnits="userSpaceOnUse"><stop stop-color="#EBCB8B"/><stop offset="0.55" stop-color="#C4912E"/><stop offset="1" stop-color="#A6781F"/></linearGradient>
+  <radialGradient id="meNode" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#FFFFFF"/><stop offset="0.45" stop-color="#FBEFD2"/><stop offset="1" stop-color="#EBCB8B"/></radialGradient>
+  <radialGradient id="meGlow" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#EBCB8B" stop-opacity="0.55"/><stop offset="1" stop-color="#EBCB8B" stop-opacity="0"/></radialGradient>
+  <g id="me-mark">
+    <g stroke="url(#meGrad)" fill="none" stroke-linecap="round" stroke-width="7"><path d="M22,38 C70,50 110,78 150,92"/><path d="M22,62 C72,68 112,84 150,92"/><path d="M22,86 C76,90 112,90 150,92"/><path d="M22,110 C76,102 112,98 150,92"/><path d="M22,134 C70,122 112,104 150,92"/></g>
+    <g fill="url(#meGrad)"><circle cx="22" cy="38" r="6"/><circle cx="22" cy="62" r="6"/><circle cx="22" cy="86" r="6"/><circle cx="22" cy="110" r="6"/><circle cx="22" cy="134" r="6"/></g>
+    <rect x="150" y="76" width="32" height="32" rx="9" fill="url(#meNode)"/>
+  </g>
+  <g id="me-mark-lg">
+    <circle cx="171" cy="92" r="60" fill="url(#meGlow)"/>
+    <g stroke="url(#meGrad)" fill="none" stroke-linecap="round" stroke-width="7"><path d="M20,38 C68,50 108,78 149,92"/><path d="M20,62 C70,68 110,84 149,92"/><path d="M20,86 C74,90 110,90 149,92"/><path d="M20,110 C74,102 110,98 149,92"/><path d="M20,134 C68,122 110,104 149,92"/></g>
+    <g fill="url(#meGrad)"><circle cx="20" cy="38" r="6"/><circle cx="20" cy="62" r="6"/><circle cx="20" cy="86" r="6"/><circle cx="20" cy="110" r="6"/><circle cx="20" cy="134" r="6"/></g>
+    <rect x="149" y="70" width="44" height="44" rx="13" fill="#FFFCF5" stroke="url(#meGrad)" stroke-width="3.5"/>
+    <rect x="160" y="81" width="22" height="22" rx="5" fill="url(#meNode)"/>
+    <g stroke="url(#meGrad)" stroke-width="2.6" stroke-linecap="round"><path d="M166,77 v4"/><path d="M171,77 v4"/><path d="M176,77 v4"/><path d="M166,103 v4"/><path d="M171,103 v4"/><path d="M176,103 v4"/><path d="M156,87 h4"/><path d="M156,92 h4"/><path d="M156,97 h4"/><path d="M182,87 h4"/><path d="M182,92 h4"/><path d="M182,97 h4"/></g>
+    <circle cx="171" cy="92" r="4.5" fill="#fff"/>
+  </g>
+</defs></svg>
 </body>
 </html>
