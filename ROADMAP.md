@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-02 20:43 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-02 20:48 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -23,9 +23,6 @@
 - [x] **P29.SEO.12** AU/NZ SME service briefs - draft the first small-business-first page briefs from the map so we can publish focused service pages without drifting into a large-agency positioning.
 - [x] **P29.SEO.13** AU/NZ SME service page drafts - turn the four briefs into first-pass public page copy for `/ai-marketing-smes`, `/ai-training`, `/ai-automation`, and optionally a GEO landing refinement if needed.
 - [ ] **P29.SEO.14** AU/NZ SME service page QA pass - verify titles, canonicals, internal links, sitemap exposure, and only make tiny fixes if the new service pages need one more polish pass.
-- [x] **P29.SEO.18** post-VI SEO/GEO repair - after the new public VI, restore AI crawler access hints, real favicon assets, raw Chinese page signals, and lightweight schema/social metadata without redesigning the site.
-- [x] **P29.SEO.19** Chinese VI logo sync - replace the old polygon logo across `/cn/` public pages so the Chinese site matches the new Magic Engine VI.
-- [x] **P29.SEO.20** brand asset sync - update the public favicon and OG image to the new VI mark so social previews and browser tabs match the rest of the site.
 
 ### Website Ads Launch Prep - 2026-06-01
 
@@ -2844,6 +2841,7 @@ AU / NZ（当前）          新市场（未来）
 | **P21.8** | FDE 触发 UI（内部一键量产） | 21.A | ✅ 完成（执行看板「⚡ 一键量产」按钮，PR #171） |
 | **P21.9** | CTS + Oztop 端到端 MVP 验收 | — | ✅ 完成（M3 验收 Checklist 生成，PM 人工验收） |
 | **P21.10** | Production Package 社媒产物「查看→」深链修复（从错误 `/pages` 改为 Launch Hub 高亮帖子） | 21.C | ✅ 完成 |
+| **P21.22** | 诸葛亮工作台 beta 接线与回归：先把工作台入口挂到 Launch Hub / Production Package，并复测建议反馈与补发提示 | 21.C/21.UX | 🚧 进行中 |
 
 **里程碑关卡（不过不许往下，PM 验证）**：
 - **M1 产能内核** ✅（P21.1-2）：`npm run build` 通过 + 单测证明 Sonnet/Haiku 分层路由 + 记忆注入生效
@@ -3198,11 +3196,6 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 ---
 
 ## 9. 功能完成日志
-
-### 2026-06-02（Website SEO Optimization P29.SEO.18 完成）
-- 新 VI 后 SEO/GEO 修复完成：补 AI search crawler robots hints、favicon/OG 资源、中文页 raw HTML 信号、中文站内链接、服务页 Service schema 和社交 meta
-- **P29.SEO.19** — 中文站导航和页脚 logo 同步新 VI 标识，修复 `/cn/` 页面仍显示旧多边形 logo 的问题
-- **P29.SEO.20** — favicon 与 OG card 重新换成新 VI，浏览器标签和社交预览现在和站点主视觉一致
 
 ### 2026-06-01（Website SEO Optimization P29.SEO.6 完成）
 
