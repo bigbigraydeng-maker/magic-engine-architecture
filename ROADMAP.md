@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-02 05:25 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-02 13:53 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -39,6 +39,82 @@
 
 - [x] **P29.WEB.1** public root site alignment - update the `website/` homepage, about page, and discovery flow to the current AI upgrade / GEO / training positioning, then add dedicated static `/geo` and `/training` pages so the real public site matches the current offer.
 - [x] **P29.WEB.2** bilingual route split - add dedicated `/cn/` public pages and language-aware link routing so English and Chinese browsing stay within the same language.
+
+### Phase 30 — Industry Baseline Engine（行业基准数据引擎）⭐⭐ 2026-06-02
+
+> **目标**：为华佗诊断 + Goal/Strategy 层提供可信的行业基准分（P50/P75/P90），让客户诊断结果有行业对标坐标。
+> **方法论**：复用现有 Collector 公式对行业代表域名打分，基准分与客户诊断分天然可比。
+> **覆盖行业（2026-06-02 扩展）**：tourism_operator（NZ inbound/outbound）、real_estate（Auckland）、flooring_tiles（Brisbane）、logistics_3pl（NZ）
+> **geo 设计**：SERP 竞争单位驱动颗粒度 — B2C 本地服务用城市级，B2B 全国服务用 national。
+
+#### 细分定义（✅ 全部完成）
+
+| 细分 ID | 含义 | geo | 域名数 | 分数状态 |
+|---------|------|-----|--------|---------|
+| `inbound_tour_operator` | NZ 入境游运营商 | national | 9 | ✅ 有分 |
+| `outbound_tour_operator` | NZ 出境游运营商（对标 CTS） | national | 6 | ✅ 有分 |
+| `real_estate_auckland` | Auckland 房产中介 | city | 8 | 🔄 采集中 |
+| `flooring_tiles_brisbane` | Brisbane 地板/瓷砖 | city | 12 | 🔄 采集中 |
+| `logistics_3pl_nz` | NZ 跨境电商 3PL | national | 9 | 🔄 采集中 |
+
+#### S1 — 域名清单（✅ 完成 2026-06-02）
+
+半自动：DataForSEO SERP 抽取 + PM 核验。脚本：`scripts/p30-s1-*.ts` / `scripts/p30-s4-serp-probe.ts`
+
+扩展城市模板（客户到位时执行）：
+```
+CITY=sydney INDUSTRY=real_estate npx tsx scripts/p30-s4-serp-probe.ts
+CITY=melbourne INDUSTRY=real_estate npx tsx scripts/p30-s4-serp-probe.ts
+CITY=christchurch INDUSTRY=real_estate npx tsx scripts/p30-s4-serp-probe.ts
+```
+
+#### S2 — Collector 采集（✅ Tourism 完成；🔄 新三细分进行中）
+
+- [x] **P30.S2.1** inbound_tour_operator 9 个域名 → P50=16 P75=16 P90=16
+- [x] **P30.S2.2** outbound_tour_operator 6 个域名 → P50=16 P75=19 P90=20（CTS=16，处于行业中位）
+- [x] **P30.S2.3** 写入 `industry_benchmarks`（tourism 两个细分）
+- [ ] **P30.S2.4** real_estate_auckland 8 个域名采集 + 写 industry_benchmarks
+- [ ] **P30.S2.5** flooring_tiles_brisbane 12 个域名采集 + 写 industry_benchmarks
+- [ ] **P30.S2.6** logistics_3pl_nz 9 个域名采集 + 写 industry_benchmarks
+
+#### S3 — 域名管理 UI（✅ 完成 2026-06-02）
+
+- [x] **P30.S3.1** `/dashboard/industry-baselines` 管理页（5 个细分分组展示）
+- [x] **P30.S3.2** 域名增删 UI（Add 弹窗 + Remove 按钮，FDE 可随时维护竞品清单）
+- [x] **P30.S3.3** 「Refresh」按钮：单域名按需触发 collector，不全局重跑
+- [x] **P30.S3.4** P50/P75/P90 实时计算展示 + 30 天 stale 橙色提示
+
+#### S4 — 扩展行业（🔄 进行中，按客户管线滚动扩展）
+
+- [x] **P30.S4.1** real_estate_auckland — Auckland 房产中介（2026-06-02）
+- [x] **P30.S4.2** flooring_tiles_brisbane — Brisbane 地板瓷砖（2026-06-02）
+- [x] **P30.S4.3** logistics_3pl_nz — NZ 跨境电商 3PL（2026-06-02）
+- [ ] **P30.S4.4** real_estate_sydney — 悉尼房产（等客户）
+- [ ] **P30.S4.5** real_estate_melbourne — 墨尔本房产（等客户）
+- [ ] **P30.S4.6** real_estate_christchurch — 基督城房产（等客户）
+
+#### S5 — 动态化基准（✅ 完成 2026-06-02）
+
+- [x] **P30.S5.1** 时序快照表 `baseline_domain_score_history`（每次 collect 插一行）
+- [x] **P30.S5.2** 月度 cron `/api/cron/baseline-domains-monthly` + GitHub Actions 调度
+- [x] **P30.S5.3** 华佗 `fetchBenchmarks` 改为实时读 baseline_domains（动态反映竞品变化）
+- [x] **P30.S5.4** 华佗 agent 调用方传 `city`，激活城市级基准命中
+
+> **PM 操作（一次性）**：GitHub repo Settings → Secrets 添加 `CRON_SECRET`（与 Render web 服务同值）。下个月 1 号 03:00 UTC 自动跑首次。可在 Actions 页面手工 `Run workflow` 验证。
+
+#### Backlog（按 FDE 使用反馈再决定）
+
+- [ ] **P30.S5.5** 前端加趋势列（domain 历史折线 / 14d 30d 涨跌）
+- [ ] **P30.S5.6** 异常预警（domain 单次掉分 >10% 报警 FDE）
+- [ ] **P30.S5.7** 客户对照视图（客户 vs 行业 P50 折线图）
+
+---
+
+**Phase 30 状态：✅ 闭环完成 2026-06-02**
+
+整个机制连起来运转：每月 1 号 cron 自动重跑 44 个域名 → 写最新分 + 插历史 → 华佗诊断时按 `industry_category + city` 实时拉基准，永远反映竞品最新水准。
+
+---
 
 ### Website Self-Serve Auth - 2026-06-02
 
