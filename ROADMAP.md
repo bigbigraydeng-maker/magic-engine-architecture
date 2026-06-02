@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-02 22:30 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-03 11:21 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -3265,6 +3265,21 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 ---
 
 ## 9. 功能完成日志
+
+### 2026-06-02（QA 测试加固轮 — 6 PR）
+背景：6-02 全天 Codex 大规模测试 ME 暴露的存量问题。性质是质量加固 + 反模式根治，非新功能推进。
+- **PR #248** — CF AI Gateway 401 修复：所有 OpenAI/Anthropic 调用走 CF Gateway 后缺 `cf-aig-authorization` header，加 `CF_AIG_TOKEN` env 注入 Bearer header
+- **PR #270** — Client portal 按钮黑底黑字 + 移动端被隐藏：a:link/visited/hover/focus/active 全部 !important 白色 + 移动端不再 display:none
+- **PR #290** — initiatives PATCH 三道闸校验：抽 `validateSupportsInitiativeParent` 共享给 create + update；terminal 不能有 parent / supporting 必须有 parent（unassigned 豁免）/ parent 必须是同 goal 的 terminal
+- **PR #293** — outcomeChip + buildExecutionGroups 回归测试 [QA-T1]：13 个 test 覆盖 formatOutcomeLabel 6 种 delta_pct/delta 输出格式、VERDICT_META fallback、buildDimensionGroups autonomous 过滤
+- **PR #297** — zhangqian/connectors 内部 HTTP 自调用根治 [QA-T3-rev]：抽 `startAdvancedDiscovery` lib 函数，connect route 删除内部 fetch + Bearer，直接进程内调用，彻底退役这条链路上的 `INTERNAL_API_KEY`
+- **commit e699218** — Codex 协作分工规范写入 CLAUDE.md（PM 不分配 Codex 任务，Claude Code 统筹 + 子牙复审 + 决定 merge）
+- **取消**：T4 phaseData.ts 误派任务（Claude 派活时引用了旧 session 的过期错误信息，Codex 正确识别现实不符并拒绝瞎改 — 这是 PR #290 撒谎事故后的正确执行方式，Codex 加分）
+
+发现待办：
+- `src/app/api/clients/[id]/blog/[postId]/route.ts:140` 还有 1 处同款内部 HTTP+Bearer 反模式（post 审批后 fire-and-forget fetch social-suggestions），待 QA-清理-1 处理
+- `@/lib/apify/*` `@/lib/dataforseo/serp` `@/lib/gsc/client` 4 个模块文件缺失，导致 advanced-agent.ts import 断裂，待排查
+- tsc 整体红（scripts/p30-*、cms/publish-geo-snippet test mock、CompetitorSnapshotAdapter），历史遗留，待单独 QA 加固轮处理
 
 ### 2026-06-02（Website SEO Optimization P29.SEO.18 完成）
 - 新 VI 后 SEO/GEO 修复完成：补 AI search crawler robots hints、favicon/OG 资源、中文页 raw HTML 信号、中文站内链接、服务页 Service schema 和社交 meta
