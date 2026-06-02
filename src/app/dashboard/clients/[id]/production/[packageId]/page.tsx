@@ -5,6 +5,8 @@ import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { findSlots } from '@/lib/scheduling/slot-finder'
 import type { SchedulingPlatform } from '@/lib/scheduling/slot-finder'
+import { ZhugeWorkbenchFab } from '@/components/workbench/ZhugeWorkbenchFab'
+import { ZhugeWorkbenchDrawer } from '@/components/workbench/ZhugeWorkbenchDrawer'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -568,6 +570,7 @@ export default function ProductionPackageDetailPage() {
   const [pkgStatus, setPkgStatus] = useState<PackageStatus>('draft')
   const [approving, setApproving] = useState(false)
   const [approveError, setApproveError] = useState<string | null>(null)
+  const [workbenchChatOpen, setWorkbenchChatOpen] = useState(false)
 
   useEffect(() => {
     void (async () => {

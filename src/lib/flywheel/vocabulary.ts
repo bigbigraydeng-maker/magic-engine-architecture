@@ -350,6 +350,7 @@ const ALL_ADS_ACTIONS    = new Set<string>(Object.values(ADS_ACTION_TYPE))
 const ALL_ADS_METRICS    = new Set<string>(Object.values(ADS_METRIC_KEY))
 const ALL_SOCIAL_ACTIONS = new Set<string>(Object.values(SOCIAL_ACTION_TYPE))
 const ALL_SOCIAL_METRICS = new Set<string>(Object.values(SOCIAL_METRIC_KEY))
+const ALL_COMPETITOR_METRICS = new Set<string>(Object.values(COMPETITOR_METRIC_KEY))
 
 export function isValidGeoActionType(value: string): value is GeoActionType {
   return ALL_GEO_ACTIONS.has(value)

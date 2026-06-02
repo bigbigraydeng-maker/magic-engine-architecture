@@ -29,6 +29,7 @@ import {
 } from './execution-view-model'
 import { FdeManualEntryModal } from './_components/FdeManualEntryModal'
 import { DataPullbackSection } from './_components/DataPullbackSection'
+import { AnomalySignalPanel } from './_components/AnomalySignalPanel'
 import { IntelligenceSummarySection } from '../_components/intelligence/IntelligenceSummarySection'
 import { BriefGateBanner } from '../_components/BriefGateBanner'
 // MemoryAnnotationPanel removed — Phase 20.D item 6: system handles flywheel recording automatically

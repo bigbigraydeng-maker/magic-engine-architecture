@@ -13,6 +13,8 @@ import type { ClientDiscoveryRow } from '@/lib/zhangqian/types';
 import { ClientDataTab } from './_components/ClientDataTab';
 import { LocaleConfirmBanner } from './_components/LocaleConfirmBanner';
 import { IntelligenceSummarySection } from './_components/intelligence/IntelligenceSummarySection';
+import { BriefGateBanner } from './_components/BriefGateBanner';
+import { GoalBanner } from './_components/GoalBanner';
 
 
 interface Client {
