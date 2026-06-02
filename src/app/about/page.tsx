@@ -2,9 +2,9 @@ import type { Metadata } from 'next'
 import Link from 'next/link'
 
 export const metadata: Metadata = {
-  title: 'About Us',
+  title: 'About Us — Magic Engine',
   description:
-    'Magic Engine is an AI-powered marketing execution platform for AU/NZ SMEs and growth teams. Learn about our company, mission, and the platform we build.',
+    'Magic Engine is an AI-powered marketing execution platform for AU/NZ growth teams. Learn about our company, mission, and the platform we build.',
 }
 
 const features = [
@@ -63,9 +63,9 @@ export default function AboutPage() {
           The execution engine for AU/NZ growth teams.
         </h1>
         <p className="mt-6 max-w-2xl text-lg leading-8 text-slate-600">
-          Magic Engine is an AI-powered marketing platform built for AU/NZ SMEs, founders, and
-          in-house growth teams. We turn diagnostic findings into shipped execution — across
-          search, AI visibility, social media, and paid advertising.
+          Magic Engine is an AI-powered marketing platform built for marketing agencies and
+          in-house growth teams in Australia and New Zealand. We turn diagnostic findings into
+          shipped execution — across search, AI visibility, social media, and paid advertising.
         </p>
 
         <section className="mt-16">
@@ -98,7 +98,7 @@ export default function AboutPage() {
           <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6">
             <p className="text-sm leading-7 text-slate-600">
               Magic Engine integrates with the Google Ads API to provide two core capabilities for
-              teams managing Google Ads for their own brands or client accounts:
+              agencies managing Google Ads on behalf of their clients:
             </p>
             <ol className="mt-4 list-decimal pl-5 text-sm leading-8 text-slate-600">
               <li>
@@ -106,7 +106,7 @@ export default function AboutPage() {
                 ad-group-level data (impressions, clicks, spend, ROAS, conversion rates) from
                 connected accounts. This feeds our AI Diagnostic Engine, which identifies
                 underperforming campaigns, budget inefficiencies, and keyword opportunities, then
-                surfaces prioritised recommendations to the team.
+                surfaces prioritised recommendations to the agency.
               </li>
               <li>
                 <strong>Approved campaign execution</strong> — after presenting findings to clients
@@ -118,9 +118,9 @@ export default function AboutPage() {
               </li>
             </ol>
             <p className="mt-4 text-sm leading-7 text-slate-600">
-              Access is granted through standard Google OAuth 2.0 by the account owner or the team
-              managing the account. Magic Engine never accesses accounts without explicit
-              authorisation, and all API usage complies with the{' '}
+              Access is granted through standard Google OAuth 2.0 by the agency managing the
+              account. Magic Engine never accesses accounts without explicit authorisation, and
+              all API usage complies with the{' '}
               <a
                 href="https://developers.google.com/google-ads/api/docs/best-practices/overview"
                 target="_blank"
