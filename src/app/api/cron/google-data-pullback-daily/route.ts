@@ -24,7 +24,6 @@ import { fetchGa4Snapshot } from '@/lib/ga4/client'
 import { getAdAccountInsights, getAdCampaignInsights } from '@/lib/meta/client'
 import { SEO_METRIC_KEY, GA4_METRIC_KEY } from '@/lib/flywheel/vocabulary'
 import { MetaAdsAdapter } from '@/lib/flywheel/adapters/MetaAdsAdapter'
-import { Ga4Adapter } from '@/lib/flywheel/adapters/Ga4Adapter'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 900
