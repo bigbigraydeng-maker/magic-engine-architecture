@@ -1,28 +1,101 @@
 'use client'
 
-import { useState } from 'react'
-import { ZhugeDrawer } from './ZhugeDrawer'
+import { useEffect, useState } from 'react'
+import { usePathname } from 'next/navigation'
+import { ZhugeWorkbenchFab } from '@/components/workbench/ZhugeWorkbenchFab'
+import { ZhugeWorkbenchDrawer } from '@/components/workbench/ZhugeWorkbenchDrawer'
 
+interface ClientMeta {
+  name: string
+  domain?: string | null
+}
+
+/**
+ * Global 诸葛亮 FAB — mounted in clients/[id]/layout.tsx so it persists across
+ * every sub-page (overview, execution, diagnostic, strategy, production, etc).
+ *
+ * Wraps ZhugeWorkbenchFab (info panel: current thread, pending summary,
+ * next-step suggestions, recent threads, quick links) and ZhugeWorkbenchDrawer
+ * (chat with 诸葛亮 about the current client).
+ *
+ * The fab auto-infers `currentAreaLabel` from pathname so each sub-page tells
+ * 诸葛亮 where the user currently is.
+ */
 export function ZhugeGlobalFab({ clientId }: { clientId: string }) {
-  const [open, setOpen] = useState(false)
+  const pathname = usePathname()
+  const [chatOpen, setChatOpen] = useState(false)
+  const [client, setClient] = useState<ClientMeta | null>(null)
+
+  // Fetch client metadata once so the panel can show a real label
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch(`/api/clients/${clientId}`, { cache: 'no-store' })
+        if (!res.ok) return
+        const data = await res.json() as { client?: ClientMeta }
+        if (data.client) setClient(data.client)
+      } catch {
+        // non-fatal: panel will fall back to the id-slice label
+      }
+    })()
+  }, [clientId])
+
+  // Infer the current area from pathname so 诸葛亮 knows where the user is
+  const currentAreaLabel = inferAreaLabel(pathname, clientId)
+
+  // Standard quick links to other client sub-pages for fast navigation
+  const quickLinks = [
+    { label: '概览',         href: `/dashboard/clients/${clientId}` },
+    { label: '执行看板',     href: `/dashboard/clients/${clientId}/execution` },
+    { label: 'Launch Hub',   href: `/dashboard/content?client=${clientId}` },
+    { label: '诊断',         href: `/dashboard/clients/${clientId}/diagnostic` },
+    { label: '内容策略',     href: `/dashboard/clients/${clientId}/strategy` },
+    { label: 'AI 可见度',    href: `/dashboard/ai-visibility/${clientId}` },
+  ]
+
+  const clientLabel = client?.name ?? clientId.slice(0, 8)
 
   return (
     <>
-      <button
-        onClick={() => setOpen(true)}
-        className="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-me-charcoal px-4 py-3 text-sm font-black text-white shadow-lg transition-all hover:bg-me-charcoal/85 hover:shadow-xl active:scale-95"
-        title="询问诸葛亮"
-      >
-        <span className="text-base leading-none">🧠</span>
-        <span className="hidden sm:inline">诸葛亮</span>
-      </button>
-
-      <ZhugeDrawer
+      <ZhugeWorkbenchFab
         clientId={clientId}
-        isOpen={open}
-        onClose={() => setOpen(false)}
-        onComplete={() => {}}
+        currentHref={pathname}
+        clientLabel={clientLabel}
+        currentAreaLabel={currentAreaLabel}
+        quickLinks={quickLinks}
+        onOpenChat={() => setChatOpen(true)}
+      />
+      <ZhugeWorkbenchDrawer
+        clientId={clientId}
+        isOpen={chatOpen}
+        onClose={() => setChatOpen(false)}
       />
     </>
   )
+}
+
+function inferAreaLabel(pathname: string | null, clientId: string): string {
+  if (!pathname) return '客户工作台'
+  const base = `/dashboard/clients/${clientId}`
+  if (pathname === base) return '客户概览'
+  const tail = pathname.replace(base, '')
+  if (tail.startsWith('/execution'))      return 'Execution 看板'
+  if (tail.startsWith('/diagnostic'))     return '华佗诊断'
+  if (tail.startsWith('/prescription'))   return '诸葛亮处方'
+  if (tail.startsWith('/zhangqian'))      return '张骞发现'
+  if (tail.startsWith('/strategy'))       return '内容策略'
+  if (tail.startsWith('/marketing-plan')) return 'Marketing Plan'
+  if (tail.startsWith('/blog'))           return '博客'
+  if (tail.startsWith('/production'))     return '生产包'
+  if (tail.startsWith('/seo-intelligence')) return 'SEO Intelligence'
+  if (tail.startsWith('/seo-gap'))        return 'SEO Gap'
+  if (tail.startsWith('/site-audit'))     return '站点审计'
+  if (tail.startsWith('/connectors'))     return '广告连接器'
+  if (tail.startsWith('/assets'))         return '素材库'
+  if (tail.startsWith('/goal'))           return 'Goal 战略层'
+  if (tail.startsWith('/goals'))          return 'Goal 战略层'
+  if (tail.startsWith('/memory'))         return '客户记忆库'
+  if (tail.startsWith('/wallet'))         return '钱包'
+  if (tail.startsWith('/settings'))       return '设置'
+  return '客户工作台'
 }
