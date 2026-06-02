@@ -335,7 +335,10 @@ export function ZhugeWorkbenchFab({
 
   return (
     <div
-      className={`fixed z-[99] ${anchorClassName}`}
+      // z-30: sits above page content but BELOW drawers/modals (which use z-50 + black/40 overlay).
+      // This makes the FAB auto-hide whenever any drawer is open, avoiding the
+      // Save/Cancel button collision in the bottom-right corner.
+      className={`fixed z-30 ${anchorClassName}`}
       onMouseLeave={() => setHoverFan(false)}
     >
       {/* Hover-fan quick links (above the FAB, only visible on hover when panel is closed)
