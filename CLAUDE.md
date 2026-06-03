@@ -306,12 +306,12 @@ npm test           # 测试套件
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-06-03 15:07 NZST （**A1 reputation 公式修复 merged + 诸葛亮工作台 FAB 完整设计上线**）
+> 最后更新：2026-06-03 18:39 NZST （**Phase 33 M4 上线 — Goal 详情页执行进度摘要（PR #304 merged）**）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
 | **🧪 Phase 33 P33.9/P33.10 测试待跑** | PR #302 已 merged。回 CTS 执行看板验证：①点 Goal filter 后状态 chips 数字真变小（之前 38/11/20 不变）②「📥 未归类 Actions」分组出现（应含 ~52 条 placeholder 绑定 action）③Bulk-migrate 一条 action 后从未归类消失 | ⚠️ 今日晚上跑 |
-| **Phase 33 M4** | Goal 详情页执行进度摘要（Initiative 进度条 + 总数）— P33.11/P33.12 | 📋 中 / 1 天 |
+| **🧪 Phase 33 M4 测试待跑** | PR #304 已 merged。回 CTS Goal 详情页验证：①顶部 Execution Progress 卡片出现（数字 vs Supabase 对得上）②Initiative 卡片展开后右上角 X/Y actions done 完成率 chip ③Campaign 已关联列表里有状态点（active/paused）| ⚠️ 今日晚上跑 |
 | **A3 案例沉淀** | 把 CTS/Oztop Phase 31/33 跑通经验固化到 Clients/ 笔记 | 📋 半天 |
 | **A2 Goal 主指标 auto-fetch** | GA4 / Brand search volume / Form submissions 自动读 current_value | 📋 中 / 1-2 天/源 |
 | **B1 AU/NZ Marketing Index** | 独立项目战略议题，Q4 2026 评估 → Q1 2027 启动 MVP | 📋 战略级 / 6-8 周 |
@@ -320,6 +320,7 @@ npm test           # 测试套件
 | **GBP.0** | Google Cloud：enable Business Profile API + Account Management API | ⚠️ PM 操作 |
 
 **已完成全景（最近几个 Phase）**：
+- ✅ **Phase 33 M4 — Goal-level Execution Summary**（2026-06-03，PR #304 merged）：子牙 review 修正版（合并 P33.11+P33.12 为一套数据双视角）。新 `GET /api/goals/[goalId]/execution-summary` 一次聚合返回；ExecutionSummaryBar 顶部 4-stat row + 完成率进度条；InitiativeExecutionPanel 加完成率 chip + Campaign 状态点。修复 3 个子牙杀手锏 bug：skipped 排出分母 / 死 campaign ID 过滤 / paused campaign 不漏算。9 个新测试，97/97 strategy lib 全过
 - ✅ **Phase 33 P33.9/P33.10 修复**（2026-06-03，PR #301 + #302 merged）：状态 chips 数字跟 Goal filter 变化；「未归类 Actions」分组判断条件扩展为 `null || initiative_type='unassigned' placeholder`；endpoint 不再过滤 unassigned；PlanGenerator 前端补 filter 排除下拉。**测试待跑**（见焦点表第一行）
 - ✅ **A1 reputation 公式修复**（2026-06-03，PR #298 + #300 merged）：RATING 0.60→0.70 / REVIEW 0.40→0.30 / MAX_REVIEWS 100→30 + 抽出纯函数 `scoreReputation()` 预留 TripAdvisor/ProductReview 字段（A2 接驳零改动）+ GBP 查询从 domain → "name+city+country"。CTS Tours NZ reputation 44 → ~71（进入健康区间）
 - ✅ **诸葛亮全局工作台 FAB**（2026-06-03）：清除 batch merge 残留冲突标记 + 恢复完整 Workbench FAB 设计（当前线程/待处理摘要/下一步建议/最近线程/快捷切换）+ hover-fan 鼠标悬停展开 + z-30 让 drawer 自动遮盖
@@ -330,17 +331,16 @@ npm test           # 测试套件
 - ✅ **Phase 30 Industry Baseline Engine**（2026-06-02，PR #251）：5 细分 / 44 域名 / 月度 cron 自动重跑 / 华佗实时读基准（含 city 维度命中）
 
 **下一候选（按优先级）**：
-1. 📋 **Phase 33 M4** — Goal 详情页执行进度摘要（P33.11/P33.12）
-2. 📋 **A3 CTS/Oztop 案例沉淀** — 半天事，把跑通经验固化（A1 已完成可基于真实评分跑案例）
-3. 📋 **A2 Goal 主指标 auto-fetch** — GA4 / Brand search volume / Form submissions 自动读 current_value（1-2 天/源）
-4. 📋 **Phase 22.A.2** — GA4 每日采集（merge PR #187 后继续）
-5. 📋 **Phase 24.B** — GBP 数据摂取（依赖 GBP.0 + migration）
+1. 📋 **A3 CTS/Oztop 案例沉淀** — 半天事，把跑通经验固化（A1 + M4 都完成，可基于真实评分和执行数据跑案例）
+2. 📋 **A2 Goal 主指标 auto-fetch** — GA4 / Brand search volume / Form submissions 自动读 current_value（1-2 天/源）
+3. 📋 **Phase 22.A.2** — GA4 每日采集（merge PR #187 后继续）
+4. 📋 **Phase 24.B** — GBP 数据摂取（依赖 GBP.0 + migration）
 
 **ME 定位升级（2026-06-02 确立）**：
 旧 → 营销自动化平台
 **新 → 以 Goal 为中心的生意指挥平台**（Kanban 汇总所有能帮客户达成 Goal 的因素，营销只是其中一条战线）
 
-下一 session：`继续 ME 工作 — 跑 Phase 33 P33.9/P33.10 测试` 或 `继续 ME 工作 — Phase 33 M4` 或 `继续 ME 工作 — A3 案例沉淀`
+下一 session：`继续 ME 工作 — 跑 Phase 33 P33.9/P33.10 + M4 测试` 或 `继续 ME 工作 — A3 案例沉淀`
 
 **更新规则**（每次上线新功能）：
 1. ROADMAP.md 勾选对应任务 checkbox
