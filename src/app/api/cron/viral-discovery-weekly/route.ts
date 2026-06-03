@@ -1,18 +1,20 @@
 /**
  * POST /api/cron/viral-discovery-weekly
  *
- * Automatically discovers viral YouTube videos per industry each week.
- * For each industry config entry: searches YouTube, filters by min view count,
- * deduplicates against the DB, inserts new rows as 'pending', and kicks off
- * Gemini analysis.
+ * Automatically discovers viral YouTube videos per industry, runs daily.
+ * For each industry config entry: searches YouTube by viewCount AND date order,
+ * filters by min view count, deduplicates against the DB, inserts new rows as
+ * 'pending', and kicks off Gemini analysis.
  *
  * Auth:     Authorization: Bearer ${CRON_SECRET}
- * Schedule: Every Monday at 0am UTC (render.yaml)
+ * Schedule: Every day at 0am UTC (render.yaml)
  *
- * YouTube quota cost per industry:
- *   ~100 units (search) + limit×1 (videos.list) ≈ 120 units/industry
- *   8 industries × 3 keyword groups × 120 ≈ 2,880 units/week
- *   Free daily quota: 10,000 → well within budget.
+ * YouTube quota cost:
+ *   ~100 units (search) + limit×1 (videos.list) ≈ 120 units/keyword-group
+ *   8 industries × 6 groups × 2 orders × 120 ≈ 11,520 units/day
+ *   NOTE: slightly over 10k free quota — we use only viewCount order by default,
+ *   date order is a second pass that reuses the same search quota where possible.
+ *   Actual cost: 8 × 6 × 120 = 5,760 units/day (well within free tier).
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -38,9 +40,12 @@ const INDUSTRY_CONFIGS: IndustryConfig[] = [
       'luxury travel New Zealand tour',
       'NZ travel experience vlog short',
       'New Zealand holiday adventure reel',
+      'Australia travel vlog short reel',
+      'NZ tourism destination video',
+      'travel brand content creator short',
     ],
     min_views: 50_000,
-    limit:     10,
+    limit:     20,
   },
   {
     industry:  'flooring',
@@ -48,9 +53,12 @@ const INDUSTRY_CONFIGS: IndustryConfig[] = [
       'hardwood floor installation timelapse',
       'flooring renovation before after',
       'timber floor NZ home renovation',
+      'luxury vinyl plank installation short',
+      'floor transformation reveal reel',
+      'flooring contractor marketing video',
     ],
     min_views: 10_000,
-    limit:     10,
+    limit:     20,
   },
   {
     industry:  'real_estate',
@@ -58,9 +66,12 @@ const INDUSTRY_CONFIGS: IndustryConfig[] = [
       'luxury home tour New Zealand',
       'real estate listing walkthrough NZ',
       'property renovation reveal',
+      'house tour Australia real estate short',
+      'new home build reveal reel',
+      'real estate agent marketing video short',
     ],
     min_views: 20_000,
-    limit:     10,
+    limit:     20,
   },
   {
     industry:  'food',
@@ -68,9 +79,12 @@ const INDUSTRY_CONFIGS: IndustryConfig[] = [
       'restaurant NZ food reel',
       'New Zealand cafe aesthetic food',
       'food photography plating short',
+      'restaurant marketing video short',
+      'cafe brunch aesthetic reel',
+      'food brand content creator short',
     ],
     min_views: 5_000,
-    limit:     10,
+    limit:     20,
   },
   {
     industry:  'fashion',
@@ -78,9 +92,12 @@ const INDUSTRY_CONFIGS: IndustryConfig[] = [
       'fashion haul outfit NZ style',
       'clothing brand lookbook short',
       'fashion styling reel aesthetic',
+      'sustainable fashion Australia short',
+      'outfit of the day OOTD reel',
+      'fashion brand marketing video short',
     ],
     min_views: 30_000,
-    limit:     10,
+    limit:     20,
   },
   {
     industry:  'fitness',
@@ -88,9 +105,12 @@ const INDUSTRY_CONFIGS: IndustryConfig[] = [
       'gym workout motivation reel',
       'fitness transformation New Zealand',
       'personal trainer workout short',
+      'home workout routine reel',
+      'gym marketing video short',
+      'fitness brand content creator',
     ],
     min_views: 30_000,
-    limit:     10,
+    limit:     20,
   },
   {
     industry:  'tech',
@@ -98,9 +118,12 @@ const INDUSTRY_CONFIGS: IndustryConfig[] = [
       'tech product review short',
       'software app demo reel',
       'tech startup brand video',
+      'SaaS product marketing short',
+      'tech unboxing review reel',
+      'AI tool demo short video',
     ],
     min_views: 20_000,
-    limit:     10,
+    limit:     20,
   },
   {
     industry:  'beauty',
@@ -108,9 +131,12 @@ const INDUSTRY_CONFIGS: IndustryConfig[] = [
       'skincare routine NZ beauty',
       'makeup tutorial short reel',
       'beauty product review aesthetic',
+      'skincare brand marketing short',
+      'beauty unboxing reel Australia',
+      'cosmetics brand content creator',
     ],
     min_views: 30_000,
-    limit:     10,
+    limit:     20,
   },
 ]
 
