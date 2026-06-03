@@ -255,6 +255,22 @@ services:
       - key: CRON_SECRET
         sync: false
 
+  # Viral reference analyzer worker — every 2 minutes
+  # Throttled queue drainer: picks up to 8 pending videos, runs Gemini analysis
+  # sequentially with 5s delay between calls. Without this, viral-discovery would
+  # burst 150+ concurrent Gemini calls and hit paid-tier TPM cap (1M tok/min).
+  - type: cron
+    name: viral-analyzer-worker
+    env: node
+    schedule: "*/2 * * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -s -X POST -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/viral-analyzer-worker
+    envVars:
+      - key: CRON_SECRET
+        sync: false
+
   # Daily viral YouTube discovery — every day at 0am UTC (~12pm NZST)
   # 8 industries × 6 keyword groups × limit 20 = up to ~960 videos/day.
   # Auto-deduplicates, inserts new rows, kicks off Gemini analysis.

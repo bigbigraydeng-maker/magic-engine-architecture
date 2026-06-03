@@ -19,7 +19,6 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { analyzeViralReference } from '@/lib/reels/viral-analyzer'
 
 export const dynamic    = 'force-dynamic'
 export const maxDuration = 300  // 5 min — 8 industries × ~30s each
@@ -281,11 +280,11 @@ async function discoverForKeywords(
     return { ...base, found: searchItems.length, skipped, below_threshold: belowThreshold, error: insertErr.message }
   }
 
-  for (const ref of inserted ?? []) {
-    analyzeViralReference(ref.id, ref.source_url).catch(err => {
-      console.error(`[viral-discovery] analysis failed ${ref.id}:`, err)
-    })
-  }
+  // NOTE: Do NOT fire-and-forget analyzeViralReference here — bursting hundreds
+  // of concurrent Gemini calls exceeds the paid-tier TPM cap (1M tokens/min)
+  // and returns 429 despite having credit. Rows are left as 'pending' and
+  // drained by the dedicated /api/cron/viral-analyzer-worker (every 2 min,
+  // 8 videos per batch, 5s delay between calls).
 
   return {
     industry:        cfg.industry,

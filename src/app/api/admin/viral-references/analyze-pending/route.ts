@@ -1,35 +1,30 @@
 /**
  * POST /api/admin/viral-references/analyze-pending
  *
- * Picks up all 'pending' viral references and kicks off Gemini analysis
- * for each one asynchronously. Safe to call multiple times (skips non-pending).
+ * Counts pending viral references. Does NOT trigger analysis directly —
+ * the dedicated /api/cron/viral-analyzer-worker drains the queue every 2 min
+ * with throttling (8 videos, 5s delay) to stay within Gemini TPM limits.
  *
- * Returns immediately with the list of IDs queued.
+ * Manual fire-and-forget was removed because bursting hundreds of concurrent
+ * Gemini calls exceeded the paid-tier TPM cap and produced 429 errors.
  */
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { analyzeViralReference } from '@/lib/reels/viral-analyzer'
 
 export async function POST() {
   const { data: pending, error } = await supabaseAdmin
     .from('viral_reference_library')
-    .select('id, source_url')
+    .select('id', { count: 'exact', head: false })
     .eq('analysis_status', 'pending')
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  if (!pending || pending.length === 0) {
-    return NextResponse.json({ success: true, queued: 0, message: 'No pending references found' })
-  }
 
-  for (const ref of pending) {
-    analyzeViralReference(ref.id, ref.source_url).catch(err => {
-      console.error(`[analyze-pending] failed for ${ref.id}:`, err)
-    })
-  }
-
+  const count = pending?.length ?? 0
   return NextResponse.json({
     success: true,
-    queued: pending.length,
-    ids: pending.map(r => r.id),
+    queued:  count,
+    message: count > 0
+      ? `${count} 条 pending — 节流 worker 每 2 分钟处理 8 条，预计 ${Math.ceil(count / 4)} 分钟内分析完`
+      : 'No pending references found',
   })
 }
