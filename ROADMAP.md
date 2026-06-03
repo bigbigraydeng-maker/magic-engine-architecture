@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-03 19:43 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-03 20:22 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -3340,6 +3340,24 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 ---
 
 ## 9. 功能完成日志
+
+### 2026-06-03（QA-清理-1 blog→social-suggestions 内部 HTTP 自调用根治 — PR #305 ✅）
+**背景**：PR #297（zhangqian/connectors）根治内部 HTTP+Bearer 反模式后，复审发现 `blog/[postId]/route.ts:140` 还有一处同款 — post 审批通过后 fire-and-forget fetch social-suggestions 端点 + Bearer INTERNAL_API_KEY。Render env 缺失时静默 401，社媒建议自动生成「看似在跑实际从未触发」。
+
+**改动（3 个文件）**：
+1. **新建** `src/lib/blog/generate-social-suggestions.ts` — 共享 lib + `GenerateSocialSuggestionsError`（携带 status code 404/403/500），完整迁移 5 个守卫
+2. **改** `blog/[postId]/route.ts` PATCH — 删 `fetch + Bearer`，改 `void generateSocialSuggestions(...).catch(log)` 同进程直接调用，保留 fire-and-forget + **新增日志**（原代码静默吞错，可观测性提升）
+3. **改** `social-suggestions/route.ts` — 收薄成 thin wrapper（170 → 47 行），保留 `requireBearerToken` 供 server-to-server
+
+**测试**：6 tests 全绿（零修改测试即通过 — mock 自然复用证明 lib 隔离干净）
+
+**子牙复审结论**：
+- 4 个守卫迁移 → **实际迁了 5 个**（多迁 `rows.length === 0`）
+- `.catch` 加日志比 PR #297 原版可观测性更好
+- INTERNAL_API_KEY 在 PATCH 链路彻底退役（wrapper 的 token 是设计内保留）
+- 无循环依赖、无新 dependency、无 fallback 残留
+
+**Reference**：PR #297 同款手法扩展
 
 ### 2026-06-03（A1.5 reputation textsearch 精度修复 — 数据层闭环）
 **背景**：A1 reputation 公式 PR #298 merge 后，复审发现 `getBusinessReviews` 用 raw domain 当 textsearch 关键词精度差，CTS 等客户可能查到错的 GBP。
