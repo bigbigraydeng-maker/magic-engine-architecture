@@ -391,8 +391,10 @@ interface Props {
 
 export function InsightsPanel({ refs }: Props) {
   // Build learnable pool per industry
+  // Note: is_learnable may be false for low-view-count videos; we include those
+  // with style_scores anyway so the panel shows data even for newer libraries.
   const learnable = useMemo(() =>
-    refs.filter(r => r.analysis_status === 'done' && r.is_learnable && !r.is_our_video && r.style_scores),
+    refs.filter(r => r.analysis_status === 'done' && !r.is_our_video && r.style_scores),
     [refs]
   )
 
@@ -478,36 +480,44 @@ export function InsightsPanel({ refs }: Props) {
     <div className="bg-me-charcoal/60 border border-me-charcoal/50 rounded-xl overflow-hidden">
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-4 py-3 gap-3 flex-wrap">
-        <button
-          onClick={() => setOpen(o => !o)}
-          className="flex items-center gap-3 flex-1 text-left hover:opacity-80 transition-opacity min-w-0"
-        >
-          <span className="text-base">📊</span>
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-white">AI 洞察报告</p>
-            <p className="text-xs text-me-ivory/50">
-              爆款规律分析 · 可向客户展示
-              <span className="text-me-ochre/80"> · {industries.length} 个行业 · {learnable.length} 条视频</span>
-            </p>
-          </div>
-          <span className="text-me-ivory/35 text-xs ml-2 shrink-0">{open ? '▲ 收起' : '▼ 展开'}</span>
-        </button>
+      <div className="px-4 pt-3 pb-2 space-y-2">
+        {/* Title row */}
+        <div className="flex items-center justify-between gap-3">
+          <button
+            onClick={() => setOpen(o => !o)}
+            className="flex items-center gap-3 text-left hover:opacity-80 transition-opacity min-w-0"
+          >
+            <span className="text-base shrink-0">📊</span>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-white whitespace-nowrap">AI 洞察报告</p>
+              <p className="text-xs text-me-ivory/50 whitespace-nowrap">
+                爆款规律分析 · 可向客户展示
+                <span className="text-me-ochre/80"> · {industries.length} 个行业 · {learnable.length} 条视频</span>
+              </p>
+            </div>
+          </button>
+          <button
+            onClick={() => setOpen(o => !o)}
+            className="shrink-0 text-me-ivory/35 text-xs hover:text-me-ivory/70 transition-colors"
+          >
+            {open ? '▲ 收起' : '▼ 展开'}
+          </button>
+        </div>
 
-        {/* Industry tabs */}
-        <div className="flex gap-1.5 shrink-0">
+        {/* Industry tabs — wrap onto multiple lines if needed */}
+        <div className="flex flex-wrap gap-1.5">
           {industries.map(ind => (
             <button
               key={ind}
               onClick={() => setIndustry(ind)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
                 industry === ind
                   ? 'bg-me-ochre text-white'
                   : 'bg-me-charcoal/60 text-me-ivory/50 hover:text-white'
               }`}
             >
               {industryLabel(ind)}
-              <span className={`ml-1.5 text-[10px] ${industry === ind ? 'text-me-ochre/80' : 'text-me-ivory/35'}`}>
+              <span className={`ml-1 text-[10px] ${industry === ind ? 'text-white/70' : 'text-me-ivory/35'}`}>
                 {poolByIndustry.get(ind)?.length ?? 0}
               </span>
             </button>
@@ -525,9 +535,17 @@ export function InsightsPanel({ refs }: Props) {
           )}
 
           {!insights ? (
-            <p className="text-sm text-me-ivory/35 text-center py-4">
-              需要至少 2 条已分析的可学习视频才能生成洞察报告
-            </p>
+            <div className="text-center py-8 space-y-2">
+              <p className="text-2xl">📊</p>
+              <p className="text-sm text-me-ivory/60 font-medium">
+                {pool.length === 0
+                  ? `${industry} 行业暂无含风格评分的视频`
+                  : `${industry} 行业仅 ${pool.length} 条有效数据，需至少 2 条才能生成洞察`}
+              </p>
+              <p className="text-xs text-me-ivory/35">
+                当前行业: {industryLabel(industry)} · 含评分: {pool.length} 条 · 总 done: {refs.filter(r => r.analysis_status === 'done').length} 条
+              </p>
+            </div>
           ) : (
             <>
               {/* Narrative summary */}
