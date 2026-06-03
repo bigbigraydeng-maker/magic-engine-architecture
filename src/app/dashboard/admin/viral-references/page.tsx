@@ -92,7 +92,7 @@ function ScoreBar({ dimension, value }: { dimension: keyof StyleScores; value: n
   return (
     <div className="flex items-center gap-2">
       <span className="text-xs text-me-ivory/50 w-20 shrink-0">{SCORE_LABELS[dimension]}</span>
-      <div className="flex-1 bg-white/10 rounded-full h-1.5">
+      <div className="flex-1 bg-me-charcoal/80 rounded-full h-1.5">
         <div
           className={`${SCORE_COLORS[dimension]} h-1.5 rounded-full transition-all`}
           style={{ width: `${(value / 10) * 100}%` }}
@@ -107,7 +107,7 @@ function ScoreBar({ dimension, value }: { dimension: keyof StyleScores; value: n
 
 function StatusBadge({ status }: { status: ViralReference['analysis_status'] }) {
   const config = {
-    pending:   { label: 'Pending',   cls: 'bg-white/10 text-me-ivory/40' },
+    pending:   { label: 'Pending',   cls: 'bg-me-charcoal/60 text-me-ivory/40' },
     analyzing: { label: 'Analyzing…', cls: 'bg-me-ochre/70 text-me-gold animate-pulse' },
     done:      { label: 'Done',      cls: 'bg-status-track/30 text-status-track' },
     error:     { label: 'Error',     cls: 'bg-status-rej/30 text-status-rej' },
@@ -124,11 +124,11 @@ function PlatformBadge({ platform }: { platform: ViralReference['platform'] }) {
   const config = {
     youtube:   { label: 'YouTube',   cls: 'bg-status-rej/30 text-status-rej' },
     facebook:  { label: 'Facebook',  cls: 'bg-me-ochre/30 text-me-gold' },
-    tiktok:    { label: 'TikTok',    cls: 'bg-white/10 text-me-ivory/60' },
+    tiktok:    { label: 'TikTok',    cls: 'bg-me-charcoal/60 text-me-ivory/60' },
     instagram: { label: 'Instagram', cls: 'bg-status-rej/30 text-status-rej' },
     upload:    { label: 'Uploaded',  cls: 'bg-status-track/30 text-status-track' },
   }
-  const { label, cls } = config[platform] ?? { label: platform, cls: 'bg-white/10 text-me-ivory/50' }
+  const { label, cls } = config[platform] ?? { label: platform, cls: 'bg-me-charcoal/60 text-me-ivory/50' }
   return (
     <span className={`text-xs px-2 py-0.5 rounded font-medium ${cls}`}>{label}</span>
   )
@@ -172,8 +172,8 @@ function ReferenceCard({ item: r, onRetry, onUpdateIndustry, learnableAvgScores 
       isOurs
         ? 'bg-status-rej/20 border-status-rej/40'
         : !r.is_learnable && r.analysis_status === 'done'
-          ? 'bg-white/5 border-white/10 opacity-60'
-          : 'bg-white/5 border-white/10'
+          ? 'bg-me-charcoal/60 border-me-charcoal opacity-60'
+          : 'bg-me-charcoal/60 border-me-charcoal'
     }`}>
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
@@ -210,7 +210,7 @@ function ReferenceCard({ item: r, onRetry, onUpdateIndustry, learnableAvgScores 
                 </button>
                 <button
                   onClick={() => { setEditingIndustry(false); setIndustryDraft(r.industry) }}
-                  className="text-xs px-1.5 py-0.5 bg-white/10 hover:bg-white/15 text-me-ivory/50 rounded"
+                  className="text-xs px-1.5 py-0.5 bg-me-charcoal/60 hover:bg-me-charcoal/50 text-me-ivory/50 rounded"
                 >
                   ✕
                 </button>
@@ -238,7 +238,7 @@ function ReferenceCard({ item: r, onRetry, onUpdateIndustry, learnableAvgScores 
               </span>
             )}
             {!isOurs && !r.is_learnable && r.analysis_status === 'done' && (
-              <span className="text-xs px-2 py-0.5 rounded bg-white/10 text-me-ivory/40" title={`view count below threshold (${r.view_threshold_min})`}>
+              <span className="text-xs px-2 py-0.5 rounded bg-me-charcoal/60 text-me-ivory/40" title={`view count below threshold (${r.view_threshold_min})`}>
                 ⊘ Not learnable
               </span>
             )}
@@ -268,7 +268,7 @@ function ReferenceCard({ item: r, onRetry, onUpdateIndustry, learnableAvgScores 
           {(r.platform === 'youtube' || r.platform === 'upload') && (
             <button
               onClick={() => onRetry(r.id)}
-              className="shrink-0 px-2.5 py-1.5 bg-white/10 hover:bg-white/15 text-xs text-white rounded-lg transition-colors"
+              className="shrink-0 px-2.5 py-1.5 bg-me-charcoal/60 hover:bg-me-charcoal/50 text-xs text-white rounded-lg transition-colors"
             >
               Retry
             </button>
@@ -286,7 +286,7 @@ function ReferenceCard({ item: r, onRetry, onUpdateIndustry, learnableAvgScores 
 
           {/* Opening hook */}
           {r.opening_hook?.type && (
-            <div className="flex items-start gap-2 bg-white/5 rounded-lg px-3 py-2">
+            <div className="flex items-start gap-2 bg-me-charcoal/50 rounded-lg px-3 py-2">
               <span className="text-[10px] text-me-ivory/40 mt-0.5 shrink-0">🎣 Hook</span>
               <div className="min-w-0">
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-exec/30 text-me-gold font-medium">
@@ -359,7 +359,7 @@ function ReferenceCard({ item: r, onRetry, onUpdateIndustry, learnableAvgScores 
                 <p className="text-[10px] text-me-ivory/40 uppercase tracking-widest mb-1">Style Tags</p>
                 <div className="flex flex-wrap gap-1.5">
                   {r.style_tags.map(t => (
-                    <span key={t} className="text-xs bg-white/10 text-me-ivory/50 px-2 py-0.5 rounded">
+                    <span key={t} className="text-xs bg-me-charcoal/60 text-me-ivory/50 px-2 py-0.5 rounded">
                       {t}
                     </span>
                   ))}
@@ -673,6 +673,7 @@ export default function ViralReferencesPage() {
     learnableAvgByKey.get(groupKey(r.industry, r.content_goal)) ?? null
 
   return (
+    <div className="min-h-screen bg-me-black">
     <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
@@ -710,7 +711,7 @@ export default function ViralReferencesPage() {
               type="checkbox"
               checked={addIsOur}
               onChange={e => setAddIsOur(e.target.checked)}
-              className="w-4 h-4 rounded border-white/20 bg-white/10 accent-status-rej"
+              className="w-4 h-4 rounded border-me-charcoal/60 bg-me-charcoal/50 accent-status-rej"
             />
             <span className={addIsOur ? 'text-status-rej font-medium' : 'text-me-ivory/40'}>
               🎯 This is OUR video (gap analysis, not learning)
@@ -723,13 +724,13 @@ export default function ViralReferencesPage() {
             onChange={e => setAddUrls(e.target.value)}
             placeholder={"每行粘贴一条链接：\nhttps://youtube.com/shorts/...\nhttps://www.facebook.com/share/..."}
             rows={3}
-            className="flex-1 bg-white/8 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder:text-me-ivory/30 resize-none focus:outline-none focus:border-me-ochre"
+            className="flex-1 bg-me-charcoal/70 border border-me-charcoal rounded-lg px-3 py-2 text-sm text-white placeholder:text-me-ivory/30 resize-none focus:outline-none focus:border-me-ochre"
           />
           <div className="flex flex-col gap-2 shrink-0 w-44">
             <select
               value={addIndustry}
               onChange={e => setAddIndustry(e.target.value)}
-              className="bg-white/8 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-me-ochre"
+              className="bg-me-charcoal/70 border border-me-charcoal rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-me-ochre"
             >
               {KNOWN_INDUSTRIES.map(ind => (
                 <option key={ind} value={ind}>
@@ -740,7 +741,7 @@ export default function ViralReferencesPage() {
             <select
               value={addGoal}
               onChange={e => setAddGoal(e.target.value as ContentGoal | 'auto')}
-              className="bg-white/8 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-me-ochre"
+              className="bg-me-charcoal/70 border border-me-charcoal rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-me-ochre"
               title="Auto-detect 让 AI 自动判断内容目标。选择 Force 可以强制指定。"
             >
               <option value="auto">🤖 Auto-detect (推荐)</option>
@@ -779,7 +780,7 @@ export default function ViralReferencesPage() {
             type="file"
             accept="video/mp4,video/quicktime,video/webm,video/x-matroska,video/mpeg"
             onChange={e => setUploadFile(e.target.files?.[0] ?? null)}
-            className="flex-1 text-sm text-me-ivory/50 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-white/10 file:text-white hover:file:bg-white/15 file:cursor-pointer"
+            className="flex-1 text-sm text-me-ivory/50 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-me-charcoal/60 file:text-white hover:file:bg-me-charcoal/50 file:cursor-pointer"
           />
           <button
             onClick={uploadVideo}
@@ -817,13 +818,13 @@ export default function ViralReferencesPage() {
             onChange={e => setDiscoverKeywords(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && discoverVideos()}
             placeholder="搜索关键词，如：luxury travel New Zealand tour"
-            className="flex-1 min-w-64 bg-white/8 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder:text-me-ivory/30 focus:outline-none focus:border-me-ochre"
+            className="flex-1 min-w-64 bg-me-charcoal/70 border border-me-charcoal rounded-lg px-3 py-2 text-sm text-white placeholder:text-me-ivory/30 focus:outline-none focus:border-me-ochre"
           />
           {/* Min views */}
           <select
             value={discoverMinViews}
             onChange={e => setDiscoverMinViews(Number(e.target.value))}
-            className="bg-white/8 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-me-ochre"
+            className="bg-me-charcoal/70 border border-me-charcoal rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-me-ochre"
             title="最低播放量过滤"
           >
             <option value={10000}>▶ 1万+</option>
@@ -836,7 +837,7 @@ export default function ViralReferencesPage() {
           <select
             value={discoverLimit}
             onChange={e => setDiscoverLimit(Number(e.target.value))}
-            className="bg-white/8 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-me-ochre"
+            className="bg-me-charcoal/70 border border-me-charcoal rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-me-ochre"
             title="最多抓取数量"
           >
             <option value={10}>10 条</option>
@@ -912,7 +913,7 @@ export default function ViralReferencesPage() {
               onClick={() => setFilter(f.key)}
               className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                 filter === f.key
-                  ? 'bg-white/15 text-white'
+                  ? 'bg-me-charcoal/80 text-white'
                   : 'text-me-ivory/40 hover:text-me-ivory/70'
               }`}
             >
@@ -923,7 +924,7 @@ export default function ViralReferencesPage() {
         <select
           value={sortBy}
           onChange={e => setSortBy(e.target.value as typeof sortBy)}
-          className="bg-white/8 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-me-ivory/60 focus:outline-none focus:border-me-ochre"
+          className="bg-me-charcoal/70 border border-me-charcoal rounded-lg px-3 py-1.5 text-sm text-me-ivory/60 focus:outline-none focus:border-me-ochre"
         >
           <option value="newest">↓ 最新添加</option>
           <option value="views">↓ 播放量</option>
@@ -949,6 +950,7 @@ export default function ViralReferencesPage() {
           ))}
         </div>
       )}
+    </div>
     </div>
   )
 }

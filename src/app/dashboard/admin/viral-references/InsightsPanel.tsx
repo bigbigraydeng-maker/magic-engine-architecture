@@ -144,7 +144,7 @@ function ScoreBar({ dim, value, compareValue }: {
   return (
     <div className="flex items-center gap-2">
       <span className="text-xs text-me-ivory/50 w-36 shrink-0">{SCORE_LABELS[dim]}</span>
-      <div className="flex-1 bg-white/10 rounded-full h-1.5 relative">
+      <div className="flex-1 bg-me-charcoal/80 rounded-full h-1.5 relative">
         <div
           className={`${SCORE_COLORS[dim]} h-1.5 rounded-full transition-all`}
           style={{ width: `${(value / 10) * 100}%` }}
@@ -187,7 +187,7 @@ function IndustryComparisonMatrix({ poolByIndustry }: {
   const dims = Object.keys(SCORE_LABELS) as (keyof StyleScores)[]
 
   return (
-    <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+    <div className="bg-me-charcoal/60 border border-me-charcoal/50 rounded-xl p-4">
       <p className="text-[11px] font-semibold text-me-ivory/40 uppercase tracking-widest mb-4">
         ⚖️ 行业风格对比
       </p>
@@ -221,7 +221,7 @@ function IndustryComparisonMatrix({ poolByIndustry }: {
                         <span className={`font-mono ${isMax ? 'text-me-gold font-bold' : 'text-me-ivory/40'}`}>
                           {val.toFixed(1)}
                         </span>
-                        <div className="mt-0.5 h-1 bg-white/10 rounded-full mx-auto w-12">
+                        <div className="mt-0.5 h-1 bg-me-charcoal/80 rounded-full mx-auto w-12">
                           <div
                             className={`h-1 rounded-full ${SCORE_COLORS[dim]}`}
                             style={{ width: `${(val / 10) * 100}%` }}
@@ -273,13 +273,13 @@ function HookAnalysis({ pool }: { pool: ViralReferenceForInsights[] }) {
             {topTypes.map(([type, count]) => {
               const pct = Math.round((count / hooksPool.length) * 100)
               const label = HOOK_TYPE_ZH[type] ?? type
-              const colorCls = HOOK_TYPE_COLOR[type] ?? 'bg-white/10 text-me-ivory/50'
+              const colorCls = HOOK_TYPE_COLOR[type] ?? 'bg-me-charcoal/60 text-me-ivory/50'
               return (
                 <div key={type} className="flex items-center gap-2">
                   <span className={`text-[10px] px-2 py-0.5 rounded font-medium shrink-0 ${colorCls}`}>
                     {label}
                   </span>
-                  <div className="flex-1 bg-white/10 rounded-full h-1.5">
+                  <div className="flex-1 bg-me-charcoal/80 rounded-full h-1.5">
                     <div
                       className="bg-me-ochre h-1.5 rounded-full"
                       style={{ width: `${pct}%` }}
@@ -301,7 +301,7 @@ function HookAnalysis({ pool }: { pool: ViralReferenceForInsights[] }) {
               return (
                 <div key={feel} className="flex items-center gap-2">
                   <span className="text-xs text-me-ivory/50 w-28 shrink-0">{label}</span>
-                  <div className="flex-1 bg-white/10 rounded-full h-1.5">
+                  <div className="flex-1 bg-me-charcoal/80 rounded-full h-1.5">
                     <div className="bg-me-ochre h-1.5 rounded-full" style={{ width: `${pct}%` }} />
                   </div>
                   <span className="text-[10px] text-me-ivory/35 w-8 text-right font-mono">{pct}%</span>
@@ -323,10 +323,10 @@ function HookAnalysis({ pool }: { pool: ViralReferenceForInsights[] }) {
           <div className="space-y-3">
             {examplesByType.map(({ type, scripts }) => {
               if (scripts.length === 0) return null
-              const colorCls = HOOK_TYPE_COLOR[type] ?? 'bg-white/10 text-me-ivory/50'
+              const colorCls = HOOK_TYPE_COLOR[type] ?? 'bg-me-charcoal/60 text-me-ivory/50'
               const label = HOOK_TYPE_ZH[type] ?? type
               return (
-                <div key={type} className="bg-white/5 border border-white/10 rounded-lg p-3">
+                <div key={type} className="bg-me-charcoal/50 border border-me-charcoal/50 rounded-lg p-3">
                   <span className={`text-[10px] px-2 py-0.5 rounded font-medium ${colorCls} mb-2 inline-block`}>
                     {label}
                   </span>
@@ -475,7 +475,7 @@ export function InsightsPanel({ refs }: Props) {
   if (industries.length === 0) return null
 
   return (
-    <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
+    <div className="bg-me-charcoal/60 border border-me-charcoal/50 rounded-xl overflow-hidden">
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-4 py-3 gap-3 flex-wrap">
@@ -503,7 +503,7 @@ export function InsightsPanel({ refs }: Props) {
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                 industry === ind
                   ? 'bg-me-ochre text-white'
-                  : 'bg-white/10 text-me-ivory/50 hover:text-white'
+                  : 'bg-me-charcoal/60 text-me-ivory/50 hover:text-white'
               }`}
             >
               {industryLabel(ind)}
@@ -517,7 +517,7 @@ export function InsightsPanel({ refs }: Props) {
 
       {/* ── Body ───────────────────────────────────────────────────────────── */}
       {open && (
-        <div className="border-t border-white/10 p-5 space-y-6">
+        <div className="border-t border-me-charcoal/50 p-5 space-y-6">
 
           {/* Industry comparison matrix (only when 2+ industries) */}
           {industries.length >= 2 && (
@@ -592,7 +592,7 @@ export function InsightsPanel({ refs }: Props) {
                       </p>
                       <div className="flex flex-wrap gap-1.5">
                         {insights.topTags.map(([tag]) => (
-                          <span key={tag} className="text-xs px-2 py-0.5 rounded bg-white/10 text-me-ivory/50">
+                          <span key={tag} className="text-xs px-2 py-0.5 rounded bg-me-charcoal/60 text-me-ivory/50">
                             {tag}
                           </span>
                         ))}
@@ -603,7 +603,7 @@ export function InsightsPanel({ refs }: Props) {
               </div>
 
               {/* Hook Analysis */}
-              <div className="border-t border-white/10 pt-5">
+              <div className="border-t border-me-charcoal/50 pt-5">
                 <HookAnalysis pool={pool} />
               </div>
 
@@ -622,7 +622,7 @@ export function InsightsPanel({ refs }: Props) {
                           <span className="text-xs text-me-ivory/50 w-24 shrink-0">
                             {meta?.emoji} {meta?.label}
                           </span>
-                          <div className="flex-1 bg-white/10 rounded-full h-1.5">
+                          <div className="flex-1 bg-me-charcoal/80 rounded-full h-1.5">
                             <div className="bg-me-ochre h-1.5 rounded-full" style={{ width: `${pct}%` }} />
                           </div>
                           <span className="text-xs text-me-ivory/50 w-8 text-right font-mono">{pct}%</span>
@@ -660,14 +660,14 @@ export function InsightsPanel({ refs }: Props) {
                   </p>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                     {insights.topPerformers.map((r, i) => (
-                      <div key={r.id} className="bg-white/5 border border-white/10 rounded-lg p-3 space-y-2">
+                      <div key={r.id} className="bg-me-charcoal/50 border border-me-charcoal/50 rounded-lg p-3 space-y-2">
                         <div className="flex items-center gap-2">
                           <span className="text-base">{['🥇', '🥈', '🥉'][i]}</span>
                           <span className="text-me-gold text-xs font-bold">
                             {fmtViews(r.view_count!)} views
                           </span>
                           {r.opening_hook?.type && (
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded ${HOOK_TYPE_COLOR[r.opening_hook.type] ?? 'bg-white/10 text-me-ivory/50'}`}>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded ${HOOK_TYPE_COLOR[r.opening_hook.type] ?? 'bg-me-charcoal/60 text-me-ivory/50'}`}>
                               {HOOK_TYPE_ZH[r.opening_hook.type] ?? r.opening_hook.type}
                             </span>
                           )}
