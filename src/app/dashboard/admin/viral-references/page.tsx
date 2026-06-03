@@ -387,8 +387,12 @@ function ReferenceCard({ item: r, onRetry, onUpdateIndustry, learnableAvgScores 
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 
+const PAGE_SIZE = 50
+
 export default function ViralReferencesPage() {
   const [refs, setRefs] = useState<ViralReference[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [triggering, setTriggering] = useState(false)
@@ -397,6 +401,9 @@ export default function ViralReferencesPage() {
   const [detectMsg, setDetectMsg] = useState('')
   const [filter, setFilter] = useState<'all' | 'done' | 'pending' | 'analyzing' | 'error'>('all')
   const [sortBy, setSortBy] = useState<'newest' | 'views' | 'industry'>('newest')
+
+  // InsightsPanel uses a separate lightweight fetch (all done records, minimal fields)
+  const [insightRefs, setInsightRefs] = useState<import('./InsightsPanel').ViralReferenceForInsights[]>([])
 
   // Add video form
   const [addUrls, setAddUrls] = useState('')
@@ -418,12 +425,21 @@ export default function ViralReferencesPage() {
   const [discovering, setDiscovering] = useState(false)
   const [discoverMsg, setDiscoverMsg] = useState('')
 
-  const fetchRefs = useCallback(async () => {
+  // Paginated card list
+  const fetchRefs = useCallback(async (p = page) => {
+    setLoading(true)
     try {
-      const res = await fetch('/api/admin/viral-references')
+      const params = new URLSearchParams({
+        page:     String(p),
+        pageSize: String(PAGE_SIZE),
+        status:   filter,
+        sort:     sortBy,
+      })
+      const res  = await fetch(`/api/admin/viral-references?${params}`)
       const data = await res.json()
       if (data.success) {
         setRefs(data.references ?? [])
+        setTotal(data.total ?? 0)
         setFetchError(null)
       } else {
         setFetchError(data.error ?? 'API returned success: false')
@@ -433,18 +449,30 @@ export default function ViralReferencesPage() {
     } finally {
       setLoading(false)
     }
+  }, [page, filter, sortBy])
+
+  // Lightweight fetch for InsightsPanel (all done records, minimal fields)
+  const fetchInsightRefs = useCallback(async () => {
+    try {
+      const res  = await fetch('/api/admin/viral-references?summary=1')
+      const data = await res.json()
+      if (data.success) setInsightRefs(data.references ?? [])
+    } catch { /* non-critical */ }
   }, [])
 
   // Initial load
-  useEffect(() => { fetchRefs() }, [fetchRefs])
+  useEffect(() => { fetchRefs(1); fetchInsightRefs() }, [])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-poll while any are analyzing
+  // Re-fetch cards when filter/sort/page changes
+  useEffect(() => { fetchRefs(page) }, [filter, sortBy, page])  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-poll while any on current page are analyzing
   useEffect(() => {
     const hasAnalyzing = refs.some(r => r.analysis_status === 'analyzing')
     if (!hasAnalyzing) return
-    const t = setInterval(fetchRefs, 5000)
+    const t = setInterval(() => { fetchRefs(page); fetchInsightRefs() }, 5000)
     return () => clearInterval(t)
-  }, [refs, fetchRefs])
+  }, [refs, page, fetchRefs, fetchInsightRefs])
 
   const addVideos = async () => {
     const urls = addUrls
@@ -614,20 +642,34 @@ export default function ViralReferencesPage() {
     }
   }
 
-  // Stats
-  const total     = refs.length
-  const done      = refs.filter(r => r.analysis_status === 'done').length
-  const pending   = refs.filter(r => r.analysis_status === 'pending').length
-  const analyzing = refs.filter(r => r.analysis_status === 'analyzing').length
-  const errors    = refs.filter(r => r.analysis_status === 'error').length
+  // Stats — fetched separately so they always show full counts regardless of current filter
+  const [stats, setStats] = useState({ total: 0, done: 0, pending: 0, analyzing: 0, errors: 0 })
+  useEffect(() => {
+    async function loadStats() {
+      try {
+        const [all, done, pending, analyzing, errors] = await Promise.all([
+          fetch('/api/admin/viral-references?pageSize=1').then(r => r.json()),
+          fetch('/api/admin/viral-references?pageSize=1&status=done').then(r => r.json()),
+          fetch('/api/admin/viral-references?pageSize=1&status=pending').then(r => r.json()),
+          fetch('/api/admin/viral-references?pageSize=1&status=analyzing').then(r => r.json()),
+          fetch('/api/admin/viral-references?pageSize=1&status=error').then(r => r.json()),
+        ])
+        setStats({
+          total:     all.total     ?? 0,
+          done:      done.total    ?? 0,
+          pending:   pending.total ?? 0,
+          analyzing: analyzing.total ?? 0,
+          errors:    errors.total  ?? 0,
+        })
+      } catch { /* non-critical */ }
+    }
+    loadStats()
+  }, [refs]) // re-run when refs change (after add/analyze)
 
-  const filtered = (filter === 'all' ? refs : refs.filter(r => r.analysis_status === filter))
-    .slice()
-    .sort((a, b) => {
-      if (sortBy === 'views') return (b.view_count ?? -1) - (a.view_count ?? -1)
-      if (sortBy === 'industry') return a.industry.localeCompare(b.industry)
-      return 0 // 'newest' — already ordered by created_at from API
-    })
+  // filtered is already the current page from API — sorting is done server-side
+  const filtered = refs
+
+  const totalPages = Math.ceil(total / PAGE_SIZE)
 
   // Compute avg scores per (industry, content_goal) from learnable references
   // Used for gap analysis on OUR videos
@@ -694,10 +736,10 @@ export default function ViralReferencesPage() {
           </button>
           <button
             onClick={triggerAnalysis}
-            disabled={triggering || pending === 0}
+            disabled={triggering || stats.pending === 0}
             className="px-4 py-2 bg-me-ochre hover:bg-me-ochre disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
           >
-            {triggering ? 'Starting…' : `Analyze Pending (${pending})`}
+            {triggering ? 'Starting…' : `Analyze Pending (${stats.pending})`}
           </button>
         </div>
       </div>
@@ -883,12 +925,12 @@ export default function ViralReferencesPage() {
       {/* Stats */}
       <div className="grid grid-cols-4 gap-3">
         {[
-          { label: 'Total',     value: total,     cls: 'text-white' },
-          { label: 'Analyzed',  value: done,      cls: 'text-status-track' },
-          { label: 'Analyzing', value: analyzing, cls: 'text-me-gold' },
-          { label: 'Errors',    value: errors,    cls: 'text-status-rej' },
+          { label: 'Total',     value: stats.total,     cls: 'text-white' },
+          { label: 'Analyzed',  value: stats.done,      cls: 'text-status-track' },
+          { label: 'Analyzing', value: stats.analyzing, cls: 'text-me-gold' },
+          { label: 'Errors',    value: stats.errors,    cls: 'text-status-rej' },
         ].map(s => (
-          <div key={s.label} className="bg-white/5 rounded-xl p-4 border border-white/10 text-center">
+          <div key={s.label} className="bg-me-charcoal/60 rounded-xl p-4 border border-me-charcoal text-center">
             <p className={`text-2xl font-bold ${s.cls}`}>{s.value}</p>
             <p className="text-xs text-me-ivory/40 mt-1">{s.label}</p>
           </div>
@@ -896,21 +938,21 @@ export default function ViralReferencesPage() {
       </div>
 
       {/* Insights Panel */}
-      <InsightsPanel refs={refs} />
+      <InsightsPanel refs={insightRefs} />
 
       {/* Filter tabs + sort */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex gap-1.5 flex-wrap">
           {([
-            { key: 'all',       label: `All (${total})` },
-            { key: 'done',      label: `Done (${done})` },
-            { key: 'analyzing', label: `Analyzing (${analyzing})` },
-            { key: 'pending',   label: `Pending (${pending})` },
-            { key: 'error',     label: `Errors (${errors})` },
+            { key: 'all',       label: `All (${stats.total})` },
+            { key: 'done',      label: `Done (${stats.done})` },
+            { key: 'analyzing', label: `Analyzing (${stats.analyzing})` },
+            { key: 'pending',   label: `Pending (${stats.pending})` },
+            { key: 'error',     label: `Errors (${stats.errors})` },
           ] as const).map(f => (
             <button
               key={f.key}
-              onClick={() => setFilter(f.key)}
+              onClick={() => { setFilter(f.key); setPage(1) }}
               className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                 filter === f.key
                   ? 'bg-me-charcoal/80 text-white'
@@ -923,7 +965,7 @@ export default function ViralReferencesPage() {
         </div>
         <select
           value={sortBy}
-          onChange={e => setSortBy(e.target.value as typeof sortBy)}
+          onChange={e => { setSortBy(e.target.value as typeof sortBy); setPage(1) }}
           className="bg-me-charcoal/70 border border-me-charcoal rounded-lg px-3 py-1.5 text-sm text-me-ivory/60 focus:outline-none focus:border-me-ochre"
         >
           <option value="newest">↓ 最新添加</option>
@@ -948,6 +990,31 @@ export default function ViralReferencesPage() {
               learnableAvgScores={avgFor(r)}
             />
           ))}
+        </div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between pt-2">
+          <p className="text-xs text-me-ivory/35">
+            第 {page} 页 / 共 {totalPages} 页 · 共 {total} 条
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="px-3 py-1.5 rounded-lg text-sm bg-me-charcoal/60 border border-me-charcoal text-me-ivory/60 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              ← 上一页
+            </button>
+            <button
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="px-3 py-1.5 rounded-lg text-sm bg-me-charcoal/60 border border-me-charcoal text-me-ivory/60 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              下一页 →
+            </button>
+          </div>
         </div>
       )}
     </div>
