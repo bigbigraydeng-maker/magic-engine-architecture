@@ -306,10 +306,11 @@ npm test           # 测试套件
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-06-03 12:54 NZST （**A1 reputation 公式修复 merged + 诸葛亮工作台 FAB 完整设计上线**）
+> 最后更新：2026-06-03 15:07 NZST （**A1 reputation 公式修复 merged + 诸葛亮工作台 FAB 完整设计上线**）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
+| **🧪 Phase 33 P33.9/P33.10 测试待跑** | PR #302 已 merged。回 CTS 执行看板验证：①点 Goal filter 后状态 chips 数字真变小（之前 38/11/20 不变）②「📥 未归类 Actions」分组出现（应含 ~52 条 placeholder 绑定 action）③Bulk-migrate 一条 action 后从未归类消失 | ⚠️ 今日晚上跑 |
 | **Phase 33 M4** | Goal 详情页执行进度摘要（Initiative 进度条 + 总数）— P33.11/P33.12 | 📋 中 / 1 天 |
 | **A3 案例沉淀** | 把 CTS/Oztop Phase 31/33 跑通经验固化到 Clients/ 笔记 | 📋 半天 |
 | **A2 Goal 主指标 auto-fetch** | GA4 / Brand search volume / Form submissions 自动读 current_value | 📋 中 / 1-2 天/源 |
@@ -319,6 +320,7 @@ npm test           # 测试套件
 | **GBP.0** | Google Cloud：enable Business Profile API + Account Management API | ⚠️ PM 操作 |
 
 **已完成全景（最近几个 Phase）**：
+- ✅ **Phase 33 P33.9/P33.10 修复**（2026-06-03，PR #301 + #302 merged）：状态 chips 数字跟 Goal filter 变化；「未归类 Actions」分组判断条件扩展为 `null || initiative_type='unassigned' placeholder`；endpoint 不再过滤 unassigned；PlanGenerator 前端补 filter 排除下拉。**测试待跑**（见焦点表第一行）
 - ✅ **A1 reputation 公式修复**（2026-06-03，PR #298 + #300 merged）：RATING 0.60→0.70 / REVIEW 0.40→0.30 / MAX_REVIEWS 100→30 + 抽出纯函数 `scoreReputation()` 预留 TripAdvisor/ProductReview 字段（A2 接驳零改动）+ GBP 查询从 domain → "name+city+country"。CTS Tours NZ reputation 44 → ~71（进入健康区间）
 - ✅ **诸葛亮全局工作台 FAB**（2026-06-03）：清除 batch merge 残留冲突标记 + 恢复完整 Workbench FAB 设计（当前线程/待处理摘要/下一步建议/最近线程/快捷切换）+ hover-fan 鼠标悬停展开 + z-30 让 drawer 自动遮盖
 - ✅ **Phase 33 M1-M3**（2026-06-03，PR #299 merged + migration 已应用）：Strategy-Execution Bridge — initiatives 加 campaign_ids、marketing_plans 加 initiative_id、Initiative 卡片展开关联 Campaign + 生成 Plan、Kanban Goal filter + Initiative badge + Unassigned 分组
@@ -338,7 +340,7 @@ npm test           # 测试套件
 旧 → 营销自动化平台
 **新 → 以 Goal 为中心的生意指挥平台**（Kanban 汇总所有能帮客户达成 Goal 的因素，营销只是其中一条战线）
 
-下一 session：`继续 ME 工作 — Phase 33 M4` 或 `继续 ME 工作 — A3 案例沉淀`
+下一 session：`继续 ME 工作 — 跑 Phase 33 P33.9/P33.10 测试` 或 `继续 ME 工作 — Phase 33 M4` 或 `继续 ME 工作 — A3 案例沉淀`
 
 **更新规则**（每次上线新功能）：
 1. ROADMAP.md 勾选对应任务 checkbox
