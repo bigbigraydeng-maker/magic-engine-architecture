@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-03 18:32 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-03 19:43 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -3340,6 +3340,30 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 ---
 
 ## 9. 功能完成日志
+
+### 2026-06-03（A1.5 reputation textsearch 精度修复 — 数据层闭环）
+**背景**：A1 reputation 公式 PR #298 merge 后，复审发现 `getBusinessReviews` 用 raw domain 当 textsearch 关键词精度差，CTS 等客户可能查到错的 GBP。
+
+**代码层（前序 merge 已完成，本轮核实）**：
+- `src/lib/places/client.ts` — 注释明确「caller MUST pass rich query」
+- `src/lib/diagnostic/collectors/reputation-collector.ts` — `ReputationCollectorContext` + `buildQuery()` 拼 `name + city + country`
+- `src/lib/diagnostic/runner.ts:156-160` — 把 `client.name / city / country` 传给 collector
+- **结论**：runtime 链路完整，A1.5 实际剩余只是数据层缺口
+
+**数据层修复（本轮 SQL UPDATE）**：
+| 客户 | city 修复 | country 修复 |
+|------|---------|------------|
+| CTS Tours NZ | null → Auckland | 保留 NZ |
+| Newaisan | null → Auckland | AU → NZ（之前国家错） |
+| oztop | "Brisbane, Gold Coast, Sunshine Coast" → Brisbane | 保留 AU |
+
+**预期效果**：
+- CTS 重跑诊断后 textsearch 用 `"CTS Tours NZ" Auckland NZ`，找到 Auckland 总部正确 GBP
+- A1 公式（PR #298）+ 准确 GBP 数据 → CTS reputation 应从 44 进一步提升到 60+
+- 等 2026-06-16 A1 公式合理性 review 时验证
+
+**延后任务（独立登记）**：
+- **A1.6** collector 兜底：多城市字符串拆分 + city=null 兜底（覆盖未来新客户）
 
 ### 2026-06-03（Phase 33 P33.9/P33.10 双 PR 修复 — PR #301 + #302）
 - **PR #301**（早一轮）— P33.9 chips count 跟 dimension+goal filter 走；P33.10 itemsForDimensionGroups 排除 `initiative_id=null`（仅处理 null，未处理 placeholder）；Goal/History 返回按钮统一中文
