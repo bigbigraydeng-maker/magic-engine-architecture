@@ -306,11 +306,10 @@ npm test           # 测试套件
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-06-03 12:50 NZST （**A1 reputation 公式修复 merged + 诸葛亮工作台 FAB 完整设计上线**）
+> 最后更新：2026-06-03 12:54 NZST （**A1 reputation 公式修复 merged + 诸葛亮工作台 FAB 完整设计上线**）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
-| **Phase 33 PR merge 🔴** | PR [#299](https://github.com/bigbigraydeng-maker/magic-engine/pull/299) — Phase 33 M1-M3 待合并 + Supabase migration 手动应用 | ⚠️ 待操作 |
 | **Phase 33 M4** | Goal 详情页执行进度摘要（Initiative 进度条 + 总数）— P33.11/P33.12 | 📋 中 / 1 天 |
 | **A3 案例沉淀** | 把 CTS/Oztop Phase 31/33 跑通经验固化到 Clients/ 笔记 | 📋 半天 |
 | **A2 Goal 主指标 auto-fetch** | GA4 / Brand search volume / Form submissions 自动读 current_value | 📋 中 / 1-2 天/源 |
@@ -322,25 +321,24 @@ npm test           # 测试套件
 **已完成全景（最近几个 Phase）**：
 - ✅ **A1 reputation 公式修复**（2026-06-03，PR #298 + #300 merged）：RATING 0.60→0.70 / REVIEW 0.40→0.30 / MAX_REVIEWS 100→30 + 抽出纯函数 `scoreReputation()` 预留 TripAdvisor/ProductReview 字段（A2 接驳零改动）+ GBP 查询从 domain → "name+city+country"。CTS Tours NZ reputation 44 → ~71（进入健康区间）
 - ✅ **诸葛亮全局工作台 FAB**（2026-06-03）：清除 batch merge 残留冲突标记 + 恢复完整 Workbench FAB 设计（当前线程/待处理摘要/下一步建议/最近线程/快捷切换）+ hover-fan 鼠标悬停展开 + z-30 让 drawer 自动遮盖
-- ✅ **Phase 33 M1-M3**（2026-06-03，PR #299 open）：Strategy-Execution Bridge — initiatives 加 campaign_ids、marketing_plans 加 initiative_id、Initiative 卡片展开关联 Campaign + 生成 Plan、Kanban Goal filter + Initiative badge + Unassigned 分组
+- ✅ **Phase 33 M1-M3**（2026-06-03，PR #299 merged + migration 已应用）：Strategy-Execution Bridge — initiatives 加 campaign_ids、marketing_plans 加 initiative_id、Initiative 卡片展开关联 Campaign + 生成 Plan、Kanban Goal filter + Initiative badge + Unassigned 分组
 - ✅ **QA 测试加固轮**（2026-06-02 下午，6 个 PR）：CF AI Gateway 401 修复（PR #248）+ Client portal 按钮 UI（PR #270）+ initiatives PATCH 三道闸校验（PR #290）+ outcomeChip/buildExecutionGroups 回归测试（PR #293）+ zhangqian/connectors 内部 HTTP 自调用根治（PR #297）+ Codex 协作分工规范写入 CLAUDE.md
 - ✅ **Phase 32 Goal sub_types + decrease + multi-active**（2026-06-02，PR #294）：Phase 31 自然延伸
 - ✅ **Phase 31 Strategy Layer (Beta)**（2026-06-02，PR #259）：Goal→Initiative→Action 三层骨架 + 4 步向导 + 诸葛亮 Sonnet 润色 hypothesis + 90 天 verdict 自动归档 + Goal 历史页 + 每日 cron
 - ✅ **Phase 30 Industry Baseline Engine**（2026-06-02，PR #251）：5 细分 / 44 域名 / 月度 cron 自动重跑 / 华佗实时读基准（含 city 维度命中）
 
 **下一候选（按优先级）**：
-1. ⚠️ **Phase 33 PR #299 merge** — Supabase migration 手动应用（两列：`initiatives.campaign_ids` + `marketing_plans.initiative_id`）
-2. 📋 **Phase 33 M4** — Goal 详情页执行进度摘要（P33.11/P33.12）
-3. 📋 **A3 CTS/Oztop 案例沉淀** — 半天事，把跑通经验固化（A1 已完成可基于真实评分跑案例）
-4. 📋 **A2 Goal 主指标 auto-fetch** — GA4 / Brand search volume / Form submissions 自动读 current_value（1-2 天/源）
-5. 📋 **Phase 22.A.2** — GA4 每日采集（merge PR #187 后继续）
-6. 📋 **Phase 24.B** — GBP 数据摂取（依赖 GBP.0 + migration）
+1. 📋 **Phase 33 M4** — Goal 详情页执行进度摘要（P33.11/P33.12）
+2. 📋 **A3 CTS/Oztop 案例沉淀** — 半天事，把跑通经验固化（A1 已完成可基于真实评分跑案例）
+3. 📋 **A2 Goal 主指标 auto-fetch** — GA4 / Brand search volume / Form submissions 自动读 current_value（1-2 天/源）
+4. 📋 **Phase 22.A.2** — GA4 每日采集（merge PR #187 后继续）
+5. 📋 **Phase 24.B** — GBP 数据摂取（依赖 GBP.0 + migration）
 
 **ME 定位升级（2026-06-02 确立）**：
 旧 → 营销自动化平台
 **新 → 以 Goal 为中心的生意指挥平台**（Kanban 汇总所有能帮客户达成 Goal 的因素，营销只是其中一条战线）
 
-下一 session：`继续 ME 工作 — Phase 33 PR #299 merge` 或 `继续 ME 工作 — Phase 33 M4`
+下一 session：`继续 ME 工作 — Phase 33 M4` 或 `继续 ME 工作 — A3 案例沉淀`
 
 **更新规则**（每次上线新功能）：
 1. ROADMAP.md 勾选对应任务 checkbox
