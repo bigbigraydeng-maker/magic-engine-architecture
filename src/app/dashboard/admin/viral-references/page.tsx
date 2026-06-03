@@ -147,6 +147,7 @@ function ReferenceCard({ item: r, onRetry, onUpdateIndustry, learnableAvgScores 
   const [editingIndustry, setEditingIndustry] = useState(false)
   const [industryDraft, setIndustryDraft] = useState(r.industry)
   const [savingIndustry, setSavingIndustry] = useState(false)
+  const [expanded, setExpanded] = useState(false)
 
   const saveIndustry = async () => {
     if (industryDraft === r.industry) { setEditingIndustry(false); return }
@@ -166,109 +167,102 @@ function ReferenceCard({ item: r, onRetry, onUpdateIndustry, learnableAvgScores 
   const views = formatViews(r.view_count)
   const isOurs = r.is_our_video
   const showGap = isOurs && r.style_scores && learnableAvgScores
+  const isDone = r.analysis_status === 'done' && r.style_scores
+  // Compact error summary — strip Google API verbose payload
+  const errSummary = (() => {
+    if (!r.analysis_error) return 'Unknown error'
+    const msg = r.analysis_error
+    if (msg.includes('Quota exceeded') || msg.includes('rate-limit')) return '❌ Gemini API 配额耗尽'
+    if (msg.includes('429')) return '❌ Rate limit (429)'
+    if (msg.includes('403')) return '❌ Auth failed (403)'
+    if (msg.includes('404')) return '❌ Video not found (404)'
+    // First sentence / line, max 100 chars
+    return msg.split(/[.\n]/)[0].slice(0, 100)
+  })()
 
   return (
-    <div className={`rounded-xl p-4 border space-y-3 ${
+    <div className={`rounded-xl p-3 border space-y-2 ${
       isOurs
         ? 'bg-status-rej/20 border-status-rej/40'
         : !r.is_learnable && r.analysis_status === 'done'
           ? 'bg-me-charcoal/60 border-me-charcoal opacity-60'
           : 'bg-me-charcoal/60 border-me-charcoal'
     }`}>
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <PlatformBadge platform={r.platform} />
-            <StatusBadge status={r.analysis_status} />
-            {isOurs && (
-              <span className="text-xs px-2 py-0.5 rounded font-bold bg-status-rej text-white">
-                🎯 OUR VIDEO
-              </span>
-            )}
-            <span className={`text-xs px-2 py-0.5 rounded font-medium ${goalCfg.cls}`}>
-              {goalCfg.emoji} {goalCfg.label}
-            </span>
-            {editingIndustry ? (
-              <span className="flex items-center gap-1">
-                <select
-                  value={industryDraft}
-                  onChange={e => setIndustryDraft(e.target.value)}
-                  className="bg-white/8 border border-me-ochre rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
-                  autoFocus
-                >
-                  {KNOWN_INDUSTRIES.map(ind => (
-                    <option key={ind} value={ind}>{ind}</option>
-                  ))}
-                </select>
-                <button
-                  onClick={saveIndustry}
-                  disabled={savingIndustry}
-                  className="text-xs px-1.5 py-0.5 bg-me-ochre hover:bg-me-ochre text-white rounded disabled:opacity-40"
-                >
-                  {savingIndustry ? '…' : '✓'}
-                </button>
-                <button
-                  onClick={() => { setEditingIndustry(false); setIndustryDraft(r.industry) }}
-                  className="text-xs px-1.5 py-0.5 bg-me-charcoal/60 hover:bg-me-charcoal/50 text-me-ivory/50 rounded"
-                >
-                  ✕
-                </button>
-              </span>
-            ) : (
-              <button
-                onClick={() => { setIndustryDraft(r.industry); setEditingIndustry(true) }}
-                title="点击修改行业分类"
-                className={`text-xs capitalize hover:text-white transition-colors ${
-                  hasMismatch ? 'text-me-gold font-semibold' : 'text-me-ivory/35'
-                }`}
-              >
-                {r.industry}
-                {hasMismatch && (
-                  <span className="ml-1 text-[10px] bg-status-exec/30 text-me-gold px-1.5 py-0.5 rounded" title={`AI 识别为 "${r.detected_industry}"，与录入行业不符`}>
-                    ⚠ AI: {r.detected_industry}
-                  </span>
-                )}
-                <span className="ml-1 text-[10px] text-me-ivory/35">✏</span>
-              </button>
-            )}
-            {views && (
-              <span className="text-xs text-me-gold font-medium">
-                ▶ {views}
-              </span>
-            )}
-            {!isOurs && !r.is_learnable && r.analysis_status === 'done' && (
-              <span className="text-xs px-2 py-0.5 rounded bg-me-charcoal/60 text-me-ivory/40" title={`view count below threshold (${r.view_threshold_min})`}>
-                ⊘ Not learnable
-              </span>
-            )}
-          </div>
-          {r.video_title && (
-            <p className="mt-1.5 text-xs text-me-ivory/50 truncate" title={r.video_title}>
-              {r.video_title}
-            </p>
-          )}
-          <a
-            href={r.source_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="block mt-0.5 text-xs text-me-ochre/80 hover:text-me-ochre/80 truncate"
+      {/* Top row: badges + key metadata */}
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <PlatformBadge platform={r.platform} />
+        <StatusBadge status={r.analysis_status} />
+        {isOurs && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded font-bold bg-status-rej text-white">
+            🎯 OUR
+          </span>
+        )}
+        {isDone && (
+          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${goalCfg.cls}`}>
+            {goalCfg.emoji} {goalCfg.label}
+          </span>
+        )}
+        {editingIndustry ? (
+          <span className="flex items-center gap-1">
+            <select
+              value={industryDraft}
+              onChange={e => setIndustryDraft(e.target.value)}
+              className="bg-white/8 border border-me-ochre rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
+              autoFocus
+            >
+              {KNOWN_INDUSTRIES.map(ind => (
+                <option key={ind} value={ind}>{ind}</option>
+              ))}
+            </select>
+            <button onClick={saveIndustry} disabled={savingIndustry} className="text-xs px-1.5 py-0.5 bg-me-ochre text-white rounded disabled:opacity-40">{savingIndustry ? '…' : '✓'}</button>
+            <button onClick={() => { setEditingIndustry(false); setIndustryDraft(r.industry) }} className="text-xs px-1.5 py-0.5 bg-me-charcoal/60 text-me-ivory/50 rounded">✕</button>
+          </span>
+        ) : (
+          <button
+            onClick={() => { setIndustryDraft(r.industry); setEditingIndustry(true) }}
+            title="点击修改行业分类"
+            className={`text-[10px] px-1.5 py-0.5 rounded capitalize hover:text-white transition-colors ${
+              hasMismatch ? 'bg-me-gold/20 text-me-gold font-semibold' : 'bg-me-charcoal/80 text-me-ivory/50'
+            }`}
           >
-            {r.channel_title ? `${r.channel_title} · ${shortUrl}` : shortUrl}
-          </a>
-        </div>
+            {r.industry}
+            {hasMismatch && (
+              <span className="ml-1" title={`AI 识别为 "${r.detected_industry}"`}>⚠ {r.detected_industry}</span>
+            )}
+          </button>
+        )}
+        {views && (
+          <span className="text-xs text-me-gold font-medium ml-auto">
+            ▶ {views}
+          </span>
+        )}
       </div>
 
-      {/* Error */}
+      {/* Title + link — single line */}
+      {r.video_title && (
+        <p className="text-xs text-me-ivory/60 truncate" title={r.video_title}>
+          {r.video_title}
+        </p>
+      )}
+      <a
+        href={r.source_url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block text-[11px] text-me-ochre/70 hover:text-me-ochre truncate"
+      >
+        {r.channel_title ? `${r.channel_title} · ${shortUrl}` : shortUrl}
+      </a>
+
+      {/* Error — compact one-liner */}
       {r.analysis_status === 'error' && (
-        <div className="flex items-start justify-between gap-2">
-          <p className="text-xs text-status-rej bg-status-rej/15 rounded p-2 flex-1">
-            {r.analysis_error ?? 'Unknown error'}
+        <div className="flex items-center justify-between gap-2 bg-status-rej/15 rounded px-2 py-1.5">
+          <p className="text-xs text-status-rej truncate flex-1" title={r.analysis_error ?? ''}>
+            {errSummary}
           </p>
           {(r.platform === 'youtube' || r.platform === 'upload') && (
             <button
               onClick={() => onRetry(r.id)}
-              className="shrink-0 px-2.5 py-1.5 bg-me-charcoal/60 hover:bg-me-charcoal/50 text-xs text-white rounded-lg transition-colors"
+              className="shrink-0 px-2 py-0.5 bg-me-charcoal/60 hover:bg-me-charcoal/50 text-xs text-white rounded transition-colors"
             >
               Retry
             </button>
@@ -276,110 +270,71 @@ function ReferenceCard({ item: r, onRetry, onUpdateIndustry, learnableAvgScores 
         </div>
       )}
 
-      {/* Analysis results */}
-      {r.analysis_status === 'done' && r.style_scores && (
-        <>
-          {/* Style description */}
-          {r.style_description && (
-            <p className="text-sm text-me-ivory/60 leading-relaxed">{r.style_description}</p>
-          )}
+      {/* Not learnable badge */}
+      {!isOurs && !r.is_learnable && isDone && (
+        <span className="text-[10px] px-1.5 py-0.5 rounded bg-me-charcoal/80 text-me-ivory/40 inline-block" title={`view count below threshold (${r.view_threshold_min})`}>
+          ⊘ Not learnable
+        </span>
+      )}
 
-          {/* Opening hook */}
-          {r.opening_hook?.type && (
-            <div className="flex items-start gap-2 bg-me-charcoal/50 rounded-lg px-3 py-2">
-              <span className="text-[10px] text-me-ivory/40 mt-0.5 shrink-0">🎣 Hook</span>
-              <div className="min-w-0">
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-exec/30 text-me-gold font-medium">
-                  {r.opening_hook.type.replace(/_/g, ' ')}
-                </span>
-                {r.opening_hook.feel && (
-                  <span className="ml-1.5 text-[10px] text-me-ivory/40">
-                    {r.opening_hook.feel === 'abrupt-cut' ? '⚡ abrupt' : '🌊 smooth'}
+      {/* Gap analysis — only for OUR videos, always visible (FDE needs this) */}
+      {showGap && (
+        <div className="rounded-lg border border-status-rej/30 bg-status-rej/10 p-2.5">
+          <p className="text-[10px] font-semibold text-status-rej uppercase tracking-wide mb-1.5">
+            Gap vs Top Viral
+          </p>
+          <div className="space-y-0.5">
+            {(Object.keys(r.style_scores!) as Array<keyof StyleScores>).map(dim => {
+              const ours = r.style_scores![dim]
+              const avg = learnableAvgScores![dim]
+              const diff = ours - avg
+              const sign = diff > 0 ? '+' : ''
+              const cls = Math.abs(diff) < 1 ? 'text-me-ivory/40'
+                        : diff > 0 ? 'text-status-track' : 'text-me-gold'
+              return (
+                <div key={dim} className="flex justify-between text-[11px]">
+                  <span className="text-me-ivory/50 capitalize">{SCORE_LABELS[dim]}</span>
+                  <span className={`font-mono ${cls}`}>
+                    {ours.toFixed(1)} vs {avg.toFixed(1)} ({sign}{diff.toFixed(1)})
                   </span>
-                )}
-                {r.opening_hook.script && (
-                  <p className="text-xs text-me-ivory/50 italic mt-1 line-clamp-1">
-                    "{r.opening_hook.script}"
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Gap analysis (only for OUR videos) */}
-          {showGap && (
-            <div className="rounded-lg border border-status-rej/30 bg-status-rej/10 p-3">
-              <p className="text-xs font-semibold text-status-rej mb-2">
-                Gap vs Top Viral References ({r.industry} {r.content_goal})
-              </p>
-              <div className="space-y-1">
-                {(Object.keys(r.style_scores) as Array<keyof StyleScores>).map(dim => {
-                  const ours = r.style_scores![dim]
-                  const avg = learnableAvgScores![dim]
-                  const diff = ours - avg
-                  const sign = diff > 0 ? '+' : ''
-                  const cls = Math.abs(diff) < 1 ? 'text-me-ivory/40'
-                            : diff > 0 ? 'text-status-track' : 'text-me-gold'
-                  return (
-                    <div key={dim} className="flex justify-between text-xs">
-                      <span className="text-me-ivory/50 capitalize">{SCORE_LABELS[dim]}</span>
-                      <span className={`font-mono ${cls}`}>
-                        {ours.toFixed(1)} vs {avg.toFixed(1)} ({sign}{diff.toFixed(1)})
-                      </span>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* 7-dim scores */}
-          <div className="space-y-1.5">
-            {(Object.keys(r.style_scores) as Array<keyof StyleScores>).map(dim => (
-              <ScoreBar key={dim} dimension={dim} value={r.style_scores![dim]} />
-            ))}
+                </div>
+              )
+            })}
           </div>
+        </div>
+      )}
 
-          {/* Tags + techniques + personas */}
-          <div className="space-y-2">
-            {r.key_techniques && r.key_techniques.length > 0 && (
-              <div>
-                <p className="text-[10px] text-me-ivory/40 uppercase tracking-widest mb-1">Key Techniques</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {r.key_techniques.map(t => (
-                    <span key={t} className="text-xs bg-status-exec/25 text-me-gold px-2 py-0.5 rounded">
-                      {t}
-                    </span>
-                  ))}
-                </div>
+      {/* AI details — collapsed by default. Already in DB for AI consumption. */}
+      {isDone && !isOurs && (
+        <details className="group" open={expanded} onToggle={e => setExpanded((e.target as HTMLDetailsElement).open)}>
+          <summary className="cursor-pointer text-[10px] text-me-ivory/35 hover:text-me-ivory/60 transition-colors select-none list-none">
+            <span className="inline-block transition-transform group-open:rotate-90">▶</span> AI 分析详情（仅供调试，AI 直接读数据库）
+          </summary>
+          <div className="mt-2 space-y-2 pl-3 border-l border-me-charcoal/80">
+            {r.style_description && (
+              <p className="text-xs text-me-ivory/50 leading-relaxed">{r.style_description}</p>
+            )}
+            {r.opening_hook?.type && (
+              <div className="text-[11px]">
+                <span className="text-me-ivory/35">🎣 Hook: </span>
+                <span className="text-me-gold">{r.opening_hook.type}</span>
+                {r.opening_hook.script && <span className="text-me-ivory/50 italic"> · "{r.opening_hook.script.slice(0, 60)}"</span>}
               </div>
             )}
-            {r.style_tags && r.style_tags.length > 0 && (
-              <div>
-                <p className="text-[10px] text-me-ivory/40 uppercase tracking-widest mb-1">Style Tags</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {r.style_tags.map(t => (
-                    <span key={t} className="text-xs bg-me-charcoal/60 text-me-ivory/50 px-2 py-0.5 rounded">
-                      {t}
-                    </span>
-                  ))}
-                </div>
+            <div className="space-y-1">
+              {(Object.keys(r.style_scores!) as Array<keyof StyleScores>).map(dim => (
+                <ScoreBar key={dim} dimension={dim} value={r.style_scores![dim]} />
+              ))}
+            </div>
+            {(r.key_techniques?.length || r.style_tags?.length || r.persona_fit?.length) ? (
+              <div className="flex flex-wrap gap-1 text-[10px]">
+                {r.key_techniques?.map(t => <span key={`k${t}`} className="bg-status-exec/25 text-me-gold px-1.5 py-0.5 rounded">{t}</span>)}
+                {r.style_tags?.map(t => <span key={`s${t}`} className="bg-me-charcoal/80 text-me-ivory/50 px-1.5 py-0.5 rounded">{t}</span>)}
+                {r.persona_fit?.map(t => <span key={`p${t}`} className="bg-status-track/25 text-status-track px-1.5 py-0.5 rounded">{t}</span>)}
               </div>
-            )}
-            {r.persona_fit && r.persona_fit.length > 0 && (
-              <div>
-                <p className="text-[10px] text-me-ivory/40 uppercase tracking-widest mb-1">Persona Fit</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {r.persona_fit.map(p => (
-                    <span key={p} className="text-xs bg-status-track/25 text-status-track px-2 py-0.5 rounded">
-                      {p}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
+            ) : null}
           </div>
-        </>
+        </details>
       )}
     </div>
   )
