@@ -1,6 +1,7 @@
 # Magic Engine — Agent 工作指南
 
-> 每次打开新会话：先看底部 **§ 当前焦点** → 按需读 [ROADMAP.md](./ROADMAP.md)。
+> 每次打开新会话：先看底部 **§ 当前焦点** → 按需读 [ROADMAP.md](./ROADMAP.md)。  
+> **Claude Code + Codex 共用本文件。** AGENTS.md 已废弃。Agent 体系见 [`docs/agents/`](./docs/agents/)，Codex 入口见 [`docs/agents/CODEX.md`](./docs/agents/CODEX.md)。
 
 **⚠️ 必读规则（每次会话开始前强制执行）：**
 - [`~/.claude/rules/coding-style.md`](~/.claude/rules/coding-style.md) — 含「删除代码前的强制流程」，**PM 反问 ≠ 删除指令**
@@ -76,6 +77,28 @@
 ### 一句话总结
 
 > **PM 不分配 Codex 任务，Claude Code 统筹。Claude Code 写提示词 + 子牙复审 + 决定 merge。Codex 干便宜的精准活，Claude Code 干贵的复杂活。**
+
+---
+
+## Agent 体系 ⭐（2026-06-03 建立）
+
+> 手册目录：[`docs/agents/`](./docs/agents/) | Codex 入口：[`docs/agents/CODEX.md`](./docs/agents/CODEX.md)
+
+| Agent | 模型 | 职责 | 代码 |
+|-------|------|------|------|
+| **子牙** | Claude Opus | 技术大脑：架构/安全/后台统筹 | `src/lib/ziya/` 待建 |
+| **诸葛亮** | Claude Sonnet | 业务大脑：客户策略/FDE工作台 | `src/lib/zhuge/` |
+| **张骞** | Claude Sonnet | 侦察：采集站点/关键词/AI可见度 | `src/lib/zhangqian/` |
+| **华佗** | Claude Sonnet | 诊断：6维度评分（0–100）| `src/lib/huatuo/` |
+| **鲁班** | Sonnet/4o-mini | 执行：flywheel adapter + 落数据 | `src/lib/luban/` |
+| **东坡** | Claude Sonnet | SEO决策层：关键词机会/排期/排名监控 | `src/lib/seo-agent/` |
+| **马良** | GPT-4o-mini vision | 视觉智能：素材标签/爆款采集/生成质量 | `src/lib/assets/` + `src/lib/visual/` |
+| **李白** | Claude Sonnet | 文案质量 + 全系统提示词管理 | `src/lib/blog/` + `src/lib/geo/` |
+| **达芬奇** | Claude Opus | PM：挑战方案（只读，无执行权）| `src/lib/davinci/` 待建 |
+| **魏征** | Sonnet + CI | 代码检查：CI关卡 + LLM审查 | `src/lib/weicheng/` 待建 |
+
+**子牙（技术）和诸葛亮（业务）并联**，各自可调度下方 8 个工作 Agent。  
+**达芬奇**：新 Phase/schema/agent 建立前必须触发。**魏征**：每次 PR merge 前必须通过。
 
 ---
 
@@ -304,9 +327,19 @@ npm test           # 测试套件
 
 ---
 
+## 客户接入约定（2026-06-04 PM 拍板）⭐
+
+**所有陪跑客户必须给 Magic Lab 邮箱 Editor 级权限**作为合作前提（GA4 / GSC / 网站后台 = Tier 1 硬性；GTM / Google Ads / GBP / Meta = Tier 2 强烈推荐）。
+
+详见 [`docs/sops/client-onboarding-access-requirements.md`](./docs/sops/client-onboarding-access-requirements.md) — 含客户沟通话术、拒绝场景应对、安全要求。
+
+GA4 key event 配置（form_submissions / leads_count 自动读数前置条件）：[`docs/sops/ga4-lead-gen-key-event-setup.md`](./docs/sops/ga4-lead-gen-key-event-setup.md)
+
+---
+
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-06-03 22:55 NZST （**Phase 33 M4 上线 — Goal 详情页执行进度摘要（PR #304 merged）**）
+> 最后更新：2026-06-04 00:42 NZST （**Phase 33 M4 上线 — Goal 详情页执行进度摘要（PR #304 merged）**）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
