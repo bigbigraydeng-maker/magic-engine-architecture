@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-04 01:27 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-04 03:11 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -3342,6 +3342,35 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 ---
 
 ## 9. 功能完成日志
+
+### 2026-06-04（A2.3 端到端验证 — GA4 generate_lead 闭环打通 ⭐ CTS 真实数据）
+
+**里程碑**：A2 系列（Goal 主指标 auto-fetch）首次端到端跑通 — 不只是代码框架就位，而是**真实客户网站 → GA4 → ME → Goal 详情页**整条链路有真数据流动。
+
+**配置（CTS Tours NZ）**：
+- GTM container `GTM-MRW95G5Q` 新增 Workspace Changes:
+  - Trigger `CE - form_submit (any form on site)` 监听 GA4 Enhanced Measurement 的 `form_submit` event（全站全表单覆盖，不依赖客户开发约定）
+  - Google Tag `G-SB9EYP2X1L`（GTM 自动建，Initialization - All Pages）
+  - GA4 Event Tag `GA4 - Generate Lead`（Event Name: `generate_lead`，触发 trigger 上）
+- Version published as `Add GA4 generate_lead conversion tracking`
+
+**验证证据（Realtime）**：
+- GA4 property `532503727` Realtime 报告显示 `generate_lead` event count = 2（PM 真实提交 2 次表单后立即出现）
+- 整条链路：网站 form submit → GA4 Enhanced Measurement form_submit → GTM trigger → GA4 Event Tag → property 532503727 → ✅
+
+**后续 24-48h 自动发生**：
+- GA4 → Admin → Events 列表会出现 `generate_lead`，PM 标 Mark as key event
+- ME 每日 3am UTC cron 拉 ga4_traffic_snapshots → top_sources[].conversions 出现非零值
+- Goal 详情页用 `form_submissions` / `leads_count` (hybrid) metric → CurrentValueCell 自动出数
+
+**关联文档**：
+- SOP: `docs/sops/ga4-lead-gen-key-event-setup.md`（4 条配置路径 + 验证 + 常见坑）
+- SOP: `docs/sops/client-onboarding-access-requirements.md`（Editor 权限要求）
+- Code: `src/lib/strategy/auto-fetch.ts` `fetchFormSubmissions()`
+
+**Oztop 待办**：同样跑一遍这套 SOP（预计 15 分钟，PM 已熟练）
+
+---
 
 ### 2026-06-03（QA-清理-1 blog→social-suggestions 内部 HTTP 自调用根治 — PR #305 ✅）
 **背景**：PR #297（zhangqian/connectors）根治内部 HTTP+Bearer 反模式后，复审发现 `blog/[postId]/route.ts:140` 还有一处同款 — post 审批通过后 fire-and-forget fetch social-suggestions 端点 + Bearer INTERNAL_API_KEY。Render env 缺失时静默 401，社媒建议自动生成「看似在跑实际从未触发」。
