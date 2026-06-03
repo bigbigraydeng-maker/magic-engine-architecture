@@ -38,7 +38,10 @@ interface Props {
 
 export function CurrentValueCell({ goal }: Props) {
   const metricDef = PRIMARY_METRIC_CATALOG.find(m => m.key === goal.primary_metric_key)
-  const isAuto = metricDef?.measurement === 'auto'
+  // Includes 'hybrid' — these have a partially-auto data source (e.g. leads_count
+  // = GA4 forms + manual phone/wechat). Endpoint already allows hybrid; UI must
+  // attempt the fetch so the auto half lands and FDE knows to top up manually.
+  const isAuto = metricDef?.measurement === 'auto' || metricDef?.measurement === 'hybrid'
 
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -76,10 +79,16 @@ export function CurrentValueCell({ goal }: Props) {
   // Manual / self_report path: show last-submitted-by-FDE value if any.
   // The judge endpoint stores it on the goal during early-submit / 90-day judge.
   // We hint how to update so PM/FDE knows where to enter it.
+  //
+  // Note: 'hybrid' metrics go through the isAuto branch above (the auto half
+  // gets fetched; FDE manually tops up). Only pure self_report + unknown
+  // (catalog miss) land here.
   if (!isAuto) {
     const hint = metricDef?.measurement === 'self_report'
       ? '客户自报 · 用「Submit Verdict」录入'
-      : '手动填写'
+      : metricDef
+        ? '手动填写'
+        : '未识别指标 · 请检查 metric_catalog'  // catalog miss (custom key) — visible signal not silent
     return (
       <div>
         <div className="text-[11px] font-black uppercase text-me-charcoal/45">Current</div>
@@ -120,6 +129,9 @@ export function CurrentValueCell({ goal }: Props) {
           </div>
           <div className="text-[10px] font-semibold text-me-ochre" title={result.label}>
             ⚡ {result.source}
+            {metricDef?.measurement === 'hybrid' && (
+              <span className="ml-1 text-me-charcoal/55">· FDE 补录其他渠道</span>
+            )}
           </div>
         </>
       )}
@@ -128,7 +140,7 @@ export function CurrentValueCell({ goal }: Props) {
         <>
           <div className="text-lg font-bold text-me-charcoal/40">—</div>
           <div className="text-[10px] font-semibold text-me-charcoal/45" title={error}>
-            未获取到 · <button
+            {metricDef?.measurement === 'hybrid' ? '自动源未取到 · 全部用 FDE 录入 · ' : '未获取到 · '}<button
               type="button"
               onClick={() => void fetchValue(true)}
               className="underline hover:text-me-ochre"

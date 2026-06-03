@@ -278,7 +278,9 @@ export default function DiagnosticPage() {
               <h1 className="text-lg font-semibold text-gray-900">诊断报告</h1>
               {run?.completed_at && (() => {
                 const ageDays = Math.floor((Date.now() - new Date(run.completed_at).getTime()) / 86_400_000)
-                const isStale = ageDays >= 3
+                // 7-day threshold (was 3): diagnostic is a weekly/monthly cadence task,
+                // a 3-day pill would create alarm fatigue and read like a system error.
+                const isStale = ageDays >= 7
                 return (
                   <p className="text-xs mt-0.5">
                     <span className="text-gray-400">
@@ -286,7 +288,7 @@ export default function DiagnosticPage() {
                     </span>
                     {isStale && (
                       <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
-                        ⚠ {ageDays} 天未重跑 · 点右侧「运行新诊断」刷新
+                        {ageDays} 天未重跑 · 点右侧「运行新诊断」刷新
                       </span>
                     )}
                   </p>

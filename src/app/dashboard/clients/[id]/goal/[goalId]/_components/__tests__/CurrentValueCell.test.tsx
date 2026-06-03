@@ -88,6 +88,38 @@ describe('CurrentValueCell', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('attempts fetch for hybrid metrics + shows "FDE 补录" hint on success', async () => {
+    // hybrid bug fix per 子牙 review — leads_count (acquisition default) was
+    // wrongly classified as self_report and never fetched
+    vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        value: 12,
+        source: 'GA4 form submits',
+        snapshot_date: '2026-06-03',
+        label: '12 form submits (May)',
+      }),
+    } as Response)
+
+    render(<CurrentValueCell goal={makeGoal({ primary_metric_key: 'leads_count' })} />)
+
+    await waitFor(() => {
+      expect(screen.getByText('12')).toBeInTheDocument()
+    })
+    expect(screen.getByText(/FDE 补录其他渠道/)).toBeInTheDocument()
+  })
+
+  it('shows "未识别指标" for catalog-miss keys (defensive)', async () => {
+    const fetchMock = vi.spyOn(global, 'fetch')
+
+    render(<CurrentValueCell goal={makeGoal({ primary_metric_key: 'custom_made_up_key' })} />)
+
+    expect(screen.getByText('—')).toBeInTheDocument()
+    expect(screen.getByText(/未识别指标/)).toBeInTheDocument()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('shows retry link when fetch returns ok:false', async () => {
     vi.spyOn(global, 'fetch').mockResolvedValueOnce({
       ok: true,
