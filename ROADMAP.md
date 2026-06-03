@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-03 11:26 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-03 12:05 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
@@ -174,13 +174,51 @@ GOAL (1 active per client) → INITIATIVES (按工作流目的切，非按维度
 - [ ] **P31.X.4** 评分公式重做（reputation / SEO / ai_visibility 维度独立大工程）
 - [ ] **P31.X.5** Retention / Reactivation intent（需先接通 CRM/EDM）
 - [ ] **P31.X.6** Initiative 类型扩展：Operations / Market Intelligence / Product / Partnerships
-- [ ] **P32.X.1** [B10] Verdict Submit — 诸葛亮预生成 Summary 草稿（基于本 Goal 周期内 flywheel_actions/metrics/outcomes 自动聚合）。需要：（a）新增 flywheel ↔ goal 关联（或按 client_id + period_start/end 时间窗查询）；（b）新 API 路由 `/api/goals/[id]/verdict-draft`；（c）VerdictModal 加「让诸葛亮起草 Summary」按钮 + 编辑后采纳。工作量约 4-6 小时
 
 ---
 
 **Phase 31 状态：✅ MVP 闭环完成 2026-06-02**
 
 整个 Goal 生命周期闭环：FDE 创建 Goal → 配 2-5 个 Initiative → 子牙润色 hypothesis → 老 actions 迁移 → 90 天后 cron 自动标 expired → FDE 填 current_value → 系统判 verdict + archive → 历史归档页学习。
+
+---
+
+### Phase 33 — Strategy-Execution Bridge（战略执行连线层）⭐⭐⭐ 2026-06-03
+
+> **目的**：把 Goal/Initiative 策略层和现有执行层（Campaign / Marketing Plan / Kanban）连线，让 Goal 功能在 ME 内实际可用。  
+> **依赖**：Phase 31 ✅ + Phase 32 ✅  
+> **PR**：[#299](https://github.com/bigbigraydeng-maker/magic-engine/pull/299)
+
+#### M1 — 数据地基（✅ 完成 2026-06-03）
+
+- [x] **P33.1** `initiatives` 表加 `campaign_ids uuid[]`（Initiative 关联哪些 Campaign）
+- [x] **P33.2** `marketing_plans` 表加 `initiative_id uuid` FK（Plan 归属哪个 Initiative）
+- [x] **P33.3** `execution_items.initiative_id` 确认已存在（Phase 31 migration，TypeScript 类型同步补齐）
+- [x] **P33.4** `InitiativeRow` 加 `campaign_ids`；`GeneratePlanRequest` 加 `initiative_id`；`ExecutionItem` 加 `initiative_id`
+
+#### M2 — Initiative 详情页连线入口（✅ 完成 2026-06-03）
+
+- [x] **P33.5** Initiative 卡片展开显示「关联执行」区域（已关联 Campaign 列表 + add/remove + 跳转链接）
+- [x] **P33.6** 点「+ 生成 Marketing Plan」从 Initiative 卡片打开弹窗，预填 `initiative_id` + 标题
+- [x] **P33.7** `PlanGenerator` 弹窗加「所属 Initiative」字段（从 Initiative 入口进来只读锁定；独立入口可选下拉）
+- [x] **P33.A** 新增 `GET /api/clients/[id]/initiatives`（PlanGenerator 下拉 + Kanban Goal filter 数据源）
+
+#### M3 — Kanban 显示 Goal/Initiative 归属（✅ 完成 2026-06-03）
+
+- [x] **P33.8** action 卡片加 `◈ Initiative名称` badge（有 initiative_id 时显示）
+- [x] **P33.9** Kanban 顶部加「按 Goal」filter（只在有 active Goal 时出现）
+- [x] **P33.10** Goal filter 激活时，`initiative_id=null` 的 action 单独显示「未归类 Actions」提示分组
+
+#### M4 — Goal 详情页执行摘要（📋 待开发）
+
+- [ ] **P33.11** Goal 详情页 Initiative 卡片展开显示：关联 Campaign 数量 + action 完成率
+- [ ] **P33.12** Goal 详情页底部「执行进度摘要」区块（各 Initiative 进度条 + 总数统计）
+
+---
+
+**Phase 33 状态（M1-M3）：✅ 完成 2026-06-03，M4 待下一 session**
+
+FDE 现在可以：从 Initiative 卡片展开关联 Campaign / 一键生成 Marketing Plan；Kanban 按 Goal 筛选 action；action 卡片显示归属 Initiative。
 
 ---
 
@@ -3266,6 +3304,32 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 ---
 
 ## 9. 功能完成日志
+
+### 2026-06-03（Phase 33 M1-M3 Strategy-Execution Bridge — PR #299）
+- **P33.1/P33.2** — DB migration：`initiatives.campaign_ids uuid[]` + `marketing_plans.initiative_id uuid FK`
+- **P33.3/P33.4** — TS 类型同步：`InitiativeRow.campaign_ids`、`GeneratePlanRequest.initiative_id`、`ExecutionItem.initiative_id`（Phase 31 DB 有列但 TS 未声明，一并补齐）
+- **P33.5/P33.6** — `InitiativeExecutionPanel` 组件：Initiative 卡片展开显示关联 Campaign + add/remove + 「+ 生成 Marketing Plan」按钮
+- **P33.7** — `PlanGenerator` 弹窗支持 `initiativeId`/`defaultTitle` props；独立入口新增「所属 Initiative」下拉
+- **P33.A** — 新增 `GET /api/clients/[id]/initiatives` 端点（返回 id/title/goal_id，供 Kanban filter + PlanGenerator 下拉使用）
+- **P33.8** — Kanban action 卡片加 `◈ Initiative名称` 橙色 badge
+- **P33.9** — Kanban 顶部加「按 Goal」filter 行（有 active Goal 才出现）
+- **P33.10** — Goal filter 激活时未归类 action 单独显示「未归类 Actions」提示分组
+- `InitiativeList` 重构：从直接点开编辑弹窗改为展开/收起模式，展开显示执行面板
+
+### 2026-06-02（QA 测试加固轮 — 6 PR）
+背景：6-02 全天 Codex 大规模测试 ME 暴露的存量问题。性质是质量加固 + 反模式根治，非新功能推进。
+- **PR #248** — CF AI Gateway 401 修复：所有 OpenAI/Anthropic 调用走 CF Gateway 后缺 `cf-aig-authorization` header，加 `CF_AIG_TOKEN` env 注入 Bearer header
+- **PR #270** — Client portal 按钮黑底黑字 + 移动端被隐藏：a:link/visited/hover/focus/active 全部 !important 白色 + 移动端不再 display:none
+- **PR #290** — initiatives PATCH 三道闸校验：抽 `validateSupportsInitiativeParent` 共享给 create + update；terminal 不能有 parent / supporting 必须有 parent（unassigned 豁免）/ parent 必须是同 goal 的 terminal
+- **PR #293** — outcomeChip + buildExecutionGroups 回归测试 [QA-T1]：13 个 test 覆盖 formatOutcomeLabel 6 种 delta_pct/delta 输出格式、VERDICT_META fallback、buildDimensionGroups autonomous 过滤
+- **PR #297** — zhangqian/connectors 内部 HTTP 自调用根治 [QA-T3-rev]：抽 `startAdvancedDiscovery` lib 函数，connect route 删除内部 fetch + Bearer，直接进程内调用，彻底退役这条链路上的 `INTERNAL_API_KEY`
+- **commit e699218** — Codex 协作分工规范写入 CLAUDE.md（PM 不分配 Codex 任务，Claude Code 统筹 + 子牙复审 + 决定 merge）
+- **取消**：T4 phaseData.ts 误派任务（Claude 派活时引用了旧 session 的过期错误信息，Codex 正确识别现实不符并拒绝瞎改 — 这是 PR #290 撒谎事故后的正确执行方式，Codex 加分）
+
+发现待办：
+- `src/app/api/clients/[id]/blog/[postId]/route.ts:140` 还有 1 处同款内部 HTTP+Bearer 反模式（post 审批后 fire-and-forget fetch social-suggestions），待 QA-清理-1 处理
+- `@/lib/apify/*` `@/lib/dataforseo/serp` `@/lib/gsc/client` 4 个模块文件缺失，导致 advanced-agent.ts import 断裂，待排查
+- tsc 整体红（scripts/p30-*、cms/publish-geo-snippet test mock、CompetitorSnapshotAdapter），历史遗留，待单独 QA 加固轮处理
 
 ### 2026-06-02（Website SEO Optimization P29.SEO.18 完成）
 - 新 VI 后 SEO/GEO 修复完成：补 AI search crawler robots hints、favicon/OG 资源、中文页 raw HTML 信号、中文站内链接、服务页 Service schema 和社交 meta
