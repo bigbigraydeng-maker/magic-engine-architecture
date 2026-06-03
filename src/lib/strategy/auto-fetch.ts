@@ -2,11 +2,13 @@
  * P31.X.2 — Goal primary metric auto-fetch
  *
  * Resolves a current_value for Goals whose primary_metric_key has
- * measurement='auto', by reading from already-cached ME data sources.
+ * measurement='auto' (or 'hybrid'), by reading from already-cached ME data
+ * sources or — for brand_search_volume — calling DataForSEO live.
  *
  * Supported metric keys (MVP):
  *   - organic_traffic    → ga4_traffic_snapshots.total_sessions (latest)
- *   - brand_search_volume→ keyword_snapshots (brand keyword, latest volume)
+ *   - brand_search_volume→ DataForSEO bulkKeywordVolume live (replaces SEMrush;
+ *                          SEMrush has been removed from ME stack 2026-06-03)
  *
  * Not yet supported (data source missing or complex):
  *   - form_submissions   → GA4 key_events (not stored in snapshot)
@@ -15,10 +17,12 @@
  *   - social_followers_growth → no data source
  *   - cart_abandonment_rate → no data source
  *
- * Returns null when unsupported or no data found.
+ * Returns ok:false when unsupported or no data found.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { bulkKeywordVolume } from '@/lib/dataforseo/labs'
+import { locationCodeForDb } from '@/lib/seo-intelligence/keyword-snapshots'
 
 export type AutoFetchResult =
   | { ok: true;  value: number; source: string; snapshot_date: string; label: string }
@@ -85,12 +89,13 @@ async function fetchBrandSearchVolume(
   supabase: SupabaseClient,
   clientId: string,
 ): Promise<AutoFetchResult> {
-  // First get the client's primary keyword / brand name
+  // Schema reality (2026-06-03 audit): clients table has `name` + `semrush_db`
+  // (au/nz) but no `primary_keyword` column. Use `name` as the brand keyword.
   const { data: client, error: clientErr } = await supabase
     .from('clients')
-    .select('primary_keyword, name')
+    .select('name, semrush_db')
     .eq('id', clientId)
-    .maybeSingle()
+    .maybeSingle<{ name: string | null; semrush_db: string | null }>()
 
   if (clientErr) {
     return { ok: false, reason: `Client query failed: ${clientErr.message}` }
@@ -99,40 +104,41 @@ async function fetchBrandSearchVolume(
     return { ok: false, reason: 'Client not found' }
   }
 
-  const brandKeyword = client.primary_keyword ?? client.name
+  const brandKeyword = client.name
   if (!brandKeyword) {
-    return { ok: false, reason: 'Client has no primary_keyword — cannot look up brand search volume' }
+    return { ok: false, reason: 'Client has no name — cannot look up brand search volume' }
   }
 
-  // Look up the most recent keyword snapshot for this brand keyword
-  const { data: snap, error: snapErr } = await supabase
-    .from('keyword_snapshots')
-    .select('search_volume, snapped_at, keyword')
-    .eq('client_id', clientId)
-    .ilike('keyword', brandKeyword)
-    .order('snapped_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  if (snapErr) {
-    return { ok: false, reason: `keyword_snapshots query failed: ${snapErr.message}` }
-  }
-  if (!snap) {
+  // SEMrush has been removed from the ME stack (2026-06-03). Call DataForSEO
+  // bulkKeywordVolume live so we don't depend on the empty keyword_snapshots
+  // table — the SEMrush ingestion cron never ran, and DataForSEO is the
+  // canonical replacement.
+  const locationCode = locationCodeForDb(client.semrush_db)
+  let labsResults
+  try {
+    labsResults = await bulkKeywordVolume([brandKeyword], locationCode)
+  } catch (err) {
     return {
       ok: false,
-      reason: `No keyword snapshot found for "${brandKeyword}" — run SEO Intelligence sync first`,
+      reason: `DataForSEO bulkKeywordVolume failed: ${(err as Error).message}`,
     }
   }
-  if (snap.search_volume == null) {
-    return { ok: false, reason: `Keyword snapshot for "${brandKeyword}" has no search_volume` }
+
+  const hit = labsResults.find(r => r.keyword.toLowerCase() === brandKeyword.toLowerCase())
+    ?? labsResults[0]
+  if (!hit || hit.search_volume == null) {
+    return {
+      ok: false,
+      reason: `DataForSEO returned no search_volume for "${brandKeyword}" (location ${locationCode})`,
+    }
   }
 
   return {
     ok: true,
-    value: snap.search_volume as number,
-    source: 'SEMrush keyword snapshot',
-    snapshot_date: snap.snapped_at as string,
-    label: `${(snap.search_volume as number).toLocaleString()} searches/mo for "${snap.keyword as string}"`,
+    value: hit.search_volume,
+    source: 'DataForSEO bulk keyword volume',
+    snapshot_date: new Date().toISOString(),
+    label: `${hit.search_volume.toLocaleString()} searches/mo for "${hit.keyword}"`,
   }
 }
 
