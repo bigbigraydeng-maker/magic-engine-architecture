@@ -69,7 +69,7 @@ const INDUSTRY_CONFIGS: IndustryConfig[] = [
       'New Zealand cafe aesthetic food',
       'food photography plating short',
     ],
-    min_views: 20_000,
+    min_views: 5_000,
     limit:     10,
   },
   {
