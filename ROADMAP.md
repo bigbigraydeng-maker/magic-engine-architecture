@@ -1,9 +1,45 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-03 12:05 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-03 18:32 NZST · 当前阶段：**Phase 24.A Platform OAuth Connector ✅ 全部 8 任务完成 PR #125；Phase 14.C P14.C.1–6 ✅ PR 待合并；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 > 
 > **策略更新（2026-05-05）**：GEO Directive 部署机制确认采用 **Phase 1 静态模型**（MVP），**Phase 2 动态脚本延缓至 Q3+ 2026**（需 PoC 验证）。详见 [§3.3.1 部署机制决策](#geoDirectiveDecision)。
 > 配套：[PRODUCT_OVERVIEW.md](./PRODUCT_OVERVIEW.md)（产品视角）· [ARCHITECTURE.md](./ARCHITECTURE.md)（技术架构）
+
+---
+
+## 🧪 待测试 / 待办登记（2026-06-03 状态）
+
+> 短期待办速查表。详细任务请见 § 其他 Phase / § 9 完成日志。
+
+### A. 待测试（需 PM 在 UI 验证）
+
+| ID | 内容 | 路径 |
+|----|------|------|
+| **T-P33.9/10** | Phase 33 P33.9/P33.10 修复（PR #302 已 merged）— CTS 执行看板①点 Goal filter 后 chips 数字应变化②「📥 未归类 Actions」分组应出现（~52 条 placeholder 绑定）③Bulk-migrate 一条 action 后从未归类消失 | `/dashboard/clients/c0000000-0000-0000-0000-000000000000/execution` |
+| **T-MP-Generate** | Marketing Plan 生成弹窗仍报 `Unexpected token '<', "<!DOCTYPE"... not valid JSON`（Phase 14.B 既有 bug，非 P33 引入）— 排查 Render logs 找根因（Claude API 超时？冷启动？）| `docs/bugs/2026-06-03-marketing-plan-generate-html-response.md` |
+| **T-CTS-Oztop-Goal-Rev** | A1 reputation 公式修复后 CTS / Oztop reputation 分数复测（CTS 应从 44 →~71 进入健康区间）| 客户首页 reputation 评分卡 |
+
+### B. 待开发
+
+| ID | 内容 | 工作量 |
+|----|------|------|
+| **P33.M4** | Phase 33 M4 — Goal 详情页执行进度摘要：P33.11（Initiative 卡片展开显示关联 Campaign 数 + action 完成率）+ P33.12（Goal 底部「执行进度摘要」区块，各 Initiative 进度条 + 总数）| 1 天 |
+| **A3 案例沉淀** | 把 CTS / Oztop 跑通 Phase 31/33 的经验固化到 `docs/clients/<name>/phase31-33-strategy-bridge-notes.md`（已部分起草于 worktree elegant-poincare）| 半天 |
+| **A2 Goal 主指标 auto-fetch** | GA4 / Brand search volume / Form submissions 自动读 current_value（3 个数据源，可单独跑）| 1-2 天/源 |
+| **QA-清理-1** | `src/app/api/clients/[id]/blog/[postId]/route.ts:140` 同款内部 HTTP+Bearer 反模式根治（参考 PR #297 模式） | 1-2h |
+| **QA-清理-2** | `@/lib/apify/*` `@/lib/dataforseo/serp` `@/lib/gsc/client` 4 个模块文件缺失，advanced-agent.ts import 断裂排查 | 半天 |
+| **QA-清理-3** | tsc 整体红清理（scripts/p30-*、cms/publish-geo-snippet test mock、CompetitorSnapshotAdapter，历史遗留） | 1 天 |
+| **Phase 22.A.2** | GA4 每日采集（依赖 PR #187 merged） | 中 |
+| **Phase 24.B** | GBP 数据摂取（依赖 GBP.0 + migration） | 中 |
+| **B1 AU/NZ Marketing Index** | 战略级独立项目议题，Q4 2026 评估 → Q1 2027 启动 MVP | 6-8 周 |
+
+### C. PM 一次性操作（无代码工作量）
+
+| ID | 内容 | 阻塞 |
+|----|------|------|
+| **PM-ENV-1** 🔴 | Render 设 `META_SYSTEM_USER_TOKEN`（长效 System User Token）| 执行看板「直接执行 (Meta API)」返回 424 |
+| **PM-ENV-2** 🔴 | GitHub repo Secrets 添加 `CRON_SECRET`（Phase 30/31 共用）| 月度/每日 cron 不能跑 |
+| **PM-OPS-1** | Google Cloud：enable Business Profile API + Account Management API（含配额申请，3-7 天）| Phase 24.B 阻塞 |
 
 ---
 
@@ -3304,6 +3340,15 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 ---
 
 ## 9. 功能完成日志
+
+### 2026-06-03（Phase 33 P33.9/P33.10 双 PR 修复 — PR #301 + #302）
+- **PR #301**（早一轮）— P33.9 chips count 跟 dimension+goal filter 走；P33.10 itemsForDimensionGroups 排除 `initiative_id=null`（仅处理 null，未处理 placeholder）；Goal/History 返回按钮统一中文
+- **PR #302**（深一层 supersede）— 三处根因彻底修复：
+  - `/api/clients/[id]/initiatives` 不再 server-side 过滤 unassigned bucket（让前端区分用 `initiative_type`）
+  - 执行看板 `filteredItemsWithoutStatus` 中间结果统一供 chips count + dimension groups 使用（chips/groups 视图一致）
+  - P33.10 「未归类」判断扩展为 `initiative_id === null || initiative_type === 'unassigned'`，覆盖 Phase 31 migration 把老 actions 自动绑到 placeholder Initiative 的真实情况
+  - PlanGenerator 下拉前端补 `initiative_type !== 'unassigned'` filter（依赖 server 过滤的副作用补上）
+- **测试待跑**：CTS 执行看板 Goal filter 激活后 chips 数字变化 + 未归类分组（~52 条）+ bulk-migrate 后从未归类消失
 
 ### 2026-06-03（Phase 33 M1-M3 Strategy-Execution Bridge — PR #299）
 - **P33.1/P33.2** — DB migration：`initiatives.campaign_ids uuid[]` + `marketing_plans.initiative_id uuid FK`
