@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
-import { getSerpCompetitors, getKeywordsGap, type LabsCompetitor, type LabsKeyword } from '@/lib/dataforseo/labs'
+import {
+  getSerpCompetitors,
+  getKeywordsGap,
+  fetchDomainRankOverview,
+  type LabsCompetitor,
+  type LabsKeyword,
+} from '@/lib/dataforseo/labs'
 import { getActiveBrief } from '@/lib/content/brief-injector'
 import { getClientCompetitors } from '@/lib/competitors/resolver'
 import {
@@ -110,6 +116,25 @@ export async function GET(
       }
     )
 
+    // ── Step 2.5: Enrich stub competitors (those not in SERP list — typically
+    //   FDE hand-picked niche competitors that DataForSEO competitors_domain
+    //   missed). One domain_rank_overview call per stub, in parallel.
+    //   intersections + avg_position stay null (we have no shared-keyword data
+    //   for them), but monthly_traffic + keyword_count get real values.
+    const stubsToEnrich = competitors.filter(c => c.monthly_traffic === null && c.keyword_count === null)
+    if (stubsToEnrich.length > 0) {
+      const enrichResults = await Promise.allSettled(
+        stubsToEnrich.map(c => fetchDomainRankOverview(c.domain, locationCode)),
+      )
+      stubsToEnrich.forEach((stub, idx) => {
+        const r = enrichResults[idx]
+        if (r.status === 'fulfilled') {
+          stub.monthly_traffic = r.value.organic_traffic
+          stub.keyword_count   = r.value.organic_keywords
+        }
+      })
+    }
+
     // ── Step 3: Keyword gap using top 3 competitor domains
     const top3       = competitors.slice(0, 3).map(c => c.domain)
     const rawGapKeywords: LabsKeyword[] = top3.length > 0
@@ -123,7 +148,10 @@ export async function GET(
       { domain: client.domain, competitors, gapKeywords },
       {
         headers: {
-          'Cache-Control': 'public, s-maxage=86400, stale-while-revalidate=3600',
+          // Short cache so FDE-edited competitor_domains take effect within ~1 minute.
+          // Trade-off: DataForSEO calls are gated by this cache, so don't drop to 0;
+          // 60s strikes a balance between freshness and API spend (was 86400 / 24h).
+          'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=60',
         },
       },
     )
