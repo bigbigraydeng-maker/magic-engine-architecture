@@ -49,6 +49,7 @@ const ADMIN_SECTIONS: NavSection[] = [
       { key: 'viral-references', label: 'Viral References',mark: 'VR', href: '/dashboard/admin/viral-references' },
       { key: 'user-console',     label: 'User Console',    mark: 'UC', href: '/dashboard/admin/users' },
       { key: 'industry-baselines', label: 'Industry Baselines', mark: 'IB', href: '/dashboard/industry-baselines' },
+      { key: 'cron-health',     label: 'Cron Health',     mark: 'CH', href: '/dashboard/admin/cron-health' },
     ],
   },
 ]
