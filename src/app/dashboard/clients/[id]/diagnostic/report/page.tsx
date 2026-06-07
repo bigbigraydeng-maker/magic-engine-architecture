@@ -182,6 +182,9 @@ export default function DiagnosticReportPage() {
   const [activeSection, setActiveSection] = useState<string | null>(null)
   const [citation, setCitation] = useState<CitationPanel | null>(null)
   const [docxLoading, setDocxLoading] = useState(false)
+  // BUG-FMT-S13 commit 2 — manual synthesis trigger state
+  const [synthLoading, setSynthLoading] = useState(false)
+  const [synthNotice, setSynthNotice] = useState<string | null>(null)
 
   const fetchReport = useCallback(async () => {
     setLoading(true)
@@ -249,6 +252,77 @@ export default function DiagnosticReportPage() {
     }
   }
 
+  const handleRegenerateSynthesis = async () => {
+    if (!reportData) return
+    setSynthLoading(true)
+    setSynthNotice(null)
+    try {
+      const res = await fetch(
+        `/api/clients/${clientId}/diagnostic/runs/${reportData.run_id}/synthesize`,
+        { method: 'POST' },
+      )
+      // BUG-FMT-S13 HIGH#1 review fix — per-module state matters: rerun-from-DB
+      // path loses competitorList in memory so competitor_analysis is always
+      // skipped on manual rerun. FDE must see WHICH modules ran vs skipped,
+      // not just an overall "ran/cost" line, otherwise an empty competitor
+      // section after a successful regenerate looks like a fresh bug.
+      type ModuleStatus =
+        | { state: 'ok'; rows_written: number; cost_usd: number }
+        | { state: 'skipped'; reason: string }
+        | { state: 'failed'; error: string }
+      const body = await res.json() as {
+        success: boolean
+        ran?: boolean
+        skipped_reason?: string | null
+        total_cost_usd?: number
+        modules?: Record<string, ModuleStatus>
+        error?: string
+      }
+      if (!res.ok || !body.success) {
+        throw new Error(body.error ?? `HTTP ${res.status}`)
+      }
+      const moduleLabels: Record<string, string> = {
+        score_explanations:   '得分解释',
+        dimension_narratives: '维度叙事',
+        competitor_analysis:  '竞品分析',
+        market_context:       '市场上下文',
+      }
+      if (body.ran) {
+        const modules = body.modules ?? {}
+        const okList     = Object.entries(modules).filter(([, m]) => m.state === 'ok'     ).map(([k]) => moduleLabels[k] ?? k)
+        const skipList   = Object.entries(modules).filter(([, m]) => m.state === 'skipped').map(([k]) => moduleLabels[k] ?? k)
+        const failList   = Object.entries(modules).filter(([, m]) => m.state === 'failed' ).map(([k]) => moduleLabels[k] ?? k)
+        const okStr   = okList.length   ? `✓ 已生成：${okList.join('、')}` : ''
+        const skipStr = skipList.length ? `· 跳过：${skipList.join('、')}` : ''
+        const failStr = failList.length ? `· 失败：${failList.join('、')}` : ''
+        // 板桥 review — 兼职 FDE 看到金额会紧张；成本只暴露给 admin。
+        // (admin tier 当前在前端无直接信号；保守做法：只显示金额若 >$0，
+        // 让 FDE 知道有花费但不强调具体数字。)
+        const cost   = body.total_cost_usd ?? 0
+        const costStr = cost > 0 ? ` · 本次约 $${cost.toFixed(2)}` : ''
+        const mainLine = `叙事重生 完成${costStr} ${[okStr, skipStr, failStr].filter(Boolean).join(' ')}`.trim()
+        // 板桥/狄仁杰 HIGH — 特化"竞品分析跳过(manual rerun 内存丢失)"提示，
+        // 让 FDE 知道这是设计而非 bug + 给出下一步动作。
+        const competitorReason = modules.competitor_analysis?.state === 'skipped'
+          ? modules.competitor_analysis.reason
+          : null
+        const hint = competitorReason && /manual rerun/i.test(competitorReason)
+          ? '\n提示：竞品分析仅在跑新诊断时生成；如需更新竞品段，请回"速览"页点"运行新诊断"。'
+          : ''
+        setSynthNotice(mainLine + hint)
+      } else {
+        setSynthNotice(`未生成新叙事：${body.skipped_reason ?? 'unknown'}`)
+      }
+      // Reload report so the new narratives show up. cache-bust prevents
+      // browser HTTP cache from returning stale HTML.
+      await fetchReport()
+    } catch (e) {
+      setSynthNotice(`生成失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setSynthLoading(false)
+    }
+  }
+
   const handleDownloadEvidence = () => {
     if (!reportData) return
     const blob = new Blob([reportData.evidence.json], { type: 'application/json' })
@@ -306,6 +380,28 @@ export default function DiagnosticReportPage() {
         </div>
 
         <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Regenerate AI narratives (BUG-FMT-S13 commit 2) */}
+          <button
+            onClick={() => void handleRegenerateSynthesis()}
+            disabled={!reportData || synthLoading}
+            title="重新生成 AI 叙事（绕过 24h 速率限制）"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {synthLoading ? (
+              <span className="w-3.5 h-3.5 border-2 border-amber-500 border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                />
+              </svg>
+            )}
+            <span className="hidden sm:inline">{synthLoading ? '生成中…' : '重新生成叙事'}</span>
+          </button>
+
           {/* Download evidence.json */}
           <button
             onClick={handleDownloadEvidence}
@@ -365,6 +461,22 @@ export default function DiagnosticReportPage() {
           </button>
         </div>
       </header>
+
+      {/* Inline notice for synthesis result */}
+      {synthNotice && (
+        <div className="flex-shrink-0 bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-start justify-between gap-3">
+          <p className="text-xs text-amber-800 leading-relaxed whitespace-pre-line">{synthNotice}</p>
+          <button
+            onClick={() => setSynthNotice(null)}
+            className="text-amber-600 hover:text-amber-900 flex-shrink-0"
+            aria-label="关闭提示"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      )}
 
       {/* ── Body: TOC sidebar + iframe ─────────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">

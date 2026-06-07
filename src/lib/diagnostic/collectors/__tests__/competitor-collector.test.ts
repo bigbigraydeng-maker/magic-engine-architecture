@@ -209,10 +209,18 @@ describe('CompetitorCollector.collect() — insufficient competitor data', () =>
 
 describe('CompetitorCollector.collect() — SEMrush failure', () => {
   it('does not crash and returns a result when getDomainMetrics throws', async () => {
+    // BUG-FMT-S14 — when SEMrush is fully down we now propagate the DataForSEO
+    // traffic numbers (the fallback path tested below), so score CAN be a
+    // number. But if DataForSEO ALSO has zero traffic for the client we get
+    // score:null (unknowable), which is the correct "we don't know" signal.
+    // This test just asserts the collector doesn't crash; the score-vs-null
+    // contract is exercised below + in the "unknowable" describe block.
     mockGetDomainMetrics.mockRejectedValue(new Error('SEMrush down'))
     const result = await new CompetitorCollector().collect(CLIENT_ID, DOMAIN, KEYWORDS)
-    expect(typeof result.score).toBe('number')
     expect(Array.isArray(result.findings)).toBe(true)
+    // score is either a number (DataForSEO traffic survived) or null
+    // (DataForSEO traffic also missing) — never the old fake 100.
+    expect(result.score === null || typeof result.score === 'number').toBe(true)
   })
 
   it('falls back to DataForSEO organic_traffic when SEMrush fails', async () => {
@@ -221,6 +229,38 @@ describe('CompetitorCollector.collect() — SEMrush failure', () => {
     // competitorList still populated from DataForSEO
     expect(result.competitorList.length).toBeGreaterThan(0)
   })
+})
+
+// ---------------------------------------------------------------------------
+// BUG-FMT-S14 — score=null when traffic is genuinely unknowable
+// ---------------------------------------------------------------------------
+
+describe('CompetitorCollector.collect() — traffic unknowable (BUG-FMT-S14)', () => {
+  it('returns score=null when ALL competitors have organic_traffic=0', async () => {
+    // ≥3 competitors discovered (passes the data_insufficient gate) but every
+    // single one has no traffic data → old code returned ratio=1 → score=100.
+    // New code must return score=null + competitor_traffic_unknowable finding.
+    mockGetCompetitorDomains.mockResolvedValue([
+      { domain: 'a.co.nz', overlap_score: 0.5, organic_traffic: 0, authority_score: 20 },
+      { domain: 'b.co.nz', overlap_score: 0.4, organic_traffic: 0, authority_score: 18 },
+      { domain: 'c.co.nz', overlap_score: 0.3, organic_traffic: 0, authority_score: 15 },
+    ])
+    mockGetDomainMetrics.mockResolvedValue({ organic_traffic: 0, authority_score: 30 })
+    const result = await new CompetitorCollector().collect(CLIENT_ID, DOMAIN, KEYWORDS)
+    expect(result.score).toBeNull()
+    expect(result.findings.some(f => f.finding_type === 'competitor_traffic_unknowable')).toBe(true)
+  })
+
+  // Note (魏征 review HIGH#2): we originally drafted a second test here trying
+  // to force the "clientTraffic === null" branch by rejecting only the client's
+  // SEMrush call. The test ended up as a tautology — the public collect()
+  // signature doesn't let us deterministically force `clientMetrics === null`
+  // through these mocks because the SEMrush fallback paths interact with the
+  // already-fetched DataForSEO competitor entries in ways the mock surface
+  // can't cleanly isolate. Rather than ship a fake green test, we document
+  // the coverage gap honestly: the all-zero competitors path above is the
+  // representative case (same code branch), and the client-null path is
+  // exercised end-to-end by the runner integration tests / live diagnostics.
 })
 
 // ---------------------------------------------------------------------------
