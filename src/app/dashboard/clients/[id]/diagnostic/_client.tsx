@@ -4,8 +4,11 @@ import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { ScoreGauge } from '@/components/diagnostic/ScoreGauge'
+import { DimensionScoreCard, type BaselineInfo } from '@/components/diagnostic/DimensionScoreCard'
 import { DiagnosticFindingCard } from '@/components/diagnostic/DiagnosticFindingCard'
 import { useDiagnosticStatus } from './_hooks/use-diagnostic-status'
+import { OVERALL_WEIGHTING_NOTE } from '@/lib/diagnostic/score-formula-explainer'
+import { sanitiseLegacyScores } from '@/lib/diagnostic/legacy-score-sanitiser'
 import type { DiagnosticRun, DiagnosticFinding, DiagnosticDimension } from '@/types/diagnostic'
 
 // ---------------------------------------------------------------------------
@@ -56,9 +59,18 @@ const ALL_DIMENSIONS: DiagnosticDimension[] = [
   'seo', 'ai_visibility', 'social', 'reputation', 'competitor', 'ads',
 ]
 
-const VALID_DIMENSIONS: DiagnosticDimension[] = [
-  'seo', 'ai_visibility', 'social', 'reputation', 'competitor',
+// Default chip ordering when run.dimensions_requested is missing. Real chips
+// come from the run itself so adding a new dimension doesn't require a UI edit.
+const DEFAULT_CHIP_DIMENSIONS: DiagnosticDimension[] = [
+  'seo', 'ai_visibility', 'ads', 'social', 'reputation', 'competitor',
 ]
+
+// 魏征 H5: module-level baseline cache (per clientId, 5-min TTL).
+// Without this, every dashboard re-render / client-switch round-trip would
+// re-fetch /api/clients/[id]/diagnostic/baseline → supabase + fetchBenchmarks.
+// FDE flipping between CTS and Oztop in the kanban would stack DB queries.
+const BASELINE_CACHE_TTL_MS = 5 * 60 * 1000
+const baselineCache = new Map<string, { at: number; data: Partial<Record<DiagnosticDimension, BaselineInfo>> }>()
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -228,33 +240,62 @@ function NarrativeCard({
   )
 }
 
+// S15: dimensions come from the run itself (dimensions_requested), with a count
+// badge per chip. Empty-count chips are kept but greyed/disabled so FDE can see
+// "0 findings on AI 可见度" is a real signal rather than a missing tab.
 function DimensionFilterTabs({
   active,
   onChange,
+  dimensions,
+  counts,
+  totalCount,
 }: {
   active: DiagnosticDimension | 'all'
   onChange: (dim: DiagnosticDimension | 'all') => void
+  dimensions: DiagnosticDimension[]
+  counts: Partial<Record<DiagnosticDimension, number>>
+  totalCount: number
 }) {
-  const tabs: Array<{ key: DiagnosticDimension | 'all'; label: string }> = [
-    { key: 'all', label: '全部' },
-    ...VALID_DIMENSIONS.map(d => ({ key: d, label: DIMENSION_LABELS[d] })),
+  const tabs: Array<{ key: DiagnosticDimension | 'all'; label: string; count: number }> = [
+    { key: 'all', label: '全部', count: totalCount },
+    ...dimensions.map(d => ({ key: d, label: DIMENSION_LABELS[d], count: counts[d] ?? 0 })),
   ]
 
   return (
     <div className="flex flex-wrap gap-2">
-      {tabs.map(tab => (
-        <button
-          key={tab.key}
-          onClick={() => onChange(tab.key)}
-          className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-            active === tab.key
-              ? 'bg-indigo-600 text-white'
-              : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-          }`}
-        >
-          {tab.label}
-        </button>
-      ))}
+      {tabs.map(tab => {
+        const isActive = active === tab.key
+        const isEmpty = tab.key !== 'all' && tab.count === 0
+        return (
+          <button
+            key={tab.key}
+            onClick={() => onChange(tab.key)}
+            disabled={isEmpty && !isActive}
+            data-testid={`filter-chip-${tab.key}`}
+            data-count={tab.count}
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+              isActive
+                ? 'bg-indigo-600 text-white'
+                : isEmpty
+                  ? 'bg-gray-50 text-gray-300 cursor-not-allowed'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            <span>{tab.label}</span>
+            <span
+              className={`tabular-nums text-[10px] font-semibold rounded-full px-1.5 py-0.5 ${
+                isActive
+                  ? 'bg-white/20 text-white'
+                  : isEmpty
+                    ? 'bg-gray-100 text-gray-300'
+                    : 'bg-white text-gray-500'
+              }`}
+            >
+              {tab.count}
+            </span>
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -277,6 +318,7 @@ export function DiagnosticClient() {
   const [isLaunching, setIsLaunching] = useState(false)
   const [dimFilter, setDimFilter] = useState<DiagnosticDimension | 'all'>('all')
   const [isDocxLoading, setIsDocxLoading] = useState(false)
+  const [baselines, setBaselines] = useState<Partial<Record<DiagnosticDimension, BaselineInfo>>>({})
 
   // Poll active run status while running
   const { status: pollStatus, run: polledRun } = useDiagnosticStatus(clientId, activeRunId)
@@ -326,6 +368,36 @@ export function DiagnosticClient() {
 
   useEffect(() => { void fetchLatest() }, [fetchLatest])
 
+  // Industry baselines for the "为什么是 X 分?" baseline-comparison row.
+  // 魏征 H5: consult module-level cache first; only hit the API on cold/stale.
+  useEffect(() => {
+    let cancelled = false
+
+    const cached = baselineCache.get(clientId)
+    if (cached && Date.now() - cached.at < BASELINE_CACHE_TTL_MS) {
+      setBaselines(cached.data)
+      return
+    }
+
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/clients/${clientId}/diagnostic/baseline`)
+        if (!res.ok) return
+        const data = (await res.json()) as {
+          success: boolean
+          baselines: Partial<Record<DiagnosticDimension, BaselineInfo>>
+        }
+        if (!cancelled && data.success) {
+          setBaselines(data.baselines)
+          baselineCache.set(clientId, { at: Date.now(), data: data.baselines })
+        }
+      } catch {
+        // non-fatal: baseline absence renders as "暂无" in the card
+      }
+    })()
+    return () => { cancelled = true }
+  }, [clientId])
+
   const handleRunDiagnostic = async () => {
     setIsLaunching(true)
     try {
@@ -371,13 +443,53 @@ export function DiagnosticClient() {
 
   const isRunning = Boolean(activeRunId) || pollStatus === 'running'
 
-  const visibleFindings = findings.filter(f => {
-    if (dismissedIds.has(f.id)) return false
+  const livingFindings = findings.filter(f => !dismissedIds.has(f.id))
+
+  const visibleFindings = livingFindings.filter(f => {
     if (dimFilter === 'all') return true
     return f.dimension === dimFilter
   })
 
-  const dimensionScores = (run?.dimension_scores ?? {}) as Partial<Record<DiagnosticDimension, number | null>>
+  const rawDimensionScores = (run?.dimension_scores ?? {}) as Partial<Record<DiagnosticDimension, number | null>>
+
+  // S15: chip dimensions come from the run itself so adding/removing a dimension
+  // never requires a UI edit. Fall back to the default ordering if the run
+  // pre-dates the dimensions_requested column.
+  const requestedDimensions: DiagnosticDimension[] = (
+    (run?.dimensions_requested as DiagnosticDimension[] | null | undefined) ?? DEFAULT_CHIP_DIMENSIONS
+  ).filter((d): d is DiagnosticDimension => ALL_DIMENSIONS.includes(d))
+
+  const findingCountByDim = livingFindings.reduce<Partial<Record<DiagnosticDimension, number>>>((acc, f) => {
+    const dim = f.dimension as DiagnosticDimension
+    acc[dim] = (acc[dim] ?? 0) + 1
+    return acc
+  }, {})
+
+  // S09: dimensions explicitly returned null (data unavailable) — used to wire
+  // the "立即配置 →" deeplink onto findings whose dimension was skipped, so the
+  // SEO "未配置" card + the SEO finding "Target keywords not configured" point
+  // FDE to the same Settings page rather than contradicting each other.
+  const dimensionsSkipped: DiagnosticDimension[] = (run?.dimensions_skipped ?? []) as DiagnosticDimension[]
+  const skippedSet = new Set<DiagnosticDimension>(dimensionsSkipped)
+
+  // 魏征 H4 + 板桥 P0: legacy competitor=100 sanitiser.
+  // Pre-PR-251 CompetitorCollector defaulted to score=100 when < 3 competitors
+  // were found, instead of returning null. PM caught those legacy runs on the
+  // live page ("竞品 100 健康是什么鬼"). Code fix already shipped, but the
+  // historical runs still render green-100 until the FDE reruns.
+  // Pure read-time guard, narrow to the exact bug fingerprint — see
+  // lib/diagnostic/legacy-score-sanitiser.ts tests for boundary behaviour.
+  const sanitised = sanitiseLegacyScores({
+    rawScores: rawDimensionScores,
+    dimensionsSkipped: skippedSet,
+    findingCountByDim,
+  })
+  const dimensionScores = sanitised.scores
+  const effectiveSkippedSet = sanitised.effectiveSkippedSet
+  const fixDeeplinkFor = (dim: DiagnosticDimension): string | undefined => {
+    if (!effectiveSkippedSet.has(dim)) return undefined
+    return `/dashboard/clients/${clientId}/${DIMENSION_CONFIG_ANCHOR[dim]}`
+  }
 
   // ---------------------------------------------------------------------------
   // Render states
@@ -506,7 +618,7 @@ export function DiagnosticClient() {
           </div>
         )}
 
-        {/* Score grid — 2×3 */}
+        {/* Score grid — 2×3 with formula breakdowns (S14) */}
         {(run || isRunning) && (
           <section>
             <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
@@ -517,28 +629,34 @@ export function DiagnosticClient() {
                 // null = data not available; undefined = still loading
                 const raw = dimensionScores[dim]
                 return (
-                  <div key={dim} className="flex flex-col items-center gap-1">
-                    <ScoreGauge
-                      score={raw === undefined ? null : raw}
-                      dimension={DIMENSION_LABELS[dim]}
-                      loading={isRunning && raw === undefined}
-                    />
-                    {raw === null && (
-                      <Link
-                        href={`/dashboard/clients/${clientId}/${DIMENSION_CONFIG_ANCHOR[dim]}`}
-                        className="text-xs text-indigo-500 hover:text-indigo-700 hover:underline"
-                      >
-                        立即配置 →
-                      </Link>
-                    )}
-                  </div>
+                  <DimensionScoreCard
+                    key={dim}
+                    dimension={dim}
+                    dimensionLabel={DIMENSION_LABELS[dim]}
+                    score={raw === undefined ? null : raw}
+                    loading={isRunning && raw === undefined}
+                    baseline={baselines[dim] ?? null}
+                    configHref={
+                      raw === null
+                        ? `/dashboard/clients/${clientId}/${DIMENSION_CONFIG_ANCHOR[dim]}`
+                        : undefined
+                    }
+                  />
                 )
               })}
             </div>
             {run?.overall_score != null && (
-              <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 flex items-center justify-between">
-                <span className="text-sm font-medium text-gray-700">综合得分</span>
-                <ScoreGauge score={run.overall_score} />
+              <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-700">综合得分</span>
+                  <ScoreGauge score={run.overall_score} />
+                </div>
+                <p
+                  data-testid="overall-weighting-note"
+                  className="text-[11px] leading-relaxed text-gray-500"
+                >
+                  {OVERALL_WEIGHTING_NOTE}
+                </p>
               </div>
             )}
           </section>
@@ -560,7 +678,13 @@ export function DiagnosticClient() {
 
             {/* Dimension filter tabs */}
             <div className="bg-white rounded-xl border border-gray-200 p-3 mb-4">
-              <DimensionFilterTabs active={dimFilter} onChange={setDimFilter} />
+              <DimensionFilterTabs
+                active={dimFilter}
+                onChange={setDimFilter}
+                dimensions={requestedDimensions}
+                counts={findingCountByDim}
+                totalCount={livingFindings.length}
+              />
             </div>
 
             {/* Findings list */}
@@ -575,6 +699,7 @@ export function DiagnosticClient() {
                     key={finding.id}
                     finding={finding}
                     onDismiss={handleDismiss}
+                    configHref={fixDeeplinkFor(finding.dimension as DiagnosticDimension)}
                   />
                 ))
               )}
