@@ -52,10 +52,13 @@ export function isBrandedKeyword(keyword: string, brandRoot: string): boolean {
  * into ["cts", "tours"], neither of which equals "ctstours", so the Organic
  * Rankings "Branded vs Non-Branded" card reported Branded 0% for CTS / Oztop.
  *
- * This wrapper layers substring matching against the PM-configured
- * `brand_aliases` array (same matcher shape as `isBrandQueryMatch` used for
- * GSC brand-search volume in PR #336) on top of the unchanged token-equality
- * fallback. Clients without aliases behave exactly as before.
+ * This wrapper layers whole-term (word-boundary) matching of the PM-configured
+ * `brand_aliases` array on top of the unchanged token-equality fallback.
+ * Word boundaries (rather than bare substring) keep short single-token aliases
+ * honest: alias "cts" matches "cts" / "cts tours" but NOT "products" /
+ * "facts" / "connects". Multi-word aliases ("cts tours") still match inside a
+ * longer query ("cts tours auckland"). Clients without aliases behave exactly
+ * as before.
  *
  * NOTE: deliberately does NOT mutate `isBrandedKeyword` — callers that rely on
  * its strict token-equality semantics (e.g. the SEO content agent assembler)
@@ -72,7 +75,7 @@ export function isBrandedKeywordWithAliases(
       for (const alias of brandAliases) {
         if (typeof alias !== 'string') continue
         const a = normaliseBrandTerm(alias)
-        if (a.length >= 2 && k.includes(a)) return true
+        if (a.length >= 2 && matchesWholeTerm(k, a)) return true
       }
     }
   }
@@ -81,10 +84,20 @@ export function isBrandedKeywordWithAliases(
 
 /**
  * Lowercase + collapse internal whitespace. Keeps inner spaces so multi-word
- * aliases ("cts tours") stay matchable as a substring of "cts tours auckland".
+ * aliases ("cts tours") stay matchable inside "cts tours auckland".
  */
 function normaliseBrandTerm(s: string): string {
   return s.toLowerCase().replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Whole-term match: `needle` must appear in `haystack` at word boundaries, so
+ * alias "cts" hits the "cts" token but not the "cts" buried inside "products".
+ * Both args are pre-normalised (lowercased, whitespace-collapsed).
+ */
+function matchesWholeTerm(haystack: string, needle: string): boolean {
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`\\b${escaped}\\b`).test(haystack)
 }
 
 export function estimateKeywordTraffic(keyword: IntentKeyword): number {
