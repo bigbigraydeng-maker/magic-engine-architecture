@@ -397,10 +397,12 @@ npm test           # 测试套件
 
 ## 当前焦点 ⬅️ 每次打开先看这里
 
-> 最后更新：2026-06-10 03:19 NZST （**A2.2 GSC 品牌搜索量上线 (PR #336) + Kanban Content Workbench UX 4 连击 (PR #327) + Phase 33 全部测试通过 ✅**）
+> 最后更新：2026-06-11 01:13 NZST （**Phase 18.B Google Ads connector 启动 — PM 已提交 developer token 申请 (2026-06-11)，等审核 1-7 工作日**）
 
 | 任务 ID | 内容 | 优先级 |
 |---------|------|--------|
+| **🔄 P18.B.0 等 Google Ads token 审核** | PM 已在 Google Ads MCC 提交 developer token 申请（2026-06-11）。等 1-7 个工作日。审核通过后填 Render env `GOOGLE_ADS_DEVELOPER_TOKEN`。期间可用 test account 开发 P18.B.1 骨架 | 🔄 PM 等审核 |
+| **P18.B.1 骨架** | 不阻塞 token：Google Cloud Console 建 OAuth 2.0 client + Service Account；`lib/connectors/google-ads/client.ts`（封装 `google-ads-api` npm package）；env 占位写好 | 📋 子牙可先做（test account）|
 | **🧪 A2.2 端到端验证** | PR #336 已 merged。等 Render 部署完后：①CTS 客户建 Goal 主指标=`brand_search_volume` ②Supabase clients 表 CTS 行的 `brand_aliases` 填 `{"cts tours","cts travel","china travel service","ctsnz"}` ③Goal 详情页主指标卡应显示 ~166 + 数据源 "GSC clicks (28-day brand searches)" ④Oztop 同样跑一遍（aliases `{"oztop building supplies","oz top"}`）。SOP: `docs/sops/brand-aliases-setup-for-gsc.md` | ⚠️ 今日晚上跑 |
 | **A2.3 Oztop GA4 generate_lead 配置** | PM 已熟练 SOP，15 分钟跑完同样配置。GTM trigger + GA4 Event Tag + Mark as key event | 📋 PM 操作 / 15 分钟 |
 | **A3 案例沉淀** | A2.1/A2.2/A2.3 全部跑通后，把 CTS/Oztop 经验固化到 Clients/ 笔记 | 📋 半天（A2 全部上线后做）|

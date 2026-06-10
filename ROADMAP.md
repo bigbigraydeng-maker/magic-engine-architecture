@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-09 01:23 NZST · 当前阶段：**⭐ DAPE 核心引擎 v0.2 ✅ 上线 production (Week 1+2+3 全部 merged, 17 PR / 6126+ 行代码 / 2 P0 hotfix)；Phase 24.A Platform OAuth Connector ✅；Phase 14.C ✅；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-11 01:13 NZST · 当前阶段：**⭐ DAPE 核心引擎 v0.2 ✅ 上线 production (Week 1+2+3 全部 merged, 17 PR / 6126+ 行代码 / 2 P0 hotfix)；Phase 24.A Platform OAuth Connector ✅；Phase 14.C ✅；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 >
 > **⭐ 核心引擎重定义（2026-06-08 PM 拍板）**：ME 核心引擎从 GIMPT (11 层堆叠) 改为 **DAPE** = **Discovery / Analysis / Prescription / Execution** 4 段循环 + AI 贯穿 + 6 大支柱矩阵。详见 [CLAUDE.md § ME 核心引擎 = DAPE](./CLAUDE.md) 顶部段落 + [DAPE spec v0.2](./docs/superpowers/specs/2026-06-08-me-dape-redefine-v0.2.md)（949 行, 5-agent 签字）+ 本文 § 9 DAPE 上线记录。
 >
@@ -2465,13 +2465,30 @@ AI 可见度层（ME 独有 ✅）
 
 **落地代码**：`meta-ads/{execute,actions,sync,snapshots}` 路由 + `lib/meta/{client,guardrails}.ts` + 执行看板 `AdsFixDrawer`（直接执行抽屉）/ `AdsAuditSection`（历史 + 撤销）。±20% 安全闸由 `checkBudgetWithinSafeRange` 在服务端强制（12 单测）。
 
-### Phase 18.B — Google Ads（Developer token 到位后开工）
+### Phase 18.B — Google Ads（Developer token 申请中 · PM 已提交 2026-06-11）
 
-| ID | 任务 |
-|----|------|
-| **P18.B.1** | Google Ads API 接入（Service Account + developer token） |
-| **P18.B.2** | 关键词出价调整 + 否定词添加 |
-| **P18.B.3** | 广告系列启停 |
+> **触发点**：2026-06-11 CTS Google Ads 收到 Capitalisation 拒登邮件，PM 决定走自研 connector 接通 ME ↔ Google Ads（路径 C：申请 developer token + 自己包 connector + 暴露成 MCP）。PM 已在 Google Ads MCC 提交 developer token 申请，等审核 1-7 个工作日。审核期间可用 test account 开发骨架。
+
+> **Why 路径 C 不是路径 A（社区 MCP）/ B（Zapier）**：①ME 战略路径已定（Phase 18 Ads Intelligence 全自研）②写操作能力（暂停/改出价/编辑 Asset）社区 MCP 基本没有 ③Zapier 不能批量诊断 + 飞轮回流 ④Google Ads outcome 必须回写 flywheel_metrics 才能进华佗诊断 / 诸葛亮策略 / 鲁班执行。
+
+| ID | 任务 | 依赖 | 状态 |
+|----|------|------|------|
+| **P18.B.0** | **PM 操作**：Google Ads MCC → API Center → 申请 developer token（用途："Internal marketing automation platform for managing our agency clients' Google Ads accounts"） | — | 🔄 PM 已提交 2026-06-11，等审核 1-7 工作日 |
+| **P18.B.1** | Google Ads OAuth 客户端 + Service Account 接入：Google Cloud Console 建 OAuth 2.0 client + Service Account；配 `GOOGLE_ADS_DEVELOPER_TOKEN` / `GOOGLE_ADS_CLIENT_ID` / `GOOGLE_ADS_CLIENT_SECRET` / `GOOGLE_ADS_REFRESH_TOKEN` env；写 `lib/connectors/google-ads/client.ts`（封装 `google-ads-api` npm package） | P18.B.0 | 📋 |
+| **P18.B.2** | 数据拉取：`lib/connectors/google-ads/reports.ts` — `getCampaigns/getAdGroups/getKeywordPerformance/getAssets`（含 disapproved 状态 + policy reason）；返回结构对齐 `flywheel_metrics`，前缀 `ads.google.*` | P18.B.1 | 📋 |
+| **P18.B.3** | 写操作：`lib/connectors/google-ads/actions.ts` — `pauseCampaign/Keyword/Ad` + `updateBid`（±20% 安全闸，复用 Meta 模式 `checkBudgetWithinSafeRange`） + `addNegativeKeyword` + `updateAsset`（修 Capitalisation 类拒登）；每次操作回写 `flywheel_actions` + before/after snapshot 支持回滚 | P18.B.2 | 📋 |
+| **P18.B.4** | ME 后台 API endpoints：`GET /api/connectors/google-ads/{campaigns,assets,performance}` + `POST .../{pause,update-bid,add-negative,update-asset}`；统一走 `supabaseAdmin` + Bearer token（service-role 模型，不走 RLS） | P18.B.3 | 📋 |
+| **P18.B.5** | 暴露成 MCP tool：ME 的 `magic-engine` MCP server 加 `me_ads_google_get_campaigns / get_disapproved_assets / pause_campaign / update_bid / add_negative_keyword / update_asset` 等 tool，让 Claude 在对话里直接调用 | P18.B.3, P18.B.4 | 📋 |
+| **P18.B.6** | 执行看板 Google Ads Fix 抽屉接线：复用 Phase 18.A 的 `AdsFixDrawer / AdsAuditSection`，诊断维度 ads → Google Ads 优先行动 → 「直接执行 (Google Ads API)」按钮 → 调 P18.B.4 endpoint → `flywheel_actions` 落库 | P18.B.5 | 📋 |
+| **P18.B.7** | 每日数据 cron (03:30 UTC) 拉所有客户 Google Ads 投放数据写 `flywheel_metrics`（前缀 `ads.google.{impressions,clicks,ctr,cpc,spend,conversions,roas}`）+ 子牙复审 connector 真实性 + 测试覆盖 | P18.B.2 | 📋 |
+
+**第一受益客户**：CTS Tours（已有 Google Ads 在投，今天的 Capitalisation 拒登即真实触发场景）
+
+**新依赖（PM 操作清单）**：
+- ⚠️ Google Ads developer token（PM 申请中，等审核）
+- ⚠️ Google Cloud OAuth 2.0 client（PM 在 Google Cloud Console 建，复用 GSC connector 那一组的 project 即可）
+- ⚠️ Render env：`GOOGLE_ADS_DEVELOPER_TOKEN` + `GOOGLE_ADS_CLIENT_ID` + `GOOGLE_ADS_CLIENT_SECRET` + `GOOGLE_ADS_REFRESH_TOKEN`
+- ⚠️ `clients` 表加字段 `google_ads_customer_id`（migration 由子牙起草，PM 拍板才 apply）
 
 ### Phase 18.C — TikTok Ads（Phase 18.B 完成后排期）
 
