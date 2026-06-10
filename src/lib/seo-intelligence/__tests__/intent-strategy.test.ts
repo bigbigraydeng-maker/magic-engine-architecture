@@ -55,6 +55,15 @@ describe('intent strategy helpers', () => {
     expect(isBrandedKeywordWithAliases('flooring brisbane', 'oztopbuildingsupplies', OZTOP_ALIASES)).toBe(false)
   })
 
+  it('does not flag generic words that merely contain a short alias as a substring', () => {
+    // Word-boundary matching: the short alias "cts" must NOT match the "cts"
+    // buried inside ordinary English words (regression guard for the bare
+    // substring matcher 魏征 flagged).
+    for (const kw of ['products', 'facts', 'connects', 'objects', 'prospects']) {
+      expect(isBrandedKeywordWithAliases(kw, 'ctstours', CTS_ALIASES)).toBe(false)
+    }
+  })
+
   it('falls back to token-equality on brandRoot when no aliases configured', () => {
     // No aliases → identical behaviour to isBrandedKeyword (no regression).
     expect(isBrandedKeywordWithAliases('cts tours new zealand', 'cts', null)).toBe(true)
