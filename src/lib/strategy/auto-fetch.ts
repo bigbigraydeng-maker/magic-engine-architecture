@@ -167,7 +167,7 @@ function extractBrandRootFromDomain(domain: string | null): string | null {
 
 /**
  * Normalise a string for brand matching: lowercase + collapse whitespace.
- * Keeps inner spaces (we want "cts tours" to stay 2 words for substring
+ * Keeps inner spaces (we want "cts tours" to stay 2 words for whole-term
  * matching against query "cts tours auckland").
  */
 function normaliseBrandTerm(s: string): string {
@@ -175,18 +175,34 @@ function normaliseBrandTerm(s: string): string {
 }
 
 /**
+ * Whole-term match: `needle` must appear in `haystack` at word boundaries.
+ * Both args are pre-normalised (lowercased, whitespace-collapsed).
+ *
+ * Word boundaries (rather than bare substring) keep short single-token brand
+ * terms honest: "cts" matches "cts" / "cts tours" but NOT the "cts" buried
+ * inside ordinary words like "products" / "facts". Mirrors the matcher used by
+ * isBrandedKeywordWithAliases in seo-intelligence/intent-strategy (kept as a
+ * local copy to avoid importing server-side strategy code into client bundles).
+ */
+function matchesWholeTerm(haystack: string, needle: string): boolean {
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`\\b${escaped}\\b`).test(haystack)
+}
+
+/**
  * Test whether a GSC query counts as a brand search.
  *
  * Matcher candidates (any hit = brand):
- *   1. Any entry in brand_aliases appears as a substring of the query.
+ *   1. Any entry in brand_aliases appears as a whole term in the query.
  *      Use case: multi-word brands ("CTS Tours" aliases: ["cts tours",
  *      "cts travel", "china travel service"]).
- *   2. brandRoot (from domain) appears as a substring of the query.
+ *   2. brandRoot (from domain) appears as a whole term in the query.
  *      Use case: legacy / no-alias clients where the brand is one word
- *      that happens to appear inline in queries ("oztop" inside
+ *      that appears as its own token in queries ("oztop" inside
  *      "oztop building supplies").
  *
- * Both checks are case-insensitive with whitespace collapsed.
+ * Both checks are case-insensitive, whitespace-collapsed, and word-boundary
+ * anchored so a short term like "cts" does not match "products".
  *
  * @param query        GSC top_queries[i].query
  * @param brandRoot    domain root or null
@@ -204,13 +220,13 @@ export function isBrandQueryMatch(
     for (const alias of brandAliases) {
       if (typeof alias !== 'string') continue
       const a = normaliseBrandTerm(alias)
-      if (a.length >= 2 && q.includes(a)) return true
+      if (a.length >= 2 && matchesWholeTerm(q, a)) return true
     }
   }
 
   if (brandRoot) {
     const r = normaliseBrandTerm(brandRoot)
-    if (r.length >= 2 && q.includes(r)) return true
+    if (r.length >= 2 && matchesWholeTerm(q, r)) return true
   }
 
   return false

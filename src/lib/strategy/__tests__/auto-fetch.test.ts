@@ -375,4 +375,21 @@ describe('isBrandQueryMatch', () => {
   it('returns false when both brandRoot and aliases are null', () => {
     expect(isBrandQueryMatch('whatever', null, null)).toBe(false)
   })
+
+  it('does not flag generic words that merely contain a short alias as a substring', () => {
+    // Word-boundary matching: a short alias "cts" must NOT match the "cts"
+    // buried inside ordinary words (regression guard — the old bare-substring
+    // matcher counted these as brand searches and inflated brand_search_volume).
+    for (const q of ['products review', 'facts about nz', 'best prospects', 'objects for sale']) {
+      expect(isBrandQueryMatch(q, null, ['cts'])).toBe(false)
+    }
+    // Same defect via the brandRoot path (short single-token domain root).
+    expect(isBrandQueryMatch('best products', 'cts', null)).toBe(false)
+  })
+
+  it('still matches a short alias when it appears as its own token', () => {
+    expect(isBrandQueryMatch('cts tours',  null, ['cts'])).toBe(true)
+    expect(isBrandQueryMatch('book cts',   null, ['cts'])).toBe(true)
+    expect(isBrandQueryMatch('cts',        'cts', null)).toBe(true)
+  })
 })
