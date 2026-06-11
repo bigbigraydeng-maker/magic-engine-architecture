@@ -167,7 +167,7 @@ function extractBrandRootFromDomain(domain: string | null): string | null {
 
 /**
  * Normalise a string for brand matching: lowercase + collapse whitespace.
- * Keeps inner spaces (we want "cts tours" to stay 2 words for substring
+ * Keeps inner spaces (we want "cts tours" to stay 2 words for whole-term
  * matching against query "cts tours auckland").
  */
 function normaliseBrandTerm(s: string): string {
@@ -175,16 +175,35 @@ function normaliseBrandTerm(s: string): string {
 }
 
 /**
+ * Whole-term match: `needle` must appear in `haystack` at word boundaries.
+ * Both args are pre-normalised (lowercased, whitespace-collapsed).
+ *
+ * Word boundaries (rather than bare substring) keep short single-token brand
+ * terms honest: "cts" matches "cts" / "cts tours" but NOT the "cts" buried
+ * inside ordinary words like "products" / "facts". Used for the human-curated
+ * brand_aliases. Mirrors the matcher used by isBrandedKeywordWithAliases in
+ * seo-intelligence/intent-strategy (kept as a local copy to avoid importing
+ * server-side strategy code into client bundles).
+ */
+function matchesWholeTerm(haystack: string, needle: string): boolean {
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`\\b${escaped}\\b`).test(haystack)
+}
+
+/**
  * Test whether a GSC query counts as a brand search.
  *
- * Matcher candidates (any hit = brand):
- *   1. Any entry in brand_aliases appears as a substring of the query.
- *      Use case: multi-word brands ("CTS Tours" aliases: ["cts tours",
- *      "cts travel", "china travel service"]).
- *   2. brandRoot (from domain) appears as a substring of the query.
- *      Use case: legacy / no-alias clients where the brand is one word
- *      that happens to appear inline in queries ("oztop" inside
- *      "oztop building supplies").
+ * Two matcher paths (any hit = brand):
+ *   1. brand_aliases — human-curated terms, matched at WORD BOUNDARIES.
+ *      Multi-word brands ("cts tours") match inside "cts tours auckland", and
+ *      a short alias ("cts") matches its own token but NOT the "cts" buried
+ *      in "products" / "facts" (regression guard from PR #454 review).
+ *   2. brandRoot (concatenated domain root, e.g. "ctstours") — matched as a
+ *      plain SUBSTRING. This is deliberate: a compound domain root must still
+ *      catch concatenated brand queries where the brand is spelled together
+ *      ("ctstours" inside "ctstoursnz"), which a word-boundary match would
+ *      miss. The root is always a long concatenated token, so substring
+ *      false-positives are not a practical concern (unlike short aliases).
  *
  * Both checks are case-insensitive with whitespace collapsed.
  *
@@ -204,7 +223,7 @@ export function isBrandQueryMatch(
     for (const alias of brandAliases) {
       if (typeof alias !== 'string') continue
       const a = normaliseBrandTerm(alias)
-      if (a.length >= 2 && q.includes(a)) return true
+      if (a.length >= 2 && matchesWholeTerm(q, a)) return true
     }
   }
 
