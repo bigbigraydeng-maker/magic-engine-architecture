@@ -3579,6 +3579,24 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 
 ## 9. 功能完成日志
 
+### 2026-06-11（Branded vs Non-Branded 识别接入 brand_aliases — P12.I.10 bug fix）
+
+**问题**：SEO Intelligence 页 "Branded vs Non-Branded Traffic" 卡片（P12.I.10）对 CTS / Oztop 显示 Branded 0% / Non-Branded 100%，但 GSC 真实数据 CTS 28 天 ~24% / Oztop ~31% 来自品牌词点击。
+
+**根因**：branded 识别（前端 `buildBrandTrafficSplit` 等）只用域名根 token-equality（`isBrandedKeyword(keyword, "ctstours")`），多词品牌词 "cts tours" 拆 ["cts","tours"] 没有 token 等于 "ctstours" → 全判 non-branded。与 A2.2（PR #336）brand_search_volume 当年踩的是同一个坑，但当时只修了 GSC volume 路径，没修这张卡片。
+
+**修复**（复用 PR #336 substring + brand_aliases 模式）：
+- 新增 `isBrandedKeywordWithAliases(keyword, brandRoot, brandAliases?)` wrapper：substring 匹配 `clients.brand_aliases` + fallback 到原 `isBrandedKeyword`（token-equality）。**`isBrandedKeyword` 保留不动**（CLAUDE.md 强约束，不污染通用函数；其他调用方如 seo-agent/assembler 零改动）
+- `buildBrandTrafficSplit` / `prioritizeContentKeywords` / `sortByIntentPriority` 加可选 `brandAliases` 参数（向后兼容）
+- 后端 `rankings/route.ts` select + 返回 `brand_aliases`（live + snapshot 两路径）
+- 前端串 brand_aliases 进卡片 + 品牌词过滤器（卡片与过滤器现在用同一 matcher，修掉旧的不一致）
+
+**验证**：intent-strategy 10/10（新增 5 个：CTS/Oztop 真实样本 + 反例 china tours / flooring brisbane + 无-alias 无回归）；seo-intelligence lib 35/35；build ✅
+
+**待 PM 端到端验证**：CTS/Oztop 填好 brand_aliases（SOP `docs/sops/brand-aliases-setup-for-gsc.md`）+ 等 Render 部署（rankings 缓存 24h）→ 卡片 Branded 应显示 ≈ 24% / ≈ 31%（无需 migration，brand_aliases 字段已存在）
+
+---
+
 ### 2026-06-08（⭐ DAPE 核心引擎 v0.2 上线 — Week 1+2+3 全部 merged production）
 
 **一句话**：ME 核心引擎从 GIMPT (11 层堆叠) 改为 **DAPE = Discovery / Analysis / Prescription / Execution** 4 段循环 + AI 贯穿 + 6 大支柱矩阵。AI 学习闭环真正接通，FDE/客户首次能在 production 看到「AI 当参谋」效果。

@@ -52,7 +52,7 @@ export async function GET(
 
   const { data: client, error: clientError } = await supabaseAdmin
     .from('clients')
-    .select('id, domain, semrush_db')
+    .select('id, domain, semrush_db, brand_aliases')
     .eq('id', clientId)
     .single()
 
@@ -69,6 +69,13 @@ export async function GET(
 
   const locationCode = LOCATION_CODE_BY_DB[client.semrush_db ?? 'au'] ?? LOCATION_CODE_BY_DB.au
 
+  // PM-configured brand aliases drive Branded vs Non-Branded detection on the
+  // client (multi-word brands like "cts tours" never match the single-word
+  // domain root via token-equality). Same source as GSC brand-search volume.
+  const brandAliases = Array.isArray(client.brand_aliases) && client.brand_aliases.length > 0
+    ? client.brand_aliases
+    : null
+
   // Fetch latest GSC snapshot (best-effort, does not block rankings)
   const gscData = await fetchLatestGscQueries(clientId)
 
@@ -80,6 +87,7 @@ export async function GET(
       {
         domain: client.domain,
         keywords: enriched,
+        brand_aliases: brandAliases,
         gsc_status: gscData.status,
         gsc_period: gscData.period,
       },
@@ -101,6 +109,7 @@ export async function GET(
         {
           domain: client.domain,
           keywords: enriched,
+          brand_aliases: brandAliases,
           source: 'snapshot',
           snapshot_date: snapshot.snapshot_date,
           gsc_status: gscData.status,
