@@ -3568,7 +3568,11 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 
 **来源**：#454（Branded vs Non-Branded 卡片）魏征复审时指出 `isBrandQueryMatch` 有同款缺陷（与卡片侧同源），当时只修了卡片侧，本次补修 GSC volume 侧。
 
-**修复**：`q.includes(...)` → **word-boundary** 匹配（`\bneedle\b`），alias 与 brandRoot 两条路径都改。短 alias 现在只命中整词：`"cts"` 命中 `cts` / `cts tours` / `book cts` 但不命中 `products` / `facts`。与 #454 intent-strategy 的 matcher 同源（注释点明有意复制，避免把 server 端 strategy 代码引入客户端 bundle）。
+**修复**（分两条路径，PR #457 Codex 复审后定稿）：
+- **brand_aliases 路径** → **word-boundary**（`\bneedle\b`）：人工策划词，短 alias `"cts"` 命中 `cts` / `cts tours` / `book cts` 但不命中 `products` / `facts`（修 魏征 关切）。
+- **brandRoot 路径** → **保留 substring**：域名根是拼接型长 token，必须能命中拼接品牌词（`ctstours` 命中 `ctstoursnz`）—— Codex 指出一刀切 word-boundary 会漏这类，对无 alias 客户造成 `brand_search_volume` 回归。brandRoot 永远是长拼接根，substring 误报风险可忽略。
+
+alias matcher 与 #454 intent-strategy 同源（注释点明有意复制，避免把 server 端 strategy 代码引入客户端 bundle）。
 
 **验证**：`isBrandQueryMatch` 单测全过（新增 2 组：5 个短 alias 误报反例 + 整词命中正例）；seo-intelligence + auto-fetch-ai-visibility 43/43；build ✅（147/147）。
 

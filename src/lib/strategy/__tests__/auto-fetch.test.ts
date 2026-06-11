@@ -377,19 +377,28 @@ describe('isBrandQueryMatch', () => {
   })
 
   it('does not flag generic words that merely contain a short alias as a substring', () => {
-    // Word-boundary matching: a short alias "cts" must NOT match the "cts"
-    // buried inside ordinary words (regression guard — the old bare-substring
-    // matcher counted these as brand searches and inflated brand_search_volume).
+    // Word-boundary matching on aliases: a short alias "cts" must NOT match the
+    // "cts" buried inside ordinary words (regression guard — the old bare-
+    // substring matcher counted these as brand searches and inflated
+    // brand_search_volume).
     for (const q of ['products review', 'facts about nz', 'best prospects', 'objects for sale']) {
       expect(isBrandQueryMatch(q, null, ['cts'])).toBe(false)
     }
-    // Same defect via the brandRoot path (short single-token domain root).
-    expect(isBrandQueryMatch('best products', 'cts', null)).toBe(false)
   })
 
   it('still matches a short alias when it appears as its own token', () => {
     expect(isBrandQueryMatch('cts tours',  null, ['cts'])).toBe(true)
     expect(isBrandQueryMatch('book cts',   null, ['cts'])).toBe(true)
-    expect(isBrandQueryMatch('cts',        'cts', null)).toBe(true)
+  })
+
+  it('matches a compound domain root as a substring inside concatenated brand queries', () => {
+    // brandRoot path stays substring on purpose: a compound root must catch
+    // concatenated brand spellings (PR #457 Codex review). Word-boundary would
+    // miss these because letters follow the root with no boundary.
+    expect(isBrandQueryMatch('ctstoursnz',     'ctstours', null)).toBe(true)
+    expect(isBrandQueryMatch('ctstours2024',   'ctstours', null)).toBe(true)
+    expect(isBrandQueryMatch('visit ctstours', 'ctstours', null)).toBe(true)
+    // Unrelated query still does not match.
+    expect(isBrandQueryMatch('day tours nz',   'ctstours', null)).toBe(false)
   })
 })
