@@ -2,8 +2,20 @@
 
 > **更新时间**：2026-06-11 NZST
 > **PM 拍板**：CTS 月广告预算从 NZ$900 (v1/v2) 升到 **NZ$3,000**，分配 Google + Meta 两平台
-> **Google / Meta 具体比例**：晚些讨论
+> **Google / Meta 比例**：✅ **方案 A 已拍板** — Google **NZ$2,100** + Meta **NZ$900**（7:3）
 > **替代**：本文档是 `02-google-ads-plan.md` § 8/9 + `05-v2-update-from-me-screenshots.md` § 8 的预算块**增量更新**
+
+---
+
+## 0 · 决策日志
+
+| 时间 | 决策 | 状态 |
+|---|---|---|
+| 2026-06-11 03:30 NZST | NZ$3,000 / Google + Meta 双平台 | ✅ PM 拍板 |
+| 2026-06-11 12:25 NZST | 方案 A 7:3 (Google 2,100 + Meta 900) | ✅ PM 拍板 |
+| 2026-06-11 待定 | CTS Conversion tracking 修复（套 Oztop 01 SOP）| 🔴 并行启动中（task #29）|
+| 2026-06-11 待定 | CTS Meta CAPI 接入 | 🔴 跟随 Conversion 修复一起做 |
+| 2026-06-11+7 待定 | Campaign 3 Display Remarketing 上线 | 📋 等 GA4 90 天 audience 积累 |
 
 ---
 
