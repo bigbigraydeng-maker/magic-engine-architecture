@@ -3562,6 +3562,23 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 
 ## 9. 功能完成日志
 
+### 2026-06-12（keyword gap 排除品类词 — Oztop shutters/blinds 误命中修复 [P12.I.BF1]）
+
+**问题**：Oztop Building Supplies 跑 keyword gap，返回 100 个词全是 shutters/blinds/windows 主题（27.1K 月搜/条），但 Oztop master_brief 明确不卖这类。根因：`BUILDING_SUPPLIES_TERMS` 通用词表含 shutter/blind/curtain，当 domain/industry hint 含 flooring/oztop 时整张表启用 → 这些词被当 business-relevant → 100 slot 被顶满。影响所有「卖部分建材类别但不卖全部」的客户。
+
+**修复**（从 PR #460 重切干净版 —— 原分支漂移成 78 文件/+4718，本 PR 只取真实 7 文件 +417/-3）：
+- `isBusinessRelevantKeyword` 加可选 `excludedTopics: string[]`（默认 `[]`，向后完全兼容），**排除检查在 business-relevance 之前运行**（同时在 businessTerms + excludedTopics 的词被拦截）
+- 新增 `extractExcludedTopics(brief)` 从 `master_briefs.excluded_topics` 读取
+- `competitors-gap` route 接线传 excludedTopics
+- 新增 `/api/clients/[id]/excluded-topics` GET/PATCH + `ExcludedTopicsPanel`（Settings 页，FDE 可视化填，不进 Supabase Studio —— 符合「配置类必有 UI」强约束）
+- Migration `20260611000001_master_briefs_excluded_topics.sql`：单列 `ADD COLUMN IF NOT EXISTS`，**⚠️ 待 PM apply**
+
+**验证**：keyword-relevance 13/13；build ✅（147/147）。基于最新 main 重切，无分支漂移。
+
+**待 PM**：①apply migration ②Settings 页给 Oztop 填 `shutter,blind,curtain,plantation,window treatment` → 重跑 keyword gap 验证出真实 flooring 业务词。
+
+---
+
 ### 2026-06-11（isBrandQueryMatch 短 alias 误报修复 — brand_search_volume GSC 路径）
 
 **问题**：A2.2（PR #336）的 `isBrandQueryMatch`（`brand_search_volume` Goal 主指标的 GSC 品牌词 clicks 聚合）用裸 substring `q.includes(alias)` 匹配，短 alias（如 `"cts"`）会把普通 GSC query `products review` / `facts about nz` 误判为品牌搜索 → 虚高 `brand_search_volume`。
