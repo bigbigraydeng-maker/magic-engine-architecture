@@ -595,6 +595,50 @@
   document.addEventListener('slidechange',function(){try{window.lucide&&window.lucide.createIcons();}catch(e){}});
 })();
 </script>
+<!-- Always-visible click navigation. deck-stage disables click-to-advance on
+     desktop and its own toolbar fades out, so we add an obvious, persistent
+     bar that drives the deck by dispatching the same arrow-key events it
+     already listens for on window. Conflict-free (sits outside <deck-stage>). -->
+<style>
+  #ml-nav{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:99999;
+    display:flex;align-items:center;gap:6px;padding:8px;border-radius:999px;
+    background:rgba(8,22,46,.72);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+    border:1px solid rgba(127,182,255,.28);box-shadow:0 10px 30px rgba(0,8,28,.45);
+    font-family:'Poppins','Noto Sans SC','PingFang SC',sans-serif;user-select:none}
+  #ml-nav button{appearance:none;border:0;cursor:pointer;display:inline-flex;align-items:center;gap:7px;
+    height:42px;padding:0 20px;border-radius:999px;background:linear-gradient(135deg,#2D7FF9,#36C5FF);
+    color:#06203F;font:700 17px 'Noto Sans SC';transition:filter .15s,transform .1s}
+  #ml-nav button:hover{filter:brightness(1.08)}
+  #ml-nav button:active{transform:scale(.96)}
+  #ml-nav button[disabled]{background:rgba(255,255,255,.12);color:#6E84A6;cursor:default;filter:none}
+  #ml-nav .chev{font-size:22px;line-height:1;font-weight:800}
+  #ml-count{min-width:74px;text-align:center;color:#CFE2FB;font:600 16px 'Poppins';letter-spacing:.04em;padding:0 6px}
+  @media print{#ml-nav{display:none!important}}
+</style>
+<div id="ml-nav" role="navigation" aria-label="幻灯片翻页">
+  <button id="ml-prev" tabindex="-1" aria-label="上一页"><span class="chev">‹</span>上一页</button>
+  <span id="ml-count">1 / 16</span>
+  <button id="ml-next" tabindex="-1" aria-label="下一页">下一页<span class="chev">›</span></button>
+</div>
+<script>
+(function(){
+  function fire(k){ window.dispatchEvent(new KeyboardEvent('keydown',{key:k,bubbles:true,cancelable:true})); }
+  var prev=document.getElementById('ml-prev'), next=document.getElementById('ml-next'),
+      countEl=document.getElementById('ml-count');
+  var total=(document.querySelectorAll('deck-stage > section').length)||16, idx=0;
+  function paint(){
+    countEl.textContent=(idx+1)+' / '+total;
+    prev.disabled=(idx<=0); next.disabled=(idx>=total-1);
+  }
+  prev.addEventListener('click',function(e){e.preventDefault(); fire('ArrowLeft');});
+  next.addEventListener('click',function(e){e.preventDefault(); fire('ArrowRight');});
+  document.addEventListener('slidechange',function(e){
+    if(e.detail){ if(typeof e.detail.total==='number') total=e.detail.total;
+      if(typeof e.detail.index==='number') idx=e.detail.index; paint(); }
+  });
+  paint();
+})();
+</script>
 <template id="__bundler_thumbnail">
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="18" fill="#0B2447"/><path d="M22 70 L40 40 L50 58 L60 40 L78 70" fill="none" stroke="#36C5FF" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/><path d="M70 24 l3 7 7 3 -7 3 -3 7 -3 -7 -7 -3 7 -3z" fill="#7FB6FF"/></svg>
 </template>

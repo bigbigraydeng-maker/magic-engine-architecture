@@ -30,7 +30,7 @@ python3 public/decks/magic-lab-class-membership/serve.py
 # 打开 http://127.0.0.1:8799/index.html
 ```
 
-翻页：`←` / `→` / 空格 / 缩略图栏点击。按 `P`（浏览器打印 → 另存为 PDF）导出一页一张的 PDF。
+翻页：底部「上一页 / 下一页」按钮、`←` / `→` / 空格、或左侧缩略图栏点击。按 `P`（浏览器打印 → 另存为 PDF）导出一页一张的 PDF。
 
 ## 重新生成离线单文件
 
