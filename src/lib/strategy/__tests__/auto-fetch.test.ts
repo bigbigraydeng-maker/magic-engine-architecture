@@ -85,7 +85,7 @@ describe('autoFetchMetricValue — brand_search_volume', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value).toBe(120 + 45 + 15) // 180 branded clicks
-    expect(result.source).toContain('GSC')
+    expect(result.source).toBe('auto.gsc_brand_clicks') // machine provenance key; human text lives in label
     expect(result.label).toContain('180')
     expect(result.label).toContain('3 queries')
     expect(result.snapshot_date).toBe('2026-06-04')
@@ -122,8 +122,7 @@ describe('autoFetchMetricValue — brand_search_volume', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value).toBe(500)
-    expect(result.source).toContain('DataForSEO')
-    expect(result.source).toContain('GSC not yet connected')
+    expect(result.source).toBe('auto.dataforseo_keyword_volume') // fell back off GSC to DataForSEO
     expect(mockBulkKeywordVolume).toHaveBeenCalledOnce()
   })
 
@@ -168,7 +167,7 @@ describe('autoFetchMetricValue — brand_search_volume', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value).toBe(50)
-    expect(result.source).toContain('DataForSEO')
+    expect(result.source).toBe('auto.dataforseo_keyword_volume')
   })
 
   // ── Both tiers fail ───────────────────────────────────────────────────────
@@ -275,7 +274,7 @@ describe('autoFetchMetricValue — brand_search_volume', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value).toBe(127 + 21 + 13 + 9) // 170 branded clicks
-    expect(result.source).toContain('GSC')
+    expect(result.source).toBe('auto.gsc_brand_clicks')
     expect(result.label).toContain('4 queries')
     expect(mockBulkKeywordVolume).not.toHaveBeenCalled()
   })
@@ -374,5 +373,31 @@ describe('isBrandQueryMatch', () => {
 
   it('returns false when both brandRoot and aliases are null', () => {
     expect(isBrandQueryMatch('whatever', null, null)).toBe(false)
+  })
+
+  it('does not flag generic words that merely contain a short alias as a substring', () => {
+    // Word-boundary matching on aliases: a short alias "cts" must NOT match the
+    // "cts" buried inside ordinary words (regression guard — the old bare-
+    // substring matcher counted these as brand searches and inflated
+    // brand_search_volume).
+    for (const q of ['products review', 'facts about nz', 'best prospects', 'objects for sale']) {
+      expect(isBrandQueryMatch(q, null, ['cts'])).toBe(false)
+    }
+  })
+
+  it('still matches a short alias when it appears as its own token', () => {
+    expect(isBrandQueryMatch('cts tours',  null, ['cts'])).toBe(true)
+    expect(isBrandQueryMatch('book cts',   null, ['cts'])).toBe(true)
+  })
+
+  it('matches a compound domain root as a substring inside concatenated brand queries', () => {
+    // brandRoot path stays substring on purpose: a compound root must catch
+    // concatenated brand spellings (PR #457 Codex review). Word-boundary would
+    // miss these because letters follow the root with no boundary.
+    expect(isBrandQueryMatch('ctstoursnz',     'ctstours', null)).toBe(true)
+    expect(isBrandQueryMatch('ctstours2024',   'ctstours', null)).toBe(true)
+    expect(isBrandQueryMatch('visit ctstours', 'ctstours', null)).toBe(true)
+    // Unrelated query still does not match.
+    expect(isBrandQueryMatch('day tours nz',   'ctstours', null)).toBe(false)
   })
 })

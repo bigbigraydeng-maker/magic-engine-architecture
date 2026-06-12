@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap
 
-> 最后更新：2026-06-11 01:13 NZST · 当前阶段：**⭐ DAPE 核心引擎 v0.2 ✅ 上线 production (Week 1+2+3 全部 merged, 17 PR / 6126+ 行代码 / 2 P0 hotfix)；Phase 24.A Platform OAuth Connector ✅；Phase 14.C ✅；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
+> 最后更新：2026-06-11 16:53 NZST · 当前阶段：**⭐ DAPE 核心引擎 v0.2 ✅ 上线 production (Week 1+2+3 全部 merged, 17 PR / 6126+ 行代码 / 2 P0 hotfix)；Phase 24.A Platform OAuth Connector ✅；Phase 14.C ✅；Phase 14.B ✅；Phase 23 Cross-Agent Memory Layer ✅；Phase 19 IDOR 修复 ✅**。
 >
 > **⭐ 核心引擎重定义（2026-06-08 PM 拍板）**：ME 核心引擎从 GIMPT (11 层堆叠) 改为 **DAPE** = **Discovery / Analysis / Prescription / Execution** 4 段循环 + AI 贯穿 + 6 大支柱矩阵。详见 [CLAUDE.md § ME 核心引擎 = DAPE](./CLAUDE.md) 顶部段落 + [DAPE spec v0.2](./docs/superpowers/specs/2026-06-08-me-dape-redefine-v0.2.md)（949 行, 5-agent 签字）+ 本文 § 9 DAPE 上线记录。
 >
@@ -3578,6 +3578,24 @@ brand_voice        品牌语气（下拉：Professional / Friendly / Bold / Witt
 ---
 
 ## 9. 功能完成日志
+
+### 2026-06-11（isBrandQueryMatch 短 alias 误报修复 — brand_search_volume GSC 路径）
+
+**问题**：A2.2（PR #336）的 `isBrandQueryMatch`（`brand_search_volume` Goal 主指标的 GSC 品牌词 clicks 聚合）用裸 substring `q.includes(alias)` 匹配，短 alias（如 `"cts"`）会把普通 GSC query `products review` / `facts about nz` 误判为品牌搜索 → 虚高 `brand_search_volume`。
+
+**来源**：#454（Branded vs Non-Branded 卡片）魏征复审时指出 `isBrandQueryMatch` 有同款缺陷（与卡片侧同源），当时只修了卡片侧，本次补修 GSC volume 侧。
+
+**修复**（分两条路径，PR #457 Codex 复审后定稿）：
+- **brand_aliases 路径** → **word-boundary**（`\bneedle\b`）：人工策划词，短 alias `"cts"` 命中 `cts` / `cts tours` / `book cts` 但不命中 `products` / `facts`（修 魏征 关切）。
+- **brandRoot 路径** → **保留 substring**：域名根是拼接型长 token，必须能命中拼接品牌词（`ctstours` 命中 `ctstoursnz`）—— Codex 指出一刀切 word-boundary 会漏这类，对无 alias 客户造成 `brand_search_volume` 回归。brandRoot 永远是长拼接根，substring 误报风险可忽略。
+
+alias matcher 与 #454 intent-strategy 同源（注释点明有意复制，避免把 server 端 strategy 代码引入客户端 bundle）。
+
+**验证**：`isBrandQueryMatch` 单测全过（新增 2 组：5 个短 alias 误报反例 + 整词命中正例）；seo-intelligence + auto-fetch-ai-visibility 43/43；build ✅（147/147）。
+
+> ⚠️ 同文件 `autoFetchMetricValue` 有 4 个**预存失败**（`result.source` 期望 `'GSC'` 实为 `'auto.gsc_brand_clicks'` 大小写不一致），与本修复无关（merged base 上即失败），未触碰，待单独处理。
+
+---
 
 ### 2026-06-11（Branded vs Non-Branded 识别接入 brand_aliases — P12.I.10 bug fix）
 
