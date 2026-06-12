@@ -85,7 +85,7 @@ describe('autoFetchMetricValue — brand_search_volume', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value).toBe(120 + 45 + 15) // 180 branded clicks
-    expect(result.source).toContain('GSC')
+    expect(result.source).toBe('auto.gsc_brand_clicks') // machine provenance key; human text lives in label
     expect(result.label).toContain('180')
     expect(result.label).toContain('3 queries')
     expect(result.snapshot_date).toBe('2026-06-04')
@@ -122,8 +122,7 @@ describe('autoFetchMetricValue — brand_search_volume', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value).toBe(500)
-    expect(result.source).toContain('DataForSEO')
-    expect(result.source).toContain('GSC not yet connected')
+    expect(result.source).toBe('auto.dataforseo_keyword_volume') // fell back off GSC to DataForSEO
     expect(mockBulkKeywordVolume).toHaveBeenCalledOnce()
   })
 
@@ -168,7 +167,7 @@ describe('autoFetchMetricValue — brand_search_volume', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value).toBe(50)
-    expect(result.source).toContain('DataForSEO')
+    expect(result.source).toBe('auto.dataforseo_keyword_volume')
   })
 
   // ── Both tiers fail ───────────────────────────────────────────────────────
@@ -275,7 +274,7 @@ describe('autoFetchMetricValue — brand_search_volume', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value).toBe(127 + 21 + 13 + 9) // 170 branded clicks
-    expect(result.source).toContain('GSC')
+    expect(result.source).toBe('auto.gsc_brand_clicks')
     expect(result.label).toContain('4 queries')
     expect(mockBulkKeywordVolume).not.toHaveBeenCalled()
   })
