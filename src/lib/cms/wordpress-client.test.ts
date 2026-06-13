@@ -659,3 +659,136 @@ describe('CMS_ACTION_TYPE.UPDATE_EXISTING', () => {
     expect(new Set(values).size).toBe(values.length)
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// P12.R.M3 — extractSlugFromWpUrl / findWordpressPostByUrl
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('extractSlugFromWpUrl', () => {
+  it.each<[string, string]>([
+    ['https://oztop.com.au/tile-sizes-explained/',                     'tile-sizes-explained'],
+    ['https://oztop.com.au/tile-sizes-explained',                      'tile-sizes-explained'],
+    ['https://oztop.com.au/blog/tile-sizes-explained/',                'tile-sizes-explained'],
+    ['https://oztop.com.au/2026/06/tile-sizes-explained/',             'tile-sizes-explained'],
+    ['https://oztop.com.au/tile-sizes-explained/?utm_source=x',        'tile-sizes-explained'],
+    ['https://oztop.com.au/tile-sizes-explained/#section-2',           'tile-sizes-explained'],
+    ['https://oztop.com.au/category/posts/%E6%B5%8B%E8%AF%95/',        '测试'],  // URL-encoded Chinese
+  ])('extracts slug from %p → %p', async (input, expected) => {
+    const { extractSlugFromWpUrl } = await import('./wordpress-client')
+    expect(extractSlugFromWpUrl(input)).toBe(expected)
+  })
+
+  it.each<[string]>([
+    ['not-a-url'],
+    ['https://oztop.com.au/'],          // root only, no path segment
+    ['https://oztop.com.au'],           // no trailing slash, no path
+  ])('returns null for %p', async (input) => {
+    const { extractSlugFromWpUrl } = await import('./wordpress-client')
+    expect(extractSlugFromWpUrl(input)).toBeNull()
+  })
+})
+
+describe('findWordpressPostByUrl', () => {
+  const realFetch = globalThis.fetch
+  let fetchMock: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchMock = vi.fn()
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+  })
+  afterEach(() => {
+    globalThis.fetch = realFetch
+    vi.restoreAllMocks()
+  })
+
+  it('finds a post by slug — single match', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse(JSON.stringify([
+      {
+        id: 123,
+        title:    { raw: 'Tile Sizes Explained' },
+        slug:     'tile-sizes-explained',
+        excerpt:  { raw: 'guide' },
+        content:  { raw: '<p>body</p>' },
+        status:   'publish',
+        link:     'https://oztop.com.au/tile-sizes-explained/',
+        modified: '2026-06-13T00:00:00',
+        meta:     { _yoast_wpseo_title: 'Yoast Title', _yoast_wpseo_metadesc: 'Yoast Desc' },
+      },
+    ]), { status: 200 }))
+
+    const { findWordpressPostByUrl } = await import('./wordpress-client')
+    const outcome = await findWordpressPostByUrl(CONFIG, 'https://oztop.com.au/tile-sizes-explained/')
+
+    const calledUrl = fetchMock.mock.calls[0][0] as string
+    expect(calledUrl).toContain('/wp-json/wp/v2/posts?slug=tile-sizes-explained&context=edit&per_page=2')
+
+    expect(outcome.post).toMatchObject({
+      postId:    123,
+      postType:  'post',
+      title:     'Tile Sizes Explained',
+      slug:      'tile-sizes-explained',
+      seoTitle:  'Yoast Title',
+    })
+    expect(outcome.meta.searchedAs).toBe('post')
+  })
+
+  it('falls through to /pages when no post matches the slug', async () => {
+    // posts: empty array → fallback to pages
+    fetchMock.mockResolvedValueOnce(makeResponse(JSON.stringify([]), { status: 200 }))
+    fetchMock.mockResolvedValueOnce(makeResponse(JSON.stringify([
+      {
+        id: 7,
+        title:  { raw: 'About' },
+        slug:   'about',
+        status: 'publish',
+      },
+    ]), { status: 200 }))
+
+    const { findWordpressPostByUrl } = await import('./wordpress-client')
+    const outcome = await findWordpressPostByUrl(CONFIG, 'https://oztop.com.au/about/')
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect((fetchMock.mock.calls[1][0] as string)).toContain('/wp-json/wp/v2/pages?slug=about')
+    expect(outcome.post?.postType).toBe('page')
+    expect(outcome.post?.postId).toBe(7)
+  })
+
+  it('returns null + meta when neither posts nor pages match', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse(JSON.stringify([]), { status: 200 }))
+    fetchMock.mockResolvedValueOnce(makeResponse(JSON.stringify([]), { status: 200 }))
+
+    const { findWordpressPostByUrl } = await import('./wordpress-client')
+    const outcome = await findWordpressPostByUrl(CONFIG, 'https://oztop.com.au/no-such-page/')
+
+    expect(outcome.post).toBeNull()
+    expect(outcome.meta.searchedAs).toBe('both')
+  })
+
+  it('returns null without any fetch when slug cannot be extracted', async () => {
+    const { findWordpressPostByUrl } = await import('./wordpress-client')
+    const outcome = await findWordpressPostByUrl(CONFIG, 'https://oztop.com.au/')
+    expect(outcome.post).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(0)
+  })
+
+  it('returns >1 match warning via meta.postsTried when slug collides', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse(JSON.stringify([
+      { id: 100, title: { raw: 'A' }, slug: 'x', status: 'publish' },
+      { id: 101, title: { raw: 'B' }, slug: 'x', status: 'draft'   },
+    ]), { status: 200 }))
+
+    const { findWordpressPostByUrl } = await import('./wordpress-client')
+    const outcome = await findWordpressPostByUrl(CONFIG, 'https://oztop.com.au/x/')
+    expect(outcome.post?.postId).toBe(100)
+    expect(outcome.meta.postsTried).toBe(2)
+  })
+
+  it('propagates WAF errors from expectJson', async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse('<html>captcha</html>', {
+      status: 200, url: 'https://oztop.com.au/sgcaptcha/?x',
+    }))
+    const { findWordpressPostByUrl } = await import('./wordpress-client')
+    await expect(findWordpressPostByUrl(CONFIG, 'https://oztop.com.au/tile-sizes-explained/'))
+      .rejects.toMatchObject({ name: 'WordpressFetchError', code: 'SITEGROUND_ANTIBOT' })
+  })
+})

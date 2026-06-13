@@ -700,21 +700,9 @@ export async function getExistingWordpressPost(
   const res  = await wpFetch(config, path)
   const data = await expectJson(res, `getExisting${postType === 'page' ? 'Page' : 'Post'}`)
 
-  const meta = (data.meta ?? {}) as Record<string, unknown>
-  return {
-    postId,
-    postType,
-    title:    extractRenderedOrRaw(data.title),
-    slug:     typeof data.slug === 'string' ? data.slug : '',
-    excerpt:  extractRenderedOrRaw(data.excerpt),
-    content:  extractRenderedOrRaw(data.content),
-    status:   typeof data.status   === 'string' ? data.status   : 'publish',
-    link:     typeof data.link     === 'string' ? data.link     : '',
-    modified: typeof data.modified === 'string' ? data.modified : '',
-    seoTitle:       optionalString(meta[YOAST_TITLE_KEY]),
-    seoDescription: optionalString(meta[YOAST_METADESC_KEY]),
-    focusKeyphrase: optionalString(meta[YOAST_FOCUSKW_KEY]),
-  }
+  // Reuse the shared parser (P12.R.M3) but trust the caller's postId since the
+  // direct-by-id endpoint always returns the same row we asked for.
+  return { ...parseExistingPost(data, postType), postId }
 }
 
 /**
@@ -823,5 +811,125 @@ export async function updateExistingWordpressPost(
     link:          typeof data.link     === 'string' ? data.link     : '',
     modified:      typeof data.modified === 'string' ? data.modified : '',
     updatedFields,
+  }
+}
+
+// ─── findWordpressPostByUrl (P12.R.M3 — Page Rewriter UI lookup) ──────────────
+
+/**
+ * Extract a likely slug from a WordPress permalink URL.
+ *
+ * Strips query/fragment, drops the trailing slash, and returns the last
+ * non-empty path segment. Handles both flat permalinks
+ * (`/tile-sizes-explained/`) and prefixed permalinks
+ * (`/blog/tile-sizes-explained/`, `/2026/06/tile-sizes-explained/`).
+ *
+ * Returns null if the URL cannot be parsed or has no path segment.
+ *
+ * Exported for unit testing — keep this pure (no I/O).
+ */
+export function extractSlugFromWpUrl(url: string): string | null {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return null
+  }
+  const segments = parsed.pathname.split('/').filter(s => s.length > 0)
+  if (segments.length === 0) return null
+  const last = segments[segments.length - 1]
+  try {
+    return decodeURIComponent(last)
+  } catch {
+    return last
+  }
+}
+
+interface FindByUrlResultMeta {
+  searchedAs:    'post' | 'page' | 'both'
+  postsTried:    number   // how many post results came back (for diagnostics)
+  pagesTried:    number
+}
+
+export interface FindWordpressPostByUrlOutcome {
+  post: ExistingWordpressPost | null
+  meta: FindByUrlResultMeta
+}
+
+/**
+ * Find an existing WP post or page that matches a given permalink URL.
+ *
+ * Strategy:
+ *   1. Extract the slug from the URL.
+ *   2. Query `/posts?slug=<slug>&context=edit&per_page=2`.
+ *   3. If no post matches, query `/pages?slug=<slug>&context=edit&per_page=2`.
+ *   4. Return the first match shaped as ExistingWordpressPost, or null.
+ *
+ * We only ever return ONE match — if more than one row shares a slug (rare;
+ * usually from a republish-with-old-slug history) the caller must disambiguate
+ * by direct postId. The `meta.postsTried` / `pagesTried` counts surface that
+ * fact to the UI so FDE can be warned.
+ *
+ * The same-host check is enforced upstream by validateWordpressSiteUrl on
+ * `config.siteUrl`; this function does not re-validate the input URL host
+ * (the caller decides whether to require host match).
+ */
+export async function findWordpressPostByUrl(
+  config: WordpressClientConfig,
+  url:    string,
+): Promise<FindWordpressPostByUrlOutcome> {
+  const slug = extractSlugFromWpUrl(url)
+  if (!slug) {
+    return { post: null, meta: { searchedAs: 'both', postsTried: 0, pagesTried: 0 } }
+  }
+  const slugParam = encodeURIComponent(slug)
+
+  // 1. Posts first (most common case).
+  const postsRes  = await wpFetch(config, `/posts?slug=${slugParam}&context=edit&per_page=2`)
+  const postsData = await expectJson(postsRes, 'findPostBySlug') as unknown as Array<Record<string, unknown>>
+  const postsArr  = Array.isArray(postsData) ? postsData : []
+
+  if (postsArr.length > 0) {
+    return {
+      post: parseExistingPost(postsArr[0], 'post'),
+      meta: { searchedAs: 'post', postsTried: postsArr.length, pagesTried: 0 },
+    }
+  }
+
+  // 2. Pages fallback.
+  const pagesRes  = await wpFetch(config, `/pages?slug=${slugParam}&context=edit&per_page=2`)
+  const pagesData = await expectJson(pagesRes, 'findPageBySlug') as unknown as Array<Record<string, unknown>>
+  const pagesArr  = Array.isArray(pagesData) ? pagesData : []
+
+  if (pagesArr.length > 0) {
+    return {
+      post: parseExistingPost(pagesArr[0], 'page'),
+      meta: { searchedAs: 'both', postsTried: 0, pagesTried: pagesArr.length },
+    }
+  }
+
+  return { post: null, meta: { searchedAs: 'both', postsTried: 0, pagesTried: 0 } }
+}
+
+/**
+ * Shared parser — converts a raw WP REST post/page row into ExistingWordpressPost.
+ * Kept private (not exported) so its shape can evolve without breaking callers.
+ */
+function parseExistingPost(raw: Record<string, unknown>, postType: WordpressPostType): ExistingWordpressPost {
+  const meta = (raw.meta ?? {}) as Record<string, unknown>
+  const id   = typeof raw.id === 'number' ? raw.id : Number(raw.id)
+  return {
+    postId:   Number.isInteger(id) && id > 0 ? id : 0,
+    postType,
+    title:    extractRenderedOrRaw(raw.title),
+    slug:     typeof raw.slug === 'string' ? raw.slug : '',
+    excerpt:  extractRenderedOrRaw(raw.excerpt),
+    content:  extractRenderedOrRaw(raw.content),
+    status:   typeof raw.status   === 'string' ? raw.status   : 'publish',
+    link:     typeof raw.link     === 'string' ? raw.link     : '',
+    modified: typeof raw.modified === 'string' ? raw.modified : '',
+    seoTitle:       optionalString(meta[YOAST_TITLE_KEY]),
+    seoDescription: optionalString(meta[YOAST_METADESC_KEY]),
+    focusKeyphrase: optionalString(meta[YOAST_FOCUSKW_KEY]),
   }
 }
