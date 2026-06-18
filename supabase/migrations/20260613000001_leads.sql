@@ -14,7 +14,10 @@
 
 CREATE TABLE IF NOT EXISTS public.leads (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  client_id       UUID NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
+  -- ON DELETE RESTRICT: leads are a captured business asset (real customers'
+  -- contact details). Deleting a client must NOT silently drop their leads —
+  -- forces an explicit business decision (archive / export / re-assign).
+  client_id       UUID NOT NULL REFERENCES public.clients(id) ON DELETE RESTRICT,
 
   -- Required form fields
   name            TEXT NOT NULL,
@@ -40,8 +43,10 @@ CREATE TABLE IF NOT EXISTS public.leads (
   client_ip       TEXT,    -- from X-Forwarded-For; used for rate limiting
   user_agent      TEXT,
 
-  -- Lifecycle
-  status          TEXT NOT NULL DEFAULT 'new',  -- new | contacted | qualified | won | lost | spam
+  -- Lifecycle. CHECK constraint enforces the enum at write-time so a buggy
+  -- UI / API can't stash unknown values that crash Kanban downstream.
+  status          TEXT NOT NULL DEFAULT 'new'
+                  CHECK (status IN ('new', 'contacted', 'qualified', 'won', 'lost', 'spam')),
   notes           TEXT,                          -- FDE follow-up notes
 
   submitted_at    TIMESTAMPTZ,                   -- client clock; informational only

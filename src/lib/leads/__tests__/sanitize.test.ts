@@ -146,6 +146,41 @@ describe('sanitizeLead — overflow guards on optional fields', () => {
   })
 })
 
+describe('sanitizeLead — submitted_at ISO validation (魏征 P1.5)', () => {
+  it('accepts a well-formed ISO timestamp and round-trips through toISOString', () => {
+    const r = sanitizeLead({ ...valid, submitted_at: '2026-06-13T05:00:00.000Z' })
+    if (!r.ok) throw new Error('expected ok')
+    expect(r.lead.submitted_at).toBe('2026-06-13T05:00:00.000Z')
+  })
+
+  it('normalises non-canonical (but parseable) inputs to canonical ISO', () => {
+    const r = sanitizeLead({ ...valid, submitted_at: '2026-06-13T05:00:00' })
+    if (!r.ok) throw new Error('expected ok')
+    expect(r.lead.submitted_at).toMatch(/^2026-06-13T\d{2}:00:00\.000Z$/)
+  })
+
+  it.each(['abc', 'not-a-date', '2026-13-99', '', '   '])(
+    'drops unparseable submitted_at %p to null (does NOT 22007-error the insert)',
+    (val) => {
+      const r = sanitizeLead({ ...valid, submitted_at: val })
+      if (!r.ok) throw new Error('expected ok')
+      expect(r.lead.submitted_at).toBeNull()
+    },
+  )
+
+  it('rejects oversized submitted_at strings (> 40 chars) to null', () => {
+    const r = sanitizeLead({ ...valid, submitted_at: '2026-06-13T05:00:00.000Z' + 'x'.repeat(30) })
+    if (!r.ok) throw new Error('expected ok')
+    expect(r.lead.submitted_at).toBeNull()
+  })
+
+  it('drops non-string submitted_at to null', () => {
+    const r = sanitizeLead({ ...valid, submitted_at: 1718254800000 as unknown as string })
+    if (!r.ok) throw new Error('expected ok')
+    expect(r.lead.submitted_at).toBeNull()
+  })
+})
+
 describe('sanitizeLead — strict typing on attribution', () => {
   it('drops attribution fields when they are non-strings', () => {
     const r = sanitizeLead({

@@ -81,7 +81,11 @@ function corsHeaders(allowOrigin: string | null): Record<string, string> {
 
 function chooseAllowOrigin(reqOrigin: string | null, allowList: string[]): string | null {
   if (!reqOrigin) return null
-  return allowList.includes(reqOrigin.toLowerCase()) ? reqOrigin : null
+  // Normalise BOTH sides and ECHO the normalised value — keeping the raw
+  // (possibly attacker-cased) string in the response header is a footgun for
+  // any future code that compares headers to the allowlist.
+  const norm = reqOrigin.toLowerCase()
+  return allowList.includes(norm) ? norm : null
 }
 
 function shape(body: Record<string, unknown>, init: { status?: number; headers?: Record<string, string> } = {}): NextResponse {
@@ -139,26 +143,26 @@ async function handlePost(req: NextRequest, { params }: RouteContext): Promise<N
     )
   }
 
-  // Sanitize FIRST so a bot-flood payload never reaches the rate-limit query.
-  const clean = sanitizeLead(raw)
-
-  // Honeypot — quietly succeed, no DB write, no rate-limit consumption.
-  if (!clean.ok && clean.code === 'HONEYPOT') {
-    return shape({ success: true, lead_id: null }, { headers })
-  }
-  if (!clean.ok) {
+  // We need a stable rate-limit key BEFORE doing anything that touches the
+  // DB. Reject sources we cannot key — otherwise every XFF-less request gets
+  // bucketed under the literal 'unknown' and a single attacker on a quirky
+  // path can exhaust the bucket and starve real users (魏征 P0.3).
+  const clientIp = extractClientIp(req.headers)
+  if (clientIp === 'unknown') {
     return shape(
-      { success: false, error: clean.reason, code: clean.code },
+      {
+        success: false,
+        error:   'Source IP could not be determined — please submit through the live LP, not a server-side relay.',
+        code:    'INVALID_INPUT',
+      },
       { status: 400, headers },
     )
   }
 
   // Rate limit per (client_id, client_ip) over the last RATE_WINDOW_SEC.
-  // Uses the leads table itself as the counter — same row that an insert
-  // produces is the row a subsequent check counts. Bots that 429 don't
-  // pollute the table because the limit check runs BEFORE the insert.
-  const clientIp = extractClientIp(req.headers)
-  const since    = new Date(Date.now() - RATE_WINDOW_SEC * 1000).toISOString()
+  // Honeypot submissions ALSO consume the bucket so attackers can't use
+  // honeypot field as a way to burst the endpoint (魏征 P0.2).
+  const since = new Date(Date.now() - RATE_WINDOW_SEC * 1000).toISOString()
   const { count: recent, error: rateErr } = await supabaseAdmin
     .from('leads')
     .select('id', { count: 'exact', head: true })
@@ -177,6 +181,24 @@ async function handlePost(req: NextRequest, { params }: RouteContext): Promise<N
         code:    'RATE_LIMITED',
       },
       { status: 429, headers },
+    )
+  }
+
+  // Sanitize AFTER the rate-limit check so a bot-flood payload still gets
+  // counted toward its IP's quota. (Sanitize is cheap; the order matters only
+  // for the rate-limit guarantee.)
+  const clean = sanitizeLead(raw)
+
+  // Honeypot — quietly succeed, no DB insert. The bucket was already debited
+  // by the rate-limit check above, so a determined spammer cannot use the
+  // honeypot field as a way to bypass throttling.
+  if (!clean.ok && clean.code === 'HONEYPOT') {
+    return shape({ success: true, lead_id: null }, { headers })
+  }
+  if (!clean.ok) {
+    return shape(
+      { success: false, error: clean.reason, code: clean.code },
+      { status: 400, headers },
     )
   }
 

@@ -141,6 +141,50 @@ describe('OPTIONS /api/clients/[id]/leads', () => {
     const res = await OPTIONS(makeOptions({ origin: 'https://evil.example' }), { params: { id: CLIENT_ID } })
     expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull()
   })
+
+  // 魏征 P0.1 — normalise BOTH sides + ECHO the normalised value, so future
+  // logic that compares ACAO to the allowlist cannot get tripped by a
+  // funky-cased attacker Origin.
+  it('echoes Origin in lowercase even when the request used a weird case', async () => {
+    mockSupabaseFor({ clientDomain: 'oztopbuildingsupplies.com.au' })
+    const res = await OPTIONS(
+      makeOptions({ origin: 'HTTPS://OZTOPBUILDINGSUPPLIES.COM.AU' }),
+      { params: { id: CLIENT_ID } },
+    )
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://oztopbuildingsupplies.com.au')
+  })
+
+  // 魏征 P1.7 — HTTP (non-SSL) origins are intentionally NOT in the allowlist;
+  // ME's client LPs must be served over HTTPS. A no-ACAO response surfaces the
+  // missing-SSL configuration to the FDE instead of silently working.
+  it('rejects an http:// origin (apex without SSL)', async () => {
+    mockSupabaseFor({ clientDomain: 'oztopbuildingsupplies.com.au' })
+    const res = await OPTIONS(
+      makeOptions({ origin: 'http://oztopbuildingsupplies.com.au' }),
+      { params: { id: CLIENT_ID } },
+    )
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull()
+  })
+
+  // 魏征 P1.7 — non-apex/non-www subdomain not in allowlist. If a client moves
+  // the LP under a different subdomain we add it explicitly; we don't open
+  // wildcard subdomain match as that's a much bigger attack surface.
+  it('rejects a non-apex / non-www subdomain', async () => {
+    mockSupabaseFor({ clientDomain: 'oztopbuildingsupplies.com.au' })
+    const res = await OPTIONS(
+      makeOptions({ origin: 'https://shop.oztopbuildingsupplies.com.au' }),
+      { params: { id: CLIENT_ID } },
+    )
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull()
+  })
+
+  it('handles OPTIONS without Origin (server-side / non-browser caller)', async () => {
+    mockSupabaseFor({ clientDomain: 'oztopbuildingsupplies.com.au' })
+    const res = await OPTIONS(makeOptions(), { params: { id: CLIENT_ID } })
+    expect(res.status).toBe(204)
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull()
+    expect(res.headers.get('Vary')).toBe('Origin')
+  })
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -197,18 +241,30 @@ describe('POST /api/clients/[id]/leads — happy path', () => {
     })
   })
 
-  it('still inserts when Origin is missing (e.g. server-side relay)', async () => {
+  it('still inserts when Origin is missing (e.g. server-side relay) BUT supplies XFF', async () => {
     let captured: Record<string, unknown> | undefined
     mockSupabaseFor({
       clientDomain:  'oztopbuildingsupplies.com.au',
       insertCapture: (row) => { captured = row },
     })
     const res = await POST(
-      makeRequest({ name: 'Sarah', phone: '0412345678' }),
+      makeRequest({ name: 'Sarah', phone: '0412345678' }, { headers: { 'x-forwarded-for': '203.0.113.10' } }),
       { params: { id: CLIENT_ID } },
     )
     expect(res.status).toBe(200)
     expect(captured?.name).toBe('Sarah')
+  })
+
+  // 魏征 P0.3 — without an IP we can rate-limit-key on, refuse to insert so
+  // a single attacker cannot starve the shared 'unknown' bucket.
+  it('rejects requests with no XFF / X-Real-IP (cannot determine source)', async () => {
+    mockSupabaseFor({ clientDomain: 'oztopbuildingsupplies.com.au' })
+    const res = await POST(
+      makeRequest({ name: 'Ghost', phone: '0412345678' }, { origin: OZTOP_HOST }),
+      { params: { id: CLIENT_ID } },
+    )
+    expect(res.status).toBe(400)
+    expect((await res.json()).code).toBe('INVALID_INPUT')
   })
 })
 
@@ -233,11 +289,18 @@ describe('POST — client lookup + input validation', () => {
   it('returns 400 INVALID_INPUT when name is missing', async () => {
     mockSupabaseFor({ clientDomain: 'oztopbuildingsupplies.com.au' })
     const res = await POST(
-      makeRequest({ phone: '0412345678' }, { origin: OZTOP_HOST }),
+      makeRequest(
+        { phone: '0412345678' },
+        { origin: OZTOP_HOST, headers: { 'x-forwarded-for': '203.0.113.10' } },
+      ),
       { params: { id: CLIENT_ID } },
     )
     expect(res.status).toBe(400)
-    expect((await res.json()).code).toBe('INVALID_INPUT')
+    const body = await res.json()
+    expect(body.code).toBe('INVALID_INPUT')
+    // Make sure we're hitting the sanitizer's required-field guard, NOT the
+    // IP-required guard (which has its own dedicated test above).
+    expect(body.error).toMatch(/name/i)
   })
 
   it('returns 400 INVALID_INPUT when body is not JSON', async () => {
@@ -259,7 +322,7 @@ describe('POST — client lookup + input validation', () => {
     const res = await POST(
       makeRequest(
         { name: 'Bot', phone: '0412345678', company_hp: 'http://spam.example' },
-        { origin: OZTOP_HOST },
+        { origin: OZTOP_HOST, headers: { 'x-forwarded-for': '203.0.113.10' } },
       ),
       { params: { id: CLIENT_ID } },
     )
@@ -268,6 +331,24 @@ describe('POST — client lookup + input validation', () => {
     expect(body.success).toBe(true)
     expect(body.lead_id).toBeNull()
     expect(inserted).toBe(false)
+  })
+
+  // 魏征 P0.2 — honeypot ALSO consumes the rate-limit bucket so a determined
+  // spammer cannot use the trap field as a free pass to burst requests.
+  it('honeypot path is itself rate-limited (cannot be used to burst)', async () => {
+    mockSupabaseFor({
+      clientDomain: 'oztopbuildingsupplies.com.au',
+      recentCount:  5,    // already at the limit for this (client, ip)
+    })
+    const res = await POST(
+      makeRequest(
+        { name: 'Bot', phone: '0412345678', company_hp: 'gotcha' },
+        { origin: OZTOP_HOST, headers: { 'x-forwarded-for': '203.0.113.99' } },
+      ),
+      { params: { id: CLIENT_ID } },
+    )
+    expect(res.status).toBe(429)
+    expect((await res.json()).code).toBe('RATE_LIMITED')
   })
 })
 
@@ -301,9 +382,59 @@ describe('POST — rate limit', () => {
       recentCount:  4,
     })
     const res = await POST(
-      makeRequest({ name: 'Edge', phone: '0412345678' }, { origin: OZTOP_HOST }),
+      makeRequest(
+        { name: 'Edge', phone: '0412345678' },
+        { origin: OZTOP_HOST, headers: { 'x-forwarded-for': '203.0.113.50' } },
+      ),
       { params: { id: CLIENT_ID } },
     )
     expect(res.status).toBe(200)
+  })
+
+  // 魏征 P1.6 — fail-OPEN explicit test. When the rate-limit count query
+  // throws (Supabase blip), we must still let a real lead through rather than
+  // 429-failing a paying customer.
+  it('fails OPEN when the rate-limit count query errors out', async () => {
+    let inserted = false
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'clients') {
+        return {
+          select:      vi.fn().mockReturnThis(),
+          eq:          vi.fn().mockReturnThis(),
+          maybeSingle: vi.fn().mockResolvedValue({ data: { domain: 'oztopbuildingsupplies.com.au' }, error: null }),
+        } as unknown as ReturnType<typeof supabaseAdmin.from>
+      }
+      if (table === 'leads') {
+        const chain = {
+          select: vi.fn().mockImplementation((_cols: string, opts?: { count?: string; head?: boolean }) => {
+            if (opts?.count === 'exact' && opts?.head === true) {
+              // Simulate Supabase coughing on the rate-limit count.
+              return {
+                eq:  vi.fn().mockReturnThis(),
+                gte: vi.fn().mockResolvedValue({ count: null, error: { message: 'supabase blip' } }),
+              }
+            }
+            // After-insert .select('id').single() — still succeeds.
+            return { single: vi.fn().mockResolvedValue({ data: { id: 'lead-rl-open' }, error: null }) }
+          }),
+          eq:     vi.fn().mockReturnThis(),
+          gte:    vi.fn().mockReturnThis(),
+          insert: vi.fn(() => { inserted = true; return chain }),
+        }
+        return chain as unknown as ReturnType<typeof supabaseAdmin.from>
+      }
+      throw new Error(`unexpected ${table}`)
+    })
+
+    const res = await POST(
+      makeRequest(
+        { name: 'Sarah', phone: '0412345678' },
+        { origin: OZTOP_HOST, headers: { 'x-forwarded-for': '203.0.113.77' } },
+      ),
+      { params: { id: CLIENT_ID } },
+    )
+    expect(res.status).toBe(200)
+    expect((await res.json()).lead_id).toBe('lead-rl-open')
+    expect(inserted).toBe(true)
   })
 })

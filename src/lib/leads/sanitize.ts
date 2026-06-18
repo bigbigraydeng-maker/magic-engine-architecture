@@ -138,11 +138,22 @@ export function sanitizeLead(raw: RawLeadInput): SanitizeResult {
       utm_source:   strField(raw.utm_source,   OPTIONAL_CAPS.utm_source),
       utm_medium:   strField(raw.utm_medium,   OPTIONAL_CAPS.utm_medium),
       utm_campaign: strField(raw.utm_campaign, OPTIONAL_CAPS.utm_campaign),
-      submitted_at: typeof raw.submitted_at === 'string' && raw.submitted_at.length <= 40
-        ? raw.submitted_at
-        : null,
+      // ISO timestamp validation: a stray "abc" from a tampered LP would
+      // otherwise reach PostgreSQL and 22007-error the whole insert, dropping
+      // a real lead. Validate parse-ability and fallback to null on garbage.
+      submitted_at: parseIsoTimestamp(raw.submitted_at),
     },
   }
+}
+
+function parseIsoTimestamp(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  if (v.length > 40) return null
+  const ts = Date.parse(v)
+  if (!Number.isFinite(ts)) return null
+  // Normalise to a canonical ISO 8601 so DB receives the same shape regardless
+  // of trailing milliseconds / timezone abbreviation oddities.
+  return new Date(ts).toISOString()
 }
 
 /**
