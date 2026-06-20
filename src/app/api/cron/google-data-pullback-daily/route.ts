@@ -1,20 +1,23 @@
 /**
  * GET /api/cron/google-data-pullback-daily
  *
- * Daily cron — pulls GSC + GA4 + Meta Ads snapshots for every client.
- * Upserts into gsc_performance_snapshots, ga4_traffic_snapshots, and
- * inserts into meta_ads_snapshots.
+ * Daily cron — pulls GSC + GA4 + Meta Ads + Google Ads snapshots for every client.
+ * Upserts into gsc_performance_snapshots, ga4_traffic_snapshots,
+ * meta_ads_snapshots, and writes Google Ads aggregates into flywheel_metrics.
  *
  * Schedule: daily at 3am UTC (~3pm NZST)
  * Auth: Bearer ${CRON_SECRET}
  * Max duration: 15 min (Render standard plan)
  *
  * Per-client logic:
- *   - GSC: requires anchor='gsc', status='connected', config.site_url
- *   - GA4: requires anchor='ga4', status='connected', config.property_id
- *   - Meta Ads: requires clients.meta_ad_account_id + META_SYSTEM_USER_TOKEN env
+ *   - GSC:        anchor='gsc',  status='connected', config.site_url
+ *   - GA4:        anchor='ga4',  status='connected', config.property_id
+ *   - Meta Ads:   clients.meta_ad_account_id + META_SYSTEM_USER_TOKEN env
+ *   - Google Ads: platform_oauth_connections (provider='google_ads', status='active')
+ *                 + GOOGLE_ADS_DEVELOPER_TOKEN / CLIENT_ID / CLIENT_SECRET /
+ *                 REFRESH_TOKEN env
  *
- * Reference: ROADMAP.md P17.A.4, P17.B.3
+ * Reference: ROADMAP.md P17.A.4, P17.B.3, P18.B.1
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -22,7 +25,8 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { fetchGscSnapshot } from '@/lib/gsc/client'
 import { fetchGa4Snapshot } from '@/lib/ga4/client'
 import { getAdAccountInsights, getAdCampaignInsights, MetaAdsInsights } from '@/lib/meta/client'
-import { SEO_METRIC_KEY, GA4_METRIC_KEY } from '@/lib/flywheel/vocabulary'
+import { fetchAccountInsights, loadGoogleAdsCreds } from '@/lib/google-ads/client'
+import { SEO_METRIC_KEY, GA4_METRIC_KEY, ADS_METRIC_KEY } from '@/lib/flywheel/vocabulary'
 import { MetaAdsAdapter } from '@/lib/flywheel/adapters/MetaAdsAdapter'
 import { startCronRun } from '@/lib/cron/run-logger'
 
@@ -38,18 +42,23 @@ interface ConnectorRow {
 }
 
 interface ClientWork {
-  client_id:          string
-  client_name?:       string
-  site_url?:          string
-  property_id?:       string
-  meta_ad_account_id?: string
+  client_id:               string
+  client_name?:            string
+  site_url?:               string
+  property_id?:            string
+  meta_ad_account_id?:     string
+  google_ads_customer_id?: string
 }
 
 interface ClientResult {
   client_id: string
-  gsc?:  { success: boolean; snapshot_id?: string; error?: string }
-  ga4?:  { success: boolean; snapshot_id?: string; error?: string }
-  meta?: { success: boolean; snapshot_id?: string; error?: string }
+  gsc?:       { success: boolean; snapshot_id?: string; error?: string }
+  ga4?:       { success: boolean; snapshot_id?: string; error?: string }
+  meta?:      { success: boolean; snapshot_id?: string; error?: string }
+  /** Google Ads sync emits metrics straight into flywheel_metrics — no
+   *  snapshot table yet, so `metrics_written` mirrors the spend/impressions
+   *  count instead of a `snapshot_id`. */
+  google_ads?: { success: boolean; metrics_written?: number; error?: string }
 }
 
 // ─── Route ───────────────────────────────────────────────────────────────────
@@ -69,8 +78,8 @@ export async function GET(req: NextRequest) {
 
   const cronRun = await startCronRun('google-data-pullback-daily')
 
-  // ── 1. Load connected Google connectors + Meta Ads accounts in parallel ───
-  const [connResult, metaResult] = await Promise.all([
+  // ── 1. Load connected Google connectors + Meta + Google Ads accounts in parallel
+  const [connResult, metaResult, googleAdsResult] = await Promise.all([
     supabaseAdmin
       .from('client_connectors')
       .select('client_id, anchor, config')
@@ -80,6 +89,15 @@ export async function GET(req: NextRequest) {
       .from('clients')
       .select('id, name, meta_ad_account_id')
       .not('meta_ad_account_id', 'is', null),
+    // Google Ads customer_id lives in platform_oauth_connections.account_id
+    // for now (PR #2 moves it to clients.google_ads_customer_id with a
+    // backwards-compatible fallback). Only 'active' connections sync.
+    supabaseAdmin
+      .from('platform_oauth_connections')
+      .select('client_id, account_id')
+      .eq('provider', 'google_ads')
+      .eq('status', 'active')
+      .not('account_id', 'is', null),
   ])
 
   if (connResult.error) {
@@ -92,6 +110,15 @@ export async function GET(req: NextRequest) {
 
   const connectors = connResult.data
   const metaClients = (metaResult.data ?? []) as Array<{ id: string; name: string; meta_ad_account_id: string }>
+  // googleAdsResult.error is non-fatal (table may not exist in some envs) — log
+  // and proceed with an empty list rather than failing the whole cron run.
+  if (googleAdsResult.error) {
+    console.warn(
+      '[cron] google_ads connections lookup failed (non-fatal):',
+      googleAdsResult.error.message,
+    )
+  }
+  const googleAdsClients = (googleAdsResult.data ?? []) as Array<{ client_id: string; account_id: string }>
 
   // ── 2. Build per-client work map ───────────────────────────────────────────
   const workMap = new Map<string, ClientWork>()
@@ -122,8 +149,19 @@ export async function GET(req: NextRequest) {
     workMap.set(c.id, entry)
   }
 
+  // Merge Google Ads clients into work map
+  for (const c of googleAdsClients) {
+    const entry = workMap.get(c.client_id) ?? { client_id: c.client_id }
+    entry.google_ads_customer_id = c.account_id
+    workMap.set(c.client_id, entry)
+  }
+
   const work = Array.from(workMap.values()).filter(
-    w => w.site_url !== undefined || w.property_id !== undefined || w.meta_ad_account_id !== undefined,
+    w =>
+      w.site_url !== undefined ||
+      w.property_id !== undefined ||
+      w.meta_ad_account_id !== undefined ||
+      w.google_ads_customer_id !== undefined,
   )
 
   if (work.length === 0) {
@@ -135,6 +173,7 @@ export async function GET(req: NextRequest) {
       gsc_synced:        0,
       ga4_synced:        0,
       meta_synced:       0,
+      google_ads_synced: 0,
       failed:            0,
       results:           [],
     })
@@ -164,24 +203,34 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    if (client.google_ads_customer_id) {
+      result.google_ads = await syncGoogleAds(client.client_id, client.google_ads_customer_id)
+    }
+
     results.push(result)
   }
 
   // ── 4. Tally results ───────────────────────────────────────────────────────
-  const gscSynced  = results.filter(r => r.gsc?.success).length
-  const ga4Synced  = results.filter(r => r.ga4?.success).length
-  const metaSynced = results.filter(r => r.meta?.success).length
-  const failed     = results.filter(
-    r => r.gsc?.success === false || r.ga4?.success === false || r.meta?.success === false,
+  const gscSynced       = results.filter(r => r.gsc?.success).length
+  const ga4Synced       = results.filter(r => r.ga4?.success).length
+  const metaSynced      = results.filter(r => r.meta?.success).length
+  const googleAdsSynced = results.filter(r => r.google_ads?.success).length
+  const failed          = results.filter(
+    r =>
+      r.gsc?.success === false ||
+      r.ga4?.success === false ||
+      r.meta?.success === false ||
+      r.google_ads?.success === false,
   ).length
 
   // Collect per-client errors so postmortem is possible without Render logs.
   // Diagnostic only — no behavior change.
   const errors = results.flatMap(r => {
-    const out: Array<{ client_id: string; source: 'gsc'|'ga4'|'meta'; error: string }> = []
-    if (r.gsc?.success === false && r.gsc.error)   out.push({ client_id: r.client_id, source: 'gsc',  error: r.gsc.error })
-    if (r.ga4?.success === false && r.ga4.error)   out.push({ client_id: r.client_id, source: 'ga4',  error: r.ga4.error })
-    if (r.meta?.success === false && r.meta.error) out.push({ client_id: r.client_id, source: 'meta', error: r.meta.error })
+    const out: Array<{ client_id: string; source: 'gsc'|'ga4'|'meta'|'google_ads'; error: string }> = []
+    if (r.gsc?.success === false && r.gsc.error)               out.push({ client_id: r.client_id, source: 'gsc',        error: r.gsc.error })
+    if (r.ga4?.success === false && r.ga4.error)               out.push({ client_id: r.client_id, source: 'ga4',        error: r.ga4.error })
+    if (r.meta?.success === false && r.meta.error)             out.push({ client_id: r.client_id, source: 'meta',       error: r.meta.error })
+    if (r.google_ads?.success === false && r.google_ads.error) out.push({ client_id: r.client_id, source: 'google_ads', error: r.google_ads.error })
     return out
   })
 
@@ -189,7 +238,7 @@ export async function GET(req: NextRequest) {
     processed: results.length,
     completed: results.length - failed,
     failed,
-    summary: { gsc_synced: gscSynced, ga4_synced: ga4Synced, meta_synced: metaSynced, errors },
+    summary: { gsc_synced: gscSynced, ga4_synced: ga4Synced, meta_synced: metaSynced, google_ads_synced: googleAdsSynced, errors },
   })
   return NextResponse.json({
     success:           true,
@@ -197,6 +246,7 @@ export async function GET(req: NextRequest) {
     gsc_synced:        gscSynced,
     ga4_synced:        ga4Synced,
     meta_synced:       metaSynced,
+    google_ads_synced: googleAdsSynced,
     failed,
     results,
   })
@@ -416,6 +466,98 @@ async function syncMeta(
     await appendAirtableMetaDaily(clientSlug, adAccountId, insights, until).catch(() => {})
 
     return { success: true, snapshot_id: (data as { id: string }).id }
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
+  }
+}
+
+/**
+ * Sync Google Ads account-level metrics for one client.
+ *
+ * Writes 30-day aggregates straight into flywheel_metrics under the shared
+ * `ads.account.*` namespace, discriminating by `source='google_ads_pullback'`
+ * so a client with both Meta + Google Ads stays distinguishable. No snapshot
+ * table yet — we'll add one when the prescription engine wants per-campaign
+ * history (separate PR; out of scope for the skeleton).
+ *
+ * Returns `success: false` (not a throw) so a missing/expired token or a
+ * single broken account doesn't kill the rest of the cron run.
+ */
+async function syncGoogleAds(
+  clientId: string,
+  customerId: string,
+): Promise<{ success: boolean; metrics_written?: number; error?: string }> {
+  try {
+    const creds = loadGoogleAdsCreds(customerId)
+    if (!creds) {
+      return {
+        success: false,
+        error:
+          'GOOGLE_ADS_* env vars missing — set DEVELOPER_TOKEN, CLIENT_ID, CLIENT_SECRET, REFRESH_TOKEN in Render env',
+      }
+    }
+
+    const insights = await fetchAccountInsights(creds, 30)
+    if (!insights) {
+      return {
+        success: false,
+        error:
+          'fetchAccountInsights returned null — check developer token approval status and customer_id',
+      }
+    }
+
+    // No unique constraint on (client_id, metric_key, measured_at) for the
+    // `ads.account.*` namespace, so delete today's google_ads_pullback rows
+    // first to avoid stale dupes accumulating across cron retries.
+    const today      = new Date().toISOString().slice(0, 10)
+    const todayStart = `${today}T00:00:00.000Z`
+    const todayEnd   = `${today}T23:59:59.999Z`
+    const adsMetricKeys = [
+      ADS_METRIC_KEY.SPEND,
+      ADS_METRIC_KEY.IMPRESSIONS,
+      ADS_METRIC_KEY.CLICKS,
+      ADS_METRIC_KEY.CTR,
+      ADS_METRIC_KEY.CPC,
+      ADS_METRIC_KEY.CONVERSIONS,
+      ADS_METRIC_KEY.CPA,
+    ]
+    await supabaseAdmin
+      .from('flywheel_metrics')
+      .delete()
+      .eq('client_id', clientId)
+      .eq('source', 'google_ads_pullback')
+      .in('metric_key', adsMetricKeys)
+      .gte('measured_at', todayStart)
+      .lte('measured_at', todayEnd)
+      .then(() => {}, () => {})
+
+    const measuredAt = new Date().toISOString()
+    const rows = [
+      { metric_key: ADS_METRIC_KEY.SPEND,       metric_value: insights.spend },
+      { metric_key: ADS_METRIC_KEY.IMPRESSIONS, metric_value: insights.impressions },
+      { metric_key: ADS_METRIC_KEY.CLICKS,      metric_value: insights.clicks },
+      { metric_key: ADS_METRIC_KEY.CTR,         metric_value: insights.ctr },
+      { metric_key: ADS_METRIC_KEY.CPC,         metric_value: insights.cpc },
+      { metric_key: ADS_METRIC_KEY.CONVERSIONS, metric_value: insights.conversions },
+      { metric_key: ADS_METRIC_KEY.CPA,         metric_value: insights.cpa },
+    ].map(m => ({
+      client_id:    clientId,
+      flywheel:     'ads' as const,
+      metric_key:   m.metric_key,
+      metric_value: m.metric_value,
+      source:       'google_ads_pullback',
+      source_ref:   {
+        customer_id:  customerId,
+        period_start: insights.period_start,
+        period_end:   insights.period_end,
+      },
+      measured_at:  measuredAt,
+    }))
+
+    const { error } = await supabaseAdmin.from('flywheel_metrics').insert(rows)
+    if (error) return { success: false, error: error.message }
+
+    return { success: true, metrics_written: rows.length }
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
   }
