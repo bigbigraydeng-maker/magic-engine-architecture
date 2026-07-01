@@ -1,9 +1,10 @@
 -- seo_meta_log: tracks every AI-generated meta optimisation per page
--- Used by oztop-seo-optimizer loop to enforce 30-day cooldown per page slug
+-- Used by oztop-seo-optimizer loop to enforce cooldown per page slug
 
 CREATE TABLE IF NOT EXISTS seo_meta_log (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id     uuid NOT NULL,
+  content_type  text NOT NULL DEFAULT 'pages',  -- 'pages' | 'posts'
   page_slug     text NOT NULL,
   page_url      text NOT NULL,
   keyword       text NOT NULL,
