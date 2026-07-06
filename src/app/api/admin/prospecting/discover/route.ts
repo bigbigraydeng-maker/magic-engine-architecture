@@ -4,32 +4,38 @@
  * Admin-only. Step 1 of the outbound pipeline: pull local business listings
  * for one industry × city seed and insert new rows into outbound_prospects.
  *
- * Body: { industry: string, city: string, limit?: number, offset?: number }
+ * Body: { industry: string, city: string, limit?: number }
  *   - industry: key of INDUSTRY_CATEGORIES (e.g. "flooring")
  *   - city:     key of CITY_COORDS (e.g. "brisbane")
- *   - offset:   pagination into the seed's result set (results are ordered
- *               by review count desc, so page deeper to go beyond the top 100)
+ *   - limit:    max businesses to pull (default 40, cap 60)
  *
- * Async: the DataForSEO business_listings query can take longer than the
- * edge/gateway HTTP timeout (Cloudflare 502 at ~100s), so the route returns
- * 202 immediately and runs the pull + insert in the background — the same
- * fire-and-forget pattern the project uses for the Zhangqian scan. The
- * console polls the list for new rows.
+ * Source: Google Places (see lib/places/business-discovery.ts). Results are
+ * Google's relevance order, not review count.
+ *
+ * Async: the discovery query (text search + one Place Details per result)
+ * can exceed the edge/gateway HTTP timeout (Cloudflare 502 at ~100s), so the
+ * route returns 202 immediately and runs the pull + insert in the background
+ * — the same fire-and-forget pattern the project uses for the Zhangqian scan.
+ * The console polls the list for new rows; the background run writes a
+ * cron_run_logs breadcrumb (job_name=prospecting_discover).
  *
  * Dedup: within the batch and against existing rows (by place_id, falling
  * back to domain), so re-running a seed is safe and only tops up new
- * listings. Cost: ~$0.006 per call (up to 100 listings).
+ * listings. Cost: ~$0.5–$1 per seed (Places Details is billed per result).
  */
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { guardAdmin } from '@/lib/auth/require-admin'
 import {
-  searchBusinessListings,
   INDUSTRY_CATEGORIES,
   CITY_COORDS,
   type BusinessListing,
 } from '@/lib/dataforseo/business-listings'
+// Discovery source: Google Places (no DataForSEO dependency, so it keeps
+// working when the DataForSEO balance is exhausted). The DataForSEO
+// business_listings wrapper stays available for a future switch-back.
+import { discoverBusinessesViaPlaces } from '@/lib/places/business-discovery'
 
 /**
  * In-batch dedup: the same business can appear under several categories
@@ -55,19 +61,20 @@ function dedupeBatch(listings: BusinessListing[]): { unique: BusinessListing[]; 
 }
 
 async function pullAndInsert(params: {
-  categories: string[]
   coord: string
   country: 'AU' | 'NZ'
   industry: string
   city: string
   limit: number
-  offset: number
-}): Promise<{ discovered: number; inserted: number }> {
-  const { categories, coord, country, industry, city, limit, offset } = params
+}): Promise<{ discovered: number; inserted: number; noWebsite: number }> {
+  const { coord, country, industry, city, limit } = params
 
-  const listings = await searchBusinessListings({ categories, coord, limit, offset })
+  const listings = await discoverBusinessesViaPlaces({ industry, city, coord, country, limit })
+  // Surface how many came back without a website — a spike here signals a
+  // Places Details quota problem, not a genuine "no site" population.
+  const noWebsite = listings.filter(l => !l.website_url && !l.domain).length
   const { unique } = dedupeBatch(listings)
-  if (unique.length === 0) return { discovered: listings.length, inserted: 0 }
+  if (unique.length === 0) return { discovered: listings.length, inserted: 0, noWebsite }
 
   const placeIds = unique.map(l => l.place_id).filter((v): v is string => v !== null)
   const domains  = unique.map(l => l.domain).filter((v): v is string => v !== null)
@@ -121,7 +128,7 @@ async function pullAndInsert(params: {
  */
 async function runDiscovery(params: Parameters<typeof pullAndInsert>[0]): Promise<void> {
   const startedAt = Date.now()
-  const { industry, city, limit, offset } = params
+  const { industry, city, limit } = params
 
   const { data: logRow } = await supabaseAdmin
     .from('cron_run_logs')
@@ -129,7 +136,7 @@ async function runDiscovery(params: Parameters<typeof pullAndInsert>[0]): Promis
       job_name:   'prospecting_discover',
       status:     'running',
       started_at: new Date().toISOString(),
-      summary:    { industry, city, limit, offset },
+      summary:    { industry, city, limit },
     })
     .select('id')
     .single<{ id: string }>()
@@ -144,10 +151,10 @@ async function runDiscovery(params: Parameters<typeof pullAndInsert>[0]): Promis
       : Promise.resolve()
 
   try {
-    const { discovered, inserted } = await pullAndInsert(params)
+    const { discovered, inserted, noWebsite } = await pullAndInsert(params)
     await finish('completed', {
       processed: discovered, completed_count: inserted,
-      summary: { industry, city, discovered, inserted },
+      summary: { industry, city, discovered, inserted, no_website: noWebsite },
     })
   } catch (err) {
     await finish('failed', { error_message: err instanceof Error ? err.message : String(err) })
@@ -160,7 +167,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (guard) return guard
 
   const body = await req.json().catch(() => null) as
-    { industry?: string; city?: string; limit?: number; offset?: number } | null
+    { industry?: string; city?: string; limit?: number } | null
 
   const industry = body?.industry ?? ''
   const city     = body?.city ?? ''
@@ -178,16 +185,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     )
   }
 
-  // Fire-and-forget so a slow business_listings query cannot exceed the
-  // gateway timeout. The console polls the list for the new rows.
+  // Fire-and-forget so a slow discovery query cannot exceed the gateway
+  // timeout. The console polls the list for the new rows.
   void runDiscovery({
-    categories,
     coord:    location.coord,
     country:  location.country,
     industry,
     city,
-    limit:    Math.max(1, body?.limit ?? 100),
-    offset:   Math.max(0, body?.offset ?? 0),
+    limit:    Math.max(1, body?.limit ?? 40),
   }).catch(err => console.error('[prospecting/discover] background failure', err))
 
   return NextResponse.json({ started: true }, { status: 202 })
