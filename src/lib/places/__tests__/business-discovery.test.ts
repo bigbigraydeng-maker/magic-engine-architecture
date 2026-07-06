@@ -76,6 +76,39 @@ describe('discoverBusinessesViaPlaces', () => {
     expect(url).not.toContain('radius=')
   })
 
+  it('keeps first-page results when the next-page token is not yet active', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({
+        status: 'OK', results: [{ place_id: 'p1', name: 'A Flooring' }], next_page_token: 'tok',
+      }) } as Response)
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'INVALID_REQUEST' }) } as Response)
+      .mockResolvedValue({ ok: true, json: () => Promise.resolve({ status: 'OK', result: {} }) } as Response)
+
+    vi.useFakeTimers()
+    const p = discoverBusinessesViaPlaces({ industry: 'flooring', city: 'brisbane', coord: '0,0', country: 'AU' })
+    await vi.runAllTimersAsync()
+    const listings = await p
+    vi.useRealTimers()
+
+    // page 2's INVALID_REQUEST must not discard page 1
+    expect(listings.map(l => l.name)).toEqual(['A Flooring'])
+  })
+
+  it('still throws on a real error (quota) on a later page — not silently degraded', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({
+        status: 'OK', results: [{ place_id: 'p1', name: 'A Flooring' }], next_page_token: 'tok',
+      }) } as Response)
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'OVER_QUERY_LIMIT' }) } as Response)
+
+    vi.useFakeTimers()
+    const p = discoverBusinessesViaPlaces({ industry: 'flooring', city: 'brisbane', coord: '0,0', country: 'AU' })
+    const assertion = expect(p).rejects.toThrow(/OVER_QUERY_LIMIT/)
+    await vi.runAllTimersAsync()
+    await assertion
+    vi.useRealTimers()
+  })
+
   it('returns [] on ZERO_RESULTS without throwing', async () => {
     mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ZERO_RESULTS', results: [] }) } as Response)
     const listings = await discoverBusinessesViaPlaces({
