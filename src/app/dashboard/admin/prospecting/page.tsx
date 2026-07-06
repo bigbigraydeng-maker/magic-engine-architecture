@@ -10,6 +10,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { INDUSTRY_CATEGORIES, CITY_COORDS } from '@/lib/dataforseo/business-listings'
+import OutreachQueue from './_components/OutreachQueue'
 
 interface ProspectRow {
   id: string
@@ -41,6 +42,7 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   replied:        { label: '已回复',   cls: 'bg-[#5C8A4A]/12 text-[#5C8A4A]' },
   converted:      { label: '已转化',   cls: 'bg-[#5C8A4A]/20 text-[#5C8A4A]' },
   archived:       { label: '已归档',   cls: 'bg-me-charcoal/5 text-me-charcoal/40' },
+  opted_out:      { label: '🚫 拒收',  cls: 'bg-[#C2453A]/10 text-[#C2453A]/70' },
 }
 
 const FILTERS = ['all', 'discovered', 'qualified', 'analyzed', 'audited'] as const
@@ -62,6 +64,7 @@ interface AiReport {
 }
 
 export default function ProspectingPage() {
+  const [tab, setTab] = useState<'pipeline' | 'outreach'>('pipeline')
   const [industry, setIndustry] = useState('flooring')
   const [city, setCity] = useState('brisbane')
   const [rows, setRows] = useState<ProspectRow[]>([])
@@ -154,6 +157,24 @@ export default function ProspectingPage() {
     }
   }
 
+  // Honour an unsubscribe reply: permanent do-not-contact (footer promise).
+  async function markOptOut(id: string) {
+    setError('')
+    try {
+      const res = await fetch(`/api/admin/prospecting/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'opt_out' }),
+      })
+      const data = await res.json() as { error?: string }
+      if (!res.ok) throw new Error(data.error ?? '操作失败')
+      setMessage('已标记拒收，该商家永不再进入外呼名单')
+      await fetchList()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '操作失败')
+    }
+  }
+
   async function runAudit() {
     setBusy('audit'); setError(''); setMessage('')
     try {
@@ -175,13 +196,28 @@ export default function ProspectingPage() {
 
   return (
     <div className="p-6 max-w-6xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-me-charcoal">Prospecting 获客管线</h1>
-        <p className="text-sm text-me-charcoal/50 mt-1">
-          内部销售工具 · 批量发现 → 规则审计 → 机会分 ≥55 合格（共 {total} 条）
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-me-charcoal">Prospecting 获客管线</h1>
+          <p className="text-sm text-me-charcoal/50 mt-1">
+            内部销售工具 · 批量发现 → 规则审计 → AI 分析 → 人审外呼（共 {total} 条）
+          </p>
+        </div>
+        <div className="flex rounded-lg border border-me-charcoal/15 p-0.5 text-sm">
+          <button onClick={() => setTab('pipeline')}
+            className={`rounded-md px-4 py-1.5 ${tab === 'pipeline' ? 'bg-me-charcoal text-white' : 'text-me-charcoal/60'}`}>
+            管线
+          </button>
+          <button onClick={() => setTab('outreach')}
+            className={`rounded-md px-4 py-1.5 ${tab === 'outreach' ? 'bg-me-charcoal text-white' : 'text-me-charcoal/60'}`}>
+            📮 外呼审核
+          </button>
+        </div>
       </div>
 
+      {tab === 'outreach' && <OutreachQueue />}
+
+      {tab === 'pipeline' && <>
       {/* Seed controls */}
       <div className="flex flex-wrap items-end gap-3 rounded-xl border border-me-charcoal/10 bg-white p-4">
         <label className="text-sm text-me-charcoal/70">
@@ -269,7 +305,17 @@ export default function ProspectingPage() {
                   <td className="px-4 py-3">
                     <span className={`rounded-full px-2 py-0.5 text-xs ${meta.cls}`}>{meta.label}</span>
                   </td>
-                  <td className="px-4 py-3 text-me-charcoal/60">{r.email ?? r.phone ?? '—'}</td>
+                  <td className="px-4 py-3 text-me-charcoal/60">
+                    {r.email ?? r.phone ?? '—'}
+                    {['contacted', 'replied'].includes(r.status) && (
+                      <button
+                        title="对方回复拒收 — 永不再联系"
+                        onClick={e => { e.stopPropagation(); void markOptOut(r.id) }}
+                        className="ml-2 rounded border border-[#C2453A]/20 px-1.5 py-0.5 text-[10px] text-[#C2453A]/70">
+                        🚫 拒收
+                      </button>
+                    )}
+                  </td>
                 </tr>,
                 expandedId === r.id && (
                   <tr key={`${r.id}-detail`} className="border-b border-me-charcoal/5 bg-me-ivory/30">
@@ -317,6 +363,7 @@ export default function ProspectingPage() {
           </tbody>
         </table>
       </div>
+      </>}
     </div>
   )
 }
