@@ -21,6 +21,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { MeMark, MeMarkDefs } from '@/components/ui/me-mark'
 import { buildLeakReport, type LeakStage } from '@/lib/prospecting/report'
 import { INDUSTRY_LABELS, type ProspectAnalysis } from '@/lib/prospecting/analyze'
+import { sanitiseOwnerName } from '@/lib/prospecting/outreach'
 import ReportLeadForm from './_components/ReportLeadForm'
 import type { ProspectAudit } from '@/lib/prospecting/audit'
 import type { ScoreSignal } from '@/lib/prospecting/score'
@@ -50,6 +51,7 @@ interface ProspectRow {
   country:       string
   domain:        string | null
   website_url:   string | null
+  email:         string | null
   rating:        number | null
   review_count:  number | null
   audit:         ProspectAudit | null
@@ -79,7 +81,7 @@ export default async function ReportPage({ params }: { params: { id: string } })
 
   const { data: p } = await supabaseAdmin
     .from('outbound_prospects')
-    .select('business_name, industry, city, country, domain, website_url, rating, review_count, audit, score_breakdown, ai_report')
+    .select('business_name, industry, city, country, domain, website_url, email, rating, review_count, audit, score_breakdown, ai_report')
     .eq('id', params.id)
     .maybeSingle<ProspectRow>()
 
@@ -108,6 +110,11 @@ export default async function ReportPage({ params }: { params: { id: string } })
   const social = p.ai_report?.social_activity
 
   const keyFinding = report.summary_points[0] ?? ''
+  // Pre-fill the lead form with what we already know (we emailed this owner):
+  // the business email we reached out on, and a plausible owner first name.
+  // Both stay editable so the reader can correct anything wrong.
+  const prefillName  = sanitiseOwnerName(p.ai_report?.owner_name, p.business_name) ?? ''
+  const prefillEmail = p.email ?? ''
   const mailto = `mailto:${process.env.OUTREACH_REPLY_EMAIL ?? 'hello@magicengine.cloud'}` +
     `?subject=${encodeURIComponent(`Health check chat — ${p.business_name}`)}`
 
@@ -137,7 +144,7 @@ export default async function ReportPage({ params }: { params: { id: string } })
     'Weeks 1–3 · Foundation: site refresh, enquiry form straight to your phone, visitor tracking you can check anywhere',
     'Weeks 1–3 · Get found: Google profile set up and polished, SEO fixes, AI-search code on your site',
     'Weeks 3–8 · Lead engine: real reviews from your past customers + a smooth search-to-call path',
-    'Weeks 3–8 · For visual trades: 10 short video ads and 1,000+ locals who’ve seen your work',
+    'Weeks 3–8 · For visual trades: short video ads that build a local audience who’ve seen your work',
     'Weeks 9–12 · Proof: a before/after report on every leak we found today',
   ]
 
@@ -336,8 +343,8 @@ export default async function ReportPage({ params }: { params: { id: string } })
           </span>
           <h2 className="mt-3 text-lg font-semibold" style={{ fontFamily: DISPLAY }}>We fix all of this in 90 days</h2>
           <p className="mt-2 text-sm leading-relaxed" style={{ color: 'rgba(255,255,255,0.72)' }}>
-            Get found, plug the leaks, and switch on a steady flow of enquiries — content, social, ads and
-            follow-up, all done for you by AI and our Auckland team.
+            Get found, plug the leaks, and make it effortless for customers to reach you — search, social, ads
+            and follow-up, all done for you by AI and our Auckland team.
           </p>
 
           {/* Price anchor */}
@@ -347,7 +354,7 @@ export default async function ReportPage({ params }: { params: { id: string } })
             </p>
             <p className="mt-1 text-sm">
               <span className="text-2xl font-bold" style={{ fontFamily: DISPLAY, color: GOLD }}>$990 NZD</span>
-              <span style={{ color: 'rgba(255,255,255,0.6)' }}> — the full 90 days, everything included.</span>
+              <span style={{ color: 'rgba(255,255,255,0.6)' }}> — the full 90-day build, done for you.</span>
             </p>
           </div>
 
@@ -372,7 +379,7 @@ export default async function ReportPage({ params }: { params: { id: string } })
           </div>
 
           <div className="mt-5">
-            <ReportLeadForm prospectId={params.id} />
+            <ReportLeadForm prospectId={params.id} prefillName={prefillName} prefillEmail={prefillEmail} />
             <p className="mt-3 text-center text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>
               Prefer email? Reach us any time at{' '}
               <a href={mailto} className="underline" style={{ color: 'rgba(255,255,255,0.7)' }}>
