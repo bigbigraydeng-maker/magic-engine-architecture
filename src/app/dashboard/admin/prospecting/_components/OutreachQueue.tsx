@@ -147,6 +147,16 @@ export default function OutreachQueue() {
       .replace(/\{\{unsubscribe_url\}\}/g, () => unsubscribeUrlFor(card))
   }
 
+  // Server-side send via Resend (one deliberate click per prospect — sending is
+  // never automated). A confirm guards against a mis-click firing a real email.
+  async function sendEmail(card: QueueCard) {
+    if (!card.email) return
+    if (!window.confirm(
+      `立即向 ${card.business_name}（${card.email}）真实发出这封邮件？发出后无法撤回。`,
+    )) return
+    await patch(card.id, { action: 'send' }, `已发送给 ${card.business_name}`)
+  }
+
   // Public link host — falls back to the outreach domain (.cloud — a .com.au
   // link reads wrong to NZ recipients); set NEXT_PUBLIC_REPORT_BASE_URL once
   // the custom domain is attached in Render.
@@ -176,7 +186,7 @@ export default function OutreachQueue() {
     // attachment (which cold recipients won't open). The link line says what
     // it is and that it's safe — a bare URL in a cold email reads as
     // suspicious (PM feedback 2026-07-07).
-    const fullText = `Subject: ${card.outreach_email.subject}\n\n${card.outreach_email.body}\n\nEverything we found is on one page here — no login, nothing to download, just a web page:\n${reportUrlFor(card)}\n\n${footerFor(card)}`
+    const fullText = `Subject: ${card.outreach_email.subject}\n\n${card.outreach_email.body}\n\nHere's the full rundown on one page — no login, nothing to download, just a web page:\n${reportUrlFor(card)}\n\n${footerFor(card)}`
     try {
       await navigator.clipboard.writeText(fullText)
     } catch {
@@ -328,6 +338,12 @@ export default function OutreachQueue() {
                   </>
                 ) : (
                   <>
+                    {card.email && (
+                      <button onClick={() => void sendEmail(card)} disabled={busy !== ''}
+                        className="rounded-lg bg-[#C4912E] px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40">
+                        ✉️ 发送邮件
+                      </button>
+                    )}
                     <button onClick={() => void copyAndMarkContacted(card)} disabled={busy !== ''}
                       className="rounded-lg bg-[#5C8A4A] px-3 py-1.5 text-xs text-white disabled:opacity-40">
                       📋 复制全文 + 标记已联系
