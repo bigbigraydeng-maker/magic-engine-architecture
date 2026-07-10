@@ -49,16 +49,20 @@ export interface Combo { industry: string; city: string }
  * (leak-fix + review engine + GBP + Meta video) all land, so the first
  * outreach wave has the strongest, fastest-to-results story.
  *
+ * cosmetic_clinics added to the wave 2026-07-09 (PM go): high-value,
+ * personal-brand Auckland businesses that fit the $990 offer well (the report
+ * page even carries a presenter-video add-on for them).
+ *
  * Deliberately excluded here (present in the catalogue but not swept):
  *   - education_consultants / travel_agencies — skew to foreign / non-English
  *     markets, failing the "must serve NZ local English customers" rule.
- *   - dentists / cosmetic_clinics / lawyers / mortgage_brokers / accountants /
- *     hvac / solar — fine businesses, held for a second wave with tailored
- *     angles; widen via SWEEP_INDUSTRIES when ready.
+ *   - dentists / lawyers / mortgage_brokers / accountants / hvac / solar —
+ *     fine businesses, held for a later wave with tailored angles; widen via
+ *     SWEEP_INDUSTRIES when ready.
  */
 export const FOCUS_INDUSTRIES = [
   'kitchen_renovation', 'bathroom_renovation', 'builders', 'landscaping',
-  'roofing', 'flooring', 'electricians', 'plumbers',
+  'roofing', 'flooring', 'electricians', 'plumbers', 'cosmetic_clinics',
 ] as const
 
 /**
@@ -128,5 +132,35 @@ export function leastCoveredCombo(combos: Combo[], coverage: Record<string, numb
     const n = coverage[`${c.industry}|${c.city}`] ?? 0
     if (n < bestCount) { best = c; bestCount = n }
   }
+  return best
+}
+
+/**
+ * Pick the seed to discover next by LEAST-RECENTLY-ATTEMPTED (round-robin over
+ * `lastAttempt`, epoch-ms per "industry|city"), not fewest-rows. This is the
+ * 2026-07-10 stuck-loop fix: coverage-by-row-count fixates on a saturated seed
+ * (Places returns the same ~20 already-inserted businesses) and never rotates,
+ * burning a Places call every fire. Never-attempted combos (time 0) sort first.
+ *
+ * Returns null when even the least-recently-attempted combo was discovered
+ * within `cooldownMs` — the whole universe was swept recently, so the cron
+ * idles instead of re-hammering a saturated seed. It re-sweeps each combo once
+ * the cooldown elapses, catching genuinely-new businesses without daily burn.
+ */
+export function pickDiscoverCombo(
+  combos: Combo[],
+  lastAttempt: Record<string, number>,
+  nowMs: number,
+  cooldownMs: number,
+): Combo | null {
+  if (combos.length === 0) return null
+  let best = combos[0]
+  let bestT = lastAttempt[`${best.industry}|${best.city}`] ?? 0
+  for (const c of combos) {
+    const t = lastAttempt[`${c.industry}|${c.city}`] ?? 0
+    if (t < bestT) { best = c; bestT = t }
+  }
+  // Every combo attempted within the cooldown → idle (no Places spend).
+  if (bestT > 0 && nowMs - bestT < cooldownMs) return null
   return best
 }
