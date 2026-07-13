@@ -7,7 +7,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { FACTORY_ANGLE_DEDUPE_DAYS } from './constants'
 import { generateAdCopy } from './copy-generator'
 import { decideSignal, pickFactoryGoal } from './strategist'
-import type { AdCopy, DemandSignal, Decision, GateContext, GoalSlice } from './types'
+import type { AdCopy, DemandSignal, Decision, GateContext, GoalSlice, VerifiedOffer } from './types'
 import type { MasterBrief } from '@/types/magic-engine'
 
 const TERMINAL_STATUSES = ['closed', 'archived', 'dead_letter', 'superseded']
@@ -141,6 +141,25 @@ async function loadContext(
   return { ctx, fullBrief: fullBrief ?? null }
 }
 
+/** B4:从 signal.evidence.verified_offer 安全提取 PM 录入的真实促销(只取非空字符串字段,防脏数据)。 */
+function parseVerifiedOffer(raw: unknown): VerifiedOffer | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const o = raw as Record<string, unknown>
+  // 防 prompt 注入(魏征 B4-P2):evidence 是外部 POST 可控,剥换行 + 限长(价格/折扣/日期本就是短串)。
+  const pick = (k: string): string | undefined => {
+    if (typeof o[k] !== 'string') return undefined
+    const cleaned = (o[k] as string).replace(/[\r\n]+/g, ' ').trim().slice(0, 40)
+    return cleaned || undefined
+  }
+  const offer: VerifiedOffer = {
+    price_from: pick('price_from'),
+    was_price: pick('was_price'),
+    discount: pick('discount'),
+    offer_expiry: pick('offer_expiry'),
+  }
+  return offer.price_from || offer.was_price || offer.discount || offer.offer_expiry ? offer : null
+}
+
 async function persistDecision(
   signal: DemandSignal,
   decision: Decision,
@@ -184,6 +203,7 @@ async function persistDecision(
           rationale: draft.rationale_one_liner,
           segmentRoles: draft.brief.segments.map((s) => s.role),
           expectedMetric: goal?.primary_metric_key, // B3:CTA 导向圈定 Goal 北极星(诸葛亮硬验收)
+          verifiedOffer: parseVerifiedOffer(signal.evidence?.['verified_offer']), // B4:真促销真数字进钩子
         })
       }
     } catch (e) {

@@ -9,7 +9,7 @@ vi.mock('@/lib/anthropic/client', () => ({
 }))
 // formatBriefForPrompt 用真实实现(读 fixture brief 字段即可,无需 mock)
 
-import { ctaIntentFor, generateAdCopy, hookIntentFor } from './copy-generator'
+import { allowedNumbersFrom, ctaIntentFor, generateAdCopy, hookIntentFor } from './copy-generator'
 import type { MasterBrief } from '@/types/magic-engine'
 
 const BRIEF = {
@@ -124,5 +124,101 @@ describe('hookIntentFor — B4 钩子导向 Goal 北极星(板桥:hook 是生死
     expect(hookIntentFor(null)).toContain('停手指')
     expect(hookIntentFor(undefined)).toContain('停手指')
     expect(hookIntentFor('weird_metric')).toContain('停手指')
+  })
+})
+
+describe('verified_offer — B4 真促销数字白名单(板桥+魏征:红线放行通道)', () => {
+  const OFFER = { price_from: '$35.50/m²', offer_expiry: '31 July' }
+
+  it('verified_offer 真数字 → LLM 用了放行,不误杀真促销', async () => {
+    callClaudeChat.mockResolvedValue({
+      text: JSON.stringify({
+        segments: [
+          { role: 'hook', title_main: '$35.50/m²', title_sub: 'Walnut clearance' },
+          { role: 'middle', caption: 'Premium walnut floors' },
+          { role: 'cta', caption: 'Ends 31 July' },
+        ],
+        endcard: { cta: 'Shop now', offer: ['Ends 31 July'], url: 'oztopbuildingsupplies.com.au' },
+      }),
+    })
+    const copy = await generateAdCopy({ brief: BRIEF, angle: 'walnut', rationale: 'why', segmentRoles: ROLES, expectedMetric: 'monthly_revenue', verifiedOffer: OFFER })
+    expect(copy.segments[0].title_main).toBe('$35.50/m²') // 真价被放行
+    // 魏征 P1:必须断言 LLM 独有字段(模板 fallback 产生不了),否则区分不了"放行"与"落模板"=空架子
+    expect(copy.segments[0].title_sub).toBe('Walnut clearance') // 模板此处是 angle 'walnut'
+    expect(copy.segments[1].caption).toBe('Premium walnut floors') // 模板此处是 angle,证明确实走了 LLM 放行
+  })
+
+  it('🔴 offer_expiry 日期数字不授权价格(魏征 P0):expiry "31 July" 下 AI 写 "$31/m²" → 被拦落模板', async () => {
+    callClaudeChat.mockResolvedValue({
+      text: JSON.stringify({
+        segments: [
+          { role: 'hook', title_main: '$31/m² WALNUT', title_sub: 'x' }, // 31 来自截止日,不是价格,必须拦
+          { role: 'middle', caption: 'y' },
+          { role: 'cta', caption: 'z' },
+        ],
+        endcard: { cta: 'Shop now', offer: [], url: 'oztopbuildingsupplies.com.au' },
+      }),
+    })
+    const copy = await generateAdCopy({ brief: BRIEF, angle: 'walnut', rationale: 'why', segmentRoles: ROLES, expectedMetric: 'monthly_revenue', verifiedOffer: { price_from: '$35.50/m²', offer_expiry: '31 July' } })
+    expect(JSON.stringify(copy)).not.toContain('$31') // 日期数字当价格用被拦
+    expect(copy.segments[0].title_main).toBe('$35.50/m²') // 落模板 offer path
+  })
+
+  it('🔴 裸价无 $ 符号也拦(魏征 P1):AI 写 "45/m²"/"AUD 45"(白名单外)→ 被拦落模板', async () => {
+    callClaudeChat.mockResolvedValue({
+      text: JSON.stringify({
+        segments: [
+          { role: 'hook', title_main: '45/m² walnut', title_sub: 'AUD 45' }, // 无 $ 的裸价,45 不在白名单
+          { role: 'middle', caption: 'y' },
+          { role: 'cta', caption: 'z' },
+        ],
+        endcard: { cta: 'Shop now', offer: [], url: 'oztopbuildingsupplies.com.au' },
+      }),
+    })
+    const copy = await generateAdCopy({ brief: BRIEF, angle: 'walnut', rationale: 'why', segmentRoles: ROLES, expectedMetric: 'monthly_revenue', verifiedOffer: { price_from: '$35.50/m²' } })
+    expect(JSON.stringify(copy)).not.toContain('45') // 裸价被拦
+  })
+
+  it('🔴 verified_offer 在,但 AI 加了白名单外编造数字(was $99) → 整条落模板(白名单≠放开)', async () => {
+    callClaudeChat.mockResolvedValue({
+      text: JSON.stringify({
+        segments: [
+          { role: 'hook', title_main: '$35.50/m²', title_sub: 'was $99/m²' }, // $99 是编的
+          { role: 'middle', caption: 'x' },
+          { role: 'cta', caption: 'y' },
+        ],
+        endcard: { cta: 'Shop now', offer: [], url: 'oztopbuildingsupplies.com.au' },
+      }),
+    })
+    const copy = await generateAdCopy({ brief: BRIEF, angle: 'walnut', rationale: 'why', segmentRoles: ROLES, expectedMetric: 'monthly_revenue', verifiedOffer: OFFER })
+    expect(JSON.stringify(copy)).not.toContain('$99') // 编造的被拦
+    expect(copy.segments[0].title_main).toBe('$35.50/m²') // 落模板 offer path,真价仍在
+  })
+
+  it('无 LLM(模板)+ verified_offer → 真价当钩子 + 截止紧迫感(本地无大脑也出真数字片)', async () => {
+    callClaudeChat.mockResolvedValue(BAD_JSON)
+    const copy = await generateAdCopy({ brief: BRIEF, angle: 'walnut clearance', rationale: 'why', segmentRoles: ROLES, expectedMetric: 'monthly_revenue', verifiedOffer: OFFER })
+    expect(copy.segments[0].title_main).toBe('$35.50/m²')
+    expect(JSON.stringify(copy)).toContain('Ends 31 July')
+    expect(copy.endcard.cta).toBe('Shop now')
+  })
+})
+
+describe('allowedNumbersFrom — 红线白名单构建', () => {
+  it('提取并归一化 verified_offer 价格数字($35.50→35.5),排除 offer_expiry 日期(魏征 P0)', () => {
+    const set = allowedNumbersFrom({ price_from: '$35.50/m²', offer_expiry: '31 July' })
+    expect(set.has('35.5')).toBe(true) // 尾零归一
+    expect(set.has('31')).toBe(false) // 日期"31"不进价格白名单,否则 AI 可拿它写 $31
+    expect(set.has('99')).toBe(false)
+  })
+  it('千分位价格不被逗号断裂($1,299 → 1299 整数,魏征 P1)', () => {
+    const set = allowedNumbersFrom({ price_from: '$1,299' })
+    expect(set.has('1299')).toBe(true)
+    expect(set.has('1')).toBe(false) // 不被断成 1/299
+    expect(set.has('299')).toBe(false)
+  })
+  it('null/undefined → 空集合(禁一切数字)', () => {
+    expect(allowedNumbersFrom(null).size).toBe(0)
+    expect(allowedNumbersFrom(undefined).size).toBe(0)
   })
 })
