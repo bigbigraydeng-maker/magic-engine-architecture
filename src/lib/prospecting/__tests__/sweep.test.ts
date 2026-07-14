@@ -76,11 +76,18 @@ describe('pickStage — drain the pipeline before pulling more in', () => {
 })
 
 describe('buildCombos', () => {
-  it('covers the Auckland sub-areas (in-person founding offer) × the focus industries', () => {
+  it('covers NZ-wide cities (Auckland areas + main metros) × the focus industries', () => {
     const combos = buildCombos([...FOCUS_INDUSTRIES], [...FOCUS_CITIES])
-    expect(new Set(combos.map(c => c.city))).toEqual(
-      new Set(['north_shore', 'west_auckland', 'south_auckland', 'east_auckland', 'central_auckland']),
-    )
+    const cities = new Set(combos.map(c => c.city))
+    // Auckland stays split by area for the in-person option…
+    for (const area of ['north_shore', 'west_auckland', 'south_auckland', 'east_auckland', 'central_auckland']) {
+      expect(cities.has(area)).toBe(true)
+    }
+    // …and every remote-served metro is in too (explicit so a dropped/merge-
+    // eaten city line fails here — the length check alone can't catch that).
+    for (const metro of ['wellington', 'christchurch', 'hamilton', 'tauranga', 'napier', 'hastings', 'palmerston_north', 'nelson', 'dunedin', 'rotorua']) {
+      expect(cities.has(metro)).toBe(true)
+    }
     expect(combos.length).toBe(FOCUS_INDUSTRIES.length * FOCUS_CITIES.length)
   })
 
@@ -108,19 +115,19 @@ describe('sweepCities — env override', () => {
     else process.env.SWEEP_CITIES = original
   })
 
-  it('defaults to the Auckland sub-areas when the env is unset', () => {
+  it('defaults to the NZ-wide focus cities when the env is unset', () => {
     delete process.env.SWEEP_CITIES
-    expect(sweepCities()).toEqual(['north_shore', 'west_auckland', 'south_auckland', 'east_auckland', 'central_auckland'])
+    expect(sweepCities()).toEqual([...FOCUS_CITIES])
   })
 
-  it('honours a valid override for a later expansion, dropping unknown keys', () => {
+  it('honours a valid override for a narrower wave, dropping unknown keys', () => {
     process.env.SWEEP_CITIES = 'auckland, wellington, atlantis'
     expect(sweepCities()).toEqual(['auckland', 'wellington'])
   })
 
-  it('falls back to the Auckland sub-areas when the override has no valid keys', () => {
+  it('falls back to the NZ-wide focus cities when the override has no valid keys', () => {
     process.env.SWEEP_CITIES = 'atlantis'
-    expect(sweepCities()).toEqual(['north_shore', 'west_auckland', 'south_auckland', 'east_auckland', 'central_auckland'])
+    expect(sweepCities()).toEqual([...FOCUS_CITIES])
   })
 })
 
