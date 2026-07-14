@@ -17,6 +17,8 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { guardAdmin } from '@/lib/auth/require-admin'
 import { renderFullOutreachBody, senderIdentity, type OutreachEmail } from '@/lib/prospecting/outreach'
 import { isJunkContactEmail } from '@/lib/prospecting/tracking-detector'
+import { buildKeywordReport } from '@/lib/prospecting/keyword-report'
+import type { ProspectAnalysis } from '@/lib/prospecting/analyze'
 import type { ProspectAudit } from '@/lib/prospecting/audit'
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -57,6 +59,7 @@ type PatchBody =
   | { action: 'mark_contacted' }
   | { action: 'start_onboarding' }
   | { action: 'mark_converted' }
+  | { action: 'generate_keyword_report' }
   | { action: 'archive' }
   | { action: 'opt_out' }
 
@@ -175,6 +178,47 @@ async function handleSend(id: string): Promise<NextResponse> {
   return NextResponse.json({ ok: true })
 }
 
+/**
+ * Fetch the "what your customers search" keyword report on demand and store it
+ * on the prospect's ai_report (jsonb, no new column). Delivery-time artifact for
+ * a paid onboarding client — the DataForSEO call is why it is not run for every
+ * cold prospect. buildKeywordReport never throws (degrades to []), so a data
+ * outage returns count:0 rather than a 500.
+ */
+async function handleGenerateKeywordReport(id: string): Promise<NextResponse> {
+  const { data: row, error: readError } = await supabaseAdmin
+    .from('outbound_prospects')
+    .select('status, domain, country, ai_report, updated_at')
+    .eq('id', id)
+    .maybeSingle<{ status: string; domain: string | null; country: string; ai_report: ProspectAnalysis | null; updated_at: string }>()
+  if (readError) return NextResponse.json({ error: readError.message }, { status: 500 })
+  if (!row) return NextResponse.json({ error: 'not found' }, { status: 404 })
+  // Delivery artifact — gate on the paid onboarding stage so a stray script can't
+  // burn DataForSEO on cold prospects (defence beyond the onboarding-only button).
+  if (row.status !== 'onboarding') return NextResponse.json({ error: '只有 onboarding（付费交付）阶段才生成关键词报告' }, { status: 409 })
+  if (!row.ai_report) return NextResponse.json({ error: '该商家还没有 AI 分析报告，先跑分析' }, { status: 409 })
+
+  const keyword_report = await buildKeywordReport(row.domain, row.country)
+  if (keyword_report.length === 0) {
+    return NextResponse.json({ ok: true, count: 0, note: '没拿到关键词数据（网站太新/无排名，或数据源暂不可用）' })
+  }
+
+  // Optimistic lock on updated_at (same as edit_email): the DataForSEO round-trip
+  // is seconds long, so guard against clobbering an ai_report rewritten meanwhile.
+  const merged: ProspectAnalysis = { ...row.ai_report, keyword_report }
+  const { data: written, error } = await supabaseAdmin
+    .from('outbound_prospects')
+    .update({ ai_report: merged, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('updated_at', row.updated_at)
+    .select('id')
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (!written || written.length === 0) {
+    return NextResponse.json({ error: '保存冲突：该商家资料刚被其他操作修改，请刷新后重试' }, { status: 409 })
+  }
+  return NextResponse.json({ ok: true, count: keyword_report.length })
+}
+
 async function transition(
   id: string,
   fromStatuses: string[],
@@ -224,6 +268,8 @@ export async function PATCH(
       // which we don't auto-track).
       return transition(params.id, ['replied', 'contacted'],
         { status: 'onboarding' }, '只有已联系/已回复的商家才能进入 onboarding')
+    case 'generate_keyword_report':
+      return handleGenerateKeywordReport(params.id)
     case 'mark_converted':
       // Forward exit from onboarding: the $19.90 client bought the $990 build.
       // Without this the funnel has no endpoint and onboarding rows pile up.
