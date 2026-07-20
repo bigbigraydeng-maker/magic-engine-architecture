@@ -1,0 +1,8 @@
+# Copy to .dev.vars for local wrangler testing:
+#   cd website && wrangler pages dev . --local
+# .dev.vars is git-ignored; safe for real secrets.
+META_PIXEL_ID=2228804581237989
+META_CAPI_ACCESS_TOKEN=EAAB...replace-with-real...
+META_CAPI_TEST_EVENT_CODE=TEST12345
+SUPABASE_URL=
+SUPABASE_SERVICE_KEY=

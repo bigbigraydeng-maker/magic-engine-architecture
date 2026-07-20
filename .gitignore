@@ -55,3 +55,4 @@ scripts/p30-s1-*-output.json
 scripts/p30-s4-*-output.json
 .mcp-*.mjs
 scripts/factory-worker/.env
+.dev.vars
