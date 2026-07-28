@@ -21,11 +21,74 @@ export type Segment =
   | 'replied'          // 客户回了，还没人接话
   | 'callback_due'     // 约好的时间到了
   | 'new_untouched'    // 进线了，没人联系过
-  | 'retry_channel'    // 电话打不通，该换条路
+  | 'retry_channel'    // 打过一次没人接
+  | 'stale_conversation' // 聊过一轮就断了，没约下次
   | 'nurture_future'   // 说了以后才走
   | 'excluded'         // 别再联系 / 号码是坏的 / 明确没兴趣
 
 export type Temperature = 'hot' | 'warm' | 'cold' | 'off'
+
+/**
+ * 每一桶「是什么人 / 该拿他怎么办」。
+ *
+ * 为什么要有这个:一次把 186 个人铺成一条长河,最烫的 6 个人会被 108 个
+ * 打不通的埋掉 —— 销售看到的还是「一大坨」,跟他逃离的 Excel 没区别。
+ * 分了桶还不够,每桶必须直说「这批人该怎么办」,否则销售面对 108 个
+ * 打不通的人只会继续一个个空打(已经证明打不通了)。
+ *
+ * API 和页面共用这一份,避免两边各写一套文案、日后漂移。
+ */
+export interface SegmentActionMeta {
+  /** 桶名(销售看的)。 */
+  label: string
+  /** 这批人该怎么办 —— 一句话,带动作。 */
+  howTo: string
+  /** 整桶一起做的动作:逐个打电话,还是一次性群发。 */
+  batch: 'call_one_by_one' | 'send_email' | 'none'
+}
+
+export const SEGMENT_ACTION_META: Record<Segment, SegmentActionMeta> = {
+  replied: {
+    label: '客户回话了',
+    howTo: '客户主动来消息了，今天一定要回 —— 这批最容易成。先打电话，打不通再回邮件。',
+    batch: 'call_one_by_one',
+  },
+  callback_due: {
+    label: '该回电了',
+    howTo: '之前答应了这个时间给他打，现在到点了。现在就打，拖了显得不上心。',
+    batch: 'call_one_by_one',
+  },
+  new_untouched: {
+    label: '新客人，还没打过',
+    howTo: '刚留下资料，人还热着。越早打通越容易成 —— 先打里面最新的。',
+    batch: 'call_one_by_one',
+  },
+  // 名字和文案都不能说「打不通」:后台判据只是「打了一次没人接」。
+  // 中午没接的人晚上会接 —— 系统斩钉截铁说一件销售凭经验知道是假的事,
+  // 他会连带不信这一页其他三桶。而这是最大的一桶(CTS 108 人 / 58%)。
+  retry_channel: {
+    label: '打过没人接',
+    howTo: '这批打过一次，没人接。别原样再打一遍 —— 换个时段再试（晚上通常好打），或者一次性给他们发封邮件（下面有按钮）。',
+    batch: 'send_email',
+  },
+  // 「聊过一轮就断了」以前被兜底并进「以后才走」,还被贴上「打了是打扰」的标签
+  // 埋进折叠区 —— 等于系统亲手弄丢了一批最该回头捞的温线索。单独成桶。
+  stale_conversation: {
+    label: '聊过了，没下文',
+    howTo: '聊过一轮就断了，也没约下次。挑等得最久的回一句，问问定下来没有。',
+    batch: 'call_one_by_one',
+  },
+  nurture_future: {
+    label: '以后才走',
+    howTo: '他说了以后才走，现在打是打扰。到时间系统会把他捞回名单。',
+    batch: 'none',
+  },
+  excluded: {
+    label: '别再联系',
+    howTo: '明确拒绝过 / 号码是坏的 / 已经成交。不要联系。',
+    batch: 'none',
+  },
+}
 
 export interface TouchpointLike {
   channel: string
@@ -61,19 +124,28 @@ export interface SegmentResult {
   priority: number
   /** 一句人话，告诉销售为什么这个人在今天的名单上。 */
   reason: string
-  /** 建议用哪个渠道 —— 打不通的人再打一次还是打不通。 */
+  /** 建议用哪个渠道 —— 打过没人接的，再打一次多半还是没人接。 */
   suggestedChannel: 'phone' | 'sms' | 'email' | 'none'
-  /** 约定的回电时间，有就带上。 */
+  /** 约定的回电时间，有就带上。销售拿起电话前一定会想「我约的几点」。 */
   dueAt: string | null
+  /**
+   * 最后一次跟这个人有来往是什么时候（任意方向、任意渠道）。
+   *
+   * 两个用处：同一桶里「等得最久的排前面」（同桶 priority 相同，没有这个
+   * 排序基本随机，销售会问"为什么先打这个"）；卡片上直说「等了 3 天」。
+   */
+  lastTouchAt: string | null
 }
 
 const SEGMENT_META: Record<Segment, { temperature: Temperature; priority: number }> = {
-  replied:        { temperature: 'hot',  priority: 1 },
-  callback_due:   { temperature: 'hot',  priority: 2 },
-  new_untouched:  { temperature: 'warm', priority: 3 },
-  retry_channel:  { temperature: 'warm', priority: 4 },
-  nurture_future: { temperature: 'cold', priority: 5 },
-  excluded:       { temperature: 'off',  priority: 9 },
+  replied:            { temperature: 'hot',  priority: 1 },
+  callback_due:       { temperature: 'hot',  priority: 2 },
+  new_untouched:      { temperature: 'warm', priority: 3 },
+  retry_channel:      { temperature: 'warm', priority: 4 },
+  // 温的:聊过一轮、人是热的,只是断了没人跟。排最后但必须进名单。
+  stale_conversation: { temperature: 'warm', priority: 5 },
+  nurture_future:     { temperature: 'cold', priority: 6 },
+  excluded:           { temperature: 'off',  priority: 9 },
 }
 
 /** 结论性的通话结果 —— 这些人不该出现在今天的名单上。 */
@@ -101,12 +173,17 @@ export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
     .filter((t) => t.outcome)
     .sort((a, b) => ts(b.occurredAt) - ts(a.occurredAt))[0]?.outcome ?? null
 
+  // 最后一次有来往(任意方向)。同桶排序 + 卡片上「等了几天」都用它。
+  const lastAny = Math.max(lastInbound, lastOutbound)
+  const lastTouchAt = lastAny > 0 ? new Date(lastAny).toISOString() : null
+
   const make = (segment: Segment, reason: string, ch: SegmentResult['suggestedChannel'], dueAt: string | null = null) => ({
     segment,
     ...SEGMENT_META[segment],
     reason,
     suggestedChannel: ch,
     dueAt,
+    lastTouchAt,
   })
 
   // 1) 客户说过别再联系，或结局已定 —— 最先判，避免被后面任何规则捞回名单
@@ -156,16 +233,32 @@ export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
     return make('new_untouched', `进线 ${hours} 小时还没人联系`, 'phone')
   }
 
-  // 6) 打过但没接通 —— 再打还是打不通，换条路
+  // 6) 打过一次没人接。
+  //    注意措辞:这里只知道「打了、没接」,不知道「打不通」。中午没接的人
+  //    晚上会接 —— 系统不能对销售说一件他凭经验知道是假的事。
   if (latestOutcome === 'no_answer') {
-    return make('retry_channel', '电话打不通，改发短信或邮件', 'sms')
+    const days = lastOutbound > 0 ? Math.floor((nowMs - lastOutbound) / 86_400_000) : 0
+    const when = days <= 0 ? '今天' : `${days} 天前`
+    return make('retry_channel', `${when}打过，没人接`, 'sms')
   }
 
-  // 7) 聊过了、没约下次 —— 温的，不进今天的名单
-  return make('nurture_future', '聊过了但没约下次，先放着', 'email')
+  // 7) 聊过一轮就断了、也没约下次 —— 温的，最该回头捞的一批。
+  //    以前它被并进「以后才走」还贴上「打了是打扰」的标签埋进折叠区，
+  //    等于系统亲手弄丢了这些人。现在单独成桶、进今天的名单。
+  const staleDays = lastAny > 0 ? Math.floor((nowMs - lastAny) / 86_400_000) : 0
+  return make(
+    'stale_conversation',
+    staleDays > 0 ? `聊过一轮就断了，${staleDays} 天没动静` : '聊过一轮，还没约下次',
+    'phone',
+  )
 }
 
-/** 今天真正要动的人：热的和温的，按优先级排。 */
+/**
+ * 今天真正要动的人：热的和温的，按优先级排。
+ *
+ * 同一桶内按「等得最久的排前面」—— 同桶 priority 相同、dueAt 多半是 null，
+ * 没有这一层排序结果基本是随机的，销售会问「为什么先打这个」。
+ */
 export function todayWorklist(
   contacts: ContactLike[],
   now: Date,
@@ -173,14 +266,21 @@ export function todayWorklist(
   return contacts
     .map((c) => ({ ...c, seg: segmentContact(c, now) }))
     .filter((c) => c.seg.temperature === 'hot' || c.seg.temperature === 'warm')
-    .sort((a, b) => a.seg.priority - b.seg.priority || ts(b.seg.dueAt) - ts(a.seg.dueAt))
+    .sort(
+      (a, b) =>
+        a.seg.priority - b.seg.priority ||
+        // 约好的时间越早越该先打
+        (a.seg.dueAt && b.seg.dueAt ? ts(a.seg.dueAt) - ts(b.seg.dueAt) : 0) ||
+        // 其余按最久没动静的排前面（0 = 从没来往过，也排前面）
+        ts(a.seg.lastTouchAt) - ts(b.seg.lastTouchAt),
+    )
 }
 
 /** 各段人数，给页面顶部的统计条。 */
 export function segmentCounts(contacts: ContactLike[], now: Date): Record<Segment, number> {
   const out: Record<Segment, number> = {
     replied: 0, callback_due: 0, new_untouched: 0,
-    retry_channel: 0, nurture_future: 0, excluded: 0,
+    retry_channel: 0, stale_conversation: 0, nurture_future: 0, excluded: 0,
   }
   for (const c of contacts) out[segmentContact(c, now).segment]++
   return out
