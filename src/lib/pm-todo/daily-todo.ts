@@ -15,6 +15,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { loadManualItems, type ManualItem } from './manual-items'
 
 /** FDE focus clients: CTS + Oztop. */
 export const FOCUS_CLIENT_IDS = [
@@ -54,6 +55,9 @@ export interface TodoCounts {
   recentCardsByClient: Array<{ name: string; id: string; cards: number }>
   /** [{ name, id, reels }] — clients with factory clips awaiting review. */
   reelsByClient: Array<{ name: string; id: string; reels: number }>
+  /** Things automation cannot finish — each carries what/how/link so a human
+   *  can act without asking (PM 拍板 2026-08-01: 管道不许断头). */
+  manualItems: ManualItem[]
   /** Cron runs that failed in the last 24h. */
   cronFailures24h: number
 }
@@ -185,6 +189,11 @@ export async function loadTodoCounts(supabase: SupabaseClient): Promise<TodoCoun
       .map(([id, v]) => ({ name: v.name, id, [key]: v.count }))
       .sort((a, b) => a.name.localeCompare(b.name))
 
+  const manualItems = await loadManualItems(supabase).catch((err: unknown) => {
+    console.error('[pm-todo] manual items load failed:', err instanceof Error ? err.message : String(err))
+    return [] as ManualItem[]
+  })
+
   const failedRuns = ((failures.data ?? []) as Array<{ status: string; failed_count: number | null }>)
     .filter((r) => r.status === 'failed' || (r.failed_count ?? 0) > 0)
 
@@ -194,6 +203,7 @@ export async function loadTodoCounts(supabase: SupabaseClient): Promise<TodoCoun
     findingsByClient: toList(countByClient(findings.data as never), 'findings') as TodoCounts['findingsByClient'],
     recentCardsByClient: toList(countByClient(cards.data as never), 'cards') as TodoCounts['recentCardsByClient'],
     reelsByClient: toList(countByClient(reels.data as never), 'reels') as TodoCounts['reelsByClient'],
+    manualItems,
     cronFailures24h: failedRuns.length,
   }
 }
@@ -233,14 +243,27 @@ export function buildTodoEmail(weekday: number, counts: TodoCounts, nzDateLabel:
 
   // Setup first: these are one-off consent clicks that block a whole pillar
   // until done, so they outrank the day's routine review queue.
-  if (counts.setupTasks.length > 0) {
+  const setupTasks = counts.setupTasks ?? []
+  if (setupTasks.length > 0) {
     sections.push(sectionCard('🔌', '要你点一次的连接（做一次，以后不再出现）',
-      counts.setupTasks.map((t) => `
+      setupTasks.map((t) => `
         <p style="margin:0 0 8px;font-size:14px;color:#334155">
           <b>${t.name}</b> · <a href="${t.href}" style="color:#0891b2">去连接</a><br/>
           <span style="font-size:12px;color:#64748b">${t.label}</span>
         </p>`),
     ))
+  }
+
+  // Then the manual lane: work the system genuinely cannot finish. Routine
+  // sections below move on their own; these stay frozen until a human acts.
+  const manualItems = counts.manualItems ?? []
+  if (manualItems.length > 0) {
+    const rows = manualItems.map((m) => `
+      <div style="margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid #f1f5f9">
+        <p style="margin:0 0 2px;font-size:14px;color:#0f172a"><b>${m.client_name}</b>：${m.what}</p>
+        <p style="margin:0;font-size:13px;color:#475569">→ ${m.how} · <a href="${m.href}" style="color:#0891b2">去做这件事</a></p>
+      </div>`)
+    sections.push(sectionCard('🙋', '需要你动手（系统做不了的）', rows))
   }
 
   const totalDrafts = counts.draftsByClient.reduce((s, c) => s + c.drafts, 0)
@@ -278,7 +301,8 @@ export function buildTodoEmail(weekday: number, counts: TodoCounts, nzDateLabel:
   }
 
   const totalItems =
-    counts.setupTasks.length + totalDrafts + totalFindings + totalCards + totalReels + counts.cronFailures24h
+    setupTasks.length + manualItems.length +
+    totalDrafts + totalFindings + totalCards + totalReels + counts.cronFailures24h
 
   const body = sections.length > 0
     ? sections.join('')
