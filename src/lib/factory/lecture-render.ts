@@ -6,11 +6,14 @@
 //   ⚠️ 线已接好但未实测(生成要花钱，PM 拍板先不烧)；模型名/入参以首跑实测为准。
 //
 // 布局(1080x1920)：上半 0-960 课件(内容下沉避开平台 UI 顶部遮挡)，下半 960-1920 人像，
-// 字幕在 y≈1020 起的横带(安全区内、压在人像上沿)。配色走客户 master_brief.vi_colors。
+// 字幕在 y≈1150 起的横带(Reel 安全区内、落在人像胸口高度)。配色走客户 master_brief.vi_colors。
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises'
+import { createWriteStream } from 'node:fs'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { supabaseAdmin } from '@/lib/supabase'
@@ -36,7 +39,9 @@ const OMNIHUMAN_MODEL = 'omnihuman-1-5'
 const W = 1080
 const H = 1920
 const SLIDE_H = 960          // 上半课件高
-const SUB_Y = 1020           // 字幕带 y(全帧坐标，安全区内)
+// 字幕带 y(全帧坐标)。1020 太高会压在脸上(PM 首片反馈)，下移到人像胸口高度；
+// 底部 ~1248 是 Reel 安全区下沿(再低会被平台 UI 盖住)，68px 字 + 描边刚好卡在里面。
+const SUB_Y = 1150
 
 interface SlideColors {
   bg: string
@@ -66,10 +71,16 @@ async function heartbeat(jobId: string, status: string): Promise<void> {
   await patchJob(jobId, { status })
 }
 
-async function download(url: string, dest: string): Promise<void> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(180000) })
-  if (!res.ok) throw new Error(`下载失败 ${res.status}: ${url}`)
-  await writeFile(dest, Buffer.from(await res.arrayBuffer()))
+/**
+ * 边下边写盘 —— 绝不把整个文件读进内存。
+ * 真实事故(2026-08-01):160MB 手机录像走 arrayBuffer + Buffer.from = 内存里两份共 320MB，
+ * 512MB 的做片容器被系统直接杀掉，任务静悄悄卡在 rendering 连报错都没留下。
+ * 超时按大文件放宽到 20 分钟(整段录像可能几百 MB)。
+ */
+async function download(url: string, dest: string, timeoutMs = 20 * 60 * 1000): Promise<void> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+  if (!res.ok || !res.body) throw new Error(`下载失败 ${res.status}: ${url}`)
+  await pipeline(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), createWriteStream(dest))
 }
 
 async function ffprobeDuration(file: string): Promise<number> {
@@ -116,7 +127,8 @@ async function whisperTranscribe(audioFile: string): Promise<TranscriptSegment[]
 
 // ---------- PIL 画课件 / 字幕 ----------
 
-// 课件 slide：深色底 + 顶部品牌条 + 大标题 + 要点列表。内容从 y=300 起(避开平台 UI 顶部遮挡)。
+// 课件 slide：深色底 + 强调色短横 + 大标题 + 要点列表。内容从 y=300 起(避开平台 UI 顶部遮挡)。
+// 不打品牌名(PM:保持单纯分享)。文字按实测宽度折行 + 字号自适应，绝不裁字。
 const SLIDE_PY = `
 import sys, json
 from PIL import Image, ImageDraw, ImageFont
@@ -124,23 +136,66 @@ cfg = json.loads(sys.argv[1])
 W, H = cfg["w"], cfg["h"]
 img = Image.new("RGBA", (W, H), cfg["bg"])
 d = ImageDraw.Draw(img)
-title_font = ImageFont.truetype(cfg["font"], 76)
-point_font = ImageFont.truetype(cfg["font"], 52)
-small_font = ImageFont.truetype(cfg["font"], 34)
 PAD = 80
-y = 300
-d.rectangle([PAD, y, PAD + 120, y + 12], fill=cfg["accent"])
-y += 48
-for line in cfg["title_lines"]:
-    d.text((PAD, y), line, font=title_font, fill=cfg["text"])
-    y += 96
-y += 36
-for p in cfg["points"]:
-    d.ellipse([PAD, y + 22, PAD + 18, y + 40], fill=cfg["accent"])
-    d.text((PAD + 44, y), p, font=point_font, fill=cfg["text"])
-    y += 88
-if cfg.get("brand"):
-    d.text((PAD, H - 80), cfg["brand"], font=small_font, fill=cfg["accent"])
+TOP = 300                 # 内容起点(避开平台 UI 顶部遮挡)
+BOTTOM_PAD = 110          # 底部留白:要点绝不许贴到边
+BULLET_X = PAD + 44
+MAX_W = W - BULLET_X - PAD
+
+def wrap(text, font, max_w):
+    """按测量宽度折行(中文没有词边界，逐字累加)。"""
+    lines, cur = [], ""
+    for ch in text:
+        if d.textlength(cur + ch, font=font) <= max_w:
+            cur += ch
+        else:
+            if cur:
+                lines.append(cur)
+            cur = ch
+    if cur:
+        lines.append(cur)
+    return lines or [""]
+
+def layout(title_size, point_size, gap):
+    """按给定字号排一遍，返回(总高, 画的指令)。放不下就让调用方缩字号。"""
+    tf = ImageFont.truetype(cfg["font"], title_size)
+    pf = ImageFont.truetype(cfg["font"], point_size)
+    ops, y = [], TOP
+    ops.append(("rect", PAD, y, PAD + 120, y + 12))
+    y += 48
+    for line in wrap(cfg["title"], tf, W - 2 * PAD)[:2]:
+        ops.append(("text", PAD, y, line, tf))
+        y += int(title_size * 1.26)
+    y += 36
+    for p in cfg["points"]:
+        if not p.strip():
+            continue
+        wrapped = wrap(p.strip(), pf, MAX_W)[:2]
+        ops.append(("dot", PAD, y + int(point_size * 0.42), PAD + 18, y + int(point_size * 0.42) + 18))
+        for i, line in enumerate(wrapped):
+            ops.append(("text", BULLET_X, y, line, pf))
+            y += int(point_size * 1.28)
+        y += int(point_size * 0.3)
+    return y, ops
+
+# 字号自适应:先按标准字号排，超出可用高度就整体缩小(最小 34)，保证一个字都不被裁
+avail = H - BOTTOM_PAD
+title_size, point_size = 76, 52
+while True:
+    total, ops = layout(title_size, point_size, 0)
+    if total <= avail or point_size <= 34:
+        break
+    title_size = max(48, title_size - 4)
+    point_size -= 3
+
+for op in ops:
+    if op[0] == "rect":
+        d.rectangle([op[1], op[2], op[3], op[4]], fill=cfg["accent"])
+    elif op[0] == "dot":
+        d.ellipse([op[1], op[2], op[3], op[4]], fill=cfg["accent"])
+    else:
+        d.text((op[1], op[2]), op[3], font=op[4], fill=cfg["text"])
+
 img.save(cfg["out"])
 `
 
@@ -160,31 +215,26 @@ d.text((x, cfg["y"]), text, font=font, fill="white", stroke_width=5, stroke_fill
 img.save(cfg["out"])
 `
 
-/** 课件标题过长时切两行(≤9 字/行，最多两行)。 */
-function slideTitleLines(title: string): string[] {
-  const t = title.trim()
-  if (t.length <= 9) return [t]
-  return [t.slice(0, 9), t.slice(9, 18)]
-}
-
 interface SlideSpec {
   title: string
   points: string[]
 }
 
-/** 每个时间段一张课件：钩子=本讲封面，要点=各自课件，CTA=收尾页。 */
-export function slidesOfLecture(lecture: LectureScript, brandName: string): SlideSpec[] {
+/**
+ * 每个时间段一张课件：钩子=本讲封面，要点=各自课件，CTA=收尾页。
+ * 课件上不打品牌名(PM 拍板：保持单纯分享的感觉，不做成宣传物料)。
+ */
+export function slidesOfLecture(lecture: LectureScript): SlideSpec[] {
   return [
     { title: lecture.title, points: ['本讲重点', ...lecture.sections.map((s) => s.slideTitle)] },
     ...lecture.sections.map((s) => ({ title: s.slideTitle, points: s.slidePoints })),
-    { title: '关注看全系列', points: [`主页合集 · ${brandName}`, '下一讲更实操'] },
+    { title: '关注看全系列', points: ['主页合集里有全套', '下一讲更实操'] },
   ]
 }
 
 async function renderSlides(
   slides: SlideSpec[],
   colors: SlideColors,
-  brand: string,
   dir: string,
 ): Promise<string[]> {
   const files: string[] = []
@@ -194,9 +244,8 @@ async function renderSlides(
       w: W, h: SLIDE_H,
       bg: colors.bg, text: colors.text, accent: colors.accent,
       font: CJK_FONT,
-      title_lines: slideTitleLines(slides[i].title),
+      title: slides[i].title.trim(),
       points: slides[i].points.slice(0, 4),
-      brand,
       out,
     }
     await exec('python3', ['-c', SLIDE_PY, JSON.stringify(cfg)])
@@ -351,10 +400,9 @@ export async function runLectureRender(jobId: string): Promise<{ outputUrl: stri
       text: DEFAULT_COLORS.text,
       accent: hexOk(vi?.secondary) ? vi.secondary : DEFAULT_COLORS.accent,
     }
-    const brand = brief?.brand_name || ''
     // 口播与课件从同一份结构过滤——空口播段(如没写 CTA)连同它的课件一起剔掉，
     // 绝不让后面的课件错位一页(魏征 m4)
-    const allSlides = slidesOfLecture(lecture, brand)
+    const allSlides = slidesOfLecture(lecture)
     const entries = [
       { spoken: lecture.hookSpoken, slide: allSlides[0] },
       ...lecture.sections.map((s, i) => ({ spoken: s.spoken, slide: allSlides[1 + i] })),
@@ -374,8 +422,10 @@ export async function runLectureRender(jobId: string): Promise<{ outputUrl: stri
       if (!production.recording_url) throw new Error('没有上传的录像')
       personFile = join(dir, 'rec.mp4')
       await download(production.recording_url, personFile)
+      await heartbeat(jobId, 'rendering')   // 大文件下载可能几分钟，别让卡死回收误杀
       duration = await ffprobeDuration(personFile)
       const segments = await whisperTranscribe(await extractAudio(personFile, dir))
+      await heartbeat(jobId, 'rendering')
       parts = alignPartsToSegments(spokenParts, segments)
       // 对轴结果首尾对齐整条录像(录像可能比第一句早开始/最后一句晚结束)
       parts[0] = { ...parts[0], start: 0 }
@@ -404,7 +454,7 @@ export async function runLectureRender(jobId: string): Promise<{ outputUrl: stri
 
     await patchJob(jobId, { status: 'assembling' })
 
-    const slideFiles = await renderSlides(entries.map((e) => e.slide), colors, brand, dir)
+    const slideFiles = await renderSlides(entries.map((e) => e.slide), colors, dir)
     const captionFiles = await renderCaptions(captionChunks, dir)
 
     const outFile = join(dir, 'final.mp4')
