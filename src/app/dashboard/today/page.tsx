@@ -24,12 +24,20 @@ interface ClientCount {
   reels?: number
 }
 
+interface SetupTask {
+  name: string
+  id: string
+  label: string
+  href: string
+}
+
 interface TodayPayload {
   weekday: number
   weekday_label: string
   theme: { title: string; hint: string } | null
   nz_date: string
   counts: {
+    setupTasks?: SetupTask[]
     draftsByClient: ClientCount[]
     findingsByClient: ClientCount[]
     recentCardsByClient: ClientCount[]
@@ -135,7 +143,9 @@ export default function TodayPage() {
   const totalFindings = counts.findingsByClient.reduce((s, c) => s + (c.findings ?? 0), 0)
   const totalCards = counts.recentCardsByClient.reduce((s, c) => s + (c.cards ?? 0), 0)
   const totalReels = (counts.reelsByClient ?? []).reduce((s, c) => s + (c.reels ?? 0), 0)
-  const total = totalDrafts + totalFindings + totalCards + totalReels + counts.cronFailures24h
+  const setupTasks = counts.setupTasks ?? []
+  const total =
+    setupTasks.length + totalDrafts + totalFindings + totalCards + totalReels + counts.cronFailures24h
 
   return (
     <div className="mx-auto max-w-3xl p-6">
@@ -157,6 +167,29 @@ export default function TodayPage() {
         </div>
       ) : (
         <div className="space-y-4">
+          {setupTasks.length > 0 && (
+            <SectionCard emoji="🔌" title="要你点一次的连接（做一次，以后不再出现）">
+              {setupTasks.map((t) => (
+                <div
+                  key={`${t.id}-${t.href}`}
+                  className="flex items-start justify-between gap-3 border-b border-slate-100 py-2 last:border-b-0"
+                >
+                  <span className="min-w-0">
+                    <span className="block text-sm font-bold text-slate-700">{t.name}</span>
+                    <span className="block text-xs leading-relaxed text-slate-500">{t.label}</span>
+                  </span>
+                  {/* 跳外部 Google 授权页：必须整页导航，不能走 next/link 的客户端路由 */}
+                  <a
+                    href={t.href}
+                    className="mt-0.5 shrink-0 rounded-lg bg-cyan-700 px-3 py-1 text-xs font-bold text-white hover:bg-cyan-800"
+                  >
+                    去连接
+                  </a>
+                </div>
+              ))}
+            </SectionCard>
+          )}
+
           {totalDrafts > 0 && (
             <SectionCard emoji="📝" title="Blog 草稿待审">
               {counts.draftsByClient.map((c) => (
