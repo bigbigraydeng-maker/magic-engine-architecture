@@ -5,8 +5,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 
-const { mockClientsQuery, mockSnapshotRankedKeywordsForClient } = vi.hoisted(() => ({
+const { mockClientsQuery, mockEq, mockSnapshotRankedKeywordsForClient } = vi.hoisted(() => ({
   mockClientsQuery: vi.fn(),
+  mockEq: vi.fn(),
   mockSnapshotRankedKeywordsForClient: vi.fn(),
 }))
 
@@ -14,7 +15,9 @@ vi.mock('@/lib/supabase', () => ({
   supabaseAdmin: {
     from: vi.fn(() => ({
       select: vi.fn(() => ({
-        not: mockClientsQuery,
+        eq: mockEq.mockImplementation(() => ({
+          not: mockClientsQuery,
+        })),
       })),
     })),
   },
@@ -22,6 +25,11 @@ vi.mock('@/lib/supabase', () => ({
 
 vi.mock('@/lib/seo-intelligence/keyword-snapshots', () => ({
   snapshotRankedKeywordsForClient: mockSnapshotRankedKeywordsForClient,
+}))
+
+// startCronRun writes to cron_run_logs via supabaseAdmin — out of scope here
+vi.mock('@/lib/cron/run-logger', () => ({
+  startCronRun: vi.fn(async () => ({ finish: vi.fn(async () => {}) })),
 }))
 
 function makeRequest(secret: string | null) {
@@ -115,6 +123,8 @@ describe('GET /api/cron/keyword-snapshots-weekly', () => {
     expect(json.clients_processed).toBe(1)
     expect(json.snapshots_written).toBe(200)
     expect(json.failed).toBe(0)
+    // 真客户闸门：选客户必须按 client_status='active' 过滤
+    expect(mockEq).toHaveBeenCalledWith('client_status', 'active')
     expect(mockSnapshotRankedKeywordsForClient).toHaveBeenCalledWith({
       id: 'client-cts',
       domain: 'ctstours.com.au',
