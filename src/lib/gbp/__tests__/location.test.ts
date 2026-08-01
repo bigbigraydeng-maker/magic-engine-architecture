@@ -49,9 +49,28 @@ describe('pickClientLocation', () => {
     expect(match?.name).toBe('locations/2')
   })
 
-  it('takes the only location when there is exactly one', () => {
+  it('takes the only location when it carries no website (nothing contradicts it)', () => {
     const { match } = pickClientLocation([loc('locations/9', 'Whatever Ltd', null)], CTS)
     expect(match?.name).toBe('locations/9')
+  })
+
+  it('REFUSES the only location when it visibly belongs to someone else', () => {
+    // 真实场景: CTS 和 oztop 用同一个 Google 账号授权。若该账号此刻只暴露
+    // CTS 一家门店，天真的「只有一家就用」会把 oztop 的帖子绑到 CTS 门店上。
+    const { match, reason } = pickClientLocation(
+      [loc('locations/1', 'CTS Tours NZ', 'https://www.ctstours.co.nz')],
+      { domain: 'oztopbuildingsupplies.com.au', name: 'oztop' },
+    )
+    expect(match).toBeNull()
+    expect(reason).toBe('ambiguous')
+  })
+
+  it('the only location on the client own website is still accepted', () => {
+    const { match } = pickClientLocation(
+      [loc('locations/1', 'Trading Name Ltd', 'https://ctstours.co.nz')],
+      CTS,
+    )
+    expect(match?.name).toBe('locations/1')
   })
 
   it('refuses to guess between several unmatched locations', () => {
@@ -63,10 +82,21 @@ describe('pickClientLocation', () => {
     expect(reason).toBe('ambiguous')
   })
 
-  it('refuses when the same host appears twice (cannot tell them apart)', () => {
+  it('several branches on the client own host stay ambiguous (which branch is a human call)', () => {
     const { match, reason } = pickClientLocation([
       loc('locations/1', 'CTS Auckland', 'https://www.ctstours.co.nz'),
       loc('locations/2', 'CTS Christchurch', 'https://www.ctstours.co.nz'),
+    ], CTS)
+    expect(match).toBeNull()
+    expect(reason).toBe('ambiguous')
+  })
+
+  it('same trading name on two different businesses stays ambiguous', () => {
+    // Titles are not unique across businesses, so a duplicate title must not
+    // resolve — that is exactly how content lands on a stranger storefront.
+    const { match, reason } = pickClientLocation([
+      loc('locations/1', 'CTS Tours NZ', 'https://impostor-a.co.nz'),
+      loc('locations/2', 'CTS Tours NZ', 'https://impostor-b.co.nz'),
     ], CTS)
     expect(match).toBeNull()
     expect(reason).toBe('ambiguous')

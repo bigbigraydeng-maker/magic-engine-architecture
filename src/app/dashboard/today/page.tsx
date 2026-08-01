@@ -168,22 +168,22 @@ export default function TodayPage() {
       ) : (
         <div className="space-y-4">
           {setupTasks.length > 0 && (
-            <SectionCard emoji="🔌" title="要你点一次的授权（一次搞定，之后全自动）">
+            <SectionCard emoji="🔌" title="要你点一次的连接（做一次，以后不再出现）">
               {setupTasks.map((t) => (
                 <div
                   key={`${t.id}-${t.href}`}
-                  className="flex items-center justify-between gap-3 border-b border-slate-100 py-2 last:border-b-0"
+                  className="flex items-start justify-between gap-3 border-b border-slate-100 py-2 last:border-b-0"
                 >
                   <span className="min-w-0">
                     <span className="block text-sm font-bold text-slate-700">{t.name}</span>
-                    <span className="block text-xs text-slate-500">{t.label}</span>
+                    <span className="block text-xs leading-relaxed text-slate-500">{t.label}</span>
                   </span>
-                  {/* 外部 OAuth 跳转：必须整页导航，不能走 next/link 的客户端路由 */}
+                  {/* 跳外部 Google 授权页：必须整页导航，不能走 next/link 的客户端路由 */}
                   <a
                     href={t.href}
-                    className="shrink-0 rounded-lg bg-amber-500 px-3 py-1 text-xs font-bold text-white hover:bg-amber-600"
+                    className="mt-0.5 shrink-0 rounded-lg bg-cyan-700 px-3 py-1 text-xs font-bold text-white hover:bg-cyan-800"
                   >
-                    去授权
+                    去连接
                   </a>
                 </div>
               ))}

@@ -184,7 +184,9 @@ export async function GET(req: NextRequest) {
   // unresolved and the first weekly post would be the one to discover a
   // problem. Failure is non-fatal — the connection itself is good, we just
   // flag that a location still needs picking.
-  let locationStatus: 'ready' | 'needs_location' = 'ready'
+  // Default to "not confirmed": telling the PM it is ready when we do not
+  // know is the one outcome that must never happen (魏征 🟡5).
+  let locationStatus: 'ready' | 'needs_location' = 'needs_location'
   try {
     const { data: clientRow } = await supabaseAdmin
       .from('clients')
@@ -196,13 +198,12 @@ export async function GET(req: NextRequest) {
       const resolved = await resolveGbpLocation(
         clientRow as { id: string; name: string; domain: string | null },
       )
-      if (!resolved.ok) {
-        locationStatus = 'needs_location'
-        console.warn('[gbp/callback] location unresolved:', resolved.reason)
-      }
+      if (resolved.ok) locationStatus = 'ready'
+      else console.warn('[gbp/callback] location unresolved:', resolved.reason)
+    } else {
+      console.warn('[gbp/callback] client row unreadable — leaving location unconfirmed')
     }
   } catch (err) {
-    locationStatus = 'needs_location'
     console.warn('[gbp/callback] location resolution failed:', err instanceof Error ? err.message : err)
   }
 

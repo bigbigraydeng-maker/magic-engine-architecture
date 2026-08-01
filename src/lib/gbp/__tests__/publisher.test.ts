@@ -68,7 +68,7 @@ describe('publishToGbp — draft degradation', () => {
     })
 
     expect(result.mode).toBe('draft')
-    expect(result.degradation_reason).toMatch(/授权/)
+    expect(result.degradation_reason).toMatch(/还没连上/)
     expect(global.fetch).not.toHaveBeenCalled()
   })
 
@@ -99,7 +99,21 @@ describe('publishToGbp — draft degradation', () => {
     })
 
     expect(result.mode).toBe('draft')
-    expect(result.degradation_reason).toMatch(/location/i)
+    expect(result.degradation_reason).toMatch(/哪一家门店/)
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('refuses a malformed location_name instead of putting it in the API path', async () => {
+    withToken()
+
+    const result = await publishToGbp({
+      post_text: 'Hi',
+      // 模型编出来的东西不该拼进 Google 的 URL（魏征 🔴3）
+      location_name: 'accounts/1/locations/2/../../other/locations/9',
+    })
+
+    expect(result.mode).toBe('draft')
+    expect(result.degradation_reason).toMatch(/格式不对/)
     expect(global.fetch).not.toHaveBeenCalled()
   })
 

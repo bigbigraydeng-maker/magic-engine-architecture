@@ -37,6 +37,7 @@ export type GbpLocationFailure =
   | 'api_failed'          // Google rejected the list call (API not enabled / no access)
   | 'no_locations'        // account has zero locations
   | 'ambiguous'           // several locations and none matches the client
+  | 'taken_by_other'      // the matched storefront already belongs to another ME client
 
 export type GbpLocationResult =
   | { ok: true; locationName: string; cached: boolean }
@@ -72,6 +73,12 @@ export function composeLocationResource(accountId: string, locationName: string)
  *
  * Order: website host match → exact title match → single location fallback.
  * Anything else is ambiguous (caller must ask a human).
+ *
+ * Note on the host rule: several locations sharing the client's website host
+ * are all branches of the SAME business, so taking the first is safe — the
+ * failure mode this whole module guards against is posting to a DIFFERENT
+ * business, which a host match rules out. A title match, by contrast, must be
+ * unique: two different businesses can carry the same trading name.
  */
 export function pickClientLocation(
   candidates: GbpLocationCandidate[],
@@ -91,7 +98,19 @@ export function pickClientLocation(
     if (byName.length === 1) return { match: byName[0] }
   }
 
-  if (candidates.length === 1) return { match: candidates[0] }
+  // Single-location fallback, but ONLY without counter-evidence.
+  //
+  // 魏征 🔴1: CTS and oztop are authorised from the SAME Google account. If
+  // that account happens to expose one location when oztop connects, a naive
+  // "only one, take it" would bind oztop's weekly posts to CTS's storefront.
+  // So the lone candidate must not visibly belong to someone else: either it
+  // carries no website at all, or its website is the client's own.
+  if (candidates.length === 1) {
+    const only = candidates[0]
+    const onlyHost = hostRoot(only.websiteUri)
+    if (!onlyHost || (clientHost && onlyHost === clientHost)) return { match: only }
+    return { match: null, reason: 'ambiguous' }
+  }
 
   return { match: null, reason: 'ambiguous' }
 }
@@ -102,20 +121,39 @@ export async function listGbpLocations(
   accountId: string,
   accessToken: string,
 ): Promise<GbpLocationCandidate[] | null> {
-  const url = `${BUSINESS_INFO_API}/${accountId}/locations?readMask=${LOCATION_READ_MASK}&pageSize=100`
-  try {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
-    if (!res.ok) {
-      const body = await res.text().catch(() => '(unreadable)')
-      console.error('[gbp/location] list failed:', res.status, body.slice(0, 300))
+  const all: GbpLocationCandidate[] = []
+  let pageToken: string | undefined
+  // Paging matters for correctness, not just completeness: a truncated list
+  // can make a genuinely ambiguous account look like it has one clear match.
+  for (let page = 0; page < 10; page++) {
+    const url =
+      `${BUSINESS_INFO_API}/${accountId}/locations?readMask=${LOCATION_READ_MASK}&pageSize=100` +
+      (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '')
+    try {
+      // Hard timeout: without it a hung Google call leaves the user staring at
+      // a blank OAuth callback, cookie uncleared, redirect never reached.
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (!res.ok) {
+        const body = await res.text().catch(() => '(unreadable)')
+        console.error('[gbp/location] list failed:', res.status, body.slice(0, 300))
+        return null
+      }
+      const json = (await res.json()) as {
+        locations?: GbpLocationCandidate[]
+        nextPageToken?: string
+      }
+      all.push(...(json.locations ?? []))
+      if (!json.nextPageToken) return all
+      pageToken = json.nextPageToken
+    } catch (err) {
+      console.error('[gbp/location] list call failed:', err instanceof Error ? err.message : err)
       return null
     }
-    const json = (await res.json()) as { locations?: GbpLocationCandidate[] }
-    return json.locations ?? []
-  } catch (err) {
-    console.error('[gbp/location] list call failed:', err instanceof Error ? err.message : err)
-    return null
   }
+  return all
 }
 
 /**
@@ -143,10 +181,70 @@ export async function resolveGbpLocation(
 
   const locationName = composeLocationResource(auth.connection.account_id, match.name)
 
+  // Second guard on the same hazard (魏征 🔴1): several ME clients are
+  // authorised from one Google account, so a storefront already claimed by
+  // another client must never be re-used — that would publish two clients'
+  // content onto one business page.
+  const { data: clash } = await supabaseAdmin
+    .from('platform_oauth_connections')
+    .select('client_id')
+    .eq('provider', 'google_gbp')
+    .eq('location_name', locationName)
+    .neq('client_id', client.id)
+    .limit(1)
+
+  if ((clash ?? []).length > 0) {
+    console.error(
+      `[gbp/location] ${locationName} is already bound to another client — refusing to share it`,
+    )
+    return { ok: false, reason: 'taken_by_other', candidates }
+  }
+
   await supabaseAdmin
     .from('platform_oauth_connections')
-    .update({ location_name: locationName })
+    .update({ location_name: locationName, updated_at: new Date().toISOString() })
     .eq('id', auth.connection.id)
 
   return { ok: true, locationName, cached: false }
+}
+
+/**
+ * Bind a specific storefront chosen by a human (Settings picker).
+ * Same cross-client guard as the automatic path.
+ */
+export async function setGbpLocation(
+  clientId: string,
+  locationName: string,
+): Promise<{ ok: true } | { ok: false; reason: 'not_connected' | 'taken_by_other' | 'invalid' }> {
+  if (!/^accounts\/[^/]+\/locations\/[^/]+$/.test(locationName)) {
+    return { ok: false, reason: 'invalid' }
+  }
+
+  const { data: conn } = await supabaseAdmin
+    .from('platform_oauth_connections')
+    .select('id')
+    .eq('client_id', clientId)
+    .eq('provider', 'google_gbp')
+    .eq('status', 'active')
+    .limit(1)
+    .maybeSingle()
+
+  if (!conn) return { ok: false, reason: 'not_connected' }
+
+  const { data: clash } = await supabaseAdmin
+    .from('platform_oauth_connections')
+    .select('client_id')
+    .eq('provider', 'google_gbp')
+    .eq('location_name', locationName)
+    .neq('client_id', clientId)
+    .limit(1)
+
+  if ((clash ?? []).length > 0) return { ok: false, reason: 'taken_by_other' }
+
+  await supabaseAdmin
+    .from('platform_oauth_connections')
+    .update({ location_name: locationName, updated_at: new Date().toISOString() })
+    .eq('id', (conn as { id: string }).id)
+
+  return { ok: true }
 }

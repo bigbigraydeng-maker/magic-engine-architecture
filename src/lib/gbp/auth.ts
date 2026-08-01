@@ -131,13 +131,21 @@ export async function getGbpAccessToken(clientId: string): Promise<GbpAuthResult
   }
 
   const refreshed = await refreshGoogleToken(refreshToken)
-  if (!refreshed) {
-    // Mark the row so the UI and 今日待办 can tell the user to re-authorise
-    // instead of silently producing nothing every week.
-    await supabaseAdmin
-      .from('platform_oauth_connections')
-      .update({ status: 'error', error_message: 'refresh_failed — needs re-authorisation' })
-      .eq('id', row.id)
+  if (!refreshed.ok) {
+    // Only a DEFINITIVE rejection (consent revoked / bad client) means the
+    // human must re-authorise. A Google 5xx, a network blip or a missing env
+    // var must not burn the connection — doing so would drag the PM through
+    // a pointless OAuth round trip for a transient wobble (魏征 🔴2).
+    if (refreshed.permanent) {
+      await supabaseAdmin
+        .from('platform_oauth_connections')
+        .update({
+          status: 'error',
+          error_message: '需要重新授权（Google 说这个授权已失效）',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', row.id)
+    }
     return { ok: false, reason: 'refresh_failed' }
   }
 
@@ -154,14 +162,22 @@ export async function getGbpAccessToken(clientId: string): Promise<GbpAuthResult
   return { ok: true, accessToken: refreshed.access_token, connection }
 }
 
-async function refreshGoogleToken(
-  refreshToken: string,
-): Promise<{ access_token: string; expires_in: number } | null> {
+/**
+ * `permanent: true` means only a human re-authorising can fix it. Everything
+ * else (5xx, network, misconfigured env) is transient and must leave the
+ * stored connection alone.
+ */
+type RefreshOutcome =
+  | { ok: true; access_token: string; expires_in: number }
+  | { ok: false; permanent: boolean }
+
+export async function refreshGoogleToken(refreshToken: string): Promise<RefreshOutcome> {
   const clientId = process.env.GOOGLE_CLIENT_ID
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET
   if (!clientId || !clientSecret) {
+    // Our own misconfiguration — never the client's consent.
     console.error('[gbp/auth] GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET not configured')
-    return null
+    return { ok: false, permanent: false }
   }
 
   try {
@@ -174,14 +190,22 @@ async function refreshGoogleToken(
         client_id: clientId,
         client_secret: clientSecret,
       }),
+      signal: AbortSignal.timeout(15_000),
     })
+
     if (!res.ok) {
-      console.error('[gbp/auth] refresh rejected by Google:', res.status)
-      return null
+      const body = await res.text().catch(() => '')
+      // Google signals a dead grant with 4xx + invalid_grant / invalid_client.
+      const permanent =
+        res.status >= 400 && res.status < 500 && /invalid_grant|invalid_client/i.test(body)
+      console.error('[gbp/auth] refresh rejected by Google:', res.status, permanent ? '(permanent)' : '(transient)')
+      return { ok: false, permanent }
     }
-    return (await res.json()) as { access_token: string; expires_in: number }
+
+    const json = (await res.json()) as { access_token: string; expires_in: number }
+    return { ok: true, access_token: json.access_token, expires_in: json.expires_in }
   } catch (err) {
     console.error('[gbp/auth] refresh call failed:', err instanceof Error ? err.message : err)
-    return null
+    return { ok: false, permanent: false }
   }
 }
