@@ -40,6 +40,12 @@ export const DAY_THEMES: Record<number, { title: string; hint: string }> = {
 }
 
 export interface TodoCounts {
+  /**
+   * One-off setup actions only a human can complete (OAuth consent screens).
+   * Surfaced here so the PM/FDE never has to hunt for them in Settings —
+   * these block whole pillars until done.
+   */
+  setupTasks: Array<{ name: string; id: string; label: string; href: string }>
   /** [{ name, id, drafts }] — clients with blog drafts awaiting review. */
   draftsByClient: Array<{ name: string; id: string; drafts: number }>
   /** [{ name, id, findings }] — clients with fresh patrol findings. */
@@ -55,6 +61,50 @@ export interface TodoCounts {
 /** reels_drafts statuses that mean "a human needs to look at this". */
 const REEL_REVIEW_STATUSES = ['video_ready', 'images_ready', 'in_review'] as const
 
+const APP_BASE = 'https://app.magicengine.com.au'
+
+/**
+ * Clients that need the Google Business Profile consent click.
+ *
+ * "Should have GBP" is inferred from `gbp_place_id` — a client only gets that
+ * field once we've confirmed they have a Google storefront (口碑监测身份).
+ * So the list extends itself as more clients are configured; no hardcoded roster.
+ *
+ * A row in error status counts too: an expired/revoked consent needs the same
+ * click, and silently skipping it is how a pillar dies unnoticed.
+ */
+export async function loadGbpSetupTasks(
+  supabase: SupabaseClient,
+): Promise<TodoCounts['setupTasks']> {
+  const [{ data: clients }, { data: connections }] = await Promise.all([
+    supabase
+      .from('clients')
+      .select('id, name')
+      .eq('client_status', 'active')
+      .not('gbp_place_id', 'is', null),
+    supabase
+      .from('platform_oauth_connections')
+      .select('client_id, status')
+      .eq('provider', 'google_gbp'),
+  ])
+
+  const connected = new Set(
+    ((connections ?? []) as Array<{ client_id: string; status: string }>)
+      .filter((c) => c.status === 'active')
+      .map((c) => c.client_id),
+  )
+
+  return ((clients ?? []) as Array<{ id: string; name: string }>)
+    .filter((c) => !connected.has(c.id))
+    .map((c) => ({
+      name: c.name,
+      id: c.id,
+      label: '连接 Google 商家页（点一次授权，之后自动发帖）',
+      href: `${APP_BASE}/api/auth/google/gbp/start?clientId=${c.id}`,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
 // ── Data loading ────────────────────────────────────────────────────────────────
 
 export async function loadTodoCounts(supabase: SupabaseClient): Promise<TodoCounts> {
@@ -62,7 +112,7 @@ export async function loadTodoCounts(supabase: SupabaseClient): Promise<TodoCoun
   cardCutoff.setDate(cardCutoff.getDate() - RECENT_CARD_DAYS)
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
 
-  const [drafts, findings, cards, reels, failures] = await Promise.all([
+  const [drafts, findings, cards, reels, failures, setupTasks] = await Promise.all([
     supabase
       .from('blog_posts')
       .select('client_id, clients(name)')
@@ -85,6 +135,7 @@ export async function loadTodoCounts(supabase: SupabaseClient): Promise<TodoCoun
       .from('cron_run_logs')
       .select('id, status, failed_count')
       .gte('started_at', since24h),
+    loadGbpSetupTasks(supabase),
   ])
 
   const countByClient = (
@@ -110,6 +161,7 @@ export async function loadTodoCounts(supabase: SupabaseClient): Promise<TodoCoun
     .filter((r) => r.status === 'failed' || (r.failed_count ?? 0) > 0)
 
   return {
+    setupTasks,
     draftsByClient: toList(countByClient(drafts.data as never), 'drafts') as TodoCounts['draftsByClient'],
     findingsByClient: toList(countByClient(findings.data as never), 'findings') as TodoCounts['findingsByClient'],
     recentCardsByClient: toList(countByClient(cards.data as never), 'cards') as TodoCounts['recentCardsByClient'],
@@ -151,6 +203,17 @@ export function buildTodoEmail(weekday: number, counts: TodoCounts, nzDateLabel:
       ${label}：<b>${count}</b> ${unit} · <a href="${href}" style="color:#0891b2">去处理</a>
     </p>`
 
+  // Setup first: these are one-off consent clicks that block a whole pillar
+  // until done, so they outrank the day's routine review queue.
+  if (counts.setupTasks.length > 0) {
+    sections.push(sectionCard('🔌', '要你点一次的授权（一次搞定，之后全自动）',
+      counts.setupTasks.map((t) => `
+        <p style="margin:0 0 4px;font-size:14px;color:#334155">
+          ${t.name}：${t.label} · <a href="${t.href}" style="color:#0891b2">去授权</a>
+        </p>`),
+    ))
+  }
+
   const totalDrafts = counts.draftsByClient.reduce((s, c) => s + c.drafts, 0)
   if (totalDrafts > 0) {
     sections.push(sectionCard('📝', 'Blog 草稿待审', counts.draftsByClient.map((c) =>
@@ -185,7 +248,8 @@ export function buildTodoEmail(weekday: number, counts: TodoCounts, nzDateLabel:
     ]))
   }
 
-  const totalItems = totalDrafts + totalFindings + totalCards + totalReels + counts.cronFailures24h
+  const totalItems =
+    counts.setupTasks.length + totalDrafts + totalFindings + totalCards + totalReels + counts.cronFailures24h
 
   const body = sections.length > 0
     ? sections.join('')

@@ -28,8 +28,16 @@ export interface GbpPostInput {
   /**
    * GBP location resource name: accounts/{accountId}/locations/{locationId}.
    * Without this the publisher always falls back to draft mode.
+   * Resolve it with lib/gbp/location.ts > resolveGbpLocation.
    */
   location_name?: string
+  /**
+   * Per-client OAuth access token (lib/gbp/auth.ts > getGbpAccessToken).
+   * Preferred over the legacy GOOGLE_GBP_ACCESS_TOKEN env var, which was
+   * never configured in production — that is why ME had published zero
+   * GBP posts before this path existed.
+   */
+  access_token?: string
 }
 
 export type GbpPublishMode = 'live' | 'draft'
@@ -46,7 +54,12 @@ export interface GbpPublishResult {
 
 const GBP_API_BASE = 'https://mybusiness.googleapis.com/v4'
 
-function getAccessToken(): string | null {
+/**
+ * Static env token — legacy path, never configured in production.
+ * Callers that know their client should pass `access_token` instead
+ * (see lib/gbp/auth.ts > getGbpAccessToken).
+ */
+function getEnvAccessToken(): string | null {
   return process.env.GOOGLE_GBP_ACCESS_TOKEN ?? null
 }
 
@@ -84,9 +97,10 @@ function draftResult(input: GbpPostInput, reason: string): GbpPublishResult {
  * are unavailable.
  */
 export async function publishToGbp(input: GbpPostInput): Promise<GbpPublishResult> {
-  const token = getAccessToken()
+  // Per-client OAuth token (preferred) → legacy env var → draft.
+  const token = input.access_token ?? getEnvAccessToken()
   if (!token) {
-    return draftResult(input, 'GOOGLE_GBP_ACCESS_TOKEN access token not configured — using draft mode.')
+    return draftResult(input, '没有该客户的 Google 商家授权（也没有备用令牌）—— 转为草稿。')
   }
 
   const { location_name } = input

@@ -7,12 +7,60 @@ import { describe, it, expect } from 'vitest'
 import { buildTodoEmail, nzWeekday, type TodoCounts } from '../daily-todo'
 
 const EMPTY: TodoCounts = {
+  setupTasks: [],
   draftsByClient: [],
   findingsByClient: [],
   recentCardsByClient: [],
   reelsByClient: [],
   cronFailures24h: 0,
 }
+
+describe('buildTodoEmail · setup tasks', () => {
+  const SETUP: TodoCounts['setupTasks'] = [
+    {
+      name: 'CTS Tours NZ',
+      id: 'cid-1',
+      label: '连接 Google 商家页（点一次授权，之后自动发帖）',
+      href: 'https://app.magicengine.com.au/api/auth/google/gbp/start?clientId=cid-1',
+    },
+    {
+      name: 'oztop',
+      id: 'cid-2',
+      label: '连接 Google 商家页（点一次授权，之后自动发帖）',
+      href: 'https://app.magicengine.com.au/api/auth/google/gbp/start?clientId=cid-2',
+    },
+  ]
+
+  it('renders one authorise link per client and counts into the total', () => {
+    const email = buildTodoEmail(3, { ...EMPTY, setupTasks: SETUP }, '1 Aug')
+
+    expect(email.totalItems).toBe(2)
+    expect(email.subject).toContain('2 件')
+    expect(email.html).toContain('去授权')
+    expect(email.html).toContain('gbp/start?clientId=cid-1')
+    expect(email.html).toContain('gbp/start?clientId=cid-2')
+  })
+
+  it('setup card is rendered above the routine review queues', () => {
+    const email = buildTodoEmail(2, {
+      ...EMPTY,
+      setupTasks: SETUP.slice(0, 1),
+      draftsByClient: [{ name: 'oztop', id: 'cid-2', drafts: 3 }],
+    }, '1 Aug')
+
+    const setupAt = email.html.indexOf('去授权')
+    const draftsAt = email.html.indexOf('Blog 草稿待审')
+    expect(setupAt).toBeGreaterThan(-1)
+    expect(draftsAt).toBeGreaterThan(-1)
+    expect(setupAt).toBeLessThan(draftsAt)
+    expect(email.totalItems).toBe(4)
+  })
+
+  it('no setup card once every client is authorised', () => {
+    const email = buildTodoEmail(3, { ...EMPTY, draftsByClient: [{ name: 'x', id: 'y', drafts: 1 }] }, '1 Aug')
+    expect(email.html).not.toContain('去授权')
+  })
+})
 
 describe('buildTodoEmail', () => {
   it('quiet day → all-clear subject and body, no section cards', () => {

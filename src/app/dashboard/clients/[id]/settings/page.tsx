@@ -79,9 +79,22 @@ export default function ClientSettingsPage() {
           <div className="mt-5 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
             <span className="text-xl">✅</span>
             <div>
-              <p className="font-black text-emerald-800">Google Business Profile 已成功连接！</p>
+              <p className="font-black text-emerald-800">Google 商家页已连接，门店位置也确认好了！</p>
               <p className="mt-0.5 text-sm text-emerald-700">
-                数据将在下次同步时开始更新。
+                这一步到此为止，之后的发帖不再需要你操作。
+              </p>
+            </div>
+          </div>
+        )}
+
+        {gbpStatus === 'needs_location' && (
+          <div className="mt-5 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+            <span className="text-xl">⚠️</span>
+            <div>
+              <p className="font-black text-amber-800">授权成功，但没能自动认出是哪一家门店</p>
+              <p className="mt-0.5 text-sm text-amber-700">
+                通常是这个 Google 账号下挂了多家门店、且名字和网址都对不上。
+                告诉我们是哪一家，我们来指定 —— 在此之前不会发出任何内容。
               </p>
             </div>
           </div>

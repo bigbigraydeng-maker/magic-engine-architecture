@@ -61,15 +61,34 @@ afterEach(() => {
 // ─── 1. 降级：无 token ─────────────────────────────────────────────────────────
 
 describe('publishToGbp — draft degradation', () => {
-  it('returns draft mode when GOOGLE_GBP_ACCESS_TOKEN is not set', async () => {
+  it('returns draft mode when neither a per-client token nor the env var is available', async () => {
     const result = await publishToGbp({
       post_text: 'Welcome to our store!',
       location_name: LOCATION_NAME,
     })
 
     expect(result.mode).toBe('draft')
-    expect(result.degradation_reason).toMatch(/access token/i)
+    expect(result.degradation_reason).toMatch(/授权/)
     expect(global.fetch).not.toHaveBeenCalled()
+  })
+
+  it('publishes live with a per-client access token even when the env var is unset', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ name: 'accounts/1/locations/2/localPosts/3' }),
+    })
+    global.fetch = fetchMock as unknown as typeof fetch
+
+    const result = await publishToGbp({
+      post_text: 'Weekly update',
+      location_name: LOCATION_NAME,
+      access_token: 'per-client-token',
+    })
+
+    expect(result.mode).toBe('live')
+    expect(result.post_name).toBe('accounts/1/locations/2/localPosts/3')
+    const [, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }]
+    expect(init.headers.Authorization).toBe('Bearer per-client-token')
   })
 
   it('returns draft mode when location_name is not provided even with a token', async () => {
