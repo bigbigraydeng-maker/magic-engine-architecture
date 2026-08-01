@@ -24,6 +24,7 @@ interface Production {
   method: 'self_record' | 'digital_human'
   recording_url?: string
   recording_uploaded_at?: string
+  changed_at?: string
 }
 interface RenderJob {
   id: string
@@ -57,8 +58,23 @@ function xhsWarnings(text: string): string[] {
 
 const ACTIVE_JOB = ['queued', 'planning', 'rendering', 'assembling']
 
+// 存储服务对单次直传的硬上限(超过会在传完那一刻被拒 = 进度条走到 98% 再失败)
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
 const PLATFORM_LABEL: Record<string, string> = {
   xiaohongshu: '小红书', douyin: '抖音', facebook: 'FB', tiktok: 'TikTok',
+}
+
+/**
+ * 上次做片的失败提示还该不该显示：改过制作方式 / 换过录像之后，那条报错就过期了
+ * (真实事故:几小时前数字人那次失败的红字，用户改成「自己录」后仍挂在屏幕上)。
+ */
+function jobErrorStillRelevant(job: RenderJob | null, production: Production | null): boolean {
+  if (!job || job.status !== 'failed' || !job.error) return false
+  if (job.error.includes('被重做替代')) return false
+  const changed = production?.changed_at
+  if (changed && job.updated_at && new Date(changed) > new Date(job.updated_at)) return false
+  return true
 }
 
 /** 做片任务超过 1 小时没动静 = 大概率卡住了，别让用户干等。 */
@@ -83,6 +99,7 @@ export default function LectureWorkbenchPage() {
   const [redoNote, setRedoNote] = useState('')
   const [uploadPct, setUploadPct] = useState<number | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const [linkInput, setLinkInput] = useState('')
 
   const base = `/api/clients/${clientId}/content-factory/${postId}`
 
@@ -224,7 +241,28 @@ export default function LectureWorkbenchPage() {
     await patch({ action: 'start_render' }, 'render', '已开始做片，约 15-30 分钟。做好会出现在下面「成片」区')
   }
 
+  async function applyRecordingLink() {
+    if (!linkInput.trim()) return
+    if (!(await ensureSaved())) return
+    const ok = await patch(
+      { action: 'recording_link', link: linkInput.trim() },
+      'link',
+      '录像链接已接上 ✅ 点「开始做片」，系统自动加课件和字幕',
+    )
+    if (ok) setLinkInput('')
+  }
+
   async function uploadRecording(file: File) {
+    // 直传有 50MB 硬上限(存储服务的限制)。手机拍的讲课视频普遍上百 MB，
+    // 传到 98% 才被拒最气人 —— 超了当场拦住，指去 Dropbox 链接那条路(无上限)。
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setError(
+        `这个视频 ${Math.round(file.size / 1048576)}MB，直接上传最多只能 50MB。` +
+        '用下面的「粘 Dropbox 链接」——手机上传到 Dropbox 后复制链接粘进来，多大都行、还不用等。',
+      )
+      if (fileRef.current) fileRef.current.value = ''
+      return
+    }
     if (!(await ensureSaved())) return
     setBusy('upload')
     setError(null)
@@ -245,8 +283,13 @@ export default function LectureWorkbenchPage() {
         xhr.upload.onprogress = (ev) => {
           if (ev.lengthComputable) setUploadPct(Math.round((ev.loaded / ev.total) * 100))
         }
-        xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error('上传断了 — 重新点一次「上传你录的视频」(大文件建议在 WiFi 下传)')))
-        xhr.onerror = () => reject(new Error('上传断了 — 重新点一次「上传你录的视频」(大文件建议在 WiFi 下传)'))
+        // 413 = 文件超上限(存储服务在收完那一刻才拒，所以是「98% 再失败」)
+        const failMsg = (status: number) =>
+          status === 413
+            ? '这个视频超过 50MB 上限了 — 用下面的「粘 Dropbox 链接」，多大都行、不用等上传'
+            : '上传断了 — 重新点一次「上传你录的视频」；反复断就改用下面的 Dropbox 链接'
+        xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(failMsg(xhr.status))))
+        xhr.onerror = () => reject(new Error(failMsg(0)))
         xhr.send(file)
       })
 
@@ -322,6 +365,7 @@ export default function LectureWorkbenchPage() {
   const method = data.production?.method
   const hasRecording = Boolean(data.production?.recording_url)
   const job = data.renderJob
+  const showJobError = jobErrorStillRelevant(job, data.production)
 
   return (
     <div className="p-6 max-w-3xl mx-auto text-me-charcoal">
@@ -489,8 +533,16 @@ export default function LectureWorkbenchPage() {
           <div className="bg-white border border-me-stone rounded-xl p-3 mb-3">
             {hasRecording && (
               <div className="mb-2">
-                <div className="text-[11px] font-semibold text-me-taupe mb-1">已上传的录像</div>
+                <div className="text-[11px] font-semibold text-me-taupe mb-1">
+                  当前录像
+                  {data.production!.recording_url!.includes('dropbox') && '（来自 Dropbox 链接）'}
+                </div>
                 <video src={data.production!.recording_url} controls playsInline className="w-full max-h-[300px] rounded-lg bg-black" />
+                {data.production!.recording_url!.includes('dropbox') && (
+                  <div className="text-[10px] text-me-taupe mt-1">
+                    Dropbox 链接的视频这里可能放不出来，不影响做片（做片时后台会自己去取）。
+                  </div>
+                )}
               </div>
             )}
             <input
@@ -509,6 +561,32 @@ export default function LectureWorkbenchPage() {
                 ? `上传中… ${uploadPct ?? 0}%`
                 : hasRecording ? '重新上传录像' : '上传你录的视频'}
             </button>
+
+            {/* 手机录完直接同步 Dropbox 的，粘链接比再导出上传快 */}
+            <div className="mt-3 pt-3 border-t border-me-stone">
+              <div className="text-[11px] font-semibold text-me-taupe mb-1">
+                或者粘 Dropbox 链接（手机录完自动同步的，直接粘更快）
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={linkInput}
+                  onChange={(e) => setLinkInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void applyRecordingLink() }}
+                  placeholder="https://www.dropbox.com/…"
+                  className="flex-1 min-w-0 text-sm border border-me-stone rounded-lg px-2 py-2"
+                />
+                <button
+                  disabled={busy !== null || !linkInput.trim()}
+                  onClick={applyRecordingLink}
+                  className="flex-none text-sm font-semibold text-me-charcoal border border-me-stone rounded-lg px-3 hover:border-me-ochre disabled:opacity-40"
+                >
+                  {busy === 'link' ? '检查中…' : '用这个链接'}
+                </button>
+              </div>
+              <div className="text-[10px] text-me-taupe mt-1">
+                在 Dropbox 里对着那条视频「复制链接」即可，权限设成「知道链接的人都能看」。
+              </div>
+            </div>
           </div>
         )}
 
@@ -527,9 +605,7 @@ export default function LectureWorkbenchPage() {
           {jobActive && jobLooksStuck(job) && (
             <span className="text-xs text-status-rej">等太久了？可能卡住了 — 直接联系我们，或等它自动失败后点「重新做片」</span>
           )}
-          {job?.status === 'failed' && job.error && !job.error.includes('被重做替代') && (
-            <span className="text-xs text-status-rej">{job.error}</span>
-          )}
+          {showJobError && <span className="text-xs text-status-rej">{job!.error}</span>}
         </div>
       </section>
 
