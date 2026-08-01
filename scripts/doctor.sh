@@ -42,11 +42,25 @@ tblhead() { if [ "$MD" = 1 ]; then say "| 状态 | 项目 | 说明 |"; say "|---
 ENV_SRC="进程环境"
 if [ -f .env.local ]; then
   ENV_SRC=".env.local + 进程环境"
+  # 按 dotenv 语义解析：去 `export ` 前缀、去引号、去行内注释、去首尾空白。
+  # 不这么做的话，直接拷 .env.example 得到的 `KEY=   # [必需] 说明` 会被当成「已配置」，
+  # 一份完全没填的模板也能让全部核心检查显示绿色并 exit 0。
   while IFS= read -r line; do
     case "$line" in ''|\#*) continue ;; esac
+    line=${line#export }
     key=${line%%=*}
+    key=${key#"${key%%[![:space:]]*}"}; key=${key%"${key##*[![:space:]]}"}
     case "$key" in *[!A-Za-z0-9_]*|'') continue ;; esac
-    if [ -z "${!key:-}" ]; then export "$key=${line#*=}"; fi
+    val=${line#*=}
+    val=${val#"${val%%[![:space:]]*}"}
+    case "$val" in
+      \"*) val=${val#\"}; val=${val%%\"*} ;;          # 双引号值：取到收尾引号
+      \'*) val=${val#\'}; val=${val%%\'*} ;;          # 单引号值：同上
+      \#*) val="" ;;                                  # 整行只有注释（`KEY=   # 说明`）→ 空值
+      *)   val=${val%%[[:space:]]#*}                  # 裸值：去掉「空白 + #」之后的行内注释
+           val=${val%"${val##*[![:space:]]}"} ;;      # 再去尾部空白
+    esac
+    if [ -z "${!key:-}" ] && [ -n "$val" ]; then export "$key=$val"; fi
   done < .env.local
 fi
 
@@ -272,7 +286,7 @@ else
   elif [ "$LOGS" = "[]" ]; then
     row "$WARN" "cron_run_logs" "表是空的 — 没有任何 cron 记录过执行"
   else
-    printf '%s' "$LOGS" | node -e '
+    printf '%s' "$LOGS" | DOCTOR_MD=$MD node -e '
       let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
         const rows=JSON.parse(s), now=Date.now(), seen=new Map();
         for (const r of rows) if (!seen.has(r.job_name)) seen.set(r.job_name, r);
@@ -286,7 +300,7 @@ else
           if (md) console.log(`| ${icon} | ${r.job_name} | ${line} |`);
           else console.log(`  ${icon}  ${r.job_name.padEnd(38)}${line}`);
         });
-      });' DOCTOR_MD=$MD 2>/dev/null || row "$WARN" "cron_run_logs" "解析失败（需要 node）"
+      });' 2>/dev/null || row "$WARN" "cron_run_logs" "解析失败（需要 node）"
   fi
 fi
 fi

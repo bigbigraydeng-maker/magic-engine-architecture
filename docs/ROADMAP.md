@@ -1,6 +1,6 @@
 # Magic Engine — Roadmap（未完成事项）
 
-> 最后整理：2026-07-25 · **本文件只留未完成的事**（147 条）。
+> 最后整理：2026-08-01（并入 main 一周新增）· **本文件只留未完成的事**（162 条）。
 > 已上线的功能见 [history/CHANGELOG.md](./history/CHANGELOG.md)。
 > 系统当前跑着什么见 [STATE.md](./STATE.md)。架构决策见 [DECISIONS.md](./DECISIONS.md)。
 > 完整历史底稿（含 344 条已完成 + 全部 Phase 背景）：[archive/ROADMAP-full-2026-07-25.md](./archive/ROADMAP-full-2026-07-25.md)
@@ -145,8 +145,48 @@
 - [ ] **`creative_profile` 无客户填**:出片风格仍全靠本地 JSON。CTS 现有风格(龙旗破云/golden_hour/短句大字/xfade 0.35)可抄进 ME 配置页接管
 - [ ] **1 条 `rendered` 旧单**(CTS 07-12,有 caption)永久卡住:交付直连修复只对新单生效,这条旧单需手动迁 `in_review` 或归档(PM 判断)
 - [ ] **P21.K.7 ad 级数据脊柱**(登记 2026-07-25,PM 拍板):日度 cron 补拉 **ad 级**(每条广告每天一行,复用 `ad_daily_insights` 的 `level='ad'`),让「某天新增了哪条广告 / 哪条在拖后腿」可被系统自查,不依赖 Meta MCP(Oztop 账户未开通)也不用人翻广告后台。**背书案例**:Oztop Lead Form Cold Broad 的 CPL 7/17 起翻倍,campaign 级只能定位到「填表率腰斩 + 出现出站点击」。含 `parent_id` 列(ad→campaign 归属,**migration 待 PM `go apply`**)+ 首拉 30 天回补 + 分页完整性守卫。顺带铺好 34.B Creative Lifecycle 要的作品层日度基础设施
+- [ ] **P21.K.8 objective 感知 + 视频疲劳正向检测**(登记 2026-07-26,PM 拍板 `排`):把 P21.K 止血从「不误判视频广告」升级到「真正体检视频广告好不好」。需 ① `ad_daily_insights` 加 `objective` 列 + 采集时拉 campaign 节点 objective(**migration 待 PM `go apply`**)② 脊柱补拉视频完播指标(ThruPlay 完播成本 / CPM / video_p100)③ 按 objective 切换判定指标:视频/播放量目标用完播成本或 CPM,表单/流量目标保留 ctr+cost_per_result,拿不到 objective 或样本太少判 `insufficient_history`。价值:CTS 这类主打视频的客户,看完成本涨→主动提醒换素材。半天到一天。附:止血注释已在 `baseline.ts` 登记本项为 follow-up
 - [ ] **多视角对抗复盘工作流**(1-2 天,可后置):battle-plan §8 方法论固化成可复用 Workflow/agent(N 视角互相证伪前提 → 作战计划 → 喂鲁班),异常触发非每日跑
 - [ ] **开放项**:三张新表 migration 逐次 PM `go apply`(`ad_daily_insights` / `ad_strategy_configs`+`_triggers` / `ad_health_narratives`)· P5 泛化首批客户(Oztop?)· 姊妹 spec Creative Lifecycle 同一 GHA 笔误待独立小 PR 修
+
+## Phase 18.E — Audience Asset Engine / 中介私域买家库 🔄 建池器已落地（2026-07-29 登记）
+
+> 蓝图：[`specs/2026-07-28-audience-asset-engine.md`](./specs/2026-07-28-audience-asset-engine.md)（v0.3 · 魏征 + 板桥双审 + PM 四项拍板）
+> 三段模型：冷广告灌池 → 暖池便宜转化 → 智能判断每人在哪一级并自动递进。
+> 边界铁律：资产层**永不裁创意、永不动预算**，只输出信号（18.D 管创意生死 / Ad Strategy Engine 管账户健康）。
+> A 线机制已验证：暖池 CPL NZ$6.65 vs 冷启动 NZ$11.12（**低 40%**，n=100/146，CTS campaign 级）。
+> ⚠️ 反例：同一暖池投 Messenger 对话单次成本 NZ$38.53（n=5，已暂停）→ **优势只在表单 lead 上成立**，30 Kiteroa 走 Messenger 不可直接引用 40%。
+> P18.E.0 建池器已完成（`src/lib/meta/audience-ladder.ts`，16 单测 + 3 变异测试）。
+
+- [ ] **P18.E.1 语法验证** — 视频源规则（`video_view_15s` / `video_view_50_percent`）需用 Render 上的 `META_SYSTEM_USER_TOKEN` 实调验证；MCP 工具面建不了（错误 2654）但平台 UI 支持 + CTS 生产在用
+- [ ] **P18.E.2 账本表** — `client_audience_assets`：`audience_id ↔ client_id / layer / ladder_stage / scope / owner_account / source_type(organic|paid)`。**存 id 不靠解析名字**（重名/改名会静默炸）。🔴 **migration 待 PM `go apply`**
+- [ ] **P18.E.3 采集** — 池 size 快照 → `flywheel_metrics` 的 `ads.audience.*`；台账画**净增 = 新进 − 到期掉出**（受众是衰减存量，不能只画总量）。新 cron 必须 link `me-shared-cron-secret`。依赖 P18.E.2
+- [ ] **P18.E.4 画像** — 现有 `google-data-pullback-daily` 加 `breakdowns=age,gender`（不新起 cron）
+- [ ] **P18.E.5 归属交付** — 归属条款 + 隐私告知（IPP 3/6/7/9/**12 跨境披露**）+ 同意文书 → **必须在任何受众共享动作之前完成**。待 PM 定条款
+- [ ] **P18.E.6 月报** — 《你的买家库月报》客户面渲染（客户永不见 `L0/L1` 代号）。依赖 P18.E.3
+- [ ] **待 PM**：Roman vendor deck「500+ Chinese buyer database」口径 · 海外买家资格口径（OIA 2018）· 开发商合同数据条款
+
+> PM 已拍板：①归属=中介（红线，删除「带不走」黏性论）②无独家，平行服务多 agent ③定价随 agent package 再定 ④Roman 只作结构样板。
+> kill criteria：暖池 CPL 若相对冷启动无显著优势 → 产品叙事重估。**当前未触发**。
+
+## Phase 21.L — 讲课式系列课 · 单讲工作台（大瑞 IP「AI海外获客」6 讲试点）🔄 层1-3 已上线
+
+> 登记 2026-08-01 · 客户 = Magic Lab Class（`377468af`）· 形态：上课件 slide + 下真人的讲课式短视频。
+> 层1-2（PR #726）与层3（PR #735）已上线，详见 [history/CHANGELOG.md](./history/CHANGELOG.md)。
+
+- [ ] **做片任务表防双击唯一索引** —— 动数据库，🔴 **PM `go apply`**
+- [ ] **数字人首跑实测** —— 生成要花钱，需 PM 说一声再试
+- [ ] **发布端按平台带不同 CTA 接线**
+
+## Phase 22.E — SEO 盯梢体系（S15-S18）📋 2026-07-31 立项，按序推进
+
+> PM 拍板四决定：①小修（标题/描述/旧文小更新）全自动 + 周报可见，新文章/新页面/内链进待办等点头 ②Blog 每家每周 1 篇 ③每周一人话周报邮件，大异常当天单发 ④**先修断的再上新的**。
+> S14（盯梢复活三连修）已上线（PR #709）。
+
+- [ ] **22.E.S15 内链 + 收录数据采集**（P1）— 补 R2/R5 的 pages 输入（site-audit 爬虫内链图 + GSC 收录状态）；内链改动按 PM 界线进待办审批，不全自动
+- [ ] **22.E.S16 每周 Blog 恢复**（P1）— CTS/Oztop 每家每周 1 篇，自动选题（AI 可见度弱项 × R4 机会词），直调 `generateBlogPost` lib（禁内部 HTTP 自调用），产出进待办等 PM 点头发布
+- [ ] **22.E.S17 CTS 自动执行手**（P1）— 照 `seo_meta_log` 队列模式，CTS Next.js 仓 meta 安全窄道 + applied 回执；blog 发布通道（自动 PR + 人 merge）单独估算
+- [ ] **22.E.S18 每周一 SEO 周报邮件**（P1）— 排名变化/自动改动/待点头 + 社媒栏 + 社媒广告栏；每栏带数据新鲜度检查，**断流标注不装新鲜**
 
 ## Phase 27 — Visual Reference Library（视觉参考库）📋 已登记，待开发
 

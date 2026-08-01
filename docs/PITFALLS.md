@@ -39,6 +39,25 @@ Blueprint 里的名字和代码里的名字不一致时，Render 不会报错 �
 
 **风险**：轮换 `CRON_SECRET` 会顺带作废所有客户上传链接，且没有任何提示。
 
+### A5 · 判「环境变量零引用」时只 grep `process.env.X` 会漏一大片 🔴
+
+**事故（2026-08-01，本仓文档整理 PR #651）**：清理 `.env.example` 时按 `process.env.X` 判定零引用，
+**误删了 9 个仍在用的 Voice Agent 变量**（`TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` /
+`WHATSAPP_ACCESS_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID` / `META_APP_SECRET` / `META_VERIFY_TOKEN` /
+`TELEPHONY_PROVIDER` / `WEBHOOK_REPLAY_WINDOW_SECONDS` / `DEFAULT_HUMAN_TRANSFER_URI`）。
+Codex 审出 5 个，人工复查又找出 4 个。
+
+**根因**：`src/lib/voice/config.ts` 用 zod schema 声明变量名（`TWILIO_ACCOUNT_SID: z.string().optional()`），
+读取时走 `parsed.TWILIO_ACCOUNT_SID` —— 全程不出现 `process.env.TWILIO_ACCOUNT_SID`。
+后果不是「少一行模板」：生产环境（`isProd` 且没开 `MOCK_EXTERNAL_SERVICES`）这些 provider 落回 mock，
+`voice/config.ts` 会**直接抛错拒绝启动**。
+
+**怎么防**：
+- grep **变量名本身**，不要 grep `process.env.<名>`；范围含 `src/` 与 `scripts/`（排除 `archive/`）
+- 命中后逐个看上下文 —— 有的命中只是文档字符串举例（`SEMRUSH_API_KEY` 在
+  `validation-utils.ts` 就是注释里的 `@param` 示例，那个确实零引用）
+- 删任何模板项前，先问「有没有 schema / 配置中心 / 字符串拼接式读取」
+
 ---
 
 ## B. Migration / Schema
@@ -195,6 +214,20 @@ SOP：`docs/sops/brand-aliases-setup-for-gsc.md`。
 进程挂了没有任何告警。
 
 **怎么防**：上机 `ps` / `pm2 list` 确认；改了 worker 逻辑后要确认进程重启过（否则还在用旧逻辑）。
+
+### F5 · 系统「知道」问题，但没有任何一处会走到人眼前
+
+**事故（2026-08-01，一天撞出三件）**：CTS 一篇 blog 的 PR 开好后躺着没人知道（待办只统计 `draft`
+不统计 `pr_open`）；Oztop 2 个页面谷歌不收录、网站页面数据 65 天没更新（主机商挡了我们的服务器）。
+三件事系统全都有数据，但都只停在日志里。
+
+**反模式**（三条都算「没下发」）：
+- ❌ 发现写进 `cron_run_logs.summary` / `console.error` 就算完事 —— 那不叫下发，叫埋掉
+- ❌ 卡片只说「Resubmit for indexing」不说去哪点 —— FDE 得先自己研究一遍，等于没下发
+- ❌ 系统做不了就 silent skip —— 静默降级必须同时产出一条人工任务，或一条可见的数据断流标记
+
+**怎么防**：自动化确实做不了的，一律下发到今日待办「🙋 需要你动手」栏
+（`src/lib/pm-todo/manual-items.ts`），并带齐 what / how / href 三件套。见 [CLAUDE.md 铁律 3](../CLAUDE.md)。
 
 ---
 

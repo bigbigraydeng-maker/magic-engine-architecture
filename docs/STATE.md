@@ -66,7 +66,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 
 ## 4. 定时任务全表
 
-### 4.1 Render Cron（28 个，全部 curl `https://app.magicengine.com.au/api/cron/*`，带 `CRON_SECRET` Bearer）
+### 4.1 Render Cron（39 个，全部 curl `https://app.magicengine.com.au/api/cron/*`，带 `CRON_SECRET` Bearer）
 
 | Cron 名 | 调度 (UTC) | 端点 |
 |---|---|---|
@@ -79,6 +79,8 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | factory-publish-sweeper | `*/15 * * * *` | `/api/cron/factory-publish-sweeper` |
 | prospecting-sweep | `*/30 * * * *` | `/api/cron/prospecting-sweep` |
 | social-comment-autoreply | `*/30 * * * *` | `/api/cron/social-comment-autoreply` |
+| messenger-hourly | `10 * * * *` | `/api/cron/messenger-sync-hourly` |
+| meta-leads-hourly | `25 * * * *` | `/api/cron/meta-leads-sync` |
 | viral-discovery-weekly | `0 0 * * *` | `/api/cron/viral-discovery-weekly` |
 | site-audit-cron | `0 2 * * *` | `/api/cron/site-audit-jobs` |
 | industry-ai-visibility-daily | `30 2 * * *` | `/api/cron/ai-visibility-weekly` |
@@ -86,18 +88,27 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | google-data-pullback-daily | `0 3 * * *` | `/api/cron/google-data-pullback-daily` |
 | social-engagement-pullback | `0 4 * * *` | `/api/cron/social-engagement-pullback` |
 | seo-patrol-daily | `0 4 * * *` | `/api/cron/seo-patrol-daily` |
+| mailchimp-activity-daily | `40 4 * * *` | `/api/cron/mailchimp-activity-sync` |
 | anomaly-detector-daily | `0 5 * * *` | `/api/cron/anomaly-detector` |
 | daily-cron-digest | `0 6 * * *` | `/api/cron/daily-cron-digest` |
 | winner-reel-sync-daily | `0 15 * * *` | `/api/cron/winner-reel-sync-daily` |
+| proposal-view-digest | `0 19 * * *` | `/api/cron/proposal-view-digest` |
 | factory-order-scheduler | `0 20 * * *` | `/api/cron/factory-order-scheduler` |
+| content-factory-intake | `0 22 * * *` | `/api/cron/content-factory-intake` |
 | attribution-cron | `0 */6 * * *` | `/api/cron/attribution` |
+| pm-daily-todo | `0 19 * * 0-4` | `/api/cron/pm-daily-todo` |
+| site-audit-weekly | `0 1 * * 0` | `/api/cron/site-audit-weekly` |
+| weekly-seo-report | `30 18 * * 0` | `/api/cron/weekly-seo-report` |
 | ai-tracker-weekly | `0 1 * * 1` | `/api/cron/ai-tracker-weekly` |
 | job-boards-weekly | `0 2 * * 1` | `/api/cron/job-boards-weekly` |
 | keyword-snapshots-weekly | `0 2 * * 1` | `/api/cron/keyword-snapshots-weekly` |
 | zhuge-weekly-recalculate | `0 3 * * 1` | `/api/cron/zhuge-recalculate` |
+| reputation-snapshots-weekly | `30 3 * * 1` | `/api/cron/reputation-snapshots-weekly` |
 | oztop-seo-optimizer | `0 5 * * 1` | `/api/cron/oztop-seo-optimizer?max=8` |
+| cts-seo-optimizer | `30 5 * * 1` | `/api/cron/cts-seo-optimizer` |
 | agent-learning-rollup | `0 7 * * 1` | `/api/cron/agent-learning-rollup` |
 | factory-stock-refill | `0 19 * * 1` | `/api/cron/factory-stock-refill` |
+| blog-weekly | `0 3 * * 2` | `/api/cron/blog-weekly` |
 
 ### 4.2 GitHub Actions（3 个当 cron 用 + 1 个手动）
 
@@ -110,7 +121,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 
 ### 4.3 🔴 有路由但没有任何调度器 —— 这些功能永远不会自动跑
 
-`src/app/api/cron/` 共 **38 个**端点，被调度的只有 **31 个**。剩下 7 个：
+`src/app/api/cron/` 共 **50 个**端点，被调度的有 **44 个**。剩下 6 个：
 
 | 端点 | 判断 |
 |---|---|
@@ -119,8 +130,9 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | `flywheel-seo-weekly` | ❓ 同上（Phase 12.I 建的，ROADMAP 标已完成） |
 | `kpi-backfill` | ❓ 同上 |
 | `memory-extractor` | ❓ 同上（Phase 23 Memory Layer） |
-| `poster-studio-daily` | ❓ 同上 |
 | `factory-review-sweeper` | ✅ **有意退役** —— 审核已搬到 `/dashboard/factory`（PR #581），Airtable 停用后该端点必 500 |
+
+> `poster-studio-daily` 原也在此列，已于 2026-08-01 前接上调度，不再是孤儿。
 
 > 新建 `/api/cron/*` 路由时，**同一个 PR 里就要加 `render.yaml` 条目**，否则就会多一个僵尸端点。
 > `bash scripts/doctor.sh --cron` 会自动查这件事。
@@ -192,17 +204,19 @@ bash scripts/doctor.sh --md     # 输出 Markdown，可直接粘回本文件 §8
 ### Cron 调度覆盖 ✅ 真实结论
 
 ```
-✅  cron 路由总数      38 个 (src/app/api/cron/)
-✅  已被调度           31 个 (render.yaml + .github/workflows)
+✅  cron 路由总数      50 个 (src/app/api/cron/)
+✅  已被调度           44 个 (render.yaml + .github/workflows)
 ❌  admin-key-expiry           有路由但没有任何调度器 → 永远不会自动跑
 ❌  benchmark-accumulator      有路由但没有任何调度器 → 永远不会自动跑
 ❌  flywheel-seo-weekly        有路由但没有任何调度器 → 永远不会自动跑
 ❌  kpi-backfill               有路由但没有任何调度器 → 永远不会自动跑
 ❌  memory-extractor           有路由但没有任何调度器 → 永远不会自动跑
-❌  poster-studio-daily        有路由但没有任何调度器 → 永远不会自动跑
 ⚠️  factory-review-sweeper     无调度 — 已知有意退役（Airtable 停用）
 ✅  被调度但路由不存在的        无
 ```
+
+> 数字为 2026-08-01 并入 main 后重跑的结果（原审计时是 38 路由 / 31 调度 / 7 孤儿）。
+> `poster-studio-daily` 已在这期间接上调度，不再是孤儿。
 
 ### cron_run_logs 最近执行
 
@@ -219,5 +233,5 @@ bash scripts/doctor.sh --md     # 输出 Markdown，可直接粘回本文件 §8
 | 🟡 中 | 62 个未登记环境变量补进 `.env.example`（已补，需 review） | [ENV.md](./ENV.md) |
 | 🟡 中 | `APIFY_API_KEY` / `APIFY_TOKEN` 双名统一 | [PITFALLS A3](./PITFALLS.md) |
 | 🟡 中 | `SEMRUSH_API_KEY` 从 `render.yaml` 清理（注意 `SEMRUSH_DB` 要留） | [ENV.md §4](./ENV.md) |
+| 🟡 中 | `src/` 有 22 个文件的注释指向已移走的 `docs/superpowers/specs/*` —— 现在是死路径，跟到底是空。9 份已在 `docs/specs/` 下同名存在，`2026-06-04-a21-stepc-design-v3.md` 本来就不存在（PR 之前就断）。本 PR 刻意没动 `src/`（保住「一行没改」的可复核性），需一个独立小 PR 批量改路径 | 本次并入 main 时发现 |
 | 🟢 低 | 远程 `master` 分支及 24 个特性分支清理（须先 verify PR MERGED） | [PITFALLS C2](./PITFALLS.md) |
-| 🟢 低 | `.env.example` 里 Twilio / WhatsApp / `ENABLE_REAL_GENERATION` 等 0 引用变量清理 | [ENV.md §10-11](./ENV.md) |
