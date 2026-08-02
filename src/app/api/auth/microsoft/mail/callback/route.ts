@@ -49,8 +49,20 @@ export async function GET(req: NextRequest) {
   const [nonce, clientId] = cookie.split(':')
   const knownClient = clientId || null
 
+  // 管理员走 adminconsent 端点回来时带的是这个，**没有授权码**（见 mail-oauth
+  // 里为什么必须分两步）。这一步不存任何东西 —— 门开了，还得 info@ 自己进。
+  const adminConsent = url.searchParams.get('admin_consent')
+
   if (denied) {
     return back(knownClient, { mail: 'error', why: '在 Microsoft 那边取消了授权' })
+  }
+  if (adminConsent) {
+    return back(
+      knownClient,
+      adminConsent.toLowerCase() === 'true'
+        ? { mail: 'admin_ok' }
+        : { mail: 'error', why: '管理员没有批准这个应用' },
+    )
   }
   if (!nonce || !clientId || !state || state !== nonce) {
     // 对不上就当没发生。不解释哪里对不上 —— 那等于告诉试探的人下一步怎么试。

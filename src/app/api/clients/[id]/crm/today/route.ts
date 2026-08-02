@@ -32,20 +32,12 @@ import { WORKLIST_GROUPS, groupDisplayMeta } from '@/lib/crm/worklist-groups'
 import { contactCardTitle } from '@/lib/crm/display-name'
 import { followUpMarks, localDay } from '@/lib/crm/follow-up-marks'
 import { stageSuppressesWorklist, isMarketingAction } from '@/lib/crm/pipeline'
+import { isAutomatedTouch } from '@/lib/crm/automated-touch'
 import { fetchAll } from '@/lib/supabase-paginate'
 
 interface RouteParams {
   params: { id: string }
 }
-
-/**
- * 这些来源写出来的「我们发出的」是**机器发的**，不是人做的动作。
- *
- * 不分开的话，一封 Mailchimp 群发会把整块看板标成「今天已经跟过」—— 销售
- * 第二天早上看到几百张灰卡，会以为活都做完了。群发那一笔仍然会出现在时间线上
- * （客人确实收到了），只是不算「有人跟过他」。
- */
-const AUTOMATED_SOURCES = new Set(['mailchimp'])
 
 interface ContactRow {
   id: string
@@ -356,7 +348,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
         summary: t.summary,
         engagement: engagementFromMetadata(t.metadata),
         loggedBy: (t.metadata?.logged_by as string | null) ?? null,
-        automated: AUTOMATED_SOURCES.has(t.source ?? ''),
+        automated: isAutomatedTouch(t.source, t.metadata),
       })),
       now,
       timeZone,
@@ -481,7 +473,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       .filter(
         (t) =>
           t.direction === 'outbound' &&
-          !AUTOMATED_SOURCES.has(t.source ?? '') &&
+          !isAutomatedTouch(t.source, t.metadata) &&
           !engagementFromMetadata(t.metadata) &&
           localDay(t.occurred_at, timeZone) === today,
       )

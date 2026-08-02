@@ -42,6 +42,7 @@ export function MailboxPanel({ clientId }: { clientId: string }) {
   // 授权回来时带的那句话（见 /api/auth/microsoft/mail/callback）。
   const justConnected = params.get('mail') === 'ok' ? params.get('addr') : null
   const justFailed = params.get('mail') === 'error' ? (params.get('why') ?? '连接失败') : null
+  const adminApproved = params.get('mail') === 'admin_ok'
 
   const active = (connections ?? []).filter((c) => c.status === 'active')
 
@@ -63,6 +64,15 @@ export function MailboxPanel({ clientId }: { clientId: string }) {
           <p className="text-sm font-black text-emerald-800">✓ 连上了：{justConnected}</p>
           <p className="mt-0.5 text-xs text-emerald-700">
             客人发到这个邮箱的信，从现在起会自动出现在「今天该联系谁」里。
+          </p>
+        </div>
+      )}
+      {adminApproved && (
+        <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+          <p className="text-sm font-black text-emerald-800">✓ 管理员批准了</p>
+          <p className="mt-0.5 text-xs text-emerald-700">
+            门开了，但<strong>还没连上</strong>。现在请用平时收这个邮箱的账号，点下面的
+            「连接公司邮箱」再走一次。
           </p>
         </div>
       )}
@@ -90,6 +100,22 @@ export function MailboxPanel({ clientId }: { clientId: string }) {
           >
             连接公司邮箱
           </a>
+          {/*
+            有些公司在 Microsoft 365 里关掉了「员工可以自己给外部软件授权」。
+            那种情况下上面的按钮会撞上一面「需要管理员批准」的墙 —— 不是账号有
+            问题，也不是我们的故障。这行字就是给撞上墙的人看的，让他不用来问。
+          */}
+          <p className="mt-3 text-xs text-slate-500">
+            登录后看到<strong>「需要管理员批准」</strong>？
+            那是公司不让员工自己给外部软件授权。请公司里管 Microsoft 365 的那位同事点一次
+            <a
+              href={`/api/auth/microsoft/mail/start?clientId=${clientId}&admin=1`}
+              className="mx-1 font-bold text-slate-700 underline"
+            >
+              这个链接
+            </a>
+            替全公司批准，然后再回来点上面的按钮。
+          </p>
         </>
       ) : (
         <>
