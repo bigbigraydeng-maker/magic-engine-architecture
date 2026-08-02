@@ -27,6 +27,7 @@ import {
   type PlatformProvider,
   type PlatformOAuthConnectionRow,
 } from './vocabulary'
+import { MICROSOFT_MAIL_SCOPES } from '@/lib/microsoft/mail-oauth'
 
 // ─── Custom errors ────────────────────────────────────────────────────────────
 
@@ -104,6 +105,68 @@ async function refreshGoogleToken(refreshTokenPlain: string): Promise<RefreshRes
   return { accessToken: data.access_token, expiresAt }
 }
 
+/**
+ * 刷新客户邮箱的令牌（Microsoft Graph）。
+ *
+ * 跟 Google 那段的差别只有两处，但都会静默毁掉刷新：
+ *  · 端点带 tenant 段。用 `common` 而不是具体 tenant id —— 客户可能是
+ *    Outlook.com 个人账号，也可能是公司的 Microsoft 365，写死任一种都会把
+ *    另一种挡在门外。
+ *  · **必须回传 scope**。Microsoft 只把「本次请求要了的权限」发新令牌，漏掉
+ *    scope 会拿到一个权限更小的令牌，读信时才报 403 —— 那时已经离现场很远了。
+ *    `offline_access` 也必须在里面，否则换来的令牌不再带刷新能力，下一次就断。
+ */
+async function refreshMicrosoftToken(refreshTokenPlain: string): Promise<RefreshResult> {
+  const clientId     = process.env.MICROSOFT_CLIENT_ID
+  const clientSecret = process.env.MICROSOFT_CLIENT_SECRET
+
+  if (!clientId || !clientSecret) {
+    throw new PlatformTokenRefreshError(
+      PLATFORM_PROVIDERS.MICROSOFT_MAIL,
+      'MICROSOFT_CLIENT_ID or MICROSOFT_CLIENT_SECRET not configured',
+    )
+  }
+
+  const body = new URLSearchParams({
+    grant_type:    'refresh_token',
+    client_id:     clientId,
+    client_secret: clientSecret,
+    refresh_token: refreshTokenPlain,
+    scope:         MICROSOFT_MAIL_SCOPES.join(' '),
+  })
+
+  const res = await fetch('https://login.microsoftonline.com/common/oauth2/v2.0/token', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body:    body.toString(),
+  })
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '(unreadable body)')
+    throw new PlatformTokenRefreshError(
+      PLATFORM_PROVIDERS.MICROSOFT_MAIL,
+      `HTTP ${res.status}: ${text}`,
+    )
+  }
+
+  const data = (await res.json()) as {
+    access_token?:      string
+    expires_in?:        number
+    error?:             string
+    error_description?: string
+  }
+
+  if (!data.access_token) {
+    const detail = data.error_description ?? data.error ?? 'missing access_token in response'
+    throw new PlatformTokenRefreshError(PLATFORM_PROVIDERS.MICROSOFT_MAIL, detail)
+  }
+
+  return {
+    accessToken: data.access_token,
+    expiresAt:   new Date(Date.now() + (data.expires_in ?? 3600) * 1000),
+  }
+}
+
 function isGoogleProvider(provider: PlatformProvider): boolean {
   return (
     provider === PLATFORM_PROVIDERS.GOOGLE_GBP ||
@@ -118,6 +181,9 @@ async function callProviderRefresh(
 ): Promise<RefreshResult> {
   if (isGoogleProvider(provider)) {
     return refreshGoogleToken(refreshTokenPlain)
+  }
+  if (provider === PLATFORM_PROVIDERS.MICROSOFT_MAIL) {
+    return refreshMicrosoftToken(refreshTokenPlain)
   }
   // Phase 18 will add Meta / TikTok refresh
   throw new PlatformTokenRefreshError(
