@@ -23,6 +23,7 @@ import { type NextRequest, NextResponse } from 'next/server'
 import * as nodeCrypto from 'crypto' // 命名空间导入 —— 测试里要 vi.mock 拦截
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import {
+  MICROSOFT_ADMIN_CONSENT_URL,
   MICROSOFT_AUTH_URL,
   MICROSOFT_MAIL_SCOPES,
   MICROSOFT_STATE_COOKIE,
@@ -53,15 +54,26 @@ export async function GET(req: NextRequest) {
   const nonce = nodeCrypto.randomBytes(16).toString('hex')
   const cookieVal = `${nonce}:${clientId}`
 
-  const authUrl = new URL(MICROSOFT_AUTH_URL)
+  // `?admin=1` = 这家公司的 Microsoft 365 管理员来替全公司批准一次。
+  //
+  // 有些企业租户关掉了「员工可以自己给第三方应用授权」，这时 info@ 自己点会
+  // 撞上「需要管理员批准」。管理员走这条链接批一次，info@ 再按原来的按钮就通了。
+  // 这条路**不换令牌、不存任何东西** —— 它只是开门，进门的还得是 info@ 本人
+  // （否则会把管理员自己的邮箱存成客户的收信箱）。
+  const adminConsent = req.nextUrl.searchParams.get('admin') === '1'
+
+  const authUrl = new URL(adminConsent ? MICROSOFT_ADMIN_CONSENT_URL : MICROSOFT_AUTH_URL)
   authUrl.searchParams.set('client_id', msClientId)
   authUrl.searchParams.set('redirect_uri', microsoftRedirectUri())
-  authUrl.searchParams.set('response_type', 'code')
-  authUrl.searchParams.set('response_mode', 'query')
-  authUrl.searchParams.set('scope', MICROSOFT_MAIL_SCOPES.join(' '))
-  // 每次都要刷新令牌 —— 没有它，一小时后同步会安静地停掉。
-  authUrl.searchParams.set('prompt', 'consent')
   authUrl.searchParams.set('state', nonce)
+
+  if (!adminConsent) {
+    authUrl.searchParams.set('response_type', 'code')
+    authUrl.searchParams.set('response_mode', 'query')
+    authUrl.searchParams.set('scope', MICROSOFT_MAIL_SCOPES.join(' '))
+    // 每次都要刷新令牌 —— 没有它，一小时后同步会安静地停掉。
+    authUrl.searchParams.set('prompt', 'consent')
+  }
 
   const res = NextResponse.redirect(authUrl.toString())
   // SameSite 必须是 Lax 不能是 Strict：从 Microsoft 跳回来是跨站的 GET，

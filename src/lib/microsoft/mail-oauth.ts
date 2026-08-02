@@ -18,14 +18,26 @@
  * 登录一下」。第一条要解释什么是租户管理员、什么是应用权限 —— 按铁律 3，
  * 一个需要解释的人工步骤等于没做好。
  *
- * ## 权限只要三个
+ * ## 权限只要四个
  *  · Mail.Read      —— 读进来的信（这次要做的）
  *  · Mail.Send      —— 以后从 CRM 里回信（现在不用，但一起要掉，省得让客户
  *                      再点第二次同意；Microsoft 只给「本次要过」的权限）
+ *  · User.Read      —— 只为问一句「刚才登录的是哪个邮箱」。Graph 的 `/me`
+ *                      认的是这个权限，`Mail.Read` 不管用 —— 少了它换令牌会
+ *                      成功、读地址却 403，连接卡在「连上了但读不到邮箱地址」
+ *                      （2026-08-02 CTS 实测踩到）
  *  · offline_access —— 换取刷新令牌。漏掉它，一小时后就断，且断得很安静
  *
  * 不要 Mail.ReadWrite：读信不需要改客户的邮箱，多要的每一分权限都是以后
  * 出事时说不清楚的地方。
+ *
+ * ## 有些公司的 Microsoft 365 不让员工自己同意
+ *
+ * 企业租户可以把「允许用户为第三方应用授权」关掉（CTS 就是关的）。这时 info@
+ * 自己点会撞上一面「需要管理员批准」的墙，**不是我们的 bug，也不是他账号的问题**。
+ * 解法是让这家公司的 Microsoft 365 管理员走一次 `adminconsent` 端点，替整个
+ * 公司批准一次；批完之后 info@ 再按原来的按钮连，就通了。见下面的
+ * `MICROSOFT_ADMIN_CONSENT_URL`。
  */
 
 import { PLATFORM_PROVIDERS } from '@/lib/platform-oauth/vocabulary'
@@ -36,6 +48,7 @@ import { PLATFORM_PROVIDERS } from '@/lib/platform-oauth/vocabulary'
  */
 export const MICROSOFT_MAIL_SCOPES = [
   'offline_access',
+  'https://graph.microsoft.com/User.Read',
   'https://graph.microsoft.com/Mail.Read',
   'https://graph.microsoft.com/Mail.Send',
 ] as const
@@ -48,6 +61,18 @@ const AUTHORITY = 'https://login.microsoftonline.com/common/oauth2/v2.0'
 
 export const MICROSOFT_AUTH_URL  = `${AUTHORITY}/authorize`
 export const MICROSOFT_TOKEN_URL = `${AUTHORITY}/token`
+
+/**
+ * 管理员替整个公司批准一次的入口。
+ *
+ * 刻意用这个专用端点、而不是在普通登录链接上加 `prompt=admin_consent`：专用
+ * 端点只回一个 `admin_consent=True`，**不回授权码**。这一点很重要 —— 走这条路
+ * 的是 IT 管理员，如果它同时回一个授权码，我们就会把**管理员自己的邮箱**存成
+ * 客户的收信箱，而这正是这条管道最贵的错误。批准和连接必须是两步：管理员开门，
+ * info@ 自己进门。
+ */
+export const MICROSOFT_ADMIN_CONSENT_URL =
+  'https://login.microsoftonline.com/common/adminconsent'
 
 /** 防 CSRF 的一次性随机数存在这个 cookie 里，回调时必须对得上。 */
 export const MICROSOFT_STATE_COOKIE = 'ms_mail_oauth_state'
@@ -132,13 +157,38 @@ export async function exchangeCodeForTokens(code: string): Promise<ExchangeResul
  * 让人当场看见自己连的是哪一个。
  */
 export async function fetchMailboxAddress(accessToken: string): Promise<string | null> {
+  const headers = { Authorization: `Bearer ${accessToken}` }
+
+  // 正路：问 Graph「我是谁」。需要 User.Read（见上面的权限说明）。
   try {
     const res = await fetch('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName', {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers,
     })
+    if (res.ok) {
+      const data = (await res.json()) as { mail?: string | null; userPrincipalName?: string | null }
+      const addr = data.mail ?? data.userPrincipalName ?? null
+      if (addr) return addr
+    }
+  } catch {
+    // 落到下面的退路
+  }
+
+  // 退路：从「已发送」里取一封信的发件人 —— 那就是这个邮箱自己。
+  //
+  // 为什么留这条退路：有些租户会把 User.Read 单独砍掉（或者管理员只批了邮件
+  // 那两项）。这时读信是通的、只有问「我是谁」不通 —— 没有退路的话，整条管道
+  // 会因为一句纯展示用的地址而连不上，而信明明已经能读了。
+  // 只用 Mail.Read，不额外要任何权限。
+  try {
+    const res = await fetch(
+      'https://graph.microsoft.com/v1.0/me/mailFolders/sentitems/messages?$top=1&$select=from',
+      { headers },
+    )
     if (!res.ok) return null
-    const data = (await res.json()) as { mail?: string | null; userPrincipalName?: string | null }
-    return data.mail ?? data.userPrincipalName ?? null
+    const data = (await res.json()) as {
+      value?: { from?: { emailAddress?: { address?: string | null } | null } | null }[]
+    }
+    return data.value?.[0]?.from?.emailAddress?.address?.trim() || null
   } catch {
     return null
   }
