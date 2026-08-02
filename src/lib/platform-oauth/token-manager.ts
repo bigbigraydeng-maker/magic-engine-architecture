@@ -58,6 +58,15 @@ export class PlatformTokenRefreshError extends Error {
 interface RefreshResult {
   accessToken: string
   expiresAt:   Date
+  /**
+   * 提供方换给我们的**新**刷新令牌。
+   *
+   * Microsoft 每刷新一次就轮换一次刷新令牌，旧的会作废。不把新的存回去，
+   * 连接会在某一天变成 `invalid_grant` 停掉 —— 而且是安静地停：邮件不再进来、
+   * 没有任何报错，只能让客户重新授权一次。
+   * Google 通常不回这个字段，所以是可选的：没回就继续用原来那个。
+   */
+  refreshToken?: string
 }
 
 async function refreshGoogleToken(refreshTokenPlain: string): Promise<RefreshResult> {
@@ -151,6 +160,7 @@ async function refreshMicrosoftToken(refreshTokenPlain: string): Promise<Refresh
 
   const data = (await res.json()) as {
     access_token?:      string
+    refresh_token?:     string
     expires_in?:        number
     error?:             string
     error_description?: string
@@ -162,8 +172,10 @@ async function refreshMicrosoftToken(refreshTokenPlain: string): Promise<Refresh
   }
 
   return {
-    accessToken: data.access_token,
-    expiresAt:   new Date(Date.now() + (data.expires_in ?? 3600) * 1000),
+    accessToken:  data.access_token,
+    // 轮换过的刷新令牌必须存回去，否则连接迟早安静地断（见 RefreshResult）。
+    refreshToken: data.refresh_token,
+    expiresAt:    new Date(Date.now() + (data.expires_in ?? 3600) * 1000),
   }
 }
 
@@ -217,17 +229,23 @@ export async function fetchConnectionRow(
 
 async function persistRefreshedToken(
   connectionId: string,
-  accessToken:  string,
-  expiresAt:    Date,
+  refreshed:    RefreshResult,
 ): Promise<void> {
+  const patch: Record<string, string> = {
+    access_token_enc: encryptToken(refreshed.accessToken),
+    token_expiry:     refreshed.expiresAt.toISOString(),
+    last_synced_at:   new Date().toISOString(),
+    updated_at:       new Date().toISOString(),
+  }
+  // 提供方轮换了刷新令牌就跟着换 —— 跟 access token 写在同一次更新里，
+  // 不留「新的 access 配旧的 refresh」这种半截状态。
+  if (refreshed.refreshToken) {
+    patch.refresh_token_enc = encryptToken(refreshed.refreshToken)
+  }
+
   const { error } = await supabaseAdmin
     .from('platform_oauth_connections')
-    .update({
-      access_token_enc: encryptToken(accessToken),
-      token_expiry:     expiresAt.toISOString(),
-      last_synced_at:   new Date().toISOString(),
-      updated_at:       new Date().toISOString(),
-    })
+    .update(patch)
     .eq('id', connectionId)
 
   if (error) {
@@ -288,6 +306,43 @@ export async function getValidToken(
     throw err
   }
 
-  await persistRefreshedToken(row.id, refreshed.accessToken, refreshed.expiresAt)
+  await persistRefreshedToken(row.id, refreshed)
+  return refreshed.accessToken
+}
+
+/**
+ * 跟 getValidToken 一样，但认的是**某一条具体的连接**，不是「这个客户这个平台
+ * 最新的那条」。
+ *
+ * 为什么需要：一个客户可以连不止一个邮箱（设置页上就有「再连一个邮箱」）。
+ * 按 (客户, 平台) 取令牌永远只会拿到最新连的那一个 —— 较早连的那个邮箱
+ * 一封信都读不到，而且不会报错。
+ */
+export async function getValidTokenForConnection(connectionId: string): Promise<string> {
+  const { data, error } = await supabaseAdmin
+    .from('platform_oauth_connections')
+    .select('*')
+    .eq('id', connectionId)
+    .eq('status', CONNECTION_STATUS.ACTIVE)
+    .maybeSingle()
+
+  if (error || !data) {
+    throw new Error(`找不到这条连接（或已断开）: ${connectionId}`)
+  }
+
+  const row = data as PlatformOAuthConnectionRow
+  if (!isTokenExpired(row.token_expiry)) {
+    return decryptToken(row.access_token_enc)
+  }
+
+  let refreshed: RefreshResult
+  try {
+    refreshed = await callProviderRefresh(row.provider, decryptToken(row.refresh_token_enc))
+  } catch (err) {
+    await markConnectionError(row.id, err instanceof Error ? err.message : String(err))
+    throw err
+  }
+
+  await persistRefreshedToken(row.id, refreshed)
   return refreshed.accessToken
 }

@@ -33,11 +33,9 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase'
-import { getValidToken, PlatformConnectionNotFoundError } from '@/lib/platform-oauth/token-manager'
-import { CONNECTION_STATUS } from '@/lib/platform-oauth/vocabulary'
+import { getValidTokenForConnection } from '@/lib/platform-oauth/token-manager'
 import { fetchMailSince, type MailFolder, type MailMessage } from '@/lib/microsoft/mail-graph'
 import { classifySender } from '@/lib/microsoft/mail-sender'
-import { MICROSOFT_MAIL_PROVIDER } from '@/lib/microsoft/mail-oauth'
 import { resolveContact } from '@/lib/crm/identity'
 
 // ─── 计划（纯函数，不碰数据库） ──────────────────────────────────────────────
@@ -220,17 +218,28 @@ const FIRST_RUN_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000
  */
 const WATERMARK_LOOKBACK_MS = 6 * 60 * 60 * 1000
 
-export interface MailSyncClient {
-  id: string
-  name: string | null
+/**
+ * 要同步的**一个邮箱**，不是一个客户。
+ *
+ * 一个客户可以连不止一个邮箱（设置页上就有「再连一个邮箱」）。按客户同步会
+ * 永远只读到最新连的那一个，较早连的那个一封信都读不到、而且不会报错 ——
+ * 所以这里的单位是连接，不是客户。
+ */
+export interface MailboxTarget {
+  clientId: string
+  clientName: string | null
   /** clients.domain —— 判「同域来信是同事」用。 */
   domain: string | null
+  /** platform_oauth_connections.id —— 令牌按这条连接取，不按「客户最新那条」。 */
+  connectionId: string
+  /** 这个邮箱的地址。同时是线程归属标记（写进 conversations.page_id）。 */
+  mailbox: string
 }
 
 export interface MailSyncResult {
   clientId: string
   clientName: string | null
-  mailbox: string | null
+  mailbox: string
   /** 这次从邮箱读回来几封。 */
   fetched: number
   /** 这次落了几条对话（含更新已有的）。 */
@@ -245,17 +254,32 @@ export interface MailSyncResult {
   skipped: SkippedSender[]
   /** 邮箱太忙，一次没读完 —— 如实说，别让人以为读全了。 */
   truncated: boolean
-  skipReason?: 'not_connected'
+  /**
+   * 有线程处理失败，这次**提前停了**，后面更新的线程一条都没落。
+   *
+   * 这是刻意的：水位线是「已存对话里最新那封信的时间」，如果跳过失败的线程
+   * 继续处理更新的，下一次的水位线就会**永久越过**失败那条，那些人再也不会
+   * 进 CRM，而 cron 还记这次成功。宁可这一轮少读一点，下一轮重来。
+   */
+  stoppedEarly?: string
   error?: string
 }
 
-/** 这个客户的邮件对话里，最新那封信是什么时候的。没有就是第一次同步。 */
-async function getMailWatermark(clientId: string): Promise<Date> {
+/**
+ * 这个**邮箱**已经读到哪儿了。没有记录就是第一次同步。
+ *
+ * 按邮箱算、不按客户算：一个客户连了两个邮箱时，忙的那个会把水位线一路推到
+ * 今天，安静的那个再也读不到自己那些更早的信。归属靠 `page_id` ——
+ * 私信那边它存的是「哪个 Facebook 主页收到的」，邮件这边存「哪个邮箱收到的」，
+ * 是同一件事。
+ */
+async function getMailWatermark(clientId: string, mailbox: string): Promise<Date> {
   const { data } = await supabaseAdmin
     .from('conversations')
     .select('last_message_at')
     .eq('client_id', clientId)
     .eq('channel', 'email')
+    .eq('page_id', mailbox)
     .not('last_message_at', 'is', null)
     .order('last_message_at', { ascending: false })
     .limit(1)
@@ -304,18 +328,24 @@ interface StoredThread {
   newMessages: number
 }
 
-/** 存一条邮件线程和它的信。抛异常由调用方按线程隔离。 */
-async function storeThread(clientId: string, thread: PlannedThread): Promise<StoredThread> {
+/** 存一条邮件线程和它的信。抛异常一路上抛 —— 调用方要靠它决定停不停。 */
+async function storeThread(
+  clientId: string,
+  mailbox: string,
+  thread: PlannedThread,
+): Promise<StoredThread> {
   const { data: row, error } = await supabaseAdmin
     .from('conversations')
     .upsert(
       {
         client_id: clientId,
         channel: 'email',
+        // 「这条线程是从我们哪个信箱看到的」。私信那边这一列存 Facebook 主页 id，
+        // 是同一个角色。水位线按它分邮箱算，不然两个邮箱会互相推。
+        page_id: mailbox,
         conversation_id: thread.key,
         subject: thread.subject,
         participant_name: thread.counterparty.name,
-        message_count: thread.messages.length,
         last_message_at: thread.lastAt,
         last_message_from: thread.lastFrom,
         last_synced_at: new Date().toISOString(),
@@ -351,6 +381,21 @@ async function storeThread(clientId: string, thread: PlannedThread): Promise<Sto
     // 信没存下是可惜，但线程行已经在了、人还能接上 —— 不为此放弃整条线程。
     console.error('[mail-ingest] 存邮件正文失败:', msgErr)
   }
+
+  // 消息数用**库里实际有多少条**，不能用这一批的条数。
+  //
+  // 第一次之后，每批只带水位线回看窗口里的几封 —— 拿它当总数，一条已经有十封
+  // 来回的线程会在下一轮倒退成 2。列表上的计数会失真，而且靠「消息数变了没」
+  // 判断要不要重出 AI 卡的逻辑会长期以为旧卡还是最新的。
+  const { count } = await supabaseAdmin
+    .from('conversation_messages')
+    .select('id', { count: 'exact', head: true })
+    .eq('conversation_id', row.id)
+
+  await supabaseAdmin
+    .from('conversations')
+    .update({ message_count: count ?? thread.messages.length })
+    .eq('id', row.id)
 
   return {
     conversationId: row.id as string,
@@ -398,15 +443,15 @@ async function writeTouchpoints(
 }
 
 /**
- * 同步一个客户的邮箱。
+ * 同步**一个邮箱**。
  *
- * **永不抛异常** —— 一个客户挂掉不能让整个 cron 停下（另外几个客户的信照样要进来）。
+ * **永不抛异常** —— 一个邮箱挂掉不能让整个 cron 停下（别的客户的信照样要进来）。
  */
-export async function syncClientMail(client: MailSyncClient): Promise<MailSyncResult> {
+export async function syncMailbox(target: MailboxTarget): Promise<MailSyncResult> {
   const base: MailSyncResult = {
-    clientId: client.id,
-    clientName: client.name,
-    mailbox: null,
+    clientId: target.clientId,
+    clientName: target.clientName,
+    mailbox: target.mailbox,
     fetched: 0,
     threads: 0,
     messages: 0,
@@ -417,27 +462,15 @@ export async function syncClientMail(client: MailSyncClient): Promise<MailSyncRe
   }
 
   let token: string
-  let mailbox: string | null = null
   try {
-    const { data: conn } = await supabaseAdmin
-      .from('platform_oauth_connections')
-      .select('account_id')
-      .eq('client_id', client.id)
-      .eq('provider', MICROSOFT_MAIL_PROVIDER)
-      .eq('status', 'active')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    mailbox = (conn?.account_id as string | undefined) ?? null
-    token = await getValidToken(client.id, MICROSOFT_MAIL_PROVIDER)
+    // 按**这条连接**取令牌，不是按「这个客户最新的那条」—— 客户连了两个邮箱时，
+    // 后者永远只会拿到最新那个的令牌，较早那个一封信都读不到且不报错。
+    token = await getValidTokenForConnection(target.connectionId)
   } catch (err) {
-    if (err instanceof PlatformConnectionNotFoundError) {
-      return { ...base, skipReason: 'not_connected' }
-    }
-    return { ...base, mailbox, error: err instanceof Error ? err.message : String(err) }
+    return { ...base, error: err instanceof Error ? err.message : String(err) }
   }
 
-  const since = await getMailWatermark(client.id)
+  const since = await getMailWatermark(target.clientId, target.mailbox)
 
   // 收件箱和已发送分开读 —— 方向由文件夹决定，不靠比对发件人猜（见 mail-graph）。
   const folders: MailFolder[] = ['inbox', 'sentitems']
@@ -448,24 +481,35 @@ export async function syncClientMail(client: MailSyncClient): Promise<MailSyncRe
     if (!res.ok) {
       // 一个文件夹读失败就整次失败：只拿到一半（比如只有已发送）会让方向判断
       // 失衡 —— 线程看起来全是我们在说话，热线索被当成「已经跟过」。
-      return { ...base, mailbox, error: `读${folder === 'inbox' ? '收件箱' : '已发送'}失败: ${res.error}` }
+      return {
+        ...base,
+        error: `读${folder === 'inbox' ? '收件箱' : '已发送'}失败: ${res.error}`,
+      }
     }
     all.push(...res.messages)
     truncated = truncated || res.truncated
   }
 
   const plan = planMailIngest(all, {
-    ownDomains: ownDomainsOf(mailbox, client.domain),
+    ownDomains: ownDomainsOf(target.mailbox, target.domain),
   })
+
+  // **从旧到新处理**，配合下面「一条失败就停」。
+  //
+  // 水位线是「已存对话里最新那封信的时间」。跳过失败的线程继续处理更新的，
+  // 下一次的水位线就会永久越过失败那条 —— 那几个人再也不会进 CRM，而 cron
+  // 还把这次记成成功。宁可这一轮少读一点，下一轮从原地重来。
+  const ordered = [...plan.threads].sort((a, b) => a.lastAt.localeCompare(b.lastAt))
 
   let messages = 0
   let newContacts = 0
   let touchpoints = 0
+  let done = 0
+  let stoppedEarly: string | undefined
 
-  for (const thread of plan.threads) {
-    // 按线程隔离：一条烂线程不能带走这个客户剩下的所有信。
+  for (const thread of ordered) {
     try {
-      const stored = await storeThread(client.id, thread)
+      const stored = await storeThread(target.clientId, target.mailbox, thread)
       messages += stored.newMessages
 
       let contactId = stored.contactId
@@ -474,7 +518,7 @@ export async function syncClientMail(client: MailSyncClient): Promise<MailSyncRe
           // 客人自己开过口 —— 认人，认不到就按邮箱新建（判断②）。
           // 只带**一个**身份，所以结构上不可能触发两个真人的不可逆合并。
           const res = await resolveContact({
-            clientId: client.id,
+            clientId: target.clientId,
             identities: [{ kind: 'email', value: thread.counterparty.address }],
             displayName: thread.counterparty.name,
             source: 'email',
@@ -484,7 +528,7 @@ export async function syncClientMail(client: MailSyncClient): Promise<MailSyncRe
           if (res.created) newContacts += 1
         } else {
           // 纯出站线程：能接上已有的人就接，接不上就留白，绝不建人。
-          contactId = await findContactByEmail(client.id, thread.counterparty.address)
+          contactId = await findContactByEmail(target.clientId, thread.counterparty.address)
         }
 
         if (contactId) {
@@ -498,22 +542,27 @@ export async function syncClientMail(client: MailSyncClient): Promise<MailSyncRe
       }
 
       if (contactId) {
-        touchpoints += await writeTouchpoints(client.id, contactId, thread)
+        touchpoints += await writeTouchpoints(target.clientId, contactId, thread)
       }
+      done += 1
     } catch (err) {
-      console.error(`[mail-ingest] 线程 ${thread.key} 失败:`, err)
+      // 停在这里。已经处理完的都落了库，水位线也就停在这条之前 ——
+      // 下一轮会从这条重新读，不会留下一个永远补不回来的洞。
+      stoppedEarly = `线程 ${thread.key} 失败：${err instanceof Error ? err.message : String(err)}`
+      console.error('[mail-ingest]', stoppedEarly)
+      break
     }
   }
 
   return {
     ...base,
-    mailbox,
     fetched: all.length,
-    threads: plan.threads.length,
+    threads: done,
     messages,
     newContacts,
     touchpoints,
     skipped: plan.skipped,
     truncated,
+    stoppedEarly,
   }
 }
