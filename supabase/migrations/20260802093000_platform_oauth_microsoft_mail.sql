@@ -10,6 +10,9 @@
 -- 品牌名时显得对不上。
 --
 -- 可逆：把 'microsoft_mail' 从数组里去掉即可（去掉前需先清理该 provider 的行）。
+--
+-- 已于 2026-08-02 由 PM 放行并执行。文件名比原计划晚半小时，是为了跟另一个
+-- 窗口同一时间戳的 team_memory 错开 —— 两者互不相干，只是重名会让人分不清顺序。
 
 ALTER TABLE platform_oauth_connections
   DROP CONSTRAINT IF EXISTS platform_oauth_connections_provider_check;
