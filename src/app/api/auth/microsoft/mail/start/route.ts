@@ -1,0 +1,74 @@
+/**
+ * GET /api/auth/microsoft/mail/start?clientId={meClientId}
+ *
+ * 开始连接客户自己的邮箱。把浏览器送到 Microsoft 的登录页，登录的人用
+ * **他自己收 info@ 的那个账号**同意一次，我们就能把发进来的邮件接回 CRM。
+ *
+ * 跟 Google GBP 那条流程刻意保持同一形状（一次性随机数进 httpOnly cookie、
+ * 只有随机数进 state、clientId 留在服务端），差别只在两个 Microsoft 特有的点：
+ *
+ *  · `prompt=consent` —— 强制每次都回传刷新令牌。少了它，第二次连接会拿到
+ *    一个没有刷新能力的令牌，一小时后同步安静地停掉。
+ *  · scope 里必须带 `offline_access`，且要跟刷新时传的那一串**完全一致**
+ *    （见 lib/microsoft/mail-oauth.ts 里的说明）。
+ *
+ * Responses:
+ *   302  → Microsoft 登录页
+ *   400  缺 clientId
+ *   401 / 403  没有这个客户的管理权限
+ *   500  没配 MICROSOFT_CLIENT_ID
+ */
+
+import { type NextRequest, NextResponse } from 'next/server'
+import * as nodeCrypto from 'crypto' // 命名空间导入 —— 测试里要 vi.mock 拦截
+import { requireDashboardClientAccess } from '@/lib/auth/client-access'
+import {
+  MICROSOFT_AUTH_URL,
+  MICROSOFT_MAIL_SCOPES,
+  MICROSOFT_STATE_COOKIE,
+  microsoftRedirectUri,
+} from '@/lib/microsoft/mail-oauth'
+
+/** 随机数只活 10 分钟 —— 够一个人登录一次，不够别人捡去用。 */
+export const STATE_TTL_SECS = 600
+
+export async function GET(req: NextRequest) {
+  const clientId = req.nextUrl.searchParams.get('clientId')
+  if (!clientId) {
+    return NextResponse.json({ error: 'clientId query param is required' }, { status: 400 })
+  }
+
+  // 谁能连一个客户的邮箱，跟谁能管这个客户是同一件事 —— 复用同一道门。
+  const access = await requireDashboardClientAccess(clientId)
+  if (!access.ok) {
+    return NextResponse.json({ error: access.error }, { status: access.status })
+  }
+
+  const msClientId = process.env.MICROSOFT_CLIENT_ID
+  if (!msClientId) {
+    return NextResponse.json({ error: 'MICROSOFT_CLIENT_ID is not configured' }, { status: 500 })
+  }
+
+  // cookie 里放 "随机数:clientId"，回调时两样都要对上 —— 只有随机数出门。
+  const nonce = nodeCrypto.randomBytes(16).toString('hex')
+  const cookieVal = `${nonce}:${clientId}`
+
+  const authUrl = new URL(MICROSOFT_AUTH_URL)
+  authUrl.searchParams.set('client_id', msClientId)
+  authUrl.searchParams.set('redirect_uri', microsoftRedirectUri())
+  authUrl.searchParams.set('response_type', 'code')
+  authUrl.searchParams.set('response_mode', 'query')
+  authUrl.searchParams.set('scope', MICROSOFT_MAIL_SCOPES.join(' '))
+  // 每次都要刷新令牌 —— 没有它，一小时后同步会安静地停掉。
+  authUrl.searchParams.set('prompt', 'consent')
+  authUrl.searchParams.set('state', nonce)
+
+  const res = NextResponse.redirect(authUrl.toString())
+  // SameSite 必须是 Lax 不能是 Strict：从 Microsoft 跳回来是跨站的 GET，
+  // Strict 会让 cookie 不被带上，回调侧看起来就像有人在伪造请求。
+  res.headers.set(
+    'Set-Cookie',
+    `${MICROSOFT_STATE_COOKIE}=${cookieVal}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${STATE_TTL_SECS}`,
+  )
+  return res
+}
