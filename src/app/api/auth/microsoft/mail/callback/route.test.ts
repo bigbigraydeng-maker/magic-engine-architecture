@@ -134,3 +134,57 @@ describe('客户在 Microsoft 那边点了取消', () => {
     expect(exchangeCodeForTokens).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * 有些公司的 Microsoft 365 关掉了「员工可以自己给外部软件授权」，info@ 自己点
+ * 会撞上「需要管理员批准」。管理员走 adminconsent 端点批一次，回到这里时带的是
+ * `admin_consent=True`，**没有授权码**。
+ */
+describe('管理员替全公司批准之后回来', () => {
+  function callAdmin(value: string) {
+    const u = new URL('https://app.magicengine.com.au/api/auth/microsoft/mail/callback')
+    u.searchParams.set('admin_consent', value)
+    u.searchParams.set('tenant', 'tenant-guid')
+    const req = new NextRequest(u, {
+      headers: { cookie: `ms_mail_oauth_state=${NONCE}:${CLIENT}` },
+    })
+    return GET(req)
+  }
+
+  /**
+   * **这条是整个两步设计的理由**：走这条路的是 IT 管理员。如果这里顺手存一条
+   * 连接，客户的收信箱就会变成**管理员自己的邮箱** —— 那是这条管道最贵的错误。
+   */
+  it('绝不因此存下一条连接 —— 否则连进来的是管理员自己的邮箱', async () => {
+    await callAdmin('True')
+    expect(upsertConnection).not.toHaveBeenCalled()
+    expect(exchangeCodeForTokens).not.toHaveBeenCalled()
+  })
+
+  it('告诉人门开了，但还得自己再连一次', async () => {
+    const url = landed(await callAdmin('True'))
+    expect(url.searchParams.get('mail')).toBe('admin_ok')
+    expect(url.pathname).toContain(CLIENT)
+  })
+
+  it('管理员点了拒绝 → 照实说，不假装成功', async () => {
+    const url = landed(await callAdmin('False'))
+    expect(url.searchParams.get('mail')).toBe('error')
+    expect(url.searchParams.get('why')).toContain('没有批准')
+    expect(upsertConnection).not.toHaveBeenCalled()
+  })
+
+  /** 没有授权码这条路走不到换令牌，但「不存」这件事必须是明确的，不能靠巧合。 */
+  it('就算带了授权码也不换 —— 这条路只负责开门', async () => {
+    const u = new URL('https://app.magicengine.com.au/api/auth/microsoft/mail/callback')
+    u.searchParams.set('admin_consent', 'True')
+    u.searchParams.set('code', 'code-1')
+    u.searchParams.set('state', NONCE)
+    const req = new NextRequest(u, {
+      headers: { cookie: `ms_mail_oauth_state=${NONCE}:${CLIENT}` },
+    })
+    await GET(req)
+    expect(exchangeCodeForTokens).not.toHaveBeenCalled()
+    expect(upsertConnection).not.toHaveBeenCalled()
+  })
+})

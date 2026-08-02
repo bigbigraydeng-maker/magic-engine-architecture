@@ -17,6 +17,8 @@ import {
   exchangeCodeForTokens,
   fetchMailboxAddress,
   microsoftRedirectUri,
+  MICROSOFT_ADMIN_CONSENT_URL,
+  MICROSOFT_AUTH_URL,
   MICROSOFT_MAIL_SCOPES,
 } from '../mail-oauth'
 
@@ -58,9 +60,56 @@ describe('要哪些权限 —— 这是一份契约，不是一个随手改的�
     expect(MICROSOFT_MAIL_SCOPES).toContain('https://graph.microsoft.com/Mail.Send')
   })
 
+  /**
+   * Graph 的 `/me` 认 User.Read，不认 Mail.Read。少了它，换令牌会成功、读地址
+   * 却 403 —— 连接卡在「连上了但读不到邮箱地址」，而信明明已经能读了。
+   * 2026-08-02 CTS 实测踩到。
+   */
+  it('要 User.Read —— 少了它问不出「刚才登录的是哪个邮箱」', () => {
+    expect(MICROSOFT_MAIL_SCOPES).toContain('https://graph.microsoft.com/User.Read')
+  })
+
   /** 读信不需要改客户的邮箱。多要的每一分权限都是以后出事时说不清楚的地方。 */
   it('绝不要 Mail.ReadWrite —— 我们没有任何理由改客户的邮箱', () => {
     expect(MICROSOFT_MAIL_SCOPES.join(' ')).not.toContain('Mail.ReadWrite')
+  })
+
+  /**
+   * 权限只该往「刚好够用」的方向走。读通讯录 / 读日历 / 读文件都跟这条管道
+   * 无关，而客户老板在同意页上看到它们只会当场停下来。
+   */
+  it('不夹带跟收信无关的权限', () => {
+    const s = MICROSOFT_MAIL_SCOPES.join(' ')
+    for (const forbidden of ['Contacts.', 'Calendars.', 'Files.', 'Directory.', 'Mail.ReadWrite']) {
+      expect(s).not.toContain(forbidden)
+    }
+  })
+})
+
+describe('管理员替全公司批准的入口', () => {
+  /**
+   * 有些公司的 Microsoft 365 关掉了「员工可以自己给外部软件授权」，info@ 自己
+   * 点会撞上「需要管理员批准」。这条链接是给管理员走的。
+   */
+  it('用 adminconsent 专用端点', () => {
+    expect(MICROSOFT_ADMIN_CONSENT_URL).toBe(
+      'https://login.microsoftonline.com/common/adminconsent',
+    )
+  })
+
+  /**
+   * **这条是这个端点存在的全部理由**：它不回授权码。走这条路的是 IT 管理员，
+   * 如果顺手换到了令牌，我们就会把**管理员自己的邮箱**存成客户的收信箱 ——
+   * 那是这条管道最贵的错误。批准和连接必须是两步。
+   */
+  it('跟普通登录端点不是同一个 —— 批准和连接必须分两步走', () => {
+    expect(MICROSOFT_ADMIN_CONSENT_URL).not.toBe(MICROSOFT_AUTH_URL)
+    expect(MICROSOFT_ADMIN_CONSENT_URL).not.toContain('/authorize')
+  })
+
+  /** `common`：客户可能是 Outlook.com 个人账号，也可能是公司的 Microsoft 365。 */
+  it('不写死某一个公司的租户号', () => {
+    expect(MICROSOFT_ADMIN_CONSENT_URL).toContain('/common/')
   })
 })
 
@@ -141,6 +190,56 @@ describe('连的到底是哪个邮箱 —— 必须问出来，不能让人手�
   it('问不出来就回 null —— 调用方据此拒绝保存，不留一条不知道是谁的连接', async () => {
     mockFetch({}, false, 403)
     expect(await fetchMailboxAddress('at')).toBeNull()
+  })
+
+  /**
+   * 退路：有些租户会把 User.Read 单独砍掉（或者管理员只批了邮件那两项）。
+   * 这时**读信是通的**，只有问「我是谁」不通 —— 没有退路的话，整条管道会因为
+   * 一句纯展示用的地址而连不上，而信明明已经能读了。
+   * 退路只用 Mail.Read：从「已发送」里取一封的发件人，那就是这个邮箱自己。
+   */
+  describe('问不出「我是谁」时的退路', () => {
+    /** 按 URL 分别应答 —— /me 和「已发送」要能给出不同结果。 */
+    function mockByUrl(routes: { me?: () => Response; sent?: () => Response }) {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string) => {
+          if (url.includes('/mailFolders/sentitems/')) {
+            return routes.sent?.() ?? ({ ok: false, status: 404 } as unknown as Response)
+          }
+          return routes.me?.() ?? ({ ok: false, status: 403 } as unknown as Response)
+        }),
+      )
+    }
+
+    const okJson = (body: unknown) =>
+      ({ ok: true, status: 200, json: async () => body }) as unknown as Response
+
+    it('/me 被拒 → 从「已发送」里认出这个邮箱', async () => {
+      mockByUrl({
+        sent: () => okJson({ value: [{ from: { emailAddress: { address: 'info@ctstours.co.nz' } } }] }),
+      })
+      expect(await fetchMailboxAddress('at')).toBe('info@ctstours.co.nz')
+    })
+
+    /** 刚建的邮箱一封都没发过 —— 认不出来就如实回 null，不猜。 */
+    it('已发送是空的 → 回 null，不猜', async () => {
+      mockByUrl({ sent: () => okJson({ value: [] }) })
+      expect(await fetchMailboxAddress('at')).toBeNull()
+    })
+
+    it('两条路都不通 → 回 null', async () => {
+      mockByUrl({})
+      expect(await fetchMailboxAddress('at')).toBeNull()
+    })
+
+    /** /me 能答就不该多打一次「已发送」—— 正路通的时候不浪费一次请求。 */
+    it('/me 答得出来就不走退路', async () => {
+      const sent = vi.fn(() => okJson({ value: [] }))
+      mockByUrl({ me: () => okJson({ mail: 'info@ctstours.co.nz' }), sent })
+      expect(await fetchMailboxAddress('at')).toBe('info@ctstours.co.nz')
+      expect(sent).not.toHaveBeenCalled()
+    })
   })
 })
 
