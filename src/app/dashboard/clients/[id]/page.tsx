@@ -18,6 +18,7 @@ import { BriefGateBanner } from './_components/BriefGateBanner';
 import { GoalBanner } from './_components/GoalBanner';
 import { WorkLogPanel } from './_components/WorkLogPanel';
 import { ReviewInbox } from '../../factory/_components/ReviewInbox';
+import { industryFeatureFlags } from '@/lib/clients/industry-features';
 
 
 interface Client {
@@ -25,26 +26,21 @@ interface Client {
   name: string;
   domain?: string;
   created_at: string;
+  /** 决定「房子」「行程单」「楼盘」这类行业专属入口显不显示。空 = 认不出，一个都不给。 */
   industry?: string | null;
 }
 
 /**
- * 工具按行业收敛。
- *
- * 之前所有工具发给所有客户 —— CTS（旅行社）的工作台上摆着「房子」，
- * 「我的客人」的说明还写着「按房子列人（中介自己用）」。客人登录第一眼
- * 就看到别的行业的词，会直接怀疑这套系统是不是给他们做的。
- *
- * 用 clients.industry 判断，不用「有没有数据」—— 新客户数据还是空的，
- * 按数据判会让他一个工具都看不到。
+ * ⚠️ 合并说明（2026-08-03）：main 上另一个窗口用内联 isRealEstate/isTravel
+ * 正则做了同一件事。这里统一改用 `lib/clients/industry-features` 的共用模块，
+ * 理由不是「我的更好」而是三条实际差异：
+ *   ① 它已被导航、房子页、行程单页、楼盘页、接口层共用 —— 内联版只管这一个文件，
+ *      两套判据迟早分叉（一处放行一处拦，最难查）
+ *   ② 它把 `real_estate`（下划线，库里实际存的写法）归一化后再匹配；
+ *      内联正则写的是 `real[_\s-]?estate` 能匹配，但旅游那条 `travel|tour` 
+ *      匹配不到库里的 `Travel — Tour Operator`（长破折号）
+ *   ③ 它有 12 个测试钉住「认不出行业 = 一个都不给」这条默认隐藏规则
  */
-function isRealEstate(industry?: string | null): boolean {
-  return /real[_\s-]?estate|property|地产|房产/i.test(industry ?? '');
-}
-
-function isTravel(industry?: string | null): boolean {
-  return /travel|tour|旅游|旅行/i.test(industry ?? '');
-}
 
 // ─── Brand Health Widget ──────────────────────────────────────────────────────
 
@@ -676,7 +672,9 @@ export default function ClientDetailPage() {
           <section>
             <p className="mb-3 text-xs font-black uppercase tracking-[0.14em] text-me-ochre">经营工具</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {isTravel(client?.industry) && (
+              {/* 行业专属：旅行社后台不该有地产工具，建材客户后台不该有旅游行程单
+                  （PM 2026-08-03 点名）。认不出行业就都不给 —— lib/clients/industry-features */}
+              {industryFeatureFlags(client?.industry).tailor_made && (
                 <ToolCard
                   href={`/dashboard/clients/${clientId}/tailor-made`}
                   title="Tailor-made 行程单"
@@ -684,7 +682,15 @@ export default function ClientDetailPage() {
                   badge="in_house"
                 />
               )}
-              {isRealEstate(client?.industry) && (
+              {industryFeatureFlags(client?.industry).projects && (
+                <ToolCard
+                  href={`/dashboard/clients/${clientId}/projects`}
+                  title="楼盘"
+                  desc="中介名下每个开发项目：各自的卖点、策略、素材，发票开给开发商"
+                  badge="in_house"
+                />
+              )}
+              {industryFeatureFlags(client?.industry).listings && (
                 <ToolCard
                   href={`/dashboard/clients/${clientId}/listings`}
                   title="房子"
@@ -702,7 +708,7 @@ export default function ClientDetailPage() {
               {/* 客户消息不是"诊断",但它跟诊断一样是每天要开的页;放生产区会被
                   一堆内容工具淹掉,所以放在诊断与分析区首位 —— 销售一进客户页就看到。 */}
               {/* 销售每天第一件事就是开这一页,放在诊断区最前面。 */}
-              {isRealEstate(client?.industry) && (
+              {industryFeatureFlags(client?.industry).listings && (
                 <ToolCard href={`/dashboard/clients/${clientId}/contacts`}        title="我的客人"       desc="手机上按房子列人 · 点一下说清楚他到哪一步了（中介自己用）"  badge="in_house" />
               )}
               <ToolCard href={`/dashboard/clients/${clientId}/crm`}                title="今天该联系谁"   desc="全渠道接触记录自动排序 · 说过别再联系的已挡在名单外"  badge="in_house" />
