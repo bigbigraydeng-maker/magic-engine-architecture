@@ -63,6 +63,8 @@ const ADMIN_SECTIONS: NavSection[] = [
       { key: 'prospecting',      label: 'Prospecting',     mark: 'PS', href: '/dashboard/admin/prospecting' },
       { key: 'industry-baselines', label: 'Industry Baselines', mark: 'IB', href: '/dashboard/industry-baselines' },
       { key: 'cron-health',     label: 'Cron Health',     mark: 'CH', href: '/dashboard/admin/cron-health' },
+      { key: 'ad-engine',       label: '广告引擎',         mark: 'AE', href: '/dashboard/ad-engine' },
+      { key: 'ad-approval',     label: '等你点头的广告',    mark: 'OK', href: '/dashboard/ad-approval' },
       { key: 'team-memory',     label: '团队工作记忆',     mark: 'TM', href: '/dashboard/team-memory' },
     ],
   },
