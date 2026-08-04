@@ -33,42 +33,14 @@ export type ManualItemKind =
   | 'not_indexed'
   | 'meta_stuck'
   | 'crawl_stale'
-  | 'cron_never_ran'
   | 'video_credits_out'
   | 'cron_not_running'
   | 'cron_blind'
   | 'goal_baseline_mismatch'
   | 'diagnostic_findings'
   | 'prescription_updated'
-
-/**
- * 新建的 cron 在 Render 上必须**手动**关联 me-shared-cron-secret 环境变量组。
- * `sync: false` 不会自动填值 —— 于是 `$CRON_SECRET` 展开成空串、每次 401、
- * curl 直接退出，应用侧连一行 `cron_run_logs` 都不会有。
- *
- * 这就是为什么它必须出现在这里：daily-cron-digest 只报「跑了但失败」，
- * 「压根没跑」它看不见。daily-cron-digest 自己就是这么哑了 51 天没人发现的。
- *
- * 新增 cron 时往这个数组里加一行；它在 cron_run_logs 里出现第一条记录后自动消失。
- */
-const CRONS_NEEDING_MANUAL_LINK: Array<{ job: string; label: string }> = [
-  { job: 'team-memory-sweeper', label: '团队工作记忆兜底清扫' },
-  // 2026-08-03 体检查出的三个「建好之后一次都没跑过」——「没跑过」跟「跑了没结果」
-  // 是两回事，前者以前没有任何地方会报。
-  { job: 'factory-order-scheduler', label: '视频工厂排产' },
-  { job: 'job-boards-weekly', label: '招聘信号周扫' },
-  // 名字里带 weekly，实际排班是每天 0 点（render.yaml / registry 都是 `0 0 * * *`）。
-  // 给 PM 看的名字按**实际**排班写 —— 服务名不好改，标签总能说真话。
-  { job: 'viral-discovery-weekly', label: '爆款素材每日挖' },
-  // 2026-08-03/04 新建的两个 —— 它们是 DAPE 分析段和处方段的全部动力来源。
-  // 密钥没接上的话，体检和方案就都不会有，而且一声不吭。
-  { job: 'diagnostic-weekly', label: '客户深度体检周更' },
-  { job: 'prescription-weekly', label: '客户方案周更' },
-]
-
-/** Render 蓝图页 —— 从这儿进去挑服务、关联环境变量组 */
-const RENDER_BLUEPRINT_URL =
-  'https://dashboard.render.com/blueprint/exs-d8ejt0og4nts73a1ce50'
+  | 'leads_metric_untrusted'
+  | 'factory_worker_idle'
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -103,6 +75,9 @@ export function gscInspectUrl(siteUrl: string, pageUrl: string): string {
 
 import { gscPropertyUrl, gscInspectSteps, verifyActionLink } from './action-link'
 import { checkCronHealth } from '@/lib/cron/health'
+import { fetchGa4KeyEventBreakdown } from '@/lib/ga4/client'
+import { judgeLeadsSanity } from '@/lib/strategy/leads-sanity'
+import { judgeWorkerPresence } from '@/lib/factory/worker-presence'
 import { auditGoalBaselines } from '@/lib/strategy/baseline-audit'
 
 export function daysAgo(iso: string | null, now: Date): number | null {
@@ -156,15 +131,18 @@ export async function loadManualItems(
   const clients = new Map(
     ((clientRows ?? []) as ClientRow[]).map((c) => [c.id, c]),
   )
-  // 基础设施类检查要放在这条提前返回**之前**：新建的 cron 有没有接上密钥，
-  // 跟系统里有几个客户毫无关系。放在后面的话，客户表一空它就被跳过了。
-  await appendNeverRanCrons(supabase, items)
+  // 基础设施类检查要放在这条提前返回**之前**：定时任务健康跟系统里有几个客户
+  // 毫无关系。放在后面的话，客户表一空它就被跳过了。
   // 出片余额用完 —— 只有人能充值，必须当天摆到眼前，不能烂在工单的 error 字段里
   await pushVideoCreditsItem(supabase, items, now)
   // 按时没跑 / 查不出跑没跑 —— PM 2026-08-03 要求「不能完成需要有报错」
   await pushCronHealthItems(supabase, items, now)
   // 目标数字口径对不上 —— 错的方向感比没数字更危险(2026-08-03 差点据此给出反向建议)
   await pushBaselineItems(supabase, items)
+  // 出片工单排队但没人干活 —— 装配跑在一台 Mac 上，不开机就没人做，而队列里看不出来
+  await pushFactoryWorkerItems(supabase, items, now).catch((e) =>
+    console.warn('[manual-items] 出片工人在岗检查失败（不阻塞其他待办）:', e),
+  )
   if (clients.size === 0) return items
 
   const ids = Array.from(clients.keys())
@@ -176,6 +154,11 @@ export async function loadManualItems(
 
   // 本周方案已自动落地 —— 只通知，不要求 PM 操作（PM 2026-08-04 拍板）
   await pushPrescriptionItems(supabase, items, now, nameOf)
+
+  // 客资数值不值得信 —— 值不值得信只有查了统计后台才知道，别让人自己去翻
+  await pushLeadsSanityItems(supabase, items, nameOf).catch((e) =>
+    console.warn('[manual-items] 客资口径检查失败（不阻塞其他待办）:', e),
+  )
 
   // GSC property identifiers (needed for the inspect deep link).
   const { data: connectors } = await supabase
@@ -331,39 +314,6 @@ export async function loadManualItems(
   return items
 }
 
-async function appendNeverRanCrons(
-  supabase: SupabaseClient,
-  items: ManualItem[],
-): Promise<void> {
-  if (CRONS_NEEDING_MANUAL_LINK.length === 0) return
-
-  const { data } = await supabase
-    .from('cron_run_logs')
-    .select('job_name')
-    .in(
-      'job_name',
-      CRONS_NEEDING_MANUAL_LINK.map((c) => c.job),
-    )
-    .limit(200)
-
-  const seen = new Set(
-    ((data ?? []) as Array<{ job_name: string }>).map((r) => r.job_name),
-  )
-
-  for (const cron of CRONS_NEEDING_MANUAL_LINK) {
-    if (seen.has(cron.job)) continue
-    items.push({
-      kind: 'cron_never_ran',
-      client_id: 'infra',
-      client_name: 'Magic Engine 后台',
-      // 别写「每天都会白跑」—— 名单里有周任务，PM 照链接去看运行记录一周才一条，
-      // 跟这句话对不上，下次他就不信这条提醒了
-      what: `定时任务「${cron.label}」建好之后一次都没跑成功过，多半是密钥没接上，接不上它每次到点都会空跑一遍、永远不出结果`,
-      how: `打开链接 → 找到服务 ${cron.job} → Environment → Linked Environment Groups → 勾 me-shared-cron-secret → 选「Link and apply on next run」。不用碰密钥本身`,
-      href: RENDER_BLUEPRINT_URL,
-    })
-  }
-}
 
 
 /** 出片余额充值页 —— 用户自己的账户页,不是深链,登录后一定打得开。 */
@@ -486,6 +436,123 @@ async function pushBaselineItems(supabase: SupabaseClient, items: ManualItem[]):
       href: `https://app.magicengine.com.au/dashboard/clients/${s.clientId}/goal/${s.goalId}`,
     })
   }
+}
+
+
+/**
+ * 「客资数」这个目标指标值不值得信 —— 不值得就说清为什么。
+ *
+ * 2026-08-04 实测起因：CTS 目标《Best of China 团报名》目标值 30、当前 344，
+ * 仪表盘上 1147% 达成。查下来是网站那个「产生线索」事件触发条件太宽 ——
+ * 28 天响 341 次，而真正开始填表只有 86 次，连关于我们、签证指南这种
+ * 没有表单的页面都在响。
+ *
+ * 这个数只有客户自己能修（在他们的统计后台改触发条件），所以必须下发；
+ * 但下发的话要说清「这个数为什么不能信」，而不是让人自己去后台翻。
+ */
+async function pushLeadsSanityItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  nameOf: (id: string) => string,
+): Promise<void> {
+  const { data: goals } = await supabase
+    .from('goals')
+    .select('id, client_id, title, current_value')
+    .eq('status', 'active')
+    .eq('primary_metric_key', 'leads_count')
+  const rows = (goals ?? []) as Array<{
+    id: string
+    client_id: string
+    title: string
+    current_value: number | null
+  }>
+  if (rows.length === 0) return
+
+  // 一个客户查一次就够 —— 同客户多个客资目标共用同一份统计数据
+  const checked = new Map<string, Awaited<ReturnType<typeof checkClientLeads>>>()
+  for (const g of rows) {
+    if (!checked.has(g.client_id)) {
+      checked.set(g.client_id, await checkClientLeads(supabase, g.client_id))
+    }
+    const verdict = checked.get(g.client_id)
+    if (!verdict || verdict.trustworthy) continue
+
+    items.push({
+      kind: 'leads_metric_untrusted',
+      client_id: g.client_id,
+      client_name: nameOf(g.client_id),
+      what:
+        `目标「${g.title}」现在显示 ${g.current_value ?? '—'}，但这个数不能信 —— ${verdict.humanReason}`,
+      how:
+        '这个要在客户的网站统计后台改（把「产生线索」的触发条件收窄到真的提交了表单），' +
+        '我改不了。你确认一下该找谁改；在那之前别拿这个数判断这个目标做得好不好',
+      href: `https://app.magicengine.com.au/dashboard/clients/${g.client_id}/goal/${g.id}`,
+    })
+  }
+}
+
+/**
+ * 出片工单在排队但没人干活 → 下发。
+ *
+ * 装配环节跑在一台 Mac 上，没人开机时工单就静静躺在队列里 ——
+ * 队列里有活、看板上没动静，而「这周怎么没出片」要等人想起来问才发现。
+ * 只在**真的有活在等**时才报（没活时工人没开机完全正常，报了就是噪音）。
+ */
+async function pushFactoryWorkerItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+): Promise<void> {
+  // 真实列名（已核实）：status / created_at / heartbeat_at
+  const { data: queuedRows } = await supabase
+    .from('content_work_orders')
+    .select('id, created_at')
+    .eq('status', 'queued')
+    .order('created_at', { ascending: true })
+  const queued = (queuedRows ?? []) as Array<{ id: string; created_at: string }>
+  if (queued.length === 0) return
+
+  const { data: hbRows } = await supabase
+    .from('content_work_orders')
+    .select('heartbeat_at')
+    .not('heartbeat_at', 'is', null)
+    .order('heartbeat_at', { ascending: false })
+    .limit(1)
+  const lastHb = (hbRows ?? [])[0] as { heartbeat_at: string } | undefined
+
+  const hours = (iso: string) => (now.getTime() - Date.parse(iso)) / 3_600_000
+  const verdict = judgeWorkerPresence({
+    queued: queued.length,
+    oldestQueuedHours: hours(queued[0].created_at),
+    lastHeartbeatHours: lastHb ? hours(lastHb.heartbeat_at) : null,
+  })
+  if (verdict.idle) return
+
+  items.push({
+    kind: 'factory_worker_idle',
+    client_id: 'infra',
+    client_name: 'Magic Engine 后台',
+    what: `${verdict.humanReason} —— 出片这一步跑在你那台 Mac 上，它不开机就没人做`,
+    how: '在那台 Mac 上跑 `node scripts/factory-worker/worker.mjs --loop`，它会自己把排队的活领走。如果你希望这事不再依赖某一台机器，回我一句，我们单独排',
+    href: 'https://app.magicengine.com.au/dashboard/factory',
+  })
+}
+
+/** 拉一个客户的关键事件构成并判定。任何一步拿不到就返回 null（不误报）。 */
+async function checkClientLeads(supabase: SupabaseClient, clientId: string) {
+  const { data: conn } = await supabase
+    .from('client_connectors')
+    .select('config')
+    .eq('client_id', clientId)
+    .eq('anchor', 'ga4')
+    .eq('status', 'connected')
+    .maybeSingle<{ config: { property_id?: string } | null }>()
+  const propertyId = conn?.config?.property_id
+  if (!propertyId) return null
+
+  const breakdown = await fetchGa4KeyEventBreakdown(propertyId, clientId).catch(() => null)
+  if (!breakdown) return null
+  return judgeLeadsSanity(breakdown)
 }
 
 
