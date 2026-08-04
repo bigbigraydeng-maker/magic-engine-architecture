@@ -11,6 +11,7 @@ import {
   buildSellerThruPlayDraft,
   traceClaims,
   NotGroundedError,
+  BannedPhraseError,
   type ListingFacts,
   type AgentFacts,
   type BuildOptions,
@@ -76,6 +77,7 @@ describe('buildBuyerLeadDraft', () => {
   it('没给来源链接 → 抛（事实不可溯不许投放）', () => {
     expect(() => buildBuyerLeadDraft({ ...LISTING, sourceUrl: '' }, AGENT, OPTS)).toThrow(
       NotGroundedError,
+  BannedPhraseError,
     )
   })
 
@@ -150,5 +152,65 @@ describe('traceClaims — 逐句标可溯来源（红线要求）', () => {
     const t = traceClaims(d, { listing: LISTING, agent: AGENT })
     const lines = d.creatives[0].primaryText.split('\n').filter((s) => s.trim())
     expect(t.length).toBeGreaterThanOrEqual(lines.length)
+  })
+})
+
+describe('禁用词硬闸 —— 广告是付费对外的，命中直接不出稿', () => {
+  // 2026-08-05 真实场景：Roman 从 Barfoot & Thompson Royal Heights 转到
+  // Ray White Mission Bay，但他官网上还全是旧行资料。照着官网抓事实生成广告，
+  // 就会把前东家的品牌印在他自己的付费物料上。
+  const OLD_AGENCY = ['Barfoot & Thompson', 'Royal Heights', 'barfoot.co.nz']
+
+  it('战绩里带前东家分行名 → 拒绝出稿', () => {
+    expect(() =>
+      buildSellerThruPlayDraft(AGENT, { ...OPTS, videoId: 'v1', bannedPhrases: OLD_AGENCY }),
+    ).toThrow(BannedPhraseError)
+  })
+
+  it('报错里说清是哪个词命中，不是一句「有问题」', () => {
+    try {
+      buildSellerThruPlayDraft(AGENT, { ...OPTS, videoId: 'v1', bannedPhrases: OLD_AGENCY })
+      throw new Error('应该抛才对')
+    } catch (e) {
+      expect(e).toBeInstanceOf(BannedPhraseError)
+      expect((e as BannedPhraseError).hits).toContain('Royal Heights')
+    }
+  })
+
+  it('大小写不敏感 —— `royal heights` 一样拦', () => {
+    const a = { ...AGENT, achievements: ['no.1 listing agent | royal heights branch 2022-2023'] }
+    expect(() =>
+      buildSellerThruPlayDraft(a, { ...OPTS, videoId: 'v1', bannedPhrases: OLD_AGENCY }),
+    ).toThrow(BannedPhraseError)
+  })
+
+  it('换成不带前东家的战绩 → 正常出稿', () => {
+    const clean = {
+      ...AGENT,
+      achievements: ['NZ government RBPs certified digital marketing expert'],
+    }
+    const d = buildSellerThruPlayDraft(clean, {
+      ...OPTS, videoId: 'v1', bannedPhrases: OLD_AGENCY,
+    })
+    expect(d.creatives[0].primaryText).toContain('RBPs certified')
+  })
+
+  it('留资广告同样过这道闸（不是只有卖家向那条查）', () => {
+    const dirty = { ...LISTING, suburb: 'Royal Heights' }
+    expect(() =>
+      buildBuyerLeadDraft(dirty, AGENT, { ...OPTS, bannedPhrases: OLD_AGENCY }),
+    ).toThrow(BannedPhraseError)
+  })
+
+  it('禁用词只出现在标题里也要拦 —— 标题同样是买家读到的字', () => {
+    // 卖家向的标题是固定话术「现在是不是放盘的时候」，正文里没有「放盘」二字。
+    // 有的客户会禁「放盘」这类措辞，那这条就必须靠查标题才拦得住。
+    expect(() =>
+      buildSellerThruPlayDraft(AGENT, { ...OPTS, videoId: 'v1', bannedPhrases: ['放盘'] }),
+    ).toThrow(BannedPhraseError)
+  })
+
+  it('没给禁用词就不拦（老调用方不受影响）', () => {
+    expect(() => buildSellerThruPlayDraft(AGENT, { ...OPTS, videoId: 'v1' })).not.toThrow()
   })
 })

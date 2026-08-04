@@ -32,6 +32,7 @@ import {
   buildSellerThruPlayDraft,
   traceClaims,
   NotGroundedError,
+  BannedPhraseError,
   type ListingFacts,
   type AgentFacts,
   type BuildOptions,
@@ -112,9 +113,26 @@ export async function POST(
 
   const { data: client } = await supabaseAdmin
     .from('clients')
-    .select('meta_ad_account_id, facebook_page_id, country')
+    .select('meta_ad_account_id, facebook_page_id, country, brand_redline_phrases')
     .eq('id', clientId)
     .maybeSingle()
+
+  // 禁用词必须查库带进生成器。
+  // 这两个字段以前只被塞进 AI 提示词当「软约束」，广告线一个字都读不到 ——
+  // 2026-08-05 Roman 转所（Barfoot & Thompson → Ray White）就是靠这条兜住：
+  // 他官网上还全是旧行资料，照着官网生成的广告会把前东家品牌印在他的付费物料上。
+  const { data: brief } = await supabaseAdmin
+    .from('master_briefs')
+    .select('avoid_words, excluded_topics')
+    .eq('client_id', clientId)
+    .eq('is_active', true)
+    .maybeSingle()
+
+  const bannedPhrases = [
+    ...((client as { brand_redline_phrases?: string[] } | null)?.brand_redline_phrases ?? []),
+    ...((brief as { avoid_words?: string[] } | null)?.avoid_words ?? []),
+    ...((brief as { excluded_topics?: string[] } | null)?.excluded_topics ?? []),
+  ].filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
 
   const c = client as {
     meta_ad_account_id?: string
@@ -147,6 +165,7 @@ export async function POST(
     imageHash: body.imageHash,
     videoId: body.videoId,
     linkUrl: body.linkUrl,
+    bannedPhrases,
   }
 
   // 表单只在真要用的时候去解析 —— 养受众那条不需要表单，别为它多打一次 Graph。
@@ -167,6 +186,13 @@ export async function POST(
         ? buildBuyerLeadDraft(body.listing as ListingFacts, body.agent, opts)
         : buildSellerThruPlayDraft(body.agent, opts)
   } catch (err) {
+    if (err instanceof BannedPhraseError) {
+      // 422 而不是 500：这不是故障，是闸门按设计拦下了。
+      return NextResponse.json(
+        { error: err.message, bannedHits: err.hits, notGrounded: true },
+        { status: 422 },
+      )
+    }
     if (err instanceof NotGroundedError) {
       return NextResponse.json({ error: err.message, notGrounded: true }, { status: 422 })
     }

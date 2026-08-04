@@ -16,6 +16,7 @@
  */
 
 import type { AdDraft, AdDraftCreative } from './ad-draft'
+import { scanRedlineHits } from '@/lib/factory/worker-guard'
 
 export type AdLang = 'en' | 'zh'
 
@@ -65,9 +66,41 @@ export interface BuildOptions {
   linkUrl?: string
   /** 图片素材（表单广告用）。 */
   imageHash?: string
+  /**
+   * 这个客户的禁用词（`master_briefs.avoid_words` + `clients.brand_redline_phrases`）。
+   * 调用方负责查库带进来 —— 这里不查库，规则才能纯函数可测。
+   */
+  bannedPhrases?: string[]
 }
 
 export class NotGroundedError extends Error {}
+
+/**
+ * 禁用词命中 —— 广告线**直接拒绝出稿**，不是标红让人审。
+ *
+ * 跟出片那条线（`scanRedlineHits` 命中只写 `redline_hits` 标红）故意不同口径。
+ * 理由：出片有人工审核那一关兜底，而且误杀会挡住整条产线；广告不一样 ——
+ * 它是**付费对外**的，一旦印上去就是花钱把错误推给几千个陌生人看。
+ *
+ * 2026-08-05 的真实场景：Roman 从 Barfoot & Thompson Royal Heights 转到
+ * Ray White Mission Bay，而他自己官网上还全是旧行的资料。任何直接抓官网
+ * 生成的广告都会把**前东家的品牌印在他自己的付费物料上**。
+ */
+export class BannedPhraseError extends Error {
+  constructor(public readonly hits: string[]) {
+    super(`文案里出现了这个客户的禁用词：${hits.join('、')} —— 不出稿`)
+  }
+}
+
+function assertNoBanned(creative: AdDraftCreative, banned: string[] | undefined): void {
+  if (!banned || banned.length === 0) return
+  const hits = scanRedlineHits(
+    [creative.primaryText, creative.headline, creative.description],
+    banned,
+    [],
+  )
+  if (hits.length > 0) throw new BannedPhraseError(hits)
+}
 
 /** 事实不完整就不许往下走 —— 半份事实拼出来的广告比没有广告危险。 */
 function assertFacts(l: ListingFacts): void {
@@ -140,6 +173,7 @@ export function buildBuyerLeadDraft(
     ...(o.imageHash ? { imageHash: o.imageHash } : {}),
     ...(o.videoId ? { videoId: o.videoId } : {}),
   }
+  assertNoBanned(creative, o.bannedPhrases)
 
   return {
     kind: 'lead_form',
@@ -196,6 +230,14 @@ export function buildSellerThruPlayDraft(agent: AgentFacts, o: BuildOptions): Ad
           .filter(Boolean)
           .join('\n')
 
+  const creative: AdDraftCreative = {
+    name: `卖家向 · ${o.lang === 'zh' ? '中文' : 'EN'}`,
+    primaryText,
+    headline: o.lang === 'zh' ? '现在是不是放盘的时候' : 'Is now the time to sell?',
+    videoId: o.videoId,
+  }
+  assertNoBanned(creative, o.bannedPhrases)
+
   return {
     kind: 'video_thruplay',
     clientId: o.clientId,
@@ -209,14 +251,7 @@ export function buildSellerThruPlayDraft(agent: AgentFacts, o: BuildOptions): Ad
     ageMax: o.ageMax ?? 65,
     linkUrl: o.linkUrl ?? agent.sourceUrl,
     pageId: o.pageId,
-    creatives: [
-      {
-        name: `卖家向 · ${o.lang === 'zh' ? '中文' : 'EN'}`,
-        primaryText,
-        headline: o.lang === 'zh' ? '现在是不是放盘的时候' : 'Is now the time to sell?',
-        videoId: o.videoId,
-      },
-    ],
+    creatives: [creative],
   }
 }
 
