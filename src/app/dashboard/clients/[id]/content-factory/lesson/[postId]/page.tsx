@@ -39,6 +39,14 @@ interface CaptionLine {
   end: number
   text: string
 }
+interface PublishedRef {
+  platform: 'facebook'
+  pageId: string
+  videoId: string
+  permalink?: string
+  draft: boolean
+  at: string
+}
 interface Detail {
   post: {
     id: string
@@ -52,6 +60,7 @@ interface Detail {
   lecture: Lecture
   production: Production | null
   captions: CaptionLine[]
+  published: PublishedRef[]
   renderJob: RenderJob | null
   viColors: { primary?: string; secondary?: string; accent?: string } | null
 }
@@ -293,6 +302,11 @@ export default function LectureWorkbenchPage() {
     }
     setBusy(null)
     await patch({ action: 'start_render' }, 'render', '字幕已保存 ✅ 正在用新字幕重做片，约 5-10 分钟')
+  }
+
+  async function publishToFacebook() {
+    if (!window.confirm('发到 Facebook 主页？第一次会先发成草稿，你在主页后台能看到、公众看不到。')) return
+    await patch({ action: 'publish_facebook' }, 'fb')
   }
 
   async function applyRecordingLink() {
@@ -791,13 +805,39 @@ export default function LectureWorkbenchPage() {
             成片和文案都在这，下载后发到各平台。（小红书和抖音没有官方发布接口，只能手动发；这里帮你把东西备齐。）
           </p>
 
-          <a
-            href={data.post.videoUrl}
-            download={`${data.post.lessonNo ? `第${data.post.lessonNo}讲` : '成片'}.mp4`}
-            className="inline-block text-sm font-semibold text-white bg-status-track rounded-xl px-5 py-2.5 mb-3"
-          >
-            ⬇ 下载成片
-          </a>
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <a
+              href={data.post.videoUrl}
+              download={`${data.post.lessonNo ? `第${data.post.lessonNo}讲` : '成片'}.mp4`}
+              className="text-sm font-semibold text-white bg-status-track rounded-xl px-5 py-2.5"
+            >
+              ⬇ 下载成片
+            </a>
+            <button
+              disabled={busy !== null}
+              onClick={publishToFacebook}
+              className="text-sm font-semibold text-me-charcoal border border-me-stone rounded-xl px-4 py-2.5 hover:border-me-ochre disabled:opacity-40"
+            >
+              {busy === 'fb' ? '发送中…' : '发到 Facebook'}
+            </button>
+            <span className="text-[11px] text-me-taupe">小红书 / 抖音没有官方接口，下载后手动发</span>
+          </div>
+
+          {(data.published ?? []).length > 0 && (
+            <div className="text-[11px] text-me-taupe mb-3">
+              {data.published.map((p, i) => (
+                <div key={i}>
+                  ✅ {new Date(p.at).toLocaleString('zh-CN')} 发到 Facebook
+                  {p.draft ? '（草稿·公众看不到）' : '（已公开）'}
+                  {p.permalink && (
+                    <a href={p.permalink} target="_blank" rel="noreferrer" className="text-me-ochre underline ml-1">
+                      去看看
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="bg-white border border-me-stone rounded-xl p-3">
