@@ -11,6 +11,24 @@
 
 ## 近期待办（跨 Phase 汇总）
 
+### 广告引擎中心 — 已上线部分的收尾（2026-08-05）
+
+已上线（见 CHANGELOG）：每天扫在投广告的闸门 · ME 起草→建成暂停→过闸门→人点头才花钱 · `/dashboard/ad-approval`。
+
+- [ ] **P21.J.M4** 起草那一步现在只有 API，**没有任何调用方** —— 得有个地方（AI 或 UI）真的产出一份草案，否则整条链路空转。优先接 Roman：留资表单 + 视频养受众各一条
+- [ ] **P21.J.M5** 素材上传还没接：`imageHash` / `videoId` 要人先传到 Meta 才有。要么接 `ads_creative_upload_*`，要么从 ME 已有的成片直传
+- [ ] **P21.J.M6** 经验共享闸 `lesson-shareability.ts` **27 种写法漏 22 种**（`86.57 NZD` 去掉 `$` 就过、`13 inquiries`、全角 `＄`）。要么加强，要么改名降级成「提示」别叫闸门
+- [ ] **P21.J.M7** `assertShareable` 至今**零生产调用方** —— 给 `global_learned_lessons` 建唯一写入口，否则这道闸永远不会被执行到（狄仁杰 2026-08-04）
+- [ ] **P21.J.M8** `/dashboard/ad-engine` 的汇总查询无 limit / 无时间窗，约 10 月起会静默截断算错（魏征 B6）
+- [ ] **P21.J.M9** 买家可见文案的摘取漏轮播 / 动态商品 / 自然帖投流三种创意形态（魏征 B5）
+- [ ] **P21.J.M10** `industry-coverage.ts` 的归一化跟取数侧不一致（取数侧会把空格转下划线），行业匹配会漏（魏征 B3）
+
+
+- [ ] **NZCPE.1** NZCPE 2026（新西兰-中国商品博览会，client_id `3f3617f5-2124-475d-9212-6f8c14f0b0e2`，FDE 接管网站+FB，目标=11月展会 To C 推广，因粉丝基数≈0 已定调优先做广告非自然发帖）2026-08-05 已通过浏览器把 Page(`721663957708055`)共享给 Magic Engine 业务组合(`1265811139097132`，权限：内容+广告+成效分析)，Facebook 侧确认生效。**下一步**：重查 `ads_get_pages_for_business(1265811139097132)` 确认传播完成，然后验证 Magic Engine 广告账户(`1018365291238494`)能否用这个 Page 建广告；LinkedIn/Instagram/WeChat/小红书/TikTok 本轮暂缓不用管。详见 [docs/clients/nzcpe/client-brief.md](./clients/nzcpe/client-brief.md)
+- [ ] **NZCPE.2** NZCPE 2026 GBP 建档，地址挂 NZICC(101 Hobson Street, Auckland CBD)——服务 To C 自然搜索流量
+- [x] **NZCPE.3** NZCPE 2026 DataForSEO 关键词调研已完成 2026-08-05，写入 `clients.primary_keywords`。真实发现：品牌词("NZCPE"等)搜索量≈0，"things to do with kids auckland"(1900/月,难度20)才是真实流量入口，内容方向应该从"贸易博览会"品牌向转成"奥克兰周末免费亲子活动"意图向
+- [x] **NZCPE.4** NZCPE 2026 网站 SEO 技术审计+修复已完成 2026-08-05：加了 canonical/OG/Twitter Card(全站原本零覆盖，FB广告落地页分享没有预览图) + Event/Organization JSON-LD 结构化数据 + 修了首页 title 日期写错(19-22误写成20-22实际是20-22)。⚠️ 还差：Google Search Console 从未提交(无验证 tag)——需 PM 的 Google 账号登录才能拿验证码，我这边进不去；Meta Pixel 也没埋，投 Conversions 类广告前必须先装
+- [ ] **NZCPE.5** NZCPE 2026 网站+FB 内容规划+广告计划已出草案，见 [docs/clients/nzcpe/content-and-ads-plan.md](./clients/nzcpe/content-and-ads-plan.md)。待 PM 拍板：广告预算量级、广告账户挂谁、要不要做"things to do with kids"博客内容、中文素材由谁做
 - [ ] **TM.1** 团队工作记忆 · 套路层出第一条：机器已建好，但要先吃几天真实会话数据才提炼得出可复用套路。观察 `team_skills` 是否开始有行；一周后没有就回头看 distill prompt 的套路判据是不是太严
 - [ ] **TM.2** 团队工作记忆 · 后台页 `/dashboard/team-memory` 补视觉验证：功能上线时页面在登录墙后未做视觉检查，数据层与接口层已验
 - [ ] **TM.3** 团队工作记忆 · 补第二个 agent 复审：按铁律 4 属大任务（加表 + 新 endpoint + 新 UI），交付时只做了自审 + 变异测试，缺魏征挑刺那一刀
