@@ -49,6 +49,16 @@ export interface LectureProduction {
   extra_head_trim_sec?: number
 }
 
+/** 发到平台之后的回执(存下来才知道发过没、发到哪、什么时候)。 */
+export interface LecturePublished {
+  platform: 'facebook'
+  pageId: string
+  videoId: string
+  permalink?: string
+  draft: boolean
+  at: string
+}
+
 interface LectureSnapshot {
   lecture?: LectureScript
   lecture_prev?: LectureScript
@@ -56,6 +66,8 @@ interface LectureSnapshot {
   lecture_transcript?: LectureTranscript
   /** 客户校准过的字幕(有就以它为准，时间不动、只改字)。 */
   lecture_captions?: CaptionLine[]
+  /** 发布回执:发过哪个平台、草稿还是公开。 */
+  lecture_published?: LecturePublished[]
   lesson_no?: number
   [k: string]: unknown
 }
@@ -93,6 +105,7 @@ export async function loadLecturePost(
   production: LectureProduction | null
   transcript: LectureTranscript | null
   captions: CaptionLine[] | null
+  published: LecturePublished[]
   lessonNo: number | null
 } | null> {
   const { data, error } = await supabaseAdmin
@@ -114,6 +127,7 @@ export async function loadLecturePost(
     production: snap?.lecture_production ?? null,
     transcript: snap?.lecture_transcript ?? null,
     captions: snap?.lecture_captions ?? null,
+    published: snap?.lecture_published ?? [],
     lessonNo: typeof snap?.lesson_no === 'number' ? snap.lesson_no : null,
   }
 }
@@ -161,6 +175,18 @@ export async function saveCaptions(params: {
   } catch { /* 学不到不影响客户保存字幕 */ }
 
   return { saved: merged.length }
+}
+
+/** 记一条发布回执(追加，不覆盖——同一条片可能先发草稿再发公开)。 */
+export async function recordPublished(params: {
+  clientId: string
+  postId: string
+  entry: LecturePublished
+}): Promise<void> {
+  const { clientId, postId, entry } = params
+  const current = await loadLecturePost(clientId, postId)
+  const list = [...(current?.published ?? []), entry].slice(-10)
+  await patchSnapshot(clientId, postId, { lecture_published: list })
 }
 
 /** 合并写 snapshot 的某几个键(读-改-写；单讲编辑是单人低频操作，不做乐观锁)。 */
