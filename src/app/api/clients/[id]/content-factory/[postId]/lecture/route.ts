@@ -1,6 +1,6 @@
 // 单讲工作台 API — 讲课式内容的脚本审改 / 制作方式 / 录像直传 / 重做 / 开始做片。
 // GET   详情(结构化脚本 + 制作方式 + 做片任务状态 + 客户 VI 色)
-// PATCH { action: save_script | set_method | recording_uploaded | redo_section | regen_script | start_render }
+// PATCH { action: save_script | save_captions | publish_facebook | set_method | recording_uploaded | recording_link | section_clip | redo_section | regen_script | start_render }
 // POST  { fileName } → 录像签名直传 URL(大文件不走 API body，直传存储)
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -9,17 +9,25 @@ import { getActiveBrief } from '@/lib/content/brief-injector'
 import {
   planLectureScript,
   redoLectureSection,
+  regionMismatch,
   spokenDiversionViolations,
   xhsCtaViolations,
   type LectureScript,
 } from '@/lib/factory/lecture-script'
+import { looksLikeVideoResponse, normalizeRecordingLink } from '@/lib/factory/recording-link'
+import { facebookReelAdapter } from '@/lib/factory/publish/facebook-reel-adapter'
+import type { PublishTarget } from '@/lib/factory/types'
 import {
   loadLecturePost,
+  recordPublished,
+  saveCaptions,
   saveLectureScript,
   setLectureProduction,
+  setSectionClip,
   type LectureMethod,
 } from '@/lib/factory/lecture-post'
 import { enqueueRenderJob } from '@/lib/factory/render-queue'
+import { loadLecturePrefs, recordRedoReason, saveLecturePrefs } from '@/lib/factory/lecture-learning'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120 // redo_section / regen_script 要等 Claude
@@ -74,6 +82,8 @@ export async function GET(_req: NextRequest, { params }: Params) {
         },
         lecture: loaded.lecture,
         production: loaded.production,
+        captions: loaded.captions ?? [],
+        published: loaded.published ?? [],
         renderJob: await latestJob(params.postId),
         viColors,
       },
@@ -103,6 +113,12 @@ function validateLecturePayload(lecture: LectureScript): string | null {
   if (violations.length > 0) {
     return `口播和小红书文案里不能出现「${Array.from(new Set(violations)).join('、')}」——这条片要发小红书，带导流词会被限流`
   }
+  // 标题写一个地方、内容讲另一个地方 = 课件一放就穿帮(真实事故:标题「澳洲华人」、内容全是奥克兰)
+  const region = regionMismatch({
+    title: lecture.title ?? '',
+    body: [lecture.hookSpoken, ...lecture.sections.map((s) => `${s.spoken} ${s.slidePoints.join(' ')}`)].join(' '),
+  })
+  if (region) return region
   return null
 }
 
@@ -113,7 +129,11 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       lecture?: LectureScript
       method?: LectureMethod
       path?: string
+      link?: string
       index?: number
+      clear?: boolean
+      captions?: string[]
+      redoReason?: string
       instruction?: string
     }
     const loaded = await loadLecturePost(params.id, params.postId)
@@ -151,6 +171,138 @@ export async function PATCH(req: NextRequest, { params }: Params) {
           recordingUrl: pub.publicUrl,
         })
         return NextResponse.json({ ok: true, recordingUrl: pub.publicUrl })
+      }
+
+      case 'recording_link': {
+        // 手机录完直接同步 Dropbox → 粘共享链接，比再导出上传快(PM 2026-08-01)
+        const norm = normalizeRecordingLink(body.link ?? '')
+        if (!norm.ok || !norm.url) {
+          return NextResponse.json({ error: norm.error ?? '这个链接用不了' }, { status: 400 })
+        }
+        // 当场探一下能不能真下到视频——别拖到做片时才失败(dl=0 的分享页会返回网页)
+        let head: Response
+        try {
+          head = await fetch(norm.url, {
+            headers: { Range: 'bytes=0-1023' },
+            redirect: 'follow',
+            signal: AbortSignal.timeout(20000),
+          })
+        } catch {
+          return NextResponse.json({ error: '打不开这个链接 — 确认链接没过期、并且设成「知道链接的人都能看」' }, { status: 400 })
+        }
+        if (!head.ok && head.status !== 206) {
+          return NextResponse.json({ error: '打不开这个链接 — 确认链接没过期、并且设成「知道链接的人都能看」' }, { status: 400 })
+        }
+        if (!looksLikeVideoResponse(head.headers.get('content-type'), norm.url)) {
+          return NextResponse.json({ error: '这个链接指向的不是视频文件 — 在 Dropbox 里对着那条视频本身「复制链接」再粘一次' }, { status: 400 })
+        }
+        await setLectureProduction({
+          clientId: params.id,
+          postId: params.postId,
+          method: 'self_record',
+          recordingUrl: norm.url,
+        })
+        return NextResponse.json({ ok: true, recordingUrl: norm.url })
+      }
+
+      case 'publish_facebook': {
+        // 发到客户 FB 主页。复用广告线那套适配器(三步上传/防误发到别人主页/幂等防重发)。
+        // 安全阀:FACTORY_PUBLISH_LIVE 没设 = 只发草稿(主页后台可见、公众看不到)，
+        // PM 验完格式显式开了才真发——发出去不可逆。
+        if (!loaded.post.source_video_url) {
+          return NextResponse.json({ error: '还没有成片 — 先做完片再发' }, { status: 400 })
+        }
+        const { data: client } = await supabaseAdmin
+          .from('clients').select('factory_config').eq('id', params.id).single()
+        const target = (client?.factory_config as { publish_target?: PublishTarget } | null)?.publish_target
+        if (!target?.page_id) {
+          return NextResponse.json(
+            { error: '还没设好发到哪个 Facebook 主页 — 告诉我们主页名字，我们来配' },
+            { status: 400 },
+          )
+        }
+        const draft = process.env.FACTORY_PUBLISH_LIVE !== 'true'
+        try {
+          const ref = await facebookReelAdapter.publish({
+            videoUrl: loaded.post.source_video_url,
+            caption: loaded.lecture.ctaVariants?.fbTiktok ?? loaded.lecture.title,
+            target,
+            idempotencyTag: params.postId,
+            draft,
+          })
+          await recordPublished({
+            clientId: params.id,
+            postId: params.postId,
+            entry: {
+              platform: 'facebook',
+              pageId: ref.page_id ?? target.page_id,
+              videoId: ref.video_id ?? ref.post_id ?? '',
+              permalink: ref.permalink,
+              draft,
+              at: new Date().toISOString(),
+            },
+          })
+          return NextResponse.json({ ok: true, draft, permalink: ref.permalink })
+        } catch (e) {
+          const raw = e instanceof Error ? e.message : String(e)
+          const human = raw.includes('页名')
+            ? '发布被拦住了:目标主页跟这个客户对不上 — 联系我们确认发到哪个主页'
+            : raw.includes('TOKEN') || raw.includes('token')
+              ? 'Facebook 授权还没配好 — 联系我们处理'
+              : '发布没成功 — 稍后再试一次；反复失败联系我们'
+          return NextResponse.json({ error: human }, { status: 502 })
+        }
+      }
+
+      case 'save_captions': {
+        // 客户校准字幕:只收文字，时间沿用(改时间容易和口型对不上)
+        if (!Array.isArray(body.captions)) {
+          return NextResponse.json({ error: '没收到字幕内容' }, { status: 400 })
+        }
+        try {
+          const { saved } = await saveCaptions({
+            clientId: params.id,
+            postId: params.postId,
+            texts: body.captions,
+          })
+          return NextResponse.json({ ok: true, saved })
+        } catch (e) {
+          return NextResponse.json(
+            { error: e instanceof Error ? e.message : '字幕没保存成功，刷新页面再试一次' },
+            { status: 400 },
+          )
+        }
+      }
+
+      case 'section_clip': {
+        // 给某个教学要点配录屏(讲到那段时上半屏换成录屏画面)。clear=true 则取消。
+        const index = body.index
+        if (typeof index !== 'number' || !loaded.lecture.sections[index]) {
+          return NextResponse.json({ error: '这个要点不存在，刷新页面再试一次' }, { status: 400 })
+        }
+        if (body.clear) {
+          await setSectionClip({ clientId: params.id, postId: params.postId, index, url: null })
+          return NextResponse.json({ ok: true })
+        }
+        const norm = normalizeRecordingLink(body.link ?? '')
+        if (!norm.ok || !norm.url) {
+          return NextResponse.json({ error: norm.error ?? '这个链接用不了' }, { status: 400 })
+        }
+        let probe: Response
+        try {
+          probe = await fetch(norm.url, {
+            headers: { Range: 'bytes=0-1023' },
+            redirect: 'follow',
+            signal: AbortSignal.timeout(20000),
+          })
+        } catch {
+          return NextResponse.json({ error: '打不开这个链接 — 确认链接没过期、并且设成「知道链接的人都能看」' }, { status: 400 })
+        }
+        if ((!probe.ok && probe.status !== 206) || !looksLikeVideoResponse(probe.headers.get('content-type'), norm.url)) {
+          return NextResponse.json({ error: '这个链接指向的不是视频 — 在 Dropbox 里对着那条录屏「复制链接」再粘一次' }, { status: 400 })
+        }
+        await setSectionClip({ clientId: params.id, postId: params.postId, index, url: norm.url })
+        return NextResponse.json({ ok: true })
       }
 
       case 'redo_section': {
@@ -216,7 +368,18 @@ export async function PATCH(req: NextRequest, { params }: Params) {
           .eq('client_id', params.id)
           .eq('id', params.postId)
         const render = await enqueueRenderJob({ clientId: params.id, contentPostId: params.postId })
-        return NextResponse.json({ ok: true, render })
+
+        // 记一次打回原因(客户可不填)。同一个原因反复出现 = 系统该改的地方，不是客户该忍的
+        let suggestRule = false
+        if (body.redoReason?.trim()) {
+          try {
+            const prefs = await loadLecturePrefs(params.id)
+            const res = recordRedoReason(prefs.redoReasons, body.redoReason, new Date().toISOString())
+            await saveLecturePrefs(params.id, { redoReasons: res.reasons })
+            suggestRule = res.suggestRule
+          } catch { /* 记不上不影响重做 */ }
+        }
+        return NextResponse.json({ ok: true, render, suggestRule })
       }
 
       default:

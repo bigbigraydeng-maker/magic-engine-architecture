@@ -1,7 +1,7 @@
 'use client'
 
 // 单讲工作台 — 一讲从脚本到成片的全部操作都在这一页：
-// ① 脚本审(可改) ② 制作方式(自己录 / 数字人) ③ 课件预览 ④ 平台 CTA 两版本 ⑤ 成片审。
+// ① 脚本审 ② 制作方式 ③ 课件预览 ④ 平台 CTA 两版本 ⑤ 成片审 ⑥ 字幕校准 ⑦ 发布(下载+各平台文案)。
 // 客户安全：不暴露生产手法，人话文案。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -24,6 +24,8 @@ interface Production {
   method: 'self_record' | 'digital_human'
   recording_url?: string
   recording_uploaded_at?: string
+  changed_at?: string
+  section_clips?: Record<string, { url: string; added_at: string }>
 }
 interface RenderJob {
   id: string
@@ -31,6 +33,19 @@ interface RenderJob {
   error: string | null
   output_url: string | null
   updated_at: string | null
+}
+interface CaptionLine {
+  start: number
+  end: number
+  text: string
+}
+interface PublishedRef {
+  platform: 'facebook'
+  pageId: string
+  videoId: string
+  permalink?: string
+  draft: boolean
+  at: string
 }
 interface Detail {
   post: {
@@ -44,6 +59,8 @@ interface Detail {
   }
   lecture: Lecture
   production: Production | null
+  captions: CaptionLine[]
+  published: PublishedRef[]
   renderJob: RenderJob | null
   viColors: { primary?: string; secondary?: string; accent?: string } | null
 }
@@ -57,8 +74,23 @@ function xhsWarnings(text: string): string[] {
 
 const ACTIVE_JOB = ['queued', 'planning', 'rendering', 'assembling']
 
+// 存储服务对单次直传的硬上限(超过会在传完那一刻被拒 = 进度条走到 98% 再失败)
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
 const PLATFORM_LABEL: Record<string, string> = {
   xiaohongshu: '小红书', douyin: '抖音', facebook: 'FB', tiktok: 'TikTok',
+}
+
+/**
+ * 上次做片的失败提示还该不该显示：改过制作方式 / 换过录像之后，那条报错就过期了
+ * (真实事故:几小时前数字人那次失败的红字，用户改成「自己录」后仍挂在屏幕上)。
+ */
+function jobErrorStillRelevant(job: RenderJob | null, production: Production | null): boolean {
+  if (!job || job.status !== 'failed' || !job.error) return false
+  if (job.error.includes('被重做替代')) return false
+  const changed = production?.changed_at
+  if (changed && job.updated_at && new Date(changed) > new Date(job.updated_at)) return false
+  return true
 }
 
 /** 做片任务超过 1 小时没动静 = 大概率卡住了，别让用户干等。 */
@@ -83,6 +115,12 @@ export default function LectureWorkbenchPage() {
   const [redoNote, setRedoNote] = useState('')
   const [uploadPct, setUploadPct] = useState<number | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const [linkInput, setLinkInput] = useState('')
+  const [clipIdx, setClipIdx] = useState<number | null>(null)   // 正在给哪个要点配录屏
+  const [clipLink, setClipLink] = useState('')
+  const [capDraft, setCapDraft] = useState<string[] | null>(null)   // 字幕校准草稿
+  const [capDirty, setCapDirty] = useState(false)
+  const [redoReason, setRedoReason] = useState('')   // 打回重做时可选填的原因
 
   const base = `/api/clients/${clientId}/content-factory/${postId}`
 
@@ -94,6 +132,8 @@ export default function LectureWorkbenchPage() {
       if (!r.ok) throw new Error(json.error || `HTTP ${r.status}`)
       setData(json)
       setDraft(json.lecture)
+      setCapDraft((json.captions ?? []).map((c: CaptionLine) => c.text))
+      setCapDirty(false)
       setDirty(false)
       setError(null)
     } catch (e) {
@@ -154,6 +194,15 @@ export default function LectureWorkbenchPage() {
       .map((t) => (t ?? '').trim())
       .filter(Boolean)
       .join('\n\n')
+  }
+
+  async function copyText(text: string, what: string) {
+    try {
+      await navigator.clipboard.writeText(text)
+      setNotice(`${what}已复制 ✅`)
+    } catch {
+      setError('复制没成功(浏览器不让) — 手动选中文字复制')
+    }
   }
 
   async function copySpoken() {
@@ -221,10 +270,81 @@ export default function LectureWorkbenchPage() {
       if (!window.confirm(`确定重做整条？会重新做一条新片(约 15-30 分钟)，做好后替换现在这条。${spend}`)) return
     }
     if (!(await ensureSaved())) return
-    await patch({ action: 'start_render' }, 'render', '已开始做片，约 15-30 分钟。做好会出现在下面「成片」区')
+    const ok = await patch(
+      { action: 'start_render', redoReason: redoReason.trim() || undefined },
+      'render',
+      '已开始做片，约 15-30 分钟。做好会出现在下面「成片」区',
+    )
+    if (ok) setRedoReason('')
+  }
+
+  /**
+   * 保存字幕并直接重做片 —— 改字幕的唯一目的就是让成片跟着变，
+   * 不该让客户再去别的区找「重新做片」(真实事故:PM 改完以为没生效)。
+   */
+  async function saveCaptionsAndRerender() {
+    if (!capDraft) return
+    setBusy('captions')
+    setError(null)
+    try {
+      const r = await fetch(`${base}/lecture`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'save_captions', captions: capDraft }),
+      })
+      const json = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(json.error || `HTTP ${r.status}`)
+      setCapDirty(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setBusy(null)
+      return
+    }
+    setBusy(null)
+    await patch({ action: 'start_render' }, 'render', '字幕已保存 ✅ 正在用新字幕重做片，约 5-10 分钟')
+  }
+
+  async function publishToFacebook() {
+    if (!window.confirm('发到 Facebook 主页？第一次会先发成草稿，你在主页后台能看到、公众看不到。')) return
+    await patch({ action: 'publish_facebook' }, 'fb')
+  }
+
+  async function applyRecordingLink() {
+    if (!linkInput.trim()) return
+    if (!(await ensureSaved())) return
+    const ok = await patch(
+      { action: 'recording_link', link: linkInput.trim() },
+      'link',
+      '录像链接已接上 ✅ 点「开始做片」，系统自动加课件和字幕',
+    )
+    if (ok) setLinkInput('')
+  }
+
+  async function applySectionClip(index: number) {
+    if (!clipLink.trim()) return
+    const ok = await patch(
+      { action: 'section_clip', index, link: clipLink.trim() },
+      `clip-${index}`,
+      '录屏已配上 ✅ 讲到这一段时，上半屏会自动换成你的录屏',
+    )
+    if (ok) { setClipIdx(null); setClipLink('') }
+  }
+
+  async function clearSectionClip(index: number) {
+    await patch({ action: 'section_clip', index, clear: true }, `clip-${index}`, '已取消这一段的录屏')
   }
 
   async function uploadRecording(file: File) {
+    // 直传有 50MB 硬上限(存储服务的限制)。手机拍的讲课视频普遍上百 MB，
+    // 传到 98% 才被拒最气人 —— 超了当场拦住，指去 Dropbox 链接那条路(无上限)。
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setError(
+        `这个视频 ${Math.round(file.size / 1048576)}MB，直接上传最多只能 50MB。` +
+        '用下面的「粘 Dropbox 链接」——手机上传到 Dropbox 后复制链接粘进来，多大都行、还不用等。',
+      )
+      if (fileRef.current) fileRef.current.value = ''
+      return
+    }
     if (!(await ensureSaved())) return
     setBusy('upload')
     setError(null)
@@ -245,8 +365,13 @@ export default function LectureWorkbenchPage() {
         xhr.upload.onprogress = (ev) => {
           if (ev.lengthComputable) setUploadPct(Math.round((ev.loaded / ev.total) * 100))
         }
-        xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error('上传断了 — 重新点一次「上传你录的视频」(大文件建议在 WiFi 下传)')))
-        xhr.onerror = () => reject(new Error('上传断了 — 重新点一次「上传你录的视频」(大文件建议在 WiFi 下传)'))
+        // 413 = 文件超上限(存储服务在收完那一刻才拒，所以是「98% 再失败」)
+        const failMsg = (status: number) =>
+          status === 413
+            ? '这个视频超过 50MB 上限了 — 用下面的「粘 Dropbox 链接」，多大都行、不用等上传'
+            : '上传断了 — 重新点一次「上传你录的视频」；反复断就改用下面的 Dropbox 链接'
+        xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(failMsg(xhr.status))))
+        xhr.onerror = () => reject(new Error(failMsg(0)))
         xhr.send(file)
       })
 
@@ -279,9 +404,8 @@ export default function LectureWorkbenchPage() {
       })
       const json = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(json.error || `HTTP ${r.status}`)
-      const platformNames = (data?.post.platforms ?? []).map((p) => PLATFORM_LABEL[p] ?? p).join(' / ')
       setNotice(action === 'schedule'
-        ? `已通过 ✅ 会按排期自动发到 ${platformNames || '你配置的平台'}，不用你再操作`
+        ? '已通过 ✅ 下面「发布」区拿成片和文案，自己发到各平台'
         : '已打回')
       await load()
     } catch (e) {
@@ -290,6 +414,8 @@ export default function LectureWorkbenchPage() {
       setBusy(null)
     }
   }
+
+  const sectionClip = (i: number) => data?.production?.section_clips?.[String(i)] ?? null
 
   const vi = data?.viColors
   const slideBg = vi?.primary || '#1A1A2E'
@@ -322,6 +448,7 @@ export default function LectureWorkbenchPage() {
   const method = data.production?.method
   const hasRecording = Boolean(data.production?.recording_url)
   const job = data.renderJob
+  const showJobError = jobErrorStillRelevant(job, data.production)
 
   return (
     <div className="p-6 max-w-3xl mx-auto text-me-charcoal">
@@ -385,14 +512,56 @@ export default function LectureWorkbenchPage() {
           <div key={i} className="bg-white border border-me-stone rounded-xl p-3 mb-3">
             <div className="flex items-center justify-between mb-2">
               <div className="text-[11px] font-semibold text-me-taupe">要点 {i + 1}</div>
-              <button
-                className="text-[11px] text-me-ochre hover:underline disabled:opacity-40"
-                disabled={busy !== null}
-                onClick={() => { setRedoIdx(redoIdx === i ? null : i); setRedoNote('') }}
-              >
-                这段不行，重写 ↻
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  className="text-[11px] text-me-charcoal hover:underline disabled:opacity-40"
+                  disabled={busy !== null}
+                  onClick={() => { setClipIdx(clipIdx === i ? null : i); setClipLink('') }}
+                >
+                  {sectionClip(i) ? '录屏已配 ✓ 换一个' : '＋ 配录屏'}
+                </button>
+                <button
+                  className="text-[11px] text-me-ochre hover:underline disabled:opacity-40"
+                  disabled={busy !== null}
+                  onClick={() => { setRedoIdx(redoIdx === i ? null : i); setRedoNote('') }}
+                >
+                  这段不行，重写 ↻
+                </button>
+              </div>
             </div>
+            {clipIdx === i && (
+              <div className="bg-me-ivory border border-me-stone rounded-lg p-2 mb-2">
+                <div className="text-[11px] text-me-taupe mb-1">
+                  粘这一段要配的录屏链接(Dropbox)。讲到这段时上半屏自动换成录屏，讲完自动切回课件；
+                  画面会自动裁到操作区放大、并配合这段的长度。
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    value={clipLink}
+                    onChange={(e) => setClipLink(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') void applySectionClip(i) }}
+                    placeholder="https://www.dropbox.com/…"
+                    className="flex-1 min-w-0 text-xs border border-me-stone rounded-lg px-2 py-1.5"
+                  />
+                  <button
+                    disabled={busy !== null || !clipLink.trim()}
+                    onClick={() => applySectionClip(i)}
+                    className="flex-none text-xs font-semibold text-white bg-me-ochre rounded-lg px-3 disabled:opacity-40"
+                  >
+                    {busy === `clip-${i}` ? '检查中…' : '用这个'}
+                  </button>
+                </div>
+                {sectionClip(i) && (
+                  <button
+                    disabled={busy !== null}
+                    onClick={() => clearSectionClip(i)}
+                    className="text-[11px] text-status-rej hover:underline mt-1.5 disabled:opacity-40"
+                  >
+                    取消这一段的录屏
+                  </button>
+                )}
+              </div>
+            )}
             {redoIdx === i && (
               <div className="flex gap-2 mb-2">
                 <input
@@ -489,8 +658,16 @@ export default function LectureWorkbenchPage() {
           <div className="bg-white border border-me-stone rounded-xl p-3 mb-3">
             {hasRecording && (
               <div className="mb-2">
-                <div className="text-[11px] font-semibold text-me-taupe mb-1">已上传的录像</div>
+                <div className="text-[11px] font-semibold text-me-taupe mb-1">
+                  当前录像
+                  {data.production!.recording_url!.includes('dropbox') && '（来自 Dropbox 链接）'}
+                </div>
                 <video src={data.production!.recording_url} controls playsInline className="w-full max-h-[300px] rounded-lg bg-black" />
+                {data.production!.recording_url!.includes('dropbox') && (
+                  <div className="text-[10px] text-me-taupe mt-1">
+                    Dropbox 链接的视频这里可能放不出来，不影响做片（做片时后台会自己去取）。
+                  </div>
+                )}
               </div>
             )}
             <input
@@ -509,6 +686,32 @@ export default function LectureWorkbenchPage() {
                 ? `上传中… ${uploadPct ?? 0}%`
                 : hasRecording ? '重新上传录像' : '上传你录的视频'}
             </button>
+
+            {/* 手机录完直接同步 Dropbox 的，粘链接比再导出上传快 */}
+            <div className="mt-3 pt-3 border-t border-me-stone">
+              <div className="text-[11px] font-semibold text-me-taupe mb-1">
+                或者粘 Dropbox 链接（手机录完自动同步的，直接粘更快）
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={linkInput}
+                  onChange={(e) => setLinkInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void applyRecordingLink() }}
+                  placeholder="https://www.dropbox.com/…"
+                  className="flex-1 min-w-0 text-sm border border-me-stone rounded-lg px-2 py-2"
+                />
+                <button
+                  disabled={busy !== null || !linkInput.trim()}
+                  onClick={applyRecordingLink}
+                  className="flex-none text-sm font-semibold text-me-charcoal border border-me-stone rounded-lg px-3 hover:border-me-ochre disabled:opacity-40"
+                >
+                  {busy === 'link' ? '检查中…' : '用这个链接'}
+                </button>
+              </div>
+              <div className="text-[10px] text-me-taupe mt-1">
+                在 Dropbox 里对着那条视频「复制链接」即可，权限设成「知道链接的人都能看」。
+              </div>
+            </div>
           </div>
         )}
 
@@ -527,9 +730,7 @@ export default function LectureWorkbenchPage() {
           {jobActive && jobLooksStuck(job) && (
             <span className="text-xs text-status-rej">等太久了？可能卡住了 — 直接联系我们，或等它自动失败后点「重新做片」</span>
           )}
-          {job?.status === 'failed' && job.error && !job.error.includes('被重做替代') && (
-            <span className="text-xs text-status-rej">{job.error}</span>
-          )}
+          {showJobError && <span className="text-xs text-status-rej">{job!.error}</span>}
         </div>
       </section>
 
@@ -595,6 +796,130 @@ export default function LectureWorkbenchPage() {
         </div>
       </section>
 
+      {/* ⑦ 发布 —— 小红书/抖音没有官方接口，任何工具都做不到全自动，
+           所以这里把「下载成片 + 各平台文案」摆到手边，你手动发但零摩擦。 */}
+      {data.post.videoUrl && (
+        <section className="bg-me-ivory border border-me-stone rounded-2xl p-4 mb-4">
+          <h2 className="font-display font-semibold mb-1">⑦ 发布</h2>
+          <p className="text-xs text-me-taupe mb-3">
+            成片和文案都在这，下载后发到各平台。（小红书和抖音没有官方发布接口，只能手动发；这里帮你把东西备齐。）
+          </p>
+
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <a
+              href={data.post.videoUrl}
+              download={`${data.post.lessonNo ? `第${data.post.lessonNo}讲` : '成片'}.mp4`}
+              className="text-sm font-semibold text-white bg-status-track rounded-xl px-5 py-2.5"
+            >
+              ⬇ 下载成片
+            </a>
+            <button
+              disabled={busy !== null}
+              onClick={publishToFacebook}
+              className="text-sm font-semibold text-me-charcoal border border-me-stone rounded-xl px-4 py-2.5 hover:border-me-ochre disabled:opacity-40"
+            >
+              {busy === 'fb' ? '发送中…' : '发到 Facebook'}
+            </button>
+            <span className="text-[11px] text-me-taupe">小红书 / 抖音没有官方接口，下载后手动发</span>
+          </div>
+
+          {(data.published ?? []).length > 0 && (
+            <div className="text-[11px] text-me-taupe mb-3">
+              {data.published.map((p, i) => (
+                <div key={i}>
+                  ✅ {new Date(p.at).toLocaleString('zh-CN')} 发到 Facebook
+                  {p.draft ? '（草稿·公众看不到）' : '（已公开）'}
+                  {p.permalink && (
+                    <a href={p.permalink} target="_blank" rel="noreferrer" className="text-me-ochre underline ml-1">
+                      去看看
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="bg-white border border-me-stone rounded-xl p-3">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[11px] font-semibold text-me-taupe">Facebook / TikTok 文案</span>
+                <button
+                  onClick={() => copyText(draft.ctaVariants?.fbTiktok ?? '', 'FB/TikTok 文案')}
+                  className="text-[11px] text-me-ochre hover:underline"
+                >
+                  复制
+                </button>
+              </div>
+              <div className="text-xs whitespace-pre-wrap leading-relaxed">
+                {draft.ctaVariants?.fbTiktok || '（还没写）'}
+              </div>
+            </div>
+
+            <div className="bg-white border border-me-stone rounded-xl p-3">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[11px] font-semibold text-me-taupe">小红书文案</span>
+                <button
+                  onClick={() => copyText(draft.ctaVariants?.xiaohongshu ?? '', '小红书文案')}
+                  className="text-[11px] text-me-ochre hover:underline"
+                >
+                  复制
+                </button>
+              </div>
+              <div className="text-xs whitespace-pre-wrap leading-relaxed">
+                {draft.ctaVariants?.xiaohongshu || '（还没写）'}
+              </div>
+              {xhsIssues.length === 0 && (
+                <div className="text-[10px] text-me-taupe mt-1">✓ 没踩小红书导流红线</div>
+              )}
+            </div>
+          </div>
+
+          <div className="text-[11px] text-me-taupe mt-3">
+            发完记得回来点 ⑤ 区的「满意 · 去发布」把这一讲标成已处理，课程列表才看得出进度。
+          </div>
+        </section>
+      )}
+
+      {/* ⑥ 字幕校准 —— 机器听写会有错字，客户在这里改，时间不动 */}
+      {(data.captions ?? []).length > 0 && capDraft && (
+        <section className="bg-me-ivory border border-me-stone rounded-2xl p-4 mb-4">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <h2 className="font-display font-semibold">⑥ 字幕校准</h2>
+            <button
+              disabled={!capDirty || busy !== null || Boolean(jobActive)}
+              onClick={saveCaptionsAndRerender}
+              className="text-xs font-semibold text-white bg-status-track rounded-full px-4 py-1.5 disabled:opacity-40"
+            >
+              {busy === 'captions' ? '保存中…'
+                : busy === 'render' ? '排队中…'
+                : capDirty ? '保存并重做片' : '已保存'}
+            </button>
+          </div>
+          <p className="text-xs text-me-taupe mb-3">
+            这是片子里显示的字幕，按你实际说的话自动听出来的 —— 会有错字（比如把「生意」听成「身影」）。
+            对着成片改错字就行，时间不用动。改完点「保存并重做片」，系统会用新字幕重出一条（约 5-10 分钟，比第一次快）。
+          </p>
+          <div className="max-h-[420px] overflow-y-auto flex flex-col gap-1.5 pr-1">
+            {capDraft.map((text, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className="text-[10px] text-me-taupe w-12 flex-none tabular-nums">
+                  {Math.floor((data.captions[i]?.start ?? 0) / 60)}:
+                  {String(Math.floor((data.captions[i]?.start ?? 0) % 60)).padStart(2, '0')}
+                </span>
+                <input
+                  value={text}
+                  onChange={(e) => {
+                    setCapDraft((d) => (d ? d.map((t, j) => (j === i ? e.target.value : t)) : d))
+                    setCapDirty(true)
+                  }}
+                  className="flex-1 min-w-0 text-sm bg-white border border-me-stone rounded-lg px-2 py-1.5"
+                />
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* ⑤ 成片审 */}
       <section className="bg-me-ivory border border-me-stone rounded-2xl p-4 mb-8">
         <h2 className="font-display font-semibold mb-1">⑤ 成片</h2>
@@ -622,6 +947,12 @@ export default function LectureWorkbenchPage() {
                 打回重做(整条)
               </button>
             </div>
+            <input
+              value={redoReason}
+              onChange={(e) => setRedoReason(e.target.value)}
+              placeholder="哪里不行?一句话就行(可不填) — 同样的问题反复出现，我们会改系统"
+              className="w-full text-xs bg-white border border-me-stone rounded-lg px-2 py-1.5 mt-2"
+            />
             <p className="text-[11px] text-me-taupe mt-2">哪段词不行 → 回 ① 改词或「重写这段」，保存后再点「重新做片」。</p>
           </>
         ) : (

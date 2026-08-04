@@ -21,6 +21,7 @@ import {
   segmentContact,
   SEGMENT_ACTION_META,
   type ContactLike,
+  engagementFromMetadata,
 } from '@/lib/crm/segments'
 import { stageSuppressesWorklist, isMarketingAction } from '@/lib/crm/pipeline'
 import { fetchAll } from '@/lib/supabase-paginate'
@@ -178,7 +179,15 @@ export async function GET(
         outcome: (t.metadata?.outcome as string) ?? null,
         travelWindow: (t.metadata?.travel_window as string) ?? null,
         callbackAt: (t.metadata?.callback_at as string) ?? null,
+        // 邮件被打开 / 链接被点 = 行为信号，不是真人消息。分段逻辑必须区分，
+        // 否则「打开了邮件」会冒充「客户回话了」挤进最高优先桶。
+        engagement: engagementFromMetadata(t.metadata),
       })),
+      // 这个人实际能怎么被联系到 —— 决定「建议用哪个渠道」落在哪。
+      // 私信能力看他有没有 messenger 触点（有触点就说明那条线是通的）。
+      hasPhone: !!c.primary_phone,
+      hasEmail: !!c.primary_email,
+      hasMessenger: tps.some((t) => t.channel === 'messenger'),
     }
     const seg = segmentContact(model, now)
 
