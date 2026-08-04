@@ -852,6 +852,30 @@ services:
       - key: CRON_SECRET
         sync: false
 
+  # 广告上线闸门 —— 每天把所有**在投**的广告组回读一遍，不管广告是谁建的。
+  #
+  # 为什么触发点是「每天扫」而不是「ME 建广告时」(2026-08-05 子牙复审)：
+  # 闸门原来只挂在 ME 自己的建广告入口上,而 2026-08-04 真正得罪 Boris/Richard/Jude
+  # 那批广告是在 Meta 后台直接建的 —— 规则写得再对也永远轮不到它说话。
+  # 按账户扫在投广告组之后,ME 建的 / FDE 手建的 / 客户自己建的 / Meta 自动改过的,
+  # 一视同仁。
+  #
+  # 查出来的 blocker 进「今日待办 → 需要你动手」,不留在日志里。
+  # 跑在 20:40 UTC(NZ 早上 8:40 左右):人上班第一眼就能看到,而不是等到花完一天钱。
+  # ⚠️ 部署后必须在 Render 后台 link `me-shared-cron-secret` 环境变量组,
+  #    否则每天 401 静默失败(上一个踩这个坑的 cron 哑了 51 天)。
+  - type: cron
+    name: ad-readback-sweep-daily
+    env: node
+    schedule: "40 20 * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 620 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/ad-readback-sweep
+    envVars:
+      - key: CRON_SECRET
+        sync: false
+
   # 做片拼片 worker — 常驻容器(node+python-PIL+ffmpeg)轮询 content_factory_render_jobs，
   # 领排队任务 → 分镜 → 画面(gpt-image+Muapi i2v) → 配音(MiniMax) → ffmpeg 拼竖屏成片 → 标待审。
   # 独立服务的原因：单条 i2v/拼接跑 15-30 分钟，塞不进 web 请求。

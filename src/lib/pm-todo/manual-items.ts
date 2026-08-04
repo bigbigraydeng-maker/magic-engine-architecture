@@ -41,6 +41,7 @@ export type ManualItemKind =
   | 'prescription_updated'
   | 'leads_metric_untrusted'
   | 'factory_worker_idle'
+  | 'ad_readback_blocker'
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -58,6 +59,28 @@ interface ClientRow {
   id: string
   name: string
   domain: string | null
+}
+
+/**
+ * `ad-readback-sweep` 写进运行记录的那份 summary 的形状。
+ *
+ * 刻意在这里重新声明、只声明用得到的字段，不 import 那边的类型：这是一份**已经
+ * 落库的旧数据**，字段随时可能是上个版本写的。当成外部输入处理，比假装它一定
+ * 跟今天的代码同构安全。
+ */
+interface AdSweepSummary {
+  results?: {
+    clientId: string
+    clientName: string
+    adAccountId: string
+    adSets?: {
+      adSetId: string
+      adSetName: string
+      hasBlocker: boolean
+      findings: { severity: string; message: string }[]
+      buyerWillSee: { adName: string; lines: string[] }[]
+    }[]
+  }[]
 }
 
 /** GSC URL-inspection deep link — the exact screen with the resubmit button. */
@@ -142,6 +165,10 @@ export async function loadManualItems(
   // 出片工单排队但没人干活 —— 装配跑在一台 Mac 上，不开机就没人做，而队列里看不出来
   await pushFactoryWorkerItems(supabase, items, now).catch((e) =>
     console.warn('[manual-items] 出片工人在岗检查失败（不阻塞其他待办）:', e),
+  )
+  // 正在花钱的广告撞上了已知的坑 —— 每天扫一遍的结果，不下发就等于没扫
+  await pushAdReadbackItems(supabase, items, now).catch((e) =>
+    console.warn('[manual-items] 广告闸门结果读取失败（不阻塞其他待办）:', e),
   )
   if (clients.size === 0) return items
 
@@ -410,6 +437,74 @@ async function pushCronHealthItems(
   }
 }
 
+
+/** 广告闸门的扫描结果多久算过期 —— 每天跑一次，超过两天就是它自己也停了。 */
+const AD_SWEEP_STALE_DAYS = 2
+
+/**
+ * 每天扫在投广告的结果里，凡是 blocker 就下发。
+ *
+ * 为什么必须落到待办（管道不许断头）：
+ *   这套闸门唯一的价值就是「有人看见并去改」。停在 cron 的运行记录里 = 只有开发
+ *   翻库才看得到 = 跟没扫一样。2026-08-04 那次得罪 5 个买家，事后复盘的结论不是
+ *   「没查出来」，是「没人被告知」。
+ *
+ * 只发 blocker 不发 warn：warn 每天都有一堆，全推等于全不看。
+ */
+async function pushAdReadbackItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+): Promise<void> {
+  const { data } = await supabase
+    .from('cron_run_logs')
+    .select('finished_at, summary')
+    .eq('job_name', 'ad-readback-sweep')
+    .eq('status', 'completed')
+    .order('finished_at', { ascending: false })
+    .limit(1)
+
+  const run = (data ?? [])[0] as
+    | { finished_at: string | null; summary: AdSweepSummary | null }
+    | undefined
+  // 没跑过 / 过期都不在这里报 —— `pushCronHealthItems` 已经在管「该跑没跑」，
+  // 两处都报会让同一件事在待办上出现两遍。
+  if (!run?.summary) return
+  const age = daysAgo(run.finished_at, now)
+  if (age !== null && age > AD_SWEEP_STALE_DAYS) return
+
+  for (const r of run.summary.results ?? []) {
+    const bad = (r.adSets ?? []).filter((s) => s.hasBlocker)
+    if (bad.length === 0) continue
+
+    for (const s of bad) {
+      const why = s.findings
+        .filter((f) => f.severity === 'blocker')
+        .map((f) => f.message)
+        .join('　')
+      // 买家实际会看到的话直接印在待办上 —— 让人当场判断，不用再登后台翻。
+      const sample = s.buyerWillSee
+        .flatMap((b) => b.lines)
+        .slice(0, 3)
+        .map((l) => `「${l}」`)
+        .join('　')
+
+      items.push({
+        kind: 'ad_readback_blocker',
+        client_id: r.clientId,
+        client_name: r.clientName,
+        what: `广告组「${s.adSetName}」正在花钱，而且撞上了已知会出事的设置：${why}${
+          sample ? ` 买家现在看到的是：${sample}` : ''
+        }`,
+        how: '打开链接 → 找到这个广告组 → 按上面那句话改（多半是按语言拆开，或把「允许投给名单以外的人」关掉）。改完当天不用管，第二天早上这条会自己消失',
+        href: `https://adsmanager.facebook.com/adsmanager/manage/adsets?act=${r.adAccountId.replace(
+          /^act_/,
+          '',
+        )}&selected_adset_ids=${s.adSetId}`,
+      })
+    }
+  }
+}
 
 /**
  * 目标的「起点」和「现值」口径对不上 → 下发。
