@@ -19,6 +19,11 @@ import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { createUploadToken, uploadSecret } from '@/lib/uploads/client-upload-token'
 import { pickUsableForListing, type AssetRow } from '@/lib/assets/listing-asset-gate'
 
+/** 一次最多取多少张在用的。写出来是为了「撞到了能被发现」，而不是静默截断。 */
+const ASSET_LIMIT = 300
+/** 已收起来的只取一小批 —— 那一栏是给人找回误点的，不是归档馆。 */
+const ARCHIVED_LIMIT = 50
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; listingId: string }> },
@@ -37,12 +42,30 @@ export async function GET(
     .maybeSingle()
   if (!listing) return NextResponse.json({ error: '找不到这套房' }, { status: 404 })
 
-  const { data: rows, error } = await supabaseAdmin
-    .from('client_assets')
-    .select('id, client_id, listing_id, source, verified_by, verified_at, archived_at, mime_type, storage_url, original_filename, created_at')
-    .eq('client_id', clientId)
-    .eq('listing_id', listingId)
-    .order('created_at', { ascending: false })
+  // 已归档的不进主列表（2026-08-05 魏征 P1-3）：
+  //   · 按设计的换图流程（归档旧的 + 传新的），不过滤的话「还不能投放」会越用越长，
+  //     变成一排坟头，真正要处理的那几张淹在里面
+  //   · migration 建的是**部分索引** `WHERE listing_id IS NOT NULL AND archived_at IS NULL`，
+  //     查询不带 archived_at 条件的话这个索引根本用不上
+  // 归档的单独取一小批给「已收起来」那一栏用，让人能放回来 —— 不是消失。
+  const [{ data: rows, error }, { data: archivedRows }] = await Promise.all([
+    supabaseAdmin
+      .from('client_assets')
+      .select('id, client_id, listing_id, source, verified_by, verified_at, archived_at, mime_type, storage_url, original_filename, created_at')
+      .eq('client_id', clientId)
+      .eq('listing_id', listingId)
+      .is('archived_at', null)
+      .order('created_at', { ascending: false })
+      .limit(ASSET_LIMIT),
+    supabaseAdmin
+      .from('client_assets')
+      .select('id, storage_url, original_filename, mime_type, archived_at')
+      .eq('client_id', clientId)
+      .eq('listing_id', listingId)
+      .not('archived_at', 'is', null)
+      .order('archived_at', { ascending: false })
+      .limit(ARCHIVED_LIMIT),
+  ])
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
@@ -74,6 +97,15 @@ export async function GET(
     uploadUrl: token ? `${req.nextUrl.origin}/upload/${token}` : null,
     uploadUrlError: token ? null : '服务器还没配上传链接的密钥（UPLOAD_LINK_SECRET），暂时发不了链接',
     summary: picked.summary,
+    // 撞到上限要说出来 —— 不说的话，这一页读起来像「全都算过了」。
+    truncated: (rows ?? []).length >= ASSET_LIMIT,
+    archived: (archivedRows ?? []).map((r) => ({
+      id: r.id as string,
+      storageUrl: r.storage_url as string,
+      filename: (r.original_filename as string | null) ?? '',
+      mimeType: (r.mime_type as string | null) ?? null,
+      archivedAt: r.archived_at as string,
+    })),
     usable: picked.usable.map(decorate),
     rejected: picked.rejected.map((r) => ({ ...decorate(r.asset), verdict: r.verdict })),
   })

@@ -36,12 +36,22 @@ interface Asset {
   verdict?: Verdict
 }
 
+interface ArchivedAsset {
+  id: string
+  storageUrl: string
+  filename: string
+  mimeType: string | null
+  archivedAt: string
+}
+
 interface Payload {
   uploadUrl: string | null
   uploadUrlError: string | null
   summary: string
+  truncated?: boolean
   usable: Asset[]
   rejected: Asset[]
+  archived: ArchivedAsset[]
 }
 
 export function ListingAssetsPanel({
@@ -83,6 +93,36 @@ export function ListingAssetsPanel({
       })
       const json = await res.json()
       if (!res.ok || json.success === false) throw new Error(json.error ?? `HTTP ${res.status}`)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '操作失败')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  /**
+   * 收起来 / 放回来。
+   *
+   * 2026-08-05 魏征 P0-2：在这个按钮存在之前，面板底部、migration 注释、
+   * 触发器报错三处都在说「换图请归档这一条再传新的」，而**全系统没有任何
+   * 写归档的入口** —— 中介传错一张，产品上没有任何手段让它消失。
+   *
+   * 归档只打一个时间戳，文件和归属一个字节都不动：已经投出去的广告当时用的
+   * 是哪一张，必须永远查得回来。所以这个动作是**可逆**的，而「改挂房源」
+   * 「换文件」永远不可逆 —— 三者的可逆性差异是刻意的，不是疏忽。
+   */
+  async function setArchived(assetId: string, archived: boolean) {
+    setBusyId(assetId)
+    setError(null)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/assets/${assetId}/archive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ archived }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`)
       await load()
     } catch (e) {
       setError(e instanceof Error ? e.message : '操作失败')
@@ -190,6 +230,15 @@ export function ListingAssetsPanel({
                   </p>
                   <p className="mt-1 text-xs text-amber-900">{a.verdict?.why}</p>
                 </div>
+                {/* 传错了就收起来 —— 这是唯一能让一张素材从面板上消失的办法。
+                    在这个按钮存在之前，传错一张就永远挂在这里（魏征 P0-2）。 */}
+                <button
+                  onClick={() => setArchived(a.id, true)}
+                  disabled={busyId === a.id}
+                  className="shrink-0 rounded-lg px-3 py-2 text-xs font-bold text-me-charcoal/60 ring-1 ring-me-charcoal/20 disabled:opacity-40"
+                >
+                  收起来
+                </button>
                 {/* 只有「客户传的、就差一个人看一眼」这一种能在这里直接补。
                     AI 生成 / 图库 / 来源不明 / 绑错房 / 已归档一律不给按钮 ——
                     有按钮就等于暗示可以绕过去。
@@ -216,9 +265,48 @@ export function ListingAssetsPanel({
           </ul>
           <p className="mt-2 text-[11px] text-me-charcoal/50">
             没有「一键全部通过」—— 确认的意思是你看过这一张。
-            要换图请归档旧的再传新的：已经投出去的广告，画面不能在背后被换掉。
+            传错了点「收起来」，再传新的：已经投出去的广告，画面不能在背后被换掉，
+            所以这里只做收起，不做替换。
           </p>
         </div>
+      )}
+
+      {/* ── 已收起来的：能放回来，不是消失 ─────────────────── */}
+      {data && data.archived?.length > 0 && (
+        <details className="mt-5">
+          <summary className="cursor-pointer text-xs font-black uppercase tracking-wide text-me-charcoal/50">
+            已收起来（{data.archived.length}）
+          </summary>
+          <ul className="mt-2 space-y-2">
+            {data.archived.map((a) => (
+              <li key={a.id} className="flex items-center gap-3 rounded-lg bg-me-charcoal/[0.03] p-2">
+                <div className="w-16 shrink-0 opacity-50">
+                  <Thumb asset={{ ...a, source: null, verifiedBy: null, verifiedAt: null }} />
+                </div>
+                <span className="flex-1 truncate text-xs text-me-charcoal/60" title={a.filename}>
+                  {a.filename || a.id}
+                </span>
+                <button
+                  onClick={() => setArchived(a.id, false)}
+                  disabled={busyId === a.id}
+                  className="shrink-0 text-xs text-me-charcoal/60 underline disabled:opacity-40"
+                >
+                  放回来
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[11px] text-me-charcoal/40">
+            收起来只是不在上面显示，文件和归属一个字节都没动 ——
+            已经投出去的广告当时用的是哪一张，必须永远查得回来。
+          </p>
+        </details>
+      )}
+
+      {data?.truncated && (
+        <p className="mt-4 text-xs text-amber-800">
+          ⚠️ 这套房的素材超过一页能显示的数量，上面只是其中一部分。
+        </p>
       )}
     </section>
   )

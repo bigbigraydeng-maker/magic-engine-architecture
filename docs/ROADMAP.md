@@ -19,6 +19,21 @@
 - [ ] **P21.J.M5** 素材上传还没接：`imageHash` / `videoId` 要人先传到 Meta 才有。要么接 `ads_creative_upload_*`，要么从 ME 已有的成片直传
 - [x] ~~**P21.J.M6/M7/M8/M9/M10**~~ 2026-08-05 全部完成：共享闸 34 种写法 0 漏 0 误拦（原漏 28 种）+ 唯一写入口 `write-lesson.ts` + `POST /api/ad-engine/lessons`；页面加 90 天窗口 + 5000 行上限 + 撞顶告警；轮播/动态商品/自然帖投流三种文案形态补齐（自然帖会去主页把文案取回来）；行业归一化统一成 `normaliseIndustry` 一个函数
 
+### 三位 agent 复审剩下的（2026-08-05，已修的不列）
+
+已修：26 个客户接口零鉴权 · 素材闸门能被一键洗白 · 撤回确认不可逆降级 · 上传页假隐私承诺 ·
+chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（全系统原来零个写 archived_at）
+
+- [ ] **P21.J.UP1** 删房源会被自己的触发器挡死：外键 `ON DELETE SET NULL` 的级联是一次真 UPDATE，撞上「绑定后不可改挂」。现在没有删除接口所以踩不到，但是个雷。修法二选一：外键改 `RESTRICT`（明说有素材的房不许删），或触发器放行 RI 级联置空
+- [ ] **P21.J.UP2** `visual-assets` 桶是 public=true，且存储路径里明文带 client_id。一张素材图 URL 外泄 = client_id 外泄。修法：路径前缀 hash 化，或桶改私有 + 签名 URL
+- [ ] **P21.J.UP3** 公开上传口零限流（`middleware` 的 matcher 不覆盖 `/api`）。且 `vision-analyzer` 取批是全局 FIFO 不分客户 —— 灌一批垃圾图会把**别的客户**的真实素材堵在后面
+- [ ] **P21.J.UP4** 上传全部失败时逐条原因被前端丢光（后端给了 `errors[]`，前端只读 `error`），客户只看到「上传失败,请重试」
+- [ ] **P21.J.UP5** `judgeAsset` 从不读 `asset.clientId`，跨客户方向零覆盖；库层也没有复合外键保证 `client_assets.client_id = listings.client_id`。现在只有两个路由的 `.eq()` 守着
+- [ ] **P21.J.UP6** 签字这一步不限 FDE —— `requireDashboardClientAccess` 对客户本人（paid_client）放行，Roman 能给自己传的图签「客户实拍」。「找个利益无关的人背书」的设计意图没落地
+- [ ] **P21.J.UP7** 变异测试逃逸 7 条（魏征实测 16 跑 7 逃）：令牌载荷截断降级、密钥截断、5 条理由文案里 4 条没被断言、`isVideoAsset` 判据松动
+- [ ] **P21.J.UP8** 上传文件零内容校验（信客户端 `file.type`，无魔数）；`Math.random()` 做文件名随机位（公开桶下 URL 即读权限）
+- [ ] **P21.J.UP9** 两个新路由 + 面板零测试；两个触发器函数缺 `SET search_path`
+
 - [ ] **P21.J.M11** 卖家向 Reel 需要 **Ray White 侧的新证明点** —— 官网四条战绩全带前东家分行名 `Royal Heights Branch`，逐字引用不行、改写更不行。要跟 Roman 要 Mission Bay 的挂牌数/成交案例/Ray White 自己的奖项
 - [ ] **P21.J.M12** `romanhu.com` 仍是旧行资料（含 `r.hu@barfoot.co.nz`）—— 广告线已被禁用词闸拦住，但网站本身该改（属 website-rescue 那条线）
 
