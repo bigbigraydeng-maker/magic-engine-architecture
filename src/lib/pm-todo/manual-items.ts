@@ -23,6 +23,18 @@ import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { AUTO_LANDED_AGENT } from '@/lib/diagnostic/auto-prescribe'
 import { isHandAddedItem } from '@/lib/diagnostic/prescription-landing'
 
+/**
+ * 这些条目**链接坏了也照样下发**。
+ *
+ * 链接闸的本意是「别给人一个白跑的链接」，但对红线类问题，
+ * 「链接不好用」远不如「这条根本没人看见」严重 —— 宁可让人自己找入口，
+ * 也不能让一条客户资料串台的告警因为链接问题静默消失。
+ *
+ * 狄仁杰 2026-08-05 实测：串台告警因为 href 写成相对路径被整条丢掉，
+ * kept=0，整套排查产出为零。
+ */
+const NEVER_DROP_KINDS = new Set<ManualItemKind>(['cross_client_leak'])
+
 /** Meta queued this long without being applied = the applier is stuck. */
 const META_PENDING_STALE_DAYS = 3
 /** Crawl data older than this = the weekly recrawl isn't landing. */
@@ -41,6 +53,8 @@ export type ManualItemKind =
   | 'prescription_updated'
   | 'leads_metric_untrusted'
   | 'factory_worker_idle'
+  | 'blog_draft_waiting'
+  | 'cross_client_leak'
   | 'price_claim_unbacked'
 
 export interface ManualItem {
@@ -80,6 +94,8 @@ import { fetchGa4KeyEventBreakdown } from '@/lib/ga4/client'
 import { judgeLeadsSanity } from '@/lib/strategy/leads-sanity'
 import { judgeWorkerPresence } from '@/lib/factory/worker-presence'
 import { auditGoalBaselines } from '@/lib/strategy/baseline-audit'
+import { fetchBlogDraftTodos } from '@/lib/pm-todo/blog-drafts'
+import { auditCrossClientLeaks } from '@/lib/clients/cross-client-audit'
 import { containsPriceClaim } from '@/lib/content/price-claim'
 import { judgeOutgoingPost } from '@/lib/content/price-claim-gate'
 import { SOURCE_LABELS } from '@/lib/assets/provenance'
@@ -112,10 +128,13 @@ export async function dropBrokenLinks(
   const kept: ManualItem[] = []
   const dropped: ManualItem[] = []
   items.forEach((it, i) => {
-    if (verdicts[i].kind === 'broken') {
+    if (verdicts[i].kind === 'broken' && !NEVER_DROP_KINDS.has(it.kind)) {
       dropped.push(it)
       console.warn(`[manual-items] 链接打不开,本条不下发: ${it.kind} ${it.href}`)
     } else {
+      if (verdicts[i].kind === 'broken') {
+        console.warn(`[manual-items] 链接打不开但这是红线条目,照常下发: ${it.kind} ${it.href}`)
+      }
       kept.push(it)
     }
   })
@@ -167,6 +186,18 @@ export async function loadManualItems(
   // 客资数值不值得信 —— 值不值得信只有查了统计后台才知道，别让人自己去翻
   await pushLeadsSanityItems(supabase, items, nameOf).catch((e) =>
     console.warn('[manual-items] 客资口径检查失败（不阻塞其他待办）:', e),
+  )
+
+  // 写好但没人看过的草稿 —— 这条待办以前只捞 pr_open，于是周更 cron 写出来的
+  // 草稿一直沉在库里（实测 3 篇，最老的躺了 5 天，而上一篇真正上线的文章在 47 天前）。
+  await pushBlogDraftItems(supabase, items, ids, now, nameOf).catch((e) =>
+    console.warn('[manual-items] 草稿待办生成失败（不阻塞其他待办）:', e),
+  )
+
+  // 客户之间有没有串台 —— PM 2026-08-05：「坚决不能胡窜」。
+  // 实测查到 CTS 的发布通道指向 Oztop 的网站，填错两个多月没人发现。
+  await pushCrossClientItems(supabase, items).catch((e) =>
+    console.warn('[manual-items] 串台检查失败（不阻塞其他待办）:', e),
   )
 
   // GSC property identifiers (needed for the inspect deep link).
@@ -526,6 +557,65 @@ async function pushBaselineItems(supabase: SupabaseClient, items: ManualItem[]):
  * 这个数只有客户自己能修（在他们的统计后台改触发条件），所以必须下发；
  * 但下发的话要说清「这个数为什么不能信」，而不是让人自己去后台翻。
  */
+/**
+ * 客户之间串台 —— 一个客户名下存着另一个客户的东西。
+ *
+ * 这条**不按客户过滤**：串台天生涉及两个客户，任何一方被过滤掉都会让问题
+ * 从待办里消失。也不做「只报 active 客户」—— 潜客的资料串进正式客户同样是事故。
+ */
+async function pushCrossClientItems(supabase: SupabaseClient, items: ManualItem[]): Promise<void> {
+  const findings = await auditCrossClientLeaks(supabase)
+  for (const f of findings) {
+    items.push({
+      kind: 'cross_client_leak',
+      // 串台涉及多个客户，名字里全列出来，别只挂一个
+      client_id: 'infra',
+      client_name: f.clients.join(' / '),
+      what:
+        f.severity === 'critical'
+          ? `🔴 客户资料串台：${f.what}`
+          : `⚠️ ${f.what}`,
+      how:
+        f.severity === 'critical'
+          ? '进客户设置页核对这条配置填的是不是本人的。在纠正之前，系统已经拒绝用它发布任何东西'
+          : '确认一下归因口径：这笔花费该算给谁，或者要不要拆开记',
+      // 🔴 必须是绝对网址。写成相对路径 `/dashboard/clients` 时，
+      //    链接闸的 `new URL()` 会抛错 → 判成 broken → **整条待办被丢掉**，
+      //    只剩一行 console.warn。狄仁杰 2026-08-05 实跑证实 kept=0 ——
+      //    也就是说这套串台排查产出为零，而我正是在修「发现死在日志里」的时候
+      //    又造了一个。绝对网址会命中「登录类站点」名单 → unverifiable → 保留。
+      href: 'https://app.magicengine.com.au/dashboard/clients',
+    })
+  }
+}
+
+/**
+ * 写好但没人看过的博客草稿。
+ *
+ * 上面那条 `blog_pr_open` 只捞 `status='pr_open'`，而 `draft → pr_open` 需要
+ * 有人手动去点发布 —— 没有任何自动化在做这一步。于是周更 cron 每周写出来的
+ * 草稿全部沉在库里：实测 3 篇没人看过，而上一篇真正上线的文章在 47 天前。
+ */
+async function pushBlogDraftItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  ids: string[],
+  now: Date,
+  nameOf: (id: string) => string,
+): Promise<void> {
+  const todos = await fetchBlogDraftTodos(supabase, ids, now)
+  for (const t of todos) {
+    items.push({
+      kind: 'blog_draft_waiting',
+      client_id: t.client_id,
+      client_name: nameOf(t.client_id),
+      what: t.what,
+      how: t.how,
+      href: t.href,
+    })
+  }
+}
+
 async function pushLeadsSanityItems(
   supabase: SupabaseClient,
   items: ManualItem[],
