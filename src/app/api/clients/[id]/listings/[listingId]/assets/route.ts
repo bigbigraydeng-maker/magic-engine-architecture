@@ -18,6 +18,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { createUploadToken, uploadSecret } from '@/lib/uploads/client-upload-token'
 import { pickUsableForListing, type AssetRow } from '@/lib/assets/listing-asset-gate'
+import { buildShootBrief, renderShootBrief } from '@/lib/listings/shoot-brief'
 
 /** 一次最多取多少张在用的。写出来是为了「撞到了能被发现」，而不是静默截断。 */
 const ASSET_LIMIT = 300
@@ -36,7 +37,7 @@ export async function GET(
   // 房源必须属于这个客户 —— 否则换个 listingId 就能看别人的素材。
   const { data: listing } = await supabaseAdmin
     .from('listings')
-    .select('id, address_line, suburb, status')
+    .select('id, address_line, suburb, status, bedrooms, property_type')
     .eq('id', listingId)
     .eq('client_id', clientId)
     .maybeSingle()
@@ -91,8 +92,19 @@ export async function GET(
   )
   const decorate = (a: AssetRow) => ({ ...a, filename: filenameOf.get(a.id) ?? '' })
 
+  // 拍摄单跟上传链接放在同一个返回里 —— 拿脚本去拍的人和传照片的人是同一个人，
+  // 分成两个接口就会变成「脚本在一条微信里、链接在另一条微信里」，他一定漏一个。
+  const brief = buildShootBrief({
+    address: (listing as { address_line: string }).address_line,
+    suburb: (listing as { suburb: string }).suburb,
+    bedrooms: (listing as { bedrooms?: number | null }).bedrooms ?? null,
+    propertyType: (listing as { property_type?: string | null }).property_type ?? null,
+  })
+
   return NextResponse.json({
     listing,
+    shootBrief: brief,
+    shootBriefText: renderShootBrief(brief, token ? `${req.nextUrl.origin}/upload/${token}` : null),
     // fail-closed：没配密钥就不发链接，而不是发一条人人可伪造的。
     uploadUrl: token ? `${req.nextUrl.origin}/upload/${token}` : null,
     uploadUrlError: token ? null : '服务器还没配上传链接的密钥（UPLOAD_LINK_SECRET），暂时发不了链接',

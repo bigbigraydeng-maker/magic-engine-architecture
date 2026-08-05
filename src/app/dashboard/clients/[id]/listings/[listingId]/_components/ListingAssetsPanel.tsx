@@ -44,7 +44,24 @@ interface ArchivedAsset {
   archivedAt: string
 }
 
+interface Shot {
+  no: number
+  what: string
+  seconds: string
+  how: string
+  optional: boolean
+}
+
+interface ShootBrief {
+  title: string
+  intro: string
+  shots: Shot[]
+  rules: string[]
+}
+
 interface Payload {
+  shootBrief?: ShootBrief
+  shootBriefText?: string
   uploadUrl: string | null
   uploadUrlError: string | null
   summary: string
@@ -65,6 +82,7 @@ export function ListingAssetsPanel({
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [copiedBrief, setCopiedBrief] = useState(false)
 
   const load = useCallback(async () => {
     setError(null)
@@ -131,6 +149,13 @@ export function ListingAssetsPanel({
     }
   }
 
+  async function copyBrief() {
+    if (!data?.shootBriefText) return
+    await navigator.clipboard.writeText(data.shootBriefText)
+    setCopiedBrief(true)
+    setTimeout(() => setCopiedBrief(false), 2000)
+  }
+
   async function copyLink() {
     if (!data?.uploadUrl) return
     await navigator.clipboard.writeText(data.uploadUrl)
@@ -168,6 +193,47 @@ export function ListingAssetsPanel({
           <p className="mt-2 text-sm font-bold text-[#C2453A]">{data?.uploadUrlError}</p>
         )}
       </div>
+
+      {/* ── 拍摄单：跟上传链接放在一起 ───────────────────────
+          拿脚本去拍的人和传照片的人是同一个人。分开放就变成
+          「脚本在一条微信里、链接在另一条微信里」，他一定会漏一个。 */}
+      {data?.shootBrief && (
+        <details className="mt-4 rounded-lg border border-me-charcoal/10 p-4">
+          <summary className="cursor-pointer text-sm font-black text-me-charcoal">
+            该拍什么 —— 拍摄单（{data.shootBrief.shots.length} 个镜头）
+          </summary>
+
+          <p className="mt-2 text-xs text-me-charcoal/60">{data.shootBrief.intro}</p>
+
+          <ol className="mt-3 space-y-2">
+            {data.shootBrief.shots.map((s) => (
+              <li key={s.no} className="text-sm">
+                <span className="font-bold text-me-charcoal">
+                  {s.no}. {s.what}
+                </span>
+                <span className="ml-2 text-xs text-me-charcoal/50">{s.seconds}</span>
+                {s.optional && (
+                  <span className="ml-1 text-[11px] text-me-charcoal/40">［可省］</span>
+                )}
+                {s.how && <p className="mt-0.5 text-xs text-me-charcoal/60">{s.how}</p>}
+              </li>
+            ))}
+          </ol>
+
+          <ul className="mt-3 space-y-1 border-t border-me-charcoal/10 pt-3 text-xs text-me-charcoal/60">
+            {data.shootBrief.rules.map((r, i) => (
+              <li key={i}>· {r.replace(/\*\*/g, '')}</li>
+            ))}
+          </ul>
+
+          <button
+            onClick={copyBrief}
+            className="mt-3 rounded-lg bg-me-charcoal px-3 py-2 text-sm font-bold text-white"
+          >
+            {copiedBrief ? '已复制（含上传链接）' : '复制拍摄单 —— 直接发微信'}
+          </button>
+        </details>
+      )}
 
       {/* ── 现在能不能出广告 ───────────────────────────────── */}
       <p className="mt-4 text-sm font-black text-me-charcoal">{data?.summary}</p>
