@@ -535,6 +535,7 @@ services:
 
   # 行业基准累积 —— 把上面攒下来的实测值按行业/规模/市场分组算 P50/P75/P90。
   # 周更即可；样本不够时本来就不该写，会在运行记录里写明「等实测结果攒够」。
+  # ⚠️ 这个 route 只实现了 GET，别加 -X POST（会 405）。
   - type: cron
     name: benchmark-accumulator
     env: node
