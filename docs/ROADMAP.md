@@ -24,15 +24,13 @@
 已修：26 个客户接口零鉴权 · 素材闸门能被一键洗白 · 撤回确认不可逆降级 · 上传页假隐私承诺 ·
 chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（全系统原来零个写 archived_at）
 
-- [ ] **P21.J.UP1** 删房源会被自己的触发器挡死：外键 `ON DELETE SET NULL` 的级联是一次真 UPDATE，撞上「绑定后不可改挂」。现在没有删除接口所以踩不到，但是个雷。修法二选一：外键改 `RESTRICT`（明说有素材的房不许删），或触发器放行 RI 级联置空
-- [ ] **P21.J.UP2** `visual-assets` 桶是 public=true，且存储路径里明文带 client_id。一张素材图 URL 外泄 = client_id 外泄。修法：路径前缀 hash 化，或桶改私有 + 签名 URL
-- [ ] **P21.J.UP3** 公开上传口零限流（`middleware` 的 matcher 不覆盖 `/api`）。且 `vision-analyzer` 取批是全局 FIFO 不分客户 —— 灌一批垃圾图会把**别的客户**的真实素材堵在后面
-- [ ] **P21.J.UP4** 上传全部失败时逐条原因被前端丢光（后端给了 `errors[]`，前端只读 `error`），客户只看到「上传失败,请重试」
-- [ ] **P21.J.UP5** `judgeAsset` 从不读 `asset.clientId`，跨客户方向零覆盖；库层也没有复合外键保证 `client_assets.client_id = listings.client_id`。现在只有两个路由的 `.eq()` 守着
-- [ ] **P21.J.UP6** 签字这一步不限 FDE —— `requireDashboardClientAccess` 对客户本人（paid_client）放行，Roman 能给自己传的图签「客户实拍」。「找个利益无关的人背书」的设计意图没落地
-- [ ] **P21.J.UP7** 变异测试逃逸 7 条（魏征实测 16 跑 7 逃）：令牌载荷截断降级、密钥截断、5 条理由文案里 4 条没被断言、`isVideoAsset` 判据松动
-- [ ] **P21.J.UP8** 上传文件零内容校验（信客户端 `file.type`，无魔数）；`Math.random()` 做文件名随机位（公开桶下 URL 即读权限）
-- [ ] **P21.J.UP9** 两个新路由 + 面板零测试；两个触发器函数缺 `SET search_path`
+- [x] ~~**P21.J.UP1–UP8**~~ 2026-08-05 全部清掉：删房源被自己触发器挡死（外键 SET NULL 的级联是真 UPDATE）· 公开桶路径泄 client_id · 公开上传口零限流 + vision 队列全局 FIFO 跨客户饿死 · 上传失败原因被前端丢光 · `judgeAsset` 从不读 clientId + 库层无跨客户守卫 · 签字不限 FDE（客户能给自己背书）· 7 条逃逸变异逐条补测并复验 · 文件名用 `Math.random()`
+      真库探针复验 6 条全过：删房源通了且素材归属自动置空 · 改挂/换文件/跨客户（INSERT 和 UPDATE）全被挡 · 签字/归档/放回来不受影响
+
+- [ ] **P21.J.UP9** 两个新路由（房源素材列表、归档）+ 面板仍零测试。跨客户拿数、`uploadUrl` 的 fail-closed、20 文件截断回报、全失败分支，一条都没覆盖
+- [ ] **P21.J.UP10** 上传文件零内容校验（信客户端 `file.type`，无魔数）；`visual-assets` 桶 `allowed_mime_types` 为 null（对比 `brief-uploads` 是有白名单的）
+- [ ] **P21.J.UP11** `visual-assets` 桶仍是 `public=true`。路径已 hash 化不再泄 client_id，但「知道 URL 即可读」这条没变 —— 要根治得改私有桶 + 签名 URL
+- [ ] **P21.J.UP12** 上传令牌非确定性（GCM nonce 随机），每打开一次页面就多铸一条永不过期、无法单独吊销的链接。至少要让签发落账可吊销
 
 - [ ] **P21.J.M11** 卖家向 Reel 需要 **Ray White 侧的新证明点** —— 官网四条战绩全带前东家分行名 `Royal Heights Branch`，逐字引用不行、改写更不行。要跟 Roman 要 Mission Bay 的挂牌数/成交案例/Ray White 自己的奖项
 - [ ] **P21.J.M12** `romanhu.com` 仍是旧行资料（含 `r.hu@barfoot.co.nz`）—— 广告线已被禁用词闸拦住，但网站本身该改（属 website-rescue 那条线）
