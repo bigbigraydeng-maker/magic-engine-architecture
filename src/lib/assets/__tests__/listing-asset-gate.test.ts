@@ -19,7 +19,7 @@ function asset(over: Partial<AssetRow> = {}): AssetRow {
     id: 'a1',
     clientId: 'c1',
     listingId: LISTING,
-    source: 'client_provided',
+    source: 'client_verified',
     verifiedBy: 'fde@magiclab.co.nz',
     verifiedAt: '2026-08-05T00:00:00Z',
     archivedAt: null,
@@ -57,8 +57,20 @@ describe('judgeAsset — 三条判据缺一不可', () => {
   })
 
   it('🔴 图库素材 → 拒', () => {
-    expect(judgeAsset(asset({ source: 'stock_library' }), LISTING).reasons)
+    expect(judgeAsset(asset({ source: 'stock' }), LISTING).reasons)
       .toContain('not_client_provided')
+  })
+
+  it('🔴 只是从上传链接进来（client_provided）→ 还不够', () => {
+    // 链接不过期、可无限转发，客户完全可能传网图或 AI 图进来。
+    // 要用它打真价必须先由人逐张确认升成 client_verified。
+    // 这条判据直接复用 provenance.ts，不在闸门里另写一套更松的。
+    expect(judgeAsset(asset({ source: 'client_provided' }), LISTING).reasons)
+      .toContain('not_client_provided')
+  })
+
+  it('FDE 自己拍的 → 够硬', () => {
+    expect(judgeAsset(asset({ source: 'fde_shot' }), LISTING).usable).toBe(true)
   })
 
   it('来源未知 → 拒（不知道来路一律不当真实画面）', () => {
@@ -100,7 +112,7 @@ describe('judgeAsset — 三条判据缺一不可', () => {
   })
 
   it('三条判据不能互相顶替：客户传的也救不了「绑错房」', () => {
-    expect(judgeAsset(asset({ source: 'client_provided', listingId: 'L2' }), LISTING).usable)
+    expect(judgeAsset(asset({ source: 'client_verified', listingId: 'L2' }), LISTING).usable)
       .toBe(false)
   })
 })

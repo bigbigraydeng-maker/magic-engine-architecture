@@ -5,8 +5,9 @@
  * 翻成机器判据，是三条**独立**的检查，缺一条都不算严谨：
  *
  *   1. **是这套房的** —— 不是同一个客户名下另一套房的，也不是没主的
- *   2. **是客户自己给的** —— 不是图库、不是 AI 生成的
- *   3. **有人签过字** —— 有人逐张确认过它确实是这套房
+ *   2. **来源够硬** —— 只有「客户实拍（已确认）」和「FDE 自己拍的」算数。
+ *      图库、AI 生成、以及**只是从上传链接进来还没人确认的**，都不算
+ *   3. **有审计签名** —— 查得到是谁、什么时候确认的
  *
  * ── 为什么第 1 条不能松 ────────────────────────────────────────────────
  * 拿 A 房的画面去卖 B 房，在 NZ 属于误导性广告，风险落在中介的执照上，不在我们。
@@ -20,8 +21,9 @@
  * 纯函数，不碰 DB。取数在调用方。
  */
 
-/** 素材的来源。`client_provided` 只说明「客户给的」，不代表「实拍」。 */
-export type AssetSource = 'client_provided' | 'stock_library' | 'ai_generated' | 'unknown'
+import { canBackRealPrice, type AssetSource } from './provenance'
+
+export type { AssetSource }
 
 export interface AssetRow {
   id: string
@@ -55,14 +57,23 @@ const REASON_TEXT: Readonly<Record<RejectReason, string>> = {
   archived: '这张已经归档了',
   wrong_listing: '这张属于另一套房 —— 拿别的房子的画面卖这套，是误导性广告',
   no_listing: '这张没绑到任何房源（多半是老链接传的），不知道拍的是哪套',
-  not_client_provided: '这张不是客户自己提供的（图库或 AI 生成）—— 不能当成这套房的真实画面',
+  not_client_provided:
+    '这张的来源不足以给真实价格背书（图库 / AI 生成 / 只是从上传链接进来还没人确认）—— 不能当成这套房的真实画面',
   not_verified: '还没有人逐张确认过它确实是这套房',
 }
 
-/** 只有「客户自己提供」才可能当真实房源画面。其余一律不行。 */
-function isClientProvided(source: AssetSource | string | null): boolean {
-  return source === 'client_provided'
-}
+/**
+ * 能不能当这套房的真实画面 —— **直接用仓库既有的判据，不在这里另写一份**。
+ *
+ * 2026-08-05 自查：我第一版在这里自己写了 `source === 'client_provided'`，
+ * 比 `provenance.ts` 里既有的模型**松**。那份模型是对的：
+ * 上传链接不过期、可无限转发，客户完全可能传网图或 AI 图进来，所以
+ * `client_provided` 只证明「客户给的」，**不能给真实价格背书**；
+ * 要用它必须先由人逐张确认升成 `client_verified`（那一步带审计记录）。
+ *
+ * 造第二套判据的后果不是重复代码，是**两套判据松紧不一样**，
+ * 而严的那套会被松的那套架空。
+ */
 
 /**
  * 判一张素材能不能给 `listingId` 这套房用。
@@ -78,7 +89,7 @@ export function judgeAsset(asset: AssetRow, listingId: string): AssetVerdict {
   if (!asset.listingId) reasons.push('no_listing')
   else if (asset.listingId !== listingId) reasons.push('wrong_listing')
 
-  if (!isClientProvided(asset.source)) reasons.push('not_client_provided')
+  if (!canBackRealPrice(asset.source)) reasons.push('not_client_provided')
 
   // 两个字段都要有：只有 verified_at 没有 verified_by＝查不出是谁签的，
   // 出问题时没法追责，等于没签。
@@ -88,7 +99,7 @@ export function judgeAsset(asset: AssetRow, listingId: string): AssetVerdict {
     usable: reasons.length === 0,
     reasons,
     why: reasons.length === 0
-      ? '可用：属于这套房、客户自己提供、已有人确认。'
+      ? '可用：属于这套房、来源够硬、有人签过字。'
       : reasons.map((r) => REASON_TEXT[r]).join('；'),
   }
 }
