@@ -16,7 +16,7 @@ describe('往返', () => {
   it('签出来的令牌能验回同一个客户', () => {
     const t = createUploadToken(CTS, SECRET)!
     expect(t).toBeTruthy()
-    expect(verifyUploadToken(t, SECRET)).toBe(CTS)
+    expect(verifyUploadToken(t, SECRET)).toEqual({ clientId: CTS })
   })
 
   it('roundTripOk 对合法输入为真', () => {
@@ -90,5 +90,48 @@ describe('伪造与篡改', () => {
     const [, ct, tag] = t.split('.')
     expect(verifyUploadToken(`AAAA.${ct}.${tag}`, SECRET)).toBeNull()      // nonce 太短
     expect(verifyUploadToken(`${t.split('.')[0]}.${ct}.AAAA`, SECRET)).toBeNull() // tag 太短
+  })
+})
+
+/**
+ * 一房一链接（PM 2026-08-05 的产品要求）。
+ *
+ * 地产的营销单位是一套房。归类不能丢给上传的人（破掉「三步不填表」），
+ * 也不能丢给后台人工（永远做不完）—— 由链接本身完成。
+ */
+describe('房源链接', () => {
+  const LISTING = '11111111-2222-3333-4444-555555555555'
+
+  it('带房源的链接能验回客户 + 房源', () => {
+    const t = createUploadToken({ clientId: CTS, listingId: LISTING }, SECRET)!
+    expect(verifyUploadToken(t, SECRET)).toEqual({ clientId: CTS, listingId: LISTING })
+  })
+
+  it('老链接（只有客户）继续可用，不带房源', () => {
+    const t = createUploadToken(CTS, SECRET)!
+    const back = verifyUploadToken(t, SECRET)!
+    expect(back.clientId).toBe(CTS)
+    expect(back.listingId).toBeUndefined()
+  })
+
+  it('🔴 房源 id 不合法 → 不签发，而不是悄悄降级成客户级链接', () => {
+    // 悄悄降级最坏：FDE 以为绑上了，实际传进来的又是一堆没主的照片。
+    expect(createUploadToken({ clientId: CTS, listingId: 'not-a-uuid' }, SECRET)).toBeNull()
+    expect(createUploadToken({ clientId: CTS, listingId: '' }, SECRET)).toBeNull()
+  })
+
+  it('同客户不同房源 → 不同链接', () => {
+    const a = createUploadToken({ clientId: CTS, listingId: LISTING }, SECRET)!
+    const b = createUploadToken({ clientId: CTS, listingId: '99999999-2222-3333-4444-555555555555' }, SECRET)!
+    expect(a).not.toBe(b)
+    expect(verifyUploadToken(a, SECRET)!.listingId)
+      .not.toBe(verifyUploadToken(b, SECRET)!.listingId)
+  })
+
+  it('🔴 房源链接同样挡篡改', () => {
+    const t = createUploadToken({ clientId: CTS, listingId: LISTING }, SECRET)!
+    const [nonce, ct, tag] = t.split('.')
+    const bend = (x: string) => (x[0] === 'A' ? 'B' : 'A') + x.slice(1)
+    expect(verifyUploadToken(`${nonce}.${bend(ct)}.${tag}`, SECRET)).toBeNull()
   })
 })

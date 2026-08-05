@@ -35,9 +35,10 @@ export async function POST(
   { params }: { params: Promise<{ token: string }> },
 ) {
   const { token } = await params
-  const clientId = verifyUploadToken(token, uploadSecret())
+  const payload = verifyUploadToken(token, uploadSecret())
   // 不区分「令牌错」和「客户不存在」,统一 404:别让人拿这个接口探测客户是否存在
-  if (!clientId) return NextResponse.json({ error: '链接无效或已失效' }, { status: 404 })
+  if (!payload) return NextResponse.json({ error: '链接无效或已失效' }, { status: 404 })
+  const { clientId, listingId } = payload
 
   const { data: client } = await supabaseAdmin
     .from('clients')
@@ -45,6 +46,19 @@ export async function POST(
     .eq('id', clientId)
     .maybeSingle()
   if (!client) return NextResponse.json({ error: '链接无效或已失效' }, { status: 404 })
+
+  // 房源链接：房源必须真实存在**且属于这个客户**。
+  // 不校验归属的话，一条链接就能把照片挂到别人的房源上 —— 而且从上传方看
+  // 完全成功，问题要等到出广告时才暴露（那时已经在花钱了）。
+  if (listingId) {
+    const { data: listing } = await supabaseAdmin
+      .from('listings')
+      .select('id')
+      .eq('id', listingId)
+      .eq('client_id', clientId)
+      .maybeSingle()
+    if (!listing) return NextResponse.json({ error: '链接无效或已失效' }, { status: 404 })
+  }
 
   // ⚠️ 必须在 formData() 之前拦:formData() 会把整个请求体读进内存,
   // 20 个 200MB 文件 = 4GB 一次性缓冲,进程直接 OOM —— 之后的大小检查救不了它。
@@ -101,6 +115,10 @@ export async function POST(
 
       const { error: dbErr } = await supabaseAdmin.from('client_assets').insert({
         client_id: clientId,
+        // 归到哪套房 —— 由链接决定，不由上传的人选，也不靠后台事后归类。
+        // 地产的营销单位是一套房：没有这一列，83 张照片全是「Roman 的」，
+        // 出广告时没人知道该拿哪一张。
+        listing_id: listingId ?? null,
         storage_url: publicUrl,
         original_filename: file.name,
         file_size_bytes: file.size,
