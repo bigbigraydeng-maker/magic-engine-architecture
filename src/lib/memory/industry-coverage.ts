@@ -22,6 +22,8 @@
  * 纯函数，不碰 DB。
  */
 
+import { normaliseIndustry } from './service'
+
 export type IndustryStatus =
   /** 词表内的规范值 —— 能正常读到同行经验。 */
   | 'canonical'
@@ -58,12 +60,16 @@ export interface CoverageSummary {
 }
 
 /**
- * 归一化：取数侧对存量自由文本做大小写/空格归一，这里必须用同一套规则，
- * 否则体检结果会跟实际取数对不上。
+ * 归一化 —— **直接用取数侧那一个函数，不在这里另写一份**。
+ *
+ * 2026-08-05 魏征 B3：这里原来是 `trim().toLowerCase()`，取数侧
+ * （`service.ts` 的 `buildIndustryMatchCandidates`）还多一步把空格/连字符转下划线。
+ * 于是 `Real Estate` 在取数侧能命中 `real_estate` 的行业经验，在这份体检报告里
+ * 却被判成「自由文本、读不到课」—— 体检结果跟真实行为**相反**，越认真看越被误导。
+ *
+ * 两份实现只要还分着写，就一定会再次漂移。所以只留一份。
  */
-function norm(v: string): string {
-  return v.trim().toLowerCase()
-}
+const norm = normaliseIndustry
 
 /**
  * @param clients        全部客户及其 industry

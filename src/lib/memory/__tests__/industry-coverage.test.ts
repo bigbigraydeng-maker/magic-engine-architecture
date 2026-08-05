@@ -119,3 +119,37 @@ describe('回归：当天真实的 26 客户分布', () => {
     expect(s.clients.filter(r => r.readableLessons > 0)).toHaveLength(4)
   })
 })
+
+/**
+ * 2026-08-05 魏征 B3：这里的归一化跟取数侧不是同一套，于是体检结果跟真实行为相反。
+ *
+ * 取数侧（service.ts）会把空格/连字符转下划线，所以 `Real Estate` 实际上**能**
+ * 命中 `real_estate` 的行业经验；而这里原来只做 trim+lowercase，把它判成
+ * 「自由文本、读不到课」。越认真看这份体检，被误导得越狠。
+ */
+describe('归一化必须跟取数侧同一套（魏征 B3）', () => {
+  const KNOWN = ['real_estate', 'building_supplies']
+
+  it.each([
+    ['Real Estate'],
+    ['real estate'],
+    ['REAL-ESTATE'],
+    ['  Real  Estate  '],
+  ])('「%s」要判成词表内，不是自由文本', (written) => {
+    const r = summariseIndustryCoverage(
+      [{ clientId: 'c1', clientName: 'A', industry: written }],
+      KNOWN,
+      { real_estate: 3 },
+    )
+    expect(r.clients[0].status).toBe('canonical')
+  })
+
+  it('真不在词表里的仍然判自由文本', () => {
+    const r = summariseIndustryCoverage(
+      [{ clientId: 'c1', clientName: 'A', industry: 'Travel — Tour Operator' }],
+      KNOWN,
+      {},
+    )
+    expect(r.clients[0].status).toBe('free_text')
+  })
+})

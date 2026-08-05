@@ -35,7 +35,8 @@ const ADSET_FIELDS =
  * 所以整块拿回来在 JS 里摘，比在 fields 里逐个点名稳 —— Meta 会按创意类型
  * 返回不同的子结构，点名少一个就静默丢一句买家能看到的话。
  */
-const AD_FIELDS = 'id,name,creative{id,object_story_spec,asset_feed_spec,body,title}'
+const AD_FIELDS =
+  'id,name,creative{id,object_story_spec,asset_feed_spec,body,title,effective_object_story_id}'
 
 async function graphGet(url: string, label: string): Promise<unknown | null> {
   let res: Response
@@ -101,6 +102,36 @@ export function extractBuyerFacingText(creative: unknown): string[] {
     // 聊天模板：问候语和建议回复按钮都是买家会看到的
     const greeting = d.page_welcome_message
     if (typeof greeting === 'string') pushWelcomeMessage(greeting, push)
+
+    // 轮播卡片（2026-08-05 魏征 B5）：轮播广告的**每张卡都有自己的标题和描述**，
+    // 而 `link_data.message` 只是卡片上方那一段。只摘 message 等于漏掉整条
+    // 轮播广告的主体文案 —— 那次得罪 5 个买家的中文问候语，正是这种「在结构
+    // 更深一层、于是没人看见」的东西。
+    const cards = d.child_attachments
+    if (Array.isArray(cards)) {
+      for (const card of cards) {
+        const cc = card as Record<string, unknown>
+        push(cc.name) // 卡片标题
+        push(cc.description) // 卡片描述
+        push(cc.caption)
+        const cta = cc.call_to_action as Record<string, unknown> | undefined
+        push((cta?.value as Record<string, unknown> | undefined)?.link_title)
+      }
+    }
+  }
+
+  // 动态商品广告（DPA / Advantage+ catalogue）：文案在 `template_data` 里，
+  // 不在 link_data。带 `{{product.name}}` 这类占位符 —— 占位符照样打出来：
+  // 它至少告诉人「这条文案是拼出来的，得去商品目录核」，比一片空白强。
+  // **只摘文本字段，绝不摘 id** —— id 混进买家可见文案会污染语言判定
+  // （`dominantScript` 会把一串数字当成拉丁字母那一侧）。
+  const tpl = spec?.template_data as Record<string, unknown> | undefined
+  if (tpl) {
+    push(tpl.message)
+    push(tpl.name)
+    push(tpl.description)
+    push(tpl.link_description)
+    push(tpl.caption)
   }
 
   // Advantage+ 素材自动化：文案散在 asset_feed_spec 的数组里
@@ -177,12 +208,48 @@ export async function fetchAdCreativesReadback(
   const rows = (json as { data?: unknown }).data
   if (!Array.isArray(rows)) return null
 
-  return rows.map((r) => {
+  const out: RawMetaAdCreative[] = []
+  for (const r of rows) {
     const ad = r as Record<string, unknown>
-    return {
-      adId: String(ad.id ?? ''),
-      adName: ad.name,
-      texts: extractBuyerFacingText(ad.creative),
+    let texts = extractBuyerFacingText(ad.creative)
+
+    // 自然帖投流（boost）：创意里**根本没有文案** —— 它在主页那条帖子上。
+    // 不去取就等于这条广告在扫描里显示「没有买家文案」，而买家明明读得到字。
+    // 2026-08-05 魏征 B5 指出的三个漏摘形态里，这个最隐蔽：它不是漏一句，
+    // 是整条广告的文案一句都看不见。
+    if (texts.length === 0) {
+      const storyId = (ad.creative as Record<string, unknown> | undefined)
+        ?.effective_object_story_id
+      if (typeof storyId === 'string' && storyId) {
+        const post = await fetchPostText(storyId, accessToken)
+        if (post) texts = post
+      }
     }
+
+    out.push({ adId: String(ad.id ?? ''), adName: ad.name, texts })
+  }
+  return out
+}
+
+/**
+ * 主页帖子上的文字。取不到返回 null（= 查不出来，不是没有）。
+ *
+ * 只在创意里一句文案都没摘到时才调 —— 每条广告多打一次 Graph 是有成本的，
+ * 而绝大多数广告的文案就在创意里。
+ */
+async function fetchPostText(
+  storyId: string,
+  accessToken: string,
+): Promise<string[] | null> {
+  const params = new URLSearchParams({
+    fields: 'message,name,description,caption',
+    access_token: accessToken,
   })
+  const json = await graphGet(`${GRAPH_BASE}/${storyId}?${params}`, `post ${storyId}`)
+  if (!json || typeof json !== 'object') return null
+  const p = json as Record<string, unknown>
+  const texts = [p.message, p.name, p.description, p.caption]
+    .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    .map((v) => v.trim())
+  return texts.length > 0 ? texts : null
 }
