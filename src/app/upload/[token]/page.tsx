@@ -156,7 +156,14 @@ export default function ClientUploadPage() {
             </div>
             <div>
               <dt className="font-medium text-slate-700">传给谁看?</dt>
-              <dd>只有我们团队看得到,不会公开,只用来做你自己的推广内容。</dd>
+              {/* ⚠️ 2026-08-05 魏征抽查：这里原来写「不会公开」。实测 `visual-assets`
+                  桶是 public=true —— 文件落地就是**任何人凭 URL 可读**的对象。
+                  给外部客户看的页面上写不实的隐私承诺，性质跟广告合规是一类的，
+                  所以改成如实说。桶改私有 + 签名 URL 是正解，见 ROADMAP P21.J.UP2。 */}
+              <dd>
+                只用来做你自己的推广内容。文件存在我们的素材库里，
+                <strong>链接本身知道的人就能打开</strong>，所以别传身份证件、合同这类东西。
+              </dd>
             </div>
             <div>
               <dt className="font-medium text-slate-700">传错了怎么办?</dt>

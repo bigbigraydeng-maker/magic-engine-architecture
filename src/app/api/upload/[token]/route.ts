@@ -30,6 +30,38 @@ const MAX_FILES_PER_REQUEST = 20         // 防一次糊上来几百个文件把
 const MAX_REQUEST_BYTES = 400 * 1024 * 1024
 const BUCKET = 'visual-assets'
 
+
+/**
+ * 边读边数,超过上限立刻断流并返回 null。
+ *
+ * 存在的理由:`content-length` 是客户端说了算的,chunked 请求干脆没有它。
+ * 要真挡住 OOM,只能自己数 —— 而且必须在**读的过程中**断,读完再判等于已经吃进内存了。
+ *
+ * 返回读到的字节(供重建请求体用);超限返回 null。
+ */
+async function measureBody(
+  body: ReadableStream<Uint8Array>,
+  limit: number,
+): Promise<Uint8Array | null> {
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > limit) {
+      await reader.cancel().catch(() => {})
+      return null
+    }
+    chunks.push(value)
+  }
+  const out = new Uint8Array(total)
+  let off = 0
+  for (const c of chunks) { out.set(c, off); off += c.byteLength }
+  return out
+}
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ token: string }> },
@@ -62,12 +94,29 @@ export async function POST(
 
   // ⚠️ 必须在 formData() 之前拦:formData() 会把整个请求体读进内存,
   // 20 个 200MB 文件 = 4GB 一次性缓冲,进程直接 OOM —— 之后的大小检查救不了它。
+  //
+  // 🔴 2026-08-05 狄仁杰 / 魏征同时指出:原来只看 `content-length` 头,而
+  // **`Transfer-Encoding: chunked` 的请求根本没有这个头** —— `?? '0'` 让它恒为 0,
+  // 检查恒通过。这道闸原来只挡老实的客户端,一条 curl 就能绕过去把实例打到 OOM,
+  // 而且这是个公开、免登录、链接不过期的口子。
+  //
+  // 现在改成**边读边数**:声明了长度就先按声明拦(省一次读),没声明就自己数,
+  // 超了立刻断流。两条路都不依赖对方诚实。
   const declaredLength = Number(req.headers.get('content-length') ?? '0')
   if (declaredLength > MAX_REQUEST_BYTES) {
-    return NextResponse.json(
-      { error: '这一批太大了,请分几次传' },
-      { status: 413 },
-    )
+    return NextResponse.json({ error: '这一批太大了,请分几次传' }, { status: 413 })
+  }
+  if (!declaredLength && req.body) {
+    const counted = await measureBody(req.body, MAX_REQUEST_BYTES)
+    if (counted === null) {
+      return NextResponse.json({ error: '这一批太大了,请分几次传' }, { status: 413 })
+    }
+    // 数完了流也读完了,得用数出来的字节重建请求体给 formData() 用。
+    req = new NextRequest(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: counted.buffer.slice(0, counted.byteLength) as ArrayBuffer,
+    })
   }
 
   let formData: FormData

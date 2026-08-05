@@ -149,13 +149,20 @@ export function ListingAssetsPanel({
                 <p className="text-[10px] text-emerald-700">
                   {a.verifiedBy} 确认
                 </p>
-                <button
-                  onClick={() => setSource(a.id, 'client_provided')}
-                  disabled={busyId === a.id}
-                  className="mt-1 text-[11px] text-me-charcoal/50 underline disabled:opacity-40"
-                >
-                  撤回确认
-                </button>
+                {/* 只有「客户实拍（已确认）」才谈得上撤回 —— 撤回是把它退回未确认状态。
+                    `fde_shot`（我们自己拍的）不能走这个按钮：2026-08-05 魏征抽查发现，
+                    原来它也带撤回，一点就变成 `client_provided`，审计签名被清空，
+                    而 UI 上没有任何路径能改回 `fde_shot`；再点一下确认，
+                    **我们自己拍的照片就变成了「客户实拍」**，且不可逆。 */}
+                {a.source === 'client_verified' && (
+                  <button
+                    onClick={() => setSource(a.id, 'client_provided')}
+                    disabled={busyId === a.id}
+                    className="mt-1 text-[11px] text-me-charcoal/50 underline disabled:opacity-40"
+                  >
+                    撤回确认
+                  </button>
+                )}
               </figure>
             ))}
           </div>
@@ -183,11 +190,19 @@ export function ListingAssetsPanel({
                   </p>
                   <p className="mt-1 text-xs text-amber-900">{a.verdict?.why}</p>
                 </div>
-                {/* 只有「差一个人确认」这一种能在这里直接补。
-                    绑错房 / AI 生成 / 已归档都不该有按钮 —— 有按钮就等于暗示可以绕过去。 */}
-                {a.verdict?.reasons.length === 2 &&
-                  a.verdict.reasons.includes('not_client_provided') &&
-                  a.verdict.reasons.includes('not_verified') && (
+                {/* 只有「客户传的、就差一个人看一眼」这一种能在这里直接补。
+                    AI 生成 / 图库 / 来源不明 / 绑错房 / 已归档一律不给按钮 ——
+                    有按钮就等于暗示可以绕过去。
+
+                    🔴 2026-08-05 魏征抽查抓到的真 bug：这里原来是数 reasons 条数。
+                    而 `not_client_provided` 是个**合并理由**——「客户传的还没确认」和
+                    「AI 生成的」压成了同一个 code。于是 ai_generated / stock / unknown
+                    的 reasons 也正好是那两条，按钮照样出，点一下就洗成「客户实拍」。
+                    生产库里 83 张素材**全是 unknown**，补挂那一刻每张都会长出这个按钮。
+                    所以判据必须落在 **source 本身**，不能落在理由条数上。 */}
+                {a.source === 'client_provided' &&
+                  a.verdict?.reasons.length === 1 &&
+                  a.verdict.reasons[0] === 'not_verified' && (
                     <button
                       onClick={() => setSource(a.id, 'client_verified')}
                       disabled={busyId === a.id}

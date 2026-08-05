@@ -1,3 +1,4 @@
+import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 // 单讲工作台 API — 讲课式内容的脚本审改 / 制作方式 / 录像直传 / 重做 / 开始做片。
 // GET   详情(结构化脚本 + 制作方式 + 做片任务状态 + 客户 VI 色)
 // PATCH { action: save_script | save_captions | publish_facebook | set_method | recording_uploaded | recording_link | section_clip | redo_section | regen_script | start_render }
@@ -62,6 +63,14 @@ async function latestJob(postId: string) {
 }
 
 export async function GET(_req: NextRequest, { params }: Params) {
+  // 鉴权闸（2026-08-05 狄仁杰复审）：这条路由原来**完全没有任何登录校验**，
+  // 而中间件的 matcher 只覆盖 /dashboard 和 /portal，不管 /api。
+  // 实测：匿名 curl 带一个 client_id 就能拿到该客户的内容流水线（CTS 返回 30KB）。
+  const __access = await requireDashboardClientAccess(params.id)
+  if (!__access.ok) {
+    return NextResponse.json({ error: __access.error }, { status: __access.status })
+  }
+
   try {
     const loaded = await loadLecturePost(params.id, params.postId)
     if (!loaded) return NextResponse.json({ error: '未找到该讲(或不是讲课式内容)' }, { status: 404 })
@@ -123,6 +132,14 @@ function validateLecturePayload(lecture: LectureScript): string | null {
 }
 
 export async function PATCH(req: NextRequest, { params }: Params) {
+  // 鉴权闸（2026-08-05 狄仁杰复审）：这条路由原来**完全没有任何登录校验**，
+  // 而中间件的 matcher 只覆盖 /dashboard 和 /portal，不管 /api。
+  // 实测：匿名 curl 带一个 client_id 就能拿到该客户的内容流水线（CTS 返回 30KB）。
+  const __access = await requireDashboardClientAccess(params.id)
+  if (!__access.ok) {
+    return NextResponse.json({ error: __access.error }, { status: __access.status })
+  }
+
   try {
     const body = (await req.json().catch(() => ({}))) as {
       action?: string
@@ -392,6 +409,14 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
 /** 录像直传：签一个只能写进本讲目录的上传 URL，浏览器直接 PUT 大文件，不过 API。 */
 export async function POST(req: NextRequest, { params }: Params) {
+  // 鉴权闸（2026-08-05 狄仁杰复审）：这条路由原来**完全没有任何登录校验**，
+  // 而中间件的 matcher 只覆盖 /dashboard 和 /portal，不管 /api。
+  // 实测：匿名 curl 带一个 client_id 就能拿到该客户的内容流水线（CTS 返回 30KB）。
+  const __access = await requireDashboardClientAccess(params.id)
+  if (!__access.ok) {
+    return NextResponse.json({ error: __access.error }, { status: __access.status })
+  }
+
   try {
     const body = (await req.json().catch(() => ({}))) as { fileName?: string }
     const loaded = await loadLecturePost(params.id, params.postId)

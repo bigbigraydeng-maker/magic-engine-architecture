@@ -43,7 +43,9 @@ export type RejectReason =
   | 'archived'
   | 'wrong_listing'
   | 'no_listing'
-  | 'not_client_provided'
+  /** 来源本身就不行（AI 生成 / 图库 / 来路不明）—— **点多少下都救不回来**。 */
+  | 'source_unusable'
+  /** 客户传的，只差一个人看一眼签字 —— 这一条是可以补的。 */
   | 'not_verified'
 
 export interface AssetVerdict {
@@ -57,9 +59,9 @@ const REASON_TEXT: Readonly<Record<RejectReason, string>> = {
   archived: '这张已经归档了',
   wrong_listing: '这张属于另一套房 —— 拿别的房子的画面卖这套，是误导性广告',
   no_listing: '这张没绑到任何房源（多半是老链接传的），不知道拍的是哪套',
-  not_client_provided:
-    '这张的来源不足以给真实价格背书（图库 / AI 生成 / 只是从上传链接进来还没人确认）—— 不能当成这套房的真实画面',
-  not_verified: '还没有人逐张确认过它确实是这套房',
+  source_unusable:
+    '这张的来源不能当真实房源画面（AI 生成 / 图库 / 来路不明）—— 这个补不了，得换一张客户自己给的',
+  not_verified: '还没有人逐张确认过它确实是这套房 —— 看过之后点一下就能过',
 }
 
 /**
@@ -89,11 +91,22 @@ export function judgeAsset(asset: AssetRow, listingId: string): AssetVerdict {
   if (!asset.listingId) reasons.push('no_listing')
   else if (asset.listingId !== listingId) reasons.push('wrong_listing')
 
-  if (!canBackRealPrice(asset.source)) reasons.push('not_client_provided')
-
-  // 两个字段都要有：只有 verified_at 没有 verified_by＝查不出是谁签的，
-  // 出问题时没法追责，等于没签。
-  if (!asset.verifiedBy || !asset.verifiedAt) reasons.push('not_verified')
+  // ── 来源分三档，**不能压成一个理由码** ────────────────────────────────
+  // 2026-08-05 魏征抽查抓到的真 bug：原来「AI 生成的」和「客户传的还没签字」
+  // 共用一个 `not_client_provided`。界面上那个「我看过，确认是这套房」按钮
+  // 靠数理由条数决定出不出，于是 **AI 生成的图也长出了按钮**，点一下就洗成
+  // 「客户实拍」。生产库 83 张素材全是 `unknown`，补挂那一刻每张都会长出来。
+  //
+  //   · 已经够硬（client_verified / fde_shot）→ 不报
+  //   · 客户传的但没签字 → 只报 not_verified（**可以补**）
+  //   · 其余（ai_generated / stock / unknown）→ 报 source_unusable（**补不了**）
+  if (!canBackRealPrice(asset.source)) {
+    if (asset.source === 'client_provided') reasons.push('not_verified')
+    else reasons.push('source_unusable')
+  } else if (!asset.verifiedBy || !asset.verifiedAt) {
+    // 来源写着已确认，却查不到是谁、什么时候确认的 —— 签名不全等于没签。
+    reasons.push('not_verified')
+  }
 
   return {
     usable: reasons.length === 0,

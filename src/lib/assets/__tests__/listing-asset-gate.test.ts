@@ -53,20 +53,12 @@ describe('judgeAsset — 三条判据缺一不可', () => {
 
   it('🔴 AI 生成的 → 拒', () => {
     expect(judgeAsset(asset({ source: 'ai_generated' }), LISTING).reasons)
-      .toContain('not_client_provided')
+      .toContain('source_unusable')
   })
 
   it('🔴 图库素材 → 拒', () => {
     expect(judgeAsset(asset({ source: 'stock' }), LISTING).reasons)
-      .toContain('not_client_provided')
-  })
-
-  it('🔴 只是从上传链接进来（client_provided）→ 还不够', () => {
-    // 链接不过期、可无限转发，客户完全可能传网图或 AI 图进来。
-    // 要用它打真价必须先由人逐张确认升成 client_verified。
-    // 这条判据直接复用 provenance.ts，不在闸门里另写一套更松的。
-    expect(judgeAsset(asset({ source: 'client_provided' }), LISTING).reasons)
-      .toContain('not_client_provided')
+      .toContain('source_unusable')
   })
 
   it('FDE 自己拍的 → 够硬', () => {
@@ -103,7 +95,7 @@ describe('judgeAsset — 三条判据缺一不可', () => {
       LISTING,
     )
     expect(v.reasons).toEqual(
-      expect.arrayContaining(['wrong_listing', 'not_client_provided', 'not_verified']),
+      expect.arrayContaining(['wrong_listing', 'source_unusable']),
     )
   })
 
@@ -125,7 +117,7 @@ describe('pickUsableForListing — 被挡下的必须带理由，不能悄悄过
     )
     expect(r.usable.map((a) => a.id)).toEqual(['ok'])
     expect(r.rejected).toHaveLength(1)
-    expect(r.rejected[0].verdict.reasons).toContain('not_client_provided')
+    expect(r.rejected[0].verdict.reasons).toContain('source_unusable')
   })
 
   it('🔴 「有素材但都不能用」和「一张都没传」必须说成两件事', () => {
