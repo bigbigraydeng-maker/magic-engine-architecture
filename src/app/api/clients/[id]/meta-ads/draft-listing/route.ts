@@ -226,7 +226,7 @@ export async function POST(
     )
   }
 
-  const picked = pickUsableForListing(found, body.listingId)
+  const picked = pickUsableForListing(found, body.listingId, clientId)
   if (picked.rejected.length > 0) {
     // 一张不合格就整条不建，**不是「用剩下能用的先跑着」**：
     // 那等于让人发现「多选几张总有能过的」，闸门就变成了摆设。

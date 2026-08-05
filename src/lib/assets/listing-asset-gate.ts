@@ -41,6 +41,8 @@ export interface AssetRow {
 
 export type RejectReason =
   | 'archived'
+  /** 这张素材根本不属于这个客户。 */
+  | 'wrong_client'
   | 'wrong_listing'
   | 'no_listing'
   /** 来源本身就不行（AI 生成 / 图库 / 来路不明）—— **点多少下都救不回来**。 */
@@ -57,6 +59,7 @@ export interface AssetVerdict {
 
 const REASON_TEXT: Readonly<Record<RejectReason, string>> = {
   archived: '这张已经归档了',
+  wrong_client: '这张素材不属于这个客户 —— 用别人的照片卖房，是最严重的那种误导',
   wrong_listing: '这张属于另一套房 —— 拿别的房子的画面卖这套，是误导性广告',
   no_listing: '这张没绑到任何房源（多半是老链接传的），不知道拍的是哪套',
   source_unusable:
@@ -83,10 +86,30 @@ const REASON_TEXT: Readonly<Record<RejectReason, string>> = {
  * 把**所有**不通过的理由一次列全，不是撞到第一条就返回：FDE 修完一条又被
  * 挡一次，第三次就绕开这道闸了。
  */
-export function judgeAsset(asset: AssetRow, listingId: string): AssetVerdict {
+export function judgeAsset(
+  asset: AssetRow,
+  listingId: string,
+  /**
+   * 这套房属于哪个客户。给了就查素材是不是同一个客户的。
+   *
+   * 🔴 2026-08-05 魏征 P2-1：这个函数原来**一次都没读过 `asset.clientId`**，
+   * 而文件头第一条判据白纸黑字写着「不是同一个客户名下另一套房的」。
+   * 实测 `judgeAsset({clientId:'别的客户', listingId:'L1'}, 'L1')` → `usable: true`。
+   * 测试里那条「同客户另一套房也不行」之所以绿，是因为 listingId 不同 ——
+   * 它测的是第二个条件，**跨客户方向零覆盖**。
+   *
+   * 现在唯一守着跨客户的是两个路由的 `.eq('client_id', …)`，而 migration
+   * 注释自己说过「应用层会被绕过，库层不会」—— 这一条恰恰只有应用层守着。
+   * 所以判据本身也要能查，不能只靠取数时筛干净。
+   */
+  expectedClientId?: string,
+): AssetVerdict {
   const reasons: RejectReason[] = []
 
   if (asset.archivedAt) reasons.push('archived')
+
+  // 客户对不上是最重的一条，排在最前 —— 用别人的照片卖房比用错自己的房还严重。
+  if (expectedClientId && asset.clientId !== expectedClientId) reasons.push('wrong_client')
 
   if (!asset.listingId) reasons.push('no_listing')
   else if (asset.listingId !== listingId) reasons.push('wrong_listing')
@@ -130,12 +153,16 @@ export interface PickResult {
  * **被挡下的一律带着理由返回**，不是悄悄过滤掉。悄悄过滤的后果是
  * 「传了 10 张却一张都用不了」，而屏幕上只显示「没有素材」—— 人会以为是没传。
  */
-export function pickUsableForListing(assets: readonly AssetRow[], listingId: string): PickResult {
+export function pickUsableForListing(
+  assets: readonly AssetRow[],
+  listingId: string,
+  expectedClientId?: string,
+): PickResult {
   const usable: AssetRow[] = []
   const rejected: { asset: AssetRow; verdict: AssetVerdict }[] = []
 
   for (const a of assets) {
-    const v = judgeAsset(a, listingId)
+    const v = judgeAsset(a, listingId, expectedClientId)
     if (v.usable) usable.push(a)
     else rejected.push({ asset: a, verdict: v })
   }

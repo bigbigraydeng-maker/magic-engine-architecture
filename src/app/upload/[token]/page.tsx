@@ -41,7 +41,12 @@ export default function ClientUploadPage() {
       const json = await res.json().catch(() => ({}))
       if (!res.ok) {
         setPhase('error')
-        setMessage(json.error ?? '上传失败,请重试')
+        // 🔴 2026-08-05 魏征 P1-2：这里原来只读 `json.error`，把后端逐条给出的
+        // `errors[]` 整个丢掉。客户一次选 10 张、全都不合格 → 屏幕上只剩
+        // 「上传失败,请重试」，他只能整批重传 —— 而这一页自己就写着
+        // 「没成功的必须逐条说清楚是哪个、为什么」。
+        setMessage(json.error ?? '这一批都没传成功')
+        setIssues(Array.isArray(json.errors) ? json.errors : [])
         return
       }
       // 只信服务端回的数。此前显示的是本地选中数,服务端截断/失败时会当着客户的面报假数。

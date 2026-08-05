@@ -15,6 +15,7 @@
  * 里标明未分析 —— analyzer 只捞 'pending',自然跳过,不会拿视频去调图像接口白烧钱。
  */
 
+import { createHash, randomUUID } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { uploadSecret, verifyUploadToken } from '@/lib/uploads/client-upload-token'
@@ -29,6 +30,19 @@ const MAX_FILES_PER_REQUEST = 20         // 防一次糊上来几百个文件把
 /** 整个请求体上限。必须在读 body 之前用 content-length 拦,否则 formData() 先把它全缓冲了 */
 const MAX_REQUEST_BYTES = 400 * 1024 * 1024
 const BUCKET = 'visual-assets'
+
+/**
+ * 限流：一条链接（＝一个客户）在窗口内最多能传多少个文件。
+ *
+ * 🔴 2026-08-05 狄仁杰 6c / 魏征 P2-4：这是一条**公开、免登录、链接不过期**的
+ * 写入口，而中间件的 matcher 不覆盖 `/api`，全仓也没有限流设施。同为公开写入口的
+ * `/api/clients/[id]/leads` 早就有 5 条/60 秒的限流，这里一条都没有。
+ *
+ * 数值取得宽：中介一次批量传几十张是正常的，卡住真实使用比防住滥用更亏。
+ * 拦的是「灌几千张」那种量级。
+ */
+const RATE_WINDOW_MIN = 10
+const RATE_LIMIT_FILES = 300
 
 
 /**
@@ -119,6 +133,25 @@ export async function POST(
     })
   }
 
+  // 限流放在读请求体之前 —— 放后面等于已经把内容吃进内存了，防不住什么。
+  const rateSince = new Date(Date.now() - RATE_WINDOW_MIN * 60_000).toISOString()
+  const { count: recentUploads, error: rateErr } = await supabaseAdmin
+    .from('client_assets')
+    .select('id', { count: 'exact', head: true })
+    .eq('client_id', clientId)
+    .gte('created_at', rateSince)
+
+  if (rateErr) {
+    // 数不出来就放行 —— 跟 leads 同一口径：宁可放过一次可疑上传，
+    // 也不因为一次数据库抖动把中介真实的素材挡在门外。但要大声记。
+    console.error('[client-upload] 限流计数失败，本次放行:', rateErr.message)
+  } else if ((recentUploads ?? 0) >= RATE_LIMIT_FILES) {
+    return NextResponse.json(
+      { error: `传得太快了，${RATE_WINDOW_MIN} 分钟后再传剩下的` },
+      { status: 429 },
+    )
+  }
+
   let formData: FormData
   try {
     formData = await req.formData()
@@ -152,8 +185,22 @@ export async function POST(
     }
 
     try {
-      const ext = file.name.split('.').pop()?.toLowerCase() ?? (isVideo ? 'mp4' : 'jpg')
-      const storagePath = `${clientId}/assets/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`
+      // 扩展名只留字母数字、最多 5 位：原样拼进 key 会造出 `a.b/c` 这种
+      // 带斜杠的奇形怪状路径（穿不出客户目录，但脏）。
+      const rawExt = file.name.split('.').pop()?.toLowerCase() ?? ''
+      const ext = rawExt.replace(/[^a-z0-9]/g, '').slice(0, 5) || (isVideo ? 'mp4' : 'jpg')
+
+      // 🔴 2026-08-05 狄仁杰 6b/6e：
+      //   · 路径前缀原来是**明文 client_id**。而 `visual-assets` 桶是公开的 ——
+      //     一张素材图的链接外泄（发微信给客户看、贴进交付文档、进 Meta 广告库）
+      //     等于 client_id 外泄，而 client_id 是很多历史接口的事实凭据。
+      //     现在前缀改成不可逆的哈希：我们自己按 client_id 照样算得出来，
+      //     拿到链接的人反推不回去。
+      //   · 随机位原来用 `Math.random()` —— V8 的实现由少量输出可恢复内部状态，
+      //     而 `Date.now()` 可猜。公开桶下「URL 即读权限」，等于别人素材的路径
+      //     理论上可推算。改用密码学随机。
+      const prefix = createHash('sha256').update(clientId).digest('hex').slice(0, 16)
+      const storagePath = `${prefix}/assets/${randomUUID()}.${ext}`
 
       const { error: uploadErr } = await supabaseAdmin.storage
         .from(BUCKET)

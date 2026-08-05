@@ -81,7 +81,7 @@ export async function GET(
     storageUrl: r.storage_url as string,
   }))
 
-  const picked = pickUsableForListing(assets, listingId)
+  const picked = pickUsableForListing(assets, listingId, clientId)
 
   // 这套房专属的上传链接。密钥只在服务端，所以必须服务端签。
   const token = createUploadToken({ clientId, listingId }, uploadSecret())
