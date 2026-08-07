@@ -21,6 +21,12 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { SEO_METRIC_KEY } from '@/lib/flywheel/vocabulary'
 import { computeVerdict } from './job'
 import {
+  GSC_EVALUATOR_METRIC_KEYS,
+  OUTCOME_CONFLICT_TARGET,
+  OUTCOME_EVALUATOR,
+  resolveStaleEvaluatorKeys,
+} from './outcome-identity'
+import {
   findGscPage,
   resolveGscAttributionScope,
   type GscPagePerformance,
@@ -126,28 +132,6 @@ async function attributeAction(
   // Need both snapshots to compute attribution
   if (!baseline || !after) return 0
 
-  const domainMetricKeys = [
-    SEO_METRIC_KEY.GSC_CLICKS,
-    SEO_METRIC_KEY.GSC_IMPRESSIONS,
-    SEO_METRIC_KEY.GSC_AVG_POSITION,
-  ]
-  const pageMetricKeys = [
-    SEO_METRIC_KEY.GSC_PAGE_CLICKS,
-    SEO_METRIC_KEY.GSC_PAGE_IMPRESSIONS,
-    SEO_METRIC_KEY.GSC_PAGE_AVG_POSITION,
-  ]
-  // Include legacy domain keys when a page action becomes live. This cleans up
-  // any outcome written by the old ungated bridge while its PR was still open.
-  const metricKeys =
-    scope.kind === 'page' ? [...domainMetricKeys, ...pageMetricKeys] : domainMetricKeys
-
-  // Delete any existing GSC outcomes for this action (idempotent)
-  await supabaseAdmin
-    .from('flywheel_outcomes')
-    .delete()
-    .eq('action_id', action.id)
-    .in('metric_key', metricKeys)
-
   const rows =
     scope.kind === 'page'
       ? buildPageOutcomeRows(action, baseline, after, scope.pageUrl, windowDays)
@@ -155,8 +139,34 @@ async function attributeAction(
 
   if (rows.length === 0) return 0
 
-  const { error } = await supabaseAdmin.from('flywheel_outcomes').insert(rows)
-  if (error) throw new Error(`insert outcomes: ${error.message}`)
+  // Write current truth first. This used to be DELETE-then-INSERT, which meant a
+  // failed insert left the action with no outcomes at all until the next
+  // successful run. Upserting on the natural key also keeps
+  // flywheel_outcomes.id stable across re-runs. See Issue #859.
+  const { error } = await supabaseAdmin
+    .from('flywheel_outcomes')
+    .upsert(rows, { onConflict: OUTCOME_CONFLICT_TARGET })
+  if (error) throw new Error(`upsert outcomes: ${error.message}`)
+
+  // Then retire the keys this evaluator owns but no longer produces — e.g. the
+  // domain-scope rows left behind once an action becomes page-scoped. Scoped to
+  // our own evaluator_key and window so it can never remove the
+  // flywheel_metrics evaluator's rows, or our own answer for another window.
+  const staleKeys = resolveStaleEvaluatorKeys(
+    GSC_EVALUATOR_METRIC_KEYS,
+    rows.map(row => row.metric_key as string),
+  )
+
+  if (staleKeys.length > 0) {
+    const { error: retireError } = await supabaseAdmin
+      .from('flywheel_outcomes')
+      .delete()
+      .eq('action_id', action.id)
+      .eq('evaluator_key', OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
+      .eq('window_days', windowDays)
+      .in('metric_key', staleKeys)
+    if (retireError) throw new Error(`retire stale outcomes: ${retireError.message}`)
+  }
 
   return rows.length
 }
@@ -252,6 +262,7 @@ function buildOutcomeRows(
       confidence,
       verdict,
       window_days: windowDays,
+      evaluator_key: OUTCOME_EVALUATOR.GSC_SNAPSHOTS,
       computed_at: now,
     }
   })
@@ -311,6 +322,7 @@ function buildPageOutcomeRows(
       confidence,
       verdict,
       window_days: windowDays,
+      evaluator_key: OUTCOME_EVALUATOR.GSC_SNAPSHOTS,
       computed_at: now,
     }
   })

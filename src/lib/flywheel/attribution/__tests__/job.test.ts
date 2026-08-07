@@ -40,14 +40,13 @@ function makeChain(terminal: Partial<Record<string, () => Promise<ChainResult>>>
 // ── Shared mock queue for maybeSingle ─────────────────────────────────────────
 
 let maybeSingleQueue: Array<() => Promise<ChainResult>> = []
-let insertResult: ChainResult = { data: null, error: null }
-let deleteResult: ChainResult = { data: null, error: null }
+let upsertResult: ChainResult = { data: null, error: null }
 
 vi.mock('@/lib/supabase', () => {
   const chain: Record<string, unknown> = {}
   const fluent = [
     'select', 'not', 'eq', 'lt', 'gte', 'lte',
-    'order', 'limit', 'delete', 'insert',
+    'order', 'limit', 'upsert',
   ]
   for (const m of fluent) {
     chain[m] = vi.fn().mockReturnValue(chain)
@@ -56,10 +55,7 @@ vi.mock('@/lib/supabase', () => {
     const next = maybeSingleQueue.shift()
     return next ? next() : { data: null, error: null }
   })
-  chain['insert'] = vi.fn().mockImplementation(async () => insertResult)
-  chain['delete'] = vi.fn().mockReturnValue({
-    eq: vi.fn().mockImplementation(async () => deleteResult),
-  })
+  chain['upsert'] = vi.fn().mockImplementation(async () => upsertResult)
 
   return {
     supabaseAdmin: {
@@ -126,8 +122,7 @@ describe('computeVerdict', () => {
 describe('runAttributionJob', () => {
   beforeEach(() => {
     maybeSingleQueue = []
-    insertResult = { data: null, error: null }
-    deleteResult = { data: null, error: null }
+    upsertResult = { data: null, error: null }
     vi.clearAllMocks()
   })
 
@@ -229,8 +224,8 @@ describe('runAttributionJob', () => {
     expect(result.skipped).toBe(0)
   })
 
-  it('increments skipped and logs error when DB throws on insert', async () => {
-    insertResult = { data: null, error: { message: 'insert failed' } }
+  it('increments skipped and logs error when DB throws on upsert', async () => {
+    upsertResult = { data: null, error: { message: 'upsert failed' } }
 
     const { supabaseAdmin } = await import('@/lib/supabase')
     const pastDate = new Date(Date.now() - 5 * 86_400_000)

@@ -6,13 +6,15 @@
  *   2. Find the most recent flywheel_metrics row AFTER the action and within
  *      window_days (after_value).
  *   3. Compute delta, delta_pct, verdict, and confidence.
- *   4. Delete any existing outcome for that action and insert a fresh row.
+ *   4. Upsert the outcome on its natural key (action_id, metric_key,
+ *      window_days) so re-runs update one stable row instead of replacing it.
  *
  * Called by the attribution Cron route (P12.A.9).
  */
 
 import { supabaseAdmin } from '../../supabase'
 import type { OutcomeVerdict } from '../adapters/types'
+import { OUTCOME_CONFLICT_TARGET, OUTCOME_EVALUATOR } from './outcome-identity'
 
 const DEFAULT_WINDOW_DAYS = 14
 
@@ -124,31 +126,34 @@ async function processAction(action: ActionRow, windowDays: number): Promise<boo
 
   const { verdict, confidence } = computeVerdict(delta, deltaPct, expected_delta)
 
-  // ── Upsert outcome (delete old, insert fresh for idempotency) ─────────────
-  const { error: deleteErr } = await supabaseAdmin
+  // ── Upsert on the natural key (action_id, metric_key, window_days) ────────
+  //
+  // This used to be DELETE WHERE action_id = ? followed by INSERT. That did two
+  // damaging things: it changed flywheel_outcomes.id on every 6-hourly run, so
+  // nothing downstream could hold a stable reference to the same business
+  // outcome; and because the delete was not scoped to this metric, it could
+  // wipe the rows the GSC evaluator writes for the same action. See Issue #859.
+  const { error: upsertErr } = await supabaseAdmin
     .from('flywheel_outcomes')
-    .delete()
-    .eq('action_id', id)
+    .upsert(
+      {
+        action_id: id,
+        client_id,
+        metric_key: expected_metric,
+        baseline,
+        after_value: afterValue,
+        delta,
+        delta_pct: deltaPct,
+        confidence,
+        verdict,
+        window_days: windowDays,
+        evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS,
+        computed_at: new Date().toISOString(),
+      },
+      { onConflict: OUTCOME_CONFLICT_TARGET },
+    )
 
-  if (deleteErr) throw new Error(`outcome delete: ${deleteErr.message}`)
-
-  const { error: insertErr } = await supabaseAdmin
-    .from('flywheel_outcomes')
-    .insert({
-      action_id: id,
-      client_id,
-      metric_key: expected_metric,
-      baseline,
-      after_value: afterValue,
-      delta,
-      delta_pct: deltaPct,
-      confidence,
-      verdict,
-      window_days: windowDays,
-      computed_at: new Date().toISOString(),
-    })
-
-  if (insertErr) throw new Error(`outcome insert: ${insertErr.message}`)
+  if (upsertErr) throw new Error(`outcome upsert: ${upsertErr.message}`)
 
   return true
 }
