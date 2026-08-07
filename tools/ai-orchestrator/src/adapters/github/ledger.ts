@@ -88,6 +88,14 @@ export interface LedgerReadResult {
   lastCommentId: number | null
   /** Markers that were found but not trusted or not valid. Surfaced, never silent. */
   rejected: readonly RejectedComment[]
+  /**
+   * How much of the Issue this read actually covered.
+   *
+   * Recorded because a ledger that was silently truncated and a ledger that is
+   * genuinely short look identical from the folded state alone.
+   */
+  pages_read: number
+  comment_count: number
 }
 
 export interface LedgerTrust {
@@ -195,7 +203,10 @@ export class IssueCommentLedger {
   ) {}
 
   async read(): Promise<LedgerReadResult> {
-    const comments = await this.client.listIssueComments(this.options.issueNumber)
+    // Throws rather than return a partial ledger; a short read here would rebuild
+    // the run from a history that stops partway.
+    const page = await this.client.listIssueComments(this.options.issueNumber)
+    const comments = page.comments
     const events: LedgerEvent[] = []
     const rejected: RejectedComment[] = []
     let lastCommentId: number | null = null
@@ -208,7 +219,13 @@ export class IssueCommentLedger {
       else rejected.push(decoded.rejected)
     }
 
-    return { events, lastCommentId, rejected }
+    return {
+      events,
+      lastCommentId,
+      rejected,
+      pages_read: page.pages_read,
+      comment_count: page.comment_count,
+    }
   }
 
   async append(event: LedgerEvent): Promise<{ written: boolean }> {

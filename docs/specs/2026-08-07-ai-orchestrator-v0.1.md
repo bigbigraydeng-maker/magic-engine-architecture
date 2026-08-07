@@ -29,7 +29,7 @@
 | **预留式预算**（先扣后打，硬顶） | 事后对账式的软上限 |
 | 真 provider **安全骨架**（缺 secret 即 fail closed） | 读写任何真实 API key |
 | manual-only workflow（默认关） | merge / deploy / migration |
-| 431 个测试 + 只读 CI + dry-run 证据 | 改任何 Magic Engine 业务代码 |
+| 460 个测试 + 只读 CI + dry-run 证据 | 改任何 Magic Engine 业务代码 |
 
 ---
 
@@ -123,11 +123,23 @@ Verdict 六值见上表。Reviewer 与 Implementer 的输出各有独立 schema
 
 为什么连 `git status` 也要读：**agent 改了文件但不 commit，文件照样改了**，只看 `diff base...HEAD` 会报告「什么都没动」。
 
-**PR 文件列表必须走完所有分页。** 之前只取 `per_page=100` 的第一页，于是一个 120 文件的 PR
-只报 100 个，而 inspector 把这个截断列表当权威事实交给 policy —— 排在第 101 位的受保护文件
-**根本不会被看见**。截断比失败更糟：policy 分不出「短列表」和「完整列表」。
-所以现在任一页失败、超过页数上限、超过文件数上限，一律抛异常，**永远不返回更短的数组**；
-重复文件保留首次出现（顺序稳定，且不会被后页的副本覆盖）；读了几页几个文件写进 `source` 当审计证据。
+**三个只读面都必须走完所有分页。** 它们共用同一个 `readAllPages`：三处需要同样的语义，
+前两处各错了一次，所以只留一份实现，而不是三次忘记的机会。契约刻意很窄 ——
+**要么完整列表，要么抛异常，永远不返回更短的数组**，因为部分答案是一个自信的错误答案。
+
+| 读取面 | 之前的后果 |
+|---|---|
+| `listPullRequestFiles` | 120 文件的 PR 只报 100 个，排在第 101 位的受保护文件**根本不会被看见** |
+| **`listIssueComments`** | **评论就是事件账本** —— 只读前 100 条会拿一段「中途截断的历史」重建 run：已经离开的状态、已经消费的授权、已经释放的租约、已经花掉的预算，全部可能复活 |
+| **`listIssueLabels`** | kill-switch label 排到第 101 位就**看不见**，run 会认为没有急停并继续花钱 —— 这是所有截断方向里最坏的一个 |
+
+comments 那一路额外要求 `sort=created&direction=asc`，这不是整洁而是**正确性**：
+offset 分页在列表被追加时可能**跳过**条目（新项落到前面的页上），升序则把新项限制在末尾，
+向前走的读取不会漏掉开始时就存在的条目。而且 fold 是**按位置读语义**的 ——
+`resumeFromWaitingHuman` 用下标判断「授权是否晚于它的等待」，所以乱序会改变账本的含义，不只是外观。
+
+读了几页几条写进 `LedgerReadResult` 和 preflight 报告：被静默截断的账本和本来就短的账本，
+光看折叠出来的状态是分不出的。
 
 **push 是远端动了，不是 HEAD 动了。** 之前 `can_push: false` 写在授权里而没有任何代码读它，
 事实层只记 HEAD 有没有移动 —— 而本地 commit 也会移动 HEAD。现在前后各读一次 tracked upstream，
@@ -237,8 +249,16 @@ maxCostFor({system, user, max_output_tokens, now}) -> { max_cost_usd, model, pri
                                                         input_tokens_estimate, breakdown }
 ```
 
-一律往高了算：token 按 **3 字符/token** 估（真实密度约 4，所以是高估）· output 一律按
-**满额 `max_output_tokens`** 计价 · 有 cache-write / tool surcharge 就加上。
+三项里两项往高了算，一项**没有**：output 一律按**满额 `max_output_tokens`** 计价 ·
+有 cache-write / tool surcharge 就加上 · **但 input token 估算不是安全上界**。
+
+`CHARS_PER_TOKEN_OPTIMISTIC = 3` 这个数来自英文散文，对英文是高估；**对中文是低估** ——
+一个 UTF-8 三字节的汉字在多数分词器里约等于 1 token，这里却按 1/3 个算。代码、JSON、emoji 也同样偏。
+低估是危险的那个方向：预留不足，顶就不再是顶。这条是 **Enable blocker E2**（§9b），
+在它修掉之前，reservation 是一个合理数字，**不是一个已证明的天花板**。
+
+留着这个错的算法、只把它标出来，是因为 scaffold 不调真实模型 —— 这里花不出钱；
+换一个只是「看起来更安全」的猜测反而会把 blocker 藏起来。
 
 **报不出价就不调用**（`cost_estimate_unavailable` → `WAITING_HUMAN`）：价目表缺失 · 过期
 （`valid_until`）· 输入超过 `max_input_tokens`。**没有安全的默认单价可以兜底。**
@@ -410,7 +430,7 @@ v0.1 只列了 `policy/` · `prompts/` · `state-machine.ts`，把 `runner.ts` �
 
 ## 8b. 只读 CI（`.github/workflows/ai-orchestrator-ci.yml`）
 
-**这不是 orchestrator 的触发器，是普通只读 CI。** 它让 GitHub 真的跑这 374 个测试，
+**这不是 orchestrator 的触发器，是普通只读 CI。** 它让 GitHub 真的跑这 460 个测试，
 而不是只有本地证据。
 
 | 项 | 值 |
@@ -554,8 +574,9 @@ GPT-5.6 第三轮定的边界：**#861 是安全骨架 PR，不是 Enable PR。*
 
 ### E1. Claude 不能在 policy 判定前 commit / push / 开 PR
 
-当前 work package 的 `allowed_tools` 里仍有 `Bash(git commit*)` / `Bash(git push origin*)` /
-`Bash(gh pr create*)`。事后能从真实 diff 抓到越权是真的，但**副作用已经落在分支和 PR 上了** ——
+推送已经收回了（`can_push` 是 `z.literal(false)`，push 工具进了黑名单），但 `allowed_tools`
+里仍有 `Bash(git commit*)` / `Bash(gh pr create*)`。事后能从真实 diff 抓到越权是真的，
+但**副作用已经落在分支和 PR 上了** ——
 抓到的是既成事实，不是拦住。
 
 Enable 版要改成：
@@ -623,7 +644,7 @@ tool allowlist 真的被 Action 尊重 · 输出符合 schema。
 
 ## 10. 测试
 
-`npx vitest run tools/ai-orchestrator` —— **431 passed / 0 failed**，全部 mock，零网络、零费用。
+`npx vitest run tools/ai-orchestrator` —— **460 passed / 0 failed**，全部 mock，零网络、零费用。
 
 | Issue #860 要求 | 覆盖位置 |
 |---|---|

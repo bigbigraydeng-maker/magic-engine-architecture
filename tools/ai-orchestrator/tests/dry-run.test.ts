@@ -65,7 +65,8 @@ describe('dry run makes no calls, no comments and no commits', () => {
     const dry = makeHarness({ dryRun: true })
     await runOrchestration(dry.input, dry.deps)
     const reread = await dry.github.listIssueComments()
-    expect(reread).toHaveLength(0)
+    expect(reread.comments).toHaveLength(0)
+    expect(reread.comment_count).toBe(0)
   })
 })
 

@@ -8,9 +8,11 @@
  *
  * So money is committed **before** the call, not after:
  *
- *   reserve max_turn_cost -> call -> reconcile against actual usage
+ *   quote worst case -> reserve that quote -> call -> reconcile against actual
  *
- * and the run may only start a turn when `remaining >= max_turn_cost_usd`.
+ * and the run may only start a turn when `remaining` covers the quote. The quote
+ * comes from the provider's own price table, not from a fixed constant — a flat
+ * figure is not an upper bound for a model whose price the runner does not know.
  *
  * Three kinds of commitment, all counted against the cap:
  *

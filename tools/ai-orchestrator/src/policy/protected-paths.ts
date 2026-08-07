@@ -21,8 +21,11 @@
  *      from git or the GitHub PR — never the model's self-report.
  *   4. `ControlPlaneIntegrityChecker` re-reads the surface after each turn and
  *      halts on drift, catching changes that were made but not reported anywhere.
- *   5. Branch protection + CODEOWNERS — NOT available on this repository today
- *      (private repo on the Free plan). Tracked as an Enable-phase blocker.
+ *   5. Branch protection — live: no bypass, PRs required, force push and deletion
+ *      blocked, unresolved conversations block merge. Required approvals stay at
+ *      0 for now on purpose (the PRs are owner-authored, and nobody can approve
+ *      their own PR); CODEOWNERS follows once an independent bot identity authors
+ *      them. See spec §9.0.
  */
 
 import { matchesAnyGlob, matchesGlob } from './glob'

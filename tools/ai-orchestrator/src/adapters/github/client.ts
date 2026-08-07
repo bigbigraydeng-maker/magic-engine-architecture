@@ -19,6 +19,20 @@ export interface IssueComment {
   created_at: string
 }
 
+/**
+ * A *complete* comment list, plus the evidence that it is complete.
+ *
+ * Same reasoning as `PullRequestFileList`, and more consequential: these
+ * comments are the run's event ledger, so a silently truncated read rebuilds the
+ * run from a history that stops partway. There is no shape here that can express
+ * "some of the comments".
+ */
+export interface IssueCommentPage {
+  comments: readonly IssueComment[]
+  pages_read: number
+  comment_count: number
+}
+
 export interface PullRequestFacts {
   number: number
   head_sha: string
@@ -48,7 +62,17 @@ export interface PullRequestFileList {
 
 export interface GitHubClient {
   readonly name: string
-  listIssueComments(issueNumber: number): Promise<readonly IssueComment[]>
+  /** Complete ledger, in creation order. Throws rather than truncate. */
+  listIssueComments(issueNumber: number): Promise<IssueCommentPage>
+  /**
+   * Complete label set. Throws rather than truncate — one of these is the kill
+   * switch, and a missing label reads as "no kill switch", the worst direction
+   * for a truncation to fail in.
+   *
+   * No page count here, unlike the two lists above: labels answer a yes/no
+   * question, so there is nothing a reviewer would audit beyond "did the stop
+   * label appear".
+   */
   listIssueLabels(issueNumber: number): Promise<readonly string[]>
   createIssueComment(issueNumber: number, body: string): Promise<IssueComment>
   /** Complete changed-file list for a PR, with blob ids. Throws rather than truncate. */

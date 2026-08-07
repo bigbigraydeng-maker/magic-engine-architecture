@@ -95,6 +95,9 @@ export interface PreflightReport {
   workspace_source: string
   integrity_source: string
   ledger_rejected: readonly RejectedComment[]
+  /** How much of the Issue the ledger read covered. A short read is not a short ledger. */
+  ledger_pages_read: number
+  ledger_comment_count: number
 }
 
 export interface RunnerResult {

@@ -3,12 +3,14 @@
  *
  * The ordering is the safety property:
  *
- *   quote worst-case cost -> reserve -> capture workspace BEFORE
- *   -> call under AbortSignal -> capture workspace AFTER -> diff
- *   -> telemetry -> policy (on the delta) -> integrity -> reconcile cost
- *   -> only now parse and compare what the model said
+ *   call under AbortSignal -> conflict re-check -> cost reconciliation
+ *   -> telemetry -> capture workspace AFTER, diff against BEFORE
+ *   -> policy (on the delta) -> integrity
+ *   -> only now parse the model's output, and compare it to the record
  *
- * Nothing the model writes can change what the first seven steps conclude.
+ * The quote, the reservation and the BEFORE capture happen in `runner.ts` before
+ * this is called. Nothing the model writes can change what any step above the
+ * last one concludes.
  */
 
 import { hasTurnBeenProcessed } from './adapters/github/ledger'

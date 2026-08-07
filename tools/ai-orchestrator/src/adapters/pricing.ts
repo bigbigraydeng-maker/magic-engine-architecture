@@ -5,13 +5,14 @@
  * actual model. A flat $0.50 is a guess, and a guess that is too low turns the
  * cap back into a tripwire — which is exactly the defect this replaces.
  *
- * Everything here errs upward:
+ * Two of the three inputs err upward, and one does not:
  *
- * - tokens are estimated at 3 characters each, well below real-world density, so
- *   the token count is an over-estimate;
  * - output is always priced at the full `max_output_tokens`, never at an expected
  *   value;
- * - cache-write and tool surcharges are added when the table declares them.
+ * - cache-write and tool surcharges are added when the table declares them;
+ * - **the input-token estimate is NOT a safe upper bound.** See
+ *   `estimateInputTokens`. This is Enable blocker E2 in the spec, and until it is
+ *   fixed the reservation is a reasonable figure rather than a proven ceiling.
  *
  * A price table that is missing, stale, or does not cover the model produces a
  * refusal, not a fallback number. There is no safe default price.
@@ -40,14 +41,29 @@ export interface ModelPricing {
 }
 
 /**
- * Conservative on purpose: real English averages closer to 4 characters per
- * token, so dividing by 3 over-counts. Over-counting costs us a slightly smaller
- * effective budget; under-counting costs money.
+ * ⚠️ Not a safe upper bound. Enable blocker E2.
+ *
+ * Three characters per token over-counts for English prose, which is where the
+ * figure came from. It **under**-counts for CJK, and Magic Engine's context is
+ * full of Chinese: a UTF-8 three-byte character costs roughly one token in most
+ * tokenizers but is counted here as one third of one. Code, JSON and emoji drift
+ * the same way.
+ *
+ * An under-estimate is the dangerous direction — it under-reserves, so the cap
+ * stops being a ceiling. Enable requires either the model's own tokenizer or
+ * UTF-8 byte length (bytes >= tokens, so it errs upward for every script).
+ *
+ * It is left in place, wrong and labelled, because the scaffold calls no real
+ * model: nothing here can spend. Replacing it with a guess that merely *looks*
+ * safer would hide the blocker instead of holding it open.
  */
-export const CHARS_PER_TOKEN_CONSERVATIVE = 3
+export const CHARS_PER_TOKEN_OPTIMISTIC = 3
+
+/** @deprecated Misleading name for {@link CHARS_PER_TOKEN_OPTIMISTIC}. */
+export const CHARS_PER_TOKEN_CONSERVATIVE = CHARS_PER_TOKEN_OPTIMISTIC
 
 export function estimateInputTokens(system: string, user: string): number {
-  return Math.ceil((system.length + user.length) / CHARS_PER_TOKEN_CONSERVATIVE)
+  return Math.ceil((system.length + user.length) / CHARS_PER_TOKEN_OPTIMISTIC)
 }
 
 function round(value: number): number {

@@ -33,7 +33,14 @@ export interface OrchestratorLimits {
   /** One round == one agent turn. */
   max_rounds: number
   cost_cap_usd: number
-  /** Reserved before every call. A turn may only start if this much is left. */
+  /**
+   * Floor used by preflight, before a prompt exists to quote.
+   *
+   * NOT the reservation: since pricing became provider-quoted, the amount
+   * reserved is `maxCostFor(request).max_cost_usd`, and the budget gate compares
+   * the remaining balance against that quote. This value only bounds the
+   * pre-prompt estimate and is validated against `cost_cap_usd`.
+   */
   max_turn_cost_usd: number
   /** Output-token ceiling handed to the provider so one call cannot blow the reservation. */
   max_output_tokens: number
@@ -60,6 +67,26 @@ export const DEFAULT_LIMITS: OrchestratorLimits = {
 // ─────────────────────────────────────────────────────────────────────────────
 // Kill switch — default off
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Tools no work package may grant, whatever its own lists say.
+ *
+ * This used to live in the Claude adapter with a comment claiming
+ * `enforceToolUse` applied it. Nothing read it — the constant and the check had
+ * never been connected, and the two lists had already drifted (`Bash(render*)`
+ * was here and missing from the scaffold's disallowed list). It lives here now,
+ * next to the function that actually consults it.
+ */
+export const NEVER_ALLOWED_TOOLS = [
+  'Bash(gh pr merge*)',
+  'Bash(git push*)',
+  'Bash(git push --force*)',
+  'Bash(git push -f*)',
+  'Bash(npx supabase*)',
+  'Bash(render*)',
+  'Bash(curl*)',
+  'WebFetch',
+] as const
 
 export const ENABLE_ENV_VAR = 'ME2_ORCHESTRATOR_ENABLED'
 export const KILL_SWITCH_LABEL = 'me2-orchestrator:stop'
@@ -155,8 +182,9 @@ export type BudgetResult =
  * The pre-flight budget gate.
  *
  * `remaining` subtracts settled spend, live reservations and orphaned
- * reservations alike, and the turn only proceeds if a whole `max_turn_cost_usd`
- * still fits. That is what makes the cap a ceiling rather than a tripwire.
+ * reservations alike, and the turn only proceeds if the whole `requiredUsd` —
+ * the provider's own worst-case quote for this specific call — still fits. That
+ * is what makes the cap a ceiling rather than a tripwire.
  */
 export function checkBudget(
   run: OrchestrationRun,
@@ -267,6 +295,17 @@ export function enforceFileScope(scope: WorkPackageScope, files: readonly string
 }
 
 export function enforceToolUse(scope: WorkPackageScope, tools: readonly string[]): PolicyDecision {
+  // Checked first and independently of the work package: a scope that allows
+  // `Bash(*)` must not thereby allow `gh pr merge`.
+  const forbidden = tools.filter((tool) => matchesAnyWildcard(tool, NEVER_ALLOWED_TOOLS))
+  if (forbidden.length > 0) {
+    return deny(
+      'TOOL_NOT_ALLOWED',
+      'turn used a tool that no work package may grant',
+      forbidden
+    )
+  }
+
   const offending = tools.filter(
     (tool) =>
       matchesAnyWildcard(tool, scope.disallowed_tools) ||

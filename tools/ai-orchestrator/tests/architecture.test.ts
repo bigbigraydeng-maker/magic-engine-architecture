@@ -117,6 +117,17 @@ describe('the module is self-contained', () => {
     const nested = walk(MODULE_ROOT).filter((path) => path.endsWith('package.json'))
     expect(nested).toEqual([])
   })
+
+  it('carries no build artefacts that could be committed by accident', () => {
+    // The root .gitignore lists `/node_modules` — rooted, so a *nested* one is
+    // not ignored and `git add -A` would commit it. Running vitest with a cwd
+    // inside this directory creates exactly that (`node_modules/.vite`), which is
+    // how this nearly happened.
+    const artefacts = readdirSync(MODULE_ROOT).filter((entry) =>
+      ['node_modules', 'dist', '.next', 'coverage', '.turbo'].includes(entry)
+    )
+    expect(artefacts, `remove ${artefacts.join(', ')} from ${MODULE_ROOT}`).toEqual([])
+  })
 })
 
 describe('house rules from CLAUDE.md', () => {

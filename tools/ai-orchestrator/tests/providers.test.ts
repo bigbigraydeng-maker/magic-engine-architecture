@@ -132,9 +132,17 @@ describe('RestGitHubClient write guard', () => {
   })
 
   it('reads through the injected fetch rather than the global one', async () => {
-    const fetchImpl = vi.fn(async () =>
-      new Response(JSON.stringify([{ name: 'enhancement' }]), { status: 200 })
-    )
+    // Two calls: the issue pre-fetch that supplies the completeness floor, then
+    // the label page itself.
+    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+      const href = typeof url === 'string' ? url : url.toString()
+      if (/\/issues\/\d+$/.test(new URL(href).pathname)) {
+        return new Response(JSON.stringify({ comments: 0, labels: [{ name: 'enhancement' }] }), {
+          status: 200,
+        })
+      }
+      return new Response(JSON.stringify([{ name: 'enhancement' }]), { status: 200 })
+    })
     const client = new RestGitHubClient({
       token: 'ghp_test',
       repository: REPO,
@@ -142,6 +150,6 @@ describe('RestGitHubClient write guard', () => {
     })
 
     await expect(client.listIssueLabels(860)).resolves.toEqual(['enhancement'])
-    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
   })
 })

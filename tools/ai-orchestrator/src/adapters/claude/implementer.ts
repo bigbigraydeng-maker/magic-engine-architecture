@@ -27,17 +27,13 @@ export const ANTHROPIC_API_KEY_SECRET = 'ME2_ORCHESTRATOR_ANTHROPIC_API_KEY'
 export const DEFAULT_IMPLEMENTER_MODEL = 'claude-opus-5'
 
 /**
- * Tools the implementer may never be granted, regardless of work package. These
- * are enforced again by `enforceToolUse` after the turn, so a provider that
- * ignores its own configuration is still caught.
+ * Moved to `policy/policy.ts`, which is where it is actually enforced.
+ *
+ * It lived here with a comment saying `enforceToolUse` applied it, and nothing
+ * read it — an adapter is the wrong home for a rule the policy layer has to
+ * apply, because the two drift and only one of them is consulted.
  */
-export const NEVER_ALLOWED_TOOLS = [
-  'Bash(gh pr merge*)',
-  'Bash(git push --force*)',
-  'Bash(npx supabase*)',
-  'Bash(render*)',
-  'WebFetch',
-] as const
+export { NEVER_ALLOWED_TOOLS } from '../../policy/policy'
 
 export interface ClaudeImplementerConfig {
   enabled: boolean

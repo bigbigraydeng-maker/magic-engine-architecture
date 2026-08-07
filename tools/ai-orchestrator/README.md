@@ -16,7 +16,7 @@ from `src/`, touches no database, and sees no customer data.
 npx vitest run tools/ai-orchestrator
 ```
 
-431 tests, all against mock providers. No network, no credentials, no spend.
+460 tests, all against mock providers. No network, no credentials, no spend.
 The dry-run test prints a preflight report showing every guard it evaluated and
 what it *would* do next.
 
@@ -58,7 +58,7 @@ src/adapters/     github · openai · claude · workspace (git · GitHub PR) · 
 src/config/       the concrete scaffold configuration
 src/runner.ts     preflight and the loop        src/turn-executor.ts  one turn, end to end
 src/runner-types.ts  shared types               src/runner-context.ts ledger writes and transitions
-tests/            431 tests
+tests/            460 tests
 ```
 
 ## The five things worth knowing
@@ -133,6 +133,7 @@ maximum instead of to our own timeout. Both real adapters currently declare
 | no verified exclusive-run context | — | `WAITING_HUMAN`, zero calls |
 | the tracked remote ref moved (a push) | — | `WAITING_HUMAN` |
 | the remote could not be read | — | `WAITING_HUMAN` (fail closed) |
+| any paginated read that cannot be completed | — | throws; no partial ledger, files or labels |
 | authorization expired | 6 h | `WAITING_HUMAN` |
 
 Every one of these is checked *before* anything is spent or written.
@@ -174,8 +175,9 @@ orchestrator, each large enough to need its own design, review and dry run.
 They are written up in
 [the spec](../../docs/specs/2026-08-07-ai-orchestrator-v0.1.md) §9b:
 
-**E1 — the agent must not write to the repository before policy runs.** The work
-package still grants `git commit` / `git push` / `gh pr create`. Catching an
+**E1 — the agent must not write to the repository before policy runs.** Pushing
+is already withdrawn (`can_push` is `z.literal(false)` and the push tools are
+denied), but the work package still grants `git commit` and `gh pr create`. Catching an
 overreach in the diff afterwards is catching a fait accompli. The Enable design
 has Claude edit and test in an isolated worktree with no git write tools, and a
 deterministic publisher commit, push and open the draft PR only after the checks
@@ -184,7 +186,8 @@ pass. AI decides; software writes.
 **E2 — the cost ceiling is not proven for real models.** Three characters per
 token is not a safe upper bound for Chinese or arbitrary Unicode, and Magic
 Engine's context is full of both — that is an *under*-estimate, the wrong
-direction. Needs a real tokenizer or a UTF-8 byte-length bound, runtime schema
+direction. The constant is named `CHARS_PER_TOKEN_OPTIMISTIC` and labelled in
+`pricing.ts` rather than quietly replaced, so the gap stays visible. Needs a real tokenizer or a UTF-8 byte-length bound, runtime schema
 validation of the price table, a check that the priced model is the model the
 adapter actually calls, and a quote that covers a whole multi-turn Claude Code
 session rather than one prompt and one completion.

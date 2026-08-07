@@ -4,17 +4,20 @@
  * Order of operations is the safety property, so it is written out once here and
  * not rearranged for convenience:
  *
- *   kill switch -> timing invariant -> authorization window -> side-effect class
- *   -> lease -> ledger fold -> human-resume gate
- *   -> [per turn] budget gate (reservation must fit) -> foreign live claim check
- *      -> RESERVE (turn_started) -> provider call under timeout
- *      -> telemetry check -> schema -> authoritative facts -> policy
- *      -> integrity -> reconcile -> record -> transition
+ *   ledger read + fold -> kill switch -> EXCLUSIVE OWNERSHIP -> timing invariant
+ *   -> authorization window -> side-effect class -> lease (audit only)
+ *   -> human-resume gate
+ *   -> [per turn] idempotency -> foreign live claim -> price quote -> budget gate
+ *      -> RESERVE (turn_started) -> capture workspace BEFORE
+ *      -> provider call under AbortSignal -> conflict re-check -> cost reconcile
+ *      -> telemetry -> capture workspace AFTER + diff -> policy -> integrity
+ *      -> schema -> self-report comparison -> record -> transition
  *
  * Two properties are worth calling out because they were wrong in v0.1:
  *
  * - **Money is committed before the call, not after.** `turn_started` reserves
- *   `max_turn_cost_usd`, and a turn may only start when that much budget is left.
+ *   the provider's own worst-case quote, and a turn may only start when that much
+ *   budget is left.
  *   If the runner dies, the reservation stays committed — we cannot know whether
  *   the provider billed us, so we assume it did.
  * - **Policy is evaluated on authoritative facts.** `files_changed`, `tools_used`
@@ -112,6 +115,8 @@ export async function runOrchestration(
     workspace_source: deps.workspace.name,
     integrity_source: deps.integrity.name,
     ledger_rejected: read.rejected,
+    ledger_pages_read: read.pages_read,
+    ledger_comment_count: read.comment_count,
   }
 
   const done = (reason: string): RunnerResult => ({

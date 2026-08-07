@@ -20,12 +20,14 @@ import { enforceProtectedPaths } from '../src/policy/policy'
 
 const REPO = { owner: 'bigbigraydeng-maker', repo: 'magic-engine' }
 
+type Page = unknown[] | 'error'
+
 function file(name: string, sha = `blob-${name}`) {
   return { filename: name, sha }
 }
 
 /** Serves `pages` in order; any page not listed throws, as a real outage would. */
-function pagedFetch(pages: Record<number, unknown[] | 'error'>) {
+function pagedFetch(pages: Record<number, unknown[] | 'error'>, changedFiles?: number) {
   return vi.fn(async (url: string | URL | Request) => {
     const href = typeof url === 'string' ? url : url.toString()
     if (href.includes('/pulls/861/files')) {
@@ -36,15 +38,30 @@ function pagedFetch(pages: Record<number, unknown[] | 'error'>) {
       }
       return new Response(JSON.stringify(body), { status: 200 })
     }
+    // `GET /pulls/861` — carries GitHub's own changed_files count, which the walk
+    // checks itself against. Defaults to however many the fake actually serves.
+    // Distinct filenames, matching what GitHub reports: a duplicate across pages
+    // is an artefact of the walk, not an extra changed file.
+    const distinct = new Set(
+      Object.values(pages)
+        .flatMap((page) => (page === 'error' ? [] : page))
+        .map((entry) => (entry as { filename: string }).filename)
+    )
+    const served = distinct.size
     return new Response(
-      JSON.stringify({ number: 861, merged: false, head: { sha: 'abc', ref: 'claude/x' } }),
+      JSON.stringify({
+        number: 861,
+        merged: false,
+        head: { sha: 'abc', ref: 'claude/x' },
+        changed_files: changedFiles ?? served,
+      }),
       { status: 200 }
     )
   })
 }
 
-function clientWith(pages: Record<number, unknown[] | 'error'>) {
-  const fetchImpl = pagedFetch(pages)
+function clientWith(pages: Record<number, unknown[] | 'error'>, changedFiles?: number) {
+  const fetchImpl = pagedFetch(pages, changedFiles)
   const client = new RestGitHubClient({
     token: 'ghp_test',
     repository: REPO,
@@ -65,7 +82,7 @@ describe('more than one page', () => {
 
     expect(listing.file_count).toBe(101)
     expect(listing.pages_read).toBe(2)
-    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(fetchImpl).toHaveBeenCalledTimes(3) // PR pre-fetch + two pages
   })
 
   it('finds a protected file sitting at position 101', async () => {
@@ -135,7 +152,45 @@ describe('a failed page is a failure, never a shorter list', () => {
     const { client, fetchImpl } = clientWith({ 1: [file('docs/specs/a.md')] })
     const listing = await client.listPullRequestFiles(861)
     expect(listing).toMatchObject({ file_count: 1, pages_read: 1 })
-    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(fetchImpl).toHaveBeenCalledTimes(2) // PR pre-fetch + one page
+  })
+})
+
+describe('a list that shifts under the walk is caught, not silently truncated', () => {
+  it('throws when fewer files come back than GitHub says exist', async () => {
+    // The deletion case: removing an entry between two page requests shifts every
+    // later file onto a lower offset, so the walk skips one and the shortfall
+    // looks exactly like a genuine end of list. Only the authoritative count
+    // tells the two apart — ordering cannot, and dedupe sees no duplicate.
+    const { client } = clientWith({ 1: fullPage, 2: [file('b/1.md'), file('b/2.md')] }, 103)
+
+    await expect(client.listPullRequestFiles(861)).rejects.toThrow(
+      /read 102 entries but the API reported at least 103/
+    )
+  })
+
+  it('accepts a list that grew during the walk', async () => {
+    // Appends are harmless: they land past the end, so nothing is skipped.
+    const { client } = clientWith({ 1: fullPage, 2: [file('b/1.md')] }, 100)
+    await expect(client.listPullRequestFiles(861)).resolves.toMatchObject({ file_count: 101 })
+  })
+
+  it('accepts an exact match — the positive control', async () => {
+    const { client } = clientWith({ 1: [file('a.md')] }, 1)
+    await expect(client.listPullRequestFiles(861)).resolves.toMatchObject({ file_count: 1 })
+  })
+
+  it('throws on a list that is an exact multiple of the page size', async () => {
+    // The final full page leaves the loop with no short page to end on, so the
+    // walk runs out of budget. Failing is correct; returning those N items as if
+    // they were everything is what must not happen.
+    const pages: Record<number, Page> = {}
+    for (let page = 1; page <= MAX_PR_FILE_PAGES; page += 1) {
+      pages[page] = fullPage.map((entry) => file(`p${page}/${entry.filename}`))
+    }
+    const { client } = clientWith(pages)
+
+    await expect(client.listPullRequestFiles(861)).rejects.toThrow(/exceeded 30 pages/)
   })
 })
 

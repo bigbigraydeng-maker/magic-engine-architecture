@@ -9,6 +9,7 @@
 import type {
   GitHubClient,
   IssueComment,
+  IssueCommentPage,
   PullRequestFacts,
   PullRequestFile,
   PullRequestFileList,
@@ -53,8 +54,9 @@ export class InMemoryGitHubClient implements GitHubClient {
     this.prFiles.set(pr.number, [...files])
   }
 
-  async listIssueComments(): Promise<readonly IssueComment[]> {
-    return [...this.comments]
+  async listIssueComments(): Promise<IssueCommentPage> {
+    const comments = [...this.comments]
+    return { comments, pages_read: 1, comment_count: comments.length }
   }
 
   async listIssueLabels(): Promise<readonly string[]> {

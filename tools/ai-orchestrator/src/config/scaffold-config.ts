@@ -47,9 +47,14 @@ export const SCAFFOLD_LIMITS: OrchestratorLimits = {
 }
 
 /**
- * Must exceed `provider_timeout_ms + lease_margin_ms`, or `checkTimingInvariant`
- * refuses to start the run. That relationship is what stops a lease from lapsing
- * mid-call and letting a second runner start a second paid call.
+ * Must exceed the **in-flight window** plus `lease_margin_ms`, or
+ * `checkTimingInvariant` refuses to start the run.
+ *
+ * The in-flight window is `provider_timeout_ms` only when the provider proves it
+ * cancels. Both real adapters declare `cancellation.supported = false`, so for
+ * them it is `server_max_timeout_ms` (30 min) and this value is far too small —
+ * which is the point: Enable has to raise it deliberately rather than inherit a
+ * number sized for mocks.
  */
 export const SCAFFOLD_LEASE_TTL_MS =
   SCAFFOLD_LIMITS.provider_timeout_ms + SCAFFOLD_LIMITS.lease_margin_ms + 60_000
