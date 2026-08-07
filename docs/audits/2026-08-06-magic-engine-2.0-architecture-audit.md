@@ -697,13 +697,14 @@ Brief §18 描述的体验（「这个月什么在拖我们后腿？」「你这
 | 项 | 内容 |
 |---|---|
 | **目标** | 让已经写好的代码开始工作。这一期不写新架构。 |
-| **涉及组件** | `render.yaml` · `src/lib/cron/registry.ts` · 5 个孤儿 cron |
+| **涉及组件** | `render.yaml` · `src/lib/cron/registry.ts` · `src/lib/memory/extractor.ts` · 5 个孤儿 cron |
 | **具体动作** | ① 给 `memory-extractor` 加调度（学习回路通电）② `flywheel-seo-weekly` / `admin-key-expiry` 逐个定性：接调度或标退役 ③ 验证 `agent-learning-rollup` 在非空表上的行为 ④ 修 `factory-sweepers.yml` 的硬编码路径，让 `doctor.sh --cron` 能静态验证 |
 | **预期收益** | Learning 层从 1 分 → 2–3 分。**投入产出比全案最高。** |
-| **技术风险** | 极低 —— 代码早就写好且有测试 |
-| **迁移风险** | 低。extractor 是幂等的、纯规则的、只追加不删除 |
+| **技术风险** | ~~极低~~ → **中**（2026-08-07 实测修正）。接线前必须先修抽取器的幂等键，否则每天写重、把记忆表灌满同一条经验的副本。详见「§16 补记 A」 |
+| **迁移风险** | 低。extractor 只追加不删除，且首跑前记忆表本来就是空的 |
 | **依赖** | 无 |
-| **相对复杂度** | **1 / 10** |
+| **相对复杂度** | ~~1 / 10~~ → **3 / 10** |
+| **实际状态** | ✅ ①②已做（含幂等修复 + 6 个回归测试）· ③④ 未做 |
 
 ---
 
@@ -806,9 +807,10 @@ Brief §18 描述的体验（「这个月什么在拖我们后腿？」「你这
 
 ## 16. Top 10 Recommended Actions（前十件事，按顺序）
 
-1. **给 `memory-extractor` 接上 cron 调度。** 一行 `render.yaml` 改动，让整个学习回路通电。代码早就写好、幂等、有测试、零风险。**这是全案投入产出比最高的一件事。**（Phase A）
+1. ~~**给 `memory-extractor` 接上 cron 调度。** 一行 `render.yaml` 改动……零风险。~~
+   **✅ 2026-08-07 已完成，但这条当时写错了 —— 它不是一行改动，也不是零风险。** 见下方「§16 补记」。（Phase A）
 
-2. **把剩下 4 个孤儿 cron 逐个定性**：`flywheel-seo-weekly` / `admin-key-expiry` / `factory-review-sweeper` / `factory-worker-sweeper` 的调度可静态验证性。要么接上，要么删掉路由。**留着比删掉危险** —— 它们让人以为某件事在跑。（Phase A）
+2. **把剩下 4 个孤儿 cron 逐个定性**：要么接上，要么删掉路由。**留着比删掉危险** —— 它们让人以为某件事在跑。2026-08-07 已定性，结论见「§16 补记」。（Phase A）
 
 3. **建 `loop_runs` + `loop_run_steps` 两张表和通用 runner。** 认领逻辑直接照抄 `auto-run.ts:298-324`（已验证的行级原子写法）。第一个改造对象是 `auto-run` 自己，**要求改造后行为零变化**。（Phase B）
 
@@ -823,6 +825,80 @@ Brief §18 描述的体验（「这个月什么在拖我们后腿？」「你这
 8. **建动作类型注册表，把 36 种自由文本收成受控词汇表。** 同时改诸葛亮的 prompt：从"生成一个 snake_case slug"改成"从这个列表里选，选不出就标 needs_human"。这一步之后，扩展自动化能力的边际成本才会真正下降。（Phase D）
 
 9. **让排序确定性化，并把 Goal 真正喂进去。** `computeGoalGap()` + 打分公式（gap 权重 × 预期影响 × 置信度 ÷ 成本）；AI 保留 `why_now` 和"合不合适"的判断。**副作用是排序终于可测试了** —— 现在诸葛亮的排序无法写回归测试。（Phase E）
+
+### §16 补记（2026-08-07，动手之后回填）
+
+> 这一节是**审计结论被实施推翻的记录**，刻意不删原文。原因见末尾。
+
+#### 补记 A：第 1 条我写错了 —— 「零风险一行改动」是错的
+
+动手接线时先读了一遍抽取器和它上游的归因作业，发现一个纯静态审计没看穿的缺陷：
+
+**归因作业每 6 小时把 `flywheel_outcomes` 整条删掉重建**
+（`flywheel/attribution/job.ts:127-149`：`.delete().eq('action_id', id)` 后 `.insert()`），
+而 `flywheel_outcomes.id` 是 `gen_random_uuid()` 默认值 ——
+**同一条归因结论的 id 每 6 小时换一次。**
+
+而抽取器的去重键正是这个 id（原 `extractor.ts:136` `source_id: out.outcome_id`）。
+
+照原样接上每日调度的后果：
+
+| 时间 | 发生什么 |
+|---|---|
+| 第 1 天 | 为每条 confirmed 结论写一条经验，`source_id` = 当时的 outcome.id |
+| +6 小时 | 归因重跑，删了重建，id 变了 |
+| 第 2 天 | 去重集合里没有新 id → **再写一条一模一样的经验** |
+| … | 每天 +1，永不收敛 |
+
+而诸葛亮读记忆只取最新 15 条（`memory/service.ts` `loadPatterns` 的 `.limit(15)`）——
+**两周后那 15 条会全是同一条经验的 15 个副本。比现在空着更糟**：空的时候 AI 知道自己没有经验，
+灌满重复副本之后它以为自己有 15 条，实际只有 1 条，且挤掉了其他所有真经验。
+
+同一轮还发现两个同源问题：
+
+- **偏好条目的去重键里含着计数**。content 是「3 次 confirmed: …」，计数一涨就是新字符串 →
+  3 次写一条、4 次再写一条，堆成一串只有数字不同的同义反复。
+- **两处 loader 都没分页**，PostgREST 硬顶 1000 行且不报错（仓库里 `supabase-paginate.ts`
+  的注释已经为这个坑写过一次事故复盘）。去重集合被截断 = 去重部分失效，照样写重。
+
+**已修**（都在抽取器内部，没碰在跑的归因作业）：
+幂等键改挂 `action_id`（归因按 action_id 整条删，所以一动作恒有且仅有一条结论，天然一对一，
+且 `flywheel_actions` 行从不被重建）· 偏好去重改认 `(flywheel, type, action_type)` ·
+两处 loader 改走 `fetchAll` · 去重集合读失败时改成**这轮不写**而不是照写。
+配 6 个回归测试，并做了变异验证（把键改回 `outcome_id`，3 个用例精确挂掉）。
+
+**这条补记为什么重要，超出它本身：**
+它是报告 §4「问题 5：幂等靠各模块自觉，没有统一契约」的第一个实证，而且证明了
+**这类缺陷读代码读不出来 —— 要把两个模块的生命周期摆在一起想才看得见**。
+Magic Engine 2.0 每接一条新的自动执行，都会遇到一次同形状的问题。
+这正是 §14.2 里 L6 Capability 层「每个 capability 必须声明幂等键规则」那条要求的由来 ——
+把「幂等怎么做」从每个模块各自的自觉，变成一个不声明就过不去的必填项。
+
+#### 补记 B：孤儿 cron 定性结论（第 2 条）
+
+| 端点 | 定性 | 理由 |
+|---|---|---|
+| `memory-extractor` | ✅ **已接**（`35 6 * * *`） | 排在归因（06:00，超时 5 分钟）之后、周一经验汇总（07:00）之前 |
+| `flywheel-seo-weekly` | ⏸ **等 PM 拍板** | 能跑（`SeoContentAdapter` 的注释还写 SEMrush，实际 import 已是 `dataforseo/labs`），但每周对每个客户花 DataForSEO 的钱。**涉及花钱 = PM 的决策，不是我的** |
+| `admin-key-expiry` | ❌ **不要照原样接** | 它只 `console.warn`，邮件通道（P2）还没建。接上等于让告警死在日志里 —— 正是铁律 §3 明令禁止的。要接必须先给 `pm-todo/manual-items.ts` 加一个 kind 走今日待办 |
+| `factory-review-sweeper` | ✅ 已知有意退役 | Airtable 停用 |
+| `factory-worker-sweeper` | ✅ 其实在跑 | 由 `.github/workflows/factory-sweepers.yml` 里的 shell 循环拼路径调度，**只是静态扫描匹配不到**。`doctor.sh --cron` 会把它误报成孤儿 —— 这本身是个该修的小账 |
+
+#### 补记 C：一个新增的红线（接线时才知道）
+
+`cron/registry.ts:63-65` 记着一件不写下来就会踩的事：
+
+> 新增 Render 服务**要有人进 Render 面板点一次 Apply，而这件事不报任何错**。
+
+所以 `render.yaml` 改完 **不等于** 任务会跑。已核实兜底通道是通的：
+`schedule.ts` 的 `judgeJob` 会把它判成 `never_ran` → `pm-todo/manual-items.ts` 的
+`cron_not_running` → 今日待办「🙋 需要你动手」栏，附 Render 链接和三步排查。
+`addedAt: '2026-08-07'` 是宽限期标记，防止它在第一次排班到点前被误报。
+
+**所以这次交付之后还有一件事要人做**：进 Render 点一次 Apply。
+不点的话，最迟一天后今日待办会主动来提醒 —— 这一条不会烂在日志里。
+
+---
 
 10. **把 factory worker 从那台 Mac 上搬下来。** 这不是架构问题，但它是当前**唯一一个"进程挂了没人知道"的单点**（STATE.md §4.4：无 launchd/pm2，工单静默卡在 queued）。搬成 Render 上的 cron 或 background worker，或者至少加一个"超过 N 分钟没心跳就下发人工任务"的检测（`pm-todo` 里已经有 `factory_worker_idle` 这个 kind，确认它真的在跑）。
 
@@ -913,6 +989,25 @@ grep -rl "new OpenAI(\|new Anthropic(" src/lib src/app/api --include=*.ts | wc -
 
 **孤儿 cron 检测**（逐个路由回查 `render.yaml` 与 `.github/workflows/`）：
 `flywheel-seo-weekly` · `admin-key-expiry` · `memory-extractor` · `factory-review-sweeper`（已知退役）· `factory-worker-sweeper`（实际由 `factory-sweepers.yml` 内的 shell 循环调度，静态不可验证）
+
+### 2026-08-07 补测：`main` 的绿灯状态（首次实测，原报告没查）
+
+第一轮审计只读代码，没跑过测试和构建。这次为了验证改动装了依赖，顺手拿到了基线：
+
+| 项 | `main` 基线 | 说明 |
+|---|---|---|
+| `npx vitest run` | **22 个文件 / 112 个用例失败**（6801 通过） | 已确认与本次改动无关 —— 同一批文件在 `main` 上一模一样地挂 |
+| `npx tsc --noEmit` | **128 个错误** | 多为 `--downlevelIteration` 与测试桩类型不匹配 |
+| `npm run build` | ✅ 通过（需要 Supabase 环境变量才能过「收集页面数据」阶段） | 构建配置跳过 lint 与类型检查，所以上面 128 个错误拦不住部署 |
+
+**这条值得单独记，因为它解释了一个机制问题**：`npm run build` 是推送前的唯一硬门槛，
+而它**跳过 lint 和类型检查**（`Skipping linting`）。于是 128 个类型错误和 112 个挂掉的测试
+可以一直存在而不挡任何一次上线 —— 它们既不会变好，也不会有人被迫看见。
+
+这跟报告 §4「问题 3」是同一个病：**没有人被强制看见的信号，等于不存在的信号。**
+建议（不在本次范围内）：先把 112 个失败分成「真 bug / 过期测试桩」两堆，
+再决定是修还是删；在那之前不要往 CI 里加「测试必须全绿」的闸，
+否则第一天就会被整体跳过，然后永远跳过。
 
 **未在本次审计覆盖的范围**（诚实声明）：
 - 生产数据库的真实数据（无凭证，所有关于"281 件待办""204 件无背书"的数字均引自代码注释中记录的实测结果，非本次直查）
