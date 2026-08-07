@@ -29,7 +29,7 @@
 | **预留式预算**（先扣后打，硬顶） | 事后对账式的软上限 |
 | 真 provider **安全骨架**（缺 secret 即 fail closed） | 读写任何真实 API key |
 | manual-only workflow（默认关） | merge / deploy / migration |
-| 269 个测试 + dry-run 证据 | 改任何 Magic Engine 业务代码 |
+| 374 个测试 + 只读 CI + dry-run 证据 | 改任何 Magic Engine 业务代码 |
 
 ---
 
@@ -377,11 +377,35 @@ v0.1 只列了 `policy/` · `prompts/` · `state-machine.ts`，把 `runner.ts` �
 
 ---
 
+## 8b. 只读 CI（`.github/workflows/ai-orchestrator-ci.yml`）
+
+**这不是 orchestrator 的触发器，是普通只读 CI。** 它让 GitHub 真的跑这 374 个测试，
+而不是只有本地证据。
+
+| 项 | 值 |
+|---|---|
+| 触发 | **只有 `pull_request`**，且 paths 限定到 `tools/ai-orchestrator/**` · 本模块 spec · `ai-orchestrator-*.yml` |
+| 权限 | `contents: read` |
+| secrets | **一个都不引用**（`secrets.` 在可执行内容里不出现，有测试断言） |
+| 模型 | 不调 OpenAI / Anthropic，不写 Issue，不 commit / push / merge，零费用 |
+| Action | 全部 pin 到完整 commit SHA |
+| **required status check 名** | **`ai-orchestrator-tests`** |
+
+跑三件事：模块级 `tsc -p tools/ai-orchestrator/tsconfig.json`（全仓基线 188 条红，
+所以必须收窄到本目录才有意义，这里的标准是 0）· `npx vitest run tools/ai-orchestrator` ·
+结束时断言工作区没被改动。
+
+架构检查和 workflow 供应链检查都在那次 vitest 里（`--reporter=verbose` 会把每条断言名打出来）。
+
+> `ai-orchestrator-manual.yml` 不受影响：仍然只有 `workflow_dispatch`，仍然默认关闭。
+
+---
+
 ## 9. Enable checklist（全部是人工作业，本次一件都没做）
 
 > ⛔️ **阻塞项在最前面。** 在 PM 就第 0 条给出决定之前，Enable 阶段保持 `WAITING_HUMAN`。
 
-### 0. branch protection —— ✅ 已配好（2026-08-07 实测），但还有两个洞
+### 0. branch protection —— ✅ 已生效；审批数暂时保持 0（有意）
 
 PM 已升级 GitHub Pro 并建好 ruleset。实测 `gh api`：
 
@@ -392,19 +416,19 @@ PM 已升级 GitHub Pro 并建好 ruleset。实测 `gh api`：
 | 规则 | `deletion` · `non_fast_forward` · `pull_request` |
 | `required_review_thread_resolution` | `true` |
 | `allowed_merge_methods` | `["merge"]` |
-| 旧的 `protect-main` / `protect-main Magic Engine` | 都已 `disabled` |
-| `default_workflow_permissions` | `read` ✅ |
+| 旧的两条 ruleset | 都已 `disabled` |
+| `default_workflow_permissions` | `read` |
 
-**仍未闭合的两条，Enable 前必须补：**
+**`required_approving_review_count` 现在是 0，暂时不要改成 1。**
+仓库里的 Claude PR 仍然显示为 owner 自己创建，而 GitHub 不允许自己批准自己的 PR ——
+现在设 1 会把流程锁死。等 Enable 版用独立 bot/App 身份开 PR，或加入第二位真人 reviewer 之后，
+再一次性做三件事：审批数设 1 · CODEOWNERS 指向真人 reviewer · **实测一次**
+（开一个 bot 创建的、改 `tools/ai-orchestrator/` 的 PR，确认没有人工批准合不进去）。
 
-1. `required_approving_review_count: 0` —— PR **零批准也能合**。禁止直推 main 有了，
-   「必须有人看过」还没有。
-2. `require_code_owner_review: false` 且 `.github/CODEOWNERS` 不存在 ——
-   受保护面（`.github/**` · `tools/ai-orchestrator/**`）的改动**没有强制指定审查人**。
+现阶段的保证是：无 bypass + 必须走 PR + 禁 force push + 未解决对话阻止合并 +
+orchestrator 永不 auto-merge —— **merge 仍然是人手动完成的**。
 
-这两条不改，第 8 节那张表的第 6 层仍然是空的。建议：审批数设为 1，建 CODEOWNERS 并打开
-`require_code_owner_review`，然后**实测一次**（开一个改 `tools/ai-orchestrator/` 的 PR，
-确认没有 owner 批准合不进去），再谈 Enable。
+合进来的下一步是把 **`ai-orchestrator-tests`** 设为 required status check（见 §8b）。
 
 ### 1. Secrets（仓库 Settings → Secrets and variables → Actions）
 
@@ -479,9 +503,84 @@ Enable 时新增的 `anthropics/claude-code-action` 同样必须 pin，且**升�
 
 ---
 
+## 9b. 转入独立 Enable Work Package 的四项（本 PR 不实施）
+
+GPT-5.6 第三轮定的边界：**#861 是安全骨架 PR，不是 Enable PR。**
+下面四项都是真问题，但都需要独立设计、独立审查、独立 dry run，塞进这个 PR 只会让它既不是骨架也不是 Enable。
+**它们不阻塞这个 inert scaffold 合并；它们阻塞 Enable。**
+
+### E1. Claude 不能在 policy 判定前 commit / push / 开 PR
+
+当前 work package 的 `allowed_tools` 里仍有 `Bash(git commit*)` / `Bash(git push origin*)` /
+`Bash(gh pr create*)`。事后能从真实 diff 抓到越权是真的，但**副作用已经落在分支和 PR 上了** ——
+抓到的是既成事实，不是拦住。
+
+Enable 版要改成：
+
+```
+Claude 只在隔离 worktree 里 edit / test（无 git 写工具）
+  → runner 读真实 delta，跑 policy + 完整性检查
+  → 通过：deterministic publisher 统一 commit、push、开 draft PR
+  → 不通过：丢弃 / reset worktree，什么都没发生过
+```
+
+也就是本仓库那条老规矩的同一形状：**AI 负责判断，软件负责写入。**
+做这件事要动 `scope.allowed_tools`、加一个 publisher 模块、改 worktree 生命周期 —— 独立 PR。
+
+### E2. 真实模型成本上界还没证明
+
+现在的 `CHARS_PER_TOKEN_CONSERVATIVE = 3` **对中文和任意 Unicode 不是安全上界** ——
+而 Magic Engine 的上下文本身大量是中文。一个 UTF-8 三字节的汉字按 3 字符/token 会被算成 ~1 token，
+真实分词往往更多。这是**低估**，方向正好错了。
+
+Enable 前必须：
+
+- 换成模型自己的 tokenizer，或用 **UTF-8 byte length** 做保守硬上界（字节数 ≥ token 数，方向是安全的）；
+- 验证 `pricing.model` 与 adapter 实际使用的 model **完全一致**（现在只是字符串对上了没人查）；
+- 对价目表做 **runtime schema 校验**（zod），而不是相信常量文件写对了；
+- **Claude Code 是多轮 agent session**：一次 `implement()` 背后是 `maxTurns` 轮模型调用 +
+  工具输出回灌 + 上下文逐轮增长。按「一次 prompt + 一次 output」计价是数量级级别的低估。
+  报价必须覆盖整个 session 的最坏情况；
+- 证明不了 worst case 就零调用（这条机制已经有了，缺的是正确的数）。
+
+### E3. 不要把通用 `github-actions[bot]` 当唯一机器身份
+
+`TRUSTED_LEDGER_AUTHORS` 里的 `github-actions[bot]` 是**所有** workflow 共用的 login ——
+仓库里任何一个拿到 `issues: write` 的 workflow 发的评论都是这个作者。
+只按 login 信任 marker，**证明不了事件来自 orchestrator**。
+
+Enable 版二选一（或都做）：
+
+- 专用 GitHub App / bot 身份，只有 orchestrator workflow 能以它发言；
+- 对 ledger marker 加签名：用 orchestrator 独占的 secret 做 HMAC，解码时验签。
+
+还要明确处理**评论被编辑或删除**时的账本完整性 —— 现在的模型假设 Issue 评论是 append-only，
+而 GitHub 上它不是。
+
+### E4. Claude Code Action 不能被 TypeScript 当函数调用
+
+这是 v0.1 那句「Action 只是 `ImplementerProvider` 接口的一种实现」的漏洞：
+**GitHub Action 是 workflow step，不是 TS 里能 `await` 的函数。** 当前 adapter 骨架的形状
+（`implement(request): Promise<Result>`）跟 Action 的真实运行方式对不上。
+
+Enable 前必须写 ADR 二选一，并做真实 dry run：
+
+| 方案 | 形状 |
+|---|---|
+| **A. 三段式静态 workflow** | preflight job（TS：读账本 / policy / 报价 / 写 claim）→ pinned Claude Action step → postflight job（TS：读 delta / 校验 / 记账） |
+| **B. SDK / headless / CLI** | Claude Code 作为 provider adapter 能真正启动和杀掉的进程，`implement()` 保持现在的形状 |
+
+无论选哪个，都必须证明这五样在**真实路径**上拿得到：
+telemetry（真实工具列表）· AbortSignal / child kill 真的生效 · usage 里的真实成本 ·
+tool allowlist 真的被 Action 尊重 · 输出符合 schema。
+
+**方案 A 会改变本 spec §5 的选型结论**，所以它是 ADR，不是实现细节。
+
+---
+
 ## 10. 测试
 
-`npx vitest run tools/ai-orchestrator` —— **269 passed / 0 failed**，全部 mock，零网络、零费用。
+`npx vitest run tools/ai-orchestrator` —— **374 passed / 0 failed**，全部 mock，零网络、零费用。
 
 | Issue #860 要求 | 覆盖位置 |
 |---|---|
@@ -511,7 +610,10 @@ Enable 时新增的 `anthropics/claude-code-action` 同样必须 pin，且**升�
 | **不支持取消的 provider fail closed / 放大租约** | `cancellation-and-pricing.test.ts` |
 | **价目表缺失 / 过期 / 输入超限 → 零调用** | `cancellation-and-pricing.test.ts` |
 | **actual > reserved → WAITING_HUMAN** | `cancellation-and-pricing.test.ts` |
-| **workflow 未 pin / 越权 / 加触发器 → 测试红** | `workflow-supply-chain.test.ts` |
+| **workflow 未 pin / 越权 / 加触发器 → 测试红** | `workflow-supply-chain.test.ts`（两条 workflow 都管） |
+| **CI 引用 secret / 给写权限 / 改 check 名 / 缩 paths → 测试红** | `workflow-supply-chain.test.ts` |
+| **模块 import 了 `src/` / supabase / next / 未声明依赖 → 测试红** | `architecture.test.ts` |
+| **文件超 800 行 / 出现 `any` → 测试红** | `architecture.test.ts` |
 
 **关于「零调用」这类断言**：每一条都配了正对照（同一套 harness 关掉 dry-run 再跑一遍，
 断言 provider 确实被调用、评论确实被写、commit 副作用确实被记录）。
@@ -533,6 +635,20 @@ Enable 时新增的 `anthropics/claude-code-action` 同样必须 pin，且**升�
 | 租约永远发放 | 3 |
 | 账本信任任意作者 | 3 |
 | `WAITING_HUMAN` 自行恢复 | 5 |
+
+**第四轮（只读 CI 与架构闸门，9 组）**
+
+| 破坏 | 变红 |
+|---|---|
+| CI 拿到写权限 | 1 |
+| CI 的 action 退回 moveable tag | 3 |
+| CI 接上模型 secret | 2 |
+| required check 名被改 | 1 |
+| CI 的 paths 被缩窄 | 1 |
+| 源文件 `import '@/...'` 打进 src | 2 |
+| 源文件 import supabase client | 1 |
+| 混进一个 `any` | 1 |
+| import 了 package.json 里没有的包 | 1 |
 
 **第三轮（针对 GPT 第二轮审查的五个 blocker，12 组）**
 
@@ -569,7 +685,7 @@ Enable 时新增的 `anthropics/claude-code-action` 同样必须 pin，且**升�
 
 ## 11. 剩余风险
 
-1. **branch protection 已开，但审批数是 0 且没有 CODEOWNERS** —— 见 §9.0。Enable 前必须补齐并实测一次。
+1. **审批数暂时保持 0，CODEOWNERS 未建** —— 有意的（见 §9.0）。这期间「必须有人看过」靠人工纪律，不靠机器。
 2. **真 provider 未接线。** `ProviderNotWiredError` 是刻意的：接线本身要单独 PR、单独审。
    接线时**必须**做到两件事，否则本次的两个修复会退化成摆设：
    `tools_used` 取自 Action 的执行日志（不是模型输出），`usage.cost_usd` 取自 API 返回。

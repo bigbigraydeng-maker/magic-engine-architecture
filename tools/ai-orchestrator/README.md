@@ -16,13 +16,28 @@ from `src/`, touches no database, and sees no customer data.
 npx vitest run tools/ai-orchestrator
 ```
 
-269 tests, all against mock providers. No network, no credentials, no spend.
+374 tests, all against mock providers. No network, no credentials, no spend.
 The dry-run test prints a preflight report showing every guard it evaluated and
 what it *would* do next.
 
 No new dependencies: this reuses the repository's `zod` and `vitest`. There is no
-`package.json` here on purpose — the root `tsconfig.json` (`include: ["**/*.ts"]`)
-and root `vitest.config.ts` already cover this directory.
+`package.json` here on purpose — `tests/architecture.test.ts` fails the build if
+one appears, or if anything imports a package the repository does not already
+have.
+
+Type check this module on its own — the repository baseline carries 188
+pre-existing errors, so only a scoped check can be a gate:
+
+```bash
+npx tsc -p tools/ai-orchestrator/tsconfig.json
+```
+
+**CI**: `.github/workflows/ai-orchestrator-ci.yml` runs both on every pull request
+that touches this module. It is ordinary read-only CI — `pull_request` only,
+`contents: read`, references no secret, calls no model, writes nothing. The check
+name is **`ai-orchestrator-tests`**; that is the string to require in the
+`Protect main` ruleset. It is not an orchestrator trigger: the orchestrator itself
+is still `workflow_dispatch`-only and still disabled by default.
 
 ## Layout
 
@@ -34,7 +49,7 @@ src/adapters/     github · openai · claude · workspace (git · GitHub PR) · 
 src/config/       the concrete scaffold configuration
 src/runner.ts     preflight and the loop        src/turn-executor.ts  one turn, end to end
 src/runner-types.ts  shared types               src/runner-context.ts ledger writes and transitions
-tests/            269 tests
+tests/            374 tests
 ```
 
 ## The five things worth knowing
@@ -122,6 +137,47 @@ Five layers, strongest first:
 5. `GitControlPlaneIntegrityChecker` asks git whether the surface moved, after
    every turn. This catches the case layer 4 cannot: a change nobody declared.
 
-Branch protection and enforced CODEOWNERS review would be layer 6. **They are not
-available on this repository** (private repo, GitHub Free) — that is the one
-blocking item for the Enable phase, and it is a decision for the PM.
+Branch protection is layer 6 and is now live: no bypass, PRs required, force
+push and deletion blocked, unresolved conversations block merge. Required
+approvals stay at 0 for now on purpose — the PRs are authored by the repository
+owner, and GitHub does not let anyone approve their own PR, so requiring one
+would deadlock the flow. That tightens once an independent bot identity authors
+the PRs (see E3 below).
+
+## What is deliberately NOT here
+
+This module is an inert scaffold. Four things stand between it and a working
+orchestrator, each large enough to need its own design, review and dry run.
+They are written up in
+[the spec](../../docs/specs/2026-08-07-ai-orchestrator-v0.1.md) §9b:
+
+**E1 — the agent must not write to the repository before policy runs.** The work
+package still grants `git commit` / `git push` / `gh pr create`. Catching an
+overreach in the diff afterwards is catching a fait accompli. The Enable design
+has Claude edit and test in an isolated worktree with no git write tools, and a
+deterministic publisher commit, push and open the draft PR only after the checks
+pass. AI decides; software writes.
+
+**E2 — the cost ceiling is not proven for real models.** Three characters per
+token is not a safe upper bound for Chinese or arbitrary Unicode, and Magic
+Engine's context is full of both — that is an *under*-estimate, the wrong
+direction. Needs a real tokenizer or a UTF-8 byte-length bound, runtime schema
+validation of the price table, a check that the priced model is the model the
+adapter actually calls, and a quote that covers a whole multi-turn Claude Code
+session rather than one prompt and one completion.
+
+**E3 — `github-actions[bot]` is not an identity.** Every workflow in the
+repository with `issues: write` posts as that same login, so trusting a marker by
+login proves nothing about which workflow wrote it. Needs a dedicated App or bot
+identity, or a signature over the marker using a secret only the orchestrator
+holds — plus a decision about what happens when a comment is edited or deleted,
+because the ledger currently assumes Issue comments are append-only and on GitHub
+they are not.
+
+**E4 — a GitHub Action is not a function.** `claude-code-action` is a workflow
+step; the current adapter shape (`implement(request): Promise<Result>`) cannot
+call it. Needs an ADR choosing between a three-phase static workflow
+(preflight → pinned Action → postflight) and the Claude Code SDK/headless/CLI as
+a process the adapter can really start and kill — and a dry run proving telemetry,
+cancellation, usage, tool allowlist and output schema are all reachable on the
+real path.
