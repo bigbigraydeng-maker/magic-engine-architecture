@@ -64,6 +64,7 @@ export const stopReasonSchema = z.enum([
   'provider_timeout',
   'cost_estimate_unavailable',
   'cost_overrun',
+  'no_exclusive_ownership',
   'reviewer_approved',
   'reviewer_declared_failure',
   'human_input_required',
@@ -101,7 +102,16 @@ export const workPackageScopeSchema = z.object({
   allowed_paths: z.array(z.string().min(1)).min(1),
   denied_paths: z.array(z.string().min(1)).default([]),
   can_commit: z.boolean(),
-  can_push: z.boolean(),
+  /**
+   * Not a setting, like `can_merge`.
+   *
+   * A capability the runner cannot verify is not a capability, it is a label. In
+   * the scaffold nothing establishes whether a push happened at the moment the
+   * policy runs, so granting it would be a permission that exists only on paper.
+   * Pushing belongs to the deterministic publisher in the Enable design (spec
+   * §9b E1), which runs after policy has already passed.
+   */
+  can_push: z.literal(false),
   can_open_draft_pr: z.boolean(),
   /** Not a setting. Merging is a human act; the type system says so. */
   can_merge: z.literal(false),
@@ -144,13 +154,6 @@ export const workPackageAuthorizationSchema = z
           message: `authorization must explicitly prohibit "${op}"`,
         })
       }
-    }
-    if (value.scope.can_push && !value.scope.can_commit) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['scope'],
-        message: 'can_push requires can_commit',
-      })
     }
   })
 export type WorkPackageAuthorization = z.infer<typeof workPackageAuthorizationSchema>
@@ -307,6 +310,18 @@ export const authoritativeTurnFactsSchema = z.object({
     .nullable(),
   /** True only when the pull request did not exist before this turn. */
   pull_request_opened_this_turn: z.boolean(),
+  /** True when the tracked remote ref moved during this turn — i.e. a push. */
+  pushed_this_turn: z.boolean(),
+  /** Before/after of the tracked remote ref, for the audit trail. */
+  remote_head_delta: z
+    .object({
+      ref: z.string().min(1),
+      before_sha: z.string().min(1).nullable(),
+      after_sha: z.string().min(1).nullable(),
+    })
+    .nullable(),
+  /** False when the remote could not be read. Policy fails closed on false. */
+  remote_facts_available: z.boolean(),
   /** Provenance for each fact, written to the ledger so a reviewer can audit it. */
   sources: z.object({
     workspace: z.string().min(1),
@@ -338,8 +353,27 @@ export const turnRejectionReasonSchema = z.enum([
   'cost_estimate_unavailable',
   /** Actual usage exceeded the reservation: the price model is wrong. */
   'cost_overrun',
+  /** No verified exclusive-run context, so the turn could have run twice. */
+  'no_exclusive_ownership',
 ])
 export type TurnRejectionReason = z.infer<typeof turnRejectionReasonSchema>
+
+/**
+ * One specific block, and what has to be approved to clear it.
+ *
+ * Nested rather than two loose fields so "an id with no reason" and "a reason
+ * with no id" are unrepresentable — the pair is only meaningful together.
+ */
+export const waitDescriptorSchema = z.object({
+  id: z.string().min(1),
+  /**
+   * What is being waited on, in machine-readable form (e.g. `policy_violation`).
+   * A human authorization must list this in `grants`: approving "carry on" is not
+   * approving "and that tool use was fine".
+   */
+  blocking_reason: z.string().min(1),
+})
+export type WaitDescriptor = z.infer<typeof waitDescriptorSchema>
 
 const ledgerBase = {
   schema_version: z.literal(LEDGER_SCHEMA_VERSION),
@@ -359,6 +393,11 @@ export const ledgerEventSchema = z.discriminatedUnion('event', [
     event: z.literal('lease_acquired'),
     lock_key: z.string().min(1),
     holder: z.string().min(1),
+    /**
+     * Fencing token. Unique per acquisition, so a release written by a holder
+     * whose lease already lapsed cannot close the lease that replaced it.
+     */
+    lease_id: z.string().min(1),
     expires_at: isoTimestamp,
     took_over_from: z.string().min(1).nullable(),
   }),
@@ -367,6 +406,8 @@ export const ledgerEventSchema = z.discriminatedUnion('event', [
     event: z.literal('lease_released'),
     lock_key: z.string().min(1),
     holder: z.string().min(1),
+    /** Must match the live lease exactly, or the release is ignored. */
+    lease_id: z.string().min(1),
   }),
   z.object({
     ...ledgerBase,
@@ -420,6 +461,12 @@ export const ledgerEventSchema = z.discriminatedUnion('event', [
     input_digest: z.string().min(1),
     reason: turnRejectionReasonSchema,
     detail: z.array(z.string()).default([]),
+    /**
+     * Identifies this specific block. Present exactly when `next_state` is
+     * WAITING_HUMAN. A human authorization must name it, so approving one gate
+     * cannot silently release the next one.
+     */
+    wait: waitDescriptorSchema.nullable().default(null),
     /** Reserved dollars that this rejection settles. Timeouts settle at full reservation. */
     reserved_cost_usd: z.number().nonnegative(),
     cost_usd: z.number().nonnegative(),
@@ -446,12 +493,25 @@ export const ledgerEventSchema = z.discriminatedUnion('event', [
     from: runStateSchema,
     to: runStateSchema,
     reason: z.string().min(1),
+    /** Present exactly when `to` is WAITING_HUMAN. See turn_rejected.wait. */
+    wait: waitDescriptorSchema.nullable().default(null),
+    /** Present when leaving WAITING_HUMAN: the wait this transition consumed. */
+    consumed_wait_id: z.string().min(1).nullable().default(null),
   }),
   z.object({
     ...ledgerBase,
     event: z.literal('human_authorization'),
     authorized_by: z.string().min(1),
-    grants: z.array(z.string().min(1)),
+    /**
+     * The specific block being released. An authorization written before its
+     * wait, or naming a different wait, is not an authorization for this one.
+     */
+    wait_id: z.string().min(1),
+    /**
+     * Must contain the blocking reason recorded on the wait event. Approving
+     * "the run may continue" is not approving "and it may also use that tool".
+     */
+    grants: z.array(z.string().min(1)).min(1),
     resume_state: z.enum(['GPT_TURN', 'CLAUDE_TURN', 'CANCELLED']),
     expires_at: isoTimestamp,
   }),

@@ -15,20 +15,6 @@ import {
 
 const NOW = new Date('2026-08-07T00:00:00.000Z')
 
-function authorizationEvent(overrides: Partial<Extract<LedgerEvent, { event: 'human_authorization' }>> = {}): LedgerEvent {
-  return {
-    schema_version: 'v1',
-    run_id: 'run-1',
-    at: NOW.toISOString(),
-    event: 'human_authorization',
-    authorized_by: 'bigbigraydeng-maker',
-    grants: ['resume'],
-    resume_state: 'CLAUDE_TURN',
-    expires_at: new Date(NOW.getTime() + 60_000).toISOString(),
-    ...overrides,
-  }
-}
-
 describe('legal transitions', () => {
   it('allows the ordinary review cycle', () => {
     expect(canTransition('READY', 'GPT_TURN')).toBe(true)
@@ -100,69 +86,28 @@ describe('verdict mapping', () => {
 })
 
 describe('WAITING_HUMAN never resumes on its own', () => {
-  it('stays parked with no authorization event', () => {
+  // The binding rules themselves are exercised in human-authorization.test.ts,
+  // against the real scaffold config. This only pins the empty case.
+  it('stays parked when the ledger holds nothing at all', () => {
     const decision = resumeFromWaitingHuman({
       runId: 'run-1',
       events: [],
       allowedAuthorizers: ['bigbigraydeng-maker'],
       now: NOW,
     })
-    expect(decision.resumed).toBe(false)
-    expect(decision.state).toBe('WAITING_HUMAN')
-    expect(decision.reason).toContain('no human authorization')
+    expect(decision).toMatchObject({ resumed: false, state: 'WAITING_HUMAN', consumed_wait_id: null })
+    expect(decision.reason).toContain('no open wait')
   })
 
-  it('stays parked when a stream of unrelated events arrives', () => {
+  it('stays parked when unrelated events arrive', () => {
     const events: LedgerEvent[] = [
-      { schema_version: 'v1', run_id: 'run-1', at: NOW.toISOString(), event: 'state_changed', from: 'CLAUDE_TURN', to: 'WAITING_HUMAN', reason: 'policy violation' },
-      { schema_version: 'v1', run_id: 'run-1', at: NOW.toISOString(), event: 'lease_released', lock_key: 'o/r#1', holder: 'gha-1' },
+      {
+        schema_version: 'v1', run_id: 'run-1', at: NOW.toISOString(),
+        event: 'lease_released', lock_key: 'o/r#1', holder: 'gha-1', lease_id: 'lease-1',
+      },
     ]
-    expect(resumeFromWaitingHuman({ runId: 'run-1', events, allowedAuthorizers: ['x'], now: NOW }).resumed).toBe(false)
-  })
-
-  it('rejects an authorization from a login that is not on the allowlist', () => {
-    const decision = resumeFromWaitingHuman({
-      runId: 'run-1',
-      events: [authorizationEvent({ authorized_by: 'random-contributor' })],
-      allowedAuthorizers: ['bigbigraydeng-maker'],
-      now: NOW,
-    })
-    expect(decision.resumed).toBe(false)
-    expect(decision.reason).toContain('not on the allowlist')
-  })
-
-  it('rejects an authorization that belongs to a different run', () => {
-    const decision = resumeFromWaitingHuman({
-      runId: 'run-1',
-      events: [authorizationEvent({ run_id: 'run-2' })],
-      allowedAuthorizers: ['bigbigraydeng-maker'],
-      now: NOW,
-    })
-    expect(decision.resumed).toBe(false)
-  })
-
-  it('rejects an expired authorization', () => {
-    const decision = resumeFromWaitingHuman({
-      runId: 'run-1',
-      events: [authorizationEvent({ expires_at: new Date(NOW.getTime() - 1).toISOString() })],
-      allowedAuthorizers: ['bigbigraydeng-maker'],
-      now: NOW,
-    })
-    expect(decision.resumed).toBe(false)
-    expect(decision.reason).toContain('expired')
-  })
-
-  it('resumes only on a valid, unexpired, allowlisted authorization', () => {
-    const decision = resumeFromWaitingHuman({
-      runId: 'run-1',
-      events: [authorizationEvent()],
-      allowedAuthorizers: ['bigbigraydeng-maker'],
-      now: NOW,
-    })
-    expect(decision).toEqual({
-      resumed: true,
-      state: 'CLAUDE_TURN',
-      reason: 'resumed by bigbigraydeng-maker',
-    })
+    expect(
+      resumeFromWaitingHuman({ runId: 'run-1', events, allowedAuthorizers: ['x'], now: NOW }).resumed
+    ).toBe(false)
   })
 })

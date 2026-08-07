@@ -28,13 +28,14 @@ import type {
   RunState,
   StopReason,
   TurnRejectionReason,
+  WaitDescriptor,
 } from './domain/schema'
 import { implementerTurnOutputSchema, reviewerTurnOutputSchema } from './domain/schema'
 import { compareSelfReport, enforceToolUse, evaluateImplementerTurn } from './policy/policy'
 import { buildPromptEnvelope } from './policy/untrusted'
 import { IMPLEMENTER_PROMPT_VERSION, IMPLEMENTER_SYSTEM_POLICY } from './prompts/implementer-system.v1'
 import { REVIEWER_PROMPT_VERSION, REVIEWER_SYSTEM_POLICY } from './prompts/reviewer-system.v1'
-import { applyTurnState, baseEvent, record } from './runner-context'
+import { applyTurnState, baseEvent, nextWaitId, record } from './runner-context'
 import type { RunnerContext } from './runner-types'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -143,6 +144,14 @@ async function rejectTurn(
     costUsd: number
   }
 ): Promise<void> {
+  // Landing on WAITING_HUMAN opens a *named* block. The human authorization that
+  // releases it must name this id, so an approval given for an earlier gate
+  // cannot silently clear this one.
+  const wait: WaitDescriptor | null =
+    args.nextState === 'WAITING_HUMAN'
+      ? { id: nextWaitId(ctx), blocking_reason: args.reason }
+      : null
+
   ctx.run = {
     ...ctx.run,
     current_round: args.round,
@@ -159,6 +168,7 @@ async function rejectTurn(
     input_digest: args.request.input_digest,
     reason: args.reason,
     detail: args.detail,
+    wait,
     reserved_cost_usd: args.request.reserved_cost_usd,
     cost_usd: args.costUsd,
     next_state: nextState,
@@ -527,6 +537,9 @@ export async function runImplementerTurn(
     commit: delta.commit,
     pull_request: delta.pull_request,
     pull_request_opened_this_turn: delta.pull_request_opened_this_turn,
+    pushed_this_turn: delta.pushed_this_turn,
+    remote_head_delta: delta.remote_head_delta,
+    remote_facts_available: delta.remote_facts_available,
     sources: { workspace: delta.source, telemetry: result.ok.telemetry.source },
   }
 

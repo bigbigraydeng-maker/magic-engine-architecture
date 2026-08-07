@@ -64,12 +64,16 @@ export const SCAFFOLD_ALLOWED_TOOLS = [
   'Bash(npm run type-check*)',
   'Bash(git add*)',
   'Bash(git commit*)',
-  'Bash(git push origin*)',
   'Bash(gh pr create*)',
 ] as const
 
 export const SCAFFOLD_DISALLOWED_TOOLS = [
   'Bash(gh pr merge*)',
+  // Pushing at all, not merely force-pushing. `can_push` is `z.literal(false)`:
+  // publishing belongs to the deterministic publisher (spec §9b E1), which runs
+  // after policy has passed. A tool the policy layer cannot verify the effect of
+  // is not a tool this work package hands out.
+  'Bash(git push*)',
   'Bash(git push --force*)',
   'Bash(git push -f*)',
   'Bash(npx supabase*)',
@@ -101,7 +105,7 @@ export function createScaffoldAuthorization(args: {
         'CLAUDE.md',
       ],
       can_commit: true,
-      can_push: true,
+      can_push: false,
       can_open_draft_pr: true,
       can_merge: false,
       allowed_tools: [...SCAFFOLD_ALLOWED_TOOLS],

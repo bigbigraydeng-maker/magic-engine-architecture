@@ -8,7 +8,7 @@
 
 import { committedSpend, computeBudgetLedger } from './domain/budget'
 import { assertTransition } from './domain/state-machine'
-import type { LedgerEvent, RunState, StopReason } from './domain/schema'
+import type { LedgerEvent, RunState, StopReason, WaitDescriptor } from './domain/schema'
 import { LEDGER_SCHEMA_VERSION } from './domain/schema'
 import type { RunnerContext, RunnerDeps } from './runner-types'
 
@@ -43,14 +43,39 @@ export function baseEvent(ctx: RunnerContext): {
  * run, a kill switch, a budget stop, a human resume. Turn-driven transitions ride
  * on the turn event itself (see `applyTurnState`).
  */
-export async function transitionTo(ctx: RunnerContext, to: RunState, reason: string): Promise<void> {
+export async function transitionTo(
+  ctx: RunnerContext,
+  to: RunState,
+  reason: string,
+  options?: { wait?: WaitDescriptor; consumedWaitId?: string }
+): Promise<void> {
   const from = ctx.run.state
   // A no-op transition is not an error. It happens when a second dispatch hits the
   // same guard that parked the run, and it must not throw.
   if (from === to) return
   assertTransition(from, to)
   ctx.run = { ...ctx.run, state: to, updated_at: ctx.clock.now().toISOString() }
-  await record(ctx, { ...baseEvent(ctx), event: 'state_changed', from, to, reason })
+  await record(ctx, {
+    ...baseEvent(ctx),
+    event: 'state_changed',
+    from,
+    to,
+    reason,
+    // Every arrival at WAITING_HUMAN opens a named wait; every departure names
+    // the wait it consumed. See domain/state-machine.ts.
+    wait: options?.wait ?? null,
+    consumed_wait_id: options?.consumedWaitId ?? null,
+  })
+}
+
+/** Deterministic id for the next wait on this run, derived from the ledger. */
+export function nextWaitId(ctx: RunnerContext): string {
+  const opened = ctx.events.filter(
+    (event) =>
+      (event.event === 'state_changed' && event.wait !== null) ||
+      (event.event === 'turn_rejected' && event.wait !== null)
+  ).length
+  return `wait-${ctx.run.run_id}-${opened + 1}`
 }
 
 /** Validates and applies a turn-driven transition without emitting its own event. */

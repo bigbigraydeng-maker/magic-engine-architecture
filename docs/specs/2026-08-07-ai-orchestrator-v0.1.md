@@ -29,7 +29,7 @@
 | **预留式预算**（先扣后打，硬顶） | 事后对账式的软上限 |
 | 真 provider **安全骨架**（缺 secret 即 fail closed） | 读写任何真实 API key |
 | manual-only workflow（默认关） | merge / deploy / migration |
-| 374 个测试 + 只读 CI + dry-run 证据 | 改任何 Magic Engine 业务代码 |
+| 431 个测试 + 只读 CI + dry-run 证据 | 改任何 Magic Engine 业务代码 |
 
 ---
 
@@ -63,8 +63,10 @@ READY ──► GPT_TURN ◄──────────► CLAUDE_TURN
 
 两条硬性质，各有专门测试：
 
-1. **`WAITING_HUMAN` 不会自己醒。** 只有账本里出现一条「run_id 匹配 + 作者在白名单 + 未过期」的
-   `human_authorization` 事件才能出来。重跑 workflow 不行，等待也不行。
+1. **`WAITING_HUMAN` 不会自己醒，而且一次授权只开一道门。** 每次进入 WAITING_HUMAN 都会开一个带
+   唯一 `wait_id` 的「等待」，授权必须**指名这个 wait_id**、**写在它之后**、来自白名单作者、未过期，
+   且 `grants` 覆盖这次的 `blocking_reason`。离开时记录 `consumed_wait_id`，所以同一张批条用不了第二次 ——
+   下一次违规会开一个**没人批准过的新 wait_id**。
 2. **终态没有出边。** 停掉的 run 不能被再次 dispatch 唤醒。
 
 ### Verdict → 下一状态
@@ -113,12 +115,25 @@ Verdict 六值见上表。Reviewer 与 Implementer 的输出各有独立 schema
 
 | 事实 | 来自哪 | 绝不来自 |
 |---|---|---|
-| `files_changed` | `git diff --name-only <base>...HEAD` **+ `git status --porcelain`**，或 GitHub PR file list | 模型输出 |
+| `files_changed` | `git diff --name-status <base>...HEAD` **+ `git status --porcelain`** + `git hash-object`，或 **完整分页的** GitHub PR file list | 模型输出 |
+| `pushed_this_turn` | 前后两次 `git rev-parse @{upstream}` 的差 | 模型输出 |
 | `commit` / `branch` | `git rev-parse HEAD` / `--abbrev-ref`，或 GitHub PR head | 模型输出 |
 | `pull_request` | `GET /repos/…/pulls/{n}` | 模型输出 |
 | `tools_used` | provider 执行日志（Claude Code Action 的 execution log / API tool_calls） | 模型输出 |
 
 为什么连 `git status` 也要读：**agent 改了文件但不 commit，文件照样改了**，只看 `diff base...HEAD` 会报告「什么都没动」。
+
+**PR 文件列表必须走完所有分页。** 之前只取 `per_page=100` 的第一页，于是一个 120 文件的 PR
+只报 100 个，而 inspector 把这个截断列表当权威事实交给 policy —— 排在第 101 位的受保护文件
+**根本不会被看见**。截断比失败更糟：policy 分不出「短列表」和「完整列表」。
+所以现在任一页失败、超过页数上限、超过文件数上限，一律抛异常，**永远不返回更短的数组**；
+重复文件保留首次出现（顺序稳定，且不会被后页的副本覆盖）；读了几页几个文件写进 `source` 当审计证据。
+
+**push 是远端动了，不是 HEAD 动了。** 之前 `can_push: false` 写在授权里而没有任何代码读它，
+事实层只记 HEAD 有没有移动 —— 而本地 commit 也会移动 HEAD。现在前后各读一次 tracked upstream，
+差异即 `pushed_this_turn`。`can_push` 已经降成 `z.literal(false)`（跟 `can_merge` 一样不是配置项），
+所以**任何**远端移动都是违规；读不到远端 → `REMOTE_FACTS_UNAVAILABLE` → 停（「没看见」和「没法看」不是一回事）。
+发布这件事属于 Enable 阶段的 deterministic publisher（§9b E1）。
 
 ### 每轮取快照做差，不是从 main 起算整条分支
 
@@ -248,12 +263,28 @@ GPT 的要求是「证明最多一个真实调用被接受，或明确记录无�
 `input_digest = sha256(system prompt + user prompt)`。
 对象键在 hash 前做稳定排序，否则同一个 turn 在两个进程里会算出两个 key。
 
-### 锁
+### 锁：唯一真正的排他来自 GitHub Actions，不是账本
 
-- GitHub Actions `concurrency: me2-orchestrator-issue-<n>`，`cancel-in-progress: false`；
-- 账本内租约（`src/domain/lease.ts`）：`lease_acquired` / `lease_released`，带 `expires_at`；
-- **stale lock recovery**：过期租约可被接管，接管时记录 `took_over_from`，不静默；
-- 同一 holder 重跑自己 = 续租，不是抢锁。
+**之前这一节把账本租约当成锁写，那是错的。** 追加一条 Issue 评论不是 compare-and-set：
+两个 runner 同时读到空账本，都会算出 `acquired: true`，都追加 `lease_acquired`，然后都去付费调用。
+事后检测只能把重复花费记下来 —— 钱已经花了。
+
+现在的分工：
+
+| 机制 | 负责什么 |
+|---|---|
+| **GitHub Actions `concurrency`** | **真正的排他。** 在两个进程启动之前由 GitHub 强制，这是唯一能强制的地方 |
+| `policy/exclusivity.ts` | 要求**证明**这份排他覆盖本 Issue，拿不到证明就一次调用都不发 |
+| 账本租约（`domain/lease.ts`） | 审计轨迹（谁持有过）+ 崩溃持有者的过期回收。**不是锁** |
+
+证明的形式：workflow 把自己的 `concurrency.group` 原样导出成 `ME2_CONCURRENCY_GROUP`，
+runner 校验 `GITHUB_ACTIONS === 'true'` · `GITHUB_RUN_ID` 存在 · 该 group **恰好等于**本 Issue 的组名。
+本地跑、组名对不上、workflow 忘了写 `concurrency` —— 三种情况全部 fail closed。
+`workflow-supply-chain.test.ts` 断言 workflow 里那两处表达式逐字相同。
+
+**租约携带 fencing token（`lease_id`）**：`lease_released` 只有在 lock_key + holder + lease_id
+三者全对时才关闭当前租约。之前只比 lock_key，于是「A 过期 → B 接管 → A 醒来写 release」会把
+**B 的**租约释放掉，让第三个 runner 以为锁空着。
 
 > 为什么不上数据库：MVP 每次运行只有个位数轮次、每轮一条评论，而 Issue 账本还额外满足一个更重要的性质 ——
 > **PM 不用登录任何后台就能看见全过程**。真到了 Issue 账本撑不住的时候，最小替代是一张 `orchestrator_runs` 表，
@@ -592,7 +623,7 @@ tool allowlist 真的被 Action 尊重 · 输出符合 schema。
 
 ## 10. 测试
 
-`npx vitest run tools/ai-orchestrator` —— **374 passed / 0 failed**，全部 mock，零网络、零费用。
+`npx vitest run tools/ai-orchestrator` —— **431 passed / 0 failed**，全部 mock，零网络、零费用。
 
 | Issue #860 要求 | 覆盖位置 |
 |---|---|

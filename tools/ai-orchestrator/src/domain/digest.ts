@@ -40,3 +40,14 @@ export function turnIdempotencyKey(args: {
 }): string {
   return digest([args.runId, args.round, args.actor, args.inputDigest]).slice(0, 32)
 }
+
+/**
+ * Sequence-derived identifiers.
+ *
+ * Deterministic on purpose: derived from what the ledger already contains rather
+ * than from a clock or a random source, so a re-read of the same ledger produces
+ * the same ids and the tests can assert on them.
+ */
+export function nextSequencedId(prefix: string, existing: number): string {
+  return `${prefix}-${existing + 1}`
+}

@@ -16,7 +16,7 @@ from `src/`, touches no database, and sees no customer data.
 npx vitest run tools/ai-orchestrator
 ```
 
-382 tests, all against mock providers. No network, no credentials, no spend.
+431 tests, all against mock providers. No network, no credentials, no spend.
 The dry-run test prints a preflight report showing every guard it evaluated and
 what it *would* do next.
 
@@ -58,7 +58,7 @@ src/adapters/     github · openai · claude · workspace (git · GitHub PR) · 
 src/config/       the concrete scaffold configuration
 src/runner.ts     preflight and the loop        src/turn-executor.ts  one turn, end to end
 src/runner-types.ts  shared types               src/runner-context.ts ledger writes and transitions
-tests/            382 tests
+tests/            431 tests
 ```
 
 ## The five things worth knowing
@@ -85,9 +85,20 @@ re-dispatched workflow reads the same Issue comments, lands on the same state, a
 does not repeat work. A turn event carries the state it moved the run to, so a
 crash cannot land between "the turn happened" and "the run moved on".
 
-**`WAITING_HUMAN` never resumes on its own.** It takes a `human_authorization`
-event from an allowlisted login, naming this run, not yet expired. Re-running the
-workflow does nothing. That is the point.
+**`WAITING_HUMAN` never resumes on its own, and one approval opens one door.**
+Every arrival at WAITING_HUMAN opens a wait with a unique id; an authorization
+must name that id, be written after it, come from an allowlisted login, be
+unexpired, and grant the specific reason the run is blocked on. Leaving records
+the wait it consumed, so the same approval cannot clear the next block — which is
+what it used to do, silently, several rounds later.
+
+**Exclusion is GitHub's, not the ledger's.** Appending an Issue comment is not a
+compare-and-set: two runners reading an idle ledger both conclude they hold the
+lease and both pay for a call. The real exclusion is GitHub Actions
+`concurrency`, enforced before either process starts, so the runner demands proof
+that it covers this Issue and refuses to spend anything without it. The ledger
+lease is an audit trail and a stale-holder recovery, and carries a fencing token
+so a late release cannot free somebody else's lease.
 
 **Money is committed before the call, at a price the provider quotes.** The
 adapter computes the worst case from its own price table — estimated input tokens,
@@ -119,6 +130,9 @@ maximum instead of to our own timeout. Both real adapters currently declare
 | self-report does not match the record | — | `WAITING_HUMAN` |
 | no usable execution telemetry | — | `WAITING_HUMAN` |
 | control-plane file touched or drifted | — | `WAITING_HUMAN` |
+| no verified exclusive-run context | — | `WAITING_HUMAN`, zero calls |
+| the tracked remote ref moved (a push) | — | `WAITING_HUMAN` |
+| the remote could not be read | — | `WAITING_HUMAN` (fail closed) |
 | authorization expired | 6 h | `WAITING_HUMAN` |
 
 Every one of these is checked *before* anything is spent or written.

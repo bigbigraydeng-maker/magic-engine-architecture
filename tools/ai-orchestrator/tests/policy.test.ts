@@ -49,6 +49,9 @@ function facts(overrides: Partial<AuthoritativeTurnFacts> = {}): AuthoritativeTu
     commit: null,
     pull_request: null,
     pull_request_opened_this_turn: false,
+    pushed_this_turn: false,
+    remote_head_delta: null,
+    remote_facts_available: true,
     sources: { workspace: 'git:diff+status+hash-object', telemetry: 'mock:execution-log' },
     ...overrides,
   }
@@ -454,7 +457,7 @@ describe('evaluateImplementerTurn runs on authoritative facts', () => {
   it('rejects a commit that exists when committing is not authorized', () => {
     const readOnly = {
       ...authorization,
-      scope: { ...authorization.scope, can_commit: false, can_push: false },
+      scope: { ...authorization.scope, can_commit: false },
     }
     expect(
       evaluateImplementerTurn(readOnly, facts({ commit: { sha: 'abc123', branch: 'x' } }))

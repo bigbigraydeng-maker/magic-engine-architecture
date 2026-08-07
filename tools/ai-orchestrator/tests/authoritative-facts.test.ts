@@ -29,6 +29,13 @@ import {
   diffWorkspaceStates,
 } from '../src/adapters/workspace/inspector'
 import { TELEMETRY_UNAVAILABLE } from '../src/adapters/provider-types'
+import { workPackageScopeSchema } from '../src/domain/schema'
+import { enforceToolUse } from '../src/policy/policy'
+import {
+  SCAFFOLD_ALLOWED_TOOLS,
+  SCAFFOLD_DISALLOWED_TOOLS,
+  createScaffoldAuthorization,
+} from '../src/config/scaffold-config'
 import { runOrchestration } from '../src/runner'
 import {
   FIXED_NOW,
@@ -45,6 +52,12 @@ function rejection(result: Awaited<ReturnType<typeof runOrchestration>>) {
 }
 
 const OTHER_IN_SCOPE = 'docs/specs/second-file.md'
+
+const SCAFFOLD_AUTH = createScaffoldAuthorization({
+  workPackageId: 'wp-860',
+  now: FIXED_NOW,
+  authorizationSource: 'issue#860',
+})
 
 describe('a turn is judged on its own delta, not the whole branch', () => {
   it('does not blame round 2 for the files round 1 changed', async () => {
@@ -141,7 +154,7 @@ describe('a turn is judged on its own delta, not the whole branch', () => {
       ...h.input,
       authorization: {
         ...h.authorization,
-        scope: { ...h.authorization.scope, can_commit: false, can_push: false },
+        scope: { ...h.authorization.scope, can_commit: false },
       },
     }
 
@@ -167,7 +180,7 @@ describe('a turn is judged on its own delta, not the whole branch', () => {
       ...h.input,
       authorization: {
         ...h.authorization,
-        scope: { ...h.authorization.scope, can_commit: false, can_push: false },
+        scope: { ...h.authorization.scope, can_commit: false },
       },
     }
 
@@ -552,7 +565,7 @@ describe('GitHub PR inspector', () => {
       'docs/specs/b.md': 'blob-b',
     })
     expect(state.pull_request).toMatchObject({ number: 861, merged: false })
-    expect(state.source).toBe('github:pr-files')
+    expect(state.source).toBe('github:pr-files(pages=1,files=2)')
   })
 
   it('prefers GitHub once a PR exists and the local view before then', () => {
@@ -560,5 +573,189 @@ describe('GitHub PR inspector', () => {
     const local = new StaticWorkspaceInspector([workspaceState()])
     expect(selectInspector({ prNumber: null, github, local }).name).toBe('static')
     expect(selectInspector({ prNumber: 861, github, local }).name).toBe('github-pr')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pushing: a capability nothing could verify, so it is not a capability
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('a push is the remote moving, not HEAD moving', () => {
+  it('stops the run when the tracked remote ref changed during the turn', async () => {
+    // The defect: `can_push: false` was in the authorization and nothing read it.
+    // The facts only recorded whether HEAD moved, which a local commit does too.
+    const h = makeHarness({
+      runOverrides: { mode: 'IMPLEMENT' },
+      implementerScript: [{ output: implementerOutput() }],
+      workspace: [
+        workspaceState({ remote: { ref: 'origin/claude/x', head_sha: 'r1' }, file_fingerprints: {} }),
+        workspaceState({
+          remote: { ref: 'origin/claude/x', head_sha: 'r2' },
+          file_fingerprints: fingerprints([IN_SCOPE_FILE]),
+        }),
+      ],
+    })
+
+    const result = await runOrchestration(h.input, h.deps)
+
+    expect(result.run.state).toBe('WAITING_HUMAN')
+    const rejected = rejection(result)
+    expect(rejected && 'detail' in rejected && rejected.detail).toContain('PUSH_NOT_AUTHORIZED')
+    expect(rejected && 'detail' in rejected && rejected.detail).toContain(
+      'origin/claude/x: r1 -> r2'
+    )
+  })
+
+  it('does not mistake a local commit for a push', async () => {
+    // HEAD moves, the remote does not. Committing locally is allowed; publishing
+    // is not. Conflating them would make the scaffold unusable or unsafe.
+    const h = makeHarness({
+      runOverrides: { mode: 'IMPLEMENT' },
+      implementerScript: [
+        {
+          output: implementerOutput({
+            commit_evidence: { branch: 'claude/x', commit_sha: 'c2', pr_number: null },
+          }),
+        },
+      ],
+      reviewerScript: [{ output: reviewerOutput({ verdict: 'WAITING_HUMAN', human_question: 'ok?' }) }],
+      workspace: [
+        workspaceState({ head_sha: 'c1', remote: { ref: 'origin/claude/x', head_sha: 'r1' }, file_fingerprints: {} }),
+        workspaceState({
+          head_sha: 'c2',
+          remote: { ref: 'origin/claude/x', head_sha: 'r1' },
+          file_fingerprints: fingerprints([IN_SCOPE_FILE]),
+        }),
+      ],
+    })
+
+    const result = await runOrchestration(h.input, h.deps)
+
+    expect(rejection(result)).toBeUndefined()
+    const completed = result.appended.find(
+      (event) => event.event === 'turn_completed' && event.actor === 'claude_implementer'
+    )
+    expect(completed && 'authoritative' in completed && completed.authoritative?.pushed_this_turn).toBe(false)
+    expect(completed && 'authoritative' in completed && completed.authoritative?.commit?.sha).toBe('c2')
+  })
+
+  it('fails closed when the remote cannot be read at all', async () => {
+    // "We did not see a push" and "we could not look" are different answers, and
+    // only one of them is a pass.
+    const h = makeHarness({
+      runOverrides: { mode: 'IMPLEMENT' },
+      implementerScript: [{ output: implementerOutput() }],
+      workspace: [
+        workspaceState({ remote: null, remote_readable: false, file_fingerprints: {} }),
+        workspaceState({
+          remote: null,
+          remote_readable: false,
+          file_fingerprints: fingerprints([IN_SCOPE_FILE]),
+        }),
+      ],
+    })
+
+    const result = await runOrchestration(h.input, h.deps)
+
+    expect(result.run.state).toBe('WAITING_HUMAN')
+    const rejected = rejection(result)
+    expect(rejected && 'detail' in rejected && rejected.detail).toContain('REMOTE_FACTS_UNAVAILABLE')
+  })
+
+  it('treats "no upstream configured" as nothing to push to, not as unknown', async () => {
+    const h = makeHarness({
+      runOverrides: { mode: 'IMPLEMENT' },
+      implementerScript: [{ output: implementerOutput() }],
+      reviewerScript: [{ output: reviewerOutput({ verdict: 'WAITING_HUMAN', human_question: 'ok?' }) }],
+      workspace: [
+        workspaceState({ remote: null, remote_readable: true, file_fingerprints: {} }),
+        workspaceState({ remote: null, remote_readable: true, file_fingerprints: fingerprints([IN_SCOPE_FILE]) }),
+      ],
+    })
+
+    expect(rejection(await runOrchestration(h.input, h.deps))).toBeUndefined()
+  })
+
+  it('cannot be granted: can_push is not a settable field', () => {
+    const parsed = workPackageScopeSchema.safeParse({
+      ...SCAFFOLD_AUTH.scope,
+      can_push: true,
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  it('hands out no push tool, and forbids force push explicitly', () => {
+    expect(SCAFFOLD_ALLOWED_TOOLS.some((tool) => tool.includes('git push'))).toBe(false)
+    expect(SCAFFOLD_DISALLOWED_TOOLS).toContain('Bash(git push*)')
+    expect(SCAFFOLD_DISALLOWED_TOOLS).toContain('Bash(git push --force*)')
+
+    // And the tool check enforces it, not just the list's existence.
+    for (const attempt of [
+      'Bash(git push origin claude/x)',
+      'Bash(git push --force origin main)',
+      'Bash(git push -f)',
+    ]) {
+      expect(enforceToolUse(SCAFFOLD_AUTH.scope, [attempt])).toMatchObject({
+        allowed: false,
+        code: 'TOOL_NOT_ALLOWED',
+      })
+    }
+  })
+})
+
+describe('git inspector reads the remote', () => {
+  function runnerFor(outputs: Record<string, string>, failing: string[] = []) {
+    return async (command: string, args: readonly string[]) => {
+      const key = `${command} ${args.join(' ')}`
+      if (failing.includes(key)) throw new Error(`${key} failed`)
+      return outputs[key] ?? ''
+    }
+  }
+
+  const base = {
+    'git diff --name-status origin/main...HEAD': '',
+    'git status --porcelain': '',
+    'git rev-parse HEAD': 'abc\n',
+    'git rev-parse --abbrev-ref HEAD': 'claude/x\n',
+  }
+
+  it('reports the tracked upstream and its head', async () => {
+    const inspector = new GitWorkspaceInspector({
+      baseRef: 'origin/main',
+      run: runnerFor({
+        ...base,
+        'git rev-parse --abbrev-ref --symbolic-full-name @{upstream}': 'origin/claude/x\n',
+        'git rev-parse origin/claude/x': 'r1\n',
+      }),
+    })
+
+    const state = await inspector.capture()
+    expect(state.remote).toEqual({ ref: 'origin/claude/x', head_sha: 'r1' })
+    expect(state.remote_readable).toBe(true)
+  })
+
+  it('reports no upstream as readable-but-absent', async () => {
+    const inspector = new GitWorkspaceInspector({
+      baseRef: 'origin/main',
+      run: runnerFor(base, ['git rev-parse --abbrev-ref --symbolic-full-name @{upstream}']),
+    })
+
+    const state = await inspector.capture()
+    expect(state.remote).toBeNull()
+    expect(state.remote_readable).toBe(true)
+  })
+
+  it('reports an unreadable remote as unreadable, not as absent', async () => {
+    const inspector = new GitWorkspaceInspector({
+      baseRef: 'origin/main',
+      run: runnerFor(
+        { ...base, 'git rev-parse --abbrev-ref --symbolic-full-name @{upstream}': 'origin/claude/x\n' },
+        ['git rev-parse origin/claude/x']
+      ),
+    })
+
+    const state = await inspector.capture()
+    expect(state.remote).toBeNull()
+    expect(state.remote_readable).toBe(false)
   })
 })

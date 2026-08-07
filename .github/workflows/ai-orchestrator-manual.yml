@@ -67,6 +67,14 @@ permissions:
 
 # One run per Issue, and never cancel a run mid-turn — a cancelled runner would
 # leave its lease behind for the stale-lock path to clean up.
+#
+# This is the ONLY real exclusion in the system. Appending an Issue comment is not
+# a compare-and-set, so the ledger lease cannot stop two runners from both paying
+# for a call; GitHub enforcing this group before either job starts can. The job
+# exports the same expression as ME2_CONCURRENCY_GROUP and the runner refuses to
+# call a provider unless it matches the Issue it is working on — so a workflow
+# that drops this block, or serialises on something else, fails closed instead of
+# silently racing. `workflow-supply-chain.test.ts` asserts the two stay identical.
 concurrency:
   group: me2-orchestrator-issue-${{ inputs.issue_number }}
   cancel-in-progress: false
@@ -115,6 +123,10 @@ jobs:
           echo "No model credentials present — as expected for the scaffold."
 
       - name: Run orchestrator tests (mock providers only)
+        env:
+          # Must equal `concurrency.group` above, verbatim. The runner compares it
+          # against the Issue it is working on and refuses to spend without a match.
+          ME2_CONCURRENCY_GROUP: me2-orchestrator-issue-${{ inputs.issue_number }}
         run: npx vitest run tools/ai-orchestrator --reporter=verbose
 
       - name: Dry-run preflight report

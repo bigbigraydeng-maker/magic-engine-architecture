@@ -32,13 +32,27 @@ export interface PullRequestFile {
   sha: string
 }
 
+/**
+ * A *complete* file list, plus the evidence that it is complete.
+ *
+ * The page count is not decoration: a caller treating a truncated list as
+ * authoritative would let a protected file sitting at position 101 pass the path
+ * policy unseen. Anything short of every page is an error, never a partial
+ * answer, so there is no shape in this type that can express "some of the files".
+ */
+export interface PullRequestFileList {
+  files: readonly PullRequestFile[]
+  pages_read: number
+  file_count: number
+}
+
 export interface GitHubClient {
   readonly name: string
   listIssueComments(issueNumber: number): Promise<readonly IssueComment[]>
   listIssueLabels(issueNumber: number): Promise<readonly string[]>
   createIssueComment(issueNumber: number, body: string): Promise<IssueComment>
-  /** Authoritative changed-file list for a PR, with blob ids. */
-  listPullRequestFiles(prNumber: number): Promise<readonly PullRequestFile[]>
+  /** Complete changed-file list for a PR, with blob ids. Throws rather than truncate. */
+  listPullRequestFiles(prNumber: number): Promise<PullRequestFileList>
   /** Authoritative commit/branch/merge facts for a PR. */
   getPullRequest(prNumber: number): Promise<PullRequestFacts | null>
 }

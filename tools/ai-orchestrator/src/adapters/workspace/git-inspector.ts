@@ -17,7 +17,7 @@
 import { PROTECTED_PATHS } from '../../policy/protected-paths'
 import type { ControlPlaneIntegrityChecker } from '../../policy/protected-paths'
 import { DELETED_FINGERPRINT } from './inspector'
-import type { PullRequestFacts, WorkspaceInspector, WorkspaceState } from './inspector'
+import type { PullRequestFacts, RemoteFacts, WorkspaceInspector, WorkspaceState } from './inspector'
 
 export type CommandRunner = (command: string, args: readonly string[]) => Promise<string>
 
@@ -108,6 +108,8 @@ export class GitWorkspaceInspector implements WorkspaceInspector {
       run('git', ['rev-parse', '--abbrev-ref', 'HEAD']),
     ])
 
+    const remote = await this.readRemote()
+
     const changed = new Map<string, boolean>()
     for (const entry of parseNameStatus(committed)) changed.set(entry.path, entry.deleted)
     // The working tree wins: a path committed as deleted but recreated on disk is
@@ -120,9 +122,41 @@ export class GitWorkspaceInspector implements WorkspaceInspector {
     return {
       head_sha: sha.trim() || null,
       branch: branch.trim() || null,
+      remote: remote.facts,
+      remote_readable: remote.readable,
       file_fingerprints: fingerprints,
       pull_request: pullRequest,
       source: 'git:diff+status+hash-object',
+    }
+  }
+
+  /**
+   * Where the tracked remote ref stands right now.
+   *
+   * `@{upstream}` is the branch's own tracking ref, so this reports what the
+   * branch actually publishes to rather than a guess. Two outcomes are different
+   * and must stay different: no upstream configured (`facts: null`, readable) is
+   * "nothing could have been pushed there"; a failed read (`readable: false`) is
+   * "we do not know", and the policy layer refuses to proceed on that.
+   */
+  private async readRemote(): Promise<{ facts: RemoteFacts | null; readable: boolean }> {
+    const { run } = this.options
+    let ref: string
+    try {
+      ref = (await run('git', ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])).trim()
+    } catch {
+      // No upstream configured. Nothing is tracked, so nothing can be pushed to it.
+      return { facts: null, readable: true }
+    }
+
+    if (!ref) return { facts: null, readable: true }
+
+    try {
+      const sha = (await run('git', ['rev-parse', ref])).trim()
+      if (!sha) return { facts: null, readable: false }
+      return { facts: { ref, head_sha: sha }, readable: true }
+    } catch {
+      return { facts: null, readable: false }
     }
   }
 

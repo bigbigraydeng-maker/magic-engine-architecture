@@ -11,9 +11,21 @@
 
 import { LedgerWriteBlockedError, MissingSecretError } from '../../domain/errors'
 import type { RepositoryRef } from '../../domain/schema'
-import type { GitHubClient, IssueComment, PullRequestFacts, PullRequestFile } from './client'
+import type {
+  GitHubClient,
+  IssueComment,
+  PullRequestFacts,
+  PullRequestFile,
+  PullRequestFileList,
+} from './client'
 
 export const GITHUB_TOKEN_SECRET = 'GITHUB_TOKEN'
+
+/** GitHub's maximum. Fewer per page means more round trips, not more safety. */
+export const PR_FILES_PER_PAGE = 100
+/** Bounds the walk. Hitting either bound is an error, not a truncation. */
+export const MAX_PR_FILE_PAGES = 30
+export const MAX_PR_FILES = 3000
 
 export interface RestGitHubClientConfig {
   token: string | undefined
@@ -106,11 +118,51 @@ export class RestGitHubClient implements GitHubClient {
     return raw.map((label) => label.name)
   }
 
-  async listPullRequestFiles(prNumber: number): Promise<readonly PullRequestFile[]> {
-    const raw = await this.request<RawPullRequestFile[]>(
-      `${this.repoPath}/pulls/${prNumber}/files?per_page=100`
+  /**
+   * Walks every page.
+   *
+   * The first version asked for `per_page=100` and stopped, which silently
+   * capped the authoritative file list at 100 entries: a protected or
+   * out-of-scope file at position 101 never reached `evaluateImplementerTurn`.
+   *
+   * Every failure mode here is an exception, never a shorter list. A partial
+   * answer that looks complete is worse than no answer, because the policy layer
+   * cannot tell the difference.
+   */
+  async listPullRequestFiles(prNumber: number): Promise<PullRequestFileList> {
+    const files: PullRequestFile[] = []
+    const seen = new Set<string>()
+    let page = 1
+
+    for (; page <= MAX_PR_FILE_PAGES; page += 1) {
+      const raw = await this.request<RawPullRequestFile[]>(
+        `${this.repoPath}/pulls/${prNumber}/files?per_page=${PR_FILES_PER_PAGE}&page=${page}`
+      )
+
+      for (const file of raw) {
+        // First occurrence wins, so the order is stable and a duplicate cannot
+        // overwrite the entry the policy layer already reasoned about.
+        if (seen.has(file.filename)) continue
+        seen.add(file.filename)
+        files.push({ filename: file.filename, sha: file.sha })
+      }
+
+      if (raw.length < PR_FILES_PER_PAGE) {
+        return { files, pages_read: page, file_count: files.length }
+      }
+
+      if (files.length > MAX_PR_FILES) {
+        throw new Error(
+          `pull request #${prNumber} has more than ${MAX_PR_FILES} changed files; ` +
+            'refusing to treat a capped list as the authoritative record'
+        )
+      }
+    }
+
+    throw new Error(
+      `pull request #${prNumber} exceeded ${MAX_PR_FILE_PAGES} pages of files; ` +
+        'refusing to treat a truncated list as the authoritative record'
     )
-    return raw.map((file) => ({ filename: file.filename, sha: file.sha }))
   }
 
   async getPullRequest(prNumber: number): Promise<PullRequestFacts | null> {

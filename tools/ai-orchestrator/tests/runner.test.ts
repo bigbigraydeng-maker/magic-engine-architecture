@@ -339,6 +339,7 @@ describe('concurrency', () => {
       event: 'lease_acquired',
       lock_key: 'bigbigraydeng-maker/magic-engine#860',
       holder: 'gha-run-first',
+      lease_id: 'lease-1',
       expires_at: new Date(FIXED_NOW.getTime() + 600_000).toISOString(),
       took_over_from: null,
     }

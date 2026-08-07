@@ -107,15 +107,61 @@ export interface ResumeDecision {
   resumed: boolean
   state: RunState
   reason: string
+  /** The wait this resume consumes. Recorded so it cannot be consumed twice. */
+  consumed_wait_id: string | null
+}
+
+export interface OpenWait {
+  wait_id: string
+  blocking_reason: string
+  /** Position in the event stream. An authorization written earlier is not one. */
+  index: number
+}
+
+/**
+ * The block the run is currently sitting on, or null if it is not blocked.
+ *
+ * Every transition into WAITING_HUMAN opens a wait with a fresh id; the
+ * transition out names the wait it consumed. That pairing is what stops one
+ * approval from covering every future gate — which is exactly what happened when
+ * `resumeFromWaitingHuman` simply took the run's most recent authorization.
+ */
+export function currentOpenWait(events: readonly LedgerEvent[], runId: string): OpenWait | null {
+  let open: OpenWait | null = null
+
+  events.forEach((event, index) => {
+    if (event.run_id !== runId) return
+
+    if (event.event === 'turn_rejected' && event.next_state === 'WAITING_HUMAN' && event.wait) {
+      open = { wait_id: event.wait.id, blocking_reason: event.wait.blocking_reason, index }
+      return
+    }
+
+    if (event.event === 'state_changed') {
+      if (event.to === 'WAITING_HUMAN' && event.wait) {
+        open = { wait_id: event.wait.id, blocking_reason: event.wait.blocking_reason, index }
+        return
+      }
+      if (event.from === 'WAITING_HUMAN' && event.consumed_wait_id) {
+        if (open && open.wait_id === event.consumed_wait_id) open = null
+      }
+    }
+  })
+
+  return open
 }
 
 /**
  * The only door out of WAITING_HUMAN.
  *
- * A run resumes only when the ledger contains a `human_authorization` event that
- * (a) names this run, (b) came from an allowlisted human, and (c) has not
- * expired. Absent all three, the run stays parked — re-running the workflow does
- * nothing, which is the point.
+ * A run resumes only when the ledger holds a `human_authorization` that
+ * (a) names the wait the run is actually sitting on, (b) was written after that
+ * wait opened, (c) comes from an allowlisted human, (d) has not expired, and
+ * (e) grants the specific reason that blocked it.
+ *
+ * The wait-id binding is the important one. Without it a still-valid approval
+ * from round 2 silently released a *different* block in round 5, so a run could
+ * pass a risk gate nobody had looked at.
  */
 export function resumeFromWaitingHuman(args: {
   runId: string
@@ -124,34 +170,62 @@ export function resumeFromWaitingHuman(args: {
   now: Date
 }): ResumeDecision {
   const { runId, events, allowedAuthorizers, now } = args
-
-  const authorizations = events.filter(
-    (event): event is Extract<LedgerEvent, { event: 'human_authorization' }> =>
-      event.event === 'human_authorization' && event.run_id === runId
-  )
-
-  if (authorizations.length === 0) {
-    return { resumed: false, state: 'WAITING_HUMAN', reason: 'no human authorization event found' }
+  const parked: Omit<ResumeDecision, 'reason'> = {
+    resumed: false,
+    state: 'WAITING_HUMAN',
+    consumed_wait_id: null,
   }
 
-  const latest = authorizations[authorizations.length - 1]
+  const open = currentOpenWait(events, runId)
+  if (!open) {
+    return { ...parked, reason: 'no open wait to authorize (or it was already consumed)' }
+  }
 
-  if (!allowedAuthorizers.includes(latest.authorized_by)) {
+  const candidates = events
+    .map((event, index) => ({ event, index }))
+    .filter(
+      (entry): entry is { event: Extract<LedgerEvent, { event: 'human_authorization' }>; index: number } =>
+        entry.event.event === 'human_authorization' && entry.event.run_id === runId
+    )
+
+  const forThisWait = candidates.filter((entry) => entry.event.wait_id === open.wait_id)
+  if (forThisWait.length === 0) {
+    return { ...parked, reason: `no authorization names wait "${open.wait_id}"` }
+  }
+
+  // An approval written before the block existed cannot be approval of it.
+  const afterTheWait = forThisWait.filter((entry) => entry.index > open.index)
+  if (afterTheWait.length === 0) {
     return {
-      resumed: false,
-      state: 'WAITING_HUMAN',
-      reason: `authorizer "${latest.authorized_by}" is not on the allowlist`,
+      ...parked,
+      reason: `authorization for wait "${open.wait_id}" predates the wait itself`,
     }
   }
 
+  const latest = afterTheWait[afterTheWait.length - 1].event
+
+  if (!allowedAuthorizers.includes(latest.authorized_by)) {
+    return { ...parked, reason: `authorizer "${latest.authorized_by}" is not on the allowlist` }
+  }
+
   if (Date.parse(latest.expires_at) <= now.getTime()) {
-    return { resumed: false, state: 'WAITING_HUMAN', reason: 'authorization has expired' }
+    return { ...parked, reason: 'authorization has expired' }
+  }
+
+  if (!latest.grants.includes(open.blocking_reason)) {
+    return {
+      ...parked,
+      reason:
+        `authorization grants [${latest.grants.join(', ')}] but this run is blocked on ` +
+        `"${open.blocking_reason}"`,
+    }
   }
 
   assertTransition('WAITING_HUMAN', latest.resume_state)
   return {
     resumed: true,
     state: latest.resume_state,
-    reason: `resumed by ${latest.authorized_by}`,
+    reason: `resumed by ${latest.authorized_by} for wait "${open.wait_id}"`,
+    consumed_wait_id: open.wait_id,
   }
 }

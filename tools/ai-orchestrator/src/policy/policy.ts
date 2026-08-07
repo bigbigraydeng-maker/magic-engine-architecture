@@ -223,6 +223,8 @@ export type PolicyViolationCode =
   | 'PROHIBITED_OPERATION_MISSING'
   | 'SELF_MODIFYING_SCOPE'
   | 'PR_ALREADY_MERGED'
+  | 'PUSH_NOT_AUTHORIZED'
+  | 'REMOTE_FACTS_UNAVAILABLE'
 
 export type PolicyDecision =
   | { allowed: true }
@@ -347,6 +349,27 @@ export function evaluateImplementerTurn(
 
   const violation = checks.find((decision) => !decision.allowed)
   if (violation) return violation
+
+  // Pushing is never authorized in the scaffold (`can_push` is `z.literal(false)`),
+  // so any movement of the tracked remote ref is a breach — and it has to be
+  // established from the remote itself, because a local commit moves HEAD without
+  // publishing anything. Not being able to read the remote is a refusal, not a pass:
+  // "we did not see a push" and "we could not look" are different answers.
+  if (!facts.remote_facts_available) {
+    return deny(
+      'REMOTE_FACTS_UNAVAILABLE',
+      'the remote ref could not be read, so a push cannot be ruled out'
+    )
+  }
+
+  if (facts.pushed_this_turn) {
+    const delta = facts.remote_head_delta
+    return deny(
+      'PUSH_NOT_AUTHORIZED',
+      'the tracked remote ref moved during this turn; pushing is never authorized here',
+      delta ? [`${delta.ref}: ${delta.before_sha ?? 'none'} -> ${delta.after_sha ?? 'none'}`] : []
+    )
+  }
 
   // Write permissions run against the delta only. Round 2 must not be blamed for
   // round 1's commit, and "the repository has a HEAD" is not evidence that this

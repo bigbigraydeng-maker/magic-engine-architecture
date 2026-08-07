@@ -33,7 +33,19 @@ export function fixedClock(now: Date = FIXED_NOW): Clock {
   return { now: () => now }
 }
 
-export const ENABLED_ENV = { ME2_ORCHESTRATOR_ENABLED: 'true' } as const
+/**
+ * A run that is both enabled and provably exclusive.
+ *
+ * The exclusivity half is not decoration: without a verified GitHub Actions
+ * concurrency context the runner refuses to call a provider at all, because the
+ * Issue-comment lease cannot stop two runners from both paying for a call.
+ */
+export const ENABLED_ENV = {
+  ME2_ORCHESTRATOR_ENABLED: 'true',
+  GITHUB_ACTIONS: 'true',
+  GITHUB_RUN_ID: '1234567',
+  ME2_CONCURRENCY_GROUP: 'me2-orchestrator-issue-860',
+} as const
 
 /** The in-scope file every default fixture pretends to have changed. */
 export const IN_SCOPE_FILE = 'docs/specs/2026-08-07-ai-orchestrator-v0.1.md'
@@ -83,6 +95,8 @@ export function workspaceState(overrides: Partial<WorkspaceState> = {}): Workspa
   return {
     head_sha: 'base000',
     branch: 'claude/x',
+    remote: { ref: 'origin/claude/x', head_sha: 'remote000' },
+    remote_readable: true,
     file_fingerprints: {},
     pull_request: null,
     source: 'git:diff+status+hash-object',

@@ -21,20 +21,26 @@ export class GitHubPullRequestInspector implements WorkspaceInspector {
   ) {}
 
   async capture(): Promise<WorkspaceState> {
-    const [files, pr] = await Promise.all([
+    // Both throw rather than return a partial view. A capture that silently
+    // dropped page two would hand the policy layer a file list it believes is
+    // complete, which is the failure this whole module exists to avoid.
+    const [listing, pr] = await Promise.all([
       this.client.listPullRequestFiles(this.prNumber),
       this.client.getPullRequest(this.prNumber),
     ])
 
     const fingerprints: Record<string, string> = {}
-    for (const file of files) fingerprints[file.filename] = file.sha
+    for (const file of listing.files) fingerprints[file.filename] = file.sha
 
     return {
       head_sha: pr?.head_sha ?? null,
       branch: pr?.head_ref ?? null,
       file_fingerprints: fingerprints,
       pull_request: pr,
-      source: 'github:pr-files',
+      // Auditable: how many pages were walked and how many files came back.
+      source: `github:pr-files(pages=${listing.pages_read},files=${listing.file_count})`,
+      remote: pr ? { ref: pr.head_ref, head_sha: pr.head_sha } : null,
+      remote_readable: true,
     }
   }
 }

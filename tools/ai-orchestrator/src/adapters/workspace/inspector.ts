@@ -30,9 +30,27 @@ export interface PullRequestFacts {
 /** Marks a path that exists in the change set because it was deleted. */
 export const DELETED_FINGERPRINT = '<deleted>'
 
+export interface RemoteFacts {
+  /** The tracked remote ref, e.g. `origin/claude/x`. */
+  ref: string
+  head_sha: string
+}
+
 export interface WorkspaceState {
   head_sha: string | null
   branch: string | null
+  /**
+   * Where the remote ref stood at this instant, or null when the branch tracks
+   * nothing. Comparing two captures is the only way to know whether a push
+   * happened — HEAD moving proves a commit, not a publication.
+   */
+  remote: RemoteFacts | null
+  /**
+   * False when the remote could not be read at all. Distinct from `remote: null`
+   * ("nothing is tracked, so nothing could have been pushed there") and treated
+   * as fail-closed by the policy layer: not knowing is not the same as nothing.
+   */
+  remote_readable: boolean
   /**
    * Every path differing from the run's base ref at this instant — committed,
    * staged and unstaged alike — mapped to a content fingerprint.
@@ -63,6 +81,15 @@ export interface TurnDelta {
   pull_request: PullRequestFacts | null
   /** True only when the pull request did not exist before this turn. */
   pull_request_opened_this_turn: boolean
+  /** True when the tracked remote ref moved during this turn — i.e. a push. */
+  pushed_this_turn: boolean
+  remote_head_delta: {
+    ref: string
+    before_sha: string | null
+    after_sha: string | null
+  } | null
+  /** False when either capture could not read the remote. Policy fails closed. */
+  remote_facts_available: boolean
   source: string
 }
 
@@ -79,12 +106,24 @@ export function diffWorkspaceStates(before: WorkspaceState, after: WorkspaceStat
 
   const headMoved = before.head_sha !== after.head_sha && after.head_sha !== null
 
+  const remoteReadable = before.remote_readable && after.remote_readable
+  const beforeRemote = before.remote?.head_sha ?? null
+  const afterRemote = after.remote?.head_sha ?? null
+  const remoteRef = after.remote?.ref ?? before.remote?.ref ?? null
+
   return {
     files_changed: changed.sort(),
     cumulative_files_changed: Object.keys(after.file_fingerprints).sort(),
     commit: headMoved && after.branch ? { sha: after.head_sha as string, branch: after.branch } : null,
     pull_request: after.pull_request,
     pull_request_opened_this_turn: before.pull_request === null && after.pull_request !== null,
+    // A push is the remote moving. A local commit is HEAD moving. Conflating the
+    // two is what let `can_push` look enforced while nothing checked it.
+    pushed_this_turn: remoteReadable && beforeRemote !== afterRemote,
+    remote_head_delta: remoteRef
+      ? { ref: remoteRef, before_sha: beforeRemote, after_sha: afterRemote }
+      : null,
+    remote_facts_available: remoteReadable,
     source: after.source,
   }
 }
@@ -108,5 +147,13 @@ export class StaticWorkspaceInspector implements WorkspaceInspector {
 }
 
 export function emptyWorkspaceState(source = 'static:empty'): WorkspaceState {
-  return { head_sha: null, branch: null, file_fingerprints: {}, pull_request: null, source }
+  return {
+    head_sha: null,
+    branch: null,
+    remote: null,
+    remote_readable: true,
+    file_fingerprints: {},
+    pull_request: null,
+    source,
+  }
 }

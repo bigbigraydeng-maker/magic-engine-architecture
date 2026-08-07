@@ -31,6 +31,7 @@ import type {
   PolicyDecision,
   TimingInvariantResult,
 } from './policy/policy'
+import type { ExclusivityResult } from './policy/exclusivity'
 import type { ControlPlaneIntegrityChecker } from './policy/protected-paths'
 import type { UntrustedBlock } from './policy/untrusted'
 
@@ -75,6 +76,8 @@ export interface RunnerInput {
 
 export interface PreflightReport {
   kill_switch: KillSwitchResult
+  /** Proof that something is actually serialising this run. See policy/exclusivity.ts. */
+  exclusivity: ExclusivityResult
   timing_invariant: TimingInvariantResult
   authorization: PolicyDecision
   side_effect_class: PolicyDecision

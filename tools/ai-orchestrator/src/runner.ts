@@ -30,6 +30,7 @@ import { foldRun } from './domain/fold'
 import { evaluateLeaseAcquisition, leaseKeyFor } from './domain/lease'
 import { actorForState, initialTurnState, isTerminal, resumeFromWaitingHuman } from './domain/state-machine'
 import type { RunState, StopReason } from './domain/schema'
+import { verifyExclusiveRunContext } from './policy/exclusivity'
 import {
   checkBudget,
   checkTimingInvariant,
@@ -37,7 +38,7 @@ import {
   enforceSideEffectClass,
   evaluateKillSwitch,
 } from './policy/policy'
-import { baseEvent, finish, log, record, transitionTo } from './runner-context'
+import { baseEvent, finish, log, nextWaitId, record, transitionTo } from './runner-context'
 import { systemClock } from './runner-types'
 import type { PreflightReport, RunnerContext, RunnerDeps, RunnerInput, RunnerResult } from './runner-types'
 import {
@@ -92,6 +93,7 @@ export async function runOrchestration(
 
   const preflight: PreflightReport = {
     kill_switch: { stopped: false, reason: null },
+    exclusivity: { ok: false, reason: 'not evaluated' },
     timing_invariant: { ok: true, message: 'not evaluated' },
     authorization: { allowed: true },
     side_effect_class: { allowed: true },
@@ -139,7 +141,28 @@ export async function runOrchestration(
     return done(`kill switch: ${preflight.kill_switch.reason}`)
   }
 
-  // 2. Timing and budget invariants. A configuration that could leak duplicate
+  // 2. Exclusive ownership. The Issue-comment lease is an audit record, not a
+  //    lock — two runners reading an idle ledger both conclude they hold it, and
+  //    both pay for a call. The real exclusion is GitHub Actions `concurrency`,
+  //    enforced before either process starts, so the runner demands proof that it
+  //    applies to this Issue and refuses to spend anything without it.
+  //
+  //    Dry-run is exempt: it calls no provider and writes nothing, so there is
+  //    nothing for two of them to race over.
+  preflight.exclusivity = verifyExclusiveRunContext({
+    env: input.env,
+    issueNumber: ctx.run.issue_number,
+  })
+  if (!input.dryRun && !preflight.exclusivity.ok) {
+    const message = `no verified exclusive ownership: ${preflight.exclusivity.reason}`
+    await transitionTo(ctx, 'WAITING_HUMAN', message, {
+      wait: { id: nextWaitId(ctx), blocking_reason: 'no_exclusive_ownership' },
+    })
+    await finish(ctx, 'no_exclusive_ownership')
+    return done(message)
+  }
+
+  // 3. Timing and budget invariants. A configuration that could leak duplicate
   //    spend never gets to make its first call.
   // Use the longer of the two providers' in-flight windows: whichever adapter
   // cannot prove it cancels sets the bar for the whole run.
@@ -150,17 +173,21 @@ export async function runOrchestration(
   preflight.timing_invariant = checkTimingInvariant(input.limits, input.leaseTtlMs, worstInFlightMs)
   if (!preflight.timing_invariant.ok) {
     if (!input.dryRun) {
-      await transitionTo(ctx, 'WAITING_HUMAN', preflight.timing_invariant.message)
+      await transitionTo(ctx, 'WAITING_HUMAN', preflight.timing_invariant.message, {
+        wait: { id: nextWaitId(ctx), blocking_reason: 'configuration_invalid' },
+      })
       await finish(ctx, 'configuration_invalid')
     }
     return done(preflight.timing_invariant.message)
   }
 
-  // 3. Authorization window and side-effect class.
+  // 4. Authorization window and side-effect class.
   preflight.authorization = enforceAuthorizationWindow(input.authorization, clock.now())
   if (!preflight.authorization.allowed) {
     if (!input.dryRun) {
-      await transitionTo(ctx, 'WAITING_HUMAN', preflight.authorization.message)
+      await transitionTo(ctx, 'WAITING_HUMAN', preflight.authorization.message, {
+        wait: { id: nextWaitId(ctx), blocking_reason: 'authorization_expired' },
+      })
       await finish(ctx, 'authorization_expired')
     }
     return done(preflight.authorization.message)
@@ -172,27 +199,37 @@ export async function runOrchestration(
   )
   if (!preflight.side_effect_class.allowed) {
     if (!input.dryRun) {
-      await transitionTo(ctx, 'WAITING_HUMAN', preflight.side_effect_class.message)
+      await transitionTo(ctx, 'WAITING_HUMAN', preflight.side_effect_class.message, {
+        wait: { id: nextWaitId(ctx), blocking_reason: 'policy_violation' },
+      })
       await finish(ctx, 'policy_violation')
     }
     return done(preflight.side_effect_class.message)
   }
 
-  // 4. Lease — only one runner may hold a turn for this Issue.
+  // 5. Lease — the audit trail of who held the run, and stale detection. NOT the
+  //    exclusion mechanism; see step 2.
   const lockKey = leaseKeyFor(ctx.run.repository, ctx.run.issue_number)
+  // Fencing token: unique per acquisition, so a release written by a holder whose
+  // lease already lapsed cannot free the lease that replaced it.
+  const priorAcquisitions = ctx.events.filter(
+    (event) => event.event === 'lease_acquired' && event.lock_key === lockKey
+  ).length
+  const leaseId = `lease-${lockKey}-${priorAcquisitions + 1}`
   const lease = evaluateLeaseAcquisition({
     events: ctx.events,
     lockKey,
     holder: input.holder,
     now: clock.now(),
     ttlMs: input.leaseTtlMs,
+    leaseId,
   })
   preflight.lease = lease
   if (!lease.acquired) {
     return done(`lease held by ${lease.held_by} until ${lease.expires_at}`)
   }
 
-  // 5. WAITING_HUMAN never resumes on its own.
+  // 6. WAITING_HUMAN never resumes on its own.
   if (ctx.run.state === 'WAITING_HUMAN') {
     const resume = resumeFromWaitingHuman({
       runId: ctx.run.run_id,
@@ -201,8 +238,13 @@ export async function runOrchestration(
       now: clock.now(),
     })
     if (!resume.resumed) return done(`waiting for human: ${resume.reason}`)
-    if (!input.dryRun) await transitionTo(ctx, resume.state, resume.reason)
-    else ctx.run = { ...ctx.run, state: resume.state }
+    if (!input.dryRun) {
+      // Recording the consumed wait id is what makes an authorization one-shot:
+      // the wait closes, and the next block opens a new id nobody has approved.
+      await transitionTo(ctx, resume.state, resume.reason, {
+        consumedWaitId: resume.consumed_wait_id ?? undefined,
+      })
+    } else ctx.run = { ...ctx.run, state: resume.state }
   }
 
   if (ctx.run.state === 'READY') {
@@ -238,7 +280,7 @@ export async function runOrchestration(
     preflight.budget = checkBudget(ctx.run, input.limits, ctx.budget, clock.now())
   }
 
-  // 6. Dry-run stops here: preflight complete, nothing called, nothing written.
+  // 7. Dry-run stops here: preflight complete, nothing called, nothing written.
   if (input.dryRun) {
     return done('dry run: preflight complete, no provider called and no comment written')
   }
@@ -248,6 +290,7 @@ export async function runOrchestration(
     event: 'lease_acquired',
     lock_key: lockKey,
     holder: input.holder,
+    lease_id: lease.lease_id,
     expires_at: lease.expires_at,
     took_over_from: lease.took_over_from,
   })
@@ -259,6 +302,7 @@ export async function runOrchestration(
     event: 'lease_released',
     lock_key: lockKey,
     holder: input.holder,
+    lease_id: lease.lease_id,
   })
 
   return done(reason)
@@ -297,7 +341,9 @@ async function executeLoop(ctx: RunnerContext): Promise<string> {
     })
     if (!quote.ok) {
       const message = `cannot price this turn (${quote.reason}): ${quote.message}`
-      await transitionTo(ctx, 'WAITING_HUMAN', message)
+      await transitionTo(ctx, 'WAITING_HUMAN', message, {
+        wait: { id: nextWaitId(ctx), blocking_reason: 'cost_estimate_unavailable' },
+      })
       await finish(ctx, 'cost_estimate_unavailable')
       return message
     }
