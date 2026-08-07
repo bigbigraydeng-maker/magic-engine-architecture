@@ -112,6 +112,41 @@ ALTER TABLE flywheel_outcomes
   ADD CONSTRAINT flywheel_outcomes_evaluator_key_check
   CHECK (evaluator_key IS NULL OR evaluator_key IN ('flywheel_metrics', 'gsc_snapshots'));
 
+-- ── 1b. Evaluator ownership: one authoritative writer per metric family ──────
+--
+-- The natural key deliberately excludes evaluator_key, which only holds up if a
+-- key can never be produced by two evaluators. Otherwise "which answer is true"
+-- collapses into "which writer ran last" — and that is reachable: the cron route
+-- takes ?window_days= for pass 1 while pass 2 uses 28, so ?window_days=28 plus an
+-- SEO action whose expected_metric is a GSC metric lands both writers on one key.
+--
+-- So ownership is assigned per metric family and enforced here, not just agreed
+-- in code: seo.gsc.* belongs to the GSC bridge (it reads Search Console's own
+-- snapshots), everything else to the flywheel_metrics evaluator. A non-owner's
+-- row is rejected by the database.
+--
+-- Verified against production before writing this: 0 of 194 rows violate it.
+--
+-- ⚠️ This expression is mirrored in src/lib/flywheel/attribution/outcome-identity.ts
+-- (METRIC_FAMILY_OWNERS). A test asserts the two agree — change them together.
+
+ALTER TABLE flywheel_outcomes
+  DROP CONSTRAINT IF EXISTS flywheel_outcomes_evaluator_owns_metric;
+
+ALTER TABLE flywheel_outcomes
+  ADD CONSTRAINT flywheel_outcomes_evaluator_owns_metric
+  CHECK (
+    evaluator_key IS NULL
+    OR evaluator_key = CASE
+         WHEN metric_key LIKE 'seo.gsc.%' THEN 'gsc_snapshots'
+         ELSE 'flywheel_metrics'
+       END
+  );
+
+COMMENT ON CONSTRAINT flywheel_outcomes_evaluator_owns_metric ON flywheel_outcomes IS
+  'Exactly one evaluator is authoritative per metric family, so a natural key is never '
+  'contested and execution order cannot decide the verdict. See Issue #859.';
+
 COMMENT ON COLUMN flywheel_outcomes.evaluator_key IS
   'Which attribution pipeline computed this row: flywheel_metrics (attribution/job.ts) '
   'or gsc_snapshots (attribution/gsc-bridge.ts). Not part of the natural key — it exists '

@@ -53,7 +53,7 @@ describe('POST /api/cron/attribution', () => {
   // ── Happy path ──────────────────────────────────────────────────────────────
 
   it('calls runAttributionJob with default options and returns result', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 5, written: 3, skipped: 2 })
+    mockRunAttributionJob.mockResolvedValue({ processed: 5, written: 3, skipped: 2, deferred: 0 })
 
     const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
     expect(res.status).toBe(200)
@@ -70,8 +70,20 @@ describe('POST /api/cron/attribution', () => {
     })
   })
 
+  it('surfaces actions deferred to another evaluator in the response', async () => {
+    // Deferrals are normal routing, not failures — but they still have to be
+    // visible, otherwise "pass 1 wrote nothing today" looks like a gap.
+    mockRunAttributionJob.mockResolvedValue({ processed: 9, written: 4, skipped: 1, deferred: 4 })
+
+    const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.deferred).toBe(4)
+  })
+
   it('passes window_days query param to runAttributionJob', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 2, written: 2, skipped: 0 })
+    mockRunAttributionJob.mockResolvedValue({ processed: 2, written: 2, skipped: 0, deferred: 0 })
 
     const res = await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, '?window_days=30')
@@ -84,7 +96,7 @@ describe('POST /api/cron/attribution', () => {
   })
 
   it('passes client_id query param to runAttributionJob', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 1, skipped: 0 })
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 1, skipped: 0, deferred: 0 })
 
     const res = await POST(
       makeRequest(

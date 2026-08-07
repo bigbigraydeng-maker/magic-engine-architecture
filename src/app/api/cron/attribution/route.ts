@@ -35,6 +35,8 @@ export interface AttributionCronResponse {
   processed: number
   written: number
   skipped: number
+  /** Actions pass 1 handed to another evaluator because it does not own the metric. */
+  deferred?: number
   gsc?: {
     clients_processed: number
     outcomes_written: number
@@ -76,11 +78,11 @@ export async function POST(
   const cronRun = await startCronRun('attribution-cron')
 
   // ── Pass 1: flywheel_metrics-based attribution (existing) ──────────────────
-  let pass1Result = { processed: 0, written: 0, skipped: 0 }
+  let pass1Result = { processed: 0, written: 0, skipped: 0, deferred: 0 }
   try {
     pass1Result = await runAttributionJob({ windowDays, clientId })
     console.log(
-      `[attribution/cron] pass1 processed=${pass1Result.processed} written=${pass1Result.written} skipped=${pass1Result.skipped}`
+      `[attribution/cron] pass1 processed=${pass1Result.processed} written=${pass1Result.written} skipped=${pass1Result.skipped} deferred=${pass1Result.deferred}`
     )
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Internal server error'

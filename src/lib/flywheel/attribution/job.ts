@@ -14,7 +14,7 @@
 
 import { supabaseAdmin } from '../../supabase'
 import type { OutcomeVerdict } from '../adapters/types'
-import { OUTCOME_CONFLICT_TARGET, OUTCOME_EVALUATOR } from './outcome-identity'
+import { OUTCOME_CONFLICT_TARGET, OUTCOME_EVALUATOR, ownsMetric } from './outcome-identity'
 
 const DEFAULT_WINDOW_DAYS = 14
 
@@ -29,6 +29,13 @@ export interface AttributionJobResult {
   processed: number
   written: number
   skipped: number
+  /**
+   * Actions whose expected_metric belongs to another evaluator's metric family.
+   * Counted separately from `skipped` because nothing is wrong: the outcome is
+   * another writer's to produce. Surfaced so "this metric is being handled
+   * elsewhere" is visible in the cron summary instead of looking like a gap.
+   */
+  deferred: number
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -53,12 +60,21 @@ export async function runAttributionJob(
     throw new Error(`runAttributionJob: failed to fetch actions — ${actionsError.message}`)
   }
 
-  if (!actions?.length) return { processed: 0, written: 0, skipped: 0 }
+  if (!actions?.length) return { processed: 0, written: 0, skipped: 0, deferred: 0 }
 
   let written = 0
   let skipped = 0
+  let deferred = 0
 
   for (const action of actions) {
+    // Arbitration: an outcome belongs to whichever evaluator owns its metric
+    // family. Declining here — rather than writing and letting the last writer
+    // win — is what keeps execution order out of the answer. See Issue #859.
+    if (!ownsMetric(OUTCOME_EVALUATOR.FLYWHEEL_METRICS, action.expected_metric)) {
+      deferred++
+      continue
+    }
+
     try {
       const didWrite = await processAction(action as ActionRow, windowDays)
       if (didWrite) written++
@@ -70,7 +86,7 @@ export async function runAttributionJob(
     }
   }
 
-  return { processed: actions.length, written, skipped }
+  return { processed: actions.length, written, skipped, deferred }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

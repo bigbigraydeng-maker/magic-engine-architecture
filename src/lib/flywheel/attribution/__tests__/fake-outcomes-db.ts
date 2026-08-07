@@ -145,6 +145,16 @@ export class FakeOutcomesDb {
   }
 }
 
+/**
+ * The `flywheel_outcomes_evaluator_owns_metric` CHECK, transcribed from the
+ * migration SQL rather than imported from `outcome-identity.ts`. Reading the
+ * rule from the module it is meant to police would make the two agree by
+ * construction and prove nothing; a separate test ties this back to the SQL.
+ */
+function sqlMetricFamilyOwner(metricKey: string): string {
+  return metricKey.startsWith('seo.gsc.') ? 'gsc_snapshots' : 'flywheel_metrics'
+}
+
 function matches(row: Row, filters: Filter[]): boolean {
   return filters.every(f => {
     const actual = row[f.column]
@@ -343,6 +353,13 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
       return {
         message:
           'new row for relation "flywheel_outcomes" violates check constraint "flywheel_outcomes_evaluator_key_check"',
+      }
+    }
+
+    if (value !== sqlMetricFamilyOwner(String(row.metric_key))) {
+      return {
+        message:
+          'new row for relation "flywheel_outcomes" violates check constraint "flywheel_outcomes_evaluator_owns_metric"',
       }
     }
     return null

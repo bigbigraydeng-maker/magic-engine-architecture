@@ -116,19 +116,22 @@ describe('one action carries many metric rows', () => {
 
 describe('the same metric coexists at different windows', () => {
   it('a 14-day and a 28-day answer for one metric are two separate rows', async () => {
+    // Reachable through the manual route, which takes any window in 1..90 while
+    // the cron uses 28. Both answers come from the metric's owning evaluator —
+    // ownership decides *who* answers, the window decides *which question*.
     seedSeoAction()
-    seedFlywheelMetrics()
     seedGscSnapshots()
 
-    await runJob(14) // job.ts writes seo.gsc.clicks @ 14
-    await runBridge(28) // gsc-bridge writes seo.gsc.clicks @ 28 (plus two more)
+    await runBridge(14)
+    await runBridge(28)
 
     const clicksRows = db.outcomes().filter(r => r.metric_key === GSC_CLICKS)
     expect(clicksRows.map(r => r.window_days).sort()).toEqual([14, 28])
-    expect(clicksRows.map(r => r.evaluator_key).sort()).toEqual([
-      OUTCOME_EVALUATOR.FLYWHEEL_METRICS,
+    expect(clicksRows.map(r => r.evaluator_key)).toEqual([
+      OUTCOME_EVALUATOR.GSC_SNAPSHOTS,
       OUTCOME_EVALUATOR.GSC_SNAPSHOTS,
     ])
+    expect(clicksRows.map(r => r.id)).toHaveLength(2)
   })
 })
 
@@ -182,38 +185,71 @@ describe('writer coexistence', () => {
     expect(db.didDeleteFrom('flywheel_outcomes')).toBe(false)
   })
 
-  it('the GSC writer scopes its retire to its own evaluator and window', async () => {
-    // A page-scope action: the bridge writes page rows and retires the domain
-    // rows it previously owned — but must leave the other writer alone.
-    seedSeoAction({
-      action_type: 'cms_update_existing',
-      payload: { status: 'live', page_url: 'https://example.com/guide' },
-    })
-    seedFlywheelMetrics()
+  it('the GSC writer retires the domain rows it no longer produces', async () => {
+    // The action becomes page-scoped, so the bridge stops producing domain keys
+    // and must clear the ones it previously owned at that window.
+    seedSeoAction()
     seedGscSnapshots([{ page: 'https://example.com/guide', clicks: 40, impressions: 400, position: 18 }])
 
-    await runJob(14) // seo.gsc.clicks @ 14, evaluator = flywheel_metrics
-    await runBridge(28) // page rows @ 28 + retire of domain rows @ 28
+    await runBridge(28) // domain scope → 3 domain rows @ 28
+    expect(db.outcomes().map(r => r.metric_key).sort()).toEqual([
+      'seo.gsc.avg_position',
+      'seo.gsc.clicks',
+      'seo.gsc.impressions',
+    ])
 
-    const rows = db.outcomes()
-    const survivor = rows.find(
-      r => r.evaluator_key === OUTCOME_EVALUATOR.FLYWHEEL_METRICS,
-    )
+    // The page-upgrade PR merges: same action, now page-scoped.
+    const action = db.rowsOf('flywheel_actions')[0]
+    action.action_type = 'cms_update_existing'
+    action.payload = { status: 'live', page_url: 'https://example.com/guide' }
 
-    expect(survivor).toBeDefined()
-    expect(survivor?.metric_key).toBe(GSC_CLICKS)
-    expect(survivor?.window_days).toBe(14)
+    await runBridge(28)
 
-    // Only page-scope keys remain for the GSC evaluator.
-    const gscKeys = rows
-      .filter(r => r.evaluator_key === OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
-      .map(r => r.metric_key)
-      .sort()
-    expect(gscKeys).toEqual([
+    expect(db.outcomes().map(r => r.metric_key).sort()).toEqual([
       'seo.gsc.page_avg_position',
       'seo.gsc.page_clicks',
       'seo.gsc.page_impressions',
     ])
+  })
+
+  it('the retire is scoped to one window, so another window survives it', async () => {
+    // Reachable through the manual route: an operator runs GSC attribution at
+    // window 14, then the cron's page-scoped run at 28 retires domain keys. The
+    // 14-day answers are a different question and must not be swept up.
+    seedSeoAction()
+    seedGscSnapshots([{ page: 'https://example.com/guide', clicks: 40, impressions: 400, position: 18 }])
+
+    await runBridge(14) // 3 domain rows @ 14
+
+    const action = db.rowsOf('flywheel_actions')[0]
+    action.action_type = 'cms_update_existing'
+    action.payload = { status: 'live', page_url: 'https://example.com/guide' }
+
+    await runBridge(28) // 3 page rows @ 28, retires domain keys @ 28 only
+
+    const atFourteen = db.outcomes().filter(r => r.window_days === 14)
+    expect(atFourteen.map(r => r.metric_key).sort()).toEqual([
+      'seo.gsc.avg_position',
+      'seo.gsc.clicks',
+      'seo.gsc.impressions',
+    ])
+    expect(db.outcomes()).toHaveLength(6)
+  })
+
+  it('the retire query is scoped by action, evaluator, window and metric', async () => {
+    // The evaluator_key scope is now defence in depth rather than load-bearing:
+    // metric-family ownership means no other evaluator can hold a seo.gsc.* row
+    // in the first place. It stays so that moving a family to a third evaluator
+    // later cannot silently reopen the cross-writer delete. Asserted
+    // structurally because the behaviour it guards is no longer reachable.
+    seedSeoAction()
+    seedGscSnapshots([{ page: 'https://example.com/guide', clicks: 40, impressions: 400, position: 18 }])
+
+    const action = db.rowsOf('flywheel_actions')[0]
+    action.action_type = 'cms_update_existing'
+    action.payload = { status: 'live', page_url: 'https://example.com/guide' }
+
+    await runBridge(28)
 
     const retire = db.ops.find(o => o.table === 'flywheel_outcomes' && o.op === 'delete')
     expect(retire).toBeDefined()
@@ -223,29 +259,6 @@ describe('writer coexistence', () => {
       'metric_key',
       'window_days',
     ])
-  })
-
-  it('the GSC retire cannot remove another evaluator row that shares its window', async () => {
-    // Reachable today: the attribution cron accepts ?window_days=28, which makes
-    // the flywheel_metrics writer land seo.gsc.clicks at the very window the GSC
-    // writer retires from. Only the evaluator_key scope keeps them apart.
-    seedSeoAction({
-      action_type: 'cms_update_existing',
-      payload: { status: 'live', page_url: 'https://example.com/guide' },
-    })
-    seedFlywheelMetrics()
-    seedGscSnapshots([{ page: 'https://example.com/guide', clicks: 40, impressions: 400, position: 18 }])
-
-    await runJob(28) // seo.gsc.clicks @ 28, evaluator = flywheel_metrics
-    await runBridge(28) // page rows @ 28, retires domain keys @ 28
-
-    const survivor = db
-      .outcomes()
-      .find(r => r.evaluator_key === OUTCOME_EVALUATOR.FLYWHEEL_METRICS)
-
-    expect(survivor).toBeDefined()
-    expect(survivor?.metric_key).toBe(GSC_CLICKS)
-    expect(survivor?.window_days).toBe(28)
   })
 })
 

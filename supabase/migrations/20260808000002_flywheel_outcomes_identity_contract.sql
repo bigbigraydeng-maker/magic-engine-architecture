@@ -66,6 +66,20 @@ ALTER TABLE flywheel_outcomes
   ADD CONSTRAINT flywheel_outcomes_evaluator_key_check
   CHECK (evaluator_key IN ('flywheel_metrics', 'gsc_snapshots'));
 
+-- Same narrowing for the ownership rule: NULL is no longer reachable, so the
+-- escape hatch that let the pre-#859 writers through comes out.
+ALTER TABLE flywheel_outcomes
+  DROP CONSTRAINT IF EXISTS flywheel_outcomes_evaluator_owns_metric;
+
+ALTER TABLE flywheel_outcomes
+  ADD CONSTRAINT flywheel_outcomes_evaluator_owns_metric
+  CHECK (
+    evaluator_key = CASE
+      WHEN metric_key LIKE 'seo.gsc.%' THEN 'gsc_snapshots'
+      ELSE 'flywheel_metrics'
+    END
+  );
+
 COMMENT ON COLUMN flywheel_outcomes.evaluator_key IS
   'Which attribution pipeline computed this row: flywheel_metrics (attribution/job.ts) '
   'or gsc_snapshots (attribution/gsc-bridge.ts). Not part of the natural key — it exists '

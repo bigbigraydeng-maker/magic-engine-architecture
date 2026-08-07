@@ -24,6 +24,7 @@ import {
   GSC_EVALUATOR_METRIC_KEYS,
   OUTCOME_CONFLICT_TARGET,
   OUTCOME_EVALUATOR,
+  assertEvaluatorOwnsAll,
   resolveStaleEvaluatorKeys,
 } from './outcome-identity'
 import {
@@ -138,6 +139,13 @@ async function attributeAction(
       : buildOutcomeRows(action, baseline, after, windowDays)
 
   if (rows.length === 0) return 0
+
+  // Arbitration, from the owning side: this evaluator may only write metrics it
+  // is authoritative for. See Issue #859.
+  assertEvaluatorOwnsAll(
+    OUTCOME_EVALUATOR.GSC_SNAPSHOTS,
+    rows.map(row => row.metric_key as string),
+  )
 
   // Write current truth first. This used to be DELETE-then-INSERT, which meant a
   // failed insert left the action with no outcomes at all until the next

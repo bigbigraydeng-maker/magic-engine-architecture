@@ -137,7 +137,7 @@ describe('runAttributionJob', () => {
 
     const { runAttributionJob } = await import('../job')
     const result = await runAttributionJob()
-    expect(result).toEqual({ processed: 0, written: 0, skipped: 0 })
+    expect(result).toEqual({ processed: 0, written: 0, skipped: 0, deferred: 0 })
   })
 
   it('skips action when no baseline metric exists', async () => {
