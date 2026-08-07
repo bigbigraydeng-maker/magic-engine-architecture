@@ -35,6 +35,8 @@ const turnEvent: LedgerEvent = {
   output_digest: 'deadbeef',
   authoritative: null,
   self_report_mismatches: [],
+  handoff: null,
+  wait: null,
   next_state: 'CLAUDE_TURN',
 }
 

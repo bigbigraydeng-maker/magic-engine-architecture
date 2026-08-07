@@ -23,7 +23,7 @@ import {
   createScaffoldAuthorization,
   createScaffoldRun,
 } from '../src/config/scaffold-config'
-import type { OrchestrationRun, WorkPackageAuthorization } from '../src/domain/schema'
+import type { OrchestrationRun, RunMode, WorkPackageAuthorization } from '../src/domain/schema'
 import { StaticIntegrityChecker } from '../src/policy/protected-paths'
 import type { Clock, RunnerDeps, RunnerInput } from '../src/runner'
 
@@ -132,6 +132,23 @@ export function defaultCaptures(): WorkspaceState[] {
   ]
 }
 
+/**
+ * The default capture sequence for a run, given who takes the first turn.
+ *
+ * **Every** turn consumes two captures now, not only the implementer's: the
+ * runner snapshots the workspace around a reviewer turn too, because that is what
+ * proves the reviewer was read-only rather than merely described as read-only.
+ *
+ * So a reviewer-first fixture has to open with a quiet pair. A reviewer whose
+ * pair straddled the implementer's edit would look like it had written the file
+ * itself — which is precisely the violation the check exists to catch, and a
+ * fixture that trips it on every honest run is how a check gets deleted.
+ */
+export function defaultCapturesFor(mode: RunMode): WorkspaceState[] {
+  const quiet = workspaceState({ file_fingerprints: {} })
+  return mode === 'IMPLEMENT' ? defaultCaptures() : [quiet, quiet, ...defaultCaptures()]
+}
+
 export interface Harness {
   github: InMemoryGitHubClient
   reviewer: MockReviewerProvider
@@ -148,12 +165,19 @@ export function makeHarness(options?: {
   now?: Date
   dryRun?: boolean
   runOverrides?: Partial<OrchestrationRun>
+  /**
+   * Bends the signed grant. Its `max_rounds` and `cost_cap_usd` are hard ceilings
+   * alongside the run's and the deployment's, so a test that means to exercise a
+   * *different* ceiling has to widen this one or it will bind first.
+   */
+  authorizationOverrides?: Partial<WorkPackageAuthorization>
   inputOverrides?: Partial<RunnerInput>
   depsOverrides?: Partial<RunnerDeps>
   labels?: readonly string[]
   /**
-   * Successive workspace captures. The runner takes one before each implementer
-   * call and one after, so a single turn consumes two entries.
+   * Successive workspace captures. The runner takes one before **every** provider
+   * call and one after — reviewer turns included — so a single turn of either
+   * actor consumes two entries. See `defaultCapturesFor`.
    */
   workspace?: readonly WorkspaceState[]
   /** Protected paths the integrity checker finds drifted. */
@@ -168,11 +192,14 @@ export function makeHarness(options?: {
     options?.implementerScript ?? [{ output: implementerOutput() }]
   )
 
-  const authorization = createScaffoldAuthorization({
-    workPackageId: 'wp-860-scaffold',
-    now,
-    authorizationSource: 'github-issue#860',
-  })
+  const authorization: WorkPackageAuthorization = {
+    ...createScaffoldAuthorization({
+      workPackageId: 'wp-860-scaffold',
+      now,
+      authorizationSource: 'github-issue#860',
+    }),
+    ...options?.authorizationOverrides,
+  }
 
   const run: OrchestrationRun = {
     ...createScaffoldRun({
@@ -206,7 +233,7 @@ export function makeHarness(options?: {
     github,
     reviewer,
     implementer,
-    workspace: new StaticWorkspaceInspector(options?.workspace ?? defaultCaptures()),
+    workspace: new StaticWorkspaceInspector(options?.workspace ?? defaultCapturesFor(run.mode)),
     integrity: new StaticIntegrityChecker(options?.drift ?? []),
     clock: fixedClock(now),
     ...options?.depsOverrides,

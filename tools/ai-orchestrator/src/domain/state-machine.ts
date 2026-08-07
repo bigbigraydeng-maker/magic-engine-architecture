@@ -132,7 +132,15 @@ export function currentOpenWait(events: readonly LedgerEvent[], runId: string): 
   events.forEach((event, index) => {
     if (event.run_id !== runId) return
 
-    if (event.event === 'turn_rejected' && event.next_state === 'WAITING_HUMAN' && event.wait) {
+    // Both kinds of turn event can park the run. A reviewer that returns
+    // WAITING_HUMAN or STOP_POLICY_VIOLATION *completed* its turn — the block
+    // rides on `turn_completed`, and reading only `turn_rejected` here left that
+    // block invisible, so no authorization could ever name it.
+    if (
+      (event.event === 'turn_rejected' || event.event === 'turn_completed') &&
+      event.next_state === 'WAITING_HUMAN' &&
+      event.wait
+    ) {
       open = { wait_id: event.wait.id, blocking_reason: event.wait.blocking_reason, index }
       return
     }

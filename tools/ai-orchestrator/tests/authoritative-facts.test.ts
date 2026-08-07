@@ -73,13 +73,19 @@ describe('a turn is judged on its own delta, not the whole branch', () => {
         { output: reviewerOutput({ verdict: 'REQUEST_CHANGES' }) },
         { output: reviewerOutput({ verdict: 'WAITING_HUMAN', human_question: 'done?' }) },
       ],
+      // Every turn consumes a before/after pair, the reviewer's included — and the
+      // reviewer's pair has to be quiet or its own read-only check fires.
       workspace: [
-        // round 1: before / after
+        // round 1, implementer: before / after
         workspaceState({ file_fingerprints: {} }),
         workspaceState({ file_fingerprints: fingerprints([IN_SCOPE_FILE]) }),
-        // round 2: before / after — IN_SCOPE_FILE keeps its fingerprint
+        // round 2, reviewer: quiet
+        workspaceState({ file_fingerprints: fingerprints([IN_SCOPE_FILE]) }),
+        workspaceState({ file_fingerprints: fingerprints([IN_SCOPE_FILE]) }),
+        // round 3, implementer: before / after — IN_SCOPE_FILE keeps its fingerprint
         workspaceState({ file_fingerprints: fingerprints([IN_SCOPE_FILE]) }),
         workspaceState({ file_fingerprints: fingerprints([IN_SCOPE_FILE, OTHER_IN_SCOPE]) }),
+        // round 4, reviewer: quiet (the last entry repeats)
       ],
     })
 
@@ -116,8 +122,13 @@ describe('a turn is judged on its own delta, not the whole branch', () => {
         { output: reviewerOutput({ verdict: 'WAITING_HUMAN', human_question: 'done?' }) },
       ],
       workspace: [
+        // round 1, implementer
         workspaceState({ file_fingerprints: {} }),
         workspaceState({ file_fingerprints: fingerprints([IN_SCOPE_FILE], 'v1') }),
+        // round 2, reviewer: quiet
+        workspaceState({ file_fingerprints: fingerprints([IN_SCOPE_FILE], 'v1') }),
+        workspaceState({ file_fingerprints: fingerprints([IN_SCOPE_FILE], 'v1') }),
+        // round 3, implementer: same path, new content
         workspaceState({ file_fingerprints: fingerprints([IN_SCOPE_FILE], 'v1') }),
         workspaceState({ file_fingerprints: fingerprints([IN_SCOPE_FILE], 'v2') }),
       ],

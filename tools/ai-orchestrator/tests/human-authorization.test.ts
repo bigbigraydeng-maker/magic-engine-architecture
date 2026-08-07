@@ -23,8 +23,16 @@ import { decodeComment, renderEventComment } from '../src/adapters/github/ledger
 import { ALLOWED_AUTHORIZERS, TRUSTED_LEDGER_AUTHORS } from '../src/config/scaffold-config'
 import { currentOpenWait, resumeFromWaitingHuman } from '../src/domain/state-machine'
 import type { LedgerEvent } from '../src/domain/schema'
+import { SCAFFOLD_LIMITS } from '../src/config/scaffold-config'
 import { runOrchestration } from '../src/runner'
-import { FIXED_NOW, implementerOutput, makeHarness, reviewerOutput, workspaceState } from './helpers'
+import {
+  FIXED_NOW,
+  implementerOutput,
+  makeHarness,
+  quietCaptures,
+  reviewerOutput,
+  workspaceState,
+} from './helpers'
 
 const OWNER = ALLOWED_AUTHORIZERS[0]
 const BOT = TRUSTED_LEDGER_AUTHORS[0]
@@ -299,6 +307,172 @@ describe('end to end with the real scaffold author lists', () => {
     expect(result.run.state).toBe('WAITING_HUMAN')
     expect(h.reviewer.callCount).toBe(0)
     expect(result.preflight.ledger_rejected).toHaveLength(2)
+  })
+})
+
+/**
+ * The third defect of the same family, found later: a reviewer verdict of
+ * WAITING_HUMAN or STOP_POLICY_VIOLATION parks the run on a turn that
+ * **completed**, and `turn_completed` carried no wait descriptor. `currentOpenWait`
+ * only read `turn_rejected` and `state_changed`, so it reported "no open wait" —
+ * and since an authorization must name the wait it releases, there was nothing to
+ * name. The run was unreleasable by anyone, which is a worse failure than the
+ * over-broad approval this whole mechanism was built to prevent.
+ */
+describe('a reviewer verdict that parks the run can still be released', () => {
+  function parkedByVerdict(verdict: 'WAITING_HUMAN' | 'STOP_POLICY_VIOLATION') {
+    return makeHarness({
+      reviewerScript: [
+        { output: reviewerOutput({ verdict, human_question: 'Upgrade the plan?' }) },
+        { output: reviewerOutput({ verdict: 'APPROVED_FOR_NEXT_STAGE' }) },
+      ],
+      workspace: quietCaptures(),
+    })
+  }
+
+  it.each(['WAITING_HUMAN', 'STOP_POLICY_VIOLATION'] as const)(
+    'opens a named wait on a %s verdict',
+    async (verdict) => {
+      const h = parkedByVerdict(verdict)
+
+      const result = await runOrchestration(h.input, h.deps)
+
+      expect(result.run.state).toBe('WAITING_HUMAN')
+      const completed = result.appended.find((event) => event.event === 'turn_completed')
+      expect(completed && 'wait' in completed && completed.wait?.id).toBeTruthy()
+      expect(completed && 'wait' in completed && completed.wait?.blocking_reason).toBe(
+        verdict === 'STOP_POLICY_VIOLATION'
+          ? 'reviewer_stop_policy_violation'
+          : 'reviewer_waiting_human'
+      )
+    }
+  )
+
+  it('reports that wait as the open one, so an approval has something to name', async () => {
+    const h = parkedByVerdict('WAITING_HUMAN')
+    const result = await runOrchestration(h.input, h.deps)
+
+    const open = currentOpenWait(result.appended, RUN_ID)
+    expect(open).not.toBeNull()
+    expect(open?.blocking_reason).toBe('reviewer_waiting_human')
+  })
+
+  it('resumes end to end once the owner approves that specific wait', async () => {
+    const h = parkedByVerdict('WAITING_HUMAN')
+    const parked = await runOrchestration(h.input, h.deps)
+
+    const completed = parked.appended.find((event) => event.event === 'turn_completed')
+    const waitId = completed && 'wait' in completed ? (completed.wait?.id as string) : ''
+    expect(waitId).toBeTruthy()
+
+    h.github.seedComment({
+      author_login: OWNER,
+      body: renderEventComment(
+        authorization({
+          wait_id: waitId,
+          grants: ['reviewer_waiting_human'],
+          resume_state: 'GPT_TURN',
+        })
+      ),
+      created_at: FIXED_NOW.toISOString(),
+    })
+
+    const resumed = await runOrchestration(h.input, h.deps)
+
+    expect(
+      resumed.appended.some(
+        (event) => event.event === 'state_changed' && event.consumed_wait_id === waitId
+      )
+    ).toBe(true)
+    expect(resumed.run.state).toBe('APPROVED_FOR_HUMAN_MERGE')
+  })
+
+  it('still refuses an approval that names a different wait — the negative control', async () => {
+    const h = parkedByVerdict('WAITING_HUMAN')
+    await runOrchestration(h.input, h.deps)
+
+    h.github.seedComment({
+      author_login: OWNER,
+      body: renderEventComment(
+        authorization({
+          wait_id: 'wait-someone-elses',
+          grants: ['reviewer_waiting_human'],
+          resume_state: 'GPT_TURN',
+        })
+      ),
+      created_at: FIXED_NOW.toISOString(),
+    })
+
+    const result = await runOrchestration(h.input, h.deps)
+    expect(result.run.state).toBe('WAITING_HUMAN')
+    expect(result.stopped_because).toContain('no authorization names wait')
+  })
+
+  it('still refuses an approval that does not grant the blocking reason', async () => {
+    const h = parkedByVerdict('STOP_POLICY_VIOLATION')
+    const parked = await runOrchestration(h.input, h.deps)
+    const completed = parked.appended.find((event) => event.event === 'turn_completed')
+    const waitId = completed && 'wait' in completed ? (completed.wait?.id as string) : ''
+
+    h.github.seedComment({
+      author_login: OWNER,
+      body: renderEventComment(
+        authorization({ wait_id: waitId, grants: ['carry_on'], resume_state: 'GPT_TURN' })
+      ),
+      created_at: FIXED_NOW.toISOString(),
+    })
+
+    const result = await runOrchestration(h.input, h.deps)
+    expect(result.run.state).toBe('WAITING_HUMAN')
+    expect(result.stopped_because).toContain('reviewer_stop_policy_violation')
+  })
+
+  it('gives the second reviewer block a fresh id, not the one already approved', async () => {
+    // The dangerous case, and the reason `nextWaitId` has to count reviewer waits
+    // too: two *consecutive* blocks that both arrive on `turn_completed`. If the
+    // counter cannot see the first one, the second is minted with the same id —
+    // and an id is exactly what an approval names. One signature, two gates.
+    const h = makeHarness({
+      reviewerScript: [
+        { output: reviewerOutput({ verdict: 'WAITING_HUMAN', human_question: 'plan ok?' }) },
+        { output: reviewerOutput({ verdict: 'STOP_POLICY_VIOLATION', summary: 'envelope breached' }) },
+      ],
+      workspace: quietCaptures(),
+    })
+
+    const first = await runOrchestration(h.input, h.deps)
+    const firstCompleted = first.appended.find((event) => event.event === 'turn_completed')
+    const firstWaitId = firstCompleted && 'wait' in firstCompleted ? firstCompleted.wait?.id : null
+    expect(firstWaitId).toBeTruthy()
+
+    // The owner clears block one, and only block one.
+    h.github.seedComment({
+      author_login: OWNER,
+      body: renderEventComment(
+        authorization({
+          wait_id: firstWaitId as string,
+          grants: ['reviewer_waiting_human'],
+          resume_state: 'GPT_TURN',
+        })
+      ),
+      created_at: FIXED_NOW.toISOString(),
+    })
+
+    const second = await runOrchestration(h.input, h.deps)
+    const secondCompleted = second.appended.find((event) => event.event === 'turn_completed')
+    const secondWaitId = secondCompleted && 'wait' in secondCompleted ? secondCompleted.wait?.id : null
+
+    expect(second.run.state).toBe('WAITING_HUMAN')
+    expect(secondWaitId).toBeTruthy()
+    expect(secondWaitId).not.toBe(firstWaitId)
+    expect(secondCompleted && 'wait' in secondCompleted && secondCompleted.wait?.blocking_reason).toBe(
+      'reviewer_stop_policy_violation'
+    )
+
+    // And a third dispatch stays parked: nothing has approved the new block.
+    const third = await runOrchestration(h.input, h.deps)
+    expect(third.run.state).toBe('WAITING_HUMAN')
+    expect(third.stopped_because).toContain('waiting for human')
   })
 })
 

@@ -63,6 +63,21 @@ export function currentLease(
       if (closesTheLiveLease) held = null
       // Otherwise: a late release from a holder that no longer owns anything.
       // Ignored on purpose — see the note at the top of this file.
+      continue
+    }
+
+    // A holder that stopped waiting on a provider it cannot cancel keeps the lease
+    // instead of freeing it, and pushes the expiry out to cover the window that
+    // call could still be running in. Same fencing rule as a release: only the
+    // live lease can be extended, and only by the holder that owns it.
+    if (event.event === 'lease_retained' && event.lock_key === lockKey) {
+      const extendsTheLiveLease =
+        held !== null && held.holder === event.holder && held.lease_id === event.lease_id
+      if (!extendsTheLiveLease || held === null) continue
+      // Never shorten: a retention is a floor on the expiry, not a replacement.
+      if (Date.parse(event.retained_until) > Date.parse(held.expires_at)) {
+        held = { ...held, expires_at: event.retained_until }
+      }
     }
   }
 

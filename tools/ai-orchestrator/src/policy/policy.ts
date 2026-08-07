@@ -88,6 +88,33 @@ export const NEVER_ALLOWED_TOOLS = [
   'WebFetch',
 ] as const
 
+/**
+ * The complete set of tools a reviewer turn may use. Everything else is denied.
+ *
+ * This is an allowlist of its own, not a filter over the work package's, and that
+ * distinction is the fix: checking the reviewer against
+ * `authorization.scope.allowed_tools` handed it the *implementer's* grant, which
+ * in the scaffold includes `Write`, `Edit`, `Bash(git commit*)` and
+ * `Bash(gh pr create*)`. A reviewer described everywhere as read-only would then
+ * have written to the repository and passed the audit as compliant.
+ *
+ * The work package can narrow this further through `disallowed_tools`; nothing
+ * can widen it, because widening would require editing this file — which is
+ * inside `PROTECTED_PATHS`.
+ */
+export const REVIEWER_READ_ONLY_TOOLS = [
+  'Read',
+  'Glob',
+  'Grep',
+  'Bash(git diff*)',
+  'Bash(git log*)',
+  'Bash(git show*)',
+  'Bash(git status*)',
+  'Bash(gh pr view*)',
+  'Bash(gh pr diff*)',
+  'Bash(gh issue view*)',
+] as const
+
 export const ENABLE_ENV_VAR = 'ME2_ORCHESTRATOR_ENABLED'
 export const KILL_SWITCH_LABEL = 'me2-orchestrator:stop'
 
@@ -179,6 +206,56 @@ export type BudgetResult =
   | { ok: false; stop_reason: StopReason; message: string; remaining_usd: number }
 
 /**
+ * The three places a round or dollar ceiling can come from, reconciled.
+ *
+ * The authorization is the one a human actually signed. The run and the
+ * deployment limits are configuration, and configuration is not approval: a run
+ * constructed with `$2 / 6 rounds` under a work package a human approved for
+ * `$0.50 / 2 rounds` must stop at the smaller pair. Taking the minimum of all
+ * three is what makes the grant a hard ceiling instead of a suggestion the run
+ * config can quietly out-vote.
+ */
+export interface EffectiveCaps {
+  cost_cap_usd: number
+  max_rounds: number
+  /** Which of the three is binding, for the stop message. */
+  cost_source: string
+  rounds_source: string
+}
+
+export function effectiveCaps(
+  run: OrchestrationRun,
+  authorization: WorkPackageAuthorization,
+  limits: OrchestratorLimits
+): EffectiveCaps {
+  const costs: readonly (readonly [string, number])[] = [
+    ['run', run.cost_cap_usd],
+    ['deployment limits', limits.cost_cap_usd],
+    [`authorization ${authorization.work_package_id}`, authorization.cost_cap_usd],
+  ]
+  const rounds: readonly (readonly [string, number])[] = [
+    ['run', run.max_rounds],
+    ['deployment limits', limits.max_rounds],
+    [`authorization ${authorization.work_package_id}`, authorization.max_rounds],
+  ]
+
+  const tightest = (
+    candidates: readonly (readonly [string, number])[]
+  ): readonly [string, number] =>
+    candidates.reduce((best, candidate) => (candidate[1] < best[1] ? candidate : best))
+
+  const [costSource, costCap] = tightest(costs)
+  const [roundsSource, roundCap] = tightest(rounds)
+
+  return {
+    cost_cap_usd: costCap,
+    max_rounds: roundCap,
+    cost_source: costSource,
+    rounds_source: roundsSource,
+  }
+}
+
+/**
  * The pre-flight budget gate.
  *
  * `remaining` subtracts settled spend, live reservations and orphaned
@@ -188,6 +265,8 @@ export type BudgetResult =
  */
 export function checkBudget(
   run: OrchestrationRun,
+  /** The signed grant. Its `max_rounds` and `cost_cap_usd` bind like any other cap. */
+  authorization: WorkPackageAuthorization,
   limits: OrchestratorLimits,
   ledger: BudgetLedger,
   now: Date,
@@ -198,15 +277,16 @@ export function checkBudget(
    */
   requiredUsd: number = limits.max_turn_cost_usd
 ): BudgetResult {
-  const costCap = Math.min(run.cost_cap_usd, limits.cost_cap_usd)
+  const caps = effectiveCaps(run, authorization, limits)
+  const costCap = caps.cost_cap_usd
   const remaining = remainingBudget(costCap, ledger)
 
-  const roundCap = Math.min(run.max_rounds, limits.max_rounds)
+  const roundCap = caps.max_rounds
   if (run.current_round >= roundCap) {
     return {
       ok: false,
       stop_reason: 'max_rounds_reached',
-      message: `round ${run.current_round} reached the cap of ${roundCap}`,
+      message: `round ${run.current_round} reached the cap of ${roundCap} (${caps.rounds_source})`,
       remaining_usd: remaining,
     }
   }
@@ -218,7 +298,8 @@ export function checkBudget(
       message:
         `remaining budget $${remaining.toFixed(6)} cannot cover the ` +
         `$${requiredUsd.toFixed(6)} worst case this turn requires ` +
-        `(committed $${committedSpend(ledger).toFixed(6)} of $${costCap.toFixed(6)})`,
+        `(committed $${committedSpend(ledger).toFixed(6)} of $${costCap.toFixed(6)} ` +
+        `from ${caps.cost_source})`,
       remaining_usd: remaining,
     }
   }
@@ -253,6 +334,8 @@ export type PolicyViolationCode =
   | 'PR_ALREADY_MERGED'
   | 'PUSH_NOT_AUTHORIZED'
   | 'REMOTE_FACTS_UNAVAILABLE'
+  /** A reviewer turn used a write tool, or the repository moved underneath it. */
+  | 'REVIEWER_NOT_READ_ONLY'
 
 export type PolicyDecision =
   | { allowed: true }
@@ -314,6 +397,105 @@ export function enforceToolUse(scope: WorkPackageScope, tools: readonly string[]
   if (offending.length > 0) {
     return deny('TOOL_NOT_ALLOWED', 'turn used tools outside the allowlist', offending)
   }
+  return ALLOWED
+}
+
+/**
+ * Tool enforcement for a reviewer turn.
+ *
+ * Deliberately does NOT consult `scope.allowed_tools`: the reviewer's ceiling is
+ * `REVIEWER_READ_ONLY_TOOLS`, and the work package only ever narrows it. Passing
+ * the scope in at all is for `disallowed_tools`, so a work package that wants an
+ * even quieter reviewer gets one.
+ */
+export function enforceReviewerToolUse(
+  scope: WorkPackageScope,
+  tools: readonly string[]
+): PolicyDecision {
+  const forbidden = tools.filter((tool) => matchesAnyWildcard(tool, NEVER_ALLOWED_TOOLS))
+  if (forbidden.length > 0) {
+    return deny(
+      'TOOL_NOT_ALLOWED',
+      'reviewer used a tool that no work package may grant',
+      forbidden
+    )
+  }
+
+  const narrowed = tools.filter((tool) => matchesAnyWildcard(tool, scope.disallowed_tools))
+  if (narrowed.length > 0) {
+    return deny(
+      'TOOL_NOT_ALLOWED',
+      'reviewer used a tool this work package explicitly disallows',
+      narrowed
+    )
+  }
+
+  const notReadOnly = tools.filter((tool) => !matchesAnyWildcard(tool, REVIEWER_READ_ONLY_TOOLS))
+  if (notReadOnly.length > 0) {
+    return deny(
+      'REVIEWER_NOT_READ_ONLY',
+      'reviewer used a tool outside the read-only set; the reviewer never gets the ' +
+        "implementer's write grant",
+      notReadOnly
+    )
+  }
+
+  return ALLOWED
+}
+
+/**
+ * The workspace proof that a reviewer turn really was read-only.
+ *
+ * The tool allowlist above is checked against harness telemetry, which is an
+ * authoritative record — but it is a record of *tool calls*, and it can only
+ * catch a write that went through a tool the harness names. This asks the
+ * repository instead: did anything move while the reviewer was running?
+ *
+ * Evaluated on the delta, never the cumulative set. Files the implementer changed
+ * in round 2 are still there in round 3, and blaming the reviewer for them would
+ * make the check fire on every honest run — which is how a check gets deleted.
+ */
+export function evaluateReviewerTurn(facts: AuthoritativeTurnFacts): PolicyDecision {
+  if (!facts.remote_facts_available) {
+    return deny(
+      'REMOTE_FACTS_UNAVAILABLE',
+      'the remote ref could not be read, so a push during the reviewer turn cannot be ruled out'
+    )
+  }
+
+  if (facts.files_changed.length > 0) {
+    return deny(
+      'REVIEWER_NOT_READ_ONLY',
+      'the working tree changed during the reviewer turn; the reviewer may not write',
+      facts.files_changed
+    )
+  }
+
+  if (facts.commit) {
+    return deny('REVIEWER_NOT_READ_ONLY', 'the reviewer turn created a commit', [facts.commit.sha])
+  }
+
+  if (facts.pushed_this_turn) {
+    const delta = facts.remote_head_delta
+    return deny(
+      'REVIEWER_NOT_READ_ONLY',
+      'the tracked remote ref moved during the reviewer turn',
+      delta ? [`${delta.ref}: ${delta.before_sha ?? 'none'} -> ${delta.after_sha ?? 'none'}`] : []
+    )
+  }
+
+  if (facts.pull_request_opened_this_turn) {
+    return deny('REVIEWER_NOT_READ_ONLY', 'the reviewer turn opened a pull request', [
+      String(facts.pull_request?.number ?? 'unknown'),
+    ])
+  }
+
+  if (facts.pull_request?.merged) {
+    return deny('PR_ALREADY_MERGED', 'the pull request is merged; merging is never authorized', [
+      String(facts.pull_request.number),
+    ])
+  }
+
   return ALLOWED
 }
 

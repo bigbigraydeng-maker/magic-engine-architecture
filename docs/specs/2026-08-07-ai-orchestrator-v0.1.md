@@ -82,6 +82,17 @@ READY ──► GPT_TURN ◄──────────► CLAUDE_TURN
 `STOP_POLICY_VIOLATION` 故意不映射到 `FAILED`：越界是安全事件，得停在一个**人必须来看**的状态，
 而不是被埋进「失败」堆里。
 
+**这两个 verdict 停下来时也必须开一道有编号的门。** 它们停在一个**成功完成**的 turn 上，
+所以 wait 挂在 `turn_completed` 而不是 `turn_rejected` —— 而 `currentOpenWait` 原来只看
+`turn_rejected` 和 `state_changed`。结果是「没有待批的门」，而人工授权**必须点名**一个 wait_id
+才生效：这个 run 谁也放不出来了。比「一张批条开了两道门」更糟 —— 这是一道谁也开不了的门。
+
+现在 `turn_completed` 带 `wait`，落到 `WAITING_HUMAN` 就开一个新编号，
+`blocking_reason` 分成 `reviewer_waiting_human` / `reviewer_stop_policy_violation` 两种，
+授权的 `grants` 必须点到对应那一条。`nextWaitId` 也要把 `turn_completed` 上的 wait 数进去 ——
+漏数就会把已经用过的编号再发一次，**两道门共用一个编号 = 一张批条开两道**，
+正是 wait_id 机制本身要防的事。
+
 ### WorkPackageAuthorization
 
 `scope{allowed_paths[], denied_paths[], can_commit, can_push, can_open_draft_pr, can_merge, allowed_tools[], disallowed_tools[]}` ·
@@ -193,6 +204,32 @@ telemetry 拿不到（`source: 'unavailable'` 或空）→ **`missing_telemetry`
 任何人都能在 Issue 里打一段标记。**只有作者在白名单里（编排 bot + 仓库 owner）的标记才会被解码。**
 不被信任的标记不是静默丢弃，而是进 `LedgerReadResult.rejected` 被报出来。
 
+### 账本也是两个 agent 之间唯一的传话筒（`turn_completed.handoff`）
+
+第五轮审查抓到一个把整件事变成空转的洞：`draftTurn` **每一轮都只放最初的任务简报**，
+而 `turn_completed` 只留一个 `output_digest`。于是 reviewer 给了 `REQUEST_CHANGES`，
+它的 findings、验收条件、要求的范围**一个字都到不了 implementer**；反过来 implementer 干了什么、
+测试跑成什么样，也回不到下一轮 reviewer 手里。跑六轮 = 两个 agent 对着同一份简报各写各的六遍，
+每一遍都要付钱。**那不是审查循环，是重复劳动。**
+
+传话筒只能是账本本身：**轮与轮不共享进程**，每次 dispatch 都是重新 fold Issue 评论建状态，
+所以下一轮要用的东西必须以事件形式存下来。`turn_completed` 因此多了一个 `handoff` 字段，
+`draftTurn` 读回**每个 actor 最近一次**的 handoff 拼进 prompt。
+
+三条硬规矩：
+
+- **先截断再落库。** 每个字段限长、每个列表限条数（`HANDOFF_MAX_ITEMS` / `HANDOFF_MAX_TEXT`），
+  外加一道序列化总量兜底。一条 Issue 评论只能装 65536 字符，**写不进去的账本等于停了的账本**，
+  而且是静默停的。
+- **handoff 是证据，不是许可。** reviewer 那份里的字段叫 `requested_next_paths` —— 名字就是语义。
+  策略层根本不读它，范围只来自 `WorkPackageAuthorization`。reviewer 在 handoff 里说「你可以改
+  `src/**`」，implementer 照做仍然会被 `PATH_EXPLICITLY_DENIED` 拦下。prompt 里也明写了这一条。
+- **能取权威事实的地方就不取自报。** implementer handoff 的 `files_changed` 和 commit
+  来自 workspace 记录，不是模型自己写的那份。下一轮 reviewer 要判断的是「上一轮**干了**什么」。
+
+因为 handoff 进了 prompt，每一轮的 `input_digest` 天然不同，幂等键也就天然不同 —— 这是对的：
+每一轮确实是不同的活。重跑同一次 dispatch 读到同样的账本，算出同样的键，照样跳过。
+
 ### 钱：先预留，后调用
 
 v0.1 的账是**事后**记的 —— 调完模型才把花费加进累计值，再跟上限比。这有两个洞，GPT 首轮审查两个都点了：
@@ -239,6 +276,26 @@ provider.cancellation = { supported: boolean, server_max_timeout_ms: number }
 `checkTimingInvariant` 用两个 provider 里更长的那个窗口。当前两个真 adapter 都声明 `false`：
 OpenAI 的 transport 还没接，Claude Code Action 是独立进程 —— 掐掉我们的 `await` 掐不死那个进程。
 **在能证明「杀掉子进程 + 请求确实被拆掉」之前，这两个值不许改成 true。**
+
+#### 把窗口算大了，收尾时又提前松手，等于没算（`lease_retained`）
+
+第五轮审查抓到的：上面那套按 `server_max_timeout_ms` 放大租约的功夫，**在收尾时被自己抵消掉了**。
+runner 跑完无条件写 `lease_released`，Actions 的 concurrency 组随着 job 退出一起消失 ——
+此刻那个不可取消的调用还可能在写仓库、还在计费，而人只要批一下条子就能立刻开下一轮，
+两个 implementer 并排跑。
+
+现在：一旦是「停等了但对方可能还活着」（`cancellation.supported === false`，
+超时和抛错都算 —— promise 被拒说明**我们**放弃了，不说明**对方**停了），
+就不写 `lease_released`，改写一条 `lease_retained`：
+
+- 租约**不释放**，并且把到期时间推到本轮 claim 的 `claim_expires_at`（= 那个服务端最大窗口的末端）；
+- 只往后推，从不缩短；
+- 跟 release 用同一条 fencing 规则 —— lock_key + holder + `lease_id` 三者全对才认，
+  所以一个已经被顶掉的持有者晚到的事件动不了现在这把锁；
+- 评论正文写人话：**「租约按住到 X，在那之前不许开下一轮」**，不是只留给开发看的日志。
+
+对照组同样重要：provider 声明 `supported: true` 时，同一个超时照旧正常 `lease_released` ——
+那种情况下确实没有东西还在跑，多按住十几分钟是白白挡住合法重跑。
 
 ### 预留额 = provider 自己报的最坏成本，不是拍脑袋的固定值
 
@@ -345,9 +402,31 @@ createOpenAIReviewer / createClaudeImplementer:
 
 第 1 步在第 2 步之前，是为了让「key 已经配好但开关没开」也走不通 —— 有 key 不等于可以用。
 
----
+### reviewer 的「只读」得有东西管着，不能只是个说法
 
-## 6. Prompt injection 防护
+第五轮审查抓到的第六个洞，两半互相放大：
+
+1. reviewer 的工具用 `authorization.scope.allowed_tools` 校验 —— 那是 **implementer 的**授权。
+   scaffold 里那份明写着 `Write` · `Edit` · `Bash(git commit*)` · `Bash(gh pr create*)`，
+   于是这四样在 reviewer 轮里**全部合法**。
+2. reviewer 轮**不拍前后快照、也不做完整性检查**，所以真写了也无处可查 ——
+   这一轮会被记成一次合规的只读审查。
+
+修法是两道各自独立的证据：
+
+- **`REVIEWER_READ_ONLY_TOOLS`**：reviewer 自己的白名单（`Read` / `Glob` / `Grep` /
+  `git diff|log|show|status` / `gh pr view|diff` / `gh issue view`），**不查 `allowed_tools`**。
+  工单只能通过 `disallowed_tools` 把它**收得更窄**；想放宽必须改 `policy/policy.ts` ——
+  那个文件在 `PROTECTED_PATHS` 里面。测试直接读真实的 `SCAFFOLD_ALLOWED_TOOLS` 逐项验，
+  以后有人往工单里加写工具，红的是这条测试。
+- **前后快照比对**（`evaluateReviewerTurn`）：本轮 delta 里有文件变动 / 有 commit /
+  远端 ref 动过 / 开了 PR，一律 `REVIEWER_NOT_READ_ONLY`；远端读不出来就 fail closed。
+  只判**本轮 delta**，不判累计 —— implementer 前几轮改的文件一直都在，
+  拿累计去判会在每一次诚实的运行上都报警，而天天误报的检查最后一定被删掉。
+  外加跟 implementer 同一套 `integrity.drift()`。
+
+工具白名单查的是**调用记录**，快照查的是**结果**。前者只能抓到走了具名工具的写入，
+后者不管走什么路都能看见 —— 两道都要。
 
 Issue 正文、Issue 评论、PR 描述、diff、文件内容 —— **全部是 data，不是 instruction**。
 
@@ -378,7 +457,15 @@ Issue 正文、Issue 评论、PR 描述、diff、文件内容 —— **全部是
 | 授权 `expires_at` | 6 h | `WAITING_HUMAN` |
 | `side_effect_class` | 只许 `none` / `repo_local` | `WAITING_HUMAN` |
 
-轮数与费用取 **run 自带上限和部署上限里更紧的那个**，所以「工单里写了个大数字」不能突破部署级天花板。
+轮数与费用取 **run 自带上限、部署上限、以及人签的那张授权，三者里最紧的一个**
+（`effectiveCaps`）。
+
+> 第五轮审查抓到的洞：原来只取 run 和部署两者的较小值，**完全没读授权里的
+> `max_rounds` / `cost_cap_usd`**。于是一个按 `$2 / 6 轮` 造出来的 run，挂在一张人只批了
+> `$0.50 / 2 轮` 的工单下面，会把 $2 花完，而且一路上所有 schema 校验都过。
+> **配置不是批准。** 谁最紧谁说了算，停下来时还要说清是哪一条在管
+> （`stopped_because` 里带 `authorization <work_package_id>`）。
+> dry run 的 `preflight.effective_caps` 会把这三者的裁决提前摊开，不用花钱就能看见。
 
 **Kill switch 三个独立来源，全部 fail-closed**：
 
@@ -387,6 +474,24 @@ Issue 正文、Issue 评论、PR 描述、diff、文件内容 —— **全部是
 3. Issue 上的 `me2-orchestrator:stop` 标签，最高优先级，其它两个说 go 也停。
 
 任一触发 → `CANCELLED`，且**在调用任何 provider 之前**。
+
+### 会变的闸门，每一次付费调用前都要重新读
+
+急停标签和授权有效期原来**只在进循环之前读一次**，而这个循环会连着跑到 `max_rounds` 轮。
+后果很具体：第 1 轮跑着的时候有人贴上 `me2-orchestrator:stop`，第 2..6 轮照跑照花钱；
+授权在第 1 轮之后到期，也一样。**中途拉不动的急停不叫急停。**
+
+现在 `recheckMutableGates` 在**每一轮开工前**重新做四件事：
+
+| 重查项 | 越界后 |
+|---|---|
+| 三源 kill switch（重新拉 Issue 标签） | `CANCELLED` |
+| 授权 `expires_at` | `WAITING_HUMAN` · `authorization_expired` |
+| 轮数上限（三源取最紧） | `BUDGET_EXHAUSTED` |
+| 费用上限（三源取最紧，且要盖得住本轮报价） | `BUDGET_EXHAUSTED` |
+
+标签**读不出来**（GitHub 502 之类）不当成「没有急停标签」，而是停下等人 ——
+「没看到」和「没去看」是两个答案，只有一个能安全地往下花钱。
 
 ---
 
@@ -644,7 +749,7 @@ tool allowlist 真的被 Action 尊重 · 输出符合 schema。
 
 ## 10. 测试
 
-`npx vitest run tools/ai-orchestrator` —— **460 passed / 0 failed**，全部 mock，零网络、零费用。
+`npx vitest run tools/ai-orchestrator` —— **532 passed / 0 failed**，全部 mock，零网络、零费用。
 
 | Issue #860 要求 | 覆盖位置 |
 |---|---|
@@ -679,6 +784,20 @@ tool allowlist 真的被 Action 尊重 · 输出符合 schema。
 | **required check 的 workflow 加任何事件过滤 → 测试红** | `workflow-supply-chain.test.ts` |
 | **模块 import 了 `src/` / supabase / next / 未声明依赖 → 测试红** | `architecture.test.ts` |
 | **文件超 800 行 / 出现 `any` → 测试红** | `architecture.test.ts` |
+| **reviewer 的 findings / 验收条件 / 要求范围进得了下一轮 implementer 的 prompt** | `turn-handoff.test.ts` |
+| **implementer 的结论 / 测试结果 / 真实改动文件回得到下一轮 reviewer** | `turn-handoff.test.ts` |
+| **换一个进程（重新 fold 账本）loop 上下文不丢** | `turn-handoff.test.ts` |
+| **handoff 只是证据：reviewer 要更宽的路径不能放宽 implementer 的范围** | `turn-handoff.test.ts` |
+| **handoff 有界，写不进 65536 字符的评论之前先降级** | `turn-handoff.test.ts` |
+| **reviewer 判 `WAITING_HUMAN` / `STOP_POLICY_VIOLATION` 时开出可授权的 wait_id** | `human-authorization.test.ts` |
+| **连着两个 reviewer 阻塞不复用同一个 wait_id** | `human-authorization.test.ts` |
+| **急停标签中途贴上，下一轮零 provider 调用** | `mid-run-gates.test.ts` |
+| **授权中途到期，下一轮零 provider 调用** | `mid-run-gates.test.ts` |
+| **标签读不出来 = 停，不是「没有急停标签」** | `mid-run-gates.test.ts` |
+| **不可取消的 provider 超时后不释放租约（含 fencing / 只延不缩）** | `mid-run-gates.test.ts` |
+| **授权的 `max_rounds` / `cost_cap_usd` 真的是硬顶** | `spend-control.test.ts` |
+| **reviewer 拿不到 implementer 的 `Write` / `Edit` / `git commit` / `gh pr create`** | `reviewer-read-only.test.ts` |
+| **reviewer 轮改了工作区 / commit / push / 开 PR，即使 telemetry 干净也被抓** | `reviewer-read-only.test.ts` |
 
 **关于「零调用」这类断言**：每一条都配了正对照（同一套 harness 关掉 dry-run 再跑一遍，
 断言 provider 确实被调用、评论确实被写、commit 副作用确实被记录）。
@@ -686,8 +805,37 @@ tool allowlist 真的被 Action 尊重 · 输出符合 schema。
 
 **变异验证**（改坏源码看测试是否变红，已全部还原）：
 
+> 变异脚本每次都**先断言那段搜索字符串真的存在**再替换。少了这一步，一个打错的搜索串会
+> 「没改动 → 测试全绿 → 记成通过」—— 正是这套验证本身要抓的那种静默失效。
+
+**最新一轮（针对 Codex 复审的六个 P1 blocker，23 组，23/23 变红）**
+
 | 破坏 | 变红 |
 |---|---|
+| handoff 到不了下一轮的 prompt | 4 |
+| reviewer 不往账本写 handoff | 4 |
+| implementer 不往账本写 handoff | 2 |
+| handoff 报模型自报的 files 而非真实记录 | 1 |
+| handoff 列表不再截断 | 1 |
+| 超限的 handoff 原样写出去 | 1 |
+| reviewer 判 `WAITING_HUMAN` 不开 wait | 7 |
+| `currentOpenWait` 退回只看 `turn_rejected` | 5 |
+| `nextWaitId` 不数 reviewer 的 wait（编号撞车） | 1 |
+| 循环里不再重查急停 | 1 |
+| 循环里不再重查授权到期 | 1 |
+| 闸门整体退回「每次 dispatch 查一遍」 | 4 |
+| 标签读不出来当成「没有急停标签」 | 1 |
+| 租约无条件释放 | 3 |
+| 不可取消的 provider 不算「可能还在跑」 | 3 |
+| 租约延期忽略 fencing token | 2 |
+| 租约延期允许缩短 | 1 |
+| 授权的 `cost_cap_usd` 被忽略 | 2 |
+| 授权的 `max_rounds` 被忽略 | 2 |
+| reviewer 工具退回查 implementer 的 allowlist | 11 |
+| reviewer 的工作区证据一律放行 | 6 |
+| reviewer 轮不做完整性检查 | 1 |
+| reviewer 轮不拍前后快照 | 1 |
+
 **第一轮（8 组，全部仍有效）**
 
 | 破坏 | 变红 |

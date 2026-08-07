@@ -37,6 +37,7 @@ import { verifyExclusiveRunContext } from './policy/exclusivity'
 import {
   checkBudget,
   checkTimingInvariant,
+  effectiveCaps,
   enforceAuthorizationWindow,
   enforceSideEffectClass,
   evaluateKillSwitch,
@@ -102,6 +103,7 @@ export async function runOrchestration(
     side_effect_class: { allowed: true },
     lease: null,
     budget: null,
+    effective_caps: effectiveCaps(ctx.run, input.authorization, input.limits),
     budget_ledger: ctx.budget,
     next_actor: null,
     next_idempotency_key: null,
@@ -276,13 +278,20 @@ export async function runOrchestration(
     preflight.next_reserved_cost_usd = quote.ok ? quote.estimate.max_cost_usd : null
     preflight.budget = checkBudget(
       ctx.run,
+      input.authorization,
       input.limits,
       ctx.budget,
       clock.now(),
       quote.ok ? quote.estimate.max_cost_usd : input.limits.max_turn_cost_usd
     )
   } else {
-    preflight.budget = checkBudget(ctx.run, input.limits, ctx.budget, clock.now())
+    preflight.budget = checkBudget(
+      ctx.run,
+      input.authorization,
+      input.limits,
+      ctx.budget,
+      clock.now()
+    )
   }
 
   // 7. Dry-run stops here: preflight complete, nothing called, nothing written.
@@ -300,32 +309,117 @@ export async function runOrchestration(
     took_over_from: lease.took_over_from,
   })
 
-  const reason = await executeLoop(ctx)
+  const loop = await executeLoop(ctx)
 
-  await record(ctx, {
-    ...baseEvent(ctx),
-    event: 'lease_released',
-    lock_key: lockKey,
-    holder: input.holder,
-    lease_id: lease.lease_id,
-  })
+  // Releasing the lease is what ends the protection: the Actions concurrency
+  // group is gone the moment this job exits, and a human who authorises a resume
+  // can start the next round immediately. That is only safe once nothing from
+  // this round can still be running. When we stopped waiting on a provider that
+  // does not support cancellation, something can — so the lease is held, and
+  // pushed out to cover the window the old call could still be alive in.
+  if (loop.retainLease) {
+    await record(ctx, {
+      ...baseEvent(ctx),
+      event: 'lease_retained',
+      lock_key: lockKey,
+      holder: input.holder,
+      lease_id: lease.lease_id,
+      retained_until: loop.retainLease.until,
+      reason: loop.retainLease.reason,
+    })
+  } else {
+    await record(ctx, {
+      ...baseEvent(ctx),
+      event: 'lease_released',
+      lock_key: lockKey,
+      holder: input.holder,
+      lease_id: lease.lease_id,
+    })
+  }
 
-  return done(reason)
+  return done(loop.reason)
 }
 
-async function executeLoop(ctx: RunnerContext): Promise<string> {
+/** What the loop stopped on, and whether the lease may be handed back. */
+interface LoopResult {
+  reason: string
+  /** Non-null when a possibly-live provider call means the lease must stay held. */
+  retainLease: { until: string; reason: string } | null
+}
+
+/**
+ * The gates that can change while the loop is running, re-read before every
+ * single paid call.
+ *
+ * Checking these once in preflight was enough only if the loop ran one turn. It
+ * runs several: someone can add the stop label after round 1 has started, and an
+ * authorization can expire between round 1 and round 2. Neither is exotic — a
+ * kill switch nobody can pull mid-run is not a kill switch, and an expiry that
+ * only applies to the first turn of a run is not an expiry.
+ *
+ * Fails closed on an unreadable label list. "We could not look" and "there is no
+ * stop label" are different answers, and only one of them is safe to spend on.
+ */
+async function recheckMutableGates(ctx: RunnerContext): Promise<string | null> {
   const { input, deps, clock } = ctx
+
+  let labels: readonly string[]
+  try {
+    labels = await deps.github.listIssueLabels(ctx.run.issue_number)
+  } catch (error) {
+    const message =
+      `cannot read the Issue labels, so the kill switch cannot be ruled out: ` +
+      `${error instanceof Error ? error.message : String(error)}`
+    await transitionTo(ctx, 'WAITING_HUMAN', message, {
+      wait: { id: nextWaitId(ctx), blocking_reason: 'kill_switch_unreadable' },
+    })
+    await finish(ctx, 'human_input_required')
+    return message
+  }
+
+  const kill = evaluateKillSwitch({
+    workflowEnabledInput: input.workflowEnabledInput,
+    env: input.env,
+    issueLabels: labels,
+  })
+  if (kill.stopped) {
+    const message = `kill switch: ${kill.reason}`
+    log(deps, message)
+    await transitionTo(ctx, 'CANCELLED', kill.reason ?? 'kill switch')
+    await finish(ctx, 'kill_switch')
+    return message
+  }
+
+  const authorization = enforceAuthorizationWindow(input.authorization, clock.now())
+  if (!authorization.allowed) {
+    await transitionTo(ctx, 'WAITING_HUMAN', authorization.message, {
+      wait: { id: nextWaitId(ctx), blocking_reason: 'authorization_expired' },
+    })
+    await finish(ctx, 'authorization_expired')
+    return authorization.message
+  }
+
+  return null
+}
+
+async function executeLoop(ctx: RunnerContext): Promise<LoopResult> {
+  const { input, deps, clock } = ctx
+  const stop = (reason: string): LoopResult => ({ reason, retainLease: null })
 
   while (!isTerminal(ctx.run.state)) {
     const actor = actorForState(ctx.run.state)
-    if (!actor) return `no actor owns state ${ctx.run.state}`
+    if (!actor) return stop(`no actor owns state ${ctx.run.state}`)
+
+    // Before every paid call, not once per dispatch. See recheckMutableGates.
+    const gateStop = await recheckMutableGates(ctx)
+    if (gateStop) return stop(gateStop)
 
     const round = ctx.run.current_round + 1
     const draft = draftTurn(ctx, actor, round)
 
     if (hasTurnBeenProcessed(ctx.events, draft.idempotency_key)) {
       log(deps, `turn ${draft.idempotency_key} already processed; not re-running`)
-      return `turn ${draft.idempotency_key} already processed`
+      return stop(`turn ${draft.idempotency_key} already processed`)
     }
 
     // Someone else has this turn claimed and their call may be in flight. Starting
@@ -333,7 +427,9 @@ async function executeLoop(ctx: RunnerContext): Promise<string> {
     const rival = foreignLiveClaim(ctx.budget, draft.idempotency_key, input.holder)
     if (rival) {
       log(deps, `turn ${draft.idempotency_key} is claimed by ${rival.holder}`)
-      return `turn ${draft.idempotency_key} is claimed by ${rival.holder} until ${rival.claim_expires_at}`
+      return stop(
+        `turn ${draft.idempotency_key} is claimed by ${rival.holder} until ${rival.claim_expires_at}`
+      )
     }
 
     // Ask the adapter that knows the prices what the worst case is. No quote, no
@@ -350,11 +446,14 @@ async function executeLoop(ctx: RunnerContext): Promise<string> {
         wait: { id: nextWaitId(ctx), blocking_reason: 'cost_estimate_unavailable' },
       })
       await finish(ctx, 'cost_estimate_unavailable')
-      return message
+      return stop(message)
     }
 
+    // Rounds and dollars are capped by the *tightest* of run config, deployment
+    // limits and the signed authorization — see `effectiveCaps`.
     const budget = checkBudget(
       ctx.run,
+      input.authorization,
       input.limits,
       ctx.budget,
       clock.now(),
@@ -364,11 +463,14 @@ async function executeLoop(ctx: RunnerContext): Promise<string> {
       // Rounds, dollars and wall-clock are all budgets, so they share one state.
       await transitionTo(ctx, 'BUDGET_EXHAUSTED', budget.message)
       await finish(ctx, budget.stop_reason)
-      return budget.message
+      return stop(budget.message)
     }
 
     const controller = new AbortController()
     const request = finalizeRequest(ctx, draft, round, quote.estimate, controller.signal)
+    const claimExpiresAt = new Date(
+      clock.now().getTime() + inFlightWindowMs(ctx, actor)
+    ).toISOString()
 
     // Reserve before calling. From here the money is committed whatever happens.
     // The claim covers the in-flight window, which is the provider's server-side
@@ -383,37 +485,43 @@ async function executeLoop(ctx: RunnerContext): Promise<string> {
       holder: input.holder,
       reserved_cost_usd: request.reserved_cost_usd,
       pricing_version: quote.estimate.pricing_version,
-      claim_expires_at: new Date(
-        clock.now().getTime() + inFlightWindowMs(ctx, actor)
-      ).toISOString(),
+      claim_expires_at: claimExpiresAt,
     })
 
-    let outcome
-    if (actor === 'gpt_reviewer') {
-      outcome = await runReviewerTurn(ctx, round, request)
-    } else {
-      // The pre-call half of the snapshot pair. Captured after the reservation so
-      // a crash between the two still leaves the money accounted for.
-      const before: WorkspaceState = await deps.workspace.capture()
-      outcome = await runImplementerTurn(ctx, round, request, before)
-    }
+    // The pre-call half of the snapshot pair, for BOTH actors. Captured after the
+    // reservation so a crash between the two still leaves the money accounted for.
+    // The reviewer needs it as much as the implementer does: without it, a turn
+    // that is supposed to be read-only has nothing to be checked against.
+    const before: WorkspaceState = await deps.workspace.capture()
+
+    const outcome =
+      actor === 'gpt_reviewer'
+        ? await runReviewerTurn(ctx, round, request, before)
+        : await runImplementerTurn(ctx, round, request, before)
 
     if (outcome.kind === 'halted') {
       await finish(ctx, outcome.stop_reason)
-      return outcome.message
+      return {
+        reason: outcome.message,
+        // The claim already covers the in-flight window; the lease has to cover
+        // the same window or the protection ends before the risk does.
+        retainLease: outcome.in_flight_risk
+          ? { until: claimExpiresAt, reason: outcome.in_flight_risk.reason }
+          : null,
+      }
     }
 
     // Nothing was recorded and nothing was transitioned: back off and let the
     // runner that won the race own the run.
     if (outcome.kind === 'conflict') {
       log(deps, outcome.message)
-      return outcome.message
+      return stop(outcome.message)
     }
 
     if (outcome.kind === 'retry' && ctx.run.invalid_output_count >= input.limits.max_invalid_outputs) {
       await transitionTo(ctx, 'FAILED', 'provider returned schema-invalid output too many times')
       await finish(ctx, 'invalid_provider_output')
-      return 'too many schema-invalid provider outputs'
+      return stop('too many schema-invalid provider outputs')
     }
   }
 
@@ -421,7 +529,7 @@ async function executeLoop(ctx: RunnerContext): Promise<string> {
     await finish(ctx, terminalStopReason(ctx.run.state))
   }
 
-  return `run reached ${ctx.run.state}`
+  return stop(`run reached ${ctx.run.state}`)
 }
 
 function terminalStopReason(state: RunState): StopReason {

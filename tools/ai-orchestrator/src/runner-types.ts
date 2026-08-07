@@ -26,6 +26,7 @@ import type {
 } from './domain/schema'
 import type {
   BudgetResult,
+  EffectiveCaps,
   KillSwitchResult,
   OrchestratorLimits,
   PolicyDecision,
@@ -83,6 +84,12 @@ export interface PreflightReport {
   side_effect_class: PolicyDecision
   lease: LeaseAcquisition | null
   budget: BudgetResult | null
+  /**
+   * The round and dollar ceilings actually in force, and which of run config,
+   * deployment limits or the signed authorization is binding. Surfaced so a
+   * dry run shows an authorization that is tighter than the run it was handed.
+   */
+  effective_caps: EffectiveCaps
   budget_ledger: BudgetLedger | null
   next_actor: Actor | null
   next_idempotency_key: string | null

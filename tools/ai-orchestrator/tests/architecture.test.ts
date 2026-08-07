@@ -167,10 +167,23 @@ describe('house rules from CLAUDE.md', () => {
 })
 
 describe('the control plane cannot be reached from the application', () => {
-  it('is not imported by any Magic Engine source file', () => {
-    const appSrc = join(process.cwd(), 'src')
-    const appFiles = walk(appSrc).filter((path) => path.endsWith('.ts') || path.endsWith('.tsx'))
-    const offenders = appFiles.filter((path) => read(path).includes('tools/ai-orchestrator'))
-    expect(offenders.map((path) => relative(process.cwd(), path))).toEqual([])
-  })
+  it(
+    'is not imported by any Magic Engine source file',
+    () => {
+      const appSrc = join(process.cwd(), 'src')
+      const appFiles = walk(appSrc).filter((path) => path.endsWith('.ts') || path.endsWith('.tsx'))
+      // Not vacuous: if the walk ever returns nothing, the assertion below passes
+      // for the wrong reason.
+      expect(appFiles.length).toBeGreaterThan(100)
+      const offenders = appFiles.filter((path) => read(path).includes('tools/ai-orchestrator'))
+      expect(offenders.map((path) => relative(process.cwd(), path))).toEqual([])
+    },
+    // This reads every one of ~700 application source files synchronously while
+    // the module's other suites run in parallel. Measured at 5-9s on a loaded
+    // machine, which straddles vitest's 5s default and made it flake — as an
+    // intermittent failure of a check that had found nothing, i.e. the worst
+    // possible signal. The bound is the honest cost of a whole-repository scan,
+    // not a workaround for a slow assertion.
+    60_000
+  )
 })

@@ -150,7 +150,7 @@ describe('budget is a ceiling, not a tripwire', () => {
   })
 
   it('passes when a full reservation still fits', () => {
-    expect(checkBudget(run, SCAFFOLD_LIMITS, emptyBudget, NOW).ok).toBe(true)
+    expect(checkBudget(run, authorization, SCAFFOLD_LIMITS, emptyBudget, NOW).ok).toBe(true)
   })
 
   it('stops before the last turn that would cross the cap', () => {
@@ -174,6 +174,8 @@ describe('budget is a ceiling, not a tripwire', () => {
           output_digest: 'o1',
           authoritative: null,
           self_report_mismatches: [],
+          handoff: null,
+          wait: null,
           next_state: 'CLAUDE_TURN',
         },
       ],
@@ -181,7 +183,7 @@ describe('budget is a ceiling, not a tripwire', () => {
       NOW
     )
 
-    const result = checkBudget(run, SCAFFOLD_LIMITS, ledger, NOW)
+    const result = checkBudget(run, authorization, SCAFFOLD_LIMITS, ledger, NOW)
     expect(result).toMatchObject({ ok: false, stop_reason: 'cost_cap_reached' })
     expect(result.remaining_usd).toBeCloseTo(0.25)
   })
@@ -208,7 +210,7 @@ describe('budget is a ceiling, not a tripwire', () => {
       NOW
     )
     expect(ledger.outstanding_reserved_usd).toBeCloseTo(1.8)
-    expect(checkBudget(run, SCAFFOLD_LIMITS, ledger, NOW)).toMatchObject({
+    expect(checkBudget(run, authorization, SCAFFOLD_LIMITS, ledger, NOW)).toMatchObject({
       ok: false,
       stop_reason: 'cost_cap_reached',
     })
@@ -237,11 +239,11 @@ describe('budget is a ceiling, not a tripwire', () => {
     )
     expect(ledger.orphaned_reserved_usd).toBeCloseTo(1.9)
     expect(ledger.outstanding_reserved_usd).toBe(0)
-    expect(checkBudget(run, SCAFFOLD_LIMITS, ledger, NOW).ok).toBe(false)
+    expect(checkBudget(run, authorization, SCAFFOLD_LIMITS, ledger, NOW).ok).toBe(false)
   })
 
   it('stops at max rounds', () => {
-    expect(checkBudget({ ...run, current_round: 6 }, SCAFFOLD_LIMITS, emptyBudget, NOW)).toMatchObject({
+    expect(checkBudget({ ...run, current_round: 6 }, authorization, SCAFFOLD_LIMITS, emptyBudget, NOW)).toMatchObject({
       ok: false,
       stop_reason: 'max_rounds_reached',
     })
@@ -249,7 +251,7 @@ describe('budget is a ceiling, not a tripwire', () => {
 
   it('stops after the wall-clock deadline', () => {
     const past = new Date(Date.parse(run.deadline_at) + 1)
-    expect(checkBudget(run, SCAFFOLD_LIMITS, emptyBudget, past)).toMatchObject({
+    expect(checkBudget(run, authorization, SCAFFOLD_LIMITS, emptyBudget, past)).toMatchObject({
       ok: false,
       stop_reason: 'wall_clock_exceeded',
     })

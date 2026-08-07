@@ -46,6 +46,11 @@ function summarise(event: LedgerEvent): string {
         : `🔒 **lease acquired** by \`${event.holder}\``
     case 'lease_released':
       return `🔓 **lease released** by \`${event.holder}\``
+    case 'lease_retained':
+      return (
+        `🔐 **lease held open** by \`${event.holder}\` until ${event.retained_until} — ` +
+        `${event.reason}. No further round may start before then.`
+      )
     case 'turn_started':
       return (
         `⏳ **${event.actor}** started round ${event.round} · holder \`${event.holder}\`` +

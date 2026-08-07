@@ -9,7 +9,17 @@ import { runOrchestration } from '../src/runner'
 import type { RunnerResult } from '../src/runner'
 import { SCAFFOLD_LIMITS } from '../src/config/scaffold-config'
 import type { OrchestratorLimits } from '../src/policy/policy'
-import { FIXED_NOW, IN_SCOPE_FILE, implementerOutput, makeHarness, reviewerOutput, workspaceState, fingerprints } from './helpers'
+import {
+  FIXED_NOW,
+  IN_SCOPE_FILE,
+  defaultCaptures,
+  fingerprints,
+  implementerOutput,
+  makeHarness,
+  quietCaptures,
+  reviewerOutput,
+  workspaceState,
+} from './helpers'
 
 function limitsWith(overrides: Partial<OrchestratorLimits>): OrchestratorLimits {
   return { ...SCAFFOLD_LIMITS, ...overrides }
@@ -152,6 +162,9 @@ describe('schema-invalid provider output', () => {
         { output: { verdict: 'LOOKS_GOOD_TO_ME', summary: 'ship it' } },
         { output: reviewerOutput({ verdict: 'APPROVED_FOR_NEXT_STAGE' }) },
       ],
+      // Two reviewer turns and no implementer: the workspace never moves, which is
+      // also what the reviewer read-only check requires of it.
+      workspace: quietCaptures(),
     })
 
     const result = await runOrchestration(h.input, h.deps)
@@ -170,6 +183,8 @@ describe('schema-invalid provider output', () => {
       inputOverrides: {
         limits: limitsWith({ max_rounds: 10, cost_cap_usd: 100, max_invalid_outputs: 2 }),
       },
+      authorizationOverrides: { max_rounds: 10, cost_cap_usd: 100 },
+      workspace: quietCaptures(),
     })
 
     const result = await runOrchestration(h.input, h.deps)
@@ -389,6 +404,9 @@ describe('duplicate delivery', () => {
       runOverrides: { mode: 'DESIGN' },
       implementerScript: [{ output: implementerOutput() }],
       reviewerScript: [{ output: reviewerOutput({ verdict: 'WAITING_HUMAN', human_question: 'ok?' }) }],
+      // Round 1 happened in the process that died, so it consumed no captures
+      // here: this process opens on the implementer's pair, not the reviewer's.
+      workspace: defaultCaptures(),
     })
 
     const crashedTurn: LedgerEvent = {
@@ -407,6 +425,8 @@ describe('duplicate delivery', () => {
       output_digest: 'abc',
       authoritative: null,
       self_report_mismatches: [],
+      handoff: null,
+      wait: null,
       next_state: 'CLAUDE_TURN',
     }
     h.github.seedComment({
@@ -450,6 +470,8 @@ describe('duplicate delivery', () => {
       output_digest: 'from-the-other-runner',
       authoritative: null,
       self_report_mismatches: [],
+      handoff: null,
+      wait: null,
       next_state: 'CLAUDE_TURN',
     }
 

@@ -68,12 +68,20 @@ export async function transitionTo(
   })
 }
 
-/** Deterministic id for the next wait on this run, derived from the ledger. */
+/**
+ * Deterministic id for the next wait on this run, derived from the ledger.
+ *
+ * Counts every event kind that can open a wait. `turn_completed` is one of them:
+ * a reviewer verdict of WAITING_HUMAN parks the run on a turn that completed
+ * successfully. Missing it here would hand out an id that a previous wait already
+ * used, and two blocks sharing an id means one approval clears both.
+ */
 export function nextWaitId(ctx: RunnerContext): string {
   const opened = ctx.events.filter(
     (event) =>
       (event.event === 'state_changed' && event.wait !== null) ||
-      (event.event === 'turn_rejected' && event.wait !== null)
+      (event.event === 'turn_rejected' && event.wait !== null) ||
+      (event.event === 'turn_completed' && event.wait !== null)
   ).length
   return `wait-${ctx.run.run_id}-${opened + 1}`
 }

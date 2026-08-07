@@ -280,6 +280,95 @@ export const implementerTurnOutputSchema = z.object({
 export type ImplementerTurnOutput = z.infer<typeof implementerTurnOutputSchema>
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Turn handoff — what one agent's turn tells the next one
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The reason the loop is a loop.
+ *
+ * Without this the ledger kept only an `output_digest`, so every round rebuilt
+ * its prompt from the original task brief alone: a reviewer's REQUEST_CHANGES
+ * findings never reached the implementer, and the implementer's conclusions never
+ * reached the reviewer. Two agents restating the same brief at each other is not
+ * a review loop, however many rounds it runs.
+ *
+ * The handoff rides on `turn_completed` because rounds do not share a process —
+ * each dispatch rebuilds its state by folding the ledger, so anything the next
+ * round needs has to be *in* the ledger.
+ *
+ * Three properties are deliberate:
+ *
+ * - **Bounded.** Every field is length-capped and every list count-capped, and
+ *   the builder truncates to those caps. One Issue comment holds 65536 characters;
+ *   an unbounded model output would silently fail to post, and a ledger that
+ *   cannot append is a ledger that has stopped.
+ * - **Advisory, never a grant.** `requested_next_paths` is named for what it is.
+ *   Scope comes from `WorkPackageAuthorization` and nothing a model writes here
+ *   widens it — the policy layer never reads this.
+ * - **Authoritative where it can be.** The implementer's `files_changed` and
+ *   commit identity are copied from the workspace record, not from its self-report.
+ */
+export const HANDOFF_MAX_ITEMS = 8
+export const HANDOFF_MAX_TEXT = 300
+export const HANDOFF_MAX_SUMMARY = 800
+
+const handoffText = z.string().min(1).max(HANDOFF_MAX_TEXT)
+const handoffList = z.array(handoffText).max(HANDOFF_MAX_ITEMS)
+
+export const reviewerHandoffSchema = z.object({
+  kind: z.literal('reviewer'),
+  verdict: verdictSchema,
+  summary: z.string().min(1).max(HANDOFF_MAX_SUMMARY),
+  findings: z
+    .array(
+      z.object({
+        severity: z.enum(['blocker', 'major', 'minor', 'nit']),
+        evidence: handoffText,
+        source_ref: handoffText,
+        reasoning: handoffText,
+      })
+    )
+    .max(HANDOFF_MAX_ITEMS),
+  acceptance_criteria: handoffList,
+  /** What the reviewer *asks* for next. Not a grant — see the note above. */
+  requested_next_paths: handoffList,
+  prohibited_next_actions: handoffList,
+  human_question: z.string().min(1).max(HANDOFF_MAX_SUMMARY).nullable(),
+})
+export type ReviewerHandoff = z.infer<typeof reviewerHandoffSchema>
+
+export const implementerHandoffSchema = z.object({
+  kind: z.literal('implementer'),
+  conclusion: z.string().min(1).max(HANDOFF_MAX_SUMMARY),
+  /** From the workspace record, not the model's `files_changed`. */
+  files_changed: handoffList,
+  tests_run: z
+    .array(
+      z.object({
+        command: handoffText,
+        passed: z.number().int().nonnegative(),
+        failed: z.number().int().nonnegative(),
+        note: handoffText.nullable(),
+      })
+    )
+    .max(HANDOFF_MAX_ITEMS),
+  baseline_comparison: z.string().min(1).max(HANDOFF_MAX_SUMMARY),
+  remaining_risks: handoffList,
+  requested_next_scope: handoffList,
+  policy_exceptions: handoffList,
+  /** From the workspace record. */
+  commit_sha: handoffText.nullable(),
+  pr_number: z.number().int().positive().nullable(),
+})
+export type ImplementerHandoff = z.infer<typeof implementerHandoffSchema>
+
+export const turnHandoffSchema = z.discriminatedUnion('kind', [
+  reviewerHandoffSchema,
+  implementerHandoffSchema,
+])
+export type TurnHandoff = z.infer<typeof turnHandoffSchema>
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Authoritative turn facts
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -411,6 +500,27 @@ export const ledgerEventSchema = z.discriminatedUnion('event', [
   }),
   z.object({
     ...ledgerBase,
+    /**
+     * The runner finished but deliberately did NOT free the lease.
+     *
+     * Written when a provider that cannot prove it cancels was still in flight
+     * when we stopped waiting. Releasing then would end the Actions concurrency
+     * group while the old call may still be writing to the repository and
+     * billing; a human could authorise a resume and start a second one beside it.
+     * So the lease is held — and extended to cover the provider's server-side
+     * maximum — until the window the old call could still be alive in has passed.
+     */
+    event: z.literal('lease_retained'),
+    lock_key: z.string().min(1),
+    holder: z.string().min(1),
+    /** Fencing token of the lease being held. Same matching rule as a release. */
+    lease_id: z.string().min(1),
+    /** Extends the lease to here. Only ever forward, never shorter. */
+    retained_until: isoTimestamp,
+    reason: z.string().min(1),
+  }),
+  z.object({
+    ...ledgerBase,
     event: z.literal('turn_started'),
     actor: actorSchema,
     round: z.number().int().positive(),
@@ -447,6 +557,21 @@ export const ledgerEventSchema = z.discriminatedUnion('event', [
     authoritative: authoritativeTurnFactsSchema.nullable(),
     /** Discrepancies between the model's self-report and the authoritative facts. */
     self_report_mismatches: z.array(z.string()).default([]),
+    /**
+     * What this turn tells the next one. The next round's prompt is built from
+     * this, so a reviewer's findings actually reach the implementer and the
+     * implementer's result actually reaches the reviewer.
+     */
+    handoff: turnHandoffSchema.nullable().default(null),
+    /**
+     * Present exactly when `next_state` is WAITING_HUMAN.
+     *
+     * A reviewer verdict of WAITING_HUMAN / STOP_POLICY_VIOLATION parks the run
+     * on a *completed* turn, not a rejected one. Without a wait here the block
+     * was invisible to `currentOpenWait`, so no authorization could name it and
+     * the run could never be released. See turn_rejected.wait.
+     */
+    wait: waitDescriptorSchema.nullable().default(null),
     /** The state this turn moved the run to. Carried on the same event as the
      *  turn itself so a crash cannot land between "the turn happened" and "the
      *  run moved on" — the window that would otherwise make us pay twice. */

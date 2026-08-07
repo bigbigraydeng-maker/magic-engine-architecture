@@ -228,6 +228,8 @@ describe('lease takeover never produces unrecorded duplicate spend', () => {
       output_digest: 'rival',
       authoritative: null,
       self_report_mismatches: [],
+      handoff: null,
+      wait: null,
       next_state: 'CLAUDE_TURN',
     }
 
@@ -280,6 +282,8 @@ describe('the cost cap is a ceiling', () => {
       output_digest: 'x',
       authoritative: null,
       self_report_mismatches: [],
+      handoff: null,
+      wait: null,
       next_state: 'GPT_TURN',
     }
     h.github.seedComment({
@@ -315,6 +319,8 @@ describe('the cost cap is a ceiling', () => {
       output_digest: 'x',
       authoritative: null,
       self_report_mismatches: [],
+      handoff: null,
+      wait: null,
       next_state: 'GPT_TURN',
     }
     h.github.seedComment({
@@ -335,6 +341,10 @@ describe('the cost cap is a ceiling', () => {
       inputOverrides: {
         limits: { ...SCAFFOLD_LIMITS, max_rounds: 50, cost_cap_usd: 1, max_turn_cost_usd: 0.25 },
       },
+      // The authorization is a ceiling too, and the scaffold's is 6 rounds — which
+      // would stop this run long before the dollars ran out and quietly turn a
+      // cost-cap test into a round-cap test.
+      authorizationOverrides: { max_rounds: 50, cost_cap_usd: 1 },
       reviewerScript: [{ output: reviewerOutput({ verdict: 'REQUEST_CHANGES' }), usage: { cost_usd: 0.05 } }],
       implementerScript: [{ output: quietImplementerOutput(), usage: { cost_usd: 0.2 } }],
       workspace: quietCaptures(),
@@ -381,5 +391,96 @@ describe('a call that never comes back still costs money', () => {
       6
     )
     expect(result.run.state).toBe('WAITING_HUMAN')
+  })
+})
+
+/**
+ * The third leak, found later: the budget gate read the run's caps and the
+ * deployment's, and never the **authorization's**.
+ *
+ * `WorkPackageAuthorization` carries `max_rounds` and `cost_cap_usd` — the pair a
+ * human actually signed. The gate took `min(run, limits)` and ignored the grant
+ * entirely, so a run constructed with `$2 / 6 rounds` would happily spend all of
+ * it under a work package approved for `$0.50 / 2 rounds`, with every schema
+ * check passing on the way. Configuration is not approval; the tightest of the
+ * three has to bind.
+ */
+describe('the signed authorization is a ceiling like any other', () => {
+  it('stops at the authorization round cap even when the run allows more', async () => {
+    const h = makeHarness({
+      runOverrides: { mode: 'DESIGN', max_rounds: 20, cost_cap_usd: 50 },
+      inputOverrides: {
+        limits: { ...SCAFFOLD_LIMITS, max_rounds: 20, cost_cap_usd: 50, max_invalid_outputs: 9 },
+      },
+      authorizationOverrides: { max_rounds: 2, cost_cap_usd: 50 },
+      reviewerScript: [{ output: reviewerOutput({ verdict: 'REQUEST_CHANGES' }) }],
+      implementerScript: [{ output: quietImplementerOutput() }],
+      workspace: quietCaptures(),
+    })
+
+    const result = await runOrchestration(h.input, h.deps)
+
+    expect(result.run.stop_reason).toBe('max_rounds_reached')
+    expect(h.reviewer.callCount + h.implementer.callCount).toBe(2)
+    expect(result.stopped_because).toContain('authorization')
+  })
+
+  it('stops at the authorization cost cap even when the run allows more', async () => {
+    const h = makeHarness({
+      runOverrides: { mode: 'DESIGN', max_rounds: 20, cost_cap_usd: 50 },
+      inputOverrides: {
+        limits: { ...SCAFFOLD_LIMITS, max_rounds: 20, cost_cap_usd: 50, max_invalid_outputs: 9 },
+      },
+      // Enough for one reviewer reservation, not two.
+      authorizationOverrides: { max_rounds: 20, cost_cap_usd: 0.2 },
+      reviewerScript: [
+        { output: reviewerOutput({ verdict: 'REQUEST_CHANGES' }), usage: { cost_usd: 0.05 } },
+      ],
+      implementerScript: [{ output: quietImplementerOutput(), usage: { cost_usd: 0.05 } }],
+      workspace: quietCaptures(),
+    })
+
+    const result = await runOrchestration(h.input, h.deps)
+
+    expect(result.run.stop_reason).toBe('cost_cap_reached')
+    expect(result.run.cumulative_cost_usd).toBeLessThanOrEqual(0.2)
+    expect(result.stopped_because).toContain('authorization')
+  })
+
+  it('runs the full length when the authorization is the widest of the three', async () => {
+    // The positive control: a grant wider than the run must not tighten anything,
+    // or the fix would just be a second, hidden cap.
+    const h = makeHarness({
+      runOverrides: { mode: 'DESIGN', max_rounds: 2, cost_cap_usd: 50 },
+      inputOverrides: {
+        limits: { ...SCAFFOLD_LIMITS, max_rounds: 20, cost_cap_usd: 50, max_invalid_outputs: 9 },
+      },
+      authorizationOverrides: { max_rounds: 99, cost_cap_usd: 99 },
+      reviewerScript: [{ output: reviewerOutput({ verdict: 'REQUEST_CHANGES' }) }],
+      implementerScript: [{ output: quietImplementerOutput() }],
+      workspace: quietCaptures(),
+    })
+
+    const result = await runOrchestration(h.input, h.deps)
+
+    expect(result.run.stop_reason).toBe('max_rounds_reached')
+    expect(h.reviewer.callCount + h.implementer.callCount).toBe(2)
+    expect(result.stopped_because).toContain('run')
+  })
+
+  it('surfaces the binding cap in preflight, so a dry run shows it before spending', async () => {
+    const h = makeHarness({
+      dryRun: true,
+      runOverrides: { max_rounds: 20, cost_cap_usd: 50 },
+      inputOverrides: { limits: { ...SCAFFOLD_LIMITS, max_rounds: 20, cost_cap_usd: 50 } },
+      authorizationOverrides: { max_rounds: 2, cost_cap_usd: 0.25 },
+    })
+
+    const { preflight } = await runOrchestration(h.input, h.deps)
+
+    expect(preflight.effective_caps.max_rounds).toBe(2)
+    expect(preflight.effective_caps.cost_cap_usd).toBe(0.25)
+    expect(preflight.effective_caps.rounds_source).toContain('authorization')
+    expect(preflight.effective_caps.cost_source).toContain('authorization')
   })
 })
