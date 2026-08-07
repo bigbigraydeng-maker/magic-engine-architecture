@@ -547,9 +547,9 @@ v0.1 只列了 `policy/` · `prompts/` · `state-machine.ts`，把 `runner.ts` �
 | Action | 全部 pin 到完整 commit SHA |
 | **required status check 名** | **`ai-orchestrator-tests`** |
 
-跑三件事：模块级 `tsc -p tools/ai-orchestrator/tsconfig.json`（全仓基线 188 条红，
-所以必须收窄到本目录才有意义，这里的标准是 0）· `npx vitest run tools/ai-orchestrator` ·
-结束时断言工作区没被改动。
+跑三件事：模块级 `tsc -p tools/ai-orchestrator/tsconfig.json`（全仓基线约 180 条红，
+且**随 main 漂移** —— 写死任何一个准数都会过期，所以必须收窄到本目录才有意义，
+这里的标准是 0）· `npx vitest run tools/ai-orchestrator` · 结束时断言工作区没被改动。
 
 ### 为什么**不**加 paths 过滤
 

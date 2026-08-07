@@ -62,8 +62,9 @@ jobs:
         run: npm ci
 
       - name: Type check this module
-        # Scoped config: the repository baseline has 188 pre-existing errors, so a
-        # whole-repo check could never be a gate. Here the standard is zero.
+        # Scoped config: the repository baseline carries ~180 pre-existing errors and
+        # drifts with main, so a whole-repo check could never be a gate. Here the
+        # standard is zero.
         run: npx tsc -p tools/ai-orchestrator/tsconfig.json
 
       - name: Tests, including architecture and workflow supply-chain checks
