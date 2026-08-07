@@ -33,12 +33,22 @@ function summarise(event: LedgerEvent): string {
         : `🔒 **lease acquired** by \`${event.holder}\``
     case 'lease_released':
       return `🔓 **lease released** by \`${event.holder}\``
+    case 'turn_started':
+      return (
+        `⏳ **${event.actor}** started round ${event.round} · holder \`${event.holder}\`` +
+        ` · reserved $${event.reserved_cost_usd.toFixed(4)} until ${event.claim_expires_at}`
+      )
     case 'turn_completed':
       return `✅ **${event.actor}** finished round ${event.round}${
         event.verdict ? ` · verdict \`${event.verdict}\`` : ''
       } · cost $${event.cost_usd.toFixed(4)}`
     case 'turn_rejected':
       return `⛔️ **${event.actor}** round ${event.round} rejected — ${event.reason}`
+    case 'duplicate_spend_recorded':
+      return (
+        `💸 **duplicate spend** · ${event.actor} round ${event.round} · ` +
+        `$${event.cost_usd.toFixed(4)} spent by \`${event.holder}\` and discarded — ${event.note}`
+      )
     case 'state_changed':
       return `➡️ \`${event.from}\` → \`${event.to}\` — ${event.reason}`
     case 'human_authorization':

@@ -3,6 +3,12 @@
  *
  * Everything is parsed through the schemas at construction, so a bad constant
  * here fails at start-up rather than half-way through a run.
+ *
+ * Note what the work package does NOT grant: `tools/ai-orchestrator/**`.
+ * The orchestrator is protected in full, and `workPackageScopeSchema` refuses to
+ * parse an authorization that reaches into it — so this file physically cannot
+ * hand the tool the keys to itself. Upgrading the orchestrator is a separate,
+ * human-initiated, human-reviewed change (which is how this very file got here).
  */
 
 import {
@@ -37,7 +43,16 @@ export const SCAFFOLD_LIMITS: OrchestratorLimits = {
   ...DEFAULT_LIMITS,
   max_rounds: 6,
   cost_cap_usd: 2,
+  max_turn_cost_usd: 0.5,
 }
+
+/**
+ * Must exceed `provider_timeout_ms + lease_margin_ms`, or `checkTimingInvariant`
+ * refuses to start the run. That relationship is what stops a lease from lapsing
+ * mid-call and letting a second runner start a second paid call.
+ */
+export const SCAFFOLD_LEASE_TTL_MS =
+  SCAFFOLD_LIMITS.provider_timeout_ms + SCAFFOLD_LIMITS.lease_margin_ms + 60_000
 
 export const SCAFFOLD_ALLOWED_TOOLS = [
   'Read',
@@ -69,11 +84,13 @@ export function createScaffoldAuthorization(args: {
   ttlMs?: number
   authorizedBy?: string
   authorizationSource: string
+  /** Defaults to a design-docs-only scope. Never the orchestrator itself. */
+  allowedPaths?: readonly string[]
 }): WorkPackageAuthorization {
   return workPackageAuthorizationSchema.parse({
     work_package_id: args.workPackageId,
     scope: {
-      allowed_paths: ['tools/ai-orchestrator/**', 'docs/specs/**'],
+      allowed_paths: args.allowedPaths ?? ['docs/specs/**'],
       denied_paths: [
         'src/**',
         'supabase/**',

@@ -6,10 +6,15 @@
  * dry-run) pass records simulated commits here, so asserting the list is empty in
  * dry-run distinguishes "the provider was never called" from "the provider was
  * called but happened to do nothing".
+ *
+ * `telemetry` is scripted independently of `output` so a test can make the model
+ * under-report the tools it used and prove the authoritative record still catches
+ * it. That separation is the whole point of the interface.
  */
 
 import type {
   ImplementerProvider,
+  ProviderTelemetry,
   ProviderTurnResult,
   ProviderUsage,
   TurnRequest,
@@ -18,6 +23,9 @@ import type {
 export interface MockImplementerStep {
   output: unknown
   usage?: Partial<ProviderUsage>
+  telemetry?: Partial<ProviderTelemetry>
+  delayMs?: number
+  throws?: string
 }
 
 export interface SimulatedSideEffect {
@@ -26,6 +34,10 @@ export interface SimulatedSideEffect {
 }
 
 const DEFAULT_USAGE: ProviderUsage = { input_tokens: 4000, output_tokens: 1500, cost_usd: 0.2 }
+const DEFAULT_TELEMETRY: ProviderTelemetry = {
+  tools_used: ['Read', 'Edit'],
+  source: 'mock:execution-log',
+}
 
 interface CommitEvidenceShape {
   branch?: unknown
@@ -55,6 +67,8 @@ export class MockImplementerProvider implements ImplementerProvider {
     this.callCount += 1
 
     if (!step) throw new Error('MockImplementerProvider was called with an empty script')
+    if (step.delayMs) await new Promise((resolve) => setTimeout(resolve, step.delayMs))
+    if (step.throws) throw new Error(step.throws)
 
     this.recordSideEffects(step.output)
 
@@ -63,6 +77,7 @@ export class MockImplementerProvider implements ImplementerProvider {
       usage: { ...DEFAULT_USAGE, ...step.usage },
       model: 'mock-claude',
       provider: this.name,
+      telemetry: { ...DEFAULT_TELEMETRY, ...step.telemetry },
     }
   }
 

@@ -4,9 +4,14 @@
  *
  * Nothing here calls out to the network or reads a database. It is pure
  * evaluation over already-parsed values so the tests can drive every branch.
+ *
+ * The scope and tool checks take **authoritative facts** — git, GitHub, the
+ * execution harness — not the model's description of its own turn. An agent that
+ * under-reports a file it touched or a tool it ran must not thereby escape them.
  */
 
 import type {
+  AuthoritativeTurnFacts,
   ImplementerTurnOutput,
   OrchestrationRun,
   SideEffectClass,
@@ -15,8 +20,10 @@ import type {
   WorkPackageScope,
 } from '../domain/schema'
 import { ALWAYS_PROHIBITED_OPERATIONS } from '../domain/schema'
+import type { BudgetLedger } from '../domain/budget'
+import { committedSpend, remainingBudget } from '../domain/budget'
 import { matchesAnyWildcard, selectMatching, selectNotMatching } from './glob'
-import { selectProtected } from './protected-paths'
+import { selectProtected, selectSelfModifyingPatterns } from './protected-paths'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Limits
@@ -26,7 +33,15 @@ export interface OrchestratorLimits {
   /** One round == one agent turn. */
   max_rounds: number
   cost_cap_usd: number
+  /** Reserved before every call. A turn may only start if this much is left. */
+  max_turn_cost_usd: number
+  /** Output-token ceiling handed to the provider so one call cannot blow the reservation. */
+  max_output_tokens: number
   max_wall_clock_ms: number
+  /** Hard wall on one provider call. Must be shorter than the lease TTL. */
+  provider_timeout_ms: number
+  /** Safety gap between the end of a call and the end of the lease. */
+  lease_margin_ms: number
   /** How many schema-invalid provider outputs before the run is declared FAILED. */
   max_invalid_outputs: number
 }
@@ -34,7 +49,11 @@ export interface OrchestratorLimits {
 export const DEFAULT_LIMITS: OrchestratorLimits = {
   max_rounds: 6,
   cost_cap_usd: 2,
+  max_turn_cost_usd: 0.5,
+  max_output_tokens: 16_000,
   max_wall_clock_ms: 20 * 60 * 1000,
+  provider_timeout_ms: 8 * 60 * 1000,
+  lease_margin_ms: 2 * 60 * 1000,
   max_invalid_outputs: 2,
 }
 
@@ -75,33 +94,91 @@ export function evaluateKillSwitch(input: KillSwitchInput): KillSwitchResult {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Configuration invariants — checked before anything can be spent
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface TimingInvariantResult {
+  ok: boolean
+  message: string
+}
+
+/**
+ * A provider call must finish well inside the lease.
+ *
+ * If a lease can expire while a call is still running, a second runner will take
+ * the lease over and start a second paid call for the same turn — and no amount
+ * of after-the-fact deduplication gets that money back. Checking the relationship
+ * up front, and failing closed, is the only place this can be prevented.
+ */
+export function checkTimingInvariant(
+  limits: OrchestratorLimits,
+  leaseTtlMs: number
+): TimingInvariantResult {
+  const required = limits.provider_timeout_ms + limits.lease_margin_ms
+  if (leaseTtlMs < required) {
+    return {
+      ok: false,
+      message:
+        `lease TTL ${leaseTtlMs}ms is shorter than provider timeout ` +
+        `${limits.provider_timeout_ms}ms + margin ${limits.lease_margin_ms}ms; ` +
+        'a lease could lapse mid-call and let a second runner start a duplicate paid call',
+    }
+  }
+  if (limits.max_turn_cost_usd > limits.cost_cap_usd) {
+    return {
+      ok: false,
+      message: `max_turn_cost_usd $${limits.max_turn_cost_usd} exceeds cost_cap_usd $${limits.cost_cap_usd}`,
+    }
+  }
+  if (limits.max_turn_cost_usd <= 0) {
+    return { ok: false, message: 'max_turn_cost_usd must be positive; a zero reservation reserves nothing' }
+  }
+  return { ok: true, message: 'timing and budget invariants hold' }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Budget
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type BudgetResult =
-  | { ok: true }
-  | { ok: false; stop_reason: StopReason; message: string }
+  | { ok: true; remaining_usd: number }
+  | { ok: false; stop_reason: StopReason; message: string; remaining_usd: number }
 
+/**
+ * The pre-flight budget gate.
+ *
+ * `remaining` subtracts settled spend, live reservations and orphaned
+ * reservations alike, and the turn only proceeds if a whole `max_turn_cost_usd`
+ * still fits. That is what makes the cap a ceiling rather than a tripwire.
+ */
 export function checkBudget(
   run: OrchestrationRun,
   limits: OrchestratorLimits,
+  ledger: BudgetLedger,
   now: Date
 ): BudgetResult {
+  const costCap = Math.min(run.cost_cap_usd, limits.cost_cap_usd)
+  const remaining = remainingBudget(costCap, ledger)
+
   const roundCap = Math.min(run.max_rounds, limits.max_rounds)
   if (run.current_round >= roundCap) {
     return {
       ok: false,
       stop_reason: 'max_rounds_reached',
       message: `round ${run.current_round} reached the cap of ${roundCap}`,
+      remaining_usd: remaining,
     }
   }
 
-  const costCap = Math.min(run.cost_cap_usd, limits.cost_cap_usd)
-  if (run.cumulative_cost_usd >= costCap) {
+  if (remaining < limits.max_turn_cost_usd) {
     return {
       ok: false,
       stop_reason: 'cost_cap_reached',
-      message: `cumulative cost $${run.cumulative_cost_usd.toFixed(4)} reached the cap of $${costCap.toFixed(4)}`,
+      message:
+        `remaining budget $${remaining.toFixed(4)} cannot cover the ` +
+        `$${limits.max_turn_cost_usd.toFixed(4)} reservation one turn requires ` +
+        `(committed $${committedSpend(ledger).toFixed(4)} of $${costCap.toFixed(4)})`,
+      remaining_usd: remaining,
     }
   }
 
@@ -110,10 +187,11 @@ export function checkBudget(
       ok: false,
       stop_reason: 'wall_clock_exceeded',
       message: `wall-clock deadline ${run.deadline_at} has passed`,
+      remaining_usd: remaining,
     }
   }
 
-  return { ok: true }
+  return { ok: true, remaining_usd: remaining }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -130,6 +208,8 @@ export type PolicyViolationCode =
   | 'AUTHORIZATION_EXPIRED'
   | 'SIDE_EFFECT_CLASS_NOT_ALLOWED'
   | 'PROHIBITED_OPERATION_MISSING'
+  | 'SELF_MODIFYING_SCOPE'
+  | 'PR_ALREADY_MERGED'
 
 export type PolicyDecision =
   | { allowed: true }
@@ -150,7 +230,7 @@ export function enforceProtectedPaths(files: readonly string[]): PolicyDecision 
   if (offending.length > 0) {
     return deny(
       'PROTECTED_PATH_TOUCHED',
-      'turn attempted to modify the control plane that governs it',
+      'turn changed the control plane that governs it',
       offending
     )
   }
@@ -204,6 +284,17 @@ export function enforceAuthorizationWindow(
     )
   }
 
+  // Belt and braces: the schema already refuses to parse one of these, but the
+  // check is cheap and the property is important enough to assert twice.
+  const selfModifying = selectSelfModifyingPatterns(authorization.scope.allowed_paths)
+  if (selfModifying.length > 0) {
+    return deny(
+      'SELF_MODIFYING_SCOPE',
+      'authorization grants paths inside the orchestrator control plane',
+      selfModifying
+    )
+  }
+
   return ALLOWED
 }
 
@@ -222,34 +313,96 @@ export function enforceSideEffectClass(
 }
 
 /**
- * The single call the runner makes after an implementer turn. Order matters:
+ * The single call the runner makes after an implementer turn.
+ *
+ * Takes authoritative facts, not the model's output. Order matters:
  * self-protection first, then scope, then tools, then write permissions — so the
  * most serious violation is the one that gets reported.
  */
 export function evaluateImplementerTurn(
   authorization: WorkPackageAuthorization,
-  output: ImplementerTurnOutput
+  facts: AuthoritativeTurnFacts
 ): PolicyDecision {
   const checks: readonly PolicyDecision[] = [
-    enforceProtectedPaths(output.files_changed),
-    enforceFileScope(authorization.scope, output.files_changed),
-    enforceToolUse(authorization.scope, output.tools_used),
+    enforceProtectedPaths(facts.files_changed),
+    enforceFileScope(authorization.scope, facts.files_changed),
+    enforceToolUse(authorization.scope, facts.tools_used),
   ]
 
   const violation = checks.find((decision) => !decision.allowed)
   if (violation) return violation
 
-  if (output.commit_evidence && !authorization.scope.can_commit) {
-    return deny('COMMIT_NOT_AUTHORIZED', 'turn reported a commit but committing is not authorized', [
-      output.commit_evidence.commit_sha,
+  if (facts.commit && !authorization.scope.can_commit) {
+    return deny('COMMIT_NOT_AUTHORIZED', 'a commit exists but committing is not authorized', [
+      facts.commit.sha,
     ])
   }
 
-  if (output.commit_evidence?.pr_number != null && !authorization.scope.can_open_draft_pr) {
-    return deny('PR_NOT_AUTHORIZED', 'turn opened a pull request but that is not authorized', [
-      String(output.commit_evidence.pr_number),
+  if (facts.pull_request && !authorization.scope.can_open_draft_pr) {
+    return deny('PR_NOT_AUTHORIZED', 'a pull request exists but that is not authorized', [
+      String(facts.pull_request.number),
+    ])
+  }
+
+  if (facts.pull_request?.merged) {
+    return deny('PR_ALREADY_MERGED', 'the pull request is merged; merging is never authorized', [
+      String(facts.pull_request.number),
     ])
   }
 
   return ALLOWED
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Self-report comparison
+// ─────────────────────────────────────────────────────────────────────────────
+
+function diffSets(
+  label: string,
+  claimed: readonly string[],
+  observed: readonly string[]
+): string[] {
+  const claimedSet = new Set(claimed)
+  const observedSet = new Set(observed)
+  const mismatches: string[] = []
+
+  for (const value of observed) {
+    if (!claimedSet.has(value)) mismatches.push(`${label}: under-reported "${value}"`)
+  }
+  for (const value of claimed) {
+    if (!observedSet.has(value)) mismatches.push(`${label}: claimed "${value}" but it is not in the record`)
+  }
+  return mismatches
+}
+
+/**
+ * Compares the model's account of its turn with what actually happened.
+ *
+ * The result never widens what is allowed — policy has already been decided on
+ * the authoritative facts. It exists because an implementer whose self-report
+ * does not match the record has either lost track of what it did or is
+ * misrepresenting it, and neither is something to keep driving on.
+ */
+export function compareSelfReport(
+  output: ImplementerTurnOutput,
+  facts: AuthoritativeTurnFacts
+): readonly string[] {
+  const mismatches = [
+    ...diffSets('files_changed', output.files_changed, facts.files_changed),
+    ...diffSets('tools_used', output.tools_used, facts.tools_used),
+  ]
+
+  const claimedSha = output.commit_evidence?.commit_sha ?? null
+  const actualSha = facts.commit?.sha ?? null
+  if (claimedSha !== actualSha) {
+    mismatches.push(`commit: reported ${claimedSha ?? 'none'} but the record says ${actualSha ?? 'none'}`)
+  }
+
+  const claimedPr = output.commit_evidence?.pr_number ?? null
+  const actualPr = facts.pull_request?.number ?? null
+  if (claimedPr !== actualPr) {
+    mismatches.push(`pull_request: reported ${claimedPr ?? 'none'} but the record says ${actualPr ?? 'none'}`)
+  }
+
+  return mismatches
 }

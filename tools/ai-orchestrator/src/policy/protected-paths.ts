@@ -1,30 +1,39 @@
 /**
  * The self-protection surface.
  *
- * These are the files that decide what the orchestrator is allowed to do. An
- * agent running under the orchestrator must never be able to change them in the
- * same run that they govern — otherwise every other guard in this directory is
- * advisory.
+ * **The whole orchestrator is protected, not a hand-picked subset.** The first
+ * version listed `policy/`, `prompts/` and `state-machine.ts` and left `runner.ts`,
+ * `schema.ts`, the ledger, every adapter, `config/`, `digest`, `fold` and `lease`
+ * writable — each of which can defeat the guards just as thoroughly. Any file that
+ * can change what the orchestrator is allowed to do belongs here, and it is easier
+ * to be right about "all of it" than about a list.
+ *
+ * Consequence, and it is intended: **the orchestrator cannot upgrade itself.**
+ * Changing this tool is a separate, human-initiated, human-reviewed change.
+ * `workPackageScopeSchema` refuses to parse an authorization whose allowed paths
+ * overlap this surface, so a self-modifying work package cannot even be built.
  *
  * Defence in depth (weakest listed last):
  *   1. GITHUB_TOKEN has no `workflows: write`, so GitHub itself rejects any push
  *      that touches `.github/workflows/**`. This holds on GitHub Free.
- *   2. `enforceProtectedPaths` below rejects the turn before anything is applied.
- *   3. `assertPolicyIntegrity` re-hashes these files after each turn and halts on
- *      drift.
- *   4. Branch protection + CODEOWNERS — NOT available on this repository today
+ *   2. `workPackageScopeSchema` rejects an authorization that grants this surface.
+ *   3. `enforceProtectedPaths` rejects the turn, using the *real* changed-file list
+ *      from git or the GitHub PR — never the model's self-report.
+ *   4. `ControlPlaneIntegrityChecker` re-reads the surface after each turn and
+ *      halts on drift, catching changes that were made but not reported anywhere.
+ *   5. Branch protection + CODEOWNERS — NOT available on this repository today
  *      (private repo on the Free plan). Tracked as an Enable-phase blocker.
  */
 
-import { createHash } from 'node:crypto'
-import { matchesAnyGlob } from './glob'
+import { matchesAnyGlob, matchesGlob } from './glob'
 
 export const PROTECTED_PATHS = [
+  // Every workflow, not only ours: a run that can edit any workflow can add a
+  // trigger that runs itself.
   '.github/**',
   'CODEOWNERS',
-  'tools/ai-orchestrator/src/policy/**',
-  'tools/ai-orchestrator/src/prompts/**',
-  'tools/ai-orchestrator/src/domain/state-machine.ts',
+  // The orchestrator in full — source, tests, config and prompts alike.
+  'tools/ai-orchestrator/**',
 ] as const
 
 export function isProtectedPath(path: string): boolean {
@@ -36,39 +45,51 @@ export function selectProtected(paths: readonly string[]): readonly string[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Integrity snapshot
+// Scope overlap — makes a self-modifying work package unrepresentable
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** path -> sha256 of the file contents, captured at run start. */
-export type PolicySnapshot = Readonly<Record<string, string>>
-
-export function hashContent(content: string): string {
-  return createHash('sha256').update(content, 'utf8').digest('hex')
+/**
+ * A concrete path the pattern would match. Used to test two globs for overlap
+ * without implementing glob intersection: if either pattern matches the other's
+ * witness, the two can reach the same file.
+ */
+function witnessFor(pattern: string): string {
+  return pattern.split('**').join('__w__/__w__').split('*').join('__w__')
 }
 
-export function snapshotPolicy(files: Readonly<Record<string, string>>): PolicySnapshot {
-  const snapshot: Record<string, string> = {}
-  for (const [path, content] of Object.entries(files)) {
-    snapshot[path] = hashContent(content)
-  }
-  return snapshot
+export function globsOverlap(a: string, b: string): boolean {
+  return matchesGlob(witnessFor(a), b) || matchesGlob(witnessFor(b), a)
 }
 
-export interface IntegrityResult {
-  intact: boolean
-  /** Files whose hash changed, plus files that appeared or disappeared. */
-  drifted: readonly string[]
-}
-
-export function comparePolicySnapshots(before: PolicySnapshot, after: PolicySnapshot): IntegrityResult {
-  const paths = Object.keys(before).concat(
-    Object.keys(after).filter((path) => !(path in before))
+/** Allowed-path patterns that reach into the protected surface. */
+export function selectSelfModifyingPatterns(allowedPaths: readonly string[]): readonly string[] {
+  return allowedPaths.filter((pattern) =>
+    PROTECTED_PATHS.some((protectedPattern) => globsOverlap(pattern, protectedPattern))
   )
-  const drifted: string[] = []
+}
 
-  for (const path of paths) {
-    if (before[path] !== after[path]) drifted.push(path)
+// ─────────────────────────────────────────────────────────────────────────────
+// Integrity checking
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Reads the protected surface independently of anything the model says about it.
+ * The git-backed implementation asks the working tree, so a run that changed a
+ * control-plane file without mentioning it anywhere is still caught.
+ */
+export interface ControlPlaneIntegrityChecker {
+  readonly name: string
+  /** Protected paths that differ from the run's baseline. Empty means intact. */
+  drift(): Promise<readonly string[]>
+}
+
+/** Test and scaffold double: returns whatever it was constructed with. */
+export class StaticIntegrityChecker implements ControlPlaneIntegrityChecker {
+  readonly name = 'static'
+
+  constructor(private readonly drifted: readonly string[] = []) {}
+
+  async drift(): Promise<readonly string[]> {
+    return this.drifted
   }
-
-  return { intact: drifted.length === 0, drifted: drifted.sort() }
 }

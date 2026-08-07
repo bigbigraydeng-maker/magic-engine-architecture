@@ -67,6 +67,9 @@ describe('real adapters are skeletons in v0.1', () => {
         untrusted_sources: [],
         idempotency_key: 'k',
         input_digest: 'd',
+        timeout_ms: 1000,
+        max_output_tokens: 100,
+        reserved_cost_usd: 0.5,
       })
     ).rejects.toBeInstanceOf(ProviderNotWiredError)
   })
@@ -85,6 +88,9 @@ describe('real adapters are skeletons in v0.1', () => {
         untrusted_sources: [],
         idempotency_key: 'k',
         input_digest: 'd',
+        timeout_ms: 1000,
+        max_output_tokens: 100,
+        reserved_cost_usd: 0.5,
       })
     ).rejects.toBeInstanceOf(ProviderNotWiredError)
   })

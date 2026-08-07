@@ -25,8 +25,11 @@ const turnEvent: LedgerEvent = {
   idempotency_key: 'key-abc',
   input_digest: 'digest-abc',
   verdict: 'REQUEST_CHANGES',
+  reserved_cost_usd: 0.5,
   cost_usd: 0.05,
   output_digest: 'deadbeef',
+  authoritative: null,
+  self_report_mismatches: [],
   next_state: 'CLAUDE_TURN',
 }
 
@@ -137,6 +140,8 @@ describe('cursor and idempotency', () => {
       input_digest: 'digest-rejected',
       reason: 'policy_violation',
       detail: ['PATH_OUT_OF_SCOPE'],
+      reserved_cost_usd: 0.5,
+      cost_usd: 0.2,
       next_state: 'WAITING_HUMAN',
     }
     expect(hasTurnBeenProcessed([rejected], 'key-rejected')).toBe(true)

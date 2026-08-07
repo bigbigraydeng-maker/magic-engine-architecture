@@ -23,6 +23,11 @@ name: ME2 AI Orchestrator (manual, mock-only, inactive)
 # does not depend on branch protection — which this repository cannot use today
 # (private repo on the GitHub Free plan). See the Enable checklist in
 # docs/specs/2026-08-07-ai-orchestrator-v0.1.md §9.
+#
+# The protected surface is `.github/**`, CODEOWNERS and ALL of
+# `tools/ai-orchestrator/**`. The orchestrator therefore cannot upgrade itself:
+# a work package whose allowed paths overlap that surface does not parse.
+# Changing this tool is a human-initiated, human-reviewed change.
 
 on:
   workflow_dispatch:

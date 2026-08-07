@@ -4,430 +4,52 @@
  * Order of operations is the safety property, so it is written out once here and
  * not rearranged for convenience:
  *
- *   kill switch -> authorization window -> side-effect class -> lease -> ledger
- *   fold -> human-resume gate -> [per turn] budget -> idempotency -> provider ->
- *   schema -> policy -> integrity -> record -> transition
+ *   kill switch -> timing invariant -> authorization window -> side-effect class
+ *   -> lease -> ledger fold -> human-resume gate
+ *   -> [per turn] budget gate (reservation must fit) -> foreign live claim check
+ *      -> RESERVE (turn_started) -> provider call under timeout
+ *      -> telemetry check -> schema -> authoritative facts -> policy
+ *      -> integrity -> reconcile -> record -> transition
  *
- * Anything that would spend money or write to GitHub happens strictly after every
- * guard above it has passed. In dry-run the runner stops at the end of preflight
- * and reports what it *would* do next.
+ * Two properties are worth calling out because they were wrong in v0.1:
+ *
+ * - **Money is committed before the call, not after.** `turn_started` reserves
+ *   `max_turn_cost_usd`, and a turn may only start when that much budget is left.
+ *   If the runner dies, the reservation stays committed — we cannot know whether
+ *   the provider billed us, so we assume it did.
+ * - **Policy is evaluated on authoritative facts.** `files_changed`, `tools_used`
+ *   and commit/PR identity come from git, GitHub and the execution harness. What
+ *   the model says about its own turn is compared to that record and reported,
+ *   never trusted in its place.
  */
 
 import { IssueCommentLedger, hasTurnBeenProcessed } from './adapters/github/ledger'
-import type { PlannedWrite, RejectedComment } from './adapters/github/ledger'
-import type { GitHubClient } from './adapters/github/client'
-import type { ImplementerProvider, ReviewerProvider, TurnRequest } from './adapters/provider-types'
-import { digest, turnIdempotencyKey } from './domain/digest'
+import { computeBudgetLedger, foreignLiveClaim, remainingBudget } from './domain/budget'
+import type { BudgetLedger } from './domain/budget'
 import { foldRun } from './domain/fold'
 import { evaluateLeaseAcquisition, leaseKeyFor } from './domain/lease'
-import type { LeaseAcquisition } from './domain/lease'
-import {
-  actorForState,
-  assertTransition,
-  initialTurnState,
-  isTerminal,
-  nextStateForVerdict,
-  resumeFromWaitingHuman,
-} from './domain/state-machine'
-import type {
-  Actor,
-  ImplementerTurnOutput,
-  LedgerEvent,
-  OrchestrationRun,
-  ReviewerTurnOutput,
-  RunState,
-  SideEffectClass,
-  StopReason,
-  TurnRejectionReason,
-  WorkPackageAuthorization,
-} from './domain/schema'
-import {
-  LEDGER_SCHEMA_VERSION,
-  implementerTurnOutputSchema,
-  reviewerTurnOutputSchema,
-} from './domain/schema'
-import type { BudgetResult, KillSwitchResult, OrchestratorLimits, PolicyDecision } from './policy/policy'
+import { actorForState, initialTurnState, isTerminal, resumeFromWaitingHuman } from './domain/state-machine'
+import type { RunState, StopReason } from './domain/schema'
 import {
   checkBudget,
+  checkTimingInvariant,
   enforceAuthorizationWindow,
   enforceSideEffectClass,
-  evaluateImplementerTurn,
   evaluateKillSwitch,
 } from './policy/policy'
-import { comparePolicySnapshots } from './policy/protected-paths'
-import type { PolicySnapshot } from './policy/protected-paths'
-import { buildPromptEnvelope } from './policy/untrusted'
-import type { UntrustedBlock } from './policy/untrusted'
-import { IMPLEMENTER_PROMPT_VERSION, IMPLEMENTER_SYSTEM_POLICY } from './prompts/implementer-system.v1'
-import { REVIEWER_PROMPT_VERSION, REVIEWER_SYSTEM_POLICY } from './prompts/reviewer-system.v1'
+import { baseEvent, finish, log, record, transitionTo } from './runner-context'
+import { systemClock } from './runner-types'
+import type { PreflightReport, RunnerContext, RunnerDeps, RunnerInput, RunnerResult } from './runner-types'
+import { buildTurnRequest, runImplementerTurn, runReviewerTurn } from './turn-executor'
 
-export interface Clock {
-  now(): Date
-}
-
-export const systemClock: Clock = { now: () => new Date() }
-
-export interface RunnerDeps {
-  github: GitHubClient
-  reviewer: ReviewerProvider
-  implementer: ImplementerProvider
-  clock?: Clock
-  logger?: (line: string) => void
-}
-
-export interface RunnerInput {
-  run: OrchestrationRun
-  authorization: WorkPackageAuthorization
-  limits: OrchestratorLimits
-  /** True by default at every call site in v0.1. */
-  dryRun: boolean
-  workflowEnabledInput: boolean
-  env: Readonly<Record<string, string | undefined>>
-  /** Comment authors whose ledger markers are trusted. */
-  trustedAuthors: readonly string[]
-  /** Humans who may release a WAITING_HUMAN run. */
-  allowedAuthorizers: readonly string[]
-  /** Identifies this runner instance, e.g. `gha-run-1234567`. */
-  holder: string
-  leaseTtlMs: number
-  /** Side-effect classes this deployment permits. */
-  permittedSideEffectClasses: readonly SideEffectClass[]
-  policySnapshot: PolicySnapshot
-  /** Re-read of the control-plane files after each turn. Omitted = not checked. */
-  readPolicySnapshot?: () => PolicySnapshot
-  taskBrief: string
-  untrusted: readonly UntrustedBlock[]
-}
-
-export interface PreflightReport {
-  kill_switch: KillSwitchResult
-  authorization: PolicyDecision
-  side_effect_class: PolicyDecision
-  lease: LeaseAcquisition | null
-  budget: BudgetResult | null
-  next_actor: Actor | null
-  next_idempotency_key: string | null
-  next_input_digest: string | null
-  policy_integrity: 'checked' | 'not_checked'
-  ledger_rejected: readonly RejectedComment[]
-}
-
-export interface RunnerResult {
-  run: OrchestrationRun
-  /** Events this invocation appended (or would have appended in dry-run). */
-  appended: readonly LedgerEvent[]
-  plannedWrites: readonly PlannedWrite[]
-  dryRun: boolean
-  preflight: PreflightReport
-  stopped_because: string
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-interface RunnerContext {
-  input: RunnerInput
-  deps: RunnerDeps
-  clock: Clock
-  ledger: IssueCommentLedger
-  /** Reassigned when a conflict re-read finds fresher events. */
-  events: LedgerEvent[]
-  appended: LedgerEvent[]
-  run: OrchestrationRun
-}
-
-function log(deps: RunnerDeps, line: string): void {
-  deps.logger?.(line)
-}
-
-async function record(ctx: RunnerContext, event: LedgerEvent): Promise<void> {
-  await ctx.ledger.append(event)
-  ctx.events.push(event)
-  ctx.appended.push(event)
-}
-
-function baseEvent(ctx: RunnerContext): {
-  schema_version: typeof LEDGER_SCHEMA_VERSION
-  run_id: string
-  at: string
-} {
-  return {
-    schema_version: LEDGER_SCHEMA_VERSION,
-    run_id: ctx.run.run_id,
-    at: ctx.clock.now().toISOString(),
-  }
-}
-
-/**
- * Records a state change that is NOT the result of an agent turn: starting the
- * run, a kill switch, a budget stop, a human resume. Turn-driven transitions ride
- * on the turn event itself (see `applyTurnState`).
- */
-async function transitionTo(ctx: RunnerContext, to: RunState, reason: string): Promise<void> {
-  const from = ctx.run.state
-  // A no-op transition is not an error. It happens when a second dispatch hits the
-  // same guard that parked the run, and it must not throw.
-  if (from === to) return
-  assertTransition(from, to)
-  ctx.run = { ...ctx.run, state: to, updated_at: ctx.clock.now().toISOString() }
-  await record(ctx, { ...baseEvent(ctx), event: 'state_changed', from, to, reason })
-}
-
-/** Validates and applies a turn-driven transition without emitting its own event. */
-function applyTurnState(ctx: RunnerContext, to: RunState): RunState {
-  if (ctx.run.state !== to) assertTransition(ctx.run.state, to)
-  ctx.run = { ...ctx.run, state: to, updated_at: ctx.clock.now().toISOString() }
-  return to
-}
-
-async function finish(ctx: RunnerContext, stopReason: StopReason | null): Promise<void> {
-  ctx.run = { ...ctx.run, stop_reason: stopReason }
-  await record(ctx, {
-    ...baseEvent(ctx),
-    event: 'run_finished',
-    final_state: ctx.run.state,
-    stop_reason: stopReason,
-  })
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Turn construction
-// ─────────────────────────────────────────────────────────────────────────────
-
-function buildTurnRequest(ctx: RunnerContext, actor: Actor, round: number): TurnRequest {
-  const systemPolicy = actor === 'gpt_reviewer' ? REVIEWER_SYSTEM_POLICY : IMPLEMENTER_SYSTEM_POLICY
-  const promptVersion =
-    actor === 'gpt_reviewer' ? REVIEWER_PROMPT_VERSION : IMPLEMENTER_PROMPT_VERSION
-
-  const envelope = buildPromptEnvelope({
-    systemPolicy,
-    task: [
-      `Run: ${ctx.run.run_id} · mode ${ctx.run.mode} · round ${round}/${ctx.run.max_rounds}`,
-      `Work package: ${ctx.input.authorization.work_package_id}`,
-      `Prompt version: ${promptVersion}`,
-      '',
-      ctx.input.taskBrief,
-    ].join('\n'),
-    untrusted: ctx.input.untrusted,
-  })
-
-  const inputDigest = digest([envelope.system, envelope.user])
-
-  return {
-    run_id: ctx.run.run_id,
-    round,
-    system: envelope.system,
-    user: envelope.user,
-    untrusted_sources: envelope.untrusted_sources,
-    input_digest: inputDigest,
-    idempotency_key: turnIdempotencyKey({
-      runId: ctx.run.run_id,
-      round,
-      actor,
-      inputDigest,
-    }),
-  }
-}
-
-async function rejectTurn(
-  ctx: RunnerContext,
-  args: {
-    actor: Actor
-    round: number
-    request: TurnRequest
-    reason: TurnRejectionReason
-    detail: string[]
-    /** Where the run lands. Same state means "try again"; WAITING_HUMAN means stop. */
-    nextState: RunState
-  }
-): Promise<void> {
-  ctx.run = {
-    ...ctx.run,
-    current_round: args.round,
-    invalid_output_count:
-      ctx.run.invalid_output_count + (args.reason === 'invalid_output' ? 1 : 0),
-  }
-  const nextState = applyTurnState(ctx, args.nextState)
-  await record(ctx, {
-    ...baseEvent(ctx),
-    event: 'turn_rejected',
-    actor: args.actor,
-    round: args.round,
-    idempotency_key: args.request.idempotency_key,
-    input_digest: args.request.input_digest,
-    reason: args.reason,
-    detail: args.detail,
-    next_state: nextState,
-  })
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Turn execution
-// ─────────────────────────────────────────────────────────────────────────────
-
-type TurnOutcome =
-  | { kind: 'advanced' }
-  /** The turn already recorded where the run landed; the loop just has to stop. */
-  | { kind: 'halted'; stop_reason: StopReason; message: string }
-  | { kind: 'retry' }
-  /** Another runner recorded this turn while we were waiting on the model. */
-  | { kind: 'conflict'; message: string }
-
-/**
- * Compare-and-set before recording a turn.
- *
- * The lease and the pre-call check together cover the ordinary cases. This covers
- * the one they cannot: a second runner took over a lease that went stale while
- * this runner was still waiting on a slow model call. Re-reading the ledger just
- * before the write is the only point at which that collision is visible.
- */
-async function turnClaimedElsewhere(ctx: RunnerContext, request: TurnRequest): Promise<boolean> {
-  const fresh = await ctx.ledger.read()
-  if (!hasTurnBeenProcessed(fresh.events, request.idempotency_key)) return false
-  ctx.events = [...fresh.events]
-  return true
-}
-
-async function runReviewerTurn(
-  ctx: RunnerContext,
-  round: number,
-  request: TurnRequest
-): Promise<TurnOutcome> {
-  const result = await ctx.deps.reviewer.review(request)
-  if (await turnClaimedElsewhere(ctx, request)) {
-    return { kind: 'conflict', message: `turn ${request.idempotency_key} was recorded by another runner` }
-  }
-
-  const parsed = reviewerTurnOutputSchema.safeParse(result.output)
-
-  if (!parsed.success) {
-    await rejectTurn(ctx, {
-      actor: 'gpt_reviewer',
-      round,
-      request,
-      reason: 'invalid_output',
-      detail: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`),
-      nextState: ctx.run.state,
-    })
-    return { kind: 'retry' }
-  }
-
-  const output: ReviewerTurnOutput = parsed.data
-  ctx.run = {
-    ...ctx.run,
-    current_round: round,
-    cumulative_cost_usd: ctx.run.cumulative_cost_usd + result.usage.cost_usd,
-  }
-
-  const nextState = applyTurnState(ctx, nextStateForVerdict(ctx.run.mode, output.verdict))
-
-  await record(ctx, {
-    ...baseEvent(ctx),
-    event: 'turn_completed',
-    actor: 'gpt_reviewer',
-    round,
-    idempotency_key: request.idempotency_key,
-    input_digest: request.input_digest,
-    verdict: output.verdict,
-    cost_usd: result.usage.cost_usd,
-    output_digest: digest(output),
-    next_state: nextState,
-  })
-
-  return { kind: 'advanced' }
-}
-
-async function runImplementerTurn(
-  ctx: RunnerContext,
-  round: number,
-  request: TurnRequest
-): Promise<TurnOutcome> {
-  const result = await ctx.deps.implementer.implement(request)
-  if (await turnClaimedElsewhere(ctx, request)) {
-    return { kind: 'conflict', message: `turn ${request.idempotency_key} was recorded by another runner` }
-  }
-
-  const parsed = implementerTurnOutputSchema.safeParse(result.output)
-
-  if (!parsed.success) {
-    await rejectTurn(ctx, {
-      actor: 'claude_implementer',
-      round,
-      request,
-      reason: 'invalid_output',
-      detail: parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`),
-      nextState: ctx.run.state,
-    })
-    return { kind: 'retry' }
-  }
-
-  const output: ImplementerTurnOutput = parsed.data
-  const policy = evaluateImplementerTurn(ctx.input.authorization, output)
-  if (!policy.allowed) {
-    await rejectTurn(ctx, {
-      actor: 'claude_implementer',
-      round,
-      request,
-      reason: 'policy_violation',
-      detail: [policy.code, policy.message, ...policy.offending],
-      nextState: 'WAITING_HUMAN',
-    })
-    return {
-      kind: 'halted',
-      stop_reason: 'policy_violation',
-      message: `${policy.code}: ${policy.message}`,
-    }
-  }
-
-  const integrity = checkPolicyIntegrity(ctx)
-  if (integrity) {
-    await rejectTurn(ctx, {
-      actor: 'claude_implementer',
-      round,
-      request,
-      reason: 'policy_integrity_drift',
-      detail: integrity,
-      nextState: 'WAITING_HUMAN',
-    })
-    return {
-      kind: 'halted',
-      stop_reason: 'policy_violation',
-      message: `control-plane files changed during the turn: ${integrity.join(', ')}`,
-    }
-  }
-
-  ctx.run = {
-    ...ctx.run,
-    current_round: round,
-    cumulative_cost_usd: ctx.run.cumulative_cost_usd + result.usage.cost_usd,
-    target_branch: output.commit_evidence?.branch ?? ctx.run.target_branch,
-    pr_number: output.commit_evidence?.pr_number ?? ctx.run.pr_number,
-  }
-
-  const nextState = applyTurnState(ctx, 'GPT_TURN')
-
-  await record(ctx, {
-    ...baseEvent(ctx),
-    event: 'turn_completed',
-    actor: 'claude_implementer',
-    round,
-    idempotency_key: request.idempotency_key,
-    input_digest: request.input_digest,
-    verdict: null,
-    cost_usd: result.usage.cost_usd,
-    output_digest: digest(output),
-    next_state: nextState,
-  })
-
-  return { kind: 'advanced' }
-}
-
-/** Returns the drifted paths, or null when intact / not checked. */
-function checkPolicyIntegrity(ctx: RunnerContext): string[] | null {
-  const read = ctx.input.readPolicySnapshot
-  if (!read) return null
-  const result = comparePolicySnapshots(ctx.input.policySnapshot, read())
-  return result.intact ? null : [...result.drifted]
-}
+export { systemClock } from './runner-types'
+export type {
+  Clock,
+  PreflightReport,
+  RunnerDeps,
+  RunnerInput,
+  RunnerResult,
+} from './runner-types'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Main entry point
@@ -445,6 +67,7 @@ export async function runOrchestration(
   })
 
   const read = await ledger.read()
+  const budget = computeBudgetLedger(read.events, input.run.run_id, clock.now())
   const ctx: RunnerContext = {
     input,
     deps,
@@ -452,19 +75,24 @@ export async function runOrchestration(
     ledger,
     events: [...read.events],
     appended: [],
-    run: foldRun(input.run, read.events, read.lastCommentId),
+    run: foldRun(input.run, read.events, read.lastCommentId, budget),
+    budget,
   }
 
   const preflight: PreflightReport = {
     kill_switch: { stopped: false, reason: null },
+    timing_invariant: { ok: true, message: 'not evaluated' },
     authorization: { allowed: true },
     side_effect_class: { allowed: true },
     lease: null,
     budget: null,
+    budget_ledger: ctx.budget,
     next_actor: null,
     next_idempotency_key: null,
     next_input_digest: null,
-    policy_integrity: input.readPolicySnapshot ? 'checked' : 'not_checked',
+    next_reserved_cost_usd: null,
+    workspace_source: deps.workspace.name,
+    integrity_source: deps.integrity.name,
     ledger_rejected: read.rejected,
   }
 
@@ -495,7 +123,18 @@ export async function runOrchestration(
     return done(`kill switch: ${preflight.kill_switch.reason}`)
   }
 
-  // 2. Authorization window and side-effect class.
+  // 2. Timing and budget invariants. A configuration that could leak duplicate
+  //    spend never gets to make its first call.
+  preflight.timing_invariant = checkTimingInvariant(input.limits, input.leaseTtlMs)
+  if (!preflight.timing_invariant.ok) {
+    if (!input.dryRun) {
+      await transitionTo(ctx, 'WAITING_HUMAN', preflight.timing_invariant.message)
+      await finish(ctx, 'configuration_invalid')
+    }
+    return done(preflight.timing_invariant.message)
+  }
+
+  // 3. Authorization window and side-effect class.
   preflight.authorization = enforceAuthorizationWindow(input.authorization, clock.now())
   if (!preflight.authorization.allowed) {
     if (!input.dryRun) {
@@ -517,7 +156,7 @@ export async function runOrchestration(
     return done(preflight.side_effect_class.message)
   }
 
-  // 3. Lease — only one runner may hold a turn for this Issue.
+  // 4. Lease — only one runner may hold a turn for this Issue.
   const lockKey = leaseKeyFor(ctx.run.repository, ctx.run.issue_number)
   const lease = evaluateLeaseAcquisition({
     events: ctx.events,
@@ -531,7 +170,7 @@ export async function runOrchestration(
     return done(`lease held by ${lease.held_by} until ${lease.expires_at}`)
   }
 
-  // 4. WAITING_HUMAN never resumes on its own.
+  // 5. WAITING_HUMAN never resumes on its own.
   if (ctx.run.state === 'WAITING_HUMAN') {
     const resume = resumeFromWaitingHuman({
       runId: ctx.run.run_id,
@@ -550,15 +189,21 @@ export async function runOrchestration(
     else ctx.run = { ...ctx.run, state: first }
   }
 
-  preflight.budget = checkBudget(ctx.run, input.limits, clock.now())
+  preflight.budget = checkBudget(ctx.run, input.limits, ctx.budget, clock.now())
   preflight.next_actor = actorForState(ctx.run.state)
   if (preflight.next_actor && preflight.budget.ok) {
-    const next = buildTurnRequest(ctx, preflight.next_actor, ctx.run.current_round + 1)
+    const next = buildTurnRequest(
+      ctx,
+      preflight.next_actor,
+      ctx.run.current_round + 1,
+      input.limits.max_turn_cost_usd
+    )
     preflight.next_idempotency_key = next.idempotency_key
     preflight.next_input_digest = next.input_digest
+    preflight.next_reserved_cost_usd = next.reserved_cost_usd
   }
 
-  // 5. Dry-run stops here: preflight complete, nothing called, nothing written.
+  // 6. Dry-run stops here: preflight complete, nothing called, nothing written.
   if (input.dryRun) {
     return done('dry run: preflight complete, no provider called and no comment written')
   }
@@ -588,7 +233,7 @@ async function executeLoop(ctx: RunnerContext): Promise<string> {
   const { input, deps, clock } = ctx
 
   while (!isTerminal(ctx.run.state)) {
-    const budget = checkBudget(ctx.run, input.limits, clock.now())
+    const budget = checkBudget(ctx.run, input.limits, ctx.budget, clock.now())
     if (!budget.ok) {
       // Rounds, dollars and wall-clock are all budgets, so they share one state.
       await transitionTo(ctx, 'BUDGET_EXHAUSTED', budget.message)
@@ -600,11 +245,35 @@ async function executeLoop(ctx: RunnerContext): Promise<string> {
     if (!actor) return `no actor owns state ${ctx.run.state}`
 
     const round = ctx.run.current_round + 1
-    const request = buildTurnRequest(ctx, actor, round)
+    const request = buildTurnRequest(ctx, actor, round, input.limits.max_turn_cost_usd)
+
     if (hasTurnBeenProcessed(ctx.events, request.idempotency_key)) {
       log(deps, `turn ${request.idempotency_key} already processed; not re-running`)
       return `turn ${request.idempotency_key} already processed`
     }
+
+    // Someone else has this turn claimed and their call may be in flight. Starting
+    // ours would buy the same answer twice.
+    const rival = foreignLiveClaim(ctx.budget, request.idempotency_key, input.holder)
+    if (rival) {
+      log(deps, `turn ${request.idempotency_key} is claimed by ${rival.holder}`)
+      return `turn ${request.idempotency_key} is claimed by ${rival.holder} until ${rival.claim_expires_at}`
+    }
+
+    // Reserve before calling. From here the money is committed whatever happens.
+    await record(ctx, {
+      ...baseEvent(ctx),
+      event: 'turn_started',
+      actor,
+      round,
+      idempotency_key: request.idempotency_key,
+      input_digest: request.input_digest,
+      holder: input.holder,
+      reserved_cost_usd: request.reserved_cost_usd,
+      claim_expires_at: new Date(
+        clock.now().getTime() + input.limits.provider_timeout_ms
+      ).toISOString(),
+    })
 
     const outcome =
       actor === 'gpt_reviewer'
@@ -642,4 +311,9 @@ function terminalStopReason(state: RunState): StopReason {
   if (state === 'FAILED') return 'reviewer_declared_failure'
   if (state === 'CANCELLED') return 'kill_switch'
   return 'human_input_required'
+}
+
+/** Exposed for the dry-run report. */
+export function remainingBudgetFor(capUsd: number, ledger: BudgetLedger): number {
+  return remainingBudget(capUsd, ledger)
 }

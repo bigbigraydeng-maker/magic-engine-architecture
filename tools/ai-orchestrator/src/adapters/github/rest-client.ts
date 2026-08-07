@@ -11,7 +11,7 @@
 
 import { LedgerWriteBlockedError, MissingSecretError } from '../../domain/errors'
 import type { RepositoryRef } from '../../domain/schema'
-import type { GitHubClient, IssueComment } from './client'
+import type { GitHubClient, IssueComment, PullRequestFacts } from './client'
 
 export const GITHUB_TOKEN_SECRET = 'GITHUB_TOKEN'
 
@@ -33,6 +33,16 @@ interface RawComment {
 
 interface RawLabel {
   name: string
+}
+
+interface RawPullRequest {
+  number: number
+  merged: boolean
+  head: { sha: string; ref: string }
+}
+
+interface RawPullRequestFile {
+  filename: string
 }
 
 export class RestGitHubClient implements GitHubClient {
@@ -93,6 +103,23 @@ export class RestGitHubClient implements GitHubClient {
       `${this.repoPath}/issues/${issueNumber}/labels?per_page=100`
     )
     return raw.map((label) => label.name)
+  }
+
+  async listPullRequestFiles(prNumber: number): Promise<readonly string[]> {
+    const raw = await this.request<RawPullRequestFile[]>(
+      `${this.repoPath}/pulls/${prNumber}/files?per_page=100`
+    )
+    return raw.map((file) => file.filename)
+  }
+
+  async getPullRequest(prNumber: number): Promise<PullRequestFacts | null> {
+    const raw = await this.request<RawPullRequest>(`${this.repoPath}/pulls/${prNumber}`)
+    return {
+      number: raw.number,
+      head_sha: raw.head.sha,
+      head_ref: raw.head.ref,
+      merged: raw.merged,
+    }
   }
 
   async createIssueComment(issueNumber: number, body: string): Promise<IssueComment> {

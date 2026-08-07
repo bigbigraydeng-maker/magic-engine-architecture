@@ -7,7 +7,13 @@ import { KILL_SWITCH_LABEL } from '../src/policy/policy'
 import type { LedgerEvent, RunState } from '../src/domain/schema'
 import { runOrchestration } from '../src/runner'
 import type { RunnerResult } from '../src/runner'
-import { FIXED_NOW, implementerOutput, makeHarness, reviewerOutput } from './helpers'
+import { SCAFFOLD_LIMITS } from '../src/config/scaffold-config'
+import type { OrchestratorLimits } from '../src/policy/policy'
+import { FIXED_NOW, IN_SCOPE_FILE, implementerOutput, makeHarness, reviewerOutput, workspaceSnapshot } from './helpers'
+
+function limitsWith(overrides: Partial<OrchestratorLimits>): OrchestratorLimits {
+  return { ...SCAFFOLD_LIMITS, ...overrides }
+}
 
 /**
  * Turn-driven transitions ride on the turn event itself, so the state trail has
@@ -93,7 +99,7 @@ describe('budget stops', () => {
   it('stops at max rounds instead of looping forever', async () => {
     const h = makeHarness({
       runOverrides: { mode: 'DESIGN', max_rounds: 3 },
-      inputOverrides: { limits: { max_rounds: 3, cost_cap_usd: 100, max_wall_clock_ms: 600_000, max_invalid_outputs: 5 } },
+      inputOverrides: { limits: limitsWith({ max_rounds: 3, cost_cap_usd: 100, max_invalid_outputs: 5 }) },
       reviewerScript: [{ output: reviewerOutput({ verdict: 'REQUEST_CHANGES' }) }],
       implementerScript: [{ output: implementerOutput() }],
     })
@@ -109,7 +115,7 @@ describe('budget stops', () => {
   it('stops at the cost cap even when rounds remain', async () => {
     const h = makeHarness({
       runOverrides: { mode: 'DESIGN', cost_cap_usd: 0.3 },
-      inputOverrides: { limits: { max_rounds: 20, cost_cap_usd: 0.3, max_wall_clock_ms: 600_000, max_invalid_outputs: 5 } },
+      inputOverrides: { limits: limitsWith({ max_rounds: 20, cost_cap_usd: 0.9, max_turn_cost_usd: 0.3, max_invalid_outputs: 5 }) },
       reviewerScript: [{ output: reviewerOutput({ verdict: 'REQUEST_CHANGES' }), usage: { cost_usd: 0.2 } }],
       implementerScript: [{ output: implementerOutput(), usage: { cost_usd: 0.2 } }],
     })
@@ -119,7 +125,12 @@ describe('budget stops', () => {
     expect(result.run.state).toBe('BUDGET_EXHAUSTED')
     expect(result.run.stop_reason).toBe('cost_cap_reached')
     expect(result.run.current_round).toBeLessThan(20)
-    expect(result.run.cumulative_cost_usd).toBeGreaterThanOrEqual(0.3)
+
+    // The property that matters: it stopped *below* the cap, with too little left
+    // to cover another reservation. A cap crossed and then noticed is not a cap.
+    const cap = 0.3
+    expect(result.run.cumulative_cost_usd).toBeLessThanOrEqual(cap)
+    expect(cap - result.run.cumulative_cost_usd).toBeLessThan(0.3)
   })
 
   it('stops when the wall-clock deadline has passed', async () => {
@@ -158,7 +169,7 @@ describe('schema-invalid provider output', () => {
     const h = makeHarness({
       reviewerScript: [{ output: { nonsense: true } }],
       inputOverrides: {
-        limits: { max_rounds: 10, cost_cap_usd: 100, max_wall_clock_ms: 600_000, max_invalid_outputs: 2 },
+        limits: limitsWith({ max_rounds: 10, cost_cap_usd: 100, max_invalid_outputs: 2 }),
       },
     })
 
@@ -169,14 +180,17 @@ describe('schema-invalid provider output', () => {
     expect(h.reviewer.callCount).toBe(2)
   })
 
-  it('charges nothing to cumulative cost for a rejected turn', async () => {
+  it('still charges a rejected turn, because the provider billed us for it', async () => {
     const h = makeHarness({
-      reviewerScript: [{ output: { bad: true }, usage: { cost_usd: 0.5 } }, { output: reviewerOutput({ verdict: 'APPROVED_FOR_NEXT_STAGE' }), usage: { cost_usd: 0.1 } }],
+      reviewerScript: [
+        { output: { bad: true }, usage: { cost_usd: 0.4 } },
+        { output: reviewerOutput({ verdict: 'APPROVED_FOR_NEXT_STAGE' }), usage: { cost_usd: 0.1 } },
+      ],
     })
 
     const result = await runOrchestration(h.input, h.deps)
 
-    expect(result.run.cumulative_cost_usd).toBeCloseTo(0.1)
+    expect(result.run.cumulative_cost_usd).toBeCloseTo(0.5)
   })
 })
 
@@ -185,7 +199,10 @@ describe('policy violations park the run for a human', () => {
     const h = makeHarness({
       runOverrides: { mode: 'IMPLEMENT' },
       implementerScript: [
-        { output: implementerOutput({ tools_used: ['Read', 'Bash(gh pr merge 861 --admin)'] }) },
+        {
+          output: implementerOutput({ tools_used: ['Read', 'Bash(gh pr merge 861 --admin)'] }),
+          telemetry: { tools_used: ['Read', 'Bash(gh pr merge 861 --admin)'] },
+        },
       ],
     })
 
@@ -201,7 +218,10 @@ describe('policy violations park the run for a human', () => {
   it('refuses an implementer turn that edited a file outside its scope', async () => {
     const h = makeHarness({
       runOverrides: { mode: 'IMPLEMENT' },
-      implementerScript: [{ output: implementerOutput({ files_changed: ['src/lib/execution/auto-run-policy.ts'] }) }],
+      implementerScript: [
+        { output: implementerOutput({ files_changed: ['src/lib/execution/auto-run-policy.ts'] }) },
+      ],
+      workspace: workspaceSnapshot({ changed_files: ['src/lib/execution/auto-run-policy.ts'] }),
     })
 
     const result = await runOrchestration(h.input, h.deps)
@@ -224,6 +244,12 @@ describe('policy violations park the run for a human', () => {
           }),
         },
       ],
+      workspace: workspaceSnapshot({
+        changed_files: [
+          'tools/ai-orchestrator/src/runner.ts',
+          '.github/workflows/ai-orchestrator-manual.yml',
+        ],
+      }),
     })
 
     const result = await runOrchestration(h.input, h.deps)
@@ -239,10 +265,7 @@ describe('policy violations park the run for a human', () => {
     const h = makeHarness({
       runOverrides: { mode: 'IMPLEMENT' },
       implementerScript: [{ output: implementerOutput() }],
-      inputOverrides: {
-        policySnapshot: { 'tools/ai-orchestrator/src/policy/policy.ts': 'hash-before' },
-        readPolicySnapshot: () => ({ 'tools/ai-orchestrator/src/policy/policy.ts': 'hash-after' }),
-      },
+      drift: ['tools/ai-orchestrator/src/policy/policy.ts'],
     })
 
     const result = await runOrchestration(h.input, h.deps)
@@ -253,12 +276,11 @@ describe('policy violations park the run for a human', () => {
   })
 
   it('accepts the same turn when the control plane did not move — the positive control', async () => {
-    const snapshot = { 'tools/ai-orchestrator/src/policy/policy.ts': 'hash-before' }
     const h = makeHarness({
       runOverrides: { mode: 'IMPLEMENT' },
       implementerScript: [{ output: implementerOutput() }],
       reviewerScript: [{ output: reviewerOutput({ verdict: 'WAITING_HUMAN', human_question: 'ok?' }) }],
-      inputOverrides: { policySnapshot: snapshot, readPolicySnapshot: () => snapshot },
+      drift: [],
     })
 
     const result = await runOrchestration(h.input, h.deps)
@@ -373,8 +395,11 @@ describe('duplicate delivery', () => {
       idempotency_key: 'key-from-the-crashed-run',
       input_digest: 'digest-from-the-crashed-run',
       verdict: 'REQUEST_CHANGES',
+      reserved_cost_usd: 0.5,
       cost_usd: 0.05,
       output_digest: 'abc',
+      authoritative: null,
+      self_report_mismatches: [],
       next_state: 'CLAUDE_TURN',
     }
     h.github.seedComment({
@@ -412,8 +437,11 @@ describe('duplicate delivery', () => {
       idempotency_key: key,
       input_digest: preflight.next_input_digest as string,
       verdict: 'REQUEST_CHANGES',
+      reserved_cost_usd: 0.5,
       cost_usd: 0.05,
       output_digest: 'from-the-other-runner',
+      authoritative: null,
+      self_report_mismatches: [],
       next_state: 'CLAUDE_TURN',
     }
 
@@ -426,6 +454,8 @@ describe('duplicate delivery', () => {
         name: 'racing',
         listIssueLabels: () => h.github.listIssueLabels(),
         createIssueComment: (issue: number, body: string) => h.github.createIssueComment(issue, body),
+        listPullRequestFiles: (pr: number) => h.github.listPullRequestFiles(pr),
+        getPullRequest: (pr: number) => h.github.getPullRequest(pr),
         listIssueComments: async () => {
           reads += 1
           if (reads === 2) {
@@ -443,10 +473,17 @@ describe('duplicate delivery', () => {
     const result = await runOrchestration(h.input, racing)
 
     expect(h.reviewer.callCount).toBe(1) // we did call, then found we had lost
+
     expect(result.stopped_because).toContain('recorded by another runner')
-    // Nothing of ours was written: no turn record, no state change, no cost.
+    // Our result is discarded — no turn record of ours, no state change of ours.
     expect(result.appended.some((e) => e.event === 'turn_completed')).toBe(false)
-    expect(result.run.cumulative_cost_usd).toBe(0)
+    expect(result.appended.some((e) => e.event === 'state_changed')).toBe(true) // only READY -> GPT_TURN
+
+    // But the money we spent losing the race is on the record, not swallowed.
+    const duplicate = result.appended.find((e) => e.event === 'duplicate_spend_recorded')
+    expect(duplicate).toMatchObject({ holder: 'test-holder', cost_usd: 0.05 })
+    // Rival's settled turn ($0.05) plus our discarded call ($0.05).
+    expect(result.run.cumulative_cost_usd).toBeCloseTo(0.1)
   })
 })
 

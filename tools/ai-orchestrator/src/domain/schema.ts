@@ -9,6 +9,8 @@
 
 import { z } from 'zod'
 
+import { selectSelfModifyingPatterns } from '../policy/protected-paths'
+
 /** Bumped whenever the ledger marker payload changes shape. */
 export const LEDGER_SCHEMA_VERSION = 'v1'
 
@@ -58,6 +60,7 @@ export const stopReasonSchema = z.enum([
   'policy_violation',
   'authorization_expired',
   'invalid_provider_output',
+  'configuration_invalid',
   'reviewer_approved',
   'reviewer_declared_failure',
   'human_input_required',
@@ -102,6 +105,18 @@ export const workPackageScopeSchema = z.object({
   allowed_tools: z.array(z.string().min(1)),
   disallowed_tools: z.array(z.string().min(1)).default([]),
 })
+  .superRefine((value, ctx) => {
+    // The orchestrator cannot be granted to itself. Upgrading this tool is a
+    // separate, human-initiated change — see policy/protected-paths.ts.
+    const selfModifying = selectSelfModifyingPatterns(value.allowed_paths)
+    for (const pattern of selfModifying) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['allowed_paths'],
+        message: `allowed path "${pattern}" overlaps the protected control plane`,
+      })
+    }
+  })
 export type WorkPackageScope = z.infer<typeof workPackageScopeSchema>
 
 export const workPackageAuthorizationSchema = z
@@ -259,6 +274,39 @@ export const implementerTurnOutputSchema = z.object({
 export type ImplementerTurnOutput = z.infer<typeof implementerTurnOutputSchema>
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Authoritative turn facts
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * What a turn actually did, as observed by git, GitHub and the execution harness.
+ *
+ * This — never the model's own `files_changed` / `tools_used` / `commit_evidence`
+ * — is what the policy layer is evaluated against. The model's version is kept
+ * only so the two can be compared and a mismatch reported.
+ */
+export const authoritativeTurnFactsSchema = z.object({
+  files_changed: z.array(z.string().min(1)),
+  tools_used: z.array(z.string().min(1)),
+  commit: z
+    .object({ sha: z.string().min(1), branch: z.string().min(1) })
+    .nullable(),
+  pull_request: z
+    .object({
+      number: z.number().int().positive(),
+      head_sha: z.string().min(1),
+      head_ref: z.string().min(1),
+      merged: z.boolean(),
+    })
+    .nullable(),
+  /** Provenance for each fact, written to the ledger so a reviewer can audit it. */
+  sources: z.object({
+    workspace: z.string().min(1),
+    telemetry: z.string().min(1),
+  }),
+})
+export type AuthoritativeTurnFacts = z.infer<typeof authoritativeTurnFactsSchema>
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Ledger events (the append-only log stored as Issue comments)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -271,6 +319,12 @@ export const turnRejectionReasonSchema = z.enum([
   'policy_integrity_drift',
   /** Provider threw before producing output. */
   'provider_error',
+  /** The call passed its hard timeout. Reserved budget is treated as spent. */
+  'provider_timeout',
+  /** The adapter could not produce a real execution record for tools_used. */
+  'missing_telemetry',
+  /** What the model said it did does not match what git and the harness observed. */
+  'self_report_mismatch',
 ])
 export type TurnRejectionReason = z.infer<typeof turnRejectionReasonSchema>
 
@@ -303,6 +357,23 @@ export const ledgerEventSchema = z.discriminatedUnion('event', [
   }),
   z.object({
     ...ledgerBase,
+    event: z.literal('turn_started'),
+    actor: actorSchema,
+    round: z.number().int().positive(),
+    idempotency_key: z.string().min(1),
+    input_digest: z.string().min(1),
+    holder: z.string().min(1),
+    /** Dollars committed before the call. Charged whether or not we hear back. */
+    reserved_cost_usd: z.number().nonnegative(),
+    /**
+     * When this claim lapses. Always inside the lease TTL. An expired claim with
+     * no matching completion is treated as spent, because we cannot know whether
+     * the provider billed us.
+     */
+    claim_expires_at: isoTimestamp,
+  }),
+  z.object({
+    ...ledgerBase,
     event: z.literal('turn_completed'),
     actor: actorSchema,
     round: z.number().int().positive(),
@@ -311,8 +382,13 @@ export const ledgerEventSchema = z.discriminatedUnion('event', [
      *  of duplicate detection, which survives a crash between two ledger writes. */
     input_digest: z.string().min(1),
     verdict: verdictSchema.nullable(),
+    reserved_cost_usd: z.number().nonnegative(),
+    /** Reconciled actual spend. May exceed the reservation; that is recorded, not hidden. */
     cost_usd: z.number().nonnegative(),
     output_digest: z.string().min(1),
+    authoritative: authoritativeTurnFactsSchema.nullable(),
+    /** Discrepancies between the model's self-report and the authoritative facts. */
+    self_report_mismatches: z.array(z.string()).default([]),
     /** The state this turn moved the run to. Carried on the same event as the
      *  turn itself so a crash cannot land between "the turn happened" and "the
      *  run moved on" — the window that would otherwise make us pay twice. */
@@ -327,7 +403,25 @@ export const ledgerEventSchema = z.discriminatedUnion('event', [
     input_digest: z.string().min(1),
     reason: turnRejectionReasonSchema,
     detail: z.array(z.string()).default([]),
+    /** Reserved dollars that this rejection settles. Timeouts settle at full reservation. */
+    reserved_cost_usd: z.number().nonnegative(),
+    cost_usd: z.number().nonnegative(),
     next_state: runStateSchema,
+  }),
+  z.object({
+    ...ledgerBase,
+    /**
+     * Our call was billed but another runner had already recorded this turn, so
+     * our result is discarded. Carries no state: it exists so money we could not
+     * avoid spending is on the record instead of vanishing.
+     */
+    event: z.literal('duplicate_spend_recorded'),
+    actor: actorSchema,
+    round: z.number().int().positive(),
+    idempotency_key: z.string().min(1),
+    holder: z.string().min(1),
+    cost_usd: z.number().nonnegative(),
+    note: z.string().min(1),
   }),
   z.object({
     ...ledgerBase,
