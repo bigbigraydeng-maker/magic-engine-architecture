@@ -554,34 +554,6 @@ services:
       - key: CRON_SECRET
         sync: false
 
-  # Memory Extractor — Phase 23.C
-  # Turns attribution verdicts into durable memory: confirmed outcomes become
-  # client_proven_patterns, reversed ones become client_failed_experiments, and
-  # repeated wins on one action_type become a learned preference. 诸葛亮 reads
-  # all three via loadMemoryForClient, so this is the step that makes "we already
-  # tried that and it didn't work" survive past a single conversation.
-  #
-  # This route existed since Phase 23.C but was never scheduled anywhere —
-  # so the whole learning loop had been dead on arrival. Wired 2026-08-07.
-  #
-  # 06:35 UTC daily is deliberate, not arbitrary:
-  #   · attribution-cron runs 0 */6 (so 06:00) with --max-time 300 → done by 06:05.
-  #     Reading outcomes before attribution has refreshed them extracts stale verdicts.
-  #   · agent-learning-rollup runs Mon 07:00 and summarises what this writes,
-  #     so the extractor has to land first on Mondays.
-  #   · 06:00 / 06:10 / 06:20 are already taken by other jobs.
-  - type: cron
-    name: memory-extractor
-    env: node
-    schedule: "35 6 * * *"
-    buildCommand: ""
-    startCommand: |
-      curl -fsS --max-time 300 -X POST -H "Authorization: Bearer $CRON_SECRET" \
-        https://app.magicengine.com.au/api/cron/memory-extractor
-    envVars:
-      - key: CRON_SECRET
-        sync: false
-
   # Agent Learning Rollup — DAPE W3 (spec §3.3)
   # Weekly aggregator: takes the previous ISO week (Mon 00:00 UTC → Mon 00:00 UTC)
   # of flywheel_outcomes + zhuge_feedback_events and writes ONE summary

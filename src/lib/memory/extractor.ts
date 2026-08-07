@@ -10,34 +10,14 @@
  *
  * 设计原则：
  *   - 纯规则版本，无 LLM 调用 — 廉价、可解释、易回滚
- *   - 幂等：通过 (source_table='flywheel_actions', source_id=action.id) 去重
+ *   - 幂等：通过 (source_table='flywheel_outcomes', source_id=outcome.id) 去重
  *   - 失败不阻塞：单条出错记入 errors，继续处理其余
  *   - 不删除已有记忆 — 抽取器只追加 + 标记，FDE 可在 P23.E 中清理
- *
- * 🔴 **幂等键必须挂 action.id，绝对不能挂 outcome.id。**
- *
- *    归因作业每 6 小时对每个动作 `delete().eq('action_id', id)` 再 insert 一条新的
- *    （`flywheel/attribution/job.ts:127-149`），而 `flywheel_outcomes.id` 是
- *    `gen_random_uuid()` 默认值 —— **同一条归因结论的 id 每 6 小时换一次**。
- *
- *    早先这里用的正是 outcome.id。那样接上每日 cron 的后果是：
- *    第 1 天写一条经验；归因重跑换了 id；第 2 天去重集合对不上，**再写一条一模一样的**；
- *    每天 +1，永不收敛。而诸葛亮读记忆只取最新 15 条（`memory/service.ts` loadPatterns）
- *    —— 两周后那 15 条会全是同一条经验的 15 个副本，**比现在空着更糟**。
- *
- *    `action_id` 是安全的：归因按 action_id 整条删，所以一个动作恒有且仅有一条
- *    outcome，一对一；而 `flywheel_actions` 行本身从不被重建。
- *
- * ⚠️ 已知局限（有意不处理）：同一个动作的 verdict 若从 confirmed 翻成 reversed，
- *    会同时留下一条「这招有效」和一条「这招失败」——因为两者查的是不同的表。
- *    翻转本身罕见（要指标反向越过阈值），而两条互相矛盾的记忆远好过 365 条重复。
- *    真要治，等 P23.E 的 FDE 清理界面，或给记忆加 supersede 关系。
  *
  * Reference: ROADMAP.md Phase 23.C
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fetchAll } from '@/lib/supabase-paginate'
 import {
   saveProvenPattern,
   saveFailedExperiment,
@@ -45,13 +25,6 @@ import {
   updateDecisionOutcome,
 } from './service'
 import type { FlywheelName, PatternType, PreferenceType } from './types'
-
-/**
- * 记忆行的溯源表名。**改这个常量等于让全部历史去重记录失效**（旧行的
- * source_table 对不上，会被当成「没抽取过」重写一遍），所以只有在同时
- * 准备好数据迁移时才改。
- */
-const MEMORY_SOURCE_TABLE = 'flywheel_actions'
 
 // ── 配置参数 ──────────────────────────────────────────────────────────────────
 
@@ -134,14 +107,8 @@ export async function runExtractorForClient(
   }
 
   // 2. 拉取已抽取的 source_id 集合（去重用）
-  //
-  // 🔴 读不回来就**不写** patterns/experiments，而不是「照写、大不了重复」。
-  //    这个任务每天跑：一次读失败换来的不是一条冗余，是从此每天一条冗余
-  //    （下次跑同样读不到自己上次写的，就再写一条）。少记一天经验可以补，
-  //    污染了的记忆表要人去捞。
   let existingPatternSourceIds = new Set<string>()
   let existingExperimentSourceIds = new Set<string>()
-  let dedupReady = true
   try {
     existingPatternSourceIds = await loadExistingSourceIds(
       supabase, clientId, 'client_proven_patterns',
@@ -150,46 +117,38 @@ export async function runExtractorForClient(
       supabase, clientId, 'client_failed_experiments',
     )
   } catch (err) {
-    dedupReady = false
-    result.errors.push(`load existing（本轮跳过经验写入，避免写重）: ${msgOf(err)}`)
+    result.errors.push(`load existing: ${msgOf(err)}`)
+    // 继续 — 即使读取失败，重复写入也只是浪费空间，不会破坏数据
   }
 
   // 3. 逐条处理 outcomes
-  for (const out of dedupReady ? outcomes : []) {
+  for (const out of outcomes) {
     try {
-      // 🔴 去重键是 action_id，不是 outcome_id —— 理由见文件头。
-      //    写入后随手把 id 加进集合：同一批里同一个动作出现两次也不会写两条。
       if (out.verdict === 'confirmed' && (out.confidence ?? 0) >= MIN_OUTCOME_CONFIDENCE) {
-        if (!existingPatternSourceIds.has(out.action_id)) {
+        if (!existingPatternSourceIds.has(out.outcome_id)) {
           const saved = await saveProvenPattern(supabase, {
             client_id: out.client_id,
             pattern_type: actionToPatternType(out.action_type),
             pattern_content: describePattern(out),
             performance_metric: describeMetric(out),
             flywheel: out.flywheel,
-            source_table: MEMORY_SOURCE_TABLE,
-            source_id: out.action_id,
+            source_table: 'flywheel_outcomes',
+            source_id: out.outcome_id,
           })
-          if (saved) {
-            result.patterns_added++
-            existingPatternSourceIds.add(out.action_id)
-          }
+          if (saved) result.patterns_added++
         }
       } else if (out.verdict === 'reversed' && (out.confidence ?? 0) >= MIN_OUTCOME_CONFIDENCE) {
-        if (!existingExperimentSourceIds.has(out.action_id)) {
+        if (!existingExperimentSourceIds.has(out.outcome_id)) {
           const saved = await saveFailedExperiment(supabase, {
             client_id: out.client_id,
             experiment_description: describeExperiment(out),
             failure_reason: describeFailure(out),
             dimension: flywheelToDimension(out.flywheel),
             tried_at: out.executed_at,
-            source_table: MEMORY_SOURCE_TABLE,
-            source_id: out.action_id,
+            source_table: 'flywheel_outcomes',
+            source_id: out.outcome_id,
           })
-          if (saved) {
-            result.experiments_added++
-            existingExperimentSourceIds.add(out.action_id)
-          }
+          if (saved) result.experiments_added++
         }
       }
     } catch (err) {
@@ -278,57 +237,28 @@ async function loadOutcomesWithActions(
   clientId: string,
 ): Promise<OutcomeJoinRow[]> {
   // 单跑 JOIN 在 PostgREST 风格里不直观；用两步查询并在内存里合并
-  //
-  // 🔴 必须走 fetchAll：PostgREST 单次查询硬顶 1000 行且**不报错**。
-  //    直接 select 的话，攒够一千条归因结论之后，最老的那些会静默消失 ——
-  //    而经验恰恰是越老越该记住的那种东西（见 supabase-paginate.ts 的实测事故）。
-  type OutcomeRow = {
-    id: string; client_id: string; action_id: string; metric_key: string
-    delta: number | null; delta_pct: number | null; confidence: number | null
-    verdict: 'confirmed' | 'inconclusive' | 'reversed'
-    computed_at: string; window_days: number
-  }
-  const outcomeRows = await fetchAll<OutcomeRow>((from, to) =>
-    supabase
-      .from('flywheel_outcomes')
-      .select('id, client_id, action_id, metric_key, delta, delta_pct, confidence, verdict, computed_at, window_days')
-      .eq('client_id', clientId)
-      .in('verdict', ['confirmed', 'reversed'])
-      // 分页必须配稳定排序；computed_at 会撞（同一轮归因批量写入），
-      // 补 id 做次级排序，否则页与页之间会漏行/重行
-      .order('computed_at', { ascending: false })
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
+  const { data: outcomeRows, error: outcomeErr } = await supabase
+    .from('flywheel_outcomes')
+    .select('id, client_id, action_id, metric_key, delta, delta_pct, confidence, verdict, computed_at, window_days')
+    .eq('client_id', clientId)
+    .in('verdict', ['confirmed', 'reversed'])
+    .order('computed_at', { ascending: false })
 
-  if (outcomeRows.length === 0) return []
+  if (outcomeErr) throw new Error(outcomeErr.message)
+  if (!outcomeRows || outcomeRows.length === 0) return []
 
   const actionIds = Array.from(new Set(outcomeRows.map(r => r.action_id).filter(Boolean)))
   if (actionIds.length === 0) return []
 
-  // action 侧按 id 批量取。`.in()` 的入参也不能无限长 —— 切块查，
-  // 每块内部再 fetchAll 兜住 1000 行上限。
-  type ActionRow = {
-    id: string; action_type: string; flywheel: FlywheelName
-    vendor: string | null; executed_at: string
-  }
-  const actionRows: ActionRow[] = []
-  const IN_CHUNK = 200
-  for (let i = 0; i < actionIds.length; i += IN_CHUNK) {
-    const chunk = actionIds.slice(i, i + IN_CHUNK)
-    const rows = await fetchAll<ActionRow>((from, to) =>
-      supabase
-        .from('flywheel_actions')
-        .select('id, action_type, flywheel, vendor, executed_at')
-        .in('id', chunk)
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
-    actionRows.push(...rows)
-  }
+  const { data: actionRows, error: actionErr } = await supabase
+    .from('flywheel_actions')
+    .select('id, action_type, flywheel, vendor, executed_at')
+    .in('id', actionIds)
+
+  if (actionErr) throw new Error(actionErr.message)
 
   const actionMap = new Map<string, { action_type: string; flywheel: FlywheelName; vendor: string | null; executed_at: string }>()
-  for (const a of actionRows) {
+  for (const a of actionRows ?? []) {
     actionMap.set(a.id, {
       action_type: a.action_type,
       flywheel: a.flywheel,
@@ -361,44 +291,30 @@ async function loadOutcomesWithActions(
   return joined
 }
 
-/**
- * 读回这个客户已经抽取过哪些动作。
- *
- * 🔴 出错必须**抛**，不能吞掉返回空集合 —— 空集合的意思是「一条都没抽过」，
- *    调用方会照着它把所有经验重写一遍。读失败和真的没有，是完全相反的两件事。
- *    （原来这里 catch 完 return new Set()，正是那个「静默重写」的入口。）
- *
- * 同样必须 fetchAll：老客户的经验条数会超过 1000，截断了的去重集合
- * 等于部分失效，照样写重。
- */
 async function loadExistingSourceIds(
   supabase: SupabaseClient,
   clientId: string,
   table: 'client_proven_patterns' | 'client_failed_experiments',
 ): Promise<Set<string>> {
-  const rows = await fetchAll<{ source_id: string | null }>((from, to) =>
-    supabase
-      .from(table)
-      .select('source_id')
-      .eq('client_id', clientId)
-      .eq('source_table', MEMORY_SOURCE_TABLE)
-      .not('source_id', 'is', null)
-      .order('source_id', { ascending: true })
-      .range(from, to),
-  )
-  return new Set(rows.map((r) => r.source_id).filter((v): v is string => !!v))
+  const { data, error } = await supabase
+    .from(table)
+    .select('source_id')
+    .eq('client_id', clientId)
+    .eq('source_table', 'flywheel_outcomes')
+    .not('source_id', 'is', null)
+
+  if (error) {
+    console.warn(`[extractor] load existing ${table}: ${error.message}`)
+    return new Set()
+  }
+  return new Set((data ?? []).map((r: { source_id: string | null }) => r.source_id).filter((v): v is string => !!v))
 }
 
 // ── Preference 聚合 ───────────────────────────────────────────────────────────
 
 /**
  * 同一 action_type 在该客户上 confirmed 次数达到阈值，生成 learned_preference。
- *
- * 🔴 去重认的是 **(flywheel, preference_type, action_type)**，不认整条 content。
- *    content 里带着次数（「3 次 confirmed: …」），而次数会随着归因累积一直涨 ——
- *    拿整条 content 当键，等于 3 次写一条、4 次再写一条、5 次又一条，
- *    同一个结论在库里堆成一串只有数字不同的行，全都是「有效」的同义反复。
- *    次数变化只是同一条经验变得更可信，该更新 confidence，不该新增一行。
+ * 已存在同 (preference_type, content, source='auto_extracted', flywheel) 不重复写。
  */
 async function extractPreferencesFromActionTypes(
   supabase: SupabaseClient,
@@ -417,31 +333,29 @@ async function extractPreferencesFromActionTypes(
     grouped.set(key, entry)
   }
 
-  // 已有 auto_extracted preferences → 归一成 (flywheel, type, action_type) 身份集
-  const existing = await fetchAll<{ content: string; flywheel: string | null; preference_type: string }>(
-    (from, to) =>
-      supabase
-        .from('client_learned_preferences')
-        .select('content, flywheel, preference_type')
-        .eq('client_id', clientId)
-        .eq('source', 'auto_extracted')
-        .order('content', { ascending: true })
-        .range(from, to),
-  )
+  // 已有 auto_extracted preferences 的内容集（按 flywheel + content 去重）
+  const { data: existing } = await supabase
+    .from('client_learned_preferences')
+    .select('content, flywheel, preference_type')
+    .eq('client_id', clientId)
+    .eq('source', 'auto_extracted')
 
-  const existingKeys = new Set<string>()
-  for (const r of existing) {
-    const actionType = actionTypeOfPreferenceContent(r.content)
-    if (!actionType) continue // 不是本抽取器写的格式，不参与去重
-    existingKeys.add(preferenceKey(r.flywheel ?? 'global', r.preference_type, actionType))
-  }
+  const existingKeys = new Set(
+    (existing ?? []).map((r: { content: string; flywheel: string | null; preference_type: string }) =>
+      `${r.flywheel ?? 'global'}::${r.preference_type}::${r.content}`,
+    ),
+  )
 
   let added = 0
   for (const entry of Array.from(grouped.values())) {
     if (entry.count < MIN_OCCURRENCES_FOR_PREFERENCE) continue
 
-    const preferenceType: PreferenceType = 'format'
-    const key = preferenceKey(entry.flywheel, preferenceType, entry.actionType)
+    const preference: { preference_type: PreferenceType; content: string; flywheel: FlywheelName } = {
+      preference_type: 'format',
+      content: `${entry.count} 次 confirmed: action_type='${entry.actionType}' 在 ${entry.flywheel} 飞轮持续跑赢`,
+      flywheel: entry.flywheel,
+    }
+    const key = `${preference.flywheel}::${preference.preference_type}::${preference.content}`
     if (existingKeys.has(key)) continue
 
     // confidence_score 与样本数挂钩（cap 0.95）
@@ -450,14 +364,13 @@ async function extractPreferencesFromActionTypes(
     const sample = entry.samples[0]
     const saved = await savePreference(supabase, {
       client_id: clientId,
-      preference_type: preferenceType,
-      content: `${entry.count} 次 confirmed: action_type='${entry.actionType}' 在 ${entry.flywheel} 飞轮持续跑赢`,
+      preference_type: preference.preference_type,
+      content: preference.content,
       source: 'auto_extracted',
       confidence_score: confidence,
-      flywheel: entry.flywheel,
-      // 溯源同样挂动作，不挂归因结论 —— 理由见文件头
-      extracted_from_table: MEMORY_SOURCE_TABLE,
-      extracted_from_id: sample?.action_id,
+      flywheel: preference.flywheel,
+      extracted_from_table: 'flywheel_outcomes',
+      extracted_from_id: sample?.outcome_id,
     })
     if (saved) {
       added++
@@ -465,20 +378,6 @@ async function extractPreferencesFromActionTypes(
     }
   }
   return added
-}
-
-/** 偏好条目的稳定身份：跟次数无关，只认「哪个飞轮的哪种动作」。 */
-function preferenceKey(flywheel: string, preferenceType: string, actionType: string): string {
-  return `${flywheel}::${preferenceType}::${actionType}`
-}
-
-/**
- * 从既有 content 里把 action_type 还原出来。
- * 只认本抽取器写的 `action_type='...'` 格式；认不出返回 null（那行不参与去重）。
- */
-function actionTypeOfPreferenceContent(content: string): string | null {
-  const m = /action_type='([^']+)'/.exec(content)
-  return m ? m[1] : null
 }
 
 // ── Decision verdict backfill ─────────────────────────────────────────────────

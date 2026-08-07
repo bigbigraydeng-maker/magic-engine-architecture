@@ -60,11 +60,6 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   { service: 'kpi-backfill', jobName: 'kpi-backfill', schedule: '20 6 * * *', logsRuns: true, addedAt: '2026-08-04' },
   { service: 'benchmark-accumulator', jobName: 'benchmark-accumulator', schedule: '40 7 * * 1', logsRuns: true, addedAt: '2026-08-04' },
   { service: 'keyword-snapshots-weekly', jobName: 'keyword-snapshots-weekly', schedule: '0 2 * * 1', logsRuns: true },
-  // 记忆抽取 —— 2026-08-07 补接线。路由从 Phase 23.C 就写好了，但从没进过任何调度器，
-  // 于是 client_proven_patterns / client_failed_experiments 一直是空的：
-  // 「这招上次不灵」这件事从来没有被记住过一次。排在 06:35 是为了夹在
-  // attribution（06:00）之后、agent-learning-rollup（周一 07:00）之前。
-  { service: 'memory-extractor', jobName: 'memory-extractor', schedule: '35 6 * * *', logsRuns: true, addedAt: '2026-08-07' },
   // mailbox-sync-hourly 已于 2026-08-03 从 render.yaml 移除：它作为独立服务一次都没跑过
   // （新增服务要有人进 Render 点一次 Apply，而这件事不报任何错），现在挂在 messenger-hourly
   // 里跑。留在清单里会天天误报「没跑」——正是这套告警最怕的东西。
