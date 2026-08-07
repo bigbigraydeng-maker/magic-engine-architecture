@@ -31,8 +31,22 @@ export interface OpLogEntry {
   rowCount?: number
 }
 
-/** Columns of the UNIQUE constraint added by migration 20260808000001. */
+/** Columns of the UNIQUE constraint added by the expand migration. */
 export const NATURAL_KEY_COLUMNS = ['action_id', 'metric_key', 'window_days'] as const
+
+export const EVALUATOR_VOCABULARY = ['flywheel_metrics', 'gsc_snapshots'] as const
+
+/**
+ * Where `flywheel_outcomes` sits in the expand → deploy → contract rollout.
+ *
+ *   pre_expand    — today's main: no UNIQUE, no evaluator_key
+ *   post_expand   — after 20260808000001: UNIQUE exists, evaluator_key nullable
+ *   post_contract — after 20260808000002: evaluator_key NOT NULL + narrowed CHECK
+ *
+ * Modelling the three states is what lets the suite prove the ordering claim
+ * rather than assert it in prose.
+ */
+export type OutcomeSchemaState = 'pre_expand' | 'post_expand' | 'post_contract'
 
 const MODELLED_TABLES = [
   'flywheel_actions',
@@ -49,9 +63,19 @@ export class FakeOutcomesDb {
   private pendingFailures: Array<{ table: string; op: string; message: string }> = []
 
   readonly ops: OpLogEntry[] = []
+  readonly schema: OutcomeSchemaState
 
-  constructor() {
+  constructor(options: { schema?: OutcomeSchemaState } = {}) {
+    this.schema = options.schema ?? 'post_expand'
     for (const t of MODELLED_TABLES) this.tables.set(t, [])
+  }
+
+  hasNaturalKeyConstraint(): boolean {
+    return this.schema !== 'pre_expand'
+  }
+
+  evaluatorKeyIsRequired(): boolean {
+    return this.schema === 'post_contract'
   }
 
   // ── Seeding / inspection ──────────────────────────────────────────────────
@@ -64,7 +88,11 @@ export class FakeOutcomesDb {
   seed(table: ModelledTable, rows: Row[]): void {
     const target = this.rowsOf(table)
     for (const row of rows) {
-      target.push({ id: row.id ?? this.nextId(), ...row })
+      const stored: Row = { id: row.id ?? this.nextId(), ...row }
+      if (table === 'flywheel_outcomes' && this.schema !== 'pre_expand') {
+        stored.outcome_key = `${stored.action_id}:${stored.metric_key}:${stored.window_days}`
+      }
+      target.push(stored)
     }
   }
 
@@ -220,8 +248,10 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
     const target = this.db.rowsOf(this.table as ModelledTable)
 
     for (const row of list) {
-      const clash = this.findByNaturalKey(target, row)
-      if (clash) {
+      const violation = this.checkColumnConstraints(row)
+      if (violation) return { data: null, error: violation }
+
+      if (this.db.hasNaturalKeyConstraint() && this.findByNaturalKey(target, row)) {
         return {
           data: null,
           error: {
@@ -230,7 +260,7 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
           },
         }
       }
-      target.push({ id: this.db.nextId(), created_at: new Date().toISOString(), ...row })
+      target.push(this.materialise(row))
     }
 
     this.db.log({ table: this.table, op: 'insert', filters: [], rowCount: list.length })
@@ -249,11 +279,25 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
       .map(c => c.trim())
       .filter(Boolean)
 
-    if (this.table === 'flywheel_outcomes' && conflictCols.length === 0) {
-      // Without a conflict target PostgREST inserts, which the unique index rejects.
-      return {
-        data: null,
-        error: { message: 'upsert without onConflict target on flywheel_outcomes' },
+    if (this.table === 'flywheel_outcomes') {
+      if (conflictCols.length === 0) {
+        // Without a conflict target PostgREST plain-inserts, which the unique
+        // index then rejects on the second run.
+        return {
+          data: null,
+          error: { message: 'upsert without onConflict target on flywheel_outcomes' },
+        }
+      }
+      if (!this.db.hasNaturalKeyConstraint()) {
+        // The blocker this rollout order exists to avoid: shipping the writers
+        // before the constraint means Postgres has nothing to conflict on.
+        return {
+          data: null,
+          error: {
+            message:
+              'there is no unique or exclusion constraint matching the ON CONFLICT specification',
+          },
+        }
       }
     }
 
@@ -261,17 +305,60 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
     const target = this.db.rowsOf(this.table as ModelledTable)
 
     for (const row of list) {
+      const violation = this.checkColumnConstraints(row)
+      if (violation) return { data: null, error: violation }
+
       const existing = target.find(r => conflictCols.every(c => r[c] === row[c]))
       if (existing) {
         // UPDATE in place: id and created_at survive — that is the whole point.
         Object.assign(existing, row)
+        this.applyGenerated(existing)
       } else {
-        target.push({ id: this.db.nextId(), created_at: new Date().toISOString(), ...row })
+        target.push(this.materialise(row))
       }
     }
 
     this.db.log({ table: this.table, op: 'upsert', filters: [], rowCount: list.length })
     return { data: null, error: null }
+  }
+
+  /** NOT NULL / CHECK constraints as they exist in the current schema state. */
+  private checkColumnConstraints(row: Row): DbError | null {
+    if (this.table !== 'flywheel_outcomes') return null
+    if (this.db.schema === 'pre_expand') return null
+
+    const value = row.evaluator_key
+
+    if (value === undefined || value === null) {
+      if (this.db.evaluatorKeyIsRequired()) {
+        return {
+          message:
+            'null value in column "evaluator_key" of relation "flywheel_outcomes" violates not-null constraint',
+        }
+      }
+      return null // expand-phase CHECK admits NULL
+    }
+
+    if (!(EVALUATOR_VOCABULARY as readonly unknown[]).includes(value)) {
+      return {
+        message:
+          'new row for relation "flywheel_outcomes" violates check constraint "flywheel_outcomes_evaluator_key_check"',
+      }
+    }
+    return null
+  }
+
+  private materialise(row: Row): Row {
+    const stored: Row = { id: this.db.nextId(), created_at: new Date().toISOString(), ...row }
+    this.applyGenerated(stored)
+    return stored
+  }
+
+  /** outcome_key is GENERATED ALWAYS — writers never supply it. */
+  private applyGenerated(row: Row): void {
+    if (this.table !== 'flywheel_outcomes') return
+    if (this.db.schema === 'pre_expand') return
+    row.outcome_key = `${row.action_id}:${row.metric_key}:${row.window_days}`
   }
 
   then<TResult1 = { data: Row[] | null; error: DbError | null }, TResult2 = never>(

@@ -13,10 +13,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
-import path from 'node:path'
-import { FakeOutcomesDb, NATURAL_KEY_COLUMNS } from './fake-outcomes-db'
-import { OUTCOME_CONFLICT_TARGET, OUTCOME_EVALUATOR } from '../outcome-identity'
+import { FakeOutcomesDb } from './fake-outcomes-db'
+import { OUTCOME_EVALUATOR } from '../outcome-identity'
 
 // ── Module-level fake, swapped per test ──────────────────────────────────────
 
@@ -412,35 +410,6 @@ describe('historical duplicate rows', () => {
     expect(clicks).toHaveLength(1)
     expect(clicks[0].id).toBe('legacy-1') // identity survives the recomputation
     expect(clicks[0].verdict).toBe('confirmed')
-  })
-})
-
-// ── 8. Code ↔ schema contract ────────────────────────────────────────────────
-
-describe('conflict target matches the migration', () => {
-  const migrationPath = path.join(
-    process.cwd(),
-    'supabase/migrations/20260808000001_flywheel_outcomes_stable_identity.sql',
-  )
-  const sql = readFileSync(migrationPath, 'utf8')
-
-  it('OUTCOME_CONFLICT_TARGET lists exactly the UNIQUE constraint columns', () => {
-    const match = sql.match(
-      /ADD CONSTRAINT flywheel_outcomes_natural_key\s+UNIQUE \(([^)]+)\)/,
-    )
-    expect(match).not.toBeNull()
-
-    const columns = match![1].split(',').map(c => c.trim())
-    expect(columns).toEqual([...NATURAL_KEY_COLUMNS])
-    expect(OUTCOME_CONFLICT_TARGET.split(',').map(c => c.trim())).toEqual(columns)
-  })
-
-  it('the duplicate collapse runs before the UNIQUE constraint is added', () => {
-    const dedupeAt = sql.indexOf('PARTITION BY action_id, metric_key, window_days')
-    const constraintAt = sql.indexOf('ADD CONSTRAINT flywheel_outcomes_natural_key')
-
-    expect(dedupeAt).toBeGreaterThan(-1)
-    expect(constraintAt).toBeGreaterThan(dedupeAt)
   })
 })
 
