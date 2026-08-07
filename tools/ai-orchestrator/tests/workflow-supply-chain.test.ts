@@ -11,10 +11,17 @@
  *   ai-orchestrator-manual.yml   the orchestrator. workflow_dispatch only,
  *                               disabled by default, refuses to be switched on.
  *   ai-orchestrator-ci.yml       ordinary read-only CI. pull_request only,
- *                               path-filtered, no secrets, no writes.
+ *                               UNfiltered (see below), no secrets, no writes.
  *
  * The rules they share (pinned actions, no dangerous write scopes, no schedule,
  * no issue_comment) are asserted against both.
+ *
+ * The CI workflow additionally must carry NO event filter at all. It is intended
+ * to be a required status check, and GitHub does not run a workflow on a PR its
+ * filter excludes — so the required check never reports, stays Pending, and
+ * blocks a PR that never touched this module. A `paths:` filter that looks like
+ * a tidy optimisation is a repository-wide merge deadlock. That is what
+ * `REQUIRED_CHECK_WORKFLOWS` below exists to prevent recurring.
  */
 
 import { readFileSync } from 'node:fs'
@@ -97,6 +104,15 @@ const ci = load('ci', CI_PATH)
 const both = [manual, ci]
 
 const FULL_SHA = /^[0-9a-f]{40}$/
+
+/**
+ * Workflows intended to be required status checks. These may not filter their
+ * events — a skipped required check is a stuck PR, not a saved minute.
+ */
+const REQUIRED_CHECK_WORKFLOWS = [ci]
+
+/** Filters that cause GitHub to skip a workflow, leaving a required check unreported. */
+const SKIPPING_FILTERS = ['paths', 'paths-ignore', 'branches', 'branches-ignore', 'tags', 'tags-ignore']
 const FORBIDDEN_WRITE_SCOPES = [
   'workflows',
   'actions',
@@ -214,7 +230,30 @@ describe('the orchestrator workflow', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The CI workflow: read-only, path-filtered, secret-free
+// Required status checks must never be skippable
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe.each(REQUIRED_CHECK_WORKFLOWS.map((workflow) => [workflow.label, workflow] as const))(
+  '%s workflow is safe to require',
+  (_label, workflow) => {
+    it.each(SKIPPING_FILTERS)('declares no %s filter on any trigger', (filter) => {
+      for (const [event, config] of Object.entries(workflow.triggers)) {
+        if (config === null || config === undefined) continue
+        expect(
+          config as Record<string, unknown>,
+          `${event} must not use ${filter}: a skipped required check blocks every unrelated PR`
+        ).not.toHaveProperty(filter)
+      }
+    })
+
+    it('has at least one trigger, so the check actually reports', () => {
+      expect(Object.keys(workflow.triggers).length).toBeGreaterThan(0)
+    })
+  }
+)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The CI workflow: read-only, unfiltered, secret-free
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('the CI workflow', () => {
@@ -226,13 +265,10 @@ describe('the CI workflow', () => {
     expect(ci.doc.permissions).toEqual({ contents: 'read' })
   })
 
-  it('is scoped to this module, its spec and its own workflows', () => {
-    const trigger = ci.triggers.pull_request as { paths?: string[] }
-    expect(trigger.paths).toEqual([
-      'tools/ai-orchestrator/**',
-      'docs/specs/2026-08-07-ai-orchestrator-v0.1.md',
-      '.github/workflows/ai-orchestrator-*.yml',
-    ])
+  it('reports on every pull request, so a required check can never hang', () => {
+    // `pull_request:` with no body at all — the only shape that guarantees the
+    // check reports on every PR.
+    expect(ci.triggers.pull_request ?? null).toBeNull()
   })
 
   it('references no secret at all', () => {
@@ -263,6 +299,15 @@ describe('the CI workflow', () => {
   it('runs the module-scoped type check, not the red whole-repo one', () => {
     const step = ci.steps.find((candidate) => candidate.run?.includes('tsc'))
     expect(step?.run).toContain('tsc -p tools/ai-orchestrator/tsconfig.json')
+  })
+
+  it('runs the module suite even on a PR that touches nothing in this module', () => {
+    // Restating the property from the other direction: there is no mechanism in
+    // the file by which GitHub could decide to skip this workflow.
+    const source = ci.executable
+    for (const filter of SKIPPING_FILTERS) {
+      expect(source, `CI must not use ${filter}`).not.toMatch(new RegExp(`^\\s*${filter}:`, 'm'))
+    }
   })
 
   it('may cancel superseded runs, unlike the orchestrator', () => {

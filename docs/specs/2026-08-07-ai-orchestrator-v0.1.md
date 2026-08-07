@@ -384,7 +384,7 @@ v0.1 只列了 `policy/` · `prompts/` · `state-machine.ts`，把 `runner.ts` �
 
 | 项 | 值 |
 |---|---|
-| 触发 | **只有 `pull_request`**，且 paths 限定到 `tools/ai-orchestrator/**` · 本模块 spec · `ai-orchestrator-*.yml` |
+| 触发 | **只有 `pull_request`，且不带任何 paths / branches 过滤** —— 每个 PR 都报状态 |
 | 权限 | `contents: read` |
 | secrets | **一个都不引用**（`secrets.` 在可执行内容里不出现，有测试断言） |
 | 模型 | 不调 OpenAI / Anthropic，不写 Issue，不 commit / push / merge，零费用 |
@@ -394,6 +394,17 @@ v0.1 只列了 `policy/` · `prompts/` · `state-machine.ts`，把 `runner.ts` �
 跑三件事：模块级 `tsc -p tools/ai-orchestrator/tsconfig.json`（全仓基线 188 条红，
 所以必须收窄到本目录才有意义，这里的标准是 0）· `npx vitest run tools/ai-orchestrator` ·
 结束时断言工作区没被改动。
+
+### 为什么**不**加 paths 过滤
+
+第一版加了 `paths:` 限定到本模块 —— 看着像顺手的优化，实际是**全仓合并死锁**：
+
+> GitHub 对被过滤掉的 PR **根本不跑这条 workflow**，所以那个 required check 永远不会报告状态，
+> 一直挂在 Pending，把一个跟本模块毫无关系的 PR 也堵死。
+
+这个 job 只读、无 secret、约 1 分钟。在无关 PR 上白跑一分钟，比把所有人的 PR 卡住便宜得多。
+`tests/workflow-supply-chain.test.ts` 现在断言这条 workflow **不许**出现
+`paths` / `paths-ignore` / `branches` / `branches-ignore` / `tags` / `tags-ignore`，防止再犯。
 
 架构检查和 workflow 供应链检查都在那次 vitest 里（`--reporter=verbose` 会把每条断言名打出来）。
 
@@ -429,6 +440,7 @@ PM 已升级 GitHub Pro 并建好 ruleset。实测 `gh api`：
 orchestrator 永不 auto-merge —— **merge 仍然是人手动完成的**。
 
 合进来的下一步是把 **`ai-orchestrator-tests`** 设为 required status check（见 §8b）。
+**加之前先确认它没有任何事件过滤** —— 有过滤的 required check 会把无关 PR 永久卡在 Pending。
 
 ### 1. Secrets（仓库 Settings → Secrets and variables → Actions）
 
@@ -611,7 +623,8 @@ tool allowlist 真的被 Action 尊重 · 输出符合 schema。
 | **价目表缺失 / 过期 / 输入超限 → 零调用** | `cancellation-and-pricing.test.ts` |
 | **actual > reserved → WAITING_HUMAN** | `cancellation-and-pricing.test.ts` |
 | **workflow 未 pin / 越权 / 加触发器 → 测试红** | `workflow-supply-chain.test.ts`（两条 workflow 都管） |
-| **CI 引用 secret / 给写权限 / 改 check 名 / 缩 paths → 测试红** | `workflow-supply-chain.test.ts` |
+| **CI 引用 secret / 给写权限 / 改 check 名 → 测试红** | `workflow-supply-chain.test.ts` |
+| **required check 的 workflow 加任何事件过滤 → 测试红** | `workflow-supply-chain.test.ts` |
 | **模块 import 了 `src/` / supabase / next / 未声明依赖 → 测试红** | `architecture.test.ts` |
 | **文件超 800 行 / 出现 `any` → 测试红** | `architecture.test.ts` |
 
@@ -636,7 +649,7 @@ tool allowlist 真的被 Action 尊重 · 输出符合 schema。
 | 账本信任任意作者 | 3 |
 | `WAITING_HUMAN` 自行恢复 | 5 |
 
-**第四轮（只读 CI 与架构闸门，9 组）**
+**第四轮（只读 CI 与架构闸门，11 组）**
 
 | 破坏 | 变红 |
 |---|---|
@@ -644,7 +657,9 @@ tool allowlist 真的被 Action 尊重 · 输出符合 schema。
 | CI 的 action 退回 moveable tag | 3 |
 | CI 接上模型 secret | 2 |
 | required check 名被改 | 1 |
-| CI 的 paths 被缩窄 | 1 |
+| CI 加回 `paths` 过滤 | 3 |
+| CI 加 `paths-ignore` | 3 |
+| CI 加 `branches` 过滤 | 3 |
 | 源文件 `import '@/...'` 打进 src | 2 |
 | 源文件 import supabase client | 1 |
 | 混进一个 `any` | 1 |

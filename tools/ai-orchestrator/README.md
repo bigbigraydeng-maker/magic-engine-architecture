@@ -16,7 +16,7 @@ from `src/`, touches no database, and sees no customer data.
 npx vitest run tools/ai-orchestrator
 ```
 
-374 tests, all against mock providers. No network, no credentials, no spend.
+382 tests, all against mock providers. No network, no credentials, no spend.
 The dry-run test prints a preflight report showing every guard it evaluated and
 what it *would* do next.
 
@@ -32,12 +32,21 @@ pre-existing errors, so only a scoped check can be a gate:
 npx tsc -p tools/ai-orchestrator/tsconfig.json
 ```
 
-**CI**: `.github/workflows/ai-orchestrator-ci.yml` runs both on every pull request
-that touches this module. It is ordinary read-only CI — `pull_request` only,
+**CI**: `.github/workflows/ai-orchestrator-ci.yml` runs both of the above on
+**every** pull request. Ordinary read-only CI — `pull_request` only,
 `contents: read`, references no secret, calls no model, writes nothing. The check
 name is **`ai-orchestrator-tests`**; that is the string to require in the
-`Protect main` ruleset. It is not an orchestrator trigger: the orchestrator itself
-is still `workflow_dispatch`-only and still disabled by default.
+`Protect main` ruleset.
+
+It carries no `paths:` filter on purpose. GitHub does not run a workflow on a PR
+its filter excludes, so a filtered workflow used as a required check never
+reports — it sits Pending and blocks a PR that never touched this module. The job
+is read-only and takes about a minute, which is far cheaper than a repository-wide
+merge deadlock. The supply-chain suite fails the build if any event filter
+reappears.
+
+It is not an orchestrator trigger: the orchestrator itself is still
+`workflow_dispatch`-only and still disabled by default.
 
 ## Layout
 
@@ -49,7 +58,7 @@ src/adapters/     github · openai · claude · workspace (git · GitHub PR) · 
 src/config/       the concrete scaffold configuration
 src/runner.ts     preflight and the loop        src/turn-executor.ts  one turn, end to end
 src/runner-types.ts  shared types               src/runner-context.ts ledger writes and transitions
-tests/            374 tests
+tests/            382 tests
 ```
 
 ## The five things worth knowing
