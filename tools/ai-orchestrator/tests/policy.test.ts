@@ -44,10 +44,12 @@ const authorization = createScaffoldAuthorization({
 function facts(overrides: Partial<AuthoritativeTurnFacts> = {}): AuthoritativeTurnFacts {
   return {
     files_changed: [IN_SCOPE_FILE],
+    cumulative_files_changed: [IN_SCOPE_FILE],
     tools_used: ['Read', 'Edit'],
     commit: null,
     pull_request: null,
-    sources: { workspace: 'git:diff+status', telemetry: 'mock:execution-log' },
+    pull_request_opened_this_turn: false,
+    sources: { workspace: 'git:diff+status+hash-object', telemetry: 'mock:execution-log' },
     ...overrides,
   }
 }
@@ -164,6 +166,7 @@ describe('budget is a ceiling, not a tripwire', () => {
           input_digest: 'd1',
           verdict: 'REQUEST_CHANGES',
           reserved_cost_usd: 0.5,
+          pricing_version: 'mock-2026-08',
           cost_usd: 1.75,
           output_digest: 'o1',
           authoritative: null,
@@ -194,6 +197,7 @@ describe('budget is a ceiling, not a tripwire', () => {
           input_digest: 'd1',
           holder: 'other',
           reserved_cost_usd: 1.8,
+          pricing_version: 'mock-2026-08',
           claim_expires_at: new Date(NOW.getTime() + 60_000).toISOString(),
         },
       ],
@@ -221,6 +225,7 @@ describe('budget is a ceiling, not a tripwire', () => {
           input_digest: 'd1',
           holder: 'crashed-runner',
           reserved_cost_usd: 1.9,
+          pricing_version: 'mock-2026-08',
           claim_expires_at: new Date(NOW.getTime() - 1).toISOString(),
         },
       ],
@@ -438,7 +443,10 @@ describe('evaluateImplementerTurn runs on authoritative facts', () => {
     expect(
       evaluateImplementerTurn(
         authorization,
-        facts({ files_changed: ['tools/ai-orchestrator/src/runner.ts', 'src/lib/a.ts'] })
+        facts({
+          files_changed: ['tools/ai-orchestrator/src/runner.ts', 'src/lib/a.ts'],
+          cumulative_files_changed: ['tools/ai-orchestrator/src/runner.ts', 'src/lib/a.ts'],
+        })
       )
     ).toMatchObject({ code: 'PROTECTED_PATH_TOUCHED' })
   })
@@ -458,7 +466,10 @@ describe('evaluateImplementerTurn runs on authoritative facts', () => {
     expect(
       evaluateImplementerTurn(
         noPr,
-        facts({ pull_request: { number: 861, head_sha: 'abc', head_ref: 'x', merged: false } })
+        facts({
+          pull_request: { number: 861, head_sha: 'abc', head_ref: 'x', merged: false },
+          pull_request_opened_this_turn: true,
+        })
       )
     ).toMatchObject({ allowed: false, code: 'PR_NOT_AUTHORIZED' })
   })
@@ -505,7 +516,7 @@ describe('compareSelfReport', () => {
       implementerOutput({ commit_evidence: { branch: 'x', commit_sha: 'deadbeef', pr_number: null } })
     )
     expect(compareSelfReport(lying, facts())).toContain(
-      'commit: reported deadbeef but the record says none'
+      'commit: reported deadbeef but this turn produced none'
     )
   })
 

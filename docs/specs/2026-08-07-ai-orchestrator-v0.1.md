@@ -29,7 +29,7 @@
 | **预留式预算**（先扣后打，硬顶） | 事后对账式的软上限 |
 | 真 provider **安全骨架**（缺 secret 即 fail closed） | 读写任何真实 API key |
 | manual-only workflow（默认关） | merge / deploy / migration |
-| 201 个测试 + dry-run 证据 | 改任何 Magic Engine 业务代码 |
+| 269 个测试 + dry-run 证据 | 改任何 Magic Engine 业务代码 |
 
 ---
 
@@ -120,6 +120,25 @@ Verdict 六值见上表。Reviewer 与 Implementer 的输出各有独立 schema
 
 为什么连 `git status` 也要读：**agent 改了文件但不 commit，文件照样改了**，只看 `diff base...HEAD` 会报告「什么都没动」。
 
+### 每轮取快照做差，不是从 main 起算整条分支
+
+v0.3 之前用的是 `git diff baseRef...HEAD` —— 那是**整条分支自离开 main 以来的累计值**。从第二轮起：
+
+- 第一轮的文件会被算成第二轮干的；
+- `commit` 永远非 null，因为 HEAD 总是存在；
+- 已经存在的 PR 会被当成本轮新建；
+- 老老实实只报本轮改动的 implementer，反而被判成撒谎。
+
+现在 inspector 只负责**捕获状态**，runner 在每次 provider 调用**前后各捕获一次**，做差：
+
+| 问题 | 用哪个 |
+|---|---|
+| 本轮干了什么（self-report 比对 · commit/PR 权限） | **delta** = after − before |
+| 分支整体有没有越界（受保护路径 · scope） | **cumulative** = after |
+
+差异按**内容指纹**算（`git hash-object`，或 GitHub PR 的 blob sha），不是按路径 ——
+否则第一轮碰过、第二轮没碰的文件，会因为仍在累计 diff 里而被当成第二轮的动作。
+
 模型的 `files_changed` / `tools_used` / `commit_evidence` 仍然收，但只用来跟记录**比对**：
 对不上 → `self_report_mismatch` → `WAITING_HUMAN`。
 policy 早就在权威事实上判完了；比对这一步是因为**一个连自己干了什么都说不准的 implementer，不该继续开车**。
@@ -177,6 +196,40 @@ orphaned **故意永不释放**。释放它等于让崩溃循环无限花钱，�
 - `max_turn_cost_usd ≤ cost_cap_usd`，且 `> 0`
 
 超时或 provider 抛错 → **按满额 reservation 结算**。不知道对方扣没扣，往对自己有利的方向猜就是把顶变成建议。
+
+### 超时必须真的取消，取消不了就把租约放大
+
+`Promise.race` **不是** hard timeout —— 输掉竞速只是放弃本地 `await`，HTTP 请求照跑照计费。
+现在：runner 建 `AbortController`，超时 `abort()`，signal 进 `TurnRequest`，adapter 契约上必须往下传。
+
+而且「能不能取消」是**声明出来的能力**，不是假设：
+
+```ts
+provider.cancellation = { supported: boolean, server_max_timeout_ms: number }
+```
+
+`supported: false` 时，我们的 timeout 什么都框不住，所以**租约和 claim 按 `server_max_timeout_ms` 算**，
+`checkTimingInvariant` 用两个 provider 里更长的那个窗口。当前两个真 adapter 都声明 `false`：
+OpenAI 的 transport 还没接，Claude Code Action 是独立进程 —— 掐掉我们的 `await` 掐不死那个进程。
+**在能证明「杀掉子进程 + 请求确实被拆掉」之前，这两个值不许改成 true。**
+
+### 预留额 = provider 自己报的最坏成本，不是拍脑袋的固定值
+
+固定 `$0.50` 对一个我们不知道单价的模型来说不是上界，是猜。现在由 adapter 出价：
+
+```ts
+maxCostFor({system, user, max_output_tokens, now}) -> { max_cost_usd, model, pricing_version,
+                                                        input_tokens_estimate, breakdown }
+```
+
+一律往高了算：token 按 **3 字符/token** 估（真实密度约 4，所以是高估）· output 一律按
+**满额 `max_output_tokens`** 计价 · 有 cache-write / tool surcharge 就加上。
+
+**报不出价就不调用**（`cost_estimate_unavailable` → `WAITING_HUMAN`）：价目表缺失 · 过期
+（`valid_until`）· 输入超过 `max_input_tokens`。**没有安全的默认单价可以兜底。**
+
+**实际花费超过预留 → `cost_overrun` → `WAITING_HUMAN`**，按实际金额入账。
+超了说明价格模型错了，不是上限有弹性。
 
 竞态真的发生了（对方无视我们的 claim、或我们读到的是旧账本）→ 写一条
 `duplicate_spend_recorded`：**不带状态**（赢家的 transition 照旧），只把这笔无法避免的钱记进账本和上限。
@@ -265,7 +318,7 @@ Issue 正文、Issue 评论、PR 描述、diff、文件内容 —— **全部是
 |---|---|---|
 | `max_rounds` | 6 | `BUDGET_EXHAUSTED` |
 | `cost_cap_usd` | 2.00（**硬顶**：剩余不够一整笔 reservation 就不开工） | `BUDGET_EXHAUSTED` |
-| `max_turn_cost_usd` | 0.50（每轮预留额） | 不够就零调用 |
+| 每轮预留额 | **provider 报价**（`max_turn_cost_usd` 只是 preflight 兜底） | 报不出价 / 不够 → 零调用 |
 | `max_output_tokens` | 16 000（交给 provider 的 token 天花板） | — |
 | `provider_timeout_ms` | 8 min（单次调用硬墙） | `provider_timeout`，按满额结算 |
 | `lease_margin_ms` | 2 min（调用结束到租约到期的余量） | 配置不满足即拒绝开工 |
@@ -328,24 +381,30 @@ v0.1 只列了 `policy/` · `prompts/` · `state-machine.ts`，把 `runner.ts` �
 
 > ⛔️ **阻塞项在最前面。** 在 PM 就第 0 条给出决定之前，Enable 阶段保持 `WAITING_HUMAN`。
 
-### 0. branch protection —— 当前计划下开不了（PM 决策）
+### 0. branch protection —— ✅ 已配好（2026-08-07 实测），但还有两个洞
 
-实测（`gh api`，2026-08-07）：
+PM 已升级 GitHub Pro 并建好 ruleset。实测 `gh api`：
 
 | 探测 | 结果 |
 |---|---|
-| `repos/.../branches/main/protection` | **403 Upgrade to GitHub Pro or make this repository public** |
-| `repos/.../rulesets` | **403 同上** |
-| `user.plan.name` | `free` |
-| `repos/.../actions/permissions/workflow` | `default_workflow_permissions: "read"` ✅ |
-| `.github/CODEOWNERS` | 不存在 |
+| `user.plan.name` | **pro** |
+| ruleset `Protect main` (id 20550157) | **active**，`bypass_actors: []` |
+| 规则 | `deletion` · `non_fast_forward` · `pull_request` |
+| `required_review_thread_resolution` | `true` |
+| `allowed_merge_methods` | `["merge"]` |
+| 旧的 `protect-main` / `protect-main Magic Engine` | 都已 `disabled` |
+| `default_workflow_permissions` | `read` ✅ |
 
-CODEOWNERS 文件可以放，但没有 branch protection 时它**只做 reviewer 自动指派，不构成强制**。
-三选一：
+**仍未闭合的两条，Enable 前必须补：**
 
-- **A** 升级 GitHub Pro / Team → 开 branch protection + 强制 CODEOWNERS review（推荐）；
-- **B** 拆独立 control-plane 私有仓库 —— 同样要付费计划才有保护，且引入跨仓凭据，**不推荐作为第一步**；
-- **C** 接受 §8 第 1–4 层作为 v1 的保证，Enable 时以文档 + 人工 review 兜底。
+1. `required_approving_review_count: 0` —— PR **零批准也能合**。禁止直推 main 有了，
+   「必须有人看过」还没有。
+2. `require_code_owner_review: false` 且 `.github/CODEOWNERS` 不存在 ——
+   受保护面（`.github/**` · `tools/ai-orchestrator/**`）的改动**没有强制指定审查人**。
+
+这两条不改，第 8 节那张表的第 6 层仍然是空的。建议：审批数设为 1，建 CODEOWNERS 并打开
+`require_code_owner_review`，然后**实测一次**（开一个改 `tools/ai-orchestrator/` 的 PR，
+确认没有 owner 批准合不进去），再谈 Enable。
 
 ### 1. Secrets（仓库 Settings → Secrets and variables → Actions）
 
@@ -372,6 +431,24 @@ implementer-job:  { contents: write, pull-requests: write }
 
 两个 job 都**永不**给：`actions` · `workflows` · `administration` · `deployments` · `packages` ·
 `security-events` 的 write。`workflows: write` 尤其不能给 —— 它是 §8 第 1 层的全部依据。
+
+**必须是 job-scoped `GITHUB_TOKEN`。** 不接受用一个权限更宽的 GitHub App installation token
+顶替：App token 的实际权限不在这个文件里，审查者读 workflow 读不出来，等于把最小权限变成口头承诺。
+
+### 3b. 第三方 Action 一律 pin 到审过的完整 commit SHA
+
+tag 是所有者随时可以重新指向的指针；今天的 `@v4` 和明天的 `@v4` 不是同一份代码，
+而这个 job 手里有仓库内容。当前已 pin：
+
+| Action | SHA | tag |
+|---|---|---|
+| `actions/checkout` | `11d5960a326750d5838078e36cf38b85af677262` | v4.3.0 |
+| `actions/setup-node` | `49933ea5288caeca8642d1e84afbd3f7d6820020` | v4.4.0 |
+
+Enable 时新增的 `anthropics/claude-code-action` 同样必须 pin，且**升级 SHA 要走一次人工 diff review**。
+
+这条不是靠 checklist 维持的：`tests/workflow-supply-chain.test.ts` 解析 workflow，
+任何未 pin 的 `uses:`、任何被禁的 write 权限、任何新增触发器都会让测试变红。
 
 ### 4. CODEOWNERS（建议内容，本次未创建）
 
@@ -404,7 +481,7 @@ implementer-job:  { contents: write, pull-requests: write }
 
 ## 10. 测试
 
-`npx vitest run tools/ai-orchestrator` —— **201 passed / 0 failed**，全部 mock，零网络、零费用。
+`npx vitest run tools/ai-orchestrator` —— **269 passed / 0 failed**，全部 mock，零网络、零费用。
 
 | Issue #860 要求 | 覆盖位置 |
 |---|---|
@@ -426,6 +503,15 @@ implementer-job:  { contents: write, pull-requests: write }
 | **改 runner/schema/ledger/config 任一文件都违规** | `policy.test.ts` › protected paths（17 条路径逐一） |
 | **lease takeover 不产生未入账的重复费用** | `spend-control.test.ts` |
 | **剩余预算不够下一轮时零 provider 调用** | `spend-control.test.ts` |
+| **owner 能真的唤醒 WAITING_HUMAN（用真实 scaffold config）** | `human-authorization.test.ts` |
+| **伪造 `authorized_by` 唤不醒**（外人冒充 · bot 代签 · owner 冒充他人） | `human-authorization.test.ts` |
+| **第 2 轮不把第 1 轮的文件/commit 算成本轮动作** | `authoritative-facts.test.ts` |
+| **本轮没 commit 时，仓库已有 HEAD 不算本轮 commit** | `authoritative-facts.test.ts` |
+| **超时真的 abort 到 adapter** | `cancellation-and-pricing.test.ts` |
+| **不支持取消的 provider fail closed / 放大租约** | `cancellation-and-pricing.test.ts` |
+| **价目表缺失 / 过期 / 输入超限 → 零调用** | `cancellation-and-pricing.test.ts` |
+| **actual > reserved → WAITING_HUMAN** | `cancellation-and-pricing.test.ts` |
+| **workflow 未 pin / 越权 / 加触发器 → 测试红** | `workflow-supply-chain.test.ts` |
 
 **关于「零调用」这类断言**：每一条都配了正对照（同一套 harness 关掉 dry-run 再跑一遍，
 断言 provider 确实被调用、评论确实被写、commit 副作用确实被记录）。
@@ -448,7 +534,24 @@ implementer-job:  { contents: write, pull-requests: write }
 | 账本信任任意作者 | 3 |
 | `WAITING_HUMAN` 自行恢复 | 5 |
 
-**第二轮（针对本次四个 blocker，9 组）**
+**第三轮（针对 GPT 第二轮审查的五个 blocker，12 组）**
+
+| 破坏 | 变红 |
+|---|---|
+| `authorized_by` 不再绑定评论真实作者 | 1 |
+| bot 可以代签人工授权 | 1 |
+| `files_changed` 退回累计分支 diff | 1 |
+| 仓库已有 HEAD 就算本轮 commit | 11 |
+| 超时不再 abort 底层调用 | 3 |
+| 不支持取消的 provider 不再放大租约 | 1 |
+| 过期价目表照样接受 | 2 |
+| 实际花费超预留被容忍 | 1 |
+| 预留退回固定常数 | 1 |
+| workflow 的 action 退回 moveable tag | 4 |
+| 给了 `workflows: write` | 2 |
+| 加了 schedule 触发器 | 2 |
+
+**第二轮（针对上一批四个 blocker，9 组）**
 
 | 破坏 | 变红 |
 |---|---|
@@ -466,7 +569,7 @@ implementer-job:  { contents: write, pull-requests: write }
 
 ## 11. 剩余风险
 
-1. **branch protection 开不了**（§9.0）—— 最大的一条，Enable 前必须 PM 拍。
+1. **branch protection 已开，但审批数是 0 且没有 CODEOWNERS** —— 见 §9.0。Enable 前必须补齐并实测一次。
 2. **真 provider 未接线。** `ProviderNotWiredError` 是刻意的：接线本身要单独 PR、单独审。
    接线时**必须**做到两件事，否则本次的两个修复会退化成摆设：
    `tools_used` 取自 Action 的执行日志（不是模型输出），`usage.cost_usd` 取自 API 返回。

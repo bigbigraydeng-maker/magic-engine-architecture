@@ -13,7 +13,7 @@ import type { MockImplementerStep } from '../src/adapters/claude/mock-implemente
 import { MockReviewerProvider } from '../src/adapters/openai/mock-reviewer'
 import type { MockReviewerStep } from '../src/adapters/openai/mock-reviewer'
 import { StaticWorkspaceInspector } from '../src/adapters/workspace/inspector'
-import type { WorkspaceSnapshot } from '../src/adapters/workspace/inspector'
+import type { WorkspaceState } from '../src/adapters/workspace/inspector'
 import {
   ALLOWED_AUTHORIZERS,
   PERMITTED_SIDE_EFFECT_CLASSES,
@@ -74,15 +74,48 @@ export function implementerOutput(overrides: Record<string, unknown> = {}): Reco
   }
 }
 
-/** The record git/GitHub would report for a well-behaved default turn. */
-export function workspaceSnapshot(overrides: Partial<WorkspaceSnapshot> = {}): WorkspaceSnapshot {
+/**
+ * A workspace capture. Fingerprints are what make round-over-round deltas work,
+ * so the helper takes paths and turns each into a distinct fingerprint unless one
+ * is given explicitly.
+ */
+export function workspaceState(overrides: Partial<WorkspaceState> = {}): WorkspaceState {
   return {
-    changed_files: [IN_SCOPE_FILE],
-    commit: null,
+    head_sha: 'base000',
+    branch: 'claude/x',
+    file_fingerprints: {},
     pull_request: null,
-    source: 'git:diff+status',
+    source: 'git:diff+status+hash-object',
     ...overrides,
   }
+}
+
+/** Shorthand: `fingerprints(['a.ts', 'b.ts'], 'v1')` -> `{ 'a.ts': 'v1', ... }`. */
+export function fingerprints(
+  paths: readonly string[],
+  version = 'v1'
+): Record<string, string> {
+  return Object.fromEntries(paths.map((path) => [path, `${path}@${version}`]))
+}
+
+/** An implementer turn that changed nothing — useful for multi-round loop tests. */
+export function quietImplementerOutput(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return implementerOutput({ files_changed: [], commit_evidence: null, ...overrides })
+}
+
+/** A workspace that never moves, so every round's delta is empty. */
+export function quietCaptures(): WorkspaceState[] {
+  return [workspaceState({ file_fingerprints: {} })]
+}
+
+/** The pre-call and post-call captures for a turn that edits IN_SCOPE_FILE once. */
+export function defaultCaptures(): WorkspaceState[] {
+  return [
+    workspaceState({ file_fingerprints: {} }),
+    workspaceState({ file_fingerprints: fingerprints([IN_SCOPE_FILE]) }),
+  ]
 }
 
 export interface Harness {
@@ -104,8 +137,11 @@ export function makeHarness(options?: {
   inputOverrides?: Partial<RunnerInput>
   depsOverrides?: Partial<RunnerDeps>
   labels?: readonly string[]
-  /** What git / the GitHub PR would authoritatively report. */
-  workspace?: WorkspaceSnapshot
+  /**
+   * Successive workspace captures. The runner takes one before each implementer
+   * call and one after, so a single turn consumes two entries.
+   */
+  workspace?: readonly WorkspaceState[]
   /** Protected paths the integrity checker finds drifted. */
   drift?: readonly string[]
 }): Harness {
@@ -156,7 +192,7 @@ export function makeHarness(options?: {
     github,
     reviewer,
     implementer,
-    workspace: new StaticWorkspaceInspector(options?.workspace ?? workspaceSnapshot()),
+    workspace: new StaticWorkspaceInspector(options?.workspace ?? defaultCaptures()),
     integrity: new StaticIntegrityChecker(options?.drift ?? []),
     clock: fixedClock(now),
     ...options?.depsOverrides,

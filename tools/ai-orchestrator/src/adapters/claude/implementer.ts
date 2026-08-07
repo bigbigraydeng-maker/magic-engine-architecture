@@ -12,7 +12,16 @@
  */
 
 import { MissingSecretError, ProviderDisabledError, ProviderNotWiredError } from '../../domain/errors'
-import type { ImplementerProvider, ProviderTurnResult, TurnRequest } from '../provider-types'
+import { quoteWorstCase } from '../pricing'
+import type { ModelPricing } from '../pricing'
+import type {
+  CostEstimateResult,
+  CostQuery,
+  ImplementerProvider,
+  ProviderCancellation,
+  ProviderTurnResult,
+  TurnRequest,
+} from '../provider-types'
 
 export const ANTHROPIC_API_KEY_SECRET = 'ME2_ORCHESTRATOR_ANTHROPIC_API_KEY'
 export const DEFAULT_IMPLEMENTER_MODEL = 'claude-opus-5'
@@ -37,15 +46,37 @@ export interface ClaudeImplementerConfig {
   allowedTools?: readonly string[]
   maxTurns?: number
   timeoutMinutes?: number
+  /** Required at Enable time. Absent means every quote is refused. */
+  pricing?: ModelPricing
 }
 
 class ClaudeCodeActionProvider implements ImplementerProvider {
   readonly name = 'claude-code-action'
 
-  constructor(private readonly config: Required<Omit<ClaudeImplementerConfig, 'enabled'>>) {}
+  /**
+   * `claude-code-action` runs as a separate process inside the runner. Aborting
+   * our await does not signal that process, and nothing here yet proves the
+   * process is killed and the API request cancelled. Until an adapter can
+   * demonstrate that — kill the child, observe the exit, confirm the request was
+   * torn down — this must stay false, and the runner will size the lease to
+   * `server_max_timeout_ms` rather than to its own timeout.
+   */
+  readonly cancellation: ProviderCancellation = {
+    supported: false,
+    server_max_timeout_ms: 30 * 60_000,
+  }
+
+  constructor(
+    private readonly config: Required<Omit<ClaudeImplementerConfig, 'enabled' | 'pricing'>> & {
+      pricing?: ModelPricing
+    }
+  ) {}
+
+  maxCostFor(query: CostQuery): CostEstimateResult {
+    return quoteWorstCase(this.config.pricing, query)
+  }
 
   async implement(_request: TurnRequest): Promise<ProviderTurnResult> {
-    void this.config
     throw new ProviderNotWiredError(this.name)
   }
 }
@@ -72,6 +103,7 @@ export function createClaudeImplementer(
       allowedTools: config.allowedTools ?? [],
       maxTurns: config.maxTurns ?? 12,
       timeoutMinutes: config.timeoutMinutes ?? 20,
+      pricing: config.pricing,
     }),
   }
 }

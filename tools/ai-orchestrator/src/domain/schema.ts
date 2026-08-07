@@ -61,6 +61,9 @@ export const stopReasonSchema = z.enum([
   'authorization_expired',
   'invalid_provider_output',
   'configuration_invalid',
+  'provider_timeout',
+  'cost_estimate_unavailable',
+  'cost_overrun',
   'reviewer_approved',
   'reviewer_declared_failure',
   'human_input_required',
@@ -285,8 +288,12 @@ export type ImplementerTurnOutput = z.infer<typeof implementerTurnOutputSchema>
  * only so the two can be compared and a mismatch reported.
  */
 export const authoritativeTurnFactsSchema = z.object({
+  /** What THIS turn changed: the delta between the pre-call and post-call captures. */
   files_changed: z.array(z.string().min(1)),
+  /** What the branch holds in total versus its base ref, after this turn. */
+  cumulative_files_changed: z.array(z.string().min(1)),
   tools_used: z.array(z.string().min(1)),
+  /** Non-null only when HEAD moved during this turn. */
   commit: z
     .object({ sha: z.string().min(1), branch: z.string().min(1) })
     .nullable(),
@@ -298,6 +305,8 @@ export const authoritativeTurnFactsSchema = z.object({
       merged: z.boolean(),
     })
     .nullable(),
+  /** True only when the pull request did not exist before this turn. */
+  pull_request_opened_this_turn: z.boolean(),
   /** Provenance for each fact, written to the ledger so a reviewer can audit it. */
   sources: z.object({
     workspace: z.string().min(1),
@@ -325,6 +334,10 @@ export const turnRejectionReasonSchema = z.enum([
   'missing_telemetry',
   /** What the model said it did does not match what git and the harness observed. */
   'self_report_mismatch',
+  /** No worst-case price could be computed, so no call was made. */
+  'cost_estimate_unavailable',
+  /** Actual usage exceeded the reservation: the price model is wrong. */
+  'cost_overrun',
 ])
 export type TurnRejectionReason = z.infer<typeof turnRejectionReasonSchema>
 
@@ -365,6 +378,8 @@ export const ledgerEventSchema = z.discriminatedUnion('event', [
     holder: z.string().min(1),
     /** Dollars committed before the call. Charged whether or not we hear back. */
     reserved_cost_usd: z.number().nonnegative(),
+    /** The price table the reservation was computed from. */
+    pricing_version: z.string().min(1),
     /**
      * When this claim lapses. Always inside the lease TTL. An expired claim with
      * no matching completion is treated as spent, because we cannot know whether
@@ -383,8 +398,10 @@ export const ledgerEventSchema = z.discriminatedUnion('event', [
     input_digest: z.string().min(1),
     verdict: verdictSchema.nullable(),
     reserved_cost_usd: z.number().nonnegative(),
-    /** Reconciled actual spend. May exceed the reservation; that is recorded, not hidden. */
+    /** Reconciled actual spend. Exceeding the reservation halts the run. */
     cost_usd: z.number().nonnegative(),
+    /** Which price table the reservation was computed from. */
+    pricing_version: z.string().min(1),
     output_digest: z.string().min(1),
     authoritative: authoritativeTurnFactsSchema.nullable(),
     /** Discrepancies between the model's self-report and the authoritative facts. */

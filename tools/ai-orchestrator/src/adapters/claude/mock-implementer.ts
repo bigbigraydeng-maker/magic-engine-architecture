@@ -12,13 +12,20 @@
  * it. That separation is the whole point of the interface.
  */
 
+import { MOCK_PRICING, quoteWorstCase } from '../pricing'
+import type { ModelPricing } from '../pricing'
 import type {
+  CostEstimateResult,
+  CostQuery,
   ImplementerProvider,
+  ProviderCancellation,
   ProviderTelemetry,
   ProviderTurnResult,
   ProviderUsage,
   TurnRequest,
 } from '../provider-types'
+
+const MODEL = 'mock-claude'
 
 export interface MockImplementerStep {
   output: unknown
@@ -26,6 +33,12 @@ export interface MockImplementerStep {
   telemetry?: Partial<ProviderTelemetry>
   delayMs?: number
   throws?: string
+}
+
+export interface MockImplementerOptions {
+  cancellation?: Partial<ProviderCancellation>
+  /** `null` means "no price table entry", to exercise the refusal path. */
+  pricing?: ModelPricing | null
 }
 
 export interface SimulatedSideEffect {
@@ -57,9 +70,29 @@ export class MockImplementerProvider implements ImplementerProvider {
   readonly requests: TurnRequest[] = []
   readonly sideEffects: SimulatedSideEffect[] = []
 
-  callCount = 0
+  readonly cancellation: ProviderCancellation
 
-  constructor(private readonly script: readonly MockImplementerStep[]) {}
+  callCount = 0
+  abortObserved = false
+
+  private readonly pricingOverride: ModelPricing | null | undefined
+
+  constructor(
+    private readonly script: readonly MockImplementerStep[],
+    options?: MockImplementerOptions
+  ) {
+    this.cancellation = {
+      supported: true,
+      server_max_timeout_ms: 30 * 60_000,
+      ...options?.cancellation,
+    }
+    this.pricingOverride = options?.pricing
+  }
+
+  maxCostFor(query: CostQuery): CostEstimateResult {
+    if (this.pricingOverride === null) return quoteWorstCase(undefined, query)
+    return quoteWorstCase(this.pricingOverride ?? MOCK_PRICING[MODEL], query)
+  }
 
   async implement(request: TurnRequest): Promise<ProviderTurnResult> {
     this.requests.push(request)
@@ -67,7 +100,7 @@ export class MockImplementerProvider implements ImplementerProvider {
     this.callCount += 1
 
     if (!step) throw new Error('MockImplementerProvider was called with an empty script')
-    if (step.delayMs) await new Promise((resolve) => setTimeout(resolve, step.delayMs))
+    if (step.delayMs) await this.sleepUnlessAborted(step.delayMs, request.signal)
     if (step.throws) throw new Error(step.throws)
 
     this.recordSideEffects(step.output)
@@ -75,10 +108,30 @@ export class MockImplementerProvider implements ImplementerProvider {
     return {
       output: step.output,
       usage: { ...DEFAULT_USAGE, ...step.usage },
-      model: 'mock-claude',
+      model: MODEL,
       provider: this.name,
-      telemetry: { ...DEFAULT_TELEMETRY, ...step.telemetry },
+      telemetry: {
+        ...DEFAULT_TELEMETRY,
+        abort_acknowledged: this.abortObserved,
+        ...step.telemetry,
+      },
     }
+  }
+
+  /** Mirrors what a real adapter must do: pass the signal down and honour it. */
+  private sleepUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, ms)
+      signal.addEventListener(
+        'abort',
+        () => {
+          clearTimeout(timer)
+          this.abortObserved = true
+          reject(new Error('aborted by caller'))
+        },
+        { once: true }
+      )
+    })
   }
 
   private recordSideEffects(output: unknown): void {

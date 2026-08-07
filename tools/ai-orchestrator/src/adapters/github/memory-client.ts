@@ -6,14 +6,14 @@
  * which are the two ways an empty comment list can come about.
  */
 
-import type { GitHubClient, IssueComment, PullRequestFacts } from './client'
+import type { GitHubClient, IssueComment, PullRequestFacts, PullRequestFile } from './client'
 
 export class InMemoryGitHubClient implements GitHubClient {
   readonly name = 'in-memory'
 
   private readonly comments: IssueComment[]
   private readonly labels: string[]
-  private readonly prFiles: Map<number, string[]>
+  private readonly prFiles: Map<number, PullRequestFile[]>
   private readonly pullRequests: Map<number, PullRequestFacts>
   private nextId: number
 
@@ -32,7 +32,7 @@ export class InMemoryGitHubClient implements GitHubClient {
     this.nextId = options?.startId ?? 1000
   }
 
-  async listPullRequestFiles(prNumber: number): Promise<readonly string[]> {
+  async listPullRequestFiles(prNumber: number): Promise<readonly PullRequestFile[]> {
     return [...(this.prFiles.get(prNumber) ?? [])]
   }
 
@@ -41,7 +41,7 @@ export class InMemoryGitHubClient implements GitHubClient {
   }
 
   /** Test helper: register the authoritative view of a pull request. */
-  seedPullRequest(pr: PullRequestFacts, files: readonly string[]): void {
+  seedPullRequest(pr: PullRequestFacts, files: readonly PullRequestFile[]): void {
     this.pullRequests.set(pr.number, pr)
     this.prFiles.set(pr.number, [...files])
   }

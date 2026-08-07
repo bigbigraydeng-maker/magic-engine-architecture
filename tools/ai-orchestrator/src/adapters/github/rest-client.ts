@@ -11,7 +11,7 @@
 
 import { LedgerWriteBlockedError, MissingSecretError } from '../../domain/errors'
 import type { RepositoryRef } from '../../domain/schema'
-import type { GitHubClient, IssueComment, PullRequestFacts } from './client'
+import type { GitHubClient, IssueComment, PullRequestFacts, PullRequestFile } from './client'
 
 export const GITHUB_TOKEN_SECRET = 'GITHUB_TOKEN'
 
@@ -43,6 +43,7 @@ interface RawPullRequest {
 
 interface RawPullRequestFile {
   filename: string
+  sha: string
 }
 
 export class RestGitHubClient implements GitHubClient {
@@ -105,11 +106,11 @@ export class RestGitHubClient implements GitHubClient {
     return raw.map((label) => label.name)
   }
 
-  async listPullRequestFiles(prNumber: number): Promise<readonly string[]> {
+  async listPullRequestFiles(prNumber: number): Promise<readonly PullRequestFile[]> {
     const raw = await this.request<RawPullRequestFile[]>(
       `${this.repoPath}/pulls/${prNumber}/files?per_page=100`
     )
-    return raw.map((file) => file.filename)
+    return raw.map((file) => ({ filename: file.filename, sha: file.sha }))
   }
 
   async getPullRequest(prNumber: number): Promise<PullRequestFacts | null> {

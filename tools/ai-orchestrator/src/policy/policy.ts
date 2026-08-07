@@ -112,15 +112,22 @@ export interface TimingInvariantResult {
  */
 export function checkTimingInvariant(
   limits: OrchestratorLimits,
-  leaseTtlMs: number
+  leaseTtlMs: number,
+  /**
+   * How long a call can still be running after we stop waiting. Equal to our own
+   * timeout when the provider genuinely cancels; equal to the provider's
+   * server-side maximum when it does not — because then our timeout bounds
+   * nothing and the lease has to cover the real worst case.
+   */
+  inFlightWindowMs: number = limits.provider_timeout_ms
 ): TimingInvariantResult {
-  const required = limits.provider_timeout_ms + limits.lease_margin_ms
+  const required = inFlightWindowMs + limits.lease_margin_ms
   if (leaseTtlMs < required) {
     return {
       ok: false,
       message:
-        `lease TTL ${leaseTtlMs}ms is shorter than provider timeout ` +
-        `${limits.provider_timeout_ms}ms + margin ${limits.lease_margin_ms}ms; ` +
+        `lease TTL ${leaseTtlMs}ms is shorter than the ${inFlightWindowMs}ms in-flight window ` +
+        `+ ${limits.lease_margin_ms}ms margin; ` +
         'a lease could lapse mid-call and let a second runner start a duplicate paid call',
     }
   }
@@ -155,7 +162,13 @@ export function checkBudget(
   run: OrchestrationRun,
   limits: OrchestratorLimits,
   ledger: BudgetLedger,
-  now: Date
+  now: Date,
+  /**
+   * The worst case this specific turn could cost, from the provider's own price
+   * table. Falls back to the configured floor only in preflight, before a prompt
+   * exists to quote.
+   */
+  requiredUsd: number = limits.max_turn_cost_usd
 ): BudgetResult {
   const costCap = Math.min(run.cost_cap_usd, limits.cost_cap_usd)
   const remaining = remainingBudget(costCap, ledger)
@@ -170,14 +183,14 @@ export function checkBudget(
     }
   }
 
-  if (remaining < limits.max_turn_cost_usd) {
+  if (remaining < requiredUsd) {
     return {
       ok: false,
       stop_reason: 'cost_cap_reached',
       message:
-        `remaining budget $${remaining.toFixed(4)} cannot cover the ` +
-        `$${limits.max_turn_cost_usd.toFixed(4)} reservation one turn requires ` +
-        `(committed $${committedSpend(ledger).toFixed(4)} of $${costCap.toFixed(4)})`,
+        `remaining budget $${remaining.toFixed(6)} cannot cover the ` +
+        `$${requiredUsd.toFixed(6)} worst case this turn requires ` +
+        `(committed $${committedSpend(ledger).toFixed(6)} of $${costCap.toFixed(6)})`,
       remaining_usd: remaining,
     }
   }
@@ -323,24 +336,30 @@ export function evaluateImplementerTurn(
   authorization: WorkPackageAuthorization,
   facts: AuthoritativeTurnFacts
 ): PolicyDecision {
+  // Path rules run against the cumulative set as well as this turn's delta: a
+  // protected or out-of-scope file introduced two rounds ago is still a breach,
+  // and it must not become invisible just because this round did not touch it.
   const checks: readonly PolicyDecision[] = [
-    enforceProtectedPaths(facts.files_changed),
-    enforceFileScope(authorization.scope, facts.files_changed),
+    enforceProtectedPaths(facts.cumulative_files_changed),
+    enforceFileScope(authorization.scope, facts.cumulative_files_changed),
     enforceToolUse(authorization.scope, facts.tools_used),
   ]
 
   const violation = checks.find((decision) => !decision.allowed)
   if (violation) return violation
 
+  // Write permissions run against the delta only. Round 2 must not be blamed for
+  // round 1's commit, and "the repository has a HEAD" is not evidence that this
+  // turn committed anything.
   if (facts.commit && !authorization.scope.can_commit) {
-    return deny('COMMIT_NOT_AUTHORIZED', 'a commit exists but committing is not authorized', [
+    return deny('COMMIT_NOT_AUTHORIZED', 'this turn created a commit but committing is not authorized', [
       facts.commit.sha,
     ])
   }
 
-  if (facts.pull_request && !authorization.scope.can_open_draft_pr) {
-    return deny('PR_NOT_AUTHORIZED', 'a pull request exists but that is not authorized', [
-      String(facts.pull_request.number),
+  if (facts.pull_request_opened_this_turn && !authorization.scope.can_open_draft_pr) {
+    return deny('PR_NOT_AUTHORIZED', 'this turn opened a pull request but that is not authorized', [
+      String(facts.pull_request?.number ?? 'unknown'),
     ])
   }
 
@@ -392,10 +411,12 @@ export function compareSelfReport(
     ...diffSets('tools_used', output.tools_used, facts.tools_used),
   ]
 
+  // Compared against this turn's delta: an implementer that reports round 1's
+  // commit again in round 2 is misdescribing round 2.
   const claimedSha = output.commit_evidence?.commit_sha ?? null
   const actualSha = facts.commit?.sha ?? null
   if (claimedSha !== actualSha) {
-    mismatches.push(`commit: reported ${claimedSha ?? 'none'} but the record says ${actualSha ?? 'none'}`)
+    mismatches.push(`commit: reported ${claimedSha ?? 'none'} but this turn produced ${actualSha ?? 'none'}`)
   }
 
   const claimedPr = output.commit_evidence?.pr_number ?? null

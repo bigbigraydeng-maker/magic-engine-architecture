@@ -9,11 +9,15 @@ import {
   renderEventComment,
 } from '../src/adapters/github/ledger'
 import type { LedgerEvent } from '../src/domain/schema'
-import { TRUSTED_LEDGER_AUTHORS } from '../src/config/scaffold-config'
+import { ALLOWED_AUTHORIZERS, TRUSTED_LEDGER_AUTHORS } from '../src/config/scaffold-config'
 import { turnIdempotencyKey } from '../src/domain/digest'
 
 const NOW = '2026-08-07T00:00:00.000Z'
-const TRUSTED = [...TRUSTED_LEDGER_AUTHORS]
+const TRUST = {
+  machineAuthors: [...TRUSTED_LEDGER_AUTHORS],
+  humanAuthorizers: [...ALLOWED_AUTHORIZERS],
+}
+const TRUSTED = TRUST.machineAuthors
 
 const turnEvent: LedgerEvent = {
   schema_version: 'v1',
@@ -26,6 +30,7 @@ const turnEvent: LedgerEvent = {
   input_digest: 'digest-abc',
   verdict: 'REQUEST_CHANGES',
   reserved_cost_usd: 0.5,
+  pricing_version: 'mock-2026-08',
   cost_usd: 0.05,
   output_digest: 'deadbeef',
   authoritative: null,
@@ -41,7 +46,7 @@ describe('marker encoding', () => {
       body: renderEventComment(turnEvent),
       created_at: NOW,
     }
-    const decoded = decodeComment(comment, TRUSTED)
+    const decoded = decodeComment(comment, TRUST)
     expect(decoded).toEqual({ event: turnEvent })
   })
 
@@ -53,7 +58,7 @@ describe('marker encoding', () => {
 
   it('returns null for a comment with no marker at all', () => {
     expect(
-      decodeComment({ id: 2, author_login: 'me2-orchestrator-bot', body: 'looks good', created_at: NOW }, TRUSTED)
+      decodeComment({ id: 2, author_login: 'me2-orchestrator-bot', body: 'looks good', created_at: NOW }, TRUST)
     ).toBeNull()
   })
 })
@@ -76,20 +81,20 @@ describe('marker forgery', () => {
       created_at: NOW,
     }
 
-    const decoded = decodeComment(forged, TRUSTED)
+    const decoded = decodeComment(forged, TRUST)
     expect(decoded).toMatchObject({ rejected: { comment_id: 3 } })
     expect(decoded && 'rejected' in decoded && decoded.rejected.reason).toContain('untrusted author')
   })
 
   it('rejects a marker whose payload is not valid JSON', () => {
     const body = '<!-- me2-orchestrator:v1 {not json} -->'
-    const decoded = decodeComment({ id: 4, author_login: TRUSTED[0], body, created_at: NOW }, TRUSTED)
+    const decoded = decodeComment({ id: 4, author_login: TRUSTED[0], body, created_at: NOW }, TRUST)
     expect(decoded).toMatchObject({ rejected: { reason: expect.stringContaining('not valid JSON') } })
   })
 
   it('rejects a marker whose payload fails schema validation', () => {
     const body = `<!-- me2-orchestrator:v1 ${JSON.stringify({ event: 'turn_completed', run_id: 'x' })} -->`
-    const decoded = decodeComment({ id: 5, author_login: TRUSTED[0], body, created_at: NOW }, TRUSTED)
+    const decoded = decodeComment({ id: 5, author_login: TRUSTED[0], body, created_at: NOW }, TRUST)
     expect(decoded).toMatchObject({ rejected: { reason: expect.stringContaining('schema validation') } })
   })
 
@@ -100,7 +105,7 @@ describe('marker forgery', () => {
       body: encodeMarker(turnEvent),
       created_at: NOW,
     })
-    const ledger = new IssueCommentLedger(client, { issueNumber: 860, trustedAuthors: TRUSTED, dryRun: false })
+    const ledger = new IssueCommentLedger(client, { issueNumber: 860, trust: TRUST, dryRun: false })
 
     const result = await ledger.read()
     expect(result.events).toHaveLength(0)
@@ -113,7 +118,7 @@ describe('cursor and idempotency', () => {
     const client = new InMemoryGitHubClient({ startId: 100 })
     client.seedComment({ author_login: 'human', body: 'unrelated chatter', created_at: NOW })
     client.seedComment({ author_login: TRUSTED[0], body: renderEventComment(turnEvent), created_at: NOW })
-    const ledger = new IssueCommentLedger(client, { issueNumber: 860, trustedAuthors: TRUSTED, dryRun: false })
+    const ledger = new IssueCommentLedger(client, { issueNumber: 860, trust: TRUST, dryRun: false })
 
     const result = await ledger.read()
     expect(result.lastCommentId).toBe(101)
@@ -158,7 +163,7 @@ describe('cursor and idempotency', () => {
 describe('dry-run ledger', () => {
   it('records the intended comment and writes nothing', async () => {
     const client = new InMemoryGitHubClient()
-    const ledger = new IssueCommentLedger(client, { issueNumber: 860, trustedAuthors: TRUSTED, dryRun: true })
+    const ledger = new IssueCommentLedger(client, { issueNumber: 860, trust: TRUST, dryRun: true })
 
     const result = await ledger.append(turnEvent)
 
@@ -170,7 +175,7 @@ describe('dry-run ledger', () => {
 
   it('actually writes when dry-run is off — the positive control', async () => {
     const client = new InMemoryGitHubClient()
-    const ledger = new IssueCommentLedger(client, { issueNumber: 860, trustedAuthors: TRUSTED, dryRun: false })
+    const ledger = new IssueCommentLedger(client, { issueNumber: 860, trust: TRUST, dryRun: false })
 
     const result = await ledger.append(turnEvent)
 

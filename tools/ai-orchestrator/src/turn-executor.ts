@@ -1,16 +1,21 @@
 /**
- * One agent turn, from prompt construction to ledger record.
+ * One agent turn, from cost quote to ledger record.
  *
- * The ordering inside `runImplementerTurn` is the interesting part: telemetry,
- * then the independent workspace read, then policy, then integrity — all before
- * the model's own output is even parsed. Nothing the model says can change what
- * those four steps conclude.
+ * The ordering is the safety property:
+ *
+ *   quote worst-case cost -> reserve -> capture workspace BEFORE
+ *   -> call under AbortSignal -> capture workspace AFTER -> diff
+ *   -> telemetry -> policy (on the delta) -> integrity -> reconcile cost
+ *   -> only now parse and compare what the model said
+ *
+ * Nothing the model writes can change what the first seven steps conclude.
  */
 
 import { hasTurnBeenProcessed } from './adapters/github/ledger'
-import type { LedgerEvent } from './domain/schema'
-import type { ProviderTurnResult, TurnRequest } from './adapters/provider-types'
+import type { CostEstimate, ProviderTurnResult, TurnRequest } from './adapters/provider-types'
 import { TELEMETRY_UNAVAILABLE } from './adapters/provider-types'
+import { diffWorkspaceStates } from './adapters/workspace/inspector'
+import type { TurnDelta, WorkspaceState } from './adapters/workspace/inspector'
 import { computeBudgetLedger } from './domain/budget'
 import { digest, turnIdempotencyKey } from './domain/digest'
 import { nextStateForVerdict } from './domain/state-machine'
@@ -18,33 +23,35 @@ import type {
   Actor,
   AuthoritativeTurnFacts,
   ImplementerTurnOutput,
+  LedgerEvent,
   ReviewerTurnOutput,
   RunState,
   StopReason,
   TurnRejectionReason,
 } from './domain/schema'
 import { implementerTurnOutputSchema, reviewerTurnOutputSchema } from './domain/schema'
-import {
-  compareSelfReport,
-  enforceToolUse,
-  evaluateImplementerTurn,
-} from './policy/policy'
+import { compareSelfReport, enforceToolUse, evaluateImplementerTurn } from './policy/policy'
 import { buildPromptEnvelope } from './policy/untrusted'
 import { IMPLEMENTER_PROMPT_VERSION, IMPLEMENTER_SYSTEM_POLICY } from './prompts/implementer-system.v1'
 import { REVIEWER_PROMPT_VERSION, REVIEWER_SYSTEM_POLICY } from './prompts/reviewer-system.v1'
 import { applyTurnState, baseEvent, record } from './runner-context'
-import type { Clock, RunnerContext } from './runner-types'
+import type { RunnerContext } from './runner-types'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Turn construction
+// Prompt and quote
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function buildTurnRequest(
-  ctx: RunnerContext,
-  actor: Actor,
-  round: number,
-  reservedCostUsd: number
-): TurnRequest {
+export interface PromptDraft {
+  system: string
+  user: string
+  untrusted_sources: readonly string[]
+  input_digest: string
+  idempotency_key: string
+  max_output_tokens: number
+}
+
+/** Everything about a turn that is known before its price is quoted. */
+export function draftTurn(ctx: RunnerContext, actor: Actor, round: number): PromptDraft {
   const systemPolicy = actor === 'gpt_reviewer' ? REVIEWER_SYSTEM_POLICY : IMPLEMENTER_SYSTEM_POLICY
   const promptVersion =
     actor === 'gpt_reviewer' ? REVIEWER_PROMPT_VERSION : IMPLEMENTER_PROMPT_VERSION
@@ -64,8 +71,6 @@ export function buildTurnRequest(
   const inputDigest = digest([envelope.system, envelope.user])
 
   return {
-    run_id: ctx.run.run_id,
-    round,
     system: envelope.system,
     user: envelope.user,
     untrusted_sources: envelope.untrusted_sources,
@@ -76,11 +81,53 @@ export function buildTurnRequest(
       actor,
       inputDigest,
     }),
-    timeout_ms: ctx.input.limits.provider_timeout_ms,
     max_output_tokens: ctx.input.limits.max_output_tokens,
-    reserved_cost_usd: reservedCostUsd,
   }
 }
+
+export function providerFor(ctx: RunnerContext, actor: Actor) {
+  return actor === 'gpt_reviewer' ? ctx.deps.reviewer : ctx.deps.implementer
+}
+
+/**
+ * How long the provider may still be running and billing after we stop waiting.
+ *
+ * When the adapter cannot prove it cancels, our timeout bounds nothing, so the
+ * claim and the lease have to cover the provider's server-side maximum instead.
+ */
+export function inFlightWindowMs(ctx: RunnerContext, actor: Actor): number {
+  const provider = providerFor(ctx, actor)
+  return provider.cancellation.supported
+    ? ctx.input.limits.provider_timeout_ms
+    : provider.cancellation.server_max_timeout_ms
+}
+
+export function finalizeRequest(
+  ctx: RunnerContext,
+  draft: PromptDraft,
+  round: number,
+  estimate: CostEstimate,
+  signal: AbortSignal
+): TurnRequest {
+  return {
+    run_id: ctx.run.run_id,
+    round,
+    system: draft.system,
+    user: draft.user,
+    untrusted_sources: draft.untrusted_sources,
+    input_digest: draft.input_digest,
+    idempotency_key: draft.idempotency_key,
+    timeout_ms: ctx.input.limits.provider_timeout_ms,
+    signal,
+    max_output_tokens: draft.max_output_tokens,
+    reserved_cost_usd: estimate.max_cost_usd,
+    cost_estimate: estimate,
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rejection
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function rejectTurn(
   ctx: RunnerContext,
@@ -122,36 +169,40 @@ async function rejectTurn(
 // Provider invocation
 // ─────────────────────────────────────────────────────────────────────────────
 
-class ProviderTimeoutError extends Error {
+export class ProviderTimeoutError extends Error {
   constructor(ms: number) {
-    super(`provider call exceeded its ${ms}ms hard timeout`)
+    super(`provider call exceeded its ${ms}ms timeout and was aborted`)
     this.name = 'ProviderTimeoutError'
   }
 }
 
 /**
- * Runs a provider call under a hard wall.
+ * Runs a provider call with a real cancellation signal.
  *
- * The timeout is not politeness — it is what keeps a call strictly inside the
- * lease. `checkTimingInvariant` has already refused to start the run unless the
- * lease outlives this by a margin.
+ * v0.2 used `Promise.race` alone and called it a hard timeout. It was not: losing
+ * the race only abandons the local `await`, while the HTTP request keeps running
+ * and keeps billing. Now an `AbortController` fires, the adapter is contractually
+ * required to pass the signal down, and `cancellation.supported` says whether that
+ * is actually believed — the runner sizes its lease on the answer.
  */
-async function callWithTimeout(
-  call: Promise<ProviderTurnResult>,
-  timeoutMs: number,
-  clock: Clock
+async function callWithAbort(
+  call: (signal: AbortSignal) => Promise<ProviderTurnResult>,
+  timeoutMs: number
 ): Promise<ProviderTurnResult> {
-  void clock
-  let timer: ReturnType<typeof setTimeout> | undefined
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+
   try {
-    return await Promise.race([
-      call,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new ProviderTimeoutError(timeoutMs)), timeoutMs)
-      }),
-    ])
+    return await call(controller.signal)
+  } catch (error) {
+    if (timedOut) throw new ProviderTimeoutError(timeoutMs)
+    throw error
   } finally {
-    if (timer !== undefined) clearTimeout(timer)
+    clearTimeout(timer)
   }
 }
 
@@ -166,8 +217,34 @@ function telemetryUsable(result: ProviderTurnResult): boolean {
   )
 }
 
+function checkTelemetry(result: ProviderTurnResult): string | null {
+  if (telemetryUsable(result)) return null
+  return `provider "${result.provider}" returned no usable execution telemetry (source: ${
+    result.telemetry?.source ?? 'absent'
+  }); tool use cannot be verified`
+}
+
+type InvokeOutcome =
+  | { ok: ProviderTurnResult }
+  | { failed: { timedOut: boolean; message: string } }
+
+async function invokeProvider(
+  call: (signal: AbortSignal) => Promise<ProviderTurnResult>,
+  request: TurnRequest
+): Promise<InvokeOutcome> {
+  try {
+    const result = await callWithAbort(call, request.timeout_ms)
+    return { ok: result }
+  } catch (error) {
+    const timedOut = error instanceof ProviderTimeoutError
+    return {
+      failed: { timedOut, message: error instanceof Error ? error.message : String(error) },
+    }
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Turn execution
+// Outcomes
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type TurnOutcome =
@@ -188,23 +265,126 @@ export type TurnOutcome =
  */
 async function turnClaimedElsewhere(ctx: RunnerContext, request: TurnRequest): Promise<boolean> {
   const fresh = await ctx.ledger.read()
-  const claimedByUs = ctx.events.some(
-    (event: LedgerEvent) => event.event === 'turn_started' && event.idempotency_key === request.idempotency_key
-  )
-  const settledElsewhere = hasTurnBeenProcessed(fresh.events, request.idempotency_key)
-  if (!settledElsewhere) return false
-  void claimedByUs
+  if (!hasTurnBeenProcessed(fresh.events, request.idempotency_key)) return false
   ctx.events = [...fresh.events]
   ctx.budget = computeBudgetLedger(ctx.events, ctx.run.run_id, ctx.clock.now())
   return true
 }
+
+/**
+ * We lost the race after paying for the answer.
+ *
+ * The reservation claim makes this rare — a compliant runner sees the claim and
+ * never starts — but it is not impossible, and silently dropping the result would
+ * drop the cost with it. The event carries no state, so the winner's transition
+ * stands; it exists purely so the money shows up in the ledger and against the cap.
+ */
+async function recordDuplicateSpend(
+  ctx: RunnerContext,
+  actor: Actor,
+  round: number,
+  request: TurnRequest,
+  costUsd: number
+): Promise<TurnOutcome> {
+  await record(ctx, {
+    ...baseEvent(ctx),
+    event: 'duplicate_spend_recorded',
+    actor,
+    round,
+    idempotency_key: request.idempotency_key,
+    holder: ctx.input.holder,
+    cost_usd: costUsd,
+    note: 'another runner recorded this turn first; our result was discarded but the call was billed',
+  })
+  return {
+    kind: 'conflict',
+    message: `turn ${request.idempotency_key} was recorded by another runner`,
+  }
+}
+
+/**
+ * A call that timed out or threw still settles at the full reservation: we do not
+ * know whether the provider billed us, and guessing in our own favour is how a
+ * cap becomes a suggestion.
+ */
+async function handleProviderFailure(
+  ctx: RunnerContext,
+  actor: Actor,
+  round: number,
+  request: TurnRequest,
+  failure: { timedOut: boolean; message: string }
+): Promise<TurnOutcome> {
+  const provider = providerFor(ctx, actor)
+  const cancellationNote = provider.cancellation.supported
+    ? 'abort signal delivered; the underlying call was cancelled'
+    : `provider does not support cancellation — it may keep running and billing for up to ${provider.cancellation.server_max_timeout_ms}ms`
+
+  await rejectTurn(ctx, {
+    actor,
+    round,
+    request,
+    reason: failure.timedOut ? 'provider_timeout' : 'provider_error',
+    detail: [
+      failure.message,
+      cancellationNote,
+      'reservation settled in full: billing status unknown',
+    ],
+    nextState: 'WAITING_HUMAN',
+    costUsd: request.reserved_cost_usd,
+  })
+  return {
+    kind: 'halted',
+    stop_reason: failure.timedOut ? 'provider_timeout' : 'provider_error',
+    message: failure.message,
+  }
+}
+
+/**
+ * Actual usage above the reservation means the price model is wrong, not that the
+ * cap is soft. It stops the run for a human rather than quietly absorbing it.
+ */
+async function checkCostReconciliation(
+  ctx: RunnerContext,
+  actor: Actor,
+  round: number,
+  request: TurnRequest,
+  actualUsd: number
+): Promise<TurnOutcome | null> {
+  if (actualUsd <= request.reserved_cost_usd) return null
+
+  await rejectTurn(ctx, {
+    actor,
+    round,
+    request,
+    reason: 'cost_overrun',
+    detail: [
+      `actual $${actualUsd.toFixed(6)} exceeded the reserved $${request.reserved_cost_usd.toFixed(6)}`,
+      `pricing_version ${request.cost_estimate.pricing_version} for model ${request.cost_estimate.model}`,
+      'the price model is wrong; treat as a pricing/configuration violation',
+    ],
+    nextState: 'WAITING_HUMAN',
+    costUsd: actualUsd,
+  })
+  return {
+    kind: 'halted',
+    stop_reason: 'cost_overrun',
+    message: `actual cost $${actualUsd.toFixed(6)} exceeded its reservation`,
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The two turns
+// ─────────────────────────────────────────────────────────────────────────────
 
 export async function runReviewerTurn(
   ctx: RunnerContext,
   round: number,
   request: TurnRequest
 ): Promise<TurnOutcome> {
-  const result = await invokeProvider(ctx, () => ctx.deps.reviewer.review(request), request)
+  const result = await invokeProvider(
+    (signal) => ctx.deps.reviewer.review({ ...request, signal }),
+    request
+  )
   if ('failed' in result) {
     return handleProviderFailure(ctx, 'gpt_reviewer', round, request, result.failed)
   }
@@ -212,6 +392,15 @@ export async function runReviewerTurn(
   if (await turnClaimedElsewhere(ctx, request)) {
     return recordDuplicateSpend(ctx, 'gpt_reviewer', round, request, result.ok.usage.cost_usd)
   }
+
+  const overrun = await checkCostReconciliation(
+    ctx,
+    'gpt_reviewer',
+    round,
+    request,
+    result.ok.usage.cost_usd
+  )
+  if (overrun) return overrun
 
   const telemetryProblem = checkTelemetry(result.ok)
   if (telemetryProblem) {
@@ -222,7 +411,7 @@ export async function runReviewerTurn(
       reason: 'missing_telemetry',
       detail: [telemetryProblem],
       nextState: 'WAITING_HUMAN',
-      costUsd: Math.max(result.ok.usage.cost_usd, request.reserved_cost_usd),
+      costUsd: result.ok.usage.cost_usd,
     })
     return { kind: 'halted', stop_reason: 'policy_violation', message: telemetryProblem }
   }
@@ -275,6 +464,7 @@ export async function runReviewerTurn(
     verdict: output.verdict,
     reserved_cost_usd: request.reserved_cost_usd,
     cost_usd: result.ok.usage.cost_usd,
+    pricing_version: request.cost_estimate.pricing_version,
     output_digest: digest(output),
     authoritative: null,
     self_report_mismatches: [],
@@ -287,9 +477,13 @@ export async function runReviewerTurn(
 export async function runImplementerTurn(
   ctx: RunnerContext,
   round: number,
-  request: TurnRequest
+  request: TurnRequest,
+  before: WorkspaceState
 ): Promise<TurnOutcome> {
-  const result = await invokeProvider(ctx, () => ctx.deps.implementer.implement(request), request)
+  const result = await invokeProvider(
+    (signal) => ctx.deps.implementer.implement({ ...request, signal }),
+    request
+  )
   if ('failed' in result) {
     return handleProviderFailure(ctx, 'claude_implementer', round, request, result.failed)
   }
@@ -297,6 +491,15 @@ export async function runImplementerTurn(
   if (await turnClaimedElsewhere(ctx, request)) {
     return recordDuplicateSpend(ctx, 'claude_implementer', round, request, result.ok.usage.cost_usd)
   }
+
+  const overrun = await checkCostReconciliation(
+    ctx,
+    'claude_implementer',
+    round,
+    request,
+    result.ok.usage.cost_usd
+  )
+  if (overrun) return overrun
 
   const telemetryProblem = checkTelemetry(result.ok)
   if (telemetryProblem) {
@@ -307,19 +510,24 @@ export async function runImplementerTurn(
       reason: 'missing_telemetry',
       detail: [telemetryProblem],
       nextState: 'WAITING_HUMAN',
-      costUsd: Math.max(result.ok.usage.cost_usd, request.reserved_cost_usd),
+      costUsd: result.ok.usage.cost_usd,
     })
     return { kind: 'halted', stop_reason: 'policy_violation', message: telemetryProblem }
   }
 
-  // Independent reads, before the model's output is even parsed.
-  const snapshot = await ctx.deps.workspace.inspect()
+  // The second half of the snapshot pair. What this turn did is after − before;
+  // what the branch holds in total is after.
+  const after = await ctx.deps.workspace.capture()
+  const delta: TurnDelta = diffWorkspaceStates(before, after)
+
   const facts: AuthoritativeTurnFacts = {
-    files_changed: [...snapshot.changed_files],
+    files_changed: [...delta.files_changed],
+    cumulative_files_changed: [...delta.cumulative_files_changed],
     tools_used: [...result.ok.telemetry.tools_used],
-    commit: snapshot.commit,
-    pull_request: snapshot.pull_request,
-    sources: { workspace: snapshot.source, telemetry: result.ok.telemetry.source },
+    commit: delta.commit,
+    pull_request: delta.pull_request,
+    pull_request_opened_this_turn: delta.pull_request_opened_this_turn,
+    sources: { workspace: delta.source, telemetry: result.ok.telemetry.source },
   }
 
   const policy = evaluateImplementerTurn(ctx.input.authorization, facts)
@@ -410,6 +618,7 @@ export async function runImplementerTurn(
     verdict: null,
     reserved_cost_usd: request.reserved_cost_usd,
     cost_usd: result.ok.usage.cost_usd,
+    pricing_version: request.cost_estimate.pricing_version,
     output_digest: digest(output),
     authoritative: facts,
     self_report_mismatches: [],
@@ -419,88 +628,5 @@ export async function runImplementerTurn(
   return { kind: 'advanced' }
 }
 
-/**
- * We lost the race after paying for the answer.
- *
- * The reservation claim makes this rare — a compliant runner sees the claim and
- * never starts — but it is not impossible, and silently dropping the result would
- * drop the cost with it. The event carries no state, so the winner's transition
- * stands; it exists purely so the money shows up in the ledger and against the cap.
- */
-async function recordDuplicateSpend(
-  ctx: RunnerContext,
-  actor: Actor,
-  round: number,
-  request: TurnRequest,
-  costUsd: number
-): Promise<TurnOutcome> {
-  await record(ctx, {
-    ...baseEvent(ctx),
-    event: 'duplicate_spend_recorded',
-    actor,
-    round,
-    idempotency_key: request.idempotency_key,
-    holder: ctx.input.holder,
-    cost_usd: costUsd,
-    note: 'another runner recorded this turn first; our result was discarded',
-  })
-  return {
-    kind: 'conflict',
-    message: `turn ${request.idempotency_key} was recorded by another runner`,
-  }
-}
-
-function checkTelemetry(result: ProviderTurnResult): string | null {
-  if (telemetryUsable(result)) return null
-  return `provider "${result.provider}" returned no usable execution telemetry (source: ${
-    result.telemetry?.source ?? 'absent'
-  }); tool use cannot be verified`
-}
-
-type InvokeOutcome =
-  | { ok: ProviderTurnResult }
-  | { failed: { timedOut: boolean; message: string } }
-
-async function invokeProvider(
-  ctx: RunnerContext,
-  call: () => Promise<ProviderTurnResult>,
-  request: TurnRequest
-): Promise<InvokeOutcome> {
-  try {
-    const result = await callWithTimeout(call(), request.timeout_ms, ctx.clock)
-    return { ok: result }
-  } catch (error) {
-    const timedOut = error instanceof ProviderTimeoutError
-    return {
-      failed: { timedOut, message: error instanceof Error ? error.message : String(error) },
-    }
-  }
-}
-
-/**
- * A call that timed out or threw still settles at the full reservation: we do not
- * know whether the provider billed us, and guessing in our own favour is how a
- * cap becomes a suggestion.
- */
-async function handleProviderFailure(
-  ctx: RunnerContext,
-  actor: Actor,
-  round: number,
-  request: TurnRequest,
-  failure: { timedOut: boolean; message: string }
-): Promise<TurnOutcome> {
-  await rejectTurn(ctx, {
-    actor,
-    round,
-    request,
-    reason: failure.timedOut ? 'provider_timeout' : 'provider_error',
-    detail: [failure.message, 'reservation settled in full: billing status unknown'],
-    nextState: 'WAITING_HUMAN',
-    costUsd: request.reserved_cost_usd,
-  })
-  return {
-    kind: 'halted',
-    stop_reason: failure.timedOut ? 'wall_clock_exceeded' : 'provider_error',
-    message: failure.message,
-  }
-}
+/** Re-exported so the runner can type its own local variables. */
+export type { LedgerEvent }

@@ -18,7 +18,14 @@ import { computeBudgetLedger, foreignLiveClaim, remainingBudget } from '../src/d
 import type { LedgerEvent } from '../src/domain/schema'
 import { SCAFFOLD_LEASE_TTL_MS, SCAFFOLD_LIMITS } from '../src/config/scaffold-config'
 import { runOrchestration } from '../src/runner'
-import { FIXED_NOW, implementerOutput, makeHarness, reviewerOutput } from './helpers'
+import {
+  FIXED_NOW,
+  implementerOutput,
+  makeHarness,
+  quietCaptures,
+  quietImplementerOutput,
+  reviewerOutput,
+} from './helpers'
 
 const RUN_ID = 'run-test-001'
 
@@ -34,6 +41,7 @@ function startedEvent(overrides: Partial<Extract<LedgerEvent, { event: 'turn_sta
     input_digest: 'digest-1',
     holder: 'gha-run-first',
     reserved_cost_usd: 0.5,
+    pricing_version: 'mock-2026-08',
     claim_expires_at: new Date(FIXED_NOW.getTime() + 60_000).toISOString(),
     ...overrides,
   }
@@ -59,6 +67,9 @@ describe('a turn reserves before it calls', () => {
     }
     const reviewer = {
       name: 'ordering-reviewer',
+      cancellation: h.reviewer.cancellation,
+      maxCostFor: (query: Parameters<typeof h.reviewer.maxCostFor>[0]) =>
+        h.reviewer.maxCostFor(query),
       review: async (request: Parameters<typeof h.reviewer.review>[0]) => {
         order.push('call')
         return h.reviewer.review(request)
@@ -70,15 +81,28 @@ describe('a turn reserves before it calls', () => {
     expect(order).toEqual(['reserve', 'call'])
   })
 
-  it('hands the provider its timeout, token ceiling and reservation', async () => {
+  it('hands the provider its timeout, token ceiling, signal and quoted reservation', async () => {
     const h = makeHarness()
     await runOrchestration(h.input, h.deps)
 
-    expect(h.reviewer.requests[0]).toMatchObject({
-      timeout_ms: SCAFFOLD_LIMITS.provider_timeout_ms,
+    const request = h.reviewer.requests[0]
+    expect(request.timeout_ms).toBe(SCAFFOLD_LIMITS.provider_timeout_ms)
+    expect(request.max_output_tokens).toBe(SCAFFOLD_LIMITS.max_output_tokens)
+    expect(request.signal).toBeInstanceOf(AbortSignal)
+
+    // The reservation is the provider's own worst-case quote, not a flat constant.
+    const quote = h.reviewer.maxCostFor({
+      system: request.system,
+      user: request.user,
       max_output_tokens: SCAFFOLD_LIMITS.max_output_tokens,
-      reserved_cost_usd: SCAFFOLD_LIMITS.max_turn_cost_usd,
+      now: FIXED_NOW,
     })
+    expect(quote.ok).toBe(true)
+    if (!quote.ok) return
+    expect(request.reserved_cost_usd).toBeCloseTo(quote.estimate.max_cost_usd, 6)
+    expect(request.cost_estimate.pricing_version).toBe('mock-2026-08')
+    // Output dominates: the ceiling is priced at the full max_output_tokens.
+    expect(quote.estimate.breakdown.output).toBeGreaterThan(quote.estimate.breakdown.input)
   })
 })
 
@@ -199,6 +223,7 @@ describe('lease takeover never produces unrecorded duplicate spend', () => {
       input_digest: preflight.next_input_digest as string,
       verdict: 'REQUEST_CHANGES',
       reserved_cost_usd: 0.5,
+      pricing_version: 'mock-2026-08',
       cost_usd: 0.05,
       output_digest: 'rival',
       authoritative: null,
@@ -250,7 +275,8 @@ describe('the cost cap is a ceiling', () => {
       input_digest: 'earlier',
       verdict: 'REQUEST_CHANGES',
       reserved_cost_usd: 0.5,
-      cost_usd: 1.8,
+      pricing_version: 'mock-2026-08',
+      cost_usd: 1.95,
       output_digest: 'x',
       authoritative: null,
       self_report_mismatches: [],
@@ -284,6 +310,7 @@ describe('the cost cap is a ceiling', () => {
       input_digest: 'earlier',
       verdict: 'REQUEST_CHANGES',
       reserved_cost_usd: 0.5,
+      pricing_version: 'mock-2026-08',
       cost_usd: 1.4,
       output_digest: 'x',
       authoritative: null,
@@ -308,8 +335,9 @@ describe('the cost cap is a ceiling', () => {
       inputOverrides: {
         limits: { ...SCAFFOLD_LIMITS, max_rounds: 50, cost_cap_usd: 1, max_turn_cost_usd: 0.25 },
       },
-      reviewerScript: [{ output: reviewerOutput({ verdict: 'REQUEST_CHANGES' }), usage: { cost_usd: 0.25 } }],
-      implementerScript: [{ output: implementerOutput(), usage: { cost_usd: 0.25 } }],
+      reviewerScript: [{ output: reviewerOutput({ verdict: 'REQUEST_CHANGES' }), usage: { cost_usd: 0.05 } }],
+      implementerScript: [{ output: quietImplementerOutput(), usage: { cost_usd: 0.2 } }],
+      workspace: quietCaptures(),
     })
 
     const result = await runOrchestration(h.input, h.deps)
@@ -330,11 +358,13 @@ describe('a call that never comes back still costs money', () => {
 
     const rejected = result.appended.find((e) => e.event === 'turn_rejected')
     expect(rejected).toMatchObject({ reason: 'provider_timeout' })
-    expect(rejected && 'cost_usd' in rejected && rejected.cost_usd).toBeCloseTo(
-      SCAFFOLD_LIMITS.max_turn_cost_usd
-    )
+    // Settled at the full reservation, whatever that reservation was quoted at.
+    const reserved = h.reviewer.requests[0].reserved_cost_usd
+    expect(rejected && 'cost_usd' in rejected && rejected.cost_usd).toBeCloseTo(reserved, 6)
     expect(result.run.state).toBe('WAITING_HUMAN')
-    expect(result.run.cumulative_cost_usd).toBeCloseTo(SCAFFOLD_LIMITS.max_turn_cost_usd)
+    expect(result.run.cumulative_cost_usd).toBeCloseTo(reserved, 6)
+    // And the abort actually reached the adapter, rather than being abandoned locally.
+    expect(h.reviewer.abortObserved).toBe(true)
   })
 
   it('settles the full reservation when the provider throws', async () => {
@@ -346,7 +376,10 @@ describe('a call that never comes back still costs money', () => {
 
     const rejected = result.appended.find((e) => e.event === 'turn_rejected')
     expect(rejected).toMatchObject({ reason: 'provider_error' })
-    expect(result.run.cumulative_cost_usd).toBeCloseTo(SCAFFOLD_LIMITS.max_turn_cost_usd)
+    expect(result.run.cumulative_cost_usd).toBeCloseTo(
+      h.reviewer.requests[0].reserved_cost_usd,
+      6
+    )
     expect(result.run.state).toBe('WAITING_HUMAN')
   })
 })

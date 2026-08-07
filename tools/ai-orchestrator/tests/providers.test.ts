@@ -68,8 +68,17 @@ describe('real adapters are skeletons in v0.1', () => {
         idempotency_key: 'k',
         input_digest: 'd',
         timeout_ms: 1000,
+        signal: new AbortController().signal,
         max_output_tokens: 100,
         reserved_cost_usd: 0.5,
+        cost_estimate: {
+          max_cost_usd: 0.5,
+          model: 'm',
+          pricing_version: 'test',
+          input_tokens_estimate: 10,
+          max_output_tokens: 100,
+          breakdown: {},
+        },
       })
     ).rejects.toBeInstanceOf(ProviderNotWiredError)
   })
@@ -89,8 +98,17 @@ describe('real adapters are skeletons in v0.1', () => {
         idempotency_key: 'k',
         input_digest: 'd',
         timeout_ms: 1000,
+        signal: new AbortController().signal,
         max_output_tokens: 100,
         reserved_cost_usd: 0.5,
+        cost_estimate: {
+          max_cost_usd: 0.5,
+          model: 'm',
+          pricing_version: 'test',
+          input_tokens_estimate: 10,
+          max_output_tokens: 100,
+          breakdown: {},
+        },
       })
     ).rejects.toBeInstanceOf(ProviderNotWiredError)
   })

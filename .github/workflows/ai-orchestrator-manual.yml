@@ -48,10 +48,20 @@ on:
         type: boolean
         default: false
 
-# Least privilege. The scaffold reads nothing it does not already have in the
-# checkout, so `contents: read` is all it gets. The Enable phase splits this into
-# a read-only reviewer job and a narrowly-scoped implementer job; it never adds
-# actions/administration/deployments/packages/workflows write.
+# Least privilege, declared at the top level so no job can silently inherit more.
+# The scaffold reads nothing it does not already have in the checkout, so
+# `contents: read` is all it gets.
+#
+# The Enable phase splits this per job — and only per job, never once at the top:
+#
+#   reviewer-job:    { contents: read,  issues: write }
+#   implementer-job: { contents: write, pull-requests: write }
+#
+# Neither may ever hold `workflows: write` (that is what stops a run from editing
+# the workflow that governs it), `actions: write`, `administration`, or
+# `deployments`. The token must be the job-scoped GITHUB_TOKEN; a GitHub App
+# installation token with broader rights is explicitly not an acceptable
+# substitute, because its scope is not visible in this file.
 permissions:
   contents: read
 
@@ -77,9 +87,13 @@ jobs:
           echo 'docs/specs/2026-08-07-ai-orchestrator-v0.1.md.'
           exit 1
 
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      # Third-party actions are pinned to reviewed commit SHAs, never to moveable
+      # tags. A tag is a pointer its owner can repoint; `@v4` today and `@v4`
+      # tomorrow are not the same code, and this job runs with repository content
+      # in reach. `tools/ai-orchestrator/tests/workflow-supply-chain.test.ts`
+      # fails the build if an unpinned `uses:` ever reappears.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: npm

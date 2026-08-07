@@ -40,7 +40,15 @@ import {
 import { baseEvent, finish, log, record, transitionTo } from './runner-context'
 import { systemClock } from './runner-types'
 import type { PreflightReport, RunnerContext, RunnerDeps, RunnerInput, RunnerResult } from './runner-types'
-import { buildTurnRequest, runImplementerTurn, runReviewerTurn } from './turn-executor'
+import {
+  draftTurn,
+  finalizeRequest,
+  inFlightWindowMs,
+  providerFor,
+  runImplementerTurn,
+  runReviewerTurn,
+} from './turn-executor'
+import type { WorkspaceState } from './adapters/workspace/inspector'
 
 export { systemClock } from './runner-types'
 export type {
@@ -62,7 +70,10 @@ export async function runOrchestration(
   const clock = deps.clock ?? systemClock
   const ledger = new IssueCommentLedger(deps.github, {
     issueNumber: input.run.issue_number,
-    trustedAuthors: input.trustedAuthors,
+    trust: {
+      machineAuthors: input.trustedAuthors,
+      humanAuthorizers: input.allowedAuthorizers,
+    },
     dryRun: input.dryRun,
   })
 
@@ -91,6 +102,11 @@ export async function runOrchestration(
     next_idempotency_key: null,
     next_input_digest: null,
     next_reserved_cost_usd: null,
+    cost_estimate: null,
+    cancellation: {
+      gpt_reviewer: deps.reviewer.cancellation,
+      claude_implementer: deps.implementer.cancellation,
+    },
     workspace_source: deps.workspace.name,
     integrity_source: deps.integrity.name,
     ledger_rejected: read.rejected,
@@ -125,7 +141,13 @@ export async function runOrchestration(
 
   // 2. Timing and budget invariants. A configuration that could leak duplicate
   //    spend never gets to make its first call.
-  preflight.timing_invariant = checkTimingInvariant(input.limits, input.leaseTtlMs)
+  // Use the longer of the two providers' in-flight windows: whichever adapter
+  // cannot prove it cancels sets the bar for the whole run.
+  const worstInFlightMs = Math.max(
+    inFlightWindowMs(ctx, 'gpt_reviewer'),
+    inFlightWindowMs(ctx, 'claude_implementer')
+  )
+  preflight.timing_invariant = checkTimingInvariant(input.limits, input.leaseTtlMs, worstInFlightMs)
   if (!preflight.timing_invariant.ok) {
     if (!input.dryRun) {
       await transitionTo(ctx, 'WAITING_HUMAN', preflight.timing_invariant.message)
@@ -189,18 +211,31 @@ export async function runOrchestration(
     else ctx.run = { ...ctx.run, state: first }
   }
 
-  preflight.budget = checkBudget(ctx.run, input.limits, ctx.budget, clock.now())
   preflight.next_actor = actorForState(ctx.run.state)
-  if (preflight.next_actor && preflight.budget.ok) {
-    const next = buildTurnRequest(
-      ctx,
-      preflight.next_actor,
-      ctx.run.current_round + 1,
-      input.limits.max_turn_cost_usd
+  if (preflight.next_actor) {
+    const draft = draftTurn(ctx, preflight.next_actor, ctx.run.current_round + 1)
+    preflight.next_idempotency_key = draft.idempotency_key
+    preflight.next_input_digest = draft.input_digest
+
+    const quote = providerFor(ctx, preflight.next_actor).maxCostFor({
+      system: draft.system,
+      user: draft.user,
+      max_output_tokens: draft.max_output_tokens,
+      now: clock.now(),
+    })
+    preflight.cost_estimate = quote.ok
+      ? quote.estimate
+      : { refused: quote.reason, message: quote.message }
+    preflight.next_reserved_cost_usd = quote.ok ? quote.estimate.max_cost_usd : null
+    preflight.budget = checkBudget(
+      ctx.run,
+      input.limits,
+      ctx.budget,
+      clock.now(),
+      quote.ok ? quote.estimate.max_cost_usd : input.limits.max_turn_cost_usd
     )
-    preflight.next_idempotency_key = next.idempotency_key
-    preflight.next_input_digest = next.input_digest
-    preflight.next_reserved_cost_usd = next.reserved_cost_usd
+  } else {
+    preflight.budget = checkBudget(ctx.run, input.limits, ctx.budget, clock.now())
   }
 
   // 6. Dry-run stops here: preflight complete, nothing called, nothing written.
@@ -233,7 +268,47 @@ async function executeLoop(ctx: RunnerContext): Promise<string> {
   const { input, deps, clock } = ctx
 
   while (!isTerminal(ctx.run.state)) {
-    const budget = checkBudget(ctx.run, input.limits, ctx.budget, clock.now())
+    const actor = actorForState(ctx.run.state)
+    if (!actor) return `no actor owns state ${ctx.run.state}`
+
+    const round = ctx.run.current_round + 1
+    const draft = draftTurn(ctx, actor, round)
+
+    if (hasTurnBeenProcessed(ctx.events, draft.idempotency_key)) {
+      log(deps, `turn ${draft.idempotency_key} already processed; not re-running`)
+      return `turn ${draft.idempotency_key} already processed`
+    }
+
+    // Someone else has this turn claimed and their call may be in flight. Starting
+    // ours would buy the same answer twice.
+    const rival = foreignLiveClaim(ctx.budget, draft.idempotency_key, input.holder)
+    if (rival) {
+      log(deps, `turn ${draft.idempotency_key} is claimed by ${rival.holder}`)
+      return `turn ${draft.idempotency_key} is claimed by ${rival.holder} until ${rival.claim_expires_at}`
+    }
+
+    // Ask the adapter that knows the prices what the worst case is. No quote, no
+    // call — there is no safe default price to fall back on.
+    const quote = providerFor(ctx, actor).maxCostFor({
+      system: draft.system,
+      user: draft.user,
+      max_output_tokens: draft.max_output_tokens,
+      now: clock.now(),
+    })
+    if (!quote.ok) {
+      const message = `cannot price this turn (${quote.reason}): ${quote.message}`
+      await transitionTo(ctx, 'WAITING_HUMAN', message)
+      await finish(ctx, 'cost_estimate_unavailable')
+      return message
+    }
+
+    const budget = checkBudget(
+      ctx.run,
+      input.limits,
+      ctx.budget,
+      clock.now(),
+      quote.estimate.max_cost_usd
+    )
     if (!budget.ok) {
       // Rounds, dollars and wall-clock are all budgets, so they share one state.
       await transitionTo(ctx, 'BUDGET_EXHAUSTED', budget.message)
@@ -241,26 +316,12 @@ async function executeLoop(ctx: RunnerContext): Promise<string> {
       return budget.message
     }
 
-    const actor = actorForState(ctx.run.state)
-    if (!actor) return `no actor owns state ${ctx.run.state}`
-
-    const round = ctx.run.current_round + 1
-    const request = buildTurnRequest(ctx, actor, round, input.limits.max_turn_cost_usd)
-
-    if (hasTurnBeenProcessed(ctx.events, request.idempotency_key)) {
-      log(deps, `turn ${request.idempotency_key} already processed; not re-running`)
-      return `turn ${request.idempotency_key} already processed`
-    }
-
-    // Someone else has this turn claimed and their call may be in flight. Starting
-    // ours would buy the same answer twice.
-    const rival = foreignLiveClaim(ctx.budget, request.idempotency_key, input.holder)
-    if (rival) {
-      log(deps, `turn ${request.idempotency_key} is claimed by ${rival.holder}`)
-      return `turn ${request.idempotency_key} is claimed by ${rival.holder} until ${rival.claim_expires_at}`
-    }
+    const controller = new AbortController()
+    const request = finalizeRequest(ctx, draft, round, quote.estimate, controller.signal)
 
     // Reserve before calling. From here the money is committed whatever happens.
+    // The claim covers the in-flight window, which is the provider's server-side
+    // maximum when the adapter cannot prove it cancels.
     await record(ctx, {
       ...baseEvent(ctx),
       event: 'turn_started',
@@ -270,15 +331,21 @@ async function executeLoop(ctx: RunnerContext): Promise<string> {
       input_digest: request.input_digest,
       holder: input.holder,
       reserved_cost_usd: request.reserved_cost_usd,
+      pricing_version: quote.estimate.pricing_version,
       claim_expires_at: new Date(
-        clock.now().getTime() + input.limits.provider_timeout_ms
+        clock.now().getTime() + inFlightWindowMs(ctx, actor)
       ).toISOString(),
     })
 
-    const outcome =
-      actor === 'gpt_reviewer'
-        ? await runReviewerTurn(ctx, round, request)
-        : await runImplementerTurn(ctx, round, request)
+    let outcome
+    if (actor === 'gpt_reviewer') {
+      outcome = await runReviewerTurn(ctx, round, request)
+    } else {
+      // The pre-call half of the snapshot pair. Captured after the reservation so
+      // a crash between the two still leaves the money accounted for.
+      const before: WorkspaceState = await deps.workspace.capture()
+      outcome = await runImplementerTurn(ctx, round, request, before)
+    }
 
     if (outcome.kind === 'halted') {
       await finish(ctx, outcome.stop_reason)

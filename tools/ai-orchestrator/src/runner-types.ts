@@ -7,7 +7,13 @@
 
 import type { IssueCommentLedger, PlannedWrite, RejectedComment } from './adapters/github/ledger'
 import type { GitHubClient } from './adapters/github/client'
-import type { ImplementerProvider, ReviewerProvider } from './adapters/provider-types'
+import type {
+  CostEstimate,
+  CostEstimateFailure,
+  ImplementerProvider,
+  ProviderCancellation,
+  ReviewerProvider,
+} from './adapters/provider-types'
 import type { WorkspaceInspector } from './adapters/workspace/inspector'
 import type { BudgetLedger } from './domain/budget'
 import type { LeaseAcquisition } from './domain/lease'
@@ -79,6 +85,10 @@ export interface PreflightReport {
   next_idempotency_key: string | null
   next_input_digest: string | null
   next_reserved_cost_usd: number | null
+  /** The worst-case quote, or why one could not be produced. */
+  cost_estimate: CostEstimate | { refused: CostEstimateFailure; message: string } | null
+  /** Whether each provider can really be cancelled, and its server-side maximum. */
+  cancellation: Readonly<Record<Actor, ProviderCancellation>>
   workspace_source: string
   integrity_source: string
   ledger_rejected: readonly RejectedComment[]

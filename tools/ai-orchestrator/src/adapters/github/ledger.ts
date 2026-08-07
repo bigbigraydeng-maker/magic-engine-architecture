@@ -5,9 +5,22 @@
  * HTML-comment marker carrying the machine-readable payload. Run state is a fold
  * over these events, never a separately stored copy that could drift.
  *
- * Trust rule: a marker is only decoded when the comment's author is on the
- * allowlist. Anyone can type a marker into an Issue comment; only the bot and the
- * repository owner can make one mean something.
+ * Trust is split by who wrote the comment, because the two writers need opposite
+ * permissions:
+ *
+ *   machine authors (the bot)   may write every event EXCEPT `human_authorization`
+ *   human authorizers (owner)   may write ONLY `human_authorization`, and only
+ *                               with `authorized_by` equal to their own login
+ *
+ * v0.2 had a single allowlist containing only the bot, which meant the owner's
+ * own approval was discarded at decode time and a parked run could never be
+ * released — the human gate was closed in both directions. Widening the one list
+ * would have fixed that by also letting the bot mint its own approvals, so the
+ * lists are separate and each is narrow.
+ *
+ * The `authorized_by == author_login` binding is what makes an authorization
+ * unforgeable: a marker claiming to come from the owner is only honoured when
+ * GitHub says the owner is who wrote it.
  */
 
 import { LedgerWriteBlockedError } from '../../domain/errors'
@@ -77,14 +90,28 @@ export interface LedgerReadResult {
   rejected: readonly RejectedComment[]
 }
 
+export interface LedgerTrust {
+  /** May write machine events. Never `human_authorization`. */
+  machineAuthors: readonly string[]
+  /** May write `human_authorization` only, and only on their own behalf. */
+  humanAuthorizers: readonly string[]
+}
+
+function authorRole(trust: LedgerTrust, login: string): 'machine' | 'human' | null {
+  if (trust.machineAuthors.includes(login)) return 'machine'
+  if (trust.humanAuthorizers.includes(login)) return 'human'
+  return null
+}
+
 export function decodeComment(
   comment: IssueComment,
-  trustedAuthors: readonly string[]
+  trust: LedgerTrust
 ): { event: LedgerEvent } | { rejected: RejectedComment } | null {
   const match = MARKER_PATTERN.exec(comment.body)
   if (!match) return null
 
-  if (!trustedAuthors.includes(comment.author_login)) {
+  const role = authorRole(trust, comment.author_login)
+  if (role === null) {
     return {
       rejected: {
         comment_id: comment.id,
@@ -112,12 +139,43 @@ export function decodeComment(
     }
   }
 
-  return { event: parsed.data }
+  const event = parsed.data
+
+  if (role === 'machine' && event.event === 'human_authorization') {
+    return {
+      rejected: {
+        comment_id: comment.id,
+        reason: `machine author "${comment.author_login}" may not mint a human authorization`,
+      },
+    }
+  }
+
+  if (role === 'human' && event.event !== 'human_authorization') {
+    return {
+      rejected: {
+        comment_id: comment.id,
+        reason: `human author "${comment.author_login}" may only write human_authorization, not ${event.event}`,
+      },
+    }
+  }
+
+  if (event.event === 'human_authorization' && event.authorized_by !== comment.author_login) {
+    return {
+      rejected: {
+        comment_id: comment.id,
+        reason:
+          `authorization claims authorized_by "${event.authorized_by}" but GitHub says ` +
+          `"${comment.author_login}" wrote the comment`,
+      },
+    }
+  }
+
+  return { event }
 }
 
 export interface LedgerOptions {
   issueNumber: number
-  trustedAuthors: readonly string[]
+  trust: LedgerTrust
   /** When true the ledger records what it would post and writes nothing. */
   dryRun: boolean
 }
@@ -144,7 +202,7 @@ export class IssueCommentLedger {
 
     for (const comment of comments) {
       lastCommentId = lastCommentId === null ? comment.id : Math.max(lastCommentId, comment.id)
-      const decoded = decodeComment(comment, this.options.trustedAuthors)
+      const decoded = decodeComment(comment, this.options.trust)
       if (!decoded) continue
       if ('event' in decoded) events.push(decoded.event)
       else rejected.push(decoded.rejected)

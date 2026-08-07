@@ -16,7 +16,7 @@ from `src/`, touches no database, and sees no customer data.
 npx vitest run tools/ai-orchestrator
 ```
 
-201 tests, all against mock providers. No network, no credentials, no spend.
+269 tests, all against mock providers. No network, no credentials, no spend.
 The dry-run test prints a preflight report showing every guard it evaluated and
 what it *would* do next.
 
@@ -30,20 +30,26 @@ and root `vitest.config.ts` already cover this directory.
 src/domain/       schema (zod) · state machine · fold · budget · lease · digest · errors
 src/policy/       limits · kill switch · scope + tool enforcement · protected paths · untrusted input
 src/prompts/      versioned reviewer and implementer system policies
-src/adapters/     github (client · ledger · in-memory · REST) · openai · claude · workspace (git · GitHub PR)
+src/adapters/     github · openai · claude · workspace (git · GitHub PR) · pricing
 src/config/       the concrete scaffold configuration
 src/runner.ts     preflight and the loop        src/turn-executor.ts  one turn, end to end
 src/runner-types.ts  shared types               src/runner-context.ts ledger writes and transitions
-tests/            201 tests
+tests/            269 tests
 ```
 
-## The four things worth knowing
+## The five things worth knowing
 
 **The model does not describe its own turn into compliance.** `files_changed`
 comes from `git diff` plus `git status` (an uncommitted change is still a change),
 or from GitHub's PR file list. `tools_used` comes from the execution log.
 Commit and PR identity come from the adapters. What the model reports is compared
 against that record; a mismatch parks the run rather than passing.
+
+**A turn is judged on its delta, not on the whole branch.** The inspector captures
+a state before and after each call and diffs the pair by content fingerprint.
+Round 1's files are not round 2's work, and "the repository has a HEAD" is not
+evidence that this turn committed anything. The cumulative view is kept too, for
+the question it actually answers: has the branch as a whole strayed out of scope.
 
 
 **One round is one agent turn**, not a GPT+Claude pair. It keeps `max_rounds`
@@ -59,10 +65,18 @@ crash cannot land between "the turn happened" and "the run moved on".
 event from an allowlisted login, naming this run, not yet expired. Re-running the
 workflow does nothing. That is the point.
 
-**Money is committed before the call, not after.** A turn reserves
-`max_turn_cost_usd` in the ledger, and may only start when that much budget is
-still free — so the cap cannot be crossed by the next call. A reservation whose
-runner vanished is never released: we cannot know the provider did not bill us.
+**Money is committed before the call, at a price the provider quotes.** The
+adapter computes the worst case from its own price table — estimated input tokens,
+the full output ceiling, cache and tool surcharges, a named `pricing_version` —
+and the runner reserves exactly that. No quote, no call: a missing, stale or
+oversized input is refused rather than guessed at. A reservation whose runner
+vanished is never released, because we cannot know the provider did not bill us.
+
+**A timeout is only a wall if the call really stops.** The runner aborts an
+`AbortController` the adapter must honour. An adapter that cannot prove it
+cancels declares so, and the lease is then sized to the provider's server-side
+maximum instead of to our own timeout. Both real adapters currently declare
+`supported: false` — killing our `await` does not kill a child process.
 
 ## What stops a run
 
@@ -70,10 +84,12 @@ runner vanished is never released: we cannot know the provider did not bill us.
 |---|---|---|
 | kill switch (label · env var · workflow input) | off | `CANCELLED` |
 | max rounds | 6 | `BUDGET_EXHAUSTED` |
-| cost cap (remaining must cover a full reservation) | $2.00 / $0.50 per turn | `BUDGET_EXHAUSTED` |
+| cost cap (remaining must cover the quoted worst case) | $2.00 | `BUDGET_EXHAUSTED` |
+| no usable price quote (missing / stale / input too large) | — | `WAITING_HUMAN`, zero calls |
+| actual cost above the reservation | — | `WAITING_HUMAN` (the price model is wrong) |
 | wall clock | 20 min | `BUDGET_EXHAUSTED` |
-| provider call timeout | 8 min | `provider_timeout`, reservation settled in full |
-| lease TTL shorter than timeout + margin | — | refuses to start at all |
+| provider call timeout | 8 min | aborted; `provider_timeout`, reservation settled in full |
+| lease TTL shorter than the in-flight window + margin | — | refuses to start at all |
 | schema-invalid provider output | 2 strikes | `FAILED` |
 | out-of-scope path, denied path, unlisted tool (from the record) | — | `WAITING_HUMAN` |
 | self-report does not match the record | — | `WAITING_HUMAN` |

@@ -2,9 +2,17 @@
  * Authoritative facts about what a turn actually did to the repository.
  *
  * The model's own `files_changed` / `commit_evidence` are a *description*. This is
- * the *record*. Policy is enforced against what git and GitHub say, never against
- * what the implementer says about itself — an agent that under-reports a file it
- * touched must not thereby escape the scope check.
+ * the *record*.
+ *
+ * v0.2 got the record right but the *scope* wrong: it asked git for
+ * `diff baseRef...HEAD`, which is everything the branch has accumulated since it
+ * left main. From round 2 onward that means round 1's files are attributed to
+ * round 2, `commit` is never null because HEAD always exists, and an honest
+ * implementer reporting only what it just did is flagged as a liar.
+ *
+ * So the inspector captures **states**, and the runner diffs two of them around
+ * each provider call. What a turn did is `after − before`; what the branch holds
+ * in total is `after`. Policy uses both, for different questions.
  */
 
 export interface CommitFacts {
@@ -19,34 +27,86 @@ export interface PullRequestFacts {
   merged: boolean
 }
 
-export interface WorkspaceSnapshot {
+/** Marks a path that exists in the change set because it was deleted. */
+export const DELETED_FINGERPRINT = '<deleted>'
+
+export interface WorkspaceState {
+  head_sha: string | null
+  branch: string | null
   /**
-   * Every path that differs from the run's baseline — committed, staged and
-   * unstaged alike. An agent that leaves a change uncommitted has still changed it.
+   * Every path differing from the run's base ref at this instant — committed,
+   * staged and unstaged alike — mapped to a content fingerprint.
+   *
+   * The fingerprint is what makes round-over-round deltas work: a file touched in
+   * round 1 and left alone in round 2 keeps its fingerprint, so it does not show
+   * up as a round 2 action. A file touched again does.
    */
-  changed_files: readonly string[]
-  commit: CommitFacts | null
+  file_fingerprints: Readonly<Record<string, string>>
   pull_request: PullRequestFacts | null
-  /** Provenance, e.g. `git:diff+status` or `github:pr-files`. Recorded in the ledger. */
+  /** Provenance, e.g. `git:diff+status+hash-object`. Recorded in the ledger. */
   source: string
 }
 
 export interface WorkspaceInspector {
   readonly name: string
-  inspect(): Promise<WorkspaceSnapshot>
+  capture(): Promise<WorkspaceState>
 }
 
-/** Fixed snapshot, for tests and for the mock-only scaffold. */
-export class StaticWorkspaceInspector implements WorkspaceInspector {
-  readonly name = 'static'
+export interface TurnDelta {
+  /** Paths this turn changed. Never includes untouched paths from earlier turns. */
+  files_changed: readonly string[]
+  /** Everything the branch holds versus its base ref, after this turn. */
+  cumulative_files_changed: readonly string[]
+  /** Non-null only when HEAD moved during this turn. */
+  commit: CommitFacts | null
+  /** The pull request as it stands now, for the never-merge assertion. */
+  pull_request: PullRequestFacts | null
+  /** True only when the pull request did not exist before this turn. */
+  pull_request_opened_this_turn: boolean
+  source: string
+}
 
-  constructor(private readonly snapshot: WorkspaceSnapshot) {}
+export function diffWorkspaceStates(before: WorkspaceState, after: WorkspaceState): TurnDelta {
+  const changed: string[] = []
+  const paths = new Set([
+    ...Object.keys(before.file_fingerprints),
+    ...Object.keys(after.file_fingerprints),
+  ])
 
-  async inspect(): Promise<WorkspaceSnapshot> {
-    return this.snapshot
+  for (const path of Array.from(paths)) {
+    if (before.file_fingerprints[path] !== after.file_fingerprints[path]) changed.push(path)
+  }
+
+  const headMoved = before.head_sha !== after.head_sha && after.head_sha !== null
+
+  return {
+    files_changed: changed.sort(),
+    cumulative_files_changed: Object.keys(after.file_fingerprints).sort(),
+    commit: headMoved && after.branch ? { sha: after.head_sha as string, branch: after.branch } : null,
+    pull_request: after.pull_request,
+    pull_request_opened_this_turn: before.pull_request === null && after.pull_request !== null,
+    source: after.source,
   }
 }
 
-export function emptySnapshot(source = 'static:empty'): WorkspaceSnapshot {
-  return { changed_files: [], commit: null, pull_request: null, source }
+/** Fixed state, for tests and for the mock-only scaffold. */
+export class StaticWorkspaceInspector implements WorkspaceInspector {
+  readonly name = 'static'
+
+  private index = 0
+
+  /** Successive captures return successive states; the last one repeats. */
+  constructor(private readonly states: readonly WorkspaceState[]) {
+    if (states.length === 0) throw new Error('StaticWorkspaceInspector needs at least one state')
+  }
+
+  async capture(): Promise<WorkspaceState> {
+    const state = this.states[Math.min(this.index, this.states.length - 1)]
+    this.index += 1
+    return state
+  }
+}
+
+export function emptyWorkspaceState(source = 'static:empty'): WorkspaceState {
+  return { head_sha: null, branch: null, file_fingerprints: {}, pull_request: null, source }
 }
