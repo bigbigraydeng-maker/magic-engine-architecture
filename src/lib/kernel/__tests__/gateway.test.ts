@@ -141,6 +141,40 @@ describe('Gateway：没有真授权就进不去', () => {
     await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/安全告警/)
   })
 
+  it('🔴 串台的东西**在去领执行权之前**就被拒了，不是靠数据库那一层兜住', async () => {
+    // 这条测的是「两道闸各自都在」，不是「最后结果对」。
+    // 数据库那道闸（kernel_begin_authorized_run）也查跨客户，所以只断言
+    // 「最后抛错了」的话，把 Gateway 这道闸整个删掉，测试照样全绿 ——
+    // 上一轮变异验证正是这么漏掉的。判据必须是**根本没去领执行权**。
+    const f = makeFixture({
+      registry: makeRegistry([testDefinition()]),
+      capabilities: OK_CAPABILITY,
+      options: { policy: AUTO_POLICY },
+    })
+    const { run } = await submitActionRun(f.kernel, submit())
+    const auth = await authorizeRun(f.kernel, run)
+
+    type RpcFn = (name: string, args: Record<string, unknown>) => Promise<unknown>
+    const spied = f.supabase as unknown as { rpc: RpcFn }
+    const rpcCalls: string[] = []
+    const realRpc = spied.rpc.bind(f.supabase) as RpcFn
+    spied.rpc = (name, args) => {
+      rpcCalls.push(name)
+      return realRpc(name, args)
+    }
+
+    f.tables.authorization_decisions[0].client_id = CLIENT_B
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/安全告警/)
+
+    expect(
+      rpcCalls,
+      'Gateway 应该在自己那一层就认出串台并停手，而不是把它交给数据库去挡',
+    ).not.toContain('kernel_begin_authorized_run')
+    // 状态一点没动
+    expect(f.tables.action_runs[0].status).toBe('authorized')
+    expect(f.tables.authorization_decisions[0].consumed_at ?? null).toBeNull()
+  })
+
   it('授权之后客户改了规则（policy_version 变了）→ 旧授权立即失效', async () => {
     const f = makeFixture({
       registry: makeRegistry([testDefinition()]),

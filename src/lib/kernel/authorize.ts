@@ -24,7 +24,7 @@ import type {
 } from './types'
 import type { KernelDeps } from './deps'
 import { validateAgainstSchema } from './registry'
-import { getActivePolicy, insertDecision, updateRun } from './store'
+import { getActivePolicy, getDecision, insertDecision, updateRun } from './store'
 
 export interface AuthorizationOutcome {
   verdict: Verdict
@@ -129,131 +129,154 @@ async function recordDeny(deps: KernelDeps, args: DenyArgs): Promise<Authorizati
   return { verdict: 'deny', decision, run, ctx: null }
 }
 
+// ── 授权前置校验（authorizeRun 与 approveRun 共用同一套） ────────────────────
+
+/**
+ * 🔴 这一段是 P1-1 的核心：**人工批准和自动放行必须过同一套闸。**
+ *
+ * 早先 `approveRun` 只检查「run 是不是在等审批」，于是等审批期间：
+ * 政策被删掉 / 政策从「要审批」改成「禁止」/ 契约升版 / 输入已不合法 /
+ * 动作被改成对外副作用 —— 人一点同意，全都被绕过去了。
+ * 最阴的一种是政策被删：签出来的决策 `policy_version = null`，
+ * Gateway 重读也拿到 null，`null === null` 直接放行。
+ *
+ * 所以两条路走同一个 `preflight`，谁都不能少判一项。
+ */
+type PreflightResult =
+  | {
+      ok: true
+      definition: ActionDefinition
+      policy: ClientAutomationPolicy
+      costEstimate: number
+      costCap: number
+    }
+  | {
+      ok: false
+      code: DenyCode
+      reason: string
+      definition: ActionDefinition | null
+      policy: ClientAutomationPolicy | null
+      costEstimate: number | null
+    }
+
+async function preflight(deps: KernelDeps, run: ActionRun, now: Date): Promise<PreflightResult> {
+  const bad = (
+    code: DenyCode,
+    reason: string,
+    definition: ActionDefinition | null = null,
+    policy: ClientAutomationPolicy | null = null,
+    costEstimate: number | null = null,
+  ): PreflightResult => ({ ok: false, code, reason, definition, policy, costEstimate })
+
+  // ① 认不认识这个动作。认不出 → deny，且必须留痕。
+  const definition = deps.registry.get(run.action_key)
+  if (!definition) {
+    return bad(
+      'unknown_action',
+      `「${run.action_key}」不是系统认识的动作 —— 没有人给它定过风险、幂等和验证方式，所以不能跑。要么它该被实现，要么这条建议本身提错了`,
+    )
+  }
+
+  // ② 版本。授权是给「这个版本的契约」签的，不能拿旧版授权跑新版实现。
+  if (definition.version !== run.action_version) {
+    return bad(
+      'unknown_action_version',
+      `这条动作是按第 ${run.action_version} 版契约排的，系统现在跑的是第 ${definition.version} 版 —— 契约变过，得重新排一次`,
+      definition,
+    )
+  }
+
+  // ③ 输入结构。
+  const schemaCheck = validateAgainstSchema(definition.inputSchema, run.input)
+  if (!schemaCheck.ok) {
+    return bad('invalid_input', `这条动作的参数不对：${schemaCheck.reason}`, definition)
+  }
+
+  // ④ purpose。同一个动作不许一会儿算增长、一会儿算维护。
+  if (!definition.allowedPurposes.includes(run.purpose)) {
+    return bad(
+      'purpose_not_allowed',
+      `这个动作只能作为「${definition.allowedPurposes.join('/')}」类任务提交，这条提交的是「${run.purpose}」`,
+      definition,
+    )
+  }
+
+  // ⑤ 🔴 v1 硬闸：任何对外副作用一律拒绝，不看政策、不看角色、**人也批不了**。
+  if (definition.sideEffect === 'outward') {
+    return bad(
+      'outward_side_effect_blocked',
+      '这个动作会作用到客户自己的资产之外，当前版本的执行内核一律不放行 —— 这条不是「等你点头」，是根本不做',
+      definition,
+    )
+  }
+
+  // ⑥ 客户政策。**查不到 = 拒绝。**
+  const policy = await getActivePolicy(deps.supabase, run.client_id, run.action_key, now)
+  const costEstimate = definition.costModel.estimate(run.input)
+  if (!policy) {
+    return bad(
+      'no_policy',
+      `这个客户还没有为「${definition.title}」设过自动化规则（也可能是刚被删掉了）—— 没有规则就是不许做，需要先在设置里给它一个规则`,
+      definition,
+      null,
+      costEstimate,
+    )
+  }
+  if (policy.effective_to && Date.parse(policy.effective_to) <= now.getTime()) {
+    return bad('policy_expired', '这个客户的自动化规则已经过期了，需要重新设一条', definition, policy, costEstimate)
+  }
+  if (policy.mode === 'deny') {
+    return bad(
+      'policy_deny',
+      `这个客户明确关掉了「${definition.title}」的自动执行`,
+      definition,
+      policy,
+      costEstimate,
+    )
+  }
+
+  // ⑦ 钱。上限没写 = 0，不是「不限」。
+  const costCap = policy.spend_cap_per_run_usd ?? 0
+  if (costEstimate > costCap) {
+    return bad(
+      'over_cost_cap',
+      `这次预计要花 $${costEstimate.toFixed(2)}，超过了这个客户给这类动作设的单次上限 $${costCap.toFixed(2)}`,
+      definition,
+      policy,
+      costEstimate,
+    )
+  }
+
+  return { ok: true, definition, policy, costEstimate, costCap }
+}
+
+// ── 自动授权 ──────────────────────────────────────────────────────────────────
+
 /**
  * 判定一个 run 能不能跑。
  *
- * 顺序有讲究：先判**认不认识这个动作**（认不出的连政策都不用查），
- * 再判输入合不合法，再判客户政策，最后才判钱。
  * 每一道闸失败都落一条 append-only 的决策记录 —— 包括未知动作。
  */
 export async function authorizeRun(deps: KernelDeps, input: ActionRun): Promise<AuthorizationOutcome> {
   const now = deps.now()
   const run = await updateRun(deps.supabase, input.id, { status: 'authorizing' })
 
-  // ① 认不认识这个动作。认不出 → deny，且必须留痕。
-  const definition = deps.registry.get(run.action_key)
-  if (!definition) {
+  const pf = await preflight(deps, run, now)
+  if (!pf.ok) {
     return recordDeny(deps, {
       run,
-      definition: null,
-      policy: null,
-      code: 'unknown_action',
-      reason: `「${run.action_key}」不是系统认识的动作 —— 没有人给它定过风险、幂等和验证方式，所以不能跑。要么它该被实现，要么这条建议本身提错了`,
-      costEstimate: null,
+      definition: pf.definition,
+      policy: pf.policy,
+      code: pf.code,
+      reason: pf.reason,
+      costEstimate: pf.costEstimate,
     })
   }
 
-  // ② 版本。授权是给「这个版本的契约」签的，不能拿旧版授权跑新版实现。
-  if (definition.version !== run.action_version) {
-    return recordDeny(deps, {
-      run,
-      definition,
-      policy: null,
-      code: 'unknown_action_version',
-      reason: `这条动作是按第 ${run.action_version} 版契约排的，系统现在跑的是第 ${definition.version} 版 —— 契约变过，得重新排一次`,
-      costEstimate: null,
-    })
-  }
-
-  // ③ 输入结构。
-  const schemaCheck = validateAgainstSchema(definition.inputSchema, run.input)
-  if (!schemaCheck.ok) {
-    return recordDeny(deps, {
-      run,
-      definition,
-      policy: null,
-      code: 'invalid_input',
-      reason: `这条动作的参数不对：${schemaCheck.reason}`,
-      costEstimate: null,
-    })
-  }
-
-  // ④ purpose。同一个动作不许一会儿算增长、一会儿算维护 —— 那会让「要不要挂目标」失去意义。
-  if (!definition.allowedPurposes.includes(run.purpose)) {
-    return recordDeny(deps, {
-      run,
-      definition,
-      policy: null,
-      code: 'purpose_not_allowed',
-      reason: `这个动作只能作为「${definition.allowedPurposes.join('/')}」类任务提交，这条提交的是「${run.purpose}」`,
-      costEstimate: null,
-    })
-  }
-
-  // ⑤ 🔴 v1 硬闸：任何对外副作用一律拒绝，不看政策、不看角色。
-  //    这不是保守，是 ADR-004 定的交付边界 —— v1 只验证内核机制，
-  //    「敢不敢对外发布」是另一个独立风险，不许被内核的进度压力推着走。
-  if (definition.sideEffect === 'outward') {
-    return recordDeny(deps, {
-      run,
-      definition,
-      policy: null,
-      code: 'outward_side_effect_blocked',
-      reason: '这个动作会作用到客户自己的资产之外，当前版本的执行内核一律不放行',
-      costEstimate: null,
-    })
-  }
-
-  // ⑥ 客户政策。**查不到 = 拒绝。**
-  const policy = await getActivePolicy(deps.supabase, run.client_id, run.action_key, now)
-  if (!policy) {
-    return recordDeny(deps, {
-      run,
-      definition,
-      policy: null,
-      code: 'no_policy',
-      reason: `这个客户还没有为「${definition.title}」设过自动化规则 —— 没设就是不许自动做，需要先在设置里给它一个规则`,
-      costEstimate: definition.costModel.estimate(run.input),
-    })
-  }
-  if (policy.effective_to && Date.parse(policy.effective_to) <= now.getTime()) {
-    return recordDeny(deps, {
-      run,
-      definition,
-      policy,
-      code: 'policy_expired',
-      reason: '这个客户的自动化规则已经过期了，需要重新设一条',
-      costEstimate: definition.costModel.estimate(run.input),
-    })
-  }
-  if (policy.mode === 'deny') {
-    return recordDeny(deps, {
-      run,
-      definition,
-      policy,
-      code: 'policy_deny',
-      reason: `这个客户明确关掉了「${definition.title}」的自动执行`,
-      costEstimate: definition.costModel.estimate(run.input),
-    })
-  }
-
-  // ⑦ 钱。上限没写 = 0，不是「不限」—— 不限必须显式写一个数。
-  const costEstimate = definition.costModel.estimate(run.input)
-  const costCap = policy.spend_cap_per_run_usd ?? 0
-  if (costEstimate > costCap) {
-    return recordDeny(deps, {
-      run,
-      definition,
-      policy,
-      code: 'over_cost_cap',
-      reason: `这次预计要花 $${costEstimate.toFixed(2)}，超过了这个客户给这类动作设的单次上限 $${costCap.toFixed(2)}`,
-      costEstimate,
-    })
-  }
-
+  const { definition, policy, costEstimate, costCap } = pf
   const expiresAt = new Date(now.getTime() + policy.decision_ttl_seconds * 1000).toISOString()
 
-  // ⑧ 要人点头。
+  // 要人点头。
   if (policy.mode === 'require_approval') {
     const decision = await insertDecision(deps.supabase, {
       action_run_id: run.id,
@@ -282,7 +305,7 @@ export async function authorizeRun(deps: KernelDeps, input: ActionRun): Promise<
     return { verdict: 'require_approval', decision, run: updated, ctx: null }
   }
 
-  // ⑨ 放行。
+  // 放行。
   const decision = await insertDecision(deps.supabase, {
     action_run_id: run.id,
     client_id: run.client_id,
@@ -311,8 +334,17 @@ export async function authorizeRun(deps: KernelDeps, input: ActionRun): Promise<
   return { verdict: 'allow', decision, run: updated, ctx: mintContext(decision, costCap) }
 }
 
+// ── 人工批准 ──────────────────────────────────────────────────────────────────
+
 /**
  * 人点了「同意」。
+ *
+ * 🔴 人工批准能做的**只有一件事**：把「当前仍然是 require_approval、
+ *    而且跟当初挂起时是同一版」的那条政策，从「等你点头」变成「可以做」。
+ *
+ *    它**不能**覆盖：没有政策 / 政策改成禁止 / 政策换了版本 / 契约升版 /
+ *    输入已不合法 / purpose 不符 / 对外副作用 / 超预算。
+ *    任何一项变了 —— 一律 fail closed，并落一条拒绝记录说清楚变了什么。
  *
  * 走的是**新签一条决策**，不是把原来那条 require_approval 改成 allow ——
  * 决策表是 append-only，改写审计记录等于没有审计。
@@ -331,21 +363,60 @@ export async function approveRun(
     )
   }
 
-  const definition = deps.registry.get(run.action_key)
-  if (!definition) {
+  // ① 当初挂起时那条 require_approval 决策必须还在 —— 它是「同一版政策」的锚。
+  const pending = run.authorization_decision_id
+    ? await getDecision(deps.supabase, run.authorization_decision_id)
+    : null
+  if (!pending || pending.verdict !== 'require_approval') {
     return recordDeny(deps, {
       run,
-      definition: null,
+      definition: deps.registry.get(run.action_key),
       policy: null,
-      code: 'unknown_action',
-      reason: `「${run.action_key}」已经不在系统认识的动作里了，批准也跑不了`,
+      code: 'approval_context_lost',
+      reason: `${approvedByUser} 点了同意，但找不到当初挂起这条动作的那份审批请求了 —— 不能凭空签一份放行，请重新排一次`,
       costEstimate: null,
     })
   }
 
-  const policy = await getActivePolicy(deps.supabase, run.client_id, run.action_key, now)
-  const costCap = run.cost_cap_usd ?? policy?.spend_cap_per_run_usd ?? 0
-  const ttl = policy?.decision_ttl_seconds ?? 900
+  // ② 全套授权不变量重跑一遍（跟自动放行同一套闸）
+  const pf = await preflight(deps, run, now)
+  if (!pf.ok) {
+    return recordDeny(deps, {
+      run,
+      definition: pf.definition,
+      policy: pf.policy,
+      code: pf.code,
+      reason: `${approvedByUser} 点了同意，但这条现在已经不能做了：${pf.reason}`,
+      costEstimate: pf.costEstimate,
+    })
+  }
+
+  const { definition, policy, costEstimate, costCap } = pf
+
+  // ③ 当前政策必须**仍然**是「要审批」。
+  //    改成了自动，说明规则已经变了，这条该重新走一次授权，而不是靠人补签。
+  if (policy.mode !== 'require_approval') {
+    return recordDeny(deps, {
+      run,
+      definition,
+      policy,
+      code: 'policy_changed_since_request',
+      reason: `${approvedByUser} 点了同意，但这个客户的规则在挂起之后被改成了「${policy.mode === 'auto_approve' ? '自动执行' : policy.mode}」—— 规则变了就不能按旧的审批请求放行，请重新排一次`,
+      costEstimate,
+    })
+  }
+
+  // ④ 而且必须是**同一版**政策。版本变了 = 上限 / 有效期 / 模式动过。
+  if (policy.policy_version !== pending.policy_version) {
+    return recordDeny(deps, {
+      run,
+      definition,
+      policy,
+      code: 'policy_changed_since_request',
+      reason: `${approvedByUser} 点了同意，但这个客户的规则在挂起之后改过（第 ${pending.policy_version} 版 → 第 ${policy.policy_version} 版）—— 你看到的还是旧规则下的请求，请重新排一次`,
+      costEstimate,
+    })
+  }
 
   const decision = await insertDecision(deps.supabase, {
     action_run_id: run.id,
@@ -354,21 +425,22 @@ export async function approveRun(
     action_version: run.action_version,
     verdict: 'allow',
     deny_code: null,
-    reason: `${approvedByUser} 点了同意`,
+    reason: `${approvedByUser} 点了同意（规则自挂起以来没变过，仍是第 ${policy.policy_version} 版）`,
     policy_snapshot: snapshotOf(policy, definition),
-    policy_version: policy?.policy_version ?? null,
+    policy_version: policy.policy_version,
     decided_by: 'human',
     decided_by_user: approvedByUser,
     cost_cap_usd: costCap,
-    cost_estimate_usd: run.cost_estimate_usd,
+    cost_estimate_usd: costEstimate,
     idempotency_key: run.idempotency_key,
-    expires_at: new Date(now.getTime() + ttl * 1000).toISOString(),
+    expires_at: new Date(now.getTime() + policy.decision_ttl_seconds * 1000).toISOString(),
   })
 
   const updated = await updateRun(deps.supabase, run.id, {
     status: 'authorized',
     authorization_decision_id: decision.id,
     cost_cap_usd: costCap,
+    cost_estimate_usd: costEstimate,
     needs_human: false,
   })
 

@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS public.client_automation_policies (
 
   -- 花钱信封。NULL = 该动作不许花钱（不是「不限」—— 不限必须显式写一个大数）。
   spend_cap_per_run_usd    numeric,
+  -- 🔴 RESERVED · NOT ENFORCED · 不要在设置页把它展示成「已生效的上限」。
+  --    周期累计预算还没有任何判定逻辑（v1 只实现了单次上限 spend_cap_per_run_usd）。
+  --    列先建好是为了将来不用再来一轮 migration，但在 enforcement 落地之前，
+  --    任何 UI 把它显示成安全上限 = 给人一个假的安全感。
   spend_cap_per_period_usd numeric,
   spend_cap_period         text CHECK (spend_cap_period IN ('day','week','month')),
 
@@ -67,6 +71,58 @@ DO $$ BEGIN
   CREATE POLICY "service_role_full" ON public.client_automation_policies
     FOR ALL TO service_role USING (true) WITH CHECK (true);
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- 1b. 政策版本由数据库强制演进 —— 不靠「改一次记得 +1」
+--
+-- 🔴 Gateway 的 stale-policy 防护完全建立在「政策一变，policy_version 就变」上：
+--    旧的 allow 决策靠版本对不上而失效。如果这条不变量只是注释里的一句约定，
+--    那么将来任何一个忘了 bump 的写入方（Settings 页、修数据的脚本、API）
+--    都会让「客户刚把自动改成禁止」这件事对已签发的授权**完全没有效果**。
+--
+--    所以：调用方**不能**决定要不要 bump。授权相关字段一变，数据库自己 +1。
+--    授权无关的字段（updated_by 之类）改动不 bump —— 那些不影响任何判定结果。
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.client_automation_policies_version_guard()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  -- 身份字段不许原地改：把一条政策从 A 客户/A 动作改挂到 B，
+  -- 等于让所有引用旧版本号的决策悄悄换了适用对象。要换就新建一条。
+  IF NEW.client_id IS DISTINCT FROM OLD.client_id
+     OR NEW.action_key IS DISTINCT FROM OLD.action_key THEN
+    RAISE EXCEPTION
+      'client_automation_policies: client_id / action_key are immutable (insert a new policy row instead)';
+  END IF;
+
+  IF NEW.mode                     IS DISTINCT FROM OLD.mode
+     OR NEW.spend_cap_per_run_usd    IS DISTINCT FROM OLD.spend_cap_per_run_usd
+     OR NEW.spend_cap_per_period_usd IS DISTINCT FROM OLD.spend_cap_per_period_usd
+     OR NEW.spend_cap_period         IS DISTINCT FROM OLD.spend_cap_period
+     OR NEW.decision_ttl_seconds     IS DISTINCT FROM OLD.decision_ttl_seconds
+     OR NEW.effective_from           IS DISTINCT FROM OLD.effective_from
+     OR NEW.effective_to             IS DISTINCT FROM OLD.effective_to
+  THEN
+    -- 无视调用方传进来的 policy_version，一律在旧值上 +1
+    NEW.policy_version := OLD.policy_version + 1;
+  ELSE
+    -- 授权相关字段没变 → 版本也不许被手工改动（防止有人靠改版本号
+    -- 悄悄让一批已签发的授权失效或复活）
+    NEW.policy_version := OLD.policy_version;
+  END IF;
+
+  NEW.updated_at := now();
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS client_automation_policies_version_guard_trigger
+  ON public.client_automation_policies;
+CREATE TRIGGER client_automation_policies_version_guard_trigger
+  BEFORE UPDATE ON public.client_automation_policies
+  FOR EACH ROW EXECUTE FUNCTION public.client_automation_policies_version_guard();
 
 
 -- ────────────────────────────────────────────────────────────────────────────
@@ -372,6 +428,129 @@ $$;
 --    在浏览器 bundle 里 —— 不收口 = 任何人可经 PostgREST 认领执行步骤。
 REVOKE EXECUTE ON FUNCTION public.kernel_claim_run_step(text, uuid[]) FROM PUBLIC, anon, authenticated;
 GRANT  EXECUTE ON FUNCTION public.kernel_claim_run_step(text, uuid[]) TO service_role;
+
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- 5b. kernel_begin_authorized_run —— 原子领取「这个 run 的唯一执行权」
+--
+-- 🔴 为什么必须是一条 RPC，而不是「先兑换 decision，再把 run 改成 running」：
+--    那两句之间存在竞态窗口。更要命的是，一个 run 理论上可能存在**多条** allow
+--    决策（比如两个调用方各自签了一份），而「各自原子地兑换各自那一条」
+--    并不能阻止两个 capability 同时开跑 —— 兑换的是决策，不是执行权。
+--
+--    所以这里锁的是 **run**：一个 run 从 authorized 进 running 只可能发生一次，
+--    而且只有 `run.authorization_decision_id` 当前指着的那一条决策能兑换。
+--    其余决策（哪怕 verdict='allow' 且没被消费过）一律领不到执行权。
+--
+-- 返回 (ok, reason)。reason 是机器可读的，应用层据此说人话。
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.kernel_begin_authorized_run(
+  p_run_id      uuid,
+  p_decision_id uuid,
+  p_worker_id   text
+)
+RETURNS TABLE (ok boolean, reason text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_run      public.action_runs%ROWTYPE;
+  v_decision public.authorization_decisions%ROWTYPE;
+  v_policy_version integer;
+  v_policy_found   boolean;
+BEGIN
+  -- ① 先锁 run。谁拿到这把锁，谁才有资格谈执行权。
+  SELECT * INTO v_run FROM public.action_runs
+   WHERE id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'run_not_found'; RETURN;
+  END IF;
+
+  -- ② 再锁决策（顺序固定 run → decision，避免与其他路径互相死锁）
+  SELECT * INTO v_decision FROM public.authorization_decisions
+   WHERE id = p_decision_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'decision_not_found'; RETURN;
+  END IF;
+
+  -- ③ run 必须正好停在「已授权、还没开跑」
+  IF v_run.status <> 'authorized' THEN
+    RETURN QUERY SELECT false, 'run_not_authorized:' || v_run.status; RETURN;
+  END IF;
+
+  -- ④ 🔴 双向绑定：run 当前指着的必须就是这一条决策，且这条决策也必须属于这个 run。
+  --    这一条是「同一个 run 的两份 allow 决策只有一份能兑换执行权」的实现。
+  IF v_run.authorization_decision_id IS DISTINCT FROM p_decision_id THEN
+    RETURN QUERY SELECT false, 'decision_not_current'; RETURN;
+  END IF;
+  IF v_decision.action_run_id <> v_run.id THEN
+    RETURN QUERY SELECT false, 'decision_run_mismatch'; RETURN;
+  END IF;
+
+  -- ⑤ 身份与契约必须逐项对得上
+  IF v_decision.client_id <> v_run.client_id THEN
+    RETURN QUERY SELECT false, 'cross_client'; RETURN;
+  END IF;
+  IF v_decision.action_key <> v_run.action_key THEN
+    RETURN QUERY SELECT false, 'action_key_mismatch'; RETURN;
+  END IF;
+  IF v_decision.action_version <> v_run.action_version THEN
+    RETURN QUERY SELECT false, 'action_version_mismatch'; RETURN;
+  END IF;
+  IF v_decision.idempotency_key <> v_run.idempotency_key THEN
+    RETURN QUERY SELECT false, 'idempotency_mismatch'; RETURN;
+  END IF;
+
+  -- ⑥ 授权本身必须有效
+  IF v_decision.verdict <> 'allow' THEN
+    RETURN QUERY SELECT false, 'not_allow:' || v_decision.verdict; RETURN;
+  END IF;
+  IF v_decision.consumed_at IS NOT NULL THEN
+    RETURN QUERY SELECT false, 'already_consumed'; RETURN;
+  END IF;
+  IF v_decision.expires_at IS NOT NULL AND v_decision.expires_at <= now() THEN
+    RETURN QUERY SELECT false, 'expired'; RETURN;
+  END IF;
+
+  -- ⑦ 政策必须还是签发时那一版（政策一改，版本自动 +1，见 1b 的触发器）
+  SELECT p.policy_version INTO v_policy_version
+    FROM public.client_automation_policies p
+   WHERE p.client_id = v_run.client_id
+     AND p.action_key = v_run.action_key
+     AND p.effective_to IS NULL
+     AND p.effective_from <= now()
+   LIMIT 1;
+  v_policy_found := FOUND;
+
+  -- 🔴 政策被删掉 ≠ 「没有版本号所以随便过」。没有生效政策 = 不许执行。
+  IF NOT v_policy_found THEN
+    RETURN QUERY SELECT false, 'no_active_policy'; RETURN;
+  END IF;
+  IF v_decision.policy_version IS DISTINCT FROM v_policy_version THEN
+    RETURN QUERY SELECT false, 'stale_policy_version'; RETURN;
+  END IF;
+
+  -- ⑧ 一次性完成：兑换授权 + run 进入 running
+  UPDATE public.authorization_decisions
+     SET consumed_at = now(), consumed_by = p_worker_id
+   WHERE id = p_decision_id;
+
+  UPDATE public.action_runs
+     SET status     = 'running',
+         started_at = COALESCE(started_at, now()),
+         last_error = NULL,
+         updated_at = now()
+   WHERE id = p_run_id;
+
+  RETURN QUERY SELECT true, 'ok';
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.kernel_begin_authorized_run(uuid, uuid, text)
+  FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.kernel_begin_authorized_run(uuid, uuid, text)
+  TO service_role;
 
 
 -- ────────────────────────────────────────────────────────────────────────────

@@ -152,6 +152,14 @@ export type DenyCode =
   | 'invalid_input'
   | 'purpose_not_allowed'
   | 'outward_side_effect_blocked'
+  /**
+   * 挂起等审批期间，客户的规则被改过了（模式变了 / 版本变了）。
+   * 🔴 人工批准只能把「当前仍是 require_approval 的同一版政策」变成放行，
+   *    不能拿一份旧规则下的审批请求去覆盖新规则。
+   */
+  | 'policy_changed_since_request'
+  /** 找不到当初挂起这条动作的那份审批请求 —— 没有锚就不能签放行。 */
+  | 'approval_context_lost'
 
 export interface AuthorizationDecision {
   id: string

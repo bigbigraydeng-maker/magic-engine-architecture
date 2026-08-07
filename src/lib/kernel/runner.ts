@@ -21,7 +21,14 @@ import { KernelError } from './errors'
 import { authorizeRun, approveRun, rejectRun } from './authorize'
 import { executeAuthorizedRun } from './gateway'
 import { computeIdempotencyKey, computeUnknownActionKey } from './idempotency'
-import { findRunByIdempotencyKey, insertRun, listSteps, updateRun, updateStep } from './store'
+import {
+  findRunByIdempotencyKey,
+  insertRun,
+  listSteps,
+  updateRun,
+  updateStep,
+  UniqueViolationError,
+} from './store'
 
 export interface SubmitActionInput {
   clientId: string
@@ -76,7 +83,50 @@ export async function submitActionRun(
   const existing = await findRunByIdempotencyKey(deps.supabase, input.clientId, idempotencyKey)
   if (existing) return { run: existing, existing: true }
 
-  const run = await insertRun(deps.supabase, {
+  const run = await insertRunHandlingRace(deps, input, idempotencyKey, definition?.version ?? 0)
+  return run
+}
+
+/**
+ * 插入 run，并把「唯一约束冲突」当成**正常的并发结果**处理。
+ *
+ * 🔴 先 SELECT 再 INSERT 不是原子幂等：两个调用方可以同时查到「没有」，
+ *    然后同时插。数据库的 `UNIQUE(client_id, idempotency_key)` 会让其中一个赢，
+ *    输的那个必须**回头把赢家那行读出来返回** —— 而不是把一次正常竞争抛成 500。
+ *    真正保证「只跑一次」的是这条唯一约束 + `kernel_begin_authorized_run`
+ *    的原子执行权领取，不是那句 SELECT。
+ */
+async function insertRunHandlingRace(
+  deps: KernelDeps,
+  input: SubmitActionInput,
+  idempotencyKey: string,
+  actionVersion: number,
+): Promise<SubmitResult> {
+  try {
+    const created = await insertRunRow(deps, input, idempotencyKey, actionVersion)
+    return { run: created, existing: false }
+  } catch (err) {
+    if (!(err instanceof UniqueViolationError)) throw err
+    const winner = await findRunByIdempotencyKey(deps.supabase, input.clientId, idempotencyKey)
+    if (!winner) {
+      // 撞了约束却读不到那一行 —— 这不是并发，是数据不一致，必须炸出来。
+      throw new KernelError(
+        'INVALID_STATE',
+        '这件事的提交撞上了重复，但又读不回已有的那一条 —— 库里状态不一致，先别继续',
+        { detail: { idempotencyKey } },
+      )
+    }
+    return { run: winner, existing: true }
+  }
+}
+
+async function insertRunRow(
+  deps: KernelDeps,
+  input: SubmitActionInput,
+  idempotencyKey: string,
+  actionVersion: number,
+): Promise<ActionRun> {
+  return insertRun(deps.supabase, {
     client_id: input.clientId,
     purpose: input.purpose,
     goal_id: input.goalId ?? null,
@@ -85,7 +135,7 @@ export async function submitActionRun(
     triggered_by_ref: input.triggeredByRef ?? null,
     action_key: input.actionKey,
     // 未知动作记 0 版 —— 它不会被执行，但拒绝记录里得看得出「当时没有版本」
-    action_version: definition?.version ?? 0,
+    action_version: actionVersion,
     input: input.input,
     rationale: input.rationale ?? null,
     evidence: input.evidence ?? {},
@@ -93,13 +143,17 @@ export async function submitActionRun(
     status: 'queued',
     ...(input.correlationId ? { correlation_id: input.correlationId } : {}),
   })
-
-  return { run, existing: false }
 }
 
 export type ActionOutcomeKind =
   | 'succeeded'
   | 'idempotent_hit'
+  /**
+   * 这件事已经有人在做了（另一个并发调用正拿着它）。
+   * 🔴 不是错误，也不是「什么都没发生」—— 调用方拿到的是**同一个 run**，
+   *    只是这一次不由它来推进。
+   */
+  | 'in_progress'
   | 'pending_approval'
   | 'denied'
   | 'dead_letter'
@@ -154,6 +208,20 @@ export async function runAction(
       decision: null,
       execution: null,
       humanReason: run.last_error,
+    }
+  }
+
+  // 🔴 已经存在、且还在推进中的 run —— **绝不再签第二份授权。**
+  //    两份 allow 决策会让「谁有权执行」出现两个答案，也会让审计表里
+  //    同一件事有两个「谁批的」。这条路径返回 in_progress，由抢到的那一方推进。
+  //    （执行权本身还有 kernel_begin_authorized_run 那道原子闸兜底。）
+  if (submitted.existing) {
+    return {
+      kind: 'in_progress',
+      run,
+      decision: null,
+      execution: null,
+      humanReason: '这件事已经有人在做了，这次不重复做',
     }
   }
 
@@ -247,8 +315,44 @@ export async function resumeDeadLetterRun(
     })
   }
 
-  await updateRun(deps.supabase, runId, { status: 'pending_approval', needs_human: true })
-  return approveAndRun(deps, runId, resumedByUser)
+  // 🔴 重跑走的是**跟第一次完全相同的授权路径**（回到 queued 再重新授权），
+  //    不是「人点了同意所以直接放行」。
+  //    死信之后世界可能已经变了：客户把规则改成禁止、规则被删、契约升版 ——
+  //    重跑必须跟第一次一样重新过全部闸。谁发起的重跑记进 evidence 留痕。
+  const resumed = await updateRun(deps.supabase, runId, {
+    status: 'queued',
+    needs_human: false,
+    last_error: null,
+    finished_at: null,
+    authorization_decision_id: null,
+    evidence: {
+      ...(run.evidence ?? {}),
+      last_resumed_by: resumedByUser,
+      last_resumed_at: deps.now().toISOString(),
+    },
+  })
+
+  const auth = await authorizeRun(deps, resumed)
+  if (auth.verdict === 'deny') {
+    return { kind: 'denied', run: auth.run, decision: auth.decision, execution: null, humanReason: auth.decision.reason }
+  }
+  if (auth.verdict === 'require_approval' || !auth.ctx) {
+    return {
+      kind: 'pending_approval',
+      run: auth.run,
+      decision: auth.decision,
+      execution: null,
+      humanReason: auth.decision.reason,
+    }
+  }
+  const execution = await executeAuthorizedRun(deps, auth.ctx)
+  return {
+    kind: execution.status === 'succeeded' ? 'succeeded' : 'dead_letter',
+    run: execution.run,
+    decision: auth.decision,
+    execution,
+    humanReason: execution.failure?.humanReason ?? null,
+  }
 }
 
 /** 人点了不做。 */

@@ -30,7 +30,7 @@ import type { KernelDeps } from './deps'
 import { KernelError, humanReasonOf, isRetryable } from './errors'
 import { validateAgainstSchema } from './registry'
 import {
-  consumeDecision,
+  beginAuthorizedRun,
   ensureSteps,
   getActivePolicy,
   getDecision,
@@ -188,33 +188,83 @@ export async function executeAuthorizedRun(
     )
   }
 
-  // ⑥ 原子兑换授权。拿不到行 = 别人先兑换了 = 一次重放。
-  //    （幂等命中在提交阶段就拦掉了，见 runner.ts —— 那里连授权都不会重签。）
-  const consumed = await consumeDecision(deps.supabase, decision.id, deps.workerId, now)
-  if (!consumed) {
-    throw new KernelError(
-      'DECISION_ALREADY_CONSUMED',
-      '这条授权刚刚已经被另一次执行用掉了 —— 一次授权只能换一次执行',
-    )
-  }
+  // ⑥ 🔴 原子领取「这个 run 的唯一执行权」。
+  //
+  //    上面第 ④ 步的重读比对是为了**说清楚为什么不让跑**（给人看的理由），
+  //    真正的并发正确性在这一句：一个 run 从 authorized 进 running 只可能发生一次，
+  //    而且只有 run 当前指着的那条决策能兑换。
+  //    不能拆成「先兑换 decision、再把 run 改成 running」—— 那两句之间有窗口，
+  //    而且兑换的是决策不是执行权（同一个 run 的两份 allow 决策会各自兑换成功）。
+  const begun = await beginAuthorizedRun(deps.supabase, run.id, decision.id, deps.workerId)
+  if (!begun.ok) throw beginFailureToError(begun.reason)
 
   // ⑦ capability 必须有实现。没有 ≠ 跳过。
   const capability = deps.capabilities[ctx.actionKey] as CapabilityImplementation | undefined
   if (!capability) {
-    return failRun(deps, run, [], new KernelError(
+    const claimed = await deps.requireRun(run.id)
+    return failRun(deps, claimed, [], new KernelError(
       'CAPABILITY_NOT_IMPLEMENTED',
       `「${definition.title}」这个动作还没有实现，跑不了`,
     ))
   }
 
   const steps = await ensureSteps(deps.supabase, run.id, run.client_id, definition.steps)
-  const running = await updateRun(deps.supabase, run.id, {
-    status: 'running',
-    started_at: run.started_at ?? now.toISOString(),
-    last_error: null,
-  })
+  // run 的状态已经由 RPC 原子地推到 running，这里只是把最新一行读回来
+  const running = await deps.requireRun(run.id)
 
   return runSteps(deps, { ctx, run: running, definition, capability, steps })
+}
+
+/**
+ * 把 RPC 的机器可读原因翻成人话 + 正确的错误类型。
+ *
+ * 🔴 不许有 `default: 当成成功` 这种分支。认不出的原因一律当失败 ——
+ *    「RPC 说了个我不认识的词」和「RPC 说可以」必须是两件事。
+ */
+function beginFailureToError(reason: string): KernelError {
+  const head = reason.split(':')[0]
+  switch (head) {
+    case 'already_consumed':
+      return new KernelError(
+        'DECISION_ALREADY_CONSUMED',
+        '这条授权刚刚已经被另一次执行用掉了 —— 一次授权只能换一次执行',
+      )
+    case 'decision_not_current':
+      return new KernelError(
+        'NOT_AUTHORIZED',
+        '这条授权已经不是这件事当前那一份了（期间又签过一次），不能拿它开跑',
+      )
+    case 'run_not_authorized':
+      return new KernelError(
+        'INVALID_STATE',
+        `这条动作已经不在「等着跑」的状态了（现在是 ${reason.split(':')[1] ?? '未知'}），可能已经有人在跑`,
+        { detail: { reason } },
+      )
+    case 'stale_policy_version':
+      return new KernelError(
+        'STALE_POLICY_VERSION',
+        '这个客户的规则在授权之后改过了，旧授权已失效，要重新走一次授权',
+      )
+    case 'no_active_policy':
+      return new KernelError(
+        'NOT_AUTHORIZED',
+        '这个客户现在没有生效的自动化规则了（可能被删了），不能按旧授权继续跑',
+      )
+    case 'expired':
+      return new KernelError('DECISION_EXPIRED', '这条授权已经过期了，要重新走一次授权')
+    case 'cross_client':
+      return new KernelError('CROSS_CLIENT', '安全告警：这条授权不属于这个客户，已阻止')
+    case 'action_version_mismatch':
+      return new KernelError('ACTION_VERSION_MISMATCH', '授权签的契约版本跟现在要跑的对不上，得重新授权')
+    case 'action_key_mismatch':
+    case 'idempotency_mismatch':
+    case 'decision_run_mismatch':
+    case 'decision_not_found':
+    case 'run_not_found':
+      return new KernelError('NOT_AUTHORIZED', `授权跟这次执行对不上（${head}）`, { detail: { reason } })
+    default:
+      return new KernelError('NOT_AUTHORIZED', `没能领到这次执行的执行权（${reason}）`, { detail: { reason } })
+  }
 }
 
 // ── 步骤循环 ──────────────────────────────────────────────────────────────────

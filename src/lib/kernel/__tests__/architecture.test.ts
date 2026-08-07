@@ -18,6 +18,7 @@ import {
   EXECUTION_ITEMS_WRITERS_GRANDFATHERED,
   AUTHORIZED_CONTEXT_MINTERS,
   KERNEL_NO_SUPABASE_ADMIN_DIRS,
+  MIGRATION_VERSION_COLLISIONS_GRANDFATHERED,
 } from '../boundaries'
 
 const ROOT = process.cwd()
@@ -59,7 +60,19 @@ function stripComments(src: string): string {
     .join('\n')
 }
 
-const readCode = (p: string) => stripComments(read(p))
+/**
+ * 全仓 2500+ 个文件，而这个文件里有三条规则都要扫一遍。
+ * 不缓存的话每条规则各读一次全仓，在并行跑测试时会直接撞 5 秒超时
+ * （实测：单跑 1.4s，十个测试文件并行时 >5s）。
+ */
+const codeCache = new Map<string, string>()
+const readCode = (p: string): string => {
+  const hit = codeCache.get(p)
+  if (hit !== undefined) return hit
+  const code = stripComments(read(p))
+  codeCache.set(p, code)
+  return code
+}
 
 interface EslintConfig {
   rules: Record<string, [string, { patterns: Array<{ group: string[] }> }]>
@@ -177,7 +190,7 @@ describe('L2 边界：授权上下文不许在别处被造出来', () => {
     // 这三件事缺任何一件，「伪造 ctx 也没用」这句话就不成立
     expect(gateway).toContain('getDecision(')
     expect(gateway).toContain('assertDecisionMatches')
-    expect(gateway).toContain('consumeDecision(')
+    expect(gateway).toContain('beginAuthorizedRun(')
   })
 })
 
@@ -205,6 +218,58 @@ describe('L1 边界：execution_items 是看板，不是执行引擎', () => {
       violations,
       '新代码不该直接往执行看板里写 —— 提交一个 action_run，让 Kernel 去跑。\n' +
         violations.join('\n'),
+    ).toEqual([])
+  })
+})
+
+describe('migration 版本不许撞车（P1-4）', () => {
+  it('supabase/migrations 里没有两个文件用同一个版本号', () => {
+    // 🔴 实测踩过：本 PR 原来用 20260808000001，而并行的另一个窗口（PR #862）
+    //    已经占了 000001 / 000002。两边都合进 main 之后，Supabase 的
+    //    migration history 会出现重复 version —— 而这件事在**各自的分支上
+    //    都看不出来**，只有合并之后才炸。
+    //    所以判据必须是「扫全目录」，不是「我记得我用的是哪个号」。
+    const dir = join(ROOT, 'supabase/migrations')
+    const versions = new Map<string, string[]>()
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith('.sql')) continue
+      const version = f.slice(0, 14)
+      expect(
+        /^\d{14}$/.test(version),
+        `migration 文件名前 14 位必须是时间戳版本号：${f}`,
+      ).toBe(true)
+      versions.set(version, [...(versions.get(version) ?? []), f])
+    }
+
+    const known = new Set<string>(MIGRATION_VERSION_COLLISIONS_GRANDFATHERED)
+    const collisions = Array.from(versions.entries())
+      .filter(([v, files]) => files.length > 1 && !known.has(v))
+      .map(([v, files]) => `${v} → ${files.join(' / ')}`)
+
+    expect(
+      collisions,
+      '这些 migration 用了同一个版本号。并行开发时各自分支都看不出来，' +
+        '合并后 Supabase 的 migration 账本会出现重复 version。\n' +
+        '把后来的那个改成一个更晚且唯一的版本号（不要往豁免清单里加）。\n' +
+        collisions.join('\n'),
+    ).toEqual([])
+  })
+
+  it('历史重复清单里的版本号现在确实还在重复（清单不许留幽灵条目）', () => {
+    const dir = join(ROOT, 'supabase/migrations')
+    const count = new Map<string, number>()
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith('.sql')) continue
+      const v = f.slice(0, 14)
+      count.set(v, (count.get(v) ?? 0) + 1)
+    }
+    const resolved = MIGRATION_VERSION_COLLISIONS_GRANDFATHERED.filter(
+      (v) => (count.get(v) ?? 0) <= 1,
+    )
+    expect(
+      resolved,
+      '这些历史撞车已经被解决了，把它们从 boundaries.ts 的清单里删掉 —— ' +
+        '留着会让欠账看起来比实际更多。',
     ).toEqual([])
   })
 })

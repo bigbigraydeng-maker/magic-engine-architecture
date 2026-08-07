@@ -13,23 +13,61 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { consumeDecision, getActivePolicy, insertDecision, listSteps } from '../store'
-import { createFakeSupabase } from './fake-supabase'
+import { beginAuthorizedRun, getActivePolicy, insertDecision, listSteps } from '../store'
+import { createFakeSupabase, type Row } from './fake-supabase'
 import { CLIENT_A } from './fixtures'
 
-function seed() {
+const RUN_ID = 'run-1'
+
+function seed(overrides: { policy?: Row | null; run?: Partial<Row> } = {}) {
   const tables = {
-    action_runs: [{ id: 'run-1', client_id: CLIENT_A }],
-    authorization_decisions: [] as Array<Record<string, unknown>>,
-    action_run_steps: [] as Array<Record<string, unknown>>,
-    client_automation_policies: [] as Array<Record<string, unknown>>,
+    action_runs: [
+      {
+        id: RUN_ID,
+        client_id: CLIENT_A,
+        action_key: 'seo.build_publish_package',
+        action_version: 1,
+        idempotency_key: 'k',
+        status: 'authorized',
+        authorization_decision_id: null,
+        started_at: null,
+        last_error: null,
+        ...(overrides.run ?? {}),
+      } as Row,
+    ],
+    authorization_decisions: [] as Row[],
+    action_run_steps: [] as Row[],
+    client_automation_policies:
+      overrides.policy === null
+        ? []
+        : [
+            {
+              id: 'policy-1',
+              client_id: CLIENT_A,
+              action_key: 'seo.build_publish_package',
+              mode: 'auto_approve',
+              policy_version: 1,
+              spend_cap_per_run_usd: 0,
+              spend_cap_per_period_usd: null,
+              spend_cap_period: null,
+              decision_ttl_seconds: 900,
+              effective_from: '2020-01-01T00:00:00.000Z',
+              effective_to: null,
+              updated_by: 'test',
+              ...(overrides.policy ?? {}),
+            } as Row,
+          ],
   }
   return { tables, sb: createFakeSupabase(tables) }
 }
 
-async function seedDecision(sb: ReturnType<typeof createFakeSupabase>) {
-  return insertDecision(sb, {
-    action_run_id: 'run-1',
+async function seedDecision(
+  sb: ReturnType<typeof createFakeSupabase>,
+  tables: { action_runs: Row[] },
+  over: Partial<Row> = {},
+) {
+  const d = await insertDecision(sb, {
+    action_run_id: RUN_ID,
     client_id: CLIENT_A,
     action_key: 'seo.build_publish_package',
     action_version: 1,
@@ -44,40 +82,86 @@ async function seedDecision(sb: ReturnType<typeof createFakeSupabase>) {
     cost_estimate_usd: 0,
     idempotency_key: 'k',
     expires_at: null,
+    ...(over as Record<string, never>),
   })
+  tables.action_runs[0].authorization_decision_id = d.id
+  return d
 }
 
-describe('原子兑换授权', () => {
-  it('第一次兑换拿到行，第二次拿到 null —— 而不是抛数据库错误', async () => {
-    const { sb } = seed()
-    const decision = await seedDecision(sb)
-    const now = new Date('2026-08-08T02:00:00.000Z')
+describe('原子领取执行权（P1-2）', () => {
+  it('第一次领到，第二次拿到 already_consumed —— 而不是抛数据库错误', async () => {
+    const { sb, tables } = seed()
+    const decision = await seedDecision(sb, tables)
 
-    const first = await consumeDecision(sb, decision.id, 'worker-1', now)
-    expect(first?.id).toBe(decision.id)
-    expect(first?.consumed_by).toBe('worker-1')
+    const first = await beginAuthorizedRun(sb, RUN_ID, decision.id, 'worker-1')
+    expect(first).toEqual({ ok: true, reason: 'ok' })
+    expect(tables.action_runs[0].status).toBe('running')
+    expect(tables.authorization_decisions[0].consumed_by).toBe('worker-1')
 
-    // 🔴 这一条就是在盯 `.is('consumed_at', null)`。
-    //    去掉那一句，这次更新会命中已兑换的那一行、触发 append-only 触发器，
-    //    于是这里拿到的是一个**抛出来的数据库错误**，而不是一个干净的 null。
-    //    差别不是风格问题：null 让上层能说「这是一次重放」，
-    //    抛错只能说「库出错了」，而重放和故障是两种完全不同的处置。
-    const second = await consumeDecision(sb, decision.id, 'worker-2', now)
-    expect(second).toBeNull()
+    const second = await beginAuthorizedRun(sb, RUN_ID, decision.id, 'worker-2')
+    expect(second.ok).toBe(false)
+    // run 已经不在 authorized 了 —— 这才是「执行权只有一个」的真正判据
+    expect(second.reason).toMatch(/run_not_authorized/)
   })
 
-  it('两个 worker 同时兑换同一条授权 → 只有一个赢', async () => {
-    const { sb } = seed()
-    const decision = await seedDecision(sb)
-    const now = new Date('2026-08-08T02:00:00.000Z')
+  it('🔴 两个 worker 同时领取 → 只有一个赢', async () => {
+    const { sb, tables } = seed()
+    const decision = await seedDecision(sb, tables)
 
-    const [a, b] = await Promise.all([
-      consumeDecision(sb, decision.id, 'worker-1', now),
-      consumeDecision(sb, decision.id, 'worker-2', now),
+    const results = await Promise.all([
+      beginAuthorizedRun(sb, RUN_ID, decision.id, 'worker-1'),
+      beginAuthorizedRun(sb, RUN_ID, decision.id, 'worker-2'),
     ])
 
-    const winners = [a, b].filter(Boolean)
-    expect(winners).toHaveLength(1)
+    expect(results.filter((r) => r.ok)).toHaveLength(1)
+  })
+
+  it('🔴 同一个 run 的第二份 allow 决策领不到执行权（兑换的是执行权，不是决策）', async () => {
+    const { sb, tables } = seed()
+    const first = await seedDecision(sb, tables)
+    // 又签了一份（模拟两个调用方各签一条）。run 现在指着第二份。
+    const second = await seedDecision(sb, tables)
+    expect(second.id).not.toBe(first.id)
+
+    // 旧那份哪怕 verdict='allow' 且没被消费过，也领不到
+    const stale = await beginAuthorizedRun(sb, RUN_ID, first.id, 'worker-1')
+    expect(stale).toEqual({ ok: false, reason: 'decision_not_current' })
+    expect(tables.action_runs[0].status).toBe('authorized')
+
+    const current = await beginAuthorizedRun(sb, RUN_ID, second.id, 'worker-2')
+    expect(current.ok).toBe(true)
+  })
+
+  it('🔴 政策被删掉 → 领不到（不是「没版本号所以随便过」）', async () => {
+    const { sb, tables } = seed()
+    const decision = await seedDecision(sb, tables)
+    tables.client_automation_policies.length = 0
+
+    const r = await beginAuthorizedRun(sb, RUN_ID, decision.id, 'w')
+    expect(r).toEqual({ ok: false, reason: 'no_active_policy' })
+    expect(tables.action_runs[0].status).toBe('authorized')
+  })
+
+  it('政策版本变了 → 领不到', async () => {
+    const { sb, tables } = seed()
+    const decision = await seedDecision(sb, tables)
+    tables.client_automation_policies[0].policy_version = 2
+
+    const r = await beginAuthorizedRun(sb, RUN_ID, decision.id, 'w')
+    expect(r).toEqual({ ok: false, reason: 'stale_policy_version' })
+  })
+
+  it('跨客户 / 版本不符 / 幂等键不符 都领不到', async () => {
+    for (const [over, reason] of [
+      [{ client_id: 'client-other' }, 'cross_client'],
+      [{ action_version: 2 }, 'action_version_mismatch'],
+      [{ idempotency_key: 'other' }, 'idempotency_mismatch'],
+    ] as Array<[Partial<Row>, string]>) {
+      const { sb, tables } = seed()
+      const decision = await seedDecision(sb, tables, over)
+      const r = await beginAuthorizedRun(sb, RUN_ID, decision.id, 'w')
+      expect(r).toEqual({ ok: false, reason })
+    }
   })
 })
 
@@ -130,7 +214,7 @@ describe('假件本身的保险：没建模的表必须炸', () => {
 
   it('append-only 是真的：改授权记录的正文会被拒绝', async () => {
     const { sb, tables } = seed()
-    const decision = await seedDecision(sb)
+    const decision = await seedDecision(sb, tables)
 
     const bad = await sb
       .from('authorization_decisions')

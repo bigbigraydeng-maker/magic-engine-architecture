@@ -155,9 +155,12 @@ export function createFakeSupabase(
         (r) => r !== ignore && keys.every((k) => r[k] === row[k]),
       )
       if (dup) {
-        throw new Error(
+        const e = new Error(
           `duplicate key value violates unique constraint "${table}_${keys.join('_')}_key"`,
-        )
+        ) as Error & { code?: string }
+        // Postgres 的唯一约束冲突码。应用层靠它把「正常竞争」跟「真故障」分开。
+        e.code = '23505'
+        throw e
       }
     }
   }
@@ -236,7 +239,7 @@ export function createFakeSupabase(
       return chain()
     }
 
-    function run(): { data: unknown; error: { message: string } | null } {
+    function run(): { data: unknown; error: { message: string; code?: string } | null } {
       options.log?.push({ table, op, filters: [...filters] })
 
       const failure = failureFor(table, op)
@@ -258,7 +261,8 @@ export function createFakeSupabase(
           try {
             assertUnique(table, row)
           } catch (e) {
-            return { data: null, error: { message: (e as Error).message } }
+            const err = e as Error & { code?: string }
+            return { data: null, error: { message: err.message, code: err.code } }
           }
           tableOf(table).push(row)
           created.push(row)
@@ -266,6 +270,26 @@ export function createFakeSupabase(
         rows = created
       } else if (op === 'update') {
         const target = tableOf(table).filter((r) => matches(r, filters))
+
+        // 复刻 `client_automation_policies_version_guard` 触发器。
+        // 🔴 不复刻的话，「政策改了但没人 bump 版本」这条 P1 的测试
+        //    测的就只是应用层碰巧写对了，而不是数据库真的强制了。
+        if (table === 'client_automation_policies') {
+          for (const r of target) {
+            if (
+              ('client_id' in patch && patch.client_id !== r.client_id) ||
+              ('action_key' in patch && patch.action_key !== r.action_key)
+            ) {
+              return {
+                data: null,
+                error: {
+                  message:
+                    'client_automation_policies: client_id / action_key are immutable (insert a new policy row instead)',
+                },
+              }
+            }
+          }
+        }
         // append-only 触发器的复刻：授权决策只允许把 consumed_at 从空写成一次值
         if (table === 'authorization_decisions') {
           const illegal = Object.keys(patch).filter(
@@ -287,7 +311,25 @@ export function createFakeSupabase(
             }
           }
         }
-        for (const r of target) Object.assign(r, patch)
+        for (const r of target) {
+          const before = { ...r }
+          Object.assign(r, patch)
+          if (table === 'client_automation_policies') {
+            const authFields = [
+              'mode',
+              'spend_cap_per_run_usd',
+              'spend_cap_per_period_usd',
+              'spend_cap_period',
+              'decision_ttl_seconds',
+              'effective_from',
+              'effective_to',
+            ]
+            const changed = authFields.some((f) => before[f] !== r[f])
+            // 调用方传什么 policy_version 都不算数：变了就 +1，没变就保持原值
+            r.policy_version = Number(before.policy_version ?? 1) + (changed ? 1 : 0)
+            r.updated_at = new Date().toISOString()
+          }
+        }
         rows = target
       } else if (op === 'delete') {
         const keep: Row[] = []
@@ -323,10 +365,10 @@ export function createFakeSupabase(
     }
 
     builder.then = (
-      onFulfilled: (v: { data: unknown; error: { message: string } | null }) => unknown,
+      onFulfilled: (v: { data: unknown; error: { message: string; code?: string } | null }) => unknown,
       onRejected?: (e: unknown) => unknown,
     ) => {
-      let result: { data: unknown; error: { message: string } | null }
+      let result: { data: unknown; error: { message: string; code?: string } | null }
       try {
         result = run()
       } catch (e) {
@@ -342,10 +384,68 @@ export function createFakeSupabase(
     return builder
   }
 
+  /**
+   * `kernel_begin_authorized_run` 的内存复刻。
+   *
+   * 🔴 **整个函数体是同步的**，这一点是故意的：Postgres 那边靠
+   *    `FOR UPDATE` 锁 run 来保证「从 authorized 进 running 只发生一次」，
+   *    JS 单线程里同步执行给出的是同一个语义 —— 中间不会被另一个
+   *    并发调用切进来。只要这里出现一个 `await`，这个复刻就不再等价，
+   *    并发测试也就测不到真东西了。
+   */
+  function beginAuthorizedRun(args: Record<string, unknown>): { ok: boolean; reason: string } {
+    const runId = String(args.p_run_id)
+    const decisionId = String(args.p_decision_id)
+    const workerId = String(args.p_worker_id)
+    const no = (reason: string) => ({ ok: false, reason })
+
+    const run = tableOf('action_runs').find((r) => r.id === runId)
+    if (!run) return no('run_not_found')
+    const decision = tableOf('authorization_decisions').find((d) => d.id === decisionId)
+    if (!decision) return no('decision_not_found')
+
+    if (run.status !== 'authorized') return no(`run_not_authorized:${String(run.status)}`)
+    if (run.authorization_decision_id !== decisionId) return no('decision_not_current')
+    if (decision.action_run_id !== run.id) return no('decision_run_mismatch')
+
+    if (decision.client_id !== run.client_id) return no('cross_client')
+    if (decision.action_key !== run.action_key) return no('action_key_mismatch')
+    if (decision.action_version !== run.action_version) return no('action_version_mismatch')
+    if (decision.idempotency_key !== run.idempotency_key) return no('idempotency_mismatch')
+
+    if (decision.verdict !== 'allow') return no(`not_allow:${String(decision.verdict)}`)
+    if (decision.consumed_at) return no('already_consumed')
+    if (decision.expires_at && String(decision.expires_at) <= new Date().toISOString()) {
+      return no('expired')
+    }
+
+    const policy = tableOf('client_automation_policies').find(
+      (p) =>
+        p.client_id === run.client_id &&
+        p.action_key === run.action_key &&
+        (p.effective_to === null || p.effective_to === undefined),
+    )
+    // 🔴 政策被删掉 ≠ 「没有版本号所以随便过」。这正是 P1-1 里最阴的那条路。
+    if (!policy) return no('no_active_policy')
+    if (policy.policy_version !== decision.policy_version) return no('stale_policy_version')
+
+    const nowIso = new Date().toISOString()
+    decision.consumed_at = nowIso
+    decision.consumed_by = workerId
+    run.status = 'running'
+    run.started_at = run.started_at ?? nowIso
+    run.last_error = null
+    run.updated_at = nowIso
+    return { ok: true, reason: 'ok' }
+  }
+
   const client = {
     from,
-    /** 只实现 Kernel 真正会调的那一个 RPC。别的名字直接炸。 */
+    /** 只实现 Kernel 真正会调的那两个 RPC。别的名字直接炸。 */
     async rpc(name: string, args: Record<string, unknown>) {
+      if (name === 'kernel_begin_authorized_run') {
+        return { data: [beginAuthorizedRun(args)], error: null }
+      }
       if (name !== 'kernel_claim_run_step') {
         throw new Error(`[fake-supabase] 没有建模的 RPC：${name}`)
       }

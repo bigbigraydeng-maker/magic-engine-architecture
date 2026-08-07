@@ -3,6 +3,7 @@
 > Issue [#859](https://github.com/bigbigraydeng-maker/magic-engine/issues/859) · ADR-001 / ADR-002 / ADR-004
 > 状态：**已实现，未启用**。建表迁移写好了但**没跑**；没有任何 cron 调用它；
 > 没有任何现有代码路径经过它。合并 + apply migration + 启用各需要 PM 单独 `go`。
+> migration 版本号是 `20260808000003` —— 原本用 000001，跟并行的 PR #862 撞了（见 §12）。
 
 ---
 
@@ -63,10 +64,14 @@ CONSTRAINT goal_matches_purpose CHECK ((purpose = 'growth') = (goal_id IS NOT NU
 ```
 queued → authorizing → { authorized | pending_approval | denied }
          authorized  → running → { succeeded | dead_letter }
-         pending_approval → (人点) → authorized | denied
-         dead_letter → (人点重跑) → pending_approval → …   ← 断点续跑
+         pending_approval → (人点同意) → authorized | denied
+         dead_letter → (人点重跑) → queued → …             ← 断点续跑
 生命周期旁支：superseded
 ```
+
+**重跑走的是跟第一次完全相同的授权路径**（回到 `queued` 重新授权），
+不是「人点了所以直接放行」—— 死信之后世界可能已经变了（客户改了规则、契约升版）。
+已经成功的步骤连同产物原样保留，只把没跑成的放回待跑；谁发起的重跑记进 `evidence`。
 
 **阶段不在这里。** 阶段是 `action_run_steps.step_key`（`build` / `persist` / `verify` / 将来的
 `publish` / `measure`）。接新域不用往这个枚举里加值。
@@ -90,6 +95,31 @@ queued → authorizing → { authorized | pending_approval | denied }
 
 AI 可以**提出**任何动作，但注册表认不出的一律 deny，**并落一条 `deny_code='unknown_action'` 的决策记录**。
 不是静默跳过 —— 否则「AI 提了个我们没实现的动作」这件事没人看得见。
+
+### 🔴 人工批准盖不过当前政策（P1-1）
+
+`approveRun` 跟自动放行**走同一套闸**（`preflight`）。人点同意能做的只有一件事：
+把「当前仍是 `require_approval`、而且跟当初挂起时同一版」的政策，从「等你点头」变成「可以做」。
+
+它**不能**覆盖：没有政策 / 政策改成禁止 / 政策换了版本 / 契约升版 / 输入已不合法 /
+purpose 不符 / 对外副作用 / 超预算。任何一项变了一律 fail closed，
+并落一条说清「变了什么」的拒绝记录。
+
+最阴的那条路是政策**被删掉**：早先会签出 `policy_version = null` 的放行，
+Gateway 重读也拿到 null，`null === null` 直接过。现在「没有生效政策」在
+授权层和数据库 RPC 里都是硬拒。
+
+### 🔴 政策版本由数据库强制演进（P1-3）
+
+Gateway 的 stale-policy 防护完全建立在「政策一变，`policy_version` 就变」上。
+这条不变量**不能靠调用方自觉** —— 将来任何一个忘了 bump 的写入方，都会让
+「客户刚把自动改成禁止」对已签发的授权完全没有效果。
+
+所以 `client_automation_policies` 带一个 `BEFORE UPDATE` 触发器：
+授权相关字段（`mode` / 两个花钱上限 / `spend_cap_period` / `decision_ttl_seconds` /
+生效窗口）任何一项变化 → `policy_version = OLD + 1`，**无视调用方传进来的值**；
+没变则版本原样保持（防止有人靠改号码批量作废或复活授权）。
+`client_id` / `action_key` 是身份字段，**不许原地改** —— 要换就新建一条。
 
 ---
 
@@ -127,9 +157,32 @@ append-only 的决策表里重读一遍再逐项比对：
 | 授权过期 | 抛错 |
 | 政策版本变过（stale） | 抛错 |
 | run 状态不对 | 抛错 |
-| 原子兑换（`WHERE consumed_at IS NULL`）拿不到行 | 抛错 |
 
 所以就算伪造一个字段齐全的 ctx，也过不了第二步。
+而且这一层**在去领执行权之前**就拒了 —— 有测试直接断言此时
+`kernel_begin_authorized_run` 一次都没被调用（不然「两道闸各自都在」这句话就没有证据）。
+
+### 🔴 原子领取执行权（P1-2）
+
+上面那套重读比对是为了**说清楚为什么不让跑**（给人看的理由）。
+真正的并发正确性在 `kernel_begin_authorized_run` 这一个 RPC 里：
+
+```
+锁 run（FOR UPDATE）→ 锁 decision → run 必须停在 authorized
+→ run.authorization_decision_id 必须正好是这条 decision（双向绑定）
+→ 客户 / action_key / version / 幂等键 / verdict / 未消费 / 未过期 逐项校验
+→ 当前政策必须存在且版本仍匹配
+→ 一次性：consume decision + run → running + started_at
+```
+
+**不能拆成「先兑换 decision、再把 run 改成 running」**：那两句之间有窗口，
+而且兑换的是决策、不是执行权 —— 同一个 run 若存在两份 allow 决策，
+「各自原子地兑换各自那条」照样能让两个 capability 同时开跑。
+
+提交侧同理：`SELECT → INSERT` 不是原子幂等。真正的闸是
+`UNIQUE(client_id, idempotency_key)` + **撞了就回读赢家**
+（把正常竞争当 500 抛出去也是错的）。已存在且还在推进中的 run
+一律返回 `in_progress`，**绝不再签第二份授权**。
 
 ---
 
@@ -198,7 +251,7 @@ goals.id
 
 ### Apply migration（需要 PM `go`）
 
-`supabase/migrations/20260808000001_me2_execution_kernel_v1.sql`
+`supabase/migrations/20260808000003_me2_execution_kernel_v1.sql`
 
 **Preflight**（应该都是 0 / 不存在）：
 
@@ -271,6 +324,10 @@ ALTER TABLE public.flywheel_actions DROP COLUMN IF EXISTS action_run_id;
 | 1 | 注册表还没反向注入 agent prompt | `zhuge/conductor.ts` 仍要求模型「action_type 是一个 snake_case 短词」，生成端还是开放词汇表。不补的话，注册表会从「36 种自由文本」变成「36 种自由文本 + 一张对不上的表」 |
 | 2 | 没有政策的 Settings UI | 现在只能写 SQL 插政策行。按 CLAUDE.md「FDE/PM 要填的字段必须连 Settings UI 一起做完」，启用前必须补 |
 | 3 | 没有调用方 | 内核建好了但没人提交动作。这是刻意的（v1 = 零运行时接线） |
-| 4 | 期间花费上限（`spend_cap_per_period_usd`）只建了列，没实现判定 | 单次上限已生效；周期累计上限还没接 |
+| 4 | **`spend_cap_per_period_usd`：RESERVED · NOT ENFORCED · 设置页先别暴露** | 只有列，没有任何判定逻辑。单次上限（`spend_cap_per_run_usd`）已生效。在 enforcement 落地之前，任何 UI 把它显示成「已生效的安全上限」= 给人一个假的安全感 |
 | 5 | `kernel_claim_run_step` 建好了但当前执行路径是进程内直跑，还没走认领 | 多 worker 并发时才需要。RPC 先建好，免得将来又要一轮 migration |
 | 6 | L3（受限 Postgres 角色）未评估 | ADR-002 已裁定不阻塞 v1，单独出 Security ADR |
+| 7 | **`approvedByUser` 现在只是一个字符串参数** | 真正接 API / UI 时**必须**从认证过的会话 / 操作者身份取，绝不能信任请求体。现在没有调用方，所以还没有可被伪造的入口 |
+| 8 | **`effective_to` 的完整时间窗语义还没做** | `getActivePolicy` 目前只取 `effective_to IS NULL` 的行，然后在授权层判过期。有限期政策的完整 UX 留给 Settings UI PR |
+| 9 | 卡在 `queued` 的孤儿 run 没有回收 | 首次提交后进程崩在授权之前，这条 run 会一直停在 `queued`，而后续提交只会拿到 `in_progress`。需要一个 `purpose='recovery'` 的清扫任务 —— 留给启用 PR（现在没有调用方，构不成实际问题） |
+| 10 | **仓库里已有 23 组重复的 migration 版本号** | 查重时发现的旧账（`origin/main` 上就有，多的一组 3 个文件）。本 PR 不改存量（改已 apply 过的文件名会打乱生产账本），只加了 CI 查重保证**不再新增**，存量冻结在 `boundaries.ts` 的清单里 |

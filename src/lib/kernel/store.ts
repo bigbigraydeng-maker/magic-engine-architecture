@@ -34,6 +34,24 @@ function fail(op: string, error: { message?: string } | null): never {
   throw new Error(`[kernel/store] ${op} 失败：${error?.message ?? '未知错误'}`)
 }
 
+/**
+ * 唯一约束冲突 —— **这是正常的并发结果，不是故障。**
+ *
+ * 两个调用方同时提交同一件事时，数据库让其中一个赢，另一个撞约束。
+ * 输的那个应该回头把赢家那行读出来返回，而不是抛一个 500 出去 ——
+ * 「你们俩要做的是同一件事，那件事已经在做了」不是错误。
+ */
+export class UniqueViolationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'UniqueViolationError'
+  }
+}
+
+function isUniqueViolation(error: { code?: string; message?: string } | null): boolean {
+  return error?.code === '23505' || /duplicate key value violates unique constraint/.test(error?.message ?? '')
+}
+
 // ── 政策 ──────────────────────────────────────────────────────────────────────
 
 /**
@@ -103,6 +121,11 @@ export async function insertRun(
   row: Partial<ActionRun> & Pick<ActionRun, 'client_id' | 'purpose' | 'action_key'>,
 ): Promise<ActionRun> {
   const { data, error } = await sb.from(TABLE_RUNS).insert(row).select(RUN_COLUMNS)
+  // 撞唯一约束 = 另一个调用方刚刚抢先提交了同一件事。这是并发的正常结果，
+  // 调用方应该回头读那一行（见 runner.submitActionRun），不是把它当故障。
+  if (error && isUniqueViolation(error)) {
+    throw new UniqueViolationError(`action_runs 幂等键冲突：${error.message}`)
+  }
   if (error) fail('创建执行实例', error)
   const created = (data ?? [])[0] as unknown as ActionRun | undefined
   if (!created) fail('创建执行实例', { message: '插入成功但没拿回行' })
@@ -158,25 +181,40 @@ export async function getDecision(
 }
 
 /**
- * 原子兑换一次授权。
+ * 原子领取「这个 run 的唯一执行权」（走 `kernel_begin_authorized_run` RPC）。
  *
- * `WHERE id = ? AND consumed_at IS NULL` + 回读 —— 拿不到行就是**别人先兑换了**，
- * 也就是一次重放。这一步必须是一条语句，不能「先查 consumed_at 再更新」。
+ * 🔴 这里刻意**没有**「先兑换 decision、再把 run 改成 running」那两句 ——
+ *    它们之间有竞态窗口。更关键的是：兑换的是决策，不是执行权。
+ *    一个 run 理论上可以存在多条 allow 决策，各自原子地兑换各自那条，
+ *    照样能让两个 capability 同时开跑。
+ *
+ *    所以锁的是 **run**：一个 run 从 authorized 进 running 只可能发生一次，
+ *    而且只有 `run.authorization_decision_id` 当前指着的那条决策能兑换。
+ *
+ * 返回 `ok=false` 时 `reason` 是机器可读的（`already_consumed` / `stale_policy_version` /
+ * `no_active_policy` / `decision_not_current` / …），由 Gateway 翻成人话。
  */
-export async function consumeDecision(
+export interface BeginRunResult {
+  ok: boolean
+  reason: string
+}
+
+export async function beginAuthorizedRun(
   sb: SupabaseClient,
+  runId: string,
   decisionId: string,
-  consumedBy: string,
-  now: Date,
-): Promise<AuthorizationDecision | null> {
-  const { data, error } = await sb
-    .from(TABLE_DECISIONS)
-    .update({ consumed_at: now.toISOString(), consumed_by: consumedBy })
-    .eq('id', decisionId)
-    .is('consumed_at', null)
-    .select(DECISION_COLUMNS)
-  if (error) fail('兑换授权决策', error)
-  return ((data ?? [])[0] as unknown as AuthorizationDecision | undefined) ?? null
+  workerId: string,
+): Promise<BeginRunResult> {
+  const { data, error } = await sb.rpc('kernel_begin_authorized_run', {
+    p_run_id: runId,
+    p_decision_id: decisionId,
+    p_worker_id: workerId,
+  })
+  if (error) fail('领取执行权', error)
+  const row = (data ?? [])[0] as unknown as { ok: boolean; reason: string } | undefined
+  // 🔴 拿不到返回行不能当成「成功」。RPC 一定会返回一行；返回不了说明调用本身有问题。
+  if (!row) fail('领取执行权', { message: 'RPC 没有返回结果行' })
+  return { ok: Boolean(row.ok), reason: String(row.reason ?? 'unknown') }
 }
 
 // ── Step ──────────────────────────────────────────────────────────────────────
