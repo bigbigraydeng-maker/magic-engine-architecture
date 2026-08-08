@@ -6,6 +6,8 @@
  * UNIQUE constraint exists. That leaves exactly one safe order:
  *
  *     [1] expand migration  →  [2] deploy new writers  →  [3] contract migration
+ *                                                            (separate follow-up
+ *                                                            PR — NOT here)
  *
  * These tests hold that order in place. Two kinds of evidence appear here and
  * they prove different things — the distinction is deliberate:
@@ -20,7 +22,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { FakeOutcomesDb, NATURAL_KEY_COLUMNS, type OutcomeSchemaState } from './fake-outcomes-db'
 import { OUTCOME_CONFLICT_TARGET, OUTCOME_EVALUATOR } from '../outcome-identity'
@@ -28,10 +30,6 @@ import { OUTCOME_CONFLICT_TARGET, OUTCOME_EVALUATOR } from '../outcome-identity'
 const MIGRATIONS = path.join(process.cwd(), 'supabase/migrations')
 const EXPAND_SQL = readFileSync(
   path.join(MIGRATIONS, '20260808000001_flywheel_outcomes_identity_expand.sql'),
-  'utf8',
-)
-const CONTRACT_SQL = readFileSync(
-  path.join(MIGRATIONS, '20260808000002_flywheel_outcomes_identity_contract.sql'),
   'utf8',
 )
 
@@ -232,9 +230,15 @@ describe('[2] deploy — the new writers require the expand migration first', ()
   })
 })
 
-// ── Criterion 7 + the reason contract must come last ─────────────────────────
+// ── Why the contract must come last — and therefore cannot ship here ────────
+//
+// `post_contract` models the FUTURE contract migration (SET NOT NULL + narrowed
+// CHECKs). That migration lives in a separate follow-up PR, gated on
+// `SELECT count(*) FROM flywheel_outcomes WHERE evaluator_key IS NULL` = 0
+// after the new writers are verified live. These behavioural tests are the
+// evidence for why: the old writers break the moment the column tightens.
 
-describe('[3] contract — only safe once every writer declares itself', () => {
+describe('[3] contract (follow-up PR) — only safe once every writer declares itself', () => {
   it('the legacy writer breaks under the contracted schema (so contract must come after deploy)', async () => {
     const db = dbAt('post_contract')
 
@@ -284,7 +288,9 @@ describe('expand migration SQL', () => {
   })
 
   it('leaves evaluator_key nullable — no NOT NULL, no DEFAULT', () => {
-    expect(EXPAND_SQL).not.toMatch(/SET NOT NULL/)
+    // Anchored on the operational statement, not the bare phrase — the header
+    // prose legitimately *talks about* the follow-up contract tightening.
+    expect(EXPAND_SQL).not.toMatch(/ALTER COLUMN\s+evaluator_key\s+SET NOT NULL/i)
     expect(EXPAND_SQL).not.toMatch(/ADD COLUMN[^;]*evaluator_key[^;]*DEFAULT/i)
   })
 
@@ -314,15 +320,15 @@ describe('expand migration SQL', () => {
 })
 
 // ── The behavioural model is only worth anything if it tracks the SQL ───────
+//
+// `post_contract` has no SQL file to track in this branch — it models the
+// follow-up contract PR. That PR must add the matching model↔SQL test when it
+// brings the file.
 
 describe('the schema model matches the migrations it claims to model', () => {
   it('post_expand requires evaluator_key exactly when the expand migration tightens it', () => {
-    expect(dbAt('post_expand').evaluatorKeyIsRequired()).toBe(/SET NOT NULL/.test(EXPAND_SQL))
-  })
-
-  it('post_contract requires evaluator_key exactly when the contract migration tightens it', () => {
-    expect(dbAt('post_contract').evaluatorKeyIsRequired()).toBe(
-      /ALTER COLUMN evaluator_key SET NOT NULL/.test(CONTRACT_SQL),
+    expect(dbAt('post_expand').evaluatorKeyIsRequired()).toBe(
+      /ALTER COLUMN\s+evaluator_key\s+SET NOT NULL/i.test(EXPAND_SQL),
     )
   })
 
@@ -333,39 +339,36 @@ describe('the schema model matches the migrations it claims to model', () => {
   })
 })
 
-describe('contract migration SQL', () => {
-  it('is a separate file from the expand migration', () => {
-    expect(CONTRACT_SQL).not.toBe(EXPAND_SQL)
-    expect(CONTRACT_SQL).not.toMatch(/ADD CONSTRAINT flywheel_outcomes_natural_key/)
+// ── Criterion 7: the contract migration is deliberately absent from this PR ──
+//
+// Review (PR #862, Codex P1): the contract's NULL-count guard measures DATA
+// state, not DEPLOY state. The expand backfill zeroes that count, so a contract
+// file sitting in the same branch passes its own guard when both are applied in
+// one batch — SET NOT NULL lands while the old writers still run, and every
+// attribution write fails from then on. "In the repo but remember not to apply
+// it" is a convention; absence is enforcement.
+//
+// The follow-up contract PR must consciously delete this block and bring the
+// null-guard tests (guard aborts when null_count > 0, tightens when 0) in its
+// place — flipping these assertions is the moment the deploy gate is
+// acknowledged, not an incidental test failure.
+
+describe('the contract migration is deliberately absent from this PR', () => {
+  const sqlFiles = readdirSync(MIGRATIONS).filter(f => f.endsWith('.sql'))
+
+  it('no migration file names itself the flywheel_outcomes contract', () => {
+    expect(sqlFiles.filter(f => /flywheel_outcomes.*contract/.test(f))).toEqual([])
   })
 
-  it('refuses to run while any evaluator_key is still NULL', () => {
-    expect(CONTRACT_SQL).toMatch(/WHERE evaluator_key IS NULL/)
-    expect(CONTRACT_SQL).toMatch(/IF null_count > 0 THEN[\s\S]*?RAISE EXCEPTION/)
-  })
-
-  it('runs that guard before tightening the column', () => {
-    const guardAt = CONTRACT_SQL.indexOf('null_count > 0')
-    const tightenAt = CONTRACT_SQL.indexOf('SET NOT NULL')
-
-    expect(guardAt).toBeGreaterThan(-1)
-    expect(tightenAt).toBeGreaterThan(guardAt)
-  })
-
-  it('tightens the column and narrows the CHECK to exclude NULL', () => {
-    expect(CONTRACT_SQL).toMatch(/ALTER COLUMN evaluator_key SET NOT NULL/)
-    expect(CONTRACT_SQL).toMatch(
-      /ADD CONSTRAINT flywheel_outcomes_evaluator_key_check\s+CHECK \(evaluator_key IN \(/,
-    )
-  })
-
-  it('never deletes a row and never invents a value', () => {
-    expect(CONTRACT_SQL).not.toMatch(/\bDELETE\s+FROM\b/i)
-    expect(CONTRACT_SQL).not.toMatch(/UPDATE flywheel_outcomes/i)
-  })
-
-  it('sorts after the expand migration by filename', () => {
-    expect('20260808000002_flywheel_outcomes_identity_contract.sql' >
-      '20260808000001_flywheel_outcomes_identity_expand.sql').toBe(true)
+  it('no migration tightens flywheel_outcomes.evaluator_key to NOT NULL', () => {
+    // Quoted-identifier form included; dynamic SQL (EXECUTE format(...)) is
+    // out of reach for a text scan — the filename test above and the follow-up
+    // PR's conscious flip of this block cover the realistic cases.
+    const offenders = sqlFiles.filter(f => {
+      const sql = readFileSync(path.join(MIGRATIONS, f), 'utf8')
+      return /flywheel_outcomes/.test(sql)
+        && /ALTER COLUMN\s+"?evaluator_key"?\s+SET\s+NOT\s+NULL/i.test(sql)
+    })
+    expect(offenders).toEqual([])
   })
 })

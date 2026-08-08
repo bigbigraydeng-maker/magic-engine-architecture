@@ -41,7 +41,9 @@ export const EVALUATOR_VOCABULARY = ['flywheel_metrics', 'gsc_snapshots'] as con
  *
  *   pre_expand    — today's main: no UNIQUE, no evaluator_key
  *   post_expand   — after 20260808000001: UNIQUE exists, evaluator_key nullable
- *   post_contract — after 20260808000002: evaluator_key NOT NULL + narrowed CHECK
+ *   post_contract — after the follow-up contract PR (deliberately NOT in this
+ *                   branch, see rollout-order.test.ts): evaluator_key NOT NULL
+ *                   + narrowed CHECK
  *
  * Modelling the three states is what lets the suite prove the ordering claim
  * rather than assert it in prose.
@@ -60,7 +62,7 @@ type ModelledTable = (typeof MODELLED_TABLES)[number]
 export class FakeOutcomesDb {
   private tables = new Map<string, Row[]>()
   private idCounter = 0
-  private pendingFailures: Array<{ table: string; op: string; message: string }> = []
+  private pendingFailures: Array<{ table: string; op: string; message: string; skip: number }> = []
 
   readonly ops: OpLogEntry[] = []
   readonly schema: OutcomeSchemaState
@@ -106,9 +108,19 @@ export class FakeOutcomesDb {
     return this.rowsOf('flywheel_outcomes')
   }
 
-  /** Make the next matching operation return a DB error, once. */
-  failNext(table: ModelledTable, op: 'upsert' | 'insert' | 'delete', message: string): void {
-    this.pendingFailures.push({ table, op, message })
+  /**
+   * Make a matching operation return a DB error, once. `afterMatches` skips
+   * that many matching operations first — `{ afterMatches: 1 }` fails the
+   * SECOND matching op, which is how a handoff-window write is made to fail
+   * after the cadence-window write succeeded.
+   */
+  failNext(
+    table: ModelledTable,
+    op: 'upsert' | 'insert' | 'delete',
+    message: string,
+    opts: { afterMatches?: number } = {},
+  ): void {
+    this.pendingFailures.push({ table, op, message, skip: opts.afterMatches ?? 0 })
   }
 
   didDeleteFrom(table: ModelledTable): boolean {
@@ -137,6 +149,11 @@ export class FakeOutcomesDb {
   takeFailure(table: string, op: string): string | null {
     const idx = this.pendingFailures.findIndex(f => f.table === table && f.op === op)
     if (idx === -1) return null
+    const failure = this.pendingFailures[idx]
+    if (failure.skip > 0) {
+      failure.skip--
+      return null
+    }
     return this.pendingFailures.splice(idx, 1)[0].message
   }
 
@@ -301,6 +318,21 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
       if (!this.db.hasNaturalKeyConstraint()) {
         // The blocker this rollout order exists to avoid: shipping the writers
         // before the constraint means Postgres has nothing to conflict on.
+        return {
+          data: null,
+          error: {
+            message:
+              'there is no unique or exclusion constraint matching the ON CONFLICT specification',
+          },
+        }
+      }
+      // Postgres also rejects a conflict target that names the wrong columns
+      // (42P10) — without this, a drifted target would silently merge across
+      // windows here while erroring in production.
+      const matchesNaturalKey =
+        conflictCols.length === NATURAL_KEY_COLUMNS.length &&
+        NATURAL_KEY_COLUMNS.every(c => conflictCols.includes(c))
+      if (!matchesNaturalKey) {
         return {
           data: null,
           error: {

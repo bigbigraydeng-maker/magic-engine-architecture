@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { runAttributionJob } from '@/lib/flywheel/attribution/job'
+import { runAttributionJob, DEFAULT_WINDOW_DAYS } from '@/lib/flywheel/attribution/job'
 import { runGscAttributionForClient } from '@/lib/flywheel/attribution/gsc-bridge'
 import { startCronRun } from '@/lib/cron/run-logger'
 
@@ -102,8 +102,26 @@ export async function POST(
   try {
     const clientIds = await loadGscClientIds(clientId)
 
+    // Pass 1 defers actions whose expected_metric the GSC evaluator owns, so
+    // its effective window must ride along: the deferred actions' answer at
+    // THAT window is now the bridge's to produce. The bridge keeps its own
+    // 28-day cadence (first arg left to its default) and computes the deferred
+    // window on top, deduplicating when the two coincide. See Issue #859.
+    //
+    // Sanitised, not just defaulted: parseInt on a malformed ?window_days=
+    // yields NaN, which `??` does not catch, and a NaN (or negative) window
+    // must not be forwarded — it would defeat the bridge's dedupe guard
+    // (NaN === anything is false) and error every deferred action. Pass 1's
+    // own handling of the malformed value is unchanged from main.
+    const pass1Window =
+      windowDays !== undefined && Number.isInteger(windowDays) && windowDays > 0
+        ? windowDays
+        : DEFAULT_WINDOW_DAYS
+
     for (const cid of clientIds) {
-      const r = await runGscAttributionForClient(cid)
+      const r = await runGscAttributionForClient(cid, undefined, {
+        deferredWindowDays: pass1Window,
+      })
       gscResult.clients_processed++
       gscResult.outcomes_written += r.outcomes_written
       gscResult.skipped           += r.skipped
@@ -111,7 +129,7 @@ export async function POST(
     }
 
     console.log(
-      `[attribution/cron] pass2(gsc) clients=${gscResult.clients_processed} outcomes=${gscResult.outcomes_written} skipped=${gscResult.skipped}`
+      `[attribution/cron] pass2(gsc) clients=${gscResult.clients_processed} outcomes=${gscResult.outcomes_written} skipped=${gscResult.skipped} deferred_window=${pass1Window}`
     )
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error in GSC attribution pass'

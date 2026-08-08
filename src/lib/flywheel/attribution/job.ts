@@ -16,7 +16,14 @@ import { supabaseAdmin } from '../../supabase'
 import type { OutcomeVerdict } from '../adapters/types'
 import { OUTCOME_CONFLICT_TARGET, OUTCOME_EVALUATOR, ownsMetric } from './outcome-identity'
 
-const DEFAULT_WINDOW_DAYS = 14
+/**
+ * Pass 1's default attribution window. Exported because the cron route must
+ * forward the effective pass-1 window to the GSC bridge: actions this job
+ * defers (expected_metric owned by the GSC evaluator) still need their answer
+ * computed at THIS window, by the owner — otherwise deferral would silently
+ * change which question gets answered. See Issue #859.
+ */
+export const DEFAULT_WINDOW_DAYS = 14
 
 export interface AttributionJobOptions {
   /** Days after action.executed_at to look for an "after" metric. Default 14. */

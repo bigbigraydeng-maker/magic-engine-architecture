@@ -321,16 +321,14 @@ describe('code ↔ schema agreement on ownership', () => {
     expect(resolveAuthoritativeEvaluator('some.unclaimed.metric')).toBe(match![1])
   })
 
-  it('the ownership constraint exists under that exact name in both migrations', () => {
-    const contractSql = readFileSync(
-      path.join(process.cwd(), 'supabase/migrations/20260808000002_flywheel_outcomes_identity_contract.sql'),
-      'utf8',
-    )
+  it('the ownership constraint exists under that exact name in the expand migration', () => {
     // Anchored on the CHECK that follows: a renamed or suffixed constraint is a
     // different constraint, and a bare substring match would wave it through.
+    // The follow-up contract PR (deliberately not in this branch — see
+    // rollout-order.test.ts) must re-add it with the NULL escape removed and
+    // bring its own copy of this assertion.
     const declared = /ADD CONSTRAINT flywheel_outcomes_evaluator_owns_metric\s+CHECK \(/
     expect(EXPAND_SQL).toMatch(declared)
-    expect(contractSql).toMatch(declared)
   })
 })
 

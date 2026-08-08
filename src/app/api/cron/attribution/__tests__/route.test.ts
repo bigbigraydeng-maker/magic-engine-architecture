@@ -4,11 +4,23 @@ import { POST } from '../route'
 
 vi.mock('@/lib/flywheel/attribution/job', () => ({
   runAttributionJob: vi.fn(),
+  // Mirrors the real export; the route needs it to derive the pass-1 window it
+  // forwards to pass 2. NOTE: the forwarding assertions below exercise THIS
+  // mocked constant, so they cannot detect drift from the real module — the
+  // real export is pinned, unmocked, in window-handoff.test.ts ("the real
+  // DEFAULT_WINDOW_DAYS export is 14").
+  DEFAULT_WINDOW_DAYS: 14,
+}))
+
+vi.mock('@/lib/flywheel/attribution/gsc-bridge', () => ({
+  runGscAttributionForClient: vi.fn(),
 }))
 
 import { runAttributionJob } from '@/lib/flywheel/attribution/job'
+import { runGscAttributionForClient } from '@/lib/flywheel/attribution/gsc-bridge'
 
 const mockRunAttributionJob = vi.mocked(runAttributionJob)
+const mockRunGscAttribution = vi.mocked(runGscAttributionForClient)
 
 function makeRequest(
   headers: Record<string, string> = {},
@@ -24,6 +36,13 @@ describe('POST /api/cron/attribution', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     process.env.CRON_SECRET = 'test-secret'
+    mockRunGscAttribution.mockResolvedValue({
+      client_id: 'abc-123',
+      actions_found: 0,
+      outcomes_written: 0,
+      skipped: 0,
+      errors: [],
+    })
   })
 
   // ── Auth ────────────────────────────────────────────────────────────────────
@@ -109,6 +128,73 @@ describe('POST /api/cron/attribution', () => {
       windowDays: undefined,
       clientId: 'abc-123',
     })
+  })
+
+  // ── Pass 1 → Pass 2 window forwarding (Issue #859, Codex P2) ───────────────
+  //
+  // Pass 1 defers seo.gsc.* actions to the bridge, so the window pass 1 ran at
+  // must ride along — otherwise the deferred actions' answer at that window is
+  // produced by nobody. client_id pins the pass-2 client list so the loop runs
+  // deterministically without touching the connectors table.
+
+  it('forwards the default pass-1 window (14) to the GSC bridge', async () => {
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, deferred: 1 })
+
+    const res = await POST(
+      makeRequest({ authorization: 'Bearer test-secret' }, '?client_id=abc-123')
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockRunGscAttribution).toHaveBeenCalledWith('abc-123', undefined, {
+      deferredWindowDays: 14,
+    })
+  })
+
+  it('forwards an explicit ?window_days=7 to the GSC bridge', async () => {
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, deferred: 1 })
+
+    const res = await POST(
+      makeRequest({ authorization: 'Bearer test-secret' }, '?window_days=7&client_id=abc-123')
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockRunGscAttribution).toHaveBeenCalledWith('abc-123', undefined, {
+      deferredWindowDays: 7,
+    })
+  })
+
+  it.each([
+    ['abc', 'non-numeric'],
+    ['-7', 'negative'],
+    ['0', 'zero'],
+  ])('sanitises ?window_days=%s (%s) to the default before forwarding', async (raw) => {
+    // parseInt garbage yields NaN, which `??` does not catch; forwarded raw it
+    // would defeat the bridge's dedupe guard and error every deferred action.
+    // Pass 1 keeps main's behaviour for the same input — only the forwarding
+    // is sanitised.
+    mockRunAttributionJob.mockResolvedValue({ processed: 0, written: 0, skipped: 0, deferred: 0 })
+
+    const res = await POST(
+      makeRequest({ authorization: 'Bearer test-secret' }, `?window_days=${raw}&client_id=abc-123`)
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockRunGscAttribution).toHaveBeenCalledWith('abc-123', undefined, {
+      deferredWindowDays: 14,
+    })
+  })
+
+  it('leaves the bridge cadence window to the bridge (never overrides it)', async () => {
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, deferred: 1 })
+
+    await POST(
+      makeRequest({ authorization: 'Bearer test-secret' }, '?window_days=7&client_id=abc-123')
+    )
+
+    // Second positional arg stays undefined: pass 1's window changes what the
+    // bridge computes IN ADDITION, not what its own 28-day cadence runs at.
+    const [, cadenceWindow] = mockRunGscAttribution.mock.calls[0]
+    expect(cadenceWindow).toBeUndefined()
   })
 
   // ── Error handling ──────────────────────────────────────────────────────────

@@ -6,13 +6,29 @@
 --
 --     [1] apply THIS migration        ← old main writers keep working
 --     [2] deploy the new writers      ← they start filling evaluator_key
---     [3] apply 20260808000002_..._contract.sql   ← only once no NULLs remain
+--     [3] a SEPARATE follow-up PR ships the contract migration
+--         (tightens evaluator_key to NOT NULL + narrows both CHECKs to exclude
+--         NULL + NOTIFY pgrst), applied only after [2] is verified:
+--           SELECT count(*) FROM flywheel_outcomes WHERE evaluator_key IS NULL;
+--         must be 0, and the contract must re-check that count itself and
+--         RAISE EXCEPTION if it is not.
+--
+--   The contract migration is deliberately NOT in this branch. It was, and
+--   review caught the trap (PR #862, Codex P1): its NULL-count guard measures
+--   DATA state, not DEPLOY state — the backfill below zeroes that count, so
+--   applying both files in one batch (supabase db push, or any run-all-pending
+--   flow) passes the guard and tightens the column while the old writers are
+--   still live, breaking every subsequent attribution write. A guard that a
+--   sibling file makes vacuously true is not a guard; the only reliable gate is
+--   that the contract cannot be applied before the deploy because it does not
+--   exist yet. A test pins its absence from this branch:
+--   src/lib/flywheel/attribution/__tests__/rollout-order.test.ts.
 --
 --   Nothing here may break the writers currently running on main. Those two
 --   writers INSERT without an `evaluator_key`, so this migration adds the column
---   NULLABLE and never sets NOT NULL. Tightening happens in step 3, guarded.
+--   NULLABLE and never tightens it.
 --
---   The UNIQUE constraint is added here rather than in step 3 because the new
+--   The UNIQUE constraint is added here rather than in the contract because the new
 --   writers' `upsert(... onConflict: 'action_id,metric_key,window_days')` cannot
 --   run without it — and the old writers (DELETE-then-INSERT, which can never
 --   leave two rows on one key) are unaffected by it.
@@ -80,7 +96,7 @@
 --                 and must keep working between step [1] and step [2];
 --   * no DEFAULT → a writer must declare which evaluator it is rather than
 --                 silently inheriting someone else's label. A DEFAULT would
---                 also make the step [3] guard meaningless, because old rows
+--                 also make the contract PR's guard meaningless, because old rows
 --                 would look filled in without any writer having said so.
 
 ALTER TABLE flywheel_outcomes
@@ -103,8 +119,8 @@ UPDATE flywheel_outcomes
  WHERE evaluator_key IS NULL;
 
 -- CHECK admits NULL on purpose: a SQL CHECK passes on NULL, so this constrains
--- the vocabulary without blocking the old writers' NULL inserts. Step [3]
--- narrows it once NOT NULL lands.
+-- the vocabulary without blocking the old writers' NULL inserts. The follow-up
+-- contract PR narrows it once the column is tightened.
 ALTER TABLE flywheel_outcomes
   DROP CONSTRAINT IF EXISTS flywheel_outcomes_evaluator_key_check;
 

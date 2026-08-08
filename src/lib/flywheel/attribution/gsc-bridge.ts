@@ -25,6 +25,7 @@ import {
   OUTCOME_CONFLICT_TARGET,
   OUTCOME_EVALUATOR,
   assertEvaluatorOwnsAll,
+  ownsMetric,
   resolveStaleEvaluatorKeys,
 } from './outcome-identity'
 import {
@@ -60,17 +61,37 @@ export interface GscAttributionResult {
   errors:           string[]
 }
 
+export interface GscAttributionOptions {
+  /**
+   * The window pass 1 (attribution/job.ts) ran at. Pass 1 defers actions whose
+   * expected_metric this evaluator owns, so the answer at ITS window becomes
+   * this evaluator's to produce — otherwise deferral silently changes which
+   * question gets answered (Codex P2 on PR #862: a 14-day ask handed off to a
+   * 28-day-only writer means the 14-day outcome never exists).
+   *
+   * When set and different from `windowDays`, deferred actions are additionally
+   * computed at this window. Equal windows are computed once — one computation
+   * answers both.
+   */
+  deferredWindowDays?: number
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
+
+/** This evaluator's own cadence window for GSC snapshots. */
+const GSC_DEFAULT_WINDOW_DAYS = 28
 
 /**
  * Run GSC attribution for all SEO actions for a given client.
  *
  * @param clientId   Target client
  * @param windowDays Days after action to look for the "after" snapshot (default 28)
+ * @param opts       See {@link GscAttributionOptions}
  */
 export async function runGscAttributionForClient(
   clientId: string,
-  windowDays: number = 28,
+  windowDays: number = GSC_DEFAULT_WINDOW_DAYS,
+  opts: GscAttributionOptions = {},
 ): Promise<GscAttributionResult> {
   const result: GscAttributionResult = {
     client_id:        clientId,
@@ -99,21 +120,56 @@ export async function runGscAttributionForClient(
   result.actions_found = actions.length
 
   for (const action of actions as SeoActionRow[]) {
+    // Accumulated OUTSIDE the try so a failure partway through the action does
+    // not un-count rows that are already in the database: the cadence-window
+    // upsert can succeed and the handoff-window one then fail, and the cron
+    // summary must still report the rows that landed.
+    let written = 0
     try {
-      const written = await attributeAction(action, windowDays)
-      if (written > 0) result.outcomes_written += written
-      else result.skipped++
+      written = await attributeAction(action, windowDays)
+
+      const handoffWindow = resolveHandoffWindow(action, windowDays, opts.deferredWindowDays)
+      if (handoffWindow !== null) {
+        written += await attributeAction(action, handoffWindow)
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       result.errors.push(`action ${action.id}: ${msg}`)
-      result.skipped++
     }
+
+    if (written > 0) result.outcomes_written += written
+    else result.skipped++
   }
 
   return result
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Which extra window, if any, this action must also be computed at because
+ * pass 1 deferred it to us. Returns null when there is nothing to add:
+ * no deferred window given, the windows coincide (one computation answers
+ * both), or the action was never deferred in the first place — pass 1 only
+ * defers metrics this evaluator owns, so an action whose expected_metric
+ * belongs to pass 1 already has its answer at the pass-1 window.
+ */
+function resolveHandoffWindow(
+  action: SeoActionRow,
+  windowDays: number,
+  deferredWindowDays: number | undefined,
+): number | null {
+  if (deferredWindowDays === undefined) return null
+  // Fail-safe against a garbage window reaching this far (the cron route
+  // sanitises, but this evaluator guards its own writes): NaN in particular
+  // would slip the equality dedupe below — NaN === anything is false — and
+  // turn every deferred action into an Invalid Date error.
+  if (!Number.isInteger(deferredWindowDays) || deferredWindowDays <= 0) return null
+  if (deferredWindowDays === windowDays) return null
+  if (!action.expected_metric) return null
+  if (!ownsMetric(OUTCOME_EVALUATOR.GSC_SNAPSHOTS, action.expected_metric)) return null
+  return deferredWindowDays
+}
 
 async function attributeAction(
   action: SeoActionRow,
