@@ -176,7 +176,13 @@ describe('both writers targeting the same (action, metric, window)', () => {
     seedCollisionFixture()
     const result = await runJob(CONTESTED_WINDOW)
 
-    expect(result).toEqual({ processed: 1, written: 0, skipped: 0, deferred: 1 })
+    expect(result).toEqual({
+      processed: 1,
+      written: 0,
+      skipped: 0,
+      deferred: 1,
+      deferredClientIds: [CLIENT_ID], // pass 2 uses this to know whom to visit
+    })
     expect(db.outcomes()).toHaveLength(0)
   })
 })

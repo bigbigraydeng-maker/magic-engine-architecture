@@ -43,6 +43,17 @@ export interface AttributionJobResult {
    * elsewhere" is visible in the cron summary instead of looking like a gap.
    */
   deferred: number
+  /**
+   * The clients those deferred actions belong to. A deferral is a promise that
+   * the owning evaluator will answer, so the cron route must run pass 2 for
+   * every client listed here even if their GSC connector is currently
+   * disconnected — the bridge reads historical gsc_performance_snapshots, not
+   * the connector, so it can still answer (or harmlessly skip). Without this,
+   * a client who disconnects GSC after their actions matured would have
+   * outcomes deferred to a pass that never visits them. (Codex P2 round 2 on
+   * PR #862.)
+   */
+  deferredClientIds: string[]
 }
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -67,11 +78,14 @@ export async function runAttributionJob(
     throw new Error(`runAttributionJob: failed to fetch actions — ${actionsError.message}`)
   }
 
-  if (!actions?.length) return { processed: 0, written: 0, skipped: 0, deferred: 0 }
+  if (!actions?.length) {
+    return { processed: 0, written: 0, skipped: 0, deferred: 0, deferredClientIds: [] }
+  }
 
   let written = 0
   let skipped = 0
   let deferred = 0
+  const deferredClients = new Set<string>()
 
   for (const action of actions) {
     // Arbitration: an outcome belongs to whichever evaluator owns its metric
@@ -79,6 +93,7 @@ export async function runAttributionJob(
     // win — is what keeps execution order out of the answer. See Issue #859.
     if (!ownsMetric(OUTCOME_EVALUATOR.FLYWHEEL_METRICS, action.expected_metric)) {
       deferred++
+      deferredClients.add(action.client_id)
       continue
     }
 
@@ -93,7 +108,13 @@ export async function runAttributionJob(
     }
   }
 
-  return { processed: actions.length, written, skipped, deferred }
+  return {
+    processed: actions.length,
+    written,
+    skipped,
+    deferred,
+    deferredClientIds: Array.from(deferredClients),
+  }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

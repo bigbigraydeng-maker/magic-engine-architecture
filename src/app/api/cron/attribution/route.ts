@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { runAttributionJob, DEFAULT_WINDOW_DAYS } from '@/lib/flywheel/attribution/job'
+import {
+  runAttributionJob,
+  DEFAULT_WINDOW_DAYS,
+  type AttributionJobResult,
+} from '@/lib/flywheel/attribution/job'
 import { runGscAttributionForClient } from '@/lib/flywheel/attribution/gsc-bridge'
 import { startCronRun } from '@/lib/cron/run-logger'
 
@@ -37,6 +41,8 @@ export interface AttributionCronResponse {
   skipped: number
   /** Actions pass 1 handed to another evaluator because it does not own the metric. */
   deferred?: number
+  /** Clients those deferred actions belong to — pass 2 visits all of them. */
+  deferredClientIds?: string[]
   gsc?: {
     clients_processed: number
     outcomes_written: number
@@ -78,7 +84,13 @@ export async function POST(
   const cronRun = await startCronRun('attribution-cron')
 
   // ── Pass 1: flywheel_metrics-based attribution (existing) ──────────────────
-  let pass1Result = { processed: 0, written: 0, skipped: 0, deferred: 0 }
+  let pass1Result: AttributionJobResult = {
+    processed: 0,
+    written: 0,
+    skipped: 0,
+    deferred: 0,
+    deferredClientIds: [],
+  }
   try {
     pass1Result = await runAttributionJob({ windowDays, clientId })
     console.log(
@@ -100,7 +112,24 @@ export async function POST(
   }
 
   try {
-    const clientIds = await loadGscClientIds(clientId)
+    // A deferral is a promise: pass 1 declined those actions because their
+    // answer is the GSC evaluator's to produce, so pass 2 must visit every
+    // client pass 1 deferred for — even one whose GSC connector is currently
+    // disconnected (the bridge reads historical gsc_performance_snapshots, not
+    // the connector; with no usable snapshots it skips harmlessly). The
+    // connector list is an optimisation for who ELSE to visit, and its
+    // transient failure must neither hide the deferred clients nor pass
+    // silently. (Codex P2, second round, on PR #862.)
+    let connectedIds: string[] = []
+    try {
+      connectedIds = await loadGscClientIds(clientId)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error('[attribution/cron] loadGscClientIds error:', message)
+      gscResult.errors.push(`load GSC clients: ${message}`)
+    }
+
+    const clientIds = Array.from(new Set([...connectedIds, ...pass1Result.deferredClientIds]))
 
     // Pass 1 defers actions whose expected_metric the GSC evaluator owns, so
     // its effective window must ride along: the deferred actions' answer at
@@ -165,8 +194,11 @@ async function loadGscClientIds(singleClientId?: string): Promise<string[]> {
     .eq('status', 'connected')
 
   if (error) {
-    console.error('[attribution/cron] loadGscClientIds error:', error.message)
-    return []
+    // Throw, don't return [] — an empty list here used to make a transient
+    // connectors failure look like a successful "no GSC clients" run, with the
+    // only trace in console. The caller records it into gscResult.errors (so
+    // the cron summary counts it) and still processes the deferred clients.
+    throw new Error(`client_connectors query failed: ${error.message}`)
   }
 
   return (data ?? []).map((r: { client_id: string }) => r.client_id)

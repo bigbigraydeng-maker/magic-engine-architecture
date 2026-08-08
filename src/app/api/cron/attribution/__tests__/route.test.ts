@@ -16,6 +16,37 @@ vi.mock('@/lib/flywheel/attribution/gsc-bridge', () => ({
   runGscAttributionForClient: vi.fn(),
 }))
 
+// Deterministic connectors table for pass 2's client discovery. Settable per
+// test: data rows for connected clients, or an error to simulate a transient
+// connectors-query failure.
+let connectorsResult: { data: Array<{ client_id: string }> | null; error: { message: string } | null } = {
+  data: [],
+  error: null,
+}
+
+vi.mock('@/lib/supabase', () => ({
+  supabaseAdmin: {
+    from: (table: string) => {
+      if (table === 'cron_run_logs') {
+        // startCronRun / finish (run-logger.ts) — log row lifecycle.
+        return {
+          insert: () => ({
+            select: () => ({ single: async () => ({ data: { id: 'run-1' }, error: null }) }),
+          }),
+          update: () => ({ eq: async () => ({ data: null, error: null }) }),
+        }
+      }
+      if (table === 'client_connectors') {
+        return {
+          select: () => ({ eq: () => ({ eq: async () => connectorsResult }) }),
+        }
+      }
+      // Any other table is a hole in this mock, not an empty result.
+      throw new Error(`route.test supabase mock: unmodelled table "${table}"`)
+    },
+  },
+}))
+
 import { runAttributionJob } from '@/lib/flywheel/attribution/job'
 import { runGscAttributionForClient } from '@/lib/flywheel/attribution/gsc-bridge'
 
@@ -36,6 +67,7 @@ describe('POST /api/cron/attribution', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     process.env.CRON_SECRET = 'test-secret'
+    connectorsResult = { data: [], error: null }
     mockRunGscAttribution.mockResolvedValue({
       client_id: 'abc-123',
       actions_found: 0,
@@ -72,7 +104,7 @@ describe('POST /api/cron/attribution', () => {
   // ── Happy path ──────────────────────────────────────────────────────────────
 
   it('calls runAttributionJob with default options and returns result', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 5, written: 3, skipped: 2, deferred: 0 })
+    mockRunAttributionJob.mockResolvedValue({ processed: 5, written: 3, skipped: 2, deferred: 0, deferredClientIds: [] })
 
     const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
     expect(res.status).toBe(200)
@@ -92,7 +124,7 @@ describe('POST /api/cron/attribution', () => {
   it('surfaces actions deferred to another evaluator in the response', async () => {
     // Deferrals are normal routing, not failures — but they still have to be
     // visible, otherwise "pass 1 wrote nothing today" looks like a gap.
-    mockRunAttributionJob.mockResolvedValue({ processed: 9, written: 4, skipped: 1, deferred: 4 })
+    mockRunAttributionJob.mockResolvedValue({ processed: 9, written: 4, skipped: 1, deferred: 4, deferredClientIds: [] })
 
     const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
     const body = await res.json()
@@ -102,7 +134,7 @@ describe('POST /api/cron/attribution', () => {
   })
 
   it('passes window_days query param to runAttributionJob', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 2, written: 2, skipped: 0, deferred: 0 })
+    mockRunAttributionJob.mockResolvedValue({ processed: 2, written: 2, skipped: 0, deferred: 0, deferredClientIds: [] })
 
     const res = await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, '?window_days=30')
@@ -115,7 +147,7 @@ describe('POST /api/cron/attribution', () => {
   })
 
   it('passes client_id query param to runAttributionJob', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 1, skipped: 0, deferred: 0 })
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 1, skipped: 0, deferred: 0, deferredClientIds: [] })
 
     const res = await POST(
       makeRequest(
@@ -138,7 +170,7 @@ describe('POST /api/cron/attribution', () => {
   // deterministically without touching the connectors table.
 
   it('forwards the default pass-1 window (14) to the GSC bridge', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, deferred: 1 })
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, deferred: 1, deferredClientIds: [] })
 
     const res = await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, '?client_id=abc-123')
@@ -151,7 +183,7 @@ describe('POST /api/cron/attribution', () => {
   })
 
   it('forwards an explicit ?window_days=7 to the GSC bridge', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, deferred: 1 })
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, deferred: 1, deferredClientIds: [] })
 
     const res = await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, '?window_days=7&client_id=abc-123')
@@ -172,7 +204,7 @@ describe('POST /api/cron/attribution', () => {
     // would defeat the bridge's dedupe guard and error every deferred action.
     // Pass 1 keeps main's behaviour for the same input — only the forwarding
     // is sanitised.
-    mockRunAttributionJob.mockResolvedValue({ processed: 0, written: 0, skipped: 0, deferred: 0 })
+    mockRunAttributionJob.mockResolvedValue({ processed: 0, written: 0, skipped: 0, deferred: 0, deferredClientIds: [] })
 
     const res = await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, `?window_days=${raw}&client_id=abc-123`)
@@ -184,8 +216,62 @@ describe('POST /api/cron/attribution', () => {
     })
   })
 
+  // ── Deferred clients drive pass 2 (Codex P2, second round) ─────────────────
+  //
+  // A deferral is a promise that the owning evaluator will answer. The
+  // connectors list only decides who ELSE pass 2 visits — a client whose GSC
+  // connector is disconnected (or whose connectors query failed) must still be
+  // visited when pass 1 deferred actions for them.
+
+  it('runs pass 2 for a deferred client even when it is not in the connected list', async () => {
+    connectorsResult = { data: [], error: null } // nobody connected
+    mockRunAttributionJob.mockResolvedValue({
+      processed: 2, written: 0, skipped: 0, deferred: 2,
+      deferredClientIds: ['client-disconnected'],
+    })
+
+    const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
+
+    expect(res.status).toBe(200)
+    expect(mockRunGscAttribution).toHaveBeenCalledWith('client-disconnected', undefined, {
+      deferredWindowDays: 14,
+    })
+  })
+
+  it('visits each client once when it is both connected and deferred', async () => {
+    connectorsResult = { data: [{ client_id: 'client-both' }], error: null }
+    mockRunAttributionJob.mockResolvedValue({
+      processed: 1, written: 0, skipped: 0, deferred: 1,
+      deferredClientIds: ['client-both'],
+    })
+
+    await POST(makeRequest({ authorization: 'Bearer test-secret' }))
+
+    const visits = mockRunGscAttribution.mock.calls.filter(([cid]) => cid === 'client-both')
+    expect(visits).toHaveLength(1)
+  })
+
+  it('a connectors-query failure is surfaced AND deferred clients still run', async () => {
+    // Previously this failure produced an empty client list and a clean-looking
+    // run, with the only trace in console.
+    connectorsResult = { data: null, error: { message: 'connection refused' } }
+    mockRunAttributionJob.mockResolvedValue({
+      processed: 1, written: 0, skipped: 0, deferred: 1,
+      deferredClientIds: ['client-deferred'],
+    })
+
+    const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.gsc.errors.join(' ')).toContain('connection refused')
+    expect(mockRunGscAttribution).toHaveBeenCalledWith('client-deferred', undefined, {
+      deferredWindowDays: 14,
+    })
+  })
+
   it('leaves the bridge cadence window to the bridge (never overrides it)', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, deferred: 1 })
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, deferred: 1, deferredClientIds: [] })
 
     await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, '?window_days=7&client_id=abc-123')

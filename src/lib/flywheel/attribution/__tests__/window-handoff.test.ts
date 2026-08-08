@@ -86,6 +86,7 @@ describe('default cron (pass 1 at 14, bridge cadence 28)', () => {
 
     const jobResult = await runJob(14)
     expect(jobResult.deferred).toBe(1) // the deferral really happened — not vacuous
+    expect(jobResult.deferredClientIds).toEqual([CLIENT_ID]) // and named its client
     expect(db.outcomes()).toHaveLength(0) // and pass 1 wrote nothing
 
     await runBridge(14)
