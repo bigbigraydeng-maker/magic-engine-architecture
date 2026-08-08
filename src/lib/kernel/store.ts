@@ -138,7 +138,7 @@ const RUN_COLUMNS =
   'authorization_decision_id, correlation_id, cost_cap_usd, cost_estimate_usd, ' +
   'needs_human, last_error, ' +
   'claimed_by, claimed_at, heartbeat_at, lease_expires_at, ' +
-  'previous_claimed_by, reclaim_count, last_reclaimed_at, ' +
+  'previous_claimed_by, reclaim_count, last_reclaimed_at, claim_generation, ' +
   'created_at, updated_at, started_at, finished_at'
 
 export async function findRunByIdempotencyKey(
@@ -273,11 +273,14 @@ export async function beginAuthorizedRun(
   runId: string,
   decisionId: string,
   workerId: string,
+  /** 🔴 F1：兑换授权也要出示自己那一代 —— 授权一旦被消费就再也签不回来。 */
+  expectedGeneration?: number | null,
 ): Promise<BeginRunResult> {
   const { data, error } = await sb.rpc('kernel_begin_authorized_run', {
     p_run_id: runId,
     p_decision_id: decisionId,
     p_worker_id: workerId,
+    p_expected_generation: expectedGeneration ?? null,
   })
   if (error) fail('领取执行权', error)
   const row = (data ?? [])[0] as unknown as { ok: boolean; reason: string } | undefined
@@ -390,20 +393,40 @@ export interface ClaimOrTakeoverResult {
   /** 是不是**从别人手里**接走的（自己续租不算）。 */
   reclaimed: boolean
   reclaimCount: number
+  /** 🔴 领到的那一代。之后所有推进性写入都要出示它。 */
+  claimGeneration: number
+  /** 接管的是一个正在跑的 run —— 没跑成的步骤已经在同一个事务里放回待跑了。 */
+  resetSteps: boolean
 }
 
 export async function claimOrTakeoverRun(
   sb: SupabaseClient,
-  args: { runId: string; ownerId: string; leaseSeconds: number },
+  args: {
+    runId: string
+    ownerId: string
+    leaseSeconds: number
+    /** 续租 / 再进一次时带上自己那一代 —— 对不上就领不到（防旧调用复活）。 */
+    expectedGeneration?: number | null
+  },
 ): Promise<ClaimOrTakeoverResult> {
   const { data, error } = await sb.rpc('kernel_claim_or_takeover_run', {
     p_run_id: args.runId,
     p_owner_id: args.ownerId,
     p_lease_seconds: args.leaseSeconds,
+    p_expected_generation: args.expectedGeneration ?? null,
   })
   if (error) fail('领取运行所有权', error)
   const row = (data ?? [])[0] as unknown as
-    | { ok: boolean; reason: string; run_status: string | null; decision_id: string | null; reclaimed: boolean; reclaim_count: number }
+    | {
+        ok: boolean
+        reason: string
+        run_status: string | null
+        decision_id: string | null
+        reclaimed: boolean
+        reclaim_count: number
+        claim_generation: number | null
+        reset_steps: boolean
+      }
     | undefined
   if (!row) fail('领取运行所有权', { message: 'RPC 没有返回结果行' })
   return {
@@ -413,6 +436,8 @@ export async function claimOrTakeoverRun(
     decisionId: row.decision_id ?? null,
     reclaimed: Boolean(row.reclaimed),
     reclaimCount: Number(row.reclaim_count ?? 0),
+    claimGeneration: Number(row.claim_generation ?? 0),
+    resetSteps: Boolean(row.reset_steps),
   }
 }
 
@@ -421,6 +446,7 @@ export async function claimOrTakeoverRun(
 const STEP_COLUMNS =
   'id, run_id, client_id, step_key, step_index, status, claimed_by, claimed_at, heartbeat_at, ' +
   'attempt, reclaim_count, next_attempt_at, output, verification, cost_actual_usd, last_error, ' +
+  'claim_generation, ' +
   'created_at, updated_at, started_at, finished_at'
 
 export async function listSteps(sb: SupabaseClient, runId: string): Promise<ActionRunStep[]> {
@@ -444,6 +470,7 @@ export async function ensureSteps(
   runId: string,
   clientId: string,
   stepKeys: readonly string[],
+  claimGeneration: number,
 ): Promise<ActionRunStep[]> {
   const existing = await listSteps(sb, runId)
   const have = new Set(existing.map((s) => s.step_key))
@@ -459,12 +486,62 @@ export async function ensureSteps(
         step_key: key,
         step_index: idx,
         status: 'pending' as StepStatus,
+        // 新建的步骤直接属于当前这一代 —— 否则它一出生就被 fence 掉
+        claim_generation: claimGeneration,
       })),
     )
     if (error) fail('创建执行步骤', error)
     return listSteps(sb, runId)
   }
   return existing
+}
+
+/**
+ * 🔴 **带代际守卫的步骤写入（F1）。**
+ *
+ * 过期的执行者手里握着有效的 `step_id`，普通的「按 id 更新」它照写不误 ——
+ * 产物、花费、状态全都会被一个已经没有执行权的进程覆盖掉。
+ * 加一句 `AND claim_generation = ?`，它就只能影响 0 行。
+ *
+ * 返回 null = 被 fence 掉了（不是「行不存在」）。调用方必须停手，
+ * 绝不能把它当成一次成功的写入。
+ */
+export async function updateStepFenced(
+  sb: SupabaseClient,
+  stepId: string,
+  expectedGeneration: number,
+  patch: Partial<Omit<ActionRunStep, 'verification'>> & {
+    status?: StepStatus
+    verification?: VerificationResult | null
+  },
+): Promise<ActionRunStep | null> {
+  const { data, error } = await sb
+    .from(TABLE_STEPS)
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', stepId)
+    .eq('claim_generation', expectedGeneration)
+    .select(STEP_COLUMNS)
+  if (error) fail('更新执行步骤（带代际守卫）', error)
+  return ((data ?? [])[0] as unknown as ActionRunStep | undefined) ?? null
+}
+
+/**
+ * 🔴 带代际守卫的 run 写入（F1）。同上：返回 null = 被 fence 掉了。
+ */
+export async function updateRunFenced(
+  sb: SupabaseClient,
+  runId: string,
+  expectedGeneration: number,
+  patch: Partial<ActionRun> & { status?: RunStatus },
+): Promise<ActionRun | null> {
+  const { data, error } = await sb
+    .from(TABLE_RUNS)
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', runId)
+    .eq('claim_generation', expectedGeneration)
+    .select(RUN_COLUMNS)
+  if (error) fail('更新执行实例（带代际守卫）', error)
+  return ((data ?? [])[0] as unknown as ActionRun | undefined) ?? null
 }
 
 export async function updateStep(

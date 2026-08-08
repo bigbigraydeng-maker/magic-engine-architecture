@@ -17,7 +17,7 @@ import { executeAuthorizedRun } from '../gateway'
 import { ACTION_REGISTRY } from '../registry'
 import { createCapabilities, computeBlogContentHash } from '@/lib/capabilities'
 import type { BlogDraftRow } from '@/lib/capabilities/seo/build-publish-package'
-import { makeFixture, CLIENT_A, GOAL_A, POST_A, BLOG_DRAFT } from './fixtures'
+import { makeFixture, CLIENT_A, GOAL_A, POST_A, BLOG_DRAFT, liveFence } from './fixtures'
 
 const KEY = 'seo.build_publish_package'
 const HASH = computeBlogContentHash(BLOG_DRAFT as unknown as BlogDraftRow)
@@ -83,7 +83,7 @@ describe('P1-3 · 政策版本自动演进', () => {
     await patchPolicy(f, { mode: 'deny' })
 
     expect(f.tables.client_automation_policies[0].policy_version).toBe(2)
-    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/规则.*改过/)
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))).rejects.toThrow(/规则.*改过/)
     expect(builds).not.toHaveBeenCalled()
     expect(f.tables.production_packages).toHaveLength(0)
   })
@@ -92,7 +92,7 @@ describe('P1-3 · 政策版本自动演进', () => {
     const { f, auth, builds } = await authorizedFixture()
     await patchPolicy(f, { spend_cap_per_run_usd: 25 })
     expect(f.tables.client_automation_policies[0].policy_version).toBe(2)
-    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/规则.*改过/)
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))).rejects.toThrow(/规则.*改过/)
     expect(builds).not.toHaveBeenCalled()
   })
 
@@ -100,7 +100,7 @@ describe('P1-3 · 政策版本自动演进', () => {
     const { f, auth } = await authorizedFixture()
     await patchPolicy(f, { decision_ttl_seconds: 60 })
     expect(f.tables.client_automation_policies[0].policy_version).toBe(2)
-    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/规则.*改过/)
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))).rejects.toThrow(/规则.*改过/)
   })
 
   it('改生效窗口 → 版本自己 +1', async () => {
@@ -114,7 +114,7 @@ describe('P1-3 · 政策版本自动演进', () => {
     await patchPolicy(f, { updated_by: 'someone-else@magiclab' })
 
     expect(f.tables.client_automation_policies[0].policy_version).toBe(1)
-    const result = await executeAuthorizedRun(f.kernel, auth.ctx!)
+    const result = await executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))
     expect(result.status).toBe('succeeded')
     expect(builds).toHaveBeenCalledTimes(1)
   })
@@ -126,14 +126,14 @@ describe('P1-3 · 政策版本自动演进', () => {
     await patchPolicy(f, { mode: 'deny', policy_version: 1 })
 
     expect(f.tables.client_automation_policies[0].policy_version).toBe(2)
-    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/规则.*改过/)
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))).rejects.toThrow(/规则.*改过/)
   })
 
   it('🔴 什么都没改时也不许手工把版本推高（防止有人靠改号码批量作废授权）', async () => {
     const { f, auth } = await authorizedFixture()
     await patchPolicy(f, { policy_version: 99 })
     expect(f.tables.client_automation_policies[0].policy_version).toBe(1)
-    const result = await executeAuthorizedRun(f.kernel, auth.ctx!)
+    const result = await executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))
     expect(result.status).toBe('succeeded')
   })
 

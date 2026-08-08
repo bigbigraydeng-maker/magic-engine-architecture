@@ -192,7 +192,7 @@ describe('T1 · 崩在中间态之后能被接管', () => {
     expect(Number(runRow(f).reclaim_count)).toBe(1)
   })
 
-  it('F · 赢家已经 running / succeeded → 迟到的接管请求拿不走，也不会把状态倒退', async () => {
+  it('F · 终态拿不走；running 只有租约过期才拿得走（租约还活着就是「真的有人在跑」）', async () => {
     const f = fixture()
     const done = await runAction(f.kernel, submit())
     expect(done.kind).toBe('succeeded')
@@ -206,16 +206,30 @@ describe('T1 · 崩在中间态之后能被接管', () => {
     expect(late.reason).toBe('not_claimable:succeeded')
     expect(runRow(f).status).toBe('succeeded')
 
-    // running 同理：执行权已经被 kernel_begin_authorized_run 原子领走了
-    runRow(f).status = 'running'
+    // running + 租约还活着 → 抢不走
+    simulateCrash(f, 'running', LEASE * 1000)
     const duringRun = await claimOrTakeoverRun(f.supabase, {
       runId: done.run.id,
       ownerId: 'late-comer#9',
       leaseSeconds: LEASE,
     })
     expect(duringRun.ok).toBe(false)
-    expect(duringRun.reason).toBe('not_claimable:running')
+    expect(duringRun.reason).toBe(`already_owned:${DEAD}`)
     expect(runRow(f).status).toBe('running')
+
+    // 🔴 但租约过期之后**必须**拿得走 —— 否则崩在执行中的 run 永远没人能接手，
+    //    正是租约要修的那个「永久锁死」，只是换了个状态待着。
+    advancePastLease(f)
+    const afterExpiry = await claimOrTakeoverRun(f.supabase, {
+      runId: done.run.id,
+      ownerId: 'late-comer#9',
+      leaseSeconds: LEASE,
+    })
+    expect(afterExpiry.ok).toBe(true)
+    expect(afterExpiry.resetSteps).toBe(true)
+    // 接管一个 running 的 run = 放回可重新授权的状态（授权已被上一代兑换掉）
+    expect(afterExpiry.runStatus).toBe('queued')
+    expect(runRow(f).authorization_decision_id).toBeNull()
   })
 
   it('G · 恢复提交之后崩溃 → 那条 queued 仍然能被接走（不是僵尸）', async () => {
@@ -260,9 +274,9 @@ describe('T1 · 接管 RPC 每一道闸单独可咬', () => {
     return { f, runId: run.id }
   }
 
-  it('🔴 状态闸：终态和 running 一律领不到（各自单独可测）', async () => {
+  it('🔴 状态闸：终态和等审批一律领不到（各自单独可测）', async () => {
     const { f, runId } = await preparedRun()
-    for (const status of ['succeeded', 'denied', 'dead_letter', 'running', 'pending_approval', 'superseded']) {
+    for (const status of ['succeeded', 'denied', 'dead_letter', 'pending_approval', 'superseded']) {
       runRow(f).status = status
       const r = await claimOrTakeoverRun(f.supabase, { runId, ownerId: 'x#1', leaseSeconds: LEASE })
       expect(r.ok, `${status} 不该能被领走`).toBe(false)
@@ -270,15 +284,17 @@ describe('T1 · 接管 RPC 每一道闸单独可咬', () => {
     }
   })
 
-  it('🔴 状态闸：三个中间态都领得到', async () => {
+  it('🔴 状态闸：四个可接管状态都领得到（含 running）', async () => {
     const { f, runId } = await preparedRun()
-    for (const status of ['queued', 'authorizing', 'authorized']) {
+    for (const status of ['queued', 'authorizing', 'authorized', 'running']) {
       runRow(f).claimed_by = null
       runRow(f).lease_expires_at = null
       runRow(f).status = status
       const r = await claimOrTakeoverRun(f.supabase, { runId, ownerId: 'x#1', leaseSeconds: LEASE })
       expect(r.ok, `${status} 该领得到`).toBe(true)
-      expect(r.runStatus).toBe(status)
+      // 接管一个 running 的 run 会把它放回 queued（授权已被上一代兑换掉，得重新签）
+      expect(r.runStatus).toBe(status === 'running' ? 'queued' : status)
+      expect(r.resetSteps).toBe(status === 'running')
     }
   })
 

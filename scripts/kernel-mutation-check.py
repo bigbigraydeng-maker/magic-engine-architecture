@@ -222,12 +222,17 @@ MUTATIONS = [
         expect_fail_contains="断点续跑",
     ),
     dict(
-        name="不再累计步骤实际花费（成本上限形同虚设）",
+        # 🔴 注意这条**不是**打那句事后的 `spent > cap` 断言 —— 硬上限做完之后
+        #    （remaining >= max 且 actual <= max ⇒ spent + actual <= cap），
+        #    那句断言在正常路径上**不可达**，因此拿不到变异覆盖。这一点在
+        #    PR 描述和 spec 里都明说了，不拿一条永远绿的探针冒充覆盖。
+        #    真正该盯的是 spent 的累加：它喂的是**下一步的预检**。
+        name="run 层不再累计已花金额（下一步的预检就瞎了）",
         file="src/lib/kernel/gateway.ts",
-        old="""        if (ctx.costCapUsd !== null && spent > ctx.costCapUsd) {""",
-        new="""        if (false) {""",
-        test="src/lib/kernel/__tests__/gateway.test.ts",
-        expect_fail_contains="花钱",
+        old="""        spent += cost""",
+        new="""        // mutated: 不再累计""",
+        test="src/lib/kernel/__tests__/cost-persistence.test.ts",
+        expect_fail_contains="装不进剩下的",
     ),
     dict(
         name="没建模的表返回空数组而不是抛错（假件退回旧毛病）",
@@ -622,7 +627,7 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         file="src/lib/kernel/gateway.ts",
         old="""        stepCostSoFar += cost
         const observedAt = deps.now().toISOString()
-        await updateStep(deps.supabase, step.id, {
+        await writeStep(step.id, {
           attempt,
           output: result.output,
           verification: result.verification ?? null,
@@ -654,9 +659,13 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
     dict(
         name="S3/T2 整个拆掉开跑前那道预算闸（超了还再花一次才发现）",
         file="src/lib/kernel/gateway.ts",
-        old="""    const budgetBlock = nextStepBlockedByBudget(definition, args.run, ctx.costCapUsd, spent, stepKey)
+        old="""    const budgetBlock = nextStepBlockedByBudget(
+      definition, args.run, ctx.costCapUsd, spent, stepKey, stepSpentSoFar,
+    )
     if (budgetBlock) {""",
-        new="""    const budgetBlock = nextStepBlockedByBudget(definition, args.run, ctx.costCapUsd, spent, stepKey)
+        new="""    const budgetBlock = nextStepBlockedByBudget(
+      definition, args.run, ctx.costCapUsd, spent, stepKey, stepSpentSoFar,
+    )
     if (false) {""",
         test="src/lib/kernel/__tests__/cost-persistence.test.ts",
         expect_fail_contains="一次都不许再调",
@@ -700,13 +709,13 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         # 这条专打「按下一条语句切片」的写法：调换顺序后那种切法会切出空串，
         # 而 expect('').not.toContain(...) 恒真 —— 断言静默失效，抹钱就混过去了。
         old="""  UPDATE public.action_run_steps
-     SET status          = 'pending',
-         last_error      = NULL,
-         next_attempt_at = NULL,
-         finished_at     = NULL,
+     SET status          = CASE WHEN status <> 'succeeded' THEN 'pending' ELSE status END,
+         last_error      = CASE WHEN status <> 'succeeded' THEN NULL ELSE last_error END,
+         next_attempt_at = CASE WHEN status <> 'succeeded' THEN NULL ELSE next_attempt_at END,
+         finished_at     = CASE WHEN status <> 'succeeded' THEN NULL ELSE finished_at END,
+         claim_generation = v_run.claim_generation + 1,
          updated_at      = now()
-   WHERE run_id = v_run.id
-     AND status <> 'succeeded';
+   WHERE run_id = v_run.id;
 
   UPDATE public.action_runs
      SET status = 'queued',""",
@@ -726,8 +735,7 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
          finished_at     = NULL,
          cost_actual_usd = 0,
          updated_at      = now()
-   WHERE run_id = v_run.id
-     AND status <> 'succeeded';
+   WHERE run_id = v_run.id;
 
   RETURN QUERY SELECT true, 'claimed';""",
         test="src/lib/kernel/__tests__/architecture.test.ts",
@@ -765,20 +773,20 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         expect_fail_contains="偷不走",
     ),
     dict(
-        name="T1 假件去掉状态白名单（终态 / running 也能被接管）",
+        name="T1 假件去掉状态白名单（终态也能被接管）",
         file="src/lib/kernel/__tests__/fake-supabase.ts",
-        old="""    if (!['queued', 'authorizing', 'authorized'].includes(String(run.status))) {""",
+        old="""    if (!['queued', 'authorizing', 'authorized', 'running'].includes(String(run.status))) {""",
         new="""    if (false) {""",
         test="src/lib/kernel/__tests__/lease-takeover.test.ts",
-        expect_fail_contains="拿不走",
+        expect_fail_contains="终态拿不走",
     ),
     dict(
         name="T1 接管 authorized 时重新签一份授权（审计表出现两个「谁批的」）",
         file="src/lib/kernel/runner.ts",
         old="""    const reused = await reuseLiveAuthorization(deps, owned)
-    if (reused?.ctx) return executeAndWrap(deps, reused.decision, reused.ctx)""",
+    if (reused?.ctx) return executeAndWrap(deps, reused.decision, reused.ctx, fence)""",
         new="""    const reused = null
-    if (reused) return executeAndWrap(deps, reused, reused)""",
+    if (reused) return executeAndWrap(deps, reused, reused, fence)""",
         test="src/lib/kernel/__tests__/lease-takeover.test.ts",
         expect_fail_contains="复用",
     ),
@@ -841,10 +849,16 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         file="supabase/migrations/20260808000003_me2_execution_kernel_v1.sql",
         old="""  SELECT * INTO v_run FROM public.action_runs WHERE id = p_run_id FOR UPDATE;
   IF NOT FOUND THEN
-    RETURN QUERY SELECT false, 'run_not_found', NULL::text, NULL::uuid, false, 0; RETURN;""",
+    RETURN QUERY SELECT false, 'run_not_found', NULL::text, NULL::uuid, false, 0, NULL::bigint, false; RETURN;
+  END IF;
+
+  -- ② 状态白名单。""",
         new="""  SELECT * INTO v_run FROM public.action_runs WHERE id = p_run_id;
   IF NOT FOUND THEN
-    RETURN QUERY SELECT false, 'run_not_found', NULL::text, NULL::uuid, false, 0; RETURN;""",
+    RETURN QUERY SELECT false, 'run_not_found', NULL::text, NULL::uuid, false, 0, NULL::bigint, false; RETURN;
+  END IF;
+
+  -- ② 状态白名单。""",
         test="src/lib/kernel/__tests__/architecture.test.ts",
         expect_fail_contains="锁",
     ),
@@ -852,7 +866,9 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
     dict(
         name="T2 预检退回 strict spent > cap（等号边界照花钱）",
         file="src/lib/kernel/gateway.ts",
-        old="""    const budgetBlock = nextStepBlockedByBudget(definition, args.run, ctx.costCapUsd, spent, stepKey)""",
+        old="""    const budgetBlock = nextStepBlockedByBudget(
+      definition, args.run, ctx.costCapUsd, spent, stepKey, stepSpentSoFar,
+    )""",
         new="""    const budgetBlock =
       ctx.costCapUsd !== null && spent > ctx.costCapUsd
         ? { humanReason: '超预算，这一步不开跑', detail: {} }
@@ -863,21 +879,15 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
     dict(
         name="T2 预检改成 spent >= cap（把零成本能力全部拦死）",
         file="src/lib/kernel/gateway.ts",
-        old="""    const budgetBlock = nextStepBlockedByBudget(definition, args.run, ctx.costCapUsd, spent, stepKey)""",
+        old="""    const budgetBlock = nextStepBlockedByBudget(
+      definition, args.run, ctx.costCapUsd, spent, stepKey, stepSpentSoFar,
+    )""",
         new="""    const budgetBlock =
       ctx.costCapUsd !== null && spent >= ctx.costCapUsd
         ? { humanReason: '超预算，这一步不开跑', detail: {} }
         : null""",
         test="src/lib/kernel/__tests__/safe-capability.test.ts",
         expect_fail_contains="",
-    ),
-    dict(
-        name="T2 未知成本 + 预算见底时放行（fail open）",
-        file="src/lib/kernel/gateway.ts",
-        old="""  if (remaining <= COST_EPSILON) {""",
-        new="""  if (false) {""",
-        test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
-        expect_fail_contains="预算见底",
     ),
     dict(
         name="T2 每步上界不看契约声明（只剩「整个动作免费」那条兜底）",
@@ -921,6 +931,140 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         new="""      cost_actual_usd >= 0""",
         test="src/lib/kernel/__tests__/architecture.test.ts",
         expect_fail_contains="NaN",
+    ),
+    # ── F1：stale-worker fencing（代际） ──────────────────────────────────
+    dict(
+        name="F1 步骤写入去掉代际守卫（过期执行者照样覆盖结果）",
+        file="src/lib/kernel/store.ts",
+        old="""    .eq('id', stepId)
+    .eq('claim_generation', expectedGeneration)""",
+        new="""    .eq('id', stepId)""",
+        test="src/lib/kernel/__tests__/stale-worker-fencing.test.ts",
+        expect_fail_contains="影响 0 行",
+    ),
+    dict(
+        name="F1 run 写入去掉代际守卫（过期执行者能把 run 写成终态）",
+        file="src/lib/kernel/store.ts",
+        old="""    .eq('id', runId)
+    .eq('claim_generation', expectedGeneration)""",
+        new="""    .eq('id', runId)""",
+        test="src/lib/kernel/__tests__/stale-worker-fencing.test.ts",
+        expect_fail_contains="run 终态",
+    ),
+    dict(
+        name="F1 兑换授权不再出示代际（过期执行者能把授权用掉）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (expectedGeneration !== null && Number(run.claim_generation ?? 0) !== expectedGeneration) {
+      return no(`stale_generation:${String(run.claim_generation ?? 0)}`)
+    }""",
+        new="""    // mutated: 不再检查代际""",
+        test="src/lib/kernel/__tests__/stale-worker-fencing.test.ts",
+        expect_fail_contains="授权一个字没动",
+    ),
+    dict(
+        name="F1 接管不换代（旧执行者醒来照样能写）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    const nextGen = Number(run.claim_generation ?? 0) + (changedHands ? 1 : 0)""",
+        new="""    const nextGen = Number(run.claim_generation ?? 0)""",
+        test="src/lib/kernel/__tests__/stale-worker-fencing.test.ts",
+        expect_fail_contains="",
+    ),
+    dict(
+        name="F1 接管不把新代际推到步骤上（旧 step 行还认旧代）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (changedHands) {
+      for (const st of tableOf('action_run_steps')) {
+        if (st.run_id !== run.id) continue
+        st.claim_generation = nextGen
+        st.updated_at = nowIso
+      }
+    }""",
+        new="""    // mutated: 不推代际到步骤""",
+        test="src/lib/kernel/__tests__/stale-worker-fencing.test.ts",
+        expect_fail_contains="影响 0 行",
+    ),
+    dict(
+        name="F1 接管 RPC 去掉代际 CAS（旧调用复活后能续租）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (expectedGeneration !== null && Number(run.claim_generation ?? 0) !== expectedGeneration) {
+      return no(`stale_generation:${String(run.claim_generation ?? 0)}`, run)
+    }""",
+        new="""    // mutated: 不再检查代际""",
+        test="src/lib/kernel/__tests__/stale-worker-fencing.test.ts",
+        expect_fail_contains="续租",
+    ),
+    dict(
+        name="F1 running 一律不可接管（崩在执行中就永远卡死）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (!['queued', 'authorizing', 'authorized', 'running'].includes(String(run.status))) {""",
+        new="""    if (!['queued', 'authorizing', 'authorized'].includes(String(run.status))) {""",
+        test="src/lib/kernel/__tests__/stale-worker-fencing.test.ts",
+        expect_fail_contains="running 崩溃也能被接管",
+    ),
+    dict(
+        name="F1 SQL 里 running 不在可接管白名单",
+        file="supabase/migrations/20260808000003_me2_execution_kernel_v1.sql",
+        old="""  IF v_run.status NOT IN ('queued','authorizing','authorized','running') THEN""",
+        new="""  IF v_run.status NOT IN ('queued','authorizing','authorized') THEN""",
+        test="src/lib/kernel/__tests__/architecture.test.ts",
+        expect_fail_contains="白名单",
+    ),
+    dict(
+        name="F1 幂等键带上 attempt（每次重试换一张收据）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  return `${run.client_id}:${run.idempotency_key}:${stepKey}`""",
+        new="""  return `${run.client_id}:${run.idempotency_key}:${stepKey}:${String(Math.random())}`""",
+        test="src/lib/kernel/__tests__/stale-worker-fencing.test.ts",
+        expect_fail_contains="同一把键",
+    ),
+    # ── T2b：成本硬上限 ──────────────────────────────────────────────────
+    dict(
+        name="T2b 预检不看每步声明的上限（退回只比累计值）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  if (ceiling === null) {
+    return {
+      humanReason:
+        `「${stepKey}」没有声明它最多会花多少钱，而这个动作声明了会花钱 —— ` +""",
+        new="""  if (false) {
+    return {
+      humanReason:
+        `「${stepKey}」没有声明它最多会花多少钱，而这个动作声明了会花钱 —— ` +""",
+        test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
+        expect_fail_contains="说不出上界",
+    ),
+    dict(
+        name="T2b actual 超过声明上限也放行（声明退化成许愿）",
+        file="src/lib/kernel/gateway.ts",
+        old="""        if (declaredMax !== null && stepCostSoFar - declaredMax > COST_EPSILON) {""",
+        new="""        if (false) {""",
+        test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
+        expect_fail_contains="契约违约",
+    ),
+    dict(
+        name="T2b 上限按「每次尝试」算而不是「这一步总共」（重试 N 次能花 N 倍）",
+        file="src/lib/kernel/gateway.ts",
+        old="""        if (declaredMax !== null && stepCostSoFar - declaredMax > COST_EPSILON) {""",
+        new="""        if (declaredMax !== null && cost - declaredMax > COST_EPSILON) {""",
+        test="src/lib/kernel/__tests__/cost-persistence.test.ts",
+        expect_fail_contains="顶破声明上限",
+    ),
+    dict(
+        name="T2b 预检不扣掉这一步已经花掉的（断点续跑被误拦）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  const ceiling = declaredMax === null ? null : Math.max(0, declaredMax - stepSpentSoFar)""",
+        new="""  const ceiling = declaredMax""",
+        test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
+        expect_fail_contains="扣掉这一步已经花掉的",
+    ),
+    dict(
+        name="T2b 声明值不校验合法性（NaN 上限能绕过整道闸）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  const declared = definition.costModel.stepCeilingUsd?.[stepKey]
+  if (isRealCostAmount(declared)) return declared""",
+        new="""  const declared = definition.costModel.stepCeilingUsd?.[stepKey]
+  if (typeof declared === 'number') return declared""",
+        test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
+        expect_fail_contains="",
     ),
     # ── P1-4：migration 版本撞车 ─────────────────────────────────────────
     dict(

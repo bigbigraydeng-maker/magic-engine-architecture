@@ -17,7 +17,7 @@ import { executeAuthorizedRun } from '../gateway'
 import { ACTION_REGISTRY } from '../registry'
 import { createCapabilities, computeBlogContentHash } from '@/lib/capabilities'
 import type { BlogDraftRow } from '@/lib/capabilities/seo/build-publish-package'
-import { makeFixture, CLIENT_A, GOAL_A, POST_A, BLOG_DRAFT } from './fixtures'
+import { makeFixture, CLIENT_A, GOAL_A, POST_A, BLOG_DRAFT, liveFence } from './fixtures'
 
 const KEY = 'seo.build_publish_package'
 const HASH = computeBlogContentHash(BLOG_DRAFT as unknown as BlogDraftRow)
@@ -132,8 +132,8 @@ describe('P1-2 · 并发提交同一件事', () => {
     expect(f.tables.authorization_decisions.filter((d) => d.verdict === 'allow')).toHaveLength(2)
 
     const settled = await Promise.allSettled([
-      executeAuthorizedRun(f.kernel, first.ctx!),
-      executeAuthorizedRun(f.kernel, second.ctx!),
+      executeAuthorizedRun(f.kernel, first.ctx!, liveFence(f)),
+      executeAuthorizedRun(f.kernel, second.ctx!, liveFence(f)),
     ])
 
     // 只有 run 当前指着的那份（second）能领到执行权

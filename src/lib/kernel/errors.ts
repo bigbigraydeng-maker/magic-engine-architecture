@@ -46,6 +46,17 @@ export type KernelErrorCode =
    *    一律 fail closed，且这个数字**不进账本**。
    */
   | 'INVALID_COST'
+  /**
+   * 实际花费超过了契约自己声明的每步上限。
+   * 🔴 这不是「估得不准」——预检放行的依据就是那个上限，
+   *    上限不作数 = 硬上限失效。停手，但钱照样如实记账。
+   */
+  | 'COST_CONTRACT_VIOLATION'
+  /**
+   * 🔴 这次执行的所有权已经被别人接管（fencing）。
+   *    过期的执行者一个字都不许写 —— 影响 0 行必须当失败，不能当「没什么好写的」。
+   */
+  | 'STALE_CLAIM'
 
 export class KernelError extends Error {
   readonly code: KernelErrorCode

@@ -190,18 +190,18 @@ describe('T2 · 等号边界：已花 == 上限', () => {
     expect(f.tables.production_packages).toHaveLength(1)
   })
 
-  it('🔴 估得进、实际超 → handler 照跑，但实际花费落库后停手', async () => {
-    // 声明上界 1（进得去），实际却花了 3
+  it('🔴 声明最多 1、实际花了 3 → 契约违约（不是「估得不准」），钱照样记账', async () => {
     const { f, bCalls } = edgeFixture({ cap: 4, bCeiling: 1, bCost: 3 })
 
     const out = await runAction(f.kernel, submit())
 
-    expect(bCalls).toHaveBeenCalledTimes(1) // 预检是估算，不是账本
+    expect(bCalls).toHaveBeenCalledTimes(1) // 预检按声明放行，它没超过 remaining
     expect(out.kind).toBe('dead_letter')
-    expect(out.execution?.failure?.code).toBe('COST_CAP_EXCEEDED')
-    // 真实花费必须落库（账本认的是 actual，不是 estimate）
+    // 🔴 上限不作数了 = 预检那道硬闸失去依据，必须当成违约停手
+    expect(out.execution?.failure?.code).toBe('COST_CONTRACT_VIOLATION')
+    // 账本认的是 actual：如实记 3。不记账才危险 —— 重跑会从低估的数字起算。
     expect(stepCost(f, 'b')).toBe(3)
-    expect(out.execution?.failure?.humanReason).not.toContain('这一步不开跑')
+    expect(out.execution?.failure?.humanReason).toContain('声明最多花')
   })
 
   it('🔴 死信重跑撞在等号边界上 → 一分钱都不许再花', async () => {
@@ -219,41 +219,125 @@ describe('T2 · 等号边界：已花 == 上限', () => {
     expect(stepCost(f, 'a')).toBe(2) // 历史花费一分没变
   })
 
-  it('没声明上界、整个动作也不是零成本 → 只在预算见底时 fail closed', async () => {
-    /** a 花掉 0.5；b 没声明上界（= 成本未知）。 */
+  it('🔴 说不出上界的付费步骤 → 不管还剩多少钱都 fail closed', async () => {
+    // 「还有余额就先跑，跑完再看超没超」等于承认预检不是硬上限。
+    // 契约既然声明这个动作会花钱，就必须说清每一步最多花多少；说不清就别开跑。
     const make = (cap: number) => {
-      const bCalls = vi.fn()
+      const calls = vi.fn()
       const f = makeFixture({
         registry: makeRegistry([
-          // 没有 stepCeilingUsd，且 estimate 是正数 → 每一步的成本都算「未知」
-          definition({ costModel: { kind: 'fixed', estimate: () => 0.5 } }),
+          // 没有 stepCeilingUsd，且 estimate 是正数 → 每一步的成本都算「说不出」
+          definition({ steps: ['a'], costModel: { kind: 'fixed', estimate: () => 0.5 } }),
         ]),
         capabilities: () => ({
           [KEY]: capabilityOf({
-            a: async () => ({ output: { a: 1 }, costActualUsd: 0.5 }),
-            b: async () => {
-              bCalls()
+            a: async () => {
+              calls()
               return { output: { done: true }, costActualUsd: 0 }
             },
           }),
         }),
         options: { policy: policyWithCap(cap) },
       })
-      return { f, bCalls }
+      return { f, calls }
     }
 
-    // 还有余额（1 - 0.5 = 0.5）→ 不拦。拦了等于把所有没声明成本的动作全废掉。
-    const loose = make(1)
-    expect((await runAction(loose.f.kernel, submit())).kind).toBe('succeeded')
-    expect(loose.bCalls).toHaveBeenCalledTimes(1)
+    // 预算绰绰有余（100）也照样拦
+    const loose = make(100)
+    const out1 = await runAction(loose.f.kernel, submit())
+    expect(out1.kind).toBe('dead_letter')
+    expect(out1.execution?.failure?.code).toBe('COST_CAP_EXCEEDED')
+    expect(loose.calls).not.toHaveBeenCalled()
+    expect(out1.execution?.failure?.humanReason).toContain('没有声明它最多会花多少钱')
 
-    // 预算刚好见底（0.5 - 0.5 = 0）+ 成本未知 → fail closed
+    // 预算刚好见底同样拦（这一半跟以前一致）
     const tight = make(0.5)
-    const out = await runAction(tight.f.kernel, submit())
-    expect(out.kind).toBe('dead_letter')
-    expect(out.execution?.failure?.code).toBe('COST_CAP_EXCEEDED')
-    expect(tight.bCalls).not.toHaveBeenCalled()
-    expect(out.execution?.failure?.humanReason).toContain('没有声明成本上界')
+    const out2 = await runAction(tight.f.kernel, submit())
+    expect(out2.kind).toBe('dead_letter')
+    expect(tight.calls).not.toHaveBeenCalled()
+  })
+
+  it('🔴 remaining 恰好等于声明上限 → 放行；差最小一点点 → handler 一次不调', async () => {
+    // 等号是够的；不够就是不够。这两条把边界钉死在同一个位置上。
+    const exact = edgeFixture({ cap: 3, bCeiling: 1, bCost: 1 }) // a 花 2，剩 1，b 要 1
+    const outExact = await runAction(exact.f.kernel, submit())
+    expect(outExact.kind).toBe('succeeded')
+    expect(exact.bCalls).toHaveBeenCalledTimes(1)
+
+    const short = edgeFixture({ cap: 2.999, bCeiling: 1, bCost: 1 }) // 剩 0.999 < 1
+    const outShort = await runAction(short.f.kernel, submit())
+    expect(outShort.kind).toBe('dead_letter')
+    expect(short.bCalls).not.toHaveBeenCalled()
+  })
+})
+
+describe('T2 · 声明本身也得是个真实金额，且断点续跑要扣掉已花的', () => {
+  it('🔴 声明的上限是 NaN / 负数 / Infinity → 当成「没声明」，付费步骤 fail closed', async () => {
+    for (const bogus of [Number.NaN, -1, Number.POSITIVE_INFINITY]) {
+      const calls = vi.fn()
+      const f = makeFixture({
+        registry: makeRegistry([
+          definition({
+            steps: ['a'],
+            costModel: { kind: 'fixed', estimate: () => 1, stepCeilingUsd: { a: bogus } },
+          }),
+        ]),
+        capabilities: () => ({
+          [KEY]: capabilityOf({
+            a: async () => {
+              calls()
+              return { output: { done: true }, costActualUsd: 0 }
+            },
+          }),
+        }),
+        options: { policy: policyWithCap(100) },
+      })
+
+      const out = await runAction(f.kernel, submit())
+      expect(out.kind, `声明 ${String(bogus)} 不该被当成有效上限`).toBe('dead_letter')
+      expect(out.execution?.failure?.humanReason).toContain('没有声明它最多会花多少钱')
+      expect(calls).not.toHaveBeenCalled()
+    }
+  })
+
+  it('🔴 断点续跑：预检要扣掉这一步已经花掉的，否则合法的续跑会被误拦', async () => {
+    // 上限 1.2 = 这一步的声明上限。第一次花了 0.4 就死信；
+    // 续跑时「还可能再花」是 1.2 − 0.4 = 0.8，刚好等于剩下的 0.8 → 该放行。
+    // 不扣的话会拿 1.2 跟 0.8 比 → 误拦，这条动作永远跑不完。
+    let calls = 0
+    const f = makeFixture({
+      registry: makeRegistry([
+        definition({
+          steps: ['a'],
+          verification: { method: 'package_integrity', delayMs: 0 },
+          costModel: { kind: 'fixed', estimate: () => 1.2, stepCeilingUsd: { a: 1.2 } },
+        }),
+      ]),
+      capabilities: () => ({
+        [KEY]: capabilityOf({
+          a: async () => {
+            calls += 1
+            return {
+              output: { done: true },
+              costActualUsd: 0.4,
+              verification:
+                calls < 2
+                  ? { method: 'package_integrity' as const, passed: false, checks: [], failure_reason: '没验过' }
+                  : { method: 'package_integrity' as const, passed: true, checks: [] },
+            }
+          },
+        }),
+      }),
+      options: { policy: policyWithCap(1.2) },
+    })
+
+    const first = await runAction(f.kernel, submit())
+    expect(first.kind).toBe('dead_letter')
+    expect(stepCost(f, 'a')).toBe(0.4)
+
+    const resumed = await resumeDeadLetterRun(f.kernel, first.run.id, 'ray@magiclab')
+    expect(resumed.kind).toBe('succeeded')
+    expect(stepCost(f, 'a')).toBeCloseTo(0.8, 10)
   })
 })
 

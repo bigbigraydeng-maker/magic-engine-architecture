@@ -12,6 +12,8 @@
 > executionItem 跨客户双层防护 · 死信前先落 cost/verification + 成本累计语义。
 > 第六轮（Codex review 4）：中间态 run 的租约 / 接管（`kernel_claim_or_takeover_run`）·
 > 开跑前的预算闸结合「下一步要花多少」· 花费金额的合法性双层校验。
+> 第七轮（Codex review 5）：**stale-worker fencing（单调代际）** · `running` 也可接管 ·
+> 成本声明改成**硬上限** · step 级外部幂等键。
 
 ---
 
@@ -168,6 +170,70 @@ owner 早就走了的僵尸租约，把真正要来推进的人挡成「已经�
 
 🔴 本 PR **不做** scheduler / cron / worker —— 只提供接管 primitive。
 
+### 🔴 光有租约不够：旧执行者必须被真正隔离（F1）
+
+**光有 owner 字符串挡不住任何东西。** 危险时序：
+
+1. A 领到租约和授权；2. A 开始推进某一步但卡住；3. A 的租约到期；
+4. B 接管；5. **A 醒过来**；6. A 手里的 `step_id` / `run_id` / `decision_id`
+**在接管之后依然有效** —— 任何「按 id 更新」的语句它照写不误。
+
+所以 `action_runs.claim_generation`（bigint，单调递增，**只在换人时 +1**）是 fencing token。
+每一次**推进性写入**都要出示它：
+
+| 写什么 | 怎么挡 |
+|---|---|
+| step 的状态 / 产物 / 花费 / 验证 | `UPDATE … WHERE id = ? AND claim_generation = ?` → 影响 0 行 |
+| run 的 `authorizing` / `authorized` / `pending_approval` / `succeeded` / `dead_letter` | 同上（`updateRunFenced`） |
+| **兑换授权**（`kernel_begin_authorized_run`） | RPC 里的代际 CAS —— 兑换是**不可逆**的，尤其不能让过期的执行者用掉 |
+| 续租 / 再领一次 | `kernel_claim_or_takeover_run` 的 `p_expected_generation` CAS |
+
+影响 0 行**必须当失败**（抛 `STALE_CLAIM`），不能当「没什么好写的」——
+那正是这个仓库反复踩的静默失效形状。
+
+**为什么是代际而不是只比 owner 字符串**：owner 相等只能说明「名字一样」。
+代际单调递增 ⇒ **不存在 ABA**：A 那一代一旦被跳过就永远回不来
+（哪怕 A 后来重新领到，那也是更大的一代）。`action_run_steps` 上也有同一列，
+换人时由 RPC 在**同一个事务**里统一改写 —— 包括已经成功的步骤，
+否则旧执行者还能把它改回失败。
+
+**`running` 也必须可接管。** 早先把 `running` 一律排除，理由是「执行权已经被原子领走」。
+那是个更糟的洞：执行者崩在半路，这条 run 就永远停在 `running`，
+没有任何人能接手，调用方永远只拿到 `in_progress` —— 正是租约要修的那个
+「幂等键把这件事永久锁死」，只是换了个状态待着。
+现在 `running` 在白名单里，但**只有租约过期才轮得到**；接管一个 `running` 的 run
+= 放回 `queued` + 清掉决策指针 + 没跑成的步骤放回待跑（授权已被上一代兑换掉，
+必须重新签），已成功的步骤和 `cost_actual_usd` 一概不动。
+
+### 🔴 我们到底保证什么（不要把 at-least-once 说成 exactly-once）
+
+| 层面 | 保证 | 靠什么 |
+|---|---|---|
+| **数据库记账** | **at-most-once** —— 过期的执行者一个字都写不进去 | 代际 fencing |
+| **授权兑换** | **exactly-once** —— 一份 allow 只能换一次执行 | `consumed_at` + run 行锁 + 代际 CAS |
+| **capability handler 的调用** | **at-least-once** —— 崩溃后接管者会重跑那一步 | 断点续跑（已成功的步骤不重跑） |
+| **外部 provider 的副作用** | **取决于 provider** —— 见下 | step 级幂等键 |
+
+**外部副作用这一格必须说清楚。** fencing 拦得住「把结果记进库」，
+拦不住 A **已经发出去**的那个 provider 调用。所以 Kernel 能做的是：
+每次调用都出示**同一把 step 级幂等键**
+
+```
+`${run.client_id}:${run.idempotency_key}:${stepKey}`
+```
+
+它**跨重试、跨死信重跑、跨接管都不变**（刻意不含 attempt、不含代际）。
+
+- provider 认这把键 → 端到端 **effectively-once**；
+- provider 不认 → 端到端只有 **at-least-once**，重跑可能产生第二次外部副作用。
+
+**这一条不能靠「租约已经解决了」糊过去。** v1 唯一上线的能力
+（`seo.build_publish_package`）是纯内部写、零外部调用、零成本，所以这个缺口
+现在**不会**造成任何真实影响。但**接第一个真正调外部 provider 的能力之前**，
+必须逐个 provider 确认它支不支持幂等键；不支持的，要么不接，
+要么在契约里显式标注「这个动作只能保证 at-least-once」并让授权层按此判风险。
+这是一条 Enable 前的硬前提，见 §7.2 E7。
+
 ### 🔴 执行卡片必须属于同一个客户（S2）
 
 跟 Goal 完全同一个洞。应用层查 `execution_items.client_id`；
@@ -198,6 +264,38 @@ run 层的 `spent` 从各步骤已持久化的花费之和起算。
 | 跑完之后（handler 返回、事实落库之后） | 估得进、实际超了 → 停手且不重试 |
 
 只有后者的话，死信重跑会**先再花一次钱**才发现超了 —— 原来那条上限对重跑完全失效。
+
+### 🔴 成本声明是**硬上限**，不是预测值（T2 / T2b）
+
+`costModel.stepCeilingUsd[stepKey]` 的语义是：**这一步（含全部重试）最多花多少**。
+两端同时成立，硬上限才成立：
+
+| 时机 | 判据 |
+|---|---|
+| 开跑前 | `remaining >= declaredMax − 这一步已经花掉的` —— 装不下就**不开跑** |
+| 跑完后 | `这一步的累计 <= declaredMax` —— 超了就是 `COST_CONTRACT_VIOLATION` |
+
+两条一起给出不变量：`spent + 这一步还会花的 <= cap`，**恒成立**。
+所以那条事后的 `spent > cap` 检查现在是**兜底断言** —— 前两道闸完好时它永远不触发，
+留着是因为「不变量被打破」必须停手而不是继续跑。
+
+三个容易写错的点：
+
+1. **口径是「这一步的总花费」，不是「每次尝试最多花多少」。** 按每次算的话，
+   重试 N 次就能花到 N × max，硬上限当场失效。
+2. **预检要扣掉这一步已经花掉的**（`declaredMax − stepSpentSoFar`），
+   否则合法的断点续跑会被误拦，这条动作永远跑不完。
+3. **声明值本身也要是真实金额**（finite 且 >= 0）。NaN / Infinity / 负数一律当成
+   「没声明」—— 否则一条烂声明就能把整道闸绕过去。
+
+**说不出上界的付费步骤一律 fail closed**，不管还剩多少钱。
+「还有余额就先跑、跑完再看超没超」等于承认预检不是硬上限。
+契约既然声明这个动作会花钱，就必须说清每一步最多花多少；说不清就别开跑。
+（整个动作 `estimate` 为 0 的，每一步上界就是 0 —— 当前唯一上线的能力属于这一类。）
+
+**实际花费超出声明上限时，钱照样记账。** 不记账才是危险方向：
+库里少记一笔，重跑就从低估的数字起算，同一笔预算能被再花一次（正是 S3 修的洞）。
+多记只会让后面的闸更严。
 
 ### 🔴 开跑前那道闸必须结合「下一步要花多少」（T2）
 
@@ -577,5 +675,6 @@ ALTER TABLE public.flywheel_actions DROP COLUMN IF EXISTS action_run_id;
 | 6 | L3（受限 Postgres 角色）未评估 | ADR-002 已裁定不阻塞 v1，单独出 Security ADR |
 | 7 | **`approvedByUser` 现在只是一个字符串参数** | 真正接 API / UI 时**必须**从认证过的会话 / 操作者身份取，绝不能信任请求体。现在没有调用方，所以还没有可被伪造的入口 |
 | 8 | **`effective_to` 的完整时间窗语义还没做** | `getActivePolicy` 目前只取 `effective_to IS NULL` 的行，然后在授权层判过期。有限期政策的完整 UX 留给 Settings UI PR |
-| 9 | 卡在 `queued` 的孤儿 run 没有回收 | 首次提交后进程崩在授权之前，这条 run 会一直停在 `queued`，而后续提交只会拿到 `in_progress`。需要一个 `purpose='recovery'` 的清扫任务 —— 留给启用 PR（现在没有调用方，构不成实际问题） |
+| ~~9~~ | ~~卡在 `queued` 的孤儿 run 没有回收~~ | ✅ **已解决**（第六 / 第七轮）：租约 + `kernel_claim_or_takeover_run` + 代际 fencing，四个中间态（含 `running`）都能被安全接管。**仍不做主动清扫（cron / worker）** —— 接管由下一次同键提交触发；将来要加清扫，查询条件是 `status IN (四个中间态) AND lease_expires_at < now()`，`idx_action_runs_lease` 就是为它建的 |
+| 11 | 🔴 **外部副作用的 exactly-once 取决于 provider，Kernel 给不了** | Kernel 保证：数据库记账 at-most-once、授权兑换 exactly-once、每次调用出示**同一把 step 级幂等键**。provider 认这把键 → effectively-once；不认 → **at-least-once**，重跑可能产生第二次外部副作用。v1 唯一上线的能力是纯内部写、零外部调用，所以现在没有实际影响。**接第一个真正调外部 provider 的能力之前必须逐个确认**：不支持幂等键的，要么不接，要么在 `ActionDefinition` 里显式标注「只能保证 at-least-once」并让授权层按此判风险。不许用「租约已经解决了」糊过去 —— 租约拦得住记账，拦不住已经发出去的那个调用 |
 | 10 | **仓库里已有 23 组重复的 migration 版本号** | 查重时发现的旧账（`origin/main` 上就有，多的一组 3 个文件）。本 PR 不改存量（改已 apply 过的文件名会打乱生产账本），只加了 CI 查重保证**不再新增**，存量冻结在 `boundaries.ts` 的清单里 |

@@ -140,3 +140,22 @@ export function makeFixture(args: {
   })
   return { supabase, tables, kernel, clock }
 }
+
+/**
+ * 测试用的执行围栏：直接读库里那条 run **当前**的代际。
+ *
+ * 🔴 生产代码里围栏来自 `kernel_claim_or_takeover_run` 的返回值 ——
+ *    那才是「我领到了这一代」的唯一凭据。测试里那些绕过领取、
+ *    直接调 `authorizeRun` / `executeAuthorizedRun` 的用例没有领取动作，
+ *    所以这里按当前值给一个「有效的围栏」，让它们测的仍是各自那道闸。
+ *    专门验证 fencing 的用例（lease-takeover / stale-worker）**不用**这个，
+ *    它们手里握的是接管**之前**那一代 —— 那才是要防的东西。
+ */
+export function liveFence(f: Fixture, runId?: string): { ownerId: string; generation: number } {
+  const rows = f.tables.action_runs as Array<Record<string, unknown>>
+  const row = runId ? rows.find((r) => r.id === runId) : rows[0]
+  return {
+    ownerId: String(row?.claimed_by ?? 'test-owner'),
+    generation: Number(row?.claim_generation ?? 0),
+  }
+}

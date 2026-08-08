@@ -18,7 +18,7 @@ import { executeAuthorizedRun } from '../gateway'
 import { ACTION_REGISTRY } from '../registry'
 import { createCapabilities, computeBlogContentHash } from '@/lib/capabilities'
 import type { BlogDraftRow } from '@/lib/capabilities/seo/build-publish-package'
-import { makeFixture, CLIENT_A, GOAL_A, POST_A, BLOG_DRAFT } from './fixtures'
+import { makeFixture, CLIENT_A, GOAL_A, POST_A, BLOG_DRAFT, liveFence } from './fixtures'
 import type { Row } from './fake-supabase'
 
 const KEY = 'seo.build_publish_package'
@@ -93,7 +93,7 @@ describe('C2 · 政策身份：删掉重建 ≠ 同一条政策', () => {
 
     rebuildPolicy(f.tables, { mode: 'deny' })
 
-    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/删掉重建/)
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))).rejects.toThrow(/删掉重建/)
     // 🔴 两道闸各自都在：Gateway 自己拒的，没走到数据库那道
     expect(rpcCalls).not.toContain('kernel_begin_authorized_run')
     expect(builds).not.toHaveBeenCalled()
@@ -110,7 +110,7 @@ describe('C2 · 政策身份：删掉重建 ≠ 同一条政策', () => {
 
     rebuildPolicy(f.tables, { mode: 'auto_approve' })
 
-    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/删掉重建/)
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))).rejects.toThrow(/删掉重建/)
     expect(builds).not.toHaveBeenCalled()
   })
 
@@ -128,7 +128,7 @@ describe('C2 · 政策身份：删掉重建 ≠ 同一条政策', () => {
       .eq('id', 'policy-1')
       .select('id')
 
-    await expect(executeAuthorizedRun(f.kernel, approved.ctx!)).rejects.toThrow(/规则/)
+    await expect(executeAuthorizedRun(f.kernel, approved.ctx!, liveFence(f))).rejects.toThrow(/规则/)
     expect(builds).not.toHaveBeenCalled()
   })
 
@@ -139,7 +139,7 @@ describe('C2 · 政策身份：删掉重建 ≠ 同一条政策', () => {
 
     rebuildPolicy(f.tables, { mode: 'require_approval' })
 
-    await expect(executeAuthorizedRun(f.kernel, approved.ctx!)).rejects.toThrow(/删掉重建/)
+    await expect(executeAuthorizedRun(f.kernel, approved.ctx!, liveFence(f))).rejects.toThrow(/删掉重建/)
     expect(builds).not.toHaveBeenCalled()
   })
 
@@ -152,7 +152,7 @@ describe('C2 · 政策身份：删掉重建 ≠ 同一条政策', () => {
 
     f.tables.client_automation_policies[0].mode = 'deny'
 
-    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/已经不是自动/)
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))).rejects.toThrow(/已经不是自动/)
     expect(rpcCalls).not.toContain('kernel_begin_authorized_run')
     expect(builds).not.toHaveBeenCalled()
   })
@@ -162,7 +162,7 @@ describe('C2 · 政策身份：删掉重建 ≠ 同一条政策', () => {
     const { run } = await submitActionRun(f.kernel, submit())
     const auth = await authorizeRun(f.kernel, run)
 
-    const result = await executeAuthorizedRun(f.kernel, auth.ctx!)
+    const result = await executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))
     expect(result.status).toBe('succeeded')
     expect(builds).toHaveBeenCalledTimes(1)
     expect(f.tables.production_packages).toHaveLength(1)

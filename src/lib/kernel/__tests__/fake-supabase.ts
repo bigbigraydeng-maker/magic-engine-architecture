@@ -51,6 +51,7 @@ const DEFAULTS: Record<string, () => Row> = {
     previous_claimed_by: null,
     reclaim_count: 0,
     last_reclaimed_at: null,
+    claim_generation: 0,
     started_at: null,
     finished_at: null,
   }),
@@ -66,6 +67,7 @@ const DEFAULTS: Record<string, () => Row> = {
     verification: null,
     cost_actual_usd: 0,
     last_error: null,
+    claim_generation: 0,
     started_at: null,
     finished_at: null,
   }),
@@ -538,6 +540,10 @@ export function createFakeSupabase(
     const runId = String(args.p_run_id)
     const decisionId = String(args.p_decision_id)
     const workerId = String(args.p_worker_id)
+    const expectedGeneration =
+      args.p_expected_generation === null || args.p_expected_generation === undefined
+        ? null
+        : Number(args.p_expected_generation)
     const no = (reason: string) => ({ ok: false, reason })
 
     const run = tableOf('action_runs').find((r) => r.id === runId)
@@ -546,6 +552,10 @@ export function createFakeSupabase(
     if (!decision) return no('decision_not_found')
 
     if (run.status !== 'authorized') return no(`run_not_authorized:${String(run.status)}`)
+    // 🔴 F1 代际闸：状态闸和指针闸都对得上时，只有它能分开「当前这一代」和「上一代」
+    if (expectedGeneration !== null && Number(run.claim_generation ?? 0) !== expectedGeneration) {
+      return no(`stale_generation:${String(run.claim_generation ?? 0)}`)
+    }
     if (run.authorization_decision_id !== decisionId) return no('decision_not_current')
     if (decision.action_run_id !== run.id) return no('decision_run_mismatch')
 
@@ -771,15 +781,19 @@ export function createFakeSupabase(
 
     const nowIso = (options.now?.() ?? new Date()).toISOString()
 
+    // 🔴 F1：恢复也是换人 —— 代际 +1 并推到**所有**步骤（含已成功的），
+    //    否则恢复之前那个执行者醒过来还能拿着旧 step_id 写进来。
+    const nextGen = Number(run.claim_generation ?? 0) + 1
     // 步骤重置 —— 只碰没跑成的；cost_actual_usd / output / verification 一概不动
     for (const st of tableOf('action_run_steps')) {
       if (st.run_id !== run.id) continue
+      st.claim_generation = nextGen
+      st.updated_at = nowIso
       if (st.status === 'succeeded') continue
       st.status = 'pending'
       st.last_error = null
       st.next_attempt_at = null
       st.finished_at = null
-      st.updated_at = nowIso
     }
 
     run.status = 'queued'
@@ -793,6 +807,8 @@ export function createFakeSupabase(
     run.claimed_at = null
     run.heartbeat_at = null
     run.lease_expires_at = null
+    // 🔴 F1：恢复是换人 —— 代际 +1（上面已经推到所有步骤上了）
+    run.claim_generation = nextGen
     run.evidence = {
       ...((run.evidence ?? {}) as Row),
       last_recovered_by: actor,
@@ -817,10 +833,16 @@ export function createFakeSupabase(
     decision_id: string | null
     reclaimed: boolean
     reclaim_count: number
+    claim_generation: number | null
+    reset_steps: boolean
   } {
     const runId = String(args.p_run_id)
     const ownerId = (args.p_owner_id ?? null) as string | null
     const leaseSeconds = Number(args.p_lease_seconds ?? 0)
+    const expectedGeneration =
+      args.p_expected_generation === null || args.p_expected_generation === undefined
+        ? null
+        : Number(args.p_expected_generation)
     const no = (r: string, run?: Row) => ({
       ok: false,
       reason: r,
@@ -828,6 +850,8 @@ export function createFakeSupabase(
       decision_id: run ? ((run.authorization_decision_id ?? null) as string | null) : null,
       reclaimed: false,
       reclaim_count: run ? Number(run.reclaim_count ?? 0) : 0,
+      claim_generation: run ? Number(run.claim_generation ?? 0) : null,
+      reset_steps: false,
     })
 
     if (!ownerId || ownerId.trim().length === 0) return no('owner_required')
@@ -836,9 +860,15 @@ export function createFakeSupabase(
     const run = tableOf('action_runs').find((r) => r.id === runId)
     if (!run) return no('run_not_found')
 
-    // 只有中间态可以领 / 接管
-    if (!['queued', 'authorizing', 'authorized'].includes(String(run.status))) {
+    // 状态白名单。🔴 running 也在里面，但只有租约过期才轮得到（见下）——
+    // 一律排除 running 会让「崩在执行中」的 run 永远没人能接手。
+    if (!['queued', 'authorizing', 'authorized', 'running'].includes(String(run.status))) {
       return no(`not_claimable:${String(run.status)}`, run)
+    }
+
+    // 代际 CAS：带了 expected 就必须还是那一代（防旧调用复活之后来续租）
+    if (expectedGeneration !== null && Number(run.claim_generation ?? 0) !== expectedGeneration) {
+      return no(`stale_generation:${String(run.claim_generation ?? 0)}`, run)
     }
 
     const now = options.now?.() ?? new Date()
@@ -855,13 +885,42 @@ export function createFakeSupabase(
 
     const prevOwner = (run.claimed_by ?? null) as string | null
     const reclaimed = prevOwner !== null && prevOwner !== ownerId
-    const statusAtClaim = String(run.status)
-    const decisionAtClaim = (run.authorization_decision_id ?? null) as string | null
+    const changedHands = prevOwner !== ownerId
+    const wasRunning = String(run.status) === 'running' && changedHands
+    const nextGen = Number(run.claim_generation ?? 0) + (changedHands ? 1 : 0)
 
+    // 接管一个 running 的 run = 放回可重新授权的状态（授权已被上一代兑换掉）
+    if (wasRunning) {
+      for (const st of tableOf('action_run_steps')) {
+        if (st.run_id !== run.id) continue
+        if (st.status === 'succeeded') continue
+        st.status = 'pending'
+        st.last_error = null
+        st.next_attempt_at = null
+        st.finished_at = null
+        st.updated_at = nowIso
+      }
+    }
+    // 🔴 换人就把**所有**步骤的代际推上去（含已成功的）——
+    //    上一代握着的 step_id 从这一刻起写不进任何一行。
+    if (changedHands) {
+      for (const st of tableOf('action_run_steps')) {
+        if (st.run_id !== run.id) continue
+        st.claim_generation = nextGen
+        st.updated_at = nowIso
+      }
+    }
+
+    const statusOut = wasRunning ? 'queued' : String(run.status)
+    const decisionOut = wasRunning ? null : ((run.authorization_decision_id ?? null) as string | null)
+
+    run.status = statusOut
+    run.authorization_decision_id = decisionOut
     run.claimed_by = ownerId
     run.claimed_at = nowIso
     run.heartbeat_at = nowIso
     run.lease_expires_at = new Date(now.getTime() + leaseSeconds * 1000).toISOString()
+    run.claim_generation = nextGen
     if (reclaimed) {
       run.previous_claimed_by = prevOwner
       run.reclaim_count = Number(run.reclaim_count ?? 0) + 1
@@ -871,17 +930,21 @@ export function createFakeSupabase(
       ...((run.evidence ?? {}) as Row),
       last_claimed_by: ownerId,
       last_claimed_at: nowIso,
+      last_claim_generation: nextGen,
       last_takeover_from: reclaimed ? prevOwner : null,
+      took_over_running: wasRunning,
     }
     run.updated_at = nowIso
 
     return {
       ok: true,
       reason: reclaimed ? 'taken_over' : 'claimed',
-      run_status: statusAtClaim,
-      decision_id: decisionAtClaim,
+      run_status: statusOut,
+      decision_id: decisionOut,
       reclaimed,
       reclaim_count: Number(run.reclaim_count ?? 0),
+      claim_generation: nextGen,
+      reset_steps: wasRunning,
     }
   }
 

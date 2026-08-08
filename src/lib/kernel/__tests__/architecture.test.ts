@@ -388,7 +388,11 @@ describe('两处清单不许分家（S1 / S2）', () => {
     // 锁：没有它，两个人能同时把 owner 写成自己
     expect(fn).toContain('FOR UPDATE')
     // 状态白名单：终态和 running 一律不许接管
-    expect(fn).toMatch(/NOT IN \('queued','authorizing','authorized'\)/)
+    // 🔴 running **在**白名单里（只有租约过期才轮得到）——
+    //    一律排除 running 会让「崩在执行中」的 run 永远没人能接手。
+    expect(fn).toMatch(/NOT IN \('queued','authorizing','authorized','running'\)/)
+    // 代际（fencing token）：接管必须换代，否则旧执行者醒过来照样能写
+    expect(fn).toContain('claim_generation')
     // 租约到期才是接管的依据 —— 判据是时间，不是「看起来没人在动」
     expect(fn).toMatch(/lease_expires_at\s*>\s*now\(\)/)
     // 领到时必须回报**领到那一刻**的状态和决策指针，调用方靠它决定复不复用授权

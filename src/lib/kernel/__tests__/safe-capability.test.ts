@@ -25,6 +25,7 @@ import {
   BRIEF_A,
   POST_A,
   BLOG_DRAFT,
+  liveFence,
 } from './fixtures'
 
 const HASH = computeBlogContentHash(BLOG_DRAFT as unknown as BlogDraftRow)
@@ -189,7 +190,7 @@ describe('Safe capability：该失败的时候真的失败', () => {
     f.tables.blog_posts[0].title = '被人改过的标题'
 
     const auth = await authorizeRun(f.kernel, run)
-    const result = await executeAuthorizedRun(f.kernel, auth.ctx!)
+    const result = await executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))
 
     expect(result.status).toBe('dead_letter')
     expect(String(result.failure?.humanReason)).toContain('又被改过了')
@@ -268,7 +269,7 @@ describe('Safe capability：该失败的时候真的失败', () => {
     })
 
     const auth = await authorizeRun(f.kernel, run)
-    const result = await executeAuthorizedRun(f.kernel, auth.ctx!)
+    const result = await executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))
 
     expect(result.status).toBe('dead_letter')
     expect(result.failure?.code).toBe('VERIFICATION_FAILED')

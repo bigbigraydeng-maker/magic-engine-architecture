@@ -19,7 +19,7 @@ import { ACTION_REGISTRY } from '../registry'
 import { createCapabilities, computeBlogContentHash } from '@/lib/capabilities'
 import type { BlogDraftRow } from '@/lib/capabilities/seo/build-publish-package'
 import type { ClientAutomationPolicy } from '../types'
-import { makeFixture, CLIENT_A, GOAL_A, POST_A, BLOG_DRAFT } from './fixtures'
+import { makeFixture, CLIENT_A, GOAL_A, POST_A, BLOG_DRAFT, liveFence } from './fixtures'
 
 const KEY = 'seo.build_publish_package'
 const HASH = computeBlogContentHash(BLOG_DRAFT as unknown as BlogDraftRow)
@@ -239,7 +239,7 @@ describe('C5 · 三条执行路径同一个口径', () => {
 
     f.clock.now = new Date('2026-08-08T03:30:00.000Z')
 
-    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/没有生效的自动化规则/)
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))).rejects.toThrow(/没有生效的自动化规则/)
     expect(f.tables.production_packages).toHaveLength(0)
   })
 })

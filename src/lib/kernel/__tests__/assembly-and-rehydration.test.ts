@@ -12,7 +12,7 @@ import { ACTION_REGISTRY } from '../registry'
 import { KernelError } from '../errors'
 import { createCapabilities, computeBlogContentHash } from '@/lib/capabilities'
 import type { BlogDraftRow } from '@/lib/capabilities/seo/build-publish-package'
-import { makeFixture, makeRegistry, CLIENT_A, GOAL_A, POST_A, BLOG_DRAFT } from './fixtures'
+import { makeFixture, makeRegistry, CLIENT_A, GOAL_A, POST_A, BLOG_DRAFT, liveFence } from './fixtures'
 
 const KEY = 'seo.build_publish_package'
 const HASH = computeBlogContentHash(BLOG_DRAFT as unknown as BlogDraftRow)
@@ -68,7 +68,7 @@ describe('P2-2 · 装配校验：授权按 v2 签，不许悄悄跑 v1 实现', 
     const auth = await authorizeRun(f.kernel, run)
     expect(auth.verdict).toBe('allow')
 
-    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/装配对不上契约/)
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))).rejects.toThrow(/装配对不上契约/)
 
     // 🔴 三条硬断言：没领执行权、capability 没跑、授权没被消费（修好装配还能跑）
     expect(rpcCalls).not.toContain('kernel_begin_authorized_run')
@@ -91,7 +91,7 @@ describe('P2-2 · 装配校验：授权按 v2 签，不许悄悄跑 v1 实现', 
     const { run } = await submitActionRun(f.kernel, submit())
     const auth = await authorizeRun(f.kernel, run)
 
-    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/装配对不上契约/)
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))).rejects.toThrow(/装配对不上契约/)
     expect(f.tables.production_packages).toHaveLength(0)
   })
 

@@ -20,7 +20,7 @@ import type { KernelDeps } from './deps'
 import type { ExecutionResult } from './gateway'
 import { KernelError } from './errors'
 import { authorizeRun, approveRun, rejectRun, reuseLiveAuthorization } from './authorize'
-import { executeAuthorizedRun, rehydrateSucceededRun } from './gateway'
+import { executeAuthorizedRun, rehydrateSucceededRun, type ExecutionFence } from './gateway'
 import { computeIdempotencyKey, computeUnknownActionKey } from './idempotency'
 import {
   claimOrTakeoverRun,
@@ -331,9 +331,10 @@ async function driveIntermediateRun(
   deps: KernelDeps,
   runId: string,
 ): Promise<ActionRunOutcome> {
+  const ownerId = nextOwnerId(deps)
   const claim = await claimOrTakeoverRun(deps.supabase, {
     runId,
-    ownerId: nextOwnerId(deps),
+    ownerId,
     leaseSeconds: deps.leaseSeconds,
   })
 
@@ -358,18 +359,21 @@ async function driveIntermediateRun(
     )
   }
 
-  // 领到了。拿最新一行（带上刚写下的租约）。
+  // 领到了。拿最新一行（带上刚写下的租约和代际）。
   const owned = await deps.requireRun(runId)
+  // 🔴 F1：从这里往后每一次推进性写入都出示这一代。
+  //    被接管之后这一代就作废了 —— 写不进去，也不会覆盖接管者的结果。
+  const fence: ExecutionFence = { ownerId, generation: claim.claimGeneration }
 
   // 🔴 停在 authorized、且当前那份 allow 还活着 → **复用它，不重新签**。
   //    重新签会让同一件事在审计表里出现两个「谁批的」。
   //    过期 / 不可复用时返回 null，走下面完整的重新授权。
   if (owned.status === 'authorized') {
     const reused = await reuseLiveAuthorization(deps, owned)
-    if (reused?.ctx) return executeAndWrap(deps, reused.decision, reused.ctx)
+    if (reused?.ctx) return executeAndWrap(deps, reused.decision, reused.ctx, fence)
   }
 
-  const auth = await authorizeRun(deps, owned)
+  const auth = await authorizeRun(deps, owned, fence)
 
   if (auth.verdict === 'deny') {
     return { kind: 'denied', run: auth.run, decision: auth.decision, execution: null, humanReason: auth.decision.reason }
@@ -384,15 +388,16 @@ async function driveIntermediateRun(
     }
   }
 
-  return executeAndWrap(deps, auth.decision, auth.ctx)
+  return executeAndWrap(deps, auth.decision, auth.ctx, fence)
 }
 
 async function executeAndWrap(
   deps: KernelDeps,
   decision: AuthorizationDecision,
   ctx: AuthorizedExecutionContext,
+  fence: ExecutionFence,
 ): Promise<ActionRunOutcome> {
-  const execution = await executeAuthorizedRun(deps, ctx)
+  const execution = await executeAuthorizedRun(deps, ctx, fence)
   return {
     kind: execution.status === 'succeeded' ? 'succeeded' : 'dead_letter',
     run: execution.run,
@@ -429,9 +434,10 @@ export async function approveAndRun(
   //    并发的 runAction 会同时接管它，两边各跑一遍授权重读。
   //    （真正的双执行还有 kernel_begin_authorized_run 兜底，但白跑一趟没必要。）
   //    领不到 = 已经有活着的 owner 在推进它，如实说，不硬抢。
+  const approverOwnerId = nextOwnerId(deps)
   const claim = await claimOrTakeoverRun(deps.supabase, {
     runId,
-    ownerId: nextOwnerId(deps),
+    ownerId: approverOwnerId,
     leaseSeconds: deps.leaseSeconds,
   })
   if (!claim.ok) {
@@ -444,7 +450,10 @@ export async function approveAndRun(
     }
   }
 
-  return executeAndWrap(deps, auth.decision, auth.ctx)
+  return executeAndWrap(deps, auth.decision, auth.ctx, {
+    ownerId: approverOwnerId,
+    generation: claim.claimGeneration,
+  })
 }
 
 /**

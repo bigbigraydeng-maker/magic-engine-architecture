@@ -31,6 +31,7 @@ import {
   insertDecision,
   resolvePendingApproval,
   updateRun,
+  updateRunFenced,
   updateRunIf,
 } from './store'
 import { KernelError } from './errors'
@@ -290,9 +291,33 @@ async function preflight(deps: KernelDeps, run: ActionRun, now: Date): Promise<P
  *
  * 每一道闸失败都落一条 append-only 的决策记录 —— 包括未知动作。
  */
-export async function authorizeRun(deps: KernelDeps, input: ActionRun): Promise<AuthorizationOutcome> {
+export async function authorizeRun(
+  deps: KernelDeps,
+  input: ActionRun,
+  /**
+   * 🔴 F1：推进这条 run 的那一代。给了就每一次状态写入都出示它 ——
+   *    被接管之后这一代作废，过期的执行者连 `authorizing` 都推不动，
+   *    更不可能再签一份授权。
+   *    只有直接调 authorizeRun 的测试才会不传（那时没有第二个执行者）。
+   */
+  fence?: { generation: number },
+): Promise<AuthorizationOutcome> {
   const now = deps.now()
-  const run = await updateRun(deps.supabase, input.id, { status: 'authorizing' })
+
+  const writeRun = async (patch: Parameters<typeof updateRun>[2]): Promise<ActionRun> => {
+    if (!fence) return updateRun(deps.supabase, input.id, patch)
+    const updated = await updateRunFenced(deps.supabase, input.id, fence.generation, patch)
+    if (!updated) {
+      throw new KernelError(
+        'STALE_CLAIM',
+        '这次执行的所有权已经被别人接管了（你手里那一代已经作废）—— 已停手，不会重复做',
+        { detail: { runId: input.id, generation: fence.generation } },
+      )
+    }
+    return updated
+  }
+
+  const run = await writeRun({ status: 'authorizing' })
 
   const pf = await preflight(deps, run, now)
   if (!pf.ok) {
@@ -329,7 +354,7 @@ export async function authorizeRun(deps: KernelDeps, input: ActionRun): Promise<
       idempotency_key: run.idempotency_key,
       expires_at: null,
     })
-    const updated = await updateRun(deps.supabase, run.id, {
+    const updated = await writeRun({
       status: 'pending_approval',
       authorization_decision_id: decision.id,
       cost_cap_usd: costCap,
@@ -365,7 +390,7 @@ export async function authorizeRun(deps: KernelDeps, input: ActionRun): Promise<
     idempotency_key: run.idempotency_key,
     expires_at: expiresAt,
   })
-  const updated = await updateRun(deps.supabase, run.id, {
+  const updated = await writeRun({
     status: 'authorized',
     authorization_decision_id: decision.id,
     cost_cap_usd: costCap,

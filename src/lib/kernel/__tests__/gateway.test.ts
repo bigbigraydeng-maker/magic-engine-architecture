@@ -18,7 +18,7 @@ import { authorizeRun } from '../authorize'
 import { submitActionRun, runAction, resumeDeadLetterRun } from '../runner'
 import { KernelError, RetryableCapabilityError } from '../errors'
 import { fetchKernelHandoffTodos } from '../handoff'
-import { makeFixture, makeRegistry, CLIENT_A, CLIENT_B, GOAL_A } from './fixtures'
+import { makeFixture, makeRegistry, CLIENT_A, CLIENT_B, GOAL_A, liveFence } from './fixtures'
 
 // ── 合成动作：让重试 / 死信 / 成本超支这些路径能被真正跑一遍 ──────────────────
 //    （不往生产注册表里塞假动作 —— 注册表必须只说真话）
@@ -99,10 +99,10 @@ describe('Gateway：没有真授权就进不去', () => {
     const { run } = await submitActionRun(f.kernel, submit())
 
     await expect(
-      executeAuthorizedRun(f.kernel, forgeContext({ runId: run.id })),
+      executeAuthorizedRun(f.kernel, forgeContext({ runId: run.id }), liveFence(f)),
     ).rejects.toThrow(KernelError)
     await expect(
-      executeAuthorizedRun(f.kernel, forgeContext({ runId: run.id })),
+      executeAuthorizedRun(f.kernel, forgeContext({ runId: run.id }), liveFence(f)),
     ).rejects.toThrow(/查不到这次执行对应的授权记录/)
     expect(f.tables.action_run_steps).toHaveLength(0)
   })
@@ -121,6 +121,7 @@ describe('Gateway：没有真授权就进不去', () => {
       executeAuthorizedRun(
         f.kernel,
         forgeContext({ runId: pending.run.id, decisionId: realDecisionId }),
+        liveFence(f),
       ),
     ).rejects.toThrow(/没有被放行/)
   })
@@ -138,7 +139,7 @@ describe('Gateway：没有真授权就进不去', () => {
     // 把决策悄悄改挂到另一个客户（模拟串台的数据形状）
     f.tables.authorization_decisions[0].client_id = CLIENT_B
 
-    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/安全告警/)
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))).rejects.toThrow(/安全告警/)
   })
 
   it('🔴 串台的东西**在去领执行权之前**就被拒了，不是靠数据库那一层兜住', async () => {
@@ -164,7 +165,7 @@ describe('Gateway：没有真授权就进不去', () => {
     }
 
     f.tables.authorization_decisions[0].client_id = CLIENT_B
-    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/安全告警/)
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))).rejects.toThrow(/安全告警/)
 
     expect(
       rpcCalls,
@@ -186,7 +187,7 @@ describe('Gateway：没有真授权就进不去', () => {
 
     f.tables.client_automation_policies[0].policy_version = 2
 
-    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/规则后来改过了/)
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))).rejects.toThrow(/规则后来改过了/)
   })
 
   it('契约版本对不上 → 抛错，不拿旧授权跑新实现', async () => {
@@ -202,7 +203,7 @@ describe('Gateway：没有真授权就进不去', () => {
     const v2 = makeRegistry([testDefinition({ version: 2 })])
     const kernelV2 = { ...f.kernel, registry: v2 }
 
-    await expect(executeAuthorizedRun(kernelV2, auth.ctx!)).rejects.toThrow(/重新授权|版契约/)
+    await expect(executeAuthorizedRun(kernelV2, auth.ctx!, liveFence(f))).rejects.toThrow(/重新授权|版契约/)
   })
 
   it('授权过期 → 抛错', async () => {
@@ -216,7 +217,7 @@ describe('Gateway：没有真授权就进不去', () => {
 
     f.clock.now = new Date(f.clock.now.getTime() + 61_000)
 
-    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/已经过期/)
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))).rejects.toThrow(/已经过期/)
   })
 
   it('同一条授权兑换两次（重放）→ 第二次抛错，capability 只被调一次', async () => {
@@ -229,10 +230,10 @@ describe('Gateway：没有真授权就进不去', () => {
     const { run } = await submitActionRun(f.kernel, submit())
     const auth = await authorizeRun(f.kernel, run)
 
-    const first = await executeAuthorizedRun(f.kernel, auth.ctx!)
+    const first = await executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))
     expect(first.status).toBe('succeeded')
 
-    await expect(executeAuthorizedRun(f.kernel, auth.ctx!)).rejects.toThrow(/已经.*用掉了|一次授权只能换一次/)
+    await expect(executeAuthorizedRun(f.kernel, auth.ctx!, liveFence(f))).rejects.toThrow(/已经.*用掉了|一次授权只能换一次/)
     expect(spy).toHaveBeenCalledTimes(1)
   })
 })
@@ -378,10 +379,12 @@ describe('Gateway：重试 / 死信 / 断点续跑', () => {
 })
 
 describe('Gateway：花钱不许超信封', () => {
-  it('步骤实际花费累计超过授权上限 → 当场停手，且不重试', async () => {
+  it('🔴 声明最多花 5、上限只有 1 → 装不下，handler 一次都不调', async () => {
     const spy = vi.fn(async () => ({ output: { done: true }, costActualUsd: 5 }))
     const f = makeFixture({
-      registry: makeRegistry([testDefinition()]),
+      registry: makeRegistry([
+        testDefinition({ costModel: { kind: 'fixed', estimate: () => 1, stepCeilingUsd: { work: 5 } } }),
+      ]),
       capabilities: () => ({ [TEST_KEY]: capabilityOf({ work: spy }) }),
       options: { policy: { ...AUTO_POLICY, spend_cap_per_run_usd: 1 } },
     })
@@ -390,7 +393,26 @@ describe('Gateway：花钱不许超信封', () => {
 
     expect(outcome.kind).toBe('dead_letter')
     expect(outcome.execution?.failure?.code).toBe('COST_CAP_EXCEEDED')
+    // 硬上限 = 在调供应商**之前**拦住，而不是花完了再说
+    expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('🔴 声明最多花 1、实际花了 5 → 契约违约，停手且不重试（钱如实记账）', async () => {
+    const spy = vi.fn(async () => ({ output: { done: true }, costActualUsd: 5 }))
+    const f = makeFixture({
+      registry: makeRegistry([
+        testDefinition({ costModel: { kind: 'fixed', estimate: () => 1, stepCeilingUsd: { work: 1 } } }),
+      ]),
+      capabilities: () => ({ [TEST_KEY]: capabilityOf({ work: spy }) }),
+      options: { policy: { ...AUTO_POLICY, spend_cap_per_run_usd: 10 } },
+    })
+
+    const outcome = await runAction(f.kernel, submit())
+
+    expect(outcome.kind).toBe('dead_letter')
+    expect(outcome.execution?.failure?.code).toBe('COST_CONTRACT_VIOLATION')
     expect(spy).toHaveBeenCalledTimes(1)
+    expect(Number(f.tables.action_run_steps[0].cost_actual_usd)).toBe(5)
   })
 })
 

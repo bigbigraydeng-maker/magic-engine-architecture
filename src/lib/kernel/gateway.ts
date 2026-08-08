@@ -37,7 +37,9 @@ import {
   getDecision,
   listSteps,
   updateRun,
+  updateRunFenced,
   updateStep,
+  updateStepFenced,
 } from './store'
 
 export interface ExecutionResult {
@@ -172,9 +174,22 @@ function assertDecisionMatches(args: {
 
 // ── 主流程 ────────────────────────────────────────────────────────────────────
 
+/**
+ * 🔴 **执行围栏（fencing token）。**
+ *
+ * 领到运行所有权那一刻拿到的代际。从这里往后，每一次推进性写入
+ * （步骤产物 / 花费 / run 终态 / 兑换授权）都要出示它。
+ * 代际对不上 = 我已经被接管了 = 立刻停手，一个字都不许写。
+ */
+export interface ExecutionFence {
+  readonly ownerId: string
+  readonly generation: number
+}
+
 export async function executeAuthorizedRun(
   deps: KernelDeps,
   ctx: AuthorizedExecutionContext,
+  fence: ExecutionFence,
 ): Promise<ExecutionResult> {
   const now = deps.now()
 
@@ -245,24 +260,30 @@ export async function executeAuthorizedRun(
   //    而且只有 run 当前指着的那条决策能兑换。
   //    不能拆成「先兑换 decision、再把 run 改成 running」—— 那两句之间有窗口，
   //    而且兑换的是决策不是执行权（同一个 run 的两份 allow 决策会各自兑换成功）。
-  const begun = await beginAuthorizedRun(deps.supabase, run.id, decision.id, deps.workerId)
+  //    🔴 F1：连同**代际**一起出示 —— 状态闸和指针闸都拦不住
+  //    「接管者把 run 推回 authorized 之后，上一代恰好拿着同一条决策 id」这一种。
+  const begun = await beginAuthorizedRun(
+    deps.supabase, run.id, decision.id, deps.workerId, fence.generation,
+  )
   if (!begun.ok) throw beginFailureToError(begun.reason)
 
   // ⑦ capability 必须有实现。没有 ≠ 跳过。
   const capability = deps.capabilities[ctx.actionKey] as CapabilityImplementation | undefined
   if (!capability) {
     const claimed = await deps.requireRun(run.id)
-    return failRun(deps, claimed, [], new KernelError(
+    return failRun(deps, claimed, [], fence, new KernelError(
       'CAPABILITY_NOT_IMPLEMENTED',
       `「${definition.title}」这个动作还没有实现，跑不了`,
     ))
   }
 
-  const steps = await ensureSteps(deps.supabase, run.id, run.client_id, definition.steps)
+  const steps = await ensureSteps(
+    deps.supabase, run.id, run.client_id, definition.steps, fence.generation,
+  )
   // run 的状态已经由 RPC 原子地推到 running，这里只是把最新一行读回来
   const running = await deps.requireRun(run.id)
 
-  return runSteps(deps, { ctx, run: running, definition, capability, steps })
+  return runSteps(deps, { ctx, run: running, definition, capability, steps, fence })
 }
 
 /**
@@ -283,6 +304,12 @@ function beginFailureToError(reason: string): KernelError {
       return new KernelError(
         'NOT_AUTHORIZED',
         '这条授权已经不是这件事当前那一份了（期间又签过一次），不能拿它开跑',
+      )
+    case 'stale_generation':
+      return new KernelError(
+        'STALE_CLAIM',
+        '这次执行的所有权已经被别人接管了（你手里那一代已经作废）—— 已停手，不会重复做',
+        { detail: { reason } },
       )
     case 'run_not_authorized':
       return new KernelError(
@@ -339,16 +366,20 @@ function beginFailureToError(reason: string): KernelError {
 const COST_EPSILON = 1e-9
 
 /**
- * 这一步**最多**会花多少钱？拿不准就返回 null。
+ * 这一步**最多**会花多少钱（硬上限，不是预测值）。拿不准就返回 null。
+ *
+ * 🔴 `stepCeilingUsd` 的语义是**上界**：执行完之后 `actual > 上界` 会被判成
+ *    契约违约（`COST_CONTRACT_VIOLATION`），而不是「估得不准，算了」。
+ *    没有这一条，预检就退化成许愿 —— 声明 $0 实际花 $100 照样过。
  *
  * 优先级：
  *   ① 契约里显式声明的每步上界（`costModel.stepCeilingUsd`）；
- *   ② 整个动作的估算是 0 —— 契约说它根本不花钱，那每一步的上界自然是 0。
+ *   ② 整个动作的估算是 0 —— 契约说它**根本不花钱**，那每一步的上界就是 0。
  *      （当前唯一上线的能力就是这一类：纯内部组装，不调 LLM、不调外部 API。）
- *   ③ 都没有 → null = **成本未知**。
+ *   ③ 都没有 → null = **说不出上界**。
  *
- * 🔴 不给未知的步骤编一个数字。编出来的数只会让「拦住了」和「放过了」
- *    都失去依据 —— 比不判更危险。未知的处置见 nextStepBlockedByBudget。
+ * 声明值本身也要是个真实金额：NaN / Infinity / 负数一律当成「没声明」，
+ * 否则一条烂声明就能把整道闸绕过去。
  */
 function nextStepCostCeiling(
   definition: ActionDefinition,
@@ -356,7 +387,7 @@ function nextStepCostCeiling(
   stepKey: string,
 ): number | null {
   const declared = definition.costModel.stepCeilingUsd?.[stepKey]
-  if (typeof declared === 'number' && Number.isFinite(declared) && declared >= 0) return declared
+  if (isRealCostAmount(declared)) return declared
 
   const whole = definition.costModel.estimate(run.input)
   if (Number.isFinite(whole) && whole === 0) return 0
@@ -365,19 +396,22 @@ function nextStepCostCeiling(
 }
 
 /**
- * 开跑前的预算闸：这一步现在还能不能跑。
+ * 开跑前的预算闸：这一步现在还能不能跑。**这是硬上限，不是提醒。**
  *
- * `remaining = cap - spent`，然后：
- *   · 上界已知 → `ceiling > remaining` 就拦。
- *     这一条覆盖了「已花 $2 / 上限 $2 / 下一步要花 $1」——
- *     `1 > 0` 成立，handler 一次都不会被调到。
- *     也覆盖了「上限 0 + 零成本步骤」：`0 > 0` 不成立，照常放行。
- *   · 上界未知 → 只在**预算已经见底**（remaining <= 0）时 fail closed。
- *     还有余额时不拦，因为拦了就等于把所有没声明成本的动作全废掉；
- *     真花超了由 handler 返回之后那道事后闸接住（那时钱已落库）。
+ * 判据：`remaining = cap - spent` 必须 **>=** 这一步**还可能再花**多少
+ * （= 声明的最大成本 − 这一步已经花掉的）。
  *
- * 🔴 不能简单写成 `spent >= cap`：`cap = 0` 是正常值（零成本能力），
- *    那样会把它们全部拦死。判据必须结合**下一步要花多少**。
+ * 🔴 上限的口径是**这一步的总花费（含全部重试）**，不是「每次尝试最多花多少」。
+ *    按每次算的话，重试 N 次就能花到 N × max，硬上限当场失效。
+ *   · 「已花 $2 / 上限 $2 / 下一步最多 $1」→ `1 > 0` → 拦，handler 一次都不调；
+ *   · 「上限 0 + 声明零成本」→ `0 > 0` 不成立 → 放行（`spent >= cap` 会把这类全拦死）；
+ *   · `remaining` 恰好等于上界 → 放行（等号是够的）。
+ *
+ * 🔴 **说不出上界的付费步骤一律 fail closed** —— 不管还剩多少钱。
+ *    早先是「还有余额就放行、见底才拦」，那等于「先执行，再发现超预算」，
+ *    钱已经出去了才知道。契约既然声明这个动作会花钱，就必须说清每一步最多花多少；
+ *    说不清就别开跑。这也让预检成为真正的硬上限：
+ *    `remaining >= max` 且 `actual <= max` ⇒ `spent + actual <= cap`，恒成立。
  */
 function nextStepBlockedByBudget(
   definition: ActionDefinition,
@@ -385,30 +419,35 @@ function nextStepBlockedByBudget(
   cap: number | null,
   spent: number,
   stepKey: string,
+  /** 这一步**已经**花掉的（断点续跑 / 重试之后会大于 0）。 */
+  stepSpentSoFar: number,
 ): { humanReason: string; detail: Record<string, unknown> } | null {
   if (cap === null) return null
 
   const remaining = cap - spent
-  const ceiling = nextStepCostCeiling(definition, run, stepKey)
+  const declaredMax = nextStepCostCeiling(definition, run, stepKey)
+  // 还可能再花多少 = 上限 − 已经花掉的。已经花超的话取 0，
+  // 真正的违约由事后那道闸抓。
+  const ceiling = declaredMax === null ? null : Math.max(0, declaredMax - stepSpentSoFar)
 
-  if (ceiling !== null) {
-    if (ceiling - remaining > COST_EPSILON) {
-      return {
-        humanReason:
-          `这次执行的上限是 $${cap.toFixed(2)}，已经花掉 $${spent.toFixed(2)}，` +
-          `而「${stepKey}」最多还要 $${ceiling.toFixed(2)} —— 不够，这一步不开跑`,
-        detail: { cap, spent, remaining, nextStepCeiling: ceiling, reason: 'ceiling_over_remaining' },
-      }
-    }
-    return null
-  }
-
-  if (remaining <= COST_EPSILON) {
+  if (ceiling === null) {
     return {
       humanReason:
-        `这次执行的上限是 $${cap.toFixed(2)}，已经花掉 $${spent.toFixed(2)}，预算见底；` +
-        `而「${stepKey}」没有声明成本上界 —— 不确定要花多少就不开跑`,
-      detail: { cap, spent, remaining, nextStepCeiling: null, reason: 'budget_exhausted_unknown_cost' },
+        `「${stepKey}」没有声明它最多会花多少钱，而这个动作声明了会花钱 —— ` +
+        `不确定要花多少就不开跑（先把契约里的每步上限写清楚）`,
+      detail: { cap, spent, remaining, nextStepCeiling: null, reason: 'no_declared_maximum' },
+    }
+  }
+
+  if (ceiling - remaining > COST_EPSILON) {
+    return {
+      humanReason:
+        `这次执行的上限是 $${cap.toFixed(2)}，已经花掉 $${spent.toFixed(2)}，` +
+        `而「${stepKey}」最多还要 $${ceiling.toFixed(2)} —— 不够，这一步不开跑`,
+      detail: {
+        cap, spent, remaining, declaredMax, stepSpentSoFar,
+        stillCouldSpend: ceiling, reason: 'ceiling_over_remaining',
+      },
     }
   }
   return null
@@ -421,6 +460,21 @@ function nextStepBlockedByBudget(
  *    负数最危险：它能把「已花金额」减回来，让同一笔预算被反复消费。
  *    数据库那条 CHECK 是同一套判据的第二层（绕开应用直接写库也写不进去）。
  */
+/**
+ * 这一步的**外部幂等键**。
+ *
+ * 🔴 组成刻意只有「客户 + 这件事 + 这一步」：
+ *      · `run.idempotency_key` 已经包含 client + action + 输入指纹；
+ *      · 加上 stepKey 区分同一件事的不同外部调用。
+ *    **不含 attempt、不含代际、不含任何一次执行的痕迹** ——
+ *    含了就等于每次重试 / 每次接管都换一张收据，provider 那边会做第二遍。
+ *
+ * 生命周期 = 这条 run 的一生：重试、死信重跑、接管之后仍然是同一个值。
+ */
+function stepIdempotencyKey(run: ActionRun, stepKey: string): string {
+  return `${run.client_id}:${run.idempotency_key}:${stepKey}`
+}
+
 function isRealCostAmount(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
@@ -435,9 +489,29 @@ async function runSteps(
     definition: ActionDefinition
     capability: CapabilityImplementation
     steps: ActionRunStep[]
+    fence: ExecutionFence
   },
 ): Promise<ExecutionResult> {
-  const { ctx, definition, capability } = args
+  const { ctx, definition, capability, fence } = args
+
+  /**
+   * 🔴 F1：每一次推进性写入都出示代际。写不进去 = 我已经被接管了。
+   *    绝不当成「行不存在」或「没什么好写的」—— 那正是静默失效的形状。
+   */
+  const writeStep = async (
+    stepId: string,
+    patch: Parameters<typeof updateStep>[2],
+  ): Promise<ActionRunStep> => {
+    const updated = await updateStepFenced(deps.supabase, stepId, fence.generation, patch)
+    if (!updated) {
+      throw new KernelError(
+        'STALE_CLAIM',
+        '这次执行的所有权已经被别人接管了（你手里那一代已经作废）—— 已停手，不会重复做',
+        { detail: { stepId, generation: fence.generation, ownerId: fence.ownerId } },
+      )
+    }
+    return updated
+  }
   let steps = args.steps
   const byKey = () => new Map(steps.map((s) => [s.step_key, s]))
 
@@ -453,7 +527,7 @@ async function runSteps(
   for (const stepKey of definition.steps) {
     const step = byKey().get(stepKey)
     if (!step) {
-      return failRun(deps, args.run, steps, new KernelError(
+      return failRun(deps, args.run, steps, fence, new KernelError(
         'INVALID_STATE',
         `执行步骤「${stepKey}」的记录不见了`,
       ))
@@ -462,7 +536,7 @@ async function runSteps(
 
     const handler = capability.steps[stepKey]
     if (!handler) {
-      return failRun(deps, args.run, steps, new KernelError(
+      return failRun(deps, args.run, steps, fence, new KernelError(
         'CAPABILITY_NOT_IMPLEMENTED',
         `「${definition.title}」缺少「${stepKey}」这一步的实现`,
       ))
@@ -477,9 +551,12 @@ async function runSteps(
     //         而不是花成 $3 之后才发现。
     //
     //    判据见 nextStepBlockedByBudget：结合「还剩多少」和「下一步最多花多少」。
-    const budgetBlock = nextStepBlockedByBudget(definition, args.run, ctx.costCapUsd, spent, stepKey)
+    const stepSpentSoFar = Number(step.cost_actual_usd ?? 0)
+    const budgetBlock = nextStepBlockedByBudget(
+      definition, args.run, ctx.costCapUsd, spent, stepKey, stepSpentSoFar,
+    )
     if (budgetBlock) {
-      return failRun(deps, args.run, steps, new KernelError(
+      return failRun(deps, args.run, steps, fence, new KernelError(
         'COST_CAP_EXCEEDED',
         budgetBlock.humanReason,
         { detail: { ...budgetBlock.detail, stepKey, phase: 'preflight' } },
@@ -491,13 +568,13 @@ async function runSteps(
     // 🔴 这一步**已经花掉**的钱（含之前失败尝试的）。cost_actual_usd 是累计语义：
     //    重试时在这个基础上加，绝不用新一次的花费去覆盖旧值 ——
     //    覆盖会让「历史已花成本」凭空变小，死信重跑就能突破原来的预算上限。
-    let stepCostSoFar = Number(step.cost_actual_usd ?? 0)
+    let stepCostSoFar = stepSpentSoFar
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
       attempt += 1
       const startedAt = deps.now().toISOString()
-      await updateStep(deps.supabase, step.id, {
+      await writeStep(step.id, {
         status: 'running',
         attempt,
         started_at: step.started_at ?? startedAt,
@@ -506,7 +583,15 @@ async function runSteps(
       })
 
       try {
-        const result = await handler({ ctx, stepKey, attempt, priorOutputs })
+        const result = await handler({
+          ctx,
+          stepKey,
+          attempt,
+          priorOutputs,
+          // 🔴 稳定的外部幂等键：跨重试、跨死信重跑、跨接管都不变。
+          //    含 attempt 或代际就等于每次重试都换一张收据，provider 会做第二遍。
+          idempotencyKey: stepIdempotencyKey(args.run, stepKey),
+        })
         const reported = result.costActualUsd ?? 0
 
         // 🔴 T3：这个数字是**运行时输入**，TypeScript 的 `number` 拦不住
@@ -519,7 +604,7 @@ async function runSteps(
         //    产物和验证结论照旧落库（东西可能真的已经写出去了，lineage 得看得见）。
         if (!isRealCostAmount(reported)) {
           const badAt = deps.now().toISOString()
-          await updateStep(deps.supabase, step.id, {
+          await writeStep(step.id, {
             attempt,
             output: result.output,
             verification: result.verification ?? null,
@@ -546,7 +631,7 @@ async function runSteps(
         //    都不许让历史已花的钱变小。
         stepCostSoFar += cost
         const observedAt = deps.now().toISOString()
-        await updateStep(deps.supabase, step.id, {
+        await writeStep(step.id, {
           attempt,
           output: result.output,
           verification: result.verification ?? null,
@@ -556,13 +641,33 @@ async function runSteps(
         spent += cost
 
         // ── 事实落库之后，才开始判定 ────────────────────────────────────
-        // 钱：run 层是信封，step 层是实际。超了当场停手，且**不重试** ——
-        // 重试只会再花一次。
-        if (ctx.costCapUsd !== null && spent > ctx.costCapUsd) {
+
+        // 🔴 契约违约：实际花的比它自己声明的上限还多。
+        //    这不是「估得不准」，是**预检那道硬上限失去意义**了 ——
+        //    预检放行的依据就是「最多花这么多」。
+        //
+        //    注意钱**照样记账**（上面已经落库了）。不记账才是危险的方向：
+        //    库里少记一笔，重跑时 spent 从低估的数字起算，同一笔预算能被再花一次
+        //    （正是上一轮 S3 修的那个洞）。多记只会让后面的闸更严，不会更松。
+        const declaredMax = nextStepCostCeiling(definition, args.run, stepKey)
+        if (declaredMax !== null && stepCostSoFar - declaredMax > COST_EPSILON) {
+          throw new KernelError(
+            'COST_CONTRACT_VIOLATION',
+            `「${stepKey}」声明最多花 $${declaredMax.toFixed(2)}，实际（含重试）已经花了 ` +
+              `$${stepCostSoFar.toFixed(2)} —— 声明的上限不作数了，已停手（钱已如实记账）`,
+            { detail: { stepKey, declaredMax, stepActual: stepCostSoFar, thisAttempt: cost, spent, cap: ctx.costCapUsd } },
+          )
+        }
+
+        // 钱：run 层是信封，step 层是实际。
+        // 🔴 这一条现在是**兜底断言**：`remaining >= max` 且 `actual <= max`
+        //    ⇒ `spent + actual <= cap`，所以上面两道闸都完好时它永远不会触发。
+        //    留着是因为「不变量被打破」必须停手，而不是继续跑下去。
+        if (ctx.costCapUsd !== null && spent - ctx.costCapUsd > COST_EPSILON) {
           throw new KernelError(
             'COST_CAP_EXCEEDED',
             `这次执行已经花到 $${spent.toFixed(2)}，超过了授权时定的上限 $${ctx.costCapUsd.toFixed(2)} —— 已停手`,
-            { detail: { spent, cap: ctx.costCapUsd, stepKey } },
+            { detail: { spent, cap: ctx.costCapUsd, stepKey, phase: 'post_hoc_backstop' } },
           )
         }
 
@@ -577,7 +682,7 @@ async function runSteps(
 
         const finished = deps.now().toISOString()
         // 只推状态和时间戳 —— 产物 / 验证 / 花费上面已经落过，不重写
-        await updateStep(deps.supabase, step.id, {
+        await writeStep(step.id, {
           status: 'succeeded',
           heartbeat_at: finished,
           finished_at: finished,
@@ -590,21 +695,24 @@ async function runSteps(
         lastError = err
         const canRetry = isRetryable(err) && attempt < definition.retryPolicy.maxAttempts
         if (!canRetry) {
-          await updateStep(deps.supabase, step.id, {
+          // 🔴 被 fence 掉的时候不许落死信 —— 那是接管者的 run 了，
+          //    过期的执行者把它写成 dead_letter 会当场毁掉正在进行的执行。
+          //    writeStep 会抛 STALE_CLAIM，直接冒泡出去（一个字都没写）。
+          await writeStep(step.id, {
             status: 'dead_letter',
             attempt,
             last_error: humanReasonOf(err),
             finished_at: deps.now().toISOString(),
           })
           steps = await listSteps(deps.supabase, args.run.id)
-          return failRun(deps, args.run, steps, err)
+          return failRun(deps, args.run, steps, fence, err)
         }
 
         const delay =
           definition.retryPolicy.backoff === 'exponential'
             ? definition.retryPolicy.baseMs * 2 ** (attempt - 1)
             : definition.retryPolicy.baseMs
-        await updateStep(deps.supabase, step.id, {
+        await writeStep(step.id, {
           status: 'pending',
           attempt,
           last_error: humanReasonOf(err),
@@ -616,7 +724,7 @@ async function runSteps(
 
     if (lastError) {
       steps = await listSteps(deps.supabase, args.run.id)
-      return failRun(deps, args.run, steps, lastError)
+      return failRun(deps, args.run, steps, fence, lastError)
     }
     steps = await listSteps(deps.supabase, args.run.id)
   }
@@ -628,7 +736,7 @@ async function runSteps(
   if (definition.verification) {
     const v = verificationOf(steps)
     if (!v || !v.passed || v.method !== definition.verification.method) {
-      return failRun(deps, args.run, steps, new KernelError(
+      return failRun(deps, args.run, steps, fence, new KernelError(
         'VERIFICATION_FAILED',
         `这个动作要求做「${definition.verification.method}」验证，但整轮跑下来没有一条通过的验证记录 —— 不能算做成了`,
       ))
@@ -638,18 +746,27 @@ async function runSteps(
   const output = lastOutputOf(definition, steps)
   const outCheck = validateAgainstSchema(definition.outputSchema, output ?? {})
   if (!outCheck.ok) {
-    return failRun(deps, args.run, steps, new KernelError(
+    return failRun(deps, args.run, steps, fence, new KernelError(
       'INVALID_OUTPUT',
       `这个动作的产物不符合它自己的契约：${outCheck.reason}`,
     ))
   }
 
-  const finishedRun = await updateRun(deps.supabase, args.run.id, {
+  // 🔴 F1：把 run 判成 succeeded 同样是推进性写入 —— 过期的执行者写它，
+  //    等于宣布一件它其实没做完的事做完了。
+  const finishedRun = await updateRunFenced(deps.supabase, args.run.id, fence.generation, {
     status: 'succeeded',
     finished_at: deps.now().toISOString(),
     needs_human: false,
     last_error: null,
   })
+  if (!finishedRun) {
+    throw new KernelError(
+      'STALE_CLAIM',
+      '这次执行的所有权已经被别人接管了（你手里那一代已经作废）—— 已停手，不会重复做',
+      { detail: { runId: args.run.id, generation: fence.generation } },
+    )
+  }
 
   return {
     status: 'succeeded',
@@ -673,16 +790,26 @@ async function failRun(
   deps: KernelDeps,
   run: ActionRun,
   steps: ActionRunStep[],
+  fence: ExecutionFence,
   err: unknown,
 ): Promise<ExecutionResult> {
   const code = err instanceof KernelError ? err.code : 'EXECUTION_FAILED'
   const humanReason = humanReasonOf(err)
-  const failed = await updateRun(deps.supabase, run.id, {
+  // 🔴 F1：落死信也是一次推进性写入。过期的执行者不许把接管者正在跑的 run
+  //    写成 dead_letter —— 那会直接毁掉一次正在进行的执行。
+  const failed = await updateRunFenced(deps.supabase, run.id, fence.generation, {
     status: 'dead_letter',
     needs_human: true,
     last_error: humanReason,
     finished_at: deps.now().toISOString(),
   })
+  if (!failed) {
+    throw new KernelError(
+      'STALE_CLAIM',
+      '这次执行的所有权已经被别人接管了（你手里那一代已经作废）—— 已停手，不会重复做',
+      { detail: { runId: run.id, generation: fence.generation, originalError: humanReason } },
+    )
+  }
   return {
     status: 'dead_letter',
     run: failed,

@@ -256,6 +256,13 @@ export interface ActionRun {
   previous_claimed_by: string | null
   reclaim_count: number
   last_reclaimed_at: string | null
+  /**
+   * 🔴 单调递增的**领取代际（fencing token）**。每次换人 +1。
+   * 光有 owner 字符串不够：接管之后旧执行者手里的 step_id / run_id 依然有效，
+   * 「按 id 更新」的每一句还能写进去。代际让每一次推进性写入都能问
+   * 「我这一代还是当前那一代吗」，而且单调 → 不存在 ABA。
+   */
+  claim_generation: number
   created_at: string
   updated_at: string
   started_at: string | null
@@ -270,6 +277,8 @@ export interface VerificationResult {
 }
 
 export interface ActionRunStep {
+  /** 这一行属于哪一代执行者。写入守卫直接落在这一列上（见 ActionRun.claim_generation）。 */
+  claim_generation: number
   id: string
   run_id: string
   client_id: string
@@ -325,6 +334,18 @@ export interface CapabilityStepContext {
   readonly ctx: AuthorizedExecutionContext
   readonly stepKey: string
   readonly attempt: number
+  /**
+   * 这一步的**外部幂等键**。传给 provider，让重复调用在对方那边收敛成一次。
+   *
+   * 🔴 生命周期 = 「这个客户的这件事的这一步」，**跨重试、跨死信重跑、跨接管都不变**，
+   *    所以刻意**不含 attempt、不含代际、不含 run 的任何一次执行痕迹**。
+   *    含了就等于每次重试都是一个新键，provider 那边就会做第二遍。
+   *
+   * 🔴 它保证的是「我们每次都出示同一张收据」，**不是** exactly-once ——
+   *    provider 不认这个键的话，端到端仍然只有 at-least-once。
+   *    见 spec §「我们到底保证什么」。
+   */
+  readonly idempotencyKey: string
   /** 上游步骤的产物。断点续跑时这里带着已完成步骤的 output。 */
   readonly priorOutputs: Readonly<Record<string, Record<string, unknown>>>
 }

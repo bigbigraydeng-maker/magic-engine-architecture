@@ -139,7 +139,13 @@ describe('C3 · no_policy → 配好规则 → 显式恢复', () => {
   it('over_cost_cap → 上限被提高之后可恢复', async () => {
     const COSTLY: ActionDefinition = {
       ...BASE,
-      costModel: { kind: 'estimated', estimate: () => 5 },
+      // 声明「这个动作最多花 5」，并逐步说清上限 —— 硬上限要求说得出每步最多花多少。
+      // （真实 capability 是零成本的，所以 actual 一定 <= 声明值。）
+      costModel: {
+        kind: 'estimated',
+        estimate: () => 5,
+        stepCeilingUsd: { build: 5, persist: 0, verify: 0 },
+      },
     }
     const f = makeFixture({
       registry: makeRegistry([COSTLY]),
