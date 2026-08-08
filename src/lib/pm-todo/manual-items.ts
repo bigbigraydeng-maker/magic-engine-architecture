@@ -19,8 +19,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { pushAttributionItems } from './attribution-items'
-import { clientListUnreadableItem, loadActiveClients, type ClientRow } from './client-roster'
+import { pushAttributionItems, type AttributionItemKind } from './attribution-items'
+import { clientListUnreadableItem, loadActiveClients, type ClientRosterItemKind, type ClientRow } from './client-roster'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { AUTO_LANDED_AGENT } from '@/lib/diagnostic/auto-prescribe'
 import { isHandAddedItem } from '@/lib/diagnostic/prescription-landing'
@@ -60,10 +60,8 @@ export type ManualItemKind =
   | 'price_claim_unbacked'
   | 'auto_run_blocked'
   | 'auto_run_stuck'
-  | 'action_unattributable'
-  | 'attribution_audit_failed'
-  | 'client_list_unreadable'
-  | 'outcome_rows_orphaned'
+  | AttributionItemKind
+  | ClientRosterItemKind
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -208,10 +206,7 @@ export async function loadManualItems(
     console.warn('[manual-items] 串台检查失败（不阻塞其他待办）:', e),
   )
 
-  // 承诺了没人能算的指标的动作 —— 归因每 6 小时都会重新发现它们，但计数进不了
-  // 告警，只会一遍遍写进开发日志。这正是「发现死在日志里」，所以捞到这条流水线上。
-  // 注意这里不是 catch 完就算了 —— 这条检查本身就是「归因黑洞」的唯一上报
-  // 通道，它挂了就等于整条检测静默消失。所以失败也要变成一条待办。
+  // 归因侧两条通道（黑洞 / 孤儿数据），理由见 attribution-items.ts
   await pushAttributionItems(supabase, items, ids, nameOf, now)
 
   // GSC property identifiers (needed for the inspect deep link).

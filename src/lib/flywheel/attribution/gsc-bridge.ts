@@ -256,27 +256,32 @@ export async function runGscAttributionForClient(
   result.actions_found = actions.length
 
   for (const action of actions) {
-    const tally = await attributeOneAction(action, windowDays, opts.deferredWindowDays)
-
-    for (const msg of tally.cleanupErrors) {
-      // Only forgivable when THIS action landed something. `cleanup_errors`
-      // means "the rows are in the database, tidying up failed", and the manual
-      // route treats it as success — but the count was per client, so an action
-      // that wrote nothing and failed to retire its stale domain rows was
-      // forgiven on the strength of a DIFFERENT action's writes. Those stale
-      // rows stay on the execution board and in the learning path while the run
-      // reports success. A zero-write cleanup failure is a hard error.
-      // (Codex P2, round 32 on PR #862.)
-      if (tally.written > 0) result.cleanup_errors++
-      result.errors.push(`action ${action.id}: ${msg}`)
-    }
-    if (tally.hardError) result.errors.push(`action ${action.id}: ${tally.hardError}`)
-
-    if (tally.written > 0) result.outcomes_written += tally.written
-    else result.skipped++
+    foldTally(result, action.id, await attributeOneAction(action, windowDays, opts.deferredWindowDays))
   }
 
   return result
+}
+
+/**
+ * Fold one action's tally into the client-level result.
+ *
+ * A cleanup failure counts as `cleanup_errors` — the counter the manual route
+ * forgives — only when THIS action landed something. The count used to be per
+ * client, so an action that wrote nothing and failed to retire its stale domain
+ * rows was forgiven on the strength of a DIFFERENT action's writes, leaving
+ * those rows on the execution board and in the learning path inside a run
+ * reported as successful. A zero-write cleanup failure is a hard error.
+ * (Codex P2, round 32 on PR #862.)
+ */
+function foldTally(result: GscAttributionResult, actionId: string, tally: ActionTally): void {
+  for (const msg of tally.cleanupErrors) {
+    if (tally.written > 0) result.cleanup_errors++
+    result.errors.push(`action ${actionId}: ${msg}`)
+  }
+  if (tally.hardError) result.errors.push(`action ${actionId}: ${tally.hardError}`)
+
+  if (tally.written > 0) result.outcomes_written += tally.written
+  else result.skipped++
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────

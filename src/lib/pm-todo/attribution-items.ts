@@ -24,6 +24,13 @@ import {
 import type { UnattributableReason } from '@/lib/flywheel/attribution/outcome-identity'
 import { daysAgo, type ManualItem } from './manual-items'
 
+/** The kinds this lane emits. Declared here so `manual-items.ts` carries one
+ *  line instead of four, and so adding a lane does not touch that file at all. */
+export type AttributionItemKind =
+  | 'action_unattributable'
+  | 'attribution_audit_failed'
+  | 'outcome_rows_orphaned'
+
 const RENDER_DASHBOARD_URL = 'https://dashboard.render.com'
 
 const executionHref = (clientId: string): string =>

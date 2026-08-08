@@ -9,6 +9,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAll } from '@/lib/supabase-paginate'
 import type { ManualItem } from './manual-items'
 
+export type ClientRosterItemKind = 'client_list_unreadable'
+
 const RENDER_DASHBOARD_URL = 'https://dashboard.render.com'
 
 export interface ClientRow {
