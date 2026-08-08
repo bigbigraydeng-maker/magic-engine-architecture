@@ -24,7 +24,7 @@ function makeChain(terminal: Partial<Record<string, () => Promise<ChainResult>>>
   const chain: Record<string, unknown> = {}
   const fluent = [
     'select', 'not', 'eq', 'lt', 'gte', 'lte',
-    'order', 'limit', 'delete', 'insert',
+    'order', 'limit', 'range', 'delete', 'insert',
   ]
   for (const m of fluent) {
     chain[m] = vi.fn().mockReturnValue(chain)
@@ -46,7 +46,7 @@ vi.mock('@/lib/supabase', () => {
   const chain: Record<string, unknown> = {}
   const fluent = [
     'select', 'not', 'eq', 'lt', 'gte', 'lte',
-    'order', 'limit', 'upsert',
+    'order', 'limit', 'range', 'upsert',
   ]
   for (const m of fluent) {
     chain[m] = vi.fn().mockReturnValue(chain)
@@ -132,7 +132,7 @@ describe('runAttributionJob', () => {
     const { supabaseAdmin } = await import('@/lib/supabase')
     // Override from to return data:[] for the actions query
     const chain = makeChain()
-    ;(chain as Record<string, unknown>)['not'] = vi.fn().mockReturnValue({ data: [], error: null })
+    ;(chain as Record<string, unknown>)['range'] = vi.fn().mockResolvedValue({ data: [], error: null })
     vi.mocked(supabaseAdmin.from).mockReturnValueOnce(asSupabaseQuery(chain))
 
     const { runAttributionJob } = await import('../job')
@@ -148,7 +148,7 @@ describe('runAttributionJob', () => {
     // actions query returns 1 action
     const { supabaseAdmin } = await import('@/lib/supabase')
     const actionsChain = makeChain()
-    ;(actionsChain as Record<string, unknown>)['not'] = vi.fn().mockReturnValue({
+    ;(actionsChain as Record<string, unknown>)['range'] = vi.fn().mockResolvedValue({
       data: [{
         id: 'action-1',
         client_id: 'client-1',
@@ -175,7 +175,7 @@ describe('runAttributionJob', () => {
   it('skips action when baseline exists but no after-metric yet', async () => {
     const { supabaseAdmin } = await import('@/lib/supabase')
     const actionsChain = makeChain()
-    ;(actionsChain as Record<string, unknown>)['not'] = vi.fn().mockReturnValue({
+    ;(actionsChain as Record<string, unknown>)['range'] = vi.fn().mockResolvedValue({
       data: [{
         id: 'action-2',
         client_id: 'client-1',
@@ -205,7 +205,7 @@ describe('runAttributionJob', () => {
     const { supabaseAdmin } = await import('@/lib/supabase')
     const pastDate = new Date(Date.now() - 5 * 86_400_000) // 5 days ago
     const actionsChain = makeChain()
-    ;(actionsChain as Record<string, unknown>)['not'] = vi.fn().mockReturnValue({
+    ;(actionsChain as Record<string, unknown>)['range'] = vi.fn().mockResolvedValue({
       data: [{
         id: 'action-3',
         client_id: 'client-1',
@@ -237,7 +237,7 @@ describe('runAttributionJob', () => {
     const { supabaseAdmin } = await import('@/lib/supabase')
     const pastDate = new Date(Date.now() - 5 * 86_400_000)
     const actionsChain = makeChain()
-    ;(actionsChain as Record<string, unknown>)['not'] = vi.fn().mockReturnValue({
+    ;(actionsChain as Record<string, unknown>)['range'] = vi.fn().mockResolvedValue({
       data: [{
         id: 'action-4',
         client_id: 'client-1',

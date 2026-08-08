@@ -205,6 +205,8 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
   private filters: Filter[] = []
   private orderBy: { column: string; ascending: boolean } | null = null
   private limitCount: number | null = null
+  private rangeFrom: number | null = null
+  private rangeTo: number | null = null
   private mode: 'select' | 'delete' = 'select'
 
   constructor(
@@ -253,6 +255,16 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
 
   limit(n: number): this {
     this.limitCount = n
+    return this
+  }
+
+  /**
+   * PostgREST's paging. Modelled because the writers use `fetchAll`, and a fake
+   * that ignored `.range()` would make every pagination fix invisible.
+   */
+  range(from: number, to: number): this {
+    this.rangeFrom = from
+    this.rangeTo = to
     return this
   }
 
@@ -455,6 +467,9 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
     }
 
     if (this.limitCount !== null) rows = rows.slice(0, this.limitCount)
+    if (this.rangeFrom !== null) {
+      rows = rows.slice(this.rangeFrom, (this.rangeTo ?? this.rangeFrom) + 1)
+    }
 
     this.db.log({ table: this.table, op: 'select', filters: this.filters, rowCount: rows.length })
     return { data: rows, error: null }

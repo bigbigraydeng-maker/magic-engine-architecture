@@ -27,6 +27,7 @@ vi.mock('@/lib/validation-utils', () => ({
 }))
 
 import { runGscAttributionForClient } from '@/lib/flywheel/attribution/gsc-bridge'
+import { DUAL_WINDOW_FLAG } from '@/lib/flywheel/attribution/dual-window-gate'
 
 const mockRun = vi.mocked(runGscAttributionForClient)
 
@@ -54,6 +55,7 @@ function result(over: Partial<Awaited<ReturnType<typeof runGscAttributionForClie
 
 beforeEach(() => {
   vi.clearAllMocks()
+  delete process.env[DUAL_WINDOW_FLAG] // shipped default: dual window OFF
 })
 
 describe('POST /api/clients/[id]/flywheel/gsc-attribution', () => {
@@ -153,15 +155,50 @@ describe('POST /api/clients/[id]/flywheel/gsc-attribution', () => {
     expect(res.status).toBe(200)
   })
 
-  it('passes a valid window_days through and clamps an oversized one', async () => {
+  it('refuses a custom window while dual-window is gated off, and says so', async () => {
+    // On main a manual run REPLACED the previous rows, so an action never held
+    // two windows. The natural key now includes window_days, so a manual 7-day
+    // run beside the cron's 28-day one would ADD rows — doubling the evidence
+    // for consumers that still count them. The gate has to cover this path too.
     mockRun.mockResolvedValue(result({ outcomes_written: 3 }))
 
-    await POST(makeRequest({ window_days: 7 }), { params })
-    expect(mockRun).toHaveBeenCalledWith('c1', 7)
+    const res = await POST(makeRequest({ window_days: 7 }), { params })
+    const body = await res.json()
 
-    mockRun.mockClear()
+    expect(mockRun).toHaveBeenCalledWith('c1', 28) // the authoritative window
+    expect(body.window_days).toBe(28)
+    // Refused out loud: silently substituting 28 would let the caller read the
+    // result as a 7-day answer.
+    expect(body.window_override_refused).toMatchObject({ requested: 7, used: 28 })
+  })
+
+  it('honours a custom window once dual-window is enabled', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    mockRun.mockResolvedValue(result({ outcomes_written: 3 }))
+
+    const res = await POST(makeRequest({ window_days: 7 }), { params })
+    const body = await res.json()
+
+    expect(mockRun).toHaveBeenCalledWith('c1', 7)
+    expect(body.window_override_refused).toBeUndefined()
+  })
+
+  it('clamps an oversized window when enabled', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    mockRun.mockResolvedValue(result({ outcomes_written: 3 }))
+
     await POST(makeRequest({ window_days: 9999 }), { params })
+
     const [, clamped] = mockRun.mock.calls[0]
     expect(clamped).toBeLessThanOrEqual(90)
+  })
+
+  it('does not flag a refusal when the caller asked for the default anyway', async () => {
+    mockRun.mockResolvedValue(result({ outcomes_written: 3 }))
+
+    const res = await POST(makeRequest({ window_days: 28 }), { params })
+    const body = await res.json()
+
+    expect(body.window_override_refused).toBeUndefined()
   })
 })

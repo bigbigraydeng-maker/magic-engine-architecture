@@ -406,3 +406,49 @@ describe('the bridge query derives its filter from the shared declaration', () =
     )
   })
 })
+
+// ── Pass 1 must read every action, for the same reason the audit does ──────
+
+describe('pass 1 pagination', () => {
+  it("job.ts pages its action scan rather than issuing one unbounded read", async () => {
+    // PostgREST caps a response at 1000 rows silently. Truncation here does not
+    // merely skip work: pass2ClientIds is built from this set, so a dropped
+    // seo.gsc.* action belonging to a GSC-disconnected client would take that
+    // client out of pass 2's visit list too — pass 1 declines it on ownership,
+    // pass 2 never sees it, and the run still reports success.
+    const { readFileSync } = await import('node:fs')
+    const nodePath = await import('node:path')
+    const source = readFileSync(
+      nodePath.join(process.cwd(), 'src/lib/flywheel/attribution/job.ts'),
+      'utf8',
+    )
+
+    expect(source).toMatch(/fetchAll</)
+    expect(source).toMatch(/\.range\(from, to\)/)
+    // A stable, unique sort — without one, `range` repeats or drops boundary rows.
+    expect(source).toMatch(/\.order\('id'/)
+  })
+
+  it('reads past the first page in practice', async () => {
+    // The fake models .range(), so this exercises the loop rather than the text.
+    for (let i = 0; i < 1200; i++) {
+      db.seed('flywheel_actions', [{
+        id: `bulk-${String(i).padStart(5, '0')}`,
+        client_id: CLIENT_ID,
+        flywheel: 'geo',
+        action_type: 'geo.deploy_directive',
+        expected_metric: GSC_CLICKS, // every one is unattributable
+        expected_delta: 1,
+        executed_at: EXECUTED_AT,
+        payload: null,
+      }])
+    }
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const result = await runJob()
+    consoleSpy.mockRestore()
+
+    expect(result.processed).toBe(1200)
+    expect(result.unattributable).toBe(1200)
+  })
+})

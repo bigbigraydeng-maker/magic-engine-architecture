@@ -13,6 +13,7 @@
  */
 
 import { supabaseAdmin } from '../../supabase'
+import { fetchAll } from '@/lib/supabase-paginate'
 import type { OutcomeVerdict } from '../adapters/types'
 import {
   OUTCOME_CONFLICT_TARGET,
@@ -95,25 +96,32 @@ export async function runAttributionJob(
 ): Promise<AttributionJobResult> {
   const windowDays = options.windowDays ?? DEFAULT_WINDOW_DAYS
 
-  let actionsQuery = supabaseAdmin
-    .from('flywheel_actions')
-    // `flywheel`, `action_type` and `payload` are all routing inputs: owning a
-    // metric is not the same as being able to load the action that promised it,
-    // and loading it is not the same as producing the key it asked for.
-    .select('id, client_id, flywheel, action_type, payload, expected_metric, expected_delta, executed_at')
-    .not('expected_metric', 'is', null)
+  // Paginated: PostgREST caps one response at 1000 rows and reports no error.
+  // Truncation here does not just skip work — `pass2ClientIds` is built from
+  // this set, so a dropped `seo.gsc.*` action belonging to a GSC-disconnected
+  // client would leave that client out of pass 2's list as well. Pass 1 declines
+  // it on ownership, pass 2 never visits, and the run still reports success.
+  const actions = await fetchAll<ActionRow>((from, to) => {
+    let query = supabaseAdmin
+      .from('flywheel_actions')
+      // `flywheel`, `action_type` and `payload` are all routing inputs: owning a
+      // metric is not the same as being able to load the action that promised it,
+      // and loading it is not the same as producing the key it asked for.
+      .select('id, client_id, flywheel, action_type, payload, expected_metric, expected_delta, executed_at')
+      .not('expected_metric', 'is', null)
+      // A stable, unique sort — `range` without one repeats or drops rows at
+      // page boundaries.
+      .order('id', { ascending: true })
 
-  if (options.clientId) {
-    actionsQuery = actionsQuery.eq('client_id', options.clientId)
-  }
+    if (options.clientId) query = query.eq('client_id', options.clientId)
 
-  const { data: actions, error: actionsError } = await actionsQuery
+    return query.range(from, to)
+  }).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`runAttributionJob: failed to fetch actions — ${message}`)
+  })
 
-  if (actionsError) {
-    throw new Error(`runAttributionJob: failed to fetch actions — ${actionsError.message}`)
-  }
-
-  if (!actions?.length) {
+  if (!actions.length) {
     return {
       processed: 0,
       written: 0,
