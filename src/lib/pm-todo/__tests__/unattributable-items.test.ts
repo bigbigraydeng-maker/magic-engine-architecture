@@ -116,18 +116,40 @@ describe('unattributable todo wording', () => {
     expect(item.how).toContain('seo.gsc.page_clicks → seo.gsc.clicks')
   })
 
-  it('tells the reader a not-yet-live page upgrade will fix itself', async () => {
+  it('says nothing at all about a page upgrade that is simply still in flight', async () => {
+    // scope_skip only means "not marked live yet". The next attribution run
+    // picks it up the moment it is. Putting that in the 「需要你动手」 lane every
+    // day — with a `how` that says it will fix itself — is noise that trains the
+    // reader to skim. (Codex P2, round 17.)
+    const items = await itemsFor([
+      action({
+        reason: 'scope_skip',
+        flywheel: 'seo',
+        action_type: 'cms_update_existing',
+        expected_metric: 'seo.gsc.page_clicks',
+        executed_at: '2026-08-05T00:00:00.000Z', // 3 days before `now`
+      }),
+    ])
+
+    expect(items).toEqual([])
+  })
+
+  it('does surface a page upgrade that has been waiting too long, as a stall', async () => {
     const [item] = await itemsFor([
       action({
         reason: 'scope_skip',
         flywheel: 'seo',
         action_type: 'cms_update_existing',
         expected_metric: 'seo.gsc.page_clicks',
+        executed_at: '2026-06-01T00:00:00.000Z', // 68 days
       }),
     ])
 
-    expect(item.how).toContain('自己好')
-    // Must not ask for a metric change — that is not the fix here.
+    expect(item.what).toContain('68 天')
+    expect(item.how).toContain('卡住')
+    // It must no longer read as "nothing to do".
+    expect(item.how).not.toContain('自己好')
+    // And still must not ask for a metric change — that is not the fix here.
     expect(item.how).not.toContain('改指标')
     expect(item.how).not.toContain('改口径')
   })

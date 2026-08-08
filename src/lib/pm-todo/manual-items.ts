@@ -44,6 +44,18 @@ const NEVER_DROP_KINDS = new Set<ManualItemKind>(['cross_client_leak'])
 const META_PENDING_STALE_DAYS = 3
 /** Crawl data older than this = the weekly recrawl isn't landing. */
 const CRAWL_STALE_DAYS = 14
+/**
+ * A page-upgrade action waiting this long to go live is stuck, not in flight.
+ *
+ * Below it there is nothing for anyone to do: the routing returns `scope_skip`
+ * only because the page has not been marked live yet, and the moment it is, the
+ * next attribution run picks it up on its own. Putting a self-healing state in
+ * the 「需要你动手」 lane every day — with a `how` that literally says it will
+ * fix itself — trains the reader to skim the list, which costs more than the
+ * item is worth. Above it the same state IS a finding: the merge step has
+ * stalled and the attribution never happens. (Codex P2, round 17 on PR #862.)
+ */
+const SCOPE_SKIP_STALE_DAYS = 14
 
 export type ManualItemKind =
   | 'blog_pr_open'
@@ -244,7 +256,7 @@ export async function loadManualItems(
   // 告警，只会一遍遍写进开发日志。这正是「发现死在日志里」，所以捞到这条流水线上。
   // 注意这里不是 catch 完就算了 —— 这条检查本身就是「归因黑洞」的唯一上报
   // 通道，它挂了就等于整条检测静默消失。所以失败也要变成一条待办。
-  await pushUnattributableItems(supabase, items, ids, nameOf).catch((e) => {
+  await pushUnattributableItems(supabase, items, ids, nameOf, now).catch((e) => {
     const message = e instanceof Error ? e.message : String(e)
     console.warn('[manual-items] 归因黑洞检查失败:', message)
     items.push({
@@ -1063,12 +1075,19 @@ async function pushUnattributableItems(
   items: ManualItem[],
   clientIds: string[],
   nameOf: (id: string) => string,
+  now: Date,
 ): Promise<void> {
   const stranded = await auditUnattributableActions(supabase, clientIds)
   if (stranded.length === 0) return
 
   const groups = new Map<string, UnattributableAction[]>()
   for (const row of stranded) {
+    // `scope_skip` is a normal in-flight state, not a problem, until it has
+    // been in flight too long. See SCOPE_SKIP_STALE_DAYS.
+    if (row.reason === 'scope_skip') {
+      const waiting = daysAgo(row.executed_at, now)
+      if (waiting === null || waiting < SCOPE_SKIP_STALE_DAYS) continue
+    }
     const key = `${row.client_id}::${row.reason}`
     const list = groups.get(key) ?? []
     list.push(row)
@@ -1086,7 +1105,7 @@ async function pushUnattributableItems(
       kind: 'action_unattributable',
       client_id: clientId,
       client_name: nameOf(clientId),
-      what: describeUnattributable(rows[0].reason, n, metrics, rows),
+      what: describeUnattributable(rows[0].reason, n, metrics, rows, now),
       how: adviseUnattributable(rows[0].reason, rows),
       href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/execution`,
     })
@@ -1098,6 +1117,7 @@ function describeUnattributable(
   n: number,
   metrics: string,
   rows: UnattributableAction[],
+  now: Date,
 ): string {
   const tail = '这些动作会一直显示「已执行」，但永远不会有效果数据'
 
@@ -1116,9 +1136,13 @@ function describeUnattributable(
     )
   }
 
+  const longest = rows.reduce((max: number, r: UnattributableAction) => {
+    const d = daysAgo(r.executed_at, now)
+    return d !== null && d > max ? d : max
+  }, 0)
   return (
-    `${n} 个页面升级动作挂了 ${metrics}，但它们还没标成已上线，` +
-    `搜索后台那条线整个跳过它们。${tail}`
+    `${n} 个页面升级动作等着上线，最久的已经等了 ${longest} 天 —— 挂的是 ${metrics}，` +
+    `但它们一直没标成已上线，搜索后台那条线就整个跳过它们。${tail}`
   )
 }
 
@@ -1153,7 +1177,8 @@ function adviseUnattributable(
   }
 
   return (
-    '这条多半会自己好 —— 这些页面改动还没合并上线，上线那一刻系统会自动把指标补上。' +
-    '要是它们已经卡了好几天没动静，回我一句「卡住了」我去查合并那一步'
+    `正常情况下这类动作上线那一刻就自动算出来了，所以只有等超过 ${SCOPE_SKIP_STALE_DAYS} 天` +
+    '才会捞出来给你看 —— 也就是说合并上线那一步大概率卡住了。回我一句「卡住了」我去查是卡在' +
+    '哪一环。想先看是哪几个页面，点链接进执行看板'
   )
 }

@@ -29,6 +29,28 @@
 --   (6h) before treating a non-zero result as a real problem.
 --   (Codex P2, round 15 on PR #862.)
 --
+--   IF THE COUNT STILL WILL NOT REACH ZERO, there is exactly one row shape the
+--   writers deliberately refuse to sign, and it needs a human answer rather
+--   than a guess:
+--
+--     SELECT o.action_id, o.metric_key, o.window_days, o.computed_at
+--       FROM flywheel_outcomes o
+--       JOIN flywheel_actions a ON a.id = o.action_id
+--      WHERE o.evaluator_key IS NULL
+--        AND o.metric_key LIKE 'seo.gsc.%'
+--        AND a.expected_metric = o.metric_key;
+--
+--   Old pass 1 attributed EVERY action straight from flywheel_metrics, which
+--   already carries seo.gsc.clicks / impressions / avg_position — so for an
+--   action whose own expected_metric is a GSC key, a row at that exact key
+--   could have come from either writer, and the namespace stops being proof.
+--   Signing it would make this gate pass while the answer is wrong, and
+--   downstream would read flywheel_metrics-derived data as an authoritative GSC
+--   measurement. Decide per row: delete it (it is reproducible), or label it by
+--   hand from the run logs. Zero actions carry a seo.gsc.* expected_metric in
+--   production as of 2026-08-08, so this query is expected to return nothing.
+--   (Codex P2, round 17 on PR #862.)
+--
 --   The contract migration is deliberately NOT in this branch. It was, and
 --   review caught the trap (PR #862, Codex P1): its NULL-count guard measures
 --   DATA state, not DEPLOY state — the backfill below zeroes that count, so

@@ -361,20 +361,65 @@ async function attributeAction(
  * and reporting one while silently skipping the other is how a half-done
  * reconciliation reads as a clean run.
  */
+/**
+ * Which of this evaluator's metric keys may be claimed for THIS action.
+ *
+ * Normally all of them: `seo.gsc.*` is this evaluator's namespace. There is one
+ * exception, and it is the one case where the namespace stops being proof of
+ * provenance — the same caveat the expand migration's backfill carries and the
+ * reason it is labelled BEST-EFFORT HISTORICAL INFERENCE.
+ *
+ * Old pass 1 (main, pre-#859) had no ownership routing: it attributed EVERY
+ * action with an `expected_metric` by reading `flywheel_metrics`, which already
+ * carries `seo.gsc.clicks / impressions / avg_position` (99 rows each). So an
+ * action whose own `expected_metric` is a GSC key, processed inside the
+ * expand→deploy gap, produces an unsigned row at that exact key derived from
+ * flywheel_metrics — not from a GSC snapshot. Signing it `gsc_snapshots` on
+ * namespace alone would relabel derived data as an authoritative GSC
+ * measurement, and because the claim runs before the snapshot maturity check,
+ * a client with no snapshots would never have it recomputed and corrected —
+ * while the contract migration's NULL check would happily pass.
+ * (Codex P2, round 17 on PR #862.)
+ *
+ * Old pass 1 wrote exactly one row per action, at `metric_key =
+ * expected_metric`, so the ambiguity is confined to that single pair. Every
+ * other GSC key on the same action can only have come from this evaluator.
+ * Those stay NULL deliberately: an unresolved provenance question belongs to a
+ * human, and the rollout's own `evaluator_key IS NULL` gate is where it
+ * surfaces — see the note in the expand migration header for the diagnostic
+ * query. Guessing would make the gate pass while the answer is wrong, which is
+ * strictly worse than the gate holding.
+ *
+ * Zero actions carry a `seo.gsc.*` expected_metric in production today
+ * (measured 2026-08-08), so this is a fuse, not a live fault — the same status
+ * the cross-writer delete had before it was removed.
+ */
+function claimableMetricKeys(action: SeoActionRow): readonly string[] {
+  const own = action.expected_metric
+  if (!own || !ownsMetric(OUTCOME_EVALUATOR.GSC_SNAPSHOTS, own)) {
+    return GSC_EVALUATOR_METRIC_KEYS
+  }
+  return GSC_EVALUATOR_METRIC_KEYS.filter(key => key !== own)
+}
+
 async function reconcileLegacyWindows(
   action: SeoActionRow,
   authoritativeWindow: number,
 ): Promise<string[]> {
   const errors: string[] = []
 
-  const { error: claimError } = await supabaseAdmin
-    .from('flywheel_outcomes')
-    .update({ evaluator_key: OUTCOME_EVALUATOR.GSC_SNAPSHOTS })
-    .eq('action_id', action.id)
-    .is('evaluator_key', null)
-    .in('metric_key', GSC_EVALUATOR_METRIC_KEYS)
+  const claimable = claimableMetricKeys(action)
 
-  if (claimError) errors.push(`claim unsigned outcomes: ${claimError.message}`)
+  if (claimable.length > 0) {
+    const { error: claimError } = await supabaseAdmin
+      .from('flywheel_outcomes')
+      .update({ evaluator_key: OUTCOME_EVALUATOR.GSC_SNAPSHOTS })
+      .eq('action_id', action.id)
+      .is('evaluator_key', null)
+      .in('metric_key', claimable)
+
+    if (claimError) errors.push(`claim unsigned outcomes: ${claimError.message}`)
+  }
 
   if (dualWindowEnabled()) return errors
 

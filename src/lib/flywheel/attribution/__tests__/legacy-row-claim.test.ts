@@ -38,6 +38,12 @@ const EXECUTED_AT = '2026-06-01T00:00:00.000Z'
 const GSC_CLICKS = 'seo.gsc.clicks'
 const SOCIAL_METRIC = 'social.followers'
 
+/**
+ * The representative SEO action: its own `expected_metric` is NOT in the GSC
+ * namespace, which is what all 205 actions in production look like today. The
+ * ambiguous shape — expected_metric IS a GSC key, so old pass 1 could have
+ * written that row too — is exercised separately below, deliberately.
+ */
 function seedSeoAction(): void {
   db.seed('flywheel_actions', [
     {
@@ -45,7 +51,7 @@ function seedSeoAction(): void {
       client_id: CLIENT_ID,
       flywheel: 'seo',
       action_type: 'seo.publish_blog',
-      expected_metric: GSC_CLICKS,
+      expected_metric: 'seo.domain.organic_traffic',
       expected_delta: 1,
       executed_at: EXECUTED_AT,
       payload: null,
@@ -199,6 +205,74 @@ describe('the GSC evaluator adopts its own unsigned rows', () => {
     // ...but the debt is named, not swallowed.
     expect(result.cleanup_errors).toBe(1)
     expect(result.errors.join(' ')).toContain('claim unsigned outcomes')
+  })
+})
+
+// ── Provenance the namespace cannot prove ───────────────────────────────────
+
+describe('an action whose own expected_metric is a GSC key', () => {
+  /**
+   * Old pass 1 had no ownership routing: it attributed every action with an
+   * expected_metric straight from `flywheel_metrics`, which already carries
+   * seo.gsc.clicks / impressions / avg_position. So for THIS shape of action,
+   * an unsigned row at that exact key could have come from either writer, and
+   * the namespace stops being proof of provenance.
+   */
+  function seedGscMetricAction(): void {
+    db.seed('flywheel_actions', [
+      {
+        id: ACTION_ID, client_id: CLIENT_ID, flywheel: 'seo',
+        action_type: 'seo.publish_blog', expected_metric: GSC_CLICKS,
+        expected_delta: 1, executed_at: EXECUTED_AT, payload: null,
+      },
+    ])
+  }
+
+  it('does NOT sign the one row old pass 1 could also have written', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    seedGscMetricAction()
+    seedGscSnapshots()
+    seedUnsignedRow() // metric_key = seo.gsc.clicks = the action's own metric
+
+    await runBridge(28)
+
+    // Left NULL on purpose: guessing would make the contract migration's
+    // NULL-count gate pass while the answer is wrong, and downstream would read
+    // flywheel_metrics-derived data as an authoritative GSC measurement.
+    expect(db.outcomes().find(r => r.window_days === 7)?.evaluator_key).toBeNull()
+  })
+
+  it('still signs the other GSC keys on the same action', async () => {
+    // Old pass 1 wrote exactly ONE row per action, so only the expected_metric
+    // pair is ambiguous. Withholding the rest would block the rollout for no
+    // reason.
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    seedGscMetricAction()
+    seedGscSnapshots()
+    seedUnsignedRow({ id: 'legacy-imp', metric_key: 'seo.gsc.impressions' })
+
+    await runBridge(28)
+
+    expect(db.outcomes().find(r => r.id === 'legacy-imp')?.evaluator_key)
+      .toBe(OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
+  })
+
+  it('pass 1 cannot reach this case at all — it defers the action', async () => {
+    // The mirror of the same question on the other writer: new pass 1 declines
+    // GSC-owned metrics before processAction runs, so its claim can never touch
+    // the seo.gsc.* namespace.
+    seedGscMetricAction()
+    db.seed('flywheel_metrics', [
+      { client_id: CLIENT_ID, metric_key: GSC_CLICKS, metric_value: 100, measured_at: '2026-05-30T00:00:00.000Z' },
+      { client_id: CLIENT_ID, metric_key: GSC_CLICKS, metric_value: 140, measured_at: '2026-06-05T00:00:00.000Z' },
+    ])
+    seedUnsignedRow()
+
+    const result = await runJob(14)
+
+    expect(result.deferred).toBe(1)
+    expect(result.written).toBe(0)
+    expect(db.outcomes().find(r => r.window_days === 7)?.evaluator_key).toBeNull()
   })
 })
 
