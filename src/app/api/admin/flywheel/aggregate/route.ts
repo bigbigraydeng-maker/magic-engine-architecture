@@ -22,12 +22,22 @@ import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { buildAggregateRows, pickTop } from '@/lib/flywheel/aggregate/outcome-aggregate'
 import { guardAdmin } from '@/lib/auth/require-admin'
+import { keepOneCasePerAction } from '@/lib/flywheel/attribution/outcome-identity'
 
 export const dynamic = 'force-dynamic'
 
+type JoinedAction = {
+  action_type: string
+  flywheel: string | null
+  expected_metric?: string | null
+}
+
 type OutcomeRow = {
+  action_id: string
+  metric_key: string
+  window_days: number | null
   verdict: string
-  flywheel_actions: { action_type: string; flywheel: string | null } | { action_type: string; flywheel: string | null }[]
+  flywheel_actions: JoinedAction | JoinedAction[]
 }
 
 export async function GET(request: Request) {
@@ -44,7 +54,10 @@ export async function GET(request: Request) {
 
   let query = supabaseAdmin
     .from('flywheel_outcomes')
-    .select('verdict, flywheel_actions!inner(action_type, flywheel, client_id)')
+    .select(
+      'action_id, metric_key, window_days, verdict, ' +
+      'flywheel_actions!inner(action_type, flywheel, client_id, expected_metric)',
+    )
 
   if (clientId) {
     // PostgREST: filter on joined table column via dot notation
@@ -62,10 +75,31 @@ export async function GET(request: Request) {
 
   // ── Flatten and aggregate ───────────────────────────────────────────────────
 
-  const rows = (data as OutcomeRow[] ?? []).map(r => {
-    const actions = Array.isArray(r.flywheel_actions) ? r.flywheel_actions[0] : r.flywheel_actions
-    return { action_type: actions?.action_type ?? 'unknown', verdict: r.verdict }
-  })
+  // Collapse to one row per ACTION before counting anything.
+  //
+  // "How often does this kind of action work" is a question about actions, and
+  // an outcome row is not an action: a GSC action yields clicks, impressions and
+  // avg_position from one snapshot pair — three readings of one event — and,
+  // once ATTRIBUTION_DUAL_WINDOW_ENABLED is on, each of those again at a second
+  // window. Counting rows lets a single action clear the `min` sample threshold
+  // by itself and pull the success rate with it. Same fold the case-library and
+  // confidence readers use, so the three cannot disagree about what a sample is.
+  // (Codex P2, round 26 on PR #862.)
+  const collapsed = keepOneCasePerAction(
+    ((data as unknown as OutcomeRow[]) ?? []).map(r => {
+      const a = Array.isArray(r.flywheel_actions) ? r.flywheel_actions[0] : r.flywheel_actions
+      return {
+        action_id: r.action_id,
+        metric_key: r.metric_key,
+        window_days: r.window_days,
+        expected_metric: a?.expected_metric ?? null,
+        action_type: a?.action_type ?? 'unknown',
+        verdict: r.verdict,
+      }
+    }),
+  )
+
+  const rows = collapsed.map(r => ({ action_type: r.action_type, verdict: r.verdict }))
 
   const aggregate  = buildAggregateRows(rows)
   const topEntries = pickTop(aggregate, top, min)

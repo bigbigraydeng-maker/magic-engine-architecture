@@ -22,10 +22,16 @@
  * and the industry benchmarks shown to clients would move. That is a real
  * change to client-visible numbers, not a theoretical risk.
  *
- * The consumers inside this PR's scope (case-library benchmarks and the three
- * confidence readers) already collapse per action — see
- * `keepOneCasePerAction`. The memory consumers are the follow-up PR's job, and
- * this flag is what keeps the two from being coupled.
+ * Every other consumer already collapses per action via `keepOneCasePerAction`:
+ * the case-library benchmarks, the three confidence readers, the admin
+ * aggregate page (`/api/admin/flywheel/aggregate`) and the execution board
+ * (`/api/clients/[id]/execution`) — the last two found by review in round 26,
+ * which is why "Memory is the only blocker" was an unsafe thing to have written
+ * down. The memory consumers are the follow-up PR's job, and this flag is what
+ * keeps the two from being coupled.
+ *
+ * If a further row-counting reader turns up, it belongs in that list before the
+ * flag is flipped, not after.
  *
  * WHAT "OFF" ACTUALLY ENFORCES. Refusing to *write* a second window is only
  * half of it. On main every writer DELETEd by action before inserting, so an
