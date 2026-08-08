@@ -258,15 +258,48 @@ export function resolveAttributionRouting(
  * measurement. A handoff that names the wrong cause sends someone looking in
  * the wrong place, which is the same as not reporting it.
  */
+/**
+ * Can the GSC evaluator actually PRODUCE the key this action asks for?
+ *
+ * Loading the action is necessary but not sufficient. That evaluator emits
+ * domain keys for a domain-scope action and page keys for a page-scope one, so
+ * an action promising `seo.gsc.page_clicks` from a plain `seo.publish_blog`
+ * would be deferred to a writer that will only ever produce the domain three —
+ * and the adapters accept that combination today. Deferring it would be the
+ * same silent hole as deferring across flywheels.
+ */
+function gscScopeVerdict(
+  action: AttributionRoutingInput,
+): AttributionRoutingResult | null {
+  const produced = gscProducedMetricKeys({
+    action_type: action.action_type ?? '',
+    expected_metric: action.expected_metric,
+    payload: action.payload ?? null,
+  })
+
+  if (produced.length === 0) {
+    return { routing: 'unattributable', reason: 'scope_skip', suggestedMetric: null }
+  }
+  if (produced.includes(action.expected_metric)) return null
+
+  // Only suggest a key this action would actually get — a suggestion the owner
+  // still would not produce is worse than no suggestion.
+  const counterpart = counterpartMetricKey(action.expected_metric)
+  return {
+    routing: 'unattributable',
+    reason: 'scope_mismatch',
+    suggestedMetric: counterpart && produced.includes(counterpart) ? counterpart : null,
+  }
+}
+
 export function resolveAttributionRoutingDetailed(
   action: AttributionRoutingInput,
 ): AttributionRoutingResult {
   // `undefined` means the caller's query did not select the column — a coding
-  // mistake, not a business fact. Coercing it to "unreachable" would route
-  // every GSC-owned action to `unattributable` and rebuild the exact permanent
-  // hole this function exists to prevent, with no error anywhere. Checked
-  // before the ownership short-circuit so the mistake surfaces on the first
-  // action rather than only on the ones that happen to need routing.
+  // mistake, not a business fact. Coercing it to "unreachable" would route every
+  // GSC-owned action to `unattributable` and rebuild the exact permanent hole
+  // this function exists to prevent, with no error anywhere. Checked before the
+  // ownership short-circuit so the mistake surfaces on the first action.
   if (action.flywheel === undefined) {
     throw new Error(
       'resolveAttributionRouting: action.flywheel is undefined — the query must ' +
@@ -286,33 +319,9 @@ export function resolveAttributionRoutingDetailed(
     return { routing: 'unattributable', reason: 'cross_flywheel', suggestedMetric: null }
   }
 
-  // Loading the action is necessary but not sufficient. The GSC evaluator emits
-  // domain keys for a domain-scope action and page keys for a page-scope one,
-  // so an action promising `seo.gsc.page_clicks` from a plain `seo.publish_blog`
-  // is deferred to a writer that will only ever produce the domain three — and
-  // the adapters accept that combination today. Deferring it would be the same
-  // silent hole as deferring across flywheels.
   if (owner === OUTCOME_EVALUATOR.GSC_SNAPSHOTS) {
-    const scopeInput = {
-      action_type: action.action_type ?? '',
-      expected_metric: action.expected_metric,
-      payload: action.payload ?? null,
-    }
-    const produced = gscProducedMetricKeys(scopeInput)
-
-    if (produced.length === 0) {
-      return { routing: 'unattributable', reason: 'scope_skip', suggestedMetric: null }
-    }
-    if (!produced.includes(action.expected_metric)) {
-      // Only suggest a key this action would actually get — a suggestion the
-      // owner still would not produce is worse than no suggestion.
-      const counterpart = counterpartMetricKey(action.expected_metric)
-      return {
-        routing: 'unattributable',
-        reason: 'scope_mismatch',
-        suggestedMetric: counterpart && produced.includes(counterpart) ? counterpart : null,
-      }
-    }
+    const scopeVerdict = gscScopeVerdict(action)
+    if (scopeVerdict) return scopeVerdict
   }
 
   return { routing: 'defer' }

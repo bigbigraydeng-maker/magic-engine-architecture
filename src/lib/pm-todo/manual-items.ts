@@ -150,20 +150,46 @@ export async function dropBrokenLinks(
   return { kept, dropped }
 }
 
-export async function loadManualItems(
-  supabase: SupabaseClient,
-  now: Date = new Date(),
-): Promise<ManualItem[]> {
-  const items: ManualItem[] = []
+/**
+ * 客户名单查挂了 ≠ 一个客户都没有。
+ *
+ * 原来两者走同一条路：`error` 被解构丢掉、`clientRows` 是 null，于是当成「零个
+ * 活跃客户」直接返回，后面所有按客户查的待办一条都不跑，而清单照样干干净净地
+ * 生成 —— 连「归因检查挂了」那张兜底网本身都在返回的下游，一起被跳过。
+ * （Codex P1, round 15 on PR #862）
+ */
+function clientListUnreadableItem(message: string): ManualItem {
+  return {
+    kind: 'client_list_unreadable',
+    client_id: 'infra',
+    client_name: 'Magic Engine 后台',
+    what:
+      `今天没读出客户名单 —— ${message}。` +
+      '所以「按客户逐个查」的那半边待办(串台、草稿、归因黑洞、客资口径……)' +
+      '今天全都没跑。这份清单不是「今天没事」,是只查了一半',
+    how:
+      '这条不用你动手 —— 是我们这边读客户表失败了。回我一句「名单读不出来」' +
+      '我去修。修好之前,今天这份清单只当作系统级检查,别当作客户侧没问题',
+    href: RENDER_DASHBOARD_URL,
+  }
+}
 
-  // 分页：PostgREST 单次最多返回 1000 行，而且不报错（见 supabase-paginate.ts）。
-  // 这里截断不只是少列几个客户 —— `ids` 是后面所有「按客户查」的输入，包括归因
-  // 黑洞和孤儿数据两项审计。它们内部各自分页也补不回来：被上游漏掉的客户，
-  // 审计根本不知道要去查。排序要唯一，否则翻页会重复或漏行。
-  let clientRows: ClientRow[] | null = null
-  let clientsError: { message: string } | null = null
+/**
+ * 活跃客户名单，分页读全。
+ *
+ * PostgREST 单次最多返回 1000 行，而且不报错（见 supabase-paginate.ts）。这里
+ * 截断不只是少列几个客户 —— 名单是后面所有「按客户查」的输入，包括归因黑洞和
+ * 孤儿数据两项审计。它们内部各自分页也补不回来：被上游漏掉的客户，审计根本不
+ * 知道要去查。排序要唯一，否则翻页会重复或漏行。（Codex P2, round 23）
+ *
+ * 查挂了和「一个活跃客户都没有」分开返回：合并成同一条路的话，清单会干干净净
+ * 地生成，而后面半边根本没跑。
+ */
+async function loadActiveClients(
+  supabase: SupabaseClient,
+): Promise<{ clients: Map<string, ClientRow>; error: { message: string } | null }> {
   try {
-    clientRows = await fetchAll<ClientRow>((from, to) =>
+    const rows = await fetchAll<ClientRow>((from, to) =>
       supabase
         .from('clients')
         .select('id, name, domain')
@@ -171,12 +197,22 @@ export async function loadManualItems(
         .order('id', { ascending: true })
         .range(from, to),
     )
+    return { clients: new Map(rows.map((c) => [c.id, c])), error: null }
   } catch (e) {
-    clientsError = { message: e instanceof Error ? e.message : String(e) }
+    return {
+      clients: new Map(),
+      error: { message: e instanceof Error ? e.message : String(e) },
+    }
   }
-  const clients = new Map(
-    ((clientRows ?? []) as ClientRow[]).map((c) => [c.id, c]),
-  )
+}
+
+export async function loadManualItems(
+  supabase: SupabaseClient,
+  now: Date = new Date(),
+): Promise<ManualItem[]> {
+  const items: ManualItem[] = []
+
+  const { clients, error: clientsError } = await loadActiveClients(supabase)
   // 基础设施类检查要放在这条提前返回**之前**：定时任务健康跟系统里有几个客户
   // 毫无关系。放在后面的话，客户表一空它就被跳过了。
   // 出片余额用完 —— 只有人能充值，必须当天摆到眼前，不能烂在工单的 error 字段里
@@ -189,26 +225,8 @@ export async function loadManualItems(
   await pushFactoryWorkerItems(supabase, items, now).catch((e) =>
     console.warn('[manual-items] 出片工人在岗检查失败（不阻塞其他待办）:', e),
   )
-  // 客户名单查挂了 ≠ 一个客户都没有,但代码原来把两者写成同一条路:`error` 被
-  // 解构丢掉,`clientRows` 是 null,于是这里当成「零个活跃客户」直接返回,后面
-  // 所有按客户查的待办(串台、草稿、归因黑洞……)一条都不会跑,而清单照样干净
-  // 地生成 —— 连「归因黑洞检查挂了」那条兜底待办本身都在这条返回的后面,
-  // 一起被跳过。这正是我在这个 PR 里逐条修的那个形状,出现在我自己刚加的
-  // 检查上游。(Codex P1, round 15 on PR #862)
   if (clientsError) {
-    items.push({
-      kind: 'client_list_unreadable',
-      client_id: 'infra',
-      client_name: 'Magic Engine 后台',
-      what:
-        `今天没读出客户名单 —— ${clientsError.message}。` +
-        '所以「按客户逐个查」的那半边待办(串台、草稿、归因黑洞、客资口径……)' +
-        '今天全都没跑。这份清单不是「今天没事」,是只查了一半',
-      how:
-        '这条不用你动手 —— 是我们这边读客户表失败了。回我一句「名单读不出来」' +
-        '我去修。修好之前,今天这份清单只当作系统级检查,别当作客户侧没问题',
-      href: RENDER_DASHBOARD_URL,
-    })
+    items.push(clientListUnreadableItem(clientsError.message))
     return items
   }
 

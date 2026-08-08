@@ -142,6 +142,85 @@ function loadableFlywheelsOrThrow(): readonly string[] {
  * @param windowDays Days after action to look for the "after" snapshot (default 28)
  * @param opts       See {@link GscAttributionOptions}
  */
+/**
+ * Load this evaluator's actions for one client, paginated.
+ *
+ * The flywheel filter comes from the shared declaration rather than a literal,
+ * so pass 1's decision to defer to us and our decision to load cannot drift
+ * apart — an action deferred here but excluded by this query would never be
+ * attributed at all.
+ *
+ * Paginated for the same reason pass 1 and the audit are: PostgREST caps a
+ * response at 1000 rows silently, and newest-first ordering means the rows
+ * dropped are the OLDEST. Pass 1 defers every GSC-owned action it finds, but
+ * `pass2ClientIds` carries only client ids — so a truncation here loses exactly
+ * the deferred actions pass 1 promised we would answer, and nothing reports it.
+ */
+async function loadSeoActions(clientId: string): Promise<SeoActionRow[]> {
+  return fetchAll<SeoActionRow>((from, to) =>
+    supabaseAdmin
+      .from('flywheel_actions')
+      .select('id, client_id, executed_at, action_type, expected_metric, payload')
+      .eq('client_id', clientId)
+      .in('flywheel', loadableFlywheelsOrThrow())
+      .not('expected_metric', 'is', null)
+      // `id` as a unique tiebreak — `executed_at` is not unique, and an
+      // unstable sort repeats or drops rows at page boundaries.
+      .order('executed_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(from, to),
+  )
+}
+
+/** One action's contribution to the run. */
+interface ActionTally {
+  written: number
+  /** Post-write reconciliation failures — the rows landed regardless. */
+  cleanupErrors: string[]
+  /** A hard failure that stopped this action producing anything. */
+  hardError: string | null
+}
+
+/**
+ * Attribute one action at the cadence window, plus the handoff window when pass
+ * 1 deferred it, and reconcile afterwards.
+ *
+ * `written` accumulates as each upsert lands, so a failure partway through does
+ * not un-count rows already in the database: the cadence upsert can succeed and
+ * the handoff one then fail, and the cron summary must still report what landed.
+ */
+async function attributeOneAction(
+  action: SeoActionRow,
+  windowDays: number,
+  deferredWindowDays: number | undefined,
+): Promise<ActionTally> {
+  const tally: ActionTally = { written: 0, cleanupErrors: [], hardError: null }
+
+  try {
+    const cadence = await attributeAction(action, windowDays)
+    tally.written = cadence.written
+    if (cadence.cleanupError) tally.cleanupErrors.push(cadence.cleanupError)
+
+    // Only now — the authoritative window is in the database, so dropping the
+    // others cannot leave this action with nothing.
+    if (cadence.written > 0) {
+      const windowError = await retireExtraWindows(action, windowDays)
+      if (windowError) tally.cleanupErrors.push(windowError)
+    }
+
+    const handoffWindow = resolveHandoffWindow(action, windowDays, deferredWindowDays)
+    if (handoffWindow !== null) {
+      const handoff = await attributeAction(action, handoffWindow)
+      tally.written += handoff.written
+      if (handoff.cleanupError) tally.cleanupErrors.push(handoff.cleanupError)
+    }
+  } catch (err) {
+    tally.hardError = err instanceof Error ? err.message : String(err)
+  }
+
+  return tally
+}
+
 export async function runGscAttributionForClient(
   clientId: string,
   windowDays: number = GSC_DEFAULT_WINDOW_DAYS,
@@ -157,31 +236,9 @@ export async function runGscAttributionForClient(
     reconcile_errors: 0,
   }
 
-  // Load this evaluator's actions for the client. The flywheel filter comes
-  // from the shared declaration rather than a literal, so pass 1's decision to
-  // defer to us and our decision to load cannot drift apart — an action
-  // deferred here but excluded by this query would never be attributed at all.
-  // Paginated for the same reason pass 1 and the audit are: PostgREST caps a
-  // response at 1000 rows silently, and newest-first ordering means the rows
-  // dropped are the OLDEST. Pass 1 now defers every GSC-owned action it finds,
-  // but `pass2ClientIds` carries only client ids — so a truncation here loses
-  // exactly the deferred actions pass 1 promised we would answer, and nothing
-  // reports it.
   let actions: SeoActionRow[]
   try {
-    actions = await fetchAll<SeoActionRow>((from, to) =>
-      supabaseAdmin
-        .from('flywheel_actions')
-        .select('id, client_id, executed_at, action_type, expected_metric, payload')
-        .eq('client_id', clientId)
-        .in('flywheel', loadableFlywheelsOrThrow())
-        .not('expected_metric', 'is', null)
-        // `id` as a unique tiebreak — `executed_at` is not unique, and an
-        // unstable sort repeats or drops rows at page boundaries.
-        .order('executed_at', { ascending: false })
-        .order('id', { ascending: false })
-        .range(from, to),
-    )
+    actions = await loadSeoActions(clientId)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     result.errors.push(`Failed to load SEO actions: ${message}`)
@@ -189,48 +246,18 @@ export async function runGscAttributionForClient(
   }
 
   if (!actions.length) return result
-
   result.actions_found = actions.length
 
   for (const action of actions) {
-    // Accumulated OUTSIDE the try so a failure partway through the action does
-    // not un-count rows that are already in the database: the cadence-window
-    // upsert can succeed and the handoff-window one then fail, and the cron
-    // summary must still report the rows that landed.
-    let written = 0
-    try {
-      const cadence = await attributeAction(action, windowDays)
-      written = cadence.written
-      if (cadence.cleanupError) {
-        result.cleanup_errors++
-        result.errors.push(`action ${action.id}: ${cadence.cleanupError}`)
-      }
+    const tally = await attributeOneAction(action, windowDays, opts.deferredWindowDays)
 
-      // Only now — the authoritative window is in the database, so dropping the
-      // others cannot leave this action with nothing.
-      if (cadence.written > 0) {
-        const windowError = await retireExtraWindows(action, windowDays)
-        if (windowError) {
-          result.cleanup_errors++
-          result.errors.push(`action ${action.id}: ${windowError}`)
-        }
-      }
-
-      const handoffWindow = resolveHandoffWindow(action, windowDays, opts.deferredWindowDays)
-      if (handoffWindow !== null) {
-        const handoff = await attributeAction(action, handoffWindow)
-        written += handoff.written
-        if (handoff.cleanupError) {
-          result.cleanup_errors++
-          result.errors.push(`action ${action.id}: ${handoff.cleanupError}`)
-        }
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
+    for (const msg of tally.cleanupErrors) {
+      result.cleanup_errors++
       result.errors.push(`action ${action.id}: ${msg}`)
     }
+    if (tally.hardError) result.errors.push(`action ${action.id}: ${tally.hardError}`)
 
-    if (written > 0) result.outcomes_written += written
+    if (tally.written > 0) result.outcomes_written += tally.written
     else result.skipped++
   }
 
@@ -264,6 +291,25 @@ function resolveHandoffWindow(
   return deferredWindowDays
 }
 
+/**
+ * Compute and write one action's outcomes at one window.
+ *
+ * Order is write-then-retire. This used to be DELETE-then-INSERT, so a failed
+ * insert left the action with no outcomes at all until the next successful run;
+ * upserting on the natural key also keeps `flywheel_outcomes.id` stable across
+ * re-runs. See Issue #859.
+ *
+ * Arbitration is enforced from the owning side: this evaluator may only write
+ * metrics it is authoritative for (`assertEvaluatorOwnsAll`).
+ *
+ * Producing nothing is normally not a refutation of the previous answer, so
+ * nothing is retired. Page scope is the exception: the action being about one
+ * specific page makes its domain-level outcomes wrong *by scope*, not by this
+ * run's data. Whether the page happens to appear in this snapshot's `top_pages`
+ * is a separate question, and letting it decide would leave rows the old ungated
+ * bridge wrote visible on the execution board — and feeding memory and
+ * benchmarks — indefinitely.
+ */
 async function attributeAction(
   action: SeoActionRow,
   windowDays: number,
@@ -273,16 +319,12 @@ async function attributeAction(
   const scope = resolveGscAttributionScope(action)
   if (scope.kind === 'skip') return nothing
 
-  const executedAt  = action.executed_at
-  const windowEnd   = addDays(executedAt, windowDays)
-
+  const executedAt = action.executed_at
   const [baseline, after] = await Promise.all([
     fetchGscSnapshot(action.client_id, 'before', executedAt),
-    fetchGscSnapshot(action.client_id, 'after',  windowEnd),
+    fetchGscSnapshot(action.client_id, 'after', addDays(executedAt, windowDays)),
   ])
-
-  // Need both snapshots to compute attribution
-  if (!baseline || !after) return nothing
+  if (!baseline || !after) return nothing   // both snapshots required
 
   const rows =
     scope.kind === 'page'
@@ -290,13 +332,6 @@ async function attributeAction(
       : buildOutcomeRows(action, baseline, after, windowDays)
 
   if (rows.length === 0) {
-    // Normally producing nothing is not a refutation of the previous answer, so
-    // nothing is retired. Page scope is the exception: the action being about
-    // one specific page makes its domain-level outcomes wrong *by scope*, not
-    // by this run's data. Whether the page happens to appear in this snapshot's
-    // top_pages is a separate question, and letting it decide would leave rows
-    // the old ungated bridge wrote visible on the execution board — and feeding
-    // memory and benchmarks — indefinitely.
     if (scope.kind === 'page') {
       return {
         written: 0,
@@ -306,28 +341,15 @@ async function attributeAction(
     return nothing
   }
 
-  // Arbitration, from the owning side: this evaluator may only write metrics it
-  // is authoritative for. See Issue #859.
-  assertEvaluatorOwnsAll(
-    OUTCOME_EVALUATOR.GSC_SNAPSHOTS,
-    rows.map(row => row.metric_key as string),
-  )
+  const written = rows.map(row => row.metric_key as string)
+  assertEvaluatorOwnsAll(OUTCOME_EVALUATOR.GSC_SNAPSHOTS, written)
 
-  // Write current truth first. This used to be DELETE-then-INSERT, which meant a
-  // failed insert left the action with no outcomes at all until the next
-  // successful run. Upserting on the natural key also keeps
-  // flywheel_outcomes.id stable across re-runs. See Issue #859.
   const { error } = await supabaseAdmin
     .from('flywheel_outcomes')
     .upsert(rows, { onConflict: OUTCOME_CONFLICT_TARGET })
   if (error) throw new Error(`upsert outcomes: ${error.message}`)
 
-  // Retire the keys this evaluator owns but no longer produces — e.g. the
-  // domain-scope rows left behind once an action becomes page-scoped.
-  const staleKeys = resolveStaleEvaluatorKeys(
-    GSC_EVALUATOR_METRIC_KEYS,
-    rows.map(row => row.metric_key as string),
-  )
+  const staleKeys = resolveStaleEvaluatorKeys(GSC_EVALUATOR_METRIC_KEYS, written)
 
   return {
     written: rows.length,

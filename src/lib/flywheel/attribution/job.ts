@@ -111,22 +111,25 @@ const UNATTRIBUTABLE_SAMPLE_LIMIT = 10
 
 // ── Main entry point ──────────────────────────────────────────────────────────
 
-export async function runAttributionJob(
-  options: AttributionJobOptions = {}
-): Promise<AttributionJobResult> {
-  const windowDays = options.windowDays ?? DEFAULT_WINDOW_DAYS
-
-  // Paginated: PostgREST caps one response at 1000 rows and reports no error.
-  // Truncation here does not just skip work — `pass2ClientIds` is built from
-  // this set, so a dropped `seo.gsc.*` action belonging to a GSC-disconnected
-  // client would leave that client out of pass 2's list as well. Pass 1 declines
-  // it on ownership, pass 2 never visits, and the run still reports success.
-  const actions = await fetchAll<ActionRow>((from, to) => {
+/**
+ * Load every action with an `expected_metric`, paginated.
+ *
+ * PostgREST caps one response at 1000 rows and reports no error. Truncation
+ * here does not just skip work — `pass2ClientIds` is built from this set, so a
+ * dropped `seo.gsc.*` action belonging to a GSC-disconnected client would leave
+ * that client out of pass 2's list as well: pass 1 declines it on ownership,
+ * pass 2 never visits, and the run still reports success.
+ *
+ * `flywheel`, `action_type` and `payload` are all routing inputs — owning a
+ * metric is not the same as being able to load the action that promised it, and
+ * loading it is not the same as producing the key it asked for.
+ */
+async function loadAttributableActions(
+  options: AttributionJobOptions,
+): Promise<ActionRow[]> {
+  return fetchAll<ActionRow>((from, to) => {
     let query = supabaseAdmin
       .from('flywheel_actions')
-      // `flywheel`, `action_type` and `payload` are all routing inputs: owning a
-      // metric is not the same as being able to load the action that promised it,
-      // and loading it is not the same as producing the key it asked for.
       .select('id, client_id, flywheel, action_type, payload, expected_metric, expected_delta, executed_at')
       .not('expected_metric', 'is', null)
       // A stable, unique sort — `range` without one repeats or drops rows at
@@ -140,112 +143,127 @@ export async function runAttributionJob(
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(`runAttributionJob: failed to fetch actions — ${message}`)
   })
+}
 
-  if (!actions.length) {
+function emptyResult(): AttributionJobResult {
+  return {
+    processed: 0,
+    written: 0,
+    skipped: 0,
+    failed: 0,
+    deferred: 0,
+    pass2ClientIds: [],
+    unattributable: 0,
+    unattributableSamples: [],
+    reconcileErrors: 0,
+    reconcileErrorSamples: [],
+  }
+}
+
+/**
+ * What one action produced. Every branch of the loop returns one of these, so
+ * counting happens in exactly one place and a new branch cannot forget to
+ * report — which is how the deferral path went quiet until round 20.
+ */
+type ActionOutcome =
+  | { kind: 'deferred' | 'unattributable' | 'written' | 'skipped'; reconcileErrors: string[] }
+  | { kind: 'failed'; message: string }
+
+/**
+ * Arbitration plus attribution for a single action.
+ *
+ * An outcome belongs to whichever evaluator owns its metric family. Declining
+ * here — rather than writing and letting the last writer win — is what keeps
+ * execution order out of the answer. See Issue #859.
+ *
+ * Both declining branches still reconcile: declining means this evaluator
+ * promises NOTHING for this action, which makes every row it already wrote
+ * abandoned. Reachable through the correction this PR asks for — an SEO action
+ * whose `expected_metric` moves from `seo.domain.organic_traffic` to
+ * `seo.gsc.clicks`. Pass 1 hands it over, the bridge only ever retires keys in
+ * its own vocabulary, so the old verdict used to be immortal.
+ * (Codex P2, round 20 on PR #862.)
+ */
+async function attributeOne(
+  action: ActionRow,
+  windowDays: number,
+): Promise<ActionOutcome> {
+  const routing = resolveAttributionRouting(action)
+
+  if (routing === 'defer') {
+    return { kind: 'deferred', reconcileErrors: await reconcileLegacyWindows(action.id, null) }
+  }
+
+  if (routing === 'unattributable') {
+    // Owned by an evaluator that cannot load this action. Deferring would
+    // promise an answer nobody can give; writing it here is refused by the
+    // ownership CHECK. Report it instead of quietly producing a hole.
+    console.error(
+      `Attribution job: action ${action.id} (flywheel=${action.flywheel}) promises ` +
+        `"${action.expected_metric}", owned by an evaluator that does not load ` +
+        `this flywheel — no evaluator can attribute it.`,
+    )
+    return { kind: 'unattributable', reconcileErrors: await reconcileLegacyWindows(action.id, null) }
+  }
+
+  try {
+    const outcome = await processAction(action, windowDays)
     return {
-      processed: 0,
-      written: 0,
-      skipped: 0,
-      failed: 0,
-      deferred: 0,
-      pass2ClientIds: [],
-      unattributable: 0,
-      unattributableSamples: [],
-      reconcileErrors: 0,
-      reconcileErrorSamples: [],
+      kind: outcome.wrote ? 'written' : 'skipped',
+      reconcileErrors: outcome.reconcileErrors,
     }
+  } catch (err) {
+    return { kind: 'failed', message: err instanceof Error ? err.message : String(err) }
   }
+}
 
-  let written = 0
-  let skipped = 0
-  let failed = 0
-  let deferred = 0
-  let unattributable = 0
+export async function runAttributionJob(
+  options: AttributionJobOptions = {}
+): Promise<AttributionJobResult> {
+  const windowDays = options.windowDays ?? DEFAULT_WINDOW_DAYS
+  const actions = await loadAttributableActions(options)
+  if (!actions.length) return emptyResult()
+
+  const r = emptyResult()
   const pass2Clients = new Set<string>()
-  const unattributableSamples: string[] = []
-  let reconcileErrors = 0
-  const reconcileErrorSamples: string[] = []
-
-  /** Every path that reconciles reports through here, so none can stay quiet. */
-  const recordReconcileErrors = (actionId: string, messages: string[]): void => {
-    for (const msg of messages) {
-      reconcileErrors++
-      if (reconcileErrorSamples.length < RECONCILE_ERROR_SAMPLE_LIMIT) {
-        reconcileErrorSamples.push(`action ${actionId}: ${msg}`)
-      }
-      console.error(`Attribution job: action ${actionId} — ${msg}`)
-    }
-  }
 
   for (const action of actions) {
-    // Arbitration: an outcome belongs to whichever evaluator owns its metric
-    // family. Declining here — rather than writing and letting the last writer
-    // win — is what keeps execution order out of the answer. See Issue #859.
-    const routing = resolveAttributionRouting(action as ActionRow)
+    const outcome = await attributeOne(action, windowDays)
 
-    if (routing === 'defer') {
-      deferred++
-      pass2Clients.add(action.client_id)
-      // Deferring means this evaluator promises NOTHING for this action any
-      // more — which makes every row it already wrote abandoned. Reachable
-      // through the correction this PR asks for in the opposite direction to
-      // round 19's: an SEO action whose expected_metric moves from
-      // `seo.domain.organic_traffic` to `seo.gsc.clicks`. Pass 1 hands the
-      // action over, the bridge only ever retires keys in its OWN vocabulary,
-      // so the old verdict was immortal — still read as evidence, and not even
-      // reported, because the orphan audit asks "can the owner load this
-      // action?" and this evaluator can load every flywheel.
-      // (Codex P2, round 20 on PR #862.)
-      recordReconcileErrors(action.id, await reconcileLegacyWindows(action.id, null))
+    if (outcome.kind === 'failed') {
+      console.error(`Attribution job: action ${action.id} — ${outcome.message}`)
+      r.failed++
       continue
     }
 
-    if (routing === 'unattributable') {
-      // Owned by an evaluator that cannot load this action. Deferring would
-      // promise an answer nobody can give; writing it here is refused by the
-      // ownership CHECK. Report it instead of quietly producing a hole.
-      unattributable++
-      // Still worth a pass-2 visit: the bridge cannot load THIS action, but the
-      // client's other SEO actions are its to attribute.
-      pass2Clients.add(action.client_id)
-      if (unattributableSamples.length < UNATTRIBUTABLE_SAMPLE_LIMIT) {
-        unattributableSamples.push(action.id)
+    for (const msg of outcome.reconcileErrors) {
+      r.reconcileErrors++
+      if (r.reconcileErrorSamples.length < RECONCILE_ERROR_SAMPLE_LIMIT) {
+        r.reconcileErrorSamples.push(`action ${action.id}: ${msg}`)
       }
-      console.error(
-        `Attribution job: action ${action.id} (flywheel=${action.flywheel}) promises ` +
-          `"${action.expected_metric}", owned by an evaluator that does not load ` +
-          `this flywheel — no evaluator can attribute it.`,
-      )
-      // Same reasoning as the deferral above: this evaluator promises nothing
-      // for this action, so anything it wrote earlier is abandoned.
-      recordReconcileErrors(action.id, await reconcileLegacyWindows(action.id, null))
-      continue
-    }
-
-    try {
-      const outcome = await processAction(action as ActionRow, windowDays)
-      if (outcome.wrote) written++
-      else skipped++
-      recordReconcileErrors(action.id, outcome.reconcileErrors)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
       console.error(`Attribution job: action ${action.id} — ${msg}`)
-      failed++
+    }
+
+    if (outcome.kind === 'written') r.written++
+    else if (outcome.kind === 'skipped') r.skipped++
+    else {
+      // Both declining kinds still need a pass-2 visit: the bridge cannot load
+      // an unattributable action, but the client's other SEO actions are its to
+      // attribute, and dropping the client would take those with it.
+      if (outcome.kind === 'deferred') r.deferred++
+      else {
+        r.unattributable++
+        if (r.unattributableSamples.length < UNATTRIBUTABLE_SAMPLE_LIMIT) {
+          r.unattributableSamples.push(action.id)
+        }
+      }
+      pass2Clients.add(action.client_id)
     }
   }
 
-  return {
-    processed: actions.length,
-    written,
-    skipped,
-    failed,
-    deferred,
-    pass2ClientIds: Array.from(pass2Clients),
-    unattributable,
-    unattributableSamples,
-    reconcileErrors,
-    reconcileErrorSamples,
-  }
+  r.processed = actions.length
+  r.pass2ClientIds = Array.from(pass2Clients)
+  return r
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
@@ -269,6 +287,57 @@ interface ProcessActionResult {
   reconcileErrors: string[]
 }
 
+/** Most recent `flywheel_metrics` value in a half-open window, or null. */
+async function latestMetricValue(
+  clientId: string,
+  metricKey: string,
+  bounds: { before?: string; from?: string; to?: string },
+  label: string,
+): Promise<number | null> {
+  let query = supabaseAdmin
+    .from('flywheel_metrics')
+    .select('metric_value')
+    .eq('client_id', clientId)
+    .eq('metric_key', metricKey)
+
+  if (bounds.before) query = query.lt('measured_at', bounds.before)
+  if (bounds.from) query = query.gte('measured_at', bounds.from)
+  if (bounds.to) query = query.lte('measured_at', bounds.to)
+
+  const { data, error } = await query
+    .order('measured_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) throw new Error(`${label} query: ${error.message}`)
+  return data ? Number(data.metric_value) : null
+}
+
+/**
+ * Write one outcome on its natural key.
+ *
+ * This used to be DELETE WHERE action_id = ? followed by INSERT, which did two
+ * damaging things: it changed `flywheel_outcomes.id` on every 6-hourly run, so
+ * nothing downstream could hold a stable reference to the same business
+ * outcome; and because the delete was not scoped to this metric, it could wipe
+ * the rows the GSC evaluator writes for the same action. See Issue #859.
+ */
+async function upsertOutcome(row: Record<string, unknown>): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from('flywheel_outcomes')
+    .upsert(row, { onConflict: OUTCOME_CONFLICT_TARGET })
+
+  if (error) throw new Error(`outcome upsert: ${error.message}`)
+}
+
+/**
+ * Attribute one action at one window.
+ *
+ * Reconciliation runs ahead of both metric lookups on purpose: an action with
+ * no baseline, or no measurement yet, returns early below, and reconciling only
+ * on the success path would leave a deploy-window row unsigned for as long as
+ * the action stays immature. (Codex P2, round 16 on PR #862.)
+ */
 async function processAction(
   action: ActionRow,
   windowDays: number,
@@ -278,77 +347,39 @@ async function processAction(
   const windowEnd = new Date(executedAt)
   windowEnd.setDate(windowEnd.getDate() + windowDays)
 
-  // Ahead of both lookups on purpose: an action with no baseline or no
-  // measurement yet returns early below, and reconciling only on the success
-  // path would leave a deploy-window row unsigned for as long as the action
-  // stays immature. (Codex P2, round 16 on PR #862.)
   const reconcileErrors = await reconcileLegacyWindows(id, expected_metric)
 
-  // ── Baseline: most recent metric BEFORE the action ────────────────────────
-  const { data: baselineRow, error: baselineErr } = await supabaseAdmin
-    .from('flywheel_metrics')
-    .select('metric_value')
-    .eq('client_id', client_id)
-    .eq('metric_key', expected_metric)
-    .lt('measured_at', executedAt.toISOString())
-    .order('measured_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  const baseline = await latestMetricValue(
+    client_id, expected_metric, { before: executedAt.toISOString() }, 'baseline',
+  )
+  if (baseline === null) return { wrote: false, reconcileErrors }
 
-  if (baselineErr) throw new Error(`baseline query: ${baselineErr.message}`)
-  if (!baselineRow) return { wrote: false, reconcileErrors }  // no baseline → skip
+  const afterValue = await latestMetricValue(
+    client_id,
+    expected_metric,
+    { from: executedAt.toISOString(), to: windowEnd.toISOString() },
+    'after',
+  )
+  if (afterValue === null) return { wrote: false, reconcileErrors }  // too early
 
-  // ── After: most recent metric AFTER action, within window ─────────────────
-  const { data: afterRow, error: afterErr } = await supabaseAdmin
-    .from('flywheel_metrics')
-    .select('metric_value')
-    .eq('client_id', client_id)
-    .eq('metric_key', expected_metric)
-    .gte('measured_at', executedAt.toISOString())
-    .lte('measured_at', windowEnd.toISOString())
-    .order('measured_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  if (afterErr) throw new Error(`after query: ${afterErr.message}`)
-  if (!afterRow) return { wrote: false, reconcileErrors }  // too early, no measurement yet
-
-  // ── Compute attribution ───────────────────────────────────────────────────
-  const baseline = Number(baselineRow.metric_value)
-  const afterValue = Number(afterRow.metric_value)
   const delta = afterValue - baseline
   const deltaPct = baseline !== 0 ? (delta / Math.abs(baseline)) * 100 : null
-
   const { verdict, confidence } = computeVerdict(delta, deltaPct, expected_delta)
 
-  // ── Upsert on the natural key (action_id, metric_key, window_days) ────────
-  //
-  // This used to be DELETE WHERE action_id = ? followed by INSERT. That did two
-  // damaging things: it changed flywheel_outcomes.id on every 6-hourly run, so
-  // nothing downstream could hold a stable reference to the same business
-  // outcome; and because the delete was not scoped to this metric, it could
-  // wipe the rows the GSC evaluator writes for the same action. See Issue #859.
-  const { error: upsertErr } = await supabaseAdmin
-    .from('flywheel_outcomes')
-    .upsert(
-      {
-        action_id: id,
-        client_id,
-        metric_key: expected_metric,
-        baseline,
-        after_value: afterValue,
-        delta,
-        delta_pct: deltaPct,
-        confidence,
-        verdict,
-        window_days: windowDays,
-        evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS,
-        computed_at: new Date().toISOString(),
-      },
-      { onConflict: OUTCOME_CONFLICT_TARGET },
-    )
-
-  if (upsertErr) throw new Error(`outcome upsert: ${upsertErr.message}`)
+  await upsertOutcome({
+    action_id: id,
+    client_id,
+    metric_key: expected_metric,
+    baseline,
+    after_value: afterValue,
+    delta,
+    delta_pct: deltaPct,
+    confidence,
+    verdict,
+    window_days: windowDays,
+    evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS,
+    computed_at: new Date().toISOString(),
+  })
 
   // Only now: the authoritative row is in the database, so dropping the other
   // windows cannot leave this action with nothing.
@@ -395,25 +426,35 @@ async function reconcileLegacyWindows(
   actionId: string,
   metricKey: string | null,
 ): Promise<string[]> {
-  const errors: string[] = []
-  // Claim by EXCLUSION, not by the current metric.
-  //
-  // Claiming only `metric_key = expected_metric` leaves a hole that the todo
-  // pipeline itself opens: inside the expand→deploy gap the old writer produces
-  // an unsigned row at metric A, then a human corrects the action to metric B
-  // (which is what `action_unattributable` asks for). The A row is then claimed
-  // by nobody — it is not the current metric — and deleted by nobody either,
-  // because the abandoned-metric retire below only matches rows already signed
-  // with this evaluator's key. It would sit unsigned forever: still read as
-  // evidence, and permanently blocking the contract migration's
-  // `evaluator_key IS NULL = 0` gate. (Codex P2, round 21 on PR #862.)
-  //
-  // Excluding every FOREIGN metric prefix rather than naming our own is what
-  // makes this provable instead of inferred: no other evaluator is permitted to
-  // write outside its own namespace, so a NULL row that is not in one can only
-  // be ours. The reverse direction stays deliberately unclaimed — a
-  // `seo.gsc.*` row could have come from either writer, and round 17 settled
-  // that guessing there is worse than letting the rollout gate hold.
+  return [
+    ...await claimOwnUnsignedRows(actionId),
+    ...await retireAbandonedMetrics(actionId, metricKey),
+  ]
+}
+
+/**
+ * Sign this evaluator's rows that an older deployment left unsigned.
+ *
+ * Claim by EXCLUSION of every foreign namespace, not by the current metric.
+ * Claiming only `metric_key = expected_metric` leaves a hole the todo pipeline
+ * itself opens: inside the expand→deploy gap the old writer produces an
+ * unsigned row at metric A, then a human corrects the action to metric B —
+ * which is what `action_unattributable` asks for. The A row is then claimed by
+ * nobody (it is not the current metric) and deleted by nobody either, because
+ * the abandoned-metric retire only matches rows already carrying this
+ * evaluator's key. It would sit unsigned forever: still read as evidence, and
+ * permanently blocking the contract migration's `evaluator_key IS NULL = 0`
+ * gate. (Codex P2, round 21 on PR #862.)
+ *
+ * Excluding foreign prefixes rather than naming our own is what makes this
+ * provable instead of inferred: no evaluator may write outside its own
+ * namespace, so an unsigned row outside all of them can only be ours. The
+ * reverse direction is deliberately NOT symmetric — the GSC evaluator claims
+ * nothing, because a `seo.gsc.*` row could have come from either writer and no
+ * query recovers which metric the action promised when it was written
+ * (rounds 17 and 24).
+ */
+async function claimOwnUnsignedRows(actionId: string): Promise<string[]> {
   let claim = supabaseAdmin
     .from('flywheel_outcomes')
     .update({ evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS })
@@ -424,43 +465,42 @@ async function reconcileLegacyWindows(
     claim = claim.not('metric_key', 'like', `${prefix}%`)
   }
 
-  const { error: claimErr } = await claim
+  const { error } = await claim
+  return error ? [`claim unsigned outcomes: ${error.message}`] : []
+}
 
-  if (claimErr) errors.push(`claim unsigned outcomes: ${claimErr.message}`)
-
-  // [2] Retire our own rows for metrics this action no longer promises.
-  //
-  // Not gated: a key the action has stopped promising is wrong at EVERY window,
-  // not just the non-authoritative ones. This is the same rule the GSC writer
-  // applies through `resolveStaleEvaluatorKeys` — retire what you no longer
-  // stand behind — and pass 1 lacked it because on main the action-wide DELETE
-  // took those rows out as a side effect. Removing that delete was necessary;
-  // its one legitimate job has to be done deliberately now.
-  //
-  // This matters because the system actively asks for `expected_metric` to be
-  // corrected: the `action_unattributable` todo added in this PR tells a human
-  // to change it. Without this, every correction leaves the old metric's
-  // outcome behind forever, still feeding the row-counting consumers.
-  //
-  // Scoped to our own evaluator_key, so it can never reach the GSC evaluator's
-  // rows — including the three it legitimately writes for the same action at
-  // keys that are not this action's expected_metric (135 such rows exist in
-  // production today; they are correct output, not stale).
-  // (Codex P2, round 19 on PR #862.)
+/**
+ * Withdraw this evaluator's rows for metrics the action no longer promises.
+ * `metricKey === null` means it promises none of them — the deferral and
+ * unattributable paths — so every row we own for it is abandoned.
+ *
+ * Not gated by the dual-window flag: a key the action has stopped promising is
+ * wrong at EVERY window, not only the non-authoritative ones. This is the same
+ * rule the GSC writer applies through `resolveStaleEvaluatorKeys`, and pass 1
+ * lacked it because on main the action-wide DELETE took those rows out as a
+ * side effect. Removing that delete was necessary; its one legitimate job has
+ * to be done deliberately now — and it matters because the system actively asks
+ * for `expected_metric` to be corrected.
+ *
+ * Scoped to our own `evaluator_key`, so it can never reach the GSC evaluator's
+ * rows — including the three it legitimately writes for the same action at keys
+ * that are not this action's expected_metric (135 such rows in production
+ * today; correct output, not stale). (Codex P2, rounds 19 and 20 on PR #862.)
+ */
+async function retireAbandonedMetrics(
+  actionId: string,
+  metricKey: string | null,
+): Promise<string[]> {
   const abandoned = supabaseAdmin
     .from('flywheel_outcomes')
     .delete()
     .eq('action_id', actionId)
     .eq('evaluator_key', OUTCOME_EVALUATOR.FLYWHEEL_METRICS)
 
-  const { error: abandonedErr } =
+  const { error } =
     metricKey === null ? await abandoned : await abandoned.neq('metric_key', metricKey)
 
-  if (abandonedErr) {
-    errors.push(`retire abandoned metric outcomes: ${abandonedErr.message}`)
-  }
-
-  return errors
+  return error ? [`retire abandoned metric outcomes: ${error.message}`] : []
 }
 
 /**

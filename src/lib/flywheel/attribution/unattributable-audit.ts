@@ -139,27 +139,11 @@ export async function auditOrphanedOutcomes(
 ): Promise<OrphanedOutcome[]> {
   if (clientIds.length === 0) return []
 
-  const actions = await fetchAll<ActionRow>((from, to) =>
-    supabase
-      .from('flywheel_actions')
-      .select('id, client_id, flywheel, action_type, payload, expected_metric, executed_at')
-      .in('client_id', clientIds)
-      .not('expected_metric', 'is', null)
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
+  const actions = await loadActionsFor(supabase, clientIds)
   if (actions.length === 0) return []
 
   const byId = new Map(actions.map(a => [a.id, a]))
-
-  const rows = await fetchAll<OutcomeRow>((from, to) =>
-    supabase
-      .from('flywheel_outcomes')
-      .select('action_id, client_id, metric_key')
-      .in('client_id', clientIds)
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
+  const rows = await loadOutcomesFor(supabase, clientIds)
 
   const grouped = new Map<string, OrphanedOutcome>()
 
@@ -198,4 +182,34 @@ interface OutcomeRow {
   action_id: string
   client_id: string
   metric_key: string
+}
+
+/** Paginated: PostgREST truncates at 1000 rows without saying so. */
+async function loadActionsFor(
+  supabase: SupabaseClient,
+  clientIds: string[],
+): Promise<ActionRow[]> {
+  return fetchAll<ActionRow>((from, to) =>
+    supabase
+      .from('flywheel_actions')
+      .select('id, client_id, flywheel, action_type, payload, expected_metric, executed_at')
+      .in('client_id', clientIds)
+      .not('expected_metric', 'is', null)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+}
+
+async function loadOutcomesFor(
+  supabase: SupabaseClient,
+  clientIds: string[],
+): Promise<OutcomeRow[]> {
+  return fetchAll<OutcomeRow>((from, to) =>
+    supabase
+      .from('flywheel_outcomes')
+      .select('action_id, client_id, metric_key')
+      .in('client_id', clientIds)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
 }
