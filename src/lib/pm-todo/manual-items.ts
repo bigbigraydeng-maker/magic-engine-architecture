@@ -65,6 +65,7 @@ export type ManualItemKind =
   | 'auto_run_stuck'
   | 'action_unattributable'
   | 'attribution_audit_failed'
+  | 'client_list_unreadable'
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -157,7 +158,7 @@ export async function loadManualItems(
 ): Promise<ManualItem[]> {
   const items: ManualItem[] = []
 
-  const { data: clientRows } = await supabase
+  const { data: clientRows, error: clientsError } = await supabase
     .from('clients')
     .select('id, name, domain')
     .eq('client_status', 'active')
@@ -176,6 +177,29 @@ export async function loadManualItems(
   await pushFactoryWorkerItems(supabase, items, now).catch((e) =>
     console.warn('[manual-items] 出片工人在岗检查失败（不阻塞其他待办）:', e),
   )
+  // 客户名单查挂了 ≠ 一个客户都没有,但代码原来把两者写成同一条路:`error` 被
+  // 解构丢掉,`clientRows` 是 null,于是这里当成「零个活跃客户」直接返回,后面
+  // 所有按客户查的待办(串台、草稿、归因黑洞……)一条都不会跑,而清单照样干净
+  // 地生成 —— 连「归因黑洞检查挂了」那条兜底待办本身都在这条返回的后面,
+  // 一起被跳过。这正是我在这个 PR 里逐条修的那个形状,出现在我自己刚加的
+  // 检查上游。(Codex P1, round 15 on PR #862)
+  if (clientsError) {
+    items.push({
+      kind: 'client_list_unreadable',
+      client_id: 'infra',
+      client_name: 'Magic Engine 后台',
+      what:
+        `今天没读出客户名单 —— ${clientsError.message}。` +
+        '所以「按客户逐个查」的那半边待办(串台、草稿、归因黑洞、客资口径……)' +
+        '今天全都没跑。这份清单不是「今天没事」,是只查了一半',
+      how:
+        '这条不用你动手 —— 是我们这边读客户表失败了。回我一句「名单读不出来」' +
+        '我去修。修好之前,今天这份清单只当作系统级检查,别当作客户侧没问题',
+      href: RENDER_DASHBOARD_URL,
+    })
+    return items
+  }
+
   if (clients.size === 0) return items
 
   const ids = Array.from(clients.keys())

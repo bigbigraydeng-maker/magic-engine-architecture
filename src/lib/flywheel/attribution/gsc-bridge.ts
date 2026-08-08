@@ -273,9 +273,11 @@ async function attributeAction(
     // the old ungated bridge wrote visible on the execution board — and feeding
     // memory and benchmarks — indefinitely.
     if (scope.kind === 'page') {
+      const claimError = await claimOwnUnclaimedRows(action)
       return {
         written: 0,
-        cleanupError: await retireOwnKeys(action, GSC_DOMAIN_METRIC_KEYS),
+        cleanupError:
+          claimError ?? (await retireOwnKeys(action, GSC_DOMAIN_METRIC_KEYS)),
       }
     }
     return nothing
@@ -297,6 +299,10 @@ async function attributeAction(
     .upsert(rows, { onConflict: OUTCOME_CONFLICT_TARGET })
   if (error) throw new Error(`upsert outcomes: ${error.message}`)
 
+  // Adopt any row an older deployment left unsigned, BEFORE retiring — a retire
+  // filtered on our evaluator_key cannot see a NULL one.
+  const claimError = await claimOwnUnclaimedRows(action)
+
   // Then retire the keys this evaluator owns but no longer produces — e.g. the
   // domain-scope rows left behind once an action becomes page-scoped.
   const staleKeys = resolveStaleEvaluatorKeys(
@@ -306,15 +312,49 @@ async function attributeAction(
 
   return {
     written: rows.length,
-    cleanupError: await retireOwnKeys(action, staleKeys),
+    cleanupError: claimError ?? (await retireOwnKeys(action, staleKeys)),
   }
+}
+
+/**
+ * Sign the rows this evaluator produced before `evaluator_key` existed.
+ *
+ * The expand migration backfills `evaluator_key` once, at apply time. But the
+ * rollout deliberately leaves the OLD code running against the expanded table
+ * until #862 deploys, and that old manual endpoint accepts any window from 1 to
+ * 90 — so a 7-day run inside that gap writes a fresh row with a NULL evaluator
+ * that the completed backfill will never revisit. Afterwards nothing reclaims
+ * it: the gate refuses custom windows, and the cron only ever recomputes its
+ * cadence, so the new writer never lands on that natural key. The row would sit
+ * unsigned forever and make the contract migration's `NULL count = 0`
+ * precondition permanently unsatisfiable. (Codex P2, round 15 on PR #862.)
+ *
+ * Safe because the metric namespace decides ownership: `seo.gsc.*` has only
+ * ever been written by this evaluator, which is the same rule the backfill and
+ * the `flywheel_outcomes_evaluator_owns_metric` CHECK encode. Scoped to one
+ * action, to NULL rows only, and to keys in our own vocabulary, so it can
+ * neither overwrite an existing signature nor claim another writer's work.
+ *
+ * An UPDATE, not a DELETE: the row is a real measurement, and the whole point
+ * of this Work Package is that no writer destroys another's evidence.
+ */
+async function claimOwnUnclaimedRows(action: SeoActionRow): Promise<string | null> {
+  const { error } = await supabaseAdmin
+    .from('flywheel_outcomes')
+    .update({ evaluator_key: OUTCOME_EVALUATOR.GSC_SNAPSHOTS })
+    .eq('action_id', action.id)
+    .is('evaluator_key', null)
+    .in('metric_key', GSC_EVALUATOR_METRIC_KEYS)
+
+  return error ? `claim unsigned outcomes: ${error.message}` : null
 }
 
 /**
  * Delete outcome rows this evaluator owns for keys it no longer stands behind.
  *
- * Scoped to our own `evaluator_key` and window, so it can never remove the
- * flywheel_metrics evaluator's rows or our own answer for a different window.
+ * Scoped to our own `evaluator_key`, so it can never remove the
+ * flywheel_metrics evaluator's rows. Deliberately NOT scoped by window — see
+ * the note on the delete below.
  *
  * Returns the error rather than throwing: by the time this runs the current
  * rows are already in the database, and throwing would discard that count and

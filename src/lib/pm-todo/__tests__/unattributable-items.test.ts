@@ -35,8 +35,14 @@ function action(over: Partial<UnattributableAction> = {}): UnattributableAction 
   }
 }
 
-/** Minimal Supabase stub: one active client, everything else empty. */
-function stubSupabase() {
+/**
+ * Minimal Supabase stub: one active client, everything else empty.
+ *
+ * `rawStub` keeps its real shape so the failure variants below can delegate to
+ * it for the tables they don't override; `stubSupabase` is the `as never` cast
+ * the loader's parameter needs.
+ */
+function rawStub() {
   const builder: Record<string, unknown> = {}
   const chain = new Proxy(builder, {
     get(_t, prop) {
@@ -64,7 +70,11 @@ function stubSupabase() {
       }
       return chain
     },
-  } as never
+  }
+}
+
+function stubSupabase() {
+  return rawStub() as never
 }
 
 async function itemsFor(rows: UnattributableAction[]) {
@@ -171,6 +181,55 @@ describe('when the audit itself fails', () => {
   it('does not emit the failure item on a clean run', async () => {
     const all = await itemsFor([])
     expect(all.find(i => i.kind === 'attribution_audit_failed')).toBeUndefined()
+  })
+
+  it('a failed CLIENT LIST query does not produce a clean-looking list', async () => {
+    // One layer above the audit, and the same shape: the clients query's
+    // `error` was destructured away, so a failed query arrived as zero active
+    // clients and returned early — before the audit and before its own failure
+    // item. The list came back tidy with the entire per-client half missing.
+    const failingSupabase = {
+      from: (table: string) => {
+        if (table === 'clients') {
+          return {
+            select: () => ({
+              eq: async () => ({
+                data: null,
+                error: { message: 'permission denied for table clients' },
+              }),
+            }),
+          }
+        }
+        return rawStub().from(table)
+      },
+    } as never
+
+    const all = await loadManualItems(failingSupabase, new Date('2026-08-08T00:00:00Z'))
+
+    const item = all.find(i => i.kind === 'client_list_unreadable')
+    expect(item).toBeDefined()
+    expect(item!.what).toContain('permission denied for table clients')
+    // Must read as "only half checked", not as "nothing wrong today".
+    expect(item!.what).toContain('只查了一半')
+    // And it must not silently claim the per-client checks ran.
+    expect(all.find(i => i.kind === 'action_unattributable')).toBeUndefined()
+  })
+
+  it('a genuinely empty client list is NOT reported as a failure', async () => {
+    // The distinction is the whole point: zero clients is a fact, an unreadable
+    // list is an unknown. Collapsing them back together would just move the bug.
+    const emptySupabase = {
+      from: (table: string) => {
+        if (table === 'clients') {
+          return { select: () => ({ eq: async () => ({ data: [], error: null }) }) }
+        }
+        return rawStub().from(table)
+      },
+    } as never
+
+    const all = await loadManualItems(emptySupabase, new Date('2026-08-08T00:00:00Z'))
+
+    expect(all.find(i => i.kind === 'client_list_unreadable')).toBeUndefined()
   })
 
   it('a failed audit does not take the rest of the todo list down with it', async () => {

@@ -281,6 +281,41 @@ async function processAction(action: ActionRow, windowDays: number): Promise<boo
 
   if (upsertErr) throw new Error(`outcome upsert: ${upsertErr.message}`)
 
+  // Sign whatever this evaluator wrote for the same action and metric at OTHER
+  // windows before `evaluator_key` existed.
+  //
+  // The expand migration backfills once, at apply time — but the rollout leaves
+  // the old code running against the expanded table until this PR deploys, and
+  // the old cron accepted `?window_days=`. A row written at 21 days inside that
+  // gap gets a NULL evaluator the finished backfill never revisits, and nothing
+  // reclaims it afterwards: the gate refuses custom windows and this job only
+  // ever recomputes DEFAULT_WINDOW_DAYS, so the upsert above never lands on that
+  // natural key. The row would stay unsigned forever and make the contract
+  // migration's `NULL count = 0` precondition permanently unsatisfiable.
+  // (Codex P2, round 15 on PR #862.)
+  //
+  // Scoped to this action, this metric, and NULL rows only. Routing already
+  // established that this evaluator owns `expected_metric`, so the ownership
+  // CHECK cannot reject the claim, and an already-signed row is never touched.
+  //
+  // Reported, not thrown: the outcome row above is already in the database, and
+  // throwing here would count a landed write as a failure. An unclaimed row is
+  // reconciliation debt — the next run retries it, and the rollout's own gate
+  // (`SELECT count(*) ... WHERE evaluator_key IS NULL` must be 0 before the
+  // contract migration may be applied) is what stops it being ignored forever.
+  const { error: claimErr } = await supabaseAdmin
+    .from('flywheel_outcomes')
+    .update({ evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS })
+    .eq('action_id', id)
+    .eq('metric_key', expected_metric)
+    .is('evaluator_key', null)
+
+  if (claimErr) {
+    console.error(
+      `Attribution job: action ${id} — claim unsigned outcomes: ${claimErr.message}`,
+    )
+  }
+
   return true
 }
 

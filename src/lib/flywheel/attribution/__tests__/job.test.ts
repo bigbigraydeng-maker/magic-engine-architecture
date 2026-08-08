@@ -46,7 +46,7 @@ vi.mock('@/lib/supabase', () => {
   const chain: Record<string, unknown> = {}
   const fluent = [
     'select', 'not', 'eq', 'lt', 'gte', 'lte',
-    'order', 'limit', 'range', 'upsert',
+    'order', 'limit', 'range', 'upsert', 'update',
   ]
   for (const m of fluent) {
     chain[m] = vi.fn().mockReturnValue(chain)
@@ -56,6 +56,11 @@ vi.mock('@/lib/supabase', () => {
     return next ? next() : { data: null, error: null }
   })
   chain['upsert'] = vi.fn().mockImplementation(async () => upsertResult)
+  // Terminal of the legacy-row claim: `.update(...).eq().eq().is(...)`.
+  // This file is a call-order mock, so it can only keep the chain from
+  // throwing — whether the claim actually signs the right rows is settled
+  // against the table-modelled fake in legacy-row-claim.test.ts.
+  chain['is'] = vi.fn().mockImplementation(async () => ({ data: null, error: null }))
 
   return {
     supabaseAdmin: {

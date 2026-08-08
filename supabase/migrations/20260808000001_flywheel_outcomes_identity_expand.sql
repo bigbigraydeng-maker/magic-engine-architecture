@@ -13,6 +13,19 @@
 --         must be 0, and the contract must re-check that count itself and
 --         RAISE EXCEPTION if it is not.
 --
+--   Expect that count to be non-zero for a short while AFTER [2], and do not
+--   read it as a failure. The backfill below runs once, at apply time, while
+--   the gap between [1] and [2] leaves the OLD writers running against the
+--   expanded table — every row they write in that gap arrives with a NULL
+--   evaluator the finished backfill will never revisit. Nothing would ever
+--   reclaim a row written at a non-cadence window (the gate refuses custom
+--   windows and each writer only recomputes its own cadence), so both new
+--   writers now adopt their own unsigned rows on the next pass they make over
+--   the action — matched on action + NULL + their own metric vocabulary, by
+--   UPDATE, never DELETE. Re-run the count after one full attribution cycle
+--   (6h) before treating a non-zero result as a real problem.
+--   (Codex P2, round 15 on PR #862.)
+--
 --   The contract migration is deliberately NOT in this branch. It was, and
 --   review caught the trap (PR #862, Codex P1): its NULL-count guard measures
 --   DATA state, not DEPLOY state — the backfill below zeroes that count, so

@@ -12,7 +12,7 @@
 
 type Row = Record<string, unknown>
 
-type FilterOp = 'eq' | 'in' | 'lt' | 'lte' | 'gt' | 'gte' | 'notNull'
+type FilterOp = 'eq' | 'in' | 'lt' | 'lte' | 'gt' | 'gte' | 'notNull' | 'isNull'
 
 interface Filter {
   column: string
@@ -26,7 +26,7 @@ export interface DbError {
 
 export interface OpLogEntry {
   table: string
-  op: 'select' | 'upsert' | 'insert' | 'delete'
+  op: 'select' | 'upsert' | 'insert' | 'delete' | 'update'
   filters: Filter[]
   rowCount?: number
 }
@@ -119,7 +119,7 @@ export class FakeOutcomesDb {
    */
   failNext(
     table: ModelledTable,
-    op: 'upsert' | 'insert' | 'delete' | 'select',
+    op: 'upsert' | 'insert' | 'delete' | 'select' | 'update',
     message: string,
     opts: { afterMatches?: number } = {},
   ): void {
@@ -185,6 +185,10 @@ function matches(row: Row, filters: Filter[]): boolean {
         return (f.value as unknown[]).includes(actual)
       case 'notNull':
         return actual !== null && actual !== undefined
+      case 'isNull':
+        // PostgREST `.is('col', null)` — and an absent column is NULL, which is
+        // exactly the shape a row written before the expand migration has.
+        return actual === null || actual === undefined
       case 'lt':
         return compare(actual, f.value) < 0
       case 'lte':
@@ -210,7 +214,8 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
   private limitCount: number | null = null
   private rangeFrom: number | null = null
   private rangeTo: number | null = null
-  private mode: 'select' | 'delete' = 'select'
+  private mode: 'select' | 'delete' | 'update' = 'select'
+  private patch: Row | null = null
 
   constructor(
     private db: FakeOutcomesDb,
@@ -271,8 +276,27 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
     return this
   }
 
+  is(column: string, value: unknown): this {
+    if (value !== null) throw new Error('FakeOutcomesDb: .is() only models IS NULL')
+    this.filters.push({ column, op: 'isNull', value: null })
+    return this
+  }
+
   delete(): this {
     this.mode = 'delete'
+    return this
+  }
+
+  /**
+   * UPDATE ... WHERE. Modelled because the writers claim rows an older
+   * deployment left with a NULL `evaluator_key`, and a fake without it would
+   * make that claim untestable. The CHECK constraints run against the MERGED
+   * row, not the patch: setting an evaluator that does not own the row's
+   * existing metric_key must fail here exactly as Postgres fails it.
+   */
+  update(patch: Row): this {
+    this.mode = 'update'
+    this.patch = patch
     return this
   }
 
@@ -453,6 +477,24 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
       target.length = 0
       target.push(...kept)
       this.db.log({ table: this.table, op: 'delete', filters: this.filters, rowCount: removed })
+      return { data: null, error: null }
+    }
+
+    if (this.mode === 'update') {
+      const failure = this.db.takeFailure(this.table, 'update')
+      if (failure) return { data: null, error: { message: failure } }
+
+      const hit = target.filter(r => matches(r, this.filters))
+      for (const row of hit) {
+        const merged = { ...row, ...(this.patch ?? {}) }
+        const violation = this.checkColumnConstraints(merged)
+        if (violation) return { data: null, error: violation }
+      }
+      for (const row of hit) {
+        Object.assign(row, this.patch ?? {})
+        this.applyGenerated(row)
+      }
+      this.db.log({ table: this.table, op: 'update', filters: this.filters, rowCount: hit.length })
       return { data: null, error: null }
     }
 
