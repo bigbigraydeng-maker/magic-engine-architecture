@@ -6,6 +6,7 @@ import {
   type AttributionJobResult,
 } from '@/lib/flywheel/attribution/job'
 import { runGscAttributionForClient } from '@/lib/flywheel/attribution/gsc-bridge'
+import { dualWindowEnabled } from '@/lib/flywheel/attribution/dual-window-gate'
 import { startCronRun } from '@/lib/cron/run-logger'
 
 /**
@@ -160,10 +161,19 @@ export async function POST(
         ? windowDays
         : DEFAULT_WINDOW_DAYS
 
+    // Gated OFF in production. The handoff itself is correct and tested, but
+    // the memory-side consumers of flywheel_outcomes still count rows, so
+    // enabling it would double the evidence behind every deferred action and
+    // move client-visible benchmarks. See dual-window-gate.ts for the full
+    // reasoning and the follow-up that unblocks it.
+    const dualWindow = dualWindowEnabled()
+
     for (const cid of clientIds) {
-      const r = await runGscAttributionForClient(cid, undefined, {
-        deferredWindowDays: pass1Window,
-      })
+      const r = await runGscAttributionForClient(
+        cid,
+        undefined,
+        dualWindow ? { deferredWindowDays: pass1Window } : {},
+      )
       gscResult.clients_processed++
       gscResult.actions_found    += r.actions_found
       gscResult.outcomes_written += r.outcomes_written
@@ -173,7 +183,7 @@ export async function POST(
     }
 
     console.log(
-      `[attribution/cron] pass2(gsc) clients=${gscResult.clients_processed} outcomes=${gscResult.outcomes_written} skipped=${gscResult.skipped} deferred_window=${pass1Window}`
+      `[attribution/cron] pass2(gsc) clients=${gscResult.clients_processed} outcomes=${gscResult.outcomes_written} skipped=${gscResult.skipped} deferred_window=${dualWindow ? pass1Window : 'off'}`
     )
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error in GSC attribution pass'

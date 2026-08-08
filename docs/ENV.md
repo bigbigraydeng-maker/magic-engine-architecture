@@ -169,6 +169,7 @@
 | `FACTORY_WORKER_CLIENT_IDS` | Factory worker 处理的客户白名单 | worker |
 | `PROSPECTING_SWEEP_ENABLED` | 线索挖掘 cron 总闸 | Render-cron |
 | `JOB_SIGNAL_INGEST_ENABLED` / `JOB_SIGNAL_KEYWORDS` | 招聘信号采集开关 + 关键词 | Render-cron |
+| `ATTRIBUTION_DUAL_WINDOW_ENABLED` | 归因双窗口总闸（默认 **关**）。开了之后被转交的动作会同时按 GSC 的 28 天节奏和 pass 1 的窗口各算一次。**在 `src/lib/memory/` 的消费方改成按动作计样本之前不许开** —— 现在开会让同一个动作在学习和行业基准里被重复计数（Issue #859） | Render-cron |
 | `SOCIAL_COMMENT_AUTOREPLY_KILL` | 社媒评论自动回复紧急关停 | Render-web |
 | `SWEEP_CITIES` / `SWEEP_INDUSTRIES` | 线索扫描城市 / 行业范围 | Render-cron |
 | `ENABLE_REAL_GENERATION` | `.env.example` 有，代码 0 引用 | ⚠️ 待清理 |

@@ -56,6 +56,7 @@ vi.mock('@/lib/supabase', () => ({
 }))
 
 import { runAttributionJob } from '@/lib/flywheel/attribution/job'
+import { DUAL_WINDOW_FLAG } from '@/lib/flywheel/attribution/dual-window-gate'
 import { runGscAttributionForClient } from '@/lib/flywheel/attribution/gsc-bridge'
 
 const mockRunAttributionJob = vi.mocked(runAttributionJob)
@@ -77,6 +78,7 @@ describe('POST /api/cron/attribution', () => {
     process.env.CRON_SECRET = 'test-secret'
     connectorsResult = { data: [], error: null }
     cronLogUpdate = null
+    delete process.env[DUAL_WINDOW_FLAG] // shipped default: dual window OFF
     mockRunGscAttribution.mockResolvedValue({
       client_id: 'abc-123',
       actions_found: 0,
@@ -179,7 +181,8 @@ describe('POST /api/cron/attribution', () => {
   // produced by nobody. client_id pins the pass-2 client list so the loop runs
   // deterministically without touching the connectors table.
 
-  it('forwards the default pass-1 window (14) to the GSC bridge', async () => {
+  it('forwards the default pass-1 window (14) to the GSC bridge when enabled', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
     mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
 
     const res = await POST(
@@ -192,7 +195,8 @@ describe('POST /api/cron/attribution', () => {
     })
   })
 
-  it('forwards an explicit ?window_days=7 to the GSC bridge', async () => {
+  it('forwards an explicit ?window_days=7 to the GSC bridge when enabled', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
     mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
 
     const res = await POST(
@@ -210,6 +214,7 @@ describe('POST /api/cron/attribution', () => {
     ['-7', 'negative'],
     ['0', 'zero'],
   ])('sanitises ?window_days=%s (%s) to the default before forwarding', async (raw) => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
     // parseInt garbage yields NaN, which `??` does not catch; forwarded raw it
     // would defeat the bridge's dedupe guard and error every deferred action.
     // Pass 1 keeps main's behaviour for the same input — only the forwarding
@@ -245,9 +250,9 @@ describe('POST /api/cron/attribution', () => {
     const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
 
     expect(res.status).toBe(200)
-    expect(mockRunGscAttribution).toHaveBeenCalledWith('client-disconnected', undefined, {
-      deferredWindowDays: 14,
-    })
+    // The point of this test is that the client is visited at all; the window
+    // payload is the gate's business and is asserted in the gate tests.
+    expect(mockRunGscAttribution).toHaveBeenCalledWith('client-disconnected', undefined, {})
   })
 
   it('visits each client once when it is both connected and deferred', async () => {
@@ -281,12 +286,11 @@ describe('POST /api/cron/attribution', () => {
 
     expect(res.status).toBe(200)
     expect(body.gsc.errors.join(' ')).toContain('connection refused')
-    expect(mockRunGscAttribution).toHaveBeenCalledWith('client-deferred', undefined, {
-      deferredWindowDays: 14,
-    })
+    expect(mockRunGscAttribution).toHaveBeenCalledWith('client-deferred', undefined, {})
   })
 
   it('leaves the bridge cadence window to the bridge (never overrides it)', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
     mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
 
     await POST(
@@ -297,6 +301,68 @@ describe('POST /api/cron/attribution', () => {
     // bridge computes IN ADDITION, not what its own 28-day cadence runs at.
     const [, cadenceWindow] = mockRunGscAttribution.mock.calls[0]
     expect(cadenceWindow).toBeUndefined()
+  })
+
+  // ── The dual-window gate (Issue #859) ──────────────────────────────────────
+  //
+  // Implemented and correct, but production-disabled: the memory consumers of
+  // flywheel_outcomes still count rows, so enabling it would double the
+  // evidence behind every deferred action and move client-visible benchmarks.
+
+  it('does NOT forward a deferred window by default', async () => {
+    // The shipped state. Production behaviour must be exactly what it was.
+    mockRunAttributionJob.mockResolvedValue({
+      processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [],
+      unattributable: 0, unattributableSamples: [],
+    })
+
+    await POST(makeRequest({ authorization: 'Bearer test-secret' }, '?client_id=abc-123'))
+
+    expect(mockRunGscAttribution).toHaveBeenCalledWith('abc-123', undefined, {})
+    const [, , opts] = mockRunGscAttribution.mock.calls[0]
+    expect(opts).not.toHaveProperty('deferredWindowDays')
+  })
+
+  it.each(['false', '', '1', 'yes', 'TRUE'])(
+    'does not forward a deferred window for flag value %p',
+    async (value) => {
+      process.env[DUAL_WINDOW_FLAG] = value
+      mockRunAttributionJob.mockResolvedValue({
+        processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [],
+        unattributable: 0, unattributableSamples: [],
+      })
+
+      await POST(makeRequest({ authorization: 'Bearer test-secret' }, '?client_id=abc-123'))
+
+      expect(mockRunGscAttribution).toHaveBeenCalledWith('abc-123', undefined, {})
+    },
+  )
+
+  it('forwards the deferred window only when the flag is exactly "true"', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    mockRunAttributionJob.mockResolvedValue({
+      processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [],
+      unattributable: 0, unattributableSamples: [],
+    })
+
+    await POST(makeRequest({ authorization: 'Bearer test-secret' }, '?client_id=abc-123'))
+
+    expect(mockRunGscAttribution).toHaveBeenCalledWith('abc-123', undefined, {
+      deferredWindowDays: 14,
+    })
+  })
+
+  it('everything else about pass 2 is unchanged while the gate is off', async () => {
+    // Deferred clients still get visited; only the extra window is withheld.
+    mockRunAttributionJob.mockResolvedValue({
+      processed: 2, written: 0, skipped: 0, failed: 0, deferred: 2,
+      pass2ClientIds: ['client-deferred'],
+      unattributable: 0, unattributableSamples: [],
+    })
+
+    await POST(makeRequest({ authorization: 'Bearer test-secret' }))
+
+    expect(mockRunGscAttribution).toHaveBeenCalledWith('client-deferred', undefined, {})
   })
 
   // ── Cron summary truthfulness (Codex P2 round 3) ───────────────────────────
