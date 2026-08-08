@@ -45,3 +45,50 @@ export function dualWindowEnabled(
 ): boolean {
   return env[DUAL_WINDOW_FLAG] === 'true'
 }
+
+export interface EffectiveWindow {
+  /** The window the caller may actually use. */
+  windowDays: number
+  /** True when a caller-supplied window was declined because the gate is off. */
+  overrideRefused: boolean
+  /** What the caller asked for, when that differed. */
+  requested?: number
+}
+
+/**
+ * The one place that decides which attribution window a caller may use.
+ *
+ * Every entry point that accepts a window is a way to create a SECOND window
+ * for an action, and every one of them multiplies the evidence the row-counting
+ * consumers see. They were fixed one at a time — the cron's deferred handoff,
+ * then the manual GSC endpoint, then pass 1's own `?window_days=` — which is
+ * how a fourth is found later. Routing them all through this function is what
+ * makes "dual window is off" a statement about the system rather than about
+ * whichever call site was remembered.
+ *
+ * On main every writer DELETEd without a window filter, so a re-run at a
+ * different window replaced the previous rows and an action never held more
+ * than one window's worth. The natural key now includes `window_days`, which is
+ * correct — a 7-day and a 28-day answer are different facts — but it turns
+ * replace into append. Until the memory consumers count by action, only the
+ * authoritative window may be written.
+ *
+ * The refusal is reported, never silent: a caller who asked for 7 days and
+ * quietly got 28 would read the answer as a 7-day one.
+ */
+export function resolveEffectiveWindow(
+  requested: number | undefined,
+  authoritative: number,
+  env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): EffectiveWindow {
+  const wanted =
+    requested !== undefined && Number.isInteger(requested) && requested > 0
+      ? requested
+      : authoritative
+
+  if (dualWindowEnabled(env)) return { windowDays: wanted, overrideRefused: false }
+
+  return wanted === authoritative
+    ? { windowDays: authoritative, overrideRefused: false }
+    : { windowDays: authoritative, overrideRefused: true, requested: wanted }
+}

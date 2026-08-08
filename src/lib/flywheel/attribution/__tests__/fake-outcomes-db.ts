@@ -31,6 +31,9 @@ export interface OpLogEntry {
   rowCount?: number
 }
 
+/** PostgREST returns at most this many rows per request, without saying so. */
+const POSTGREST_MAX_ROWS = 1000
+
 /** Columns of the UNIQUE constraint added by the expand migration. */
 export const NATURAL_KEY_COLUMNS = ['action_id', 'metric_key', 'window_days'] as const
 
@@ -467,8 +470,14 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
     }
 
     if (this.limitCount !== null) rows = rows.slice(0, this.limitCount)
+
     if (this.rangeFrom !== null) {
       rows = rows.slice(this.rangeFrom, (this.rangeTo ?? this.rangeFrom) + 1)
+    } else if (rows.length > POSTGREST_MAX_ROWS) {
+      // PostgREST's silent cap. Modelled so that a reader which forgets to
+      // paginate gets a truncated result with no error — exactly what it gets
+      // in production, and the only way a pagination fix is testable at all.
+      rows = rows.slice(0, POSTGREST_MAX_ROWS)
     }
 
     this.db.log({ table: this.table, op: 'select', filters: this.filters, rowCount: rows.length })

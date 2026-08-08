@@ -6,7 +6,10 @@ import {
   type AttributionJobResult,
 } from '@/lib/flywheel/attribution/job'
 import { runGscAttributionForClient } from '@/lib/flywheel/attribution/gsc-bridge'
-import { dualWindowEnabled } from '@/lib/flywheel/attribution/dual-window-gate'
+import {
+  dualWindowEnabled,
+  resolveEffectiveWindow,
+} from '@/lib/flywheel/attribution/dual-window-gate'
 import { startCronRun } from '@/lib/cron/run-logger'
 
 /**
@@ -50,6 +53,10 @@ export interface AttributionCronResponse {
   unattributable?: number
   /** A bounded sample of those action ids, for diagnosis. */
   unattributableSamples?: string[]
+  /** The window pass 1 actually ran at. */
+  window_days?: number
+  /** Present when a caller-supplied window was declined by the dual-window gate. */
+  window_override_refused?: { requested: number; used: number; reason: string }
   gsc?: {
     clients_processed: number
     actions_found: number
@@ -87,8 +94,15 @@ export async function POST(
   const windowDaysParam = searchParams.get('window_days')
   const clientId = searchParams.get('client_id') ?? undefined
 
-  const windowDays =
+  const requestedWindow =
     windowDaysParam !== null ? parseInt(windowDaysParam, 10) : undefined
+
+  // Pass 1 accepts a window too, and on main a re-run at a different window
+  // REPLACED the previous rows. The natural key now appends instead, so this
+  // endpoint is a third way to create a second window — gated with the same
+  // switch, and the refusal is reported rather than silently applied.
+  const pass1 = resolveEffectiveWindow(requestedWindow, DEFAULT_WINDOW_DAYS)
+  const windowDays = pass1.windowDays
 
   const cronRun = await startCronRun('attribution-cron')
 
@@ -156,17 +170,12 @@ export async function POST(
     // must not be forwarded — it would defeat the bridge's dedupe guard
     // (NaN === anything is false) and error every deferred action. Pass 1's
     // own handling of the malformed value is unchanged from main.
-    const pass1Window =
-      windowDays !== undefined && Number.isInteger(windowDays) && windowDays > 0
-        ? windowDays
-        : DEFAULT_WINDOW_DAYS
-
     // Gated OFF in production. The handoff itself is correct and tested, but
     // the memory-side consumers of flywheel_outcomes still count rows, so
     // enabling it would double the evidence behind every deferred action and
-    // move client-visible benchmarks. See dual-window-gate.ts for the full
-    // reasoning and the follow-up that unblocks it.
+    // move client-visible benchmarks. See dual-window-gate.ts.
     const dualWindow = dualWindowEnabled()
+    const pass1Window = windowDays
 
     for (const cid of clientIds) {
       const r = await runGscAttributionForClient(
@@ -216,6 +225,20 @@ export async function POST(
     {
       timestamp: new Date().toISOString(),
       ...pass1Result,
+      window_days: windowDays,
+      ...(pass1.overrideRefused
+        ? {
+            window_override_refused: {
+              requested: pass1.requested!,
+              used: pass1.windowDays,
+              reason:
+                'Custom attribution windows are disabled while ' +
+                'ATTRIBUTION_DUAL_WINDOW_ENABLED is off — a second window would ' +
+                'double the evidence behind each action for consumers that still ' +
+                'count outcome rows. See Issue #859.',
+            },
+          }
+        : {}),
       gsc: gscResult,
     },
     { status: 200 }

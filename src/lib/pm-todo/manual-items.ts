@@ -64,6 +64,7 @@ export type ManualItemKind =
   | 'auto_run_blocked'
   | 'auto_run_stuck'
   | 'action_unattributable'
+  | 'attribution_audit_failed'
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -217,9 +218,24 @@ export async function loadManualItems(
 
   // 承诺了没人能算的指标的动作 —— 归因每 6 小时都会重新发现它们，但计数进不了
   // 告警，只会一遍遍写进开发日志。这正是「发现死在日志里」，所以捞到这条流水线上。
-  await pushUnattributableItems(supabase, items, ids, nameOf).catch((e) =>
-    console.warn('[manual-items] 归因黑洞检查失败（不阻塞其他待办）:', e),
-  )
+  // 注意这里不是 catch 完就算了 —— 这条检查本身就是「归因黑洞」的唯一上报
+  // 通道，它挂了就等于整条检测静默消失。所以失败也要变成一条待办。
+  await pushUnattributableItems(supabase, items, ids, nameOf).catch((e) => {
+    const message = e instanceof Error ? e.message : String(e)
+    console.warn('[manual-items] 归因黑洞检查失败:', message)
+    items.push({
+      kind: 'attribution_audit_failed',
+      client_id: 'infra',
+      client_name: 'Magic Engine 后台',
+      what:
+        `「有没有动作没人能算效果」这项检查今天没跑成 —— ${message}。` +
+        '不是「今天没问题」，是没查成；真有问题也看不见',
+      how:
+        '这条不用你动手 —— 是我们这边查询挂了（多半是表结构或权限变了）。' +
+        '回我一句「查不了」我去修。修好之前，归因黑洞这一项当作没查过，别当作没问题',
+      href: RENDER_DASHBOARD_URL,
+    })
+  })
 
   // GSC property identifiers (needed for the inspect deep link).
   const { data: connectors } = await supabase

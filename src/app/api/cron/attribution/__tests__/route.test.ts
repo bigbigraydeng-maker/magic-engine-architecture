@@ -127,8 +127,10 @@ describe('POST /api/cron/attribution', () => {
     expect(body.skipped).toBe(2)
     expect(body.timestamp).toBeDefined()
 
+    // The window is resolved through the gate before pass 1 sees it, so the
+    // default arrives as an explicit 14 rather than undefined.
     expect(mockRunAttributionJob).toHaveBeenCalledWith({
-      windowDays: undefined,
+      windowDays: 14,
       clientId: undefined,
     })
   })
@@ -145,17 +147,39 @@ describe('POST /api/cron/attribution', () => {
     expect(body.deferred).toBe(4)
   })
 
-  it('passes window_days query param to runAttributionJob', async () => {
+  it('refuses a custom pass-1 window while the gate is off, and says so', async () => {
+    // Pass 1 accepts a window too. On main a re-run at a different window
+    // REPLACED the previous rows; the natural key now appends, so this is a
+    // third route to a second window and the same gate has to cover it.
     mockRunAttributionJob.mockResolvedValue({ processed: 2, written: 2, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
 
     const res = await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, '?window_days=30')
     )
+    const body = await res.json()
+
     expect(res.status).toBe(200)
+    expect(mockRunAttributionJob).toHaveBeenCalledWith({
+      windowDays: 14, // the authoritative window, not the request
+      clientId: undefined,
+    })
+    expect(body.window_override_refused).toMatchObject({ requested: 30, used: 14 })
+  })
+
+  it('honours a custom pass-1 window once the gate is on', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    mockRunAttributionJob.mockResolvedValue({ processed: 2, written: 2, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
+
+    const res = await POST(
+      makeRequest({ authorization: 'Bearer test-secret' }, '?window_days=30')
+    )
+    const body = await res.json()
+
     expect(mockRunAttributionJob).toHaveBeenCalledWith({
       windowDays: 30,
       clientId: undefined,
     })
+    expect(body.window_override_refused).toBeUndefined()
   })
 
   it('passes client_id query param to runAttributionJob', async () => {
@@ -169,7 +193,7 @@ describe('POST /api/cron/attribution', () => {
     )
     expect(res.status).toBe(200)
     expect(mockRunAttributionJob).toHaveBeenCalledWith({
-      windowDays: undefined,
+      windowDays: 14,
       clientId: 'abc-123',
     })
   })

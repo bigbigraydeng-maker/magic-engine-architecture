@@ -137,3 +137,52 @@ describe('unattributable todo wording', () => {
     expect(await itemsFor([])).toEqual([])
   })
 })
+
+// ── The check failing is itself a finding ──────────────────────────────────
+
+describe('when the audit itself fails', () => {
+  it('emits an infra todo instead of swallowing it', async () => {
+    // The audit throws deliberately on a query failure so that "nothing is
+    // stranded" and "we could not check" never look the same. Catching that
+    // into a console.warn undoes the distinction one layer up: the todo list
+    // returns cleanly with no attribution item, and the whole detection
+    // pipeline disappears into a developer log.
+    const { auditUnattributableActions } = await import(
+      '@/lib/flywheel/attribution/unattributable-audit'
+    )
+    vi.mocked(auditUnattributableActions).mockRejectedValueOnce(
+      new Error('column "payload" does not exist'),
+    )
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const all = await loadManualItems(stubSupabase(), new Date('2026-08-08T00:00:00Z'))
+    warn.mockRestore()
+
+    const item = all.find(i => i.kind === 'attribution_audit_failed')
+    expect(item).toBeDefined()
+    // The message has to carry the actual cause, not just "something failed".
+    expect(item!.what).toContain('column "payload" does not exist')
+    // And it must not read as "all clear".
+    expect(item!.what).toContain('不是「今天没问题」')
+    expect(item!.how).toContain('查不了')
+    expect(item!.href).toBeTruthy()
+  })
+
+  it('does not emit the failure item on a clean run', async () => {
+    const all = await itemsFor([])
+    expect(all.find(i => i.kind === 'attribution_audit_failed')).toBeUndefined()
+  })
+
+  it('a failed audit does not take the rest of the todo list down with it', async () => {
+    const { auditUnattributableActions } = await import(
+      '@/lib/flywheel/attribution/unattributable-audit'
+    )
+    vi.mocked(auditUnattributableActions).mockRejectedValueOnce(new Error('boom'))
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await expect(
+      loadManualItems(stubSupabase(), new Date('2026-08-08T00:00:00Z')),
+    ).resolves.toBeInstanceOf(Array)
+    warn.mockRestore()
+  })
+})

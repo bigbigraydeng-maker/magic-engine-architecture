@@ -18,6 +18,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase'
+import { fetchAll } from '@/lib/supabase-paginate'
 import { SEO_METRIC_KEY } from '@/lib/flywheel/vocabulary'
 import { computeVerdict } from './job'
 import {
@@ -145,24 +146,38 @@ export async function runGscAttributionForClient(
   // from the shared declaration rather than a literal, so pass 1's decision to
   // defer to us and our decision to load cannot drift apart — an action
   // deferred here but excluded by this query would never be attributed at all.
-  const { data: actions, error: actionsErr } = await supabaseAdmin
-    .from('flywheel_actions')
-    .select('id, client_id, executed_at, action_type, expected_metric, payload')
-    .eq('client_id', clientId)
-    .in('flywheel', loadableFlywheelsOrThrow())
-    .not('expected_metric', 'is', null)
-    .order('executed_at', { ascending: false })
-
-  if (actionsErr) {
-    result.errors.push(`Failed to load SEO actions: ${actionsErr.message}`)
+  // Paginated for the same reason pass 1 and the audit are: PostgREST caps a
+  // response at 1000 rows silently, and newest-first ordering means the rows
+  // dropped are the OLDEST. Pass 1 now defers every GSC-owned action it finds,
+  // but `pass2ClientIds` carries only client ids — so a truncation here loses
+  // exactly the deferred actions pass 1 promised we would answer, and nothing
+  // reports it.
+  let actions: SeoActionRow[]
+  try {
+    actions = await fetchAll<SeoActionRow>((from, to) =>
+      supabaseAdmin
+        .from('flywheel_actions')
+        .select('id, client_id, executed_at, action_type, expected_metric, payload')
+        .eq('client_id', clientId)
+        .in('flywheel', loadableFlywheelsOrThrow())
+        .not('expected_metric', 'is', null)
+        // `id` as a unique tiebreak — `executed_at` is not unique, and an
+        // unstable sort repeats or drops rows at page boundaries.
+        .order('executed_at', { ascending: false })
+        .order('id', { ascending: false })
+        .range(from, to),
+    )
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    result.errors.push(`Failed to load SEO actions: ${message}`)
     return result
   }
 
-  if (!actions?.length) return result
+  if (!actions.length) return result
 
   result.actions_found = actions.length
 
-  for (const action of actions as SeoActionRow[]) {
+  for (const action of actions) {
     // Accumulated OUTSIDE the try so a failure partway through the action does
     // not un-count rows that are already in the database: the cadence-window
     // upsert can succeed and the handoff-window one then fail, and the cron

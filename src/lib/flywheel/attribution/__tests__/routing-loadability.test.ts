@@ -452,3 +452,45 @@ describe('pass 1 pagination', () => {
     expect(result.unattributable).toBe(1200)
   })
 })
+
+// ── The bridge must read every action too ──────────────────────────────────
+
+describe('gsc-bridge pagination', () => {
+  it('loads SEO actions past the first page', async () => {
+    // pass2ClientIds carries only client ids, so if the bridge truncates its
+    // own scan the deferred actions pass 1 promised we would answer are simply
+    // never seen — by either writer — and the run still reports success.
+    db.seed('gsc_performance_snapshots', [
+      { client_id: CLIENT_ID, period_end: '2026-05-31', total_clicks: 100, total_impressions: 1000, avg_position: 20, top_pages: null },
+      { client_id: CLIENT_ID, period_end: '2026-07-15', total_clicks: 150, total_impressions: 1600, avg_position: 12, top_pages: null },
+    ])
+    for (let i = 0; i < 1100; i++) {
+      db.seed('flywheel_actions', [{
+        id: `seo-${String(i).padStart(5, '0')}`,
+        client_id: CLIENT_ID,
+        flywheel: 'seo',
+        action_type: 'seo.publish_blog',
+        expected_metric: GSC_CLICKS,
+        expected_delta: 1,
+        executed_at: EXECUTED_AT,
+        payload: null,
+      }])
+    }
+
+    const result = await runBridge()
+
+    expect(result.actions_found).toBe(1100)
+  })
+
+  it('uses a stable unique sort so page boundaries cannot drop or repeat rows', async () => {
+    const { readFileSync } = await import('node:fs')
+    const nodePath = await import('node:path')
+    const source = readFileSync(
+      nodePath.join(process.cwd(), 'src/lib/flywheel/attribution/gsc-bridge.ts'),
+      'utf8',
+    )
+
+    expect(source).toMatch(/fetchAll</)
+    expect(source).toMatch(/\.order\('id'/)
+  })
+})

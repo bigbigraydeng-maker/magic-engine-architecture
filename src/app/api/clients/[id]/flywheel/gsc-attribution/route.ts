@@ -16,7 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireBearerToken } from '@/lib/validation-utils'
 import { runGscAttributionForClient } from '@/lib/flywheel/attribution/gsc-bridge'
-import { dualWindowEnabled } from '@/lib/flywheel/attribution/dual-window-gate'
+import { resolveEffectiveWindow } from '@/lib/flywheel/attribution/dual-window-gate'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 
 export const dynamic = 'force-dynamic'
@@ -63,9 +63,9 @@ export async function POST(
   //
   // Refused out loud rather than silently ignored: an operator who asked for 7
   // days and got 28 without being told would read the result as a 7-day answer.
-  const dualWindow = dualWindowEnabled()
-  const windowDays = dualWindow ? requestedWindow : DEFAULT_WINDOW_DAYS
-  const windowOverrideRefused = !dualWindow && requestedWindow !== DEFAULT_WINDOW_DAYS
+  const effective = resolveEffectiveWindow(requestedWindow, DEFAULT_WINDOW_DAYS)
+  const windowDays = effective.windowDays
+  const windowOverrideRefused = effective.overrideRefused
 
   const result = await runGscAttributionForClient(clientId, windowDays)
 
@@ -97,7 +97,7 @@ export async function POST(
       ...(windowOverrideRefused
         ? {
             window_override_refused: {
-              requested: requestedWindow,
+              requested: effective.requested ?? requestedWindow,
               used: windowDays,
               reason:
                 'Custom attribution windows are disabled while ' +
