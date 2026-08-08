@@ -341,6 +341,79 @@ describe('T2 · 声明本身也得是个真实金额，且断点续跑要扣掉�
   })
 })
 
+describe('T2c · 上限本身也必须是真实金额（NaN 会让整条花钱链路失效）', () => {
+  it('🔴 政策里的上限是 NaN → 一律不做（`x > NaN` 恒假，三道闸会同时失效）', async () => {
+    const calls = vi.fn()
+    const f = makeFixture({
+      registry: makeRegistry([
+        definition({ steps: ['a'], costModel: { kind: 'fixed', estimate: () => 1, stepCeilingUsd: { a: 1 } } }),
+      ]),
+      capabilities: () => ({
+        [KEY]: capabilityOf({
+          a: async () => {
+            calls()
+            return { output: { done: true }, costActualUsd: 999 }
+          },
+        }),
+      }),
+      options: { policy: policyWithCap(0) },
+    })
+    // 🔴 绕过 Settings 直接把上限写成 numeric 的 NaN（修数脚本 / 坏输入）。
+    //    注意这里放的是**字符串** 'NaN' —— JSON 没有 NaN 这个值，
+    //    PostgREST 把 numeric 的 NaN 序列化成字符串 "NaN"，
+    //    所以真正到达 JS 的就是这个形状。`1 > 'NaN'` 同样恒假，洞是一样的。
+    f.tables.client_automation_policies[0].spend_cap_per_run_usd = 'NaN'
+
+    const out = await runAction(f.kernel, submit())
+
+    expect(out.kind).toBe('denied')
+    expect(f.tables.authorization_decisions[0].deny_code).toBe('over_cost_cap')
+    expect(out.humanReason).toContain('不是一个有效金额')
+    expect(calls).not.toHaveBeenCalled()
+  })
+
+  it('🔴 Infinity / 负数的上限同样不算数（「不限」必须由人显式写一个大数）', async () => {
+    for (const bogus of ['Infinity', '-Infinity', -1] as Array<string | number>) {
+      const f = makeFixture({
+        registry: makeRegistry([definition({ steps: ['a'] })]),
+        capabilities: () => ({
+          [KEY]: capabilityOf({ a: async () => ({ output: { done: true }, costActualUsd: 0 }) }),
+        }),
+        options: { policy: policyWithCap(0) },
+      })
+      f.tables.client_automation_policies[0].spend_cap_per_run_usd = bogus
+
+      const out = await runAction(f.kernel, submit())
+      expect(out.kind, `上限 ${String(bogus)} 不该被当成有效值`).toBe('denied')
+    }
+  })
+
+  it('🔴 绕开应用直接往政策表写非法上限 → 数据库拒绝', async () => {
+    const f = makeFixture({
+      registry: makeRegistry([definition({ steps: ['a'] })]),
+      capabilities: () => ({
+        [KEY]: capabilityOf({ a: async () => ({ output: { done: true }, costActualUsd: 0 }) }),
+      }),
+      options: { policy: policyWithCap(0) },
+    })
+
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      const { error } = await f.supabase.from('client_automation_policies').insert({
+        client_id: CLIENT_A,
+        action_key: `k-${String(bad)}`,
+        mode: 'auto_approve',
+        policy_version: 1,
+        spend_cap_per_run_usd: bad,
+        decision_ttl_seconds: 900,
+        effective_from: '2020-01-01T00:00:00.000Z',
+        effective_to: null,
+        updated_by: 'bad-script',
+      })
+      expect(error?.message, `${String(bad)} 该被拒绝`).toContain('spend_caps_are_real_amounts')
+    }
+  })
+})
+
 describe('T3 · 花费必须是真实金额（应用层）', () => {
   function costFixture(reported: number) {
     return makeFixture({

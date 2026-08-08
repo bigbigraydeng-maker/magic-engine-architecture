@@ -1066,6 +1066,41 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
         expect_fail_contains="",
     ),
+    # ── T2c：上限本身的合法性 ────────────────────────────────────────────
+    dict(
+        name="T2c 应用层不校验上限本身（NaN 上限让三道闸同时失效）",
+        file="src/lib/kernel/authorize.ts",
+        old="""  if (!Number.isFinite(costCap) || costCap < 0) {""",
+        new="""  if (false) {""",
+        test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
+        expect_fail_contains="不是一个有效金额",
+    ),
+    dict(
+        name="T2c 应用层只挡负数不挡 NaN（`x > NaN` 恒假）",
+        file="src/lib/kernel/authorize.ts",
+        old="""  if (!Number.isFinite(costCap) || costCap < 0) {""",
+        new="""  if (Number(costCap) < 0) {""",
+        test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
+        expect_fail_contains="NaN",
+    ),
+    dict(
+        name="T2c 拆掉数据库那层的上限 CHECK 复刻",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""      if (Number.isFinite(n) && n >= 0) continue""",
+        new="""      continue""",
+        test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
+        expect_fail_contains="数据库拒绝",
+    ),
+    dict(
+        name="T2c SQL 的上限 CHECK 只写 >= 0（numeric 里 NaN >= 0 是 true）",
+        file="supabase/migrations/20260808000003_me2_execution_kernel_v1.sql",
+        old="""      spend_cap_per_run_usd >= 0
+      AND spend_cap_per_run_usd <> 'NaN'::numeric
+      AND spend_cap_per_run_usd <  'Infinity'::numeric))""",
+        new="""      spend_cap_per_run_usd >= 0))""",
+        test="src/lib/kernel/__tests__/architecture.test.ts",
+        expect_fail_contains="NaN",
+    ),
     # ── P1-4：migration 版本撞车 ─────────────────────────────────────────
     dict(
         name="P1-4 新起一个跟别人同号的 migration",

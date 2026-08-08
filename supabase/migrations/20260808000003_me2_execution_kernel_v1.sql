@@ -54,6 +54,24 @@ CREATE TABLE IF NOT EXISTS public.client_automation_policies (
   updated_at               timestamptz NOT NULL DEFAULT now(),
 
   CONSTRAINT policy_window_sane CHECK (effective_to IS NULL OR effective_to > effective_from),
+
+  -- 🔴 T2c：**上限本身**也得是个真实金额。
+  --    NaN 最阴：numeric 的 `x > 'NaN'` 恒假，于是授权时的估算闸、开跑前的硬上限、
+  --    事后的兜底断言**同时**失效 —— 整条花钱链路一句话都拦不住。
+  --    判据跟 action_run_steps.cost_actual_usd 逐条一致（生产 PG 17.6 实测过：
+  --    `'NaN'::numeric >= 0` 是 true，只写 `>= 0` 拦不住它）。
+  --    「不限」必须由人显式写一个大数，不能靠 Infinity 这种特殊值悄悄生效。
+  CONSTRAINT spend_caps_are_real_amounts CHECK (
+    (spend_cap_per_run_usd IS NULL OR (
+      spend_cap_per_run_usd >= 0
+      AND spend_cap_per_run_usd <> 'NaN'::numeric
+      AND spend_cap_per_run_usd <  'Infinity'::numeric))
+    AND
+    (spend_cap_per_period_usd IS NULL OR (
+      spend_cap_per_period_usd >= 0
+      AND spend_cap_per_period_usd <> 'NaN'::numeric
+      AND spend_cap_per_period_usd <  'Infinity'::numeric))
+  ),
   -- 有花费上限就必须说清是哪个周期，反之亦然
   CONSTRAINT policy_period_paired CHECK (
     (spend_cap_per_period_usd IS NULL) = (spend_cap_period IS NULL)

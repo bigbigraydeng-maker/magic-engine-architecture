@@ -271,6 +271,23 @@ async function preflight(deps: KernelDeps, run: ActionRun, now: Date): Promise<P
 
   // ⑦ 钱。上限没写 = 0，不是「不限」。
   const costCap = policy.spend_cap_per_run_usd ?? 0
+
+  // 🔴 T2c：**上限本身**也必须是个真实金额。
+  //    NaN 最阴：`x > NaN` 恒假，于是授权时的估算闸、开跑前的硬上限、
+  //    事后的兜底断言**同时**失效 —— 整条花钱链路一句话都拦不住。
+  //    Infinity 则等于「不限」，但那必须是有人显式写一个大数，不能靠一个特殊值悄悄生效。
+  //    数据库那条 CHECK 是同一套判据的第二层。
+  if (!Number.isFinite(costCap) || costCap < 0) {
+    return bad(
+      'over_cost_cap',
+      `这个客户给「${definition.title}」设的单次花费上限不是一个有效金额（${String(costCap)}）—— ` +
+        `先把规则里的上限改成一个具体数字，在那之前一律不做`,
+      definition,
+      policy,
+      costEstimate,
+    )
+  }
+
   if (costEstimate > costCap) {
     return bad(
       'over_cost_cap',

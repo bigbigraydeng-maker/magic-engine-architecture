@@ -413,6 +413,20 @@ describe('两处清单不许分家（S1 / S2）', () => {
     ).toBeGreaterThanOrEqual(3)
   })
 
+  it('🔴 单次 / 周期花费上限的 CHECK 也要挡住 NaN 和 Infinity（T2c）', () => {
+    const sql = read(MIGRATION_SQL)
+    const i = sql.indexOf('CONSTRAINT spend_caps_are_real_amounts')
+    expect(i, '政策表上应该有 spend_caps_are_real_amounts 约束').toBeGreaterThan(-1)
+    const stmt = sql.slice(i, i + 700)
+    // 上限本身是 NaN 的话，`x > NaN` 恒假 —— 授权估算闸、开跑前硬上限、
+    // 事后兜底断言会**同时**失效，整条花钱链路一句话都拦不住。
+    for (const col of ['spend_cap_per_run_usd', 'spend_cap_per_period_usd']) {
+      expect(stmt).toContain(`${col} >= 0`)
+      expect(stmt).toContain(`${col} <> 'NaN'::numeric`)
+      expect(stmt).toContain(`${col} <  'Infinity'::numeric`)
+    }
+  })
+
   it('🔴 cost_actual_usd 的 CHECK 必须显式挡住 NaN 和 Infinity（T3）', () => {
     const sql = read(MIGRATION_SQL)
     const stmt = sql.slice(

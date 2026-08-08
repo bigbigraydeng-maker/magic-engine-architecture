@@ -220,6 +220,20 @@ export function createFakeSupabase(
     )
   }
 
+  /** 复刻 `client_automation_policies.spend_caps_are_real_amounts`（T2c）。 */
+  function assertRealCaps(table: string, row: Row): void {
+    if (table !== 'client_automation_policies') return
+    for (const col of ['spend_cap_per_run_usd', 'spend_cap_per_period_usd']) {
+      const v = row[col]
+      if (v === null || v === undefined) continue
+      const n = Number(v)
+      if (Number.isFinite(n) && n >= 0) continue
+      throw new Error(
+        `new row for relation "client_automation_policies" violates check constraint "spend_caps_are_real_amounts"`,
+      )
+    }
+  }
+
   function assertUnique(table: string, row: Row, ignore?: Row): void {
     for (const keys of UNIQUE_KEYS[table] ?? []) {
       const dup = tableOf(table).find(
@@ -335,6 +349,7 @@ export function createFakeSupabase(
           }
           try {
             assertRealCost(table, row.cost_actual_usd)
+            assertRealCaps(table, row)
             assertUnique(table, row)
           } catch (e) {
             const err = e as Error & { code?: string }
