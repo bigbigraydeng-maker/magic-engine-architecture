@@ -29,7 +29,7 @@ import {
   OUTCOME_EVALUATOR,
   assertEvaluatorOwnsAll,
   evaluatorLoadableFlywheels,
-  ownsMetric,
+  resolveAttributionRouting,
   resolveStaleEvaluatorKeys,
 } from './outcome-identity'
 import {
@@ -51,6 +51,13 @@ interface GscSnapshotRow {
 interface SeoActionRow {
   id:              string
   client_id:       string
+  /**
+   * Selected even though this evaluator only ever loads `seo`: the handoff
+   * decision runs the SHARED routing rule, which refuses to decide without it
+   * rather than assuming. Hardcoding `'seo'` here would be the same shortcut
+   * `loadableFlywheelsOrThrow` exists to prevent.
+   */
+  flywheel:        string
   executed_at:     string
   action_type:     string
   expected_metric: string | null
@@ -160,7 +167,7 @@ async function loadSeoActions(clientId: string): Promise<SeoActionRow[]> {
   return fetchAll<SeoActionRow>((from, to) =>
     supabaseAdmin
       .from('flywheel_actions')
-      .select('id, client_id, executed_at, action_type, expected_metric, payload')
+      .select('id, client_id, flywheel, executed_at, action_type, expected_metric, payload')
       .eq('client_id', clientId)
       .in('flywheel', loadableFlywheelsOrThrow())
       .not('expected_metric', 'is', null)
@@ -295,8 +302,25 @@ function resolveHandoffWindow(
   if (!Number.isInteger(deferredWindowDays) || deferredWindowDays <= 0) return null
   if (deferredWindowDays === windowDays) return null
   if (!action.expected_metric) return null
-  if (!ownsMetric(OUTCOME_EVALUATOR.GSC_SNAPSHOTS, action.expected_metric)) return null
-  return deferredWindowDays
+
+  // Ask the SHARED routing rule, not just "does this evaluator own the metric".
+  //
+  // Ownership is necessary but not sufficient, and the gap is a real shape:
+  // a plain `seo.publish_blog` promising `seo.gsc.page_clicks` is owned by this
+  // evaluator, so the ownership test says yes — but pass 1 routes it
+  // `unattributable` (scope_mismatch), never `defer`. It was never handed over,
+  // so there is no second question owed to anyone; computing one would give a
+  // misconfigured action two windows' worth of rows and re-amplify exactly the
+  // evidence the dual-window gate exists to hold down.
+  // (Codex P2, round 33 on PR #862.)
+  return resolveAttributionRouting({
+    flywheel: action.flywheel,
+    action_type: action.action_type,
+    expected_metric: action.expected_metric,
+    payload: action.payload,
+  }) === 'defer'
+    ? deferredWindowDays
+    : null
 }
 
 /**

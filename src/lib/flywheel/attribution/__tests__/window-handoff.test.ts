@@ -372,3 +372,37 @@ describe('order-independence with handoff', () => {
     expect(jobFirst).toHaveLength(6) // 3 @ 14 (handoff) + 3 @ 28 (cadence)
   })
 })
+
+// ── Only an action pass 1 actually DEFERRED gets a second window ────────────
+
+describe('the handoff window follows the routing decision, not just ownership', () => {
+  it('gives no second window to a scope-mismatched action', async () => {
+    // `seo.gsc.page_clicks` on a plain `seo.publish_blog` IS owned by this
+    // evaluator, so an ownership-only test says yes — but pass 1 routes it
+    // `unattributable` (scope_mismatch) and never hands it over. Computing a
+    // handoff window for it would give a misconfigured action two windows'
+    // worth of rows, re-amplifying exactly the evidence the dual-window gate
+    // holds down. (Codex P2, round 33.)
+    // Flag ON, so the window retire is not what removes the extra rows — the
+    // assertion is about whether a handoff window is COMPUTED at all.
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    seedDeferredAction('seo.gsc.page_clicks')
+    seedSnapshots()
+
+    await runBridge(14)
+
+    // Only the cadence window's rows exist — no 14-day set alongside them.
+    expect(new Set(db.outcomes().map(r => r.window_days))).toEqual(new Set([28]))
+  })
+
+  it('still gives one to an action pass 1 genuinely deferred', async () => {
+    // The control: same shape, a metric this evaluator both owns and produces.
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    seedDeferredAction(GSC_CLICKS)
+    seedSnapshots()
+
+    await runBridge(14)
+
+    expect(new Set(db.outcomes().map(r => r.window_days))).toEqual(new Set([14, 28]))
+  })
+})
