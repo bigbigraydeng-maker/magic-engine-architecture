@@ -236,6 +236,68 @@ describe('writer coexistence', () => {
     expect(db.outcomes()).toHaveLength(6)
   })
 
+  it('retires domain rows for a page-scoped action even when the page is missing from the snapshot', async () => {
+    // Page scope is decided by the action, not by this run's data: once the
+    // action is about one specific page, its domain-level outcomes are wrong
+    // whether or not the page shows up in top_pages today. Letting a temporarily
+    // absent page keep them alive leaves rows the old ungated bridge wrote on
+    // the execution board — and feeding memory and benchmarks — indefinitely.
+    seedSeoAction()
+    seedGscSnapshots() // top_pages: null → no page rows can be built
+
+    await runBridge(28) // domain scope first: 3 domain rows land
+    expect(db.outcomes()).toHaveLength(3)
+
+    const action = db.rowsOf('flywheel_actions')[0]
+    action.action_type = 'cms_update_existing'
+    action.payload = { status: 'live', page_url: 'https://example.com/guide' }
+
+    const result = await runBridge(28)
+
+    expect(result.outcomes_written).toBe(0) // nothing could be produced…
+    expect(db.outcomes()).toHaveLength(0) // …and the stale domain rows are gone
+    expect(result.cleanup_errors).toBe(0)
+  })
+
+  it('a barren page-scoped run keeps the page rows it produced earlier', async () => {
+    // Only the DOMAIN keys are wrong by scope. The page rows are the last known
+    // good answer at the right scope, and today's snapshot merely not listing
+    // the page is no reason to throw them away — retiring everything the
+    // evaluator owns would do exactly that.
+    seedSeoAction({
+      action_type: 'cms_update_existing',
+      payload: { status: 'live', page_url: 'https://example.com/guide' },
+    })
+    seedGscSnapshots([{ page: 'https://example.com/guide', clicks: 40, impressions: 400, position: 18 }])
+
+    await runBridge(28) // page rows land
+    const pageRowIds = db.outcomes().map(r => r.id).sort()
+    expect(pageRowIds).toHaveLength(3)
+
+    // The page drops out of top_pages next time round.
+    for (const snap of db.rowsOf('gsc_performance_snapshots')) snap.top_pages = []
+
+    const result = await runBridge(28)
+
+    expect(result.outcomes_written).toBe(0)
+    expect(db.outcomes().map(r => r.id).sort()).toEqual(pageRowIds)
+    expect(db.outcomes().map(r => r.metric_key).sort()).toEqual([
+      'seo.gsc.page_avg_position',
+      'seo.gsc.page_clicks',
+      'seo.gsc.page_impressions',
+    ])
+  })
+
+  it('a barren run that is NOT page-scoped still retires nothing', async () => {
+    // The general rule is unchanged: producing nothing is not a refutation.
+    seedSeoAction()
+    // No snapshots at all → the run cannot even reach the scope decision.
+    const result = await runBridge(28)
+
+    expect(result.outcomes_written).toBe(0)
+    expect(db.didDeleteFrom('flywheel_outcomes')).toBe(false)
+  })
+
   it('the retire query is scoped by action, evaluator, window and metric', async () => {
     // The evaluator_key scope is now defence in depth rather than load-bearing:
     // metric-family ownership means no other evaluator can hold a seo.gsc.* row

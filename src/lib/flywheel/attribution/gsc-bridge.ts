@@ -21,6 +21,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { SEO_METRIC_KEY } from '@/lib/flywheel/vocabulary'
 import { computeVerdict } from './job'
 import {
+  GSC_DOMAIN_METRIC_KEYS,
   GSC_EVALUATOR_METRIC_KEYS,
   OUTCOME_CONFLICT_TARGET,
   OUTCOME_EVALUATOR,
@@ -248,7 +249,22 @@ async function attributeAction(
       ? buildPageOutcomeRows(action, baseline, after, scope.pageUrl, windowDays)
       : buildOutcomeRows(action, baseline, after, windowDays)
 
-  if (rows.length === 0) return nothing
+  if (rows.length === 0) {
+    // Normally producing nothing is not a refutation of the previous answer, so
+    // nothing is retired. Page scope is the exception: the action being about
+    // one specific page makes its domain-level outcomes wrong *by scope*, not
+    // by this run's data. Whether the page happens to appear in this snapshot's
+    // top_pages is a separate question, and letting it decide would leave rows
+    // the old ungated bridge wrote visible on the execution board — and feeding
+    // memory and benchmarks — indefinitely.
+    if (scope.kind === 'page') {
+      return {
+        written: 0,
+        cleanupError: await retireOwnKeys(action, windowDays, GSC_DOMAIN_METRIC_KEYS),
+      }
+    }
+    return nothing
+  }
 
   // Arbitration, from the owning side: this evaluator may only write metrics it
   // is authoritative for. See Issue #859.
@@ -267,36 +283,45 @@ async function attributeAction(
   if (error) throw new Error(`upsert outcomes: ${error.message}`)
 
   // Then retire the keys this evaluator owns but no longer produces — e.g. the
-  // domain-scope rows left behind once an action becomes page-scoped. Scoped to
-  // our own evaluator_key and window so it can never remove the
-  // flywheel_metrics evaluator's rows, or our own answer for another window.
+  // domain-scope rows left behind once an action becomes page-scoped.
   const staleKeys = resolveStaleEvaluatorKeys(
     GSC_EVALUATOR_METRIC_KEYS,
     rows.map(row => row.metric_key as string),
   )
 
-  if (staleKeys.length > 0) {
-    const { error: retireError } = await supabaseAdmin
-      .from('flywheel_outcomes')
-      .delete()
-      .eq('action_id', action.id)
-      .eq('evaluator_key', OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
-      .eq('window_days', windowDays)
-      .in('metric_key', staleKeys)
-
-    // Reported, not thrown: the rows above are already in the database, and
-    // throwing here would discard that count and report the run as having
-    // written nothing. Leaving a superseded row behind is a reconciliation
-    // debt for the next run, not a reason to disown a successful write.
-    if (retireError) {
-      return {
-        written: rows.length,
-        cleanupError: `retire stale outcomes: ${retireError.message}`,
-      }
-    }
+  return {
+    written: rows.length,
+    cleanupError: await retireOwnKeys(action, windowDays, staleKeys),
   }
+}
 
-  return { written: rows.length, cleanupError: null }
+/**
+ * Delete outcome rows this evaluator owns for keys it no longer stands behind.
+ *
+ * Scoped to our own `evaluator_key` and window, so it can never remove the
+ * flywheel_metrics evaluator's rows or our own answer for a different window.
+ *
+ * Returns the error rather than throwing: by the time this runs the current
+ * rows are already in the database, and throwing would discard that count and
+ * report the run as having written nothing. A superseded row left behind is a
+ * reconciliation debt for the next run, not a reason to disown a good write.
+ */
+async function retireOwnKeys(
+  action: SeoActionRow,
+  windowDays: number,
+  metricKeys: readonly string[],
+): Promise<string | null> {
+  if (metricKeys.length === 0) return null
+
+  const { error } = await supabaseAdmin
+    .from('flywheel_outcomes')
+    .delete()
+    .eq('action_id', action.id)
+    .eq('evaluator_key', OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
+    .eq('window_days', windowDays)
+    .in('metric_key', metricKeys)
+
+  return error ? `retire stale outcomes: ${error.message}` : null
 }
 
 async function fetchGscSnapshot(

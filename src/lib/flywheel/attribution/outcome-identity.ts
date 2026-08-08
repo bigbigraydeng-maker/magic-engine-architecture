@@ -57,6 +57,17 @@ export const GSC_EVALUATOR_METRIC_KEYS: readonly string[] = [
 ]
 
 /**
+ * The domain-scope subset. Once an action is known to be about one specific
+ * page, these keys are wrong for it regardless of whether page-level numbers
+ * can be produced this run — the scope is the refutation, not the data.
+ */
+export const GSC_DOMAIN_METRIC_KEYS: readonly string[] = [
+  SEO_METRIC_KEY.GSC_CLICKS,
+  SEO_METRIC_KEY.GSC_IMPRESSIONS,
+  SEO_METRIC_KEY.GSC_AVG_POSITION,
+]
+
+/**
  * Metric families whose authoritative evaluator is not the default.
  *
  * `seo.gsc.*` belongs to the GSC bridge: it reads `gsc_performance_snapshots`,
