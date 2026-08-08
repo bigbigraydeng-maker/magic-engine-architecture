@@ -19,13 +19,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import {
-  auditOrphanedOutcomes,
-  auditUnattributableActions,
-  type OrphanedOutcome,
-  type UnattributableAction,
-} from '@/lib/flywheel/attribution/unattributable-audit'
-import type { UnattributableReason } from '@/lib/flywheel/attribution/outcome-identity'
+import { fetchAll } from '@/lib/supabase-paginate'
+import { pushAttributionItems } from './attribution-items'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { AUTO_LANDED_AGENT } from '@/lib/diagnostic/auto-prescribe'
 import { isHandAddedItem } from '@/lib/diagnostic/prescription-landing'
@@ -46,18 +41,6 @@ const NEVER_DROP_KINDS = new Set<ManualItemKind>(['cross_client_leak'])
 const META_PENDING_STALE_DAYS = 3
 /** Crawl data older than this = the weekly recrawl isn't landing. */
 const CRAWL_STALE_DAYS = 14
-/**
- * A page-upgrade action waiting this long to go live is stuck, not in flight.
- *
- * Below it there is nothing for anyone to do: the routing returns `scope_skip`
- * only because the page has not been marked live yet, and the moment it is, the
- * next attribution run picks it up on its own. Putting a self-healing state in
- * the 「需要你动手」 lane every day — with a `how` that literally says it will
- * fix itself — trains the reader to skim the list, which costs more than the
- * item is worth. Above it the same state IS a finding: the merge step has
- * stalled and the attribution never happens. (Codex P2, round 17 on PR #862.)
- */
-const SCOPE_SKIP_STALE_DAYS = 14
 
 export type ManualItemKind =
   | 'blog_pr_open'
@@ -173,10 +156,24 @@ export async function loadManualItems(
 ): Promise<ManualItem[]> {
   const items: ManualItem[] = []
 
-  const { data: clientRows, error: clientsError } = await supabase
-    .from('clients')
-    .select('id, name, domain')
-    .eq('client_status', 'active')
+  // 分页：PostgREST 单次最多返回 1000 行，而且不报错（见 supabase-paginate.ts）。
+  // 这里截断不只是少列几个客户 —— `ids` 是后面所有「按客户查」的输入，包括归因
+  // 黑洞和孤儿数据两项审计。它们内部各自分页也补不回来：被上游漏掉的客户，
+  // 审计根本不知道要去查。排序要唯一，否则翻页会重复或漏行。
+  let clientRows: ClientRow[] | null = null
+  let clientsError: { message: string } | null = null
+  try {
+    clientRows = await fetchAll<ClientRow>((from, to) =>
+      supabase
+        .from('clients')
+        .select('id, name, domain')
+        .eq('client_status', 'active')
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+  } catch (e) {
+    clientsError = { message: e instanceof Error ? e.message : String(e) }
+  }
   const clients = new Map(
     ((clientRows ?? []) as ClientRow[]).map((c) => [c.id, c]),
   )
@@ -259,41 +256,7 @@ export async function loadManualItems(
   // 告警，只会一遍遍写进开发日志。这正是「发现死在日志里」，所以捞到这条流水线上。
   // 注意这里不是 catch 完就算了 —— 这条检查本身就是「归因黑洞」的唯一上报
   // 通道，它挂了就等于整条检测静默消失。所以失败也要变成一条待办。
-  await pushUnattributableItems(supabase, items, ids, nameOf, now).catch((e) => {
-    const message = e instanceof Error ? e.message : String(e)
-    console.warn('[manual-items] 归因黑洞检查失败:', message)
-    items.push({
-      kind: 'attribution_audit_failed',
-      client_id: 'infra',
-      client_name: 'Magic Engine 后台',
-      what:
-        `「有没有动作没人能算效果」这项检查今天没跑成 —— ${message}。` +
-        '不是「今天没问题」，是没查成；真有问题也看不见',
-      how:
-        '这条不用你动手 —— 是我们这边查询挂了（多半是表结构或权限变了）。' +
-        '回我一句「查不了」我去修。修好之前，归因黑洞这一项当作没查过，别当作没问题',
-      href: RENDER_DASHBOARD_URL,
-    })
-  })
-
-  // 效果数据挂在没人能维护的指标上 —— 改指标那一刀的副作用。
-  // 只报不删：删别人名下的行正是这个 PR 拆掉的那个 bug。
-  await pushOrphanedOutcomeItems(supabase, items, ids, nameOf).catch((e) => {
-    const message = e instanceof Error ? e.message : String(e)
-    console.warn('[manual-items] 孤儿效果数据检查失败:', message)
-    items.push({
-      kind: 'attribution_audit_failed',
-      client_id: 'infra',
-      client_name: 'Magic Engine 后台',
-      what:
-        `「有没有效果数据没人维护」这项检查今天没跑成 —— ${message}。` +
-        '不是「今天没问题」，是没查成',
-      how:
-        '这条不用你动手 —— 是我们这边查询挂了。回我一句「查不了」我去修。' +
-        '修好之前，这一项当作没查过，别当作没问题',
-      href: RENDER_DASHBOARD_URL,
-    })
-  })
+  await pushAttributionItems(supabase, items, ids, nameOf, now)
 
   // GSC property identifiers (needed for the inspect deep link).
   const { data: connectors } = await supabase
@@ -1073,180 +1036,4 @@ async function pushPrescriptionItems(
       href: `https://app.magicengine.com.au/dashboard/clients/${p.client_id}/execution`,
     })
   }
-}
-
-/**
- * Actions promising a metric no evaluator can compute.
- *
- * Attribution finds these on every run and can do nothing about them: either
- * the metric's owning evaluator does not load that flywheel, or it loads the
- * action but its scope produces a different set of keys. Left alone they are a
- * silent permanent gap — the action looks executed, and its effect never
- * appears.
- *
- * Grouped by CAUSE, not just by client: the three causes have different fixes,
- * and a note that names the wrong one sends the reader looking in the wrong
- * place — which is the same as not reporting it at all.
- *
- * Deliberately NOT routed through the cron's failure count: this is a standing
- * property of stored rows, so it would pin the daily digest's alarm on forever
- * while carrying no diagnosis (the digest reads error_message, never summary).
- */
-async function pushUnattributableItems(
-  supabase: SupabaseClient,
-  items: ManualItem[],
-  clientIds: string[],
-  nameOf: (id: string) => string,
-  now: Date,
-): Promise<void> {
-  const stranded = await auditUnattributableActions(supabase, clientIds)
-  if (stranded.length === 0) return
-
-  const groups = new Map<string, UnattributableAction[]>()
-  for (const row of stranded) {
-    // `scope_skip` is a normal in-flight state, not a problem, until it has
-    // been in flight too long. See SCOPE_SKIP_STALE_DAYS.
-    if (row.reason === 'scope_skip') {
-      const waiting = daysAgo(row.executed_at, now)
-      if (waiting === null || waiting < SCOPE_SKIP_STALE_DAYS) continue
-    }
-    const key = `${row.client_id}::${row.reason}`
-    const list = groups.get(key) ?? []
-    list.push(row)
-    groups.set(key, list)
-  }
-
-  for (const [key, rows] of Array.from(groups.entries())) {
-    const clientId = key.split('::')[0]
-    const n = rows.length
-    const metrics = Array.from(
-      new Set(rows.map((r: UnattributableAction) => r.expected_metric)),
-    ).join('、')
-
-    items.push({
-      kind: 'action_unattributable',
-      client_id: clientId,
-      client_name: nameOf(clientId),
-      what: describeUnattributable(rows[0].reason, n, metrics, rows, now),
-      how: adviseUnattributable(rows[0].reason, rows),
-      href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/execution`,
-    })
-  }
-}
-
-/**
- * 效果数据挂在没人能维护的指标上。
- *
- * 触发路径就是我们自己请人做的那件事：「改指标」。改完之后，旧指标那批行
- * 如果属于另一条评估线，就卡住了 —— pass 1 不碰别人名下的行，而那条线又
- * 加载不到这个动作。它们会一直停在最后一次算出来的数上，还继续被当成证据读。
- *
- * 只报不删：删别人名下的行正是这个 PR 拆掉的那个 bug（老代码按动作整删），
- * 换个更窄的条件再加回来只会让同样的错误更难被发现。
- */
-async function pushOrphanedOutcomeItems(
-  supabase: SupabaseClient,
-  items: ManualItem[],
-  clientIds: string[],
-  nameOf: (id: string) => string,
-): Promise<void> {
-  const orphans = await auditOrphanedOutcomes(supabase, clientIds)
-  if (orphans.length === 0) return
-
-  const byClient = new Map<string, OrphanedOutcome[]>()
-  for (const row of orphans) {
-    const list = byClient.get(row.client_id) ?? []
-    list.push(row)
-    byClient.set(row.client_id, list)
-  }
-
-  for (const [clientId, rows] of Array.from(byClient.entries())) {
-    const totalRows = rows.reduce((sum: number, r: OrphanedOutcome) => sum + r.rows, 0)
-    const metrics = Array.from(new Set(rows.map((r: OrphanedOutcome) => r.metric_key))).join('、')
-    items.push({
-      kind: 'outcome_rows_orphaned',
-      client_id: clientId,
-      client_name: nameOf(clientId),
-      what:
-        `${totalRows} 条效果数据（${metrics}）没人能再更新了 —— 这些动作后来改了` +
-        '指标，旧指标那批数就停在改之前那一刻，但报表和学习还在照读。' +
-        '数字不会再变，也不会自己消失',
-      how:
-        '这条不用你动手，但要你拍个板：这些旧数是删掉，还是留着当历史存档？' +
-        '回我一句「删掉」或「留着」就行。我不会自己删 —— 删的是另一条线名下的' +
-        '数据，这正是这次修的那个老毛病',
-      href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/execution`,
-    })
-  }
-}
-
-function describeUnattributable(
-  reason: UnattributableReason,
-  n: number,
-  metrics: string,
-  rows: UnattributableAction[],
-  now: Date,
-): string {
-  const tail = '这些动作会一直显示「已执行」，但永远不会有效果数据'
-
-  if (reason === 'cross_flywheel') {
-    const wheels = Array.from(new Set(rows.map((r) => r.flywheel))).join('、')
-    return (
-      `${n} 个动作挂的效果指标跟它们所在的战线对不上 —— ${wheels} 战线的动作挂了 ${metrics}，` +
-      `而这个指标只有搜索后台那条线能算，它又只认 SEO 战线的动作。${tail}`
-    )
-  }
-
-  if (reason === 'scope_mismatch') {
-    return (
-      `${n} 个 SEO 动作挂的指标跟它们的量法对不上 —— 挂了 ${metrics}，` +
-      `但搜索后台对这类动作只出另一个口径的数（整站 / 单页各算各的）。${tail}`
-    )
-  }
-
-  const longest = rows.reduce((max: number, r: UnattributableAction) => {
-    const d = daysAgo(r.executed_at, now)
-    return d !== null && d > max ? d : max
-  }, 0)
-  return (
-    `${n} 个页面升级动作等着上线，最久的已经等了 ${longest} 天 —— 挂的是 ${metrics}，` +
-    `但它们一直没标成已上线，搜索后台那条线就整个跳过它们。${tail}`
-  )
-}
-
-function adviseUnattributable(
-  reason: UnattributableReason,
-  rows: UnattributableAction[],
-): string {
-  // 没有改这两个字段的界面，所以别让人去找入口 —— 说清是我们这边的事，
-  // 以及具体该改成什么。
-  if (reason === 'cross_flywheel') {
-    return (
-      '这条不用你动手 —— 是我们派活时把指标配到了错的战线。回我一句「改指标」我就去改，' +
-      '改完下一轮归因就能算出来。想先看是哪几个动作，点链接进执行看板'
-    )
-  }
-
-  if (reason === 'scope_mismatch') {
-    const swap = Array.from(
-      new Set(
-        rows
-          .filter((r) => r.suggested_metric)
-          .map((r) => `${r.expected_metric} → ${r.suggested_metric}`),
-      ),
-    ).join('；')
-    const detail = swap
-      ? `具体是把 ${swap} 换过来`
-      : '具体换成这类动作真正能拿到的那个口径'
-    return (
-      `这条不用你动手 —— 战线没配错，是量法配错了：${detail}。` +
-      '回我一句「改口径」我就去改。想先看是哪几个动作，点链接进执行看板'
-    )
-  }
-
-  return (
-    `正常情况下这类动作上线那一刻就自动算出来了，所以只有等超过 ${SCOPE_SKIP_STALE_DAYS} 天` +
-    '才会捞出来给你看 —— 也就是说合并上线那一步大概率卡住了。回我一句「卡住了」我去查是卡在' +
-    '哪一环。想先看是哪几个页面，点链接进执行看板'
-  )
 }

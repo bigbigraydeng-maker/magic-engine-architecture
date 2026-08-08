@@ -48,6 +48,22 @@ function action(over: Partial<UnattributableAction> = {}): UnattributableAction 
  * it for the tables they don't override; `stubSupabase` is the `as never` cast
  * the loader's parameter needs.
  */
+/**
+ * The clients query is paginated now, so the stub has to answer the real chain:
+ * `.select().eq().order().range()`. A stub that still ends at `.eq()` would make
+ * the pagination fix untestable — and would have passed while production
+ * truncated at 1000 rows.
+ */
+function clientsQuery(result: { data: unknown; error: unknown }) {
+  const q = {
+    select: () => q,
+    eq: () => q,
+    order: () => q,
+    range: async () => result,
+  }
+  return q as never
+}
+
 function rawStub() {
   const builder: Record<string, unknown> = {}
   const chain = new Proxy(builder, {
@@ -65,14 +81,10 @@ function rawStub() {
   return {
     from: (table: string) => {
       if (table === 'clients') {
-        return {
-          select: () => ({
-            eq: async () => ({
-              data: [{ id: 'c1', name: 'CTS Tours', domain: 'ctstours.co.nz' }],
-              error: null,
-            }),
-          }),
-        }
+        return clientsQuery({
+          data: [{ id: 'c1', name: 'CTS Tours', domain: 'ctstours.co.nz' }],
+          error: null,
+        })
       }
       return chain
     },
@@ -220,14 +232,10 @@ describe('when the audit itself fails', () => {
     const failingSupabase = {
       from: (table: string) => {
         if (table === 'clients') {
-          return {
-            select: () => ({
-              eq: async () => ({
-                data: null,
-                error: { message: 'permission denied for table clients' },
-              }),
-            }),
-          }
+          return clientsQuery({
+            data: null,
+            error: { message: 'permission denied for table clients' },
+          })
         }
         return rawStub().from(table)
       },
@@ -244,13 +252,53 @@ describe('when the audit itself fails', () => {
     expect(all.find(i => i.kind === 'action_unattributable')).toBeUndefined()
   })
 
+  it('reads the WHOLE client list, not just the first page', async () => {
+    // PostgREST caps a response at 1000 rows without saying so. Truncating here
+    // is not just "a few clients missing from the list" — `ids` is the input to
+    // every per-client check including both attribution audits, and their own
+    // internal pagination cannot recover a client the caller never mentioned.
+    // (Codex P2, round 23.)
+    const page1 = Array.from({ length: 1000 }, (_, i) => ({
+      id: `c${String(i).padStart(4, '0')}`, name: `Client ${i}`, domain: null,
+    }))
+    const page2 = [{ id: 'c1000', name: 'Last Client', domain: null }]
+    const seen: Array<[number, number]> = []
+    const pagedSupabase = {
+      from: (table: string) => {
+        if (table === 'clients') {
+          const q: Record<string, unknown> = {}
+          q.select = () => q
+          q.eq = () => q
+          q.order = () => q
+          q.range = async (from: number, to: number) => {
+            seen.push([from, to])
+            return { data: from === 0 ? page1 : page2, error: null }
+          }
+          return q
+        }
+        return rawStub().from(table)
+      },
+    } as never
+
+    stranded.length = 0
+    orphans.length = 0
+    stranded.push(action({ client_id: 'c1000', reason: 'cross_flywheel' }))
+
+    const all = await loadManualItems(pagedSupabase, new Date('2026-08-08T00:00:00Z'))
+
+    expect(seen.length).toBeGreaterThan(1) // it asked for a second page
+    // And the client that only exists on page 2 still gets its finding.
+    const item = all.find(i => i.kind === 'action_unattributable')
+    expect(item?.client_name).toBe('Last Client')
+  })
+
   it('a genuinely empty client list is NOT reported as a failure', async () => {
     // The distinction is the whole point: zero clients is a fact, an unreadable
     // list is an unknown. Collapsing them back together would just move the bug.
     const emptySupabase = {
       from: (table: string) => {
         if (table === 'clients') {
-          return { select: () => ({ eq: async () => ({ data: [], error: null }) }) }
+          return clientsQuery({ data: [], error: null })
         }
         return rawStub().from(table)
       },
