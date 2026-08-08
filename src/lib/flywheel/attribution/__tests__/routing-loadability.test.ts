@@ -1,0 +1,297 @@
+/**
+ * Deferral must only go to an evaluator that can actually load the action —
+ * Issue #859, Codex P2 round 3.
+ *
+ * Owning a metric and being able to reach the action that promised it are two
+ * different things. `gsc-bridge` queries `flywheel = 'seo'`, so a GEO or Social
+ * action carrying a `seo.gsc.*` expected_metric is owned by an evaluator that
+ * will never see it. Deferring it manufactures a permanent hole: pass 1 stops
+ * attributing, pass 2 never loads it, and no outcome is ever produced.
+ *
+ * Writing it in pass 1 is not an option either — the
+ * `flywheel_outcomes_evaluator_owns_metric` CHECK forbids the flywheel_metrics
+ * evaluator writing `seo.gsc.*` rows. So the only honest handling is to report
+ * it, in the same spirit as `metric-registry.ts`, which refuses at write time
+ * an expected_metric nothing will ever measure.
+ */
+
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { FakeOutcomesDb } from './fake-outcomes-db'
+import {
+  OUTCOME_EVALUATOR,
+  evaluatorCanLoad,
+  evaluatorLoadableFlywheels,
+  resolveAttributionRouting,
+} from '../outcome-identity'
+
+let db: FakeOutcomesDb
+
+vi.mock('@/lib/supabase', () => ({
+  supabaseAdmin: {
+    from: (table: string) => db.from(table),
+  },
+}))
+
+const CLIENT_ID = 'client-1'
+const EXECUTED_AT = '2026-06-01T00:00:00.000Z'
+const GSC_CLICKS = 'seo.gsc.clicks'
+
+function seedAction(id: string, flywheel: string, expectedMetric: string): void {
+  db.seed('flywheel_actions', [
+    {
+      id,
+      client_id: CLIENT_ID,
+      flywheel,
+      action_type: `${flywheel}.some_action`,
+      expected_metric: expectedMetric,
+      expected_delta: 1,
+      executed_at: EXECUTED_AT,
+      payload: null,
+    },
+  ])
+}
+
+function seedSnapshots(): void {
+  db.seed('gsc_performance_snapshots', [
+    { client_id: CLIENT_ID, period_end: '2026-05-31', total_clicks: 100, total_impressions: 1000, avg_position: 20, top_pages: null },
+    { client_id: CLIENT_ID, period_end: '2026-07-15', total_clicks: 150, total_impressions: 1600, avg_position: 12, top_pages: null },
+  ])
+}
+
+async function runJob(windowDays = 14) {
+  const { runAttributionJob } = await import('../job')
+  return runAttributionJob({ clientId: CLIENT_ID, windowDays })
+}
+
+async function runBridge(windowDays = 28) {
+  const { runGscAttributionForClient } = await import('../gsc-bridge')
+  return runGscAttributionForClient(CLIENT_ID, windowDays)
+}
+
+beforeEach(() => {
+  db = new FakeOutcomesDb()
+  vi.clearAllMocks()
+})
+
+// ── The routing rule itself ─────────────────────────────────────────────────
+
+/**
+ * Every value the `flywheel_name` enum admits, verified against production on
+ * 2026-08-08 (`seo, geo, ads, social`; the column is NOT NULL with zero null
+ * rows). Routing is exhaustive over these — a value added to the enum later
+ * without a routing decision lands in `unattributable`, which is the safe
+ * direction: reported, not silently deferred into a hole.
+ */
+const FLYWHEEL_VALUES = ['seo', 'geo', 'ads', 'social'] as const
+
+describe('resolveAttributionRouting', () => {
+  it('keeps a metric the flywheel_metrics evaluator owns, whatever the flywheel', () => {
+    for (const flywheel of FLYWHEEL_VALUES) {
+      expect(resolveAttributionRouting({ flywheel, expected_metric: 'geo.query.mention_rate' }))
+        .toBe('own')
+    }
+  })
+
+  it('defers a GSC metric only when the bridge can load that flywheel', () => {
+    expect(resolveAttributionRouting({ flywheel: 'seo', expected_metric: GSC_CLICKS }))
+      .toBe('defer')
+  })
+
+  it.each(FLYWHEEL_VALUES.filter(f => f !== 'seo'))(
+    'marks a %s action promising a GSC metric unattributable, not deferred',
+    (flywheel) => {
+      expect(resolveAttributionRouting({ flywheel, expected_metric: GSC_CLICKS }))
+        .toBe('unattributable')
+    },
+  )
+
+  it('routes every flywheel value to exactly one of the three states', () => {
+    for (const flywheel of FLYWHEEL_VALUES) {
+      for (const metric of [GSC_CLICKS, 'geo.query.mention_rate', 'ads.account.roas']) {
+        expect(['own', 'defer', 'unattributable'])
+          .toContain(resolveAttributionRouting({ flywheel, expected_metric: metric }))
+      }
+    }
+  })
+
+  it('treats an unknown or absent flywheel as unreachable rather than assuming seo', () => {
+    // The column is NOT NULL in the database, so this is belt-and-braces — but
+    // guessing "seo" for an unknown value would defer into a hole.
+    expect(resolveAttributionRouting({ flywheel: null, expected_metric: GSC_CLICKS }))
+      .toBe('unattributable')
+    expect(resolveAttributionRouting({ flywheel: 'future_flywheel', expected_metric: GSC_CLICKS }))
+      .toBe('unattributable')
+  })
+})
+
+describe('evaluatorCanLoad', () => {
+  it('lets the flywheel_metrics evaluator load every flywheel (it filters on none)', () => {
+    for (const flywheel of ['seo', 'geo', 'social', 'ads', 'anything']) {
+      expect(evaluatorCanLoad(OUTCOME_EVALUATOR.FLYWHEEL_METRICS, flywheel)).toBe(true)
+    }
+  })
+
+  it('limits the GSC evaluator to the flywheels it queries', () => {
+    expect(evaluatorCanLoad(OUTCOME_EVALUATOR.GSC_SNAPSHOTS, 'seo')).toBe(true)
+    expect(evaluatorCanLoad(OUTCOME_EVALUATOR.GSC_SNAPSHOTS, 'geo')).toBe(false)
+    expect(evaluatorCanLoad(OUTCOME_EVALUATOR.GSC_SNAPSHOTS, 'social')).toBe(false)
+  })
+})
+
+// ── End to end through the real writers ─────────────────────────────────────
+
+describe('an SEO action with a GSC metric', () => {
+  it('is deferred by pass 1 and produced by the bridge', async () => {
+    seedAction('seo-1', 'seo', GSC_CLICKS)
+    seedSnapshots()
+
+    const jobResult = await runJob()
+    expect(jobResult.deferred).toBe(1)
+    expect(jobResult.unattributable).toBe(0)
+    expect(jobResult.pass2ClientIds).toEqual([CLIENT_ID])
+
+    await runBridge()
+    expect(db.outcomes().filter(r => r.action_id === 'seo-1')).toHaveLength(3)
+  })
+})
+
+describe.each(['geo', 'social', 'ads'])('a %s action with a GSC metric', (flywheel) => {
+  it('is reported unattributable rather than deferred into a hole', async () => {
+    seedAction(`${flywheel}-1`, flywheel, GSC_CLICKS)
+    seedSnapshots()
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const jobResult = await runJob()
+    consoleSpy.mockRestore()
+
+    expect(jobResult.unattributable).toBe(1)
+    expect(jobResult.unattributableSamples).toEqual([`${flywheel}-1`])
+    // Crucially NOT deferred — a deferral would promise an answer nobody gives.
+    expect(jobResult.deferred).toBe(0)
+    // The client is still worth a pass-2 visit: the bridge cannot load THIS
+    // action, but the client's other SEO actions are still its to attribute.
+    expect(jobResult.pass2ClientIds).toEqual([CLIENT_ID])
+  })
+
+  it('is not picked up by the bridge either, confirming the hole is real', async () => {
+    seedAction(`${flywheel}-1`, flywheel, GSC_CLICKS)
+    seedSnapshots()
+
+    const result = await runBridge()
+
+    expect(result.actions_found).toBe(0)
+    expect(db.outcomes()).toHaveLength(0)
+  })
+
+  it('never produces an outcome row via pass 1 (the ownership CHECK forbids it)', async () => {
+    seedAction(`${flywheel}-1`, flywheel, GSC_CLICKS)
+    db.seed('flywheel_metrics', [
+      { client_id: CLIENT_ID, metric_key: GSC_CLICKS, metric_value: 100, measured_at: '2026-05-30T00:00:00.000Z' },
+      { client_id: CLIENT_ID, metric_key: GSC_CLICKS, metric_value: 140, measured_at: '2026-06-05T00:00:00.000Z' },
+    ])
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await runJob()
+    consoleSpy.mockRestore()
+
+    // Even with perfectly good flywheel_metrics data on both sides of the
+    // action, pass 1 must not write it — that is what ownership means.
+    expect(db.outcomes()).toHaveLength(0)
+  })
+})
+
+describe('pass2ClientIds', () => {
+  it('names only clients whose actions the bridge will actually take', async () => {
+    seedAction('seo-1', 'seo', GSC_CLICKS) // deferrable
+    seedAction('geo-1', 'geo', GSC_CLICKS) // unattributable
+    seedSnapshots()
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const jobResult = await runJob()
+    consoleSpy.mockRestore()
+
+    expect(jobResult.deferred).toBe(1)
+    expect(jobResult.unattributable).toBe(1)
+    expect(jobResult.pass2ClientIds).toEqual([CLIENT_ID])
+  })
+
+  it('still lists the client when every GSC-keyed action is unreachable', async () => {
+    // Dropping the client here would also drop their OTHER seo actions from
+    // pass 2 — the bridge loads every seo action for a client it visits, so
+    // removing the client removes attribution it would otherwise have done.
+    seedAction('geo-1', 'geo', GSC_CLICKS)
+    seedAction('social-1', 'social', GSC_CLICKS)
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const jobResult = await runJob()
+    consoleSpy.mockRestore()
+
+    expect(jobResult.unattributable).toBe(2)
+    expect(jobResult.deferred).toBe(0)
+    expect(jobResult.pass2ClientIds).toEqual([CLIENT_ID])
+  })
+})
+
+// ── The routing input must actually be fetched ──────────────────────────────
+
+describe('the flywheel column is load-bearing, not incidental', () => {
+  it('throws rather than guessing when the column was not selected', () => {
+    // Dropping `flywheel` from job.ts's SELECT would make action.flywheel
+    // undefined. Coercing that to "unreachable" would route every GSC-owned
+    // action to unattributable and rebuild the permanent hole in silence —
+    // with every other test still green, because neither fake models column
+    // projection.
+    expect(() =>
+      resolveAttributionRouting({
+        flywheel: undefined,
+        expected_metric: GSC_CLICKS,
+      }),
+    ).toThrow(/must\s+select the flywheel column/)
+  })
+
+  it('throws even for a metric this evaluator owns, so the mistake surfaces at once', () => {
+    // Checked before the ownership short-circuit: otherwise the error would
+    // only appear on the subset of actions that need routing, and a run with
+    // no GSC-owned actions would look fine.
+    expect(() =>
+      resolveAttributionRouting({
+        flywheel: undefined,
+        expected_metric: 'geo.query.mention_rate',
+      }),
+    ).toThrow(/flywheel is undefined/)
+  })
+
+  it("job.ts's query selects the column routing depends on", async () => {
+    // The behavioural test above cannot see the query, and the fake DB ignores
+    // projections, so this reads the source. It is the only thing standing
+    // between a dropped column and a silent hole.
+    const { readFileSync } = await import('node:fs')
+    const path = await import('node:path')
+    const source = readFileSync(
+      path.join(process.cwd(), 'src/lib/flywheel/attribution/job.ts'),
+      'utf8',
+    )
+    const select = source.match(/\.select\('([^']*flywheel_actions?[^']*|[^']+)'\)/)
+    expect(select).not.toBeNull()
+    expect(select![1].split(',').map(c => c.trim())).toContain('flywheel')
+  })
+})
+
+// ── The declaration and the query must not drift ────────────────────────────
+
+describe('the bridge query derives its filter from the shared declaration', () => {
+  it('filters on exactly the flywheels declared loadable for this evaluator', async () => {
+    seedAction('seo-1', 'seo', GSC_CLICKS)
+    seedSnapshots()
+
+    await runBridge()
+
+    const actionQuery = db.ops.find(o => o.table === 'flywheel_actions' && o.op === 'select')
+    const flywheelFilter = actionQuery?.filters.find(f => f.column === 'flywheel')
+
+    expect(flywheelFilter?.op).toBe('in')
+    expect(flywheelFilter?.value).toEqual(
+      evaluatorLoadableFlywheels(OUTCOME_EVALUATOR.GSC_SNAPSHOTS),
+    )
+  })
+})

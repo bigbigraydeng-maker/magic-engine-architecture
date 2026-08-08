@@ -14,7 +14,11 @@
 
 import { supabaseAdmin } from '../../supabase'
 import type { OutcomeVerdict } from '../adapters/types'
-import { OUTCOME_CONFLICT_TARGET, OUTCOME_EVALUATOR, ownsMetric } from './outcome-identity'
+import {
+  OUTCOME_CONFLICT_TARGET,
+  OUTCOME_EVALUATOR,
+  resolveAttributionRouting,
+} from './outcome-identity'
 
 /**
  * Pass 1's default attribution window. Exported because the cron route must
@@ -35,7 +39,18 @@ export interface AttributionJobOptions {
 export interface AttributionJobResult {
   processed: number
   written: number
+  /**
+   * Actions with nothing to attribute yet — no baseline, or no measurement
+   * inside the window. Normal and expected; NOT a failure.
+   */
   skipped: number
+  /**
+   * Actions whose attribution threw. Kept apart from `skipped` because the two
+   * were indistinguishable before: a run in which every write failed (a missing
+   * constraint, say) reported the same shape as a quiet day with no data, and
+   * the cron logged it as completed with zero failures. See Issue #859.
+   */
+  failed: number
   /**
    * Actions whose expected_metric belongs to another evaluator's metric family.
    * Counted separately from `skipped` because nothing is wrong: the outcome is
@@ -44,17 +59,34 @@ export interface AttributionJobResult {
    */
   deferred: number
   /**
-   * The clients those deferred actions belong to. A deferral is a promise that
-   * the owning evaluator will answer, so the cron route must run pass 2 for
-   * every client listed here even if their GSC connector is currently
-   * disconnected — the bridge reads historical gsc_performance_snapshots, not
-   * the connector, so it can still answer (or harmlessly skip). Without this,
-   * a client who disconnects GSC after their actions matured would have
-   * outcomes deferred to a pass that never visits them. (Codex P2 round 2 on
-   * PR #862.)
+   * Clients pass 2 must visit because pass 1 did not fully handle them —
+   * whether it deferred an action to the GSC evaluator or found one nobody can
+   * attribute. The cron route runs pass 2 for every client listed here even if
+   * their GSC connector is currently disconnected: the bridge reads historical
+   * gsc_performance_snapshots, not the connector, so it can still answer (or
+   * harmlessly skip). Without this, a client who disconnects GSC after their
+   * actions matured would have outcomes deferred to a pass that never visits
+   * them. Unattributable actions are included too — the bridge will not load
+   * that particular action, but the client's other SEO actions are still its
+   * to attribute, and dropping the client would take those with it.
+   * (Codex P2 rounds 2 and 3 on PR #862.)
    */
-  deferredClientIds: string[]
+  pass2ClientIds: string[]
+  /**
+   * Actions whose expected_metric belongs to an evaluator that cannot load
+   * them — e.g. a GEO action promising `seo.gsc.clicks`, which the GSC bridge
+   * (flywheel = 'seo' only) will never see. Nobody can attribute these: this
+   * evaluator is forbidden to write them by the ownership CHECK, and the owner
+   * cannot reach them. Counted and named rather than deferred, so the hole is
+   * reported instead of manufactured. (Codex P2 round 3 on PR #862.)
+   */
+  unattributable: number
+  /** First few unattributable action ids, for diagnosis. Bounded on purpose. */
+  unattributableSamples: string[]
 }
+
+/** How many unattributable action ids to carry into the summary. */
+const UNATTRIBUTABLE_SAMPLE_LIMIT = 10
 
 // ── Main entry point ──────────────────────────────────────────────────────────
 
@@ -65,7 +97,9 @@ export async function runAttributionJob(
 
   let actionsQuery = supabaseAdmin
     .from('flywheel_actions')
-    .select('id, client_id, expected_metric, expected_delta, executed_at')
+    // `flywheel` is needed for routing: owning a metric is not the same as
+    // being able to load the action that promised it.
+    .select('id, client_id, flywheel, expected_metric, expected_delta, executed_at')
     .not('expected_metric', 'is', null)
 
   if (options.clientId) {
@@ -79,21 +113,54 @@ export async function runAttributionJob(
   }
 
   if (!actions?.length) {
-    return { processed: 0, written: 0, skipped: 0, deferred: 0, deferredClientIds: [] }
+    return {
+      processed: 0,
+      written: 0,
+      skipped: 0,
+      failed: 0,
+      deferred: 0,
+      pass2ClientIds: [],
+      unattributable: 0,
+      unattributableSamples: [],
+    }
   }
 
   let written = 0
   let skipped = 0
+  let failed = 0
   let deferred = 0
-  const deferredClients = new Set<string>()
+  let unattributable = 0
+  const pass2Clients = new Set<string>()
+  const unattributableSamples: string[] = []
 
   for (const action of actions) {
     // Arbitration: an outcome belongs to whichever evaluator owns its metric
     // family. Declining here — rather than writing and letting the last writer
     // win — is what keeps execution order out of the answer. See Issue #859.
-    if (!ownsMetric(OUTCOME_EVALUATOR.FLYWHEEL_METRICS, action.expected_metric)) {
+    const routing = resolveAttributionRouting(action as ActionRow)
+
+    if (routing === 'defer') {
       deferred++
-      deferredClients.add(action.client_id)
+      pass2Clients.add(action.client_id)
+      continue
+    }
+
+    if (routing === 'unattributable') {
+      // Owned by an evaluator that cannot load this action. Deferring would
+      // promise an answer nobody can give; writing it here is refused by the
+      // ownership CHECK. Report it instead of quietly producing a hole.
+      unattributable++
+      // Still worth a pass-2 visit: the bridge cannot load THIS action, but the
+      // client's other SEO actions are its to attribute.
+      pass2Clients.add(action.client_id)
+      if (unattributableSamples.length < UNATTRIBUTABLE_SAMPLE_LIMIT) {
+        unattributableSamples.push(action.id)
+      }
+      console.error(
+        `Attribution job: action ${action.id} (flywheel=${action.flywheel}) promises ` +
+          `"${action.expected_metric}", owned by an evaluator that does not load ` +
+          `this flywheel — no evaluator can attribute it.`,
+      )
       continue
     }
 
@@ -104,7 +171,7 @@ export async function runAttributionJob(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`Attribution job: action ${action.id} — ${msg}`)
-      skipped++
+      failed++
     }
   }
 
@@ -112,8 +179,11 @@ export async function runAttributionJob(
     processed: actions.length,
     written,
     skipped,
+    failed,
     deferred,
-    deferredClientIds: Array.from(deferredClients),
+    pass2ClientIds: Array.from(pass2Clients),
+    unattributable,
+    unattributableSamples,
   }
 }
 
@@ -122,6 +192,7 @@ export async function runAttributionJob(
 interface ActionRow {
   id: string
   client_id: string
+  flywheel: string | null
   expected_metric: string
   expected_delta: number | null
   executed_at: string

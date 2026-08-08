@@ -41,12 +41,20 @@ export interface AttributionCronResponse {
   skipped: number
   /** Actions pass 1 handed to another evaluator because it does not own the metric. */
   deferred?: number
-  /** Clients those deferred actions belong to — pass 2 visits all of them. */
-  deferredClientIds?: string[]
+  /** Clients pass 2 must visit because pass 1 did not fully handle them. */
+  pass2ClientIds?: string[]
+  /** Pass-1 actions whose attribution threw (distinct from having no data yet). */
+  failed?: number
+  /** Actions no evaluator can attribute (metric owner cannot load their flywheel). */
+  unattributable?: number
+  /** A bounded sample of those action ids, for diagnosis. */
+  unattributableSamples?: string[]
   gsc?: {
     clients_processed: number
+    actions_found: number
     outcomes_written: number
     skipped: number
+    cleanup_errors: number
     errors: string[]
   }
 }
@@ -88,13 +96,16 @@ export async function POST(
     processed: 0,
     written: 0,
     skipped: 0,
+    failed: 0,
     deferred: 0,
-    deferredClientIds: [],
+    pass2ClientIds: [],
+    unattributable: 0,
+    unattributableSamples: [],
   }
   try {
     pass1Result = await runAttributionJob({ windowDays, clientId })
     console.log(
-      `[attribution/cron] pass1 processed=${pass1Result.processed} written=${pass1Result.written} skipped=${pass1Result.skipped} deferred=${pass1Result.deferred}`
+      `[attribution/cron] pass1 processed=${pass1Result.processed} written=${pass1Result.written} skipped=${pass1Result.skipped} deferred=${pass1Result.deferred} unattributable=${pass1Result.unattributable}`
     )
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Internal server error'
@@ -106,8 +117,10 @@ export async function POST(
   // ── Pass 2: GSC snapshot-based attribution (P17.A.4) ──────────────────────
   const gscResult = {
     clients_processed: 0,
+    actions_found:     0,
     outcomes_written:  0,
     skipped:           0,
+    cleanup_errors:    0,
     errors:            [] as string[],
   }
 
@@ -129,7 +142,7 @@ export async function POST(
       gscResult.errors.push(`load GSC clients: ${message}`)
     }
 
-    const clientIds = Array.from(new Set([...connectedIds, ...pass1Result.deferredClientIds]))
+    const clientIds = Array.from(new Set([...connectedIds, ...pass1Result.pass2ClientIds]))
 
     // Pass 1 defers actions whose expected_metric the GSC evaluator owns, so
     // its effective window must ride along: the deferred actions' answer at
@@ -152,8 +165,10 @@ export async function POST(
         deferredWindowDays: pass1Window,
       })
       gscResult.clients_processed++
+      gscResult.actions_found    += r.actions_found
       gscResult.outcomes_written += r.outcomes_written
       gscResult.skipped           += r.skipped
+      gscResult.cleanup_errors    += r.cleanup_errors
       if (r.errors.length) gscResult.errors.push(...r.errors)
     }
 
@@ -166,10 +181,25 @@ export async function POST(
     gscResult.errors.push(message)
   }
 
+  // All three counters are in the same unit — ACTIONS — so `completed` can be
+  // read against `processed`. `completed` used to ignore pass 2 entirely (a run
+  // whose only writes came from the GSC evaluator reported zero completed), and
+  // counting its outcome ROWS instead would make completed exceed processed
+  // several times over, since one action yields three metric rows per window.
+  //
+  // `failed` counts what actually went wrong this run: pass-1 actions that
+  // threw, plus pass-2 errors (including post-write cleanup failures, which do
+  // not reduce `completed`). `unattributable` is deliberately NOT counted here
+  // — it is a standing property of stored rows, recomputed identically every
+  // run, so folding it in would pin the daily digest's alarm on forever with no
+  // remediation path. It travels in the response and the run summary instead.
+  // See Issue #859.
+  const gscAttributed = Math.max(0, gscResult.actions_found - gscResult.skipped)
+
   await cronRun.finish({
-    processed: pass1Result.processed,
-    completed: pass1Result.written,
-    failed: gscResult.errors.length,
+    processed: pass1Result.processed + gscResult.actions_found,
+    completed: pass1Result.written + gscAttributed,
+    failed: pass1Result.failed + gscResult.errors.length,
     summary: { pass1: pass1Result, gsc: gscResult },
   })
   return NextResponse.json<AttributionCronResponse>(

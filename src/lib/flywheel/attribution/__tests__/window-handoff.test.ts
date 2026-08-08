@@ -86,7 +86,7 @@ describe('default cron (pass 1 at 14, bridge cadence 28)', () => {
 
     const jobResult = await runJob(14)
     expect(jobResult.deferred).toBe(1) // the deferral really happened — not vacuous
-    expect(jobResult.deferredClientIds).toEqual([CLIENT_ID]) // and named its client
+    expect(jobResult.pass2ClientIds).toEqual([CLIENT_ID]) // and named its client
     expect(db.outcomes()).toHaveLength(0) // and pass 1 wrote nothing
 
     await runBridge(14)
@@ -239,6 +239,51 @@ describe('malformed deferred windows', () => {
 })
 
 // ── Partial failure: the handoff failing must not un-count landed rows ──────
+
+describe('post-write cleanup failure', () => {
+  it('keeps the written count when retiring superseded rows fails', async () => {
+    // The upsert lands 3 domain rows; retiring the page-scope keys this run no
+    // longer produces then fails. Those 3 rows are in the database — reporting
+    // the run as having written nothing (and, via the manual route, 502) is
+    // the bug this split fixes.
+    seedDeferredAction()
+    seedSnapshots()
+
+    db.failNext('flywheel_outcomes', 'delete', 'retire failed: deadlock')
+
+    const result = await runBridge()
+
+    expect(result.outcomes_written).toBe(3)
+    expect(result.cleanup_errors).toBe(1)
+    expect(result.errors.join(' ')).toContain('retire stale outcomes')
+    expect(result.skipped).toBe(0)
+    expect(db.outcomes()).toHaveLength(3) // the rows really did land
+  })
+
+  it('reports zero cleanup errors on a clean run', async () => {
+    seedDeferredAction()
+    seedSnapshots()
+
+    const result = await runBridge()
+
+    expect(result.outcomes_written).toBe(3)
+    expect(result.cleanup_errors).toBe(0)
+    expect(result.errors).toEqual([])
+  })
+
+  it('still reports nothing written when the upsert itself fails', async () => {
+    seedDeferredAction()
+    seedSnapshots()
+
+    db.failNext('flywheel_outcomes', 'upsert', 'primary write failed')
+
+    const result = await runBridge()
+
+    expect(result.outcomes_written).toBe(0)
+    expect(result.cleanup_errors).toBe(0)
+    expect(result.skipped).toBe(1)
+  })
+})
 
 describe('handoff partial failure', () => {
   it('cadence rows that already landed stay counted when the handoff write fails', async () => {

@@ -25,6 +25,7 @@ import {
   OUTCOME_CONFLICT_TARGET,
   OUTCOME_EVALUATOR,
   assertEvaluatorOwnsAll,
+  evaluatorLoadableFlywheels,
   ownsMetric,
   resolveStaleEvaluatorKeys,
 } from './outcome-identity'
@@ -59,6 +60,22 @@ export interface GscAttributionResult {
   outcomes_written: number
   skipped:          number
   errors:           string[]
+  /**
+   * Stale-row reconciliation failures that happened AFTER their outcomes were
+   * already written. Counted separately because they do not undo the write:
+   * `outcomes_written` still reports every row that landed. Folding these into
+   * "nothing was written" is what made a successful run look like a total
+   * failure (and return 502). (Codex P2 round 3 on PR #862.)
+   */
+  cleanup_errors:   number
+}
+
+/** One action's attribution: what landed, and whether tidying up afterwards failed. */
+interface AttributeActionResult {
+  /** Rows successfully upserted. Never reduced by a later cleanup failure. */
+  written: number
+  /** Message if retiring superseded rows failed, else null. */
+  cleanupError: string | null
 }
 
 export interface GscAttributionOptions {
@@ -82,6 +99,27 @@ export interface GscAttributionOptions {
 const GSC_DEFAULT_WINDOW_DAYS = 28
 
 /**
+ * The flywheels this evaluator's action query filters on.
+ *
+ * `null` in the shared declaration means "any flywheel" — but a PostgREST
+ * `.in('flywheel', [])` means "no flywheel", the exact inversion. Widening this
+ * evaluator to `null` without also removing the filter would silently select
+ * nothing and report a clean, empty pass while routing every GSC-owned action
+ * to it. Throwing makes that mistake impossible to ship quietly.
+ */
+function loadableFlywheelsOrThrow(): readonly string[] {
+  const scope = evaluatorLoadableFlywheels(OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
+  if (scope === null) {
+    throw new Error(
+      'gsc-bridge: this evaluator is declared loadable for every flywheel, but its ' +
+        'action query filters on a list. Remove the .in() filter instead of passing ' +
+        'an empty array, which would match nothing.',
+    )
+  }
+  return scope
+}
+
+/**
  * Run GSC attribution for all SEO actions for a given client.
  *
  * @param clientId   Target client
@@ -99,14 +137,18 @@ export async function runGscAttributionForClient(
     outcomes_written: 0,
     skipped:          0,
     errors:           [],
+    cleanup_errors:   0,
   }
 
-  // Load all SEO flywheel actions for this client
+  // Load this evaluator's actions for the client. The flywheel filter comes
+  // from the shared declaration rather than a literal, so pass 1's decision to
+  // defer to us and our decision to load cannot drift apart — an action
+  // deferred here but excluded by this query would never be attributed at all.
   const { data: actions, error: actionsErr } = await supabaseAdmin
     .from('flywheel_actions')
     .select('id, client_id, executed_at, action_type, expected_metric, payload')
     .eq('client_id', clientId)
-    .eq('flywheel', 'seo')
+    .in('flywheel', loadableFlywheelsOrThrow())
     .not('expected_metric', 'is', null)
     .order('executed_at', { ascending: false })
 
@@ -126,11 +168,21 @@ export async function runGscAttributionForClient(
     // summary must still report the rows that landed.
     let written = 0
     try {
-      written = await attributeAction(action, windowDays)
+      const cadence = await attributeAction(action, windowDays)
+      written = cadence.written
+      if (cadence.cleanupError) {
+        result.cleanup_errors++
+        result.errors.push(`action ${action.id}: ${cadence.cleanupError}`)
+      }
 
       const handoffWindow = resolveHandoffWindow(action, windowDays, opts.deferredWindowDays)
       if (handoffWindow !== null) {
-        written += await attributeAction(action, handoffWindow)
+        const handoff = await attributeAction(action, handoffWindow)
+        written += handoff.written
+        if (handoff.cleanupError) {
+          result.cleanup_errors++
+          result.errors.push(`action ${action.id}: ${handoff.cleanupError}`)
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -174,9 +226,11 @@ function resolveHandoffWindow(
 async function attributeAction(
   action: SeoActionRow,
   windowDays: number,
-): Promise<number> {
+): Promise<AttributeActionResult> {
+  const nothing: AttributeActionResult = { written: 0, cleanupError: null }
+
   const scope = resolveGscAttributionScope(action)
-  if (scope.kind === 'skip') return 0
+  if (scope.kind === 'skip') return nothing
 
   const executedAt  = action.executed_at
   const windowEnd   = addDays(executedAt, windowDays)
@@ -187,14 +241,14 @@ async function attributeAction(
   ])
 
   // Need both snapshots to compute attribution
-  if (!baseline || !after) return 0
+  if (!baseline || !after) return nothing
 
   const rows =
     scope.kind === 'page'
       ? buildPageOutcomeRows(action, baseline, after, scope.pageUrl, windowDays)
       : buildOutcomeRows(action, baseline, after, windowDays)
 
-  if (rows.length === 0) return 0
+  if (rows.length === 0) return nothing
 
   // Arbitration, from the owning side: this evaluator may only write metrics it
   // is authoritative for. See Issue #859.
@@ -229,10 +283,20 @@ async function attributeAction(
       .eq('evaluator_key', OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
       .eq('window_days', windowDays)
       .in('metric_key', staleKeys)
-    if (retireError) throw new Error(`retire stale outcomes: ${retireError.message}`)
+
+    // Reported, not thrown: the rows above are already in the database, and
+    // throwing here would discard that count and report the run as having
+    // written nothing. Leaving a superseded row behind is a reconciliation
+    // debt for the next run, not a reason to disown a successful write.
+    if (retireError) {
+      return {
+        written: rows.length,
+        cleanupError: `retire stale outcomes: ${retireError.message}`,
+      }
+    }
   }
 
-  return rows.length
+  return { written: rows.length, cleanupError: null }
 }
 
 async function fetchGscSnapshot(

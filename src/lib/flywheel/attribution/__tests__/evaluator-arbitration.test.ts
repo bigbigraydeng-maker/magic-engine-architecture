@@ -179,9 +179,11 @@ describe('both writers targeting the same (action, metric, window)', () => {
     expect(result).toEqual({
       processed: 1,
       written: 0,
-      skipped: 0,
+      skipped: 0, failed: 0,
       deferred: 1,
-      deferredClientIds: [CLIENT_ID], // pass 2 uses this to know whom to visit
+      pass2ClientIds: [CLIENT_ID], // pass 2 uses this to know whom to visit
+      unattributable: 0, // the bridge can load this flywheel, so it is reachable
+      unattributableSamples: [],
     })
     expect(db.outcomes()).toHaveLength(0)
   })

@@ -53,15 +53,29 @@ export async function POST(
 
   const hasErrors = result.errors.length > 0
 
+  // Two kinds of error, and they mean opposite things for this response:
+  //
+  //   · reconciliation debt — the outcome rows landed, then retiring superseded
+  //     rows failed. Nothing was lost; the next run tidies up. `outcomes_written`
+  //     must keep counting those rows, and a 502 here would claim the opposite.
+  //   · a real write failure — an upsert or snapshot query threw, so an action
+  //     produced nothing.
+  //
+  // `errors[]` holds both, so `cleanup_errors` is what tells them apart: when
+  // every error is a cleanup error, the run did its job. See Issue #859.
+  const onlyCleanupFailed = hasErrors && result.errors.length === result.cleanup_errors
+  const hardErrors = result.errors.length - result.cleanup_errors
+
   return NextResponse.json(
     {
-      success:          !hasErrors || result.outcomes_written > 0,
+      success:          !hasErrors || onlyCleanupFailed,
       client_id:        result.client_id,
       actions_found:    result.actions_found,
       outcomes_written: result.outcomes_written,
       skipped:          result.skipped,
+      cleanup_errors:   result.cleanup_errors,
       errors:           result.errors,
     },
-    { status: hasErrors && result.outcomes_written === 0 ? 502 : 200 },
+    { status: hardErrors > 0 && result.outcomes_written === 0 ? 502 : 200 },
   )
 }

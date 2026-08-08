@@ -24,16 +24,24 @@ let connectorsResult: { data: Array<{ client_id: string }> | null; error: { mess
   error: null,
 }
 
+/** What the route wrote into cron_run_logs on finish. */
+let cronLogUpdate: Record<string, unknown> | null = null
+
 vi.mock('@/lib/supabase', () => ({
   supabaseAdmin: {
     from: (table: string) => {
       if (table === 'cron_run_logs') {
-        // startCronRun / finish (run-logger.ts) — log row lifecycle.
+        // startCronRun / finish (run-logger.ts) — log row lifecycle. The update
+        // payload is captured so tests can assert what the cron summary claims,
+        // not just what the HTTP response says.
         return {
           insert: () => ({
             select: () => ({ single: async () => ({ data: { id: 'run-1' }, error: null }) }),
           }),
-          update: () => ({ eq: async () => ({ data: null, error: null }) }),
+          update: (payload: Record<string, unknown>) => {
+            cronLogUpdate = payload
+            return { eq: async () => ({ data: null, error: null }) }
+          },
         }
       }
       if (table === 'client_connectors') {
@@ -68,11 +76,13 @@ describe('POST /api/cron/attribution', () => {
     vi.clearAllMocks()
     process.env.CRON_SECRET = 'test-secret'
     connectorsResult = { data: [], error: null }
+    cronLogUpdate = null
     mockRunGscAttribution.mockResolvedValue({
       client_id: 'abc-123',
       actions_found: 0,
       outcomes_written: 0,
       skipped: 0,
+      cleanup_errors: 0,
       errors: [],
     })
   })
@@ -104,7 +114,7 @@ describe('POST /api/cron/attribution', () => {
   // ── Happy path ──────────────────────────────────────────────────────────────
 
   it('calls runAttributionJob with default options and returns result', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 5, written: 3, skipped: 2, deferred: 0, deferredClientIds: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 5, written: 3, skipped: 2, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
 
     const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
     expect(res.status).toBe(200)
@@ -124,7 +134,7 @@ describe('POST /api/cron/attribution', () => {
   it('surfaces actions deferred to another evaluator in the response', async () => {
     // Deferrals are normal routing, not failures — but they still have to be
     // visible, otherwise "pass 1 wrote nothing today" looks like a gap.
-    mockRunAttributionJob.mockResolvedValue({ processed: 9, written: 4, skipped: 1, deferred: 4, deferredClientIds: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 9, written: 4, skipped: 1, failed: 0, deferred: 4, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
 
     const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
     const body = await res.json()
@@ -134,7 +144,7 @@ describe('POST /api/cron/attribution', () => {
   })
 
   it('passes window_days query param to runAttributionJob', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 2, written: 2, skipped: 0, deferred: 0, deferredClientIds: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 2, written: 2, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
 
     const res = await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, '?window_days=30')
@@ -147,7 +157,7 @@ describe('POST /api/cron/attribution', () => {
   })
 
   it('passes client_id query param to runAttributionJob', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 1, skipped: 0, deferred: 0, deferredClientIds: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 1, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
 
     const res = await POST(
       makeRequest(
@@ -170,7 +180,7 @@ describe('POST /api/cron/attribution', () => {
   // deterministically without touching the connectors table.
 
   it('forwards the default pass-1 window (14) to the GSC bridge', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, deferred: 1, deferredClientIds: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
 
     const res = await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, '?client_id=abc-123')
@@ -183,7 +193,7 @@ describe('POST /api/cron/attribution', () => {
   })
 
   it('forwards an explicit ?window_days=7 to the GSC bridge', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, deferred: 1, deferredClientIds: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
 
     const res = await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, '?window_days=7&client_id=abc-123')
@@ -204,7 +214,7 @@ describe('POST /api/cron/attribution', () => {
     // would defeat the bridge's dedupe guard and error every deferred action.
     // Pass 1 keeps main's behaviour for the same input — only the forwarding
     // is sanitised.
-    mockRunAttributionJob.mockResolvedValue({ processed: 0, written: 0, skipped: 0, deferred: 0, deferredClientIds: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 0, written: 0, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
 
     const res = await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, `?window_days=${raw}&client_id=abc-123`)
@@ -226,8 +236,10 @@ describe('POST /api/cron/attribution', () => {
   it('runs pass 2 for a deferred client even when it is not in the connected list', async () => {
     connectorsResult = { data: [], error: null } // nobody connected
     mockRunAttributionJob.mockResolvedValue({
-      processed: 2, written: 0, skipped: 0, deferred: 2,
-      deferredClientIds: ['client-disconnected'],
+      processed: 2, written: 0, skipped: 0, failed: 0, deferred: 2,
+      pass2ClientIds: ['client-disconnected'],
+      unattributable: 0,
+      unattributableSamples: [],
     })
 
     const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
@@ -241,8 +253,10 @@ describe('POST /api/cron/attribution', () => {
   it('visits each client once when it is both connected and deferred', async () => {
     connectorsResult = { data: [{ client_id: 'client-both' }], error: null }
     mockRunAttributionJob.mockResolvedValue({
-      processed: 1, written: 0, skipped: 0, deferred: 1,
-      deferredClientIds: ['client-both'],
+      processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1,
+      pass2ClientIds: ['client-both'],
+      unattributable: 0,
+      unattributableSamples: [],
     })
 
     await POST(makeRequest({ authorization: 'Bearer test-secret' }))
@@ -256,8 +270,10 @@ describe('POST /api/cron/attribution', () => {
     // run, with the only trace in console.
     connectorsResult = { data: null, error: { message: 'connection refused' } }
     mockRunAttributionJob.mockResolvedValue({
-      processed: 1, written: 0, skipped: 0, deferred: 1,
-      deferredClientIds: ['client-deferred'],
+      processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1,
+      pass2ClientIds: ['client-deferred'],
+      unattributable: 0,
+      unattributableSamples: [],
     })
 
     const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
@@ -271,7 +287,7 @@ describe('POST /api/cron/attribution', () => {
   })
 
   it('leaves the bridge cadence window to the bridge (never overrides it)', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, deferred: 1, deferredClientIds: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
 
     await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, '?window_days=7&client_id=abc-123')
@@ -281,6 +297,134 @@ describe('POST /api/cron/attribution', () => {
     // bridge computes IN ADDITION, not what its own 28-day cadence runs at.
     const [, cadenceWindow] = mockRunGscAttribution.mock.calls[0]
     expect(cadenceWindow).toBeUndefined()
+  })
+
+  // ── Cron summary truthfulness (Codex P2 round 3) ───────────────────────────
+
+  it('counts attributed actions from BOTH passes as completed, in one unit', async () => {
+    // `completed` used to be pass-1 only, so a run whose writes all came from
+    // the GSC evaluator reported zero completed. It counts ACTIONS, not outcome
+    // rows — one action yields three metric rows per window, so counting rows
+    // would make completed several times larger than processed.
+    mockRunAttributionJob.mockResolvedValue({
+      processed: 4, written: 1, skipped: 0, failed: 0, deferred: 3, pass2ClientIds: ['c1'],
+      unattributable: 0, unattributableSamples: [],
+    })
+    mockRunGscAttribution.mockResolvedValue({
+      client_id: 'c1', actions_found: 3, outcomes_written: 9, skipped: 0,
+      cleanup_errors: 0, errors: [],
+    })
+
+    const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.gsc.outcomes_written).toBe(9) // 9 ROWS from 3 actions
+    expect(body.written).toBe(1)
+    // 1 action attributed by pass 1 + 3 by pass 2 (actions_found 3 − skipped 0).
+    expect(cronLogUpdate?.completed_count).toBe(4)
+    // …and completed never exceeds processed: 4 pass-1 actions + 3 pass-2 = 7.
+    expect(cronLogUpdate?.processed).toBe(7)
+    expect(cronLogUpdate?.completed_count as number)
+      .toBeLessThanOrEqual(cronLogUpdate?.processed as number)
+  })
+
+  it('reports rows landed AND reconciliation errors at the same time', async () => {
+    // A post-write cleanup failure must not reduce the written count, and must
+    // still be visible as a failure — the cron summary has to say both.
+    mockRunAttributionJob.mockResolvedValue({
+      processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: ['c1'],
+      unattributable: 0, unattributableSamples: [],
+    })
+    mockRunGscAttribution.mockResolvedValue({
+      client_id: 'c1', actions_found: 1, outcomes_written: 3, skipped: 0,
+      cleanup_errors: 1, errors: ['action a1: retire stale outcomes: boom'],
+    })
+
+    const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.gsc.outcomes_written).toBe(3) // landed rows survive the error
+    expect(body.gsc.cleanup_errors).toBe(1)
+    expect(body.gsc.errors).toHaveLength(1)
+    // Both facts in the cron log at once: the action was attributed, and
+    // reconciliation failed. Neither cancels the other.
+    expect(cronLogUpdate?.completed_count).toBe(1)
+    expect(cronLogUpdate?.failed_count).toBe(1)
+  })
+
+  it('does NOT count unattributable actions as run failures', async () => {
+    // They are a standing property of stored rows, recomputed identically every
+    // run. Folding them into failed_count would make the daily digest email
+    // "N failed / —" every day forever, with no remediation path and no
+    // diagnostic text (the digest reads error_message, never summary). They stay
+    // visible in the response and the run summary instead.
+    mockRunAttributionJob.mockResolvedValue({
+      processed: 3, written: 1, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: ['c1'],
+      unattributable: 2, unattributableSamples: ['geo-1', 'social-1'],
+    })
+
+    await POST(makeRequest({ authorization: 'Bearer test-secret' }))
+
+    expect(cronLogUpdate?.failed_count).toBe(0)
+    expect(cronLogUpdate?.status).toBe('completed')
+    const summary = cronLogUpdate?.summary as { pass1: { unattributableSamples: string[] } }
+    expect(summary.pass1.unattributableSamples).toEqual(['geo-1', 'social-1'])
+  })
+
+  it('counts pass-1 action failures in the cron log', async () => {
+    // The case this exists for: the expand migration is not applied, so every
+    // upsert raises 42P10. Before, those landed in `skipped` and the run was
+    // logged as completed with zero failures — a total outage, reported green.
+    mockRunAttributionJob.mockResolvedValue({
+      processed: 5, written: 0, skipped: 0, failed: 5, deferred: 0, pass2ClientIds: [],
+      unattributable: 0, unattributableSamples: [],
+    })
+
+    await POST(makeRequest({ authorization: 'Bearer test-secret' }))
+
+    expect(cronLogUpdate?.failed_count).toBe(5)
+    expect(cronLogUpdate?.completed_count).toBe(0)
+  })
+
+  it('does not count a quiet day (no data yet) as failure', async () => {
+    mockRunAttributionJob.mockResolvedValue({
+      processed: 5, written: 0, skipped: 5, failed: 0, deferred: 0, pass2ClientIds: [],
+      unattributable: 0, unattributableSamples: [],
+    })
+
+    await POST(makeRequest({ authorization: 'Bearer test-secret' }))
+
+    expect(cronLogUpdate?.failed_count).toBe(0)
+  })
+
+  it('surfaces unattributable actions in the response', async () => {
+    // An action no evaluator can attribute is a reported failure, not a
+    // silently missing outcome.
+    mockRunAttributionJob.mockResolvedValue({
+      processed: 2, written: 0, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [],
+      unattributable: 2, unattributableSamples: ['geo-action-1', 'social-action-2'],
+    })
+
+    const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.unattributable).toBe(2)
+    expect(body.unattributableSamples).toEqual(['geo-action-1', 'social-action-2'])
+  })
+
+  it('does not treat unattributable actions as deferred clients for pass 2', async () => {
+    // They must not drag a client into pass 2 — the bridge cannot load them.
+    mockRunAttributionJob.mockResolvedValue({
+      processed: 1, written: 0, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [],
+      unattributable: 1, unattributableSamples: ['geo-action-1'],
+    })
+
+    await POST(makeRequest({ authorization: 'Bearer test-secret' }))
+
+    expect(mockRunGscAttribution).not.toHaveBeenCalled()
   })
 
   // ── Error handling ──────────────────────────────────────────────────────────

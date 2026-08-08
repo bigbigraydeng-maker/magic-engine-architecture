@@ -101,6 +101,83 @@ export function ownsMetric(evaluator: OutcomeEvaluatorKey, metricKey: string): b
 }
 
 /**
+ * Which `flywheel_actions.flywheel` values each evaluator can actually load.
+ *
+ * Owning a metric is not the same as being able to reach the action that
+ * promised it. The GSC bridge queries `flywheel = 'seo'`, so a GEO or Social
+ * action carrying a `seo.gsc.*` expected_metric is owned by an evaluator that
+ * will never see it. Declaring the reachable set here — rather than letting
+ * each side assume — is what keeps "who owns this" and "who can load this"
+ * from drifting apart. `null` means "any flywheel": the flywheel_metrics
+ * evaluator loads every action with an expected_metric, without a filter.
+ *
+ * ⚠️ Widening an evaluator's scope means widening its query too. `gsc-bridge`
+ * derives its filter from this map, and a test asserts it.
+ */
+const EVALUATOR_LOADABLE_FLYWHEELS: Readonly<
+  Record<OutcomeEvaluatorKey, readonly string[] | null>
+> = {
+  [OUTCOME_EVALUATOR.FLYWHEEL_METRICS]: null,
+  [OUTCOME_EVALUATOR.GSC_SNAPSHOTS]: ['seo'],
+}
+
+/** The flywheels this evaluator loads actions for, or null for "all of them". */
+export function evaluatorLoadableFlywheels(
+  evaluator: OutcomeEvaluatorKey,
+): readonly string[] | null {
+  return EVALUATOR_LOADABLE_FLYWHEELS[evaluator]
+}
+
+/** Whether `evaluator` would ever load an action on this flywheel. */
+export function evaluatorCanLoad(evaluator: OutcomeEvaluatorKey, flywheel: string): boolean {
+  const scope = EVALUATOR_LOADABLE_FLYWHEELS[evaluator]
+  return scope === null || scope.includes(flywheel)
+}
+
+/**
+ * What the flywheel_metrics evaluator should do with an action.
+ *
+ *   own            — this evaluator owns the metric; attribute it here.
+ *   defer          — another evaluator owns it AND can load this action.
+ *   unattributable — another evaluator owns it but cannot load this action, so
+ *                    nobody will ever answer. Deferring here would manufacture
+ *                    a permanent hole; writing it here is forbidden by the
+ *                    `flywheel_outcomes_evaluator_owns_metric` CHECK. The only
+ *                    honest option is to report it.
+ *
+ * The third case is the same failure shape `metric-registry.ts` exists to
+ * prevent — an action promising a metric nothing will measure — caught at the
+ * one point attribution can see it rather than left to fail silently.
+ */
+export type AttributionRouting = 'own' | 'defer' | 'unattributable'
+
+export function resolveAttributionRouting(action: {
+  flywheel: string | null | undefined
+  expected_metric: string
+}): AttributionRouting {
+  // `undefined` means the caller's query did not select the column — a coding
+  // mistake, not a business fact. Coercing it to "unreachable" would route
+  // every GSC-owned action to `unattributable` and rebuild the exact permanent
+  // hole this function exists to prevent, with no error anywhere. Checked
+  // before the ownership short-circuit so the mistake surfaces on the first
+  // action rather than only on the ones that happen to need routing.
+  if (action.flywheel === undefined) {
+    throw new Error(
+      'resolveAttributionRouting: action.flywheel is undefined — the query must ' +
+        'select the flywheel column. Routing cannot be decided without it.',
+    )
+  }
+
+  if (ownsMetric(OUTCOME_EVALUATOR.FLYWHEEL_METRICS, action.expected_metric)) return 'own'
+
+  const owner = resolveAuthoritativeEvaluator(action.expected_metric)
+  // NULL is not reachable (the column is NOT NULL in the database) but is
+  // handled as unreachable rather than assumed to be 'seo': guessing would
+  // defer into a hole, reporting will not.
+  return evaluatorCanLoad(owner, action.flywheel ?? '') ? 'defer' : 'unattributable'
+}
+
+/**
  * Guard for a writer about to persist a batch: every metric in it must belong
  * to the writer. Throws rather than filtering, because a writer producing a row
  * it does not own is a coding mistake, and dropping it quietly would hide the

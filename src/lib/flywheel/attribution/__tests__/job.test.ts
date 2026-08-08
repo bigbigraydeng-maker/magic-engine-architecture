@@ -137,7 +137,11 @@ describe('runAttributionJob', () => {
 
     const { runAttributionJob } = await import('../job')
     const result = await runAttributionJob()
-    expect(result).toEqual({ processed: 0, written: 0, skipped: 0, deferred: 0, deferredClientIds: [] })
+    expect(result).toEqual({
+      processed: 0, written: 0, skipped: 0, failed: 0,
+      deferred: 0, pass2ClientIds: [],
+      unattributable: 0, unattributableSamples: [],
+    })
   })
 
   it('skips action when no baseline metric exists', async () => {
@@ -148,6 +152,7 @@ describe('runAttributionJob', () => {
       data: [{
         id: 'action-1',
         client_id: 'client-1',
+        flywheel: 'geo',
         expected_metric: 'geo.query.mention_rate',
         expected_delta: 0.05,
         executed_at: new Date().toISOString(),
@@ -174,6 +179,7 @@ describe('runAttributionJob', () => {
       data: [{
         id: 'action-2',
         client_id: 'client-1',
+        flywheel: 'geo',
         expected_metric: 'geo.query.mention_rate',
         expected_delta: 0.05,
         executed_at: new Date(Date.now() - 86_400_000).toISOString(), // 1 day ago
@@ -203,6 +209,7 @@ describe('runAttributionJob', () => {
       data: [{
         id: 'action-3',
         client_id: 'client-1',
+        flywheel: 'geo',
         expected_metric: 'geo.query.mention_rate',
         expected_delta: 0.05,
         executed_at: pastDate.toISOString(),
@@ -224,7 +231,7 @@ describe('runAttributionJob', () => {
     expect(result.skipped).toBe(0)
   })
 
-  it('increments skipped and logs error when DB throws on upsert', async () => {
+  it('increments failed (not skipped) and logs when DB throws on upsert', async () => {
     upsertResult = { data: null, error: { message: 'upsert failed' } }
 
     const { supabaseAdmin } = await import('@/lib/supabase')
@@ -234,6 +241,7 @@ describe('runAttributionJob', () => {
       data: [{
         id: 'action-4',
         client_id: 'client-1',
+        flywheel: 'geo',
         expected_metric: 'geo.query.mention_rate',
         expected_delta: 0.05,
         executed_at: pastDate.toISOString(),
@@ -250,7 +258,10 @@ describe('runAttributionJob', () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { runAttributionJob } = await import('../job')
     const result = await runAttributionJob()
-    expect(result.skipped).toBe(1)
+    // `failed`, not `skipped`: a thrown write is a failure, and lumping it in
+    // with "no data yet" is what let a total outage log as a clean run.
+    expect(result.failed).toBe(1)
+    expect(result.skipped).toBe(0)
     consoleSpy.mockRestore()
   })
 })
