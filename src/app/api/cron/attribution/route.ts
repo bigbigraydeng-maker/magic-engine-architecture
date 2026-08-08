@@ -5,10 +5,14 @@ import {
   DEFAULT_WINDOW_DAYS,
   type AttributionJobResult,
 } from '@/lib/flywheel/attribution/job'
-import { runGscAttributionForClient } from '@/lib/flywheel/attribution/gsc-bridge'
+import {
+  runGscAttributionForClient,
+  type GscAttributionResult,
+} from '@/lib/flywheel/attribution/gsc-bridge'
 import {
   dualWindowEnabled,
   resolveEffectiveWindow,
+  type EffectiveWindow,
 } from '@/lib/flywheel/attribution/dual-window-gate'
 import { startCronRun } from '@/lib/cron/run-logger'
 
@@ -107,53 +111,72 @@ interface GscPassResult {
  * double the evidence behind every deferred action and move client-visible
  * benchmarks. See dual-window-gate.ts.
  */
-async function runPass2(
+/**
+ * Who pass 2 must visit: every client with a connected GSC connector, plus
+ * every client pass 1 deferred for.
+ *
+ * A connector-query failure is reported but never fatal — it would otherwise
+ * hide the deferred clients, whose actions pass 1 has already declined.
+ */
+async function resolvePass2Clients(
   clientId: string | undefined,
-  windowDays: number,
   deferredClientIds: string[],
-): Promise<GscPassResult> {
-  const gscResult = {
+  errors: string[],
+): Promise<string[]> {
+  let connectedIds: string[] = []
+  try {
+    connectedIds = await loadGscClientIds(clientId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[attribution/cron] loadGscClientIds error:', message)
+    errors.push(`load GSC clients: ${message}`)
+  }
+  return Array.from(new Set([...connectedIds, ...deferredClientIds]))
+}
+
+function emptyGscResult(): GscPassResult {
+  return {
     clients_processed: 0,
     actions_found:     0,
     outcomes_written:  0,
     skipped:           0,
     cleanup_errors:    0,
     reconcile_errors:  0,
-    errors:            [] as string[],
+    errors:            [],
   }
+}
+
+function accumulate(into: GscPassResult, r: GscAttributionResult): void {
+  into.clients_processed++
+  into.actions_found    += r.actions_found
+  into.outcomes_written += r.outcomes_written
+  into.skipped          += r.skipped
+  into.cleanup_errors   += r.cleanup_errors
+  into.reconcile_errors += r.reconcile_errors
+  if (r.errors.length) into.errors.push(...r.errors)
+}
+
+async function runPass2(
+  clientId: string | undefined,
+  windowDays: number,
+  deferredClientIds: string[],
+): Promise<GscPassResult> {
+  const gscResult = emptyGscResult()
+  const dualWindow = dualWindowEnabled()
 
   try {
-    let connectedIds: string[] = []
-    try {
-      connectedIds = await loadGscClientIds(clientId)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      console.error('[attribution/cron] loadGscClientIds error:', message)
-      gscResult.errors.push(`load GSC clients: ${message}`)
-    }
-
-    const clientIds = Array.from(new Set([...connectedIds, ...deferredClientIds]))
-
-    const dualWindow = dualWindowEnabled()
-    const pass1Window = windowDays
+    const clientIds = await resolvePass2Clients(clientId, deferredClientIds, gscResult.errors)
 
     for (const cid of clientIds) {
-      const r = await runGscAttributionForClient(
+      accumulate(gscResult, await runGscAttributionForClient(
         cid,
         undefined,
-        dualWindow ? { deferredWindowDays: pass1Window } : {},
-      )
-      gscResult.clients_processed++
-      gscResult.actions_found    += r.actions_found
-      gscResult.outcomes_written += r.outcomes_written
-      gscResult.skipped           += r.skipped
-      gscResult.cleanup_errors    += r.cleanup_errors
-      gscResult.reconcile_errors  += r.reconcile_errors
-      if (r.errors.length) gscResult.errors.push(...r.errors)
+        dualWindow ? { deferredWindowDays: windowDays } : {},
+      ))
     }
 
     console.log(
-      `[attribution/cron] pass2(gsc) clients=${gscResult.clients_processed} outcomes=${gscResult.outcomes_written} skipped=${gscResult.skipped} deferred_window=${dualWindow ? pass1Window : 'off'}`
+      `[attribution/cron] pass2(gsc) clients=${gscResult.clients_processed} outcomes=${gscResult.outcomes_written} skipped=${gscResult.skipped} deferred_window=${dualWindow ? windowDays : 'off'}`
     )
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error in GSC attribution pass'
@@ -224,43 +247,48 @@ async function finishRun(
   })
 }
 
-export async function POST(
-  req: NextRequest
-): Promise<NextResponse<AttributionCronResponse | ApiErrorResponse>> {
+/** Bearer check. Returns a response to send, or null to proceed. */
+function authorize(req: NextRequest): NextResponse<ApiErrorResponse> | null {
   const cronSecret = process.env.CRON_SECRET
   if (!cronSecret) {
     return NextResponse.json<ApiErrorResponse>(
       { error: 'Server misconfiguration: CRON_SECRET not set' },
-      { status: 500 }
+      { status: 500 },
     )
   }
-
-  const authHeader = req.headers.get('authorization')
-  if (authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json<ApiErrorResponse>(
-      { error: 'Unauthorized' },
-      { status: 401 }
-    )
+  if (req.headers.get('authorization') !== `Bearer ${cronSecret}`) {
+    return NextResponse.json<ApiErrorResponse>({ error: 'Unauthorized' }, { status: 401 })
   }
+  return null
+}
 
+/**
+ * Query parameters, with pass 1's window run through the dual-window gate.
+ *
+ * Pass 1 accepts a window too, and on main a re-run at a different window
+ * REPLACED the previous rows. The natural key now appends instead, so this
+ * endpoint is a third way to create a second window — gated with the same
+ * switch, and the refusal is reported rather than silently applied.
+ */
+function parseRequest(req: NextRequest): {
+  clientId: string | undefined
+  windowDays: number
+  pass1Window: EffectiveWindow
+} {
   const { searchParams } = new URL(req.url)
   const windowDaysParam = searchParams.get('window_days')
-  const clientId = searchParams.get('client_id') ?? undefined
+  const requested = windowDaysParam !== null ? parseInt(windowDaysParam, 10) : undefined
+  const pass1Window = resolveEffectiveWindow(requested, DEFAULT_WINDOW_DAYS)
 
-  const requestedWindow =
-    windowDaysParam !== null ? parseInt(windowDaysParam, 10) : undefined
+  return {
+    clientId: searchParams.get('client_id') ?? undefined,
+    windowDays: pass1Window.windowDays,
+    pass1Window,
+  }
+}
 
-  // Pass 1 accepts a window too, and on main a re-run at a different window
-  // REPLACED the previous rows. The natural key now appends instead, so this
-  // endpoint is a third way to create a second window — gated with the same
-  // switch, and the refusal is reported rather than silently applied.
-  const pass1 = resolveEffectiveWindow(requestedWindow, DEFAULT_WINDOW_DAYS)
-  const windowDays = pass1.windowDays
-
-  const cronRun = await startCronRun('attribution-cron')
-
-  // ── Pass 1: flywheel_metrics-based attribution (existing) ──────────────────
-  let pass1Result: AttributionJobResult = {
+function emptyJobResult(): AttributionJobResult {
+  return {
     processed: 0,
     written: 0,
     skipped: 0,
@@ -272,6 +300,19 @@ export async function POST(
     reconcileErrors: 0,
     reconcileErrorSamples: [],
   }
+}
+
+export async function POST(
+  req: NextRequest
+): Promise<NextResponse<AttributionCronResponse | ApiErrorResponse>> {
+  const denied = authorize(req)
+  if (denied) return denied
+
+  const { clientId, windowDays, pass1Window } = parseRequest(req)
+  const cronRun = await startCronRun('attribution-cron')
+
+  // ── Pass 1: flywheel_metrics-based attribution ────────────────────────────
+  let pass1Result: AttributionJobResult = emptyJobResult()
   try {
     pass1Result = await runAttributionJob({ windowDays, clientId })
     console.log(
@@ -286,7 +327,7 @@ export async function POST(
 
   const gscResult = await runPass2(clientId, windowDays, pass1Result.pass2ClientIds)
 
-  return finishRun(cronRun, pass1Result, gscResult, windowDays, pass1)
+  return finishRun(cronRun, pass1Result, gscResult, windowDays, pass1Window)
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────

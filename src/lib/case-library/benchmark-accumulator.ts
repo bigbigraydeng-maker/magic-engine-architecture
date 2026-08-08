@@ -196,6 +196,30 @@ function isMissingColumnError(message: string): boolean {
 // ── Main accumulator ──────────────────────────────────────────────────────────
 
 /**
+ * 分页读全指定时间之后的 outcomes。
+ *
+ * PostgREST 单次最多 1000 行且不报错。截断在这里比少几行更糟 —— 按动作折叠是在
+ * 读到的行里挑代表，如果恰好把带 expected_metric 的那行截掉了，折叠会挑另一行当
+ * 这个动作的结论，于是不是「少算」而是「算错」。一个动作本来就出三行，双窗口
+ * 再翻倍，上限来得比行数看上去快得多。（Codex P2, round 28 on PR #862）
+ */
+async function loadOutcomesSince(
+  supabase: SupabaseClient,
+  since: string,
+): Promise<OutcomeRow[]> {
+  return fetchAll<OutcomeRow>((from, to) =>
+    supabase
+      .from('flywheel_outcomes')
+      .select('id, action_id, client_id, metric_key, delta_pct, window_days')
+      .in('metric_key', Object.keys(REPRESENTATIVE_METRICS))
+      .not('delta_pct', 'is', null)
+      .gte('computed_at', since)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+}
+
+/**
  * 聚合 flywheel_outcomes → 写回 industry_benchmarks 的 GROWTH 字段。
  *
  * @param supabase    supabaseAdmin（service role）
@@ -235,23 +259,9 @@ export async function accumulateBenchmarks(
   // ── 2. 拉最近 LOOKBACK_DAYS 的 outcomes ───────────────────────────────────
   const since = new Date(Date.now() - LOOKBACK_DAYS * 86_400_000).toISOString()
 
-  // 分页读全：PostgREST 单次最多 1000 行且不报错。截断在这里比少几行更糟 ——
-  // 按动作折叠是在读到的行里挑代表，如果恰好把带 expected_metric 的那行截掉了,
-  // 折叠会挑另一行当这个动作的结论，于是不是「少算」而是「算错」。
-  // 一个动作本来就出三行，双窗口再翻倍，上限来得比行数看上去快得多。
-  // （Codex P2, round 28 on PR #862）
   let outcomes: OutcomeRow[]
   try {
-    outcomes = await fetchAll<OutcomeRow>((from, to) =>
-      supabase
-        .from('flywheel_outcomes')
-        .select('id, action_id, client_id, metric_key, delta_pct, window_days')
-        .in('metric_key', Object.keys(REPRESENTATIVE_METRICS))
-        .not('delta_pct', 'is', null)
-        .gte('computed_at', since)
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
+    outcomes = await loadOutcomesSince(supabase, since)
   } catch (e) {
     result.errors.push(`fetch outcomes: ${e instanceof Error ? e.message : String(e)}`)
     return result
