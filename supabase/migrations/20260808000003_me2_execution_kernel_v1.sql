@@ -588,6 +588,165 @@ GRANT  EXECUTE ON FUNCTION public.kernel_begin_authorized_run(uuid, uuid, text)
 
 
 -- ────────────────────────────────────────────────────────────────────────────
+-- 5c. kernel_resolve_pending_approval —— 人工批准 / 拒绝的原子状态转换
+--
+-- 🔴 为什么必须是一条 RPC：两个人（或一次双击）同时批准同一条等审批的 run，
+--    两边都能读到旧状态、各签一份放行 —— A 开始执行把 run 推进 running 之后，
+--    B 的无条件 update 还能把它拽回 authorized 并换上自己那份决策，
+--    然后再领一次执行权 → capability 执行两次。
+--    批准和拒绝抢的是**同一把行锁**：谁先锁到 run 谁说了算，输的一方
+--    拿到机器可读的原因，绝不覆盖赢家写下的状态。
+--
+-- 应用层先跑完整 preflight（契约 / 输入 / 用途 / 对外 / 预算）说人话；
+-- 这里重查的是 preflight 和提交之间**可能变化的数据库事实**。
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.kernel_resolve_pending_approval(
+  p_run_id              uuid,
+  p_pending_decision_id uuid,
+  p_resolution          text,     -- 'approve' | 'reject'
+  p_resolved_by         text,
+  p_reason              text,
+  p_policy_snapshot     jsonb DEFAULT '{}',
+  p_cost_estimate_usd   numeric DEFAULT NULL
+)
+RETURNS TABLE (ok boolean, reason text, decision_id uuid)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_run      public.action_runs%ROWTYPE;
+  v_pending  public.authorization_decisions%ROWTYPE;
+  v_policy   public.client_automation_policies%ROWTYPE;
+  v_new_id   uuid;
+  v_cost_cap numeric;
+BEGIN
+  IF p_resolution NOT IN ('approve','reject') THEN
+    RETURN QUERY SELECT false, 'bad_resolution', NULL::uuid; RETURN;
+  END IF;
+
+  -- ① 锁 run —— 批准、拒绝、以及并发的另一次批准，全在这把锁上排队
+  SELECT * INTO v_run FROM public.action_runs
+   WHERE id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'run_not_found', NULL::uuid; RETURN;
+  END IF;
+
+  -- ② 必须**仍然**停在等审批。running / succeeded / denied 一律不许覆盖。
+  IF v_run.status <> 'pending_approval' THEN
+    RETURN QUERY SELECT false, 'not_pending:' || v_run.status, NULL::uuid; RETURN;
+  END IF;
+
+  -- ③ run 当前指着的必须还是这份审批请求（防拿旧页面上的过期请求来批）
+  IF v_run.authorization_decision_id IS DISTINCT FROM p_pending_decision_id THEN
+    RETURN QUERY SELECT false, 'decision_not_current', NULL::uuid; RETURN;
+  END IF;
+
+  -- ④ 锁住这份审批请求本身，并核对它的身份
+  SELECT * INTO v_pending FROM public.authorization_decisions
+   WHERE id = p_pending_decision_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'pending_not_found', NULL::uuid; RETURN;
+  END IF;
+  IF v_pending.action_run_id <> v_run.id THEN
+    RETURN QUERY SELECT false, 'pending_run_mismatch', NULL::uuid; RETURN;
+  END IF;
+  IF v_pending.verdict <> 'require_approval' THEN
+    RETURN QUERY SELECT false, 'not_require_approval', NULL::uuid; RETURN;
+  END IF;
+
+  IF p_resolution = 'reject' THEN
+    -- 拒绝不查政策：政策被删了、变了，人依然有权说「不做」。
+    INSERT INTO public.authorization_decisions
+      (action_run_id, client_id, action_key, action_version, verdict, deny_code, reason,
+       policy_snapshot, policy_id, policy_version, decided_by, decided_by_user,
+       cost_cap_usd, cost_estimate_usd, idempotency_key, expires_at)
+    VALUES
+      (v_run.id, v_run.client_id, v_run.action_key, v_run.action_version, 'deny',
+       'policy_deny', p_reason, p_policy_snapshot, v_pending.policy_id,
+       v_pending.policy_version, 'human', p_resolved_by,
+       v_run.cost_cap_usd, v_run.cost_estimate_usd, v_run.idempotency_key, NULL)
+    RETURNING id INTO v_new_id;
+
+    UPDATE public.action_runs
+       SET status = 'denied',
+           authorization_decision_id = v_new_id,
+           needs_human = false,
+           last_error  = p_reason,
+           finished_at = now(),
+           updated_at  = now()
+     WHERE id = v_run.id;
+
+    RETURN QUERY SELECT true, 'rejected', v_new_id; RETURN;
+  END IF;
+
+  -- ── approve ────────────────────────────────────────────────────────────
+  -- ⑤ 政策三连（跟执行前同一套）：当前生效的那一行必须还是挂起时那一行、
+  --    同一版、且模式仍是「要人审」。时间窗口径与 kernel_begin_authorized_run 一致。
+  SELECT * INTO v_policy
+    FROM public.client_automation_policies p
+   WHERE p.client_id = v_run.client_id
+     AND p.action_key = v_run.action_key
+     AND p.effective_from <= now()
+     AND (p.effective_to IS NULL OR p.effective_to > now())
+   ORDER BY p.effective_from DESC
+   LIMIT 1;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'no_active_policy', NULL::uuid; RETURN;
+  END IF;
+  IF v_policy.id IS DISTINCT FROM v_pending.policy_id THEN
+    RETURN QUERY SELECT false, 'policy_identity_changed', NULL::uuid; RETURN;
+  END IF;
+  IF v_policy.policy_version IS DISTINCT FROM v_pending.policy_version THEN
+    RETURN QUERY SELECT false, 'stale_policy_version', NULL::uuid; RETURN;
+  END IF;
+  IF v_policy.mode <> 'require_approval' THEN
+    RETURN QUERY SELECT false, 'policy_mode_changed', NULL::uuid; RETURN;
+  END IF;
+
+  -- ⑥ 审批请求描述的必须还是这条 run 本身
+  IF v_pending.client_id <> v_run.client_id
+     OR v_pending.action_key <> v_run.action_key
+     OR v_pending.action_version <> v_run.action_version
+     OR v_pending.idempotency_key <> v_run.idempotency_key THEN
+    RETURN QUERY SELECT false, 'pending_identity_mismatch', NULL::uuid; RETURN;
+  END IF;
+
+  v_cost_cap := COALESCE(v_policy.spend_cap_per_run_usd, 0);
+
+  -- ⑦ 一次性：签人签的放行 + run → authorized + 指向新决策
+  INSERT INTO public.authorization_decisions
+    (action_run_id, client_id, action_key, action_version, verdict, deny_code, reason,
+     policy_snapshot, policy_id, policy_version, decided_by, decided_by_user,
+     cost_cap_usd, cost_estimate_usd, idempotency_key, expires_at)
+  VALUES
+    (v_run.id, v_run.client_id, v_run.action_key, v_run.action_version, 'allow',
+     NULL, p_reason, p_policy_snapshot, v_policy.id, v_policy.policy_version,
+     'human', p_resolved_by, v_cost_cap, p_cost_estimate_usd,
+     v_run.idempotency_key,
+     now() + (v_policy.decision_ttl_seconds * interval '1 second'))
+  RETURNING id INTO v_new_id;
+
+  UPDATE public.action_runs
+     SET status = 'authorized',
+         authorization_decision_id = v_new_id,
+         cost_cap_usd = v_cost_cap,
+         cost_estimate_usd = p_cost_estimate_usd,
+         needs_human = false,
+         updated_at  = now()
+   WHERE id = v_run.id;
+
+  RETURN QUERY SELECT true, 'approved', v_new_id;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.kernel_resolve_pending_approval(uuid, uuid, text, text, text, jsonb, numeric)
+  FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.kernel_resolve_pending_approval(uuid, uuid, text, text, text, jsonb, numeric)
+  TO service_role;
+
+
+-- ────────────────────────────────────────────────────────────────────────────
 -- 6. flywheel_actions.action_run_id —— 补上 lineage 的最后一条边
 --
 -- 可空、无默认值、无触发器：对现有归因作业**零行为变化**。

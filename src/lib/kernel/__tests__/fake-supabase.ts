@@ -97,9 +97,42 @@ export interface FakeSupabaseOptions {
 }
 
 export interface Filter {
-  kind: 'eq' | 'in' | 'is' | 'gte' | 'lte' | 'not'
+  kind: 'eq' | 'in' | 'is' | 'gte' | 'lte' | 'not' | 'or'
   column: string
   value: unknown
+}
+
+/**
+ * PostgREST 的 `.or('a.is.null,b.gt.X')` 语法的最小解析。
+ * 🔴 只实现内核真用到的算子（is.null / gt / gte / lt / lte / eq）——
+ *    认不出的算子直接 throw，不能静默当「匹配」（那会把过滤器变成漏勺）。
+ */
+function orMatches(row: Row, expr: string): boolean {
+  return expr.split(',').some((cond) => {
+    const firstDot = cond.indexOf('.')
+    const secondDot = cond.indexOf('.', firstDot + 1)
+    const column = cond.slice(0, firstDot)
+    const op = secondDot === -1 ? cond.slice(firstDot + 1) : cond.slice(firstDot + 1, secondDot)
+    const value = secondDot === -1 ? '' : cond.slice(secondDot + 1)
+    const v = readPath(row, column)
+    switch (op) {
+      case 'is':
+        if (value !== 'null') throw new Error(`[fake-supabase] .or 只实现了 is.null：${cond}`)
+        return v === null || v === undefined
+      case 'gt':
+        return v !== null && v !== undefined && String(v) > value
+      case 'gte':
+        return v !== null && v !== undefined && String(v) >= value
+      case 'lt':
+        return v !== null && v !== undefined && String(v) < value
+      case 'lte':
+        return v !== null && v !== undefined && String(v) <= value
+      case 'eq':
+        return String(v) === value
+      default:
+        throw new Error(`[fake-supabase] .or 没实现算子「${op}」：${cond}`)
+    }
+  })
 }
 
 function readPath(row: Row, column: string): unknown {
@@ -129,6 +162,8 @@ function matches(row: Row, filters: Filter[]): boolean {
         return String(v) <= String(f.value)
       case 'not':
         return v !== f.value
+      case 'or':
+        return orMatches(row, String(f.value))
       default:
         return true
     }
@@ -224,6 +259,10 @@ export function createFakeSupabase(
     }
     builder.lte = (column: string, value: unknown) => {
       filters.push({ kind: 'lte', column, value })
+      return chain()
+    }
+    builder.or = (expr: string) => {
+      filters.push({ kind: 'or', column: '', value: expr })
       return chain()
     }
     builder.not = (column: string, _op: string, value: unknown) => {
@@ -473,12 +512,141 @@ export function createFakeSupabase(
     return { ok: true, reason: 'ok' }
   }
 
+  /**
+   * `kernel_resolve_pending_approval` 的内存复刻。
+   * 🔴 跟 beginAuthorizedRun 同一原则：**整个函数体同步**，等价于行锁 ——
+   *    一个 await 都不能有，否则并发测试测不到真东西。
+   */
+  function resolvePendingApproval(args: Record<string, unknown>): {
+    ok: boolean
+    reason: string
+    decision_id: string | null
+  } {
+    const runId = String(args.p_run_id)
+    const pendingId = String(args.p_pending_decision_id)
+    const resolution = String(args.p_resolution)
+    const resolvedBy = String(args.p_resolved_by)
+    const reason = String(args.p_reason)
+    const snapshot = (args.p_policy_snapshot ?? {}) as Row
+    const costEstimate = (args.p_cost_estimate_usd ?? null) as number | null
+    const no = (r: string) => ({ ok: false, reason: r, decision_id: null })
+
+    if (resolution !== 'approve' && resolution !== 'reject') return no('bad_resolution')
+
+    const run = tableOf('action_runs').find((r) => r.id === runId)
+    if (!run) return no('run_not_found')
+    if (run.status !== 'pending_approval') return no(`not_pending:${String(run.status)}`)
+    if (run.authorization_decision_id !== pendingId) return no('decision_not_current')
+
+    const pending = tableOf('authorization_decisions').find((d) => d.id === pendingId)
+    if (!pending) return no('pending_not_found')
+    if (pending.action_run_id !== run.id) return no('pending_run_mismatch')
+    if (pending.verdict !== 'require_approval') return no('not_require_approval')
+
+    const nowIso = (options.now?.() ?? new Date()).toISOString()
+
+    if (resolution === 'reject') {
+      const decision: Row = {
+        id: fakeId('authorization_decisions'),
+        created_at: nowIso,
+        ...(DEFAULTS.authorization_decisions?.() ?? {}),
+        action_run_id: run.id,
+        client_id: run.client_id,
+        action_key: run.action_key,
+        action_version: run.action_version,
+        verdict: 'deny',
+        deny_code: 'policy_deny',
+        reason,
+        policy_snapshot: snapshot,
+        policy_id: pending.policy_id ?? null,
+        policy_version: pending.policy_version ?? null,
+        decided_by: 'human',
+        decided_by_user: resolvedBy,
+        cost_cap_usd: run.cost_cap_usd ?? null,
+        cost_estimate_usd: run.cost_estimate_usd ?? null,
+        idempotency_key: run.idempotency_key,
+        expires_at: null,
+      }
+      tableOf('authorization_decisions').push(decision)
+      run.status = 'denied'
+      run.authorization_decision_id = decision.id
+      run.needs_human = false
+      run.last_error = reason
+      run.finished_at = nowIso
+      run.updated_at = nowIso
+      return { ok: true, reason: 'rejected', decision_id: String(decision.id) }
+    }
+
+    // approve：政策三连，时间窗口径与 beginAuthorizedRun 一致
+    const policy = tableOf('client_automation_policies')
+      .filter(
+        (p) =>
+          p.client_id === run.client_id &&
+          p.action_key === run.action_key &&
+          String(p.effective_from) <= nowIso &&
+          (p.effective_to === null || p.effective_to === undefined || String(p.effective_to) > nowIso),
+      )
+      .sort((a, b) => String(b.effective_from).localeCompare(String(a.effective_from)))[0]
+    if (!policy) return no('no_active_policy')
+    if (policy.id !== pending.policy_id) return no('policy_identity_changed')
+    if (policy.policy_version !== pending.policy_version) return no('stale_policy_version')
+    if (policy.mode !== 'require_approval') return no('policy_mode_changed')
+
+    if (
+      pending.client_id !== run.client_id ||
+      pending.action_key !== run.action_key ||
+      pending.action_version !== run.action_version ||
+      pending.idempotency_key !== run.idempotency_key
+    ) {
+      return no('pending_identity_mismatch')
+    }
+
+    const costCap = Number(policy.spend_cap_per_run_usd ?? 0)
+    const ttl = Number(policy.decision_ttl_seconds ?? 900)
+    const expiresAt = new Date(
+      Date.parse(nowIso) + ttl * 1000,
+    ).toISOString()
+
+    const decision: Row = {
+      id: fakeId('authorization_decisions'),
+      created_at: nowIso,
+      ...(DEFAULTS.authorization_decisions?.() ?? {}),
+      action_run_id: run.id,
+      client_id: run.client_id,
+      action_key: run.action_key,
+      action_version: run.action_version,
+      verdict: 'allow',
+      deny_code: null,
+      reason,
+      policy_snapshot: snapshot,
+      policy_id: policy.id,
+      policy_version: policy.policy_version,
+      decided_by: 'human',
+      decided_by_user: resolvedBy,
+      cost_cap_usd: costCap,
+      cost_estimate_usd: costEstimate,
+      idempotency_key: run.idempotency_key,
+      expires_at: expiresAt,
+    }
+    tableOf('authorization_decisions').push(decision)
+    run.status = 'authorized'
+    run.authorization_decision_id = decision.id
+    run.cost_cap_usd = costCap
+    run.cost_estimate_usd = costEstimate
+    run.needs_human = false
+    run.updated_at = nowIso
+    return { ok: true, reason: 'approved', decision_id: String(decision.id) }
+  }
+
   const client = {
     from,
     /** 只实现 Kernel 真正会调的那两个 RPC。别的名字直接炸。 */
     async rpc(name: string, args: Record<string, unknown>) {
       if (name === 'kernel_begin_authorized_run') {
         return { data: [beginAuthorizedRun(args)], error: null }
+      }
+      if (name === 'kernel_resolve_pending_approval') {
+        return { data: [resolvePendingApproval(args)], error: null }
       }
       if (name !== 'kernel_claim_run_step') {
         throw new Error(`[fake-supabase] 没有建模的 RPC：${name}`)

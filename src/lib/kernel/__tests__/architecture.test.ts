@@ -303,7 +303,7 @@ describe('lineage 视图的权限（C1）', () => {
 
   it('两个 RPC 的 EXECUTE 也都收了口（同一类漏洞，一起盯）', () => {
     const sql = read(MIGRATION)
-    for (const fn of ['kernel_claim_run_step', 'kernel_begin_authorized_run']) {
+    for (const fn of ['kernel_claim_run_step', 'kernel_begin_authorized_run', 'kernel_resolve_pending_approval']) {
       expect(
         new RegExp(
           `REVOKE\\s+EXECUTE\\s+ON\\s+FUNCTION\\s+public\\.${fn}[^;]*FROM\\s+PUBLIC\\s*,\\s*anon\\s*,\\s*authenticated`,
@@ -318,11 +318,12 @@ describe('lineage 视图的权限（C1）', () => {
     const sql = read(MIGRATION)
     // 政策查询必须是「from<=now 且 (to IS NULL 或 to>now)」——
     // 用 effective_to IS NULL 当过滤条件会把带结束时间但没到期的政策当成不存在
+    const windows = sql.match(
+      /effective_from\s*<=\s*now\(\)\s+AND\s+\(p\.effective_to\s+IS\s+NULL\s+OR\s+p\.effective_to\s*>\s*now\(\)\)/gi,
+    )
     expect(
-      /effective_from\s*<=\s*now\(\)\s+AND\s+\(p\.effective_to\s+IS\s+NULL\s+OR\s+p\.effective_to\s*>\s*now\(\)\)/i.test(
-        sql,
-      ),
-      'kernel_begin_authorized_run 的政策查询必须按时间窗过滤，跟 store.isPolicyActive 完全一致',
+      (windows ?? []).length >= 2,
+      '两个会查政策的 RPC（begin / resolve_pending_approval）的时间窗必须都在，且跟 store.isPolicyActive 完全一致',
     ).toBe(true)
   })
 })

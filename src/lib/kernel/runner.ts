@@ -19,7 +19,7 @@ import type { KernelDeps } from './deps'
 import type { ExecutionResult } from './gateway'
 import { KernelError } from './errors'
 import { authorizeRun, approveRun, rejectRun } from './authorize'
-import { executeAuthorizedRun } from './gateway'
+import { executeAuthorizedRun, rehydrateSucceededRun } from './gateway'
 import { computeIdempotencyKey, computeUnknownActionKey } from './idempotency'
 import {
   findRunByIdempotencyKey,
@@ -205,21 +205,17 @@ export async function runAction(
   const submitted = await submitActionRun(deps, input)
   const run = submitted.run
 
-  // 幂等命中：已经做完的事不再做第二遍，capability 一次都不调
+  // 幂等命中：已经做完的事不再做第二遍，capability 一次都不调。
+  // 🔴 但返回的必须是**第一次的真实结果**（产物 + 验证），不是一个空壳 ——
+  //    调用方丢了首次响应重试时，拿到 null 等于逼它自己去翻步骤表。
+  //    历史数据对不上契约时 rehydrate 会抛错（fail closed），不假装成功。
   if (submitted.existing && run.status === 'succeeded') {
     return {
       kind: 'idempotent_hit',
       run,
       decision: null,
-      execution: {
-        status: 'succeeded',
-        run,
-        steps: await listSteps(deps.supabase, run.id),
-        output: null,
-        idempotentHit: true,
-        verification: null,
-      },
-      humanReason: '这件事之前已经做过了，没有重复做',
+      execution: await rehydrateSucceededRun(deps, run),
+      humanReason: '这件事之前已经做过了，没有重复做（返回的是第一次的结果）',
     }
   }
 

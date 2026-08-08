@@ -87,17 +87,23 @@ export async function getActivePolicy(
   actionKey: string,
   now: Date,
 ): Promise<ClientAutomationPolicy | null> {
+  // 🔴 时间窗过滤必须发生在**数据库侧、截断之前**。
+  //    早先是「先取最近 20 行、再在内存里挑」—— 客户排了 20+ 条未来生效的
+  //    定时政策时，真正在生效的那条（effective_from 更早）会被截掉，
+  //    应用层报「没配政策」而 RPC 却查得到它 —— 两边口径又分家了。
+  const nowIso = now.toISOString()
   const { data, error } = await sb
     .from(TABLE_POLICIES)
     .select(POLICY_COLUMNS)
     .eq('client_id', clientId)
     .eq('action_key', actionKey)
+    .lte('effective_from', nowIso)
+    .or(`effective_to.is.null,effective_to.gt.${nowIso}`)
     .order('effective_from', { ascending: false })
-    .limit(20)
+    .limit(1)
   if (error) fail('读取客户自动化政策', error)
 
-  const rows = (data ?? []) as unknown as ClientAutomationPolicy[]
-  return rows.find((p) => isPolicyActive(p, now)) ?? null
+  return ((data ?? [])[0] as unknown as ClientAutomationPolicy | undefined) ?? null
 }
 
 /**
@@ -105,6 +111,7 @@ export async function getActivePolicy(
  *
  * 只用于把 deny 的理由说准（「规则过期了」vs「从来没配过规则」）——
  * 两句话引导人做的事不一样：前者是续一条，后者是新配一条。
+ * 判据同样下推到数据库（effective_to <= now 的行存在即可），不受行数截断影响。
  */
 export async function hasExpiredPolicy(
   sb: SupabaseClient,
@@ -114,14 +121,13 @@ export async function hasExpiredPolicy(
 ): Promise<boolean> {
   const { data, error } = await sb
     .from(TABLE_POLICIES)
-    .select('id, effective_to')
+    .select('id')
     .eq('client_id', clientId)
     .eq('action_key', actionKey)
-    .limit(20)
+    .lte('effective_to', now.toISOString())
+    .limit(1)
   if (error) fail('读取客户自动化政策历史', error)
-  return ((data ?? []) as unknown as Array<{ effective_to: string | null }>).some(
-    (p) => p.effective_to !== null && Date.parse(p.effective_to) <= now.getTime(),
-  )
+  return ((data ?? []) as unknown as Array<{ id: string }>).length > 0
 }
 
 // ── Run ───────────────────────────────────────────────────────────────────────
@@ -183,6 +189,29 @@ export async function updateRun(
   const updated = (data ?? [])[0] as unknown as ActionRun | undefined
   if (!updated) fail('更新执行实例', { message: `没有匹配到 run ${runId}` })
   return updated
+}
+
+/**
+ * 带状态守卫的 run 更新：只有 run **仍然**停在 expectedStatus 时才写。
+ *
+ * 🔴 用在人工路径的失败落地上。无条件的 update 会让一次迟到的「拒绝落库」
+ *    把已经在跑（甚至已经跑完）的 run 拽回 denied —— 状态是别人赢来的，
+ *    输家不许覆盖。返回 null = 守卫没命中（run 已被别人推进），调用方停手。
+ */
+export async function updateRunIf(
+  sb: SupabaseClient,
+  runId: string,
+  expectedStatus: RunStatus,
+  patch: Partial<ActionRun> & { status?: RunStatus },
+): Promise<ActionRun | null> {
+  const { data, error } = await sb
+    .from(TABLE_RUNS)
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq('id', runId)
+    .eq('status', expectedStatus)
+    .select(RUN_COLUMNS)
+  if (error) fail('条件更新执行实例', error)
+  return ((data ?? [])[0] as unknown as ActionRun | undefined) ?? null
 }
 
 // ── 授权决策（append-only） ───────────────────────────────────────────────────
@@ -252,6 +281,49 @@ export async function beginAuthorizedRun(
   // 🔴 拿不到返回行不能当成「成功」。RPC 一定会返回一行；返回不了说明调用本身有问题。
   if (!row) fail('领取执行权', { message: 'RPC 没有返回结果行' })
   return { ok: Boolean(row.ok), reason: String(row.reason ?? 'unknown') }
+}
+
+/**
+ * 人工批准 / 拒绝的原子状态转换（走 `kernel_resolve_pending_approval` RPC）。
+ *
+ * 🔴 批准和拒绝抢的是**同一把 run 行锁**：谁先锁到谁说了算。
+ *    输的一方拿到机器可读的 reason（not_pending / decision_not_current / …），
+ *    绝不覆盖赢家写下的状态 —— 这条 RPC 是「capability 不会被人工双击执行两次」
+ *    的唯一保证，应用层的 preflight 只负责把话说人话。
+ */
+export interface ResolveApprovalResult {
+  ok: boolean
+  reason: string
+  decisionId: string | null
+}
+
+export async function resolvePendingApproval(
+  sb: SupabaseClient,
+  args: {
+    runId: string
+    pendingDecisionId: string
+    resolution: 'approve' | 'reject'
+    resolvedBy: string
+    reason: string
+    policySnapshot: Record<string, unknown>
+    costEstimateUsd: number | null
+  },
+): Promise<ResolveApprovalResult> {
+  const { data, error } = await sb.rpc('kernel_resolve_pending_approval', {
+    p_run_id: args.runId,
+    p_pending_decision_id: args.pendingDecisionId,
+    p_resolution: args.resolution,
+    p_resolved_by: args.resolvedBy,
+    p_reason: args.reason,
+    p_policy_snapshot: args.policySnapshot,
+    p_cost_estimate_usd: args.costEstimateUsd,
+  })
+  if (error) fail('人工批准/拒绝', error)
+  const row = (data ?? [])[0] as unknown as
+    | { ok: boolean; reason: string; decision_id: string | null }
+    | undefined
+  if (!row) fail('人工批准/拒绝', { message: 'RPC 没有返回结果行' })
+  return { ok: Boolean(row.ok), reason: String(row.reason ?? 'unknown'), decisionId: row.decision_id ?? null }
 }
 
 // ── Step ──────────────────────────────────────────────────────────────────────

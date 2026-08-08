@@ -24,7 +24,16 @@ import type {
 } from './types'
 import type { KernelDeps } from './deps'
 import { validateAgainstSchema } from './registry'
-import { getActivePolicy, getDecision, hasExpiredPolicy, insertDecision, updateRun } from './store'
+import {
+  getActivePolicy,
+  getDecision,
+  hasExpiredPolicy,
+  insertDecision,
+  resolvePendingApproval,
+  updateRun,
+  updateRunIf,
+} from './store'
+import { KernelError } from './errors'
 
 export interface AuthorizationOutcome {
   verdict: Verdict
@@ -96,6 +105,13 @@ interface DenyArgs {
   code: DenyCode
   reason: string
   costEstimate: number | null
+  /**
+   * 🔴 只在 run **仍然**停在这个状态时才落 denied。
+   *    人工批准的失败路径必须带上它（'pending_approval'）——
+   *    不带的话，一次迟到的「批不了」会把并发赢家已经推进 running 的 run
+   *    拽回 denied。守卫没命中 = 别人赢了，这里抛错停手，绝不覆盖。
+   */
+  onlyIfStatus?: ActionRun['status']
 }
 
 async function recordDeny(deps: KernelDeps, args: DenyArgs): Promise<AuthorizationOutcome> {
@@ -118,15 +134,28 @@ async function recordDeny(deps: KernelDeps, args: DenyArgs): Promise<Authorizati
     expires_at: null,
   })
 
-  const run = await updateRun(deps.supabase, args.run.id, {
-    status: 'denied',
+  const patch = {
+    status: 'denied' as const,
     authorization_decision_id: decision.id,
     // 🔴 被拒绝也要有人看见。拒绝只写进日志 = 发现死在日志里。
     needs_human: true,
     last_error: args.reason,
     finished_at: deps.now().toISOString(),
-  })
+  }
 
+  if (args.onlyIfStatus) {
+    const guarded = await updateRunIf(deps.supabase, args.run.id, args.onlyIfStatus, patch)
+    if (!guarded) {
+      throw new KernelError(
+        'INVALID_STATE',
+        '这条动作刚刚已经被别人处理了（批准或拒绝发生在你前面），这次操作没有生效',
+        { detail: { runId: args.run.id, denyCode: args.code } },
+      )
+    }
+    return { verdict: 'deny', decision, run: guarded, ctx: null }
+  }
+
+  const run = await updateRun(deps.supabase, args.run.id, patch)
   return { verdict: 'deny', decision, run, ctx: null }
 }
 
@@ -364,8 +393,9 @@ export async function approveRun(
   const run = await deps.requireRun(runId)
 
   if (run.status !== 'pending_approval') {
-    throw new Error(
-      `[kernel/authorize] 这条动作现在的状态是「${run.status}」，不是在等人点头，不能批准`,
+    throw new KernelError(
+      'INVALID_STATE',
+      `这条动作现在的状态是「${run.status}」，不是在等人点头，不能批准`,
     )
   }
 
@@ -381,10 +411,12 @@ export async function approveRun(
       code: 'approval_context_lost',
       reason: `${approvedByUser} 点了同意，但找不到当初挂起这条动作的那份审批请求了 —— 不能凭空签一份放行，请重新排一次`,
       costEstimate: null,
+      onlyIfStatus: 'pending_approval',
     })
   }
 
-  // ② 全套授权不变量重跑一遍（跟自动放行同一套闸）
+  // ② 全套授权不变量重跑一遍（跟自动放行同一套闸）—— 这里说人话；
+  //    数据库 RPC 之后还会重查所有「这里和提交之间可能变化」的库内事实。
   const pf = await preflight(deps, run, now)
   if (!pf.ok) {
     return recordDeny(deps, {
@@ -394,13 +426,13 @@ export async function approveRun(
       code: pf.code,
       reason: `${approvedByUser} 点了同意，但这条现在已经不能做了：${pf.reason}`,
       costEstimate: pf.costEstimate,
+      onlyIfStatus: 'pending_approval',
     })
   }
 
-  const { definition, policy, costEstimate, costCap } = pf
+  const { definition, policy, costEstimate } = pf
 
   // ③ 当前政策必须**仍然**是「要审批」。
-  //    改成了自动，说明规则已经变了，这条该重新走一次授权，而不是靠人补签。
   if (policy.mode !== 'require_approval') {
     return recordDeny(deps, {
       run,
@@ -409,11 +441,11 @@ export async function approveRun(
       code: 'policy_changed_since_request',
       reason: `${approvedByUser} 点了同意，但这个客户的规则在挂起之后被改成了「${policy.mode === 'auto_approve' ? '自动执行' : policy.mode}」—— 规则变了就不能按旧的审批请求放行，请重新排一次`,
       costEstimate,
+      onlyIfStatus: 'pending_approval',
     })
   }
 
-  // ④ 而且必须是**同一行**政策（C2）。「删掉重建」的新行版本号可能跟旧行一样，
-  //    但行身份（uuid）造不出第二个 —— 你在待办里看到的是旧规则下的请求。
+  // ④ 而且必须是**同一行**政策（C2）。
   if (policy.id !== pending.policy_id) {
     return recordDeny(deps, {
       run,
@@ -422,10 +454,11 @@ export async function approveRun(
       code: 'policy_changed_since_request',
       reason: `${approvedByUser} 点了同意，但这个客户的规则在挂起之后被删掉重建过 —— 你看到的还是旧规则下的请求，请重新排一次`,
       costEstimate,
+      onlyIfStatus: 'pending_approval',
     })
   }
 
-  // ⑤ 而且必须是**同一版**。版本变了 = 上限 / 有效期 / 模式动过。
+  // ⑤ 而且必须是**同一版**。
   if (policy.policy_version !== pending.policy_version) {
     return recordDeny(deps, {
       run,
@@ -434,37 +467,39 @@ export async function approveRun(
       code: 'policy_changed_since_request',
       reason: `${approvedByUser} 点了同意，但这个客户的规则在挂起之后改过（第 ${pending.policy_version} 版 → 第 ${policy.policy_version} 版）—— 你看到的还是旧规则下的请求，请重新排一次`,
       costEstimate,
+      onlyIfStatus: 'pending_approval',
     })
   }
 
-  const decision = await insertDecision(deps.supabase, {
-    action_run_id: run.id,
-    client_id: run.client_id,
-    action_key: run.action_key,
-    action_version: run.action_version,
-    verdict: 'allow',
-    deny_code: null,
+  // ⑥ 🔴 原子转换：签放行 + run → authorized 在数据库同一个事务里完成。
+  //    两个人同时批准（或一次双击）时，抢的是同一把 run 行锁 ——
+  //    输的一方在这里拿到 not_pending / decision_not_current，绝不覆盖赢家。
+  //    RPC 内部会把政策三连（行身份 / 版本 / 模式）再查一遍，
+  //    挡住「preflight 和这里之间政策又变了」的窗口。
+  const resolved = await resolvePendingApproval(deps.supabase, {
+    runId: run.id,
+    pendingDecisionId: pending.id,
+    resolution: 'approve',
+    resolvedBy: approvedByUser,
     reason: `${approvedByUser} 点了同意（规则自挂起以来没变过，仍是第 ${policy.policy_version} 版）`,
-    policy_snapshot: snapshotOf(policy, definition),
-    policy_id: policy.id,
-    policy_version: policy.policy_version,
-    decided_by: 'human',
-    decided_by_user: approvedByUser,
-    cost_cap_usd: costCap,
-    cost_estimate_usd: costEstimate,
-    idempotency_key: run.idempotency_key,
-    expires_at: new Date(now.getTime() + policy.decision_ttl_seconds * 1000).toISOString(),
+    policySnapshot: snapshotOf(policy, definition),
+    costEstimateUsd: costEstimate,
   })
+  if (!resolved.ok || !resolved.decisionId) {
+    throw new KernelError(
+      'INVALID_STATE',
+      `这条动作刚刚已经被别人处理了或状态变了（${resolved.reason}），这次批准没有生效`,
+      { detail: { reason: resolved.reason } },
+    )
+  }
 
-  const updated = await updateRun(deps.supabase, run.id, {
-    status: 'authorized',
-    authorization_decision_id: decision.id,
-    cost_cap_usd: costCap,
-    cost_estimate_usd: costEstimate,
-    needs_human: false,
-  })
+  const decision = await getDecision(deps.supabase, resolved.decisionId)
+  if (!decision) {
+    throw new KernelError('INVALID_STATE', '批准已生效但读不回新签的决策 —— 库状态不一致，先别继续')
+  }
+  const updated = await deps.requireRun(run.id)
 
-  return { verdict: 'allow', decision, run: updated, ctx: mintContext(decision, costCap) }
+  return { verdict: 'allow', decision, run: updated, ctx: mintContext(decision, decision.cost_cap_usd) }
 }
 
 /** 人点了「不做」。同样是新签一条决策。 */
@@ -477,32 +512,47 @@ export async function rejectRun(
   const run = await deps.requireRun(runId)
   const definition = deps.registry.get(run.action_key)
 
-  const decision = await insertDecision(deps.supabase, {
-    action_run_id: run.id,
-    client_id: run.client_id,
-    action_key: run.action_key,
-    action_version: run.action_version,
-    verdict: 'deny',
-    deny_code: 'policy_deny',
-    reason: `${rejectedByUser} 点了不做：${reason}`,
-    policy_snapshot: snapshotOf(null, definition),
-    policy_id: null,
-    policy_version: null,
-    decided_by: 'human',
-    decided_by_user: rejectedByUser,
-    cost_cap_usd: run.cost_cap_usd,
-    cost_estimate_usd: run.cost_estimate_usd,
-    idempotency_key: run.idempotency_key,
-    expires_at: null,
-  })
+  // 🔴 只能拒绝**仍在等审批**的 run。running / succeeded / denied 一律不许覆盖 ——
+  //    「对已过期页面重复点不做」和「拒绝跟批准赛跑」都会走到这里。
+  if (run.status !== 'pending_approval') {
+    throw new KernelError(
+      'INVALID_STATE',
+      `这条动作现在的状态是「${run.status}」，不是在等审批，不能拒绝（它可能已经被批准执行了）`,
+    )
+  }
+  const pending = run.authorization_decision_id
+    ? await getDecision(deps.supabase, run.authorization_decision_id)
+    : null
+  if (!pending || pending.verdict !== 'require_approval') {
+    throw new KernelError(
+      'INVALID_STATE',
+      '找不到当初挂起这条动作的那份审批请求，不能拒绝 —— 请刷新后重试',
+    )
+  }
 
-  const updated = await updateRun(deps.supabase, run.id, {
-    status: 'denied',
-    authorization_decision_id: decision.id,
-    needs_human: false,
-    last_error: reason,
-    finished_at: deps.now().toISOString(),
+  // 原子转换：跟批准抢同一把 run 行锁，输的一方拿到机器可读原因。
+  const resolved = await resolvePendingApproval(deps.supabase, {
+    runId: run.id,
+    pendingDecisionId: pending.id,
+    resolution: 'reject',
+    resolvedBy: rejectedByUser,
+    reason: `${rejectedByUser} 点了不做：${reason}`,
+    policySnapshot: snapshotOf(null, definition),
+    costEstimateUsd: run.cost_estimate_usd,
   })
+  if (!resolved.ok || !resolved.decisionId) {
+    throw new KernelError(
+      'INVALID_STATE',
+      `这条动作刚刚已经被别人处理了或状态变了（${resolved.reason}），这次拒绝没有生效`,
+      { detail: { reason: resolved.reason } },
+    )
+  }
+
+  const decision = await getDecision(deps.supabase, resolved.decisionId)
+  if (!decision) {
+    throw new KernelError('INVALID_STATE', '拒绝已生效但读不回新签的决策 —— 库状态不一致')
+  }
+  const updated = await deps.requireRun(run.id)
 
   return { verdict: 'deny', decision, run: updated, ctx: null }
 }

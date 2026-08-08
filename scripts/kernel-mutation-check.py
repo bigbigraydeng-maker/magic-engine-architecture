@@ -68,6 +68,7 @@ MUTATIONS = [
       code: pf.code,
       reason: `${approvedByUser} 点了同意，但这条现在已经不能做了：${pf.reason}`,
       costEstimate: pf.costEstimate,
+      onlyIfStatus: 'pending_approval',
     })
   }""",
         new="""  const pf = await preflight(deps, run, now)
@@ -79,6 +80,7 @@ MUTATIONS = [
       code: 'no_policy',
       reason: `${approvedByUser}`,
       costEstimate: null,
+      onlyIfStatus: 'pending_approval',
     })
   }""",
         test="src/lib/kernel/__tests__/human-approval.test.ts",
@@ -353,6 +355,143 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         new="""          (p.effective_to === null || p.effective_to === undefined),""",
         test="src/lib/kernel/__tests__/store.test.ts",
         expect_fail_contains="带结束时间",
+    ),
+    # ── R1(P1)：人工批准/拒绝的原子性 ────────────────────────────────────
+    dict(
+        name="R1 resolve 复刻去掉 status CAS（running 也能被批/拒覆盖）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (run.status !== 'pending_approval') return no(`not_pending:${String(run.status)}`)
+    if (run.authorization_decision_id !== pendingId) return no('decision_not_current')""",
+        new="""    if (run.authorization_decision_id !== pendingId) return no('decision_not_current')""",
+        test="src/lib/kernel/__tests__/store.test.ts",
+        expect_fail_contains="status CAS",
+    ),
+    dict(
+        name="R1 resolve 复刻去掉 current-decision CAS",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (run.authorization_decision_id !== pendingId) return no('decision_not_current')
+
+    const pending = tableOf('authorization_decisions').find((d) => d.id === pendingId)""",
+        new="""    const pending = tableOf('authorization_decisions').find((d) => d.id === pendingId)""",
+        test="src/lib/kernel/__tests__/store.test.ts",
+        expect_fail_contains="current-decision CAS",
+    ),
+    dict(
+        name="R1 approveRun 的失败落地不再带状态守卫（迟到的批不了会覆盖赢家）",
+        file="src/lib/kernel/authorize.ts",
+        old="""  if (args.onlyIfStatus) {
+    const guarded = await updateRunIf(deps.supabase, args.run.id, args.onlyIfStatus, patch)""",
+        new="""  if (false) {
+    const guarded = await updateRunIf(deps.supabase, args.run.id, args.onlyIfStatus as never, patch)""",
+        test="src/lib/kernel/__tests__/approval-concurrency.test.ts",
+        expect_fail_contains="失败落地守卫",
+    ),
+    # ── P2-1：reject 的应用层状态闸（跟 RPC 那道可区分） ─────────────────
+    dict(
+        name="P2-1 rejectRun 去掉应用层状态闸（只剩 RPC 那道，错误话术变了）",
+        file="src/lib/kernel/authorize.ts",
+        old="""  if (run.status !== 'pending_approval') {
+    throw new KernelError(
+      'INVALID_STATE',
+      `这条动作现在的状态是「${run.status}」，不是在等审批，不能拒绝（它可能已经被批准执行了）`,
+    )
+  }""",
+        new="""  if (false) {
+    throw new KernelError(
+      'INVALID_STATE',
+      `这条动作现在的状态是「${run.status}」，不是在等审批，不能拒绝（它可能已经被批准执行了）`,
+    )
+  }""",
+        test="src/lib/kernel/__tests__/approval-concurrency.test.ts",
+        expect_fail_contains="应用层状态闸",
+    ),
+    # ── P2-2：装配校验 ───────────────────────────────────────────────────
+    dict(
+        name="P2-2 去掉装配校验（v2 授权悄悄跑 v1 实现）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  if (assembled) {
+    if (assembled.actionKey !== definition.actionKey || assembled.version !== definition.version) {""",
+        new="""  if (false) {
+    if (assembled!.actionKey !== definition.actionKey || assembled!.version !== definition.version) {""",
+        test="src/lib/kernel/__tests__/assembly-and-rehydration.test.ts",
+        expect_fail_contains="装配校验",
+    ),
+    # ── P2-3：幂等重建 ───────────────────────────────────────────────────
+    dict(
+        name="P2-3 幂等命中退回返回 null 空壳",
+        file="src/lib/kernel/runner.ts",
+        old="""      execution: await rehydrateSucceededRun(deps, run),""",
+        new="""      execution: {
+        status: 'succeeded' as const,
+        run,
+        steps: await listSteps(deps.supabase, run.id),
+        output: null,
+        idempotentHit: true,
+        verification: null,
+      },""",
+        test="src/lib/kernel/__tests__/assembly-and-rehydration.test.ts",
+        expect_fail_contains="返回 null 空壳",
+    ),
+    dict(
+        name="P2-3 重建不再 fail closed（缺验证也当成功）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  if (definition.verification && (!verification || !verification.passed)) {
+    throw new KernelError(
+      'INVALID_STATE',
+      '这条执行标着成功，但存下来的验证记录缺失或未通过 —— 历史数据不一致',
+      { detail: { runId: run.id } },
+    )
+  }""",
+        new="""  if (false) {
+    throw new KernelError(
+      'INVALID_STATE',
+      '这条执行标着成功，但存下来的验证记录缺失或未通过 —— 历史数据不一致',
+      { detail: { runId: run.id } },
+    )
+  }""",
+        test="src/lib/kernel/__tests__/assembly-and-rehydration.test.ts",
+        expect_fail_contains="fail closed",
+    ),
+    # ── P2-4：时间窗过滤在截断之前 ───────────────────────────────────────
+    dict(
+        name="P2-4 getActivePolicy 退回「先 limit(20) 再内存过滤」",
+        file="src/lib/kernel/store.ts",
+        old="""  const nowIso = now.toISOString()
+  const { data, error } = await sb
+    .from(TABLE_POLICIES)
+    .select(POLICY_COLUMNS)
+    .eq('client_id', clientId)
+    .eq('action_key', actionKey)
+    .lte('effective_from', nowIso)
+    .or(`effective_to.is.null,effective_to.gt.${nowIso}`)
+    .order('effective_from', { ascending: false })
+    .limit(1)
+  if (error) fail('读取客户自动化政策', error)
+
+  return ((data ?? [])[0] as unknown as ClientAutomationPolicy | undefined) ?? null""",
+        new="""  const { data, error } = await sb
+    .from(TABLE_POLICIES)
+    .select(POLICY_COLUMNS)
+    .eq('client_id', clientId)
+    .eq('action_key', actionKey)
+    .order('effective_from', { ascending: false })
+    .limit(20)
+  if (error) fail('读取客户自动化政策', error)
+
+  const rows = (data ?? []) as unknown as ClientAutomationPolicy[]
+  return rows.find((p) => isPolicyActive(p, now)) ?? null""",
+        test="src/lib/kernel/__tests__/policy-window.test.ts",
+        expect_fail_contains="25 条未来政策",
+    ),
+    dict(
+        name="P2-4 假件的 .or 解析变成永真（过滤器变漏勺）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""      case 'or':
+        return orMatches(row, String(f.value))""",
+        new="""      case 'or':
+        return true""",
+        test="src/lib/kernel/__tests__/policy-window.test.ts",
+        expect_fail_contains=".or 永真",
     ),
     # ── P1-4：migration 版本撞车 ─────────────────────────────────────────
     dict(

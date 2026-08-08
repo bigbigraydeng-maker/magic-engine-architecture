@@ -75,6 +75,91 @@ describe('C5 · isPolicyActive 的四种窗口', () => {
   })
 })
 
+describe('P2-4 · 时间窗过滤必须发生在截断之前（数据库侧）', () => {
+  /** 造 N 条未来才生效的定时政策（模拟客户排了一整年的计划）。 */
+  function futurePolicies(n: number) {
+    return Array.from({ length: n }, (_, i) => ({
+      id: `policy-future-${String(i).padStart(2, '0')}`,
+      client_id: CLIENT_A,
+      action_key: KEY,
+      mode: 'deny', // 未来的政策是禁止 —— 选错行的话行为立刻不同
+      policy_version: 1,
+      spend_cap_per_run_usd: 0,
+      spend_cap_per_period_usd: null,
+      spend_cap_period: null,
+      decision_ttl_seconds: 900,
+      // 全部晚于冻结时钟（2026-08-08T02:00Z），且晚于当前生效那条
+      effective_from: `2026-09-${String((i % 28) + 1).padStart(2, '0')}T0${i % 10}:00:00.000Z`,
+      effective_to: null,
+      updated_by: 'scheduler',
+    }))
+  }
+
+  it('🔴 25 条未来政策排在前面，当前真正生效的那条（更早）仍然找得到', async () => {
+    // 早先是「先取最近 20 行再内存过滤」：25 条未来行按 effective_from 倒序
+    // 全排在生效那条前面 → 生效那条被截掉 → 应用层报「没配政策」，
+    // 而 RPC 却查得到它 —— 两边口径分家。
+    const f = makeFixture({
+      registry: ACTION_REGISTRY,
+      capabilities: createCapabilities,
+      options: { policy: policyWith({}) }, // policy-1，effective_from=2026-08-01，auto
+    })
+    f.tables.client_automation_policies.push(...futurePolicies(25))
+    expect(f.tables.client_automation_policies).toHaveLength(26)
+
+    const outcome = await runAction(f.kernel, submit())
+
+    expect(outcome.kind).toBe('succeeded')
+    expect(f.tables.authorization_decisions[0].policy_id).toBe('policy-1')
+    expect(f.tables.production_packages).toHaveLength(1)
+  })
+
+  it('多条都在生效时 → 确定性取 effective_from 最新的那条', async () => {
+    const f = makeFixture({
+      registry: ACTION_REGISTRY,
+      capabilities: createCapabilities,
+      options: { policy: policyWith({ from: '2026-08-01T00:00:00.000Z' }) },
+    })
+    // 第二条也在生效，且 from 更晚 —— 该赢
+    f.tables.client_automation_policies.push({
+      id: 'policy-newer',
+      client_id: CLIENT_A,
+      action_key: KEY,
+      mode: 'require_approval',
+      policy_version: 1,
+      spend_cap_per_run_usd: 0,
+      spend_cap_per_period_usd: null,
+      spend_cap_period: null,
+      decision_ttl_seconds: 900,
+      effective_from: '2026-08-05T00:00:00.000Z',
+      effective_to: null,
+      updated_by: 'settings-ui',
+    })
+
+    const outcome = await runAction(f.kernel, submit())
+
+    // 赢的是更晚那条 require_approval —— 不是随缘取一条
+    expect(outcome.kind).toBe('pending_approval')
+    expect(f.tables.authorization_decisions[0].policy_id).toBe('policy-newer')
+  })
+
+  it('人工批准路径同一口径：25 条未来政策挡不住批准', async () => {
+    const f = makeFixture({
+      registry: ACTION_REGISTRY,
+      capabilities: createCapabilities,
+      options: { policy: { ...policyWith({}), mode: 'require_approval' } },
+    })
+    f.tables.client_automation_policies.push(...futurePolicies(25))
+
+    const pending = await runAction(f.kernel, submit())
+    expect(pending.kind).toBe('pending_approval')
+
+    const { approveRun } = await import('../authorize')
+    const approved = await approveRun(f.kernel, pending.run.id, 'ray@magiclab')
+    expect(approved.verdict).toBe('allow')
+  })
+})
+
 describe('C5 · 三条执行路径同一个口径', () => {
   it('🔴 Gateway 全链路：带结束时间但没到期的政策 → 正常自动执行（不再 no_policy）', async () => {
     const f = makeFixture({

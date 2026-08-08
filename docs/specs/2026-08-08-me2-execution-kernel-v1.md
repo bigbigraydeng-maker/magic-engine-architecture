@@ -5,7 +5,9 @@
 > 没有任何现有代码路径经过它。合并 + apply migration + 启用各需要 PM 单独 `go`。
 > migration 版本号是 `20260808000003` —— 原本用 000001，跟并行的 PR #862 撞了。
 > 第三轮（Codex review）：视图权限收口 · 授权绑定政策行身份 + 模式复核 ·
-> 可恢复 deny 的显式重授权 · Goal 跨客户双层防护 · 政策时间窗（见 §5.x / §6.x / §13）。
+> 可恢复 deny 的显式重授权 · Goal 跨客户双层防护 · 政策时间窗。
+> 第四轮（Codex review 2）：人工批准/拒绝原子化（`kernel_resolve_pending_approval`）·
+> capability 装配运行时校验 · 幂等命中重建历史结果 · 政策时间窗过滤下推到数据库。
 
 ---
 
@@ -97,6 +99,44 @@ queued → authorizing → { authorized | pending_approval | denied }
 
 AI 可以**提出**任何动作，但注册表认不出的一律 deny，**并落一条 `deny_code='unknown_action'` 的决策记录**。
 不是静默跳过 —— 否则「AI 提了个我们没实现的动作」这件事没人看得见。
+
+### 🔴 人工批准 / 拒绝是数据库原子转换（R1 / P2-1）
+
+批准和拒绝都走 `kernel_resolve_pending_approval`（`SECURITY DEFINER`，EXECUTE 已收权）：
+`FOR UPDATE` 锁 run → **status 必须仍是 `pending_approval`** →
+**run 当前指着的必须还是这份审批请求** → 锁 pending decision 并核对身份 →
+（批准时）政策三连 + run/pending 身份逐项比对 → 原子签新决策 + 推状态。
+
+要防的形状：两人（或双击）同时批准 → 各签一份放行 → A 开跑推进 running →
+B 的无条件 update 把 run 拽回 authorized 换上自己那份 → B 再领执行权 →
+**capability 执行两次**。现在批准/拒绝/另一次批准抢**同一把 run 行锁**，
+输家拿到机器可读原因（not_pending / decision_not_current），绝不覆盖赢家。
+
+拒绝额外规则：只能拒**仍在等审批**的 run（running / succeeded / denied 不许覆盖）；
+拒绝不查政策 —— 政策删了变了，人依然有权说「不做」。
+应用层失败落地（recordDeny）在人工路径带状态守卫（`onlyIfStatus='pending_approval'`）：
+迟到批准人的「批不了」不许把赢家已经跑完的 run 拽回 denied。
+
+### 🔴 capability 装配必须对得上契约（P2-2）
+
+授权按注册表契约签，执行的却是 `deps.capabilities` 里**分开装配**的实现。
+注册表升 v2、装配还插着 v1 时：领执行权之前运行时校验
+`capability.actionKey === definition.actionKey && capability.version === definition.version`，
+不一致 fail closed 且**不消费授权**（修好装配还能跑）。不信 TS 类型 —— 这是装配不变量。
+
+### 🔴 幂等命中返回第一次的真实结果（P2-3）
+
+同一把幂等键重试，返回**跟第一次等价的结果**（产物 + 验证），只是 capability 不再执行。
+重建按 `ActionDefinition.steps` 契约顺序（不是「数组最后一条」）；
+run 标着成功但历史步骤缺产物 / 缺验证 / 产物不合契约 → fail closed 抛错，
+**不返回假的 success + null**。
+
+### 🔴 政策时间窗过滤在截断之前（P2-4）
+
+`getActivePolicy` 把时间窗下推到数据库（`lte(effective_from) + or(to.is.null, to.gt.now)` +
+`ORDER BY effective_from DESC LIMIT 1`）。早先「先取 20 行再内存过滤」：
+客户排 20+ 条未来定时政策时，真正生效的那条被截掉 → 应用层报没政策、RPC 却查得到 ——
+两边口径分家。现在应用层与两个 RPC 三处同口径，架构测试锁定。
 
 ### 🔴 人工批准盖不过当前政策（P1-1）
 

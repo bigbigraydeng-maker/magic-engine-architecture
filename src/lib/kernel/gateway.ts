@@ -222,6 +222,22 @@ export async function executeAuthorizedRun(
     )
   }
 
+  // ⑤b 🔴 装配校验（运行时，不信 TS 类型）：授权按注册表契约签，
+  //    执行的却是 deps.capabilities 里装配的实现 —— 两者是**分开装配**的。
+  //    注册表升到 v2 而装配还插着 v1 实现时，授权会按 v2 签、v1 悄悄跑掉。
+  //    对不上一律 fail closed，且**不去领执行权**（授权不被消费，修好装配还能跑）。
+  const assembled = deps.capabilities[ctx.actionKey] as CapabilityImplementation | undefined
+  if (assembled) {
+    if (assembled.actionKey !== definition.actionKey || assembled.version !== definition.version) {
+      throw new KernelError(
+        'ACTION_VERSION_MISMATCH',
+        `装配对不上契约：授权按「${definition.actionKey}」第 ${definition.version} 版签，` +
+          `装配的实现是「${assembled.actionKey}」第 ${assembled.version} 版 —— 先把装配修对，不执行`,
+        { detail: { expectedKey: definition.actionKey, expectedVersion: definition.version, actualKey: assembled.actionKey, actualVersion: assembled.version } },
+      )
+    }
+  }
+
   // ⑥ 🔴 原子领取「这个 run 的唯一执行权」。
   //
   //    上面第 ④ 步的重读比对是为了**说清楚为什么不让跑**（给人看的理由），
@@ -535,4 +551,82 @@ function verificationOf(steps: ActionRunStep[]): VerificationResult | null {
     if (steps[i].verification) return steps[i].verification
   }
   return null
+}
+
+// ── 幂等命中的历史结果重建（P2-3） ────────────────────────────────────────────
+
+/**
+ * 同一把幂等键再来一次，必须拿到**跟第一次等价的结果**，只是 capability 不再执行。
+ *
+ * 🔴 早先这个分支固定返回 `output: null / verification: null` —— 调用方丢了
+ *    第一次的响应再重试时，拿到的是一个「成功但什么都没有」的空壳。
+ *    步骤表里明明存着第一次的 package_id / output / verification。
+ *
+ * 重建按 **ActionDefinition.steps 的契约顺序**（不是「数组最后一条」）：
+ * 产物 = 契约里最后一个成功步骤的 output（跟当时判成功用的 `lastOutputOf` 同一套）。
+ *
+ * fail closed：run 明明是 succeeded，历史步骤却缺产物 / 缺验证 / 产物不合契约 ——
+ * 那是数据不一致，抛错，**不返回假的 success + null**。
+ */
+export async function rehydrateSucceededRun(
+  deps: KernelDeps,
+  run: ActionRun,
+): Promise<ExecutionResult> {
+  const definition = deps.registry.get(run.action_key)
+  // 契约版本变了的话，幂等键也会变（键里带 v<version>），根本不会命中这条 run。
+  // 走到这里却对不上 = 数据不一致，不猜。
+  if (!definition || definition.version !== run.action_version) {
+    throw new KernelError(
+      'INVALID_STATE',
+      `这条已完成的执行按第 ${run.action_version} 版契约跑，现在的注册表对不上 —— 历史结果无法按当前契约重建`,
+      { detail: { runId: run.id, runVersion: run.action_version, registryVersion: definition?.version ?? null } },
+    )
+  }
+
+  const steps = await listSteps(deps.supabase, run.id)
+
+  // 契约里的每一步都必须真的成功过 —— 缺一步都不是「成功的历史」
+  for (const key of definition.steps) {
+    const step = steps.find((x) => x.step_key === key)
+    if (!step || step.status !== 'succeeded') {
+      throw new KernelError(
+        'INVALID_STATE',
+        `这条执行标着成功，但步骤「${key}」的记录${step ? `是「${step.status}」` : '不见了'} —— 历史数据不一致，不能当成功返回`,
+        { detail: { runId: run.id, stepKey: key } },
+      )
+    }
+  }
+
+  const output = lastOutputOf(definition, steps)
+  if (!output) {
+    throw new KernelError('INVALID_STATE', '这条执行标着成功，但找不到任何步骤产物 —— 历史数据不一致', {
+      detail: { runId: run.id },
+    })
+  }
+  const outCheck = validateAgainstSchema(definition.outputSchema, output)
+  if (!outCheck.ok) {
+    throw new KernelError(
+      'INVALID_STATE',
+      `这条执行标着成功，但存下来的产物不合它自己的契约（${outCheck.reason}）—— 历史数据不一致`,
+      { detail: { runId: run.id } },
+    )
+  }
+
+  const verification = verificationOf(steps)
+  if (definition.verification && (!verification || !verification.passed)) {
+    throw new KernelError(
+      'INVALID_STATE',
+      '这条执行标着成功，但存下来的验证记录缺失或未通过 —— 历史数据不一致',
+      { detail: { runId: run.id } },
+    )
+  }
+
+  return {
+    status: 'succeeded',
+    run,
+    steps,
+    output,
+    idempotentHit: true,
+    verification,
+  }
 }

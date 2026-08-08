@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { beginAuthorizedRun, getActivePolicy, insertDecision, listSteps } from '../store'
+import { beginAuthorizedRun, getActivePolicy, insertDecision, listSteps, resolvePendingApproval } from '../store'
 import { createFakeSupabase, type Row } from './fake-supabase'
 import { CLIENT_A } from './fixtures'
 
@@ -225,6 +225,109 @@ describe('原子领取执行权（P1-2）', () => {
       const r = await beginAuthorizedRun(sb, RUN_ID, decision.id, 'w')
       expect(r).toEqual({ ok: false, reason })
     }
+  })
+})
+
+describe('resolve RPC 的两道 CAS 各自能咬人（R1）', () => {
+  // 🔴 在「两人赛跑」里这两道闸互为影子：A 赢了之后 status 和指针**都**变了，
+  //    拆掉任意一道另一道照样拦住 —— 端到端测试测不出单独哪道在。
+  //    所以这里直接对 RPC 造「只有那一道能拦」的库状态。
+
+  async function seedPending(sb: ReturnType<typeof createFakeSupabase>, tables: { action_runs: Row[] }) {
+    const pending = await insertDecision(sb, {
+      action_run_id: RUN_ID,
+      client_id: CLIENT_A,
+      action_key: 'seo.build_publish_package',
+      action_version: 1,
+      verdict: 'require_approval',
+      deny_code: null,
+      reason: '要你点头',
+      policy_snapshot: {},
+      policy_id: 'policy-1',
+      policy_version: 1,
+      decided_by: 'policy',
+      decided_by_user: null,
+      cost_cap_usd: 0,
+      cost_estimate_usd: 0,
+      idempotency_key: 'k',
+      expires_at: null,
+    })
+    tables.action_runs[0].status = 'pending_approval'
+    tables.action_runs[0].authorization_decision_id = pending.id
+    return pending
+  }
+
+  it('🔴 status CAS：指针没动、只有状态被推进（running）→ not_pending', async () => {
+    const { sb, tables } = seed({ policy: { mode: 'require_approval' } })
+    const pending = await seedPending(sb, tables)
+    // 只动状态、不动指针 —— 只有 status CAS 能拦
+    tables.action_runs[0].status = 'running'
+
+    const r = await resolvePendingApproval(sb, {
+      runId: RUN_ID,
+      pendingDecisionId: String(pending.id),
+      resolution: 'approve',
+      resolvedBy: 'ray@magiclab',
+      reason: '同意',
+      policySnapshot: {},
+      costEstimateUsd: 0,
+    })
+    expect(r.ok).toBe(false)
+    expect(r.reason).toBe('not_pending:running')
+    // 状态没被覆盖
+    expect(tables.action_runs[0].status).toBe('running')
+  })
+
+  it('🔴 status CAS：succeeded 也一样拦（reject 同理）', async () => {
+    const { sb, tables } = seed({ policy: { mode: 'require_approval' } })
+    const pending = await seedPending(sb, tables)
+    tables.action_runs[0].status = 'succeeded'
+
+    const r = await resolvePendingApproval(sb, {
+      runId: RUN_ID,
+      pendingDecisionId: String(pending.id),
+      resolution: 'reject',
+      resolvedBy: 'ray@magiclab',
+      reason: '不做',
+      policySnapshot: {},
+      costEstimateUsd: 0,
+    })
+    expect(r.ok).toBe(false)
+    expect(r.reason).toBe('not_pending:succeeded')
+    expect(tables.action_runs[0].status).toBe('succeeded')
+  })
+
+  it('🔴 decision CAS：状态还在 pending、但 run 已指向另一份审批请求 → decision_not_current', async () => {
+    const { sb, tables } = seed({ policy: { mode: 'require_approval' } })
+    const stale = await seedPending(sb, tables)
+    // 又签了一份新的审批请求，run 改指新那份 —— 状态仍是 pending_approval。
+    // 拿旧页面上的过期请求来批，只有 decision CAS 能拦。
+    const fresh = await seedPending(sb, tables)
+    expect(tables.action_runs[0].authorization_decision_id).toBe(fresh.id)
+    expect(tables.action_runs[0].status).toBe('pending_approval')
+
+    const r = await resolvePendingApproval(sb, {
+      runId: RUN_ID,
+      pendingDecisionId: String(stale.id),
+      resolution: 'approve',
+      resolvedBy: 'ray@magiclab',
+      reason: '同意',
+      policySnapshot: {},
+      costEstimateUsd: 0,
+    })
+    expect(r.ok).toBe(false)
+    expect(r.reason).toBe('decision_not_current')
+    // 新那份照常能批
+    const ok = await resolvePendingApproval(sb, {
+      runId: RUN_ID,
+      pendingDecisionId: String(fresh.id),
+      resolution: 'approve',
+      resolvedBy: 'ray@magiclab',
+      reason: '同意',
+      policySnapshot: {},
+      costEstimateUsd: 0,
+    })
+    expect(ok.ok).toBe(true)
   })
 })
 
