@@ -165,6 +165,17 @@ export async function runAttributionJob(
   let reconcileErrors = 0
   const reconcileErrorSamples: string[] = []
 
+  /** Every path that reconciles reports through here, so none can stay quiet. */
+  const recordReconcileErrors = (actionId: string, messages: string[]): void => {
+    for (const msg of messages) {
+      reconcileErrors++
+      if (reconcileErrorSamples.length < RECONCILE_ERROR_SAMPLE_LIMIT) {
+        reconcileErrorSamples.push(`action ${actionId}: ${msg}`)
+      }
+      console.error(`Attribution job: action ${actionId} — ${msg}`)
+    }
+  }
+
   for (const action of actions) {
     // Arbitration: an outcome belongs to whichever evaluator owns its metric
     // family. Declining here — rather than writing and letting the last writer
@@ -174,6 +185,17 @@ export async function runAttributionJob(
     if (routing === 'defer') {
       deferred++
       pass2Clients.add(action.client_id)
+      // Deferring means this evaluator promises NOTHING for this action any
+      // more — which makes every row it already wrote abandoned. Reachable
+      // through the correction this PR asks for in the opposite direction to
+      // round 19's: an SEO action whose expected_metric moves from
+      // `seo.domain.organic_traffic` to `seo.gsc.clicks`. Pass 1 hands the
+      // action over, the bridge only ever retires keys in its OWN vocabulary,
+      // so the old verdict was immortal — still read as evidence, and not even
+      // reported, because the orphan audit asks "can the owner load this
+      // action?" and this evaluator can load every flywheel.
+      // (Codex P2, round 20 on PR #862.)
+      recordReconcileErrors(action.id, await reconcileLegacyWindows(action.id, null, windowDays))
       continue
     }
 
@@ -193,6 +215,9 @@ export async function runAttributionJob(
           `"${action.expected_metric}", owned by an evaluator that does not load ` +
           `this flywheel — no evaluator can attribute it.`,
       )
+      // Same reasoning as the deferral above: this evaluator promises nothing
+      // for this action, so anything it wrote earlier is abandoned.
+      recordReconcileErrors(action.id, await reconcileLegacyWindows(action.id, null, windowDays))
       continue
     }
 
@@ -200,13 +225,7 @@ export async function runAttributionJob(
       const outcome = await processAction(action as ActionRow, windowDays)
       if (outcome.wrote) written++
       else skipped++
-      for (const msg of outcome.reconcileErrors) {
-        reconcileErrors++
-        if (reconcileErrorSamples.length < RECONCILE_ERROR_SAMPLE_LIMIT) {
-          reconcileErrorSamples.push(`action ${action.id}: ${msg}`)
-        }
-        console.error(`Attribution job: action ${action.id} — ${msg}`)
-      }
+      recordReconcileErrors(action.id, outcome.reconcileErrors)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`Attribution job: action ${action.id} — ${msg}`)
@@ -369,18 +388,20 @@ async function processAction(
  */
 async function reconcileLegacyWindows(
   actionId: string,
-  metricKey: string,
+  metricKey: string | null,
   authoritativeWindow: number,
 ): Promise<string[]> {
   const errors: string[] = []
-  const { error: claimErr } = await supabaseAdmin
-    .from('flywheel_outcomes')
-    .update({ evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS })
-    .eq('action_id', actionId)
-    .eq('metric_key', metricKey)
-    .is('evaluator_key', null)
+  if (metricKey !== null) {
+    const { error: claimErr } = await supabaseAdmin
+      .from('flywheel_outcomes')
+      .update({ evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS })
+      .eq('action_id', actionId)
+      .eq('metric_key', metricKey)
+      .is('evaluator_key', null)
 
-  if (claimErr) errors.push(`claim unsigned outcomes: ${claimErr.message}`)
+    if (claimErr) errors.push(`claim unsigned outcomes: ${claimErr.message}`)
+  }
 
   // [2] Retire our own rows for metrics this action no longer promises.
   //
@@ -401,16 +422,21 @@ async function reconcileLegacyWindows(
   // keys that are not this action's expected_metric (135 such rows exist in
   // production today; they are correct output, not stale).
   // (Codex P2, round 19 on PR #862.)
-  const { error: abandonedErr } = await supabaseAdmin
+  const abandoned = supabaseAdmin
     .from('flywheel_outcomes')
     .delete()
     .eq('action_id', actionId)
     .eq('evaluator_key', OUTCOME_EVALUATOR.FLYWHEEL_METRICS)
-    .neq('metric_key', metricKey)
+
+  const { error: abandonedErr } =
+    metricKey === null ? await abandoned : await abandoned.neq('metric_key', metricKey)
 
   if (abandonedErr) {
     errors.push(`retire abandoned metric outcomes: ${abandonedErr.message}`)
   }
+
+  // Nothing promised means nothing left to keep at any window either.
+  if (metricKey === null) return errors
 
   if (dualWindowEnabled()) return errors
 

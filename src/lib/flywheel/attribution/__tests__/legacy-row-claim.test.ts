@@ -511,6 +511,85 @@ describe('with dual-window OFF, an action never ends up holding two windows', ()
     expect(db.outcomes().map(r => r.metric_key)).toEqual([SOCIAL_METRIC])
   })
 
+  it('pass 1 clears its old rows when the metric moves to the OTHER evaluator', async () => {
+    // The reverse of the case above, and the one that stayed immortal: an SEO
+    // action whose expected_metric moves from a flywheel_metrics key to a GSC
+    // key. Pass 1 defers the action, the bridge only retires keys in its own
+    // vocabulary, so the old verdict had no owner willing to withdraw it — and
+    // the orphan audit missed it too, because it asks "can the owner load this
+    // action?" and this evaluator loads every flywheel. (Codex P2, round 20.)
+    process.env[DUAL_WINDOW_FLAG] = 'true' // not the window retire doing this
+    db.seed('flywheel_actions', [
+      {
+        id: 'action-seo-moved', client_id: CLIENT_ID, flywheel: 'seo',
+        action_type: 'seo.publish_blog',
+        expected_metric: GSC_CLICKS,          // corrected to the GSC evaluator's key
+        expected_delta: 1, executed_at: EXECUTED_AT, payload: null,
+      },
+    ])
+    db.seed('flywheel_outcomes', [
+      {
+        id: 'old-owner-row', action_id: 'action-seo-moved', client_id: CLIENT_ID,
+        metric_key: 'seo.domain.organic_traffic', window_days: 14,
+        baseline: 100, after_value: 120, delta: 20, delta_pct: 20,
+        confidence: 0.9, verdict: 'confirmed',
+        evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS,
+        computed_at: '2026-06-10T00:00:00.000Z',
+      },
+    ])
+
+    const result = await runJob(14)
+
+    expect(result.deferred).toBe(1)                       // pass 1 hands it over…
+    expect(db.outcomes()).toEqual([])                     // …and withdraws its own verdict
+  })
+
+  it('does not touch the OTHER evaluator\'s rows when it defers', async () => {
+    // Deferral must not become a licence to clear the action wholesale — that
+    // is the delete this PR removed.
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    db.seed('flywheel_actions', [
+      {
+        id: 'action-seo-moved', client_id: CLIENT_ID, flywheel: 'seo',
+        action_type: 'seo.publish_blog', expected_metric: GSC_CLICKS,
+        expected_delta: 1, executed_at: EXECUTED_AT, payload: null,
+      },
+    ])
+    db.seed('flywheel_outcomes', [
+      {
+        id: 'gsc-row', action_id: 'action-seo-moved', client_id: CLIENT_ID,
+        metric_key: GSC_CLICKS, window_days: 28,
+        baseline: 100, after_value: 150, delta: 50, delta_pct: 50,
+        confidence: 0.9, verdict: 'confirmed',
+        evaluator_key: OUTCOME_EVALUATOR.GSC_SNAPSHOTS,
+        computed_at: '2026-06-10T00:00:00.000Z',
+      },
+    ])
+
+    await runJob(14)
+
+    expect(db.outcomes().map(r => r.id)).toEqual(['gsc-row'])
+  })
+
+  it('reports a reconciliation failure on the defer path too', async () => {
+    // The defer branch used to `continue` before any reconciliation existed, so
+    // it is the path most likely to go quiet again.
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    db.seed('flywheel_actions', [
+      {
+        id: 'action-seo-moved', client_id: CLIENT_ID, flywheel: 'seo',
+        action_type: 'seo.publish_blog', expected_metric: GSC_CLICKS,
+        expected_delta: 1, executed_at: EXECUTED_AT, payload: null,
+      },
+    ])
+    db.failNext('flywheel_outcomes', 'delete', 'permission denied')
+
+    const result = await runJob(14)
+
+    expect(result.reconcileErrors).toBe(1)
+    expect(result.reconcileErrorSamples.join(' ')).toContain('retire abandoned metric outcomes')
+  })
+
   it('pass 1 retires its own non-authoritative windows too', async () => {
     db.seed('flywheel_actions', [
       {
