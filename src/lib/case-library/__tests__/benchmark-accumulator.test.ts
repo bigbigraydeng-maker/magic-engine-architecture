@@ -251,6 +251,8 @@ function makeSupabase(opts: MockOpts = {}) {
 /** N 条 seo.gsc.clicks outcome，可指定客户分布。 */
 function clickOutcomes(deltas: number[], clientIds: string[] = ['c1']) {
   return deltas.map((delta_pct, i) => ({
+    // Distinct action per row: samples are counted per action, not per row.
+    action_id: `a${i}`,
     client_id: clientIds[i % clientIds.length],
     metric_key: 'seo.gsc.clicks',
     delta_pct,
@@ -296,6 +298,41 @@ describe('accumulateBenchmarks', () => {
     expect(result.benchmarksUpdated).toBe(1)
     expect(result.groupsSkipped).toBe(0)
     expect(insertFn).toHaveBeenCalledOnce()
+  })
+
+  it('does not let two dual-window actions cross the 3-sample threshold', async () => {
+    // A deferred action is attributed at the bridge's 28-day cadence AND at
+    // pass 1's 14-day window. Counting rows, two actions look like four samples
+    // and a client-facing benchmark gets written on half the real evidence —
+    // with 14-day and 28-day growth rates averaged together.
+    const dualWindow = [
+      { action_id: 'a1', client_id: 'c1', metric_key: 'seo.gsc.clicks', delta_pct: 10, window_days: 28 },
+      { action_id: 'a1', client_id: 'c1', metric_key: 'seo.gsc.clicks', delta_pct: 4,  window_days: 14 },
+      { action_id: 'a2', client_id: 'c1', metric_key: 'seo.gsc.clicks', delta_pct: 30, window_days: 28 },
+      { action_id: 'a2', client_id: 'c1', metric_key: 'seo.gsc.clicks', delta_pct: 12, window_days: 14 },
+    ]
+    const { supabase, insertFn, updateFn } = makeSupabase({ outcomes: dualWindow })
+
+    const result = await accumulateBenchmarks(supabase)
+
+    expect(result.benchmarksUpdated).toBe(0)
+    expect(result.groupsSkipped).toBe(1)
+    expect(insertFn).not.toHaveBeenCalled()
+    expect(updateFn).not.toHaveBeenCalled()
+  })
+
+  it('counts a dual-window action once when the sample really is large enough', async () => {
+    const rows = ['a1', 'a2', 'a3'].flatMap((action_id, i) => [
+      { action_id, client_id: 'c1', metric_key: 'seo.gsc.clicks', delta_pct: 10 + i * 10, window_days: 28 },
+      { action_id, client_id: 'c1', metric_key: 'seo.gsc.clicks', delta_pct: 1 + i, window_days: 14 },
+    ])
+    const { supabase, insertFn } = makeSupabase({ outcomes: rows })
+
+    const result = await accumulateBenchmarks(supabase)
+
+    expect(result.benchmarksUpdated).toBe(1)
+    // Three actions, not six rows — and the 14-day deltas never entered the maths.
+    expect(insertFn.mock.calls[0][0].growth_sample_size).toBe(3)
   })
 
   it('respects an explicit higher minSamples argument', async () => {
@@ -382,7 +419,8 @@ describe('accumulateBenchmarks', () => {
   })
 
   it('ignores metrics outside REPRESENTATIVE_METRICS', async () => {
-    const noise = [10, 20, 30].map(delta_pct => ({
+    const noise = [10, 20, 30].map((delta_pct, i) => ({
+      action_id: `noise-${i}`,
       client_id: 'c1',
       metric_key: 'seo.gsc.impressions',
       delta_pct,

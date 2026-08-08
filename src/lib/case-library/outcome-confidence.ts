@@ -9,6 +9,20 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { keepOneMeasurementPerAction } from '@/lib/flywheel/attribution/outcome-identity'
+
+/**
+ * An outcome row as these queries fetch it. The identity columns are selected
+ * so multi-window rows for one action collapse to a single sample before any
+ * counting — see keepOneMeasurementPerAction.
+ */
+interface OutcomeConfidenceQueryRow<A> {
+  action_id: string
+  metric_key: string
+  window_days: number | null
+  verdict: string
+  flywheel_actions: A | A[]
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -97,14 +111,13 @@ export async function fetchOutcomeConfidenceMap(
   try {
     const { data, error } = await supabase
       .from('flywheel_outcomes')
-      .select('verdict, flywheel_actions!inner(action_type)')
+      .select('action_id, metric_key, window_days, verdict, flywheel_actions!inner(action_type)')
 
     if (error || !data) return {}
 
-    const rows: RawOutcomeConfidenceRow[] = (data as Array<{
-      verdict: string
-      flywheel_actions: { action_type: string } | Array<{ action_type: string }>
-    }>).map(r => {
+    const rows: RawOutcomeConfidenceRow[] = keepOneMeasurementPerAction(
+      data as Array<OutcomeConfidenceQueryRow<{ action_type: string }>>,
+    ).map(r => {
       const actions = Array.isArray(r.flywheel_actions) ? r.flywheel_actions[0] : r.flywheel_actions
       return { action_type: actions?.action_type ?? 'unknown', verdict: r.verdict }
     })
@@ -143,7 +156,7 @@ export async function fetchClientOutcomeHistory(
   try {
     let query = supabase
       .from('flywheel_outcomes')
-      .select('verdict, flywheel_actions!inner(action_type, flywheel, client_id)')
+      .select('action_id, metric_key, window_days, verdict, flywheel_actions!inner(action_type, flywheel, client_id)')
       .eq('flywheel_actions.client_id', clientId) // 🔴 hard client scope — never removed
 
     if (filters?.flywheel) query = query.eq('flywheel_actions.flywheel', filters.flywheel)
@@ -152,10 +165,9 @@ export async function fetchClientOutcomeHistory(
     const { data, error } = await query
     if (error || !data) return {}
 
-    const rows: RawOutcomeConfidenceRow[] = (data as Array<{
-      verdict: string
-      flywheel_actions: { action_type: string } | Array<{ action_type: string }>
-    }>).map(r => {
+    const rows: RawOutcomeConfidenceRow[] = keepOneMeasurementPerAction(
+      data as Array<OutcomeConfidenceQueryRow<{ action_type: string }>>,
+    ).map(r => {
       const actions = Array.isArray(r.flywheel_actions) ? r.flywheel_actions[0] : r.flywheel_actions
       return { action_type: actions?.action_type ?? 'unknown', verdict: r.verdict }
     })
@@ -201,7 +213,7 @@ export async function fetchSeoBlogConfidenceByMode(
   try {
     const { data, error } = await supabase
       .from('flywheel_outcomes')
-      .select('verdict, flywheel_actions!inner(action_type, payload, client_id)')
+      .select('action_id, metric_key, window_days, verdict, flywheel_actions!inner(action_type, payload, client_id)')
       .eq('flywheel_actions.client_id', clientId)
       .eq('flywheel_actions.action_type', 'seo.publish_blog')
 
@@ -213,10 +225,9 @@ export async function fetchSeoBlogConfidenceByMode(
       seo_only: { confirmed: 0, total: 0 },
     }
 
-    for (const row of data as Array<{
-      verdict: string
-      flywheel_actions: { payload?: { mode?: string } | null } | Array<{ payload?: { mode?: string } | null }>
-    }>) {
+    for (const row of keepOneMeasurementPerAction(
+      data as Array<OutcomeConfidenceQueryRow<{ payload?: { mode?: string } | null }>>,
+    )) {
       const action = Array.isArray(row.flywheel_actions) ? row.flywheel_actions[0] : row.flywheel_actions
       const mode = action?.payload?.mode
       if (!mode || !(mode in buckets)) continue

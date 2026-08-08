@@ -31,6 +31,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { mapIndustryToCategory } from '@/lib/huatuo/industry-mapper'
 import type { BenchmarkDimension } from '@/lib/huatuo/types'
+import { keepOneMeasurementPerAction } from '@/lib/flywheel/attribution/outcome-identity'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -92,6 +93,7 @@ interface GroupEntry {
 }
 
 interface OutcomeRow {
+  action_id: string
   client_id: string
   metric_key: string
   delta_pct: number | null
@@ -234,7 +236,7 @@ export async function accumulateBenchmarks(
 
   const { data: outcomes, error: outcomesError } = await supabase
     .from('flywheel_outcomes')
-    .select('client_id, metric_key, delta_pct, window_days')
+    .select('action_id, client_id, metric_key, delta_pct, window_days')
     .in('metric_key', Object.keys(REPRESENTATIVE_METRICS))
     .not('delta_pct', 'is', null)
     .gte('computed_at', since)
@@ -247,10 +249,17 @@ export async function accumulateBenchmarks(
   if (!outcomes || outcomes.length === 0) return result
 
   // ── 3. 分组 ───────────────────────────────────────────────────────────────
+  // 先把同一个 (动作, 指标) 的多窗口结果收成一条：被转交的动作会同时按
+  // bridge 自己的 28 天节奏和 pass 1 的窗口各算一次，两条都是合法事实，
+  // 但它们是同一次动作的两个观察角度，不是两份证据。按行数当样本会让
+  // 两个动作凑够 MIN_SAMPLE_THRESHOLD，还会把不同窗口的增长率混进同一个
+  // 百分位 —— 而这个数字是要写进 industry_benchmarks 给客户看的。
+  const measurements = keepOneMeasurementPerAction(outcomes as OutcomeRow[])
+
   const groups = new Map<string, GroupEntry>()
   const seenUnmapped = new Set<string>()
 
-  for (const outcome of outcomes as OutcomeRow[]) {
+  for (const outcome of measurements) {
     const deltaPct = outcome.delta_pct
     if (deltaPct == null) continue
 

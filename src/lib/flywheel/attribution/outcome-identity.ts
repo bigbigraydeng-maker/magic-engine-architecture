@@ -336,6 +336,45 @@ export function assertEvaluatorOwnsAll(
   }
 }
 
+/** The columns needed to decide whether two outcome rows are one measurement. */
+export interface OutcomeMeasurementRow {
+  action_id: string
+  metric_key: string
+  window_days: number | null
+}
+
+/**
+ * Collapse an outcome set to one row per (action, metric) — the unit any
+ * consumer counting evidence should use.
+ *
+ * The natural key includes `window_days` because a 14-day and a 28-day answer
+ * are different facts, and both are legitimately stored. But they are not two
+ * pieces of evidence about whether the action worked: since deferred actions
+ * are computed at the bridge's cadence AND at pass 1's window, counting rows
+ * makes one action look like two. That inflates `industry_benchmarks` sample
+ * sizes past their minimum threshold on half the real evidence, and doubles the
+ * "client cases" behind Huatuo's success rates.
+ *
+ * The longest window wins: it is the most mature observation of the same
+ * action, and picking deterministically keeps the count stable across runs
+ * rather than depending on row order.
+ */
+export function keepOneMeasurementPerAction<T extends OutcomeMeasurementRow>(
+  rows: readonly T[],
+): T[] {
+  const best = new Map<string, T>()
+
+  for (const row of rows) {
+    const key = `${row.action_id}::${row.metric_key}`
+    const held = best.get(key)
+    if (!held || (row.window_days ?? -1) > (held.window_days ?? -1)) {
+      best.set(key, row)
+    }
+  }
+
+  return Array.from(best.values())
+}
+
 /**
  * The canonical handle for an outcome's natural key. Mirrors the `outcome_key`
  * generated column so application code and SQL agree on one spelling.
