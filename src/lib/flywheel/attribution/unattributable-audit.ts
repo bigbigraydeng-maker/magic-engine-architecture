@@ -16,6 +16,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAll } from '@/lib/supabase-paginate'
 import {
+  evaluatorCanLoad,
+  resolveAuthoritativeEvaluator,
   resolveAttributionRoutingDetailed,
   type UnattributableReason,
 } from './outcome-identity'
@@ -96,4 +98,104 @@ export async function auditUnattributableActions(
   }
 
   return stranded
+}
+
+// ── Outcome rows nobody can maintain ─────────────────────────────────────────
+
+export interface OrphanedOutcome {
+  client_id: string
+  action_id: string
+  metric_key: string
+  flywheel: string
+  /** What the action promises now — the reason the old row was abandoned. */
+  expected_metric: string
+  /** How many rows share this (action, metric) pair, across windows. */
+  rows: number
+}
+
+/**
+ * Outcome rows whose owning evaluator cannot load their action.
+ *
+ * Reachable through a correction the system itself asks for: the
+ * `action_unattributable` todo tells a human to change an action's
+ * `expected_metric`, and if the old value belonged to a DIFFERENT evaluator's
+ * metric family, the rows it already wrote become unmaintainable. Pass 1 will
+ * not touch them — they are not its evaluator's — and the owning evaluator
+ * cannot load the action, so it never sees them either. They are frozen at
+ * whatever they last said, while still being read as evidence.
+ *
+ * DELETING THEM IS NOT AN OPTION. A writer removing rows it does not own is the
+ * exact defect this Work Package removed (main's `DELETE WHERE action_id = ?`),
+ * and re-adding it under a narrower condition would just make the same mistake
+ * harder to see. So this is detection: it goes to a human through the same
+ * pipeline as everything else, and a human decides.
+ *
+ * Throws on a query failure — "no orphans" and "we could not check" must not
+ * look the same. (Codex P2, round 19 on PR #862.)
+ */
+export async function auditOrphanedOutcomes(
+  supabase: SupabaseClient,
+  clientIds: string[],
+): Promise<OrphanedOutcome[]> {
+  if (clientIds.length === 0) return []
+
+  const actions = await fetchAll<ActionRow>((from, to) =>
+    supabase
+      .from('flywheel_actions')
+      .select('id, client_id, flywheel, action_type, payload, expected_metric, executed_at')
+      .in('client_id', clientIds)
+      .not('expected_metric', 'is', null)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+  if (actions.length === 0) return []
+
+  const byId = new Map(actions.map(a => [a.id, a]))
+
+  const rows = await fetchAll<OutcomeRow>((from, to) =>
+    supabase
+      .from('flywheel_outcomes')
+      .select('action_id, client_id, metric_key')
+      .in('client_id', clientIds)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+
+  const grouped = new Map<string, OrphanedOutcome>()
+
+  for (const row of rows) {
+    const action = byId.get(row.action_id)
+    if (!action) continue                       // orphan of a deleted action — different problem
+    if (row.metric_key === action.expected_metric) continue
+
+    // Only a row the action no longer promises AND whose owner cannot load it
+    // is stuck. A metric the owner CAN load is refreshed or retired by that
+    // owner on its own schedule — the three seo.gsc.* rows the bridge writes
+    // for an SEO action are exactly that, and must not be reported.
+    const owner = resolveAuthoritativeEvaluator(row.metric_key)
+    if (evaluatorCanLoad(owner, action.flywheel)) continue
+
+    const key = `${row.action_id}::${row.metric_key}`
+    const existing = grouped.get(key)
+    if (existing) {
+      existing.rows++
+      continue
+    }
+    grouped.set(key, {
+      client_id: row.client_id,
+      action_id: row.action_id,
+      metric_key: row.metric_key,
+      flywheel: action.flywheel,
+      expected_metric: action.expected_metric,
+      rows: 1,
+    })
+  }
+
+  return Array.from(grouped.values())
+}
+
+interface OutcomeRow {
+  action_id: string
+  client_id: string
+  metric_key: string
 }

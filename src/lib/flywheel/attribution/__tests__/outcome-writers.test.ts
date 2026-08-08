@@ -177,16 +177,45 @@ describe('writer coexistence', () => {
     expect(gscIdsAfter).toEqual(gscIdsBefore)
   })
 
-  it('the flywheel_metrics writer issues no DELETE against flywheel_outcomes at all', async () => {
-    process.env[DUAL_WINDOW_FLAG] = 'true' // two windows only coexist when dual-window is ON
+  it('the flywheel_metrics writer never issues a DELETE that can reach another evaluator', async () => {
+    // This assertion used to be "no DELETE at all", which stopped being true
+    // once pass 1 had to retire the metrics an action no longer promises —
+    // the one legitimate job main's action-wide DELETE was doing. What must
+    // hold is the property that mattered, not the absence of the statement:
+    // every delete pass 1 issues is scoped to its own evaluator_key, so it
+    // cannot destroy the GSC writer's rows the way the old one did.
+    process.env[DUAL_WINDOW_FLAG] = 'true'
     seedSeoAction({ expected_metric: 'seo.domain.organic_traffic' })
     seedFlywheelMetrics('seo.domain.organic_traffic')
 
     await runJob(14)
 
-    // The old code ran DELETE WHERE action_id = ?, which is exactly how it
-    // destroyed the other writer's rows. There is now no delete path here.
-    expect(db.didDeleteFrom('flywheel_outcomes')).toBe(false)
+    const deletes = db.ops.filter(o => o.table === 'flywheel_outcomes' && o.op === 'delete')
+    expect(deletes.length).toBeGreaterThan(0)
+    for (const del of deletes) {
+      const cols = del.filters.map(f => f.column)
+      expect(cols).toContain('action_id')
+      expect(cols).toContain('evaluator_key')
+      const evaluator = del.filters.find(f => f.column === 'evaluator_key')
+      expect(evaluator?.value).toBe(OUTCOME_EVALUATOR.FLYWHEEL_METRICS)
+    }
+  })
+
+  it('leaves the GSC writer\'s rows for the same action untouched when it retires', async () => {
+    // The behavioural half of the assertion above: the bridge legitimately
+    // writes three seo.gsc.* rows for an action whose expected_metric is
+    // something else entirely (135 such rows in production). Pass 1 must not
+    // read those as "a metric this action no longer promises".
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    seedSeoAction({ expected_metric: 'seo.domain.organic_traffic' })
+    seedFlywheelMetrics('seo.domain.organic_traffic')
+    seedGscSnapshots()
+
+    await runBridge(28)          // 3 GSC rows land
+    await runJob(14)             // pass 1 writes its own and retires its own
+
+    const gscRows = db.outcomes().filter(r => String(r.metric_key).startsWith('seo.gsc.'))
+    expect(gscRows).toHaveLength(3)
   })
 
   it('the GSC writer retires the domain rows it no longer produces', async () => {

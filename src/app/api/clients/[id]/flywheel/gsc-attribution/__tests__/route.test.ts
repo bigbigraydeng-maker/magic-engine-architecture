@@ -144,6 +144,26 @@ describe('POST /api/clients/[id]/flywheel/gsc-attribution', () => {
     expect(body.errors).toHaveLength(2)
   })
 
+  it('does not call a zero-write run successful just because the error was a cleanup', async () => {
+    // Reachable: a page-scoped action whose page is missing from top_pages
+    // writes nothing and still retires the domain keys it no longer stands
+    // behind. If that retire fails, the stale rows are still on the board and
+    // still feeding memory — and nothing was written to weigh against it.
+    // (Codex P2, round 19.)
+    mockRun.mockResolvedValue(result({
+      outcomes_written: 0,
+      cleanup_errors: 1,
+      reconcile_errors: 0,
+      errors: ['action a1: retire stale outcomes: deadlock'],
+    }))
+
+    const res = await POST(makeRequest(), { params })
+    const body = await res.json()
+
+    expect(body.success).toBe(false)
+    expect(res.status).toBe(200) // still not a 502 — no write was lost
+  })
+
   it('never answers 502 for a run whose only errors were reconciliation debt', async () => {
     // A post-write cleanup failure must never be the thing that makes this a
     // 502 — the rows landed. (This shape used to be unreachable because cleanup

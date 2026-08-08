@@ -345,7 +345,10 @@ async function processAction(
  *
  *   [1] CLAIM  — sign it, or the contract migration's `NULL count = 0`
  *                precondition can never be met.
- *   [2] RETIRE — while dual-window is OFF, drop our own rows at any other
+ *   [2] RETIRE ABANDONED METRICS — drop our own rows for keys this action no
+ *                longer promises. Ungated: a key it has stopped promising is
+ *                wrong at every window.
+ *   [3] RETIRE EXTRA WINDOWS — while dual-window is OFF, drop our own rows at any other
  *                window. Signing alone would leave the action holding two
  *                windows, which doubles its evidence for the memory consumers
  *                that still count rows — the harm the gate exists to prevent.
@@ -378,6 +381,36 @@ async function reconcileLegacyWindows(
     .is('evaluator_key', null)
 
   if (claimErr) errors.push(`claim unsigned outcomes: ${claimErr.message}`)
+
+  // [2] Retire our own rows for metrics this action no longer promises.
+  //
+  // Not gated: a key the action has stopped promising is wrong at EVERY window,
+  // not just the non-authoritative ones. This is the same rule the GSC writer
+  // applies through `resolveStaleEvaluatorKeys` — retire what you no longer
+  // stand behind — and pass 1 lacked it because on main the action-wide DELETE
+  // took those rows out as a side effect. Removing that delete was necessary;
+  // its one legitimate job has to be done deliberately now.
+  //
+  // This matters because the system actively asks for `expected_metric` to be
+  // corrected: the `action_unattributable` todo added in this PR tells a human
+  // to change it. Without this, every correction leaves the old metric's
+  // outcome behind forever, still feeding the row-counting consumers.
+  //
+  // Scoped to our own evaluator_key, so it can never reach the GSC evaluator's
+  // rows — including the three it legitimately writes for the same action at
+  // keys that are not this action's expected_metric (135 such rows exist in
+  // production today; they are correct output, not stale).
+  // (Codex P2, round 19 on PR #862.)
+  const { error: abandonedErr } = await supabaseAdmin
+    .from('flywheel_outcomes')
+    .delete()
+    .eq('action_id', actionId)
+    .eq('evaluator_key', OUTCOME_EVALUATOR.FLYWHEEL_METRICS)
+    .neq('metric_key', metricKey)
+
+  if (abandonedErr) {
+    errors.push(`retire abandoned metric outcomes: ${abandonedErr.message}`)
+  }
 
   if (dualWindowEnabled()) return errors
 

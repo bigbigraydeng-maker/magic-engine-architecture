@@ -382,7 +382,9 @@ describe('the flywheel_metrics evaluator adopts its own unsigned rows', () => {
 
   it('reports a failed window retire the same way', async () => {
     seedSocialAction()
-    db.failNext('flywheel_outcomes', 'delete', 'deadlock detected')
+    // The SECOND delete: [2] retires abandoned metrics, [3] retires extra
+    // windows. Targeting the first would test a different statement.
+    db.failNext('flywheel_outcomes', 'delete', 'deadlock detected', { afterMatches: 1 })
 
     const result = await runJob(14)
 
@@ -470,6 +472,43 @@ describe('with dual-window OFF, an action never ends up holding two windows', ()
     await runBridge(28)
 
     expect(db.outcomes().find(r => r.id === 'other-14')).toBeDefined()
+  })
+
+  it('pass 1 clears the old metric\u2019s rows after expected_metric is corrected', async () => {
+    // The correction is something the system actively asks a human to make —
+    // the action_unattributable todo says "回我一句改指标". On main the
+    // action-wide DELETE cleared the old metric's rows as a side effect;
+    // removing that delete was necessary, so this job has to be done on purpose
+    // now. Ungated: a key the action no longer promises is wrong at every
+    // window, not only the non-authoritative ones. (Codex P2, round 19.)
+    process.env[DUAL_WINDOW_FLAG] = 'true' // prove it is NOT the window retire doing this
+    db.seed('flywheel_actions', [
+      {
+        id: 'action-social-1', client_id: CLIENT_ID, flywheel: 'social',
+        action_type: 'social.publish', expected_metric: SOCIAL_METRIC,
+        expected_delta: 1, executed_at: EXECUTED_AT, payload: null,
+      },
+    ])
+    db.seed('flywheel_metrics', [
+      { client_id: CLIENT_ID, metric_key: SOCIAL_METRIC, metric_value: 100, measured_at: '2026-05-30T00:00:00.000Z' },
+      { client_id: CLIENT_ID, metric_key: SOCIAL_METRIC, metric_value: 140, measured_at: '2026-06-05T00:00:00.000Z' },
+    ])
+    // What the action USED to promise, at the very same window it runs at now.
+    db.seed('flywheel_outcomes', [
+      {
+        id: 'old-metric', action_id: 'action-social-1', client_id: CLIENT_ID,
+        metric_key: 'social.reach', window_days: 14,
+        baseline: 10, after_value: 12, delta: 2, delta_pct: 20,
+        confidence: 0.5, verdict: 'confirmed',
+        evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS,
+        computed_at: '2026-06-10T00:00:00.000Z',
+      },
+    ])
+
+    await runJob(14)
+
+    expect(db.outcomes().find(r => r.id === 'old-metric')).toBeUndefined()
+    expect(db.outcomes().map(r => r.metric_key)).toEqual([SOCIAL_METRIC])
   })
 
   it('pass 1 retires its own non-authoritative windows too', async () => {

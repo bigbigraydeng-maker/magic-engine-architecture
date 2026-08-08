@@ -9,12 +9,18 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { UnattributableAction } from '@/lib/flywheel/attribution/unattributable-audit'
+import type {
+  OrphanedOutcome,
+  UnattributableAction,
+} from '@/lib/flywheel/attribution/unattributable-audit'
 
 const stranded: UnattributableAction[] = []
 
+const orphans: OrphanedOutcome[] = []
+
 vi.mock('@/lib/flywheel/attribution/unattributable-audit', () => ({
   auditUnattributableActions: vi.fn(async () => stranded),
+  auditOrphanedOutcomes: vi.fn(async () => orphans),
 }))
 
 // Everything else `loadManualItems` reaches is out of scope here; only the
@@ -79,6 +85,7 @@ function stubSupabase() {
 
 async function itemsFor(rows: UnattributableAction[]) {
   stranded.length = 0
+  orphans.length = 0
   stranded.push(...rows)
   const all = await loadManualItems(stubSupabase(), new Date('2026-08-08T00:00:00Z'))
   return all.filter(i => i.kind === 'action_unattributable')
@@ -265,5 +272,50 @@ describe('when the audit itself fails', () => {
       loadManualItems(stubSupabase(), new Date('2026-08-08T00:00:00Z')),
     ).resolves.toBeInstanceOf(Array)
     warn.mockRestore()
+  })
+})
+
+// ── Frozen rows that only a human can decide about ──────────────────────────
+
+describe('outcome rows nobody can maintain', () => {
+  async function orphanItems(rows: OrphanedOutcome[]) {
+    stranded.length = 0
+    orphans.length = 0
+    orphans.push(...rows)
+    const all = await loadManualItems(stubSupabase(), new Date('2026-08-08T00:00:00Z'))
+    return all.filter(i => i.kind === 'outcome_rows_orphaned')
+  }
+
+  it('asks for a decision instead of quietly deleting', async () => {
+    const [item] = await orphanItems([
+      {
+        client_id: 'c1', action_id: 'a1', metric_key: 'seo.gsc.clicks',
+        flywheel: 'geo', expected_metric: 'geo.query.mention_rate', rows: 3,
+      },
+    ])
+
+    expect(item.what).toContain('3 条')
+    expect(item.what).toContain('seo.gsc.clicks')
+    // The reader has to know the numbers are frozen but still being read.
+    expect(item.what).toContain('还在照读')
+    // And the ask is a decision, not an action — deleting another evaluator's
+    // rows is the defect this PR removed.
+    expect(item.how).toContain('删掉')
+    expect(item.how).toContain('留着')
+    expect(item.client_name).toBe('CTS Tours')
+  })
+
+  it('produces nothing when no row is stranded', async () => {
+    expect(await orphanItems([])).toEqual([])
+  })
+
+  it('sums the rows per client rather than emitting one item each', async () => {
+    const items = await orphanItems([
+      { client_id: 'c1', action_id: 'a1', metric_key: 'seo.gsc.clicks', flywheel: 'geo', expected_metric: 'geo.query.mention_rate', rows: 2 },
+      { client_id: 'c1', action_id: 'a2', metric_key: 'seo.gsc.impressions', flywheel: 'geo', expected_metric: 'geo.query.mention_rate', rows: 3 },
+    ])
+
+    expect(items).toHaveLength(1)
+    expect(items[0].what).toContain('5 条')
   })
 })

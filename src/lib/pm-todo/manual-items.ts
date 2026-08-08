@@ -20,7 +20,9 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
+  auditOrphanedOutcomes,
   auditUnattributableActions,
+  type OrphanedOutcome,
   type UnattributableAction,
 } from '@/lib/flywheel/attribution/unattributable-audit'
 import type { UnattributableReason } from '@/lib/flywheel/attribution/outcome-identity'
@@ -78,6 +80,7 @@ export type ManualItemKind =
   | 'action_unattributable'
   | 'attribution_audit_failed'
   | 'client_list_unreadable'
+  | 'outcome_rows_orphaned'
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -269,6 +272,25 @@ export async function loadManualItems(
       how:
         '这条不用你动手 —— 是我们这边查询挂了（多半是表结构或权限变了）。' +
         '回我一句「查不了」我去修。修好之前，归因黑洞这一项当作没查过，别当作没问题',
+      href: RENDER_DASHBOARD_URL,
+    })
+  })
+
+  // 效果数据挂在没人能维护的指标上 —— 改指标那一刀的副作用。
+  // 只报不删：删别人名下的行正是这个 PR 拆掉的那个 bug。
+  await pushOrphanedOutcomeItems(supabase, items, ids, nameOf).catch((e) => {
+    const message = e instanceof Error ? e.message : String(e)
+    console.warn('[manual-items] 孤儿效果数据检查失败:', message)
+    items.push({
+      kind: 'attribution_audit_failed',
+      client_id: 'infra',
+      client_name: 'Magic Engine 后台',
+      what:
+        `「有没有效果数据没人维护」这项检查今天没跑成 —— ${message}。` +
+        '不是「今天没问题」，是没查成',
+      how:
+        '这条不用你动手 —— 是我们这边查询挂了。回我一句「查不了」我去修。' +
+        '修好之前，这一项当作没查过，别当作没问题',
       href: RENDER_DASHBOARD_URL,
     })
   })
@@ -1107,6 +1129,52 @@ async function pushUnattributableItems(
       client_name: nameOf(clientId),
       what: describeUnattributable(rows[0].reason, n, metrics, rows, now),
       how: adviseUnattributable(rows[0].reason, rows),
+      href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/execution`,
+    })
+  }
+}
+
+/**
+ * 效果数据挂在没人能维护的指标上。
+ *
+ * 触发路径就是我们自己请人做的那件事：「改指标」。改完之后，旧指标那批行
+ * 如果属于另一条评估线，就卡住了 —— pass 1 不碰别人名下的行，而那条线又
+ * 加载不到这个动作。它们会一直停在最后一次算出来的数上，还继续被当成证据读。
+ *
+ * 只报不删：删别人名下的行正是这个 PR 拆掉的那个 bug（老代码按动作整删），
+ * 换个更窄的条件再加回来只会让同样的错误更难被发现。
+ */
+async function pushOrphanedOutcomeItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  clientIds: string[],
+  nameOf: (id: string) => string,
+): Promise<void> {
+  const orphans = await auditOrphanedOutcomes(supabase, clientIds)
+  if (orphans.length === 0) return
+
+  const byClient = new Map<string, OrphanedOutcome[]>()
+  for (const row of orphans) {
+    const list = byClient.get(row.client_id) ?? []
+    list.push(row)
+    byClient.set(row.client_id, list)
+  }
+
+  for (const [clientId, rows] of Array.from(byClient.entries())) {
+    const totalRows = rows.reduce((sum: number, r: OrphanedOutcome) => sum + r.rows, 0)
+    const metrics = Array.from(new Set(rows.map((r: OrphanedOutcome) => r.metric_key))).join('、')
+    items.push({
+      kind: 'outcome_rows_orphaned',
+      client_id: clientId,
+      client_name: nameOf(clientId),
+      what:
+        `${totalRows} 条效果数据（${metrics}）没人能再更新了 —— 这些动作后来改了` +
+        '指标，旧指标那批数就停在改之前那一刻，但报表和学习还在照读。' +
+        '数字不会再变，也不会自己消失',
+      how:
+        '这条不用你动手，但要你拍个板：这些旧数是删掉，还是留着当历史存档？' +
+        '回我一句「删掉」或「留着」就行。我不会自己删 —— 删的是另一条线名下的' +
+        '数据，这正是这次修的那个老毛病',
       href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/execution`,
     })
   }

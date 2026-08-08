@@ -94,9 +94,18 @@ export async function POST(
   //
   // `errors[]` holds all three, so the two counters are what tell them apart.
   // See Issue #859.
+  //
+  // The forgiveness is conditional on something having LANDED this run. A
+  // page-scoped action whose page is absent from `top_pages` produces no rows
+  // and still retires the domain-scope keys it no longer stands behind — so a
+  // failure there means the stale rows are still on the execution board and
+  // still feeding memory, with nothing written to offset it. "The rows landed,
+  // tidying up failed" is the only shape that deserves a success.
+  // (Codex P2, round 19 on PR #862.)
   const onlyCleanupFailed =
     hasErrors &&
     result.reconcile_errors === 0 &&
+    result.outcomes_written > 0 &&
     result.errors.length === result.cleanup_errors
   const hardErrors =
     result.errors.length - result.cleanup_errors - result.reconcile_errors
