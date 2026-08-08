@@ -271,3 +271,29 @@ describe('POST /api/clients/[id]/flywheel/gsc-attribution', () => {
     expect(body.window_override_refused).toBeUndefined()
   })
 })
+
+// ── Bodies that are valid JSON but not objects ──────────────────────────────
+
+describe('request body handling', () => {
+  it('falls back to the default window for a literal null body', async () => {
+    // `req.json()` SUCCEEDS on `null`, so a plain assignment put null into the
+    // parsed body and reading `.window_days` off it threw — a 500 for a request
+    // that used to work. (Codex P2, round 32.)
+    mockRun.mockResolvedValue(result({ outcomes_written: 3 }))
+
+    const res = await POST(makeRequest(null), { params })
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.window_days).toBe(28)
+  })
+
+  it('falls back to the default window for a non-object body', async () => {
+    mockRun.mockResolvedValue(result({ outcomes_written: 3 }))
+
+    const res = await POST(makeRequest(42), { params })
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).window_days).toBe(28)
+  })
+})

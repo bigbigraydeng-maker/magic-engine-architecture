@@ -113,11 +113,17 @@ export async function POST(
     return NextResponse.json({ success: false, error: auth.error }, { status: auth.status })
   }
 
+  // `req.json()` SUCCEEDS on a literal `null` body, so a plain assignment puts
+  // null into rawBody and the window read below throws a TypeError — a 500 for
+  // a request that used to fall back to the default. Splitting the handler in
+  // round 30 moved that read out of the try that used to absorb it; the guard
+  // has to be on the shape, not on the parse. (Codex P2, round 32 on PR #862.)
   let rawBody: { window_days?: unknown } = {}
   try {
-    rawBody = await req.json() as { window_days?: unknown }
+    const parsed: unknown = await req.json()
+    if (parsed && typeof parsed === 'object') rawBody = parsed as { window_days?: unknown }
   } catch {
-    // no body — the default window stands
+    // no body, or not JSON — the default window stands
   }
 
   const { windowDays, refused } = resolveWindow(rawBody)

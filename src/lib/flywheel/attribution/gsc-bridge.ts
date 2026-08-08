@@ -252,7 +252,15 @@ export async function runGscAttributionForClient(
     const tally = await attributeOneAction(action, windowDays, opts.deferredWindowDays)
 
     for (const msg of tally.cleanupErrors) {
-      result.cleanup_errors++
+      // Only forgivable when THIS action landed something. `cleanup_errors`
+      // means "the rows are in the database, tidying up failed", and the manual
+      // route treats it as success — but the count was per client, so an action
+      // that wrote nothing and failed to retire its stale domain rows was
+      // forgiven on the strength of a DIFFERENT action's writes. Those stale
+      // rows stay on the execution board and in the learning path while the run
+      // reports success. A zero-write cleanup failure is a hard error.
+      // (Codex P2, round 32 on PR #862.)
+      if (tally.written > 0) result.cleanup_errors++
       result.errors.push(`action ${action.id}: ${msg}`)
     }
     if (tally.hardError) result.errors.push(`action ${action.id}: ${tally.hardError}`)

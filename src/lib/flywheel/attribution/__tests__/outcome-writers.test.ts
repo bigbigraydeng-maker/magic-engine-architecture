@@ -548,3 +548,52 @@ describe('historical duplicate rows', () => {
 function byKey(a: { key: unknown }, b: { key: unknown }): number {
   return String(a.key).localeCompare(String(b.key))
 }
+
+// ── Cleanup forgiveness is per ACTION, not per client ───────────────────────
+
+describe('a zero-write action\'s cleanup failure is not forgiven', () => {
+  it('does not count it as reconcilable debt just because another action wrote', async () => {
+    // Action A attributes normally. Action B is page-scoped with its page
+    // missing from top_pages, so it writes nothing and still has to retire the
+    // domain keys it no longer stands behind — and that retire fails. Counting
+    // it as cleanup debt let the client-level `outcomes_written > 0` from A
+    // forgive it, so B's stale domain rows stayed on the board inside a run
+    // reported as successful. (Codex P2, round 32.)
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    seedSeoAction()                       // A — plain, writes 3 rows
+    db.seed('flywheel_actions', [
+      {
+        id: 'action-page-b', client_id: CLIENT_ID, flywheel: 'seo',
+        action_type: 'cms_update_existing',
+        payload: { status: 'live', page_url: 'https://example.com/missing' },
+        expected_metric: GSC_CLICKS, expected_delta: 1, executed_at: EXECUTED_AT,
+      },
+    ])
+    // Snapshots exist, but top_pages never mentions B's page → B produces none.
+    seedGscSnapshots([{ page: 'https://example.com/other', clicks: 5, impressions: 50, position: 9 }])
+    // The SECOND delete: A retires the page keys it does not produce (and it
+    // DID write, so that one is legitimate debt); B's is the one under test.
+    db.failNext('flywheel_outcomes', 'delete', 'retire failed: deadlock', { afterMatches: 1 })
+
+    const result = await runBridge(28)
+
+    expect(result.outcomes_written).toBeGreaterThan(0)  // A landed
+    expect(result.cleanup_errors).toBe(0)               // …but B's is not debt
+    expect(result.errors.join(' ')).toContain('retire stale outcomes')
+  })
+
+  it('still forgives a cleanup failure on an action that did write', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    seedSeoAction({
+      action_type: 'cms_update_existing',
+      payload: { status: 'live', page_url: 'https://example.com/guide' },
+    })
+    seedGscSnapshots([{ page: 'https://example.com/guide', clicks: 40, impressions: 400, position: 18 }])
+    db.failNext('flywheel_outcomes', 'delete', 'retire failed: deadlock')
+
+    const result = await runBridge(28)
+
+    expect(result.outcomes_written).toBeGreaterThan(0)
+    expect(result.cleanup_errors).toBe(1)               // rows landed → debt
+  })
+})
