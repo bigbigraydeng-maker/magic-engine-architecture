@@ -138,6 +138,25 @@ export function resolveAuthoritativeEvaluator(metricKey: string): OutcomeEvaluat
   return owner
 }
 
+/**
+ * Metric-family prefixes belonging to evaluators OTHER than this one.
+ *
+ * Used to claim rows by exclusion: a NULL-evaluator row whose metric_key falls
+ * outside every foreign prefix can only have been written by this evaluator,
+ * because no other evaluator is allowed to write that namespace. That makes the
+ * claim provable rather than inferred — the distinction round 17 turned on.
+ *
+ * Derived from the ownership table rather than hardcoded, so carving out a new
+ * family later cannot leave a writer claiming rows that stopped being its own.
+ */
+export function foreignMetricPrefixes(
+  evaluator: OutcomeEvaluatorKey,
+): readonly string[] {
+  return METRIC_FAMILY_OWNERS
+    .filter(family => family.evaluator !== evaluator)
+    .map(family => family.prefix)
+}
+
 /** Whether `evaluator` is the authoritative writer for `metricKey`. */
 export function ownsMetric(evaluator: OutcomeEvaluatorKey, metricKey: string): boolean {
   return resolveAuthoritativeEvaluator(metricKey) === evaluator

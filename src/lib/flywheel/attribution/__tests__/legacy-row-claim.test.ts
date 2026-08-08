@@ -511,6 +511,96 @@ describe('with dual-window OFF, an action never ends up holding two windows', ()
     expect(db.outcomes().map(r => r.metric_key)).toEqual([SOCIAL_METRIC])
   })
 
+  it('claims an unsigned row at the OLD metric after a correction, then retires it', async () => {
+    // The hole the todo pipeline itself opens: inside the expand→deploy gap the
+    // old writer leaves an unsigned row at metric A, then a human corrects the
+    // action to metric B — which is exactly what `action_unattributable` asks
+    // for. Claiming only the CURRENT metric leaves A unsigned, and the
+    // abandoned-metric retire only matches rows already signed, so A was
+    // claimed by nobody and deleted by nobody: still read as evidence, and
+    // permanently blocking the contract gate. (Codex P2, round 21.)
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    db.seed('flywheel_actions', [
+      {
+        id: 'action-social-1', client_id: CLIENT_ID, flywheel: 'social',
+        action_type: 'social.publish', expected_metric: SOCIAL_METRIC,
+        expected_delta: 1, executed_at: EXECUTED_AT, payload: null,
+      },
+    ])
+    db.seed('flywheel_metrics', [
+      { client_id: CLIENT_ID, metric_key: SOCIAL_METRIC, metric_value: 100, measured_at: '2026-05-30T00:00:00.000Z' },
+      { client_id: CLIENT_ID, metric_key: SOCIAL_METRIC, metric_value: 140, measured_at: '2026-06-05T00:00:00.000Z' },
+    ])
+    db.seed('flywheel_outcomes', [
+      {
+        id: 'gap-row', action_id: 'action-social-1', client_id: CLIENT_ID,
+        metric_key: 'social.reach',                      // what it promised before
+        window_days: 14,
+        baseline: 10, after_value: 12, delta: 2, delta_pct: 20,
+        confidence: 0.5, verdict: 'confirmed',
+        evaluator_key: null,                             // written in the gap
+        computed_at: '2026-06-10T00:00:00.000Z',
+      },
+    ])
+
+    const result = await runJob(14)
+
+    // Claimed (so it is ours to withdraw) and then withdrawn — one pass.
+    expect(db.outcomes().find(r => r.id === 'gap-row')).toBeUndefined()
+    // Nothing unsigned is left to block the rollout gate.
+    expect(db.outcomes().filter(r => r.evaluator_key == null)).toEqual([])
+    expect(result.written).toBe(1)
+  })
+
+  it('excludes the other evaluator\'s namespace in the QUERY, not by hitting the CHECK', async () => {
+    // A seo.gsc.* row could have come from either writer — round 17 settled
+    // that guessing is worse than letting the rollout gate hold. But asserting
+    // only "the row stayed unsigned" proves nothing: an unscoped claim leaves it
+    // unsigned too, because the ownership CHECK rejects the statement — and
+    // takes down every row the claim was supposed to sign with it. The real
+    // assertion is that the run is clean AND the claimable row got claimed.
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    db.seed('flywheel_actions', [
+      {
+        id: 'action-social-1', client_id: CLIENT_ID, flywheel: 'social',
+        action_type: 'social.publish', expected_metric: SOCIAL_METRIC,
+        expected_delta: 1, executed_at: EXECUTED_AT, payload: null,
+      },
+    ])
+    db.seed('flywheel_metrics', [
+      { client_id: CLIENT_ID, metric_key: SOCIAL_METRIC, metric_value: 100, measured_at: '2026-05-30T00:00:00.000Z' },
+      { client_id: CLIENT_ID, metric_key: SOCIAL_METRIC, metric_value: 140, measured_at: '2026-06-05T00:00:00.000Z' },
+    ])
+    db.seed('flywheel_outcomes', [
+      {
+        id: 'ambiguous', action_id: 'action-social-1', client_id: CLIENT_ID,
+        metric_key: GSC_CLICKS, window_days: 14,
+        baseline: 1, after_value: 2, delta: 1, delta_pct: 100,
+        confidence: 0.5, verdict: 'confirmed', evaluator_key: null,
+        computed_at: '2026-06-10T00:00:00.000Z',
+      },
+      {
+        // Ours beyond doubt, at a window we will not recompute: it must be
+        // signed on this same pass.
+        id: 'ours', action_id: 'action-social-1', client_id: CLIENT_ID,
+        metric_key: SOCIAL_METRIC, window_days: 21,
+        baseline: 1, after_value: 2, delta: 1, delta_pct: 100,
+        confidence: 0.5, verdict: 'confirmed', evaluator_key: null,
+        computed_at: '2026-06-10T00:00:00.000Z',
+      },
+    ])
+
+    const result = await runJob(14)
+
+    // Not guessed at, not deleted.
+    const ambiguous = db.outcomes().find(r => r.id === 'ambiguous')
+    expect(ambiguous?.evaluator_key).toBeNull()
+    // And the claim still did its job for the row it could prove.
+    expect(db.outcomes().find(r => r.id === 'ours')?.evaluator_key)
+      .toBe(OUTCOME_EVALUATOR.FLYWHEEL_METRICS)
+    expect(result.reconcileErrors).toBe(0)
+  })
+
   it('pass 1 clears its old rows when the metric moves to the OTHER evaluator', async () => {
     // The reverse of the case above, and the one that stayed immortal: an SEO
     // action whose expected_metric moves from a flywheel_metrics key to a GSC

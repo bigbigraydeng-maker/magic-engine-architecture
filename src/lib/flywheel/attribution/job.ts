@@ -19,6 +19,7 @@ import { dualWindowEnabled } from './dual-window-gate'
 import {
   OUTCOME_CONFLICT_TARGET,
   OUTCOME_EVALUATOR,
+  foreignMetricPrefixes,
   resolveAttributionRouting,
 } from './outcome-identity'
 
@@ -392,16 +393,37 @@ async function reconcileLegacyWindows(
   authoritativeWindow: number,
 ): Promise<string[]> {
   const errors: string[] = []
-  if (metricKey !== null) {
-    const { error: claimErr } = await supabaseAdmin
-      .from('flywheel_outcomes')
-      .update({ evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS })
-      .eq('action_id', actionId)
-      .eq('metric_key', metricKey)
-      .is('evaluator_key', null)
+  // Claim by EXCLUSION, not by the current metric.
+  //
+  // Claiming only `metric_key = expected_metric` leaves a hole that the todo
+  // pipeline itself opens: inside the expand→deploy gap the old writer produces
+  // an unsigned row at metric A, then a human corrects the action to metric B
+  // (which is what `action_unattributable` asks for). The A row is then claimed
+  // by nobody — it is not the current metric — and deleted by nobody either,
+  // because the abandoned-metric retire below only matches rows already signed
+  // with this evaluator's key. It would sit unsigned forever: still read as
+  // evidence, and permanently blocking the contract migration's
+  // `evaluator_key IS NULL = 0` gate. (Codex P2, round 21 on PR #862.)
+  //
+  // Excluding every FOREIGN metric prefix rather than naming our own is what
+  // makes this provable instead of inferred: no other evaluator is permitted to
+  // write outside its own namespace, so a NULL row that is not in one can only
+  // be ours. The reverse direction stays deliberately unclaimed — a
+  // `seo.gsc.*` row could have come from either writer, and round 17 settled
+  // that guessing there is worse than letting the rollout gate hold.
+  let claim = supabaseAdmin
+    .from('flywheel_outcomes')
+    .update({ evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS })
+    .eq('action_id', actionId)
+    .is('evaluator_key', null)
 
-    if (claimErr) errors.push(`claim unsigned outcomes: ${claimErr.message}`)
+  for (const prefix of foreignMetricPrefixes(OUTCOME_EVALUATOR.FLYWHEEL_METRICS)) {
+    claim = claim.not('metric_key', 'like', `${prefix}%`)
   }
+
+  const { error: claimErr } = await claim
+
+  if (claimErr) errors.push(`claim unsigned outcomes: ${claimErr.message}`)
 
   // [2] Retire our own rows for metrics this action no longer promises.
   //

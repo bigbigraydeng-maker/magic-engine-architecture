@@ -46,7 +46,7 @@ vi.mock('@/lib/supabase', () => {
   const chain: Record<string, unknown> = {}
   const fluent = [
     'select', 'not', 'eq', 'lt', 'gte', 'lte',
-    'order', 'limit', 'range', 'upsert', 'update', 'delete',
+    'order', 'limit', 'range', 'upsert', 'update', 'delete', 'is', 'not',
   ]
   for (const m of fluent) {
     chain[m] = vi.fn().mockReturnValue(chain)
@@ -56,13 +56,14 @@ vi.mock('@/lib/supabase', () => {
     return next ? next() : { data: null, error: null }
   })
   chain['upsert'] = vi.fn().mockImplementation(async () => upsertResult)
-  // Terminal of the legacy-row claim: `.update(...).eq().eq().is(...)`.
-  // This file is a call-order mock, so it can only keep the chain from
-  // throwing — whether the claim actually signs the right rows is settled
-  // against the table-modelled fake in legacy-row-claim.test.ts.
-  chain['is'] = vi.fn().mockImplementation(async () => ({ data: null, error: null }))
   // Terminal of the window retire: `.delete().eq().eq().eq().neq(...)`.
   chain['neq'] = vi.fn().mockImplementation(async () => ({ data: null, error: null }))
+  // The reconciliation chains end on `.not(...)` or on the builder itself, so
+  // the chain has to be awaitable. This file is a call-order mock and can only
+  // keep those chains from throwing — whether reconciliation touches the right
+  // rows is settled against the table-modelled fake in legacy-row-claim.test.ts.
+  chain['then'] = (resolve: (v: unknown) => unknown) =>
+    Promise.resolve({ data: null, error: null }).then(resolve)
 
   return {
     supabaseAdmin: {

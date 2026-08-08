@@ -12,7 +12,7 @@
 
 type Row = Record<string, unknown>
 
-type FilterOp = 'eq' | 'neq' | 'in' | 'lt' | 'lte' | 'gt' | 'gte' | 'notNull' | 'isNull'
+type FilterOp = 'eq' | 'neq' | 'in' | 'notLike' | 'lt' | 'lte' | 'gt' | 'gte' | 'notNull' | 'isNull'
 
 interface Filter {
   column: string
@@ -187,6 +187,14 @@ function matches(row: Row, filters: Filter[]): boolean {
         return (f.value as unknown[]).includes(actual)
       case 'notNull':
         return actual !== null && actual !== undefined
+      case 'notLike': {
+        // Only the `prefix%` form the writers use.
+        const pattern = String(f.value)
+        if (!pattern.endsWith('%')) {
+          throw new Error(`FakeOutcomesDb: unmodelled LIKE pattern "${pattern}"`)
+        }
+        return !String(actual).startsWith(pattern.slice(0, -1))
+      }
       case 'isNull':
         // PostgREST `.is('col', null)` — and an absent column is NULL, which is
         // exactly the shape a row written before the expand migration has.
@@ -243,9 +251,26 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
     return this
   }
 
-  not(column: string, _op: string, _value: unknown): this {
-    this.filters.push({ column, op: 'notNull', value: null })
-    return this
+  /**
+   * PostgREST's `not(column, op, value)`.
+   *
+   * The op used to be ignored: every `.not()` became `IS NOT NULL`. That is not
+   * a shortcut, it is a wrong table — a writer excluding a metric namespace
+   * would have every row match in tests and only the intended ones match in
+   * production, so the exclusion could ship broken with a green suite. The two
+   * forms the writers actually use are modelled; anything else throws rather
+   * than being silently approximated.
+   */
+  not(column: string, op: string, value: unknown): this {
+    if (op === 'is' && value === null) {
+      this.filters.push({ column, op: 'notNull', value: null })
+      return this
+    }
+    if (op === 'like') {
+      this.filters.push({ column, op: 'notLike', value })
+      return this
+    }
+    throw new Error(`FakeOutcomesDb: unmodelled .not(${column}, ${op}, …)`)
   }
 
   lt(column: string, value: unknown): this {
