@@ -189,7 +189,7 @@ describe('S3 · 死信重跑之后，预算从历史真实花费起算', () => {
     expect(totalCost(f)).toBe(afterFirstResume) // 只增不减，也没有多花
     expect(stepCost(f, 'a')).toBe(1.5) // a 从头到尾只跑过一次
     // 拦在开跑前和跑完之后，给人看的话不一样 —— 这条钉死是**前者**
-    expect(second.execution?.failure?.humanReason).toContain('不再开跑')
+    expect(second.execution?.failure?.humanReason).toContain('这一步不开跑')
   })
 
   it('把上限提高之后再重跑 → 开跑前那道闸放行，这一步真的跑完', async () => {

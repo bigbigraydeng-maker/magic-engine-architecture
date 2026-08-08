@@ -40,6 +40,12 @@ export type KernelErrorCode =
   | 'CAPABILITY_NOT_IMPLEMENTED'
   /** 对外副作用被闸死 —— v1 永远不许出现 */
   | 'OUTWARD_SIDE_EFFECT_BLOCKED'
+  /**
+   * capability 报回来的花费不是一个真实金额（NaN / ±Infinity / 负数）。
+   * 🔴 负数最危险 —— 它能把「已花金额」减回来，等于绕开预算上限。
+   *    一律 fail closed，且这个数字**不进账本**。
+   */
+  | 'INVALID_COST'
 
 export class KernelError extends Error {
   readonly code: KernelErrorCode

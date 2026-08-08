@@ -136,7 +136,10 @@ const RUN_COLUMNS =
   'id, client_id, purpose, goal_id, execution_item_id, triggered_by, triggered_by_ref, ' +
   'action_key, action_version, input, rationale, evidence, idempotency_key, status, ' +
   'authorization_decision_id, correlation_id, cost_cap_usd, cost_estimate_usd, ' +
-  'needs_human, last_error, created_at, updated_at, started_at, finished_at'
+  'needs_human, last_error, ' +
+  'claimed_by, claimed_at, heartbeat_at, lease_expires_at, ' +
+  'previous_claimed_by, reclaim_count, last_reclaimed_at, ' +
+  'created_at, updated_at, started_at, finished_at'
 
 export async function findRunByIdempotencyKey(
   sb: SupabaseClient,
@@ -364,6 +367,53 @@ export async function claimRunRecovery(
   const row = (data ?? [])[0] as unknown as { ok: boolean; reason: string } | undefined
   if (!row) fail('领取恢复权', { message: 'RPC 没有返回结果行' })
   return { ok: Boolean(row.ok), reason: String(row.reason ?? 'unknown') }
+}
+
+/**
+ * 中间态 run 的运行所有权：领租约 / 接管（走 `kernel_claim_or_takeover_run` RPC）。
+ *
+ * 🔴 这是「已经有人在做了」这句话的**唯一依据**。
+ *    没有它，进程在 queued / authorizing / authorized 崩掉之后，
+ *    幂等唯一键会把这件事永久锁死 —— 相同请求永远只拿到 in_progress，
+ *    而实际上没有任何人在推进它。
+ *
+ *    领不到（`already_owned`）= 真的还有一个活着的 owner，这才配叫 in_progress。
+ */
+export interface ClaimOrTakeoverResult {
+  ok: boolean
+  /** `claimed` / `taken_over` / `already_owned:<owner>` / `not_claimable:<status>` / … */
+  reason: string
+  /** 领到的那一刻 run 的状态（决定接下来是复用授权还是重新授权）。 */
+  runStatus: string | null
+  /** 领到的那一刻 run 当前指着的决策。authorized 时用来复用授权。 */
+  decisionId: string | null
+  /** 是不是**从别人手里**接走的（自己续租不算）。 */
+  reclaimed: boolean
+  reclaimCount: number
+}
+
+export async function claimOrTakeoverRun(
+  sb: SupabaseClient,
+  args: { runId: string; ownerId: string; leaseSeconds: number },
+): Promise<ClaimOrTakeoverResult> {
+  const { data, error } = await sb.rpc('kernel_claim_or_takeover_run', {
+    p_run_id: args.runId,
+    p_owner_id: args.ownerId,
+    p_lease_seconds: args.leaseSeconds,
+  })
+  if (error) fail('领取运行所有权', error)
+  const row = (data ?? [])[0] as unknown as
+    | { ok: boolean; reason: string; run_status: string | null; decision_id: string | null; reclaimed: boolean; reclaim_count: number }
+    | undefined
+  if (!row) fail('领取运行所有权', { message: 'RPC 没有返回结果行' })
+  return {
+    ok: Boolean(row.ok),
+    reason: String(row.reason ?? 'unknown'),
+    runStatus: row.run_status ?? null,
+    decisionId: row.decision_id ?? null,
+    reclaimed: Boolean(row.reclaimed),
+    reclaimCount: Number(row.reclaim_count ?? 0),
+  }
 }
 
 // ── Step ──────────────────────────────────────────────────────────────────────

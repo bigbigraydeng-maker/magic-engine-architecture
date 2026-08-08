@@ -301,13 +301,14 @@ describe('lineage 视图的权限（C1）', () => {
     ).toBe(true)
   })
 
-  it('两个 RPC 的 EXECUTE 也都收了口（同一类漏洞，一起盯）', () => {
+  it('每一个 RPC 的 EXECUTE 也都收了口（同一类漏洞，一起盯）', () => {
     const sql = read(MIGRATION)
     for (const fn of [
       'kernel_claim_run_step',
       'kernel_begin_authorized_run',
       'kernel_resolve_pending_approval',
       'kernel_claim_run_recovery',
+      'kernel_claim_or_takeover_run',
     ]) {
       expect(
         new RegExp(
@@ -375,6 +376,50 @@ describe('两处清单不许分家（S1 / S2）', () => {
     const resetStmt = fn.slice(startIdx, endIdx)
     expect(resetStmt, '切出来的必须真是那条语句，不能是空串').toContain('SET status')
     expect(resetStmt).not.toContain('cost_actual_usd')
+  })
+
+  it('🔴 接管 RPC：锁 + 状态白名单 + 租约到期判据，缺一不可（T1）', () => {
+    const sql = read(MIGRATION_SQL)
+    const fn = sql.slice(
+      sql.indexOf('CREATE OR REPLACE FUNCTION public.kernel_claim_or_takeover_run'),
+      sql.indexOf('REVOKE EXECUTE ON FUNCTION public.kernel_claim_or_takeover_run'),
+    )
+    expect(fn, '接管 RPC 应该切得出来').toContain('SECURITY DEFINER')
+    // 锁：没有它，两个人能同时把 owner 写成自己
+    expect(fn).toContain('FOR UPDATE')
+    // 状态白名单：终态和 running 一律不许接管
+    expect(fn).toMatch(/NOT IN \('queued','authorizing','authorized'\)/)
+    // 租约到期才是接管的依据 —— 判据是时间，不是「看起来没人在动」
+    expect(fn).toMatch(/lease_expires_at\s*>\s*now\(\)/)
+    // 领到时必须回报**领到那一刻**的状态和决策指针，调用方靠它决定复不复用授权
+    expect(fn).toMatch(/v_run\.authorization_decision_id/)
+    // 接管审计
+    expect(fn).toContain('previous_claimed_by')
+    expect(fn).toContain('reclaim_count')
+  })
+
+  it('🔴 交接（批准 / 拒绝 / 恢复）都必须清空租约，否则会留下僵尸 owner（T1）', () => {
+    const sql = read(MIGRATION_SQL)
+    // 三处状态转换都得把租约清干净：留着的话，真正要来推进的人会被
+    // 一份 owner 早就走了的租约挡成「已经有人在做了」。
+    const resets = sql.match(/lease_expires_at\s*=\s*NULL/gi) ?? []
+    expect(
+      resets.length,
+      '至少三处交接（approve / reject / recovery）要清租约',
+    ).toBeGreaterThanOrEqual(3)
+  })
+
+  it('🔴 cost_actual_usd 的 CHECK 必须显式挡住 NaN 和 Infinity（T3）', () => {
+    const sql = read(MIGRATION_SQL)
+    const stmt = sql.slice(
+      sql.indexOf('CONSTRAINT cost_actual_usd_is_a_real_amount'),
+      sql.indexOf('CONSTRAINT cost_actual_usd_is_a_real_amount') + 400,
+    )
+    expect(stmt, 'CHECK 约束应该切得出来').toContain('CHECK')
+    // 🔴 `>= 0` 一条拦不住 NaN —— numeric 里 `'NaN' >= 0` 是 **true**（生产 PG 17.6 实测）。
+    expect(stmt).toContain('>= 0')
+    expect(stmt).toMatch(/<>\s*'NaN'::numeric/)
+    expect(stmt).toMatch(/<\s*'Infinity'::numeric/)
   })
 
   it('🔴 execution_item 的复合外键和前置唯一索引都在（S2 的库层那道）', () => {

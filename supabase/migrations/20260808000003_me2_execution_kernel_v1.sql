@@ -333,6 +333,25 @@ CREATE TABLE IF NOT EXISTS public.action_runs (
   needs_human               boolean NOT NULL DEFAULT false,
   last_error                text,
 
+  -- ── 运行所有权（租约）─────────────────────────────────────────────────
+  -- 🔴 T1：「已经有人在做了」必须意味着**真的还有一个没过期的 owner**。
+  --
+  --    没有这几列的时候：进程在 queued / authorizing / authorized 崩掉，
+  --    run 就永远卡在那儿 —— 幂等唯一键让相同请求再也插不进来，
+  --    调用方每次只拿到 in_progress，而实际上没有任何人在推进它。
+  --    唯一键本来是防重复执行的，结果把这件事**永久锁死**。
+  --
+  --    字段名沿用 action_run_steps 那套（claimed_by / heartbeat_at / reclaim_count），
+  --    仓库里唯一并发正确的那份租约就是这么写的，不另发明一套词。
+  claimed_by                text,
+  claimed_at                timestamptz,
+  heartbeat_at              timestamptz,
+  lease_expires_at          timestamptz,
+  -- 接管审计：被谁从谁手里接走、接过几次、最后一次什么时候
+  previous_claimed_by       text,
+  reclaim_count             integer NOT NULL DEFAULT 0,
+  last_reclaimed_at         timestamptz,
+
   created_at                timestamptz NOT NULL DEFAULT now(),
   updated_at                timestamptz NOT NULL DEFAULT now(),
   started_at                timestamptz,
@@ -346,6 +365,10 @@ CREATE INDEX IF NOT EXISTS idx_action_runs_queue  ON public.action_runs (status,
 CREATE INDEX IF NOT EXISTS idx_action_runs_client ON public.action_runs (client_id, status);
 CREATE INDEX IF NOT EXISTS idx_action_runs_goal   ON public.action_runs (goal_id) WHERE goal_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_action_runs_corr   ON public.action_runs (correlation_id);
+-- 找「中间态里租约已经过期的 run」——接管的查询走这条
+CREATE INDEX IF NOT EXISTS idx_action_runs_lease
+  ON public.action_runs (status, lease_expires_at)
+  WHERE status IN ('queued','authorizing','authorized');
 
 ALTER TABLE public.action_runs ENABLE ROW LEVEL SECURITY;
 DO $$ BEGIN
@@ -394,6 +417,28 @@ CREATE TABLE IF NOT EXISTS public.action_run_steps (
 
   cost_actual_usd  numeric NOT NULL DEFAULT 0,
   last_error       text,
+
+  -- 🔴 T3：花掉的钱是**运行时输入**（capability 返回什么就是什么），
+  --    TypeScript 的 `number` 拦不住 NaN / Infinity / 负数。
+  --    负数最危险：它能把「已花金额」减回来，等于绕开预算上限。
+  --
+  --    numeric 的三个坑，全部在生产库（PostgreSQL 17.6）实测过，不是照猜：
+  --      · `'NaN'::numeric >= 0`            → **true**（`>= 0` 一条根本拦不住 NaN）
+  --      · `'NaN'::numeric <> 'NaN'`        → false  （所以 `<> 'NaN'` 能拦住它）
+  --      · `'Infinity'::numeric >= 0`       → true   （`< 'Infinity'` 才拦得住）
+  --      · `'-Infinity'::numeric >= 0`      → false  （`>= 0` 就拦住了）
+  --    numeric 从 PG 14 起支持 ±Infinity，所以这两条都不是理论问题。
+  --
+  --    应用层也有同一套判据。两层都要：应用层是为了说人话 + 不污染账本，
+  --    这一层是为了「绕开应用直接写库」也写不进去。
+  CONSTRAINT cost_actual_usd_is_a_real_amount CHECK (
+    cost_actual_usd IS NULL
+    OR (
+      cost_actual_usd >= 0
+      AND cost_actual_usd <> 'NaN'::numeric
+      AND cost_actual_usd <  'Infinity'::numeric
+    )
+  ),
 
   created_at       timestamptz NOT NULL DEFAULT now(),
   updated_at       timestamptz NOT NULL DEFAULT now(),
@@ -708,6 +753,13 @@ BEGIN
        SET status = 'denied',
            authorization_decision_id = v_new_id,
            needs_human = false,
+           -- 🔴 T1：这是一次**交接**，不是继续推进 —— 把租约清干净。
+           --    挂起等审批期间那份租约的 owner 早就走了；不清的话，
+           --    真正要来推进的人会被这份僵尸租约挡成「已经有人在做了」。
+           claimed_by       = NULL,
+           claimed_at       = NULL,
+           heartbeat_at     = NULL,
+           lease_expires_at = NULL,
            last_error  = p_reason,
            finished_at = now(),
            updated_at  = now()
@@ -769,6 +821,13 @@ BEGIN
          cost_cap_usd = v_cost_cap,
          cost_estimate_usd = p_cost_estimate_usd,
          needs_human = false,
+         -- 🔴 T1：批准是一次**交接**。挂起等审批期间留下的那份租约，
+         --    它的 owner 早就走了 —— 不清掉的话，真正要来推进这条 run 的人
+         --    会被这份僵尸租约挡成「已经有人在做了」，而实际没有任何人在做。
+         claimed_by       = NULL,
+         claimed_at       = NULL,
+         heartbeat_at     = NULL,
+         lease_expires_at = NULL,
          updated_at  = now()
    WHERE id = v_run.id;
 
@@ -887,6 +946,15 @@ BEGIN
          needs_human = false,
          last_error  = NULL,
          finished_at = NULL,
+         -- 🔴 T1：放回 queued 的同时**把租约清干净**。
+         --    恢复只是把这件事重新变成「可做」，并不代表恢复的那个进程
+         --    一定能活到把它跑完 —— 恢复提交之后、重新授权之前崩掉，
+         --    留着旧 owner 会让这条 run 再也没人接得走。
+         --    清空之后它就是一条无主的 queued，谁先领租约谁推进。
+         claimed_by       = NULL,
+         claimed_at       = NULL,
+         heartbeat_at     = NULL,
+         lease_expires_at = NULL,
          evidence = COALESCE(evidence, '{}'::jsonb) || jsonb_build_object(
            'last_recovered_by',        p_actor,
            'last_recovered_at',        to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
@@ -904,6 +972,123 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.kernel_claim_run_recovery(uuid, uuid, text, text, text)
   FROM PUBLIC, anon, authenticated;
 GRANT  EXECUTE ON FUNCTION public.kernel_claim_run_recovery(uuid, uuid, text, text, text)
+  TO service_role;
+
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- 5e. kernel_claim_or_takeover_run —— 中间态 run 的运行所有权（租约 + 接管）
+--
+-- 🔴 要解决的问题：进程在真正执行之前崩掉。
+--
+--    run 已经落库成 queued / authorizing / authorized，但没有任何人在推进它。
+--    相同业务请求再来一次，撞上 `UNIQUE(client_id, idempotency_key)`，
+--    拿回同一条 run —— 于是调用方永远只得到「已经有人在做了」。
+--    没有 worker、没有清扫器，幂等唯一键反而把这件事**永久锁死**。
+--
+--    所以「已经有人在做了」这句话必须有实质：**当前真的存在一个没过期的 owner**。
+--    否则必须允许显式接管。
+--
+-- 🔴 为什么必须是一条 RPC 而不是「读一下再 update」：
+--    两个调用方可以同时读到「租约已过期 / 无主」，然后各自把自己写成 owner，
+--    再各自去授权 —— 同一条 run 出现两份 allow 决策、两个执行者。
+--    这里锁的是 run 本身：一次只有一个人能把 owner 换成自己。
+--
+-- 🔴 只有**中间态**可以接管。succeeded / denied / dead_letter / running
+--    一律不许 —— 前三个是终态（要动它们走 recovery 那条显式路径），
+--    running 说明执行权已经被 kernel_begin_authorized_run 原子领走了，
+--    接管它等于让 capability 跑第二遍。
+--
+-- 返回 run_status 和 decision_id 是给调用方判断**接下来怎么走**：
+--    · authorized + 一份没被消费的 allow → 直接复用那份授权，**不要重新签**
+--    · queued / authorizing               → 重新进授权（此时租约保证只有一个人在签）
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.kernel_claim_or_takeover_run(
+  p_run_id        uuid,
+  p_owner_id      text,
+  p_lease_seconds integer
+)
+RETURNS TABLE (
+  ok            boolean,
+  reason        text,
+  run_status    text,
+  decision_id   uuid,
+  reclaimed     boolean,
+  reclaim_count integer
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_run        public.action_runs%ROWTYPE;
+  v_reclaimed  boolean := false;
+  v_prev_owner text;
+BEGIN
+  IF p_owner_id IS NULL OR length(btrim(p_owner_id)) = 0 THEN
+    RETURN QUERY SELECT false, 'owner_required', NULL::text, NULL::uuid, false, 0; RETURN;
+  END IF;
+  IF p_lease_seconds IS NULL OR p_lease_seconds <= 0 THEN
+    RETURN QUERY SELECT false, 'lease_seconds_required', NULL::text, NULL::uuid, false, 0; RETURN;
+  END IF;
+
+  -- ① 锁住这一行。后面每一句都在这把锁之内。
+  SELECT * INTO v_run FROM public.action_runs WHERE id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'run_not_found', NULL::text, NULL::uuid, false, 0; RETURN;
+  END IF;
+
+  -- ② 只有中间态可以领 / 接管
+  IF v_run.status NOT IN ('queued','authorizing','authorized') THEN
+    RETURN QUERY SELECT false, 'not_claimable:' || v_run.status,
+                        v_run.status, v_run.authorization_decision_id, false, v_run.reclaim_count;
+    RETURN;
+  END IF;
+
+  -- ③ 租约还活着，而且不是自己的 → 抢不走。
+  --    这就是「in_progress」唯一有资格出现的场景。
+  --    同一个 owner 再来一次算**续租**，不算接管（重试 / 同进程再进一次）。
+  IF v_run.claimed_by IS NOT NULL
+     AND v_run.lease_expires_at IS NOT NULL
+     AND v_run.lease_expires_at > now()
+     AND v_run.claimed_by <> p_owner_id THEN
+    RETURN QUERY SELECT false, 'already_owned:' || v_run.claimed_by,
+                        v_run.status, v_run.authorization_decision_id, false, v_run.reclaim_count;
+    RETURN;
+  END IF;
+
+  -- ④ 无主 / 租约过期 / 自己续租 → 原子写下新 owner。
+  --    「从别人手里接走」才算 reclaim，自己续租不算 —— 两者是不同的故障信号。
+  v_prev_owner := v_run.claimed_by;
+  v_reclaimed  := (v_prev_owner IS NOT NULL AND v_prev_owner <> p_owner_id);
+
+  UPDATE public.action_runs
+     SET claimed_by          = p_owner_id,
+         claimed_at          = now(),
+         heartbeat_at        = now(),
+         lease_expires_at    = now() + make_interval(secs => p_lease_seconds),
+         previous_claimed_by = CASE WHEN v_reclaimed THEN v_prev_owner ELSE previous_claimed_by END,
+         reclaim_count       = reclaim_count + CASE WHEN v_reclaimed THEN 1 ELSE 0 END,
+         last_reclaimed_at   = CASE WHEN v_reclaimed THEN now() ELSE last_reclaimed_at END,
+         evidence            = COALESCE(evidence, '{}'::jsonb) || jsonb_build_object(
+           'last_claimed_by', p_owner_id,
+           'last_claimed_at', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+           'last_takeover_from', CASE WHEN v_reclaimed THEN to_jsonb(v_prev_owner) ELSE 'null'::jsonb END
+         ),
+         updated_at          = now()
+   WHERE id = v_run.id;
+
+  RETURN QUERY SELECT true,
+                      CASE WHEN v_reclaimed THEN 'taken_over' ELSE 'claimed' END,
+                      v_run.status,
+                      v_run.authorization_decision_id,
+                      v_reclaimed,
+                      v_run.reclaim_count + CASE WHEN v_reclaimed THEN 1 ELSE 0 END;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.kernel_claim_or_takeover_run(uuid, text, integer)
+  FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.kernel_claim_or_takeover_run(uuid, text, integer)
   TO service_role;
 
 

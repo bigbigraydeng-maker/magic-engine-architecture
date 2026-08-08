@@ -335,6 +335,13 @@ export async function authorizeRun(deps: KernelDeps, input: ActionRun): Promise<
       cost_cap_usd: costCap,
       cost_estimate_usd: costEstimate,
       needs_human: true,
+      // 🔴 T1：挂起等人点头 = **交接给人**，推进这条 run 的人到此为止。
+      //    租约留着的话，等它自己过期之前这条 run 看起来一直「有人在做」。
+      //    可接管的三个状态里，「租约活着」必须严格等于「真的有人在推进」。
+      claimed_by: null,
+      claimed_at: null,
+      heartbeat_at: null,
+      lease_expires_at: null,
     })
     return { verdict: 'require_approval', decision, run: updated, ctx: null }
   }
@@ -367,6 +374,63 @@ export async function authorizeRun(deps: KernelDeps, input: ActionRun): Promise<
   })
 
   return { verdict: 'allow', decision, run: updated, ctx: mintContext(decision, costCap) }
+}
+
+/**
+ * 接管一条**已经授权过**的 run：复用它当前那份授权，**不重新签一条**（T1）。
+ *
+ * 场景：进程签完 allow、把 run 推到 authorized，然后在开跑之前崩了。
+ * 接管者拿到运行所有权之后，这条 run 已经有一份**没被消费过**的 allow ——
+ * 再签一份会让同一件事出现两个「谁批的」，审计表里多一条纯噪音的记录。
+ *
+ * 🔴 但复用绝不是「照单全收」：
+ *    · 决策必须真的属于这条 run、这个客户（跨客户当场拦）；
+ *    · 必须是 allow、必须没被消费过（消费过说明已经有人开跑了 —— 这是不一致，抛）；
+ *    · 过期了就**不复用**（返回 null），由调用方走一次完整的重新授权 ——
+ *      过期的授权本来就该重新判，这不是绕过。
+ *
+ *    政策有没有变（身份 / 版本 / 模式）这里不查 —— Gateway 在真正开跑前
+ *    会把这些逐项重查一遍（assertDecisionMatches + kernel_begin_authorized_run），
+ *    在这里再抄一份只会多一处会分家的判据。
+ *
+ * @returns 可复用的授权结果；`null` = 不可复用但可以重新授权。
+ */
+export async function reuseLiveAuthorization(
+  deps: KernelDeps,
+  run: ActionRun,
+): Promise<AuthorizationOutcome | null> {
+  if (!run.authorization_decision_id) return null
+
+  const decision = await getDecision(deps.supabase, run.authorization_decision_id)
+  if (!decision) return null
+
+  if (decision.client_id !== run.client_id) {
+    throw new KernelError(
+      'CROSS_CLIENT',
+      '安全告警：这条动作当前指着的授权不属于这个客户 —— 已阻止',
+      { detail: { runId: run.id, decisionId: decision.id } },
+    )
+  }
+  if (decision.action_run_id !== run.id) {
+    throw new KernelError(
+      'NOT_AUTHORIZED',
+      '这条动作当前指着的授权记的是另一件事 —— 库里状态不一致，先别继续',
+      { detail: { runId: run.id, decisionId: decision.id } },
+    )
+  }
+  if (decision.verdict !== 'allow') return null
+  if (decision.consumed_at) {
+    // authorized + 授权已被兑换 = 已经有人开跑了，状态却没跟上。
+    // 这不是并发的正常结果，是不一致，必须炸出来而不是再跑一遍。
+    throw new KernelError(
+      'DECISION_ALREADY_CONSUMED',
+      '这条动作停在「已授权」，但它的授权已经被用掉了 —— 库里状态不一致，先别继续',
+      { detail: { runId: run.id, decisionId: decision.id, consumedBy: decision.consumed_by } },
+    )
+  }
+  if (decision.expires_at && Date.parse(decision.expires_at) <= deps.now().getTime()) return null
+
+  return { verdict: 'allow', decision, run, ctx: mintContext(decision, decision.cost_cap_usd) }
 }
 
 // ── 人工批准 ──────────────────────────────────────────────────────────────────

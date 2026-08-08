@@ -66,6 +66,18 @@ export interface CostModel {
   readonly kind: 'fixed' | 'per_unit' | 'estimated'
   /** 估算这次要花多少美金。纯内部动作返回 0。 */
   estimate(input: Record<string, unknown>): number
+  /**
+   * 每一步**最多**会花多少美金（step_key → 上界）。
+   *
+   * 🔴 有了它，「还剩多少预算」才能在**调用供应商之前**判准：
+   *    已花 $2、上限 $2、下一步要花 $1 —— 不该等花成 $3 才发现超了。
+   *
+   *    没声明的步骤 = 成本未知。未知不等于放行也不等于拦死：
+   *      · 整个动作的 estimate 是 0（契约说它根本不花钱）→ 视为上界 0；
+   *      · 否则只在**预算已经见底**时 fail closed。
+   *    这是刻意的 —— 凭空给未知步骤编一个数字，比不判还危险。
+   */
+  readonly stepCeilingUsd?: Readonly<Record<string, number>>
 }
 
 export interface RetryPolicy {
@@ -233,6 +245,17 @@ export interface ActionRun {
   cost_estimate_usd: number | null
   needs_human: boolean
   last_error: string | null
+  /**
+   * 运行所有权（租约）。「已经有人在做了」必须意味着 `lease_expires_at > now()`
+   * 且 `claimed_by` 不为空 —— 否则这条 run 就是无主的，可以被显式接管。
+   */
+  claimed_by: string | null
+  claimed_at: string | null
+  heartbeat_at: string | null
+  lease_expires_at: string | null
+  previous_claimed_by: string | null
+  reclaim_count: number
+  last_reclaimed_at: string | null
   created_at: string
   updated_at: string
   started_at: string | null

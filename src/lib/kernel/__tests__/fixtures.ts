@@ -115,6 +115,10 @@ export function makeFixture(args: {
   capabilities: (sb: SupabaseClient) => Readonly<Record<string, CapabilityImplementation>>
   options?: FixtureOptions
   startAt?: string
+  /** 租约时长（秒）。接管测试要把它调小，才能在冻结时钟上把租约推过期。 */
+  leaseSeconds?: number
+  /** 固定租约身份 —— 用来造「另一个进程」。 */
+  ownerId?: string
 }): Fixture {
   const tables = buildTables(args.options)
   const clock = { now: new Date(args.startAt ?? '2026-08-08T02:00:00.000Z') }
@@ -128,6 +132,8 @@ export function makeFixture(args: {
     registry: args.registry,
     capabilities: args.capabilities(supabase),
     workerId: 'test-worker',
+    ...(args.leaseSeconds !== undefined ? { leaseSeconds: args.leaseSeconds } : {}),
+    ...(args.ownerId !== undefined ? { ownerId: args.ownerId } : {}),
     now: () => clock.now,
     // 测试里不真等 —— 退避的**时长**由 next_attempt_at 断言，不由挂钟断言
     sleep: async () => {},

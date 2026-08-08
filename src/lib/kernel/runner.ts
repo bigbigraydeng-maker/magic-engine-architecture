@@ -13,15 +13,17 @@ import type {
   ActionPurpose,
   ActionRun,
   AuthorizationDecision,
+  AuthorizedExecutionContext,
   TriggeredBy,
 } from './types'
 import type { KernelDeps } from './deps'
 import type { ExecutionResult } from './gateway'
 import { KernelError } from './errors'
-import { authorizeRun, approveRun, rejectRun } from './authorize'
+import { authorizeRun, approveRun, rejectRun, reuseLiveAuthorization } from './authorize'
 import { executeAuthorizedRun, rehydrateSucceededRun } from './gateway'
 import { computeIdempotencyKey, computeUnknownActionKey } from './idempotency'
 import {
+  claimOrTakeoverRun,
   claimRunRecovery,
   findRunByIdempotencyKey,
   getDecision,
@@ -200,6 +202,19 @@ async function insertRunRow(
   })
 }
 
+/**
+ * 这一次推进的租约身份。
+ *
+ * 🔴 每一次「我要来推进这条 run」都是一个**独立的 owner**，
+ *    哪怕它们在同一个进程里。共用进程身份的话，同进程的两个并发调用
+ *    会互相被当成「自己续租」而同时放行 —— 租约那道锁就形同虚设。
+ */
+let claimSeq = 0
+function nextOwnerId(deps: KernelDeps): string {
+  claimSeq += 1
+  return `${deps.ownerId}#${claimSeq}`
+}
+
 export type ActionOutcomeKind =
   | 'succeeded'
   | 'idempotent_hit'
@@ -232,13 +247,31 @@ export async function runAction(
   input: SubmitActionInput,
 ): Promise<ActionRunOutcome> {
   const submitted = await submitActionRun(deps, input)
-  const run = submitted.run
 
+  // 已经有定论的 run（做完 / 等审批 / 被拒 / 死信）直接如实回答，不再往下走
+  const settled = await outcomeForSettledRun(deps, submitted.run)
+  if (settled) return settled
+
+  return driveIntermediateRun(deps, submitted.run.id)
+}
+
+/**
+ * run 已经有定论了吗。有 → 如实回答；没有（还在中间态）→ null，由调用方继续推进。
+ *
+ * 抽出来是因为**两个地方要用同一套判据**：提交之后的第一次判断，
+ * 以及领运行所有权失败（`not_claimable:<status>`）之后的复查 ——
+ * 后者意味着「期间被别人推进到了另一个状态」，此时必须按**新状态**回答，
+ * 不能一律说「已经有人在做了」。
+ */
+async function outcomeForSettledRun(
+  deps: KernelDeps,
+  run: ActionRun,
+): Promise<ActionRunOutcome | null> {
   // 幂等命中：已经做完的事不再做第二遍，capability 一次都不调。
   // 🔴 但返回的必须是**第一次的真实结果**（产物 + 验证），不是一个空壳 ——
   //    调用方丢了首次响应重试时，拿到 null 等于逼它自己去翻步骤表。
   //    历史数据对不上契约时 rehydrate 会抛错（fail closed），不假装成功。
-  if (submitted.existing && run.status === 'succeeded') {
+  if (run.status === 'succeeded') {
     return {
       kind: 'idempotent_hit',
       run,
@@ -249,10 +282,10 @@ export async function runAction(
   }
 
   // 已经在等人点头 / 已经被拒 —— 不重新授权，避免审计表里出现两个答案
-  if (submitted.existing && run.status === 'pending_approval') {
+  if (run.status === 'pending_approval') {
     return { kind: 'pending_approval', run, decision: null, execution: null, humanReason: '这条还在等你点头' }
   }
-  if (submitted.existing && (run.status === 'denied' || run.status === 'dead_letter')) {
+  if (run.status === 'denied' || run.status === 'dead_letter') {
     return {
       kind: run.status === 'denied' ? 'denied' : 'dead_letter',
       run,
@@ -262,21 +295,81 @@ export async function runAction(
     }
   }
 
-  // 🔴 已经存在、且还在推进中的 run —— **绝不再签第二份授权。**
-  //    两份 allow 决策会让「谁有权执行」出现两个答案，也会让审计表里
-  //    同一件事有两个「谁批的」。这条路径返回 in_progress，由抢到的那一方推进。
-  //    （执行权本身还有 kernel_begin_authorized_run 那道原子闸兜底。）
-  if (submitted.existing) {
+  // 已经被原子领走执行权、正在跑 —— 这是真的有人在做
+  if (run.status === 'running') {
     return {
       kind: 'in_progress',
       run,
       decision: null,
       execution: null,
-      humanReason: '这件事已经有人在做了，这次不重复做',
+      humanReason: '这件事正在做，这次不重复做',
     }
   }
 
-  const auth = await authorizeRun(deps, run)
+  return null
+}
+
+/**
+ * 推进一条**中间态**的 run（queued / authorizing / authorized）。
+ *
+ * 🔴 T1 的核心：先**原子领取运行所有权**，再决定自己推不推。
+ *
+ *    早先这里是「已经存在的 run 一律返回 in_progress」。那句话有个致命前提：
+ *    「已经存在」意味着有人在推进它。可进程会崩 —— run 停在 queued / authorizing /
+ *    authorized，没有 worker、没有清扫器，而幂等唯一键让相同请求再也插不进来。
+ *    结果是幂等键把这件事**永久锁死**，调用方永远只拿到 in_progress。
+ *
+ *    现在 in_progress 只在两种情况下出现：
+ *      ① 租约还没过期（`already_owned`）—— 真的还有一个活着的 owner；
+ *      ② run 已经进 running —— 执行权已被原子领走。
+ *    其余情况一律允许显式接管。
+ *
+ *    租约同时也是「同一时刻只有一个人在签授权」的那把锁：
+ *    没有它，两个调用方能同时给一条 queued 的 run 各签一份 allow。
+ */
+async function driveIntermediateRun(
+  deps: KernelDeps,
+  runId: string,
+): Promise<ActionRunOutcome> {
+  const claim = await claimOrTakeoverRun(deps.supabase, {
+    runId,
+    ownerId: nextOwnerId(deps),
+    leaseSeconds: deps.leaseSeconds,
+  })
+
+  if (!claim.ok) {
+    if (claim.reason.startsWith('already_owned')) {
+      return {
+        kind: 'in_progress',
+        run: await deps.requireRun(runId),
+        decision: null,
+        execution: null,
+        humanReason: '这件事已经有人在做了，这次不重复做',
+      }
+    }
+    // `not_claimable:<status>` —— 期间被别人推进到了另一个状态。按新状态如实回答。
+    const fresh = await deps.requireRun(runId)
+    const settled = await outcomeForSettledRun(deps, fresh)
+    if (settled) return settled
+    throw new KernelError(
+      'INVALID_STATE',
+      '这条动作的状态在这次操作期间变过了，没能接手 —— 刷新后再看',
+      { detail: { runId, reason: claim.reason, status: fresh.status } },
+    )
+  }
+
+  // 领到了。拿最新一行（带上刚写下的租约）。
+  const owned = await deps.requireRun(runId)
+
+  // 🔴 停在 authorized、且当前那份 allow 还活着 → **复用它，不重新签**。
+  //    重新签会让同一件事在审计表里出现两个「谁批的」。
+  //    过期 / 不可复用时返回 null，走下面完整的重新授权。
+  if (owned.status === 'authorized') {
+    const reused = await reuseLiveAuthorization(deps, owned)
+    if (reused?.ctx) return executeAndWrap(deps, reused.decision, reused.ctx)
+  }
+
+  const auth = await authorizeRun(deps, owned)
 
   if (auth.verdict === 'deny') {
     return { kind: 'denied', run: auth.run, decision: auth.decision, execution: null, humanReason: auth.decision.reason }
@@ -291,11 +384,19 @@ export async function runAction(
     }
   }
 
-  const execution = await executeAuthorizedRun(deps, auth.ctx)
+  return executeAndWrap(deps, auth.decision, auth.ctx)
+}
+
+async function executeAndWrap(
+  deps: KernelDeps,
+  decision: AuthorizationDecision,
+  ctx: AuthorizedExecutionContext,
+): Promise<ActionRunOutcome> {
+  const execution = await executeAuthorizedRun(deps, ctx)
   return {
     kind: execution.status === 'succeeded' ? 'succeeded' : 'dead_letter',
     run: execution.run,
-    decision: auth.decision,
+    decision,
     execution,
     humanReason: execution.failure?.humanReason ?? null,
   }
@@ -322,49 +423,47 @@ export async function approveAndRun(
       humanReason: auth.decision.reason,
     }
   }
-  const execution = await executeAuthorizedRun(deps, auth.ctx)
-  return {
-    kind: execution.status === 'succeeded' ? 'succeeded' : 'dead_letter',
-    run: execution.run,
-    decision: auth.decision,
-    execution,
-    humanReason: execution.failure?.humanReason ?? null,
+
+  // 🔴 T1：批准是原子的（RPC 里只有一个人能签），但**批准和执行是两件事**。
+  //    签完之后这条 run 就是一条无主的 authorized —— 不领运行所有权的话，
+  //    并发的 runAction 会同时接管它，两边各跑一遍授权重读。
+  //    （真正的双执行还有 kernel_begin_authorized_run 兜底，但白跑一趟没必要。）
+  //    领不到 = 已经有活着的 owner 在推进它，如实说，不硬抢。
+  const claim = await claimOrTakeoverRun(deps.supabase, {
+    runId,
+    ownerId: nextOwnerId(deps),
+    leaseSeconds: deps.leaseSeconds,
+  })
+  if (!claim.ok) {
+    return {
+      kind: 'in_progress',
+      run: await deps.requireRun(runId),
+      decision: auth.decision,
+      execution: null,
+      humanReason: '你的同意已经生效了；这件事已经有人在推进，这次不重复做',
+    }
   }
+
+  return executeAndWrap(deps, auth.decision, auth.ctx)
 }
 
 /**
  * 把「领到恢复权之后」的那一段共用逻辑抽出来。
  *
- * 恢复权已经原子领到了（run 现在是 queued、指针已清），接下来走的是
- * **跟第一次完全相同的授权路径** —— 恢复之后世界可能已经变了
+ * 恢复权已经原子领到了（run 现在是 queued、指针已清、**租约也已清空**），
+ * 接下来走的是**跟第一次完全相同的那条路** —— 恢复之后世界可能已经变了
  * （客户把规则改成禁止、规则被删、契约升版），必须重新过全部闸。
+ *
+ * 🔴 T1：恢复提交（事务已提交）和重新授权之间还有一个崩溃窗口。
+ *    走同一条 `driveIntermediateRun` 就是为了覆盖它 ——
+ *    先领运行所有权，崩在这之后租约会过期，这条 queued 还能被别人接走；
+ *    而不是变成一条永远没人推进、相同请求又插不进来的僵尸。
  */
 async function authorizeAndRunRecovered(
   deps: KernelDeps,
   runId: string,
 ): Promise<ActionRunOutcome> {
-  const recovered = await deps.requireRun(runId)
-  const auth = await authorizeRun(deps, recovered)
-  if (auth.verdict === 'deny') {
-    return { kind: 'denied', run: auth.run, decision: auth.decision, execution: null, humanReason: auth.decision.reason }
-  }
-  if (auth.verdict === 'require_approval' || !auth.ctx) {
-    return {
-      kind: 'pending_approval',
-      run: auth.run,
-      decision: auth.decision,
-      execution: null,
-      humanReason: auth.decision.reason,
-    }
-  }
-  const execution = await executeAuthorizedRun(deps, auth.ctx)
-  return {
-    kind: execution.status === 'succeeded' ? 'succeeded' : 'dead_letter',
-    run: execution.run,
-    decision: auth.decision,
-    execution,
-    humanReason: execution.failure?.humanReason ?? null,
-  }
+  return driveIntermediateRun(deps, runId)
 }
 
 /** 把 RPC 的机器可读原因翻成人话。认不出的一律当失败，没有「默认放过」。 */

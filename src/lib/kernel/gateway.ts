@@ -327,6 +327,104 @@ function beginFailureToError(reason: string): KernelError {
   }
 }
 
+// ── 钱 ────────────────────────────────────────────────────────────────────────
+
+/**
+ * 浮点噪音的容差。
+ *
+ * `0.4 * 3 = 1.2000000000000002` 这类误差会让「刚好花完」变成「差一点点负数」，
+ * 从而把一个零成本步骤误判成超预算。1e-9 美金 = 十亿分之一美分，
+ * 不可能是任何真实成本。
+ */
+const COST_EPSILON = 1e-9
+
+/**
+ * 这一步**最多**会花多少钱？拿不准就返回 null。
+ *
+ * 优先级：
+ *   ① 契约里显式声明的每步上界（`costModel.stepCeilingUsd`）；
+ *   ② 整个动作的估算是 0 —— 契约说它根本不花钱，那每一步的上界自然是 0。
+ *      （当前唯一上线的能力就是这一类：纯内部组装，不调 LLM、不调外部 API。）
+ *   ③ 都没有 → null = **成本未知**。
+ *
+ * 🔴 不给未知的步骤编一个数字。编出来的数只会让「拦住了」和「放过了」
+ *    都失去依据 —— 比不判更危险。未知的处置见 nextStepBlockedByBudget。
+ */
+function nextStepCostCeiling(
+  definition: ActionDefinition,
+  run: ActionRun,
+  stepKey: string,
+): number | null {
+  const declared = definition.costModel.stepCeilingUsd?.[stepKey]
+  if (typeof declared === 'number' && Number.isFinite(declared) && declared >= 0) return declared
+
+  const whole = definition.costModel.estimate(run.input)
+  if (Number.isFinite(whole) && whole === 0) return 0
+
+  return null
+}
+
+/**
+ * 开跑前的预算闸：这一步现在还能不能跑。
+ *
+ * `remaining = cap - spent`，然后：
+ *   · 上界已知 → `ceiling > remaining` 就拦。
+ *     这一条覆盖了「已花 $2 / 上限 $2 / 下一步要花 $1」——
+ *     `1 > 0` 成立，handler 一次都不会被调到。
+ *     也覆盖了「上限 0 + 零成本步骤」：`0 > 0` 不成立，照常放行。
+ *   · 上界未知 → 只在**预算已经见底**（remaining <= 0）时 fail closed。
+ *     还有余额时不拦，因为拦了就等于把所有没声明成本的动作全废掉；
+ *     真花超了由 handler 返回之后那道事后闸接住（那时钱已落库）。
+ *
+ * 🔴 不能简单写成 `spent >= cap`：`cap = 0` 是正常值（零成本能力），
+ *    那样会把它们全部拦死。判据必须结合**下一步要花多少**。
+ */
+function nextStepBlockedByBudget(
+  definition: ActionDefinition,
+  run: ActionRun,
+  cap: number | null,
+  spent: number,
+  stepKey: string,
+): { humanReason: string; detail: Record<string, unknown> } | null {
+  if (cap === null) return null
+
+  const remaining = cap - spent
+  const ceiling = nextStepCostCeiling(definition, run, stepKey)
+
+  if (ceiling !== null) {
+    if (ceiling - remaining > COST_EPSILON) {
+      return {
+        humanReason:
+          `这次执行的上限是 $${cap.toFixed(2)}，已经花掉 $${spent.toFixed(2)}，` +
+          `而「${stepKey}」最多还要 $${ceiling.toFixed(2)} —— 不够，这一步不开跑`,
+        detail: { cap, spent, remaining, nextStepCeiling: ceiling, reason: 'ceiling_over_remaining' },
+      }
+    }
+    return null
+  }
+
+  if (remaining <= COST_EPSILON) {
+    return {
+      humanReason:
+        `这次执行的上限是 $${cap.toFixed(2)}，已经花掉 $${spent.toFixed(2)}，预算见底；` +
+        `而「${stepKey}」没有声明成本上界 —— 不确定要花多少就不开跑`,
+      detail: { cap, spent, remaining, nextStepCeiling: null, reason: 'budget_exhausted_unknown_cost' },
+    }
+  }
+  return null
+}
+
+/**
+ * capability 报回来的花费是一个**真实金额**吗。
+ *
+ * 🔴 这是运行时输入，TypeScript 的 `number` 拦不住 NaN / ±Infinity / 负数。
+ *    负数最危险：它能把「已花金额」减回来，让同一笔预算被反复消费。
+ *    数据库那条 CHECK 是同一套判据的第二层（绕开应用直接写库也写不进去）。
+ */
+function isRealCostAmount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
 // ── 步骤循环 ──────────────────────────────────────────────────────────────────
 
 async function runSteps(
@@ -372,17 +470,19 @@ async function runSteps(
 
     // 🔴 **开跑前先看钱够不够**，而不是等 handler 跑完再判。
     //
-    //    只在事后判有个致命缺口：死信重跑时 spent 从「历史已花」起算，
-    //    此时哪怕已经超了上限，也会先把 handler 再调一次（钱又花一遍、
-    //    东西又写一遍），然后才发现超了。等于原来那条上限拦不住重跑。
+    //    只在事后判有两个缺口：
+    //      ① 死信重跑时 spent 从「历史已花」起算，此时哪怕已经超了上限，
+    //         也会先把 handler 再调一次（钱又花一遍、东西又写一遍）才发现；
+    //      ② 已花 $2、上限 $2、下一步要花 $1 —— 该在调供应商**之前**拦住，
+    //         而不是花成 $3 之后才发现。
     //
-    //    这里用严格大于：cap = 0 是正常值（当前唯一上线的能力就是零成本），
-    //    `spent >= cap` 会把零成本能力全部拦死。
-    if (ctx.costCapUsd !== null && spent > ctx.costCapUsd) {
+    //    判据见 nextStepBlockedByBudget：结合「还剩多少」和「下一步最多花多少」。
+    const budgetBlock = nextStepBlockedByBudget(definition, args.run, ctx.costCapUsd, spent, stepKey)
+    if (budgetBlock) {
       return failRun(deps, args.run, steps, new KernelError(
         'COST_CAP_EXCEEDED',
-        `这次执行历史上已经花掉 $${spent.toFixed(2)}，超过授权时定的上限 $${ctx.costCapUsd.toFixed(2)} —— 「${stepKey}」不再开跑`,
-        { detail: { spent, cap: ctx.costCapUsd, stepKey, phase: 'preflight' } },
+        budgetBlock.humanReason,
+        { detail: { ...budgetBlock.detail, stepKey, phase: 'preflight' } },
       ))
     }
 
@@ -407,7 +507,31 @@ async function runSteps(
 
       try {
         const result = await handler({ ctx, stepKey, attempt, priorOutputs })
-        const cost = Number(result.costActualUsd ?? 0)
+        const reported = result.costActualUsd ?? 0
+
+        // 🔴 T3：这个数字是**运行时输入**，TypeScript 的 `number` 拦不住
+        //    NaN / ±Infinity / 负数。负数最危险 —— 它能把「已花金额」减回来，
+        //    让同一笔预算被反复消费，等于绕开上限。
+        //
+        //    非法值一律 fail closed，而且**这个数字不进账本**：
+        //    宁可账上少记一笔（有 last_error 说清楚），也不能让账本被污染 ——
+        //    污染之后所有预算判定都失去意义。
+        //    产物和验证结论照旧落库（东西可能真的已经写出去了，lineage 得看得见）。
+        if (!isRealCostAmount(reported)) {
+          const badAt = deps.now().toISOString()
+          await updateStep(deps.supabase, step.id, {
+            attempt,
+            output: result.output,
+            verification: result.verification ?? null,
+            heartbeat_at: badAt,
+          })
+          throw new KernelError(
+            'INVALID_COST',
+            `「${stepKey}」报回来的花费不是一个真实金额（${String(reported)}）—— 账不能这么记，已停手`,
+            { detail: { stepKey, reported: String(reported) } },
+          )
+        }
+        const cost = reported
 
         // 🔴 **已经发生的事实必须先落库，再决定这次算不算成功。**
         //

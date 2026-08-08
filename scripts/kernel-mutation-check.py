@@ -44,14 +44,14 @@ MUTATIONS = [
         expect_fail_contains="并发提交",
     ),
     dict(
-        name="P1-2 已存在的 run 也重新签一份授权（两个执行者）",
+        # 旧写法是「已存在的 run 一律 in_progress」；T1 之后改成「领不到租约才 in_progress」。
+        # 要拆的闸变成了「领不到就别往下推进」。
+        name="P1-2/T1 领不到租约也照样往下推进（两个执行者各签一份授权）",
         file="src/lib/kernel/runner.ts",
-        old="""  if (submitted.existing) {
-    return {
-      kind: 'in_progress',""",
+        old="""  if (!claim.ok) {
+    if (claim.reason.startsWith('already_owned')) {""",
         new="""  if (false) {
-    return {
-      kind: 'in_progress',""",
+    if (claim.reason.startsWith('already_owned')) {""",
         test="src/lib/kernel/__tests__/concurrency.test.ts",
         expect_fail_contains="只签一份授权",
     ),
@@ -652,28 +652,14 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         expect_fail_contains="预算从历史真实花费起算",
     ),
     dict(
-        name="S3 去掉开跑前那道预算闸（超了还再花一次才发现）",
+        name="S3/T2 整个拆掉开跑前那道预算闸（超了还再花一次才发现）",
         file="src/lib/kernel/gateway.ts",
-        old="""    if (ctx.costCapUsd !== null && spent > ctx.costCapUsd) {
-      return failRun(deps, args.run, steps, new KernelError(
-        'COST_CAP_EXCEEDED',""",
-        new="""    if (false) {
-      return failRun(deps, args.run, steps, new KernelError(
-        'COST_CAP_EXCEEDED',""",
+        old="""    const budgetBlock = nextStepBlockedByBudget(definition, args.run, ctx.costCapUsd, spent, stepKey)
+    if (budgetBlock) {""",
+        new="""    const budgetBlock = nextStepBlockedByBudget(definition, args.run, ctx.costCapUsd, spent, stepKey)
+    if (false) {""",
         test="src/lib/kernel/__tests__/cost-persistence.test.ts",
         expect_fail_contains="一次都不许再调",
-    ),
-    dict(
-        name="S3 开跑前的预算闸改成 >=（把零成本能力全拦死）",
-        file="src/lib/kernel/gateway.ts",
-        old="""    if (ctx.costCapUsd !== null && spent > ctx.costCapUsd) {
-      return failRun(deps, args.run, steps, new KernelError(
-        'COST_CAP_EXCEEDED',""",
-        new="""    if (ctx.costCapUsd !== null && spent >= ctx.costCapUsd) {
-      return failRun(deps, args.run, steps, new KernelError(
-        'COST_CAP_EXCEEDED',""",
-        test="src/lib/kernel/__tests__/safe-capability.test.ts",
-        expect_fail_contains="",
     ),
     # ── 删除侧的引用动作 ─────────────────────────────────────────────────
     dict(
@@ -746,6 +732,195 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
   RETURN QUERY SELECT true, 'claimed';""",
         test="src/lib/kernel/__tests__/architecture.test.ts",
         expect_fail_contains="",
+    ),
+    # ── T1：中间态 run 的租约 / 接管 ──────────────────────────────────────
+    dict(
+        name="T1 已存在的 run 一律 in_progress（退回没有接管这一步）",
+        file="src/lib/kernel/runner.ts",
+        old="""  return driveIntermediateRun(deps, submitted.run.id)""",
+        new="""  return {
+    kind: 'in_progress',
+    run: submitted.run,
+    decision: null,
+    execution: null,
+    humanReason: '这件事已经有人在做了，这次不重复做',
+  }""",
+        test="src/lib/kernel/__tests__/lease-takeover.test.ts",
+        expect_fail_contains="被接走",
+    ),
+    dict(
+        name="T1 假件去掉租约到期判据（永远抢不走 / 随便抢）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""      String(run.lease_expires_at) > nowIso""",
+        new="""      true""",
+        test="src/lib/kernel/__tests__/lease-takeover.test.ts",
+        expect_fail_contains="租约",
+    ),
+    dict(
+        name="T1 假件去掉 owner CAS（谁来都能把 owner 写成自己）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (leaseAlive && run.claimed_by !== ownerId) {""",
+        new="""    if (false) {""",
+        test="src/lib/kernel/__tests__/lease-takeover.test.ts",
+        expect_fail_contains="偷不走",
+    ),
+    dict(
+        name="T1 假件去掉状态白名单（终态 / running 也能被接管）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (!['queued', 'authorizing', 'authorized'].includes(String(run.status))) {""",
+        new="""    if (false) {""",
+        test="src/lib/kernel/__tests__/lease-takeover.test.ts",
+        expect_fail_contains="拿不走",
+    ),
+    dict(
+        name="T1 接管 authorized 时重新签一份授权（审计表出现两个「谁批的」）",
+        file="src/lib/kernel/runner.ts",
+        old="""    const reused = await reuseLiveAuthorization(deps, owned)
+    if (reused?.ctx) return executeAndWrap(deps, reused.decision, reused.ctx)""",
+        new="""    const reused = null
+    if (reused) return executeAndWrap(deps, reused, reused)""",
+        test="src/lib/kernel/__tests__/lease-takeover.test.ts",
+        expect_fail_contains="复用",
+    ),
+    dict(
+        name="T1 交接时不清租约（批准之后被僵尸租约挡住）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    run.claimed_by = null
+    run.claimed_at = null
+    run.heartbeat_at = null
+    run.lease_expires_at = null
+    run.updated_at = nowIso
+    return { ok: true, reason: 'approved', decision_id: String(decision.id) }""",
+        new="""    run.updated_at = nowIso
+    return { ok: true, reason: 'approved', decision_id: String(decision.id) }""",
+        test="src/lib/kernel/__tests__/lease-takeover.test.ts",
+        expect_fail_contains="僵尸租约",
+    ),
+    dict(
+        name="T1 恢复时不清租约（恢复完崩掉就再也没人接得走）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    run.finished_at = null
+    // 🔴 跟 SQL 一致：放回 queued 的同时把租约清干净，否则恢复之后崩掉
+    //    这条 run 会留着一个死 owner，再也没人接得走。
+    run.claimed_by = null
+    run.claimed_at = null
+    run.heartbeat_at = null
+    run.lease_expires_at = null""",
+        new="""    run.finished_at = null""",
+        test="src/lib/kernel/__tests__/lease-takeover.test.ts",
+        expect_fail_contains="仍然能被接走",
+    ),
+    dict(
+        name="T1 挂起等审批时不清租约（这条 run 看起来一直「有人在做」）",
+        file="src/lib/kernel/authorize.ts",
+        old="""      claimed_by: null,
+      claimed_at: null,
+      heartbeat_at: null,
+      lease_expires_at: null,
+    })""",
+        new="""    })""",
+        test="src/lib/kernel/__tests__/lease-takeover.test.ts",
+        expect_fail_contains="租约被清空",
+    ),
+    dict(
+        name="T1 租约身份退回用进程 workerId（同进程并发互相当成自己续租）",
+        file="src/lib/kernel/runner.ts",
+        old="""function nextOwnerId(deps: KernelDeps): string {
+  claimSeq += 1
+  return `${deps.ownerId}#${claimSeq}`
+}""",
+        new="""function nextOwnerId(deps: KernelDeps): string {
+  claimSeq += 1
+  return deps.workerId
+}""",
+        test="src/lib/kernel/__tests__/concurrency.test.ts",
+        expect_fail_contains="",
+    ),
+    dict(
+        name="T1 SQL 里去掉接管 RPC 的 FOR UPDATE",
+        file="supabase/migrations/20260808000003_me2_execution_kernel_v1.sql",
+        old="""  SELECT * INTO v_run FROM public.action_runs WHERE id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'run_not_found', NULL::text, NULL::uuid, false, 0; RETURN;""",
+        new="""  SELECT * INTO v_run FROM public.action_runs WHERE id = p_run_id;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'run_not_found', NULL::text, NULL::uuid, false, 0; RETURN;""",
+        test="src/lib/kernel/__tests__/architecture.test.ts",
+        expect_fail_contains="锁",
+    ),
+    # ── T2：开跑前的预算闸要结合下一步成本 ────────────────────────────────
+    dict(
+        name="T2 预检退回 strict spent > cap（等号边界照花钱）",
+        file="src/lib/kernel/gateway.ts",
+        old="""    const budgetBlock = nextStepBlockedByBudget(definition, args.run, ctx.costCapUsd, spent, stepKey)""",
+        new="""    const budgetBlock =
+      ctx.costCapUsd !== null && spent > ctx.costCapUsd
+        ? { humanReason: '超预算，这一步不开跑', detail: {} }
+        : null""",
+        test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
+        expect_fail_contains="handler 一次都不调",
+    ),
+    dict(
+        name="T2 预检改成 spent >= cap（把零成本能力全部拦死）",
+        file="src/lib/kernel/gateway.ts",
+        old="""    const budgetBlock = nextStepBlockedByBudget(definition, args.run, ctx.costCapUsd, spent, stepKey)""",
+        new="""    const budgetBlock =
+      ctx.costCapUsd !== null && spent >= ctx.costCapUsd
+        ? { humanReason: '超预算，这一步不开跑', detail: {} }
+        : null""",
+        test="src/lib/kernel/__tests__/safe-capability.test.ts",
+        expect_fail_contains="",
+    ),
+    dict(
+        name="T2 未知成本 + 预算见底时放行（fail open）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  if (remaining <= COST_EPSILON) {""",
+        new="""  if (false) {""",
+        test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
+        expect_fail_contains="预算见底",
+    ),
+    dict(
+        name="T2 每步上界不看契约声明（只剩「整个动作免费」那条兜底）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  const declared = definition.costModel.stepCeilingUsd?.[stepKey]""",
+        new="""  const declared = undefined as number | undefined""",
+        test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
+        expect_fail_contains="声明零成本",
+    ),
+    # ── T3：花费必须是真实金额 ───────────────────────────────────────────
+    dict(
+        name="T3 拆掉应用层的金额校验（NaN / 负数直接进账本）",
+        file="src/lib/kernel/gateway.ts",
+        old="""        if (!isRealCostAmount(reported)) {""",
+        new="""        if (false) {""",
+        test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
+        expect_fail_contains="不进账本",
+    ),
+    dict(
+        name="T3 应用层只挡 NaN、不挡负数（负数能把已花金额减回来）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  return typeof value === 'number' && Number.isFinite(value) && value >= 0""",
+        new="""  return typeof value === 'number' && !Number.isNaN(value)""",
+        test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
+        expect_fail_contains="减回来",
+    ),
+    dict(
+        name="T3 拆掉数据库那层的 CHECK 复刻（绕开应用直接写库就能污染账本）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (Number.isFinite(n) && n >= 0) return""",
+        new="""    return""",
+        test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
+        expect_fail_contains="数据库拒绝",
+    ),
+    dict(
+        name="T3 SQL 的 CHECK 只写 >= 0（numeric 里 NaN >= 0 是 true，拦不住）",
+        file="supabase/migrations/20260808000003_me2_execution_kernel_v1.sql",
+        old="""      cost_actual_usd >= 0
+      AND cost_actual_usd <> 'NaN'::numeric
+      AND cost_actual_usd <  'Infinity'::numeric""",
+        new="""      cost_actual_usd >= 0""",
+        test="src/lib/kernel/__tests__/architecture.test.ts",
+        expect_fail_contains="NaN",
     ),
     # ── P1-4：migration 版本撞车 ─────────────────────────────────────────
     dict(

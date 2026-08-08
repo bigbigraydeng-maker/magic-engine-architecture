@@ -44,6 +44,13 @@ const DEFAULTS: Record<string, () => Row> = {
     cost_estimate_usd: null,
     needs_human: false,
     last_error: null,
+    claimed_by: null,
+    claimed_at: null,
+    heartbeat_at: null,
+    lease_expires_at: null,
+    previous_claimed_by: null,
+    reclaim_count: 0,
+    last_reclaimed_at: null,
     started_at: null,
     finished_at: null,
   }),
@@ -192,6 +199,25 @@ export function createFakeSupabase(
     return hit ? hit.message : null
   }
 
+  /**
+   * 复刻 `action_run_steps.cost_actual_usd_is_a_real_amount`（T3）。
+   *
+   * 🔴 只建模应用层的守卫等于没建模这一层 —— 「绕开应用直接写库」的那条路
+   *    必须在假件里也走不通，否则 SQL 和复刻在这一路上分家的那天不会有测试变红。
+   *    判据跟 SQL 逐条对应（numeric 语义已在生产 PG 17.6 实测）：
+   *      >= 0 拦住负数和 -Infinity；<> NaN 拦住 NaN（`NaN >= 0` 在 numeric 里是 true！）；
+   *      < Infinity 拦住 +Infinity。
+   */
+  function assertRealCost(table: string, value: unknown): void {
+    if (table !== 'action_run_steps') return
+    if (value === null || value === undefined) return
+    const n = Number(value)
+    if (Number.isFinite(n) && n >= 0) return
+    throw new Error(
+      `new row for relation "action_run_steps" violates check constraint "cost_actual_usd_is_a_real_amount"`,
+    )
+  }
+
   function assertUnique(table: string, row: Row, ignore?: Row): void {
     for (const keys of UNIQUE_KEYS[table] ?? []) {
       const dup = tableOf(table).find(
@@ -306,6 +332,7 @@ export function createFakeSupabase(
             ...raw,
           }
           try {
+            assertRealCost(table, row.cost_actual_usd)
             assertUnique(table, row)
           } catch (e) {
             const err = e as Error & { code?: string }
@@ -387,6 +414,14 @@ export function createFakeSupabase(
               data: null,
               error: { message: `authorization decision ${already.id} already consumed` },
             }
+          }
+        }
+        // CHECK 约束在**写之前**判 —— 写完再回滚不是数据库的语义
+        if ('cost_actual_usd' in patch) {
+          try {
+            assertRealCost(table, patch.cost_actual_usd)
+          } catch (e) {
+            return { data: null, error: { message: (e as Error).message } }
           }
         }
         for (const r of target) {
@@ -616,6 +651,11 @@ export function createFakeSupabase(
       run.needs_human = false
       run.last_error = reason
       run.finished_at = nowIso
+      // 🔴 跟 SQL 一致：批准 / 拒绝都是**交接**，把挂起期间那份僵尸租约清干净
+      run.claimed_by = null
+      run.claimed_at = null
+      run.heartbeat_at = null
+      run.lease_expires_at = null
       run.updated_at = nowIso
       return { ok: true, reason: 'rejected', decision_id: String(decision.id) }
     }
@@ -677,6 +717,12 @@ export function createFakeSupabase(
     run.cost_cap_usd = costCap
     run.cost_estimate_usd = costEstimate
     run.needs_human = false
+    // 🔴 跟 SQL 一致：批准是交接 —— 挂起期间那份租约的 owner 早就走了，
+    //    不清掉会把真正要来推进的人挡成「已经有人在做了」。
+    run.claimed_by = null
+    run.claimed_at = null
+    run.heartbeat_at = null
+    run.lease_expires_at = null
     run.updated_at = nowIso
     return { ok: true, reason: 'approved', decision_id: String(decision.id) }
   }
@@ -741,6 +787,12 @@ export function createFakeSupabase(
     run.needs_human = false
     run.last_error = null
     run.finished_at = null
+    // 🔴 跟 SQL 一致：放回 queued 的同时把租约清干净，否则恢复之后崩掉
+    //    这条 run 会留着一个死 owner，再也没人接得走。
+    run.claimed_by = null
+    run.claimed_at = null
+    run.heartbeat_at = null
+    run.lease_expires_at = null
     run.evidence = {
       ...((run.evidence ?? {}) as Row),
       last_recovered_by: actor,
@@ -753,9 +805,89 @@ export function createFakeSupabase(
     return { ok: true, reason: 'claimed' }
   }
 
+  /**
+   * `kernel_claim_or_takeover_run` 的内存复刻。
+   * 🔴 同样**整个函数体同步**：真库靠 `FOR UPDATE` 锁 run 保证
+   *    「同一时刻只有一个人能把 owner 换成自己」，JS 单线程里同步执行给的是同一个语义。
+   */
+  function claimOrTakeoverRun(args: Record<string, unknown>): {
+    ok: boolean
+    reason: string
+    run_status: string | null
+    decision_id: string | null
+    reclaimed: boolean
+    reclaim_count: number
+  } {
+    const runId = String(args.p_run_id)
+    const ownerId = (args.p_owner_id ?? null) as string | null
+    const leaseSeconds = Number(args.p_lease_seconds ?? 0)
+    const no = (r: string, run?: Row) => ({
+      ok: false,
+      reason: r,
+      run_status: run ? String(run.status) : null,
+      decision_id: run ? ((run.authorization_decision_id ?? null) as string | null) : null,
+      reclaimed: false,
+      reclaim_count: run ? Number(run.reclaim_count ?? 0) : 0,
+    })
+
+    if (!ownerId || ownerId.trim().length === 0) return no('owner_required')
+    if (!Number.isFinite(leaseSeconds) || leaseSeconds <= 0) return no('lease_seconds_required')
+
+    const run = tableOf('action_runs').find((r) => r.id === runId)
+    if (!run) return no('run_not_found')
+
+    // 只有中间态可以领 / 接管
+    if (!['queued', 'authorizing', 'authorized'].includes(String(run.status))) {
+      return no(`not_claimable:${String(run.status)}`, run)
+    }
+
+    const now = options.now?.() ?? new Date()
+    const nowIso = now.toISOString()
+
+    // 租约还活着、而且不是自己的 → 抢不走（这才配叫 in_progress）
+    const leaseAlive =
+      run.claimed_by != null &&
+      run.lease_expires_at != null &&
+      String(run.lease_expires_at) > nowIso
+    if (leaseAlive && run.claimed_by !== ownerId) {
+      return no(`already_owned:${String(run.claimed_by)}`, run)
+    }
+
+    const prevOwner = (run.claimed_by ?? null) as string | null
+    const reclaimed = prevOwner !== null && prevOwner !== ownerId
+    const statusAtClaim = String(run.status)
+    const decisionAtClaim = (run.authorization_decision_id ?? null) as string | null
+
+    run.claimed_by = ownerId
+    run.claimed_at = nowIso
+    run.heartbeat_at = nowIso
+    run.lease_expires_at = new Date(now.getTime() + leaseSeconds * 1000).toISOString()
+    if (reclaimed) {
+      run.previous_claimed_by = prevOwner
+      run.reclaim_count = Number(run.reclaim_count ?? 0) + 1
+      run.last_reclaimed_at = nowIso
+    }
+    run.evidence = {
+      ...((run.evidence ?? {}) as Row),
+      last_claimed_by: ownerId,
+      last_claimed_at: nowIso,
+      last_takeover_from: reclaimed ? prevOwner : null,
+    }
+    run.updated_at = nowIso
+
+    return {
+      ok: true,
+      reason: reclaimed ? 'taken_over' : 'claimed',
+      run_status: statusAtClaim,
+      decision_id: decisionAtClaim,
+      reclaimed,
+      reclaim_count: Number(run.reclaim_count ?? 0),
+    }
+  }
+
   const client = {
     from,
-    /** 只实现 Kernel 真正会调的那两个 RPC。别的名字直接炸。 */
+    /** 只实现 Kernel 真正会调的那几个 RPC。别的名字直接炸。 */
     async rpc(name: string, args: Record<string, unknown>) {
       if (name === 'kernel_begin_authorized_run') {
         return { data: [beginAuthorizedRun(args)], error: null }
@@ -765,6 +897,9 @@ export function createFakeSupabase(
       }
       if (name === 'kernel_claim_run_recovery') {
         return { data: [claimRunRecovery(args)], error: null }
+      }
+      if (name === 'kernel_claim_or_takeover_run') {
+        return { data: [claimOrTakeoverRun(args)], error: null }
       }
       if (name !== 'kernel_claim_run_step') {
         throw new Error(`[fake-supabase] 没有建模的 RPC：${name}`)

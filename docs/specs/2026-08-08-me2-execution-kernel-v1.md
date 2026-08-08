@@ -10,6 +10,8 @@
 > capability 装配运行时校验 · 幂等命中重建历史结果 · 政策时间窗过滤下推到数据库。
 > 第五轮（Codex review 3）：恢复权原子领取（`kernel_claim_run_recovery`）·
 > executionItem 跨客户双层防护 · 死信前先落 cost/verification + 成本累计语义。
+> 第六轮（Codex review 4）：中间态 run 的租约 / 接管（`kernel_claim_or_takeover_run`）·
+> 开跑前的预算闸结合「下一步要花多少」· 花费金额的合法性双层校验。
 
 ---
 
@@ -120,6 +122,52 @@ A 抢先恢复并开跑，B 晚到的无条件 update 把 running/succeeded 拽�
 可恢复拒绝码白名单在**两处**：`runner.ts` 的 `RECOVERABLE_DENY_CODES`（说人话）和
 RPC 里的 `v_recoverable`（真强制）。有一条架构测试盯着两边一字不差。
 
+### 🔴 中间态 run 必须能被安全接管（T1）
+
+**「已经有人在做了」这句话必须有实质。**
+
+进程在 `queued` / `authorizing` / `authorized` 崩掉之后，run 停在那儿，
+而 `UNIQUE(client_id, idempotency_key)` 让相同请求再也插不进来 ——
+调用方永远只拿到 `in_progress`，实际却没有任何人在推进它。
+一个本来用来**防重复执行**的约束，把这件事**永久锁死**。
+
+所以 `action_runs` 上有一份运行所有权（租约），沿用 `action_run_steps` 那套词：
+`claimed_by` / `claimed_at` / `heartbeat_at` / `lease_expires_at` +
+接管审计 `previous_claimed_by` / `reclaim_count` / `last_reclaimed_at`。
+
+`kernel_claim_or_takeover_run(run_id, owner_id, lease_seconds)`，一个事务里：
+
+1. `FOR UPDATE` 锁 run；
+2. 状态必须在 `{queued, authorizing, authorized}` —— 终态和 `running` 一律 `not_claimable`
+   （`running` 说明执行权已被 `kernel_begin_authorized_run` 原子领走，接管它 = 跑第二遍）；
+3. 租约还没过期且不是自己的 → `already_owned`（**这才配叫 in_progress**）；
+4. 无主 / 已过期 / 自己续租 → 原子写下新 owner + 新到期时间；
+5. 从别人手里接走才算 `reclaim`（自己续租不算 —— 两者是不同的故障信号）；
+6. 回报**领到那一刻**的 `status` 和 `authorization_decision_id`。
+
+调用方按第 6 步的回报决定下一步：
+
+| 领到时的状态 | 怎么走 |
+|---|---|
+| `authorized` + 一份没被消费的 allow | **复用那份授权**，绝不重新签（否则审计表里同一件事有两个「谁批的」） |
+| `authorized` + 授权已过期 | 走完整的重新授权（过期的授权本来就该重新判） |
+| `queued` / `authorizing` | 走完整授权 —— 此时租约保证**只有一个人在签** |
+
+**owner 是每一次推进的身份，不是机器的身份。** 用 `workerId`（`kernel@<instance>`）当 owner
+的话，同进程的两个并发调用会互相被当成「自己续租」而同时放行 —— 租约那道锁形同虚设
+（实测：四路并发提交会签出四份授权）。所以 owner = `<deps.ownerId>#<第几次领取>`，
+其中 `ownerId` 带一次性 boot nonce，进程重启后也不会跟崩溃前那份租约撞上。
+
+**交接必须清租约。** 批准 / 拒绝（`kernel_resolve_pending_approval`）、
+恢复（`kernel_claim_run_recovery`）、挂起等审批（`authorizeRun`）——
+这四处转换的共同点是「推进这条 run 的人到此为止」。不清的话会留下一份
+owner 早就走了的僵尸租约，把真正要来推进的人挡成「已经有人在做了」。
+
+于是有一条严格的不变量：**在三个可接管状态里，租约活着 ⟺ 真的有人在推进。**
+（终态上的租约只是取证信息：最后是谁在推。）
+
+🔴 本 PR **不做** scheduler / cron / worker —— 只提供接管 primitive。
+
 ### 🔴 执行卡片必须属于同一个客户（S2）
 
 跟 Goal 完全同一个洞。应用层查 `execution_items.client_id`；
@@ -146,12 +194,51 @@ run 层的 `spent` 从各步骤已持久化的花费之和起算。
 
 | 时机 | 拦的是什么 |
 |---|---|
-| **开跑前**（每一步进 handler 之前） | 历史已花就已经超了 → 这一步根本不开跑 |
-| 跑完之后（handler 返回、事实落库之后） | 这一次花下去才超 → 停手且不重试 |
+| **开跑前**（每一步进 handler 之前） | 剩下的钱不够这一步花 → 根本不开跑 |
+| 跑完之后（handler 返回、事实落库之后） | 估得进、实际超了 → 停手且不重试 |
 
 只有后者的话，死信重跑会**先再花一次钱**才发现超了 —— 原来那条上限对重跑完全失效。
-两处都用严格 `>`：`cap = 0` 是正常值（当前唯一上线的能力就是零成本），
-`>=` 会把零成本能力全部拦死。
+
+### 🔴 开跑前那道闸必须结合「下一步要花多少」（T2）
+
+只判 `spent > cap` 有个洞：已花 $2、上限 $2、下一步要花 $1 —— 照跑，
+花成 $3 之后才发现。钱已经出去了，事后判没有意义。
+但也**不能**简单改成 `spent >= cap`：`cap = 0` 是正常值（零成本能力），
+那样会把它们全部拦死。所以判据是 `remaining = cap - spent` 对上「下一步最多花多少」：
+
+| 下一步的成本上界 | 判据 |
+|---|---|
+| 契约里显式声明（`costModel.stepCeilingUsd[stepKey]`） | `ceiling > remaining` → 拦 |
+| 没声明，但整个动作的 `estimate` 是 0（契约说它根本不花钱） | 上界视为 0 → 只有已经超支才拦 |
+| 都没有 = **成本未知** | 只在 `remaining <= 0` 时 fail closed |
+
+未知成本时**不编一个数字**顶上 —— 编出来的数会让「拦住了」和「放过了」都失去依据，
+比不判更危险。还有余额就放行（否则等于把所有没声明成本的动作全废掉），
+真花超了由事后那道闸接住（那时钱已经落库）。
+
+判据里带 1e-9 的容差：`0.4 * 3 = 1.2000000000000002` 这类浮点噪音会把
+「刚好花完」变成「差一点点负数」，从而把零成本步骤误判成超预算。
+
+### 🔴 花费必须是一个真实金额，两层都拦（T3）
+
+`costActualUsd` 是**运行时输入**，TypeScript 的 `number` 拦不住
+`NaN` / `±Infinity` / 负数。负数最危险：它能把「已花金额」减回来，
+让同一笔预算被反复消费，等于绕开上限。
+
+- **应用层**：`Number.isFinite(v) && v >= 0`。不合法 → `INVALID_COST` 死信，
+  而且**这个数字不进账本**（产物和验证结论照旧落库 —— 东西可能真写出去了）。
+- **数据库层**：`action_run_steps.cost_actual_usd` 上的 CHECK，绕开应用直接写库也写不进去。
+
+numeric 的坑全部在生产库（PostgreSQL 17.6）实测过，不是照猜：
+
+| 表达式 | 实测结果 | 含义 |
+|---|---|---|
+| `'NaN'::numeric >= 0` | **true** | 只写 `>= 0` **拦不住 NaN** |
+| `'NaN'::numeric <> 'NaN'` | false | 所以 `<> 'NaN'` 能拦住它 |
+| `'Infinity'::numeric >= 0` | true | 要靠 `< 'Infinity'` 拦 |
+| `'-Infinity'::numeric >= 0` | false | `>= 0` 就拦住了 |
+
+（numeric 从 PG 14 起支持 ±Infinity，所以这两条不是理论问题。）
 
 ### 🔴 两条复合外键的删除语义是**不一样**的，而且是故意的
 
