@@ -171,6 +171,12 @@ export interface AuthorizationDecision {
   deny_code: DenyCode | null
   reason: string
   policy_snapshot: Record<string, unknown>
+  /**
+   * 签发依据的**具体那一行**政策（uuid）。
+   * 🔴 只记版本号不够：「auto v1 → 删掉 → 重建 deny v1」时版本号完全一样，
+   *    只有行身份能把两条政策分开。没有政策参与的判定（如未知动作）为 null。
+   */
+  policy_id: string | null
   policy_version: number | null
   decided_by: 'policy' | 'human'
   decided_by_user: string | null

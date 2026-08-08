@@ -148,6 +148,10 @@ CREATE TABLE IF NOT EXISTS public.authorization_decisions (
 
   -- 判定当时的政策快照 —— 政策后来改了也能复盘「当时凭什么放行」
   policy_snapshot        jsonb NOT NULL DEFAULT '{}',
+  -- 🔴 签发依据的**具体那一行**政策。只记版本号不够：
+  --    「auto_approve v1 → 删掉 → 重建一条 deny v1」时版本号完全一样，
+  --    只有行身份（uuid，删了就再也造不出同一个）能把两条政策分开。
+  policy_id              uuid,
   policy_version         integer,
 
   decided_by             text NOT NULL CHECK (decided_by IN ('policy','human')),
@@ -201,12 +205,12 @@ BEGIN
   END IF;
 
   IF ROW(NEW.id, NEW.action_run_id, NEW.client_id, NEW.action_key, NEW.action_version,
-         NEW.verdict, NEW.deny_code, NEW.reason, NEW.policy_snapshot, NEW.policy_version,
+         NEW.verdict, NEW.deny_code, NEW.reason, NEW.policy_snapshot, NEW.policy_id, NEW.policy_version,
          NEW.decided_by, NEW.decided_by_user, NEW.cost_cap_usd, NEW.cost_estimate_usd,
          NEW.idempotency_key, NEW.expires_at, NEW.created_at)
      IS DISTINCT FROM
      ROW(OLD.id, OLD.action_run_id, OLD.client_id, OLD.action_key, OLD.action_version,
-         OLD.verdict, OLD.deny_code, OLD.reason, OLD.policy_snapshot, OLD.policy_version,
+         OLD.verdict, OLD.deny_code, OLD.reason, OLD.policy_snapshot, OLD.policy_id, OLD.policy_version,
          OLD.decided_by, OLD.decided_by_user, OLD.cost_cap_usd, OLD.cost_estimate_usd,
          OLD.idempotency_key, OLD.expires_at, OLD.created_at)
   THEN
@@ -231,6 +235,11 @@ CREATE TRIGGER authorization_decisions_append_only_trigger
 --            authorized  → running → { succeeded | failed → dead_letter }
 --            pending_approval → (人点) → authorized | denied
 -- ────────────────────────────────────────────────────────────────────────────
+-- 🔴 C4 前置：给 goals 建 (client_id, id) 唯一索引，让下面的复合外键有落点。
+--    goals.id 本身就是主键（全表唯一），所以这个索引**不可能因历史数据冲突而失败**。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_goals_client_id_id
+  ON public.goals (client_id, id);
+
 CREATE TABLE IF NOT EXISTS public.action_runs (
   id                        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id                 uuid NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
@@ -245,6 +254,12 @@ CREATE TABLE IF NOT EXISTS public.action_runs (
   -- 双向约束：growth 必须有 Goal；非 growth 挂了 Goal **也拒绝**。
   -- 让「给维护任务伪造 Goal」在数据库层不可能，而不是靠约定。
   CONSTRAINT goal_matches_purpose CHECK ((purpose = 'growth') = (goal_id IS NOT NULL)),
+
+  -- 🔴 C4：Goal 必须属于**同一个客户**。单列 FK 只验证「目标存在」，
+  --    拦不住「A 客户的 run 挂 B 客户的目标」—— 那会把 lineage 串台到别的客户身上。
+  --    MATCH SIMPLE 语义下 goal_id 为 NULL 时本约束自动放过（非 growth 任务不受影响）。
+  CONSTRAINT fk_action_runs_goal_same_client
+    FOREIGN KEY (client_id, goal_id) REFERENCES public.goals (client_id, id),
 
   -- 连回人看的看板（execution_items 继续是意图卡，不是执行引擎）
   execution_item_id         uuid REFERENCES public.execution_items(id) ON DELETE SET NULL,
@@ -457,7 +472,9 @@ AS $$
 DECLARE
   v_run      public.action_runs%ROWTYPE;
   v_decision public.authorization_decisions%ROWTYPE;
+  v_policy_id      uuid;
   v_policy_version integer;
+  v_policy_mode    text;
   v_policy_found   boolean;
 BEGIN
   -- ① 先锁 run。谁拿到这把锁，谁才有资格谈执行权。
@@ -513,13 +530,17 @@ BEGIN
     RETURN QUERY SELECT false, 'expired'; RETURN;
   END IF;
 
-  -- ⑦ 政策必须还是签发时那一版（政策一改，版本自动 +1，见 1b 的触发器）
-  SELECT p.policy_version INTO v_policy_version
+  -- ⑦ 政策必须还是**签发时那一行、那一版、且模式仍允许这类授权**。
+  --    时间窗（C5）：带结束时间但还没到期的政策一样是生效的，
+  --    不能用 effective_to IS NULL 把它当成「没有政策」。
+  SELECT p.id, p.policy_version, p.mode
+    INTO v_policy_id, v_policy_version, v_policy_mode
     FROM public.client_automation_policies p
    WHERE p.client_id = v_run.client_id
      AND p.action_key = v_run.action_key
-     AND p.effective_to IS NULL
      AND p.effective_from <= now()
+     AND (p.effective_to IS NULL OR p.effective_to > now())
+   ORDER BY p.effective_from DESC
    LIMIT 1;
   v_policy_found := FOUND;
 
@@ -527,8 +548,21 @@ BEGIN
   IF NOT v_policy_found THEN
     RETURN QUERY SELECT false, 'no_active_policy'; RETURN;
   END IF;
+  -- 🔴 身份（C2）：版本号只在同一行政策内有意义。
+  --    「auto v1 → 删掉 → 重建 deny v1」两条版本号一样，只有行 id 分得开。
+  IF v_decision.policy_id IS DISTINCT FROM v_policy_id THEN
+    RETURN QUERY SELECT false, 'policy_identity_changed'; RETURN;
+  END IF;
   IF v_decision.policy_version IS DISTINCT FROM v_policy_version THEN
     RETURN QUERY SELECT false, 'stale_policy_version'; RETURN;
+  END IF;
+  -- 🔴 模式复核（C2）：机器签的放行只在「现在仍是自动」时有效，
+  --    人签的放行只在「现在仍要人审」时有效 —— 模式一换，旧授权作废。
+  IF v_decision.decided_by = 'policy' AND v_policy_mode <> 'auto_approve' THEN
+    RETURN QUERY SELECT false, 'policy_mode_changed'; RETURN;
+  END IF;
+  IF v_decision.decided_by = 'human' AND v_policy_mode <> 'require_approval' THEN
+    RETURN QUERY SELECT false, 'policy_mode_changed'; RETURN;
   END IF;
 
   -- ⑧ 一次性完成：兑换授权 + run 进入 running
@@ -572,7 +606,11 @@ CREATE INDEX IF NOT EXISTS idx_flywheel_actions_run
 --
 -- 审计里记着：问「上周那篇文章现在到哪一步了」要人手拼 5 张表。这条视图是答案。
 -- ────────────────────────────────────────────────────────────────────────────
-CREATE OR REPLACE VIEW public.kernel_action_lineage AS
+-- 🔴 security_invoker（C1）：视图按**调用者**的权限读底表，而不是按 owner。
+--    没有它，anon/authenticated 可能借视图 owner 的身份越过底表 RLS，
+--    把跨客户的目标、授权理由、操作人、步骤产物一锅端走。
+CREATE OR REPLACE VIEW public.kernel_action_lineage
+WITH (security_invoker = true) AS
 SELECT
   r.id                       AS run_id,
   r.client_id,
@@ -611,3 +649,8 @@ LEFT JOIN public.authorization_decisions  d  ON d.id  = r.authorization_decision
 LEFT JOIN public.action_run_steps         s  ON s.run_id = r.id
 LEFT JOIN public.flywheel_actions         fa ON fa.action_run_id = r.id
 LEFT JOIN public.flywheel_outcomes        fo ON fo.action_id = fa.id;
+
+-- 🔴 视图权限双保险（C1）：security_invoker 之外再显式收口 ——
+--    不依赖「底表 RLS 恰好都配对了」这一层运气。
+REVOKE ALL ON public.kernel_action_lineage FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.kernel_action_lineage TO service_role;

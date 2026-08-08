@@ -54,10 +54,31 @@ function isUniqueViolation(error: { code?: string; message?: string } | null): b
 
 // ── 政策 ──────────────────────────────────────────────────────────────────────
 
+const POLICY_COLUMNS =
+  'id, client_id, action_key, mode, policy_version, spend_cap_per_run_usd, ' +
+  'spend_cap_per_period_usd, spend_cap_period, decision_ttl_seconds, ' +
+  'effective_from, effective_to, updated_by'
+
+/**
+ * 这条政策**此刻**生效吗。
+ *
+ * 🔴 判据是时间窗，不是「有没有结束时间」（C5）：
+ *    `effective_from <= now < effective_to`。带结束时间但还没到期的政策
+ *    一样是生效的 —— 用 `effective_to IS NULL` 当过滤条件，会把一条
+ *    明明还在管事的政策当成「客户没配政策」。
+ *    这个判定必须跟 `kernel_begin_authorized_run` 里的 SQL 完全一致。
+ */
+export function isPolicyActive(policy: ClientAutomationPolicy, now: Date): boolean {
+  if (Date.parse(policy.effective_from) > now.getTime()) return false
+  if (policy.effective_to && Date.parse(policy.effective_to) <= now.getTime()) return false
+  return true
+}
+
 /**
  * 拿这个客户对这个动作现在生效的政策。
  *
- * 没有行 = 没有政策 = **deny**（调用方负责把这一点变成一条 deny 决策）。
+ * 没有生效的行 = 没有政策 = **deny**（调用方负责把这一点变成一条 deny 决策）。
+ * 多条候选时取 `effective_from` 最晚的那条（跟 RPC 的 ORDER BY 一致）。
  * 注意「没有行」和「读失败」在这里被严格分开：后者抛。
  */
 export async function getActivePolicy(
@@ -68,23 +89,39 @@ export async function getActivePolicy(
 ): Promise<ClientAutomationPolicy | null> {
   const { data, error } = await sb
     .from(TABLE_POLICIES)
-    .select(
-      'id, client_id, action_key, mode, policy_version, spend_cap_per_run_usd, ' +
-        'spend_cap_per_period_usd, spend_cap_period, decision_ttl_seconds, ' +
-        'effective_from, effective_to, updated_by',
-    )
+    .select(POLICY_COLUMNS)
     .eq('client_id', clientId)
     .eq('action_key', actionKey)
-    .is('effective_to', null)
-    .limit(1)
+    .order('effective_from', { ascending: false })
+    .limit(20)
   if (error) fail('读取客户自动化政策', error)
 
-  const row = (data ?? [])[0] as unknown as ClientAutomationPolicy | undefined
-  if (!row) return null
+  const rows = (data ?? []) as unknown as ClientAutomationPolicy[]
+  return rows.find((p) => isPolicyActive(p, now)) ?? null
+}
 
-  // 还没生效的政策不算数 —— 提前配好的下周政策不能今天就放行
-  if (Date.parse(row.effective_from) > now.getTime()) return null
-  return row
+/**
+ * 这个客户对这个动作**曾经有过**、但现在已经到期的政策吗。
+ *
+ * 只用于把 deny 的理由说准（「规则过期了」vs「从来没配过规则」）——
+ * 两句话引导人做的事不一样：前者是续一条，后者是新配一条。
+ */
+export async function hasExpiredPolicy(
+  sb: SupabaseClient,
+  clientId: string,
+  actionKey: string,
+  now: Date,
+): Promise<boolean> {
+  const { data, error } = await sb
+    .from(TABLE_POLICIES)
+    .select('id, effective_to')
+    .eq('client_id', clientId)
+    .eq('action_key', actionKey)
+    .limit(20)
+  if (error) fail('读取客户自动化政策历史', error)
+  return ((data ?? []) as unknown as Array<{ effective_to: string | null }>).some(
+    (p) => p.effective_to !== null && Date.parse(p.effective_to) <= now.getTime(),
+  )
 }
 
 // ── Run ───────────────────────────────────────────────────────────────────────
@@ -152,7 +189,7 @@ export async function updateRun(
 
 const DECISION_COLUMNS =
   'id, action_run_id, client_id, action_key, action_version, verdict, deny_code, reason, ' +
-  'policy_snapshot, policy_version, decided_by, decided_by_user, cost_cap_usd, ' +
+  'policy_snapshot, policy_id, policy_version, decided_by, decided_by_user, cost_cap_usd, ' +
   'cost_estimate_usd, idempotency_key, expires_at, consumed_at, consumed_by, created_at'
 
 export async function insertDecision(

@@ -18,6 +18,8 @@ import { createFakeSupabase, type Row } from './fake-supabase'
 import { CLIENT_A } from './fixtures'
 
 const RUN_ID = 'run-1'
+/** 冻结时钟 —— 跟 fixtures 同一原则：时间只能有一个来源，不然测试是定时炸弹。 */
+const FROZEN = new Date('2026-08-08T02:00:00.000Z')
 
 function seed(overrides: { policy?: Row | null; run?: Partial<Row> } = {}) {
   const tables = {
@@ -58,7 +60,7 @@ function seed(overrides: { policy?: Row | null; run?: Partial<Row> } = {}) {
             } as Row,
           ],
   }
-  return { tables, sb: createFakeSupabase(tables) }
+  return { tables, sb: createFakeSupabase(tables, { now: () => FROZEN }) }
 }
 
 async function seedDecision(
@@ -75,6 +77,7 @@ async function seedDecision(
     deny_code: null,
     reason: '测试',
     policy_snapshot: {},
+    policy_id: 'policy-1',
     policy_version: 1,
     decided_by: 'policy',
     decided_by_user: null,
@@ -149,6 +152,66 @@ describe('原子领取执行权（P1-2）', () => {
 
     const r = await beginAuthorizedRun(sb, RUN_ID, decision.id, 'w')
     expect(r).toEqual({ ok: false, reason: 'stale_policy_version' })
+  })
+
+  it('🔴 政策删掉又重建（新行、同版本号）→ 领不到：policy_identity_changed（C2）', async () => {
+    // 「auto v1 → 删掉 → 重建一条 v1」：版本号完全一样，只有行身份分得开。
+    // 只查版本号的话这条路整个是敞开的。
+    const { sb, tables } = seed()
+    const decision = await seedDecision(sb, tables)
+    tables.client_automation_policies[0] = {
+      ...tables.client_automation_policies[0],
+      id: 'policy-2-rebuilt', // 新行
+      policy_version: 1, // 版本号跟旧行一样
+    }
+
+    const r = await beginAuthorizedRun(sb, RUN_ID, decision.id, 'w')
+    expect(r).toEqual({ ok: false, reason: 'policy_identity_changed' })
+    expect(tables.action_runs[0].status).toBe('authorized')
+  })
+
+  it('🔴 模式变了但行和版本都没变（触发器失灵的形状）→ 领不到：policy_mode_changed（C2）', async () => {
+    // 直接改内存行、绕过 .update()（也就绕过了版本触发器的复刻）——
+    // 模拟「版本触发器失灵」。模式复核是它失灵时的最后防线，必须自己能咬人。
+    const { sb, tables } = seed()
+    const decision = await seedDecision(sb, tables)
+    tables.client_automation_policies[0].mode = 'deny'
+
+    const r = await beginAuthorizedRun(sb, RUN_ID, decision.id, 'w')
+    expect(r).toEqual({ ok: false, reason: 'policy_mode_changed' })
+  })
+
+  it('人签的授权，政策模式后来改成「自动」→ 也领不到（human allow 只在仍要人审时有效）', async () => {
+    const { sb, tables } = seed()
+    const decision = await seedDecision(sb, tables, {
+      decided_by: 'human',
+      decided_by_user: 'ray@magiclab',
+    })
+    tables.client_automation_policies[0].mode = 'auto_approve'
+    // 机器路径的前提：政策此刻是 auto —— 但这条授权是人按「要审批」签的
+    const r = await beginAuthorizedRun(sb, RUN_ID, decision.id, 'w')
+    expect(r).toEqual({ ok: false, reason: 'policy_mode_changed' })
+  })
+
+  it('带结束时间但还没到期的政策一样生效 → 正常领到（C5）', async () => {
+    // 夹具时钟冻结在 2026-08-08T02:00 —— 结束时间设在两小时后
+    const { sb, tables } = seed({
+      policy: { effective_to: '2026-08-08T04:00:00.000Z' },
+    })
+    const decision = await seedDecision(sb, tables)
+
+    const r = await beginAuthorizedRun(sb, RUN_ID, decision.id, 'w')
+    expect(r).toEqual({ ok: true, reason: 'ok' })
+  })
+
+  it('结束时间已过 → 当成没有政策：no_active_policy（C5）', async () => {
+    const { sb, tables } = seed({
+      policy: { effective_to: '2026-08-08T01:00:00.000Z' },
+    })
+    const decision = await seedDecision(sb, tables)
+
+    const r = await beginAuthorizedRun(sb, RUN_ID, decision.id, 'w')
+    expect(r).toEqual({ ok: false, reason: 'no_active_policy' })
   })
 
   it('跨客户 / 版本不符 / 幂等键不符 都领不到', async () => {

@@ -23,6 +23,7 @@ import { executeAuthorizedRun } from './gateway'
 import { computeIdempotencyKey, computeUnknownActionKey } from './idempotency'
 import {
   findRunByIdempotencyKey,
+  getDecision,
   insertRun,
   listSteps,
   updateRun,
@@ -71,6 +72,31 @@ export async function submitActionRun(
       'INVALID_INPUT',
       `「${input.purpose}」类任务不该挂在某个增长目标下 —— 为了让它挂上而编一个目标，正是我们要防的事`,
     )
+  }
+
+  // 🔴 C4：Goal 必须属于**同一个客户**。只验证「目标存在」拦不住
+  //    「A 客户的 run 挂 B 客户的目标」—— 那会把 lineage 串台到别的客户身上。
+  //    数据库还有一道复合外键兜底（fk_action_runs_goal_same_client），
+  //    这里先拦是为了把话说人话，而不是抛一条外键约束名。
+  if (input.goalId) {
+    const { data, error } = await deps.supabase
+      .from('goals')
+      .select('id, client_id')
+      .eq('id', input.goalId)
+      .limit(1)
+    // 读失败必须炸 —— 当成「目标不存在」会把一次数据库抖动变成一条错误的拒绝
+    if (error) throw new Error(`[kernel] 校验目标归属失败：${error.message}`)
+    const goal = ((data ?? []) as unknown as Array<{ id: string; client_id: string }>)[0]
+    if (!goal) {
+      throw new KernelError('INVALID_INPUT', '这条动作挂的目标不存在，可能已经被删了 —— 重新选一个目标')
+    }
+    if (goal.client_id !== input.clientId) {
+      throw new KernelError(
+        'CROSS_CLIENT',
+        '安全告警：这条动作挂的目标不属于这个客户 —— 已阻止（跨客户的执行记录会把两个客户的数据串在一起）',
+        { detail: { goalId: input.goalId, goalClient: goal.client_id, runClient: input.clientId } },
+      )
+    }
   }
 
   const definition = deps.registry.get(input.actionKey)
@@ -333,6 +359,114 @@ export async function resumeDeadLetterRun(
   })
 
   const auth = await authorizeRun(deps, resumed)
+  if (auth.verdict === 'deny') {
+    return { kind: 'denied', run: auth.run, decision: auth.decision, execution: null, humanReason: auth.decision.reason }
+  }
+  if (auth.verdict === 'require_approval' || !auth.ctx) {
+    return {
+      kind: 'pending_approval',
+      run: auth.run,
+      decision: auth.decision,
+      execution: null,
+      humanReason: auth.decision.reason,
+    }
+  }
+  const execution = await executeAuthorizedRun(deps, auth.ctx)
+  return {
+    kind: execution.status === 'succeeded' ? 'succeeded' : 'dead_letter',
+    run: execution.run,
+    decision: auth.decision,
+    execution,
+    humanReason: execution.failure?.humanReason ?? null,
+  }
+}
+
+/**
+ * 哪些拒绝是**修好条件之后可以重新授权**的（C3）。
+ *
+ * 🔴 白名单，不是黑名单。判据：拒绝的原因是不是「环境问题」——
+ *    政策没配 / 过期 / 改过、预算上限后来被提高 —— 这些修好之后同一件事
+ *    理应能做；而「参数不对 / 动作不认识 / 对外副作用 / 用途不符」是
+ *    **这次提交本身**的问题，重新授权一万次结论也一样，必须重新排一条新的。
+ */
+export const RECOVERABLE_DENY_CODES: ReadonlySet<string> = new Set([
+  'no_policy',
+  'policy_expired',
+  'policy_changed_since_request',
+  'over_cost_cap',
+])
+
+/**
+ * 可恢复的 deny → 显式重新授权（C3）。
+ *
+ * 背景：第一次因「客户没配规则」被拒后，人按待办去把规则配好了 ——
+ * 但同样的输入再提交会命中同一把幂等键，直接拿回旧的 denied，永远好不了。
+ *
+ * 🔴 三条边界，一条都不许松：
+ *    ① **普通重复提交不会走到这里** —— runAction 对 denied 仍然只返回旧结果。
+ *       恢复必须是一次显式动作，带着是谁、为什么。
+ *    ② 旧的 deny 决策**原样保留**（append-only 本来也改不了）——
+ *       重新授权是新签一条，不是改写历史。
+ *    ③ 只有白名单里的拒绝码能恢复；人明确点过「不做」的（decided_by='human'）
+ *       不能被这条路悄悄翻案 —— 那要人自己改主意，不是系统替他改。
+ *
+ * run id / 幂等键保持不变 —— 恢复的是**同一件事**，不是另一件。
+ */
+export async function recoverDeniedRun(
+  deps: KernelDeps,
+  runId: string,
+  recoveredByUser: string,
+  reason: string,
+): Promise<ActionRunOutcome> {
+  const run = await deps.requireRun(runId)
+  if (run.status !== 'denied') {
+    throw new KernelError(
+      'INVALID_STATE',
+      `这条动作现在是「${run.status}」，不是被拒绝的状态，不用恢复`,
+    )
+  }
+
+  // 拿当初拒绝它的那条决策 —— 判断这个拒绝可不可以恢复
+  const denyDecision = run.authorization_decision_id
+    ? await getDecision(deps.supabase, run.authorization_decision_id)
+    : null
+  if (!denyDecision || denyDecision.verdict !== 'deny') {
+    throw new KernelError(
+      'INVALID_STATE',
+      '找不到当初拒绝这条动作的记录，说不清它为什么被拒 —— 不能凭空恢复，请重新排一条',
+    )
+  }
+  if (denyDecision.decided_by === 'human') {
+    throw new KernelError(
+      'NOT_AUTHORIZED',
+      `这条是 ${denyDecision.decided_by_user} 明确点了「不做」的 —— 系统不替人改主意。要做的话请重新排一条`,
+    )
+  }
+  if (!denyDecision.deny_code || !RECOVERABLE_DENY_CODES.has(denyDecision.deny_code)) {
+    throw new KernelError(
+      'NOT_AUTHORIZED',
+      `这条被拒的原因是「${denyDecision.deny_code ?? '未知'}」—— 那是这次提交本身的问题，改条件救不了它，请修正后重新排一条`,
+      { detail: { denyCode: denyDecision.deny_code } },
+    )
+  }
+
+  // 回到 queued 走**跟第一次完全相同**的授权路径。谁发起的恢复、为什么，记进 evidence。
+  const recovered = await updateRun(deps.supabase, runId, {
+    status: 'queued',
+    needs_human: false,
+    last_error: null,
+    finished_at: null,
+    authorization_decision_id: null,
+    evidence: {
+      ...(run.evidence ?? {}),
+      last_recovered_by: recoveredByUser,
+      last_recovered_at: deps.now().toISOString(),
+      recovery_reason: reason,
+      recovered_from_deny_code: denyDecision.deny_code,
+    },
+  })
+
+  const auth = await authorizeRun(deps, recovered)
   if (auth.verdict === 'deny') {
     return { kind: 'denied', run: auth.run, decision: auth.decision, execution: null, humanReason: auth.decision.reason }
   }

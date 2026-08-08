@@ -128,7 +128,7 @@ MUTATIONS = [
     dict(
         name="不再检查政策版本是否变过",
         file="src/lib/kernel/gateway.ts",
-        old="""  if (decision.policy_version !== currentPolicyVersion) {""",
+        old="""  if (decision.policy_version !== currentPolicy.policy_version) {""",
         new="""  if (false) {""",
         test="src/lib/kernel/__tests__/gateway.test.ts",
         expect_fail_contains="改了规则",
@@ -237,6 +237,122 @@ MUTATIONS = [
       known.add(name)""",
         test="src/lib/kernel/__tests__/store.test.ts",
         expect_fail_contains="假件本身",
+    ),
+    # ── C1：lineage 视图权限 ─────────────────────────────────────────────
+    dict(
+        name="C1 视图去掉 security_invoker（按 owner 权限读底表）",
+        file="supabase/migrations/20260808000003_me2_execution_kernel_v1.sql",
+        old="""CREATE OR REPLACE VIEW public.kernel_action_lineage
+WITH (security_invoker = true) AS""",
+        new="""CREATE OR REPLACE VIEW public.kernel_action_lineage AS""",
+        test="src/lib/kernel/__tests__/architecture.test.ts",
+        expect_fail_contains="security_invoker",
+    ),
+    dict(
+        name="C1 视图去掉 REVOKE（anon 可经 Data API 读跨客户数据）",
+        file="supabase/migrations/20260808000003_me2_execution_kernel_v1.sql",
+        old="""REVOKE ALL ON public.kernel_action_lineage FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
+        new="""GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
+        test="src/lib/kernel/__tests__/architecture.test.ts",
+        expect_fail_contains="REVOKE",
+    ),
+    # ── C2：政策身份 + 模式复核 ──────────────────────────────────────────
+    dict(
+        name="C2 Gateway 去掉政策行身份检查（删掉重建同版本号就放行）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  if (decision.policy_id !== currentPolicy.id) {""",
+        new="""  if (false) {""",
+        test="src/lib/kernel/__tests__/policy-identity.test.ts",
+        expect_fail_contains="删掉重建",
+    ),
+    dict(
+        name="C2 Gateway 去掉模式复核（版本触发器失灵时没有最后防线）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  if (decision.decided_by === 'policy' && currentPolicy.mode !== 'auto_approve') {""",
+        new="""  if (false) {""",
+        test="src/lib/kernel/__tests__/policy-identity.test.ts",
+        expect_fail_contains="模式复核",
+    ),
+    dict(
+        name="C2 RPC 复刻去掉行身份检查",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (policy.id !== decision.policy_id) return no('policy_identity_changed')""",
+        new="""    // mutated: 不再比对行身份""",
+        test="src/lib/kernel/__tests__/store.test.ts",
+        expect_fail_contains="policy_identity_changed",
+    ),
+    dict(
+        name="C2 RPC 复刻去掉模式复核",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (decision.decided_by === 'policy' && policy.mode !== 'auto_approve') return no('policy_mode_changed')""",
+        new="""    // mutated: 机器签的授权不再复核当前模式""",
+        test="src/lib/kernel/__tests__/store.test.ts",
+        expect_fail_contains="policy_mode_changed",
+    ),
+    # ── C3：可恢复 deny ─────────────────────────────────────────────────
+    dict(
+        name="C3 把可恢复白名单清空（配好政策也永远救不回来）",
+        file="src/lib/kernel/runner.ts",
+        old="""export const RECOVERABLE_DENY_CODES: ReadonlySet<string> = new Set([
+  'no_policy',
+  'policy_expired',
+  'policy_changed_since_request',
+  'over_cost_cap',
+])""",
+        new="""export const RECOVERABLE_DENY_CODES: ReadonlySet<string> = new Set([])""",
+        test="src/lib/kernel/__tests__/deny-recovery.test.ts",
+        expect_fail_contains="恢复闭环",
+    ),
+    dict(
+        name="C3 恢复不再区分「人明确拒过」（系统替人改主意）",
+        file="src/lib/kernel/runner.ts",
+        old="""  if (denyDecision.decided_by === 'human') {""",
+        new="""  if (false) {""",
+        test="src/lib/kernel/__tests__/deny-recovery.test.ts",
+        expect_fail_contains="不替人改主意",
+    ),
+    # ── C4：Goal 跨客户 ─────────────────────────────────────────────────
+    dict(
+        name="C4 应用层去掉 goal 归属检查（只剩数据库那层，错误形状变了）",
+        file="src/lib/kernel/runner.ts",
+        old="""    if (goal.client_id !== input.clientId) {""",
+        new="""    if (false) {""",
+        test="src/lib/kernel/__tests__/goal-ownership.test.ts",
+        expect_fail_contains="应用层",
+    ),
+    dict(
+        name="C4 假件去掉复合外键复刻（绕过应用直接 INSERT 畅通无阻）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""          if (table === 'action_runs' && row.goal_id) {""",
+        new="""          if (false) {""",
+        test="src/lib/kernel/__tests__/goal-ownership.test.ts",
+        expect_fail_contains="数据库层",
+    ),
+    # ── C5：时间窗 ──────────────────────────────────────────────────────
+    dict(
+        name="C5 应用层退回 IS NULL-only（有限期政策被当成没配）",
+        file="src/lib/kernel/store.ts",
+        old="""export function isPolicyActive(policy: ClientAutomationPolicy, now: Date): boolean {
+  if (Date.parse(policy.effective_from) > now.getTime()) return false
+  if (policy.effective_to && Date.parse(policy.effective_to) <= now.getTime()) return false
+  return true
+}""",
+        new="""export function isPolicyActive(policy: ClientAutomationPolicy, now: Date): boolean {
+  if (Date.parse(policy.effective_from) > now.getTime()) return false
+  if (policy.effective_to !== null && policy.effective_to !== undefined) return false
+  return true
+}""",
+        test="src/lib/kernel/__tests__/policy-window.test.ts",
+        expect_fail_contains="有结束时间且还没到期",
+    ),
+    dict(
+        name="C5 RPC 复刻退回 IS NULL-only",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""          (p.effective_to === null || p.effective_to === undefined || String(p.effective_to) > nowStr),""",
+        new="""          (p.effective_to === null || p.effective_to === undefined),""",
+        test="src/lib/kernel/__tests__/store.test.ts",
+        expect_fail_contains="带结束时间",
     ),
     # ── P1-4：migration 版本撞车 ─────────────────────────────────────────
     dict(

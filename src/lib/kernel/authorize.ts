@@ -24,7 +24,7 @@ import type {
 } from './types'
 import type { KernelDeps } from './deps'
 import { validateAgainstSchema } from './registry'
-import { getActivePolicy, getDecision, insertDecision, updateRun } from './store'
+import { getActivePolicy, getDecision, hasExpiredPolicy, insertDecision, updateRun } from './store'
 
 export interface AuthorizationOutcome {
   verdict: Verdict
@@ -108,6 +108,7 @@ async function recordDeny(deps: KernelDeps, args: DenyArgs): Promise<Authorizati
     deny_code: args.code,
     reason: args.reason,
     policy_snapshot: snapshotOf(args.policy, args.definition),
+    policy_id: args.policy?.id ?? null,
     policy_version: args.policy?.policy_version ?? null,
     decided_by: 'policy',
     decided_by_user: null,
@@ -214,6 +215,12 @@ async function preflight(deps: KernelDeps, run: ActionRun, now: Date): Promise<P
   const policy = await getActivePolicy(deps.supabase, run.client_id, run.action_key, now)
   const costEstimate = definition.costModel.estimate(run.input)
   if (!policy) {
+    // getActivePolicy 已按时间窗过滤（C5）—— 走到这里就是真没有生效的规则。
+    // 但「规则到期了」和「从来没配过」要分开说：前者该续一条，后者该新配一条。
+    const expired = await hasExpiredPolicy(deps.supabase, run.client_id, run.action_key, now)
+    if (expired) {
+      return bad('policy_expired', '这个客户的自动化规则已经过期了，需要重新设一条', definition, null, costEstimate)
+    }
     return bad(
       'no_policy',
       `这个客户还没有为「${definition.title}」设过自动化规则（也可能是刚被删掉了）—— 没有规则就是不许做，需要先在设置里给它一个规则`,
@@ -221,9 +228,6 @@ async function preflight(deps: KernelDeps, run: ActionRun, now: Date): Promise<P
       null,
       costEstimate,
     )
-  }
-  if (policy.effective_to && Date.parse(policy.effective_to) <= now.getTime()) {
-    return bad('policy_expired', '这个客户的自动化规则已经过期了，需要重新设一条', definition, policy, costEstimate)
   }
   if (policy.mode === 'deny') {
     return bad(
@@ -287,6 +291,7 @@ export async function authorizeRun(deps: KernelDeps, input: ActionRun): Promise<
       deny_code: null,
       reason: `按这个客户的规则，「${definition.title}」要你点头才做`,
       policy_snapshot: snapshotOf(policy, definition),
+      policy_id: policy.id,
       policy_version: policy.policy_version,
       decided_by: 'policy',
       decided_by_user: null,
@@ -315,6 +320,7 @@ export async function authorizeRun(deps: KernelDeps, input: ActionRun): Promise<
     deny_code: null,
     reason: `这个客户已经允许系统自己做「${definition.title}」，且这次不花钱、不对外`,
     policy_snapshot: snapshotOf(policy, definition),
+    policy_id: policy.id,
     policy_version: policy.policy_version,
     decided_by: 'policy',
     decided_by_user: null,
@@ -406,7 +412,20 @@ export async function approveRun(
     })
   }
 
-  // ④ 而且必须是**同一版**政策。版本变了 = 上限 / 有效期 / 模式动过。
+  // ④ 而且必须是**同一行**政策（C2）。「删掉重建」的新行版本号可能跟旧行一样，
+  //    但行身份（uuid）造不出第二个 —— 你在待办里看到的是旧规则下的请求。
+  if (policy.id !== pending.policy_id) {
+    return recordDeny(deps, {
+      run,
+      definition,
+      policy,
+      code: 'policy_changed_since_request',
+      reason: `${approvedByUser} 点了同意，但这个客户的规则在挂起之后被删掉重建过 —— 你看到的还是旧规则下的请求，请重新排一次`,
+      costEstimate,
+    })
+  }
+
+  // ⑤ 而且必须是**同一版**。版本变了 = 上限 / 有效期 / 模式动过。
   if (policy.policy_version !== pending.policy_version) {
     return recordDeny(deps, {
       run,
@@ -427,6 +446,7 @@ export async function approveRun(
     deny_code: null,
     reason: `${approvedByUser} 点了同意（规则自挂起以来没变过，仍是第 ${policy.policy_version} 版）`,
     policy_snapshot: snapshotOf(policy, definition),
+    policy_id: policy.id,
     policy_version: policy.policy_version,
     decided_by: 'human',
     decided_by_user: approvedByUser,
@@ -466,6 +486,7 @@ export async function rejectRun(
     deny_code: 'policy_deny',
     reason: `${rejectedByUser} 点了不做：${reason}`,
     policy_snapshot: snapshotOf(null, definition),
+    policy_id: null,
     policy_version: null,
     decided_by: 'human',
     decided_by_user: rejectedByUser,

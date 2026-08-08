@@ -19,6 +19,11 @@ export type KernelErrorCode =
   | 'DECISION_EXPIRED'
   /** 授权时的政策版本跟现在的对不上 —— 政策改了，必须重新授权 */
   | 'STALE_POLICY_VERSION'
+  /**
+   * 政策的**身份或模式**变了：被删掉重建（版本号可能一样但行不是同一行）、
+   * 或模式换了（机器签的放行只在仍是自动时有效，人签的只在仍要人审时有效）。
+   */
+  | 'POLICY_CHANGED'
   /** 🔴 跨客户：decision 属于 A 客户，却拿来对 B 客户执行 */
   | 'CROSS_CLIENT'
   /** 超预算 */

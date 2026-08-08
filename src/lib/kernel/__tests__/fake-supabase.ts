@@ -65,6 +65,7 @@ const DEFAULTS: Record<string, () => Row> = {
   authorization_decisions: () => ({
     deny_code: null,
     policy_snapshot: {},
+    policy_id: null,
     policy_version: null,
     decided_by_user: null,
     cost_cap_usd: null,
@@ -86,6 +87,13 @@ export interface FakeSupabaseOptions {
   failOn?: Array<{ table: string; op: 'select' | 'insert' | 'update' | 'delete'; message: string }>
   /** 每次操作都记一笔，测试可以断言「这张表被查了几次 / 用什么条件查的」。 */
   log?: Array<{ table: string; op: string; filters: Filter[] }>
+  /**
+   * 🔴 假件的时钟。真库的 RPC 用的是 `now()`，复刻时如果偷懒用真挂钟，
+   *    而夹具又冻结在某个时刻 —— 授权有效期（900 秒）迟早会被**真实时间**跨过，
+   *    测试就成了定时炸弹（实测：跑了几个小时后同一批测试突然全报「授权过期」）。
+   *    时间必须整条链只有一个来源。
+   */
+  now?: () => Date
 }
 
 export interface Filter {
@@ -264,6 +272,22 @@ export function createFakeSupabase(
             const err = e as Error & { code?: string }
             return { data: null, error: { message: err.message, code: err.code } }
           }
+          // 复刻 fk_action_runs_goal_same_client（C4）：goal 必须属于同一客户。
+          // MATCH SIMPLE 语义 —— goal_id 为 NULL 时不检查。
+          if (table === 'action_runs' && row.goal_id) {
+            const goal = tableOf('goals').find(
+              (g) => g.id === row.goal_id && g.client_id === row.client_id,
+            )
+            if (!goal) {
+              return {
+                data: null,
+                error: {
+                  message:
+                    'insert or update on table "action_runs" violates foreign key constraint "fk_action_runs_goal_same_client"',
+                },
+              }
+            }
+          }
           tableOf(table).push(row)
           created.push(row)
         }
@@ -415,21 +439,31 @@ export function createFakeSupabase(
 
     if (decision.verdict !== 'allow') return no(`not_allow:${String(decision.verdict)}`)
     if (decision.consumed_at) return no('already_consumed')
-    if (decision.expires_at && String(decision.expires_at) <= new Date().toISOString()) {
+    if (decision.expires_at && String(decision.expires_at) <= (options.now?.() ?? new Date()).toISOString()) {
       return no('expired')
     }
 
-    const policy = tableOf('client_automation_policies').find(
-      (p) =>
-        p.client_id === run.client_id &&
-        p.action_key === run.action_key &&
-        (p.effective_to === null || p.effective_to === undefined),
-    )
+    // 时间窗（C5）：带结束时间但还没到期的政策一样是生效的 —— 跟真 SQL 逐字一致
+    const nowStr = (options.now?.() ?? new Date()).toISOString()
+    const policy = tableOf('client_automation_policies')
+      .filter(
+        (p) =>
+          p.client_id === run.client_id &&
+          p.action_key === run.action_key &&
+          String(p.effective_from) <= nowStr &&
+          (p.effective_to === null || p.effective_to === undefined || String(p.effective_to) > nowStr),
+      )
+      .sort((a, b) => String(b.effective_from).localeCompare(String(a.effective_from)))[0]
     // 🔴 政策被删掉 ≠ 「没有版本号所以随便过」。这正是 P1-1 里最阴的那条路。
     if (!policy) return no('no_active_policy')
+    // 身份（C2）：版本号只在同一行政策内有意义
+    if (policy.id !== decision.policy_id) return no('policy_identity_changed')
     if (policy.policy_version !== decision.policy_version) return no('stale_policy_version')
+    // 模式复核（C2）
+    if (decision.decided_by === 'policy' && policy.mode !== 'auto_approve') return no('policy_mode_changed')
+    if (decision.decided_by === 'human' && policy.mode !== 'require_approval') return no('policy_mode_changed')
 
-    const nowIso = new Date().toISOString()
+    const nowIso = (options.now?.() ?? new Date()).toISOString()
     decision.consumed_at = nowIso
     decision.consumed_by = workerId
     run.status = 'running'
@@ -456,7 +490,7 @@ export function createFakeSupabase(
 
       const eligible = steps
         .filter((s) => s.status === 'pending')
-        .filter((s) => !s.next_attempt_at || String(s.next_attempt_at) <= new Date().toISOString())
+        .filter((s) => !s.next_attempt_at || String(s.next_attempt_at) <= (options.now?.() ?? new Date()).toISOString())
         .filter((s) => !clientIds || clientIds.includes(String(s.client_id)))
         .filter((s) => {
           const run = runs.find((r) => r.id === s.run_id)

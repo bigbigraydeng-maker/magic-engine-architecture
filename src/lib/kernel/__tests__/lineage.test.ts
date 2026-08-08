@@ -13,6 +13,7 @@ import { ACTION_REGISTRY } from '../registry'
 import { createCapabilities, computeBlogContentHash } from '@/lib/capabilities'
 import type { BlogDraftRow } from '@/lib/capabilities/seo/build-publish-package'
 import { makeFixture, CLIENT_A, GOAL_A, POST_A, BLOG_DRAFT } from './fixtures'
+import type { FakeSupabaseOptions } from './fake-supabase'
 
 const HASH = computeBlogContentHash(BLOG_DRAFT as unknown as BlogDraftRow)
 const AUTO_POLICY = {
@@ -101,15 +102,18 @@ describe('Lineage：goal → run → 授权 → 步骤 → 验证 → 业务结�
   })
 
   it('🔴 读目标时数据库炸了 → 抛错，不悄悄说成「这条动作没挂目标」', async () => {
+    // failOn 的数组是活引用：先让 run 正常跑完（提交时 C4 的 goal 归属检查
+    // 也要读 goals，不能一开始就炸），**之后**才把 goals 的读故障装上。
+    const failures: NonNullable<FakeSupabaseOptions['failOn']> = []
     const f = makeFixture({
       registry: ACTION_REGISTRY,
       capabilities: createCapabilities,
-      options: {
-        policy: AUTO_POLICY,
-        supabaseOptions: { failOn: [{ table: 'goals', op: 'select', message: 'timeout' }] },
-      },
+      options: { policy: AUTO_POLICY, supabaseOptions: { failOn: failures } },
     })
     const outcome = await runAction(f.kernel, submit())
+    expect(outcome.kind).toBe('succeeded')
+
+    failures.push({ table: 'goals', op: 'select', message: 'timeout' })
 
     await expect(loadActionLineage(f.supabase, outcome.run.id)).rejects.toThrow(/读取目标失败/)
   })

@@ -164,6 +164,19 @@ describe('P1-1 · 人工批准盖不过当前政策', () => {
     expectFailedClosed(f, calls, out, 'policy_changed_since_request')
   })
 
+  it('🔴 模式变了但行和版本都没动（触发器失灵的形状）→ 只有模式检查挡得住', async () => {
+    // 三种改法三道闸：.update() 改模式 → 版本 +1 → 版本检查先拦；
+    // 删掉重建 → 行身份检查先拦；**直接改内存行**（绕过触发器复刻）→
+    // 行还是那行、版本还是 1，只有「当前必须仍是 require_approval」这道自己咬人。
+    // C2 加了身份检查之后，这道闸恰好被遮蔽过一次（变异验证抓出来的）。
+    const { f, pending, calls } = await pendingFixture()
+    f.tables.client_automation_policies[0].mode = 'auto_approve'
+
+    const out = await approveAndRun(f.kernel, pending.run.id, 'ray@magiclab')
+    expectFailedClosed(f, calls, out, 'policy_changed_since_request')
+    expect(String(f.tables.authorization_decisions.at(-1)!.reason)).toContain('自动执行')
+  })
+
   it('挂起期间契约升版 → 人点同意也不执行', async () => {
     const { f, pending, calls } = await pendingFixture()
     const v2 = { ...f.kernel, registry: makeRegistry([{ ...BASE, version: 2 }]) }

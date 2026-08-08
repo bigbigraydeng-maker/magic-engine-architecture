@@ -115,8 +115,12 @@ export function makeFixture(args: {
   startAt?: string
 }): Fixture {
   const tables = buildTables(args.options)
-  const supabase = createFakeSupabase(tables, args.options?.supabaseOptions)
   const clock = { now: new Date(args.startAt ?? '2026-08-08T02:00:00.000Z') }
+  // 🔴 假件跟 Kernel 共用同一个冻结时钟 —— 时间只能有一个来源（见 FakeSupabaseOptions.now）
+  const supabase = createFakeSupabase(tables, {
+    ...(args.options?.supabaseOptions ?? {}),
+    now: () => clock.now,
+  })
   const kernel = createKernelDeps({
     supabase,
     registry: args.registry,

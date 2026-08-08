@@ -274,6 +274,59 @@ describe('migration 版本不许撞车（P1-4）', () => {
   })
 })
 
+describe('lineage 视图的权限（C1）', () => {
+  const MIGRATION = 'supabase/migrations/20260808000003_me2_execution_kernel_v1.sql'
+
+  it('🔴 视图必须声明 security_invoker —— 否则按 owner 权限读底表，anon 可能借道越过 RLS', () => {
+    const sql = read(MIGRATION)
+    const viewStmt = sql.slice(sql.indexOf('CREATE OR REPLACE VIEW public.kernel_action_lineage'))
+    const header = viewStmt.slice(0, viewStmt.indexOf(' AS'))
+    expect(
+      /WITH\s*\(\s*security_invoker\s*=\s*true\s*\)/i.test(header),
+      'kernel_action_lineage 的 CREATE VIEW 头部必须带 WITH (security_invoker = true)。\n' +
+        '没有它，视图以 owner 权限读 goals / authorization_decisions / step output —— \n' +
+        'anon/authenticated 经 Data API 查视图就能把跨客户数据一锅端走。',
+    ).toBe(true)
+  })
+
+  it('🔴 anon / authenticated 必须被显式 REVOKE，service_role 显式 GRANT —— 不赌底表 RLS 恰好都配对', () => {
+    const sql = read(MIGRATION)
+    expect(
+      /REVOKE\s+ALL\s+ON\s+public\.kernel_action_lineage\s+FROM\s+PUBLIC\s*,\s*anon\s*,\s*authenticated/i.test(sql),
+      '迁移里必须有 REVOKE ALL ON public.kernel_action_lineage FROM PUBLIC, anon, authenticated',
+    ).toBe(true)
+    expect(
+      /GRANT\s+SELECT\s+ON\s+public\.kernel_action_lineage\s+TO\s+service_role/i.test(sql),
+      '迁移里必须有 GRANT SELECT ON public.kernel_action_lineage TO service_role',
+    ).toBe(true)
+  })
+
+  it('两个 RPC 的 EXECUTE 也都收了口（同一类漏洞，一起盯）', () => {
+    const sql = read(MIGRATION)
+    for (const fn of ['kernel_claim_run_step', 'kernel_begin_authorized_run']) {
+      expect(
+        new RegExp(
+          `REVOKE\\s+EXECUTE\\s+ON\\s+FUNCTION\\s+public\\.${fn}[^;]*FROM\\s+PUBLIC\\s*,\\s*anon\\s*,\\s*authenticated`,
+          'i',
+        ).test(sql),
+        `${fn} 的 EXECUTE 必须显式 REVOKE（anon key 在浏览器 bundle 里）`,
+      ).toBe(true)
+    }
+  })
+
+  it('RPC 的政策时间窗跟应用层同一个口径（C5：不许退回 IS NULL-only）', () => {
+    const sql = read(MIGRATION)
+    // 政策查询必须是「from<=now 且 (to IS NULL 或 to>now)」——
+    // 用 effective_to IS NULL 当过滤条件会把带结束时间但没到期的政策当成不存在
+    expect(
+      /effective_from\s*<=\s*now\(\)\s+AND\s+\(p\.effective_to\s+IS\s+NULL\s+OR\s+p\.effective_to\s*>\s*now\(\)\)/i.test(
+        sql,
+      ),
+      'kernel_begin_authorized_run 的政策查询必须按时间窗过滤，跟 store.isPolicyActive 完全一致',
+    ).toBe(true)
+  })
+})
+
 describe('注册表的封闭性', () => {
   it('capability 的实现集合跟注册表的动作集合完全对齐', async () => {
     const { ACTION_KEYS } = await import('../registry')

@@ -23,6 +23,7 @@ import type {
   AuthorizationDecision,
   AuthorizedExecutionContext,
   CapabilityImplementation,
+  ClientAutomationPolicy,
   RunStatus,
   VerificationResult,
 } from './types'
@@ -65,10 +66,10 @@ function assertDecisionMatches(args: {
   run: ActionRun
   decision: AuthorizationDecision
   definition: ActionDefinition
-  currentPolicyVersion: number | null
+  currentPolicy: ClientAutomationPolicy | null
   now: Date
 }): void {
-  const { ctx, run, decision, definition, currentPolicyVersion, now } = args
+  const { ctx, run, decision, definition, currentPolicy, now } = args
 
   // 🔴 跨客户：decision 属于 A 客户却拿来对 B 客户执行。
   //    三方（ctx / run / decision）必须完全一致，任意两方对上而第三方对不上都算越界。
@@ -126,12 +127,45 @@ function assertDecisionMatches(args: {
     )
   }
 
+  // ── 政策三连（C2）：行身份 → 版本 → 模式，缺一不可 ────────────────────
+  // 🔴 政策被删掉 ≠ 「两边都是 null 所以对得上」。没有生效政策 = 不执行。
+  if (!currentPolicy) {
+    throw new KernelError(
+      'POLICY_CHANGED',
+      '这个客户现在没有生效的自动化规则了（可能被删了），不能按旧授权继续跑',
+    )
+  }
+
+  // 版本号只在同一行政策内有意义：「删掉重建」的新行版本可能跟旧行一样，
+  // 但行身份（uuid）造不出第二个。
+  if (decision.policy_id !== currentPolicy.id) {
+    throw new KernelError(
+      'POLICY_CHANGED',
+      '这条授权依据的那条客户规则已经被删掉重建过了 —— 新规则说了算，得重新授权',
+    )
+  }
+
   // 政策改了 → 版本变了 → 旧授权立即失效。
   // 「授权时是自动、现在客户改成了要审批」必须当场停手，不能按旧授权跑完。
-  if (decision.policy_version !== currentPolicyVersion) {
+  if (decision.policy_version !== currentPolicy.policy_version) {
     throw new KernelError(
       'STALE_POLICY_VERSION',
-      `这条授权是按第 ${decision.policy_version} 版客户规则签的，规则后来改过了（现在是第 ${currentPolicyVersion} 版），得重新授权`,
+      `这条授权是按第 ${decision.policy_version} 版客户规则签的，规则后来改过了（现在是第 ${currentPolicy.policy_version} 版），得重新授权`,
+    )
+  }
+
+  // 模式复核：机器签的放行只在「现在仍是自动」时有效，
+  // 人签的放行只在「现在仍要人审」时有效。这一条是版本触发器失灵时的最后防线。
+  if (decision.decided_by === 'policy' && currentPolicy.mode !== 'auto_approve') {
+    throw new KernelError(
+      'POLICY_CHANGED',
+      '这条授权是按「自动执行」的规则签的，但这个客户现在的规则已经不是自动了 —— 得重新走授权',
+    )
+  }
+  if (decision.decided_by === 'human' && currentPolicy.mode !== 'require_approval') {
+    throw new KernelError(
+      'POLICY_CHANGED',
+      '这条授权是人按「要审批」的规则批的，但这个客户现在的规则已经变了 —— 得重新走授权',
     )
   }
 }
@@ -175,7 +209,7 @@ export async function executeAuthorizedRun(
     run,
     decision,
     definition,
-    currentPolicyVersion: policy?.policy_version ?? null,
+    currentPolicy: policy,
     now,
   })
 
@@ -247,8 +281,18 @@ function beginFailureToError(reason: string): KernelError {
       )
     case 'no_active_policy':
       return new KernelError(
-        'NOT_AUTHORIZED',
+        'POLICY_CHANGED',
         '这个客户现在没有生效的自动化规则了（可能被删了），不能按旧授权继续跑',
+      )
+    case 'policy_identity_changed':
+      return new KernelError(
+        'POLICY_CHANGED',
+        '这条授权依据的那条客户规则已经被删掉重建过了 —— 新规则说了算，得重新授权',
+      )
+    case 'policy_mode_changed':
+      return new KernelError(
+        'POLICY_CHANGED',
+        '这个客户的规则模式在授权之后变了（自动↔要审批↔禁止），旧授权作废，得重新走授权',
       )
     case 'expired':
       return new KernelError('DECISION_EXPIRED', '这条授权已经过期了，要重新走一次授权')

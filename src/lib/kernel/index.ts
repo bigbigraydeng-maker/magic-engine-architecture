@@ -38,6 +38,8 @@ export {
   approveAndRun,
   rejectPendingRun,
   resumeDeadLetterRun,
+  recoverDeniedRun,
+  RECOVERABLE_DENY_CODES,
   type SubmitActionInput,
   type ActionRunOutcome,
   type ActionOutcomeKind,

@@ -3,7 +3,9 @@
 > Issue [#859](https://github.com/bigbigraydeng-maker/magic-engine/issues/859) · ADR-001 / ADR-002 / ADR-004
 > 状态：**已实现，未启用**。建表迁移写好了但**没跑**；没有任何 cron 调用它；
 > 没有任何现有代码路径经过它。合并 + apply migration + 启用各需要 PM 单独 `go`。
-> migration 版本号是 `20260808000003` —— 原本用 000001，跟并行的 PR #862 撞了（见 §12）。
+> migration 版本号是 `20260808000003` —— 原本用 000001，跟并行的 PR #862 撞了。
+> 第三轮（Codex review）：视图权限收口 · 授权绑定政策行身份 + 模式复核 ·
+> 可恢复 deny 的显式重授权 · Goal 跨客户双层防护 · 政策时间窗（见 §5.x / §6.x / §13）。
 
 ---
 
@@ -108,6 +110,53 @@ purpose 不符 / 对外副作用 / 超预算。任何一项变了一律 fail clo
 最阴的那条路是政策**被删掉**：早先会签出 `policy_version = null` 的放行，
 Gateway 重读也拿到 null，`null === null` 直接过。现在「没有生效政策」在
 授权层和数据库 RPC 里都是硬拒。
+
+### 🔴 授权绑定的是「那一行政策」，不只是版本号（C2）
+
+决策表记 `policy_id`（签发依据的具体那一行）。版本号只在同一行政策内有意义：
+「auto v1 → 删掉 → 重建 deny v1」时两条政策版本号完全一样，只有行身份分得开。
+
+执行前（Gateway 与 `kernel_begin_authorized_run` 两层各查一遍）**政策三连**：
+
+1. 当前必须存在生效政策（被删 = 拒，不是「两边都是 null 所以对得上」）；
+2. `当前政策.id === decision.policy_id`（行身份）；
+3. `policy_version` 一致；
+4. **模式复核**：`decided_by='policy'` 的放行要求当前仍是 `auto_approve`；
+   `decided_by='human'` 的放行要求当前仍是 `require_approval` ——
+   这一条兼任版本触发器失灵时的最后防线。
+
+### 🔴 可恢复的 deny 能显式重新授权（C3）
+
+「客户没配规则 → 被拒 → 人配好了规则 → 同样输入永远命中旧 denied」是死路。
+`recoverDeniedRun(runId, 谁, 为什么)`：
+
+- **普通重复提交不会偷偷恢复** —— 恢复必须是显式动作；
+- 白名单（只这四个）：`no_policy` / `policy_expired` / `policy_changed_since_request` / `over_cost_cap`；
+- 不可恢复：`invalid_input` / `unknown_action` / `unknown_action_version` /
+  `outward_side_effect_blocked` / `purpose_not_allowed` / **人明确点过「不做」的**（系统不替人改主意）；
+- 旧 deny 决策原样保留（append-only），run id / 幂等键不变，恢复人 / 原因 / 时间记进 `evidence`，
+  然后回到 `queued` 走**跟第一次完全相同**的授权路径。
+
+### 🔴 Goal 必须属于同一个客户（C4）
+
+双层：提交层查 `goals.client_id === run.client_id`（说人话的安全告警）；
+数据库层复合外键 `FOREIGN KEY (client_id, goal_id) REFERENCES goals (client_id, id)`
+（前置 `CREATE UNIQUE INDEX idx_goals_client_id_id` —— `goals.id` 本身是主键，
+这个索引不可能因历史数据冲突而失败）。MATCH SIMPLE 语义下非 growth 任务（goal_id NULL）不受影响。
+
+### 🔴 政策生效判据是时间窗（C5）
+
+`effective_from <= now AND (effective_to IS NULL OR effective_to > now)` ——
+带结束时间但没到期的政策一样生效。应用层 `store.isPolicyActive` 与 RPC 的 SQL 完全一致，
+有架构测试盯着两边不许分家。到期的政策拒绝时说「过期了，去续一条」，
+从没配过的说「去新配一条」—— 两句话引导人做的事不一样。
+
+### 🔴 lineage 视图按调用者权限读底表（C1）
+
+`kernel_action_lineage` 带 `WITH (security_invoker = true)` + 显式
+`REVOKE ALL ... FROM PUBLIC, anon, authenticated` + `GRANT SELECT ... TO service_role`。
+没有 security_invoker 的话，视图以 owner 权限读底表 —— anon 经 Data API 查视图
+就能把跨客户的目标 / 授权理由 / 操作人 / 步骤产物一锅端走。**不赌底表 RLS 恰好都配对。**
 
 ### 🔴 政策版本由数据库强制演进（P1-3）
 
