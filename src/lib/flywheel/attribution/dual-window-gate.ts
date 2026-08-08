@@ -34,10 +34,20 @@
  * row written at a custom window by an older deployment now SURVIVES alongside
  * the cadence one, and the row-counting consumers double-count that action just
  * the same. So while this flag is off, each writer also retires its own rows at
- * any window other than the authoritative one (`reconcileLegacyWindows`, in
+ * any window other than the authoritative one (`retireExtraWindows`, in
  * both writers). Scoped to its own evaluator, so it is never the cross-writer
  * delete this Work Package removed. With the flag ON, nothing is retired —
  * those rows are legitimate. (Codex P1, round 16 on PR #862.)
+ *
+ * That retire happens AFTER the authoritative window has been written, never
+ * before. Running it first turned the safeguard into data loss: an action
+ * holding only a deploy-gap row at some other window, whose authoritative
+ * window cannot be computed yet, had its one piece of evidence deleted and no
+ * replacement written. So an immature action can transiently hold two windows
+ * even with the flag off — a duplicate that self-clears on the pass that
+ * finally writes the authoritative row. That is the deliberate trade: a
+ * duplicate is recoverable, a row deleted precisely because it cannot be
+ * recomputed is not. (Codex P1, round 22 on PR #862.)
  *
  * 🔴 Do not flip this on until that PR has landed.
  */

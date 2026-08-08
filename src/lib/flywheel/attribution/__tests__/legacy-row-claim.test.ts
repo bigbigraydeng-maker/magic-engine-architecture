@@ -435,6 +435,68 @@ describe('with dual-window OFF, an action never ends up holding two windows', ()
     expect(db.outcomes().filter(r => r.action_id === ACTION_ID)).toHaveLength(3)
   })
 
+  it('does NOT drop the only evidence when the authoritative window cannot be computed', async () => {
+    // The regression moving reconciliation before the write introduced: with the
+    // gate off, an action holding only a 7-day row from the deploy gap and no
+    // mature 28-day snapshot had its one row deleted, and then the recompute
+    // declined to run. It went from "some evidence" to none — and the reason it
+    // was deleted is precisely that we cannot recompute it.
+    // (Codex P1, round 22.)
+    seedSeoAction()
+    seedUnsignedRow()          // 7 days
+    // Deliberately NO snapshots: attributeAction returns early.
+
+    const result = await runBridge(28)
+
+    expect(result.outcomes_written).toBe(0)
+    const legacy = db.outcomes().find(r => r.window_days === 7)
+    expect(legacy).toBeDefined()
+    // Claimed all the same — claiming is an UPDATE and stays pre-write, which
+    // is what round 16 needed. Only the DELETE waits.
+    expect(legacy?.evaluator_key).toBe(OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
+  })
+
+  it('drops it on the pass that finally writes the authoritative window', async () => {
+    // The duplicate is transient, not permanent: the moment the replacement
+    // lands, the extra window goes.
+    seedSeoAction()
+    seedUnsignedRow()
+
+    await runBridge(28)                       // nothing to compute yet → 7 survives
+    expect(db.outcomes().some(r => r.window_days === 7)).toBe(true)
+
+    seedGscSnapshots()                        // the action matures
+    await runBridge(28)
+
+    expect(new Set(db.outcomes().map(r => r.window_days))).toEqual(new Set([28]))
+  })
+
+  it('pass 1 keeps its only row when there is no baseline to recompute from', async () => {
+    db.seed('flywheel_actions', [
+      {
+        id: 'action-social-1', client_id: CLIENT_ID, flywheel: 'social',
+        action_type: 'social.publish', expected_metric: SOCIAL_METRIC,
+        expected_delta: 1, executed_at: EXECUTED_AT, payload: null,
+      },
+    ])
+    // No flywheel_metrics rows at all → processAction returns before the upsert.
+    db.seed('flywheel_outcomes', [
+      {
+        id: 'only-row', action_id: 'action-social-1', client_id: CLIENT_ID,
+        metric_key: SOCIAL_METRIC, window_days: 21,
+        baseline: 100, after_value: 130, delta: 30, delta_pct: 30,
+        confidence: 0.9, verdict: 'confirmed',
+        evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS,
+        computed_at: '2026-06-10T00:00:00.000Z',
+      },
+    ])
+
+    const result = await runJob(14)
+
+    expect(result.written).toBe(0)
+    expect(db.outcomes().find(r => r.id === 'only-row')).toBeDefined()
+  })
+
   it('keeps both windows once dual-window is enabled', async () => {
     // Same inputs, flag on: the extra window is legitimate and is preserved.
     // Without this pair, "retire everything else" and "the gate does nothing"

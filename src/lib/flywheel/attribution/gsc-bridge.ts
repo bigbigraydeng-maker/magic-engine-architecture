@@ -205,7 +205,7 @@ export async function runGscAttributionForClient(
       // path would leave a gap row unsigned for as long as its action stays
       // immature (up to a full 28-day window), and the rollout's NULL-count
       // gate would sit blocked on it. (Codex P2, round 16 on PR #862.)
-      for (const err of await reconcileLegacyWindows(action, windowDays)) {
+      for (const err of await claimUnsignedRows(action)) {
         result.reconcile_errors++
         result.errors.push(`action ${action.id}: ${err}`)
       }
@@ -215,6 +215,16 @@ export async function runGscAttributionForClient(
       if (cadence.cleanupError) {
         result.cleanup_errors++
         result.errors.push(`action ${action.id}: ${cadence.cleanupError}`)
+      }
+
+      // Only now — the authoritative window is in the database, so dropping the
+      // others cannot leave this action with nothing.
+      if (cadence.written > 0) {
+        const windowError = await retireExtraWindows(action, windowDays)
+        if (windowError) {
+          result.cleanup_errors++
+          result.errors.push(`action ${action.id}: ${windowError}`)
+        }
       }
 
       const handoffWindow = resolveHandoffWindow(action, windowDays, opts.deferredWindowDays)
@@ -416,39 +426,65 @@ function claimableMetricKeys(action: SeoActionRow): readonly string[] {
   return GSC_EVALUATOR_METRIC_KEYS.filter(key => key !== own)
 }
 
-async function reconcileLegacyWindows(
+/**
+ * The non-destructive half, run BEFORE any attribution work.
+ *
+ * Claiming is an UPDATE: it can safely precede the snapshot maturity check, and
+ * it has to, because the action most likely to be carrying an unsigned row is
+ * the one whose window has not closed yet (round 16).
+ *
+ * The destructive half deliberately does NOT live here — see
+ * `retireExtraWindows`.
+ */
+async function claimUnsignedRows(action: SeoActionRow): Promise<string[]> {
+  const claimable = claimableMetricKeys(action)
+  if (claimable.length === 0) return []
+
+  const { error } = await supabaseAdmin
+    .from('flywheel_outcomes')
+    .update({ evaluator_key: OUTCOME_EVALUATOR.GSC_SNAPSHOTS })
+    .eq('action_id', action.id)
+    .is('evaluator_key', null)
+    .in('metric_key', claimable)
+
+  return error ? [`claim unsigned outcomes: ${error.message}`] : []
+}
+
+/**
+ * Drop this evaluator's rows at any window other than the authoritative one —
+ * only AFTER the authoritative window has actually been written.
+ *
+ * The ordering is the point. When I moved reconciliation ahead of the maturity
+ * check in round 16, this delete came along with it, and that turned a
+ * safeguard into data loss: with the gate off, an action holding only a 7-day
+ * row from the deploy gap and not yet carrying a mature 28-day snapshot had its
+ * one piece of evidence deleted, and then the recompute declined to run. The
+ * action went from "some evidence" to none. (Codex P1, round 22 on PR #862.)
+ *
+ * Write-before-retire is the rule this whole Work Package established for the
+ * upsert path; the window retire has to obey it too. Never delete the answer to
+ * a question you still promise to answer until the replacement has landed.
+ *
+ * The cost is that an immature action can transiently hold two windows while
+ * the gate is off — the harm the gate exists to prevent. That is the right
+ * trade: a duplicate is recoverable and self-clears on the pass that finally
+ * writes the authoritative window, whereas the deleted row is not recoverable
+ * at all, because the very reason it was deleted is that we cannot recompute it.
+ */
+async function retireExtraWindows(
   action: SeoActionRow,
   authoritativeWindow: number,
-): Promise<string[]> {
-  const errors: string[] = []
+): Promise<string | null> {
+  if (dualWindowEnabled()) return null
 
-  const claimable = claimableMetricKeys(action)
-
-  if (claimable.length > 0) {
-    const { error: claimError } = await supabaseAdmin
-      .from('flywheel_outcomes')
-      .update({ evaluator_key: OUTCOME_EVALUATOR.GSC_SNAPSHOTS })
-      .eq('action_id', action.id)
-      .is('evaluator_key', null)
-      .in('metric_key', claimable)
-
-    if (claimError) errors.push(`claim unsigned outcomes: ${claimError.message}`)
-  }
-
-  if (dualWindowEnabled()) return errors
-
-  const { error: retireError } = await supabaseAdmin
+  const { error } = await supabaseAdmin
     .from('flywheel_outcomes')
     .delete()
     .eq('action_id', action.id)
     .eq('evaluator_key', OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
     .neq('window_days', authoritativeWindow)
 
-  if (retireError) {
-    errors.push(`retire non-authoritative windows: ${retireError.message}`)
-  }
-
-  return errors
+  return error ? `retire non-authoritative windows: ${error.message}` : null
 }
 
 /**

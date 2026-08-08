@@ -196,7 +196,7 @@ export async function runAttributionJob(
       // reported, because the orphan audit asks "can the owner load this
       // action?" and this evaluator can load every flywheel.
       // (Codex P2, round 20 on PR #862.)
-      recordReconcileErrors(action.id, await reconcileLegacyWindows(action.id, null, windowDays))
+      recordReconcileErrors(action.id, await reconcileLegacyWindows(action.id, null))
       continue
     }
 
@@ -218,7 +218,7 @@ export async function runAttributionJob(
       )
       // Same reasoning as the deferral above: this evaluator promises nothing
       // for this action, so anything it wrote earlier is abandoned.
-      recordReconcileErrors(action.id, await reconcileLegacyWindows(action.id, null, windowDays))
+      recordReconcileErrors(action.id, await reconcileLegacyWindows(action.id, null))
       continue
     }
 
@@ -282,7 +282,7 @@ async function processAction(
   // measurement yet returns early below, and reconciling only on the success
   // path would leave a deploy-window row unsigned for as long as the action
   // stays immature. (Codex P2, round 16 on PR #862.)
-  const reconcileErrors = await reconcileLegacyWindows(id, expected_metric, windowDays)
+  const reconcileErrors = await reconcileLegacyWindows(id, expected_metric)
 
   // ── Baseline: most recent metric BEFORE the action ────────────────────────
   const { data: baselineRow, error: baselineErr } = await supabaseAdmin
@@ -350,6 +350,10 @@ async function processAction(
 
   if (upsertErr) throw new Error(`outcome upsert: ${upsertErr.message}`)
 
+  // Only now: the authoritative row is in the database, so dropping the other
+  // windows cannot leave this action with nothing.
+  reconcileErrors.push(...await retireExtraWindows(id, expected_metric, windowDays))
+
   return { wrote: true, reconcileErrors }
 }
 
@@ -390,7 +394,6 @@ async function processAction(
 async function reconcileLegacyWindows(
   actionId: string,
   metricKey: string | null,
-  authoritativeWindow: number,
 ): Promise<string[]> {
   const errors: string[] = []
   // Claim by EXCLUSION, not by the current metric.
@@ -457,12 +460,28 @@ async function reconcileLegacyWindows(
     errors.push(`retire abandoned metric outcomes: ${abandonedErr.message}`)
   }
 
-  // Nothing promised means nothing left to keep at any window either.
-  if (metricKey === null) return errors
+  return errors
+}
 
-  if (dualWindowEnabled()) return errors
+/**
+ * Drop this evaluator's rows for `metricKey` at any window other than the
+ * authoritative one — only AFTER the authoritative row has been written.
+ *
+ * Mirror of the GSC writer's `retireExtraWindows`, and moved here for the same
+ * reason: run before the write, this deletes an action's only evidence in the
+ * exact case where the replacement cannot be produced (no baseline yet, or no
+ * measurement inside the window). Write-before-retire is the rule this Work
+ * Package established for the upsert path, and the window retire has to obey it
+ * too. (Codex P1, round 22 on PR #862.)
+ */
+async function retireExtraWindows(
+  actionId: string,
+  metricKey: string,
+  authoritativeWindow: number,
+): Promise<string[]> {
+  if (dualWindowEnabled()) return []
 
-  const { error: retireErr } = await supabaseAdmin
+  const { error } = await supabaseAdmin
     .from('flywheel_outcomes')
     .delete()
     .eq('action_id', actionId)
@@ -470,11 +489,7 @@ async function reconcileLegacyWindows(
     .eq('evaluator_key', OUTCOME_EVALUATOR.FLYWHEEL_METRICS)
     .neq('window_days', authoritativeWindow)
 
-  if (retireErr) {
-    errors.push(`retire non-authoritative windows: ${retireErr.message}`)
-  }
-
-  return errors
+  return error ? [`retire non-authoritative windows: ${error.message}`] : []
 }
 
 // ── Verdict computation ───────────────────────────────────────────────────────
