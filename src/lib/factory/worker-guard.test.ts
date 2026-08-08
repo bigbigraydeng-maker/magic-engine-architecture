@@ -1,6 +1,8 @@
 // P21.J M2 — worker 收权三件套单测(路径注入面 = 安全核心,狄仁杰实施后再补攻击验证)
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { existsSync, readdirSync, readFileSync } from 'fs'
+import path from 'path'
 import {
   isWorkerAuthorized,
   scanRedlineHits,
@@ -58,6 +60,83 @@ describe('workerClientWhitelist', () => {
   it('全是非法值 → null,不放行空白名单', () => {
     process.env.FACTORY_WORKER_CLIENT_IDS = 'not-a-uuid, also-bad'
     expect(workerClientWhitelist()).toBeNull()
+  })
+})
+
+/**
+ * FACTORY_WORKER_CLIENT_IDS 配在哪。
+ *
+ * 名字里带 worker,docs/ENV.md 原来据此标成「worker」,但 worker 自己从来不读它:
+ * worker 调 /api/factory/worker/claim,白名单是在那条路由里读的 —— 那是 web 进程。
+ * 配到 Render 的 worker 服务上,claim 会一直 fail-closed 拒绝(白名单 null),
+ * 表现成「工单一条都领不走」,而排查方向会被变量名带偏。
+ *
+ * 下面查的是真实事实,不是比对一段固定文案:全仓谁 process.env 读它、render.yaml 的
+ * worker 服务有没有声明它、docs/ENV.md 那一格写的是什么。
+ */
+describe('FACTORY_WORKER_CLIENT_IDS 配在哪', () => {
+  const ROOT = path.resolve(__dirname, '../../..')
+  const ENV_NAME = 'FACTORY_WORKER_CLIENT_IDS'
+
+  /** 递归收集源码文件(跳过 node_modules / .next 等构建产物)。 */
+  function walk(dir: string): string[] {
+    if (!existsSync(dir)) return []
+    return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      if (e.name === 'node_modules' || e.name.startsWith('.')) return []
+      const full = path.join(dir, e.name)
+      if (e.isDirectory()) return walk(full)
+      return /\.(ts|tsx|mjs|cjs|js|py)$/.test(e.name) ? [full] : []
+    })
+  }
+
+  const readers = [...walk(path.join(ROOT, 'src')), ...walk(path.join(ROOT, 'scripts'))]
+    .filter((f) => !f.endsWith('worker-guard.test.ts'))
+    .filter((f) => readFileSync(f, 'utf8').includes(`process.env.${ENV_NAME}`))
+    .map((f) => path.relative(ROOT, f))
+
+  it('前提成立:扫到的源码文件数量正常(走空了就不许静默变绿)', () => {
+    expect(walk(path.join(ROOT, 'src')).length).toBeGreaterThan(500)
+    expect(walk(path.join(ROOT, 'scripts')).length).toBeGreaterThan(5)
+  })
+
+  it('🔴 全仓唯一读它的地方是 worker-guard.ts —— 多出第二个读取方,配在哪就要重判', () => {
+    expect(readers).toEqual(['src/lib/factory/worker-guard.ts'])
+  })
+
+  it('🔴 读它的那个函数只被 web 路由用 —— 没有常驻 worker 进程碰它', () => {
+    const importers = walk(path.join(ROOT, 'src'))
+      .concat(walk(path.join(ROOT, 'scripts')))
+      .filter((f) => !f.endsWith('worker-guard.ts') && !f.endsWith('worker-guard.test.ts'))
+      .filter((f) => readFileSync(f, 'utf8').includes('workerClientWhitelist'))
+      .map((f) => path.relative(ROOT, f))
+    expect(importers.length).toBeGreaterThan(0)
+    expect(importers.every((f) => f.startsWith('src/app/api/'))).toBe(true)
+  })
+
+  it('🔴 render.yaml 的 worker 服务没有声明这个变量(声明了说明职责变了)', () => {
+    const yaml = readFileSync(path.join(ROOT, 'render.yaml'), 'utf8')
+    const workers = Array.from(
+      yaml.matchAll(/-\s+type:\s+worker\s*\n\s+name:\s*(\S+)([\s\S]*?)(?=\n\s*-\s+type:|$)/g),
+    )
+    expect(workers.length, 'render.yaml 里一个 worker 服务都没解析到,正则可能写歪了').toBeGreaterThan(0)
+    const declaring = workers.filter((m) => m[2].includes(ENV_NAME)).map((m) => m[1])
+    expect(declaring).toEqual([])
+  })
+
+  it('docs/ENV.md 标的是 Render-web', () => {
+    const lines = readFileSync(path.join(ROOT, 'docs/ENV.md'), 'utf8').split('\n')
+    const cellsOf = (line: string) => line.split('|').slice(1, -1).map((c) => c.trim())
+    const i = lines.findIndex(
+      (l) => l.trimStart().startsWith('|') && (cellsOf(l)[0] ?? '').includes(`\`${ENV_NAME}\``),
+    )
+    expect(i, `docs/ENV.md 里找不到 ${ENV_NAME} 这一行`).toBeGreaterThan(-1)
+    let col = -1
+    for (let j = i - 1; j >= 0 && lines[j].trimStart().startsWith('|'); j--) {
+      const c = cellsOf(lines[j]).findIndex((x) => x.includes('配在哪'))
+      if (c >= 0) { col = c; break }
+    }
+    expect(col, '定位不到「配在哪」那一列').toBeGreaterThan(-1)
+    expect(cellsOf(lines[i])[col]).toBe('Render-web')
   })
 })
 
