@@ -199,17 +199,6 @@ export async function runGscAttributionForClient(
     // summary must still report the rows that landed.
     let written = 0
     try {
-      // Before any attribution work — deliberately ahead of the snapshot
-      // maturity checks inside attributeAction, which return early for an
-      // action whose window has not closed yet. Reconciling only on the success
-      // path would leave a gap row unsigned for as long as its action stays
-      // immature (up to a full 28-day window), and the rollout's NULL-count
-      // gate would sit blocked on it. (Codex P2, round 16 on PR #862.)
-      for (const err of await claimUnsignedRows(action)) {
-        result.reconcile_errors++
-        result.errors.push(`action ${action.id}: ${err}`)
-      }
-
       const cadence = await attributeAction(action, windowDays)
       written = cadence.written
       if (cadence.cleanupError) {
@@ -386,69 +375,44 @@ async function attributeAction(
  * reconciliation reads as a clean run.
  */
 /**
- * Which of this evaluator's metric keys may be claimed for THIS action.
+ * WHY THIS EVALUATOR DOES NOT CLAIM UNSIGNED ROWS.
  *
- * Normally all of them: `seo.gsc.*` is this evaluator's namespace. There is one
- * exception, and it is the one case where the namespace stops being proof of
- * provenance — the same caveat the expand migration's backfill carries and the
- * reason it is labelled BEST-EFFORT HISTORICAL INFERENCE.
+ * It used to (round 15): sign any `seo.gsc.*` row for an action that the expand
+ * migration's backfill had left with a NULL `evaluator_key`, so the contract
+ * migration's `evaluator_key IS NULL = 0` gate could be satisfied. That rested
+ * on "the namespace proves the writer", and two rounds of review took the
+ * proof apart:
  *
- * Old pass 1 (main, pre-#859) had no ownership routing: it attributed EVERY
- * action with an `expected_metric` by reading `flywheel_metrics`, which already
- * carries `seo.gsc.clicks / impressions / avg_position` (99 rows each). So an
- * action whose own `expected_metric` is a GSC key, processed inside the
- * expand→deploy gap, produces an unsigned row at that exact key derived from
- * flywheel_metrics — not from a GSC snapshot. Signing it `gsc_snapshots` on
- * namespace alone would relabel derived data as an authoritative GSC
- * measurement, and because the claim runs before the snapshot maturity check,
- * a client with no snapshots would never have it recomputed and corrected —
- * while the contract migration's NULL check would happily pass.
- * (Codex P2, round 17 on PR #862.)
+ *   · round 17 — old pass 1 had no ownership routing and attributed straight
+ *     from `flywheel_metrics`, which already carries the three GSC keys. So an
+ *     action whose `expected_metric` was a GSC key produced a
+ *     flywheel_metrics-derived row AT that key. Narrowed: exclude the action's
+ *     own expected_metric.
+ *   · round 24 — that exclusion reads the CURRENT expected_metric, but the
+ *     ambiguity was created by whatever it was AT THE TIME. Once the
+ *     `action_unattributable` todo has a human correct A → B, the A row becomes
+ *     claimable again and gets signed as ours.
  *
- * Old pass 1 wrote exactly one row per action, at `metric_key =
- * expected_metric`, so the ambiguity is confined to that single pair. Every
- * other GSC key on the same action can only have come from this evaluator.
- * Those stay NULL deliberately: an unresolved provenance question belongs to a
- * human, and the rollout's own `evaluator_key IS NULL` gate is where it
- * surfaces — see the note in the expand migration header for the diagnostic
- * query. Guessing would make the gate pass while the answer is wrong, which is
- * strictly worse than the gate holding.
+ * There is no third narrowing, because the missing fact is history: nothing in
+ * the row says which metric the action promised when it was written, and no
+ * query can recover it. Signing anyway would make the rollout gate pass while
+ * the answer is wrong — downstream would read a flywheel_metrics-derived number
+ * as an authoritative GSC measurement — and the claim runs before the maturity
+ * check, so a client without snapshots would never have it recomputed and
+ * corrected.
  *
- * Zero actions carry a `seo.gsc.*` expected_metric in production today
- * (measured 2026-08-08), so this is a fuse, not a live fault — the same status
- * the cross-writer delete had before it was removed.
+ * So this evaluator signs only what it writes. An unsigned `seo.gsc.*` row is
+ * left exactly as it is — not claimed, not retired (the retire filters on our
+ * own evaluator_key, so it cannot see a NULL one) — and surfaces at rollout
+ * step [2], where the expand migration's header carries the diagnostic query
+ * and the two acceptable resolutions. A blocked gate a human can explain beats
+ * an unblocked one built on a guess.
+ *
+ * Pass 1's claim is NOT symmetric with this and stays: it claims by excluding
+ * every foreign namespace, and this evaluator has never written outside
+ * `seo.gsc.*`, so a non-GSC unsigned row can only be pass 1's own. That one is
+ * provable; this one is not.
  */
-function claimableMetricKeys(action: SeoActionRow): readonly string[] {
-  const own = action.expected_metric
-  if (!own || !ownsMetric(OUTCOME_EVALUATOR.GSC_SNAPSHOTS, own)) {
-    return GSC_EVALUATOR_METRIC_KEYS
-  }
-  return GSC_EVALUATOR_METRIC_KEYS.filter(key => key !== own)
-}
-
-/**
- * The non-destructive half, run BEFORE any attribution work.
- *
- * Claiming is an UPDATE: it can safely precede the snapshot maturity check, and
- * it has to, because the action most likely to be carrying an unsigned row is
- * the one whose window has not closed yet (round 16).
- *
- * The destructive half deliberately does NOT live here — see
- * `retireExtraWindows`.
- */
-async function claimUnsignedRows(action: SeoActionRow): Promise<string[]> {
-  const claimable = claimableMetricKeys(action)
-  if (claimable.length === 0) return []
-
-  const { error } = await supabaseAdmin
-    .from('flywheel_outcomes')
-    .update({ evaluator_key: OUTCOME_EVALUATOR.GSC_SNAPSHOTS })
-    .eq('action_id', action.id)
-    .is('evaluator_key', null)
-    .in('metric_key', claimable)
-
-  return error ? [`claim unsigned outcomes: ${error.message}`] : []
-}
 
 /**
  * Drop this evaluator's rows at any window other than the authoritative one —

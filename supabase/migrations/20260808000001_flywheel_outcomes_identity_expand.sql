@@ -19,37 +19,46 @@
 --   expanded table — every row they write in that gap arrives with a NULL
 --   evaluator the finished backfill will never revisit. Nothing would ever
 --   reclaim a row written at a non-cadence window (the gate refuses custom
---   windows and each writer only recomputes its own cadence), so both new
---   writers now adopt their own unsigned rows on the next pass they make over
---   the action — matched on action + NULL + their own metric vocabulary, by
---   UPDATE, never DELETE — and, while ATTRIBUTION_DUAL_WINDOW_ENABLED is off,
+--   windows and each writer only recomputes its own cadence), so
+--   pass 1 now adopts its own unsigned rows on the next pass it makes over the
+--   action — matched on action + NULL + everything outside every FOREIGN metric
+--   namespace, by UPDATE, never DELETE. The GSC evaluator deliberately does not
+--   (see below). While ATTRIBUTION_DUAL_WINDOW_ENABLED is off, both writers
 --   also retire their OWN rows at any non-authoritative window, because a
 --   signed-but-extra window still double-counts that action for the consumers
 --   that read outcome rows. Re-run the count after one full attribution cycle
 --   (6h) before treating a non-zero result as a real problem.
 --   (Codex P2, round 15 on PR #862.)
 --
---   IF THE COUNT STILL WILL NOT REACH ZERO, there is exactly one row shape the
---   writers deliberately refuse to sign, and it needs a human answer rather
---   than a guess:
+--   IF THE COUNT STILL WILL NOT REACH ZERO, the rows left are `seo.gsc.*` ones,
+--   and they need a human answer rather than a guess:
 --
---     SELECT o.action_id, o.metric_key, o.window_days, o.computed_at
+--     SELECT o.action_id, o.metric_key, o.window_days, o.computed_at,
+--            a.flywheel, a.expected_metric
 --       FROM flywheel_outcomes o
 --       JOIN flywheel_actions a ON a.id = o.action_id
 --      WHERE o.evaluator_key IS NULL
 --        AND o.metric_key LIKE 'seo.gsc.%'
---        AND a.expected_metric = o.metric_key;
+--      ORDER BY o.computed_at;
 --
---   Old pass 1 attributed EVERY action straight from flywheel_metrics, which
---   already carries seo.gsc.clicks / impressions / avg_position — so for an
---   action whose own expected_metric is a GSC key, a row at that exact key
---   could have come from either writer, and the namespace stops being proof.
---   Signing it would make this gate pass while the answer is wrong, and
---   downstream would read flywheel_metrics-derived data as an authoritative GSC
---   measurement. Decide per row: delete it (it is reproducible), or label it by
---   hand from the run logs. Zero actions carry a seo.gsc.* expected_metric in
---   production as of 2026-08-08, so this query is expected to return nothing.
---   (Codex P2, round 17 on PR #862.)
+--   The GSC evaluator deliberately signs ONLY what it writes, so it never
+--   claims these. Old pass 1 attributed every action straight from
+--   flywheel_metrics, which already carries seo.gsc.clicks / impressions /
+--   avg_position — so a row at one of those keys could have come from either
+--   writer, and nothing in the row records which metric the action promised
+--   when it was written. Signing it would make this gate pass while the answer
+--   is wrong, and downstream would read flywheel_metrics-derived data as an
+--   authoritative GSC measurement.
+--
+--   Resolve per row: delete it (the bridge recomputes its cadence window on the
+--   next run, so nothing is permanently lost), or label it by hand from the run
+--   logs. Non-GSC unsigned rows do not appear here — pass 1 claims those by
+--   excluding every foreign namespace, which IS provable, because this
+--   evaluator has never written outside seo.gsc.*.
+--
+--   Zero actions carry a seo.gsc.* expected_metric in production as of
+--   2026-08-08, so this query is expected to return nothing.
+--   (Codex P2, rounds 17 and 24 on PR #862.)
 --
 --   The contract migration is deliberately NOT in this branch. It was, and
 --   review caught the trap (PR #862, Codex P1): its NULL-count guard measures

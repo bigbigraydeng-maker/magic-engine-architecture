@@ -92,6 +92,17 @@ function seedUnsignedRow(over: Record<string, unknown> = {}): void {
   ])
 }
 
+/**
+ * The same row, already carrying this evaluator's key — what the expand
+ * migration's backfill leaves for a row the bridge itself wrote, and what any
+ * row written after the deploy carries. The window retire is scoped to our own
+ * key, so this is the shape it acts on; an unsigned row is deliberately outside
+ * its reach (see "the GSC evaluator never signs a row it did not write").
+ */
+function seedSignedRow(over: Record<string, unknown> = {}): void {
+  seedUnsignedRow({ evaluator_key: OUTCOME_EVALUATOR.GSC_SNAPSHOTS, ...over })
+}
+
 async function runBridge(windowDays = 28) {
   const { runGscAttributionForClient } = await import('../gsc-bridge')
   return runGscAttributionForClient(CLIENT_ID, windowDays)
@@ -108,174 +119,82 @@ beforeEach(() => {
   delete process.env[DUAL_WINDOW_FLAG] // shipped default: dual window OFF
 })
 
-// ── The GSC evaluator ────────────────────────────────────────────────────────
+// ── The GSC evaluator signs only what it writes ──────────────────────────────
 
-describe('the GSC evaluator adopts its own unsigned rows', () => {
-  it('signs a 7-day row it can never recompute (dual-window ON)', async () => {
-    process.env[DUAL_WINDOW_FLAG] = 'true'
-    seedSeoAction()
-    seedGscSnapshots()
-    seedUnsignedRow()
-
-    await runBridge(28)
-
-    const legacy = db.outcomes().find(r => r.window_days === 7)
-    expect(legacy?.evaluator_key).toBe(OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
-  })
-
-  it('claims by UPDATE — the measurement itself survives (dual-window ON)', async () => {
-    process.env[DUAL_WINDOW_FLAG] = 'true'
-    seedSeoAction()
-    seedGscSnapshots()
-    seedUnsignedRow()
-
-    await runBridge(28)
-
-    const legacy = db.outcomes().find(r => r.window_days === 7)
-    // Same row, same id, same numbers. Only the signature was missing.
-    expect(legacy?.id).toBe('legacy-1')
-    expect(legacy?.delta).toBe(20)
-    expect(legacy?.verdict).toBe('confirmed')
-  })
-
-  it('signs an immature action\u2019s row even though attribution produces nothing', async () => {
-    // No snapshots at all: attributeAction returns early on the missing
-    // baseline/after pair. Reconciling only on the success path would leave the
-    // row unsigned for as long as the action stays immature — up to a full
-    // window — and the rollout's NULL-count gate would sit blocked on it.
-    process.env[DUAL_WINDOW_FLAG] = 'true'
-    seedSeoAction()
-    seedUnsignedRow()
-
-    const result = await runBridge(28)
-
-    expect(result.outcomes_written).toBe(0) // nothing to attribute yet
-    expect(db.outcomes().find(r => r.window_days === 7)?.evaluator_key)
-      .toBe(OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
-  })
-
-  it('leaves the other evaluator\'s unsigned rows alone', async () => {
-    process.env[DUAL_WINDOW_FLAG] = 'true'
-    // The claim is only safe because the metric namespace decides ownership.
-    // A social metric was never written by the GSC evaluator, so signing it
-    // would be inventing provenance — and Postgres would reject it anyway.
-    seedSeoAction()
-    seedGscSnapshots()
-    seedUnsignedRow({ id: 'legacy-2', metric_key: SOCIAL_METRIC })
-
-    const result = await runBridge(28)
-
-    const other = db.outcomes().find(r => r.id === 'legacy-2')
-    expect(other?.evaluator_key).toBeNull()
-    // And the row must be excluded by the QUERY, not by Postgres rejecting the
-    // write: an unscoped claim leaves the row untouched too, but only because
-    // the ownership CHECK aborted the whole statement — which also loses the
-    // rows the claim was supposed to sign. A clean run is the real assertion.
-    expect(result.cleanup_errors).toBe(0)
-    expect(result.errors).toEqual([])
-  })
-
-  it('never re-signs a row another evaluator already signed', async () => {
-    process.env[DUAL_WINDOW_FLAG] = 'true'
-    seedSeoAction()
-    seedGscSnapshots()
-    seedUnsignedRow({
-      id: 'legacy-3',
-      metric_key: SOCIAL_METRIC,
-      evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS,
-    })
-
-    await runBridge(28)
-
-    const other = db.outcomes().find(r => r.id === 'legacy-3')
-    expect(other?.evaluator_key).toBe(OUTCOME_EVALUATOR.FLYWHEEL_METRICS)
-  })
-
-  it('reports a failed claim instead of counting the run clean', async () => {
-    process.env[DUAL_WINDOW_FLAG] = 'true'
-    seedSeoAction()
-    seedGscSnapshots()
-    seedUnsignedRow()
-    db.failNext('flywheel_outcomes', 'update', 'deadlock detected')
-
-    const result = await runBridge(28)
-
-    // The rows this run wrote are in the database and still counted...
-    expect(result.outcomes_written).toBe(3)
-    // ...but the failure is named, and counted apart from post-write cleanup
-    // debt: this one made nothing right, so the manual route must not read it
-    // as success. (Codex P2, round 18.)
-    expect(result.reconcile_errors).toBe(1)
-    expect(result.cleanup_errors).toBe(0)
-    expect(result.errors.join(' ')).toContain('claim unsigned outcomes')
-  })
-})
-
-// ── Provenance the namespace cannot prove ───────────────────────────────────
-
-describe('an action whose own expected_metric is a GSC key', () => {
+describe('the GSC evaluator never signs a row it did not write this run', () => {
   /**
-   * Old pass 1 had no ownership routing: it attributed every action with an
-   * expected_metric straight from `flywheel_metrics`, which already carries
-   * seo.gsc.clicks / impressions / avg_position. So for THIS shape of action,
-   * an unsigned row at that exact key could have come from either writer, and
-   * the namespace stops being proof of provenance.
+   * Round 15 had it claim unsigned `seo.gsc.*` rows so the contract gate could
+   * be satisfied. Round 17 showed old pass 1 could have written that exact key
+   * (it attributed straight from flywheel_metrics, which carries all three GSC
+   * keys), so the claim was narrowed to exclude the action's own
+   * expected_metric. Round 24 showed the narrowing reads the CURRENT metric
+   * while the ambiguity was created by whatever it was at the time — and once
+   * the todo has a human correct A → B, the A row becomes claimable again.
+   *
+   * The missing fact is history, and no query recovers it. So the claim is
+   * gone: this evaluator signs only what it writes, and an unsigned GSC row is
+   * a human's call at rollout step [2].
    */
-  function seedGscMetricAction(): void {
+  it('leaves an unsigned 7-day row exactly as it is', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    seedSeoAction()
+    seedGscSnapshots()
+    seedUnsignedRow()
+
+    const result = await runBridge(28)
+
+    const legacy = db.outcomes().find(r => r.window_days === 7)
+    expect(legacy).toBeDefined()                 // not deleted
+    expect(legacy?.evaluator_key).toBeNull()     // and not guessed at
+    expect(result.reconcile_errors).toBe(0)      // nothing was even attempted
+  })
+
+  it('still leaves it alone after the metric has been corrected', async () => {
+    // The round-24 case specifically: the row sits at metric A, which is no
+    // longer what the action promises, so an exclusion keyed on the CURRENT
+    // expected_metric would have let it through.
+    process.env[DUAL_WINDOW_FLAG] = 'true'
     db.seed('flywheel_actions', [
       {
         id: ACTION_ID, client_id: CLIENT_ID, flywheel: 'seo',
-        action_type: 'seo.publish_blog', expected_metric: GSC_CLICKS,
+        action_type: 'seo.publish_blog',
+        expected_metric: 'seo.gsc.impressions',   // corrected to B…
         expected_delta: 1, executed_at: EXECUTED_AT, payload: null,
       },
     ])
-  }
-
-  it('does NOT sign the one row old pass 1 could also have written', async () => {
-    process.env[DUAL_WINDOW_FLAG] = 'true'
-    seedGscMetricAction()
     seedGscSnapshots()
-    seedUnsignedRow() // metric_key = seo.gsc.clicks = the action's own metric
+    seedUnsignedRow()                             // …row still sits at A
 
     await runBridge(28)
 
-    // Left NULL on purpose: guessing would make the contract migration's
-    // NULL-count gate pass while the answer is wrong, and downstream would read
-    // flywheel_metrics-derived data as an authoritative GSC measurement.
     expect(db.outcomes().find(r => r.window_days === 7)?.evaluator_key).toBeNull()
   })
 
-  it('still signs the other GSC keys on the same action', async () => {
-    // Old pass 1 wrote exactly ONE row per action, so only the expected_metric
-    // pair is ambiguous. Withholding the rest would block the rollout for no
-    // reason.
-    process.env[DUAL_WINDOW_FLAG] = 'true'
-    seedGscMetricAction()
+  it('signs the rows it does write, through the upsert', async () => {
+    // Removing the claim must not weaken the ordinary path: everything this
+    // evaluator computes still carries its key.
+    seedSeoAction()
     seedGscSnapshots()
-    seedUnsignedRow({ id: 'legacy-imp', metric_key: 'seo.gsc.impressions' })
 
     await runBridge(28)
 
-    expect(db.outcomes().find(r => r.id === 'legacy-imp')?.evaluator_key)
-      .toBe(OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
+    const written = db.outcomes().filter(r => r.window_days === 28)
+    expect(written).toHaveLength(3)
+    expect(new Set(written.map(r => r.evaluator_key)))
+      .toEqual(new Set([OUTCOME_EVALUATOR.GSC_SNAPSHOTS]))
   })
 
-  it('pass 1 cannot reach this case at all — it defers the action', async () => {
-    // The mirror of the same question on the other writer: new pass 1 declines
-    // GSC-owned metrics before processAction runs, so its claim can never touch
-    // the seo.gsc.* namespace.
-    seedGscMetricAction()
-    db.seed('flywheel_metrics', [
-      { client_id: CLIENT_ID, metric_key: GSC_CLICKS, metric_value: 100, measured_at: '2026-05-30T00:00:00.000Z' },
-      { client_id: CLIENT_ID, metric_key: GSC_CLICKS, metric_value: 140, measured_at: '2026-06-05T00:00:00.000Z' },
-    ])
+  it('does not retire an unsigned row either — the retire is scoped to our key', async () => {
+    // Not-claiming must not turn into deleting-by-default: the row is a real
+    // measurement of unknown provenance, and this PR exists because writers
+    // used to destroy rows that were not theirs.
+    seedSeoAction()
+    seedGscSnapshots()
     seedUnsignedRow()
 
-    const result = await runJob(14)
+    await runBridge(28)   // gate OFF: the window retire runs
 
-    expect(result.deferred).toBe(1)
-    expect(result.written).toBe(0)
-    expect(db.outcomes().find(r => r.window_days === 7)?.evaluator_key).toBeNull()
+    expect(db.outcomes().find(r => r.window_days === 7)).toBeDefined()
   })
 })
 
@@ -426,7 +345,7 @@ describe('with dual-window OFF, an action never ends up holding two windows', ()
     // not happen, because every writer DELETEd by action before inserting.
     seedSeoAction()
     seedGscSnapshots()
-    seedUnsignedRow()
+    seedSignedRow()
 
     await runBridge(28)
 
@@ -443,7 +362,7 @@ describe('with dual-window OFF, an action never ends up holding two windows', ()
     // was deleted is precisely that we cannot recompute it.
     // (Codex P1, round 22.)
     seedSeoAction()
-    seedUnsignedRow()          // 7 days
+    seedSignedRow()          // 7 days
     // Deliberately NO snapshots: attributeAction returns early.
 
     const result = await runBridge(28)
@@ -460,7 +379,7 @@ describe('with dual-window OFF, an action never ends up holding two windows', ()
     // The duplicate is transient, not permanent: the moment the replacement
     // lands, the extra window goes.
     seedSeoAction()
-    seedUnsignedRow()
+    seedSignedRow()
 
     await runBridge(28)                       // nothing to compute yet → 7 survives
     expect(db.outcomes().some(r => r.window_days === 7)).toBe(true)
@@ -504,7 +423,7 @@ describe('with dual-window OFF, an action never ends up holding two windows', ()
     process.env[DUAL_WINDOW_FLAG] = 'true'
     seedSeoAction()
     seedGscSnapshots()
-    seedUnsignedRow()
+    seedSignedRow()
 
     await runBridge(28)
 
@@ -791,7 +710,12 @@ describe('the ordinary write path cannot reach these rows', () => {
     expect(rows.find(r => r.window_days === 7)?.id).toBe('legacy-1')
   })
 
-  it('leaves no unsigned row behind for the contract migration to trip on', async () => {
+  it('leaves an unsigned row for the rollout gate rather than guessing at it', async () => {
+    // The inverse of what this test used to assert. Round 15 had the bridge
+    // clear the unsigned rows so the contract gate would pass; rounds 17 and 24
+    // showed the signature it applied could be wrong. A gate that holds on a
+    // row a human can look up beats one that opens on a guess — the expand
+    // migration's header carries the query and the two ways to resolve it.
     process.env[DUAL_WINDOW_FLAG] = 'true'
     seedSeoAction()
     seedGscSnapshots()
@@ -800,6 +724,7 @@ describe('the ordinary write path cannot reach these rows', () => {
     await runBridge(28)
 
     const unsigned = db.outcomes().filter(r => r.evaluator_key == null)
-    expect(unsigned).toEqual([])
+    expect(unsigned).toHaveLength(1)
+    expect(unsigned[0].id).toBe('legacy-1')
   })
 })
