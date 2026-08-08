@@ -71,6 +71,19 @@ export interface GscAttributionResult {
    * failure (and return 502). (Codex P2 round 3 on PR #862.)
    */
   cleanup_errors:   number
+  /**
+   * Reconciliation failures from BEFORE any write this run — claiming rows an
+   * older deployment left unsigned, or retiring a non-authoritative window.
+   *
+   * Deliberately NOT folded into `cleanup_errors`. That counter means "the rows
+   * landed, tidying up afterwards failed", which is why the manual route treats
+   * it as success. These errors mean the opposite: nothing has been made right,
+   * the unsigned rows still block the contract migration, and a duplicated
+   * window is still being counted twice by the memory consumers. They only
+   * looked alike because reconciliation used to run after the write.
+   * (Codex P2, round 18 on PR #862.)
+   */
+  reconcile_errors: number
 }
 
 /** One action's attribution: what landed, and whether tidying up afterwards failed. */
@@ -141,6 +154,7 @@ export async function runGscAttributionForClient(
     skipped:          0,
     errors:           [],
     cleanup_errors:   0,
+    reconcile_errors: 0,
   }
 
   // Load this evaluator's actions for the client. The flywheel filter comes
@@ -192,7 +206,7 @@ export async function runGscAttributionForClient(
       // immature (up to a full 28-day window), and the rollout's NULL-count
       // gate would sit blocked on it. (Codex P2, round 16 on PR #862.)
       for (const err of await reconcileLegacyWindows(action, windowDays)) {
-        result.cleanup_errors++
+        result.reconcile_errors++
         result.errors.push(`action ${action.id}: ${err}`)
       }
 

@@ -85,6 +85,7 @@ describe('POST /api/cron/attribution', () => {
       outcomes_written: 0,
       skipped: 0,
       cleanup_errors: 0,
+      reconcile_errors: 0,
       errors: [],
     })
   })
@@ -116,7 +117,7 @@ describe('POST /api/cron/attribution', () => {
   // ── Happy path ──────────────────────────────────────────────────────────────
 
   it('calls runAttributionJob with default options and returns result', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 5, written: 3, skipped: 2, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 5, written: 3, skipped: 2, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [] })
 
     const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
     expect(res.status).toBe(200)
@@ -138,7 +139,7 @@ describe('POST /api/cron/attribution', () => {
   it('surfaces actions deferred to another evaluator in the response', async () => {
     // Deferrals are normal routing, not failures — but they still have to be
     // visible, otherwise "pass 1 wrote nothing today" looks like a gap.
-    mockRunAttributionJob.mockResolvedValue({ processed: 9, written: 4, skipped: 1, failed: 0, deferred: 4, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 9, written: 4, skipped: 1, failed: 0, deferred: 4, pass2ClientIds: [], unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [] })
 
     const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
     const body = await res.json()
@@ -151,7 +152,7 @@ describe('POST /api/cron/attribution', () => {
     // Pass 1 accepts a window too. On main a re-run at a different window
     // REPLACED the previous rows; the natural key now appends, so this is a
     // third route to a second window and the same gate has to cover it.
-    mockRunAttributionJob.mockResolvedValue({ processed: 2, written: 2, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 2, written: 2, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [] })
 
     const res = await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, '?window_days=30')
@@ -168,7 +169,7 @@ describe('POST /api/cron/attribution', () => {
 
   it('honours a custom pass-1 window once the gate is on', async () => {
     process.env[DUAL_WINDOW_FLAG] = 'true'
-    mockRunAttributionJob.mockResolvedValue({ processed: 2, written: 2, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 2, written: 2, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [] })
 
     const res = await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, '?window_days=30')
@@ -183,7 +184,7 @@ describe('POST /api/cron/attribution', () => {
   })
 
   it('passes client_id query param to runAttributionJob', async () => {
-    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 1, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 1, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [] })
 
     const res = await POST(
       makeRequest(
@@ -207,7 +208,7 @@ describe('POST /api/cron/attribution', () => {
 
   it('forwards the default pass-1 window (14) to the GSC bridge when enabled', async () => {
     process.env[DUAL_WINDOW_FLAG] = 'true'
-    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [], unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [] })
 
     const res = await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, '?client_id=abc-123')
@@ -221,7 +222,7 @@ describe('POST /api/cron/attribution', () => {
 
   it('forwards an explicit ?window_days=7 to the GSC bridge when enabled', async () => {
     process.env[DUAL_WINDOW_FLAG] = 'true'
-    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [], unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [] })
 
     const res = await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, '?window_days=7&client_id=abc-123')
@@ -243,7 +244,7 @@ describe('POST /api/cron/attribution', () => {
     // would defeat the bridge's dedupe guard and error every deferred action.
     // Pass 1 keeps main's behaviour for the same input — only the forwarding
     // is sanitised.
-    mockRunAttributionJob.mockResolvedValue({ processed: 0, written: 0, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 0, written: 0, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [], unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [] })
 
     const res = await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, `?window_days=${raw}&client_id=abc-123`)
@@ -269,6 +270,8 @@ describe('POST /api/cron/attribution', () => {
       pass2ClientIds: ['client-disconnected'],
       unattributable: 0,
       unattributableSamples: [],
+      reconcileErrors: 0,
+      reconcileErrorSamples: [],
     })
 
     const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
@@ -286,6 +289,8 @@ describe('POST /api/cron/attribution', () => {
       pass2ClientIds: ['client-both'],
       unattributable: 0,
       unattributableSamples: [],
+      reconcileErrors: 0,
+      reconcileErrorSamples: [],
     })
 
     await POST(makeRequest({ authorization: 'Bearer test-secret' }))
@@ -303,6 +308,8 @@ describe('POST /api/cron/attribution', () => {
       pass2ClientIds: ['client-deferred'],
       unattributable: 0,
       unattributableSamples: [],
+      reconcileErrors: 0,
+      reconcileErrorSamples: [],
     })
 
     const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
@@ -315,7 +322,7 @@ describe('POST /api/cron/attribution', () => {
 
   it('leaves the bridge cadence window to the bridge (never overrides it)', async () => {
     process.env[DUAL_WINDOW_FLAG] = 'true'
-    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [], unattributable: 0, unattributableSamples: [] })
+    mockRunAttributionJob.mockResolvedValue({ processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [], unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [] })
 
     await POST(
       makeRequest({ authorization: 'Bearer test-secret' }, '?window_days=7&client_id=abc-123')
@@ -337,7 +344,7 @@ describe('POST /api/cron/attribution', () => {
     // The shipped state. Production behaviour must be exactly what it was.
     mockRunAttributionJob.mockResolvedValue({
       processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [],
-      unattributable: 0, unattributableSamples: [],
+      unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [],
     })
 
     await POST(makeRequest({ authorization: 'Bearer test-secret' }, '?client_id=abc-123'))
@@ -353,7 +360,7 @@ describe('POST /api/cron/attribution', () => {
       process.env[DUAL_WINDOW_FLAG] = value
       mockRunAttributionJob.mockResolvedValue({
         processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [],
-        unattributable: 0, unattributableSamples: [],
+        unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [],
       })
 
       await POST(makeRequest({ authorization: 'Bearer test-secret' }, '?client_id=abc-123'))
@@ -366,7 +373,7 @@ describe('POST /api/cron/attribution', () => {
     process.env[DUAL_WINDOW_FLAG] = 'true'
     mockRunAttributionJob.mockResolvedValue({
       processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: [],
-      unattributable: 0, unattributableSamples: [],
+      unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [],
     })
 
     await POST(makeRequest({ authorization: 'Bearer test-secret' }, '?client_id=abc-123'))
@@ -381,7 +388,7 @@ describe('POST /api/cron/attribution', () => {
     mockRunAttributionJob.mockResolvedValue({
       processed: 2, written: 0, skipped: 0, failed: 0, deferred: 2,
       pass2ClientIds: ['client-deferred'],
-      unattributable: 0, unattributableSamples: [],
+      unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [],
     })
 
     await POST(makeRequest({ authorization: 'Bearer test-secret' }))
@@ -398,11 +405,12 @@ describe('POST /api/cron/attribution', () => {
     // would make completed several times larger than processed.
     mockRunAttributionJob.mockResolvedValue({
       processed: 4, written: 1, skipped: 0, failed: 0, deferred: 3, pass2ClientIds: ['c1'],
-      unattributable: 0, unattributableSamples: [],
+      unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [],
     })
     mockRunGscAttribution.mockResolvedValue({
       client_id: 'c1', actions_found: 3, outcomes_written: 9, skipped: 0,
-      cleanup_errors: 0, errors: [],
+      cleanup_errors: 0,
+      reconcile_errors: 0, errors: [],
     })
 
     const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
@@ -424,11 +432,12 @@ describe('POST /api/cron/attribution', () => {
     // still be visible as a failure — the cron summary has to say both.
     mockRunAttributionJob.mockResolvedValue({
       processed: 1, written: 0, skipped: 0, failed: 0, deferred: 1, pass2ClientIds: ['c1'],
-      unattributable: 0, unattributableSamples: [],
+      unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [],
     })
     mockRunGscAttribution.mockResolvedValue({
       client_id: 'c1', actions_found: 1, outcomes_written: 3, skipped: 0,
-      cleanup_errors: 1, errors: ['action a1: retire stale outcomes: boom'],
+      cleanup_errors: 1,
+      reconcile_errors: 0, errors: ['action a1: retire stale outcomes: boom'],
     })
 
     const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
@@ -452,7 +461,7 @@ describe('POST /api/cron/attribution', () => {
     // visible in the response and the run summary instead.
     mockRunAttributionJob.mockResolvedValue({
       processed: 3, written: 1, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: ['c1'],
-      unattributable: 2, unattributableSamples: ['geo-1', 'social-1'],
+      unattributable: 2, unattributableSamples: ['geo-1', 'social-1'], reconcileErrors: 0, reconcileErrorSamples: [],
     })
 
     await POST(makeRequest({ authorization: 'Bearer test-secret' }))
@@ -469,7 +478,7 @@ describe('POST /api/cron/attribution', () => {
     // logged as completed with zero failures — a total outage, reported green.
     mockRunAttributionJob.mockResolvedValue({
       processed: 5, written: 0, skipped: 0, failed: 5, deferred: 0, pass2ClientIds: [],
-      unattributable: 0, unattributableSamples: [],
+      unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [],
     })
 
     await POST(makeRequest({ authorization: 'Bearer test-secret' }))
@@ -481,7 +490,7 @@ describe('POST /api/cron/attribution', () => {
   it('does not count a quiet day (no data yet) as failure', async () => {
     mockRunAttributionJob.mockResolvedValue({
       processed: 5, written: 0, skipped: 5, failed: 0, deferred: 0, pass2ClientIds: [],
-      unattributable: 0, unattributableSamples: [],
+      unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [],
     })
 
     await POST(makeRequest({ authorization: 'Bearer test-secret' }))
@@ -494,7 +503,7 @@ describe('POST /api/cron/attribution', () => {
     // silently missing outcome.
     mockRunAttributionJob.mockResolvedValue({
       processed: 2, written: 0, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [],
-      unattributable: 2, unattributableSamples: ['geo-action-1', 'social-action-2'],
+      unattributable: 2, unattributableSamples: ['geo-action-1', 'social-action-2'], reconcileErrors: 0, reconcileErrorSamples: [],
     })
 
     const res = await POST(makeRequest({ authorization: 'Bearer test-secret' }))
@@ -509,7 +518,7 @@ describe('POST /api/cron/attribution', () => {
     // They must not drag a client into pass 2 — the bridge cannot load them.
     mockRunAttributionJob.mockResolvedValue({
       processed: 1, written: 0, skipped: 0, failed: 0, deferred: 0, pass2ClientIds: [],
-      unattributable: 1, unattributableSamples: ['geo-action-1'],
+      unattributable: 1, unattributableSamples: ['geo-action-1'], reconcileErrors: 0, reconcileErrorSamples: [],
     })
 
     await POST(makeRequest({ authorization: 'Bearer test-secret' }))
@@ -526,5 +535,27 @@ describe('POST /api/cron/attribution', () => {
     expect(res.status).toBe(500)
     const body = await res.json()
     expect(body.error).toBe('DB connection failed')
+  })
+})
+
+// ── Reconciliation failures must reach the run summary ──────────────────────
+
+describe('pass-1 reconciliation failures are reported, not logged', () => {
+  it('counts them into the cron run\u2019s failed total', async () => {
+    // The action still attributed, so `written` is 1 and `failed` would have
+    // been 0 — a healthy-looking run while the unsigned row keeps the contract
+    // migration blocked. (Codex P1, round 18.)
+    mockRunAttributionJob.mockResolvedValue({
+      processed: 1, written: 1, skipped: 0, failed: 0, deferred: 0,
+      pass2ClientIds: [], unattributable: 0, unattributableSamples: [],
+      reconcileErrors: 2,
+      reconcileErrorSamples: ['action a1: claim unsigned outcomes: permission denied'],
+    })
+
+    await POST(makeRequest({ authorization: 'Bearer test-secret' }))
+
+    const summary = cronLogUpdate?.summary as { pass1: { reconcileErrorSamples: string[] } }
+    expect(cronLogUpdate?.failed_count).toBe(2)
+    expect(summary.pass1.reconcileErrorSamples[0]).toContain('claim unsigned outcomes')
   })
 })

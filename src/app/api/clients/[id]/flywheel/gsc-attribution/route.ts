@@ -79,10 +79,27 @@ export async function POST(
   //   · a real write failure — an upsert or snapshot query threw, so an action
   //     produced nothing.
   //
-  // `errors[]` holds both, so `cleanup_errors` is what tells them apart: when
-  // every error is a cleanup error, the run did its job. See Issue #859.
-  const onlyCleanupFailed = hasErrors && result.errors.length === result.cleanup_errors
-  const hardErrors = result.errors.length - result.cleanup_errors
+  // …and a third kind, which used to be unreachable and no longer is:
+  //
+  //   · a pre-write reconciliation failure — claiming rows an older deployment
+  //     left unsigned, or retiring a duplicated window. Reconciliation now runs
+  //     BEFORE the snapshot maturity check (it has to: an immature action is the
+  //     likeliest one to be carrying such a row), so a run can end with zero
+  //     writes and a reconciliation error. Calling that "success" would report a
+  //     run that made nothing right — the unsigned rows still block the contract
+  //     migration, and a duplicated window is still double-counted downstream.
+  //     An earlier version of this file asserted that shape was unreachable;
+  //     that stopped being true when the ordering changed.
+  //     (Codex P2, round 18 on PR #862.)
+  //
+  // `errors[]` holds all three, so the two counters are what tell them apart.
+  // See Issue #859.
+  const onlyCleanupFailed =
+    hasErrors &&
+    result.reconcile_errors === 0 &&
+    result.errors.length === result.cleanup_errors
+  const hardErrors =
+    result.errors.length - result.cleanup_errors - result.reconcile_errors
 
   return NextResponse.json(
     {
@@ -92,6 +109,7 @@ export async function POST(
       outcomes_written: result.outcomes_written,
       skipped:          result.skipped,
       cleanup_errors:   result.cleanup_errors,
+      reconcile_errors: result.reconcile_errors,
       errors:           result.errors,
       window_days:      windowDays,
       ...(windowOverrideRefused

@@ -53,6 +53,10 @@ export interface AttributionCronResponse {
   unattributable?: number
   /** A bounded sample of those action ids, for diagnosis. */
   unattributableSamples?: string[]
+  /** Pass-1 reconciliation failures (claim / retire). Counted into cron `failed`. */
+  reconcileErrors?: number
+  /** A bounded sample of those messages, for diagnosis. */
+  reconcileErrorSamples?: string[]
   /** The window pass 1 actually ran at. */
   window_days?: number
   /** Present when a caller-supplied window was declined by the dual-window gate. */
@@ -63,6 +67,8 @@ export interface AttributionCronResponse {
     outcomes_written: number
     skipped: number
     cleanup_errors: number
+    /** Pre-write reconciliation failures — see GscAttributionResult. */
+    reconcile_errors: number
     errors: string[]
   }
 }
@@ -116,6 +122,8 @@ export async function POST(
     pass2ClientIds: [],
     unattributable: 0,
     unattributableSamples: [],
+    reconcileErrors: 0,
+    reconcileErrorSamples: [],
   }
   try {
     pass1Result = await runAttributionJob({ windowDays, clientId })
@@ -136,6 +144,7 @@ export async function POST(
     outcomes_written:  0,
     skipped:           0,
     cleanup_errors:    0,
+    reconcile_errors:  0,
     errors:            [] as string[],
   }
 
@@ -188,6 +197,7 @@ export async function POST(
       gscResult.outcomes_written += r.outcomes_written
       gscResult.skipped           += r.skipped
       gscResult.cleanup_errors    += r.cleanup_errors
+      gscResult.reconcile_errors  += r.reconcile_errors
       if (r.errors.length) gscResult.errors.push(...r.errors)
     }
 
@@ -207,8 +217,18 @@ export async function POST(
   // several times over, since one action yields three metric rows per window.
   //
   // `failed` counts what actually went wrong this run: pass-1 actions that
-  // threw, plus pass-2 errors (including post-write cleanup failures, which do
-  // not reduce `completed`). `unattributable` is deliberately NOT counted here
+  // threw, pass-1 reconciliation failures, plus pass-2 errors (including
+  // post-write cleanup failures, which do not reduce `completed`).
+  //
+  // Reconciliation failures are counted even though the action itself may have
+  // attributed perfectly. That is the point: nothing else would ever show them.
+  // `written` goes up, `failed` stays 0, the digest reports a healthy run — and
+  // meanwhile the unsigned row keeps the contract migration blocked and the
+  // duplicated window keeps being counted twice downstream. Pass 2's equivalents
+  // were already inside `gscResult.errors`; this is pass 1 catching up.
+  // (Codex P1, round 18 on PR #862.)
+  //
+  // `unattributable` is deliberately NOT counted here
   // — it is a standing property of stored rows, recomputed identically every
   // run, so folding it in would pin the daily digest's alarm on forever with no
   // remediation path. It travels in the response and the run summary instead.
@@ -218,7 +238,7 @@ export async function POST(
   await cronRun.finish({
     processed: pass1Result.processed + gscResult.actions_found,
     completed: pass1Result.written + gscAttributed,
-    failed: pass1Result.failed + gscResult.errors.length,
+    failed: pass1Result.failed + pass1Result.reconcileErrors + gscResult.errors.length,
     summary: { pass1: pass1Result, gsc: gscResult },
   })
   return NextResponse.json<AttributionCronResponse>(

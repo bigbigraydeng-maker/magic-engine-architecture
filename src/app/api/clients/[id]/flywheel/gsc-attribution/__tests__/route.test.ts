@@ -48,6 +48,7 @@ function result(over: Partial<Awaited<ReturnType<typeof runGscAttributionForClie
     outcomes_written: 0,
     skipped: 0,
     cleanup_errors: 0,
+    reconcile_errors: 0,
     errors: [] as string[],
     ...over,
   }
@@ -77,6 +78,7 @@ describe('POST /api/clients/[id]/flywheel/gsc-attribution', () => {
     mockRun.mockResolvedValue(result({
       outcomes_written: 3,
       cleanup_errors: 1,
+      reconcile_errors: 0,
       errors: ['action a1: retire stale outcomes: deadlock'],
     }))
 
@@ -95,6 +97,7 @@ describe('POST /api/clients/[id]/flywheel/gsc-attribution', () => {
       outcomes_written: 0,
       skipped: 1,
       cleanup_errors: 0,
+      reconcile_errors: 0,
       errors: ['action a1: upsert outcomes: connection reset'],
     }))
 
@@ -113,6 +116,7 @@ describe('POST /api/clients/[id]/flywheel/gsc-attribution', () => {
       outcomes_written: 3,
       skipped: 9,
       cleanup_errors: 0,
+      reconcile_errors: 0,
       errors: Array.from({ length: 9 }, (_, i) => `action a${i}: upsert outcomes: boom`),
     }))
 
@@ -128,6 +132,7 @@ describe('POST /api/clients/[id]/flywheel/gsc-attribution', () => {
       actions_found: 2,
       outcomes_written: 3,
       cleanup_errors: 1,
+      reconcile_errors: 0,
       errors: ['action a1: retire stale outcomes: x', 'action a2: upsert outcomes: y'],
     }))
 
@@ -140,19 +145,63 @@ describe('POST /api/clients/[id]/flywheel/gsc-attribution', () => {
   })
 
   it('never answers 502 for a run whose only errors were reconciliation debt', async () => {
-    // The bridge cannot currently produce written=0 alongside a cleanup error
-    // (cleanup only runs after a successful upsert), but the contract is about
-    // what the status means, not about which shapes happen to be reachable
-    // today: a cleanup failure must never be the thing that makes this a 502.
+    // A post-write cleanup failure must never be the thing that makes this a
+    // 502 — the rows landed. (This shape used to be unreachable because cleanup
+    // only ran after a successful upsert; it is reachable now that the
+    // pre-write half exists, which is exactly why the two are counted apart.)
     mockRun.mockResolvedValue(result({
       outcomes_written: 0,
       cleanup_errors: 1,
+      reconcile_errors: 0,
       errors: ['action a1: retire stale outcomes: deadlock'],
     }))
 
     const res = await POST(makeRequest(), { params })
 
     expect(res.status).toBe(200)
+  })
+
+  it('does NOT report success when a pre-write reconciliation failed', async () => {
+    // Reconciliation runs before the snapshot maturity check, so a run can end
+    // with zero writes and a reconciliation error. Counting that as cleanup
+    // debt would answer success:true for a run that made nothing right: the
+    // unsigned rows still block the contract migration, and a duplicated window
+    // is still double-counted downstream. (Codex P2, round 18.)
+    mockRun.mockResolvedValue(result({
+      outcomes_written: 0,
+      cleanup_errors: 0,
+      reconcile_errors: 1,
+      errors: ['action a1: claim unsigned outcomes: permission denied'],
+    }))
+
+    const res = await POST(makeRequest(), { params })
+    const body = await res.json()
+
+    expect(body.success).toBe(false)
+    expect(body.reconcile_errors).toBe(1)
+    // Not a 502 either — nothing was attempted-and-lost, the run simply could
+    // not reconcile. 502 stays reserved for failed writes.
+    expect(res.status).toBe(200)
+  })
+
+  it('keeps the two kinds apart when both happen in one run', async () => {
+    mockRun.mockResolvedValue(result({
+      outcomes_written: 3,
+      cleanup_errors: 1,
+      reconcile_errors: 1,
+      errors: [
+        'action a1: retire stale outcomes: deadlock',
+        'action a2: claim unsigned outcomes: permission denied',
+      ],
+    }))
+
+    const res = await POST(makeRequest(), { params })
+    const body = await res.json()
+
+    expect(body.success).toBe(false) // the reconciliation half is not debt
+    expect(body.outcomes_written).toBe(3) // …and the rows still landed
+    expect(body.cleanup_errors).toBe(1)
+    expect(body.reconcile_errors).toBe(1)
   })
 
   it('refuses a custom window while dual-window is gated off, and says so', async () => {

@@ -202,8 +202,11 @@ describe('the GSC evaluator adopts its own unsigned rows', () => {
 
     // The rows this run wrote are in the database and still counted...
     expect(result.outcomes_written).toBe(3)
-    // ...but the debt is named, not swallowed.
-    expect(result.cleanup_errors).toBe(1)
+    // ...but the failure is named, and counted apart from post-write cleanup
+    // debt: this one made nothing right, so the manual route must not read it
+    // as success. (Codex P2, round 18.)
+    expect(result.reconcile_errors).toBe(1)
+    expect(result.cleanup_errors).toBe(0)
     expect(result.errors.join(' ')).toContain('claim unsigned outcomes')
   })
 })
@@ -358,6 +361,42 @@ describe('the flywheel_metrics evaluator adopts its own unsigned rows', () => {
     expect(result.written).toBe(0) // nothing to attribute yet
     expect(db.outcomes().find(r => r.id === 'legacy-21')?.evaluator_key)
       .toBe(OUTCOME_EVALUATOR.FLYWHEEL_METRICS)
+  })
+
+  it('reports a failed reconciliation instead of logging it', async () => {
+    // The failure shows up nowhere else: the action still attributes fine, so
+    // `written` goes up and `failed` stays 0 while the unsigned row keeps the
+    // contract migration blocked. A finding that only reaches console.error is
+    // the shape CLAUDE.md §3 forbids, and the GSC writer already reports its
+    // equivalent. (Codex P1, round 18.)
+    seedSocialAction()
+    db.failNext('flywheel_outcomes', 'update', 'permission denied')
+
+    const result = await runJob(14)
+
+    expect(result.written).toBe(1)   // the attribution itself was fine
+    expect(result.failed).toBe(0)    // …so it is not an attribution failure
+    expect(result.reconcileErrors).toBe(1)
+    expect(result.reconcileErrorSamples.join(' ')).toContain('claim unsigned outcomes')
+  })
+
+  it('reports a failed window retire the same way', async () => {
+    seedSocialAction()
+    db.failNext('flywheel_outcomes', 'delete', 'deadlock detected')
+
+    const result = await runJob(14)
+
+    expect(result.reconcileErrors).toBe(1)
+    expect(result.reconcileErrorSamples.join(' ')).toContain('retire non-authoritative windows')
+  })
+
+  it('counts nothing when reconciliation succeeds', async () => {
+    seedSocialAction()
+
+    const result = await runJob(14)
+
+    expect(result.reconcileErrors).toBe(0)
+    expect(result.reconcileErrorSamples).toEqual([])
   })
 
   it('does not disown a landed write when the claim fails', async () => {

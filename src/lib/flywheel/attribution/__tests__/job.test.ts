@@ -147,7 +147,7 @@ describe('runAttributionJob', () => {
     expect(result).toEqual({
       processed: 0, written: 0, skipped: 0, failed: 0,
       deferred: 0, pass2ClientIds: [],
-      unattributable: 0, unattributableSamples: [],
+      unattributable: 0, unattributableSamples: [], reconcileErrors: 0, reconcileErrorSamples: [],
     })
   })
 

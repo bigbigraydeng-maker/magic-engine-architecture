@@ -85,7 +85,25 @@ export interface AttributionJobResult {
   unattributable: number
   /** First few unattributable action ids, for diagnosis. Bounded on purpose. */
   unattributableSamples: string[]
+  /**
+   * Reconciliation failures — claiming a row an older deployment left unsigned,
+   * or retiring a non-authoritative window.
+   *
+   * Counted rather than logged because neither failure shows up anywhere else:
+   * the action itself may still attribute perfectly, so `written` goes up,
+   * `failed` stays 0, and the run reports healthy — while the unsigned row keeps
+   * the contract migration blocked and the duplicated window keeps being counted
+   * twice by the memory consumers. A finding that only reaches console.error is
+   * the exact shape CLAUDE.md §3 forbids, and the GSC writer already reports its
+   * equivalent. (Codex P1, round 18 on PR #862.)
+   */
+  reconcileErrors: number
+  /** First few reconciliation error messages, for diagnosis. Bounded. */
+  reconcileErrorSamples: string[]
 }
+
+/** How many reconciliation error messages to carry into the summary. */
+const RECONCILE_ERROR_SAMPLE_LIMIT = 5
 
 /** How many unattributable action ids to carry into the summary. */
 const UNATTRIBUTABLE_SAMPLE_LIMIT = 10
@@ -132,6 +150,8 @@ export async function runAttributionJob(
       pass2ClientIds: [],
       unattributable: 0,
       unattributableSamples: [],
+      reconcileErrors: 0,
+      reconcileErrorSamples: [],
     }
   }
 
@@ -142,6 +162,8 @@ export async function runAttributionJob(
   let unattributable = 0
   const pass2Clients = new Set<string>()
   const unattributableSamples: string[] = []
+  let reconcileErrors = 0
+  const reconcileErrorSamples: string[] = []
 
   for (const action of actions) {
     // Arbitration: an outcome belongs to whichever evaluator owns its metric
@@ -175,9 +197,16 @@ export async function runAttributionJob(
     }
 
     try {
-      const didWrite = await processAction(action as ActionRow, windowDays)
-      if (didWrite) written++
+      const outcome = await processAction(action as ActionRow, windowDays)
+      if (outcome.wrote) written++
       else skipped++
+      for (const msg of outcome.reconcileErrors) {
+        reconcileErrors++
+        if (reconcileErrorSamples.length < RECONCILE_ERROR_SAMPLE_LIMIT) {
+          reconcileErrorSamples.push(`action ${action.id}: ${msg}`)
+        }
+        console.error(`Attribution job: action ${action.id} — ${msg}`)
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`Attribution job: action ${action.id} — ${msg}`)
@@ -194,6 +223,8 @@ export async function runAttributionJob(
     pass2ClientIds: Array.from(pass2Clients),
     unattributable,
     unattributableSamples,
+    reconcileErrors,
+    reconcileErrorSamples,
   }
 }
 
@@ -210,7 +241,18 @@ interface ActionRow {
   executed_at: string
 }
 
-async function processAction(action: ActionRow, windowDays: number): Promise<boolean> {
+/** What one action's attribution produced, and what reconciliation could not do. */
+interface ProcessActionResult {
+  /** True when an outcome row was written. */
+  wrote: boolean
+  /** Reconciliation failures. Never suppresses the write; never counted as one. */
+  reconcileErrors: string[]
+}
+
+async function processAction(
+  action: ActionRow,
+  windowDays: number,
+): Promise<ProcessActionResult> {
   const { id, client_id, expected_metric, expected_delta, executed_at } = action
   const executedAt = new Date(executed_at)
   const windowEnd = new Date(executedAt)
@@ -220,7 +262,7 @@ async function processAction(action: ActionRow, windowDays: number): Promise<boo
   // measurement yet returns early below, and reconciling only on the success
   // path would leave a deploy-window row unsigned for as long as the action
   // stays immature. (Codex P2, round 16 on PR #862.)
-  await reconcileLegacyWindows(id, expected_metric, windowDays)
+  const reconcileErrors = await reconcileLegacyWindows(id, expected_metric, windowDays)
 
   // ── Baseline: most recent metric BEFORE the action ────────────────────────
   const { data: baselineRow, error: baselineErr } = await supabaseAdmin
@@ -234,7 +276,7 @@ async function processAction(action: ActionRow, windowDays: number): Promise<boo
     .maybeSingle()
 
   if (baselineErr) throw new Error(`baseline query: ${baselineErr.message}`)
-  if (!baselineRow) return false  // no baseline → skip
+  if (!baselineRow) return { wrote: false, reconcileErrors }  // no baseline → skip
 
   // ── After: most recent metric AFTER action, within window ─────────────────
   const { data: afterRow, error: afterErr } = await supabaseAdmin
@@ -249,7 +291,7 @@ async function processAction(action: ActionRow, windowDays: number): Promise<boo
     .maybeSingle()
 
   if (afterErr) throw new Error(`after query: ${afterErr.message}`)
-  if (!afterRow) return false  // too early, no measurement yet
+  if (!afterRow) return { wrote: false, reconcileErrors }  // too early, no measurement yet
 
   // ── Compute attribution ───────────────────────────────────────────────────
   const baseline = Number(baselineRow.metric_value)
@@ -288,7 +330,7 @@ async function processAction(action: ActionRow, windowDays: number): Promise<boo
 
   if (upsertErr) throw new Error(`outcome upsert: ${upsertErr.message}`)
 
-  return true
+  return { wrote: true, reconcileErrors }
 }
 
 /**
@@ -317,14 +359,17 @@ async function processAction(action: ActionRow, windowDays: number): Promise<boo
  * for as long as its action stays immature. Scoped to this action, this metric,
  * and this evaluator; routing has already established we own `expected_metric`.
  *
- * Reported, never thrown: reconciliation debt must not be counted as a failed
- * attribution, and the next run retries it.
+ * Returned, never thrown: reconciliation debt must not be counted as a failed
+ * attribution — the row this action writes is still correct — but it must not
+ * vanish into a log either. The caller counts it into `reconcileErrors`, which
+ * the cron run summary reports. (Codex P1, round 18 on PR #862.)
  */
 async function reconcileLegacyWindows(
   actionId: string,
   metricKey: string,
   authoritativeWindow: number,
-): Promise<void> {
+): Promise<string[]> {
+  const errors: string[] = []
   const { error: claimErr } = await supabaseAdmin
     .from('flywheel_outcomes')
     .update({ evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS })
@@ -332,13 +377,9 @@ async function reconcileLegacyWindows(
     .eq('metric_key', metricKey)
     .is('evaluator_key', null)
 
-  if (claimErr) {
-    console.error(
-      `Attribution job: action ${actionId} — claim unsigned outcomes: ${claimErr.message}`,
-    )
-  }
+  if (claimErr) errors.push(`claim unsigned outcomes: ${claimErr.message}`)
 
-  if (dualWindowEnabled()) return
+  if (dualWindowEnabled()) return errors
 
   const { error: retireErr } = await supabaseAdmin
     .from('flywheel_outcomes')
@@ -349,10 +390,10 @@ async function reconcileLegacyWindows(
     .neq('window_days', authoritativeWindow)
 
   if (retireErr) {
-    console.error(
-      `Attribution job: action ${actionId} — retire non-authoritative windows: ${retireErr.message}`,
-    )
+    errors.push(`retire non-authoritative windows: ${retireErr.message}`)
   }
+
+  return errors
 }
 
 // ── Verdict computation ───────────────────────────────────────────────────────
