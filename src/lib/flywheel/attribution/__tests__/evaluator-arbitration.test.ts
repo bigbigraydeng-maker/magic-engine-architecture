@@ -16,6 +16,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { FakeOutcomesDb } from './fake-outcomes-db'
+import { DUAL_WINDOW_FLAG } from '../dual-window-gate'
 import {
   OUTCOME_EVALUATOR,
   assertEvaluatorOwnsAll,
@@ -105,6 +106,7 @@ beforeEach(() => {
   vi.setSystemTime(new Date('2026-08-08T00:00:00.000Z'))
   db = new FakeOutcomesDb()
   vi.clearAllMocks()
+  delete process.env[DUAL_WINDOW_FLAG]
 })
 
 afterEach(() => {
@@ -250,6 +252,7 @@ describe('non-contested metrics', () => {
   })
 
   it('the same metric at two windows is still two rows when one owner writes both', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true' // two windows only coexist when dual-window is ON
     db.seed('flywheel_actions', [
       {
         id: ACTION_ID,

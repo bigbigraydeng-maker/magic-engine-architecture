@@ -15,6 +15,7 @@
 import { supabaseAdmin } from '../../supabase'
 import { fetchAll } from '@/lib/supabase-paginate'
 import type { OutcomeVerdict } from '../adapters/types'
+import { dualWindowEnabled } from './dual-window-gate'
 import {
   OUTCOME_CONFLICT_TARGET,
   OUTCOME_EVALUATOR,
@@ -215,6 +216,12 @@ async function processAction(action: ActionRow, windowDays: number): Promise<boo
   const windowEnd = new Date(executedAt)
   windowEnd.setDate(windowEnd.getDate() + windowDays)
 
+  // Ahead of both lookups on purpose: an action with no baseline or no
+  // measurement yet returns early below, and reconciling only on the success
+  // path would leave a deploy-window row unsigned for as long as the action
+  // stays immature. (Codex P2, round 16 on PR #862.)
+  await reconcileLegacyWindows(id, expected_metric, windowDays)
+
   // ── Baseline: most recent metric BEFORE the action ────────────────────────
   const { data: baselineRow, error: baselineErr } = await supabaseAdmin
     .from('flywheel_metrics')
@@ -281,42 +288,71 @@ async function processAction(action: ActionRow, windowDays: number): Promise<boo
 
   if (upsertErr) throw new Error(`outcome upsert: ${upsertErr.message}`)
 
-  // Sign whatever this evaluator wrote for the same action and metric at OTHER
-  // windows before `evaluator_key` existed.
-  //
-  // The expand migration backfills once, at apply time — but the rollout leaves
-  // the old code running against the expanded table until this PR deploys, and
-  // the old cron accepted `?window_days=`. A row written at 21 days inside that
-  // gap gets a NULL evaluator the finished backfill never revisits, and nothing
-  // reclaims it afterwards: the gate refuses custom windows and this job only
-  // ever recomputes DEFAULT_WINDOW_DAYS, so the upsert above never lands on that
-  // natural key. The row would stay unsigned forever and make the contract
-  // migration's `NULL count = 0` precondition permanently unsatisfiable.
-  // (Codex P2, round 15 on PR #862.)
-  //
-  // Scoped to this action, this metric, and NULL rows only. Routing already
-  // established that this evaluator owns `expected_metric`, so the ownership
-  // CHECK cannot reject the claim, and an already-signed row is never touched.
-  //
-  // Reported, not thrown: the outcome row above is already in the database, and
-  // throwing here would count a landed write as a failure. An unclaimed row is
-  // reconciliation debt — the next run retries it, and the rollout's own gate
-  // (`SELECT count(*) ... WHERE evaluator_key IS NULL` must be 0 before the
-  // contract migration may be applied) is what stops it being ignored forever.
+  return true
+}
+
+/**
+ * Bring one action's pre-#859 rows for this metric into line with what this
+ * deployment stands behind. Mirror of the GSC evaluator's reconciliation; see
+ * the long note on `reconcileLegacyWindows` in gsc-bridge.ts for why it exists.
+ *
+ * In short: the expand migration backfills `evaluator_key` once, at apply time,
+ * while the old code keeps running against the expanded table until this PR
+ * deploys — and the old cron accepted `?window_days=`. A row written at 21 days
+ * inside that gap ends up unsigned, at a window this job will never recompute.
+ *
+ *   [1] CLAIM  — sign it, or the contract migration's `NULL count = 0`
+ *                precondition can never be met.
+ *   [2] RETIRE — while dual-window is OFF, drop our own rows at any other
+ *                window. Signing alone would leave the action holding two
+ *                windows, which doubles its evidence for the memory consumers
+ *                that still count rows — the harm the gate exists to prevent.
+ *                On main this was impossible: every writer DELETEd by action
+ *                before inserting. Removing that delete was necessary (it is
+ *                what stopped the writers wiping each other), so single-window
+ *                behaviour has to be restored deliberately while the gate is off.
+ *
+ * Runs BEFORE the baseline/after lookups, so an action with nothing to
+ * attribute yet is still reconciled — otherwise a gap row would stay unsigned
+ * for as long as its action stays immature. Scoped to this action, this metric,
+ * and this evaluator; routing has already established we own `expected_metric`.
+ *
+ * Reported, never thrown: reconciliation debt must not be counted as a failed
+ * attribution, and the next run retries it.
+ */
+async function reconcileLegacyWindows(
+  actionId: string,
+  metricKey: string,
+  authoritativeWindow: number,
+): Promise<void> {
   const { error: claimErr } = await supabaseAdmin
     .from('flywheel_outcomes')
     .update({ evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS })
-    .eq('action_id', id)
-    .eq('metric_key', expected_metric)
+    .eq('action_id', actionId)
+    .eq('metric_key', metricKey)
     .is('evaluator_key', null)
 
   if (claimErr) {
     console.error(
-      `Attribution job: action ${id} — claim unsigned outcomes: ${claimErr.message}`,
+      `Attribution job: action ${actionId} — claim unsigned outcomes: ${claimErr.message}`,
     )
   }
 
-  return true
+  if (dualWindowEnabled()) return
+
+  const { error: retireErr } = await supabaseAdmin
+    .from('flywheel_outcomes')
+    .delete()
+    .eq('action_id', actionId)
+    .eq('metric_key', metricKey)
+    .eq('evaluator_key', OUTCOME_EVALUATOR.FLYWHEEL_METRICS)
+    .neq('window_days', authoritativeWindow)
+
+  if (retireErr) {
+    console.error(
+      `Attribution job: action ${actionId} — retire non-authoritative windows: ${retireErr.message}`,
+    )
+  }
 }
 
 // ── Verdict computation ───────────────────────────────────────────────────────

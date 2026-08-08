@@ -12,7 +12,7 @@
 
 type Row = Record<string, unknown>
 
-type FilterOp = 'eq' | 'in' | 'lt' | 'lte' | 'gt' | 'gte' | 'notNull' | 'isNull'
+type FilterOp = 'eq' | 'neq' | 'in' | 'lt' | 'lte' | 'gt' | 'gte' | 'notNull' | 'isNull'
 
 interface Filter {
   column: string
@@ -181,6 +181,8 @@ function matches(row: Row, filters: Filter[]): boolean {
     switch (f.op) {
       case 'eq':
         return actual === f.value
+      case 'neq':
+        return actual !== f.value
       case 'in':
         return (f.value as unknown[]).includes(actual)
       case 'notNull':
@@ -228,6 +230,11 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
 
   eq(column: string, value: unknown): this {
     this.filters.push({ column, op: 'eq', value })
+    return this
+  }
+
+  neq(column: string, value: unknown): this {
+    this.filters.push({ column, op: 'neq', value })
     return this
   }
 

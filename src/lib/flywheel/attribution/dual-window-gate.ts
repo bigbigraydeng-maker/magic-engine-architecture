@@ -27,6 +27,18 @@
  * `keepOneCasePerAction`. The memory consumers are the follow-up PR's job, and
  * this flag is what keeps the two from being coupled.
  *
+ * WHAT "OFF" ACTUALLY ENFORCES. Refusing to *write* a second window is only
+ * half of it. On main every writer DELETEd by action before inserting, so an
+ * action could never hold two windows; removing that delete was necessary — it
+ * is what stopped the two writers destroying each other's rows — but it means a
+ * row written at a custom window by an older deployment now SURVIVES alongside
+ * the cadence one, and the row-counting consumers double-count that action just
+ * the same. So while this flag is off, each writer also retires its own rows at
+ * any window other than the authoritative one (`reconcileLegacyWindows`, in
+ * both writers). Scoped to its own evaluator, so it is never the cross-writer
+ * delete this Work Package removed. With the flag ON, nothing is retired —
+ * those rows are legitimate. (Codex P1, round 16 on PR #862.)
+ *
  * 🔴 Do not flip this on until that PR has landed.
  */
 

@@ -15,6 +15,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { FakeOutcomesDb } from './fake-outcomes-db'
 import { OUTCOME_EVALUATOR } from '../outcome-identity'
+import { DUAL_WINDOW_FLAG } from '../dual-window-gate'
 
 // ── Module-level fake, swapped per test ──────────────────────────────────────
 
@@ -90,6 +91,7 @@ async function runBridge(windowDays = 28) {
 beforeEach(() => {
   db = new FakeOutcomesDb()
   vi.clearAllMocks()
+  delete process.env[DUAL_WINDOW_FLAG]
 })
 
 // ── 1. One action, many metrics ──────────────────────────────────────────────
@@ -116,6 +118,7 @@ describe('one action carries many metric rows', () => {
 
 describe('the same metric coexists at different windows', () => {
   it('a 14-day and a 28-day answer for one metric are two separate rows', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true' // two windows only coexist when dual-window is ON
     // Reachable through the manual route, which takes any window in 1..90 while
     // the cron uses 28. Both answers come from the metric's owning evaluator —
     // ownership decides *who* answers, the window decides *which question*.
@@ -175,6 +178,7 @@ describe('writer coexistence', () => {
   })
 
   it('the flywheel_metrics writer issues no DELETE against flywheel_outcomes at all', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true' // two windows only coexist when dual-window is ON
     seedSeoAction({ expected_metric: 'seo.domain.organic_traffic' })
     seedFlywheelMetrics('seo.domain.organic_traffic')
 
@@ -311,6 +315,7 @@ describe('writer coexistence', () => {
   })
 
   it('a barren run that is NOT page-scoped still retires nothing', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true' // two windows only coexist when dual-window is ON
     // The general rule is unchanged: producing nothing is not a refutation.
     seedSeoAction()
     // No snapshots at all → the run cannot even reach the scope decision.
@@ -321,6 +326,7 @@ describe('writer coexistence', () => {
   })
 
   it('the retire query is scoped by action, evaluator and metric — deliberately not window', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true' // two windows only coexist when dual-window is ON
     // The evaluator_key scope is now defence in depth rather than load-bearing:
     // metric-family ownership means no other evaluator can hold a seo.gsc.* row
     // in the first place. It stays so that moving a family to a third evaluator
@@ -420,6 +426,7 @@ describe('partial failure', () => {
   })
 
   it('a failed GSC write does not run the retire step', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true' // two windows only coexist when dual-window is ON
     seedSeoAction({
       action_type: 'cms_update_existing',
       payload: { status: 'live', page_url: 'https://example.com/guide' },

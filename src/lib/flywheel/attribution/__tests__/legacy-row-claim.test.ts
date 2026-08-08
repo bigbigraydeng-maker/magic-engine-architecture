@@ -22,6 +22,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { FakeOutcomesDb } from './fake-outcomes-db'
 import { OUTCOME_EVALUATOR } from '../outcome-identity'
+import { DUAL_WINDOW_FLAG } from '../dual-window-gate'
 
 let db: FakeOutcomesDb
 
@@ -98,12 +99,14 @@ async function runJob(windowDays?: number) {
 beforeEach(() => {
   db = new FakeOutcomesDb()
   vi.clearAllMocks()
+  delete process.env[DUAL_WINDOW_FLAG] // shipped default: dual window OFF
 })
 
 // ── The GSC evaluator ────────────────────────────────────────────────────────
 
 describe('the GSC evaluator adopts its own unsigned rows', () => {
-  it('signs a 7-day row it can never recompute', async () => {
+  it('signs a 7-day row it can never recompute (dual-window ON)', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
     seedSeoAction()
     seedGscSnapshots()
     seedUnsignedRow()
@@ -114,7 +117,8 @@ describe('the GSC evaluator adopts its own unsigned rows', () => {
     expect(legacy?.evaluator_key).toBe(OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
   })
 
-  it('claims by UPDATE — the measurement itself survives', async () => {
+  it('claims by UPDATE — the measurement itself survives (dual-window ON)', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
     seedSeoAction()
     seedGscSnapshots()
     seedUnsignedRow()
@@ -128,7 +132,24 @@ describe('the GSC evaluator adopts its own unsigned rows', () => {
     expect(legacy?.verdict).toBe('confirmed')
   })
 
+  it('signs an immature action\u2019s row even though attribution produces nothing', async () => {
+    // No snapshots at all: attributeAction returns early on the missing
+    // baseline/after pair. Reconciling only on the success path would leave the
+    // row unsigned for as long as the action stays immature — up to a full
+    // window — and the rollout's NULL-count gate would sit blocked on it.
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    seedSeoAction()
+    seedUnsignedRow()
+
+    const result = await runBridge(28)
+
+    expect(result.outcomes_written).toBe(0) // nothing to attribute yet
+    expect(db.outcomes().find(r => r.window_days === 7)?.evaluator_key)
+      .toBe(OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
+  })
+
   it('leaves the other evaluator\'s unsigned rows alone', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
     // The claim is only safe because the metric namespace decides ownership.
     // A social metric was never written by the GSC evaluator, so signing it
     // would be inventing provenance — and Postgres would reject it anyway.
@@ -149,6 +170,7 @@ describe('the GSC evaluator adopts its own unsigned rows', () => {
   })
 
   it('never re-signs a row another evaluator already signed', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
     seedSeoAction()
     seedGscSnapshots()
     seedUnsignedRow({
@@ -164,6 +186,7 @@ describe('the GSC evaluator adopts its own unsigned rows', () => {
   })
 
   it('reports a failed claim instead of counting the run clean', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
     seedSeoAction()
     seedGscSnapshots()
     seedUnsignedRow()
@@ -201,7 +224,8 @@ describe('the flywheel_metrics evaluator adopts its own unsigned rows', () => {
     ])
   }
 
-  it('signs a 21-day row left by the old ungated pass 1', async () => {
+  it('signs a 21-day row left by the old ungated pass 1 (dual-window ON)', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
     // Reachable on main: the cron accepted ?window_days=. After the deploy the
     // gate refuses it and this job only recomputes DEFAULT_WINDOW_DAYS, so the
     // upsert never lands on window 21 again.
@@ -231,6 +255,37 @@ describe('the flywheel_metrics evaluator adopts its own unsigned rows', () => {
     expect(legacy?.id).toBe('legacy-21')
   })
 
+  it('signs an immature action\u2019s row even though there is no baseline yet', async () => {
+    // processAction returns false at the missing baseline, long before the
+    // upsert. Reconciling only after a successful write would leave this row
+    // unsigned for as long as the action has no metrics — and the rollout's
+    // NULL-count gate would sit blocked on it. (Codex P2, round 16.)
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    db.seed('flywheel_actions', [
+      {
+        id: 'action-social-1', client_id: CLIENT_ID, flywheel: 'social',
+        action_type: 'social.publish', expected_metric: SOCIAL_METRIC,
+        expected_delta: 1, executed_at: EXECUTED_AT, payload: null,
+      },
+    ])
+    // Deliberately no flywheel_metrics rows at all.
+    db.seed('flywheel_outcomes', [
+      {
+        id: 'legacy-21', action_id: 'action-social-1', client_id: CLIENT_ID,
+        metric_key: SOCIAL_METRIC, window_days: 21,
+        baseline: 100, after_value: 130, delta: 30, delta_pct: 30,
+        confidence: 0.9, verdict: 'confirmed', evaluator_key: null,
+        computed_at: '2026-06-10T00:00:00.000Z',
+      },
+    ])
+
+    const result = await runJob(14)
+
+    expect(result.written).toBe(0) // nothing to attribute yet
+    expect(db.outcomes().find(r => r.id === 'legacy-21')?.evaluator_key)
+      .toBe(OUTCOME_EVALUATOR.FLYWHEEL_METRICS)
+  })
+
   it('does not disown a landed write when the claim fails', async () => {
     seedSocialAction()
     db.failNext('flywheel_outcomes', 'update', 'connection reset')
@@ -245,12 +300,100 @@ describe('the flywheel_metrics evaluator adopts its own unsigned rows', () => {
   })
 })
 
+// ── The gate's real promise: one window per action in production ────────────
+
+describe('with dual-window OFF, an action never ends up holding two windows', () => {
+  it('retires the legacy 7-day row instead of merely signing it', async () => {
+    // Signing alone was not enough, and this is the finding that showed it: the
+    // action would hold BOTH a 7-day and a 28-day answer, and the memory
+    // consumers still count outcome ROWS — so its evidence is doubled while the
+    // gate is supposedly holding production at one window. On main this could
+    // not happen, because every writer DELETEd by action before inserting.
+    seedSeoAction()
+    seedGscSnapshots()
+    seedUnsignedRow()
+
+    await runBridge(28)
+
+    const windows = db.outcomes().map(r => r.window_days)
+    expect(new Set(windows)).toEqual(new Set([28]))
+    expect(db.outcomes().filter(r => r.action_id === ACTION_ID)).toHaveLength(3)
+  })
+
+  it('keeps both windows once dual-window is enabled', async () => {
+    // Same inputs, flag on: the extra window is legitimate and is preserved.
+    // Without this pair, "retire everything else" and "the gate does nothing"
+    // would look identical.
+    process.env[DUAL_WINDOW_FLAG] = 'true'
+    seedSeoAction()
+    seedGscSnapshots()
+    seedUnsignedRow()
+
+    await runBridge(28)
+
+    expect(new Set(db.outcomes().map(r => r.window_days))).toEqual(new Set([7, 28]))
+  })
+
+  it('does not touch the OTHER evaluator\'s rows when retiring windows', async () => {
+    // The retire is scoped to our own evaluator_key. A flywheel_metrics row at
+    // a different window is not ours to withdraw, and this PR exists because
+    // writers used to delete each other's evidence.
+    seedSeoAction()
+    seedGscSnapshots()
+    db.seed('flywheel_outcomes', [
+      {
+        id: 'other-14',
+        action_id: ACTION_ID,
+        client_id: CLIENT_ID,
+        metric_key: SOCIAL_METRIC,
+        window_days: 14,
+        baseline: 1, after_value: 2, delta: 1, delta_pct: 100,
+        confidence: 0.5, verdict: 'confirmed',
+        evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS,
+        computed_at: '2026-06-10T00:00:00.000Z',
+      },
+    ])
+
+    await runBridge(28)
+
+    expect(db.outcomes().find(r => r.id === 'other-14')).toBeDefined()
+  })
+
+  it('pass 1 retires its own non-authoritative windows too', async () => {
+    db.seed('flywheel_actions', [
+      {
+        id: 'action-social-1', client_id: CLIENT_ID, flywheel: 'social',
+        action_type: 'social.publish', expected_metric: SOCIAL_METRIC,
+        expected_delta: 1, executed_at: EXECUTED_AT, payload: null,
+      },
+    ])
+    db.seed('flywheel_metrics', [
+      { client_id: CLIENT_ID, metric_key: SOCIAL_METRIC, metric_value: 100, measured_at: '2026-05-30T00:00:00.000Z' },
+      { client_id: CLIENT_ID, metric_key: SOCIAL_METRIC, metric_value: 140, measured_at: '2026-06-05T00:00:00.000Z' },
+    ])
+    db.seed('flywheel_outcomes', [
+      {
+        id: 'legacy-21', action_id: 'action-social-1', client_id: CLIENT_ID,
+        metric_key: SOCIAL_METRIC, window_days: 21,
+        baseline: 100, after_value: 130, delta: 30, delta_pct: 30,
+        confidence: 0.9, verdict: 'confirmed', evaluator_key: null,
+        computed_at: '2026-06-10T00:00:00.000Z',
+      },
+    ])
+
+    await runJob(14)
+
+    expect(db.outcomes().map(r => r.window_days)).toEqual([14])
+  })
+})
+
 // ── Why the claim is needed at all ───────────────────────────────────────────
 
 describe('the ordinary write path cannot reach these rows', () => {
   it('a cadence run does not touch a 7-day row on its own', async () => {
     // Without the claim this is the whole bug: the run succeeds, writes its own
     // three rows, and the unsigned one is simply never visited.
+    process.env[DUAL_WINDOW_FLAG] = 'true'
     seedSeoAction()
     seedGscSnapshots()
     seedUnsignedRow()
@@ -266,6 +409,7 @@ describe('the ordinary write path cannot reach these rows', () => {
   })
 
   it('leaves no unsigned row behind for the contract migration to trip on', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true'
     seedSeoAction()
     seedGscSnapshots()
     seedUnsignedRow()

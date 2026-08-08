@@ -22,7 +22,10 @@
 --   windows and each writer only recomputes its own cadence), so both new
 --   writers now adopt their own unsigned rows on the next pass they make over
 --   the action — matched on action + NULL + their own metric vocabulary, by
---   UPDATE, never DELETE. Re-run the count after one full attribution cycle
+--   UPDATE, never DELETE — and, while ATTRIBUTION_DUAL_WINDOW_ENABLED is off,
+--   also retire their OWN rows at any non-authoritative window, because a
+--   signed-but-extra window still double-counts that action for the consumers
+--   that read outcome rows. Re-run the count after one full attribution cycle
 --   (6h) before treating a non-zero result as a real problem.
 --   (Codex P2, round 15 on PR #862.)
 --

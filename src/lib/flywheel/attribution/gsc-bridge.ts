@@ -20,6 +20,7 @@
 import { supabaseAdmin } from '@/lib/supabase'
 import { fetchAll } from '@/lib/supabase-paginate'
 import { SEO_METRIC_KEY } from '@/lib/flywheel/vocabulary'
+import { dualWindowEnabled } from './dual-window-gate'
 import { computeVerdict } from './job'
 import {
   GSC_DOMAIN_METRIC_KEYS,
@@ -184,6 +185,17 @@ export async function runGscAttributionForClient(
     // summary must still report the rows that landed.
     let written = 0
     try {
+      // Before any attribution work — deliberately ahead of the snapshot
+      // maturity checks inside attributeAction, which return early for an
+      // action whose window has not closed yet. Reconciling only on the success
+      // path would leave a gap row unsigned for as long as its action stays
+      // immature (up to a full 28-day window), and the rollout's NULL-count
+      // gate would sit blocked on it. (Codex P2, round 16 on PR #862.)
+      for (const err of await reconcileLegacyWindows(action, windowDays)) {
+        result.cleanup_errors++
+        result.errors.push(`action ${action.id}: ${err}`)
+      }
+
       const cadence = await attributeAction(action, windowDays)
       written = cadence.written
       if (cadence.cleanupError) {
@@ -273,11 +285,9 @@ async function attributeAction(
     // the old ungated bridge wrote visible on the execution board — and feeding
     // memory and benchmarks — indefinitely.
     if (scope.kind === 'page') {
-      const claimError = await claimOwnUnclaimedRows(action)
       return {
         written: 0,
-        cleanupError:
-          claimError ?? (await retireOwnKeys(action, GSC_DOMAIN_METRIC_KEYS)),
+        cleanupError: await retireOwnKeys(action, GSC_DOMAIN_METRIC_KEYS),
       }
     }
     return nothing
@@ -299,11 +309,7 @@ async function attributeAction(
     .upsert(rows, { onConflict: OUTCOME_CONFLICT_TARGET })
   if (error) throw new Error(`upsert outcomes: ${error.message}`)
 
-  // Adopt any row an older deployment left unsigned, BEFORE retiring — a retire
-  // filtered on our evaluator_key cannot see a NULL one.
-  const claimError = await claimOwnUnclaimedRows(action)
-
-  // Then retire the keys this evaluator owns but no longer produces — e.g. the
+  // Retire the keys this evaluator owns but no longer produces — e.g. the
   // domain-scope rows left behind once an action becomes page-scoped.
   const staleKeys = resolveStaleEvaluatorKeys(
     GSC_EVALUATOR_METRIC_KEYS,
@@ -312,41 +318,78 @@ async function attributeAction(
 
   return {
     written: rows.length,
-    cleanupError: claimError ?? (await retireOwnKeys(action, staleKeys)),
+    cleanupError: await retireOwnKeys(action, staleKeys),
   }
 }
 
 /**
- * Sign the rows this evaluator produced before `evaluator_key` existed.
+ * Bring one action's pre-#859 rows into line with what this deployment stands
+ * behind. Two steps, in this order, both scoped to this action and this
+ * evaluator's own metric vocabulary.
  *
- * The expand migration backfills `evaluator_key` once, at apply time. But the
- * rollout deliberately leaves the OLD code running against the expanded table
- * until #862 deploys, and that old manual endpoint accepts any window from 1 to
- * 90 — so a 7-day run inside that gap writes a fresh row with a NULL evaluator
- * that the completed backfill will never revisit. Afterwards nothing reclaims
- * it: the gate refuses custom windows, and the cron only ever recomputes its
- * cadence, so the new writer never lands on that natural key. The row would sit
- * unsigned forever and make the contract migration's `NULL count = 0`
- * precondition permanently unsatisfiable. (Codex P2, round 15 on PR #862.)
+ * WHY ANY OF THIS EXISTS. The expand migration backfills `evaluator_key` once,
+ * at apply time, and the rollout then deliberately keeps the OLD code running
+ * against the expanded table until #862 deploys. The old manual endpoint takes
+ * any window from 1 to 90, so a 7-day run inside that gap writes a row the
+ * finished backfill will never revisit — and nothing afterwards lands on that
+ * natural key again, because the gate refuses custom windows and each writer
+ * only recomputes its own cadence.
  *
- * Safe because the metric namespace decides ownership: `seo.gsc.*` has only
- * ever been written by this evaluator, which is the same rule the backfill and
- * the `flywheel_outcomes_evaluator_owns_metric` CHECK encode. Scoped to one
- * action, to NULL rows only, and to keys in our own vocabulary, so it can
- * neither overwrite an existing signature nor claim another writer's work.
+ * [1] CLAIM — sign our own unsigned rows. Safe because the metric namespace
+ *     decides ownership: `seo.gsc.*` has only ever been written by this
+ *     evaluator, the same rule the backfill and the
+ *     `flywheel_outcomes_evaluator_owns_metric` CHECK encode. Never overwrites
+ *     an existing signature. Without it the contract migration's
+ *     `NULL count = 0` precondition is permanently unsatisfiable.
  *
- * An UPDATE, not a DELETE: the row is a real measurement, and the whole point
- * of this Work Package is that no writer destroys another's evidence.
+ * [2] RETIRE NON-AUTHORITATIVE WINDOWS — but only while dual-window is OFF.
+ *     Signing a gap row is not enough on its own: it leaves the action holding
+ *     BOTH a 7-day and a 28-day answer, and the memory consumers still count
+ *     outcome ROWS, so that action's evidence is doubled — the exact harm
+ *     `ATTRIBUTION_DUAL_WINDOW_ENABLED` exists to prevent. On main this could
+ *     not happen, because every writer DELETEd by action before inserting, so
+ *     an action never held more than one window. Removing that delete is right
+ *     — it is what stopped the two writers destroying each other's rows — but
+ *     it means "one window per action" has to be restored deliberately for as
+ *     long as the gate is off. With the gate ON these rows are legitimate and
+ *     nothing is retired. (Codex P1, round 16 on PR #862.)
+ *
+ * Order matters: the retire filters on our own `evaluator_key`, so it cannot
+ * see a row that is still NULL. Claim first, then retire.
+ *
+ * Returns every error rather than the first: these are independent statements,
+ * and reporting one while silently skipping the other is how a half-done
+ * reconciliation reads as a clean run.
  */
-async function claimOwnUnclaimedRows(action: SeoActionRow): Promise<string | null> {
-  const { error } = await supabaseAdmin
+async function reconcileLegacyWindows(
+  action: SeoActionRow,
+  authoritativeWindow: number,
+): Promise<string[]> {
+  const errors: string[] = []
+
+  const { error: claimError } = await supabaseAdmin
     .from('flywheel_outcomes')
     .update({ evaluator_key: OUTCOME_EVALUATOR.GSC_SNAPSHOTS })
     .eq('action_id', action.id)
     .is('evaluator_key', null)
     .in('metric_key', GSC_EVALUATOR_METRIC_KEYS)
 
-  return error ? `claim unsigned outcomes: ${error.message}` : null
+  if (claimError) errors.push(`claim unsigned outcomes: ${claimError.message}`)
+
+  if (dualWindowEnabled()) return errors
+
+  const { error: retireError } = await supabaseAdmin
+    .from('flywheel_outcomes')
+    .delete()
+    .eq('action_id', action.id)
+    .eq('evaluator_key', OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
+    .neq('window_days', authoritativeWindow)
+
+  if (retireError) {
+    errors.push(`retire non-authoritative windows: ${retireError.message}`)
+  }
+
+  return errors
 }
 
 /**

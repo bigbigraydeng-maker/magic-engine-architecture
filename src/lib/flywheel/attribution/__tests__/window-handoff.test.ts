@@ -16,6 +16,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { FakeOutcomesDb } from './fake-outcomes-db'
 import { OUTCOME_EVALUATOR } from '../outcome-identity'
+import { DUAL_WINDOW_FLAG } from '../dual-window-gate'
 import { DEFAULT_WINDOW_DAYS } from '../job'
 
 let db: FakeOutcomesDb
@@ -75,6 +76,7 @@ function outcomeWindows(metricKey: string): number[] {
 beforeEach(() => {
   db = new FakeOutcomesDb()
   vi.clearAllMocks()
+  delete process.env[DUAL_WINDOW_FLAG]
 })
 
 // ── Criterion 1: the default cron leaves a 14-day answer ────────────────────
@@ -270,6 +272,7 @@ describe('snapshot query failures', () => {
 
 describe('post-write cleanup failure', () => {
   it('keeps the written count when retiring superseded rows fails', async () => {
+    process.env[DUAL_WINDOW_FLAG] = 'true' // two windows only coexist when dual-window is ON
     // The upsert lands 3 domain rows; retiring the page-scope keys this run no
     // longer produces then fails. Those 3 rows are in the database — reporting
     // the run as having written nothing (and, via the manual route, 502) is
