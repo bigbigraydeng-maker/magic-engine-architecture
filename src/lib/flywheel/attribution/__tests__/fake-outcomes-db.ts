@@ -116,7 +116,7 @@ export class FakeOutcomesDb {
    */
   failNext(
     table: ModelledTable,
-    op: 'upsert' | 'insert' | 'delete',
+    op: 'upsert' | 'insert' | 'delete' | 'select',
     message: string,
     opts: { afterMatches?: number } = {},
   ): void {
@@ -440,6 +440,9 @@ class QueryBuilder implements PromiseLike<{ data: Row[] | null; error: DbError |
       this.db.log({ table: this.table, op: 'delete', filters: this.filters, rowCount: removed })
       return { data: null, error: null }
     }
+
+    const selectFailure = this.db.takeFailure(this.table, 'select')
+    if (selectFailure) return { data: null, error: { message: selectFailure } }
 
     let rows = target.filter(r => matches(r, this.filters))
 

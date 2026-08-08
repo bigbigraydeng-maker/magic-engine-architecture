@@ -19,6 +19,10 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import {
+  auditUnattributableActions,
+  type UnattributableAction,
+} from '@/lib/flywheel/attribution/unattributable-audit'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { AUTO_LANDED_AGENT } from '@/lib/diagnostic/auto-prescribe'
 import { isHandAddedItem } from '@/lib/diagnostic/prescription-landing'
@@ -58,6 +62,7 @@ export type ManualItemKind =
   | 'price_claim_unbacked'
   | 'auto_run_blocked'
   | 'auto_run_stuck'
+  | 'action_unattributable'
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -207,6 +212,12 @@ export async function loadManualItems(
   // 实测查到 CTS 的发布通道指向 Oztop 的网站，填错两个多月没人发现。
   await pushCrossClientItems(supabase, items).catch((e) =>
     console.warn('[manual-items] 串台检查失败（不阻塞其他待办）:', e),
+  )
+
+  // 承诺了没人能算的指标的动作 —— 归因每 6 小时都会重新发现它们，但计数进不了
+  // 告警，只会一遍遍写进开发日志。这正是「发现死在日志里」，所以捞到这条流水线上。
+  await pushUnattributableItems(supabase, items, ids, nameOf).catch((e) =>
+    console.warn('[manual-items] 归因黑洞检查失败（不阻塞其他待办）:', e),
   )
 
   // GSC property identifiers (needed for the inspect deep link).
@@ -985,6 +996,57 @@ async function pushPrescriptionItems(
       what: `${day}出的新方案已经排进执行看板 —— 新增 ${n} 个动作${tail}${cleaned}`,
       how,
       href: `https://app.magicengine.com.au/dashboard/clients/${p.client_id}/execution`,
+    })
+  }
+}
+
+/**
+ * Actions promising a metric no evaluator can compute.
+ *
+ * Attribution finds these on every run and can do nothing about them: the
+ * metric's owning evaluator does not load that flywheel, and the ownership
+ * CHECK forbids anyone else writing the outcome. Left alone they are a silent
+ * permanent gap — the action looks executed, and its effect never appears.
+ *
+ * Deliberately NOT routed through the cron's failure count: this is a standing
+ * property of stored rows, so it would pin the daily digest's alarm on forever
+ * while carrying no diagnosis (the digest reads error_message, never summary).
+ * It belongs here, where a person gets the action ids and a way to act.
+ */
+async function pushUnattributableItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  clientIds: string[],
+  nameOf: (id: string) => string,
+): Promise<void> {
+  const stranded = await auditUnattributableActions(supabase, clientIds)
+  if (stranded.length === 0) return
+
+  // One item per client: the fix is per action, but the decision ("re-point
+  // these at a metric someone measures") is one conversation per client.
+  const byClient = new Map<string, UnattributableAction[]>()
+  for (const row of stranded) {
+    const list = byClient.get(row.client_id) ?? []
+    list.push(row)
+    byClient.set(row.client_id, list)
+  }
+
+  for (const [clientId, rows] of Array.from(byClient.entries())) {
+    const metrics = Array.from(new Set(rows.map((r: UnattributableAction) => r.expected_metric))).join('、')
+    const wheels = Array.from(new Set(rows.map((r: UnattributableAction) => r.flywheel))).join('、')
+
+    items.push({
+      kind: 'action_unattributable',
+      client_id: clientId,
+      client_name: nameOf(clientId),
+      what:
+        `${rows.length} 个动作承诺的效果指标没有任何人能算 —— ${wheels} 战线的动作挂了 ${metrics}，` +
+        `而这个指标只有搜索后台那条线能算，它又只认 SEO 战线的动作。这些动作会一直显示「已执行」，但永远不会有效果数据`,
+      // 没有改这个字段的界面，所以别让他去找。这是我们派活时配错的，说清楚谁来修。
+      how:
+        '这条不用你动手 —— 是我们派活时把指标配错了战线。回我一句「改指标」我就去改，' +
+        '改完下一轮归因就能算出来。想先看是哪几个动作，点链接进执行看板',
+      href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/execution`,
     })
   }
 }

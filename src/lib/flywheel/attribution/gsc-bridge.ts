@@ -319,9 +319,15 @@ async function fetchGscSnapshot(
 
   const { data, error } = await query.limit(1).maybeSingle()
 
+  // Throw rather than returning null: "the query failed" and "this client has no
+  // snapshot on that side yet" both used to arrive here as null, and the caller
+  // reads null as the latter — counting the action as `skipped` with an empty
+  // `errors` array, so a transient PostgREST failure logged as a healthy run
+  // that simply had nothing to do. That is the shape pass 1 no longer covers
+  // for, since it defers these actions instead of attributing them. The caller
+  // catches this per action, so one bad query does not abort the client.
   if (error) {
-    console.warn(`[gsc-bridge] fetchGscSnapshot(${direction}) error:`, error.message)
-    return null
+    throw new Error(`gsc snapshot query (${direction}): ${error.message}`)
   }
 
   return data as GscSnapshotRow | null

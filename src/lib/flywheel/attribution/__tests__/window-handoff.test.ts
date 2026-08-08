@@ -240,6 +240,34 @@ describe('malformed deferred windows', () => {
 
 // ── Partial failure: the handoff failing must not un-count landed rows ──────
 
+describe('snapshot query failures', () => {
+  it('a failing snapshot query is reported, not counted as "no data yet"', async () => {
+    // The two used to be indistinguishable: fetchGscSnapshot swallowed the
+    // error into null, the action landed in `skipped`, `errors` stayed empty,
+    // and the run looked healthy. Pass 1 defers these actions now, so nothing
+    // else would have covered for it.
+    seedDeferredAction()
+    seedSnapshots()
+
+    db.failNext('gsc_performance_snapshots', 'select', 'statement timeout')
+
+    const result = await runBridge()
+
+    expect(result.errors.join(' ')).toContain('statement timeout')
+    expect(result.outcomes_written).toBe(0)
+  })
+
+  it('a genuinely absent snapshot is still a quiet skip', async () => {
+    seedDeferredAction() // no snapshots seeded at all
+
+    const result = await runBridge()
+
+    expect(result.errors).toEqual([])
+    expect(result.skipped).toBe(1)
+    expect(result.outcomes_written).toBe(0)
+  })
+})
+
 describe('post-write cleanup failure', () => {
   it('keeps the written count when retiring superseded rows fails', async () => {
     // The upsert lands 3 domain rows; retiring the page-scope keys this run no
