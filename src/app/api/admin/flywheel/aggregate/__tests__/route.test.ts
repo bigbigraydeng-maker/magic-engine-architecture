@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // ─── Hoisted mocks ────────────────────────────────────────────────────────────
 
 const mockQuery = vi.fn()
+let rangesAsked: Array<[number, number]> = []
 
 const mocks = vi.hoisted(() => ({
   guardAdmin: vi.fn(),
@@ -36,6 +37,16 @@ const makeChainable = (): object => {
           if (prop === 'then') return p.then(...(args as [never, never]))
           if (prop === 'catch') return p.catch(...(args as [never]))
           return p.finally(...(args as [never]))
+        }
+      }
+      // `.range()` is the terminal now that the route pages. Range-aware on
+      // purpose: a stub that hands back everything regardless cannot see a
+      // paging bug, which is how the fold-without-paging gap survived a round.
+      if (prop === 'range') {
+        return async (from: number, to: number) => {
+          const res = (await mockQuery()) as { data: unknown[] | null; error: unknown }
+          rangesAsked.push([from, to])
+          return { data: (res.data ?? []).slice(from, to + 1), error: res.error }
         }
       }
       // Every other accessor (eq, select, from, order…) returns the same proxy
@@ -98,6 +109,7 @@ function makeRequest(params: Record<string, string> = {}) {
 describe('GET /api/admin/flywheel/aggregate', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    rangesAsked = []
     mocks.guardAdmin.mockResolvedValue(null) // null = admin authenticated, proceed
     mockQuery.mockResolvedValue({ data: OUTCOMES_WITH_ACTIONS, error: null })
   })
@@ -236,5 +248,25 @@ describe('counting by action, not by row', () => {
     expect(body.total_outcomes).toBe(1)
     // The mature window is the one that represents the action.
     expect(body.top[0].confirmed).toBe(1)
+  })
+})
+
+// ── Reading every page, not just the first ──────────────────────────────────
+
+describe('paging', () => {
+  it('counts an action whose rows sit past the 1000-row cap', async () => {
+    const filler = Array.from({ length: 1000 }, (_, i) =>
+      outcome(`n${i}`, 'confirmed', 'ads.pause_campaign', 'ads', 'c1'))
+    mockQuery.mockResolvedValue({
+      data: [...filler, outcome('late', 'confirmed', 'late.action', 'seo', 'c1')],
+      error: null,
+    })
+
+    const res = await GET(makeRequest({ min: '1' }))
+    const body = await res.json()
+
+    expect(rangesAsked.length).toBeGreaterThan(1)
+    expect(body.total_outcomes).toBe(1001)
+    expect(body.top.some((t: { action_type: string }) => t.action_type === 'late.action')).toBe(true)
   })
 })

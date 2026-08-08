@@ -30,8 +30,15 @@
  * down. The memory consumers are the follow-up PR's job, and this flag is what
  * keeps the two from being coupled.
  *
- * If a further row-counting reader turns up, it belongs in that list before the
- * flag is flipped, not after.
+ * Each of those also reads its outcomes PAGINATED. Folding without paging is
+ * still wrong, and wrong in a nastier way than undercounting: the fold picks a
+ * representative from the rows it was handed, so if PostgREST's silent 1000-row
+ * cap drops the row carrying the action's `expected_metric`, the fold reports a
+ * different verdict for that action. Dual-window doubles the row count and
+ * brings that cap twice as close. (Codex P2, round 28 on PR #862.)
+ *
+ * If a further reader of `flywheel_outcomes` turns up, it needs BOTH — paginated
+ * read and per-action fold — before the flag is flipped, not after.
  *
  * WHAT "OFF" ACTUALLY ENFORCES. Refusing to *write* a second window is only
  * half of it. On main every writer DELETEd by action before inserting, so an

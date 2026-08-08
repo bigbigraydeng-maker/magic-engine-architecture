@@ -23,6 +23,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { buildAggregateRows, pickTop } from '@/lib/flywheel/aggregate/outcome-aggregate'
 import { guardAdmin } from '@/lib/auth/require-admin'
 import { keepOneCasePerAction } from '@/lib/flywheel/attribution/outcome-identity'
+import { fetchAll } from '@/lib/supabase-paginate'
 
 export const dynamic = 'force-dynamic'
 
@@ -41,19 +42,38 @@ type OutcomeRow = {
 }
 
 
-function buildQuery(clientId: string | null, flywheel: string | null) {
-  let query = supabaseAdmin
-    .from('flywheel_outcomes')
-    .select(
-      'action_id, metric_key, window_days, verdict, ' +
-      'flywheel_actions!inner(action_type, flywheel, client_id, expected_metric)',
-    )
+/**
+ * Read every matching outcome, paginated.
+ *
+ * PostgREST caps a response at 1000 rows and reports no error. Truncating here
+ * is worse than losing a few rows: the per-action fold below picks a
+ * representative from whatever it was given, so if the row carrying the
+ * action's `expected_metric` is the one dropped, the fold reports a DIFFERENT
+ * verdict for that action — not an undercount, a wrong answer. One action
+ * already yields three rows, and dual-window doubles that again.
+ * (Codex P2, round 28 on PR #862.)
+ */
+async function loadOutcomes(
+  clientId: string | null,
+  flywheel: string | null,
+): Promise<OutcomeRow[]> {
+  return fetchAll<OutcomeRow>((from, to) => {
+    let query = supabaseAdmin
+      .from('flywheel_outcomes')
+      .select(
+        'id, action_id, metric_key, window_days, verdict, ' +
+        'flywheel_actions!inner(action_type, flywheel, client_id, expected_metric)',
+      )
+      // A stable, unique sort — `range` without one repeats or drops rows at
+      // page boundaries.
+      .order('id', { ascending: true })
 
-  // PostgREST: filter on joined table columns via dot notation
-  if (clientId) query = (query as typeof query).eq('flywheel_actions.client_id', clientId)
-  if (flywheel) query = (query as typeof query).eq('flywheel_actions.flywheel', flywheel)
+    // PostgREST: filter on joined table columns via dot notation
+    if (clientId) query = (query as typeof query).eq('flywheel_actions.client_id', clientId)
+    if (flywheel) query = (query as typeof query).eq('flywheel_actions.flywheel', flywheel)
 
-  return query
+    return query.range(from, to) as unknown as PromiseLike<{ data: OutcomeRow[] | null; error: { message: string } | null }>
+  })
 }
 
 /**
@@ -101,15 +121,19 @@ export async function GET(request: Request) {
 
   // ── Build query ─────────────────────────────────────────────────────────────
 
-  const { data, error } = await buildQuery(clientId, flywheel)
-
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
+  let outcomes: OutcomeRow[]
+  try {
+    outcomes = await loadOutcomes(clientId, flywheel)
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : String(e) },
+      { status: 500 },
+    )
   }
 
   // ── Flatten and aggregate ───────────────────────────────────────────────────
 
-  const rows = collapseToActions(data as unknown as OutcomeRow[] | null)
+  const rows = collapseToActions(outcomes)
 
   const aggregate  = buildAggregateRows(rows)
   const topEntries = pickTop(aggregate, top, min)

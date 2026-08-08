@@ -9,6 +9,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAll } from '@/lib/supabase-paginate'
 import { keepOneCasePerAction } from '@/lib/flywheel/attribution/outcome-identity'
 
 /**
@@ -121,14 +122,22 @@ export async function fetchOutcomeConfidenceMap(
   supabase: SupabaseClient,
 ): Promise<OutcomeConfidenceMap> {
   try {
-    const { data, error } = await supabase
-      .from('flywheel_outcomes')
-      .select('action_id, metric_key, window_days, verdict, flywheel_actions!inner(action_type, expected_metric)')
-
-    if (error || !data) return {}
+    // 分页读全：PostgREST 单次最多 1000 行且不报错。截断在这里比少几行更糟 ——
+    // 按动作折叠是在读到的行里挑代表，如果恰好把带 expected_metric 的那行截掉了,
+    // 折叠会挑另一行当这个动作的结论，于是不是「少算」而是「算错」。
+    // 一个动作本来就出三行，双窗口再翻倍，上限来得比行数看上去快得多。
+    // （Codex P2, round 28 on PR #862）
+    const data = await fetchAll<OutcomeConfidenceQueryRow<{ action_type: string; expected_metric?: string | null }>>(
+      (from, to) =>
+        supabase
+          .from('flywheel_outcomes')
+          .select('id, action_id, metric_key, window_days, verdict, flywheel_actions!inner(action_type, expected_metric)')
+          .order('id', { ascending: true })
+          .range(from, to),
+    )
 
     const rows: RawOutcomeConfidenceRow[] = keepOneCasePerAction(
-      withPromise(data as Array<OutcomeConfidenceQueryRow<{ action_type: string; expected_metric?: string | null }>>),
+      withPromise(data),
     ).map(r => {
       const actions = Array.isArray(r.flywheel_actions) ? r.flywheel_actions[0] : r.flywheel_actions
       return { action_type: actions?.action_type ?? 'unknown', verdict: r.verdict }
@@ -178,7 +187,7 @@ export async function fetchClientOutcomeHistory(
     if (error || !data) return {}
 
     const rows: RawOutcomeConfidenceRow[] = keepOneCasePerAction(
-      withPromise(data as Array<OutcomeConfidenceQueryRow<{ action_type: string; expected_metric?: string | null }>>),
+      withPromise(data),
     ).map(r => {
       const actions = Array.isArray(r.flywheel_actions) ? r.flywheel_actions[0] : r.flywheel_actions
       return { action_type: actions?.action_type ?? 'unknown', verdict: r.verdict }

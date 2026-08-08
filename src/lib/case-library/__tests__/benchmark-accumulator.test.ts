@@ -214,18 +214,19 @@ function makeSupabase(opts: MockOpts = {}) {
     }
 
     if (table === 'flywheel_outcomes') {
-      return {
-        select: vi.fn().mockReturnValue({
-          in: vi.fn().mockReturnValue({
-            not: vi.fn().mockReturnValue({
-              gte: vi.fn().mockResolvedValue({
-                data: outcomesError ? null : outcomes,
-                error: outcomesError,
-              }),
-            }),
-          }),
-        }),
-      }
+      // 这条查询现在分页读（fetchAll → .order().range()）。桩子必须照着真链条建模：
+      // 停在 .gte() 的桩会让分页修复根本测不出来，链条永远不 resolve。
+      const q: Record<string, unknown> = {}
+      q.select = () => q
+      q.in = () => q
+      q.not = () => q
+      q.gte = () => q
+      q.order = () => q
+      q.range = async (from: number, to: number) => ({
+        data: outcomesError ? null : outcomes.slice(from, to + 1),
+        error: outcomesError,
+      })
+      return q
     }
 
     if (table === 'industry_benchmarks') {
@@ -461,5 +462,41 @@ describe('accumulateBenchmarks', () => {
     expect(result.errors[0]).toContain('lookup failed')
     expect(updateFn).not.toHaveBeenCalled()
     expect(insertFn).not.toHaveBeenCalled()
+  })
+})
+
+// ── 读全，不只是第一页 ────────────────────────────────────────────────────────
+
+describe('accumulateBenchmarks 分页读全', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('第二页上的动作照样进样本', async () => {
+    // PostgREST 单次 1000 行且不报错。这里截断不是「少几行」：一个动作出三行,
+    // 基准的样本量和百分位都会因此偏，而且没有任何报错。
+    // （Codex P2, round 28）
+    const filler = Array.from({ length: 1000 }, (_, i) => ({
+      action_id: `n${i}`, client_id: 'c1',
+      metric_key: 'seo.gsc.clicks', delta_pct: 10, window_days: 28,
+    }))
+    const late = [
+      { action_id: 'late1', client_id: 'c2', metric_key: 'seo.gsc.clicks', delta_pct: 90, window_days: 28 },
+      { action_id: 'late2', client_id: 'c3', metric_key: 'seo.gsc.clicks', delta_pct: 95, window_days: 28 },
+    ]
+
+    const { supabase, insertFn } = makeSupabase({
+      clients: [
+        { id: 'c1', industry: 'flooring' },
+        { id: 'c2', industry: 'flooring' },
+        { id: 'c3', industry: 'flooring' },
+      ],
+      outcomes: [...filler, ...late],
+    })
+
+    await accumulateBenchmarks(supabase)
+
+    // 只读第一页的话这三个客户会变成一个，客户penalty 直接把 confidence 砍到底,
+    // 样本量也少两个。
+    const written = insertFn.mock.calls[0][0] as Record<string, unknown>
+    expect(written.growth_sample_size).toBe(1002)
   })
 })

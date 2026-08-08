@@ -31,6 +31,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { mapIndustryToCategory } from '@/lib/huatuo/industry-mapper'
 import type { BenchmarkDimension } from '@/lib/huatuo/types'
+import { fetchAll } from '@/lib/supabase-paginate'
 import { keepOneMeasurementPerAction } from '@/lib/flywheel/attribution/outcome-identity'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -234,15 +235,25 @@ export async function accumulateBenchmarks(
   // ── 2. 拉最近 LOOKBACK_DAYS 的 outcomes ───────────────────────────────────
   const since = new Date(Date.now() - LOOKBACK_DAYS * 86_400_000).toISOString()
 
-  const { data: outcomes, error: outcomesError } = await supabase
-    .from('flywheel_outcomes')
-    .select('action_id, client_id, metric_key, delta_pct, window_days')
-    .in('metric_key', Object.keys(REPRESENTATIVE_METRICS))
-    .not('delta_pct', 'is', null)
-    .gte('computed_at', since)
-
-  if (outcomesError) {
-    result.errors.push(`fetch outcomes: ${outcomesError.message}`)
+  // 分页读全：PostgREST 单次最多 1000 行且不报错。截断在这里比少几行更糟 ——
+  // 按动作折叠是在读到的行里挑代表，如果恰好把带 expected_metric 的那行截掉了,
+  // 折叠会挑另一行当这个动作的结论，于是不是「少算」而是「算错」。
+  // 一个动作本来就出三行，双窗口再翻倍，上限来得比行数看上去快得多。
+  // （Codex P2, round 28 on PR #862）
+  let outcomes: OutcomeRow[]
+  try {
+    outcomes = await fetchAll<OutcomeRow>((from, to) =>
+      supabase
+        .from('flywheel_outcomes')
+        .select('id, action_id, client_id, metric_key, delta_pct, window_days')
+        .in('metric_key', Object.keys(REPRESENTATIVE_METRICS))
+        .not('delta_pct', 'is', null)
+        .gte('computed_at', since)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+  } catch (e) {
+    result.errors.push(`fetch outcomes: ${e instanceof Error ? e.message : String(e)}`)
     return result
   }
 
