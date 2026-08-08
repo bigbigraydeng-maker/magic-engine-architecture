@@ -19,7 +19,9 @@ vi.mock('@/lib/supabase', () => ({
       const q: Record<string, unknown> = {}
       q.select = () => q
       q.in = () => q
-      q.order = async () => ({ data: rows, error: null })
+      q.order = () => q
+      // 分页读全之后 .range() 才是终点；停在 .order() 的桩会让分页修复测不出来。
+      q.range = async (from: number, to: number) => ({ data: rows.slice(from, to + 1), error: null })
       return q
     },
   },
@@ -103,5 +105,20 @@ describe('fetchLatestOutcomesByAction', () => {
 
     expect(byAction.a1).toBeDefined()
     expect(byAction.a1.verdict).toBe('confirmed')
+  })
+
+  it('still answers for an action whose rows sit past the 1000-row cap', async () => {
+    // Newest-first ordering meant the OLDEST actions were the ones truncated
+    // away, and the board showed them as never attributed at all.
+    // (Codex P2, round 29.)
+    rows = [
+      ...Array.from({ length: 1000 }, (_, i) => row({ action_id: `n${i}` })),
+      row({ action_id: 'old', verdict: 'reversed' }),
+    ]
+
+    const byAction = await fetchLatestOutcomesByAction(['old'])
+
+    expect(byAction.old).toBeDefined()
+    expect(byAction.old.verdict).toBe('reversed')
   })
 })

@@ -11,7 +11,11 @@
 
 import { describe, it, expect } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fetchOutcomeConfidenceMap } from '../outcome-confidence'
+import {
+  fetchClientOutcomeHistory,
+  fetchOutcomeConfidenceMap,
+  fetchSeoBlogConfidenceByMode,
+} from '../outcome-confidence'
 
 const PAGE = 1000
 
@@ -83,5 +87,38 @@ describe('fetchOutcomeConfidenceMap reads every page', () => {
     // Truncated at 1000, only the `impressions` row survives and the action
     // reads as reversed. Read whole, the promised metric wins.
     expect(map['seo.publish_blog']?.successRate).toBe(1)
+  })
+})
+
+describe('the per-client readers page too', () => {
+  it('fetchClientOutcomeHistory keeps an action from page two', async () => {
+    const rows = [
+      ...Array.from({ length: PAGE }, (_, i) => row({ id: `n${i}`, action_id: `n${i}` })),
+      row({
+        id: 'late', action_id: 'late', verdict: 'reversed',
+        flywheel_actions: { action_type: 'late.action', expected_metric: 'seo.gsc.clicks' },
+      }),
+    ]
+    const { supabase } = pagedSupabase(rows)
+
+    const map = await fetchClientOutcomeHistory(supabase, 'c1')
+
+    expect(map['late.action']).toBeDefined()
+  })
+
+  it('fetchSeoBlogConfidenceByMode keeps an action from page two', async () => {
+    const blog = (over: Record<string, unknown>) => row({
+      flywheel_actions: { action_type: 'seo.publish_blog', payload: { mode: 'unified' }, expected_metric: 'seo.gsc.clicks' },
+      ...over,
+    })
+    const rows = [
+      ...Array.from({ length: PAGE }, (_, i) => blog({ id: `n${i}`, action_id: `n${i}` })),
+      blog({ id: 'late', action_id: 'late' }),
+    ]
+    const { supabase } = pagedSupabase(rows)
+
+    const byMode = await fetchSeoBlogConfidenceByMode(supabase, 'c1')
+
+    expect(byMode.unified.sampleSize).toBe(PAGE + 1)
   })
 })

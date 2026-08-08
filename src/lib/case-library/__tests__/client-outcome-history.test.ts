@@ -9,11 +9,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 /** Thenable fake query builder that records every .eq() call. */
 function fakeSupabase(rows: unknown[], captured: Array<[string, string]>) {
+  // 这两个读取方现在分页读全（fetchAll → .order().range()）。桩子照着真链条建模,
+  // 否则「读全」这件事在测试里根本不存在。
   const q: Record<string, unknown> = {
     select() { return q },
     eq(col: string, val: string) { captured.push([col, val]); return q },
-    then(resolve: (v: { data: unknown; error: null }) => unknown) {
-      return resolve({ data: rows, error: null })
+    order() { return q },
+    async range(from: number, to: number) {
+      return { data: rows.slice(from, to + 1), error: null }
     },
   }
   return { from: () => q } as unknown as SupabaseClient

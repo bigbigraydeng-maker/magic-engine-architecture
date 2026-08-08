@@ -175,16 +175,21 @@ export async function fetchClientOutcomeHistory(
 ): Promise<OutcomeConfidenceMap> {
   if (!clientId) return {}
   try {
-    let query = supabase
-      .from('flywheel_outcomes')
-      .select('action_id, metric_key, window_days, verdict, flywheel_actions!inner(action_type, flywheel, client_id, expected_metric)')
-      .eq('flywheel_actions.client_id', clientId) // 🔴 hard client scope — never removed
+    // 分页读全：理由同 fetchOutcomeConfidenceMap —— 截断之后再折叠不是少算是算错。
+    // （Codex P2, round 29 on PR #862）
+    const data = await fetchAll<OutcomeConfidenceQueryRow<{ action_type: string; expected_metric?: string | null }>>(
+      (from, to) => {
+        let query = supabase
+          .from('flywheel_outcomes')
+          .select('id, action_id, metric_key, window_days, verdict, flywheel_actions!inner(action_type, flywheel, client_id, expected_metric)')
+          .eq('flywheel_actions.client_id', clientId) // 🔴 hard client scope — never removed
 
-    if (filters?.flywheel) query = query.eq('flywheel_actions.flywheel', filters.flywheel)
-    if (filters?.actionType) query = query.eq('flywheel_actions.action_type', filters.actionType)
+        if (filters?.flywheel) query = query.eq('flywheel_actions.flywheel', filters.flywheel)
+        if (filters?.actionType) query = query.eq('flywheel_actions.action_type', filters.actionType)
 
-    const { data, error } = await query
-    if (error || !data) return {}
+        return query.order('id', { ascending: true }).range(from, to)
+      },
+    )
 
     const rows: RawOutcomeConfidenceRow[] = keepOneCasePerAction(
       withPromise(data),
@@ -232,13 +237,18 @@ export async function fetchSeoBlogConfidenceByMode(
   }
 
   try {
-    const { data, error } = await supabase
-      .from('flywheel_outcomes')
-      .select('action_id, metric_key, window_days, verdict, flywheel_actions!inner(action_type, payload, client_id, expected_metric)')
-      .eq('flywheel_actions.client_id', clientId)
-      .eq('flywheel_actions.action_type', 'seo.publish_blog')
-
-    if (error || !data) return empty
+    // 分页读全：理由同 fetchOutcomeConfidenceMap —— 截断之后再折叠不是少算是算错。
+    // （Codex P2, round 29 on PR #862）
+    const data = await fetchAll<OutcomeConfidenceQueryRow<{ payload?: { mode?: string } | null; expected_metric?: string | null }>>(
+      (from, to) =>
+        supabase
+          .from('flywheel_outcomes')
+          .select('id, action_id, metric_key, window_days, verdict, flywheel_actions!inner(action_type, payload, client_id, expected_metric)')
+          .eq('flywheel_actions.client_id', clientId)
+          .eq('flywheel_actions.action_type', 'seo.publish_blog')
+          .order('id', { ascending: true })
+          .range(from, to),
+    )
 
     const buckets: Record<string, { confirmed: number; total: number }> = {
       unified:  { confirmed: 0, total: 0 },
@@ -247,7 +257,7 @@ export async function fetchSeoBlogConfidenceByMode(
     }
 
     for (const row of keepOneCasePerAction(
-      withPromise(data as Array<OutcomeConfidenceQueryRow<{ payload?: { mode?: string } | null; expected_metric?: string | null }>>),
+      withPromise(data),
     )) {
       const action = Array.isArray(row.flywheel_actions) ? row.flywheel_actions[0] : row.flywheel_actions
       const mode = action?.payload?.mode

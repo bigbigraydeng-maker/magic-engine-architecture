@@ -40,6 +40,17 @@
  * If a further reader of `flywheel_outcomes` turns up, it needs BOTH — paginated
  * read and per-action fold — before the flag is flipped, not after.
  *
+ * FOR THE FOLLOW-UP MEMORY PR, so it does not have to rediscover this: the five
+ * memory-side reads are unpaginated too, not just row-counting —
+ * `extractor.ts` (3) and `learning-rollup.ts` (2). Deduplicating by action
+ * without also paging would leave the same defect this PR spent four rounds
+ * chasing: the fold picks a representative from a silently truncated set, so a
+ * dropped `expected_metric` row yields a different verdict rather than a
+ * smaller count. This PR is not authorised to touch `src/lib/memory/**`, hence
+ * a note rather than a change. Enumerated by sweeping every
+ * `.from('flywheel_outcomes')` in the repo — the DELETE/UPDATE/UPSERT sites do
+ * not page by nature and are fine.
+ *
  * WHAT "OFF" ACTUALLY ENFORCES. Refusing to *write* a second window is only
  * half of it. On main every writer DELETEd by action before inserting, so an
  * action could never hold two windows; removing that delete was necessary — it

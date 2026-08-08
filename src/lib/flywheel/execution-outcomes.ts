@@ -9,6 +9,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase'
 import { keepOneCasePerAction } from '@/lib/flywheel/attribution/outcome-identity'
+import { fetchAll } from '@/lib/supabase-paginate'
 
 export interface ItemOutcomeSummary {
   verdict: 'confirmed' | 'reversed' | 'inconclusive'
@@ -52,17 +53,26 @@ export async function fetchLatestOutcomesByAction(
 ): Promise<Record<string, ItemOutcomeSummary>> {
   if (actionIds.length === 0) return {}
 
-  const { data: outcomeRows } = await supabaseAdmin
-    .from('flywheel_outcomes')
-    .select(
-      'action_id, metric_key, window_days, delta, delta_pct, confidence, verdict, computed_at, ' +
-      'flywheel_actions!inner(expected_metric)',
-    )
-    .in('action_id', actionIds)
-    .order('computed_at', { ascending: false })
+  // Paginated. Truncation here is not "a few rows short": the rows come back
+  // newest-first, so past the cap it is the OLDEST actions that vanish
+  // entirely, and the board shows them as never having been attributed.
+  // (Codex P2, round 29 on PR #862.)
+  const outcomeRows = await fetchAll<OutcomeJoin>((from, to) =>
+    supabaseAdmin
+      .from('flywheel_outcomes')
+      .select(
+        'id, action_id, metric_key, window_days, delta, delta_pct, confidence, verdict, computed_at, ' +
+        'flywheel_actions!inner(expected_metric)',
+      )
+      .in('action_id', actionIds)
+      // A stable, unique sort — `range` without one repeats or drops rows at
+      // page boundaries. `computed_at` is shared by every row of one upsert.
+      .order('id', { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{ data: OutcomeJoin[] | null; error: { message: string } | null }>,
+  )
 
   const representative = keepOneCasePerAction(
-    ((outcomeRows as unknown as OutcomeJoin[]) ?? []).map(r => {
+    outcomeRows.map(r => {
       const a = Array.isArray(r.flywheel_actions) ? r.flywheel_actions[0] : r.flywheel_actions
       return { ...r, expected_metric: a?.expected_metric ?? null }
     }),
