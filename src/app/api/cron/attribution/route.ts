@@ -77,6 +77,153 @@ export interface ApiErrorResponse {
   error: string
 }
 
+interface GscPassResult {
+  clients_processed: number
+  actions_found: number
+  outcomes_written: number
+  skipped: number
+  cleanup_errors: number
+  reconcile_errors: number
+  errors: string[]
+}
+
+/**
+ * Pass 2 — GSC snapshot-based attribution (P17.A.4).
+ *
+ * Visits every client pass 1 deferred for, plus every client with a connected
+ * GSC connector. A deferral is a promise: pass 1 declined those actions because
+ * their answer is the GSC evaluator's to produce, so pass 2 must visit that
+ * client even if their connector is currently disconnected — the bridge reads
+ * historical `gsc_performance_snapshots`, not the connector, and with no usable
+ * snapshot it skips harmlessly. The connector list is an optimisation for who
+ * ELSE to visit, and its transient failure must neither hide the deferred
+ * clients nor pass silently. (Codex P2, round 2 on PR #862.)
+ *
+ * Pass 1's effective window rides along: the deferred actions' answer at THAT
+ * window is now the bridge's to produce. The bridge keeps its own 28-day
+ * cadence (first arg left to its default) and computes the deferred window on
+ * top, deduplicating when the two coincide. That handoff is GATED OFF in
+ * production — the memory-side consumers still count rows, so enabling it would
+ * double the evidence behind every deferred action and move client-visible
+ * benchmarks. See dual-window-gate.ts.
+ */
+async function runPass2(
+  clientId: string | undefined,
+  windowDays: number,
+  deferredClientIds: string[],
+): Promise<GscPassResult> {
+  const gscResult = {
+    clients_processed: 0,
+    actions_found:     0,
+    outcomes_written:  0,
+    skipped:           0,
+    cleanup_errors:    0,
+    reconcile_errors:  0,
+    errors:            [] as string[],
+  }
+
+  try {
+    let connectedIds: string[] = []
+    try {
+      connectedIds = await loadGscClientIds(clientId)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error('[attribution/cron] loadGscClientIds error:', message)
+      gscResult.errors.push(`load GSC clients: ${message}`)
+    }
+
+    const clientIds = Array.from(new Set([...connectedIds, ...deferredClientIds]))
+
+    const dualWindow = dualWindowEnabled()
+    const pass1Window = windowDays
+
+    for (const cid of clientIds) {
+      const r = await runGscAttributionForClient(
+        cid,
+        undefined,
+        dualWindow ? { deferredWindowDays: pass1Window } : {},
+      )
+      gscResult.clients_processed++
+      gscResult.actions_found    += r.actions_found
+      gscResult.outcomes_written += r.outcomes_written
+      gscResult.skipped           += r.skipped
+      gscResult.cleanup_errors    += r.cleanup_errors
+      gscResult.reconcile_errors  += r.reconcile_errors
+      if (r.errors.length) gscResult.errors.push(...r.errors)
+    }
+
+    console.log(
+      `[attribution/cron] pass2(gsc) clients=${gscResult.clients_processed} outcomes=${gscResult.outcomes_written} skipped=${gscResult.skipped} deferred_window=${dualWindow ? pass1Window : 'off'}`
+    )
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error in GSC attribution pass'
+    console.error('[attribution/cron] Pass 2 error:', message)
+    gscResult.errors.push(message)
+  }
+
+  return gscResult
+}
+
+
+/**
+ * Write the run summary and build the response.
+ *
+ * All three counters are in the same unit — ACTIONS — so `completed` can be read
+ * against `processed`. `completed` used to ignore pass 2 entirely (a run whose
+ * only writes came from the GSC evaluator reported zero completed), and counting
+ * its outcome ROWS instead would make completed exceed processed several times
+ * over, since one action yields three metric rows per window.
+ *
+ * `failed` counts what actually went wrong: pass-1 actions that threw, pass-1
+ * reconciliation failures, plus pass-2 errors (including post-write cleanup
+ * failures, which do not reduce `completed`). Reconciliation failures count even
+ * when the action attributed perfectly — that is the point, because nothing else
+ * would ever show them: `written` goes up, `failed` stays 0, the digest reports
+ * a healthy run, and meanwhile the unsigned row keeps the contract migration
+ * blocked. (Codex P1, round 18 on PR #862.)
+ *
+ * `unattributable` is deliberately NOT counted here — it is a standing property
+ * of stored rows, recomputed identically every run, so folding it in would pin
+ * the daily digest's alarm on forever with no remediation path. It travels in
+ * the response and the run summary instead. See Issue #859.
+ */
+async function finishRun(
+  cronRun: Awaited<ReturnType<typeof startCronRun>>,
+  pass1Result: AttributionJobResult,
+  gscResult: GscPassResult,
+  windowDays: number,
+  pass1: { overrideRefused: boolean; requested?: number },
+): Promise<NextResponse<AttributionCronResponse>> {
+  const gscAttributed = Math.max(0, gscResult.actions_found - gscResult.skipped)
+
+  await cronRun.finish({
+    processed: pass1Result.processed + gscResult.actions_found,
+    completed: pass1Result.written + gscAttributed,
+    failed: pass1Result.failed + pass1Result.reconcileErrors + gscResult.errors.length,
+    summary: { pass1: pass1Result, gsc: gscResult },
+  })
+
+  return NextResponse.json<AttributionCronResponse>({
+    timestamp: new Date().toISOString(),
+    ...pass1Result,
+    window_days: windowDays,
+    ...(pass1.overrideRefused
+      ? {
+          window_override_refused: {
+            requested: pass1.requested ?? windowDays,
+            used: windowDays,
+            reason:
+              'Custom attribution windows are disabled while ' +
+              'ATTRIBUTION_DUAL_WINDOW_ENABLED is off — a second window would ' +
+              'double the evidence behind each action for consumers that still ' +
+              'count outcome rows. See Issue #859.',
+          },
+        }
+      : {}),
+    gsc: gscResult,
+  })
+}
+
 export async function POST(
   req: NextRequest
 ): Promise<NextResponse<AttributionCronResponse | ApiErrorResponse>> {
@@ -137,132 +284,9 @@ export async function POST(
     return NextResponse.json<ApiErrorResponse>({ error: message }, { status: 500 })
   }
 
-  // ── Pass 2: GSC snapshot-based attribution (P17.A.4) ──────────────────────
-  const gscResult = {
-    clients_processed: 0,
-    actions_found:     0,
-    outcomes_written:  0,
-    skipped:           0,
-    cleanup_errors:    0,
-    reconcile_errors:  0,
-    errors:            [] as string[],
-  }
+  const gscResult = await runPass2(clientId, windowDays, pass1Result.pass2ClientIds)
 
-  try {
-    // A deferral is a promise: pass 1 declined those actions because their
-    // answer is the GSC evaluator's to produce, so pass 2 must visit every
-    // client pass 1 deferred for — even one whose GSC connector is currently
-    // disconnected (the bridge reads historical gsc_performance_snapshots, not
-    // the connector; with no usable snapshots it skips harmlessly). The
-    // connector list is an optimisation for who ELSE to visit, and its
-    // transient failure must neither hide the deferred clients nor pass
-    // silently. (Codex P2, second round, on PR #862.)
-    let connectedIds: string[] = []
-    try {
-      connectedIds = await loadGscClientIds(clientId)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      console.error('[attribution/cron] loadGscClientIds error:', message)
-      gscResult.errors.push(`load GSC clients: ${message}`)
-    }
-
-    const clientIds = Array.from(new Set([...connectedIds, ...pass1Result.pass2ClientIds]))
-
-    // Pass 1 defers actions whose expected_metric the GSC evaluator owns, so
-    // its effective window must ride along: the deferred actions' answer at
-    // THAT window is now the bridge's to produce. The bridge keeps its own
-    // 28-day cadence (first arg left to its default) and computes the deferred
-    // window on top, deduplicating when the two coincide. See Issue #859.
-    //
-    // Sanitised, not just defaulted: parseInt on a malformed ?window_days=
-    // yields NaN, which `??` does not catch, and a NaN (or negative) window
-    // must not be forwarded — it would defeat the bridge's dedupe guard
-    // (NaN === anything is false) and error every deferred action. Pass 1's
-    // own handling of the malformed value is unchanged from main.
-    // Gated OFF in production. The handoff itself is correct and tested, but
-    // the memory-side consumers of flywheel_outcomes still count rows, so
-    // enabling it would double the evidence behind every deferred action and
-    // move client-visible benchmarks. See dual-window-gate.ts.
-    const dualWindow = dualWindowEnabled()
-    const pass1Window = windowDays
-
-    for (const cid of clientIds) {
-      const r = await runGscAttributionForClient(
-        cid,
-        undefined,
-        dualWindow ? { deferredWindowDays: pass1Window } : {},
-      )
-      gscResult.clients_processed++
-      gscResult.actions_found    += r.actions_found
-      gscResult.outcomes_written += r.outcomes_written
-      gscResult.skipped           += r.skipped
-      gscResult.cleanup_errors    += r.cleanup_errors
-      gscResult.reconcile_errors  += r.reconcile_errors
-      if (r.errors.length) gscResult.errors.push(...r.errors)
-    }
-
-    console.log(
-      `[attribution/cron] pass2(gsc) clients=${gscResult.clients_processed} outcomes=${gscResult.outcomes_written} skipped=${gscResult.skipped} deferred_window=${dualWindow ? pass1Window : 'off'}`
-    )
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Unknown error in GSC attribution pass'
-    console.error('[attribution/cron] Pass 2 error:', message)
-    gscResult.errors.push(message)
-  }
-
-  // All three counters are in the same unit — ACTIONS — so `completed` can be
-  // read against `processed`. `completed` used to ignore pass 2 entirely (a run
-  // whose only writes came from the GSC evaluator reported zero completed), and
-  // counting its outcome ROWS instead would make completed exceed processed
-  // several times over, since one action yields three metric rows per window.
-  //
-  // `failed` counts what actually went wrong this run: pass-1 actions that
-  // threw, pass-1 reconciliation failures, plus pass-2 errors (including
-  // post-write cleanup failures, which do not reduce `completed`).
-  //
-  // Reconciliation failures are counted even though the action itself may have
-  // attributed perfectly. That is the point: nothing else would ever show them.
-  // `written` goes up, `failed` stays 0, the digest reports a healthy run — and
-  // meanwhile the unsigned row keeps the contract migration blocked and the
-  // duplicated window keeps being counted twice downstream. Pass 2's equivalents
-  // were already inside `gscResult.errors`; this is pass 1 catching up.
-  // (Codex P1, round 18 on PR #862.)
-  //
-  // `unattributable` is deliberately NOT counted here
-  // — it is a standing property of stored rows, recomputed identically every
-  // run, so folding it in would pin the daily digest's alarm on forever with no
-  // remediation path. It travels in the response and the run summary instead.
-  // See Issue #859.
-  const gscAttributed = Math.max(0, gscResult.actions_found - gscResult.skipped)
-
-  await cronRun.finish({
-    processed: pass1Result.processed + gscResult.actions_found,
-    completed: pass1Result.written + gscAttributed,
-    failed: pass1Result.failed + pass1Result.reconcileErrors + gscResult.errors.length,
-    summary: { pass1: pass1Result, gsc: gscResult },
-  })
-  return NextResponse.json<AttributionCronResponse>(
-    {
-      timestamp: new Date().toISOString(),
-      ...pass1Result,
-      window_days: windowDays,
-      ...(pass1.overrideRefused
-        ? {
-            window_override_refused: {
-              requested: pass1.requested!,
-              used: pass1.windowDays,
-              reason:
-                'Custom attribution windows are disabled while ' +
-                'ATTRIBUTION_DUAL_WINDOW_ENABLED is off — a second window would ' +
-                'double the evidence behind each action for consumers that still ' +
-                'count outcome rows. See Issue #859.',
-            },
-          }
-        : {}),
-      gsc: gscResult,
-    },
-    { status: 200 }
-  )
+  return finishRun(cronRun, pass1Result, gscResult, windowDays, pass1)
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────

@@ -435,13 +435,48 @@ export function keepOneCasePerAction<T extends OutcomeCaseRow>(rows: readonly T[
   return Array.from(best.values())
 }
 
+/**
+ * Which metric best stands for an action when its promised one is missing.
+ *
+ * Lower rank wins. The list is a BUSINESS order, not an alphabetical one:
+ * lexicographic ordering picked `seo.gsc.avg_position` over `seo.gsc.clicks`
+ * purely because "a" sorts before "c", so an action whose clicks confirmed but
+ * whose ranking slipped was reported as a reversal to the aggregate page, the
+ * confidence readers and the execution board alike. `benchmark-accumulator.ts`
+ * already treats clicks as the SEO representative and leaves avg_position out
+ * as an intermediate signal; this makes the two agree instead of one of them
+ * deciding by spelling. (Codex P2, round 30 on PR #862.)
+ *
+ * Anything unlisted ranks below everything listed, and ties fall back to
+ * `metric_key` so the choice is still deterministic rather than row-ordered.
+ */
+const REPRESENTATIVE_METRIC_ORDER: readonly string[] = [
+  'seo.gsc.clicks',
+  'seo.gsc.page_clicks',
+  'geo.query.mention_rate',
+  'seo.gsc.impressions',
+  'seo.gsc.page_impressions',
+  // avg_position last on purpose: a ranking move is a means, not the outcome.
+  'seo.gsc.avg_position',
+  'seo.gsc.page_position',
+]
+
+function representativeRank(metricKey: string): number {
+  const i = REPRESENTATIVE_METRIC_ORDER.indexOf(metricKey)
+  return i === -1 ? REPRESENTATIVE_METRIC_ORDER.length : i
+}
+
 function outranks<T extends OutcomeCaseRow>(candidate: T, held: T): boolean {
   const candidateIsPromise = candidate.expected_metric === candidate.metric_key
   const heldIsPromise = held.expected_metric === held.metric_key
   if (candidateIsPromise !== heldIsPromise) return candidateIsPromise
 
-  // Neither (or both) is the promised metric — fall back to the most mature
-  // window, then to metric_key so the choice never depends on row order.
+  // Neither (or both) is the promised metric — prefer the metric that actually
+  // represents the business result, then the most mature window, then
+  // metric_key so the choice never depends on row order.
+  const byBusiness = representativeRank(candidate.metric_key) - representativeRank(held.metric_key)
+  if (byBusiness !== 0) return byBusiness < 0
+
   const byWindow = (candidate.window_days ?? -1) - (held.window_days ?? -1)
   if (byWindow !== 0) return byWindow > 0
   return candidate.metric_key < held.metric_key

@@ -181,25 +181,59 @@ describe('keepOneCasePerAction', () => {
     expect(forward[0].metric_key).toBe(reverse[0].metric_key)
   })
 
-  it('falls back to the longest window when the promise was never measured', () => {
+  it('falls back to the BUSINESS metric when the promise was never measured', () => {
+    // This used to prefer the longest window, with `metric_key` alphabetical as
+    // the last tiebreak — which handed the action to `seo.gsc.avg_position`
+    // purely because "a" sorts before "c". An action whose clicks confirmed but
+    // whose ranking slipped then read as a reversal everywhere downstream.
+    //
+    // Comparing windows across DIFFERENT metrics was never like-for-like
+    // anyway: `keepOneMeasurementPerAction` has already folded each metric to
+    // its own most mature window before this runs, so the only question left is
+    // which metric states the result. (Codex P2, round 30.)
     const kept = keepOneCasePerAction([
       r('a1', 'seo.gsc.clicks', 14, 'seo.domain.organic_traffic'),
       r('a1', 'seo.gsc.impressions', 28, 'seo.domain.organic_traffic'),
     ])
 
     expect(kept).toHaveLength(1)
+    expect(kept[0].metric_key).toBe('seo.gsc.clicks')
+  })
+
+  it('never lets avg_position speak for an action that has a clicks reading', () => {
+    // The exact shape the fold used to get wrong.
+    const kept = keepOneCasePerAction([
+      r('a1', 'seo.gsc.avg_position', 28, 'seo.domain.organic_traffic'),
+      r('a1', 'seo.gsc.clicks', 28, 'seo.domain.organic_traffic'),
+    ])
+
+    expect(kept[0].metric_key).toBe('seo.gsc.clicks')
+  })
+
+  it('still prefers the most mature window between equally representative metrics', () => {
+    // Two unlisted metrics rank the same, so window maturity decides — the
+    // business order narrows the tie, it does not replace the rest of it.
+    const kept = keepOneCasePerAction([
+      r('a1', 'custom.alpha', 14, null),
+      r('a1', 'custom.beta', 28, null),
+    ])
+
     expect(kept[0].window_days).toBe(28)
   })
 
-  it('is deterministic when neither window nor promise breaks the tie', () => {
-    const kept = keepOneCasePerAction([
-      r('a1', 'seo.gsc.impressions', 28, null),
-      r('a1', 'seo.gsc.clicks', 28, null),
+  it('is deterministic when nothing else breaks the tie', () => {
+    const forward = keepOneCasePerAction([
+      r('a1', 'custom.beta', 28, null),
+      r('a1', 'custom.alpha', 28, null),
+    ])
+    const reversed = keepOneCasePerAction([
+      r('a1', 'custom.alpha', 28, null),
+      r('a1', 'custom.beta', 28, null),
     ])
 
-    expect(kept[0].metric_key).toBe('seo.gsc.avg_position' < 'seo.gsc.clicks'
-      ? 'seo.gsc.clicks'
-      : 'seo.gsc.clicks')
+    // Same answer whichever order the rows arrived in.
+    expect(forward[0].metric_key).toBe(reversed[0].metric_key)
+    expect(forward[0].metric_key).toBe('custom.alpha')
   })
 
   it('keeps different actions apart', () => {
