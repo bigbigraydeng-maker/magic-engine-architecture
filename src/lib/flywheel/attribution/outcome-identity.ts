@@ -24,6 +24,14 @@
  */
 
 import { SEO_METRIC_KEY } from '@/lib/flywheel/vocabulary'
+import { resolveGscAttributionScope } from './gsc-page-scope'
+
+/** The fields the GSC bridge's scope decision reads off an action. */
+export interface GscScopeInput {
+  action_type: string
+  expected_metric: string | null
+  payload: Record<string, unknown> | null
+}
 
 /** Which attribution pipeline produced a row. Mirrors the DB CHECK constraint. */
 export const OUTCOME_EVALUATOR = {
@@ -66,6 +74,30 @@ export const GSC_DOMAIN_METRIC_KEYS: readonly string[] = [
   SEO_METRIC_KEY.GSC_IMPRESSIONS,
   SEO_METRIC_KEY.GSC_AVG_POSITION,
 ]
+
+/** The page-scope subset — produced only for a live page-upgrade action. */
+export const GSC_PAGE_METRIC_KEYS: readonly string[] = [
+  SEO_METRIC_KEY.GSC_PAGE_CLICKS,
+  SEO_METRIC_KEY.GSC_PAGE_IMPRESSIONS,
+  SEO_METRIC_KEY.GSC_PAGE_AVG_POSITION,
+]
+
+/**
+ * The metric keys the GSC evaluator will actually produce for this action.
+ *
+ * Loading an action is not the same as answering its question: the bridge's
+ * scope decides which half of its vocabulary it emits. A domain-scope action
+ * only ever gets the three domain keys, a page-scope one only the three page
+ * keys, and a `skip` one nothing at all. An action promising a key outside that
+ * set is stranded exactly as surely as one on a flywheel the bridge cannot
+ * load, so routing has to ask this too.
+ */
+export function gscProducedMetricKeys(action: GscScopeInput): readonly string[] {
+  const scope = resolveGscAttributionScope(action)
+  if (scope.kind === 'page') return GSC_PAGE_METRIC_KEYS
+  if (scope.kind === 'domain') return GSC_DOMAIN_METRIC_KEYS
+  return []
+}
 
 /**
  * Metric families whose authoritative evaluator is not the default.
@@ -162,10 +194,17 @@ export function evaluatorCanLoad(evaluator: OutcomeEvaluatorKey, flywheel: strin
  */
 export type AttributionRouting = 'own' | 'defer' | 'unattributable'
 
-export function resolveAttributionRouting(action: {
+export interface AttributionRoutingInput {
   flywheel: string | null | undefined
   expected_metric: string
-}): AttributionRouting {
+  /** Needed to work out which keys the GSC evaluator would emit for this action. */
+  action_type?: string | null
+  payload?: Record<string, unknown> | null
+}
+
+export function resolveAttributionRouting(
+  action: AttributionRoutingInput,
+): AttributionRouting {
   // `undefined` means the caller's query did not select the column — a coding
   // mistake, not a business fact. Coercing it to "unreachable" would route
   // every GSC-owned action to `unattributable` and rebuild the exact permanent
@@ -185,7 +224,24 @@ export function resolveAttributionRouting(action: {
   // NULL is not reachable (the column is NOT NULL in the database) but is
   // handled as unreachable rather than assumed to be 'seo': guessing would
   // defer into a hole, reporting will not.
-  return evaluatorCanLoad(owner, action.flywheel ?? '') ? 'defer' : 'unattributable'
+  if (!evaluatorCanLoad(owner, action.flywheel ?? '')) return 'unattributable'
+
+  // Loading the action is necessary but not sufficient. The GSC evaluator emits
+  // domain keys for a domain-scope action and page keys for a page-scope one,
+  // so an action promising `seo.gsc.page_clicks` from a plain `seo.publish_blog`
+  // is deferred to a writer that will only ever produce the domain three — and
+  // the adapters accept that combination today. Deferring it would be the same
+  // silent hole as deferring across flywheels.
+  if (owner === OUTCOME_EVALUATOR.GSC_SNAPSHOTS) {
+    const produced = gscProducedMetricKeys({
+      action_type: action.action_type ?? '',
+      expected_metric: action.expected_metric,
+      payload: action.payload ?? null,
+    })
+    if (!produced.includes(action.expected_metric)) return 'unattributable'
+  }
+
+  return 'defer'
 }
 
 /**

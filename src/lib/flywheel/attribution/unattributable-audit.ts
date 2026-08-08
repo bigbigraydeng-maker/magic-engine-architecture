@@ -29,8 +29,9 @@ interface ActionRow {
   id: string
   client_id: string
   flywheel: string
-  expected_metric: string
   action_type: string | null
+  payload: Record<string, unknown> | null
+  expected_metric: string
   executed_at: string | null
 }
 
@@ -46,7 +47,7 @@ export async function auditUnattributableActions(
 ): Promise<UnattributableAction[]> {
   let query = supabase
     .from('flywheel_actions')
-    .select('id, client_id, flywheel, expected_metric, action_type, executed_at')
+    .select('id, client_id, flywheel, action_type, payload, expected_metric, executed_at')
     .not('expected_metric', 'is', null)
     .order('executed_at', { ascending: false })
 

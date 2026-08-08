@@ -97,9 +97,10 @@ export async function runAttributionJob(
 
   let actionsQuery = supabaseAdmin
     .from('flywheel_actions')
-    // `flywheel` is needed for routing: owning a metric is not the same as
-    // being able to load the action that promised it.
-    .select('id, client_id, flywheel, expected_metric, expected_delta, executed_at')
+    // `flywheel`, `action_type` and `payload` are all routing inputs: owning a
+    // metric is not the same as being able to load the action that promised it,
+    // and loading it is not the same as producing the key it asked for.
+    .select('id, client_id, flywheel, action_type, payload, expected_metric, expected_delta, executed_at')
     .not('expected_metric', 'is', null)
 
   if (options.clientId) {
@@ -193,6 +194,8 @@ interface ActionRow {
   id: string
   client_id: string
   flywheel: string | null
+  action_type: string | null
+  payload: Record<string, unknown> | null
   expected_metric: string
   expected_delta: number | null
   executed_at: string

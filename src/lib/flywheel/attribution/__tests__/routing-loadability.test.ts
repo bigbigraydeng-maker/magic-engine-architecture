@@ -21,6 +21,7 @@ import {
   OUTCOME_EVALUATOR,
   evaluatorCanLoad,
   evaluatorLoadableFlywheels,
+  gscProducedMetricKeys,
   resolveAttributionRouting,
 } from '../outcome-identity'
 
@@ -232,6 +233,113 @@ describe('pass2ClientIds', () => {
   })
 })
 
+// ── Loading the action is not the same as producing its metric ──────────────
+//
+// The bridge's scope decides which half of its vocabulary it emits: domain keys
+// for a domain-scope action, page keys for a page-scope one, nothing for a
+// skipped one. Deferring an action whose promised key is outside that set is
+// the same silent hole as deferring across flywheels — and the adapters accept
+// the combination today (`/api/flywheel/execute` passes `expectedMetric`
+// through unvalidated).
+
+const PAGE_LIVE = {
+  action_type: 'cms_update_existing',
+  payload: { status: 'live', page_url: 'https://example.com/guide' },
+}
+
+describe('routing checks the metric the owner would actually produce', () => {
+  it('defers a domain key from a domain-scope action', () => {
+    expect(resolveAttributionRouting({
+      flywheel: 'seo',
+      action_type: 'seo.publish_blog',
+      payload: null,
+      expected_metric: 'seo.gsc.clicks',
+    })).toBe('defer')
+  })
+
+  it('strands a PAGE key promised by a domain-scope action', () => {
+    // The case Codex found: the bridge loads it, scopes it to domain, and only
+    // ever writes the three domain keys — page_clicks never appears.
+    expect(resolveAttributionRouting({
+      flywheel: 'seo',
+      action_type: 'seo.publish_blog',
+      payload: null,
+      expected_metric: 'seo.gsc.page_clicks',
+    })).toBe('unattributable')
+  })
+
+  it('defers a page key from a live page-scope action', () => {
+    expect(resolveAttributionRouting({
+      flywheel: 'seo',
+      ...PAGE_LIVE,
+      expected_metric: 'seo.gsc.page_clicks',
+    })).toBe('defer')
+  })
+
+  it('strands a DOMAIN key promised by a page-scope action', () => {
+    // The mirror image, equally silent.
+    expect(resolveAttributionRouting({
+      flywheel: 'seo',
+      ...PAGE_LIVE,
+      expected_metric: 'seo.gsc.clicks',
+    })).toBe('unattributable')
+  })
+
+  it('strands any GSC key when the bridge would skip the action entirely', () => {
+    expect(resolveAttributionRouting({
+      flywheel: 'seo',
+      action_type: 'cms_update_existing',
+      payload: { status: 'pr_open' }, // not live → scope 'skip'
+      expected_metric: 'seo.gsc.page_clicks',
+    })).toBe('unattributable')
+  })
+
+  it('leaves non-GSC metrics alone — the scope question is the GSC bridge\'s', () => {
+    expect(resolveAttributionRouting({
+      flywheel: 'seo',
+      ...PAGE_LIVE,
+      expected_metric: 'seo.domain.organic_traffic',
+    })).toBe('own')
+  })
+})
+
+describe('gscProducedMetricKeys', () => {
+  it('reports the three domain keys for a domain-scope action', () => {
+    expect([...gscProducedMetricKeys({
+      action_type: 'seo.publish_blog',
+      payload: null,
+      expected_metric: 'seo.gsc.clicks',
+    })].sort()).toEqual(['seo.gsc.avg_position', 'seo.gsc.clicks', 'seo.gsc.impressions'])
+  })
+
+  it('reports the three page keys for a live page-scope action', () => {
+    expect([...gscProducedMetricKeys({
+      ...PAGE_LIVE,
+      expected_metric: 'seo.gsc.page_clicks',
+    })].sort()).toEqual([
+      'seo.gsc.page_avg_position',
+      'seo.gsc.page_clicks',
+      'seo.gsc.page_impressions',
+    ])
+  })
+
+  it('reports nothing when the bridge would skip the action', () => {
+    expect(gscProducedMetricKeys({
+      action_type: 'cms_update_existing',
+      payload: { status: 'pr_open' },
+      expected_metric: 'seo.gsc.page_clicks',
+    })).toEqual([])
+  })
+
+  it('never claims a key the two scopes do not cover', () => {
+    const all = new Set([
+      ...gscProducedMetricKeys({ action_type: 'x', payload: null, expected_metric: 'seo.gsc.clicks' }),
+      ...gscProducedMetricKeys({ ...PAGE_LIVE, expected_metric: 'seo.gsc.page_clicks' }),
+    ])
+    expect(all.size).toBe(6) // exactly the evaluator's vocabulary, no more
+  })
+})
+
 // ── The routing input must actually be fetched ──────────────────────────────
 
 describe('the flywheel column is load-bearing, not incidental', () => {
@@ -273,7 +381,10 @@ describe('the flywheel column is load-bearing, not incidental', () => {
     )
     const select = source.match(/\.select\('([^']*flywheel_actions?[^']*|[^']+)'\)/)
     expect(select).not.toBeNull()
-    expect(select![1].split(',').map(c => c.trim())).toContain('flywheel')
+    const columns = select![1].split(',').map(c => c.trim())
+    for (const needed of ['flywheel', 'action_type', 'payload']) {
+      expect(columns).toContain(needed)
+    }
   })
 })
 
