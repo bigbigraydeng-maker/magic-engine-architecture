@@ -14,6 +14,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchAll } from '@/lib/supabase-paginate'
 import {
   resolveAttributionRoutingDetailed,
   type UnattributableReason,
@@ -52,22 +53,33 @@ export async function auditUnattributableActions(
   supabase: SupabaseClient,
   clientIds?: string[],
 ): Promise<UnattributableAction[]> {
-  let query = supabase
-    .from('flywheel_actions')
-    .select('id, client_id, flywheel, action_type, payload, expected_metric, executed_at')
-    .not('expected_metric', 'is', null)
-    .order('executed_at', { ascending: false })
+  // Paginated, not a bare select: PostgREST caps a single response at 1000 rows
+  // and says nothing about it. Combined with newest-first ordering, an
+  // unpaginated read silently drops the OLDEST actions — and a stranded action
+  // only gets older, so precisely the ones most overdue for attention would be
+  // the ones that never reach the todo. `fetchAll` throws rather than handing
+  // back half a result, which is the whole reason it exists.
+  const rows = await fetchAll<ActionRow>((from, to) => {
+    let query = supabase
+      .from('flywheel_actions')
+      .select('id, client_id, flywheel, action_type, payload, expected_metric, executed_at')
+      .not('expected_metric', 'is', null)
+      // `id` as tiebreak: executed_at is not unique, and an unstable sort across
+      // page boundaries duplicates or drops rows there.
+      .order('executed_at', { ascending: false })
+      .order('id', { ascending: false })
 
-  if (clientIds?.length) query = query.in('client_id', clientIds)
+    if (clientIds?.length) query = query.in('client_id', clientIds)
 
-  const { data, error } = await query
-  if (error) {
-    throw new Error(`auditUnattributableActions: ${error.message}`)
-  }
+    return query.range(from, to)
+  }).catch((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`auditUnattributableActions: ${message}`)
+  })
 
   const stranded: UnattributableAction[] = []
 
-  for (const row of (data ?? []) as ActionRow[]) {
+  for (const row of rows) {
     const result = resolveAttributionRoutingDetailed(row)
     if (result.routing !== 'unattributable') continue
 
