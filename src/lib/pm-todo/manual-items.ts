@@ -23,6 +23,7 @@ import {
   auditUnattributableActions,
   type UnattributableAction,
 } from '@/lib/flywheel/attribution/unattributable-audit'
+import type { UnattributableReason } from '@/lib/flywheel/attribution/outcome-identity'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { AUTO_LANDED_AGENT } from '@/lib/diagnostic/auto-prescribe'
 import { isHandAddedItem } from '@/lib/diagnostic/prescription-landing'
@@ -1003,15 +1004,19 @@ async function pushPrescriptionItems(
 /**
  * Actions promising a metric no evaluator can compute.
  *
- * Attribution finds these on every run and can do nothing about them: the
- * metric's owning evaluator does not load that flywheel, and the ownership
- * CHECK forbids anyone else writing the outcome. Left alone they are a silent
- * permanent gap — the action looks executed, and its effect never appears.
+ * Attribution finds these on every run and can do nothing about them: either
+ * the metric's owning evaluator does not load that flywheel, or it loads the
+ * action but its scope produces a different set of keys. Left alone they are a
+ * silent permanent gap — the action looks executed, and its effect never
+ * appears.
+ *
+ * Grouped by CAUSE, not just by client: the three causes have different fixes,
+ * and a note that names the wrong one sends the reader looking in the wrong
+ * place — which is the same as not reporting it at all.
  *
  * Deliberately NOT routed through the cron's failure count: this is a standing
  * property of stored rows, so it would pin the daily digest's alarm on forever
  * while carrying no diagnosis (the digest reads error_message, never summary).
- * It belongs here, where a person gets the action ids and a way to act.
  */
 async function pushUnattributableItems(
   supabase: SupabaseClient,
@@ -1022,31 +1027,93 @@ async function pushUnattributableItems(
   const stranded = await auditUnattributableActions(supabase, clientIds)
   if (stranded.length === 0) return
 
-  // One item per client: the fix is per action, but the decision ("re-point
-  // these at a metric someone measures") is one conversation per client.
-  const byClient = new Map<string, UnattributableAction[]>()
+  const groups = new Map<string, UnattributableAction[]>()
   for (const row of stranded) {
-    const list = byClient.get(row.client_id) ?? []
+    const key = `${row.client_id}::${row.reason}`
+    const list = groups.get(key) ?? []
     list.push(row)
-    byClient.set(row.client_id, list)
+    groups.set(key, list)
   }
 
-  for (const [clientId, rows] of Array.from(byClient.entries())) {
-    const metrics = Array.from(new Set(rows.map((r: UnattributableAction) => r.expected_metric))).join('、')
-    const wheels = Array.from(new Set(rows.map((r: UnattributableAction) => r.flywheel))).join('、')
+  for (const [key, rows] of Array.from(groups.entries())) {
+    const clientId = key.split('::')[0]
+    const n = rows.length
+    const metrics = Array.from(
+      new Set(rows.map((r: UnattributableAction) => r.expected_metric)),
+    ).join('、')
 
     items.push({
       kind: 'action_unattributable',
       client_id: clientId,
       client_name: nameOf(clientId),
-      what:
-        `${rows.length} 个动作承诺的效果指标没有任何人能算 —— ${wheels} 战线的动作挂了 ${metrics}，` +
-        `而这个指标只有搜索后台那条线能算，它又只认 SEO 战线的动作。这些动作会一直显示「已执行」，但永远不会有效果数据`,
-      // 没有改这个字段的界面，所以别让他去找。这是我们派活时配错的，说清楚谁来修。
-      how:
-        '这条不用你动手 —— 是我们派活时把指标配错了战线。回我一句「改指标」我就去改，' +
-        '改完下一轮归因就能算出来。想先看是哪几个动作，点链接进执行看板',
+      what: describeUnattributable(rows[0].reason, n, metrics, rows),
+      how: adviseUnattributable(rows[0].reason, rows),
       href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/execution`,
     })
   }
+}
+
+function describeUnattributable(
+  reason: UnattributableReason,
+  n: number,
+  metrics: string,
+  rows: UnattributableAction[],
+): string {
+  const tail = '这些动作会一直显示「已执行」，但永远不会有效果数据'
+
+  if (reason === 'cross_flywheel') {
+    const wheels = Array.from(new Set(rows.map((r) => r.flywheel))).join('、')
+    return (
+      `${n} 个动作挂的效果指标跟它们所在的战线对不上 —— ${wheels} 战线的动作挂了 ${metrics}，` +
+      `而这个指标只有搜索后台那条线能算，它又只认 SEO 战线的动作。${tail}`
+    )
+  }
+
+  if (reason === 'scope_mismatch') {
+    return (
+      `${n} 个 SEO 动作挂的指标跟它们的量法对不上 —— 挂了 ${metrics}，` +
+      `但搜索后台对这类动作只出另一个口径的数（整站 / 单页各算各的）。${tail}`
+    )
+  }
+
+  return (
+    `${n} 个页面升级动作挂了 ${metrics}，但它们还没标成已上线，` +
+    `搜索后台那条线整个跳过它们。${tail}`
+  )
+}
+
+function adviseUnattributable(
+  reason: UnattributableReason,
+  rows: UnattributableAction[],
+): string {
+  // 没有改这两个字段的界面，所以别让人去找入口 —— 说清是我们这边的事，
+  // 以及具体该改成什么。
+  if (reason === 'cross_flywheel') {
+    return (
+      '这条不用你动手 —— 是我们派活时把指标配到了错的战线。回我一句「改指标」我就去改，' +
+      '改完下一轮归因就能算出来。想先看是哪几个动作，点链接进执行看板'
+    )
+  }
+
+  if (reason === 'scope_mismatch') {
+    const swap = Array.from(
+      new Set(
+        rows
+          .filter((r) => r.suggested_metric)
+          .map((r) => `${r.expected_metric} → ${r.suggested_metric}`),
+      ),
+    ).join('；')
+    const detail = swap
+      ? `具体是把 ${swap} 换过来`
+      : '具体换成这类动作真正能拿到的那个口径'
+    return (
+      `这条不用你动手 —— 战线没配错，是量法配错了：${detail}。` +
+      '回我一句「改口径」我就去改。想先看是哪几个动作，点链接进执行看板'
+    )
+  }
+
+  return (
+    '这条多半会自己好 —— 这些页面改动还没合并上线，上线那一刻系统会自动把指标补上。' +
+    '要是它们已经卡了好几天没动静，回我一句「卡住了」我去查合并那一步'
+  )
 }

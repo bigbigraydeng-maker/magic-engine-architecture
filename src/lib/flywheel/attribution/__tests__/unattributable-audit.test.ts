@@ -15,6 +15,7 @@ interface Row {
   flywheel: string
   expected_metric: string
   action_type: string | null
+  payload: Record<string, unknown> | null
   executed_at: string | null
 }
 
@@ -44,6 +45,7 @@ function row(over: Partial<Row> = {}): Row {
     flywheel: 'geo',
     expected_metric: 'seo.gsc.clicks',
     action_type: 'geo.deploy_directive',
+    payload: null,
     executed_at: '2026-06-01T00:00:00.000Z',
     ...over,
   }
@@ -113,5 +115,82 @@ describe('auditUnattributableActions', () => {
     const found = await auditUnattributableActions(client)
 
     expect(found.map(f => f.action_id)).toEqual(['stranded'])
+  })
+})
+
+// ── The reason has to survive into the handoff ──────────────────────────────
+//
+// Three causes, three fixes. A note that names the wrong one sends the reader
+// looking in the wrong place, which is the same as not reporting it.
+
+describe('unattributable reasons', () => {
+  it('labels a metric on a flywheel the owner cannot load as cross_flywheel', async () => {
+    const { client } = fakeSupabase([row({ flywheel: 'geo', expected_metric: 'seo.gsc.clicks' })])
+
+    const [found] = await auditUnattributableActions(client)
+
+    expect(found.reason).toBe('cross_flywheel')
+    expect(found.suggested_metric).toBeNull() // no counterpart makes sense here
+  })
+
+  it('labels a page key on a domain-scope action as scope_mismatch, with the swap', async () => {
+    const { client } = fakeSupabase([
+      row({
+        flywheel: 'seo',
+        action_type: 'seo.publish_blog',
+        payload: null,
+        expected_metric: 'seo.gsc.page_clicks',
+      }),
+    ])
+
+    const [found] = await auditUnattributableActions(client)
+
+    expect(found.reason).toBe('scope_mismatch')
+    expect(found.suggested_metric).toBe('seo.gsc.clicks')
+  })
+
+  it('labels a domain key on a page-scope action as scope_mismatch, with the swap', async () => {
+    const { client } = fakeSupabase([
+      row({
+        flywheel: 'seo',
+        action_type: 'cms_update_existing',
+        payload: { status: 'live', page_url: 'https://example.com/g' },
+        expected_metric: 'seo.gsc.impressions',
+      }),
+    ])
+
+    const [found] = await auditUnattributableActions(client)
+
+    expect(found.reason).toBe('scope_mismatch')
+    expect(found.suggested_metric).toBe('seo.gsc.page_impressions')
+  })
+
+  it('labels a not-yet-live page upgrade as scope_skip', async () => {
+    const { client } = fakeSupabase([
+      row({
+        flywheel: 'seo',
+        action_type: 'cms_update_existing',
+        payload: { status: 'pr_open' },
+        expected_metric: 'seo.gsc.page_clicks',
+      }),
+    ])
+
+    const [found] = await auditUnattributableActions(client)
+
+    expect(found.reason).toBe('scope_skip')
+    // Nothing to swap to — the action simply is not live yet.
+    expect(found.suggested_metric).toBeNull()
+  })
+
+  it('never suggests a metric the owner still would not produce', async () => {
+    const { client } = fakeSupabase([
+      row({ flywheel: 'seo', action_type: 'seo.publish_blog', payload: null, expected_metric: 'seo.gsc.page_avg_position' }),
+      row({ id: 'a2', flywheel: 'seo', action_type: 'cms_update_existing', payload: { status: 'live', page_url: 'https://e.com/x' }, expected_metric: 'seo.gsc.avg_position' }),
+    ])
+
+    const found = await auditUnattributableActions(client)
+
+    expect(found[0].suggested_metric).toBe('seo.gsc.avg_position')
+    expect(found[1].suggested_metric).toBe('seo.gsc.page_avg_position')
   })
 })

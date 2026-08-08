@@ -14,7 +14,10 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveAttributionRouting } from './outcome-identity'
+import {
+  resolveAttributionRoutingDetailed,
+  type UnattributableReason,
+} from './outcome-identity'
 
 export interface UnattributableAction {
   action_id: string
@@ -23,6 +26,10 @@ export interface UnattributableAction {
   expected_metric: string
   action_type: string | null
   executed_at: string | null
+  /** Why nobody can attribute it — the three causes have different fixes. */
+  reason: UnattributableReason
+  /** The metric this action would actually get, when one exists. */
+  suggested_metric: string | null
 }
 
 interface ActionRow {
@@ -58,14 +65,23 @@ export async function auditUnattributableActions(
     throw new Error(`auditUnattributableActions: ${error.message}`)
   }
 
-  return ((data ?? []) as ActionRow[])
-    .filter(row => resolveAttributionRouting(row) === 'unattributable')
-    .map(row => ({
+  const stranded: UnattributableAction[] = []
+
+  for (const row of (data ?? []) as ActionRow[]) {
+    const result = resolveAttributionRoutingDetailed(row)
+    if (result.routing !== 'unattributable') continue
+
+    stranded.push({
       action_id: row.id,
       client_id: row.client_id,
       flywheel: row.flywheel,
       expected_metric: row.expected_metric,
       action_type: row.action_type,
       executed_at: row.executed_at,
-    }))
+      reason: result.reason,
+      suggested_metric: result.suggestedMetric,
+    })
+  }
+
+  return stranded
 }

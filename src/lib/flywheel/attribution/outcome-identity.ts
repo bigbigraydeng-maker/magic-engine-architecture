@@ -194,6 +194,28 @@ export function evaluatorCanLoad(evaluator: OutcomeEvaluatorKey, flywheel: strin
  */
 export type AttributionRouting = 'own' | 'defer' | 'unattributable'
 
+/**
+ * Why nobody can attribute an action. The three have different fixes, so the
+ * handoff to a human is only actionable if it knows which one it is.
+ */
+export type UnattributableReason =
+  /** The owning evaluator does not load this flywheel at all. */
+  | 'cross_flywheel'
+  /** It loads the action, but its scope emits a different set of keys. */
+  | 'scope_mismatch'
+  /** It would skip the action entirely — nothing is produced at any key. */
+  | 'scope_skip'
+
+export type AttributionRoutingResult =
+  | { routing: 'own' }
+  | { routing: 'defer' }
+  | {
+      routing: 'unattributable'
+      reason: UnattributableReason
+      /** The key the owner WOULD produce for this action, when there is one. */
+      suggestedMetric: string | null
+    }
+
 export interface AttributionRoutingInput {
   flywheel: string | null | undefined
   expected_metric: string
@@ -205,6 +227,21 @@ export interface AttributionRoutingInput {
 export function resolveAttributionRouting(
   action: AttributionRoutingInput,
 ): AttributionRouting {
+  return resolveAttributionRoutingDetailed(action).routing
+}
+
+/**
+ * Routing, plus why an action is stranded and what would fix it.
+ *
+ * The reason matters because the fixes differ: a metric on the wrong flywheel
+ * needs a different metric (or a different flywheel), while a scope mismatch
+ * inside the SEO flywheel needs the domain/page counterpart of the same
+ * measurement. A handoff that names the wrong cause sends someone looking in
+ * the wrong place, which is the same as not reporting it.
+ */
+export function resolveAttributionRoutingDetailed(
+  action: AttributionRoutingInput,
+): AttributionRoutingResult {
   // `undefined` means the caller's query did not select the column — a coding
   // mistake, not a business fact. Coercing it to "unreachable" would route
   // every GSC-owned action to `unattributable` and rebuild the exact permanent
@@ -218,13 +255,17 @@ export function resolveAttributionRouting(
     )
   }
 
-  if (ownsMetric(OUTCOME_EVALUATOR.FLYWHEEL_METRICS, action.expected_metric)) return 'own'
+  if (ownsMetric(OUTCOME_EVALUATOR.FLYWHEEL_METRICS, action.expected_metric)) {
+    return { routing: 'own' }
+  }
 
   const owner = resolveAuthoritativeEvaluator(action.expected_metric)
   // NULL is not reachable (the column is NOT NULL in the database) but is
   // handled as unreachable rather than assumed to be 'seo': guessing would
   // defer into a hole, reporting will not.
-  if (!evaluatorCanLoad(owner, action.flywheel ?? '')) return 'unattributable'
+  if (!evaluatorCanLoad(owner, action.flywheel ?? '')) {
+    return { routing: 'unattributable', reason: 'cross_flywheel', suggestedMetric: null }
+  }
 
   // Loading the action is necessary but not sufficient. The GSC evaluator emits
   // domain keys for a domain-scope action and page keys for a page-scope one,
@@ -233,15 +274,44 @@ export function resolveAttributionRouting(
   // the adapters accept that combination today. Deferring it would be the same
   // silent hole as deferring across flywheels.
   if (owner === OUTCOME_EVALUATOR.GSC_SNAPSHOTS) {
-    const produced = gscProducedMetricKeys({
+    const scopeInput = {
       action_type: action.action_type ?? '',
       expected_metric: action.expected_metric,
       payload: action.payload ?? null,
-    })
-    if (!produced.includes(action.expected_metric)) return 'unattributable'
+    }
+    const produced = gscProducedMetricKeys(scopeInput)
+
+    if (produced.length === 0) {
+      return { routing: 'unattributable', reason: 'scope_skip', suggestedMetric: null }
+    }
+    if (!produced.includes(action.expected_metric)) {
+      // Only suggest a key this action would actually get — a suggestion the
+      // owner still would not produce is worse than no suggestion.
+      const counterpart = counterpartMetricKey(action.expected_metric)
+      return {
+        routing: 'unattributable',
+        reason: 'scope_mismatch',
+        suggestedMetric: counterpart && produced.includes(counterpart) ? counterpart : null,
+      }
+    }
   }
 
-  return 'defer'
+  return { routing: 'defer' }
+}
+
+/**
+ * The same measurement at the other scope — `seo.gsc.page_clicks` ⇄
+ * `seo.gsc.clicks`. The two key lists are parallel by construction, so the
+ * counterpart is the entry at the same index.
+ */
+function counterpartMetricKey(metricKey: string): string | null {
+  const domainIndex = GSC_DOMAIN_METRIC_KEYS.indexOf(metricKey)
+  if (domainIndex >= 0) return GSC_PAGE_METRIC_KEYS[domainIndex] ?? null
+
+  const pageIndex = GSC_PAGE_METRIC_KEYS.indexOf(metricKey)
+  if (pageIndex >= 0) return GSC_DOMAIN_METRIC_KEYS[pageIndex] ?? null
+
+  return null
 }
 
 /**
