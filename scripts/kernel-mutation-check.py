@@ -493,6 +493,260 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         test="src/lib/kernel/__tests__/policy-window.test.ts",
         expect_fail_contains=".or 永真",
     ),
+    # ── S1：恢复权原子领取 ───────────────────────────────────────────────
+    dict(
+        name="S1 恢复 RPC 去掉状态 CAS（running/succeeded 也能被拽回 queued）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (run.status !== kind) return no(`not_recoverable:${String(run.status)}`)""",
+        new="""    // mutated: 不再要求 run 仍停在那个可恢复的终态""",
+        test="src/lib/kernel/__tests__/store.test.ts",
+        expect_fail_contains="状态 CAS",
+    ),
+    dict(
+        name="S1 恢复 RPC 去掉指针 CAS（拿过期决策也能恢复）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if ((run.authorization_decision_id ?? null) !== expected) return no('decision_not_current')""",
+        new="""    // mutated: 不再比对 run 当前指着的是不是这条决策""",
+        test="src/lib/kernel/__tests__/store.test.ts",
+        expect_fail_contains="指针 CAS",
+    ),
+    dict(
+        name="S1 恢复 RPC 不再查可恢复白名单",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""      if (!code || !RECOVERABLE.includes(code)) {
+        return no(`deny_code_not_recoverable:${code ?? 'null'}`)
+      }""",
+        new="""      if (false) {
+        return no(`deny_code_not_recoverable:${code ?? 'null'}`)
+      }""",
+        test="src/lib/kernel/__tests__/store.test.ts",
+        expect_fail_contains="白名单在 RPC 里也强制",
+    ),
+    dict(
+        name="S1 恢复 RPC 不再拦「人明确拒过的」",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""      if (decision!.decided_by === 'human') return no('human_reject_not_recoverable')""",
+        new="""      // mutated: 人拒过的也能被系统翻案""",
+        test="src/lib/kernel/__tests__/store.test.ts",
+        expect_fail_contains="人明确拒过",
+    ),
+    dict(
+        name="S1 恢复时把已花的钱一起抹掉（步骤重置顺手清 cost）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""      st.status = 'pending'
+      st.last_error = null""",
+        new="""      st.status = 'pending'
+      st.cost_actual_usd = 0
+      st.last_error = null""",
+        test="src/lib/kernel/__tests__/store.test.ts",
+        expect_fail_contains="不碰已花的钱",
+    ),
+    dict(
+        name="S1 恢复不走原子 RPC（退回 read → update）",
+        file="src/lib/kernel/runner.ts",
+        old="""  const claimed = await claimRunRecovery(deps.supabase, {
+    runId,
+    expectedDecisionId: run.authorization_decision_id,
+    kind: 'denied',
+    actor: recoveredByUser,
+    reason,
+  })
+  if (!claimed.ok) throw recoveryFailureToError(claimed.reason, 'denied')""",
+        new="""  await updateRun(deps.supabase, runId, {
+    status: 'queued',
+    needs_human: false,
+    last_error: null,
+    finished_at: null,
+    authorization_decision_id: null,
+    evidence: {
+      ...(run.evidence ?? {}),
+      last_recovered_by: recoveredByUser,
+      last_recovered_at: deps.now().toISOString(),
+      recovery_reason: reason,
+      recovery_kind: 'denied',
+      recovered_from_deny_code: denyDecision.deny_code,
+    },
+  })""",
+        test="src/lib/kernel/__tests__/recovery-concurrency.test.ts",
+        expect_fail_contains="并发恢复 denied",
+    ),
+    dict(
+        name="S1 死信重跑不走原子 RPC（退回 read → update）",
+        file="src/lib/kernel/runner.ts",
+        old="""  const claimed = await claimRunRecovery(deps.supabase, {
+    runId,
+    expectedDecisionId: run.authorization_decision_id,
+    kind: 'dead_letter',
+    actor: resumedByUser,
+    reason,
+  })
+  if (!claimed.ok) throw recoveryFailureToError(claimed.reason, 'dead_letter')""",
+        new="""  const stepsToReset = await listSteps(deps.supabase, runId)
+  for (const st of stepsToReset) {
+    if (st.status === 'succeeded') continue
+    await updateStep(deps.supabase, st.id, {
+      status: 'pending', last_error: null, next_attempt_at: null, finished_at: null,
+    })
+  }
+  await updateRun(deps.supabase, runId, {
+    status: 'queued',
+    needs_human: false,
+    last_error: null,
+    finished_at: null,
+    authorization_decision_id: null,
+    evidence: { ...(run.evidence ?? {}), last_recovered_by: resumedByUser, recovery_kind: 'dead_letter', recovery_reason: reason },
+  })""",
+        test="src/lib/kernel/__tests__/recovery-concurrency.test.ts",
+        expect_fail_contains="并发恢复 dead_letter",
+    ),
+    # ── S2：executionItem 跨客户 ─────────────────────────────────────────
+    dict(
+        name="S2 应用层去掉执行卡片归属检查",
+        file="src/lib/kernel/runner.ts",
+        old="""    if (item.client_id !== input.clientId) {""",
+        new="""    if (false) {""",
+        test="src/lib/kernel/__tests__/execution-item-ownership.test.ts",
+        expect_fail_contains="应用层拒绝",
+    ),
+    dict(
+        name="S2 假件去掉执行卡片复合外键复刻",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""          if (table === 'action_runs' && row.execution_item_id) {""",
+        new="""          if (false) {""",
+        test="src/lib/kernel/__tests__/execution-item-ownership.test.ts",
+        expect_fail_contains="数据库层拒绝",
+    ),
+    # ── S3：死信前先落 cost / verification ───────────────────────────────
+    dict(
+        name="S3 判定之前不先落库（钱和失败的验证都丢了）",
+        file="src/lib/kernel/gateway.ts",
+        old="""        stepCostSoFar += cost
+        const observedAt = deps.now().toISOString()
+        await updateStep(deps.supabase, step.id, {
+          attempt,
+          output: result.output,
+          verification: result.verification ?? null,
+          cost_actual_usd: stepCostSoFar,
+          heartbeat_at: observedAt,
+        })
+        spent += cost""",
+        new="""        stepCostSoFar += cost
+        spent += cost""",
+        test="src/lib/kernel/__tests__/cost-persistence.test.ts",
+        expect_fail_contains="先落库",
+    ),
+    dict(
+        name="S3 成本改回覆盖语义（重跑让历史已花的钱变小）",
+        file="src/lib/kernel/gateway.ts",
+        old="""          cost_actual_usd: stepCostSoFar,""",
+        new="""          cost_actual_usd: cost,""",
+        test="src/lib/kernel/__tests__/cost-persistence.test.ts",
+        expect_fail_contains="累加",
+    ),
+    dict(
+        name="S3 spent 不再含历史（每次重跑预算从零起算）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  let spent = steps.reduce((sum, s) => sum + Number(s.cost_actual_usd ?? 0), 0)""",
+        new="""  let spent = 0""",
+        test="src/lib/kernel/__tests__/cost-persistence.test.ts",
+        expect_fail_contains="预算从历史真实花费起算",
+    ),
+    dict(
+        name="S3 去掉开跑前那道预算闸（超了还再花一次才发现）",
+        file="src/lib/kernel/gateway.ts",
+        old="""    if (ctx.costCapUsd !== null && spent > ctx.costCapUsd) {
+      return failRun(deps, args.run, steps, new KernelError(
+        'COST_CAP_EXCEEDED',""",
+        new="""    if (false) {
+      return failRun(deps, args.run, steps, new KernelError(
+        'COST_CAP_EXCEEDED',""",
+        test="src/lib/kernel/__tests__/cost-persistence.test.ts",
+        expect_fail_contains="一次都不许再调",
+    ),
+    dict(
+        name="S3 开跑前的预算闸改成 >=（把零成本能力全拦死）",
+        file="src/lib/kernel/gateway.ts",
+        old="""    if (ctx.costCapUsd !== null && spent > ctx.costCapUsd) {
+      return failRun(deps, args.run, steps, new KernelError(
+        'COST_CAP_EXCEEDED',""",
+        new="""    if (ctx.costCapUsd !== null && spent >= ctx.costCapUsd) {
+      return failRun(deps, args.run, steps, new KernelError(
+        'COST_CAP_EXCEEDED',""",
+        test="src/lib/kernel/__tests__/safe-capability.test.ts",
+        expect_fail_contains="",
+    ),
+    # ── 删除侧的引用动作 ─────────────────────────────────────────────────
+    dict(
+        name="删卡片改成连执行台账一起删（SET NULL 没了）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""            if (r.execution_item_id && ids.has(r.execution_item_id)) r.execution_item_id = null""",
+        new="""            void ids""",
+        test="src/lib/kernel/__tests__/execution-item-ownership.test.ts",
+        expect_fail_contains="只把指针置空",
+    ),
+    dict(
+        name="有台账的目标也能直接删掉（NO ACTION 没了）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""        if (table === 'goals' && removed.length > 0) {""",
+        new="""        if (false) {""",
+        test="src/lib/kernel/__tests__/execution-item-ownership.test.ts",
+        expect_fail_contains="删不掉",
+    ),
+    dict(
+        name="SQL 里把卡片外键的 SET NULL 去掉（跟内存复刻分家）",
+        file="supabase/migrations/20260808000003_me2_execution_kernel_v1.sql",
+        old="""    ON DELETE SET NULL (execution_item_id),""",
+        new="""    ,""",
+        test="src/lib/kernel/__tests__/architecture.test.ts",
+        expect_fail_contains="删除语义",
+    ),
+    dict(
+        name="SQL 里给目标外键加上 SET NULL（会撞 goal_matches_purpose）",
+        file="supabase/migrations/20260808000003_me2_execution_kernel_v1.sql",
+        old="""    FOREIGN KEY (client_id, goal_id) REFERENCES public.goals (client_id, id),""",
+        new="""    FOREIGN KEY (client_id, goal_id) REFERENCES public.goals (client_id, id) ON DELETE SET NULL,""",
+        test="src/lib/kernel/__tests__/architecture.test.ts",
+        expect_fail_contains="删除语义",
+    ),
+    dict(
+        name="恢复 RPC 把两条 UPDATE 调个个儿，顺手抹掉历史成本",
+        file="supabase/migrations/20260808000003_me2_execution_kernel_v1.sql",
+        # 这条专打「按下一条语句切片」的写法：调换顺序后那种切法会切出空串，
+        # 而 expect('').not.toContain(...) 恒真 —— 断言静默失效，抹钱就混过去了。
+        old="""  UPDATE public.action_run_steps
+     SET status          = 'pending',
+         last_error      = NULL,
+         next_attempt_at = NULL,
+         finished_at     = NULL,
+         updated_at      = now()
+   WHERE run_id = v_run.id
+     AND status <> 'succeeded';
+
+  UPDATE public.action_runs
+     SET status = 'queued',""",
+        new="""  UPDATE public.action_runs
+     SET status = 'queued',""",
+        old2="""         updated_at = now()
+   WHERE id = v_run.id;
+
+  RETURN QUERY SELECT true, 'claimed';""",
+        new2="""         updated_at = now()
+   WHERE id = v_run.id;
+
+  UPDATE public.action_run_steps
+     SET status          = 'pending',
+         last_error      = NULL,
+         next_attempt_at = NULL,
+         finished_at     = NULL,
+         cost_actual_usd = 0,
+         updated_at      = now()
+   WHERE run_id = v_run.id
+     AND status <> 'succeeded';
+
+  RETURN QUERY SELECT true, 'claimed';""",
+        test="src/lib/kernel/__tests__/architecture.test.ts",
+        expect_fail_contains="",
+    ),
     # ── P1-4：migration 版本撞车 ─────────────────────────────────────────
     dict(
         name="P1-4 新起一个跟别人同号的 migration",
@@ -541,6 +795,12 @@ def main():
             results.append((m["name"], "SKIP", "锚点没匹配上（代码改过了，变异脚本要跟着更新）"))
             continue
         mutated = original.replace(m["old"], m["new"], 1)
+        # 有些变异要同时动两处（比如「把两条语句调个个儿」= 从这儿删、到那儿加）
+        if "old2" in m:
+            if m["old2"] not in mutated:
+                results.append((m["name"], "SKIP", "第二个锚点没匹配上（变异脚本要跟着更新）"))
+                continue
+            mutated = mutated.replace(m["old2"], m["new2"], 1)
         open(f, "w", encoding="utf-8").write(mutated)
         try:
             code, out = run_test(m["test"])

@@ -327,6 +327,21 @@ export function createFakeSupabase(
               }
             }
           }
+          // 复刻 fk_action_runs_execution_item_same_client（S2）：同一个洞的第二处。
+          if (table === 'action_runs' && row.execution_item_id) {
+            const item = tableOf('execution_items').find(
+              (e) => e.id === row.execution_item_id && e.client_id === row.client_id,
+            )
+            if (!item) {
+              return {
+                data: null,
+                error: {
+                  message:
+                    'insert or update on table "action_runs" violates foreign key constraint "fk_action_runs_execution_item_same_client"',
+                },
+              }
+            }
+          }
           tableOf(table).push(row)
           created.push(row)
         }
@@ -398,6 +413,34 @@ export function createFakeSupabase(
         const keep: Row[] = []
         const removed: Row[] = []
         for (const r of tableOf(table)) (matches(r, filters) ? removed : keep).push(r)
+
+        // 🔴 删除侧的引用动作也要复刻，不能只建模插入侧。
+        //    两条复合外键的删除语义**是不一样的**，而且这个差别是有意的：
+        //      · goals   → NO ACTION：已经有执行台账的目标删不掉（要删先归档记录）
+        //      · execution_items → ON DELETE SET NULL (execution_item_id)：
+        //        看板卡片是会被例行删掉的，但执行台账要留下，只把指针置空
+        //    只建模插入侧的话，SQL 和这份复刻在删除这一路上就分家了 ——
+        //    而分家的那天没有任何测试会红。
+        if (table === 'goals' && removed.length > 0) {
+          const ids = new Set(removed.map((r) => r.id))
+          const blocking = tableOf('action_runs').find((r) => r.goal_id && ids.has(r.goal_id))
+          if (blocking) {
+            return {
+              data: null,
+              error: {
+                message:
+                  'update or delete on table "goals" violates foreign key constraint "fk_action_runs_goal_same_client" on table "action_runs"',
+              },
+            }
+          }
+        }
+        if (table === 'execution_items' && removed.length > 0) {
+          const ids = new Set(removed.map((r) => r.id))
+          for (const r of tableOf('action_runs')) {
+            if (r.execution_item_id && ids.has(r.execution_item_id)) r.execution_item_id = null
+          }
+        }
+
         tables[table] = keep
         rows = removed
       } else {
@@ -638,6 +681,78 @@ export function createFakeSupabase(
     return { ok: true, reason: 'approved', decision_id: String(decision.id) }
   }
 
+  /**
+   * `kernel_claim_run_recovery` 的内存复刻。
+   * 🔴 同样**整个函数体同步** —— 一个 await 都不能有，否则并发恢复测试测不到真东西。
+   *    步骤重置和状态转换必须在这一个函数里一起完成（真库里是同一个事务）。
+   */
+  function claimRunRecovery(args: Record<string, unknown>): { ok: boolean; reason: string } {
+    const runId = String(args.p_run_id)
+    const expected = (args.p_expected_decision_id ?? null) as string | null
+    const kind = String(args.p_recovery_kind)
+    const actor = String(args.p_actor)
+    const reason = String(args.p_reason)
+    const no = (r: string) => ({ ok: false, reason: r })
+    // 🔴 跟 SQL 里的白名单一字不差（架构测试盯着 SQL ↔ TS 不许分家）
+    const RECOVERABLE = ['no_policy', 'policy_expired', 'policy_changed_since_request', 'over_cost_cap']
+
+    if (kind !== 'denied' && kind !== 'dead_letter') return no('bad_recovery_kind')
+
+    const run = tableOf('action_runs').find((r) => r.id === runId)
+    if (!run) return no('run_not_found')
+
+    // 状态 CAS
+    if (run.status !== kind) return no(`not_recoverable:${String(run.status)}`)
+    // 指针 CAS
+    if ((run.authorization_decision_id ?? null) !== expected) return no('decision_not_current')
+
+    let decision: Row | undefined
+    if (expected !== null) {
+      decision = tableOf('authorization_decisions').find((d) => d.id === expected)
+      if (!decision) return no('decision_not_found')
+      if (decision.action_run_id !== run.id) return no('decision_run_mismatch')
+    }
+
+    if (kind === 'denied') {
+      if (expected === null) return no('deny_decision_missing')
+      if (decision!.verdict !== 'deny') return no('not_a_deny')
+      if (decision!.decided_by === 'human') return no('human_reject_not_recoverable')
+      const code = decision!.deny_code as string | null
+      if (!code || !RECOVERABLE.includes(code)) {
+        return no(`deny_code_not_recoverable:${code ?? 'null'}`)
+      }
+    }
+
+    const nowIso = (options.now?.() ?? new Date()).toISOString()
+
+    // 步骤重置 —— 只碰没跑成的；cost_actual_usd / output / verification 一概不动
+    for (const st of tableOf('action_run_steps')) {
+      if (st.run_id !== run.id) continue
+      if (st.status === 'succeeded') continue
+      st.status = 'pending'
+      st.last_error = null
+      st.next_attempt_at = null
+      st.finished_at = null
+      st.updated_at = nowIso
+    }
+
+    run.status = 'queued'
+    run.authorization_decision_id = null
+    run.needs_human = false
+    run.last_error = null
+    run.finished_at = null
+    run.evidence = {
+      ...((run.evidence ?? {}) as Row),
+      last_recovered_by: actor,
+      last_recovered_at: nowIso,
+      recovery_reason: reason,
+      recovery_kind: kind,
+      recovered_from_deny_code: (decision?.deny_code ?? null) as string | null,
+    }
+    run.updated_at = nowIso
+    return { ok: true, reason: 'claimed' }
+  }
+
   const client = {
     from,
     /** 只实现 Kernel 真正会调的那两个 RPC。别的名字直接炸。 */
@@ -647,6 +762,9 @@ export function createFakeSupabase(
       }
       if (name === 'kernel_resolve_pending_approval') {
         return { data: [resolvePendingApproval(args)], error: null }
+      }
+      if (name === 'kernel_claim_run_recovery') {
+        return { data: [claimRunRecovery(args)], error: null }
       }
       if (name !== 'kernel_claim_run_step') {
         throw new Error(`[fake-supabase] 没有建模的 RPC：${name}`)

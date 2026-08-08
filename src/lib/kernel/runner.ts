@@ -22,6 +22,7 @@ import { authorizeRun, approveRun, rejectRun } from './authorize'
 import { executeAuthorizedRun, rehydrateSucceededRun } from './gateway'
 import { computeIdempotencyKey, computeUnknownActionKey } from './idempotency'
 import {
+  claimRunRecovery,
   findRunByIdempotencyKey,
   getDecision,
   insertRun,
@@ -29,6 +30,7 @@ import {
   updateRun,
   updateStep,
   UniqueViolationError,
+  type RecoveryKind,
 } from './store'
 
 export interface SubmitActionInput {
@@ -95,6 +97,33 @@ export async function submitActionRun(
         'CROSS_CLIENT',
         '安全告警：这条动作挂的目标不属于这个客户 —— 已阻止（跨客户的执行记录会把两个客户的数据串在一起）',
         { detail: { goalId: input.goalId, goalClient: goal.client_id, runClient: input.clientId } },
+      )
+    }
+  }
+
+  // 🔴 S2：执行看板卡片也必须属于**同一个客户**。跟 goalId 完全同一个洞：
+  //    挂错客户的卡片 = 执行按 A 的授权跑，lineage / 看板关系却挂到 B，
+  //    归因和「这件事为谁做的」当场串台。数据库还有复合外键兜底。
+  if (input.executionItemId) {
+    const { data, error } = await deps.supabase
+      .from('execution_items')
+      .select('id, client_id')
+      .eq('id', input.executionItemId)
+      .limit(1)
+    // 读失败必须炸 —— 当成「卡片不存在」会把一次数据库抖动变成一条错误的拒绝
+    if (error) throw new Error(`[kernel] 校验执行卡片归属失败：${error.message}`)
+    const item = ((data ?? []) as unknown as Array<{ id: string; client_id: string }>)[0]
+    if (!item) {
+      throw new KernelError(
+        'INVALID_INPUT',
+        '这条动作挂的执行卡片不存在，可能已经被删了 —— 重新选一张卡片',
+      )
+    }
+    if (item.client_id !== input.clientId) {
+      throw new KernelError(
+        'CROSS_CLIENT',
+        '安全告警：这条动作挂的执行卡片不属于这个客户 —— 已阻止（跨客户的执行记录会把两个客户的数据串在一起）',
+        { detail: { executionItemId: input.executionItemId, itemClient: item.client_id, runClient: input.clientId } },
       )
     }
   }
@@ -304,57 +333,18 @@ export async function approveAndRun(
 }
 
 /**
- * 死信重跑 —— **断点续跑**的入口。
+ * 把「领到恢复权之后」的那一段共用逻辑抽出来。
  *
- * 🔴 已经成功的步骤原样保留（连同它们的产物），只把没跑成的放回待跑。
- *    这跟「整条重来」是两件事：重来会把已经写出去的东西再写一遍，
- *    而 Kernel 的幂等承诺是「同一件事只做一次」。
- *
- * 重跑必须由人发起并留下是谁发起的 —— 死信意味着系统自己已经放弃过一次，
- * 不该再由系统自己决定要不要再试。
+ * 恢复权已经原子领到了（run 现在是 queued、指针已清），接下来走的是
+ * **跟第一次完全相同的授权路径** —— 恢复之后世界可能已经变了
+ * （客户把规则改成禁止、规则被删、契约升版），必须重新过全部闸。
  */
-export async function resumeDeadLetterRun(
+async function authorizeAndRunRecovered(
   deps: KernelDeps,
   runId: string,
-  resumedByUser: string,
 ): Promise<ActionRunOutcome> {
-  const run = await deps.requireRun(runId)
-  if (run.status !== 'dead_letter') {
-    throw new KernelError(
-      'INVALID_STATE',
-      `这条动作现在是「${run.status}」，不是停手待查的状态，不用重跑`,
-    )
-  }
-
-  const steps = await listSteps(deps.supabase, runId)
-  for (const s of steps) {
-    if (s.status === 'succeeded') continue
-    await updateStep(deps.supabase, s.id, {
-      status: 'pending',
-      last_error: null,
-      next_attempt_at: null,
-      finished_at: null,
-    })
-  }
-
-  // 🔴 重跑走的是**跟第一次完全相同的授权路径**（回到 queued 再重新授权），
-  //    不是「人点了同意所以直接放行」。
-  //    死信之后世界可能已经变了：客户把规则改成禁止、规则被删、契约升版 ——
-  //    重跑必须跟第一次一样重新过全部闸。谁发起的重跑记进 evidence 留痕。
-  const resumed = await updateRun(deps.supabase, runId, {
-    status: 'queued',
-    needs_human: false,
-    last_error: null,
-    finished_at: null,
-    authorization_decision_id: null,
-    evidence: {
-      ...(run.evidence ?? {}),
-      last_resumed_by: resumedByUser,
-      last_resumed_at: deps.now().toISOString(),
-    },
-  })
-
-  const auth = await authorizeRun(deps, resumed)
+  const recovered = await deps.requireRun(runId)
+  const auth = await authorizeRun(deps, recovered)
   if (auth.verdict === 'deny') {
     return { kind: 'denied', run: auth.run, decision: auth.decision, execution: null, humanReason: auth.decision.reason }
   }
@@ -377,6 +367,88 @@ export async function resumeDeadLetterRun(
   }
 }
 
+/** 把 RPC 的机器可读原因翻成人话。认不出的一律当失败，没有「默认放过」。 */
+function recoveryFailureToError(reason: string, kind: RecoveryKind): KernelError {
+  const head = reason.split(':')[0]
+  switch (head) {
+    case 'not_recoverable':
+      return new KernelError(
+        'INVALID_STATE',
+        `这条动作现在是「${reason.split(':')[1] ?? '未知'}」—— 已经有人先恢复了，或者它正在跑 / 已经跑完，这次恢复没有生效`,
+        { detail: { reason, kind } },
+      )
+    case 'decision_not_current':
+      return new KernelError(
+        'INVALID_STATE',
+        '这条动作的状态在你操作期间变过了（可能已经被别人恢复），请刷新后再看',
+        { detail: { reason, kind } },
+      )
+    case 'human_reject_not_recoverable':
+      return new KernelError(
+        'NOT_AUTHORIZED',
+        '这条是有人明确点了「不做」的 —— 系统不替人改主意。要做的话请重新排一条',
+        { detail: { reason } },
+      )
+    case 'deny_code_not_recoverable':
+      return new KernelError(
+        'NOT_AUTHORIZED',
+        `这条被拒的原因是「${reason.split(':')[1] ?? '未知'}」—— 那是这次提交本身的问题，改条件救不了它，请修正后重新排一条`,
+        { detail: { reason } },
+      )
+    case 'deny_decision_missing':
+    case 'not_a_deny':
+    case 'decision_not_found':
+    case 'decision_run_mismatch':
+      return new KernelError(
+        'INVALID_STATE',
+        '找不到当初拒绝这条动作的记录，说不清它为什么被拒 —— 不能凭空恢复，请重新排一条',
+        { detail: { reason } },
+      )
+    default:
+      return new KernelError('INVALID_STATE', `这次恢复没有生效（${reason}）`, { detail: { reason } })
+  }
+}
+
+/**
+ * 死信重跑 —— **断点续跑**的入口。
+ *
+ * 🔴 已经成功的步骤原样保留（连同它们的产物和**已经花掉的钱**），只把没跑成的放回待跑。
+ *    这跟「整条重来」是两件事：重来会把已经写出去的东西再写一遍，
+ *    而 Kernel 的幂等承诺是「同一件事只做一次」。
+ *
+ * 🔴 恢复权是**原子领取**的（`kernel_claim_run_recovery`）：状态 CAS + 指针 CAS +
+ *    步骤重置在同一个数据库事务里。两个人同时重跑只有一个赢，
+ *    而且晚到的那个绝不能把已经 running/succeeded 的 run 拽回 queued。
+ *
+ * 重跑必须由人发起并留下是谁发起的 —— 死信意味着系统自己已经放弃过一次，
+ * 不该再由系统自己决定要不要再试。
+ */
+export async function resumeDeadLetterRun(
+  deps: KernelDeps,
+  runId: string,
+  resumedByUser: string,
+  reason = '人工重跑',
+): Promise<ActionRunOutcome> {
+  const run = await deps.requireRun(runId)
+  if (run.status !== 'dead_letter') {
+    throw new KernelError(
+      'INVALID_STATE',
+      `这条动作现在是「${run.status}」，不是停手待查的状态，不用重跑`,
+    )
+  }
+
+  const claimed = await claimRunRecovery(deps.supabase, {
+    runId,
+    expectedDecisionId: run.authorization_decision_id,
+    kind: 'dead_letter',
+    actor: resumedByUser,
+    reason,
+  })
+  if (!claimed.ok) throw recoveryFailureToError(claimed.reason, 'dead_letter')
+
+  return authorizeAndRunRecovered(deps, runId)
+}
+
 /**
  * 哪些拒绝是**修好条件之后可以重新授权**的（C3）。
  *
@@ -384,6 +456,9 @@ export async function resumeDeadLetterRun(
  *    政策没配 / 过期 / 改过、预算上限后来被提高 —— 这些修好之后同一件事
  *    理应能做；而「参数不对 / 动作不认识 / 对外副作用 / 用途不符」是
  *    **这次提交本身**的问题，重新授权一万次结论也一样，必须重新排一条新的。
+ *
+ * 🔴 这份清单在数据库的 `kernel_claim_run_recovery` 里还有一份（真正的强制在那边）。
+ *    有一条架构测试盯着两边一字不差 —— 两处各写一份清单必然分家。
  */
 export const RECOVERABLE_DENY_CODES: ReadonlySet<string> = new Set([
   'no_policy',
@@ -398,15 +473,18 @@ export const RECOVERABLE_DENY_CODES: ReadonlySet<string> = new Set([
  * 背景：第一次因「客户没配规则」被拒后，人按待办去把规则配好了 ——
  * 但同样的输入再提交会命中同一把幂等键，直接拿回旧的 denied，永远好不了。
  *
- * 🔴 三条边界，一条都不许松：
+ * 🔴 四条边界，一条都不许松：
  *    ① **普通重复提交不会走到这里** —— runAction 对 denied 仍然只返回旧结果。
  *       恢复必须是一次显式动作，带着是谁、为什么。
  *    ② 旧的 deny 决策**原样保留**（append-only 本来也改不了）——
  *       重新授权是新签一条，不是改写历史。
  *    ③ 只有白名单里的拒绝码能恢复；人明确点过「不做」的（decided_by='human'）
  *       不能被这条路悄悄翻案 —— 那要人自己改主意，不是系统替他改。
+ *    ④ 恢复权是**原子领取**的：两个人同时恢复只有一个赢，
+ *       输的那个绝不能把赢家已经推进的 run 拽回去。
  *
  * run id / 幂等键保持不变 —— 恢复的是**同一件事**，不是另一件。
+ * 下面这些应用层检查只是为了**把话说人话**；真正的强制在 RPC 里，两边都测。
  */
 export async function recoverDeniedRun(
   deps: KernelDeps,
@@ -422,7 +500,7 @@ export async function recoverDeniedRun(
     )
   }
 
-  // 拿当初拒绝它的那条决策 —— 判断这个拒绝可不可以恢复
+  // 拿当初拒绝它的那条决策 —— 只为把「为什么不能恢复」说清楚
   const denyDecision = run.authorization_decision_id
     ? await getDecision(deps.supabase, run.authorization_decision_id)
     : null
@@ -446,43 +524,16 @@ export async function recoverDeniedRun(
     )
   }
 
-  // 回到 queued 走**跟第一次完全相同**的授权路径。谁发起的恢复、为什么，记进 evidence。
-  const recovered = await updateRun(deps.supabase, runId, {
-    status: 'queued',
-    needs_human: false,
-    last_error: null,
-    finished_at: null,
-    authorization_decision_id: null,
-    evidence: {
-      ...(run.evidence ?? {}),
-      last_recovered_by: recoveredByUser,
-      last_recovered_at: deps.now().toISOString(),
-      recovery_reason: reason,
-      recovered_from_deny_code: denyDecision.deny_code,
-    },
+  const claimed = await claimRunRecovery(deps.supabase, {
+    runId,
+    expectedDecisionId: run.authorization_decision_id,
+    kind: 'denied',
+    actor: recoveredByUser,
+    reason,
   })
+  if (!claimed.ok) throw recoveryFailureToError(claimed.reason, 'denied')
 
-  const auth = await authorizeRun(deps, recovered)
-  if (auth.verdict === 'deny') {
-    return { kind: 'denied', run: auth.run, decision: auth.decision, execution: null, humanReason: auth.decision.reason }
-  }
-  if (auth.verdict === 'require_approval' || !auth.ctx) {
-    return {
-      kind: 'pending_approval',
-      run: auth.run,
-      decision: auth.decision,
-      execution: null,
-      humanReason: auth.decision.reason,
-    }
-  }
-  const execution = await executeAuthorizedRun(deps, auth.ctx)
-  return {
-    kind: execution.status === 'succeeded' ? 'succeeded' : 'dead_letter',
-    run: execution.run,
-    decision: auth.decision,
-    execution,
-    humanReason: execution.failure?.humanReason ?? null,
-  }
+  return authorizeAndRunRecovered(deps, runId)
 }
 
 /** 人点了不做。 */

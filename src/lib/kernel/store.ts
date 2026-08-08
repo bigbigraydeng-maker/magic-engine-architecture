@@ -326,6 +326,46 @@ export async function resolvePendingApproval(
   return { ok: Boolean(row.ok), reason: String(row.reason ?? 'unknown'), decisionId: row.decision_id ?? null }
 }
 
+/**
+ * 恢复权的原子领取（走 `kernel_claim_run_recovery` RPC）。
+ *
+ * 🔴 跟人工批准是同一类竞态：两个操作者都看到 denied/dead_letter，
+ *    晚到的那个如果无条件 update，就能把赢家已经推进到 running/succeeded 的 run
+ *    改回 queued 并再签一份 allow → capability 做第二遍。
+ *
+ *    RPC 里锁 run + 双 CAS（状态仍是那个终态 / 指针仍是看到的那条决策），
+ *    死信的步骤重置也在同一个事务里 —— 不留「步骤放回待跑但 run 还是死信」的半恢复态。
+ */
+export type RecoveryKind = 'denied' | 'dead_letter'
+
+export interface ClaimRecoveryResult {
+  ok: boolean
+  reason: string
+}
+
+export async function claimRunRecovery(
+  sb: SupabaseClient,
+  args: {
+    runId: string
+    expectedDecisionId: string | null
+    kind: RecoveryKind
+    actor: string
+    reason: string
+  },
+): Promise<ClaimRecoveryResult> {
+  const { data, error } = await sb.rpc('kernel_claim_run_recovery', {
+    p_run_id: args.runId,
+    p_expected_decision_id: args.expectedDecisionId,
+    p_recovery_kind: args.kind,
+    p_actor: args.actor,
+    p_reason: args.reason,
+  })
+  if (error) fail('领取恢复权', error)
+  const row = (data ?? [])[0] as unknown as { ok: boolean; reason: string } | undefined
+  if (!row) fail('领取恢复权', { message: 'RPC 没有返回结果行' })
+  return { ok: Boolean(row.ok), reason: String(row.reason ?? 'unknown') }
+}
+
 // ── Step ──────────────────────────────────────────────────────────────────────
 
 const STEP_COLUMNS =

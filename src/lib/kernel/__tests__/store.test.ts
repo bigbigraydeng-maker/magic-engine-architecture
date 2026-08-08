@@ -13,7 +13,14 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { beginAuthorizedRun, getActivePolicy, insertDecision, listSteps, resolvePendingApproval } from '../store'
+import {
+  beginAuthorizedRun,
+  claimRunRecovery,
+  getActivePolicy,
+  insertDecision,
+  listSteps,
+  resolvePendingApproval,
+} from '../store'
 import { createFakeSupabase, type Row } from './fake-supabase'
 import { CLIENT_A } from './fixtures'
 
@@ -328,6 +335,177 @@ describe('resolve RPC 的两道 CAS 各自能咬人（R1）', () => {
       costEstimateUsd: 0,
     })
     expect(ok.ok).toBe(true)
+  })
+})
+
+describe('恢复权 RPC 的两道 CAS 各自能咬人（S1）', () => {
+  // 🔴 跟 resolve 那两道一样：在真实赛跑里，赢家把 status 和指针**都**改了
+  //    （status→queued、指针→null），拆掉任一道另一道照样拦 ——
+  //    端到端并发测试测不出单独哪道在。所以这里直接造「只有那一道能拦」的库状态。
+
+  async function seedDenied(sb: ReturnType<typeof createFakeSupabase>, tables: { action_runs: Row[] }) {
+    const deny = await insertDecision(sb, {
+      action_run_id: RUN_ID,
+      client_id: CLIENT_A,
+      action_key: 'seo.build_publish_package',
+      action_version: 1,
+      verdict: 'deny',
+      deny_code: 'no_policy',
+      reason: '这个客户还没配规则',
+      policy_snapshot: {},
+      policy_id: null,
+      policy_version: null,
+      decided_by: 'policy',
+      decided_by_user: null,
+      cost_cap_usd: null,
+      cost_estimate_usd: null,
+      idempotency_key: 'k',
+      expires_at: null,
+    })
+    tables.action_runs[0].status = 'denied'
+    tables.action_runs[0].authorization_decision_id = deny.id
+    return deny
+  }
+
+  const claim = (sb: ReturnType<typeof createFakeSupabase>, expected: string | null, kind: 'denied' | 'dead_letter' = 'denied') =>
+    claimRunRecovery(sb, {
+      runId: RUN_ID,
+      expectedDecisionId: expected,
+      kind,
+      actor: 'ray@magiclab',
+      reason: '恢复',
+    })
+
+  it('✅ 状态和指针都对 → 领到恢复权，run 回到 queued、指针清空', async () => {
+    const { sb, tables } = seed()
+    const deny = await seedDenied(sb, tables)
+
+    const r = await claim(sb, String(deny.id))
+    expect(r).toEqual({ ok: true, reason: 'claimed' })
+    expect(tables.action_runs[0].status).toBe('queued')
+    expect(tables.action_runs[0].authorization_decision_id).toBeNull()
+  })
+
+  it('🔴 状态 CAS：指针没动、只有状态被推进（running）→ not_recoverable', async () => {
+    const { sb, tables } = seed()
+    const deny = await seedDenied(sb, tables)
+    tables.action_runs[0].status = 'running' // 只动状态
+
+    const r = await claim(sb, String(deny.id))
+    expect(r).toEqual({ ok: false, reason: 'not_recoverable:running' })
+    expect(tables.action_runs[0].status).toBe('running')
+  })
+
+  it('🔴 状态 CAS：succeeded 也一样拦', async () => {
+    const { sb, tables } = seed()
+    const deny = await seedDenied(sb, tables)
+    tables.action_runs[0].status = 'succeeded'
+
+    const r = await claim(sb, String(deny.id))
+    expect(r).toEqual({ ok: false, reason: 'not_recoverable:succeeded' })
+  })
+
+  it('🔴 指针 CAS：状态还是 denied、但指针已换成另一条决策 → decision_not_current', async () => {
+    const { sb, tables } = seed()
+    const stale = await seedDenied(sb, tables)
+    const fresh = await seedDenied(sb, tables) // 指针改指新那条，状态仍是 denied
+    expect(tables.action_runs[0].authorization_decision_id).toBe(fresh.id)
+    expect(tables.action_runs[0].status).toBe('denied')
+
+    const r = await claim(sb, String(stale.id))
+    expect(r).toEqual({ ok: false, reason: 'decision_not_current' })
+    expect(tables.action_runs[0].status).toBe('denied')
+  })
+
+  it('🔴 白名单在 RPC 里也强制：不可恢复的拒绝码领不到', async () => {
+    const { sb, tables } = seed()
+    const deny = await insertDecision(sb, {
+      action_run_id: RUN_ID,
+      client_id: CLIENT_A,
+      action_key: 'seo.build_publish_package',
+      action_version: 1,
+      verdict: 'deny',
+      deny_code: 'invalid_input',
+      reason: '参数不对',
+      policy_snapshot: {},
+      policy_id: null,
+      policy_version: null,
+      decided_by: 'policy',
+      decided_by_user: null,
+      cost_cap_usd: null,
+      cost_estimate_usd: null,
+      idempotency_key: 'k',
+      expires_at: null,
+    })
+    tables.action_runs[0].status = 'denied'
+    tables.action_runs[0].authorization_decision_id = deny.id
+
+    const r = await claim(sb, String(deny.id))
+    expect(r.ok).toBe(false)
+    expect(r.reason).toBe('deny_code_not_recoverable:invalid_input')
+  })
+
+  it('🔴 人明确拒过的，RPC 层也不许恢复（不只靠应用层那句话）', async () => {
+    const { sb, tables } = seed()
+    const deny = await insertDecision(sb, {
+      action_run_id: RUN_ID,
+      client_id: CLIENT_A,
+      action_key: 'seo.build_publish_package',
+      action_version: 1,
+      verdict: 'deny',
+      // 白名单里的码，唯一的区别是这条是人点的
+      deny_code: 'policy_deny',
+      reason: 'ray 点了不做',
+      policy_snapshot: {},
+      policy_id: null,
+      policy_version: null,
+      decided_by: 'human',
+      decided_by_user: 'ray@magiclab',
+      cost_cap_usd: null,
+      cost_estimate_usd: null,
+      idempotency_key: 'k',
+      expires_at: null,
+    })
+    tables.action_runs[0].status = 'denied'
+    tables.action_runs[0].authorization_decision_id = deny.id
+
+    const r = await claim(sb, String(deny.id))
+    expect(r).toEqual({ ok: false, reason: 'human_reject_not_recoverable' })
+  })
+
+  it('🔴 步骤重置跟状态转换在同一个函数里，且**不碰已花的钱**', async () => {
+    const { sb, tables } = seed()
+    const deny = await seedDenied(sb, tables)
+    tables.action_runs[0].status = 'dead_letter'
+    tables.action_run_steps.push(
+      { id: 'st-1', run_id: RUN_ID, client_id: CLIENT_A, step_key: 'a', step_index: 0,
+        status: 'succeeded', attempt: 1, cost_actual_usd: 1.5, output: { a: 1 }, verification: null,
+        last_error: null, next_attempt_at: null, finished_at: 'x' },
+      { id: 'st-2', run_id: RUN_ID, client_id: CLIENT_A, step_key: 'b', step_index: 1,
+        status: 'dead_letter', attempt: 2, cost_actual_usd: 0.75, output: {}, verification: null,
+        last_error: '炸了', next_attempt_at: null, finished_at: 'y' },
+    )
+
+    const r = await claimRunRecovery(sb, {
+      runId: RUN_ID,
+      expectedDecisionId: String(deny.id),
+      kind: 'dead_letter',
+      actor: 'ray@magiclab',
+      reason: '修好了',
+    })
+    expect(r.ok).toBe(true)
+
+    const a = tables.action_run_steps.find((s) => s.id === 'st-1')!
+    const b = tables.action_run_steps.find((s) => s.id === 'st-2')!
+    // 成功的那步原样保留
+    expect(a.status).toBe('succeeded')
+    expect(a.cost_actual_usd).toBe(1.5)
+    // 没跑成的那步放回待跑，但**已经花掉的钱不许被抹掉**
+    expect(b.status).toBe('pending')
+    expect(b.last_error).toBeNull()
+    expect(b.cost_actual_usd).toBe(0.75)
+    // 状态转换也在同一次调用里完成 —— 不留「步骤放回了但 run 还是死信」的半恢复态
+    expect(tables.action_runs[0].status).toBe('queued')
   })
 })
 

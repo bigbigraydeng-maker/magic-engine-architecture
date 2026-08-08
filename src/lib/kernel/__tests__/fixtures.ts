@@ -37,6 +37,7 @@ export interface FixtureOptions {
   blogPosts?: Row[]
   masterBriefs?: Row[]
   goals?: Row[]
+  executionItems?: Row[]
   productionPackages?: Row[]
   extraTables?: Tables
   supabaseOptions?: FakeSupabaseOptions
@@ -78,6 +79,7 @@ export function buildTables(opts: FixtureOptions = {}): Tables {
     blog_posts: clone(opts.blogPosts ?? [BLOG_DRAFT]),
     master_briefs: clone(opts.masterBriefs ?? [{ id: BRIEF_A, client_id: CLIENT_A }]),
     goals: clone(opts.goals ?? [{ id: GOAL_A, client_id: CLIENT_A, title: '三个月内自然流量翻倍' }]),
+    execution_items: clone(opts.executionItems ?? []),
     production_packages: clone(opts.productionPackages ?? []),
     flywheel_actions: [],
     flywheel_outcomes: [],

@@ -8,6 +8,8 @@
 > 可恢复 deny 的显式重授权 · Goal 跨客户双层防护 · 政策时间窗。
 > 第四轮（Codex review 2）：人工批准/拒绝原子化（`kernel_resolve_pending_approval`）·
 > capability 装配运行时校验 · 幂等命中重建历史结果 · 政策时间窗过滤下推到数据库。
+> 第五轮（Codex review 3）：恢复权原子领取（`kernel_claim_run_recovery`）·
+> executionItem 跨客户双层防护 · 死信前先落 cost/verification + 成本累计语义。
 
 ---
 
@@ -99,6 +101,76 @@ queued → authorizing → { authorized | pending_approval | denied }
 
 AI 可以**提出**任何动作，但注册表认不出的一律 deny，**并落一条 `deny_code='unknown_action'` 的决策记录**。
 不是静默跳过 —— 否则「AI 提了个我们没实现的动作」这件事没人看得见。
+
+### 🔴 恢复权是原子领取的（S1）
+
+`denied` / `dead_letter` 的恢复走 `kernel_claim_run_recovery`：
+`FOR UPDATE` 锁 run → **状态 CAS**（必须仍是那个可恢复的终态）→
+**指针 CAS**（必须仍指着调用方看到的那条决策）→ （denied 还要查白名单 + 挡人工拒绝）→
+**步骤重置和状态转换在同一个事务里**。
+
+要防的形状跟人工批准同类：两人（或双击）都看到 denied/dead_letter，
+A 抢先恢复并开跑，B 晚到的无条件 update 把 running/succeeded 拽回 queued 并再签一份 allow
+→ capability 做第二遍。
+
+为什么步骤重置必须在同一个事务：先 reset steps 再 update run 会留下
+「步骤已经放回待跑、run 却还是 dead_letter」的半恢复态 —— 崩在中间就再也说不清了。
+已成功的步骤原样保留（断点续跑），**且不碰 `cost_actual_usd`**（见下）。
+
+可恢复拒绝码白名单在**两处**：`runner.ts` 的 `RECOVERABLE_DENY_CODES`（说人话）和
+RPC 里的 `v_recoverable`（真强制）。有一条架构测试盯着两边一字不差。
+
+### 🔴 执行卡片必须属于同一个客户（S2）
+
+跟 Goal 完全同一个洞。应用层查 `execution_items.client_id`；
+数据库层复合外键 `(client_id, execution_item_id) → execution_items(client_id, id)`，
+前置 `CREATE UNIQUE INDEX idx_execution_items_client_id_id` ——
+`execution_items.id` 本身是主键，这个索引不可能因历史数据冲突而失败。
+
+### 🔴 已经发生的事实必须先落库，再决定成败（S3）
+
+handler 返回的那一刻，钱已经花了、验证结论也已经有了。
+早先是先判「超预算 / 没验过」再抛错 —— 这些事实永远进不了库：
+
+- 数据库以为钱没花 → 死信重跑时 `spent` 从低估的数字起算 → 再调一次 handler →
+  **真正突破预算上限**；
+- 失败的验证结论丢失 → lineage 里查不到「它到底是怎么没做成的」。
+
+现在 handler 一返回就先写 `{output, verification, cost_actual_usd}`，**然后**才判定。
+
+`cost_actual_usd` 是**累计**语义（在这一步已有的基础上加），重试 / 死信重跑 / 恢复
+都不许让历史已花的钱变小 —— 变小 = 同一笔预算可以被反复消费。
+run 层的 `spent` 从各步骤已持久化的花费之和起算。
+
+预算上限判**两次**，缺一不可：
+
+| 时机 | 拦的是什么 |
+|---|---|
+| **开跑前**（每一步进 handler 之前） | 历史已花就已经超了 → 这一步根本不开跑 |
+| 跑完之后（handler 返回、事实落库之后） | 这一次花下去才超 → 停手且不重试 |
+
+只有后者的话，死信重跑会**先再花一次钱**才发现超了 —— 原来那条上限对重跑完全失效。
+两处都用严格 `>`：`cap = 0` 是正常值（当前唯一上线的能力就是零成本），
+`>=` 会把零成本能力全部拦死。
+
+### 🔴 两条复合外键的删除语义是**不一样**的，而且是故意的
+
+| 外键 | 删父行时 | 为什么 |
+|---|---|---|
+| `(client_id, goal_id) → goals` | **NO ACTION**（删不掉） | growth 的 run 置空 `goal_id` 会当场违反 `goal_matches_purpose`。有执行台账的目标就是删不掉，要删先归档记录 —— 这比留一条半残记录诚实。选 NO ACTION 而不是 RESTRICT，是因为它推迟到语句结束才查，删客户时两边各自 CASCADE，整条 DELETE 照样成功 |
+| `(client_id, execution_item_id) → execution_items` | **`ON DELETE SET NULL (execution_item_id)`** | 看板卡片会被例行删掉（撤回营销计划批量删 pending 卡片），但执行台账要留下，只把指针置空 |
+
+两条硬约束：
+
+1. **每列只能有一条外键。** 早先是「列上单列 FK + 表级复合 FK」两条并存 —— 同一次 DELETE
+   会排队两个 RI 触发器，触发顺序按约束 OID（= `CREATE TABLE` 里的文本顺序）决定。
+   谁先谁后能决定删得掉删不掉，等于把正确性押在书写次序上（真机复现过：交换两行的位置，
+   `DELETE FROM execution_items` 从报错变成成功）。
+2. **SET NULL 必须带列清单。** 不带清单会去置空 `client_id`（NOT NULL），整条 DELETE 当场炸。
+   列清单形式需要 PG ≥ 15，生产实测 PostgreSQL 17.6，可用。
+
+内存假件把**删除侧**也建模了（不只是插入侧）—— 只建模插入侧的话，SQL 和复刻在删除这一路上
+分家的那天不会有任何测试变红。
 
 ### 🔴 人工批准 / 拒绝是数据库原子转换（R1 / P2-1）
 

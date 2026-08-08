@@ -370,8 +370,28 @@ async function runSteps(
       ))
     }
 
+    // 🔴 **开跑前先看钱够不够**，而不是等 handler 跑完再判。
+    //
+    //    只在事后判有个致命缺口：死信重跑时 spent 从「历史已花」起算，
+    //    此时哪怕已经超了上限，也会先把 handler 再调一次（钱又花一遍、
+    //    东西又写一遍），然后才发现超了。等于原来那条上限拦不住重跑。
+    //
+    //    这里用严格大于：cap = 0 是正常值（当前唯一上线的能力就是零成本），
+    //    `spent >= cap` 会把零成本能力全部拦死。
+    if (ctx.costCapUsd !== null && spent > ctx.costCapUsd) {
+      return failRun(deps, args.run, steps, new KernelError(
+        'COST_CAP_EXCEEDED',
+        `这次执行历史上已经花掉 $${spent.toFixed(2)}，超过授权时定的上限 $${ctx.costCapUsd.toFixed(2)} —— 「${stepKey}」不再开跑`,
+        { detail: { spent, cap: ctx.costCapUsd, stepKey, phase: 'preflight' } },
+      ))
+    }
+
     let attempt = step.attempt
     let lastError: unknown = null
+    // 🔴 这一步**已经花掉**的钱（含之前失败尝试的）。cost_actual_usd 是累计语义：
+    //    重试时在这个基础上加，绝不用新一次的花费去覆盖旧值 ——
+    //    覆盖会让「历史已花成本」凭空变小，死信重跑就能突破原来的预算上限。
+    let stepCostSoFar = Number(step.cost_actual_usd ?? 0)
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -387,11 +407,33 @@ async function runSteps(
 
       try {
         const result = await handler({ ctx, stepKey, attempt, priorOutputs })
+        const cost = Number(result.costActualUsd ?? 0)
 
+        // 🔴 **已经发生的事实必须先落库，再决定这次算不算成功。**
+        //
+        //    handler 返回的那一刻，钱已经花了、东西可能已经写出去了、
+        //    验证结论也已经有了。如果先判定「超预算 / 没验过」再抛错，
+        //    这些事实就永远进不了库：
+        //      · 数据库以为钱没花 → 死信重跑时 spent 从低估的数字起算 →
+        //        再调一次 handler → 真正突破预算上限；
+        //      · 失败的验证结论丢失 → lineage 里查不到「它到底是怎么没做成的」。
+        //
+        //    cost 是**累计**的（在这一步已有的基础上加）—— 重试 / 死信重跑
+        //    都不许让历史已花的钱变小。
+        stepCostSoFar += cost
+        const observedAt = deps.now().toISOString()
+        await updateStep(deps.supabase, step.id, {
+          attempt,
+          output: result.output,
+          verification: result.verification ?? null,
+          cost_actual_usd: stepCostSoFar,
+          heartbeat_at: observedAt,
+        })
+        spent += cost
+
+        // ── 事实落库之后，才开始判定 ────────────────────────────────────
         // 钱：run 层是信封，step 层是实际。超了当场停手，且**不重试** ——
         // 重试只会再花一次。
-        const cost = Number(result.costActualUsd ?? 0)
-        spent += cost
         if (ctx.costCapUsd !== null && spent > ctx.costCapUsd) {
           throw new KernelError(
             'COST_CAP_EXCEEDED',
@@ -410,11 +452,9 @@ async function runSteps(
         }
 
         const finished = deps.now().toISOString()
+        // 只推状态和时间戳 —— 产物 / 验证 / 花费上面已经落过，不重写
         await updateStep(deps.supabase, step.id, {
           status: 'succeeded',
-          output: result.output,
-          verification: result.verification ?? null,
-          cost_actual_usd: cost,
           heartbeat_at: finished,
           finished_at: finished,
           last_error: null,

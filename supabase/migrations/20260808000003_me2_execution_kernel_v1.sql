@@ -240,6 +240,12 @@ CREATE TRIGGER authorization_decisions_append_only_trigger
 CREATE UNIQUE INDEX IF NOT EXISTS idx_goals_client_id_id
   ON public.goals (client_id, id);
 
+-- 🔴 S2 前置：execution_items 同理。`execution_items.id` 是 PRIMARY KEY
+--    （见 20260513000001_diagnostic_engine.sql:153），全表唯一，
+--    所以 (client_id, id) 这个组合**不可能因历史业务行重复而失败**。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_items_client_id_id
+  ON public.execution_items (client_id, id);
+
 CREATE TABLE IF NOT EXISTS public.action_runs (
   id                        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   client_id                 uuid NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
@@ -249,7 +255,7 @@ CREATE TABLE IF NOT EXISTS public.action_runs (
   --    维护 / 合规 / 恢复 / 系统卫生这四类任务本来就不服务任何增长目标。
   purpose                   text NOT NULL CHECK (purpose IN
                               ('growth','compliance','maintenance','recovery','housekeeping')),
-  goal_id                   uuid REFERENCES public.goals(id) ON DELETE SET NULL,
+  goal_id                   uuid,
 
   -- 双向约束：growth 必须有 Goal；非 growth 挂了 Goal **也拒绝**。
   -- 让「给维护任务伪造 Goal」在数据库层不可能，而不是靠约定。
@@ -258,11 +264,41 @@ CREATE TABLE IF NOT EXISTS public.action_runs (
   -- 🔴 C4：Goal 必须属于**同一个客户**。单列 FK 只验证「目标存在」，
   --    拦不住「A 客户的 run 挂 B 客户的目标」—— 那会把 lineage 串台到别的客户身上。
   --    MATCH SIMPLE 语义下 goal_id 为 NULL 时本约束自动放过（非 growth 任务不受影响）。
+  --
+  -- 🔴 **只保留这一条**外键，且**刻意不写 ON DELETE**（= NO ACTION）。
+  --
+  --    早先是「列上 ON DELETE SET NULL + 这条复合约束」两条并存 —— 那是个坑：
+  --    同一次 DELETE 会排队两个 RI 触发器，触发顺序按约束 OID（= CREATE TABLE 里的
+  --    文本顺序）决定。谁先谁后能决定删得掉删不掉，等于把正确性押在书写次序上，
+  --    第一次有人 DROP/ADD CONSTRAINT 就静默翻车。
+  --
+  --    而且 SET NULL 对 growth 的 run **根本不可能成功**：把 goal_id 置空会当场违反
+  --    上面那条 goal_matches_purpose（growth 必须有目标）。也就是说旧写法对
+  --    「真的引用了目标的 run」两种情况都是报错，只是报的错不一样。
+  --
+  --    NO ACTION 是诚实的语义：**已经有执行记录的目标删不掉**（要删先归档/搬走记录）。
+  --    选 NO ACTION 而不是 RESTRICT，是因为 NO ACTION 推迟到语句结束才查 ——
+  --    删客户时 goals 和 action_runs 各自 CASCADE 删掉，语句结束时已经没有引用行，
+  --    整条 DELETE 照样成功；RESTRICT 会当场炸。
   CONSTRAINT fk_action_runs_goal_same_client
     FOREIGN KEY (client_id, goal_id) REFERENCES public.goals (client_id, id),
 
+  -- 🔴 S2：执行看板卡片同理。挂错客户的卡片 = 执行按 A 的授权跑，
+  --    lineage / 看板关系却挂到 B —— 归因和「这件事为谁做的」当场串台。
+  --
+  --    跟 goal 一样**只保留这一条**外键（列上不再单独写 REFERENCES）。
+  --    区别在删除语义：看板卡片是会被例行删掉的（撤回营销计划会批量删 pending 卡片、
+  --    删处方会 CASCADE 过来），而 run 是执行台账 —— 卡片没了台账要留下，
+  --    所以这里要 SET NULL，只是**必须带列清单**：`client_id` 是 NOT NULL，
+  --    不带列清单的 SET NULL 会去置空它，直接违反非空约束。
+  --    列清单形式需要 PG ≥ 15；生产实测是 PostgreSQL 17.6，可用。
+  CONSTRAINT fk_action_runs_execution_item_same_client
+    FOREIGN KEY (client_id, execution_item_id)
+    REFERENCES public.execution_items (client_id, id)
+    ON DELETE SET NULL (execution_item_id),
+
   -- 连回人看的看板（execution_items 继续是意图卡，不是执行引擎）
-  execution_item_id         uuid REFERENCES public.execution_items(id) ON DELETE SET NULL,
+  execution_item_id         uuid,
 
   triggered_by              text NOT NULL CHECK (triggered_by IN
                               ('signal','schedule','human','agent','run')),
@@ -743,6 +779,131 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.kernel_resolve_pending_approval(uuid, uuid, text, text, text, jsonb, numeric)
   FROM PUBLIC, anon, authenticated;
 GRANT  EXECUTE ON FUNCTION public.kernel_resolve_pending_approval(uuid, uuid, text, text, text, jsonb, numeric)
+  TO service_role;
+
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- 5d. kernel_claim_run_recovery —— 恢复权的原子领取（denied / dead_letter 共用）
+--
+-- 🔴 跟人工批准是同一类竞态：两个操作者（或双击）都看到 denied/dead_letter，
+--    A 抢先恢复并开跑，B 晚到的无条件 update 又把已经 running/succeeded 的 run
+--    改回 queued 并再签一份 allow → capability 做第二遍。
+--
+--    这里锁的是 run：状态必须**仍是**那个可恢复的终态、指针必须**仍是**
+--    调用方看到的那条决策，两条同时满足才领得到恢复权。输家拿到机器可读原因。
+--
+-- 🔴 死信恢复的**步骤重置也在这个事务里**。先 reset steps 再 update run 会留下
+--    「步骤已经放回待跑、run 却还是 dead_letter」的半恢复状态；崩在中间就再也说不清了。
+--    已经成功的步骤原样保留（断点续跑），**并且不碰 cost_actual_usd** ——
+--    历史已花的钱不许因为重跑变小（见 S3）。
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.kernel_claim_run_recovery(
+  p_run_id               uuid,
+  p_expected_decision_id uuid,
+  p_recovery_kind        text,     -- 'denied' | 'dead_letter'
+  p_actor                text,
+  p_reason               text
+)
+RETURNS TABLE (ok boolean, reason text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_run      public.action_runs%ROWTYPE;
+  v_decision public.authorization_decisions%ROWTYPE;
+  -- 🔴 可恢复的拒绝码白名单。必须跟 runner.ts 的 RECOVERABLE_DENY_CODES 一字不差，
+  --    有一条架构测试专门盯着两边不许分家（两处各写一份清单必然分家）。
+  v_recoverable text[] := ARRAY[
+    'no_policy', 'policy_expired', 'policy_changed_since_request', 'over_cost_cap'
+  ];
+BEGIN
+  IF p_recovery_kind NOT IN ('denied', 'dead_letter') THEN
+    RETURN QUERY SELECT false, 'bad_recovery_kind'; RETURN;
+  END IF;
+
+  -- ① 锁 run —— 两次恢复、以及恢复与正常执行，全在这把锁上排队
+  SELECT * INTO v_run FROM public.action_runs
+   WHERE id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'run_not_found'; RETURN;
+  END IF;
+
+  -- ② 状态 CAS：必须**仍然**停在那个可恢复的终态。
+  --    running / succeeded / 已被别人恢复成 queued 的，一律不许覆盖。
+  IF v_run.status <> p_recovery_kind THEN
+    RETURN QUERY SELECT false, 'not_recoverable:' || v_run.status; RETURN;
+  END IF;
+
+  -- ③ 指针 CAS：run 当前指着的必须还是调用方看到的那条决策
+  --    （防拿旧页面 / 旧快照上的过期决策来恢复）
+  IF v_run.authorization_decision_id IS DISTINCT FROM p_expected_decision_id THEN
+    RETURN QUERY SELECT false, 'decision_not_current'; RETURN;
+  END IF;
+
+  IF p_expected_decision_id IS NOT NULL THEN
+    SELECT * INTO v_decision FROM public.authorization_decisions
+     WHERE id = p_expected_decision_id FOR UPDATE;
+    IF NOT FOUND THEN
+      RETURN QUERY SELECT false, 'decision_not_found'; RETURN;
+    END IF;
+    IF v_decision.action_run_id <> v_run.id THEN
+      RETURN QUERY SELECT false, 'decision_run_mismatch'; RETURN;
+    END IF;
+  END IF;
+
+  -- ④ denied 恢复：只能恢复**机器**因环境问题拒掉的那几种。
+  IF p_recovery_kind = 'denied' THEN
+    IF p_expected_decision_id IS NULL THEN
+      RETURN QUERY SELECT false, 'deny_decision_missing'; RETURN;
+    END IF;
+    IF v_decision.verdict <> 'deny' THEN
+      RETURN QUERY SELECT false, 'not_a_deny'; RETURN;
+    END IF;
+    -- 🔴 人明确点过「不做」的永远不可恢复 —— 系统不替人改主意
+    IF v_decision.decided_by = 'human' THEN
+      RETURN QUERY SELECT false, 'human_reject_not_recoverable'; RETURN;
+    END IF;
+    IF v_decision.deny_code IS NULL OR NOT (v_decision.deny_code = ANY(v_recoverable)) THEN
+      RETURN QUERY SELECT false,
+        'deny_code_not_recoverable:' || COALESCE(v_decision.deny_code, 'null'); RETURN;
+    END IF;
+  END IF;
+
+  -- ⑤ 步骤重置与状态转换在**同一个事务**里。
+  --    只碰没跑成的那些；cost_actual_usd / output / verification 一概不动。
+  UPDATE public.action_run_steps
+     SET status          = 'pending',
+         last_error      = NULL,
+         next_attempt_at = NULL,
+         finished_at     = NULL,
+         updated_at      = now()
+   WHERE run_id = v_run.id
+     AND status <> 'succeeded';
+
+  UPDATE public.action_runs
+     SET status = 'queued',
+         authorization_decision_id = NULL,
+         needs_human = false,
+         last_error  = NULL,
+         finished_at = NULL,
+         evidence = COALESCE(evidence, '{}'::jsonb) || jsonb_build_object(
+           'last_recovered_by',        p_actor,
+           'last_recovered_at',        to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+           'recovery_reason',          p_reason,
+           'recovery_kind',            p_recovery_kind,
+           'recovered_from_deny_code', COALESCE(v_decision.deny_code, NULL)
+         ),
+         updated_at = now()
+   WHERE id = v_run.id;
+
+  RETURN QUERY SELECT true, 'claimed';
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.kernel_claim_run_recovery(uuid, uuid, text, text, text)
+  FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.kernel_claim_run_recovery(uuid, uuid, text, text, text)
   TO service_role;
 
 

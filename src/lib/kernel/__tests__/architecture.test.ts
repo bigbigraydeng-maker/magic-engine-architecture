@@ -303,7 +303,12 @@ describe('lineage 视图的权限（C1）', () => {
 
   it('两个 RPC 的 EXECUTE 也都收了口（同一类漏洞，一起盯）', () => {
     const sql = read(MIGRATION)
-    for (const fn of ['kernel_claim_run_step', 'kernel_begin_authorized_run', 'kernel_resolve_pending_approval']) {
+    for (const fn of [
+      'kernel_claim_run_step',
+      'kernel_begin_authorized_run',
+      'kernel_resolve_pending_approval',
+      'kernel_claim_run_recovery',
+    ]) {
       expect(
         new RegExp(
           `REVOKE\\s+EXECUTE\\s+ON\\s+FUNCTION\\s+public\\.${fn}[^;]*FROM\\s+PUBLIC\\s*,\\s*anon\\s*,\\s*authenticated`,
@@ -325,6 +330,89 @@ describe('lineage 视图的权限（C1）', () => {
       (windows ?? []).length >= 2,
       '两个会查政策的 RPC（begin / resolve_pending_approval）的时间窗必须都在，且跟 store.isPolicyActive 完全一致',
     ).toBe(true)
+  })
+})
+
+describe('两处清单不许分家（S1 / S2）', () => {
+  const MIGRATION_SQL = 'supabase/migrations/20260808000003_me2_execution_kernel_v1.sql'
+
+  it('🔴 可恢复拒绝码：SQL 里的白名单跟 runner.ts 的 RECOVERABLE_DENY_CODES 一字不差', async () => {
+    // 真正的强制在 RPC 里（应用层那份只是为了把话说人话）。
+    // 两处各写一份清单必然分家 —— 分家的那天，应用层说「不能恢复」而数据库放行，
+    // 或者反过来。这条测试是唯一能让它们保持同步的东西。
+    const { RECOVERABLE_DENY_CODES } = await import('../runner')
+    const sql = read(MIGRATION_SQL)
+    const m = sql.match(/v_recoverable\s+text\[\]\s*:=\s*ARRAY\[([\s\S]*?)\]/)
+    expect(m, 'kernel_claim_run_recovery 里应该有 v_recoverable 白名单').toBeTruthy()
+    const fromSql = Array.from(m![1].matchAll(/'([^']+)'/g)).map((x) => x[1]).sort()
+    expect(fromSql).toEqual(Array.from(RECOVERABLE_DENY_CODES).sort())
+  })
+
+  it('🔴 恢复 RPC 里有状态 CAS 和指针 CAS 两道，且步骤重置在同一个函数里', () => {
+    const sql = read(MIGRATION_SQL)
+    const fn = sql.slice(
+      sql.indexOf('CREATE OR REPLACE FUNCTION public.kernel_claim_run_recovery'),
+      sql.indexOf('REVOKE EXECUTE ON FUNCTION public.kernel_claim_run_recovery'),
+    )
+    expect(fn).toContain('FOR UPDATE')
+    // 状态 CAS
+    expect(fn).toMatch(/v_run\.status\s*<>\s*p_recovery_kind/)
+    // 指针 CAS
+    expect(fn).toMatch(/v_run\.authorization_decision_id\s+IS\s+DISTINCT\s+FROM\s+p_expected_decision_id/i)
+    // 🔴 步骤重置必须在同一个函数（= 同一个事务）里，不能先 reset 再 update run
+    expect(fn).toMatch(/UPDATE\s+public\.action_run_steps/i)
+    expect(fn).toMatch(/status\s*<>\s*'succeeded'/)
+    // 🔴 而且绝不能碰 cost_actual_usd —— 历史已花的钱不许因为重跑变小
+    //
+    // 切法：从这条语句自己开头切到**它自己的分号**。
+    // 早先是切到「下一条 UPDATE public.action_runs」为止 —— 那依赖两条语句的
+    // 书写先后：谁被挪到前面，这里就切出一个空串，而 `expect('').not.toContain(…)`
+    // 恒真，这道断言等于静默失效（fail-open）。下面那句 SET 哨兵就是防这个的。
+    const startIdx = fn.indexOf('UPDATE public.action_run_steps')
+    expect(startIdx, '恢复 RPC 里应该有一条重置步骤的 UPDATE').toBeGreaterThan(-1)
+    const endIdx = fn.indexOf(';', startIdx)
+    expect(endIdx, '那条 UPDATE 应该以分号收尾').toBeGreaterThan(startIdx)
+    const resetStmt = fn.slice(startIdx, endIdx)
+    expect(resetStmt, '切出来的必须真是那条语句，不能是空串').toContain('SET status')
+    expect(resetStmt).not.toContain('cost_actual_usd')
+  })
+
+  it('🔴 execution_item 的复合外键和前置唯一索引都在（S2 的库层那道）', () => {
+    const sql = read(MIGRATION_SQL)
+    expect(sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_items_client_id_id')
+    expect(
+      /FOREIGN KEY \(client_id, execution_item_id\)[\s\S]{0,80}?REFERENCES public\.execution_items \(client_id, id\)/.test(
+        sql,
+      ),
+      'action_runs 必须有 (client_id, execution_item_id) → execution_items(client_id, id) 的复合外键',
+    ).toBe(true)
+  })
+
+  it('🔴 两条复合外键的删除语义各自钉死，且各只有一条外键', () => {
+    const sql = read(MIGRATION_SQL)
+    const runs = sql.slice(
+      sql.indexOf('CREATE TABLE IF NOT EXISTS public.action_runs'),
+      sql.indexOf('CREATE TABLE IF NOT EXISTS public.action_run_steps'),
+    )
+    expect(runs, 'action_runs 建表语句应该切得出来').toContain('goal_matches_purpose')
+
+    // 卡片：删得掉，台账留下 → SET NULL，且**必须带列清单**
+    // （不带列清单会去置空 NOT NULL 的 client_id，整条 DELETE 当场炸）
+    expect(runs).toMatch(
+      /FOREIGN KEY \(client_id, execution_item_id\)[\s\S]{0,120}?ON DELETE SET NULL \(execution_item_id\)/,
+    )
+    // 目标：有台账就删不掉 → 刻意不写 ON DELETE（= NO ACTION）
+    const goalFk = runs.slice(
+      runs.indexOf('CONSTRAINT fk_action_runs_goal_same_client'),
+      runs.indexOf('CONSTRAINT fk_action_runs_execution_item_same_client'),
+    )
+    expect(goalFk, 'goal 的复合外键应该切得出来').toContain('REFERENCES public.goals')
+    expect(goalFk).not.toContain('ON DELETE')
+
+    // 🔴 每列**只能有一条**外键。两条并存时，删除走哪条要看约束 OID
+    // （= 建表里的书写顺序），等于把「删得掉删不掉」押在书写次序上。
+    expect(runs.match(/REFERENCES public\.goals/g) ?? []).toHaveLength(1)
+    expect(runs.match(/REFERENCES public\.execution_items/g) ?? []).toHaveLength(1)
   })
 })
 
