@@ -260,7 +260,7 @@ async function attributeAction(
     if (scope.kind === 'page') {
       return {
         written: 0,
-        cleanupError: await retireOwnKeys(action, windowDays, GSC_DOMAIN_METRIC_KEYS),
+        cleanupError: await retireOwnKeys(action, GSC_DOMAIN_METRIC_KEYS),
       }
     }
     return nothing
@@ -291,7 +291,7 @@ async function attributeAction(
 
   return {
     written: rows.length,
-    cleanupError: await retireOwnKeys(action, windowDays, staleKeys),
+    cleanupError: await retireOwnKeys(action, staleKeys),
   }
 }
 
@@ -308,17 +308,23 @@ async function attributeAction(
  */
 async function retireOwnKeys(
   action: SeoActionRow,
-  windowDays: number,
   metricKeys: readonly string[],
 ): Promise<string | null> {
   if (metricKeys.length === 0) return null
 
+  // Deliberately NOT filtered by window. These keys are retired because the
+  // action's SCOPE rules them out — a page-scoped action's domain numbers are
+  // wrong at every window, not just the one being recomputed. The manual
+  // endpoint accepts any window from 1 to 90 while the cron only ever revisits
+  // its cadence and pass 1's window, so a window-scoped delete would strand
+  // rows written at, say, 7 days forever, still feeding the execution board and
+  // the benchmarks. Scoped to this action and this evaluator, so it can never
+  // touch the flywheel_metrics evaluator's rows.
   const { error } = await supabaseAdmin
     .from('flywheel_outcomes')
     .delete()
     .eq('action_id', action.id)
     .eq('evaluator_key', OUTCOME_EVALUATOR.GSC_SNAPSHOTS)
-    .eq('window_days', windowDays)
     .in('metric_key', metricKeys)
 
   return error ? `retire stale outcomes: ${error.message}` : null

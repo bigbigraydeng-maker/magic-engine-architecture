@@ -375,6 +375,50 @@ export function keepOneMeasurementPerAction<T extends OutcomeMeasurementRow>(
   return Array.from(best.values())
 }
 
+/** An outcome row plus the promise its action made, for case counting. */
+export interface OutcomeCaseRow extends OutcomeMeasurementRow {
+  /** `flywheel_actions.expected_metric` — the metric the action promised to move. */
+  expected_metric?: string | null
+}
+
+/**
+ * Collapse an outcome set to one row per ACTION — the unit for "how often does
+ * this kind of action work".
+ *
+ * `keepOneMeasurementPerAction` folds the windows; this folds the metrics too.
+ * A GSC action yields clicks, impressions and avg_position from one snapshot
+ * pair: three readings of a single event, not three independent results. Left
+ * per-metric they let one action cross a sample threshold on its own and pull a
+ * success rate around by three votes.
+ *
+ * The representative reading is the action's own `expected_metric` — the thing
+ * it promised to move. When that reading is absent (the promise was never
+ * measured), the longest window of whatever was measured stands in, so the
+ * evidence is not thrown away entirely.
+ */
+export function keepOneCasePerAction<T extends OutcomeCaseRow>(rows: readonly T[]): T[] {
+  const best = new Map<string, T>()
+
+  for (const row of keepOneMeasurementPerAction(rows)) {
+    const held = best.get(row.action_id)
+    if (!held || outranks(row, held)) best.set(row.action_id, row)
+  }
+
+  return Array.from(best.values())
+}
+
+function outranks<T extends OutcomeCaseRow>(candidate: T, held: T): boolean {
+  const candidateIsPromise = candidate.expected_metric === candidate.metric_key
+  const heldIsPromise = held.expected_metric === held.metric_key
+  if (candidateIsPromise !== heldIsPromise) return candidateIsPromise
+
+  // Neither (or both) is the promised metric — fall back to the most mature
+  // window, then to metric_key so the choice never depends on row order.
+  const byWindow = (candidate.window_days ?? -1) - (held.window_days ?? -1)
+  if (byWindow !== 0) return byWindow > 0
+  return candidate.metric_key < held.metric_key
+}
+
 /**
  * The canonical handle for an outcome's natural key. Mirrors the `outcome_key`
  * generated column so application code and SQL agree on one spelling.

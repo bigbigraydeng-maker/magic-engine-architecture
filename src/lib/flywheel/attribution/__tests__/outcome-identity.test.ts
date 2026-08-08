@@ -4,6 +4,7 @@ import {
   OUTCOME_CONFLICT_TARGET,
   OUTCOME_EVALUATOR,
   buildOutcomeKey,
+  keepOneCasePerAction,
   keepOneMeasurementPerAction,
   resolveStaleEvaluatorKeys,
 } from '../outcome-identity'
@@ -135,5 +136,92 @@ describe('keepOneMeasurementPerAction', () => {
   it('is a no-op on an already-deduped set', () => {
     const rows = [row('a1', 'seo.gsc.clicks', 28), row('a2', 'seo.gsc.impressions', 14)]
     expect(keepOneMeasurementPerAction(rows)).toHaveLength(2)
+  })
+})
+
+// ── One action is one case, however many metrics it moved ──────────────────
+
+describe('keepOneCasePerAction', () => {
+  const r = (
+    action_id: string,
+    metric_key: string,
+    window_days: number | null,
+    expected_metric: string | null = null,
+  ) => ({ action_id, metric_key, window_days, expected_metric })
+
+  it('folds one action three metrics into a single case', () => {
+    const kept = keepOneCasePerAction([
+      r('a1', 'seo.gsc.clicks', 28, 'seo.gsc.clicks'),
+      r('a1', 'seo.gsc.impressions', 28, 'seo.gsc.clicks'),
+      r('a1', 'seo.gsc.avg_position', 28, 'seo.gsc.clicks'),
+    ])
+
+    expect(kept).toHaveLength(1)
+  })
+
+  it('represents the case with the metric the action promised', () => {
+    const kept = keepOneCasePerAction([
+      r('a1', 'seo.gsc.avg_position', 28, 'seo.gsc.clicks'),
+      r('a1', 'seo.gsc.clicks', 28, 'seo.gsc.clicks'),
+    ])
+
+    expect(kept[0].metric_key).toBe('seo.gsc.clicks')
+  })
+
+  it('does not depend on row order', () => {
+    const forward = keepOneCasePerAction([
+      r('a1', 'seo.gsc.clicks', 28, 'seo.gsc.clicks'),
+      r('a1', 'seo.gsc.impressions', 28, 'seo.gsc.clicks'),
+    ])
+    const reverse = keepOneCasePerAction([
+      r('a1', 'seo.gsc.impressions', 28, 'seo.gsc.clicks'),
+      r('a1', 'seo.gsc.clicks', 28, 'seo.gsc.clicks'),
+    ])
+
+    expect(forward[0].metric_key).toBe(reverse[0].metric_key)
+  })
+
+  it('falls back to the longest window when the promise was never measured', () => {
+    const kept = keepOneCasePerAction([
+      r('a1', 'seo.gsc.clicks', 14, 'seo.domain.organic_traffic'),
+      r('a1', 'seo.gsc.impressions', 28, 'seo.domain.organic_traffic'),
+    ])
+
+    expect(kept).toHaveLength(1)
+    expect(kept[0].window_days).toBe(28)
+  })
+
+  it('is deterministic when neither window nor promise breaks the tie', () => {
+    const kept = keepOneCasePerAction([
+      r('a1', 'seo.gsc.impressions', 28, null),
+      r('a1', 'seo.gsc.clicks', 28, null),
+    ])
+
+    expect(kept[0].metric_key).toBe('seo.gsc.avg_position' < 'seo.gsc.clicks'
+      ? 'seo.gsc.clicks'
+      : 'seo.gsc.clicks')
+  })
+
+  it('keeps different actions apart', () => {
+    expect(keepOneCasePerAction([
+      r('a1', 'seo.gsc.clicks', 28, 'seo.gsc.clicks'),
+      r('a2', 'seo.gsc.clicks', 28, 'seo.gsc.clicks'),
+    ])).toHaveLength(2)
+  })
+
+  it('collapses windows as well as metrics — one action stays one case', () => {
+    // The compounding case: 3 metrics x 2 windows = 6 rows for one action.
+    const kept = keepOneCasePerAction([
+      r('a1', 'seo.gsc.clicks', 28, 'seo.gsc.clicks'),
+      r('a1', 'seo.gsc.clicks', 14, 'seo.gsc.clicks'),
+      r('a1', 'seo.gsc.impressions', 28, 'seo.gsc.clicks'),
+      r('a1', 'seo.gsc.impressions', 14, 'seo.gsc.clicks'),
+      r('a1', 'seo.gsc.avg_position', 28, 'seo.gsc.clicks'),
+      r('a1', 'seo.gsc.avg_position', 14, 'seo.gsc.clicks'),
+    ])
+
+    expect(kept).toHaveLength(1)
+    expect(kept[0].metric_key).toBe('seo.gsc.clicks')
+    expect(kept[0].window_days).toBe(28)
   })
 })

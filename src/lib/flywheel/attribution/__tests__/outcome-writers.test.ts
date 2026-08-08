@@ -212,10 +212,13 @@ describe('writer coexistence', () => {
     ])
   })
 
-  it('the retire is scoped to one window, so another window survives it', async () => {
-    // Reachable through the manual route: an operator runs GSC attribution at
-    // window 14, then the cron's page-scoped run at 28 retires domain keys. The
-    // 14-day answers are a different question and must not be swept up.
+  it('the retire clears the superseded scope at EVERY window, not just this run\'s', async () => {
+    // The manual endpoint accepts any window from 1 to 90 while the cron only
+    // revisits its cadence and pass 1's window. A window-scoped delete would
+    // strand domain rows written at, say, 14 days forever — still shown on the
+    // execution board and still counted by the benchmarks — even though the
+    // action is now about one specific page. Scope invalidates a key at every
+    // window, so the retire has to reach across them.
     seedSeoAction()
     seedGscSnapshots([{ page: 'https://example.com/guide', clicks: 40, impressions: 400, position: 18 }])
 
@@ -225,15 +228,34 @@ describe('writer coexistence', () => {
     action.action_type = 'cms_update_existing'
     action.payload = { status: 'live', page_url: 'https://example.com/guide' }
 
-    await runBridge(28) // 3 page rows @ 28, retires domain keys @ 28 only
+    await runBridge(28) // 3 page rows @ 28; every domain row is now superseded
 
-    const atFourteen = db.outcomes().filter(r => r.window_days === 14)
-    expect(atFourteen.map(r => r.metric_key).sort()).toEqual([
-      'seo.gsc.avg_position',
-      'seo.gsc.clicks',
-      'seo.gsc.impressions',
+    expect(db.outcomes().map(r => r.metric_key).sort()).toEqual([
+      'seo.gsc.page_avg_position',
+      'seo.gsc.page_clicks',
+      'seo.gsc.page_impressions',
     ])
-    expect(db.outcomes()).toHaveLength(6)
+    expect(db.outcomes().every(r => r.window_days === 28)).toBe(true)
+  })
+
+  it('the retire still never reaches another evaluator or another action', async () => {
+    // Dropping the window filter widened the delete; the action and evaluator
+    // scoping are what keep it from becoming a blunt instrument.
+    seedSeoAction()
+    seedGscSnapshots([{ page: 'https://example.com/guide', clicks: 40, impressions: 400, position: 18 }])
+    db.seed('flywheel_outcomes', [
+      { id: 'other-action', action_id: 'other', client_id: CLIENT_ID, metric_key: 'seo.gsc.clicks', window_days: 28, verdict: 'confirmed', evaluator_key: OUTCOME_EVALUATOR.GSC_SNAPSHOTS },
+      { id: 'other-eval', action_id: ACTION_ID, client_id: CLIENT_ID, metric_key: 'seo.domain.organic_traffic', window_days: 28, verdict: 'confirmed', evaluator_key: OUTCOME_EVALUATOR.FLYWHEEL_METRICS },
+    ])
+
+    const action = db.rowsOf('flywheel_actions')[0]
+    action.action_type = 'cms_update_existing'
+    action.payload = { status: 'live', page_url: 'https://example.com/guide' }
+
+    await runBridge(28)
+
+    expect(db.outcomes().find(r => r.id === 'other-action')).toBeDefined()
+    expect(db.outcomes().find(r => r.id === 'other-eval')).toBeDefined()
   })
 
   it('retires domain rows for a page-scoped action even when the page is missing from the snapshot', async () => {
@@ -298,7 +320,7 @@ describe('writer coexistence', () => {
     expect(db.didDeleteFrom('flywheel_outcomes')).toBe(false)
   })
 
-  it('the retire query is scoped by action, evaluator, window and metric', async () => {
+  it('the retire query is scoped by action, evaluator and metric — deliberately not window', async () => {
     // The evaluator_key scope is now defence in depth rather than load-bearing:
     // metric-family ownership means no other evaluator can hold a seo.gsc.* row
     // in the first place. It stays so that moving a family to a third evaluator
@@ -319,7 +341,6 @@ describe('writer coexistence', () => {
       'action_id',
       'evaluator_key',
       'metric_key',
-      'window_days',
     ])
   })
 })
