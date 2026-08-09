@@ -140,7 +140,10 @@ describe('cron 触发、web 进程读取的开关：docs/ENV.md 的「配在哪�
 
   it('前提成立：解析器读到了 cron，也读到了 ENV.md 的表（正则写歪不许静默变绿）', () => {
     expect(parsed.length).toBeGreaterThan(30)
-    expect(parsed.every((p) => p.startCommand.includes('curl'))).toBe(true)
+    // 只确认每条 startCommand 都解析出来了。这里**不**断言「全部 cron 都是 curl」——
+    // 以后新增一条正当的、在自己进程里跑 node 的 cron，不该让这个无关的断言变红；
+    // 「只能 curl」的约束下面按任务单独验，只管本文件真正关心的那两条。
+    expect(parsed.filter((p) => p.startCommand.trim() === '').map((p) => p.service)).toEqual([])
     expect(envDocLocation('CRON_SECRET')).toContain('cron')
     expect(envDocLocation('NEXT_PUBLIC_SUPABASE_ANON_KEY')).toBe('Render-web')
     expect(envDocLocation('THIS_ENV_DOES_NOT_EXIST')).toBeNull()

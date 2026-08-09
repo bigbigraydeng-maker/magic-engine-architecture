@@ -71,8 +71,14 @@ describe('workerClientWhitelist', () => {
  * 配到 Render 的 worker 服务上,claim 会一直 fail-closed 拒绝(白名单 null),
  * 表现成「工单一条都领不走」,而排查方向会被变量名带偏。
  *
- * 下面查的是真实事实,不是比对一段固定文案:全仓谁 process.env 读它、render.yaml 的
- * worker 服务有没有声明它、docs/ENV.md 那一格写的是什么。
+ * 下面查的是真实事实,不是比对一段固定文案:全仓谁读它、render.yaml 的 worker 服务有没有
+ * 声明它、docs/ENV.md 那一格写的是什么。
+ *
+ * ⚠️ 读取方扫描不能只认 `process.env.X`。本机 worker
+ * scripts/factory-worker/worker.mjs 自己有一个 loadEnv() 读 .env 文件,所有配置都走
+ * `ENV.X`(FACTORY_WORKER_TOKEN / FACTORY_WORKER_ID / FACTORY_CLIENT_STUDIO 等 13 个)。
+ * 只匹配 process.env,恰好会漏掉最该盯的那个文件 —— worker 哪天真开始自己读白名单,
+ * 测试还是全绿,文档继续把它写成 web。所以下面按「访问方式」匹配,不是按字面量。
  */
 describe('FACTORY_WORKER_CLIENT_IDS 配在哪', () => {
   const ROOT = path.resolve(__dirname, '../../..')
@@ -89,14 +95,30 @@ describe('FACTORY_WORKER_CLIENT_IDS 配在哪', () => {
     })
   }
 
+  /**
+   * 「读这个变量」的各种写法:process.env.X / ENV.X / env.X,点号和方括号都算。
+   * 刻意不匹配裸字符串,否则 claim 路由那句 'FACTORY_WORKER_CLIENT_IDS not configured'
+   * 错误文案会被当成读取方。
+   */
+  const READ_PATTERN = new RegExp(
+    `(?:process\\.env|\\bENV|\\benv)\\s*(?:\\.\\s*${ENV_NAME}\\b|\\[\\s*['"\`]${ENV_NAME}['"\`]\\s*\\])`,
+  )
+
   const readers = [...walk(path.join(ROOT, 'src')), ...walk(path.join(ROOT, 'scripts'))]
     .filter((f) => !f.endsWith('worker-guard.test.ts'))
-    .filter((f) => readFileSync(f, 'utf8').includes(`process.env.${ENV_NAME}`))
+    .filter((f) => READ_PATTERN.test(readFileSync(f, 'utf8')))
     .map((f) => path.relative(ROOT, f))
 
   it('前提成立:扫到的源码文件数量正常(走空了就不许静默变绿)', () => {
     expect(walk(path.join(ROOT, 'src')).length).toBeGreaterThan(500)
     expect(walk(path.join(ROOT, 'scripts')).length).toBeGreaterThan(5)
+  })
+
+  it('前提成立:读取方匹配式认得本仓真实用过的两种写法,且不把错误文案当成读取', () => {
+    expect(READ_PATTERN.test(`process.env.${ENV_NAME}`)).toBe(true)
+    expect(READ_PATTERN.test(`const ids = ENV.${ENV_NAME} || ''`)).toBe(true)
+    expect(READ_PATTERN.test(`process.env['${ENV_NAME}']`)).toBe(true)
+    expect(READ_PATTERN.test(`{ error: '${ENV_NAME} not configured' }`)).toBe(false)
   })
 
   it('🔴 全仓唯一读它的地方是 worker-guard.ts —— 多出第二个读取方,配在哪就要重判', () => {
