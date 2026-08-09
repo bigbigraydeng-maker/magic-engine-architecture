@@ -19,6 +19,8 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { pushAttributionItems, type AttributionItemKind } from './attribution-items'
+import { clientListUnreadableItem, loadActiveClients, type ClientRosterItemKind, type ClientRow } from './client-roster'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { AUTO_LANDED_AGENT } from '@/lib/diagnostic/auto-prescribe'
 import { isHandAddedItem } from '@/lib/diagnostic/prescription-landing'
@@ -60,6 +62,8 @@ export type ManualItemKind =
   | 'auto_run_stuck'
   /** 执行内核停手 / 等审批 / 被规则挡下 —— 必须有人看见，不许死在日志里 */
   | 'kernel_needs_human'
+  | AttributionItemKind
+  | ClientRosterItemKind
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -71,12 +75,6 @@ export interface ManualItem {
   how: string
   /** Direct link to the place the action happens. */
   href: string
-}
-
-interface ClientRow {
-  id: string
-  name: string
-  domain: string | null
 }
 
 /** GSC URL-inspection deep link — the exact screen with the resubmit button. */
@@ -153,13 +151,7 @@ export async function loadManualItems(
 ): Promise<ManualItem[]> {
   const items: ManualItem[] = []
 
-  const { data: clientRows } = await supabase
-    .from('clients')
-    .select('id, name, domain')
-    .eq('client_status', 'active')
-  const clients = new Map(
-    ((clientRows ?? []) as ClientRow[]).map((c) => [c.id, c]),
-  )
+  const { clients, error: clientsError } = await loadActiveClients(supabase)
   // 基础设施类检查要放在这条提前返回**之前**：定时任务健康跟系统里有几个客户
   // 毫无关系。放在后面的话，客户表一空它就被跳过了。
   // 出片余额用完 —— 只有人能充值，必须当天摆到眼前，不能烂在工单的 error 字段里
@@ -172,6 +164,11 @@ export async function loadManualItems(
   await pushFactoryWorkerItems(supabase, items, now).catch((e) =>
     console.warn('[manual-items] 出片工人在岗检查失败（不阻塞其他待办）:', e),
   )
+  if (clientsError) {
+    items.push(clientListUnreadableItem(clientsError.message))
+    return items
+  }
+
   if (clients.size === 0) return items
 
   const ids = Array.from(clients.keys())
@@ -216,6 +213,9 @@ export async function loadManualItems(
   await pushCrossClientItems(supabase, items).catch((e) =>
     console.warn('[manual-items] 串台检查失败（不阻塞其他待办）:', e),
   )
+
+  // 归因侧两条通道（黑洞 / 孤儿数据），理由见 attribution-items.ts
+  await pushAttributionItems(supabase, items, ids, nameOf, now)
 
   // GSC property identifiers (needed for the inspect deep link).
   const { data: connectors } = await supabase

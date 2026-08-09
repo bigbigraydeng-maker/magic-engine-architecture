@@ -48,6 +48,8 @@ function fakeSupabase(opts: {
     chain.not = (k: unknown, _op: unknown, v: unknown) => rec(k, v)
     chain.gte = (k: unknown, v: unknown) => rec(k, v)
     chain.order = () => chain
+    // fetchAll pages the clients query now — without this the chain never resolves.
+    chain.range = () => chain
     chain.limit = () => chain
     chain.maybeSingle = () =>
       Promise.resolve({
