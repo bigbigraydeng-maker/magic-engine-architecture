@@ -104,18 +104,23 @@ describe('FACTORY_WORKER_CLIENT_IDS 配在哪', () => {
   }
 
   /**
-   * 「读这个变量」的各种写法:process.env.X / ENV.X / env.X,点号和方括号都算。
+   * 「读这个变量」的各种写法:
+   *   - 点号 / 方括号取值:process.env.X · ENV.X · env['X']
+   *   - 解构:const { X } = ENV · const { X: ids } = process.env
    * 刻意不匹配裸字符串,否则 claim 路由那句 'FACTORY_WORKER_CLIENT_IDS not configured'
    * 错误文案会被当成读取方。
    */
-  const READ_PATTERN = new RegExp(
-    `(?:process\\.env|\\bENV|\\benv)\\s*(?:\\.\\s*${ENV_NAME}\\b|\\[\\s*['"\`]${ENV_NAME}['"\`]\\s*\\])`,
-  )
+  const ENV_OBJ = `(?:process\\.env|\\bENV|\\benv)`
+  const READ_PATTERNS = [
+    new RegExp(`${ENV_OBJ}\\s*(?:\\.\\s*${ENV_NAME}\\b|\\[\\s*['"\`]${ENV_NAME}['"\`]\\s*\\])`),
+    new RegExp(`\\{[^{}]*\\b${ENV_NAME}\\b[^{}]*\\}\\s*=\\s*${ENV_OBJ}\\b`),
+  ]
+  const readsEnv = (src: string) => READ_PATTERNS.some((re) => re.test(src))
 
   const runtimeFiles = [...walk(path.join(ROOT, 'src')), ...walk(path.join(ROOT, 'scripts'))]
 
   const readers = runtimeFiles
-    .filter((f) => READ_PATTERN.test(readFileSync(f, 'utf8')))
+    .filter((f) => readsEnv(readFileSync(f, 'utf8')))
     .map((f) => path.relative(ROOT, f))
 
   it('前提成立:扫到的源码文件数量正常(走空了就不许静默变绿)', () => {
@@ -128,11 +133,15 @@ describe('FACTORY_WORKER_CLIENT_IDS 配在哪', () => {
     expect(runtimeFiles.some((f) => /(\.test\.|\.spec\.|__tests__)/.test(f))).toBe(false)
   })
 
-  it('前提成立:读取方匹配式认得本仓真实用过的两种写法,且不把错误文案当成读取', () => {
-    expect(READ_PATTERN.test(`process.env.${ENV_NAME}`)).toBe(true)
-    expect(READ_PATTERN.test(`const ids = ENV.${ENV_NAME} || ''`)).toBe(true)
-    expect(READ_PATTERN.test(`process.env['${ENV_NAME}']`)).toBe(true)
-    expect(READ_PATTERN.test(`{ error: '${ENV_NAME} not configured' }`)).toBe(false)
+  it('前提成立:读取方匹配式认得取值和解构两类写法,且不把错误文案当成读取', () => {
+    expect(readsEnv(`process.env.${ENV_NAME}`)).toBe(true)
+    expect(readsEnv(`const ids = ENV.${ENV_NAME} || ''`)).toBe(true)
+    expect(readsEnv(`process.env['${ENV_NAME}']`)).toBe(true)
+    expect(readsEnv(`const { ${ENV_NAME} } = ENV`)).toBe(true)
+    expect(readsEnv(`const { ${ENV_NAME}: ids } = process.env`)).toBe(true)
+    expect(readsEnv(`const { FOO, ${ENV_NAME}, BAR } = env`)).toBe(true)
+    expect(readsEnv(`{ error: '${ENV_NAME} not configured' }`)).toBe(false)
+    expect(readsEnv(`const { ${ENV_NAME} } = someOtherObject`)).toBe(false)
   })
 
   it('🔴 全仓唯一读它的地方是 worker-guard.ts —— 多出第二个读取方,配在哪就要重判', () => {
