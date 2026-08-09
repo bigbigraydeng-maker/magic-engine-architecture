@@ -48,7 +48,17 @@ function extractStartCommand(block: string): string {
     body.push(line)
   }
   if (body.length === 0) return ''
-  return folded ? `${body.map((l) => l.trim()).join(' ')}\n` : `${body.join('\n')}\n`
+  if (!folded) return `${body.join('\n')}\n`
+  // folded 只折**同级缩进**的普通行；比基准更深的行保留换行（YAML 折叠标量的规则）。
+  // 无脑全折会把一条更深缩进的本地命令拼进 curl 那一段，变成漏报。
+  const base = /^([ \t]*)/.exec(body[0])![1].length
+  const out: string[] = []
+  for (const line of body) {
+    const deeper = /^([ \t]*)/.exec(line)![1].length > base
+    if (out.length === 0 || deeper) out.push(line.trim())
+    else out[out.length - 1] = `${out[out.length - 1]} ${line.trim()}`
+  }
+  return `${out.join('\n')}\n`
 }
 
 function parseRenderYaml(): ParsedCron[] {
@@ -206,17 +216,24 @@ describe('cron 触发、web 进程读取的开关：docs/ENV.md 的「配在哪�
     expect(envDocLocation('THIS_ENV_DOES_NOT_EXIST')).toBeNull()
   })
 
-  it('前提成立：literal 块和 folded 块的换行语义分得开（folded 不许被拆成两条命令）', () => {
-    const svcBlock = (indicator: string) =>
-      `    name: x\n    startCommand: ${indicator}\n      curl -fsS\n        https://example.test/api\n    envVars:\n      - key: CRON_SECRET\n`
-    // folded：YAML 会把换行折成空格，仍是一条 curl
-    expect(isCurlOnly(extractStartCommand(svcBlock('>')))).toBe(true)
-    expect(isCurlOnly(extractStartCommand(svcBlock('>-')))).toBe(true)
-    // literal：换行就是换行，第二行那个不是命令，判不通过（正是要拦的形状）
-    expect(isCurlOnly(extractStartCommand(svcBlock('|')))).toBe(false)
+  it('前提成立：literal / folded 块的换行语义分得开，folded 只折同级缩进', () => {
+    // 同级缩进：YAML 折成空格，仍是一条 curl
+    const flat = (ind: string) =>
+      `    name: x\n    startCommand: ${ind}\n      curl -fsS\n      https://example.test/api\n    envVars:\n      - key: CRON_SECRET\n`
+    expect(isCurlOnly(extractStartCommand(flat('>')))).toBe(true)
+    expect(isCurlOnly(extractStartCommand(flat('>-')))).toBe(true)
+    // literal 块里同样两行 = 两条命令，第二条不是 curl，判不通过
+    expect(isCurlOnly(extractStartCommand(flat('|')))).toBe(false)
+
+    // folded 里更深缩进的行保留换行 —— 无脑全折会把本地命令拼进 curl 那段变成漏报
+    const deeper =
+      `    name: x\n    startCommand: >\n      curl -fsS https://example.test/api\n        ./scripts/foo.mjs\n    envVars:\n      - key: CRON_SECRET\n`
+    expect(extractStartCommand(deeper)).toContain('\n')
+    expect(isCurlOnly(extractStartCommand(deeper))).toBe(false)
+
     // 两种块都不许把 envVars / - key 吃进来
-    expect(extractStartCommand(svcBlock('|'))).not.toMatch(/envVars:|- key:/)
-    expect(extractStartCommand(svcBlock('>'))).not.toMatch(/envVars:|- key:/)
+    expect(extractStartCommand(flat('|'))).not.toMatch(/envVars:|- key:/)
+    expect(extractStartCommand(flat('>'))).not.toMatch(/envVars:|- key:/)
     // 单行写法原样取出
     expect(extractStartCommand('    startCommand: node scripts/x.mjs\n')).toBe('node scripts/x.mjs')
   })
