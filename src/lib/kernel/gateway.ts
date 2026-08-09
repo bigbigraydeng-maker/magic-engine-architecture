@@ -741,6 +741,9 @@ async function runSteps(
       }
 
       attempt += 1
+      // 心跳句柄要在 try 外面 —— handler **抛错**那条路也得读它的 lostReason()，
+      // 否则「失去执行权」只在正常返回那条路上被发现（见下面 catch 里的复核）。
+      let heartbeat: ReturnType<typeof startLeaseHeartbeat> | null = null
       const startedAt = deps.now().toISOString()
       await writeStep(step.id, {
         status: 'running',
@@ -759,7 +762,7 @@ async function runSteps(
         //    所以只要我还活着、还握着这一代，就把租约往后推；
         //    续不上（owner 变了 / 代际变了 / 状态不是 running）= 我已经失去执行权，
         //    当场停手，**绝不把执行结果当自己的提交**。
-        const heartbeat = startLeaseHeartbeat(deps, args.run.id, fence)
+        heartbeat = startLeaseHeartbeat(deps, args.run.id, fence)
         let result: CapabilityStepResult
         try {
           result = await handler({
@@ -886,9 +889,16 @@ async function runSteps(
         //    `claimed_by` 却不换代际 —— 于是旧执行者的代际仍然对得上，
         //    `writeStep` / `failRun` 照写不误，把人工写下的 `last_error`
         //    （比如「先确认供应商那边扣没扣钱」）覆盖成「被接管了」。
-        //    人再看这条待办时，那句真正要他去做的事已经没了。
-        //    实测过：park 的原因确实会被冲掉。所以这里直接往外抛，不落任何状态。
-        if (err instanceof KernelError && err.code === 'STALE_CLAIM') throw err
+        //    人再看这条待办时，那句真正要他去做的事已经没了。实测过，确实会被冲掉。
+        //
+        //    这一句管的是**抛错**这条路：handler 抛错（超时 / 502 / 解析失败）时
+        //    控制流直接跳到这里，绕过上面「返回之后」那句复核。只补那一条 = 没补。
+        //    复核不过就直接往外抛（一个字都不写），原来那个业务错误让位。
+        //
+        //    🔴 这里**不再**单独写一句「是 STALE_CLAIM 就直接抛」——
+        //    那句会被这一句完全遮住（同一个情形，这一句一样会抛），
+        //    遮住的闸删掉都没人发现，正是我们一路在防的形状。
+        await assertStillOwner(deps, args.run.id, fence, heartbeat?.lostReason() ?? null)
 
         lastError = err
 

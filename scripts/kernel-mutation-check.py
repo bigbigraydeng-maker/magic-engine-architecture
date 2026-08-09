@@ -1297,8 +1297,8 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
     dict(
         name="R10-2 handler 跑着的时候不续租（第二代会把它再调一遍）",
         file="src/lib/kernel/gateway.ts",
-        old="""        const heartbeat = startLeaseHeartbeat(deps, args.run.id, fence)""",
-        new="""        const heartbeat = { stop: () => {}, lostReason: () => null }""",
+        old="""        heartbeat = startLeaseHeartbeat(deps, args.run.id, fence)""",
+        new="""        heartbeat = { stop: () => {}, lostReason: () => null }""",
         test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
         expect_fail_contains="心跳把租约续上",
     ),
@@ -1427,14 +1427,25 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
     dict(
         # 只删这一句，其它闸原样保留：写入围栏只比代际，而 park 清 owner 不换代际，
         # 所以旧执行者的 writeStep / failRun 照写不误，会把人工处置的原话冲掉。
-        name="R11-1 失去 owner 之后仍然继续落死信（覆盖人工处置的原话）",
+        name="R11-1 handler 正常返回这条路不复核所有权（把结果当成自己的提交）",
         file="src/lib/kernel/gateway.ts",
-        old="""        if (err instanceof KernelError && err.code === 'STALE_CLAIM') throw err
+        old="""        await assertStillOwner(deps, args.run.id, fence, heartbeat.lostReason())
+        const reported = result.costActualUsd ?? 0""",
+        new="""        const reported = result.costActualUsd ?? 0""",
+        test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
+        expect_fail_contains="handler 跑着的时候这条 run 被转人工",
+    ),
+    dict(
+        # 同一个覆盖的另一条分支：handler 抛错时绕过「返回之后那句复核」。
+        # 只补正常返回那条路 = 没补 —— 这个探针就是盯着别再只补一半。
+        name="R11-2 handler 抛错这条路不复核所有权（覆盖人工处置的原话）",
+        file="src/lib/kernel/gateway.ts",
+        old="""        await assertStillOwner(deps, args.run.id, fence, heartbeat?.lostReason() ?? null)
 
         lastError = err""",
         new="""        lastError = err""",
         test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
-        expect_fail_contains="handler 跑着的时候这条 run 被转人工",
+        expect_fail_contains="转人工之后 handler 抛错",
     ),
 ]
 

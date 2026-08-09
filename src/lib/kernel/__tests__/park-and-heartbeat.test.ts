@@ -532,4 +532,66 @@ describe('P1-2b · handler 返回之后必须复核「我还握着执行权吗�
     // 步骤也不许被旧执行者改写
     expect(f.tables.action_run_steps.every((st) => st.status !== 'dead_letter')).toBe(true)
   })
+
+  /**
+   * 🔴 同一个覆盖的**另一条分支**：handler 不是正常返回，而是抛错。
+   *
+   *    抛错时控制流直接跳进通用 catch，绕过「返回之后那句复核」——
+   *    只补正常返回那条路等于没补：只比代际的 writeStep / failRun
+   *    照样把人工处置的原话、时间、步骤状态覆盖掉。
+   */
+  it('🔴 转人工之后 handler 抛错 → 也不许落自己的死信（人工原话原样保留）', async () => {
+    let boom: () => void = () => {}
+    const gate = new Promise<void>((_, rej) => { boom = () => rej(new Error('供应商 502')) })
+    const f = makeFixture({
+      registry: makeRegistry([paidUnsafeDefinition({ providerIdempotency: 'supported' })]),
+      capabilities: () => ({
+        [KEY]: {
+          actionKey: KEY as never,
+          version: 1,
+          steps: { a: async () => { await gate; return { output: { done: true } } } } as never,
+        } as CapabilityImplementation,
+      }),
+      options: { policy: policy(10) },
+      startAt: T0,
+      leaseSeconds: 3600,
+    })
+
+    const running = runAction(f.kernel, submit()).then(
+      (v) => ({ ok: true as const, v }),
+      (e: Error) => ({ ok: false as const, e }),
+    )
+    for (let i = 0; i < 200 && f.tables.action_runs[0]?.status !== 'running'; i += 1) {
+      await new Promise((r) => setTimeout(r, 5))
+    }
+    expect(runRow(f).status).toBe('running')
+
+    const parked = await parkRunForHuman(f.supabase, {
+      runId: String(runRow(f).id),
+      expectedGeneration: Number(runRow(f).claim_generation),
+      reason: '人工介入：先确认供应商那边扣没扣钱',
+    })
+    expect(parked.ok).toBe(true)
+    const human = {
+      lastError: String(runRow(f).last_error),
+      finishedAt: String(runRow(f).finished_at),
+      evidence: JSON.stringify(runRow(f).evidence ?? {}),
+    }
+
+    boom()
+    const out = await running
+
+    // 🔴 抛错这条路也必须冒泡，而不是把「供应商 502」写成这条 run 的结局
+    expect(out.ok).toBe(false)
+    if (out.ok) throw new Error('unreachable')
+    expect(out.e.message).toMatch(/接管/)
+
+    expect(runRow(f).status).toBe('dead_letter')
+    expect(runRow(f).needs_human).toBe(true)
+    expect(runRow(f).last_error).toBe(human.lastError)
+    expect(String(runRow(f).last_error)).not.toContain('502')
+    expect(String(runRow(f).finished_at)).toBe(human.finishedAt)
+    expect(JSON.stringify(runRow(f).evidence ?? {})).toBe(human.evidence)
+    expect(f.tables.action_run_steps.every((st) => st.status !== 'dead_letter')).toBe(true)
+  })
 })
