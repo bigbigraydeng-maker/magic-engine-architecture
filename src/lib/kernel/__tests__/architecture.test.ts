@@ -61,8 +61,19 @@ function stripComments(src: string): string {
 }
 
 /**
- * 全仓 2500+ 个文件，而这个文件里有三条规则都要扫一遍。
- * 不缓存的话每条规则各读一次全仓，在并行跑测试时会直接撞 5 秒超时
+ * 🔴 扫全仓的那几条要显式给超时。
+ *
+ * 默认 5s 是按「单元测试」定的，而这几条是**真的把 src 下近 2000 个文件读一遍**。
+ * 仓库一长就会撞线 —— 这次合 main 之后从 ~2.2s 涨到 ~5.1s，当场变红，
+ * 而它红的原因是「跑不完」，不是「发现了违规」。两者混在一起最危险：
+ * 一条本该拦违规的闸会因为超时而以「红了」的样子出现，让人以为它在干活；
+ * 而反过来，为了让它绿去放宽判据才是真正的灾难。所以这里不动判据，只给足时间。
+ */
+const SCAN_TIMEOUT_MS = 60_000
+
+/**
+ * 全仓近 2000 个文件，而这个文件里有四条规则都要扫一遍。
+ * 不缓存的话每条规则各读一次全仓，在并行跑测试时会直接撞超时
  * （实测：单跑 1.4s，十个测试文件并行时 >5s）。
  */
 const codeCache = new Map<string, string>()
@@ -105,7 +116,7 @@ describe('L1 边界：对外写能力只能由 capability 层调用', () => {
         `确实要豁免就把路径加进 boundaries.ts 的 PROVIDER_WRITE_GRANDFATHERED（那是一次要过 review 的 diff）。\n` +
         violations.join('\n'),
     ).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('历史清单里的路径都还在（清单不许留幽灵条目）', () => {
     const missing = PROVIDER_WRITE_GRANDFATHERED.filter((p) => !ALL_FILES.includes(p))
@@ -165,7 +176,7 @@ describe('L1 边界：Kernel 不许自己抓 service-role 客户端', () => {
         '自己 import supabaseAdmin 等于把「谁在什么授权下写了什么」退化成「进程里哪都能写」。\n' +
         violations.join('\n'),
     ).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 })
 
 describe('L2 边界：授权上下文不许在别处被造出来', () => {
@@ -183,7 +194,7 @@ describe('L2 边界：授权上下文不许在别处被造出来', () => {
         '（就算伪造了也过不了 Gateway 的重读比对，但它不该出现在生产代码里。）\n' +
         violations.join('\n'),
     ).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 
   it('Gateway 确实会从库里重读授权，而不是只信传进来的对象', () => {
     const gateway = read('src/lib/kernel/gateway.ts')
@@ -219,7 +230,7 @@ describe('L1 边界：execution_items 是看板，不是执行引擎', () => {
       '新代码不该直接往执行看板里写 —— 提交一个 action_run，让 Kernel 去跑。\n' +
         violations.join('\n'),
     ).toEqual([])
-  })
+  }, SCAN_TIMEOUT_MS)
 })
 
 describe('migration 版本不许撞车（P1-4）', () => {
