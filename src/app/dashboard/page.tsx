@@ -1,5 +1,9 @@
 import { supabaseAdmin } from '@/lib/supabase';
 import { loadClientsWithOutcomes } from '@/lib/flywheel/measure-coverage';
+import {
+  loadClientsWithDiagnose,
+  loadExecutionPhaseClients,
+} from '@/lib/flywheel/phase-coverage';
 import Link from 'next/link';
 import {
   MePanel,
@@ -94,8 +98,8 @@ async function getOverviewData() {
     mentionRateCurrentRes,
     mentionRatePreviousRes,
     aiEngineRunsRes,
-    prescriptionsRes,
-    execItemsRes,
+    diagnoseRes,
+    executionPhasesRes,
     outcomesRes,
   ] = await Promise.all([
     // Onboarding gate uses count-only query — does NOT pull rows
@@ -163,15 +167,11 @@ async function getOverviewData() {
       .select('ai_engine, client_brand_rank, ran_at')
       .gte('ran_at', sevenDaysAgo),
 
-    // Flywheel phase 1: Diagnose — clients with a prescription
-    supabaseAdmin
-      .from('prescriptions')
-      .select('client_id'),
+    // Flywheel phase 1: Diagnose — clients with a prescription.
+    loadClientsWithDiagnose(),
 
-    // Flywheel phases 2 & 3: Prioritise / Execute — execution_items per client
-    supabaseAdmin
-      .from('execution_items')
-      .select('client_id, status'),
+    // Flywheel phases 2 & 3: Prioritise / Execute — by execution item status.
+    loadExecutionPhaseClients(),
 
     // Flywheel phase 4: Measure — clients with at least one outcome.
     loadClientsWithOutcomes(),
@@ -268,21 +268,9 @@ async function getOverviewData() {
   };
 
   // ── 4-phase mini-flywheel — per-client coverage ratios ─────────────────────
-  const clientsWithDiagnose = new Set<string>(
-    ((prescriptionsRes.data ?? []) as Array<{ client_id: string }>).map(r => r.client_id),
-  );
-  const clientsWithPrioritise = new Set<string>();
-  const clientsWithExecute = new Set<string>();
-  for (const row of (execItemsRes.data ?? []) as Array<{
-    client_id: string;
-    status: string;
-  }>) {
-    if (row.status === 'pending' || row.status === 'in_progress') {
-      clientsWithPrioritise.add(row.client_id);
-    } else if (row.status === 'completed') {
-      clientsWithExecute.add(row.client_id);
-    }
-  }
+  const clientsWithDiagnose = diagnoseRes;
+  const { prioritise: clientsWithPrioritise, execute: clientsWithExecute } =
+    executionPhasesRes;
   const clientsWithMeasure = outcomesRes;
 
   const phasePct = (n: number): number =>
