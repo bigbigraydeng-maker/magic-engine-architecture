@@ -7,7 +7,7 @@
 
 | 「配在哪」 | 含义 |
 |---|---|
-| **Render-web** | Render 上 `magic-engine` web service 的 Environment |
+| **Render-web** | Render 上 `crazycontent` web service（service id `srv-d79s6d95pdvs73boptcg`）的 Environment —— 它才是对外的生产 web 服务，持有 `app.magicengine.com.au`。⚠️ 旧的 web 服务 `magic-engine` 已于 2026-07-25 移除，**别因为名字像就去找它**（依据：`render.yaml` 顶部说明） |
 | **Render-cron** | 该变量只有某个 cron job 用得到 |
 | **GH** | GitHub repo → Settings → Secrets and variables → Actions |
 | **本地** | 只在 `.env.local` 或跑脚本时临时传，不需要上平台 |
