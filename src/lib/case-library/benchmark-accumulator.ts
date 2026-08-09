@@ -31,6 +31,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { mapIndustryToCategory } from '@/lib/huatuo/industry-mapper'
 import type { BenchmarkDimension } from '@/lib/huatuo/types'
+import { fetchAll } from '@/lib/supabase-paginate'
+import { keepOneMeasurementPerAction } from '@/lib/flywheel/attribution/outcome-identity'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -92,6 +94,7 @@ interface GroupEntry {
 }
 
 interface OutcomeRow {
+  action_id: string
   client_id: string
   metric_key: string
   delta_pct: number | null
@@ -193,6 +196,30 @@ function isMissingColumnError(message: string): boolean {
 // ── Main accumulator ──────────────────────────────────────────────────────────
 
 /**
+ * 分页读全指定时间之后的 outcomes。
+ *
+ * PostgREST 单次最多 1000 行且不报错。截断在这里比少几行更糟 —— 按动作折叠是在
+ * 读到的行里挑代表，如果恰好把带 expected_metric 的那行截掉了，折叠会挑另一行当
+ * 这个动作的结论，于是不是「少算」而是「算错」。一个动作本来就出三行，双窗口
+ * 再翻倍，上限来得比行数看上去快得多。（Codex P2, round 28 on PR #862）
+ */
+async function loadOutcomesSince(
+  supabase: SupabaseClient,
+  since: string,
+): Promise<OutcomeRow[]> {
+  return fetchAll<OutcomeRow>((from, to) =>
+    supabase
+      .from('flywheel_outcomes')
+      .select('id, action_id, client_id, metric_key, delta_pct, window_days')
+      .in('metric_key', Object.keys(REPRESENTATIVE_METRICS))
+      .not('delta_pct', 'is', null)
+      .gte('computed_at', since)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+}
+
+/**
  * 聚合 flywheel_outcomes → 写回 industry_benchmarks 的 GROWTH 字段。
  *
  * @param supabase    supabaseAdmin（service role）
@@ -232,25 +259,28 @@ export async function accumulateBenchmarks(
   // ── 2. 拉最近 LOOKBACK_DAYS 的 outcomes ───────────────────────────────────
   const since = new Date(Date.now() - LOOKBACK_DAYS * 86_400_000).toISOString()
 
-  const { data: outcomes, error: outcomesError } = await supabase
-    .from('flywheel_outcomes')
-    .select('client_id, metric_key, delta_pct, window_days')
-    .in('metric_key', Object.keys(REPRESENTATIVE_METRICS))
-    .not('delta_pct', 'is', null)
-    .gte('computed_at', since)
-
-  if (outcomesError) {
-    result.errors.push(`fetch outcomes: ${outcomesError.message}`)
+  let outcomes: OutcomeRow[]
+  try {
+    outcomes = await loadOutcomesSince(supabase, since)
+  } catch (e) {
+    result.errors.push(`fetch outcomes: ${e instanceof Error ? e.message : String(e)}`)
     return result
   }
 
   if (!outcomes || outcomes.length === 0) return result
 
   // ── 3. 分组 ───────────────────────────────────────────────────────────────
+  // 先把同一个 (动作, 指标) 的多窗口结果收成一条：被转交的动作会同时按
+  // bridge 自己的 28 天节奏和 pass 1 的窗口各算一次，两条都是合法事实，
+  // 但它们是同一次动作的两个观察角度，不是两份证据。按行数当样本会让
+  // 两个动作凑够 MIN_SAMPLE_THRESHOLD，还会把不同窗口的增长率混进同一个
+  // 百分位 —— 而这个数字是要写进 industry_benchmarks 给客户看的。
+  const measurements = keepOneMeasurementPerAction(outcomes as OutcomeRow[])
+
   const groups = new Map<string, GroupEntry>()
   const seenUnmapped = new Set<string>()
 
-  for (const outcome of outcomes as OutcomeRow[]) {
+  for (const outcome of measurements) {
     const deltaPct = outcome.delta_pct
     if (deltaPct == null) continue
 
