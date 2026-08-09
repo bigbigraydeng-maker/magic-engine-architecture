@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '@/lib/supabase';
+import { loadClientsWithOutcomes } from '@/lib/flywheel/measure-coverage';
 import Link from 'next/link';
 import {
   MePanel,
@@ -172,10 +173,8 @@ async function getOverviewData() {
       .from('execution_items')
       .select('client_id, status'),
 
-    // Flywheel phase 4: Measure — clients with at least one outcome
-    supabaseAdmin
-      .from('flywheel_outcomes')
-      .select('client_id'),
+    // Flywheel phase 4: Measure — clients with at least one outcome.
+    loadClientsWithOutcomes(),
   ]);
 
   const totalClientCount = clientsCountRes.count ?? 0;
@@ -284,9 +283,7 @@ async function getOverviewData() {
       clientsWithExecute.add(row.client_id);
     }
   }
-  const clientsWithMeasure = new Set<string>(
-    ((outcomesRes.data ?? []) as Array<{ client_id: string }>).map(r => r.client_id),
-  );
+  const clientsWithMeasure = outcomesRes;
 
   const phasePct = (n: number): number =>
     totalClientCount === 0 ? 0 : Math.round((n / totalClientCount) * 100);
