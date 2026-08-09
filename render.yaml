@@ -121,7 +121,8 @@ services:
   # Prospecting auto-sweep — every 10 minutes (Phase 35)
   # Advances the outbound conveyor one bounded step per fire:
   #   audit -> analyze -> draft -> discover next industry x NZ-city seed.
-  # No-ops unless PROSPECTING_SWEEP_ENABLED=true (ships dark; PM turns spend on).
+  # No-ops unless PROSPECTING_SWEEP_ENABLED=true on the web service (this cron only
+  # curls; a flag set here would never be read). Ships dark; PM turns spend on.
   # Sending stays human — drafts land in the review queue only.
   - type: cron
     name: prospecting-sweep
