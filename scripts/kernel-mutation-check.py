@@ -14,7 +14,7 @@ MUTATIONS = [
         old="""  if (decision.client_id !== ctx.clientId || decision.client_id !== run.client_id) {""",
         new="""  if (false) {""",
         test="src/lib/kernel/__tests__/gateway.test.ts",
-        expect_fail_contains="跨客户",
+        expect_fail_contains="在去领执行权之前**就被拒了",
     ),
     # ── P1-2：原子领取执行权 ─────────────────────────────────────────────
     dict(
@@ -23,7 +23,7 @@ MUTATIONS = [
         old="""    if (run.authorization_decision_id !== decisionId) return no('decision_not_current')""",
         new="""    // mutated: 不再检查这条决策是不是 run 当前那一份""",
         test="src/lib/kernel/__tests__/store.test.ts",
-        expect_fail_contains="同一个 run 两份 allow 决策",
+        expect_fail_contains="第二份 allow 决策领不到执行权",
     ),
     dict(
         name="P1-2 run 状态不再是领取的前提（去掉 authorized 检查）",
@@ -31,7 +31,7 @@ MUTATIONS = [
         old="""    if (run.status !== 'authorized') return no(`run_not_authorized:${String(run.status)}`)""",
         new="""    // mutated: 不再要求 run 停在 authorized""",
         test="src/lib/kernel/__tests__/store.test.ts",
-        expect_fail_contains="执行权只有一个",
+        expect_fail_contains="第二次拿到 already_consumed",
     ),
     dict(
         name="P1-2 提交撞唯一约束时不回读赢家（把正常竞争当故障抛出去）",
@@ -48,12 +48,10 @@ MUTATIONS = [
         # 要拆的闸变成了「领不到就别往下推进」。
         name="P1-2/T1 领不到租约也照样往下推进（两个执行者各签一份授权）",
         file="src/lib/kernel/runner.ts",
-        old="""  if (!claim.ok) {
-    if (claim.reason.startsWith('already_owned')) {""",
-        new="""  if (false) {
-    if (claim.reason.startsWith('already_owned')) {""",
+        old="""  if (!claim.ok) return outcomeForFailedClaim(deps, runId, claim.reason)""",
+        new="""  if (false) return outcomeForFailedClaim(deps, runId, claim.reason)""",
         test="src/lib/kernel/__tests__/concurrency.test.ts",
-        expect_fail_contains="只签一份授权",
+        expect_fail_contains="四个调用同时提交也一样",
     ),
     # ── P1-1：人工批准重新校验 ───────────────────────────────────────────
     dict(
@@ -84,7 +82,7 @@ MUTATIONS = [
     })
   }""",
         test="src/lib/kernel/__tests__/human-approval.test.ts",
-        expect_fail_contains="政策被删/改",
+        expect_fail_contains="挂起期间政策被删掉",
     ),
     dict(
         name="P1-1 人工批准不再要求政策仍是 require_approval",
@@ -92,7 +90,7 @@ MUTATIONS = [
         old="""  if (policy.mode !== 'require_approval') {""",
         new="""  if (false) {""",
         test="src/lib/kernel/__tests__/human-approval.test.ts",
-        expect_fail_contains="政策改成自动",
+        expect_fail_contains="只有模式检查挡得住",
     ),
     dict(
         name="P1-1 人工批准不再比对政策版本",
@@ -108,7 +106,7 @@ MUTATIONS = [
         old="""  if (!pending || pending.verdict !== 'require_approval') {""",
         new="""  if (false) {""",
         test="src/lib/kernel/__tests__/human-approval.test.ts",
-        expect_fail_contains="审批请求丢了",
+        expect_fail_contains="当初那份审批请求找不到了",
     ),
     # ── P1-3：政策版本自动演进 ───────────────────────────────────────────
     dict(
@@ -178,7 +176,7 @@ MUTATIONS = [
         old="""  action_runs: [['client_id', 'idempotency_key']],""",
         new="""  action_runs: [],""",
         test="src/lib/kernel/__tests__/concurrency.test.ts",
-        expect_fail_contains="唯一约束才是幂等的闸",
+        expect_fail_contains="四个调用同时提交也一样",
     ),
     dict(
         name="读稿子时不再按客户过滤（4 轴身份少一轴）",
@@ -379,15 +377,13 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
     const pending = tableOf('authorization_decisions').find((d) => d.id === pendingId)""",
         new="""    const pending = tableOf('authorization_decisions').find((d) => d.id === pendingId)""",
         test="src/lib/kernel/__tests__/store.test.ts",
-        expect_fail_contains="current-decision CAS",
+        expect_fail_contains="run 已指向另一份审批请求",
     ),
     dict(
         name="R1 approveRun 的失败落地不再带状态守卫（迟到的批不了会覆盖赢家）",
         file="src/lib/kernel/authorize.ts",
-        old="""  if (args.onlyIfStatus) {
-    const guarded = await updateRunIf(deps.supabase, args.run.id, args.onlyIfStatus, patch)""",
-        new="""  if (false) {
-    const guarded = await updateRunIf(deps.supabase, args.run.id, args.onlyIfStatus as never, patch)""",
+        old="""    expectedStatus: args.onlyIfStatus ?? null,""",
+        new="""    expectedStatus: null,""",
         test="src/lib/kernel/__tests__/approval-concurrency.test.ts",
         expect_fail_contains="失败落地守卫",
     ),
@@ -408,7 +404,7 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
     )
   }""",
         test="src/lib/kernel/__tests__/approval-concurrency.test.ts",
-        expect_fail_contains="应用层状态闸",
+        expect_fail_contains="第二次被明确拒掉",
     ),
     # ── P2-2：装配校验 ───────────────────────────────────────────────────
     dict(
@@ -435,7 +431,7 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         verification: null,
       },""",
         test="src/lib/kernel/__tests__/assembly-and-rehydration.test.ts",
-        expect_fail_contains="返回 null 空壳",
+        expect_fail_contains="deepEqual result1",
     ),
     dict(
         name="P2-3 重建不再 fail closed（缺验证也当成功）",
@@ -496,7 +492,7 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         new="""      case 'or':
         return true""",
         test="src/lib/kernel/__tests__/policy-window.test.ts",
-        expect_fail_contains=".or 永真",
+        expect_fail_contains="已到期的政策",
     ),
     # ── S1：恢复权原子领取 ───────────────────────────────────────────────
     dict(
@@ -659,16 +655,16 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
     dict(
         name="S3/T2 整个拆掉开跑前那道预算闸（超了还再花一次才发现）",
         file="src/lib/kernel/gateway.ts",
-        old="""    const budgetBlock = nextStepBlockedByBudget(
-      definition, args.run, ctx.costCapUsd, spent, stepKey, stepSpentSoFar,
-    )
-    if (budgetBlock) {""",
-        new="""    const budgetBlock = nextStepBlockedByBudget(
-      definition, args.run, ctx.costCapUsd, spent, stepKey, stepSpentSoFar,
-    )
-    if (false) {""",
+        old="""      const budgetBlock = nextStepBlockedByBudget(
+        definition, args.run, ctx.costCapUsd, spent, stepKey, stepCostSoFar,
+      )
+      if (budgetBlock) {""",
+        new="""      const budgetBlock = nextStepBlockedByBudget(
+        definition, args.run, ctx.costCapUsd, spent, stepKey, stepCostSoFar,
+      )
+      if (false) {""",
         test="src/lib/kernel/__tests__/cost-persistence.test.ts",
-        expect_fail_contains="一次都不许再调",
+        expect_fail_contains="装不下就永远不调 handler",
     ),
     # ── 删除侧的引用动作 ─────────────────────────────────────────────────
     dict(
@@ -739,7 +735,7 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
 
   RETURN QUERY SELECT true, 'claimed';""",
         test="src/lib/kernel/__tests__/architecture.test.ts",
-        expect_fail_contains="",
+        expect_fail_contains="步骤重置在同一个函数里",
     ),
     # ── T1：中间态 run 的租约 / 接管 ──────────────────────────────────────
     dict(
@@ -842,7 +838,7 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
   return deps.workerId
 }""",
         test="src/lib/kernel/__tests__/concurrency.test.ts",
-        expect_fail_contains="",
+        expect_fail_contains="四个调用同时提交也一样",
     ),
     dict(
         name="T1 SQL 里去掉接管 RPC 的 FOR UPDATE",
@@ -866,9 +862,9 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
     dict(
         name="T2 预检退回 strict spent > cap（等号边界照花钱）",
         file="src/lib/kernel/gateway.ts",
-        old="""    const budgetBlock = nextStepBlockedByBudget(
-      definition, args.run, ctx.costCapUsd, spent, stepKey, stepSpentSoFar,
-    )""",
+        old="""      const budgetBlock = nextStepBlockedByBudget(
+        definition, args.run, ctx.costCapUsd, spent, stepKey, stepCostSoFar,
+      )""",
         new="""    const budgetBlock =
       ctx.costCapUsd !== null && spent > ctx.costCapUsd
         ? { humanReason: '超预算，这一步不开跑', detail: {} }
@@ -879,15 +875,15 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
     dict(
         name="T2 预检改成 spent >= cap（把零成本能力全部拦死）",
         file="src/lib/kernel/gateway.ts",
-        old="""    const budgetBlock = nextStepBlockedByBudget(
-      definition, args.run, ctx.costCapUsd, spent, stepKey, stepSpentSoFar,
-    )""",
+        old="""      const budgetBlock = nextStepBlockedByBudget(
+        definition, args.run, ctx.costCapUsd, spent, stepKey, stepCostSoFar,
+      )""",
         new="""    const budgetBlock =
       ctx.costCapUsd !== null && spent >= ctx.costCapUsd
         ? { humanReason: '超预算，这一步不开跑', detail: {} }
         : null""",
         test="src/lib/kernel/__tests__/safe-capability.test.ts",
-        expect_fail_contains="",
+        expect_fail_contains="Goal → 授权 → 执行 → 验证 → 成功",
     ),
     dict(
         name="T2 每步上界不看契约声明（只剩「整个动作免费」那条兜底）",
@@ -967,7 +963,7 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         old="""    const nextGen = Number(run.claim_generation ?? 0) + (changedHands ? 1 : 0)""",
         new="""    const nextGen = Number(run.claim_generation ?? 0)""",
         test="src/lib/kernel/__tests__/stale-worker-fencing.test.ts",
-        expect_fail_contains="",
+        expect_fail_contains="晚到写 step",
     ),
     dict(
         name="F1 接管不把新代际推到步骤上（旧 step 行还认旧代）",
@@ -1064,7 +1060,7 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         new="""  const declared = definition.costModel.stepCeilingUsd?.[stepKey]
   if (typeof declared === 'number') return declared""",
         test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
-        expect_fail_contains="",
+        expect_fail_contains="声明的上限是 NaN",
     ),
     # ── T2c：上限本身的合法性 ────────────────────────────────────────────
     dict(
@@ -1073,7 +1069,7 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         old="""  if (!Number.isFinite(costCap) || costCap < 0) {""",
         new="""  if (false) {""",
         test="src/lib/kernel/__tests__/budget-and-cost-validity.test.ts",
-        expect_fail_contains="不是一个有效金额",
+        expect_fail_contains="政策里的上限是 NaN",
     ),
     dict(
         name="T2c 应用层只挡负数不挡 NaN（`x > NaN` 恒假）",
@@ -1101,6 +1097,161 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         test="src/lib/kernel/__tests__/architecture.test.ts",
         expect_fail_contains="NaN",
     ),
+    # ── 第八轮：running 入口 / deny 围栏 / 建步骤围栏 / 收费后抛错 / 复用复核 / 真终态 ──
+    dict(
+        name="R8-1 running 在进 takeover 之前就答 in_progress（接管入口形同虚设）",
+        file="src/lib/kernel/runner.ts",
+        old="""  // 🔴 `running` **不在这里早退**。""",
+        new="""  if (run.status === 'running') {
+    return { kind: 'in_progress', run, decision: null, execution: null, humanReason: '正在做' }
+  }
+  // 🔴 `running` **不在这里早退**。""",
+        test="src/lib/kernel/__tests__/lease-takeover.test.ts",
+        expect_fail_contains="必须**能被接走",
+    ),
+    dict(
+        name="R8-2 落拒绝不带围栏（过期执行者能把 succeeded 改成 denied）",
+        file="src/lib/kernel/authorize.ts",
+        old="""    expectedGeneration: args.fence?.generation ?? null,""",
+        new="""    expectedGeneration: null,""",
+        test="src/lib/kernel/__tests__/fencing-gaps.test.ts",
+        expect_fail_contains="只有 recordDeny 那道围栏能拦住它",
+    ),
+    dict(
+        name="R8-2b 假件的 deny RPC 不验代际",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (expectedGen !== null && Number(run.claim_generation ?? 0) !== expectedGen) {
+      return no(`stale_generation:${String(run.claim_generation ?? 0)}`)
+    }
+    // 跨客户：决策必须属于这条 run 的客户（跟 SQL 同一道闸）""",
+        new="""    // 跨客户：决策必须属于这条 run 的客户（跟 SQL 同一道闸）""",
+        test="src/lib/kernel/__tests__/fencing-gaps.test.ts",
+        expect_fail_contains="落不了 deny",
+    ),
+    dict(
+        name="R8-3 建步骤不验代际（旧执行者能插一批旧代际的行）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (run.client_id !== clientId) return no('cross_client')
+    if (expectedGen !== null && Number(run.claim_generation ?? 0) !== expectedGen) {""",
+        new="""    if (run.client_id !== clientId) return no('cross_client')
+    if (false) {""",
+        test="src/lib/kernel/__tests__/fencing-gaps.test.ts",
+        expect_fail_contains="建步骤",
+    ),
+    dict(
+        name="R8-3b 建步骤被 fence 时当成「没什么好建的」继续跑",
+        file="src/lib/kernel/store.ts",
+        old="""    if (String(row.reason).startsWith('stale_generation')) return null""",
+        new="""    if (String(row.reason).startsWith('stale_generation')) return listSteps(sb, runId)""",
+        test="src/lib/kernel/__tests__/fencing-gaps.test.ts",
+        expect_fail_contains="拿到 null",
+    ),
+    dict(
+        name="R8-4 抛错时不记 provider 已扣的钱（记 0 元然后重试）",
+        file="src/lib/kernel/gateway.ts",
+        old="""        const reportedOnError = reportedCostOf(err)""",
+        new="""        const reportedOnError = undefined as unknown""",
+        test="src/lib/kernel/__tests__/charged-then-threw.test.ts",
+        expect_fail_contains="不是记 0 元",
+    ),
+    dict(
+        name="R8-4b 收费步骤结果未知也照样自动重试（可能被重复收费）",
+        file="src/lib/kernel/gateway.ts",
+        old="""        const unsafeToRetry = paidStepWithoutIdempotency(definition, args.run, stepKey)""",
+        new="""        const unsafeToRetry = false""",
+        test="src/lib/kernel/__tests__/charged-then-threw.test.ts",
+        expect_fail_contains="不自动重试",
+    ),
+    dict(
+        name="R8-4c 把 not_applicable 也当成「保证幂等」（契约自相矛盾时最乐观）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  return definition.providerIdempotency !== 'supported'""",
+        new="""  return definition.providerIdempotency === 'unsupported' ? false : false""",
+        test="src/lib/kernel/__tests__/charged-then-threw.test.ts",
+        expect_fail_contains="不自动重试",
+    ),
+    dict(
+        name="R8-4d 这一步自己的预算花完了还能再跑一次",
+        file="src/lib/kernel/gateway.ts",
+        old="""  if (declaredMax! > COST_EPSILON && ceiling <= COST_EPSILON) {""",
+        new="""  if (false) {""",
+        test="src/lib/kernel/__tests__/charged-then-threw.test.ts",
+        expect_fail_contains="重跑不许再突破",
+    ),
+    dict(
+        name="R8-5 复用旧授权前不复核政策（卡到 TTL 到期）",
+        file="src/lib/kernel/authorize.ts",
+        old="""  const policy = await getActivePolicy(deps.supabase, run.client_id, run.action_key, deps.now())
+  if (!policy) return null
+  if (policy.id !== decision.policy_id) return null
+  if (policy.policy_version !== decision.policy_version) return null""",
+        new="""  const policy = await getActivePolicy(deps.supabase, run.client_id, run.action_key, deps.now())
+  void policy""",
+        test="src/lib/kernel/__tests__/fencing-gaps.test.ts",
+        expect_fail_contains="不复用旧授权",
+    ),
+    dict(
+        name="R8-5b 复用时不复核模式（auto→require_approval 也照跑）",
+        file="src/lib/kernel/authorize.ts",
+        old="""  if (!modeStillMatches) return null""",
+        new="""  void modeStillMatches""",
+        test="src/lib/kernel/__tests__/fencing-gaps.test.ts",
+        expect_fail_contains="等人点头",
+    ),
+    dict(
+        name="R8-6 领不到租约一律答 in_progress（终态也说成「正在做」）",
+        file="src/lib/kernel/runner.ts",
+        old="""  if (reason.startsWith('already_owned')) {""",
+        new="""  if (true) {""",
+        test="src/lib/kernel/__tests__/fencing-gaps.test.ts",
+        expect_fail_contains="返回死信原因",
+    ),
+    # ── 第八轮复审补的四道闸 ──────────────────────────────────────────────
+    dict(
+        name="R9-1 预检退回「每个步骤只判一次」（重试循环绕过硬上限）",
+        file="src/lib/kernel/gateway.ts",
+        old="""      const budgetBlock = nextStepBlockedByBudget(
+        definition, args.run, ctx.costCapUsd, spent, stepKey, stepCostSoFar,
+      )""",
+        new="""      const budgetBlock = attempt === firstAttemptNumber
+        ? nextStepBlockedByBudget(definition, args.run, ctx.costCapUsd, spent, stepKey, stepCostSoFar)
+        : null""",
+        test="src/lib/kernel/__tests__/charged-then-threw.test.ts",
+        expect_fail_contains="重试循环里也守硬上限",
+    ),
+    dict(
+        name="R9-2 建步骤被 fence 掉时不抛（gateway 那三行没了）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  if (!steps) {
+    throw new KernelError(
+      'STALE_CLAIM',""",
+        new="""  if (false) {
+    throw new KernelError(
+      'STALE_CLAIM',""",
+        test="src/lib/kernel/__tests__/fencing-gaps.test.ts",
+        expect_fail_contains="挡住它的必须是 ensureSteps 那道闸",
+    ),
+    dict(
+        name="R9-3 接管 running 直接重跑（跟 UNSAFE_RETRY 自相矛盾）",
+        file="src/lib/kernel/runner.ts",
+        old="""  if (claim.resetSteps) {
+    const blocked = takeoverNeedsHumanJudgement(deps, owned)
+    if (blocked) return blocked
+  }""",
+        new="""  if (false) {
+    void takeoverNeedsHumanJudgement
+  }""",
+        test="src/lib/kernel/__tests__/charged-then-threw.test.ts",
+        expect_fail_contains="不自动重跑",
+    ),
+    dict(
+        name="R9-4 落拒绝不挡跨客户（审计表里能写串台的决策）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (d.client_id !== run.client_id) return no('cross_client')""",
+        new="""    // mutated: 不挡跨客户""",
+        test="src/lib/kernel/__tests__/fencing-gaps.test.ts",
+        expect_fail_contains="跨客户",
+    ),
     # ── P1-4：migration 版本撞车 ─────────────────────────────────────────
     dict(
         name="P1-4 新起一个跟别人同号的 migration",
@@ -1110,7 +1261,7 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
             "supabase/migrations/20260806000001_me2_execution_kernel_v1.sql",
         ),
         test="src/lib/kernel/__tests__/architecture.test.ts",
-        expect_fail_contains="migration 版本撞车",
+        expect_fail_contains="没有两个文件用同一个版本号",
     ),
 ]
 
@@ -1123,6 +1274,32 @@ def run_test(path):
     return r.returncode, r.stdout + r.stderr
 
 
+def judge(m, code, out):
+    """判定一次变异到底有没有被**想验的那道闸**抓住。
+
+    🔴 早先这里只看 `code != 0` —— 「CAUGHT」的真实含义只是
+    「那个测试文件里有东西红了」，不是「我想验的那道闸红了」。
+    测试文件一大（十几二十个用例），随便哪条附带地红一下就算过，
+    等于把变异验证降级成了「跑一下试试」。
+
+    现在 `expect_fail_contains` 是**强制**的：写了就必须有一条红掉的用例名
+    包含它；红了但不是那一条 → WRONG_TEST，跟 MISSED 一样算没通过。
+    留空表示「这条变异会牵连一大片，不指定具体用例」——那是刻意的例外，
+    要在探针里写清楚为什么。
+    """
+    names = [l.strip() for l in out.splitlines() if l.strip().startswith("×")]
+    if code == 0:
+        return (m["name"], "MISSED", "测试全绿 —— 这道闸没有被任何测试盯着")
+    want = m.get("expect_fail_contains", "")
+    if want and not any(want in n for n in names):
+        return (
+            m["name"],
+            "WRONG_TEST",
+            f"红了，但红的不是想验的那条（期望名字里含「{want}」）：" + "; ".join(names[:4]),
+        )
+    return (m["name"], "CAUGHT", "; ".join(names[:4]))
+
+
 def main():
     results = []
     for m in MUTATIONS:
@@ -1131,14 +1308,7 @@ def main():
             src, dst = m["rename"]
             os.rename(src, dst)
             try:
-                code, out = run_test(m["test"])
-                failed = code != 0
-                names = [l.strip() for l in out.splitlines() if l.strip().startswith("×")]
-                results.append((
-                    m["name"],
-                    "CAUGHT" if failed else "MISSED",
-                    "; ".join(names[:4]) if failed else "测试全绿 —— 这道闸没有被任何测试盯着",
-                ))
+                results.append(judge(m, *run_test(m["test"])))
             finally:
                 os.rename(dst, src)
             continue
@@ -1157,15 +1327,7 @@ def main():
             mutated = mutated.replace(m["old2"], m["new2"], 1)
         open(f, "w", encoding="utf-8").write(mutated)
         try:
-            code, out = run_test(m["test"])
-            failed = code != 0
-            # 抓出到底哪几条挂了
-            names = [l.strip() for l in out.splitlines() if l.strip().startswith("×")]
-            results.append((
-                m["name"],
-                "CAUGHT" if failed else "MISSED",
-                "; ".join(names[:4]) if failed else "测试全绿 —— 这道闸没有被任何测试盯着",
-            ))
+            results.append(judge(m, *run_test(m["test"])))
         finally:
             open(f, "w", encoding="utf-8").write(original)
 

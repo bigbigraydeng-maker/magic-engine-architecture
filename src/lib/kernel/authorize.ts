@@ -29,10 +29,10 @@ import {
   getDecision,
   hasExpiredPolicy,
   insertDecision,
+  recordFencedDeny,
   resolvePendingApproval,
   updateRun,
   updateRunFenced,
-  updateRunIf,
 } from './store'
 import { KernelError } from './errors'
 
@@ -113,50 +113,64 @@ interface DenyArgs {
    *    拽回 denied。守卫没命中 = 别人赢了，这里抛错停手，绝不覆盖。
    */
   onlyIfStatus?: ActionRun['status']
+  /**
+   * 🔴 F2：推进这条 run 的那一代。
+   *    授权前置校验（读政策、读注册表）是有耗时的 —— A 卡在那儿的时候租约可能
+   *    已经过期、B 已经接管并把这件事跑完了。A 醒过来接着落拒绝，
+   *    无条件的 update 会把 succeeded 改成 denied，**当场毁掉一次已经成功的执行**。
+   */
+  fence?: { generation: number }
 }
 
+/**
+ * 落一条拒绝 + 推 run 状态。
+ *
+ * 🔴 两件事必须在**一个事务**里（`kernel_record_fenced_deny`）：
+ *    先插决策、再判代际的话，代际对不上时会留下一条孤立的 deny 决策 ——
+ *    run 状态没跟着变，审计表里多一条说不清归属的记录。
+ */
 async function recordDeny(deps: KernelDeps, args: DenyArgs): Promise<AuthorizationOutcome> {
-  const decision = await insertDecision(deps.supabase, {
-    action_run_id: args.run.id,
-    client_id: args.run.client_id,
-    action_key: args.run.action_key,
-    action_version: args.run.action_version,
-    verdict: 'deny',
-    deny_code: args.code,
+  const written = await recordFencedDeny(deps.supabase, {
+    runId: args.run.id,
+    expectedGeneration: args.fence?.generation ?? null,
+    expectedStatus: args.onlyIfStatus ?? null,
     reason: args.reason,
-    policy_snapshot: snapshotOf(args.policy, args.definition),
-    policy_id: args.policy?.id ?? null,
-    policy_version: args.policy?.policy_version ?? null,
-    decided_by: 'policy',
-    decided_by_user: null,
-    cost_cap_usd: args.policy?.spend_cap_per_run_usd ?? null,
-    cost_estimate_usd: args.costEstimate,
-    idempotency_key: args.run.idempotency_key,
-    expires_at: null,
+    decision: {
+      client_id: args.run.client_id,
+      action_key: args.run.action_key,
+      action_version: args.run.action_version,
+      deny_code: args.code,
+      policy_snapshot: snapshotOf(args.policy, args.definition),
+      policy_id: args.policy?.id ?? null,
+      policy_version: args.policy?.policy_version ?? null,
+      decided_by: 'policy',
+      decided_by_user: null,
+      cost_cap_usd: args.policy?.spend_cap_per_run_usd ?? null,
+      cost_estimate_usd: args.costEstimate,
+      idempotency_key: args.run.idempotency_key,
+    },
   })
 
-  const patch = {
-    status: 'denied' as const,
-    authorization_decision_id: decision.id,
-    // 🔴 被拒绝也要有人看见。拒绝只写进日志 = 发现死在日志里。
-    needs_human: true,
-    last_error: args.reason,
-    finished_at: deps.now().toISOString(),
-  }
-
-  if (args.onlyIfStatus) {
-    const guarded = await updateRunIf(deps.supabase, args.run.id, args.onlyIfStatus, patch)
-    if (!guarded) {
+  if (!written.ok) {
+    if (written.reason.startsWith('stale_generation')) {
       throw new KernelError(
-        'INVALID_STATE',
-        '这条动作刚刚已经被别人处理了（批准或拒绝发生在你前面），这次操作没有生效',
-        { detail: { runId: args.run.id, denyCode: args.code } },
+        'STALE_CLAIM',
+        '这次执行的所有权已经被别人接管了（你手里那一代已经作废）—— 已停手，不会重复做',
+        { detail: { runId: args.run.id, denyCode: args.code, reason: written.reason } },
       )
     }
-    return { verdict: 'deny', decision, run: guarded, ctx: null }
+    throw new KernelError(
+      'INVALID_STATE',
+      '这条动作刚刚已经被别人处理了（批准或拒绝发生在你前面），这次操作没有生效',
+      { detail: { runId: args.run.id, denyCode: args.code, reason: written.reason } },
+    )
   }
 
-  const run = await updateRun(deps.supabase, args.run.id, patch)
+  const decision = await getDecision(deps.supabase, written.decisionId!)
+  if (!decision) {
+    throw new KernelError('INVALID_STATE', '刚落下的拒绝决策读不回来 —— 库里状态不一致，先别继续')
+  }
+  const run = await deps.requireRun(args.run.id)
   return { verdict: 'deny', decision, run, ctx: null }
 }
 
@@ -345,6 +359,7 @@ export async function authorizeRun(
       code: pf.code,
       reason: pf.reason,
       costEstimate: pf.costEstimate,
+      fence,
     })
   }
 
@@ -431,9 +446,9 @@ export async function authorizeRun(
  *    · 过期了就**不复用**（返回 null），由调用方走一次完整的重新授权 ——
  *      过期的授权本来就该重新判，这不是绕过。
  *
- *    政策有没有变（身份 / 版本 / 模式）这里不查 —— Gateway 在真正开跑前
- *    会把这些逐项重查一遍（assertDecisionMatches + kernel_begin_authorized_run），
- *    在这里再抄一份只会多一处会分家的判据。
+ *    政策有没有变（身份 / 版本 / 模式 / 时间窗）**这里也要查**（见函数末尾）。
+ *    早先是交给 Gateway 的 —— 那样只是「拿旧授权去撞一堵墙」：抛错之后 run
+ *    仍停在 authorized、租约也没清，于是反复报同一个错一直卡到 TTL 到期。
  *
  * @returns 可复用的授权结果；`null` = 不可复用但可以重新授权。
  */
@@ -471,6 +486,25 @@ export async function reuseLiveAuthorization(
     )
   }
   if (decision.expires_at && Date.parse(decision.expires_at) <= deps.now().getTime()) return null
+
+  // 🔴 P2-1：政策**现在**还跟签这份授权时一样吗。
+  //
+  //    早先这一层交给 Gateway：反正它开跑前会重查身份 / 版本 / 模式。
+  //    但那样只是「拿旧授权去撞一堵墙」—— Gateway 抛错之后 run 仍停在
+  //    authorized、接管者的租约也还在，于是后续请求先被答成 in_progress，
+  //    租约过期后又重复同一个错，**一直卡到授权 TTL 自己到期**。
+  //    政策变了就直接认定「不可复用」，走完整重新授权 ——
+  //    那条路会如实落一条 deny / require_approval，而不是反复抛错。
+  const policy = await getActivePolicy(deps.supabase, run.client_id, run.action_key, deps.now())
+  if (!policy) return null
+  if (policy.id !== decision.policy_id) return null
+  if (policy.policy_version !== decision.policy_version) return null
+  // 机器签的放行只在「现在仍是自动」时有效；人签的只在「现在仍要人审」时有效
+  const modeStillMatches =
+    decision.decided_by === 'human'
+      ? policy.mode === 'require_approval'
+      : policy.mode === 'auto_approve'
+  if (!modeStillMatches) return null
 
   return { verdict: 'allow', decision, run, ctx: mintContext(decision, decision.cost_cap_usd) }
 }

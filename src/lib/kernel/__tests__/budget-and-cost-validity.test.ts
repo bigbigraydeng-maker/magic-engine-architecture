@@ -39,6 +39,7 @@ function definition(over: Partial<ActionDefinition> = {}): ActionDefinition {
     //    给 0 的话「整个动作不花钱」那条兜底会顶上来，测不到「每步上界」这条路；
     //    给大数的话授权阶段那道估算闸（估 > 上限 → deny）会先拦，也测不到执行期。
     costModel: { kind: 'fixed', estimate: () => 0.01, stepCeilingUsd: { a: 2, b: 1 } },
+    providerIdempotency: 'supported',
     retryPolicy: { maxAttempts: 1, backoff: 'fixed', baseMs: 1 },
     verification: null,
     requiredCapabilityTier: 'paid_client',

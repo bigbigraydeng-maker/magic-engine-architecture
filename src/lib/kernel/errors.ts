@@ -57,6 +57,11 @@ export type KernelErrorCode =
    *    过期的执行者一个字都不许写 —— 影响 0 行必须当失败，不能当「没什么好写的」。
    */
   | 'STALE_CLAIM'
+  /**
+   * 🔴 会花钱的步骤失败了、结果又不确定，而外部服务不保证幂等重放 ——
+   *    自动重试可能再收一次钱。一律 fail closed，转人工判断。
+   */
+  | 'UNSAFE_RETRY'
 
 export class KernelError extends Error {
   readonly code: KernelErrorCode
@@ -70,11 +75,13 @@ export class KernelError extends Error {
   /** 给人看的一句话。会原样进今日待办，所以必须是人话。 */
   readonly humanReason: string
   readonly detail: Record<string, unknown>
+  /** 见 RetryableCapabilityError.costActualUsd —— capability 抛 KernelError 时同样要能记账。 */
+  readonly costActualUsd?: number
 
   constructor(
     code: KernelErrorCode,
     humanReason: string,
-    opts: { retryable?: boolean; detail?: Record<string, unknown> } = {},
+    opts: { retryable?: boolean; detail?: Record<string, unknown>; costActualUsd?: number } = {},
   ) {
     super(`[${code}] ${humanReason}`)
     this.name = 'KernelError'
@@ -82,16 +89,41 @@ export class KernelError extends Error {
     this.retryable = opts.retryable ?? false
     this.humanReason = humanReason
     this.detail = opts.detail ?? {}
+    this.costActualUsd = opts.costActualUsd
   }
 }
 
 /** capability 内部用的：这次失败换个时间再试有意义（网络抖动、上游 429）。 */
 export class RetryableCapabilityError extends Error {
   readonly retryable = true as const
-  constructor(message: string) {
+  /**
+   * 🔴 provider **已经收掉的钱**。
+   *
+   * 抛错的时候 handler 没机会返回 `CapabilityStepResult`，于是这笔钱本来会
+   * 凭空消失 —— Kernel 记 0 元，然后重试，然后可能再收一次。
+   * 能可靠拿到已扣金额的 capability 必须把它挂在异常上带回来。
+   * 拿不到就别编：不填 = 「不知道花了多少」，Kernel 会按未知结果处置。
+   */
+  readonly costActualUsd?: number
+  constructor(message: string, options?: { costActualUsd?: number }) {
     super(message)
     this.name = 'RetryableCapabilityError'
+    this.costActualUsd = options?.costActualUsd
   }
+}
+
+/**
+ * 从异常里取「provider 已经收了多少钱」。
+ *
+ * 🔴 取不到返回 `undefined`，**不是 0**。两者的处置完全不同：
+ *    0 = 「确定没花钱」，undefined = 「不知道花没花」。
+ *    把后者当成前者，正是这条边界要防的事。
+ */
+export function reportedCostOf(err: unknown): unknown {
+  if (err && typeof err === 'object' && 'costActualUsd' in err) {
+    return (err as { costActualUsd?: unknown }).costActualUsd
+  }
+  return undefined
 }
 
 export function isRetryable(err: unknown): boolean {

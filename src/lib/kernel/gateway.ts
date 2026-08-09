@@ -28,7 +28,7 @@ import type {
   VerificationResult,
 } from './types'
 import type { KernelDeps } from './deps'
-import { KernelError, humanReasonOf, isRetryable } from './errors'
+import { KernelError, humanReasonOf, isRetryable, reportedCostOf } from './errors'
 import { validateAgainstSchema } from './registry'
 import {
   beginAuthorizedRun,
@@ -277,9 +277,19 @@ export async function executeAuthorizedRun(
     ))
   }
 
+  // 🔴 F3：建步骤也要过代际闸。少了它就有一个窗口 ——
+  //    A 拿到授权、卡在建步骤之前，租约过期，B 接管（代际 +1），
+  //    A 醒来仍能插一批**带旧代际**的步骤行，然后拿着自己造的行继续调 handler。
   const steps = await ensureSteps(
     deps.supabase, run.id, run.client_id, definition.steps, fence.generation,
   )
+  if (!steps) {
+    throw new KernelError(
+      'STALE_CLAIM',
+      '这次执行的所有权已经被别人接管了（你手里那一代已经作废）—— 已停手，不会重复做',
+      { detail: { runId: run.id, generation: fence.generation, at: 'ensureSteps' } },
+    )
+  }
   // run 的状态已经由 RPC 原子地推到 running，这里只是把最新一行读回来
   const running = await deps.requireRun(run.id)
 
@@ -439,6 +449,23 @@ function nextStepBlockedByBudget(
     }
   }
 
+  // 🔴 这一步**自己**的预算已经花完了。
+  //    再跑一次只可能违约：契约说它总共最多花 declaredMax，而它已经花到了。
+  //    （declaredMax = 0 的零成本步骤不在此列 —— 它本来就不花钱，可以正常跑。）
+  if (declaredMax! > COST_EPSILON && ceiling <= COST_EPSILON) {
+    return {
+      humanReason:
+        `「${stepKey}」声明总共最多花 $${declaredMax!.toFixed(2)}，已经花到了 ` +
+        `$${stepSpentSoFar.toFixed(2)} —— 这一步的预算用完了，不再开跑。` +
+        `这个上限写在代码的动作契约里（不是客户规则），所以把客户的花费上限调高没有用：` +
+        `要么确认这件事其实已经做成了、把它作废，要么改契约里这一步的上限再发一次版。`,
+      detail: {
+        cap, spent, remaining, declaredMax, stepSpentSoFar,
+        stillCouldSpend: ceiling, reason: 'step_budget_exhausted',
+      },
+    }
+  }
+
   if (ceiling - remaining > COST_EPSILON) {
     return {
       humanReason:
@@ -473,6 +500,27 @@ function nextStepBlockedByBudget(
  */
 function stepIdempotencyKey(run: ActionRun, stepKey: string): string {
   return `${run.client_id}:${run.idempotency_key}:${stepKey}`
+}
+
+/**
+ * 这一步「结果未知的失败」自动重试安全吗。
+ *
+ * 🔴 判据两条同时成立才叫**不安全**：
+ *    ① 这一步可能收费（声明的每步上限 > 0，或者压根说不出上限）；
+ *    ② 外部服务不保证同一把幂等键重放不会重复收费。
+ *
+ *    `not_applicable` 声明的是「根本不调外部服务」——
+ *    但它要是同时声明了正的每步上限，那就是契约自相矛盾，按最保守的处置。
+ */
+function paidStepWithoutIdempotency(
+  definition: ActionDefinition,
+  run: ActionRun,
+  stepKey: string,
+): boolean {
+  const declaredMax = nextStepCostCeiling(definition, run, stepKey)
+  const mightCost = declaredMax === null || declaredMax > COST_EPSILON
+  if (!mightCost) return false
+  return definition.providerIdempotency !== 'supported'
 }
 
 function isRealCostAmount(value: unknown): value is number {
@@ -552,17 +600,7 @@ async function runSteps(
     //
     //    判据见 nextStepBlockedByBudget：结合「还剩多少」和「下一步最多花多少」。
     const stepSpentSoFar = Number(step.cost_actual_usd ?? 0)
-    const budgetBlock = nextStepBlockedByBudget(
-      definition, args.run, ctx.costCapUsd, spent, stepKey, stepSpentSoFar,
-    )
-    if (budgetBlock) {
-      return failRun(deps, args.run, steps, fence, new KernelError(
-        'COST_CAP_EXCEEDED',
-        budgetBlock.humanReason,
-        { detail: { ...budgetBlock.detail, stepKey, phase: 'preflight' } },
-      ))
-    }
-
+    const firstAttemptNumber = step.attempt
     let attempt = step.attempt
     let lastError: unknown = null
     // 🔴 这一步**已经花掉**的钱（含之前失败尝试的）。cost_actual_usd 是累计语义：
@@ -572,6 +610,36 @@ async function runSteps(
 
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      // 🔴 **每一次尝试之前都判钱，不是每个步骤只判一次。**
+      //
+      //    只在步骤入口判的话，重试循环整个绕过硬上限：
+      //    「抛错也记账」之后，N 次重试能花到 N × declaredMax。
+      //    实测过 —— 上限 $2 的授权，三次重试各扣 $2，落库 $6。
+      //    判据用**当前**的累计值（spent / stepCostSoFar），所以第二次尝试
+      //    在「这一步的预算已经花完」那道闸上就停住了，handler 不会被再调一次。
+      const budgetBlock = nextStepBlockedByBudget(
+        definition, args.run, ctx.costCapUsd, spent, stepKey, stepCostSoFar,
+      )
+      if (budgetBlock) {
+        const blocked = new KernelError(
+          'COST_CAP_EXCEEDED',
+          budgetBlock.humanReason,
+          { detail: { ...budgetBlock.detail, stepKey, phase: 'preflight', attempt } },
+        )
+        // 一次都还没跑过 → 保持原样：不把步骤写成死信，直接落 run
+        if (attempt === firstAttemptNumber) {
+          return failRun(deps, args.run, steps, fence, blocked)
+        }
+        await writeStep(step.id, {
+          status: 'dead_letter',
+          attempt,
+          last_error: humanReasonOf(blocked),
+          finished_at: deps.now().toISOString(),
+        })
+        steps = await listSteps(deps.supabase, args.run.id)
+        return failRun(deps, args.run, steps, fence, blocked)
+      }
+
       attempt += 1
       const startedAt = deps.now().toISOString()
       await writeStep(step.id, {
@@ -693,7 +761,74 @@ async function runSteps(
         break
       } catch (err) {
         lastError = err
-        const canRetry = isRetryable(err) && attempt < definition.retryPolicy.maxAttempts
+
+        // 🔴 P1-4：**provider 已经收了钱、然后才抛错**（超时 / 解析失败 / 502）。
+        //    handler 没机会返回 CapabilityStepResult，于是这笔钱本来会凭空消失 ——
+        //    Kernel 记 0 元，然后重试，provider 不认幂等键的话每次都再收一遍。
+        //
+        //    能可靠拿到已扣金额的 capability 把它挂在异常上带回来。
+        //    先落库、再决定重不重试 —— 顺序跟成功路径一致（事实先于判定）。
+        const reportedOnError = reportedCostOf(err)
+        if (reportedOnError !== undefined) {
+          if (!isRealCostAmount(reportedOnError)) {
+            lastError = new KernelError(
+              'INVALID_COST',
+              `「${stepKey}」抛错时报回来的花费不是一个真实金额（${String(reportedOnError)}）—— 账不能这么记，已停手`,
+              { detail: { stepKey, reported: String(reportedOnError) } },
+            )
+          } else {
+            stepCostSoFar += reportedOnError
+            spent += reportedOnError
+            await writeStep(step.id, {
+              attempt,
+              cost_actual_usd: stepCostSoFar,
+              heartbeat_at: deps.now().toISOString(),
+            })
+
+            // 🔴 **抛错路径也要过那两道钱闸，否则硬上限在重试循环里彻底失效。**
+            //
+            //    预检每个步骤只跑一次（在 while 之前）。「抛错也记账」之后，
+            //    如果这里不判，重试就能花到 maxAttempts × declaredMax —— 实测过：
+            //    上限 $2 的授权，三次重试各扣 $2，落库 $6，而且失败码是 provider
+            //    的原始错误，既不是 COST_CAP_EXCEEDED 也不是 COST_CONTRACT_VIOLATION。
+            //    这是「抛错记账」这一改动自己带进来的洞（以前记 0 元所以不累加）。
+            //
+            //    判定结果**覆盖**原始异常，并且一律不可重试 —— 再试只会再花一次。
+            const maxOnError = nextStepCostCeiling(definition, args.run, stepKey)
+            if (maxOnError !== null && stepCostSoFar - maxOnError > COST_EPSILON) {
+              lastError = new KernelError(
+                'COST_CONTRACT_VIOLATION',
+                `「${stepKey}」声明最多花 $${maxOnError.toFixed(2)}，实际（含重试）已经花了 ` +
+                  `$${stepCostSoFar.toFixed(2)} —— 声明的上限不作数了，已停手（钱已如实记账）`,
+                { detail: { stepKey, declaredMax: maxOnError, stepActual: stepCostSoFar, phase: 'on_error' } },
+              )
+            } else if (ctx.costCapUsd !== null && spent - ctx.costCapUsd > COST_EPSILON) {
+              lastError = new KernelError(
+                'COST_CAP_EXCEEDED',
+                `这次执行已经花到 $${spent.toFixed(2)}，超过了授权时定的上限 ` +
+                  `$${ctx.costCapUsd.toFixed(2)} —— 已停手`,
+                { detail: { spent, cap: ctx.costCapUsd, stepKey, phase: 'on_error' } },
+              )
+            }
+          }
+        }
+
+        // 🔴 「结果未知」的付费步骤能不能自动重试，取决于 provider 认不认幂等键。
+        //    不认就一律 fail closed —— 重试可能再收一次钱，那不是 Kernel 能替客户
+        //    冒的险。零成本步骤不受影响（没有可重复收的东西）。
+        const unsafeToRetry = paidStepWithoutIdempotency(definition, args.run, stepKey)
+        const canRetry =
+          isRetryable(lastError) &&
+          !unsafeToRetry &&
+          attempt < definition.retryPolicy.maxAttempts
+        if (unsafeToRetry && isRetryable(lastError)) {
+          lastError = new KernelError(
+            'UNSAFE_RETRY',
+            `「${stepKey}」是会花钱的步骤，而这个动作的外部服务不保证「同一把幂等键重放不会重复收费」——` +
+              `这次的结果又不确定（${humanReasonOf(err)}），所以不自动重试，转人工判断`,
+            { detail: { stepKey, providerIdempotency: definition.providerIdempotency } },
+          )
+        }
         if (!canRetry) {
           // 🔴 被 fence 掉的时候不许落死信 —— 那是接管者的 run 了，
           //    过期的执行者把它写成 dead_letter 会当场毁掉正在进行的执行。
@@ -701,11 +836,11 @@ async function runSteps(
           await writeStep(step.id, {
             status: 'dead_letter',
             attempt,
-            last_error: humanReasonOf(err),
+            last_error: humanReasonOf(lastError),
             finished_at: deps.now().toISOString(),
           })
           steps = await listSteps(deps.supabase, args.run.id)
-          return failRun(deps, args.run, steps, fence, err)
+          return failRun(deps, args.run, steps, fence, lastError)
         }
 
         const delay =

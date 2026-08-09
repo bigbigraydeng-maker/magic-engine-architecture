@@ -441,6 +441,43 @@ export async function claimOrTakeoverRun(
   }
 }
 
+/**
+ * 落一条拒绝 + 推 run 状态，**一个事务**（走 `kernel_record_fenced_deny`）。
+ *
+ * 🔴 不能「先插决策、再 update run」：preflight 是有耗时的，A 卡在那儿的时候
+ *    租约可能已经过期、B 已经接管并跑完了。A 醒过来接着落拒绝 ——
+ *    无条件的 update 会把 succeeded 改成 denied，当场毁掉一次已经成功的执行。
+ *    先插后判还会留下孤立的 deny 决策，所以插入之前就在锁里把代际验掉。
+ */
+export interface FencedDenyResult {
+  ok: boolean
+  reason: string
+  decisionId: string | null
+}
+
+export async function recordFencedDeny(
+  sb: SupabaseClient,
+  args: {
+    runId: string
+    expectedGeneration?: number | null
+    expectedStatus?: RunStatus | null
+    reason: string
+    decision: Record<string, unknown>
+  },
+): Promise<FencedDenyResult> {
+  const { data, error } = await sb.rpc('kernel_record_fenced_deny', {
+    p_run_id: args.runId,
+    p_expected_generation: args.expectedGeneration ?? null,
+    p_expected_status: args.expectedStatus ?? null,
+    p_decision: args.decision,
+    p_reason: args.reason,
+  })
+  if (error) fail('落拒绝决策', error)
+  const row = (data ?? [])[0] as unknown as { ok: boolean; reason: string; decision_id: string | null } | undefined
+  if (!row) fail('落拒绝决策', { message: 'RPC 没有返回结果行' })
+  return { ok: Boolean(row.ok), reason: String(row.reason ?? 'unknown'), decisionId: row.decision_id ?? null }
+}
+
 // ── Step ──────────────────────────────────────────────────────────────────────
 
 const STEP_COLUMNS =
@@ -465,35 +502,37 @@ export async function listSteps(sb: SupabaseClient, runId: string): Promise<Acti
  * 断点续跑靠的就是这个：步骤行是**一个 run 一份**，重跑时已完成的行还在，
  * 带着它们的 output —— 不是「重新建一批然后跳过前几个」。
  */
+/**
+ * 建齐这条 run 的步骤（走 `kernel_ensure_run_steps` RPC）。
+ *
+ * 🔴 **必须走 RPC，不能在这里裸 INSERT。** 少了代际闸就有一个窗口：
+ *    A 已经拿到授权、卡在建步骤之前，租约过期，B 接管（代际 +1）。
+ *    A 醒过来仍然能插一批**带旧代际**的步骤行 —— 而步骤写入的守卫只看
+ *    step 自己那一列，于是 A 拿着自己造的行继续调 handler，整套 fencing 被绕过。
+ *
+ * 返回 null = 代际已经不是自己那一代了（被接管），调用方必须停手。
+ */
 export async function ensureSteps(
   sb: SupabaseClient,
   runId: string,
   clientId: string,
   stepKeys: readonly string[],
   claimGeneration: number,
-): Promise<ActionRunStep[]> {
-  const existing = await listSteps(sb, runId)
-  const have = new Set(existing.map((s) => s.step_key))
-  const missing = stepKeys
-    .map((key, idx) => ({ key, idx }))
-    .filter(({ key }) => !have.has(key))
-
-  if (missing.length > 0) {
-    const { error } = await sb.from(TABLE_STEPS).insert(
-      missing.map(({ key, idx }) => ({
-        run_id: runId,
-        client_id: clientId,
-        step_key: key,
-        step_index: idx,
-        status: 'pending' as StepStatus,
-        // 新建的步骤直接属于当前这一代 —— 否则它一出生就被 fence 掉
-        claim_generation: claimGeneration,
-      })),
-    )
-    if (error) fail('创建执行步骤', error)
-    return listSteps(sb, runId)
+): Promise<ActionRunStep[] | null> {
+  const { data, error } = await sb.rpc('kernel_ensure_run_steps', {
+    p_run_id: runId,
+    p_client_id: clientId,
+    p_step_keys: [...stepKeys],
+    p_expected_generation: claimGeneration,
+  })
+  if (error) fail('创建执行步骤', error)
+  const row = (data ?? [])[0] as unknown as { ok: boolean; reason: string } | undefined
+  if (!row) fail('创建执行步骤', { message: 'RPC 没有返回结果行' })
+  if (!row.ok) {
+    if (String(row.reason).startsWith('stale_generation')) return null
+    fail('创建执行步骤', { message: String(row.reason) })
   }
-  return existing
+  return listSteps(sb, runId)
 }
 
 /**

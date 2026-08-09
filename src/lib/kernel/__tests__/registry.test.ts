@@ -117,3 +117,34 @@ describe('幂等键', () => {
     expect(a.startsWith('unknown:')).toBe(true)
   })
 })
+
+describe('契约自洽：会花钱的动作必须如实声明 provider 幂等能力', () => {
+  it('🔴 声明 not_applicable 的动作，不许同时声明正的成本', async () => {
+    const { ACTION_REGISTRY } = await import('../registry')
+    const bad: string[] = []
+    for (const key of ACTION_REGISTRY.keys()) {
+      const d = ACTION_REGISTRY.get(key)!
+      if (d.providerIdempotency !== 'not_applicable') continue
+      const ceilings = Object.values(d.costModel.stepCeilingUsd ?? {}).map(Number)
+      const positive = ceilings.some((v) => v > 0)
+      if (positive) bad.push(`${key}：stepCeilingUsd 里有正数`)
+    }
+    expect(
+      bad,
+      'not_applicable 的意思是「根本不调外部 provider」。既然如此就不该有正的每步成本 —— ' +
+        '这两件事同时声明是契约自相矛盾，运行时会按最保守的 unsupported 处置（见 gateway 的 paidStepWithoutIdempotency）。',
+    ).toEqual([])
+  })
+
+  it('🔴 每个动作都必须显式声明 providerIdempotency（不许留空靠默认）', async () => {
+    const { ACTION_REGISTRY } = await import('../registry')
+    const allowed = ['not_applicable', 'supported', 'unsupported']
+    const bad = ACTION_REGISTRY.keys().filter(
+      (k) => !allowed.includes(ACTION_REGISTRY.get(k)!.providerIdempotency),
+    )
+    expect(
+      bad,
+      '填错的代价是客户被重复扣款 —— 所以这一项必须是有意识填的，不能靠默认值。',
+    ).toEqual([])
+  })
+})

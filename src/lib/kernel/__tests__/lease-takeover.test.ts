@@ -401,17 +401,54 @@ describe('T1 · 「已经有人在做了」只在两种情况下出现', () => {
     expect(f.tables.production_packages).toHaveLength(1)
   })
 
-  it('run 已经 running → 连租约都不用看，直接说「正在做」', async () => {
+  it('🔴 running + 租约还活着 → in_progress（真的有人在跑）', async () => {
     const builds = vi.fn()
     const f = fixture(builds)
     await submitActionRun(f.kernel, submit())
-    const row = runRow(f)
-    row.status = 'running'
-    row.claimed_by = null
-    row.lease_expires_at = null
+    simulateCrash(f, 'running', LEASE * 1000)
 
     const out = await runAction(f.kernel, submit())
+
     expect(out.kind).toBe('in_progress')
     expect(builds).not.toHaveBeenCalled()
+    expect(runRow(f).claimed_by).toBe(DEAD) // owner 没被换掉
+  })
+
+  it('🔴 running + 租约已过期 → **必须**能被接走并跑完（否则崩在执行中就永久卡死）', async () => {
+    // 这条是 P1-1：SQL 早就允许接管过期的 running，但 runAction 以前
+    // 在进 takeover 判断之前就把 running 直接答成 in_progress ——
+    // 接管入口形同虚设，run 永远卡在 running。
+    const builds = vi.fn()
+    const f = fixture(builds)
+    await submitActionRun(f.kernel, submit())
+    simulateCrash(f, 'running', LEASE * 1000)
+    advancePastLease(f)
+
+    const out = await runAction(f.kernel, submit())
+
+    expect(out.kind).toBe('succeeded')
+    expect(builds).toHaveBeenCalledTimes(1)
+    expect(f.tables.production_packages).toHaveLength(1)
+    expect(runRow(f).previous_claimed_by).toBe(DEAD)
+  })
+
+  it('🔴 running 过期后两个并发接管 → 只有一代赢，capability 只跑一次', async () => {
+    const builds = vi.fn()
+    const f = fixture(builds)
+    await submitActionRun(f.kernel, submit())
+    simulateCrash(f, 'running', LEASE * 1000)
+    advancePastLease(f)
+    const genBefore = Number(runRow(f).claim_generation)
+
+    const results = await Promise.allSettled([
+      runAction(f.kernel, submit()),
+      runAction(f.kernel, submit()),
+    ])
+    const kinds = results.map((r) => (r.status === 'fulfilled' ? r.value.kind : 'rejected'))
+
+    expect(kinds.filter((k) => k === 'succeeded')).toHaveLength(1)
+    expect(kinds.filter((k) => k === 'in_progress')).toHaveLength(1)
+    expect(builds).toHaveBeenCalledTimes(1)
+    expect(Number(runRow(f).claim_generation)).toBe(genBefore + 1)
   })
 })

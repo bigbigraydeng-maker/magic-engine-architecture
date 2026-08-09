@@ -80,6 +80,20 @@ export interface CostModel {
   readonly stepCeilingUsd?: Readonly<Record<string, number>>
 }
 
+/**
+ * 这个动作的外部 provider 支不支持「同一把幂等键重放」。
+ *
+ * 🔴 它决定的是一件很具体的事：**收费步骤抛出「结果未知」的异常时，能不能自动重试。**
+ *    - `supported`     —— provider 认 `CapabilityStepContext.idempotencyKey`，
+ *                         重放不会重复收费 / 重复做 → 可以自动重试；
+ *    - `unsupported`   —— 重试可能再收一次钱 → **一律 fail closed，转死信让人来判**；
+ *    - `not_applicable` —— 这个动作根本不调外部 provider（纯内部写、零成本）。
+ *
+ * 🔴 声明 `not_applicable` 却又声明了正的每步上限 = 契约自相矛盾，
+ *    运行时按最保守的 `unsupported` 处置（有注册表测试盯着这条一致性）。
+ */
+export type ProviderIdempotency = 'not_applicable' | 'supported' | 'unsupported'
+
 export interface RetryPolicy {
   readonly maxAttempts: number
   readonly backoff: 'exponential' | 'fixed'
@@ -115,6 +129,11 @@ export interface ActionDefinition<K extends ActionKey = ActionKey> {
   readonly reversible: boolean
   readonly idempotency: IdempotencyRule
   readonly costModel: CostModel
+  /**
+   * 外部 provider 的幂等能力。决定「收费步骤抛出结果未知的异常时能不能自动重试」。
+   * 🔴 不许乐观填 —— 填错的代价是客户被重复扣款。
+   */
+  readonly providerIdempotency: ProviderIdempotency
   readonly retryPolicy: RetryPolicy
   readonly verification: VerificationSpec | null
   /** 谁有资格授权它。复用现成的 auth/access-types.ts，不另发明一套角色。 */

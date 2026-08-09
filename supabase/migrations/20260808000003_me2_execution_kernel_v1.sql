@@ -1221,6 +1221,167 @@ GRANT  EXECUTE ON FUNCTION public.kernel_claim_or_takeover_run(uuid, text, integ
 
 
 -- ────────────────────────────────────────────────────────────────────────────
+-- 5f. kernel_record_fenced_deny —— 落一条拒绝 + 推 run 状态，两件事一个事务
+--
+-- 🔴 为什么不能「先插决策、再 update run」：
+--    授权前置校验（preflight）要读政策、读注册表，是有耗时的。A 卡在那儿的时候
+--    租约可能已经过期、B 已经接管并把这件事跑完了。A 醒过来接着落拒绝 ——
+--    无条件的 update 会把 succeeded 改成 denied，**当场毁掉一次已经成功的执行**。
+--
+--    先插后判还会留下孤立的 deny 决策（run 状态没跟着变，审计表里多一条
+--    说不清归属的记录）。所以插入之前就在锁里把代际验掉。
+--
+-- p_expected_generation 为 NULL = 调用方没有围栏（直接调 authorizeRun 的测试路径）。
+-- p_expected_status     为 NULL = 不要求 run 停在某个特定状态。
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.kernel_record_fenced_deny(
+  p_run_id              uuid,
+  p_expected_generation bigint,
+  p_expected_status     text,
+  p_decision            jsonb,
+  p_reason              text
+)
+RETURNS TABLE (ok boolean, reason text, decision_id uuid)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_run    public.action_runs%ROWTYPE;
+  v_new_id uuid;
+BEGIN
+  SELECT * INTO v_run FROM public.action_runs WHERE id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'run_not_found', NULL::uuid; RETURN;
+  END IF;
+
+  -- 🔴 代际闸：过期的执行者不许把别人已经推进的 run 写成 denied。
+  IF p_expected_generation IS NOT NULL
+     AND v_run.claim_generation <> p_expected_generation THEN
+    RETURN QUERY SELECT false, 'stale_generation:' || v_run.claim_generation::text, NULL::uuid;
+    RETURN;
+  END IF;
+
+  -- 🔴 跨客户：决策必须属于这条 run 的客户，否则会往审计表里写一条串台的记录。
+  --    kernel_ensure_run_steps 有这道闸，这里以前没有 —— 同一类漏洞要一起堵。
+  IF (p_decision->>'client_id')::uuid IS DISTINCT FROM v_run.client_id THEN
+    RETURN QUERY SELECT false, 'cross_client', NULL::uuid; RETURN;
+  END IF;
+
+  -- 状态闸（人工批准失败落地用）：只在仍停在那个状态时才写。
+  IF p_expected_status IS NOT NULL AND v_run.status <> p_expected_status THEN
+    RETURN QUERY SELECT false, 'not_' || p_expected_status || ':' || v_run.status, NULL::uuid;
+    RETURN;
+  END IF;
+
+  INSERT INTO public.authorization_decisions
+    (action_run_id, client_id, action_key, action_version, verdict, deny_code, reason,
+     policy_snapshot, policy_id, policy_version, decided_by, decided_by_user,
+     cost_cap_usd, cost_estimate_usd, idempotency_key, expires_at)
+  VALUES
+    (v_run.id,
+     (p_decision->>'client_id')::uuid,
+     p_decision->>'action_key',
+     (p_decision->>'action_version')::integer,
+     'deny',
+     p_decision->>'deny_code',
+     p_reason,
+     COALESCE(p_decision->'policy_snapshot', '{}'::jsonb),
+     NULLIF(p_decision->>'policy_id','')::uuid,
+     NULLIF(p_decision->>'policy_version','')::integer,
+     COALESCE(p_decision->>'decided_by','policy'),
+     NULLIF(p_decision->>'decided_by_user',''),
+     NULLIF(p_decision->>'cost_cap_usd','')::numeric,
+     NULLIF(p_decision->>'cost_estimate_usd','')::numeric,
+     p_decision->>'idempotency_key',
+     NULL)
+  RETURNING id INTO v_new_id;
+
+  UPDATE public.action_runs
+     SET status = 'denied',
+         authorization_decision_id = v_new_id,
+         needs_human = true,
+         last_error  = p_reason,
+         finished_at = now(),
+         updated_at  = now()
+   WHERE id = v_run.id;
+
+  RETURN QUERY SELECT true, 'denied', v_new_id;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.kernel_record_fenced_deny(uuid, bigint, text, jsonb, text)
+  FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.kernel_record_fenced_deny(uuid, bigint, text, jsonb, text)
+  TO service_role;
+
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- 5g. kernel_ensure_run_steps —— 建步骤也要过代际闸
+--
+-- 🔴 少了这一道就有一个窗口：A 已经拿到授权，卡在建步骤之前，租约过期，
+--    B 接管（代际 +1）。A 醒过来仍然能 INSERT 一批**带旧代际**的步骤行 ——
+--    而步骤写入的守卫只看 step 自己那一列，于是 A 拿着自己造的行继续调 handler。
+--    等于绕过了整套 fencing。
+--
+--    所以建步骤必须在锁里验代际，并且**用 run 当前的代际**写进去。
+--    顺带把已存在步骤的代际也拉齐（接管时应该已经拉过，这里是第二道保险）。
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.kernel_ensure_run_steps(
+  p_run_id              uuid,
+  p_client_id           uuid,
+  p_step_keys           text[],
+  p_expected_generation bigint
+)
+RETURNS TABLE (ok boolean, reason text, created integer)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_run     public.action_runs%ROWTYPE;
+  v_created integer := 0;
+  v_idx     integer;
+BEGIN
+  SELECT * INTO v_run FROM public.action_runs WHERE id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'run_not_found', 0; RETURN;
+  END IF;
+  IF v_run.client_id <> p_client_id THEN
+    RETURN QUERY SELECT false, 'cross_client', 0; RETURN;
+  END IF;
+  IF p_expected_generation IS NOT NULL
+     AND v_run.claim_generation <> p_expected_generation THEN
+    RETURN QUERY SELECT false, 'stale_generation:' || v_run.claim_generation::text, 0; RETURN;
+  END IF;
+
+  FOR v_idx IN 1 .. COALESCE(array_length(p_step_keys, 1), 0) LOOP
+    INSERT INTO public.action_run_steps
+      (run_id, client_id, step_key, step_index, status, claim_generation)
+    VALUES
+      (v_run.id, v_run.client_id, p_step_keys[v_idx], v_idx - 1, 'pending', v_run.claim_generation)
+    ON CONFLICT (run_id, step_key) DO NOTHING;
+    IF FOUND THEN v_created := v_created + 1; END IF;
+  END LOOP;
+
+  -- 已存在的步骤也拉齐到当前代际（接管时已经拉过，这里是第二道保险）
+  UPDATE public.action_run_steps
+     SET claim_generation = v_run.claim_generation,
+         updated_at       = now()
+   WHERE run_id = v_run.id
+     AND claim_generation <> v_run.claim_generation;
+
+  RETURN QUERY SELECT true, 'ok', v_created;
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.kernel_ensure_run_steps(uuid, uuid, text[], bigint)
+  FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.kernel_ensure_run_steps(uuid, uuid, text[], bigint)
+  TO service_role;
+
+
+-- ────────────────────────────────────────────────────────────────────────────
 -- 6. flywheel_actions.action_run_id —— 补上 lineage 的最后一条边
 --
 -- 可空、无默认值、无触发器：对现有归因作业**零行为变化**。

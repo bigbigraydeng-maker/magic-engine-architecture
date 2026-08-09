@@ -103,6 +103,26 @@ export interface FakeSupabaseOptions {
    *    时间必须整条链只有一个来源。
    */
   now?: () => Date
+  /**
+   * 每次调 RPC **之前**的钩子。
+   *
+   * 🔴 用来精确制造交错：有些分支只在「两句之间别人插了一脚」时才走得到
+   *    （比如批准之后、领租约之前被别人抢先跑完）。没有这个缝，那条分支
+   *    就只能靠「大概等价」的间接测试糊过去 —— 而那正是遮蔽闸的温床。
+   */
+  beforeRpc?: (name: string, args: Record<string, unknown>) => void
+  /**
+   * 每次表操作**之前**的钩子。跟 `beforeRpc` 同一个用途，但**可以返回 Promise** ——
+   * 返回了就把这次操作挂住，直到它 resolve。
+   *
+   * 🔴 为什么需要「挂住」而不只是「插一脚」：有些闸只在
+   *    「某一段耗时操作**进行当中**别人接管了」时才走得到。
+   *    比如授权前置校验读政策的那一刻被接管 —— 这时 `authorizing` 那一次写
+   *    **早就成功了**，所以前面那道围栏拦不住，只有落拒绝那道能拦。
+   *    没有这个 barrier，那条分支就只能靠「大概等价」的构造去测，
+   *    而那正是遮蔽闸的温床（这一条被遮蔽了两次才测出来）。
+   */
+  beforeOp?: (table: string, op: string, filters: Filter[]) => void | Promise<void>
 }
 
 export interface Filter {
@@ -526,6 +546,18 @@ export function createFakeSupabase(
       onFulfilled: (v: { data: unknown; error: { message: string; code?: string } | null }) => unknown,
       onRejected?: (e: unknown) => unknown,
     ) => {
+      // 钩子可以返回 Promise —— 返回了就把这次操作挂住（见 FakeSupabaseOptions.beforeOp）
+      const hook = options.beforeOp?.(table, op, filters)
+      if (hook && typeof (hook as Promise<void>).then === 'function') {
+        return (hook as Promise<void>).then(() => settle(onFulfilled, onRejected), onRejected)
+      }
+      return settle(onFulfilled, onRejected)
+    }
+
+    function settle(
+      onFulfilled: (v: { data: unknown; error: { message: string; code?: string } | null }) => unknown,
+      onRejected?: (e: unknown) => unknown,
+    ) {
       let result: { data: unknown; error: { message: string; code?: string } | null }
       try {
         result = run()
@@ -963,10 +995,131 @@ export function createFakeSupabase(
     }
   }
 
+  /** `kernel_record_fenced_deny` 的内存复刻。插入之前就在「锁」里验代际。 */
+  function recordFencedDeny(args: Record<string, unknown>): {
+    ok: boolean
+    reason: string
+    decision_id: string | null
+  } {
+    const runId = String(args.p_run_id)
+    const expectedGen =
+      args.p_expected_generation === null || args.p_expected_generation === undefined
+        ? null
+        : Number(args.p_expected_generation)
+    const expectedStatus = (args.p_expected_status ?? null) as string | null
+    const d = (args.p_decision ?? {}) as Row
+    const reason = String(args.p_reason)
+    const no = (r: string) => ({ ok: false, reason: r, decision_id: null })
+
+    const run = tableOf('action_runs').find((r) => r.id === runId)
+    if (!run) return no('run_not_found')
+    if (expectedGen !== null && Number(run.claim_generation ?? 0) !== expectedGen) {
+      return no(`stale_generation:${String(run.claim_generation ?? 0)}`)
+    }
+    // 跨客户：决策必须属于这条 run 的客户（跟 SQL 同一道闸）
+    if (d.client_id !== run.client_id) return no('cross_client')
+    // 复刻 deny_code_matches_verdict：deny 必须带机器可读的码
+    if (!d.deny_code) {
+      throw new Error(
+        'new row for relation "authorization_decisions" violates check constraint "deny_code_matches_verdict"',
+      )
+    }
+    if (expectedStatus !== null && run.status !== expectedStatus) {
+      return no(`not_${expectedStatus}:${String(run.status)}`)
+    }
+
+    const nowIso = (options.now?.() ?? new Date()).toISOString()
+    const decision: Row = {
+      id: fakeId('authorization_decisions'),
+      created_at: nowIso,
+      ...(DEFAULTS.authorization_decisions?.() ?? {}),
+      action_run_id: run.id,
+      client_id: d.client_id,
+      action_key: d.action_key,
+      action_version: d.action_version,
+      verdict: 'deny',
+      deny_code: d.deny_code ?? null,
+      reason,
+      policy_snapshot: d.policy_snapshot ?? {},
+      policy_id: d.policy_id ?? null,
+      policy_version: d.policy_version ?? null,
+      decided_by: d.decided_by ?? 'policy',
+      decided_by_user: d.decided_by_user ?? null,
+      cost_cap_usd: d.cost_cap_usd ?? null,
+      cost_estimate_usd: d.cost_estimate_usd ?? null,
+      idempotency_key: d.idempotency_key,
+      expires_at: null,
+    }
+    tableOf('authorization_decisions').push(decision)
+
+    run.status = 'denied'
+    run.authorization_decision_id = decision.id
+    run.needs_human = true
+    run.last_error = reason
+    run.finished_at = nowIso
+    run.updated_at = nowIso
+    return { ok: true, reason: 'denied', decision_id: String(decision.id) }
+  }
+
+  /** `kernel_ensure_run_steps` 的内存复刻。建步骤也要过代际闸。 */
+  function ensureRunSteps(args: Record<string, unknown>): {
+    ok: boolean
+    reason: string
+    created: number
+  } {
+    const runId = String(args.p_run_id)
+    const clientId = String(args.p_client_id)
+    const keys = (args.p_step_keys ?? []) as string[]
+    const expectedGen =
+      args.p_expected_generation === null || args.p_expected_generation === undefined
+        ? null
+        : Number(args.p_expected_generation)
+    const no = (r: string) => ({ ok: false, reason: r, created: 0 })
+
+    const run = tableOf('action_runs').find((r) => r.id === runId)
+    if (!run) return no('run_not_found')
+    if (run.client_id !== clientId) return no('cross_client')
+    if (expectedGen !== null && Number(run.claim_generation ?? 0) !== expectedGen) {
+      return no(`stale_generation:${String(run.claim_generation ?? 0)}`)
+    }
+
+    const nowIso = (options.now?.() ?? new Date()).toISOString()
+    const gen = Number(run.claim_generation ?? 0)
+    let created = 0
+    keys.forEach((key, idx) => {
+      const dup = tableOf('action_run_steps').find(
+        (st) => st.run_id === run.id && st.step_key === key,
+      )
+      if (dup) return
+      tableOf('action_run_steps').push({
+        id: fakeId('action_run_steps'),
+        created_at: nowIso,
+        updated_at: nowIso,
+        ...(DEFAULTS.action_run_steps?.() ?? {}),
+        run_id: run.id,
+        client_id: run.client_id,
+        step_key: key,
+        step_index: idx,
+        status: 'pending',
+        claim_generation: gen,
+      })
+      created += 1
+    })
+    // 已存在的步骤拉齐到当前代际（第二道保险）
+    for (const st of tableOf('action_run_steps')) {
+      if (st.run_id !== run.id) continue
+      if (Number(st.claim_generation ?? 0) === gen) continue
+      st.claim_generation = gen
+      st.updated_at = nowIso
+    }
+    return { ok: true, reason: 'ok', created }
+  }
+
   const client = {
     from,
     /** 只实现 Kernel 真正会调的那几个 RPC。别的名字直接炸。 */
     async rpc(name: string, args: Record<string, unknown>) {
+      options.beforeRpc?.(name, args)
       if (name === 'kernel_begin_authorized_run') {
         return { data: [beginAuthorizedRun(args)], error: null }
       }
@@ -978,6 +1131,12 @@ export function createFakeSupabase(
       }
       if (name === 'kernel_claim_or_takeover_run') {
         return { data: [claimOrTakeoverRun(args)], error: null }
+      }
+      if (name === 'kernel_record_fenced_deny') {
+        return { data: [recordFencedDeny(args)], error: null }
+      }
+      if (name === 'kernel_ensure_run_steps') {
+        return { data: [ensureRunSteps(args)], error: null }
       }
       if (name !== 'kernel_claim_run_step') {
         throw new Error(`[fake-supabase] 没有建模的 RPC：${name}`)

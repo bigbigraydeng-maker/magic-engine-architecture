@@ -14,6 +14,8 @@
 > 开跑前的预算闸结合「下一步要花多少」· 花费金额的合法性双层校验。
 > 第七轮（Codex review 5）：**stale-worker fencing（单调代际）** · `running` 也可接管 ·
 > 成本声明改成**硬上限** · step 级外部幂等键。
+> 第八轮（Codex review 6）：`running` 接管的**真正入口** · 落拒绝 / 建步骤也进围栏 ·
+> **provider 收了钱才抛错**的安全规则 · 政策变了立刻重判 · 领不到租约时说真话。
 
 ---
 
@@ -140,8 +142,10 @@ RPC 里的 `v_recoverable`（真强制）。有一条架构测试盯着两边一
 `kernel_claim_or_takeover_run(run_id, owner_id, lease_seconds)`，一个事务里：
 
 1. `FOR UPDATE` 锁 run；
-2. 状态必须在 `{queued, authorizing, authorized}` —— 终态和 `running` 一律 `not_claimable`
-   （`running` 说明执行权已被 `kernel_begin_authorized_run` 原子领走，接管它 = 跑第二遍）；
+2. 状态必须在 `{queued, authorizing, authorized, running}` —— 终态一律 `not_claimable`。
+   `running` **也在里面**，但只有租约过期才轮得到（租约还活着 = 真的有人在跑）；
+   接管一个 `running` 的 run = 放回 `queued` + 清决策指针 + 没跑成的步骤放回待跑
+   （授权已被上一代兑换掉，必须重新签），已成功的步骤和 `cost_actual_usd` 一概不动；
 3. 租约还没过期且不是自己的 → `already_owned`（**这才配叫 in_progress**）；
 4. 无主 / 已过期 / 自己续租 → 原子写下新 owner + 新到期时间；
 5. 从别人手里接走才算 `reclaim`（自己续租不算 —— 两者是不同的故障信号）；
@@ -154,6 +158,7 @@ RPC 里的 `v_recoverable`（真强制）。有一条架构测试盯着两边一
 | `authorized` + 一份没被消费的 allow | **复用那份授权**，绝不重新签（否则审计表里同一件事有两个「谁批的」） |
 | `authorized` + 授权已过期 | 走完整的重新授权（过期的授权本来就该重新判） |
 | `queued` / `authorizing` | 走完整授权 —— 此时租约保证**只有一个人在签** |
+| `running`（租约已过期） | 已被放回 `queued`，走完整授权；已成功的步骤不重跑 |
 
 **owner 是每一次推进的身份，不是机器的身份。** 用 `workerId`（`kernel@<instance>`）当 owner
 的话，同进程的两个并发调用会互相被当成「自己续租」而同时放行 —— 租约那道锁形同虚设
@@ -165,8 +170,25 @@ RPC 里的 `v_recoverable`（真强制）。有一条架构测试盯着两边一
 这四处转换的共同点是「推进这条 run 的人到此为止」。不清的话会留下一份
 owner 早就走了的僵尸租约，把真正要来推进的人挡成「已经有人在做了」。
 
-于是有一条严格的不变量：**在三个可接管状态里，租约活着 ⟺ 真的有人在推进。**
+于是有一条严格的不变量：**在四个可接管状态里，租约活着 ⟺ 真的有人在推进。**
 （终态上的租约只是取证信息：最后是谁在推。）
+
+**围栏必须覆盖每一处推进性写入，漏一处就等于没有。** 第八轮补上了两处：
+
+- **落拒绝**（`recordDeny`）：授权前置校验要读政策、读注册表，是有耗时的。
+  A 卡在那儿的时候租约可能已经过期、B 已经接管并跑完了 ——
+  A 醒来落一条 deny，无条件的 update 会把 `succeeded` 改成 `denied`，
+  **当场毁掉一次已经成功的执行**。现在走 `kernel_record_fenced_deny`：
+  锁 run → 验代际 → 插决策 → 推状态，**一个事务**。
+  先插后判的话，代际对不上时会留下一条孤立的 deny 决策。
+- **建步骤**（`ensureSteps`）：A 卡在建步骤之前被接管，醒来仍能插一批**带旧代际**
+  的步骤行 —— 而步骤写入的守卫只看 step 自己那一列，整套 fencing 被绕过。
+  现在走 `kernel_ensure_run_steps`：锁 run → 验代际 → 用 run 当前代际建行。
+
+**`running` 的接管还要有真正的入口。** 第七轮在 SQL 里放开了「租约过期的 running
+可以接管」，但 `runAction` 在进入接管判断**之前**就把 `running` 直接答成
+`in_progress` —— 入口形同虚设，崩在执行中的 run 依然永久卡死。
+现在 `running` 跟其他三个中间态走同一条路：租约还活着才答 `in_progress`。
 
 🔴 本 PR **不做** scheduler / cron / worker —— 只提供接管 primitive。
 
@@ -204,6 +226,29 @@ owner 早就走了的僵尸租约，把真正要来推进的人挡成「已经�
 现在 `running` 在白名单里，但**只有租约过期才轮得到**；接管一个 `running` 的 run
 = 放回 `queued` + 清掉决策指针 + 没跑成的步骤放回待跑（授权已被上一代兑换掉，
 必须重新签），已成功的步骤和 `cost_actual_usd` 一概不动。
+
+### 🔴 收费步骤失败、而结果未知时，能不能自动重试（P1-4）
+
+这是硬预算最难的一条边界：provider **已经扣了款**，然后网络超时 / 响应解析失败。
+handler 抛异常、没有 `CapabilityStepResult`，于是 `costActualUsd` 没机会返回 ——
+Kernel 记 0 元并重试，provider 不认幂等键的话**每次重试都再收一遍**。
+
+Kernel 不能凭空知道 provider 扣了多少。所以契约被写成可执行的安全规则：
+
+| 情况 | 处置 |
+|---|---|
+| 异常带着已扣金额（`RetryableCapabilityError` / `KernelError` 的 `costActualUsd`） | **先落库再判定**（跟成功路径同一个顺序），金额同样过 finite / 非负校验 |
+| 收费步骤 + 结果未知 + `providerIdempotency !== 'supported'` | **不自动重试**，直接死信（`UNSAFE_RETRY`）让人判断 |
+| 收费步骤 + 结果未知 + provider 保证幂等重放 | 可以按**同一把 step 幂等键**重试 |
+| 零成本步骤（契约 `estimate` 为 0 / 每步上限 0） | 不受影响，照常重试 |
+
+`ActionDefinition.providerIdempotency` 是新增的必填契约字段
+（`not_applicable` / `supported` / `unsupported`）。声明 `not_applicable`
+却又声明了正的每步上限 = 契约自相矛盾，运行时按最保守的处置。
+v1 唯一上线的能力零外部调用，填的是 `not_applicable`。
+
+另外：**这一步自己的预算花完了就不再开跑。** 声明总共最多 $2、已经花到 $2 的步骤，
+再跑一次只可能违约 —— 一个守规矩的 provider 不会白干活。（零成本步骤不在此列。）
 
 ### 🔴 我们到底保证什么（不要把 at-least-once 说成 exactly-once）
 
@@ -296,6 +341,28 @@ run 层的 `spent` 从各步骤已持久化的花费之和起算。
 **实际花费超出声明上限时，钱照样记账。** 不记账才是危险方向：
 库里少记一笔，重跑就从低估的数字起算，同一笔预算能被再花一次（正是 S3 修的洞）。
 多记只会让后面的闸更严。
+
+### 🔴 政策变了就别再复用旧授权（P2-1）
+
+接管一条停在 `authorized` 的 run 时会复用它那份没被消费的 allow。
+但复用前必须复核**当前政策**：存在 / 行身份 / 版本 / 模式 / 时间窗，缺一不可。
+
+早先这一层交给 Gateway（反正它开跑前会重查）。那样只是「拿旧授权去撞一堵墙」——
+Gateway 抛错之后 run 仍停在 `authorized`、接管者的租约也还在，于是后续请求
+先被答成 `in_progress`，租约过期后又重复同一个错，**一直卡到授权 TTL 自己到期**。
+现在政策一变就直接认定「不可复用」，走完整重新授权 ——
+那条路会如实落一条 deny / require_approval，而不是反复抛错。
+
+### 🔴 领不到租约时要说真话（P2-2）
+
+领不到分两类，处置完全不同：
+
+- `already_owned:*` → 真的还有一个活着的 owner，答 `in_progress` 是对的；
+- `not_claimable:<终态>` → 期间已经跑完 / 死信 / 被拒了。这时答「正在做」
+  等于告诉调用方事情还在进行，而它其实已经结束 —— 成功的产物和失败的原因都拿不到。
+
+`runAction` 和 `approveAndRun` 走**同一个** `outcomeForFailedClaim`。
+两处各写一份必然分家（`approveAndRun` 早先就是无条件 `in_progress`）。
 
 ### 🔴 开跑前那道闸必须结合「下一步要花多少」（T2）
 

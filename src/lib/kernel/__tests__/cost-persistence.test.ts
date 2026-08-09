@@ -39,6 +39,9 @@ function definition(over: Partial<ActionDefinition> = {}): ActionDefinition {
     reversible: true,
     idempotency: { keyFields: ['n'], scope: 'client' },
     costModel: { kind: 'fixed', estimate: () => 0.01, stepCeilingUsd: { a: 2, b: 2 } },
+    // 这些用例测的是「重试之内成本怎么累计」，前提就是重试被允许 ——
+    // 而收费步骤能不能自动重试，取决于 provider 认不认幂等键（见 P1-4）。
+    providerIdempotency: 'supported',
     retryPolicy: { maxAttempts: 1, backoff: 'fixed', baseMs: 1 },
     verification: null,
     requiredCapabilityTier: 'paid_client',

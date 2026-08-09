@@ -295,17 +295,31 @@ async function outcomeForSettledRun(
     }
   }
 
-  // 已经被原子领走执行权、正在跑 —— 这是真的有人在做
-  if (run.status === 'running') {
+  // 🔴 `failed` / `superseded` 也是终态。Kernel 现在不写它们，但 CHECK 允许，
+  //    接管 RPC 也会对它们回 `not_claimable`。不认的话，共用件会抛 INVALID_STATE ——
+  //    等于把一个「这件事早结束了」抛给点了同意的人。宁可说人话。
+  if (run.status === 'failed' || run.status === 'superseded') {
     return {
-      kind: 'in_progress',
+      kind: 'dead_letter',
       run,
       decision: null,
       execution: null,
-      humanReason: '这件事正在做，这次不重复做',
+      humanReason:
+        run.last_error ??
+        (run.status === 'superseded'
+          ? '这条动作已经被另一条取代了，不会再跑'
+          : '这条动作之前失败了，需要人看一眼'),
     }
   }
 
+  // 🔴 `running` **不在这里早退**。
+  //
+  //    早先这里直接答「正在做」，于是 SQL 那边虽然允许接管租约已过期的 running，
+  //    实际上永远走不到 —— 执行者崩在半路，这条 run 就永远停在 running，
+  //    调用方永远只拿到 in_progress。接管入口形同虚设。
+  //
+  //    现在它跟其他三个中间态一样往下走：租约还活着 → 领不到 → 才答 in_progress；
+  //    租约过期 → 允许接管。判据只有一个 —— **有没有一个没过期的 owner**。
   return null
 }
 
@@ -338,29 +352,24 @@ async function driveIntermediateRun(
     leaseSeconds: deps.leaseSeconds,
   })
 
-  if (!claim.ok) {
-    if (claim.reason.startsWith('already_owned')) {
-      return {
-        kind: 'in_progress',
-        run: await deps.requireRun(runId),
-        decision: null,
-        execution: null,
-        humanReason: '这件事已经有人在做了，这次不重复做',
-      }
-    }
-    // `not_claimable:<status>` —— 期间被别人推进到了另一个状态。按新状态如实回答。
-    const fresh = await deps.requireRun(runId)
-    const settled = await outcomeForSettledRun(deps, fresh)
-    if (settled) return settled
-    throw new KernelError(
-      'INVALID_STATE',
-      '这条动作的状态在这次操作期间变过了，没能接手 —— 刷新后再看',
-      { detail: { runId, reason: claim.reason, status: fresh.status } },
-    )
-  }
+  if (!claim.ok) return outcomeForFailedClaim(deps, runId, claim.reason)
 
   // 领到了。拿最新一行（带上刚写下的租约和代际）。
   const owned = await deps.requireRun(runId)
+
+  // 🔴 接管的是一条**正在跑**的 run（上一个执行者崩在 handler 调用中途）——
+  //    这跟「收费步骤抛出结果未知的异常」是**同一个场景**：
+  //    我们不知道 provider 那边到底做没做、扣没扣。
+  //    所以处置也必须一样：provider 不保证幂等重放时，**不许自动重跑**，
+  //    转人工判断。否则同一个 PR 里一边用 UNSAFE_RETRY 挡住重试、
+  //    一边让接管路径把 handler 又调一遍，自相矛盾。
+  //
+  //    只在真的接管了 running 时才判（claim.resetSteps）；
+  //    零成本 / provider 认幂等键的动作不受影响。
+  if (claim.resetSteps) {
+    const blocked = takeoverNeedsHumanJudgement(deps, owned)
+    if (blocked) return blocked
+  }
   // 🔴 F1：从这里往后每一次推进性写入都出示这一代。
   //    被接管之后这一代就作废了 —— 写不进去，也不会覆盖接管者的结果。
   const fence: ExecutionFence = { ownerId, generation: claim.claimGeneration }
@@ -389,6 +398,80 @@ async function driveIntermediateRun(
   }
 
   return executeAndWrap(deps, auth.decision, auth.ctx, fence)
+}
+
+/**
+ * 接管一条**跑到一半**的 run 时，能不能直接重跑？
+ *
+ * 🔴 上一个执行者是崩在 handler 调用中途的 —— 结果未知，跟「收费步骤抛出
+ *    结果未知的异常」是同一个场景。provider 不保证幂等重放时，重跑可能
+ *    再收一次钱，所以一律 fail closed，转人工。
+ *
+ * 返回 null = 可以接着跑（零成本动作，或 provider 认幂等键）。
+ */
+function takeoverNeedsHumanJudgement(
+  deps: KernelDeps,
+  run: ActionRun,
+): ActionRunOutcome | null {
+  const definition = deps.registry.get(run.action_key)
+  if (!definition) return null // 认不出的动作由授权层去拒，不在这里判
+
+  const mightCost =
+    definition.costModel.estimate(run.input) > 0 ||
+    Object.values(definition.costModel.stepCeilingUsd ?? {}).some((v) => Number(v) > 0)
+  if (!mightCost) return null
+  if (definition.providerIdempotency === 'supported') return null
+
+  return {
+    kind: 'dead_letter',
+    run,
+    decision: null,
+    execution: null,
+    humanReason:
+      `上一个执行者在跑「${definition.title}」的中途没了，而这个动作会花钱、` +
+      `它的外部服务又不保证「同一把幂等键重放不会重复收费」—— ` +
+      `系统不敢自动重跑（可能再扣一次）。请人工确认那边到底做没做、扣没扣，再决定重跑还是作废。`,
+  }
+}
+
+/**
+ * 领不到运行所有权之后，**如实回答现在到底是什么状况**。
+ *
+ * 🔴 不能一律答 `in_progress`。领不到分两类：
+ *    · `already_owned:*` —— 真的还有一个活着的 owner，答「正在做」是对的；
+ *    · `not_claimable:<终态>` —— 期间已经跑完 / 死信 / 被拒了。
+ *      这时答「正在做」等于告诉调用方事情还在进行，而它其实已经结束了 ——
+ *      成功的产物和失败的原因都拿不到。
+ *
+ * 抽成共用件是因为 `runAction` 和 `approveAndRun` 都要用；
+ * 两处各写一份必然分家（`approveAndRun` 早先就是无条件 in_progress）。
+ */
+async function outcomeForFailedClaim(
+  deps: KernelDeps,
+  runId: string,
+  reason: string,
+): Promise<ActionRunOutcome> {
+  const fresh = await deps.requireRun(runId)
+
+  if (reason.startsWith('already_owned')) {
+    return {
+      kind: 'in_progress',
+      run: fresh,
+      decision: null,
+      execution: null,
+      humanReason: '这件事已经有人在做了，这次不重复做',
+    }
+  }
+
+  // `not_claimable:<status>` —— 期间被推进到了另一个状态，按新状态如实回答
+  const settled = await outcomeForSettledRun(deps, fresh)
+  if (settled) return settled
+
+  throw new KernelError(
+    'INVALID_STATE',
+    '这条动作的状态在这次操作期间变过了，没能接手 —— 刷新后再看',
+    { detail: { runId, reason, status: fresh.status } },
+  )
 }
 
 async function executeAndWrap(
@@ -440,14 +523,12 @@ export async function approveAndRun(
     ownerId: approverOwnerId,
     leaseSeconds: deps.leaseSeconds,
   })
+  //    🔴 P2-2：领不到分两类。`already_owned` 才是「正在做」；
+  //    `not_claimable:<终态>` 说明期间已经跑完 / 死信 / 被拒 ——
+  //    那时候必须把**真实的终态和产物**给点了同意的人，而不是让他一直看到「进行中」。
   if (!claim.ok) {
-    return {
-      kind: 'in_progress',
-      run: await deps.requireRun(runId),
-      decision: auth.decision,
-      execution: null,
-      humanReason: '你的同意已经生效了；这件事已经有人在推进，这次不重复做',
-    }
+    const settled = await outcomeForFailedClaim(deps, runId, claim.reason)
+    return { ...settled, decision: settled.decision ?? auth.decision }
   }
 
   return executeAndWrap(deps, auth.decision, auth.ctx, {

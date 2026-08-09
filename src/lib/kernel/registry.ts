@@ -72,6 +72,10 @@ const SEO_BUILD_PUBLISH_PACKAGE: ActionDefinition<'seo.build_publish_package'> =
   // 纯内部组装，不调 LLM、不调外部 API
   costModel: { kind: 'fixed', estimate: () => 0 },
 
+  // 🔴 根本不调外部 provider —— 所以「重试会不会重复收费」这个问题不成立。
+  //    将来任何真调外部 API 的动作，必须逐个确认之后如实填 supported / unsupported。
+  providerIdempotency: 'not_applicable',
+
   retryPolicy: { maxAttempts: 3, backoff: 'exponential', baseMs: 500 },
 
   // 🔴 验证不是可选项。没有它，「写入成功」就会被当成「事情做成了」。
