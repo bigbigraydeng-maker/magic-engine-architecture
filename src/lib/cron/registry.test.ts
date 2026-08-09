@@ -579,11 +579,28 @@ describe('docs/ENV.md 里带 worker 服务名的标注，必须跟真实 worker 
         if (existsSync(path.join(ROOT, cand))) { candidates.push(cand); break }
       }
     }
-    return candidates.filter((f) => readFileSync(path.join(ROOT, f), 'utf8').includes(`process.env.${envName}`))
+    // 要带标识符边界：子串匹配下 `process.env.NEXT_PUBLIC_SUPABASE_URL_V2` 会把
+    // `NEXT_PUBLIC_SUPABASE_URL` 也算成有人读 —— 旧变量其实已经没人读了，文档却继续
+    // 声称 worker 需要它，测试还绿着。方括号取值也一并认。
+    const reads = new RegExp(
+      `process\\.env\\s*(?:\\.\\s*${envName}(?![A-Za-z0-9_])|\\[\\s*['"\`]${envName}['"\`]\\s*\\])`,
+    )
+    return candidates.filter((f) => reads.test(readFileSync(path.join(ROOT, f), 'utf8')))
   }
 
   const workers = workerServices()
   const labelled = Array.from(allEnvDocLocations().entries()).filter(([, w]) => workerNameIn(w))
+
+  it('前提成立：读取方判定带标识符边界，不把 X_V2 算成读了 X', () => {
+    const probe = (src: string, name: string) =>
+      new RegExp(
+        `process\\.env\\s*(?:\\.\\s*${name}(?![A-Za-z0-9_])|\\[\\s*['"\`]${name}['"\`]\\s*\\])`,
+      ).test(src)
+    expect(probe('const a = process.env.NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL')).toBe(true)
+    expect(probe("const a = process.env['NEXT_PUBLIC_SUPABASE_URL']", 'NEXT_PUBLIC_SUPABASE_URL')).toBe(true)
+    // 🔴 改名成 _V2 之后，旧名字就没人读了
+    expect(probe('const a = process.env.NEXT_PUBLIC_SUPABASE_URL_V2', 'NEXT_PUBLIC_SUPABASE_URL')).toBe(false)
+  })
 
   it('前提成立：render.yaml 解析到了 worker，ENV.md 里也确实有点名 worker 的标注', () => {
     expect(workers.length).toBeGreaterThan(0)
