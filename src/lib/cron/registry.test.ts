@@ -299,45 +299,53 @@ describe('cron 触发、web 进程读取的开关：docs/ENV.md 的「配在哪�
  * cron 进程里唯一读得到的就是那条 curl 自己要用的 CRON_SECRET。业务变量标成
  * Render-cron，运维照着配就是配到一个永远读不到的地方 —— 而且不报错。
  *
- * 下面不写死任何变量名单：cron 的资格是从 render.yaml 各 cron 服务的 envVars 里推的。
- * 哪天某条 cron 真的开始在自己进程里跑脚本、并给自己声明业务变量，这条自然放行。
+ * 下面不写死任何变量名单：cron 的资格是从 render.yaml 里**各 cron 的 startCommand 真的
+ * 引用了哪些 $VAR** 推出来的 —— 不是「envVars 里声明过」。声明 ≠ 被读：一个遗留或
+ * 误加进 envVars、但命令里从来没展开过的变量，进程里根本没有读取方，拿「声明过」当
+ * 依据会把这种情况判成绿。
+ *
+ * 两个方向都要管，缺一个都能 false-green：
+ *   正向 —— 文档标着上 cron 的，命令里必须真的引用了它；
+ *   反向 —— 命令里真的引用了的（且 ENV.md 里有登记的），文档必须保留 cron 标注。
+ * 只有正向的话，以后新加一条 curl 用了 $FOO 而 ENV.md 把 FOO 写成 Render-web，
+ * 没有任何断言会红。
  */
+/** docs/ENV.md 全表：变量名 → 「配在哪」那一格。 */
+function allEnvDocLocations(): Map<string, string> {
+  const lines = readFileSync(path.join(ROOT, 'docs/ENV.md'), 'utf8').split('\n')
+  const cellsOf = (l: string) => l.split('|').slice(1, -1).map((c) => c.trim())
+  const out = new Map<string, string>()
+  let col = -1
+  for (const line of lines) {
+    if (!line.trimStart().startsWith('|')) { col = -1; continue }
+    const cells = cellsOf(line)
+    const h = cells.findIndex((c) => c.includes('配在哪'))
+    if (h >= 0) { col = h; continue }
+    if (col < 0 || col >= cells.length) continue
+    if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue
+    Array.from(cells[0].matchAll(/`([A-Z][A-Z0-9_]{2,})`/g)).forEach((m) => out.set(m[1], cells[col]))
+  }
+  return out
+}
+
 describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron 上', () => {
   const parsed = parseRenderYaml()
 
-  /** render.yaml 里各 cron 服务 envVars 声明过的 key（含 fromGroup 引来的组名）。 */
-  function cronDeclaredKeys(): Set<string> {
-    const txt = readFileSync(path.join(ROOT, 'render.yaml'), 'utf8')
+  /**
+   * 各 cron 的 startCommand 里真的展开过的变量（`$VAR` / `${VAR}`）。
+   * 这才是「cron 进程读得到」的证据 —— envVars 里声明过只代表值被注进了环境。
+   */
+  function cronReferencedVars(): Set<string> {
     const out = new Set<string>()
-    const blocks = Array.from(
-      txt.matchAll(/-\s+type:\s+cron\s*\n\s+name:\s*\S+([\s\S]*?)(?=\n\s*-\s+type:|$)/g),
-    )
-    for (const m of blocks) {
-      Array.from(m[1].matchAll(/-\s+key:\s*(\S+)/g)).forEach((k) => out.add(k[1]))
-      Array.from(m[1].matchAll(/fromGroup:\s*(\S+)/g)).forEach((g) => out.add(g[1]))
+    for (const p of parsed) {
+      Array.from(p.startCommand.matchAll(/\$\{?([A-Z][A-Z0-9_]{2,})\}?/g)).forEach((m) =>
+        out.add(m[1]),
+      )
     }
     return out
   }
 
-  /** docs/ENV.md 全表：变量名 → 「配在哪」那一格。 */
-  function allEnvDocLocations(): Map<string, string> {
-    const lines = readFileSync(path.join(ROOT, 'docs/ENV.md'), 'utf8').split('\n')
-    const cellsOf = (l: string) => l.split('|').slice(1, -1).map((c) => c.trim())
-    const out = new Map<string, string>()
-    let col = -1
-    for (const line of lines) {
-      if (!line.trimStart().startsWith('|')) { col = -1; continue }
-      const cells = cellsOf(line)
-      const h = cells.findIndex((c) => c.includes('配在哪'))
-      if (h >= 0) { col = h; continue }
-      if (col < 0 || col >= cells.length) continue
-      if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue
-      Array.from(cells[0].matchAll(/`([A-Z][A-Z0-9_]{2,})`/g)).forEach((m) => out.set(m[1], cells[col]))
-    }
-    return out
-  }
-
-  const declared = cronDeclaredKeys()
+  const referenced = cronReferencedVars()
   const locations = allEnvDocLocations()
   /** 「配在哪」里声称要上 cron 的写法：Render-cron / 全部 cron / + cron。 */
   const claimsCron = (where: string) => /Render-cron|全部 cron|\+\s*cron/.test(where)
@@ -345,7 +353,7 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
   it('前提成立：两个解析器都读到了东西（走空不许静默变绿）', () => {
     expect(parsed.length).toBeGreaterThan(30)
     expect(locations.size).toBeGreaterThan(50)
-    expect(declared.size).toBeGreaterThan(0)
+    expect(referenced.size).toBeGreaterThan(0)
     expect(claimsCron('Render-web + 全部 cron')).toBe(true)
     expect(claimsCron('Render-cron')).toBe(true)
     expect(claimsCron('Render-web')).toBe(false)
@@ -360,20 +368,117 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
     ).toEqual([])
   })
 
-  it('🔴 标着上 cron 的变量，必须真的在某条 cron 的 envVars 里声明过', () => {
+  it('🔴 正向：标着上 cron 的变量，cron 的命令里必须真的展开过它', () => {
     const offenders = Array.from(locations.entries())
       .filter(([, where]) => claimsCron(where))
-      .filter(([env]) => !declared.has(env))
+      .filter(([env]) => !referenced.has(env))
       .map(([env, where]) => `${env} → 「${where}」`)
     expect(
       offenders,
-      `cron 进程读不到这些变量（没有任何 cron 服务声明过它们），文档这么写会让人配到不生效的地方：\n${offenders.join('\n')}`,
+      `没有任何 cron 的命令引用过这些变量，cron 进程里就没有读取方；文档这么写会让人配到不生效的地方：\n${offenders.join('\n')}`,
     ).toEqual([])
   })
 
-  it('真正给 cron 用的变量保留 cron 标注 —— 这条不是「一律不许写 cron」', () => {
-    const kept = Array.from(locations.entries()).filter(([, w]) => claimsCron(w)).map(([e]) => e)
-    expect(kept.length, 'cron 标注被清空了，那说明上面那条退化成了「一律禁止」').toBeGreaterThan(0)
-    expect(kept.every((e) => declared.has(e))).toBe(true)
+  it('🔴 反向：cron 命令里真的用到的变量，文档必须保留 cron 标注', () => {
+    const missing = Array.from(referenced)
+      .filter((env) => locations.has(env))
+      .filter((env) => !claimsCron(locations.get(env)!))
+      .map((env) => `${env} → 「${locations.get(env)}」`)
+    expect(
+      missing,
+      `这些变量 cron 的命令里真的要用，但文档没标 cron —— 照文档配会漏掉 cron 那份：\n${missing.join('\n')}`,
+    ).toEqual([])
   })
+
+  it('前提成立：反向那条不是空转（确实有变量既被命令引用、又在 ENV.md 里登记）', () => {
+    const both = Array.from(referenced).filter((env) => locations.has(env))
+    expect(both.length, '一个都没有的话，上面那条反向断言等于没跑').toBeGreaterThan(0)
+  })
+})
+
+/**
+ * 标着「配在某个 worker 服务上」的变量，那条链必须是真的。
+ *
+ * 「Render-web + worker `content-factory-render-worker`」这种写法点了名，就得有人核对：
+ * 服务还在不在、还叫不叫这个名、有没有声明这个变量、那个容器跑的入口文件是不是还
+ * 真的（经 import 链）读它。缺了这层，worker 被删 / 改名 / 撤掉密钥 / 断掉 import，
+ * 文档照样绿着骗人。
+ *
+ * 全部从文件推：服务名从 ENV.md 那一格里取，入口从 render.yaml 的 dockerfilePath →
+ * Dockerfile 的 CMD 取，读取方沿入口文件的 `@/lib/*` import 走一跳。
+ */
+describe('docs/ENV.md 里带 worker 服务名的标注，必须跟真实 worker 对得上', () => {
+  type WorkerSvc = { name: string; dockerfilePath: string; keys: string[] }
+
+  function workerServices(): WorkerSvc[] {
+    const txt = readFileSync(path.join(ROOT, 'render.yaml'), 'utf8')
+    return Array.from(
+      txt.matchAll(/-\s+type:\s+worker\s*\n\s+name:\s*(\S+)([\s\S]*?)(?=\n\s*-\s+type:|$)/g),
+    ).map((m) => ({
+      name: m[1],
+      dockerfilePath: /dockerfilePath:\s*(\S+)/.exec(m[2])?.[1] ?? '',
+      keys: Array.from(m[2].matchAll(/-\s+key:\s*(\S+)/g)).map((k) => k[1]),
+    }))
+  }
+
+  /** 「配在哪」那一格里点名的 worker 服务名：worker `xxx`。 */
+  const workerNameIn = (where: string) => /worker\s+`([^`]+)`/.exec(where)?.[1] ?? null
+
+  /** Dockerfile 的 CMD 里跑的那个仓内文件。 */
+  function entrypointOf(dockerfilePath: string): string | null {
+    const f = path.join(ROOT, dockerfilePath.replace(/^\.\//, ''))
+    if (!existsSync(f)) return null
+    const cmd = /^\s*(?:CMD|ENTRYPOINT)\s+(.+)$/im.exec(readFileSync(f, 'utf8'))?.[1] ?? ''
+    const rel = Array.from(cmd.matchAll(/"([^"]+)"/g))
+      .map((m) => m[1])
+      .find((a) => /\.(ts|tsx|mjs|cjs|js)$/.test(a))
+    return rel && existsSync(path.join(ROOT, rel)) ? rel : null
+  }
+
+  /** 入口文件本身 + 它直接 import 的 `@/lib/*` 模块，谁读了这个变量。 */
+  function readsVia(entry: string, envName: string): string[] {
+    const src = readFileSync(path.join(ROOT, entry), 'utf8')
+    const candidates = [entry]
+    for (const m of Array.from(src.matchAll(/from\s+'@\/(lib\/[^']+)'/g))) {
+      for (const ext of ['.ts', '.tsx', '/index.ts']) {
+        const cand = path.join('src', m[1] + ext)
+        if (existsSync(path.join(ROOT, cand))) { candidates.push(cand); break }
+      }
+    }
+    return candidates.filter((f) => readFileSync(path.join(ROOT, f), 'utf8').includes(`process.env.${envName}`))
+  }
+
+  const workers = workerServices()
+  const labelled = Array.from(allEnvDocLocations().entries()).filter(([, w]) => workerNameIn(w))
+
+  it('前提成立：render.yaml 解析到了 worker，ENV.md 里也确实有点名 worker 的标注', () => {
+    expect(workers.length).toBeGreaterThan(0)
+    expect(labelled.length, 'ENV.md 里没有「worker `名字`」这种标注，下面几条等于没跑').toBeGreaterThan(0)
+    expect(workerNameIn('Render-web + worker `content-factory-render-worker`')).toBe(
+      'content-factory-render-worker',
+    )
+    expect(workerNameIn('Render-web')).toBeNull()
+  })
+
+  it.each(labelled.map(([env, where]) => ({ env, where })))(
+    '$env 点名的 worker 服务存在、声明了它、入口文件确实读得到它',
+    ({ env, where }) => {
+      const name = workerNameIn(where)!
+      const svc = workers.find((w) => w.name === name)
+      expect(svc, `render.yaml 里没有名为 ${name} 的 worker 服务了（删了或改名了）`).toBeDefined()
+      expect(
+        svc!.keys,
+        `worker ${name} 的 envVars 里没有声明 ${env}，文档不该让人往这儿配`,
+      ).toContain(env)
+
+      const entry = entrypointOf(svc!.dockerfilePath)
+      expect(entry, `${svc!.dockerfilePath} 的 CMD 里找不到仓内入口文件`).not.toBeNull()
+
+      const readers = readsVia(entry!, env)
+      expect(
+        readers.length,
+        `${entry} 及其直接 import 的 @/lib 模块里，没有一个读 process.env.${env} —— import 链断了，标注要重判`,
+      ).toBeGreaterThan(0)
+    },
+  )
 })
