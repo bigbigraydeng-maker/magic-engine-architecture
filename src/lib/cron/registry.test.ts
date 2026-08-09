@@ -123,10 +123,15 @@ const CRON_TRIGGERED_WEB_FLAGS: { env: string; service: string }[] = [
  * `./scripts/foo.mjs`、`/usr/bin/node foo.js`、`bun foo.ts` 都能绕过去，而只要
  * 其中任何一条在 cron 进程里跑并读了这个开关，本文件的结论（配 Render-web）就错了，
  * 测试却还是绿的。所以这里反过来问：拆开的每一段是不是都是 curl？
+ *
+ * 光看段首还不够：`curl "$(./scripts/foo.mjs)"` 整段以 curl 开头，但 shell 会先把
+ * 里面那个本地命令跑掉。所以嵌套执行语法（命令替换 `$(…)` / 反引号、进程替换
+ * `<(…)` `>(…)`）一律判不通过。`$CRON_SECRET`、`${VAR}` 这类纯变量展开不受影响。
  */
 function isCurlOnly(startCommand: string): boolean {
   const flat = startCommand.replace(/\\\s*\n/g, ' ').replace(/\s+/g, ' ').trim()
   if (flat === '') return false
+  if (/\$\(|`|<\(|>\(/.test(flat)) return false
   const segments = flat.split(/&&|\|\||;|\||\n/).map((s) => s.trim()).filter((s) => s !== '')
   return segments.length > 0 && segments.every((s) => /^curl(\s|$)/.test(s))
 }
@@ -173,6 +178,14 @@ describe('cron 触发、web 进程读取的开关：docs/ENV.md 的「配在哪�
     expect(isCurlOnly('curl -fsS https://x/y | sh\n')).toBe(false)
     expect(isCurlOnly('node scripts/x.mjs\n')).toBe(false)
     expect(isCurlOnly('')).toBe(false)
+    // 嵌套执行：整段以 curl 开头，但 shell 会先把里面那个本地命令跑掉
+    expect(isCurlOnly('curl "$(./scripts/foo.mjs)"\n')).toBe(false)
+    expect(isCurlOnly('curl "$(/usr/bin/node foo.js)"\n')).toBe(false)
+    expect(isCurlOnly('curl "`./scripts/foo.mjs`"\n')).toBe(false)
+    expect(isCurlOnly('curl --data @<(./scripts/foo.mjs) https://x/y\n')).toBe(false)
+    // 纯变量展开不是执行，别误杀 —— 真实命令就长这样
+    expect(isCurlOnly('curl -H "Authorization: Bearer $CRON_SECRET" https://x/y\n')).toBe(true)
+    expect(isCurlOnly('curl -H "Authorization: Bearer ${CRON_SECRET}" https://x/y\n')).toBe(true)
   })
 
   describe.each(CRON_TRIGGERED_WEB_FLAGS)('$env', ({ env, service }) => {
