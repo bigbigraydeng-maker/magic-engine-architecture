@@ -369,8 +369,13 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
     return out.join('')
   }
 
-  // 名字长度不设下限：`$TZ`、`$X` 都是合法环境变量，卡 3 个字符会让它们被整个忽略
-  const VAR_RE = /\$\{?([A-Z][A-Z0-9_]*)\}?/g
+  /**
+   * 按 shell 的标识符规则整个抓，不是只抓大写前缀。
+   * 名字长度不设下限（`$TZ` / `$X` 都合法），也不能在小写处截断 ——
+   * `$CRON_SECRETx` 里 shell 读的是 `CRON_SECRETx` 这一整个名字（通常展开成空，
+   * 于是鉴权失败）；只捕获前缀 `CRON_SECRET` 会让注入、字面量、文档三项全都误判成通过。
+   */
+  const VAR_RE = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g
 
   /** 命令里每一次 `$VAR` 出现：名字 + 下标 + 这一次会不会真的展开。 */
   function varOccurrences(startCommand: string): { name: string; index: number; expands: boolean }[] {
@@ -379,7 +384,7 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
       Array.from(masked.matchAll(VAR_RE)).map((m) => m.index as number),
     )
     return Array.from(startCommand.matchAll(VAR_RE)).map((m) => ({
-      name: m[1],
+      name: m[1] ?? m[2],
       index: m.index as number,
       expands: expandedAt.has(m.index as number),
     }))
@@ -455,6 +460,9 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
     // 掩码必须保长，否则下标对不齐，逐次判定就退化了
     expect(maskNonExpanding(mixed)).toHaveLength(mixed.length)
 
+    // 🔴 不许在小写处截断：shell 读的是 CRON_SECRETx 这一整个名字
+    expect(expandedVars('curl -H "Bearer $CRON_SECRETx" https://x')).toEqual(['CRON_SECRETx'])
+    expect(expandedVars('curl -H "Bearer ${CRON_SECRET}x" https://x')).toEqual(['CRON_SECRET'])
     // 🔴 短名字也是合法环境变量，不许因为长度被整个忽略
     expect(expandedVars('curl -H "X: $TZ" https://x')).toEqual(['TZ'])
     expect(expandedVars('curl -H "X: ${X}" https://x')).toEqual(['X'])
