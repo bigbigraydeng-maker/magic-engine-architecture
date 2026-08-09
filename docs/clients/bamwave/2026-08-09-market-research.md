@@ -4,8 +4,12 @@
 > 六大支柱关联：SEO · AI 可见度 · 竞品 · 社媒 · 广告
 > 业务轨道：待定（见 §8 待客户确认清单）
 >
-> **数据来源标注规则**：每条结论后面标 `[实测]`（我们自己跑接口拿到的数字）/ `[公开源]`（可查的第三方公开资料，附链接）/ `[推断]`（基于前两者的判断，不是事实）。
-> **本次调研没有拿到任何客户自有数据**，客户产品线、价格、认证、产能全部为空 —— 见 §8。
+> **数据来源标注规则**：每条结论后面标 `[实测]`（我们自己跑接口拿到的数字）/ `[公开源]`（可查的第三方公开资料，附链接）/ `[推断]`（基于前两者的判断，不是事实）/ `[未获取]`（没拿到，**不等于客户没有**）。
+> **本报告仍然没有拿到任何客户自有数据**，客户产品线、价格、认证、产能全部为空 —— 缺口逐项见 §9，要问客户的问题见 §8 和 §9.3。
+>
+> **更新记录**
+> - `2026-08-09` 首轮：市场侧完成（§3–§7）。官网被网络出口拦截，客户侧全空。
+> - `2026-08-09` 二次补充：**再次尝试打开官网，仍被拦截**（证据见 §2）。新增 §9「客户侧现状」，把缺口、网站体检的判定标准、以及可直接发给客户的问题邮件全部写死，让客户侧的推进**不再依赖官网能不能打开**。市场侧数字未作任何改动。
 
 ---
 
@@ -17,15 +21,34 @@
 
 ---
 
-## 2. 先说一个卡点（需要你动手，1 分钟）
+## 2. 先说一个卡点（需要你动手）
 
-**问题**：我这次**没能打开 www.bamwave.co.nz**。不是网站有问题，是我们这个工作环境的"允许访问的网址白名单"里没有这个域名，代理直接把请求挡了（返回 `Host not in allowlist: bamwave.co.nz`）。我试过换网址、换镜像、换存档站，全部同样被挡，这属于环境权限设置，我这边绕不过去。
+> **状态：未解决。** 第一次尝试 2026-08-09（首轮调研），第二次尝试 2026-08-09（本轮补充），**两次都被同一个原因挡住**。
 
-**影响**：客户到底卖哪几款盒子、多大规格、什么价、有没有堆肥认证、面向餐厅还是散客 —— 这些我一个字都没编（按红线规矩，编了就是害客户）。所以本报告只覆盖**市场和对手**，不含**客户自己**那一半。
+**问题**：我**还是没能打开 www.bamwave.co.nz**。不是网站有问题，也**不是只有这一个域名被挡** —— 这个工作环境的外网出口整个是关着的。
+
+**这次的实测证据**（`[实测]`，可复现）：
+
+| 试了什么 | 结果 | 说明什么 |
+|---|---|---|
+| 抓取 `www.bamwave.co.nz` | 被出口代理拒绝 | 拿不到官网 |
+| 抓取 `example.com`（全世界最普通的测试网址） | **同样被拒绝** | **不是这个域名的问题**，是整个外网出口关着 |
+| 命令行直连上面两个网址 | 均返回 `CONNECT tunnel failed, response 403` | 连接在代理层就被切断，没到网站 |
+| 检查代理自身状态 | 运行正常，无故障记录 | **不是代理坏了，是这个环境的网络策略设置** |
+| 网页搜索（走的另一条通道，可用） | 搜 `bamwave.co.nz`、`site:bamwave.co.nz`、`Bamwave` 三种搜法，**均无该网站的任何结果** | 见下方注 |
+| Semrush 外链库查该域名 | `NOTHING FOUND`，无任何记录 | 该域名在 Semrush 里没有任何可查数据 |
+
+> 注：网页搜索工具用的是**美国索引**，所以"搜不到"**不能**当作"这个网站在新西兰没被谷歌收录"的证据，只能说明它在美国索引里没有存在感。真正的收录情况必须等能打开官网后用新西兰数据实测。**这一条不要对外引用。**
+
+**影响**：客户到底卖哪几款盒子、多大规格、什么价、有没有堆肥认证、内壁有没有塑料淋膜、面向餐厅还是散客 —— 这些我**一个字都没编**（按红线规矩，编了就是害客户）。所以本报告到目前为止只覆盖**市场和对手**，不含**客户自己**那一半。缺什么、怎么补，见 §9。
 
 **怎么做**（二选一，哪个快选哪个）：
-- **A（推荐）**：把 `bamwave.co.nz` 加进这个工作环境的网络访问白名单 → 打开 https://claude.ai/settings/code → 找到本项目的环境 → 网络访问设置里添加该域名。加完跟我说一声，我 10 分钟内补齐"客户侧"那半份。
-- **B**：你直接把官网首页 + 产品页的文字复制粘贴给我，我照样能补。
+
+- **A**：把整个环境的外网访问打开（或至少放行 `bamwave.co.nz`）
+  → 打开 **https://claude.ai/settings/code** → 找到本项目的环境 → 网络访问设置 → 改成允许访问外部网站（或把该域名加进允许清单）
+  → **注意**：上次已经加过一次但没生效。**改完请务必确认设置真的保存了**，因为环境的网络设置是"开新窗口时锁定"的 —— 改完之后**必须开一个全新会话**才会生效，在旧会话里加是不管用的。加完跟我说一声，我 10 分钟内补齐客户侧。
+
+- **B（不依赖 A，建议现在就做）**：**§9.2 里我已经把要问客户的问题写成了可以直接发的英文邮件**，复制粘贴发给客户就行。客户回了，我照样能补齐 —— 而且客户亲口说的比官网写的更可靠（尤其是塑料淋膜那条）。
 
 ---
 
@@ -246,18 +269,129 @@
 
 ---
 
-## 9. 建议的下一步（等你拍板）
+## 9. 客户侧现状 —— 本次仍未获取
 
-1. **你做**：按 §2 把官网加进白名单（或把官网文字贴给我）→ 我补齐"客户侧"半份报告
-2. **你做**：把 §8 前 3 条问客户要到 → 这是所有后续动作的前提
-3. **我做**（拿到 1、2 之后）：出正式的品牌资料档案（master brief）+ 90 天打法方案
-4. **我做**（可以现在就并行）：把 §7.3 那 6 篇内容的选题和大纲先写出来，等材料确认后再落笔
+> **本节是空的，而且是故意空的。** 官网打不开（§2），我不会拿"竹纤维盒子一般都是……"来填。
+> 按红线规矩：**没有来源的客户业务信息，宁可留白，也绝不写进报告。** 一旦写了，后面所有内容、话术、广告都会建在假地基上。
+
+### 9.1 逐项状态
+
+标注含义：`[未获取]` = 没拿到，不是"没有"。**千万不要把"未获取"当成"客户没有"来用。**
+
+| # | 要素 | 现状 | 官网打开后能否解决 |
+|---|---|---|---|
+| 1 | **内壁有没有 PE / PLA 塑料淋膜** ⚠️ 最关键 | `[未获取]` 官网未获取，需向客户确认 | **多半不能** —— 淋膜属于工艺细节，产品页几乎不会写。**必须客户本人或工厂规格书回答** |
+| 2 | 完整产品线（名称 / 容量规格 / 有无配盖 / 防不防漏） | `[未获取]` 官网未获取，需向客户确认 | **能**，产品页通常写得全 |
+| 3 | 堆肥认证 AS4736（工业）/ AS5810（家庭）/ EN13432 | `[未获取]` 官网未获取，需向客户确认 | **部分能** —— 官网常会挂认证标志，但**证书编号基本不会公开** |
+| 4 | 认证证书编号（用于核验真伪） | `[未获取]` 官网未获取，需向客户确认 | **不能**，必须客户提供证书原件 |
+| 5 | "未刻意添加 PFAS"第三方检测报告 | `[未获取]` 官网未获取，需向客户确认 | **不能**，必须客户提供报告原件 |
+| 6 | 价格 / 起订量 / 批发阶梯价 | `[未获取]` 官网未获取，需向客户确认 | **看情况** —— B2C 站会标价，B2B 站常写"询价" |
+| 7 | 面向 B2B / B2C / 两者都做 | `[未获取]` 官网未获取，需向客户确认 | **能**，从有没有批发入口、有没有购物车能看出来 |
+| 8 | 供货来源与产能（进口 / 本地、备货周期） | `[未获取]` 官网未获取，需向客户确认 | **多半不能**，必须问客户 |
+| 9 | 网站状态：有没有博客 | `[未获取]` 官网未获取 | **能** |
+| 10 | 网站状态：有没有产品结构化数据（让谷歌/AI 读懂产品的代码标记） | `[未获取]` 官网未获取 | **能** |
+| 11 | 网站状态：页面标题怎么写的 | `[未获取]` 官网未获取 | **能** |
+| 12 | 有没有 Google Analytics / Search Console / 社媒账号 | `[未获取]` | **不能**，必须客户开权限 |
+
+### 9.2 网站体检 —— 待做，判定标准先定死
+
+官网一打开就跑这项检查，**结论怎么判现在就写死，免得到时候看图说话**：
+
+按 §5.2 的实测，新西兰人搜 `bamboo` 搜的是按摩店、床单、园艺 —— **高量前 40 个 "bamboo" 词里没有一个跟餐饮包装有关**。所以：
+
+| 检查项 | 合格 | 不合格（要改） |
+|---|---|---|
+| 首页页面标题 | 含 `compostable` / `takeaway containers` / `food packaging` + `NZ` | 押在 `bamboo` 上（例如 "Bamwave – Bamboo Packaging"） |
+| 产品页标题 | 按业态或规格写（如 "Compostable Takeaway Containers 750ml"） | 只写产品型号或只写 "Bamboo Box" |
+| 有没有博客 | 有，且能承载 §7.3 那 6 篇法规科普 | 没有 —— 那 §7.3 的内容主线要先建站点结构 |
+| 产品结构化数据 | 有（谷歌和 AI 能直接读出产品名、规格、价格） | 没有 —— 影响 AI 可见度，属低成本高回报的第一批修复 |
+
+> **这是"待办清单"，不是"体检结果"。** 本次没有做过任何一项实际检查，上表任何一格都不能当结论引用。
+
+### 9.3 必须问客户本人的问题（官网也答不了）
+
+以下 5 条，**就算官网明天能打开，也大概率查不到**，只能问客户本人 —— 建议**现在就发**，不要等白名单：
+
+1. **盒子内壁有没有 PE 或 PLA 塑料淋膜？**（最要命的一条，理由见 §4.2）
+2. **认证证书的编号和证书原件**（只看官网上的认证标志不够，标志可以随便贴）
+3. **有没有 PFAS 检测报告**（有 = 能打政府/学校/连锁的标；没有 = 这个话题一个字都不能碰）
+4. **进口还是本地生产、备货周期多久、能接多大的单**（决定敢不敢投广告 —— 广告拉来订单却发不出货，比没广告更伤）
+5. **Google Analytics / Search Console / 社媒账号的访问权限**（决定后续是拿真实数据还是只能靠外部估算）
+
+### 9.4 可以直接发给客户的邮件（复制粘贴即可）
+
+> 客户是新西兰本地公司，所以用英文。**这封信不依赖白名单，现在就能发。**
+
+```
+Subject: A few product questions before we finalise your marketing plan
+
+Hi [name],
+
+We've finished the New Zealand market research for Bamwave and found a
+strong angle we think you can own. Before we build any content or ads
+around it, we need to confirm a few things about the products themselves —
+we don't want to publish a single claim we can't back up.
+
+MOST IMPORTANT
+1. Do any of your containers have a plastic lining on the inside
+   (PE, PLA, or any other coating)? Or are they 100% plant fibre with
+   no lining at all?
+   Why we're asking: NZ's plastic regulations also ban compostable and
+   plant-based plastics. Our strongest message for you is "bamboo fibre
+   is not plastic, so it isn't caught by the ban." If there is any
+   plastic lining, we must not use that message — so we need a definite
+   yes or no, ideally from your manufacturer's spec sheet.
+
+CERTIFICATIONS
+2. Do you hold AS4736 (commercial composting), AS5810 (home composting),
+   or EN13432 certification? If so, could you send the certificates
+   themselves — we need the certificate numbers to verify them.
+3. Do you have a third-party test report showing no intentionally added
+   PFAS ("forever chemicals")? If you do, it's a strong advantage for
+   government, school and chain tenders.
+
+PRODUCTS & COMMERCIALS
+4. Could you send your full product list — product names, sizes/capacity,
+   whether each comes with a lid, and whether it's leak-resistant?
+5. What are your prices, minimum order quantities, and wholesale tiers?
+6. Are your products made in New Zealand or imported? What's your typical
+   lead time, and what's the largest order you could fill comfortably?
+
+BUSINESS & ACCESS
+7. Are you mainly selling to businesses (restaurants, cafés), direct to
+   consumers, or both? Which do you want to grow first?
+8. Do you have any existing customers or venues using your products that
+   we could reference?
+9. Could you give us access to your Google Analytics, Google Search
+   Console, and social media accounts? Without these we can only estimate
+   from outside data.
+
+No rush on the nice-to-haves, but question 1 is genuinely blocking — we
+can't start writing until we know the answer.
+
+Thanks,
+[your name]
+```
 
 ---
 
-## 10. 本报告的可信度边界
+## 10. 建议的下一步（等你拍板）
+
+**按"不等任何人就能开始"排序：**
+
+1. **你做（现在，不依赖任何东西）**：把 §9.4 那封邮件发给客户。**这是当前唯一的关键路径** —— §9.3 那 5 条就算官网能打开也查不到，只能客户本人回答。
+2. **你做（现在，1 分钟）**：按 §2 的 A 方案把外网访问打开，**然后开一个新会话**（旧会话里改不生效）→ 我补齐 §9.1 里"官网打开后能解决"的 6 项 + §9.2 的网站体检
+3. **我做（可以现在就并行，不等 1 和 2）**：把 §7.3 那 6 篇内容的选题和大纲先写出来 —— 这批内容讲的是**法规**，不是产品，所以不依赖客户产品信息，现在就能动笔
+4. **我做（拿到 1 之后）**：出正式的品牌资料档案（master brief）+ 90 天打法方案
+5. **暂停，等 §9.3 第 1 条**：§4.2 那套"竹子不是塑料"的核心话术、以及任何对外文案，**在塑料淋膜问题有明确答案之前一个字都不要写**
+
+---
+
+## 11. 本报告的可信度边界
 
 - **§5、§6 全部是实测数字**，来自 Semrush 新西兰数据库，2026-08-09 拉取，可复现。
 - **§3、§4 是公开资料**，每条都附了原始链接，可点开核对。
 - **标 `[推断]` 的都是判断，不是事实** —— 尤其是 §7 的全部战略建议，以及"竹纤维不受禁令影响"这条法律解读（**必须经律师确认后才能对外讲**）。
-- **客户自身的一切（产品、价格、认证、产能、现有客户）本报告全部为空**，一个字都没有猜测。
+- **客户自身的一切（产品、价格、认证、产能、现有客户）本报告全部为空**，一个字都没有猜测。§9 逐项列出了空在哪里 —— 那些 `[未获取]` 表示**我们没拿到**，不表示**客户没有**。
+- **§9.2 的网站体检是待办清单，不是体检结果。** 本次没有对官网做过任何一项实际检查。
+- **§2 里"网页搜索搜不到 bamwave.co.nz"用的是美国索引**，不能用来判断该网站在新西兰的收录情况。
