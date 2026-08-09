@@ -16,11 +16,21 @@ const ROOT = path.resolve(__dirname, '../../..')
 type ParsedCron = { service: string; schedule: string; routes: string[]; startCommand: string }
 
 /**
- * 从一个服务块里取出 startCommand，块格式 `startCommand: |` 和单行格式都认。
+ * 从一个服务块里取出 startCommand。三种写法都认：
+ *   - 单行 `startCommand: node x.js`
+ *   - literal 块 `startCommand: |`（含 `|-` `|+`）：换行是真换行，另起一条命令
+ *   - folded 块 `startCommand: >`（含 `>-` `>+`）：YAML 会把普通换行折成空格，仍是一条命令
+ *
+ * 两种块的换行语义必须分开 —— 都当 literal 的话，一个合法的 folded 块会被拆成
+ * 「curl」+「URL」两段，URL 那段不以 curl 开头，测试就误报。
  *
  * 块的结束按缩进判：缩进不比 `startCommand:` 这一行深的第一行就是块外。
  * 早先用 `(?:[ \t]+.*\n)+` 一路吃下去，把后面的 `envVars:` / `- key: …` 也吞进了
  * 命令里 —— 反正后面判断时又把空白压平，整段还是以 curl 开头，就一直没露馅。
+ *
+ * 这是手写的够用版，不是完整 YAML 实现（不处理块内空行的折叠规则等）。本仓 46 条 cron
+ * 全是 literal 块或单行，folded 只为「哪天有人这么写」兜底。真要完整语义得引 YAML
+ * 解析器 —— 那是新依赖，不在这个 PR 的范围里。
  */
 function extractStartCommand(block: string): string {
   const lines = block.split('\n')
@@ -28,14 +38,17 @@ function extractStartCommand(block: string): string {
   if (i < 0) return ''
   const keyIndent = /^([ \t]*)/.exec(lines[i])![1].length
   const inline = /startCommand:[ \t]+(\S.*)$/.exec(lines[i])?.[1]?.trim()
-  if (inline !== undefined && inline !== '|' && inline !== '>') return inline
+  const isBlock = inline !== undefined && /^[|>][-+]?\d*$/.test(inline)
+  if (inline !== undefined && !isBlock) return inline
+  const folded = isBlock && inline!.startsWith('>')
   const body: string[] = []
   for (const line of lines.slice(i + 1)) {
     if (line.trim() === '') break
     if (/^([ \t]*)/.exec(line)![1].length <= keyIndent) break
     body.push(line)
   }
-  return body.length > 0 ? `${body.join('\n')}\n` : ''
+  if (body.length === 0) return ''
+  return folded ? `${body.map((l) => l.trim()).join(' ')}\n` : `${body.join('\n')}\n`
 }
 
 function parseRenderYaml(): ParsedCron[] {
@@ -191,6 +204,21 @@ describe('cron 触发、web 进程读取的开关：docs/ENV.md 的「配在哪�
     expect(envDocLocation('CRON_SECRET')).toContain('cron')
     expect(envDocLocation('NEXT_PUBLIC_SUPABASE_ANON_KEY')).toBe('Render-web')
     expect(envDocLocation('THIS_ENV_DOES_NOT_EXIST')).toBeNull()
+  })
+
+  it('前提成立：literal 块和 folded 块的换行语义分得开（folded 不许被拆成两条命令）', () => {
+    const svcBlock = (indicator: string) =>
+      `    name: x\n    startCommand: ${indicator}\n      curl -fsS\n        https://example.test/api\n    envVars:\n      - key: CRON_SECRET\n`
+    // folded：YAML 会把换行折成空格，仍是一条 curl
+    expect(isCurlOnly(extractStartCommand(svcBlock('>')))).toBe(true)
+    expect(isCurlOnly(extractStartCommand(svcBlock('>-')))).toBe(true)
+    // literal：换行就是换行，第二行那个不是命令，判不通过（正是要拦的形状）
+    expect(isCurlOnly(extractStartCommand(svcBlock('|')))).toBe(false)
+    // 两种块都不许把 envVars / - key 吃进来
+    expect(extractStartCommand(svcBlock('|'))).not.toMatch(/envVars:|- key:/)
+    expect(extractStartCommand(svcBlock('>'))).not.toMatch(/envVars:|- key:/)
+    // 单行写法原样取出
+    expect(extractStartCommand('    startCommand: node scripts/x.mjs\n')).toBe('node scripts/x.mjs')
   })
 
   it('前提成立：isCurlOnly 是允许列表 —— 黑名单枚举不到的那几种写法必须也判成「不只是 curl」', () => {
