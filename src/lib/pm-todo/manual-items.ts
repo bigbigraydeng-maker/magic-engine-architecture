@@ -60,6 +60,8 @@ export type ManualItemKind =
   | 'price_claim_unbacked'
   | 'auto_run_blocked'
   | 'auto_run_stuck'
+  /** 执行内核停手 / 等审批 / 被规则挡下 —— 必须有人看见，不许死在日志里 */
+  | 'kernel_needs_human'
   | AttributionItemKind
   | ClientRosterItemKind
 
@@ -96,6 +98,7 @@ import { judgeWorkerPresence } from '@/lib/factory/worker-presence'
 import { auditGoalBaselines } from '@/lib/strategy/baseline-audit'
 import { fetchBlogDraftTodos } from '@/lib/pm-todo/blog-drafts'
 import { fetchAutoRunTodos } from '@/lib/pm-todo/auto-run-items'
+import { fetchKernelHandoffTodos } from '@/lib/kernel/handoff'
 import { auditCrossClientLeaks } from '@/lib/clients/cross-client-audit'
 import { containsPriceClaim } from '@/lib/content/price-claim'
 import { judgeOutgoingPost } from '@/lib/content/price-claim-gate'
@@ -123,7 +126,15 @@ export async function dropBrokenLinks(
 ): Promise<{ kept: ManualItem[]; dropped: ManualItem[] }> {
   const verdicts = await Promise.all(
     items.map((it) =>
-      verifyActionLink(it.href, fetchImpl).catch(() => ({ kind: 'unverifiable' as const })),
+      // 🔴 **没有链接 ≠ 链接坏了。**
+      //    有些待办本来就没有可点的地方（比如那件事的入口还没上线），
+      //    它的价值全在 what / how 上。空 href 交给 verifyActionLink 会走
+      //    `new URL('')` / `fetch('')` 抛错 → 判成 broken → 整条被丢掉，
+      //    于是「如实告诉人这件事现在做不了」变成了「人什么都看不到」——
+      //    发现死在 console.warn 里，正是铁律 3 下半句禁止的那件事。
+      it.href.trim() === ''
+        ? Promise.resolve({ kind: 'unverifiable' as const })
+        : verifyActionLink(it.href, fetchImpl).catch(() => ({ kind: 'unverifiable' as const })),
     ),
   )
   const kept: ManualItem[] = []
@@ -198,6 +209,11 @@ export async function loadManualItems(
   // 只写进 cron 的运行记录 = 发现死在日志里（管道断头那条铁律的反面教材）。
   await pushAutoRunItems(supabase, items, now, nameOf).catch((e) =>
     console.warn('[manual-items] 自动执行待办生成失败（不阻塞其他待办）:', e),
+  )
+
+  // 执行内核停手的 / 等你点头的 / 被规则挡下的 —— 死信不许只写进库里没人看
+  await pushKernelItems(supabase, items, now, nameOf).catch((e) =>
+    console.warn('[manual-items] 执行内核待办生成失败（不阻塞其他待办）:', e),
   )
 
   // 客户之间有没有串台 —— PM 2026-08-05：「坚决不能胡窜」。
@@ -641,6 +657,34 @@ async function pushAutoRunItems(
   for (const t of todos) {
     items.push({
       kind: t.stuck ? 'auto_run_stuck' : 'auto_run_blocked',
+      client_id: t.client_id,
+      client_name: nameOf(t.client_id),
+      what: t.what,
+      how: t.how,
+      href: t.href,
+    })
+  }
+}
+
+/**
+ * 执行内核里需要人处理的东西 → 下发。
+ *
+ * 三种：重试到上限停手的（死信）、按客户规则要人点头的、被规则挡下的。
+ * 判定复用 Kernel 自己的取数函数，所以这里说的话跟库里的状态永远一致。
+ *
+ * 🔴 这条是「管道不许断头」的执行内核侧出口。没有它，一次死信就只是
+ *    `action_runs` 里一行 `status='dead_letter'` —— 没有任何人会去翻。
+ */
+async function pushKernelItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+  nameOf: (id: string) => string,
+): Promise<void> {
+  const todos = await fetchKernelHandoffTodos(supabase, now)
+  for (const t of todos) {
+    items.push({
+      kind: 'kernel_needs_human',
       client_id: t.client_id,
       client_name: nameOf(t.client_id),
       what: t.what,
