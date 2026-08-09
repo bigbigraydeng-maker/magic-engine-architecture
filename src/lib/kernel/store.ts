@@ -478,6 +478,53 @@ export async function recordFencedDeny(
   return { ok: Boolean(row.ok), reason: String(row.reason ?? 'unknown'), decisionId: row.decision_id ?? null }
 }
 
+/**
+ * 把一条 run 原子地停到「等人处理」的终态（走 `kernel_park_for_human`）。
+ *
+ * 🔴 用在「接管了一条正在跑的付费 run，而 provider 不保证幂等重放」那条路上。
+ *    只返回一个内存里的 dead_letter 是**安全假象**：领取 RPC 这时已经把 run
+ *    重置成 queued + 写了新租约，租约一过期，下一次同键提交就会重新授权、
+ *    再调一次 handler，钱可能被扣第二次。必须真的落库。
+ */
+export async function parkRunForHuman(
+  sb: SupabaseClient,
+  args: { runId: string; expectedGeneration: number | null; reason: string; evidenceKey?: string },
+): Promise<{ ok: boolean; reason: string }> {
+  const { data, error } = await sb.rpc('kernel_park_for_human', {
+    p_run_id: args.runId,
+    p_expected_generation: args.expectedGeneration,
+    p_reason: args.reason,
+    p_evidence_key: args.evidenceKey ?? 'parked_for_human',
+  })
+  if (error) fail('停到等人处理', error)
+  const row = (data ?? [])[0] as unknown as { ok: boolean; reason: string } | undefined
+  if (!row) fail('停到等人处理', { message: 'RPC 没有返回结果行' })
+  return { ok: Boolean(row.ok), reason: String(row.reason ?? 'unknown') }
+}
+
+/**
+ * handler 跑着的时候续租（走 `kernel_renew_lease`）。
+ *
+ * 🔴 四项 CAS：run 存在 · owner 还是我 · 代际还是我这一代 · 状态还是 running。
+ *    任何一项不成立 = 我已经失去了执行权，调用方必须当场停手，
+ *    **不许再把执行结果当自己的提交**。
+ */
+export async function renewLease(
+  sb: SupabaseClient,
+  args: { runId: string; ownerId: string; expectedGeneration: number; leaseSeconds: number },
+): Promise<{ ok: boolean; reason: string }> {
+  const { data, error } = await sb.rpc('kernel_renew_lease', {
+    p_run_id: args.runId,
+    p_owner_id: args.ownerId,
+    p_expected_generation: args.expectedGeneration,
+    p_lease_seconds: args.leaseSeconds,
+  })
+  if (error) fail('续租', error)
+  const row = (data ?? [])[0] as unknown as { ok: boolean; reason: string } | undefined
+  if (!row) fail('续租', { message: 'RPC 没有返回结果行' })
+  return { ok: Boolean(row.ok), reason: String(row.reason ?? 'unknown') }
+}
+
 // ── Step ──────────────────────────────────────────────────────────────────────
 
 const STEP_COLUMNS =

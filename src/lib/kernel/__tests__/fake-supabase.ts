@@ -27,6 +27,11 @@ export function fakeId(prefix = 'id'): string {
 const UNIQUE_KEYS: Record<string, string[][]> = {
   action_runs: [['client_id', 'idempotency_key']],
   action_run_steps: [['run_id', 'step_key']],
+  // 🔴 业务副作用的数据库级幂等兜底（对应迁移里的部分唯一索引
+  //    `uq_production_packages_kernel_run`）：同一条 run 只可能落一个包。
+  //    **部分**索引 —— 只约束带 `kernel_run_id` 的行（= 执行内核造的），
+  //    人工 / 其它管道造的包不受影响，所以这里 null 值一律跳过（见 assertUnique）。
+  production_packages: [['source_payload->>kernel_run_id']],
 }
 
 const DEFAULTS: Record<string, () => Row> = {
@@ -256,8 +261,14 @@ export function createFakeSupabase(
 
   function assertUnique(table: string, row: Row, ignore?: Row): void {
     for (const keys of UNIQUE_KEYS[table] ?? []) {
+      // 🔴 部分唯一索引：任何一列取不到值就整条跳过。
+      //    Postgres 的 `WHERE ... IS NOT NULL` 就是这个语义 ——
+      //    不跳过的话，一堆「两边都是 null」的历史行会被误判成互相冲突。
+      const values = keys.map((k) => readPath(row, k))
+      if (values.some((v) => v === null || v === undefined)) continue
+
       const dup = tableOf(table).find(
-        (r) => r !== ignore && keys.every((k) => r[k] === row[k]),
+        (r) => r !== ignore && keys.every((k, i) => readPath(r, k) === values[i]),
       )
       if (dup) {
         const e = new Error(
@@ -1115,6 +1126,71 @@ export function createFakeSupabase(
     return { ok: true, reason: 'ok', created }
   }
 
+  /** `kernel_renew_lease` 的内存复刻（四项 CAS 一个都不能少）。 */
+  function renewLease(args: Record<string, unknown>): { ok: boolean; reason: string } {
+    const runId = String(args.p_run_id)
+    const ownerId = String(args.p_owner_id)
+    const expectedGen = Number(args.p_expected_generation)
+    const leaseSeconds = Number(args.p_lease_seconds ?? 0)
+    if (!Number.isFinite(leaseSeconds) || leaseSeconds <= 0) {
+      return { ok: false, reason: 'lease_seconds_required' }
+    }
+    const run = tableOf('action_runs').find((r) => r.id === runId)
+    if (!run) return { ok: false, reason: 'run_not_found' }
+    if (run.claimed_by !== ownerId) {
+      return { ok: false, reason: `not_owner:${String(run.claimed_by ?? '<none>')}` }
+    }
+    if (Number(run.claim_generation ?? 0) !== expectedGen) {
+      return { ok: false, reason: `stale_generation:${String(run.claim_generation ?? 0)}` }
+    }
+    if (run.status !== 'running') return { ok: false, reason: `not_running:${String(run.status)}` }
+
+    const now = options.now?.() ?? new Date()
+    run.lease_expires_at = new Date(now.getTime() + leaseSeconds * 1000).toISOString()
+    run.heartbeat_at = now.toISOString()
+    run.updated_at = now.toISOString()
+    return { ok: true, reason: 'renewed' }
+  }
+
+  /** `kernel_park_for_human` 的内存复刻。 */
+  function parkForHuman(args: Record<string, unknown>): { ok: boolean; reason: string } {
+    const runId = String(args.p_run_id)
+    const expectedGen =
+      args.p_expected_generation === null || args.p_expected_generation === undefined
+        ? null
+        : Number(args.p_expected_generation)
+    const reason = String(args.p_reason ?? '')
+    const key = String(args.p_evidence_key ?? 'parked_for_human')
+
+    const run = tableOf('action_runs').find((r) => r.id === runId)
+    if (!run) return { ok: false, reason: 'run_not_found' }
+    if (expectedGen !== null && Number(run.claim_generation ?? 0) !== expectedGen) {
+      return { ok: false, reason: `stale_generation:${String(run.claim_generation ?? 0)}` }
+    }
+
+    const nowIso = (options.now?.() ?? new Date()).toISOString()
+    const previousStatus = String(run.status)
+    run.status = 'dead_letter'
+    run.needs_human = true
+    run.last_error = reason
+    run.finished_at = nowIso
+    run.claimed_by = null
+    run.claimed_at = null
+    run.heartbeat_at = null
+    run.lease_expires_at = null
+    run.evidence = {
+      ...((run.evidence ?? {}) as Row),
+      [key]: {
+        reason,
+        at: nowIso,
+        generation: run.claim_generation ?? 0,
+        previous_status: previousStatus,
+      },
+    }
+    run.updated_at = nowIso
+    return { ok: true, reason: 'parked' }
+  }
+
   const client = {
     from,
     /** 只实现 Kernel 真正会调的那几个 RPC。别的名字直接炸。 */
@@ -1128,6 +1204,12 @@ export function createFakeSupabase(
       }
       if (name === 'kernel_claim_run_recovery') {
         return { data: [claimRunRecovery(args)], error: null }
+      }
+      if (name === 'kernel_renew_lease') {
+        return { data: [renewLease(args)], error: null }
+      }
+      if (name === 'kernel_park_for_human') {
+        return { data: [parkForHuman(args)], error: null }
       }
       if (name === 'kernel_claim_or_takeover_run') {
         return { data: [claimOrTakeoverRun(args)], error: null }

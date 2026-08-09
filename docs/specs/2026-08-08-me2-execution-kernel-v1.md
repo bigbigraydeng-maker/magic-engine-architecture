@@ -16,6 +16,9 @@
 > 成本声明改成**硬上限** · step 级外部幂等键。
 > 第八轮（Codex review 6）：`running` 接管的**真正入口** · 落拒绝 / 建步骤也进围栏 ·
 > **provider 收了钱才抛错**的安全规则 · 政策变了立刻重判 · 领不到租约时说真话。
+> 第九轮：同步最新 main，基线全部重测。
+> 第十轮（Codex review 7）：转人工**真的落库** · handler 跑着时**续租** ·
+> 业务副作用的库级唯一兜底 · 待办不再假装有审批入口（KERNEL-E7-APPROVAL-SURFACE）。
 
 ---
 
@@ -249,6 +252,40 @@ v1 唯一上线的能力零外部调用，填的是 `not_applicable`。
 
 另外：**这一步自己的预算花完了就不再开跑。** 声明总共最多 $2、已经花到 $2 的步骤，
 再跑一次只可能违约 —— 一个守规矩的 provider 不会白干活。（零成本步骤不在此列。）
+
+### 🔴 「转人工」必须真的落库，不能只返回一个内存值（R10-1）
+
+接管一条**正在跑**的付费 run、而 provider 不保证幂等重放时，我们不敢自动重跑。
+但领取 RPC 这时**已经**把 run 重置成 `queued` 并写了新租约 ——
+只在内存里返回一个 `dead_letter`，数据库里那条 run 仍然是「可以继续自动推进」的样子：
+**等这次租约一过期，下一次同幂等键提交就会从 `queued` 重新授权、再调一次 handler。**
+那道安全闸就是**装饰性**的，钱照样可能被扣第二次。
+
+`kernel_park_for_human` 在当前这一代的围栏下原子地：
+`status = dead_letter` + `needs_human = true` + **清空租约** + 留痕。
+`dead_letter` 不在接管白名单里，所以之后**只能走显式的人工恢复**回到 `queued`。
+
+### 🔴 handler 跑着的时候要续租（R10-2）
+
+代际围栏能拦住旧 owner **回写**，拦不住它**已经做出去的业务写入**。
+一个跑得比租约还久的 handler（默认 300 秒）会在自己还在跑的时候被第二代接管 ——
+两代各自真的调了一次外部服务，围栏对此无能为力。
+
+所以 handler 调用期间按 `kernel_renew_lease` 周期续租（间隔 = 租约的 1/3），
+**四项 CAS 缺一不可**：run 存在 · owner 还是我 · 代际还是我这一代 · 状态还是 `running`。
+任何一项不成立 = 我已经失去执行权，handler 返回后由 `assertStillOwner()`
+把它变成一次显式失败 —— **绝不把执行结果当自己的提交**。
+
+> 续租失败**不在定时器回调里抛** —— 那里没人接得住（会变成 unhandled rejection），
+> 而且 handler 还在跑，抛也停不掉它。记下来，等 handler 返回时再判。
+
+> ⚠️ **心跳只覆盖 handler 调用那一段窗口。** 步骤之间、重试退避（`deps.sleep`）、授权 / 读步骤这些阶段**不续租**。默认 300 秒租约下这些窗口都很短，问题不大；但把 `leaseSeconds` 调小 + 指数退避拉长时，可能在无心跳的窗口里被接管 —— 那时靠的是代际围栏和 `assertStillOwner`，结果不会被重复提交，只是白跑一趟。
+
+**续租把窗口压小，压不到零**（进程真死了就是会被接管）。所以每个 capability 的
+业务写入自己也要有**数据库级唯一身份**，不能只靠「先 SELECT 再 INSERT」——
+那两句之间就是竞态窗口。v1 的能力用部分唯一索引
+`uq_production_packages_kernel_run`（只约束带 `kernel_run_id` 的行；
+生产实查 25 行里 **0 行**带这个键，所以不可能因历史数据建不上，人工造的包也不受影响）。
 
 ### 🔴 我们到底保证什么（不要把 at-least-once 说成 exactly-once）
 
@@ -735,6 +772,7 @@ ALTER TABLE public.flywheel_actions DROP COLUMN IF EXISTS action_run_id;
 | # | 缺口 | 影响 |
 |---|---|---|
 | 1 | 注册表还没反向注入 agent prompt | `zhuge/conductor.ts` 仍要求模型「action_type 是一个 snake_case 短词」，生成端还是开放词汇表。不补的话，注册表会从「36 种自由文本」变成「36 种自由文本 + 一张对不上的表」 |
+| **2b** | 🔴 **`KERNEL-E7-APPROVAL-SURFACE`（Enable 前硬前提）** | 全仓**没有任何页面 / 接口读 `action_runs`**，也没有任何地方调 `approveAndRun` / `rejectPendingRun`。所以「等人点头」这条路现在**根本没有入口**。接真实调用方 / apply 迁移 / 启用**任何可能产生 `pending_approval` 的动作**之前，下面七件必须先有：① 认证过的操作者身份（不能信请求体里的 `approvedByUser`）；② 真能读到 `action_run` + 当前那条 pending 决策的 UI 或 API；③ 同意 → `approveAndRun`；④ 不做 → `rejectPendingRun`；⑤ 已结束 / 已被别人处理（settled / stale）如实反馈；⑥ 客户归属与授权校验；⑦ 审批操作留审计。**本 PR 不实现它，也不假装它存在** —— 待办文案已改成如实说「入口还没上线、这条已经安全停住、不会自动执行」，**不给假的 action URL**；渲染器在没有 href 时也不再画出「去做这件事」按钮。两条守卫测试盯着不许回退 |
 | 2 | 没有政策的 Settings UI | 现在只能写 SQL 插政策行。按 CLAUDE.md「FDE/PM 要填的字段必须连 Settings UI 一起做完」，启用前必须补 |
 | 3 | 没有调用方 | 内核建好了但没人提交动作。这是刻意的（v1 = 零运行时接线） |
 | 4 | **`spend_cap_per_period_usd`：RESERVED · NOT ENFORCED · 设置页先别暴露** | 只有列，没有任何判定逻辑。单次上限（`spend_cap_per_run_usd`）已生效。在 enforcement 落地之前，任何 UI 把它显示成「已生效的安全上限」= 给人一个假的安全感 |

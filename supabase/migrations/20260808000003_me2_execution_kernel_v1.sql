@@ -1317,6 +1317,163 @@ GRANT  EXECUTE ON FUNCTION public.kernel_record_fenced_deny(uuid, bigint, text, 
 
 
 -- ────────────────────────────────────────────────────────────────────────────
+-- 5h. kernel_park_for_human —— 把一条 run 原子地停到「等人处理」的终态
+--
+-- 🔴 为什么必须落库，而不是「返回一个 dead_letter 就完事」：
+--
+--    接管一条**正在跑**的付费 run 时（上一个执行者崩在 handler 中途），
+--    如果 provider 不保证幂等重放，我们不敢自动重跑。但领取 RPC 这时**已经**
+--    把 run 重置成 queued + 写了新租约 —— 只在内存里返回一个 dead_letter，
+--    数据库里那条 run 仍然是「可以继续自动推进」的样子：
+--    等这次的租约一过期，下一次同幂等键提交就会从 queued 重新授权、再调一次 handler。
+--    也就是说那道安全闸是**装饰性**的，钱照样可能被扣第二次。
+--
+--    所以必须在**当前这一代**的围栏下，原子地把它钉死：
+--      · status = dead_letter（终态，接管 RPC 的白名单里没有它 → 不可再被自动接管）
+--      · needs_human = true（进今日待办，不许死在日志里）
+--      · 租约清空（不留一个还能被自动推进的 owner）
+--    之后只能走**显式的人工恢复**（kernel_claim_run_recovery）回到 queued。
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.kernel_park_for_human(
+  p_run_id              uuid,
+  p_expected_generation bigint,
+  p_reason              text,
+  p_evidence_key        text DEFAULT 'parked_for_human'
+)
+RETURNS TABLE (ok boolean, reason text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_run public.action_runs%ROWTYPE;
+BEGIN
+  SELECT * INTO v_run FROM public.action_runs WHERE id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'run_not_found'; RETURN;
+  END IF;
+
+  -- 🔴 代际围栏：过期的执行者不许把新 owner 正在推进的 run 钉成终态
+  IF p_expected_generation IS NOT NULL
+     AND v_run.claim_generation IS DISTINCT FROM p_expected_generation THEN
+    RETURN QUERY SELECT false, 'stale_generation:' || v_run.claim_generation::text; RETURN;
+  END IF;
+
+  UPDATE public.action_runs
+     SET status           = 'dead_letter',
+         needs_human      = true,
+         last_error       = p_reason,
+         finished_at      = now(),
+         -- 租约清空：不留一个「还能被自动推进」的 owner。
+         -- dead_letter 不在接管白名单里，所以只能走显式人工恢复。
+         claimed_by       = NULL,
+         claimed_at       = NULL,
+         heartbeat_at     = NULL,
+         lease_expires_at = NULL,
+         evidence         = COALESCE(evidence, '{}'::jsonb) || jsonb_build_object(
+           p_evidence_key, jsonb_build_object(
+             'reason',       p_reason,
+             'at',           to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+             'generation',   v_run.claim_generation,
+             'previous_status', v_run.status
+           )
+         ),
+         updated_at       = now()
+   WHERE id = v_run.id;
+
+  RETURN QUERY SELECT true, 'parked';
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.kernel_park_for_human(uuid, bigint, text, text)
+  FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.kernel_park_for_human(uuid, bigint, text, text)
+  TO service_role;
+
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- 5i. kernel_renew_lease —— handler 跑着的时候按 owner + 代际续租
+--
+-- 🔴 为什么代际围栏替代不了续租：
+--    围栏能拦住旧 owner **回写**，拦不住它**已经做出去的业务写入**。
+--    一个跑得比租约还久的 handler（默认 300 秒），会在自己还在跑的时候
+--    被第二代接管并**再调一遍** —— 两代各自真的调了一次外部服务。
+--    所以正确做法是：只要我还活着、还握着这一代，就把租约往后推。
+--
+-- 四项 CAS，缺一不可：run 存在 · owner 还是我 · 代际还是我这一代 · 状态还是 running。
+-- 任何一项不成立 → 我已经失去了执行权（lost claim），调用方必须当场停手，
+-- **不许再把执行结果当自己的提交**。
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.kernel_renew_lease(
+  p_run_id              uuid,
+  p_owner_id            text,
+  p_expected_generation bigint,
+  p_lease_seconds       integer
+)
+RETURNS TABLE (ok boolean, reason text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_run public.action_runs%ROWTYPE;
+BEGIN
+  IF p_lease_seconds IS NULL OR p_lease_seconds <= 0 THEN
+    RETURN QUERY SELECT false, 'lease_seconds_required'; RETURN;
+  END IF;
+
+  SELECT * INTO v_run FROM public.action_runs WHERE id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'run_not_found'; RETURN;
+  END IF;
+
+  IF v_run.claimed_by IS DISTINCT FROM p_owner_id THEN
+    RETURN QUERY SELECT false, 'not_owner:' || COALESCE(v_run.claimed_by, '<none>'); RETURN;
+  END IF;
+  IF v_run.claim_generation IS DISTINCT FROM p_expected_generation THEN
+    RETURN QUERY SELECT false, 'stale_generation:' || v_run.claim_generation::text; RETURN;
+  END IF;
+  -- 只有真的在跑才续。已经被推成别的状态 = 这次执行已经不算数了。
+  IF v_run.status <> 'running' THEN
+    RETURN QUERY SELECT false, 'not_running:' || v_run.status; RETURN;
+  END IF;
+
+  UPDATE public.action_runs
+     SET lease_expires_at = now() + make_interval(secs => p_lease_seconds),
+         heartbeat_at     = now(),
+         updated_at       = now()
+   WHERE id = v_run.id;
+
+  RETURN QUERY SELECT true, 'renewed';
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.kernel_renew_lease(uuid, text, bigint, integer)
+  FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.kernel_renew_lease(uuid, text, bigint, integer)
+  TO service_role;
+
+
+-- ────────────────────────────────────────────────────────────────────────────
+-- 5j. 业务副作用的数据库级幂等兜底
+--
+-- 🔴 续租把「被接管」的窗口压到很小，但压不到零（进程真死了就是会被接管）。
+--    所以**每个 capability 的业务写入本身也要有数据库级的唯一身份**，
+--    不能只靠「先 SELECT 再 INSERT」—— 那两句之间就是竞态窗口，
+--    两代执行者可以各插一条。
+--
+--    v1 唯一上线的能力写 `production_packages`，它的自然唯一身份是
+--    「哪一条 run 的哪一步产出的」。用**部分**唯一索引：
+--      · 只约束带 `kernel_run_id` 的行（即执行内核造的），
+--        现有历史数据一行都不带这个键 → 不可能因为历史数据建不上；
+--      · 人工 / 其它管道造的包完全不受影响。
+-- ────────────────────────────────────────────────────────────────────────────
+CREATE UNIQUE INDEX IF NOT EXISTS uq_production_packages_kernel_run
+  ON public.production_packages ((source_payload->>'kernel_run_id'))
+  WHERE source_payload->>'kernel_run_id' IS NOT NULL;
+
+
+-- ────────────────────────────────────────────────────────────────────────────
 -- 5g. kernel_ensure_run_steps —— 建步骤也要过代际闸
 --
 -- 🔴 少了这一道就有一个窗口：A 已经拿到授权，卡在建步骤之前，租约过期，

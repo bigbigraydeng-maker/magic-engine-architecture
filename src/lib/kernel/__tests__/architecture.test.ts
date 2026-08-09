@@ -424,6 +424,51 @@ describe('两处清单不许分家（S1 / S2）', () => {
     ).toBeGreaterThanOrEqual(3)
   })
 
+  it('🔴 业务副作用要有数据库级唯一兜底 + 续租 / 转人工两个 RPC 都收了口（R10）', () => {
+    const sql = read(MIGRATION_SQL)
+    // 🔴 续租把「被接管」的窗口压小，压不到零。所以 capability 的业务写入
+    //    自己也要有数据库级唯一身份 —— 不能只靠「先 SELECT 再 INSERT」。
+    //    **部分**索引：只约束执行内核造的行，人工 / 其它管道不受影响。
+    expect(sql).toMatch(
+      /CREATE UNIQUE INDEX IF NOT EXISTS uq_production_packages_kernel_run[\s\S]{0,200}?WHERE source_payload->>'kernel_run_id' IS NOT NULL/,
+    )
+    // 两个新 RPC 的 EXECUTE 同样要收口（anon key 在浏览器 bundle 里）
+    for (const fn of ['kernel_park_for_human', 'kernel_renew_lease']) {
+      expect(
+        new RegExp(
+          `REVOKE\\s+EXECUTE\\s+ON\\s+FUNCTION\\s+public\\.${fn}[^;]*FROM\\s+PUBLIC\\s*,\\s*anon\\s*,\\s*authenticated`,
+          'i',
+        ).test(sql),
+        `${fn} 的 EXECUTE 必须显式 REVOKE`,
+      ).toBe(true)
+    }
+    // 🔴 park 的 SQL 语义也要断言 —— 只断 REVOKE 的话，
+    //    「真 SQL 验不验代际 / 清不清租约」全靠假件在保证，两边分家没人知道。
+    const park = sql.slice(
+      sql.indexOf('CREATE OR REPLACE FUNCTION public.kernel_park_for_human'),
+      sql.indexOf('REVOKE EXECUTE ON FUNCTION public.kernel_park_for_human'),
+    )
+    expect(park, 'park RPC 应该切得出来').toContain('SECURITY DEFINER')
+    expect(park).toContain('FOR UPDATE')
+    expect(park).toMatch(/claim_generation\s+IS DISTINCT FROM\s+p_expected_generation/)
+    expect(park).toMatch(/status\s*=\s*'dead_letter'/)
+    expect(park).toMatch(/needs_human\s*=\s*true/)
+    // 租约三件套必须清空，否则会留下一个还能被自动推进的 owner
+    for (const col of ['claimed_by', 'claimed_at', 'lease_expires_at']) {
+      expect(park, `park 必须清空 ${col}`).toMatch(new RegExp(`${col}\\s*=\\s*NULL`))
+    }
+
+    // 续租的四项 CAS 必须都在 SQL 里
+    const renew = sql.slice(
+      sql.indexOf('CREATE OR REPLACE FUNCTION public.kernel_renew_lease'),
+      sql.indexOf('REVOKE EXECUTE ON FUNCTION public.kernel_renew_lease'),
+    )
+    expect(renew).toContain('FOR UPDATE')
+    expect(renew).toMatch(/claimed_by\s+IS DISTINCT FROM\s+p_owner_id/)
+    expect(renew).toMatch(/claim_generation\s+IS DISTINCT FROM\s+p_expected_generation/)
+    expect(renew).toMatch(/status\s*<>\s*'running'/)
+  })
+
   it('🔴 单次 / 周期花费上限的 CHECK 也要挡住 NaN 和 Infinity（T2c）', () => {
     const sql = read(MIGRATION_SQL)
     const i = sql.indexOf('CONSTRAINT spend_caps_are_real_amounts')

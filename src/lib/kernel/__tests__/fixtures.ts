@@ -154,8 +154,20 @@ export function makeFixture(args: {
 export function liveFence(f: Fixture, runId?: string): { ownerId: string; generation: number } {
   const rows = f.tables.action_runs as Array<Record<string, unknown>>
   const row = runId ? rows.find((r) => r.id === runId) : rows[0]
+  if (!row) return { ownerId: 'test-owner', generation: 0 }
+
+  // 🔴 围栏不是凭空来的 —— 生产里它只能来自一次真实的领取，
+  //    所以这里也把 run 摆成「我确实持有这一代」的样子（owner + 还没到期的租约）。
+  //    不摆的话 `claimed_by` 是 null，而围栏说 owner 是 'test-owner'，
+  //    两者对不上 —— 执行中途的所有权复核会当场判成「已经被接管」。
+  if (row.claimed_by == null) {
+    row.claimed_by = 'test-owner'
+    row.claimed_at = f.clock.now.toISOString()
+    row.heartbeat_at = row.claimed_at
+    row.lease_expires_at = new Date(f.clock.now.getTime() + 3_600_000).toISOString()
+  }
   return {
-    ownerId: String(row?.claimed_by ?? 'test-owner'),
-    generation: Number(row?.claim_generation ?? 0),
+    ownerId: String(row.claimed_by),
+    generation: Number(row.claim_generation ?? 0),
   }
 }

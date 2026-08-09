@@ -24,6 +24,10 @@ export function createKernel(
     registry: overrides.registry ?? ACTION_REGISTRY,
     capabilities: overrides.capabilities ?? createCapabilities(supabase),
     workerId: overrides.workerId,
+    // 🔴 这两项以前接了不转发 —— 公开 API 上写着能配，实际永远是 300 秒 + 随机 owner。
+    //    「参数类型收了它」和「行为真的变了」是两件事，有测试盯着后者。
+    leaseSeconds: overrides.leaseSeconds,
+    ownerId: overrides.ownerId,
     now: overrides.now,
     sleep: overrides.sleep,
   })

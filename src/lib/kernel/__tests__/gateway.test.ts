@@ -326,7 +326,13 @@ describe('Gateway：重试 / 死信 / 断点续跑', () => {
     expect(todos).toHaveLength(1)
     expect(todos[0].what).toContain('已经停手')
     expect(todos[0].how.length).toBeGreaterThan(10)
-    expect(todos[0].href).toMatch(/^https:\/\/app\.magicengine\.com\.au\//)
+    // 🔴 **不给假的 action URL。** 执行看板不读 `action_runs` —— 链过去既找不到
+    //    这条 run，也没有能处理它的按钮。三件套里的 href 宁可空着，
+    //    也不能给一个「打得开但看不到这件事」的地址。
+    //    （空 href 不会被 dropBrokenLinks 当成「链接坏了」丢掉，
+    //     渲染器也不会画出一个点了没反应的按钮 —— 两处都有守卫测试。）
+    expect(todos[0].href).toBe('')
+    expect(todos[0].how).toContain('回我一句')
   })
 
   it('不可重试的失败 → 一次就停手，不白试三次', async () => {

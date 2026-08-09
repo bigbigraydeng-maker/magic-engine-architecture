@@ -126,7 +126,15 @@ export async function dropBrokenLinks(
 ): Promise<{ kept: ManualItem[]; dropped: ManualItem[] }> {
   const verdicts = await Promise.all(
     items.map((it) =>
-      verifyActionLink(it.href, fetchImpl).catch(() => ({ kind: 'unverifiable' as const })),
+      // 🔴 **没有链接 ≠ 链接坏了。**
+      //    有些待办本来就没有可点的地方（比如那件事的入口还没上线），
+      //    它的价值全在 what / how 上。空 href 交给 verifyActionLink 会走
+      //    `new URL('')` / `fetch('')` 抛错 → 判成 broken → 整条被丢掉，
+      //    于是「如实告诉人这件事现在做不了」变成了「人什么都看不到」——
+      //    发现死在 console.warn 里，正是铁律 3 下半句禁止的那件事。
+      it.href.trim() === ''
+        ? Promise.resolve({ kind: 'unverifiable' as const })
+        : verifyActionLink(it.href, fetchImpl).catch(() => ({ kind: 'unverifiable' as const })),
     ),
   )
   const kept: ManualItem[] = []

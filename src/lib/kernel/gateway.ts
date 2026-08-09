@@ -23,6 +23,7 @@ import type {
   AuthorizationDecision,
   AuthorizedExecutionContext,
   CapabilityImplementation,
+  CapabilityStepResult,
   ClientAutomationPolicy,
   RunStatus,
   VerificationResult,
@@ -38,6 +39,7 @@ import {
   listSteps,
   updateRun,
   updateRunFenced,
+  renewLease,
   updateStep,
   updateStepFenced,
 } from './store'
@@ -527,6 +529,104 @@ function isRealCostAmount(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
+/**
+ * handler 跑着的时候周期性续租，返回一个「停」的函数。
+ *
+ * 🔴 间隔必须**显著小于**租约时长，否则续租还没发出去租约就已经过期了。
+ *    这里取租约的三分之一（至少 1ms，测试里用很短的租约验证）。
+ *
+ * 🔴 续不上的处置：**记下来，不在这里抛**。
+ *    抛在定时器回调里没人接得住（会变成 unhandled rejection），
+ *    而且 handler 还在跑，抛也停不掉它。正确做法是让 handler 自然返回之后，
+ *    在 `assertStillOwner()` 那一步把「我已经失去执行权」变成一次显式失败 ——
+ *    那时它才有机会阻止「把执行结果当自己的提交」。
+ */
+function startLeaseHeartbeat(
+  deps: KernelDeps,
+  runId: string,
+  fence: ExecutionFence,
+): { stop: () => void; lostReason: () => string | null } {
+  // 🔴 「丢没丢过执行权」挂在**这一次心跳的闭包**上，不放模块级 Map。
+  //    放 Map 里踩过两个坑：① 键只有 runId，同一条 run 的上一代会污染下一代；
+  //    ② 只在成功路径清理，handler 一抛异常就永远留着 —— 于是这条 run 在这个
+  //    进程里**再也跑不成**，而且死信理由是编的（根本没人接管过它）。
+  //    闭包的作用域天然跟这次执行对齐，不需要任何人记得清理。
+  let lost: string | null = null
+  let stopped = false
+
+  const everyMs = Math.max(1, Math.floor((deps.leaseSeconds * 1000) / 3))
+  const timer = setInterval(() => {
+    void renewLease(deps.supabase, {
+      runId,
+      ownerId: fence.ownerId,
+      expectedGeneration: fence.generation,
+      leaseSeconds: deps.leaseSeconds,
+    })
+      .then((r) => {
+        // stop 之后在途的那一次回来了也不算数 —— 这次执行已经结束了
+        if (!stopped && !r.ok) lost = r.reason
+      })
+      .catch((e) => {
+        // 🔴 「CAS 判负」和「调用本身炸了」是两件事，不能一起吞掉。
+        //    RPC 不存在（迁移还没 apply）/ 网络断了都会走到这里 ——
+        //    静默的话，这道闸等于不存在，而且**零信号**。
+        //    单次异常不当成失去执行权（可能只是抖动），但必须留下痕迹；
+        //    真失去了会由下一次续租的 CAS 判负、或 assertStillOwner 的重读发现。
+        if (!stopped) {
+          console.warn(
+            `[kernel] 续租没打通（run=${runId} gen=${fence.generation}）：${String(e)}`,
+          )
+        }
+      })
+  }, everyMs)
+  // Node 里别让这个定时器吊住进程退出
+  ;(timer as unknown as { unref?: () => void }).unref?.()
+
+  return {
+    stop: () => {
+      stopped = true
+      clearInterval(timer)
+    },
+    lostReason: () => lost,
+  }
+}
+
+/**
+ * 我还握着这一代的执行权吗。不握着就当场抛 —— 绝不把执行结果当自己的提交。
+ *
+ * 两个来源：① 心跳期间续租失败过；② 直接回库再确认一次（心跳可能刚好没赶上）。
+ */
+async function assertStillOwner(
+  deps: KernelDeps,
+  runId: string,
+  fence: ExecutionFence,
+  lost: string | null,
+): Promise<void> {
+  if (lost) {
+    throw new KernelError(
+      'STALE_CLAIM',
+      '这次执行的所有权在跑的过程中被别人接管了（续租没续上）—— 已停手，不会重复做',
+      { detail: { runId, generation: fence.generation, reason: lost } },
+    )
+  }
+  const run = await deps.requireRun(runId)
+  if (Number(run.claim_generation) !== fence.generation || run.claimed_by !== fence.ownerId) {
+    throw new KernelError(
+      'STALE_CLAIM',
+      '这次执行的所有权在跑的过程中被别人接管了 —— 已停手，不会重复做',
+      {
+        detail: {
+          runId,
+          myGeneration: fence.generation,
+          nowGeneration: run.claim_generation,
+          myOwner: fence.ownerId,
+          nowOwner: run.claimed_by,
+        },
+      },
+    )
+  }
+}
+
 // ── 步骤循环 ──────────────────────────────────────────────────────────────────
 
 async function runSteps(
@@ -651,15 +751,35 @@ async function runSteps(
       })
 
       try {
-        const result = await handler({
-          ctx,
-          stepKey,
-          attempt,
-          priorOutputs,
-          // 🔴 稳定的外部幂等键：跨重试、跨死信重跑、跨接管都不变。
-          //    含 attempt 或代际就等于每次重试都换一张收据，provider 会做第二遍。
-          idempotencyKey: stepIdempotencyKey(args.run, stepKey),
-        })
+        // 🔴 **handler 跑着的时候要续租。**
+        //
+        //    代际围栏能拦住旧 owner 回写，拦不住它**已经做出去的业务写入**。
+        //    一个跑得比租约还久的 handler 会在自己还在跑的时候被第二代接管，
+        //    于是两代各自真的调了一次外部服务 —— 围栏对此无能为力。
+        //    所以只要我还活着、还握着这一代，就把租约往后推；
+        //    续不上（owner 变了 / 代际变了 / 状态不是 running）= 我已经失去执行权，
+        //    当场停手，**绝不把执行结果当自己的提交**。
+        const heartbeat = startLeaseHeartbeat(deps, args.run.id, fence)
+        let result: CapabilityStepResult
+        try {
+          result = await handler({
+            ctx,
+            stepKey,
+            attempt,
+            priorOutputs,
+            // 🔴 稳定的外部幂等键：跨重试、跨死信重跑、跨接管都不变。
+            //    含 attempt 或代际就等于每次重试都换一张收据，provider 会做第二遍。
+            idempotencyKey: stepIdempotencyKey(args.run, stepKey),
+          })
+        } finally {
+          heartbeat.stop()
+        }
+
+        // 🔴 handler 返回了，但**在把它的结果当成我的提交之前**先确认我还握着执行权。
+        //    续租失败过 = 我已经被接管了 —— 这时候写任何东西都是在覆盖新 owner。
+        //    （围栏本身也会挡住写入，但这里要给出准确的原因，而不是一句
+        //     「影响 0 行」；也避免把「已经被接管」误当成一次可重试的失败。）
+        await assertStillOwner(deps, args.run.id, fence, heartbeat.lostReason())
         const reported = result.costActualUsd ?? 0
 
         // 🔴 T3：这个数字是**运行时输入**，TypeScript 的 `number` 拦不住

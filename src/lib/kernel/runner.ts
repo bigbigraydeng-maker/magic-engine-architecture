@@ -24,6 +24,7 @@ import { executeAuthorizedRun, rehydrateSucceededRun, type ExecutionFence } from
 import { computeIdempotencyKey, computeUnknownActionKey } from './idempotency'
 import {
   claimOrTakeoverRun,
+  parkRunForHuman,
   claimRunRecovery,
   findRunByIdempotencyKey,
   getDecision,
@@ -367,7 +368,7 @@ async function driveIntermediateRun(
   //    只在真的接管了 running 时才判（claim.resetSteps）；
   //    零成本 / provider 认幂等键的动作不受影响。
   if (claim.resetSteps) {
-    const blocked = takeoverNeedsHumanJudgement(deps, owned)
+    const blocked = await parkTakeoverForHuman(deps, owned, claim.claimGeneration)
     if (blocked) return blocked
   }
   // 🔴 F1：从这里往后每一次推进性写入都出示这一代。
@@ -409,10 +410,25 @@ async function driveIntermediateRun(
  *
  * 返回 null = 可以接着跑（零成本动作，或 provider 认幂等键）。
  */
-function takeoverNeedsHumanJudgement(
+/**
+ * 接管了一条**正在跑**的付费 run，而 provider 不保证幂等重放 → 停到「等人处理」。
+ *
+ * 🔴 **必须真的落库，不能只返回一个内存里的 dead_letter。**
+ *
+ *    领取 RPC 这时**已经**把 run 重置成 queued 并写了新租约。只返回不落库的话，
+ *    数据库里那条 run 仍然是「可以继续自动推进」的样子 —— 等这次租约一过期，
+ *    下一次同幂等键提交就会从 queued 重新授权、再调一次 handler，钱可能被扣第二次。
+ *    那样这道闸就是**装饰性**的。
+ *
+ *    `kernel_park_for_human` 在当前这一代的围栏下原子地：
+ *    推 dead_letter + needs_human + 清租约。dead_letter 不在接管白名单里，
+ *    所以之后只能走**显式的人工恢复**回到 queued。
+ */
+async function parkTakeoverForHuman(
   deps: KernelDeps,
   run: ActionRun,
-): ActionRunOutcome | null {
+  generation: number,
+): Promise<ActionRunOutcome | null> {
   const definition = deps.registry.get(run.action_key)
   if (!definition) return null // 认不出的动作由授权层去拒，不在这里判
 
@@ -422,15 +438,32 @@ function takeoverNeedsHumanJudgement(
   if (!mightCost) return null
   if (definition.providerIdempotency === 'supported') return null
 
+  const humanReason =
+    `上一个执行者在跑「${definition.title}」的中途没了，而这个动作会花钱、` +
+    `它的外部服务又不保证「同一把幂等键重放不会重复收费」—— ` +
+    `系统不敢自动重跑（可能再扣一次）。请人工确认那边到底做没做、扣没扣，再决定重跑还是作废。`
+
+  const parked = await parkRunForHuman(deps.supabase, {
+    runId: run.id,
+    expectedGeneration: generation,
+    reason: humanReason,
+    evidenceKey: 'parked_unsafe_takeover',
+  })
+  if (!parked.ok) {
+    // 代际对不上 = 我已经被接管了，连「把它钉成终态」都不该由我来做
+    throw new KernelError(
+      'STALE_CLAIM',
+      '这次执行的所有权已经被别人接管了（你手里那一代已经作废）—— 已停手，不会重复做',
+      { detail: { runId: run.id, generation, reason: parked.reason } },
+    )
+  }
+
   return {
     kind: 'dead_letter',
-    run,
+    run: await deps.requireRun(run.id),
     decision: null,
     execution: null,
-    humanReason:
-      `上一个执行者在跑「${definition.title}」的中途没了，而这个动作会花钱、` +
-      `它的外部服务又不保证「同一把幂等键重放不会重复收费」—— ` +
-      `系统不敢自动重跑（可能再扣一次）。请人工确认那边到底做没做、扣没扣，再决定重跑还是作废。`,
+    humanReason,
   }
 }
 

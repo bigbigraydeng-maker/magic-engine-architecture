@@ -1235,11 +1235,11 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         name="R9-3 接管 running 直接重跑（跟 UNSAFE_RETRY 自相矛盾）",
         file="src/lib/kernel/runner.ts",
         old="""  if (claim.resetSteps) {
-    const blocked = takeoverNeedsHumanJudgement(deps, owned)
+    const blocked = await parkTakeoverForHuman(deps, owned, claim.claimGeneration)
     if (blocked) return blocked
   }""",
         new="""  if (false) {
-    void takeoverNeedsHumanJudgement
+    void parkTakeoverForHuman
   }""",
         test="src/lib/kernel/__tests__/charged-then-threw.test.ts",
         expect_fail_contains="不自动重跑",
@@ -1251,6 +1251,166 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         new="""    // mutated: 不挡跨客户""",
         test="src/lib/kernel/__tests__/fencing-gaps.test.ts",
         expect_fail_contains="跨客户",
+    ),
+    # ── R10：转人工要落库 / 续租 / 参数转发 / 待办不许假装可操作 ──────────
+    dict(
+        name="R10-1 转人工只返回不落库（安全假象：租约一过期又能自动跑）",
+        file="src/lib/kernel/runner.ts",
+        old="""  const parked = await parkRunForHuman(deps.supabase, {""",
+        new="""  const parked = { ok: true, reason: 'skipped' }
+  await Promise.resolve({""",
+        test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
+        expect_fail_contains="真的是 dead_letter",
+    ),
+    dict(
+        name="R10-1b 落人工终态时不验代际（旧执行者能把新 owner 的 run 钉死）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (expectedGen !== null && Number(run.claim_generation ?? 0) !== expectedGen) {
+      return { ok: false, reason: `stale_generation:${String(run.claim_generation ?? 0)}` }
+    }
+
+    const nowIso = (options.now?.() ?? new Date()).toISOString()
+    const previousStatus = String(run.status)""",
+        new="""    const nowIso = (options.now?.() ?? new Date()).toISOString()
+    const previousStatus = String(run.status)""",
+        test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
+        expect_fail_contains="用过期的代际去落人工终态",
+    ),
+    dict(
+        name="R10-1c 转人工时不清租约（留下一个还能被自动推进的 owner）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    run.finished_at = nowIso
+    run.claimed_by = null
+    run.claimed_at = null
+    run.heartbeat_at = null
+    run.lease_expires_at = null
+    run.evidence = {
+      ...((run.evidence ?? {}) as Row),
+      [key]: {""",
+        new="""    run.finished_at = nowIso
+    run.evidence = {
+      ...((run.evidence ?? {}) as Row),
+      [key]: {""",
+        test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
+        expect_fail_contains="真的是 dead_letter",
+    ),
+    dict(
+        name="R10-2 handler 跑着的时候不续租（第二代会把它再调一遍）",
+        file="src/lib/kernel/gateway.ts",
+        old="""        const heartbeat = startLeaseHeartbeat(deps, args.run.id, fence)""",
+        new="""        const heartbeat = { stop: () => {}, lostReason: () => null }""",
+        test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
+        expect_fail_contains="心跳把租约续上",
+    ),
+    dict(
+        name="R10-2b 续租不验 owner（别人的 run 也能被我续）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (run.claimed_by !== ownerId) {
+      return { ok: false, reason: `not_owner:${String(run.claimed_by ?? '<none>')}` }
+    }""",
+        new="""    // mutated: 不验 owner""",
+        test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
+        expect_fail_contains="四项 CAS 各自单独可咬",
+    ),
+    dict(
+        name="R10-2c 业务副作用的唯一兜底没了（两代各插一条包）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""  production_packages: [['source_payload->>kernel_run_id']],""",
+        new="""""",
+        test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
+        expect_fail_contains="同一条 run 只可能落一个包",
+    ),
+    dict(
+        name="R10-2d SQL 里的部分唯一索引没了",
+        file="supabase/migrations/20260808000003_me2_execution_kernel_v1.sql",
+        old="""CREATE UNIQUE INDEX IF NOT EXISTS uq_production_packages_kernel_run""",
+        new="""CREATE INDEX IF NOT EXISTS uq_production_packages_kernel_run""",
+        test="src/lib/kernel/__tests__/architecture.test.ts",
+        expect_fail_contains="业务副作用",
+    ),
+    dict(
+        name="R10-3 createKernel 又把租约参数吞掉",
+        file="src/lib/kernel/index.ts",
+        old="""    leaseSeconds: overrides.leaseSeconds,
+    ownerId: overrides.ownerId,""",
+        new="""""",
+        test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
+        expect_fail_contains="真的改变行为",
+    ),
+    dict(
+        name="R10-4 待办又开始指向不存在的审批入口",
+        file="src/lib/kernel/handoff.ts",
+        old="""      href: '',
+    }
+  }""",
+        new="""      href,
+    }
+  }""",
+        test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
+        expect_fail_contains="没有假链接",
+    ),
+    dict(
+        name="R10-4b 待办渲染器又无条件画出「去做这件事」按钮",
+        file="src/app/dashboard/today/page.tsx",
+        old="""                    {m.href ? (""",
+        new="""                    {true ? (""",
+        test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
+        expect_fail_contains="不许画出一个点了没反应的按钮",
+    ),
+    dict(
+        name="R10-5 handler 返回后不复核所有权（人工终态会被覆盖成 succeeded）",
+        file="src/lib/kernel/gateway.ts",
+        old="""        await assertStillOwner(deps, args.run.id, fence, heartbeat.lostReason())""",
+        new="""        void heartbeat""",
+        test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
+        expect_fail_contains="被转人工",
+    ),
+    dict(
+        name="R10-5b 只比代际、不比 owner（转人工/恢复清 owner 时拦不住）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  if (Number(run.claim_generation) !== fence.generation || run.claimed_by !== fence.ownerId) {""",
+        new="""  if (Number(run.claim_generation) !== fence.generation) {""",
+        test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
+        expect_fail_contains="被转人工",
+    ),
+    dict(
+        name="R10-6 空 href 又被当成「链接坏了」丢掉（发现死在 console.warn 里）",
+        file="src/lib/pm-todo/manual-items.ts",
+        old="""      it.href.trim() === ''
+        ? Promise.resolve({ kind: 'unverifiable' as const })
+        : verifyActionLink(it.href, fetchImpl).catch(() => ({ kind: 'unverifiable' as const })),""",
+        new="""      verifyActionLink(it.href, fetchImpl).catch(() => ({ kind: 'unverifiable' as const })),""",
+        test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
+        expect_fail_contains="这条待办还在",
+    ),
+    dict(
+        name="R10-7 park 的 SQL 不清租约",
+        file="supabase/migrations/20260808000003_me2_execution_kernel_v1.sql",
+        old="""         claimed_by       = NULL,
+         claimed_at       = NULL,
+         heartbeat_at     = NULL,
+         lease_expires_at = NULL,
+         evidence         = COALESCE(evidence, '{}'::jsonb) || jsonb_build_object(
+           p_evidence_key, jsonb_build_object(""",
+        new="""         evidence         = COALESCE(evidence, '{}'::jsonb) || jsonb_build_object(
+           p_evidence_key, jsonb_build_object(""",
+        test="src/lib/kernel/__tests__/architecture.test.ts",
+        expect_fail_contains="业务副作用",
+    ),
+    dict(
+        name="R10-7b park 的 SQL 不验代际",
+        file="supabase/migrations/20260808000003_me2_execution_kernel_v1.sql",
+        old="""  IF p_expected_generation IS NOT NULL
+     AND v_run.claim_generation IS DISTINCT FROM p_expected_generation THEN
+    RETURN QUERY SELECT false, 'stale_generation:' || v_run.claim_generation::text; RETURN;
+  END IF;
+
+  UPDATE public.action_runs
+     SET status           = 'dead_letter',""",
+        new="""  UPDATE public.action_runs
+     SET status           = 'dead_letter',""",
+        test="src/lib/kernel/__tests__/architecture.test.ts",
+        expect_fail_contains="业务副作用",
     ),
     # ── P1-4：migration 版本撞车 ─────────────────────────────────────────
     dict(
