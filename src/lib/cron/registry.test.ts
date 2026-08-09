@@ -15,6 +15,29 @@ const ROOT = path.resolve(__dirname, '../../..')
  */
 type ParsedCron = { service: string; schedule: string; routes: string[]; startCommand: string }
 
+/**
+ * 从一个服务块里取出 startCommand，块格式 `startCommand: |` 和单行格式都认。
+ *
+ * 块的结束按缩进判：缩进不比 `startCommand:` 这一行深的第一行就是块外。
+ * 早先用 `(?:[ \t]+.*\n)+` 一路吃下去，把后面的 `envVars:` / `- key: …` 也吞进了
+ * 命令里 —— 反正后面判断时又把空白压平，整段还是以 curl 开头，就一直没露馅。
+ */
+function extractStartCommand(block: string): string {
+  const lines = block.split('\n')
+  const i = lines.findIndex((l) => /^\s*startCommand:/.test(l))
+  if (i < 0) return ''
+  const keyIndent = /^([ \t]*)/.exec(lines[i])![1].length
+  const inline = /startCommand:[ \t]+(\S.*)$/.exec(lines[i])?.[1]?.trim()
+  if (inline !== undefined && inline !== '|' && inline !== '>') return inline
+  const body: string[] = []
+  for (const line of lines.slice(i + 1)) {
+    if (line.trim() === '') break
+    if (/^([ \t]*)/.exec(line)![1].length <= keyIndent) break
+    body.push(line)
+  }
+  return body.length > 0 ? `${body.join('\n')}\n` : ''
+}
+
 function parseRenderYaml(): ParsedCron[] {
   const txt = readFileSync(path.join(ROOT, 'render.yaml'), 'utf8')
   const out: ParsedCron[] = []
@@ -23,12 +46,7 @@ function parseRenderYaml(): ParsedCron[] {
   while ((m = re.exec(txt)) !== null) {
     const schedule = /schedule:\s*"([^"]+)"/.exec(m[2])?.[1] ?? ''
     const routes = Array.from(m[2].matchAll(/\/api\/cron\/([a-z0-9-]+)/g)).map((x) => x[1])
-    // 块格式 `startCommand: |` 和单行格式 `startCommand: node x.js` 都要认。
-    // 只认块格式的话，单行写法会被解析成空串 —— 那是「没解析到」冒充「没有命令」。
-    const startCommand =
-      /startCommand: \|\n((?:[ \t]+.*\n)+)/.exec(m[2])?.[1] ??
-      /startCommand:[ \t]+(\S.*)/.exec(m[2])?.[1] ??
-      ''
+    const startCommand = extractStartCommand(m[2])
     out.push({ service: m[1], schedule, routes, startCommand })
   }
   return out
@@ -129,10 +147,14 @@ const CRON_TRIGGERED_WEB_FLAGS: { env: string; service: string }[] = [
  * `<(…)` `>(…)`）一律判不通过。`$CRON_SECRET`、`${VAR}` 这类纯变量展开不受影响。
  */
 function isCurlOnly(startCommand: string): boolean {
-  const flat = startCommand.replace(/\\\s*\n/g, ' ').replace(/\s+/g, ' ').trim()
-  if (flat === '') return false
-  if (/\$\(|`|<\(|>\(/.test(flat)) return false
-  const segments = flat.split(/&&|\|\||;|\||\n/).map((s) => s.trim()).filter((s) => s !== '')
+  // 只把「反斜杠 + 换行」的行接续接起来。**不能**把所有空白压平 —— 那会把裸换行
+  // 也变成空格，于是「第二行另起一条命令」被并进 curl 那一段，整段还是以 curl 开头。
+  const joined = startCommand.replace(/\\[ \t]*\n/g, ' ')
+  if (/\$\(|`|<\(|>\(/.test(joined)) return false
+  const segments = joined
+    .split(/&&|\|\||;|\||&|\n/) // 换行和单个 & 都是命令分隔符，跟 && / ; 一样要拆
+    .map((s) => s.replace(/[ \t]+/g, ' ').trim())
+    .filter((s) => s !== '')
   return segments.length > 0 && segments.every((s) => /^curl(\s|$)/.test(s))
 }
 
@@ -163,6 +185,9 @@ describe('cron 触发、web 进程读取的开关：docs/ENV.md 的「配在哪�
     // 毫无关系的断言。受检任务自己的「只能 curl」在下面各自验。
     const checked = CRON_TRIGGERED_WEB_FLAGS.map((f) => parsed.find((p) => p.service === f.service))
     expect(checked.filter((p) => (p?.startCommand ?? '').trim() === '')).toEqual([])
+    // 块只能取到命令本身：吃到 envVars / - key 就是解析越界了（曾经真的越界过，
+    // 只是当时把空白压平，整段还是以 curl 开头，所以一直没露馅）
+    expect(checked.some((p) => /envVars:|- key:/.test(p!.startCommand))).toBe(false)
     expect(envDocLocation('CRON_SECRET')).toContain('cron')
     expect(envDocLocation('NEXT_PUBLIC_SUPABASE_ANON_KEY')).toBe('Render-web')
     expect(envDocLocation('THIS_ENV_DOES_NOT_EXIST')).toBeNull()
@@ -183,6 +208,9 @@ describe('cron 触发、web 进程读取的开关：docs/ENV.md 的「配在哪�
     expect(isCurlOnly('curl "$(/usr/bin/node foo.js)"\n')).toBe(false)
     expect(isCurlOnly('curl "`./scripts/foo.mjs`"\n')).toBe(false)
     expect(isCurlOnly('curl --data @<(./scripts/foo.mjs) https://x/y\n')).toBe(false)
+    // 换行和单个 & 都另起一条命令，不能被并进 curl 那一段
+    expect(isCurlOnly('curl -fsS https://x/y\n./scripts/foo.mjs\n')).toBe(false)
+    expect(isCurlOnly('curl -fsS https://x/y & ./scripts/foo.mjs\n')).toBe(false)
     // 纯变量展开不是执行，别误杀 —— 真实命令就长这样
     expect(isCurlOnly('curl -H "Authorization: Bearer $CRON_SECRET" https://x/y\n')).toBe(true)
     expect(isCurlOnly('curl -H "Authorization: Bearer ${CRON_SECRET}" https://x/y\n')).toBe(true)
