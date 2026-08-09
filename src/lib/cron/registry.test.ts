@@ -332,20 +332,48 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
   const parsed = parseRenderYaml()
 
   /**
-   * 各 cron 的 startCommand 里真的展开过的变量（`$VAR` / `${VAR}`）。
-   * 这才是「cron 进程读得到」的证据 —— envVars 里声明过只代表值被注进了环境。
+   * 一条命令里**真的会被 shell 展开**的变量。
+   *
+   * 单引号里的 `$VAR` 和转义的 `\$VAR` 都是字面量，不展开 —— 那种写法下 cron 会带着
+   * 一串字面量去请求（真发生过就是 401），把它算成「读取方」等于把坏掉的配置判成对的。
+   * 所以先把转义和单引号段去掉再匹配。这是够用的近似，不是 shell 解析器。
    */
-  function cronReferencedVars(): Set<string> {
+  function expandedVars(startCommand: string): string[] {
+    const expandable = startCommand.replace(/\\\$/g, ' ').replace(/'[^']*'/g, ' ')
+    return Array.from(expandable.matchAll(/\$\{?([A-Z][A-Z0-9_]{2,})\}?/g)).map((m) => m[1])
+  }
+
+  type CronEnv = { service: string; startCommand: string; keys: string[]; fromGroup: boolean }
+
+  /** 每条 cron：命令 + 它自己 envVars 注进来的 key（fromGroup 的内容仓库里看不到）。 */
+  function cronEnvBlocks(): CronEnv[] {
+    const txt = readFileSync(path.join(ROOT, 'render.yaml'), 'utf8')
+    return Array.from(
+      txt.matchAll(/-\s+type:\s+cron\s*\n\s+name:\s*(\S+)([\s\S]*?)(?=\n\s*-\s+type:|$)/g),
+    ).map((m) => ({
+      service: m[1],
+      startCommand: extractStartCommand(m[2]),
+      keys: Array.from(m[2].matchAll(/-\s+key:\s*(\S+)/g)).map((k) => k[1]),
+      fromGroup: /fromGroup:/.test(m[2]),
+    }))
+  }
+
+  /**
+   * 「cron 进程真读得到」的证据：**同一条 cron** 既在命令里展开了它，又确实被注进了环境。
+   * 只看「哪条命令引用过」不够 —— 引用了但那条服务没注入，跑起来就是空值。
+   * 走 fromGroup 的服务无法从仓库判断组里有什么，按「可能注入」放行。
+   */
+  function cronVarEvidence(): Set<string> {
     const out = new Set<string>()
-    for (const p of parsed) {
-      Array.from(p.startCommand.matchAll(/\$\{?([A-Z][A-Z0-9_]{2,})\}?/g)).forEach((m) =>
-        out.add(m[1]),
-      )
+    for (const c of cronEnvBlocks()) {
+      for (const v of expandedVars(c.startCommand)) {
+        if (c.fromGroup || c.keys.includes(v)) out.add(v)
+      }
     }
     return out
   }
 
-  const referenced = cronReferencedVars()
+  const referenced = cronVarEvidence()
   const locations = allEnvDocLocations()
   /** 「配在哪」里声称要上 cron 的写法：Render-cron / 全部 cron / + cron。 */
   const claimsCron = (where: string) => /Render-cron|全部 cron|\+\s*cron/.test(where)
@@ -365,6 +393,46 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
     expect(
       inProcess,
       `这些 cron 不再是纯 curl，跟它们相关的变量要重新判定配在哪：${inProcess.join(', ')}`,
+    ).toEqual([])
+  })
+
+  it('前提成立：展开判定认得单引号 / 转义这两种「不展开」的写法', () => {
+    expect(expandedVars('curl -H "Authorization: Bearer $CRON_SECRET" https://x')).toEqual(['CRON_SECRET'])
+    expect(expandedVars('curl -H "Bearer ${CRON_SECRET}" https://x')).toEqual(['CRON_SECRET'])
+    // 单引号里不展开，shell 会把字面量发出去（真发生过就是 401）
+    expect(expandedVars("curl -H 'Authorization: Bearer $CRON_SECRET' https://x")).toEqual([])
+    // 转义同理
+    expect(expandedVars('curl -H "Bearer \\$CRON_SECRET" https://x')).toEqual([])
+  })
+
+  it('🔴 命令里不许出现「写了但不会展开」的 $VAR —— 那会把字面量发出去', () => {
+    const literals: string[] = []
+    for (const c of cronEnvBlocks()) {
+      const expanded = new Set(expandedVars(c.startCommand))
+      const written = Array.from(c.startCommand.matchAll(/\$\{?([A-Z][A-Z0-9_]{2,})\}?/g)).map(
+        (m) => m[1],
+      )
+      for (const v of written) {
+        if (!expanded.has(v)) literals.push(`${c.service}: $${v} 在单引号或转义里，不会展开`)
+      }
+    }
+    expect(
+      literals,
+      `这些 cron 会把字面量当值发出去（空 Bearer → 401，日志里跟「没跑」长得一样）：\n${literals.join('\n')}`,
+    ).toEqual([])
+  })
+
+  it('🔴 每条 cron 命令里展开的变量，那条服务自己必须注入了它（引用 ≠ 拿得到）', () => {
+    const broken: string[] = []
+    for (const c of cronEnvBlocks()) {
+      if (c.fromGroup) continue // 组里有什么，仓库里看不到
+      for (const v of expandedVars(c.startCommand)) {
+        if (!c.keys.includes(v)) broken.push(`${c.service}: 命令用了 $${v}，但 envVars 里没有它`)
+      }
+    }
+    expect(
+      broken,
+      `这些 cron 会带着空值去请求（最典型就是空 Bearer 换来 401，而日志里跟「没跑」长得一样）：\n${broken.join('\n')}`,
     ).toEqual([])
   })
 
