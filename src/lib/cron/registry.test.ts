@@ -23,7 +23,12 @@ function parseRenderYaml(): ParsedCron[] {
   while ((m = re.exec(txt)) !== null) {
     const schedule = /schedule:\s*"([^"]+)"/.exec(m[2])?.[1] ?? ''
     const routes = Array.from(m[2].matchAll(/\/api\/cron\/([a-z0-9-]+)/g)).map((x) => x[1])
-    const startCommand = /startCommand: \|\n((?:[ \t]+.*\n)+)/.exec(m[2])?.[1] ?? ''
+    // 块格式 `startCommand: |` 和单行格式 `startCommand: node x.js` 都要认。
+    // 只认块格式的话，单行写法会被解析成空串 —— 那是「没解析到」冒充「没有命令」。
+    const startCommand =
+      /startCommand: \|\n((?:[ \t]+.*\n)+)/.exec(m[2])?.[1] ??
+      /startCommand:[ \t]+(\S.*)/.exec(m[2])?.[1] ??
+      ''
     out.push({ service: m[1], schedule, routes, startCommand })
   }
   return out
@@ -140,10 +145,11 @@ describe('cron 触发、web 进程读取的开关：docs/ENV.md 的「配在哪�
 
   it('前提成立：解析器读到了 cron，也读到了 ENV.md 的表（正则写歪不许静默变绿）', () => {
     expect(parsed.length).toBeGreaterThan(30)
-    // 只确认每条 startCommand 都解析出来了。这里**不**断言「全部 cron 都是 curl」——
-    // 以后新增一条正当的、在自己进程里跑 node 的 cron，不该让这个无关的断言变红；
-    // 「只能 curl」的约束下面按任务单独验，只管本文件真正关心的那两条。
-    expect(parsed.filter((p) => p.startCommand.trim() === '').map((p) => p.service)).toEqual([])
+    // 这里对 startCommand 只管本文件受检的那两条任务。**不**对全部 cron 设任何约束 ——
+    // 无论是「必须 curl」还是「必须写成块格式」，都会让一条正当的新 cron 弄红一个跟它
+    // 毫无关系的断言。受检任务自己的「只能 curl」在下面各自验。
+    const checked = CRON_TRIGGERED_WEB_FLAGS.map((f) => parsed.find((p) => p.service === f.service))
+    expect(checked.filter((p) => (p?.startCommand ?? '').trim() === '')).toEqual([])
     expect(envDocLocation('CRON_SECRET')).toContain('cron')
     expect(envDocLocation('NEXT_PUBLIC_SUPABASE_ANON_KEY')).toBe('Render-web')
     expect(envDocLocation('THIS_ENV_DOES_NOT_EXIST')).toBeNull()

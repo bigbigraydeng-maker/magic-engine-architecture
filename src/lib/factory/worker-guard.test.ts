@@ -84,13 +84,21 @@ describe('FACTORY_WORKER_CLIENT_IDS 配在哪', () => {
   const ROOT = path.resolve(__dirname, '../../..')
   const ENV_NAME = 'FACTORY_WORKER_CLIENT_IDS'
 
-  /** 递归收集源码文件(跳过 node_modules / .next 等构建产物)。 */
+  /**
+   * 递归收集**运行时**源码文件。
+   *
+   * 跳过 node_modules / .next 等构建产物，也跳过测试本身(`__tests__` 目录和
+   * `*.test.*` / `*.spec.*`)—— 测试里出现 ENV.FACTORY_WORKER_CLIENT_IDS 或调用
+   * workerClientWhitelist 是正常的，不是「运行时多了个读取方」。按目录和后缀统一排除，
+   * 而不是给当前这个文件开特例，否则下一个测试文件照样会误报。
+   */
   function walk(dir: string): string[] {
     if (!existsSync(dir)) return []
     return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
       if (e.name === 'node_modules' || e.name.startsWith('.')) return []
       const full = path.join(dir, e.name)
-      if (e.isDirectory()) return walk(full)
+      if (e.isDirectory()) return e.name === '__tests__' ? [] : walk(full)
+      if (/\.(test|spec)\.(ts|tsx|mjs|cjs|js|py)$/.test(e.name)) return []
       return /\.(ts|tsx|mjs|cjs|js|py)$/.test(e.name) ? [full] : []
     })
   }
@@ -104,14 +112,20 @@ describe('FACTORY_WORKER_CLIENT_IDS 配在哪', () => {
     `(?:process\\.env|\\bENV|\\benv)\\s*(?:\\.\\s*${ENV_NAME}\\b|\\[\\s*['"\`]${ENV_NAME}['"\`]\\s*\\])`,
   )
 
-  const readers = [...walk(path.join(ROOT, 'src')), ...walk(path.join(ROOT, 'scripts'))]
-    .filter((f) => !f.endsWith('worker-guard.test.ts'))
+  const runtimeFiles = [...walk(path.join(ROOT, 'src')), ...walk(path.join(ROOT, 'scripts'))]
+
+  const readers = runtimeFiles
     .filter((f) => READ_PATTERN.test(readFileSync(f, 'utf8')))
     .map((f) => path.relative(ROOT, f))
 
   it('前提成立:扫到的源码文件数量正常(走空了就不许静默变绿)', () => {
-    expect(walk(path.join(ROOT, 'src')).length).toBeGreaterThan(500)
+    expect(walk(path.join(ROOT, 'src')).length).toBeGreaterThan(400)
     expect(walk(path.join(ROOT, 'scripts')).length).toBeGreaterThan(5)
+  })
+
+  it('前提成立:遍历确实把测试排除在外了(包括本文件)', () => {
+    expect(runtimeFiles.some((f) => f.endsWith('worker-guard.test.ts'))).toBe(false)
+    expect(runtimeFiles.some((f) => /(\.test\.|\.spec\.|__tests__)/.test(f))).toBe(false)
   })
 
   it('前提成立:读取方匹配式认得本仓真实用过的两种写法,且不把错误文案当成读取', () => {
@@ -126,9 +140,8 @@ describe('FACTORY_WORKER_CLIENT_IDS 配在哪', () => {
   })
 
   it('🔴 读它的那个函数只被 web 路由用 —— 没有常驻 worker 进程碰它', () => {
-    const importers = walk(path.join(ROOT, 'src'))
-      .concat(walk(path.join(ROOT, 'scripts')))
-      .filter((f) => !f.endsWith('worker-guard.ts') && !f.endsWith('worker-guard.test.ts'))
+    const importers = runtimeFiles
+      .filter((f) => !f.endsWith('worker-guard.ts'))
       .filter((f) => readFileSync(f, 'utf8').includes('workerClientWhitelist'))
       .map((f) => path.relative(ROOT, f))
     expect(importers.length).toBeGreaterThan(0)
