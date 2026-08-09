@@ -116,11 +116,19 @@ const CRON_TRIGGERED_WEB_FLAGS: { env: string; service: string }[] = [
   { env: 'JOB_SIGNAL_INGEST_ENABLED', service: 'job-boards-weekly' },
 ]
 
-/** startCommand 里除了 curl 还跑别的东西吗？跑了，才轮到 Render-cron 这一栏。 */
-function runsCodeInProcess(startCommand: string): boolean {
-  return /(^|\s|&&\s*|;\s*)(node|npm|npx|tsx|ts-node|python3?|bash|sh)\s/.test(
-    startCommand.replace(/\\\n/g, ' '),
-  )
+/**
+ * startCommand 是不是**只**由 curl 调用组成。
+ *
+ * 用允许列表，不用「禁止 node/npm/…」那种黑名单 —— 黑名单永远枚举不全：
+ * `./scripts/foo.mjs`、`/usr/bin/node foo.js`、`bun foo.ts` 都能绕过去，而只要
+ * 其中任何一条在 cron 进程里跑并读了这个开关，本文件的结论（配 Render-web）就错了，
+ * 测试却还是绿的。所以这里反过来问：拆开的每一段是不是都是 curl？
+ */
+function isCurlOnly(startCommand: string): boolean {
+  const flat = startCommand.replace(/\\\s*\n/g, ' ').replace(/\s+/g, ' ').trim()
+  if (flat === '') return false
+  const segments = flat.split(/&&|\|\||;|\||\n/).map((s) => s.trim()).filter((s) => s !== '')
+  return segments.length > 0 && segments.every((s) => /^curl(\s|$)/.test(s))
 }
 
 /** docs/ENV.md 里某个变量所在行的「配在哪」那一格（列位置按所属表格的表头定，不写死）。 */
@@ -155,13 +163,27 @@ describe('cron 触发、web 进程读取的开关：docs/ENV.md 的「配在哪�
     expect(envDocLocation('THIS_ENV_DOES_NOT_EXIST')).toBeNull()
   })
 
+  it('前提成立：isCurlOnly 是允许列表 —— 黑名单枚举不到的那几种写法必须也判成「不只是 curl」', () => {
+    expect(isCurlOnly('curl -fsS https://x/y \\\n  && curl -fsS https://hc-ping.com/z\n')).toBe(true)
+    expect(isCurlOnly('curl -fsS https://x/y\n')).toBe(true)
+    // 下面这些黑名单版全都漏判成「只是 curl」，允许列表版必须拦住
+    expect(isCurlOnly('curl -fsS https://x/y && ./scripts/foo.mjs\n')).toBe(false)
+    expect(isCurlOnly('/usr/bin/node foo.js\n')).toBe(false)
+    expect(isCurlOnly('bun foo.ts\n')).toBe(false)
+    expect(isCurlOnly('curl -fsS https://x/y | sh\n')).toBe(false)
+    expect(isCurlOnly('node scripts/x.mjs\n')).toBe(false)
+    expect(isCurlOnly('')).toBe(false)
+  })
+
   describe.each(CRON_TRIGGERED_WEB_FLAGS)('$env', ({ env, service }) => {
     const svc = parsed.find((p) => p.service === service)
 
     it(`${service} 这条 cron 还在，而且只是 curl —— 一旦它改成在自己进程里跑脚本，这个变量要挪回 Render-cron`, () => {
       expect(svc, `render.yaml 里没有名为 ${service} 的 cron 了`).toBeDefined()
-      expect(svc!.startCommand).toContain('curl')
-      expect(runsCodeInProcess(svc!.startCommand)).toBe(false)
+      expect(
+        isCurlOnly(svc!.startCommand),
+        `${service} 的 startCommand 不再是纯 curl（拆开后有非 curl 的段）：${svc!.startCommand.trim()}`,
+      ).toBe(true)
     })
 
     it('确实是在它 curl 打的那条路由里 process.env 读的（路由路径从 render.yaml 推，不写死）', () => {
