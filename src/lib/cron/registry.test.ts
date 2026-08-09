@@ -309,9 +309,12 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
   function cronDeclaredKeys(): Set<string> {
     const txt = readFileSync(path.join(ROOT, 'render.yaml'), 'utf8')
     const out = new Set<string>()
-    for (const m of txt.matchAll(/-\s+type:\s+cron\s*\n\s+name:\s*\S+([\s\S]*?)(?=\n\s*-\s+type:|$)/g)) {
-      for (const k of m[1].matchAll(/-\s+key:\s*(\S+)/g)) out.add(k[1])
-      for (const g of m[1].matchAll(/fromGroup:\s*(\S+)/g)) out.add(g[1])
+    const blocks = Array.from(
+      txt.matchAll(/-\s+type:\s+cron\s*\n\s+name:\s*\S+([\s\S]*?)(?=\n\s*-\s+type:|$)/g),
+    )
+    for (const m of blocks) {
+      Array.from(m[1].matchAll(/-\s+key:\s*(\S+)/g)).forEach((k) => out.add(k[1]))
+      Array.from(m[1].matchAll(/fromGroup:\s*(\S+)/g)).forEach((g) => out.add(g[1]))
     }
     return out
   }
@@ -329,7 +332,7 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
       if (h >= 0) { col = h; continue }
       if (col < 0 || col >= cells.length) continue
       if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue
-      for (const m of cells[0].matchAll(/`([A-Z][A-Z0-9_]{2,})`/g)) out.set(m[1], cells[col])
+      Array.from(cells[0].matchAll(/`([A-Z][A-Z0-9_]{2,})`/g)).forEach((m) => out.set(m[1], cells[col]))
     }
     return out
   }
@@ -358,7 +361,7 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
   })
 
   it('🔴 标着上 cron 的变量，必须真的在某条 cron 的 envVars 里声明过', () => {
-    const offenders = [...locations.entries()]
+    const offenders = Array.from(locations.entries())
       .filter(([, where]) => claimsCron(where))
       .filter(([env]) => !declared.has(env))
       .map(([env, where]) => `${env} → 「${where}」`)
@@ -369,7 +372,7 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
   })
 
   it('真正给 cron 用的变量保留 cron 标注 —— 这条不是「一律不许写 cron」', () => {
-    const kept = [...locations.entries()].filter(([, w]) => claimsCron(w)).map(([e]) => e)
+    const kept = Array.from(locations.entries()).filter(([, w]) => claimsCron(w)).map(([e]) => e)
     expect(kept.length, 'cron 标注被清空了，那说明上面那条退化成了「一律禁止」').toBeGreaterThan(0)
     expect(kept.every((e) => declared.has(e))).toBe(true)
   })
