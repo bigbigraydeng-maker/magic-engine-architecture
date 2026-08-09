@@ -338,9 +338,34 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
    * 一串字面量去请求（真发生过就是 401），把它算成「读取方」等于把坏掉的配置判成对的。
    * 所以先把转义和单引号段去掉再匹配。这是够用的近似，不是 shell 解析器。
    */
+  /**
+   * 把不会展开的位置盖掉，**长度保持不变** —— 这样原文和盖过的版本可以按下标对齐，
+   * 于是能逐次出现地判断，而不是按变量名去重。同一条命令里同一个名字既正常展开、
+   * 又在单引号里出现一次时，按名字去重会把后者放过去。
+   */
+  function maskNonExpanding(startCommand: string): string {
+    return startCommand
+      .replace(/\\\$/g, '  ')
+      .replace(/'[^']*'/g, (q) => ' '.repeat(q.length))
+  }
+
+  const VAR_RE = /\$\{?([A-Z][A-Z0-9_]{2,})\}?/g
+
+  /** 命令里每一次 `$VAR` 出现：名字 + 下标 + 这一次会不会真的展开。 */
+  function varOccurrences(startCommand: string): { name: string; index: number; expands: boolean }[] {
+    const masked = maskNonExpanding(startCommand)
+    const expandedAt = new Set(
+      Array.from(masked.matchAll(VAR_RE)).map((m) => m.index as number),
+    )
+    return Array.from(startCommand.matchAll(VAR_RE)).map((m) => ({
+      name: m[1],
+      index: m.index as number,
+      expands: expandedAt.has(m.index as number),
+    }))
+  }
+
   function expandedVars(startCommand: string): string[] {
-    const expandable = startCommand.replace(/\\\$/g, ' ').replace(/'[^']*'/g, ' ')
-    return Array.from(expandable.matchAll(/\$\{?([A-Z][A-Z0-9_]{2,})\}?/g)).map((m) => m[1])
+    return varOccurrences(startCommand).filter((o) => o.expands).map((o) => o.name)
   }
 
   type CronEnv = { service: string; startCommand: string; keys: string[]; fromGroup: boolean }
@@ -396,24 +421,27 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
     ).toEqual([])
   })
 
-  it('前提成立：展开判定认得单引号 / 转义这两种「不展开」的写法', () => {
+  it('前提成立：展开判定认得单引号 / 转义，而且是逐次出现地判，不是按名字去重', () => {
     expect(expandedVars('curl -H "Authorization: Bearer $CRON_SECRET" https://x')).toEqual(['CRON_SECRET'])
     expect(expandedVars('curl -H "Bearer ${CRON_SECRET}" https://x')).toEqual(['CRON_SECRET'])
     // 单引号里不展开，shell 会把字面量发出去（真发生过就是 401）
     expect(expandedVars("curl -H 'Authorization: Bearer $CRON_SECRET' https://x")).toEqual([])
     // 转义同理
     expect(expandedVars('curl -H "Bearer \\$CRON_SECRET" https://x')).toEqual([])
+    // 🔴 同一条命令里同一个名字，一次展开一次不展开 —— 按名字去重会把后者放过去
+    const mixed = 'curl -H "Bearer $CRON_SECRET" "https://x?t=\'$CRON_SECRET\'"'
+    expect(varOccurrences(mixed).map((o) => o.expands)).toEqual([true, false])
+    // 掩码必须保长，否则下标对不齐，逐次判定就退化了
+    expect(maskNonExpanding(mixed)).toHaveLength(mixed.length)
   })
 
   it('🔴 命令里不许出现「写了但不会展开」的 $VAR —— 那会把字面量发出去', () => {
     const literals: string[] = []
     for (const c of cronEnvBlocks()) {
-      const expanded = new Set(expandedVars(c.startCommand))
-      const written = Array.from(c.startCommand.matchAll(/\$\{?([A-Z][A-Z0-9_]{2,})\}?/g)).map(
-        (m) => m[1],
-      )
-      for (const v of written) {
-        if (!expanded.has(v)) literals.push(`${c.service}: $${v} 在单引号或转义里，不会展开`)
+      for (const o of varOccurrences(c.startCommand)) {
+        if (!o.expands) {
+          literals.push(`${c.service}: 第 ${o.index} 个字符处的 $${o.name} 在单引号或转义里，不会展开`)
+        }
       }
     }
     expect(
@@ -449,9 +477,10 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
 
   it('🔴 反向：cron 命令里真的用到的变量，文档必须保留 cron 标注', () => {
     const missing = Array.from(referenced)
-      .filter((env) => locations.has(env))
-      .filter((env) => !claimsCron(locations.get(env)!))
-      .map((env) => `${env} → 「${locations.get(env)}」`)
+      .filter((env) => !locations.has(env) || !claimsCron(locations.get(env)!))
+      .map((env) =>
+        locations.has(env) ? `${env} → 「${locations.get(env)}」` : `${env} → ENV.md 里压根没登记`,
+      )
     expect(
       missing,
       `这些变量 cron 的命令里真的要用，但文档没标 cron —— 照文档配会漏掉 cron 那份：\n${missing.join('\n')}`,
