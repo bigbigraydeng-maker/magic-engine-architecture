@@ -323,7 +323,7 @@ function allEnvDocLocations(): Map<string, string> {
     if (h >= 0) { col = h; continue }
     if (col < 0 || col >= cells.length) continue
     if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue
-    Array.from(cells[0].matchAll(/`([A-Z][A-Z0-9_]{2,})`/g)).forEach((m) => out.set(m[1], cells[col]))
+    Array.from(cells[0].matchAll(/`([A-Z][A-Z0-9_]*)`/g)).forEach((m) => out.set(m[1], cells[col]))
   }
   return out
 }
@@ -369,7 +369,8 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
     return out.join('')
   }
 
-  const VAR_RE = /\$\{?([A-Z][A-Z0-9_]{2,})\}?/g
+  // 名字长度不设下限：`$TZ`、`$X` 都是合法环境变量，卡 3 个字符会让它们被整个忽略
+  const VAR_RE = /\$\{?([A-Z][A-Z0-9_]*)\}?/g
 
   /** 命令里每一次 `$VAR` 出现：名字 + 下标 + 这一次会不会真的展开。 */
   function varOccurrences(startCommand: string): { name: string; index: number; expands: boolean }[] {
@@ -454,6 +455,9 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
     // 掩码必须保长，否则下标对不齐，逐次判定就退化了
     expect(maskNonExpanding(mixed)).toHaveLength(mixed.length)
 
+    // 🔴 短名字也是合法环境变量，不许因为长度被整个忽略
+    expect(expandedVars('curl -H "X: $TZ" https://x')).toEqual(['TZ'])
+    expect(expandedVars('curl -H "X: ${X}" https://x')).toEqual(['X'])
     // 🔴 双引号里的 `'` 是普通字符，里面的 $VAR 照样展开（正则配对会判成不展开）
     expect(expandedVars('curl "https://x?t=\'$CRON_SECRET\'"')).toEqual(['CRON_SECRET'])
     // 🔴 反过来：双引号里出现一个撇号，不该跟后面真正的单引号段配成一对
