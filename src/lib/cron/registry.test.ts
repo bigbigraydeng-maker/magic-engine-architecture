@@ -291,3 +291,86 @@ describe('cron 触发、web 进程读取的开关：docs/ENV.md 的「配在哪�
     })
   })
 })
+
+/**
+ * 标着「要配到 cron service 上」的变量，必须真的在 cron 进程里读得到。
+ *
+ * 本仓每条 cron 的 startCommand 都只是一条 curl 打 web 上的 /api/cron/*，
+ * cron 进程里唯一读得到的就是那条 curl 自己要用的 CRON_SECRET。业务变量标成
+ * Render-cron，运维照着配就是配到一个永远读不到的地方 —— 而且不报错。
+ *
+ * 下面不写死任何变量名单：cron 的资格是从 render.yaml 各 cron 服务的 envVars 里推的。
+ * 哪天某条 cron 真的开始在自己进程里跑脚本、并给自己声明业务变量，这条自然放行。
+ */
+describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron 上', () => {
+  const parsed = parseRenderYaml()
+
+  /** render.yaml 里各 cron 服务 envVars 声明过的 key（含 fromGroup 引来的组名）。 */
+  function cronDeclaredKeys(): Set<string> {
+    const txt = readFileSync(path.join(ROOT, 'render.yaml'), 'utf8')
+    const out = new Set<string>()
+    for (const m of txt.matchAll(/-\s+type:\s+cron\s*\n\s+name:\s*\S+([\s\S]*?)(?=\n\s*-\s+type:|$)/g)) {
+      for (const k of m[1].matchAll(/-\s+key:\s*(\S+)/g)) out.add(k[1])
+      for (const g of m[1].matchAll(/fromGroup:\s*(\S+)/g)) out.add(g[1])
+    }
+    return out
+  }
+
+  /** docs/ENV.md 全表：变量名 → 「配在哪」那一格。 */
+  function allEnvDocLocations(): Map<string, string> {
+    const lines = readFileSync(path.join(ROOT, 'docs/ENV.md'), 'utf8').split('\n')
+    const cellsOf = (l: string) => l.split('|').slice(1, -1).map((c) => c.trim())
+    const out = new Map<string, string>()
+    let col = -1
+    for (const line of lines) {
+      if (!line.trimStart().startsWith('|')) { col = -1; continue }
+      const cells = cellsOf(line)
+      const h = cells.findIndex((c) => c.includes('配在哪'))
+      if (h >= 0) { col = h; continue }
+      if (col < 0 || col >= cells.length) continue
+      if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue
+      for (const m of cells[0].matchAll(/`([A-Z][A-Z0-9_]{2,})`/g)) out.set(m[1], cells[col])
+    }
+    return out
+  }
+
+  const declared = cronDeclaredKeys()
+  const locations = allEnvDocLocations()
+  /** 「配在哪」里声称要上 cron 的写法：Render-cron / 全部 cron / + cron。 */
+  const claimsCron = (where: string) => /Render-cron|全部 cron|\+\s*cron/.test(where)
+
+  it('前提成立：两个解析器都读到了东西（走空不许静默变绿）', () => {
+    expect(parsed.length).toBeGreaterThan(30)
+    expect(locations.size).toBeGreaterThan(50)
+    expect(declared.size).toBeGreaterThan(0)
+    expect(claimsCron('Render-web + 全部 cron')).toBe(true)
+    expect(claimsCron('Render-cron')).toBe(true)
+    expect(claimsCron('Render-web')).toBe(false)
+    expect(claimsCron('Render-web + worker `content-factory-render-worker`')).toBe(false)
+  })
+
+  it('🔴 每条 cron 都只是 curl —— 所以业务变量配到 cron 上读不到（哪天有 cron 自己跑脚本，这条会红，提醒重判）', () => {
+    const inProcess = parsed.filter((p) => !isCurlOnly(p.startCommand)).map((p) => p.service)
+    expect(
+      inProcess,
+      `这些 cron 不再是纯 curl，跟它们相关的变量要重新判定配在哪：${inProcess.join(', ')}`,
+    ).toEqual([])
+  })
+
+  it('🔴 标着上 cron 的变量，必须真的在某条 cron 的 envVars 里声明过', () => {
+    const offenders = [...locations.entries()]
+      .filter(([, where]) => claimsCron(where))
+      .filter(([env]) => !declared.has(env))
+      .map(([env, where]) => `${env} → 「${where}」`)
+    expect(
+      offenders,
+      `cron 进程读不到这些变量（没有任何 cron 服务声明过它们），文档这么写会让人配到不生效的地方：\n${offenders.join('\n')}`,
+    ).toEqual([])
+  })
+
+  it('真正给 cron 用的变量保留 cron 标注 —— 这条不是「一律不许写 cron」', () => {
+    const kept = [...locations.entries()].filter(([, w]) => claimsCron(w)).map(([e]) => e)
+    expect(kept.length, 'cron 标注被清空了，那说明上面那条退化成了「一律禁止」').toBeGreaterThan(0)
+    expect(kept.every((e) => declared.has(e))).toBe(true)
+  })
+})
