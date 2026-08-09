@@ -880,6 +880,16 @@ async function runSteps(
         lastError = null
         break
       } catch (err) {
+        // 🔴 **失去执行权就一个字都不许写 —— 包括「落死信」这一步。**
+        //
+        //    写入围栏比的是**代际**，而「转人工」「人工恢复」这两条路会清空
+        //    `claimed_by` 却不换代际 —— 于是旧执行者的代际仍然对得上，
+        //    `writeStep` / `failRun` 照写不误，把人工写下的 `last_error`
+        //    （比如「先确认供应商那边扣没扣钱」）覆盖成「被接管了」。
+        //    人再看这条待办时，那句真正要他去做的事已经没了。
+        //    实测过：park 的原因确实会被冲掉。所以这里直接往外抛，不落任何状态。
+        if (err instanceof KernelError && err.code === 'STALE_CLAIM') throw err
+
         lastError = err
 
         // 🔴 P1-4：**provider 已经收了钱、然后才抛错**（超时 / 解析失败 / 502）。

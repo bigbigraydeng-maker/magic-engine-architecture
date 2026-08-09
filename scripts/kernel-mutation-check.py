@@ -1423,6 +1423,19 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         test="src/lib/kernel/__tests__/architecture.test.ts",
         expect_fail_contains="没有两个文件用同一个版本号",
     ),
+    # ── R11-1：失去执行权之后连「落死信」都不许写 ────────────────────────
+    dict(
+        # 只删这一句，其它闸原样保留：写入围栏只比代际，而 park 清 owner 不换代际，
+        # 所以旧执行者的 writeStep / failRun 照写不误，会把人工处置的原话冲掉。
+        name="R11-1 失去 owner 之后仍然继续落死信（覆盖人工处置的原话）",
+        file="src/lib/kernel/gateway.ts",
+        old="""        if (err instanceof KernelError && err.code === 'STALE_CLAIM') throw err
+
+        lastError = err""",
+        new="""        lastError = err""",
+        test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
+        expect_fail_contains="handler 跑着的时候这条 run 被转人工",
+    ),
 ]
 
 

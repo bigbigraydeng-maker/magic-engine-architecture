@@ -19,6 +19,9 @@
 > 第九轮：同步最新 main，基线全部重测。
 > 第十轮（Codex review 7）：转人工**真的落库** · handler 跑着时**续租** ·
 > 业务副作用的库级唯一兜底 · 待办不再假装有审批入口（KERNEL-E7-APPROVAL-SURFACE）。
+> 第十一轮（Codex review 8）：**失去执行权之后连「落死信」都不许写** ——
+> 人工处置写下的原话不会被旧执行者覆盖；另两条登记为 Enable 前硬前提
+> （KERNEL-E8-ACTIVE-BRIEF-SELECTION · KERNEL-E9-IDEMPOTENCY-LINEAGE-SEMANTICS）。
 
 ---
 
@@ -773,6 +776,8 @@ ALTER TABLE public.flywheel_actions DROP COLUMN IF EXISTS action_run_id;
 |---|---|---|
 | 1 | 注册表还没反向注入 agent prompt | `zhuge/conductor.ts` 仍要求模型「action_type 是一个 snake_case 短词」，生成端还是开放词汇表。不补的话，注册表会从「36 种自由文本」变成「36 种自由文本 + 一张对不上的表」 |
 | **2b** | 🔴 **`KERNEL-E7-APPROVAL-SURFACE`（Enable 前硬前提）** | 全仓**没有任何页面 / 接口读 `action_runs`**，也没有任何地方调 `approveAndRun` / `rejectPendingRun`。所以「等人点头」这条路现在**根本没有入口**。接真实调用方 / apply 迁移 / 启用**任何可能产生 `pending_approval` 的动作**之前，下面七件必须先有：① 认证过的操作者身份（不能信请求体里的 `approvedByUser`）；② 真能读到 `action_run` + 当前那条 pending 决策的 UI 或 API；③ 同意 → `approveAndRun`；④ 不做 → `rejectPendingRun`；⑤ 已结束 / 已被别人处理（settled / stale）如实反馈；⑥ 客户归属与授权校验；⑦ 审批操作留审计。**本 PR 不实现它，也不假装它存在** —— 待办文案已改成如实说「入口还没上线、这条已经安全停住、不会自动执行」，**不给假的 action URL**；渲染器在没有 href 时也不再画出「去做这件事」按钮。两条守卫测试盯着不许回退 |
+| **2c** | 🔴 **`KERNEL-E8-ACTIVE-BRIEF-SELECTION`（接第一个真实调用方 / Enable 前硬前提）** | `build-publish-package` 现在读 `master_briefs` 是**无状态过滤、无排序的 `limit(1)`** —— 客户留着历史版本时可能挑到 archived 或旧版；客户压根没有 active 底稿时，动作照样"成功"生成一个挂错底稿的包，而当前 verification 只查外键解得开，看不出选错版本。启用前必须：① 只选 active（跟仓库其它品牌底稿读取路径同一口径）；② 多版本按 version 倒序确定性选择；③ **没有 active 底稿必须 fail closed**，不许静默用旧的。**本 PR 不改** —— 生产实测每个客户只有一条 active 底稿，且 #863 没有调用方、没有 Enable，构不成当前风险 |
+| **2d** | 🔴 **`KERNEL-E9-IDEMPOTENCY-LINEAGE-SEMANTICS`（接第一个真实调用方前必须先定产品语义）** | 幂等键**不含** `goal_id` / `execution_item_id`。同一客户拿同一份物理内容换一个 Goal / 换一张执行卡片再提交时，会命中第一条 run 并按幂等成功返回，但库里的归因仍只指向第一次提交 —— 第二个目标的执行 lineage 就没了。两条路都成立、语义不同，必须先由产品拍板：**A** 归因对不上就拒绝；**B** 物理产物保持唯一、另外记一条 lineage 关联。**语义没定之前不许偷偷改幂等键** —— 改了等于把「同一份内容只做一次」这条保证悄悄换掉。当前没有任何调用方能造出这个场景 |
 | 2 | 没有政策的 Settings UI | 现在只能写 SQL 插政策行。按 CLAUDE.md「FDE/PM 要填的字段必须连 Settings UI 一起做完」，启用前必须补 |
 | 3 | 没有调用方 | 内核建好了但没人提交动作。这是刻意的（v1 = 零运行时接线） |
 | 4 | **`spend_cap_per_period_usd`：RESERVED · NOT ENFORCED · 设置页先别暴露** | 只有列，没有任何判定逻辑。单次上限（`spend_cap_per_run_usd`）已生效。在 enforcement 落地之前，任何 UI 把它显示成「已生效的安全上限」= 给人一个假的安全感 |

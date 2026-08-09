@@ -492,26 +492,44 @@ describe('P1-2b · handler 返回之后必须复核「我还握着执行权吗�
     const parked = await parkRunForHuman(f.supabase, {
       runId: String(runRow(f).id),
       expectedGeneration: genDuring,
-      reason: '人工介入',
+      reason: '人工介入：先确认供应商那边扣没扣钱',
     })
     expect(parked.ok).toBe(true)
     expect(runRow(f).claimed_by).toBeNull()
     // 🔴 代际没动 —— 所以写入围栏这时是**拦不住**旧执行者的
     expect(Number(runRow(f).claim_generation)).toBe(genDuring)
 
+    // 人工处置写下的那份说法 —— 下面逐字比对，一个标点都不许被冲掉
+    const human = {
+      lastError: String(runRow(f).last_error),
+      finishedAt: String(runRow(f).finished_at),
+      evidence: JSON.stringify(runRow(f).evidence ?? {}),
+    }
+    expect(human.lastError).toBe('人工介入：先确认供应商那边扣没扣钱')
+
     release()
     const out = await running
 
-    // 🔴 绝不能是 succeeded —— 那等于把「人工已经把它停住」这件事覆盖掉
-    if (out.ok) {
-      expect(out.v.kind).not.toBe('succeeded')
-      expect(out.v.execution?.failure?.code).toBe('STALE_CLAIM')
-    } else {
-      expect(out.e.message).toMatch(/接管/)
-    }
+    // 🔴 直接冒泡，不是「跑完再报一个失败」—— 报失败的路上就会写状态
+    expect(out.ok).toBe(false)
+    if (out.ok) throw new Error('unreachable')
+    expect(out.e.message).toMatch(/接管/)
+
     expect(runRow(f).status).toBe('dead_letter')
     expect(runRow(f).needs_human).toBe(true)
     // 产物也没被写出去
     expect(f.tables.action_run_steps.every((st) => st.status !== 'succeeded')).toBe(true)
+
+    // 🔴 **人工写下的那份处置必须原样还在。**
+    //    写入围栏比的是代际，而 park 清 owner 不换代际 —— 旧执行者的
+    //    `writeStep` / `failRun` 本来照写不误，会把「请确认供应商那边扣没扣钱」
+    //    覆盖成「被接管了」，`finished_at` 也会被推到它自己停手的那一刻。
+    //    人再看这条待办时，真正要他去做的事就没了。
+    expect(runRow(f).last_error).toBe(human.lastError)
+    expect(String(runRow(f).last_error)).not.toContain('接管')
+    expect(String(runRow(f).finished_at)).toBe(human.finishedAt)
+    expect(JSON.stringify(runRow(f).evidence ?? {})).toBe(human.evidence)
+    // 步骤也不许被旧执行者改写
+    expect(f.tables.action_run_steps.every((st) => st.status !== 'dead_letter')).toBe(true)
   })
 })
