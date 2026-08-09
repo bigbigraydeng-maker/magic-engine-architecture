@@ -342,11 +342,31 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
    * 把不会展开的位置盖掉，**长度保持不变** —— 这样原文和盖过的版本可以按下标对齐，
    * 于是能逐次出现地判断，而不是按变量名去重。同一条命令里同一个名字既正常展开、
    * 又在单引号里出现一次时，按名字去重会把后者放过去。
+   *
+   * 必须按引号**状态**逐字符扫，不能拿正则全局配对任意两个 `'`：
+   *   - 双引号里的 `'` 是普通字符，`"…'\$X'…"` 里的 $X 照样展开；
+   *   - 拿正则配对会把双引号里的撇号跟后面真正的单引号配成一段，两个方向都判错。
+   * 这是引号/转义状态机，不是 shell 解析器 —— 不处理 here-doc、$'…' 这类扩展语法。
    */
   function maskNonExpanding(startCommand: string): string {
-    return startCommand
-      .replace(/\\\$/g, '  ')
-      .replace(/'[^']*'/g, (q) => ' '.repeat(q.length))
+    const out = startCommand.split('')
+    let inSingle = false
+    let inDouble = false
+    for (let i = 0; i < startCommand.length; i++) {
+      const ch = startCommand[i]
+      // 单引号里没有转义；其余位置反斜杠吃掉下一个字符（`\$` 就是这样不展开的）
+      if (!inSingle && ch === '\\') {
+        out[i] = ' '
+        if (i + 1 < startCommand.length) out[i + 1] = ' '
+        i++
+        continue
+      }
+      // 双引号里的 `'` 是普通字符，不开单引号段；单引号里的 `"` 同理
+      if (!inDouble && ch === "'") { inSingle = !inSingle; continue }
+      if (!inSingle && ch === '"') { inDouble = !inDouble; continue }
+      if (inSingle) out[i] = ' '
+    }
+    return out.join('')
   }
 
   const VAR_RE = /\$\{?([A-Z][A-Z0-9_]{2,})\}?/g
@@ -429,10 +449,15 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
     // 转义同理
     expect(expandedVars('curl -H "Bearer \\$CRON_SECRET" https://x')).toEqual([])
     // 🔴 同一条命令里同一个名字，一次展开一次不展开 —— 按名字去重会把后者放过去
-    const mixed = 'curl -H "Bearer $CRON_SECRET" "https://x?t=\'$CRON_SECRET\'"'
+    const mixed = 'curl -H "Bearer $CRON_SECRET" \'$CRON_SECRET\''
     expect(varOccurrences(mixed).map((o) => o.expands)).toEqual([true, false])
     // 掩码必须保长，否则下标对不齐，逐次判定就退化了
     expect(maskNonExpanding(mixed)).toHaveLength(mixed.length)
+
+    // 🔴 双引号里的 `'` 是普通字符，里面的 $VAR 照样展开（正则配对会判成不展开）
+    expect(expandedVars('curl "https://x?t=\'$CRON_SECRET\'"')).toEqual(['CRON_SECRET'])
+    // 🔴 反过来：双引号里出现一个撇号，不该跟后面真正的单引号段配成一对
+    expect(expandedVars('curl -H "\'" \'$CRON_SECRET\'')).toEqual([])
   })
 
   it('🔴 命令里不许出现「写了但不会展开」的 $VAR —— 那会把字面量发出去', () => {
