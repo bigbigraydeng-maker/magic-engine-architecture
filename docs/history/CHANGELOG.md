@@ -5,6 +5,72 @@
 
 ---
 
+### 2026-08-10（ME2 WP01：Growth Module 契约进仓 —— 上线了，但一行都还没跑）
+
+**先说清楚这条跟别的条目不一样在哪：它上线了，却不改变系统任何现有行为。**
+合进去的是一套**纯类型 + 纯校验器**，全仓**没有任何代码 import 它**
+（`grep -rn "lib/growth" src/ --exclude-dir=growth` 零结果）。
+没有数据库读写、没有 schema、没有 migration、没有 provider 调用、没有 cron 条目、
+没有 API 路由、没有 UI。它现在就是一块**躺着的契约层**，等后面的 WP 来用。
+之所以还是记进「功能完成日志」，是因为它确实进了 `main`、确实随主干部署上线了 ——
+**记它是为了让「上线了什么」这句话诚实，不是为了宣称交付了什么能力。**
+
+PR [#890](https://github.com/bigbigraydeng-maker/magic-engine/pull/890) ·
+issue [#877](https://github.com/bigbigraydeng-maker/magic-engine/issues/877) ·
+父史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872) ·
+合并提交 `700f57e` · 两个提交 `3171de1` + `cc8958d` · 五个新文件 `+1148` 行 ·
+**零个既有文件被修改**。
+
+**它是什么**：`src/lib/growth/` —— 任何 Domain Module（GEO Module 是第一个）
+共用的五段推理契约 `observe → diagnose → prescribe → propose → verify`，
+落成五个带 `Growth` 前缀的概念：`GrowthEvidence` / `GrowthFinding` /
+`GrowthPrescription` / `GrowthActionCandidate` / `GrowthVerificationDefinition`。
+前缀不是洁癖 —— `src/types/diagnostic.ts` 里已经有语义完全不同的 `Prescription`
+和诊断 finding，同名不同事是这个仓库反复出事的形状。
+
+**几条被写进类型、而不是写进文档的红线**：
+
+- **没有 Evidence 的 Finding 不许存在** —— 校验器硬拒。既有的 `DiagnosticFinding`
+  带 `evidence` 字段但不强制，这是 ME2 侧唯一收紧的那一条。
+- **「不知道」必须显式写出来**，不许省略、不许 `null`、不许补 0。用的是判别式联合
+  （`{known:true,value}` / `{known:false,reason}`），因为 `null` 不逼消费方分支，
+  而「不知道」被读成「一样」或「一次都没有」是这个仓库吃过亏的形状。
+- **「刻意不做什么」是必填字段**（可以是空数组，但不许省略）—— 做成可选就等于永远没人填，
+  而「不做什么」正是处方区别于任务清单的地方。
+- **候选动作只有六个顶层字段，多一个就拒**。这里刻意用白名单不用黑名单：
+  本仓规定 AU/NZ 英语拼写，一个 `authorised` 就能从黑名单底下穿过去。
+- **会花钱却说不出成本上界 = 非法**，直接 fail closed。
+- **验证判据必须写满成功 / 失败 / 无法判定三档** —— 只有两档会逼着系统
+  在证据不足的时候编一个答案。
+- **动作输入必须能原样存活过一次 JSON 序列化**：稀疏数组、数组上的额外属性、
+  symbol 键、不可枚举属性、访问器、`Date`/`Map`、`NaN`、循环引用一律拒。
+  实现读的是属性描述符，**getter 一律拒绝且从不调用** —— 校验器是纯函数，
+  不能在「只是检查一下」的时候把别人的副作用跑掉。
+
+**刻意没做的事，同样重要**：不做 ActionKey 映射（归 K-WP02）· 不带授权 ·
+不落库 · 不碰 `src/lib/execution/auto-run.ts` · 不 import `writeExecutionItems` ·
+**不发明 `verification_id` / `loop_run_id` / `learning_record_id`**
+（这三个在仓库里都不是一等标识，WP00 §15 U4 仍未决）·
+**零 legacy 适配器** —— 逐字段核对过 `PriorityAction` / `DiagnosticFinding` /
+既有 `Prescription` / Kernel 的 `VerificationSpec`，**没有一个语义是完整的**，
+硬映射只能靠编数据，所以一个都不做。
+
+**边界有机器守着，不靠自觉**：新增的架构测试扫 `src/lib/growth/**`，
+禁止 import kernel / zhuge / execution / capabilities / supabase / flywheel /
+任何 provider 通道，也禁止出现 `writeExecutionItems`、`execution_items`、
+`PriorityAction`、`FlywheelMetricKey`、`'superseded'` 等符号。
+
+合并前的验证：Growth 71 条测试全过 · Kernel 架构回归 25 条全过 ·
+growth 作用域 `tsc` 零错误 · GitHub 两项检查绿。
+仓库既有的基线欠账（26 个失败测试文件、128 行 tsc 报错）**一条未修、也不声称已修**，
+它们全都在本次未触碰的文件里。
+
+**治理留痕**：本次合并由 Product Owner 显式授权。授权链与当时的分歧记录在
+[#877](https://github.com/bigbigraydeng-maker/magic-engine/issues/877) 的合并回执
+及其后续更正说明里。
+
+---
+
 ### 2026-08-09（首页覆盖率正贴着上限 —— 小客户随时会从统计里消失）
 
 **这条不是「以后可能出问题」，是随时会出。** 首页四段飞轮的覆盖率百分比，
