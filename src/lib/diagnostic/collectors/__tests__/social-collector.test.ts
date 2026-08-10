@@ -52,14 +52,31 @@ const DEFAULT_INSTAGRAM = {
   topPosts30d: DEFAULT_TOP_POSTS,
 }
 
+interface FakeRun {
+  client_id: string
+  status: string
+  dimension_scores: Record<string, number | null> | null
+  created_at: string
+}
+
 /** Builds a Supabase mock that controls cache check + client handle fetch */
 function makeSupabase(opts: {
   instagramHandle?: string | null
   /** Last measured social score within the cache window; null = no completed run scored it */
   cachedScore?: number | null
   runsError?: boolean
+  /** Raw diagnostic_runs rows, filtered by the mock the same way Postgrest would filter .eq() calls.
+   *  Use this (instead of cachedScore) to prove the collector's own filters — e.g. status='completed' —
+   *  are what keeps a non-qualifying row out, not just the mock's shorthand behaviour. */
+  runs?: FakeRun[]
 }): SupabaseClient {
-  const { instagramHandle = 'example_brand', cachedScore = null, runsError = false } = opts
+  const { instagramHandle = 'example_brand', cachedScore = null, runsError = false, runs } = opts
+
+  const defaultRows: FakeRun[] =
+    cachedScore === null
+      ? []
+      : [{ client_id: CLIENT_ID, status: 'completed', dimension_scores: { social: cachedScore }, created_at: '2026-08-01' }]
+  const allRows = runs ?? defaultRows
 
   return {
     from: vi.fn((table: string) => {
@@ -76,23 +93,25 @@ function makeSupabase(opts: {
         }
       }
       if (table === 'diagnostic_runs') {
-        const rows =
-          cachedScore === null ? [] : [{ dimension_scores: { social: cachedScore }, created_at: '2026-08-01' }]
-        return {
-          select: vi.fn().mockReturnValue({
-            eq: vi.fn().mockReturnValue({
-              eq: vi.fn().mockReturnValue({
-                gte: vi.fn().mockReturnValue({
-                  order: vi.fn().mockReturnValue({
-                    limit: vi.fn().mockResolvedValue(
-                      runsError ? { data: null, error: { message: 'boom' } } : { data: rows, error: null },
-                    ),
-                  }),
-                }),
-              }),
-            }),
-          }),
-        }
+        // Mirrors Postgrest's .eq() semantics: each .eq(col, val) call narrows what
+        // .limit() eventually resolves to, so a test can prove a filter is actually
+        // applied (not just present in the source) by including a row that would
+        // only be excluded if that filter runs.
+        const filters: Array<[keyof FakeRun, unknown]> = []
+        const chain: Record<string, ReturnType<typeof vi.fn>> = {}
+        chain.select = vi.fn().mockReturnValue(chain)
+        chain.eq = vi.fn((col: keyof FakeRun, val: unknown) => {
+          filters.push([col, val])
+          return chain
+        })
+        chain.gte = vi.fn().mockReturnValue(chain)
+        chain.order = vi.fn().mockReturnValue(chain)
+        chain.limit = vi.fn().mockImplementation(() => {
+          if (runsError) return Promise.resolve({ data: null, error: { message: 'boom' } })
+          const matched = allRows.filter(row => filters.every(([col, val]) => row[col] === val))
+          return Promise.resolve({ data: matched, error: null })
+        })
+        return chain
       }
       return {}
     }),
@@ -288,6 +307,17 @@ describe('SocialCollector.collect() — cache', () => {
     const supabase = makeSupabase({ runsError: true })
     await new SocialCollector(supabase).collect(CLIENT_ID, DOMAIN, KEYWORDS)
     expect(mockScrapeInstagramProfile).toHaveBeenCalled()
+  })
+
+  it('does NOT reuse a numeric score from a failed/incomplete run — only completed runs qualify as cache', async () => {
+    mockScrapeInstagramProfile.mockResolvedValue(DEFAULT_INSTAGRAM)
+    const supabase = makeSupabase({
+      runs: [{ client_id: CLIENT_ID, status: 'failed', dimension_scores: { social: 61 }, created_at: '2026-08-01' }],
+    })
+    const result = await new SocialCollector(supabase).collect(CLIENT_ID, DOMAIN, KEYWORDS)
+    expect(mockScrapeInstagramProfile).toHaveBeenCalled()
+    expect(typeof result.score).toBe('number')
+    expect(result.score).not.toBe(61)
   })
 })
 
