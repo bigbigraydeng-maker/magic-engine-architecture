@@ -31,6 +31,7 @@ import type {
 import type { KernelDeps } from './deps'
 import { KernelError, humanReasonOf, isRetryable, reportedCostOf } from './errors'
 import { validateAgainstSchema } from './registry'
+import { outwardBlockReason } from './outward-authorization'
 import {
   beginAuthorizedRun,
   ensureSteps,
@@ -172,6 +173,20 @@ function assertDecisionMatches(args: {
       '这条授权是人按「要审批」的规则批的，但这个客户现在的规则已经变了 —— 得重新走授权',
     )
   }
+
+  // 🔴 对外动作：最终放行**必须是人签的**。
+  //
+  //    授权层已经保证了「outward + auto_approve」签不出放行，但那是它对自己的保证；
+  //    Gateway 不信任上游的保证，只信库里这条 append-only 记录写的是谁批的。
+  //    授权层被改坏、被绕过、或者哪天多出第二条签发路径时，这一句仍然拦得住。
+  if (definition.sideEffect === 'outward' && decision.decided_by !== 'human') {
+    throw new KernelError(
+      'OUTWARD_SIDE_EFFECT_BLOCKED',
+      `这条对外动作的放行是「${decision.decided_by}」签的，不是人点头的 —— ` +
+        '对外动作只认人工批准，已停手',
+      { detail: { decidedBy: decision.decided_by, actionKey: decision.action_key } },
+    )
+  }
 }
 
 // ── 主流程 ────────────────────────────────────────────────────────────────────
@@ -204,12 +219,12 @@ export async function executeAuthorizedRun(
     throw new KernelError('UNKNOWN_ACTION', `「${ctx.actionKey}」不是系统认识的动作，不能执行`)
   }
 
-  // ③ v1 硬闸：对外副作用一律不放行（授权层已经挡过一次，这里再挡一次）
-  if (definition.sideEffect === 'outward') {
-    throw new KernelError(
-      'OUTWARD_SIDE_EFFECT_BLOCKED',
-      '这个动作会作用到客户自己的资产之外，当前版本的执行内核一律不放行',
-    )
+  // ③ 对外副作用：默认拒绝，除非逐动作说清了凭什么（授权层挡过一次，这里独立再挡一次）。
+  //    🔴 位置刻意留在这里 —— 在第 ④ 步重读决策、第 ⑥ 步兑换授权**之前**。
+  //    被这道闸拦下的对外动作，授权一次都不会被消费掉。
+  const outwardBlocked = outwardBlockReason(definition)
+  if (outwardBlocked) {
+    throw new KernelError('OUTWARD_SIDE_EFFECT_BLOCKED', outwardBlocked)
   }
 
   // ④ 从库里重读授权，逐项比对。ctx 只是索引。

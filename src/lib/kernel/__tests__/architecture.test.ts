@@ -18,8 +18,11 @@ import {
   EXECUTION_ITEMS_WRITERS_GRANDFATHERED,
   AUTHORIZED_CONTEXT_MINTERS,
   KERNEL_NO_SUPABASE_ADMIN_DIRS,
+  KERNEL_FORBIDDEN_MODULE_IMPORTS,
+  ACTION_BRIDGE_FORBIDDEN_IMPORTS,
   MIGRATION_VERSION_COLLISIONS_GRANDFATHERED,
 } from '../boundaries'
+import { outwardBlockReason } from '../outward-authorization'
 
 const ROOT = process.cwd()
 const SRC = join(ROOT, 'src')
@@ -174,6 +177,54 @@ describe('L1 边界：Kernel 不许自己抓 service-role 客户端', () => {
       violations,
       'Kernel 的数据访问一律走注入进来的客户端（见 kernel/deps.ts）。\n' +
         '自己 import supabaseAdmin 等于把「谁在什么授权下写了什么」退化成「进程里哪都能写」。\n' +
+        violations.join('\n'),
+    ).toEqual([])
+  }, SCAN_TIMEOUT_MS)
+})
+
+describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => {
+  it('🔴 kernel 目录里没有一处 import 域模块或 action-bridge', () => {
+    const violations = ALL_FILES.filter((f) => f.startsWith('src/lib/kernel/'))
+      .filter((f) => !isTest(f))
+      .filter((f) =>
+        KERNEL_FORBIDDEN_MODULE_IMPORTS.some((m) =>
+          new RegExp(`from\\s+['"]${m.replace(/[/@]/g, '\\$&')}`).test(readCode(f)),
+        ),
+      )
+
+    expect(
+      violations,
+      '依赖方向只有一条：bridge → kernel。\n' +
+        '把候选身份映射放进 Kernel，等于每接一个新域就让 Kernel 多 import 一个域模块。\n' +
+        violations.join('\n'),
+    ).toEqual([])
+  }, SCAN_TIMEOUT_MS)
+
+  it('🔴 action-bridge 只依赖 Kernel —— 不碰库 / provider / 执行 / legacy 生成端', () => {
+    const violations = ALL_FILES.filter((f) => f.startsWith('src/lib/action-bridge/'))
+      .filter((f) => !isTest(f))
+      .filter((f) =>
+        ACTION_BRIDGE_FORBIDDEN_IMPORTS.some((m) =>
+          new RegExp(`from\\s+['"]${m.replace(/[/@]/g, '\\$&')}`).test(readCode(f)),
+        ),
+      )
+
+    expect(
+      violations,
+      'bridge 是一层纯映射。它一旦能 import 到 capabilities / supabase / provider，\n' +
+        '就从「翻译」变成了第二条执行路径 —— ME2 只留一个入口：提交 action_run。\n' +
+        violations.join('\n'),
+    ).toEqual([])
+  }, SCAN_TIMEOUT_MS)
+
+  it('域模块（Growth）不 import Kernel 或 action-bridge', () => {
+    const violations = ALL_FILES.filter((f) => f.startsWith('src/lib/growth/'))
+      .filter((f) => !isTest(f))
+      .filter((f) => /from\s+['"]@\/lib\/(kernel|action-bridge)/.test(readCode(f)))
+
+    expect(
+      violations,
+      'Growth 契约只描述形状。要让系统做事，提交一个 action_run 交给执行内核。\n' +
         violations.join('\n'),
     ).toEqual([])
   }, SCAN_TIMEOUT_MS)
@@ -553,8 +604,15 @@ describe('注册表的封闭性', () => {
       expect(def.idempotency.keyFields.length, `${key} 必须声明幂等键字段`).toBeGreaterThan(0)
       expect(def.retryPolicy.maxAttempts, `${key} 必须声明重试上限`).toBeGreaterThan(0)
       expect(def.steps.length, `${key} 必须至少有一个步骤`).toBeGreaterThan(0)
-      // v1 的交付边界：注册表里不许出现任何对外副作用的动作
-      expect(def.sideEffect, `${key}：v1 不接受对外副作用的动作`).not.toBe('outward')
+      // 🔴 对外副作用：从「一律不许出现」换成「逐动作说清楚才许出现」。
+      //    判据是同一个 predicate，授权层与 Gateway 用的也是它 ——
+      //    所以注册表里能待着的对外动作，一定是那两道闸也会放行的那种。
+      //    当前注册表里零个对外动作，这条对它们**恒真**（非 outward 直接返回 null）；
+      //    将来加第一个对外动作时，它不用改这条断言，只需要把声明写完整。
+      expect(
+        outwardBlockReason(def),
+        `${key}：对外动作必须带完整的 outwardAuthorization 声明才能进注册表`,
+      ).toBeNull()
       // 幂等键字段必须真的在输入契约里，否则提交时算不出来
       for (const f of def.idempotency.keyFields) {
         expect(

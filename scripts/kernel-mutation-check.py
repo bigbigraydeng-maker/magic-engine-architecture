@@ -1447,6 +1447,102 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
         expect_fail_contains="转人工之后 handler 抛错",
     ),
+    # ── K-WP02：逐动作的对外副作用授权（三道闸各自单独可咬） ──────────────
+    dict(
+        # 授权层那道。拆掉它之后 Gateway 仍然会拦，所以这条探针指的是
+        # **授权阶段**的用例：capability 一次都不许被调、决策表要留 deny 码。
+        name="K-WP02 授权层不再判对外许可",
+        file="src/lib/kernel/authorize.ts",
+        old="""  const outwardBlocked = outwardBlockReason(definition)
+  if (outwardBlocked) {
+    return bad('outward_side_effect_blocked', outwardBlocked, definition)
+  }""",
+        new="""  // mutated: 授权层不再判对外许可""",
+        test="src/lib/kernel/__tests__/outward-authorization.test.ts",
+        expect_fail_contains="没有声明",
+    ),
+    dict(
+        name="K-WP02 对外动作允许 auto_approve 直接放行（不再要求人点头）",
+        file="src/lib/kernel/authorize.ts",
+        old="""  if (definition.sideEffect === 'outward' && policy.mode === 'auto_approve') {""",
+        new="""  if (false) {""",
+        test="src/lib/kernel/__tests__/outward-authorization.test.ts",
+        expect_fail_contains="auto_approve",
+    ),
+    dict(
+        # Gateway 的结构闸。它被授权层遮着，所以探针必须指向那条
+        # 「授权之后才把声明抽走」的用例 —— 只有 Gateway 拦得住。
+        name="K-WP02 Gateway 不再独立判对外许可",
+        file="src/lib/kernel/gateway.ts",
+        old="""  const outwardBlocked = outwardBlockReason(definition)
+  if (outwardBlocked) {
+    throw new KernelError('OUTWARD_SIDE_EFFECT_BLOCKED', outwardBlocked)
+  }""",
+        new="""  // mutated: Gateway 不再独立判对外许可""",
+        test="src/lib/kernel/__tests__/outward-authorization.test.ts",
+        expect_fail_contains="声明在授权之后被抽走",
+    ),
+    dict(
+        # Gateway 的人工复核闸。同样被遮着（既有的模式复核会先开火），
+        # 所以那条用例特地把政策也摆成 auto_approve，让这一句成为唯一还站着的。
+        name="K-WP02 Gateway 不再复核对外放行是不是人签的",
+        file="src/lib/kernel/gateway.ts",
+        old="""  if (definition.sideEffect === 'outward' && decision.decided_by !== 'human') {""",
+        new="""  if (false) {""",
+        test="src/lib/kernel/__tests__/outward-authorization.test.ts",
+        expect_fail_contains="放行是机器签的",
+    ),
+    dict(
+        # 声明盖不住事实：拆掉 reversible 那一条，只靠填 rollback 就能放行。
+        name="K-WP02 reversible:false 也放行（让声明盖过事实）",
+        file="src/lib/kernel/outward-authorization.ts",
+        old="""  if (definition.reversible !== true) {""",
+        new="""  if (false) {""",
+        test="src/lib/kernel/__tests__/outward-authorization.test.ts",
+        expect_fail_contains="reversible:false",
+    ),
+    dict(
+        name="K-WP02 每步成本上界不再强制",
+        file="src/lib/kernel/outward-authorization.ts",
+        old="""    if (!isRealCeiling(definition.costModel.stepCeilingUsd?.[stepKey])) {""",
+        new="""    if (false) {""",
+        test="src/lib/kernel/__tests__/outward-authorization.test.ts",
+        expect_fail_contains="有一步没写成本上界",
+    ),
+    # ── K-WP02：候选身份映射 ─────────────────────────────────────────────
+    dict(
+        # 退回「拼字符串当键」的写法 —— 分隔符碰撞会让两个不同候选撞成一个。
+        name="K-WP02 映射退回字符串拼接（制造分隔符碰撞）",
+        file="src/lib/action-bridge/index.ts",
+        old="""      const entry = table.find(
+        (candidate) => candidate.domain === identity.domain && candidate.intent === identity.intent,
+      )""",
+        new="""      const entry = table.find(
+        (candidate) =>
+          `${candidate.domain}:${candidate.intent}` === `${identity.domain}:${identity.intent}`,
+      )""",
+        test="src/lib/action-bridge/__tests__/candidate-mapping.test.ts",
+        expect_fail_contains="不许命中",
+    ),
+    dict(
+        name="K-WP02 词汇表遇到注册表漂移就静默跳过",
+        file="src/lib/action-bridge/index.ts",
+        old="""        if (!definition) {
+          throw new GovernedVocabularyConfigurationError(""",
+        new="""        if (false) {
+          throw new GovernedVocabularyConfigurationError(""",
+        test="src/lib/action-bridge/__tests__/candidate-mapping.test.ts",
+        expect_fail_contains="注册表漂移必须当场炸",
+    ),
+    dict(
+        # 纯空白的身份被当成合法 —— " " 会变成一个能参与匹配的域名。
+        name="K-WP02 身份校验不再要求去空白后仍有内容",
+        file="src/lib/action-bridge/index.ts",
+        old="""  return typeof value === 'string' && value.trim().length > 0""",
+        new="""  return typeof value === 'string'""",
+        test="src/lib/action-bridge/__tests__/candidate-mapping.test.ts",
+        expect_fail_contains="纯空白不算有内容",
+    ),
 ]
 
 
