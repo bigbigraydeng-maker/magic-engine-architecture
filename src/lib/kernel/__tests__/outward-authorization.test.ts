@@ -19,7 +19,7 @@ import { ACTION_REGISTRY } from '../registry'
 import { outwardBlockReason } from '../outward-authorization'
 import type { CapabilityImplementation } from '../types'
 import { makeFixture, makeRegistry, CLIENT_A, GOAL_A, POST_A, BLOG_DRAFT, liveFence } from './fixtures'
-import { computeBlogContentHash } from '@/lib/capabilities'
+import { computeBlogContentHash, createCapabilities } from '@/lib/capabilities'
 import type { BlogDraftRow } from '@/lib/capabilities/seo/build-publish-package'
 
 const KEY = 'seo.build_publish_package'
@@ -219,7 +219,9 @@ describe('授权层：对外动作默认拒绝', () => {
     const outcome = await runAction(f.kernel, submitInput())
 
     expect(outcome.kind).toBe('denied')
-    expect(f.tables.authorization_decisions[0].deny_code).toBe('outward_side_effect_blocked')
+    // 🔴 专用码，不是结构性那个 —— 前者可恢复（改规则就能做），后者不可恢复。
+    //    合用一个码会让「按提示改完规则还是做不了」变成永久锁死。
+    expect(f.tables.authorization_decisions[0].deny_code).toBe('outward_requires_human_policy')
     expect(String(f.tables.authorization_decisions[0].reason)).toContain('要人点头')
     expect(calls).toEqual([])
   })
@@ -259,6 +261,87 @@ describe('授权层：对外动作默认拒绝', () => {
     expect(allow!.decided_by_user).toBe('bigbigraydeng@gmail.com')
     // 原来那条 require_approval 一个字都没被改
     expect(f.tables.authorization_decisions[0].verdict).toBe('require_approval')
+  })
+})
+
+// ── 审计快照：凭什么允许它对外写，必须写进决策记录 ──────────────────────────
+
+describe('审计快照带上对外授权的依据', () => {
+  /** 决策行里的 definition 快照。 */
+  function definitionSnapshot(f: ReturnType<typeof makeFixture>, index: number) {
+    const snap = f.tables.authorization_decisions[index].policy_snapshot as {
+      definition: Record<string, unknown>
+    }
+    return snap.definition
+  }
+
+  it('🔴 pending 与最终 human allow 两条决策都带完整的 outward 治理快照', async () => {
+    const calls: string[] = []
+    const f = makeFixture({
+      registry: makeRegistry([outwardDefinition({ providerIdempotency: 'unsupported' })]),
+      capabilities: countingCapability(calls),
+      options: { policy: APPROVAL_POLICY },
+    })
+
+    const pending = await runAction(f.kernel, submitInput())
+    await approveAndRun(f.kernel, pending.run.id, 'bigbigraydeng@gmail.com')
+
+    // 两条：require_approval + human allow
+    expect(f.tables.authorization_decisions.length).toBeGreaterThanOrEqual(2)
+    for (const index of [0, f.tables.authorization_decisions.length - 1]) {
+      const def = definitionSnapshot(f, index)
+      expect(def.side_effect, `第 ${index} 条`).toBe('outward')
+      expect(def.outward_authorization, `第 ${index} 条`).toEqual({
+        declared_in: 'K-WP02 #882 (test-only definition)',
+        requires_human_approval: true,
+        rollback: 'snapshot_restore',
+      })
+      expect(def.provider_idempotency, `第 ${index} 条`).toBe('unsupported')
+      expect(def.step_ceiling_usd, `第 ${index} 条`).toEqual({ build: 0, persist: 0, verify: 0 })
+    }
+  })
+
+  it('内部动作的快照里 outward_authorization 是 null', async () => {
+    const f = makeFixture({
+      registry: ACTION_REGISTRY,
+      capabilities: createCapabilities,
+      options: { policy: { action_key: KEY, mode: 'auto_approve', spend_cap_per_run_usd: 0 } },
+    })
+    await runAction(f.kernel, submitInput())
+
+    const def = definitionSnapshot(f, 0)
+    expect(def.side_effect).toBe('internal_write')
+    expect(def.outward_authorization).toBeNull()
+    expect(def.provider_idempotency).toBe('not_applicable')
+    // 这个动作没声明每步上界 —— 如实存 null，不编一个空对象
+    expect(def.step_ceiling_usd).toBeNull()
+  })
+
+  it('🔴 快照必须能 JSON 无损 round-trip（函数进去了会被悄悄丢掉）', async () => {
+    const calls: string[] = []
+    const f = makeFixture({
+      registry: makeRegistry([outwardDefinition()]),
+      capabilities: countingCapability(calls),
+      options: { policy: APPROVAL_POLICY },
+    })
+    await runAction(f.kernel, submitInput())
+
+    const snapshot = f.tables.authorization_decisions[0].policy_snapshot
+    expect(JSON.parse(JSON.stringify(snapshot))).toEqual(snapshot)
+  })
+
+  it('🔴 不许把 costModel 整个塞进快照（estimate 是函数，JSON 存不住）', async () => {
+    const calls: string[] = []
+    const f = makeFixture({
+      registry: makeRegistry([outwardDefinition()]),
+      capabilities: countingCapability(calls),
+      options: { policy: APPROVAL_POLICY },
+    })
+    await runAction(f.kernel, submitInput())
+
+    const def = definitionSnapshot(f, 0)
+    expect(def.cost_model).toBeUndefined()
+    expect(JSON.stringify(def)).not.toContain('estimate')
   })
 })
 

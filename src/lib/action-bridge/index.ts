@@ -50,6 +50,27 @@ function isMeaningfulString(value: unknown): value is string {
 }
 
 /**
+ * 读一个**自有的、可枚举的、数据**属性。不满足就返回 `undefined`。
+ *
+ * 🔴 为什么不能直接 `record.domain`：
+ *    · **getter 会被执行** —— 一个恶意（或只是写坏了的）getter 能在这里抛异常，
+ *      把「返回结构化拒绝」变成「炸给调用方」；
+ *    · **原型链上的字段会被读到** —— `Object.create({domain:'geo'})` 看起来
+ *      有 domain，但那不是这个对象自己的东西，不该被当成候选身份。
+ *    所以先拿属性描述符，确认它是自有 + 可枚举 + 数据属性（有 `value`，
+ *    不是 get/set），再取值。**全程不触发任何 getter。**
+ */
+function ownDataProperty(record: object, key: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(record, key)
+  if (!descriptor) return undefined
+  if (!descriptor.enumerable) return undefined
+  // 访问器属性（get / set）一律不接受 —— 判据是「有没有 value 这个槽」，
+  // 而不是「value 是不是 undefined」，后者分不清「没声明」和「声明成 undefined」。
+  if (!Object.prototype.hasOwnProperty.call(descriptor, 'value')) return undefined
+  return descriptor.value
+}
+
+/**
  * 把**任意**输入安全地读成候选身份，读不成返回 null。
  *
  * 🔴 入参是 `unknown` 而不是 `CandidateIdentity`：调用方可能是别的模块、
@@ -59,10 +80,40 @@ function isMeaningfulString(value: unknown): value is string {
  */
 function readIdentity(input: unknown): CandidateIdentity | null {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) return null
-  const record = input as Record<string, unknown>
-  if (!isMeaningfulString(record.domain)) return null
-  if (!isMeaningfulString(record.intent)) return null
-  return { domain: record.domain, intent: record.intent }
+  const domain = ownDataProperty(input, 'domain')
+  const intent = ownDataProperty(input, 'intent')
+  if (!isMeaningfulString(domain)) return null
+  if (!isMeaningfulString(intent)) return null
+  return { domain, intent }
+}
+
+/**
+ * 配对表自身的结构问题；没问题返回 `null`。
+ *
+ * 🔴 **重复配对必须 fail closed，哪怕两条指向同一个 ActionKey。**
+ *    `.find()` 会静默取第一条 —— 那等于让**数组顺序**决定一个候选映射到哪个动作。
+ *    今天两条恰好一样，明天有人改了其中一条，行为就在没有任何提示的情况下变了。
+ *    "受治理"的意思是歧义要当场报出来，不是挑一条继续走。
+ *
+ * 🔴 表项本身畸形（空 domain / 非字符串）也算 —— 表是坏的时候，
+ *    对任何候选回答"没有配对"都是在假装自己知道答案。
+ */
+function mappingTableProblem(table: readonly CandidateMappingEntry[]): string | null {
+  const seen: string[][] = []
+  for (const entry of table) {
+    if (!isMeaningfulString(entry?.domain) || !isMeaningfulString(entry?.intent)) {
+      return '配对表里有一条 domain / intent 不是非空字符串的记录'
+    }
+    if (!isMeaningfulString(entry?.actionKey)) {
+      return `配对表里「${entry.domain}」/「${entry.intent}」这条没有有效的 actionKey`
+    }
+    // 逐项比对，跟 map() 用同一个判据 —— 不拼字符串，所以不会有分隔符碰撞
+    if (seen.some(([d, i]) => d === entry.domain && i === entry.intent)) {
+      return `配对表里「${entry.domain}」/「${entry.intent}」出现了不止一次 —— 歧义配对，不靠数组顺序决定`
+    }
+    seen.push([entry.domain, entry.intent])
+  }
+  return null
 }
 
 export interface CandidateMapperDeps {
@@ -92,8 +143,15 @@ export function createCandidateMapper(deps: CandidateMapperDeps): CandidateMappe
           outcome: 'rejected',
           code: 'malformed_identity',
           reason:
-            '候选身份不成立：需要 domain 和 intent 两个非空字符串（去掉空白之后仍要有内容）',
+            '候选身份不成立：需要 domain 和 intent 两个自有的、非空的字符串字段' +
+            '（不接受 getter、不接受原型链上继承来的、去掉空白之后也要有内容）',
         }
+      }
+
+      // 🔴 表坏了就别回答 —— 对一个坏掉的配对表说「没有配对」是在假装知道答案。
+      const tableProblem = mappingTableProblem(table)
+      if (tableProblem) {
+        return { outcome: 'rejected', code: 'registry_drift', reason: tableProblem }
       }
 
       // 🔴 两个字段各自精确相等。不拼接、不推断、不规范化、不模糊匹配。
@@ -129,6 +187,12 @@ export function createCandidateMapper(deps: CandidateMapperDeps): CandidateMappe
     },
 
     listVocabulary(): readonly GovernedActionVocabularyEntry[] {
+      // 🔴 歧义 / 畸形的配对表不许产出词汇表。生成端拿到一份「看起来正常」
+      //    但其实有两条抢同一个身份的清单，比拿不到更糟。
+      const tableProblem = mappingTableProblem(table)
+      if (tableProblem) {
+        throw new GovernedVocabularyConfigurationError(tableProblem)
+      }
       return table.map((entry) => {
         const definition = registry.get(entry.actionKey)
         if (!definition) {

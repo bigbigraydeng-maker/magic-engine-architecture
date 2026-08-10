@@ -162,6 +162,124 @@ describe('映射：不拼字符串，所以造不出分隔符碰撞', () => {
   })
 })
 
+describe('🔴 输入只认自有的数据属性', () => {
+  const mapper = createCandidateMapper({
+    registry: registryWith([REAL_KEY]),
+    table: table([{ domain: 'geo', intent: 'optimize', actionKey: REAL_KEY }]),
+  })
+
+  it('🔴 getter 一次都不许被执行（恶意 getter 能把拒绝变成抛异常）', () => {
+    let getterRan = false
+    const hostile = {}
+    Object.defineProperty(hostile, 'domain', {
+      enumerable: true,
+      get() {
+        getterRan = true
+        throw new Error('这个 getter 不该被执行')
+      },
+    })
+    Object.defineProperty(hostile, 'intent', { enumerable: true, value: 'optimize' })
+
+    // 不抛，返回结构化拒绝
+    const result = mapper.map(hostile)
+    expect(result.outcome).toBe('rejected')
+    expect(result).toMatchObject({ code: 'malformed_identity' })
+    expect(getterRan, 'getter 被执行了 —— 说明读的是属性值而不是描述符').toBe(false)
+  })
+
+  it('🔴 原型链上继承来的 domain / intent 不算数', () => {
+    const proto = { domain: 'geo', intent: 'optimize' }
+    const inherited = Object.create(proto) as object
+    // 自证：普通读法确实读得到，所以这条测的是「我们没用普通读法」
+    expect((inherited as { domain: string }).domain).toBe('geo')
+
+    const result = mapper.map(inherited)
+    expect(result.outcome).toBe('rejected')
+    expect(result).toMatchObject({ code: 'malformed_identity' })
+  })
+
+  it('只有一半是继承来的也不行', () => {
+    const halfInherited = Object.create({ domain: 'geo' }) as object
+    Object.defineProperty(halfInherited, 'intent', { enumerable: true, value: 'optimize' })
+    expect(mapper.map(halfInherited).outcome).toBe('rejected')
+  })
+
+  it('访问器属性（getter 返回合法值）也不接受 —— 判据是数据属性，不是取到的值', () => {
+    const accessor = {}
+    Object.defineProperty(accessor, 'domain', { enumerable: true, get: () => 'geo' })
+    Object.defineProperty(accessor, 'intent', { enumerable: true, value: 'optimize' })
+    expect(mapper.map(accessor)).toMatchObject({ code: 'malformed_identity' })
+  })
+
+  it('不可枚举的自有属性不接受', () => {
+    const hidden = {}
+    Object.defineProperty(hidden, 'domain', { enumerable: false, value: 'geo' })
+    Object.defineProperty(hidden, 'intent', { enumerable: true, value: 'optimize' })
+    expect(mapper.map(hidden)).toMatchObject({ code: 'malformed_identity' })
+  })
+
+  it('symbol 键不参与匹配（只认字符串键 domain / intent）', () => {
+    const sym = Symbol('domain')
+    const weird = { [sym]: 'geo', intent: 'optimize' }
+    expect(mapper.map(weird)).toMatchObject({ code: 'malformed_identity' })
+  })
+
+  it('多带了别的字段不影响 —— 只取 domain / intent 两个', () => {
+    const extra = { domain: 'geo', intent: 'optimize', authorised: true, sideEffect: 'outward' }
+    expect(mapper.map(extra)).toMatchObject({ outcome: 'mapped', actionKey: REAL_KEY })
+  })
+})
+
+describe('🔴 配对表自身坏了就 fail closed', () => {
+  const dupTable = table([
+    { domain: 'geo', intent: 'optimize', actionKey: REAL_KEY },
+    { domain: 'geo', intent: 'optimize', actionKey: REAL_KEY },
+  ])
+
+  it('🔴 重复配对 → registry_drift，即使两条指向同一个 ActionKey', () => {
+    const mapper = createCandidateMapper({ registry: registryWith([REAL_KEY]), table: dupTable })
+    const result = mapper.map({ domain: 'geo', intent: 'optimize' })
+    expect(result.outcome).toBe('rejected')
+    expect(result).toMatchObject({ code: 'registry_drift' })
+    if (result.outcome === 'rejected') expect(result.reason).toContain('不止一次')
+  })
+
+  it('🔴 重复配对 → 词汇表当场抛，不产出一份靠数组顺序的清单', () => {
+    const mapper = createCandidateMapper({ registry: registryWith([REAL_KEY]), table: dupTable })
+    expect(() => mapper.listVocabulary()).toThrow(GovernedVocabularyConfigurationError)
+    expect(() => mapper.listVocabulary()).toThrow(/不止一次/)
+  })
+
+  it('畸形表项（空 domain / 缺 actionKey）两个 API 都拒', () => {
+    for (const bad of [
+      [{ domain: '', intent: 'optimize', actionKey: REAL_KEY }],
+      [{ domain: 'geo', intent: '   ', actionKey: REAL_KEY }],
+      [{ domain: 'geo', intent: 'optimize', actionKey: '' as unknown as ActionKey }],
+    ]) {
+      const mapper = createCandidateMapper({
+        registry: registryWith([REAL_KEY]),
+        table: table(bad as CandidateMappingEntry[]),
+      })
+      expect(mapper.map({ domain: 'geo', intent: 'optimize' })).toMatchObject({
+        code: 'registry_drift',
+      })
+      expect(() => mapper.listVocabulary()).toThrow(GovernedVocabularyConfigurationError)
+    }
+  })
+
+  it('两条不同的配对不算重复', () => {
+    const mapper = createCandidateMapper({
+      registry: registryWith([REAL_KEY]),
+      table: table([
+        { domain: 'geo', intent: 'a', actionKey: REAL_KEY },
+        { domain: 'geo', intent: 'b', actionKey: REAL_KEY },
+      ]),
+    })
+    expect(mapper.map({ domain: 'geo', intent: 'b' })).toMatchObject({ outcome: 'mapped' })
+    expect(mapper.listVocabulary()).toHaveLength(2)
+  })
+})
+
 describe('受治理的词汇表', () => {
   it('由配对表 ⋈ 注册表派生 —— 不维护第二份清单', () => {
     const mapper = createCandidateMapper({

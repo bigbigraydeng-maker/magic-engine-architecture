@@ -297,15 +297,14 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
     ),
     # ── C3：可恢复 deny ─────────────────────────────────────────────────
     dict(
-        name="C3 把可恢复白名单清空（配好政策也永远救不回来）",
+        name="C3 把 no_policy 从可恢复白名单里拿掉（配好政策也永远救不回来）",
         file="src/lib/kernel/runner.ts",
+        # 🔴 锚点只取头两行 —— 清单会随新拒绝码增长，整段字面量当锚点必然失配，
+        #    而失配是 SKIP：脚本不报错，那道闸却其实一次都没被验证过。
         old="""export const RECOVERABLE_DENY_CODES: ReadonlySet<string> = new Set([
-  'no_policy',
-  'policy_expired',
-  'policy_changed_since_request',
-  'over_cost_cap',
-])""",
-        new="""export const RECOVERABLE_DENY_CODES: ReadonlySet<string> = new Set([])""",
+  'no_policy',""",
+        new="""export const RECOVERABLE_DENY_CODES: ReadonlySet<string> = new Set([
+  'never_recoverable_placeholder',""",
         test="src/lib/kernel/__tests__/deny-recovery.test.ts",
         expect_fail_contains="恢复闭环",
     ),
@@ -1533,6 +1532,51 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
           throw new GovernedVocabularyConfigurationError(""",
         test="src/lib/action-bridge/__tests__/candidate-mapping.test.ts",
         expect_fail_contains="注册表漂移必须当场炸",
+    ),
+    dict(
+        # 退回「直接读属性」—— getter 会被执行，原型链上的字段也会被当成自己的。
+        name="K-WP02 身份读取退回直接取属性（getter 会被执行 / 认继承字段）",
+        file="src/lib/action-bridge/index.ts",
+        old="""  const domain = ownDataProperty(input, 'domain')
+  const intent = ownDataProperty(input, 'intent')""",
+        new="""  const domain = (input as Record<string, unknown>).domain
+  const intent = (input as Record<string, unknown>).intent""",
+        test="src/lib/action-bridge/__tests__/candidate-mapping.test.ts",
+        expect_fail_contains="getter 一次都不许被执行",
+    ),
+    dict(
+        # 重复配对退回「静默取第一条」—— 让数组顺序决定映射到哪个动作。
+        name="K-WP02 重复配对不再 fail closed（靠数组顺序挑一条）",
+        file="src/lib/action-bridge/index.ts",
+        old="""    if (seen.some(([d, i]) => d === entry.domain && i === entry.intent)) {""",
+        new="""    if (false) {""",
+        test="src/lib/action-bridge/__tests__/candidate-mapping.test.ts",
+        expect_fail_contains="重复配对",
+    ),
+    dict(
+        # 对外动作的 auto_approve 错配退回结构性拒绝码 —— 那个码不可恢复，
+        # 于是「按提示改完规则」之后仍然做不了，等于永久锁死。
+        name="K-WP02 auto_approve 错配退回不可恢复的结构性拒绝码",
+        file="src/lib/kernel/authorize.ts",
+        old="""      'outward_requires_human_policy',""",
+        new="""      'outward_side_effect_blocked',""",
+        test="src/lib/kernel/__tests__/outward-authorization.test.ts",
+        expect_fail_contains="auto_approve",
+    ),
+    dict(
+        # 对外授权依据不进审计快照 —— 决策记录说不清「凭什么允许它对外写」。
+        name="K-WP02 对外授权依据不进审计快照",
+        file="src/lib/kernel/authorize.ts",
+        old="""          outward_authorization: definition.outwardAuthorization
+            ? {
+                declared_in: definition.outwardAuthorization.declaredIn,
+                requires_human_approval: definition.outwardAuthorization.requiresHumanApproval,
+                rollback: definition.outwardAuthorization.rollback,
+              }
+            : null,""",
+        new="""          outward_authorization: null,""",
+        test="src/lib/kernel/__tests__/outward-authorization.test.ts",
+        expect_fail_contains="完整的 outward 治理快照",
     ),
     dict(
         # 纯空白的身份被当成合法 —— " " 会变成一个能参与匹配的域名。

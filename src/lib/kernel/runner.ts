@@ -687,6 +687,10 @@ export const RECOVERABLE_DENY_CODES: ReadonlySet<string> = new Set([
   'policy_expired',
   'policy_changed_since_request',
   'over_cost_cap',
+  // 对外动作被配成了「自动执行」。规则改成「要审批」之后同一件事就能做了 ——
+  // 所以它属于「环境问题」这一类。🔴 结构性的 outward_side_effect_blocked
+  // **不在**这份清单里，那一条是动作定义本身不合规，改条件救不了。
+  'outward_requires_human_policy',
 ])
 
 /**

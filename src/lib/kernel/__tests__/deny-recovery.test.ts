@@ -235,9 +235,113 @@ describe('C3 · 不可恢复的拒绝不许翻案', () => {
   it('白名单是显式的：只有环境类拒绝码在里面', () => {
     expect(Array.from(RECOVERABLE_DENY_CODES).sort()).toEqual([
       'no_policy',
+      'outward_requires_human_policy',
       'over_cost_cap',
       'policy_changed_since_request',
       'policy_expired',
     ])
+  })
+})
+
+/**
+ * K-WP02 · 对外动作被配成「自动执行」→ 改规则 → 显式恢复。
+ *
+ * 🔴 这一条防的是一个**永久锁死**：拒绝文案让人去把规则改成「要审批」，
+ *    可幂等键会让同一件事命中旧的 denied run；如果那个拒绝码不可恢复，
+ *    人照做了也永远做不了。所以「规则配错了」必须跟
+ *    「动作定义本身不合规」用两个不同的码 —— 前者可恢复，后者不可。
+ */
+describe('K-WP02 · outward + auto_approve → 改成要审批 → 显式恢复', () => {
+  const OUTWARD: ActionDefinition = {
+    ...BASE,
+    sideEffect: 'outward',
+    reversible: true,
+    providerIdempotency: 'supported',
+    outwardAuthorization: {
+      declaredIn: 'K-WP02 #882 (test-only definition)',
+      requiresHumanApproval: true,
+      rollback: 'snapshot_restore',
+    },
+    costModel: { kind: 'fixed', estimate: () => 0, stepCeilingUsd: { build: 0, persist: 0, verify: 0 } },
+  }
+
+  /**
+   * 🔴 **端到端那一半暂时缺席，原因如实写在这里。**
+   *
+   * 恢复要过两道：应用层的 `RECOVERABLE_DENY_CODES`（已含新码）与
+   * RPC `kernel_claim_run_recovery` 的白名单（migration 里已含新码）。
+   * 但测试跑的是内存假件，而假件在 `fake-supabase.ts` 里还留着**第三份**
+   * 硬编码的白名单 —— 它不在本 PR 授权的文件范围内，所以端到端那一步
+   * （recoverDeniedRun → pending_approval）现在跑不通。
+   *
+   * 顺带暴露一个既有隐患：架构测试只盯 SQL ↔ runner.ts 两处，
+   * **假件那第三份没有任何东西盯着**，它早就可能跟前两处分家。
+   *
+   * 下面这条只断言范围内能证明的部分：两个**权威**来源都认这个码。
+   * 端到端闭环等假件那一行获批后补上。
+   */
+  it('🔴 两个权威来源都认这个码可恢复（SQL 侧由架构测试盯着一字不差）', () => {
+    expect(RECOVERABLE_DENY_CODES.has('outward_requires_human_policy')).toBe(true)
+    // 结构性不合规那个码必须**不在**里面 —— 两者的可恢复性刻意相反
+    expect(RECOVERABLE_DENY_CODES.has('outward_side_effect_blocked')).toBe(false)
+  })
+
+  it('🔴 规则配错了 → 拒绝码精确，且 capability 零调用', async () => {
+    const calls = vi.fn()
+    const f = makeFixture({
+      registry: makeRegistry([OUTWARD]),
+      capabilities: () => ({
+        [KEY]: {
+          actionKey: KEY,
+          version: 1,
+          steps: {
+            build: async () => {
+              calls()
+              return { output: {}, verification: null, costActualUsd: 0 }
+            },
+            persist: async () => {
+              calls()
+              return { output: {}, verification: null, costActualUsd: 0 }
+            },
+            verify: async () => {
+              calls()
+              return { output: {}, verification: null, costActualUsd: 0 }
+            },
+          },
+        } as never,
+      }),
+      // ① 规则配错了：对外动作却配成「自动执行」
+      options: { policy: { action_key: KEY, mode: 'auto_approve', spend_cap_per_run_usd: 100 } },
+    })
+
+    const denied = await runAction(f.kernel, submit())
+
+    // ① 拒绝码必须**精确**是专用那个 —— 不是结构性的 outward_side_effect_blocked
+    expect(denied.kind).toBe('denied')
+    expect(f.tables.authorization_decisions[0].deny_code).toBe('outward_requires_human_policy')
+    // ② capability 零调用
+    expect(calls).not.toHaveBeenCalled()
+
+    // ③ 应用层这一关已经放行了（真正卡住的是假件里那第三份白名单，见上面的说明）
+    expect(RECOVERABLE_DENY_CODES.has(String(f.tables.authorization_decisions[0].deny_code))).toBe(
+      true,
+    )
+  })
+
+  it('🔴 结构性不合规（缺声明）用的仍是不可恢复的那个码', async () => {
+    const f = makeFixture({
+      registry: makeRegistry([{ ...OUTWARD, outwardAuthorization: null }]),
+      capabilities: createCapabilities,
+      options: { policy: { action_key: KEY, mode: 'require_approval', spend_cap_per_run_usd: 100 } },
+    })
+
+    const denied = await runAction(f.kernel, submit())
+    expect(denied.kind).toBe('denied')
+    expect(f.tables.authorization_decisions[0].deny_code).toBe('outward_side_effect_blocked')
+
+    // 改条件救不了它 —— 动作定义本身不合规
+    await expect(
+      recoverDeniedRun(f.kernel, denied.run.id, 'ray@magiclab', '试试'),
+    ).rejects.toThrow(/改条件救不了/)
   })
 })
