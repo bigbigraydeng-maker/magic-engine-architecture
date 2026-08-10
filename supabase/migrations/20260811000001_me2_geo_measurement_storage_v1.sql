@@ -619,6 +619,23 @@ BEGIN
       USING ERRCODE = 'check_violation';
   END IF;
 
+  -- 🔴 上锁只能走「首个批次落地」那一条路，调用方不能自己 UPDATE 抢锁。
+  --
+  --    只堵住 INSERT 是不够的：`UPDATE geo_query_sets SET locked_at = now()`
+  --    照样能穿过上面所有判据（旧值为空、新值非空、别的列没动），于是一个
+  --    **一道题都还没拟完、一个批次都还没跑**的集合就被永久锁死了 ——
+  --    解不开（再 UPDATE 会撞「已锁定」）、加不了题、也删不掉（锁定的集合不许删）。
+  --    一次手滑就能把一个在建的查询集彻底做废，而且没有任何恢复路径。
+  --
+  --    判据用 pg_trigger_depth()：合法的那次上锁是 geo_batches 的 BEFORE INSERT
+  --    触发器（深度 1）内部发出的 UPDATE，本守卫因此在**深度 2**触发；
+  --    而调用方直接 UPDATE 时本守卫在**深度 1**触发。调用方伪造不了触发深度。
+  IF pg_trigger_depth() < 2 THEN
+    RAISE EXCEPTION
+      '查询集 % 不能被直接锁定：locked_at 只由第一个批次落地时的触发器写入。', OLD.id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
   IF ROW(NEW.id, NEW.client_id, NEW.query_set_version, NEW.created_by, NEW.created_at)
      IS DISTINCT FROM
      ROW(OLD.id, OLD.client_id, OLD.query_set_version, OLD.created_by, OLD.created_at)
@@ -874,7 +891,8 @@ CREATE TRIGGER geo_evidence_successful_observation_trigger
 --
 --   挡得住的：service_role 的任何 UPDATE / DELETE、upsert（ON CONFLICT DO UPDATE
 --   与 MERGE 都会触发 BEFORE UPDATE）、TRUNCATE、以及从父表级联过来的删除；
---   还有「建集合时自带锁定时间」和「把证据挂到失败观测上」这两种伪造。
+--   还有「建集合时自带锁定时间」「调用方直接 UPDATE 抢锁」和「把证据挂到失败观测上」
+--   这三种伪造。
 --
 --   仍然挡不住（写入方的纪律，库层给不了保证）：**成功的观测却没有证据行**。
 --   经 PostgREST 的两次 INSERT 是两个事务，跨表的延迟约束在这条路径上没有生效时机。

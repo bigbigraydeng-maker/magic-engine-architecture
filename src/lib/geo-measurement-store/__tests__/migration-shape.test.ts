@@ -536,6 +536,20 @@ describe('WP03 migration · Codex 复审三条（回归）', () => {
     expect(fn).toContain('NEW.locked_at IS NOT NULL')
   })
 
+  it('上锁只能由首个批次的触发器发起，调用方不能直接 UPDATE 抢锁', () => {
+    const fn = region('FUNCTION public.geo_query_sets_guard()', 'DROP TRIGGER IF EXISTS geo_query_sets_guard_trigger')
+    // 🔴 只堵 INSERT 不够：UPDATE ... SET locked_at = now() 能穿过「旧值为空 /
+    //    新值非空 / 别的列没动」全部判据，把一个还没拟完题的集合永久锁死 ——
+    //    解不开、加不了题、也删不掉，没有任何恢复路径。
+    expect(
+      fn.includes('pg_trigger_depth() < 2'),
+      '合法的上锁是 geo_batches 的 BEFORE INSERT 触发器内部发出的 UPDATE（本守卫深度 2）；\n' +
+        '调用方直接 UPDATE 时本守卫深度是 1。深度伪造不了，这是唯一分得开两者的判据。',
+    ).toBe(true)
+    // 判据必须在「强制写 now()」之前，否则先放行再判就没意义了
+    expect(fn.indexOf('pg_trigger_depth() < 2')).toBeLessThan(fn.indexOf('NEW.locked_at := now()'))
+  })
+
   // ── P2：证据挂到失败观测 ──────────────────────────────────────────────────
   it('证据只能挂在成功的观测上（外键只管存在与同租户，管不了成败）', () => {
     expect(SQL).toContain('FUNCTION public.geo_evidence_requires_successful_observation()')
