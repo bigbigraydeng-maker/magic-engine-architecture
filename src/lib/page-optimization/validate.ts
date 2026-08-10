@@ -184,7 +184,15 @@ export function validatePageChange(
     }
   }
   if (!providerCheck.passed) {
-    violations.push(...providerCheck.violations)
+    // 🔴 无论 providerCheck.violations 是不是空数组，passed:false 本身就是
+    // 明确的失败结论——绝不能因为「这次没列出具体违规」就被后面的
+    // `violations.length === 0` 兜底成 ok:true（2026-08-11 Build Control Room
+    // 复审：这仍然是把「明确失败」表示成「成功」）。
+    return {
+      ok: false,
+      reason: 'provider 侧校验判定失败',
+      violations: [...violations, ...providerCheck.violations],
+    }
   }
 
   return violations.length === 0 ? { ok: true } : { ok: false, reason: '校验未通过', violations }

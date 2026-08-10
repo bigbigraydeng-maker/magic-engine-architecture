@@ -108,6 +108,15 @@ describe('validatePageChange · provider 校验未评估不能算通过', () => 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.violations).toContain('Yoast meta 字段不可写')
   })
+
+  it('provider 校验判定失败但 violations 是空数组 → 仍然拒绝，不能被空数组兜底成通过', () => {
+    // 回归用例：passed:false + violations:[] 曾经能一路走到
+    // `violations.length === 0` 那句兜底判断，被误判成 ok:true——
+    // 这正是把「明确失败」表示成「成功」（2026-08-11 Build Control Room 复审）。
+    const providerCheck: ProviderCheckInput = { evaluated: true, passed: false, violations: [] }
+    const result = validatePageChange(baseRequest(), OK_DIFF, AVAILABLE_NO_REDLINES, providerCheck)
+    expect(result.ok).toBe(false)
+  })
 })
 
 describe('validatePageChange · providerCheck 运行时必须是合法形状（不能靠类型系统兜底）', () => {
