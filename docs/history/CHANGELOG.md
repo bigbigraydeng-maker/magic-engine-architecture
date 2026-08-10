@@ -5,6 +5,24 @@
 
 ---
 
+### 2026-08-10（ME2 WP01：Growth Module 契约进仓，尚未启用）
+
+issue [#877](https://github.com/bigbigraydeng-maker/magic-engine/issues/877) · PR [#890](https://github.com/bigbigraydeng-maker/magic-engine/pull/890) · 合并提交 `700f57e`。
+
+新增 `src/lib/growth/` 五个文件，落下任何 Domain Module 共用的五段推理契约：
+`GrowthEvidence` / `GrowthFinding` / `GrowthPrescription` /
+`GrowthActionCandidate` / `GrowthVerificationDefinition`。
+
+**已合入 `main`，运行时仍不活动**：全仓没有任何代码 import 这个模块
+（`grep -rn "lib/growth" src/ --exclude-dir=growth` 零结果），无 schema、无 migration、
+无 provider 调用，不改变任何现有功能的行为。
+
+验证：Growth 71 条测试、Kernel 架构回归 25 条全过。
+
+WP01 是后续 WP 的代码前置，**本身不交付任何用户可见能力**。
+
+---
+
 ### 2026-08-09（首页覆盖率正贴着上限 —— 小客户随时会从统计里消失）
 
 **这条不是「以后可能出问题」，是随时会出。** 首页四段飞轮的覆盖率百分比，
