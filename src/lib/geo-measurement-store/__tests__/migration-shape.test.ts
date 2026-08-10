@@ -575,11 +575,18 @@ describe('WP03 migration · Codex 复审三条（回归）', () => {
     )
     expect(locker).toContain('UPDATE public.geo_query_sets')
     expect(locker).toContain('SET locked_at = now()')
+    // 🔴 断言必须一路管到 EXECUTE FUNCTION 的**绑定**为止。
+    //    只匹配到 FOR EACH ROW 是不够的：把 EXECUTE FUNCTION 改绑到别的函数
+    //    （或整句删掉），上面那些断言照样全绿 —— 因为上锁函数本身还在、函数体里
+    //    那句 UPDATE 也还在，只是**再没有人调用它**了。
+    //    那种状态下首个批次落库后查询集根本不会被锁上，而「放行侧」看起来还被钉着。
     expect(
       SQL,
-      '上锁那句 UPDATE 必须由 geo_batches 的**行级**触发器发出，深度才够得到 2。',
+      '上锁那句 UPDATE 必须由 geo_batches 的**行级**触发器发出，深度才够得到 2；\n' +
+        '而且这个触发器必须真的绑在 geo_batches_lock_query_set() 上 —— \n' +
+        '函数还在、没人调用，跟没有这个函数是一回事。',
     ).toMatch(
-      /CREATE TRIGGER geo_batches_lock_query_set_trigger\s+BEFORE INSERT ON public\.geo_batches\s+FOR EACH ROW/,
+      /CREATE TRIGGER geo_batches_lock_query_set_trigger\s+BEFORE INSERT ON public\.geo_batches\s+FOR EACH ROW EXECUTE FUNCTION public\.geo_batches_lock_query_set\(\);/,
     )
 
     // 全库只有这一处写 locked_at。多出来的那处多半在深度 1，会被守卫自己拦死 ——
