@@ -536,18 +536,79 @@ describe('WP03 migration · Codex 复审三条（回归）', () => {
     expect(fn).toContain('NEW.locked_at IS NOT NULL')
   })
 
-  it('上锁只能由首个批次的触发器发起，调用方不能直接 UPDATE 抢锁', () => {
-    const fn = region('FUNCTION public.geo_query_sets_guard()', 'DROP TRIGGER IF EXISTS geo_query_sets_guard_trigger')
-    // 🔴 只堵 INSERT 不够：UPDATE ... SET locked_at = now() 能穿过「旧值为空 /
-    //    新值非空 / 别的列没动」全部判据，把一个还没拟完题的集合永久锁死 ——
-    //    解不开、加不了题、也删不掉，没有任何恢复路径。
+  it('上锁这条路：调用方直接 UPDATE 被拒，首个批次触发的那次照样通过', () => {
+    // 🔴 这条测试要同时钉住**两侧**。只钉「拒」的一侧是不够的：把阈值调严一点
+    //    （比如 < 3）或者把上锁那句 UPDATE 挪出触发器，唯一那条合法的上锁路径
+    //    就会被判据自己永久堵死，而查询集从此再也锁不上 —— 只测拒绝侧看不出来。
+    //
+    // 🔴 判据本身是**运行时行为**（触发深度），这里扫的只是 SQL 文本。
+    //    真的「顶层 UPDATE 报错、批次插入成功上锁」必须在 apply 之后用真库验；
+    //    仓库里没有可执行的本地 Postgres 测试设施，本 PR 也不引入。
+    //    apply 后的自验语句见迁移文件 §8。
+    const guard = region(
+      'FUNCTION public.geo_query_sets_guard()',
+      'DROP TRIGGER IF EXISTS geo_query_sets_guard_trigger',
+    )
+
+    // ── 拒的那一侧：顶层 UPDATE 时本守卫在深度 1 触发，阈值正好是 2 才拦得住 ──
     expect(
-      fn.includes('pg_trigger_depth() < 2'),
-      '合法的上锁是 geo_batches 的 BEFORE INSERT 触发器内部发出的 UPDATE（本守卫深度 2）；\n' +
-        '调用方直接 UPDATE 时本守卫深度是 1。深度伪造不了，这是唯一分得开两者的判据。',
+      guard.includes('pg_trigger_depth() < 2'),
+      '调用方直接 UPDATE 时本守卫在深度 1 触发，批次触发的那次在深度 2。\n' +
+        '阈值必须正好是 2：调大了会把唯一合法的上锁也拦掉，调小了等于没拦。',
     ).toBe(true)
-    // 判据必须在「强制写 now()」之前，否则先放行再判就没意义了
-    expect(fn.indexOf('pg_trigger_depth() < 2')).toBeLessThan(fn.indexOf('NEW.locked_at := now()'))
+
+    // 必须**先拦再写**，否则等于先放行再判
+    const depthAt = guard.indexOf('pg_trigger_depth() < 2')
+    const forceNowAt = guard.indexOf('NEW.locked_at := now()')
+    expect(depthAt, '守卫里必须有深度判据').toBeGreaterThan(-1)
+    expect(forceNowAt, '守卫里必须有「强制写数据库时间」').toBeGreaterThan(-1)
+    expect(
+      depthAt,
+      '深度判据必须排在 NEW.locked_at := now() 之前 —— 排在后面就是先放行再判。',
+    ).toBeLessThan(forceNowAt)
+
+    // ── 放行的那一侧：合法的上锁必须是触发器**内部**发出的 UPDATE ──────────
+    //    只有这样守卫才会在深度 2 触发。下面三件事任何一件变了，深度就不再是 2。
+    const locker = region(
+      'FUNCTION public.geo_batches_lock_query_set()',
+      'DROP TRIGGER IF EXISTS geo_batches_lock_query_set_trigger',
+    )
+    expect(locker).toContain('UPDATE public.geo_query_sets')
+    expect(locker).toContain('SET locked_at = now()')
+    expect(
+      SQL,
+      '上锁那句 UPDATE 必须由 geo_batches 的**行级**触发器发出，深度才够得到 2。',
+    ).toMatch(
+      /CREATE TRIGGER geo_batches_lock_query_set_trigger\s+BEFORE INSERT ON public\.geo_batches\s+FOR EACH ROW/,
+    )
+
+    // 全库只有这一处写 locked_at。多出来的那处多半在深度 1，会被守卫自己拦死 ——
+    // 于是「上锁」这件事看起来有两条路，实际只有一条走得通。
+    expect(
+      SQL.split('SET locked_at').length - 1,
+      'locked_at 只允许有一个写入方（批次触发器）。',
+    ).toBe(1)
+
+    // ── 合法的那次上锁**只准动 locked_at** ────────────────────────────────
+    //    列清单从建表语句里现读，不写死：将来给 geo_query_sets 加一列却忘了
+    //    加进冻结清单，这条会红。写死清单的话，新列会悄悄变成「上锁时可改」。
+    const tableBlock = region(
+      'CREATE TABLE IF NOT EXISTS public.geo_query_sets',
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_geo_query_sets_client_id_id',
+    )
+    const columns = Array.from(tableBlock.matchAll(/^ {2}([a-z_]+) +[a-z]/gm)).map((m) => m[1])
+    expect(columns, '没解析到列名的话下面的判据就是空跑').toContain('locked_at')
+    expect(columns.length).toBeGreaterThan(1)
+
+    const notFrozen = columns
+      .filter((c) => c !== 'locked_at')
+      .filter((c) => !guard.includes(`NEW.${c}`) || !guard.includes(`OLD.${c}`))
+    expect(
+      notFrozen,
+      '这些列没被上锁那一步的 ROW(...) 冻结住 —— 意味着「上锁」这一次写入\n' +
+        '可以顺手把它们改掉，而查询集一旦锁定就再也改不回来了。\n' +
+        notFrozen.join('\n'),
+    ).toEqual([])
   })
 
   // ── P2：证据挂到失败观测 ──────────────────────────────────────────────────
