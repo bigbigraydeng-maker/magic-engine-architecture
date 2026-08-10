@@ -30,12 +30,13 @@
 - [ ] **K-WP02** [#882](https://github.com/bigbigraydeng-maker/magic-engine/issues/882) ActionCandidate→ActionKey 治理 + per-action 副作用政策 + 注册表反向注入 prompt · 前置已满足
 - [ ] **WP03** [#875](https://github.com/bigbigraydeng-maker/magic-engine/issues/875) 不可变测量存储（含 migration，apply 单独授权）
 - [ ] **WP04** [#874](https://github.com/bigbigraydeng-maker/magic-engine/issues/874) 测量执行 + 成本 / 覆盖率控制
-- [ ] **WP05** [#879](https://github.com/bigbigraydeng-maker/magic-engine/issues/879) GEO Module v1（第一个 Domain Module，会是 `src/lib/growth` 的第一个 importer）
+- [ ] **WP05** [#879](https://github.com/bigbigraydeng-maker/magic-engine/issues/879) GEO Module v1 —— 第一个 Domain Module，**唯一明确的 `src/lib/growth` 首个消费方**
 - [ ] **WP06** [#878](https://github.com/bigbigraydeng-maker/magic-engine/issues/878) 共享 Page 能力：resolve / snapshot / draft / diff / validate（零线上写）
 - [ ] **WP07** [#880](https://github.com/bigbigraydeng-maker/magic-engine/issues/880) Kernel 授权的 apply / verify / rollback
 - [ ] **K-WP01** [#881](https://github.com/bigbigraydeng-maker/magic-engine/issues/881) 认证审批 / 拒绝界面 + 政策 Settings UI
 - [ ] **WP08–WP10** [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) / [#884](https://github.com/bigbigraydeng-maker/magic-engine/issues/884) / [#885](https://github.com/bigbigraydeng-maker/magic-engine/issues/885) Roman 基线 → 首次 1–3 页优化 → T+7/14/28 复测与学习（严格串行）
-- [ ] **U11 剩余** `docs/STATE.md` / 本文件的 ME2 条目已补（本 PR）；WP00 §15 其余未决项（U1–U10、U12）仍以未决形态挂着，**任何 WP 不许把它们当既定假设**
+- [x] ~~**U11**~~ ✅ **已完成** —— `docs/STATE.md` 与本文件的 ME2 条目已补齐（本 PR）
+- [ ] **WP00 §15 其余未决项**（**U1–U10、U12**）仍**单独**以未决形态挂着，**任何 WP 不许把它们当既定假设**
 
 **独立并行、不并入本链**：[#886](https://github.com/bigbigraydeng-maker/magic-engine/issues/886) Operating Brief（参考闭环稳定前不开工）· [#887](https://github.com/bigbigraydeng-maker/magic-engine/issues/887) 广告安全泳道（**不许夹带进任何 ME2 的 WP**）
 
