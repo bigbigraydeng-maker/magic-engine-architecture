@@ -60,7 +60,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | **ME MCP Server** (P34) | ✅ 上线 | `lib/mcp` · `api/mcp` · `api/mcp-admin` | `admin_api_keys` `client_api_keys` `api_key_settings` |
 | **Outbound Prospecting** (P35) | 🔄 建设中 | `lib/prospecting` · `api/admin/prospecting` · `api/prospect` | `outbound_prospects` `discovery_leads` |
 | **Voice Agent** (P36) | 🔄 建设中 | `lib/voice` · `api/voice` · `scripts/voice/` | 见 `docs/voice-agent/` |
-| **ME2 执行内核** | ⚠️ **代码在 main，生产未启用** | `lib/kernel` · `lib/capabilities` | `action_runs` `action_run_steps` `authorization_decisions` `client_automation_policies` —— **这四张表在生产不存在**（migration 未 apply） |
+| **ME2 执行内核** | ⚠️ **代码在 main，生产未启用** | `lib/kernel` · `lib/capabilities` | `action_runs` `action_run_steps` `authorization_decisions` `client_automation_policies` —— **WP00 2026-08-10 preflight 记录为不存在；启用前按对象存在性重查** |
 | **ME2 Growth 契约** | ⚠️ **代码在 main，无人调用** | `lib/growth`（纯类型 + 纯校验器） | 无 |
 
 **六支柱诊断维度（不变）**：`seo` / `ai_visibility` / `ads` / `social` / `reputation` / `competitor`。
