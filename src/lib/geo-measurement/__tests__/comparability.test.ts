@@ -158,9 +158,97 @@ describe('evaluateGeoComparability', () => {
     expect(result.mismatches.every((m) => m.condition !== 'quality_thresholds')).toBe(true)
   })
 
-  it('可以显式传入自定义阈值策略（例如更严格的 WP08 覆盖）', () => {
-    const strict = { version: 'strict-test', minParserConfidence: 0.99, minEngineCoverage: 0.99, maxFailureRate: 0.01 }
-    const result = evaluateGeoComparability(cohort(), cohort(), strict)
+  it('不接受调用方传入运行时阈值 —— evaluateGeoComparability 只接受两个队列参数', () => {
+    expect(evaluateGeoComparability.length).toBe(2)
+  })
+
+  it('样本序号已知但两侧不相等 → not_comparable，原因带上具体数值', () => {
+    const result = evaluateGeoComparability(
+      cohort(),
+      cohort({ acquisition: acquisition({ sample: { ...acquisition().sample, sampleIndex: { known: true, value: 2 } } }) }),
+    )
     expect(result.comparable).toBe(false)
+    if (result.comparable) throw new Error('unreachable')
+    expect(result.mismatches.some((m) => m.dimension === 'sample.sampleIndex' && m.reason.includes('1') && m.reason.includes('2'))).toBe(
+      true,
+    )
+  })
+
+  it('采样参数一侧已知一侧未知 → not_comparable', () => {
+    const result = evaluateGeoComparability(
+      cohort(),
+      cohort({
+        acquisition: acquisition({
+          sample: { ...acquisition().sample, samplingParameters: { known: true, value: { temperature: 0.7 } } },
+        }),
+      }),
+    )
+    expect(result.comparable).toBe(false)
+    if (result.comparable) throw new Error('unreachable')
+    expect(result.mismatches.some((m) => m.dimension === 'sample.samplingParameters')).toBe(true)
+  })
+
+  it('采样参数两侧都已知但值不同 → not_comparable', () => {
+    const withParams = (v: number) =>
+      cohort({
+        acquisition: acquisition({
+          sample: { ...acquisition().sample, samplingParameters: { known: true, value: { temperature: v } } },
+        }),
+      })
+    const result = evaluateGeoComparability(withParams(0.7), withParams(0.9))
+    expect(result.comparable).toBe(false)
+    if (result.comparable) throw new Error('unreachable')
+    expect(result.mismatches.some((m) => m.dimension === 'sample.samplingParameters')).toBe(true)
+  })
+
+  it('采样参数两侧都已知、值相同但 key 插入顺序不同 → 仍然 comparable（不许假性不匹配）', () => {
+    const left = cohort({
+      acquisition: acquisition({
+        sample: {
+          ...acquisition().sample,
+          samplingParameters: { known: true, value: { temperature: 0.7, seed: 42 } },
+        },
+      }),
+    })
+    const right = cohort({
+      acquisition: acquisition({
+        sample: {
+          ...acquisition().sample,
+          samplingParameters: { known: true, value: { seed: 42, temperature: 0.7 } },
+        },
+      }),
+    })
+    expect(evaluateGeoComparability(left, right)).toEqual({ comparable: true })
+  })
+
+  it('采样参数两侧都显式未知 → 允许，不是不匹配', () => {
+    expect(evaluateGeoComparability(cohort(), cohort())).toEqual({ comparable: true })
+  })
+
+  it('confidence 为 NaN → not_comparable，不许被 NaN<阈值 恒为 false 悄悄放过', () => {
+    const result = evaluateGeoComparability(cohort({ confidence: { known: true, value: Number.NaN } }), cohort())
+    expect(result.comparable).toBe(false)
+    if (result.comparable) throw new Error('unreachable')
+    expect(result.mismatches.some((m) => m.dimension === 'left.confidence' && m.reason.includes('finite ratio'))).toBe(
+      true,
+    )
+  })
+
+  it('engineCoverage 超出 [0,1] 范围（例如 1.5）→ not_comparable', () => {
+    const result = evaluateGeoComparability(cohort(), cohort({ engineCoverage: { known: true, value: 1.5 } }))
+    expect(result.comparable).toBe(false)
+    if (result.comparable) throw new Error('unreachable')
+    expect(
+      result.mismatches.some((m) => m.dimension === 'right.engineCoverage' && m.reason.includes('finite ratio')),
+    ).toBe(true)
+  })
+
+  it('failureRate 为 Infinity → not_comparable', () => {
+    const result = evaluateGeoComparability(cohort({ failureRate: { known: true, value: Number.POSITIVE_INFINITY } }), cohort())
+    expect(result.comparable).toBe(false)
+    if (result.comparable) throw new Error('unreachable')
+    expect(result.mismatches.some((m) => m.dimension === 'left.failureRate' && m.reason.includes('finite ratio'))).toBe(
+      true,
+    )
   })
 })

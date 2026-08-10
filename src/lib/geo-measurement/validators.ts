@@ -50,6 +50,14 @@ function isValidMaybeUnknown(value: unknown, checkValue: (v: unknown) => boolean
 const isStringMaybeUnknown = (v: unknown): boolean => isValidMaybeUnknown(v, (x) => typeof x === 'string')
 const isNumberMaybeUnknown = (v: unknown): boolean => isValidMaybeUnknown(v, (x) => typeof x === 'number')
 
+/**
+ * 已知值必须是有限、落在 [0,1] 的比率。`NaN` 在 JS 里 `typeof` 是 `'number'`，
+ * 且 `NaN < x` / `NaN > x` 恒为 `false` —— 不额外判有限性就会让畸形置信度
+ * 悄悄通过下游的阈值比较。用于 confidence 一类「已知就必须是合法比率」的字段。
+ */
+const isRatioMaybeUnknown = (v: unknown): boolean =>
+  isValidMaybeUnknown(v, (x) => typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= 1)
+
 // ── 采集身份 ──────────────────────────────────────────────────────────────────
 
 /**
@@ -186,8 +194,8 @@ export function validateGeoObservation(input: unknown): GeoValidationResult {
   const interpretation = validateGeoInterpretationIdentity(input.interpretation)
   if (!interpretation.ok) return fail(`observation.interpretation: ${interpretation.reason}`)
 
-  if (!isNumberMaybeUnknown(input.confidence)) {
-    return fail('observation "confidence" must be a known/unknown number')
+  if (!isRatioMaybeUnknown(input.confidence)) {
+    return fail('observation "confidence" must be a known/unknown finite ratio in [0,1]')
   }
   if (!isParseableTimestamp(input.observedAt)) return fail('observation "observedAt" must be a parseable timestamp')
 
@@ -209,9 +217,11 @@ export function validateGeoObservation(input: unknown): GeoValidationResult {
 
 // ── 指标 ──────────────────────────────────────────────────────────────────────
 
-function validateMetricResult(input: unknown, label: string): GeoValidationResult {
+function validateMetricResult(input: unknown, label: string, expectedMetricKey: string): GeoValidationResult {
   if (!isPlainObject(input)) return fail(`${label} must be an object`)
-  if (!isNonEmptyString(input.metricKey)) return fail(`${label}.metricKey must be a non-empty string`)
+  if (input.metricKey !== expectedMetricKey) {
+    return fail(`${label}.metricKey must be "${expectedMetricKey}", got ${JSON.stringify(input.metricKey)}`)
+  }
 
   const value = input.value
   if (!isPlainObject(value)) return fail(`${label}.value must be an object`)
@@ -280,6 +290,16 @@ export function validateGeoMetricsSummary(input: unknown): GeoValidationResult {
     if (!(key in input)) return fail(`metrics summary missing "${key}"`)
   }
 
+  // 🔴 每个字段必须绑定它自己的 metricKey —— 校验器不许接受挪错位置的指标结果
+  // （例如把 qualified_mention 塞进 recommendation 字段）。
+  const FIELD_TO_METRIC_KEY: Readonly<Record<string, string>> = {
+    qualifiedMention: 'qualified_mention',
+    recommendation: 'recommendation',
+    citation: 'citation',
+    ownedDomainCitation: 'owned_domain_citation',
+    directOwnedPageCitation: 'direct_owned_page_citation',
+    engineCoverage: 'engine_coverage',
+  }
   for (const key of [
     'qualifiedMention',
     'recommendation',
@@ -288,7 +308,7 @@ export function validateGeoMetricsSummary(input: unknown): GeoValidationResult {
     'directOwnedPageCitation',
     'engineCoverage',
   ] as const) {
-    const result = validateMetricResult(input[key], key)
+    const result = validateMetricResult(input[key], key, FIELD_TO_METRIC_KEY[key])
     if (!result.ok) return result
   }
 

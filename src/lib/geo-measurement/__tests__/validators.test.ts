@@ -16,6 +16,7 @@ import type {
   GeoAcquisitionIdentity,
   GeoEvidence,
   GeoInterpretationIdentity,
+  GeoMetricKey,
   GeoMetricsSummary,
   GeoObservation,
 } from '../types'
@@ -65,8 +66,9 @@ const observation = (): GeoObservation => ({
   outcome: { ok: true, evidenceId: 'ev-1' },
 })
 
-const metric = (overrides: Partial<{ computable: boolean }> = {}) => ({
-  metricKey: 'qualified_mention' as const,
+/** 🔴 每个字段必须传自己的 metricKey —— 校验器现在绑定 key，混用会被拒绝。 */
+const metric = (metricKey: GeoMetricKey, overrides: Partial<{ computable: boolean }> = {}) => ({
+  metricKey,
   value:
     overrides.computable === false
       ? { computable: false as const, reason: 'no page ledger available' }
@@ -76,17 +78,17 @@ const metric = (overrides: Partial<{ computable: boolean }> = {}) => ({
 })
 
 const metricsSummary = (): GeoMetricsSummary => ({
-  qualifiedMention: metric(),
-  recommendation: metric(),
-  citation: metric(),
-  ownedDomainCitation: metric(),
-  directOwnedPageCitation: metric({ computable: false }),
+  qualifiedMention: metric('qualified_mention'),
+  recommendation: metric('recommendation'),
+  citation: metric('citation'),
+  ownedDomainCitation: metric('owned_domain_citation'),
+  directOwnedPageCitation: metric('direct_owned_page_citation', { computable: false }),
   conditionalRank: {
     metricRulesVersion: { known: true, value: 'geo-rules@2026-08-01' },
     sampleSize: 5,
     value: { applicable: true, computable: true, rank: 2 },
   },
-  engineCoverage: metric(),
+  engineCoverage: metric('engine_coverage'),
 })
 
 const mutate = <T>(base: T, patch: Record<string, unknown>): unknown => ({ ...base, ...patch })
@@ -199,6 +201,18 @@ describe('validateGeoObservation', () => {
     expect(validateGeoObservation(mutate(observation(), { outcome: { ok: true } })).ok).toBe(false)
   })
 
+  it('confidence 为 NaN 拒绝 —— NaN 的 typeof 是 "number"，不能只靠类型判断', () => {
+    expect(
+      validateGeoObservation(mutate(observation(), { confidence: { known: true, value: Number.NaN } })).ok,
+    ).toBe(false)
+  })
+
+  it('confidence 超出 [0,1] 范围（例如 1.5）拒绝', () => {
+    expect(validateGeoObservation(mutate(observation(), { confidence: { known: true, value: 1.5 } })).ok).toBe(
+      false,
+    )
+  })
+
   it('内嵌的采集身份不合法时，观测整体拒绝', () => {
     const o = observation()
     expect(
@@ -244,8 +258,16 @@ describe('validateGeoMetricsSummary', () => {
     expect(
       validateGeoMetricsSummary(
         mutate(metricsSummary(), {
-          directOwnedPageCitation: { ...metric(), value: { computable: false } },
+          directOwnedPageCitation: { ...metric('direct_owned_page_citation'), value: { computable: false } },
         }),
+      ).ok,
+    ).toBe(false)
+  })
+
+  it('metricKey 挪错位置（例如把 qualified_mention 塞进 recommendation 字段）拒绝', () => {
+    expect(
+      validateGeoMetricsSummary(
+        mutate(metricsSummary(), { recommendation: metric('qualified_mention') }),
       ).ok,
     ).toBe(false)
   })

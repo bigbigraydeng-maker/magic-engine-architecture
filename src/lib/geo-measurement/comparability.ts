@@ -30,6 +30,41 @@ function sameKnownValue<T>(a: GeoMaybeUnknown<T>, b: GeoMaybeUnknown<T>): boolea
   return a.value === b.value
 }
 
+/** 有限、非 NaN 的数值判据 —— 独立于「known/unknown」，判的是「known 里的值本身合不合法」。 */
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v)
+}
+
+/** 有限且落在 [0,1] 的比率 —— confidence / engineCoverage / failureRate 共用的判据。 */
+function isValidRatio(v: unknown): v is number {
+  return isFiniteNumber(v) && v >= 0 && v <= 1
+}
+
+/**
+ * 结构相等，`GeoJsonValue` 语义：对象比较忽略 key 插入顺序，数组比较保序。
+ * 供 `sample.samplingParameters` 的可比性判定使用（sampling parameters 的
+ * 序列化顺序不该造成假性不匹配）。
+ */
+function sameJsonStructure(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== typeof b) return false
+  if (a === null || b === null) return a === b
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b)) return false
+    if (a.length !== b.length) return false
+    return a.every((v, i) => sameJsonStructure(v, b[i]))
+  }
+  if (typeof a === 'object' && typeof b === 'object') {
+    const aObj = a as Record<string, unknown>
+    const bObj = b as Record<string, unknown>
+    const aKeys = Object.keys(aObj).sort()
+    const bKeys = Object.keys(bObj).sort()
+    if (aKeys.length !== bKeys.length) return false
+    return aKeys.every((k, i) => k === bKeys[i] && sameJsonStructure(aObj[k], bObj[k]))
+  }
+  return false
+}
+
 function checkAcquisitionIdentity(
   left: GeoAcquisitionIdentity,
   right: GeoAcquisitionIdentity,
@@ -65,12 +100,39 @@ function checkAcquisitionIdentity(
     })
   }
 
-  // 两侧都必须能重建样本序号身份 —— 缺一侧就不算 matched（GEO 契约 §3.2 冻结）。
-  if (!left.sample.sampleIndex.known || !right.sample.sampleIndex.known) {
+  // 两侧都必须能重建样本序号身份，且身份必须相等 —— 缺一侧或不相等就不算
+  // matched（GEO 契约 §3.2 冻结）。
+  const leftIndex = left.sample.sampleIndex
+  const rightIndex = right.sample.sampleIndex
+  if (!leftIndex.known || !rightIndex.known) {
     mismatches.push({
       condition: 'acquisition_identity',
       dimension: 'sample.sampleIndex',
       reason: 'replicate identity cannot be reconstructed on at least one side',
+    })
+  } else if (leftIndex.value !== rightIndex.value) {
+    mismatches.push({
+      condition: 'acquisition_identity',
+      dimension: 'sample.sampleIndex',
+      reason: `replicate identity differs (${leftIndex.value} vs ${rightIndex.value})`,
+    })
+  }
+
+  // 采样参数：一侧已知一侧未知视为不匹配；两侧都已知要结构相等（忽略 key 顺序）；
+  // 两侧都未知是允许的 —— 契约只要求「可控且可得时才记」，都没记不代表不匹配。
+  const leftParams = left.sample.samplingParameters
+  const rightParams = right.sample.samplingParameters
+  if (leftParams.known !== rightParams.known) {
+    mismatches.push({
+      condition: 'acquisition_identity',
+      dimension: 'sample.samplingParameters',
+      reason: 'sampling parameters are recorded on only one side',
+    })
+  } else if (leftParams.known && rightParams.known && !sameJsonStructure(leftParams.value, rightParams.value)) {
+    mismatches.push({
+      condition: 'acquisition_identity',
+      dimension: 'sample.samplingParameters',
+      reason: 'sampling parameters differ',
     })
   }
 
@@ -113,38 +175,56 @@ function checkQualitySide(
   const mismatches: GeoComparabilityMismatch[] = []
 
   const confidence = unwrapKnown(cohort.confidence)
-  if (confidence === undefined || confidence < policy.minParserConfidence) {
+  if (confidence === undefined || !isValidRatio(confidence)) {
     mismatches.push({
       condition: 'quality_thresholds',
       dimension: `${side}.confidence`,
       reason:
         confidence === undefined
           ? 'parser confidence is unknown'
-          : `parser confidence ${confidence} is below the ${policy.minParserConfidence} floor`,
+          : `parser confidence ${confidence} is not a finite ratio in [0,1]`,
+    })
+  } else if (confidence < policy.minParserConfidence) {
+    mismatches.push({
+      condition: 'quality_thresholds',
+      dimension: `${side}.confidence`,
+      reason: `parser confidence ${confidence} is below the ${policy.minParserConfidence} floor`,
     })
   }
 
   const coverage = unwrapKnown(cohort.engineCoverage)
-  if (coverage === undefined || coverage < policy.minEngineCoverage) {
+  if (coverage === undefined || !isValidRatio(coverage)) {
     mismatches.push({
       condition: 'quality_thresholds',
       dimension: `${side}.engineCoverage`,
       reason:
         coverage === undefined
           ? 'engine coverage is unknown'
-          : `engine coverage ${coverage} is below the ${policy.minEngineCoverage} floor`,
+          : `engine coverage ${coverage} is not a finite ratio in [0,1]`,
+    })
+  } else if (coverage < policy.minEngineCoverage) {
+    mismatches.push({
+      condition: 'quality_thresholds',
+      dimension: `${side}.engineCoverage`,
+      reason: `engine coverage ${coverage} is below the ${policy.minEngineCoverage} floor`,
     })
   }
 
   const failureRate = unwrapKnown(cohort.failureRate)
-  if (failureRate === undefined || failureRate > policy.maxFailureRate) {
+  if (failureRate === undefined || !isValidRatio(failureRate)) {
     mismatches.push({
       condition: 'quality_thresholds',
       dimension: `${side}.failureRate`,
       reason:
         failureRate === undefined
           ? 'failure rate is unknown'
-          : `failure rate ${failureRate} exceeds the ${policy.maxFailureRate} ceiling`,
+          : `failure rate ${failureRate} is not a finite ratio in [0,1]`,
+    })
+  } else if (failureRate > policy.maxFailureRate) {
+    mismatches.push({
+      condition: 'quality_thresholds',
+      dimension: `${side}.failureRate`,
+      reason: `failure rate ${failureRate} exceeds the ${policy.maxFailureRate} ceiling`,
     })
   }
 
@@ -155,14 +235,17 @@ function checkQualitySide(
  * 三条判据全部成立才 `comparable: true`（GEO 契约 §6.1）。任何一条不成立，
  * 结果是 `not_comparable`，并带上是哪一条、哪一项不成立。
  *
- * 质量阈值默认取 {@link GEO_COMPARABILITY_POLICY_V1}，独立施加于两侧，
- * 不平均、不许一侧补偿另一侧。
+ * 🔴 v1 冻结：质量阈值恒为 {@link GEO_COMPARABILITY_POLICY_V1}，独立施加于两侧，
+ *    不平均、不许一侧补偿另一侧。**不接受调用方传入的运行时阈值** —— 否则任何
+ *    调用方都能传一份全零阈值把不合格的队列判成 `comparable: true`，这条冻结
+ *    政策就形同虚设。未来要换一版阈值，必须显式引入新的具名版本化策略，
+ *    不能按次调用现改（Build Control Room 2026-08-10 WP02 复审裁定）。
  */
 export function evaluateGeoComparability(
   left: GeoComparabilityCohortInput,
   right: GeoComparabilityCohortInput,
-  policy: GeoComparabilityPolicy = GEO_COMPARABILITY_POLICY_V1,
 ): GeoComparabilityResult {
+  const policy = GEO_COMPARABILITY_POLICY_V1
   const mismatches: GeoComparabilityMismatch[] = [
     ...checkAcquisitionIdentity(left.acquisition, right.acquisition),
     ...checkInterpretationIdentity(left.interpretation, right.interpretation),
