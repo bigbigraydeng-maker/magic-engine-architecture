@@ -35,7 +35,7 @@ export type GrowthMaybeUnknown<T> =
   | { readonly known: true; readonly value: T }
   | { readonly known: false; readonly reason: GrowthUnknownReason }
 
-/** provider 中立输入允许的值。不含 `undefined` —— JSON 里没有这个东西。 */
+/** 动作输入允许的值。不含 `undefined` —— JSON 里没有这个东西。 */
 export type GrowthJsonValue =
   | string
   | number
@@ -192,7 +192,16 @@ export interface GrowthVerificationDefinition {
 export interface GrowthActionCandidate {
   /** 想做的动作身份（候选，尚未映射到 ActionKey）。 */
   readonly identity: GrowthActionCandidateIdentity
-  /** provider 中立的输入。不许出现任何 provider 专有字段。 */
+  /**
+   * 动作输入。
+   *
+   * 🔴 **WP01 只强制「形状是 JSON 安全的」** —— 校验器查的是这份数据能不能原样
+   *    存活过一次序列化，**不判断字段语义是不是 provider 中立**。
+   *    它认不出 provider 专有的字段名，也没有这种黑名单。
+   *
+   * 🔴 「不许出现 provider 专有字段」这条语义约束由**后续的域映射 / K-WP 层**强制
+   *    （Page 契约 §2 第 1 条）。本层不声称做到了这件事。
+   */
   readonly input: { readonly [key: string]: GrowthJsonValue }
   /** 凭哪些 Finding（每条自带至少一条 Evidence）。**至少一条。** */
   readonly basis: readonly GrowthFinding[]

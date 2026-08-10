@@ -310,6 +310,69 @@ describe('ActionCandidate.input 的 JSON 值检查', () => {
   it('顶层是数组 → 拒绝', () => {
     expect(validateGrowthActionCandidate(mutate(candidate(), { input: ['not', 'an', 'object'] })).ok).toBe(false)
   })
+
+  // 🔴 下面这几种都能过 `Array.prototype.every` / `Object.values`，
+  //    但 JSON 序列化会把它们悄悄改掉或丢掉 —— 实测见 validators.ts 的判据表。
+  const rejectsInput = (input: unknown): boolean =>
+    validateGrowthActionCandidate(mutate(candidate(), { input })).ok === false
+
+  it('稀疏数组被拒 —— 空洞在序列化后会变成 null', () => {
+    // eslint-disable-next-line no-sparse-arrays
+    expect(rejectsInput({ a: [1, , 3] })).toBe(true)
+    expect(JSON.stringify({ a: [1, , 3] })).toBe('{"a":[1,null,3]}')
+  })
+
+  it('数组上挂了额外的字符串属性 → 拒绝（序列化时会丢）', () => {
+    const withExtra: unknown[] = ['a']
+    ;(withExtra as unknown as Record<string, unknown>).foo = 'x'
+    expect(rejectsInput({ a: withExtra })).toBe(true)
+  })
+
+  it('symbol 键 → 拒绝（序列化时会丢）', () => {
+    expect(rejectsInput({ a: { [Symbol('s')]: 1 } })).toBe(true)
+  })
+
+  it('不可枚举属性 → 拒绝（序列化时会丢）', () => {
+    const hidden = {}
+    Object.defineProperty(hidden, 'a', { value: 1, enumerable: false, configurable: true })
+    expect(rejectsInput({ a: hidden })).toBe(true)
+  })
+
+  it('🔴 可枚举的 getter → 拒绝，而且**不会被调用**（校验器不许跑别人的副作用）', () => {
+    let invoked = false
+    const withGetter = {}
+    Object.defineProperty(withGetter, 'a', {
+      enumerable: true,
+      configurable: true,
+      get() {
+        invoked = true
+        return 1
+      },
+    })
+    expect(rejectsInput({ a: withGetter })).toBe(true)
+    expect(invoked, 'getter 被调用了 —— 校验器必须只读描述符').toBe(false)
+  })
+})
+
+// ── 校验结果不可被调用方改坏 ─────────────────────────────────────────────────
+
+describe('GrowthValidationResult 是冻结的', () => {
+  it('共用的成功值改不动', () => {
+    const result = validateGrowthEvidence(evidence())
+    expect(result).toEqual({ ok: true })
+    expect(Object.isFrozen(result)).toBe(true)
+    expect(() => {
+      ;(result as { ok: boolean }).ok = false
+    }).toThrow()
+    // 改不动之后，下一次调用拿到的仍然是 ok
+    expect(validateGrowthEvidence(evidence())).toEqual({ ok: true })
+  })
+
+  it('失败值同样冻结', () => {
+    const result = validateGrowthEvidence(mutate(evidence(), { observedAt: 'nope' }))
+    expect(result.ok).toBe(false)
+    expect(Object.isFrozen(result)).toBe(true)
+  })
 })
 
 // ── 类型层契约 ───────────────────────────────────────────────────────────────

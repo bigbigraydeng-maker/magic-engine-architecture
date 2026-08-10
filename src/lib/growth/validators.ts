@@ -15,10 +15,13 @@
 import type { DiagnosticDimension, DiagnosticSeverity } from '@/types/diagnostic'
 import type { GrowthUnknownReason } from './types'
 
-export type GrowthValidationResult = { ok: true } | { ok: false; reason: string }
+export type GrowthValidationResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: string }
 
-const OK: GrowthValidationResult = { ok: true }
-const fail = (reason: string): GrowthValidationResult => ({ ok: false, reason })
+/** 🔴 全模块共用同一个成功值，所以必须冻结 —— 否则任何调用方都能改到别人的结果。 */
+const OK: GrowthValidationResult = Object.freeze({ ok: true as const })
+const fail = (reason: string): GrowthValidationResult => Object.freeze({ ok: false as const, reason })
 
 // ── 基础判据 ──────────────────────────────────────────────────────────────────
 
@@ -227,14 +230,25 @@ function validateCandidateIdentity(value: unknown): GrowthValidationResult {
 /**
  * `input` 必须真的是 JSON 值，不是「看起来像个对象」就算。
  *
- * 拒绝 `undefined` / 函数 / symbol / bigint / 非普通对象（`Date`、`Map`、类实例）
- * / `NaN` / `Infinity` / 循环引用。理由很具体：这些东西会**通过契约校验**，
- * 然后在下游把候选交给 Kernel 落 jsonb 时才出事 —— `Date` 变字符串、
- * `undefined` 静默消失、`bigint` 让 `JSON.stringify` 直接抛异常，
- * 全都炸在离源头很远的地方。
+ * 🔴 判据是「**会不会在序列化时静默变样**」，下面每一条都实测过：
  *
- * 🔴 只查**值**的类型与环，**不查键**（顶层键的白名单是另一回事，见 `CANDIDATE_KEYS`）。
- *    `ancestors` 只跟踪当前这条路径，所以同一个对象被引用两次（DAG）不算环。
+ *   | 输入 | `JSON.stringify` 之后 |
+ *   |---|---|
+ *   | 稀疏数组 `[1,,3]` | `[1,null,3]` —— 空洞变成 `null` |
+ *   | 数组上的额外字符串属性 | 直接丢掉 |
+ *   | symbol 键 | 直接丢掉 |
+ *   | 不可枚举属性 | 直接丢掉 |
+ *   | `undefined` / 函数 | 对象里丢掉、数组里变 `null` |
+ *   | `Date` / `Map` / 类实例 | 变成字符串或 `{}` |
+ *   | `NaN` / `Infinity` | 变成 `null` |
+ *   | `bigint` | 直接抛异常 |
+ *
+ * 🔴 **一律读属性描述符，绝不触发 getter。** 访问器属性直接拒绝 ——
+ *    校验器是纯函数，不能在「只是检查一下」的时候把别人的副作用跑掉。
+ *    （`Object.values()` 会调 getter，所以这里不能用它。）
+ *
+ * 🔴 只查**值**，不查键名语义。`ancestors` 只跟踪当前这条路径，
+ *    所以同一个对象被引用两次（DAG）不算环，只有真的成环才拒。
  */
 function isJsonValue(value: unknown, ancestors: Set<object>): boolean {
   if (value === null) return true
@@ -244,13 +258,40 @@ function isJsonValue(value: unknown, ancestors: Set<object>): boolean {
 
   if (ancestors.has(value)) return false
   ancestors.add(value)
-  const proto = Object.getPrototypeOf(value) as unknown
   const ok = Array.isArray(value)
-    ? value.every((item) => isJsonValue(item, ancestors))
-    : (proto === Object.prototype || proto === null) &&
-      Object.values(value).every((item) => isJsonValue(item, ancestors))
+    ? isDenseJsonArray(value, ancestors)
+    : isJsonRecord(value, ancestors)
   ancestors.delete(value)
   return ok
+}
+
+/** 数组必须稠密，且除了下标与 `length` 之外不许有别的自有属性。 */
+function isDenseJsonArray(node: readonly unknown[], ancestors: Set<object>): boolean {
+  if (Object.getOwnPropertySymbols(node).length > 0) return false
+  // 自有属性名应当正好是 0…length-1 再加一个 `length`；对不上就说明有空洞或有夹带。
+  if (Object.getOwnPropertyNames(node).length !== node.length + 1) return false
+
+  for (let i = 0; i < node.length; i += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(node, i)
+    // 描述符缺失 = 空洞；没有 value = 访问器；不可枚举 = 序列化时会丢
+    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) return false
+    if (!isJsonValue(descriptor.value, ancestors)) return false
+  }
+  return true
+}
+
+/** 普通对象只许带「可枚举的字符串键数据属性」。 */
+function isJsonRecord(node: object, ancestors: Set<object>): boolean {
+  const proto = Object.getPrototypeOf(node) as unknown
+  if (proto !== Object.prototype && proto !== null) return false
+  if (Object.getOwnPropertySymbols(node).length > 0) return false
+
+  for (const key of Object.getOwnPropertyNames(node)) {
+    const descriptor = Object.getOwnPropertyDescriptor(node, key)
+    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) return false
+    if (!isJsonValue(descriptor.value, ancestors)) return false
+  }
+  return true
 }
 
 /**
@@ -302,7 +343,7 @@ export function validateGrowthActionCandidate(value: unknown): GrowthValidationR
   if (!identity.ok) return identity
 
   if (!isPlainObject(value.input)) {
-    return fail('ActionCandidate.input 必须是一个 provider 中立的对象')
+    return fail('ActionCandidate.input 必须是一个对象')
   }
   if (!isJsonValue(value.input, new Set())) {
     return fail(
