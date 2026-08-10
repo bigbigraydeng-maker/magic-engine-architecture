@@ -22,7 +22,7 @@
 
 **已合入 `main`（但都不活动，见 [STATE.md §3.1](./STATE.md)）**：
 - ✅ WP00 [#873](https://github.com/bigbigraydeng-maker/magic-engine/issues/873) 契约冻结（PR #888，docs-only）
-- ✅ 执行内核 v1（PR #863）—— 生产 migration **未 apply**、零调用方
+- ✅ 执行内核 v1（PR #863）—— 生产 migration **未 apply**、**无提交 / 执行调用方**。⚠️ 但**已有一条只读接线在生产跑**：`pm-daily-todo` cron 经 `pm-todo/manual-items.ts` 读 `action_runs` 生成交接待办（表不存在时报错被吞成警告）。详见 [STATE.md §3.1](./STATE.md)
 - ✅ WP01 [#877](https://github.com/bigbigraydeng-maker/magic-engine/issues/877) 纯 Growth 契约（PR #890 / `700f57e`）—— `src/lib/growth/`，**零 importer**
 
 **未完成**：

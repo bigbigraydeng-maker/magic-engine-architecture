@@ -73,7 +73,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | | 执行内核 | Growth 契约 |
 |---|---|---|
 | 合入 | PR #863 | PR [#890](https://github.com/bigbigraydeng-maker/magic-engine/pull/890)（合并提交 `700f57e`） |
-| 为什么不活动 | 生产 migration `20260808000003_me2_execution_kernel_v1.sql` **未 apply**，且**零调用方**。⚠️ **这是 2026-08-10 的快照，不是实时状态** —— 出处是 [WP00 §9.1](./specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md) 当天的对象存在性 preflight（四张表 + lineage 视图全不存在、`kernel_*` RPC 一个都没有）。**启用前必须重查，不许拿这一行当现况。** | 全仓**没有任何代码 import 它**（`grep -rn "lib/growth" src/ --exclude-dir=growth` 零结果）。无表、无 migration、无 provider 调用、无 cron、无 API、无 UI |
+| 为什么不活动 | 生产 migration `20260808000003_me2_execution_kernel_v1.sql` **未 apply**，且**没有任何提交 / 执行调用方**（没有代码提交 `action_run`，也没有人跑它）。⚠️ **这是 2026-08-10 的快照，不是实时状态** —— 出处是 [WP00 §9.1](./specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md) 当天的对象存在性 preflight（四张表 + lineage 视图全不存在、`kernel_*` RPC 一个都没有）。**启用前必须重查，不许拿这一行当现况。**<br><br>🔴 **但它不是完全没接线** —— 有一条**只读**路径已经在生产跑：`pm-daily-todo` cron → `loadManualItems()` → `pushKernelItems()`（`lib/pm-todo/manual-items.ts`）→ `fetchKernelHandoffTodos()`（`lib/kernel/handoff.ts`）→ `listDeadLetterRuns()` → 查 `action_runs`。migration 未 apply 时这个查询会报错，被调用点的 `.catch` 收成一条警告，**不阻塞其它待办**。改内核之前先把这条路径算进去。 | 全仓**没有任何代码 import 它**（`grep -rn "lib/growth" src/ --exclude-dir=growth` 零结果）。无表、无 migration、无 provider 调用、无 cron、无 API、无 UI |
 | 启用需要什么 | apply 是**单独授权的运维动作**，必须 PM 显式 `go`，**绝不夹带进任何 PR** | 等 **WP05（GEO Module v1，#879）** 来 import —— 它是**唯一明确的首个 Domain Module 消费方**。其余 WP 会不会 import 由各自设计时决定，此处不预设 |
 
 🔴 **判定 migration 有没有 apply 只认对象存在性**，不认文件名或版本号 —— 仓库账本会在 apply 时重编号（实测：文件 `20260808000001_*` 在生产账本里记成 `20260809020105`）。
