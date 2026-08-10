@@ -55,9 +55,11 @@ const DEFAULT_INSTAGRAM = {
 /** Builds a Supabase mock that controls cache check + client handle fetch */
 function makeSupabase(opts: {
   instagramHandle?: string | null
-  hasCachedFindings?: boolean
+  /** Last measured social score within the cache window; null = no completed run scored it */
+  cachedScore?: number | null
+  runsError?: boolean
 }): SupabaseClient {
-  const { instagramHandle = 'example_brand', hasCachedFindings = false } = opts
+  const { instagramHandle = 'example_brand', cachedScore = null, runsError = false } = opts
 
   return {
     from: vi.fn((table: string) => {
@@ -73,15 +75,18 @@ function makeSupabase(opts: {
           }),
         }
       }
-      if (table === 'diagnostic_findings') {
+      if (table === 'diagnostic_runs') {
+        const rows =
+          cachedScore === null ? [] : [{ dimension_scores: { social: cachedScore }, created_at: '2026-08-01' }]
         return {
           select: vi.fn().mockReturnValue({
             eq: vi.fn().mockReturnValue({
               eq: vi.fn().mockReturnValue({
                 gte: vi.fn().mockReturnValue({
-                  limit: vi.fn().mockResolvedValue({
-                    data: hasCachedFindings ? [{ id: 'cached-finding' }] : [],
-                    error: null,
+                  order: vi.fn().mockReturnValue({
+                    limit: vi.fn().mockResolvedValue(
+                      runsError ? { data: null, error: { message: 'boom' } } : { data: rows, error: null },
+                    ),
                   }),
                 }),
               }),
@@ -249,18 +254,40 @@ describe('SocialCollector.collect() — Apify failure', () => {
 // ---------------------------------------------------------------------------
 
 describe('SocialCollector.collect() — cache', () => {
-  it('does NOT call Apify when fresh social findings exist in DB (within 7 days)', async () => {
-    const supabase = makeSupabase({ hasCachedFindings: true })
+  it('does NOT call Apify when a completed run scored social within 7 days', async () => {
+    const supabase = makeSupabase({ cachedScore: 61 })
     await new SocialCollector(supabase).collect(CLIENT_ID, DOMAIN, KEYWORDS)
     expect(mockScrapeInstagramProfile).not.toHaveBeenCalled()
     expect(mockScrapeFacebookPage).not.toHaveBeenCalled()
   })
 
-  it('returns a valid CollectorResult from cache (score=null when cache hit)', async () => {
-    const supabase = makeSupabase({ hasCachedFindings: true })
+  it('reuses the cached score instead of returning null', async () => {
+    const supabase = makeSupabase({ cachedScore: 61 })
     const result = await new SocialCollector(supabase).collect(CLIENT_ID, DOMAIN, KEYWORDS)
-    expect(result.score).toBeNull()
+    expect(result.score).toBe(61)
     expect(Array.isArray(result.findings)).toBe(true)
+  })
+
+  it('a cached score of 0 is a valid cache hit, not "no score"', async () => {
+    const supabase = makeSupabase({ cachedScore: 0 })
+    const result = await new SocialCollector(supabase).collect(CLIENT_ID, DOMAIN, KEYWORDS)
+    expect(result.score).toBe(0)
+    expect(mockScrapeInstagramProfile).not.toHaveBeenCalled()
+  })
+
+  it('measures again when no completed run has a social score in the window', async () => {
+    mockScrapeInstagramProfile.mockResolvedValue(DEFAULT_INSTAGRAM)
+    const supabase = makeSupabase({ cachedScore: null })
+    const result = await new SocialCollector(supabase).collect(CLIENT_ID, DOMAIN, KEYWORDS)
+    expect(mockScrapeInstagramProfile).toHaveBeenCalled()
+    expect(typeof result.score).toBe('number')
+  })
+
+  it('measures again when the cache query fails instead of treating it as a hit', async () => {
+    mockScrapeInstagramProfile.mockResolvedValue(DEFAULT_INSTAGRAM)
+    const supabase = makeSupabase({ runsError: true })
+    await new SocialCollector(supabase).collect(CLIENT_ID, DOMAIN, KEYWORDS)
+    expect(mockScrapeInstagramProfile).toHaveBeenCalled()
   })
 })
 
