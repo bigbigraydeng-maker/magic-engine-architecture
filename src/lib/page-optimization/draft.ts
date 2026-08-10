@@ -60,7 +60,15 @@ function decodeHtmlEntities(value: string): string {
   return value.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
 }
 
-/** 校验意图集合：只认 v1 冻结的三个字段，且每个字段最多出现一次。 */
+/**
+ * 校验意图集合：只认 v1 冻结的三个字段，且每个字段最多出现一次。
+ *
+ * 🔴 `proposedValue` 必须在运行时核实真的是字符串——`PageOptimizationIntent`
+ *    的类型标注挡不住跨 JSON 边界传入 `undefined`/数字/`null` 这种畸形值
+ *    （`JSON.stringify({ a: undefined })` 会悄悄把这个 key 整个丢掉，产出
+ *    一份看似成功、实则不是 JSON-safe 的结果——2026-08-11 Build Control Room
+ *    PATCH REQUIRED 复审第 3 条）。
+ */
 function validateIntents(
   intents: readonly PageOptimizationIntent[],
 ): { readonly ok: true; readonly byField: ReadonlyMap<PageOptimizationField, string> } | { readonly ok: false; readonly reason: string } {
@@ -70,6 +78,12 @@ function validateIntents(
       return {
         ok: false,
         reason: `字段 "${intent.field}" 不在 v1 允许的字段集合内（meta_title | meta_description | content_html）`,
+      }
+    }
+    if (typeof intent.proposedValue !== 'string') {
+      return {
+        ok: false,
+        reason: `字段 "${intent.field}" 的 proposedValue 必须是字符串（收到的不是——畸形跨 JSON 边界输入）`,
       }
     }
     if (byField.has(intent.field)) {

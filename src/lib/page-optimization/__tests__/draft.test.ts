@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import { draftPageChange } from '../draft'
-import type { GithubPageSnapshot, PageOptimizationField, PageOptimizationIntent, WordpressPageSnapshot } from '../types'
+import type {
+  GithubPageSnapshot,
+  PageOptimizationField,
+  PageOptimizationIntent,
+  PageOptimizationRequest,
+  WordpressPageSnapshot,
+} from '../types'
 
 const GITHUB_HTML = `<!doctype html>
 <html>
@@ -78,6 +84,38 @@ describe('draftPageChange · 只接受 v1 冻结的三个字段', () => {
   })
 })
 
+describe('draftPageChange · proposedValue 必须是字符串（JSON-safe 运行时事实，不只是类型注释）', () => {
+  it('proposedValue 是 undefined（跨 JSON 边界丢失的典型形状）→ 拒绝', () => {
+    const bogus = {
+      field: 'meta_title',
+      proposedValue: undefined,
+      semanticIntent: { known: false, reason: 'not_applicable' },
+    } as unknown as PageOptimizationIntent
+    const result = draftPageChange(wordpressSnapshot(), [bogus])
+    expect(result.ok).toBe(false)
+  })
+
+  it('proposedValue 是数字 → 拒绝', () => {
+    const bogus = {
+      field: 'meta_title',
+      proposedValue: 42,
+      semanticIntent: { known: false, reason: 'not_applicable' },
+    } as unknown as PageOptimizationIntent
+    const result = draftPageChange(wordpressSnapshot(), [bogus])
+    expect(result.ok).toBe(false)
+  })
+
+  it('proposedValue 是 null → 拒绝', () => {
+    const bogus = {
+      field: 'meta_title',
+      proposedValue: null,
+      semanticIntent: { known: false, reason: 'not_applicable' },
+    } as unknown as PageOptimizationIntent
+    const result = draftPageChange(wordpressSnapshot(), [bogus])
+    expect(result.ok).toBe(false)
+  })
+})
+
 describe('draftPageChange · 不在没有快照的情况下起草', () => {
   it('快照不可用（shopify）→ 起草失败，不假装能起草', () => {
     const result = draftPageChange(
@@ -125,5 +163,38 @@ describe('draftPageChange · 不调用任何 provider / 网络依赖', () => {
     const snapshot = githubSnapshot()
     const intents = [intent('meta_title', 'New Title')]
     expect(() => draftPageChange(snapshot, intents)).not.toThrow()
+  })
+})
+
+describe('JSON-safe（无损往返）', () => {
+  const request: PageOptimizationRequest = {
+    clientId: 'client-1',
+    page: { url: 'https://romanhu.com/listings/123' },
+    intents: [intent('meta_title', 'New Title')],
+    lineage: { findingRefs: ['finding-1'] },
+    verification: {
+      metricRef: 'geo.owned_page_citation',
+      windowDays: 14,
+      baseline: 'previous_measurement',
+      criteria: { success: 'citation increases', failure: 'citation unchanged or drops', indeterminate: 'not_comparable' },
+    },
+    constraints: { doNotTouch: [] },
+    basedOnVersion: { known: false, reason: 'not_recorded_by_source' },
+  }
+
+  it('PageOptimizationRequest 能无损 JSON 往返（GrowthJsonValue 兼容性的运行时证据）', () => {
+    expect(JSON.parse(JSON.stringify(request))).toEqual(request)
+  })
+
+  it('成功的 PageDraftResult 能无损 JSON 往返', () => {
+    const result = draftPageChange(wordpressSnapshot(), request.intents)
+    expect(result.ok).toBe(true)
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result)
+  })
+
+  it('失败的 PageDraftResult 能无损 JSON 往返', () => {
+    const result = draftPageChange({ ok: false, provider: 'none', reason: '未连接任何 provider' }, request.intents)
+    expect(result.ok).toBe(false)
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result)
   })
 })

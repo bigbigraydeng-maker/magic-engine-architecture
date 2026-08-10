@@ -102,3 +102,19 @@ describe('diffPageChange · 字段级 before/after', () => {
     expect(diff.ok).toBe(false)
   })
 })
+
+describe('diffPageChange · 结果 JSON-safe（无损往返）', () => {
+  it('成功的 PageDiffResult 能无损 JSON 往返', () => {
+    const snapshot = wordpressSnapshot()
+    const draft = draftPageChange(snapshot, [intent('meta_title', 'New SEO Title')])
+    const diff = diffPageChange(snapshot, draft)
+    expect(diff.ok).toBe(true)
+    expect(JSON.parse(JSON.stringify(diff))).toEqual(diff)
+  })
+
+  it('失败的 PageDiffResult 能无损 JSON 往返', () => {
+    const diff = diffPageChange({ ok: false, provider: 'none', reason: '未连接任何 provider' }, { ok: false, reason: '起草失败' })
+    expect(diff.ok).toBe(false)
+    expect(JSON.parse(JSON.stringify(diff))).toEqual(diff)
+  })
+})

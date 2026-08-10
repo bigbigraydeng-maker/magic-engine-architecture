@@ -172,10 +172,17 @@ export type RedlineCheckInput =
  * 🔴 `evaluated: false`（没算过）绝不能被表示成「通过」——这正是
  *    「validation failure/not-evaluated cannot be represented as passed」
  *    这条要求的类型层落地。
+ *
+ * 🔴 三态判别式联合，不是 `{ evaluated: true; passed: boolean; violations }`——
+ *    那个形状允许 `{ evaluated:true, passed:true, violations:['实际失败'] }`
+ *    这种自相矛盾的值同时存在，等于把「失败」表示成了「通过」（2026-08-11
+ *    Build Control Room PATCH REQUIRED 复审第 1 条）。`passed:true` 分支
+ *    干脆没有 `violations` 字段——没有地方能藏一条被判"通过"但列着的失败。
  */
 export type ProviderCheckInput =
-  | { readonly evaluated: true; readonly passed: boolean; readonly violations: readonly string[] }
   | { readonly evaluated: false; readonly reason: string }
+  | { readonly evaluated: true; readonly passed: true }
+  | { readonly evaluated: true; readonly passed: false; readonly violations: readonly string[] }
 
 export type PageValidationResult =
   | { readonly ok: true }
