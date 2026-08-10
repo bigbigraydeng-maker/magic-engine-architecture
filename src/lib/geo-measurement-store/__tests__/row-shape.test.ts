@@ -335,6 +335,20 @@ describe('证据行 → GeoEvidence', () => {
     expect(notComputable.ownedDomain).not.toEqual({ known: true, value: false })
   })
 
+  it('失败的观测不该有证据行（库层由 BEFORE INSERT 触发器挡）', () => {
+    const failed = rowToGeoObservation({
+      ...FULLY_KNOWN_OBSERVATION,
+      outcome_ok: false,
+      error_code: 'provider_timeout',
+      error_message: 'upstream timed out after 30s',
+      error_message_unknown_reason: null,
+    })
+    // 🔴 冻结契约里，失败那一支**结构上就没有 evidenceId** ——
+    //    库里若真挂上一条证据，这一行就投影不出合法的契约对象了。
+    expect(failed.outcome.ok).toBe(false)
+    expect('evidenceId' in failed.outcome).toBe(false)
+  })
+
   it('证据与观测之间只有一条边：证据指向观测', () => {
     expect(rowToGeoEvidence(EVIDENCE).observationId).toBe(FULLY_KNOWN_OBSERVATION.id)
     // 观测行上没有 evidence_id 列 —— 少一个能跟事实对不上的地方
@@ -396,6 +410,62 @@ describe('批次状态与查询集：库与契约不许分家', () => {
       created_at: '2026-08-11T01:00:00.000Z',
     }
     expect(query.client_id).toBe(FULLY_KNOWN_OBSERVATION.client_id)
+  })
+})
+
+// ── 覆盖率计数的语义（与库层 CHECK 对齐）─────────────────────────────────────
+
+/**
+ * 🔴 WP02 没有 GeoCoverageDescriptor 的校验器（validators.ts 只导出五个，都不管它），
+ *    所以这两张表的覆盖率字段**只有这里和库层 CHECK 在守**。
+ *    这些断言把库里的判据在 TypeScript 侧写一遍，两边分家时能当场看出来。
+ */
+describe('覆盖率计数：计数就得是计数', () => {
+  const isCount = (v: unknown): boolean =>
+    typeof v === 'number' && Number.isInteger(v) && v >= 0
+
+  const countsAddUp = (c: { attempted: number; succeeded: number; failed: number }): boolean =>
+    c.attempted === c.succeeded + c.failed
+
+  it('三个计数必须是非负整数 —— 负数 / 小数都不算数', () => {
+    expect(isCount(0)).toBe(true)
+    expect(isCount(12)).toBe(true)
+    expect(isCount(-9)).toBe(false)
+    expect(isCount(1.5)).toBe(false)
+    expect(isCount(Number.NaN)).toBe(false)
+  })
+
+  it('实际覆盖：尝试 = 成功 + 失败', () => {
+    expect(countsAddUp({ attempted: 12, succeeded: 10, failed: 2 })).toBe(true)
+    expect(countsAddUp({ attempted: 12, succeeded: 10, failed: 1 })).toBe(false)
+  })
+
+  it('🔴 两条判据缺一不可：复审举的那条反例，加总其实是对的', () => {
+    const codexExample = { attempted: 1, succeeded: 10, failed: -9 }
+    // 10 + (-9) = 1 —— 等式成立，**加总这条判据根本拦不住它**。
+    expect(countsAddUp(codexExample)).toBe(true)
+    // 真正拦住它的是「计数必须是非负整数」那一条。
+    expect(isCount(codexExample.failed)).toBe(false)
+    expect(
+      [codexExample.attempted, codexExample.succeeded, codexExample.failed].every(isCount),
+      '只加一条加总约束会漏掉这个形状；只加非负整数约束又漏掉 10+1≠12 那种。两条都要。',
+    ).toBe(false)
+  })
+
+  it('部分完成是一等结论：失败不为零照样是一条合法的实际覆盖', () => {
+    const partial = { attempted: 10, succeeded: 7, failed: 3 }
+    expect(countsAddUp(partial)).toBe(true)
+    expect([partial.attempted, partial.succeeded, partial.failed].every(isCount)).toBe(true)
+  })
+
+  it('🔴 这条等式不适用于计划覆盖 —— 计划里 succeeded / failed 就是 0', () => {
+    const planned = { attempted: 100, succeeded: 0, failed: 0 }
+    expect([planned.attempted, planned.succeeded, planned.failed].every(isCount)).toBe(true)
+    expect(
+      countsAddUp(planned),
+      '计划覆盖在下单那一刻还没跑，等式本来就不成立 —— ' +
+        '库层的 add_up 约束只挂在 actual 上，挂到 planned 上会拦下每一次合法的计划。',
+    ).toBe(false)
   })
 })
 

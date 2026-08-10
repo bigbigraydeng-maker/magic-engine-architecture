@@ -342,7 +342,7 @@ describe('WP03 migration · 查询集锁死之后不许增删改', () => {
     // 上锁那一次也不许顺手改别的列
     expect(fn).toContain('IS DISTINCT FROM')
     expect(SQL).toMatch(
-      /CREATE TRIGGER geo_query_sets_guard_trigger\s+BEFORE UPDATE OR DELETE ON public\.geo_query_sets/,
+      /CREATE TRIGGER geo_query_sets_guard_trigger\s+BEFORE INSERT OR UPDATE OR DELETE ON public\.geo_query_sets/,
     )
   })
 })
@@ -464,6 +464,107 @@ describe('WP03 migration · WP02 的每一个维度都留住了', () => {
   })
 })
 
+describe('WP03 migration · Codex 复审三条（回归）', () => {
+  const batchBlock = region(
+    'CREATE TABLE IF NOT EXISTS public.geo_batches',
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_geo_batches_client_id_id',
+  )
+
+  // ── P1：覆盖率计数 ────────────────────────────────────────────────────────
+  it.each(['planned_coverage', 'actual_coverage'])(
+    '%s 的三个计数必须是非负整数（jsonb_typeof=number 拦不住 -9 / 1.5）',
+    (column) => {
+      // 🔴 比对前先把空白压平：SQL 里为了对齐在 `~` 前面留了多余空格，
+      //    照字面比会漏掉对齐过的那一行（'failed' 就是这么被漏掉的）。
+      const flat = batchBlock.replace(/\s+/g, ' ')
+      const missing = ['attempted', 'succeeded', 'failed'].filter(
+        (key) => !flat.includes(`COALESCE((${column} ->> '${key}') ~ '^[0-9]+$', false)`),
+      )
+      expect(
+        missing,
+        `${column} 的这几个计数没有非负整数判据。批次落库即不可变，` +
+          '这种行永远修不掉，还会一路污染失败率与引擎覆盖率（§6.1 第 3 条的硬闸）。\n' +
+          missing.join('\n'),
+      ).toEqual([])
+    },
+  )
+
+  it('实际覆盖的三个数必须对得上：尝试 = 成功 + 失败', () => {
+    // 🔴 断言的是**约束本身还挂着**，不只是这段文字还在文件里。
+    //    只写 toContain('geo_batches_actual_counts_add_up') 的话，把它改名成
+    //    ..._DISABLED 或者在前面加一句 `true OR` 都照样绿 —— 变异测试实测过。
+    expect(batchBlock).toMatch(/CONSTRAINT geo_batches_actual_counts_add_up CHECK \(/)
+    const flat = batchBlock.replace(/\s+/g, ' ')
+    expect(
+      /\btrue\s+OR\b/i.test(flat),
+      '约束里出现 `true OR` 等于把它整条短路掉。',
+    ).toBe(false)
+    expect(flat).toContain(
+      "(actual_coverage ->> 'attempted')::numeric " +
+        "= (actual_coverage ->> 'succeeded')::numeric + (actual_coverage ->> 'failed')::numeric",
+    )
+  })
+
+  it('这条等式**不许**套在 planned 上（计划里 succeeded/failed 本来就是 0）', () => {
+    expect(
+      /planned_coverage ->> 'attempted'\)::numeric\s*\n?\s*=/.test(batchBlock),
+      '计划覆盖在下单那一刻 succeeded / failed 是 0、attempted 是整批的量 ——\n' +
+        '对 planned 也套等式会把每一次合法的计划都拦下来。',
+    ).toBe(false)
+  })
+
+  it('计数判据不做强制转换（转换在 CASE 里，AND 不保证短路）', () => {
+    const addUp = region('CONSTRAINT geo_batches_actual_counts_add_up', 'CONSTRAINT geo_batches_cost_is_a_real_amount')
+    expect(addUp).toContain('CASE')
+    expect(
+      addUp.includes('ELSE false'),
+      '说不清楚就不许写 —— ELSE 必须是 false，不能落到 NULL（CHECK 遇 NULL 放行）。',
+    ).toBe(true)
+  })
+
+  // ── P2：建集合时伪造锁时间 ────────────────────────────────────────────────
+  it('查询集守卫覆盖 INSERT —— 不能建一个「生下来就锁着」的集合', () => {
+    expect(
+      SQL,
+      '只挡 UPDATE 的话，直接 INSERT 一条 locked_at 是 2020 年的集合就绕过去了：\n' +
+        '它当场被视为已锁定，再也加不进问题，时间还是假的且改不回来。',
+    ).toMatch(
+      /CREATE TRIGGER geo_query_sets_guard_trigger\s+BEFORE INSERT OR UPDATE OR DELETE ON public\.geo_query_sets/,
+    )
+    const fn = region('FUNCTION public.geo_query_sets_guard()', 'DROP TRIGGER IF EXISTS geo_query_sets_guard_trigger')
+    expect(fn).toContain("IF TG_OP = 'INSERT' THEN")
+    expect(fn).toContain('NEW.locked_at IS NOT NULL')
+  })
+
+  // ── P2：证据挂到失败观测 ──────────────────────────────────────────────────
+  it('证据只能挂在成功的观测上（外键只管存在与同租户，管不了成败）', () => {
+    expect(SQL).toContain('FUNCTION public.geo_evidence_requires_successful_observation()')
+    expect(SQL).toMatch(
+      /CREATE TRIGGER geo_evidence_successful_observation_trigger\s+BEFORE INSERT ON public\.geo_evidence/,
+    )
+    const fn = region(
+      'FUNCTION public.geo_evidence_requires_successful_observation()',
+      'DROP TRIGGER IF EXISTS geo_evidence_successful_observation_trigger',
+    )
+    expect(fn).toContain('SELECT outcome_ok INTO v_outcome_ok')
+    expect(
+      fn.includes('v_outcome_ok IS NOT TRUE'),
+      'WP02 冻结的 GeoObservationOutcome 里，失败那一支结构上就没有 evidenceId ——\n' +
+        '挂上去的行投影不出合法契约对象，而且证据不可删，再也清不掉。',
+    ).toBe(true)
+    // 🔴 光断言有 `IF NOT FOUND THEN` 不够 —— `IF NOT FOUND THEN RETURN NEW; END IF;`
+    //    也含这句话，却是**放行**。必须断言这一支真的抛错（变异测试实测过这个盲区）。
+    const notFoundAt = fn.indexOf('IF NOT FOUND THEN')
+    const outcomeCheckAt = fn.indexOf('v_outcome_ok IS NOT TRUE')
+    expect(notFoundAt, '守卫里必须有「观测不存在」这一支').toBeGreaterThan(-1)
+    expect(outcomeCheckAt, '守卫里必须有成败判定').toBeGreaterThan(notFoundAt)
+    expect(
+      fn.slice(notFoundAt, outcomeCheckAt).includes('RAISE EXCEPTION'),
+      '观测不存在时必须抛错，不能因为 SELECT INTO 留下 NULL 就放行。',
+    ).toBe(true)
+  })
+})
+
 describe('WP03 migration · 收尾与诚实声明', () => {
   it('发了 NOTIFY pgrst —— 否则新表在 PostgREST 眼里不存在', () => {
     expect(
@@ -492,7 +593,12 @@ describe('WP03 migration · 收尾与诚实声明', () => {
 })
 
 describe('WP03 migration · 证据：原始响应就地存、定位符不另立真相源', () => {
-  const EVIDENCE_BLOCK = region('CREATE TABLE IF NOT EXISTS public.geo_evidence')
+  // 🔴 必须给终点：不给的话切到文件末尾，会把后面那个提到 outcome_ok 的
+  //    触发器函数一起吞进来，下面「证据表没有 outcome_ok 列」那条就失真了。
+  const EVIDENCE_BLOCK = region(
+    'CREATE TABLE IF NOT EXISTS public.geo_evidence',
+    'ALTER TABLE public.geo_evidence ENABLE ROW LEVEL SECURITY',
+  )
 
   it('原始响应是就地的 text，没有发明外部存储', () => {
     expect(EVIDENCE_BLOCK).toContain('raw_response                  text')

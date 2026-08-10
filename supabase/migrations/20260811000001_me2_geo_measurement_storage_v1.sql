@@ -234,6 +234,46 @@ CREATE TABLE IF NOT EXISTS public.geo_batches (
     AND COALESCE(jsonb_typeof(actual_coverage -> 'failed'),    '') = 'number'
   ),
 
+  -- 🔴 三个计数必须是**真正的计数**：非负整数。
+  --    只判 jsonb_typeof = 'number' 是不够的 —— `-9`、`1.5`、`1e9` 都是合法的
+  --    JSON number，照样写得进去。而批次落库即不可变，这种行**永远修不掉**，
+  --    还会一路污染失败率与引擎覆盖率（两者都是 §6.1 第 3 条的可比性硬闸，
+  --    阈值 0.2 / 0.8），最后让一次比较得出反的结论。
+  --
+  --    判据写成对 `->>` 文本形态做正则：不需要任何强制转换，所以**永远不会报类型错**；
+  --    键缺失时 `->>` 返回 NULL，COALESCE 成 false —— 失败关闭，不是静默放行。
+  CONSTRAINT geo_batches_planned_counts_are_counts CHECK (
+    COALESCE((planned_coverage ->> 'attempted') ~ '^[0-9]+$', false)
+    AND COALESCE((planned_coverage ->> 'succeeded') ~ '^[0-9]+$', false)
+    AND COALESCE((planned_coverage ->> 'failed')    ~ '^[0-9]+$', false)
+  ),
+  CONSTRAINT geo_batches_actual_counts_are_counts CHECK (
+    COALESCE((actual_coverage ->> 'attempted') ~ '^[0-9]+$', false)
+    AND COALESCE((actual_coverage ->> 'succeeded') ~ '^[0-9]+$', false)
+    AND COALESCE((actual_coverage ->> 'failed')    ~ '^[0-9]+$', false)
+  ),
+
+  -- 🔴 **实际**覆盖的三个数还得对得上：尝试了多少，就该等于成功多少 + 失败多少。
+  --    `{"attempted":1,"succeeded":10,"failed":-9}` 这种行一旦落库就是永久的假账。
+  --
+  -- 🔴 这一条**只管 actual，不管 planned**。计划覆盖在下单那一刻
+  --    succeeded / failed 本来就是 0（还没跑），attempted 却是整批的量 ——
+  --    对 planned 也套这条等式会把每一次合法的计划都拦下来。
+  --
+  --    用 CASE 包住是为了让强制转换只在正则已经证明「全是数字」之后才发生：
+  --    SQL 的 AND 不保证短路求值，裸写会撞出类型错误而不是约束冲突。
+  --    ELSE false = 说不清楚就不许写。
+  CONSTRAINT geo_batches_actual_counts_add_up CHECK (
+    CASE
+      WHEN (actual_coverage ->> 'attempted') ~ '^[0-9]+$'
+       AND (actual_coverage ->> 'succeeded') ~ '^[0-9]+$'
+       AND (actual_coverage ->> 'failed')    ~ '^[0-9]+$'
+      THEN (actual_coverage ->> 'attempted')::numeric
+         = (actual_coverage ->> 'succeeded')::numeric + (actual_coverage ->> 'failed')::numeric
+      ELSE false
+    END
+  ),
+
   -- 🔴 花费必须是个真实金额。numeric 的 NaN / Infinity 坑在生产 PG 17.6
   --    实测过：`'NaN'::numeric >= 0` 是 true，只写 `>= 0` 拦不住它
   --    （判据与 action_run_steps.cost_actual_usd 逐条一致）。
@@ -540,6 +580,21 @@ LANGUAGE plpgsql
 SET search_path = public, pg_temp
 AS $$
 BEGIN
+  -- 🔴 建集合时不许自带锁定时间。
+  --    只挡 UPDATE 是挡不住的：调用方可以直接 INSERT 一条 locked_at 是 2020 年的集合，
+  --    它当场就被视为已锁定 —— 再也加不进问题，而且时间还是假的、也改不回来
+  --    （UPDATE 分支看到 OLD.locked_at 非空就一律拒绝）。
+  --    整个「首个批次落地时才由数据库上锁」的说法就是这么被绕过去的。
+  IF TG_OP = 'INSERT' THEN
+    IF NEW.locked_at IS NOT NULL THEN
+      RAISE EXCEPTION
+        '查询集不能在创建时就带着锁定时间（收到 %）：上锁只能由第一个批次落地时触发。',
+        NEW.locked_at
+        USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+  END IF;
+
   IF TG_OP = 'DELETE' THEN
     -- 还没被任何批次用过的集合可以整体删掉（拟题阶段）；
     -- 一旦锁死，它就是历史的一部分了。
@@ -586,7 +641,7 @@ $$;
 
 DROP TRIGGER IF EXISTS geo_query_sets_guard_trigger ON public.geo_query_sets;
 CREATE TRIGGER geo_query_sets_guard_trigger
-  BEFORE UPDATE OR DELETE ON public.geo_query_sets
+  BEFORE INSERT OR UPDATE OR DELETE ON public.geo_query_sets
   FOR EACH ROW EXECUTE FUNCTION public.geo_query_sets_guard();
 
 DROP TRIGGER IF EXISTS geo_query_sets_no_truncate ON public.geo_query_sets;
@@ -762,6 +817,50 @@ CREATE TRIGGER geo_evidence_no_truncate
   FOR EACH STATEMENT EXECUTE FUNCTION public.geo_forbid_truncate();
 
 
+-- ── 6.5b 证据只能挂在**成功**的观测上 ────────────────────────────────────────
+--
+-- 🔴 外键只保证「这条观测存在、且是同一个客户的」，保证不了「它是成功的」。
+--    把证据挂到 outcome_ok = false 的观测上，库层照单全收 —— 而 WP02 冻结的
+--    GeoObservationOutcome 里，失败那一支**结构上就没有 evidenceId**。
+--    于是库里会出现一种投影不出合法契约对象的行；更糟的是证据不可删，
+--    这条自相矛盾的记录就再也清不掉了，citation 统计与覆盖率会一直读到它。
+--
+-- 没有竞态：观测落库即不可变，outcome_ok 之后不可能变。
+CREATE OR REPLACE FUNCTION public.geo_evidence_requires_successful_observation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_outcome_ok boolean;
+BEGIN
+  SELECT outcome_ok INTO v_outcome_ok
+    FROM public.geo_observations
+   WHERE id = NEW.observation_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION
+      '观测 % 不存在，挂不上证据。', NEW.observation_id
+      USING ERRCODE = 'foreign_key_violation';
+  END IF;
+
+  IF v_outcome_ok IS NOT TRUE THEN
+    RAISE EXCEPTION
+      '观测 % 是失败观测，不能挂证据：失败本来就没有原始响应可留，硬挂一条会让「问了但失败」和「问到了」在库里长得一样。',
+      NEW.observation_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS geo_evidence_successful_observation_trigger ON public.geo_evidence;
+CREATE TRIGGER geo_evidence_successful_observation_trigger
+  BEFORE INSERT ON public.geo_evidence
+  FOR EACH ROW EXECUTE FUNCTION public.geo_evidence_requires_successful_observation();
+
+
 -- ── 6.6 这道锁挡不住什么（说清楚，别让人以为都挡住了）────────────────────────
 --
 --   · **表的属主**（Supabase SQL Editor 里的 postgres）可以 DROP TRIGGER /
@@ -774,7 +873,11 @@ CREATE TRIGGER geo_evidence_no_truncate
 --     这是写入方的纪律，库层给不了保证。
 --
 --   挡得住的：service_role 的任何 UPDATE / DELETE、upsert（ON CONFLICT DO UPDATE
---   与 MERGE 都会触发 BEFORE UPDATE）、TRUNCATE、以及从父表级联过来的删除。
+--   与 MERGE 都会触发 BEFORE UPDATE）、TRUNCATE、以及从父表级联过来的删除；
+--   还有「建集合时自带锁定时间」和「把证据挂到失败观测上」这两种伪造。
+--
+--   仍然挡不住（写入方的纪律，库层给不了保证）：**成功的观测却没有证据行**。
+--   经 PostgREST 的两次 INSERT 是两个事务，跨表的延迟约束在这条路径上没有生效时机。
 -- ============================================================================
 
 
