@@ -9,6 +9,38 @@
 
 ---
 
+## ME2 — Roman GEO / AI 可见度参考闭环（史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)）🔄 契约层已合，域运行时未开工
+
+> **新窗口开工前必读**：[WP00 契约冻结 v1.0](./specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md)。
+> 它冻结了七层边界、五个概念结构、禁令清单与未决登记表，**后续每个 WP 从那里取自己的边界，不重新讨论**。
+
+**治理规则（跟本仓其它 Phase 不一样，别照惯例办）**：
+- 架构、PR 边界、验收与合并决策归 **ChatGPT Build Control Room**；**不要自行启动任何 WP**，等它明确授权。
+- 一个 Claude 窗口 = 一个已授权的 WP / PR。
+- 生产 migration 的 apply 是**单独授权的运维动作**，必须 PM 显式 `go`，**绝不夹带进任何 PR**。
+- 🔴 **PR [#844](https://github.com/bigbigraydeng-maker/magic-engine/pull/844) 不许合并**（独立 Website Growth Agent 架构已被本史诗取代），也**不许从它摘代码**。
+
+**已合入 `main`（但都不活动，见 [STATE.md §3.1](./STATE.md)）**：
+- ✅ WP00 [#873](https://github.com/bigbigraydeng-maker/magic-engine/issues/873) 契约冻结（PR #888，docs-only）
+- ✅ 执行内核 v1（PR #863）—— 生产 migration **未 apply**、零调用方
+- ✅ WP01 [#877](https://github.com/bigbigraydeng-maker/magic-engine/issues/877) 纯 Growth 契约（PR #890 / `700f57e`）—— `src/lib/growth/`，**零 importer**
+
+**未完成**：
+- [ ] **WP02** [#876](https://github.com/bigbigraydeng-maker/magic-engine/issues/876) GEO 测量运行时契约（采集身份七项 + 三层 sample + 解释身份 + 七个指标 + 三条可比性判据）· 前置已满足
+- [ ] **K-WP02** [#882](https://github.com/bigbigraydeng-maker/magic-engine/issues/882) ActionCandidate→ActionKey 治理 + per-action 副作用政策 + 注册表反向注入 prompt · 前置已满足
+- [ ] **WP03** [#875](https://github.com/bigbigraydeng-maker/magic-engine/issues/875) 不可变测量存储（含 migration，apply 单独授权）
+- [ ] **WP04** [#874](https://github.com/bigbigraydeng-maker/magic-engine/issues/874) 测量执行 + 成本 / 覆盖率控制
+- [ ] **WP05** [#879](https://github.com/bigbigraydeng-maker/magic-engine/issues/879) GEO Module v1（第一个 Domain Module，会是 `src/lib/growth` 的第一个 importer）
+- [ ] **WP06** [#878](https://github.com/bigbigraydeng-maker/magic-engine/issues/878) 共享 Page 能力：resolve / snapshot / draft / diff / validate（零线上写）
+- [ ] **WP07** [#880](https://github.com/bigbigraydeng-maker/magic-engine/issues/880) Kernel 授权的 apply / verify / rollback
+- [ ] **K-WP01** [#881](https://github.com/bigbigraydeng-maker/magic-engine/issues/881) 认证审批 / 拒绝界面 + 政策 Settings UI
+- [ ] **WP08–WP10** [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) / [#884](https://github.com/bigbigraydeng-maker/magic-engine/issues/884) / [#885](https://github.com/bigbigraydeng-maker/magic-engine/issues/885) Roman 基线 → 首次 1–3 页优化 → T+7/14/28 复测与学习（严格串行）
+- [ ] **U11 剩余** `docs/STATE.md` / 本文件的 ME2 条目已补（本 PR）；WP00 §15 其余未决项（U1–U10、U12）仍以未决形态挂着，**任何 WP 不许把它们当既定假设**
+
+**独立并行、不并入本链**：[#886](https://github.com/bigbigraydeng-maker/magic-engine/issues/886) Operating Brief（参考闭环稳定前不开工）· [#887](https://github.com/bigbigraydeng-maker/magic-engine/issues/887) 广告安全泳道（**不许夹带进任何 ME2 的 WP**）
+
+---
+
 ## 近期待办（跨 Phase 汇总）
 
 - [ ] **TM.1** 团队工作记忆 · 套路层出第一条：机器已建好，但要先吃几天真实会话数据才提炼得出可复用套路。观察 `team_skills` 是否开始有行；一周后没有就回头看 distill prompt 的套路判据是不是太严

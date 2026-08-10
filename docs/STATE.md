@@ -60,9 +60,25 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | **ME MCP Server** (P34) | ✅ 上线 | `lib/mcp` · `api/mcp` · `api/mcp-admin` | `admin_api_keys` `client_api_keys` `api_key_settings` |
 | **Outbound Prospecting** (P35) | 🔄 建设中 | `lib/prospecting` · `api/admin/prospecting` · `api/prospect` | `outbound_prospects` `discovery_leads` |
 | **Voice Agent** (P36) | 🔄 建设中 | `lib/voice` · `api/voice` · `scripts/voice/` | 见 `docs/voice-agent/` |
+| **ME2 执行内核** | ⚠️ **代码在 main，生产未启用** | `lib/kernel` · `lib/capabilities` | `action_runs` `action_run_steps` `authorization_decisions` `client_automation_policies` —— **这四张表在生产不存在**（migration 未 apply） |
+| **ME2 Growth 契约** | ⚠️ **代码在 main，无人调用** | `lib/growth`（纯类型 + 纯校验器） | 无 |
 
 **六支柱诊断维度（不变）**：`seo` / `ai_visibility` / `ads` / `social` / `reputation` / `competitor`。
 其中 `reputation` + `competitor` 只诊断、不接飞轮（FDE 外部完成）。
+
+### 3.1 ME2 两块「在仓库里但没在跑」的东西（新窗口必读）
+
+这两块跟表里其它模块**性质不同**：代码合进 `main` 了，但**都不在任何运行时路径上**。看到它们不要以为系统已经在用。
+
+| | 执行内核 | Growth 契约 |
+|---|---|---|
+| 合入 | PR #863 | PR [#890](https://github.com/bigbigraydeng-maker/magic-engine/pull/890)（合并提交 `700f57e`） |
+| 为什么不活动 | 生产 migration `20260808000003_me2_execution_kernel_v1.sql` **未 apply**，且**零调用方**。判定依据是 [WP00 §9.1](./specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md) 记录的 2026-08-10 对象存在性 preflight（四张表 + lineage 视图全不存在、`kernel_*` RPC 一个都没有）—— **要动之前请重新跑一遍那段 preflight，别直接信这一行** | 全仓**没有任何代码 import 它**（`grep -rn "lib/growth" src/ --exclude-dir=growth` 零结果）。无表、无 migration、无 provider 调用、无 cron、无 API、无 UI |
+| 启用需要什么 | apply 是**单独授权的运维动作**，必须 PM 显式 `go`，**绝不夹带进任何 PR** | 等后续 WP（K-WP02 / WP02 / WP05）来 import |
+
+🔴 **判定 migration 有没有 apply 只认对象存在性**，不认文件名或版本号 —— 仓库账本会在 apply 时重编号（实测：文件 `20260808000001_*` 在生产账本里记成 `20260809020105`）。
+
+**权威文档**（动 ME2 之前先读）：[WP00 契约冻结](./specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md) · [GEO 测量契约](./specs/2026-08-10-me2-geo-measurement-contract-v1.0.md) · [页面能力契约](./specs/2026-08-10-me2-page-optimization-capability-v1.0.md) · [执行内核 v1](./specs/2026-08-08-me2-execution-kernel-v1.md)
 
 ## 4. 定时任务全表
 
