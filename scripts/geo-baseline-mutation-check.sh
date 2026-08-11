@@ -15,6 +15,9 @@ PROVIDER="src/lib/geo-baseline/provider.ts"
 PARSER="src/lib/geo-baseline/parser.ts"
 STORE="src/lib/geo-baseline/store.ts"
 QUERYSET="src/lib/geo-baseline/query-set.ts"
+TRANSPORT="src/lib/geo-baseline/transport-openai.ts"
+RUNSCRIPT="scripts/geo-baseline-run.ts"
+CONFIG="src/lib/geo-baseline/config.ts"
 
 fail_count=0
 
@@ -75,10 +78,6 @@ check "provider: 超时的成本改成「已知 0」" "$PROVIDER" \
   "costUsd: { known: false, reason: 'source_ambiguous' }," \
   "costUsd: { known: true, value: 0 },"
 
-check "provider: 拿不到用量时按 0 记成功" "$PROVIDER" \
-  "    if (cost === null) {" \
-  "    if (false) { const cost2 = cost"
-
 check "provider: locale 不进出站请求" "$PROVIDER" \
   "localeDirective: \`Answer in \${request.locale}.\`," \
   "localeDirective: 'Answer.',"
@@ -119,9 +118,71 @@ check "query-set: 建集合时自带 locked_at" "$QUERYSET" \
   "      created_by: seed.createdBy," \
   "      created_by: seed.createdBy, locked_at: new Date().toISOString(),"
 
+check "transport: 中断判定退回只看 err.name（复审发现的那个死分支）" "$TRANSPORT" \
+  "  const aborted =
+    signal.aborted ||" \
+  "  const aborted =
+    false ||"
+
+check "transport: 不关掉 SDK 自动重试" "$TRANSPORT" \
+  "Object.freeze({ maxRetries: 0 })" \
+  "Object.freeze({ maxRetries: 2 })"
+
+check "provider: 模型对不上时记 0（而不是实际花费）" "$PROVIDER" \
+  "      return this.modelMismatchResult(this.modelMismatch, measured ?? this.ceiling())" \
+  "      return this.modelMismatchResult(this.modelMismatch, 0)"
+
+check "provider: 拆掉模型对不上之后的闩" "$PROVIDER" \
+  "    if (this.modelMismatch !== null) {" \
+  "    if (false) {"
+
+check "provider: 拿不到用量时记 0（而不是上界）" "$PROVIDER" \
+  "        costUsd: this.ceiling()," \
+  "        costUsd: 0,"
+
+check "parser: 空正文当成「答了但没引来源」" "$PARSER" \
+  "    if (text === null) {" \
+  "    if (false) { const t2 = text"
+
+check "store: 对账不读批次行" "$STORE" \
+  "    if (readBack.batchRowCount !== 1) {" \
+  "    if (false) {"
+
+check "store: 对账不比成功数" "$STORE" \
+  "    if (readBack.successIds.length !== actual.succeeded) {" \
+  "    if (false) {"
+
+check "store: 对账读失败时 orphaned 报 false" "$STORE" \
+  "    if (obsErr) fail(\`对账读取 \${TABLE_OBSERVATIONS}\`, obsErr, true)" \
+  "    if (obsErr) fail(\`对账读取 \${TABLE_OBSERVATIONS}\`, obsErr)"
+
+check "store: 不截断 error_message" "$STORE" \
+  "      clampErrorMessage(toGeoObservationRow({ observation, clientId: input.clientId, createdAt }))," \
+  "      toGeoObservationRow({ observation, clientId: input.clientId, createdAt }),"
+
+check "config: verified 从清单非空推出来（复审确认的违规原样）" "$CONFIG" \
+  "  if (attestation.length === 0) {" \
+  "  if (domains.length > 0 ? false : true) {"
+
+check "config: 可选数值不验有限（Number('60s')=NaN）" "$CONFIG" \
+  "  if (!Number.isFinite(n) || n <= 0) {
+    throw new GeoConfigError('not_positive', \`环境变量 \${name}=\"\${raw}\" 必须是一个大于 0 的有限数字。\`)
+  }" \
+  "  if (false) {
+    throw new GeoConfigError('not_positive', '')
+  }"
+
+check "config: 价格填 0 也放行（预算闸从此形同虚设）" "$CONFIG" \
+  "  if (opts.positive === true && n <= 0) {" \
+  "  if (false) {"
+
+check "脚本: 部分覆盖也返回 0" "$RUNSCRIPT" \
+  "  return 2" \
+  "  return 0"
+
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 14 道闸各自单独确认会响"
+  echo "✅ 全部 27 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"

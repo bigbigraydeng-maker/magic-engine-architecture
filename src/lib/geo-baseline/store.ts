@@ -47,20 +47,30 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
-  checkCoverageMatchesRows,
   checkObservationEvidenceIntegrity,
   toGeoBatchRow,
   toGeoEvidenceRow,
   toGeoObservationRow,
 } from '@/lib/geo-measurement-runtime'
 import type { GeoBatchPersistInput, GeoRuntimeStore } from '@/lib/geo-measurement-runtime'
-import type { GeoEvidenceRow } from '@/lib/geo-measurement-store/types'
+import type { GeoEvidenceRow, GeoObservationRow } from '@/lib/geo-measurement-store/types'
 
 export const TABLE_BATCHES = 'geo_batches'
 export const TABLE_OBSERVATIONS = 'geo_observations'
 export const TABLE_EVIDENCE = 'geo_evidence'
 export const TABLE_QUERY_SETS = 'geo_query_sets'
 export const TABLE_QUERIES = 'geo_queries'
+
+/** 对账读证据时每批塞进 `.in()` 的 id 数上限（uuid × 50 ≈ 1.9 KB，离网关 header 上限很远）。 */
+export const EVIDENCE_READBACK_CHUNK = 50
+
+/**
+ * 写进 `geo_observations.error_message` 的文本上限。
+ *
+ * 🔴 那一列是 `text`（无长度上限）且**落库即不可变**。provider 的错误原文会被原样带进去，
+ *    一条超长的上游报错（含完整请求回显）会永久占着一行不可删的证据。截断留痕，别留全文。
+ */
+export const MAX_ERROR_MESSAGE_CHARS = 2000
 
 /** 落库过程中出的事。`orphaned` 为真时**已经有行永久留在库里且删不掉**。 */
 export class GeoStoreError extends Error {
@@ -74,8 +84,19 @@ export class GeoStoreError extends Error {
   }
 }
 
-function fail(op: string, error: { message?: string } | null): never {
-  throw new GeoStoreError('query_failed', `[geo-baseline/store] ${op} 失败：${error?.message ?? '未知错误'}`)
+/**
+ * @param orphaned 这次失败发生时，库里**是否已经有行落定且删不掉**。
+ *   🔴 对账阶段的读失败一律 `true`：那时三条 INSERT 全部已经成功。
+ *      默认 false 会让调用方只印一句「跑挂了」，一个字都不提库里已经躺着一个完整批次 ——
+ *      操作者按提示重跑，同一个查询集版本下就多出一批重复观测，覆盖率与失败率从此双倍。
+ */
+function fail(op: string, error: { message?: string } | null, orphaned = false): never {
+  throw new GeoStoreError(
+    'query_failed',
+    `[geo-baseline/store] ${op} 失败：${error?.message ?? '未知错误'}` +
+      (orphaned ? '\n🔴 此时三条 INSERT 已全部成功，行已永久落库且删不掉 —— 不要重跑，先人工核对这一批。' : ''),
+    orphaned,
+  )
 }
 
 /**
@@ -87,6 +108,18 @@ function fail(op: string, error: { message?: string } | null): never {
 export function stripGeneratedColumns(row: GeoEvidenceRow): Omit<GeoEvidenceRow, 'raw_response_locator'> {
   const { raw_response_locator: _generated, ...insertable } = row
   return insertable
+}
+
+/**
+ * 把 `error_message` 截到 {@link MAX_ERROR_MESSAGE_CHARS}，并在截断处留痕。
+ *
+ * 🔴 截断要留痕，不能悄悄砍 —— 否则读的人分不清「上游就报了这么多」和「我们截过」。
+ */
+export function clampErrorMessage(row: GeoObservationRow): GeoObservationRow {
+  const msg = row.error_message
+  if (typeof msg !== 'string' || msg.length <= MAX_ERROR_MESSAGE_CHARS) return row
+  const suffix = `…[truncated ${msg.length - MAX_ERROR_MESSAGE_CHARS} chars by geo-baseline store]`
+  return { ...row, error_message: msg.slice(0, MAX_ERROR_MESSAGE_CHARS) + suffix }
 }
 
 export interface GeoSupabaseStoreOptions {
@@ -113,7 +146,7 @@ export class GeoSupabaseStore implements GeoRuntimeStore {
       createdAt,
     })
     const observationRows = input.observations.map((observation) =>
-      toGeoObservationRow({ observation, clientId: input.clientId, createdAt }),
+      clampErrorMessage(toGeoObservationRow({ observation, clientId: input.clientId, createdAt })),
     )
     const evidenceRows = input.evidence.map((record) =>
       toGeoEvidenceRow({
@@ -157,11 +190,17 @@ export class GeoSupabaseStore implements GeoRuntimeStore {
   /** 第 ① 步：批次终态行。同时触发查询集上锁（migration `:766-783`）。 */
   private async insertBatchRow(batchRow: ReturnType<typeof toGeoBatchRow>): Promise<void> {
     const { error } = await this.sb.from(TABLE_BATCHES).insert(batchRow)
-    // 这一步失败 = 一行都没写进去，干净失败，没有孤儿。
     if (error) {
+      // 🔴 **不能断言「未产生任何行」。** 这里有第三种交错：语句在库里已经提交，
+      //    但响应在回程丢了（502 / 504 / socket reset），supabase-js 照样报 error。
+      //    那种情况下批次行是真的落定了 —— 而它的 BEFORE INSERT 触发器
+      //    （migration :766-783）已经把查询集永久锁死。说死「没写进去」会把人引向
+      //    「直接重跑」，于是库里多出一个谁也不知道的幽灵批次。
       throw new GeoStoreError(
         'batch_insert_failed',
-        `写入 ${TABLE_BATCHES} 失败（未产生任何行）：${error.message}`,
+        `写入 ${TABLE_BATCHES} 报错：${error.message}\n` +
+          `⚠️ 批次 ${batchRow.id} 是否已经落库**无法从这个错误判断**（响应可能在提交之后才丢）。` +
+          `重跑之前请先按 id 查一次 ${TABLE_BATCHES}：在，就已经锁了查询集、且删不掉，按新批次重跑并登记这一条；不在，才是干净失败。`,
       )
     }
   }
@@ -212,41 +251,44 @@ export class GeoSupabaseStore implements GeoRuntimeStore {
    *    而是**把行从库里读回来**，拿真实行数与批次自己声称的覆盖账对。
    */
   private async reconcileAfterWrite(input: GeoBatchPersistInput, batchId: string): Promise<void> {
-    const { data: obsRows, error: obsErr } = await this.sb
-      .from(TABLE_OBSERVATIONS)
-      .select('id, outcome_ok')
-      .eq('client_id', input.clientId)
-      .eq('batch_id', batchId)
-    if (obsErr) fail(`对账读取 ${TABLE_OBSERVATIONS}`, obsErr)
-    if (obsRows === null) throw new GeoStoreError('null_result', '对账读取观测返回 null data 且无 error')
-
-    const observationIds = obsRows.map((r) => String((r as { id: unknown }).id))
-    const successIds = obsRows
-      .filter((r) => (r as { outcome_ok: unknown }).outcome_ok === true)
-      .map((r) => String((r as { id: unknown }).id))
-
-    const { data: evRows, error: evErr } =
-      successIds.length === 0
-        ? { data: [] as { observation_id: unknown }[], error: null }
-        : await this.sb
-            .from(TABLE_EVIDENCE)
-            .select('observation_id')
-            .eq('client_id', input.clientId)
-            .in('observation_id', successIds)
-    if (evErr) fail(`对账读取 ${TABLE_EVIDENCE}`, evErr)
-    if (evRows === null) throw new GeoStoreError('null_result', '对账读取证据返回 null data 且无 error')
-
+    const readBack = await this.readBackRows(input.clientId, batchId)
     const actual = input.batch.actualCoverage
-    if (observationIds.length !== actual.attempted) {
+
+    // 🔴 三条判据全部拿**从库里读回来的行**去比，不拿内存里的 input 自己跟自己比。
+    //    此前最后一条是把 `input.*` 喂给 `checkCoverageMatchesRows`，而 WP04 的
+    //    `runtime.ts` 在调用本方法之前刚用逐字相同的参数跑过同一个纯函数 ——
+    //    那条断言恒为真，一辈子不会响，是一段假装成闸门的死代码。
+    if (readBack.batchRowCount !== 1) {
+      throw new GeoStoreError(
+        'batch_row_missing',
+        `🔴 批次 ${batchId} 写完后按 id 读回来得到 ${readBack.batchRowCount} 行（应为 1）。`,
+        true,
+      )
+    }
+    if (readBack.observationIds.length !== actual.attempted) {
       throw new GeoStoreError(
         'coverage_row_count_mismatch',
-        `🔴 批次 ${batchId} 声称尝试了 ${actual.attempted} 条观测，库里实际只有 ${observationIds.length} 条。` +
+        `🔴 批次 ${batchId} 声称尝试了 ${actual.attempted} 条观测，库里实际有 ${readBack.observationIds.length} 条。` +
           `这些行不可删除，必须人工登记。`,
         true,
       )
     }
-    const evidenceObservationIds = new Set(evRows.map((r) => String(r.observation_id)))
-    const missing = successIds.filter((id) => !evidenceObservationIds.has(id))
+    if (readBack.successIds.length !== actual.succeeded) {
+      throw new GeoStoreError(
+        'coverage_success_count_mismatch',
+        `🔴 批次 ${batchId} 声称成功 ${actual.succeeded} 条，库里 outcome_ok=true 的有 ${readBack.successIds.length} 条。`,
+        true,
+      )
+    }
+    const failedInDb = readBack.observationIds.length - readBack.successIds.length
+    if (failedInDb !== actual.failed) {
+      throw new GeoStoreError(
+        'coverage_failed_count_mismatch',
+        `🔴 批次 ${batchId} 声称失败 ${actual.failed} 条，库里 outcome_ok=false 的有 ${failedInDb} 条。`,
+        true,
+      )
+    }
+    const missing = readBack.successIds.filter((id) => !readBack.evidenceObservationIds.has(id))
     if (missing.length > 0) {
       throw new GeoStoreError(
         'success_observation_without_evidence',
@@ -255,17 +297,58 @@ export class GeoSupabaseStore implements GeoRuntimeStore {
         true,
       )
     }
+  }
 
-    // 覆盖账与真实行数的一致性 —— 复用 WP04 已有的纯判据，不另写一套。
-    const coverage = checkCoverageMatchesRows({
-      claimedAttempted: actual.attempted,
-      claimedSucceeded: actual.succeeded,
-      claimedFailed: actual.failed,
-      observations: input.observations,
-      evidence: input.evidence.map((r) => r.evidence),
-    })
-    if (!coverage.ok) {
-      throw new GeoStoreError(coverage.code, `落库后覆盖账对不上：${coverage.reason}`, true)
+  /**
+   * 把这一批真正落进库里的行读回来。
+   *
+   * 🔴 证据按 `successIds` 分批查：`.in()` 会把 uuid 全部拼进 query string，
+   *    200 条约 7.4 KB，已经贴着常见网关 8 KB header 上限。撞上去会在**所有行都已落库之后**
+   *    抛一个读失败 —— 那是最坏的时机。
+   */
+  private async readBackRows(
+    clientId: string,
+    batchId: string,
+  ): Promise<{
+    batchRowCount: number
+    observationIds: string[]
+    successIds: string[]
+    evidenceObservationIds: Set<string>
+  }> {
+    const { data: batchRows, error: batchErr } = await this.sb
+      .from(TABLE_BATCHES)
+      .select('id')
+      .eq('client_id', clientId)
+      .eq('id', batchId)
+    if (batchErr) fail(`对账读取 ${TABLE_BATCHES}`, batchErr, true)
+    if (batchRows === null) throw new GeoStoreError('null_result', '对账读取批次返回 null data 且无 error', true)
+
+    const { data: obsRows, error: obsErr } = await this.sb
+      .from(TABLE_OBSERVATIONS)
+      .select('id, outcome_ok')
+      .eq('client_id', clientId)
+      .eq('batch_id', batchId)
+    if (obsErr) fail(`对账读取 ${TABLE_OBSERVATIONS}`, obsErr, true)
+    if (obsRows === null) throw new GeoStoreError('null_result', '对账读取观测返回 null data 且无 error', true)
+
+    const observationIds = obsRows.map((r) => String((r as { id: unknown }).id))
+    const successIds = obsRows
+      .filter((r) => (r as { outcome_ok: unknown }).outcome_ok === true)
+      .map((r) => String((r as { id: unknown }).id))
+
+    const evidenceObservationIds = new Set<string>()
+    for (let i = 0; i < successIds.length; i += EVIDENCE_READBACK_CHUNK) {
+      const chunk = successIds.slice(i, i + EVIDENCE_READBACK_CHUNK)
+      const { data, error } = await this.sb
+        .from(TABLE_EVIDENCE)
+        .select('observation_id')
+        .eq('client_id', clientId)
+        .in('observation_id', chunk)
+      if (error) fail(`对账读取 ${TABLE_EVIDENCE}`, error, true)
+      if (data === null) throw new GeoStoreError('null_result', '对账读取证据返回 null data 且无 error', true)
+      for (const row of data) evidenceObservationIds.add(String((row as { observation_id: unknown }).observation_id))
     }
+
+    return { batchRowCount: batchRows.length, observationIds, successIds, evidenceObservationIds }
   }
 }

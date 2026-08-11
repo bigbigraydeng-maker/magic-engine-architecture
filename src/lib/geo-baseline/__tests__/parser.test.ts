@@ -25,13 +25,17 @@ const REQUEST: GeoProviderRequest = {
 
 const PAGE_POLICY = { computable: false as const, reason: '页面台账为空，本轮未裁定页面级归属' }
 
-function envelope(citationUrls: string[], text = 'answer'): string {
+function envelope(citationUrls: string[], overrides: Partial<GeoRawResponseEnvelope> = {}): string {
   const e: GeoRawResponseEnvelope = {
     envelope: 'geo-baseline/openai/v1',
     resolvedModel: 'm',
-    text,
+    text: 'answer',
+    refusal: null,
+    finishReason: 'stop',
     citationUrls,
     usage: { promptTokens: 1, completionTokens: 1 },
+    rawPayload: { id: 'chatcmpl-1' },
+    ...overrides,
   }
   return JSON.stringify(e)
 }
@@ -117,6 +121,26 @@ describe('信封读取', () => {
       ok: false,
       errorCode: 'envelope_malformed',
     })
+  })
+})
+
+describe('没有正文 ⇒ 失败观测，不是「回答了但没引来源」', () => {
+  it('text 为 null + 有 refusal ⇒ model_refused', () => {
+    const parse = createGeoBaselineParser(config())
+    const raw = envelope([], { text: null, refusal: 'I cannot help', finishReason: 'content_filter' })
+    expect(parse(raw, REQUEST)).toMatchObject({ ok: false, errorCode: 'model_refused' })
+  })
+
+  it('text 为 null 且没有 refusal ⇒ no_answer_content', () => {
+    const parse = createGeoBaselineParser(config())
+    const raw = envelope([], { text: null, refusal: null, finishReason: 'length' })
+    expect(parse(raw, REQUEST)).toMatchObject({ ok: false, errorCode: 'no_answer_content' })
+  })
+
+  it('空字符串正文仍算成功 —— 「答了一句空话」和「没答」是两件事', () => {
+    const parse = createGeoBaselineParser(config())
+    const result = parse(envelope([], { text: '' }), REQUEST)
+    expect(result.ok).toBe(true)
   })
 })
 

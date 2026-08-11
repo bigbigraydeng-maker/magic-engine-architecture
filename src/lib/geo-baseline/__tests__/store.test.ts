@@ -16,7 +16,14 @@ import {
   GeoFakeProvider,
 } from '@/lib/geo-measurement-runtime'
 import type { GeoFrozenPlan } from '@/lib/geo-measurement-runtime'
-import { GeoStoreError, GeoSupabaseStore, stripGeneratedColumns } from '../store'
+import {
+  clampErrorMessage,
+  GeoStoreError,
+  GeoSupabaseStore,
+  MAX_ERROR_MESSAGE_CHARS,
+  stripGeneratedColumns,
+} from '../store'
+import { buildSuccessObservation } from '@/lib/geo-measurement-runtime/observation'
 import { FakeSupabase } from './fake-supabase'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -226,6 +233,118 @@ describe('崩溃窗口 —— 选路线③ 的全部代价押在这里', () => {
     })
     expect(db.tables.geo_batches).toHaveLength(0)
     expect(db.tables.geo_observations).toHaveLength(0)
+  })
+})
+
+describe('落库后对账必须拿**读回来的行**比，不是拿内存里的输入自己比自己', () => {
+  it('批次行读不回来 ⇒ batch_row_missing', async () => {
+    const db = new FakeSupabase()
+    db.swallowInsertsFor.add('geo_batches')
+    const thrown = await runGeoMeasurementBatch(plan(), deps(db)).catch((e: unknown) => e)
+    // 观测的外键在真库里会先炸；这里的假件不建模那条外键，所以直接落到批次对账。
+    expect(thrown).toMatchObject({ orphaned: true })
+    expect((thrown as GeoStoreError).code).toMatch(/batch_row_missing|coverage_/)
+  })
+
+  it('成功数对不上 ⇒ coverage_success_count_mismatch（拿库里的 outcome_ok 分布对账）', async () => {
+    const db = new FakeSupabase()
+    const store = new GeoSupabaseStore({ client: db as unknown as SupabaseClient, now: () => 't' })
+    const built = buildSuccessObservation({
+      plan: plan(),
+      queryKey: 'q1',
+      sampleIndex: 0,
+      batchId: 'b-mismatch',
+      observationId: 'o-1',
+      evidenceId: 'e-1',
+      observedAt: '2026-08-12T00:00:00.000Z',
+      confidence: 0.9,
+      citations: [],
+      rawResponse: 'raw',
+    })
+    // 一条成功观测，但批次自己声称「0 成功 / 1 失败」—— 库里读回来的分布会拆穿它。
+    const coverage = {
+      engines: ['openai'], models: ['m'], locales: ['en-NZ'], markets: ['nz'], queryKeys: ['q1'],
+      attempted: 1, succeeded: 0, failed: 1,
+    }
+    const thrown = await store
+      .persistBatch({
+        clientId: CLIENT_ID,
+        querySetId: 'qs-1',
+        batch: {
+          batchId: 'b-mismatch',
+          querySetVersion: 'v1',
+          startedAt: '2026-08-12T00:00:00.000Z',
+          completedAt: { known: true, value: '2026-08-12T00:00:01.000Z' },
+          status: 'partial',
+          plannedCoverage: coverage,
+          actualCoverage: coverage,
+          costUsd: { known: true, value: 0.01 },
+          triggeredBy: { known: true, value: 'test' },
+        },
+        observations: [built.observation],
+        evidence: [built.evidence],
+      })
+      .then(() => null)
+      .catch((e: unknown) => e)
+    expect(thrown).toMatchObject({ code: 'coverage_success_count_mismatch', orphaned: true })
+  })
+
+  it('对账阶段读失败 ⇒ orphaned 必须是 true（此时三条 INSERT 已经全成功）', async () => {
+    const db = new FakeSupabase()
+    const shared = deps(db)
+    // 先正常落一批，确认能成功
+    await runGeoMeasurementBatch(plan(), shared)
+    // 再跑一批，但让对账那一步的读失败
+    db.failures.push({ table: 'geo_observations', op: 'select', message: 'connection reset' })
+    let n = 0
+    const thrown = await runGeoMeasurementBatch(plan({ clientId: 'c2' }), {
+      ...deps(db),
+      newId: (kind) => `c2-${kind}-${++n}`,
+    }).catch((e: unknown) => e)
+    expect(thrown).toMatchObject({ code: 'query_failed', orphaned: true })
+    expect((thrown as GeoStoreError).message).toMatch(/不要重跑/)
+  })
+})
+
+describe('error_message 截断（那一列不可变、无长度上限）', () => {
+  it('🔴 走 persistBatch 真链路时也截断（直测函数不够 —— 拆掉调用点必须有测试变红）', async () => {
+    const db = new FakeSupabase()
+    const long = 'E'.repeat(MAX_ERROR_MESSAGE_CHARS + 321)
+    const provider = new GeoFakeProvider({
+      engineFamily: 'openai',
+      idempotency: 'unsupported',
+      script: () => ({ kind: 'error', errorCode: 'provider_error', message: long, costUsd: 0 }),
+    })
+    await runGeoMeasurementBatch(plan(), deps(db, provider))
+    for (const row of db.tables.geo_observations) {
+      const msg = String(row.error_message)
+      expect(msg.length).toBeLessThan(long.length)
+      expect(msg).toContain('truncated 321 chars')
+    }
+  })
+
+  it('超长错误被截断并留痕', () => {
+    const long = 'x'.repeat(MAX_ERROR_MESSAGE_CHARS + 500)
+    const row = clampErrorMessage({
+      id: 'o1', client_id: 'c', batch_id: 'b',
+      query_set_version: 'v', query_set_version_unknown_reason: null,
+      query_key: 'k', query_key_unknown_reason: null,
+      engine_family: 'openai', engine_family_unknown_reason: null,
+      model_version: 'm', model_version_unknown_reason: null,
+      locale: 'en-NZ', locale_unknown_reason: null,
+      market: 'nz', market_unknown_reason: null,
+      sample_planned_count: 1, sample_planned_count_unknown_reason: null,
+      sample_index: 0, sample_index_unknown_reason: null,
+      sampling_parameters: null, sampling_parameters_unknown_reason: 'not_recorded_by_source',
+      parser_version: 'p', parser_version_unknown_reason: null,
+      metric_rules_version: 'r', metric_rules_version_unknown_reason: null,
+      confidence: null, confidence_unknown_reason: 'not_applicable',
+      observed_at: 't', outcome_ok: false, error_code: 'e',
+      error_message: long, error_message_unknown_reason: null,
+      source_observation_id: null, created_at: 't',
+    })
+    expect(row.error_message).toContain('truncated 500 chars')
+    expect((row.error_message ?? '').length).toBeLessThan(long.length)
   })
 })
 

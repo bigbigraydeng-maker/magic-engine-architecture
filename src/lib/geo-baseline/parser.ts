@@ -80,8 +80,12 @@ export function parseEnvelope(rawResponse: string): ParsedEnvelope | ParsedEnvel
       message: `expected envelope "${ENVELOPE_VERSION}", got ${JSON.stringify(e.envelope)}`,
     }
   }
-  if (typeof e.text !== 'string' || !Array.isArray(e.citationUrls)) {
-    return { ok: false, errorCode: 'envelope_malformed', message: 'envelope is missing text or citationUrls' }
+  // `text` 允许为 null（拒答 / 无 choice）；但字段必须在，缺字段是信封坏了。
+  if (!('text' in e) || (e.text !== null && typeof e.text !== 'string')) {
+    return { ok: false, errorCode: 'envelope_malformed', message: 'envelope "text" must be a string or null' }
+  }
+  if (!Array.isArray(e.citationUrls)) {
+    return { ok: false, errorCode: 'envelope_malformed', message: 'envelope is missing citationUrls' }
   }
   return { ok: true, envelope: decoded as GeoRawResponseEnvelope }
 }
@@ -115,6 +119,21 @@ export function createGeoBaselineParser(config: GeoBaselineParserConfig): GeoPar
     if (!parsed.ok) {
       return { ok: false, errorCode: parsed.errorCode, message: parsed.message }
     }
+    // 🔴 模型压根没给出正文 ⇒ **这不是一次可解释的观测**，判失败。
+    //    此前把 `text` 当成必然是字符串，`?? ''` 一路上来的空串会被读成
+    //    「回答了、但一个来源都没引」—— 那是一个**不同且是错的**事实，
+    //    而且它会以 confidence=1 的成功观测落进不可变的库里。
+    const { text, refusal, finishReason } = parsed.envelope
+    if (text === null) {
+      return {
+        ok: false,
+        errorCode: refusal !== null && refusal !== undefined ? 'model_refused' : 'no_answer_content',
+        message:
+          `provider returned no answer content (finish_reason=${String(finishReason)}` +
+          (refusal ? `, refusal=${refusal}` : '') + ')',
+      }
+    }
+
     const urls = parsed.envelope.citationUrls
     const citations: GeoCitation[] = []
     for (const url of urls) {

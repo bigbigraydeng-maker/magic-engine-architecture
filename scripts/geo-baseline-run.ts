@@ -17,6 +17,8 @@
  *
  * 真跑（**需要单独授权：真实 provider 调用 + 预算 + 生产写入 + baseline execution**）：
  *   ... 同上 ... npx tsx --env-file=.env.local scripts/geo-baseline-run.ts --live
+ *
+ * 退出码：0 = 完整基线；1 = 跑挂了；2 = 部分覆盖（**不是一次完整基线**）。
  */
 
 import { supabaseAdmin } from '@/lib/supabase'
@@ -35,27 +37,45 @@ import {
   TABLE_QUERIES,
   TABLE_QUERY_SETS,
 } from '@/lib/geo-baseline'
-import type { GeoBaselineManifest } from '@/lib/geo-baseline'
+import {
+  buildOwnedDomainPolicy,
+  GeoConfigError,
+  optionalNumber as parseOptionalNumber,
+  requireNumber,
+  requireString,
+} from '@/lib/geo-baseline/config'
+import type { GeoBaselineManifest, GeoBuiltPlan, GeoOwnedDomainPolicy } from '@/lib/geo-baseline'
 
 const LIVE = process.argv.includes('--live')
 
-function required(name: string): string {
-  const v = process.env[name]
-  if (v === undefined || v.trim().length === 0) {
-    console.error(`缺环境变量 ${name} —— 这一项属于 PM 冻结的 manifest，脚本不替它填默认值。`)
-    process.exit(1)
-  }
-  return v.trim()
+function die(message: string): never {
+  console.error(message)
+  process.exit(1)
 }
 
-function requiredNumber(name: string): number {
-  const raw = required(name)
-  const n = Number(raw)
-  if (!Number.isFinite(n)) {
-    console.error(`环境变量 ${name}="${raw}" 不是一个有限数字。`)
-    process.exit(1)
+/** 薄壳：把纯函数的错误翻成「打印 + 退出」。判据本身在 `@/lib/geo-baseline/config`，那里能被直测。 */
+function required(name: string): string {
+  try {
+    return requireString(name, process.env[name])
+  } catch (e) {
+    die(e instanceof GeoConfigError ? e.message : String(e))
   }
-  return n
+}
+
+function requiredNumber(name: string, opts: { positive?: boolean } = {}): number {
+  try {
+    return requireNumber(name, process.env[name], opts)
+  } catch (e) {
+    die(e instanceof GeoConfigError ? e.message : String(e))
+  }
+}
+
+function optionalNumber(name: string, fallback: number): number {
+  try {
+    return parseOptionalNumber(name, process.env[name], fallback)
+  } catch (e) {
+    die(e instanceof GeoConfigError ? e.message : String(e))
+  }
 }
 
 function readManifest(): GeoBaselineManifest {
@@ -65,13 +85,25 @@ function readManifest(): GeoBaselineManifest {
     modelVersion: required('GEO_MODEL_VERSION'),
     locale: required('GEO_LOCALE'),
     market: required('GEO_MARKET'),
-    sampleCount: requiredNumber('GEO_SAMPLE_COUNT'),
+    sampleCount: requiredNumber('GEO_SAMPLE_COUNT', { positive: true }),
     parserVersion: required('GEO_PARSER_VERSION'),
     metricRulesVersion: required('GEO_METRIC_RULES_VERSION'),
-    budgetUsd: requiredNumber('GEO_BUDGET_USD'),
-    perObservationCostCeilingUsd: requiredNumber('GEO_PER_CALL_CEILING_USD'),
-    maxAttemptsPerObservation: Number(process.env.GEO_MAX_ATTEMPTS ?? '1'),
+    budgetUsd: requiredNumber('GEO_BUDGET_USD', { positive: true }),
+    perObservationCostCeilingUsd: requiredNumber('GEO_PER_CALL_CEILING_USD', { positive: true }),
+    maxAttemptsPerObservation: optionalNumber('GEO_MAX_ATTEMPTS', 1),
     triggeredBy: required('GEO_TRIGGERED_BY'),
+  }
+}
+
+/** 薄壳 —— 判据（含「verified 不许从清单非空推出来」）在 `@/lib/geo-baseline/config`。 */
+function readOwnedDomainPolicy(): GeoOwnedDomainPolicy {
+  try {
+    return buildOwnedDomainPolicy({
+      domainsCsv: process.env.GEO_OWNED_DOMAINS,
+      verifiedBy: process.env.GEO_OWNED_DOMAINS_VERIFIED_BY,
+    })
+  } catch (e) {
+    die(e instanceof GeoConfigError ? e.message : String(e))
   }
 }
 
@@ -82,67 +114,64 @@ function readManifest(): GeoBaselineManifest {
  *    只断言「空」的话，两种情况分不开，探针等于没有。
  */
 async function preflightTables(): Promise<void> {
-  const tables = [TABLE_QUERY_SETS, TABLE_QUERIES, TABLE_BATCHES, TABLE_OBSERVATIONS, TABLE_EVIDENCE]
-  for (const table of tables) {
+  for (const table of [TABLE_QUERY_SETS, TABLE_QUERIES, TABLE_BATCHES, TABLE_OBSERVATIONS, TABLE_EVIDENCE]) {
     const { error } = await supabaseAdmin.from(table).select('id').limit(1)
     if (error) {
       console.error(`❌ 表 ${table} 读不到：${error.message}`)
-      console.error('   WP03 的 migration 可能没 apply，或 PostgREST 的 schema 缓存没刷新。停。')
-      process.exit(1)
+      die('   WP03 的 migration 可能没 apply，或 PostgREST 的 schema 缓存没刷新。停。')
     }
     console.log(`   ✅ ${table}`)
   }
 }
 
-async function main(): Promise<void> {
-  const manifest = readManifest()
-  const ownedDomainsRaw = (process.env.GEO_OWNED_DOMAINS ?? '').trim()
-  const ownedDomains = ownedDomainsRaw.length > 0 ? ownedDomainsRaw.split(',').map((s) => s.trim()) : []
-
-  console.log('═'.repeat(72))
-  console.log(LIVE ? '🔴 LIVE —— 会真的调用 provider 并写生产库' : '🟢 DRY RUN —— 只读库，不调 provider，不写任何一行')
-  console.log('═'.repeat(72))
-
-  console.log('\n[1/4] 五张表存在性 preflight')
-  await preflightTables()
-
-  console.log('\n[2/4] 读取冻结的查询范围')
-  const scope = await loadFrozenQueryScope(supabaseAdmin, {
-    clientId: manifest.clientId,
-    querySetVersion: required('GEO_QUERY_SET_VERSION'),
-  })
-  console.log(`   查询集 ${scope.querySetVersion}（${scope.querySetId}）· ${scope.queries.length} 个问题`)
-  console.log(`   锁定状态：${scope.lockedAt.known ? `已于 ${scope.lockedAt.value} 锁定` : '未锁定（首个批次落地时由数据库自动上锁）'}`)
-
-  console.log('\n[3/4] 组装并校验冻结计划')
-  const built = buildFrozenPlan(manifest, scope)
+function printPlan(manifest: GeoBaselineManifest, built: GeoBuiltPlan, owned: GeoOwnedDomainPolicy): void {
   const headroom = summariseBudgetHeadroom(built)
-  console.log(`   cohort：engine=${manifest.engineFamily} model=${manifest.modelVersion} locale=${manifest.locale} market=${manifest.market} sample=${manifest.sampleCount}`)
+  console.log(
+    `   cohort：engine=${manifest.engineFamily} model=${manifest.modelVersion} ` +
+      `locale=${manifest.locale} market=${manifest.market} sample=${manifest.sampleCount}`,
+  )
   console.log(`   解释身份：parser=${manifest.parserVersion} metricRules=${manifest.metricRulesVersion}`)
   console.log(`   计划观测数：${built.plannedObservationCount}`)
   console.log(`   最坏花费：$${built.worstCaseCostUsd.toFixed(4)} / 授权额度 $${headroom.budgetUsd.toFixed(4)}`)
   console.log(`   ${headroom.note}`)
-  console.log(`   自有域名清单：${ownedDomains.length > 0 ? ownedDomains.join(', ') : '（未提供 ⇒ 每条引用的 ownedDomain 记「未知」，不是 false）'}`)
+  console.log(
+    `   自有域名：${owned.verified ? `已核实（${owned.verifiedDomains.join(', ')}）` : '⚠️ 未核实 ⇒ 每条引用的 ownedDomain 一律记「未知」，不是 false'}`,
+  )
   console.log('   页面级引用归属：本轮不可算（R4 未裁定 / 页面台账为空）—— 绝不报 0')
+}
 
-  if (!LIVE) {
-    console.log('\n[4/4] DRY RUN 到此为止。没有调用任何 provider，没有写任何一行。')
-    console.log('      真跑需要六条独立授权全部就位（代码实施 / 真实客户数据 / 真实 provider / 预算 / 生产写入 / baseline execution），')
-    console.log('      然后加 --live 重跑。')
-    return
+function printResult(result: Awaited<ReturnType<typeof runGeoMeasurementBatch>>): number {
+  console.log('\n' + '═'.repeat(72))
+  console.log(`终态：${result.status}   批次：${result.batchId}`)
+  console.log(
+    `覆盖：计划 ${result.plannedCoverage.attempted} / 尝试 ${result.actualCoverage.attempted} / ` +
+      `成功 ${result.actualCoverage.succeeded} / 失败 ${result.actualCoverage.failed}`,
+  )
+  console.log(`花费：${result.costUsd.known ? `$${result.costUsd.value.toFixed(4)}` : `未知（${result.costUsd.reason}）`}`)
+  console.log(`停止原因：${result.stopReason.code} —— ${result.stopReason.detail}`)
+  if (result.stopReason.observedErrorCodes.length > 0) {
+    console.log(`出现过的错误码：${result.stopReason.observedErrorCodes.join(', ')}`)
   }
+  if (result.status === 'completed') return 0
+  console.log(
+    '🔴 这不是一次完整基线。按 GEO 契约 §7.2，部分覆盖的批次不许在任何界面上被呈现成一次完整基线。',
+  )
+  // 🔴 退出码也是一个界面。返回 0 会让任何包装它的东西把「部分覆盖」读成「成功」。
+  return 2
+}
 
-  console.log('\n[4/4] LIVE —— 开始跑批次')
+async function runLive(manifest: GeoBaselineManifest, built: GeoBuiltPlan, owned: GeoOwnedDomainPolicy): Promise<number> {
   const provider = new GeoBaselineOpenAiProvider({
     transport: openAiTransport,
     pricing: {
-      inputPerMillionUsd: requiredNumber('GEO_PRICE_INPUT_PER_M'),
-      outputPerMillionUsd: requiredNumber('GEO_PRICE_OUTPUT_PER_M'),
+      inputPerMillionUsd: requiredNumber('GEO_PRICE_INPUT_PER_M', { positive: true }),
+      outputPerMillionUsd: requiredNumber('GEO_PRICE_OUTPUT_PER_M', { positive: true }),
     },
-    timeoutMs: Number(process.env.GEO_TIMEOUT_MS ?? '60000'),
+    perObservationCostCeilingUsd: manifest.perObservationCostCeilingUsd,
+    timeoutMs: optionalNumber('GEO_TIMEOUT_MS', 60_000),
   })
   const parse = createGeoBaselineParser({
-    ownedDomains: { verifiedDomains: ownedDomains, verified: ownedDomains.length > 0 },
+    ownedDomains: owned,
     ownedPages: {
       computable: false,
       reason: '客户页面台账为空，且本轮是否做页面级归属尚未裁定（Roman 文档 R4 / WP00 U2）',
@@ -157,27 +186,53 @@ async function main(): Promise<void> {
     now: () => new Date().toISOString(),
     newId: () => crypto.randomUUID(),
   })
-
-  console.log('\n' + '═'.repeat(72))
-  console.log(`终态：${result.status}   批次：${result.batchId}`)
-  console.log(`覆盖：计划 ${result.plannedCoverage.attempted} / 尝试 ${result.actualCoverage.attempted} / 成功 ${result.actualCoverage.succeeded} / 失败 ${result.actualCoverage.failed}`)
-  console.log(`花费：${result.costUsd.known ? `$${result.costUsd.value.toFixed(4)}` : `未知（${result.costUsd.reason}）`}`)
-  console.log(`停止原因：${result.stopReason.code} —— ${result.stopReason.detail}`)
-  if (result.stopReason.observedErrorCodes.length > 0) {
-    console.log(`出现过的错误码：${result.stopReason.observedErrorCodes.join(', ')}`)
-  }
-  if (result.status !== 'completed') {
-    console.log('🔴 这不是一次完整基线。按 GEO 契约 §7.2，部分覆盖的批次不许在任何界面上被呈现成一次完整基线。')
-  }
+  return printResult(result)
 }
 
-main().catch((err: unknown) => {
-  console.error('\n❌ 跑挂了：', err instanceof Error ? err.message : String(err))
-  const orphaned = (err as { orphaned?: boolean })?.orphaned === true
-  if (orphaned) {
-    console.error('\n🔴🔴 库里留下了删不掉的半截数据。上面的错误信息里写着是哪一批、哪些行。')
-    console.error('     这三张表的 UPDATE/DELETE 被触发器全禁 —— 不要试图清理，清不掉。')
-    console.error('     请人工登记这个批次并忽略它；重跑一律用新批次。')
+async function main(): Promise<number> {
+  const manifest = readManifest()
+  const owned = readOwnedDomainPolicy()
+
+  console.log('═'.repeat(72))
+  console.log(LIVE ? '🔴 LIVE —— 会真的调用 provider 并写生产库' : '🟢 DRY RUN —— 只读库，不调 provider，不写任何一行')
+  console.log('═'.repeat(72))
+
+  console.log('\n[1/4] 五张表存在性 preflight')
+  await preflightTables()
+
+  console.log('\n[2/4] 读取冻结的查询范围')
+  const scope = await loadFrozenQueryScope(supabaseAdmin, {
+    clientId: manifest.clientId,
+    querySetVersion: required('GEO_QUERY_SET_VERSION'),
+  })
+  console.log(`   查询集 ${scope.querySetVersion}（${scope.querySetId}）· ${scope.queries.length} 个问题`)
+  console.log(
+    `   锁定状态：${scope.lockedAt.known ? `已于 ${scope.lockedAt.value} 锁定` : '未锁定（首个批次落地时由数据库自动上锁）'}`,
+  )
+
+  console.log('\n[3/4] 组装并校验冻结计划')
+  const built = buildFrozenPlan(manifest, scope)
+  printPlan(manifest, built, owned)
+
+  if (!LIVE) {
+    console.log('\n[4/4] DRY RUN 到此为止。没有调用任何 provider，没有写任何一行。')
+    console.log('      真跑需要六条独立授权全部就位（代码实施 / 真实客户数据 / 真实 provider / 预算 / 生产写入 / baseline execution），')
+    console.log('      然后加 --live 重跑。')
+    return 0
   }
-  process.exit(1)
-})
+
+  console.log('\n[4/4] LIVE —— 开始跑批次')
+  return runLive(manifest, built, owned)
+}
+
+main()
+  .then((code) => process.exit(code))
+  .catch((err: unknown) => {
+    console.error('\n❌ 跑挂了：', err instanceof Error ? err.message : String(err))
+    if ((err as { orphaned?: boolean })?.orphaned === true) {
+      console.error('\n🔴🔴 库里留下了删不掉的半截数据。上面的错误信息里写着是哪一批、哪些行。')
+      console.error('     这三张表的 UPDATE/DELETE 被触发器全禁 —— 不要试图清理，清不掉。')
+      console.error('     请人工登记这个批次并忽略它；重跑一律用新批次。')
+    }
+    process.exit(1)
+  })

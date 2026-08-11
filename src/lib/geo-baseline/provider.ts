@@ -122,6 +122,13 @@ function asTransportError(err: unknown): GeoTransportError {
 
 export interface GeoBaselineProviderConfig extends GeoBaselineProviderOptions {
   readonly pricing: { readonly inputPerMillionUsd: number; readonly outputPerMillionUsd: number }
+  /**
+   * 计划里声明的单次成本上界。
+   *
+   * 🔴 用途是**给「已经打出去但算不出花了多少」的调用一个保守落点**。
+   *    详见 {@link GeoBaselineOpenAiProvider.resolveOk} 里 `provider_cost_unknown` 的处理。
+   */
+  readonly perObservationCostCeilingUsd: number
 }
 
 /**
@@ -140,6 +147,16 @@ export class GeoBaselineOpenAiProvider implements GeoProvider {
   readonly idempotency = 'unsupported' as const
 
   private readonly config: GeoBaselineProviderConfig
+  /**
+   * 模型身份对不上时的闩。
+   *
+   * 🔴 为什么需要它：模型回显不符是**确定性重复**的 —— 计划钉的是浮动别名，那这一批
+   *    每一次调用都会不符。没有闩的话，200 条计划观测会发出 200 次**真实计费**的调用，
+   *    每一条都判失败，而 WP04 的批次级停跑只认「预算耗尽」和「成本不可信」两种理由
+   *    （`runtime.ts:256-279`），不认「一直在失败」。于是钱花光了、一条有效观测都没有。
+   *    第一次不符就闩上，后续调用**不发请求**直接返回同一个错误。
+   */
+  private modelMismatch: { readonly requested: string; readonly resolved: string } | null = null
 
   constructor(config: GeoBaselineProviderConfig) {
     this.config = config
@@ -153,6 +170,9 @@ export class GeoBaselineOpenAiProvider implements GeoProvider {
         message: `request engineFamily "${request.engineFamily}" != provider "${this.engineFamily}"`,
         costUsd: 0,
       }
+    }
+    if (this.modelMismatch !== null) {
+      return this.modelMismatchResult(this.modelMismatch, 0)
     }
     const built = buildOutboundRequest(request)
     if (!built.ok) {
@@ -172,41 +192,70 @@ export class GeoBaselineOpenAiProvider implements GeoProvider {
     }
   }
 
+  private modelMismatchResult(
+    mismatch: { requested: string; resolved: string },
+    costUsd: number,
+  ): GeoProviderCallResult {
+    return {
+      kind: 'error',
+      errorCode: 'provider_model_mismatch',
+      message:
+        `plan pinned modelVersion "${mismatch.requested}" but the provider resolved it to ` +
+        `"${mismatch.resolved}"; a floating alias cannot serve as frozen observation identity. ` +
+        `Pin the manifest to "${mismatch.resolved}" and re-run. ` +
+        `(Provider latched: no further requests will be sent in this batch.)`,
+      costUsd,
+    }
+  }
+
   /** 成功路径：先核对模型身份，再算成本，最后把整个载荷封进信封。 */
   private resolveOk(
     result: Awaited<ReturnType<GeoTransport>>,
     request: GeoProviderRequest,
   ): GeoProviderCallResult {
+    // 🔴 下面两条拒绝分支都发生在**调用已经完成**之后 —— provider 跑过了、也计了费。
+    //    此前这里两条都返回 `costUsd: 0`，于是 `knownSpent` 永远不动、
+    //    `preflightBudget` 永远放行、`geo_batches.cost_usd` 落库写着 $0 且不可改。
+    //    钱是真花了的，账必须记上。
+    const measured = computeCostUsd(result.promptTokens, result.completionTokens, this.config.pricing)
+
     if (result.resolvedModel !== request.modelVersion) {
-      return {
-        kind: 'error',
-        errorCode: 'provider_model_mismatch',
-        message:
-          `plan pinned modelVersion "${request.modelVersion}" but the provider resolved it to ` +
-          `"${result.resolvedModel}"; a floating alias cannot serve as frozen observation identity. ` +
-          `Pin the manifest to "${result.resolvedModel}" and re-run.`,
-        costUsd: 0,
-      }
+      this.modelMismatch = { requested: request.modelVersion, resolved: result.resolvedModel }
+      // 有用量就记实际花费；没有用量就按上界保守计（宁可高估，不可低估）。
+      return this.modelMismatchResult(this.modelMismatch, measured ?? this.ceiling())
     }
-    const cost = computeCostUsd(result.promptTokens, result.completionTokens, this.config.pricing)
-    if (cost === null) {
-      // 拿不到用量 = 说不出这一步实际花了多少。成本上界不明的付费步骤一律 fail closed
-      // （GEO 契约 §7.1 第 3 条）。不许拿 0 顶替 —— 那是把「不知道」写成「免费」。
+
+    if (measured === null) {
+      // 拿不到用量 = 说不出这一步实际花了多少，但**钱已经花了**。
+      // 记上界：高估会让预算闸提前收手（安全方向），低估会让它形同虚设。
       return {
         kind: 'error',
         errorCode: 'provider_cost_unknown',
-        message: 'provider returned no token usage; actual cost cannot be established',
-        costUsd: 0,
+        message:
+          'provider returned no token usage; the call was made and billed but its exact cost ' +
+          `cannot be established — charged the declared per-call ceiling ($${this.ceiling()}) as a ` +
+          'conservative upper bound so the budget gate cannot be silently bypassed',
+        costUsd: this.ceiling(),
       }
     }
+
     const envelope: GeoRawResponseEnvelope = {
       envelope: 'geo-baseline/openai/v1',
       resolvedModel: result.resolvedModel,
       text: result.text,
+      refusal: result.refusal,
+      finishReason: result.finishReason,
       citationUrls: result.citationUrls,
       usage: { promptTokens: result.promptTokens, completionTokens: result.completionTokens },
+      rawPayload: result.rawPayload,
     }
-    return { kind: 'ok', rawResponse: JSON.stringify(envelope), costUsd: cost }
+    return { kind: 'ok', rawResponse: JSON.stringify(envelope), costUsd: measured }
+  }
+
+  /** 声明的单次上界，非有限 / 负数时退回 0（那种计划会被 WP04 的 plan 校验先拒掉）。 */
+  private ceiling(): number {
+    const c = this.config.perObservationCostCeilingUsd
+    return Number.isFinite(c) && c >= 0 ? c : 0
   }
 
   /** 失败路径：**四态必须分得开**，见文件头 ①。 */

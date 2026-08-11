@@ -13,7 +13,21 @@
 export { GeoBaselineOpenAiProvider, GEO_BASELINE_ENGINE_FAMILY, DEFAULT_PROVIDER_TIMEOUT_MS, buildOutboundRequest, computeCostUsd } from './provider'
 export type { GeoBaselineProviderConfig, GeoBaselineProviderOptions } from './provider'
 
-export { openAiTransport } from './transport-openai'
+export {
+  openAiTransport,
+  createOpenAiTransport,
+  toTransportError,
+  TRANSPORT_REQUEST_OPTIONS,
+} from './transport-openai'
+export type { OpenAiChatClient } from './transport-openai'
+
+export {
+  buildOwnedDomainPolicy,
+  requireString,
+  requireNumber,
+  optionalNumber,
+  GeoConfigError,
+} from './config'
 
 export { createGeoBaselineParser, classifyOwnedDomain, normaliseHost, parseEnvelope } from './parser'
 
@@ -21,6 +35,9 @@ export {
   GeoSupabaseStore,
   GeoStoreError,
   stripGeneratedColumns,
+  clampErrorMessage,
+  EVIDENCE_READBACK_CHUNK,
+  MAX_ERROR_MESSAGE_CHARS,
   TABLE_BATCHES,
   TABLE_OBSERVATIONS,
   TABLE_EVIDENCE,

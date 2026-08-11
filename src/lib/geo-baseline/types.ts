@@ -39,14 +39,34 @@ export interface GeoRawResponseEnvelope {
   readonly envelope: 'geo-baseline/openai/v1'
   /** provider **回显**的模型标识 —— 不是我们请求的那个。身份核对靠它。 */
   readonly resolvedModel: string
-  /** 助手回复正文，逐字。 */
-  readonly text: string
-  /** 结构化引用来源（URL 原样，不规范化、不去重 —— 规范化是 parser 的事）。 */
+  /**
+   * 助手回复正文，逐字。
+   *
+   * 🔴 **可空，且不许拿 `''` 顶替 `null`。**「模型拒答」「返回了空串」「压根没有 choice」
+   *    是三件不同的事；压成一个值之后，落进不可变的观测行里就永远分不开了。
+   */
+  readonly text: string | null
+  /** 模型显式拒答时的说明（OpenAI 的 `refusal` 字段）。 */
+  readonly refusal: string | null
+  /** `stop` / `length` / `content_filter` …… 空正文到底是怎么来的，靠它区分。 */
+  readonly finishReason: string | null
+  /** 结构化引用来源的**派生视图**（URL 原样，不规范化、不去重）。 */
   readonly citationUrls: readonly string[]
   readonly usage: {
     readonly promptTokens: number | null
     readonly completionTokens: number | null
   }
+  /**
+   * 🔴 **整个响应对象，逐字。** 上面那些字段都是给 v1 parser 用的派生视图；
+   *    真正满足 GEO 契约 §4.4「逐字保留供日后重新解析」的是这一份。
+   *
+   *    少了它会怎样：`url_citation.title` / `start_index` / `end_index`
+   *    （引用落在正文哪个位置 —— 「限定性提及」这类指标的原料）、`system_fingerprint`、
+   *    多个 choice 全都不在派生视图里。而观测行落库即不可变、补不回来 ——
+   *    六个月后 WP05 算 M1 指标时才发现缺料，就只能重跑一次全新采集，
+   *    **而重跑意味着基线时间点丢了**。现在多存一个字段是一行代码，上线之后补是补不回来的。
+   */
+  readonly rawPayload: Record<string, unknown>
 }
 
 // ── provider 传输层（注入以便测试，绝不在测试里发真请求）────────────────────
@@ -65,10 +85,15 @@ export interface GeoOutboundRequest {
 /** 传输层结果。**不做任何解释** —— 解释是 parser 的事。 */
 export interface GeoTransportResult {
   readonly resolvedModel: string
-  readonly text: string
+  /** 可空：拒答 / 空串 / 没有 choice 是三件事，不许压成一个值。 */
+  readonly text: string | null
+  readonly refusal: string | null
+  readonly finishReason: string | null
   readonly citationUrls: readonly string[]
   readonly promptTokens: number | null
   readonly completionTokens: number | null
+  /** 整个响应对象，逐字 —— §4.4 的「供日后重新解析」靠它，不靠派生字段。 */
+  readonly rawPayload: Record<string, unknown>
 }
 
 /**
@@ -102,7 +127,16 @@ export type GeoTransport = (request: GeoOutboundRequest, signal: AbortSignal) =>
 export interface GeoOwnedDomainPolicy {
   /** 已核实的域名与别名。空数组 = 尚未核实，不是「一个都没有」。 */
   readonly verifiedDomains: readonly string[]
-  /** 这份清单是否真的经过核实。false ⇒ 一律记未知。 */
+  /**
+   * 这份清单是否真的经过核实。false ⇒ 一律记未知。
+   *
+   * 🔴 **绝不许从清单本身推导出来**（比如 `verified: domains.length > 0`）。
+   *    「有人填了几个域名」和「PM 核实过这就是全部自有域名」是两件事：
+   *    漏填一个别名，那个别名下的每一条引用都会被记成
+   *    `{known:true, value:false}` —— 也就是**「我们核实过，这不是他的」**，
+   *    而事实是根本没人核实过。这行结论落进 `geo_evidence.citations` 就不可变了。
+   *    R10 / GEO 契约 M8 至今未决，裁定方是 PM + Build Control Room。
+   */
   readonly verified: boolean
 }
 

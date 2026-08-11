@@ -164,13 +164,38 @@ describe('人工触发脚本的边界', () => {
     ]) {
       // `required(...)` 或 `requiredNumber(...)` 都算 —— 两者缺值都 process.exit(1)。
       // 判据是「这个 key 没有 ?? 默认值」，不是「用了哪个 helper」。
-      const wired = new RegExp(`required(?:Number)?\\('${key}'\\)`).test(src)
+      const wired = new RegExp(`required(?:Number)?\\('${key}'`).test(src)
       expect(wired, `${key} 必须走 required()/requiredNumber()，不许有 ?? 默认值`).toBe(true)
       expect(
         new RegExp(`${key}[^\\n]*\\?\\?`).test(src),
         `${key} 不许有 ?? 默认值 —— 这一项属于 PM 冻结的 manifest`,
       ).toBe(false)
     }
+  })
+
+  it('🔴 自有域名「已核实」必须来自独立的显式信号，不许从清单非空推出来', () => {
+    // 复审确认的一条真实违规：`verified: ownedDomains.length > 0` 把 R10（未决项）
+    // 悄悄决了 —— 漏填一个别名，那个别名下的每条引用都会被记成「核实过，不是他的」。
+    expect(src).not.toMatch(/verified:\s*\w*[Dd]omains\.length\s*>/)
+    expect(src, 'verified 必须由一个独立的 attestation 环境变量驱动').toContain(
+      'GEO_OWNED_DOMAINS_VERIFIED_BY',
+    )
+  })
+
+  it('可选数值环境变量也必须验有限 —— Number("60s") 是 NaN，?? 拦不住', () => {
+    for (const key of ['GEO_TIMEOUT_MS', 'GEO_MAX_ATTEMPTS']) {
+      expect(src, `${key} 必须走 optionalNumber()（内部判 Number.isFinite）`).toMatch(
+        new RegExp(`optionalNumber\\('${key}'`),
+      )
+      expect(
+        new RegExp(`process\\.env\\.${key}\\s*\\?\\?`).test(src),
+        `${key} 不许直接 process.env.X ?? 默认值 —— NaN 会漏过去`,
+      ).toBe(false)
+    }
+  })
+
+  it('部分覆盖不许以退出码 0 收场（退出码也是一个界面）', () => {
+    expect(src).toContain('return 2')
   })
 
   it('没进 render.yaml（一次性脚本不是 cron）', () => {

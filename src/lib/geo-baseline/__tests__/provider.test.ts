@@ -10,6 +10,7 @@ import type { GeoOutboundRequest, GeoTransport, GeoTransportError, GeoTransportR
 import type { GeoProviderRequest } from '@/lib/geo-measurement-runtime'
 
 const PRICING = { inputPerMillionUsd: 2.5, outputPerMillionUsd: 10 }
+const CEILING = 0.05
 
 function request(overrides: Partial<GeoProviderRequest> = {}): GeoProviderRequest {
   return {
@@ -35,9 +36,12 @@ function okTransport(result: Partial<GeoTransportResult> = {}): {
     return {
       resolvedModel: 'gpt-4o-search-preview-2025-03-11',
       text: 'answer',
+      refusal: null,
+      finishReason: 'stop',
       citationUrls: ['https://romanhu.com/about'],
       promptTokens: 1000,
       completionTokens: 500,
+      rawPayload: { id: 'chatcmpl-1', system_fingerprint: 'fp_x' },
       ...result,
     }
   }
@@ -48,6 +52,7 @@ function providerWith(transport: GeoTransport): GeoBaselineOpenAiProvider {
   return new GeoBaselineOpenAiProvider({
     transport,
     pricing: PRICING,
+    perObservationCostCeilingUsd: CEILING,
     createTimeoutSignal: () => ({ signal: new AbortController().signal, dispose: () => {} }),
   })
 }
@@ -153,10 +158,68 @@ describe('四态分类（塌成一态 = 把「可安全重放」和「不许重�
     expect(result).toMatchObject({ kind: 'error', errorCode: 'provider_http_400', costUsd: 0 })
   })
 
-  it('拿不到 token 用量 ⇒ 判失败，不许拿 0 顶替（那是把「不知道」写成「免费」）', async () => {
+  it('拿不到 token 用量 ⇒ 判失败，且按声明上界记账（钱已经花了，不许记 0）', async () => {
     const { transport } = okTransport({ promptTokens: null, completionTokens: null })
     const result = await providerWith(transport).call(request())
-    expect(result).toMatchObject({ kind: 'error', errorCode: 'provider_cost_unknown' })
+    expect(result).toMatchObject({ kind: 'error', errorCode: 'provider_cost_unknown', costUsd: CEILING })
+  })
+})
+
+describe('已经打出去的调用必须记账（复审确认的最贵一条）', () => {
+  it('模型对不上时，有用量就记**实际花费**，不是 0', async () => {
+    const { transport } = okTransport({ resolvedModel: 'other-model' })
+    const result = await providerWith(transport).call(request())
+    expect(result.kind).toBe('error')
+    if (result.kind !== 'error') return
+    // 调用已经完成、已经计费；记 0 会让 knownSpent 永远不动、预算闸永不触发。
+    expect(result.costUsd).toBeCloseTo(0.0075, 10)
+  })
+
+  it('模型对不上且拿不到用量 ⇒ 按声明上界保守记账', async () => {
+    const { transport } = okTransport({
+      resolvedModel: 'other-model',
+      promptTokens: null,
+      completionTokens: null,
+    })
+    const result = await providerWith(transport).call(request())
+    expect(result).toMatchObject({ kind: 'error', errorCode: 'provider_model_mismatch', costUsd: CEILING })
+  })
+
+  it('🔴 模型一旦对不上就闩住：后续调用一个请求都不再发', async () => {
+    const { transport, seen } = okTransport({ resolvedModel: 'other-model' })
+    const provider = providerWith(transport)
+    const first = await provider.call(request())
+    expect(first).toMatchObject({ errorCode: 'provider_model_mismatch' })
+    expect(seen).toHaveLength(1)
+
+    // 不闩的话，一个 manifest 笔误会让 200 条计划观测发出 200 次真实计费调用，
+    // 而 WP04 的批次级停跑只认「预算耗尽」和「成本不可信」，不认「一直在失败」。
+    for (let i = 0; i < 5; i++) {
+      const again = await provider.call(request())
+      expect(again).toMatchObject({ kind: 'error', errorCode: 'provider_model_mismatch', costUsd: 0 })
+    }
+    expect(seen, '闩上之后不许再发请求').toHaveLength(1)
+  })
+})
+
+describe('信封保真度（§4.4「供日后重新解析」）', () => {
+  it('整个响应对象逐字进信封 —— 派生字段不够 WP05 用', async () => {
+    const { transport } = okTransport()
+    const result = await providerWith(transport).call(request())
+    if (result.kind !== 'ok') throw new Error('should be ok')
+    const envelope = JSON.parse(result.rawResponse)
+    expect(envelope.rawPayload).toEqual({ id: 'chatcmpl-1', system_fingerprint: 'fp_x' })
+    expect(envelope.refusal).toBeNull()
+    expect(envelope.finishReason).toBe('stop')
+  })
+
+  it('正文为 null 时如实保留 null，不拿空串顶替', async () => {
+    const { transport } = okTransport({ text: null, refusal: 'I cannot help with that', finishReason: 'content_filter' })
+    const result = await providerWith(transport).call(request())
+    if (result.kind !== 'ok') throw new Error('should be ok')
+    const envelope = JSON.parse(result.rawResponse)
+    expect(envelope.text).toBeNull()
+    expect(envelope.refusal).toBe('I cannot help with that')
   })
 })
 
@@ -174,6 +237,7 @@ describe('超时真的会被触发', () => {
     const provider = new GeoBaselineOpenAiProvider({
       transport: okTransport().transport,
       pricing: PRICING,
+      perObservationCostCeilingUsd: CEILING,
       timeoutMs: 1234,
       createTimeoutSignal: create,
     })
@@ -189,6 +253,7 @@ describe('超时真的会被触发', () => {
         throw new Error('boom')
       },
       pricing: PRICING,
+      perObservationCostCeilingUsd: CEILING,
       createTimeoutSignal: () => ({ signal: new AbortController().signal, dispose }),
     })
     await provider.call(request())
