@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'fs'
-import { join, relative } from 'path'
+import { join, relative, posix } from 'path'
 import { ACTION_BRIDGE_FORBIDDEN_IMPORTS } from '@/lib/kernel/boundaries'
 
 const ROOT = process.cwd()
@@ -72,6 +72,30 @@ function moduleSpecifiersIn(code: string): string[] {
 }
 
 /**
+ * 把说明符规范成**跟禁止清单同一套写法**（`@/...`）。
+ *
+ * 🔴 只比原始说明符是不够的 —— 禁止清单写的是 `@/lib/capabilities`，
+ *    而下面这些普通写法指向同一个模块，却一条都不会命中：
+ *      import '../capabilities'
+ *      require('../supabase')
+ *      import '../kernel/gateway'      // 还能绕开 Kernel 的允许清单
+ *    所以相对说明符必须按**当前被扫描的那个源文件**的位置先解析出来。
+ *
+ * 规则：`@/...` 与 npm 包名原样保留；`./` `../` 按源文件目录解析；
+ * 落到 `src/...` 的再折回等价的 `@/...`；分隔符统一成 `/`。
+ */
+function canonicalSpecifier(sourcePath: string, spec: string): string {
+  if (!spec.startsWith('.')) return spec
+  const dir = posix.dirname(sourcePath.split('\\').join('/'))
+  const resolved = posix.normalize(posix.join(dir, spec))
+  return resolved.startsWith('src/') ? `@/${resolved.slice('src/'.length)}` : resolved
+}
+
+/** 一个源文件里所有 import 指向的模块，已规范成 `@/...` 口径。 */
+const importedModules = (sourcePath: string, code: string): string[] =>
+  moduleSpecifiersIn(code).map((spec) => canonicalSpecifier(sourcePath, spec))
+
+/**
  * 命中判据 = **前缀匹配**，跟原来的正则语义一致：
  * 禁止 `@/lib/growth` 时，`@/lib/growth` 与 `@/lib/growth/types` 都要命中；
  * `@/lib/cms/` 这种带斜杠的前缀规则照常生效。
@@ -81,15 +105,15 @@ function moduleSpecifiersIn(code: string): string[] {
  */
 const specMatchesModule = (spec: string, mod: string): boolean => spec.startsWith(mod)
 
-function forbiddenImportsIn(code: string): string[] {
-  const specs = moduleSpecifiersIn(code)
+function forbiddenImportsIn(sourcePath: string, code: string): string[] {
+  const specs = importedModules(sourcePath, code)
   return ACTION_BRIDGE_FORBIDDEN_IMPORTS.filter((mod) =>
     specs.some((spec) => specMatchesModule(spec, mod)),
   )
 }
 
-const kernelImportsIn = (code: string): string[] =>
-  moduleSpecifiersIn(code).filter((spec) => spec.startsWith('@/lib/kernel'))
+const kernelImportsIn = (sourcePath: string, code: string): string[] =>
+  importedModules(sourcePath, code).filter((spec) => spec.startsWith('@/lib/kernel'))
 
 describe('action-bridge 是一层纯映射', () => {
   it('目录里确实有生产文件（防止判据因为路径写错而空跑）', () => {
@@ -99,7 +123,7 @@ describe('action-bridge 是一层纯映射', () => {
   it('🔴 不 import 域模块 / 库 / provider / 执行 / legacy 生成端', () => {
     const violations: string[] = []
     for (const file of PROD_FILES) {
-      for (const mod of forbiddenImportsIn(codeOf(file))) {
+      for (const mod of forbiddenImportsIn(file, codeOf(file))) {
         violations.push(`${file} → ${mod}`)
       }
     }
@@ -113,7 +137,7 @@ describe('action-bridge 是一层纯映射', () => {
 
   it('🔴 尤其不 import Growth —— 候选身份靠结构匹配，不靠名义类型', () => {
     const offenders = PROD_FILES.filter((f) =>
-      moduleSpecifiersIn(codeOf(f)).some((spec) => spec.startsWith('@/lib/growth')),
+      importedModules(f, codeOf(f)).some((spec) => spec.startsWith('@/lib/growth')),
     )
     expect(
       offenders,
@@ -123,8 +147,8 @@ describe('action-bridge 是一层纯映射', () => {
     ).toEqual([])
   })
 
-  it('只从 Kernel 取类型与只读注册表（动态导入 / require 也算数）', () => {
-    const kernelImports = PROD_FILES.flatMap((f) => kernelImportsIn(codeOf(f)))
+  it('只从 Kernel 取类型与只读注册表（动态导入 / require / 相对路径也算数）', () => {
+    const kernelImports = PROD_FILES.flatMap((f) => kernelImportsIn(f, codeOf(f)))
     const unique = kernelImports.filter((v, i) => kernelImports.indexOf(v) === i).sort()
     // registry（拿定义 / 版本号）与 types（ActionKey 等）—— 不碰 gateway / authorize / store
     expect(unique).toEqual(['@/lib/kernel/registry', '@/lib/kernel/types'])
@@ -162,8 +186,11 @@ describe('🔴 导入扫描盖得住所有写法（合成源码）', () => {
     ['空格风格不影响', `const m = await import (  '@/lib/execution'  )`],
   ]
 
+  /** 合成用例的虚拟源文件 —— 相对说明符要按它的位置解析。 */
+  const BRIDGE_FILE = 'src/lib/action-bridge/index.ts'
+
   it.each(FORBIDDEN_FORMS)('%s → 必须被发现', (_label, code) => {
-    expect(forbiddenImportsIn(code).length).toBeGreaterThan(0)
+    expect(forbiddenImportsIn(BRIDGE_FILE, code).length).toBeGreaterThan(0)
   })
 
   it('🔴 只写在注释里的示例不算违规（判据不许把自己的文档当罪证）', () => {
@@ -173,7 +200,7 @@ describe('🔴 导入扫描盖得住所有写法（合成源码）', () => {
       ` * import '@/lib/execution'`,
       `const real = 1`,
     ].join('\n')
-    expect(forbiddenImportsIn(stripComments(commented))).toEqual([])
+    expect(forbiddenImportsIn(BRIDGE_FILE, stripComments(commented))).toEqual([])
   })
 
   it('不在禁止清单里的模块不误报', () => {
@@ -181,16 +208,93 @@ describe('🔴 导入扫描盖得住所有写法（合成源码）', () => {
       `import { ACTION_REGISTRY } from '@/lib/kernel/registry'`,
       `import type { ActionKey } from '@/lib/kernel/types'`,
       `import { MAPPING_TABLE } from './mapping-table'`,
+      `import type { X } from './types'`,
     ].join('\n')
-    expect(forbiddenImportsIn(clean)).toEqual([])
+    expect(forbiddenImportsIn(BRIDGE_FILE, clean)).toEqual([])
   })
 
   it('🔴 Kernel 允许清单也盖得住动态导入 / require / 副作用导入', () => {
     // 这三种都能把 gateway 拉进来，而允许清单只有 types 与 registry
-    expect(kernelImportsIn(`import '@/lib/kernel/gateway'`)).toEqual(['@/lib/kernel/gateway'])
-    expect(kernelImportsIn(`await import('@/lib/kernel/gateway')`)).toEqual(['@/lib/kernel/gateway'])
-    expect(kernelImportsIn(`require('@/lib/kernel/store')`)).toEqual(['@/lib/kernel/store'])
+    expect(kernelImportsIn(BRIDGE_FILE, `import '@/lib/kernel/gateway'`)).toEqual([
+      '@/lib/kernel/gateway',
+    ])
+    expect(kernelImportsIn(BRIDGE_FILE, `await import('@/lib/kernel/gateway')`)).toEqual([
+      '@/lib/kernel/gateway',
+    ])
+    expect(kernelImportsIn(BRIDGE_FILE, `require('@/lib/kernel/store')`)).toEqual([
+      '@/lib/kernel/store',
+    ])
     // 允许的那两个照常被认出来（判据没把正常写法一起拦掉）
-    expect(kernelImportsIn(`import { x } from '@/lib/kernel/types'`)).toEqual(['@/lib/kernel/types'])
+    expect(kernelImportsIn(BRIDGE_FILE, `import { x } from '@/lib/kernel/types'`)).toEqual([
+      '@/lib/kernel/types',
+    ])
+  })
+})
+
+/**
+ * 🔴 **相对路径同样要按源文件位置解析。**
+ *
+ * 上一轮把四种 import 写法都盖住了，但只拿**原始说明符**去比 `@/lib/...` ——
+ * 于是 `import '../capabilities'` 指向同一个模块却一条都不命中。
+ * 禁止清单用的是 alias 口径，说明符就必须先规范到同一口径再比。
+ */
+describe('🔴 相对路径导入按源文件位置解析（合成源码）', () => {
+  const BRIDGE_FILE = 'src/lib/action-bridge/index.ts'
+  const NESTED_FILE = 'src/lib/action-bridge/nested/deep.ts'
+
+  it('规范化本身：相对说明符折算成 alias', () => {
+    expect(canonicalSpecifier(BRIDGE_FILE, '../capabilities')).toBe('@/lib/capabilities')
+    expect(canonicalSpecifier(BRIDGE_FILE, '../kernel/types')).toBe('@/lib/kernel/types')
+    expect(canonicalSpecifier(BRIDGE_FILE, './mapping-table')).toBe(
+      '@/lib/action-bridge/mapping-table',
+    )
+    expect(canonicalSpecifier(NESTED_FILE, '../../supabase')).toBe('@/lib/supabase')
+    // alias 与 npm 包名原样保留
+    expect(canonicalSpecifier(BRIDGE_FILE, '@/lib/capabilities')).toBe('@/lib/capabilities')
+    expect(canonicalSpecifier(BRIDGE_FILE, '@supabase/supabase-js')).toBe('@supabase/supabase-js')
+    expect(canonicalSpecifier(BRIDGE_FILE, 'vitest')).toBe('vitest')
+  })
+
+  const RELATIVE_FORMS: Array<[label: string, code: string]> = [
+    ['../capabilities（副作用导入）', `import '../capabilities'`],
+    ['../capabilities（具名导入）', `import { createCapabilities } from '../capabilities'`],
+    ['../execution（动态导入）', `const m = await import('../execution')`],
+    ['../supabase（require）', `const sb = require('../supabase')`],
+    ['../cms/wordpress-client（带斜杠前缀规则）', `import { w } from '../cms/wordpress-client'`],
+    ['../growth（域模块）', `import type { T } from '../growth/types'`],
+  ]
+
+  it.each(RELATIVE_FORMS)('bridge 里的 %s → 必须被拒', (_label, code) => {
+    expect(forbiddenImportsIn(BRIDGE_FILE, code).length).toBeGreaterThan(0)
+  })
+
+  it('🔴 `../kernel/gateway` 会被 Kernel 允许清单拒掉', () => {
+    expect(kernelImportsIn(BRIDGE_FILE, `import '../kernel/gateway'`)).toEqual([
+      '@/lib/kernel/gateway',
+    ])
+    expect(kernelImportsIn(BRIDGE_FILE, `await import('../kernel/store')`)).toEqual([
+      '@/lib/kernel/store',
+    ])
+  })
+
+  it('✅ `../kernel/types` 与 `../kernel/registry` 允许通过', () => {
+    const code = [
+      `import type { ActionKey } from '../kernel/types'`,
+      `import { ACTION_REGISTRY } from '../kernel/registry'`,
+    ].join('\n')
+    const found = kernelImportsIn(BRIDGE_FILE, code).sort()
+    expect(found).toEqual(['@/lib/kernel/registry', '@/lib/kernel/types'])
+    // 它们也不该被禁止清单误伤
+    expect(forbiddenImportsIn(BRIDGE_FILE, code)).toEqual([])
+  })
+
+  it('✅ 合法的本地相对导入不误报', () => {
+    const code = [
+      `import { MAPPING_TABLE } from './mapping-table'`,
+      `import type { CandidateIdentity } from './types'`,
+      `import { helper } from './nested/helper'`,
+    ].join('\n')
+    expect(forbiddenImportsIn(BRIDGE_FILE, code)).toEqual([])
+    expect(kernelImportsIn(BRIDGE_FILE, code)).toEqual([])
   })
 })

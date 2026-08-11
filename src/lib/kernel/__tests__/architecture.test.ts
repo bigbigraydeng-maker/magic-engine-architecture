@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'fs'
-import { join, relative } from 'path'
+import { join, relative, posix } from 'path'
 import {
   PROVIDER_WRITE_MODULES,
   PROVIDER_WRITE_ALLOWED_DIRS,
@@ -211,20 +211,40 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
   }
 
   /**
+   * 把说明符规范成**跟禁止清单同一套写法**（`@/...`）。
+   *
+   * 🔴 只比原始说明符是不够的 —— 禁止清单写的是 `@/lib/growth`，
+   *    而 `import '../growth'` 指向同一个模块却一条都不命中。
+   *    相对说明符必须按**当前被扫描的那个源文件**的位置先解析出来。
+   *
+   * 规则：`@/...` 与 npm 包名原样保留；`./` `../` 按源文件目录解析；
+   * 落到 `src/...` 的再折回等价的 `@/...`；分隔符统一成 `/`。
+   */
+  function canonicalSpecifier(sourcePath: string, spec: string): string {
+    if (!spec.startsWith('.')) return spec
+    const dir = posix.dirname(sourcePath.split('\\').join('/'))
+    const resolved = posix.normalize(posix.join(dir, spec))
+    return resolved.startsWith('src/') ? `@/${resolved.slice('src/'.length)}` : resolved
+  }
+
+  const importedModules = (sourcePath: string, code: string): string[] =>
+    moduleSpecifiersIn(code).map((spec) => canonicalSpecifier(sourcePath, spec))
+
+  /**
    * 命中判据 = **前缀匹配**，跟原来的正则语义一致（模块本身与它的子路径都命中，
    * `@/lib/cms/` 这类带斜杠的前缀规则照常生效）。
    * 🔴 改成字符串比较之后**不再需要转义** —— 模块名里的 `/`、`@`、`.`
    *    都只是普通字符，没有任何机会被当成正则元字符。
    */
-  const importsAnyOf = (code: string, mods: readonly string[]): boolean => {
-    const specs = moduleSpecifiersIn(code)
+  const importsAnyOf = (sourcePath: string, code: string, mods: readonly string[]): boolean => {
+    const specs = importedModules(sourcePath, code)
     return mods.some((mod) => specs.some((spec) => spec.startsWith(mod)))
   }
 
   it('🔴 kernel 目录里没有一处 import 域模块或 action-bridge', () => {
     const violations = ALL_FILES.filter((f) => f.startsWith('src/lib/kernel/'))
       .filter((f) => !isTest(f))
-      .filter((f) => importsAnyOf(readCode(f), KERNEL_FORBIDDEN_MODULE_IMPORTS))
+      .filter((f) => importsAnyOf(f, readCode(f), KERNEL_FORBIDDEN_MODULE_IMPORTS))
 
     expect(
       violations,
@@ -237,7 +257,7 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
   it('🔴 action-bridge 只依赖 Kernel —— 不碰库 / provider / 执行 / legacy 生成端', () => {
     const violations = ALL_FILES.filter((f) => f.startsWith('src/lib/action-bridge/'))
       .filter((f) => !isTest(f))
-      .filter((f) => importsAnyOf(readCode(f), ACTION_BRIDGE_FORBIDDEN_IMPORTS))
+      .filter((f) => importsAnyOf(f, readCode(f), ACTION_BRIDGE_FORBIDDEN_IMPORTS))
 
     expect(
       violations,
@@ -250,7 +270,7 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
   it('域模块（Growth）不 import Kernel 或 action-bridge', () => {
     const violations = ALL_FILES.filter((f) => f.startsWith('src/lib/growth/'))
       .filter((f) => !isTest(f))
-      .filter((f) => importsAnyOf(readCode(f), ['@/lib/kernel', '@/lib/action-bridge']))
+      .filter((f) => importsAnyOf(f, readCode(f), ['@/lib/kernel', '@/lib/action-bridge']))
 
     expect(
       violations,
@@ -278,19 +298,32 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
       ['子路径也算', `import type { T } from '@/lib/growth/types'`],
     ]
 
+    /** 合成用例的虚拟源文件 —— 相对说明符要按它们的位置解析。 */
+    const KERNEL_FILE = 'src/lib/kernel/example.ts'
+    const BRIDGE_FILE = 'src/lib/action-bridge/index.ts'
+    const GROWTH_FILE = 'src/lib/growth/types.ts'
+
     it.each(FORBIDDEN_FORMS)('kernel 侧：%s → 必须被发现', (_label, code) => {
-      expect(importsAnyOf(code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(true)
+      expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(true)
     })
 
     it('bridge 侧：动态导入 / require / 副作用导入都算数', () => {
-      expect(importsAnyOf(`import '@/lib/capabilities'`, ACTION_BRIDGE_FORBIDDEN_IMPORTS)).toBe(true)
       expect(
-        importsAnyOf(`await import('@/lib/execution')`, ACTION_BRIDGE_FORBIDDEN_IMPORTS),
+        importsAnyOf(BRIDGE_FILE, `import '@/lib/capabilities'`, ACTION_BRIDGE_FORBIDDEN_IMPORTS),
       ).toBe(true)
-      expect(importsAnyOf(`require('@/lib/supabase')`, ACTION_BRIDGE_FORBIDDEN_IMPORTS)).toBe(true)
+      expect(
+        importsAnyOf(BRIDGE_FILE, `await import('@/lib/execution')`, ACTION_BRIDGE_FORBIDDEN_IMPORTS),
+      ).toBe(true)
+      expect(
+        importsAnyOf(BRIDGE_FILE, `require('@/lib/supabase')`, ACTION_BRIDGE_FORBIDDEN_IMPORTS),
+      ).toBe(true)
       // 带斜杠的前缀规则
       expect(
-        importsAnyOf(`import { w } from '@/lib/cms/wordpress-client'`, ACTION_BRIDGE_FORBIDDEN_IMPORTS),
+        importsAnyOf(
+          BRIDGE_FILE,
+          `import { w } from '@/lib/cms/wordpress-client'`,
+          ACTION_BRIDGE_FORBIDDEN_IMPORTS,
+        ),
       ).toBe(true)
     })
 
@@ -301,7 +334,60 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
         ` * import '@/lib/growth'`,
         `const real = 1`,
       ].join('\n')
-      expect(importsAnyOf(stripComments(commented), KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
+      expect(
+        importsAnyOf(KERNEL_FILE, stripComments(commented), KERNEL_FORBIDDEN_MODULE_IMPORTS),
+      ).toBe(false)
+    })
+
+    /**
+     * 🔴 **相对路径同样要按源文件位置解析。**
+     *
+     * 上一轮把四种 import 写法都盖住了，但只拿**原始说明符**去比 `@/lib/...` ——
+     * 于是 `import '../growth'` 指向同一个模块却一条都不命中。
+     */
+    it('规范化本身：相对说明符折算成 alias', () => {
+      expect(canonicalSpecifier(KERNEL_FILE, '../growth')).toBe('@/lib/growth')
+      expect(canonicalSpecifier(KERNEL_FILE, '../action-bridge')).toBe('@/lib/action-bridge')
+      expect(canonicalSpecifier(KERNEL_FILE, './registry')).toBe('@/lib/kernel/registry')
+      expect(canonicalSpecifier(GROWTH_FILE, '../kernel')).toBe('@/lib/kernel')
+      // alias 与 npm 包名原样保留
+      expect(canonicalSpecifier(KERNEL_FILE, '@/lib/growth')).toBe('@/lib/growth')
+      expect(canonicalSpecifier(KERNEL_FILE, 'vitest')).toBe('vitest')
+    })
+
+    const KERNEL_RELATIVE: Array<[label: string, code: string]> = [
+      ['../growth（副作用导入）', `import '../growth'`],
+      ['../growth（具名导入）', `import { x } from '../growth'`],
+      ['../action-bridge（动态导入）', `const m = await import('../action-bridge')`],
+      ['../action-bridge（require）', `const b = require('../action-bridge')`],
+      ['../growth/types（子路径）', `import type { T } from '../growth/types'`],
+    ]
+
+    it.each(KERNEL_RELATIVE)('kernel 里的 %s → 必须被拒', (_label, code) => {
+      expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(true)
+    })
+
+    it('🔴 bridge 里的 ../capabilities / ../execution / ../supabase 都被拒', () => {
+      for (const code of [
+        `import '../capabilities'`,
+        `const m = await import('../execution')`,
+        `const sb = require('../supabase')`,
+      ]) {
+        expect(importsAnyOf(BRIDGE_FILE, code, ACTION_BRIDGE_FORBIDDEN_IMPORTS), code).toBe(true)
+      }
+    })
+
+    it('🔴 Growth 里相对导入 ../kernel 或 ../action-bridge 都被拒', () => {
+      for (const code of [
+        `import { runAction } from '../kernel'`,
+        `import '../action-bridge'`,
+        `const k = require('../kernel/runner')`,
+      ]) {
+        expect(
+          importsAnyOf(GROWTH_FILE, code, ['@/lib/kernel', '@/lib/action-bridge']),
+          code,
+        ).toBe(true)
+      }
     })
 
     it('Kernel 自己内部的相对 import 不误报', () => {
@@ -310,7 +396,15 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
         `import type { ActionRun } from './types'`,
         `import { KernelError } from '@/lib/kernel/errors'`,
       ].join('\n')
-      expect(importsAnyOf(clean, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
+      expect(importsAnyOf(KERNEL_FILE, clean, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
+    })
+
+    it('Growth 自己内部的相对 import 不误报', () => {
+      const clean = [
+        `import type { X } from './types'`,
+        `import { validate } from './validators'`,
+      ].join('\n')
+      expect(importsAnyOf(GROWTH_FILE, clean, ['@/lib/kernel', '@/lib/action-bridge'])).toBe(false)
     })
   })
 })
