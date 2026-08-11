@@ -5,6 +5,25 @@
 
 ---
 
+### 2026-08-11 ~ 08-12（Onboarding / 第三方对接页面简化，PM 起因："对接页面有点乱，好几个页面都能连"）
+
+方案：[specs/2026-08-11-onboarding-integrations-unify-v1.md](../specs/2026-08-11-onboarding-integrations-unify-v1.md)。
+PR1 [#908](https://github.com/bigbigraydeng-maker/magic-engine/pull/908) · PR2 [#909](https://github.com/bigbigraydeng-maker/magic-engine/pull/909) ·
+PR3a [#913](https://github.com/bigbigraydeng-maker/magic-engine/pull/913) · PR5 [#916](https://github.com/bigbigraydeng-maker/magic-engine/pull/916) ·
+PR6 [#918](https://github.com/bigbigraydeng-maker/magic-engine/pull/918)。每个 PR 设计+实施两阶段都过了独立 agent 复审（魏征挑刺 + 板桥客户视角）。
+
+**新客户现在的路径**：注册验证邮箱 → 直接落地正式的 5 步自助向导（此前这个向导已经建好但从未激活，新客户走的是一个只有 5 个字段的单页表单）→ 业务档案 / 网站 / 一键连 Google Business Profile + GA4/GSC（真 OAuth，不用再去 Supabase 后台手填 token）/ Meta 广告号（手填，Meta App Review 周期不可控，本轮不做真授权）/ 上传素材。
+
+**FDE/客户设置页现在的路径**：GA4、GSC、GBP、GTM 全部走同一套统一 OAuth 组件真授权；此前分散在 `/connectors`、`/connectors/[anchor]`、settings 页里的三处重复入口合并成一个，旧地址自动跳转（19 处内部链接同步改掉）；Google Ads 从一个假的"已连接"状态提示改成能直接编辑的 customer_id 字段；老的 `google_oauth_tokens` 表数据回填进新的 `platform_oauth_connections`。
+
+**顺手堵上的洞**：Google OAuth 发起/回调接口此前对 admin/wizard 两条流程完全零鉴权（拿到一个 client UUID 就能劫持任何人的授权）；诸葛亮工作台（内部中文 FDE 工具）此前无条件对自助客户可见；向导 Step1/2 表单不回填已保存数据，客户隔天回来会像丢了数据。
+
+验证：新增/改动测试全过（194 条覆盖到的目录）；`npm run build` 每个 PR 都过。
+
+剩余：PR3b（停止读写老 token 表）、一条低优先级的 OAuth 失败态提示——见 [ROADMAP.md](../ROADMAP.md#近期待办跨-phase-汇总)。
+
+---
+
 ### 2026-08-10（ME2 WP01：Growth Module 契约进仓，尚未启用）
 
 issue [#877](https://github.com/bigbigraydeng-maker/magic-engine/issues/877) · PR [#890](https://github.com/bigbigraydeng-maker/magic-engine/pull/890) · 合并提交 `700f57e`。
