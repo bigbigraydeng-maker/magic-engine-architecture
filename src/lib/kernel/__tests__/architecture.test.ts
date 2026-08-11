@@ -279,6 +279,13 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
    *
    * scoped npm 包的插值（如 `` `some-package-${variant}` ``）静态前缀不落在
    * 这四类里，原样放行 —— 不能把外部包名误判成工程路径。
+   *
+   * 🔴 **表达式打头（静态前缀为空）同样要 fail closed。**`import(\`${prefix}/execution\`)`
+   *    —— 反引号后面立刻就是 `${`，抠出来的静态前缀是空字符串，不落在上面四类
+   *    写法的任何一类里，原判据会当成「外部包插值」直接放行。但空前缀什么都没
+   *    证明：`prefix` 运行时可能算出 `'@/lib'` 也可能算出一个 npm 包名，静态扫描
+   *    没有任何字面文本能用来判断。「没法证明是外部包」≠「可以放行」——只有静态
+   *    前缀非空、且明确不落在四类工程路径写法上时，才算「证明了是外部包」。
    */
   const PROJECT_PATH_PREFIXES = ['@/', 'src/', './', '../'] as const
 
@@ -288,9 +295,12 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
     let match: RegExpExecArray | null
     while ((match = pattern.exec(code)) !== null) {
       const prefix = match[1]
-      if (PROJECT_PATH_PREFIXES.some((p) => prefix.startsWith(p))) {
+      const provablyExternal = prefix.length > 0 && !PROJECT_PATH_PREFIXES.some((p) => prefix.startsWith(p))
+      if (!provablyExternal) {
         hits.push(
-          '插值动态导入 `' + prefix + '${…}`（静态前缀落在工程路径写法上，展开后去向未知，fail closed）',
+          prefix.length === 0
+            ? '插值动态导入 `${…}`（表达式打头，静态前缀为空，无法证明去向是外部包，fail closed）'
+            : '插值动态导入 `' + prefix + '${…}`（静态前缀落在工程路径写法上，展开后去向未知，fail closed）',
         )
       }
     }
@@ -620,6 +630,33 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
       },
     )
 
+    /**
+     * 🔴 **表达式打头，静态前缀为空** —— `${` 紧跟在反引号后面，抠出来的前缀是
+     *    空字符串，不落在四类工程路径写法的任何一类，之前的判据会误判成「外部
+     *    包插值」直接放行。空前缀什么都没证明，必须跟四类工程路径写法一样 fail
+     *    closed，而不是因为「不匹配」就当成安全。
+     */
+    const EXPRESSION_FIRST_FORMS: Array<[label: string, code: string]> = [
+      ['import，无任何静态前缀', 'const m = await import(`${domain}/growth`)'],
+      ['require，无任何静态前缀', 'const m = require(`${domain}/growth`)'],
+      ['整段模板只有一个插值', 'const m = await import(`${modulePath}`)'],
+    ]
+
+    it.each(EXPRESSION_FIRST_FORMS)(
+      'kernel 侧：%s → fail closed 必须命中（不能因为前缀是空字符串就放行）',
+      (_label, code) => {
+        expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(true)
+      },
+    )
+
+    it.each(EXPRESSION_FIRST_FORMS)('bridge 侧：%s → fail closed 必须命中', (_label, code) => {
+      expect(importsAnyOf(BRIDGE_FILE, code, ACTION_BRIDGE_FORBIDDEN_IMPORTS)).toBe(true)
+    })
+
+    it.each(EXPRESSION_FIRST_FORMS)('growth 侧：%s → fail closed 必须命中', (_label, code) => {
+      expect(importsAnyOf(GROWTH_FILE, code, ['@/lib/kernel', '@/lib/action-bridge'])).toBe(true)
+    })
+
     it('🔴 命中诊断带着源文件路径（违规清单不能只说「哪个文件出事了」丢了「因为什么」）', () => {
       const reasons = violationReasons(
         KERNEL_FILE,
@@ -631,7 +668,7 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
       expect(reasons[0]).toContain('fail closed')
     })
 
-    it('外部 npm 包名的插值不是工程路径，不误报', () => {
+    it('✅ 外部 npm 包名的插值不是工程路径，不误报（静态前缀非空且明确不落在四类写法上，才算证明了外部）', () => {
       const code = 'const m = await import(`some-package-${variant}`)'
       expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
       expect(importsAnyOf(BRIDGE_FILE, code, ACTION_BRIDGE_FORBIDDEN_IMPORTS)).toBe(false)
@@ -648,6 +685,7 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
         '// const m = await import(`@/lib/${domain}`)',
         '/* const g = require(`../${domain}`) */',
         ' * await import(`src/lib/${x}`)',
+        '// const h = await import(`${domain}/growth`)',
         'const real = 1',
       ].join('\n')
       expect(
