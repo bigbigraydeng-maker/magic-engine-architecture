@@ -32,7 +32,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'client_id is required' }, { status: 400 })
   }
 
-  const flow = req.nextUrl.searchParams.get('flow') === 'connect' ? 'connect' : 'admin'
+  const rawFlow = req.nextUrl.searchParams.get('flow')
+  const flow = rawFlow === 'connect' ? 'connect' : rawFlow === 'wizard' ? 'wizard' : 'admin'
 
   const redirectUri = `${appUrl()}/api/auth/google/callback`
   const state       = buildState(clientId, flow)
