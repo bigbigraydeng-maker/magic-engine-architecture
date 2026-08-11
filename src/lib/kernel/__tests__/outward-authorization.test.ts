@@ -593,7 +593,20 @@ describe('对外动作接上既有的成本与重试机制', () => {
               return { output: { package_id: 'p1', content_hash: HASH }, verification: null, costActualUsd: 0 }
             },
             persist: async () => ({ output: {}, verification: null, costActualUsd: 0 }),
-            verify: async () => ({ output: {}, verification: null, costActualUsd: 0 }),
+            // 🔴 最后一步要同时满足两件事，缺一样整轮都会落死信，
+            //    于是这条用例就再也证明不了「重试没被误伤」那件事了
+            //    （它会因为完全无关的原因变红）：
+            //      ① 契约声明了 package_integrity 验证 —— 必须真给出一条通过的记录；
+            //      ② 产物要满足 outputSchema 的必填字段（package_id / content_hash）。
+            verify: async () => ({
+              output: { package_id: 'p1', content_hash: HASH },
+              verification: {
+                method: 'package_integrity' as const,
+                passed: true,
+                checks: [{ name: 'package_readable', passed: true }],
+              },
+              costActualUsd: 0,
+            }),
           },
         } as unknown as CapabilityImplementation,
       }),

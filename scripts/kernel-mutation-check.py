@@ -513,7 +513,7 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
     dict(
         name="S1 恢复 RPC 不再查可恢复白名单",
         file="src/lib/kernel/__tests__/fake-supabase.ts",
-        old="""      if (!code || !RECOVERABLE.includes(code)) {
+        old="""      if (!code || !RECOVERABLE_DENY_CODES.has(code)) {
         return no(`deny_code_not_recoverable:${code ?? 'null'}`)
       }""",
         new="""      if (false) {
@@ -1565,6 +1565,26 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
   const intent = (input as Record<string, unknown>).intent""",
         test="src/lib/action-bridge/__tests__/candidate-mapping.test.ts",
         expect_fail_contains="getter 一次都不许被执行",
+    ),
+    dict(
+        # 退回「只取要的两个、其余忽略」—— 夹带字段就能混进身份对象。
+        name="K-WP02 身份对象不再要求恰好两个键（多带字段被忽略）",
+        file="src/lib/action-bridge/index.ts",
+        old="""  const keys = Reflect.ownKeys(input)
+  if (keys.length !== 2) return null""",
+        new="""  const keys = Reflect.ownKeys(input)
+  if (false) return null""",
+        test="src/lib/action-bridge/__tests__/candidate-mapping.test.ts",
+        expect_fail_contains="多带一个字符串字段",
+    ),
+    dict(
+        # 用 Object.keys 就看不见 symbol 键 —— 夹带一个 symbol 就能绕过去。
+        name="K-WP02 键检查退回 Object.keys（看不见 symbol 键）",
+        file="src/lib/action-bridge/index.ts",
+        old="""  const keys = Reflect.ownKeys(input)""",
+        new="""  const keys: (string | symbol)[] = Object.keys(input)""",
+        test="src/lib/action-bridge/__tests__/candidate-mapping.test.ts",
+        expect_fail_contains="symbol 键",
     ),
     dict(
         # 重复配对退回「静默取第一条」—— 让数组顺序决定映射到哪个动作。

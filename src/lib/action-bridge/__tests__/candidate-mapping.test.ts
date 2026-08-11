@@ -224,9 +224,42 @@ describe('🔴 输入只认自有的数据属性', () => {
     expect(mapper.map(weird)).toMatchObject({ code: 'malformed_identity' })
   })
 
-  it('多带了别的字段不影响 —— 只取 domain / intent 两个', () => {
-    const extra = { domain: 'geo', intent: 'optimize', authorised: true, sideEffect: 'outward' }
-    expect(mapper.map(extra)).toMatchObject({ outcome: 'mapped', actionKey: REAL_KEY })
+  /**
+   * 🔴 多带字段一律拒绝，**不是「只取我要的两个、其余忽略」**。
+   *    忽略等于默许调用方往身份对象里夹带东西 —— 那些字段今天不生效，
+   *    明天被谁顺手读一下就生效了。身份对象必须恰好是 domain + intent。
+   */
+  it('🔴 多带一个字符串字段 → 拒绝（哪怕内容看着无害）', () => {
+    for (const extra of [
+      { domain: 'geo', intent: 'optimize', note: 'just a note' },
+      { domain: 'geo', intent: 'optimize', authorised: true },
+      { domain: 'geo', intent: 'optimize', sideEffect: 'outward' },
+    ]) {
+      const result = mapper.map(extra)
+      expect(result.outcome, JSON.stringify(extra)).toBe('rejected')
+      expect(result).toMatchObject({ code: 'malformed_identity' })
+    }
+  })
+
+  it('🔴 多带一个 symbol 键 → 拒绝（Object.keys 看不见它，Reflect.ownKeys 看得见）', () => {
+    const withSymbol = { domain: 'geo', intent: 'optimize', [Symbol('extra')]: 'x' }
+    // 自证：普通的 Object.keys 只看得到两个键，所以这条测的是「我们没用 Object.keys」
+    expect(Object.keys(withSymbol)).toEqual(['domain', 'intent'])
+    expect(mapper.map(withSymbol)).toMatchObject({ code: 'malformed_identity' })
+  })
+
+  it('🔴 多带一个不可枚举的自有键 → 拒绝', () => {
+    const hidden = { domain: 'geo', intent: 'optimize' }
+    Object.defineProperty(hidden, 'smuggled', { enumerable: false, value: 'x' })
+    expect(mapper.map(hidden)).toMatchObject({ code: 'malformed_identity' })
+  })
+
+  it('恰好 domain + intent 两个键 → 正常映射（严格化没有误伤正常输入）', () => {
+    expect(mapper.map({ domain: 'geo', intent: 'optimize' })).toEqual({
+      outcome: 'mapped',
+      actionKey: REAL_KEY,
+      actionVersion: 7,
+    })
   })
 })
 

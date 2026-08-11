@@ -13,7 +13,13 @@
 
 import { describe, it, expect, vi } from 'vitest'
 import type { ActionDefinition } from '../types'
-import { runAction, recoverDeniedRun, rejectPendingRun, RECOVERABLE_DENY_CODES } from '../runner'
+import {
+  runAction,
+  recoverDeniedRun,
+  rejectPendingRun,
+  approveAndRun,
+  RECOVERABLE_DENY_CODES,
+} from '../runner'
 import { ACTION_REGISTRY } from '../registry'
 import { KernelError } from '../errors'
 import { createCapabilities, computeBlogContentHash } from '@/lib/capabilities'
@@ -265,49 +271,40 @@ describe('K-WP02 · outward + auto_approve → 改成要审批 → 显式恢复'
     costModel: { kind: 'fixed', estimate: () => 0, stepCeilingUsd: { build: 0, persist: 0, verify: 0 } },
   }
 
-  /**
-   * 🔴 **端到端那一半暂时缺席，原因如实写在这里。**
-   *
-   * 恢复要过两道：应用层的 `RECOVERABLE_DENY_CODES`（已含新码）与
-   * RPC `kernel_claim_run_recovery` 的白名单（migration 里已含新码）。
-   * 但测试跑的是内存假件，而假件在 `fake-supabase.ts` 里还留着**第三份**
-   * 硬编码的白名单 —— 它不在本 PR 授权的文件范围内，所以端到端那一步
-   * （recoverDeniedRun → pending_approval）现在跑不通。
-   *
-   * 顺带暴露一个既有隐患：架构测试只盯 SQL ↔ runner.ts 两处，
-   * **假件那第三份没有任何东西盯着**，它早就可能跟前两处分家。
-   *
-   * 下面这条只断言范围内能证明的部分：两个**权威**来源都认这个码。
-   * 端到端闭环等假件那一行获批后补上。
-   */
   it('🔴 两个权威来源都认这个码可恢复（SQL 侧由架构测试盯着一字不差）', () => {
     expect(RECOVERABLE_DENY_CODES.has('outward_requires_human_policy')).toBe(true)
     // 结构性不合规那个码必须**不在**里面 —— 两者的可恢复性刻意相反
     expect(RECOVERABLE_DENY_CODES.has('outward_side_effect_blocked')).toBe(false)
   })
 
-  it('🔴 规则配错了 → 拒绝码精确，且 capability 零调用', async () => {
+  it('🔴 完整闭环：配错 → 拒绝 → 改规则 → 恢复成等审批 → 人点头才跑，且只跑一次', async () => {
     const calls = vi.fn()
+    const output = { package_id: 'p1', content_hash: HASH }
+    const step = async () => {
+      calls()
+      return { output, verification: null, costActualUsd: 0 }
+    }
+    // 契约声明了要做 package_integrity 验证 —— 最后一步必须真给出一条通过的验证记录，
+    // 否则整轮会被判成「没验过 = 没做成」并落死信（这条闸本身有别的用例盯着）。
+    const verifyStep = async () => {
+      calls()
+      return {
+        output,
+        verification: {
+          method: 'package_integrity' as const,
+          passed: true,
+          checks: [{ name: 'package_readable', passed: true }],
+        },
+        costActualUsd: 0,
+      }
+    }
     const f = makeFixture({
       registry: makeRegistry([OUTWARD]),
       capabilities: () => ({
         [KEY]: {
           actionKey: KEY,
           version: 1,
-          steps: {
-            build: async () => {
-              calls()
-              return { output: {}, verification: null, costActualUsd: 0 }
-            },
-            persist: async () => {
-              calls()
-              return { output: {}, verification: null, costActualUsd: 0 }
-            },
-            verify: async () => {
-              calls()
-              return { output: {}, verification: null, costActualUsd: 0 }
-            },
-          },
+          steps: { build: step, persist: step, verify: verifyStep },
         } as never,
       }),
       // ① 规则配错了：对外动作却配成「自动执行」
@@ -318,14 +315,53 @@ describe('K-WP02 · outward + auto_approve → 改成要审批 → 显式恢复'
 
     // ① 拒绝码必须**精确**是专用那个 —— 不是结构性的 outward_side_effect_blocked
     expect(denied.kind).toBe('denied')
+    expect(f.tables.authorization_decisions).toHaveLength(1)
     expect(f.tables.authorization_decisions[0].deny_code).toBe('outward_requires_human_policy')
-    // ② capability 零调用
+    // ② 这时候 capability 一次都没被调
     expect(calls).not.toHaveBeenCalled()
 
-    // ③ 应用层这一关已经放行了（真正卡住的是假件里那第三份白名单，见上面的说明）
-    expect(RECOVERABLE_DENY_CODES.has(String(f.tables.authorization_decisions[0].deny_code))).toBe(
-      true,
+    // ③ 人按待办把规则改成「要审批」，版本正常推进（真库由触发器推，这里手动复刻）
+    const policy = f.tables.client_automation_policies[0]
+    policy.mode = 'require_approval'
+    policy.policy_version = Number(policy.policy_version) + 1
+
+    // ④ 🔴 普通重复提交**不会**偷偷恢复 —— 恢复必须是显式动作
+    const resubmitted = await runAction(f.kernel, submit())
+    expect(resubmitted.kind).toBe('denied')
+    expect(resubmitted.run.id).toBe(denied.run.id)
+    expect(f.tables.action_runs).toHaveLength(1)
+    expect(calls).not.toHaveBeenCalled()
+
+    // ⑤ 显式恢复 → 回到「等人点头」
+    const recovered = await recoverDeniedRun(
+      f.kernel,
+      denied.run.id,
+      'ray@magiclab',
+      '规则已改成要审批',
     )
+    expect(recovered.kind).toBe('pending_approval')
+
+    // ⑥ 同一条 run、同一把幂等键
+    expect(recovered.run.id).toBe(denied.run.id)
+    expect(recovered.run.idempotency_key).toBe(denied.run.idempotency_key)
+    expect(f.tables.action_runs).toHaveLength(1)
+
+    // ⑦ 人还没点头之前，capability 仍然一次都没被调
+    expect(calls).not.toHaveBeenCalled()
+
+    // ⑧ 人点头 → 真的跑完，且**只跑一次**（三个步骤各一次）
+    const done = await approveAndRun(f.kernel, denied.run.id, 'ray@magiclab')
+    expect(done.kind).toBe('succeeded')
+    expect(calls).toHaveBeenCalledTimes(3)
+
+    // ⑨ 审计链完整：原 deny 原样保留（append-only），后面各自新签一条
+    const verdicts = f.tables.authorization_decisions.map((d) => d.verdict)
+    expect(f.tables.authorization_decisions[0].verdict).toBe('deny')
+    expect(f.tables.authorization_decisions[0].deny_code).toBe('outward_requires_human_policy')
+    expect(verdicts).toContain('require_approval')
+    const allow = f.tables.authorization_decisions.find((d) => d.verdict === 'allow')!
+    expect(allow.decided_by).toBe('human')
+    expect(allow.decided_by_user).toBe('ray@magiclab')
   })
 
   it('🔴 结构性不合规（缺声明）用的仍是不可恢复的那个码', async () => {

@@ -80,6 +80,16 @@ function ownDataProperty(record: object, key: string): unknown {
  */
 function readIdentity(input: unknown): CandidateIdentity | null {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) return null
+
+  // 🔴 **恰好两个自有键，不多不少。**
+  //    多带的字段一律拒绝，而不是「只取我要的两个、其余忽略」 ——
+  //    忽略等于默许调用方往身份对象里夹带东西（`authorised: true` 之类），
+  //    而那些字段今天不生效、明天被谁读一下就生效了。
+  //    用 `Reflect.ownKeys` 才看得见 symbol 键；`Object.keys` 看不见。
+  const keys = Reflect.ownKeys(input)
+  if (keys.length !== 2) return null
+  if (!keys.includes('domain') || !keys.includes('intent')) return null
+
   const domain = ownDataProperty(input, 'domain')
   const intent = ownDataProperty(input, 'intent')
   if (!isMeaningfulString(domain)) return null
