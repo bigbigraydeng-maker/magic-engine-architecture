@@ -6,7 +6,8 @@
 import { describe, it, expect } from 'vitest'
 import { buildFailedObservation, buildSuccessObservation } from '../observation'
 import { GeoFakeStore, GeoFakeStoreError } from '../fake-store'
-import type { GeoBatch, GeoFrozenPlan } from '../types'
+import type { GeoBatch } from '@/lib/geo-measurement'
+import type { GeoFrozenPlan } from '../types'
 
 const plan: GeoFrozenPlan = {
   clientId: 'c1',
