@@ -92,15 +92,21 @@ function moduleSpecifiersIn(code: string): string[] {
  *    但静态扫描永远看不出来。
  *
  * 🔴 **判据的方向是「证明它安全」，不是「看它像不像工程路径」。**
- *    早先写成「静态前缀落在 `@/` `src/` `./` `../` 上才算命中」——
- *    那是反的，于是**两类**写法从正门走了出去：
- *      const prefix = '@/lib'; await import(`${prefix}/execution`)   // 静态前缀是空串
- *      await import(`s${rest}`)                                       // 前缀还能长成 `src/`
- *    静态前缀为空**恰恰是最没法证明安全的情形**，却因为 `''.startsWith('@/')`
- *    为假而被判成干净。所以现在反过来：**证明不了指向仓库外的包，就算命中。**
+ *    早先写成「静态前缀落在 `@/` `src/` `./` `../` 上才算命中」—— 那是反的，
+ *    「没法证明是外部包」≠「可以放行」。于是**两类**写法从正门走了出去：
  *
- * 证明成立只有一种情形：静态前缀非空，**且**它既没落在四类工程路径写法上，
- * 也不可能再长成其中任何一条（`'s'`→`'src/'`、`'@'`→`'@/'`、`'.'`→`'./'` 都算长得成）。
+ *      const prefix = '@/lib'; await import(`${prefix}/execution`)   // ① 静态前缀是空串
+ *      await import(`s${rest}`)                                       // ② 前缀还能长成 `src/`
+ *
+ *    ① 表达式打头：反引号后面立刻就是 `${`，抠出来的静态前缀是空字符串。
+ *      空前缀什么都没证明 —— `prefix` 运行时可能算出 `'@/lib'`，也可能算出一个
+ *      npm 包名，静态扫描没有任何字面文本能用来判断；却因为 `''.startsWith('@/')`
+ *      为假被判成干净，**恰恰是最没法证明安全的情形反而被放行**。
+ *    ② 半截前缀：`'s'` 再补三个字符就是 `'src/'`，`'@'` 补一个就是 `'@/'`。
+ *
+ *    所以现在反过来：**证明不了指向仓库外的包，就算命中。**
+ *    证明成立只有一种情形：静态前缀非空，**且**它既没落在四类工程路径写法上，
+ *    也不可能再长成其中任何一条。
  *
  * 🔴 不猜插值算出来是什么，也不许把这段前缀塞进 `canonicalSpecifier()` 去规范化
  *    —— 那是个截断的半截路径，规范化出来的东西看着像一个合法模块，实则是编出来的。
@@ -136,7 +142,9 @@ function interpolatedProjectPathHits(code: string): string[] {
     const prefix = match[1]
     if (!provablyExternalPackagePrefix(prefix)) {
       hits.push(
-        '插值动态导入 `' + prefix + '${…}`（静态前缀证明不了它指向仓库外的包，展开后去向未知，fail closed）',
+        prefix === ''
+          ? '插值动态导入 `${…}`（表达式打头，静态前缀为空，无法证明去向是外部包，fail closed）'
+          : '插值动态导入 `' + prefix + '${…}`（静态前缀证明不了它指向仓库外的包，展开后去向未知，fail closed）',
       )
     }
   }
@@ -499,13 +507,40 @@ describe('🔴 插值模板字面量的动态导入 fail closed（合成源码�
     expect(kernelImportsIn(BRIDGE_FILE, code).length).toBeGreaterThan(0)
   })
 
+  /**
+   * 🔴 **表达式打头，静态前缀为空** —— `${` 紧跟在反引号后面，抠出来的前缀是
+   *    空字符串，不落在四类工程路径写法的任何一类，之前的判据会误判成「外部
+   *    包插值」直接放行。空前缀什么都没证明，必须 fail closed，而不是因为
+   *    「不匹配四类前缀」就当成安全。
+   */
+  const EXPRESSION_FIRST_FORMS: Array<[label: string, code: string]> = [
+    ['import，无任何静态前缀', 'const m = await import(`${domain}/execution`)'],
+    ['require，无任何静态前缀', 'const m = require(`${domain}/execution`)'],
+    ['整段模板只有一个插值', 'const m = await import(`${modulePath}`)'],
+  ]
+
+  it.each(EXPRESSION_FIRST_FORMS)(
+    '%s → 禁止清单判据 fail closed 必须命中（不能因为前缀是空字符串就放行）',
+    (_label, code) => {
+      expect(forbiddenImportsIn(BRIDGE_FILE, code).length).toBeGreaterThan(0)
+    },
+  )
+
+  it.each(EXPRESSION_FIRST_FORMS)('%s → Kernel 允许清单判据同样 fail closed', (_label, code) => {
+    expect(kernelImportsIn(BRIDGE_FILE, code).length).toBeGreaterThan(0)
+  })
+
   it('🔴 命中诊断带着可辨认的原因（fail closed，不是一个具体模块名）', () => {
     const hits = forbiddenImportsIn(BRIDGE_FILE, 'await import(`@/lib/${domain}`)')
     expect(hits.length).toBe(1)
     expect(hits[0]).toContain('fail closed')
+
+    const expressionFirstHits = forbiddenImportsIn(BRIDGE_FILE, 'await import(`${domain}/execution`)')
+    expect(expressionFirstHits.length).toBe(1)
+    expect(expressionFirstHits[0]).toContain('fail closed')
   })
 
-  it('外部 npm 包名的插值不是工程路径，不误报', () => {
+  it('✅ 外部 npm 包名的插值不是工程路径，不误报（静态前缀非空且明确不落在四类写法上，才算证明了外部）', () => {
     const code = 'const m = await import(`some-package-${variant}`)'
     expect(forbiddenImportsIn(BRIDGE_FILE, code)).toEqual([])
     expect(kernelImportsIn(BRIDGE_FILE, code)).toEqual([])
@@ -525,6 +560,7 @@ describe('🔴 插值模板字面量的动态导入 fail closed（合成源码�
       '// const m = await import(`@/lib/${domain}`)',
       '/* const g = require(`../${domain}`) */',
       ' * await import(`src/lib/${x}`)',
+      '// const h = await import(`${domain}/execution`)',
       'const real = 1',
     ].join('\n')
     expect(forbiddenImportsIn(BRIDGE_FILE, stripComments(commented))).toEqual([])
