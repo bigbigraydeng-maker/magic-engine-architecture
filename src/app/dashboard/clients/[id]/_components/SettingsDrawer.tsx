@@ -147,41 +147,24 @@ export function SettingsDrawer({ open, onClose, clientId, client, activeTab, onT
                 </div>
               </div>
 
+              {/* PR5（docs/specs/2026-08-11-onboarding-integrations-unify-v1.md §2.4）：
+                  GBP/GSC/GA4/Google Ads/其他数据来源全部收进 settings 页「连接」组一处
+                  管理了，这里不再各写一份链接列表——一个入口，避免抽屉和整页各画一套、
+                  点进去发现内容不一致。 */}
               <div className="border-t border-black/[.06] pt-5">
-                <p className="text-[11px] font-black uppercase tracking-[0.14em] text-me-ochre">OAuth 授权</p>
-                <h3 className="mt-1 font-display text-lg font-semibold tracking-tight text-me-charcoal">需要授权的平台</h3>
+                <p className="text-[11px] font-black uppercase tracking-[0.14em] text-me-ochre">更多平台</p>
+                <h3 className="mt-1 font-display text-lg font-semibold tracking-tight text-me-charcoal">
+                  Google Business Profile / Search Console / Analytics 4 / 广告 / 其他数据来源
+                </h3>
                 <p className="mt-1 text-xs text-me-charcoal/55">
-                  以下连接器走 OAuth 授权流程，在独立的连接器页面完成（点击进入对应平台）。
+                  这些都在客户配置中心的「连接」这一组统一管理，点击下面按钮直接打开。
                 </p>
-                <div className="mt-3 space-y-2">
-                  {[
-                    // GBP OAuth lives in /settings (GbpPanel), NOT /connectors/gbp
-                    // — that route does not exist (only gsc/ga4/google-ads/meta-ads do).
-                    // Until GBP is migrated to /connectors/gbp, route GBP separately below.
-                    { anchor: 'gbp',         label: 'Google Business Profile', icon: '📍', hint: '商家资料 + 评论 + 评分' },
-                    { anchor: 'gsc',         label: 'Google Search Console',   icon: '🔍', hint: 'GSC 搜索表现 + Indexing API' },
-                    { anchor: 'ga4',         label: 'Google Analytics 4',      icon: '📈', hint: '网站真实流量数据' },
-                    { anchor: 'google-ads',  label: 'Google 广告（公开扫描）',  icon: '📢', hint: '透明度中心抓取' },
-                    { anchor: 'meta-ads',    label: 'Facebook 主页',           icon: '📊', hint: 'Meta 广告库 + 公开粉丝数' },
-                  ].map(p => (
-                    <Link
-                      key={p.anchor}
-                      href={
-                        p.anchor === 'gbp'
-                          ? `/dashboard/clients/${clientId}/settings`
-                          : `/dashboard/clients/${clientId}/connectors/${p.anchor}`
-                      }
-                      className="group flex items-center gap-3 rounded-lg border border-black/10 bg-white px-4 py-3 text-sm text-me-charcoal transition hover:border-me-ochre/30 hover:bg-me-ochre/5"
-                    >
-                      <span>{p.icon}</span>
-                      <div className="min-w-0 flex-1">
-                        <div className="font-bold">{p.label}</div>
-                        <div className="text-xs text-me-charcoal/55">{p.hint}</div>
-                      </div>
-                      <span className="text-me-ochre opacity-0 transition group-hover:opacity-100">→</span>
-                    </Link>
-                  ))}
-                </div>
+                <Link
+                  href={`/dashboard/clients/${clientId}/settings?tab=connect`}
+                  className="mt-3 inline-flex items-center gap-2 rounded-lg bg-me-ochre px-4 py-2.5 text-sm font-bold text-white transition hover:opacity-90"
+                >
+                  打开完整设置页 →
+                </Link>
               </div>
             </div>
           )}

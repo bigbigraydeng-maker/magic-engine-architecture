@@ -101,7 +101,7 @@ export function ConfigureCTA({
   if (!clientId) return null
   return (
     <a
-      href={`/dashboard/clients/${clientId}/connectors#${anchor}`}
+      href={`/dashboard/clients/${clientId}/settings?tab=connect`}
       className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800"
     >
       {label}

@@ -1,199 +1,118 @@
 'use client'
 
 /**
- * GoogleAdsPanel — Google Ads connection status tile.
+ * GoogleAdsPanel — Google Ads customer ID.
  *
- * Mirrors GbpPanel (Phase 24.A.7) for visual + interaction parity:
- *   - loading / error / disconnected / needs_reconnect / connected states
- *   - shows account_id (Google Ads customer_id) + last_synced_at on connect
- *   - connect/reconnect routes to the legacy connectors page (the OAuth
- *     callback there already wires through to platform_oauth_connections).
- *   - disconnect is intentionally absent from this panel; users wanting to
- *     revoke today go through the legacy /connectors/google-ads page.
- *     (When the OAuth flow becomes first-class here, we add it.)
- *
- * Phase 18.B.3
+ * PR5 (docs/specs/2026-08-11-onboarding-integrations-unify-v1.md §2.3): this
+ * used to be a fake "connect via OAuth" status tile — nothing in the codebase
+ * ever writes provider='google_ads' to platform_oauth_connections, so it
+ * showed "未连接" forever regardless of reality. Ad execution actually uses
+ * one shared MCC (Manager) credential for every client, distinguished only
+ * by customer_id — there's nothing to "connect" per client, just a number to
+ * set. This panel is the real, always-truthful version of that.
  */
 
-import { useState, useEffect, useCallback } from 'react'
-import Link from 'next/link'
-import type { PlatformConnectionSummary } from '@/lib/platform-oauth/vocabulary'
+import React, { useState, useEffect, useCallback } from 'react'
 
 interface Props {
   clientId: string
 }
 
-type PanelState =
-  | { phase: 'loading' }
-  | { phase: 'error';            message: string }
-  | { phase: 'disconnected' }
-  | { phase: 'needs_reconnect'; connection: PlatformConnectionSummary }
-  | { phase: 'connected';       connection: PlatformConnectionSummary }
+type SourceLabel = { text: string; tone: 'set' | 'inherited' | 'unset' }
 
-function formatRelative(iso: string | null): string {
-  if (!iso) return '从未同步'
-  const ms = Date.now() - new Date(iso).getTime()
-  if (Number.isNaN(ms) || ms < 0) return iso
-  const mins = Math.floor(ms / 60_000)
-  if (mins < 1) return '刚刚'
-  if (mins < 60) return `${mins} 分钟前`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours} 小时前`
-  const days = Math.floor(hours / 24)
-  return `${days} 天前`
+const SOURCE_LABELS: Record<string, SourceLabel> = {
+  clients_table:               { text: '手动设置', tone: 'set' },
+  platform_oauth_connections:  { text: '来自 OAuth 连接（未手动覆盖）', tone: 'inherited' },
+  flywheel_actions_payload:    { text: '来自历史执行记录（未手动覆盖，建议手动确认一次）', tone: 'inherited' },
+  none:                        { text: '未设置', tone: 'unset' },
 }
 
 export function GoogleAdsPanel({ clientId }: Props) {
-  const [state, setState] = useState<PanelState>({ phase: 'loading' })
+  const [customerId, setCustomerId] = useState('')
+  const [source, setSource]         = useState<string>('none')
+  const [loading, setLoading]       = useState(true)
+  const [saving, setSaving]         = useState(false)
+  const [msg, setMsg]               = useState<{ ok: boolean; text: string } | null>(null)
 
   const load = useCallback(async () => {
-    setState({ phase: 'loading' })
+    setLoading(true)
     try {
-      const res = await fetch(`/api/clients/${clientId}/platform/google-ads`)
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const { connection } = (await res.json()) as { connection: PlatformConnectionSummary | null }
-      if (!connection) {
-        setState({ phase: 'disconnected' })
-      } else if (connection.status === 'active') {
-        setState({ phase: 'connected', connection })
-      } else {
-        // 'revoked' | 'expired' | 'error' — all need a fresh OAuth round-trip.
-        setState({ phase: 'needs_reconnect', connection })
+      const res = await fetch(`/api/clients/${clientId}/google-ads-customer-id`)
+      if (res.ok) {
+        const data = await res.json() as { customer_id: string | null; source: string }
+        setCustomerId(data.customer_id ?? '')
+        setSource(data.source)
       }
-    } catch (err) {
-      setState({ phase: 'error', message: err instanceof Error ? err.message : String(err) })
+    } finally {
+      setLoading(false)
     }
   }, [clientId])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { void load() }, [load])
 
-  // ── Loading ─────────────────────────────────────────────────────────────
-  if (state.phase === 'loading') {
+  const handleSave = async () => {
+    setSaving(true)
+    setMsg(null)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/google-ads-customer-id`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customer_id: customerId.trim() || null }),
+      })
+      const data = await res.json() as { success?: boolean; error?: string }
+      if (res.ok && data.success) {
+        setMsg({ ok: true, text: '✓ 已保存' })
+        await load()
+      } else {
+        setMsg({ ok: false, text: data.error ?? '保存失败' })
+      }
+    } catch {
+      setMsg({ ok: false, text: '网络错误，请重试' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) {
     return (
-      <div className="flex items-center gap-2 text-sm text-slate-500" data-testid="google-ads-panel-loading">
+      <div className="flex items-center gap-2 text-sm text-slate-500">
         <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-cyan-600" />
-        正在加载连接状态…
+        正在加载…
       </div>
     )
   }
 
-  // ── Error ────────────────────────────────────────────────────────────────
-  if (state.phase === 'error') {
-    return (
-      <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700" data-testid="google-ads-panel-error">
-        <p className="font-bold">加载失败</p>
-        <p className="mt-1 text-xs text-red-600">{state.message}</p>
-        <button
-          onClick={load}
-          className="mt-2 inline-flex items-center rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
-        >
-          重试
-        </button>
-      </div>
-    )
-  }
+  const label = SOURCE_LABELS[source] ?? SOURCE_LABELS.none
 
-  // ── Disconnected ─────────────────────────────────────────────────────────
-  if (state.phase === 'disconnected') {
-    return (
-      <div
-        className="rounded-xl border border-slate-200 bg-white p-5"
-        data-testid="google-ads-panel-disconnected"
-        data-status="disconnected"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="font-bold text-slate-800">未连接</p>
-            <p className="mt-1 text-xs text-slate-500">
-              连接后每日 3am UTC 自动拉取过去 30 天的花费 / 展示 / 点击 / 转化数据
-              写入 flywheel_metrics，供诊断引擎使用。
-            </p>
-          </div>
-          <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 whitespace-nowrap">
-            未连接
-          </span>
-        </div>
-        <Link
-          href={`/dashboard/clients/${clientId}/connectors/google-ads`}
-          className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-cyan-600 px-4 py-2 text-sm font-bold text-white hover:bg-cyan-700"
-        >
-          连接 Google Ads →
-        </Link>
-      </div>
-    )
-  }
-
-  // ── Needs reconnect (revoked / expired / error) ──────────────────────────
-  if (state.phase === 'needs_reconnect') {
-    return (
-      <div
-        className="rounded-xl border border-amber-200 bg-amber-50 p-5"
-        data-testid="google-ads-panel-needs-reconnect"
-        data-status={state.connection.status}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="font-bold text-amber-900">连接需要更新</p>
-            <p className="mt-1 text-xs text-amber-800">
-              当前状态: <code className="font-mono">{state.connection.status}</code>
-              {state.connection.error_message && (
-                <> · {state.connection.error_message}</>
-              )}
-            </p>
-            <p className="mt-2 text-xs text-amber-700">
-              账号 ID: <code className="font-mono">{state.connection.account_id}</code>
-            </p>
-          </div>
-          <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800 whitespace-nowrap">
-            需要重连
-          </span>
-        </div>
-        <Link
-          href={`/dashboard/clients/${clientId}/connectors/google-ads`}
-          className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-700"
-        >
-          重新连接 →
-        </Link>
-      </div>
-    )
-  }
-
-  // ── Connected ────────────────────────────────────────────────────────────
-  const c = state.connection
   return (
-    <div
-      className="rounded-xl border border-emerald-200 bg-emerald-50 p-5"
-      data-testid="google-ads-panel-connected"
-      data-status="active"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="font-bold text-emerald-900">{c.display_name || 'Google Ads 账号'}</p>
-          <p className="mt-1 text-xs text-emerald-800">
-            账号 ID: <code className="font-mono">{c.account_id}</code>
-          </p>
-          <p className="mt-1 text-xs text-emerald-700">
-            上次同步: {formatRelative(c.last_synced_at)}
-          </p>
-        </div>
-        <span className="inline-flex items-center rounded-full border border-emerald-300 bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-800 whitespace-nowrap">
-          ✓ 已连接
-        </span>
-      </div>
+    <div className="rounded-xl border border-slate-200 bg-white p-5">
+      <p className="text-sm text-slate-500">
+        广告投放走平台共享授权（一个后台账号管理所有客户），不需要每个客户单独连接 Google 账号——
+        这里只需要填这个客户在 Google Ads 里的 10 位客户编号，用来在投放时区分是哪个客户。
+      </p>
+
       <div className="mt-3 flex items-center gap-2">
-        <Link
-          href={`/dashboard/clients/${clientId}/connectors/google-ads`}
-          className="inline-flex items-center gap-1.5 rounded-md border border-emerald-300 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100"
-        >
-          管理连接
-        </Link>
+        <input
+          type="text"
+          value={customerId}
+          onChange={e => setCustomerId(e.target.value)}
+          placeholder="1234567890 或 123-456-7890"
+          className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500"
+        />
         <button
-          onClick={load}
-          className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+          onClick={() => void handleSave()}
+          disabled={saving}
+          className="shrink-0 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-bold text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          ↻ 刷新
+          {saving ? '保存中…' : '保存'}
         </button>
       </div>
+
+      <p className={`mt-2 text-xs ${label.tone === 'set' ? 'text-emerald-600' : label.tone === 'inherited' ? 'text-amber-600' : 'text-slate-400'}`}>
+        {label.text}
+      </p>
+
+      {msg && <p className={`mt-1 text-xs ${msg.ok ? 'text-emerald-600' : 'text-red-600'}`}>{msg.text}</p>}
     </div>
   )
 }
