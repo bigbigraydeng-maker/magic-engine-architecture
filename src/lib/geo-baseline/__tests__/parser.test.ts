@@ -51,7 +51,7 @@ function config(overrides: Partial<GeoBaselineParserConfig> = {}): GeoBaselinePa
 describe('自有域名归属（R10 / GEO 契约 M8）', () => {
   it('清单未核实 ⇒ ownedDomain 记未知，绝不是 false', () => {
     const parse = createGeoBaselineParser(config())
-    const result = parse(envelope(['https://romanhu.com/x']), REQUEST)
+    const result = parse(envelope(['https://example.com/x']), REQUEST)
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.citations[0].ownedDomain).toEqual({ known: false, reason: 'not_recorded_by_source' })
@@ -59,35 +59,35 @@ describe('自有域名归属（R10 / GEO 契约 M8）', () => {
 
   it('已核实且命中 ⇒ true', () => {
     const parse = createGeoBaselineParser(
-      config({ ownedDomains: { verifiedDomains: ['romanhu.com'], verified: true } }),
+      config({ ownedDomains: { verifiedDomains: ['example.com'], verified: true } }),
     )
-    const result = parse(envelope(['https://www.romanhu.com/about']), REQUEST)
+    const result = parse(envelope(['https://www.example.com/about']), REQUEST)
     if (!result.ok) throw new Error('should parse')
     expect(result.citations[0].ownedDomain).toEqual({ known: true, value: true })
   })
 
   it('已核实但没命中 ⇒ false（这时 false 才是一个真结论）', () => {
     const parse = createGeoBaselineParser(
-      config({ ownedDomains: { verifiedDomains: ['romanhu.com'], verified: true } }),
+      config({ ownedDomains: { verifiedDomains: ['example.com'], verified: true } }),
     )
     const result = parse(envelope(['https://realestate.co.nz/listing/1']), REQUEST)
     if (!result.ok) throw new Error('should parse')
     expect(result.citations[0].ownedDomain).toEqual({ known: true, value: false })
   })
 
-  it('子域算自有；同后缀但不同域的不算（rromanhu.com ≠ romanhu.com）', () => {
-    expect(classifyOwnedDomain('blog.romanhu.com', { verifiedDomains: ['romanhu.com'], verified: true })).toEqual({
+  it('子域算自有；同后缀但不同域的不算（notexample.com ≠ example.com）', () => {
+    expect(classifyOwnedDomain('blog.example.com', { verifiedDomains: ['example.com'], verified: true })).toEqual({
       known: true,
       value: true,
     })
-    expect(classifyOwnedDomain('notromanhu.com', { verifiedDomains: ['romanhu.com'], verified: true })).toEqual({
+    expect(classifyOwnedDomain('notexample.com', { verifiedDomains: ['example.com'], verified: true })).toEqual({
       known: true,
       value: false,
     })
   })
 
   it('normaliseHost 只去一个前导 www.，不做别的猜测', () => {
-    expect(normaliseHost('WWW.Romanhu.COM')).toBe('romanhu.com')
+    expect(normaliseHost('WWW.Example.COM')).toBe('example.com')
     expect(normaliseHost('www.www.x.com')).toBe('www.x.com')
   })
 })
@@ -180,7 +180,7 @@ describe('confidence = 读取保真度（v1 语义）', () => {
 describe('产出的 citation 必须过 WP02 校验器', () => {
   it('未核实域名 + 不可算页面的组合是合法的 GeoEvidence', () => {
     const parse = createGeoBaselineParser(config())
-    const result = parse(envelope(['https://romanhu.com/a']), REQUEST)
+    const result = parse(envelope(['https://example.com/a']), REQUEST)
     if (!result.ok) throw new Error('should parse')
     const verdict = validateGeoEvidence({
       evidenceId: 'e1',

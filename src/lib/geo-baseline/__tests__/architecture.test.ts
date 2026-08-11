@@ -41,6 +41,16 @@ const PRODUCTION_FILES = walk(DIR)
 
 const sourceOf = (file: string): string => stripComments(readFileSync(join(ROOT, file), 'utf8'))
 
+/**
+ * 客户专属字样。
+ *
+ * 🔴 这一层是**通用的一次性接线**，不是「Roman 的接线」。客户取值属未决项 R5/R10，
+ *    只能从运行参数进来。连测试夹具都不用真实客户域名（一律 example.com）——
+ *    否则复审的人在 diff 里看到一个真实客户域名，得停下来判断「这是常量还是夹具」，
+ *    而那本来不该需要判断。
+ */
+const CLIENT_SPECIFIC = /romanhu|roman-hu|ray\s*white|mission\s*bay/i
+
 describe('GEO Baseline 接线层的边界', () => {
   it('目录里确实有生产文件（防止判据因路径写错而空跑）', () => {
     expect(PRODUCTION_FILES.length).toBeGreaterThan(0)
@@ -133,6 +143,23 @@ describe('GEO Baseline 接线层的边界', () => {
     expect(store).toMatch(/\.rpc\(RPC_PERSIST_BATCH/)
   })
 
+  it('整个模块（含测试与 migration）里没有任何客户专属字样', () => {
+    const all = walk(DIR).map((f) => relative(ROOT, f).split('\\').join('/'))
+    const offenders: string[] = []
+    for (const file of all) {
+      // 判据自身这一行不算（它必须包含这些字样才能工作）。
+      if (file.endsWith('architecture.test.ts')) continue
+      if (CLIENT_SPECIFIC.test(readFileSync(join(ROOT, file), 'utf8'))) offenders.push(file)
+    }
+    for (const extra of [
+      'scripts/geo-baseline-run.ts',
+      'supabase/migrations/20260812000001_me2_geo_persist_batch_atomic_v1.sql',
+    ]) {
+      if (CLIENT_SPECIFIC.test(readFileSync(join(ROOT, extra), 'utf8'))) offenders.push(extra)
+    }
+    expect(offenders, `这些文件里有客户专属字样：\n${offenders.join('\n')}`).toEqual([])
+  })
+
   it('没有 any', () => {
     const offenders = PRODUCTION_FILES.filter((f) => /:\s*any\b|<any>|as\s+any\b/.test(sourceOf(f)))
     expect(offenders, offenders.join('\n')).toEqual([])
@@ -165,7 +192,7 @@ describe('人工触发脚本的边界', () => {
   })
 
   it('脚本里没有任何客户常量（Roman 的取值属未决项，不进代码）', () => {
-    expect(/romanhu|roman-hu|Ray White|Mission Bay/i.test(src)).toBe(false)
+    expect(CLIENT_SPECIFIC.test(src)).toBe(false)
     // UUID 字面量同理 —— client_id 只能从环境变量进来。
     expect(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(src)).toBe(false)
   })

@@ -15,7 +15,7 @@ const CEILING = 0.05
 function request(overrides: Partial<GeoProviderRequest> = {}): GeoProviderRequest {
   return {
     queryKey: 'q1',
-    questionText: 'who are the best agents in Mission Bay?',
+    questionText: 'a frozen question from the approved query set',
     engineFamily: 'openai',
     modelVersion: 'gpt-4o-search-preview-2025-03-11',
     locale: 'en-NZ',
@@ -38,7 +38,7 @@ function okTransport(result: Partial<GeoTransportResult> = {}): {
       text: 'answer',
       refusal: null,
       finishReason: 'stop',
-      citationUrls: ['https://romanhu.com/about'],
+      citationUrls: ['https://example.com/about'],
       promptTokens: 1000,
       completionTokens: 500,
       rawPayload: { id: 'chatcmpl-1', system_fingerprint: 'fp_x' },
@@ -121,7 +121,7 @@ describe('四态分类（塌成一态 = 把「可安全重放」和「不许重�
     const envelope = JSON.parse(result.rawResponse)
     expect(envelope.envelope).toBe('geo-baseline/openai/v1')
     expect(envelope.text).toBe('answer')
-    expect(envelope.citationUrls).toEqual(['https://romanhu.com/about'])
+    expect(envelope.citationUrls).toEqual(['https://example.com/about'])
   })
 
   it('429 ⇒ rate_limited（未收费、重放安全），不是 error', async () => {
