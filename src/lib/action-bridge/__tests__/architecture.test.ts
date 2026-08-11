@@ -56,24 +56,41 @@ const parseSource = (code: string): ts.SourceFile =>
  *
  * 只有仍然基于正则的检查（比如「没有 any」）才需要它；
  * import 扫描走 AST，解析器本来就不会把注释当代码。
+ *
+ * 🔴 **只收 leading 不够 —— 同一行、紧跟在前一个 token 后面的注释是 trailing，
+ *    不是下一个 token 的 leading。**（Codex thread r3759104932）
+ *      const x = foo /* as unknown as AuthorizedExecutionContext *\/ + bar
+ *    TS 的 trivia 归属规则：本行内、换行符之前出现的注释算**前一个 token 的
+ *    trailing trivia**，只有跨过一次换行之后的注释才会被记成下一个 token 的
+ *    leading trivia。原来只在每个节点的 `pos`（= leading）取一次，会漏掉这类
+ *    挂在表达式中间、同一行内的注释 —— 挖不掉，就原样留在后面还在用正则的
+ *    「没有 any」之类检查里，可能把纯注释文本当成生产代码。
+ *    补法：每个节点的 `pos`（leading）与 `end`（trailing）都收一遍。
  */
 function stripComments(src: string): string {
   const sourceFile = parseSource(src)
   const ranges = new Map<string, ts.CommentRange>()
 
   // `node.pos` 就是含前导 trivia 的起点（= getFullStart()），不需要父指针
-  const collectAt = (pos: number): void => {
+  const collectLeadingAt = (pos: number): void => {
     for (const r of ts.getLeadingCommentRanges(src, pos) ?? []) {
       ranges.set(`${r.pos}:${r.end}`, r)
     }
   }
+  // `node.end` 是节点的结束位置 —— 同一行内紧跟在它后面的注释算它的 trailing trivia
+  const collectTrailingAt = (pos: number): void => {
+    for (const r of ts.getTrailingCommentRanges(src, pos) ?? []) {
+      ranges.set(`${r.pos}:${r.end}`, r)
+    }
+  }
   const visit = (node: ts.Node): void => {
-    collectAt(node.pos)
+    collectLeadingAt(node.pos)
+    collectTrailingAt(node.end)
     node.forEachChild(visit)
   }
   visit(sourceFile)
   // 文件末尾那条注释是 EOF token 的前导 trivia，不挂在任何其它节点上
-  collectAt(sourceFile.endOfFileToken.pos)
+  collectLeadingAt(sourceFile.endOfFileToken.pos)
 
   const chars = src.split('')
   // 用 forEach 而不是 `for…of ranges.values()`：仓库 tsconfig 没设 target，
@@ -93,19 +110,26 @@ const PROD_FILES = walk(DIR)
 const codeOf = (p: string) => stripComments(readFileSync(join(ROOT, p), 'utf8'))
 
 /**
- * 从一段源码里把**所有**模块引用抠出来 —— 走 AST，五种入口一个不漏：
+ * 从一段源码里把**所有**模块引用抠出来 —— 走 AST，六种入口一个不漏：
  *
  *      import { x } from '…'  /  import type … /  import '…'（副作用）    ImportDeclaration
  *      export { x } from '…'  /  export * from '…'                        ExportDeclaration
  *      import x = require('…')                                            ImportEqualsDeclaration
  *      import('…') / await import('…')                                    CallExpression(ImportKeyword)
  *      require('…') / require.resolve('…')                                CallExpression(require)
+ *      type T = import('…').X                                             ImportTypeNode
  *
  * 🔴 **说明符取的是 `.text`，也就是解析器求值后的 cooked 值，不是源码原文。**
  *    `import('\x40/lib/capabilities')` 的 `.text` 直接就是 `@/lib/capabilities`；
  *    `` require(`\x73rc/lib/supabase`) `` 的 `.text` 直接就是 `src/lib/supabase`。
  *    转义写法自此不再是一条绕过路径 —— 不是因为多加了一条正则，而是因为
  *    比对的东西从「源码长什么样」换成了「运行时到底是哪个字符串」。
+ *
+ * 🔴 **`type T = import('…').X` 是单独一种语法节点（`ImportTypeNode`），
+ *    不是 `CallExpression`。**（Codex thread r3759104922）只覆盖调用表达式那五种，
+ *    这种纯类型层的引用会被漏掉 —— 但它在编译期照样把 bridge 焊死在被禁止的
+ *    那一层上，`import type { X } from '…'` 挡得住的东西，`type T = import('…').X`
+ *    原样绕过去。
  *
  * 🔴 **不是字面量的一律 fail closed**（`unresolvable`）：模板带插值、字符串拼接、
  *    说明符是个变量……静态都证明不了它去哪。证明不了就不许放行。
@@ -171,6 +195,18 @@ function scanModuleReferences(code: string): ModuleReferenceScan {
         node.expression.name.text === 'resolve'
       ) {
         record(node.arguments[0], 'require.resolve()')
+      }
+    } else if (ts.isImportTypeNode(node)) {
+      // `type T = import('…').X` —— 类型层的模块引用，argument 只可能是
+      // 字符串字面量类型（TS 语法本身不允许在这里写变量/拼接），
+      // 但仍按同一套「不是字面量就 fail closed」处理，不假设它一定合法。
+      const arg = node.argument
+      if (ts.isLiteralTypeNode(arg) && ts.isStringLiteralLike(arg.literal)) {
+        record(arg.literal, 'import 类型()')
+      } else {
+        unresolvable.push(
+          `import 类型() 说明符不是字符串字面量（${ts.SyntaxKind[arg.kind]}），静态证明不了去向，fail closed`,
+        )
       }
     }
     node.forEachChild(visit)
@@ -799,6 +835,36 @@ describe('🔴 解析器口径：转义与注释（合成源码）', () => {
     })
   })
 
+  /** ④ Codex thread r3759104932：trailing 注释（同一行、紧跟在前一个 token 后面）也要挖空 */
+  describe('注释挖空同样要收 trailing，不能只收 leading', () => {
+    it('🔴 表达式中间、同一行内的块注释（trailing trivia）必须被挖空', () => {
+      // `/* … */` 紧跟在 foo 后面、同一行、没有换行分隔 —— 这是 foo 的
+      // trailing trivia，不是 `+ bar` 的 leading trivia。只收 leading 会漏掉它。
+      const code = `const x = foo /* as unknown as AuthorizedExecutionContext */ + bar`
+      expect(stripComments(code)).not.toContain('as unknown as AuthorizedExecutionContext')
+    })
+
+    it('🔴 语句末尾、同一行的 `//` 注释同样要被挖空（不只是独占一行的注释）', () => {
+      // 🔴 断言必须直接对 stripComments() 的输出下手 —— forbiddenImportsIn 走 AST
+      // 直接扫原始 code，注释本来就不会被解析成 import 声明，跟 stripComments
+      // 挖没挖干净无关；真正受这个修复影响的是后面那些还在用正则的检查（如「没有 any」）。
+      const code = [`const x = 1 // as unknown as any`, `const y = 2`].join('\n')
+      expect(stripComments(code)).not.toContain('as unknown as any')
+    })
+
+    it('✅ 挖 trailing 注释不许连带误伤字符串 / 正则里长得像注释的内容', () => {
+      const code = [
+        `const start = '/*'`,
+        `const mid = 1 /* real trailing comment */ + 2`,
+        `const end = '*/'`,
+      ].join('\n')
+      const stripped = stripComments(code)
+      expect(stripped).toContain(`const start = '/*'`)
+      expect(stripped).toContain(`const end = '*/'`)
+      expect(stripped).not.toContain('real trailing comment')
+    })
+  })
+
   /**
    * ③ 顺带关掉的两条 —— 上一轮我在 PR 评论 §6 里如实列为「残余风险、未修」。
    *    换解析器之后它们是同一条代码路径的自然结果，不是额外加的判据。
@@ -814,5 +880,66 @@ describe('🔴 解析器口径：转义与注释（合成源码）', () => {
     it.each(NON_LITERAL)('🔴 %s → 必须被发现', (_label, code) => {
       expect(forbiddenImportsIn(BRIDGE_FILE, code).length).toBeGreaterThan(0)
     })
+  })
+})
+
+/**
+ * 🔴 **type-only 的模块引用走的是另一种语法节点（`ImportTypeNode`），
+ *    不是上面六种里的 `CallExpression`/`Declaration`。**（Codex thread r3759104922）
+ *
+ * `type T = import('@/lib/capabilities').X` 在编译期建立的依赖跟
+ * `import type { X } from '@/lib/capabilities'` 完全一样，但语法节点是
+ * `ImportTypeNode`，原来的 `visit()` 只认 `ImportDeclaration` / `ExportDeclaration` /
+ * `ImportEqualsDeclaration` / `CallExpression` 四类，这一种直接漏过去。
+ */
+describe('🔴 type-only 的 import() 类型引用同样要被治理（ImportTypeNode）', () => {
+  const BRIDGE_FILE = 'src/lib/action-bridge/index.ts'
+
+  it('🔴 禁止清单：type T = import(...).X 必须被发现', () => {
+    expect(forbiddenImportsIn(BRIDGE_FILE, `type T = import('@/lib/capabilities').X`)).toEqual([
+      '@/lib/capabilities',
+    ])
+  })
+
+  it('🔴 Kernel 允许清单同样看得到 import 类型（gateway 不在 types/registry 里）', () => {
+    expect(kernelImportsIn(BRIDGE_FILE, `type T = import('@/lib/kernel/gateway').X`)).toEqual([
+      '@/lib/kernel/gateway',
+    ])
+  })
+
+  it('✅ 允许的 Kernel types/registry 用 import 类型写法也照常放行', () => {
+    const code = [
+      `type A = import('@/lib/kernel/types').ActionKey`,
+      `type B = import('@/lib/kernel/registry').ActionDefinition`,
+    ].join('\n')
+    expect(forbiddenImportsIn(BRIDGE_FILE, code)).toEqual([])
+    expect(kernelImportsIn(BRIDGE_FILE, code).sort()).toEqual([
+      '@/lib/kernel/registry',
+      '@/lib/kernel/types',
+    ])
+  })
+
+  it('🔴 相对路径 / baseUrl 在 import 类型里同样要折算再判', () => {
+    expect(forbiddenImportsIn(BRIDGE_FILE, `type T = import('../capabilities').X`)).toEqual([
+      '@/lib/capabilities',
+    ])
+    expect(forbiddenImportsIn(BRIDGE_FILE, `type T = import('src/lib/execution').X`)).toEqual([
+      '@/lib/execution',
+    ])
+  })
+
+  it('🔴 转义写法在 import 类型里同样按 cooked 值判', () => {
+    expect(forbiddenImportsIn(BRIDGE_FILE, `type T = import('\\x40/lib/capabilities').X`)).toEqual(
+      ['@/lib/capabilities'],
+    )
+  })
+
+  it('🔴 只写在注释里的 import 类型示例不算违规', () => {
+    const commented = [
+      `// type T = import('@/lib/capabilities').X`,
+      `/* type U = import('@/lib/execution').Y */`,
+      `const real = 1`,
+    ].join('\n')
+    expect(forbiddenImportsIn(BRIDGE_FILE, commented)).toEqual([])
   })
 })

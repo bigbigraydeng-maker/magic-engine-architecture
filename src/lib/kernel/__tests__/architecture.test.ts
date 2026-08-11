@@ -72,24 +72,42 @@ const parseSource = (code: string): ts.SourceFile =>
  *
  *    注释范围一律改由**解析器**给出。它认得字符串 / 模板 / 正则字面量，
  *    这一类问题从此不是「再补一条正则」，而是根本不存在。
+ *
+ * 🔴 **只收 leading 不够 —— 同一行、紧跟在前一个 token 后面的注释是 trailing，
+ *    不是下一个 token 的 leading。**（Codex thread r3759104932）
+ *      const x = foo /* as unknown as AuthorizedExecutionContext *\/ + bar
+ *    TS 的 trivia 归属规则：本行内、换行符之前出现的注释算**前一个 token 的
+ *    trailing trivia**，只有跨过一次换行之后的注释才会被记成下一个 token 的
+ *    leading trivia。原来只在每个节点的 `pos`（= leading）取一次，会漏掉
+ *    这类挂在表达式中间、同一行内的注释 —— 挖不掉，就原样留在 `readCode()`
+ *    的输出里，让后面那些还在用正则的检查（比如 `AUTHORIZED_CONTEXT_MINTERS`
+ *    那条）把纯注释文本当成生产代码，对着注释报出一个假违规。
+ *    补法：每个节点的 `pos`（leading）与 `end`（trailing）都收一遍。
  */
 function stripComments(src: string): string {
   const sourceFile = parseSource(src)
   const ranges = new Map<string, ts.CommentRange>()
 
   // `node.pos` 就是含前导 trivia 的起点（= getFullStart()），不需要父指针
-  const collectAt = (pos: number): void => {
+  const collectLeadingAt = (pos: number): void => {
     for (const r of ts.getLeadingCommentRanges(src, pos) ?? []) {
       ranges.set(`${r.pos}:${r.end}`, r)
     }
   }
+  // `node.end` 是节点的结束位置 —— 同一行内紧跟在它后面的注释算它的 trailing trivia
+  const collectTrailingAt = (pos: number): void => {
+    for (const r of ts.getTrailingCommentRanges(src, pos) ?? []) {
+      ranges.set(`${r.pos}:${r.end}`, r)
+    }
+  }
   const visit = (node: ts.Node): void => {
-    collectAt(node.pos)
+    collectLeadingAt(node.pos)
+    collectTrailingAt(node.end)
     node.forEachChild(visit)
   }
   visit(sourceFile)
   // 文件末尾那条注释是 EOF token 的前导 trivia，不挂在任何其它节点上
-  collectAt(sourceFile.endOfFileToken.pos)
+  collectLeadingAt(sourceFile.endOfFileToken.pos)
 
   const chars = src.split('')
   // 用 forEach 而不是 `for…of ranges.values()`：仓库 tsconfig 没设 target，
@@ -223,19 +241,26 @@ describe('L1 边界：Kernel 不许自己抓 service-role 客户端', () => {
 
 describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => {
   /**
-   * 从一段源码里把**所有**模块引用抠出来 —— 走 AST，五种入口一个不漏：
+   * 从一段源码里把**所有**模块引用抠出来 —— 走 AST，六种入口一个不漏：
    *
    *      import { x } from '…' / import type … / import '…'（副作用）   ImportDeclaration
    *      export { x } from '…' / export * from '…'                      ExportDeclaration
    *      import x = require('…')                                        ImportEqualsDeclaration
    *      import('…') / await import('…')                                CallExpression(ImportKeyword)
    *      require('…') / require.resolve('…')                            CallExpression(require)
+   *      type T = import('…').X                                         ImportTypeNode
    *
    * 🔴 **说明符取 `.text`，也就是解析器求值后的 cooked 值，不是源码原文。**
    *    正则版比的是源码文本，于是合法的 JS 转义直接绕过：
    *      await import(`\x73rc/lib/${d}`)     // 源码 \x73rc/lib/，运行时 src/lib/
    *      import('\x40/lib/growth')           // 运行时 @/lib/growth
    *    补正则救不了这一类 —— 要比就得比运行时到底是哪个字符串。
+   *
+   * 🔴 **`type T = import('…').X` 是单独一种语法节点（`ImportTypeNode`），
+   *    不是 `CallExpression`。**（Codex thread r3759104922）只覆盖调用表达式那五种，
+   *    这种纯类型层的引用会被漏掉 —— 但它在编译期照样把 bridge/kernel 焊死在
+   *    被禁止的那一层上，`import type { X } from '…'` 挡得住的东西，
+   *    `type T = import('…').X` 原样绕过去。
    *
    * 🔴 **不是字面量的一律 fail closed**：模板带插值、字符串拼接、说明符是变量……
    *    静态都证明不了它去哪。证明不了就不许放行。
@@ -298,6 +323,18 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
           node.expression.name.text === 'resolve'
         ) {
           record(node.arguments[0], 'require.resolve()')
+        }
+      } else if (ts.isImportTypeNode(node)) {
+        // `type T = import('…').X` —— 类型层的模块引用，argument 只可能是
+        // 字符串字面量类型（TS 语法本身不允许在这里写变量/拼接），
+        // 但仍按同一套「不是字面量就 fail closed」处理，不假设它一定合法。
+        const arg = node.argument
+        if (ts.isLiteralTypeNode(arg) && ts.isStringLiteralLike(arg.literal)) {
+          record(arg.literal, 'import 类型()')
+        } else {
+          unresolvable.push(
+            `import 类型() 说明符不是字符串字面量（${ts.SyntaxKind[arg.kind]}），静态证明不了去向，fail closed`,
+          )
         }
       }
       node.forEachChild(visit)
@@ -926,6 +963,44 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
           const code = ['/* a */', '// b', 'const real = 1'].join('\n')
           expect(stripComments(code).split('\n').length).toBe(3)
         })
+
+        /** ④ Codex thread r3759104932：trailing 注释（同一行、紧跟在前一个 token 后面）也要挖空 */
+        it('🔴 表达式中间、同一行内的块注释（trailing trivia）必须被挖空', () => {
+          // `/* … */` 紧跟在 foo 后面、同一行、没有换行分隔 —— 这是 foo 的
+          // trailing trivia，不是 `+ bar` 的 leading trivia。只收 leading 会漏掉它。
+          const code = `const x = foo /* as unknown as AuthorizedExecutionContext */ + bar`
+          expect(stripComments(code)).not.toContain('as unknown as AuthorizedExecutionContext')
+        })
+
+        it('🔴 挖掉 trailing 注释之后，还在用正则的检查不会把注释文本当成生产代码', () => {
+          // 复刻 L2 边界「授权上下文不许在别处被造出来」那条检查的判据：
+          // 注释里出现这行字不代表生产代码里真的伪造了授权上下文，之前会误判成违规。
+          const pattern = /as\s+(unknown\s+as\s+)?AuthorizedExecutionContext/
+          const code = `const x = foo /* as unknown as AuthorizedExecutionContext */ + bar`
+          expect(pattern.test(stripComments(code))).toBe(false)
+        })
+
+        it('🔴 语句末尾、同一行的 `//` 注释同样要被挖空（不只是独占一行的注释）', () => {
+          // 🔴 断言必须直接对 stripComments() 的输出下手 —— importsAnyOf 走 AST
+          // 直接扫原始 code，注释本来就不会被解析成 import 声明，跟 stripComments
+          // 挖没挖干净无关；真正受这个修复影响的是后面那些还在用正则的检查。
+          const code = [`const x = 1 // as unknown as AuthorizedExecutionContext`, `const y = 2`].join(
+            '\n',
+          )
+          expect(stripComments(code)).not.toContain('as unknown as AuthorizedExecutionContext')
+        })
+
+        it('✅ 挖 trailing 注释不许连带误伤字符串 / 正则里长得像注释的内容', () => {
+          const code = [
+            `const start = '/*'`,
+            `const mid = 1 /* real trailing comment */ + 2`,
+            `const end = '*/'`,
+          ].join('\n')
+          const stripped = stripComments(code)
+          expect(stripped).toContain(`const start = '/*'`)
+          expect(stripped).toContain(`const end = '*/'`)
+          expect(stripped).not.toContain('real trailing comment')
+        })
       })
 
       /**
@@ -944,6 +1019,87 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
           expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(true)
         })
       })
+    })
+  })
+
+  /**
+   * 🔴 **type-only 的模块引用走的是另一种语法节点（`ImportTypeNode`），
+   *    不是上面六种里的 `CallExpression`/`Declaration`。**（Codex thread r3759104922）
+   *
+   * `type T = import('@/lib/growth').GrowthActionCandidateIdentity` 在编译期
+   * 建立的依赖跟 `import type { X } from '@/lib/growth'` 完全一样，但语法节点是
+   * `ImportTypeNode`，原来的 `visit()` 只认 `ImportDeclaration` / `ExportDeclaration` /
+   * `ImportEqualsDeclaration` / `CallExpression` 四类，这一种直接漏过去。
+   */
+  describe('🔴 type-only 的 import() 类型引用同样要被治理（ImportTypeNode）', () => {
+    const KERNEL_FILE = 'src/lib/kernel/example.ts'
+    const BRIDGE_FILE = 'src/lib/action-bridge/index.ts'
+    const GROWTH_FILE = 'src/lib/growth/types.ts'
+
+    it('🔴 kernel 侧：type T = import(...).X 必须被发现', () => {
+      expect(
+        importsAnyOf(
+          KERNEL_FILE,
+          `type T = import('@/lib/growth').GrowthActionCandidateIdentity`,
+          KERNEL_FORBIDDEN_MODULE_IMPORTS,
+        ),
+      ).toBe(true)
+    })
+
+    it('🔴 bridge 侧：type T = import(...).X 必须被发现', () => {
+      expect(
+        importsAnyOf(
+          BRIDGE_FILE,
+          `type T = import('@/lib/capabilities').X`,
+          ACTION_BRIDGE_FORBIDDEN_IMPORTS,
+        ),
+      ).toBe(true)
+    })
+
+    it('🔴 growth 侧：type T = import(...).X 必须被发现', () => {
+      expect(
+        importsAnyOf(GROWTH_FILE, `type T = import('@/lib/kernel').X`, [
+          '@/lib/kernel',
+          '@/lib/action-bridge',
+        ]),
+      ).toBe(true)
+    })
+
+    it('✅ 允许的模块用 import 类型写法也照常放行（没有被 fail-closed 误伤）', () => {
+      const code = `type T = import('./registry').X`
+      expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
+    })
+
+    it('🔴 相对路径 / baseUrl 在 import 类型里同样要折算再判', () => {
+      expect(
+        importsAnyOf(KERNEL_FILE, `type T = import('../growth').X`, KERNEL_FORBIDDEN_MODULE_IMPORTS),
+      ).toBe(true)
+      expect(
+        importsAnyOf(
+          BRIDGE_FILE,
+          `type T = import('src/lib/capabilities').X`,
+          ACTION_BRIDGE_FORBIDDEN_IMPORTS,
+        ),
+      ).toBe(true)
+    })
+
+    it('🔴 转义写法在 import 类型里同样按 cooked 值判', () => {
+      expect(
+        importsAnyOf(
+          KERNEL_FILE,
+          `type T = import('\\x40/lib/growth').X`,
+          KERNEL_FORBIDDEN_MODULE_IMPORTS,
+        ),
+      ).toBe(true)
+    })
+
+    it('🔴 只写在注释里的 import 类型示例不算违规', () => {
+      const commented = [
+        `// type T = import('@/lib/growth').X`,
+        `/* type U = import('@/lib/action-bridge').Y */`,
+        `const real = 1`,
+      ].join('\n')
+      expect(importsAnyOf(KERNEL_FILE, commented, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
     })
   })
 })
