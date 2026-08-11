@@ -271,16 +271,44 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
    *
    * 🔴 直接放过等于开了个口子：`import(\`${prefix}/growth\`)` 只要 `prefix`
    *    运行时算出来是 `'@/lib'`，效果跟写死 `import('@/lib/growth')` 一模一样，
-   *    但静态扫描永远看不出来。所以静态前缀（`${` 之前那一截）只要落在四类
-   *    工程路径写法上 —— `@/`、`src/`、`./`、`../` —— 就直接判定为命中，
-   *    不猜插值算出来是什么，也不许把这段前缀塞进 `canonicalSpecifier()`
-   *    去规范化（那是个截断的半截路径，规范化出来的东西看着像一个合法模块，
-   *    实则是编出来的误导信息）。
+   *    但静态扫描永远看不出来。
    *
-   * scoped npm 包的插值（如 `` `some-package-${variant}` ``）静态前缀不落在
-   * 这四类里，原样放行 —— 不能把外部包名误判成工程路径。
+   * 🔴 **判据的方向是「证明它安全」，不是「看它像不像工程路径」。**
+   *    早先写成「静态前缀落在 `@/` `src/` `./` `../` 上才算命中」——
+   *    那是反的，于是**两类**写法从正门走了出去：
+   *      const prefix = '@/lib'; await import(`${prefix}/growth`)   // 静态前缀是空串
+   *      await import(`s${rest}`)                                     // 前缀还能长成 `src/`
+   *    静态前缀为空**恰恰是最没法证明安全的情形**，却因为 `''.startsWith('@/')`
+   *    为假而被判成干净。所以现在反过来：**证明不了指向仓库外的包，就算命中。**
+   *
+   * 证明成立只有一种情形：静态前缀非空，**且**它既没落在四类工程路径写法上，
+   * 也不可能再长成其中任何一条（`'s'`→`'src/'`、`'@'`→`'@/'`、`'.'`→`'./'` 都算长得成）。
+   *
+   * 🔴 不猜插值算出来是什么，也不许把这段前缀塞进 `canonicalSpecifier()` 去规范化
+   *    —— 那是个截断的半截路径，规范化出来的东西看着像一个合法模块，实则是编出来的。
+   *
+   * npm 包的插值（`` `some-package-${variant}` `` / `` `@supabase/${sub}` ``）静态前缀
+   * 已经把首段定死在仓库外，证明成立，原样放行 —— 不能把外部包名误判成工程路径。
    */
   const PROJECT_PATH_PREFIXES = ['@/', 'src/', './', '../'] as const
+
+  /**
+   * 这段静态前缀能不能**证明**插值展开后指向的是仓库外的 npm 包。
+   * 证明不了一律返回 false（→ fail closed）。
+   */
+  function provablyExternalPackagePrefix(prefix: string): boolean {
+    // 空前缀什么都证明不了：`${anything}` 可以是任意路径。
+    // 🔴 这一句**被下面「长得成」那句盖住**（`'@/'.startsWith('')` 为真，空前缀在那里
+    //    照样会被拒）—— 实测拆掉它测试全绿。留着是因为它写的是本轮 Codex 点名的
+    //    那一种情形，读代码的人一眼就能看见；但**别给它单写变异探针**说它独立生效，
+    //    也别因为「空的情况这儿管了」就去简化下面那句 —— 真正拦住空前缀的是它。
+    if (prefix === '') return false
+    // 已经落在工程路径写法上
+    if (PROJECT_PATH_PREFIXES.some((p) => prefix.startsWith(p))) return false
+    // 还没写完，但再补几个字符就能长成工程路径写法（也含空前缀这一种）
+    if (PROJECT_PATH_PREFIXES.some((p) => p.startsWith(prefix))) return false
+    return true
+  }
 
   function interpolatedProjectPathHits(code: string): string[] {
     const pattern = /\b(?:import|require)\s*\(\s*`([^`]*?)\$\{/g
@@ -288,9 +316,9 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
     let match: RegExpExecArray | null
     while ((match = pattern.exec(code)) !== null) {
       const prefix = match[1]
-      if (PROJECT_PATH_PREFIXES.some((p) => prefix.startsWith(p))) {
+      if (!provablyExternalPackagePrefix(prefix)) {
         hits.push(
-          '插值动态导入 `' + prefix + '${…}`（静态前缀落在工程路径写法上，展开后去向未知，fail closed）',
+          '插值动态导入 `' + prefix + '${…}`（静态前缀证明不了它指向仓库外的包，展开后去向未知，fail closed）',
         )
       }
     }
@@ -583,9 +611,10 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
    *
    * `import(\`${prefix}/growth\`)`：只要 `prefix` 运行时算出来是 `'@/lib'`，
    * 效果跟写死 `import('@/lib/growth')` 一模一样，但静态扫描算不出插值展开后
-   * 去了哪。所以静态前缀（`${` 之前那一截）只要落在四类工程路径写法上——
-   * `@/`、`src/`、`./`、`../`——就直接判定为命中，不猜、也不算出真实目标；
-   * scoped npm 包的插值（`some-package-${variant}`）前缀不落在这四类里，放行。
+   * 去了哪。所以判据是**证明它安全才放行**：静态前缀（`${` 之前那一截）必须非空，
+   * 且既没落在四类工程路径写法上（`@/`、`src/`、`./`、`../`）、也不可能再长成其中
+   * 任何一条 —— 证明不了一律命中，不猜、也不算出真实目标。
+   * npm 包的插值（`some-package-${variant}` / `@supabase/${sub}`）首段已定死在仓库外，放行。
    */
   describe('🔴 插值模板字面量的动态导入 fail closed（合成源码）', () => {
     const KERNEL_FILE = 'src/lib/kernel/example.ts'
@@ -653,6 +682,50 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
       expect(
         importsAnyOf(KERNEL_FILE, stripComments(commented), KERNEL_FORBIDDEN_MODULE_IMPORTS),
       ).toBe(false)
+    })
+
+    /**
+     * 🔴 **判据反了的那两类，各自单独盯一条。**
+     *
+     * 上面那组 `PROJECT_PREFIX_FORMS` 全都是「静态前缀已经写成了工程路径」，
+     * 旧判据（`prefix.startsWith('@/')` 之类）照样让它们全绿 —— 那一组
+     * **证明不了**这次的修复。真正从正门走出去的是下面两类：前缀为空、
+     * 以及前缀短到还能长成工程路径标记。
+     */
+    describe('🔴 证明不了指向外部包就算命中（这才是本轮的判据）', () => {
+      it('🔴 静态前缀为空 —— Codex 点名的那一种，整段路径都在插值里', () => {
+        // const prefix = '@/lib'; await import(`${prefix}/growth`)
+        // 运行时等价于 import('@/lib/growth')，静态前缀却是空串。
+        const code = "const prefix = '@/lib'\nconst m = await import(`${prefix}/growth`)"
+        expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(true)
+        expect(importsAnyOf(BRIDGE_FILE, code, ACTION_BRIDGE_FORBIDDEN_IMPORTS)).toBe(true)
+        expect(importsAnyOf(GROWTH_FILE, code, ['@/lib/kernel', '@/lib/action-bridge'])).toBe(true)
+      })
+
+      const GROWABLE_PREFIXES: Array<[label: string, code: string]> = [
+        ['`s` 还能长成 `src/`', 'const m = await import(`s${rest}`)'],
+        ['`sr` 还能长成 `src/`', 'const m = await import(`sr${rest}`)'],
+        ['`src` 还能长成 `src/`', 'const m = await import(`src${rest}`)'],
+        ['`@` 还能长成 `@/`', 'const m = await import(`@${rest}`)'],
+        ['`.` 还能长成 `./`', 'const m = require(`.${rest}`)'],
+        ['`..` 还能长成 `../`', 'const m = require(`..${rest}`)'],
+      ]
+
+      it.each(GROWABLE_PREFIXES)('🔴 %s → 证明不了，必须 fail closed', (_label, code) => {
+        expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(true)
+        expect(importsAnyOf(BRIDGE_FILE, code, ACTION_BRIDGE_FORBIDDEN_IMPORTS)).toBe(true)
+      })
+
+      it('✅ 首段已经定死在仓库外的 npm 插值仍然放行（判据没有一刀切成全拒）', () => {
+        for (const code of [
+          'const m = await import(`some-package-${variant}`)',
+          'const m = await import(`@supabase/${sub}`)',
+          'const m = require(`lodash.${fn}`)',
+        ]) {
+          expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS), code).toBe(false)
+          expect(importsAnyOf(BRIDGE_FILE, code, ACTION_BRIDGE_FORBIDDEN_IMPORTS), code).toBe(false)
+        }
+      })
     })
   })
 })

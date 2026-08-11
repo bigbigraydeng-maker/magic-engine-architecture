@@ -1629,6 +1629,46 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         test="src/lib/action-bridge/__tests__/candidate-mapping.test.ts",
         expect_fail_contains="纯空白不算有内容",
     ),
+    # ── PR #898 收尾：Codex P2（thread r3756852483，模板字面量动态导入）──────
+    dict(
+        # 反引号动态导入（无插值）原来只认引号字符串，一条都不命中。
+        # 拆掉这两条 pattern 之后，`import(\`@/lib/growth\`)` 这类写法应当重新
+        # 变得对扫描不可见 —— 用来证明「盖住反引号」这件事真的是这两行做的，
+        # 不是别的判据附带盖住的。
+        name="K-WP02 架构扫描不再认反引号动态导入（无插值）",
+        file="src/lib/kernel/__tests__/architecture.test.ts",
+        old="""    /\\bimport\\s*\\(\\s*`([^`]*)`/g,
+    /\\brequire\\s*\\(\\s*`([^`]*)`/g,
+""",
+        new="""""",
+        test="src/lib/kernel/__tests__/architecture.test.ts",
+        expect_fail_contains="模板字面量，无插值",
+    ),
+    # ── PR #898 收尾：Codex P2（thread r3757587391，插值前缀 fail closed）───
+    # 🔴 判据由三句组成，其中「空前缀」那句**被「长得成」那句盖住**（实测拆掉全绿），
+    #    所以这里只给真正独立生效的两句各写一条探针 —— 不给被遮蔽的那句编一条假证据。
+    dict(
+        # 退回「放过一切插值」：静态前缀已经写成 `@/lib/` 也不再算命中。
+        name="K-WP02 插值动态导入：已是工程路径的前缀不再算命中",
+        file="src/lib/action-bridge/__tests__/architecture.test.ts",
+        old="""  if (PROJECT_PATH_PREFIXES.some((p) => prefix.startsWith(p))) return false
+""",
+        new="""""",
+        test="src/lib/action-bridge/__tests__/architecture.test.ts",
+        expect_fail_contains="fail closed 必须命中",
+    ),
+    dict(
+        # 这一句是 Codex r3757587391 的正解：前缀为空、或短到还能长成 `src/`、`@/`、
+        # `./`、`../`，都证明不了指向仓库外的包。拆掉它，`${prefix}/execution`
+        # 与 `s${rest}` 两类写法就又从正门走出去了。
+        name="K-WP02 插值动态导入：证明不了是外部包也放行（空前缀/半截前缀重新敞开）",
+        file="src/lib/action-bridge/__tests__/architecture.test.ts",
+        old="""  if (PROJECT_PATH_PREFIXES.some((p) => p.startsWith(prefix))) return false
+""",
+        new="""""",
+        test="src/lib/action-bridge/__tests__/architecture.test.ts",
+        expect_fail_contains="证明不了，必须 fail closed",
+    ),
 ]
 
 
