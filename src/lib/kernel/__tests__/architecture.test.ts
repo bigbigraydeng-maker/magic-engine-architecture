@@ -183,14 +183,48 @@ describe('L1 边界：Kernel 不许自己抓 service-role 客户端', () => {
 })
 
 describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => {
+  /**
+   * 从一段源码里把**所有**模块说明符抠出来。
+   *
+   * 🔴 只认 `from '...'` 是不够的 —— 下面这三种照样把模块拉进来，却一条都不会被发现：
+   *      import '@/lib/capabilities'         // 静态副作用导入
+   *      await import('@/lib/execution')     // 动态导入
+   *      require('@/lib/supabase')           // CommonJS
+   *    一条只挡得住「规规矩矩的写法」的边界等于没有边界。
+   */
+  const SPECIFIER_PATTERNS: readonly RegExp[] = [
+    /\bfrom\s*['"]([^'"]+)['"]/g,
+    /\bimport\s*['"]([^'"]+)['"]/g,
+    /\bimport\s*\(\s*['"]([^'"]+)['"]/g,
+    /\brequire\s*\(\s*['"]([^'"]+)['"]/g,
+  ]
+
+  function moduleSpecifiersIn(code: string): string[] {
+    const out: string[] = []
+    for (const pattern of SPECIFIER_PATTERNS) {
+      // 每次新建，避免共享 lastIndex 让第二次扫描从半路开始
+      const re = new RegExp(pattern.source, pattern.flags)
+      let match: RegExpExecArray | null
+      while ((match = re.exec(code)) !== null) out.push(match[1])
+    }
+    return out
+  }
+
+  /**
+   * 命中判据 = **前缀匹配**，跟原来的正则语义一致（模块本身与它的子路径都命中，
+   * `@/lib/cms/` 这类带斜杠的前缀规则照常生效）。
+   * 🔴 改成字符串比较之后**不再需要转义** —— 模块名里的 `/`、`@`、`.`
+   *    都只是普通字符，没有任何机会被当成正则元字符。
+   */
+  const importsAnyOf = (code: string, mods: readonly string[]): boolean => {
+    const specs = moduleSpecifiersIn(code)
+    return mods.some((mod) => specs.some((spec) => spec.startsWith(mod)))
+  }
+
   it('🔴 kernel 目录里没有一处 import 域模块或 action-bridge', () => {
     const violations = ALL_FILES.filter((f) => f.startsWith('src/lib/kernel/'))
       .filter((f) => !isTest(f))
-      .filter((f) =>
-        KERNEL_FORBIDDEN_MODULE_IMPORTS.some((m) =>
-          new RegExp(`from\\s+['"]${m.replace(/[/@]/g, '\\$&')}`).test(readCode(f)),
-        ),
-      )
+      .filter((f) => importsAnyOf(readCode(f), KERNEL_FORBIDDEN_MODULE_IMPORTS))
 
     expect(
       violations,
@@ -203,11 +237,7 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
   it('🔴 action-bridge 只依赖 Kernel —— 不碰库 / provider / 执行 / legacy 生成端', () => {
     const violations = ALL_FILES.filter((f) => f.startsWith('src/lib/action-bridge/'))
       .filter((f) => !isTest(f))
-      .filter((f) =>
-        ACTION_BRIDGE_FORBIDDEN_IMPORTS.some((m) =>
-          new RegExp(`from\\s+['"]${m.replace(/[/@]/g, '\\$&')}`).test(readCode(f)),
-        ),
-      )
+      .filter((f) => importsAnyOf(readCode(f), ACTION_BRIDGE_FORBIDDEN_IMPORTS))
 
     expect(
       violations,
@@ -220,7 +250,7 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
   it('域模块（Growth）不 import Kernel 或 action-bridge', () => {
     const violations = ALL_FILES.filter((f) => f.startsWith('src/lib/growth/'))
       .filter((f) => !isTest(f))
-      .filter((f) => /from\s+['"]@\/lib\/(kernel|action-bridge)/.test(readCode(f)))
+      .filter((f) => importsAnyOf(readCode(f), ['@/lib/kernel', '@/lib/action-bridge']))
 
     expect(
       violations,
@@ -228,6 +258,61 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
         violations.join('\n'),
     ).toEqual([])
   }, SCAN_TIMEOUT_MS)
+
+  /**
+   * 🔴 **盯着这道闸本身。**
+   *
+   * 上面三条扫的是真实文件，而真实文件现在是干净的 —— 它们**永远绿**，
+   * 绿得跟「判据整个失效了」一模一样。所以这一组用合成源码逐项证明：
+   * 每一种把模块拉进来的写法都真的会被发现。这正是本轮 P2 的成因 ——
+   * 原来的判据只认 `from '...'`，另外三种全是敞开的。
+   */
+  describe('🔴 导入扫描盖得住所有写法（合成源码）', () => {
+    const FORBIDDEN_FORMS: Array<[label: string, code: string]> = [
+      ['具名导入', `import { x } from '@/lib/growth'`],
+      ['再导出', `export { x } from '@/lib/growth'`],
+      ['再导出全部', `export * from '@/lib/action-bridge'`],
+      ['静态副作用导入', `import '@/lib/action-bridge'`],
+      ['动态导入', `const m = await import('@/lib/growth')`],
+      ['CommonJS require', `const g = require('@/lib/growth')`],
+      ['子路径也算', `import type { T } from '@/lib/growth/types'`],
+    ]
+
+    it.each(FORBIDDEN_FORMS)('kernel 侧：%s → 必须被发现', (_label, code) => {
+      expect(importsAnyOf(code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(true)
+    })
+
+    it('bridge 侧：动态导入 / require / 副作用导入都算数', () => {
+      expect(importsAnyOf(`import '@/lib/capabilities'`, ACTION_BRIDGE_FORBIDDEN_IMPORTS)).toBe(true)
+      expect(
+        importsAnyOf(`await import('@/lib/execution')`, ACTION_BRIDGE_FORBIDDEN_IMPORTS),
+      ).toBe(true)
+      expect(importsAnyOf(`require('@/lib/supabase')`, ACTION_BRIDGE_FORBIDDEN_IMPORTS)).toBe(true)
+      // 带斜杠的前缀规则
+      expect(
+        importsAnyOf(`import { w } from '@/lib/cms/wordpress-client'`, ACTION_BRIDGE_FORBIDDEN_IMPORTS),
+      ).toBe(true)
+    })
+
+    it('🔴 只写在注释里的示例不算违规（判据不许把自己的文档当罪证）', () => {
+      const commented = [
+        `// import { x } from '@/lib/growth'`,
+        `/* const g = require('@/lib/action-bridge') */`,
+        ` * import '@/lib/growth'`,
+        `const real = 1`,
+      ].join('\n')
+      expect(importsAnyOf(stripComments(commented), KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
+    })
+
+    it('Kernel 自己内部的相对 import 不误报', () => {
+      const clean = [
+        `import { validateAgainstSchema } from './registry'`,
+        `import type { ActionRun } from './types'`,
+        `import { KernelError } from '@/lib/kernel/errors'`,
+      ].join('\n')
+      expect(importsAnyOf(clean, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
+    })
+  })
 })
 
 describe('L2 边界：授权上下文不许在别处被造出来', () => {
