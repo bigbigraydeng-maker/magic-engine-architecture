@@ -86,21 +86,21 @@ describe('成功路径：三张表都落对', () => {
     for (const row of db.tables.geo_evidence) expect(row.client_id).toBe(CLIENT_ID)
   })
 
-  it('写入顺序必须是 批次 → 观测 → 证据（外键与证据触发器钉死了这个顺序）', async () => {
+  it('🔴 唯一的写入路径是一次 RPC —— 绝不能退回三条独立 INSERT', async () => {
     const db = new FakeSupabase()
     await runGeoMeasurementBatch(plan(), deps(db))
-    expect(db.insertPayloads.map((p) => p.table)).toEqual(['geo_batches', 'geo_observations', 'geo_evidence'])
+    // 三条独立 INSERT = 三个事务 = 中途失败留下不可删除的半截证据。
+    expect(db.insertPayloads, '不许对 geo_* 表直接 INSERT').toEqual([])
+    expect(db.rpcPayloads.map((r) => r.name)).toEqual(['geo_persist_batch_v1'])
   })
 
-  it('观测与证据各自是一条多行 INSERT，不是逐行插（逐行 = 更多崩溃窗口）', async () => {
+  it('一次 RPC 带上整批：批次 + 全部观测 + 全部证据', async () => {
     const db = new FakeSupabase()
     await runGeoMeasurementBatch(plan(), deps(db))
-    const obs = db.insertPayloads.filter((p) => p.table === 'geo_observations')
-    const ev = db.insertPayloads.filter((p) => p.table === 'geo_evidence')
-    expect(obs).toHaveLength(1)
-    expect(obs[0].rows).toHaveLength(2)
-    expect(ev).toHaveLength(1)
-    expect(ev[0].rows).toHaveLength(2)
+    const params = db.rpcPayloads[0].params as Record<string, unknown>
+    expect(params.p_client_id).toBe(CLIENT_ID)
+    expect((params.p_observations as unknown[]).length).toBe(2)
+    expect((params.p_evidence as unknown[]).length).toBe(2)
   })
 
   it('raw_response 逐字落库（没有它，「日后用新 parser 重新解析」是空话）', async () => {
@@ -116,14 +116,13 @@ describe('成功路径：三张表都落对', () => {
 })
 
 describe('GENERATED 列', () => {
-  it('raw_response_locator 绝不出现在 INSERT payload 里（Postgres 会直接拒）', async () => {
+  it('raw_response_locator 绝不出现在送给 RPC 的证据里（Postgres 会直接拒）', async () => {
     const db = new FakeSupabase()
     await runGeoMeasurementBatch(plan(), deps(db))
-    const evidenceInserts = db.insertPayloads.filter((p) => p.table === 'geo_evidence')
-    for (const payload of evidenceInserts) {
-      for (const row of payload.rows) {
-        expect(Object.keys(row)).not.toContain('raw_response_locator')
-      }
+    const evidence = db.rpcPayloads[0].params.p_evidence as Record<string, unknown>[]
+    expect(evidence.length).toBeGreaterThan(0)
+    for (const row of evidence) {
+      expect(Object.keys(row)).not.toContain('raw_response_locator')
     }
   })
 
@@ -167,83 +166,144 @@ describe('失败观测不产出证据', () => {
   })
 })
 
-describe('崩溃窗口 —— 选路线③ 的全部代价押在这里', () => {
-  it('观测写失败 ⇒ 抛错，且明说批次行成了删不掉的孤儿', async () => {
+describe('🔴 原子性：任一步失败 ⇒ 三表零新增（Codex 复验要求的六条）', () => {
+  async function expectNothingWritten(db: FakeSupabase, run: Promise<unknown>): Promise<GeoStoreError> {
+    const thrown = (await run.catch((e: unknown) => e)) as GeoStoreError
+    expect(db.tables.geo_batches, 'geo_batches 必须零新增').toEqual([])
+    expect(db.tables.geo_observations, 'geo_observations 必须零新增').toEqual([])
+    expect(db.tables.geo_evidence, 'geo_evidence 必须零新增').toEqual([])
+    return thrown
+  }
+
+  it('批次写入失败 ⇒ 三表零新增', async () => {
     const db = new FakeSupabase()
-    db.failures.push({ table: 'geo_observations', op: 'insert', message: 'connection reset' })
-    // 只跑一次 —— 跑第二次会撞上「批次不可变」，把要测的那条错误盖掉。
-    const thrown = await runGeoMeasurementBatch(plan(), deps(db)).catch((e: unknown) => e)
-    expect(thrown).toBeInstanceOf(GeoStoreError)
-    expect(thrown).toMatchObject({ code: 'observations_insert_failed', orphaned: true })
-    expect((thrown as GeoStoreError).message).toMatch(/不可删除/)
-    // 批次行确实留下了，且删不掉 —— 这条路线的已知代价，钉住它。
-    expect(db.tables.geo_batches).toHaveLength(1)
-    expect(db.tables.geo_observations).toHaveLength(0)
+    db.failures.push({ table: 'geo_persist_batch_v1', op: 'rpc', message: 'geo_batches 违反约束' })
+    const thrown = await expectNothingWritten(db, runGeoMeasurementBatch(plan(), deps(db)))
+    expect(thrown).toMatchObject({ code: 'atomic_persist_failed', committed: false })
+    expect(thrown.message).toMatch(/整批已回滚/)
   })
 
-  it('证据写失败 ⇒ 抛错，且明说「成功观测却没有证据」这种行已经进库了', async () => {
+  it('观测写入失败 ⇒ 三表零新增（批次不会被单独留下）', async () => {
     const db = new FakeSupabase()
-    db.failures.push({ table: 'geo_evidence', op: 'insert', message: 'connection reset' })
-    await expect(runGeoMeasurementBatch(plan(), deps(db))).rejects.toMatchObject({
-      code: 'evidence_insert_failed',
-      orphaned: true,
-    })
-    // 半截数据是真的留下了 —— 这正是这条路线的已知代价，测试把它钉住。
+    db.failures.push({ table: 'geo_persist_batch_v1', op: 'rpc', message: 'geo_observations 违反约束' })
+    const thrown = await expectNothingWritten(db, runGeoMeasurementBatch(plan(), deps(db)))
+    expect(thrown).toMatchObject({ code: 'atomic_persist_failed', committed: false })
+  })
+
+  it('证据写入失败 ⇒ 三表零新增（不会留下「成功观测没有证据」那种毒行）', async () => {
+    const db = new FakeSupabase()
+    db.failures.push({ table: 'geo_persist_batch_v1', op: 'rpc', message: 'geo_evidence 违反约束' })
+    await expectNothingWritten(db, runGeoMeasurementBatch(plan(), deps(db)))
+  })
+
+  it('成功路径 ⇒ 三表一次完整写入', async () => {
+    const db = new FakeSupabase()
+    const result = await runGeoMeasurementBatch(plan(), deps(db))
+    expect(result.status).toBe('completed')
     expect(db.tables.geo_batches).toHaveLength(1)
     expect(db.tables.geo_observations).toHaveLength(2)
-    expect(db.tables.geo_evidence).toHaveLength(0)
+    expect(db.tables.geo_evidence).toHaveLength(2)
+    expect(db.rpcPayloads).toHaveLength(1)
   })
 
-  it('库悄悄吞掉观测行（写没报错但行不在）⇒ 对账必须发现，不许当成功返回', async () => {
-    // 场景要挑全失败的批次：有成功观测的话，证据那一步会先撞上「观测不存在」的外键，
-    // 把对账要抓的那件事盖掉 —— 那道闸另有测试。这里要单独测**对账本身**。
+  it('store 侧：三份 payload 的 client_id 恒等于计划里的那一个（租户不可能从映射里跑偏）', async () => {
     const db = new FakeSupabase()
-    db.swallowInsertsFor.add('geo_observations')
-    const allFail = new GeoFakeProvider({
-      engineFamily: 'openai',
-      idempotency: 'unsupported',
-      script: () => ({ kind: 'error', errorCode: 'provider_http_500', message: 'boom', costUsd: 0 }),
+    await runGeoMeasurementBatch(plan(), deps(db))
+    const params = db.rpcPayloads[0].params as Record<string, unknown>
+    const batch = params.p_batch as Record<string, unknown>
+    expect(params.p_client_id).toBe(CLIENT_ID)
+    expect(batch.client_id).toBe(CLIENT_ID)
+    for (const o of params.p_observations as Record<string, unknown>[]) expect(o.client_id).toBe(CLIENT_ID)
+    for (const e of params.p_evidence as Record<string, unknown>[]) expect(e.client_id).toBe(CLIENT_ID)
+  })
+
+  it('RPC 侧：批次 client_id 与声明的租户不符 ⇒ 整批回滚，三表零新增', async () => {
+    // 🔴 这道闸在 RPC 里（`geo_persist_batch_v1` 的租户闸），所以直测 RPC。
+    //    store 自己永远盖同一个 client_id —— 真正的风险是有别的调用方绕过它。
+    const db = new FakeSupabase()
+    const { error } = await db.rpc('geo_persist_batch_v1', {
+      p_client_id: 'declared-client',
+      p_batch: { id: 'b-1', client_id: 'other-client', query_set_id: 'qs-1' },
+      p_observations: [],
+      p_evidence: [],
     })
-    const thrown = await runGeoMeasurementBatch(plan(), deps(db, allFail)).catch((e: unknown) => e)
-    expect(thrown).toMatchObject({ code: 'coverage_row_count_mismatch', orphaned: true })
+    expect(error?.message).toMatch(/client_id .* 与调用声明的 .* 不一致/)
+    expect(db.tables.geo_batches).toEqual([])
+    expect(db.tables.geo_observations).toEqual([])
+    expect(db.tables.geo_evidence).toEqual([])
   })
 
-  it('观测被吞掉时，证据那一步先撞上「观测不存在」—— 库层这道闸也必须响', async () => {
+  it('RPC 侧：观测的 client_id / batch_id 与本批次不符 ⇒ 整批回滚', async () => {
     const db = new FakeSupabase()
-    db.swallowInsertsFor.add('geo_observations')
-    const thrown = await runGeoMeasurementBatch(plan(), deps(db)).catch((e: unknown) => e)
-    expect(thrown).toMatchObject({ code: 'evidence_insert_failed', orphaned: true })
-  })
-
-  it('库悄悄吞掉证据行 ⇒ 对账必须报「成功观测没有证据」', async () => {
-    const db = new FakeSupabase()
-    db.swallowInsertsFor.add('geo_evidence')
-    await expect(runGeoMeasurementBatch(plan(), deps(db))).rejects.toMatchObject({
-      code: 'success_observation_without_evidence',
-      orphaned: true,
+    const r1 = await db.rpc('geo_persist_batch_v1', {
+      p_client_id: 'c1',
+      p_batch: { id: 'b-1', client_id: 'c1' },
+      p_observations: [{ id: 'o-1', client_id: 'c2', batch_id: 'b-1', outcome_ok: false }],
+      p_evidence: [],
     })
+    expect(r1.error?.message).toMatch(/观测的 client_id 与本批次不符/)
+
+    const r2 = await db.rpc('geo_persist_batch_v1', {
+      p_client_id: 'c1',
+      p_batch: { id: 'b-2', client_id: 'c1' },
+      p_observations: [{ id: 'o-2', client_id: 'c1', batch_id: 'other-batch', outcome_ok: false }],
+      p_evidence: [],
+    })
+    expect(r2.error?.message).toMatch(/观测的 batch_id 与本批次不符/)
+
+    expect(db.tables.geo_batches).toEqual([])
+    expect(db.tables.geo_observations).toEqual([])
   })
 
-  it('批次写失败 ⇒ 干净失败，一行都没进去，不标 orphaned', async () => {
+  it('RPC 侧：成功观测缺证据 ⇒ 整批回滚（库层拦不住，RPC 在事务内补的那一刀）', async () => {
     const db = new FakeSupabase()
-    db.failures.push({ table: 'geo_batches', op: 'insert', message: 'nope' })
-    await expect(runGeoMeasurementBatch(plan(), deps(db))).rejects.toMatchObject({
-      code: 'batch_insert_failed',
-      orphaned: false,
+    const { error } = await db.rpc('geo_persist_batch_v1', {
+      p_client_id: 'c1',
+      p_batch: { id: 'b-1', client_id: 'c1' },
+      p_observations: [{ id: 'o-1', client_id: 'c1', batch_id: 'b-1', outcome_ok: true }],
+      p_evidence: [],
     })
-    expect(db.tables.geo_batches).toHaveLength(0)
-    expect(db.tables.geo_observations).toHaveLength(0)
+    expect(error?.message).toMatch(/成功观测没有对应证据行，整批回滚/)
+    expect(db.tables.geo_batches).toEqual([])
+    expect(db.tables.geo_observations).toEqual([])
+  })
+
+  it('重复的不可变观测（同一批次跑两次）⇒ 全部回滚，第一批完好', async () => {
+    const db = new FakeSupabase()
+    const shared = deps(db)
+    await runGeoMeasurementBatch(plan(), shared)
+    const before = {
+      b: db.tables.geo_batches.length,
+      o: db.tables.geo_observations.length,
+      e: db.tables.geo_evidence.length,
+    }
+    // 同一个 id 工厂 ⇒ 第二次生成同样的 batch / observation id。
+    const thrown = await runGeoMeasurementBatch(plan(), {
+      ...shared,
+      newId: createSequentialIdFactory(),
+    }).catch((e: unknown) => e)
+    expect(thrown).toMatchObject({ code: 'atomic_persist_failed', committed: false })
+    // 第二批一行都没进去；第一批一个字节都没被改。
+    expect(db.tables.geo_batches).toHaveLength(before.b)
+    expect(db.tables.geo_observations).toHaveLength(before.o)
+    expect(db.tables.geo_evidence).toHaveLength(before.e)
   })
 })
 
 describe('落库后对账必须拿**读回来的行**比，不是拿内存里的输入自己比自己', () => {
-  it('批次行读不回来 ⇒ batch_row_missing', async () => {
+  it('RPC 说成功、批次行却读不回来 ⇒ batch_row_missing（纵深验证真的会响）', async () => {
     const db = new FakeSupabase()
-    db.swallowInsertsFor.add('geo_batches')
+    const store = new GeoSupabaseStore({ client: db as unknown as SupabaseClient, now: () => 't' })
+    void store
+    // RPC 提交后把批次行抽掉，模拟「库说写了、读回来没有」这种异常。
+    const originalRpc = db.rpc.bind(db)
+    db.rpc = async (name, params) => {
+      const r = await originalRpc(name, params)
+      db.tables.geo_batches.length = 0
+      return r
+    }
     const thrown = await runGeoMeasurementBatch(plan(), deps(db)).catch((e: unknown) => e)
-    // 观测的外键在真库里会先炸；这里的假件不建模那条外键，所以直接落到批次对账。
-    expect(thrown).toMatchObject({ orphaned: true })
-    expect((thrown as GeoStoreError).code).toMatch(/batch_row_missing|coverage_/)
+    expect(thrown).toMatchObject({ code: 'batch_row_missing', committed: true })
   })
 
   it('成功数对不上 ⇒ coverage_success_count_mismatch（拿库里的 outcome_ok 分布对账）', async () => {
@@ -286,10 +346,10 @@ describe('落库后对账必须拿**读回来的行**比，不是拿内存里的
       })
       .then(() => null)
       .catch((e: unknown) => e)
-    expect(thrown).toMatchObject({ code: 'coverage_success_count_mismatch', orphaned: true })
+    expect(thrown).toMatchObject({ code: 'coverage_success_count_mismatch', committed: true })
   })
 
-  it('对账阶段读失败 ⇒ orphaned 必须是 true（此时三条 INSERT 已经全成功）', async () => {
+  it('对账阶段读失败 ⇒ committed 必须是 true（此时 RPC 已经原子提交成功）', async () => {
     const db = new FakeSupabase()
     const shared = deps(db)
     // 先正常落一批，确认能成功
@@ -301,7 +361,7 @@ describe('落库后对账必须拿**读回来的行**比，不是拿内存里的
       ...deps(db),
       newId: (kind) => `c2-${kind}-${++n}`,
     }).catch((e: unknown) => e)
-    expect(thrown).toMatchObject({ code: 'query_failed', orphaned: true })
+    expect(thrown).toMatchObject({ code: 'query_failed', committed: true })
     expect((thrown as GeoStoreError).message).toMatch(/不要重跑/)
   })
 })
@@ -370,17 +430,5 @@ describe('读路径不许把「查炸了」读成「没有」', () => {
     expect(await store.listBatchIds(CLIENT_ID)).toHaveLength(1)
     expect(await store.listBatchIds('other-client')).toHaveLength(1)
     expect(await store.listBatchIds('nobody')).toHaveLength(0)
-  })
-})
-
-describe('不可变性', () => {
-  it('同一个批次 id 落两次 ⇒ 被库层拒（重跑必须是新批次）', async () => {
-    const db = new FakeSupabase()
-    // 两次运行共用同一个 id 工厂 ⇒ 第二次会生成同样的 batch id。
-    const shared = deps(db)
-    await runGeoMeasurementBatch(plan(), shared)
-    await expect(
-      runGeoMeasurementBatch(plan(), { ...shared, newId: createSequentialIdFactory() }),
-    ).rejects.toMatchObject({ code: 'batch_insert_failed' })
   })
 })

@@ -18,6 +18,7 @@ QUERYSET="src/lib/geo-baseline/query-set.ts"
 TRANSPORT="src/lib/geo-baseline/transport-openai.ts"
 RUNSCRIPT="scripts/geo-baseline-run.ts"
 CONFIG="src/lib/geo-baseline/config.ts"
+MIGRATION="supabase/migrations/20260812000001_me2_geo_persist_batch_atomic_v1.sql"
 
 fail_count=0
 
@@ -98,9 +99,20 @@ check "parser: 信封版本不校验" "$PARSER" \
   "if (e.envelope !== ENVELOPE_VERSION) {" \
   "if (false) {"
 
-check "store: 不摘 GENERATED 列" "$STORE" \
-  "    const insertable = rows.map(stripGeneratedColumns)" \
-  "    const insertable = rows.slice()"
+check "store: 送给 RPC 的证据不摘 GENERATED 列" "$STORE" \
+  "      p_evidence: evidenceRows.map(stripGeneratedColumns)," \
+  "      p_evidence: evidenceRows.slice(),"
+
+check "🔴 store: 拆掉原子事务调用（回退成不写）" "$STORE" \
+  "    await this.persistAtomically(batchRow, observationRows, evidenceRows, input.clientId)" \
+  "    void this.persistAtomically"
+
+check "🔴 store: 把 RPC 失败当成功（吞掉回滚信号）" "$STORE" \
+  "    if (error) {
+      // 整批回滚，一行不留 —— 可以安全重跑（用新批次 id）。
+      throw new GeoStoreError(" \
+  "    if (false) {
+      throw new GeoStoreError("
 
 check "store: 拆掉落库后对账" "$STORE" \
   "    await this.reconcileAfterWrite(input, batchRow.id)" \
@@ -152,7 +164,7 @@ check "store: 对账不比成功数" "$STORE" \
   "    if (readBack.successIds.length !== actual.succeeded) {" \
   "    if (false) {"
 
-check "store: 对账读失败时 orphaned 报 false" "$STORE" \
+check "store: 对账读失败时 committed 报 false" "$STORE" \
   "    if (obsErr) fail(\`对账读取 \${TABLE_OBSERVATIONS}\`, obsErr, true)" \
   "    if (obsErr) fail(\`对账读取 \${TABLE_OBSERVATIONS}\`, obsErr)"
 
@@ -180,9 +192,37 @@ check "脚本: 部分覆盖也返回 0" "$RUNSCRIPT" \
   "  return 2" \
   "  return 0"
 
+check "🔴 migration: 函数改成 SECURITY DEFINER（凭空提权）" "$MIGRATION" \
+  "LANGUAGE plpgsql" \
+  "LANGUAGE plpgsql
+SECURITY DEFINER"
+
+check "🔴 migration: 拆掉租户闸" "$MIGRATION" \
+  "  IF v_batch_client IS DISTINCT FROM p_client_id THEN" \
+  "  IF false THEN"
+
+check "🔴 migration: 证据 INSERT 带上 GENERATED 列" "$MIGRATION" \
+  "    id, client_id, observation_id, raw_response, raw_response_unknown_reason, citations, created_at
+  )
+  SELECT r.id, r.client_id, r.observation_id, r.raw_response, r.raw_response_unknown_reason,
+         r.citations, r.created_at" \
+  "    id, client_id, observation_id, raw_response, raw_response_unknown_reason, raw_response_locator, citations, created_at
+  )
+  SELECT r.id, r.client_id, r.observation_id, r.raw_response, r.raw_response_unknown_reason,
+         r.raw_response_locator, r.citations, r.created_at"
+
+check "🔴 migration: EXECUTE 顺手授给 authenticated" "$MIGRATION" \
+  "  TO service_role;" \
+  "  TO service_role, authenticated;"
+
+check "🔴 migration: 加 EXCEPTION 块（子事务会让部分成功变成可提交）" "$MIGRATION" \
+  "  RETURN jsonb_build_object(" \
+  "  EXCEPTION WHEN others THEN RETURN NULL;
+  RETURN jsonb_build_object("
+
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 27 道闸各自单独确认会响"
+  echo "✅ 全部 32 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"

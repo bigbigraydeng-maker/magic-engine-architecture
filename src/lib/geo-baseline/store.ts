@@ -4,41 +4,27 @@
  * 实现 WP04 的 `GeoRuntimeStore`（`src/lib/geo-measurement-runtime/types.ts:163-168`）。
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * 🔴 关于「原子」这两个字，必须先把话说清楚 —— 这是本文件最重要的一段注释
+ * 🔴 原子性：靠一个数据库事务，不靠事后对账
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * WP04 的 store 契约写着「要么整批写入、要么一行都不写」。**走 PostgREST 做不到。**
- * 这不是我的判断，是 WP03 migration 自己写死的：
+ * WP04 的 store 契约要求「要么整批写入、要么一行都不写」。走 PostgREST 逐表 INSERT
+ * 做不到 —— 三张表就是三个事务，WP03 的 migration 自己写死了这件事
+ * （`20260811000001_...sql:529-534`、`:897-898`）。
  *
- *   `20260811000001_me2_geo_measurement_storage_v1.sql:529-534`
- *   「数据库拦不住『成功的观测却没有证据行』：两次 INSERT 经 PostgREST 是两个事务，
- *     跨表的延迟约束在这条路径上根本没有生效的时机。」
- *   同文件 `:897-898`「仍然挡不住…**成功的观测却没有证据行**。」
+ * 曾经的做法是「三条定序 INSERT + 事后对账 + 不一致就大声失败」。**那个做法是错的**：
+ * 对账只能**发现**污染，不能**阻止**污染。而这三张表的 UPDATE / DELETE 被
+ * `geo_immutable_row`（`:789-819`）全禁 —— 半截数据一旦写出去就**既补不上也删不掉**。
+ * 「已声明的取舍」不能让契约违反变成不违反，何况代价不可逆。
  *
- * 而写入顺序是被结构钉死的：`geo_observations.batch_id` 外键指向 `geo_batches`，
- * `geo_evidence` 的触发器（`:846-878`）要求观测已存在且 `outcome_ok = true`。
- * ⇒ 必须是三条独立语句，**必然有两个崩溃窗口**。
+ * 现在：**唯一的写入路径是 `geo_persist_batch_v1` 这一个 RPC**
+ * （`supabase/migrations/20260812000001_me2_geo_persist_batch_atomic_v1.sql`）。
+ * 一个 plpgsql 函数体跑在单个事务里，任何一步抛错整批回滚，一行不留。
  *
- * 更要命的是：这三张表的 UPDATE / DELETE 被 `geo_immutable_row`（`:789-819`）全禁，
- * 还有 TRUNCATE 守卫。**半截数据既补不上，也删不掉。补偿性回滚在结构上不可能。**
+ * 落库后的只读对账**保留**，但它的角色变了：不再是原子性的替代品，而是
+ * 纵深验证（确认库里读回来的行真的与声称的覆盖账一致）。
+ * 它失败不代表有孤儿 —— RPC 成功即意味着三张表都已提交。
  *
- * 三条候选路线里选了第三条（本 PR 的技术裁定，理由随 PR 提交给复审）：
- *   ① 新建 Postgres 函数做真事务 —— 需要新 migration + 单独 apply 授权；
- *      而 `migration-shape.test.ts:167-173` 钉死 WP03 那个 migration 不许有
- *      `SECURITY DEFINER`，所以只能另开文件。**首次基线不值得为它引一次不可逆的
- *      生产变更**，且那属于另一个 WP。
- *   ② 直连 `pg` 开事务 —— `pg@^8.20.0` 在 package.json 里但**全仓零 importer**，
- *      也没有任何连接串 env。为一次性脚本引入一条全新的数据库接入方式，
- *      风险大于它解决的问题。
- *   ③ **三条定序 INSERT + 落库后立刻对账 + 不一致就大声失败**（本文件）。
- *
- * 选 ③ 的前提是**把它说出来**：本 store **不提供**原子性，它提供的是
- * **「不原子的时候你一定会知道」**。首次基线是一次有人盯着终端的手工运行，
- * 批次上限 200 条观测、几十秒内跑完 —— 崩溃窗口真实但极窄，且一旦落进去，
- * 抛出来的错会逐字说明哪一批、哪些行成了永久孤儿、以及它删不掉。
- * **绝不静默、绝不假装写成功。**
- *
- * ═══════════════════════════════════════════════════════════════════════════
+ * ⚠️ 那个 migration **尚未 apply**。apply 是单独授权的运维动作（A5）。
  *
  * 🔴 **不 import `@/lib/supabase`。** 客户端注入（照 `src/lib/kernel/store.ts:1-18`）。
  * 🔴 **查询失败一律抛错，绝不 `return []`。**「查不到」和「查炸了」返回同一个值，
@@ -61,6 +47,9 @@ export const TABLE_EVIDENCE = 'geo_evidence'
 export const TABLE_QUERY_SETS = 'geo_query_sets'
 export const TABLE_QUERIES = 'geo_queries'
 
+/** 唯一的写入路径。见 `supabase/migrations/20260812000001_me2_geo_persist_batch_atomic_v1.sql`。 */
+export const RPC_PERSIST_BATCH = 'geo_persist_batch_v1'
+
 /** 对账读证据时每批塞进 `.in()` 的 id 数上限（uuid × 50 ≈ 1.9 KB，离网关 header 上限很远）。 */
 export const EVIDENCE_READBACK_CHUNK = 50
 
@@ -72,30 +61,36 @@ export const EVIDENCE_READBACK_CHUNK = 50
  */
 export const MAX_ERROR_MESSAGE_CHARS = 2000
 
-/** 落库过程中出的事。`orphaned` 为真时**已经有行永久留在库里且删不掉**。 */
+/**
+ * 落库过程中出的事。
+ *
+ * `committed` 为真 = RPC 已经原子提交成功、库里有完整的一批；此时重跑会产生重复批次。
+ * `committed` 为假 = 整批回滚，一行不留，可以安全重跑。
+ */
 export class GeoStoreError extends Error {
   readonly code: string
-  readonly orphaned: boolean
-  constructor(code: string, message: string, orphaned = false) {
+  readonly committed: boolean
+  constructor(code: string, message: string, committed = false) {
     super(message)
     this.name = 'GeoStoreError'
     this.code = code
-    this.orphaned = orphaned
+    this.committed = committed
   }
 }
 
 /**
- * @param orphaned 这次失败发生时，库里**是否已经有行落定且删不掉**。
- *   🔴 对账阶段的读失败一律 `true`：那时三条 INSERT 全部已经成功。
- *      默认 false 会让调用方只印一句「跑挂了」，一个字都不提库里已经躺着一个完整批次 ——
- *      操作者按提示重跑，同一个查询集版本下就多出一批重复观测，覆盖率与失败率从此双倍。
+ * @param committed 这次失败发生时，RPC **是否已经提交成功**（即库里确实有这一批行）。
+ *   🔴 对账阶段的读失败一律 `true`：那时 RPC 已经返回成功，三张表都已提交。
+ *      不标出来的话，调用方只会印一句「跑挂了」，操作者按提示重跑，
+ *      同一个查询集版本下就多出一批重复观测，覆盖率与失败率从此双倍。
+ *      注意：这不是「孤儿」——批次是完整的，只是对账没读回来。
  */
-function fail(op: string, error: { message?: string } | null, orphaned = false): never {
+function fail(op: string, error: { message?: string } | null, committed = false): never {
   throw new GeoStoreError(
     'query_failed',
     `[geo-baseline/store] ${op} 失败：${error?.message ?? '未知错误'}` +
-      (orphaned ? '\n🔴 此时三条 INSERT 已全部成功，行已永久落库且删不掉 —— 不要重跑，先人工核对这一批。' : ''),
-    orphaned,
+      (committed ? '\n⚠️ 此时批次已经原子提交成功，库里有完整的一批 —— 不要重跑，先人工核对。' : ''),
+    committed,
   )
 }
 
@@ -167,9 +162,8 @@ export class GeoSupabaseStore implements GeoRuntimeStore {
       throw new GeoStoreError(integrity.code, `落库前自检未过：${integrity.reason}`)
     }
 
-    await this.insertBatchRow(batchRow)
-    await this.insertObservationRows(observationRows, batchRow.id)
-    await this.insertEvidenceRows(evidenceRows, batchRow.id)
+    await this.persistAtomically(batchRow, observationRows, evidenceRows, input.clientId)
+    // 纵深验证，**不是**原子性的实现手段 —— 原子性已经由上一行的事务保证。
     await this.reconcileAfterWrite(input, batchRow.id)
   }
 
@@ -187,59 +181,33 @@ export class GeoSupabaseStore implements GeoRuntimeStore {
     return data.map((row) => String((row as { id: unknown }).id))
   }
 
-  /** 第 ① 步：批次终态行。同时触发查询集上锁（migration `:766-783`）。 */
-  private async insertBatchRow(batchRow: ReturnType<typeof toGeoBatchRow>): Promise<void> {
-    const { error } = await this.sb.from(TABLE_BATCHES).insert(batchRow)
-    if (error) {
-      // 🔴 **不能断言「未产生任何行」。** 这里有第三种交错：语句在库里已经提交，
-      //    但响应在回程丢了（502 / 504 / socket reset），supabase-js 照样报 error。
-      //    那种情况下批次行是真的落定了 —— 而它的 BEFORE INSERT 触发器
-      //    （migration :766-783）已经把查询集永久锁死。说死「没写进去」会把人引向
-      //    「直接重跑」，于是库里多出一个谁也不知道的幽灵批次。
-      throw new GeoStoreError(
-        'batch_insert_failed',
-        `写入 ${TABLE_BATCHES} 报错：${error.message}\n` +
-          `⚠️ 批次 ${batchRow.id} 是否已经落库**无法从这个错误判断**（响应可能在提交之后才丢）。` +
-          `重跑之前请先按 id 查一次 ${TABLE_BATCHES}：在，就已经锁了查询集、且删不掉，按新批次重跑并登记这一条；不在，才是干净失败。`,
-      )
-    }
-  }
-
-  /** 第 ② 步：整批观测，**单条 SQL 多行插入** —— 这条语句内部 Postgres 保证原子。 */
-  private async insertObservationRows(
-    rows: readonly ReturnType<typeof toGeoObservationRow>[],
-    batchId: string,
+  /**
+   * 唯一的写入路径：一个 RPC，一个事务。
+   *
+   * 🔴 **不做三条独立 INSERT。** 那样是三个事务，中途失败会留下不可删除的半截证据
+   *    （WP03 的表禁 UPDATE/DELETE）。函数内任一步抛错 ⇒ 整批回滚，一行不留 ⇒
+   *    调用方可以安全重跑。
+   * 🔴 证据行的 `raw_response_locator` 是 GENERATED 列，这里在**送出之前**就摘掉；
+   *    RPC 内部的 INSERT 列清单也不含它（两道都在，任一处漏了 Postgres 都会直接拒）。
+   */
+  private async persistAtomically(
+    batchRow: ReturnType<typeof toGeoBatchRow>,
+    observationRows: readonly GeoObservationRow[],
+    evidenceRows: readonly GeoEvidenceRow[],
+    clientId: string,
   ): Promise<void> {
-    if (rows.length === 0) return
-    const { error } = await this.sb.from(TABLE_OBSERVATIONS).insert(rows as unknown as object[])
+    const { error } = await this.sb.rpc(RPC_PERSIST_BATCH, {
+      p_client_id: clientId,
+      p_batch: batchRow,
+      p_observations: observationRows,
+      p_evidence: evidenceRows.map(stripGeneratedColumns),
+    })
     if (error) {
+      // 整批回滚，一行不留 —— 可以安全重跑（用新批次 id）。
       throw new GeoStoreError(
-        'observations_insert_failed',
-        `写入 ${TABLE_OBSERVATIONS} 失败：${error.message}\n` +
-          `🔴 批次 ${batchId} 的行已经写进 ${TABLE_BATCHES} 且**不可删除**（geo_immutable_row 触发器）。` +
-          `库里现在有一个声称跑过、却没有任何观测的批次。这行永久留存，必须人工登记后忽略；` +
-          `重跑请用新批次，不要试图删它 —— 删不掉。`,
-        true,
-      )
-    }
-  }
-
-  /** 第 ③ 步：整批证据，同样单条多行插入。GENERATED 列必须摘掉。 */
-  private async insertEvidenceRows(
-    rows: readonly GeoEvidenceRow[],
-    batchId: string,
-  ): Promise<void> {
-    if (rows.length === 0) return
-    const insertable = rows.map(stripGeneratedColumns)
-    const { error } = await this.sb.from(TABLE_EVIDENCE).insert(insertable as unknown as object[])
-    if (error) {
-      throw new GeoStoreError(
-        'evidence_insert_failed',
-        `写入 ${TABLE_EVIDENCE} 失败：${error.message}\n` +
-          `🔴 批次 ${batchId} 的批次行与观测行已经写进库且**不可删除**。` +
-          `库里现在有成功观测却没有对应证据 —— 正是 migration :529-534 点名的那种行。` +
-          `读的时候 WP02 校验器会当场炸（ok:true 必须带 evidenceId）。必须人工登记，重跑请用新批次。`,
-        true,
+        'atomic_persist_failed',
+        `${RPC_PERSIST_BATCH} 失败，整批已回滚（库里一行都没留）：${error.message}`,
+        false,
       )
     }
   }
@@ -261,7 +229,8 @@ export class GeoSupabaseStore implements GeoRuntimeStore {
     if (readBack.batchRowCount !== 1) {
       throw new GeoStoreError(
         'batch_row_missing',
-        `🔴 批次 ${batchId} 写完后按 id 读回来得到 ${readBack.batchRowCount} 行（应为 1）。`,
+        `🔴 批次 ${batchId} 原子提交成功后按 id 读回来得到 ${readBack.batchRowCount} 行（应为 1）。` +
+          `RPC 说成功、库里却读不到 —— 这是一个需要人工核对的异常，不要直接重跑。`,
         true,
       )
     }

@@ -111,6 +111,28 @@ describe('GEO Baseline 接线层的边界', () => {
     expect(offenders, offenders.join('\n')).toEqual([])
   })
 
+  it('🔴 绝不对 geo_* 表直接 INSERT —— 唯一写入路径是原子 RPC', () => {
+    // 三条独立 INSERT = 三个事务；中途失败会留下不可删除的半截证据
+    // （这三张表禁 UPDATE/DELETE）。契约要求全有或全无，只有事务做得到。
+    const offenders: string[] = []
+    for (const file of PRODUCTION_FILES) {
+      const src = sourceOf(file)
+      for (const m of Array.from(src.matchAll(/\.from\(\s*TABLE_(BATCHES|OBSERVATIONS|EVIDENCE)\s*\)([\s\S]{0,120})/g))) {
+        if (/\.insert\(/.test(m[2])) offenders.push(`${file} → .from(TABLE_${m[1]}).insert(`)
+      }
+      if (/\.from\(\s*['"]geo_(batches|observations|evidence)['"]\s*\)[\s\S]{0,120}\.insert\(/.test(src)) {
+        offenders.push(`${file} → 直接 .from('geo_*').insert(`)
+      }
+    }
+    expect(offenders, offenders.join('\n')).toEqual([])
+  })
+
+  it('store 确实调了那个原子 RPC', () => {
+    const store = sourceOf('src/lib/geo-baseline/store.ts')
+    expect(store).toContain("RPC_PERSIST_BATCH = 'geo_persist_batch_v1'")
+    expect(store).toMatch(/\.rpc\(RPC_PERSIST_BATCH/)
+  })
+
   it('没有 any', () => {
     const offenders = PRODUCTION_FILES.filter((f) => /:\s*any\b|<any>|as\s+any\b/.test(sourceOf(f)))
     expect(offenders, offenders.join('\n')).toEqual([])

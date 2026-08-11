@@ -13,8 +13,9 @@
 const MODELLED = new Set(['geo_query_sets', 'geo_queries', 'geo_batches', 'geo_observations', 'geo_evidence'])
 
 export interface FakeFailure {
+  /** 表名，或 RPC 名（op='rpc' 时）。 */
   readonly table: string
-  readonly op: 'insert' | 'select'
+  readonly op: 'insert' | 'select' | 'rpc'
   readonly message: string
   readonly code?: string
 }
@@ -51,7 +52,119 @@ export class FakeSupabase {
     return new FakeQuery(this, table)
   }
 
-  findFailure(table: string, op: 'insert' | 'select'): FakeFailure | undefined {
+  /**
+   * `geo_persist_batch_v1` 的建模 —— **按真事务建模，不是按三次调用建模**。
+   *
+   * 🔴 全部校验先跑完，全过了才一次性提交到三张表；任一条不过就抛，
+   *    **三张表一行都不动**。这正是 plpgsql 函数体的语义：函数内抛错 ⇒ 整个事务回滚。
+   *    假件如果做成「边校验边写」，「回滚」这件事就永远测不到。
+   */
+  rpc(name: string, params: Record<string, unknown>): Promise<Result> {
+    if (name !== 'geo_persist_batch_v1') {
+      throw new Error(`假 Supabase 没有建模 RPC "${name}" —— 不许返回一个半成品对象假装成功`)
+    }
+    const injected = this.failures.find((f) => f.table === name && f.op === 'rpc')
+    if (injected) return Promise.resolve({ data: null, error: { message: injected.message, code: injected.code } })
+
+    const clientId = String(params.p_client_id)
+    const batch = params.p_batch as Row
+    const observations = (params.p_observations ?? []) as Row[]
+    const evidence = (params.p_evidence ?? []) as Row[]
+    this.rpcPayloads.push({ name, params })
+
+    try {
+      this.validateTransaction(clientId, batch, observations, evidence)
+    } catch (e) {
+      // 🔴 抛错 = 回滚。三张表一行都没动过（校验期间从未写入）。
+      return Promise.resolve({ data: null, error: { message: (e as Error).message, code: 'P0001' } })
+    }
+
+    // 全过了才提交。
+    this.tables.geo_batches.push({ ...batch })
+    this.tables.geo_observations.push(...observations.map((r) => ({ ...r })))
+    this.tables.geo_evidence.push(
+      ...evidence.map((r) => ({
+        ...r,
+        // GENERATED 列由库自己算。
+        raw_response_locator:
+          r.raw_response === null || r.raw_response === undefined
+            ? null
+            : `db://public.geo_evidence/${String(r.id)}/raw_response`,
+      })),
+    )
+    return Promise.resolve({
+      data: [{ batch_id: batch.id, observations: observations.length, evidence: evidence.length }],
+      error: null,
+    })
+  }
+
+  /** 事务内的全部判据。任一条不过就抛 —— 对应 RPC 里的 `RAISE EXCEPTION`。 */
+  private validateTransaction(clientId: string, batch: Row, observations: Row[], evidence: Row[]): void {
+    if (batch === undefined || batch === null) throw new Error('p_batch 必须是一个 JSON 对象')
+    if (String(batch.client_id) !== clientId) {
+      throw new Error(`批次 client_id (${String(batch.client_id)}) 与调用声明的 (${clientId}) 不一致`)
+    }
+    const batchId = String(batch.id)
+
+    // 租户 / 批次归属
+    for (const o of observations) {
+      if (String(o.client_id) !== clientId) throw new Error('观测的 client_id 与本批次不符')
+      if (String(o.batch_id) !== batchId) throw new Error('观测的 batch_id 与本批次不符')
+    }
+    for (const e of evidence) {
+      if (String(e.client_id) !== clientId) throw new Error('证据的 client_id 与本批次不符')
+      // GENERATED 列写入方不许给值
+      if ('raw_response_locator' in e) {
+        throw new Error('cannot insert a non-DEFAULT value into column "raw_response_locator"')
+      }
+    }
+
+    // 不可变：同 id 不许再插（含批内自重复）
+    const seen = new Set<string>()
+    for (const [table, rows] of [
+      ['geo_batches', [batch]],
+      ['geo_observations', observations],
+      ['geo_evidence', evidence],
+    ] as const) {
+      for (const row of rows) {
+        const key = `${table}:${String(row.id)}`
+        if (seen.has(key)) throw new Error(`${table} 批内重复 id=${String(row.id)}`)
+        seen.add(key)
+        if (this.tables[table].some((x) => String(x.id) === String(row.id))) {
+          throw new Error(`${table} 已存在 id=${String(row.id)}，不可变行不许重写`)
+        }
+      }
+    }
+
+    // 观测内的维度唯一（idx_geo_observations_no_double_insert）
+    const dims = new Set<string>()
+    for (const o of observations) {
+      const key = [o.query_key, o.engine_family, o.model_version, o.locale, o.market, o.sample_index]
+        .map((v) => (v === null || v === undefined ? 'NULL' : `v:${String(v)}`))
+        .join('|')
+      if (dims.has(key)) throw new Error('同一批次里同一维度组合重复插入')
+      dims.add(key)
+    }
+
+    // 证据只能挂在**本批次内**的成功观测上（外键 + 触发器）
+    const successIds = new Set(observations.filter((o) => o.outcome_ok === true).map((o) => String(o.id)))
+    const allIds = new Set(observations.map((o) => String(o.id)))
+    for (const e of evidence) {
+      const obsId = String(e.observation_id)
+      if (!allIds.has(obsId)) throw new Error(`观测 ${obsId} 不存在，挂不上证据`)
+      if (!successIds.has(obsId)) throw new Error(`观测 ${obsId} 是失败观测，不能挂证据`)
+    }
+
+    // 事务内自检：成功观测必须都有证据
+    const withEvidence = new Set(evidence.map((e) => String(e.observation_id)))
+    const missing = Array.from(successIds).filter((id) => !withEvidence.has(id))
+    if (missing.length > 0) throw new Error(`${missing.length} 条成功观测没有对应证据行，整批回滚`)
+  }
+
+  /** 每一次 RPC 的原始 payload —— 断言「GENERATED 列没被送出去」靠它。 */
+  readonly rpcPayloads: { name: string; params: Record<string, unknown> }[] = []
+
+  findFailure(table: string, op: 'insert' | 'select' | 'rpc'): FakeFailure | undefined {
     return this.failures.find((f) => f.table === table && f.op === op)
   }
 

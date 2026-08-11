@@ -229,10 +229,11 @@ main()
   .then((code) => process.exit(code))
   .catch((err: unknown) => {
     console.error('\n❌ 跑挂了：', err instanceof Error ? err.message : String(err))
-    if ((err as { orphaned?: boolean })?.orphaned === true) {
-      console.error('\n🔴🔴 库里留下了删不掉的半截数据。上面的错误信息里写着是哪一批、哪些行。')
-      console.error('     这三张表的 UPDATE/DELETE 被触发器全禁 —— 不要试图清理，清不掉。')
-      console.error('     请人工登记这个批次并忽略它；重跑一律用新批次。')
+    if ((err as { committed?: boolean })?.committed === true) {
+      console.error('\n⚠️ 批次**已经原子提交成功**，库里有完整的一批 —— 挂掉的是提交之后的只读对账。')
+      console.error('   不要直接重跑（会多出一批重复观测）。先按上面的批次 id 人工核对库里的行。')
+    } else {
+      console.error('\n✅ 整批已回滚，库里一行都没留 —— 可以安全重跑（会自动用新的批次 id）。')
     }
     process.exit(1)
   })
