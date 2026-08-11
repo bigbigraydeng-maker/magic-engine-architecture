@@ -72,23 +72,45 @@ function moduleSpecifiersIn(code: string): string[] {
 }
 
 /**
- * 把说明符规范成**跟禁止清单同一套写法**（`@/...`）。
+ * 把说明符规范成**跟禁止清单同一套写法**（无点段的 `@/...`）。
  *
- * 🔴 只比原始说明符是不够的 —— 禁止清单写的是 `@/lib/capabilities`，
- *    而下面这些普通写法指向同一个模块，却一条都不会命中：
- *      import '../capabilities'
- *      require('../supabase')
- *      import '../kernel/gateway'      // 还能绕开 Kernel 的允许清单
- *    所以相对说明符必须按**当前被扫描的那个源文件**的位置先解析出来。
+ * 🔴 只处理 `./` `../` 是不够的。仓库的 tsconfig 是
+ *    `baseUrl: "."` + `paths: { "@/*": ["./src/*"] }`，所以下面这些
+ *    **合法的 TypeScript 导入**都会解析到仓库内真实模块，却一条都不命中：
+ *      import 'src/lib/capabilities'                  // baseUrl 项目路径
+ *      require('src/lib/supabase')
+ *      import '@/lib/kernel/../growth/types'          // alias 里带点段
+ *      await import('@/lib/action-bridge/../execution')
+ *    所以四类说明符都要折算到同一口径，点段一律消除。
  *
- * 规则：`@/...` 与 npm 包名原样保留；`./` `../` 按源文件目录解析；
- * 落到 `src/...` 的再折回等价的 `@/...`；分隔符统一成 `/`。
+ * 🔴 `@/` 是本仓 alias，`@supabase/supabase-js` 这类 scoped npm 包**不是** ——
+ *    判据必须是 `@/` 而不是 `@`，否则会把 npm 包名改写掉。
  */
+function toAliasPath(repoRelative: string): string {
+  return repoRelative.startsWith('src/') ? `@/${repoRelative.slice('src/'.length)}` : repoRelative
+}
+
 function canonicalSpecifier(sourcePath: string, spec: string): string {
-  if (!spec.startsWith('.')) return spec
-  const dir = posix.dirname(sourcePath.split('\\').join('/'))
-  const resolved = posix.normalize(posix.join(dir, spec))
-  return resolved.startsWith('src/') ? `@/${resolved.slice('src/'.length)}` : resolved
+  const slashed = spec.split('\\').join('/')
+
+  // ① 相对说明符：按**当前被扫描的那个源文件**的目录解析
+  if (slashed.startsWith('.')) {
+    const dir = posix.dirname(sourcePath.split('\\').join('/'))
+    return toAliasPath(posix.normalize(posix.join(dir, slashed)))
+  }
+
+  // ② 本仓 alias（只有 `@/`），点段在这里被消除
+  if (slashed.startsWith('@/')) {
+    return toAliasPath(posix.normalize(`src/${slashed.slice('@/'.length)}`))
+  }
+
+  // ③ baseUrl 项目路径（`src/...`）
+  if (slashed === 'src' || slashed.startsWith('src/')) {
+    return toAliasPath(posix.normalize(slashed))
+  }
+
+  // ④ npm 包名（含 scoped）原样保留
+  return spec
 }
 
 /** 一个源文件里所有 import 指向的模块，已规范成 `@/...` 口径。 */
@@ -296,5 +318,73 @@ describe('🔴 相对路径导入按源文件位置解析（合成源码）', ()
     ].join('\n')
     expect(forbiddenImportsIn(BRIDGE_FILE, code)).toEqual([])
     expect(kernelImportsIn(BRIDGE_FILE, code)).toEqual([])
+  })
+})
+
+/**
+ * 🔴 仓库的 tsconfig 是 `baseUrl: "."` + `paths: { "@/*": ["./src/*"] }`，
+ *    所以「不以 `.` 开头」并不等于「不是本仓模块」：
+ *      · `src/lib/x` 靠 baseUrl 解析得到；
+ *      · `@/lib/a/../b` 里的点段会被 TypeScript 自己消掉。
+ *    这两类都是**合法写法**，只要扫描不折算就能静默绕过冻结边界。
+ */
+describe('🔴 baseUrl 项目路径与 alias 点段也要折算（合成源码）', () => {
+  const BRIDGE_FILE = 'src/lib/action-bridge/index.ts'
+
+  it('🔴 `src/lib/capabilities` / `src/lib/supabase` 会被抓到', () => {
+    expect(forbiddenImportsIn(BRIDGE_FILE, `import 'src/lib/capabilities'`)).toContain(
+      '@/lib/capabilities',
+    )
+    expect(forbiddenImportsIn(BRIDGE_FILE, `require('src/lib/supabase')`)).toContain(
+      '@/lib/supabase',
+    )
+    expect(
+      forbiddenImportsIn(BRIDGE_FILE, `await import('src/lib/execution/auto-run')`),
+    ).toContain('@/lib/execution')
+  })
+
+  it('🔴 alias 里的点段会被消除后再判', () => {
+    expect(
+      forbiddenImportsIn(BRIDGE_FILE, `import '@/lib/action-bridge/../execution'`),
+    ).toContain('@/lib/execution')
+    expect(
+      forbiddenImportsIn(BRIDGE_FILE, `import type { X } from '@/lib/kernel/../growth/types'`),
+    ).toContain('@/lib/growth')
+  })
+
+  it('🔴 绕开 Kernel 允许清单的两种写法都被认出来', () => {
+    // 点段绕过
+    expect(
+      kernelImportsIn(BRIDGE_FILE, `import '@/lib/action-bridge/../kernel/gateway'`),
+    ).toEqual(['@/lib/kernel/gateway'])
+    // baseUrl 绕过
+    expect(kernelImportsIn(BRIDGE_FILE, `require('src/lib/kernel/store')`)).toEqual([
+      '@/lib/kernel/store',
+    ])
+  })
+
+  it('✅ 折算之后仍然允许的两条 Kernel 导入', () => {
+    expect(
+      kernelImportsIn(BRIDGE_FILE, `import type { T } from '@/lib/action-bridge/../kernel/types'`),
+    ).toEqual(['@/lib/kernel/types'])
+    expect(kernelImportsIn(BRIDGE_FILE, `import { R } from 'src/lib/kernel/registry'`)).toEqual([
+      '@/lib/kernel/registry',
+    ])
+  })
+
+  it('🔴 scoped npm 包不许被当成本仓 alias 改写', () => {
+    // `@supabase/supabase-js` 本来就在禁止清单里 —— 它必须**按原样**命中，
+    // 而不是被 `@/` 那条分支改写成别的东西
+    expect(
+      forbiddenImportsIn(BRIDGE_FILE, `import { createClient } from '@supabase/supabase-js'`),
+    ).toEqual(['@supabase/supabase-js'])
+    // 不在清单里的普通 / scoped 包一律不误报
+    const clean = [
+      `import { describe } from 'vitest'`,
+      `import { z } from '@scope/pkg'`,
+      `import { readFileSync } from 'fs'`,
+    ].join('\n')
+    expect(forbiddenImportsIn(BRIDGE_FILE, clean)).toEqual([])
+    expect(kernelImportsIn(BRIDGE_FILE, clean)).toEqual([])
   })
 })

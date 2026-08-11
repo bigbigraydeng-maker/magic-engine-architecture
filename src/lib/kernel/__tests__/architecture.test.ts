@@ -211,20 +211,45 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
   }
 
   /**
-   * 把说明符规范成**跟禁止清单同一套写法**（`@/...`）。
+   * 把说明符规范成**跟禁止清单同一套写法**（无点段的 `@/...`）。
    *
-   * 🔴 只比原始说明符是不够的 —— 禁止清单写的是 `@/lib/growth`，
-   *    而 `import '../growth'` 指向同一个模块却一条都不命中。
-   *    相对说明符必须按**当前被扫描的那个源文件**的位置先解析出来。
+   * 🔴 只处理 `./` `../` 是不够的。仓库的 tsconfig 是
+   *    `baseUrl: "."` + `paths: { "@/*": ["./src/*"] }`，所以下面这些
+   *    **合法的 TypeScript 导入**都会解析到仓库内真实模块，却一条都不命中：
+   *      import 'src/lib/capabilities'                  // baseUrl 项目路径
+   *      require('src/lib/supabase')
+   *      import '@/lib/kernel/../growth/types'          // alias 里带点段
+   *      await import('@/lib/action-bridge/../execution')
+   *    所以四类说明符都要折算到同一口径，点段一律消除。
    *
-   * 规则：`@/...` 与 npm 包名原样保留；`./` `../` 按源文件目录解析；
-   * 落到 `src/...` 的再折回等价的 `@/...`；分隔符统一成 `/`。
+   * 🔴 `@/` 是本仓 alias，`@supabase/supabase-js` 这类 scoped npm 包**不是** ——
+   *    判据必须是 `@/` 而不是 `@`，否则会把 npm 包名改写掉。
    */
+  function toAliasPath(repoRelative: string): string {
+    return repoRelative.startsWith('src/') ? `@/${repoRelative.slice('src/'.length)}` : repoRelative
+  }
+
   function canonicalSpecifier(sourcePath: string, spec: string): string {
-    if (!spec.startsWith('.')) return spec
-    const dir = posix.dirname(sourcePath.split('\\').join('/'))
-    const resolved = posix.normalize(posix.join(dir, spec))
-    return resolved.startsWith('src/') ? `@/${resolved.slice('src/'.length)}` : resolved
+    const slashed = spec.split('\\').join('/')
+
+    // ① 相对说明符：按**当前被扫描的那个源文件**的目录解析
+    if (slashed.startsWith('.')) {
+      const dir = posix.dirname(sourcePath.split('\\').join('/'))
+      return toAliasPath(posix.normalize(posix.join(dir, slashed)))
+    }
+
+    // ② 本仓 alias（只有 `@/`），点段在这里被消除
+    if (slashed.startsWith('@/')) {
+      return toAliasPath(posix.normalize(`src/${slashed.slice('@/'.length)}`))
+    }
+
+    // ③ baseUrl 项目路径（`src/...`）
+    if (slashed === 'src' || slashed.startsWith('src/')) {
+      return toAliasPath(posix.normalize(slashed))
+    }
+
+    // ④ npm 包名（含 scoped）原样保留
+    return spec
   }
 
   const importedModules = (sourcePath: string, code: string): string[] =>
@@ -405,6 +430,82 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
         `import { validate } from './validators'`,
       ].join('\n')
       expect(importsAnyOf(GROWTH_FILE, clean, ['@/lib/kernel', '@/lib/action-bridge'])).toBe(false)
+    })
+  })
+
+  /**
+   * 🔴 仓库 tsconfig 是 `baseUrl: "."` + `paths: { "@/*": ["./src/*"] }`，
+   *    所以「不以 `.` 开头」并不等于「不是本仓模块」：`src/lib/x` 靠 baseUrl
+   *    解析得到，`@/lib/a/../b` 里的点段会被 TypeScript 自己消掉。
+   *    两类都是合法写法，扫描不折算就能静默绕过冻结边界。
+   */
+  describe('🔴 baseUrl 项目路径与 alias 点段也要折算（合成源码）', () => {
+    const KERNEL_FILE = 'src/lib/kernel/example.ts'
+    const BRIDGE_FILE = 'src/lib/action-bridge/index.ts'
+    const GROWTH_FILE = 'src/lib/growth/types.ts'
+
+    it('折算表：四类说明符各归各位', () => {
+      // alias 点段
+      expect(canonicalSpecifier(KERNEL_FILE, '@/lib/kernel/../growth/types')).toBe(
+        '@/lib/growth/types',
+      )
+      expect(canonicalSpecifier(BRIDGE_FILE, '@/lib/action-bridge/../execution')).toBe(
+        '@/lib/execution',
+      )
+      // baseUrl 项目路径
+      expect(canonicalSpecifier(BRIDGE_FILE, 'src/lib/capabilities')).toBe('@/lib/capabilities')
+      expect(canonicalSpecifier(KERNEL_FILE, 'src/lib/growth')).toBe('@/lib/growth')
+      // 原有两类不回归
+      expect(canonicalSpecifier(KERNEL_FILE, '../growth')).toBe('@/lib/growth')
+      expect(canonicalSpecifier(KERNEL_FILE, '@/lib/x')).toBe('@/lib/x')
+      // 🔴 scoped npm 包不是本仓 alias，一个字都不许改
+      expect(canonicalSpecifier(KERNEL_FILE, '@supabase/supabase-js')).toBe('@supabase/supabase-js')
+      expect(canonicalSpecifier(KERNEL_FILE, 'vitest')).toBe('vitest')
+    })
+
+    it('🔴 Kernel：baseUrl 与点段两种写法都被拒', () => {
+      for (const code of [
+        `import 'src/lib/growth'`,
+        `require('src/lib/action-bridge')`,
+        `import type { X } from '@/lib/kernel/../growth/types'`,
+        `await import('@/lib/kernel/../action-bridge')`,
+      ]) {
+        expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS), code).toBe(true)
+      }
+    })
+
+    it('🔴 Bridge：baseUrl 与点段两种写法都被拒', () => {
+      for (const code of [
+        `import 'src/lib/capabilities'`,
+        `require('src/lib/supabase')`,
+        `await import('src/lib/execution/auto-run')`,
+        `import '@/lib/action-bridge/../execution'`,
+      ]) {
+        expect(importsAnyOf(BRIDGE_FILE, code, ACTION_BRIDGE_FORBIDDEN_IMPORTS), code).toBe(true)
+      }
+    })
+
+    it('🔴 Growth：baseUrl 与点段两种写法都被拒', () => {
+      for (const code of [
+        `import 'src/lib/action-bridge'`,
+        `require('src/lib/kernel/gateway')`,
+        `import '@/lib/growth/../kernel'`,
+      ]) {
+        expect(
+          importsAnyOf(GROWTH_FILE, code, ['@/lib/kernel', '@/lib/action-bridge']),
+          code,
+        ).toBe(true)
+      }
+    })
+
+    it('折算之后合法导入仍不误报', () => {
+      const clean = [
+        `import { ACTION_REGISTRY } from 'src/lib/kernel/registry'`,
+        `import type { ActionKey } from '@/lib/action-bridge/../kernel/types'`,
+        `import { createClient } from '@supabase/supabase-js'`,
+      ].join('\n')
+      // Kernel 侧：registry / types 都不在 Kernel 的禁止清单里
+      expect(importsAnyOf(KERNEL_FILE, clean, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
     })
   })
 })
