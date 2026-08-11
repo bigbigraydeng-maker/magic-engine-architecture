@@ -7,7 +7,7 @@
  *
  * The signed state carries a `flow` field that decides where the user lands
  * afterwards:
- *   - 'admin'   → /dashboard/clients/[id]/connectors/gsc  (internal operator)
+ *   - 'admin'   → /dashboard/clients/[id]/settings?tab=connect  (internal operator)
  *   - 'connect' → /connect/[id]  (public customer-facing page, no login)
  */
 
@@ -41,7 +41,11 @@ function destination(flow: OAuthFlow, clientId: string, oauth: OAuthResult): str
   if (flow === 'wizard') {
     return `${appUrl()}/dashboard/clients/${clientId}/onboarding?oauth=${oauth}`
   }
-  return `${appUrl()}/dashboard/clients/${clientId}/connectors/gsc?oauth=${oauth}`
+  // PR5 2026-08-11 复审：/connectors 页已退役，这里原来落到的死路径靠
+  // next.config.js 的重定向兜住不 404，但那只是兜底，不是终点——直接改到
+  // 真正的落点，省一次多余的跳转（spec §2.4 明确点名这种"靠重定向兜着不
+  // 改真实目标"是反模式）。
+  return `${appUrl()}/dashboard/clients/${clientId}/settings?tab=connect&oauth=${oauth}`
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {

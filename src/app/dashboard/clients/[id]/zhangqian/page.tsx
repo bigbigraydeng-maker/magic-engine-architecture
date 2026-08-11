@@ -305,7 +305,7 @@ function DiscoveryReviewCards({
               </p>
               <div className="mt-3">
                 <Link
-                  href={`/dashboard/clients/${clientId}/connectors`}
+                  href={`/dashboard/clients/${clientId}/settings?tab=connect`}
                   className="inline-flex items-center gap-1.5 rounded-md border border-green-300 bg-white px-3 py-1.5 text-xs font-medium text-green-700 hover:bg-green-50 transition-colors"
                 >
                   接入更多数据源 →
@@ -327,7 +327,7 @@ function DiscoveryReviewCards({
               </p>
               <div className="mt-3">
                 <Link
-                  href={`/dashboard/clients/${clientId}/connectors`}
+                  href={`/dashboard/clients/${clientId}/settings?tab=connect`}
                   className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-700 transition-colors"
                 >
                   接通数据源 →

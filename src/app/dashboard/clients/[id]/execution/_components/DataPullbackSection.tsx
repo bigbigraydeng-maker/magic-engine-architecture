@@ -69,7 +69,7 @@ export function DataPullbackSection({ clientId }: { clientId: string }) {
           数据回流
         </p>
         <a
-          href={`/dashboard/clients/${clientId}/connectors`}
+          href={`/dashboard/clients/${clientId}/settings?tab=connect`}
           className="text-[11px] text-indigo-500 hover:underline"
         >
           管理数据源 →
@@ -126,7 +126,7 @@ function GscCard({ snapshot, clientId }: { snapshot: GscSnapshot; clientId: stri
       <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-100">
         <span className="text-[10px] text-slate-400">{period}</span>
         <a
-          href={`/dashboard/clients/${clientId}/connectors/gsc`}
+          href={`/dashboard/clients/${clientId}/settings?tab=connect`}
           className="text-[10px] text-indigo-500 hover:text-indigo-700"
         >
           同步新数据 →
@@ -181,7 +181,7 @@ function Ga4Card({ snapshot, clientId }: { snapshot: Ga4Snapshot; clientId: stri
       <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-slate-100">
         <span className="text-[10px] text-slate-400">{period}</span>
         <a
-          href={`/dashboard/clients/${clientId}/connectors/ga4`}
+          href={`/dashboard/clients/${clientId}/settings?tab=connect`}
           className="text-[10px] text-indigo-500 hover:text-indigo-700"
         >
           同步新数据 →

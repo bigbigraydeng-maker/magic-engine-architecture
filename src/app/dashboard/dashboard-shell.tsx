@@ -165,7 +165,7 @@ function buildSelfServeSections(clientId: string): NavSection[] {
         { key: 'strategy',    label: 'Strategy',    mark: 'ST', href: `/dashboard/clients/${clientId}/strategy`,    paidOnlyFeature: 'Strategy' },
         { key: 'diagnostic',  label: 'Diagnostic',  mark: 'DG', href: `/dashboard/clients/${clientId}/diagnostic`,  paidOnlyFeature: 'Diagnostic' },
         { key: 'execution',   label: 'Execution',   mark: 'EX', href: `/dashboard/clients/${clientId}/execution`,   paidOnlyFeature: 'Execution' },
-        { key: 'connectors',  label: 'Connectors',  mark: 'CN', href: `/dashboard/clients/${clientId}/connectors`,  paidOnlyFeature: 'Connectors' },
+        { key: 'connectors',  label: 'Connectors',  mark: 'CN', href: `/dashboard/clients/${clientId}/settings?tab=connect`,  paidOnlyFeature: 'Connectors' },
       ],
     },
   ]
@@ -216,7 +216,7 @@ function buildScopedAdminSections(clientId: string, industry: string | null): Na
         // 放在「客户跟进」前面 —— 他每天开的是这一页，不是内部那张排班表。
         { key: 'contacts',    label: '我的客人', mark: 'MY', href: at('/contacts') },
         { key: 'crm',         label: '客户跟进', mark: 'CR', href: at('/crm') },
-        { key: 'connectors',  label: '数据连接', mark: 'CN', href: at('/connectors') },
+        { key: 'connectors',  label: '数据连接', mark: 'CN', href: at('/settings?tab=connect') },
       ],
     },
   ]
