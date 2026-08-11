@@ -3,7 +3,9 @@
 > Issue [#882](https://github.com/bigbigraydeng-maker/magic-engine/issues/882)（K-WP02）· 父史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)
 > 上游：[WP00 契约冻结 v1.0](./2026-08-10-me2-wp00-contract-freeze-v1.0.md) · [执行内核 v1](./2026-08-08-me2-execution-kernel-v1.md)
 > 下游消费者：[#881 K-WP01](https://github.com/bigbigraydeng-maker/magic-engine/issues/881)（审批界面渲染这里定义的词汇）· [#880 WP07](https://github.com/bigbigraydeng-maker/magic-engine/issues/880)（第一个真实对外动作）· [#879 WP05](https://github.com/bigbigraydeng-maker/magic-engine/issues/879)（生成端消费词汇表 API）
-> 状态：**代码已合并，零调用方、零生产 ActionKey 新增、零 migration。**
+> 状态：**代码已合并，零调用方、零生产 ActionKey 新增。**
+> 含一条兼容性前向 migration（见 §7）—— **合并这个 PR 不代表授权或执行了 migration apply**，
+> 把它 apply 到任何环境（开发 / 预览 / 生产）是单独的运维决定。
 
 ---
 
@@ -207,9 +209,18 @@ interface OutwardAuthorization {
 - 任何新的生产 `ActionKey`（配对表和注册表都没加东西）
 - 任何 stub / placeholder capability
 - 调用方、dispatcher、编排器、审批 UI / API
-- migration、schema、生产查询 —— `action_key` 在三张表上是普通 `text` 列，本 WP 不需要任何库改动
+- schema、生产查询 —— `action_key` 在三张表上是普通 `text` 列，本 WP 治理映射本身不需要任何 schema 改动
 - `zhuge/conductor.ts`、`execution/auto-run.ts`、`src/lib/growth/**`、`src/lib/capabilities/**` 一律不碰
 - `.eslintrc.json` 不动（既有的架构测试机制足以表达这两条新边界）
+
+> **例外（有 migration）**：修复 BCR blocker「auto_approve 错配会永久锁死同一幂等动作」时，
+> `kernel_claim_run_recovery` 的可恢复白名单需要加一个新拒绝码 `outward_requires_human_policy`。
+> 已合并进 main 的历史 migration（`supabase/migrations/20260808000003_me2_execution_kernel_v1.sql`）
+> 保持不可变，改动落在新增的**兼容性前向 migration**
+> `supabase/migrations/20260811040000_kernel_recovery_outward_requires_human_policy.sql`
+> （`CREATE OR REPLACE FUNCTION` 重建同一个函数，白名单加一条，函数体其余部分逐字相同 ——
+> 已经 apply 过历史 migration 的环境也能拿到新白名单）。
+> **这条 migration 随本 PR 的代码一起合并，但 apply 与否是独立的操作授权，不因合并而自动发生。**
 
 ---
 

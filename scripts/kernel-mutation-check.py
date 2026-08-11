@@ -1162,12 +1162,23 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         expect_fail_contains="不自动重试",
     ),
     dict(
-        name="R8-4c 把 not_applicable 也当成「保证幂等」（契约自相矛盾时最乐观）",
+        name="R8-4c 幂等判据形同虚设（不管 provider 认不认幂等键都当成安全）",
         file="src/lib/kernel/gateway.ts",
-        old="""  return definition.providerIdempotency !== 'supported'""",
-        new="""  return definition.providerIdempotency === 'unsupported' ? false : false""",
+        old="""  if (definition.providerIdempotency === 'supported') return false""",
+        new="""  if (true) return false""",
         test="src/lib/kernel/__tests__/charged-then-threw.test.ts",
         expect_fail_contains="不自动重试",
+    ),
+    dict(
+        # Codex P2（PR #898）：零成本的对外动作曾经靠 mightCost===false 绕开这道闸，
+        # 跟内部动作一样被当成「安全」—— 但对外动作的重放风险是外部写入被再做一遍，
+        # 不是钱，零成本救不了它。
+        name="R8-4e 零成本的对外步骤不再受幂等闸保护（重放风险被当成钱来判）",
+        file="src/lib/kernel/gateway.ts",
+        old="""  if (definition.sideEffect === 'outward') return true""",
+        new="""  if (false) return true""",
+        test="src/lib/kernel/__tests__/outward-authorization.test.ts",
+        expect_fail_contains="重放风险跟钱无关",
     ),
     dict(
         name="R8-4d 这一步自己的预算花完了还能再跑一次",
@@ -1242,6 +1253,17 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
   }""",
         test="src/lib/kernel/__tests__/charged-then-threw.test.ts",
         expect_fail_contains="不自动重跑",
+    ),
+    dict(
+        # Codex P2（PR #898）：接管保护跟 gateway 那道重试闸用的是同一个成本判据，
+        # 零成本的对外动作曾经一样能绕开它（`!mightCost` 直接放行接管重跑）。
+        name="R9-3b 接管保护对零成本的对外动作失效（跟成本闸同一个洞）",
+        file="src/lib/kernel/runner.ts",
+        old="""  if (!isOutward && !mightCost) return null""",
+        new="""  void isOutward
+  if (!mightCost) return null""",
+        test="src/lib/kernel/__tests__/park-and-heartbeat.test.ts",
+        expect_fail_contains="「零成本」豁免",
     ),
     dict(
         name="R9-4 落拒绝不挡跨客户（审计表里能写串台的决策）",

@@ -17,6 +17,7 @@ import { authorizeRun } from '../authorize'
 import { executeAuthorizedRun } from '../gateway'
 import { ACTION_REGISTRY } from '../registry'
 import { outwardBlockReason } from '../outward-authorization'
+import { RetryableCapabilityError } from '../errors'
 import type { CapabilityImplementation } from '../types'
 import { makeFixture, makeRegistry, CLIENT_A, GOAL_A, POST_A, BLOG_DRAFT, liveFence } from './fixtures'
 import { computeBlogContentHash, createCapabilities } from '@/lib/capabilities'
@@ -493,6 +494,117 @@ describe('对外动作接上既有的成本与重试机制', () => {
     expect(buildCalls, '不认幂等键的付费步骤，结果未知时不许自动重试').toBe(1)
     expect(f.tables.action_runs[0].status).toBe('dead_letter')
     expect(f.tables.action_runs[0].needs_human).toBe(true)
+  })
+
+  it('🔴 unsupported + 会花钱的对外步骤 + 结果未知的失败 → 依旧不自动重试（新判据没有弱化成本这条路）', async () => {
+    let buildCalls = 0
+    const f = makeFixture({
+      registry: makeRegistry([
+        outwardDefinition({
+          providerIdempotency: 'unsupported',
+          costModel: {
+            kind: 'estimated',
+            estimate: () => 1,
+            stepCeilingUsd: { build: 5, persist: 0, verify: 0 },
+          },
+        }),
+      ]),
+      capabilities: () => ({
+        [KEY]: {
+          actionKey: KEY,
+          version: 1,
+          steps: {
+            build: async () => {
+              buildCalls += 1
+              throw new RetryableCapabilityError('provider 超时，结果未知')
+            },
+            persist: async () => ({ output: {}, verification: null, costActualUsd: 0 }),
+            verify: async () => ({ output: {}, verification: null, costActualUsd: 0 }),
+          },
+        } as unknown as CapabilityImplementation,
+      }),
+      options: { policy: APPROVAL_POLICY },
+    })
+
+    const pending = await runAction(f.kernel, submitInput())
+    const outcome = await approveAndRun(f.kernel, pending.run.id, 'ray')
+
+    expect(outcome.kind).toBe('dead_letter')
+    expect(buildCalls, '付费的对外步骤，结果未知时不许自动重试').toBe(1)
+    expect(f.tables.action_runs[0].needs_human).toBe(true)
+  })
+
+  it('🔴 unsupported + 零成本的对外步骤 + 结果未知的失败 → 一样不自动重试（重放风险跟钱无关）', async () => {
+    let buildCalls = 0
+    const f = makeFixture({
+      registry: makeRegistry([
+        outwardDefinition({
+          providerIdempotency: 'unsupported',
+          // 默认 costModel 就是零成本（build/persist/verify 全 0）——
+          // 刻意不额外声明正的 stepCeilingUsd，证明这道闸不是靠钱触发的。
+        }),
+      ]),
+      capabilities: () => ({
+        [KEY]: {
+          actionKey: KEY,
+          version: 1,
+          steps: {
+            build: async () => {
+              buildCalls += 1
+              // 🔴 必须是 Kernel 认识的「可重试」类型 —— 裸 Error 挂个 .retryable
+              //    字段不会被 isRetryable() 认出来，那样测的就不是这道闸了。
+              throw new RetryableCapabilityError('provider 超时，结果未知')
+            },
+            persist: async () => ({ output: {}, verification: null, costActualUsd: 0 }),
+            verify: async () => ({ output: {}, verification: null, costActualUsd: 0 }),
+          },
+        } as unknown as CapabilityImplementation,
+      }),
+      options: { policy: APPROVAL_POLICY },
+    })
+
+    const pending = await runAction(f.kernel, submitInput())
+    const outcome = await approveAndRun(f.kernel, pending.run.id, 'ray')
+
+    expect(outcome.kind).toBe('dead_letter')
+    expect(buildCalls, '零成本的对外步骤，结果未知时也不许自动重试 —— 重放的是外部写入，不是钱').toBe(1)
+    expect(f.tables.action_runs[0].status).toBe('dead_letter')
+    expect(f.tables.action_runs[0].needs_human).toBe(true)
+  })
+
+  it('✅ supported + 零成本的对外步骤 + 结果未知的失败 → 照常按幂等键重试、跑完（新判据没有误伤真幂等）', async () => {
+    let buildCalls = 0
+    const f = makeFixture({
+      registry: makeRegistry([
+        outwardDefinition({
+          providerIdempotency: 'supported',
+        }),
+      ]),
+      capabilities: () => ({
+        [KEY]: {
+          actionKey: KEY,
+          version: 1,
+          steps: {
+            build: async () => {
+              buildCalls += 1
+              if (buildCalls < 2) {
+                throw new RetryableCapabilityError('临时抖动')
+              }
+              return { output: { package_id: 'p1', content_hash: HASH }, verification: null, costActualUsd: 0 }
+            },
+            persist: async () => ({ output: {}, verification: null, costActualUsd: 0 }),
+            verify: async () => ({ output: {}, verification: null, costActualUsd: 0 }),
+          },
+        } as unknown as CapabilityImplementation,
+      }),
+      options: { policy: APPROVAL_POLICY },
+    })
+
+    const pending = await runAction(f.kernel, submitInput())
+    const outcome = await approveAndRun(f.kernel, pending.run.id, 'ray')
+
+    expect(outcome.kind).toBe('succeeded')
+    expect(buildCalls, '认幂等键的对外步骤，重试没有被这条规则误伤').toBe(2)
   })
 
   it('🔴 预算装不下声明的上界 → handler 一次都不调', async () => {

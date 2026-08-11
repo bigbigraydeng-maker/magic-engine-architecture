@@ -522,9 +522,11 @@ function stepIdempotencyKey(run: ActionRun, stepKey: string): string {
 /**
  * 这一步「结果未知的失败」自动重试安全吗。
  *
- * 🔴 判据两条同时成立才叫**不安全**：
- *    ① 这一步可能收费（声明的每步上限 > 0，或者压根说不出上限）；
- *    ② 外部服务不保证同一把幂等键重放不会重复收费。
+ * 🔴 判据（先满足 `providerIdempotency !== 'supported'`，再满足以下任一即**不安全**）：
+ *    ① 这个动作是对外的（`sideEffect === 'outward'`）—— 重放的风险是「外部世界
+ *       已经发生的写入」被再做一遍（重复发帖、重复改客户资产），跟这一步花不花钱
+ *       无关，声明零成本上界救不了它；
+ *    ② 这一步可能收费（声明的每步上限 > 0，或者压根说不出上限）。
  *
  *    `not_applicable` 声明的是「根本不调外部服务」——
  *    但它要是同时声明了正的每步上限，那就是契约自相矛盾，按最保守的处置。
@@ -534,10 +536,10 @@ function paidStepWithoutIdempotency(
   run: ActionRun,
   stepKey: string,
 ): boolean {
+  if (definition.providerIdempotency === 'supported') return false
+  if (definition.sideEffect === 'outward') return true
   const declaredMax = nextStepCostCeiling(definition, run, stepKey)
-  const mightCost = declaredMax === null || declaredMax > COST_EPSILON
-  if (!mightCost) return false
-  return definition.providerIdempotency !== 'supported'
+  return declaredMax === null || declaredMax > COST_EPSILON
 }
 
 function isRealCostAmount(value: unknown): value is number {
@@ -977,11 +979,17 @@ async function runSteps(
           !unsafeToRetry &&
           attempt < definition.retryPolicy.maxAttempts
         if (unsafeToRetry && isRetryable(lastError)) {
+          // 🔴 对外动作的不安全跟花不花钱无关（重放风险是外部写入被再做一遍），
+          //    所以理由要分开说清楚，不能对零成本的对外步骤说「是会花钱的步骤」。
+          const unsafeBecause =
+            definition.sideEffect === 'outward'
+              ? '会写到客户资产之外'
+              : '是会花钱的步骤'
           lastError = new KernelError(
             'UNSAFE_RETRY',
-            `「${stepKey}」是会花钱的步骤，而这个动作的外部服务不保证「同一把幂等键重放不会重复收费」——` +
+            `「${stepKey}」${unsafeBecause}，而这个动作的外部服务不保证「同一把幂等键重放不会重复收费/重复执行」——` +
               `这次的结果又不确定（${humanReasonOf(err)}），所以不自动重试，转人工判断`,
-            { detail: { stepKey, providerIdempotency: definition.providerIdempotency } },
+            { detail: { stepKey, providerIdempotency: definition.providerIdempotency, sideEffect: definition.sideEffect } },
           )
         }
         if (!canRetry) {

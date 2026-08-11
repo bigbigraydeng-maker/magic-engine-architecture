@@ -406,12 +406,13 @@ async function driveIntermediateRun(
  *
  * 🔴 上一个执行者是崩在 handler 调用中途的 —— 结果未知，跟「收费步骤抛出
  *    结果未知的异常」是同一个场景。provider 不保证幂等重放时，重跑可能
- *    再收一次钱，所以一律 fail closed，转人工。
+ *    再收一次钱（内部动作）或再对外做一遍（对外动作），所以一律 fail closed，转人工。
  *
- * 返回 null = 可以接着跑（零成本动作，或 provider 认幂等键）。
+ * 返回 null = 可以接着跑（provider 认幂等键；或非对外的零成本动作）。
+ * 对外动作不看成本 —— 零成本的对外动作一样要转人工。
  */
 /**
- * 接管了一条**正在跑**的付费 run，而 provider 不保证幂等重放 → 停到「等人处理」。
+ * 接管了一条**正在跑**的付费或对外 run，而 provider 不保证幂等重放 → 停到「等人处理」。
  *
  * 🔴 **必须真的落库，不能只返回一个内存里的 dead_letter。**
  *
@@ -431,17 +432,24 @@ async function parkTakeoverForHuman(
 ): Promise<ActionRunOutcome | null> {
   const definition = deps.registry.get(run.action_key)
   if (!definition) return null // 认不出的动作由授权层去拒，不在这里判
+  if (definition.providerIdempotency === 'supported') return null
 
+  // 🔴 对外动作：重放的风险是「外部世界已经发生的写入」被再做一遍
+  //    （重复发帖、重复改客户资产），跟这一步花不花钱无关 ——
+  //    零成本的对外动作一样不能被接管重跑。付费的非对外动作维持原判据。
+  const isOutward = definition.sideEffect === 'outward'
   const mightCost =
     definition.costModel.estimate(run.input) > 0 ||
     Object.values(definition.costModel.stepCeilingUsd ?? {}).some((v) => Number(v) > 0)
-  if (!mightCost) return null
-  if (definition.providerIdempotency === 'supported') return null
+  if (!isOutward && !mightCost) return null
 
-  const humanReason =
-    `上一个执行者在跑「${definition.title}」的中途没了，而这个动作会花钱、` +
-    `它的外部服务又不保证「同一把幂等键重放不会重复收费」—— ` +
-    `系统不敢自动重跑（可能再扣一次）。请人工确认那边到底做没做、扣没扣，再决定重跑还是作废。`
+  const humanReason = isOutward
+    ? `上一个执行者在跑「${definition.title}」的中途没了，而这个动作会写到客户资产之外、` +
+      `它的外部服务又不保证「同一把幂等键重放不会重复执行」—— ` +
+      `系统不敢自动重跑（可能再做一遍）。请人工确认那边到底做没做，再决定重跑还是作废。`
+    : `上一个执行者在跑「${definition.title}」的中途没了，而这个动作会花钱、` +
+      `它的外部服务又不保证「同一把幂等键重放不会重复收费」—— ` +
+      `系统不敢自动重跑（可能再扣一次）。请人工确认那边到底做没做、扣没扣，再决定重跑还是作废。`
 
   const parked = await parkRunForHuman(deps.supabase, {
     runId: run.id,
