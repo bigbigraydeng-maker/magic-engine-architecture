@@ -1720,6 +1720,29 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         test="src/lib/action-bridge/__tests__/architecture.test.ts",
         expect_fail_contains="同一行内的块注释（trailing trivia）必须被挖空",
     ),
+    # ── PR #898 收尾（第三轮）：Codex P2 thread r3761927225 —— allowJs ────────
+    dict(
+        # 扫描面退回只认 .ts/.tsx。仓库 tsconfig 是 allowJs:true，于是 kernel 或
+        # bridge 里放一个 .js/.jsx 直接 import 被禁止的层，构建照打、测试全绿。
+        name="K-WP02 扫描面退回只认 .ts/.tsx（allowJs 下的 .js/.jsx 重新隐身）",
+        file="src/lib/action-bridge/__tests__/architecture.test.ts",
+        old="""const isScannedSource = (p: string): boolean => SOURCE_EXTENSIONS.some(([ext]) => p.endsWith(ext))""",
+        new="""const isScannedSource = (p: string): boolean => /\\.tsx?$/.test(p)""",
+        test="src/lib/action-bridge/__tests__/architecture.test.ts",
+        expect_fail_contains="扫描面覆盖构建真会编译的 8 种后缀",
+    ),
+    dict(
+        # 所有文件一律当 ScriptKind.TS。JSX 会被当成类型断言，JSX 属性 / 子元素里
+        # 嵌的 require() / import() 一条都扫不到（实测返回 []）。
+        name="K-WP02 ScriptKind 一律当 TS（JSX 里嵌的模块引用重新扫不到）",
+        file="src/lib/action-bridge/__tests__/architecture.test.ts",
+        old="""  for (const [ext, kind] of SOURCE_EXTENSIONS) if (fileName.endsWith(ext)) return kind
+  return ts.ScriptKind.TS""",
+        new="""  void fileName
+  return ts.ScriptKind.TS""",
+        test="src/lib/action-bridge/__tests__/architecture.test.ts",
+        expect_fail_contains="JSX 属性 / 子元素里的模块引用要能扫到",
+    ),
 ]
 
 
