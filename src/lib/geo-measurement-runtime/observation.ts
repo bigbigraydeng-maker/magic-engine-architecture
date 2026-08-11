@@ -13,7 +13,8 @@ import type {
   GeoInterpretationIdentity,
   GeoObservation,
 } from '@/lib/geo-measurement'
-import type { GeoFrozenPlan, GeoProviderRequest } from './types'
+import { deriveRawResponseLocator } from './row-mapper'
+import type { GeoEvidenceRecord, GeoFrozenPlan, GeoProviderRequest } from './types'
 
 const known = <T>(value: T): { known: true; value: T } => ({ known: true, value })
 
@@ -58,7 +59,8 @@ export function buildProviderRequest(plan: GeoFrozenPlan, queryKey: string, ques
 
 export interface BuiltSuccess {
   readonly observation: GeoObservation
-  readonly evidence: GeoEvidence
+  /** 证据 + 它的原始响应正文 —— 正文必须一路带到落库，否则定位符没有兜底数据。 */
+  readonly evidence: GeoEvidenceRecord
 }
 
 /**
@@ -66,6 +68,11 @@ export interface BuiltSuccess {
  *
  * 🔴 成功观测**必须**带 evidence（授权第 5 条）。二者在此一起构造，绝不分家 ——
  *    「成功却没证据」这种半成品状态在源头就不产生。
+ *
+ * 🔴 `rawResponseLocator` 用**库里 GENERATED 列的同一条表达式**生成
+ *    （`db://public.geo_evidence/<id>/raw_response`），且与逐字保留的 `rawResponse`
+ *    一起返回。此前用的 `memory://` 定位符没有任何兜底数据，落库后就是一个指向空气的
+ *    地址 —— 「日后用新 parser 重新解析」在那种形态下根本做不到。
  */
 export function buildSuccessObservation(args: {
   plan: GeoFrozenPlan
@@ -77,6 +84,7 @@ export function buildSuccessObservation(args: {
   observedAt: string
   confidence: number
   citations: readonly GeoCitation[]
+  rawResponse: string
 }): BuiltSuccess {
   const observation: GeoObservation = {
     observationId: args.observationId,
@@ -90,10 +98,10 @@ export function buildSuccessObservation(args: {
   const evidence: GeoEvidence = {
     evidenceId: args.evidenceId,
     observationId: args.observationId,
-    rawResponseLocator: known(`memory://geo-evidence/${args.evidenceId}/raw`),
+    rawResponseLocator: known(deriveRawResponseLocator(args.evidenceId, args.rawResponse) as string),
     citations: args.citations,
   }
-  return { observation, evidence }
+  return { observation, evidence: { evidence, rawResponse: known(args.rawResponse) } }
 }
 
 /**

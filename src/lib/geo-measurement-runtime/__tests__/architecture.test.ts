@@ -79,17 +79,30 @@ describe('GEO Measurement Runtime 不接生产、不自造可比性', () => {
     expect(violations, `WP04 运行时只对着注入的假件跑，绝不接真实 provider / 生产库 / 执行内核。\n${violations.join('\n')}`).toEqual([])
   })
 
-  it('唯一依赖的 geo 契约是 WP02（@/lib/geo-measurement），没有偷偷平行另一套契约', () => {
+  it('geo 依赖只有 WP02 契约与 WP03 行形状，没有偷偷平行另一套契约', () => {
+    // 🔴 允许清单只有两个：
+    //    · `@/lib/geo-measurement`             —— WP02 契约（纯类型 + 纯函数）
+    //    · `@/lib/geo-measurement-store/types` —— WP03 行形状（纯类型，**没有** supabase 客户端）
+    //    WP03 的行类型是刻意复用的：不复用就等于在 WP04 里手写第二套列名，
+    //    哪天库里改了列，编译器一声不吭。允许它进来的前提是它确实只有类型。
+    const ALLOWED = [/^@\/lib\/geo-measurement$/, /^@\/lib\/geo-measurement\//, /^@\/lib\/geo-measurement-store\/types$/]
     const offenders: string[] = []
     for (const file of PRODUCTION_FILES) {
       const src = sourceOf(file)
-      const geoImports = src.match(/from\s+['"](@\/lib\/geo-measurement[^'"]*)['"]/g) ?? []
-      for (const imp of geoImports) {
-        // 允许 @/lib/geo-measurement 与其子路径；不允许任何别的 geo-* 契约来源。
-        if (!/@\/lib\/geo-measurement(['"]|\/)/.test(imp)) offenders.push(`${file} → ${imp}`)
+      const geoImports = Array.from(src.matchAll(/from\s+['"](@\/lib\/geo-[^'"]*)['"]/g)).map((m) => m[1])
+      for (const spec of geoImports) {
+        if (!ALLOWED.some((re) => re.test(spec))) offenders.push(`${file} → ${spec}`)
       }
     }
     expect(offenders).toEqual([])
+  })
+
+  it('WP03 store 只借行形状，不借（也没有）数据库客户端', () => {
+    const storeTypes = readFileSync(join(ROOT, 'src/lib/geo-measurement-store/types.ts'), 'utf8')
+    // 这条守的是「借类型」这个前提本身：哪天 WP03 的 types.ts 长出一个 supabase 客户端，
+    // WP04 这一层就等于间接接上了生产库 —— 那必须当场红，而不是等 code review 发现。
+    expect(/from\s+['"]@supabase\/supabase-js['"]/.test(storeTypes)).toBe(false)
+    expect(/from\s+['"]@\/lib\/supabase['"]/.test(storeTypes)).toBe(false)
   })
 
   it('WP04 自己不写可比性判定 —— 没有手写的 comparable 结论字面量', () => {

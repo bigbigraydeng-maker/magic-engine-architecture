@@ -137,12 +137,27 @@ import type { GeoBatch, GeoObservation, GeoEvidence } from '@/lib/geo-measuremen
  *    这里把「批次 + 全部观测 + 全部证据」作为一个不可分割的单元交给 store，
  *    store 要么整批写入、要么一行都不写（见 `fake-store.ts` 对 WP03 不变式的建模）。
  */
+/**
+ * 一条证据 + 它的原始响应。
+ *
+ * 🔴 WP02 的 `GeoEvidence` 只有 `rawResponseLocator`，**没有正文字段** —— 而 WP03 的
+ *    `geo_evidence.raw_response` 要求原始响应**逐字保留**（那是「日后用新 parser 重新解析」
+ *    的物质前提）。所以正文必须与证据一起穿过持久化边界，否则落库只剩一个指向空气的
+ *    定位符。这是本类型存在的唯一理由。
+ */
+export interface GeoEvidenceRecord {
+  readonly evidence: GeoEvidence
+  readonly rawResponse: GeoMaybeUnknown<string>
+}
+
 export interface GeoBatchPersistInput {
   /** 每条 WP03 行都带 client_id；持久化边界一并携带，租户不靠 batch 反查。 */
   readonly clientId: string
+  /** WP03 `geo_batches.query_set_id`（WP02 的 GeoBatch 只有 version，没有行 id）。 */
+  readonly querySetId: string
   readonly batch: GeoBatch
   readonly observations: readonly GeoObservation[]
-  readonly evidence: readonly GeoEvidence[]
+  readonly evidence: readonly GeoEvidenceRecord[]
 }
 
 export interface GeoRuntimeStore {
@@ -165,6 +180,8 @@ export interface GeoStopReason {
     | 'plan_completed'
     | 'budget_exhausted_before_first_call'
     | 'budget_exhausted_mid_run'
+    /** provider 报了一个不可信的成本（非有限 / 负数 / 超过声明上界）→ 立即停跑。 */
+    | 'provider_cost_untrusted'
     | 'all_attempts_failed'
     | 'partial_failures'
   readonly detail: string

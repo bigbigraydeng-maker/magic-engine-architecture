@@ -78,12 +78,52 @@ describe('runGeoMeasurementBatch —— 成功路径与 cohort identity', () => 
     const stored = store.getBatch(res.batchId)!
     expect(stored.observations).toHaveLength(3)
     expect(stored.evidence).toHaveLength(3) // 每条成功观测一条证据
+
+    // 落进去的是 WP03 的行，不是 domain 对象的副本。
+    expect(stored.batch.client_id).toBe('client-1')
+    expect(stored.batch.query_set_id).toBe('qs-1')
+    expect(stored.batch.status).toBe('completed')
     for (const o of stored.observations) {
-      expect(o.outcome.ok).toBe(true)
-      expect(o.acquisition.engineFamily).toEqual({ known: true, value: 'openai' })
-      expect(o.acquisition.market).toEqual({ known: true, value: 'nz' })
-      expect(o.acquisition.sample.samplePlan).toEqual({ known: true, value: { plannedCount: 3 } })
+      expect(o.outcome_ok).toBe(true)
+      expect(o.error_code).toBeNull()
+      expect(o.client_id).toBe('client-1')
+      expect(o.batch_id).toBe(res.batchId)
+      expect(o.engine_family).toBe('openai')
+      expect(o.engine_family_unknown_reason).toBeNull()
+      expect(o.market).toBe('nz')
+      expect(o.locale).toBe('en-NZ')
+      expect(o.sample_planned_count).toBe(3)
+      expect(o.source_observation_id).toBeNull() // 正常采集恒为 null
+      // 计划里的采样参数是显式未知 → 值列为空、理由列有值
+      expect(o.sampling_parameters).toBeNull()
+      expect(o.sampling_parameters_unknown_reason).toBe('not_recorded_by_source')
     }
+  })
+
+  it('成功证据在 store 里保留了真实 raw_response，定位符有兜底数据', async () => {
+    const d = deps({ provider: alwaysOkProvider('openai', 0.01) })
+    const res = await runGeoMeasurementBatch(plan({ sampleCount: 1 }), d)
+    const stored = (d.store as GeoFakeStore).getBatch(res.batchId)!
+    const evi = stored.evidence[0]
+
+    expect(evi.raw_response).toBe('answer for q1#0') // 逐字保留，不是空壳
+    expect(evi.raw_response_unknown_reason).toBeNull()
+    expect(evi.raw_response_locator).toBe(`db://public.geo_evidence/${evi.id}/raw_response`)
+    expect(evi.client_id).toBe('client-1')
+    expect(evi.observation_id).toBe(stored.observations[0].id)
+    expect(Array.isArray(evi.citations)).toBe(true)
+  })
+})
+
+describe('runGeoMeasurementBatch —— provider 装配闸', () => {
+  it('注入的 provider 引擎与计划不符 → 拒跑，callCount=0、一行都不写', async () => {
+    const provider = alwaysOkProvider('perplexity') // 计划声明的是 openai
+    const store = new GeoFakeStore()
+    await expect(runGeoMeasurementBatch(plan(), deps({ provider, store }))).rejects.toMatchObject({
+      code: 'provider_engine_mismatch',
+    })
+    expect(provider.callCount).toBe(0)
+    expect(await store.listBatchIds('client-1')).toHaveLength(0)
   })
 })
 
@@ -103,8 +143,9 @@ describe('runGeoMeasurementBatch —— 失败绝不写成成功', () => {
     expect(res.status).toBe('partial')
     expect(res.actualCoverage).toMatchObject({ attempted: 3, succeeded: 2, failed: 1 })
     const stored = (d.store as GeoFakeStore).getBatch(res.batchId)!
-    const failed = stored.observations.filter((o) => !o.outcome.ok)
+    const failed = stored.observations.filter((o) => !o.outcome_ok)
     expect(failed).toHaveLength(1)
+    expect(failed[0].error_code).toBe('server_error')
     expect(stored.evidence).toHaveLength(2) // 失败观测没有证据
     expect(res.stopReason.observedErrorCodes).toContain('server_error')
   })
@@ -176,8 +217,8 @@ describe('runGeoMeasurementBatch —— 限流 / 超时 / 幂等', () => {
     expect(res.status).toBe('failed')
     const stored = (d.store as GeoFakeStore).getBatch(res.batchId)!
     const o = stored.observations[0]
-    expect(o.outcome.ok).toBe(false)
-    if (!o.outcome.ok) expect(o.outcome.errorCode).toBe('provider_timeout_ambiguous_no_replay')
+    expect(o.outcome_ok).toBe(false)
+    expect(o.error_code).toBe('provider_timeout_ambiguous_no_replay')
     expect(res.costUsd).toEqual({ known: false, reason: 'source_ambiguous' })
   })
 })
@@ -222,9 +263,117 @@ describe('runGeoMeasurementBatch —— 预算', () => {
     )
     expect(provider.callCount).toBe(1) // 想重放，但重试前 preflight 拦下
     const stored = (d.store as GeoFakeStore).getBatch(res.batchId)!
-    const o = stored.observations[0]
-    if (!o.outcome.ok) expect(o.outcome.errorCode).toBe('budget_exhausted_no_retry')
+    expect(stored.observations[0].error_code).toBe('budget_exhausted_no_retry')
     expect(res.stopReason.code).toBe('budget_exhausted_mid_run')
+  })
+})
+
+describe('runGeoMeasurementBatch —— WP02 校验由 runtime 自己把关', () => {
+  it('观测不合 WP02 契约 → runtime 在调 store 之前就炸，store 一次都没被调用', async () => {
+    // 🔴 这条证明的是「契约闸门不挂在某个 store 实现上」：即使 store 完全不校验，
+    //    runtime 也必须拦住。用一个**什么都不验**的 store 才测得出这件事。
+    const calls: unknown[] = []
+    const permissiveStore = {
+      persistBatch: async (input: unknown) => {
+        calls.push(input)
+      },
+      listBatchIds: async () => [],
+    }
+    // parser 给出越界置信度 1.5（WP02 要求 [0,1] 的有限比率）
+    const d = deps({ store: permissiveStore, parse: makeFakeParser({ confidence: 1.5 }) })
+
+    await expect(runGeoMeasurementBatch(plan({ sampleCount: 1 }), d)).rejects.toMatchObject({
+      code: 'invalid_observation',
+    })
+    expect(calls).toHaveLength(0) // store 一次都没被调用
+  })
+})
+
+describe('runGeoMeasurementBatch —— provider 报的成本不可信任', () => {
+  // 每一个都是真实的污染手法：NaN 让后续所有预算比较恒为 false（闸门静默失效）；
+  // Infinity/超上界是花了没批过的钱；负数等于把钱「还」回来、凭空扩大额度。
+  const poisons: readonly (readonly [string, number])[] = [
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['-Infinity', Number.NEGATIVE_INFINITY],
+    ['负数', -5],
+    ['超过声明上界', 0.5], // ceiling = 0.05
+  ]
+
+  for (const [label, poisoned] of poisons) {
+    it(`ok 结果携带 ${label} 成本 → 立即停跑、不污染预算账、观测记 provider_cost_untrusted`, async () => {
+      const provider = new GeoFakeProvider({
+        engineFamily: 'openai',
+        idempotency: 'not_applicable',
+        script: () => ({ kind: 'ok', rawResponse: 'ans', costUsd: poisoned }),
+      })
+      const d = deps({ provider })
+      const res = await runGeoMeasurementBatch(plan({ sampleCount: 5 }), d)
+
+      // 停跑：第一条之后不再发起任何调用（否则会一路把 5 条跑完）
+      expect(provider.callCount).toBe(1)
+      expect(res.stopReason.code).toBe('provider_cost_untrusted')
+      expect(res.status).toBe('failed')
+      expect(res.actualCoverage).toMatchObject({ attempted: 1, succeeded: 0, failed: 1 })
+
+      // 不污染预算账：成本记为显式未知，绝不是一个被 NaN/负数带歪的数字
+      expect(res.costUsd).toEqual({ known: false, reason: 'source_ambiguous' })
+
+      const stored = (d.store as GeoFakeStore).getBatch(res.batchId)!
+      expect(stored.observations[0].error_code).toBe('provider_cost_untrusted')
+      expect(stored.evidence).toHaveLength(0) // 失败观测没有证据
+      // 库层「花费必须是真实金额」在行上也成立
+      expect(stored.batch.cost_usd).toBeNull()
+      expect(stored.batch.cost_usd_unknown_reason).toBe('source_ambiguous')
+    })
+
+    it(`error 结果携带 ${label} 成本 → 同样立即停跑`, async () => {
+      const provider = new GeoFakeProvider({
+        engineFamily: 'openai',
+        idempotency: 'not_applicable',
+        script: () => ({ kind: 'error', errorCode: 'server_error', message: '500', costUsd: poisoned }),
+      })
+      const res = await runGeoMeasurementBatch(plan({ sampleCount: 5 }), deps({ provider }))
+      expect(provider.callCount).toBe(1)
+      expect(res.stopReason.code).toBe('provider_cost_untrusted')
+      expect(res.stopReason.observedErrorCodes).toContain('provider_cost_untrusted')
+    })
+
+    it(`timeout 结果携带已知但 ${label} 的成本 → 同样立即停跑`, async () => {
+      const provider = new GeoFakeProvider({
+        engineFamily: 'openai',
+        idempotency: 'supported',
+        script: () => ({ kind: 'timeout', message: 't/o', costUsd: { known: true, value: poisoned } }),
+      })
+      const res = await runGeoMeasurementBatch(plan({ sampleCount: 5 }), deps({ provider }))
+      expect(provider.callCount).toBe(1) // 即便 idempotency=supported 也不再重放
+      expect(res.stopReason.code).toBe('provider_cost_untrusted')
+    })
+  }
+
+  it('恰好等于上界的成本是可信的（边界不误杀）', async () => {
+    const provider = new GeoFakeProvider({
+      engineFamily: 'openai',
+      idempotency: 'not_applicable',
+      script: () => ({ kind: 'ok', rawResponse: 'ans', costUsd: 0.05 }),
+    })
+    const res = await runGeoMeasurementBatch(
+      plan({ sampleCount: 1, perObservationCostCeilingUsd: 0.05, budgetUsd: 1 }),
+      deps({ provider }),
+    )
+    expect(res.status).toBe('completed')
+    expect(res.costUsd).toEqual({ known: true, value: 0.05 })
+  })
+
+  it('零成本可信（免费额度不是错误）', async () => {
+    const provider = new GeoFakeProvider({
+      engineFamily: 'openai',
+      idempotency: 'not_applicable',
+      script: () => ({ kind: 'ok', rawResponse: 'ans', costUsd: 0 }),
+    })
+    const res = await runGeoMeasurementBatch(plan({ sampleCount: 2 }), deps({ provider }))
+    expect(res.status).toBe('completed')
+    expect(res.costUsd).toEqual({ known: true, value: 0 })
   })
 })
 

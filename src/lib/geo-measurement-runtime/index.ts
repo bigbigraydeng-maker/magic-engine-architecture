@@ -14,7 +14,14 @@
 export { runGeoMeasurementBatch, GeoPlanRejectedError, GeoRuntimeInvariantError } from './runtime'
 
 export { validateFrozenPlan, MAX_PLANNED_OBSERVATIONS_PER_BATCH, type GeoPlanValidation } from './plan'
-export { preflightBudget, type GeoBudgetDecision } from './budget'
+export { preflightBudget, trustProviderCost, type GeoBudgetDecision, type GeoCostTrustResult } from './budget'
+export {
+  toGeoBatchRow,
+  toGeoObservationRow,
+  toGeoEvidenceRow,
+  splitMaybe,
+  deriveRawResponseLocator,
+} from './row-mapper'
 export {
   buildPlannedCoverage,
   buildActualCoverage,
@@ -29,7 +36,7 @@ export {
   type GeoIntegrityResult,
 } from './reconcile'
 
-export { GeoFakeStore, GeoFakeStoreError } from './fake-store'
+export { GeoFakeStore, GeoFakeStoreError, type StoredBatchRows } from './fake-store'
 export {
   GeoFakeProvider,
   alwaysOkProvider,
@@ -53,6 +60,7 @@ export type {
   GeoParseResult,
   GeoRuntimeStore,
   GeoBatchPersistInput,
+  GeoEvidenceRecord,
   GeoStopReason,
   GeoRuntimeResult,
   GeoRuntimeDeps,

@@ -38,6 +38,7 @@ const ok = (i: number) =>
     observedAt: '2026-08-12T00:00:00.000Z',
     confidence: 0.9,
     citations: [],
+    rawResponse: `raw ${i}`,
   })
 
 const fail = (i: number) =>
@@ -55,7 +56,7 @@ const fail = (i: number) =>
 describe('checkObservationEvidenceIntegrity', () => {
   it('成功配证据 + 失败无证据 → ok', () => {
     const a = ok(0)
-    const r = checkObservationEvidenceIntegrity([a.observation, fail(1)], [a.evidence])
+    const r = checkObservationEvidenceIntegrity([a.observation, fail(1)], [a.evidence.evidence])
     expect(r.ok).toBe(true)
   })
 
@@ -92,15 +93,15 @@ describe('checkObservationEvidenceIntegrity', () => {
 
   it('两条证据指向同一观测 → duplicate_evidence', () => {
     const a = ok(0)
-    const dup: GeoEvidence = { ...a.evidence, evidenceId: 'e-dup' }
-    const r = checkObservationEvidenceIntegrity([a.observation], [a.evidence, dup])
+    const dup: GeoEvidence = { ...a.evidence.evidence, evidenceId: 'e-dup' }
+    const r = checkObservationEvidenceIntegrity([a.observation], [a.evidence.evidence, dup])
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.code).toBe('duplicate_evidence')
   })
 
   it('观测引用的 evidenceId 与实际证据不符 → evidence_id_mismatch', () => {
     const a = ok(0)
-    const mismatched: GeoEvidence = { ...a.evidence, evidenceId: 'different' }
+    const mismatched: GeoEvidence = { ...a.evidence.evidence, evidenceId: 'different' }
     const r = checkObservationEvidenceIntegrity([a.observation], [mismatched])
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.code).toBe('evidence_id_mismatch')
@@ -109,7 +110,7 @@ describe('checkObservationEvidenceIntegrity', () => {
 
 describe('checkCoverageMatchesRows', () => {
   const a = ok(0)
-  const base = { observations: [a.observation, fail(1)], evidence: [a.evidence] }
+  const base = { observations: [a.observation, fail(1)], evidence: [a.evidence.evidence] }
 
   it('账与行数吻合 → ok', () => {
     const r = checkCoverageMatchesRows({ claimedAttempted: 2, claimedSucceeded: 1, claimedFailed: 1, ...base })

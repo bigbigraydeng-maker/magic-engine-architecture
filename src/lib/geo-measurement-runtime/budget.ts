@@ -38,3 +38,36 @@ export function preflightBudget(remainingUsd: number, nextCostUpperBoundUsd: num
   }
   return { allowed: true, reason: 'within authorization' }
 }
+
+export type GeoCostTrustResult =
+  | { readonly trusted: true; readonly costUsd: number }
+  | { readonly trusted: false; readonly reason: string }
+
+/**
+ * provider 报回来的花费**不能直接信**。
+ *
+ * 🔴 provider 是外部系统，它报的成本是**输入**，不是事实 —— 一个 `NaN` / `Infinity` /
+ *    负数会当场污染预算账：`spent += NaN` 之后所有 preflight 的比较恒为 false（NaN 参与
+ *    的比较永远不成立），预算闸门就此静默失效，后面每一次调用都会被放行。负数更糟：
+ *    它会把已花的钱「还」回来，等于凭空扩大授权额度。
+ * 🔴 超过本次声明的成本上界同样不可信 —— preflight 就是拿这个上界批的额度，
+ *    实报超上界说明「批的」和「花的」对不上，此时继续跑就是在花没批过的钱。
+ *
+ * 判据与 WP03 `geo_batches_cost_is_a_real_amount` 同构（那条 CHECK 在写入时兜底，
+ * 这条在**发起下一次调用之前**兜底）。
+ */
+export function trustProviderCost(reported: number, ceilingUsd: number): GeoCostTrustResult {
+  if (typeof reported !== 'number' || !Number.isFinite(reported)) {
+    return { trusted: false, reason: `provider reported a non-finite cost (${String(reported)})` }
+  }
+  if (reported < 0) {
+    return { trusted: false, reason: `provider reported a negative cost (${reported})` }
+  }
+  if (!Number.isFinite(ceilingUsd) || ceilingUsd < 0) {
+    return { trusted: false, reason: `declared per-call cost ceiling is invalid (${String(ceilingUsd)})` }
+  }
+  if (reported > ceilingUsd) {
+    return { trusted: false, reason: `provider reported ${reported}, above the declared ceiling ${ceilingUsd}` }
+  }
+  return { trusted: true, costUsd: reported }
+}
