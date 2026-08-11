@@ -27,6 +27,9 @@ import { useParams, useSearchParams } from 'next/navigation'
 import { ClientStatusPanel } from './_components/ClientStatusPanel'
 import { GbpPanel } from './_components/GbpPanel'
 import { GbpLocationPanel } from './_components/GbpLocationPanel'
+import { GscPanel } from './_components/GscPanel'
+import { Ga4Panel } from './_components/Ga4Panel'
+import { Ga4PropertyPanel } from './_components/Ga4PropertyPanel'
 import { GoogleAdsPanel } from './_components/GoogleAdsPanel'
 import { MailboxPanel } from './_components/MailboxPanel'
 import { AdStrategyPanel } from './_components/AdStrategyPanel'
@@ -116,6 +119,15 @@ function TabBody({ tab, clientId }: { tab: SettingsTab; clientId: string }) {
           </SettingsSection>
           <SettingsSection icon="🏪" title="发到哪一家门店">
             <GbpLocationPanel clientId={clientId} />
+          </SettingsSection>
+          <SettingsSection icon="🔎" title="Google Search Console">
+            <GscPanel clientId={clientId} />
+          </SettingsSection>
+          <SettingsSection icon="📈" title="Google Analytics 4">
+            <Ga4Panel clientId={clientId} />
+          </SettingsSection>
+          <SettingsSection icon="📊" title="同步哪一个 GA4 Property">
+            <Ga4PropertyPanel clientId={clientId} />
           </SettingsSection>
           <SettingsSection icon="📢" title="Google Ads">
             <GoogleAdsPanel clientId={clientId} />
