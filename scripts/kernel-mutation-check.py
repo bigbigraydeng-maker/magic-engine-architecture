@@ -1631,18 +1631,16 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
     ),
     # ── PR #898 收尾：Codex P2（thread r3756852483，模板字面量动态导入）──────
     dict(
-        # 反引号动态导入（无插值）原来只认引号字符串，一条都不命中。
-        # 拆掉这两条 pattern 之后，`import(\`@/lib/growth\`)` 这类写法应当重新
-        # 变得对扫描不可见 —— 用来证明「盖住反引号」这件事真的是这两行做的，
-        # 不是别的判据附带盖住的。
-        name="K-WP02 架构扫描不再认反引号动态导入（无插值）",
-        file="src/lib/kernel/__tests__/architecture.test.ts",
-        old="""    /\\bimport\\s*\\(\\s*`([^`]*)`/g,
-    /\\brequire\\s*\\(\\s*`([^`]*)`/g,
-""",
-        new="""""",
-        test="src/lib/kernel/__tests__/architecture.test.ts",
-        expect_fail_contains="模板字面量，无插值",
+        # 无插值反引号（`import(\`@/lib/kernel/types\`)`）走的是 isStringLiteralLike
+        # 这一支 —— 它同时认 StringLiteral 与 NoSubstitutionTemplateLiteral。
+        # 收窄成 isStringLiteral 之后反引号说明符不再被解析成具体模块名
+        # （会掉进 fail-closed 那一支），允许清单的精确断言当场对不上。
+        name="K-WP02 架构扫描不再把无插值反引号当字符串字面量",
+        file="src/lib/action-bridge/__tests__/architecture.test.ts",
+        old="""    if (ts.isStringLiteralLike(expr)) {""",
+        new="""    if (ts.isStringLiteral(expr)) {""",
+        test="src/lib/action-bridge/__tests__/architecture.test.ts",
+        expect_fail_contains="反引号也照常放行",
     ),
     # ── PR #898 收尾：Codex P2（thread r3757587391，插值前缀 fail closed）───
     # 🔴 判据由三句组成，其中「空前缀」那句**被「长得成」那句盖住**（实测拆掉全绿），
@@ -1668,6 +1666,32 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         new="""""",
         test="src/lib/action-bridge/__tests__/architecture.test.ts",
         expect_fail_contains="证明不了，必须 fail closed",
+    ),
+    # ── PR #898 收尾（第二轮）：Codex P2 thread r3758650486 —— 转义说明符 ──────
+    dict(
+        # 说明符退回「源码原文」而不是解析器求值后的 cooked 值。
+        # `import('\\x40/lib/capabilities')` 的原文是 \\x40/lib/...，跟禁止清单
+        # 的 @/lib/... 永远比不中 —— 这正是 Codex 报的那条绕过。
+        name="K-WP02 说明符退回源码原文（转义写法重新绕过）",
+        file="src/lib/action-bridge/__tests__/architecture.test.ts",
+        old="""      specifiers.push(expr.text)""",
+        new="""      specifiers.push(code.slice(expr.pos, expr.end).trim().replace(/^['"`]|['"`]$/g, ''))""",
+        test="src/lib/action-bridge/__tests__/architecture.test.ts",
+        expect_fail_contains="cooked 值确实被还原成了真实模块名",
+    ),
+    # ── PR #898 收尾（第二轮）：Codex P2 thread r3758650489 —— 注释挖空 ────────
+    dict(
+        # 在解析器给出的注释范围之外，再补一刀当年那条正则。
+        # 它认不得字符串字面量，会把 `const start = '/*'` 到 `const end = '*/'`
+        # 之间的**真实源码**（含违规 import）整段删掉 —— 正是 Codex 报的那条。
+        name="K-WP02 注释挖空叠加旧正则（字符串之间的真实源码被吞）",
+        file="src/lib/action-bridge/__tests__/architecture.test.ts",
+        old="""  return chars.join('')
+}""",
+        new="""  return chars.join('').replace(/\\/\\*[\\s\\S]*?\\*\\//g, '')
+}""",
+        test="src/lib/action-bridge/__tests__/architecture.test.ts",
+        expect_fail_contains="之间夹着的违规 import 必须还在",
     ),
 ]
 

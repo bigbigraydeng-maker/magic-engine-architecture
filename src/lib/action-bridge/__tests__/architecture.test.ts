@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import ts from 'typescript'
 import { readFileSync, readdirSync, statSync } from 'fs'
 import { join, relative, posix } from 'path'
 import { ACTION_BRIDGE_FORBIDDEN_IMPORTS } from '@/lib/kernel/boundaries'
@@ -23,15 +24,66 @@ function walk(dir: string, out: string[] = []): string[] {
   return out
 }
 
+/**
+ * 🔴 **用真正的 TypeScript 解析器，不再手搓正则。**
+ *
+ * 这一版之前是一路正则打补丁堆上来的，每补一次就露一个新口子（`from` → 副作用导入
+ * → 动态导入 → require → 反引号 → 插值 → 相对路径 → baseUrl → 点段）。
+ * 正则**看不懂 JS 的词法**，所以两类问题它结构上就解决不了：
+ *
+ *   ① 转义：`` import(`\x73rc/lib/${d}`) `` 源码文本是 `\x73rc/...`，运行时却是 `src/...`。
+ *      比对**源码原文**永远比不中；要比就得比**求值后（cooked）**的字符串。
+ *   ② 注释与字面量分不开：`const start = '/*'` … `const end = '*\/'` 之间是**真实源码**，
+ *      正则版 `stripComments` 会把它整段当块注释删掉，夹在中间的违规 import 随之蒸发。
+ *
+ * 仓库本来就有 TypeScript（devDependency，编译器 API 自带），所以**不引入任何新依赖**。
+ * 解析器天然认得注释 / 字符串 / 模板 / 正则字面量，上面两类问题一次性消失。
+ */
+const parseSource = (code: string): ts.SourceFile =>
+  // setParentNodes = false：这里只按位置取注释、按节点类型取说明符，用不上父指针，
+  // 关掉它能省一遍全树回填（全仓近 2000 个文件时这笔开销是实打实的）。
+  ts.createSourceFile('scan.ts', code, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS)
+
+/**
+ * 把注释挖空（保留换行与列宽，行号列号都不动）。
+ *
+ * 🔴 注释范围一律来自**解析器**，不是正则。正则版的 `/\/\*[\s\S]*?\*\//g` 会把
+ *    字符串或正则字面量里的 `/*` 当成注释开头 —— 于是这样一段合法源码：
+ *      const start = '/*'
+ *      import '@/lib/capabilities'      // ← 真实的违规导入
+ *      const end = '*\/'
+ *    扫描后只剩 `const start = ''`，边界测试一片绿。
+ *
+ * 只有仍然基于正则的检查（比如「没有 any」）才需要它；
+ * import 扫描走 AST，解析器本来就不会把注释当代码。
+ */
 function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .split('\n')
-    .filter((line) => {
-      const t = line.trim()
-      return !t.startsWith('//') && !t.startsWith('*')
-    })
-    .join('\n')
+  const sourceFile = parseSource(src)
+  const ranges = new Map<string, ts.CommentRange>()
+
+  // `node.pos` 就是含前导 trivia 的起点（= getFullStart()），不需要父指针
+  const collectAt = (pos: number): void => {
+    for (const r of ts.getLeadingCommentRanges(src, pos) ?? []) {
+      ranges.set(`${r.pos}:${r.end}`, r)
+    }
+  }
+  const visit = (node: ts.Node): void => {
+    collectAt(node.pos)
+    node.forEachChild(visit)
+  }
+  visit(sourceFile)
+  // 文件末尾那条注释是 EOF token 的前导 trivia，不挂在任何其它节点上
+  collectAt(sourceFile.endOfFileToken.pos)
+
+  const chars = src.split('')
+  // 用 forEach 而不是 `for…of ranges.values()`：仓库 tsconfig 没设 target，
+  // 直接迭代 Map 的迭代器会撞 TS2802（要 downlevelIteration）。
+  ranges.forEach((r) => {
+    for (let i = r.pos; i < r.end && i < chars.length; i++) {
+      if (chars[i] !== '\n') chars[i] = ' '
+    }
+  })
+  return chars.join('')
 }
 
 const PROD_FILES = walk(DIR)
@@ -41,47 +93,91 @@ const PROD_FILES = walk(DIR)
 const codeOf = (p: string) => stripComments(readFileSync(join(ROOT, p), 'utf8'))
 
 /**
- * 从一段源码里把**所有**模块说明符抠出来。
+ * 从一段源码里把**所有**模块引用抠出来 —— 走 AST，五种入口一个不漏：
  *
- * 🔴 只认 `from '...'` 是不够的 —— 下面这三种照样把模块拉进来，却一条都不会被发现：
- *      import '@/lib/capabilities'         // 静态副作用导入
- *      await import('@/lib/execution')     // 动态导入
- *      require('@/lib/supabase')           // CommonJS
- *    一条只挡得住「规规矩矩的写法」的边界等于没有边界 —— 想绕的人正好用另外三种。
+ *      import { x } from '…'  /  import type … /  import '…'（副作用）    ImportDeclaration
+ *      export { x } from '…'  /  export * from '…'                        ExportDeclaration
+ *      import x = require('…')                                            ImportEqualsDeclaration
+ *      import('…') / await import('…')                                    CallExpression(ImportKeyword)
+ *      require('…') / require.resolve('…')                                CallExpression(require)
  *
- * 🔴 动态 import()/require() 还能用模板字面量：
- *      await import(`@/lib/execution`)     // 反引号，没有插值 —— 跟引号字符串等价
- *    只认引号的话这一种照样敞开。无插值的反引号字符串跟引号字符串同等对待，
- *    一起抠进说明符列表；带插值的（`${...}`）另有专门判据，见下方 fail-closed。
+ * 🔴 **说明符取的是 `.text`，也就是解析器求值后的 cooked 值，不是源码原文。**
+ *    `import('\x40/lib/capabilities')` 的 `.text` 直接就是 `@/lib/capabilities`；
+ *    `` require(`\x73rc/lib/supabase`) `` 的 `.text` 直接就是 `src/lib/supabase`。
+ *    转义写法自此不再是一条绕过路径 —— 不是因为多加了一条正则，而是因为
+ *    比对的东西从「源码长什么样」换成了「运行时到底是哪个字符串」。
+ *
+ * 🔴 **不是字面量的一律 fail closed**（`unresolvable`）：模板带插值、字符串拼接、
+ *    说明符是个变量……静态都证明不了它去哪。证明不了就不许放行。
  */
-const SPECIFIER_PATTERNS: readonly RegExp[] = [
-  // import ... from 'x' / export ... from 'x'（含 import type / export type）
-  /\bfrom\s*['"]([^'"]+)['"]/g,
-  // import 'x' —— 副作用导入。`import(` 和 `import x from` 都进不来（后面不是引号）
-  /\bimport\s*['"]([^'"]+)['"]/g,
-  // import('x') / await import('x') —— 动态导入
-  /\bimport\s*\(\s*['"]([^'"]+)['"]/g,
-  // require('x')
-  /\brequire\s*\(\s*['"]([^'"]+)['"]/g,
-  // import(`x`) —— 动态导入，无插值的模板字面量
-  /\bimport\s*\(\s*`([^`]*)`/g,
-  // require(`x`)
-  /\brequire\s*\(\s*`([^`]*)`/g,
-]
+type ModuleReferenceScan = {
+  /** 能静态定死的说明符，已是 cooked 值 */
+  readonly specifiers: readonly string[]
+  /** 静态证明不了去向的引用，一律算命中，附带可读的原因 */
+  readonly unresolvable: readonly string[]
+}
 
-function moduleSpecifiersIn(code: string): string[] {
-  const out: string[] = []
-  for (const pattern of SPECIFIER_PATTERNS) {
-    // 每次新建，避免共享 lastIndex 让第二次扫描从半路开始
-    const re = new RegExp(pattern.source, pattern.flags)
-    let match: RegExpExecArray | null
-    while ((match = re.exec(code)) !== null) {
-      // 带插值的模板字面量在这里整段跳过——`${...}` 是运行时求值出来的，
-      // 不是一段真实存在的说明符文本；这类另有专门的 fail-closed 判据。
-      if (!match[1].includes('${')) out.push(match[1])
+function scanModuleReferences(code: string): ModuleReferenceScan {
+  const specifiers: string[] = []
+  const unresolvable: string[] = []
+
+  const record = (expr: ts.Expression | undefined, kind: string): void => {
+    if (!expr) return
+
+    // 字符串字面量 与 无插值模板字面量：`.text` 是 cooked 值，转义已被解析器还原
+    if (ts.isStringLiteralLike(expr)) {
+      specifiers.push(expr.text)
+      return
     }
+
+    // 带插值的模板：只有 head 是静态的，且同样取 cooked 值
+    if (ts.isTemplateExpression(expr)) {
+      const cookedHead = expr.head.text
+      if (!provablyExternalPackagePrefix(cookedHead)) {
+        unresolvable.push(
+          cookedHead === ''
+            ? `${kind} 模板 \`\${…}\`（表达式打头，静态前缀为空，无法证明去向是外部包，fail closed）`
+            : `${kind} 模板 \`${cookedHead}\${…}\`（静态前缀证明不了它指向仓库外的包，fail closed）`,
+        )
+      }
+      return
+    }
+
+    // 变量、拼接、三元…… 静态都定不下来
+    unresolvable.push(
+      `${kind} 说明符不是字面量（${ts.SyntaxKind[expr.kind]}），静态证明不了去向，fail closed`,
+    )
   }
-  return out
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) {
+      record(node.moduleSpecifier, 'import')
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier) {
+      record(node.moduleSpecifier, 'export…from')
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference)
+    ) {
+      record(node.moduleReference.expression, 'import=require')
+    } else if (ts.isCallExpression(node)) {
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        record(node.arguments[0], 'import()')
+      } else if (ts.isIdentifier(node.expression) && node.expression.text === 'require') {
+        record(node.arguments[0], 'require()')
+      } else if (
+        ts.isPropertyAccessExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression) &&
+        node.expression.expression.text === 'require' &&
+        node.expression.name.text === 'resolve'
+      ) {
+        record(node.arguments[0], 'require.resolve()')
+      }
+    }
+    node.forEachChild(visit)
+  }
+
+  visit(parseSource(code))
+  return { specifiers, unresolvable }
 }
 
 /**
@@ -134,22 +230,9 @@ function provablyExternalPackagePrefix(prefix: string): boolean {
   return true
 }
 
-function interpolatedProjectPathHits(code: string): string[] {
-  const pattern = /\b(?:import|require)\s*\(\s*`([^`]*?)\$\{/g
-  const hits: string[] = []
-  let match: RegExpExecArray | null
-  while ((match = pattern.exec(code)) !== null) {
-    const prefix = match[1]
-    if (!provablyExternalPackagePrefix(prefix)) {
-      hits.push(
-        prefix === ''
-          ? '插值动态导入 `${…}`（表达式打头，静态前缀为空，无法证明去向是外部包，fail closed）'
-          : '插值动态导入 `' + prefix + '${…}`（静态前缀证明不了它指向仓库外的包，展开后去向未知，fail closed）',
-      )
-    }
-  }
-  return hits
-}
+/** 静态证明不了去向的模块引用（插值模板 / 变量 / 拼接），一律算命中。 */
+const interpolatedProjectPathHits = (code: string): readonly string[] =>
+  scanModuleReferences(code).unresolvable
 
 /**
  * 把说明符规范成**跟禁止清单同一套写法**（无点段的 `@/...`）。
@@ -195,7 +278,7 @@ function canonicalSpecifier(sourcePath: string, spec: string): string {
 
 /** 一个源文件里所有 import 指向的模块，已规范成 `@/...` 口径。 */
 const importedModules = (sourcePath: string, code: string): string[] =>
-  moduleSpecifiersIn(code).map((spec) => canonicalSpecifier(sourcePath, spec))
+  scanModuleReferences(code).specifiers.map((spec) => canonicalSpecifier(sourcePath, spec))
 
 /**
  * 命中判据 = **前缀匹配**，跟原来的正则语义一致：
@@ -306,12 +389,19 @@ describe('🔴 导入扫描盖得住所有写法（合成源码）', () => {
   })
 
   it('🔴 只写在注释里的示例不算违规（判据不许把自己的文档当罪证）', () => {
+    // 🔴 JSDoc 续行（` * …`）必须**真的包在块注释里**。早先这里少写了 `/**` 与 `*/`，
+    //    那段源码其实是「悬空的代码」，只因为旧的正则版按行首 `*` 猜注释才没报 ——
+    //    解析器不猜，所以 fixture 得写成真实文件里的样子。
     const commented = [
       `// import { x } from '@/lib/capabilities'`,
       `/* const m = require('@/lib/supabase') */`,
+      `/**`,
       ` * import '@/lib/execution'`,
+      ` */`,
       `const real = 1`,
     ].join('\n')
+    // 原文直接扫（AST 天然不把注释当代码）与先挖空注释再扫，两条路都必须干净
+    expect(forbiddenImportsIn(BRIDGE_FILE, commented)).toEqual([])
     expect(forbiddenImportsIn(BRIDGE_FILE, stripComments(commented))).toEqual([])
   })
 
@@ -556,13 +646,18 @@ describe('🔴 插值模板字面量的动态导入 fail closed（合成源码�
   })
 
   it('🔴 只写在注释里的插值示例不算违规（判据不许把自己的文档当罪证）', () => {
+    // JSDoc 续行同样要真的包在块注释里 —— 解析器不按行首 `*` 猜注释
     const commented = [
       '// const m = await import(`@/lib/${domain}`)',
       '/* const g = require(`../${domain}`) */',
+      '/**',
       ' * await import(`src/lib/${x}`)',
+      ' */',
       '// const h = await import(`${domain}/execution`)',
       'const real = 1',
     ].join('\n')
+    expect(forbiddenImportsIn(BRIDGE_FILE, commented)).toEqual([])
+    expect(kernelImportsIn(BRIDGE_FILE, commented)).toEqual([])
     expect(forbiddenImportsIn(BRIDGE_FILE, stripComments(commented))).toEqual([])
     expect(kernelImportsIn(BRIDGE_FILE, stripComments(commented))).toEqual([])
   })
@@ -607,6 +702,117 @@ describe('🔴 插值模板字面量的动态导入 fail closed（合成源码�
         expect(forbiddenImportsIn(BRIDGE_FILE, code), code).toEqual([])
         expect(kernelImportsIn(BRIDGE_FILE, code), code).toEqual([])
       }
+    })
+  })
+})
+
+/**
+ * 🔴 **换成解析器之后才关得掉的两类绕过。**
+ *
+ * 这两条正则版**结构上**做不到，不是补一条 pattern 的事：
+ *   ① 转义：比对源码原文，`\x73rc` 永远不等于 `src`；要比就得比 cooked 值。
+ *   ② 注释：正则分不清「注释」与「字符串里长得像注释的那几个字符」。
+ */
+describe('🔴 解析器口径：转义与注释（合成源码）', () => {
+  const BRIDGE_FILE = 'src/lib/action-bridge/index.ts'
+
+  /** ① Codex thread r3758650486 */
+  describe('转义说明符按 cooked 值判，不按源码原文', () => {
+    const ESCAPED_FORMS: Array<[label: string, code: string, why: string]> = [
+      [
+        '模板 head 里的 \\x73rc（Codex 原案）',
+        'const m = await import(`\\x73rc/lib/${domain}`)',
+        '源码是 \\x73rc/lib/，cooked 是 src/lib/ → 落在 baseUrl 工程路径上，fail closed',
+      ],
+      [
+        '普通字符串里的 \\x40（= @）',
+        "import '\\x40/lib/capabilities'",
+        'cooked 是 @/lib/capabilities',
+      ],
+      [
+        '无插值模板里的 \\x73rc',
+        'const sb = require(`\\x73rc/lib/supabase`)',
+        'cooked 是 src/lib/supabase',
+      ],
+      [
+        'unicode 转义 \\u0073rc',
+        "await import('\\u0073rc/lib/execution')",
+        'cooked 是 src/lib/execution',
+      ],
+    ]
+
+    it.each(ESCAPED_FORMS)('🔴 %s → 必须被发现', (_label, code) => {
+      expect(forbiddenImportsIn(BRIDGE_FILE, code).length).toBeGreaterThan(0)
+    })
+
+    it('🔴 cooked 值确实被还原成了真实模块名（不是靠 fail-closed 兜住的）', () => {
+      // 无插值 → 走 specifiers 这条路，命中的必须是**具体模块名**而不是「证明不了」
+      expect(forbiddenImportsIn(BRIDGE_FILE, "import '\\x40/lib/capabilities'")).toEqual([
+        '@/lib/capabilities',
+      ])
+      expect(forbiddenImportsIn(BRIDGE_FILE, 'require(`\\x73rc/lib/supabase`)')).toEqual([
+        '@/lib/supabase',
+      ])
+    })
+
+    it('✅ 转义出来的外部包名不误报', () => {
+      // '\x76itest' → 'vitest'，是 npm 包，不该被当成工程路径
+      expect(forbiddenImportsIn(BRIDGE_FILE, "import '\\x76itest'")).toEqual([])
+      expect(kernelImportsIn(BRIDGE_FILE, "import '\\x76itest'")).toEqual([])
+    })
+  })
+
+  /** ② Codex thread r3758650489 */
+  describe('注释挖空不许吞掉字符串之间的真实源码', () => {
+    it('🔴 字符串里的 `/*` 与 `*/` 之间夹着的违规 import 必须还在', () => {
+      // 这是一段**完全合法**的源码：两个字符串常量，中间一条真实的违规 import。
+      // 正则版把 '/*' 到 '*/' 整段当块注释删掉 → 只剩 `const start = ''`，测试全绿。
+      const code = [
+        `const start = '/*'`,
+        `import '@/lib/capabilities'`,
+        `const end = '*/'`,
+      ].join('\n')
+      expect(stripComments(code)).toContain('@/lib/capabilities')
+      expect(forbiddenImportsIn(BRIDGE_FILE, code)).toEqual(['@/lib/capabilities'])
+      expect(forbiddenImportsIn(BRIDGE_FILE, stripComments(code))).toEqual(['@/lib/capabilities'])
+    })
+
+    it('🔴 正则字面量里的 `/*` 同样不许把后面的源码吞掉', () => {
+      const code = [`const re = /\\/\\*/`, `import '@/lib/execution'`, `const done = 1`].join('\n')
+      expect(forbiddenImportsIn(BRIDGE_FILE, code)).toEqual(['@/lib/execution'])
+    })
+
+    it('🔴 模板字面量里的 `/*` 也一样', () => {
+      const code = ['const t = `/*`', `require('@/lib/supabase')`, 'const u = `*/`'].join('\n')
+      expect(forbiddenImportsIn(BRIDGE_FILE, code)).toEqual(['@/lib/supabase'])
+    })
+
+    it('✅ 真的写在块注释里的示例仍然不算违规（没有把判据放松成「注释也算」）', () => {
+      const code = [`/* import '@/lib/capabilities' */`, `const real = 1`].join('\n')
+      expect(forbiddenImportsIn(BRIDGE_FILE, code)).toEqual([])
+      expect(stripComments(code)).not.toContain('@/lib/capabilities')
+    })
+
+    it('✅ 挖空注释不改变行号（诊断信息里的位置仍然对得上）', () => {
+      const code = ['/* a */', '// b', 'const real = 1'].join('\n')
+      expect(stripComments(code).split('\n').length).toBe(3)
+    })
+  })
+
+  /**
+   * ③ 顺带关掉的两条 —— 上一轮我在 PR 评论 §6 里如实列为「残余风险、未修」。
+   *    换解析器之后它们是同一条代码路径的自然结果，不是额外加的判据。
+   */
+  describe('说明符不是字面量一律 fail closed（上一轮列为残余风险的两条）', () => {
+    const NON_LITERAL: Array<[label: string, code: string]> = [
+      ['字符串拼接', `const m = import('@/lib/' + 'growth')`],
+      ['说明符是变量', `const p = '@/lib/capabilities'\nconst m = import(p)`],
+      ['三元表达式', `const m = import(flag ? '@/lib/execution' : 'vitest')`],
+      ['require.resolve', `const p = require.resolve('@/lib/supabase')`],
+    ]
+
+    it.each(NON_LITERAL)('🔴 %s → 必须被发现', (_label, code) => {
+      expect(forbiddenImportsIn(BRIDGE_FILE, code).length).toBeGreaterThan(0)
     })
   })
 })

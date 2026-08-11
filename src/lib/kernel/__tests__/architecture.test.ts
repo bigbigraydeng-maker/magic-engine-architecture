@@ -5,10 +5,14 @@
  *    架构测试关不掉 —— 它跑在 `npm test` 里，白名单写在版本控制的代码里，
  *    加一条就是一次要过 review 的 diff。
  *
- * 全部是纯文件系统扫描：不需要 AST 解析器，不需要新依赖。
+ * 扫描基于文件系统 + **仓库自带的 TypeScript 解析器**（devDependency，编译器 API
+ * 随包提供）—— 不引入任何新依赖。早先这里写的是「不需要 AST 解析器」，实践证明
+ * 那个判断是错的：正则分不清注释与字面量、也读不到转义求值后的字符串，
+ * 靠加正则补丁堵不完（详见下面 `stripComments` 与 `scanModuleReferences`）。
  */
 
 import { describe, it, expect } from 'vitest'
+import ts from 'typescript'
 import { readFileSync, readdirSync, statSync } from 'fs'
 import { join, relative, posix } from 'path'
 import {
@@ -45,22 +49,57 @@ const ALL_FILES = walk(SRC).map((f) => relative(ROOT, f).split('\\').join('/'))
 const isTest = (p: string) => /\.test\.tsx?$/.test(p) || p.includes('/__tests__/')
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
 
+const parseSource = (code: string): ts.SourceFile =>
+  // setParentNodes = false：只按位置取注释、按节点类型取说明符，用不上父指针。
+  // 全仓近 2000 个文件都要过这一遍，省下的回填是实打实的。
+  ts.createSourceFile('scan.ts', code, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS)
+
 /**
- * 扫描前先把注释去掉。
+ * 扫描前先把注释挖空（保留换行与列宽，行号列号都不动）。
  *
  * 🔴 首版没做这一步，于是**讲解这条规则的注释本身**被当成了违规
  *    （`boundaries.ts` 和 `types.ts` 里都写着「唯一的绕过是 `as unknown as …`」）。
  *    一条把自己的文档当罪证的规则，第一件事就是教人删注释。
+ *
+ * 🔴 **但正则版的做法是错的，而且错得能放行真实违规。**
+ *    `/\/\*[\s\S]*?\*\//g` 分不清「注释」和「字符串里长得像注释的那几个字符」：
+ *      const start = '/*'
+ *      import '@/lib/growth'        // ← 真实的违规导入
+ *      const end = '*\/'
+ *    这是一段完全合法的源码，正则会把 `'/*'` 到 `'*\/'` 整段当块注释删掉，
+ *    夹在中间的违规 import 随之蒸发，边界测试一片绿。
+ *    按行首 `*` 猜 JSDoc 续行同样是猜 —— 一条真代码只要缩进后以 `*` 开头就被吞掉。
+ *
+ *    注释范围一律改由**解析器**给出。它认得字符串 / 模板 / 正则字面量，
+ *    这一类问题从此不是「再补一条正则」，而是根本不存在。
  */
 function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .split('\n')
-    .filter((line) => {
-      const t = line.trim()
-      return !t.startsWith('//') && !t.startsWith('*')
-    })
-    .join('\n')
+  const sourceFile = parseSource(src)
+  const ranges = new Map<string, ts.CommentRange>()
+
+  // `node.pos` 就是含前导 trivia 的起点（= getFullStart()），不需要父指针
+  const collectAt = (pos: number): void => {
+    for (const r of ts.getLeadingCommentRanges(src, pos) ?? []) {
+      ranges.set(`${r.pos}:${r.end}`, r)
+    }
+  }
+  const visit = (node: ts.Node): void => {
+    collectAt(node.pos)
+    node.forEachChild(visit)
+  }
+  visit(sourceFile)
+  // 文件末尾那条注释是 EOF token 的前导 trivia，不挂在任何其它节点上
+  collectAt(sourceFile.endOfFileToken.pos)
+
+  const chars = src.split('')
+  // 用 forEach 而不是 `for…of ranges.values()`：仓库 tsconfig 没设 target，
+  // 直接迭代 Map 的迭代器会撞 TS2802（要 downlevelIteration）。
+  ranges.forEach((r) => {
+    for (let i = r.pos; i < r.end && i < chars.length; i++) {
+      if (chars[i] !== '\n') chars[i] = ' '
+    }
+  })
+  return chars.join('')
 }
 
 /**
@@ -184,41 +223,88 @@ describe('L1 边界：Kernel 不许自己抓 service-role 客户端', () => {
 
 describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => {
   /**
-   * 从一段源码里把**所有**模块说明符抠出来。
+   * 从一段源码里把**所有**模块引用抠出来 —— 走 AST，五种入口一个不漏：
    *
-   * 🔴 只认 `from '...'` 是不够的 —— 下面这三种照样把模块拉进来，却一条都不会被发现：
-   *      import '@/lib/capabilities'         // 静态副作用导入
-   *      await import('@/lib/execution')     // 动态导入
-   *      require('@/lib/supabase')           // CommonJS
-   *    一条只挡得住「规规矩矩的写法」的边界等于没有边界。
+   *      import { x } from '…' / import type … / import '…'（副作用）   ImportDeclaration
+   *      export { x } from '…' / export * from '…'                      ExportDeclaration
+   *      import x = require('…')                                        ImportEqualsDeclaration
+   *      import('…') / await import('…')                                CallExpression(ImportKeyword)
+   *      require('…') / require.resolve('…')                            CallExpression(require)
    *
-   * 🔴 动态 import()/require() 还能用模板字面量：
-   *      await import(`@/lib/growth`)        // 反引号，没有插值 —— 跟引号字符串等价
-   *    只认引号的话这一种照样敞开。无插值的反引号字符串跟引号字符串同等对待，
-   *    一起抠进说明符列表；带插值的（`${...}`）另有专门判据，见下方 fail-closed。
+   * 🔴 **说明符取 `.text`，也就是解析器求值后的 cooked 值，不是源码原文。**
+   *    正则版比的是源码文本，于是合法的 JS 转义直接绕过：
+   *      await import(`\x73rc/lib/${d}`)     // 源码 \x73rc/lib/，运行时 src/lib/
+   *      import('\x40/lib/growth')           // 运行时 @/lib/growth
+   *    补正则救不了这一类 —— 要比就得比运行时到底是哪个字符串。
+   *
+   * 🔴 **不是字面量的一律 fail closed**：模板带插值、字符串拼接、说明符是变量……
+   *    静态都证明不了它去哪。证明不了就不许放行。
    */
-  const SPECIFIER_PATTERNS: readonly RegExp[] = [
-    /\bfrom\s*['"]([^'"]+)['"]/g,
-    /\bimport\s*['"]([^'"]+)['"]/g,
-    /\bimport\s*\(\s*['"]([^'"]+)['"]/g,
-    /\brequire\s*\(\s*['"]([^'"]+)['"]/g,
-    /\bimport\s*\(\s*`([^`]*)`/g,
-    /\brequire\s*\(\s*`([^`]*)`/g,
-  ]
+  type ModuleReferenceScan = {
+    readonly specifiers: readonly string[]
+    readonly unresolvable: readonly string[]
+  }
 
-  function moduleSpecifiersIn(code: string): string[] {
-    const out: string[] = []
-    for (const pattern of SPECIFIER_PATTERNS) {
-      // 每次新建，避免共享 lastIndex 让第二次扫描从半路开始
-      const re = new RegExp(pattern.source, pattern.flags)
-      let match: RegExpExecArray | null
-      while ((match = re.exec(code)) !== null) {
-        // 带插值的模板字面量在这里整段跳过——`${...}` 是运行时求值出来的，
-        // 不是一段真实存在的说明符文本；这类另有专门的 fail-closed 判据。
-        if (!match[1].includes('${')) out.push(match[1])
+  function scanModuleReferences(code: string): ModuleReferenceScan {
+    const specifiers: string[] = []
+    const unresolvable: string[] = []
+
+    const record = (expr: ts.Expression | undefined, kind: string): void => {
+      if (!expr) return
+
+      // 字符串字面量 与 无插值模板字面量：`.text` 是 cooked 值，转义已被还原
+      if (ts.isStringLiteralLike(expr)) {
+        specifiers.push(expr.text)
+        return
       }
+
+      // 带插值的模板：只有 head 是静态的，同样取 cooked 值
+      if (ts.isTemplateExpression(expr)) {
+        const cookedHead = expr.head.text
+        if (!provablyExternalPackagePrefix(cookedHead)) {
+          unresolvable.push(
+            cookedHead === ''
+              ? `${kind} 模板 \`\${…}\`（表达式打头，静态前缀为空，无法证明去向是外部包，fail closed）`
+              : `${kind} 模板 \`${cookedHead}\${…}\`（静态前缀证明不了它指向仓库外的包，fail closed）`,
+          )
+        }
+        return
+      }
+
+      unresolvable.push(
+        `${kind} 说明符不是字面量（${ts.SyntaxKind[expr.kind]}），静态证明不了去向，fail closed`,
+      )
     }
-    return out
+
+    const visit = (node: ts.Node): void => {
+      if (ts.isImportDeclaration(node)) {
+        record(node.moduleSpecifier, 'import')
+      } else if (ts.isExportDeclaration(node) && node.moduleSpecifier) {
+        record(node.moduleSpecifier, 'export…from')
+      } else if (
+        ts.isImportEqualsDeclaration(node) &&
+        ts.isExternalModuleReference(node.moduleReference)
+      ) {
+        record(node.moduleReference.expression, 'import=require')
+      } else if (ts.isCallExpression(node)) {
+        if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+          record(node.arguments[0], 'import()')
+        } else if (ts.isIdentifier(node.expression) && node.expression.text === 'require') {
+          record(node.arguments[0], 'require()')
+        } else if (
+          ts.isPropertyAccessExpression(node.expression) &&
+          ts.isIdentifier(node.expression.expression) &&
+          node.expression.expression.text === 'require' &&
+          node.expression.name.text === 'resolve'
+        ) {
+          record(node.arguments[0], 'require.resolve()')
+        }
+      }
+      node.forEachChild(visit)
+    }
+
+    visit(parseSource(code))
+    return { specifiers, unresolvable }
   }
 
   /**
@@ -264,7 +350,7 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
   }
 
   const importedModules = (sourcePath: string, code: string): string[] =>
-    moduleSpecifiersIn(code).map((spec) => canonicalSpecifier(sourcePath, spec))
+    scanModuleReferences(code).specifiers.map((spec) => canonicalSpecifier(sourcePath, spec))
 
   /**
    * 插值模板字面量的动态 import()/require() —— 静态扫描算不出插值展开后的真实路径。
@@ -316,21 +402,9 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
     return true
   }
 
-  function interpolatedProjectPathHits(code: string): string[] {
-    const pattern = /\b(?:import|require)\s*\(\s*`([^`]*?)\$\{/g
-    const hits: string[] = []
-    let match: RegExpExecArray | null
-    while ((match = pattern.exec(code)) !== null) {
-      const prefix = match[1]
-      if (!provablyExternalPackagePrefix(prefix)) {
-        hits.push(
-          prefix === ''
-            ? '插值动态导入 `${…}`（表达式打头，静态前缀为空，无法证明去向是外部包，fail closed）'
-            : '插值动态导入 `' + prefix + '${…}`（静态前缀证明不了它指向仓库外的包，展开后去向未知，fail closed）',
-        )
-      }
-    }
-    return hits
+  /** 静态证明不了去向的模块引用（插值模板 / 变量 / 拼接），一律算命中。 */
+  function interpolatedProjectPathHits(code: string): readonly string[] {
+    return scanModuleReferences(code).unresolvable
   }
 
   /**
@@ -458,12 +532,19 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
     })
 
     it('🔴 只写在注释里的示例不算违规（判据不许把自己的文档当罪证）', () => {
+      // 🔴 JSDoc 续行（` * …`）必须**真的包在块注释里**。早先这里少写了 `/**` 与 `*/`，
+      //    那段其实是「悬空的代码」，只因为旧的正则版按行首 `*` 猜注释才没报 ——
+      //    解析器不猜，所以 fixture 得写成真实文件里的样子。
       const commented = [
         `// import { x } from '@/lib/growth'`,
         `/* const g = require('@/lib/action-bridge') */`,
+        `/**`,
         ` * import '@/lib/growth'`,
+        ` */`,
         `const real = 1`,
       ].join('\n')
+      // 原文直接扫（AST 天然不把注释当代码）与先挖空注释再扫，两条路都必须干净
+      expect(importsAnyOf(KERNEL_FILE, commented, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
       expect(
         importsAnyOf(KERNEL_FILE, stripComments(commented), KERNEL_FORBIDDEN_MODULE_IMPORTS),
       ).toBe(false)
@@ -708,13 +789,17 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
     })
 
     it('🔴 只写在注释里的插值示例不算违规（判据不许把自己的文档当罪证）', () => {
+      // JSDoc 续行同样要真的包在块注释里 —— 解析器不按行首 `*` 猜注释
       const commented = [
         '// const m = await import(`@/lib/${domain}`)',
         '/* const g = require(`../${domain}`) */',
+        '/**',
         ' * await import(`src/lib/${x}`)',
+        ' */',
         '// const h = await import(`${domain}/growth`)',
         'const real = 1',
       ].join('\n')
+      expect(importsAnyOf(KERNEL_FILE, commented, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
       expect(
         importsAnyOf(KERNEL_FILE, stripComments(commented), KERNEL_FORBIDDEN_MODULE_IMPORTS),
       ).toBe(false)
@@ -761,6 +846,103 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
           expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS), code).toBe(false)
           expect(importsAnyOf(BRIDGE_FILE, code, ACTION_BRIDGE_FORBIDDEN_IMPORTS), code).toBe(false)
         }
+      })
+    })
+
+    /**
+     * 🔴 **换成解析器之后才关得掉的两类绕过。**
+     *
+     * 这两条正则版**结构上**做不到，不是补一条 pattern 的事：
+     *   ① 转义：比对源码原文，`\x73rc` 永远不等于 `src`；要比就得比 cooked 值。
+     *   ② 注释：正则分不清「注释」与「字符串里长得像注释的那几个字符」。
+     */
+    describe('🔴 解析器口径：转义与注释（合成源码）', () => {
+      /** ① Codex thread r3758650486 */
+      describe('转义说明符按 cooked 值判，不按源码原文', () => {
+        const ESCAPED_FORMS: Array<[label: string, code: string]> = [
+          ['模板 head 里的 \\x73rc（Codex 原案）', 'const m = await import(`\\x73rc/lib/${d}`)'],
+          ['普通字符串里的 \\x40（= @）', "import '\\x40/lib/growth'"],
+          ['无插值模板里的 \\x73rc', 'const g = require(`\\x73rc/lib/growth`)'],
+          ['unicode 转义 \\u0073rc', "await import('\\u0073rc/lib/action-bridge')"],
+        ]
+
+        it.each(ESCAPED_FORMS)('🔴 kernel 侧：%s → 必须被发现', (_label, code) => {
+          expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(true)
+        })
+
+        it('🔴 cooked 值确实被还原成真实模块名（不是靠 fail-closed 兜住的）', () => {
+          const reasons = violationReasons(
+            KERNEL_FILE,
+            "import '\\x40/lib/growth'",
+            KERNEL_FORBIDDEN_MODULE_IMPORTS,
+          )
+          expect(reasons).toEqual([`${KERNEL_FILE} → @/lib/growth`])
+        })
+
+        it('✅ 转义出来的外部包名不误报', () => {
+          // '\x76itest' → 'vitest'
+          expect(importsAnyOf(KERNEL_FILE, "import '\\x76itest'", KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(
+            false,
+          )
+        })
+      })
+
+      /** ② Codex thread r3758650489 */
+      describe('注释挖空不许吞掉字符串之间的真实源码', () => {
+        it('🔴 字符串里的 `/*` 与 `*/` 之间夹着的违规 import 必须还在', () => {
+          // 完全合法的源码：两个字符串常量，中间一条真实的违规 import。
+          // 正则版把 '/*' 到 '*/' 整段当块注释删掉 → 违规蒸发，测试全绿。
+          const code = [
+            `const start = '/*'`,
+            `import '@/lib/growth'`,
+            `const end = '*/'`,
+          ].join('\n')
+          expect(stripComments(code)).toContain('@/lib/growth')
+          expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(true)
+          expect(
+            importsAnyOf(KERNEL_FILE, stripComments(code), KERNEL_FORBIDDEN_MODULE_IMPORTS),
+          ).toBe(true)
+        })
+
+        it('🔴 正则字面量里的 `/*` 同样不许把后面的源码吞掉', () => {
+          const code = [`const re = /\\/\\*/`, `import '@/lib/action-bridge'`, `const d = 1`].join(
+            '\n',
+          )
+          expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(true)
+        })
+
+        it('🔴 模板字面量里的 `/*` 也一样', () => {
+          const code = ['const t = `/*`', `require('@/lib/growth')`, 'const u = `*/`'].join('\n')
+          expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(true)
+        })
+
+        it('✅ 真的写在块注释里的示例仍然不算违规（判据没有被放松成「注释也算」）', () => {
+          const code = [`/* import '@/lib/growth' */`, `const real = 1`].join('\n')
+          expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
+          expect(stripComments(code)).not.toContain('@/lib/growth')
+        })
+
+        it('✅ 挖空注释不改变行号（诊断信息里的位置仍然对得上）', () => {
+          const code = ['/* a */', '// b', 'const real = 1'].join('\n')
+          expect(stripComments(code).split('\n').length).toBe(3)
+        })
+      })
+
+      /**
+       * ③ 顺带关掉的两条 —— 上一轮在 PR 评论 §6 里如实列为「残余风险、未修」。
+       *    换解析器之后它们是同一条代码路径的自然结果，不是额外加的判据。
+       */
+      describe('说明符不是字面量一律 fail closed（上一轮列为残余风险的两条）', () => {
+        const NON_LITERAL: Array<[label: string, code: string]> = [
+          ['字符串拼接', `const m = import('@/lib/' + 'growth')`],
+          ['说明符是变量', `const p = '@/lib/growth'\nconst m = import(p)`],
+          ['三元表达式', `const m = import(flag ? '@/lib/growth' : 'vitest')`],
+          ['require.resolve', `const p = require.resolve('@/lib/action-bridge')`],
+        ]
+
+        it.each(NON_LITERAL)('🔴 %s → 必须被发现', (_label, code) => {
+          expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(true)
+        })
       })
     })
   })
