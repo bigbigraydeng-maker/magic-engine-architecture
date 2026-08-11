@@ -16,11 +16,18 @@
  *      逻辑完全一样：只有一个就直接选，有多个也选第一个，跟已经上线的行为
  *      保持一致，不是这个脚本单独发明一套规则）。
  *
- * 默认 dry-run，只打印"会做什么"，不写库。加 --live 才真的写。
- * 幂等：跑第二遍，已经迁移过的行会被跳过（先查新表是否已有该 provider 行）。
+ * dry-run 是**真正零写入、零外部调用**：GA4 这部分老代码曾经不加 --live
+ * 也会经 getValidAccessToken() 触发一次 Google token 刷新、悄悄写回老表——
+ * 复审揪出这条后已改掉，dry-run 现在对 GA4 只报「这一行是候选，具体连的
+ * 是哪个 Property 要等 --live 才会真的去问 Google」，不再有任何副作用。
+ *
+ * 幂等：跑第二遍，已经迁移过的行会被跳过（先查新表是否已有该 provider 行，
+ * 用 order+limit(1) 取最新一条，不假设只有一行）。
+ * 单行出错不会掀翻整批——每个客户的处理都包在自己的 try/catch 里，失败了
+ * 记一笔继续跑下一个。
  *
  * 用法：
- *   npx tsx scripts/backfills/migrate-google-oauth-tokens.ts            # dry-run
+ *   npx tsx scripts/backfills/migrate-google-oauth-tokens.ts            # dry-run，零写入零外呼
  *   npx tsx scripts/backfills/migrate-google-oauth-tokens.ts --live     # 真的写
  *   npx tsx scripts/backfills/migrate-google-oauth-tokens.ts --live --client-id=<uuid>  # 只跑一个客户
  */
@@ -47,13 +54,204 @@ interface OldTokenRow {
 
 const GA4_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly'
 
+/** 立刻视为过期，逼下一次真正读取时强制刷新一次——比信一个我们其实不知道
+ *  准不准的到期时间安全（刷新是幂等、低成本操作，读到过期数据不是）。 */
+function forceExpiredTimestamp(): string {
+  return new Date(0).toISOString()
+}
+
+async function migrateGsc(
+  row: OldTokenRow,
+  deps: {
+    supabaseAdmin: typeof import('../../src/lib/supabase').supabaseAdmin
+    encryptToken: typeof import('../../src/lib/platform-oauth/vocabulary').encryptToken
+  },
+  counts: { migrated: number; skipped: number; failed: number },
+): Promise<void> {
+  const { supabaseAdmin, encryptToken } = deps
+  const label = `client=${row.client_id}`
+
+  const { data: existing, error: lookupErr } = await supabaseAdmin
+    .from('platform_oauth_connections')
+    .select('id')
+    .eq('client_id', row.client_id)
+    .eq('provider', 'google_gsc')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (lookupErr) {
+    console.error(`[gsc] ${label} — lookup failed, skip:`, lookupErr.message)
+    counts.failed++
+    return
+  }
+  if (existing) {
+    console.log(`[gsc] ${label} — already has a platform_oauth_connections row, skip`)
+    counts.skipped++
+    return
+  }
+  if (!row.refresh_token) {
+    console.warn(`[gsc] ${label} — no refresh_token in old row, cannot migrate, skip`)
+    counts.failed++
+    return
+  }
+
+  console.log(`[gsc] ${label} — will insert (account_id=${row.google_email ?? row.client_id})`)
+  if (!LIVE) { counts.migrated++; return }
+
+  const { error: insErr } = await supabaseAdmin
+    .from('platform_oauth_connections')
+    .upsert(
+      {
+        client_id:         row.client_id,
+        provider:          'google_gsc',
+        access_token_enc:  encryptToken(row.access_token),
+        refresh_token_enc: encryptToken(row.refresh_token),
+        token_expiry:      row.token_expiry,
+        account_id:        row.google_email ?? row.client_id,
+        display_name:      row.google_email ?? 'Google Search Console',
+        scopes:            row.scopes,
+        status:            'active',
+        updated_at:        new Date().toISOString(),
+      },
+      { onConflict: 'client_id,provider,account_id' },
+    )
+  if (insErr) {
+    console.error(`[gsc] ${label} — insert failed:`, insErr.message)
+    counts.failed++
+  } else {
+    counts.migrated++
+  }
+}
+
+async function migrateGa4(
+  row: OldTokenRow,
+  deps: {
+    supabaseAdmin: typeof import('../../src/lib/supabase').supabaseAdmin
+    encryptToken: typeof import('../../src/lib/platform-oauth/vocabulary').encryptToken
+    getValidAccessToken: typeof import('../../src/lib/google-oauth/client').getValidAccessToken
+    listGa4Properties: typeof import('../../src/lib/ga4/admin').listGa4Properties
+  },
+  counts: { migrated: number; skipped: number; failed: number; noProperties: number },
+): Promise<void> {
+  const { supabaseAdmin, encryptToken, getValidAccessToken, listGa4Properties } = deps
+  const label = `client=${row.client_id}`
+
+  if (!row.scopes?.includes(GA4_SCOPE)) {
+    console.log(`[ga4] ${label} — old grant never requested analytics.readonly, skip`)
+    counts.skipped++
+    return
+  }
+  if (!row.refresh_token) {
+    console.warn(`[ga4] ${label} — no refresh_token in old row, cannot migrate, skip`)
+    counts.failed++
+    return
+  }
+
+  const { data: existing, error: lookupErr } = await supabaseAdmin
+    .from('platform_oauth_connections')
+    .select('id')
+    .eq('client_id', row.client_id)
+    .eq('provider', 'google_ga4')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (lookupErr) {
+    console.error(`[ga4] ${label} — lookup failed, skip:`, lookupErr.message)
+    counts.failed++
+    return
+  }
+  if (existing) {
+    console.log(`[ga4] ${label} — already has a platform_oauth_connections row, skip`)
+    counts.skipped++
+    return
+  }
+
+  // Dry-run stops here — resolving which property applies needs a live
+  // Google call (token refresh + Admin API), and a "preview" must never
+  // touch a real API or write a token refresh back to the old table.
+  if (!LIVE) {
+    console.log(`[ga4] ${label} — candidate (has analytics.readonly scope, not yet migrated); ` +
+      `run with --live to actually ask Google which property applies`)
+    counts.migrated++
+    return
+  }
+
+  const accessToken = await getValidAccessToken(row.client_id)
+  if (!accessToken) {
+    console.warn(`[ga4] ${label} — could not obtain a live access token (refresh failed), skip`)
+    counts.failed++
+    return
+  }
+
+  const result = await listGa4Properties(accessToken)
+  if (!result.ok) {
+    console.error(`[ga4] ${label} — Admin API call failed, skip (not the same as "no GA4 account")`)
+    counts.failed++
+    return
+  }
+  if (result.properties.length === 0) {
+    console.log(`[ga4] ${label} — Google account genuinely has no GA4 property, skip`)
+    counts.noProperties++
+    return
+  }
+
+  const chosen = result.properties[0]   // same "take first" MVP as the live OAuth callback
+  console.log(`[ga4] ${label} — inserting property=${chosen.property} ("${chosen.displayName}")`)
+
+  const { error: insErr } = await supabaseAdmin
+    .from('platform_oauth_connections')
+    .upsert(
+      {
+        client_id:         row.client_id,
+        provider:          'google_ga4',
+        access_token_enc:  encryptToken(accessToken),
+        refresh_token_enc: encryptToken(row.refresh_token),
+        // accessToken 可能是刚刷新出来的新值，row.token_expiry 是刷新前那个
+        // 已过期的老值，两者配不上——不假装知道真实到期时间，直接标成已过期，
+        // 逼下一次真正使用时再刷新一次（幂等、低成本，比用错的时间戳安全）。
+        token_expiry:      forceExpiredTimestamp(),
+        account_id:        chosen.property,
+        display_name:      chosen.displayName,
+        scopes:            row.scopes,
+        status:            'active',
+        updated_at:        new Date().toISOString(),
+      },
+      { onConflict: 'client_id,provider,account_id' },
+    )
+  if (insErr) {
+    console.error(`[ga4] ${label} — insert failed:`, insErr.message)
+    counts.failed++
+    return
+  }
+
+  const now = new Date().toISOString()
+  await supabaseAdmin
+    .from('client_connectors')
+    .upsert(
+      {
+        client_id:    row.client_id,
+        anchor:       'ga4',
+        status:       'connected',
+        // google_email 跟线上 OAuth 回调（google/callback/route.ts）写的字段
+        // 对齐——settings 页面读这个字段显示"已连接为 xxx@gmail.com"。
+        config:       { google_email: row.google_email, property_id: chosen.property },
+        connected_at: now,
+        updated_at:   now,
+      },
+      { onConflict: 'client_id,anchor' },
+    )
+  counts.migrated++
+}
+
 async function main() {
   const { supabaseAdmin } = await import('../../src/lib/supabase')
   const { encryptToken } = await import('../../src/lib/platform-oauth/vocabulary')
   const { getValidAccessToken } = await import('../../src/lib/google-oauth/client')
   const { listGa4Properties } = await import('../../src/lib/ga4/admin')
 
-  console.log(`[migrate-google-oauth-tokens] mode=${LIVE ? 'LIVE (will write)' : 'DRY-RUN (no writes)'}`)
+  console.log(`[migrate-google-oauth-tokens] mode=${LIVE ? 'LIVE (will write)' : 'DRY-RUN (zero writes, zero external calls)'}`)
 
   let query = supabaseAdmin
     .from('google_oauth_tokens')
@@ -70,151 +268,30 @@ async function main() {
   const oldRows = (rows ?? []) as OldTokenRow[]
   console.log(`[migrate-google-oauth-tokens] ${oldRows.length} row(s) in google_oauth_tokens to consider`)
 
-  let gscMigrated = 0, gscSkipped = 0, gscFailed = 0
-  let ga4Migrated = 0, ga4Skipped = 0, ga4Failed = 0, ga4NoProperties = 0
+  const gscCounts = { migrated: 0, skipped: 0, failed: 0 }
+  const ga4Counts = { migrated: 0, skipped: 0, failed: 0, noProperties: 0 }
 
   for (const row of oldRows) {
-    const label = `client=${row.client_id}`
-
-    // ── GSC: pure data copy, no external call ──────────────────────────────
-    const { data: existingGsc } = await supabaseAdmin
-      .from('platform_oauth_connections')
-      .select('id')
-      .eq('client_id', row.client_id)
-      .eq('provider', 'google_gsc')
-      .maybeSingle()
-
-    if (existingGsc) {
-      console.log(`[gsc] ${label} — already has a platform_oauth_connections row, skip`)
-      gscSkipped++
-    } else if (!row.refresh_token) {
-      console.warn(`[gsc] ${label} — no refresh_token in old row, cannot migrate, skip`)
-      gscFailed++
-    } else {
-      console.log(`[gsc] ${label} — will insert (account_id=${row.google_email ?? row.client_id})`)
-      if (LIVE) {
-        const { error: insErr } = await supabaseAdmin
-          .from('platform_oauth_connections')
-          .upsert(
-            {
-              client_id:         row.client_id,
-              provider:          'google_gsc',
-              access_token_enc:  encryptToken(row.access_token),
-              refresh_token_enc: encryptToken(row.refresh_token),
-              token_expiry:      row.token_expiry,
-              account_id:        row.google_email ?? row.client_id,
-              display_name:      row.google_email ?? 'Google Search Console',
-              scopes:            row.scopes,
-              status:            'active',
-              updated_at:        new Date().toISOString(),
-            },
-            { onConflict: 'client_id,provider,account_id' },
-          )
-        if (insErr) {
-          console.error(`[gsc] ${label} — insert failed:`, insErr.message)
-          gscFailed++
-        } else {
-          gscMigrated++
-        }
-      } else {
-        gscMigrated++   // counted as "would migrate" in dry-run
-      }
+    try {
+      await migrateGsc(row, { supabaseAdmin, encryptToken }, gscCounts)
+    } catch (err) {
+      console.error(`[gsc] client=${row.client_id} — unexpected error, skip and continue:`, err)
+      gscCounts.failed++
     }
 
-    // ── GA4: needs a live Google API call to resolve the property ──────────
-    if (!row.scopes?.includes(GA4_SCOPE)) {
-      console.log(`[ga4] ${label} — old grant never requested analytics.readonly, skip`)
-      ga4Skipped++
-      continue
-    }
-
-    const { data: existingGa4 } = await supabaseAdmin
-      .from('platform_oauth_connections')
-      .select('id')
-      .eq('client_id', row.client_id)
-      .eq('provider', 'google_ga4')
-      .maybeSingle()
-
-    if (existingGa4) {
-      console.log(`[ga4] ${label} — already has a platform_oauth_connections row, skip`)
-      ga4Skipped++
-      continue
-    }
-
-    // getValidAccessToken reads+refreshes through the OLD table — safe to
-    // call even in dry-run, it's a read/refresh, not a write to the table
-    // we're migrating away from.
-    const accessToken = await getValidAccessToken(row.client_id)
-    if (!accessToken) {
-      console.warn(`[ga4] ${label} — could not obtain a live access token (refresh failed), skip`)
-      ga4Failed++
-      continue
-    }
-
-    const result = await listGa4Properties(accessToken)
-    if (!result.ok) {
-      console.error(`[ga4] ${label} — Admin API call failed, skip (not the same as "no GA4 account")`)
-      ga4Failed++
-      continue
-    }
-    if (result.properties.length === 0) {
-      console.log(`[ga4] ${label} — Google account genuinely has no GA4 property, skip`)
-      ga4NoProperties++
-      continue
-    }
-
-    const chosen = result.properties[0]   // same "take first" MVP as the live OAuth callback
-    console.log(`[ga4] ${label} — will insert property=${chosen.property} ("${chosen.displayName}")`)
-
-    if (LIVE) {
-      const { error: insErr } = await supabaseAdmin
-        .from('platform_oauth_connections')
-        .upsert(
-          {
-            client_id:         row.client_id,
-            provider:          'google_ga4',
-            access_token_enc:  encryptToken(accessToken),
-            refresh_token_enc: encryptToken(row.refresh_token!),
-            token_expiry:      row.token_expiry,
-            account_id:        chosen.property,
-            display_name:      chosen.displayName,
-            scopes:            row.scopes,
-            status:            'active',
-            updated_at:        new Date().toISOString(),
-          },
-          { onConflict: 'client_id,provider,account_id' },
-        )
-      if (insErr) {
-        console.error(`[ga4] ${label} — insert failed:`, insErr.message)
-        ga4Failed++
-        continue
-      }
-
-      const now = new Date().toISOString()
-      await supabaseAdmin
-        .from('client_connectors')
-        .upsert(
-          {
-            client_id:    row.client_id,
-            anchor:       'ga4',
-            status:       'connected',
-            config:       { property_id: chosen.property },
-            connected_at: now,
-            updated_at:   now,
-          },
-          { onConflict: 'client_id,anchor' },
-        )
-      ga4Migrated++
-    } else {
-      ga4Migrated++   // counted as "would migrate" in dry-run
+    try {
+      await migrateGa4(row, { supabaseAdmin, encryptToken, getValidAccessToken, listGa4Properties }, ga4Counts)
+    } catch (err) {
+      console.error(`[ga4] client=${row.client_id} — unexpected error, skip and continue:`, err)
+      ga4Counts.failed++
     }
   }
 
   console.log('')
   console.log('[migrate-google-oauth-tokens] summary')
-  console.log(`  GSC: migrated=${gscMigrated} skipped=${gscSkipped} failed=${gscFailed}`)
-  console.log(`  GA4: migrated=${ga4Migrated} skipped=${ga4Skipped} no_properties=${ga4NoProperties} failed=${ga4Failed}`)
-  if (!LIVE) console.log('  (dry-run — nothing was written; re-run with --live to apply)')
+  console.log(`  GSC: migrated=${gscCounts.migrated} skipped=${gscCounts.skipped} failed=${gscCounts.failed}`)
+  console.log(`  GA4: migrated=${ga4Counts.migrated} skipped=${ga4Counts.skipped} no_properties=${ga4Counts.noProperties} failed=${ga4Counts.failed}`)
+  if (!LIVE) console.log('  (dry-run — nothing was written, no external calls made; re-run with --live to apply)')
 }
 
 main().catch((err) => {
