@@ -1693,6 +1693,33 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         test="src/lib/action-bridge/__tests__/architecture.test.ts",
         expect_fail_contains="之间夹着的违规 import 必须还在",
     ),
+    # ── PR #898 收尾（第三轮）：Codex P2 thread r3759104922 —— ImportTypeNode ──
+    dict(
+        # `type T = import('@/lib/growth').X` 走的是独立的 ImportTypeNode 分支，
+        # 不属于 ImportDeclaration/ExportDeclaration/CallExpression 任何一类。
+        # 拆掉这一支，type-only 的模块引用就完全不会被 record，
+        # 禁止层可以只用 type import 悄悄建立编译期依赖而不被架构测试发现。
+        name="K-WP02 ImportTypeNode 分支被拆掉（type-only 模块引用不再被发现）",
+        file="src/lib/action-bridge/__tests__/architecture.test.ts",
+        old="""    } else if (ts.isImportTypeNode(node)) {""",
+        new="""    } else if (false) {""",
+        test="src/lib/action-bridge/__tests__/architecture.test.ts",
+        expect_fail_contains="type T = import(...).X 必须被发现",
+    ),
+    # ── PR #898 收尾（第三轮）：Codex P2 thread r3759104932 —— trailing 注释 ──
+    dict(
+        # 同一行内、紧跟在前一个 token 后面的块注释是 trailing trivia，
+        # 只收 leading 挖不掉它。拆掉这一收集，`foo /* ... */ + bar` 这类
+        # 注释会原样留在 stripComments 输出里，可能被后面还在用正则的
+        # 检查（比如「没有 any」）当成生产代码误判。
+        name="K-WP02 trailing 注释不再被挖空（同一行内的块注释原样留下）",
+        file="src/lib/action-bridge/__tests__/architecture.test.ts",
+        old="""    collectTrailingAt(node.end)
+""",
+        new="""""",
+        test="src/lib/action-bridge/__tests__/architecture.test.ts",
+        expect_fail_contains="同一行内的块注释（trailing trivia）必须被挖空",
+    ),
 ]
 
 
