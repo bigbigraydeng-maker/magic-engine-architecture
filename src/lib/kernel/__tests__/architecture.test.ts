@@ -191,12 +191,19 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
    *      await import('@/lib/execution')     // 动态导入
    *      require('@/lib/supabase')           // CommonJS
    *    一条只挡得住「规规矩矩的写法」的边界等于没有边界。
+   *
+   * 🔴 动态 import()/require() 还能用模板字面量：
+   *      await import(`@/lib/growth`)        // 反引号，没有插值 —— 跟引号字符串等价
+   *    只认引号的话这一种照样敞开。无插值的反引号字符串跟引号字符串同等对待，
+   *    一起抠进说明符列表；带插值的（`${...}`）另有专门判据，见下方 fail-closed。
    */
   const SPECIFIER_PATTERNS: readonly RegExp[] = [
     /\bfrom\s*['"]([^'"]+)['"]/g,
     /\bimport\s*['"]([^'"]+)['"]/g,
     /\bimport\s*\(\s*['"]([^'"]+)['"]/g,
     /\brequire\s*\(\s*['"]([^'"]+)['"]/g,
+    /\bimport\s*\(\s*`([^`]*)`/g,
+    /\brequire\s*\(\s*`([^`]*)`/g,
   ]
 
   function moduleSpecifiersIn(code: string): string[] {
@@ -205,7 +212,11 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
       // 每次新建，避免共享 lastIndex 让第二次扫描从半路开始
       const re = new RegExp(pattern.source, pattern.flags)
       let match: RegExpExecArray | null
-      while ((match = re.exec(code)) !== null) out.push(match[1])
+      while ((match = re.exec(code)) !== null) {
+        // 带插值的模板字面量在这里整段跳过——`${...}` 是运行时求值出来的，
+        // 不是一段真实存在的说明符文本；这类另有专门的 fail-closed 判据。
+        if (!match[1].includes('${')) out.push(match[1])
+      }
     }
     return out
   }
@@ -256,20 +267,65 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
     moduleSpecifiersIn(code).map((spec) => canonicalSpecifier(sourcePath, spec))
 
   /**
+   * 插值模板字面量的动态 import()/require() —— 静态扫描算不出插值展开后的真实路径。
+   *
+   * 🔴 直接放过等于开了个口子：`import(\`${prefix}/growth\`)` 只要 `prefix`
+   *    运行时算出来是 `'@/lib'`，效果跟写死 `import('@/lib/growth')` 一模一样，
+   *    但静态扫描永远看不出来。所以静态前缀（`${` 之前那一截）只要落在四类
+   *    工程路径写法上 —— `@/`、`src/`、`./`、`../` —— 就直接判定为命中，
+   *    不猜插值算出来是什么，也不许把这段前缀塞进 `canonicalSpecifier()`
+   *    去规范化（那是个截断的半截路径，规范化出来的东西看着像一个合法模块，
+   *    实则是编出来的误导信息）。
+   *
+   * scoped npm 包的插值（如 `` `some-package-${variant}` ``）静态前缀不落在
+   * 这四类里，原样放行 —— 不能把外部包名误判成工程路径。
+   */
+  const PROJECT_PATH_PREFIXES = ['@/', 'src/', './', '../'] as const
+
+  function interpolatedProjectPathHits(code: string): string[] {
+    const pattern = /\b(?:import|require)\s*\(\s*`([^`]*?)\$\{/g
+    const hits: string[] = []
+    let match: RegExpExecArray | null
+    while ((match = pattern.exec(code)) !== null) {
+      const prefix = match[1]
+      if (PROJECT_PATH_PREFIXES.some((p) => prefix.startsWith(p))) {
+        hits.push(
+          '插值动态导入 `' + prefix + '${…}`（静态前缀落在工程路径写法上，展开后去向未知，fail closed）',
+        )
+      }
+    }
+    return hits
+  }
+
+  /**
    * 命中判据 = **前缀匹配**，跟原来的正则语义一致（模块本身与它的子路径都命中，
    * `@/lib/cms/` 这类带斜杠的前缀规则照常生效）。
    * 🔴 改成字符串比较之后**不再需要转义** —— 模块名里的 `/`、`@`、`.`
    *    都只是普通字符，没有任何机会被当成正则元字符。
+   *
+   * 🔴 插值动态导入的 fail-closed 命中不看 `mods` —— 静态扫描算不出真实目标，
+   *    没法证明它没指向被禁止的那些层，所以对**每一道**在跑的边界检查都算命中。
    */
   const importsAnyOf = (sourcePath: string, code: string, mods: readonly string[]): boolean => {
     const specs = importedModules(sourcePath, code)
-    return mods.some((mod) => specs.some((spec) => spec.startsWith(mod)))
+    if (mods.some((mod) => specs.some((spec) => spec.startsWith(mod)))) return true
+    return interpolatedProjectPathHits(code).length > 0
+  }
+
+  /** 跟 `importsAnyOf` 同一套判据，但把命中原因（含源文件路径）摊开，用于违规清单的诊断信息。 */
+  const violationReasons = (sourcePath: string, code: string, mods: readonly string[]): string[] => {
+    const specs = importedModules(sourcePath, code)
+    const direct = mods
+      .filter((mod) => specs.some((spec) => spec.startsWith(mod)))
+      .map((mod) => `${sourcePath} → ${mod}`)
+    const interpolated = interpolatedProjectPathHits(code).map((reason) => `${sourcePath} → ${reason}`)
+    return [...direct, ...interpolated]
   }
 
   it('🔴 kernel 目录里没有一处 import 域模块或 action-bridge', () => {
     const violations = ALL_FILES.filter((f) => f.startsWith('src/lib/kernel/'))
       .filter((f) => !isTest(f))
-      .filter((f) => importsAnyOf(f, readCode(f), KERNEL_FORBIDDEN_MODULE_IMPORTS))
+      .flatMap((f) => violationReasons(f, readCode(f), KERNEL_FORBIDDEN_MODULE_IMPORTS))
 
     expect(
       violations,
@@ -282,7 +338,7 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
   it('🔴 action-bridge 只依赖 Kernel —— 不碰库 / provider / 执行 / legacy 生成端', () => {
     const violations = ALL_FILES.filter((f) => f.startsWith('src/lib/action-bridge/'))
       .filter((f) => !isTest(f))
-      .filter((f) => importsAnyOf(f, readCode(f), ACTION_BRIDGE_FORBIDDEN_IMPORTS))
+      .flatMap((f) => violationReasons(f, readCode(f), ACTION_BRIDGE_FORBIDDEN_IMPORTS))
 
     expect(
       violations,
@@ -295,7 +351,7 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
   it('域模块（Growth）不 import Kernel 或 action-bridge', () => {
     const violations = ALL_FILES.filter((f) => f.startsWith('src/lib/growth/'))
       .filter((f) => !isTest(f))
-      .filter((f) => importsAnyOf(f, readCode(f), ['@/lib/kernel', '@/lib/action-bridge']))
+      .flatMap((f) => violationReasons(f, readCode(f), ['@/lib/kernel', '@/lib/action-bridge']))
 
     expect(
       violations,
@@ -321,6 +377,8 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
       ['动态导入', `const m = await import('@/lib/growth')`],
       ['CommonJS require', `const g = require('@/lib/growth')`],
       ['子路径也算', `import type { T } from '@/lib/growth/types'`],
+      ['动态导入（模板字面量，无插值）', 'const m = await import(`@/lib/growth`)'],
+      ['CommonJS require（模板字面量，无插值）', 'const g = require(`@/lib/growth`)'],
     ]
 
     /** 合成用例的虚拟源文件 —— 相对说明符要按它们的位置解析。 */
@@ -349,6 +407,17 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
           `import { w } from '@/lib/cms/wordpress-client'`,
           ACTION_BRIDGE_FORBIDDEN_IMPORTS,
         ),
+      ).toBe(true)
+      // 动态导入 / require 用模板字面量（无插值）一样算数
+      expect(
+        importsAnyOf(
+          BRIDGE_FILE,
+          'await import(`@/lib/execution`)',
+          ACTION_BRIDGE_FORBIDDEN_IMPORTS,
+        ),
+      ).toBe(true)
+      expect(
+        importsAnyOf(BRIDGE_FILE, 'require(`@/lib/supabase`)', ACTION_BRIDGE_FORBIDDEN_IMPORTS),
       ).toBe(true)
     })
 
@@ -506,6 +575,84 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
       ].join('\n')
       // Kernel 侧：registry / types 都不在 Kernel 的禁止清单里
       expect(importsAnyOf(KERNEL_FILE, clean, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
+    })
+  })
+
+  /**
+   * 🔴 **插值模板字面量的动态导入同样要 fail closed。**
+   *
+   * `import(\`${prefix}/growth\`)`：只要 `prefix` 运行时算出来是 `'@/lib'`，
+   * 效果跟写死 `import('@/lib/growth')` 一模一样，但静态扫描算不出插值展开后
+   * 去了哪。所以静态前缀（`${` 之前那一截）只要落在四类工程路径写法上——
+   * `@/`、`src/`、`./`、`../`——就直接判定为命中，不猜、也不算出真实目标；
+   * scoped npm 包的插值（`some-package-${variant}`）前缀不落在这四类里，放行。
+   */
+  describe('🔴 插值模板字面量的动态导入 fail closed（合成源码）', () => {
+    const KERNEL_FILE = 'src/lib/kernel/example.ts'
+    const BRIDGE_FILE = 'src/lib/action-bridge/index.ts'
+    const GROWTH_FILE = 'src/lib/growth/types.ts'
+
+    const PROJECT_PREFIX_FORMS: Array<[label: string, code: string]> = [
+      ['@/ alias 前缀', 'const m = await import(`@/lib/${domain}`)'],
+      ['src/ baseUrl 前缀', 'const m = await import(`src/lib/${domain}`)'],
+      ['./ 相对前缀', 'const m = require(`./${domain}`)'],
+      ['../ 相对前缀', 'const m = require(`../${domain}`)'],
+    ]
+
+    it.each(PROJECT_PREFIX_FORMS)(
+      'kernel 侧：%s 的插值动态导入 → fail closed 必须命中',
+      (_label, code) => {
+        expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(true)
+      },
+    )
+
+    it.each(PROJECT_PREFIX_FORMS)(
+      'bridge 侧：%s 的插值动态导入 → fail closed 必须命中',
+      (_label, code) => {
+        expect(importsAnyOf(BRIDGE_FILE, code, ACTION_BRIDGE_FORBIDDEN_IMPORTS)).toBe(true)
+      },
+    )
+
+    it.each(PROJECT_PREFIX_FORMS)(
+      'growth 侧：%s 的插值动态导入 → fail closed 必须命中',
+      (_label, code) => {
+        expect(importsAnyOf(GROWTH_FILE, code, ['@/lib/kernel', '@/lib/action-bridge'])).toBe(true)
+      },
+    )
+
+    it('🔴 命中诊断带着源文件路径（违规清单不能只说「哪个文件出事了」丢了「因为什么」）', () => {
+      const reasons = violationReasons(
+        KERNEL_FILE,
+        'await import(`@/lib/${domain}`)',
+        KERNEL_FORBIDDEN_MODULE_IMPORTS,
+      )
+      expect(reasons.length).toBeGreaterThan(0)
+      expect(reasons[0]).toContain(KERNEL_FILE)
+      expect(reasons[0]).toContain('fail closed')
+    })
+
+    it('外部 npm 包名的插值不是工程路径，不误报', () => {
+      const code = 'const m = await import(`some-package-${variant}`)'
+      expect(importsAnyOf(KERNEL_FILE, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
+      expect(importsAnyOf(BRIDGE_FILE, code, ACTION_BRIDGE_FORBIDDEN_IMPORTS)).toBe(false)
+      expect(importsAnyOf(GROWTH_FILE, code, ['@/lib/kernel', '@/lib/action-bridge'])).toBe(false)
+    })
+
+    it('Kernel 允许的本地相对导入即使用反引号（无插值）也不误报', () => {
+      const clean = 'import(`./registry`)\nrequire(`./types`)'
+      expect(importsAnyOf(KERNEL_FILE, clean, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
+    })
+
+    it('🔴 只写在注释里的插值示例不算违规（判据不许把自己的文档当罪证）', () => {
+      const commented = [
+        '// const m = await import(`@/lib/${domain}`)',
+        '/* const g = require(`../${domain}`) */',
+        ' * await import(`src/lib/${x}`)',
+        'const real = 1',
+      ].join('\n')
+      expect(
+        importsAnyOf(KERNEL_FILE, stripComments(commented), KERNEL_FORBIDDEN_MODULE_IMPORTS),
+      ).toBe(false)
     })
   })
 })
