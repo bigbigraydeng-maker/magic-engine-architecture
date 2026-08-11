@@ -13,7 +13,8 @@
 
 import { describe, it, expect } from 'vitest'
 import ts from 'typescript'
-import { readFileSync, readdirSync, statSync } from 'fs'
+import { readFileSync, readdirSync, statSync, mkdtempSync, writeFileSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
 import { join, relative, posix } from 'path'
 import {
   PROVIDER_WRITE_MODULES,
@@ -1164,6 +1165,38 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
       for (const other of ['.json', '.md', '.css', '.sql', '.snap', '.py']) {
         expect(isScannedSource(`anything${other}`), other).toBe(false)
       }
+    })
+
+    it('🔴 walk() 真的会把这些后缀收进来，且不误收非代码文件（真实磁盘探针）', () => {
+      // 🔴 上面那条只验判据函数；这条验**真实的目录遍历**——判据对了但 walker
+      //    没用上它，照样是空的。
+      const tmp = mkdtempSync(join(tmpdir(), 'k-wp02-kernel-walker-'))
+      try {
+        const source = ['a.ts', 'b.tsx', 'c.js', 'd.jsx', 'e.mts', 'f.cts', 'g.mjs', 'h.cjs']
+        const noise = ['i.json', 'j.md', 'k.css', 'l.snap']
+        for (const f of [...source, ...noise]) writeFileSync(join(tmp, f), '')
+        const found = walk(tmp).map((f) => f.split(/[\\/]/).pop() as string)
+        expect(found.sort()).toEqual([...source].sort())
+      } finally {
+        rmSync(tmp, { recursive: true, force: true })
+      }
+    })
+
+    it('🔴 .jsx 里插值动态导入同样 fail closed（不因为扩展名不是 .ts 就放松）', () => {
+      expect(
+        importsAnyOf(KERNEL_JSX, 'const m = await import(`@/lib/${d}`)', KERNEL_FORBIDDEN_MODULE_IMPORTS),
+      ).toBe(true)
+      expect(
+        importsAnyOf(KERNEL_JS, 'const m = require(`../${d}`)', KERNEL_FORBIDDEN_MODULE_IMPORTS),
+      ).toBe(true)
+    })
+
+    it('✅ .jsx 里真正的 JSX 内容不误报（属性值长得像路径也不算 import）', () => {
+      const jsx = [
+        `import React from 'react'`,
+        `export const P = () => <a href="@/lib/growth" data-src="../action-bridge">x</a>`,
+      ].join('\n')
+      expect(importsAnyOf(KERNEL_JSX, jsx, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
     })
 
     it('🔴 每种后缀选对 ScriptKind（不是一律当 TS）', () => {

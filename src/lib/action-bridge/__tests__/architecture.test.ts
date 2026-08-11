@@ -8,7 +8,8 @@
 
 import { describe, it, expect } from 'vitest'
 import ts from 'typescript'
-import { readFileSync, readdirSync, statSync } from 'fs'
+import { readFileSync, readdirSync, statSync, mkdtempSync, writeFileSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
 import { join, relative, posix } from 'path'
 import { ACTION_BRIDGE_FORBIDDEN_IMPORTS } from '@/lib/kernel/boundaries'
 
@@ -1009,6 +1010,35 @@ describe('🔴 allowJs：JS/JSX 文件同样要被扫描与治理（合成源码
     for (const other of ['.json', '.md', '.css', '.sql', '.snap', '.py']) {
       expect(isScannedSource(`anything${other}`), other).toBe(false)
     }
+  })
+
+  it('🔴 walk() 真的会把这些后缀收进来，且不误收非代码文件（真实磁盘探针）', () => {
+    // 🔴 上面那条只验判据函数；这条验**真实的目录遍历** —— 判据对了但 walker
+    //    没用上它，照样是空的。
+    const tmp = mkdtempSync(join(tmpdir(), 'k-wp02-bridge-walker-'))
+    try {
+      const source = ['a.ts', 'b.tsx', 'c.js', 'd.jsx', 'e.mts', 'f.cts', 'g.mjs', 'h.cjs']
+      const noise = ['i.json', 'j.md', 'k.css', 'l.snap']
+      for (const f of [...source, ...noise]) writeFileSync(join(tmp, f), '')
+      const found = walk(tmp).map((f) => f.split(/[\\/]/).pop() as string)
+      expect(found.sort()).toEqual([...source].sort())
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  it('🔴 .jsx 里插值动态导入同样 fail closed（不因为扩展名不是 .ts 就放松）', () => {
+    expect(forbiddenImportsIn(BRIDGE_JSX, 'const m = await import(`@/lib/${d}`)').length).toBeGreaterThan(0)
+    expect(forbiddenImportsIn(BRIDGE_JS, 'const m = require(`../${d}`)').length).toBeGreaterThan(0)
+  })
+
+  it('✅ .jsx 里真正的 JSX 内容不误报（属性值长得像路径也不算 import）', () => {
+    const jsx = [
+      `import React from 'react'`,
+      `export const W = () => <a href="@/lib/capabilities" data-src="../execution">x</a>`,
+    ].join('\n')
+    expect(forbiddenImportsIn(BRIDGE_JSX, jsx)).toEqual([])
+    expect(kernelImportsIn(BRIDGE_JSX, jsx)).toEqual([])
   })
 
   it('🔴 每种后缀选对 ScriptKind（不是一律当 TS）', () => {
