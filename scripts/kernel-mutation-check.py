@@ -1720,6 +1720,18 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         test="src/lib/action-bridge/__tests__/architecture.test.ts",
         expect_fail_contains="同一行内的块注释（trailing trivia）必须被挖空",
     ),
+    # ── PR #898 收尾（第四轮）：Codex P2 thread r3761927225 —— walker 漏扫 .js/.jsx ──
+    dict(
+        # walker 的扩展名判据退回只认 .ts/.tsx —— kernel/bridge/growth 任一目录新增
+        # 一个 .js/.jsx 辅助文件，会在文件系统这一层就被跳过，根本轮不到
+        # scanModuleReferences 去判：越权 import 靠改扩展名就能绕开全部四条边界扫描。
+        name="K-WP02 walker 扩展名判据退回只认 .ts/.tsx（.js/.jsx helper 又能绕开边界）",
+        file="src/lib/action-bridge/__tests__/architecture.test.ts",
+        old="""    else if (/\\.[jt]sx?$/.test(entry)) out.push(full)""",
+        new="""    else if (/\\.tsx?$/.test(entry)) out.push(full)""",
+        test="src/lib/action-bridge/__tests__/architecture.test.ts",
+        expect_fail_contains="必须收 .ts / .tsx / .js / .jsx",
+    ),
 ]
 
 

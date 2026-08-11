@@ -13,8 +13,9 @@
 
 import { describe, it, expect } from 'vitest'
 import ts from 'typescript'
-import { readFileSync, readdirSync, statSync } from 'fs'
+import { readFileSync, readdirSync, statSync, mkdtempSync, writeFileSync, rmSync } from 'fs'
 import { join, relative, posix } from 'path'
+import { tmpdir } from 'os'
 import {
   PROVIDER_WRITE_MODULES,
   PROVIDER_WRITE_ALLOWED_DIRS,
@@ -31,13 +32,19 @@ import { outwardBlockReason } from '../outward-authorization'
 const ROOT = process.cwd()
 const SRC = join(ROOT, 'src')
 
+/**
+ * 🔴 **`.tsx?` 只认 `.ts` / `.tsx`。**（Codex thread r3761927225）仓库 tsconfig
+ *    开了 `allowJs`，kernel/growth/bridge 里任何目录新增一个 `.js`/`.jsx` 文件、
+ *    里面直接越过依赖边界，这个 walker 在文件系统这一层就把它跳过了 ——
+ *    根本轮不到下面的判据去看，全仓四条边界扫描永远绿。
+ */
 function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry)
     if (statSync(full).isDirectory()) {
       if (entry === 'node_modules' || entry === '.next') continue
       walk(full, out)
-    } else if (/\.tsx?$/.test(entry)) {
+    } else if (/\.[jt]sx?$/.test(entry)) {
       out.push(full)
     }
   }
@@ -46,13 +53,26 @@ function walk(dir: string, out: string[] = []): string[] {
 
 const ALL_FILES = walk(SRC).map((f) => relative(ROOT, f).split('\\').join('/'))
 
-const isTest = (p: string) => /\.test\.tsx?$/.test(p) || p.includes('/__tests__/')
+const isTest = (p: string) => /\.test\.[jt]sx?$/.test(p) || p.includes('/__tests__/')
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
 
-const parseSource = (code: string): ts.SourceFile =>
+/**
+ * 🔴 **按文件扩展名选正确的 ScriptKind，不能对 `.js`/`.jsx` 硬编码用 TS 解析。**
+ *    （Codex thread r3761927225）JSX 语法在 `ScriptKind.TS`/`.JS` 下不被支持 ——
+ *    `<Widget />` 会被当成类型断言/泛型语法去解析，解析器行为跟着走样。
+ *    扩展名之外一律落回 `.TS`（合成用例的虚拟路径大多没有真实扩展名）。
+ */
+function scriptKindFor(path: string): ts.ScriptKind {
+  if (path.endsWith('.tsx')) return ts.ScriptKind.TSX
+  if (path.endsWith('.jsx')) return ts.ScriptKind.JSX
+  if (path.endsWith('.js')) return ts.ScriptKind.JS
+  return ts.ScriptKind.TS
+}
+
+const parseSource = (code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS): ts.SourceFile =>
   // setParentNodes = false：只按位置取注释、按节点类型取说明符，用不上父指针。
   // 全仓近 2000 个文件都要过这一遍，省下的回填是实打实的。
-  ts.createSourceFile('scan.ts', code, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS)
+  ts.createSourceFile('scan.ts', code, ts.ScriptTarget.Latest, false, scriptKind)
 
 /**
  * 扫描前先把注释挖空（保留换行与列宽，行号列号都不动）。
@@ -84,8 +104,8 @@ const parseSource = (code: string): ts.SourceFile =>
  *    那条）把纯注释文本当成生产代码，对着注释报出一个假违规。
  *    补法：每个节点的 `pos`（leading）与 `end`（trailing）都收一遍。
  */
-function stripComments(src: string): string {
-  const sourceFile = parseSource(src)
+function stripComments(src: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS): string {
+  const sourceFile = parseSource(src, scriptKind)
   const ranges = new Map<string, ts.CommentRange>()
 
   // `node.pos` 就是含前导 trivia 的起点（= getFullStart()），不需要父指针
@@ -140,7 +160,7 @@ const codeCache = new Map<string, string>()
 const readCode = (p: string): string => {
   const hit = codeCache.get(p)
   if (hit !== undefined) return hit
-  const code = stripComments(read(p))
+  const code = stripComments(read(p), scriptKindFor(p))
   codeCache.set(p, code)
   return code
 }
@@ -270,7 +290,10 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
     readonly unresolvable: readonly string[]
   }
 
-  function scanModuleReferences(code: string): ModuleReferenceScan {
+  function scanModuleReferences(
+    code: string,
+    scriptKind: ts.ScriptKind = ts.ScriptKind.TS,
+  ): ModuleReferenceScan {
     const specifiers: string[] = []
     const unresolvable: string[] = []
 
@@ -340,7 +363,7 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
       node.forEachChild(visit)
     }
 
-    visit(parseSource(code))
+    visit(parseSource(code, scriptKind))
     return { specifiers, unresolvable }
   }
 
@@ -387,7 +410,9 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
   }
 
   const importedModules = (sourcePath: string, code: string): string[] =>
-    scanModuleReferences(code).specifiers.map((spec) => canonicalSpecifier(sourcePath, spec))
+    scanModuleReferences(code, scriptKindFor(sourcePath)).specifiers.map((spec) =>
+      canonicalSpecifier(sourcePath, spec),
+    )
 
   /**
    * 插值模板字面量的动态 import()/require() —— 静态扫描算不出插值展开后的真实路径。
@@ -440,8 +465,8 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
   }
 
   /** 静态证明不了去向的模块引用（插值模板 / 变量 / 拼接），一律算命中。 */
-  function interpolatedProjectPathHits(code: string): readonly string[] {
-    return scanModuleReferences(code).unresolvable
+  function interpolatedProjectPathHits(sourcePath: string, code: string): readonly string[] {
+    return scanModuleReferences(code, scriptKindFor(sourcePath)).unresolvable
   }
 
   /**
@@ -456,7 +481,7 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
   const importsAnyOf = (sourcePath: string, code: string, mods: readonly string[]): boolean => {
     const specs = importedModules(sourcePath, code)
     if (mods.some((mod) => specs.some((spec) => spec.startsWith(mod)))) return true
-    return interpolatedProjectPathHits(code).length > 0
+    return interpolatedProjectPathHits(sourcePath, code).length > 0
   }
 
   /** 跟 `importsAnyOf` 同一套判据，但把命中原因（含源文件路径）摊开，用于违规清单的诊断信息。 */
@@ -465,7 +490,9 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
     const direct = mods
       .filter((mod) => specs.some((spec) => spec.startsWith(mod)))
       .map((mod) => `${sourcePath} → ${mod}`)
-    const interpolated = interpolatedProjectPathHits(code).map((reason) => `${sourcePath} → ${reason}`)
+    const interpolated = interpolatedProjectPathHits(sourcePath, code).map(
+      (reason) => `${sourcePath} → ${reason}`,
+    )
     return [...direct, ...interpolated]
   }
 
@@ -1100,6 +1127,96 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
         `const real = 1`,
       ].join('\n')
       expect(importsAnyOf(KERNEL_FILE, commented, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
+    })
+  })
+
+  /**
+   * 🔴 **全仓 walker 只认 `.ts` / `.tsx`，`.js` / `.jsx` helper 完全不会被扫。**
+   *    （Codex thread r3761927225）仓库 tsconfig 开了 `allowJs`：kernel / growth /
+   *    action-bridge 任一目录新增一个 `.js` 辅助文件、里面直接越过依赖边界，
+   *    walker 在文件系统这一层就把它跳过了 —— 根本轮不到上面这些判据去看，
+   *    四条边界扫描（kernel 禁止清单 / bridge 禁止清单 / growth 禁止清单 /
+   *    bridge 的 Kernel 允许清单）全部会一直绿下去。
+   */
+  describe('🔴 walker 认得 .js / .jsx，不再只认 .ts / .tsx', () => {
+    const KERNEL_JS_FILE = 'src/lib/kernel/example.js'
+    const BRIDGE_JSX_FILE = 'src/lib/action-bridge/index.jsx'
+    const GROWTH_JS_FILE = 'src/lib/growth/types.js'
+
+    it('🔴 walk() 必须收 .ts / .tsx / .js / .jsx，且不误收非代码文件（真实磁盘探针）', () => {
+      const tmp = mkdtempSync(join(tmpdir(), 'k-wp02-kernel-walker-'))
+      try {
+        writeFileSync(join(tmp, 'a.ts'), '')
+        writeFileSync(join(tmp, 'b.tsx'), '')
+        writeFileSync(join(tmp, 'c.js'), '')
+        writeFileSync(join(tmp, 'd.jsx'), '')
+        writeFileSync(join(tmp, 'e.json'), '')
+        writeFileSync(join(tmp, 'f.md'), '')
+        const found = walk(tmp).map((f) => f.split(/[\\/]/).pop())
+        expect(found.sort()).toEqual(['a.ts', 'b.tsx', 'c.js', 'd.jsx'])
+      } finally {
+        rmSync(tmp, { recursive: true, force: true })
+      }
+    })
+
+    it('🔴 kernel 侧 .js：import 域模块 / bridge 必须被发现', () => {
+      expect(
+        importsAnyOf(KERNEL_JS_FILE, `import { x } from '@/lib/growth'`, KERNEL_FORBIDDEN_MODULE_IMPORTS),
+      ).toBe(true)
+      expect(
+        importsAnyOf(
+          KERNEL_JS_FILE,
+          `const b = require('@/lib/action-bridge')`,
+          KERNEL_FORBIDDEN_MODULE_IMPORTS,
+        ),
+      ).toBe(true)
+    })
+
+    it('🔴 bridge 侧 .jsx：import 禁止层必须被发现', () => {
+      expect(
+        importsAnyOf(BRIDGE_JSX_FILE, `import { x } from '@/lib/capabilities'`, ACTION_BRIDGE_FORBIDDEN_IMPORTS),
+      ).toBe(true)
+      expect(
+        importsAnyOf(
+          BRIDGE_JSX_FILE,
+          `const m = await import('@/lib/execution')`,
+          ACTION_BRIDGE_FORBIDDEN_IMPORTS,
+        ),
+      ).toBe(true)
+    })
+
+    it('🔴 growth 侧 .js：import kernel / bridge 必须被发现', () => {
+      expect(
+        importsAnyOf(GROWTH_JS_FILE, `import { x } from '@/lib/kernel'`, [
+          '@/lib/kernel',
+          '@/lib/action-bridge',
+        ]),
+      ).toBe(true)
+    })
+
+    it('🔴 .jsx 里插值动态导入同样 fail closed（不因为扩展名不是 .ts 就放松）', () => {
+      expect(
+        importsAnyOf(
+          BRIDGE_JSX_FILE,
+          'const m = await import(`@/lib/${domain}`)',
+          ACTION_BRIDGE_FORBIDDEN_IMPORTS,
+        ),
+      ).toBe(true)
+    })
+
+    it('✅ .js / .jsx 里允许的模块不误报（没被扩展名扫描误伤）', () => {
+      expect(
+        importsAnyOf(KERNEL_JS_FILE, `import { R } from './registry'`, KERNEL_FORBIDDEN_MODULE_IMPORTS),
+      ).toBe(false)
+    })
+
+    it('✅ .jsx 里真正的 JSX 内容不误报（属性值长得像路径也不算 import）', () => {
+      const code = [
+        `import { x } from '@/lib/growth'`,
+        `const el = <Widget src="@/lib/growth" />`,
+      ].join('\n')
+      // 命中来自那一行真实 import；JSX 属性值不是 import/require 的说明符
+      expect(importsAnyOf(BRIDGE_JSX_FILE, code, ['@/lib/growth'])).toBe(true)
     })
   })
 })

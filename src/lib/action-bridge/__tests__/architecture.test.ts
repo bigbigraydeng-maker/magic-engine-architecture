@@ -8,18 +8,26 @@
 
 import { describe, it, expect } from 'vitest'
 import ts from 'typescript'
-import { readFileSync, readdirSync, statSync } from 'fs'
+import { readFileSync, readdirSync, statSync, mkdtempSync, writeFileSync, rmSync } from 'fs'
 import { join, relative, posix } from 'path'
+import { tmpdir } from 'os'
 import { ACTION_BRIDGE_FORBIDDEN_IMPORTS } from '@/lib/kernel/boundaries'
 
 const ROOT = process.cwd()
 const DIR = join(ROOT, 'src/lib/action-bridge')
 
+/**
+ * 🔴 **`.tsx?` 只认 `.ts` / `.tsx`。**（Codex thread r3761927225）仓库 tsconfig
+ *    开了 `allowJs`，bridge 新增一个 `.js`/`.jsx` 辅助文件、里面直接 import 被禁止
+ *    的层，这个 walker 在文件系统这一层就把它跳过了 —— 根本轮不到下面的
+ *    scanModuleReferences 去判，两套架构测试永远绿。这不是判据的口子，
+ *    是扫描范围本身的口子。
+ */
 function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry)
     if (statSync(full).isDirectory()) walk(full, out)
-    else if (/\.tsx?$/.test(entry)) out.push(full)
+    else if (/\.[jt]sx?$/.test(entry)) out.push(full)
   }
   return out
 }
@@ -38,11 +46,23 @@ function walk(dir: string, out: string[] = []): string[] {
  *
  * 仓库本来就有 TypeScript（devDependency，编译器 API 自带），所以**不引入任何新依赖**。
  * 解析器天然认得注释 / 字符串 / 模板 / 正则字面量，上面两类问题一次性消失。
+ *
+ * 🔴 **按文件扩展名选正确的 ScriptKind，不能对 `.js`/`.jsx` 硬编码用 TS 解析。**
+ *    （Codex thread r3761927225）JSX 语法在 `ScriptKind.TS`/`.JS` 下不被支持 ——
+ *    `<Widget />` 会被当成类型断言/泛型语法去解析，解析器行为跟着走样。
+ *    扩展名之外一律落回 `.TS`（合成用例的虚拟路径大多没有真实扩展名）。
  */
-const parseSource = (code: string): ts.SourceFile =>
+function scriptKindFor(path: string): ts.ScriptKind {
+  if (path.endsWith('.tsx')) return ts.ScriptKind.TSX
+  if (path.endsWith('.jsx')) return ts.ScriptKind.JSX
+  if (path.endsWith('.js')) return ts.ScriptKind.JS
+  return ts.ScriptKind.TS
+}
+
+const parseSource = (code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS): ts.SourceFile =>
   // setParentNodes = false：这里只按位置取注释、按节点类型取说明符，用不上父指针，
   // 关掉它能省一遍全树回填（全仓近 2000 个文件时这笔开销是实打实的）。
-  ts.createSourceFile('scan.ts', code, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS)
+  ts.createSourceFile('scan.ts', code, ts.ScriptTarget.Latest, false, scriptKind)
 
 /**
  * 把注释挖空（保留换行与列宽，行号列号都不动）。
@@ -67,8 +87,8 @@ const parseSource = (code: string): ts.SourceFile =>
  *    「没有 any」之类检查里，可能把纯注释文本当成生产代码。
  *    补法：每个节点的 `pos`（leading）与 `end`（trailing）都收一遍。
  */
-function stripComments(src: string): string {
-  const sourceFile = parseSource(src)
+function stripComments(src: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS): string {
+  const sourceFile = parseSource(src, scriptKind)
   const ranges = new Map<string, ts.CommentRange>()
 
   // `node.pos` 就是含前导 trivia 的起点（= getFullStart()），不需要父指针
@@ -107,7 +127,7 @@ const PROD_FILES = walk(DIR)
   .map((f) => relative(ROOT, f).split('\\').join('/'))
   .filter((f) => !f.includes('/__tests__/'))
 
-const codeOf = (p: string) => stripComments(readFileSync(join(ROOT, p), 'utf8'))
+const codeOf = (p: string) => stripComments(readFileSync(join(ROOT, p), 'utf8'), scriptKindFor(p))
 
 /**
  * 从一段源码里把**所有**模块引用抠出来 —— 走 AST，六种入口一个不漏：
@@ -141,7 +161,10 @@ type ModuleReferenceScan = {
   readonly unresolvable: readonly string[]
 }
 
-function scanModuleReferences(code: string): ModuleReferenceScan {
+function scanModuleReferences(
+  code: string,
+  scriptKind: ts.ScriptKind = ts.ScriptKind.TS,
+): ModuleReferenceScan {
   const specifiers: string[] = []
   const unresolvable: string[] = []
 
@@ -212,7 +235,7 @@ function scanModuleReferences(code: string): ModuleReferenceScan {
     node.forEachChild(visit)
   }
 
-  visit(parseSource(code))
+  visit(parseSource(code, scriptKind))
   return { specifiers, unresolvable }
 }
 
@@ -267,8 +290,8 @@ function provablyExternalPackagePrefix(prefix: string): boolean {
 }
 
 /** 静态证明不了去向的模块引用（插值模板 / 变量 / 拼接），一律算命中。 */
-const interpolatedProjectPathHits = (code: string): readonly string[] =>
-  scanModuleReferences(code).unresolvable
+const interpolatedProjectPathHits = (sourcePath: string, code: string): readonly string[] =>
+  scanModuleReferences(code, scriptKindFor(sourcePath)).unresolvable
 
 /**
  * 把说明符规范成**跟禁止清单同一套写法**（无点段的 `@/...`）。
@@ -314,7 +337,9 @@ function canonicalSpecifier(sourcePath: string, spec: string): string {
 
 /** 一个源文件里所有 import 指向的模块，已规范成 `@/...` 口径。 */
 const importedModules = (sourcePath: string, code: string): string[] =>
-  scanModuleReferences(code).specifiers.map((spec) => canonicalSpecifier(sourcePath, spec))
+  scanModuleReferences(code, scriptKindFor(sourcePath)).specifiers.map((spec) =>
+    canonicalSpecifier(sourcePath, spec),
+  )
 
 /**
  * 命中判据 = **前缀匹配**，跟原来的正则语义一致：
@@ -336,12 +361,12 @@ function forbiddenImportsIn(sourcePath: string, code: string): string[] {
   const direct = ACTION_BRIDGE_FORBIDDEN_IMPORTS.filter((mod) =>
     specs.some((spec) => specMatchesModule(spec, mod)),
   )
-  return [...direct, ...interpolatedProjectPathHits(code)]
+  return [...direct, ...interpolatedProjectPathHits(sourcePath, code)]
 }
 
 const kernelImportsIn = (sourcePath: string, code: string): string[] => {
   const direct = importedModules(sourcePath, code).filter((spec) => spec.startsWith('@/lib/kernel'))
-  return [...direct, ...interpolatedProjectPathHits(code)]
+  return [...direct, ...interpolatedProjectPathHits(sourcePath, code)]
 }
 
 describe('action-bridge 是一层纯映射', () => {
@@ -941,5 +966,76 @@ describe('🔴 type-only 的 import() 类型引用同样要被治理（ImportTyp
       `const real = 1`,
     ].join('\n')
     expect(forbiddenImportsIn(BRIDGE_FILE, commented)).toEqual([])
+  })
+})
+
+/**
+ * 🔴 **全仓 walker 只认 `.ts` / `.tsx`，`.js` / `.jsx` helper 完全不会被扫。**
+ *    （Codex thread r3761927225）仓库 tsconfig 开了 `allowJs`：bridge 新增一个
+ *    `.js` 辅助文件、里面直接 import 被禁止的层，两套架构测试永远绿 —— walker
+ *    在文件系统这一层就把它跳过了，根本轮不到 scanModuleReferences 去判。
+ *    这不是扫描判据的口子，是扫描范围本身的口子。
+ */
+describe('🔴 walker 认得 .js / .jsx，不再只认 .ts / .tsx', () => {
+  it('🔴 walk() 必须收 .ts / .tsx / .js / .jsx，且不误收非代码文件（真实磁盘探针）', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'k-wp02-bridge-walker-'))
+    try {
+      writeFileSync(join(tmp, 'a.ts'), '')
+      writeFileSync(join(tmp, 'b.tsx'), '')
+      writeFileSync(join(tmp, 'c.js'), '')
+      writeFileSync(join(tmp, 'd.jsx'), '')
+      writeFileSync(join(tmp, 'e.json'), '')
+      writeFileSync(join(tmp, 'f.md'), '')
+      const found = walk(tmp).map((f) => f.split(/[\\/]/).pop())
+      expect(found.sort()).toEqual(['a.ts', 'b.tsx', 'c.js', 'd.jsx'])
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
+  const BRIDGE_JS_FORMS: Array<[label: string, sourcePath: string, code: string]> = [
+    ['.js 具名导入', 'src/lib/action-bridge/helper.js', `import { createCapabilities } from '@/lib/capabilities'`],
+    ['.js CommonJS require', 'src/lib/action-bridge/helper.js', `const sb = require('@/lib/supabase')`],
+    ['.jsx 具名导入', 'src/lib/action-bridge/widget.jsx', `import { execute } from '@/lib/execution'`],
+    ['.jsx 动态导入', 'src/lib/action-bridge/widget.jsx', `const m = await import('@/lib/capabilities')`],
+  ]
+
+  it.each(BRIDGE_JS_FORMS)('🔴 %s → 必须被发现（禁止清单）', (_label, sourcePath, code) => {
+    expect(forbiddenImportsIn(sourcePath, code).length).toBeGreaterThan(0)
+  })
+
+  it('🔴 .jsx 里插值动态导入同样 fail closed（不因为扩展名不是 .ts 就放松）', () => {
+    const code = 'const m = await import(`@/lib/${domain}`)'
+    expect(forbiddenImportsIn('src/lib/action-bridge/widget.jsx', code).length).toBeGreaterThan(0)
+  })
+
+  it('✅ .js / .jsx 里允许的 Kernel types/registry 导入不误报', () => {
+    const code = [
+      `import type { ActionKey } from '@/lib/kernel/types'`,
+      `import { ACTION_REGISTRY } from '@/lib/kernel/registry'`,
+    ].join('\n')
+    expect(forbiddenImportsIn('src/lib/action-bridge/helper.js', code)).toEqual([])
+    expect(kernelImportsIn('src/lib/action-bridge/helper.js', code).sort()).toEqual([
+      '@/lib/kernel/registry',
+      '@/lib/kernel/types',
+    ])
+  })
+
+  it('✅ .jsx 里真正的 JSX 内容不误报（属性值长得像路径也不算 import）', () => {
+    const code = [
+      `import { createCapabilities } from '@/lib/capabilities'`,
+      `const el = <Widget src="@/lib/capabilities" />`,
+    ].join('\n')
+    // 违规只来自那一行真实 import；JSX 属性值不是 import/require 的说明符
+    expect(forbiddenImportsIn('src/lib/action-bridge/widget.jsx', code)).toEqual(['@/lib/capabilities'])
+  })
+
+  it('✅ 干净的 .js / .jsx 文件不误报', () => {
+    const clean = [
+      `import { MAPPING_TABLE } from './mapping-table'`,
+      `export function helper() { return MAPPING_TABLE }`,
+    ].join('\n')
+    expect(forbiddenImportsIn('src/lib/action-bridge/helper.js', clean)).toEqual([])
+    expect(forbiddenImportsIn('src/lib/action-bridge/widget.jsx', clean)).toEqual([])
   })
 })
