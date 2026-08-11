@@ -22,6 +22,7 @@ import {
 import { supabaseAdmin } from '@/lib/supabase'
 import { encryptToken } from '@/lib/platform-oauth/vocabulary'
 import { listGa4Properties } from '@/lib/ga4/admin'
+import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -52,17 +53,24 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const verified = state ? verifyState(state) : null
 
   // User denied consent
+  //
+  // 魏征 2026-08-11 复审：原来只给 'connect' 打了"别送去会撞登录墙的 /dashboard"
+  // 的补丁，漏了同样是非 FDE 用户的 'wizard'——而"在 Google 同意页点取消"正是
+  // 向导 UX 设计里要覆盖的主路径之一（没有账号就跳过/点了取消，不该被撞飞出
+  // 向导）。'connect' 和 'wizard' 现在统一走 destination()，只有 'admin'（本来
+  // 就是已登录 FDE）和 state 完全解析不出来（没有 clientId 可用）才落回裸
+  // /dashboard。
   if (error) {
-    if (verified?.flow === 'connect') {
-      return NextResponse.redirect(destination('connect', verified.clientId, 'denied'))
+    if (verified && verified.flow !== 'admin') {
+      return NextResponse.redirect(destination(verified.flow, verified.clientId, 'denied'))
     }
     return NextResponse.redirect(`${appUrl()}/dashboard?google_auth_error=denied`)
   }
 
-  // Missing code or state — route connect-flow customers away from the dashboard login wall
+  // Missing code or state — route connect/wizard customers away from the dashboard login wall
   if (!code || !state) {
-    if (verified?.flow === 'connect') {
-      return NextResponse.redirect(destination('connect', verified.clientId, 'error'))
+    if (verified && verified.flow !== 'admin') {
+      return NextResponse.redirect(destination(verified.flow, verified.clientId, 'error'))
     }
     return NextResponse.redirect(`${appUrl()}/dashboard?google_auth_error=missing_params`)
   }
@@ -78,6 +86,19 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // might allow non-HMAC-sourced clientIds to reach this point.
   if (!UUID_RE.test(clientId)) {
     return NextResponse.redirect(`${appUrl()}/dashboard?google_auth_error=invalid_state`)
+  }
+
+  // 狄仁杰 2026-08-11 攻击验证：state 的 HMAC 签名只证明"这条 state 是本服务
+  // 签发的"，不证明"签发时的调用者真的有权碰这个 clientId"——/api/auth/google/
+  // connect 那一端现在已经堵了 admin/wizard 两条 flow 的入口，这里是第二道闸，
+  // 用当前请求的真实会话重新校验一次，跟 gbp/callback 的模式一致（不是只信
+  // state 里带的东西）。'connect' flow 是刻意设计成无登录的公网页，不在这道
+  // 闸门里——它自己的鉴权模型是另一个独立问题，见 spec §2.1 B1。
+  if (flow !== 'connect') {
+    const access = await requireDashboardClientAccess(clientId)
+    if (!access.ok) {
+      return NextResponse.json({ error: access.error }, { status: access.status })
+    }
   }
 
   // Exchange authorization code for tokens

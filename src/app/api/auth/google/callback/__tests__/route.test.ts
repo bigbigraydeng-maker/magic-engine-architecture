@@ -10,8 +10,13 @@ const mocks = vi.hoisted(() => ({
   storeTokens:       vi.fn(),
   encryptToken:      vi.fn((s: string) => `enc:${s}`),
   listGa4Properties: vi.fn(),
+  requireDashboardClientAccess: vi.fn(),
   upsertCalls:       [] as Array<{ table: string; row: unknown; opts?: unknown }>,
   clientConnectorsExisting: null as { status: string; config: Record<string, unknown> | null } | null,
+}))
+
+vi.mock('@/lib/auth/client-access', () => ({
+  requireDashboardClientAccess: mocks.requireDashboardClientAccess,
 }))
 
 vi.mock('@/lib/google-oauth/client', async (importOriginal) => {
@@ -75,6 +80,10 @@ function makeRequest(params: { code?: string; state?: string; error?: string }) 
   return new NextRequest(url)
 }
 
+function adminAccess() {
+  return { ok: true as const, user: { email: 'admin@test.com' }, role: 'admin' as const, allowedClientId: null }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.upsertCalls.length = 0
@@ -85,6 +94,52 @@ beforeEach(() => {
   mocks.fetchGoogleEmail.mockResolvedValue('owner@example.com')
   mocks.storeTokens.mockResolvedValue(undefined)
   mocks.listGa4Properties.mockResolvedValue({ ok: true, properties: [] })
+  mocks.requireDashboardClientAccess.mockResolvedValue(adminAccess())
+})
+
+describe('狄仁杰 2026-08-11 攻击验证 — admin/wizard flow 必须验证当前会话真的有权碰这个 client', () => {
+  it('rejects with the access-control status when the session has no access (admin flow)', async () => {
+    mocks.verifyState.mockReturnValue({ clientId: CLIENT_ID, flow: 'admin' })
+    mocks.requireDashboardClientAccess.mockResolvedValue({ ok: false, status: 403, error: 'Forbidden' })
+
+    const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+    expect(res.status).toBe(403)
+    expect(mocks.exchangeCode).not.toHaveBeenCalled()
+  })
+
+  it('rejects an unauthenticated caller (wizard flow) — this is exactly the path wired into the onboarding wizard button', async () => {
+    mocks.verifyState.mockReturnValue({ clientId: CLIENT_ID, flow: 'wizard' })
+    mocks.requireDashboardClientAccess.mockResolvedValue({ ok: false, status: 401, error: 'Unauthenticated' })
+
+    const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+    expect(res.status).toBe(401)
+    expect(mocks.exchangeCode).not.toHaveBeenCalled()
+    // No DB writes must happen for a rejected caller — an attacker must not be
+    // able to plant their own Google account's tokens as "this client's connection".
+    expect(mocks.upsertCalls).toHaveLength(0)
+  })
+
+  it('proceeds normally when the session does have access (admin flow)', async () => {
+    mocks.verifyState.mockReturnValue({ clientId: CLIENT_ID, flow: 'admin' })
+    mocks.requireDashboardClientAccess.mockResolvedValue(adminAccess())
+
+    const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+    expect(res.status).toBe(307)
+    expect(mocks.exchangeCode).toHaveBeenCalled()
+  })
+
+  it('does NOT gate the connect flow — that is the intentional no-login public page (separate issue, spec §2.1 B1)', async () => {
+    mocks.verifyState.mockReturnValue({ clientId: CLIENT_ID, flow: 'connect' })
+    mocks.requireDashboardClientAccess.mockResolvedValue({ ok: false, status: 401, error: 'Unauthenticated' })
+
+    const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+    expect(mocks.requireDashboardClientAccess).not.toHaveBeenCalled()
+    expect(mocks.exchangeCode).toHaveBeenCalled()
+  })
 })
 
 describe('GET /api/auth/google/callback', () => {
@@ -205,6 +260,46 @@ describe('GET /api/auth/google/callback', () => {
 
       const loc = res.headers.get('location') ?? ''
       expect(loc).toContain(`/dashboard/clients/${CLIENT_ID}/connectors/gsc`)
+    })
+  })
+
+  describe('魏征 2026-08-11 复审 — denied consent / missing params must not eject wizard users to a bare login wall', () => {
+    it('user cancels on the Google consent screen (wizard flow) — must land back on the wizard, not a clientId-less /dashboard', async () => {
+      mocks.verifyState.mockReturnValue({ clientId: CLIENT_ID, flow: 'wizard' })
+
+      const res = await GET(makeRequest({ error: 'access_denied', state: 'sig.state' }))
+
+      const loc = res.headers.get('location') ?? ''
+      expect(loc).toContain(`/dashboard/clients/${CLIENT_ID}/onboarding`)
+      expect(loc).toContain('oauth=denied')
+    })
+
+    it('missing code/state on a wizard-flow return trip also lands back on the wizard', async () => {
+      mocks.verifyState.mockReturnValue({ clientId: CLIENT_ID, flow: 'wizard' })
+
+      // state present (so verifyState still resolves flow) but code missing
+      const res = await GET(makeRequest({ state: 'sig.state' }))
+
+      const loc = res.headers.get('location') ?? ''
+      expect(loc).toContain(`/dashboard/clients/${CLIENT_ID}/onboarding`)
+    })
+
+    it('user cancels on the Google consent screen (connect flow) — unchanged, still lands on /connect/[clientId]', async () => {
+      mocks.verifyState.mockReturnValue({ clientId: CLIENT_ID, flow: 'connect' })
+
+      const res = await GET(makeRequest({ error: 'access_denied', state: 'sig.state' }))
+
+      const loc = res.headers.get('location') ?? ''
+      expect(loc).toContain(`/connect/${CLIENT_ID}`)
+    })
+
+    it('admin flow still falls back to the bare /dashboard on denial — FDE is already logged in there', async () => {
+      mocks.verifyState.mockReturnValue({ clientId: CLIENT_ID, flow: 'admin' })
+
+      const res = await GET(makeRequest({ error: 'access_denied', state: 'sig.state' }))
+
+      const loc = res.headers.get('location') ?? ''
+      expect(loc).toBe('https://app.magic-engine.com/dashboard?google_auth_error=denied')
     })
   })
 })
