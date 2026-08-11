@@ -22,6 +22,7 @@ const FIX_PATH = join(ROOT, 'ops-codex-to-claude-fix.yml')
 const SMOKE_PATH = join(ROOT, 'ops-codex-smoke-test.yml')
 
 interface WorkflowStep {
+  id?: string
   uses?: string
   name?: string
   run?: string
@@ -150,6 +151,27 @@ describe('the codex-to-claude-fix workflow', () => {
   it('only invokes claude-code-action when the plan step said dispatch-fix', () => {
     const claudeStep = fix.steps.find((s) => s.uses?.startsWith('anthropics/claude-code-action'))
     expect(claudeStep?.if).toBe("steps.plan.outputs.action == 'dispatch-fix'")
+  })
+
+  it('records the fix round outcome after the Claude step, on success or failure', () => {
+    // Codex finding (PR #906, P2): the fix-dispatched marker used to be
+    // written before the Claude Action step ran, so a failure permanently
+    // consumed a round. This step must run unconditionally (always()) after
+    // it and read that step's real outcome.
+    const outcomeStep = fix.steps.find((s) => s.run?.includes('mark-fix-outcome.mjs'))
+    expect(outcomeStep?.if).toBe("always() && steps.plan.outputs.action == 'dispatch-fix'")
+  })
+
+  it('gives the Claude Action step an id so the outcome step can read its result', () => {
+    const claudeStep = fix.steps.find((s) => s.uses?.startsWith('anthropics/claude-code-action'))
+    expect(claudeStep?.id).toBe('claude')
+  })
+
+  it('runs the outcome step after the Claude Action step, not before', () => {
+    const claudeIndex = fix.steps.findIndex((s) => s.uses?.startsWith('anthropics/claude-code-action'))
+    const outcomeIndex = fix.steps.findIndex((s) => s.run?.includes('mark-fix-outcome.mjs'))
+    expect(claudeIndex).toBeGreaterThanOrEqual(0)
+    expect(outcomeIndex).toBeGreaterThan(claudeIndex)
   })
 
   it('checks out the control-plane script from main, not the PR head', () => {

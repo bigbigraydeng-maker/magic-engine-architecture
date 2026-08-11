@@ -48,7 +48,12 @@ jobs:
       startsWith(github.event.pull_request.head.ref, 'claude/me2-') &&
       github.event.pull_request.state == 'open'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 10 minutes: "Decide next stage" can spend up to ~4 of these polling the
+    # required check when Codex's clean review lands before CI finishes (see
+    # tools/ops-review-loop/src/poll.mjs) — the two paths (poll vs. dispatch
+    # Claude) are mutually exclusive within a single run, so this is headroom
+    # for whichever one this run takes, not a sum of both.
+    timeout-minutes: 10
     steps:
       # Checked out from main, not the PR head, for the same reason as the
       # sibling workflow: a PR must never be able to edit the script that
@@ -71,6 +76,7 @@ jobs:
       # this step is reached), and only with the aggregated Codex findings
       # as its prompt.
       - name: Invoke Claude to fix Codex findings
+        id: claude
         if: steps.plan.outputs.action == 'dispatch-fix'
         uses: anthropics/claude-code-action@v1
         with:
@@ -78,3 +84,16 @@ jobs:
           additional_permissions: |
             actions: read
           prompt: ${{ steps.plan.outputs.prompt }}
+
+      # Codex finding (PR #906, P2): posting the fix-dispatched marker from
+      # "Decide next stage", before this step ran, meant a timeout or failed
+      # push still permanently consumed a round. This step runs regardless of
+      # whether the step above succeeded (`always()`) and records the real
+      # outcome — see tools/ops-review-loop/src/mark-fix-outcome.mjs.
+      - name: Record fix round outcome
+        if: always() && steps.plan.outputs.action == 'dispatch-fix'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ROUND: ${{ steps.plan.outputs.round }}
+          OUTCOME: ${{ steps.claude.outcome }}
+        run: node tools/ops-review-loop/src/mark-fix-outcome.mjs

@@ -2,11 +2,13 @@
  * Workflow B entrypoint (ops-codex-to-claude-fix.yml). Runs when Codex
  * submits a review on a qualifying PR. Decides one of:
  *
- *   dispatch-fix  -> post a marker, then the workflow invokes claude-code-action
- *                    directly with the aggregated findings as its prompt
+ *   dispatch-fix  -> the workflow invokes claude-code-action directly with
+ *                    the aggregated findings as its prompt, then a separate
+ *                    step (mark-fix-outcome.mjs) records success/failure
  *   needs-human   -> post "NEEDS HUMAN REVIEW" and stop (3 rounds already used)
  *   ready         -> post "READY FOR PRODUCT OWNER" (no actionable findings, CI green)
- *   wait-ci       -> no actionable findings, but required CI has not gone green yet
+ *   wait-ci       -> no actionable findings, and required CI still hasn't
+ *                    gone green after polling within this run
  *   skip          -> this head sha already has a marker for the stage we'd write
  *
  * It never merges, deploys, applies a migration, or resolves a review thread.
@@ -17,6 +19,7 @@ import { appendFileSync, readFileSync } from 'node:fs'
 import { createIssueComment, listCheckRunsForRef, listIssueComments, listReviewComments } from './github.mjs'
 import { buildMarker, parseMarkers } from './markers.mjs'
 import { decideStage } from './plan.mjs'
+import { waitForRequiredCheck } from './poll.mjs'
 import { isActionable } from './severity.mjs'
 
 const MAX_ROUNDS = 3
@@ -24,6 +27,7 @@ const MAX_ROUNDS = 3
 // the workflow name shown in the Checks tab ("ai-orchestrator CI") — whichever
 // GitHub surfaces as the check-run `name`.
 const REQUIRED_CHECK_NAME_PATTERN = /ai-orchestrator/i
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const token = process.env.GITHUB_TOKEN
 const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/')
@@ -32,7 +36,7 @@ const pr = event.pull_request.number
 const sha = event.pull_request.head.sha
 const review = event.review
 
-const [issueComments, reviewComments, checkRuns] = await Promise.all([
+const [issueComments, reviewComments, initialCheckRuns] = await Promise.all([
   listIssueComments(token, owner, repo, pr),
   listReviewComments(token, owner, repo, pr, review.id),
   listCheckRunsForRef(token, owner, repo, sha),
@@ -45,14 +49,39 @@ const findingCandidates = [
   ...reviewComments.map((c) => ({ source: `${c.path}:${c.line ?? c.original_line ?? '?'}`, body: c.body ?? '' })),
 ]
 const actionableFindings = findingCandidates.filter((f) => isActionable(f.body))
+const hasActionableFindings = actionableFindings.length > 0
 
-const requiredCheck = checkRuns.find((run) => REQUIRED_CHECK_NAME_PATTERN.test(run.name))
-const ciSuccess = requiredCheck?.status === 'completed' && requiredCheck?.conclusion === 'success'
+function checkSucceeded(run) {
+  return run?.status === 'completed' && run?.conclusion === 'success'
+}
+
+let requiredCheck = initialCheckRuns.find((run) => REQUIRED_CHECK_NAME_PATTERN.test(run.name))
+
+// Codex finding (PR #906, P2): a clean review that lands while required CI is
+// still running used to fall straight through to `wait-ci` and stop there —
+// this workflow only fires on pull_request_review.submitted, so CI turning
+// green afterward never got re-evaluated for that head sha. Poll within this
+// same run (bounded) before giving up, since there is no other event wired to
+// retry it.
+if (!hasActionableFindings && !checkSucceeded(requiredCheck)) {
+  const polled = await waitForRequiredCheck({
+    fetchCheckRuns: async () => listCheckRunsForRef(token, owner, repo, sha),
+    sleep,
+    pattern: REQUIRED_CHECK_NAME_PATTERN,
+    maxAttempts: 12,
+    intervalMs: 20000,
+  })
+  if (polled) {
+    requiredCheck = polled
+  }
+}
+
+const ciSuccess = checkSucceeded(requiredCheck)
 
 const plan = decideStage({
   markers,
   sha,
-  hasActionableFindings: actionableFindings.length > 0,
+  hasActionableFindings,
   ciSuccess,
   maxRounds: MAX_ROUNDS,
 })
@@ -80,7 +109,7 @@ switch (plan.action) {
     break
   }
   case 'wait-ci': {
-    console.log('No actionable findings, but required CI is not green yet — not posting READY.')
+    console.log('No actionable findings, but required CI did not go green within this run — not posting READY.')
     setOutput('action', 'wait-ci')
     break
   }
@@ -97,14 +126,10 @@ switch (plan.action) {
     break
   }
   case 'dispatch-fix': {
-    const marker = buildMarker({ stage: 'fix-dispatched', pr, sha, round: plan.round })
-    await createIssueComment(
-      token,
-      owner,
-      repo,
-      pr,
-      `Dispatching automated fix round ${plan.round} of ${MAX_ROUNDS} for Codex findings.\n\n${marker}`
-    )
+    // Codex finding (PR #906, P2): this case used to post the fix-dispatched
+    // marker itself, before the Claude Action step even ran — so a timeout or
+    // failed push still permanently consumed a round. The marker is now
+    // posted by mark-fix-outcome.mjs, and only on success.
     const findingsText = actionableFindings
       .map((f, i) => `${i + 1}. [${f.source}]\n${f.body.trim()}`)
       .join('\n\n')
@@ -118,6 +143,7 @@ switch (plan.action) {
       findingsText,
     ].join('\n')
     setOutput('action', 'dispatch-fix')
+    setOutput('round', String(plan.round))
     setOutput('prompt', prompt)
     break
   }
