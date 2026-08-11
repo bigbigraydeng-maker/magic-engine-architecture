@@ -923,10 +923,7 @@ DECLARE
   -- 🔴 可恢复的拒绝码白名单。必须跟 runner.ts 的 RECOVERABLE_DENY_CODES 一字不差，
   --    有一条架构测试专门盯着两边不许分家（两处各写一份清单必然分家）。
   v_recoverable text[] := ARRAY[
-    'no_policy', 'policy_expired', 'policy_changed_since_request', 'over_cost_cap',
-    -- 对外动作被配成「自动执行」= 规则配错了，改成「要审批」之后同一件事就能做。
-    -- 🔴 结构性的 outward_side_effect_blocked 不在此列（动作定义本身不合规，改条件救不了）。
-    'outward_requires_human_policy'
+    'no_policy', 'policy_expired', 'policy_changed_since_request', 'over_cost_cap'
   ];
 BEGIN
   IF p_recovery_kind NOT IN ('denied', 'dead_letter') THEN

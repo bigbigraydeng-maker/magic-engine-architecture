@@ -398,17 +398,47 @@ describe('lineage 视图的权限（C1）', () => {
 
 describe('两处清单不许分家（S1 / S2）', () => {
   const MIGRATION_SQL = 'supabase/migrations/20260808000003_me2_execution_kernel_v1.sql'
+  // 🔴 已合并进 main 的历史迁移不可变（Codex P2，PR #898）：白名单的最新真相在
+  //    这条前向迁移里的 CREATE OR REPLACE FUNCTION —— 不管目标环境有没有 apply
+  //    过历史迁移，这条语句都会把函数换成最新版本。跟 runner.ts 比对必须用这份
+  //    "最终生效" 的 SQL，历史文件本身不再改。
+  const RECOVERY_WHITELIST_MIGRATION_SQL =
+    'supabase/migrations/20260811040000_kernel_recovery_outward_requires_human_policy.sql'
 
   it('🔴 可恢复拒绝码：SQL 里的白名单跟 runner.ts 的 RECOVERABLE_DENY_CODES 一字不差', async () => {
     // 真正的强制在 RPC 里（应用层那份只是为了把话说人话）。
     // 两处各写一份清单必然分家 —— 分家的那天，应用层说「不能恢复」而数据库放行，
     // 或者反过来。这条测试是唯一能让它们保持同步的东西。
     const { RECOVERABLE_DENY_CODES } = await import('../runner')
-    const sql = read(MIGRATION_SQL)
+    const sql = read(RECOVERY_WHITELIST_MIGRATION_SQL)
     const m = sql.match(/v_recoverable\s+text\[\]\s*:=\s*ARRAY\[([\s\S]*?)\]/)
     expect(m, 'kernel_claim_run_recovery 里应该有 v_recoverable 白名单').toBeTruthy()
     const fromSql = Array.from(m![1].matchAll(/'([^']+)'/g)).map((x) => x[1]).sort()
     expect(fromSql).toEqual(Array.from(RECOVERABLE_DENY_CODES).sort())
+  })
+
+  it('🔴 历史迁移不可变：已合并的 20260808000003 不再声明新拒绝码，只有前向迁移能加', () => {
+    // Codex P2（PR #898）：直接改写已合并迁移，在已经 apply 过它的环境里不生效。
+    // 这条测试锁住「历史文件的 v_recoverable 停在最初 4 个码」，
+    // 新码只允许从后续的前向迁移里加进来。
+    const sql = read(MIGRATION_SQL)
+    const m = sql.match(/v_recoverable\s+text\[\]\s*:=\s*ARRAY\[([\s\S]*?)\]/)
+    expect(m, 'kernel_claim_run_recovery 里应该有 v_recoverable 白名单').toBeTruthy()
+    const fromSql = Array.from(m![1].matchAll(/'([^']+)'/g)).map((x) => x[1]).sort()
+    expect(fromSql).toEqual(
+      ['no_policy', 'over_cost_cap', 'policy_changed_since_request', 'policy_expired'],
+    )
+  })
+
+  it('🔴 前向迁移用 CREATE OR REPLACE FUNCTION —— 已 apply 过历史迁移的环境也能拿到新白名单', () => {
+    const sql = read(RECOVERY_WHITELIST_MIGRATION_SQL)
+    expect(sql).toMatch(
+      /CREATE OR REPLACE FUNCTION public\.kernel_claim_run_recovery/,
+    )
+    // 新增的码必须在这份前向迁移里，且不在历史迁移里（否则又是原地改写）。
+    expect(sql).toContain("'outward_requires_human_policy'")
+    const historical = read(MIGRATION_SQL)
+    expect(historical).not.toContain('outward_requires_human_policy')
   })
 
   it('🔴 恢复 RPC 里有状态 CAS 和指针 CAS 两道，且步骤重置在同一个函数里', () => {
