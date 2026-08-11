@@ -28,6 +28,7 @@ import { ClientStatusPanel } from './_components/ClientStatusPanel'
 import { GbpPanel } from './_components/GbpPanel'
 import { GbpLocationPanel } from './_components/GbpLocationPanel'
 import { GscPanel } from './_components/GscPanel'
+import { GscPropertyPanel } from './_components/GscPropertyPanel'
 import { Ga4Panel } from './_components/Ga4Panel'
 import { Ga4PropertyPanel } from './_components/Ga4PropertyPanel'
 import { GoogleAdsPanel } from './_components/GoogleAdsPanel'
@@ -92,6 +93,7 @@ function TabBody({ tab, clientId }: { tab: SettingsTab; clientId: string }) {
           </SettingsSection>
           <SettingsSection icon="🔎" title="Google Search Console">
             <GscPanel clientId={clientId} />
+            <div className="mt-3"><GscPropertyPanel clientId={clientId} /></div>
             <div className="mt-3"><DataSnapshotPanel anchor="gsc" clientId={clientId} /></div>
           </SettingsSection>
           <SettingsSection icon="📈" title="Google Analytics 4">
@@ -202,6 +204,9 @@ export default function ClientSettingsPage() {
   const clientId = params.id
   const gbpStatus = searchParams.get('gbp')
   const gbpReason = searchParams.get('reason') ?? ''
+  // GSC/GA4 合并授权（/api/auth/google/callback）回跳带的是 ?oauth=，不是
+  // ?gbp=——PR5 复审发现这条错误提示之前直接消失了，补上一个通用版本。
+  const oauthStatus = searchParams.get('oauth')
 
   const errorMessage =
     gbpStatus === 'error' ? (ERROR_MESSAGES[gbpReason] ?? '连接过程中发生未知错误，请重试。') : null
@@ -256,6 +261,29 @@ export default function ClientSettingsPage() {
             <div>
               <p className="font-black text-red-800">连接失败</p>
               <p className="mt-0.5 text-sm text-red-700">{errorMessage}</p>
+            </div>
+          </div>
+        )}
+
+        {oauthStatus === 'success' && (
+          <div className="mt-5 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+            <span className="text-xl">✅</span>
+            <p className="font-black text-emerald-800">Google 账号已连接</p>
+          </div>
+        )}
+
+        {(oauthStatus === 'error' || oauthStatus === 'denied') && (
+          <div className="mt-5 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+            <span className="text-xl">❌</span>
+            <div>
+              <p className="font-black text-red-800">
+                {oauthStatus === 'denied' ? '授权被取消' : '连接失败'}
+              </p>
+              <p className="mt-0.5 text-sm text-red-700">
+                {oauthStatus === 'denied'
+                  ? '你在 Google 那边取消了授权，下面重新点一次「连接」就行。'
+                  : 'Google 那边没给我们通行证，请再试一次。'}
+              </p>
             </div>
           </div>
         )}

@@ -77,6 +77,40 @@ describe('PATCH /api/clients/[id]/google-ads-customer-id', () => {
     expect(mocks.from).not.toHaveBeenCalled()
   })
 
+  it('rejects more than 10 digits', async () => {
+    const res = await PATCH(makePatchRequest({ customer_id: '123456789012' }), routeContext())
+    expect(res.status).toBe(400)
+    expect(mocks.from).not.toHaveBeenCalled()
+  })
+
+  it('treats a whitespace-only string as clearing the binding (not a validation error)', async () => {
+    const eq = vi.fn().mockResolvedValue({ error: null })
+    mocks.from.mockReturnValue({ update: vi.fn().mockReturnValue({ eq }) })
+
+    const res = await PATCH(makePatchRequest({ customer_id: '   ' }), routeContext())
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toEqual({ success: true, customer_id: null })
+  })
+
+  it('treats a dashes-only string as clearing the binding, not as 10 zero-width digits', async () => {
+    const eq = vi.fn().mockResolvedValue({ error: null })
+    mocks.from.mockReturnValue({ update: vi.fn().mockReturnValue({ eq }) })
+
+    const res = await PATCH(makePatchRequest({ customer_id: '---' }), routeContext())
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toEqual({ success: true, customer_id: null })
+  })
+
+  it('rejects non-string, non-null customer_id (e.g. a number from a sloppy caller)', async () => {
+    const res = await PATCH(makePatchRequest({ customer_id: 1234567890 }), routeContext())
+    expect(res.status).toBe(400)
+    expect(mocks.from).not.toHaveBeenCalled()
+  })
+
   it('strips dashes/spaces before validating (accepts 123-456-7890 form)', async () => {
     const eq = vi.fn().mockResolvedValue({ error: null })
     mocks.from.mockReturnValue({ update: vi.fn().mockReturnValue({ eq }) })

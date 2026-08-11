@@ -34,8 +34,11 @@ export function GoogleAdsPanel({ clientId }: Props) {
   const [saving, setSaving]         = useState(false)
   const [msg, setMsg]               = useState<{ ok: boolean; text: string } | null>(null)
 
-  const load = useCallback(async () => {
-    setLoading(true)
+  // 魏征 2026-08-11 复审：保存成功后 load() 会把 loading 设回 true，整卡切成
+  // spinner，把刚设置的"✓ 已保存"瞬间盖掉——用独立标记区分"首次加载"（要全卡
+  // spinner）和"保存后静默刷新"（不要），避免这次视觉闪烁。
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true)
     try {
       const res = await fetch(`/api/clients/${clientId}/google-ads-customer-id`)
       if (res.ok) {
@@ -44,7 +47,7 @@ export function GoogleAdsPanel({ clientId }: Props) {
         setSource(data.source)
       }
     } finally {
-      setLoading(false)
+      if (!opts?.silent) setLoading(false)
     }
   }, [clientId])
 
@@ -62,7 +65,7 @@ export function GoogleAdsPanel({ clientId }: Props) {
       const data = await res.json() as { success?: boolean; error?: string }
       if (res.ok && data.success) {
         setMsg({ ok: true, text: '✓ 已保存' })
-        await load()
+        await load({ silent: true })
       } else {
         setMsg({ ok: false, text: data.error ?? '保存失败' })
       }

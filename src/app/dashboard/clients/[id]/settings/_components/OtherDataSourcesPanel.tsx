@@ -13,7 +13,7 @@
  * 只是从"独立页面"改成"手风琴式内嵌区块"，不再要求跳转。
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 
 interface AnchorMeta {
   name: string
@@ -62,12 +62,14 @@ export function OtherDataSourcesPanel({ clientId }: { clientId: string }) {
   const [rows, setRows] = useState<StatusRow[] | null>(null)
   const [openAnchor, setOpenAnchor] = useState<string | null>(null)
 
-  useEffect(() => {
-    fetch(`/api/clients/${clientId}/connectors/status`)
+  const loadStatus = useCallback(() => {
+    return fetch(`/api/clients/${clientId}/connectors/status`)
       .then(r => r.ok ? r.json() as Promise<{ connectors: StatusRow[] }> : null)
       .then(data => setRows(data?.connectors ?? []))
       .catch(() => setRows([]))
   }, [clientId])
+
+  useEffect(() => { void loadStatus() }, [loadStatus])
 
   const statusFor = (anchor: string) => rows?.find(r => r.anchor === anchor)?.status ?? 'not_connected'
 
@@ -82,9 +84,10 @@ export function OtherDataSourcesPanel({ clientId }: { clientId: string }) {
           status={statusFor(anchor)}
           open={openAnchor === anchor}
           onToggle={() => setOpenAnchor(o => (o === anchor ? null : anchor))}
+          onSaved={loadStatus}
         />
       ))}
-      <PublerRow clientId={clientId} status={statusFor('publer')} open={openAnchor === 'publer'} onToggle={() => setOpenAnchor(o => (o === 'publer' ? null : 'publer'))} />
+      <PublerRow clientId={clientId} status={statusFor('publer')} open={openAnchor === 'publer'} onToggle={() => setOpenAnchor(o => (o === 'publer' ? null : 'publer'))} onSaved={loadStatus} />
     </div>
   )
 }
@@ -97,7 +100,7 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function AnchorRow({
-  anchor, meta, clientId, status, open, onToggle,
+  anchor, meta, clientId, status, open, onToggle, onSaved,
 }: {
   anchor: string
   meta: AnchorMeta
@@ -105,6 +108,7 @@ function AnchorRow({
   status: string
   open: boolean
   onToggle: () => void
+  onSaved: () => void
 }) {
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
@@ -123,6 +127,9 @@ function AnchorRow({
       })
       const data = await res.json() as { success: boolean; error?: string }
       setResult(data.success ? { ok: true } : { ok: false, error: data.error ?? '保存失败' })
+      // 魏征 2026-08-11 复审：保存成功后收起手风琴，头部徽章不刷新，会让人
+      // 以为没存上——通知父组件重新拉一次状态。
+      if (data.success) onSaved()
     } catch {
       setResult({ ok: false, error: '网络错误，请重试' })
     } finally {
@@ -178,12 +185,13 @@ function AnchorRow({
 }
 
 function PublerRow({
-  clientId, status, open, onToggle,
+  clientId, status, open, onToggle, onSaved,
 }: {
   clientId: string
   status: string
   open: boolean
   onToggle: () => void
+  onSaved: () => void
 }) {
   const [accounts, setAccounts] = useState<Array<{ id: string; provider: string; name: string }>>([])
   const [loading, setLoading] = useState(false)
@@ -218,6 +226,7 @@ function PublerRow({
       })
       const data = await res.json() as { success: boolean; error?: string }
       setResult(data.success ? { ok: true } : { ok: false, error: data.error ?? '保存失败' })
+      if (data.success) onSaved()
     } catch {
       setResult({ ok: false, error: '网络错误，请重试' })
     } finally {

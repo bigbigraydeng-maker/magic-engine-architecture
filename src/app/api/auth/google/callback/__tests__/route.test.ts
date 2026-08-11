@@ -255,11 +255,12 @@ describe('GET /api/auth/google/callback', () => {
       expect(loc).toContain(`/connect/${CLIENT_ID}`)
     })
 
-    it('flow=admin (default) still redirects to the legacy connectors/gsc page', async () => {
+    it('flow=admin (default) redirects to the settings connect tab (PR5: /connectors retired)', async () => {
       const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
 
       const loc = res.headers.get('location') ?? ''
-      expect(loc).toContain(`/dashboard/clients/${CLIENT_ID}/connectors/gsc`)
+      expect(loc).toContain(`/dashboard/clients/${CLIENT_ID}/settings?tab=connect`)
+      expect(loc).not.toContain('/connectors')
     })
   })
 
