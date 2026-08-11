@@ -19,9 +19,23 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { pushAttributionItems, type AttributionItemKind } from './attribution-items'
+import { clientListUnreadableItem, loadActiveClients, type ClientRosterItemKind, type ClientRow } from './client-roster'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { AUTO_LANDED_AGENT } from '@/lib/diagnostic/auto-prescribe'
 import { isHandAddedItem } from '@/lib/diagnostic/prescription-landing'
+
+/**
+ * 这些条目**链接坏了也照样下发**。
+ *
+ * 链接闸的本意是「别给人一个白跑的链接」，但对红线类问题，
+ * 「链接不好用」远不如「这条根本没人看见」严重 —— 宁可让人自己找入口，
+ * 也不能让一条客户资料串台的告警因为链接问题静默消失。
+ *
+ * 狄仁杰 2026-08-05 实测：串台告警因为 href 写成相对路径被整条丢掉，
+ * kept=0，整套排查产出为零。
+ */
+const NEVER_DROP_KINDS = new Set<ManualItemKind>(['cross_client_leak'])
 
 /** Meta queued this long without being applied = the applier is stuck. */
 const META_PENDING_STALE_DAYS = 3
@@ -42,6 +56,15 @@ export type ManualItemKind =
   | 'leads_metric_untrusted'
   | 'factory_worker_idle'
   | 'ad_readback_blocker'
+  | 'blog_draft_waiting'
+  | 'cross_client_leak'
+  | 'price_claim_unbacked'
+  | 'auto_run_blocked'
+  | 'auto_run_stuck'
+  /** 执行内核停手 / 等审批 / 被规则挡下 —— 必须有人看见，不许死在日志里 */
+  | 'kernel_needs_human'
+  | AttributionItemKind
+  | ClientRosterItemKind
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -53,12 +76,6 @@ export interface ManualItem {
   how: string
   /** Direct link to the place the action happens. */
   href: string
-}
-
-interface ClientRow {
-  id: string
-  name: string
-  domain: string | null
 }
 
 /**
@@ -102,6 +119,13 @@ import { fetchGa4KeyEventBreakdown } from '@/lib/ga4/client'
 import { judgeLeadsSanity } from '@/lib/strategy/leads-sanity'
 import { judgeWorkerPresence } from '@/lib/factory/worker-presence'
 import { auditGoalBaselines } from '@/lib/strategy/baseline-audit'
+import { fetchBlogDraftTodos } from '@/lib/pm-todo/blog-drafts'
+import { fetchAutoRunTodos } from '@/lib/pm-todo/auto-run-items'
+import { fetchKernelHandoffTodos } from '@/lib/kernel/handoff'
+import { auditCrossClientLeaks } from '@/lib/clients/cross-client-audit'
+import { containsPriceClaim } from '@/lib/content/price-claim'
+import { judgeOutgoingPost } from '@/lib/content/price-claim-gate'
+import { SOURCE_LABELS } from '@/lib/assets/provenance'
 
 export function daysAgo(iso: string | null, now: Date): number | null {
   if (!iso) return null
@@ -125,16 +149,27 @@ export async function dropBrokenLinks(
 ): Promise<{ kept: ManualItem[]; dropped: ManualItem[] }> {
   const verdicts = await Promise.all(
     items.map((it) =>
-      verifyActionLink(it.href, fetchImpl).catch(() => ({ kind: 'unverifiable' as const })),
+      // 🔴 **没有链接 ≠ 链接坏了。**
+      //    有些待办本来就没有可点的地方（比如那件事的入口还没上线），
+      //    它的价值全在 what / how 上。空 href 交给 verifyActionLink 会走
+      //    `new URL('')` / `fetch('')` 抛错 → 判成 broken → 整条被丢掉，
+      //    于是「如实告诉人这件事现在做不了」变成了「人什么都看不到」——
+      //    发现死在 console.warn 里，正是铁律 3 下半句禁止的那件事。
+      it.href.trim() === ''
+        ? Promise.resolve({ kind: 'unverifiable' as const })
+        : verifyActionLink(it.href, fetchImpl).catch(() => ({ kind: 'unverifiable' as const })),
     ),
   )
   const kept: ManualItem[] = []
   const dropped: ManualItem[] = []
   items.forEach((it, i) => {
-    if (verdicts[i].kind === 'broken') {
+    if (verdicts[i].kind === 'broken' && !NEVER_DROP_KINDS.has(it.kind)) {
       dropped.push(it)
       console.warn(`[manual-items] 链接打不开,本条不下发: ${it.kind} ${it.href}`)
     } else {
+      if (verdicts[i].kind === 'broken') {
+        console.warn(`[manual-items] 链接打不开但这是红线条目,照常下发: ${it.kind} ${it.href}`)
+      }
       kept.push(it)
     }
   })
@@ -147,13 +182,7 @@ export async function loadManualItems(
 ): Promise<ManualItem[]> {
   const items: ManualItem[] = []
 
-  const { data: clientRows } = await supabase
-    .from('clients')
-    .select('id, name, domain')
-    .eq('client_status', 'active')
-  const clients = new Map(
-    ((clientRows ?? []) as ClientRow[]).map((c) => [c.id, c]),
-  )
+  const { clients, error: clientsError } = await loadActiveClients(supabase)
   // 基础设施类检查要放在这条提前返回**之前**：定时任务健康跟系统里有几个客户
   // 毫无关系。放在后面的话，客户表一空它就被跳过了。
   // 出片余额用完 —— 只有人能充值，必须当天摆到眼前，不能烂在工单的 error 字段里
@@ -170,6 +199,11 @@ export async function loadManualItems(
   await pushAdReadbackItems(supabase, items, now).catch((e) =>
     console.warn('[manual-items] 广告闸门结果读取失败（不阻塞其他待办）:', e),
   )
+  if (clientsError) {
+    items.push(clientListUnreadableItem(clientsError.message))
+    return items
+  }
+
   if (clients.size === 0) return items
 
   const ids = Array.from(clients.keys())
@@ -179,6 +213,11 @@ export async function loadManualItems(
   // 必须放在 nameOf 定义之后：待办上显示 uuid 等于没显示。
   await pushDiagnosticItems(supabase, items, now, nameOf)
 
+  // 审批过但被价格闸拦住的帖子 —— 自动发布那条路人不在场,不捞出来就没人知道
+  await pushPriceGateItems(supabase, items, nameOf).catch((e) =>
+    console.warn('[manual-items] 价格闸待办检查失败（不阻塞其他待办）:', e),
+  )
+
   // 本周方案已自动落地 —— 只通知，不要求 PM 操作（PM 2026-08-04 拍板）
   await pushPrescriptionItems(supabase, items, now, nameOf)
 
@@ -186,6 +225,32 @@ export async function loadManualItems(
   await pushLeadsSanityItems(supabase, items, nameOf).catch((e) =>
     console.warn('[manual-items] 客资口径检查失败（不阻塞其他待办）:', e),
   )
+
+  // 写好但没人看过的草稿 —— 这条待办以前只捞 pr_open，于是周更 cron 写出来的
+  // 草稿一直沉在库里（实测 3 篇，最老的躺了 5 天，而上一篇真正上线的文章在 47 天前）。
+  await pushBlogDraftItems(supabase, items, ids, now, nameOf).catch((e) =>
+    console.warn('[manual-items] 草稿待办生成失败（不阻塞其他待办）:', e),
+  )
+
+  // 机器本来能自己做、今天却没做的动作 —— 拦下来的原因必须有人看见。
+  // 只写进 cron 的运行记录 = 发现死在日志里（管道断头那条铁律的反面教材）。
+  await pushAutoRunItems(supabase, items, now, nameOf).catch((e) =>
+    console.warn('[manual-items] 自动执行待办生成失败（不阻塞其他待办）:', e),
+  )
+
+  // 执行内核停手的 / 等你点头的 / 被规则挡下的 —— 死信不许只写进库里没人看
+  await pushKernelItems(supabase, items, now, nameOf).catch((e) =>
+    console.warn('[manual-items] 执行内核待办生成失败（不阻塞其他待办）:', e),
+  )
+
+  // 客户之间有没有串台 —— PM 2026-08-05：「坚决不能胡窜」。
+  // 实测查到 CTS 的发布通道指向 Oztop 的网站，填错两个多月没人发现。
+  await pushCrossClientItems(supabase, items).catch((e) =>
+    console.warn('[manual-items] 串台检查失败（不阻塞其他待办）:', e),
+  )
+
+  // 归因侧两条通道（黑洞 / 孤儿数据），理由见 attribution-items.ts
+  await pushAttributionItems(supabase, items, ids, nameOf, now)
 
   // GSC property identifiers (needed for the inspect deep link).
   const { data: connectors } = await supabase
@@ -267,7 +332,8 @@ export async function loadManualItems(
     // the usual cause, so say that instead.
     const unknown = row.index_verdict === 'URL is unknown to Google'
     const thin = (row.word_count ?? 0) < 300
-    const age = days !== null ? `（已 ${days} 天）` : ''
+    // Day 0 reads as "（已 0 天）" — noise. Say nothing until it has aged.
+    const age = days !== null && days > 0 ? `（已 ${days} 天）` : ''
 
     const what = unknown
       ? `${row.url} 谷歌根本不知道这个网址${age}，它拿不到任何谷歌流量`
@@ -518,6 +584,72 @@ async function pushAdReadbackItems(
  *
  * 不自动改客户的目标数字 —— 那是业务事实，PM 拍板。这里只负责说清楚。
  */
+/**
+ * 审批过了但发不出去的帖子 —— 文案报了价，配图来源却背不了真价。
+ *
+ * 为什么必须下发：`/api/publer/create-post` 是 Airtable 审批过就自动跑的，人不在场。
+ * 那道闸拦下来只会往 webhook 回一个 409，**没有任何人会看到** —— 帖子就永远停在
+ * approved，看起来像「排着排着就没了」。发现死在日志里 = 管道断头。
+ *
+ * 不落新状态、不加新表：判定条件跟闸本身同源，改好文案或确认好素材，这条自己就消失。
+ */
+async function pushPriceGateItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  nameOf: (id: string) => string,
+): Promise<void> {
+  const { data: posts } = await supabase
+    .from('content_posts')
+    .select('id, client_id, title, caption')
+    .eq('status', 'approved')
+  const rows = (posts ?? []) as Array<{
+    id: string
+    client_id: string
+    title: string | null
+    caption: string | null
+  }>
+
+  // 绝大多数帖子不报价 —— 先在内存里筛掉，别为了没价格的帖子去查素材。
+  const withPrice = rows.filter((p) => containsPriceClaim(p.caption))
+  if (withPrice.length === 0) return
+
+  for (const post of withPrice) {
+    // 跟 create-post 取图口径一致：外部改过的终版优先，其次选中的，再次最新的。
+    const { data: assets } = await supabase
+      .from('visual_assets')
+      .select('storage_url')
+      .eq('post_id', post.id)
+      .eq('generation_status', 'ready')
+      .order('is_final', { ascending: false })
+      .order('is_selected', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(1)
+    const storageUrl = (assets ?? [])[0]?.storage_url as string | undefined
+    if (!storageUrl) continue // 没配图 = 发不出去是别的原因，不归这条管
+
+    const verdict = await judgeOutgoingPost(supabase, {
+      clientId: post.client_id,
+      caption:  post.caption ?? '',
+      imageUrl: storageUrl,
+    })
+    if (!verdict.blocked) continue
+
+    items.push({
+      kind: 'price_claim_unbacked',
+      client_id: post.client_id,
+      client_name: nameOf(post.client_id),
+      what:
+        `帖子「${post.title ?? post.id}」已审批但发不出去 —— 文案里写了价格，` +
+        `配图来源是「${SOURCE_LABELS[verdict.source]}」。真实价格只能配真实画面，` +
+        '客人按图下单拿到的东西对不上，投诉算客户的。',
+      how:
+        '两条路选一条：① 最快 —— 把价格从文案里去掉；' +
+        '② 如果那张图确实是客户实拍，去素材库点开它，把来源改成「客户实拍（已确认）」，再回来重发。',
+      href: `https://app.magicengine.com.au/dashboard/clients/${post.client_id}/assets`,
+    })
+  }
+}
+
 async function pushBaselineItems(supabase: SupabaseClient, items: ManualItem[]): Promise<void> {
   const suspects = await auditGoalBaselines(supabase).catch(() => [])
   for (const s of suspects) {
@@ -545,6 +677,118 @@ async function pushBaselineItems(supabase: SupabaseClient, items: ManualItem[]):
  * 这个数只有客户自己能修（在他们的统计后台改触发条件），所以必须下发；
  * 但下发的话要说清「这个数为什么不能信」，而不是让人自己去后台翻。
  */
+/**
+ * 客户之间串台 —— 一个客户名下存着另一个客户的东西。
+ *
+ * 这条**不按客户过滤**：串台天生涉及两个客户，任何一方被过滤掉都会让问题
+ * 从待办里消失。也不做「只报 active 客户」—— 潜客的资料串进正式客户同样是事故。
+ */
+async function pushCrossClientItems(supabase: SupabaseClient, items: ManualItem[]): Promise<void> {
+  const findings = await auditCrossClientLeaks(supabase)
+  for (const f of findings) {
+    items.push({
+      kind: 'cross_client_leak',
+      // 串台涉及多个客户，名字里全列出来，别只挂一个
+      client_id: 'infra',
+      client_name: f.clients.join(' / '),
+      what:
+        f.severity === 'critical'
+          ? `🔴 客户资料串台：${f.what}`
+          : `⚠️ ${f.what}`,
+      how:
+        f.severity === 'critical'
+          ? '进客户设置页核对这条配置填的是不是本人的。在纠正之前，系统已经拒绝用它发布任何东西'
+          : '确认一下归因口径：这笔花费该算给谁，或者要不要拆开记',
+      // 🔴 必须是绝对网址。写成相对路径 `/dashboard/clients` 时，
+      //    链接闸的 `new URL()` 会抛错 → 判成 broken → **整条待办被丢掉**，
+      //    只剩一行 console.warn。狄仁杰 2026-08-05 实跑证实 kept=0 ——
+      //    也就是说这套串台排查产出为零，而我正是在修「发现死在日志里」的时候
+      //    又造了一个。绝对网址会命中「登录类站点」名单 → unverifiable → 保留。
+      href: 'https://app.magicengine.com.au/dashboard/clients',
+    })
+  }
+}
+
+/**
+ * 写好但没人看过的博客草稿。
+ *
+ * 上面那条 `blog_pr_open` 只捞 `status='pr_open'`，而 `draft → pr_open` 需要
+ * 有人手动去点发布 —— 没有任何自动化在做这一步。于是周更 cron 每周写出来的
+ * 草稿全部沉在库里：实测 3 篇没人看过，而上一篇真正上线的文章在 47 天前。
+ */
+async function pushBlogDraftItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  ids: string[],
+  now: Date,
+  nameOf: (id: string) => string,
+): Promise<void> {
+  const todos = await fetchBlogDraftTodos(supabase, ids, now)
+  for (const t of todos) {
+    items.push({
+      kind: 'blog_draft_waiting',
+      client_id: t.client_id,
+      client_name: nameOf(t.client_id),
+      what: t.what,
+      how: t.how,
+      href: t.href,
+    })
+  }
+}
+
+/**
+ * 自动执行这条线今天的产出说明。
+ *
+ * 两类：机器已经停手的（一条一条报）、被闸门拦下的（按客户汇总一条）。
+ * 判定复用 cron 自己的选择函数，所以这里说的话跟机器真做的事永远一致。
+ */
+async function pushAutoRunItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+  nameOf: (id: string) => string,
+): Promise<void> {
+  const todos = await fetchAutoRunTodos(supabase, now)
+  for (const t of todos) {
+    items.push({
+      kind: t.stuck ? 'auto_run_stuck' : 'auto_run_blocked',
+      client_id: t.client_id,
+      client_name: nameOf(t.client_id),
+      what: t.what,
+      how: t.how,
+      href: t.href,
+    })
+  }
+}
+
+/**
+ * 执行内核里需要人处理的东西 → 下发。
+ *
+ * 三种：重试到上限停手的（死信）、按客户规则要人点头的、被规则挡下的。
+ * 判定复用 Kernel 自己的取数函数，所以这里说的话跟库里的状态永远一致。
+ *
+ * 🔴 这条是「管道不许断头」的执行内核侧出口。没有它，一次死信就只是
+ *    `action_runs` 里一行 `status='dead_letter'` —— 没有任何人会去翻。
+ */
+async function pushKernelItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+  nameOf: (id: string) => string,
+): Promise<void> {
+  const todos = await fetchKernelHandoffTodos(supabase, now)
+  for (const t of todos) {
+    items.push({
+      kind: 'kernel_needs_human',
+      client_id: t.client_id,
+      client_name: nameOf(t.client_id),
+      what: t.what,
+      how: t.how,
+      href: t.href,
+    })
+  }
+}
+
 async function pushLeadsSanityItems(
   supabase: SupabaseClient,
   items: ManualItem[],
@@ -705,9 +949,13 @@ async function pushDiagnosticItems(
       kind: 'diagnostic_findings',
       client_id: clientId,
       client_name: nameOf(clientId),
+      // 🔴 别再让人去体检页「挑要处理的」——那页是只读报告，一个可执行按钮都没有
+      //    （2026-08-04 PM 实测：「点击到健康体检页面，出现的页面我不知道应该做什么」）。
+      //    体检查出的问题现在由每周方案自动排成看板上的动作，所以这条只报「查到了什么」，
+      //    并把人送到**真的能动手的地方**（执行看板），不是送到报告里。
       what: `本周体检查出 ${counts}问题。最要紧的一条：${v.top}`,
-      how: '打开链接看完整诊断报告，挑要处理的告诉我，能自动做的我直接做掉',
-      href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/diagnostic`,
+      how: '不用你挑 —— 每周方案会把这些自动排成看板上的动作。点开是执行看板，看方向对不对；觉得漏了哪条回我一句，我单独加',
+      href: `https://app.magicengine.com.au/dashboard/clients/${clientId}/execution`,
     })
   }
 }
