@@ -244,12 +244,23 @@ check "盖章时不核对发现记录与批准主机" "$PLAN" \
   "  assertDiscoveryConsistent(plan)" \
   "  void assertDiscoveryConsistent"
 
+check "🔴 盖章时不核对发现摘要与候选计数（整条删掉一个主机的候选，剩下的字段全自洽）" "$PLAN" \
+  "  assertDiscoveryMatchesCandidates(
+    plan.discovery,
+    plan.candidates.map((c) => c.originalUrl),
+  )" \
+  "  void assertDiscoveryMatchesCandidates"
+
 check "🔴 复核时间只查非空、不验 ISO（留下证明不了时间的凭据）" "$PLAN" \
   "  const parsed = Date.parse(trimmed)" \
   "  const parsed = 0; void trimmed"
 
 check "🔴 决策值不做运行时校验（拼错的值带着签名溜下去）" "$PLAN" \
   "    if (!ALLOWED_REVIEW_DECISIONS.includes(decision.decision)) {" \
+  "    if (false) {"
+
+check "🔴 人工原因码不做运行时校验（拼错的原因码带着签名溜下去）" "$PLAN" \
+  "    if (!ALLOWED_REASON_CODES.includes(code)) {" \
   "    if (false) {"
 
 check "🔴 复核不签名（自带哈希谁都能重算，等于没有凭据）" "$PLAN" \

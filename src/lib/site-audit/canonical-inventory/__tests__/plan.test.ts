@@ -195,6 +195,34 @@ describe('逐主机发现必须进计划（否则缺整个站没人看得见）'
       }),
     ).toThrow(/对不上/)
   })
+
+  it('🔴 发现记录还在、但整条候选被删掉 → 盖章时仍被挡下（逐字段比对只看剩下的候选，看不出少了一条）', () => {
+    // 摘要仍声称 shop.example.com 有 1 条，candidates 里那条被整条拿掉再重算哈希：
+    // assertDiscoveryConsistent 只查主机覆盖（两边都有 shop.example.com 这个主机名），
+    // assertCandidatesMachineDerived 只重构剩下的候选、逐字段比对，两关都过不出这条。
+    const plan = buildInventoryPlan({
+      clientId: CLIENT,
+      requestedDomain: 'example.com',
+      approvedHosts: ['example.com', 'shop.example.com'],
+      discoveredUrls: ['https://example.com/a', 'https://shop.example.com/b'],
+      discovery: [
+        { host: 'example.com', count: 1, foreignCount: 0, error: null },
+        { host: 'shop.example.com', count: 1, foreignCount: 0, error: null },
+      ],
+    })
+    const stripped = {
+      ...plan,
+      candidates: plan.candidates.filter((c) => c.originalUrl !== 'https://shop.example.com/b'),
+    }
+    const { planHash: _drop, ...rest } = stripped
+    expect(() =>
+      applyReviewDecisions({ ...rest, planHash: computePlanHash(rest) }, {
+        decisions: {},
+        review: REVIEW,
+        sign: SIGN,
+      }),
+    ).toThrow(/两个入参对不上/)
+  })
 })
 
 describe('复核时间必须是合法 ISO 8601', () => {
@@ -431,6 +459,34 @@ describe('人工复核', () => {
         sign: SIGN,
       }),
     ).toThrow(/只接受 accepted \/ rejected \/ defer/)
+  })
+
+  it('🔴 人工原因码拼错 → 当场抛，不许带着签名往下走', () => {
+    // decisions 从文件 / UI 反序列化进来，reasonCodes 里混进一个枚举外的字符串时，
+    // 联合类型在运行时不拦任何东西 —— 不校验的话它会被原样哈希、签名，
+    // 破坏「审计要能按机器原因码分组统计」这条契约唯一的保证。
+    const plan = build(['https://example.com/a'])
+    expect(() =>
+      applyReviewDecisions(plan, {
+        decisions: {
+          'https://example.com/a': { decision: 'rejected', reasonCodes: ['reviewr_rejected' as never] },
+        },
+        review: REVIEW,
+        sign: SIGN,
+      }),
+    ).toThrow(/原因码「reviewr_rejected」不认识/)
+  })
+
+  it('合法的人工原因码照常通过', () => {
+    const plan = build(['https://example.com/a'])
+    const reviewed = applyReviewDecisions(plan, {
+      decisions: {
+        'https://example.com/a': { decision: 'rejected', reasonCodes: ['host_not_approved'] },
+      },
+      review: REVIEW,
+      sign: SIGN,
+    })
+    expect(reviewed.candidates[0].reasonCodes).toEqual(['host_not_approved'])
   })
 
   it('复核必须署名并带时间', () => {

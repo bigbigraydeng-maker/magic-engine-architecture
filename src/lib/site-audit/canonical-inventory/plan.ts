@@ -388,10 +388,21 @@ function applyDecisionsToCandidates(
  *
  *    所以这里**从原始 URL 把整份机器候选重新构造一遍，逐字段比对** ——
  *    决策、原因码、归一留痕、撞车指向，一个字段都不放过。
+ *
+ * 🔴 光比对「计划里现有的候选」还不够 —— 另一条绕过路径是**整条删掉某个主机的候选**：
+ *    `discovery` 仍声称 `shop.example.com` 有 1 条，`candidates` 里那条已经被拿掉，
+ *    重新构造/逐字段比对只看剩下的候选，看不出「本该有一条却没有」。
+ *    `assertDiscoveryConsistent()` 只查主机覆盖（有没有这个主机的发现记录），
+ *    不查数量对不对得上 —— 所以这里必须重新跑一遍
+ *    `buildInventoryPlan()` 生成时用过的那道计数对账。
  */
 export function assertPlanIntact(plan: CanonicalInventoryPlan): void {
   assertVersionsAndHash(plan)
   assertDiscoveryConsistent(plan)
+  assertDiscoveryMatchesCandidates(
+    plan.discovery,
+    plan.candidates.map((c) => c.originalUrl),
+  )
   assertCandidatesMachineDerived(plan)
 }
 
@@ -521,11 +532,43 @@ export function countCandidates(candidates: readonly InventoryCandidate[]): Inve
 // 私有
 // ---------------------------------------------------------------------------
 
+/**
+ * 人工原因码运行时白名单。跟 `RejectionReasonCode` 手动保持同步 ——
+ * 联合类型只在编译期挡人，反序列化进来的拼写错误 / 旧枚举值靠这份清单在运行时挡。
+ */
+const ALLOWED_REASON_CODES: readonly RejectionReasonCode[] = [
+  'malformed_url',
+  'unsupported_scheme',
+  'insecure_scheme',
+  'credentials_present',
+  'non_default_port',
+  'host_not_approved',
+  'duplicate_canonical_target',
+  'reviewer_rejected',
+  'reviewer_deferred',
+]
+
+/**
+ * 🔴 人工原因码在盖章前必须逐项校验。它跟决策值一样是反序列化进来的：
+ *    拼错一个值（如 `reviewr_rejected`）会原样被哈希和签名，激活侧只确认它是数组，
+ *    最终进入拒绝 / 暂缓审计，却破坏了「按机器原因码分组统计」这条契约唯一的保证。
+ */
 function resolveReasonCodes(decision: ReviewDecision): readonly RejectionReasonCode[] {
-  if (decision.reasonCodes !== undefined) return decision.reasonCodes
-  if (decision.decision === 'rejected') return ['reviewer_rejected']
-  if (decision.decision === 'defer') return ['reviewer_deferred']
-  return []
+  if (decision.reasonCodes === undefined) {
+    if (decision.decision === 'rejected') return ['reviewer_rejected']
+    if (decision.decision === 'defer') return ['reviewer_deferred']
+    return []
+  }
+  for (const code of decision.reasonCodes) {
+    if (!ALLOWED_REASON_CODES.includes(code)) {
+      throw new InventoryPlanError(
+        'invalid_reason_code',
+        `原因码「${String(code)}」不认识，只接受 ${ALLOWED_REASON_CODES.join(' / ')} —— ` +
+          '认不出来的值必须当场拒，不能带着签名往下走',
+      )
+    }
+  }
+  return decision.reasonCodes
 }
 
 function finalisePlan(parts: {
