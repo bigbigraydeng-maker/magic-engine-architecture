@@ -7,8 +7,10 @@
 # 用法：bash scripts/canonical-inventory-mutation-check.sh
 # 退出码 0 = 每一道闸都确认会响。
 #
-# 注意：判据套件只跑 canonical-inventory 目录。job-executor 有 2 条**先于本分支就红**的
-#      历史用例，混进来会让基线不为 0，判据就失去意义。
+# 注意：判据套件跑 canonical-inventory 目录 + crawler 单测。台账的「发现是否完整」
+#      这一维的闸装在 crawler.ts 里（被吞掉的失败要报出来），不把它的测试算进来，
+#      那几道闸拆掉也不会红。job-executor 有 2 条**先于本分支就红**的历史用例，
+#      混进来会让基线不为 0，判据就失去意义 —— 所以只加 crawler.test.ts 这一个文件。
 
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
@@ -18,17 +20,34 @@ RULES="src/lib/site-audit/canonical-inventory/url-rules.ts"
 PLAN="src/lib/site-audit/canonical-inventory/plan.ts"
 ACT="src/lib/site-audit/canonical-inventory/activation.ts"
 ADAPTERS="src/lib/site-audit/canonical-inventory/adapters.ts"
+CRAWLER="src/lib/site-audit/crawler.ts"
+CRAWLER_SUITE="src/lib/site-audit/__tests__/crawler.test.ts"
 
 fail_count=0
 
+# 🔴 这个脚本会**真的改生产代码**再改回来。中途被打断（Ctrl-C / 超时被 kill）时，
+#    留在盘上的就是一份被变异过的源码 + 一个 .orig 备份 —— 长得跟正常工作区一样，
+#    `git add -A` 会把「闸被拆掉」的那一版一起提交，而且测试还是绿的
+#    （拆的就是那道闸，红的是它自己的用例，容易被当成已知失败放过去）。
+#    2026-08-12 实际发生过一次：activation.ts 的分类失败闸被以 `if (false)` 提交进来。
+CURRENT_MUTATED=""
+restore_on_exit() {
+  if [ -n "$CURRENT_MUTATED" ] && [ -f "$CURRENT_MUTATED.orig" ]; then
+    mv "$CURRENT_MUTATED.orig" "$CURRENT_MUTATED"
+    echo "⚠️  被打断 —— 已把 $CURRENT_MUTATED 还原回原文，工作区是干净的"
+  fi
+}
+trap restore_on_exit EXIT INT TERM
+
 red_count() {
-  npx vitest run "$SUITE" --reporter=json 2>/dev/null \
+  npx vitest run "$SUITE" "$CRAWLER_SUITE" --reporter=json 2>/dev/null \
     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s.slice(s.indexOf("{")));console.log(j.numFailedTests??0)}catch{console.log("PARSE_ERROR")}})'
 }
 
 check() {
   local label="$1" file="$2" from="$3" to="$4"
   cp "$file" "$file.orig"
+  CURRENT_MUTATED="$file"
   node -e '
     const fs=require("fs");
     const [f,from,to]=process.argv.slice(1);
@@ -39,12 +58,14 @@ check() {
   if [ $? -eq 3 ]; then
     echo "❌ [$label] 变异目标没找到 —— 代码改了但这个脚本没跟着改，判据已失效"
     mv "$file.orig" "$file"
+    CURRENT_MUTATED=""
     fail_count=$((fail_count+1))
     return
   fi
   local n
   n=$(red_count)
   mv "$file.orig" "$file"
+  CURRENT_MUTATED=""
   if [ "$n" = "PARSE_ERROR" ]; then
     echo "❌ [$label] 跑不出结果"
     fail_count=$((fail_count+1))
@@ -416,6 +437,23 @@ check "🔴 抓取上限吃 crawlPages 的默认 100（超过 100 的批准清�
 check "显式给的上限比清单还小也照跑（截断后跑出来的不是那份清单）" "$ADAPTERS" \
   "    if (opts?.limit !== undefined && opts.limit < urls.length) {" \
   "    if (false) {"
+
+check "🔴 主机名不归一就比归属（Example.COM 一条都对不上，好端端的站被要求人工认）" "$ADAPTERS" \
+  "  for (const host of normaliseApprovedHosts(approvedHosts)) {" \
+  "  for (const host of approvedHosts) {"
+
+# ——— 发现完整性（闸装在 crawler.ts，靠 crawler.test.ts 判据） ———
+check "🔴 子 sitemap 返回非 2xx 不报（一棵子树没取到，跟空 sitemap 长得一样）" "$CRAWLER" \
+  "            report('child-sitemap', \`HTTP \${childRes.status}\`, childUrl)" \
+  "            void childRes"
+
+check "🔴 直连路径的深度截断不报（截断跟「这棵子树是空的」长得一样）" "$CRAWLER" \
+  "    report('sitemap-depth-limit', \`depth limit \${MAX_SITEMAP_DEPTH} reached\`, url)" \
+  "    void url"
+
+check "🔴 Jina 路径的深度截断不报" "$CRAWLER" \
+  "    report('jina-sitemap-depth-limit', \`depth limit \${MAX_SITEMAP_DEPTH} reached\`, url)" \
+  "    void url"
 
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then

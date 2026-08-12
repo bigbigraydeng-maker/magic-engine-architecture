@@ -127,4 +127,25 @@ describe('discoverCandidateUrls', () => {
     expect(outcome.perHost[0]).toMatchObject({ host: 'broken.example.com', count: 0 })
     expect(outcome.perHost[0].error).toContain('DNS lookup failed')
   })
+
+  it('主机名带大写也要数得对 —— 用的是计划那边同一个归一函数', async () => {
+    // 归属比对拿的是解析后的小写 hostname。这里不先归一的话，`Example.COM`
+    // 一条都对不上、记成 0 条，然后要求人去认一个其实好端端的站 ——
+    // 方向是安全的，但假警报会训练人闭眼点「认了」。
+    vi.mocked(discoverSitemapUrls).mockResolvedValue(['https://example.com/a'])
+    const outcome = await discoverCandidateUrls([' Example.COM '])
+    expect(outcome.perHost[0]).toMatchObject({ host: 'example.com', count: 1, foreignCount: 0, error: null })
+  })
+
+  it('同一个主机写两遍只发现一次（归一顺带去重）', async () => {
+    vi.mocked(discoverSitemapUrls).mockResolvedValue(['https://example.com/a'])
+    const outcome = await discoverCandidateUrls(['example.com', 'EXAMPLE.com'])
+    expect(vi.mocked(discoverSitemapUrls)).toHaveBeenCalledTimes(1)
+    expect(outcome.perHost).toHaveLength(1)
+  })
+
+  it('畸形的批准主机在发一次请求之前就抛（不许先跑一轮再报错）', async () => {
+    await expect(discoverCandidateUrls(['https://example.com/path'])).rejects.toThrow()
+    expect(vi.mocked(discoverSitemapUrls)).not.toHaveBeenCalled()
+  })
 })

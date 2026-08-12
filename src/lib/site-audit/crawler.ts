@@ -381,7 +381,11 @@ export async function fetchSitemapPagesViaJina(
   visited: Set<string> = new Set(),
   report: Report = () => {}
 ): Promise<string[]> {
-  if (depth >= MAX_SITEMAP_DEPTH || visited.has(url)) return []
+  if (depth >= MAX_SITEMAP_DEPTH) {
+    report('jina-sitemap-depth-limit', `depth limit ${MAX_SITEMAP_DEPTH} reached`, url)
+    return []
+  }
+  if (visited.has(url)) return []
   visited.add(url)
   const { fetchUrlRaw } = await import('../brief/jina')
   const raw = await fetchUrlRaw(url)
@@ -516,7 +520,11 @@ const MAX_SITEMAP_DEPTH = 3
  * Depth-limited to MAX_SITEMAP_DEPTH to guard against malformed cycles.
  */
 async function fetchSitemapPageUrls(url: string, depth: number, report: Report = () => {}): Promise<string[]> {
-  if (depth >= MAX_SITEMAP_DEPTH) return []
+  if (depth >= MAX_SITEMAP_DEPTH) {
+    // 截断跟「这棵子树是空的」长得一样 —— 深度上限也是一次没取到。
+    report('sitemap-depth-limit', `depth limit ${MAX_SITEMAP_DEPTH} reached`, url)
+    return []
+  }
   try {
     const res = await fetch(url)
     if (!res.ok) {

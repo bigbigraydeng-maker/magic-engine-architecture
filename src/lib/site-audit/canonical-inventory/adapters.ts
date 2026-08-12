@@ -49,10 +49,15 @@ export async function discoverCandidateUrls(approvedHosts: readonly string[]): P
   const seen = new Set<string>()
   const perHost: HostDiscoveryResult[] = []
 
-  // 🔴 先过同一套归一（大小写 + 去重 + 合法性），再去发现。
-  //    调用方传 `Example.com` 时，`new URL()` 给回来的 hostname 永远是小写，
-  //    拿原串去比就永远不等 —— 真找到的页面会被记成 count 0 / foreignCount > 0，
-  //    然后计划会要求人去认一个根本不存在的「发现不完整」。
+  // 🔴 先归一再发请求。`hostnameOf()` 给的是小写 hostname，主机名带大写传进来
+  //    （`Example.COM`）会一条都对不上 —— 实际发现到的页面被记成 `count: 0`
+  //    加一堆 `foreignCount`，然后计划那边要求人去认一个其实好端端的站。
+  //    方向是安全的，但它是假警报，而假警报会训练人闭眼点「认了」，那道闸就废了。
+  //
+  //    用的是 `normaliseApprovedHosts()` 而不是自己 `trim().toLowerCase()`：
+  //    它同时校验格式（带 scheme / 端口 / 路径 / 通配符一律抛）并去重，
+  //    跟 `buildInventoryPlan()` 是**同一个**函数 —— 两边口径不许各写各的。
+  //    畸形清单在这里就抛掉，比发完一轮网络请求再抛好。
   for (const host of normaliseApprovedHosts(approvedHosts)) {
     perHost.push(await discoverOneHost(host, seen))
   }
