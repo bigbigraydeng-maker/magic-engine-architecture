@@ -31,6 +31,7 @@ import type {
 import type { KernelDeps } from './deps'
 import { KernelError, humanReasonOf, isRetryable, reportedCostOf } from './errors'
 import { validateAgainstSchema } from './registry'
+import { outwardBlockReason } from './outward-authorization'
 import {
   beginAuthorizedRun,
   ensureSteps,
@@ -172,6 +173,20 @@ function assertDecisionMatches(args: {
       '这条授权是人按「要审批」的规则批的，但这个客户现在的规则已经变了 —— 得重新走授权',
     )
   }
+
+  // 🔴 对外动作：最终放行**必须是人签的**。
+  //
+  //    授权层已经保证了「outward + auto_approve」签不出放行，但那是它对自己的保证；
+  //    Gateway 不信任上游的保证，只信库里这条 append-only 记录写的是谁批的。
+  //    授权层被改坏、被绕过、或者哪天多出第二条签发路径时，这一句仍然拦得住。
+  if (definition.sideEffect === 'outward' && decision.decided_by !== 'human') {
+    throw new KernelError(
+      'OUTWARD_SIDE_EFFECT_BLOCKED',
+      `这条对外动作的放行是「${decision.decided_by}」签的，不是人点头的 —— ` +
+        '对外动作只认人工批准，已停手',
+      { detail: { decidedBy: decision.decided_by, actionKey: decision.action_key } },
+    )
+  }
 }
 
 // ── 主流程 ────────────────────────────────────────────────────────────────────
@@ -204,12 +219,12 @@ export async function executeAuthorizedRun(
     throw new KernelError('UNKNOWN_ACTION', `「${ctx.actionKey}」不是系统认识的动作，不能执行`)
   }
 
-  // ③ v1 硬闸：对外副作用一律不放行（授权层已经挡过一次，这里再挡一次）
-  if (definition.sideEffect === 'outward') {
-    throw new KernelError(
-      'OUTWARD_SIDE_EFFECT_BLOCKED',
-      '这个动作会作用到客户自己的资产之外，当前版本的执行内核一律不放行',
-    )
+  // ③ 对外副作用：默认拒绝，除非逐动作说清了凭什么（授权层挡过一次，这里独立再挡一次）。
+  //    🔴 位置刻意留在这里 —— 在第 ④ 步重读决策、第 ⑥ 步兑换授权**之前**。
+  //    被这道闸拦下的对外动作，授权一次都不会被消费掉。
+  const outwardBlocked = outwardBlockReason(definition)
+  if (outwardBlocked) {
+    throw new KernelError('OUTWARD_SIDE_EFFECT_BLOCKED', outwardBlocked)
   }
 
   // ④ 从库里重读授权，逐项比对。ctx 只是索引。
@@ -507,9 +522,11 @@ function stepIdempotencyKey(run: ActionRun, stepKey: string): string {
 /**
  * 这一步「结果未知的失败」自动重试安全吗。
  *
- * 🔴 判据两条同时成立才叫**不安全**：
- *    ① 这一步可能收费（声明的每步上限 > 0，或者压根说不出上限）；
- *    ② 外部服务不保证同一把幂等键重放不会重复收费。
+ * 🔴 判据（先满足 `providerIdempotency !== 'supported'`，再满足以下任一即**不安全**）：
+ *    ① 这个动作是对外的（`sideEffect === 'outward'`）—— 重放的风险是「外部世界
+ *       已经发生的写入」被再做一遍（重复发帖、重复改客户资产），跟这一步花不花钱
+ *       无关，声明零成本上界救不了它；
+ *    ② 这一步可能收费（声明的每步上限 > 0，或者压根说不出上限）。
  *
  *    `not_applicable` 声明的是「根本不调外部服务」——
  *    但它要是同时声明了正的每步上限，那就是契约自相矛盾，按最保守的处置。
@@ -519,10 +536,10 @@ function paidStepWithoutIdempotency(
   run: ActionRun,
   stepKey: string,
 ): boolean {
+  if (definition.providerIdempotency === 'supported') return false
+  if (definition.sideEffect === 'outward') return true
   const declaredMax = nextStepCostCeiling(definition, run, stepKey)
-  const mightCost = declaredMax === null || declaredMax > COST_EPSILON
-  if (!mightCost) return false
-  return definition.providerIdempotency !== 'supported'
+  return declaredMax === null || declaredMax > COST_EPSILON
 }
 
 function isRealCostAmount(value: unknown): value is number {
@@ -962,11 +979,17 @@ async function runSteps(
           !unsafeToRetry &&
           attempt < definition.retryPolicy.maxAttempts
         if (unsafeToRetry && isRetryable(lastError)) {
+          // 🔴 对外动作的不安全跟花不花钱无关（重放风险是外部写入被再做一遍），
+          //    所以理由要分开说清楚，不能对零成本的对外步骤说「是会花钱的步骤」。
+          const unsafeBecause =
+            definition.sideEffect === 'outward'
+              ? '会写到客户资产之外'
+              : '是会花钱的步骤'
           lastError = new KernelError(
             'UNSAFE_RETRY',
-            `「${stepKey}」是会花钱的步骤，而这个动作的外部服务不保证「同一把幂等键重放不会重复收费」——` +
+            `「${stepKey}」${unsafeBecause}，而这个动作的外部服务不保证「同一把幂等键重放不会重复收费/重复执行」——` +
               `这次的结果又不确定（${humanReasonOf(err)}），所以不自动重试，转人工判断`,
-            { detail: { stepKey, providerIdempotency: definition.providerIdempotency } },
+            { detail: { stepKey, providerIdempotency: definition.providerIdempotency, sideEffect: definition.sideEffect } },
           )
         }
         if (!canRetry) {

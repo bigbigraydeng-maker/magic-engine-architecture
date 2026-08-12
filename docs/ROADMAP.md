@@ -9,7 +9,7 @@
 
 ---
 
-## ME2 — Roman GEO / AI 可见度参考闭环（史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)）🔄 契约层已合，域运行时未开工
+## ME2 — Roman GEO / AI 可见度参考闭环（史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)）🔄 GEO 测量线已跑出首个生产 baseline（WP08）
 
 > **新窗口开工前必读**：[WP00 契约冻结 v1.0](./specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md)。
 > 它冻结了七层边界、五个概念结构、禁令清单与未决登记表，**后续每个 WP 从那里取自己的边界，不重新讨论**。
@@ -34,7 +34,16 @@
 - [ ] **WP06** [#878](https://github.com/bigbigraydeng-maker/magic-engine/issues/878) 共享 Page 能力：resolve / snapshot / draft / diff / validate（零线上写）
 - [ ] **WP07** [#880](https://github.com/bigbigraydeng-maker/magic-engine/issues/880) Kernel 授权的 apply / verify / rollback
 - [ ] **K-WP01** [#881](https://github.com/bigbigraydeng-maker/magic-engine/issues/881) 认证审批 / 拒绝界面 + 政策 Settings UI
-- [ ] **WP08–WP10** [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) / [#884](https://github.com/bigbigraydeng-maker/magic-engine/issues/884) / [#885](https://github.com/bigbigraydeng-maker/magic-engine/issues/885) Roman 基线 → 首次 1–3 页优化 → T+7/14/28 复测与学习（严格串行）
+- [x] ~~**WP08**~~ ✅ **2026-08-12 完成** [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) Roman 首个有效生产 GEO baseline 已捕获并经 Product Owner 验收 —— 批次 `688bd8ae-2db6-4300-b761-b850f30c32c5`，冻结查询集 `roman_geo_baseline_v1`（12 条问题），12 / 12 观测成功 ＋ 12 条证据，累计记账成本 US$0.708 / US$5.00。
+      **这是冻结的测量事实，不因后续优化、诊断或重解释而回写或重新表述**（[冻结审计记录](https://github.com/bigbigraydeng-maker/magic-engine/issues/883#issuecomment-5260895662)）：
+      唯一已确认的 Roman 可见度数字是 **owned-domain citation coverage = 2 / 12 = 16.7%**；
+      「12 / 12」指 12 个回答都带了引用，**不等于** Roman 被提及或被推荐；
+      qualified mention / recommendation / conditional rank 的判据（M1）未决因而**不可计算**，
+      `direct_owned_page_citation` 记 `not_computable`（不是 0）。
+      **未执行**：diagnosis · optimization action · 第二轮测量 · 页面台账补录 · Roman 网站修改。
+      Issue #883 已于 **2026-08-12 经 Product Owner 授权关闭**（[结账说明](https://github.com/bigbigraydeng-maker/magic-engine/issues/883#issuecomment-5262037905)）；其余留的 3 项前置工作已拆入 #932。
+- [ ] **WP08 余项** [#932](https://github.com/bigbigraydeng-maker/magic-engine/issues/932) Roman 页面台账 + 权威来源 · 测量频率（cadence，须与 #885 对齐）· WP09 前置就位登记 —— **WP09 的前置**，与已冻结的 Baseline v1 无关
+- [ ] **WP09 / WP10** [#884](https://github.com/bigbigraydeng-maker/magic-engine/issues/884) / [#885](https://github.com/bigbigraydeng-maker/magic-engine/issues/885) 首次 1–3 页优化 → T+7/14/28 复测与学习（严格串行，**两项均未开工**）
 - [x] ~~**U11**~~ ✅ **已完成** —— `docs/STATE.md` 与本文件的 ME2 条目已补齐（本 PR）
 - [ ] **WP00 §15 其余未决项**（**U1–U10、U12**）仍**单独**以未决形态挂着，**任何 WP 不许把它们当既定假设**
 
@@ -51,6 +60,14 @@
 - [ ] **P21.J.M4** 起草那一步现在只有 API，**没有任何调用方** —— 得有个地方（AI 或 UI）真的产出一份草案，否则整条链路空转。优先接 Roman：留资表单 + 视频养受众各一条
 - [ ] **P21.J.M5** 素材上传还没接：`imageHash` / `videoId` 要人先传到 Meta 才有。要么接 `ads_creative_upload_*`，要么从 ME 已有的成片直传
 - [x] ~~**P21.J.M6/M7/M8/M9/M10**~~ 2026-08-05 全部完成：共享闸 34 种写法 0 漏 0 误拦（原漏 28 种）+ 唯一写入口 `write-lesson.ts` + `POST /api/ad-engine/lessons`；页面加 90 天窗口 + 5000 行上限 + 撞顶告警；轮播/动态商品/自然帖投流三种文案形态补齐（自然帖会去主页把文案取回来）；行业归一化统一成 `normaliseIndustry` 一个函数
+
+### Onboarding / 第三方对接页面简化（2026-08-11，方案见 [specs/2026-08-11-onboarding-integrations-unify-v1.md](./specs/2026-08-11-onboarding-integrations-unify-v1.md)）
+
+已上线（PR1 [#908](https://github.com/bigbigraydeng-maker/magic-engine/pull/908) / PR2 [#909](https://github.com/bigbigraydeng-maker/magic-engine/pull/909) / PR3a [#913](https://github.com/bigbigraydeng-maker/magic-engine/pull/913) / PR5 [#916](https://github.com/bigbigraydeng-maker/magic-engine/pull/916)）：GA4/GTM 补进真 OAuth provider 白名单 + DB 约束扩容 · GA4/GSC 真授权 + 老 `google_oauth_tokens` 表回填进新表 · 三处重复对接入口（`/connectors` 等）合并进 settings 页一个入口，19 处内部链接跟着改 · 顺手补上 Google OAuth 发起/回调此前零鉴权的越权漏洞。
+
+- [x] ~~**PR6**~~ 2026-08-12 已合并（[#918](https://github.com/bigbigraydeng-maker/magic-engine/pull/918)）：已建好但一直没激活的 5 步自助向导正式设为新客户登录落地页。复审（魏征+板桥）已修：`isBriefComplete()` 卡两个完成戳导致的死循环锁 · 诸葛亮中文内部工具悬浮窗对 self_serve 客户可见（信任崩塌级） · Step1/2 表单不回填已保存数据（像丢数据）· 完成页死胡同没有返回按钮 · 500 MTC 欢迎奖励向导内无确认
+- [ ] **PR6 板桥发现5（低优先级，随手可修）** Google 连接失败 vs 客户自己点取消，回向导后画面一模一样看不出区别——不卡人，PR6 已上线，这条留到下次顺手改
+- [ ] **PR3b（contract 阶段，PM 已表态"优先级较低可以往后放"）** 老 `google_oauth_tokens` 表目前仍是读写兜底路径（PR3a 只做了双写+双读的 expand），等回填脚本在生产真正跑过、观察一段时间没问题后，再停止读写旧表并评估能不能删
 
 ### 三位 agent 复审剩下的（2026-08-05，已修的不列）
 

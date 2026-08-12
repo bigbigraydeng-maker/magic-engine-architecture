@@ -63,30 +63,51 @@ grant. That means:
 - The unit tests in `tests/` were written and manually re-derived by hand but
   **not executed** in this session (`node_modules` is not installed here either).
   Run `npx vitest run tools/ops-review-loop` after `npm ci` to confirm.
-- **Required-validation item 6** (does the native Codex GitHub App accept a
-  bot-authored `@codex review` comment at all?) could not be tested live. Run
-  the included `OPS — Codex Review Smoke Test` workflow
-  (`ops-codex-smoke-test.yml`, `workflow_dispatch`, needs a `pr_number` input)
-  against any harmless open PR and watch whether Codex responds. If it does not,
-  per the issue's own instruction: stop and report that blocker rather than
-  adding an API key, PAT, or custom GitHub App as a workaround.
-- The exact bot login for the Codex connector is assumed to be
-  `chatgpt-codex-connector[bot]` or close to it (per the issue text); the guard
-  uses `contains(login, 'chatgpt-codex-connector')` rather than an exact match so
-  a `[bot]` suffix guess can't silently break it, but this should be confirmed
-  against a real `pull_request_review` payload once Codex has actually reviewed
-  a PR here, and tightened to an exact match if the PM wants that.
+- **Required-validation items 6/7** are now **ANSWERED — and the answer was no.**
+  A bot-authored `@codex review` is *not* treated like a human-authored one.
+  Four bot-authored requests (PR #898 2026-08-11 12:38 / 13:58, PR #924
+  2026-08-12 01:21 / 02:52) each drew *"To use Codex here, create a Codex
+  account and connect to github"*, while the identical text from the Product
+  Owner's account on PR #898 at 04:11 drew a real review at 04:15. Codex Cloud
+  resolves the request against the **comment author's** Codex account, and
+  `github-actions[bot]` has none.
+
+  The blocker was reported rather than worked around (see the note below on why
+  `OPS_REVIEW_PAT` is not the "API key / custom GitHub App workaround" the
+  original issue forbade), and the resolution the Product Owner chose was to
+  author the comment as themselves via a repository-scoped fine-grained PAT.
+  The smoke-test workflow now validates *that* path instead.
+- The exact bot login for the Codex connector is **confirmed** as
+  `chatgpt-codex-connector[bot]`, observed on real `pull_request_review`
+  payloads (PR #898 2026-08-11, PR #927 2026-08-12 03:20). The guard still uses
+  `contains(login, 'chatgpt-codex-connector')` rather than an exact match, which
+  is deliberate: it survives a `[bot]` suffix change. Tighten to an exact match
+  only if the Product Owner wants that.
 - Whether `.github/workflows/**` pushes from this GitHub App installation are
   actually accepted is untested by this same constraint — see the PR
   description for what happened when this branch was pushed.
 
 ## One-time repository setup needed from the Product Owner
 
-- Confirm `chatgpt-codex-connector`'s exact bot login (see above) once Codex has
-  reviewed a real PR here, and tighten the `contains(...)` guard in
-  `ops-codex-to-claude-fix.yml` to an exact match if desired.
-- Run the smoke test (above) once to confirm Codex accepts a bot-authored
-  `@codex review` comment.
+- **`OPS_REVIEW_PAT` (required — both loop legs are inert without it).** A
+  fine-grained PAT owned by the Product Owner, scoped to **this repository
+  only**, with exactly two permissions: **Issues: Read and write** and
+  **Pull requests: Read and write**. No contents write, no workflow, no admin.
+  Store it as a repository Actions secret named `OPS_REVIEW_PAT`.
+
+  This is not the "API key / custom GitHub App workaround" the original issue
+  ruled out. It adds no third-party service and no new bot identity — it makes
+  the workflow speak as the human who already has review authority, which is
+  the only identity Codex will act on. Without it, `ops-codex-request-review.yml`
+  fails closed with an explicit error rather than posting a comment Codex
+  silently refuses.
+- **`CLAUDE_CODE_OAUTH_TOKEN` must be current.** The return leg
+  (`ops-codex-to-claude-fix.yml`) failed 4/4 times on 2026-08-11, each time
+  within ~7 seconds at the `claude-code-action` step while the preceding
+  decision step succeeded — the signature of an expired token, not a logic bug.
+  Regenerate with `claude setup-token` when the loop stops dispatching fixes.
+- Run the smoke test (above) once after setting `OPS_REVIEW_PAT` to confirm a
+  workflow-posted, PAT-authored `@codex review` draws a real Codex review.
 - If `.github/workflows/**` pushes from Claude Code are rejected (see PR
   description), apply the three workflow files in this PR manually, or grant
   the Claude Code GitHub App the `workflows` permission.

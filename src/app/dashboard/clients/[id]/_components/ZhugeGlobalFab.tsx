@@ -96,7 +96,6 @@ function inferAreaLabel(pathname: string | null, clientId: string): string {
   if (tail.startsWith('/seo-intelligence')) return 'SEO Intelligence'
   if (tail.startsWith('/seo-gap'))        return 'SEO Gap'
   if (tail.startsWith('/site-audit'))     return '站点审计'
-  if (tail.startsWith('/connectors'))     return '广告连接器'
   if (tail.startsWith('/assets'))         return '素材库'
   if (tail.startsWith('/goal'))           return 'Goal 战略层'
   if (tail.startsWith('/goals'))          return 'Goal 战略层'

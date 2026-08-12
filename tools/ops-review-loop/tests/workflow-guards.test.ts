@@ -111,11 +111,24 @@ describe('the request-review workflow', () => {
     ])
   })
 
-  it('guards same-repo, base=main, and the claude/me2- branch prefix', () => {
+  it('guards same-repo, base=main, and the claude/ agent-branch prefix', () => {
     const guard = Object.values(request.doc.jobs ?? {})[0]?.if ?? ''
     expect(guard).toContain('head.repo.full_name == github.repository')
     expect(guard).toContain("base.ref == 'main'")
-    expect(guard).toContain("startsWith(github.event.pull_request.head.ref, 'claude/me2-')")
+    expect(guard).toContain("startsWith(github.event.pull_request.head.ref, 'claude/')")
+  })
+
+  it('is scoped wider than the auto-push leg, and only this leg is', () => {
+    // Asymmetry on purpose: asking for a review posts one comment and can
+    // collide with nothing, so every agent branch gets it. Dispatching a fix
+    // pushes commits, and this repo runs one window per branch (CLAUDE.md §6),
+    // so that leg stays in the ME2 lane. If someone ever "tidies up" these two
+    // guards into matching prefixes, the auto-push leg silently gains reach
+    // over branches a live window is holding — this pins the difference.
+    const requestGuard = Object.values(request.doc.jobs ?? {})[0]?.if ?? ''
+    const fixGuard = Object.values(fix.doc.jobs ?? {})[0]?.if ?? ''
+    expect(requestGuard).not.toContain("'claude/me2-'")
+    expect(fixGuard).toContain("'claude/me2-'")
   })
 
   it('checks out the control-plane script from main, not the PR head', () => {
@@ -125,6 +138,40 @@ describe('the request-review workflow', () => {
 
   it('has no contents: write', () => {
     expect(request.doc.permissions?.contents).not.toBe('write')
+  })
+
+  it('authors the review request through OPS_REVIEW_PAT, never the ambient GITHUB_TOKEN', () => {
+    // Codex Cloud resolves "@codex review" against the *comment author's*
+    // Codex account. github-actions[bot] has none, so every bot-authored
+    // request was refused with "create a Codex account and connect to github"
+    // (PR #898 12:38/13:58, PR #924 01:21/02:52 — four for four), while the
+    // same text from the Product Owner's account drew a real review in four
+    // minutes. Reverting this env var to GITHUB_TOKEN restores a workflow
+    // that goes green and accomplishes nothing, which is the hardest kind of
+    // break to notice — so it is pinned here.
+    const step = request.steps.find((s) => s.run?.includes('request-review.mjs'))
+    // The POST — the only call whose author Codex looks at — must be the PAT.
+    expect(step?.env?.REVIEW_REQUEST_TOKEN).toBe('${{ secrets.OPS_REVIEW_PAT }}')
+  })
+
+  it('reads with the ambient token so the PAT needs no extra permission to dedup', () => {
+    // PR #927's first live run died on `GET /issues/927/comments -> 404`: issue
+    // comments sit under the Issues API even on a PR, so a PAT granted only
+    // "Pull requests" cannot read them. The read carries no identity meaning,
+    // so it should never have been on the PAT in the first place.
+    const step = request.steps.find((s) => s.run?.includes('request-review.mjs'))
+    expect(step?.env?.GITHUB_TOKEN).toBe('${{ secrets.GITHUB_TOKEN }}')
+  })
+
+  it('fails closed when OPS_REVIEW_PAT is missing instead of falling back', () => {
+    // A fallback to GITHUB_TOKEN would silently reproduce the original bug.
+    const guardStep = request.steps.find((s) => s.run?.includes('OPS_REVIEW_PAT is not set'))
+    expect(guardStep).toBeDefined()
+    expect(guardStep?.run).toContain('exit 1')
+    const guardIndex = request.steps.findIndex((s) => s.run?.includes('OPS_REVIEW_PAT is not set'))
+    const postIndex = request.steps.findIndex((s) => s.run?.includes('request-review.mjs'))
+    expect(guardIndex).toBeGreaterThanOrEqual(0)
+    expect(postIndex).toBeGreaterThan(guardIndex)
   })
 })
 
@@ -193,6 +240,26 @@ describe('the smoke-test workflow', () => {
   it('requires a pr_number input', () => {
     const dispatch = smoke.triggers.workflow_dispatch as { inputs?: Record<string, { required?: boolean }> }
     expect(dispatch.inputs?.pr_number?.required).toBe(true)
+  })
+
+  it('does not describe itself as bot-authored in the comment it actually posts', () => {
+    // Codex finding (PR #927, P2): switching the workflow's token while leaving
+    // the posted text saying "posted by github-actions[bot] ... to check whether
+    // a bot-authored request works" makes the validation evidence assert the
+    // opposite of what ran. The mechanism and the words about it drift apart
+    // silently, because nothing executes the words.
+    const source = readFileSync(join(process.cwd(), 'tools/ops-review-loop/src/smoke-test.mjs'), 'utf8')
+    const posted = source.slice(source.indexOf('@codex review'))
+    expect(posted).not.toContain('posted by github-actions[bot]')
+    expect(posted).toContain('OPS_REVIEW_PAT')
+  })
+
+  it('posts through OPS_REVIEW_PAT so it validates the real path, not the broken one', () => {
+    // The bot-authored question this workflow originally existed to answer is
+    // settled (it does not work). Its job now is to prove the replacement
+    // identity works on demand — which it cannot do while posting as the bot.
+    const step = smoke.steps.find((s) => s.run?.includes('smoke-test.mjs'))
+    expect(step?.env?.GITHUB_TOKEN).toBe('${{ secrets.OPS_REVIEW_PAT }}')
   })
 })
 

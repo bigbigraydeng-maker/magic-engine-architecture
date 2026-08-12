@@ -24,7 +24,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface StatusResponse {
@@ -77,6 +77,11 @@ function HelpLink({ label, active, onClick }: { label: string; active: boolean; 
 export default function OnboardingWizardPage() {
   const params = useParams<{ id: string }>()
   const clientId = params.id
+  // ?welcome=1 is set once, by resolveSelfServeLanding right after OTP
+  // verification (the register form promises "500 MTC welcome bonus" — 板桥
+  // PR6 复审: the wizard never confirmed it landed, so the promise looked
+  // broken even though the credit was applied).
+  const welcome = useSearchParams().get('welcome') === '1'
 
   const [status, setStatus] = useState<StatusResponse | null>(null)
   const [help, setHelp] = useState<Record<HelpKey, boolean>>({ profile: false, gbp: false, ga4gsc: false, meta: false, website: false, assets: false })
@@ -124,12 +129,20 @@ export default function OnboardingWizardPage() {
           Thanks — we&apos;ve got what we need to get started. We&apos;re running your first health check now,
           and we&apos;ll be in touch to book your visit. Anything you couldn&apos;t finish, we&apos;ll sort together then.
         </p>
+        <a href={`/dashboard/clients/${clientId}`} className={`${BTN} mt-6`} style={BTN_STYLE}>
+          Go to your dashboard →
+        </a>
       </main>
     )
   }
 
   return (
     <main className="mx-auto max-w-2xl px-5 py-8">
+      {welcome && (
+        <div className="mb-4 rounded-xl border border-[#5C8A4A]/25 bg-[#5C8A4A]/8 px-4 py-3 text-sm font-semibold text-[#3F6134]">
+          🎉 Welcome! We&apos;ve added 500 MTC to your account to get you started.
+        </div>
+      )}
       <div className="mb-2">
         <h1 className="font-display text-2xl font-bold text-me-charcoal">Let&apos;s get you set up</h1>
         <p className="mt-1 text-sm text-me-charcoal/60">
@@ -187,6 +200,24 @@ function ProfileStep({ clientId, done, onSaved, help, onHelp }: { clientId: stri
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
 
+  // 板桥 PR6 复审: a client who saves Step 1 and comes back later (new day,
+  // new OTP login) saw the green "Done" checkmark but every field blank —
+  // the data was fine, it just was never fetched back into the form.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const [briefRes, kwRes] = await Promise.all([
+          fetch(`/api/clients/${clientId}/light-brief`),
+          fetch(`/api/clients/${clientId}/primary-keywords`),
+        ])
+        const briefJson = await briefRes.json().catch(() => ({}))
+        if (briefJson.brief_fields) setF((prev) => ({ ...prev, ...briefJson.brief_fields }))
+        const kwJson = await kwRes.json().catch(() => ({}))
+        if (Array.isArray(kwJson.keywords) && kwJson.keywords.length > 0) setKeywords(kwJson.keywords.join(', '))
+      } catch { /* leave blank — worst case they re-type, save still works */ }
+    })()
+  }, [clientId])
+
   async function save() {
     setSaving(true); setMsg('')
     try {
@@ -228,6 +259,19 @@ function WebsiteStep({ clientId, done, onSaved, help, onHelp }: { clientId: stri
   const [domain, setDomain] = useState('')
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
+
+  // Same resumability gap as Step 1 — prefill from whatever domain is
+  // already on the client record instead of showing an empty box next to
+  // a green "Done" checkmark.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await fetch(`/api/clients/${clientId}`)
+        const j = await r.json().catch(() => ({}))
+        if (j.client?.domain) setDomain(j.client.domain)
+      } catch { /* leave blank — worst case they re-type, save still works */ }
+    })()
+  }, [clientId])
 
   async function save() {
     setSaving(true); setMsg('')

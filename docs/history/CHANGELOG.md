@@ -5,6 +5,95 @@
 
 ---
 
+### 2026-08-12（ME2 WP04A：GEO 测量线接上真东西，并跑出 Roman 首个生产 baseline）
+
+issue [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) ·
+PR [#922](https://github.com/bigbigraydeng-maker/magic-engine/pull/922)（2026-08-11 合并）·
+已审查 head `769cb15d` · 合并提交 `885fe6e1`。
+
+**这次解决的一件事**：WP04 的测量运行时早就合进 `main` 了，但它的三个注入点
+`deps.{provider, parse, store}` 全仓只有假件，模块**零 importer** —— 没有任何东西能调用它。
+PR #922 把这三个点接到真的 provider / parser / store 上，并给一个**默认 dry-run** 的人工触发脚本。
+
+新增 21 个文件、**零个既有文件被改**：`src/lib/geo-baseline/`
+（`provider` / `transport-openai` / `parser` / `store` / `query-set` / `plan-builder` / `config` / `types` / `index`
+＋9 个测试文件）· `scripts/geo-baseline-run.ts`（`--live` 才真跑）·
+`scripts/geo-baseline-mutation-check.sh` · migration `20260812000001_me2_geo_persist_batch_atomic_v1.sql`。
+
+**落库只有一条路**：单个事务型 RPC `geo_persist_batch_v1` —— 批次 / 观测 / 证据三张表
+在同一个数据库事务里写完，任一步失败整批回滚、一行不留。这三张表的 UPDATE/DELETE 被 WP03 的
+触发器全禁，半截数据既补不上也删不掉，所以必须是「阻止污染」而不是「事后发现污染」。
+该 migration 已在生产 apply（账本号 `20260812002017`，⚠️ 与文件名不同，判 apply 只认对象存在性）。
+
+**为什么另开第三个目录**：WP04 目录的架构测试禁止 import supabase / openai，WP03 目录禁止导出
+任何写函数 —— 真 provider 与真 store 在结构上就放不进那两个目录。好处是 WP02 / WP03 / WP04 一个字都没改。
+
+#### Roman Baseline v1 —— 冻结的测量事实
+
+Product Owner 于 2026-08-12 验收通过，认定批次 `688bd8ae-2db6-4300-b761-b850f30c32c5` 为 Roman
+**首个有效生产 GEO baseline**。**本段是测量事实，冻结** —— 不因后续优化、诊断或重解释而回写、
+修改或重新表述。完整审计记录见
+[#883 的冻结审计评论](https://github.com/bigbigraydeng-maker/magic-engine/issues/883#issuecomment-5260895662)。
+
+采集身份：查询集 `roman_geo_baseline_v1`（12 条问题，首个批次落地时由数据库触发器自动上锁）·
+市场 / 语言 `nz` / `en-NZ` · provider OpenAI、模型 `gpt-5-search-api-2025-10-14`
+（精确带日期的 ID，不是浮动别名）· 1 sample/query、禁止自动重试 · parser `geo-baseline/parser/v1`。
+
+批次结果：12 计划 / 12 尝试 / 12 成功 / 0 失败 · 12 条观测 ＋ 12 条证据（原始响应逐字保留）·
+孤儿行 0 · 跨租户引用 0 · 重复观测 0 · 结构漂移 0。
+
+**能算出来的**：
+
+- 引用总数 **142** 条 · 被引不同域名 **47** 个 · 单条回答引用数 7–20
+- **回答含引用的比例 12 / 12 = 100%** —— 这是「12 个回答都带了引用」，
+  **不等于** Roman 在这 12 个回答里被提及或被推荐
+- **owned-domain citation coverage = 2 / 12 = 16.7%** —— 目前**唯一**已确认的 Roman 可见度事实
+- 自有域名引用条数 4 / 142，实际被引的 host 只有 `romanhu.com`（无任何子域被引）
+- 引用到自有域名的那 2 条 query 都是**点名 "Roman Hu" 的品牌词**。中性记录，不作业务外推
+
+**算不出来的**（连原因一起记，免得以后被当成 0）：
+
+- `direct_owned_page_citation` —— 页面台账 0 条、本轮不做页面级归属，142 条引用的 `ownedPage`
+  **全部记 `not_computable`，无一写成 0 或 false**
+- qualified mention / recommendation / conditional rank —— 判据 M1 未决；指标计算属 WP05 / WP10，
+  不在 WP08 范围
+
+**成本**：本轮累计**记账** **US$0.708 / US$5.00 上限**（记账单价刻意取高、系统性高估）。
+逐次成本不落库（WP03 只在批次级存 `cost_usd`），**确切的最高单次成本无处可查**；
+能诚实断言的只有一条 —— **所有正式调用都没有触发 US$0.08 的单次上界**（触发会 fail closed 停批，而未触发）。
+
+另有两个失败批次**永久留存、未删未改未复用**：`c9dfb7ea…`（模型已下线，provider 404）·
+`667d202a…`（单次成本超过**当时**的 US$0.05 上界，fail closed 停批；该上界后由 Product Owner 调整为 US$0.08）。
+有效批次是从冻结查询集**完整重跑 12 条**得来的，没有把任何失败观测复用成成功结果。
+
+**本轮未执行**：diagnosis · optimization action · 第二轮测量 · 页面台账补录 · Roman 网站修改 ·
+内容或广告发布。Issue #883 仍 OPEN。
+
+验证：`npx vitest run src/lib/geo-baseline` 139 条全过 · WP02 / WP03 / WP04 基线 297 条不受影响 ·
+`npm run build` 通过 · 变异验证 32 道闸逐道单独确认会响 ·
+Codex 在隔离 PostgreSQL 环境对 `geo_persist_batch_v1` 做过真实事务验证（六类失败场景全部三表回滚）。
+
+---
+
+### 2026-08-11 ~ 08-12（Onboarding / 第三方对接页面简化，PM 起因："对接页面有点乱，好几个页面都能连"）
+
+方案：[specs/2026-08-11-onboarding-integrations-unify-v1.md](../specs/2026-08-11-onboarding-integrations-unify-v1.md)。
+PR1 [#908](https://github.com/bigbigraydeng-maker/magic-engine/pull/908) · PR2 [#909](https://github.com/bigbigraydeng-maker/magic-engine/pull/909) ·
+PR3a [#913](https://github.com/bigbigraydeng-maker/magic-engine/pull/913) · PR5 [#916](https://github.com/bigbigraydeng-maker/magic-engine/pull/916) ·
+PR6 [#918](https://github.com/bigbigraydeng-maker/magic-engine/pull/918)。每个 PR 设计+实施两阶段都过了独立 agent 复审（魏征挑刺 + 板桥客户视角）。
+
+**新客户现在的路径**：注册验证邮箱 → 直接落地正式的 5 步自助向导（此前这个向导已经建好但从未激活，新客户走的是一个只有 5 个字段的单页表单）→ 业务档案 / 网站 / 一键连 Google Business Profile + GA4/GSC（真 OAuth，不用再去 Supabase 后台手填 token）/ Meta 广告号（手填，Meta App Review 周期不可控，本轮不做真授权）/ 上传素材。
+
+**FDE/客户设置页现在的路径**：GA4、GSC、GBP、GTM 全部走同一套统一 OAuth 组件真授权；此前分散在 `/connectors`、`/connectors/[anchor]`、settings 页里的三处重复入口合并成一个，旧地址自动跳转（19 处内部链接同步改掉）；Google Ads 从一个假的"已连接"状态提示改成能直接编辑的 customer_id 字段；老的 `google_oauth_tokens` 表数据回填进新的 `platform_oauth_connections`。
+
+**顺手堵上的洞**：Google OAuth 发起/回调接口此前对 admin/wizard 两条流程完全零鉴权（拿到一个 client UUID 就能劫持任何人的授权）；诸葛亮工作台（内部中文 FDE 工具）此前无条件对自助客户可见；向导 Step1/2 表单不回填已保存数据，客户隔天回来会像丢了数据。
+
+验证：新增/改动测试全过（194 条覆盖到的目录）；`npm run build` 每个 PR 都过。
+
+剩余：PR3b（停止读写老 token 表）、一条低优先级的 OAuth 失败态提示——见 [ROADMAP.md](../ROADMAP.md#近期待办跨-phase-汇总)。
+
+---
+
 ### 2026-08-10（ME2 WP01：Growth Module 契约进仓，尚未启用）
 
 issue [#877](https://github.com/bigbigraydeng-maker/magic-engine/issues/877) · PR [#890](https://github.com/bigbigraydeng-maker/magic-engine/pull/890) · 合并提交 `700f57e`。

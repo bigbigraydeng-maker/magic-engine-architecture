@@ -20,9 +20,9 @@ import { isBriefComplete, invalidateBriefCache } from '../completion'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function dbReturns(brief_completed_at: string | null) {
+function dbReturns(brief_completed_at: string | null, onboarding_completed_at: string | null = null) {
   mockMaybeSingle.mockResolvedValueOnce({
-    data: { brief_completed_at },
+    data: { brief_completed_at, onboarding_completed_at },
     error: null,
   })
 }
@@ -60,13 +60,27 @@ describe('isBriefComplete', () => {
       dbReturns('2026-06-01T10:00:00Z')
       await isBriefComplete(CLIENT_ID)
       expect(mockFrom).toHaveBeenCalledWith('clients')
-      expect(mockSelect).toHaveBeenCalledWith('brief_completed_at')
+      expect(mockSelect).toHaveBeenCalledWith('brief_completed_at, onboarding_completed_at')
       expect(mockEq).toHaveBeenCalledWith('id', CLIENT_ID)
     })
   })
 
+  describe('DB return — completed via onboarding wizard (魏征 PR6 复审)', () => {
+    it('returns true when only onboarding_completed_at is set (wizard finished, Step 1 skipped)', async () => {
+      dbReturns(null, '2026-08-11T00:00:00Z')
+      const result = await isBriefComplete(CLIENT_ID)
+      expect(result).toBe(true)
+    })
+
+    it('returns true when both are set', async () => {
+      dbReturns('2026-06-01T10:00:00Z', '2026-08-11T00:00:00Z')
+      const result = await isBriefComplete(CLIENT_ID)
+      expect(result).toBe(true)
+    })
+  })
+
   describe('DB return — not completed', () => {
-    it('returns false when brief_completed_at is null', async () => {
+    it('returns false when both brief_completed_at and onboarding_completed_at are null', async () => {
       dbReturns(null)
       const result = await isBriefComplete(CLIENT_ID)
       expect(result).toBe(false)
