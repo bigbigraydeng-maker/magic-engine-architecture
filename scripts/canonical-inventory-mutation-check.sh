@@ -7,8 +7,10 @@
 # 用法：bash scripts/canonical-inventory-mutation-check.sh
 # 退出码 0 = 每一道闸都确认会响。
 #
-# 注意：判据套件只跑 canonical-inventory 目录。job-executor 有 2 条**先于本分支就红**的
-#      历史用例，混进来会让基线不为 0，判据就失去意义。
+# 注意：判据套件跑 canonical-inventory 目录 + crawler 单测。台账的「发现是否完整」
+#      这一维的闸装在 crawler.ts 里（被吞掉的失败要报出来），不把它的测试算进来，
+#      那几道闸拆掉也不会红。job-executor 有 2 条**先于本分支就红**的历史用例，
+#      混进来会让基线不为 0，判据就失去意义 —— 所以只加 crawler.test.ts 这一个文件。
 
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
@@ -18,11 +20,13 @@ RULES="src/lib/site-audit/canonical-inventory/url-rules.ts"
 PLAN="src/lib/site-audit/canonical-inventory/plan.ts"
 ACT="src/lib/site-audit/canonical-inventory/activation.ts"
 ADAPTERS="src/lib/site-audit/canonical-inventory/adapters.ts"
+CRAWLER="src/lib/site-audit/crawler.ts"
+CRAWLER_SUITE="src/lib/site-audit/__tests__/crawler.test.ts"
 
 fail_count=0
 
 red_count() {
-  npx vitest run "$SUITE" --reporter=json 2>/dev/null \
+  npx vitest run "$SUITE" "$CRAWLER_SUITE" --reporter=json 2>/dev/null \
     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s.slice(s.indexOf("{")));console.log(j.numFailedTests??0)}catch{console.log("PARSE_ERROR")}})'
 }
 
@@ -378,7 +382,7 @@ check "🔴 只发现第一个批准主机（第二个站的页面静默缺席�
   "  for (const host of approvedHosts.slice(0, 1)) {"
 
 check "逐主机条数不留痕（某个站 0 条被合并结果盖住）" "$ADAPTERS" \
-  "    perHost.push(await discoverOneHost(host, seen))" \
+  "    perHost.push(await discoverOneHost(host.trim().toLowerCase(), seen))" \
   "    perHost.push({ host, count: 1, foreignCount: 0, error: null }); await discoverOneHost(host, seen)"
 
 check "一个主机挂掉不留痕（跟「这个站没有页面」长得一样）" "$ADAPTERS" \
@@ -401,9 +405,26 @@ check "显式给的上限比清单还小也照跑（截断后跑出来的不是�
   "    if (opts?.limit !== undefined && opts.limit < urls.length) {" \
   "    if (false) {"
 
+check "🔴 主机名不归一就比归属（Example.COM 一条都对不上，好端端的站被要求人工认）" "$ADAPTERS" \
+  "    perHost.push(await discoverOneHost(host.trim().toLowerCase(), seen))" \
+  "    perHost.push(await discoverOneHost(host, seen))"
+
+# ——— 发现完整性（闸装在 crawler.ts，靠 crawler.test.ts 判据） ———
+check "🔴 子 sitemap 返回非 2xx 不报（一棵子树没取到，跟空 sitemap 长得一样）" "$CRAWLER" \
+  "            report('child-sitemap', \`HTTP \${childRes.status}\`, childUrl)" \
+  "            void childRes"
+
+check "🔴 直连路径的深度截断不报（截断跟「这棵子树是空的」长得一样）" "$CRAWLER" \
+  "    report('sitemap-depth-limit', \`depth limit \${MAX_SITEMAP_DEPTH} reached\`, url)" \
+  "    void url"
+
+check "🔴 Jina 路径的深度截断不报" "$CRAWLER" \
+  "    report('jina-sitemap-depth-limit', \`depth limit \${MAX_SITEMAP_DEPTH} reached\`, url)" \
+  "    void url"
+
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 76 道闸各自单独确认会响"
+  echo "✅ 全部 80 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"

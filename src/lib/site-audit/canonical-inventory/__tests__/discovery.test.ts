@@ -93,4 +93,13 @@ describe('discoverCandidateUrls', () => {
     expect(outcome.perHost[0]).toMatchObject({ host: 'broken.example.com', count: 0 })
     expect(outcome.perHost[0].error).toContain('DNS lookup failed')
   })
+
+  it('主机名带大写也要数得对 —— 归一口径跟计划那边一致', async () => {
+    // 归属比对拿的是解析后的小写 hostname。这里不先归一的话，`Example.COM`
+    // 一条都对不上、记成 0 条，然后要求人去认一个其实好端端的站 ——
+    // 方向是安全的，但假警报会训练人闭眼点「认了」。
+    vi.mocked(discoverSitemapUrls).mockResolvedValue(['https://example.com/a'])
+    const outcome = await discoverCandidateUrls([' Example.COM '])
+    expect(outcome.perHost[0]).toMatchObject({ host: 'example.com', count: 1, foreignCount: 0, error: null })
+  })
 })

@@ -49,7 +49,11 @@ export async function discoverCandidateUrls(approvedHosts: readonly string[]): P
   const perHost: HostDiscoveryResult[] = []
 
   for (const host of approvedHosts) {
-    perHost.push(await discoverOneHost(host, seen))
+    // 🔴 先归一再比。`hostnameOf()` 给的是小写 hostname，主机名带大写传进来
+    //    （`Example.COM`）会一条都对不上 —— 记成 0 条，然后要求人去认一个
+    //    其实好端端的站。方向是安全的，但它是假警报，而假警报会训练人闭眼点「认了」。
+    //    归一口径跟 `buildInventoryPlan()` 那边（`trim().toLowerCase()`）保持一致。
+    perHost.push(await discoverOneHost(host.trim().toLowerCase(), seen))
   }
 
   return { urls: Array.from(seen), perHost }
