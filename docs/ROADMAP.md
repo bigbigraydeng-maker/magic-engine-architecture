@@ -20,16 +20,19 @@
 - 生产 migration 的 apply 是**单独授权的运维动作**，必须 PM 显式 `go`，**绝不夹带进任何 PR**。
 - 🔴 **PR [#844](https://github.com/bigbigraydeng-maker/magic-engine/pull/844) 不许合并**（独立 Website Growth Agent 架构已被本史诗取代），也**不许从它摘代码**。
 
-**已合入 `main`（但都不活动，见 [STATE.md §3.1](./STATE.md)）**：
+**已合入 `main`**（下面注明哪些真跑过、哪些仍不活动；另见 [STATE.md §3.1](./STATE.md)）：
 - ✅ WP00 [#873](https://github.com/bigbigraydeng-maker/magic-engine/issues/873) 契约冻结（PR #888，docs-only）
 - ✅ 执行内核 v1（PR #863）—— 生产 migration **未 apply**、**无提交 / 执行调用方**。⚠️ 但**已有一条只读接线在生产跑**：`pm-daily-todo` cron 经 `pm-todo/manual-items.ts` 读 `action_runs` 生成交接待办（表不存在时报错被吞成警告）。详见 [STATE.md §3.1](./STATE.md)
-- ✅ WP01 [#877](https://github.com/bigbigraydeng-maker/magic-engine/issues/877) 纯 Growth 契约（PR #890 / `700f57e`）—— `src/lib/growth/`，**零 importer**
+- ✅ WP01 [#877](https://github.com/bigbigraydeng-maker/magic-engine/issues/877) 纯 Growth 契约（PR #890 / `700f57e`）—— `src/lib/growth/`，**仍零 importer、不活动**
+- ✅ **WP02** [#876](https://github.com/bigbigraydeng-maker/magic-engine/issues/876) GEO 测量运行时契约（PR [#894](https://github.com/bigbigraydeng-maker/magic-engine/pull/894)）—— `src/lib/geo-measurement/`。issue 已关闭
+- ✅ **WP03** [#875](https://github.com/bigbigraydeng-maker/magic-engine/issues/875) 不可变测量存储（PR [#897](https://github.com/bigbigraydeng-maker/magic-engine/pull/897)）—— `src/lib/geo-measurement-store/` + migration `20260811000001`，**已 apply**，并已真实承载 Roman Baseline v1。issue 已关闭
+- ✅ **WP04** [#874](https://github.com/bigbigraydeng-maker/magic-engine/issues/874) 测量执行 + 成本 / 覆盖率控制（PR [#914](https://github.com/bigbigraydeng-maker/magic-engine/pull/914)）· **WP04A** 真 provider / parser / store 接线（PR [#922](https://github.com/bigbigraydeng-maker/magic-engine/pull/922)）—— `src/lib/geo-measurement-runtime/` + `src/lib/geo-baseline/`。⚠️ **issue #874 仍 OPEN**（代码已合并上线，issue 关不关由 Build Control Room 定）
+- ✅ **K-WP02** [#882](https://github.com/bigbigraydeng-maker/magic-engine/issues/882) ActionCandidate→ActionKey 治理 + per-action 副作用政策（PR [#898](https://github.com/bigbigraydeng-maker/magic-engine/pull/898) / 合并提交 `2d9e426a`）。⚠️ **issue #882 仍 OPEN**（同上）
+
+> 上面五条**代码都在 `main` 上**，2026-08-12 逐条核对过（模块目录、migration 文件、PR 合并状态、issue 状态各查一次）。
+> **别把「issue 还开着」读成「活还没干」** —— #874 / #882 的实现早已合并并在生产跑过，开着的是 issue 本身。
 
 **未完成**：
-- [ ] **WP02** [#876](https://github.com/bigbigraydeng-maker/magic-engine/issues/876) GEO 测量运行时契约（采集身份七项 + 三层 sample + 解释身份 + 七个指标 + 三条可比性判据）· 前置已满足
-- [ ] **K-WP02** [#882](https://github.com/bigbigraydeng-maker/magic-engine/issues/882) ActionCandidate→ActionKey 治理 + per-action 副作用政策 + 注册表反向注入 prompt · 前置已满足
-- [ ] **WP03** [#875](https://github.com/bigbigraydeng-maker/magic-engine/issues/875) 不可变测量存储（含 migration，apply 单独授权）
-- [ ] **WP04** [#874](https://github.com/bigbigraydeng-maker/magic-engine/issues/874) 测量执行 + 成本 / 覆盖率控制
 - [ ] **WP05** [#879](https://github.com/bigbigraydeng-maker/magic-engine/issues/879) GEO Module v1 —— 第一个 Domain Module，**唯一明确的 `src/lib/growth` 首个消费方**
 - [ ] **WP06** [#878](https://github.com/bigbigraydeng-maker/magic-engine/issues/878) 共享 Page 能力：resolve / snapshot / draft / diff / validate（零线上写）
 - [ ] **WP07** [#880](https://github.com/bigbigraydeng-maker/magic-engine/issues/880) Kernel 授权的 apply / verify / rollback
