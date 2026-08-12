@@ -1,10 +1,18 @@
 name: OPS — Codex Review Smoke Test
 
-# Manual, one-shot: posts "@codex review" as a bot comment on a PM-specified
-# PR so a human can observe whether the native Codex GitHub App treats a
-# bot-authored review request the same as a human-authored one
-# (ME2-OPS02 required validation #6/#7). This session had no live GitHub
-# access to run this itself — see the PR description for details.
+# Manual, one-shot validation of the review-request identity.
+#
+# ME2-OPS02 validation #6/#7 — "does Codex treat a bot-authored request like a
+# human-authored one?" — is now ANSWERED, by production evidence rather than
+# by this workflow: it does not. Four bot-authored requests (PR #898 at
+# 2026-08-11 12:38 / 13:58, PR #924 at 2026-08-12 01:21 / 02:52) each drew
+# "To use Codex here, create a Codex account and connect to github", while the
+# same text from the Product Owner's account (PR #898, 04:11) drew a real
+# review four minutes later.
+#
+# So this workflow's job has changed: it now proves the *replacement* path
+# works — that a comment authored through OPS_REVIEW_PAT gets a real Codex
+# review — without waiting for a qualifying PR to receive a new commit.
 #
 # Posts exactly one comment. Never runs on its own (workflow_dispatch only).
 # Never merges, deploys, or touches anything but that one comment.
@@ -31,8 +39,17 @@ jobs:
           ref: main
           fetch-depth: 1
 
-      - name: Post a bot-authored "@codex review" comment
+      - name: Check the review-requester identity is configured
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPS_REVIEW_PAT: ${{ secrets.OPS_REVIEW_PAT }}
+        run: |
+          if [ -z "$OPS_REVIEW_PAT" ]; then
+            echo "::error::Repository secret OPS_REVIEW_PAT is not set — nothing to smoke-test."
+            exit 1
+          fi
+
+      - name: Post an "@codex review" comment through OPS_REVIEW_PAT
+        env:
+          GITHUB_TOKEN: ${{ secrets.OPS_REVIEW_PAT }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: node tools/ops-review-loop/src/smoke-test.mjs
