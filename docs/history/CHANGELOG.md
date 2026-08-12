@@ -5,6 +5,46 @@
 
 ---
 
+### 2026-08-12（ME2 Backlog Cleanup Gate：GitHub 状态与 ROADMAP 对齐，三个已完成 WP 结账）
+
+Epic [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872) ·
+PR [#936](https://github.com/bigbigraydeng-maker/magic-engine/pull/936)（合并提交 `f7a6bfc1`）。
+
+**这次解决的一件事**：ME2 的 GitHub 状态、ROADMAP 和已合并实现三者互相说不上话 —— 五个 WP
+的代码早已上线，ROADMAP 却还挂在「未完成」；三个 WP 的活干完了 issue 还开着；Epic 正文的
+勾选表落后五条、序列漏四条。新窗口读哪一份都会得到错的授权判断。
+
+**做了什么**（全程只读核验后才动，无运行时改动）：
+
+- **三个 WP 结账关闭**：#874 WP04（PR #914 / `caf8d481`）· #917 WP04A（PR #922 / `885fe6e1`）·
+  #882 K-WP02（PR #898 / `2d9e426a`）。每条附合并提交 + acceptance 逐项对账 + 余项承接；
+  相关 872 个测试实跑全绿。
+  🔴 #882 的关闭说明逐字写明「**已合并 ≠ 已启用**」—— 它映射表为空、零调用方，
+  依赖的内核四张表在生产不存在。
+- **Epic #872 正文重写**：补勾 8 条 · 补入 #917 / #930 / #932 / #911 · 删掉已作废的
+  「只授权 #877」· 新增 2026-08-12 生产实查表与「Merged is not enabled」一节。
+- **ROADMAP 对齐**（PR #936，接手另一窗口开的 PR 而非重开）：补上原版漏掉的 WP06 #878 ·
+  把 K-WP02 拆出来标「已合并、零调用方、生产未启用」· 把它的主实现指向
+  `src/lib/action-bridge/`（`MAPPING_TABLE` 在那儿，不在 Kernel）· 记清 WP06 交付的是被
+  缩小的范围（无成本闸门是照实施指令做的，两份契约文档打架时后发的赢）。
+- **#930 / #932 边界裁定**：页面台账归 #930（唯一权威），#932 只留复测节奏 + WP09 就位登记。
+- **归档 #911 / PR #912**：中继试点唯一标的 #910 已关闭，是注定空转的自动化。
+- **存量清理**：#421 / #422 / #424 关（从未实现且价值已衰减）· #423 关（核实后确认已实现）·
+  #420 / #425 / #426 **保持开启**并附核实结论（三条都还是真问题，关掉等于谎报已处理）。
+
+**顺带挖出两条会静默失效的东西，各自开了 issue 承接**：
+
+- [#939](https://github.com/bigbigraydeng-maker/magic-engine/issues/939) 🔴 Codex 复审 → Claude 自动修
+  **从来没成功过** —— `ops-codex-to-claude-fix.yml` 没给 action 传 `allowed_bots`，
+  Codex 机器人一提意见就必挂（#935 / #936 均实测复现）。PR #931「复审干净就自动合并」的硬前置。
+- [#938](https://github.com/bigbigraydeng-maker/magic-engine/issues/938) architecture 守卫的 walker
+  只收 `.ts`，而 tsconfig 是 `allowJs` —— 放个 `.js` / `.tsx` 会整文件静默不扫描。
+
+**WP05 开工 Gate**：8 条中 7 条已满足，只剩「获批的 canonical page set」（依赖 #930 的
+PR #935 先解掉那条 P1）。
+
+---
+
 ### 2026-08-12（ME2 WP04A：GEO 测量线接上真东西，并跑出 Roman 首个生产 baseline）
 
 issue [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) ·
