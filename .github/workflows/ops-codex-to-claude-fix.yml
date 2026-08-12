@@ -104,6 +104,13 @@ jobs:
           # The `if:` guard above is what decides who may trigger this; this
           # input only stops the action from refusing the run outright.
           allowed_bots: chatgpt-codex-connector
+          # Defence in depth, NOT the boundary. Narrowing the tool surface
+          # makes the obvious abuses harder, but this leg genuinely needs a
+          # shell to run tests and to commit + push, and any shell is enough
+          # to do damage if the model is talked into it. What actually bounds
+          # the blast radius is ops-fix-scope-guard.yml, which judges the
+          # resulting diff and does not care what the prompt said.
+          claude_args: '--allowed-tools Read,Edit,Write,Glob,Grep,Bash'
           additional_permissions: |
             actions: read
           prompt: ${{ steps.plan.outputs.prompt }}
