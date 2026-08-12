@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import ts from 'typescript'
-import { readFileSync, existsSync } from 'fs'
+import { readFileSync, existsSync, statSync } from 'fs'
 import path from 'path'
 import { CRON_REGISTRY } from './registry'
 import { expectedIntervalHours } from './schedule'
@@ -654,17 +654,111 @@ describe('docs/ENV.md 里带 worker 服务名的标注，必须跟真实 worker 
     return found
   }
 
-  /** 入口文件本身 + 它直接 import 的 `@/lib/*` 模块，谁读了这个变量。 */
-  function readsVia(entry: string, envName: string): string[] {
-    const src = readFileSync(path.join(ROOT, entry), 'utf8')
-    const candidates = [entry]
-    for (const m of Array.from(src.matchAll(/from\s+'@\/(lib\/[^']+)'/g))) {
-      for (const ext of ['.ts', '.tsx', '/index.ts']) {
-        const cand = path.join('src', m[1] + ext)
-        if (existsSync(path.join(ROOT, cand))) { candidates.push(cand); break }
+  /**
+   * 这个文件里所有指向**仓库内**的模块说明符。外部包（`react` / `@supabase/...`）返回不了路径，
+   * 自然被排除。走 AST 而不是正则：`from '…'` / `export … from '…'` / 动态 `import('…')` /
+   * `require('…')` 四种入口一次收全，注释和字符串里长得像 import 的东西不会混进来。
+   */
+  function importSpecifiers(source: string, fileName: string): string[] {
+    const sourceFile = ts.createSourceFile(
+      fileName,
+      source,
+      ts.ScriptTarget.Latest,
+      false,
+      fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    )
+    const out: string[] = []
+    const visit = (node: ts.Node): void => {
+      if (
+        (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+        node.moduleSpecifier &&
+        ts.isStringLiteral(node.moduleSpecifier)
+      ) {
+        out.push(node.moduleSpecifier.text)
+      }
+      if (
+        ts.isCallExpression(node) &&
+        (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+          (ts.isIdentifier(node.expression) && node.expression.text === 'require')) &&
+        node.arguments.length > 0 &&
+        ts.isStringLiteralLike(node.arguments[0])
+      ) {
+        out.push((node.arguments[0] as ts.StringLiteralLike).text)
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(sourceFile)
+    return out
+  }
+
+  /** 把一个模块说明符解析成仓库内的文件路径；外部包 / 解析不到都返回 null。 */
+  function resolveModule(spec: string, fromFile: string): string | null {
+    let base: string
+    if (spec.startsWith('@/')) base = path.join('src', spec.slice(2))
+    else if (spec.startsWith('./') || spec.startsWith('../')) base = path.join(path.dirname(fromFile), spec)
+    else return null
+
+    for (const cand of [
+      base,
+      `${base}.ts`,
+      `${base}.tsx`,
+      `${base}.mts`,
+      `${base}.cts`,
+      `${base}.js`,
+      `${base}.mjs`,
+      `${base}.cjs`,
+      path.join(base, 'index.ts'),
+      path.join(base, 'index.tsx'),
+    ]) {
+      const full = path.join(ROOT, cand)
+      if (existsSync(full) && statSync(full).isFile()) return cand.split('\\').join('/')
+    }
+    return null
+  }
+
+  /**
+   * 入口文件**传递闭包**：入口 + 它经由仓库内 import 能到达的一切文件。
+   *
+   * 🔴 **必须递归，只看直接 import 会漏掉真实依赖。**（Codex thread：registry.test.ts L664）
+   *    实测两条两跳以上的链，原来一条都看不见：
+   *      worker.ts → render-pipeline.ts → scene-plan.ts  → anthropic/client.ts  要 ANTHROPIC_API_KEY
+   *      worker.ts → render-pipeline.ts → broll-clip.ts  → muapi/client.ts      要 MUAPI_API_KEY
+   *    而且中间那一跳 `./scene-plan` 是**相对路径**，原实现只认 `from '@/lib/…'`，
+   *    连第一跳都接不上 —— 于是 worker 缺这两把 key 会启动即崩，而反向核对一路绿。
+   *
+   *    深度不设限（靠 visited 去重收敛），但设一个总数上限：真炸开了要报错，
+   *    不能让判据变成一个慢到没人跑的东西。
+   */
+  const MAX_CLOSURE_FILES = 800
+  const closureCache = new Map<string, string[]>()
+  function moduleClosure(entry: string): string[] {
+    const cached = closureCache.get(entry)
+    if (cached) return cached
+
+    const seen = new Set<string>()
+    const queue = [entry]
+    while (queue.length > 0) {
+      const file = queue.shift() as string
+      if (seen.has(file)) continue
+      seen.add(file)
+      if (seen.size > MAX_CLOSURE_FILES) {
+        throw new Error(`${entry} 的依赖闭包超过 ${MAX_CLOSURE_FILES} 个文件，判据需要重新设计`)
+      }
+      const source = readFileSync(path.join(ROOT, file), 'utf8')
+      for (const spec of importSpecifiers(source, file)) {
+        const resolved = resolveModule(spec, file)
+        if (resolved && !seen.has(resolved)) queue.push(resolved)
       }
     }
-    return candidates.filter((f) =>
+
+    const files = Array.from(seen)
+    closureCache.set(entry, files)
+    return files
+  }
+
+  /** 入口文件的整条依赖链上，谁读了这个变量。 */
+  function readsVia(entry: string, envName: string): string[] {
+    return moduleClosure(entry).filter((f) =>
       readsEnvVar(readFileSync(path.join(ROOT, f), 'utf8'), f, envName),
     )
   }
@@ -700,6 +794,29 @@ describe('docs/ENV.md 里带 worker 服务名的标注，必须跟真实 worker 
     // 🔴 名字对不上的属性访问不算
     expect(probe(`const a = process.envx.${N}`)).toBe(false)
     expect(probe(`const a = notprocess.env.${N}`)).toBe(false)
+  })
+
+  it('前提成立：依赖闭包是递归的，相对路径和别名都跟得到（Codex thread L664）', () => {
+    const entry = entrypointOf(workers[0].dockerfilePath)
+    expect(entry, '拿不到 worker 入口，下面几条等于没跑').not.toBeNull()
+    const closure = moduleClosure(entry!)
+
+    // 空转保护：只有入口一个文件 = 解析链断了，不是「它真的什么都不 import」
+    expect(closure.length, '闭包只有入口自己 —— import 解析坏了').toBeGreaterThan(5)
+    expect(closure).toContain(entry)
+
+    // 🔴 第一跳走的是**相对路径**（render-pipeline 里 `import './scene-plan'`），
+    //    原实现只认 `from '@/lib/…'`，连它都接不上。
+    expect(closure, '相对路径 import 没跟到').toContain('src/lib/factory/scene-plan.ts')
+    // 🔴 第二跳才是别名，且这两个文件正是 ANTHROPIC_API_KEY / MUAPI_API_KEY 的读取方
+    expect(closure, '两跳之后的别名 import 没跟到').toContain('src/lib/anthropic/client.ts')
+    expect(closure).toContain('src/lib/muapi/client.ts')
+
+    // 这两条链上的变量必须真的被判成「worker 读得到」
+    expect(readsVia(entry!, 'ANTHROPIC_API_KEY')).toContain('src/lib/anthropic/client.ts')
+    expect(readsVia(entry!, 'MUAPI_API_KEY')).toContain('src/lib/muapi/client.ts')
+    // 反向对照：不在这条链上的变量不许被误判成读得到
+    expect(readsVia(entry!, 'THIS_ENV_DOES_NOT_EXIST_ANYWHERE')).toEqual([])
   })
 
   it('前提成立：render.yaml 解析到了 worker，ENV.md 里也确实有点名 worker 的标注', () => {
