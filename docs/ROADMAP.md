@@ -26,15 +26,28 @@
 - ✅ WP01 [#877](https://github.com/bigbigraydeng-maker/magic-engine/issues/877) 纯 Growth 契约（PR #890 / `700f57e`）—— `src/lib/growth/`，**仍零 importer、不活动**
 - ✅ **WP02** [#876](https://github.com/bigbigraydeng-maker/magic-engine/issues/876) GEO 测量运行时契约（PR [#894](https://github.com/bigbigraydeng-maker/magic-engine/pull/894)）—— `src/lib/geo-measurement/`。issue 已关闭
 - ✅ **WP03** [#875](https://github.com/bigbigraydeng-maker/magic-engine/issues/875) 不可变测量存储（PR [#897](https://github.com/bigbigraydeng-maker/magic-engine/pull/897)）—— `src/lib/geo-measurement-store/` + migration `20260811000001`，**已 apply**，并已真实承载 Roman Baseline v1。issue 已关闭
-- ✅ **WP04** [#874](https://github.com/bigbigraydeng-maker/magic-engine/issues/874) 测量执行 + 成本 / 覆盖率控制（PR [#914](https://github.com/bigbigraydeng-maker/magic-engine/pull/914)）· **WP04A** 真 provider / parser / store 接线（PR [#922](https://github.com/bigbigraydeng-maker/magic-engine/pull/922)）—— `src/lib/geo-measurement-runtime/` + `src/lib/geo-baseline/`。⚠️ **issue #874 仍 OPEN**（代码已合并上线，issue 关不关由 Build Control Room 定）
-- ✅ **K-WP02** [#882](https://github.com/bigbigraydeng-maker/magic-engine/issues/882) ActionCandidate→ActionKey 治理 + per-action 副作用政策（PR [#898](https://github.com/bigbigraydeng-maker/magic-engine/pull/898) / 合并提交 `2d9e426a`）。⚠️ **issue #882 仍 OPEN**（同上）
+- ✅ **WP04** [#874](https://github.com/bigbigraydeng-maker/magic-engine/issues/874) 测量执行 + 成本 / 覆盖率控制（PR [#914](https://github.com/bigbigraydeng-maker/magic-engine/pull/914) / `caf8d481`）—— `src/lib/geo-measurement-runtime/`。issue 已关闭
+- ✅ **WP04A** [#917](https://github.com/bigbigraydeng-maker/magic-engine/issues/917) 真 provider / parser / WP03 store 接线（PR [#922](https://github.com/bigbigraydeng-maker/magic-engine/pull/922) / `885fe6e1`）—— `src/lib/geo-baseline/`。**Roman Baseline v1 就是它跑出来的**。issue 已关闭
+- ✅ **WP06** [#878](https://github.com/bigbigraydeng-maker/magic-engine/issues/878) 共享 Page 能力 resolve / snapshot / draft / diff / validate（PR [#895](https://github.com/bigbigraydeng-maker/magic-engine/pull/895) / `e818d9dc`）—— `src/lib/capabilities/page-optimization/`，**零线上写、零持久化、零调用方**。issue 已关闭
+- ✅ **K-WP02** [#882](https://github.com/bigbigraydeng-maker/magic-engine/issues/882) ActionCandidate→ActionKey 治理 + per-action 副作用政策（PR [#898](https://github.com/bigbigraydeng-maker/magic-engine/pull/898) / `2d9e426a`）—— `src/lib/kernel/`。
+      🔴 **只是合并了，没在生产跑过**：映射注册表为空、**零调用方**，且它依赖的执行内核四张表在生产**根本不存在**（见下）。**不要把它跟真跑过生产的 WP03 / WP04A 归成一类。** issue 已关闭，关闭说明里逐字写明了「已合并 ≠ 已启用」
 
-> 上面五条**代码都在 `main` 上**，2026-08-12 逐条核对过（模块目录、migration 文件、PR 合并状态、issue 状态各查一次）。
-> **别把「issue 还开着」读成「活还没干」** —— #874 / #882 的实现早已合并并在生产跑过，开着的是 issue 本身。
+> **哪些真跑过生产 —— 2026-08-12 对生产库做对象存在性只读实查（不认文件名、不认版本号）**：
+>
+> | 对象 | 生产实际 |
+> |---|---|
+> | `geo_query_sets` · `geo_queries` · `geo_batches` · `geo_observations` · `geo_evidence` | **都在** —— 3 个批次 / 25 条观测 / 12 条证据 |
+> | 批量原子写入 RPC（migration `20260812000001`） | **在** |
+> | `action_runs` · `action_run_steps` · `authorization_decisions` · `client_automation_policies` | **四张全不存在** |
+> | `kernel_*` RPC | **0 个** |
+> | Roman 的 `client_site_pages` / `cms_connections` | **0 / 0** |
+>
+> 结论：**GEO 测量线（WP02→WP03→WP04→WP04A）真跑过一次生产；内核线（PR #863 + K-WP02）没有。**
+> **别把「issue 已关闭」读成「功能已在生产生效」** —— 关闭只代表代码交付完成。
 
 **未完成**：
-- [ ] **WP05** [#879](https://github.com/bigbigraydeng-maker/magic-engine/issues/879) GEO Module v1 —— 第一个 Domain Module，**唯一明确的 `src/lib/growth` 首个消费方**
-- [ ] **WP06** [#878](https://github.com/bigbigraydeng-maker/magic-engine/issues/878) 共享 Page 能力：resolve / snapshot / draft / diff / validate（零线上写）
+- [ ] **WP05** [#879](https://github.com/bigbigraydeng-maker/magic-engine/issues/879) GEO Module v1 —— 第一个 Domain Module，**唯一明确的 `src/lib/growth` 首个消费方**。2026-08-12 已冻结 `geo-module/m1/v1` 语义（实体匹配 / 别名 / 消歧判据），**实现仍未授权**，卡在前置 #930
+- [ ] **WP05 前置** [#930](https://github.com/bigbigraydeng-maker/magic-engine/issues/930) Roman 页面台账的发现与激活边界 —— 草稿 PR [#935](https://github.com/bigbigraydeng-maker/magic-engine/pull/935) 复审中。⚠️ 与 #932 在「页面台账」上重叠，边界待 Build Control Room 裁定
 - [ ] **WP07** [#880](https://github.com/bigbigraydeng-maker/magic-engine/issues/880) Kernel 授权的 apply / verify / rollback
 - [ ] **K-WP01** [#881](https://github.com/bigbigraydeng-maker/magic-engine/issues/881) 认证审批 / 拒绝界面 + 政策 Settings UI
 - [x] ~~**WP08**~~ ✅ **2026-08-12 完成** [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) Roman 首个有效生产 GEO baseline 已捕获并经 Product Owner 验收 —— 批次 `688bd8ae-2db6-4300-b761-b850f30c32c5`，冻结查询集 `roman_geo_baseline_v1`（12 条问题），12 / 12 观测成功 ＋ 12 条证据，累计记账成本 US$0.708 / US$5.00。
@@ -51,6 +64,10 @@
 - [ ] **WP00 §15 其余未决项**（**U1–U10、U12**）仍**单独**以未决形态挂着，**任何 WP 不许把它们当既定假设**
 
 **独立并行、不并入本链**：[#886](https://github.com/bigbigraydeng-maker/magic-engine/issues/886) Operating Brief（参考闭环稳定前不开工）· [#887](https://github.com/bigbigraydeng-maker/magic-engine/issues/887) 广告安全泳道（**不许夹带进任何 ME2 的 WP**）
+
+**运维泳道（也不并入本链，等 PM 拍板）**：
+- [ ] [#911](https://github.com/bigbigraydeng-maker/magic-engine/issues/911) / PR [#912](https://github.com/bigbigraydeng-maker/magic-engine/pull/912) OPS03 事件驱动 Issue 中继试点 —— ⚠️ 它写死的唯一标的 #910 **已关闭**，试点要么改标的要么归档
+- [ ] PR [#931](https://github.com/bigbigraydeng-maker/magic-engine/pull/931) OPS02「Codex 复审干净就自动合并」—— ⚠️ 两条前提都不成立：本仓是 GitHub Free 私有仓库**开不了分支保护**（自动合并没有兜底闸门），且唯一能给出「复审干净」信号的 `handle-review` 流水线**现在是坏的**（`.github/workflows/ops-codex-to-claude-fix.yml` 没传 `allowed_bots`，Codex 机器人一提意见就必挂，#935 / #936 均实测复现）
 
 ---
 
