@@ -303,8 +303,8 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
             const childXml = await childRes.text()
             allLocs.push(...parseLocsFromXml(childXml))
           } else {
-            // 🔴 非 2xx 跟抛异常一样是「这棵子树没取到」，只是它不会抛。
-            //    不报的话，一个 404 的子 sitemap 跟一个空 sitemap 完全一样。
+            // 🔴 404/503 不会抛 —— fetch 正常完成，只是 ok 为 false。
+            //    只在 catch 里上报，等于漏掉了子树失败最常见的那一种。
             report('child-sitemap', `HTTP ${childRes.status}`, childUrl)
           }
         } catch (err) {

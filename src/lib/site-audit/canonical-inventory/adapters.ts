@@ -75,7 +75,11 @@ async function discoverOneHost(host: string, seen: Set<string>): Promise<HostDis
   const swallowed: string[] = []
   let found: readonly string[] = []
   try {
-    found = await discoverSitemapUrls(host, {
+    // 🔴 传 `https://${host}` 而不是裸主机：crawler 的 normaliseDomain 用
+    //    `input.startsWith('http')` 判断有没有 scheme，于是 `httpbin.org` 这种
+    //    **字面量以 http 开头的合法主机**会被当成已带 scheme，直接 new URL() 抛错 ——
+    //    那个站连一次请求都发不出去，却只会被记成「0 条 / 出错」。
+    found = await discoverSitemapUrls(`https://${host}`, {
       onIssue: (issue) => swallowed.push(`${issue.stage}${issue.url ? ` ${issue.url}` : ''}: ${issue.error}`),
     })
   } catch (err) {
@@ -84,15 +88,33 @@ async function discoverOneHost(host: string, seen: Set<string>): Promise<HostDis
   }
 
   let count = 0
+  let sitemapFiles = 0
   for (const url of found) {
+    // 🔴 sitemap 文件不是页面。crawler 的 Level 1 只对 /sitemap.xml 做一次 <loc> 解析，
+    //    如果它本身是一个 sitemap index，返回的就是 page-sitemap.xml 之类的**子索引**。
+    //    把它们当页面记账，会得到「正数、无错误」的漂亮账，而真实页面全部静默缺席。
+    if (isSitemapFile(url)) {
+      sitemapFiles++
+      continue
+    }
     if (!seen.has(url)) seen.add(url)
     if (hostnameOf(url) === host) count++
+  }
+  if (sitemapFiles > 0) {
+    swallowed.push(
+      `发现结果里有 ${sitemapFiles} 个 sitemap 文件而不是页面（多半是 /sitemap.xml 本身是索引，没有被展开）`,
+    )
   }
   const error =
     swallowed.length > 0
       ? `发现过程中有 ${swallowed.length} 处失败被吞掉（结果可能不完整）：${swallowed.slice(0, 3).join('；')}`
       : null
-  return { host, count, foreignCount: found.length - count, error }
+  return { host, count, foreignCount: found.length - count - sitemapFiles, error }
+}
+
+/** `.xml` 结尾（可带 query）= sitemap 文件，不是页面。 */
+function isSitemapFile(url: string): boolean {
+  return /\.xml(\?[^#]*)?$/i.test(url)
 }
 
 /** 解析不了就返回 null —— 绝不用字符串包含去猜归属。 */
