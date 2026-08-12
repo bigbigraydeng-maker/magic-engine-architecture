@@ -5,6 +5,80 @@
 
 ---
 
+### 2026-08-12（架构守卫的扫描面：五套声明了八种后缀却没接上，实际只扫 `.ts`）
+
+Issue [#938](https://github.com/bigbigraydeng-maker/magic-engine/issues/938) ·
+PR [#944](https://github.com/bigbigraydeng-maker/magic-engine/pull/944)（合并提交 `948f0a78`）。
+
+**这次解决的一件事**：七套架构守卫里，只有 `kernel` / `action-bridge` 的 walker 真的用了
+`isScannedSource()`。另外五套（`geo-baseline` / `geo-measurement-runtime` / `geo-measurement` /
+`growth` / `page-optimization`）**都声明了那份 8 种后缀的 `SOURCE_EXTENSIONS`**（八行齐全，就在文件里），
+但声明位置在 walker **之后**、只喂给 `scriptKindFor()` 选 ScriptKind，walker 自己还是
+`entry.endsWith('.ts')` —— **连 `.tsx` 都不收**。
+
+🔴 **这条值得单独记住的原因**：它不是「忘了扩后缀」，是**扩了却没接上**。
+grep `SOURCE_EXTENSIONS` 一眼看过去像已经覆盖八种，复核的人会直接放过 ——
+清单在、看着对、实际没接线。**「看起来修好了」比没修更难发现。**
+
+**实测证据**（真放违规文件，不是推理）：`src/lib/growth/violation-probe.tsx` 里
+`import { supabaseAdmin } from '@/lib/supabase'` —— 修复后 **2 条红**（禁止导入 + 禁止符号两道都抓到）；
+walker 回退成 `.ts` 后那 2 条红**消失**，文件对守卫完全不存在。探针未入库。
+
+**改了什么**：五套的清单 + `isScannedSource` 提到 walker 之前并真正接上（必须提前 ——
+`walk()` 在模块初始化时就被调用，引用后声明的 `const` 会 TDZ 抛错）· `page-optimization` 的
+`isTest` 改成跟 walker 同源 · **`strip-comments-consistency` 那条「盯着七份 `stripComments()`
+副本别漂」的盯梢，它自己的 walker 也只收 `.ts`/`.tsx`，一并改** —— 扫描面缩小时它不会红，
+找不到的副本直接从判据里消失、盯梢照样全绿，是同一个形状。
+
+**六个文件各补两条测试**：8 种后缀的断言 + 真磁盘 fixture（`mkdtemp` 写 8 个文件断言 walker
+全收，`.md`/`.json` 不许收）。照 `kernel` 既有写法，不自创。**没抽共享 helper** —— 七份 walker
+有意各自独立（删掉任一，其余六个仍拦得住自己那半边），抽了等于给七道闸装同一个总开关。
+
+**验证**：57 个测试文件 / 1259 条全绿 · **变异 6/6**（逐个文件退回 `.ts`，每次都是新加的
+fixture 那条响，还原后复绿）· tsc 198 条基线报错与本次改动零交集。
+
+---
+
+### 2026-08-12（ME2 Backlog Cleanup Gate：GitHub 状态与 ROADMAP 对齐，三个已完成 WP 结账）
+
+Epic [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872) ·
+PR [#936](https://github.com/bigbigraydeng-maker/magic-engine/pull/936)（合并提交 `f7a6bfc1`）。
+
+**这次解决的一件事**：ME2 的 GitHub 状态、ROADMAP 和已合并实现三者互相说不上话 —— 五个 WP
+的代码早已上线，ROADMAP 却还挂在「未完成」；三个 WP 的活干完了 issue 还开着；Epic 正文的
+勾选表落后五条、序列漏四条。新窗口读哪一份都会得到错的授权判断。
+
+**做了什么**（全程只读核验后才动，无运行时改动）：
+
+- **三个 WP 结账关闭**：#874 WP04（PR #914 / `caf8d481`）· #917 WP04A（PR #922 / `885fe6e1`）·
+  #882 K-WP02（PR #898 / `2d9e426a`）。每条附合并提交 + acceptance 逐项对账 + 余项承接；
+  相关 872 个测试实跑全绿。
+  🔴 #882 的关闭说明逐字写明「**已合并 ≠ 已启用**」—— 它映射表为空、零调用方，
+  依赖的内核四张表在生产不存在。
+- **Epic #872 正文重写**：补勾 8 条 · 补入 #917 / #930 / #932 / #911 · 删掉已作废的
+  「只授权 #877」· 新增 2026-08-12 生产实查表与「Merged is not enabled」一节。
+- **ROADMAP 对齐**（PR #936，接手另一窗口开的 PR 而非重开）：补上原版漏掉的 WP06 #878 ·
+  把 K-WP02 拆出来标「已合并、零调用方、生产未启用」· 把它的主实现指向
+  `src/lib/action-bridge/`（`MAPPING_TABLE` 在那儿，不在 Kernel）· 记清 WP06 交付的是被
+  缩小的范围（无成本闸门是照实施指令做的，两份契约文档打架时后发的赢）。
+- **#930 / #932 边界裁定**：页面台账归 #930（唯一权威），#932 只留复测节奏 + WP09 就位登记。
+- **归档 #911 / PR #912**：中继试点唯一标的 #910 已关闭，是注定空转的自动化。
+- **存量清理**：#421 / #422 / #424 关（从未实现且价值已衰减）· #423 关（核实后确认已实现）·
+  #420 / #425 / #426 **保持开启**并附核实结论（三条都还是真问题，关掉等于谎报已处理）。
+
+**顺带挖出两条会静默失效的东西，各自开了 issue 承接**：
+
+- [#939](https://github.com/bigbigraydeng-maker/magic-engine/issues/939) 🔴 Codex 复审 → Claude 自动修
+  **从来没成功过** —— `ops-codex-to-claude-fix.yml` 没给 action 传 `allowed_bots`，
+  Codex 机器人一提意见就必挂（#935 / #936 均实测复现）。PR #931「复审干净就自动合并」的硬前置。
+- [#938](https://github.com/bigbigraydeng-maker/magic-engine/issues/938) architecture 守卫的 walker
+  只收 `.ts`，而 tsconfig 是 `allowJs` —— 放个 `.js` / `.tsx` 会整文件静默不扫描。
+
+**WP05 开工 Gate**：8 条中 7 条已满足，只剩「获批的 canonical page set」（依赖 #930 的
+PR #935 先解掉那条 P1）。
+
+---
+
 ### 2026-08-12（ME2 WP04A：GEO 测量线接上真东西，并跑出 Roman 首个生产 baseline）
 
 issue [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) ·
