@@ -35,6 +35,10 @@ export interface CronRegistryEntry {
 }
 
 export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
+  // 补登记：render.yaml 里早就有这条 cron，清单里一直没有 —— 也就是说它从上线起
+  // 就不在监控范围内，而「不在监控范围」和「一切正常」在告警里长得一模一样。
+  // 是本 PR 新加的这份对账测试把它抓出来的（service 名带 -daily，jobName 不带）。
+  { service: 'ad-readback-sweep-daily', jobName: 'ad-readback-sweep', schedule: '40 20 * * *', logsRuns: true, addedAt: '2026-08-12' },
   { service: 'agent-learning-rollup', jobName: 'agent-learning-rollup', schedule: '0 7 * * 1', logsRuns: true },
   { service: 'ai-tracker-weekly', jobName: 'ai-tracker-weekly', schedule: '0 1 * * 1', logsRuns: true },
   { service: 'anomaly-detector-daily', jobName: 'anomaly-detector-daily', schedule: '0 5 * * *', logsRuns: true },

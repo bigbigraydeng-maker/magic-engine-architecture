@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import ts from 'typescript'
 import { readFileSync, existsSync } from 'fs'
 import path from 'path'
 import { CRON_REGISTRY } from './registry'
@@ -366,6 +367,15 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
       if (!inSingle && ch === '"') { inDouble = !inDouble; continue }
       if (inSingle) out[i] = ' '
     }
+    // 🔴 扫完还停在引号里 = 这条命令 bash 根本跑不起来（实测 `bash -n` 返回 2，语法错）。
+    //    这时候「哪个 $VAR 会展开」无从谈起：右引号缺失的那段之后，所有 $VAR 都会被
+    //    当成「正常展开」——于是字面量、注入、文档三条断言**同时**放行一条压根执行不了的命令。
+    //    必须 fail closed：宁可让这条测试炸出来，也不能给一条坏命令发通行证。
+    if (inSingle || inDouble) {
+      throw new Error(
+        `startCommand 有未闭合的${inSingle ? '单' : '双'}引号，bash 会直接语法错，无法判定变量展开：${startCommand}`,
+      )
+    }
     return out.join('')
   }
 
@@ -470,6 +480,14 @@ describe('docs/ENV.md 里带 cron 标注的变量，必须真的配得到 cron �
     expect(expandedVars('curl "https://x?t=\'$CRON_SECRET\'"')).toEqual(['CRON_SECRET'])
     // 🔴 反过来：双引号里出现一个撇号，不该跟后面真正的单引号段配成一对
     expect(expandedVars('curl -H "\'" \'$CRON_SECRET\'')).toEqual([])
+
+    // 🔴 未闭合的引号必须 fail closed，不许当成正常命令继续判（Codex thread：registry.test.ts L369）
+    //    漏一个右双引号，bash 直接语法错（实测 `bash -n` 返回 2）；而扫描器如果不管，
+    //    后面那个 $CRON_SECRET 会被判成「会展开」，字面量 / 注入 / 文档三条断言一起放行。
+    expect(() => expandedVars('curl -H "Bearer $CRON_SECRET https://x')).toThrow(/未闭合的双引号/)
+    expect(() => expandedVars("curl -H 'Bearer $CRON_SECRET https://x")).toThrow(/未闭合的单引号/)
+    // 转义掉的引号不算开引号段，不许误报
+    expect(expandedVars('curl -H "Bearer $CRON_SECRET\\"" https://x')).toEqual(['CRON_SECRET'])
   })
 
   it('🔴 命令里不许出现「写了但不会展开」的 $VAR —— 那会把字面量发出去', () => {
@@ -569,6 +587,68 @@ describe('docs/ENV.md 里带 worker 服务名的标注，必须跟真实 worker 
     return rel && existsSync(path.join(ROOT, rel)) ? rel : null
   }
 
+  /**
+   * 这个文件里有没有**真的**读 `process.env.<envName>`。
+   *
+   * 🔴 **判据必须走解析器，不能拿正则扫源码文本。**（Codex thread：registry.test.ts L588）
+   *    原来是一条带标识符边界的正则。标识符边界只解决了 `X_V2` 不算读了 `X`，
+   *    解决不了**这段文本压根不是代码**的情况：worker 里真正的读取被删掉之后，
+   *    只要文件里还留着
+   *        // process.env.FOO was removed
+   *        const hint = 'set process.env.FOO before running'
+   *    正则照样命中 → ENV.md 继续声称 worker 需要这个变量，而读取链校验一路绿。
+   *    「文档说要配」和「其实没人读」在这条测试里长得一模一样，正是它要防的那种病。
+   *
+   *    改成解析 AST，只接受**真实的属性访问表达式**：`process.env.FOO` 与
+   *    `process.env['FOO']`（含反引号）。注释是 trivia、字符串内容不会被解析成表达式，
+   *    所以这两类伪读取从根上就进不了判定，不是再补一条正则。
+   *    仓库自带 TypeScript（devDependency），不引入任何新依赖。
+   */
+  function readsEnvVar(source: string, fileName: string, envName: string): boolean {
+    const kind = fileName.endsWith('.tsx')
+      ? ts.ScriptKind.TSX
+      : fileName.endsWith('.jsx')
+        ? ts.ScriptKind.JSX
+        : /\.(js|mjs|cjs)$/.test(fileName)
+          ? ts.ScriptKind.JS
+          : ts.ScriptKind.TS
+    const sourceFile = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, false, kind)
+
+    /** 这个表达式是不是 `process.env` 本身。 */
+    const isProcessEnv = (node: ts.Expression): boolean =>
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'process' &&
+      node.name.text === 'env'
+
+    let found = false
+    const visit = (node: ts.Node): void => {
+      if (found) return
+      // process.env.FOO
+      if (
+        ts.isPropertyAccessExpression(node) &&
+        isProcessEnv(node.expression) &&
+        node.name.text === envName
+      ) {
+        found = true
+        return
+      }
+      // process.env['FOO'] / process.env[`FOO`]
+      if (
+        ts.isElementAccessExpression(node) &&
+        isProcessEnv(node.expression) &&
+        ts.isStringLiteralLike(node.argumentExpression) &&
+        node.argumentExpression.text === envName
+      ) {
+        found = true
+        return
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(sourceFile)
+    return found
+  }
+
   /** 入口文件本身 + 它直接 import 的 `@/lib/*` 模块，谁读了这个变量。 */
   function readsVia(entry: string, envName: string): string[] {
     const src = readFileSync(path.join(ROOT, entry), 'utf8')
@@ -579,27 +659,42 @@ describe('docs/ENV.md 里带 worker 服务名的标注，必须跟真实 worker 
         if (existsSync(path.join(ROOT, cand))) { candidates.push(cand); break }
       }
     }
-    // 要带标识符边界：子串匹配下 `process.env.NEXT_PUBLIC_SUPABASE_URL_V2` 会把
-    // `NEXT_PUBLIC_SUPABASE_URL` 也算成有人读 —— 旧变量其实已经没人读了，文档却继续
-    // 声称 worker 需要它，测试还绿着。方括号取值也一并认。
-    const reads = new RegExp(
-      `process\\.env\\s*(?:\\.\\s*${envName}(?![A-Za-z0-9_])|\\[\\s*['"\`]${envName}['"\`]\\s*\\])`,
+    return candidates.filter((f) =>
+      readsEnvVar(readFileSync(path.join(ROOT, f), 'utf8'), f, envName),
     )
-    return candidates.filter((f) => reads.test(readFileSync(path.join(ROOT, f), 'utf8')))
   }
 
   const workers = workerServices()
   const labelled = Array.from(allEnvDocLocations().entries()).filter(([, w]) => workerNameIn(w))
 
-  it('前提成立：读取方判定带标识符边界，不把 X_V2 算成读了 X', () => {
-    const probe = (src: string, name: string) =>
-      new RegExp(
-        `process\\.env\\s*(?:\\.\\s*${name}(?![A-Za-z0-9_])|\\[\\s*['"\`]${name}['"\`]\\s*\\])`,
-      ).test(src)
-    expect(probe('const a = process.env.NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL')).toBe(true)
-    expect(probe("const a = process.env['NEXT_PUBLIC_SUPABASE_URL']", 'NEXT_PUBLIC_SUPABASE_URL')).toBe(true)
+  it('前提成立：读取方判定走 AST —— 注释 / 字符串里的伪读取不算，X_V2 也不算读了 X', () => {
+    const N = 'NEXT_PUBLIC_SUPABASE_URL'
+    const probe = (src: string, name = N) => readsEnvVar(src, 'probe.ts', name)
+
+    // ✅ 真读取的两种写法（含反引号下标）
+    expect(probe(`const a = process.env.${N}`)).toBe(true)
+    expect(probe(`const a = process.env['${N}']`)).toBe(true)
+    expect(probe(`const a = process.env[\`${N}\`]`)).toBe(true)
+    expect(probe(`const { ${N}: v } = process.env\nconst a = process.env.${N} ?? ''`)).toBe(true)
+
     // 🔴 改名成 _V2 之后，旧名字就没人读了
-    expect(probe('const a = process.env.NEXT_PUBLIC_SUPABASE_URL_V2', 'NEXT_PUBLIC_SUPABASE_URL')).toBe(false)
+    expect(probe(`const a = process.env.${N}_V2`)).toBe(false)
+
+    // 🔴 注释里的伪读取不算 —— 正则版在这里会命中，于是「删掉了读取」也一路绿
+    expect(probe(`// process.env.${N} was removed`)).toBe(false)
+    expect(probe(`/* 迁移前这里读过 process.env.${N} */`)).toBe(false)
+    expect(probe(`/**\n * @deprecated 原来读 process.env.${N}\n */\nexport const x = 1`)).toBe(false)
+
+    // 🔴 字符串 / 模板串里的伪读取同样不算
+    expect(probe(`const hint = 'set process.env.${N} before running'`)).toBe(false)
+    expect(probe(`const hint = \`set process.env.${N} first\``)).toBe(false)
+
+    // 🔴 JSX 文本里写出来的也只是页面上的字，不是读取
+    expect(readsEnvVar(`export const P = () => <div>process.env.${N}</div>`, 'probe.tsx', N)).toBe(false)
+
+    // 🔴 名字对不上的属性访问不算
+    expect(probe(`const a = process.envx.${N}`)).toBe(false)
+    expect(probe(`const a = notprocess.env.${N}`)).toBe(false)
   })
 
   it('前提成立：render.yaml 解析到了 worker，ENV.md 里也确实有点名 worker 的标注', () => {
