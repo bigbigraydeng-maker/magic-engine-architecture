@@ -129,7 +129,12 @@ function stripComments(src: string, fileName = 'scan.ts'): string {
   const visit = (node: ts.Node): void => {
     collectLeadingAt(node.pos)
     collectTrailingAt(node.end)
-    node.forEachChild(visit)
+    // 🔴 必须走 getChildren()（token 级），不是 forEachChild（只给子**节点**）。
+    //    JSX 表达式里的注释 `<div>{/* … */}</div>` 挂在 `}` 这个 **token** 的
+    //    前导 trivia 上 —— JsxExpression 没有子节点，forEachChild 一个都不给，
+    //    于是整段注释原样留下，后面仍用正则的检查会把它当成生产代码。
+    //    同理还有块尾 `}` 之前那种独占一行的注释。
+    for (const child of node.getChildren(sourceFile)) visit(child)
   }
   visit(sourceFile)
   // 文件末尾那条注释是 EOF token 的前导 trivia，不挂在任何其它节点上
@@ -905,6 +910,85 @@ describe('🔴 解析器口径：转义与注释（合成源码）', () => {
       expect(stripped).toContain(`const start = '/*'`)
       expect(stripped).toContain(`const end = '*/'`)
       expect(stripped).not.toContain('real trailing comment')
+    })
+  })
+
+
+  /**
+   * 🔴 **JSX 表达式里的注释挂在 token 上，不挂在任何子节点上。**（Codex thread r3762497089）
+   *
+   *     <div>{/* as unknown as AuthorizedExecutionContext *\/}</div>
+   *     <Comp value={/* any *\/ expr} />
+   *
+   * `JsxExpression` 只有 `{` `}` 两个 token；空表达式时 `forEachChild` 一个子节点都不给，
+   * 所以注释既不是它的 leading、也不是谁的 trailing —— 原样留在挖空结果里，
+   * 后面仍用正则的检查（授权上下文、没有 any）会把纯注释当成生产代码而误报。
+   * 修法：遍历改走 `getChildren()`（token 级），注释是 `}` 的前导 trivia。
+   */
+  describe('🔴 JSX 表达式里的注释同样要被挖空（Codex r3762497089）', () => {
+    const BRIDGE_TSX = 'src/lib/action-bridge/panel.tsx'
+    const BRIDGE_JSX2 = 'src/lib/action-bridge/panel.jsx'
+
+    it('🔴 .tsx 里 `{/* as unknown as AuthorizedExecutionContext */}` 必须被挖空', () => {
+      const code = `export const P = () => <div>{/* as unknown as AuthorizedExecutionContext */}</div>`
+      expect(stripComments(code, BRIDGE_TSX)).not.toContain('as unknown as AuthorizedExecutionContext')
+    })
+
+    it('🔴 .jsx 里 `{/* any */}` 不得触发「没有 any」那条正则', () => {
+      const code = `export const P = () => <div>{/* const x: any = 1 */}</div>`
+      expect(/:\s*any\b|<any>|as\s+any\b/.test(stripComments(code, BRIDGE_JSX2))).toBe(false)
+    })
+
+    it('🔴 JSX 属性里的内联注释 `value={/* … */ expr}` 也要挖空', () => {
+      const code = `export const P = () => <Comp value={/* as unknown as any */ expr} />`
+      expect(stripComments(code, BRIDGE_TSX)).not.toContain('as unknown as any')
+    })
+
+    it('🔴 JSX 注释里写的禁止 import / require 路径不算违规', () => {
+      const code = [
+        `import React from 'react'`,
+        `export const P = () => <div>{/* import '@/lib/capabilities' */}</div>`,
+        `export const Q = () => <div>{/* require('@/lib/execution') */}</div>`,
+      ].join('\n')
+      expect(forbiddenImportsIn(BRIDGE_JSX2, code)).toEqual([])
+      expect(stripComments(code, BRIDGE_JSX2)).not.toContain('@/lib/capabilities')
+    })
+
+    it('🔴 JSX 表达式**外**真实的禁止 import / require 仍必须命中', () => {
+      const code = [
+        `import '@/lib/capabilities'`,
+        `export const P = () => <div>{/* 这里只是注释 */}{require('@/lib/execution')}</div>`,
+      ].join('\n')
+      expect(forbiddenImportsIn(BRIDGE_JSX2, code).sort()).toEqual([
+        '@/lib/capabilities',
+        '@/lib/execution',
+      ])
+    })
+
+    it('✅ 字符串 / 模板串 / 正则 / JSX 属性里形似注释的内容不得被误删', () => {
+      const code = [
+        `const s = "/* not a comment */"`,
+        'const t = `// not a comment either`',
+        `const re = /\\/\\*keepme\\*\\//`,
+        `export const P = () => <a href="/* keep-href */" data-x="// keep-attr">t</a>`,
+      ].join('\n')
+      const stripped = stripComments(code, BRIDGE_TSX)
+      expect(stripped).toContain('/* not a comment */')
+      expect(stripped).toContain('// not a comment either')
+      expect(stripped).toContain('keepme')
+      expect(stripped).toContain('/* keep-href */')
+      expect(stripped).toContain('// keep-attr')
+    })
+
+    it('🔴 八类后缀下 JSX / 普通注释都挖得掉（挖空不改行号）', () => {
+      for (const f of ['a.ts', 'a.tsx', 'a.js', 'a.jsx', 'a.mts', 'a.cts', 'a.mjs', 'a.cjs']) {
+        const code = ['/* lead */', 'const a = 1 // trail', '// eof'].join('\n')
+        const stripped = stripComments(code, f)
+        expect(stripped, f).not.toContain('lead')
+        expect(stripped, f).not.toContain('trail')
+        expect(stripped, f).not.toContain('eof')
+        expect(stripped.split('\n').length, f).toBe(3)
+      }
     })
   })
 

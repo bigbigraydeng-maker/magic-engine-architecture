@@ -86,7 +86,20 @@ function walk(dir: string, out: string[] = []): string[] {
 
 const ALL_FILES = walk(SRC).map((f) => relative(ROOT, f).split('\\').join('/'))
 
-const isTest = (p: string) => /\.test\.tsx?$/.test(p) || p.includes('/__tests__/')
+/**
+ * 🔴 **测试文件判据必须跟 walker 的后缀清单同源。**（Codex thread r3762497095）
+ *
+ * walker 扩到八类后缀之后，这里还写着 `/\.test\.tsx?$/` —— 于是
+ * `src/foo.test.js` / `.jsx` / `.mts` / `.cts` / `.mjs` / `.cjs` 会被
+ * 当成**生产文件**扫描，测试里那些**故意写来验证边界**的禁止导入、
+ * 伪造授权上下文、直接写库，会被判成生产违规而把整套测试卡红。
+ *
+ * 所以直接复用 `SOURCE_EXTENSIONS`，两边同源，不会再各自漂移。
+ * 🔴 仓库现有测试命名只有 `.test.<ext>` 与 `/__tests__/` 两种（实测 `.spec.*` 为 0），
+ *    这里只扩后缀、**不新增** `.spec.*` 之类仓库里不存在的约定。
+ */
+const isTest = (p: string) =>
+  SOURCE_EXTENSIONS.some(([ext]) => p.endsWith(`.test${ext}`)) || p.includes('/__tests__/')
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8')
 
 const parseSource = (code: string, fileName = 'scan.ts'): ts.SourceFile =>
@@ -143,7 +156,12 @@ function stripComments(src: string, fileName = 'scan.ts'): string {
   const visit = (node: ts.Node): void => {
     collectLeadingAt(node.pos)
     collectTrailingAt(node.end)
-    node.forEachChild(visit)
+    // 🔴 必须走 getChildren()（token 级），不是 forEachChild（只给子**节点**）。
+    //    JSX 表达式里的注释 `<div>{/* … */}</div>` 挂在 `}` 这个 **token** 的
+    //    前导 trivia 上 —— JsxExpression 没有子节点，forEachChild 一个都不给，
+    //    于是整段注释原样留下，后面仍用正则的检查会把它当成生产代码。
+    //    同理还有块尾 `}` 之前那种独占一行的注释。
+    for (const child of node.getChildren(sourceFile)) visit(child)
   }
   visit(sourceFile)
   // 文件末尾那条注释是 EOF token 的前导 trivia，不挂在任何其它节点上
@@ -1040,6 +1058,138 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
           expect(stripped).toContain(`const start = '/*'`)
           expect(stripped).toContain(`const end = '*/'`)
           expect(stripped).not.toContain('real trailing comment')
+        })
+      })
+
+      /**
+       * 🔴 **测试文件判据必须跟 walker 的后缀清单同源。**（Codex thread r3762497095）
+       *
+       * walker 扩到八类后缀后，`isTest` 若还只认 `.test.ts(x)`，那么
+       * `src/foo.test.js` 之类会被当成生产文件扫描 —— 测试里**故意写来验证边界**的
+       * 禁止导入会被判成生产违规，把整套测试卡红。
+       */
+      describe('🔴 isTest 与 walker 后缀同源（Codex r3762497095）', () => {
+        it('🔴 八种 `.test.<ext>` 全部被认定为测试文件', () => {
+          for (const [ext] of SOURCE_EXTENSIONS) {
+            expect(isTest(`src/lib/kernel/foo.test${ext}`), ext).toBe(true)
+          }
+        })
+
+        it('🔴 八种同后缀的**普通生产文件**仍然被当成生产代码（不许被排除掉）', () => {
+          for (const [ext] of SOURCE_EXTENSIONS) {
+            expect(isTest(`src/lib/kernel/foo${ext}`), ext).toBe(false)
+            expect(isScannedSource(`src/lib/kernel/foo${ext}`), ext).toBe(true)
+          }
+        })
+
+        it('✅ `/__tests__/` 既有语义保持不变；不引入 `.spec.*` 之类仓库里没有的约定', () => {
+          expect(isTest('src/lib/kernel/__tests__/a.ts')).toBe(true)
+          expect(isTest('src/lib/kernel/__tests__/a.js')).toBe(true)
+          // 仓库实测 `.spec.*` 为 0，不新增该约定
+          expect(isTest('src/lib/kernel/foo.spec.ts')).toBe(false)
+        })
+
+        it('🔴 真实磁盘 fixture：测试文件不进生产违规扫描，同内容的生产文件必须被拦', () => {
+          const tmp = mkdtempSync(join(tmpdir(), 'k-wp02-istest-'))
+          try {
+            const forbidden = `import '@/lib/growth'`
+            // 同样一段禁止导入，一份放测试文件、一份放生产文件
+            writeFileSync(join(tmp, 'boundary.test.jsx'), forbidden)
+            writeFileSync(join(tmp, 'widget.jsx'), forbidden)
+            writeFileSync(join(tmp, 'notes.md'), forbidden)
+
+            const collected = walk(tmp).map((f) => f.split(/[\\/]/).pop() as string)
+            // walker 收源码、不收非源码
+            expect(collected.sort()).toEqual(['boundary.test.jsx', 'widget.jsx'])
+
+            const production = collected.filter((f) => !isTest(f))
+            expect(production).toEqual(['widget.jsx'])
+
+            // 生产那份必须命中；测试那份不进扫描，因此不会把边界测试卡红
+            expect(importsAnyOf('widget.jsx', forbidden, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(true)
+            expect(isTest('boundary.test.jsx')).toBe(true)
+          } finally {
+            rmSync(tmp, { recursive: true, force: true })
+          }
+        })
+      })
+
+      /**
+       * 🔴 **JSX 表达式里的注释挂在 token 上，不挂在任何子节点上。**（Codex thread r3762497089）
+       *
+       *     <div>{/* as unknown as AuthorizedExecutionContext *\/}</div>
+       *     <Comp value={/* any *\/ expr} />
+       *
+       * `JsxExpression` 只有 `{` `}` 两个 token；空表达式时 `forEachChild` 一个子节点都不给，
+       * 所以注释既不是它的 leading、也不是谁的 trailing —— 原样留在挖空结果里，
+       * 后面仍用正则的全仓检查（授权上下文、没有 any）会把纯注释当成生产代码而误报。
+       * 修法：遍历改走 `getChildren()`（token 级），注释是 `}` 的前导 trivia。
+       */
+      describe('🔴 JSX 表达式里的注释同样要被挖空（Codex r3762497089）', () => {
+        const KERNEL_TSX = 'src/lib/kernel/panel.tsx'
+        const KERNEL_JSX2 = 'src/lib/kernel/panel.jsx'
+
+        it('🔴 .tsx 里 `{/* as unknown as AuthorizedExecutionContext */}` 必须被挖空', () => {
+          const code = `export const P = () => <div>{/* as unknown as AuthorizedExecutionContext */}</div>`
+          expect(stripComments(code, KERNEL_TSX)).not.toContain(
+            'as unknown as AuthorizedExecutionContext',
+          )
+        })
+
+        it('🔴 .jsx 里 `{/* any */}` 不得触发「没有 any」那条正则', () => {
+          const code = `export const P = () => <div>{/* const x: any = 1 */}</div>`
+          expect(/:\s*any\b|<any>|as\s+any\b/.test(stripComments(code, KERNEL_JSX2))).toBe(false)
+        })
+
+        it('🔴 JSX 属性里的内联注释 `value={/* … */ expr}` 也要挖空', () => {
+          const code = `export const P = () => <Comp value={/* as unknown as any */ expr} />`
+          expect(stripComments(code, KERNEL_TSX)).not.toContain('as unknown as any')
+        })
+
+        it('🔴 JSX 注释里写的禁止 import / require 路径不算违规', () => {
+          const code = [
+            `import React from 'react'`,
+            `export const P = () => <div>{/* import '@/lib/growth' */}</div>`,
+            `export const Q = () => <div>{/* require('@/lib/action-bridge') */}</div>`,
+          ].join('\n')
+          expect(importsAnyOf(KERNEL_JSX2, code, KERNEL_FORBIDDEN_MODULE_IMPORTS)).toBe(false)
+          expect(stripComments(code, KERNEL_JSX2)).not.toContain('@/lib/growth')
+        })
+
+        it('🔴 JSX 表达式**外**真实的禁止 import / require 仍必须命中', () => {
+          const code = [
+            `import '@/lib/growth'`,
+            `export const P = () => <div>{/* 这里只是注释 */}{require('@/lib/action-bridge')}</div>`,
+          ].join('\n')
+          expect(
+            violationReasons(KERNEL_JSX2, code, KERNEL_FORBIDDEN_MODULE_IMPORTS).sort(),
+          ).toEqual([`${KERNEL_JSX2} → @/lib/action-bridge`, `${KERNEL_JSX2} → @/lib/growth`])
+        })
+
+        it('✅ 字符串 / 模板串 / 正则 / JSX 属性里形似注释的内容不得被误删', () => {
+          const code = [
+            `const s = "/* not a comment */"`,
+            'const t = `// not a comment either`',
+            `const re = /\\/\\*keepme\\*\\//`,
+            `export const P = () => <a href="/* keep-href */" data-x="// keep-attr">t</a>`,
+          ].join('\n')
+          const stripped = stripComments(code, KERNEL_TSX)
+          expect(stripped).toContain('/* not a comment */')
+          expect(stripped).toContain('// not a comment either')
+          expect(stripped).toContain('keepme')
+          expect(stripped).toContain('/* keep-href */')
+          expect(stripped).toContain('// keep-attr')
+        })
+
+        it('🔴 八类后缀下 JSX / 普通注释都挖得掉（挖空不改行号）', () => {
+          for (const f of ['a.ts', 'a.tsx', 'a.js', 'a.jsx', 'a.mts', 'a.cts', 'a.mjs', 'a.cjs']) {
+            const code = ['/* lead */', 'const a = 1 // trail', '// eof'].join('\n')
+            const stripped = stripComments(code, f)
+            expect(stripped, f).not.toContain('lead')
+            expect(stripped, f).not.toContain('trail')
+            expect(stripped, f).not.toContain('eof')
+            expect(stripped.split('\n').length, f).toBe(3)
+          }
         })
       })
 

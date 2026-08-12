@@ -1743,7 +1743,32 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         test="src/lib/action-bridge/__tests__/architecture.test.ts",
         expect_fail_contains="JSX 属性 / 子元素里的模块引用要能扫到",
     ),
+    # ── PR #898 收尾（第四轮）：Codex P2 thread r3762497089 —— JSX 注释 ────────
+    dict(
+        # 注释范围收集退回 forEachChild（只给子**节点**）。JSX 表达式里的注释挂在
+        # `}` 这个 token 的前导 trivia 上，JsxExpression 没有子节点 —— 于是整段注释
+        # 原样留下，后面仍用正则的检查会把纯注释当成生产代码而误报。
+        name="K-WP02 注释收集退回 forEachChild（JSX 表达式里的注释挖不掉）",
+        file="src/lib/action-bridge/__tests__/architecture.test.ts",
+        old="    for (const child of node.getChildren(sourceFile)) visit(child)",
+        new="    node.forEachChild(visit)",
+        test="src/lib/action-bridge/__tests__/architecture.test.ts",
+        expect_fail_contains="必须被挖空",
+    ),
+    # ── PR #898 收尾（第四轮）：Codex P2 thread r3762497095 —— isTest 后缀 ─────
+    dict(
+        # isTest 退回只认 .test.ts(x)。walker 已扩到八类后缀，于是 .test.js/.jsx/
+        # .mts/.cts/.mjs/.cjs 会被当成生产文件扫描，测试里故意写的禁止导入会把
+        # 整套边界测试卡红。
+        name="K-WP02 isTest 退回只认 .test.ts(x)（其余六类测试文件被当成生产代码）",
+        file="src/lib/kernel/__tests__/architecture.test.ts",
+        old="const isTest = (p: string) =>\n  SOURCE_EXTENSIONS.some(([ext]) => p.endsWith(`.test${ext}`)) || p.includes('/__tests__/')",
+        new="const isTest = (p: string) => /\\.test\\.tsx?$/.test(p) || p.includes('/__tests__/')",
+        test="src/lib/kernel/__tests__/architecture.test.ts",
+        expect_fail_contains="八种 `.test.<ext>` 全部被认定为测试文件",
+    ),
 ]
+
 
 
 def run_test(path):
