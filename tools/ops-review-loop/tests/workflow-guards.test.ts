@@ -13,6 +13,8 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
+import { GUARDED_BRANCH_PREFIXES, PROTECTED_PATHS } from '../src/fix-scope.mjs'
+
 const requireFromHere = createRequire(import.meta.url)
 const YAML = requireFromHere('js-yaml') as { load(input: string): unknown }
 
@@ -20,6 +22,7 @@ const ROOT = join(process.cwd(), '.github/workflows')
 const REQUEST_PATH = join(ROOT, 'ops-codex-request-review.yml')
 const FIX_PATH = join(ROOT, 'ops-codex-to-claude-fix.yml')
 const SMOKE_PATH = join(ROOT, 'ops-codex-smoke-test.yml')
+const SCOPE_PATH = join(ROOT, 'ops-fix-scope-guard.yml')
 
 interface WorkflowStep {
   id?: string
@@ -59,7 +62,8 @@ function load(path: string) {
 const request = load(REQUEST_PATH)
 const fix = load(FIX_PATH)
 const smoke = load(SMOKE_PATH)
-const all = [request, fix, smoke]
+const scope = load(SCOPE_PATH)
+const all = [request, fix, smoke, scope]
 
 const FORBIDDEN_WRITE_SCOPES = ['workflows', 'actions', 'administration', 'deployments', 'packages', 'security-events']
 const DANGEROUS_SUBSTRINGS = [
@@ -263,6 +267,48 @@ describe('the codex-to-claude-fix workflow', () => {
   it('serialises per PR so the check-then-act dedup cannot race itself', () => {
     expect(fix.doc.concurrency?.group).toContain('github.event.pull_request.number')
     expect(fix.doc.concurrency?.['cancel-in-progress']).toBe(false)
+  })
+})
+
+describe('the auto-fix blast-radius guard (the real boundary)', () => {
+  // Codex on PR #941: "XML 围栏只改变文本位置，无法区分正常的修复指令和被 PR 内容
+  // 诱导出来的恶意修复指令 … 现有测试只验证字符串位于围栏内，并未验证模型不会服从它。"
+  // Correct — so containment cannot live in the prompt. It lives here, in a
+  // check that judges the resulting diff. These assertions pin the properties
+  // that make it a boundary rather than a suggestion.
+  it('runs on pull_request so it cannot be skipped by not asking for it', () => {
+    expect(Object.keys(scope.triggers)).toEqual(['pull_request'])
+  })
+
+  it('checks itself out from main, so a PR cannot edit the guard that judges it', () => {
+    const checkout = scope.steps.find((s) => s.uses?.startsWith('actions/checkout'))
+    expect(checkout?.with?.ref).toBe('main')
+  })
+
+  it('is read-only — it judges, it never writes', () => {
+    expect(scope.doc.permissions?.contents).toBe('read')
+    expect(scope.doc.permissions?.['pull-requests']).toBe('read')
+  })
+
+  it('guards exactly the lane the auto-fix leg can push to', () => {
+    // If the fix leg's reach ever widens, this guard must widen with it.
+    const fixGuard = Object.values(fix.doc.jobs ?? {})[0]?.if ?? ''
+    for (const prefix of GUARDED_BRANCH_PREFIXES) {
+      expect(fixGuard, `fix leg pushes to ${prefix} but the scope guard does not cover it`).toContain(prefix)
+    }
+  })
+
+  it('protects the paths that would let the lane widen itself', () => {
+    const protectedPrefixes = PROTECTED_PATHS.map((r) => r.prefix ?? r.suffix ?? r.includes)
+    for (const needed of ['.github/workflows/', 'tools/ops-review-loop/', 'supabase/migrations/', 'render.yaml']) {
+      expect(protectedPrefixes, `${needed} must stay protected`).toContain(needed)
+    }
+  })
+
+  it('narrows the action tool surface too, while not pretending that is the boundary', () => {
+    const claudeStep = fix.steps.find((s) => s.uses?.startsWith('anthropics/claude-code-action'))
+    expect(String(claudeStep?.with?.claude_args ?? '')).toContain('--allowed-tools')
+    expect(fix.source).toContain('NOT the boundary')
   })
 })
 
