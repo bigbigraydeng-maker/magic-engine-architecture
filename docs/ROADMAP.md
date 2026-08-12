@@ -31,7 +31,9 @@
 - ✅ **WP06** [#878](https://github.com/bigbigraydeng-maker/magic-engine/issues/878) 共享 Page 能力 resolve / snapshot / draft / diff / validate（PR [#895](https://github.com/bigbigraydeng-maker/magic-engine/pull/895) / `e818d9dc`）—— `src/lib/page-optimization/` + `src/lib/capabilities/page-optimization/snapshot.ts`，**零线上写、零持久化、零调用方**。issue 已关闭
       ⚠️ **交付的是被缩小过的范围，不是能力契约的全集**：Build Control Room 的 WP06 MINIMUM 实施指令（2026-08-10）冻结决定第 5 条明写「**WP06 的模型花费固定为零，不许加通用预算引擎或可配置花费政策**」，因此**代码里没有成本上限，也不该有**。
       但 [页面能力契约 v1.0](./specs/2026-08-10-me2-page-optimization-capability-v1.0.md) §10 的验收要点仍写着「draft 与 snapshot 的模型 / provider 调用都声明了成本上限，建立不起来就 fail closed」—— **两份权威文档打架，后发的实施指令赢**。真要恢复成本闸门，那是 WP07（#880，它才有真的对外调用）的事，不是回头改 WP06。
-- ✅ **K-WP02** [#882](https://github.com/bigbigraydeng-maker/magic-engine/issues/882) ActionCandidate→ActionKey 治理 + per-action 副作用政策（PR [#898](https://github.com/bigbigraydeng-maker/magic-engine/pull/898) / `2d9e426a`）—— `src/lib/kernel/`。
+- ✅ **K-WP02** [#882](https://github.com/bigbigraydeng-maker/magic-engine/issues/882) ActionCandidate→ActionKey 治理 + per-action 副作用政策（PR [#898](https://github.com/bigbigraydeng-maker/magic-engine/pull/898) / `2d9e426a`）——
+      📍 **主实现在 `src/lib/action-bridge/`**（`MAPPING_TABLE` / mapper / 词汇表 API 都在这里，且 `MAPPING_TABLE` 目前是**空数组**）；**只有副作用授权那一段在 `src/lib/kernel/`**（`outward-authorization.ts`）。
+      🔴 K-WP02 的冻结边界要求 **bridge 不许放进 Kernel** —— 要加新映射就加在 `action-bridge/`，**别加进 Kernel 层**。
       🔴 **只是合并了，没在生产跑过**：映射注册表为空、**零调用方**，且它依赖的执行内核四张表在生产**根本不存在**（见下）。**不要把它跟真跑过生产的 WP03 / WP04A 归成一类。** issue 已关闭，关闭说明里逐字写明了「已合并 ≠ 已启用」
 
 > **哪些真跑过生产 —— 2026-08-12 对生产库做对象存在性只读实查（不认文件名、不认版本号）**：
