@@ -222,3 +222,71 @@ describe('mark-fix-outcome: the baseline must bracket this round', () => {
     expect(body).toContain('pushed no commit')
   })
 })
+
+describe('mark-fix-outcome: pushed a commit and then failed', () => {
+  let dir
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ops-loop-pushfail-'))
+    createIssueComment.mockClear()
+    getPullRequest.mockReset()
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+    vi.resetModules()
+  })
+
+  it('counts the round, because the commit is real', async () => {
+    // Codex finding (PR #943, P2). If the action pushes and only then fails,
+    // the old shape fell into the failure branch, announced "no change was
+    // pushed" without checking, and wrote no marker. The commits are real and
+    // trigger further reviews, so the 3-round cap could be blown while the
+    // loop insisted nothing had happened.
+    const eventPath = join(dir, 'event.json')
+    writeFileSync(eventPath, JSON.stringify({ pull_request: { number: 943, head: { sha: 'oldhead000' } } }))
+    getPullRequest.mockResolvedValue({ head: { sha: 'pushedhead' } })
+
+    await withEnv(
+      {
+        GITHUB_TOKEN: 'tok',
+        GITHUB_REPOSITORY: 'bigbigraydeng-maker/magic-engine',
+        GITHUB_EVENT_PATH: eventPath,
+        ROUND: '2',
+        OUTCOME: 'failure',
+        HEAD_BEFORE: 'd'.repeat(40),
+      },
+      () => import('../src/mark-fix-outcome.mjs')
+    )
+
+    const [, , , , body] = createIssueComment.mock.calls[0]
+    expect(body).toContain('pushedhead')
+    expect(body).toContain('stage=fix-dispatched')
+    expect(body).toContain('this round **is** counted')
+    // and it must not claim the run was clean
+    expect(body).toContain('failure')
+  })
+
+  it('only claims "no commit was pushed" when it verified that', async () => {
+    const eventPath = join(dir, 'event.json')
+    writeFileSync(eventPath, JSON.stringify({ pull_request: { number: 943, head: { sha: 'samehead00' } } }))
+    getPullRequest.mockResolvedValue({ head: { sha: 'e'.repeat(40) } })
+
+    await withEnv(
+      {
+        GITHUB_TOKEN: 'tok',
+        GITHUB_REPOSITORY: 'bigbigraydeng-maker/magic-engine',
+        GITHUB_EVENT_PATH: eventPath,
+        ROUND: '2',
+        OUTCOME: 'failure',
+        HEAD_BEFORE: 'e'.repeat(40),
+      },
+      () => import('../src/mark-fix-outcome.mjs')
+    )
+
+    const [, , , , body] = createIssueComment.mock.calls[0]
+    expect(body).toContain('no commit was pushed')
+    expect(body).toContain('eeeeeeeeee')
+    expect(body).not.toContain('stage=fix-dispatched')
+  })
+})

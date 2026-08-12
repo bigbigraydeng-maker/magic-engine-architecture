@@ -60,14 +60,29 @@ const pushedSomething =
   typeof headNow === 'string' &&
   headNow !== headBefore
 
-if (outcome === 'success' && pushedSomething) {
+// Codex finding (PR #943, P2). What decides whether a round was consumed is
+// whether a commit landed — not whether the action exited cleanly. Those are
+// different facts, and the earlier shape only asked the second one on two of
+// the three paths: a round that pushed a commit and THEN failed inside the
+// action fell into the failure branch, which announced "no change was pushed"
+// without ever checking, and wrote no marker. The commits are real and go on
+// to trigger further reviews, so the cap could be exceeded while the loop
+// insisted nothing had happened.
+//
+// Branch on the push, then describe the outcome — rather than branching on the
+// outcome and assuming the push.
+if (pushedSomething) {
   const marker = buildMarker({ stage: 'fix-dispatched', pr, sha, round })
+  const note =
+    outcome === 'success'
+      ? `Codex will review the new head next.`
+      : `⚠️ The action then reported \`${outcome}\`, so the fix may be incomplete — but the commit is real, so this round **is** counted. Codex will review the new head next.`
   await createIssueComment(
     token,
     owner,
     repo,
     pr,
-    `Completed automated fix round ${round} for Codex findings and pushed \`${headNow.slice(0, 10)}\`. Codex will review the new head next.\n\n${marker}`
+    `Completed automated fix round ${round} for Codex findings and pushed \`${headNow.slice(0, 10)}\`. ${note}\n\n${marker}`
   )
 } else if (outcome === 'success') {
   // Green step, unchanged head. Deliberately writes NO fix-dispatched marker:
@@ -92,6 +107,9 @@ if (outcome === 'success' && pushedSomething) {
     owner,
     repo,
     pr,
-    `⚠️ Automated fix round ${round} did not finish successfully (outcome: \`${outcome}\`) — no change was pushed. This round is **not** counted against the 3-round limit; a fresh Codex review on this same head, or a manual re-run of this job, will retry it. Check the workflow run logs if this keeps happening.`
+    // Reached only when the head genuinely did not move, so "no commit was
+    // pushed" is now a verified statement rather than an assumption about what
+    // a failing action must have done.
+    `⚠️ Automated fix round ${round} did not finish successfully (outcome: \`${outcome}\`) and **no commit was pushed** — the branch head is still \`${String(headNow ?? headBefore ?? 'unknown').slice(0, 10)}\`. This round is **not** counted against the 3-round limit; a fresh Codex review on this same head, or a manual re-run of this job, will retry it. Check the workflow run logs if this keeps happening.`
   )
 }
