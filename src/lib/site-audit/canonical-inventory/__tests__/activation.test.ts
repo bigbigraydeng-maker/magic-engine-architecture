@@ -64,6 +64,7 @@ function makeReviewedPlan(over?: { hosts?: readonly string[]; domain?: string; c
     requestedDomain: over?.domain ?? DOMAIN,
     approvedHosts: over?.hosts ?? HOSTS,
     discoveredUrls: [...ACCEPTED, REJECTED, DEFERRED],
+    // ACCEPTED×2 + REJECTED(http, 同主机) + DEFERRED = 4 条，全在 example.com 下。
     discovery: (over?.hosts ?? HOSTS).map((host) => ({ host, count: 4, foreignCount: 0, error: null })),
   })
   return applyReviewDecisions(plan, {
@@ -635,7 +636,8 @@ describe('#930 现场形状：裸域进台账、www 进不去', () => {
       requestedDomain: HOST,
       approvedHosts: [HOST],
       discoveredUrls: [`https://${HOST}/about`, `https://www.${HOST}/about`],
-      discovery: [{ host: HOST, count: 2, foreignCount: 0, error: null }],
+      // 清单里属于裸域的只有 1 条（另一条是 www，不属于这个主机）。
+      discovery: [{ host: HOST, count: 1, foreignCount: 0, error: null }],
     })
     const pendingUrls = plan.candidates.filter((c) => c.decision === 'pending').map((c) => c.originalUrl)
     expect(pendingUrls).toEqual([`https://${HOST}/about`])

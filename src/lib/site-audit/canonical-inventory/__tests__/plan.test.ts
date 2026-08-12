@@ -18,14 +18,27 @@ const REVIEW = { reviewedBy: 'product-owner', reviewedAt: '2026-08-12T00:00:00.0
 /** 假签名：真实实现应当是带密钥的 HMAC —— 改文件的人算不出来。 */
 const SIGN = (planHash: string): string => `sig:${planHash}`
 
+/** 清单里属于这个主机的唯一 URL 数 —— 跟适配器的算法一致。 */
+function countFor(host: string, urls: readonly string[]): number {
+  const own = new Set<string>()
+  for (const u of urls) {
+    try {
+      if (new URL(u.trim()).hostname.toLowerCase() === host.toLowerCase()) own.add(u.trim())
+    } catch {
+      /* 畸形 URL 不参与对账 */
+    }
+  }
+  return own.size
+}
+
 function build(urls: readonly string[], hosts: readonly string[] = ['example.com']): CanonicalInventoryPlan {
   return buildInventoryPlan({
     clientId: CLIENT,
     requestedDomain: 'example.com',
     approvedHosts: hosts,
     discoveredUrls: urls,
-    // 默认每个批准主机都找到了东西 —— 「找到 0 条」是要单独立用例的情形。
-    discovery: hosts.map((host) => ({ host, count: urls.length, foreignCount: 0, error: null })),
+    // 🔴 按**真实主机归属**算，不能拿清单长度充数：计划会拿这个数字跟候选对账。
+    discovery: hosts.map((host) => ({ host, count: countFor(host, urls), foreignCount: 0, error: null })),
   })
 }
 
@@ -132,6 +145,21 @@ describe('逐主机发现必须进计划（否则缺整个站没人看得见）'
         ],
       }),
     ).toThrow(/必须有人明确认过/)
+  })
+
+  it('🔴 摘要说 B 站有页面、候选清单里一条都没有 → 抛（两个入参对不上）', () => {
+    // discovery 与 discoveredUrls 是两个独立入参。不核对的话，B 整个站缺席
+    // 却不需要任何人确认 —— 因为「0 条要有人认」那道闸看的是摘要，而摘要说它不是 0。
+    expect(() =>
+      buildInventoryPlan({
+        ...base,
+        discoveredUrls: ['https://example.com/a'],
+        discovery: [
+          { host: 'example.com', count: 1, foreignCount: 0, error: null },
+          { host: 'shop.example.com', count: 1, foreignCount: 0, error: null },
+        ],
+      }),
+    ).toThrow(/两个入参对不上/)
   })
 
   it('明确认过之后才生得成计划，且这件事记进计划与哈希', () => {
@@ -261,7 +289,9 @@ describe('人工复核', () => {
   })
 
   it('🔴 规则自动拒掉的候选不许被人改成 accepted', () => {
-    const plan = build(['https://www.example.com/x'])
+    // 带一条本主机的正常页面：否则本主机 0 条会触发「发现不完整必须有人认」那道闸，
+    // 那样这条用例测的就不是它想测的东西了。
+    const plan = build(['https://www.example.com/x', 'https://example.com/ok'])
     expect(() =>
       applyReviewDecisions(plan, {
         decisions: { 'https://www.example.com/x': { decision: 'accepted' } },

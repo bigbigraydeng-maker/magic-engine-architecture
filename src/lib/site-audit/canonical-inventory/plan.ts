@@ -82,6 +82,7 @@ export function buildInventoryPlan(input: BuildInventoryPlanInput): CanonicalInv
   const boundary: HostBoundary = { requestedDomain: input.requestedDomain.trim(), approvedHosts }
 
   const discovery = summariseDiscovery(input, approvedHosts)
+  assertDiscoveryMatchesCandidates(discovery, input.discoveredUrls)
   const uniqueOriginals = Array.from(new Set(input.discoveredUrls.map((u) => u.trim()).filter((u) => u.length > 0)))
   uniqueOriginals.sort(compareStrings)
 
@@ -142,6 +143,41 @@ function summariseDiscovery(
       acknowledged: incomplete ? ack : false,
     }
   })
+}
+
+/**
+ * 发现摘要里声称的条数，必须跟实际交进来的候选清单对得上（按精确主机名分别数）。
+ *
+ * 🔴 `discovery` 与 `discoveredUrls` 是**两个独立入参**。不核对的话，
+ *    「摘要说 B 站有 1 页」＋「候选清单里一条 B 的都没有」可以同时成立 ——
+ *    计划照样签得出来、激活照样成功，B 整个站缺席**且不需要任何人确认**，
+ *    因为那道「0 条要有人认」的闸看的是摘要，而摘要说它不是 0。
+ */
+function assertDiscoveryMatchesCandidates(
+  discovery: readonly HostDiscoverySummary[],
+  discoveredUrls: readonly string[],
+): void {
+  const unique = new Set(discoveredUrls.map((u) => u.trim()).filter((u) => u.length > 0))
+  const actual = new Map<string, number>()
+  for (const url of Array.from(unique)) {
+    let host: string
+    try {
+      host = new URL(url).hostname.toLowerCase()
+    } catch {
+      continue // 畸形 URL 由候选层记原因码，不参与这里的对账
+    }
+    actual.set(host, (actual.get(host) ?? 0) + 1)
+  }
+  for (const row of discovery) {
+    const seen = actual.get(row.host) ?? 0
+    if (seen !== row.count) {
+      throw new InventoryPlanError(
+        'discovery_count_mismatch',
+        `主机 ${row.host} 的发现摘要说有 ${row.count} 条，实际交进来的候选里属于它的有 ${seen} 条 —— ` +
+          '两个入参对不上，说明摘要和清单不是同一次发现的产物（或者清单在传参时被截断了）',
+      )
+    }
+  }
 }
 
 /**

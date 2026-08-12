@@ -228,6 +228,10 @@ check "🔴 逐主机发现不进计划（缺整个站没人看得见）" "$PLAN
   "  const discovery = summariseDiscovery(input, approvedHosts)" \
   "  const discovery = approvedHosts.map((host) => ({ host, count: 0, error: null, acknowledged: true })); void summariseDiscovery"
 
+check "🔴 不核对摘要计数与实际候选（摘要说有、清单里没有，整站静默缺席）" "$PLAN" \
+  "  assertDiscoveryMatchesCandidates(discovery, input.discoveredUrls)" \
+  "  void assertDiscoveryMatchesCandidates"
+
 check "🔴 批准了却没发现记录的主机也放行" "$PLAN" \
   "    if (row === undefined) {" \
   "    if (false) {"
@@ -411,8 +415,8 @@ check "一个主机挂掉不留痕（跟「这个站没有页面」长得一样�
   "    void err; return { host, count: 0, foreignCount: 0, error: null }"
 
 check "🔴 按返回总条数记账，不按精确主机归属（只带回别家 URL 也算「有页面」）" "$ADAPTERS" \
-  "    if (hostnameOf(url) === host) count++" \
-  "    count++"
+  "    if (hostnameOf(url) === host) own.add(url)" \
+  "    own.add(url)"
 
 check "🔴 批准主机不先归一（带大写就永远比不上，逼人认假的「不完整」）" "$ADAPTERS" \
   "  for (const host of normaliseApprovedHosts(approvedHosts)) {" \
@@ -465,7 +469,7 @@ check "🔴 首页 BFS 截到上限不上报（其余页面静默缺席）" "$CR
 
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 82 道闸各自单独确认会响"
+  echo "✅ 全部 83 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"

@@ -93,7 +93,7 @@ async function discoverOneHost(host: string, seen: Set<string>): Promise<HostDis
     return { host, count: 0, foreignCount: 0, error: err instanceof Error ? err.message : String(err) }
   }
 
-  let count = 0
+  const own = new Set<string>()
   let sitemapFiles = 0
   for (const url of found) {
     // 🔴 sitemap 文件不是页面。crawler 的 Level 1 只对 /sitemap.xml 做一次 <loc> 解析，
@@ -104,8 +104,11 @@ async function discoverOneHost(host: string, seen: Set<string>): Promise<HostDis
       continue
     }
     if (!seen.has(url)) seen.add(url)
-    if (hostnameOf(url) === host) count++
+    // 🔴 按主机**去重**计数：计划那边会拿候选清单里属于本主机的**唯一** URL 数
+    //    跟这个数字对账，重复计数会让对账假红。
+    if (hostnameOf(url) === host) own.add(url)
   }
+  const count = own.size
   if (sitemapFiles > 0) {
     swallowed.push(
       `发现结果里有 ${sitemapFiles} 个 sitemap 文件而不是页面（多半是 /sitemap.xml 本身是索引，没有被展开）`,
