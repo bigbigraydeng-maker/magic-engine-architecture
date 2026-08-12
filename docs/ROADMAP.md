@@ -20,18 +20,38 @@
 - 生产 migration 的 apply 是**单独授权的运维动作**，必须 PM 显式 `go`，**绝不夹带进任何 PR**。
 - 🔴 **PR [#844](https://github.com/bigbigraydeng-maker/magic-engine/pull/844) 不许合并**（独立 Website Growth Agent 架构已被本史诗取代），也**不许从它摘代码**。
 
-**已合入 `main`（但都不活动，见 [STATE.md §3.1](./STATE.md)）**：
+**已合入 `main`**（下面注明哪些真跑过、哪些仍不活动；另见 [STATE.md §3.1](./STATE.md)）：
 - ✅ WP00 [#873](https://github.com/bigbigraydeng-maker/magic-engine/issues/873) 契约冻结（PR #888，docs-only）
 - ✅ 执行内核 v1（PR #863）—— 生产 migration **未 apply**、**无提交 / 执行调用方**。⚠️ 但**已有一条只读接线在生产跑**：`pm-daily-todo` cron 经 `pm-todo/manual-items.ts` 读 `action_runs` 生成交接待办（表不存在时报错被吞成警告）。详见 [STATE.md §3.1](./STATE.md)
-- ✅ WP01 [#877](https://github.com/bigbigraydeng-maker/magic-engine/issues/877) 纯 Growth 契约（PR #890 / `700f57e`）—— `src/lib/growth/`，**零 importer**
+- ✅ WP01 [#877](https://github.com/bigbigraydeng-maker/magic-engine/issues/877) 纯 Growth 契约（PR #890 / `700f57e`）—— `src/lib/growth/`，**仍零 importer、不活动**
+- ✅ **WP02** [#876](https://github.com/bigbigraydeng-maker/magic-engine/issues/876) GEO 测量运行时契约（PR [#894](https://github.com/bigbigraydeng-maker/magic-engine/pull/894)）—— `src/lib/geo-measurement/`。issue 已关闭
+- ✅ **WP03** [#875](https://github.com/bigbigraydeng-maker/magic-engine/issues/875) 不可变测量存储（PR [#897](https://github.com/bigbigraydeng-maker/magic-engine/pull/897)）—— `src/lib/geo-measurement-store/` + migration `20260811000001`，**已 apply**，并已真实承载 Roman Baseline v1。issue 已关闭
+- ✅ **WP04** [#874](https://github.com/bigbigraydeng-maker/magic-engine/issues/874) 测量执行 + 成本 / 覆盖率控制（PR [#914](https://github.com/bigbigraydeng-maker/magic-engine/pull/914) / `caf8d481`）—— `src/lib/geo-measurement-runtime/`。issue 已关闭
+- ✅ **WP04A** [#917](https://github.com/bigbigraydeng-maker/magic-engine/issues/917) 真 provider / parser / WP03 store 接线（PR [#922](https://github.com/bigbigraydeng-maker/magic-engine/pull/922) / `885fe6e1`）—— `src/lib/geo-baseline/`。**Roman Baseline v1 就是它跑出来的**。issue 已关闭
+- ✅ **WP06** [#878](https://github.com/bigbigraydeng-maker/magic-engine/issues/878) 共享 Page 能力 resolve / snapshot / draft / diff / validate（PR [#895](https://github.com/bigbigraydeng-maker/magic-engine/pull/895) / `e818d9dc`）—— `src/lib/page-optimization/` + `src/lib/capabilities/page-optimization/snapshot.ts`，**零线上写、零持久化、零调用方**。issue 已关闭
+      ⚠️ **交付的是被缩小过的范围，不是能力契约的全集**：Build Control Room 的 WP06 MINIMUM 实施指令（2026-08-10）冻结决定第 5 条明写「**WP06 的模型花费固定为零，不许加通用预算引擎或可配置花费政策**」，因此**代码里没有成本上限，也不该有**。
+      但 [页面能力契约 v1.0](./specs/2026-08-10-me2-page-optimization-capability-v1.0.md) §10 的验收要点仍写着「draft 与 snapshot 的模型 / provider 调用都声明了成本上限，建立不起来就 fail closed」—— **两份权威文档打架，后发的实施指令赢**。真要恢复成本闸门，那是 WP07（#880，它才有真的对外调用）的事，不是回头改 WP06。
+- ✅ **K-WP02** [#882](https://github.com/bigbigraydeng-maker/magic-engine/issues/882) ActionCandidate→ActionKey 治理 + per-action 副作用政策（PR [#898](https://github.com/bigbigraydeng-maker/magic-engine/pull/898) / `2d9e426a`）——
+      📍 **主实现在 `src/lib/action-bridge/`**（`MAPPING_TABLE` / mapper / 词汇表 API 都在这里，且 `MAPPING_TABLE` 目前是**空数组**）；**只有副作用授权那一段在 `src/lib/kernel/`**（`outward-authorization.ts`）。
+      🔴 K-WP02 的冻结边界要求 **bridge 不许放进 Kernel** —— 要加新映射就加在 `action-bridge/`，**别加进 Kernel 层**。
+      🔴 **只是合并了，没在生产跑过**：映射注册表为空、**零调用方**，且它依赖的执行内核四张表在生产**根本不存在**（见下）。**不要把它跟真跑过生产的 WP03 / WP04A 归成一类。** issue 已关闭，关闭说明里逐字写明了「已合并 ≠ 已启用」
+
+> **哪些真跑过生产 —— 2026-08-12 对生产库做对象存在性只读实查（不认文件名、不认版本号）**：
+>
+> | 对象 | 生产实际 |
+> |---|---|
+> | `geo_query_sets` · `geo_queries` · `geo_batches` · `geo_observations` · `geo_evidence` | **都在** —— 3 个批次 / 25 条观测 / 12 条证据 |
+> | 批量原子写入 RPC（migration `20260812000001`） | **在** |
+> | `action_runs` · `action_run_steps` · `authorization_decisions` · `client_automation_policies` | **四张全不存在** |
+> | `kernel_*` RPC | **0 个** |
+> | Roman 的 `client_site_pages` / `cms_connections` | **0 / 0** |
+>
+> 结论：**GEO 测量线（WP02→WP03→WP04→WP04A）真跑过一次生产；内核线（PR #863 + K-WP02）没有。**
+> **别把「issue 已关闭」读成「功能已在生产生效」** —— 关闭只代表代码交付完成。
 
 **未完成**：
-- [ ] **WP02** [#876](https://github.com/bigbigraydeng-maker/magic-engine/issues/876) GEO 测量运行时契约（采集身份七项 + 三层 sample + 解释身份 + 七个指标 + 三条可比性判据）· 前置已满足
-- [ ] **K-WP02** [#882](https://github.com/bigbigraydeng-maker/magic-engine/issues/882) ActionCandidate→ActionKey 治理 + per-action 副作用政策 + 注册表反向注入 prompt · 前置已满足
-- [ ] **WP03** [#875](https://github.com/bigbigraydeng-maker/magic-engine/issues/875) 不可变测量存储（含 migration，apply 单独授权）
-- [ ] **WP04** [#874](https://github.com/bigbigraydeng-maker/magic-engine/issues/874) 测量执行 + 成本 / 覆盖率控制
-- [ ] **WP05** [#879](https://github.com/bigbigraydeng-maker/magic-engine/issues/879) GEO Module v1 —— 第一个 Domain Module，**唯一明确的 `src/lib/growth` 首个消费方**
-- [ ] **WP06** [#878](https://github.com/bigbigraydeng-maker/magic-engine/issues/878) 共享 Page 能力：resolve / snapshot / draft / diff / validate（零线上写）
+- [ ] **WP05** [#879](https://github.com/bigbigraydeng-maker/magic-engine/issues/879) GEO Module v1 —— 第一个 Domain Module，**唯一明确的 `src/lib/growth` 首个消费方**。2026-08-12 已冻结 `geo-module/m1/v1` 语义（实体匹配 / 别名 / 消歧判据），**实现仍未授权**，卡在前置 #930
+- [ ] **WP05 前置** [#930](https://github.com/bigbigraydeng-maker/magic-engine/issues/930) Roman 页面台账的发现与激活边界 —— 草稿 PR [#935](https://github.com/bigbigraydeng-maker/magic-engine/pull/935) 复审中。⚠️ 与 #932 在「页面台账」上重叠，边界待 Build Control Room 裁定
 - [ ] **WP07** [#880](https://github.com/bigbigraydeng-maker/magic-engine/issues/880) Kernel 授权的 apply / verify / rollback
 - [ ] **K-WP01** [#881](https://github.com/bigbigraydeng-maker/magic-engine/issues/881) 认证审批 / 拒绝界面 + 政策 Settings UI
 - [x] ~~**WP08**~~ ✅ **2026-08-12 完成** [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) Roman 首个有效生产 GEO baseline 已捕获并经 Product Owner 验收 —— 批次 `688bd8ae-2db6-4300-b761-b850f30c32c5`，冻结查询集 `roman_geo_baseline_v1`（12 条问题），12 / 12 观测成功 ＋ 12 条证据，累计记账成本 US$0.708 / US$5.00。
@@ -48,6 +68,11 @@
 - [ ] **WP00 §15 其余未决项**（**U1–U10、U12**）仍**单独**以未决形态挂着，**任何 WP 不许把它们当既定假设**
 
 **独立并行、不并入本链**：[#886](https://github.com/bigbigraydeng-maker/magic-engine/issues/886) Operating Brief（参考闭环稳定前不开工）· [#887](https://github.com/bigbigraydeng-maker/magic-engine/issues/887) 广告安全泳道（**不许夹带进任何 ME2 的 WP**）
+
+**运维泳道（也不并入本链，等 PM 拍板）**：
+- [ ] [#911](https://github.com/bigbigraydeng-maker/magic-engine/issues/911) / PR [#912](https://github.com/bigbigraydeng-maker/magic-engine/pull/912) OPS03 事件驱动 Issue 中继试点 —— ⚠️ 它写死的唯一标的 #910 **已关闭**，试点要么改标的要么归档
+- [ ] PR [#931](https://github.com/bigbigraydeng-maker/magic-engine/pull/931) OPS02「Codex 复审干净就自动合并」—— ⚠️ 前置未成立：唯一能给出「复审干净」信号的 `handle-review` 流水线**现在是坏的**（[#939](https://github.com/bigbigraydeng-maker/magic-engine/issues/939)：`.github/workflows/ops-codex-to-claude-fix.yml` 没传 `allowed_bots`，Codex 机器人一提意见就必挂，#935 / #936 均实测复现）。
+      ✅ **兜底闸门这一条不是问题**：2026-08-12 实查，`main` 上有 **active 的 ruleset「Protect main」** —— 禁删、禁 force push、只许 merge commit、**所有复审线程必须解决**、`ai-orchestrator-tests` 必须过。（旧说法「GitHub Free 私有仓库开不了分支保护」已作废，ruleset 已对私有仓库开放。）
 
 ---
 
@@ -68,6 +93,17 @@
 - [x] ~~**PR6**~~ 2026-08-12 已合并（[#918](https://github.com/bigbigraydeng-maker/magic-engine/pull/918)）：已建好但一直没激活的 5 步自助向导正式设为新客户登录落地页。复审（魏征+板桥）已修：`isBriefComplete()` 卡两个完成戳导致的死循环锁 · 诸葛亮中文内部工具悬浮窗对 self_serve 客户可见（信任崩塌级） · Step1/2 表单不回填已保存数据（像丢数据）· 完成页死胡同没有返回按钮 · 500 MTC 欢迎奖励向导内无确认
 - [ ] **PR6 板桥发现5（低优先级，随手可修）** Google 连接失败 vs 客户自己点取消，回向导后画面一模一样看不出区别——不卡人，PR6 已上线，这条留到下次顺手改
 - [ ] **PR3b（contract 阶段，PM 已表态"优先级较低可以往后放"）** 老 `google_oauth_tokens` 表目前仍是读写兜底路径（PR3a 只做了双写+双读的 expand），等回填脚本在生产真正跑过、观察一段时间没问题后，再停止读写旧表并评估能不能删
+
+### NZCPE 2026（新西兰中国贸易博览会 · 2026-08-05 建档，客户档在 [docs/clients/nzcpe/](./clients/nzcpe/)）
+
+FDE 接手范围：网站 `nzcpe.co.nz`（Cloudflare Pages）+ Facebook，服务 11 月博览会。
+已上线：假新闻清理 · GSC/GA4/Meta Pixel 全部接通（Pixel `1109538797562911`，全站 PageView + 三个报名表单 `Lead`）。
+
+- [ ] **NZCPE-1 推广方向口径待 PM 一句话定死** —— 网站 SEO 已按 PM 2026-08-05 拍板改回 **B2B**（中国企业出海 / NZ 企业对华采购），而广告与社媒计划仍冲 **To C** 的 15,000 公众访客目标。两条线现在方向不同：是有意为之，还是广告也要一并转 B2B？没定死之前，广告线按 To C 继续跑。
+- [ ] **NZCPE-2 GBP 建档** 地址挂 NZICC（101 Hobson Street, Auckland CBD）—— To C 推广也吃自然搜索流量
+- [ ] **NZCPE-3 确认 `plan_tier`** 现设 `starter`，无预算信号，PM 确认后再调
+- [ ] **NZCPE-4 广告账户挂谁** NZCPE 自建 vs Magic Engine `1018365291238494` 代投 —— PM 待拍板
+- [ ] **NZCPE-5（可选，PM 决定要不要做）** 关键词调研发现 `things to do with kids auckland`（1900/月·低难度）比品牌词好抓，可做网站博客 / `news.html` 扩展 —— **但这跟 NZCPE-1 的方向问题绑在一起**，B2B 方向下这条不成立
 
 ### 三位 agent 复审剩下的（2026-08-05，已修的不列）
 
