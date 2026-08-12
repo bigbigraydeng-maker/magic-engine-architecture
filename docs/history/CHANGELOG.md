@@ -13,7 +13,7 @@ PR [#922](https://github.com/bigbigraydeng-maker/magic-engine/pull/922)（2026-0
 
 **这次解决的一件事**：WP04 的测量运行时早就合进 `main` 了，但它的三个注入点
 `deps.{provider, parse, store}` 全仓只有假件，模块**零 importer** —— 没有任何东西能调用它。
-本 PR 把这三个点接到真的 provider / parser / store 上，并给一个**默认 dry-run** 的人工触发脚本。
+PR #922 把这三个点接到真的 provider / parser / store 上，并给一个**默认 dry-run** 的人工触发脚本。
 
 新增 21 个文件、**零个既有文件被改**：`src/lib/geo-baseline/`
 （`provider` / `transport-openai` / `parser` / `store` / `query-set` / `plan-builder` / `config` / `types` / `index`
@@ -30,7 +30,7 @@ PR [#922](https://github.com/bigbigraydeng-maker/magic-engine/pull/922)（2026-0
 
 #### Roman Baseline v1 —— 冻结的测量事实
 
-PM 于 2026-08-12 验收通过，认定批次 `688bd8ae-2db6-4300-b761-b850f30c32c5` 为 Roman
+Product Owner 于 2026-08-12 验收通过，认定批次 `688bd8ae-2db6-4300-b761-b850f30c32c5` 为 Roman
 **首个有效生产 GEO baseline**。**本段是测量事实，冻结** —— 不因后续优化、诊断或重解释而回写、
 修改或重新表述。完整审计记录见
 [#883 的冻结审计评论](https://github.com/bigbigraydeng-maker/magic-engine/issues/883#issuecomment-5260895662)。

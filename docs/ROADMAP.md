@@ -9,7 +9,7 @@
 
 ---
 
-## ME2 — Roman GEO / AI 可见度参考闭环（史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)）🔄 GEO 测量线已跑出首个生产 baseline（WP08），其余域运行时未开工
+## ME2 — Roman GEO / AI 可见度参考闭环（史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)）🔄 GEO 测量线已跑出首个生产 baseline（WP08）
 
 > **新窗口开工前必读**：[WP00 契约冻结 v1.0](./specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md)。
 > 它冻结了七层边界、五个概念结构、禁令清单与未决登记表，**后续每个 WP 从那里取自己的边界，不重新讨论**。
@@ -34,7 +34,7 @@
 - [ ] **WP06** [#878](https://github.com/bigbigraydeng-maker/magic-engine/issues/878) 共享 Page 能力：resolve / snapshot / draft / diff / validate（零线上写）
 - [ ] **WP07** [#880](https://github.com/bigbigraydeng-maker/magic-engine/issues/880) Kernel 授权的 apply / verify / rollback
 - [ ] **K-WP01** [#881](https://github.com/bigbigraydeng-maker/magic-engine/issues/881) 认证审批 / 拒绝界面 + 政策 Settings UI
-- [x] ~~**WP08**~~ ✅ **2026-08-12 完成** [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) Roman 首个有效生产 GEO baseline 已捕获并经 PM 验收 —— 批次 `688bd8ae-2db6-4300-b761-b850f30c32c5`，冻结查询集 `roman_geo_baseline_v1`（12 条问题），12 / 12 观测成功 ＋ 12 条证据，累计记账成本 US$0.708 / US$5.00。
+- [x] ~~**WP08**~~ ✅ **2026-08-12 完成** [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) Roman 首个有效生产 GEO baseline 已捕获并经 Product Owner 验收 —— 批次 `688bd8ae-2db6-4300-b761-b850f30c32c5`，冻结查询集 `roman_geo_baseline_v1`（12 条问题），12 / 12 观测成功 ＋ 12 条证据，累计记账成本 US$0.708 / US$5.00。
       **这是冻结的测量事实，不因后续优化、诊断或重解释而回写或重新表述**（[冻结审计记录](https://github.com/bigbigraydeng-maker/magic-engine/issues/883#issuecomment-5260895662)）：
       唯一已确认的 Roman 可见度数字是 **owned-domain citation coverage = 2 / 12 = 16.7%**；
       「12 / 12」指 12 个回答都带了引用，**不等于** Roman 被提及或被推荐；
