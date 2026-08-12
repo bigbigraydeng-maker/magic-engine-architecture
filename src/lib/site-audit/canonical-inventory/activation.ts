@@ -24,6 +24,7 @@ import type {
   ActivationDeps,
   ActivationExpectation,
   AcceptedPageRecord,
+  CandidateDecision,
   InventoryCandidate,
   ReviewedInventoryPlan,
 } from './types'
@@ -32,6 +33,9 @@ import type { CrawlResult } from '../crawler'
 import type { EnrichedPage } from '../page-enrichment'
 import { verifyPlanHash } from './plan'
 import { deriveCanonicalUrl, normaliseApprovedHosts } from './url-rules'
+
+/** 决策的全集。计划里出现这四个以外的值，就是上游有 bug 或者被人改过。 */
+const KNOWN_DECISIONS: readonly CandidateDecision[] = ['pending', 'accepted', 'rejected', 'defer']
 
 export interface ActivateInput {
   readonly plan: ReviewedInventoryPlan
@@ -173,6 +177,17 @@ function checkAcceptedSet(
   accepted: readonly InventoryCandidate[],
 ): ActivationBlocker[] {
   const blockers: ActivationBlocker[] = []
+  // 🔴 认不出来的决策值必须当场拒。它不属于 accepted/rejected/deferred 任何一个集合，
+  //    也不算 pending —— 放过去就等于这条候选从每一份账里凭空消失，而整次激活照报「完成」。
+  const unknown = plan.candidates.filter((c) => !KNOWN_DECISIONS.includes(c.decision))
+  if (unknown.length > 0) {
+    blockers.push({
+      code: 'unknown_decision',
+      message:
+        `${unknown.length} 条候选带着认不出来的决策值` +
+        `（${unknown.slice(0, 3).map((c) => `${c.originalUrl}=${String(c.decision)}`).join('、')}）`,
+    })
+  }
   const pending = plan.candidates.filter((c) => c.decision === 'pending')
   if (pending.length > 0) {
     blockers.push({
@@ -385,17 +400,20 @@ async function persistAndReconcile(
   records: readonly AcceptedPageRecord[],
 ): Promise<ActivationAudit> {
   const { plan, deps } = input
-  const reject = (blocker: ActivationBlocker, touched: boolean, written: readonly string[] = []): ActivationAudit =>
-    buildAudit({ plan, accepted, status: touched ? 'failed' : 'rejected', blockers: [blocker], failures: [], written, touched })
+  // 🔴 走到这里页面**已经抓过了**，所以任何收场都是 `failed`，不是 `rejected` ——
+  //    `rejected` 的契约是「一次抓取都没发生」。搞混了，读审计的人会以为这次没花过网络成本，
+  //    重试与成本判断都会跟着错。`inventoryTouched` 才是「有没有碰过台账」那一维。
+  const fail = (blocker: ActivationBlocker, touched: boolean, written: readonly string[] = []): ActivationAudit =>
+    buildAudit({ plan, accepted, status: 'failed', blockers: [blocker], failures: [], written, touched })
 
   const stillEmpty = await recheckInventoryEmpty(input)
-  if (stillEmpty !== null) return reject(stillEmpty, false)
+  if (stillEmpty !== null) return fail(stillEmpty, false)
 
   const write = await writeRecords(input, records)
-  if (write.blocker !== null) return reject(write.blocker, true)
+  if (write.blocker !== null) return fail(write.blocker, true)
 
   const mismatch = reconcileWriteSet(records, write.written)
-  if (mismatch !== null) return reject(mismatch, true, write.written)
+  if (mismatch !== null) return fail(mismatch, true, write.written)
 
   return buildAudit({
     plan,

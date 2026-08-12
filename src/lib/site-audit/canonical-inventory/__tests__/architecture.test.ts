@@ -129,7 +129,10 @@ describe('台账层的边界', () => {
 
   it('每个函数都 < 50 行（CLAUDE.md 的硬规则，别等复审来提）', () => {
     const offenders: string[] = []
-    for (const file of PRODUCTION_FILES) {
+    // 🔴 本 PR 新增/改动的文件全都要盯，不只是本目录 ——
+    //    上一版这条守卫只扫了 canonical-inventory/，于是同一批改动里的
+    //    page-enrichment.ts 超长又是复审发现的。判据的覆盖面本身也是判据的一部分。
+    for (const file of [...PRODUCTION_FILES, 'src/lib/site-audit/page-enrichment.ts']) {
       const lines = readFileSync(join(ROOT, file), 'utf8').split('\n')
       let start = -1
       for (let i = 0; i < lines.length; i++) {

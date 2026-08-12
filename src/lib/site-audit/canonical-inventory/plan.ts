@@ -118,6 +118,13 @@ function buildCandidates(originals: readonly string[], boundary: HostBoundary): 
   return candidates
 }
 
+/** 人工决策只认这三个值。运行时逐字校验 —— 类型系统在反序列化边界上帮不了忙。 */
+export const ALLOWED_REVIEW_DECISIONS: readonly Exclude<CandidateDecision, 'pending'>[] = [
+  'accepted',
+  'rejected',
+  'defer',
+]
+
 export interface ReviewDecision {
   readonly decision: Exclude<CandidateDecision, 'pending'>
   /** 人工原因码；不给的话按决策自动补 `reviewer_rejected` / `reviewer_deferred`。 */
@@ -232,6 +239,17 @@ function applyDecisionsToCandidates(
   return candidates.map((candidate) => {
     const decision = decisions[candidate.originalUrl]
     if (decision === undefined) return candidate
+    // 🔴 决策是从文件 / 界面反序列化进来的，TypeScript 的联合类型在运行时不拦任何东西。
+    //    写进去一个 'accept'（少个 ed）会变成一个谁都不认识的状态：激活闸的 pending 检查
+    //    看不见它、accepted/rejected/deferred 三个集合也都不含它 —— 它从每一份账里**消失**，
+    //    只要还有另一条合法的 accepted，整次激活会写完其余页面然后报「完成」。
+    if (!ALLOWED_REVIEW_DECISIONS.includes(decision.decision)) {
+      throw new InventoryPlanError(
+        'invalid_decision',
+        `候选 ${candidate.originalUrl} 的决策是「${String(decision.decision)}」，` +
+          `只接受 ${ALLOWED_REVIEW_DECISIONS.join(' / ')} —— 认不出来的值必须当场拒，不能带着签名往下走`,
+      )
+    }
     if (candidate.decision !== 'pending') {
       throw new InventoryPlanError(
         'auto_rejected_not_overridable',

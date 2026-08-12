@@ -199,6 +199,10 @@ check "复核不要求署名" "$PLAN" \
   "  if (input.review.reviewedBy.trim().length === 0) {" \
   "  if (false) {"
 
+check "🔴 决策值不做运行时校验（拼错的值带着签名溜下去）" "$PLAN" \
+  "    if (!ALLOWED_REVIEW_DECISIONS.includes(decision.decision)) {" \
+  "    if (false) {"
+
 check "🔴 复核不签名（自带哈希谁都能重算，等于没有凭据）" "$PLAN" \
   "  const reviewSignature = input.sign(finalised.planHash)" \
   "  const reviewSignature = 'unsigned'"
@@ -247,6 +251,14 @@ check "不校验归一规则版本（旧批准套新语义）" "$ACT" \
 check "不校验契约版本" "$ACT" \
   "  if (plan.contractVersion !== INVENTORY_PLAN_CONTRACT_VERSION) {" \
   "  if (false) {"
+
+check "🔴 认不出来的决策值也放行（那条候选从每一份账里消失）" "$ACT" \
+  "  if (unknown.length > 0) {" \
+  "  if (false) {"
+
+check "🔴 抓取之后的失败被记成 rejected（读审计的人以为没花过网络成本）" "$ACT" \
+  "    buildAudit({ plan, accepted, status: 'failed', blockers: [blocker], failures: [], written, touched })" \
+  "    buildAudit({ plan, accepted, status: touched ? 'failed' : 'rejected', blockers: [blocker], failures: [], written, touched })"
 
 check "🔴 带 pending 的计划也放行（没判过当成不要）" "$ACT" \
   "  if (pending.length > 0) {" \
@@ -327,7 +339,7 @@ check "显式给的上限比清单还小也照跑（截断后跑出来的不是�
 
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 57 道闸各自单独确认会响"
+  echo "✅ 全部 60 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"

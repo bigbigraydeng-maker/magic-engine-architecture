@@ -283,6 +283,23 @@ describe('人工复核', () => {
     ).toThrow(/只盖一次章/)
   })
 
+  it('🔴 决策值拼错（accept 少个 ed）→ 当场抛，不许带着签名往下走', () => {
+    // 决策是从文件 / 界面反序列化进来的，联合类型在运行时不拦任何东西。
+    // 放过去它就从 accepted/rejected/deferred/pending 每一份账里消失，
+    // 而只要还有另一条合法 accepted，整次激活会写完其余页面然后报「完成」。
+    const plan = build(['https://example.com/a', 'https://example.com/b'])
+    expect(() =>
+      applyReviewDecisions(plan, {
+        decisions: {
+          'https://example.com/a': { decision: 'accept' as never },
+          'https://example.com/b': { decision: 'accepted' },
+        },
+        review: REVIEW,
+        sign: SIGN,
+      }),
+    ).toThrow(/只接受 accepted \/ rejected \/ defer/)
+  })
+
   it('复核必须署名并带时间', () => {
     const plan = build(['https://example.com/a'])
     expect(() =>

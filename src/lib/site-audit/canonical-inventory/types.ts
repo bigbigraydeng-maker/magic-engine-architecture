@@ -255,9 +255,14 @@ export interface AcceptedPageRecord {
 export type ActivationStatus =
   /** 全部被接受页面抓取+分类成功、且确切写进台账 */
   | 'activated'
-  /** 闸门没过 —— 一次抓取都没发生，一行都没写 */
+  /**
+   * 闸门没过 —— **一次抓取都没发生**，一行都没写。
+   *
+   * 🔴 这一条是承诺，不是描述：读审计的人（以及重试 / 成本判断）靠它认定「这次没花过网络成本」。
+   *    抓取之后才出的问题一律记 `failed`，哪怕一行都没写。
+   */
   | 'rejected'
-  /** 闸门过了但执行没能满足「被接受集合」契约 —— 不许当成完成 */
+  /** 抓取已经发生，但执行没能满足「被接受集合」契约 —— 不许当成完成。台账碰没碰过看 `inventoryTouched`。 */
   | 'failed'
 
 export interface ActivationBlocker {

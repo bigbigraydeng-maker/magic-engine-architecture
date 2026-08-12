@@ -277,6 +277,21 @@ describe('被接受集合闸', () => {
     expect(audit.blockers.map((b) => b.code)).toContain('unreviewed_candidates')
   })
 
+  it('🔴 计划里带着认不出来的决策值 → 拒（它会从每一份账里消失）', async () => {
+    const base = makeReviewedPlan()
+    const plan = rehash({
+      ...base,
+      candidates: base.candidates.map((c) =>
+        c.originalUrl === ACCEPTED[0] ? { ...c, decision: 'accept' as never } : c,
+      ),
+    })
+    const deps = makeDeps()
+    const audit = await activateReviewedPlan(makeInput({ plan, deps }))
+    expect(audit.status).toBe('rejected')
+    expect(audit.blockers.map((b) => b.code)).toContain('unknown_decision')
+    expect(deps.store.writes).toHaveLength(0)
+  })
+
   it('被接受集合为空 → 拒（没有可激活的台账）', async () => {
     const plan = buildInventoryPlan({
       clientId: CLIENT,
@@ -390,16 +405,18 @@ describe('空库闸（首次激活）', () => {
     expect(store.writes).toHaveLength(0)
   })
 
-  it('🔴 抓取期间台账被别人写了（第一次读 0、写之前读到 4）→ 拒，一行不写', async () => {
+  it('🔴 抓取期间台账被别人写了（第一次读 0、写之前读到 4）→ 停手，一行不写', async () => {
     const deps = makeDeps({ store: new FakeInventoryStore({ countSequence: [0, 4] }) })
     const audit = await activateReviewedPlan(makeInput({ deps }))
-    expect(audit.status).toBe('rejected')
+    // 🔴 这里是 failed 不是 rejected：页面已经抓过了。rejected 的契约是「一次抓取都没发生」，
+    //    用错会让读审计的人以为这次没花过网络成本。
+    expect(audit.status).toBe('failed')
     expect(audit.blockers.map((b) => b.code)).toContain('inventory_changed_during_crawl')
     expect(deps.store.writes).toHaveLength(0)
     expect(audit.inventoryTouched).toBe(false)
   })
 
-  it('写入前那次复查读失败 → 也拒（读不到 ≠ 仍然是空的）', async () => {
+  it('写入前那次复查读失败 → 也停手（读不到 ≠ 仍然是空的）', async () => {
     const store = new FakeInventoryStore()
     let call = 0
     store.countExistingPages = async () => {
@@ -409,9 +426,10 @@ describe('空库闸（首次激活）', () => {
     }
     const deps = makeDeps({ store })
     const audit = await activateReviewedPlan(makeInput({ deps }))
-    expect(audit.status).toBe('rejected')
+    expect(audit.status).toBe('failed')
     expect(audit.blockers.map((b) => b.code)).toContain('inventory_count_unavailable')
     expect(store.writes).toHaveLength(0)
+    expect(audit.inventoryTouched).toBe(false)
   })
 
   it('🔴 写入时把「必须仍为空」的要求传给 store（实现方得在事务里再确认一次）', async () => {

@@ -37,50 +37,57 @@ export async function enrichCrawledPage(page: {
   title: string
   markdown: string
 }): Promise<EnrichedPage> {
-  let pageType = FALLBACK_PAGE_TYPE
-  let topics: string[] = []
-  let primaryKeyword: string | null = null
-  let classificationConfidence = 0
-  let classified = false
-  let classificationError: string | null = null
-
-  try {
-    const classification = await classifyPage(page.url, page.title, page.markdown)
-    pageType = classification.page_type
-    topics = classification.topics
-    primaryKeyword = classification.primary_keyword
-    classificationConfidence = classification.confidence
-    classified = true
-  } catch (err) {
-    // 兜底：保持未分类默认值，不中断整批
-    pageType = FALLBACK_PAGE_TYPE
-    classificationError = err instanceof Error ? err.message : String(err)
-  }
-
-  let hasGeoBlock = false
-  let geoDetectionMethod: string | null = null
-  let geoConfidence = 0
-  try {
-    const geo = detectGEOBlock(page.markdown)
-    hasGeoBlock = geo.has_geo_block
-    geoDetectionMethod = geo.detection_method
-    geoConfidence = geo.confidence
-  } catch {
-    // GEO 检测失败不影响这一页
-  }
-
+  const classification = await classifyOrFallback(page)
+  const geo = detectGeoOrDefault(page.markdown)
   const wordCount = page.markdown ? page.markdown.trim().split(/\s+/).filter(Boolean).length : 0
+  return { ...classification, ...geo, wordCount }
+}
 
-  return {
-    pageType,
-    topics,
-    primaryKeyword,
-    classificationConfidence,
-    classified,
-    classificationError,
-    hasGeoBlock,
-    geoDetectionMethod,
-    geoConfidence,
-    wordCount,
+type ClassificationPart = Pick<
+  EnrichedPage,
+  'pageType' | 'topics' | 'primaryKeyword' | 'classificationConfidence' | 'classified' | 'classificationError'
+>
+
+/** 分类失败退回未分类默认值并留下原因，**不抛** —— 与 job-executor 原行为逐字一致。 */
+async function classifyOrFallback(page: {
+  url: string
+  title: string
+  markdown: string
+}): Promise<ClassificationPart> {
+  try {
+    const c = await classifyPage(page.url, page.title, page.markdown)
+    return {
+      pageType: c.page_type,
+      topics: c.topics,
+      primaryKeyword: c.primary_keyword,
+      classificationConfidence: c.confidence,
+      classified: true,
+      classificationError: null,
+    }
+  } catch (err) {
+    return {
+      pageType: FALLBACK_PAGE_TYPE,
+      topics: [],
+      primaryKeyword: null,
+      classificationConfidence: 0,
+      classified: false,
+      classificationError: err instanceof Error ? err.message : String(err),
+    }
+  }
+}
+
+type GeoPart = Pick<EnrichedPage, 'hasGeoBlock' | 'geoDetectionMethod' | 'geoConfidence'>
+
+/** GEO 检测失败不影响这一页。 */
+function detectGeoOrDefault(markdown: string): GeoPart {
+  try {
+    const geo = detectGEOBlock(markdown)
+    return {
+      hasGeoBlock: geo.has_geo_block,
+      geoDetectionMethod: geo.detection_method,
+      geoConfidence: geo.confidence,
+    }
+  } catch {
+    return { hasGeoBlock: false, geoDetectionMethod: null, geoConfidence: 0 }
   }
 }
