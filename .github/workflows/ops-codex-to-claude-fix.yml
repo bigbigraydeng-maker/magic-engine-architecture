@@ -81,6 +81,21 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # claude-code-action refuses to run when the workflow was triggered by
+          # a bot, unless that bot is named here. This leg exists to be
+          # triggered by exactly one bot, so every run has been failing:
+          #
+          #   Workflow initiated by non-human actor: chatgpt-codex-connector
+          #   (type: Bot). Add bot to allowed_bots list or use '*'...
+          #
+          # Observed on PR #936 (2026-08-12 04:54) and three times on PR #930's
+          # branch (06:43, 07:05, 07:26) — the review leg has never once
+          # completed a fix round on this repository.
+          #
+          # Named, never '*': a wildcard would let any bot able to submit a
+          # review drive an automated code push, leaving the job-level actor
+          # guard as the only thing between a review comment and a commit.
+          allowed_bots: chatgpt-codex-connector
           additional_permissions: |
             actions: read
           prompt: ${{ steps.plan.outputs.prompt }}

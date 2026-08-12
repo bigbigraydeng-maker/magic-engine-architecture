@@ -209,6 +209,19 @@ describe('the codex-to-claude-fix workflow', () => {
     expect(outcomeStep?.if).toBe("always() && steps.plan.outputs.action == 'dispatch-fix'")
   })
 
+  it('allow-lists exactly the Codex bot, never a wildcard', () => {
+    // Without this the action refuses the run outright ("Workflow initiated by
+    // non-human actor"), which is how this leg came to fail every single time
+    // it fired — PR #936 at 2026-08-12 04:54 and PR #930's branch at 06:43,
+    // 07:05 and 07:26. The loop looked wired and was not.
+    //
+    // '*' is the tempting one-character alternative and is rejected: it would
+    // let any bot able to submit a review drive an automated code push, with
+    // the job-level actor guard as the only remaining check.
+    const claudeStep = fix.steps.find((s) => s.uses?.startsWith('anthropics/claude-code-action'))
+    expect(claudeStep?.with?.allowed_bots).toBe('chatgpt-codex-connector')
+  })
+
   it('gives the Claude Action step an id so the outcome step can read its result', () => {
     const claudeStep = fix.steps.find((s) => s.uses?.startsWith('anthropics/claude-code-action'))
     expect(claudeStep?.id).toBe('claude')
