@@ -5,6 +5,40 @@
 
 ---
 
+### 2026-08-12（架构守卫的扫描面：五套声明了八种后缀却没接上，实际只扫 `.ts`）
+
+Issue [#938](https://github.com/bigbigraydeng-maker/magic-engine/issues/938) ·
+PR [#944](https://github.com/bigbigraydeng-maker/magic-engine/pull/944)（合并提交 `948f0a78`）。
+
+**这次解决的一件事**：七套架构守卫里，只有 `kernel` / `action-bridge` 的 walker 真的用了
+`isScannedSource()`。另外五套（`geo-baseline` / `geo-measurement-runtime` / `geo-measurement` /
+`growth` / `page-optimization`）**都声明了那份 8 种后缀的 `SOURCE_EXTENSIONS`**（八行齐全，就在文件里），
+但声明位置在 walker **之后**、只喂给 `scriptKindFor()` 选 ScriptKind，walker 自己还是
+`entry.endsWith('.ts')` —— **连 `.tsx` 都不收**。
+
+🔴 **这条值得单独记住的原因**：它不是「忘了扩后缀」，是**扩了却没接上**。
+grep `SOURCE_EXTENSIONS` 一眼看过去像已经覆盖八种，复核的人会直接放过 ——
+清单在、看着对、实际没接线。**「看起来修好了」比没修更难发现。**
+
+**实测证据**（真放违规文件，不是推理）：`src/lib/growth/violation-probe.tsx` 里
+`import { supabaseAdmin } from '@/lib/supabase'` —— 修复后 **2 条红**（禁止导入 + 禁止符号两道都抓到）；
+walker 回退成 `.ts` 后那 2 条红**消失**，文件对守卫完全不存在。探针未入库。
+
+**改了什么**：五套的清单 + `isScannedSource` 提到 walker 之前并真正接上（必须提前 ——
+`walk()` 在模块初始化时就被调用，引用后声明的 `const` 会 TDZ 抛错）· `page-optimization` 的
+`isTest` 改成跟 walker 同源 · **`strip-comments-consistency` 那条「盯着七份 `stripComments()`
+副本别漂」的盯梢，它自己的 walker 也只收 `.ts`/`.tsx`，一并改** —— 扫描面缩小时它不会红，
+找不到的副本直接从判据里消失、盯梢照样全绿，是同一个形状。
+
+**六个文件各补两条测试**：8 种后缀的断言 + 真磁盘 fixture（`mkdtemp` 写 8 个文件断言 walker
+全收，`.md`/`.json` 不许收）。照 `kernel` 既有写法，不自创。**没抽共享 helper** —— 七份 walker
+有意各自独立（删掉任一，其余六个仍拦得住自己那半边），抽了等于给七道闸装同一个总开关。
+
+**验证**：57 个测试文件 / 1259 条全绿 · **变异 6/6**（逐个文件退回 `.ts`，每次都是新加的
+fixture 那条响，还原后复绿）· tsc 198 条基线报错与本次改动零交集。
+
+---
+
 ### 2026-08-12（ME2 Backlog Cleanup Gate：GitHub 状态与 ROADMAP 对齐，三个已完成 WP 结账）
 
 Epic [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872) ·
