@@ -57,6 +57,14 @@ export interface ActivateInput {
  */
 export async function activateReviewedPlan(input: ActivateInput): Promise<ActivationAudit> {
   const { plan, deps } = input
+
+  // 🔴 结构闸必须在**任何解引用之前**。下面这一行 `.filter()` 本身就会在
+  //    `candidates` 不是数组时抛出去，而这个模块承诺的是「一定返回一份审计」。
+  const shape = checkPlanShape(plan)
+  if (shape.length > 0) {
+    return buildAudit({ plan, accepted: [], status: 'rejected', blockers: shape, failures: [], written: [], touched: false })
+  }
+
   const accepted = plan.candidates.filter((c) => c.decision === 'accepted')
 
   const blockers = await collectBlockers(input, accepted)
@@ -99,18 +107,41 @@ async function collectBlockers(
   accepted: readonly InventoryCandidate[],
 ): Promise<ActivationBlocker[]> {
   const { plan, expected, deps } = input
-  const blockers: ActivationBlocker[] = [
-    ...checkPlanIdentity(plan, expected, deps.verifyReviewSignature),
-    ...checkAcceptedSet(plan, accepted),
-  ]
+  let blockers: ActivationBlocker[]
+  try {
+    blockers = [
+      ...checkPlanIdentity(plan, expected, deps.verifyReviewSignature),
+      ...checkAcceptedSet(plan, accepted),
+    ]
+  } catch (err) {
+    // 🔴 code 跟 `plan_shape_invalid` **故意不同**：那个是结构闸认出来的已知形状，
+    //    这个是「闸没覆盖到、靠兜底才没炸出去」—— 出现它就说明 checkPlanShape 有洞，
+    //    该去补闸，而不是把两种信号混成一个。
+    //    这里还没抓过任何页面、也没写过任何东西，所以是干净的 rejected。
+    return [
+      {
+        code: 'plan_shape_unexpected',
+        message:
+          `校验计划时出了结构闸没预料到的错：${err instanceof Error ? err.message : String(err)}。` +
+          '这说明 checkPlanShape 漏了一种形状，需要补。',
+      },
+    ]
+  }
   if (blockers.length > 0) return blockers
 
   // 空库闸放在最后：它要打网络/数据库，前面的纯校验能拦下的就别浪费这一次查询。
+  return checkInventoryEmpty(deps.store, plan.clientId)
+}
+
+/** 首次激活要求台账为空。读不到行数**绝不当成 0** —— 「查不到」和「查炸了」必须是两种结局。 */
+async function checkInventoryEmpty(
+  store: ActivationDeps['store'],
+  clientId: string,
+): Promise<ActivationBlocker[]> {
   let existing: number
   try {
-    existing = await deps.store.countExistingPages(plan.clientId)
+    existing = await store.countExistingPages(clientId)
   } catch (err) {
-    // 🔴 读失败绝不当成 0 —— 「查不到」和「查炸了」必须是两种结局。
     return [
       {
         code: 'inventory_count_unavailable',
@@ -215,6 +246,41 @@ function checkAcceptedSet(
     if (blocker !== null) blockers.push(blocker)
   }
   return blockers
+}
+
+/**
+ * 反序列化之后的结构校验 —— 在任何解引用之前跑。
+ *
+ * 只查「下面真的会去碰」的字段：类型系统对一份 JSON.parse 的结果不提供任何保护。
+ */
+function checkPlanShape(plan: ReviewedInventoryPlan): ActivationBlocker[] {
+  const bad = (message: string): ActivationBlocker[] => [{ code: 'plan_shape_invalid', message }]
+  if (typeof plan !== 'object' || plan === null) return bad('计划不是一个对象')
+  if (typeof plan.clientId !== 'string' || typeof plan.planHash !== 'string') {
+    return bad('计划缺少 clientId / planHash，或者它们不是字符串')
+  }
+  const boundary = plan.boundary as unknown
+  if (typeof boundary !== 'object' || boundary === null) return bad('计划缺少主机边界（boundary）')
+  if (typeof plan.boundary.requestedDomain !== 'string' || !Array.isArray(plan.boundary.approvedHosts)) {
+    return bad('主机边界的 requestedDomain / approvedHosts 结构不对')
+  }
+  if (!plan.boundary.approvedHosts.every((h) => typeof h === 'string')) {
+    return bad('批准主机清单里有非字符串项')
+  }
+  if (!Array.isArray(plan.candidates)) return bad('计划的候选清单不是数组')
+  return checkReviewShape(plan)
+}
+
+/** 复核信息的结构。缺 `review`、或者署名/时间不是字符串，都在这里变成 blocker 而不是异常。 */
+function checkReviewShape(plan: ReviewedInventoryPlan): ActivationBlocker[] {
+  const review = plan.review as unknown
+  if (typeof review !== 'object' || review === null) {
+    return [{ code: 'plan_shape_invalid', message: '计划里没有复核信息（review），不能激活' }]
+  }
+  if (typeof plan.review.reviewedBy !== 'string' || typeof plan.review.reviewedAt !== 'string') {
+    return [{ code: 'plan_shape_invalid', message: '复核信息的 reviewedBy / reviewedAt 不是字符串' }]
+  }
+  return []
 }
 
 /** 契约版本 / 归一规则版本 —— 版本不对就不能拿旧批准套新语义。 */
@@ -518,13 +584,16 @@ function buildAudit(parts: {
   touched: boolean
 }): ActivationAudit {
   const { plan } = parts
-  const rejected = plan.candidates.filter((c) => c.decision === 'rejected')
-  const deferred = plan.candidates.filter((c) => c.decision === 'defer')
+  // 🔴 审计对象本身**绝不能抛**：它经常是「计划结构不对」时唯一能交出去的东西。
+  const all: readonly InventoryCandidate[] = Array.isArray(plan.candidates) ? plan.candidates : []
+  const rejected = all.filter((c) => c.decision === 'rejected')
+  const deferred = all.filter((c) => c.decision === 'defer')
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '')
   return {
     status: parts.status,
-    clientId: plan.clientId,
-    planHash: plan.planHash,
-    normalizationRuleVersion: plan.normalizationRuleVersion,
+    clientId: str(plan.clientId),
+    planHash: str(plan.planHash),
+    normalizationRuleVersion: str(plan.normalizationRuleVersion),
     counts: {
       accepted: parts.accepted.length,
       rejected: rejected.length,

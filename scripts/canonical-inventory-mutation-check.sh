@@ -208,6 +208,18 @@ check "🔴 复核不签名（自带哈希谁都能重算，等于没有凭据�
   "  const reviewSignature = 'unsigned'"
 
 # ——— 激活闸 ———
+check "🔴 结构闸不在解引用之前（缺字段直接抛，调用方拿不到审计）" "$ACT" \
+  "  const shape = checkPlanShape(plan)" \
+  "  const shape: ActivationBlocker[] = []; void checkPlanShape"
+
+check "复核信息结构不查（缺 review 时 .trim() 抛出去）" "$ACT" \
+  "  return checkReviewShape(plan)" \
+  "  return []"
+
+check "审计对象自己也会抛（候选不是数组时连账都交不出来）" "$ACT" \
+  "  const all: readonly InventoryCandidate[] = Array.isArray(plan.candidates) ? plan.candidates : []" \
+  "  const all: readonly InventoryCandidate[] = plan.candidates"
+
 check "🔴 不验复核签名（成对改 URL + 自己重算哈希就能混进去）" "$ACT" \
   "    ...checkReviewSignature(plan, verifySignature)," \
   "    ...[],"
@@ -329,6 +341,18 @@ check "写入抛错也报完成" "$ACT" \
         code: 'write_failed',"
 
 # ——— 复用适配器 ———
+check "🔴 只发现第一个批准主机（第二个站的页面静默缺席）" "$ADAPTERS" \
+  "  for (const host of approvedHosts) {" \
+  "  for (const host of approvedHosts.slice(0, 1)) {"
+
+check "逐主机条数不留痕（某个站 0 条被合并结果盖住）" "$ADAPTERS" \
+  "    perHost.push({ host, count, error })" \
+  "    void host; void count; void error"
+
+check "一个主机挂掉不留痕（跟「这个站没有页面」长得一样）" "$ADAPTERS" \
+  "      error = err instanceof Error ? err.message : String(err)" \
+  "      void err"
+
 check "🔴 抓取上限吃 crawlPages 的默认 100（超过 100 的批准清单被截断）" "$ADAPTERS" \
   "    return crawlPages([...urls], { ...opts, limit: urls.length })" \
   "    return crawlPages([...urls], opts)"
@@ -339,7 +363,7 @@ check "显式给的上限比清单还小也照跑（截断后跑出来的不是�
 
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 60 道闸各自单独确认会响"
+  echo "✅ 全部 66 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"

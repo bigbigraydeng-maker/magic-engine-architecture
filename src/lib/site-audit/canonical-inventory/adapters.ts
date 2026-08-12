@@ -12,15 +12,56 @@ import { crawlPages, discoverSitemapUrls, type CrawlOptions, type CrawlResult } 
 import { enrichCrawledPage } from '../page-enrichment'
 import type { ActivationDeps, CanonicalInventoryStore } from './types'
 
+export interface HostDiscoveryResult {
+  readonly host: string
+  readonly count: number
+  readonly error: string | null
+}
+
+export interface DiscoveryOutcome {
+  /** 所有主机合并去重后的原始 URL。 */
+  readonly urls: readonly string[]
+  /** 每个主机各自发现了多少 —— 0 条也要看得见，不许被合并结果盖住。 */
+  readonly perHost: readonly HostDiscoveryResult[]
+}
+
 /**
  * 发现候选 URL —— 直接用现有 `discoverSitemapUrls`
  * （robots / sitemap / sitemap_index / 首页 BFS / Jina 兜底，五级回退全在里面）。
  *
- * 🔴 它返回的是**原始串**，而且它内部的同源过滤是宽松的（剥 www + 前缀比较）。
+ * 🔴 **逐个批准主机各发现一遍再合并**，不是只跑一个域名。
+ *    批准清单里可以有裸域 + `www` + 子域，而它们完全可能是**互不链接的独立站点**
+ *    （#930 的现场就是这样）。只跑第一个的 robots / sitemap / 首页，
+ *    第二个站的页面根本不会出现在候选里 —— 复核和激活照样成功，
+ *    产出一份**静默缺页**的台账。缺页比多页危险：多的会被人看见并拒掉，缺的没人会发现。
+ *
+ * 🔴 逐主机的条数原样返回。某个主机 0 条可能是站点空、也可能是被 WAF 挡了，
+ *    两者都得让人看见再决定，不能悄悄当成「这个站没有页面」。
+ *
+ * 🔴 返回的是**原始串**，而且 crawler 内部的同源过滤是宽松的（剥 www + 前缀比较）。
  *    所以结果必须再过 `buildInventoryPlan()` 的精确主机闸，不能直接拿来用。
  */
-export async function discoverCandidateUrls(domain: string): Promise<readonly string[]> {
-  return discoverSitemapUrls(domain)
+export async function discoverCandidateUrls(approvedHosts: readonly string[]): Promise<DiscoveryOutcome> {
+  const seen = new Set<string>()
+  const perHost: HostDiscoveryResult[] = []
+
+  for (const host of approvedHosts) {
+    let count = 0
+    let error: string | null = null
+    try {
+      const found = await discoverSitemapUrls(host)
+      for (const url of found) {
+        if (!seen.has(url)) seen.add(url)
+      }
+      count = found.length
+    } catch (err) {
+      // 一个主机挂掉不影响别的主机，但**必须留痕** —— 否则它会长得跟「这个站没有页面」一样。
+      error = err instanceof Error ? err.message : String(err)
+    }
+    perHost.push({ host, count, error })
+  }
+
+  return { urls: Array.from(seen), perHost }
 }
 
 /**

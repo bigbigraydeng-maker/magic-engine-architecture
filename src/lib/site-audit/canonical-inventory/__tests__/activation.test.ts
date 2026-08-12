@@ -143,6 +143,28 @@ describe('顺利通过的基线（不先证明它能过，后面的「拒」就�
   })
 })
 
+describe('结构闸：反序列化后缺字段也必须返回审计，不许抛出去', () => {
+  it.each([
+    ['缺 review', (p: ReviewedInventoryPlan) => ({ ...p, review: undefined })],
+    ['reviewedBy 不是字符串', (p: ReviewedInventoryPlan) => ({ ...p, review: { reviewedBy: 42, reviewedAt: 'x' } })],
+    ['candidates 不是数组', (p: ReviewedInventoryPlan) => ({ ...p, candidates: undefined })],
+    ['缺 boundary', (p: ReviewedInventoryPlan) => ({ ...p, boundary: undefined })],
+    ['approvedHosts 不是数组', (p: ReviewedInventoryPlan) => ({ ...p, boundary: { ...p.boundary, approvedHosts: 'example.com' } })],
+    ['clientId 不是字符串', (p: ReviewedInventoryPlan) => ({ ...p, clientId: null })],
+  ])('%s → 返回 rejected 审计（而不是抛异常）', async (_label, mutate) => {
+    const broken = mutate(makeReviewedPlan()) as unknown as ReviewedInventoryPlan
+    const deps = makeDeps()
+    // 🔴 关键是「不抛」：这个模块对外承诺一定返回一份审计，调用方靠 status 判结局。
+    const audit = await activateReviewedPlan(makeInput({ plan: broken, deps }))
+    expect(audit.status).toBe('rejected')
+    // 🔴 必须是结构闸**认出来**的 plan_shape_invalid，而不是兜底 catch 抓到的
+    //    plan_shape_unexpected —— 后者意味着闸有洞，只是碰巧没炸出去。
+    expect(audit.blockers.map((b) => b.code)).toContain('plan_shape_invalid')
+    expect(audit.blockers.map((b) => b.code)).not.toContain('plan_shape_unexpected')
+    expect(deps.store.writes).toHaveLength(0)
+  })
+})
+
 describe('身份闸：计划与当前上下文对不上就一次抓取都不发', () => {
   const crawlSpy = () => vi.fn(async (urls: readonly string[]) => urls.map((u) => makeCrawl(u)))
 
