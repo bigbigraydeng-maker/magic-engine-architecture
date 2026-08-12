@@ -109,7 +109,33 @@ switch (plan.action) {
     break
   }
   case 'wait-ci': {
-    console.log('No actionable findings, but required CI did not go green within this run — not posting READY.')
+    // This used to log and post nothing. Nothing else re-triggers this
+    // workflow for the same sha — it only listens to
+    // pull_request_review.submitted — so re-running a check to green produces
+    // no new event, and the PR simply stopped moving. From the PR page, "CI is
+    // red" and "the automation is broken" looked identical: silence, forever.
+    //
+    // Say which checks are not green, once per sha, and say plainly that a
+    // re-run alone will not restart anything.
+    // `requiredCheck` is whatever the poll last saw for the gating check; the
+    // initial list is everything else on the sha. Report both, so the comment
+    // is useful even when the gating check simply never appeared.
+    const observed = requiredCheck ? [requiredCheck] : initialCheckRuns
+    const notGreen = observed
+      .filter((r) => !(r?.status === 'completed' && ['success', 'neutral', 'skipped'].includes(r?.conclusion)))
+      .map((r) => `- \`${r.name}\` — ${r.status}${r.conclusion ? `/${r.conclusion}` : ''}`)
+    const alreadyTold = markers.some((m) => m.stage === 'ci-blocked' && m.sha === sha)
+    if (!alreadyTold) {
+      const marker = buildMarker({ stage: 'ci-blocked', pr, sha })
+      await createIssueComment(
+        token,
+        owner,
+        repo,
+        pr,
+        `**BLOCKED ON CI**\n\nCodex raised no actionable findings, but these checks on \`${sha.slice(0, 10)}\` are not green:\n\n${notGreen.join('\n') || '- (no check runs reported at all)'}\n\nNothing re-triggers this automation for the same commit, so re-running a check to green will **not** move this PR on its own — push a commit, or ask Codex to review again once CI is green.\n\n${marker}`
+      )
+    }
+    console.log('No actionable findings, but CI is not green — posted BLOCKED ON CI instead of staying silent.')
     setOutput('action', 'wait-ci')
     break
   }
