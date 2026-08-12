@@ -41,7 +41,7 @@
       qualified mention / recommendation / conditional rank 的判据（M1）未决因而**不可计算**，
       `direct_owned_page_citation` 记 `not_computable`（不是 0）。
       **未执行**：diagnosis · optimization action · 第二轮测量 · 页面台账补录 · Roman 网站修改。
-      Issue #883 已于 **2026-08-12 经 Product Owner 授权关闭**（[结账说明](https://github.com/bigbigraydeng-maker/magic-engine/issues/883#issuecomment-5262037905)）；其 Scope 未完成的 3 条已拆入 #932。
+      Issue #883 已于 **2026-08-12 经 Product Owner 授权关闭**（[结账说明](https://github.com/bigbigraydeng-maker/magic-engine/issues/883#issuecomment-5262037905)）；其余留的 3 项前置工作已拆入 #932。
 - [ ] **WP08 余项** [#932](https://github.com/bigbigraydeng-maker/magic-engine/issues/932) Roman 页面台账 + 权威来源 · 测量频率（cadence，须与 #885 对齐）· WP09 前置就位登记 —— **WP09 的前置**，与已冻结的 Baseline v1 无关
 - [ ] **WP09 / WP10** [#884](https://github.com/bigbigraydeng-maker/magic-engine/issues/884) / [#885](https://github.com/bigbigraydeng-maker/magic-engine/issues/885) 首次 1–3 页优化 → T+7/14/28 复测与学习（严格串行，**两项均未开工**）
 - [x] ~~**U11**~~ ✅ **已完成** —— `docs/STATE.md` 与本文件的 ME2 条目已补齐（本 PR）
