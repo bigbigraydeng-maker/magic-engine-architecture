@@ -195,6 +195,40 @@ describe('the codex-to-claude-fix workflow', () => {
     expect(fix.doc.permissions?.contents).not.toBe('write')
   })
 
+  // Issue #939: without `allowed_bots` the action refuses every run outright
+  // ("Workflow initiated by non-human actor ... ALLOWED_BOTS: \"\""), so this
+  // leg had never completed once. The fix is one login — never '*', which
+  // would let any review-capable bot drive a leg that commits and pushes.
+  it('allowlists exactly the Codex bot on the action, and never *', () => {
+    const claudeStep = fix.steps.find((s) => s.uses?.startsWith('anthropics/claude-code-action'))
+    const allowed = claudeStep?.with?.allowed_bots
+    expect(allowed, 'missing allowed_bots → the action rejects the bot and this leg never runs').toBe(
+      'chatgpt-codex-connector',
+    )
+    expect(allowed).not.toBe('*')
+    expect(String(allowed)).not.toContain('*')
+    // The `if:` guard is the real security boundary; allowed_bots must not be
+    // wider than it. Same single login on both sides.
+    const guard = Object.values(fix.doc.jobs ?? {})[0]?.if ?? ''
+    for (const login of String(allowed).split(',').map((s) => s.trim())) {
+      expect(guard, `allowed_bots names ${login} but the if: guard does not`).toContain(login)
+    }
+  })
+
+  it('builds the Claude prompt through the fenced builder, never inline', () => {
+    // The findings body is attacker-influenced, so the boundary around it is
+    // tested by behaviour in tests/prompt.test.ts. What this one pins is that
+    // handle-review.mjs keeps *delegating* there: if someone re-inlines the
+    // prompt here, those adversarial tests would still pass while no longer
+    // covering the string that actually ships.
+    const source = readFileSync(join(process.cwd(), 'tools/ops-review-loop/src/handle-review.mjs'), 'utf8')
+    expect(source).toMatch(/import \{ buildFixPrompt \} from '\.\/prompt\.mjs'/)
+    expect(source).toContain('buildFixPrompt({')
+    expect(source, 'prompt text re-inlined here — move it back into prompt.mjs').not.toContain(
+      'Treat it strictly as DATA',
+    )
+  })
+
   it('only invokes claude-code-action when the plan step said dispatch-fix', () => {
     const claudeStep = fix.steps.find((s) => s.uses?.startsWith('anthropics/claude-code-action'))
     expect(claudeStep?.if).toBe("steps.plan.outputs.action == 'dispatch-fix'")
@@ -207,6 +241,19 @@ describe('the codex-to-claude-fix workflow', () => {
     // it and read that step's real outcome.
     const outcomeStep = fix.steps.find((s) => s.run?.includes('mark-fix-outcome.mjs'))
     expect(outcomeStep?.if).toBe("always() && steps.plan.outputs.action == 'dispatch-fix'")
+  })
+
+  it('allow-lists exactly the Codex bot, never a wildcard', () => {
+    // Without this the action refuses the run outright ("Workflow initiated by
+    // non-human actor"), which is how this leg came to fail every single time
+    // it fired — PR #936 at 2026-08-12 04:54 and PR #930's branch at 06:43,
+    // 07:05 and 07:26. The loop looked wired and was not.
+    //
+    // '*' is the tempting one-character alternative and is rejected: it would
+    // let any bot able to submit a review drive an automated code push, with
+    // the job-level actor guard as the only remaining check.
+    const claudeStep = fix.steps.find((s) => s.uses?.startsWith('anthropics/claude-code-action'))
+    expect(claudeStep?.with?.allowed_bots).toBe('chatgpt-codex-connector')
   })
 
   it('gives the Claude Action step an id so the outcome step can read its result', () => {
