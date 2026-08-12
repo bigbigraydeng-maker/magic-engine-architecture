@@ -164,3 +164,55 @@ describe('handle-review: the BLOCKED ON CI report must use the gate\'s own stand
     expect(body).toContain('nothing will re-evaluate this PR')
   })
 })
+
+describe('handle-review: the report must not contradict itself', () => {
+  let dir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ops-waitci3-'))
+    createIssueComment.mockClear()
+    listIssueComments.mockReset().mockResolvedValue([])
+    listCheckRunsForRef.mockReset()
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+    vi.resetModules()
+  })
+
+  it('lists a check once, in its latest state, not twice in two states', async () => {
+    // Codex finding (PR #943, P2). The pre-poll snapshot and the polled result
+    // are different objects for the same check, so a reference-based dedupe
+    // (`r !== requiredCheck`) never matched and the comment listed the check
+    // twice — `in_progress` from four minutes ago next to `completed/failure`
+    // from now. A report that contradicts itself is worse than a terse one.
+    const early = { id: 11, name: 'ai-orchestrator-tests', status: 'in_progress', conclusion: null }
+    const late = { id: 11, name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'failure' }
+    listCheckRunsForRef.mockResolvedValueOnce([early]).mockResolvedValue([late])
+
+    await run(dir)
+
+    const body = String(createIssueComment.mock.calls[0][4])
+    // Count list entries, not every mention: the blocker sentence names the
+    // required check too, and that is deliberate.
+    const listEntries = body.match(/^- `ai-orchestrator-tests`/gm) ?? []
+    expect(listEntries.length).toBe(1)
+    expect(body).toContain('completed/failure')
+    // The stale `in_progress` observation must not survive anywhere.
+    expect(body).not.toContain('in_progress')
+  })
+
+  it('reports the other checks as they are now, not as they were before polling', async () => {
+    const stale = { id: 22, name: 'build', status: 'in_progress', conclusion: null }
+    const fresh = { id: 22, name: 'build', status: 'completed', conclusion: 'failure' }
+    listCheckRunsForRef
+      .mockResolvedValueOnce([stale])
+      .mockResolvedValue([fresh, { id: 11, name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'failure' }])
+
+    await run(dir)
+
+    const body = String(createIssueComment.mock.calls[0][4])
+    expect(body).toContain('`build` — completed/failure')
+    expect(body).not.toContain('`build` — in_progress')
+  })
+})

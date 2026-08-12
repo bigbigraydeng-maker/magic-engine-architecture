@@ -25,18 +25,24 @@
  */
 export async function waitForRequiredCheck({ fetchCheckRuns, sleep, pattern, maxAttempts = 12, intervalMs = 20000 }) {
   let lastSeen = null
+  let lastRuns = null
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const checkRuns = await fetchCheckRuns()
+    lastRuns = checkRuns
     const requiredCheck = checkRuns.find((run) => pattern.test(run.name))
     if (requiredCheck) {
       lastSeen = requiredCheck
     }
     if (requiredCheck?.status === 'completed') {
-      return { check: requiredCheck, sawIt: true }
+      return { check: requiredCheck, sawIt: true, runs: checkRuns }
     }
     if (attempt < maxAttempts - 1) {
       await sleep(intervalMs)
     }
   }
-  return { check: lastSeen, sawIt: lastSeen !== null }
+  // Codex finding (PR #943, P2): the caller also needs the whole list as last
+  // observed. Reporting from the pre-poll snapshot describes the world as it
+  // was minutes ago — and mixing the two lists shows the same check twice, in
+  // two contradictory states.
+  return { check: lastSeen, sawIt: lastSeen !== null, runs: lastRuns }
 }

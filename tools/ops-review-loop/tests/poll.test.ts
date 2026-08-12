@@ -13,6 +13,7 @@ describe('waitForRequiredCheck', () => {
     expect(result).toEqual({
       check: { name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'success' },
       sawIt: true,
+      runs: [{ name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'success' }],
     })
     expect(fetchCheckRuns).toHaveBeenCalledTimes(1)
     expect(sleep).not.toHaveBeenCalled()
@@ -31,6 +32,7 @@ describe('waitForRequiredCheck', () => {
     expect(result).toEqual({
       check: { name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'failure' },
       sawIt: true,
+      runs: [{ name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'failure' }],
     })
     expect(fetchCheckRuns).toHaveBeenCalledTimes(3)
     expect(sleep).toHaveBeenCalledTimes(2)
@@ -48,6 +50,7 @@ describe('waitForRequiredCheck', () => {
     expect(result).toEqual({
       check: { name: 'ai-orchestrator-tests', status: 'in_progress', conclusion: null },
       sawIt: true,
+      runs: [{ name: 'ai-orchestrator-tests', status: 'in_progress', conclusion: null }],
     })
     expect(fetchCheckRuns).toHaveBeenCalledTimes(3)
     expect(sleep).toHaveBeenCalledTimes(2)
@@ -60,7 +63,13 @@ describe('waitForRequiredCheck', () => {
     const result = await waitForRequiredCheck({ fetchCheckRuns, sleep, pattern, maxAttempts: 2, intervalMs: 10 })
 
     // Genuinely absent: nothing matching the pattern was ever observed.
-    expect(result).toEqual({ check: null, sawIt: false })
+    // `runs` carries the freshest full list so the caller reports on the world
+    // as it is now, not as it was before the poll (Codex finding PR #943, P2).
+    expect(result).toEqual({
+      check: null,
+      sawIt: false,
+      runs: [{ name: 'Cloudflare Pages', status: 'completed', conclusion: 'success' }],
+    })
     expect(fetchCheckRuns).toHaveBeenCalledTimes(2)
   })
 })

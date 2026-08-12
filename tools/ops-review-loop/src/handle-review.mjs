@@ -64,6 +64,9 @@ function checkSucceeded(run) {
 }
 
 let requiredCheck = initialCheckRuns.find((run) => REQUIRED_CHECK_NAME_PATTERN.test(run.name))
+// The freshest full list we have. Reporting from the pre-poll snapshot
+// describes the world as it was up to four minutes ago.
+let latestCheckRuns = initialCheckRuns
 
 // Codex finding (PR #906, P2): a clean review that lands while required CI is
 // still running used to fall straight through to `wait-ci` and stop there —
@@ -86,6 +89,9 @@ if (!hasActionableFindings && !checkSucceeded(requiredCheck)) {
   })
   if (polled.check) {
     requiredCheck = polled.check
+  }
+  if (polled.runs) {
+    latestCheckRuns = polled.runs
   }
 }
 
@@ -140,7 +146,19 @@ switch (plan.action) {
     //    fix the wrong thing and the PR still will not move. Absence is its
     //    own diagnosis and has to be stated as one.
     const isGreenByGate = (r) => checkSucceeded(r)
-    const notGreen = (requiredCheck ? [requiredCheck, ...initialCheckRuns.filter((r) => r !== requiredCheck)] : initialCheckRuns)
+    // Codex finding (PR #943, P2): the previous version reported from the
+    // PRE-poll snapshot and removed the required check's duplicate with
+    // `r !== requiredCheck` — a reference comparison against a freshly
+    // deserialised object, which never matched. The comment listed that check
+    // twice, in two contradictory states, alongside four-minute-old data for
+    // everything else.
+    //
+    // Reporting from the single freshest list fixes both at once: it is the
+    // world as it is now, and the required check appears in it exactly once.
+    // An id-based dedupe was written here as well and then removed — with one
+    // list there is nothing to deduplicate, and a guard that cannot be reached
+    // is a guard that cannot be tested.
+    const notGreen = latestCheckRuns
       .filter((r) => !isGreenByGate(r))
       .map((r) => `- \`${r.name}\` — ${r.status}${r.conclusion ? `/${r.conclusion}` : ''}`)
     // Three genuinely different states, three different things for a human to
