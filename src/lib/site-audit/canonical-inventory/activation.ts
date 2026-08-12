@@ -29,6 +29,7 @@ import type {
 } from './types'
 import { INVENTORY_PLAN_CONTRACT_VERSION, NORMALIZATION_RULE_VERSION } from './types'
 import type { CrawlResult } from '../crawler'
+import type { EnrichedPage } from '../page-enrichment'
 import { verifyPlanHash } from './plan'
 import { deriveCanonicalUrl, normaliseApprovedHosts } from './url-rules'
 
@@ -202,36 +203,47 @@ function checkAcceptedSet(
 
   const seen = new Set<string>()
   for (const candidate of accepted) {
-    const url = candidate.canonicalUrl
-    if (url === null) {
-      blockers.push({
-        code: 'accepted_without_canonical',
-        message: `被接受的候选 ${candidate.originalUrl} 没有 canonical URL`,
-      })
-      continue
-    }
-    // 🔴 拿**原始 URL 重新推导**，而不是只验「这个串本身规不规范」。
-    //    差别在于：把 canonical 从 /a 改成同一主机下的 /hacked，那个串自己完全规范，
-    //    但它不是这条候选推导出来的东西 —— 照批就会写入一个没人复核过的页面。
-    //    plan.ts 的 assertPlanIntact 已经验过一遍；这里是纵深防御，
-    //    因为没有任何东西能证明一份手写的复核计划真的来自 buildInventoryPlan。
-    const derived = deriveCanonicalUrl(candidate.originalUrl, { approvedHosts })
-    if (derived === null || derived !== url) {
-      blockers.push({
-        code: 'accepted_url_not_derived',
-        message:
-          `被接受的 ${candidate.originalUrl} 记着的 canonical 是 ${url}，` +
-          `按当前规则重新推导得到 ${derived ?? 'null'}（主机未批准或该串被改过）`,
-      })
-      continue
-    }
-    if (seen.has(url)) {
-      blockers.push({ code: 'duplicate_accepted_target', message: `被接受集合里出现重复的 canonical URL：${url}` })
-      continue
-    }
-    seen.add(url)
+    const blocker = checkAcceptedCandidate(candidate, approvedHosts, seen)
+    if (blocker !== null) blockers.push(blocker)
   }
   return blockers
+}
+
+/**
+ * 逐条验一个被接受的候选。过了就把它的 canonical 记进 `seen`（用于去重）。
+ *
+ * 🔴 推导校验拿**原始 URL 重新推导**，而不是只验「这个串本身规不规范」。
+ *    差别在于：把 canonical 从 /a 改成同一主机下的 /hacked，那个串自己完全规范，
+ *    但它不是这条候选推导出来的东西 —— 照批就会写入一个没人复核过的页面。
+ *    plan.ts 的 assertPlanIntact 已经验过一遍；这里是纵深防御，
+ *    因为没有任何东西能证明一份手写的复核计划真的来自 buildInventoryPlan。
+ */
+function checkAcceptedCandidate(
+  candidate: InventoryCandidate,
+  approvedHosts: readonly string[],
+  seen: Set<string>,
+): ActivationBlocker | null {
+  const url = candidate.canonicalUrl
+  if (url === null) {
+    return {
+      code: 'accepted_without_canonical',
+      message: `被接受的候选 ${candidate.originalUrl} 没有 canonical URL`,
+    }
+  }
+  const derived = deriveCanonicalUrl(candidate.originalUrl, { approvedHosts })
+  if (derived === null || derived !== url) {
+    return {
+      code: 'accepted_url_not_derived',
+      message:
+        `被接受的 ${candidate.originalUrl} 记着的 canonical 是 ${url}，` +
+        `按当前规则重新推导得到 ${derived ?? 'null'}（主机未批准或该串被改过）`,
+    }
+  }
+  if (seen.has(url)) {
+    return { code: 'duplicate_accepted_target', message: `被接受集合里出现重复的 canonical URL：${url}` }
+  }
+  seen.add(url)
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -268,29 +280,43 @@ async function crawlAndEnrich(urls: readonly string[], deps: ActivationDeps): Pr
       failures.push({ url, error: result.error })
       continue
     }
-    const enriched = await deps.enrich({ url, title: result.title, markdown: result.markdown })
+    // 🔴 富集契约上「永不抛」，但注入进来的实现不归我们管。让它把整个
+    //    activateReviewedPlan() reject 掉，调用方就既拿不到审计、也没法按 status 判结局
+    //    —— 而这个模块对外的承诺正是「一定返回一份审计」。抓成失败，语义跟抓取失败一致。
+    let enriched: EnrichedPage
+    try {
+      enriched = await deps.enrich({ url, title: result.title, markdown: result.markdown })
+    } catch (err) {
+      failures.push({ url, error: `enrichment threw: ${err instanceof Error ? err.message : String(err)}` })
+      continue
+    }
     if (!enriched.classified) {
       // 台账要给 WP05 当页面身份用，分类失败的页面不许以 `other` 蒙混进去。
       failures.push({ url, error: `classification failed: ${enriched.classificationError ?? 'unknown'}` })
       continue
     }
-    records.push({
-      canonicalUrl: url,
-      path: new URL(url).pathname,
-      title: result.title,
-      markdown: result.markdown,
-      wordCount: enriched.wordCount,
-      pageType: enriched.pageType,
-      topics: enriched.topics,
-      primaryKeyword: enriched.primaryKeyword,
-      classificationConfidence: enriched.classificationConfidence,
-      hasGeoBlock: enriched.hasGeoBlock,
-      geoDetectionMethod: enriched.geoDetectionMethod,
-      geoConfidence: enriched.geoConfidence,
-      crawledAt: result.crawledAt.toISOString(),
-    })
+    records.push(toPageRecord(url, result, enriched))
   }
   return { records, failures }
+}
+
+/** 把一页抓取结果 + 富集结果拼成台账记录。字段只用 `client_site_pages` 已有的列。 */
+function toPageRecord(url: string, result: CrawlResult, enriched: EnrichedPage): AcceptedPageRecord {
+  return {
+    canonicalUrl: url,
+    path: new URL(url).pathname,
+    title: result.title,
+    markdown: result.markdown,
+    wordCount: enriched.wordCount,
+    pageType: enriched.pageType,
+    topics: enriched.topics,
+    primaryKeyword: enriched.primaryKeyword,
+    classificationConfidence: enriched.classificationConfidence,
+    hasGeoBlock: enriched.hasGeoBlock,
+    geoDetectionMethod: enriched.geoDetectionMethod,
+    geoConfidence: enriched.geoConfidence,
+    crawledAt: result.crawledAt.toISOString(),
+  }
 }
 
 function crawlErrorText(err: unknown): string {
@@ -307,104 +333,105 @@ async function persistAndReconcile(
   records: readonly AcceptedPageRecord[],
 ): Promise<ActivationAudit> {
   const { plan, deps } = input
+  const reject = (blocker: ActivationBlocker, touched: boolean, written: readonly string[] = []): ActivationAudit =>
+    buildAudit({ plan, accepted, status: touched ? 'failed' : 'rejected', blockers: [blocker], failures: [], written, touched })
 
-  // 🔴 抓取要跑几分钟，空库那一眼是几分钟之前看的。这中间可能有另一次激活、
-  //    或者旧的 site-audit 任务往同一张表里写过东西。写之前再看一眼，变了就停手。
-  //    ⚠️ 这只是把窗口收窄，**不是**原子性：真正的保证必须由 store 在
-  //    同一个事务 / 条件写里跟插入一起做（见 `CanonicalInventoryStore` 契约）。
+  const stillEmpty = await recheckInventoryEmpty(input)
+  if (stillEmpty !== null) return reject(stillEmpty, false)
+
+  const write = await writeRecords(input, records)
+  if (write.blocker !== null) return reject(write.blocker, true)
+
+  const mismatch = reconcileWriteSet(records, write.written)
+  if (mismatch !== null) return reject(mismatch, true, write.written)
+
+  return buildAudit({
+    plan,
+    accepted,
+    status: 'activated',
+    blockers: [],
+    failures: [],
+    written: write.written,
+    touched: true,
+  })
+}
+
+/**
+ * 写之前再看一眼台账是不是仍然是空的。有问题返回闸门理由，没问题返回 `null`。
+ *
+ * 🔴 抓取要跑几分钟，激活开头那一眼是几分钟之前看的。这中间可能有另一次激活、
+ *    或者旧的 site-audit 任务往同一张表里写过东西。
+ *    ⚠️ 这只是把窗口收窄，**不是**原子性：真正的保证必须由 store 在
+ *    同一个事务 / 条件写里跟插入一起做（见 `CanonicalInventoryStore` 契约）。
+ */
+async function recheckInventoryEmpty(input: ActivateInput): Promise<ActivationBlocker | null> {
   let recheck: number
   try {
-    recheck = await deps.store.countExistingPages(plan.clientId)
+    recheck = await input.deps.store.countExistingPages(input.plan.clientId)
   } catch (err) {
-    return buildAudit({
-      plan,
-      accepted,
-      status: 'rejected',
-      blockers: [
-        {
-          code: 'inventory_count_unavailable',
-          message: `写入前复查台账行数失败，不能确认它仍然是空的：${err instanceof Error ? err.message : String(err)}`,
-        },
-      ],
-      failures: [],
-      written: [],
-      touched: false,
-    })
+    return {
+      code: 'inventory_count_unavailable',
+      message: `写入前复查台账行数失败，不能确认它仍然是空的：${err instanceof Error ? err.message : String(err)}`,
+    }
   }
   if (recheck !== 0) {
-    return buildAudit({
-      plan,
-      accepted,
-      status: 'rejected',
-      blockers: [
-        {
-          code: 'inventory_changed_during_crawl',
-          message:
-            `抓取期间台账从 0 行变成了 ${recheck} 行 —— 有别的东西在往同一个租户写。` +
-            '这次不写，先弄清那些行是谁写的。',
-        },
-      ],
-      failures: [],
-      written: [],
-      touched: false,
-    })
+    return {
+      code: 'inventory_changed_during_crawl',
+      message:
+        `抓取期间台账从 0 行变成了 ${recheck} 行 —— 有别的东西在往同一个租户写。` +
+        '这次不写，先弄清那些行是谁写的。',
+    }
   }
+  return null
+}
 
-  let written: readonly string[]
+/** 唯一一处真正调用落库口的地方。 */
+async function writeRecords(
+  input: ActivateInput,
+  records: readonly AcceptedPageRecord[],
+): Promise<{ written: readonly string[]; blocker: ActivationBlocker | null }> {
   try {
-    written = await deps.store.writeAcceptedPages({
-      clientId: plan.clientId,
+    const written = await input.deps.store.writeAcceptedPages({
+      clientId: input.plan.clientId,
       pages: records,
       // 🔴 这个标记不是给日志看的：实现方**必须**在同一个事务 / 条件写里
       //    重新确认台账为空，否则两份不同的计划可以各自对账通过、
       //    最后台账是两份的并集 —— 那已经不是任何一份被批准的清单。
       requireEmptyInventory: true,
     })
+    return { written, blocker: null }
   } catch (err) {
-    return buildAudit({
-      plan,
-      accepted,
-      status: 'failed',
-      blockers: [
-        {
-          code: 'write_failed',
-          message:
-            `写入台账失败：${err instanceof Error ? err.message : String(err)}。` +
-            '⚠️ 失败发生在写入过程中，库里可能已有部分行，先人工核对再重跑。',
-        },
-      ],
-      failures: [],
+    return {
       written: [],
-      touched: true,
-    })
+      blocker: {
+        code: 'write_failed',
+        message:
+          `写入台账失败：${err instanceof Error ? err.message : String(err)}。` +
+          '⚠️ 失败发生在写入过程中，库里可能已有部分行，先人工核对再重跑。',
+      },
+    }
   }
+}
 
-  // 🔴 拿写入方返回的清单跟被接受集合做**精确**比对，不是数个数。
-  //    少一条 / 多一条 / 换了一条，都不许报「完成」。
+/**
+ * 拿写入方返回的清单跟被接受集合做**精确**比对，不是数个数。
+ * 少一条 / 多一条 / 换了一条，都不许报「完成」。
+ */
+function reconcileWriteSet(
+  records: readonly AcceptedPageRecord[],
+  written: readonly string[],
+): ActivationBlocker | null {
   const expectedSet = new Set(records.map((r) => r.canonicalUrl))
   const writtenSet = new Set(written)
   const missing = Array.from(expectedSet).filter((u) => !writtenSet.has(u))
   const unexpected = Array.from(writtenSet).filter((u) => !expectedSet.has(u))
-  if (missing.length > 0 || unexpected.length > 0) {
-    return buildAudit({
-      plan,
-      accepted,
-      status: 'failed',
-      blockers: [
-        {
-          code: 'write_set_mismatch',
-          message:
-            `写入结果与被接受集合不一致：缺 ${missing.length} 条 [${missing.join(', ')}]，` +
-            `多 ${unexpected.length} 条 [${unexpected.join(', ')}]。⚠️ 台账已被改动，必须人工核对。`,
-        },
-      ],
-      failures: [],
-      written,
-      touched: true,
-    })
+  if (missing.length === 0 && unexpected.length === 0) return null
+  return {
+    code: 'write_set_mismatch',
+    message:
+      `写入结果与被接受集合不一致：缺 ${missing.length} 条 [${missing.join(', ')}]，` +
+      `多 ${unexpected.length} 条 [${unexpected.join(', ')}]。⚠️ 台账已被改动，必须人工核对。`,
   }
-
-  return buildAudit({ plan, accepted, status: 'activated', blockers: [], failures: [], written, touched: true })
 }
 
 // ---------------------------------------------------------------------------

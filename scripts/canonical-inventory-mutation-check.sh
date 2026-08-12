@@ -209,8 +209,8 @@ check "🔴 带 pending 的计划也放行（没判过当成不要）" "$ACT" \
   "  if (false) {"
 
 check "🔴 被接受的 URL 不再按原始 URL 重新推导（手改的能进台账）" "$ACT" \
-  "    if (derived === null || derived !== url) {" \
-  "    if (false) {"
+  "  if (derived === null || derived !== url) {" \
+  "  if (false) {"
 
 check "🔴 写入前不复查台账是否仍为空（抓取那几分钟里的并发写就漏了）" "$ACT" \
   "  if (recheck !== 0) {" \
@@ -221,8 +221,8 @@ check "🔴 不把「必须仍为空」的要求传给 store（实现方无从�
   "      requireEmptyInventory: false,"
 
 check "被接受集合里的重复不拦" "$ACT" \
-  "    if (seen.has(url)) {" \
-  "    if (false) {"
+  "  if (seen.has(url)) {" \
+  "  if (false) {"
 
 check "🔴 台账非空也照写（首次激活闸失效）" "$ACT" \
   "  if (existing !== 0) {" \
@@ -244,6 +244,11 @@ check "🔴 分类失败的页面拿兜底 other 混进台账" "$ACT" \
   "    if (!enriched.classified) {" \
   "    if (false) {"
 
+check "🔴 富集抛错直接炸掉整个调用（调用方拿不到审计）" "$ACT" \
+  "      failures.push({ url, error: \`enrichment threw: \${err instanceof Error ? err.message : String(err)}\` })
+      continue" \
+  "      throw err"
+
 check "抓取器少返回的 URL 当成跳过而不是失败" "$ACT" \
   "    if (result === undefined) {" \
   "    if (result === undefined) { continue }
@@ -254,24 +259,18 @@ check "抓取结果带 error 也照写（反爬挑战页进台账）" "$ACT" \
   "    if (false) {"
 
 check "🔴 写入结果不做精确对账（少写/多写都报完成）" "$ACT" \
-  "  if (missing.length > 0 || unexpected.length > 0) {" \
-  "  if (false) {"
+  "  if (missing.length === 0 && unexpected.length === 0) return null" \
+  "  if (true) return null"
 
 check "写入抛错也报完成" "$ACT" \
-  "    return buildAudit({
-      plan,
-      accepted,
-      status: 'failed',
-      blockers: [
-        {
-          code: 'write_failed'," \
-  "    return buildAudit({
-      plan,
-      accepted,
-      status: 'activated',
-      blockers: [
-        {
-          code: 'write_failed',"
+  "    return {
+      written: [],
+      blocker: {
+        code: 'write_failed'," \
+  "    return {
+      written: records.map((r) => r.canonicalUrl),
+      blocker: null && {
+        code: 'write_failed',"
 
 # ——— 复用适配器 ———
 check "🔴 抓取上限吃 crawlPages 的默认 100（超过 100 的批准清单被截断）" "$ADAPTERS" \
@@ -284,7 +283,7 @@ check "显式给的上限比清单还小也照跑（截断后跑出来的不是�
 
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 45 道闸各自单独确认会响"
+  echo "✅ 全部 46 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"

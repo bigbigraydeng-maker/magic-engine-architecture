@@ -413,6 +413,21 @@ describe('执行阶段：一页失败就不许报完成', () => {
     expect(deps.store.writes).toHaveLength(0)
   })
 
+  it('🔴 富集抛错 → 计成这一页失败并照常返回审计，不许把整个调用炸掉', async () => {
+    // 富集契约上「永不抛」，但注入进来的实现不归我们管。让它 reject 掉整个调用，
+    // 调用方就既拿不到审计、也没法按 status 判结局 —— 而这个模块对外的承诺正是「一定返回审计」。
+    const deps = makeDeps({
+      enrich: async ({ url }) => {
+        if (url === ACCEPTED[1]) throw new Error('openai client blew up')
+        return makeEnriched()
+      },
+    })
+    const audit = await activateReviewedPlan(makeInput({ deps }))
+    expect(audit.status).toBe('failed')
+    expect(audit.failedUrls).toEqual([{ url: ACCEPTED[1], error: expect.stringContaining('enrichment threw') }])
+    expect(deps.store.writes).toHaveLength(0)
+  })
+
   it('抓取器少返回一条 → 当失败处理，不当「跳过」', async () => {
     const deps = makeDeps({ crawl: async (urls) => [makeCrawl(urls[0])] })
     const audit = await activateReviewedPlan(makeInput({ deps }))

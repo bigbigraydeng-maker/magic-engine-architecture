@@ -127,6 +127,23 @@ describe('台账层的边界', () => {
     expect(offenders, offenders.join('\n')).toEqual([])
   })
 
+  it('每个函数都 < 50 行（CLAUDE.md 的硬规则，别等复审来提）', () => {
+    const offenders: string[] = []
+    for (const file of PRODUCTION_FILES) {
+      const lines = readFileSync(join(ROOT, file), 'utf8').split('\n')
+      let start = -1
+      for (let i = 0; i < lines.length; i++) {
+        if (start < 0 && /^(export )?(async )?function /.test(lines[i])) start = i
+        else if (start >= 0 && lines[i] === '}') {
+          const length = i - start + 1
+          if (length >= 50) offenders.push(`${file}:${start + 1} → ${length} 行`)
+          start = -1
+        }
+      }
+    }
+    expect(offenders, offenders.join('\n')).toEqual([])
+  })
+
   it('没有 any', () => {
     const offenders = PRODUCTION_FILES.filter((f) => /:\s*any\b|<any>|as\s+any\b/.test(sourceOf(f)))
     expect(offenders, offenders.join('\n')).toEqual([])

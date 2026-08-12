@@ -64,10 +64,25 @@ export function buildInventoryPlan(input: BuildInventoryPlanInput): CanonicalInv
   const uniqueOriginals = Array.from(new Set(input.discoveredUrls.map((u) => u.trim()).filter((u) => u.length > 0)))
   uniqueOriginals.sort(compareStrings)
 
+  return finalisePlan({
+    clientId: input.clientId.trim(),
+    boundary,
+    candidates: buildCandidates(uniqueOriginals, boundary),
+    review: null,
+  })
+}
+
+/**
+ * 把去重排序后的原始 URL 逐条翻成候选。
+ *
+ * 规则过不去的记 `rejected` + 原因码；撞车的记 `duplicate_canonical_target` 并指回留下的那条；
+ * 其余一律 `pending`（等人判）。**一条都不丢** —— 审计要能解释每个发现到的 URL 去哪了。
+ */
+function buildCandidates(originals: readonly string[], boundary: HostBoundary): InventoryCandidate[] {
   const claimed = new Map<string, string>() // canonicalUrl → 留下的那条 originalUrl
   const candidates: InventoryCandidate[] = []
 
-  for (const originalUrl of uniqueOriginals) {
+  for (const originalUrl of originals) {
     const result = canonicaliseUrl(originalUrl, boundary)
     if (!result.ok) {
       candidates.push({
@@ -100,8 +115,7 @@ export function buildInventoryPlan(input: BuildInventoryPlanInput): CanonicalInv
       notes: result.notes,
     })
   }
-
-  return finalisePlan({ clientId: input.clientId.trim(), boundary, candidates, review: null })
+  return candidates
 }
 
 export interface ReviewDecision {
