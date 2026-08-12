@@ -1789,6 +1789,36 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         test="src/lib/action-bridge/__tests__/architecture.test.ts",
         expect_fail_contains="不许吞掉后续源码",
     ),
+    # ── Issue #929：另外五套 suite 的正则版 stripComments 会放行真实违规 ────────
+    dict(
+        # 把 growth 那份退回正则版。`const START = '/*'` … `const END = '*/'` 之间的
+        # 真实违规会被整段删掉 —— 守卫还在、还是绿的，但守空了。
+        name="#929 growth 的注释挖空退回正则版（字符串夹着的真实违规重新隐身）",
+        file="src/lib/growth/__tests__/architecture.test.ts",
+        old="""  const sourceFile = parseSource(src, fileName)""",
+        new="""  void fileName
+  return src
+    .replace(/\\/\\*[\\s\\S]*?\\*\\//g, '')
+    .split('\\n')
+    .filter((line) => {
+      const t = line.trim()
+      return !t.startsWith('//') && !t.startsWith('*')
+    })
+    .join('\\n')
+  const sourceFile = parseSource(src, fileName)""",
+        test="src/lib/growth/__tests__/architecture.test.ts",
+        expect_fail_contains="夹着的真实违规必须还在",
+    ),
+    dict(
+        # 一致性守卫的抠取逻辑坏掉 = 它会一个实现都扫不到，然后「全都一致」地变绿。
+        # 空跑的判据长得跟「大家都合规」一模一样，所以这一刀专门验它红得出来。
+        name="#929 七处一致守卫的抠取逻辑坏掉（验它不是空跑就绿）",
+        file="src/lib/__tests__/strip-comments-consistency.test.ts",
+        old="""const DECL = 'function stripComments('""",
+        new="""const DECL = 'function __no_such_symbol__('""",
+        test="src/lib/__tests__/strip-comments-consistency.test.ts",
+        expect_fail_contains="防止判据因为抠取写错而空跑",
+    ),
 ]
 
 
