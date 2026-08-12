@@ -154,6 +154,22 @@ describe('语法归一', () => {
   it('参数顺序不同的同一页面收敛成同一个 canonical', () => {
     expect(canonical('https://example.com/a?b=2&a=1')).toBe(canonical('https://example.com/a?a=1&b=2'))
   })
+
+  it('🔴 同名重复参数保持原始先后 —— 顺序可能就是页面身份的一部分', () => {
+    // ?sort=price&sort=date 与 ?sort=date&sort=price 可能是两个不同的页面。
+    // 按值排会把它们合并成一条、另一条被标撞车，复核的人从此没机会分别接受它们。
+    const a = canonical('https://example.com/l?sort=price&sort=date')
+    const b = canonical('https://example.com/l?sort=date&sort=price')
+    expect(a).toBe('https://example.com/l?sort=price&sort=date')
+    expect(b).toBe('https://example.com/l?sort=date&sort=price')
+    expect(a).not.toBe(b)
+  })
+
+  it('不同 key 照样排序，同名之间仍保持原始先后', () => {
+    expect(canonical('https://example.com/l?z=1&sort=price&sort=date&a=0')).toBe(
+      'https://example.com/l?a=0&sort=price&sort=date&z=1',
+    )
+  })
 })
 
 describe('幂等性（canonical 再跑一次还是自己）', () => {

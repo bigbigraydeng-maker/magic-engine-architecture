@@ -54,10 +54,16 @@ export function createCrawlAdapter(
 export function createActivationDeps(input: {
   readonly store: CanonicalInventoryStore
   readonly now: () => string
+  /**
+   * 验签。**必须由调用方给**，这里不提供默认实现 ——
+   * 一个「默认恒真」的验签器等于没有这道闸，而且没人会注意到它不见了。
+   */
+  readonly verifyReviewSignature: (planHash: string, signature: string) => boolean
   readonly crawlOptions?: CrawlOptions
 }): ActivationDeps {
   return {
     store: input.store,
+    verifyReviewSignature: input.verifyReviewSignature,
     crawl: createCrawlAdapter(input.crawlOptions),
     enrich: enrichCrawledPage,
     now: input.now,

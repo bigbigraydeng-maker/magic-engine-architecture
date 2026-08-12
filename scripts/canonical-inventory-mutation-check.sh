@@ -110,8 +110,12 @@ check "🔴 有意义的查询参数被一并删掉（两个真实页面合并�
   "    if (false) kept.push([key, value])"
 
 check "查询参数不排序（顺序不同就多出一条候选）" "$RULES" \
-  "  const sorted = [...kept].sort((a, b) => (a[0] === b[0] ? compare(a[1], b[1]) : compare(a[0], b[0])))" \
+  "  const sorted = [...kept].sort((a, b) => compare(a[0], b[0]))" \
   "  const sorted = [...kept]"
+
+check "🔴 同名重复参数按值排（两个真实页面被合并成一条）" "$RULES" \
+  "  const sorted = [...kept].sort((a, b) => compare(a[0], b[0]))" \
+  "  const sorted = [...kept].sort((a, b) => (a[0] === b[0] ? compare(a[1], b[1]) : compare(a[0], b[0])))"
 
 check "推导退化成「只要能归一就行」（换成另一页也认）" "$RULES" \
   "  return result.ok ? result.canonicalUrl : null" \
@@ -195,7 +199,31 @@ check "复核不要求署名" "$PLAN" \
   "  if (input.review.reviewedBy.trim().length === 0) {" \
   "  if (false) {"
 
+check "🔴 复核不签名（自带哈希谁都能重算，等于没有凭据）" "$PLAN" \
+  "  const reviewSignature = input.sign(finalised.planHash)" \
+  "  const reviewSignature = 'unsigned'"
+
 # ——— 激活闸 ———
+check "🔴 不验复核签名（成对改 URL + 自己重算哈希就能混进去）" "$ACT" \
+  "    ...checkReviewSignature(plan, verifySignature)," \
+  "    ...[],"
+
+check "签名验不过也放行" "$ACT" \
+  "  if (!ok) {" \
+  "  if (false) {"
+
+check "签名缺失也放行" "$ACT" \
+  "  if (typeof signature !== 'string' || signature.trim().length === 0) {" \
+  "  if (false) {"
+
+check "验签自己抛错当成验过了" "$ACT" \
+  "    return [
+      {
+        code: 'review_signature_unverifiable'," \
+  "    return [] || [
+      {
+        code: 'review_signature_unverifiable',"
+
 check "🔴 不校验计划哈希" "$ACT" \
   "  if (!verifyPlanHash(plan)) {" \
   "  if (false) {"
@@ -299,7 +327,7 @@ check "显式给的上限比清单还小也照跑（截断后跑出来的不是�
 
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 50 道闸各自单独确认会响"
+  echo "✅ 全部 57 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"

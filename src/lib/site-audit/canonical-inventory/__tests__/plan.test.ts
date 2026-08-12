@@ -15,6 +15,8 @@ import type { CanonicalInventoryPlan } from '../types'
 
 const CLIENT = '00000000-0000-0000-0000-0000000000aa'
 const REVIEW = { reviewedBy: 'product-owner', reviewedAt: '2026-08-12T00:00:00.000Z' }
+/** 假签名：真实实现应当是带密钥的 HMAC —— 改文件的人算不出来。 */
+const SIGN = (planHash: string): string => `sig:${planHash}`
 
 function build(urls: readonly string[], hosts: readonly string[] = ['example.com']): CanonicalInventoryPlan {
   return buildInventoryPlan({
@@ -107,6 +109,7 @@ describe('计划哈希', () => {
     const reviewed = applyReviewDecisions(plan, {
       decisions: { 'https://example.com/a': { decision: 'accepted' } },
       review: REVIEW,
+      sign: SIGN,
     })
     expect(verifyPlanHash(mutate(reviewed))).toBe(false)
   })
@@ -131,6 +134,7 @@ describe('人工复核', () => {
         'https://example.com/c': { decision: 'defer' },
       },
       review: REVIEW,
+      sign: SIGN,
     })
     expect(reviewed.counts).toMatchObject({ accepted: 1, rejected: 1, deferred: 1, pending: 0 })
     expect(reviewed.planHash).not.toBe(plan.planHash)
@@ -146,6 +150,7 @@ describe('人工复核', () => {
         'https://example.com/b': { decision: 'defer' },
       },
       review: REVIEW,
+      sign: SIGN,
     })
     const codes = Object.fromEntries(reviewed.candidates.map((c) => [c.originalUrl, c.reasonCodes]))
     expect(codes['https://example.com/a']).toEqual(['reviewer_rejected'])
@@ -158,6 +163,7 @@ describe('人工复核', () => {
       applyReviewDecisions(plan, {
         decisions: { 'https://www.example.com/x': { decision: 'accepted' } },
         review: REVIEW,
+        sign: SIGN,
       }),
     ).toThrow(/不接受人工覆盖/)
   })
@@ -168,6 +174,7 @@ describe('人工复核', () => {
       applyReviewDecisions(plan, {
         decisions: { 'https://example.com/typo': { decision: 'accepted' } },
         review: REVIEW,
+        sign: SIGN,
       }),
     ).toThrow(InventoryPlanError)
   })
@@ -177,6 +184,7 @@ describe('人工复核', () => {
     const reviewed = applyReviewDecisions(plan, {
       decisions: { 'https://example.com/a': { decision: 'accepted' } },
       review: REVIEW,
+      sign: SIGN,
     })
     expect(reviewed.counts.pending).toBe(1)
   })
@@ -194,6 +202,7 @@ describe('人工复核', () => {
       applyReviewDecisions(rehashed, {
         decisions: { 'https://example.com/a': { decision: 'accepted' } },
         review: REVIEW,
+        sign: SIGN,
       }),
     ).toThrow(/不是机器刚产出的那一份/)
   })
@@ -201,7 +210,7 @@ describe('人工复核', () => {
   it('计划哈希对不上 → 不许盖章（不给任意输入重新背书）', () => {
     const plan = build(['https://example.com/a'])
     const tampered = { ...plan, clientId: 'someone-else' }
-    expect(() => applyReviewDecisions(tampered, { decisions: {}, review: REVIEW })).toThrow(/哈希对不上/)
+    expect(() => applyReviewDecisions(tampered, { decisions: {}, review: REVIEW, sign: SIGN })).toThrow(/哈希对不上/)
   })
 
   it('旧规则版本生成的计划 → 不许被悄悄「升级」成当前规则', () => {
@@ -209,7 +218,7 @@ describe('人工复核', () => {
     const old = { ...plan, normalizationRuleVersion: 'inventory-url-rules@0' }
     const { planHash: _drop, ...rest } = old
     const rehashed = { ...rest, planHash: computePlanHash(rest) }
-    expect(() => applyReviewDecisions(rehashed, { decisions: {}, review: REVIEW })).toThrow(/规则变了/)
+    expect(() => applyReviewDecisions(rehashed, { decisions: {}, review: REVIEW, sign: SIGN })).toThrow(/规则变了/)
   })
 
   it('🔴 计划里预置了 accepted（哈希也重算过）→ 不许盖章', () => {
@@ -226,7 +235,7 @@ describe('人工复核', () => {
     }
     const { planHash: _drop, ...rest } = preAccepted
     const rehashed = { ...rest, planHash: computePlanHash(rest) }
-    expect(() => applyReviewDecisions(rehashed, { decisions: {}, review: REVIEW })).toThrow(
+    expect(() => applyReviewDecisions(rehashed, { decisions: {}, review: REVIEW, sign: SIGN })).toThrow(
       /不是机器刚产出的那一份/,
     )
   })
@@ -244,7 +253,7 @@ describe('人工复核', () => {
       }
       const { planHash: _drop, ...rest } = tampered
       expect(() =>
-        applyReviewDecisions({ ...rest, planHash: computePlanHash(rest) }, { decisions: {}, review: REVIEW }),
+        applyReviewDecisions({ ...rest, planHash: computePlanHash(rest) }, { decisions: {}, review: REVIEW, sign: SIGN }),
       ).toThrow(/不是机器刚产出的那一份/)
     }
   })
@@ -254,7 +263,7 @@ describe('人工复核', () => {
     const doubled = { ...plan, candidates: [...plan.candidates, { ...plan.candidates[0] }] }
     const { planHash: _drop, ...rest } = doubled
     expect(() =>
-      applyReviewDecisions({ ...rest, planHash: computePlanHash(rest) }, { decisions: {}, review: REVIEW }),
+      applyReviewDecisions({ ...rest, planHash: computePlanHash(rest) }, { decisions: {}, review: REVIEW, sign: SIGN }),
     ).toThrow(/出现了多次/)
   })
 
@@ -263,11 +272,13 @@ describe('人工复核', () => {
     const reviewed = applyReviewDecisions(plan, {
       decisions: { 'https://example.com/a': { decision: 'rejected' } },
       review: REVIEW,
+      sign: SIGN,
     })
     expect(() =>
       applyReviewDecisions(reviewed, {
         decisions: {},
         review: { reviewedBy: 'someone-else', reviewedAt: REVIEW.reviewedAt },
+        sign: SIGN,
       }),
     ).toThrow(/只盖一次章/)
   })
@@ -275,10 +286,10 @@ describe('人工复核', () => {
   it('复核必须署名并带时间', () => {
     const plan = build(['https://example.com/a'])
     expect(() =>
-      applyReviewDecisions(plan, { decisions: {}, review: { reviewedBy: '  ', reviewedAt: REVIEW.reviewedAt } }),
+      applyReviewDecisions(plan, { decisions: {}, review: { reviewedBy: '  ', reviewedAt: REVIEW.reviewedAt }, sign: SIGN }),
     ).toThrow(InventoryPlanError)
     expect(() =>
-      applyReviewDecisions(plan, { decisions: {}, review: { reviewedBy: 'x', reviewedAt: '' } }),
+      applyReviewDecisions(plan, { decisions: {}, review: { reviewedBy: 'x', reviewedAt: '' }, sign: SIGN }),
     ).toThrow(InventoryPlanError)
   })
 })

@@ -128,6 +128,13 @@ export interface ApplyReviewInput {
   /** 按 **原始 URL** 索引的人工决策。 */
   readonly decisions: Readonly<Record<string, ReviewDecision>>
   readonly review: PlanReview
+  /**
+   * 对最终 `planHash` 签名。由持密钥的一方提供。
+   *
+   * 🔴 签名必须是**改文件的人算不出来**的东西 —— 自带的 SHA-256 谁都能重算，
+   *    挡不住「改内容 + 自己重签」。这一层不碰密钥，只要求你给得出签名。
+   */
+  readonly sign: (planHash: string) => string
 }
 
 /**
@@ -167,7 +174,11 @@ export function applyReviewDecisions(
     candidates,
     review: input.review,
   })
-  return { ...finalised, review: input.review }
+  const reviewSignature = input.sign(finalised.planHash)
+  if (typeof reviewSignature !== 'string' || reviewSignature.trim().length === 0) {
+    throw new InventoryPlanError('missing_signature', '复核签名是空的 —— 没有签名的计划等于没批过，不许产出')
+  }
+  return { ...finalised, review: input.review, reviewSignature }
 }
 
 /**

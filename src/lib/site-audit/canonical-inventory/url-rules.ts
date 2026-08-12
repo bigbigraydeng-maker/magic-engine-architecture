@@ -211,9 +211,14 @@ function isTrackingKey(key: string): boolean {
 }
 
 /**
- * 查询串归一：删已知跟踪参数 → 其余按 (key, value) 排序。
+ * 查询串归一：删已知跟踪参数 → 其余**只按 key 排序**（稳定排序）。
  *
  * 排序是为了确定性：`?b=1&a=2` 与 `?a=2&b=1` 是同一个页面，不排序会留下两条候选。
+ *
+ * 🔴 同名参数之间**保持原始先后**，不按值排。有些站点用重复参数表达顺序或优先级
+ *    （`?sort=price&sort=date` 与 `?sort=date&sort=price` 可能是两个不同的页面）。
+ *    按值排会把它们合并成一条，另一条被标成撞车 —— 复核的人从此没机会分别接受它们，
+ *    而这正是「不许凭空合并页面身份」那条原则的反面。
  */
 function normaliseQuery(params: URLSearchParams): { search: string; notes: NormalisationNote[] } {
   const notes: NormalisationNote[] = []
@@ -230,7 +235,8 @@ function normaliseQuery(params: URLSearchParams): { search: string; notes: Norma
   if (removedTracking) notes.push('tracking_query_removed')
   if (kept.length === 0) return { search: '', notes }
 
-  const sorted = [...kept].sort((a, b) => (a[0] === b[0] ? compare(a[1], b[1]) : compare(a[0], b[0])))
+  // Array.prototype.sort 在现代 JS 里是稳定排序：只按 key 比，同名参数就保住原始先后。
+  const sorted = [...kept].sort((a, b) => compare(a[0], b[0]))
   if (sorted.some((pair, i) => pair !== kept[i])) notes.push('query_sorted')
   notes.push('query_retained')
 

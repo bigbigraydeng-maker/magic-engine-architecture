@@ -19,6 +19,12 @@ const CLIENT = '00000000-0000-0000-0000-0000000000aa'
 const DOMAIN = 'example.com'
 const HOSTS = ['example.com']
 const REVIEW = { reviewedBy: 'product-owner', reviewedAt: '2026-08-12T00:00:00.000Z' }
+/**
+ * 假签名。真实实现必须是**改文件的人算不出来**的东西（带密钥的 HMAC / 非对称签名）——
+ * 这里用一个带「密钥」的前缀模拟：测试里改内容却拿不到 SIGN 的一方就伪造不出来。
+ */
+const SIGN = (planHash: string): string => `sig:${planHash}`
+const VERIFY = (planHash: string, signature: string): boolean => signature === SIGN(planHash)
 
 const ACCEPTED = ['https://example.com/a', 'https://example.com/b']
 const REJECTED = 'http://example.com/insecure'
@@ -66,6 +72,7 @@ function makeReviewedPlan(over?: { hosts?: readonly string[]; domain?: string; c
       [DEFERRED]: { decision: 'defer' },
     },
     review: REVIEW,
+    sign: SIGN,
   })
 }
 
@@ -73,6 +80,7 @@ function makeDeps(over: Partial<ActivationDeps> = {}): ActivationDeps & { store:
   const store = (over.store as FakeInventoryStore) ?? new FakeInventoryStore()
   return {
     store,
+    verifyReviewSignature: over.verifyReviewSignature ?? VERIFY,
     crawl: over.crawl ?? (async (urls) => urls.map((u) => makeCrawl(u))),
     enrich: over.enrich ?? (async () => makeEnriched()),
     now: over.now ?? (() => '2026-08-12T02:00:00.000Z'),
@@ -88,10 +96,14 @@ function makeInput(over: Partial<ActivateInput> = {}): ActivateInput {
   }
 }
 
-/** 改计划内容后重算哈希 —— 用来构造「内容非法但哈希自洽」的输入，逼每道闸自己说话。 */
+/**
+ * 改计划内容后重算哈希**并重新签名** —— 用来构造「内容非法但哈希与签名都自洽」的输入，
+ * 逼每道闸自己说话。不重签的话，签名闸会先响，后面每一道都被它遮住。
+ */
 function rehash(plan: ReviewedInventoryPlan): ReviewedInventoryPlan {
-  const { planHash: _old, ...rest } = plan
-  return { ...rest, planHash: computePlanHash(rest) } as ReviewedInventoryPlan
+  const { planHash: _old, reviewSignature: _sig, ...rest } = plan
+  const planHash = computePlanHash(rest)
+  return { ...rest, planHash, reviewSignature: SIGN(planHash) } as ReviewedInventoryPlan
 }
 
 describe('顺利通过的基线（不先证明它能过，后面的「拒」就证明不了什么）', () => {
@@ -195,6 +207,51 @@ describe('身份闸：计划与当前上下文对不上就一次抓取都不发'
     expect(audit.blockers.map((b) => b.code)).toContain('plan_hash_mismatch')
   })
 
+  it('🔴 成对改掉已接受候选的 originalUrl 与 canonicalUrl、再自己重算哈希 → 签名对不上，拒', async () => {
+    // Codex 第五轮点名的那条：自带哈希是公开函数算的，改内容的人能自己重算；
+    // 哈希闸与推导闸都会放行（/hacked 是个规范且主机合法的串，也确实由它自己推导得出）。
+    // 唯一挡得住的是一枚改文件的人算不出来的签名。
+    const base = makeReviewedPlan()
+    const swapped: ReviewedInventoryPlan = {
+      ...base,
+      candidates: base.candidates.map((c) =>
+        c.originalUrl === ACCEPTED[0]
+          ? { ...c, originalUrl: 'https://example.com/hacked', canonicalUrl: 'https://example.com/hacked' }
+          : c,
+      ),
+    }
+    // 攻击者手里没有签名密钥，所以只能重算哈希、留着旧签名。
+    const { planHash: _old, ...rest } = swapped
+    const forged = { ...rest, planHash: computePlanHash(rest) } as ReviewedInventoryPlan
+
+    const deps = makeDeps()
+    const audit = await activateReviewedPlan(makeInput({ plan: forged, deps }))
+    expect(audit.status).toBe('rejected')
+    expect(audit.blockers.map((b) => b.code)).toContain('review_signature_invalid')
+    expect(deps.store.writes).toHaveLength(0)
+    // 证明这道闸不是被别的闸顺带拦下的：哈希与推导本身都是自洽的。
+    expect(audit.blockers.map((b) => b.code)).not.toContain('plan_hash_mismatch')
+    expect(audit.blockers.map((b) => b.code)).not.toContain('accepted_url_not_derived')
+  })
+
+  it('签名缺失 → 拒', async () => {
+    const plan = { ...makeReviewedPlan(), reviewSignature: '  ' }
+    const audit = await activateReviewedPlan(makeInput({ plan }))
+    expect(audit.blockers.map((b) => b.code)).toContain('review_signature_missing')
+  })
+
+  it('验签函数自己抛 → 也拒（验不了 ≠ 验过了）', async () => {
+    const deps = makeDeps({
+      verifyReviewSignature: () => {
+        throw new Error('key material unavailable')
+      },
+    })
+    const audit = await activateReviewedPlan(makeInput({ deps }))
+    expect(audit.status).toBe('rejected')
+    expect(audit.blockers.map((b) => b.code)).toContain('review_signature_unverifiable')
+    expect(deps.store.writes).toHaveLength(0)
+  })
+
   it('没有复核签名', async () => {
     const base = makeReviewedPlan()
     const plan = rehash({ ...base, review: { reviewedBy: '', reviewedAt: REVIEW.reviewedAt } })
@@ -214,6 +271,7 @@ describe('被接受集合闸', () => {
     const reviewed = applyReviewDecisions(plan, {
       decisions: { [ACCEPTED[0]]: { decision: 'accepted' } },
       review: REVIEW,
+      sign: SIGN,
     })
     const audit = await activateReviewedPlan(makeInput({ plan: reviewed }))
     expect(audit.blockers.map((b) => b.code)).toContain('unreviewed_candidates')
@@ -229,6 +287,7 @@ describe('被接受集合闸', () => {
     const reviewed = applyReviewDecisions(plan, {
       decisions: { [ACCEPTED[0]]: { decision: 'rejected' }, [ACCEPTED[1]]: { decision: 'defer' } },
       review: REVIEW,
+      sign: SIGN,
     })
     const audit = await activateReviewedPlan(makeInput({ plan: reviewed }))
     expect(audit.blockers.map((b) => b.code)).toContain('empty_accepted_set')
@@ -496,6 +555,7 @@ describe('#930 现场形状：裸域进台账、www 进不去', () => {
     const reviewed = applyReviewDecisions(plan, {
       decisions: { [`https://${HOST}/about`]: { decision: 'accepted' } },
       review: REVIEW,
+      sign: SIGN,
     })
     const deps = makeDeps()
     const audit = await activateReviewedPlan({

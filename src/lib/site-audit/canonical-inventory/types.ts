@@ -161,9 +161,22 @@ export interface CanonicalInventoryPlan {
   readonly review: PlanReview | null
 }
 
-/** 复核过的计划 —— `review` 一定不为空。 */
+/**
+ * 复核过的计划 —— `review` 一定不为空，且带一枚**别人算不出来**的签名。
+ *
+ * 🔴 为什么光有 `planHash` 不够：那个哈希是拿公开函数算的。计划以文件 / 界面形式
+ *    在外面转一圈时，把某条已接受候选的 `originalUrl` 与 `canonicalUrl` **成对**改成
+ *    另一个真实页面、保留 accepted 与复核信息，再自己重算一遍哈希 ——
+ *    哈希闸与推导闸都会过，激活就会抓取并写入一个从没获批的页面。
+ *    自带哈希只能证明「内容与同一份文件里的哈希一致」，不能证明「内容还是当初批的那份」。
+ *
+ * 所以复核时必须由持密钥的一方对 `planHash` 签名；激活时用注入的验签函数验。
+ * 改内容 ⇒ `planHash` 变 ⇒ 旧签名对不上，而改签名需要密钥 —— 改文件的人没有。
+ */
 export interface ReviewedInventoryPlan extends CanonicalInventoryPlan {
   readonly review: PlanReview
+  /** 对 `planHash` 的签名（HMAC 之类）。内容不透明，本层只负责「验得过 / 验不过」。 */
+  readonly reviewSignature: string
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +306,13 @@ export interface ActivationAudit {
  */
 export interface ActivationDeps {
   readonly store: CanonicalInventoryStore
+  /**
+   * 验签。返回 false 一律拒。
+   *
+   * 🔴 必须是**调用方无法自助重算**的东西（带密钥的 HMAC / 非对称签名）。
+   *    注入一个恒真的实现，这道闸就等于没有 —— 那是注入方的责任，跟 store 一样。
+   */
+  readonly verifyReviewSignature: (planHash: string, signature: string) => boolean
   readonly crawl: (urls: readonly string[]) => Promise<readonly CrawlResult[]>
   readonly enrich: (page: { url: string; title: string; markdown: string }) => Promise<EnrichedPage>
   /** ISO 8601 时间源，注入以便测试确定性。 */

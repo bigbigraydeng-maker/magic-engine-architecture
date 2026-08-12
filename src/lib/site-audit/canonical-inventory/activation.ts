@@ -96,7 +96,7 @@ async function collectBlockers(
 ): Promise<ActivationBlocker[]> {
   const { plan, expected, deps } = input
   const blockers: ActivationBlocker[] = [
-    ...checkPlanIdentity(plan, expected),
+    ...checkPlanIdentity(plan, expected, deps.verifyReviewSignature),
     ...checkAcceptedSet(plan, accepted),
   ]
   if (blockers.length > 0) return blockers
@@ -127,22 +127,15 @@ async function collectBlockers(
   return []
 }
 
-function checkPlanIdentity(plan: ReviewedInventoryPlan, expected: ActivationExpectation): ActivationBlocker[] {
-  const blockers: ActivationBlocker[] = []
-  if (plan.contractVersion !== INVENTORY_PLAN_CONTRACT_VERSION) {
-    blockers.push({
-      code: 'contract_version_mismatch',
-      message: `计划契约版本是 ${plan.contractVersion}，当前代码是 ${INVENTORY_PLAN_CONTRACT_VERSION}`,
-    })
-  }
-  if (plan.normalizationRuleVersion !== NORMALIZATION_RULE_VERSION) {
-    blockers.push({
-      code: 'rule_version_mismatch',
-      message:
-        `计划按 ${plan.normalizationRuleVersion} 归一，当前代码是 ${NORMALIZATION_RULE_VERSION} —— ` +
-        '规则变了就必须重新生成并重新复核，旧批准不能套新语义',
-    })
-  }
+function checkPlanIdentity(
+  plan: ReviewedInventoryPlan,
+  expected: ActivationExpectation,
+  verifySignature: ActivationDeps['verifyReviewSignature'],
+): ActivationBlocker[] {
+  const blockers: ActivationBlocker[] = [
+    ...checkReviewSignature(plan, verifySignature),
+    ...checkPlanVersions(plan),
+  ]
   if (plan.clientId !== expected.clientId) {
     blockers.push({
       code: 'client_mismatch',
@@ -207,6 +200,65 @@ function checkAcceptedSet(
     if (blocker !== null) blockers.push(blocker)
   }
   return blockers
+}
+
+/** 契约版本 / 归一规则版本 —— 版本不对就不能拿旧批准套新语义。 */
+function checkPlanVersions(plan: ReviewedInventoryPlan): ActivationBlocker[] {
+  const blockers: ActivationBlocker[] = []
+  if (plan.contractVersion !== INVENTORY_PLAN_CONTRACT_VERSION) {
+    blockers.push({
+      code: 'contract_version_mismatch',
+      message: `计划契约版本是 ${plan.contractVersion}，当前代码是 ${INVENTORY_PLAN_CONTRACT_VERSION}`,
+    })
+  }
+  if (plan.normalizationRuleVersion !== NORMALIZATION_RULE_VERSION) {
+    blockers.push({
+      code: 'rule_version_mismatch',
+      message:
+        `计划按 ${plan.normalizationRuleVersion} 归一，当前代码是 ${NORMALIZATION_RULE_VERSION} —— ` +
+        '规则变了就必须重新生成并重新复核，旧批准不能套新语义',
+    })
+  }
+  return blockers
+}
+
+/**
+ * 验复核签名。
+ *
+ * 🔴 自带的 `planHash` 只能证明「内容与同一份文件里的哈希一致」—— 它是用公开函数算的，
+ *    谁改了内容都能自己重算一遍。把某条已接受候选的 `originalUrl` 与 `canonicalUrl`
+ *    **成对**换成另一个真实页面，哈希闸与推导闸都会放行。
+ *    唯一挡得住的是一枚改文件的人算不出来的签名。
+ */
+function checkReviewSignature(
+  plan: ReviewedInventoryPlan,
+  verifySignature: ActivationDeps['verifyReviewSignature'],
+): ActivationBlocker[] {
+  const signature = plan.reviewSignature
+  if (typeof signature !== 'string' || signature.trim().length === 0) {
+    return [{ code: 'review_signature_missing', message: '这份计划没有复核签名，不能激活' }]
+  }
+  let ok: boolean
+  try {
+    ok = verifySignature(plan.planHash, signature)
+  } catch (err) {
+    return [
+      {
+        code: 'review_signature_unverifiable',
+        message: `验签过程本身出错，不能当成验过：${err instanceof Error ? err.message : String(err)}`,
+      },
+    ]
+  }
+  if (!ok) {
+    return [
+      {
+        code: 'review_signature_invalid',
+        message:
+          '复核签名与计划内容对不上 —— 批准之后内容被改过（自带哈希谁都能重算，签名不能）。',
+      },
+    ]
+  }
+  return []
 }
 
 /**
