@@ -51,6 +51,62 @@ PR [#956](https://github.com/bigbigraydeng-maker/magic-engine/pull/956)（合并
 
 ---
 
+### 2026-08-13（记忆会自相矛盾：同一个动作「管用」和「不管用」同时生效，而且关不掉）
+
+Issue [#859](https://github.com/bigbigraydeng-maker/magic-engine/issues/859) 架构判断 6 ·
+PR [#949](https://github.com/bigbigraydeng-maker/magic-engine/pull/949)（合并提交 `d87742cb`）·
+migration `20260812100000_memory_supersession_v1` **已 apply 到生产**（2026-08-13，PM 授权后手工执行）。
+
+**这次解决的两件事**：
+
+1. **结论翻转后正反经验并存。** PR #862 把 `flywheel_outcomes` 改成按自然键 upsert
+   （`job.ts::upsertOutcome`，注释里就写着 "See Issue #859"），`outcome.id` 稳定了 ——
+   但同一行现在**原地 UPDATE**，verdict 能 `confirmed` ↔ `reversed` 来回翻。
+   抽取器是「见过这个 `source_id` 就跳过」，于是翻第二次之后彻底卡死：
+   正面经验写完留着，负面经验再写一条，两条一起喂给 agent；翻回来时**一条都动不了**。
+   而 `client_failed_experiments` 建表时（`20260610000001`）就漏了 `is_active`
+   （另两张记忆表都有），**想关都没地方关**。
+
+2. **一个动作被数成三次。** 一个 GSC 动作一次快照产出 clicks / impressions / avg_position
+   三行 outcome，双窗口开了再翻倍。`extractor` 按行累加、`learning-rollup` 只
+   `select('verdict')`（连 `action_id` 都没查），而 `MIN_OCCURRENCES_FOR_PREFERENCE = 3`
+   —— **一个动作自己就能凑够阈值**，凭一次事件写出「持续跑赢」的偏好。
+
+🔴 **值得单独记住的**：稳定身份不是「缓解」了第 1 条，是**让它变成唯一形态**。
+修好「每天造副本」的那一刀，同时把「同一行会被改写」变成常态 —— 上游修对了，
+下游那套按「见过就跳过」写的幂等逻辑就从对的变成错的。
+**幂等的写法要跟着上游的身份语义走，不能一次写完就当永远成立。**
+
+**改了什么**：`client_failed_experiments` 补 `is_active` / `updated_at` + 触发器（三表对齐）·
+两张派生表加 `source_action_id`（去重与互斥的单位是**动作**，不是 outcome 行；
+不改 `source_id` 含义，存量 23 条不被重新解释，该列为 NULL = legacy）·
+**跨表互斥用 DB 触发器**而不是 executor 里的 if —— 写这两张表的不止抽取器，
+还有 FDE 标注接口 `/api/clients/[id]/memory/annotate`，放 DB 层谁都绕不过去
+（#859 判断 3）· 抽取器从「追加」改成「对账」，存量行按 `outcome_id → action_id` 认领回来 ·
+`extractor` + `learning-rollup` 接上 `keepOneCasePerAction`（库里早有，
+`aggregate` / `case-library` / execution board 三处都在用，**只有记忆侧没接**）。
+
+**验证**：新增 18 条测试，`src/lib/memory` 135/135 全绿 · **变异 8/8**，每道闸单独破坏都有用例变红 ·
+**其中 M8 第一次没抓住**：原用例里动作承诺的指标正好和兜底排序第一名相同，两条路径答案一样，
+删掉 `expected_metric` 测不出来；补了「承诺 impressions 而 clicks 结论相反」的用例才锁住 ——
+这个 case 出错不是少记，是**记反** · 假 Supabase **按表建模**且**刻意不实现互斥触发器**，
+绿说明应用层单独站得住，不是靠触发器兜的 · 全量 107 红与本次零交集
+（那条可疑的红专门切回干净 main 用同样并行负载复现，数字逐字相同）。
+
+**生产实查**（按对象存在性，不认文件名）：新列 3 + 1、新触发器 3、
+`client_failed_experiments` 8/8 生效、`client_proven_patterns` 15/15 生效 ——
+`is_active` 默认 TRUE，**存量记忆一条没被误关**。
+
+**仍未启用**：`ATTRIBUTION_DUAL_WINDOW_ENABLED` 仍关着（本次只解除它的阻塞条件）·
+`memory-extractor` 仍未排班（enablement 是单独一个 PR）。
+
+⚠️ **过程教训**：#949 是按 Draft 开的，却在 Codex 复审到达**前 2 分 17 秒**被翻成 ready 并合并，
+于是「代码先上、migration 后到」，中间窗口里六条读记忆的线会静默拿到空数组、
+FDE 标注会写不进去。**改 schema 的 PR，merge 与 apply 的先后必须当成一件事安排**，
+不能各自当独立决定。
+
+---
+
 ### 2026-08-12（架构守卫的扫描面：五套声明了八种后缀却没接上，实际只扫 `.ts`）
 
 Issue [#938](https://github.com/bigbigraydeng-maker/magic-engine/issues/938) ·
