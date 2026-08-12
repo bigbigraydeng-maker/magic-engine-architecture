@@ -71,6 +71,11 @@ let requiredCheck = initialCheckRuns.find((run) => REQUIRED_CHECK_NAME_PATTERN.t
 // green afterward never got re-evaluated for that head sha. Poll within this
 // same run (bounded) before giving up, since there is no other event wired to
 // retry it.
+// After the poll below, `requiredCheck` is set whenever the check was ever
+// observed — completed or not — so its emptiness alone distinguishes "never
+// appeared" from "appeared but unfinished". An extra `everSeen` flag was tried
+// here and removed: it was a second copy of the same fact, and a second copy
+// is a thing that can drift.
 if (!hasActionableFindings && !checkSucceeded(requiredCheck)) {
   const polled = await waitForRequiredCheck({
     fetchCheckRuns: async () => listCheckRunsForRef(token, owner, repo, sha),
@@ -79,8 +84,8 @@ if (!hasActionableFindings && !checkSucceeded(requiredCheck)) {
     maxAttempts: POLL_ATTEMPTS,
     intervalMs: POLL_INTERVAL_MS,
   })
-  if (polled) {
-    requiredCheck = polled
+  if (polled.check) {
+    requiredCheck = polled.check
   }
 }
 
@@ -135,13 +140,19 @@ switch (plan.action) {
     //    fix the wrong thing and the PR still will not move. Absence is its
     //    own diagnosis and has to be stated as one.
     const isGreenByGate = (r) => checkSucceeded(r)
-    const requiredMissing = !requiredCheck
     const notGreen = (requiredCheck ? [requiredCheck, ...initialCheckRuns.filter((r) => r !== requiredCheck)] : initialCheckRuns)
       .filter((r) => !isGreenByGate(r))
       .map((r) => `- \`${r.name}\` — ${r.status}${r.conclusion ? `/${r.conclusion}` : ''}`)
-    const blocker = requiredMissing
-      ? `The required check (matching \`${REQUIRED_CHECK_NAME_PATTERN}\`) **never reported on this commit** — that, not the list below, is what is holding this PR.`
-      : `The required check has not passed.`
+    // Three genuinely different states, three different things for a human to
+    // do. Codex finding (PR #943, P2): the previous version collapsed the
+    // first two, so a normal slow-starting check was announced as "never
+    // reported" — a confident wrong diagnosis, which is worse than silence
+    // because it sends someone to fix the wrong thing.
+    const blocker = !requiredCheck
+      ? `The required check (matching \`${REQUIRED_CHECK_NAME_PATTERN}\`) **never appeared on this commit** — that, not the list below, is what is holding this PR. Check that the workflow producing it is actually triggering.`
+      : requiredCheck?.status !== 'completed'
+        ? `The required check \`${requiredCheck?.name}\` appeared but was still \`${requiredCheck?.status}\` when this run gave up waiting. It may well go green on its own — but nothing will re-evaluate this PR when it does.`
+        : `The required check \`${requiredCheck?.name}\` finished \`${requiredCheck?.conclusion}\`.`
     const others = notGreen.length
       ? `\n\nChecks on \`${sha.slice(0, 10)}\` that are not completed+success:\n\n${notGreen.join('\n')}`
       : `\n\nEvery other check on \`${sha.slice(0, 10)}\` is completed and successful.`

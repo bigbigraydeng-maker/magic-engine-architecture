@@ -10,7 +10,10 @@ describe('waitForRequiredCheck', () => {
 
     const result = await waitForRequiredCheck({ fetchCheckRuns, sleep, pattern, maxAttempts: 5, intervalMs: 10 })
 
-    expect(result).toEqual({ name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'success' })
+    expect(result).toEqual({
+      check: { name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'success' },
+      sawIt: true,
+    })
     expect(fetchCheckRuns).toHaveBeenCalledTimes(1)
     expect(sleep).not.toHaveBeenCalled()
   })
@@ -25,7 +28,10 @@ describe('waitForRequiredCheck', () => {
 
     const result = await waitForRequiredCheck({ fetchCheckRuns, sleep, pattern, maxAttempts: 5, intervalMs: 10 })
 
-    expect(result).toEqual({ name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'failure' })
+    expect(result).toEqual({
+      check: { name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'failure' },
+      sawIt: true,
+    })
     expect(fetchCheckRuns).toHaveBeenCalledTimes(3)
     expect(sleep).toHaveBeenCalledTimes(2)
   })
@@ -36,7 +42,13 @@ describe('waitForRequiredCheck', () => {
 
     const result = await waitForRequiredCheck({ fetchCheckRuns, sleep, pattern, maxAttempts: 3, intervalMs: 10 })
 
-    expect(result).toBeNull()
+    // Codex finding (PR #943, P2): timing out is not the same as absence. The
+    // caller needs the last observation so it can tell a maintainer "it is
+    // still running" instead of the confident, wrong "it never appeared".
+    expect(result).toEqual({
+      check: { name: 'ai-orchestrator-tests', status: 'in_progress', conclusion: null },
+      sawIt: true,
+    })
     expect(fetchCheckRuns).toHaveBeenCalledTimes(3)
     expect(sleep).toHaveBeenCalledTimes(2)
   })
@@ -47,7 +59,8 @@ describe('waitForRequiredCheck', () => {
 
     const result = await waitForRequiredCheck({ fetchCheckRuns, sleep, pattern, maxAttempts: 2, intervalMs: 10 })
 
-    expect(result).toBeNull()
+    // Genuinely absent: nothing matching the pattern was ever observed.
+    expect(result).toEqual({ check: null, sawIt: false })
     expect(fetchCheckRuns).toHaveBeenCalledTimes(2)
   })
 })

@@ -139,9 +139,28 @@ describe('handle-review: the BLOCKED ON CI report must use the gate\'s own stand
     await run(dir)
 
     const body = String(createIssueComment.mock.calls[0][4])
-    expect(body).toContain('never reported on this commit')
+    expect(body).toContain('never appeared on this commit')
     // the unrelated failure is still listed, but clearly not as the blocker
     expect(body).toContain('Cloudflare Pages')
     expect(body).toContain('not the list below')
+  })
+
+  it('distinguishes a slow required check from an absent one', async () => {
+    // Codex finding (PR #943, P2). A check that shows up late and is still
+    // running when the poll gives up was being announced as "never appeared" —
+    // a confident wrong diagnosis, worse than silence because it sends someone
+    // to debug a workflow that is in fact working.
+    listCheckRunsForRef
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([{ name: 'ai-orchestrator-tests', status: 'in_progress', conclusion: null }])
+
+    await run(dir)
+
+    const body = String(createIssueComment.mock.calls[0][4])
+    expect(body).toContain('still `in_progress`')
+    expect(body).not.toContain('never appeared')
+    // and it tells the maintainer the thing that is not obvious: going green
+    // on its own will not restart anything.
+    expect(body).toContain('nothing will re-evaluate this PR')
   })
 })
