@@ -200,10 +200,18 @@ export interface CanonicalInventoryStore {
    * 写入被接受的页面，返回**实际写进去**的 canonical URL 清单。
    *
    * 返回值不是回声：激活方会拿它跟被接受集合做精确比对，对不上就不许报「完成」。
+   *
+   * 🔴 `requireEmptyInventory` 为真时，实现方**必须在同一个事务 / 条件写里**
+   *    重新确认该租户台账仍为空，做不到就抛。
+   *    「先读一次 count 再写」不算数：抓取要跑几分钟，那一眼早就过期了。
+   *    两次首次激活并发跑（或旧的 site-audit 任务在中间写了几行），双方都能读到 0、
+   *    各自跟自己的写入结果精确对账、各自报 activated —— 而台账是两份清单的并集，
+   *    已经不是任何一份被批准的清单。
    */
   writeAcceptedPages(input: {
     readonly clientId: string
     readonly pages: readonly AcceptedPageRecord[]
+    readonly requireEmptyInventory: boolean
   }): Promise<readonly string[]>
 }
 

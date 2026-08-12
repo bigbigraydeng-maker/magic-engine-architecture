@@ -234,6 +234,23 @@ describe('被接受集合闸', () => {
     expect(audit.blockers.map((b) => b.code)).toContain('empty_accepted_set')
   })
 
+  it('🔴 canonical 被换成同一主机下的另一页（串本身完全规范）→ 仍然拒', async () => {
+    // Codex 复审点名的那条：/hacked 自己是规范的，只验「规不规范」拦不住，
+    // 必须拿原始 URL 重新推导才发现它不是这条候选的东西。
+    const base = makeReviewedPlan()
+    const plan = rehash({
+      ...base,
+      candidates: base.candidates.map((c) =>
+        c.originalUrl === ACCEPTED[0] ? { ...c, canonicalUrl: 'https://example.com/hacked' } : c,
+      ),
+    })
+    const deps = makeDeps()
+    const audit = await activateReviewedPlan(makeInput({ plan, deps }))
+    expect(audit.status).toBe('rejected')
+    expect(audit.blockers.map((b) => b.code)).toContain('accepted_url_not_derived')
+    expect(deps.store.writes).toHaveLength(0)
+  })
+
   it('🔴 被接受的 URL 主机被改成未批准的（且哈希已重算）→ 仍然拒', async () => {
     const base = makeReviewedPlan()
     const plan = rehash({
@@ -244,7 +261,7 @@ describe('被接受集合闸', () => {
     })
     const audit = await activateReviewedPlan(makeInput({ plan }))
     expect(audit.status).toBe('rejected')
-    expect(audit.blockers.map((b) => b.code)).toContain('accepted_url_not_canonical')
+    expect(audit.blockers.map((b) => b.code)).toContain('accepted_url_not_derived')
   })
 
   it('被接受的 URL 被手改成未归一的串 → 拒（尾斜杠 / 片段 / http 都算）', async () => {
@@ -257,19 +274,18 @@ describe('被接受集合闸', () => {
         ),
       })
       const audit = await activateReviewedPlan(makeInput({ plan }))
-      expect(audit.blockers.map((b) => b.code), bad).toContain('accepted_url_not_canonical')
+      expect(audit.blockers.map((b) => b.code), bad).toContain('accepted_url_not_derived')
     }
   })
 
   it('被接受集合里出现重复 canonical → 拒', async () => {
+    // 手写的计划里同一条原始 URL 出现两次：两条都能通过推导校验，
+    // 所以这道去重闸不会被上一道遮住，是它自己在说话。
     const base = makeReviewedPlan()
-    const plan = rehash({
-      ...base,
-      candidates: base.candidates.map((c) =>
-        c.originalUrl === ACCEPTED[1] ? { ...c, canonicalUrl: ACCEPTED[0] } : c,
-      ),
-    })
+    const first = base.candidates.find((c) => c.originalUrl === ACCEPTED[0])
+    const plan = rehash({ ...base, candidates: [...base.candidates, { ...first! }] })
     const audit = await activateReviewedPlan(makeInput({ plan }))
+    expect(audit.status).toBe('rejected')
     expect(audit.blockers.map((b) => b.code)).toContain('duplicate_accepted_target')
   })
 
@@ -296,12 +312,53 @@ describe('空库闸（首次激活）', () => {
     expect(audit.inventoryTouched).toBe(false)
   })
 
-  it('🔴 读不到行数 ≠ 行数为 0 —— 读失败也拒', async () => {
-    const deps = makeDeps({ store: new FakeInventoryStore({ countError: 'connection reset' }) })
+  it('🔴 读不到行数 ≠ 行数为 0 —— 读失败也拒，而且一次抓取都不发', async () => {
+    // 只让**第一次**读失败：这样这道闸如果被拆掉，流程会往下走到抓取，
+    // 断言 crawl 没被调用就会变红 —— 不会被写入前那道复查悄悄接住。
+    const store = new FakeInventoryStore()
+    let call = 0
+    store.countExistingPages = async () => {
+      call++
+      if (call === 1) throw new Error('connection reset')
+      return 0
+    }
+    const crawl = vi.fn(async (urls: readonly string[]) => urls.map((u) => makeCrawl(u)))
+    const deps = makeDeps({ store, crawl })
     const audit = await activateReviewedPlan(makeInput({ deps }))
     expect(audit.status).toBe('rejected')
     expect(audit.blockers.map((b) => b.code)).toContain('inventory_count_unavailable')
+    expect(crawl).not.toHaveBeenCalled()
+    expect(store.writes).toHaveLength(0)
+  })
+
+  it('🔴 抓取期间台账被别人写了（第一次读 0、写之前读到 4）→ 拒，一行不写', async () => {
+    const deps = makeDeps({ store: new FakeInventoryStore({ countSequence: [0, 4] }) })
+    const audit = await activateReviewedPlan(makeInput({ deps }))
+    expect(audit.status).toBe('rejected')
+    expect(audit.blockers.map((b) => b.code)).toContain('inventory_changed_during_crawl')
     expect(deps.store.writes).toHaveLength(0)
+    expect(audit.inventoryTouched).toBe(false)
+  })
+
+  it('写入前那次复查读失败 → 也拒（读不到 ≠ 仍然是空的）', async () => {
+    const store = new FakeInventoryStore()
+    let call = 0
+    store.countExistingPages = async () => {
+      call++
+      if (call === 1) return 0
+      throw new Error('connection reset')
+    }
+    const deps = makeDeps({ store })
+    const audit = await activateReviewedPlan(makeInput({ deps }))
+    expect(audit.status).toBe('rejected')
+    expect(audit.blockers.map((b) => b.code)).toContain('inventory_count_unavailable')
+    expect(store.writes).toHaveLength(0)
+  })
+
+  it('🔴 写入时把「必须仍为空」的要求传给 store（实现方得在事务里再确认一次）', async () => {
+    const deps = makeDeps()
+    await activateReviewedPlan(makeInput({ deps }))
+    expect(deps.store.requireEmptyFlags).toEqual([true])
   })
 
   it('身份闸没过时不去打数据库（先拦纯校验，别浪费查询）', async () => {

@@ -181,6 +181,37 @@ describe('人工复核', () => {
     expect(reviewed.counts.pending).toBe(1)
   })
 
+  it('🔴 计划在外面被改过（canonical 换成同主机下的另一页）→ 不许盖章', () => {
+    const plan = build(['https://example.com/a'])
+    const tampered = {
+      ...plan,
+      candidates: plan.candidates.map((c) => ({ ...c, canonicalUrl: 'https://example.com/hacked' })),
+    }
+    // 连哈希一起重算，模拟「改完再自洽」的情形 —— 只验哈希是拦不住的。
+    const { planHash: _drop, ...rest } = tampered
+    const rehashed = { ...rest, planHash: computePlanHash(rest) }
+    expect(() =>
+      applyReviewDecisions(rehashed, {
+        decisions: { 'https://example.com/a': { decision: 'accepted' } },
+        review: REVIEW,
+      }),
+    ).toThrow(/重新推导/)
+  })
+
+  it('计划哈希对不上 → 不许盖章（不给任意输入重新背书）', () => {
+    const plan = build(['https://example.com/a'])
+    const tampered = { ...plan, clientId: 'someone-else' }
+    expect(() => applyReviewDecisions(tampered, { decisions: {}, review: REVIEW })).toThrow(/哈希对不上/)
+  })
+
+  it('旧规则版本生成的计划 → 不许被悄悄「升级」成当前规则', () => {
+    const plan = build(['https://example.com/a'])
+    const old = { ...plan, normalizationRuleVersion: 'inventory-url-rules@0' }
+    const { planHash: _drop, ...rest } = old
+    const rehashed = { ...rest, planHash: computePlanHash(rest) }
+    expect(() => applyReviewDecisions(rehashed, { decisions: {}, review: REVIEW })).toThrow(/规则变了/)
+  })
+
   it('复核必须署名并带时间', () => {
     const plan = build(['https://example.com/a'])
     expect(() =>

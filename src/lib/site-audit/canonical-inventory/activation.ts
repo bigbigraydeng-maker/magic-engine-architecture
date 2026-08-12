@@ -30,7 +30,7 @@ import type {
 import { INVENTORY_PLAN_CONTRACT_VERSION, NORMALIZATION_RULE_VERSION } from './types'
 import type { CrawlResult } from '../crawler'
 import { verifyPlanHash } from './plan'
-import { isCanonicalForBoundary, normaliseApprovedHosts } from './url-rules'
+import { deriveCanonicalUrl, normaliseApprovedHosts } from './url-rules'
 
 export interface ActivateInput {
   readonly plan: ReviewedInventoryPlan
@@ -210,11 +210,18 @@ function checkAcceptedSet(
       })
       continue
     }
-    // 🔴 这一条同时挡住两件事：主机被改成未批准的、以及 canonical 串被手改成不符合规则版本的。
-    if (!isCanonicalForBoundary(url, { approvedHosts })) {
+    // 🔴 拿**原始 URL 重新推导**，而不是只验「这个串本身规不规范」。
+    //    差别在于：把 canonical 从 /a 改成同一主机下的 /hacked，那个串自己完全规范，
+    //    但它不是这条候选推导出来的东西 —— 照批就会写入一个没人复核过的页面。
+    //    plan.ts 的 assertPlanIntact 已经验过一遍；这里是纵深防御，
+    //    因为没有任何东西能证明一份手写的复核计划真的来自 buildInventoryPlan。
+    const derived = deriveCanonicalUrl(candidate.originalUrl, { approvedHosts })
+    if (derived === null || derived !== url) {
       blockers.push({
-        code: 'accepted_url_not_canonical',
-        message: `被接受的 ${url} 不符合当前规则版本或主机不在批准清单内`,
+        code: 'accepted_url_not_derived',
+        message:
+          `被接受的 ${candidate.originalUrl} 记着的 canonical 是 ${url}，` +
+          `按当前规则重新推导得到 ${derived ?? 'null'}（主机未批准或该串被改过）`,
       })
       continue
     }
@@ -300,9 +307,59 @@ async function persistAndReconcile(
   records: readonly AcceptedPageRecord[],
 ): Promise<ActivationAudit> {
   const { plan, deps } = input
+
+  // 🔴 抓取要跑几分钟，空库那一眼是几分钟之前看的。这中间可能有另一次激活、
+  //    或者旧的 site-audit 任务往同一张表里写过东西。写之前再看一眼，变了就停手。
+  //    ⚠️ 这只是把窗口收窄，**不是**原子性：真正的保证必须由 store 在
+  //    同一个事务 / 条件写里跟插入一起做（见 `CanonicalInventoryStore` 契约）。
+  let recheck: number
+  try {
+    recheck = await deps.store.countExistingPages(plan.clientId)
+  } catch (err) {
+    return buildAudit({
+      plan,
+      accepted,
+      status: 'rejected',
+      blockers: [
+        {
+          code: 'inventory_count_unavailable',
+          message: `写入前复查台账行数失败，不能确认它仍然是空的：${err instanceof Error ? err.message : String(err)}`,
+        },
+      ],
+      failures: [],
+      written: [],
+      touched: false,
+    })
+  }
+  if (recheck !== 0) {
+    return buildAudit({
+      plan,
+      accepted,
+      status: 'rejected',
+      blockers: [
+        {
+          code: 'inventory_changed_during_crawl',
+          message:
+            `抓取期间台账从 0 行变成了 ${recheck} 行 —— 有别的东西在往同一个租户写。` +
+            '这次不写，先弄清那些行是谁写的。',
+        },
+      ],
+      failures: [],
+      written: [],
+      touched: false,
+    })
+  }
+
   let written: readonly string[]
   try {
-    written = await deps.store.writeAcceptedPages({ clientId: plan.clientId, pages: records })
+    written = await deps.store.writeAcceptedPages({
+      clientId: plan.clientId,
+      pages: records,
+      // 🔴 这个标记不是给日志看的：实现方**必须**在同一个事务 / 条件写里
+      //    重新确认台账为空，否则两份不同的计划可以各自对账通过、
+      //    最后台账是两份的并集 —— 那已经不是任何一份被批准的清单。
+      requireEmptyInventory: true,
+    })
   } catch (err) {
     return buildAudit({
       plan,

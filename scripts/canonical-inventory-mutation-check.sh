@@ -113,9 +113,9 @@ check "查询参数不排序（顺序不同就多出一条候选）" "$RULES" \
   "  const sorted = [...kept].sort((a, b) => (a[0] === b[0] ? compare(a[1], b[1]) : compare(a[0], b[0])))" \
   "  const sorted = [...kept]"
 
-check "canonical 幂等自检恒真（手改的 URL 就能蒙混过关）" "$RULES" \
-  "  return result.ok && result.canonicalUrl === url" \
-  "  return true"
+check "推导退化成「只要能归一就行」（换成另一页也认）" "$RULES" \
+  "  return result.ok ? result.canonicalUrl : null" \
+  "  return result.ok ? result.canonicalUrl : originalUrl"
 
 # ——— 计划 ———
 check "🔴 合规候选直接给 accepted（回到「发现即接受」）" "$PLAN" \
@@ -155,6 +155,26 @@ check "哈希不覆盖复核签名" "$PLAN" \
     }," \
   "    review: null,"
 
+check "🔴 盖章前不验来料（替任意输入重新背书）" "$PLAN" \
+  "  assertPlanIntact(plan)" \
+  "  void assertPlanIntact"
+
+check "🔴 只验哈希版本、不验候选能否从原始 URL 推导出来" "$PLAN" \
+  "    if (candidate.canonicalUrl !== derived) {" \
+  "    if (false) {"
+
+check "盖章前不验计划哈希" "$PLAN" \
+  "  if (!verifyPlanHash(plan)) {
+    throw new InventoryPlanError('plan_hash_mismatch'" \
+  "  if (false) {
+    throw new InventoryPlanError('plan_hash_mismatch'"
+
+check "盖章前不验规则版本（旧计划被悄悄升级）" "$PLAN" \
+  "  if (plan.normalizationRuleVersion !== NORMALIZATION_RULE_VERSION) {
+    throw new InventoryPlanError(" \
+  "  if (false) {
+    throw new InventoryPlanError("
+
 check "复核不要求署名" "$PLAN" \
   "  if (input.review.reviewedBy.trim().length === 0) {" \
   "  if (false) {"
@@ -188,9 +208,17 @@ check "🔴 带 pending 的计划也放行（没判过当成不要）" "$ACT" \
   "  if (pending.length > 0) {" \
   "  if (false) {"
 
-check "🔴 被接受的 URL 不再复核归一 / 主机（手改的能进台账）" "$ACT" \
-  "    if (!isCanonicalForBoundary(url, { approvedHosts })) {" \
+check "🔴 被接受的 URL 不再按原始 URL 重新推导（手改的能进台账）" "$ACT" \
+  "    if (derived === null || derived !== url) {" \
   "    if (false) {"
+
+check "🔴 写入前不复查台账是否仍为空（抓取那几分钟里的并发写就漏了）" "$ACT" \
+  "  if (recheck !== 0) {" \
+  "  if (false) {"
+
+check "🔴 不把「必须仍为空」的要求传给 store（实现方无从在事务里再确认）" "$ACT" \
+  "      requireEmptyInventory: true," \
+  "      requireEmptyInventory: false,"
 
 check "被接受集合里的重复不拦" "$ACT" \
   "    if (seen.has(url)) {" \
@@ -256,7 +284,7 @@ check "显式给的上限比清单还小也照跑（截断后跑出来的不是�
 
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 38 道闸各自单独确认会响"
+  echo "✅ 全部 45 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"

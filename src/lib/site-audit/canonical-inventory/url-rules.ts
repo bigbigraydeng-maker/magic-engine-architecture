@@ -169,14 +169,19 @@ export function canonicaliseUrl(raw: string, boundary: Pick<HostBoundary, 'appro
 }
 
 /**
- * canonical URL 是否已经是自己的归一结果（幂等自检）。
+ * 从原始 URL 重新推导 canonical URL；推不出来就是 `null`。
  *
- * 🔴 复核的人可以手改 canonical URL，激活闸必须能发现改出来的串不符合规则版本 ——
- *    否则「版本化的归一」只是生成时的一句话，批准环节可以绕过去。
+ * 🔴 计划与激活两处都拿它**重算一遍**，再跟计划里记着的 canonical 逐字比对。
+ *    只验「这个串本身是不是规范的」不够 —— 把某条候选的 canonical 从 `/a` 改成
+ *    同一主机下的 `/hacked`，那个串自己完全规范，但它已经不是这条候选推导出来的东西了；
+ *    照批就会抓取并写入一个**没有人复核过**的页面。
  */
-export function isCanonicalForBoundary(url: string, boundary: Pick<HostBoundary, 'approvedHosts'>): boolean {
-  const result = canonicaliseUrl(url, boundary)
-  return result.ok && result.canonicalUrl === url
+export function deriveCanonicalUrl(
+  originalUrl: string,
+  boundary: Pick<HostBoundary, 'approvedHosts'>,
+): string | null {
+  const result = canonicaliseUrl(originalUrl, boundary)
+  return result.ok ? result.canonicalUrl : null
 }
 
 // ---------------------------------------------------------------------------

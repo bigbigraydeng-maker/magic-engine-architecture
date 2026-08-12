@@ -40,7 +40,7 @@ export {
   InventoryHostBoundaryError,
   canonicaliseUrl,
   isApprovedHost,
-  isCanonicalForBoundary,
+  deriveCanonicalUrl,
   normaliseApprovedHosts,
   type CanonicalisationResult,
 } from './url-rules'

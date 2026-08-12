@@ -22,7 +22,7 @@ import {
   type RejectionReasonCode,
   type ReviewedInventoryPlan,
 } from './types'
-import { canonicaliseUrl, normaliseApprovedHosts } from './url-rules'
+import { canonicaliseUrl, deriveCanonicalUrl, normaliseApprovedHosts } from './url-rules'
 
 export class InventoryPlanError extends Error {
   readonly code: string
@@ -127,6 +127,12 @@ export function applyReviewDecisions(
   plan: CanonicalInventoryPlan,
   input: ApplyReviewInput,
 ): ReviewedInventoryPlan {
+  // 🔴 先验来料，再盖章。计划会以文件 / 界面形式在外面转一圈再回来，
+  //    这里如果不验就直接 finalisePlan()，等于**替任意输入重新背书**：
+  //    把某条候选的 canonical 从 /a 改成 /hacked 再批准，出来的是一份哈希完全自洽的计划，
+  //    激活闸只会确认 /hacked 本身规范 —— 于是抓取并写入一个没人复核过的页面。
+  //    旧规则版本生成的计划同理，不验就会被悄悄「升级」成当前规则。
+  assertPlanIntact(plan)
   if (input.review.reviewedBy.trim().length === 0) {
     throw new InventoryPlanError('missing_reviewer', '复核必须署名 —— 「谁批的」是这份计划唯一的授权凭据')
   }
@@ -192,6 +198,44 @@ export function computePlanHash(plan: Omit<CanonicalInventoryPlan, 'planHash'>):
     },
   }
   return createHash('sha256').update(stableStringify(payload)).digest('hex')
+}
+
+/**
+ * 计划是否「还是它自己」：版本对得上、哈希自洽、且每条候选的 canonical 都能从
+ * 它的原始 URL 按当前规则**重新推导出来**。不满足直接抛。
+ *
+ * 🔴 三条缺一不可：
+ *    - 只验哈希：拿旧规则版本生成的计划会被当前代码照单全收；
+ *    - 只验版本：内容改过照样过；
+ *    - 只验前两条：改 canonical 的同时重算哈希就能绕过去 —— 推导校验才是那道真闸。
+ */
+export function assertPlanIntact(plan: CanonicalInventoryPlan): void {
+  if (plan.contractVersion !== INVENTORY_PLAN_CONTRACT_VERSION) {
+    throw new InventoryPlanError(
+      'contract_version_mismatch',
+      `计划契约版本是 ${plan.contractVersion}，当前代码是 ${INVENTORY_PLAN_CONTRACT_VERSION} —— 重新生成，别在旧结构上盖新章`,
+    )
+  }
+  if (plan.normalizationRuleVersion !== NORMALIZATION_RULE_VERSION) {
+    throw new InventoryPlanError(
+      'rule_version_mismatch',
+      `计划按 ${plan.normalizationRuleVersion} 归一，当前代码是 ${NORMALIZATION_RULE_VERSION} —— 规则变了必须重新生成并重新复核`,
+    )
+  }
+  if (!verifyPlanHash(plan)) {
+    throw new InventoryPlanError('plan_hash_mismatch', '计划内容与它自带的哈希对不上 —— 在外面被改过，不许盖章')
+  }
+  const approvedHosts = normaliseApprovedHosts(plan.boundary.approvedHosts)
+  for (const candidate of plan.candidates) {
+    const derived = deriveCanonicalUrl(candidate.originalUrl, { approvedHosts })
+    if (candidate.canonicalUrl !== derived) {
+      throw new InventoryPlanError(
+        'candidate_not_derivable',
+        `候选 ${candidate.originalUrl} 记着的 canonical 是 ${candidate.canonicalUrl ?? 'null'}，` +
+          `按当前规则重新推导得到 ${derived ?? 'null'} —— 对不上就是被改过`,
+      )
+    }
+  }
 }
 
 /** 计划自带的哈希是否与内容一致（篡改检测）。 */

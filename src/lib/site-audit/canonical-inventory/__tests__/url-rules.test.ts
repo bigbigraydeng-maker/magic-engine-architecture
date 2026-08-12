@@ -13,7 +13,7 @@ import {
   InventoryHostBoundaryError,
   canonicaliseUrl,
   isApprovedHost,
-  isCanonicalForBoundary,
+  deriveCanonicalUrl,
   normaliseApprovedHosts,
 } from '../url-rules'
 
@@ -168,12 +168,19 @@ describe('幂等性（canonical 再跑一次还是自己）', () => {
     const once = canonical(url)
     expect(once).not.toBeNull()
     expect(canonical(once as string)).toBe(once)
-    expect(isCanonicalForBoundary(once as string, BOUNDARY)).toBe(true)
+    expect(deriveCanonicalUrl(once as string, BOUNDARY)).toBe(once)
   })
 
-  it('未归一的串不算 canonical —— 复核时手改的 URL 会被这道自检抓住', () => {
-    expect(isCanonicalForBoundary('https://example.com/a/', BOUNDARY)).toBe(false)
-    expect(isCanonicalForBoundary('https://example.com/a#x', BOUNDARY)).toBe(false)
-    expect(isCanonicalForBoundary('http://example.com/a', BOUNDARY)).toBe(false)
+  it('推导：能推就给 canonical，推不出来给 null（不给「差不多」的串）', () => {
+    expect(deriveCanonicalUrl('https://example.com/a/', BOUNDARY)).toBe('https://example.com/a')
+    expect(deriveCanonicalUrl('https://example.com/a#x', BOUNDARY)).toBe('https://example.com/a')
+    expect(deriveCanonicalUrl('http://example.com/a', BOUNDARY)).toBeNull()
+    expect(deriveCanonicalUrl('https://www.example.com/a', BOUNDARY)).toBeNull()
+  })
+
+  it('🔴 推导认的是「这一条原始 URL 变出来的东西」，不是「这个串规不规范」', () => {
+    // /hacked 自己完全规范，但它不是 /a 推出来的 —— 只验规范性拦不住换页面。
+    expect(deriveCanonicalUrl('https://example.com/a', BOUNDARY)).not.toBe('https://example.com/hacked')
+    expect(canonical('https://example.com/hacked')).toBe('https://example.com/hacked')
   })
 })
