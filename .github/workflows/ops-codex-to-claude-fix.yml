@@ -94,6 +94,23 @@ jobs:
       # most 3 times per PR (enforced by plan.mjs / handle-review.mjs before
       # this step is reached), and only with the aggregated Codex findings
       # as its prompt.
+      # Codex finding (PR #943, P2): "did the head move?" is only evidence that
+      # THIS round pushed something if the baseline was taken immediately
+      # before this round ran. The review event's sha can be minutes old, and
+      # anyone — a human, another automation — pushing in that window would
+      # have been credited to Claude, consuming one of the three rounds for
+      # work it never did.
+      #
+      # Read the baseline here, one step before the action, so the comparison
+      # in mark-fix-outcome.mjs brackets exactly this round.
+      - name: Record the branch head before the fix round
+        id: baseline
+        if: steps.plan.outputs.action == 'dispatch-fix'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node tools/ops-review-loop/src/read-head.mjs
+
       - name: Invoke Claude to fix Codex findings
         id: claude
         if: steps.plan.outputs.action == 'dispatch-fix'
@@ -119,4 +136,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ROUND: ${{ steps.plan.outputs.round }}
           OUTCOME: ${{ steps.claude.outcome }}
+          # Taken one step before the action ran, so "the head moved" means
+          # this round moved it — see read-head.mjs.
+          HEAD_BEFORE: ${{ steps.baseline.outputs.head_before }}
         run: node tools/ops-review-loop/src/mark-fix-outcome.mjs

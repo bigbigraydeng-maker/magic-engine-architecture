@@ -44,6 +44,7 @@ describe('mark-fix-outcome', () => {
         GITHUB_EVENT_PATH: eventPath,
         ROUND: '1',
         OUTCOME: 'success',
+        HEAD_BEFORE: 'a'.repeat(40),
       },
       () => import('../src/mark-fix-outcome.mjs')
     )
@@ -135,6 +136,7 @@ describe('mark-fix-outcome: a round that pushed nothing', () => {
         GITHUB_EVENT_PATH: eventPath,
         ROUND: '1',
         OUTCOME: 'success',
+        HEAD_BEFORE: 'b'.repeat(40),
       },
       () => import('../src/mark-fix-outcome.mjs')
     )
@@ -142,5 +144,76 @@ describe('mark-fix-outcome: a round that pushed nothing', () => {
     const [, , , , body] = createIssueComment.mock.calls[0]
     expect(body).toContain('brandnew11')
     expect(body).toContain('stage=fix-dispatched')
+  })
+})
+
+describe('mark-fix-outcome: the baseline must bracket this round', () => {
+  let dir
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ops-loop-baseline-'))
+    createIssueComment.mockClear()
+    getPullRequest.mockReset()
+    delete process.env.HEAD_BEFORE
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+    delete process.env.HEAD_BEFORE
+    vi.resetModules()
+  })
+
+  const SHA_BEFORE = 'c'.repeat(40)
+
+  it('does not claim a push when someone else moved the head after the review landed', async () => {
+    // Codex finding (PR #943, P2). The review event's sha can be minutes old.
+    // Comparing against it means a commit pushed by a human, another
+    // automation, or a second window on the same branch reads as "Claude fixed
+    // it" — claimed in a comment and charged against the 3-round budget.
+    //
+    // Here the review event is stale (its sha is long gone) but the head has
+    // NOT moved since this round started, so nothing was pushed by this round.
+    const eventPath = join(dir, 'event.json')
+    writeFileSync(eventPath, JSON.stringify({ pull_request: { number: 943, head: { sha: 'staleevent' } } }))
+    getPullRequest.mockResolvedValue({ head: { sha: SHA_BEFORE } })
+
+    await withEnv(
+      {
+        GITHUB_TOKEN: 'tok',
+        GITHUB_REPOSITORY: 'bigbigraydeng-maker/magic-engine',
+        GITHUB_EVENT_PATH: eventPath,
+        ROUND: '1',
+        OUTCOME: 'success',
+        HEAD_BEFORE: SHA_BEFORE,
+      },
+      () => import('../src/mark-fix-outcome.mjs')
+    )
+
+    const [, , , , body] = createIssueComment.mock.calls[0]
+    expect(body).toContain('pushed no commit')
+    expect(body).not.toContain('ops-codex-loop:stage=fix-dispatched')
+  })
+
+  it('reports no push when the baseline is missing, rather than guessing', async () => {
+    // If the baseline step was skipped or a future edit drops the env var, the
+    // safe reading is "nothing was pushed". Over-reporting is the exact failure
+    // this file exists to stop.
+    const eventPath = join(dir, 'event.json')
+    writeFileSync(eventPath, JSON.stringify({ pull_request: { number: 943, head: { sha: 'whatever00' } } }))
+    getPullRequest.mockResolvedValue({ head: { sha: 'movedalot1' } })
+
+    await withEnv(
+      {
+        GITHUB_TOKEN: 'tok',
+        GITHUB_REPOSITORY: 'bigbigraydeng-maker/magic-engine',
+        GITHUB_EVENT_PATH: eventPath,
+        ROUND: '1',
+        OUTCOME: 'success',
+      },
+      () => import('../src/mark-fix-outcome.mjs')
+    )
+
+    const [, , , , body] = createIssueComment.mock.calls[0]
+    expect(body).toContain('pushed no commit')
   })
 })

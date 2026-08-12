@@ -35,12 +35,29 @@ const outcome = process.env.OUTCOME
 // The usual cause is that the findings sit in files the dispatch prompt
 // forbids Claude from editing (`.github/workflows/**`, `tools/ai-orchestrator/**`).
 //
-// A step's exit code is not evidence that a commit exists — only the head sha
-// is. Those three rounds also consumed the entire 3-round budget, so the loop
-// then declared NEEDS HUMAN REVIEW ("3 rounds without a clean review") about
-// work it had never actually attempted.
+// A step's exit code is not evidence that a commit exists. Those three rounds
+// also consumed the entire 3-round budget, so the loop then declared NEEDS
+// HUMAN REVIEW ("3 rounds without a clean review") about work it had never
+// actually attempted.
+//
+// Codex finding (PR #943, P2) — the first version of this fix compared against
+// the sha in the review event, which is a stale baseline. Anything pushed
+// between the review landing and this step (a human, another automation, a
+// second window on the branch) would have been credited to Claude and charged
+// against the budget. That is the same error as trusting the exit code,
+// pointing the other way: neither says WHO moved the head.
+//
+// `HEAD_BEFORE` is read one step before claude-code-action runs (read-head.mjs),
+// so this comparison brackets exactly this round. If it is missing — the step
+// was skipped, or a future edit dropped it — fall back to reporting no push
+// rather than guessing: over-reporting is the failure this file exists to stop.
+const headBefore = process.env.HEAD_BEFORE
 const headNow = (await getPullRequest(token, owner, repo, pr))?.head?.sha
-const pushedSomething = typeof headNow === 'string' && headNow !== sha
+const pushedSomething =
+  typeof headBefore === 'string' &&
+  /^[0-9a-f]{40}$/.test(headBefore) &&
+  typeof headNow === 'string' &&
+  headNow !== headBefore
 
 if (outcome === 'success' && pushedSomething) {
   const marker = buildMarker({ stage: 'fix-dispatched', pr, sha, round })
