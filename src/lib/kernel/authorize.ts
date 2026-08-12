@@ -24,6 +24,7 @@ import type {
 } from './types'
 import type { KernelDeps } from './deps'
 import { validateAgainstSchema } from './registry'
+import { outwardBlockReason } from './outward-authorization'
 import {
   getActivePolicy,
   getDecision,
@@ -71,6 +72,24 @@ function snapshotOf(
           reversible: definition.reversible,
           capability: definition.capability,
           required_tier: definition.requiredCapabilityTier,
+          // 🔴 对外动作的**授权依据**必须进快照，否则 append-only 的决策记录
+          //    说不清「这次凭什么允许它对外写」—— 而契约后来改过之后，
+          //    再回头看就只剩一个 side_effect: 'outward'，等于没有依据。
+          //    非对外动作是 null（它们本来就没有这份依据）。
+          outward_authorization: definition.outwardAuthorization
+            ? {
+                declared_in: definition.outwardAuthorization.declaredIn,
+                requires_human_approval: definition.outwardAuthorization.requiresHumanApproval,
+                rollback: definition.outwardAuthorization.rollback,
+              }
+            : null,
+          // 决定「收费步骤结果未知时能不能自动重试」—— 复盘时必须看得见当时声明的是什么
+          provider_idempotency: definition.providerIdempotency,
+          // 每步成本上界。🔴 只取这一个字段，**不放整个 costModel** ——
+          //    里面的 estimate 是函数，JSON 存不住（会变成 undefined 被悄悄丢掉）。
+          step_ceiling_usd: definition.costModel.stepCeilingUsd
+            ? { ...definition.costModel.stepCeilingUsd }
+            : null,
         }
       : null,
   }
@@ -246,13 +265,12 @@ async function preflight(deps: KernelDeps, run: ActionRun, now: Date): Promise<P
     )
   }
 
-  // ⑤ 🔴 v1 硬闸：任何对外副作用一律拒绝，不看政策、不看角色、**人也批不了**。
-  if (definition.sideEffect === 'outward') {
-    return bad(
-      'outward_side_effect_blocked',
-      '这个动作会作用到客户自己的资产之外，当前版本的执行内核一律不放行 —— 这条不是「等你点头」，是根本不做',
-      definition,
-    )
+  // ⑤ 🔴 对外副作用：**默认拒绝**，除非这个动作逐条说清了它凭什么可以对外写。
+  //    判据在 outward-authorization.ts，Gateway 执行前会拿同一个判据再判一次。
+  //    没有全局开关、没有环境变量旁路 —— 放宽的唯一方式是给某个动作补一份完整声明。
+  const outwardBlocked = outwardBlockReason(definition)
+  if (outwardBlocked) {
+    return bad('outward_side_effect_blocked', outwardBlocked, definition)
   }
 
   // ⑥ 客户政策。**查不到 = 拒绝。**
@@ -277,6 +295,27 @@ async function preflight(deps: KernelDeps, run: ActionRun, now: Date): Promise<P
     return bad(
       'policy_deny',
       `这个客户明确关掉了「${definition.title}」的自动执行`,
+      definition,
+      policy,
+      costEstimate,
+    )
+  }
+
+  // ⑥b 🔴 对外动作**永远**要人点头 —— `auto_approve` 不足以放行。
+  //     这里拒绝而不是"悄悄升级成要审批"：把客户明确配成自动的规则
+  //     在背后改判成人工，会让设置页显示的和实际发生的两回事。
+  //     配错了就说清楚该怎么配，而不是替他兜着。
+  //
+  //     🔴 用的是**专用**拒绝码，不是结构性的 outward_side_effect_blocked。
+  //     后者不可恢复（动作定义本身不合规，改条件救不了）；而这一条是环境问题，
+  //     必须可恢复 —— 否则拒绝文案让人去改规则，人改完了还是做不了：
+  //     幂等键会让同一件事命中旧的 denied run，而不可恢复的码连
+  //     recoverDeniedRun 都救不回来，等于把这个动作**永久**锁死。
+  if (definition.sideEffect === 'outward' && policy.mode === 'auto_approve') {
+    return bad(
+      'outward_requires_human_policy',
+      `「${definition.title}」会作用到客户自己的资产之外，这类动作一律要人点头 —— ` +
+        '这个客户的规则却配成了「自动执行」。先把规则改成「要审批」，在那之前一律不做',
       definition,
       policy,
       costEstimate,

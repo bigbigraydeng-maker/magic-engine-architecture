@@ -1,43 +1,19 @@
 /**
- * GoogleAdsPanel — settings-page connection tile (Phase 18.B.3)
+ * GoogleAdsPanel — Google Ads customer ID (PR5 rewrite)
  *
- * Pins the four mutually-exclusive states the panel must surface so the
- * FDE always sees an unambiguous "what should I do next" signal:
- *
- *   loading            → spinner
- *   error              → red bubble + retry button
- *   disconnected       → grey card + 'Connect' CTA  (data-status=disconnected)
- *   needs_reconnect    → amber card + 'Reconnect'   (data-status=revoked|expired|error)
- *   connected          → green card + account_id + last-synced relative + manage link  (data-status=active)
- *
- * Visual badges + tailwind classes are not asserted (would break on minor
- * design tweaks); state pinning via data-testid + data-status keeps the
- * contract stable.
+ * The panel used to show a fake "connect via OAuth" status that could never
+ * become true (nothing ever writes provider='google_ads' to
+ * platform_oauth_connections — see docs/specs/2026-08-11-onboarding-
+ * integrations-unify-v1.md §2.3). It's now a plain, always-truthful editable
+ * field for clients.google_ads_customer_id, backed by
+ * /api/clients/[id]/google-ads-customer-id.
  */
 import React from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { GoogleAdsPanel } from '../GoogleAdsPanel'
 
 const CLIENT_ID = 'client-uuid-panel-test'
-
-const ACTIVE_CONNECTION = {
-  id: 'conn-1',
-  provider: 'google_ads',
-  display_name: 'CTS NZ Ads',
-  account_id: '1234567890',
-  location_name: null,
-  status: 'active',
-  scopes: [],
-  last_synced_at: new Date(Date.now() - 5 * 60_000).toISOString(),
-  error_message: null,
-}
-
-const REVOKED_CONNECTION = {
-  ...ACTIVE_CONNECTION,
-  status: 'revoked',
-  error_message: 'refresh_token revoked by user',
-}
 
 function mockFetchOnce(payload: unknown, opts: { ok?: boolean; status?: number } = {}) {
   global.fetch = vi.fn().mockResolvedValue({
@@ -56,68 +32,91 @@ afterEach(() => {
 })
 
 describe('GoogleAdsPanel', () => {
-  it('shows a loading spinner before the fetch resolves', async () => {
-    // Never resolve, so the panel stays in loading state for the assertion.
-    global.fetch = vi.fn().mockReturnValue(new Promise(() => {})) as unknown as typeof fetch
-    render(<GoogleAdsPanel clientId={CLIENT_ID} />)
-    expect(screen.getByTestId('google-ads-panel-loading')).toBeInTheDocument()
-  })
-
-  it('renders the disconnected card when the API returns connection: null', async () => {
-    mockFetchOnce({ connection: null })
+  it('fetches from the customer-id endpoint (not the old fake platform/google-ads status route)', async () => {
+    mockFetchOnce({ customer_id: null, source: 'none' })
     render(<GoogleAdsPanel clientId={CLIENT_ID} />)
     await waitFor(() => {
-      const card = screen.getByTestId('google-ads-panel-disconnected')
-      expect(card).toBeInTheDocument()
-      expect(card).toHaveAttribute('data-status', 'disconnected')
+      expect(global.fetch).toHaveBeenCalledWith(`/api/clients/${CLIENT_ID}/google-ads-customer-id`)
     })
-    // Disconnected card must offer a connect CTA that points at the legacy
-    // connectors route — pin the href so a future refactor doesn't dead-link it.
-    const connectLink = screen.getByRole('link', { name: /连接 Google Ads/i })
-    expect(connectLink).toHaveAttribute(
-      'href',
-      `/dashboard/clients/${CLIENT_ID}/connectors/google-ads`,
+  })
+
+  it('pre-fills the input with the resolved customer_id and shows its source', async () => {
+    mockFetchOnce({ customer_id: '1234567890', source: 'clients_table' })
+    render(<GoogleAdsPanel clientId={CLIENT_ID} />)
+
+    const input = await screen.findByPlaceholderText(/1234567890/)
+    expect(input).toHaveValue('1234567890')
+    expect(screen.getByText('手动设置')).toBeInTheDocument()
+  })
+
+  it('shows an empty input and "未设置" when no source has a value', async () => {
+    mockFetchOnce({ customer_id: null, source: 'none' })
+    render(<GoogleAdsPanel clientId={CLIENT_ID} />)
+
+    await waitFor(() => expect(screen.getByText('未设置')).toBeInTheDocument())
+    expect(screen.getByPlaceholderText(/1234567890/)).toHaveValue('')
+  })
+
+  it('flags an inherited (non-manual) source distinctly, so FDE knows nobody confirmed it', async () => {
+    mockFetchOnce({ customer_id: '9998887770', source: 'platform_oauth_connections' })
+    render(<GoogleAdsPanel clientId={CLIENT_ID} />)
+
+    await waitFor(() => {
+      expect(screen.getByText(/来自 OAuth 连接/)).toBeInTheDocument()
+    })
+  })
+
+  it('PATCHes the new value on save and reloads', async () => {
+    mockFetchOnce({ customer_id: null, source: 'none' })
+    render(<GoogleAdsPanel clientId={CLIENT_ID} />)
+
+    const input = await screen.findByPlaceholderText(/1234567890/)
+    fireEvent.change(input, { target: { value: '1234567890' } })
+
+    const patchSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 200, json: async () => ({ success: true, customer_id: '1234567890' }),
+    })
+    const reloadSpy = vi.fn().mockResolvedValue({
+      ok: true, status: 200, json: async () => ({ customer_id: '1234567890', source: 'clients_table' }),
+    })
+    global.fetch = vi.fn()
+      .mockImplementationOnce(patchSpy)
+      .mockImplementationOnce(reloadSpy) as unknown as typeof fetch
+
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }))
+
+    await waitFor(() => expect(screen.getByText('✓ 已保存')).toBeInTheDocument())
+    expect(patchSpy).toHaveBeenCalledWith(
+      `/api/clients/${CLIENT_ID}/google-ads-customer-id`,
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ customer_id: '1234567890' }),
+      }),
     )
   })
 
-  it('renders the connected card with account_id when status=active', async () => {
-    mockFetchOnce({ connection: ACTIVE_CONNECTION })
+  it('shows the server error message when the save fails', async () => {
+    mockFetchOnce({ customer_id: null, source: 'none' })
     render(<GoogleAdsPanel clientId={CLIENT_ID} />)
+
+    const input = await screen.findByPlaceholderText(/1234567890/)
+    fireEvent.change(input, { target: { value: '123' } })
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false, status: 400, json: async () => ({ error: 'customer_id must be 10 digits' }),
+    }) as unknown as typeof fetch
+
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }))
+
     await waitFor(() => {
-      const card = screen.getByTestId('google-ads-panel-connected')
-      expect(card).toBeInTheDocument()
-      expect(card).toHaveAttribute('data-status', 'active')
+      expect(screen.getByText('customer_id must be 10 digits')).toBeInTheDocument()
     })
-    expect(screen.getByText(ACTIVE_CONNECTION.account_id)).toBeInTheDocument()
-    expect(screen.getByText(/CTS NZ Ads/)).toBeInTheDocument()
   })
 
-  it('renders the needs_reconnect card for non-active statuses and surfaces the error_message', async () => {
-    mockFetchOnce({ connection: REVOKED_CONNECTION })
+  it('no longer renders any link to the retired /connectors/google-ads page', async () => {
+    mockFetchOnce({ customer_id: '1234567890', source: 'clients_table' })
     render(<GoogleAdsPanel clientId={CLIENT_ID} />)
-    await waitFor(() => {
-      const card = screen.getByTestId('google-ads-panel-needs-reconnect')
-      expect(card).toBeInTheDocument()
-      expect(card).toHaveAttribute('data-status', 'revoked')
-    })
-    expect(screen.getByText(/refresh_token revoked by user/)).toBeInTheDocument()
-  })
-
-  it('renders the error card with the HTTP status when the fetch fails', async () => {
-    mockFetchOnce({ error: 'forbidden' }, { ok: false, status: 403 })
-    render(<GoogleAdsPanel clientId={CLIENT_ID} />)
-    await waitFor(() => {
-      expect(screen.getByTestId('google-ads-panel-error')).toBeInTheDocument()
-    })
-    expect(screen.getByText(/HTTP 403/)).toBeInTheDocument()
-  })
-
-  it('fetches from the per-client endpoint exactly once on mount', async () => {
-    mockFetchOnce({ connection: null })
-    render(<GoogleAdsPanel clientId={CLIENT_ID} />)
-    await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(`/api/clients/${CLIENT_ID}/platform/google-ads`)
-    })
-    expect(global.fetch).toHaveBeenCalledTimes(1)
+    await waitFor(() => screen.getByPlaceholderText(/1234567890/))
+    expect(screen.queryByRole('link')).not.toBeInTheDocument()
   })
 })

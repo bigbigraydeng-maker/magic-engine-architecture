@@ -153,7 +153,7 @@ export function Ga4TrendSection({ clientId }: { clientId: string }) {
           </p>
         </div>
         <Link
-          href={`/dashboard/clients/${clientId}/connectors`}
+          href={`/dashboard/clients/${clientId}/settings?tab=connect`}
           className="shrink-0 rounded-lg border border-black/10 px-3 py-1.5 text-xs font-black text-me-charcoal/60 transition-colors hover:bg-me-ivory"
         >
           前往连接 →
