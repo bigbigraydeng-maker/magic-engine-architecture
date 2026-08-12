@@ -988,7 +988,7 @@ Magic Engine 2.0 每接一条新的自动执行都会遇到一次同形状的问
 
 | 端点 | 定性 | 理由 |
 |---|---|---|
-| `memory-extractor` | ⏸ **不接，等 memory 语义定案** | v2 曾接上 `35 6 * * *`，v4 已回退。理由见 §16 补记 A-2：上游身份未修之前接调度，等于把一个未定案的语义固化进生产数据，且会关闭「记忆表还是空的、改语义零迁移成本」这个窗口 |
+| `memory-extractor` | ⏸ **不接，等 memory 语义定案** | v2 曾接上 `35 6 * * *`，v4 已回退。理由见 §16 补记 A-2：上游身份未修之前接调度，等于把一个未定案的语义固化进生产数据。<br>🔴 **2026-08-12 更正**：原来这里还写了第二条理由「会关闭『记忆表还是空的、改语义零迁移成本』这个窗口」—— **那个前提是错的，记忆表早就不空了**。生产库只读实查：`global_learned_lessons` **12 行** · `client_learned_preferences` **2 行** · `team_lessons` **193 行**。所以「零迁移成本」这个窗口**已经关了**，改语义要付迁移成本。**不接调度这个结论仍然成立**，但只剩第一条理由（语义未定案），不要再引用那个空表前提。 |
 | `flywheel-seo-weekly` | ⏸ **等 PM 拍板** | 能跑（`SeoContentAdapter` 的注释还写 SEMrush，实际 import 已是 `dataforseo/labs`），但每周对每个客户花 DataForSEO 的钱。**涉及花钱 = PM 的决策，不是我的** |
 | `admin-key-expiry` | ❌ **不要照原样接** | 它只 `console.warn`，邮件通道（P2）还没建。接上等于让告警死在日志里 —— 正是铁律 §3 明令禁止的。要接必须先给 `pm-todo/manual-items.ts` 加一个 kind 走今日待办 |
 | `factory-review-sweeper` | ✅ 已知有意退役 | Airtable 停用 |
