@@ -41,7 +41,7 @@
       qualified mention / recommendation / conditional rank 的判据（M1）未决因而**不可计算**，
       `direct_owned_page_citation` 记 `not_computable`（不是 0）。
       **未执行**：diagnosis · optimization action · 第二轮测量 · 页面台账补录 · Roman 网站修改。
-      ⚠️ Issue #883 **仍 OPEN**，关闭需 PM 另行明确授权
+      ⚠️ Issue #883 **仍 OPEN**，关闭需 Product Owner 另行明确授权
 - [ ] **WP09 / WP10** [#884](https://github.com/bigbigraydeng-maker/magic-engine/issues/884) / [#885](https://github.com/bigbigraydeng-maker/magic-engine/issues/885) 首次 1–3 页优化 → T+7/14/28 复测与学习（严格串行，**两项均未开工**）
 - [x] ~~**U11**~~ ✅ **已完成** —— `docs/STATE.md` 与本文件的 ME2 条目已补齐（本 PR）
 - [ ] **WP00 §15 其余未决项**（**U1–U10、U12**）仍**单独**以未决形态挂着，**任何 WP 不许把它们当既定假设**
