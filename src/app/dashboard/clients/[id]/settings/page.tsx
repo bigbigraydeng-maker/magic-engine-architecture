@@ -27,7 +27,14 @@ import { useParams, useSearchParams } from 'next/navigation'
 import { ClientStatusPanel } from './_components/ClientStatusPanel'
 import { GbpPanel } from './_components/GbpPanel'
 import { GbpLocationPanel } from './_components/GbpLocationPanel'
+import { GscPanel } from './_components/GscPanel'
+import { GscPropertyPanel } from './_components/GscPropertyPanel'
+import { Ga4Panel } from './_components/Ga4Panel'
+import { Ga4PropertyPanel } from './_components/Ga4PropertyPanel'
 import { GoogleAdsPanel } from './_components/GoogleAdsPanel'
+import { DataSnapshotPanel } from './_components/DataSnapshotPanel'
+import { OtherDataSourcesPanel } from './_components/OtherDataSourcesPanel'
+import { CmsPanel } from '../_components/CmsPanel'
 import { MailboxPanel } from './_components/MailboxPanel'
 import { AdStrategyPanel } from './_components/AdStrategyPanel'
 import { CompetitorDomainsPanel } from './_components/CompetitorDomainsPanel'
@@ -61,39 +68,6 @@ const ERROR_MESSAGES: Record<string, string> = {
   no_gbp_accounts:       '这个 Google 账号名下没有任何商家页 —— 十有八九是登错账号了，退出 Google 换客户老板的账号重来。',
 }
 
-/** 还在旧「Connectors」页面管理的连接器。 */
-const LEGACY_CONNECTORS = [
-  { anchor: 'gsc',      label: 'Google Search Console', icon: '🔍', hint: 'GSC 搜索表现 + Indexing API' },
-  { anchor: 'ga4',      label: 'Google Analytics 4',    icon: '📈', hint: '网站真实流量数据' },
-  { anchor: 'meta-ads', label: 'Facebook 主页',          icon: '📊', hint: 'Meta 广告库 + 公开粉丝数' },
-]
-
-function LegacyConnectors({ clientId }: { clientId: string }) {
-  return (
-    <>
-      <p className="mb-3 text-xs text-slate-500">
-        以下连接器在「Connectors」页面管理，后续会逐步迁移到本页。
-      </p>
-      <div className="space-y-2">
-        {LEGACY_CONNECTORS.map((p) => (
-          <Link
-            key={p.anchor}
-            href={`/dashboard/clients/${clientId}/connectors/${p.anchor}`}
-            className="group flex items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 transition hover:border-cyan-300 hover:bg-cyan-50"
-          >
-            <span>{p.icon}</span>
-            <div className="min-w-0 flex-1">
-              <div className="font-bold">{p.label}</div>
-              <div className="text-xs text-slate-500">{p.hint}</div>
-            </div>
-            <span className="text-cyan-600 opacity-0 transition group-hover:opacity-100">→</span>
-          </Link>
-        ))}
-      </div>
-    </>
-  )
-}
-
 /**
  * 当前这一组的内容。
  *
@@ -117,14 +91,29 @@ function TabBody({ tab, clientId }: { tab: SettingsTab; clientId: string }) {
           <SettingsSection icon="🏪" title="发到哪一家门店">
             <GbpLocationPanel clientId={clientId} />
           </SettingsSection>
+          <SettingsSection icon="🔎" title="Google Search Console">
+            <GscPanel clientId={clientId} />
+            <div className="mt-3"><GscPropertyPanel clientId={clientId} /></div>
+            <div className="mt-3"><DataSnapshotPanel anchor="gsc" clientId={clientId} /></div>
+          </SettingsSection>
+          <SettingsSection icon="📈" title="Google Analytics 4">
+            <Ga4Panel clientId={clientId} />
+            <div className="mt-3"><DataSnapshotPanel anchor="ga4" clientId={clientId} /></div>
+          </SettingsSection>
+          <SettingsSection icon="📊" title="同步哪一个 GA4 Property">
+            <Ga4PropertyPanel clientId={clientId} />
+          </SettingsSection>
           <SettingsSection icon="📢" title="Google Ads">
             <GoogleAdsPanel clientId={clientId} />
           </SettingsSection>
           <SettingsSection icon="🩺" title="广告健康监测">
             <AdStrategyPanel clientId={clientId} />
           </SettingsSection>
-          <SettingsSection icon="🔗" title="其他平台连接">
-            <LegacyConnectors clientId={clientId} />
+          <SettingsSection icon="🌐" title="网站连接（GitHub / WordPress / Shopify）">
+            <CmsPanel clientId={clientId} />
+          </SettingsSection>
+          <SettingsSection icon="🔗" title="其他数据来源">
+            <OtherDataSourcesPanel clientId={clientId} />
           </SettingsSection>
         </>
       )
@@ -215,6 +204,9 @@ export default function ClientSettingsPage() {
   const clientId = params.id
   const gbpStatus = searchParams.get('gbp')
   const gbpReason = searchParams.get('reason') ?? ''
+  // GSC/GA4 合并授权（/api/auth/google/callback）回跳带的是 ?oauth=，不是
+  // ?gbp=——PR5 复审发现这条错误提示之前直接消失了，补上一个通用版本。
+  const oauthStatus = searchParams.get('oauth')
 
   const errorMessage =
     gbpStatus === 'error' ? (ERROR_MESSAGES[gbpReason] ?? '连接过程中发生未知错误，请重试。') : null
@@ -269,6 +261,29 @@ export default function ClientSettingsPage() {
             <div>
               <p className="font-black text-red-800">连接失败</p>
               <p className="mt-0.5 text-sm text-red-700">{errorMessage}</p>
+            </div>
+          </div>
+        )}
+
+        {oauthStatus === 'success' && (
+          <div className="mt-5 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+            <span className="text-xl">✅</span>
+            <p className="font-black text-emerald-800">Google 账号已连接</p>
+          </div>
+        )}
+
+        {(oauthStatus === 'error' || oauthStatus === 'denied') && (
+          <div className="mt-5 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+            <span className="text-xl">❌</span>
+            <div>
+              <p className="font-black text-red-800">
+                {oauthStatus === 'denied' ? '授权被取消' : '连接失败'}
+              </p>
+              <p className="mt-0.5 text-sm text-red-700">
+                {oauthStatus === 'denied'
+                  ? '你在 Google 那边取消了授权，下面重新点一次「连接」就行。'
+                  : 'Google 那边没给我们通行证，请再试一次。'}
+              </p>
             </div>
           </div>
         )}

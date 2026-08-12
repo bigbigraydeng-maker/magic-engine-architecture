@@ -51,7 +51,11 @@ export function normalizeSelfServeTarget(clientId: string, requestedPath: string
   return clientHome
 }
 
-function buildBriefPath(clientId: string, nextPath: string, welcome: boolean): string {
+/**
+ * PR6（docs/specs/2026-08-11-onboarding-integrations-unify-v1.md）：正式激活
+ * 开关——新自助客户第一次登录，从这里落地，不再是旧的单页 /brief 表单。
+ */
+function buildOnboardingPath(clientId: string, nextPath: string, welcome: boolean): string {
   const params = new URLSearchParams()
   const clientHome = clientHomePath(clientId)
 
@@ -64,7 +68,7 @@ function buildBriefPath(clientId: string, nextPath: string, welcome: boolean): s
   }
 
   const query = params.toString()
-  return `/dashboard/clients/${clientId}/brief${query ? `?${query}` : ''}`
+  return `/dashboard/clients/${clientId}/onboarding${query ? `?${query}` : ''}`
 }
 
 export async function resolveSelfServeLanding(
@@ -75,12 +79,15 @@ export async function resolveSelfServeLanding(
   const nextPath = normalizeSelfServeTarget(clientId, requestedPath)
   const { data } = await supabaseAdmin
     .from('clients')
-    .select('brief_completed_at')
+    .select('onboarding_completed_at')
     .eq('id', clientId)
     .maybeSingle()
 
-  if (!data?.brief_completed_at) {
-    return buildBriefPath(clientId, nextPath, welcome)
+  // 门禁看向导自己的完成标记（onboarding_completed_at），不是 Step 1 的
+  // brief_completed_at——只填完 Step 1 但没走完整个向导的客户，应该被继续
+  // 送回向导续填，不能因为 Step 1 填过就当成"已经 onboard 完"放行。
+  if (!data?.onboarding_completed_at) {
+    return buildOnboardingPath(clientId, nextPath, welcome)
   }
 
   if (welcome && nextPath === clientHomePath(clientId)) {
