@@ -15,10 +15,11 @@
  * `plan.mjs` holds the actual decision logic and is unit-tested in isolation;
  * this file is the I/O glue around it.
  */
-import { appendFileSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { createIssueComment, listCheckRunsForRef, listIssueComments, listReviewComments } from './github.mjs'
 import { buildMarker, parseMarkers } from './markers.mjs'
 import { decideStage } from './plan.mjs'
+import { setOutput } from './output.mjs'
 import { buildFixPrompt } from './prompt.mjs'
 import { waitForRequiredCheck } from './poll.mjs'
 import { isActionable } from './severity.mjs'
@@ -86,10 +87,6 @@ const plan = decideStage({
   ciSuccess,
   maxRounds: MAX_ROUNDS,
 })
-
-function setOutput(name, value) {
-  appendFileSync(process.env.GITHUB_OUTPUT, `${name}<<__OPS_LOOP_EOF__\n${value}\n__OPS_LOOP_EOF__\n`)
-}
 
 switch (plan.action) {
   case 'skip': {
