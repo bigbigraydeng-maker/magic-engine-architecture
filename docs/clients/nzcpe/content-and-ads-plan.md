@@ -69,12 +69,18 @@ DataForSEO 查了新西兰市场真实搜索量，结论跟 brief 里"品牌向"
 | 阶段 | 目标(campaign objective) | 优化目标 |
 |---|---|---|
 | T-15~T-8周 | Awareness/Video Views | 便宜的曝光和素材测试，找出哪条素材停留时间长 |
-| T-8~T-4周 | Traffic / Conversions(如果 Pixel 装好) | 往 register-visitor.html 引流，优化目标=完成报名 |
+| T-8~T-4周 | Traffic / Conversions（Pixel 已装好，`Lead` 事件已在收） | 往 register-visitor.html 引流，优化目标=完成报名 |
 | T-4~T-1周 | Conversions | 加大预算，冲报名量，用阶段二跑出来的赢家素材 |
 | T-1周~开幕 | Conversions + Reach | 收尾冲量，同时保基础曝光 |
 
 ### 前置依赖（跟 client-brief.md 待办对齐，不重复记）
-- Meta Pixel：register-visitor.html 目前没有埋 Pixel，投 Conversions 目标前必须先装，否则广告没法优化到"谁报名了"
+- ~~Meta Pixel：register-visitor.html 目前没有埋 Pixel，投 Conversions 目标前必须先装~~
+  ✅ **2026-08-05 已装好，这条前置已解除。** Pixel `1109538797562911` 已装到**全站**，
+  三个报名表单（含 `register-visitor.html`）提交成功时触发 `Lead`（GA4 同步 `generate_lead`）。
+  详见 [client-brief.md](./client-brief.md)「追踪工具接线状态」。
+  **投 Conversions 之前要做的是「验证事件真的在收」，不是再装一次** ——
+  重复埋点会造成重复计数，把转化数直接做假。
+  验证方法：Meta 事件管理工具看 `Lead` 最近有没有进；或用 Meta Pixel Helper 实际提交一次表单。
 - 广告账户定案（NZCPE 自建 or Magic Engine 代投）
 
 ---

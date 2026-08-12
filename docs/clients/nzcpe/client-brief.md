@@ -57,7 +57,20 @@
 
 ## FDE 接手范围（2026-08-05 收窄）
 
-**网站**（Cloudflare Pages 上的 nzcpe.co.nz，内容更新/SEO/表单监控）+ **Facebook**（唯一在跑的社媒渠道），服务于 **11 月博览会 To C 推广**这一个目标。LinkedIn/Instagram/WeChat/小红书/TikTok 暂缓，B2B 展商/赞助商招募内容非本轮重点。
+**网站**（Cloudflare Pages 上的 nzcpe.co.nz，内容更新/SEO/表单监控）+ **Facebook**（唯一在跑的社媒渠道），服务于 **11 月博览会**。LinkedIn/Instagram/WeChat/小红书/TikTok 暂缓。
+
+### ⚠️ 推广方向：两条线目前不一致，**以本节为准**
+
+同一天（2026-08-05）先后有两个口径，谁最新一眼看不出来，所以在主档里定死：
+
+| 线 | 现行方向 | 依据 |
+|---|---|---|
+| **网站 SEO / 排产内容** | **B2B** —— 中国企业出海 / NZ 企业对华采购、供应链 | PM 2026-08-05 **后**改的口径，见 [seo-content-plan.md](./seo-content-plan.md) 开头「方向调整」。第一篇 To C 文章（Family Day）已上线不撤，后续按 B2B 排产 |
+| **广告 / Facebook 社媒** | **To C** —— 冲 15,000 周末公众访客 | [content-and-ads-plan.md](./content-and-ads-plan.md)，对应客户自己的公众访客目标 |
+
+**这不是笔误，但也没被明确批准成「就该这样」。** 待 PM 一句话定死（ROADMAP `NZCPE-1`）：
+是有意分开跑（SEO 抓 B2B 长尾、广告抓公众到场），还是广告也要一并转 B2B。
+**在 PM 定死之前，广告线按 To C 继续跑**，不要因为看到 SEO 转了 B2B 就自行改广告受众。
 
 ## 假新闻清理（2026-08-05，已上线）
 
@@ -91,9 +104,9 @@
 
 **部署方式**：Cloudflare wrangler + 专属 API token(`ME NZCPE Pages Deploy`，权限限定 Cloudflare Pages:Edit，账号 bigbigraydeng)，不用共享的全局 CLI 登录（本机多窗口并行时全局登录会被别的窗口切走，踩过坑）。
 
-## 待办（已回写 [docs/ROADMAP.md](../../ROADMAP.md)）
+## 待办（已回写 [docs/ROADMAP.md](../../ROADMAP.md) → 「近期待办 › NZCPE 2026」段，编号 NZCPE-1…5）
 
-1. 围绕 15,000 公众访客目标做网站+FB 的 To C 内容规划（周末文化/美食/亲子活动向，不是展商招募向）——见 [content-and-ads-plan.md](./content-and-ads-plan.md)
-2. GBP 建档，地址挂 NZICC（101 Hobson Street, Auckland CBD）——To C 推广也吃自然搜索流量
-3. 确认 `plan_tier`（现设 starter，无预算信号，PM 确认后再调）
-4. 广告账户挂谁（NZCPE 自建 vs Magic Engine `1018365291238494` 代投）——PM 待拍板
+1. **推广方向口径待 PM 一句话定死**（NZCPE-1）——见上面「推广方向」那节，SEO 已转 B2B、广告仍 To C
+2. GBP 建档，地址挂 NZICC（101 Hobson Street, Auckland CBD）——自然搜索流量（NZCPE-2）
+3. 确认 `plan_tier`（现设 starter，无预算信号，PM 确认后再调）（NZCPE-3）
+4. 广告账户挂谁（NZCPE 自建 vs Magic Engine `1018365291238494` 代投）——PM 待拍板（NZCPE-4）
