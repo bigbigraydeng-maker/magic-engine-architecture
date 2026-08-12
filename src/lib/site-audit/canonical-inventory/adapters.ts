@@ -23,11 +23,29 @@ export async function discoverCandidateUrls(domain: string): Promise<readonly st
   return discoverSitemapUrls(domain)
 }
 
-/** 抓取适配器：现有 `crawlPages`（限流 + 容错 + 反爬指纹识别）。 */
+/**
+ * 抓取适配器：现有 `crawlPages`（限流 + 容错 + 反爬指纹识别）。
+ *
+ * 🔴 上限必须按**这一次被接受的页面数**来给，不能吃 `crawlPages` 的默认 100
+ *    （`crawler.ts:411`、`:415` 会 `urls.slice(0, limit)`）。被接受清单超过 100 条时，
+ *    多出来的 URL 会连结果都没有，激活方只能看到「抓取器没返回这一条」——
+ *    整次激活在跑完 100 次真实网络请求之后失败，而且原因看着像抓取挂了，
+ *    实际上是配置把批准过的清单截断了。
+ *
+ * 显式传了一个更小的上限，就是配置本身有问题：**直接抛**，别让它退化成一堆看不懂的失败。
+ */
 export function createCrawlAdapter(
   opts?: CrawlOptions,
 ): (urls: readonly string[]) => Promise<readonly CrawlResult[]> {
-  return (urls) => crawlPages([...urls], opts)
+  return (urls) => {
+    if (opts?.limit !== undefined && opts.limit < urls.length) {
+      throw new Error(
+        `抓取上限 ${opts.limit} 小于被接受的页面数 ${urls.length} —— ` +
+          '被批准的是这一整份清单，截断之后跑出来的不是那份清单',
+      )
+    }
+    return crawlPages([...urls], { ...opts, limit: urls.length })
+  }
 }
 
 /**

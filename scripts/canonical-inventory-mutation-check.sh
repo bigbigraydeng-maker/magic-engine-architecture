@@ -17,6 +17,7 @@ SUITE="src/lib/site-audit/canonical-inventory"
 RULES="src/lib/site-audit/canonical-inventory/url-rules.ts"
 PLAN="src/lib/site-audit/canonical-inventory/plan.ts"
 ACT="src/lib/site-audit/canonical-inventory/activation.ts"
+ADAPTERS="src/lib/site-audit/canonical-inventory/adapters.ts"
 
 fail_count=0
 
@@ -55,7 +56,15 @@ check() {
   fi
 }
 
-echo "基线（未变异）应为 0 红：$(red_count)"
+# 🔴 基线必须严格为 0 红，否则整个判据是假的：
+#    只要有一条测试本来就红，后面每一次变异都会「有红」，36 道闸会一律显示会响，
+#    脚本还照样以 0 退出 —— 那正是这套验证要防的那种「看着全绿其实零覆盖」。
+baseline=$(red_count)
+if [ "$baseline" != "0" ]; then
+  echo "❌ 基线不是 0 红（实际：$baseline）—— 先把基线修绿，否则本脚本的结论没有意义"
+  exit 1
+fi
+echo "基线（未变异）：0 红 ✅"
 echo "───────────────────────────────────────────────"
 
 # ——— 主机边界 ———
@@ -236,9 +245,18 @@ check "写入抛错也报完成" "$ACT" \
         {
           code: 'write_failed',"
 
+# ——— 复用适配器 ———
+check "🔴 抓取上限吃 crawlPages 的默认 100（超过 100 的批准清单被截断）" "$ADAPTERS" \
+  "    return crawlPages([...urls], { ...opts, limit: urls.length })" \
+  "    return crawlPages([...urls], opts)"
+
+check "显式给的上限比清单还小也照跑（截断后跑出来的不是那份清单）" "$ADAPTERS" \
+  "    if (opts?.limit !== undefined && opts.limit < urls.length) {" \
+  "    if (false) {"
+
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 36 道闸各自单独确认会响"
+  echo "✅ 全部 38 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"
