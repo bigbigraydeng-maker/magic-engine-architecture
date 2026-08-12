@@ -130,6 +130,23 @@ describe('docs/ENV.md 里带 worker 服务名的标注，必须跟真实 worker 
         found = true
         return
       }
+      // 🔴 解构读取：const { FOO } = process.env / const { FOO: bar } = process.env（Issue #948）
+      //    原来只认属性访问与下标访问，解构写法命中数为 0 —— 依赖链上有人这么写就整个绕过去了。
+      if (
+        ts.isVariableDeclaration(node) &&
+        node.initializer &&
+        isProcessEnv(node.initializer) &&
+        ts.isObjectBindingPattern(node.name)
+      ) {
+        for (const el of node.name.elements) {
+          // `{ FOO: bar }` 读的是 FOO（propertyName），不是 bar
+          const key = el.propertyName ?? el.name
+          if (ts.isIdentifier(key) && key.text === envName) {
+            found = true
+            return
+          }
+        }
+      }
       ts.forEachChild(node, visit)
     }
     visit(sourceFile)
@@ -311,6 +328,26 @@ describe('docs/ENV.md 里带 worker 服务名的标注，必须跟真实 worker 
         ts.isStringLiteralLike(node.argumentExpression)
       ) {
         record(node.argumentExpression.text, node)
+      } else if (
+        // 🔴 解构读取（Issue #948）：`const { FOO } = process.env`
+        ts.isVariableDeclaration(node) &&
+        node.initializer &&
+        isProcessEnv(node.initializer) &&
+        ts.isObjectBindingPattern(node.name)
+      ) {
+        for (const el of node.name.elements) {
+          if (el.dotDotDotToken) {
+            // `...rest` 静态上无法确定读了哪些变量 —— 判失败，别假装看得懂。
+            throw new Error(
+              `${fileName}: \`const { ...rest } = process.env\` 无法静态判定读了哪些变量，判据需要人来看一眼`,
+            )
+          }
+          const key = el.propertyName ?? el.name
+          if (!ts.isIdentifier(key)) continue
+          // `{ FOO = 'd' }` 自带默认值 —— 跟 `|| d` / `?? d` 同一档，算有兜底
+          const unguarded = el.initializer === undefined
+          reads.set(key.text, (reads.get(key.text) ?? false) || unguarded)
+        }
       }
       ts.forEachChild(node, visit)
     }
@@ -370,6 +407,43 @@ describe('docs/ENV.md 里带 worker 服务名的标注，必须跟真实 worker 
     // 🔴 名字对不上的属性访问不算
     expect(probe(`const a = process.envx.${N}`)).toBe(false)
     expect(probe(`const a = notprocess.env.${N}`)).toBe(false)
+  })
+
+  /** Issue #948 缺口二：解构写法原来命中数为 0，等于给判据开了一扇后门。 */
+  it('🔴 process.env 的解构读取必须算「读了」（原来完全看不见）', () => {
+    const N = 'MUAPI_API_KEY'
+    const probe = (src: string) => readsEnvVar(src, 'probe.ts', N)
+
+    expect(probe(`const { ${N} } = process.env`)).toBe(true)
+    // `{ FOO: bar }` 读的是 FOO，不是 bar
+    expect(probe(`const { ${N}: key } = process.env`)).toBe(true)
+    expect(readsEnvVar(`const { ${N}: key } = process.env`, 'probe.ts', 'key')).toBe(false)
+    expect(probe(`const { ${N} = 'd' } = process.env`)).toBe(true)
+    // 混在一堆里也要认出来
+    expect(probe(`const { NODE_ENV, ${N}, TZ } = process.env`)).toBe(true)
+
+    // 不许误判：解构的不是 process.env
+    expect(probe(`const { ${N} } = someOtherObject`)).toBe(false)
+    expect(probe(`const { ${N} } = config.env`)).toBe(false)
+    // 名字对不上
+    expect(readsEnvVar('const { OTHER_KEY } = process.env', 'probe.ts', N)).toBe(false)
+  })
+
+  it('🔴 解构里的默认值算「有兜底」，没默认值算「必需」', () => {
+    const reads = (src: string) => envReadsIn(src, 'probe.ts')
+
+    // 没默认值 = 必需
+    expect(reads('const { FOO } = process.env').get('FOO')).toBe(true)
+    // 有默认值 = 有兜底，跟 `|| d` / `?? d` 同一档
+    expect(reads("const { FOO = 'd' } = process.env").get('FOO')).toBe(false)
+    // 重命名不影响判定，记的仍是环境变量名
+    expect(reads('const { FOO: bar } = process.env').get('FOO')).toBe(true)
+    expect(reads('const { FOO: bar } = process.env').has('bar')).toBe(false)
+  })
+
+  it('🔴 `...rest` 解构判失败 —— 静态看不懂就别假装看得懂', () => {
+    // 它可能读了任何变量。悄悄跳过等于给判据留一个「写成 rest 就免检」的后门。
+    expect(() => envReadsIn('const { A, ...rest } = process.env', 'probe.ts')).toThrow(/无法静态判定/)
   })
 
   it('前提成立：依赖闭包是递归的，相对路径和别名都跟得到（Codex thread L664）', () => {
@@ -441,7 +515,9 @@ describe('docs/ENV.md 里带 worker 服务名的标注，必须跟真实 worker 
       const entry = entrypointOf(svc.dockerfilePath)
       if (!entry) continue
       const declared = new Set(svc.keys)
-      for (const [name, file] of unguardedEnvReads(entry)) {
+      // Array.from 而不是直接迭代 Map：仓库 tsconfig 没设 target，
+      // 直接迭代迭代器会撞 TS2802（要 downlevelIteration）。同文件别处已踩过。
+      for (const [name, file] of Array.from(unguardedEnvReads(entry))) {
         checked++
         if (!declared.has(name)) {
           problems.push(`${name} —— ${file} 没兜底地读它，但 render.yaml 里 worker \`${svc.name}\` 没声明`)
