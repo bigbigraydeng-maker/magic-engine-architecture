@@ -298,7 +298,7 @@ export function applyReviewDecisions(
 /**
  * 计划哈希。
  *
- * 覆盖契约版本 / 规则版本 / 租户 / 边界 / 每条候选的全部身份字段 / 复核签名。
+ * 覆盖契约版本 / 规则版本 / 租户 / 边界 / 每条候选的全部身份字段 / 计数 / 复核签名。
  * 少盖任何一项，那一项就能在批准之后被悄悄改掉。
  */
 export function computePlanHash(plan: Omit<CanonicalInventoryPlan, 'planHash'>): string {
@@ -327,6 +327,13 @@ export function computePlanHash(plan: Omit<CanonicalInventoryPlan, 'planHash'>):
       notes: [...c.notes].sort(compareStrings),
       duplicateOf: c.duplicateOf ?? null,
     })),
+    counts: {
+      discovered: plan.counts.discovered,
+      pending: plan.counts.pending,
+      accepted: plan.counts.accepted,
+      rejected: plan.counts.rejected,
+      deferred: plan.counts.deferred,
+    },
     review: plan.review === null ? null : {
       reviewedBy: plan.review.reviewedBy,
       reviewedAt: plan.review.reviewedAt,
@@ -395,6 +402,14 @@ function applyDecisionsToCandidates(
  *    `assertDiscoveryConsistent()` 只查主机覆盖（有没有这个主机的发现记录），
  *    不查数量对不对得上 —— 所以这里必须重新跑一遍
  *    `buildInventoryPlan()` 生成时用过的那道计数对账。
+ *
+ * 🔴 上面那道对账**只覆盖批准主机**——删掉一条 malformed 或未批准主机的候选，
+ *    它本来就不进任何主机的逐主机统计，对账天生看不见，逐字段比对也看不见
+ *    （比对只看「剩下的候选」，少一条不会让剩下的字段对不上）。这类候选唯一
+ *    还留着的痕迹是 `counts.discovered`（`countCandidates()` 在生成时算过一次），
+ *    所以最后再补一道：拿现在的 `candidates` 重新数一遍，跟 `counts` 里的数字比对。
+ *    这道放在 `assertCandidatesMachineDerived()` **之后**——候选内容被篡改
+ *    （决策 / 撞车重复）时，前面那道更具体的错误应该先响，这道只兜「整条消失」。
  */
 export function assertPlanIntact(plan: CanonicalInventoryPlan): void {
   assertVersionsAndHash(plan)
@@ -404,6 +419,29 @@ export function assertPlanIntact(plan: CanonicalInventoryPlan): void {
     plan.candidates.map((c) => c.originalUrl),
   )
   assertCandidatesMachineDerived(plan)
+  assertCountsMachineDerived(plan)
+}
+
+/** `counts` 必须是当前 `candidates` 用 `countCandidates()` 重新数出来的那一份，一个字段都不许对不上。 */
+function assertCountsMachineDerived(plan: CanonicalInventoryPlan): void {
+  const expected = countCandidates(plan.candidates)
+  const actual = plan.counts
+  if (
+    actual.discovered !== expected.discovered ||
+    actual.pending !== expected.pending ||
+    actual.accepted !== expected.accepted ||
+    actual.rejected !== expected.rejected ||
+    actual.deferred !== expected.deferred
+  ) {
+    throw new InventoryPlanError(
+      'counts_not_machine_derived',
+      `计划自带的计数（发现 ${actual.discovered} / 待判 ${actual.pending} / 已批 ${actual.accepted} / ` +
+        `已拒 ${actual.rejected} / 暂缓 ${actual.deferred}）跟拿当前候选清单重新数出来的` +
+        `（发现 ${expected.discovered} / 待判 ${expected.pending} / 已批 ${expected.accepted} / ` +
+        `已拒 ${expected.rejected} / 暂缓 ${expected.deferred}）对不上 —— ` +
+        '最常见的原因是候选被整条删掉、却没有同步改计数，尤其是 malformed / 未批准主机这类不进逐主机统计的候选',
+    )
+  }
 }
 
 /**

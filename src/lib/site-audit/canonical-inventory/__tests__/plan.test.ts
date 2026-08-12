@@ -223,6 +223,35 @@ describe('逐主机发现必须进计划（否则缺整个站没人看得见）'
       }),
     ).toThrow(/两个入参对不上/)
   })
+
+  it('🔴 malformed 候选被整条删掉 → 盖章时仍被挡下（它不属于任何主机，逐主机对账天生看不见，只有计数兜得住）', () => {
+    const plan = build(['https://example.com/a', 'garbage'])
+    const stripped = { ...plan, candidates: plan.candidates.filter((c) => c.originalUrl !== 'garbage') }
+    const { planHash: _drop, ...rest } = stripped
+    expect(() =>
+      applyReviewDecisions({ ...rest, planHash: computePlanHash(rest) }, {
+        decisions: {},
+        review: REVIEW,
+        sign: SIGN,
+      }),
+    ).toThrow(/候选被整条删掉/)
+  })
+
+  it('🔴 未批准主机的候选被整条删掉 → 盖章时仍被挡下（同上，只是原因码不同）', () => {
+    const plan = build(['https://example.com/a', 'https://www.example.com/other-host'])
+    const stripped = {
+      ...plan,
+      candidates: plan.candidates.filter((c) => c.originalUrl !== 'https://www.example.com/other-host'),
+    }
+    const { planHash: _drop, ...rest } = stripped
+    expect(() =>
+      applyReviewDecisions({ ...rest, planHash: computePlanHash(rest) }, {
+        decisions: {},
+        review: REVIEW,
+        sign: SIGN,
+      }),
+    ).toThrow(/候选被整条删掉/)
+  })
 })
 
 describe('复核时间必须是合法 ISO 8601', () => {
@@ -279,6 +308,12 @@ describe('计划哈希', () => {
       ...plan,
       candidates: plan.candidates.map((c) => ({ ...c, notes: [...c.notes, 'fragment_removed' as const] })),
     }
+    expect(computePlanHash(tampered)).not.toBe(plan.planHash)
+  })
+
+  it('哈希覆盖计数（不是只看候选清单本身）', () => {
+    const plan = build(['https://example.com/a'])
+    const tampered = { ...plan, counts: { ...plan.counts, accepted: plan.counts.accepted + 1 } }
     expect(computePlanHash(tampered)).not.toBe(plan.planHash)
   })
 })
