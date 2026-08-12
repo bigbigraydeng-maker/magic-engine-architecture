@@ -47,7 +47,8 @@ const outcome = process.env.OUTCOME
 // against the budget. That is the same error as trusting the exit code,
 // pointing the other way: neither says WHO moved the head.
 //
-// `HEAD_BEFORE` is read one step before claude-code-action runs (read-head.mjs),
+// `HEAD_BEFORE` is read one step before claude-code-action runs (the `baseline`
+// step in ops-codex-to-claude-fix.yml, inline on purpose — see the note there),
 // so this comparison brackets exactly this round. If it is missing — the step
 // was skipped, or a future edit dropped it — fall back to reporting no push
 // rather than guessing: over-reporting is the failure this file exists to stop.

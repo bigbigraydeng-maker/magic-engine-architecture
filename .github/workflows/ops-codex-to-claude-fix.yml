@@ -122,11 +122,32 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          set -euo pipefail
           head_before=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha)
+          # Exactly 40 hex characters, anchored at both ends. The loose version
+          # of this check ("starts with 8 hex chars") accepted trailing junk,
+          # and the very next line writes the value into GITHUB_OUTPUT as
+          # `key=value` — where a newline in the value declares a further
+          # output. That is the same injection class PR #941 just closed on the
+          # JavaScript side, reopened here in shell. The value comes from
+          # GitHub's own API and is not attacker-controlled today; a validation
+          # step exists precisely so that stops being load-bearing.
+          #
+          # NOT `grep -E '^[0-9a-f]{40}$'`: grep matches line by line, so a
+          # value whose FIRST line is 40 hex characters passes while carrying
+          # further lines behind it — which is exactly the injection this check
+          # is here to stop. Verified by trying it: the newline case sailed
+          # through. Length plus a whole-string character class does not have
+          # that hole, because shell `case` sees the entire value, newlines
+          # included.
           case "$head_before" in
-            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
-            *) echo "::error::Unusable head sha for PR #${PR_NUMBER}: ${head_before}"; exit 1 ;;
+            *[!0-9a-f]*) head_ok=no ;;
+            *) [ "${#head_before}" -eq 40 ] && head_ok=yes || head_ok=no ;;
           esac
+          if [ "$head_ok" != yes ]; then
+            echo "::error::Unusable head sha for PR #${PR_NUMBER}: ${head_before}"
+            exit 1
+          fi
           echo "head_before=${head_before}" >> "$GITHUB_OUTPUT"
           echo "Branch head before this fix round: ${head_before}"
 
@@ -156,6 +177,6 @@ jobs:
           ROUND: ${{ steps.plan.outputs.round }}
           OUTCOME: ${{ steps.claude.outcome }}
           # Taken one step before the action ran, so "the head moved" means
-          # this round moved it — see read-head.mjs.
+          # this round moved it — see the `baseline` step above.
           HEAD_BEFORE: ${{ steps.baseline.outputs.head_before }}
         run: node tools/ops-review-loop/src/mark-fix-outcome.mjs
