@@ -213,7 +213,12 @@ describe('cron 触发、web 进程读取的开关：docs/ENV.md 的「配在哪�
     // 只是当时把空白压平，整段还是以 curl 开头，所以一直没露馅）
     expect(checked.some((p) => /envVars:|- key:/.test(p!.startCommand))).toBe(false)
     expect(envDocLocation('CRON_SECRET')).toContain('cron')
-    expect(envDocLocation('NEXT_PUBLIC_SUPABASE_ANON_KEY')).toBe('Render-web')
+    // 🔴 这是「解析器真读到了『配在哪』那一格」的探针，所以**必须**是精确值比对，
+    //    不能松成 toContain —— 松了就分不出「读对了整格」和「读到了半格」。
+    //    ENV.md 里这一行改了，这里就要跟着改（本次由反向核对补标 worker 而改）。
+    expect(envDocLocation('NEXT_PUBLIC_SUPABASE_ANON_KEY')).toBe(
+      'Render-web + worker `content-factory-render-worker`',
+    )
     expect(envDocLocation('THIS_ENV_DOES_NOT_EXIST')).toBeNull()
   })
 
@@ -704,6 +709,48 @@ describe('docs/ENV.md 里带 worker 服务名的标注，必须跟真实 worker 
       'content-factory-render-worker',
     )
     expect(workerNameIn('Render-web')).toBeNull()
+  })
+
+  /**
+   * 🔴 **反向核对：从 worker 真实依赖出发，倒查文档有没有标。**（Codex thread：registry.test.ts L668）
+   *
+   * 上面那条是**正向**的 —— 只从「ENV.md 里已经写了 worker」的行出发去验证。
+   * 正向查不出**漏标**：一个变量 worker 明明要读、render.yaml 也确实注进去了，
+   * 但 ENV.md 只写 `Render-web`，正向那条压根不会看它，测试一路绿。
+   *
+   * 后果不是文档不好看，是**照 ENV.md 配新 worker 会起不来**：
+   * `src/lib/supabase.ts` 缺 `NEXT_PUBLIC_SUPABASE_ANON_KEY` 时直接 `throw`，容器启动即崩。
+   *
+   * 判据：worker 在 render.yaml 里声明的 key，**且**入口链上真有人读 → ENV.md 必须点名这个 worker。
+   * 只声明没读的不算（那是多配的，不影响启动）；读了但没声明的由上面的正向那条管。
+   */
+  it('🔴 反向：worker 真读到的变量，ENV.md 必须点名这个 worker（漏标 = 照文档配会起不来）', () => {
+    const docLocations = allEnvDocLocations()
+    const missing: string[] = []
+    let checked = 0
+
+    for (const svc of workers) {
+      const entry = entrypointOf(svc.dockerfilePath)
+      if (!entry) continue
+      for (const key of svc.keys) {
+        if (readsVia(entry, key).length === 0) continue // 声明了但没人读 —— 不影响启动
+        checked++
+        const where = docLocations.get(key)
+        if (where === undefined) {
+          missing.push(`${key} → ENV.md 整张表里根本没有这个变量（worker ${svc.name} 要读）`)
+        } else if (!where.includes(svc.name)) {
+          missing.push(`${key} → ENV.md 写的是「${where}」，没点名 worker \`${svc.name}\``)
+        }
+      }
+    }
+
+    // 空转不许静默变绿：一个都没查到 = 上面几个解析器坏了，不是「全都合规」
+    expect(checked, 'worker 一个真实读取都没查到 —— 解析链坏了，不是大家都合规').toBeGreaterThan(0)
+    expect(
+      missing,
+      'worker 起不来的时候，错误信息只会说「缺环境变量」，不会说「文档漏标了」。\n' +
+        missing.join('\n'),
+    ).toEqual([])
   })
 
   it.each(labelled.map(([env, where]) => ({ env, where })))(
