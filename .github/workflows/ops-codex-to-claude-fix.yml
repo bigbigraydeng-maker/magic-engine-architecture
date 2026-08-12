@@ -103,13 +103,32 @@ jobs:
       #
       # Read the baseline here, one step before the action, so the comparison
       # in mark-fix-outcome.mjs brackets exactly this round.
+      #
+      # Deliberately inline, and deliberately NOT a new file under
+      # tools/ops-review-loop/src/. This workflow's YAML comes from the PR
+      # branch while `actions/checkout ref: main` gives it scripts from main —
+      # so a step that calls a brand-new module fails on the PR that
+      # introduces it, every time, until both halves are on main. The first
+      # version of this step did exactly that and turned this PR red with
+      # "Cannot find module .../read-head.mjs".
+      #
+      # Anything genuinely new that a workflow step must call has to land on
+      # main before the step that calls it. A one-line read does not deserve
+      # that dance.
       - name: Record the branch head before the fix round
         id: baseline
         if: steps.plan.outputs.action == 'dispatch-fix'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: node tools/ops-review-loop/src/read-head.mjs
+        run: |
+          head_before=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha)
+          case "$head_before" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+            *) echo "::error::Unusable head sha for PR #${PR_NUMBER}: ${head_before}"; exit 1 ;;
+          esac
+          echo "head_before=${head_before}" >> "$GITHUB_OUTPUT"
+          echo "Branch head before this fix round: ${head_before}"
 
       - name: Invoke Claude to fix Codex findings
         id: claude

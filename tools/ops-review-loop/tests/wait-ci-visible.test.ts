@@ -42,6 +42,8 @@ function run(dir: string) {
     GITHUB_REPOSITORY: 'bigbigraydeng-maker/magic-engine',
     GITHUB_EVENT_PATH: eventPath,
     GITHUB_OUTPUT: outPath,
+    OPS_POLL_ATTEMPTS: '2',
+    OPS_POLL_INTERVAL_MS: '0',
   })
   return import('../src/handle-review.mjs').finally(() => {
     process.env = original
@@ -91,5 +93,55 @@ describe('handle-review: CI never went green', () => {
     await run(dir)
 
     expect(createIssueComment).not.toHaveBeenCalled()
+  })
+})
+
+describe('handle-review: the BLOCKED ON CI report must use the gate\'s own standard', () => {
+  let dir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'ops-waitci2-'))
+    createIssueComment.mockClear()
+    listIssueComments.mockReset().mockResolvedValue([])
+    listCheckRunsForRef.mockReset()
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+    vi.resetModules()
+  })
+
+  it('shows a skipped required check instead of filtering it out as green', async () => {
+    // Codex finding (PR #943, P2). The gate is completed+success, but this
+    // listing used a looser rule that let `neutral`/`skipped` through — so a
+    // required check ending `skipped` was dropped as "green" and the comment
+    // said "no check runs reported at all", hiding the actual blocker.
+    listCheckRunsForRef.mockResolvedValue([
+      { name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'skipped' },
+    ])
+
+    await run(dir)
+
+    const body = String(createIssueComment.mock.calls[0][4])
+    expect(body).toContain('ai-orchestrator-tests')
+    expect(body).toContain('completed/skipped')
+    expect(body).not.toContain('no check runs reported at all')
+  })
+
+  it('says plainly when the required check never reported, rather than blaming other failures', async () => {
+    // Codex finding (PR #943, P2). Listing unrelated red checks reads as if
+    // THOSE are the blocker; maintainers fix the wrong thing and the PR still
+    // does not move. Absence is its own diagnosis.
+    listCheckRunsForRef.mockResolvedValue([
+      { name: 'Cloudflare Pages', status: 'completed', conclusion: 'failure' },
+    ])
+
+    await run(dir)
+
+    const body = String(createIssueComment.mock.calls[0][4])
+    expect(body).toContain('never reported on this commit')
+    // the unrelated failure is still listed, but clearly not as the blocker
+    expect(body).toContain('Cloudflare Pages')
+    expect(body).toContain('not the list below')
   })
 })

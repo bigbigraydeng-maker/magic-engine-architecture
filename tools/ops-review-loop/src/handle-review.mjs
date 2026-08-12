@@ -30,6 +30,12 @@ const MAX_ROUNDS = 3
 // GitHub surfaces as the check-run `name`.
 const REQUIRED_CHECK_NAME_PATTERN = /ai-orchestrator/i
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+// Overridable so the CI-wait path is testable without really waiting four
+// minutes. Defaults are the production values; nothing in the workflow sets
+// these. Without them the "required check never reported" branch cannot be
+// covered at all, which is how it shipped with a misleading message.
+const POLL_ATTEMPTS = Number(process.env.OPS_POLL_ATTEMPTS ?? 12)
+const POLL_INTERVAL_MS = Number(process.env.OPS_POLL_INTERVAL_MS ?? 20000)
 
 const token = process.env.GITHUB_TOKEN
 const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/')
@@ -70,8 +76,8 @@ if (!hasActionableFindings && !checkSucceeded(requiredCheck)) {
     fetchCheckRuns: async () => listCheckRunsForRef(token, owner, repo, sha),
     sleep,
     pattern: REQUIRED_CHECK_NAME_PATTERN,
-    maxAttempts: 12,
-    intervalMs: 20000,
+    maxAttempts: POLL_ATTEMPTS,
+    intervalMs: POLL_INTERVAL_MS,
   })
   if (polled) {
     requiredCheck = polled
@@ -115,13 +121,30 @@ switch (plan.action) {
     //
     // Say which checks are not green, once per sha, and say plainly that a
     // re-run alone will not restart anything.
-    // `requiredCheck` is whatever the poll last saw for the gating check; the
-    // initial list is everything else on the sha. Report both, so the comment
-    // is useful even when the gating check simply never appeared.
-    const observed = requiredCheck ? [requiredCheck] : initialCheckRuns
-    const notGreen = observed
-      .filter((r) => !(r?.status === 'completed' && ['success', 'neutral', 'skipped'].includes(r?.conclusion)))
+    // Two Codex findings (PR #943, both P2) shaped this block:
+    //
+    //  - The gate is `checkSucceeded` = completed + success. This listing used
+    //    a *looser* rule (it also let `neutral` and `skipped` through), so a
+    //    required check that ended `skipped` was filtered out as "green" and
+    //    the comment then said "no check runs reported at all" — hiding the
+    //    very thing that blocked the PR. A report must use the gate's own
+    //    standard or it describes a different system.
+    //
+    //  - When the required check never reports at all, listing the other
+    //    failing checks reads as if THOSE are the blocker. Maintainers then
+    //    fix the wrong thing and the PR still will not move. Absence is its
+    //    own diagnosis and has to be stated as one.
+    const isGreenByGate = (r) => checkSucceeded(r)
+    const requiredMissing = !requiredCheck
+    const notGreen = (requiredCheck ? [requiredCheck, ...initialCheckRuns.filter((r) => r !== requiredCheck)] : initialCheckRuns)
+      .filter((r) => !isGreenByGate(r))
       .map((r) => `- \`${r.name}\` — ${r.status}${r.conclusion ? `/${r.conclusion}` : ''}`)
+    const blocker = requiredMissing
+      ? `The required check (matching \`${REQUIRED_CHECK_NAME_PATTERN}\`) **never reported on this commit** — that, not the list below, is what is holding this PR.`
+      : `The required check has not passed.`
+    const others = notGreen.length
+      ? `\n\nChecks on \`${sha.slice(0, 10)}\` that are not completed+success:\n\n${notGreen.join('\n')}`
+      : `\n\nEvery other check on \`${sha.slice(0, 10)}\` is completed and successful.`
     const alreadyTold = markers.some((m) => m.stage === 'ci-blocked' && m.sha === sha)
     if (!alreadyTold) {
       const marker = buildMarker({ stage: 'ci-blocked', pr, sha })
@@ -130,7 +153,7 @@ switch (plan.action) {
         owner,
         repo,
         pr,
-        `**BLOCKED ON CI**\n\nCodex raised no actionable findings, but these checks on \`${sha.slice(0, 10)}\` are not green:\n\n${notGreen.join('\n') || '- (no check runs reported at all)'}\n\nNothing re-triggers this automation for the same commit, so re-running a check to green will **not** move this PR on its own — push a commit, or ask Codex to review again once CI is green.\n\n${marker}`
+        `**BLOCKED ON CI**\n\nCodex raised no actionable findings, but this PR cannot advance.\n\n${blocker}${others}\n\nNothing re-triggers this automation for the same commit, so re-running a check to green will **not** move this PR on its own — push a commit, or ask Codex to review again once CI is green.\n\n${marker}`
       )
     }
     console.log('No actionable findings, but CI is not green — posted BLOCKED ON CI instead of staying silent.')

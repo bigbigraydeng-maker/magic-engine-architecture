@@ -192,6 +192,11 @@ describe('mark-fix-outcome: the baseline must bracket this round', () => {
     const [, , , , body] = createIssueComment.mock.calls[0]
     expect(body).toContain('pushed no commit')
     expect(body).not.toContain('ops-codex-loop:stage=fix-dispatched')
+    // Codex finding (PR #943, P2): the message must name the head it actually
+    // read, not the sha from the (stale) review event. Fixing the accounting
+    // while still printing commit A swaps one false statement for another.
+    expect(body).toContain(SHA_BEFORE.slice(0, 10))
+    expect(body).not.toContain('staleevent')
   })
 
   it('reports no push when the baseline is missing, rather than guessing', async () => {

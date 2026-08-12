@@ -77,7 +77,13 @@ if (outcome === 'success' && pushedSomething) {
     owner,
     repo,
     pr,
-    `⚠️ Automated fix round ${round} ran without error but **pushed no commit** — the branch head is still \`${sha.slice(0, 10)}\`, so the Codex findings are **not** addressed.\n\nThe usual cause is findings in files the fix prompt forbids Claude from editing (\`.github/workflows/**\`, \`tools/ai-orchestrator/**\`); those need a human. This round is **not** counted against the 3-round limit.`
+    // Codex finding (PR #943, P2): this used to print the sha from the review
+    // event. In the very scenario the new baseline exists to handle — review
+    // on commit A, someone pushes B, this round pushes nothing — that sentence
+    // publicly claims the head is still A. Fixing the accounting while still
+    // reporting the wrong commit swaps one false statement for another.
+    // Report what was actually read.
+    `⚠️ Automated fix round ${round} ran without error but **pushed no commit** — the branch head is \`${String(headNow ?? headBefore ?? 'unknown').slice(0, 10)}\`, unchanged by this round, so the Codex findings are **not** addressed.\n\nThe usual cause is findings in files the fix prompt forbids Claude from editing (\`.github/workflows/**\`, \`tools/ai-orchestrator/**\`); those need a human. This round is **not** counted against the 3-round limit.`
   )
 } else {
   await createIssueComment(
