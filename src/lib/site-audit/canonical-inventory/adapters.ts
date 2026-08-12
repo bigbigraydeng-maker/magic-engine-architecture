@@ -11,6 +11,7 @@
 import { crawlPages, discoverSitemapUrls, type CrawlOptions, type CrawlResult } from '../crawler'
 import { enrichCrawledPage } from '../page-enrichment'
 import type { ActivationDeps, CanonicalInventoryStore } from './types'
+import { normaliseApprovedHosts } from './url-rules'
 
 export interface HostDiscoveryResult {
   readonly host: string
@@ -48,12 +49,17 @@ export async function discoverCandidateUrls(approvedHosts: readonly string[]): P
   const seen = new Set<string>()
   const perHost: HostDiscoveryResult[] = []
 
-  for (const host of approvedHosts) {
-    // 🔴 先归一再比。`hostnameOf()` 给的是小写 hostname，主机名带大写传进来
-    //    （`Example.COM`）会一条都对不上 —— 记成 0 条，然后要求人去认一个
-    //    其实好端端的站。方向是安全的，但它是假警报，而假警报会训练人闭眼点「认了」。
-    //    归一口径跟 `buildInventoryPlan()` 那边（`trim().toLowerCase()`）保持一致。
-    perHost.push(await discoverOneHost(host.trim().toLowerCase(), seen))
+  // 🔴 先归一再发请求。`hostnameOf()` 给的是小写 hostname，主机名带大写传进来
+  //    （`Example.COM`）会一条都对不上 —— 实际发现到的页面被记成 `count: 0`
+  //    加一堆 `foreignCount`，然后计划那边要求人去认一个其实好端端的站。
+  //    方向是安全的，但它是假警报，而假警报会训练人闭眼点「认了」，那道闸就废了。
+  //
+  //    用的是 `normaliseApprovedHosts()` 而不是自己 `trim().toLowerCase()`：
+  //    它同时校验格式（带 scheme / 端口 / 路径 / 通配符一律抛）并去重，
+  //    跟 `buildInventoryPlan()` 是**同一个**函数 —— 两边口径不许各写各的。
+  //    畸形清单在这里就抛掉，比发完一轮网络请求再抛好。
+  for (const host of normaliseApprovedHosts(approvedHosts)) {
+    perHost.push(await discoverOneHost(host, seen))
   }
 
   return { urls: Array.from(seen), perHost }

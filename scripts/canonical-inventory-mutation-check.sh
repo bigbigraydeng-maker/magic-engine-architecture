@@ -25,6 +25,20 @@ CRAWLER_SUITE="src/lib/site-audit/__tests__/crawler.test.ts"
 
 fail_count=0
 
+# 🔴 这个脚本会**真的改生产代码**再改回来。中途被打断（Ctrl-C / 超时被 kill）时，
+#    留在盘上的就是一份被变异过的源码 + 一个 .orig 备份 —— 长得跟正常工作区一样，
+#    `git add -A` 会把「闸被拆掉」的那一版一起提交，而且测试还是绿的
+#    （拆的就是那道闸，红的是它自己的用例，容易被当成已知失败放过去）。
+#    2026-08-12 实际发生过一次：activation.ts 的分类失败闸被以 `if (false)` 提交进来。
+CURRENT_MUTATED=""
+restore_on_exit() {
+  if [ -n "$CURRENT_MUTATED" ] && [ -f "$CURRENT_MUTATED.orig" ]; then
+    mv "$CURRENT_MUTATED.orig" "$CURRENT_MUTATED"
+    echo "⚠️  被打断 —— 已把 $CURRENT_MUTATED 还原回原文，工作区是干净的"
+  fi
+}
+trap restore_on_exit EXIT INT TERM
+
 red_count() {
   npx vitest run "$SUITE" "$CRAWLER_SUITE" --reporter=json 2>/dev/null \
     | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s.slice(s.indexOf("{")));console.log(j.numFailedTests??0)}catch{console.log("PARSE_ERROR")}})'
@@ -33,6 +47,7 @@ red_count() {
 check() {
   local label="$1" file="$2" from="$3" to="$4"
   cp "$file" "$file.orig"
+  CURRENT_MUTATED="$file"
   node -e '
     const fs=require("fs");
     const [f,from,to]=process.argv.slice(1);
@@ -43,12 +58,14 @@ check() {
   if [ $? -eq 3 ]; then
     echo "❌ [$label] 变异目标没找到 —— 代码改了但这个脚本没跟着改，判据已失效"
     mv "$file.orig" "$file"
+    CURRENT_MUTATED=""
     fail_count=$((fail_count+1))
     return
   fi
   local n
   n=$(red_count)
   mv "$file.orig" "$file"
+  CURRENT_MUTATED=""
   if [ "$n" = "PARSE_ERROR" ]; then
     echo "❌ [$label] 跑不出结果"
     fail_count=$((fail_count+1))
@@ -378,11 +395,11 @@ check "写入抛错也报完成" "$ACT" \
 
 # ——— 复用适配器 ———
 check "🔴 只发现第一个批准主机（第二个站的页面静默缺席）" "$ADAPTERS" \
-  "  for (const host of approvedHosts) {" \
-  "  for (const host of approvedHosts.slice(0, 1)) {"
+  "  for (const host of normaliseApprovedHosts(approvedHosts)) {" \
+  "  for (const host of normaliseApprovedHosts(approvedHosts).slice(0, 1)) {"
 
 check "逐主机条数不留痕（某个站 0 条被合并结果盖住）" "$ADAPTERS" \
-  "    perHost.push(await discoverOneHost(host.trim().toLowerCase(), seen))" \
+  "    perHost.push(await discoverOneHost(host, seen))" \
   "    perHost.push({ host, count: 1, foreignCount: 0, error: null }); await discoverOneHost(host, seen)"
 
 check "一个主机挂掉不留痕（跟「这个站没有页面」长得一样）" "$ADAPTERS" \
@@ -414,8 +431,8 @@ check "显式给的上限比清单还小也照跑（截断后跑出来的不是�
   "    if (false) {"
 
 check "🔴 主机名不归一就比归属（Example.COM 一条都对不上，好端端的站被要求人工认）" "$ADAPTERS" \
-  "    perHost.push(await discoverOneHost(host.trim().toLowerCase(), seen))" \
-  "    perHost.push(await discoverOneHost(host, seen))"
+  "  for (const host of normaliseApprovedHosts(approvedHosts)) {" \
+  "  for (const host of approvedHosts) {"
 
 # ——— 发现完整性（闸装在 crawler.ts，靠 crawler.test.ts 判据） ———
 check "🔴 子 sitemap 返回非 2xx 不报（一棵子树没取到，跟空 sitemap 长得一样）" "$CRAWLER" \
