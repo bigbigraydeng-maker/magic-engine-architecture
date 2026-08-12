@@ -43,12 +43,27 @@ concurrency:
 jobs:
   request-review:
     # Same-repo PRs only (a fork PR's GITHUB_TOKEN must stay read-only and
-    # this workflow does not need to run for it), targeting main, on the
-    # claude/me2-* branch convention this loop is scoped to, and still open.
+    # this workflow does not need to run for it), targeting main, on any
+    # agent-authored claude/* branch, and still open.
+    #
+    # WHY claude/* HERE BUT claude/me2-* IN THE SIBLING WORKFLOW
+    # ----------------------------------------------------------
+    # These two legs carry very different blast radius, so they get different
+    # scopes on purpose:
+    #
+    #   this file        posts ONE comment           → widening is free
+    #   to-claude-fix    dispatches Claude to PUSH   → widening is not
+    #
+    # Every agent branch benefits from being reviewed, and a review request
+    # cannot collide with anything. Auto-pushing is different: this repo runs
+    # one window per branch (CLAUDE.md §6), so a fix dispatched onto a branch
+    # another window is actively holding would fight that window for the same
+    # working tree. That leg stays pinned to the ME2 lane, where the
+    # one-window-per-Work-Package rule is explicit and enforced.
     if: |
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.base.ref == 'main' &&
-      startsWith(github.event.pull_request.head.ref, 'claude/me2-') &&
+      startsWith(github.event.pull_request.head.ref, 'claude/') &&
       github.event.pull_request.state == 'open'
     runs-on: ubuntu-latest
     timeout-minutes: 5

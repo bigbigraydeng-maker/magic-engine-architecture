@@ -111,11 +111,24 @@ describe('the request-review workflow', () => {
     ])
   })
 
-  it('guards same-repo, base=main, and the claude/me2- branch prefix', () => {
+  it('guards same-repo, base=main, and the claude/ agent-branch prefix', () => {
     const guard = Object.values(request.doc.jobs ?? {})[0]?.if ?? ''
     expect(guard).toContain('head.repo.full_name == github.repository')
     expect(guard).toContain("base.ref == 'main'")
-    expect(guard).toContain("startsWith(github.event.pull_request.head.ref, 'claude/me2-')")
+    expect(guard).toContain("startsWith(github.event.pull_request.head.ref, 'claude/')")
+  })
+
+  it('is scoped wider than the auto-push leg, and only this leg is', () => {
+    // Asymmetry on purpose: asking for a review posts one comment and can
+    // collide with nothing, so every agent branch gets it. Dispatching a fix
+    // pushes commits, and this repo runs one window per branch (CLAUDE.md §6),
+    // so that leg stays in the ME2 lane. If someone ever "tidies up" these two
+    // guards into matching prefixes, the auto-push leg silently gains reach
+    // over branches a live window is holding — this pins the difference.
+    const requestGuard = Object.values(request.doc.jobs ?? {})[0]?.if ?? ''
+    const fixGuard = Object.values(fix.doc.jobs ?? {})[0]?.if ?? ''
+    expect(requestGuard).not.toContain("'claude/me2-'")
+    expect(fixGuard).toContain("'claude/me2-'")
   })
 
   it('checks out the control-plane script from main, not the PR head', () => {
