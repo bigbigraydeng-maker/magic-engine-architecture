@@ -126,6 +126,30 @@ describe('the request-review workflow', () => {
   it('has no contents: write', () => {
     expect(request.doc.permissions?.contents).not.toBe('write')
   })
+
+  it('authors the review request through OPS_REVIEW_PAT, never the ambient GITHUB_TOKEN', () => {
+    // Codex Cloud resolves "@codex review" against the *comment author's*
+    // Codex account. github-actions[bot] has none, so every bot-authored
+    // request was refused with "create a Codex account and connect to github"
+    // (PR #898 12:38/13:58, PR #924 01:21/02:52 — four for four), while the
+    // same text from the Product Owner's account drew a real review in four
+    // minutes. Reverting this env var to GITHUB_TOKEN restores a workflow
+    // that goes green and accomplishes nothing, which is the hardest kind of
+    // break to notice — so it is pinned here.
+    const step = request.steps.find((s) => s.run?.includes('request-review.mjs'))
+    expect(step?.env?.GITHUB_TOKEN).toBe('${{ secrets.OPS_REVIEW_PAT }}')
+  })
+
+  it('fails closed when OPS_REVIEW_PAT is missing instead of falling back', () => {
+    // A fallback to GITHUB_TOKEN would silently reproduce the original bug.
+    const guardStep = request.steps.find((s) => s.run?.includes('OPS_REVIEW_PAT is not set'))
+    expect(guardStep).toBeDefined()
+    expect(guardStep?.run).toContain('exit 1')
+    const guardIndex = request.steps.findIndex((s) => s.run?.includes('OPS_REVIEW_PAT is not set'))
+    const postIndex = request.steps.findIndex((s) => s.run?.includes('request-review.mjs'))
+    expect(guardIndex).toBeGreaterThanOrEqual(0)
+    expect(postIndex).toBeGreaterThan(guardIndex)
+  })
 })
 
 describe('the codex-to-claude-fix workflow', () => {
@@ -193,6 +217,14 @@ describe('the smoke-test workflow', () => {
   it('requires a pr_number input', () => {
     const dispatch = smoke.triggers.workflow_dispatch as { inputs?: Record<string, { required?: boolean }> }
     expect(dispatch.inputs?.pr_number?.required).toBe(true)
+  })
+
+  it('posts through OPS_REVIEW_PAT so it validates the real path, not the broken one', () => {
+    // The bot-authored question this workflow originally existed to answer is
+    // settled (it does not work). Its job now is to prove the replacement
+    // identity works on demand — which it cannot do while posting as the bot.
+    const step = smoke.steps.find((s) => s.run?.includes('smoke-test.mjs'))
+    expect(step?.env?.GITHUB_TOKEN).toBe('${{ secrets.OPS_REVIEW_PAT }}')
   })
 })
 

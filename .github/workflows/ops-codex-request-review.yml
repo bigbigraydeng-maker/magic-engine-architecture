@@ -7,6 +7,26 @@ name: OPS — Request Codex Review
 # commit, ask the native Codex GitHub App to review it — exactly once per
 # head sha. It posts one PR comment and nothing else. It never merges,
 # deploys, applies a migration, or touches production data or credentials.
+#
+# WHY THIS USES OPS_REVIEW_PAT AND NOT THE BUILT-IN GITHUB_TOKEN
+# --------------------------------------------------------------
+# Codex Cloud resolves "@codex review" against the Codex account of the
+# comment's *author*. github-actions[bot] has no Codex account, so every
+# bot-authored request was answered with:
+#
+#   "To use Codex here, create a Codex account and connect to github"
+#
+# Observed on PR #898 (2026-08-11 12:38, 13:58) and PR #924 (2026-08-12
+# 01:21, 02:52) — four requests, four refusals, zero reviews. The identical
+# text posted by the Product Owner's own account on PR #898 at 04:11 got a
+# real Codex review at 04:15. The workflow was never broken; the identity
+# was. This answers ME2-OPS02 required validation #6/#7 with production
+# evidence: a bot-authored request is NOT treated like a human one.
+#
+# OPS_REVIEW_PAT is a fine-grained PAT owned by the Product Owner, scoped to
+# this single repository, with only Issues + Pull requests read/write — no
+# contents write, no workflow, no admin. It is used ONLY to author this one
+# comment. Everything else in this file still runs on GITHUB_TOKEN.
 
 on:
   pull_request:
@@ -41,7 +61,24 @@ jobs:
           ref: main
           fetch-depth: 1
 
+      # Fail loudly instead of falling back to GITHUB_TOKEN. A fallback would
+      # reproduce exactly the failure this change exists to remove: a green
+      # workflow run whose comment Codex silently refuses. A red run that says
+      # why is strictly better than a green run that achieves nothing.
+      - name: Check the review-requester identity is configured
+        env:
+          OPS_REVIEW_PAT: ${{ secrets.OPS_REVIEW_PAT }}
+        run: |
+          if [ -z "$OPS_REVIEW_PAT" ]; then
+            echo "::error::Repository secret OPS_REVIEW_PAT is not set."
+            echo "::error::Codex ignores review requests authored by github-actions[bot]."
+            echo "::error::Add a fine-grained PAT (this repo only; Issues + Pull requests: read/write) as OPS_REVIEW_PAT."
+            exit 1
+          fi
+
       - name: Request Codex review once per head sha
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Authors the comment as the Product Owner, whose Codex account
+          # Codex Cloud can actually resolve. See the header comment.
+          GITHUB_TOKEN: ${{ secrets.OPS_REVIEW_PAT }}
         run: node tools/ops-review-loop/src/request-review.mjs
