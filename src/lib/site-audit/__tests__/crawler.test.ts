@@ -568,6 +568,38 @@ describe('discoverSitemapUrls', () => {
       )
     })
 
+    it('🔴 reports when the result came from homepage BFS (best-effort, cannot enumerate a site)', async () => {
+      // sitemap 全挂、靠首页链接凑出来的结果，跟「这个站就这么多页」长得一模一样。
+      // 危险的不是 sitemap 404（那是正常回退），是**最后靠首页凑出来**这件事。
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
+        .mockResolvedValueOnce(mockNotFound())
+        .mockResolvedValueOnce(mockNotFound())
+        .mockResolvedValueOnce(mockResponse('<a href="/a">a</a><a href="/b">b</a>'))
+      )
+      const issues: DiscoveryIssue[] = []
+      const urls = await discoverSitemapUrls('example.com', { onIssue: (i) => issues.push(i) })
+
+      expect(urls.length).toBeGreaterThanOrEqual(2)
+      expect(issues.map((i) => i.stage)).toContain('homepage-bfs-only')
+    })
+
+    it('🔴 reports when homepage BFS hit the link cap (the rest are silently absent)', async () => {
+      // 截到 MAX_BFS_LINKS 就返回，截断跟「这个站就这么多页」长得一样。
+      const many = Array.from({ length: 80 }, (_, i) => `<a href="/p${i}">p${i}</a>`).join('')
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
+        .mockResolvedValueOnce(mockNotFound())
+        .mockResolvedValueOnce(mockNotFound())
+        .mockResolvedValueOnce(mockResponse(many))
+      )
+      const issues: DiscoveryIssue[] = []
+      const urls = await discoverSitemapUrls('example.com', { onIssue: (i) => issues.push(i) })
+
+      expect(urls).toHaveLength(MAX_BFS_LINKS)
+      expect(issues.map((i) => i.stage)).toContain('homepage-bfs-truncated')
+    })
+
     it('stays silent when discovery is complete', async () => {
       vi.stubGlobal('fetch', vi.fn()
         .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))

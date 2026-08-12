@@ -323,8 +323,20 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
     const res = await fetch(origin)
     if (res.ok) {
       const html = await res.text()
-      const urls = keepOrEscalate(extractSameDomainLinks(html, origin, MAX_BFS_LINKS))
-      if (urls) return urls
+      const links = extractSameDomainLinks(html, origin, MAX_BFS_LINKS)
+      // 🔴 BFS 截到上限就返回，截断跟「这个站就这么多页」长得一样。
+      //    不上报的话，台账会拿到 count: 50 / error: null，其余页面静默缺席。
+      if (links.length >= MAX_BFS_LINKS) {
+        report('homepage-bfs-truncated', `hit MAX_BFS_LINKS=${MAX_BFS_LINKS}`, origin)
+      }
+      const urls = keepOrEscalate(links)
+      if (urls) {
+        // 🔴 真正的危险信号不是「sitemap 404」（那是正常回退），而是**最后靠首页链接凑出来的结果**：
+        //    首页 BFS 本来就枚举不全一个站，它给出的「正数 + 无错误」跟「这个站就这么多页」
+        //    长得一模一样。台账必须知道这一份是尽力而为的结果，交给人认。
+        report('homepage-bfs-only', 'discovery fell back to homepage links (not a sitemap)', origin)
+        return urls
+      }
     }
   } catch (err) {
     report('homepage-bfs', err, origin)
@@ -355,8 +367,12 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
     const jinaResult = await fetchUrlAsMarkdown(origin)
     if (jinaResult.markdown) {
       const links = extractMarkdownLinks(jinaResult.markdown, origin, MAX_BFS_LINKS)
+      if (links.length >= MAX_BFS_LINKS) {
+        report('jina-homepage-truncated', `hit MAX_BFS_LINKS=${MAX_BFS_LINKS}`, origin)
+      }
       if (links.length >= MIN_DISCOVERED_URLS) {
         console.info(`[crawler] Level 5b Jina homepage found ${links.length} URLs for ${origin}`)
+        report('jina-homepage-only', 'discovery fell back to homepage links (not a sitemap)', origin)
         return links
       }
       if (links.length > best.length) best = links
@@ -365,6 +381,10 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
     report('jina-homepage', err, origin)
   }
 
+  // 走到这里 = 每一级都没凑够阈值，返回的是「最好的那一份残缺结果」。
+  if (best.length > 0) {
+    report('partial-best-effort', `no level reached ${MIN_DISCOVERED_URLS} URLs; returning best partial result`, origin)
+  }
   return best
 }
 

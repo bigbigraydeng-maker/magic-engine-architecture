@@ -455,9 +455,17 @@ check "🔴 Jina 路径的深度截断不报" "$CRAWLER" \
   "    report('jina-sitemap-depth-limit', \`depth limit \${MAX_SITEMAP_DEPTH} reached\`, url)" \
   "    void url"
 
+check "🔴 首页 BFS 凑出来的结果不上报（尽力而为被当成完整结果）" "$CRAWLER" \
+  "        report('homepage-bfs-only', 'discovery fell back to homepage links (not a sitemap)', origin)" \
+  "        void origin"
+
+check "🔴 首页 BFS 截到上限不上报（其余页面静默缺席）" "$CRAWLER" \
+  "      if (links.length >= MAX_BFS_LINKS) {" \
+  "      if (false) {"
+
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 80 道闸各自单独确认会响"
+  echo "✅ 全部 82 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"
