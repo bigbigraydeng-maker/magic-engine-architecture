@@ -13,6 +13,10 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+// 🔴 复刻 RPC 的可恢复白名单时**直接复用**唯一那份声明，不再手抄一遍。
+//    手抄过一次的后果：SQL 与 runner.ts 有架构测试盯着，假件这第三份没人盯，
+//    加第五个拒绝码时它当场就跟另外两处分家了（K-WP02 实测撞到）。
+import { RECOVERABLE_DENY_CODES } from '../runner'
 
 export type Row = Record<string, unknown>
 export type Tables = Record<string, Row[]>
@@ -807,8 +811,6 @@ export function createFakeSupabase(
     const actor = String(args.p_actor)
     const reason = String(args.p_reason)
     const no = (r: string) => ({ ok: false, reason: r })
-    // 🔴 跟 SQL 里的白名单一字不差（架构测试盯着 SQL ↔ TS 不许分家）
-    const RECOVERABLE = ['no_policy', 'policy_expired', 'policy_changed_since_request', 'over_cost_cap']
 
     if (kind !== 'denied' && kind !== 'dead_letter') return no('bad_recovery_kind')
 
@@ -832,7 +834,7 @@ export function createFakeSupabase(
       if (decision!.verdict !== 'deny') return no('not_a_deny')
       if (decision!.decided_by === 'human') return no('human_reject_not_recoverable')
       const code = decision!.deny_code as string | null
-      if (!code || !RECOVERABLE.includes(code)) {
+      if (!code || !RECOVERABLE_DENY_CODES.has(code)) {
         return no(`deny_code_not_recoverable:${code ?? 'null'}`)
       }
     }

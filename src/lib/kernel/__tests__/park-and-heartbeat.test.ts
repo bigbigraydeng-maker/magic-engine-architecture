@@ -194,6 +194,52 @@ describe('P1-1 · 接管付费 running → 转人工必须真的落库', () => {
     expect(out.kind).toBe('succeeded')
     expect(calls).toHaveBeenCalledTimes(1)
   })
+
+  it('🔴 零成本的对外动作不享受「零成本」豁免 —— 接管一样转人工（重放风险跟钱无关）', async () => {
+    const calls = vi.fn()
+    const f = makeFixture({
+      registry: makeRegistry([
+        paidUnsafeDefinition({
+          sideEffect: 'outward',
+          reversible: true,
+          // 🔴 declaration 必须合规（否则「转人工」会被「outwardBlockReason 直接拒」这道
+          //    不相关的闸盖住，测不出接管保护本身有没有失效）。
+          outwardAuthorization: {
+            declaredIn: 'park-and-heartbeat.test.ts（测试专用定义）',
+            requiresHumanApproval: true,
+            rollback: 'provider_native',
+          },
+          costModel: { kind: 'fixed', estimate: () => 0, stepCeilingUsd: { a: 0 } },
+        }),
+      ]),
+      capabilities: () => ({
+        [KEY]: {
+          actionKey: KEY as never,
+          version: 1,
+          steps: {
+            a: async () => {
+              calls()
+              return { output: { done: true }, costActualUsd: 0 }
+            },
+          } as never,
+        } as CapabilityImplementation,
+      }),
+      options: { policy: policy(0) },
+      startAt: T0,
+      leaseSeconds: LEASE,
+    })
+    const { run } = await submitActionRun(f.kernel, submit())
+    await claimOrTakeoverRun(f.supabase, { runId: run.id, ownerId: 'dead#1', leaseSeconds: LEASE })
+    f.tables.action_runs[0].status = 'running'
+    f.clock.now = new Date(f.clock.now.getTime() + (LEASE + 1) * 1000)
+
+    const out = await runAction(f.kernel, submit())
+
+    expect(out.kind).toBe('dead_letter')
+    expect(calls, '零成本的对外动作，接管中途也不许自动重跑').not.toHaveBeenCalled()
+    expect(runRow(f).needs_human).toBe(true)
+    expect(String(runRow(f).last_error)).toContain('不敢自动重跑')
+  })
 })
 
 describe('P1-2 · handler 跑着的时候要续租', () => {
