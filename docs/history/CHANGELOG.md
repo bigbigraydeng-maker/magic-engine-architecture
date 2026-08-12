@@ -5,6 +5,52 @@
 
 ---
 
+### 2026-08-12（站点页面台账：把「谁批准了这一页」变成一道过不去就不许跑的闸）
+
+Issue [#930](https://github.com/bigbigraydeng-maker/magic-engine/issues/930) ·
+PR [#956](https://github.com/bigbigraydeng-maker/magic-engine/pull/956)（合并提交 `a11d2ba7`）·
+复审全记录见 [#935](https://github.com/bigbigraydeng-maker/magic-engine/pull/935)。
+
+**这次解决的一件事**：现有 site-audit 能发现页面、抓取、分类、按租户落库，但**没有「页面身份」这个概念** ——
+边发现边 upsert，人还没看过就已经进库；「审核」步骤在写入**之后**，只能整体点一个「看起来没问题」。
+本次补上 4 样，一行采集逻辑都没重写：精确主机边界 · 版本化 URL 归一（`inventory-url-rules@1`）·
+无写入的可复核计划（带确定性哈希 + 复核签名）· fail-closed 激活闸。
+
+🔴 **值得记住的那条现场事实**：crawler 的同源判定是「剥 `www.` + 字符串前缀比较」
+（`crawler.ts:133-135`、`:509-529`），于是裸域与 `www.` 被当成同一个站 ——
+而 #930 的现场是这两个主机下面挂着**两个不同的站**（一个现站、一个旧品牌残留）。
+照那套判定凑名单，会把**别人家的页面**记成这个客户的。前缀比较还会把
+`example.com.evil.com` 判成同源。**这一层因此不复用任何现成的「canonical」**：
+`seo-patrol#canonicalUrl` 也不行 —— 它**故意**合并 bare/www 服务跨源分析，目标与台账身份相反。
+
+**顺序就是这道闸的全部意义**：校验（全过才继续）→ 抓取+富集（全成才继续）→ 一次性写入 → 精确集合对账。
+任何一步没过，后面一步**根本不会发生**：校验没过就一次抓取都不发；富集没全成就一行都不写；
+写完拿写入方返回的清单跟被接受集合逐条比对，少一条多一条都不许报「完成」。
+
+**复用而不是重造**：`crawler.ts`（发现/抓取/反爬指纹）· `classifier.ts` + `geo-detector.ts` ·
+`client_site_pages` **现有列**（不加列、不加表、无 migration）。对既有代码只两处外科手术 ——
+富集逻辑抽成 `page-enrichment.ts`（行为逐字不变）· crawler 加**可选**观察口 `onIssue`
+（不传 = 完全维持既有行为，79 条既有 crawler 测试全绿）。
+
+**这次没做、且是故意的**：**没有落库实现、没有 route / cron / UI** ——
+代码里**不存在一条能写到生产台账的路径**，架构测试强制这一点。
+真正激活另需 Product Owner 单独授权 + 一把签名密钥 + 一个 `CanonicalInventoryStore` 实现。
+
+**过程本身留了个教训**：Codex 自动复审跑了 **13 轮、29 个发现全部属实**，没有收敛趋势
+（每轮都在新写的代码里找到新的真问题）。实测两条反直觉的结论已立项写进 [#951](https://github.com/bigbigraydeng-maker/magic-engine/issues/951)：
+**不要按 P1/P2 过滤**（最危险的几个全是 P2：整站缺页无人发现 / 目录文件被当成页面记账 /
+决策拼错一个字母导致页面从所有账里蒸发；而 P1 里有 3 个只是「函数超 50 行」——
+它的严重性标记与真实后果基本无关）· **不要升级审核模型**（29 个 0 误报，它没乱报）。
+另立 [#952](https://github.com/bigbigraydeng-maker/magic-engine/issues/952)（变异脚本被打断会把**关掉的安全闸**提交进库，测试还是绿的）·
+[#955](https://github.com/bigbigraydeng-maker/magic-engine/issues/955)（发现器应按响应结构递归展开 sitemap index，别靠 `.xml` 后缀猜）。
+
+**已知残留**（写在这里免得下次当新发现）：重定向 / HTTP 状态证据不可得
+（Jina 的 200 只证明 Jina 成功）→ accepted 记录**故意不写** `status_code`，
+审计恒标 `redirectEvidence: 'unavailable'` · 逐条接受/拒绝的复核**界面**未做 ·
+`cms_connections = 0` 仍是独立的 WP09 阻塞项。
+
+---
+
 ### 2026-08-12（架构守卫的扫描面：五套声明了八种后缀却没接上，实际只扫 `.ts`）
 
 Issue [#938](https://github.com/bigbigraydeng-maker/magic-engine/issues/938) ·
