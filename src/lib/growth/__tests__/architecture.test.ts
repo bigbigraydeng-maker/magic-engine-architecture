@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import ts from 'typescript'
 import { readFileSync, readdirSync, statSync } from 'fs'
 import { join, relative } from 'path'
 
@@ -25,20 +26,104 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 /**
- * 扫描前先去掉注释。
+ * 扫描前先把注释**挖空**（保留换行与列宽，行号列号都不动）。
  *
- * 🔴 不去的话，**解释这条规则的注释本身**会被当成罪证（kernel 的架构测试
- *    踩过这个坑）—— 一条把自己的文档当违规的规则，第一件事就是教人删注释。
+ * 🔴 不挖的话，**讲解这条规则的注释本身**会被当成罪证 —— 一条把自己的文档
+ *    当违规的规则，第一件事就是教人删注释。
+ *
+ * 🔴 **但原来那版正则做法是错的，而且错得能放行真实违规。**（Issue #929）
+ *    `/\/\*[\s\S]*?\*\//g` 分不清「注释」和「字符串里长得像注释的那几个字符」：
+ *      const START = '/*'
+ *      import { supabaseAdmin } from '@/lib/supabase'   ← 真实违规
+ *      const END = '*\/'
+ *    这是一段**完全合法**的源码，正则会把 `'/*'` 到 `'*\/'` 整段当块注释删掉，
+ *    夹在中间的违规随之蒸发。实测：往本目录放一个这样的文件，本套守卫**全绿**；
+ *    去掉那两行伪装、同一个文件立刻被抓 —— 守卫还在、还是绿的，但守空了。
+ *    按行首 `*` 猜 JSDoc 续行同样是猜：真代码只要缩进后以 `*` 开头就被整行丢掉；
+ *    而且那版是**删行**，行号会漂，诊断位置对不上。
+ *
+ *    注释范围一律改由**解析器**给出。它认得字符串 / 模板 / 正则字面量，
+ *    这一类问题从此不是「再补一条正则」，而是根本不存在。
+ *    仓库自带 TypeScript（devDependency，编译器 API 随包提供）—— **不引入任何新依赖**。
+ *
+ * 🔴 本实现与 `src/lib/kernel/__tests__/architecture.test.ts`、
+ *    `src/lib/action-bridge/__tests__/architecture.test.ts` 里那两份**函数体逐字一致**，
+ *    含 Issue #923 的 JsxText 修复（JSX 文本里形似注释的内容是要渲染出去的字面文本；
+ *    未闭合的 `/*` 会一路吃到 EOF，吞掉该文件后续全部源码）。
+ *    七处是否仍然一致由 `src/lib/__tests__/strip-comments-consistency.test.ts` 机器盯着，
+ *    以后再动这个函数不会又出现「修一处、漏六处」。
  */
-function stripComments(src: string): string {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .split('\n')
-    .filter((line) => {
-      const t = line.trim()
-      return !t.startsWith('//') && !t.startsWith('*')
-    })
-    .join('\n')
+
+const SOURCE_EXTENSIONS: ReadonlyArray<readonly [ext: string, kind: ts.ScriptKind]> = [
+  // 长后缀在前，避免 `.mts` / `.cts` 之类被短后缀先匹配掉
+  ['.tsx', ts.ScriptKind.TSX],
+  ['.jsx', ts.ScriptKind.JSX],
+  ['.mts', ts.ScriptKind.TS],
+  ['.cts', ts.ScriptKind.TS],
+  ['.mjs', ts.ScriptKind.JS],
+  ['.cjs', ts.ScriptKind.JS],
+  ['.ts', ts.ScriptKind.TS],
+  ['.js', ts.ScriptKind.JS],
+]
+
+/** 按后缀选 ScriptKind；认不出的按 TS 处理（保守，不会让扫描面变小）。 */
+const scriptKindFor = (fileName: string): ts.ScriptKind => {
+  for (const [ext, kind] of SOURCE_EXTENSIONS) if (fileName.endsWith(ext)) return kind
+  return ts.ScriptKind.TS
+}
+
+const parseSource = (code: string, fileName = 'scan.ts'): ts.SourceFile =>
+  // setParentNodes = false：只按位置取注释、按节点类型取说明符，用不上父指针。
+  // 全仓近 2000 个文件都要过这一遍，省下的回填是实打实的。
+  ts.createSourceFile(fileName, code, ts.ScriptTarget.Latest, false, scriptKindFor(fileName))
+
+function stripComments(src: string, fileName = 'scan.ts'): string {
+  const sourceFile = parseSource(src, fileName)
+  const ranges = new Map<string, ts.CommentRange>()
+  // JSX 文本区间：起点落在这里面的「注释」是假的，见上面 Issue #923 那段
+  const jsxTextSpans: Array<{ pos: number; end: number }> = []
+
+  // `node.pos` 就是含前导 trivia 的起点（= getFullStart()），不需要父指针
+  const collectLeadingAt = (pos: number): void => {
+    for (const r of ts.getLeadingCommentRanges(src, pos) ?? []) {
+      ranges.set(`${r.pos}:${r.end}`, r)
+    }
+  }
+  // `node.end` 是节点的结束位置 —— 同一行内紧跟在它后面的注释算它的 trailing trivia
+  const collectTrailingAt = (pos: number): void => {
+    for (const r of ts.getTrailingCommentRanges(src, pos) ?? []) {
+      ranges.set(`${r.pos}:${r.end}`, r)
+    }
+  }
+  const visit = (node: ts.Node): void => {
+    if (node.kind === ts.SyntaxKind.JsxText) jsxTextSpans.push({ pos: node.pos, end: node.end })
+    collectLeadingAt(node.pos)
+    collectTrailingAt(node.end)
+    // 🔴 必须走 getChildren()（token 级），不是 forEachChild（只给子**节点**）。
+    //    JSX 表达式里的注释 `<div>{/* … */}</div>` 挂在 `}` 这个 **token** 的
+    //    前导 trivia 上 —— JsxExpression 没有子节点，forEachChild 一个都不给，
+    //    于是整段注释原样留下，后面仍用正则的检查会把它当成生产代码。
+    //    同理还有块尾 `}` 之前那种独占一行的注释。
+    for (const child of node.getChildren(sourceFile)) visit(child)
+  }
+  visit(sourceFile)
+  // 文件末尾那条注释是 EOF token 的前导 trivia，不挂在任何其它节点上
+  collectLeadingAt(sourceFile.endOfFileToken.pos)
+
+  // 起点落在 JSX 文本里 = 这段「注释」其实是页面上的字面文本，不许挖（Issue #923）
+  const startsInsideJsxText = (pos: number): boolean =>
+    jsxTextSpans.some((span) => pos >= span.pos && pos < span.end)
+
+  const chars = src.split('')
+  // 用 forEach 而不是 `for…of ranges.values()`：仓库 tsconfig 没设 target，
+  // 直接迭代 Map 的迭代器会撞 TS2802（要 downlevelIteration）。
+  ranges.forEach((r) => {
+    if (startsInsideJsxText(r.pos)) return
+    for (let i = r.pos; i < r.end && i < chars.length; i++) {
+      if (chars[i] !== '\n') chars[i] = ' '
+    }
+  })
+  return chars.join('')
 }
 
 /** 生产文件 = growth 目录下除测试以外的 .ts。 */
@@ -46,7 +131,8 @@ const PRODUCTION_FILES = walk(GROWTH_DIR)
   .map((f) => relative(ROOT, f).split('\\').join('/'))
   .filter((f) => !f.includes('/__tests__/') && !f.endsWith('.test.ts'))
 
-const sourceOf = (file: string): string => stripComments(readFileSync(join(ROOT, file), 'utf8'))
+const sourceOf = (file: string): string =>
+  stripComments(readFileSync(join(ROOT, file), 'utf8'), file)
 
 describe('Growth 契约是纯的', () => {
   it('契约目录里确实有生产文件（防止判据因为路径写错而空跑）', () => {
@@ -126,5 +212,114 @@ describe('Growth 契约是纯的', () => {
   it('没有 any', () => {
     const violations = PRODUCTION_FILES.filter((f) => /:\s*any\b|<any>|as\s+any\b/.test(sourceOf(f)))
     expect(violations, 'CLAUDE.md 铁律 7：TypeScript strict，无 any。\n' + violations.join('\n')).toEqual([])
+  })
+})
+
+/**
+ * 🔴 **注释挖空必须走解析器，不能靠正则。**（Issue #929，含 Issue #923 的 JsxText 修复）
+ *
+ * 这一组用例守的是 `stripComments()` 本身的口径 —— 上面所有「读源码再上正则」的判据
+ * 都建在它之上：它抹掉什么，那些判据就看不见什么。
+ * 正向（必须**保留**）与反向（必须**挖空**）两边都写，防止为了修一边把另一边弄坏。
+ */
+describe('注释挖空的口径（Issue #929 / #923）', () => {
+  const TSX = 'src/lib/__scan-probe__.tsx'
+
+  it('🔴 字符串里的 `/*` 与 `*/` 之间夹着的真实违规必须还在（#929 主线）', () => {
+    // 完全合法的源码：两个普通字符串常量，中间夹着真实违规。
+    // 正则版会把 '/*' 到 '*/' 整段当块注释删掉 → 违规蒸发，守卫全绿。
+    const code = [
+      `const START = '/*'`,
+      `import { supabaseAdmin } from '@/lib/supabase'`,
+      `export const rows: any = supabaseAdmin.from('execution_items')`,
+      `const END = '*/'`,
+    ].join('\n')
+    const stripped = stripComments(code)
+    expect(stripped).toContain('@/lib/supabase')
+    expect(stripped).toContain('supabaseAdmin')
+    expect(stripped).toContain('execution_items')
+    expect(/:\s*any\b|<any>|as\s+any\b/.test(stripped)).toBe(true)
+  })
+
+  it('🔴 模板串 / 正则字面量里形似注释的内容同样不许吞掉后面的源码', () => {
+    const template = ['const t = `/*`', `import '@/lib/supabase'`, 'const u = `*/`'].join('\n')
+    expect(stripComments(template)).toContain('@/lib/supabase')
+
+    const regex = [`const re = /\\/\\*keepme\\*\\//`, `import '@/lib/supabase'`, `const d = 1`].join('\n')
+    const strippedRegex = stripComments(regex)
+    expect(strippedRegex).toContain('keepme')
+    expect(strippedRegex).toContain('@/lib/supabase')
+  })
+
+  it('🔴 行首是 `*` 的真代码不许被整行丢掉（正则版靠猜 JSDoc 续行，会误伤）', () => {
+    const code = ['const total =', '  * multiplierFromExecutionItems'].join('\n')
+    expect(stripComments(code)).toContain('multiplierFromExecutionItems')
+  })
+
+  it('🔴 JSX 文本里形似注释的内容不许被挖空，未闭合 `/*` 不许吞掉后续源码（#923）', () => {
+    expect(stripComments(`export const P = () => <div>/* keep-me */</div>`, TSX)).toContain(
+      '/* keep-me */',
+    )
+    expect(stripComments(`export const P = () => <div>// keep-me</div>`, TSX)).toContain('// keep-me')
+
+    const unterminated = [
+      `export const P = () => <div>/* unterminated`,
+      `</div>`,
+      `export const rows: any = supabaseAdmin.from('execution_items')`,
+    ].join('\n')
+    const stripped = stripComments(unterminated, TSX)
+    expect(stripped).toContain('supabaseAdmin')
+    expect(stripped).toContain('execution_items')
+    expect(/:\s*any\b|<any>|as\s+any\b/.test(stripped)).toBe(true)
+  })
+
+  it('✅ 字符串 / 模板串 / 正则 / JSX 属性里形似注释的内容都不许被误删', () => {
+    const code = [
+      `const s = "/* keep-s */"`,
+      'const t = `// keep-t`',
+      `const re = /\\/\\*keep-re\\*\\//`,
+      `export const P = () => <a href="/* keep-href */" data-x="// keep-attr">t</a>`,
+    ].join('\n')
+    const stripped = stripComments(code, TSX)
+    expect(stripped).toContain('/* keep-s */')
+    expect(stripped).toContain('// keep-t')
+    expect(stripped).toContain('keep-re')
+    expect(stripped).toContain('/* keep-href */')
+    expect(stripped).toContain('// keep-attr')
+  })
+
+  it('✅ 反向对照：真的行注释 / 块注释 / 同行 trailing / EOF / 块尾 } 之前的注释仍被挖空', () => {
+    const cases: Array<[label: string, code: string]> = [
+      ['行注释', `const x = 1 // kill-me\nconst y = 2`],
+      ['块注释', `/* kill-me */\nconst y = 2`],
+      ['同一行 trailing 块注释', `const x = foo /* kill-me */ + bar`],
+      ['EOF 注释', `const x = 1\n// kill-me`],
+      ['块尾 } 之前的注释', `function f() {\n  const a = 1\n  // kill-me\n}`],
+      ['模板插值里的注释', 'const s = `${/* kill-me */ x}`'],
+    ]
+    for (const [label, code] of cases) {
+      expect(stripComments(code), label).not.toContain('kill-me')
+    }
+  })
+
+  it('✅ 反向对照：JSX expression comment 仍被挖空（不是把 JSX 一刀切放过）', () => {
+    const cases: Array<[label: string, code: string]> = [
+      ['空表达式', `export const P = () => <div>{/* kill-me */}</div>`],
+      ['属性内联', `export const P = () => <C v={/* kill-me */ e} />`],
+      ['紧跟在 JSX 文本后面', `export const P = () => <div>/* keep-me */{/* kill-me */}</div>`],
+    ]
+    for (const [label, code] of cases) {
+      expect(stripComments(code, TSX), label).not.toContain('kill-me')
+    }
+  })
+
+  it('✅ 挖空保留换行与列宽（行号列号都不动，不许像正则版那样删行）', () => {
+    const code = ['/* lead */', 'const a = 1 // trail', 'const b = 2', '// eof'].join('\n')
+    const stripped = stripComments(code)
+    expect(stripped).not.toContain('lead')
+    expect(stripped).not.toContain('trail')
+    expect(stripped).not.toContain('eof')
+    expect(stripped.split('\n').length).toBe(code.split('\n').length)
+    expect(stripped.length).toBe(code.length)
   })
 })

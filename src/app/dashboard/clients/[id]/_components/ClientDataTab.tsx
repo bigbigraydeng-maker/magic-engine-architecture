@@ -484,7 +484,7 @@ export function ClientDataTab({ clientId }: { clientId: string }) {
           请先在连接页面完成平台授权并同步，数据同步后将在此展示。
         </p>
         <Link
-          href={`/dashboard/clients/${clientId}/connectors`}
+          href={`/dashboard/clients/${clientId}/settings?tab=connect`}
           className="mt-1 rounded-lg bg-me-charcoal px-4 py-2 text-sm font-black text-white transition-colors hover:bg-me-charcoal/85"
         >
           前往连接页面 →

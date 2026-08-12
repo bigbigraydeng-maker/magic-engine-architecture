@@ -113,6 +113,41 @@ export const AUTHORIZED_CONTEXT_MINTERS = ['src/lib/kernel/authorize.ts'] as con
 export const KERNEL_NO_SUPABASE_ADMIN_DIRS = ['src/lib/kernel/', 'src/lib/capabilities/'] as const
 
 /**
+ * 🔴 **Kernel 不许 import 任何域模块，也不许 import bridge。**
+ *
+ * 依赖方向只有一条：`bridge → kernel`。反过来（把候选身份映射放进 Kernel）
+ * 会逼着 Kernel **每接一个新域就多 import 一个域模块** —— 治权的那一层
+ * 反而挂在被治理的那些层上，第二个域模块进来时就会看出这条路走不通。
+ *
+ * 候选身份靠**结构**匹配（bridge 自己声明 `CandidateIdentity`），
+ * 所以三方谁都不用 import 谁：Growth 不 import Kernel，Kernel 不 import 两者。
+ */
+export const KERNEL_FORBIDDEN_MODULE_IMPORTS = [
+  '@/lib/growth',
+  '@/lib/action-bridge',
+] as const
+
+/**
+ * bridge 只准依赖 Kernel 的类型与只读注册表。
+ *
+ * 它是一层**纯映射**：不碰库、不碰 provider、不碰执行、不碰 legacy 生成端。
+ * 一旦这里能 import 到 capabilities 或 supabase，它就从「翻译」变成了
+ * 第二条执行路径 —— 那正是 ME2 只留一个入口（提交 action_run）要防的事。
+ */
+export const ACTION_BRIDGE_FORBIDDEN_IMPORTS = [
+  '@/lib/growth',
+  '@/lib/capabilities',
+  '@/lib/supabase',
+  '@supabase/supabase-js',
+  '@/lib/execution',
+  '@/lib/zhuge',
+  '@/lib/cms/',
+  '@/lib/publer/',
+  '@/lib/gbp/',
+  '@/lib/gsc/',
+] as const
+
+/**
  * `supabase/migrations` 里**已经存在**的重复版本号 —— 同样只准变短。
  *
  * 🔴 这不是新问题，是查出来的旧账：`origin/main` 上已经有 **23 组**不同文件

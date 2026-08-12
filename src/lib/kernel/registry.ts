@@ -27,7 +27,8 @@ import type { ActionDefinition, ActionKey } from './types'
  *   · 回滚干净：未发布的 package 没有下游消费者
  *
  * 🔴 `sideEffect: 'internal_write'` 是这个动作的红线。它一旦被改成
- *    `outward`，Gateway 会直接拒绝执行（v1 不允许任何对外副作用）。
+ *    `outward`，授权层与 Gateway 会各拒一次 —— 因为它的
+ *    `outwardAuthorization` 是 `null`，而对外动作没有逐动作声明就不放行。
  */
 const SEO_BUILD_PUBLISH_PACKAGE: ActionDefinition<'seo.build_publish_package'> = {
   actionKey: 'seo.build_publish_package',
@@ -64,6 +65,9 @@ const SEO_BUILD_PUBLISH_PACKAGE: ActionDefinition<'seo.build_publish_package'> =
   // 🔴 内部写。不碰客户网站、不碰商家页、不碰社媒、不花钱。
   sideEffect: 'internal_write',
   reversible: true,
+
+  // 不是对外动作，所以不需要对外许可。**保持 null 就是保持「不放行对外」。**
+  outwardAuthorization: null,
 
   // 同一篇稿子 + 同样的正文 → 同一把键 → 只会有一个 package。
   // 稿子改了 content_hash 就变，那是**另一件事**，该有另一个 package。

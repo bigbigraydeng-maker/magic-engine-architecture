@@ -10,17 +10,21 @@
  * visit" escape that records a help request handed to the FDE at submit.
  *
  * Hard rules from the four-reviewer pass (板桥):
- *  - GA4/GSC are shown as "we set this up for you", NOT "connect a thing you
- *    don't have" — most $990 owners have neither.
+ *  - GA4/GSC (2026-08-11: now a real "Connect with Google" button, PM ask —
+ *    see spec below) always sits next to the "sort it on the visit" skip
+ *    link on the SAME screen, never gated behind a failed attempt first —
+ *    owners with neither account just tap skip, no dead end.
  *  - Meta is "enter your ad account number / we set it up on the visit", never
- *    "authorize Meta in one click" (no real OAuth exists for it).
+ *    "authorize Meta in one click" (no real OAuth exists for it — PM decision
+ *    2026-08-11, Meta App Review timeline is out of our control).
  *  - Skipping is never silent: it becomes a help request for the kickoff visit.
  *
  * Spec: docs/superpowers/specs/2026-07-08-990-self-serve-onboarding-wizard-v0.1.md
+ *       docs/specs/2026-08-11-onboarding-integrations-unify-v1.md (GSC/GA4 real-OAuth revision)
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface StatusResponse {
@@ -73,6 +77,11 @@ function HelpLink({ label, active, onClick }: { label: string; active: boolean; 
 export default function OnboardingWizardPage() {
   const params = useParams<{ id: string }>()
   const clientId = params.id
+  // ?welcome=1 is set once, by resolveSelfServeLanding right after OTP
+  // verification (the register form promises "500 MTC welcome bonus" — 板桥
+  // PR6 复审: the wizard never confirmed it landed, so the promise looked
+  // broken even though the credit was applied).
+  const welcome = useSearchParams().get('welcome') === '1'
 
   const [status, setStatus] = useState<StatusResponse | null>(null)
   const [help, setHelp] = useState<Record<HelpKey, boolean>>({ profile: false, gbp: false, ga4gsc: false, meta: false, website: false, assets: false })
@@ -120,12 +129,20 @@ export default function OnboardingWizardPage() {
           Thanks — we&apos;ve got what we need to get started. We&apos;re running your first health check now,
           and we&apos;ll be in touch to book your visit. Anything you couldn&apos;t finish, we&apos;ll sort together then.
         </p>
+        <a href={`/dashboard/clients/${clientId}`} className={`${BTN} mt-6`} style={BTN_STYLE}>
+          Go to your dashboard →
+        </a>
       </main>
     )
   }
 
   return (
     <main className="mx-auto max-w-2xl px-5 py-8">
+      {welcome && (
+        <div className="mb-4 rounded-xl border border-[#5C8A4A]/25 bg-[#5C8A4A]/8 px-4 py-3 text-sm font-semibold text-[#3F6134]">
+          🎉 Welcome! We&apos;ve added 500 MTC to your account to get you started.
+        </div>
+      )}
       <div className="mb-2">
         <h1 className="font-display text-2xl font-bold text-me-charcoal">Let&apos;s get you set up</h1>
         <p className="mt-1 text-sm text-me-charcoal/60">
@@ -183,6 +200,24 @@ function ProfileStep({ clientId, done, onSaved, help, onHelp }: { clientId: stri
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
 
+  // 板桥 PR6 复审: a client who saves Step 1 and comes back later (new day,
+  // new OTP login) saw the green "Done" checkmark but every field blank —
+  // the data was fine, it just was never fetched back into the form.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const [briefRes, kwRes] = await Promise.all([
+          fetch(`/api/clients/${clientId}/light-brief`),
+          fetch(`/api/clients/${clientId}/primary-keywords`),
+        ])
+        const briefJson = await briefRes.json().catch(() => ({}))
+        if (briefJson.brief_fields) setF((prev) => ({ ...prev, ...briefJson.brief_fields }))
+        const kwJson = await kwRes.json().catch(() => ({}))
+        if (Array.isArray(kwJson.keywords) && kwJson.keywords.length > 0) setKeywords(kwJson.keywords.join(', '))
+      } catch { /* leave blank — worst case they re-type, save still works */ }
+    })()
+  }, [clientId])
+
   async function save() {
     setSaving(true); setMsg('')
     try {
@@ -224,6 +259,19 @@ function WebsiteStep({ clientId, done, onSaved, help, onHelp }: { clientId: stri
   const [domain, setDomain] = useState('')
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState('')
+
+  // Same resumability gap as Step 1 — prefill from whatever domain is
+  // already on the client record instead of showing an empty box next to
+  // a green "Done" checkmark.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await fetch(`/api/clients/${clientId}`)
+        const j = await r.json().catch(() => ({}))
+        if (j.client?.domain) setDomain(j.client.domain)
+      } catch { /* leave blank — worst case they re-type, save still works */ }
+    })()
+  }, [clientId])
 
   async function save() {
     setSaving(true); setMsg('')
@@ -274,9 +322,11 @@ function ConnectStep({ clientId, connectors, help, onHelp, onSaved }: { clientId
     } finally { setSavingMeta(false) }
   }
 
-  const gbpDone = Boolean(connectors.gbp)
+  const gbpDone   = Boolean(connectors.gbp)
+  const dataDone  = Boolean(connectors.gsc || connectors.ga4)
+  const stepDone  = gbpDone || dataDone
   return (
-    <StepShell n={3} title="Connect your accounts" done={gbpDone}>
+    <StepShell n={3} title="Connect your accounts" done={stepDone}>
       {/* GBP — real OAuth */}
       <div className="rounded-xl bg-me-ivory p-4">
         <p className="text-sm font-semibold text-me-charcoal">Your Google Business Profile</p>
@@ -285,17 +335,22 @@ function ConnectStep({ clientId, connectors, help, onHelp, onSaved }: { clientId
         </p>
         {gbpDone
           ? <p className="mt-2 text-xs font-semibold text-[#5C8A4A]">✓ Connected</p>
-          : <a href={`/api/auth/google/gbp/start?clientId=${clientId}`} className={`${BTN} mt-3`} style={BTN_STYLE}>Connect with Google</a>}
+          : <a href={`/api/auth/google/gbp/start?clientId=${clientId}&flow=wizard`} className={`${BTN} mt-3`} style={BTN_STYLE}>Connect with Google</a>}
         <HelpLink label={HELP_LABELS.gbp} active={help.gbp} onClick={() => onHelp('gbp')} />
       </div>
 
-      {/* GA4/GSC — we build it for you (板桥 rule) */}
+      {/* GA4/GSC — real OAuth (one click covers both) */}
       <div className="mt-3 rounded-xl bg-me-ivory p-4">
         <p className="text-sm font-semibold text-me-charcoal">Website visitor data</p>
         <p className="mt-1 text-xs leading-relaxed text-me-charcoal/60">
-          Most businesses don&apos;t have this set up yet — <span className="font-semibold text-me-charcoal">that&apos;s one of the things included in your setup</span>.
-          Nothing to do here now. (Already have Google Analytics? Tell us on the visit and we&apos;ll connect it.)
+          Already have Google Search Console or Analytics? Connect it here — one click covers both.
+          You&apos;ll see a Google confirmation screen; if you don&apos;t have these yet, that&apos;s
+          totally normal — just tap &ldquo;sort it on the visit&rdquo; below, it&apos;s one of the
+          things included in your setup.
         </p>
+        {dataDone
+          ? <p className="mt-2 text-xs font-semibold text-[#5C8A4A]">✓ Connected</p>
+          : <a href={`/api/auth/google/connect?client_id=${clientId}&flow=wizard`} className={`${BTN} mt-3`} style={BTN_STYLE}>Connect with Google</a>}
         <HelpLink label={HELP_LABELS.ga4gsc} active={help.ga4gsc} onClick={() => onHelp('ga4gsc')} />
       </div>
 

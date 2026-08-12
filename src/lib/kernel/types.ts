@@ -43,7 +43,12 @@ export type TriggeredBy = 'signal' | 'schedule' | 'human' | 'agent' | 'run'
 
 export type RiskLevel = 'low' | 'medium' | 'high' | 'irreversible'
 
-/** 副作用作用在哪。`outward` = 会作用到客户自有资产之外，v1 永远不许出现。 */
+/**
+ * 副作用作用在哪。`outward` = 会作用到客户自有资产之外。
+ *
+ * 🔴 `outward` **默认拒绝**：没有逐动作的 `outwardAuthorization` 声明就一律不放行
+ *    （授权层与 Gateway 各拒一次）。不存在全局开关能整体放开它。
+ */
 export type SideEffectClass = 'none' | 'internal_write' | 'external_read' | 'outward'
 
 // ── 动作定义（代码内 typed registry） ─────────────────────────────────────────
@@ -100,6 +105,25 @@ export interface RetryPolicy {
   readonly baseMs: number
 }
 
+/**
+ * 逐动作的对外副作用授权声明。
+ *
+ * 🔴 **默认是「没有」，而「没有」就是拒绝。** 判据不是某个字段的值，
+ *    而是这份声明**在不在** —— 给字段一个默认值会让「忘了声明」
+ *    和「明确批准了」在代码里长得一模一样（跟客户政策「查不到 = 拒绝」同一个道理）。
+ *
+ * 🔴 声明**不能覆盖事实**：v1 只放行 `reversible === true` 的对外动作，
+ *    填 `rollback` 换不来放行。完整判据见 `outward-authorization.ts`。
+ */
+export interface OutwardAuthorization {
+  /** 这条许可的出处（spec / issue / PR）。空白不算 —— 要能追到是谁按哪份文件批的。 */
+  readonly declaredIn: string
+  /** 🔴 字面量 `true`：对外动作一律要人点头，这一项不允许声明成别的值。 */
+  readonly requiresHumanApproval: true
+  /** 怎么撤回。说不清撤回路径的对外动作不许存在。 */
+  readonly rollback: 'provider_native' | 'snapshot_restore'
+}
+
 /** 验证方法键 —— 真去回读并断言，不是「写成功了所以算成功」。 */
 export type VerificationMethod = 'package_integrity'
 
@@ -127,6 +151,13 @@ export interface ActionDefinition<K extends ActionKey = ActionKey> {
   readonly risk: RiskLevel
   readonly sideEffect: SideEffectClass
   readonly reversible: boolean
+  /**
+   * 对外副作用的逐动作许可。**`null` = 不放行**，这是默认。
+   *
+   * 非 outward 的动作保持 `null` 即可（这道闸只管对外许可这一件事）。
+   * outward 的动作没有它就一定被拒 —— 授权层和 Gateway 各拒一次。
+   */
+  readonly outwardAuthorization: OutwardAuthorization | null
   readonly idempotency: IdempotencyRule
   readonly costModel: CostModel
   /**
@@ -183,6 +214,16 @@ export type DenyCode =
   | 'invalid_input'
   | 'purpose_not_allowed'
   | 'outward_side_effect_blocked'
+  /**
+   * 动作本身合规，但这个客户给它配的规则是「自动执行」—— 对外动作一律要人点头。
+   *
+   * 🔴 **跟 `outward_side_effect_blocked` 分开是必须的，不是为了好看。**
+   *    那个码说的是「动作定义本身不合规」，改条件救不了，所以**不可恢复**；
+   *    这个码说的是「规则配错了」，是环境问题 —— 把规则改成「要审批」之后
+   *    同一件事理应能做。合用一个码的话，拒绝文案让人去改规则，
+   *    人改完了却因为幂等键命中旧的 denied run 而**永远做不了**。
+   */
+  | 'outward_requires_human_policy'
   /**
    * 挂起等审批期间，客户的规则被改过了（模式变了 / 版本变了）。
    * 🔴 人工批准只能把「当前仍是 require_approval 的同一版政策」变成放行，

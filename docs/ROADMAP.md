@@ -9,7 +9,7 @@
 
 ---
 
-## ME2 — Roman GEO / AI 可见度参考闭环（史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)）🔄 契约层已合，域运行时未开工
+## ME2 — Roman GEO / AI 可见度参考闭环（史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)）🔄 GEO 测量线已跑出首个生产 baseline（WP08）
 
 > **新窗口开工前必读**：[WP00 契约冻结 v1.0](./specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md)。
 > 它冻结了七层边界、五个概念结构、禁令清单与未决登记表，**后续每个 WP 从那里取自己的边界，不重新讨论**。
@@ -34,7 +34,16 @@
 - [ ] **WP06** [#878](https://github.com/bigbigraydeng-maker/magic-engine/issues/878) 共享 Page 能力：resolve / snapshot / draft / diff / validate（零线上写）
 - [ ] **WP07** [#880](https://github.com/bigbigraydeng-maker/magic-engine/issues/880) Kernel 授权的 apply / verify / rollback
 - [ ] **K-WP01** [#881](https://github.com/bigbigraydeng-maker/magic-engine/issues/881) 认证审批 / 拒绝界面 + 政策 Settings UI
-- [ ] **WP08–WP10** [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) / [#884](https://github.com/bigbigraydeng-maker/magic-engine/issues/884) / [#885](https://github.com/bigbigraydeng-maker/magic-engine/issues/885) Roman 基线 → 首次 1–3 页优化 → T+7/14/28 复测与学习（严格串行）
+- [x] ~~**WP08**~~ ✅ **2026-08-12 完成** [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) Roman 首个有效生产 GEO baseline 已捕获并经 Product Owner 验收 —— 批次 `688bd8ae-2db6-4300-b761-b850f30c32c5`，冻结查询集 `roman_geo_baseline_v1`（12 条问题），12 / 12 观测成功 ＋ 12 条证据，累计记账成本 US$0.708 / US$5.00。
+      **这是冻结的测量事实，不因后续优化、诊断或重解释而回写或重新表述**（[冻结审计记录](https://github.com/bigbigraydeng-maker/magic-engine/issues/883#issuecomment-5260895662)）：
+      唯一已确认的 Roman 可见度数字是 **owned-domain citation coverage = 2 / 12 = 16.7%**；
+      「12 / 12」指 12 个回答都带了引用，**不等于** Roman 被提及或被推荐；
+      qualified mention / recommendation / conditional rank 的判据（M1）未决因而**不可计算**，
+      `direct_owned_page_citation` 记 `not_computable`（不是 0）。
+      **未执行**：diagnosis · optimization action · 第二轮测量 · 页面台账补录 · Roman 网站修改。
+      Issue #883 已于 **2026-08-12 经 Product Owner 授权关闭**（[结账说明](https://github.com/bigbigraydeng-maker/magic-engine/issues/883#issuecomment-5262037905)）；其余留的 3 项前置工作已拆入 #932。
+- [ ] **WP08 余项** [#932](https://github.com/bigbigraydeng-maker/magic-engine/issues/932) Roman 页面台账 + 权威来源 · 测量频率（cadence，须与 #885 对齐）· WP09 前置就位登记 —— **WP09 的前置**，与已冻结的 Baseline v1 无关
+- [ ] **WP09 / WP10** [#884](https://github.com/bigbigraydeng-maker/magic-engine/issues/884) / [#885](https://github.com/bigbigraydeng-maker/magic-engine/issues/885) 首次 1–3 页优化 → T+7/14/28 复测与学习（严格串行，**两项均未开工**）
 - [x] ~~**U11**~~ ✅ **已完成** —— `docs/STATE.md` 与本文件的 ME2 条目已补齐（本 PR）
 - [ ] **WP00 §15 其余未决项**（**U1–U10、U12**）仍**单独**以未决形态挂着，**任何 WP 不许把它们当既定假设**
 
@@ -44,6 +53,45 @@
 
 ## 近期待办（跨 Phase 汇总）
 
+### 广告引擎中心 — 已上线部分的收尾（2026-08-05）
+
+已上线（见 CHANGELOG）：每天扫在投广告的闸门 · ME 起草→建成暂停→过闸门→人点头才花钱 · `/dashboard/ad-approval`。
+
+- [ ] **P21.J.M4** 起草那一步现在只有 API，**没有任何调用方** —— 得有个地方（AI 或 UI）真的产出一份草案，否则整条链路空转。优先接 Roman：留资表单 + 视频养受众各一条
+- [ ] **P21.J.M5** 素材上传还没接：`imageHash` / `videoId` 要人先传到 Meta 才有。要么接 `ads_creative_upload_*`，要么从 ME 已有的成片直传
+- [x] ~~**P21.J.M6/M7/M8/M9/M10**~~ 2026-08-05 全部完成：共享闸 34 种写法 0 漏 0 误拦（原漏 28 种）+ 唯一写入口 `write-lesson.ts` + `POST /api/ad-engine/lessons`；页面加 90 天窗口 + 5000 行上限 + 撞顶告警；轮播/动态商品/自然帖投流三种文案形态补齐（自然帖会去主页把文案取回来）；行业归一化统一成 `normaliseIndustry` 一个函数
+
+### Onboarding / 第三方对接页面简化（2026-08-11，方案见 [specs/2026-08-11-onboarding-integrations-unify-v1.md](./specs/2026-08-11-onboarding-integrations-unify-v1.md)）
+
+已上线（PR1 [#908](https://github.com/bigbigraydeng-maker/magic-engine/pull/908) / PR2 [#909](https://github.com/bigbigraydeng-maker/magic-engine/pull/909) / PR3a [#913](https://github.com/bigbigraydeng-maker/magic-engine/pull/913) / PR5 [#916](https://github.com/bigbigraydeng-maker/magic-engine/pull/916)）：GA4/GTM 补进真 OAuth provider 白名单 + DB 约束扩容 · GA4/GSC 真授权 + 老 `google_oauth_tokens` 表回填进新表 · 三处重复对接入口（`/connectors` 等）合并进 settings 页一个入口，19 处内部链接跟着改 · 顺手补上 Google OAuth 发起/回调此前零鉴权的越权漏洞。
+
+- [x] ~~**PR6**~~ 2026-08-12 已合并（[#918](https://github.com/bigbigraydeng-maker/magic-engine/pull/918)）：已建好但一直没激活的 5 步自助向导正式设为新客户登录落地页。复审（魏征+板桥）已修：`isBriefComplete()` 卡两个完成戳导致的死循环锁 · 诸葛亮中文内部工具悬浮窗对 self_serve 客户可见（信任崩塌级） · Step1/2 表单不回填已保存数据（像丢数据）· 完成页死胡同没有返回按钮 · 500 MTC 欢迎奖励向导内无确认
+- [ ] **PR6 板桥发现5（低优先级，随手可修）** Google 连接失败 vs 客户自己点取消，回向导后画面一模一样看不出区别——不卡人，PR6 已上线，这条留到下次顺手改
+- [ ] **PR3b（contract 阶段，PM 已表态"优先级较低可以往后放"）** 老 `google_oauth_tokens` 表目前仍是读写兜底路径（PR3a 只做了双写+双读的 expand），等回填脚本在生产真正跑过、观察一段时间没问题后，再停止读写旧表并评估能不能删
+
+### 三位 agent 复审剩下的（2026-08-05，已修的不列）
+
+已修：26 个客户接口零鉴权 · 素材闸门能被一键洗白 · 撤回确认不可逆降级 · 上传页假隐私承诺 ·
+chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（全系统原来零个写 archived_at）
+
+- [x] ~~**P21.J.UP1–UP8**~~ 2026-08-05 全部清掉：删房源被自己触发器挡死（外键 SET NULL 的级联是真 UPDATE）· 公开桶路径泄 client_id · 公开上传口零限流 + vision 队列全局 FIFO 跨客户饿死 · 上传失败原因被前端丢光 · `judgeAsset` 从不读 clientId + 库层无跨客户守卫 · 签字不限 FDE（客户能给自己背书）· 7 条逃逸变异逐条补测并复验 · 文件名用 `Math.random()`
+      真库探针复验 6 条全过：删房源通了且素材归属自动置空 · 改挂/换文件/跨客户（INSERT 和 UPDATE）全被挡 · 签字/归档/放回来不受影响
+
+- [ ] **P21.J.UP9** 两个新路由（房源素材列表、归档）+ 面板仍零测试。跨客户拿数、`uploadUrl` 的 fail-closed、20 文件截断回报、全失败分支，一条都没覆盖
+- [ ] **P21.J.UP10** 上传文件零内容校验（信客户端 `file.type`，无魔数）；`visual-assets` 桶 `allowed_mime_types` 为 null（对比 `brief-uploads` 是有白名单的）
+- [ ] **P21.J.UP11** `visual-assets` 桶仍是 `public=true`。路径已 hash 化不再泄 client_id，但「知道 URL 即可读」这条没变 —— 要根治得改私有桶 + 签名 URL
+- [ ] **P21.J.UP12** 上传令牌非确定性（GCM nonce 随机），每打开一次页面就多铸一条永不过期、无法单独吊销的链接。至少要让签发落账可吊销
+
+- [ ] **P21.J.M11** 卖家向 Reel 需要 **Ray White 侧的新证明点** —— 官网四条战绩全带前东家分行名 `Royal Heights Branch`，逐字引用不行、改写更不行。要跟 Roman 要 Mission Bay 的挂牌数/成交案例/Ray White 自己的奖项
+- [ ] **P21.J.M12** `romanhu.com` 仍是旧行资料（含 `r.hu@barfoot.co.nz`）—— 广告线已被禁用词闸拦住，但网站本身该改（属 website-rescue 那条线）
+
+
+- [ ] **NZCPE.1** NZCPE 2026（新西兰-中国商品博览会，client_id `3f3617f5-2124-475d-9212-6f8c14f0b0e2`，FDE 接管网站+FB，目标=11月展会 To C 推广，因粉丝基数≈0 已定调优先做广告非自然发帖）2026-08-05 已把 Page(`721663957708055`)共享给 Magic Engine 业务组合(`1265811139097132`，权限：内容+广告+成效分析)，Facebook 侧确认生效。**下一步**：验证 Magic Engine 广告账户(`1018365291238494`)能否用这个 Page 建广告；LinkedIn/Instagram/WeChat/小红书/TikTok 本轮暂缓不用管。详见 [docs/clients/nzcpe/client-brief.md](./clients/nzcpe/client-brief.md)
+- [x] **NZCPE.1b** NZCPE 2026 追踪工具接线已完成 2026-08-05：GSC 验证+提交 sitemap、GA4 建 Property(`G-Q2L7PFQSB5`)、Meta Pixel 找到既有未装的 Pixel(`1109538797562911`)装上+接 Lead 事件，GTM 判断跳过(理由见 client-brief.md)。过程中发现本机 Cloudflare wrangler 全局登录会被并行窗口切走导致部署失败，改用专属 API token 解决，以后 nzcpe-site 部署都走这个 token
+- [ ] **NZCPE.2** NZCPE 2026 GBP——2026-08-05 查到 Google 上已有未认领的旧档案"NZCN Expo Auckland office"(同一主办方旧年份用的)，PM 拍板改名/更新成2026版，但认领必须客户自己账号走验证流程，卡在等 Richard Meng 动手认领+加 ME Manager 权限。顺带发现网站全站 NZICC 地址写错("11–13 Hobson Street"→已修正为真实地址"101 Hobson Street, Auckland Central 1010"，13文件23处已部署验证)
+- [x] **NZCPE.3** NZCPE 2026 DataForSEO 关键词调研已完成 2026-08-05，写入 `clients.primary_keywords`。真实发现：品牌词("NZCPE"等)搜索量≈0，"things to do with kids auckland"(1900/月,难度20)才是真实流量入口，内容方向应该从"贸易博览会"品牌向转成"奥克兰周末免费亲子活动"意图向
+- [x] **NZCPE.4** NZCPE 2026 网站 SEO 技术审计+修复已完成 2026-08-05：加了 canonical/OG/Twitter Card(全站原本零覆盖，FB广告落地页分享没有预览图) + Event/Organization JSON-LD 结构化数据 + 修了首页 title 日期写错(19-22误写成20-22实际是20-22)。⚠️ 还差：Google Search Console 从未提交(无验证 tag)——需 PM 的 Google 账号登录才能拿验证码，我这边进不去；Meta Pixel 也没埋，投 Conversions 类广告前必须先装
+- [ ] **NZCPE.5** NZCPE 2026 网站+FB 内容规划+广告计划已出草案，见 [docs/clients/nzcpe/content-and-ads-plan.md](./clients/nzcpe/content-and-ads-plan.md)。待 PM 拍板：广告预算量级、广告账户挂谁、要不要做"things to do with kids"博客内容、中文素材由谁做
 - [ ] **TM.1** 团队工作记忆 · 套路层出第一条：机器已建好，但要先吃几天真实会话数据才提炼得出可复用套路。观察 `team_skills` 是否开始有行；一周后没有就回头看 distill prompt 的套路判据是不是太严
 - [ ] **TM.2** 团队工作记忆 · 后台页 `/dashboard/team-memory` 补视觉验证：功能上线时页面在登录墙后未做视觉检查，数据层与接口层已验
 - [ ] **TM.3** 团队工作记忆 · 补第二个 agent 复审：按铁律 4 属大任务（加表 + 新 endpoint + 新 UI），交付时只做了自审 + 变异测试，缺魏征挑刺那一刀
