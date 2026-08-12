@@ -13,6 +13,24 @@
 > 本文件合入时（2026-08-12）`main` 已经又前进了一批（WP02 / WP03 / WP04 / WP04A / K-WP02
 > 等已合并），因此**文件数、行数与模块现状必然已经对不上**。
 >
+> ### 🔴 本文件是历史材料，**不是可执行的方案** —— 别照它的问题清单和迁移计划开工
+>
+> 2026-08-12 核对后加的。差的不只是数字，是**几条结构性判断已经被后续工作推翻了**：
+>
+> | 审计原文的判断 | 2026-08-12 的实际情况 |
+> |---|---|
+> | 「缺少域无关、可续跑、可重试的 Execution Kernel」/「运行时完全不存在」 | **已存在**：`src/lib/kernel/`（`index.ts` / `runner.ts` / `authorize.ts` / `gateway.ts` / `idempotency.ts` / `lineage.ts`），PR #863 合入。提交 / 授权 / 幂等 / 恢复 / 人工审批都有 |
+> | 「外部 Capability 仍分散」 | **已有统一层**：`src/lib/capabilities/` |
+> | 「`action_type` 仍是 AI 自由文本，缺稳定 Action Contract」 | **已治理**：K-WP02（#882 / PR #898），`src/lib/action-bridge/` 的 `MAPPING_TABLE` 是白名单（当前为空数组，但机制在） |
+> | 「上游 outcome 身份未修」 | **已修**：migration `20260808000001_flywheel_outcomes_identity_expand.sql` |
+>
+> ⚠️ 上面这些**代码在 `main` 但大多没接生产调用方**（内核 migration 未 apply、零调用方）——
+> 「没启用」和「不存在」是两件事，**按本文的 Phase B / C 去建，会重复建一遍已经有的内核**。
+>
+> **正确的现状入口**：[STATE.md](../STATE.md) §3.1（ME2 那几行）· [ROADMAP.md](../ROADMAP.md) 的 ME2 段 ·
+> Epic [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)。
+> 本文件保留的价值是**当时为什么这么判断**，以及 ME2 这条线的立项由来 —— 不是待办清单。
+>
 > 用法：**结构性判断与问题清单**仍然有效，可以读；**任何具体数字先自己复核一次**，
 > 不要拿本文件去覆盖 STATE.md 或当前代码。
 >
@@ -641,7 +659,7 @@ Brief §18 描述的体验（「这个月什么在拖我们后腿？」「你这
 | 5 | **Verification 验证** | **2** | 归因作业（6h）+ GSC 收录检查真实存在且有测试。但只覆盖有 `expected_metric` 的动作，且 SEO 之外基本空白 |
 | 6 | **Learning 学习** | **1** | 数据模型 5 张表 + 抽取器代码完整 + 幂等设计正确 —— **但抽取器零调用方，cron 未调度**。汇总层（rollup）在空表上跑 |
 | 7 | **Long-term memory 长期记忆** | **2** | 业务记忆（brief）健康；情节记忆有原始数据；学到的偏好基本为空；策略记忆是代码常量 |
-| 8 | **Workflow reliability 工作流可靠性** | **1** | 无通用运行时。8 张作业表中只有 `content_work_orders`（心跳+认领+重试上限）和 `execution_items`（退避+超时回收）算及格，其余 6 张卡住无人知 |
+| 8 | **Workflow reliability 工作流可靠性** | **1** | 无通用运行时。8 张作业表中只有 `content_work_orders`（心跳+认领+重试上限）和 `execution_items`（退避+超时回收）算及格。**其余 6 张不是一律卡死** —— 按 §2 那张逐表核对（本文第 236–239 行）：`client_discovery_jobs` / `site_audit_jobs` 有超时失败清理（仅标失败，活还是丢）· `visual_assets` 有带上限的真·自动重试 · **真正卡住无人知的只有其余 3 张**。评这个 1 分是因为「无通用运行时」，不是因为六张全裸 |
 | 9 | **Agent modularity Agent 模块化** | **3** | 四个 agent 职责清晰、通过表交接（不靠对话上下文）、诸葛亮的只读工具服务端注入身份 —— 这些都对。扣分：agent 与工具之间无契约 |
 | 10 | **Tool/API abstraction 工具抽象** | **1** | Capability 层完全缺失；15 个文件绕过统一 LLM 层；鲁班 4 个工具里 2 个是半成品。`lib/cms/` 有正确形状但没暴露成工具 |
 | 11 | **Goal alignment 目标对齐** | **2** | 表建得好（intent/baseline/target/period/budget/多目标），链路 goals→initiatives→execution_items 通了。但决策层只收到一个字符串，排序框架 8 条规则无一提 Goal |
