@@ -94,6 +94,17 @@
 - [ ] **PR6 板桥发现5（低优先级，随手可修）** Google 连接失败 vs 客户自己点取消，回向导后画面一模一样看不出区别——不卡人，PR6 已上线，这条留到下次顺手改
 - [ ] **PR3b（contract 阶段，PM 已表态"优先级较低可以往后放"）** 老 `google_oauth_tokens` 表目前仍是读写兜底路径（PR3a 只做了双写+双读的 expand），等回填脚本在生产真正跑过、观察一段时间没问题后，再停止读写旧表并评估能不能删
 
+### NZCPE 2026（新西兰中国贸易博览会 · 2026-08-05 建档，客户档在 [docs/clients/nzcpe/](./clients/nzcpe/)）
+
+FDE 接手范围：网站 `nzcpe.co.nz`（Cloudflare Pages）+ Facebook，服务 11 月博览会。
+已上线：假新闻清理 · GSC/GA4/Meta Pixel 全部接通（Pixel `1109538797562911`，全站 PageView + 三个报名表单 `Lead`）。
+
+- [ ] **NZCPE-1 推广方向口径待 PM 一句话定死** —— 网站 SEO 已按 PM 2026-08-05 拍板改回 **B2B**（中国企业出海 / NZ 企业对华采购），而广告与社媒计划仍冲 **To C** 的 15,000 公众访客目标。两条线现在方向不同：是有意为之，还是广告也要一并转 B2B？没定死之前，广告线按 To C 继续跑。
+- [ ] **NZCPE-2 GBP 建档** 地址挂 NZICC（101 Hobson Street, Auckland CBD）—— To C 推广也吃自然搜索流量
+- [ ] **NZCPE-3 确认 `plan_tier`** 现设 `starter`，无预算信号，PM 确认后再调
+- [ ] **NZCPE-4 广告账户挂谁** NZCPE 自建 vs Magic Engine `1018365291238494` 代投 —— PM 待拍板
+- [ ] **NZCPE-5（可选，PM 决定要不要做）** 关键词调研发现 `things to do with kids auckland`（1900/月·低难度）比品牌词好抓，可做网站博客 / `news.html` 扩展 —— **但这跟 NZCPE-1 的方向问题绑在一起**，B2B 方向下这条不成立
+
 ### 三位 agent 复审剩下的（2026-08-05，已修的不列）
 
 已修：26 个客户接口零鉴权 · 素材闸门能被一键洗白 · 撤回确认不可逆降级 · 上传页假隐私承诺 ·
