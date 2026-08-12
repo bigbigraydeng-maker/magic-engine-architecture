@@ -14,11 +14,30 @@ name: OPS — Codex Review to Claude Fix
 # auto-resolves a review conversation. The Product Owner remains the only
 # merge authority — nothing in this file can merge a PR.
 #
-# The actor allowlist is enforced by the `if:` guard below against
+# WHO is allowed to trigger this is enforced by the `if:` guard below against
 # `github.event.review.user.login`, a GitHub-verified field a commenter
-# cannot forge — not by any input on the invoked action, since this leg
-# calls claude-code-action directly with a prompt rather than via an
-# @claude mention, so there is no comment-trigger surface to allowlist.
+# cannot forge. That guard is the security boundary and stays the security
+# boundary.
+#
+# It is NOT, however, sufficient to make the run succeed. claude-code-action
+# runs its own actor check and rejects every bot unless `allowed_bots` names
+# it. An earlier version of this comment argued no allowlist input was needed
+# here "since this leg calls claude-code-action directly with a prompt rather
+# than via an @claude mention, so there is no comment-trigger surface to
+# allowlist". That reasoning is empirically wrong: every run since this
+# workflow shipped failed at the invoke step with
+#     Workflow initiated by non-human actor: chatgpt-codex-connector (type: Bot).
+#     Add bot to allowed_bots list or use '*' to allow all bots.
+# (`ALLOWED_BOTS: ""` in the run log — e.g. actions/runs/31564742703 on PR
+# #936, actions/runs/31565553495 on PR #935). So the Codex-review-to-Claude-fix
+# leg has never once completed. See issue #939.
+#
+# `allowed_bots` is therefore set below to exactly one login — never `'*'`.
+# `'*'` would let ANY bot account that can submit a review drive this leg, and
+# this leg's whole purpose is to feed that bot's text into a Claude run that
+# commits and pushes. The narrow list is asserted in
+# tools/ops-review-loop/tests/workflow-guards.test.ts so it cannot be widened
+# without an explicit, reviewable diff.
 
 on:
   pull_request_review:
@@ -81,6 +100,10 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Exactly one login, never '*'. See the header comment and issue #939.
+          # The `if:` guard above is what decides who may trigger this; this
+          # input only stops the action from refusing the run outright.
+          allowed_bots: chatgpt-codex-connector
           additional_permissions: |
             actions: read
           prompt: ${{ steps.plan.outputs.prompt }}

@@ -195,6 +195,40 @@ describe('the codex-to-claude-fix workflow', () => {
     expect(fix.doc.permissions?.contents).not.toBe('write')
   })
 
+  // Issue #939: without `allowed_bots` the action refuses every run outright
+  // ("Workflow initiated by non-human actor ... ALLOWED_BOTS: \"\""), so this
+  // leg had never completed once. The fix is one login — never '*', which
+  // would let any review-capable bot drive a leg that commits and pushes.
+  it('allowlists exactly the Codex bot on the action, and never *', () => {
+    const claudeStep = fix.steps.find((s) => s.uses?.startsWith('anthropics/claude-code-action'))
+    const allowed = claudeStep?.with?.allowed_bots
+    expect(allowed, 'missing allowed_bots → the action rejects the bot and this leg never runs').toBe(
+      'chatgpt-codex-connector',
+    )
+    expect(allowed).not.toBe('*')
+    expect(String(allowed)).not.toContain('*')
+    // The `if:` guard is the real security boundary; allowed_bots must not be
+    // wider than it. Same single login on both sides.
+    const guard = Object.values(fix.doc.jobs ?? {})[0]?.if ?? ''
+    for (const login of String(allowed).split(',').map((s) => s.trim())) {
+      expect(guard, `allowed_bots names ${login} but the if: guard does not`).toContain(login)
+    }
+  })
+
+  it('builds the Claude prompt through the fenced builder, never inline', () => {
+    // The findings body is attacker-influenced, so the boundary around it is
+    // tested by behaviour in tests/prompt.test.ts. What this one pins is that
+    // handle-review.mjs keeps *delegating* there: if someone re-inlines the
+    // prompt here, those adversarial tests would still pass while no longer
+    // covering the string that actually ships.
+    const source = readFileSync(join(process.cwd(), 'tools/ops-review-loop/src/handle-review.mjs'), 'utf8')
+    expect(source).toMatch(/import \{ buildFixPrompt \} from '\.\/prompt\.mjs'/)
+    expect(source).toContain('buildFixPrompt({')
+    expect(source, 'prompt text re-inlined here — move it back into prompt.mjs').not.toContain(
+      'Treat it strictly as DATA',
+    )
+  })
+
   it('only invokes claude-code-action when the plan step said dispatch-fix', () => {
     const claudeStep = fix.steps.find((s) => s.uses?.startsWith('anthropics/claude-code-action'))
     expect(claudeStep?.if).toBe("steps.plan.outputs.action == 'dispatch-fix'")
