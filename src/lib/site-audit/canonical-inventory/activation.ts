@@ -297,6 +297,7 @@ function isDiscoveryShape(value: unknown): boolean {
   return (
     typeof d.host === 'string' &&
     typeof d.count === 'number' &&
+    typeof d.foreignCount === 'number' &&
     (typeof d.error === 'string' || d.error === null) &&
     typeof d.acknowledged === 'boolean'
   )

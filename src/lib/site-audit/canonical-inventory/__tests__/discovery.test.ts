@@ -52,9 +52,35 @@ describe('discoverCandidateUrls', () => {
     )
     const outcome = await discoverCandidateUrls(['example.com', 'legacy.example.com'])
     expect(outcome.perHost).toEqual([
-      { host: 'example.com', count: 1, error: null },
-      { host: 'legacy.example.com', count: 0, error: null },
+      { host: 'example.com', count: 1, foreignCount: 0, error: null },
+      { host: 'legacy.example.com', count: 0, foreignCount: 0, error: null },
     ])
+  })
+
+  it('🔴 只返回了别的主机的 URL → 本主机记 0 条（「找到东西」≠「找到这个站的东西」）', async () => {
+    // crawler 的同源过滤是宽松的（剥 www + 前缀比较），跑 A 主机时可能只带回 B 的 URL。
+    // 按返回总条数记账，A 就被记成「有页面」，那道「0 条必须有人认」的闸永远不响。
+    vi.mocked(discoverSitemapUrls).mockImplementation(async (host) =>
+      host === 'www.example.com'
+        ? ['https://example.com/a', 'https://example.com/b'] // 全是裸域的页面
+        : ['https://example.com/a'],
+    )
+    const outcome = await discoverCandidateUrls(['example.com', 'www.example.com'])
+    const www = outcome.perHost.find((h) => h.host === 'www.example.com')
+    expect(www).toMatchObject({ count: 0, foreignCount: 2 })
+  })
+
+  it('🔴 发现过程中被吞掉的失败要记成 error（部分结果不许当完整结果）', async () => {
+    // discoverSitemapUrls 每一级回退都会吞掉失败继续走：一棵子 sitemap 取不到、
+    // 其余还有结果时它正常返回 —— 部分结果长得跟完整结果一模一样。
+    vi.mocked(discoverSitemapUrls).mockImplementation(async (host, opts) => {
+      opts?.onIssue?.({ stage: 'child-sitemap', url: `https://${host}/sitemap-2.xml`, error: 'HTTP 503' })
+      return [`https://${host}/a`]
+    })
+    const outcome = await discoverCandidateUrls(['example.com'])
+    expect(outcome.perHost[0].count).toBe(1)
+    expect(outcome.perHost[0].error).toContain('被吞掉')
+    expect(outcome.perHost[0].error).toContain('sitemap-2.xml')
   })
 
   it('一个主机挂掉不影响别的主机，但必须留痕（否则跟「没有页面」长得一样）', async () => {

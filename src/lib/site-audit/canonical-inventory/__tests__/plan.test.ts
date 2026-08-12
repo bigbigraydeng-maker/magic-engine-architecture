@@ -25,7 +25,7 @@ function build(urls: readonly string[], hosts: readonly string[] = ['example.com
     approvedHosts: hosts,
     discoveredUrls: urls,
     // 默认每个批准主机都找到了东西 —— 「找到 0 条」是要单独立用例的情形。
-    discovery: hosts.map((host) => ({ host, count: urls.length, error: null })),
+    discovery: hosts.map((host) => ({ host, count: urls.length, foreignCount: 0, error: null })),
   })
 }
 
@@ -88,7 +88,7 @@ describe('计划组装', () => {
       requestedDomain: 'example.com',
       approvedHosts: ['example.com'],
       discoveredUrls: [],
-      discovery: [{ host: 'example.com', count: 1, error: null }],
+      discovery: [{ host: 'example.com', count: 1, foreignCount: 0, error: null }],
     }
     expect(() => buildInventoryPlan({ ...base, clientId: ' ' })).toThrow(InventoryPlanError)
     expect(() => buildInventoryPlan({ ...base, clientId: CLIENT, requestedDomain: '' })).toThrow(InventoryPlanError)
@@ -106,7 +106,7 @@ describe('逐主机发现必须进计划（否则缺整个站没人看得见）'
 
   it('🔴 批准了两个主机、发现记录只有一个 → 抛（那个站根本没被找过）', () => {
     expect(() =>
-      buildInventoryPlan({ ...base, discovery: [{ host: 'example.com', count: 1, error: null }] }),
+      buildInventoryPlan({ ...base, discovery: [{ host: 'example.com', count: 1, foreignCount: 0, error: null }] }),
     ).toThrow(/根本没被找过/)
   })
 
@@ -115,8 +115,8 @@ describe('逐主机发现必须进计划（否则缺整个站没人看得见）'
       buildInventoryPlan({
         ...base,
         discovery: [
-          { host: 'example.com', count: 1, error: null },
-          { host: 'shop.example.com', count: 0, error: null },
+          { host: 'example.com', count: 1, foreignCount: 0, error: null },
+          { host: 'shop.example.com', count: 0, foreignCount: 0, error: null },
         ],
       }),
     ).toThrow(/必须有人明确认过/)
@@ -127,8 +127,8 @@ describe('逐主机发现必须进计划（否则缺整个站没人看得见）'
       buildInventoryPlan({
         ...base,
         discovery: [
-          { host: 'example.com', count: 1, error: null },
-          { host: 'shop.example.com', count: 0, error: 'DNS lookup failed' },
+          { host: 'example.com', count: 1, foreignCount: 0, error: null },
+          { host: 'shop.example.com', count: 0, foreignCount: 0, error: 'DNS lookup failed' },
         ],
       }),
     ).toThrow(/必须有人明确认过/)
@@ -138,14 +138,14 @@ describe('逐主机发现必须进计划（否则缺整个站没人看得见）'
     const plan = buildInventoryPlan({
       ...base,
       discovery: [
-        { host: 'example.com', count: 1, error: null },
-        { host: 'shop.example.com', count: 0, error: null },
+        { host: 'example.com', count: 1, foreignCount: 0, error: null },
+        { host: 'shop.example.com', count: 0, foreignCount: 0, error: null },
       ],
       acknowledgedIncompleteHosts: ['shop.example.com'],
     })
     expect(plan.discovery).toEqual([
-      { host: 'example.com', count: 1, error: null, acknowledged: false },
-      { host: 'shop.example.com', count: 0, error: null, acknowledged: true },
+      { host: 'example.com', count: 1, foreignCount: 0, error: null, acknowledged: false },
+      { host: 'shop.example.com', count: 0, foreignCount: 0, error: null, acknowledged: true },
     ])
     // 改动发现记录 → 哈希必须变（否则复核人看到的和实际跑的可以分叉）
     const tampered = {

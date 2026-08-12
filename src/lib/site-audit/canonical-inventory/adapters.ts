@@ -14,7 +14,10 @@ import type { ActivationDeps, CanonicalInventoryStore } from './types'
 
 export interface HostDiscoveryResult {
   readonly host: string
+  /** **这个主机自己的**页面数（按解析后的 hostname 精确归属，不是发现器返回的总条数）。 */
   readonly count: number
+  /** 发现这个主机时返回的、其实属于别的主机的条数 —— 记下来，不丢掉。 */
+  readonly foreignCount: number
   readonly error: string | null
 }
 
@@ -46,22 +49,55 @@ export async function discoverCandidateUrls(approvedHosts: readonly string[]): P
   const perHost: HostDiscoveryResult[] = []
 
   for (const host of approvedHosts) {
-    let count = 0
-    let error: string | null = null
-    try {
-      const found = await discoverSitemapUrls(host)
-      for (const url of found) {
-        if (!seen.has(url)) seen.add(url)
-      }
-      count = found.length
-    } catch (err) {
-      // 一个主机挂掉不影响别的主机，但**必须留痕** —— 否则它会长得跟「这个站没有页面」一样。
-      error = err instanceof Error ? err.message : String(err)
-    }
-    perHost.push({ host, count, error })
+    perHost.push(await discoverOneHost(host, seen))
   }
 
   return { urls: Array.from(seen), perHost }
+}
+
+/**
+ * 跑一个主机的发现，并**如实**记账。
+ *
+ * 🔴 两件事都不能想当然：
+ *    1. **「找到了东西」≠「找到了这个站的东西」。** crawler 的同源过滤是宽松的
+ *       （剥 www + 前缀比较），跑 A 主机时完全可能只返回 B 主机的 URL ——
+ *       按返回总条数记账，A 就被记成「有页面」，那道「0 条必须有人认」的闸永远不响，
+ *       而 A 整个站静默缺席。所以只数**解析后 hostname 精确等于本主机**的那些。
+ *    2. **「没抛错」≠「找全了」。** discoverSitemapUrls 每一级回退都会吞掉失败继续走，
+ *       一棵子 sitemap 取不到、其余还有结果时，它正常返回 —— 部分结果长得跟完整结果一样。
+ *       所以接上它的观察口，任何被吞掉的失败都记成 error，交给人去认。
+ */
+async function discoverOneHost(host: string, seen: Set<string>): Promise<HostDiscoveryResult> {
+  const swallowed: string[] = []
+  let found: readonly string[] = []
+  try {
+    found = await discoverSitemapUrls(host, {
+      onIssue: (issue) => swallowed.push(`${issue.stage}${issue.url ? ` ${issue.url}` : ''}: ${issue.error}`),
+    })
+  } catch (err) {
+    // 整个发现挂掉也必须留痕 —— 否则它会长得跟「这个站没有页面」一样。
+    return { host, count: 0, foreignCount: 0, error: err instanceof Error ? err.message : String(err) }
+  }
+
+  let count = 0
+  for (const url of found) {
+    if (!seen.has(url)) seen.add(url)
+    if (hostnameOf(url) === host) count++
+  }
+  const error =
+    swallowed.length > 0
+      ? `发现过程中有 ${swallowed.length} 处失败被吞掉（结果可能不完整）：${swallowed.slice(0, 3).join('；')}`
+      : null
+  return { host, count, foreignCount: found.length - count, error }
+}
+
+/** 解析不了就返回 null —— 绝不用字符串包含去猜归属。 */
+function hostnameOf(url: string): string | null {
+  try {
+    return new URL(url).hostname.toLowerCase()
+  } catch {
+    return null
+  }
 }
 
 /**

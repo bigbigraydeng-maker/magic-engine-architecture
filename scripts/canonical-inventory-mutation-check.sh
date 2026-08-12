@@ -378,12 +378,20 @@ check "🔴 只发现第一个批准主机（第二个站的页面静默缺席�
   "  for (const host of approvedHosts.slice(0, 1)) {"
 
 check "逐主机条数不留痕（某个站 0 条被合并结果盖住）" "$ADAPTERS" \
-  "    perHost.push({ host, count, error })" \
-  "    void host; void count; void error"
+  "    perHost.push(await discoverOneHost(host, seen))" \
+  "    perHost.push({ host, count: 1, foreignCount: 0, error: null }); await discoverOneHost(host, seen)"
 
 check "一个主机挂掉不留痕（跟「这个站没有页面」长得一样）" "$ADAPTERS" \
-  "      error = err instanceof Error ? err.message : String(err)" \
-  "      void err"
+  "    return { host, count: 0, foreignCount: 0, error: err instanceof Error ? err.message : String(err) }" \
+  "    void err; return { host, count: 0, foreignCount: 0, error: null }"
+
+check "🔴 按返回总条数记账，不按精确主机归属（只带回别家 URL 也算「有页面」）" "$ADAPTERS" \
+  "    if (hostnameOf(url) === host) count++" \
+  "    count++"
+
+check "🔴 被吞掉的发现失败不记 error（部分结果被当成完整结果）" "$ADAPTERS" \
+  "    swallowed.length > 0" \
+  "    false"
 
 check "🔴 抓取上限吃 crawlPages 的默认 100（超过 100 的批准清单被截断）" "$ADAPTERS" \
   "    return crawlPages([...urls], { ...opts, limit: urls.length })" \
@@ -395,7 +403,7 @@ check "显式给的上限比清单还小也照跑（截断后跑出来的不是�
 
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 74 道闸各自单独确认会响"
+  echo "✅ 全部 76 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"

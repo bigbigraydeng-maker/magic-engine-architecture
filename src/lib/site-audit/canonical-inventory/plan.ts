@@ -48,7 +48,12 @@ export interface BuildInventoryPlanInput {
    * 🔴 必须逐个覆盖 `approvedHosts`。少一个主机 = 那个站根本没被找过，
    *    而合并后的 URL 清单看不出这件事。
    */
-  readonly discovery: readonly { readonly host: string; readonly count: number; readonly error: string | null }[]
+  readonly discovery: readonly {
+    readonly host: string
+    readonly count: number
+    readonly foreignCount?: number
+    readonly error: string | null
+  }[]
   /**
    * 明确认过的「不完整发现」主机。
    *
@@ -101,13 +106,13 @@ function summariseDiscovery(
   input: BuildInventoryPlanInput,
   approvedHosts: readonly string[],
 ): readonly HostDiscoverySummary[] {
-  const seen = new Map<string, { count: number; error: string | null }>()
+  const seen = new Map<string, { count: number; foreignCount: number; error: string | null }>()
   for (const row of input.discovery) {
     const host = row.host.trim().toLowerCase()
     if (seen.has(host)) {
       throw new InventoryPlanError('duplicate_discovery_host', `发现结果里主机 ${host} 出现了多次`)
     }
-    seen.set(host, { count: row.count, error: row.error })
+    seen.set(host, { count: row.count, foreignCount: row.foreignCount ?? 0, error: row.error })
   }
   const acknowledged = new Set((input.acknowledgedIncompleteHosts ?? []).map((h) => h.trim().toLowerCase()))
 
@@ -129,7 +134,13 @@ function summariseDiscovery(
           '否则会产出一份缺了整个站的台账，而缺页没有人会发现。',
       )
     }
-    return { host, count: row.count, error: row.error, acknowledged: incomplete ? ack : false }
+    return {
+      host,
+      count: row.count,
+      foreignCount: row.foreignCount,
+      error: row.error,
+      acknowledged: incomplete ? ack : false,
+    }
   })
 }
 
@@ -264,7 +275,13 @@ export function computePlanHash(plan: Omit<CanonicalInventoryPlan, 'planHash'>):
       approvedHosts: [...plan.boundary.approvedHosts].sort(compareStrings),
     },
     discovery: [...plan.discovery]
-      .map((d) => ({ host: d.host, count: d.count, error: d.error ?? null, acknowledged: d.acknowledged }))
+      .map((d) => ({
+        host: d.host,
+        count: d.count,
+        foreignCount: d.foreignCount ?? 0,
+        error: d.error ?? null,
+        acknowledged: d.acknowledged,
+      }))
       .sort((a, b) => compareStrings(a.host, b.host)),
     candidates: plan.candidates.map((c) => ({
       originalUrl: c.originalUrl,

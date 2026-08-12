@@ -153,7 +153,10 @@ export interface PlanReview {
  */
 export interface HostDiscoverySummary {
   readonly host: string
+  /** **这个主机自己的**页面数（按解析后的 hostname 精确归属）。 */
   readonly count: number
+  /** 发现这个主机时返回的、其实属于别的主机的条数。记着不丢，但不算它「有页面」。 */
+  readonly foreignCount: number
   readonly error: string | null
   /**
    * 人有没有明确认过「这个主机 0 条 / 出错，我知道，继续」。
