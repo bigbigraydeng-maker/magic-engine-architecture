@@ -22,7 +22,7 @@ import {
   type RejectionReasonCode,
   type ReviewedInventoryPlan,
 } from './types'
-import { canonicaliseUrl, deriveCanonicalUrl, normaliseApprovedHosts } from './url-rules'
+import { canonicaliseUrl, normaliseApprovedHosts } from './url-rules'
 
 export class InventoryPlanError extends Error {
   readonly code: string
@@ -146,6 +146,12 @@ export function applyReviewDecisions(
   //    把某条候选的 canonical 从 /a 改成 /hacked 再批准，出来的是一份哈希完全自洽的计划，
   //    激活闸只会确认 /hacked 本身规范 —— 于是抓取并写入一个没人复核过的页面。
   //    旧规则版本生成的计划同理，不验就会被悄悄「升级」成当前规则。
+  if (plan.review !== null) {
+    throw new InventoryPlanError(
+      'already_reviewed',
+      '这份计划已经有复核签名了 —— 复核只盖一次章。要改决策就从新生成的计划重新走一遍。',
+    )
+  }
   assertPlanIntact(plan)
   if (input.review.reviewedBy.trim().length === 0) {
     throw new InventoryPlanError('missing_reviewer', '复核必须署名 —— 「谁批的」是这份计划唯一的授权凭据')
@@ -153,25 +159,7 @@ export function applyReviewDecisions(
   if (input.review.reviewedAt.trim().length === 0) {
     throw new InventoryPlanError('missing_reviewed_at', '复核必须带时间戳')
   }
-  const known = new Set(plan.candidates.map((c) => c.originalUrl))
-  for (const url of Object.keys(input.decisions)) {
-    if (!known.has(url)) {
-      throw new InventoryPlanError('unknown_candidate', `复核决策指向了计划里不存在的候选：${url}`)
-    }
-  }
-
-  const candidates = plan.candidates.map((candidate) => {
-    const decision = input.decisions[candidate.originalUrl]
-    if (decision === undefined) return candidate
-    if (candidate.decision !== 'pending') {
-      throw new InventoryPlanError(
-        'auto_rejected_not_overridable',
-        `候选 ${candidate.originalUrl} 已被规则判为 ${candidate.decision}（${candidate.reasonCodes.join(',')}），` +
-          '不接受人工覆盖 —— 主机边界与 URL 规则不是可商量的项',
-      )
-    }
-    return { ...candidate, decision: decision.decision, reasonCodes: resolveReasonCodes(decision) }
-  })
+  const candidates = applyDecisionsToCandidates(plan.candidates, input.decisions)
 
   const finalised = finalisePlan({
     clientId: plan.clientId,
@@ -215,15 +203,53 @@ export function computePlanHash(plan: Omit<CanonicalInventoryPlan, 'planHash'>):
 }
 
 /**
- * 计划是否「还是它自己」：版本对得上、哈希自洽、且每条候选的 canonical 都能从
- * 它的原始 URL 按当前规则**重新推导出来**。不满足直接抛。
+ * 把人工决策盖到候选上。
  *
- * 🔴 三条缺一不可：
- *    - 只验哈希：拿旧规则版本生成的计划会被当前代码照单全收；
- *    - 只验版本：内容改过照样过；
- *    - 只验前两条：改 canonical 的同时重算哈希就能绕过去 —— 推导校验才是那道真闸。
+ * 🔴 规则自动拒掉的候选不许被改成 accepted —— 主机边界与 URL 规则不是可商量的项。
+ * 🔴 决策指向不存在的候选直接抛，防止复核文件与计划悄悄脱节。
+ */
+function applyDecisionsToCandidates(
+  candidates: readonly InventoryCandidate[],
+  decisions: Readonly<Record<string, ReviewDecision>>,
+): InventoryCandidate[] {
+  const known = new Set(candidates.map((c) => c.originalUrl))
+  for (const url of Object.keys(decisions)) {
+    if (!known.has(url)) {
+      throw new InventoryPlanError('unknown_candidate', `复核决策指向了计划里不存在的候选：${url}`)
+    }
+  }
+  return candidates.map((candidate) => {
+    const decision = decisions[candidate.originalUrl]
+    if (decision === undefined) return candidate
+    if (candidate.decision !== 'pending') {
+      throw new InventoryPlanError(
+        'auto_rejected_not_overridable',
+        `候选 ${candidate.originalUrl} 已被规则判为 ${candidate.decision}（${candidate.reasonCodes.join(',')}），` +
+          '不接受人工覆盖 —— 主机边界与 URL 规则不是可商量的项',
+      )
+    }
+    return { ...candidate, decision: decision.decision, reasonCodes: resolveReasonCodes(decision) }
+  })
+}
+
+/**
+ * 一份**未复核**计划是否「还是机器刚生成出来的那一份」。不满足直接抛。
+ *
+ * 🔴 只验哈希 / 版本 / canonical 推导**都不够**。真实绕过路径：
+ *    把某条合规候选的 `decision` 从 `pending` 直接改成 `accepted`，再用公开的
+ *    `computePlanHash()` 重算哈希 —— 版本对、哈希自洽、canonical 也推得出来，三关全过；
+ *    然后 `applyReviewDecisions(plan, { decisions: {} })` 原样保留那个 `accepted`
+ *    并给它盖上复核签名。最终抓取并写入一条**复核人从没接受过**的页面。
+ *
+ *    所以这里**从原始 URL 把整份机器候选重新构造一遍，逐字段比对** ——
+ *    决策、原因码、归一留痕、撞车指向，一个字段都不放过。
  */
 export function assertPlanIntact(plan: CanonicalInventoryPlan): void {
+  assertVersionsAndHash(plan)
+  assertCandidatesMachineDerived(plan)
+}
+
+function assertVersionsAndHash(plan: CanonicalInventoryPlan): void {
   if (plan.contractVersion !== INVENTORY_PLAN_CONTRACT_VERSION) {
     throw new InventoryPlanError(
       'contract_version_mismatch',
@@ -239,17 +265,49 @@ export function assertPlanIntact(plan: CanonicalInventoryPlan): void {
   if (!verifyPlanHash(plan)) {
     throw new InventoryPlanError('plan_hash_mismatch', '计划内容与它自带的哈希对不上 —— 在外面被改过，不许盖章')
   }
+}
+
+/**
+ * 拿计划里的原始 URL 重新跑一遍 `buildCandidates()`，结果必须与计划里的候选**逐字段相等**。
+ *
+ * 顺序也要一致：主候选的选取依赖字典序，顺序被打乱意味着撞车关系可能被换过。
+ */
+function assertCandidatesMachineDerived(plan: CanonicalInventoryPlan): void {
   const approvedHosts = normaliseApprovedHosts(plan.boundary.approvedHosts)
-  for (const candidate of plan.candidates) {
-    const derived = deriveCanonicalUrl(candidate.originalUrl, { approvedHosts })
-    if (candidate.canonicalUrl !== derived) {
+  const originals = plan.candidates.map((c) => c.originalUrl)
+  if (new Set(originals).size !== originals.length) {
+    throw new InventoryPlanError('duplicate_original_url', '同一条原始 URL 在计划里出现了多次 —— 机器不会这么生成')
+  }
+  const rebuilt = buildCandidates([...originals].sort(compareStrings), {
+    requestedDomain: plan.boundary.requestedDomain,
+    approvedHosts,
+  })
+  for (let i = 0; i < rebuilt.length; i++) {
+    const actual = plan.candidates[i]
+    const expected = rebuilt[i]
+    const diff = firstFieldDifference(actual, expected)
+    if (diff !== null) {
       throw new InventoryPlanError(
-        'candidate_not_derivable',
-        `候选 ${candidate.originalUrl} 记着的 canonical 是 ${candidate.canonicalUrl ?? 'null'}，` +
-          `按当前规则重新推导得到 ${derived ?? 'null'} —— 对不上就是被改过`,
+        'candidate_not_machine_derived',
+        `候选 ${actual.originalUrl} 的「${diff}」跟机器重新生成的结果对不上 —— 这一份不是机器刚产出的那一份`,
       )
     }
   }
+}
+
+/** 返回第一个对不上的字段名；全都一致返回 `null`。 */
+function firstFieldDifference(actual: InventoryCandidate, expected: InventoryCandidate): string | null {
+  if (actual.originalUrl !== expected.originalUrl) return 'originalUrl'
+  if (actual.canonicalUrl !== expected.canonicalUrl) return 'canonicalUrl'
+  if (actual.decision !== expected.decision) return 'decision'
+  if ((actual.duplicateOf ?? null) !== (expected.duplicateOf ?? null)) return 'duplicateOf'
+  if (!sameStringList(actual.reasonCodes, expected.reasonCodes)) return 'reasonCodes'
+  if (!sameStringList(actual.notes, expected.notes)) return 'notes'
+  return null
+}
+
+function sameStringList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i])
 }
 
 /** 计划自带的哈希是否与内容一致（篡改检测）。 */

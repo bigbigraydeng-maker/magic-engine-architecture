@@ -195,7 +195,7 @@ describe('人工复核', () => {
         decisions: { 'https://example.com/a': { decision: 'accepted' } },
         review: REVIEW,
       }),
-    ).toThrow(/重新推导/)
+    ).toThrow(/不是机器刚产出的那一份/)
   })
 
   it('计划哈希对不上 → 不许盖章（不给任意输入重新背书）', () => {
@@ -210,6 +210,66 @@ describe('人工复核', () => {
     const { planHash: _drop, ...rest } = old
     const rehashed = { ...rest, planHash: computePlanHash(rest) }
     expect(() => applyReviewDecisions(rehashed, { decisions: {}, review: REVIEW })).toThrow(/规则变了/)
+  })
+
+  it('🔴 计划里预置了 accepted（哈希也重算过）→ 不许盖章', () => {
+    // Codex 第四轮点名的那条：把合规候选的 decision 从 pending 直接改成 accepted、
+    // 再用公开的 computePlanHash 重算，版本/哈希/canonical 推导三关全过；
+    // 然后 applyReviewDecisions(..., decisions: {}) 会原样保留它并盖上签名 ——
+    // 最终写入一条复核人从没接受过的页面。
+    const plan = build(['https://example.com/a', 'https://example.com/b'])
+    const preAccepted = {
+      ...plan,
+      candidates: plan.candidates.map((c) =>
+        c.originalUrl === 'https://example.com/a' ? { ...c, decision: 'accepted' as const } : c,
+      ),
+    }
+    const { planHash: _drop, ...rest } = preAccepted
+    const rehashed = { ...rest, planHash: computePlanHash(rest) }
+    expect(() => applyReviewDecisions(rehashed, { decisions: {}, review: REVIEW })).toThrow(
+      /不是机器刚产出的那一份/,
+    )
+  })
+
+  it('原因码 / 归一留痕 / 撞车指向被改过 → 同样不许盖章', () => {
+    const plan = build(['https://example.com/a/', 'https://example.com/a#x'])
+    for (const mutate of [
+      (c: (typeof plan.candidates)[number]) => ({ ...c, reasonCodes: [] as never[] }),
+      (c: (typeof plan.candidates)[number]) => ({ ...c, notes: [] as never[] }),
+      (c: (typeof plan.candidates)[number]) => ({ ...c, duplicateOf: 'https://example.com/elsewhere' }),
+    ]) {
+      const tampered = {
+        ...plan,
+        candidates: plan.candidates.map((c) => (c.decision === 'rejected' ? mutate(c) : c)),
+      }
+      const { planHash: _drop, ...rest } = tampered
+      expect(() =>
+        applyReviewDecisions({ ...rest, planHash: computePlanHash(rest) }, { decisions: {}, review: REVIEW }),
+      ).toThrow(/不是机器刚产出的那一份/)
+    }
+  })
+
+  it('同一条原始 URL 出现两次 → 不许盖章（机器不会这么生成）', () => {
+    const plan = build(['https://example.com/a'])
+    const doubled = { ...plan, candidates: [...plan.candidates, { ...plan.candidates[0] }] }
+    const { planHash: _drop, ...rest } = doubled
+    expect(() =>
+      applyReviewDecisions({ ...rest, planHash: computePlanHash(rest) }, { decisions: {}, review: REVIEW }),
+    ).toThrow(/出现了多次/)
+  })
+
+  it('🔴 已经签过名的计划不许再盖一次章', () => {
+    const plan = build(['https://example.com/a'])
+    const reviewed = applyReviewDecisions(plan, {
+      decisions: { 'https://example.com/a': { decision: 'rejected' } },
+      review: REVIEW,
+    })
+    expect(() =>
+      applyReviewDecisions(reviewed, {
+        decisions: {},
+        review: { reviewedBy: 'someone-else', reviewedAt: REVIEW.reviewedAt },
+      }),
+    ).toThrow(/只盖一次章/)
   })
 
   it('复核必须署名并带时间', () => {

@@ -159,9 +159,25 @@ check "🔴 盖章前不验来料（替任意输入重新背书）" "$PLAN" \
   "  assertPlanIntact(plan)" \
   "  void assertPlanIntact"
 
-check "🔴 只验哈希版本、不验候选能否从原始 URL 推导出来" "$PLAN" \
-  "    if (candidate.canonicalUrl !== derived) {" \
-  "    if (false) {"
+check "🔴 不重新构造机器候选（预置 accepted + 重算哈希就能混过去）" "$PLAN" \
+  "  assertCandidatesMachineDerived(plan)" \
+  "  void assertCandidatesMachineDerived"
+
+check "🔴 重构比对不看决策（只比 canonical，预置 accepted 照样过）" "$PLAN" \
+  "  if (actual.decision !== expected.decision) return 'decision'" \
+  "  if (false) return 'decision'"
+
+check "重构比对不看原因码 / 留痕 / 撞车指向" "$PLAN" \
+  "  if ((actual.duplicateOf ?? null) !== (expected.duplicateOf ?? null)) return 'duplicateOf'" \
+  "  if (false) return 'duplicateOf'"
+
+check "同一条原始 URL 出现多次也放行" "$PLAN" \
+  "  if (new Set(originals).size !== originals.length) {" \
+  "  if (false) {"
+
+check "🔴 已签名的计划还能再盖一次章" "$PLAN" \
+  "  if (plan.review !== null) {" \
+  "  if (false) {"
 
 check "盖章前不验计划哈希" "$PLAN" \
   "  if (!verifyPlanHash(plan)) {
@@ -283,7 +299,7 @@ check "显式给的上限比清单还小也照跑（截断后跑出来的不是�
 
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 46 道闸各自单独确认会响"
+  echo "✅ 全部 50 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"
