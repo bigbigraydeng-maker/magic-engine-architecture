@@ -19,9 +19,11 @@
  * problem. That is the same failure this polling exists to prevent, one level
  * up.
  *
- * So: return `{ check, sawIt }`. `check` is the completed run when one was
- * seen, otherwise the last observation of it (possibly still queued/running);
- * `sawIt` says whether the check was ever present at all.
+ * So: return `{ check, sawIt, runs }`. `check` is the completed run when one
+ * was seen, otherwise the last observation of it (possibly still
+ * queued/running); `sawIt` says whether the check was ever present at all; and
+ * `runs` is the whole list as last observed, so the caller can describe the
+ * other checks as they are now rather than as they were before the wait.
  */
 export async function waitForRequiredCheck({ fetchCheckRuns, sleep, pattern, maxAttempts = 12, intervalMs = 20000 }) {
   let lastSeen = null
