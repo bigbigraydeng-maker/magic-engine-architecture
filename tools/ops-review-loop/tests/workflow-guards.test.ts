@@ -7,7 +7,7 @@
  *
  * Mirrors the style of tools/ai-orchestrator/tests/workflow-supply-chain.test.ts.
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 
@@ -316,6 +316,25 @@ describe('the auto-fix blast-radius guard (the real boundary)', () => {
     for (const needed of ['.github/workflows/', 'tools/ops-review-loop/', 'supabase/migrations/', 'render.yaml']) {
       expect(protectedPrefixes, `${needed} must stay protected`).toContain(needed)
     }
+  })
+
+  it('🔴 the guard script must exist — deleting it must redden a REQUIRED check, not silently pass', () => {
+    // The workflow tolerates a missing script exactly once: the bootstrap PR
+    // that introduces it (it checks out `main`, where the file does not exist
+    // yet). That tolerance would otherwise be a permanent hole — delete the
+    // script from main and the guard exits 0 forever.
+    //
+    // This assertion closes it. It lives in ai-orchestrator-tests, which IS a
+    // required check, so removing the script fails the merge gate instead of
+    // quietly disarming the guard.
+    for (const file of [
+      'tools/ops-review-loop/src/check-fix-scope.mjs',
+      'tools/ops-review-loop/src/fix-scope.mjs',
+    ]) {
+      expect(existsSync(join(process.cwd(), file)), `${file} 没了 —— 爆炸半径闸门会静默放行`).toBe(true)
+    }
+    // and the workflow must still be the thing that runs it
+    expect(scope.source).toContain('tools/ops-review-loop/src/check-fix-scope.mjs')
   })
 
   it('narrows the action tool surface too, while not pretending that is the boundary', () => {
