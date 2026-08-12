@@ -64,6 +64,7 @@ function makeReviewedPlan(over?: { hosts?: readonly string[]; domain?: string; c
     requestedDomain: over?.domain ?? DOMAIN,
     approvedHosts: over?.hosts ?? HOSTS,
     discoveredUrls: [...ACCEPTED, REJECTED, DEFERRED],
+    discovery: (over?.hosts ?? HOSTS).map((host) => ({ host, count: 4, error: null })),
   })
   return applyReviewDecisions(plan, {
     decisions: {
@@ -151,6 +152,10 @@ describe('结构闸：反序列化后缺字段也必须返回审计，不许抛�
     ['缺 boundary', (p: ReviewedInventoryPlan) => ({ ...p, boundary: undefined })],
     ['approvedHosts 不是数组', (p: ReviewedInventoryPlan) => ({ ...p, boundary: { ...p.boundary, approvedHosts: 'example.com' } })],
     ['clientId 不是字符串', (p: ReviewedInventoryPlan) => ({ ...p, clientId: null })],
+    ['candidates 里有 null', (p: ReviewedInventoryPlan) => ({ ...p, candidates: [...p.candidates, null] })],
+    ['候选缺 originalUrl', (p: ReviewedInventoryPlan) => ({ ...p, candidates: [{ decision: 'accepted' }] })],
+    ['discovery 不是数组', (p: ReviewedInventoryPlan) => ({ ...p, discovery: 'example.com' })],
+    ['discovery 里有畸形项', (p: ReviewedInventoryPlan) => ({ ...p, discovery: [{ host: 'example.com' }] })],
   ])('%s → 返回 rejected 审计（而不是抛异常）', async (_label, mutate) => {
     const broken = mutate(makeReviewedPlan()) as unknown as ReviewedInventoryPlan
     const deps = makeDeps()
@@ -186,6 +191,46 @@ describe('身份闸：计划与当前上下文对不上就一次抓取都不发'
       makeInput({ expected: { clientId: CLIENT, requestedDomain: 'other.com', approvedHosts: HOSTS } }),
     )
     expect(audit.blockers.map((b) => b.code)).toContain('domain_mismatch')
+  })
+
+  it('🔴 发现记录少了一个批准主机 → 拒（那个站根本没被找过）', async () => {
+    const base = makeReviewedPlan()
+    const plan = rehash({ ...base, discovery: [] })
+    const deps = makeDeps()
+    const audit = await activateReviewedPlan(makeInput({ plan, deps }))
+    expect(audit.status).toBe('rejected')
+    expect(audit.blockers.map((b) => b.code)).toContain('discovery_host_missing')
+    expect(deps.store.writes).toHaveLength(0)
+  })
+
+  it('发现记录里有未批准的主机 → 拒', async () => {
+    const base = makeReviewedPlan()
+    const plan = rehash({
+      ...base,
+      discovery: [...base.discovery, { host: 'www.example.com', count: 3, error: null, acknowledged: false }],
+    })
+    const audit = await activateReviewedPlan(makeInput({ plan }))
+    expect(audit.blockers.map((b) => b.code)).toContain('discovery_host_unapproved')
+  })
+
+  it('🔴 某个主机 0 条 / 出错且没人认过 → 拒', async () => {
+    const base = makeReviewedPlan()
+    const plan = rehash({
+      ...base,
+      discovery: base.discovery.map((d) => ({ ...d, count: 0, acknowledged: false })),
+    })
+    const audit = await activateReviewedPlan(makeInput({ plan }))
+    expect(audit.blockers.map((b) => b.code)).toContain('incomplete_discovery_not_acknowledged')
+  })
+
+  it('认过的 0 条主机不再拦（人已经分清楚了）', async () => {
+    const base = makeReviewedPlan()
+    const plan = rehash({
+      ...base,
+      discovery: base.discovery.map((d) => ({ ...d, count: 0, acknowledged: true })),
+    })
+    const audit = await activateReviewedPlan(makeInput({ plan }))
+    expect(audit.blockers.map((b) => b.code)).not.toContain('incomplete_discovery_not_acknowledged')
   })
 
   it('🔴 批准主机清单不符（上下文多批了一个 www，计划里没有）', async () => {
@@ -289,6 +334,7 @@ describe('被接受集合闸', () => {
       requestedDomain: DOMAIN,
       approvedHosts: HOSTS,
       discoveredUrls: ACCEPTED,
+      discovery: HOSTS.map((host) => ({ host, count: 2, error: null })),
     })
     const reviewed = applyReviewDecisions(plan, {
       decisions: { [ACCEPTED[0]]: { decision: 'accepted' } },
@@ -320,6 +366,7 @@ describe('被接受集合闸', () => {
       requestedDomain: DOMAIN,
       approvedHosts: HOSTS,
       discoveredUrls: ACCEPTED,
+      discovery: HOSTS.map((host) => ({ host, count: 2, error: null })),
     })
     const reviewed = applyReviewDecisions(plan, {
       decisions: { [ACCEPTED[0]]: { decision: 'rejected' }, [ACCEPTED[1]]: { decision: 'defer' } },
@@ -588,6 +635,7 @@ describe('#930 现场形状：裸域进台账、www 进不去', () => {
       requestedDomain: HOST,
       approvedHosts: [HOST],
       discoveredUrls: [`https://${HOST}/about`, `https://www.${HOST}/about`],
+      discovery: [{ host: HOST, count: 2, error: null }],
     })
     const pendingUrls = plan.candidates.filter((c) => c.decision === 'pending').map((c) => c.originalUrl)
     expect(pendingUrls).toEqual([`https://${HOST}/about`])

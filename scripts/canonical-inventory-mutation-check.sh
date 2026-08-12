@@ -199,6 +199,26 @@ check "复核不要求署名" "$PLAN" \
   "  if (input.review.reviewedBy.trim().length === 0) {" \
   "  if (false) {"
 
+check "🔴 逐主机发现不进计划（缺整个站没人看得见）" "$PLAN" \
+  "  const discovery = summariseDiscovery(input, approvedHosts)" \
+  "  const discovery = approvedHosts.map((host) => ({ host, count: 0, error: null, acknowledged: true })); void summariseDiscovery"
+
+check "🔴 批准了却没发现记录的主机也放行" "$PLAN" \
+  "    if (row === undefined) {" \
+  "    if (false) {"
+
+check "🔴 0 条 / 出错的主机不要求人认过" "$PLAN" \
+  "    if (incomplete && !ack) {" \
+  "    if (false) {"
+
+check "盖章时不核对发现记录与批准主机" "$PLAN" \
+  "  assertDiscoveryConsistent(plan)" \
+  "  void assertDiscoveryConsistent"
+
+check "🔴 复核时间只查非空、不验 ISO（留下证明不了时间的凭据）" "$PLAN" \
+  "  const parsed = Date.parse(trimmed)" \
+  "  const parsed = 0; void trimmed"
+
 check "🔴 决策值不做运行时校验（拼错的值带着签名溜下去）" "$PLAN" \
   "    if (!ALLOWED_REVIEW_DECISIONS.includes(decision.decision)) {" \
   "    if (false) {"
@@ -212,13 +232,25 @@ check "🔴 结构闸不在解引用之前（缺字段直接抛，调用方拿�
   "  const shape = checkPlanShape(plan)" \
   "  const shape: ActivationBlocker[] = []; void checkPlanShape"
 
+check "🔴 候选数组只查容器、不查每一项（一个 null 就直接抛）" "$ACT" \
+  "  const badCandidate = plan.candidates.findIndex((c) => !isCandidateShape(c))" \
+  "  const badCandidate = -1; void isCandidateShape"
+
+check "审计构造器不滤掉畸形候选（最需要账的时候交不出账）" "$ACT" \
+  "    (c): c is InventoryCandidate => isCandidateShape(c)," \
+  "    (): boolean => true,"
+
+check "🔴 激活侧不查发现覆盖（手写计划可以缺整个站）" "$ACT" \
+  "    ...checkDiscoveryCoverage(plan)," \
+  "    ...[],"
+
 check "复核信息结构不查（缺 review 时 .trim() 抛出去）" "$ACT" \
   "  return checkReviewShape(plan)" \
   "  return []"
 
 check "审计对象自己也会抛（候选不是数组时连账都交不出来）" "$ACT" \
-  "  const all: readonly InventoryCandidate[] = Array.isArray(plan.candidates) ? plan.candidates : []" \
-  "  const all: readonly InventoryCandidate[] = plan.candidates"
+  "(Array.isArray(plan.candidates) ? plan.candidates : []).filter(" \
+  "(plan.candidates as InventoryCandidate[]).filter("
 
 check "🔴 不验复核签名（成对改 URL + 自己重算哈希就能混进去）" "$ACT" \
   "    ...checkReviewSignature(plan, verifySignature)," \
@@ -363,7 +395,7 @@ check "显式给的上限比清单还小也照跑（截断后跑出来的不是�
 
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 66 道闸各自单独确认会响"
+  echo "✅ 全部 74 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"

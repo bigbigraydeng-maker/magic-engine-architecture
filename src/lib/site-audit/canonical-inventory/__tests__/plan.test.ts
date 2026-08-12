@@ -24,6 +24,8 @@ function build(urls: readonly string[], hosts: readonly string[] = ['example.com
     requestedDomain: 'example.com',
     approvedHosts: hosts,
     discoveredUrls: urls,
+    // 默认每个批准主机都找到了东西 —— 「找到 0 条」是要单独立用例的情形。
+    discovery: hosts.map((host) => ({ host, count: urls.length, error: null })),
   })
 }
 
@@ -82,10 +84,111 @@ describe('计划组装', () => {
   })
 
   it('缺租户 / 缺域名 / 主机清单非法都直接抛', () => {
-    const base = { requestedDomain: 'example.com', approvedHosts: ['example.com'], discoveredUrls: [] }
+    const base = {
+      requestedDomain: 'example.com',
+      approvedHosts: ['example.com'],
+      discoveredUrls: [],
+      discovery: [{ host: 'example.com', count: 1, error: null }],
+    }
     expect(() => buildInventoryPlan({ ...base, clientId: ' ' })).toThrow(InventoryPlanError)
     expect(() => buildInventoryPlan({ ...base, clientId: CLIENT, requestedDomain: '' })).toThrow(InventoryPlanError)
     expect(() => buildInventoryPlan({ ...base, clientId: CLIENT, approvedHosts: [] })).toThrow()
+  })
+})
+
+describe('逐主机发现必须进计划（否则缺整个站没人看得见）', () => {
+  const base = {
+    clientId: CLIENT,
+    requestedDomain: 'example.com',
+    approvedHosts: ['example.com', 'shop.example.com'],
+    discoveredUrls: ['https://example.com/a'],
+  }
+
+  it('🔴 批准了两个主机、发现记录只有一个 → 抛（那个站根本没被找过）', () => {
+    expect(() =>
+      buildInventoryPlan({ ...base, discovery: [{ host: 'example.com', count: 1, error: null }] }),
+    ).toThrow(/根本没被找过/)
+  })
+
+  it('🔴 某个主机 0 条且没人认过 → 抛（0 条可能是空站，也可能被挡住）', () => {
+    expect(() =>
+      buildInventoryPlan({
+        ...base,
+        discovery: [
+          { host: 'example.com', count: 1, error: null },
+          { host: 'shop.example.com', count: 0, error: null },
+        ],
+      }),
+    ).toThrow(/必须有人明确认过/)
+  })
+
+  it('某个主机发现出错且没人认过 → 抛', () => {
+    expect(() =>
+      buildInventoryPlan({
+        ...base,
+        discovery: [
+          { host: 'example.com', count: 1, error: null },
+          { host: 'shop.example.com', count: 0, error: 'DNS lookup failed' },
+        ],
+      }),
+    ).toThrow(/必须有人明确认过/)
+  })
+
+  it('明确认过之后才生得成计划，且这件事记进计划与哈希', () => {
+    const plan = buildInventoryPlan({
+      ...base,
+      discovery: [
+        { host: 'example.com', count: 1, error: null },
+        { host: 'shop.example.com', count: 0, error: null },
+      ],
+      acknowledgedIncompleteHosts: ['shop.example.com'],
+    })
+    expect(plan.discovery).toEqual([
+      { host: 'example.com', count: 1, error: null, acknowledged: false },
+      { host: 'shop.example.com', count: 0, error: null, acknowledged: true },
+    ])
+    // 改动发现记录 → 哈希必须变（否则复核人看到的和实际跑的可以分叉）
+    const tampered = {
+      ...plan,
+      discovery: plan.discovery.map((d) => ({ ...d, count: d.count + 1 })),
+    }
+    expect(computePlanHash(tampered)).not.toBe(plan.planHash)
+  })
+
+  it('删掉一条发现记录再重算哈希 → 盖章时仍被挡下', () => {
+    const plan = build(['https://example.com/a'])
+    const stripped = { ...plan, discovery: [] }
+    const { planHash: _drop, ...rest } = stripped
+    expect(() =>
+      applyReviewDecisions({ ...rest, planHash: computePlanHash(rest) }, {
+        decisions: {},
+        review: REVIEW,
+        sign: SIGN,
+      }),
+    ).toThrow(/对不上/)
+  })
+})
+
+describe('复核时间必须是合法 ISO 8601', () => {
+  it.each(['not-a-date', '2026-13-45', '昨天'])('%s → 抛（排不了序也证明不了复核时间）', (bad) => {
+    const plan = build(['https://example.com/a'])
+    expect(() =>
+      applyReviewDecisions(plan, {
+        decisions: {},
+        review: { reviewedBy: 'po', reviewedAt: bad },
+        sign: SIGN,
+      }),
+    ).toThrow(/ISO 8601/)
+  })
+
+  it('合法 ISO 时间照常通过', () => {
+    const plan = build(['https://example.com/a'])
+    const reviewed = applyReviewDecisions(plan, {
+      decisions: {},
+      review: { reviewedBy: 'po', reviewedAt: '2026-08-12T03:04:05.000Z' },
+      sign: SIGN,
+    })
+    expect(reviewed.review.reviewedAt).toBe('2026-08-12T03:04:05.000Z')
   })
 })
 

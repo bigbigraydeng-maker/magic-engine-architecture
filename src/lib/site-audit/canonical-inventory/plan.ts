@@ -16,6 +16,7 @@ import {
   type CanonicalInventoryPlan,
   type CandidateDecision,
   type HostBoundary,
+  type HostDiscoverySummary,
   type InventoryCandidate,
   type InventoryPlanCounts,
   type PlanReview,
@@ -41,6 +42,20 @@ export interface BuildInventoryPlanInput {
   readonly approvedHosts: readonly string[]
   /** 发现阶段拿到的原始 URL（复用现有 `discoverSitemapUrls`）。 */
   readonly discoveredUrls: readonly string[]
+  /**
+   * 逐主机发现结果（`discoverCandidateUrls()` 的 `perHost`）。
+   *
+   * 🔴 必须逐个覆盖 `approvedHosts`。少一个主机 = 那个站根本没被找过，
+   *    而合并后的 URL 清单看不出这件事。
+   */
+  readonly discovery: readonly { readonly host: string; readonly count: number; readonly error: string | null }[]
+  /**
+   * 明确认过的「不完整发现」主机。
+   *
+   * 某个主机 0 条或出错时，**必须**在这里列出来才生得成计划 ——
+   * 否则一份缺了整个站的台账会一路顺畅地走到激活。
+   */
+  readonly acknowledgedIncompleteHosts?: readonly string[]
 }
 
 /**
@@ -61,14 +76,60 @@ export function buildInventoryPlan(input: BuildInventoryPlanInput): CanonicalInv
   const approvedHosts = normaliseApprovedHosts(input.approvedHosts)
   const boundary: HostBoundary = { requestedDomain: input.requestedDomain.trim(), approvedHosts }
 
+  const discovery = summariseDiscovery(input, approvedHosts)
   const uniqueOriginals = Array.from(new Set(input.discoveredUrls.map((u) => u.trim()).filter((u) => u.length > 0)))
   uniqueOriginals.sort(compareStrings)
 
   return finalisePlan({
     clientId: input.clientId.trim(),
     boundary,
+    discovery,
     candidates: buildCandidates(uniqueOriginals, boundary),
     review: null,
+  })
+}
+
+/**
+ * 把逐主机发现结果核对并定型。
+ *
+ * 🔴 两道硬闸：
+ *    1. 发现结果必须逐个覆盖批准主机 —— 少一个就是那个站根本没被找过；
+ *    2. 0 条 / 出错的主机必须被**显式认过**，否则计划生不出来。
+ *       0 条可能是站是空的、也可能被 WAF 挡了，长得一模一样，只能由人来分。
+ */
+function summariseDiscovery(
+  input: BuildInventoryPlanInput,
+  approvedHosts: readonly string[],
+): readonly HostDiscoverySummary[] {
+  const seen = new Map<string, { count: number; error: string | null }>()
+  for (const row of input.discovery) {
+    const host = row.host.trim().toLowerCase()
+    if (seen.has(host)) {
+      throw new InventoryPlanError('duplicate_discovery_host', `发现结果里主机 ${host} 出现了多次`)
+    }
+    seen.set(host, { count: row.count, error: row.error })
+  }
+  const acknowledged = new Set((input.acknowledgedIncompleteHosts ?? []).map((h) => h.trim().toLowerCase()))
+
+  return approvedHosts.map((host) => {
+    const row = seen.get(host)
+    if (row === undefined) {
+      throw new InventoryPlanError(
+        'discovery_host_missing',
+        `批准了主机 ${host}，但发现结果里没有它 —— 那个站根本没被找过，合并后的 URL 清单看不出这件事`,
+      )
+    }
+    const incomplete = row.error !== null || row.count === 0
+    const ack = acknowledged.has(host)
+    if (incomplete && !ack) {
+      throw new InventoryPlanError(
+        'incomplete_discovery_not_acknowledged',
+        `主机 ${host} 发现${row.error !== null ? `出错（${row.error}）` : '结果为 0 条'}。` +
+          '这可能是站是空的，也可能是被挡住了 —— 必须有人明确认过才能继续，' +
+          '否则会产出一份缺了整个站的台账，而缺页没有人会发现。',
+      )
+    }
+    return { host, count: row.count, error: row.error, acknowledged: incomplete ? ack : false }
   })
 }
 
@@ -170,14 +231,13 @@ export function applyReviewDecisions(
   if (input.review.reviewedBy.trim().length === 0) {
     throw new InventoryPlanError('missing_reviewer', '复核必须署名 —— 「谁批的」是这份计划唯一的授权凭据')
   }
-  if (input.review.reviewedAt.trim().length === 0) {
-    throw new InventoryPlanError('missing_reviewed_at', '复核必须带时间戳')
-  }
+  assertValidIsoTimestamp(input.review.reviewedAt)
   const candidates = applyDecisionsToCandidates(plan.candidates, input.decisions)
 
   const finalised = finalisePlan({
     clientId: plan.clientId,
     boundary: plan.boundary,
+    discovery: plan.discovery,
     candidates,
     review: input.review,
   })
@@ -203,6 +263,9 @@ export function computePlanHash(plan: Omit<CanonicalInventoryPlan, 'planHash'>):
       requestedDomain: plan.boundary.requestedDomain,
       approvedHosts: [...plan.boundary.approvedHosts].sort(compareStrings),
     },
+    discovery: [...plan.discovery]
+      .map((d) => ({ host: d.host, count: d.count, error: d.error ?? null, acknowledged: d.acknowledged }))
+      .sort((a, b) => compareStrings(a.host, b.host)),
     candidates: plan.candidates.map((c) => ({
       originalUrl: c.originalUrl,
       canonicalUrl: c.canonicalUrl,
@@ -275,7 +338,53 @@ function applyDecisionsToCandidates(
  */
 export function assertPlanIntact(plan: CanonicalInventoryPlan): void {
   assertVersionsAndHash(plan)
+  assertDiscoveryConsistent(plan)
   assertCandidatesMachineDerived(plan)
+}
+
+/**
+ * ISO 8601 时间戳校验。
+ *
+ * 🔴 「非空字符串」不够：`reviewedAt: 'not-a-date'` 照样能生成哈希与签名，
+ *    留下一条**排不了序、也证明不了复核时间**的授权凭据 —— 而这份凭据正是台账的唯一出处。
+ */
+export function assertValidIsoTimestamp(value: string): void {
+  const trimmed = value.trim()
+  if (trimmed.length === 0) {
+    throw new InventoryPlanError('missing_reviewed_at', '复核必须带时间戳')
+  }
+  const parsed = Date.parse(trimmed)
+  if (!Number.isFinite(parsed) || new Date(parsed).toISOString().slice(0, 10) !== trimmed.slice(0, 10)) {
+    throw new InventoryPlanError(
+      'invalid_reviewed_at',
+      `复核时间「${value}」不是合法的 ISO 8601 时间戳 —— 排不了序也证明不了复核时间`,
+    )
+  }
+}
+
+/**
+ * 发现记录与批准主机必须一一对应，且不完整的主机都被认过。
+ *
+ * 这两条在生成时验过一遍；这里再验一遍，是因为计划会以文件形式在外面转一圈 ——
+ * 有人删掉一条 discovery 记录再重算哈希，缺的那个站就又隐形了。
+ */
+function assertDiscoveryConsistent(plan: CanonicalInventoryPlan): void {
+  const hosts = plan.discovery.map((d) => d.host)
+  const approved = [...plan.boundary.approvedHosts].sort(compareStrings).join('|')
+  if ([...hosts].sort(compareStrings).join('|') !== approved) {
+    throw new InventoryPlanError(
+      'discovery_coverage_mismatch',
+      `发现记录覆盖的主机是 [${hosts.join(', ')}]，批准的是 [${plan.boundary.approvedHosts.join(', ')}] —— 对不上`,
+    )
+  }
+  for (const row of plan.discovery) {
+    if ((row.error !== null || row.count === 0) && !row.acknowledged) {
+      throw new InventoryPlanError(
+        'incomplete_discovery_not_acknowledged',
+        `主机 ${row.host} 的发现结果不完整且没人认过`,
+      )
+    }
+  }
 }
 
 function assertVersionsAndHash(plan: CanonicalInventoryPlan): void {
@@ -369,6 +478,7 @@ function resolveReasonCodes(decision: ReviewDecision): readonly RejectionReasonC
 function finalisePlan(parts: {
   clientId: string
   boundary: HostBoundary
+  discovery: readonly HostDiscoverySummary[]
   candidates: readonly InventoryCandidate[]
   review: PlanReview | null
 }): CanonicalInventoryPlan {
@@ -377,6 +487,7 @@ function finalisePlan(parts: {
     normalizationRuleVersion: NORMALIZATION_RULE_VERSION,
     clientId: parts.clientId,
     boundary: parts.boundary,
+    discovery: parts.discovery,
     candidates: parts.candidates,
     counts: countCandidates(parts.candidates),
     review: parts.review,

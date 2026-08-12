@@ -143,11 +143,34 @@ export interface PlanReview {
   readonly note?: string
 }
 
+/**
+ * 逐个批准主机的发现结果。
+ *
+ * 🔴 **必须进计划、进哈希、进复核内容。** 只在发现阶段返回一份 `perHost` 是不够的：
+ *    调用方把 `urls` 喂进计划、`perHost` 丢在一边，就能批准并激活一份
+ *    **整个主机静默缺席**的台账 —— 而缺页没有任何人会发现。
+ *    所以「某个主机 0 条 / 发现出错」这件事必须跟着计划一路走到复核人面前。
+ */
+export interface HostDiscoverySummary {
+  readonly host: string
+  readonly count: number
+  readonly error: string | null
+  /**
+   * 人有没有明确认过「这个主机 0 条 / 出错，我知道，继续」。
+   *
+   * 0 条可能是站是空的，也可能是被 WAF 挡了 —— 两者长得一模一样，只能由人来分。
+   * 没认过的不完整发现，计划根本生不出来（更谈不上激活）。
+   */
+  readonly acknowledged: boolean
+}
+
 export interface CanonicalInventoryPlan {
   readonly contractVersion: string
   readonly normalizationRuleVersion: string
   readonly clientId: string
   readonly boundary: HostBoundary
+  /** 逐主机发现结果 —— 与 `boundary.approvedHosts` 一一对应，一个都不能少。 */
+  readonly discovery: readonly HostDiscoverySummary[]
   readonly candidates: readonly InventoryCandidate[]
   readonly counts: InventoryPlanCounts
   /**

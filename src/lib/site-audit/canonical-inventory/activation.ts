@@ -170,6 +170,7 @@ function checkPlanIdentity(
   const blockers: ActivationBlocker[] = [
     ...checkReviewSignature(plan, verifySignature),
     ...checkPlanVersions(plan),
+    ...checkDiscoveryCoverage(plan),
   ]
   if (plan.clientId !== expected.clientId) {
     blockers.push({
@@ -268,7 +269,37 @@ function checkPlanShape(plan: ReviewedInventoryPlan): ActivationBlocker[] {
     return bad('批准主机清单里有非字符串项')
   }
   if (!Array.isArray(plan.candidates)) return bad('计划的候选清单不是数组')
+  // 🔴 只确认「容器是数组」不够：里面塞一个 null，下一行 `.filter(c => c.decision)`
+  //    就会直接抛 TypeError，而那一刻还没进兜底 catch —— 调用方拿不到承诺的审计对象。
+  const badCandidate = plan.candidates.findIndex((c) => !isCandidateShape(c))
+  if (badCandidate >= 0) return bad(`第 ${badCandidate + 1} 条候选的结构不对（不是对象，或关键字段类型不对）`)
+  if (!Array.isArray(plan.discovery)) return bad('计划的逐主机发现记录不是数组')
+  if (!plan.discovery.every((d) => isDiscoveryShape(d))) return bad('逐主机发现记录里有结构不对的项')
   return checkReviewShape(plan)
+}
+
+/** 一条候选必须长成对象，且后面真的会去解引用的字段类型都对。 */
+function isCandidateShape(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false
+  const c = value as Record<string, unknown>
+  return (
+    typeof c.originalUrl === 'string' &&
+    (typeof c.canonicalUrl === 'string' || c.canonicalUrl === null) &&
+    typeof c.decision === 'string' &&
+    Array.isArray(c.reasonCodes) &&
+    Array.isArray(c.notes)
+  )
+}
+
+function isDiscoveryShape(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false
+  const d = value as Record<string, unknown>
+  return (
+    typeof d.host === 'string' &&
+    typeof d.count === 'number' &&
+    (typeof d.error === 'string' || d.error === null) &&
+    typeof d.acknowledged === 'boolean'
+  )
 }
 
 /** 复核信息的结构。缺 `review`、或者署名/时间不是字符串，都在这里变成 blocker 而不是异常。 */
@@ -281,6 +312,42 @@ function checkReviewShape(plan: ReviewedInventoryPlan): ActivationBlocker[] {
     return [{ code: 'plan_shape_invalid', message: '复核信息的 reviewedBy / reviewedAt 不是字符串' }]
   }
   return []
+}
+
+/**
+ * 逐主机发现记录必须覆盖每一个批准主机，且不完整的主机都被人认过。
+ *
+ * 🔴 这道闸挡的是**缺整个站**：批准了两个主机、只找了一个，合并后的 URL 清单
+ *    看不出任何异常，复核与激活会一路顺畅地产出一份缺页台账 —— 而缺页没人会发现。
+ */
+function checkDiscoveryCoverage(plan: ReviewedInventoryPlan): ActivationBlocker[] {
+  const blockers: ActivationBlocker[] = []
+  const covered = new Set(plan.discovery.map((d) => d.host.trim().toLowerCase()))
+  const missing = plan.boundary.approvedHosts.filter((h) => !covered.has(h.trim().toLowerCase()))
+  if (missing.length > 0) {
+    blockers.push({
+      code: 'discovery_host_missing',
+      message: `批准了主机 [${missing.join(', ')}] 但计划里没有它们的发现记录 —— 那些站根本没被找过`,
+    })
+  }
+  const approved = new Set(plan.boundary.approvedHosts.map((h) => h.trim().toLowerCase()))
+  const extra = plan.discovery.filter((d) => !approved.has(d.host.trim().toLowerCase()))
+  if (extra.length > 0) {
+    blockers.push({
+      code: 'discovery_host_unapproved',
+      message: `发现记录里有未批准的主机 [${extra.map((d) => d.host).join(', ')}]`,
+    })
+  }
+  const unacknowledged = plan.discovery.filter((d) => (d.error !== null || d.count === 0) && !d.acknowledged)
+  if (unacknowledged.length > 0) {
+    blockers.push({
+      code: 'incomplete_discovery_not_acknowledged',
+      message:
+        `主机 [${unacknowledged.map((d) => d.host).join(', ')}] 的发现结果为 0 条或出错，且没人认过。` +
+        '0 条可能是站是空的、也可能是被挡住了 —— 必须有人先分清楚。',
+    })
+  }
+  return blockers
 }
 
 /** 契约版本 / 归一规则版本 —— 版本不对就不能拿旧批准套新语义。 */
@@ -585,7 +652,11 @@ function buildAudit(parts: {
 }): ActivationAudit {
   const { plan } = parts
   // 🔴 审计对象本身**绝不能抛**：它经常是「计划结构不对」时唯一能交出去的东西。
-  const all: readonly InventoryCandidate[] = Array.isArray(plan.candidates) ? plan.candidates : []
+  //    所以这里不只查容器是不是数组，还要把结构不对的项（null、缺字段）滤掉 ——
+  //    否则一个 null 候选就能让「交不出账」这件事发生在最需要账的时候。
+  const all: readonly InventoryCandidate[] = (Array.isArray(plan.candidates) ? plan.candidates : []).filter(
+    (c): c is InventoryCandidate => isCandidateShape(c),
+  )
   const rejected = all.filter((c) => c.decision === 'rejected')
   const deferred = all.filter((c) => c.decision === 'defer')
   const str = (v: unknown): string => (typeof v === 'string' ? v : '')
