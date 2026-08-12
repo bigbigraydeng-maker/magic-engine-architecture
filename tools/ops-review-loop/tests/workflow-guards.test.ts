@@ -219,6 +219,18 @@ describe('the smoke-test workflow', () => {
     expect(dispatch.inputs?.pr_number?.required).toBe(true)
   })
 
+  it('does not describe itself as bot-authored in the comment it actually posts', () => {
+    // Codex finding (PR #927, P2): switching the workflow's token while leaving
+    // the posted text saying "posted by github-actions[bot] ... to check whether
+    // a bot-authored request works" makes the validation evidence assert the
+    // opposite of what ran. The mechanism and the words about it drift apart
+    // silently, because nothing executes the words.
+    const source = readFileSync(join(process.cwd(), 'tools/ops-review-loop/src/smoke-test.mjs'), 'utf8')
+    const posted = source.slice(source.indexOf('@codex review'))
+    expect(posted).not.toContain('posted by github-actions[bot]')
+    expect(posted).toContain('OPS_REVIEW_PAT')
+  })
+
   it('posts through OPS_REVIEW_PAT so it validates the real path, not the broken one', () => {
     // The bot-authored question this workflow originally existed to answer is
     // settled (it does not work). Its job now is to prove the replacement
