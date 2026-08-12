@@ -302,6 +302,10 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
           if (childRes.ok) {
             const childXml = await childRes.text()
             allLocs.push(...parseLocsFromXml(childXml))
+          } else {
+            // 🔴 404/503 不会抛 —— fetch 正常完成，只是 ok 为 false。
+            //    只在 catch 里上报，等于漏掉了子树失败最常见的那一种。
+            report('child-sitemap', `HTTP ${childRes.status}`, childUrl)
           }
         } catch (err) {
           report('child-sitemap', err, childUrl)

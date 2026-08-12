@@ -389,6 +389,14 @@ check "🔴 按返回总条数记账，不按精确主机归属（只带回别�
   "    if (hostnameOf(url) === host) count++" \
   "    count++"
 
+check "🔴 sitemap 文件被当成页面记账（真实页面静默缺席）" "$ADAPTERS" \
+  "    if (isSitemapFile(url)) {" \
+  "    if (false) {"
+
+check "🔴 裸主机不补 https（httpbin.org 这类主机一次请求都发不出去）" "$ADAPTERS" \
+  "    found = await discoverSitemapUrls(\`https://\${host}\`, {" \
+  "    found = await discoverSitemapUrls(host, {"
+
 check "🔴 被吞掉的发现失败不记 error（部分结果被当成完整结果）" "$ADAPTERS" \
   "    swallowed.length > 0" \
   "    false"
@@ -403,7 +411,7 @@ check "显式给的上限比清单还小也照跑（截断后跑出来的不是�
 
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 76 道闸各自单独确认会响"
+  echo "✅ 全部 78 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"
