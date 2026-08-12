@@ -151,6 +151,13 @@ describe('语法归一', () => {
     expect(canonical('https://example.com/l?id=2')).toBe('https://example.com/l?id=2')
   })
 
+  it('🔴 百分号转义的大小写统一 —— /a%2Fb 与 /a%2fb 是同一个资源', () => {
+    // 十六进制本身不区分大小写，但 WHATWG URL 会原样保留两种写法。
+    // 不统一就会给同一个页面生成两个 canonical，撞车检测也看不见它们。
+    expect(canonical('https://example.com/a%2fb')).toBe('https://example.com/a%2Fb')
+    expect(canonical('https://example.com/a%2Fb')).toBe(canonical('https://example.com/a%2fb'))
+  })
+
   it('参数顺序不同的同一页面收敛成同一个 canonical', () => {
     expect(canonical('https://example.com/a?b=2&a=1')).toBe(canonical('https://example.com/a?a=1&b=2'))
   })

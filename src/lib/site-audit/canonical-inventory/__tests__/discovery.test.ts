@@ -82,6 +82,14 @@ describe('discoverCandidateUrls', () => {
     expect(outcome.perHost[0]).toMatchObject({ host: 'httpbin.org', count: 1, error: null })
   })
 
+  it('🔴 批准主机带大写也照常统计（否则会要求人去认一个不存在的「发现不完整」）', async () => {
+    // new URL() 给回来的 hostname 永远是小写，拿原串 `Example.com` 去比就永远不等，
+    // 真找到的页面会被记成 count 0 / foreignCount > 0。
+    vi.mocked(discoverSitemapUrls).mockResolvedValue(['https://example.com/a', 'https://example.com/b'])
+    const outcome = await discoverCandidateUrls(['Example.COM'])
+    expect(outcome.perHost).toEqual([{ host: 'example.com', count: 2, foreignCount: 0, error: null }])
+  })
+
   it('🔴 返回的是 sitemap 文件而不是页面 → 不算页面，并记成结果不完整', async () => {
     // /sitemap.xml 本身是索引时，crawler 的 Level 1 只做一次 <loc> 解析就返回，
     // 拿到的是 page-sitemap.xml 之类的子索引 —— 当页面记账会得到「正数、无错误」的漂亮账，

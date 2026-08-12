@@ -159,7 +159,11 @@ export function canonicaliseUrl(raw: string, boundary: Pick<HostBoundary, 'appro
   const query = normaliseQuery(parsed.searchParams)
   notes.push(...query.notes)
 
-  let path = parsed.pathname
+  // 🔴 百分号转义的十六进制**本身不区分大小写**：`/a%2Fb` 与 `/a%2fb` 是同一个资源，
+  //    但 WHATWG URL 会原样保留两种写法。直接拼接就会给同一个页面生成两个 canonical，
+  //    撞车检测也就看不见它们 —— 复核的人会同时接受，台账里出现两条同一页面的身份。
+  //    统一成大写（RFC 3986 推荐的写法）。
+  let path = parsed.pathname.replace(/%([0-9a-fA-F]{2})/g, (_m, hex: string) => `%${hex.toUpperCase()}`)
   if (path.length > 1 && path.endsWith('/')) {
     path = path.replace(/\/+$/, '')
     notes.push('trailing_slash_removed')

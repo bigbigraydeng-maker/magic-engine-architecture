@@ -11,6 +11,7 @@
 import { crawlPages, discoverSitemapUrls, type CrawlOptions, type CrawlResult } from '../crawler'
 import { enrichCrawledPage } from '../page-enrichment'
 import type { ActivationDeps, CanonicalInventoryStore } from './types'
+import { normaliseApprovedHosts } from './url-rules'
 
 export interface HostDiscoveryResult {
   readonly host: string
@@ -48,7 +49,11 @@ export async function discoverCandidateUrls(approvedHosts: readonly string[]): P
   const seen = new Set<string>()
   const perHost: HostDiscoveryResult[] = []
 
-  for (const host of approvedHosts) {
+  // 🔴 先过同一套归一（大小写 + 去重 + 合法性），再去发现。
+  //    调用方传 `Example.com` 时，`new URL()` 给回来的 hostname 永远是小写，
+  //    拿原串去比就永远不等 —— 真找到的页面会被记成 count 0 / foreignCount > 0，
+  //    然后计划会要求人去认一个根本不存在的「发现不完整」。
+  for (const host of normaliseApprovedHosts(approvedHosts)) {
     perHost.push(await discoverOneHost(host, seen))
   }
 

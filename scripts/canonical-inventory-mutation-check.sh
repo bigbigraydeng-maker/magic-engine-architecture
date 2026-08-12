@@ -117,6 +117,10 @@ check "🔴 同名重复参数按值排（两个真实页面被合并成一条�
   "  const sorted = [...kept].sort((a, b) => compare(a[0], b[0]))" \
   "  const sorted = [...kept].sort((a, b) => (a[0] === b[0] ? compare(a[1], b[1]) : compare(a[0], b[0])))"
 
+check "🔴 百分号转义大小写不统一（同一页面两个身份，撞车检测看不见）" "$RULES" \
+  "  let path = parsed.pathname.replace(/%([0-9a-fA-F]{2})/g, (_m, hex: string) => \`%\${hex.toUpperCase()}\`)" \
+  "  let path = parsed.pathname"
+
 check "推导退化成「只要能归一就行」（换成另一页也认）" "$RULES" \
   "  return result.ok ? result.canonicalUrl : null" \
   "  return result.ok ? result.canonicalUrl : originalUrl"
@@ -374,8 +378,8 @@ check "写入抛错也报完成" "$ACT" \
 
 # ——— 复用适配器 ———
 check "🔴 只发现第一个批准主机（第二个站的页面静默缺席）" "$ADAPTERS" \
-  "  for (const host of approvedHosts) {" \
-  "  for (const host of approvedHosts.slice(0, 1)) {"
+  "  for (const host of normaliseApprovedHosts(approvedHosts)) {" \
+  "  for (const host of normaliseApprovedHosts(approvedHosts).slice(0, 1)) {"
 
 check "逐主机条数不留痕（某个站 0 条被合并结果盖住）" "$ADAPTERS" \
   "    perHost.push(await discoverOneHost(host, seen))" \
@@ -388,6 +392,10 @@ check "一个主机挂掉不留痕（跟「这个站没有页面」长得一样�
 check "🔴 按返回总条数记账，不按精确主机归属（只带回别家 URL 也算「有页面」）" "$ADAPTERS" \
   "    if (hostnameOf(url) === host) count++" \
   "    count++"
+
+check "🔴 批准主机不先归一（带大写就永远比不上，逼人认假的「不完整」）" "$ADAPTERS" \
+  "  for (const host of normaliseApprovedHosts(approvedHosts)) {" \
+  "  for (const host of approvedHosts) {"
 
 check "🔴 sitemap 文件被当成页面记账（真实页面静默缺席）" "$ADAPTERS" \
   "    if (isSitemapFile(url)) {" \
@@ -411,7 +419,7 @@ check "显式给的上限比清单还小也照跑（截断后跑出来的不是�
 
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 78 道闸各自单独确认会响"
+  echo "✅ 全部 80 道闸各自单独确认会响"
   exit 0
 fi
 echo "❌ $fail_count 道闸没有确认"
