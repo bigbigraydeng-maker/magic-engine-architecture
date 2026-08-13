@@ -19,7 +19,7 @@ import {
   requireUuid,
 } from '@/lib/kernel-approval/http'
 import {
-  assertActorMayAuthorize,
+  approvalPermissionsFor,
   buildApprovalDetail,
   loadRunForApproval,
 } from '@/lib/kernel-approval/service'
@@ -42,12 +42,18 @@ export async function GET(
     // ③ 拿它的 client_id 去做真实鉴权
     const actor = await requireApprovalActor(run.client_id)
 
-    // ④ 档次够不够授权**这一类**动作 —— 不够就连详情也不给，
-    //    免得界面画出一个他其实点不了的按钮
-    assertActorMayAuthorize(run, actor.tier)
+    // ④ 🔴 **不再因为「批不了」就连详情都不给。**（Codex P2）
+    //    早先这里是硬拒的，理由是「免得界面画出一个他其实点不了的按钮」——
+    //    但那样一来，契约升版后的旧请求连**看**都看不到，也就没法点「不做」，
+    //    永久卡死。正确做法是把「能做什么」如实告诉界面，让它画对按钮。
+    const permissions = approvalPermissionsFor(run, actor.tier)
 
     const detail = await buildApprovalDetail(supabaseAdmin, run)
-    return NextResponse.json({ item: detail, actor: { email: actor.email, tier: actor.tier } })
+    return NextResponse.json({
+      item: detail,
+      actor: { email: actor.email, tier: actor.tier },
+      permissions,
+    })
   } catch (err) {
     return approvalErrorResponse(err)
   }

@@ -16,7 +16,11 @@ import { describe, it, expect } from 'vitest'
 import type { ActionRun } from '@/lib/kernel/types'
 import { ACTION_REGISTRY } from '@/lib/kernel/registry'
 import { ApprovalError } from '../errors'
-import { canAuthorizeAction, assertActorMayAuthorize } from '../service'
+import {
+  canAuthorizeAction,
+  assertActorMayApprove,
+  approvalPermissionsFor,
+} from '../service'
 
 const ALL_REQUIRED_TIERS = ['admin', 'paid_client', 'self_serve', 'portal_only'] as const
 
@@ -67,20 +71,20 @@ describe('canAuthorizeAction · 冻结判定', () => {
   })
 })
 
-describe('assertActorMayAuthorize', () => {
+describe('assertActorMayApprove（批准前的硬闸）', () => {
   it('付费客户可以授权注册表里门槛为 paid_client 的动作', () => {
     expect(ACTION_REGISTRY.get('seo.build_publish_package')!.requiredCapabilityTier).toBe(
       'paid_client',
     )
-    expect(() => assertActorMayAuthorize(fakeRun(), 'paid_client')).not.toThrow()
-    expect(() => assertActorMayAuthorize(fakeRun(), 'admin')).not.toThrow()
+    expect(() => assertActorMayApprove(fakeRun(), 'paid_client')).not.toThrow()
+    expect(() => assertActorMayApprove(fakeRun(), 'admin')).not.toThrow()
   })
 
   it('🔴 self_serve / portal_only 拿到 403 forbidden_tier', () => {
     for (const tier of ['self_serve', 'portal_only'] as const) {
       const err = (() => {
         try {
-          assertActorMayAuthorize(fakeRun(), tier)
+          assertActorMayApprove(fakeRun(), tier)
           return null
         } catch (e) {
           return e
@@ -105,7 +109,7 @@ describe('assertActorMayAuthorize', () => {
     for (const tier of ['admin', 'paid_client'] as const) {
       const err = (() => {
         try {
-          assertActorMayAuthorize(oldVersionRun, tier)
+          assertActorMayApprove(oldVersionRun, tier)
           return null
         } catch (e) {
           return e
@@ -117,17 +121,48 @@ describe('assertActorMayAuthorize', () => {
     }
   })
 
+  it('🔴 批不了的时候，permissions 仍然说「可以拒绝」—— 这条 run 不许被卡死', () => {
+    // 🔴 铁律「管道不许断头」：契约升版 / 动作下架之后，这些旧请求
+    //    没有别的清理入口。连拒绝都挡掉的话，它们会永久停在待审批里，
+    //    而界面上看起来一切正常。门槛只管「批准」，不管「说不做」。
+    const current = ACTION_REGISTRY.get('seo.build_publish_package')!
+    const cases: Array<[label: string, run: ActionRun, reason: string]> = [
+      ['版本对不上', fakeRun({ action_version: current.version + 1 }), 'unknown_action_version'],
+      ['动作已下架', fakeRun({ action_key: 'geo.rewrite_the_whole_site' }), 'unknown_action'],
+    ]
+    for (const [label, run, reason] of cases) {
+      for (const tier of ['admin', 'paid_client'] as const) {
+        const perms = approvalPermissionsFor(run, tier)
+        expect(perms.canApprove, `${label} / ${tier} 不许批`).toBe(false)
+        expect(perms.approveBlockedReason).toBe(reason)
+        expect(perms.canReject, `${label} / ${tier} **必须**还能拒绝`).toBe(true)
+      }
+    }
+  })
+
+  it('🔴 档次不够时同样：批不了，但拒绝仍然可以', () => {
+    const perms = approvalPermissionsFor(fakeRun(), 'self_serve')
+    expect(perms.canApprove).toBe(false)
+    expect(perms.approveBlockedReason).toBe('insufficient_tier')
+    expect(perms.canReject).toBe(true)
+  })
+
+  it('能批的时候 permissions 两项都是真，且没有 blocked 原因', () => {
+    const perms = approvalPermissionsFor(fakeRun(), 'paid_client')
+    expect(perms).toEqual({ canApprove: true, canReject: true, approveBlockedReason: null })
+  })
+
   it('✅ 版本对得上时照常放行（判据不是把所有人都拦掉）', () => {
     const current = ACTION_REGISTRY.get('seo.build_publish_package')!
     expect(() =>
-      assertActorMayAuthorize(fakeRun({ action_version: current.version }), 'paid_client'),
+      assertActorMayApprove(fakeRun({ action_version: current.version }), 'paid_client'),
     ).not.toThrow()
   })
 
   it('🔴 注册表认不出这个动作 → 谁也批不了（fail closed，不是「先批了再说」）', () => {
     const err = (() => {
       try {
-        assertActorMayAuthorize(fakeRun({ action_key: 'geo.rewrite_the_whole_site' }), 'admin')
+        assertActorMayApprove(fakeRun({ action_key: 'geo.rewrite_the_whole_site' }), 'admin')
         return null
       } catch (e) {
         return e

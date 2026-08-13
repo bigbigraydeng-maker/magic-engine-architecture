@@ -24,7 +24,7 @@ import {
   requireUuid,
 } from '@/lib/kernel-approval/http'
 import {
-  assertActorMayAuthorize,
+  assertActorMayApprove,
   createApprovalKernelDeps,
   decideApproval,
   loadRunForApproval,
@@ -56,8 +56,12 @@ export async function POST(
     // ③ 拿它的 client_id 做真实鉴权，操作者身份来自会话
     const actor = await requireApprovalActor(run.client_id)
 
-    // ④ 档次够不够授权这一类动作
-    assertActorMayAuthorize(run, actor.tier)
+    // ④ 🔴 **门槛只管「批准」。**（Codex P2）
+    //    拒绝不授权任何执行，而契约升版 / 动作下架之后，这些旧请求
+    //    没有别的清理入口 —— 连拒绝都挡掉的话它们会永久卡在待审批里。
+    if (input.resolution === 'approve') {
+      assertActorMayApprove(run, actor.tier)
+    }
 
     // ⑤ 交给 Kernel 的授权段。`expectedDecisionId` 一路传到数据库的行锁那里，
     //    对不上就是 409 stale_decision，且**什么都没被改动**。

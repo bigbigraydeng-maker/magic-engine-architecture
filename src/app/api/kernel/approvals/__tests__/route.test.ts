@@ -59,7 +59,7 @@ function access(tier: 'admin' | 'paid_client' | 'self_serve' | 'portal_only', em
   return { ok: true as const, user: { email }, role: 'admin' as const, tier, allowedClientId: null }
 }
 
-function pendingRun(clientId = CLIENT_A) {
+function pendingRun(clientId = CLIENT_A, overrides: Record<string, unknown> = {}) {
   return {
     id: RUN_ID,
     client_id: clientId,
@@ -67,6 +67,7 @@ function pendingRun(clientId = CLIENT_A) {
     action_version: 1,
     status: 'pending_approval',
     authorization_decision_id: DECISION_ID,
+    ...overrides,
   }
 }
 
@@ -380,12 +381,28 @@ describe('GET /api/kernel/approvals/[runId]', () => {
     expect(mocks.buildApprovalDetail).not.toHaveBeenCalled()
   })
 
-  it('🔴 档次不够 → 403 forbidden_tier，连详情都不给', async () => {
-    mocks.requirePaidClientAccess.mockResolvedValue(access('portal_only'))
+  it('🔴 批不了也照样给详情，并如实告诉界面「能做什么」（不许卡死）', async () => {
+    // 🔴 早先这里是 403 —— 于是契约升版后的旧请求连看都看不到，
+    //    也就没法点「不做」，永久卡在待审批里。铁律「管道不许断头」。
+    mocks.loadRunForApproval.mockResolvedValue(pendingRun(CLIENT_A, { action_version: 99 }))
     const res = await detailGET(detailReq(), runCtx())
-    expect(res.status).toBe(403)
-    expect(await res.json()).toMatchObject({ code: 'forbidden_tier' })
-    expect(mocks.buildApprovalDetail).not.toHaveBeenCalled()
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.item).toBeDefined()
+    expect(body.permissions).toEqual({
+      canApprove: false,
+      canReject: true,
+      approveBlockedReason: 'unknown_action_version',
+    })
+  })
+
+  it('能批的时候 permissions 如实是可批', async () => {
+    const body = await (await detailGET(detailReq(), runCtx())).json()
+    expect(body.permissions).toEqual({
+      canApprove: true,
+      canReject: true,
+      approveBlockedReason: null,
+    })
   })
 
   it('run 不存在 → 404', async () => {
@@ -508,7 +525,7 @@ describe('POST /api/kernel/approvals/[runId]/decision', () => {
   })
 
   it.each(['self_serve', 'portal_only'] as const)(
-    '🔴 %s 档次 → 403 forbidden_tier，且不落任何决定',
+    '🔴 %s 档次**批准** → 403 forbidden_tier，且不落任何决定',
     async (tier) => {
       mocks.requirePaidClientAccess.mockResolvedValue(access(tier))
       const res = await decisionPOST(decisionReq(APPROVE), runCtx())
@@ -517,6 +534,61 @@ describe('POST /api/kernel/approvals/[runId]/decision', () => {
       expect(mocks.decideApproval).not.toHaveBeenCalled()
     },
   )
+
+  it('🔴 契约升版后的旧请求：批准被拒，但**拒绝走得通**（不许卡死）', async () => {
+    mocks.loadRunForApproval.mockResolvedValue(pendingRun(CLIENT_A, { action_version: 99 }))
+
+    // 批准 → 403，且一条决定都不落
+    const denied = await decisionPOST(decisionReq(APPROVE), runCtx())
+    expect(denied.status).toBe(403)
+    expect(await denied.json()).toMatchObject({ code: 'forbidden_tier' })
+    expect(mocks.decideApproval).not.toHaveBeenCalled()
+
+    // 拒绝 → 走得通。门槛只管「让这件事发生」，不管「说不做」。
+    mocks.decideApproval.mockResolvedValue({
+      runId: RUN_ID,
+      finalStatus: 'denied',
+      decisionId: 'dec00000-0000-4000-8000-000000002222',
+      decidedBy: 'ray@magiclab',
+      reason: '契约变过了，这条清掉',
+    })
+    const rejected = await decisionPOST(
+      decisionReq({
+        resolution: 'reject',
+        expectedDecisionId: DECISION_ID,
+        reason: '契约变过了，这条清掉',
+      }),
+      runCtx(),
+    )
+    expect(rejected.status, '拒绝必须走得通 —— 否则这条 run 永久卡在待审批里').toBe(200)
+    expect(await rejected.json()).toMatchObject({ finalStatus: 'denied' })
+    expect(mocks.decideApproval).toHaveBeenCalledTimes(1)
+  })
+
+  it('🔴 动作已从注册表下架：同样批不了、但拒得掉', async () => {
+    mocks.loadRunForApproval.mockResolvedValue(
+      pendingRun(CLIENT_A, { action_key: 'geo.rewrite_the_whole_site' }),
+    )
+    expect((await decisionPOST(decisionReq(APPROVE), runCtx())).status).toBe(403)
+    expect(mocks.decideApproval).not.toHaveBeenCalled()
+
+    mocks.decideApproval.mockResolvedValue({
+      runId: RUN_ID,
+      finalStatus: 'denied',
+      decisionId: 'dec00000-0000-4000-8000-000000003333',
+      decidedBy: 'ray@magiclab',
+      reason: '这个动作已经没有了',
+    })
+    const rejected = await decisionPOST(
+      decisionReq({
+        resolution: 'reject',
+        expectedDecisionId: DECISION_ID,
+        reason: '这个动作已经没有了',
+      }),
+      runCtx(),
+    )
+    expect(rejected.status).toBe(200)
+  })
 
   it('🔴 会话没有邮箱 → 403（人签的决策必须记得下是谁批的）', async () => {
     mocks.requirePaidClientAccess.mockResolvedValue(access('paid_client', ''))

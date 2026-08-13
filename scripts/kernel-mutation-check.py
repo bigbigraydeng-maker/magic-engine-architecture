@@ -1888,7 +1888,7 @@ const approveRun = async (d: never, r: string, u: string) => {
     dict(
         name="K-WP01A 删掉 requiredCapabilityTier 检查（谁登录了都能批）",
         file="src/lib/kernel-approval/service.ts",
-        old="""  if (!canAuthorizeAction(actorTier, definition.requiredCapabilityTier)) {""",
+        old="""  if (!canAuthorizeAction(actorTier, found.definition.requiredCapabilityTier)) {""",
         new="""  if (false) {""",
         test="src/lib/kernel-approval/__tests__/tier-gate.test.ts",
         expect_fail_contains="self_serve / portal_only 拿到 403 forbidden_tier",
@@ -2097,6 +2097,31 @@ const approveRun = async (d: never, r: string, u: string) => {
         new="  void lookupDefinition\n  return ACTION_REGISTRY.get(run.action_key)",
         test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
         expect_fail_contains="版本对不上时不许拿新版定义顶替",
+    ),
+    dict(
+        # 🔴 把门槛重新挂回拒绝路径 = 契约升版后的旧请求永久卡死（铁律：管道不许断头）。
+        name="K-WP01A 拒绝也要过批准门槛（旧请求永久卡在待审批里）",
+        file="src/app/api/kernel/approvals/[runId]/decision/route.ts",
+        old="    if (input.resolution === 'approve') {",
+        new="    if (true) {",
+        test="src/app/api/kernel/approvals/__tests__/route.test.ts",
+        expect_fail_contains="拒绝走得通",
+    ),
+    dict(
+        name="K-WP01A 详情对批不了的 run 重新硬拒（连看都看不到，也就没法拒）",
+        file="src/app/api/kernel/approvals/[runId]/route.ts",
+        old="    const permissions = approvalPermissionsFor(run, actor.tier)",
+        new="    assertActorMayApprove(run, actor.tier)\n    const permissions = approvalPermissionsFor(run, actor.tier)",
+        test="src/app/api/kernel/approvals/__tests__/route.test.ts",
+        expect_fail_contains="批不了也照样给详情",
+    ),
+    dict(
+        name="K-WP01A permissions 恒报「可批」（界面画出一个点不动的按钮）",
+        file="src/lib/kernel-approval/service.ts",
+        old="    return { canApprove: false, canReject: true, approveBlockedReason: found.reason }",
+        new="    return { canApprove: true, canReject: true, approveBlockedReason: null }",
+        test="src/lib/kernel-approval/__tests__/tier-gate.test.ts",
+        expect_fail_contains="permissions 仍然说「可以拒绝」",
     ),
     # ── K-WP01A · UUID 边界（Codex round 2 · P2） ─────────────────────────────
     dict(

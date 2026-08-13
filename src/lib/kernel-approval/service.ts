@@ -100,36 +100,88 @@ function definitionFor(run: ActionRun): ActionDefinition | null {
   return found.ok ? found.definition : null
 }
 
-/** 档次不够就抛 403。够就安静返回。 */
-export function assertActorMayAuthorize(run: ActionRun, actorTier: AccessTier): void {
+/**
+ * 这个操作者对这条 run **能做什么**。
+ *
+ * 🔴 **门槛只管「批准」，不管「说不做」。**（Codex P2）
+ *
+ *    上一轮补版本核对时，我把这道闸挂在了详情和决定两条路的最前面 ——
+ *    于是契约一升版，那些按旧版排的 `pending_approval` 就**连拒绝都做不了**：
+ *    详情打不开、reject 也是 403，连 admin 都没辙。没有别的重排 / 清理入口，
+ *    这些记录会**永久卡在那儿**。那正是铁律「管道不许断头」要防的东西 ——
+ *    一条谁都处理不了的待办，比没有待办更糟。
+ *
+ *    正确的不对称是：
+ *      · **批准**要过版本 + 档次 —— 它是「让这件事发生」的那一下；
+ *      · **拒绝**不过 —— 它只是「别做」，不授权任何执行，
+ *        而且 `rejectRun` 本来就允许 `definition` 为 null（不查注册表、不跑 preflight）。
+ *
+ *    客户归属和付费轨仍然是硬前提（`requireApprovalActor` 已经挡过一道）——
+ *    放宽的只有「谁能说不做」，不是「谁能进来」。
+ */
+export interface ApprovalPermissions {
+  readonly canApprove: boolean
+  /** 🔴 拒绝永远允许 —— 留成字段是为了让界面读到的是**事实**，不是一句约定。 */
+  readonly canReject: true
+  /** 批不了的原因；能批时是 null。给界面用来说人话，不是让它自己判。 */
+  readonly approveBlockedReason:
+    | 'unknown_action'
+    | 'unknown_action_version'
+    | 'insufficient_tier'
+    | null
+}
+
+export function approvalPermissionsFor(
+  run: ActionRun,
+  actorTier: AccessTier,
+): ApprovalPermissions {
   const found = lookupDefinition(run)
   if (!found.ok) {
-    const humanReason =
-      found.reason === 'unknown_action_version'
-        ? `这条动作是按第 ${run.action_version} 版契约排的，系统现在跑的是另一版 ——` +
-          '契约变过，不能拿新版的规则来批一条旧请求。这条已经安全停住，请重新排一次'
-        : `系统认不出「${run.action_key}」这个动作 —— 没有人给它定过谁有资格授权它，` +
-          '所以现在谁也批不了。这条已经安全停住，不会自动执行'
-    throw new ApprovalError('forbidden_tier', humanReason, {
-      runId: run.id,
-      actionKey: run.action_key,
-      actionVersion: run.action_version,
-      reason: found.reason,
-    })
+    return { canApprove: false, canReject: true, approveBlockedReason: found.reason }
   }
-  const { definition } = found
-  if (!canAuthorizeAction(actorTier, definition.requiredCapabilityTier)) {
+  if (!canAuthorizeAction(actorTier, found.definition.requiredCapabilityTier)) {
+    return { canApprove: false, canReject: true, approveBlockedReason: 'insufficient_tier' }
+  }
+  return { canApprove: true, canReject: true, approveBlockedReason: null }
+}
+
+/**
+ * 批准前的硬闸。**只在 `resolution === 'approve'` 时调**（见 `approvalPermissionsFor`）。
+ */
+export function assertActorMayApprove(run: ActionRun, actorTier: AccessTier): void {
+  const perms = approvalPermissionsFor(run, actorTier)
+  if (perms.canApprove) return
+
+  const detail = {
+    runId: run.id,
+    actionKey: run.action_key,
+    actionVersion: run.action_version,
+    actorTier,
+    reason: perms.approveBlockedReason,
+  }
+  if (perms.approveBlockedReason === 'unknown_action_version') {
     throw new ApprovalError(
       'forbidden_tier',
-      `「${definition.title}」需要更高的权限才能批准 —— 你的账号档次不够。请让有权限的同事来点`,
-      {
-        runId: run.id,
-        actionKey: run.action_key,
-        actorTier,
-        requiredTier: definition.requiredCapabilityTier,
-      },
+      `这条动作是按第 ${run.action_version} 版契约排的，系统现在跑的是另一版 ——` +
+        '契约变过，不能拿新版的规则来批一条旧请求。' +
+        '**你仍然可以点「不做」把它清掉**，或者请人重新排一次',
+      detail,
     )
   }
+  if (perms.approveBlockedReason === 'unknown_action') {
+    throw new ApprovalError(
+      'forbidden_tier',
+      `系统认不出「${run.action_key}」这个动作 —— 没有人给它定过谁有资格授权它，所以批不了。` +
+        '**你仍然可以点「不做」把它清掉**。这条不会自动执行',
+      detail,
+    )
+  }
+  throw new ApprovalError(
+    'forbidden_tier',
+    '这个动作需要更高的权限才能批准 —— 你的账号档次不够。请让有权限的同事来点。' +
+      '**你仍然可以点「不做」**',
+    detail,
+  )
 }
 
 // ── 读 ────────────────────────────────────────────────────────────────────────
