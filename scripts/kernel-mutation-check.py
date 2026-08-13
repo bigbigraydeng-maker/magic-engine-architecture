@@ -2030,9 +2030,9 @@ const approveRun = async (d: never, r: string, u: string) => {
     dict(
         name="K-WP01A 批准备注不往下传（人写的话被静默丢弃）",
         file="src/lib/kernel-approval/service.ts",
-        old="""      reason: input.reason,
-    })""",
-        new="""    })""",
+        old="""            reason: input.reason,
+          })""",
+        new="""          })""",
         test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
         expect_fail_contains="落进 append-only 决策记录",
     ),
@@ -2119,8 +2119,8 @@ const approveRun = async (d: never, r: string, u: string) => {
         # 🔴 大写形式的合法 id 会被判成 STALE_DECISION —— 批准和拒绝都永远提交不上去。
         name="K-WP01A expectedDecisionId 不再归一大小写（大写提交永远批不动）",
         file="src/lib/kernel-approval/service.ts",
-        old="    expectedDecisionId: expectedDecisionId.trim().toLowerCase(),",
-        new="    expectedDecisionId: expectedDecisionId.trim(),",
+        old="  return trimmed.toLowerCase()",
+        new="  return trimmed",
         test="src/lib/kernel-approval/__tests__/decision-input.test.ts",
         expect_fail_contains="归一成小写",
     ),
@@ -2252,6 +2252,24 @@ const approveRun = async (d: never, r: string, u: string) => {
         test="src/lib/kernel-approval/__tests__/architecture.test.ts",
         expect_fail_contains="800 行",
     ),
+    dict(
+        # 🔴 拒绝旧版请求时写进新版契约快照 → append-only 审计记录自己跟自己打架。
+        name="K-WP01A 拒绝旧版请求时写新版契约快照（审计记录自相矛盾）",
+        file="src/lib/kernel/human-approval.ts",
+        old="  const definition = registered && registered.version === run.action_version ? registered : null",
+        new="  const definition = registered",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="不许写新版的契约快照",
+    ),
+    dict(
+        # 函数行数守卫本身：抠取写坏 = 一个函数都数不到，然后「全都合规」地变绿。
+        name="K-WP01A 函数行数守卫空跑（一个函数都数不到照样绿）",
+        file="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        old="      const m = /^(export )?(async )?function (\\w+)/.exec(src[i])",
+        new="      const m = /^__never_matches__(\\w+)/.exec(src[i])",
+        test="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        expect_fail_contains="真的数得出函数长度",
+    ),
     # ── K-WP01A · UUID 边界（Codex round 2 · P2） ─────────────────────────────
     dict(
         name="K-WP01A 详情/决定路由不再校验 runId（畸形路径变成 500）",
@@ -2264,7 +2282,7 @@ const approveRun = async (d: never, r: string, u: string) => {
     dict(
         name="K-WP01A 请求体的 expectedDecisionId 不再校验 UUID",
         file="src/lib/kernel-approval/service.ts",
-        old="  if (!isUuid(expectedDecisionId.trim())) {",
+        old="  if (!isUuid(trimmed)) {",
         new="  if (false) {",
         test="src/lib/kernel-approval/__tests__/decision-input.test.ts",
         expect_fail_contains="不是合法 UUID",

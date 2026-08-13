@@ -348,12 +348,12 @@ const ALLOWED_BODY_KEYS = new Set(['resolution', 'expectedDecisionId', 'reason']
  *    起作用了，而将来某个人顺手加一句 `body.actorEmail ??` 就把身份闸拆了。
  *    当场拒掉，这条路从一开始就走不通。
  */
-export function parseDecisionInput(body: unknown): ApprovalDecisionInput {
+/** ① 形状 + 字段白名单。多一个字段就当伪造。 */
+function readAllowedFields(body: unknown): Record<string, unknown> {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     throw new ApprovalError('invalid_request', '请求内容不对：需要一个 JSON 对象')
   }
   const record = body as Record<string, unknown>
-
   const unexpected = Object.keys(record).filter((key) => !ALLOWED_BODY_KEYS.has(key))
   if (unexpected.length > 0) {
     throw new ApprovalError(
@@ -363,24 +363,38 @@ export function parseDecisionInput(body: unknown): ApprovalDecisionInput {
       { unexpected },
     )
   }
+  return record
+}
 
+/** ② approve / reject，没有第三种。 */
+function readResolution(record: Record<string, unknown>): 'approve' | 'reject' {
   const resolution = record.resolution
   if (resolution !== 'approve' && resolution !== 'reject') {
     throw new ApprovalError('invalid_request', 'resolution 只能是 approve 或 reject')
   }
+  return resolution
+}
 
-  const expectedDecisionId = record.expectedDecisionId
-  if (typeof expectedDecisionId !== 'string' || expectedDecisionId.trim().length === 0) {
+/**
+ * ③ 审批人看到的那份请求的 id。**归一成小写**返回。
+ *
+ * 🔴 语法必须在这里就判：它最终作为 `p_pending_decision_id`（uuid）进 RPC，
+ *    畸形值会让 Postgres 抛 22P02，接口答 500 —— 客户端问题被记成服务端故障。
+ * 🔴 归一成小写：后面要跟**库里读出来的** `authorization_decision_id` 做
+ *    **字符串**比较，而 Postgres 吐的永远是小写。不归一的话，提交大写形式
+ *    会被判成 STALE_DECISION —— 合法的批准 / 拒绝永远提交不上去。
+ */
+function readExpectedDecisionId(record: Record<string, unknown>): string {
+  const raw = record.expectedDecisionId
+  if (typeof raw !== 'string' || raw.trim().length === 0) {
     throw new ApprovalError(
       'invalid_request',
       '缺少 expectedDecisionId —— 必须带上你页面上看到的那份审批请求的 id，' +
         '否则没法确认你批的是不是你看见的那一件事',
     )
   }
-  // 🔴 它最终会作为 `p_pending_decision_id`（uuid）进 RPC，所以语法必须先过。
-  //    畸形值不判的话，Postgres 抛 22P02，接口答 500 —— 一个客户端问题被记成
-  //    服务端故障。判在这里（请求体解析阶段）= 在读库、鉴权和任何写入之前。
-  if (!isUuid(expectedDecisionId.trim())) {
+  const trimmed = raw.trim()
+  if (!isUuid(trimmed)) {
     throw new ApprovalError(
       'invalid_request',
       'expectedDecisionId 不是一个合法的 id（应该长成 8-4-4-4-12 的那种）——' +
@@ -388,17 +402,26 @@ export function parseDecisionInput(body: unknown): ApprovalDecisionInput {
       { field: 'expectedDecisionId' },
     )
   }
+  return trimmed.toLowerCase()
+}
 
-  const rawReason = record.reason
-  if (rawReason !== undefined && typeof rawReason !== 'string') {
+/**
+ * ④ 原因。拒绝必填。
+ *
+ * 🔴 被拒的那条会进「可恢复」判定和今日待办 —— 没有原因的话，
+ *    下一个看到它的人不知道是「这次不合适」还是「永远别做」。
+ */
+function readReason(record: Record<string, unknown>, resolution: 'approve' | 'reject'): string {
+  const raw = record.reason
+  if (raw !== undefined && typeof raw !== 'string') {
     throw new ApprovalError('invalid_request', 'reason 必须是一段文字')
   }
-  const reason = rawReason?.trim() ?? ''
-
-  // 🔴 拒绝必须说明原因：被拒的那条会进「可恢复」判定和今日待办，
-  //    没有原因的话，下一个看到它的人不知道是「这次不合适」还是「永远别做」。
+  const reason = raw?.trim() ?? ''
   if (resolution === 'reject' && reason.length === 0) {
-    throw new ApprovalError('invalid_request', '点「不做」必须写一句为什么 —— 不然下一个人看不懂这条为什么被挡下来')
+    throw new ApprovalError(
+      'invalid_request',
+      '点「不做」必须写一句为什么 —— 不然下一个人看不懂这条为什么被挡下来',
+    )
   }
   if (reason.length > MAX_REASON_LENGTH) {
     throw new ApprovalError(
@@ -406,18 +429,19 @@ export function parseDecisionInput(body: unknown): ApprovalDecisionInput {
       `原因太长了（${reason.length} 字，最多 ${MAX_REASON_LENGTH} 字）`,
     )
   }
+  return reason
+}
 
+export function parseDecisionInput(body: unknown): ApprovalDecisionInput {
+  const record = readAllowedFields(body)
+  const resolution = readResolution(record)
   return {
     resolution,
-    // 🔴 **归一成小写。**（Codex P2）
-    //    UUID 的大小写不影响它是哪一个值，所以上面那道校验刻意收大写 ——
-    //    但 `expectedDecisionId` 后面要跟**从库里读出来的** `authorization_decision_id`
-    //    做**字符串**比较，而 Postgres 吐出来的永远是小写。
-    //    不归一的话，提交大写形式会被判成 STALE_DECISION：
-    //    一个合法的批准 / 拒绝**永远提交不上去**，而且报的还是「你看到的不是最新的」
-    //    这种完全指错方向的话。
-    expectedDecisionId: expectedDecisionId.trim().toLowerCase(),
-    ...(reason.length > 0 ? { reason } : {}),
+    expectedDecisionId: readExpectedDecisionId(record),
+    ...((): { reason?: string } => {
+      const reason = readReason(record, resolution)
+      return reason.length > 0 ? { reason } : {}
+    })(),
   }
 }
 
@@ -491,6 +515,23 @@ function messageOf(err: unknown): string {
   return ''
 }
 
+/** 把一次授权结果摊成接口返回体。终态只可能是 authorized / denied。 */
+function toDecisionResult(
+  outcome: { verdict: string; decision: { id: string; reason: string } },
+  runId: string,
+  actorEmail: string,
+): ApprovalDecisionResult {
+  return {
+    runId,
+    // 🔴 批准也可能被 fail closed 拒掉（挂起期间政策改了 / 契约升版 / 超预算）——
+    //    那时 Kernel 落的是一条 deny，run 进 `denied`。如实照搬，不粉饰成成功。
+    finalStatus: outcome.verdict === 'allow' ? 'authorized' : 'denied',
+    decisionId: outcome.decision.id,
+    decidedBy: actorEmail,
+    reason: outcome.decision.reason,
+  }
+}
+
 /**
  * 人点了同意 / 不做。
  *
@@ -499,68 +540,33 @@ function messageOf(err: unknown): string {
  *    · 不做 → `rejectRun`   → run 停在 `denied`
  *    两条路都只往 append-only 的决策表里加一条，谁批的、什么时候批的有据可查。
  *
+ * 🔴 拒绝的写路径**也**要过归属核对（错挂到别人的决策不许拒得掉）——
+ *    但那道闸在**数据库里**：`kernel_resolve_pending_approval` 的
+ *    `pending_identity_mismatch` 已经提到了 approve/reject 的公共分支
+ *    （见 20260813000000 那条前向迁移）。
+ *    这里**刻意不再加一道应用层的同判据**：加了也是被数据库那道遮住的死闸 ——
+ *    拆掉它测试照样全绿（实测变异探针 MISSED），而它每次还多读一次库。
+ *
  * @param run 已经过客户归属 + 档次校验的那一行（**必须**是服务端读出来的）
  * @param actorEmail 登录会话里的邮箱。**不许**来自请求体
  */
 export async function decideApproval(
   deps: KernelDeps,
-  args: {
-    run: ActionRun
-    actorEmail: string
-    input: ApprovalDecisionInput
-  },
+  args: { run: ActionRun; actorEmail: string; input: ApprovalDecisionInput },
 ): Promise<ApprovalDecisionResult> {
   const { run, actorEmail, input } = args
-
   try {
-    if (input.resolution === 'reject') {
-      // 🔴 拒绝的写路径**也**要过归属核对（错挂到别人的决策不许拒得掉，
-      //    否则新签的 deny 会把对方的 policy_id / 版本抄进这个客户的审计记录）——
-      //    但那道闸在**数据库里**：`kernel_resolve_pending_approval` 的
-      //    `pending_identity_mismatch` 已经从 approve 分支提到了 approve/reject
-      //    的公共分支（见 20260813000000 那条前向迁移）。
-      //
-      //    这里**刻意不再加一道应用层的同判据**：加了也是被数据库那道遮住的死闸 ——
-      //    拆掉它测试照样全绿（实测变异探针 MISSED），而它每次还要多读一次库。
-      //    真闸在锁里，这是对的地方。
-      const outcome = await rejectRun(deps, run.id, actorEmail, input.reason ?? '', {
-        expectedDecisionId: input.expectedDecisionId,
-      })
-      return {
-        runId: run.id,
-        finalStatus: 'denied',
-        decisionId: outcome.decision.id,
-        decidedBy: actorEmail,
-        reason: outcome.decision.reason,
-      }
-    }
-
-    const outcome = await approveRun(deps, run.id, actorEmail, {
-      expectedDecisionId: input.expectedDecisionId,
-      // 🔴 批准时人写的备注也要落库。接口按契约收下了这段话，
-      //    不往下传就是静默丢弃 —— 审计表里只剩一句自动生成的通用理由。
-      reason: input.reason,
-    })
-
-    // 🔴 批准也可能被 fail closed 拒掉（挂起期间政策改了 / 契约升版 / 超预算）——
-    //    那时 Kernel 落的是一条 deny，run 进 `denied`。如实照搬，不粉饰成成功。
-    if (outcome.verdict !== 'allow') {
-      return {
-        runId: run.id,
-        finalStatus: 'denied',
-        decisionId: outcome.decision.id,
-        decidedBy: actorEmail,
-        reason: outcome.decision.reason,
-      }
-    }
-
-    return {
-      runId: run.id,
-      finalStatus: 'authorized',
-      decisionId: outcome.decision.id,
-      decidedBy: actorEmail,
-      reason: outcome.decision.reason,
-    }
+    const outcome =
+      input.resolution === 'reject'
+        ? await rejectRun(deps, run.id, actorEmail, input.reason ?? '', {
+            expectedDecisionId: input.expectedDecisionId,
+          })
+        : await approveRun(deps, run.id, actorEmail, {
+            expectedDecisionId: input.expectedDecisionId,
+            // 🔴 批准时人写的备注也要落库 —— 不往下传就是静默丢弃。
+            reason: input.reason,
+          })
+    return toDecisionResult(outcome, run.id, actorEmail)
   } catch (err) {
     translateKernelError(err)
   }

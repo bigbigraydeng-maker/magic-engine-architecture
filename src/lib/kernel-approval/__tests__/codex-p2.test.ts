@@ -332,6 +332,50 @@ describe('🔴 Codex round 6 · 锁内政策竞态不是终态', () => {
   })
 })
 
+describe('🔴 Codex round 8 · 拒绝旧版请求时不许写新版的契约快照', () => {
+  it('版本对不上 → deny 的 policy_snapshot 里 definition 是 null，不是新版那份', async () => {
+    // 🔴 注册表只存当前那一版。按 action_key 取到的是**新版**，而这条 deny
+    //    自己的 action_version 记的是**旧**版 —— 把新版的 version / risk /
+    //    side_effect 写进去，等于让一条 append-only 审计记录自己跟自己打架。
+    const { f, runId, expectedDecisionId } = await pendingFixture()
+    f.tables.action_runs[0].action_version = 99
+    // 指针那份也跟着改，才走得到拒绝那条路
+    const pending = f.tables.authorization_decisions.find((d) => d.id === expectedDecisionId)!
+    pending.action_version = 99
+    pending.idempotency_key = f.tables.action_runs[0].idempotency_key
+
+    await decideApproval(f.kernel, {
+      run: await loadRunForApproval(f.supabase, runId),
+      actorEmail: ACTOR,
+      input: { resolution: 'reject', expectedDecisionId, reason: '契约变过了' },
+    })
+
+    const deny = f.tables.authorization_decisions.find(
+      (d) => d.verdict === 'deny' && d.decided_by === 'human',
+    )!
+    expect(deny.action_version, '这条 deny 记的仍然是旧版').toBe(99)
+    const snapshot = deny.policy_snapshot as { definition: unknown }
+    expect(
+      snapshot.definition,
+      '拿不到旧版契约就留空 —— 不许填一份看着像、其实不是的',
+    ).toBeNull()
+  })
+
+  it('✅ 版本对得上时照常写 definition 快照（判据不是把所有快照都清空）', async () => {
+    const { f, runId, expectedDecisionId } = await pendingFixture()
+    await decideApproval(f.kernel, {
+      run: await loadRunForApproval(f.supabase, runId),
+      actorEmail: ACTOR,
+      input: { resolution: 'reject', expectedDecisionId, reason: '这周不做' },
+    })
+    const deny = f.tables.authorization_decisions.find(
+      (d) => d.verdict === 'deny' && d.decided_by === 'human',
+    )!
+    const snapshot = deny.policy_snapshot as { definition: { action_key?: string } | null }
+    expect(snapshot.definition?.action_key).toBe(KEY)
+  })
+})
+
 // ── P2-3 ─────────────────────────────────────────────────────────────────────
 
 describe('🔴 Codex P2-3 · 表在但 RPC 不在 → 仍然是 503，不是 500', () => {

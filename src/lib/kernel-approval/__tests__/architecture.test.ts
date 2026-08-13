@@ -372,6 +372,48 @@ describe('🔴 安全核心文件不许越过 800 行', () => {
   })
 })
 
+/**
+ * 🔴 **函数行数上限同样是铁律**（CLAUDE.md：函数 < 50 行）。
+ *
+ * 一个 70 行、同时干五件事的解析函数，改审批输入契约时没人能完整审查
+ * （实测：`parseDecisionInput` 曾 72 行，Codex P1）。
+ */
+describe('🔴 审批面的函数不许越过 50 行', () => {
+  const MAX_FN_LINES = 50
+
+  /** 从 `export function name(` 数到同缩进的 `}`。够用，不引解析器。 */
+  function functionLengths(file: string): Array<[name: string, lines: number]> {
+    const src = readFileSync(join(ROOT, file), 'utf8').split('\n')
+    const out: Array<[string, number]> = []
+    for (let i = 0; i < src.length; i++) {
+      const m = /^(export )?(async )?function (\w+)/.exec(src[i])
+      if (!m) continue
+      for (let j = i + 1; j < src.length; j++) {
+        if (src[j] === '}') {
+          out.push([m[3], j - i + 1])
+          break
+        }
+      }
+    }
+    return out
+  }
+
+  it.each([...APPROVAL_SURFACE_DIRS.flatMap((d) => walk(join(ROOT, d)))]
+    .map((f) => relative(ROOT, f).split('\\').join('/'))
+    .filter((f) => !isTest(f)))('%s 里每个函数 < 50 行', (file) => {
+    const tooLong = functionLengths(file).filter(([, n]) => n > MAX_FN_LINES)
+    expect(
+      tooLong.map(([n, l]) => `${n}(${l} 行)`),
+      `${file} 里这些函数越过了 ${MAX_FN_LINES} 行 —— 拆成小函数`,
+    ).toEqual([])
+  })
+
+  it('🔴 判据本身有效：真的数得出函数长度（不是永远空数组）', () => {
+    const found = functionLengths('src/lib/kernel-approval/service.ts')
+    expect(found.length, '一个函数都没数到 = 判据在空跑').toBeGreaterThan(3)
+  })
+})
+
 describe('🔴 审批面执行不了 capability（真实文件）', () => {
   it('审批面确实有文件被扫到（判据不许空跑就绿）', () => {
     const files = surfaceFiles()

@@ -325,7 +325,14 @@ export async function rejectRun(
   options: HumanDecisionOptions = {},
 ): Promise<AuthorizationOutcome> {
   const run = await deps.requireRun(runId)
-  const definition = deps.registry.get(run.action_key)
+  // 🔴 **版本对不上就不写这份契约快照。**（Codex P2）
+  //    注册表只存**当前**那一版。契约升过版之后，按 action_key 取到的是新版 ——
+  //    而这条 deny 记录自己的 `action_version` 记的是**旧**版。
+  //    把新版的 version / risk / side_effect 写进去，等于让一条 append-only
+  //    审计记录**自己跟自己打架**：行上写着第 1 版，快照里写着第 2 版的风险等级。
+  //    宁可留空（我们确实没有旧版的契约了），也不填一份看着像、其实不是的。
+  const registered = deps.registry.get(run.action_key)
+  const definition = registered && registered.version === run.action_version ? registered : null
 
   // 🔴 只能拒绝**仍在等审批**的 run。running / succeeded / denied 一律不许覆盖 ——
   //    「对已过期页面重复点不做」和「拒绝跟批准赛跑」都会走到这里。
