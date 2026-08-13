@@ -189,6 +189,61 @@ describe('parseLocsFromXml', () => {
     expect(locs).toHaveLength(2)
     expect(locs[0]).toBe('https://example.com/sitemap-posts.xml')
   })
+
+  /**
+   * Codex review on PR #963 (P2): sitemap XML escapes `&` as `&amp;` per spec
+   * — a <loc> with a multi-param query string is written with the entity,
+   * not the raw character. Decoding must happen at this shared parsing
+   * boundary so every caller (Level 1/2, robots directive, sitemap-index
+   * recursion, Jina fallback) gets it, not just one call site.
+   */
+  describe('XML entity decoding in <loc>', () => {
+    it('decodes &amp; to & in a multi-param query string', () => {
+      const xml = '<urlset><url><loc>https://example.com/sitemap.php?type=post&amp;page=2</loc></url></urlset>'
+      const locs = parseLocsFromXml(xml)
+      expect(locs).toEqual(['https://example.com/sitemap.php?type=post&page=2'])
+    })
+
+    it('decodes a decimal numeric entity (&#38;) to &', () => {
+      const xml = '<urlset><url><loc>https://example.com/search?a=1&#38;b=2</loc></url></urlset>'
+      const locs = parseLocsFromXml(xml)
+      expect(locs).toEqual(['https://example.com/search?a=1&b=2'])
+    })
+
+    it('decodes a hex numeric entity (&#x26;) to &', () => {
+      const xml = '<urlset><url><loc>https://example.com/search?a=1&#x26;b=2</loc></url></urlset>'
+      const locs = parseLocsFromXml(xml)
+      expect(locs).toEqual(['https://example.com/search?a=1&b=2'])
+    })
+
+    it('decodes an uppercase hex numeric entity (&#X26;) to &', () => {
+      const xml = '<urlset><url><loc>https://example.com/search?a=1&#X26;b=2</loc></url></urlset>'
+      const locs = parseLocsFromXml(xml)
+      expect(locs).toEqual(['https://example.com/search?a=1&b=2'])
+    })
+
+    it('never returns a URL containing the literal substring "amp;"', () => {
+      const xml = '<urlset><url><loc>https://example.com/sitemap.php?type=post&amp;page=2&amp;lang=en</loc></url></urlset>'
+      const locs = parseLocsFromXml(xml)
+      expect(locs[0]).not.toContain('amp;')
+      expect(locs).toEqual(['https://example.com/sitemap.php?type=post&page=2&lang=en'])
+    })
+
+    it('leaves an already-normal URL with no entities completely unchanged', () => {
+      const locs = parseLocsFromXml(SITEMAP_XML_10_URLS)
+      expect(locs[0]).toBe('https://example.com/page-1')
+    })
+
+    it('does not double-decode an XML-escaped literal "&amp;" string (&amp;amp; → &amp;, not &)', () => {
+      // A sitemap that genuinely wants the literal text "&amp;" to survive into
+      // the URL must escape the ampersand itself, writing &amp;amp; in the XML
+      // source. A single decode pass must leave it as "&amp;" — decoding twice
+      // would over-decode it down to "&", corrupting an already-normal value.
+      const xml = '<urlset><url><loc>https://example.com/page?raw=&amp;amp;</loc></url></urlset>'
+      const locs = parseLocsFromXml(xml)
+      expect(locs).toEqual(['https://example.com/page?raw=&amp;'])
+    })
+  })
 })
 
 describe('parseSitemapDirectives', () => {
@@ -630,6 +685,49 @@ describe('discoverSitemapUrls', () => {
 
       expect(urls).toHaveLength(6)
       expect(issues).toEqual([])
+    })
+  })
+
+  /**
+   * Codex review on PR #963 (P2): parseLocsFromXml() must decode XML entities
+   * so a &amp;-escaped multi-param query string is fetched/returned correctly,
+   * not with the literal "amp;" text still embedded in the URL.
+   */
+  describe('XML entity decoding when discovering pages (Codex review P2)', () => {
+    it('requests the decoded URL for a &amp;-escaped child sitemap, not the literal amp;', async () => {
+      const indexWithEscapedChild = `<?xml version="1.0"?>
+<sitemapindex><sitemap><loc>https://example.com/sitemap.php?type=post&amp;page=2</loc></sitemap></sitemapindex>`
+      const childUrlset = `<?xml version="1.0"?>
+<urlset><url><loc>https://example.com/blog/post-1</loc></url><url><loc>https://example.com/blog/post-2</loc></url></urlset>`
+
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
+        .mockResolvedValueOnce(mockResponse(indexWithEscapedChild))  // sitemap.xml → index, child has &amp;
+        .mockResolvedValueOnce(mockResponse(childUrlset))
+      vi.stubGlobal('fetch', fetchMock)
+
+      const urls = await discoverSitemapUrls('example.com')
+
+      expect(urls).toEqual(['https://example.com/blog/post-1', 'https://example.com/blog/post-2'])
+      // The child sitemap must be requested with a decoded query string.
+      const requestedUrls = fetchMock.mock.calls.map(([u]) => u)
+      expect(requestedUrls).toContain('https://example.com/sitemap.php?type=post&page=2')
+      expect(requestedUrls.some((u) => u.includes('amp;'))).toBe(false)
+    })
+
+    it('returns a &amp;-escaped page <loc> as a decoded page candidate, not the literal amp;', async () => {
+      const urlsetWithEscapedLoc = `<?xml version="1.0"?>
+<urlset><url><loc>https://example.com/search?a=1&amp;b=2</loc></url></urlset>`
+
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
+        .mockResolvedValueOnce(mockResponse(urlsetWithEscapedLoc))
+      )
+
+      const urls = await discoverSitemapUrls('example.com')
+
+      expect(urls).toEqual(['https://example.com/search?a=1&b=2'])
+      expect(urls.some((u) => u.includes('amp;'))).toBe(false)
     })
   })
 

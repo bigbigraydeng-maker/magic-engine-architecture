@@ -93,14 +93,48 @@ export function normaliseDomain(input: string): string {
 }
 
 /**
+ * Decode XML entities in <loc> text (Codex review on PR #963, P2).
+ *
+ * 🔴 Sitemap XML is required to escape `&` as `&amp;` — a query string like
+ *    `?type=post&page=2` is written `?type=post&amp;page=2` in valid XML.
+ *    parseLocsFromXml() used to return that text verbatim, and callers fetch
+ *    it as-is: the literal `amp;page=2` param goes out on the wire instead of
+ *    `page=2`, so multi-param sitemap/page URLs 404 or resolve to the wrong
+ *    resource. This is a single left-to-right pass — each entity match is
+ *    consumed once, so `&amp;amp;` (an XML-escaped literal "&amp;" string)
+ *    decodes to `&amp;`, not `&` — no double-decoding of already-normal text.
+ */
+function decodeXmlEntities(text: string): string {
+  return text.replace(/&(#[xX][0-9a-fA-F]+|#[0-9]+|amp|lt|gt|quot|apos);/g, (match, entity: string) => {
+    if (entity[0] === '#') {
+      const isHex = entity[1] === 'x' || entity[1] === 'X'
+      const codePoint = parseInt(entity.slice(isHex ? 2 : 1), isHex ? 16 : 10)
+      return Number.isNaN(codePoint) ? match : String.fromCodePoint(codePoint)
+    }
+    switch (entity) {
+      case 'amp': return '&'
+      case 'lt': return '<'
+      case 'gt': return '>'
+      case 'quot': return '"'
+      case 'apos': return "'"
+      default: return match
+    }
+  })
+}
+
+/**
  * Parse <loc> text nodes from a sitemap XML string.
+ * XML entities (&amp;, &#38;, &#x26;, ...) are decoded here — this is the
+ * one shared parsing boundary every caller (Level 1, Level 2, robots.txt
+ * directive, sitemap-index recursion, Jina fallback) goes through, so fixing
+ * it here fixes it everywhere instead of patching individual call sites.
  */
 export function parseLocsFromXml(xml: string): string[] {
   const locs: string[] = []
   const re = /<loc>\s*(https?:\/\/[^\s<]+)\s*<\/loc>/gi
   let m: RegExpExecArray | null
   while ((m = re.exec(xml)) !== null) {
-    locs.push(m[1].trim())
+    locs.push(decodeXmlEntities(m[1].trim()))
   }
   return locs
 }
