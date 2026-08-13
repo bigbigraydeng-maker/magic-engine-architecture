@@ -27,6 +27,22 @@ export const APPROVAL_SURFACE_DIRS = [
 ] as const
 
 /**
+ * 🔴 **函数长度那道闸要多盖一个文件。**（Codex P1）
+ *
+ *    `APPROVAL_SURFACE_DIRS` 管的是「不许出现执行入口」，那是审批面自己的规矩，
+ *    不该套到 Kernel 上。但函数长度是**全仓铁律**，而真正承载审批状态转换的
+ *    `human-approval.ts` 不在审批面目录里 —— 于是守卫看起来盖住了审批链路，
+ *    实际把最长的那两个函数（`approveRun` 126 行、`rejectRun` 62 行）漏在外面。
+ *
+ *    一个「看起来覆盖了、其实没有」的守卫比没有守卫更糟：它给的是假安心。
+ *    所以两张清单分开，各自说清自己管什么。
+ */
+export const FUNCTION_LENGTH_SCAN_PATHS = [
+  ...APPROVAL_SURFACE_DIRS,
+  'src/lib/kernel/human-approval.ts',
+] as const
+
+/**
  * 审批面**不许**出现的东西。
  *
  * 每一条都对应一种「审批顺手把事情做了」的写法：
@@ -398,14 +414,40 @@ describe('🔴 审批面的函数不许越过 50 行', () => {
     return out
   }
 
-  it.each([...APPROVAL_SURFACE_DIRS.flatMap((d) => walk(join(ROOT, d)))]
-    .map((f) => relative(ROOT, f).split('\\').join('/'))
-    .filter((f) => !isTest(f)))('%s 里每个函数 < 50 行', (file) => {
+  it.each(
+    FUNCTION_LENGTH_SCAN_PATHS.flatMap((p) => {
+      const full = join(ROOT, p)
+      return statSync(full).isDirectory() ? walk(full) : [full]
+    })
+      .map((f) => relative(ROOT, f).split('\\').join('/'))
+      .filter((f) => !isTest(f)),
+  )('%s 里每个函数 < 50 行', (file) => {
     const tooLong = functionLengths(file).filter(([, n]) => n > MAX_FN_LINES)
     expect(
       tooLong.map(([n, l]) => `${n}(${l} 行)`),
       `${file} 里这些函数越过了 ${MAX_FN_LINES} 行 —— 拆成小函数`,
     ).toEqual([])
+  })
+
+  /**
+   * 🔴 **扫描清单写死一份，不从被测常量派生。**
+   *
+   *    `it.each` 是从清单**生成**用例的：把某个路径从清单里拿掉，
+   *    只是少跑一条用例 —— 一条都不会红。守卫被掏空而测试全绿，
+   *    跟 `APPROVAL_FORBIDDEN_SYMBOLS` 那次是同一个自证陷阱
+   *    （变异探针第一轮就是这么漏过去的）。
+   */
+  const MUST_BE_SCANNED = [
+    'src/lib/kernel-approval',
+    'src/app/api/kernel/approvals',
+    'src/lib/kernel/human-approval.ts',
+  ] as const
+
+  it('🔴 扫描清单不许被悄悄改短（尤其别漏掉真正做审批状态转换的那个文件）', () => {
+    expect(
+      [...FUNCTION_LENGTH_SCAN_PATHS].sort(),
+      '这份清单只准变长。漏掉一个路径 = 守卫看起来盖住了、实际没有 —— 那是假安心。',
+    ).toEqual([...MUST_BE_SCANNED].sort())
   })
 
   it('🔴 判据本身有效：真的数得出函数长度（不是永远空数组）', () => {

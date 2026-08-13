@@ -2256,8 +2256,8 @@ const approveRun = async (d: never, r: string, u: string) => {
         # 🔴 拒绝旧版请求时写进新版契约快照 → append-only 审计记录自己跟自己打架。
         name="K-WP01A 拒绝旧版请求时写新版契约快照（审计记录自相矛盾）",
         file="src/lib/kernel/human-approval.ts",
-        old="  const definition = registered && registered.version === run.action_version ? registered : null",
-        new="  const definition = registered",
+        old="  return registered && registered.version === run.action_version ? registered : null",
+        new="  return registered",
         test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
         expect_fail_contains="不许写新版的契约快照",
     ),
@@ -2269,6 +2269,24 @@ const approveRun = async (d: never, r: string, u: string) => {
         new="      const m = /^__never_matches__(\\w+)/.exec(src[i])",
         test="src/lib/kernel-approval/__tests__/architecture.test.ts",
         expect_fail_contains="真的数得出函数长度",
+    ),
+    dict(
+        # 🔴 还活着的不一致用终态码报 → 调用方把待办划掉 → 那条 run 永远没人处理。
+        name="K-WP01A 还活着的不一致退回终态码 not_pending（活待办从管道消失）",
+        file="src/lib/kernel-approval/service.ts",
+        old="      'pending_inconsistent',",
+        new="      'not_pending',",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="还活着的不一致不许用终态码报",
+    ),
+    dict(
+        # 🔴 函数长度守卫漏掉 human-approval.ts —— 看起来盖住了审批链路，实际没有。
+        name="K-WP01A 函数长度守卫漏掉 human-approval.ts（假安心）",
+        file="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        old="  'src/lib/kernel/human-approval.ts',\n] as const",
+        new="] as const",
+        test="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        expect_fail_contains="扫描清单不许被悄悄改短",
     ),
     # ── K-WP01A · UUID 边界（Codex round 2 · P2） ─────────────────────────────
     dict(

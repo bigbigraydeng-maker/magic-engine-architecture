@@ -25,8 +25,29 @@ export type ApprovalErrorCode =
   | 'forbidden_tier'
   /** 这条 run 不存在。 */
   | 'not_found'
-  /** 这条 run 已经不在等审批了（已批 / 已拒 / 在跑 / 已结束）。 */
+  /**
+   * 这条 run 已经不在等审批了（已批 / 已拒 / 在跑 / 已结束）。
+   *
+   * 🔴 **这是个终态码。** 调用方看到它就该把这条待办从管道里划掉 ——
+   *    所以只有「真的有结论了」才准用它，见 `pending_inconsistent`。
+   */
   | 'not_pending'
+  /**
+   * 🔴 run **还停在** `pending_approval`，但它指着的那份审批请求缺失 / 对不上。
+   *
+   *    跟 `not_pending` 分开是必须的：那个码的含义是「这件事已经有结论了」，
+   *    调用方据此把待办划掉 —— 而这条 run **一个结论都没有**，它还活着，
+   *    只是库里状态不一致。用终态码报它，等于让一条**永远不会被处理**的待办
+   *    从管道里消失，而界面上看起来一切正常。这正是铁律里「发现不许死在日志里」
+   *    的那种烂尾：没有人再看得见它，也没有人会去修它。
+   *
+   *    锁内的写路径对同一类「没写成任何东西的不一致」已经报 `stale_decision`
+   *    （非终态、提示刷新重试）。读路径必须跟它同向 —— 一个说「重排」、
+   *    一个说「已结束」，是两套相反的语义。
+   *
+   *    🔴 收到它时**什么都没被改动**。正确处置是重新排一次，不是划掉。
+   */
+  | 'pending_inconsistent'
   /** 审批人手里那份审批请求已经不是当前那一份了 —— 刷新重来，**什么都没被改动**。 */
   | 'stale_decision'
   /** 请求体本身不成立（缺字段 / 类型不对 / 拒绝没写原因）。 */
@@ -40,6 +61,7 @@ export const APPROVAL_HTTP_STATUS: Readonly<Record<ApprovalErrorCode, number>> =
   forbidden_tier: 403,
   not_found: 404,
   not_pending: 409,
+  pending_inconsistent: 409,
   stale_decision: 409,
   invalid_request: 400,
 }

@@ -310,9 +310,14 @@ export async function buildApprovalDetail(
     // 🔴 不编一份审批请求出来，也**不把一份不属于这条 run 的决策原样吐出去**
     //    —— 后者会把另一个客户的理由和政策版本泄露给当前这个客户。
     //    没有锚就没法安全地点头（Kernel 那边也会拒）。
+    // 🔴 用**非终态**码。（Codex P2）
+    //    这条 run 还停在 pending_approval —— 它一个结论都没有，只是库里状态
+    //    不一致。报 `not_pending` 的话调用方会把它当「已经有结论」划掉，
+    //    于是一条永远不会被处理的待办从管道里消失，而界面上一切正常。
     throw new ApprovalError(
-      'not_pending',
-      '这条动作标着「等人点头」，但当初那份审批请求对不上 —— 库里状态不一致，先别点，请重新排一次',
+      'pending_inconsistent',
+      '这条动作还停在「等人点头」，但当初那份审批请求对不上 —— 库里状态不一致。' +
+        '先别点：它没有被批准也没有被拒绝，需要重新排一次',
       { runId: run.id, decisionId },
     )
   }

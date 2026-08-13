@@ -87,7 +87,7 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
     const err = await buildApprovalDetail(f.supabase, run).catch((e: unknown) => e)
 
     expect(err).toBeInstanceOf(ApprovalError)
-    expect((err as ApprovalError).code).toBe('not_pending')
+    expect((err as ApprovalError).code).toBe('pending_inconsistent')
     expect(
       JSON.stringify(err),
       '🔴 另一个客户的理由 / 政策版本一个字都不许出现在返回体里',
@@ -116,7 +116,7 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
     const run = await loadRunForApproval(f.supabase, runId)
     const err = await buildApprovalDetail(f.supabase, run).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(ApprovalError)
-    expect((err as ApprovalError).code).toBe('not_pending')
+    expect((err as ApprovalError).code).toBe('pending_inconsistent')
     expect(JSON.stringify(err)).not.toContain('B 客户的机密理由')
 
     // 列表侧同样
@@ -141,7 +141,7 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
 
     const run = await loadRunForApproval(f.supabase, runId)
     await expect(buildApprovalDetail(f.supabase, run)).rejects.toMatchObject({
-      code: 'not_pending',
+      code: 'pending_inconsistent',
     })
   })
 
@@ -373,6 +373,38 @@ describe('🔴 Codex round 8 · 拒绝旧版请求时不许写新版的契约快
     )!
     const snapshot = deny.policy_snapshot as { definition: { action_key?: string } | null }
     expect(snapshot.definition?.action_key).toBe(KEY)
+  })
+})
+
+describe('🔴 Codex round 9 · 还活着的不一致不许用终态码报', () => {
+  it('run 仍是 pending_approval、指针错挂 → pending_inconsistent，不是 not_pending', async () => {
+    // 🔴 `not_pending` 的含义是「这件事已经有结论了」，调用方据此把待办划掉。
+    //    而这条 run 一个结论都没有 —— 它还停在 pending_approval，只是库里状态
+    //    不一致。用终态码报它，等于让一条**永远不会被处理**的待办从管道里消失，
+    //    而界面上看起来一切正常。锁内写路径对同类不一致已经报 stale_decision
+    //    （非终态），读路径必须同向。
+    const { f, runId } = await pendingFixture()
+    f.tables.action_runs[0].authorization_decision_id = null
+
+    const run = await loadRunForApproval(f.supabase, runId)
+    const err = await buildApprovalDetail(f.supabase, run).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ApprovalError)
+    expect((err as ApprovalError).code).toBe('pending_inconsistent')
+    expect((err as ApprovalError).status).toBe(409)
+    expect(
+      f.tables.action_runs[0].status,
+      '这条 run 还活着 —— 报错没有把它推向任何终态',
+      ).toBe('pending_approval')
+  })
+
+  it('🔴 真正的终态仍然报 not_pending（判据不是把所有失败都改成非终态）', async () => {
+    const { f, runId } = await pendingFixture()
+    f.tables.action_runs[0].status = 'succeeded'
+    const run = await loadRunForApproval(f.supabase, runId)
+    await expect(buildApprovalDetail(f.supabase, run)).rejects.toMatchObject({
+      code: 'not_pending',
+    })
   })
 })
 
