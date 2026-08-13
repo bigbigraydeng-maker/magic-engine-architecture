@@ -93,6 +93,22 @@ export function normaliseDomain(input: string): string {
 }
 
 /**
+ * XML 1.0 §2.2 legal character range:
+ *   Char ::= #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
+ * Rejects surrogate halves (0xD800–0xDFFF, the gap between the second and
+ * third range) and anything past the Unicode ceiling (0x10FFFF) — both of
+ * which make String.fromCodePoint() throw RangeError.
+ */
+function isValidXmlCodePoint(codePoint: number): boolean {
+  return (
+    codePoint === 0x9 || codePoint === 0xa || codePoint === 0xd ||
+    (codePoint >= 0x20 && codePoint <= 0xd7ff) ||
+    (codePoint >= 0xe000 && codePoint <= 0xfffd) ||
+    (codePoint >= 0x10000 && codePoint <= 0x10ffff)
+  )
+}
+
+/**
  * Decode XML entities in <loc> text (Codex review on PR #963, P2).
  *
  * 🔴 Sitemap XML is required to escape `&` as `&amp;` — a query string like
@@ -109,7 +125,16 @@ function decodeXmlEntities(text: string): string {
     if (entity[0] === '#') {
       const isHex = entity[1] === 'x' || entity[1] === 'X'
       const codePoint = parseInt(entity.slice(isHex ? 2 : 1), isHex ? 16 : 10)
-      return Number.isNaN(codePoint) ? match : String.fromCodePoint(codePoint)
+      // 🔴 Codex review on PR #963 (P2): a malformed sitemap can carry an
+      //    out-of-range numeric entity (&#1114112;, a surrogate half, or a
+      //    digit string long enough to overflow to Infinity). parseInt()
+      //    never throws, but String.fromCodePoint() does — and this runs
+      //    inside the one parse call for the whole XML document, so one bad
+      //    <loc> would abort parsing and drop every valid page in the same
+      //    file. Validate the range first; an illegal entity keeps its
+      //    original source text instead of decoding (or crashing).
+      if (!Number.isFinite(codePoint) || !isValidXmlCodePoint(codePoint)) return match
+      return String.fromCodePoint(codePoint)
     }
     switch (entity) {
       case 'amp': return '&'

@@ -243,6 +243,65 @@ describe('parseLocsFromXml', () => {
       const locs = parseLocsFromXml(xml)
       expect(locs).toEqual(['https://example.com/page?raw=&amp;'])
     })
+
+    /**
+     * Codex review on PR #963 (2nd P2): parseInt() never throws, but
+     * String.fromCodePoint() does for out-of-range values — and this ran
+     * inside the one parse call for the whole sitemap, so a single malformed
+     * <loc> used to abort parsing and drop every valid page in the same file.
+     */
+    describe('rejects out-of-range numeric entities instead of throwing', () => {
+      it('does not throw for a decimal entity one past the Unicode ceiling (&#1114112;)', () => {
+        const xml = '<urlset><url><loc>https://example.com/page?x=&#1114112;</loc></url></urlset>'
+        expect(() => parseLocsFromXml(xml)).not.toThrow()
+        expect(parseLocsFromXml(xml)).toEqual(['https://example.com/page?x=&#1114112;'])
+      })
+
+      it('does not throw for a hex entity one past the Unicode ceiling (&#x110000;)', () => {
+        const xml = '<urlset><url><loc>https://example.com/page?x=&#x110000;</loc></url></urlset>'
+        expect(() => parseLocsFromXml(xml)).not.toThrow()
+        expect(parseLocsFromXml(xml)).toEqual(['https://example.com/page?x=&#x110000;'])
+      })
+
+      it('does not throw for a surrogate-half entity (&#xD800;)', () => {
+        const xml = '<urlset><url><loc>https://example.com/page?x=&#xD800;</loc></url></urlset>'
+        expect(() => parseLocsFromXml(xml)).not.toThrow()
+        expect(parseLocsFromXml(xml)).toEqual(['https://example.com/page?x=&#xD800;'])
+      })
+
+      it('does not throw for an absurdly long numeric entity (overflows to Infinity)', () => {
+        const hugeDigits = '9'.repeat(400)
+        const xml = `<urlset><url><loc>https://example.com/page?x=&#${hugeDigits};</loc></url></urlset>`
+        expect(() => parseLocsFromXml(xml)).not.toThrow()
+        expect(parseLocsFromXml(xml)).toEqual([`https://example.com/page?x=&#${hugeDigits};`])
+      })
+
+      it('still extracts the valid <loc> when a malformed one sits right next to it', () => {
+        const xml = `<?xml version="1.0"?>
+<urlset>
+  <url><loc>https://example.com/bad?x=&#1114112;</loc></url>
+  <url><loc>https://example.com/good</loc></url>
+</urlset>`
+        expect(() => parseLocsFromXml(xml)).not.toThrow()
+        const locs = parseLocsFromXml(xml)
+        expect(locs).toContain('https://example.com/good')
+        expect(locs).toHaveLength(2)
+      })
+
+      it('still decodes legal numeric entities at the exact boundary values', () => {
+        // 0x10FFFF is the highest legal code point; 0xD7FF/0xE000 are the
+        // legal values immediately outside the surrogate gap on each side.
+        const xml = `<urlset>
+  <url><loc>https://example.com/max?x=&#x10FFFF;</loc></url>
+  <url><loc>https://example.com/before-surrogate?x=&#xD7FF;</loc></url>
+  <url><loc>https://example.com/after-surrogate?x=&#xE000;</loc></url>
+</urlset>`
+        const locs = parseLocsFromXml(xml)
+        expect(locs[0]).toBe(`https://example.com/max?x=${String.fromCodePoint(0x10ffff)}`)
+        expect(locs[1]).toBe(`https://example.com/before-surrogate?x=${String.fromCodePoint(0xd7ff)}`)
+        expect(locs[2]).toBe(`https://example.com/after-surrogate?x=${String.fromCodePoint(0xe000)}`)
+      })
+    })
   })
 })
 
