@@ -1819,6 +1819,162 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         test="src/lib/__tests__/strip-comments-consistency.test.ts",
         expect_fail_contains="防止判据因为抠取写错而空跑",
     ),
+    # ── K-WP01A（#881）：认证过的审批 / 拒绝边界 ──────────────────────────────
+    dict(
+        # 🔴 这一刀是本轮最重要的一条：只要审批接口开始执行 capability，测试必红。
+        #    换掉的是**判据本身**（禁令清单），等价于「把执行入口从边界里放出来」——
+        #    直接改 service.ts 的话变异脚本还得同时改 import，锚点会脆。
+        #    清单一空，`approveRun → approveAndRun` 这类改法就再没有人拦。
+        name="K-WP01A 审批面不再禁执行入口（approveRun 换成 approveAndRun 也没人拦）",
+        file="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        old="""export const APPROVAL_FORBIDDEN_SYMBOLS = [
+  'approveAndRun',""",
+        new="""export const APPROVAL_FORBIDDEN_SYMBOLS = [
+  '__never_appears_anywhere__',""",
+        test="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        expect_fail_contains="光是出现标识符 approveAndRun 就算违规",
+    ),
+    dict(
+        # 同一个洞的另一半：模块层禁令没了 → `import '@/lib/capabilities'` 畅通。
+        name="K-WP01A 审批面不再禁 capability / runner / gateway 的导入",
+        file="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        old="""export const APPROVAL_FORBIDDEN_IMPORTS = [
+  '@/lib/capabilities',
+  '@/lib/kernel/gateway',
+  '@/lib/kernel/runner',
+] as const""",
+        new="""export const APPROVAL_FORBIDDEN_IMPORTS = ['@/lib/__never_imported__'] as const""",
+        test="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        expect_fail_contains="必须被发现",
+    ),
+    dict(
+        # 真·行为侧：审批层直接把 approveRun 换成 approveAndRun。
+        # 行为测试里那只 capability 计数器会当场数到调用 —— 这条证明的是
+        # 「不执行」不只写在架构清单里，跑起来也真的没跑。
+        name="K-WP01A 审批层改调 approveAndRun（人一点头东西就发出去了）",
+        file="src/lib/kernel-approval/service.ts",
+        old="""import { approveRun, rejectRun } from '@/lib/kernel/authorize'""",
+        new="""import { rejectRun } from '@/lib/kernel/authorize'
+import { approveAndRun } from '@/lib/kernel/runner'
+const approveRun = async (d: never, r: string, u: string) => {
+  const o = await approveAndRun(d, r, u)
+  return { verdict: 'allow' as const, decision: { id: 'x', reason: 'x' }, run: o.run, ctx: null }
+}""",
+        test="src/lib/kernel-approval/__tests__/decision.test.ts",
+        expect_fail_contains="什么都没执行",
+    ),
+    dict(
+        name="K-WP01A 从请求体读操作者身份（伪造的 actor 就生效了）",
+        file="src/lib/kernel-approval/service.ts",
+        old="""  const unexpected = Object.keys(record).filter((key) => !ALLOWED_BODY_KEYS.has(key))""",
+        new="""  const unexpected: string[] = []""",
+        test="src/lib/kernel-approval/__tests__/decision-input.test.ts",
+        expect_fail_contains="伪造身份的字段一律拒",
+    ),
+    dict(
+        # 🔴 伪造 clientId 只能从**请求体以外**的通道来 —— 请求体那条路已经被
+        #    严格解析挡死了（多一个字段就 400），所以「从 body 读 clientId」那种
+        #    改法在当前实现下根本走不到，拿它当探针只会永远 MISSED。
+        #    真正能走通的通道是查询串，所以这一刀打那儿。
+        name="K-WP01A 归属改看调用方给的 clientId（查询串通道）",
+        file="src/app/api/kernel/approvals/[runId]/decision/route.ts",
+        old="""    const actor = await requireApprovalActor(run.client_id)""",
+        new="""    const actor = await requireApprovalActor(
+      req.nextUrl.searchParams.get('clientId') ?? run.client_id,
+    )""",
+        test="src/app/api/kernel/approvals/__tests__/route.test.ts",
+        expect_fail_contains="查询串",
+    ),
+    dict(
+        name="K-WP01A 删掉 requiredCapabilityTier 检查（谁登录了都能批）",
+        file="src/lib/kernel-approval/service.ts",
+        old="""  if (!canAuthorizeAction(actorTier, definition.requiredCapabilityTier)) {""",
+        new="""  if (false) {""",
+        test="src/lib/kernel-approval/__tests__/tier-gate.test.ts",
+        expect_fail_contains="self_serve / portal_only 拿到 403 forbidden_tier",
+    ),
+    dict(
+        # 🔴 tier 闸的第二刀：判据反过来写成「黑名单」。
+        #    表面上 self_serve / portal_only 照样被拒，但**认不出的档次会被放行** ——
+        #    新加一个枚举值忘了分类，就等于悄悄开了一道门。
+        name="K-WP01A tier 闸退回黑名单（未知档次被放行）",
+        file="src/lib/kernel-approval/service.ts",
+        old="""  if (actorTier === 'admin') return true
+  if (actorTier === 'paid_client') return requiredTier !== 'admin'
+  return false""",
+        new="""  if (actorTier === 'self_serve' || actorTier === 'portal_only') return false
+  return requiredTier !== 'admin' || actorTier === 'admin'""",
+        test="src/lib/kernel-approval/__tests__/tier-gate.test.ts",
+        expect_fail_contains="认不出的档次 fail closed",
+    ),
+    dict(
+        name="K-WP01A 删掉 expectedDecisionId 的应用层 CAS（批的是页面上早就换掉的那一份）",
+        file="src/lib/kernel/authorize.ts",
+        old="""  if (run.authorization_decision_id === expectedDecisionId) return""",
+        new="""  if (true) return""",
+        test="src/lib/kernel-approval/__tests__/decision.test.ts",
+        expect_fail_contains="拿一个别的 decision id 来批",
+    ),
+    dict(
+        # 拒绝那条路单独一刀 —— 两处 assert 是各自独立的调用，
+        # 只验批准那一条的话，拒绝这边被删掉不会有任何测试变红。
+        name="K-WP01A 拒绝路径不再校验 expectedDecisionId",
+        file="src/lib/kernel/authorize.ts",
+        old="""  assertDecisionStillCurrent(run, options.expectedDecisionId, rejectedByUser)""",
+        new="""  void options""",
+        test="src/lib/kernel-approval/__tests__/decision.test.ts",
+        expect_fail_contains="拒绝也一样：过期的 id 拒不掉",
+    ),
+    # 🔴 **这里刻意没有「把 pendingDecisionId 换回 pending.id」那一刀。**
+    #    应用层那道 CAS 保证了两个值在能走到 RPC 的每一条路径上**必然相等**
+    #    （`pending` 就是按 `run.authorization_decision_id` 读出来的，而那道闸
+    #    刚刚断言过它等于调用方给的 id）。所以那一刀在行为上不可观测，
+    #    写进来只会永远 MISSED，把整个变异闸变成红的 —— 拿一条抓不住的探针
+    #    冒充覆盖，比没有探针更糟。
+    #    把调用方那个 id 一路传下去的价值是**数据来源的结构性诚实**；
+    #    真正的原子保证来自数据库那道 CAS，它由既有的
+    #    「R1 resolve 复刻去掉 current-decision CAS」覆盖。
+    dict(
+        name="K-WP01A 表不存在被吞成空列表（界面显示「没有待办，一切正常」）",
+        file="src/lib/kernel-approval/errors.ts",
+        old="""export function isKernelNotProvisioned(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false""",
+        new="""export function isKernelNotProvisioned(error: unknown): boolean {
+  return false
+  if (!error || typeof error !== 'object') return false""",
+        test="src/lib/kernel-approval/__tests__/not-provisioned.test.ts",
+        expect_fail_contains="表不存在 → 503 kernel_not_provisioned，不是 200 []",
+    ),
+    dict(
+        # 反方向那一刀：把任意查询错误都当成「没启用」。
+        # 一次数据库超时会被答成 503「系统还没打开」—— 那是另一件事。
+        name="K-WP01A 任何查询错误都当成「内核没启用」（超时被答成没打开）",
+        file="src/lib/kernel-approval/errors.ts",
+        old="""export function isKernelNotProvisioned(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false""",
+        new="""export function isKernelNotProvisioned(error: unknown): boolean {
+  return true
+  if (!error || typeof error !== 'object') return false""",
+        test="src/lib/kernel-approval/__tests__/not-provisioned.test.ts",
+        expect_fail_contains="别的失败一律不算「没启用」",
+    ),
+    dict(
+        name="K-WP01A 列表不再按客户过滤（跨客户的待审批全都看得到）",
+        file="src/lib/kernel-approval/queries.ts",
+        old="""    .eq('client_id', clientId)
+    .eq('status', 'pending_approval')""",
+        new="""    .eq('status', 'pending_approval')""",
+        test="src/lib/kernel-approval/__tests__/decision.test.ts",
+        expect_fail_contains="A 客户的待审批不出现在 B 客户的列表里",
+    ),
+    dict(
+        name="K-WP01A reject 不再要求写原因",
+        file="src/lib/kernel-approval/service.ts",
+        old="""  if (resolution === 'reject' && reason.length === 0) {""",
+        new="""  if (false) {""",
+        test="src/lib/kernel-approval/__tests__/decision-input.test.ts",
+        expect_fail_contains="reject 不写原因",
+    ),
 ]
 
 

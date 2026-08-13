@@ -551,6 +551,61 @@ export async function reuseLiveAuthorization(
 // ── 人工批准 ──────────────────────────────────────────────────────────────────
 
 /**
+ * 人工决定的可选参数。
+ *
+ * 🔴 `expectedDecisionId` = **审批人当时在页面上真正看到的那份审批请求的 id**。
+ *
+ *    没有它的时候，服务端是这么干的：拿 runId 去库里重读一遍
+ *    `run.authorization_decision_id`，读到什么就批什么。于是这条时间线是通的：
+ *
+ *      10:00  人打开审批页，看到「花 $2 发这条」
+ *      10:05  政策改了 / 系统重新排了一次 → run 换上了**另一份**审批请求（$40）
+ *      10:06  人点「同意」——服务端重读到的是新那份，**照批不误**
+ *
+ *    人点头点的是他看见的那一份，不是「这条 run 此刻恰好挂着的任意一份」。
+ *    所以这个 id 由调用方带上来，并且**一路传到数据库**当作
+ *    `p_pending_decision_id` —— 数据库拿到 run 行锁之后会再比对一次
+ *    （`kernel_resolve_pending_approval` 第 ③ 步）。
+ *
+ *    两层缺一不可：
+ *      · 应用层这一道让「明显过期」当场失败，**一个字都不写库**，并给人话；
+ *      · 数据库那一道守的是「比完到提交之间」的那个窗口 —— 那里有行锁，是真原子。
+ *
+ *    不传 = 保持老行为（服务端重读）。**新的审批 API 一律必须传**；
+ *    保留可选是为了不改动现有那些非 HTTP 调用方（测试、恢复路径）。
+ */
+export interface HumanDecisionOptions {
+  readonly expectedDecisionId?: string
+}
+
+/**
+ * 应用层的过期审批闸。
+ *
+ * 🔴 命中就抛，**在任何写入之前**。不落决策、不动 run —— 因为这次操作
+ *    从一开始就不该发生：人批的是另一份东西。
+ */
+function assertDecisionStillCurrent(
+  run: ActionRun,
+  expectedDecisionId: string | undefined,
+  actor: string,
+): void {
+  if (expectedDecisionId === undefined) return
+  if (run.authorization_decision_id === expectedDecisionId) return
+  throw new KernelError(
+    'STALE_DECISION',
+    `${actor} 看到的那份审批请求已经不是最新的了（这条动作期间被重新排过或规则改过）——` +
+      '这次操作没有生效，也没有改动任何东西。刷新一下再决定',
+    {
+      detail: {
+        runId: run.id,
+        expectedDecisionId,
+        currentDecisionId: run.authorization_decision_id,
+      },
+    },
+  )
+}
+
+/**
  * 人点了「同意」。
  *
  * 🔴 人工批准能做的**只有一件事**：把「当前仍然是 require_approval、
@@ -567,6 +622,7 @@ export async function approveRun(
   deps: KernelDeps,
   runId: string,
   approvedByUser: string,
+  options: HumanDecisionOptions = {},
 ): Promise<AuthorizationOutcome> {
   const now = deps.now()
   const run = await deps.requireRun(runId)
@@ -577,6 +633,9 @@ export async function approveRun(
       `这条动作现在的状态是「${run.status}」，不是在等人点头，不能批准`,
     )
   }
+
+  // 🔴 在任何写入之前 —— 批的必须是他看见的那一份（见 HumanDecisionOptions）
+  assertDecisionStillCurrent(run, options.expectedDecisionId, approvedByUser)
 
   // ① 当初挂起时那条 require_approval 决策必须还在 —— 它是「同一版政策」的锚。
   const pending = run.authorization_decision_id
@@ -655,9 +714,11 @@ export async function approveRun(
   //    输的一方在这里拿到 not_pending / decision_not_current，绝不覆盖赢家。
   //    RPC 内部会把政策三连（行身份 / 版本 / 模式）再查一遍，
   //    挡住「preflight 和这里之间政策又变了」的窗口。
+  //    🔴 交给数据库的是**调用方带上来的那个 id**（没带才退回服务端重读的）。
+  //    这一句就是「人批的是他看见的那一份」这条契约在数据库侧的落点。
   const resolved = await resolvePendingApproval(deps.supabase, {
     runId: run.id,
-    pendingDecisionId: pending.id,
+    pendingDecisionId: options.expectedDecisionId ?? pending.id,
     resolution: 'approve',
     resolvedBy: approvedByUser,
     reason: `${approvedByUser} 点了同意（规则自挂起以来没变过，仍是第 ${policy.policy_version} 版）`,
@@ -687,6 +748,7 @@ export async function rejectRun(
   runId: string,
   rejectedByUser: string,
   reason: string,
+  options: HumanDecisionOptions = {},
 ): Promise<AuthorizationOutcome> {
   const run = await deps.requireRun(runId)
   const definition = deps.registry.get(run.action_key)
@@ -699,6 +761,11 @@ export async function rejectRun(
       `这条动作现在的状态是「${run.status}」，不是在等审批，不能拒绝（它可能已经被批准执行了）`,
     )
   }
+
+  // 🔴 拒绝同样只能对「他看见的那一份」生效。人说「不做」说的是那件事，
+  //    不是这条 run 此刻恰好挂着的任意一件事 —— 期间换过内容就得重看再决定。
+  assertDecisionStillCurrent(run, options.expectedDecisionId, rejectedByUser)
+
   const pending = run.authorization_decision_id
     ? await getDecision(deps.supabase, run.authorization_decision_id)
     : null
@@ -712,7 +779,7 @@ export async function rejectRun(
   // 原子转换：跟批准抢同一把 run 行锁，输的一方拿到机器可读原因。
   const resolved = await resolvePendingApproval(deps.supabase, {
     runId: run.id,
-    pendingDecisionId: pending.id,
+    pendingDecisionId: options.expectedDecisionId ?? pending.id,
     resolution: 'reject',
     resolvedBy: rejectedByUser,
     reason: `${rejectedByUser} 点了不做：${reason}`,

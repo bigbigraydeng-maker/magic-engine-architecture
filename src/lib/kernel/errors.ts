@@ -36,6 +36,18 @@ export type KernelErrorCode =
   | 'VERIFICATION_FAILED'
   /** run / step 状态不允许这次执行 */
   | 'INVALID_STATE'
+  /**
+   * 🔴 审批人手里那份审批请求已经不是这条 run 当前指着的那一份了。
+   *
+   *    跟 `INVALID_STATE` 分开是必须的：`INVALID_STATE` 说的是「状态不对」
+   *    （已经跑起来了 / 已经被拒了），而这一条说的是「状态还对，但你看到的
+   *    是**上一版**的请求」—— 页面开着没动、期间政策改过、系统重新排过。
+   *    两者的处置完全不同：前者这件事已经有结论了，后者刷新一下就能重新决定。
+   *    合成一个码，审批界面就没法把「刷新重试」和「已经有结论了」分开说。
+   *
+   *    🔴 收到这个码时**一定没有签出任何新决策，也没有动过 run**。
+   */
+  | 'STALE_DECISION'
   /** capability 没注册处理器 */
   | 'CAPABILITY_NOT_IMPLEMENTED'
   /** 对外副作用被闸死 —— v1 永远不许出现 */
