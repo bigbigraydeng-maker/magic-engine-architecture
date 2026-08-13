@@ -13,7 +13,9 @@ import { describe, it, expect } from 'vitest'
 import { ApprovalError } from '../errors'
 import { parseDecisionInput, MAX_REASON_LENGTH } from '../service'
 
-const OK_ID = 'decision-abc'
+// 🔴 合法 UUID。用 'decision-abc' 那种假值的话，这套测试会绕过
+//    「expectedDecisionId 最终要进 uuid RPC 参数」这条真实边界。
+const OK_ID = '0d000000-0000-4000-8000-0000000000ab'
 
 function expectRejected(body: unknown, contains?: string): ApprovalError {
   let caught: unknown = null
@@ -102,6 +104,38 @@ describe('🔴 parseDecisionInput · 其余不合法输入', () => {
     for (const expectedDecisionId of [undefined, '', '   ', 42, null, {}]) {
       expectRejected({ resolution: 'approve', expectedDecisionId }, 'expectedDecisionId')
     }
+  })
+
+  it('🔴 expectedDecisionId 不是合法 UUID → 400（它最终要进 uuid RPC 参数）', () => {
+    // 不判的话，Postgres 抛 22P02，接口答 500 —— 客户端问题被记成服务端故障。
+    const bad = [
+      'not-a-uuid',
+      'decision-abc',
+      '0d000000-0000-4000-8000-0000000000a', // 少一位
+      '0d000000-0000-4000-8000-0000000000abc', // 多一位
+      '0d000000_0000_4000_8000_0000000000ab', // 分隔符不对
+      '0d000000-0000-4000-8000-0000000000ag', // g 不是十六进制
+      "0d000000-0000-4000-8000-0000000000ab' OR 1=1--",
+      '  0d000000-0000-4000-8000-0000000000ab  extra',
+    ]
+    for (const expectedDecisionId of bad) {
+      expectRejected({ resolution: 'approve', expectedDecisionId }, '合法的 id')
+    }
+  })
+
+  it('大小写混排的合法 UUID 照收（Postgres 的 uuid 不区分大小写）', () => {
+    const upper = '0D000000-0000-4000-8000-0000000000AB'
+    expect(parseDecisionInput({ resolution: 'approve', expectedDecisionId: upper })).toEqual({
+      resolution: 'approve',
+      expectedDecisionId: upper,
+    })
+  })
+
+  it('🔴 全零 UUID 也是合法的（判据要跟数据库一致，别比数据库还严）', () => {
+    const zero = '00000000-0000-0000-0000-000000000000'
+    expect(
+      parseDecisionInput({ resolution: 'approve', expectedDecisionId: zero }).expectedDecisionId,
+    ).toBe(zero)
   })
 
   it('🔴 reject 不写原因 → 400', () => {

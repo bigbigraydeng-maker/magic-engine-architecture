@@ -47,10 +47,13 @@ import { GET as detailGET } from '../[runId]/route'
 import { POST as decisionPOST } from '../[runId]/decision/route'
 import { ApprovalError } from '@/lib/kernel-approval/errors'
 
-const CLIENT_A = 'client-aaaa'
-const CLIENT_B = 'client-bbbb'
-const RUN_ID = 'run-1111'
-const DECISION_ID = 'decision-1111'
+// 🔴 全部是**合法 UUID**。路由现在会在读库之前校验它们 ——
+//    夹具用 `run-1111` 这种假值的话，测试要么全红，要么（更糟）
+//    在校验加上之前一直绿着，而真实调用方从来走不到那条路。
+const CLIENT_A = 'c11e0000-0000-4000-8000-00000000000a'
+const CLIENT_B = 'c11e0000-0000-4000-8000-00000000000b'
+const RUN_ID = '40000000-0000-4000-8000-000000001111'
+const DECISION_ID = 'dec00000-0000-4000-8000-000000001111'
 
 function access(tier: 'admin' | 'paid_client' | 'self_serve' | 'portal_only', email = 'ray@magiclab') {
   return { ok: true as const, user: { email }, role: 'admin' as const, tier, allowedClientId: null }
@@ -100,6 +103,102 @@ beforeEach(() => {
     decisionId: 'decision-new',
     decidedBy: 'ray@magiclab',
     reason: 'ok',
+  })
+})
+
+// ── UUID 边界（Codex P2：读 uuid 列之前必须先判语法） ────────────────────────
+
+/**
+ * 🔴 三个入口的 uuid 都要在**任何数据库查询、任何鉴权、任何写入之前**判掉。
+ *
+ *    不判的话 `.eq('id', 'not-a-uuid')` 会让 Postgres 抛
+ *    `22P02 invalid input syntax for type uuid` —— 一路冒上来变成 `500`。
+ *    于是「链接被聊天软件截断了」这种纯客户端问题被记成服务端故障，
+ *    5xx 监控被污染，真正的故障淹在噪音里。
+ *
+ *    每条用例都同时断言「没查库、没鉴权、没落决定」—— 只断言状态码的话，
+ *    校验放在鉴权**之后**也照样绿，而那时 DB 已经被打过一次了。
+ */
+const MALFORMED_IDS = [
+  'not-a-uuid',
+  'run-1111',
+  '40000000-0000-4000-8000-00000000111', // 少一位
+  '40000000-0000-4000-8000-0000000011111', // 多一位
+  '40000000_0000_4000_8000_000000001111', // 分隔符不对
+  '40000000-0000-4000-8000-00000000111g', // g 不是十六进制
+  "40000000-0000-4000-8000-000000001111' OR 1=1--",
+  '../../etc/passwd',
+  '',
+]
+
+describe('🔴 GET /api/kernel/approvals/[runId] · 非法 runId', () => {
+  it.each(MALFORMED_IDS)('「%s」→ 400，且零查询零鉴权', async (bad) => {
+    const res = await detailGET(detailReq(), { params: Promise.resolve({ runId: bad }) })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({ code: 'invalid_request' })
+    expect(mocks.loadRunForApproval, '读库必须没发生').not.toHaveBeenCalled()
+    expect(mocks.requirePaidClientAccess, '鉴权必须没发生').not.toHaveBeenCalled()
+    expect(mocks.buildApprovalDetail).not.toHaveBeenCalled()
+  })
+
+  it('✅ 合法 runId 照常往下走（判据不是把所有人都拦掉）', async () => {
+    const res = await detailGET(detailReq(), runCtx())
+    expect(res.status).toBe(200)
+    expect(mocks.loadRunForApproval).toHaveBeenCalledWith(expect.anything(), RUN_ID)
+  })
+})
+
+describe('🔴 POST …/[runId]/decision · 非法 runId', () => {
+  const APPROVE_BODY = { resolution: 'approve', expectedDecisionId: DECISION_ID }
+
+  it.each(MALFORMED_IDS)('「%s」→ 400，且零查询零鉴权零写入', async (bad) => {
+    const res = await decisionPOST(decisionReq(APPROVE_BODY), {
+      params: Promise.resolve({ runId: bad }),
+    })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({ code: 'invalid_request' })
+    expect(mocks.loadRunForApproval, '读库必须没发生').not.toHaveBeenCalled()
+    expect(mocks.requirePaidClientAccess, '鉴权必须没发生').not.toHaveBeenCalled()
+    expect(mocks.decideApproval, '一条决定都不许落').not.toHaveBeenCalled()
+  })
+
+  it('🔴 runId 的校验排在请求体解析**之后**、读库之前 —— 两种错都各自报各自的', async () => {
+    // 请求体也不合法时，先报请求体的问题（两条都是 400，但 detail 要说清是哪个字段）
+    const res = await decisionPOST(decisionReq({ resolution: 'nope' }), {
+      params: Promise.resolve({ runId: 'not-a-uuid' }),
+    })
+    expect(res.status).toBe(400)
+    expect(mocks.loadRunForApproval).not.toHaveBeenCalled()
+    expect(mocks.decideApproval).not.toHaveBeenCalled()
+  })
+
+  it('🔴 请求体里的 expectedDecisionId 非法 → 400，且零查询零鉴权零写入', async () => {
+    const res = await decisionPOST(
+      decisionReq({ resolution: 'approve', expectedDecisionId: 'decision-1111' }),
+      runCtx(),
+    )
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({ code: 'invalid_request' })
+    expect(mocks.loadRunForApproval).not.toHaveBeenCalled()
+    expect(mocks.requirePaidClientAccess).not.toHaveBeenCalled()
+    expect(mocks.decideApproval).not.toHaveBeenCalled()
+  })
+})
+
+describe('🔴 GET /api/kernel/approvals · 非法 clientId', () => {
+  it.each(MALFORMED_IDS.filter((v) => v !== ''))('「%s」→ 400，且零查询零鉴权', async (bad) => {
+    const res = await listGET(listReq(`?clientId=${encodeURIComponent(bad)}`))
+    expect(res.status).toBe(400)
+    expect(await res.json()).toMatchObject({ code: 'invalid_request' })
+    expect(mocks.requirePaidClientAccess, '鉴权必须没发生').not.toHaveBeenCalled()
+    expect(mocks.listPendingApprovals, '读库必须没发生').not.toHaveBeenCalled()
+  })
+
+  it('空 clientId 仍然是「请带上 clientId」那条，不是 uuid 报错', async () => {
+    const res = await listGET(listReq('?clientId='))
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toContain('请带上 clientId')
+    expect(mocks.requirePaidClientAccess).not.toHaveBeenCalled()
   })
 })
 

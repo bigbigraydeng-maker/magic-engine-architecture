@@ -167,7 +167,7 @@ describe('K-WP01A · expectedDecisionId 过期', () => {
     const err = await decideApproval(f.kernel, {
       run: await loadRunForApproval(f.supabase, runId),
       actorEmail: ACTOR,
-      input: { resolution: 'approve', expectedDecisionId: 'decision-from-an-older-page' },
+      input: { resolution: 'approve', expectedDecisionId: '0d000000-0000-4000-8000-00000000fa9e' },
     }).catch((e: unknown) => e)
 
     expect(err).toBeInstanceOf(ApprovalError)
@@ -189,7 +189,7 @@ describe('K-WP01A · expectedDecisionId 过期', () => {
     const err = await decideApproval(f.kernel, {
       run: await loadRunForApproval(f.supabase, runId),
       actorEmail: ACTOR,
-      input: { resolution: 'reject', expectedDecisionId: 'stale-id', reason: '不做' },
+      input: { resolution: 'reject', expectedDecisionId: '0d000000-0000-4000-8000-00000000ba1d', reason: '不做' },
     }).catch((e: unknown) => e)
 
     expect((err as ApprovalError).code).toBe('stale_decision')
@@ -270,10 +270,10 @@ describe('K-WP01A · expectedDecisionId 过期', () => {
               ...f.tables.authorization_decisions.find(
                 (d) => d.id === run.authorization_decision_id,
               )!,
-              id: 'decision-re-issued',
+              id: '0d000000-0000-4000-8000-0000000e1550',
             }
             f.tables.authorization_decisions.push(replacement)
-            run.authorization_decision_id = 'decision-re-issued'
+            run.authorization_decision_id = '0d000000-0000-4000-8000-0000000e1550'
           },
         },
       },

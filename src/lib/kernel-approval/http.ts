@@ -8,7 +8,31 @@
 import { NextResponse } from 'next/server'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import type { AccessTier } from '@/lib/auth/access-types'
+import { isUuid } from '@/lib/validation-utils'
 import { ApprovalError } from './errors'
+
+/**
+ * 来自 HTTP 的 uuid：**读库之前**就得判。
+ *
+ * 🔴 不判的话，`.eq('id', 'not-a-uuid')` 会让 Postgres 抛
+ *    `22P02 invalid input syntax for type uuid` —— 一路冒上来变成 `500 internal_error`。
+ *    于是「链接被聊天软件截断了」「有人手打错了一位」这种纯客户端问题
+ *    会被记成服务端故障：调用方看到的是「系统坏了」而不是「你这个链接不对」，
+ *    而 5xx 监控被这类噪音污染之后，真正的故障就淹在里面了。
+ *
+ * 🔴 这道闸只管**语法**。过了照样要走客户归属和档次校验 ——
+ *    它不是权限闸，一个字都没放宽后面的东西。
+ *
+ * @param label 出错时告诉调用方是**哪个**字段不对（三处入口共用一份文案模板）
+ */
+export function requireUuid(value: unknown, label: string): string {
+  if (isUuid(value)) return value
+  throw new ApprovalError(
+    'invalid_request',
+    `${label} 不是一个合法的 id（应该长成 8-4-4-4-12 的那种）—— 多半是链接被截断了，或者哪里手打错了一位`,
+    { field: label },
+  )
+}
 
 export interface ApprovalActor {
   readonly email: string

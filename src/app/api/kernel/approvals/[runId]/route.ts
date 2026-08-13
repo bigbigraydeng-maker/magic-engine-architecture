@@ -13,7 +13,11 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { approvalErrorResponse, requireApprovalActor } from '@/lib/kernel-approval/http'
+import {
+  approvalErrorResponse,
+  requireApprovalActor,
+  requireUuid,
+} from '@/lib/kernel-approval/http'
 import {
   assertActorMayAuthorize,
   buildApprovalDetail,
@@ -25,15 +29,20 @@ export async function GET(
   { params }: { params: Promise<{ runId: string }> },
 ): Promise<NextResponse> {
   try {
-    const { runId } = await params
+    const { runId: rawRunId } = await params
 
-    // ① 客户归属从这条 run 自己身上读出来
+    // ① 🔴 **第一件事**：runId 必须先长得像个 uuid。
+    //    放到读库之后的话，畸形路径会让 Postgres 抛 22P02，一路变成 500 ——
+    //    「链接被截断了」被记成服务端故障。这一道在**任何**查询和鉴权之前。
+    const runId = requireUuid(rawRunId, 'runId')
+
+    // ② 客户归属从这条 run 自己身上读出来
     const run = await loadRunForApproval(supabaseAdmin, runId)
 
-    // ② 拿它的 client_id 去做真实鉴权
+    // ③ 拿它的 client_id 去做真实鉴权
     const actor = await requireApprovalActor(run.client_id)
 
-    // ③ 档次够不够授权**这一类**动作 —— 不够就连详情也不给，
+    // ④ 档次够不够授权**这一类**动作 —— 不够就连详情也不给，
     //    免得界面画出一个他其实点不了的按钮
     assertActorMayAuthorize(run, actor.tier)
 

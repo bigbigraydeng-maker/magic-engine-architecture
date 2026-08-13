@@ -24,7 +24,12 @@ export type Tables = Record<string, Row[]>
 let seq = 0
 export function fakeId(prefix = 'id'): string {
   seq += 1
-  return `${prefix}-${String(seq).padStart(6, '0')}`
+  // 🔴 生成的必须是**合法 UUID** —— 真表里这些主键列就是 `uuid`。
+  //    以前返回 `authorization_decisions-000001` 这种，看着好读，
+  //    但它让测试绕过了一整类真实输入边界（真库对畸形 uuid 抛 22P02，
+  //    假件只做字符串比较照收不误）。可读性靠把序号放在最后一段保留。
+  void prefix
+  return `feed0000-0000-4000-8000-${String(seq).padStart(12, '0')}`
 }
 
 /** 复刻生产库上的唯一约束。少了它，幂等测试测的就只是应用层的一个 if。 */

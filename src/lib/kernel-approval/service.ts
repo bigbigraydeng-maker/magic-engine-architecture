@@ -23,6 +23,7 @@ import { ACTION_REGISTRY } from '@/lib/kernel/registry'
 import { approveRun, rejectRun } from '@/lib/kernel/authorize'
 import { KernelError } from '@/lib/kernel/errors'
 import { createKernelDeps, type KernelDeps } from '@/lib/kernel/deps'
+import { isUuid } from '@/lib/validation-utils'
 import { ApprovalError, isKernelNotProvisioned } from './errors'
 import {
   getDecisionForApproval,
@@ -287,6 +288,17 @@ export function parseDecisionInput(body: unknown): ApprovalDecisionInput {
       'invalid_request',
       '缺少 expectedDecisionId —— 必须带上你页面上看到的那份审批请求的 id，' +
         '否则没法确认你批的是不是你看见的那一件事',
+    )
+  }
+  // 🔴 它最终会作为 `p_pending_decision_id`（uuid）进 RPC，所以语法必须先过。
+  //    畸形值不判的话，Postgres 抛 22P02，接口答 500 —— 一个客户端问题被记成
+  //    服务端故障。判在这里（请求体解析阶段）= 在读库、鉴权和任何写入之前。
+  if (!isUuid(expectedDecisionId.trim())) {
+    throw new ApprovalError(
+      'invalid_request',
+      'expectedDecisionId 不是一个合法的 id（应该长成 8-4-4-4-12 的那种）——' +
+        '多半是页面上那份数据不完整，刷新一下再点',
+      { field: 'expectedDecisionId' },
     )
   }
 

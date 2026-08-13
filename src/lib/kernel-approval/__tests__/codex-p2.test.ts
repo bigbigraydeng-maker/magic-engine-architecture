@@ -72,16 +72,16 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
 
     // 造一条属于 B 客户、别的 run 的 require_approval 决策，并把 A 的 run 错挂过去
     f.tables.authorization_decisions.push({
-      id: 'decision-of-client-b',
-      action_run_id: 'run-of-client-b',
+      id: '0d000000-0000-4000-8000-0000000000cb',
+      action_run_id: '40000000-0000-4000-8000-0000000000cb',
       client_id: CLIENT_B,
       verdict: 'require_approval',
       reason: 'B 客户的机密理由：给 xxx 投 $4000',
-      policy_id: 'policy-of-b',
+      policy_id: '901c0000-0000-4000-8000-0000000000cb',
       policy_version: 7,
       created_at: '2026-08-13T00:00:00.000Z',
     })
-    f.tables.action_runs[0].authorization_decision_id = 'decision-of-client-b'
+    f.tables.action_runs[0].authorization_decision_id = '0d000000-0000-4000-8000-0000000000cb'
 
     const run = await loadRunForApproval(f.supabase, runId)
     const err = await buildApprovalDetail(f.supabase, run).catch((e: unknown) => e)
@@ -102,16 +102,16 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
     //    （Kernel 的 reuseLiveAuthorization 对同一形状抛 CROSS_CLIENT。）
     const { f, runId } = await pendingFixture()
     f.tables.authorization_decisions.push({
-      id: 'decision-claiming-this-run',
+      id: '0d000000-0000-4000-8000-00000000c1a1',
       action_run_id: runId,
       client_id: CLIENT_B,
       verdict: 'require_approval',
       reason: 'B 客户的机密理由：给 xxx 投 $4000',
-      policy_id: 'policy-of-b',
+      policy_id: '901c0000-0000-4000-8000-0000000000cb',
       policy_version: 7,
       created_at: '2026-08-13T00:00:00.000Z',
     })
-    f.tables.action_runs[0].authorization_decision_id = 'decision-claiming-this-run'
+    f.tables.action_runs[0].authorization_decision_id = '0d000000-0000-4000-8000-00000000c1a1'
 
     const run = await loadRunForApproval(f.supabase, runId)
     const err = await buildApprovalDetail(f.supabase, run).catch((e: unknown) => e)
@@ -128,16 +128,16 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
   it('指针挂到**同客户但另一条 run** 的决策上 → 一样拒绝', async () => {
     const { f, runId } = await pendingFixture()
     f.tables.authorization_decisions.push({
-      id: 'decision-of-another-run',
-      action_run_id: 'some-other-run',
+      id: '0d000000-0000-4000-8000-00000000a107',
+      action_run_id: '40000000-0000-4000-8000-00000000a107',
       client_id: CLIENT_A,
       verdict: 'require_approval',
       reason: '另一件事的理由',
-      policy_id: 'policy-1',
+      policy_id: '901c0000-0000-4000-8000-000000000001',
       policy_version: 1,
       created_at: '2026-08-13T00:00:00.000Z',
     })
-    f.tables.action_runs[0].authorization_decision_id = 'decision-of-another-run'
+    f.tables.action_runs[0].authorization_decision_id = '0d000000-0000-4000-8000-00000000a107'
 
     const run = await loadRunForApproval(f.supabase, runId)
     await expect(buildApprovalDetail(f.supabase, run)).rejects.toMatchObject({
@@ -148,16 +148,16 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
   it('列表侧同样拦：错挂的那条进 skipped，不冒充一条能点的待办', async () => {
     const { f } = await pendingFixture()
     f.tables.authorization_decisions.push({
-      id: 'decision-of-client-b',
-      action_run_id: 'run-of-client-b',
+      id: '0d000000-0000-4000-8000-0000000000cb',
+      action_run_id: '40000000-0000-4000-8000-0000000000cb',
       client_id: CLIENT_B,
       verdict: 'require_approval',
       reason: 'B 客户的机密理由',
-      policy_id: 'policy-of-b',
+      policy_id: '901c0000-0000-4000-8000-0000000000cb',
       policy_version: 7,
       created_at: '2026-08-13T00:00:00.000Z',
     })
-    f.tables.action_runs[0].authorization_decision_id = 'decision-of-client-b'
+    f.tables.action_runs[0].authorization_decision_id = '0d000000-0000-4000-8000-0000000000cb'
 
     const { items, skippedRunIds } = await listPendingApprovals(f.supabase, CLIENT_A)
     expect(items).toEqual([])
@@ -236,20 +236,24 @@ describe('🔴 Codex P2-3 · 表在但 RPC 不在 → 仍然是 503，不是 500
 
 // ── P2-4 ─────────────────────────────────────────────────────────────────────
 
+/** 第 i 条种子 run 的 id。**合法 UUID** —— 真表里这一列就是 uuid。 */
+const seededRunId = (i: number): string =>
+  `40000000-0000-4000-8000-${String(i).padStart(12, '0')}`
+
 /** 直接往表里塞 N 条等审批的 run + 对应决策（不走 Kernel，快且可控时间戳）。 */
 function seedPending(f: Awaited<ReturnType<typeof pendingFixture>>['f'], count: number) {
   f.tables.action_runs.length = 0
   f.tables.authorization_decisions.length = 0
   for (let i = 0; i < count; i++) {
-    const runId = `run-${String(i).padStart(3, '0')}`
-    const decisionId = `dec-${String(i).padStart(3, '0')}`
+    const runId = seededRunId(i)
+    const decisionId = `0d000000-0000-4000-8000-${String(i).padStart(12, '0')}`
     f.tables.authorization_decisions.push({
       id: decisionId,
       action_run_id: runId,
       client_id: CLIENT_A,
       verdict: 'require_approval',
       reason: `第 ${i} 条`,
-      policy_id: 'policy-1',
+      policy_id: '901c0000-0000-4000-8000-000000000001',
       policy_version: 1,
       created_at: '2026-08-01T00:00:00.000Z',
     })
@@ -297,10 +301,10 @@ describe('🔴 Codex P2-4 · 列表截断不许静默，等得最久的排最前
     const { f } = await pendingFixture()
     seedPending(f, PENDING_APPROVAL_PAGE_SIZE + 7)
     const page = await listPendingApprovals(f.supabase, CLIENT_A)
-    expect(page.items[0].runId, '第一条必须是等得最久的那一条').toBe('run-000')
-    expect(page.items[1].runId).toBe('run-001')
+    expect(page.items[0].runId, '第一条必须是等得最久的那一条').toBe(seededRunId(0))
+    expect(page.items[1].runId).toBe(seededRunId(1))
     // 🔴 被截掉的必须是**最新的**那几条，不是最老的
-    expect(page.items.map((i) => i.runId)).not.toContain('run-056')
+    expect(page.items.map((i) => i.runId)).not.toContain(seededRunId(56))
   })
 
   it('🔴 排序真的按「先时间、平手再 id」—— 主键不许被第二排序键顶掉', async () => {
@@ -313,8 +317,8 @@ describe('🔴 Codex P2-4 · 列表截断不许静默，等得最久的排最前
     f.tables.action_runs.length = 0
     f.tables.authorization_decisions.length = 0
     const order = [
-      { id: 'run-zzz', updated_at: '2026-08-01T00:00:00.000Z' }, // 最老 → 应排第一
-      { id: 'run-aaa', updated_at: '2026-08-09T00:00:00.000Z' }, // 最新 → 应排最后
+      { id: '40000000-0000-4000-8000-0000000000zz'.replace('zz','ff'), updated_at: '2026-08-01T00:00:00.000Z' }, // 最老 → 应排第一
+      { id: '40000000-0000-4000-8000-0000000000aa', updated_at: '2026-08-09T00:00:00.000Z' }, // 最新 → 应排最后
     ]
     for (const { id, updated_at } of order) {
       f.tables.authorization_decisions.push({
@@ -323,7 +327,7 @@ describe('🔴 Codex P2-4 · 列表截断不许静默，等得最久的排最前
         client_id: CLIENT_A,
         verdict: 'require_approval',
         reason: '',
-        policy_id: 'policy-1',
+        policy_id: '901c0000-0000-4000-8000-000000000001',
         policy_version: 1,
         created_at: updated_at,
       })
@@ -349,8 +353,11 @@ describe('🔴 Codex P2-4 · 列表截断不许静默，等得最久的排最前
     const page = await listPendingApprovals(f.supabase, CLIENT_A)
     expect(
       page.items.map((i) => i.runId),
-      '排序必须由 updated_at 说了算 —— 按 id 排的话 run-aaa 会跑到前面',
-    ).toEqual(['run-zzz', 'run-aaa'])
+      '排序必须由 updated_at 说了算 —— 按 id 排的话 …aa 会跑到前面',
+    ).toEqual([
+      '40000000-0000-4000-8000-0000000000ff',
+      '40000000-0000-4000-8000-0000000000aa',
+    ])
   })
 
   it('🔴 时间戳撞在一起时，id 作为第二排序键给出稳定总序（翻页不跳条的前提）', async () => {
@@ -358,14 +365,18 @@ describe('🔴 Codex P2-4 · 列表截断不许静默，等得最久的排最前
     f.tables.action_runs.length = 0
     f.tables.authorization_decisions.length = 0
     const SAME_TIME = '2026-08-05T00:00:00.000Z'
-    for (const id of ['run-c', 'run-a', 'run-b']) {
+    for (const id of [
+      '40000000-0000-4000-8000-0000000000c0',
+      '40000000-0000-4000-8000-0000000000a0',
+      '40000000-0000-4000-8000-0000000000b0',
+    ]) {
       f.tables.authorization_decisions.push({
         id: `dec-${id}`,
         action_run_id: id,
         client_id: CLIENT_A,
         verdict: 'require_approval',
         reason: '',
-        policy_id: 'policy-1',
+        policy_id: '901c0000-0000-4000-8000-000000000001',
         policy_version: 1,
         created_at: SAME_TIME,
       })
@@ -388,7 +399,11 @@ describe('🔴 Codex P2-4 · 列表截断不许静默，等得最久的排最前
       })
     }
     const page = await listPendingApprovals(f.supabase, CLIENT_A)
-    expect(page.items.map((i) => i.runId)).toEqual(['run-a', 'run-b', 'run-c'])
+    expect(page.items.map((i) => i.runId)).toEqual([
+      '40000000-0000-4000-8000-0000000000a0',
+      '40000000-0000-4000-8000-0000000000b0',
+      '40000000-0000-4000-8000-0000000000c0',
+    ])
   })
 
   it('🔴 offset 能真的翻到后面去，而且不跳条不重条', async () => {
@@ -409,7 +424,7 @@ describe('🔴 Codex P2-4 · 列表截断不许静默，等得最久的排最前
     const seen = [...first.items, ...second.items, ...third.items].map((i) => i.runId)
     expect(new Set(seen).size, '翻完三页不许有重复').toBe(total)
     expect(seen).toEqual(
-      Array.from({ length: total }, (_, i) => `run-${String(i).padStart(3, '0')}`),
+      Array.from({ length: total }, (_, i) => seededRunId(i)),
     )
   })
 
@@ -493,9 +508,9 @@ describe('🔴 批准的**失败落地**也要过指针闸（不许盖掉一份�
               ...f.tables.authorization_decisions.find(
                 (d) => d.id === run.authorization_decision_id,
               )!,
-              id: 'decision-re-issued',
+              id: '0d000000-0000-4000-8000-0000000e1550',
             })
-            run.authorization_decision_id = 'decision-re-issued'
+            run.authorization_decision_id = '0d000000-0000-4000-8000-0000000e1550'
           },
         },
       },
@@ -518,7 +533,7 @@ describe('🔴 批准的**失败落地**也要过指针闸（不许盖掉一份�
 
     // 🔴 那份新排的请求**毫发无损**：run 还停在等审批，指针还指着它
     expect(f.tables.action_runs[0].status).toBe('pending_approval')
-    expect(f.tables.action_runs[0].authorization_decision_id).toBe('decision-re-issued')
+    expect(f.tables.action_runs[0].authorization_decision_id).toBe('0d000000-0000-4000-8000-0000000e1550')
     expect(
       f.tables.authorization_decisions.filter((d) => d.verdict === 'deny'),
       '一条 deny 都不许落 —— 落了就等于把别人正在看的那件事替他否了',

@@ -2080,6 +2080,50 @@ const approveRun = async (d: never, r: string, u: string) => {
         test="src/lib/kernel-approval/__tests__/architecture.test.ts",
         expect_fail_contains="必须把旧签名 DROP 掉",
     ),
+    # ── K-WP01A · UUID 边界（Codex round 2 · P2） ─────────────────────────────
+    dict(
+        name="K-WP01A 详情/决定路由不再校验 runId（畸形路径变成 500）",
+        file="src/lib/kernel-approval/http.ts",
+        old="  if (isUuid(value)) return value",
+        new="  if (true) return value as string",
+        test="src/app/api/kernel/approvals/__tests__/route.test.ts",
+        expect_fail_contains="非法 runId",
+    ),
+    dict(
+        name="K-WP01A 请求体的 expectedDecisionId 不再校验 UUID",
+        file="src/lib/kernel-approval/service.ts",
+        old="  if (!isUuid(expectedDecisionId.trim())) {",
+        new="  if (false) {",
+        test="src/lib/kernel-approval/__tests__/decision-input.test.ts",
+        expect_fail_contains="不是合法 UUID",
+    ),
+    dict(
+        # 🔴 校验挪到读库之后 —— 状态码仍是 400，但 DB 已经被打过一次了。
+        #    只断言状态码的用例抓不住这一刀；断言「零查询零鉴权」的才抓得住。
+        name="K-WP01A runId 校验挪到读库之后（顺序退化）",
+        file="src/app/api/kernel/approvals/[runId]/route.ts",
+        old="    const runId = requireUuid(rawRunId, 'runId')",
+        new="    const runId = rawRunId\n    await loadRunForApproval(supabaseAdmin, rawRunId)\n    requireUuid(rawRunId, 'runId')",
+        test="src/app/api/kernel/approvals/__tests__/route.test.ts",
+        expect_fail_contains="非法 runId",
+    ),
+    dict(
+        name="K-WP01A 列表不再校验 clientId 的 UUID 语法",
+        file="src/app/api/kernel/approvals/route.ts",
+        old="    const clientId = requireUuid(rawClientId, 'clientId')",
+        new="    const clientId = rawClientId",
+        test="src/app/api/kernel/approvals/__tests__/route.test.ts",
+        expect_fail_contains="非法 clientId",
+    ),
+    dict(
+        # 判据比数据库还严 = 把库里真实存在的行判成非法输入。
+        name="K-WP01A UUID 判据加上 version/variant 位（比数据库还严）",
+        file="src/lib/validation-utils.ts",
+        old="const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i",
+        new="const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i",
+        test="src/lib/kernel-approval/__tests__/decision-input.test.ts",
+        expect_fail_contains="全零 UUID 也是合法的",
+    ),
     dict(
         name="K-WP01A 指针闸用 <> 而不是 IS DISTINCT FROM（遇 NULL 等于没判）",
         file="supabase/migrations/20260813000000_kernel_fenced_deny_decision_cas.sql",

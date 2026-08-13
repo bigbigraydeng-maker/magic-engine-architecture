@@ -16,7 +16,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { ApprovalError } from '@/lib/kernel-approval/errors'
-import { approvalErrorResponse, requireApprovalActor } from '@/lib/kernel-approval/http'
+import {
+  approvalErrorResponse,
+  requireApprovalActor,
+  requireUuid,
+} from '@/lib/kernel-approval/http'
 import { listPendingApprovals } from '@/lib/kernel-approval/service'
 
 /**
@@ -33,15 +37,20 @@ function numericParam(raw: string | null): number | undefined {
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   try {
-    const clientId = (req.nextUrl.searchParams.get('clientId') ?? '').trim()
-    if (clientId.length === 0) {
+    const rawClientId = (req.nextUrl.searchParams.get('clientId') ?? '').trim()
+    if (rawClientId.length === 0) {
       throw new ApprovalError('invalid_request', '要看哪个客户的待审批？请带上 clientId')
     }
 
-    // ① 先鉴权 —— 过不了就到此为止，一条数据都不查
+    // ① 🔴 先判语法 —— 它最终会打在 `action_runs.client_id` 这个 uuid 列上。
+    //    畸形值不判的话，Postgres 抛 22P02，接口答 500，把客户端问题
+    //    记成服务端故障。在鉴权和查询之前。
+    const clientId = requireUuid(rawClientId, 'clientId')
+
+    // ② 再鉴权 —— 过不了就到此为止，一条数据都不查
     await requireApprovalActor(clientId)
 
-    // ② 再查，且客户过滤钉死在数据库侧
+    // ③ 再查，且客户过滤钉死在数据库侧
     const { items, skippedRunIds, hasMore, limit, offset } = await listPendingApprovals(
       supabaseAdmin,
       clientId,

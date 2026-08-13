@@ -18,7 +18,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { ApprovalError } from '@/lib/kernel-approval/errors'
-import { approvalErrorResponse, requireApprovalActor } from '@/lib/kernel-approval/http'
+import {
+  approvalErrorResponse,
+  requireApprovalActor,
+  requireUuid,
+} from '@/lib/kernel-approval/http'
 import {
   assertActorMayAuthorize,
   createApprovalKernelDeps,
@@ -32,7 +36,11 @@ export async function POST(
   { params }: { params: Promise<{ runId: string }> },
 ): Promise<NextResponse> {
   try {
-    const { runId } = await params
+    const { runId: rawRunId } = await params
+
+    // ① 🔴 **第一件事**：runId 必须先长得像个 uuid（见详情路由那段说明）。
+    //    在读库、鉴权、以及任何写入之前。
+    const runId = requireUuid(rawRunId, 'runId')
 
     let rawBody: unknown
     try {
@@ -42,16 +50,16 @@ export async function POST(
     }
     const input = parseDecisionInput(rawBody)
 
-    // ① 客户归属从这条 run 自己身上读出来 —— 不信调用方
+    // ② 客户归属从这条 run 自己身上读出来 —— 不信调用方
     const run = await loadRunForApproval(supabaseAdmin, runId)
 
-    // ② 拿它的 client_id 做真实鉴权，操作者身份来自会话
+    // ③ 拿它的 client_id 做真实鉴权，操作者身份来自会话
     const actor = await requireApprovalActor(run.client_id)
 
-    // ③ 档次够不够授权这一类动作
+    // ④ 档次够不够授权这一类动作
     assertActorMayAuthorize(run, actor.tier)
 
-    // ④ 交给 Kernel 的授权段。`expectedDecisionId` 一路传到数据库的行锁那里，
+    // ⑤ 交给 Kernel 的授权段。`expectedDecisionId` 一路传到数据库的行锁那里，
     //    对不上就是 409 stale_decision，且**什么都没被改动**。
     const result = await decideApproval(createApprovalKernelDeps(supabaseAdmin), {
       run,
