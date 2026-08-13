@@ -293,6 +293,28 @@ BEGIN
   -- ── approve ────────────────────────────────────────────────────────────
   -- ⑤ 政策三连（跟执行前同一套）：当前生效的那一行必须还是挂起时那一行、
   --    同一版、且模式仍是「要人审」。时间窗口径与 kernel_begin_authorized_run 一致。
+  --
+  -- 🔴 **`FOR UPDATE` —— 政策行必须被锁住，一路锁到事务提交。**（Codex P2）
+  --
+  --    不锁的话有一个真实窗口：Settings 在这句 `SELECT` 读到旧版
+  --    `require_approval` 之后、下面那条 allow 写进去之前提交了一次改动
+  --    （比如把模式改成 `deny`）。这个函数拿着旧快照照签 allow、把 run 改成
+  --    `authorized`、并向审批人回「成功」—— 而客户的规则此刻已经是「禁止」。
+  --    Gateway 开跑前会重读政策再拦一次，所以**不会**真的执行；但
+  --    append-only 的审计表里已经留下一条**签发当时就已失效**的放行，
+  --    而那条 run 还得再走一次重新授权才能恢复。审计记录说的必须是当时的事实。
+  --
+  --    🔴 **锁顺序固定：run → pending decision → active policy。**
+  --       三把锁在这个函数里永远按这个顺序拿；`kernel_record_fenced_deny`
+  --       只拿前两把（它不读政策）。顺序一致 = 不会互相成环 = 不会死锁。
+  --
+  --    🔴 `ORDER BY … LIMIT 1 FOR UPDATE` 的语义要说清：并发事务把选中那行
+  --       改成不再满足 WHERE 时，Postgres 会重新求值（EvalPlanQual）并返回 0 行 ——
+  --       于是这里走 `no_active_policy`，那是**正确**的答案（此刻确实没有生效的规则）。
+  --
+  --    ⚠️ 代价要写明：锁住当前活动行会挡住并发的 UPDATE / DELETE，也会挡住
+  --       「先关掉旧行、再插一条新活动行」那种切换流程 —— 它得等这次审批提交。
+  --       这是刻意的取舍：审批只占一个很短的事务，而拿旧快照签放行是错的。
   SELECT * INTO v_policy
     FROM public.client_automation_policies p
    WHERE p.client_id = v_run.client_id
@@ -300,10 +322,12 @@ BEGIN
      AND p.effective_from <= now()
      AND (p.effective_to IS NULL OR p.effective_to > now())
    ORDER BY p.effective_from DESC
-   LIMIT 1;
+   LIMIT 1
+     FOR UPDATE;
   IF NOT FOUND THEN
     RETURN QUERY SELECT false, 'no_active_policy', NULL::uuid; RETURN;
   END IF;
+  -- 🔴 三连一律在**拿到锁之后**核对 —— 锁之前比等于比一份可能马上过期的快照。
   IF v_policy.id IS DISTINCT FROM v_pending.policy_id THEN
     RETURN QUERY SELECT false, 'policy_identity_changed', NULL::uuid; RETURN;
   END IF;
