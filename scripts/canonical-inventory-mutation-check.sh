@@ -24,6 +24,7 @@ CRAWLER="src/lib/site-audit/crawler.ts"
 CRAWLER_SUITE="src/lib/site-audit/__tests__/crawler.test.ts"
 
 fail_count=0
+total_count=0
 
 # 🔴 这个脚本会**真的改生产代码**再改回来。中途被打断（Ctrl-C / 超时被 kill）时，
 #    留在盘上的就是一份被变异过的源码 + 一个 .orig 备份 —— 长得跟正常工作区一样，
@@ -46,6 +47,7 @@ red_count() {
 
 check() {
   local label="$1" file="$2" from="$3" to="$4"
+  total_count=$((total_count+1))
   cp "$file" "$file.orig"
   CURRENT_MUTATED="$file"
   node -e '
@@ -184,6 +186,16 @@ check "哈希不覆盖复核签名" "$PLAN" \
     }," \
   "    review: null,"
 
+check "哈希不覆盖计数" "$PLAN" \
+  "    counts: {
+      discovered: plan.counts.discovered,
+      pending: plan.counts.pending,
+      accepted: plan.counts.accepted,
+      rejected: plan.counts.rejected,
+      deferred: plan.counts.deferred,
+    }," \
+  "    counts: null as never,"
+
 check "🔴 盖章前不验来料（替任意输入重新背书）" "$PLAN" \
   "  assertPlanIntact(plan)" \
   "  void assertPlanIntact"
@@ -203,6 +215,12 @@ check "重构比对不看原因码 / 留痕 / 撞车指向" "$PLAN" \
 check "同一条原始 URL 出现多次也放行" "$PLAN" \
   "  if (new Set(originals).size !== originals.length) {" \
   "  if (false) {"
+
+check "🔴 盖章前不核对计数与候选清单（malformed / 未批准主机的候选被整条删掉也不响）" "$PLAN" \
+  "  assertCandidatesMachineDerived(plan)
+  assertCountsMachineDerived(plan)" \
+  "  assertCandidatesMachineDerived(plan)
+  void assertCountsMachineDerived"
 
 check "🔴 已签名的计划还能再盖一次章" "$PLAN" \
   "  if (plan.review !== null) {" \
@@ -244,12 +262,23 @@ check "盖章时不核对发现记录与批准主机" "$PLAN" \
   "  assertDiscoveryConsistent(plan)" \
   "  void assertDiscoveryConsistent"
 
+check "🔴 盖章时不核对发现摘要与候选计数（整条删掉一个主机的候选，剩下的字段全自洽）" "$PLAN" \
+  "  assertDiscoveryMatchesCandidates(
+    plan.discovery,
+    plan.candidates.map((c) => c.originalUrl),
+  )" \
+  "  void assertDiscoveryMatchesCandidates"
+
 check "🔴 复核时间只查非空、不验 ISO（留下证明不了时间的凭据）" "$PLAN" \
   "  const parsed = Date.parse(trimmed)" \
   "  const parsed = 0; void trimmed"
 
 check "🔴 决策值不做运行时校验（拼错的值带着签名溜下去）" "$PLAN" \
   "    if (!ALLOWED_REVIEW_DECISIONS.includes(decision.decision)) {" \
+  "    if (false) {"
+
+check "🔴 人工原因码不做运行时校验（拼错的原因码带着签名溜下去）" "$PLAN" \
+  "    if (!ALLOWED_REASON_CODES.includes(code)) {" \
   "    if (false) {"
 
 check "🔴 复核不签名（自带哈希谁都能重算，等于没有凭据）" "$PLAN" \
@@ -469,8 +498,8 @@ check "🔴 首页 BFS 截到上限不上报（其余页面静默缺席）" "$CR
 
 echo "───────────────────────────────────────────────"
 if [ "$fail_count" -eq 0 ]; then
-  echo "✅ 全部 83 道闸各自单独确认会响"
+  echo "✅ 全部 $total_count 道闸各自单独确认会响"
   exit 0
 fi
-echo "❌ $fail_count 道闸没有确认"
+echo "❌ $fail_count / $total_count 道闸没有确认"
 exit 1
