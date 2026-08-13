@@ -160,6 +160,117 @@ export function violationsFor(file: string, code: string): string[] {
   return out
 }
 
+/**
+ * 🔴 **应用层调 RPC 的参数，必须在 SQL 里真的存在。**
+ *
+ * 这条不是理论问题：K-WP01A 复审那一轮，自动修给
+ * `kernel_record_fenced_deny` 的调用加了 `p_expected_decision_id`，
+ * 同时改了内存假件 —— **但没改 SQL**。于是整套测试全绿，而生产上
+ * PostgREST 会因为找不到匹配签名直接报「函数不存在」。
+ * 假件跟 SQL 分家的那一刻，测试就从「证据」变成了「安慰」。
+ */
+describe('🔴 RPC 参数：应用层 / 假件 / SQL 三处不许分家', () => {
+  const KERNEL_MIGRATION = 'supabase/migrations/20260808000003_me2_execution_kernel_v1.sql'
+  const FORWARD_MIGRATION = 'supabase/migrations/20260813000000_kernel_fenced_deny_decision_cas.sql'
+
+  const readSql = (): string =>
+    readFileSync(join(ROOT, KERNEL_MIGRATION), 'utf8') +
+    '\n' +
+    readFileSync(join(ROOT, FORWARD_MIGRATION), 'utf8')
+
+  /** `sb.rpc('name', { p_x: … })` 里出现的所有 `p_*` 参数名。 */
+  function rpcParamsIn(code: string, rpcName: string): string[] {
+    const found = new Set<string>()
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === 'rpc' &&
+        node.arguments[0] &&
+        ts.isStringLiteralLike(node.arguments[0]) &&
+        (node.arguments[0] as ts.StringLiteralLike).text === rpcName &&
+        node.arguments[1] &&
+        ts.isObjectLiteralExpression(node.arguments[1])
+      ) {
+        for (const prop of (node.arguments[1] as ts.ObjectLiteralExpression).properties) {
+          const name = prop.name && ts.isIdentifier(prop.name) ? prop.name.text : null
+          if (name && name.startsWith('p_')) found.add(name)
+        }
+      }
+      node.forEachChild(visit)
+    }
+    visit(
+      ts.createSourceFile('store.ts', code, ts.ScriptTarget.Latest, false),
+    )
+    return Array.from(found)
+  }
+
+  const STORE = 'src/lib/kernel/store.ts'
+  const GUARDED_RPCS = [
+    'kernel_record_fenced_deny',
+    'kernel_resolve_pending_approval',
+    'kernel_claim_run_recovery',
+  ] as const
+
+  it.each([...GUARDED_RPCS])('%s：store 传的每个参数在 SQL 里都声明了', (rpcName) => {
+    const store = readFileSync(join(ROOT, STORE), 'utf8')
+    const params = rpcParamsIn(store, rpcName)
+    expect(params.length, `没在 ${STORE} 里找到 ${rpcName} 的调用 —— 判据空跑了`).toBeGreaterThan(0)
+
+    const sql = readSql()
+    const missing = params.filter((p) => !new RegExp(`\\b${p}\\b`).test(sql))
+    expect(
+      missing,
+      `${rpcName} 的这些参数只存在于应用层（可能连假件也一起改了），SQL 里没有 ——\n` +
+        'PostgREST 找不到匹配签名会直接报「函数不存在」，而测试因为假件同步改了照样全绿。\n' +
+        `缺的是：${missing.join('、')}`,
+    ).toEqual([])
+  })
+
+  it('🔴 判据本身有效：编一个 SQL 里不存在的参数，必须被抓出来', () => {
+    const fake = `sb.rpc('kernel_record_fenced_deny', { p_run_id: id, p_totally_made_up: 1 })`
+    const params = rpcParamsIn(fake, 'kernel_record_fenced_deny')
+    expect(params).toContain('p_totally_made_up')
+    expect(new RegExp('\\bp_totally_made_up\\b').test(readSql())).toBe(false)
+  })
+
+  it('🔴 前向迁移必须把旧签名 DROP 掉（带默认值的新参会形成有歧义的重载）', () => {
+    const forward = readFileSync(join(ROOT, FORWARD_MIGRATION), 'utf8')
+    expect(
+      /DROP\s+FUNCTION\s+IF\s+EXISTS\s+public\.kernel_record_fenced_deny\(uuid,\s*bigint,\s*text,\s*jsonb,\s*text\)/i.test(
+        forward,
+      ),
+      '不 DROP 旧五参版本的话，五参调用会变成 "Could not choose the best candidate function"',
+    ).toBe(true)
+  })
+
+  it('🔴 新签名的 EXECUTE 也收了口（anon key 印在浏览器 bundle 里）', () => {
+    const forward = readFileSync(join(ROOT, FORWARD_MIGRATION), 'utf8')
+    const sig = String.raw`\(uuid,\s*bigint,\s*text,\s*jsonb,\s*text,\s*uuid\)`
+    expect(
+      new RegExp(
+        String.raw`REVOKE\s+EXECUTE\s+ON\s+FUNCTION\s+public\.kernel_record_fenced_deny${sig}\s*\n?\s*FROM\s+PUBLIC\s*,\s*anon\s*,\s*authenticated`,
+        'i',
+      ).test(forward),
+    ).toBe(true)
+    expect(
+      new RegExp(
+        String.raw`GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+public\.kernel_record_fenced_deny${sig}\s*\n?\s*TO\s+service_role`,
+        'i',
+      ).test(forward),
+    ).toBe(true)
+  })
+
+  it('🔴 SQL 里的指针闸判据跟 resolve_pending_approval 那道同源', () => {
+    const forward = readFileSync(join(ROOT, FORWARD_MIGRATION), 'utf8')
+    expect(
+      /authorization_decision_id\s+IS\s+DISTINCT\s+FROM\s+p_expected_decision_id/i.test(forward),
+      '指针闸必须用 IS DISTINCT FROM（`<>` 遇到 NULL 是 NULL，等于没判）',
+    ).toBe(true)
+    expect(/decision_not_current/.test(forward)).toBe(true)
+  })
+})
+
 describe('🔴 审批面执行不了 capability（真实文件）', () => {
   it('审批面确实有文件被扫到（判据不许空跑就绿）', () => {
     const files = surfaceFiles()

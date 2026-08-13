@@ -2034,6 +2034,60 @@ const approveRun = async (d: never, r: string, u: string) => {
         test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
         expect_fail_contains="offset 能真的翻到后面去",
     ),
+    # ── K-WP01A · 自动修那一轮指出的另外两条（按正确方式修，含 SQL） ──────────
+    dict(
+        name="K-WP01A 批准备注不往下传（人写的话被静默丢弃）",
+        file="src/lib/kernel-approval/service.ts",
+        old="""      reason: input.reason,
+    })""",
+        new="""    })""",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="落进 append-only 决策记录",
+    ),
+    dict(
+        name="K-WP01A 失败落地不再带决策指针（盖掉一份新的待审批请求）",
+        file="src/lib/kernel/authorize.ts",
+        old="""    expectedDecisionId: args.expectedDecisionId ?? null,""",
+        new="""    expectedDecisionId: null,""",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="失败落地被 CAS 挡住",
+    ),
+    dict(
+        name="K-WP01A 假件不再复刻指针闸（SQL 有、复刻没有 → 两边分家）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (expectedDecisionId !== null && run.authorization_decision_id !== expectedDecisionId) {
+      return no('decision_not_current')
+    }""",
+        new="""    // mutated: 不再复刻指针闸""",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="失败落地被 CAS 挡住",
+    ),
+    dict(
+        # 🔴 这一刀验的是「假件跟 SQL 不许分家」那道守卫本身 ——
+        #    自动修那一版正是只改了应用层和假件、没改 SQL，测试却全绿。
+        name="K-WP01A store 传一个 SQL 里不存在的 RPC 参数（假件跟 SQL 分家）",
+        file="src/lib/kernel/store.ts",
+        old="""    p_expected_decision_id: args.expectedDecisionId ?? null,""",
+        new="""    p_expected_decision_id_typo: args.expectedDecisionId ?? null,""",
+        test="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        expect_fail_contains="store 传的每个参数在 SQL 里都声明了",
+    ),
+    dict(
+        name="K-WP01A 前向迁移忘了 DROP 旧签名（五参调用变成有歧义的重载）",
+        file="supabase/migrations/20260813000000_kernel_fenced_deny_decision_cas.sql",
+        old="""DROP FUNCTION IF EXISTS public.kernel_record_fenced_deny(uuid, bigint, text, jsonb, text);""",
+        new="""-- mutated: 不再 DROP 旧签名""",
+        test="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        expect_fail_contains="必须把旧签名 DROP 掉",
+    ),
+    dict(
+        name="K-WP01A 指针闸用 <> 而不是 IS DISTINCT FROM（遇 NULL 等于没判）",
+        file="supabase/migrations/20260813000000_kernel_fenced_deny_decision_cas.sql",
+        old="""     AND v_run.authorization_decision_id IS DISTINCT FROM p_expected_decision_id THEN""",
+        new="""     AND v_run.authorization_decision_id <> p_expected_decision_id THEN""",
+        test="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        expect_fail_contains="跟 resolve_pending_approval 那道同源",
+    ),
 ]
 
 

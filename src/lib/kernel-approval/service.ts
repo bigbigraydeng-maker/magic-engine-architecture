@@ -422,6 +422,9 @@ export async function decideApproval(
 
     const outcome = await approveRun(deps, run.id, actorEmail, {
       expectedDecisionId: input.expectedDecisionId,
+      // 🔴 批准时人写的备注也要落库。接口按契约收下了这段话，
+      //    不往下传就是静默丢弃 —— 审计表里只剩一句自动生成的通用理由。
+      reason: input.reason,
     })
 
     // 🔴 批准也可能被 fail closed 拒掉（挂起期间政策改了 / 契约升版 / 超预算）——

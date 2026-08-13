@@ -433,6 +433,99 @@ describe('🔴 Codex P2-4 · 列表截断不许静默，等得最久的排最前
   })
 })
 
+// ── Codex 对 #961 那一轮另外两条（机器人已发现，这里按正确方式修 + 盯住） ──────
+
+describe('🔴 批准时写的备注不许被静默丢弃', () => {
+  it('approve 带 reason → 落进 append-only 决策记录', async () => {
+    const { f, runId, expectedDecisionId } = await pendingFixture()
+    await decideApproval(f.kernel, {
+      run: await loadRunForApproval(f.supabase, runId),
+      actorEmail: ACTOR,
+      input: { resolution: 'approve', expectedDecisionId, reason: '跟客户电话确认过了' },
+    })
+    const allow = f.tables.authorization_decisions.find(
+      (d) => d.verdict === 'allow' && d.decided_by === 'human',
+    )!
+    expect(
+      String(allow.reason),
+      '接口按契约收下了这段话，审计表里必须找得到它 —— 否则就是静默丢弃',
+    ).toContain('跟客户电话确认过了')
+  })
+
+  it('approve 不带 reason 时照常有自动生成的理由（不因此变空）', async () => {
+    const { f, runId, expectedDecisionId } = await pendingFixture()
+    await decideApproval(f.kernel, {
+      run: await loadRunForApproval(f.supabase, runId),
+      actorEmail: ACTOR,
+      input: { resolution: 'approve', expectedDecisionId },
+    })
+    const allow = f.tables.authorization_decisions.find(
+      (d) => d.verdict === 'allow' && d.decided_by === 'human',
+    )!
+    expect(String(allow.reason)).toContain(ACTOR)
+    expect(String(allow.reason).length).toBeGreaterThan(10)
+  })
+})
+
+describe('🔴 批准的**失败落地**也要过指针闸（不许盖掉一份新的待审批请求）', () => {
+  it('preflight 期间这条 run 被重新排成另一份请求 → 失败落地被 CAS 挡住，新请求毫发无损', async () => {
+    // 形状：人点了同意 → preflight 读政策时发现政策没了（会走 recordDeny）——
+    // 但就在这中间，系统把这条 run 重新排了一次，挂上了**另一份**待审批请求。
+    // 只有状态闸的话，状态仍是 pending_approval，于是那份**新的、还没人看过的**
+    // 请求会被这次迟到的「批不了」直接盖成 denied。
+    // 🔴 钩子必须**等这条 run 真的挂起之后**才上膛：`runAction` 自己也要读政策，
+    //    不上膛的话第一次触发发生在挂起之前，整条 run 直接被拒，测的就不是这件事了。
+    let armed = false
+    let swapped = false
+    const f = makeFixture({
+      registry: ACTION_REGISTRY,
+      capabilities: (sb) => ({ [KEY]: createCapabilities(sb)[KEY] }),
+      options: {
+        policy: APPROVAL_POLICY,
+        supabaseOptions: {
+          beforeOp: (table, op) => {
+            // 政策被读之后、落拒绝之前，插一脚把 run 重新排一次
+            if (!armed || swapped || table !== 'client_automation_policies' || op !== 'select') return
+            swapped = true
+            f.tables.client_automation_policies.length = 0 // 让 preflight 失败
+            const run = f.tables.action_runs[0]
+            f.tables.authorization_decisions.push({
+              ...f.tables.authorization_decisions.find(
+                (d) => d.id === run.authorization_decision_id,
+              )!,
+              id: 'decision-re-issued',
+            })
+            run.authorization_decision_id = 'decision-re-issued'
+          },
+        },
+      },
+    })
+    const pending = await runAction(f.kernel, submit())
+    expect(pending.kind).toBe('pending_approval')
+    const runId = String(f.tables.action_runs[0].id)
+    const expectedDecisionId = String(f.tables.action_runs[0].authorization_decision_id)
+    armed = true
+
+    const err = await decideApproval(f.kernel, {
+      run: await loadRunForApproval(f.supabase, runId),
+      actorEmail: ACTOR,
+      input: { resolution: 'approve', expectedDecisionId },
+    }).catch((e: unknown) => e)
+
+    expect(swapped, '这条测试必须真的走到那个缝 —— 否则它什么都没验').toBe(true)
+    expect(err).toBeInstanceOf(ApprovalError)
+    expect((err as ApprovalError).code).toBe('stale_decision')
+
+    // 🔴 那份新排的请求**毫发无损**：run 还停在等审批，指针还指着它
+    expect(f.tables.action_runs[0].status).toBe('pending_approval')
+    expect(f.tables.action_runs[0].authorization_decision_id).toBe('decision-re-issued')
+    expect(
+      f.tables.authorization_decisions.filter((d) => d.verdict === 'deny'),
+      '一条 deny 都不许落 —— 落了就等于把别人正在看的那件事替他否了',
+    ).toHaveLength(0)
+  })
+})
+
 // ── 一条保险：上面这些没把「正常路径」测坏 ───────────────────────────────────
 
 describe('回归：正常审批链路仍然通', () => {

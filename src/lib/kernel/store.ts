@@ -461,6 +461,14 @@ export async function recordFencedDeny(
     runId: string
     expectedGeneration?: number | null
     expectedStatus?: RunStatus | null
+    /**
+     * 🔴 审批人当时看到的那份审批请求的 id（跟 `resolvePendingApproval` 的
+     *    `pendingDecisionId` 同一个契约）。传了就在数据库的行锁里再比一次 ——
+     *    只有状态闸的话，`pending_approval` 期间这条 run 被重新排成**另一份**
+     *    待审批请求时，一次迟到的「批不了」会把那份新的直接盖成 denied。
+     *    不传 = 不做这道校验（自动授权路径没有「审批人看到的那份」这个概念）。
+     */
+    expectedDecisionId?: string | null
     reason: string
     decision: Record<string, unknown>
   },
@@ -471,6 +479,7 @@ export async function recordFencedDeny(
     p_expected_status: args.expectedStatus ?? null,
     p_decision: args.decision,
     p_reason: args.reason,
+    p_expected_decision_id: args.expectedDecisionId ?? null,
   })
   if (error) fail('落拒绝决策', error)
   const row = (data ?? [])[0] as unknown as { ok: boolean; reason: string; decision_id: string | null } | undefined
