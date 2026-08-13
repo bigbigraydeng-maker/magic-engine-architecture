@@ -292,8 +292,11 @@ describe('K-WP01A · expectedDecisionId 过期', () => {
 
     expect(swapped, '这条测试必须真的走到 RPC —— 否则它测的不是数据库那道闸').toBe(true)
     expect(err).toBeInstanceOf(ApprovalError)
-    // 输的一方拿到的是「这条刚被别人处理了 / 状态变了」，绝不是一次成功的批准
-    expect(['stale_decision', 'not_pending']).toContain((err as ApprovalError).code)
+    // 🔴 必须是 stale_decision，**不能**是 not_pending：run 这时仍然停在
+    //    pending_approval，只是被重新挂到了另一份请求上 —— 对人来说是
+    //    「刷新一下还能决定」，不是「已经有结论了」。压成后者，界面会告诉他
+    //    这件事已经定了，而它其实还等着他点。
+    expect((err as ApprovalError).code).toBe('stale_decision')
 
     // 🔴 只多了我们自己塞进去的那一条替身，**没有任何新签的决策**
     expect(f.tables.authorization_decisions).toHaveLength(decisionsBefore + 1)

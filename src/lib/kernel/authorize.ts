@@ -633,6 +633,39 @@ function assertDecisionStillCurrent(
 }
 
 /**
+ * 原子 RPC 失败 → Kernel 错误。
+ *
+ * 🔴 `decision_not_current` 必须保留成 `STALE_DECISION`，不能跟别的失败
+ *    一起压成 `INVALID_STATE`。（Codex P2）
+ *
+ *    这两件事对人的意思完全相反：
+ *      · `INVALID_STATE` = 这条已经有结论了（被批了 / 被拒了 / 跑起来了）——**没得再决定**；
+ *      · `STALE_DECISION` = run **仍然停在 pending_approval**，只是期间被重新挂到
+ *        了另一份待审批请求上 —— **刷新一下还能决定**。
+ *    压成前者，界面会告诉人「已经有结论了」，而那件事其实还等着他点。
+ */
+function resolveFailureToError(
+  reason: string,
+  runId: string,
+  actor: string,
+  verb: string,
+): never {
+  if (reason === 'decision_not_current') {
+    throw new KernelError(
+      'STALE_DECISION',
+      `${actor} 看到的那份审批请求已经不是最新的了（这条动作期间被重新排过）——` +
+        `这次${verb}没有生效，也没有改动任何东西。刷新一下再决定`,
+      { detail: { runId, reason } },
+    )
+  }
+  throw new KernelError(
+    'INVALID_STATE',
+    `这条动作刚刚已经被别人处理了或状态变了（${reason}），这次${verb}没有生效`,
+    { detail: { reason } },
+  )
+}
+
+/**
  * 人点了「同意」。
  *
  * 🔴 人工批准能做的**只有一件事**：把「当前仍然是 require_approval、
@@ -760,11 +793,7 @@ export async function approveRun(
     costEstimateUsd: costEstimate,
   })
   if (!resolved.ok || !resolved.decisionId) {
-    throw new KernelError(
-      'INVALID_STATE',
-      `这条动作刚刚已经被别人处理了或状态变了（${resolved.reason}），这次批准没有生效`,
-      { detail: { reason: resolved.reason } },
-    )
+    resolveFailureToError(resolved.reason, run.id, approvedByUser, '批准')
   }
 
   const decision = await getDecision(deps.supabase, resolved.decisionId)
@@ -821,11 +850,7 @@ export async function rejectRun(
     costEstimateUsd: run.cost_estimate_usd,
   })
   if (!resolved.ok || !resolved.decisionId) {
-    throw new KernelError(
-      'INVALID_STATE',
-      `这条动作刚刚已经被别人处理了或状态变了（${resolved.reason}），这次拒绝没有生效`,
-      { detail: { reason: resolved.reason } },
-    )
+    resolveFailureToError(resolved.reason, run.id, rejectedByUser, '拒绝')
   }
 
   const decision = await getDecision(deps.supabase, resolved.decisionId)
