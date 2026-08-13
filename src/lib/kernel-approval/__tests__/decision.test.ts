@@ -45,7 +45,7 @@ function submit(clientId: string = CLIENT_A) {
  *    （`approveRun` 被换成 `approveAndRun`），这里会当场被数出来。
  *    用空的 capability 表测「没执行」是自证 —— 那样什么都跑不起来。
  */
-async function pendingFixture() {
+async function pendingFixture(supabaseOptions: Record<string, unknown> = {}) {
   const capabilityCalls = vi.fn()
   const f = makeFixture({
     registry: ACTION_REGISTRY,
@@ -66,7 +66,7 @@ async function pendingFixture() {
         },
       }
     },
-    options: { policy: APPROVAL_POLICY },
+    options: { policy: APPROVAL_POLICY, supabaseOptions },
   })
   const pending = await runAction(f.kernel, submit())
   expect(pending.kind).toBe('pending_approval')
@@ -160,7 +160,14 @@ describe('K-WP01A · 批准的终点只能是 authorized', () => {
 
 describe('K-WP01A · expectedDecisionId 过期', () => {
   it('🔴 拿一个别的 decision id 来批 → 409 stale_decision，且零新决策、run 一个字没动', async () => {
-    const { f, capabilityCalls, runId, expectedDecisionId } = await pendingFixture()
+    // 🔴 这条**还要**证明应用层那道闸是独立生效的 —— 见下面的 rpcCalls 断言。
+    //    数据库那道 CAS 也拦得住同样的输入，所以只断言「被拒了」的话，
+    //    应用层这道就算整个删掉也照样绿（实测变异探针 MISSED）。
+    //    两道闸的可观察差别只有一个：应用层这道**一次库都不打**。
+    const rpcCalls: string[] = []
+    const { f, capabilityCalls, runId, expectedDecisionId } = await pendingFixture({
+      beforeRpc: (name: string) => rpcCalls.push(name),
+    })
     const before = f.tables.authorization_decisions.length
     const runBefore = { ...f.tables.action_runs[0] }
 
@@ -173,6 +180,10 @@ describe('K-WP01A · expectedDecisionId 过期', () => {
     expect(err).toBeInstanceOf(ApprovalError)
     expect((err as ApprovalError).code).toBe('stale_decision')
     expect((err as ApprovalError).status).toBe(409)
+    expect(
+      rpcCalls,
+      '🔴 明显过期的 id 必须在**打库之前**就被拒 —— 一次原子 RPC 都不许发出去',
+    ).not.toContain('kernel_resolve_pending_approval')
 
     // 🔴 「什么都没被改动」不是一句安慰话 —— 逐条比
     expect(f.tables.authorization_decisions).toHaveLength(before)
@@ -182,8 +193,11 @@ describe('K-WP01A · expectedDecisionId 过期', () => {
     expectNothingExecuted(f, capabilityCalls)
   })
 
-  it('🔴 拒绝也一样：过期的 id 拒不掉，零新决策', async () => {
-    const { f, runId, expectedDecisionId } = await pendingFixture()
+  it('🔴 拒绝也一样：过期的 id 拒不掉，零新决策，且一次库都不打', async () => {
+    const rpcCalls: string[] = []
+    const { f, runId, expectedDecisionId } = await pendingFixture({
+      beforeRpc: (name: string) => rpcCalls.push(name),
+    })
     const before = f.tables.authorization_decisions.length
 
     const err = await decideApproval(f.kernel, {
@@ -193,6 +207,10 @@ describe('K-WP01A · expectedDecisionId 过期', () => {
     }).catch((e: unknown) => e)
 
     expect((err as ApprovalError).code).toBe('stale_decision')
+    expect(
+      rpcCalls,
+      '🔴 拒绝那条路的应用层闸同样要在打库之前拦下来',
+    ).not.toContain('kernel_resolve_pending_approval')
     expect(f.tables.authorization_decisions).toHaveLength(before)
     expect(f.tables.action_runs[0].status).toBe('pending_approval')
     expect(f.tables.action_runs[0].authorization_decision_id).toBe(expectedDecisionId)

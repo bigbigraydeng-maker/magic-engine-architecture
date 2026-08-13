@@ -43,8 +43,9 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  v_run    public.action_runs%ROWTYPE;
-  v_new_id uuid;
+  v_run     public.action_runs%ROWTYPE;
+  v_pending public.authorization_decisions%ROWTYPE;
+  v_new_id  uuid;
 BEGIN
   SELECT * INTO v_run FROM public.action_runs WHERE id = p_run_id FOR UPDATE;
   IF NOT FOUND THEN
@@ -80,9 +81,47 @@ BEGIN
   --    判据跟 kernel_resolve_pending_approval 第 ③ 步逐字一致，在同一把行锁里。
   --    p_expected_decision_id 为 NULL = 调用方没有「审批人看到的那份」这个概念
   --    （自动授权路径），跳过这道闸。
-  IF p_expected_decision_id IS NOT NULL
-     AND v_run.authorization_decision_id IS DISTINCT FROM p_expected_decision_id THEN
-    RETURN QUERY SELECT false, 'decision_not_current', NULL::uuid; RETURN;
+  IF p_expected_decision_id IS NOT NULL THEN
+    IF v_run.authorization_decision_id IS DISTINCT FROM p_expected_decision_id THEN
+      RETURN QUERY SELECT false, 'decision_not_current', NULL::uuid; RETURN;
+    END IF;
+
+    -- 🔴 **锚的完整身份核对 —— 跟 kernel_resolve_pending_approval 同一套判据。**
+    --
+    --    「指针指着它」还不够。`authorization_decision_id` 是外键，数据库只保证
+    --    这个 id **存在**，不保证它指着的那条决策属于这条 run、这个客户。
+    --    库里一次错挂（并发写歪、恢复路径写歪、手工改数据）之后，
+    --    preflight 失败 / 政策漂移的失败落地会一路走到底 —— 而新签的 deny 记录里
+    --    `policy_id` / `policy_version` 是**从那份别人的决策里抄过来的**：
+    --    跨客户的数据被写进这个客户的 append-only 审计记录。
+    --
+    --    resolve 那边（第 ④ / ④b 步）早就在锁内做这组核对了。写入的两条路
+    --    不许一条严一条松 —— 松的那条就是被绕过去的那条。
+    SELECT * INTO v_pending FROM public.authorization_decisions
+     WHERE id = p_expected_decision_id FOR UPDATE;
+    IF NOT FOUND THEN
+      RETURN QUERY SELECT false, 'pending_not_found', NULL::uuid; RETURN;
+    END IF;
+    IF v_pending.action_run_id <> v_run.id THEN
+      RETURN QUERY SELECT false, 'pending_run_mismatch', NULL::uuid; RETURN;
+    END IF;
+    IF v_pending.verdict <> 'require_approval' THEN
+      RETURN QUERY SELECT false, 'not_require_approval', NULL::uuid; RETURN;
+    END IF;
+    IF v_pending.client_id <> v_run.client_id
+       OR v_pending.action_key <> v_run.action_key
+       OR v_pending.action_version <> v_run.action_version
+       OR v_pending.idempotency_key <> v_run.idempotency_key THEN
+      RETURN QUERY SELECT false, 'pending_identity_mismatch', NULL::uuid; RETURN;
+    END IF;
+
+    -- 🔴 **这里刻意不镜像 resolve 的「政策三连」（行身份 / 版本 / 模式）。**
+    --    那三条问的是「政策自挂起以来变没变」—— 而这条路**正是为了记下
+    --    「它变了、所以做不了」**。把它镜像过来，政策一漂移这条 deny 就永远
+    --    落不了地：run 卡在 pending_approval，谁都不知道为什么。
+    --    resolve 自己的 reject 分支同样跳过政策三连，理由一样。
+    --    身份判据（这份请求是不是这条 run 的）跟批不批准无关，两条路都过；
+    --    政策判据（现在还准不准做）只属于放行那条路。
   END IF;
 
   INSERT INTO public.authorization_decisions

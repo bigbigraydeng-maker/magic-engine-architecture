@@ -558,3 +558,164 @@ describe('🔴 判据盖得住各种写法（合成源码）', () => {
     expect(violationsFor(FILE, stripComments(commented, FILE))).toEqual([])
   })
 })
+
+/**
+ * 🔴 **文件行数也是全仓铁律（CLAUDE.md：文件 < 800 行），测试文件不例外。**
+ *
+ * 这条不是洁癖：`codex-p2.test.ts` 长到 974 行时，它同时装着归属身份、
+ * 分页、写路径竞态、SQL 守卫四类完全不同的回归 —— 改任何一类都没人能
+ * 完整审查这份套件。而上一版的行数守卫只扫**生产**文件，CI 一声不吭。
+ *
+ * 🔴 清单**写死**，并且有一条独立的固定断言盯着它（见下）。
+ *    不能只靠 `it.each` —— 那是从清单**生成**用例的：把一个路径从清单里拿掉
+ *    只会少跑一条，一条都不会红。这个自证陷阱在本 PR 里已经踩过两次
+ *    （`APPROVAL_FORBIDDEN_SYMBOLS` 一次、`FUNCTION_LENGTH_SCAN_PATHS` 一次）。
+ */
+describe('🔴 审批面的文件不许越过 800 行', () => {
+  const MAX_FILE_LINES = 800
+
+  /** 本 PR 新增 / 改动的审批相关文件，**逐个写死**。只准变长。 */
+  const FILES_UNDER_LINE_LIMIT = [
+    'src/lib/kernel-approval/errors.ts',
+    'src/lib/kernel-approval/http.ts',
+    'src/lib/kernel-approval/queries.ts',
+    'src/lib/kernel-approval/service.ts',
+    'src/lib/kernel-approval/types.ts',
+    'src/lib/kernel/human-approval.ts',
+    'src/lib/kernel-approval/__tests__/_fixtures.ts',
+    'src/lib/kernel-approval/__tests__/anchor-identity.test.ts',
+    'src/lib/kernel-approval/__tests__/architecture.test.ts',
+    'src/lib/kernel-approval/__tests__/decision-input.test.ts',
+    'src/lib/kernel-approval/__tests__/decision.test.ts',
+    'src/lib/kernel-approval/__tests__/not-provisioned.test.ts',
+    'src/lib/kernel-approval/__tests__/pagination.test.ts',
+    'src/lib/kernel-approval/__tests__/tier-gate.test.ts',
+    'src/lib/kernel-approval/__tests__/write-path-cas.test.ts',
+    'src/app/api/kernel/approvals/route.ts',
+    'src/app/api/kernel/approvals/[runId]/route.ts',
+    'src/app/api/kernel/approvals/[runId]/decision/route.ts',
+    'src/app/api/kernel/approvals/__tests__/route.test.ts',
+  ] as const
+
+  it.each([...FILES_UNDER_LINE_LIMIT])('%s < 800 行', (file) => {
+    const lines = readFileSync(join(ROOT, file), 'utf8').split('\n').length
+    expect(lines, `${file} 有 ${lines} 行 —— 按主题拆开，别靠合并断言压行数`).toBeLessThan(
+      MAX_FILE_LINES,
+    )
+  })
+
+  /**
+   * 🔴 **独立的固定断言：清单必须盖住审批面**上真实存在的每一个文件。
+   *
+   *    没有这一条，把某个文件从 `FILES_UNDER_LINE_LIMIT` 里删掉就等于给它免检，
+   *    而 `it.each` 只会少跑一条、一条都不会红 —— 守卫被掏空且全绿。
+   *    这里反过来从**文件系统**列一遍，两边对不上就红。
+   */
+  it('🔴 清单盖住审批面上每一个真实文件（漏一个就等于给它免检）', () => {
+    const onDisk = [
+      ...APPROVAL_SURFACE_DIRS.flatMap((d) => walk(join(ROOT, d))),
+      join(ROOT, 'src/lib/kernel/human-approval.ts'),
+    ]
+      .map((f) => relative(ROOT, f).split('\\').join('/'))
+      .sort()
+
+    expect(
+      [...FILES_UNDER_LINE_LIMIT].sort(),
+      '审批面上有文件没进行数清单 —— 加文件时必须同时加进来，否则它永远不受这条铁律管',
+    ).toEqual(onDisk)
+  })
+})
+
+/**
+ * 🔴 **锚身份判据：SQL / 假件 / 应用层三处不许分家。**（Codex round 10 · P2）
+ *
+ * `kernel_record_fenced_deny` 和 `kernel_resolve_pending_approval` 是**两条写路径**。
+ * 一条严一条松的话，松的那条就是被绕过去的那条 —— 而失败落地恰恰是
+ * 「政策漂移 / preflight 失败」时才走的路，最容易被忽略。
+ */
+describe('🔴 锚身份判据在 SQL 两个 RPC 里逐条对齐', () => {
+  const FORWARD_MIGRATION = 'supabase/migrations/20260813000000_kernel_approval_identity_guards.sql'
+  const sql = (): string => readFileSync(join(ROOT, FORWARD_MIGRATION), 'utf8')
+
+  /** 抠出某个函数体（到下一个 `$$;` 为止）。 */
+  function functionBody(name: string): string {
+    const src = sql()
+    const start = src.indexOf(`CREATE OR REPLACE FUNCTION public.${name}(`)
+    expect(start, `${name} 必须在这条前向迁移里`).toBeGreaterThan(-1)
+    const end = src.indexOf('$$;', start)
+    expect(end, `${name} 的函数体没闭合`).toBeGreaterThan(start)
+    return src.slice(start, end)
+  }
+
+  /** 锚身份的五条判据 —— 两个 RPC 都必须**逐条**具备。 */
+  const ANCHOR_IDENTITY_CHECKS: ReadonlyArray<[label: string, needle: string]> = [
+    ['锚必须存在', "'pending_not_found'"],
+    ['锚属于这条 run', 'v_pending.action_run_id <> v_run.id'],
+    ['锚是 require_approval', "v_pending.verdict <> 'require_approval'"],
+    ['四元身份（客户 / 动作 / 版本 / 幂等键）', 'v_pending.idempotency_key <> v_run.idempotency_key'],
+    ['身份不一致的机器可读原因', "'pending_identity_mismatch'"],
+  ]
+
+  it.each([...ANCHOR_IDENTITY_CHECKS])(
+    'kernel_resolve_pending_approval 有「%s」',
+    (_label, needle) => {
+      expect(functionBody('kernel_resolve_pending_approval')).toContain(needle)
+    },
+  )
+
+  it.each([...ANCHOR_IDENTITY_CHECKS])(
+    '🔴 kernel_record_fenced_deny 也有「%s」（失败落地这条路不许更松）',
+    (_label, needle) => {
+      expect(functionBody('kernel_record_fenced_deny')).toContain(needle)
+    },
+  )
+
+  it('🔴 四元身份四个字段一个都不少', () => {
+    const body = functionBody('kernel_record_fenced_deny')
+    for (const field of ['client_id', 'action_key', 'action_version', 'idempotency_key']) {
+      expect(body, `锚身份少比了 ${field}`).toContain(`v_pending.${field} <> v_run.${field}`)
+    }
+  })
+
+  it('🔴 锚身份闸只在带 expectedDecisionId 时生效（不许误伤自动授权路径）', () => {
+    const body = functionBody('kernel_record_fenced_deny')
+    expect(
+      body,
+      '整段必须包在 `IF p_expected_decision_id IS NOT NULL THEN` 里 —— ' +
+        '否则 preflight 失败的自动 run 再也落不了 deny，那是误伤不是更严',
+    ).toContain('IF p_expected_decision_id IS NOT NULL THEN')
+  })
+
+  it('🔴 **不**镜像政策三连（那会让政策漂移的 deny 永远落不了地）', () => {
+    const body = functionBody('kernel_record_fenced_deny')
+    for (const forbidden of ['policy_identity_changed', 'stale_policy_version', 'policy_mode_changed']) {
+      expect(
+        body,
+        `失败落地这条路正是为了记下「政策变了所以做不了」—— 镜像 ${forbidden} 会让它自锁`,
+      ).not.toContain(forbidden)
+    }
+  })
+
+  it('🔴 身份核对必须在 approve / reject 的公共分支（reject 不许绕过去）', () => {
+    // 🔴 这段原来只在 approve 分支里。于是一次错挂之后 reject 会一路走到底：
+    //    新签的 deny 把**别人那份决策**的 policy_id / 版本抄进这个客户的审计记录。
+    //    「这份请求是不是这条 run 的」跟批不批准无关 —— 判据必须排在
+    //    `IF p_resolution = 'reject'` **之前**，两条路都过。
+    const body = functionBody('kernel_resolve_pending_approval')
+    const identityAt = body.indexOf("'pending_identity_mismatch'")
+    const rejectBranchAt = body.indexOf("IF p_resolution = 'reject' THEN")
+    expect(identityAt, '身份核对没找到').toBeGreaterThan(-1)
+    expect(rejectBranchAt, 'reject 分支没找到').toBeGreaterThan(-1)
+    expect(
+      identityAt,
+      '身份核对被挪进了 approve 分支 —— reject 那条路就绕过去了',
+    ).toBeLessThan(rejectBranchAt)
+  })
+
+  it('🔴 指针闸用 IS DISTINCT FROM（跟 resolve_pending_approval 那道同源）', () => {
+    // `<>` 遇到 NULL 求值成 NULL（不是 true）——指针为空时那道闸等于没判。
+    expect(functionBody('kernel_record_fenced_deny')).toContain(
+      'v_run.authorization_decision_id IS DISTINCT FROM p_expected_decision_id',
+    )
+  })
+})

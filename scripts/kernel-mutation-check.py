@@ -1990,7 +1990,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         old="""  if (decision.action_run_id !== run.id) return false
   if (decision.client_id !== run.client_id) return false""",
         new="""  // mutated: 只看 verdict，不看它到底是谁的""",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
         expect_fail_contains="另一个客户",
     ),
     dict(
@@ -1999,7 +1999,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel-approval/service.ts",
         old="""  if (decision.client_id !== run.client_id) return false""",
         new="""  // mutated: 不再核对客户""",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
         expect_fail_contains="另一个客户",
     ),
     dict(
@@ -2007,7 +2007,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel-approval/service.ts",
         old="""  if (isKernelNotProvisioned(err) || isKernelNotProvisioned({ message: messageOf(err) })) {""",
         new="""  if (false) {""",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/write-path-cas.test.ts",
         expect_fail_contains="RPC 缺失",
     ),
     dict(
@@ -2015,7 +2015,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel-approval/queries.ts",
         old="""  const hasMore = rows.length > limit""",
         new="""  const hasMore = false""",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/pagination.test.ts",
         expect_fail_contains="hasMore 是 true",
     ),
     dict(
@@ -2023,7 +2023,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel-approval/queries.ts",
         old="""    .order('updated_at', { ascending: true })""",
         new="""    .order('updated_at', { ascending: false })""",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/pagination.test.ts",
         expect_fail_contains="等得最久的排最前",
     ),
     # ── K-WP01A · 自动修那一轮指出的另外两条（按正确方式修，含 SQL） ──────────
@@ -2033,7 +2033,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         old="""            reason: input.reason,
           })""",
         new="""          })""",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/write-path-cas.test.ts",
         expect_fail_contains="落进 append-only 决策记录",
     ),
     dict(
@@ -2041,18 +2041,16 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel/authorize.ts",
         old="""    expectedDecisionId: args.expectedDecisionId ?? null,""",
         new="""    expectedDecisionId: null,""",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
-        expect_fail_contains="失败落地被 CAS 挡住",
+        test="src/lib/kernel-approval/__tests__/write-path-cas.test.ts",
+        expect_fail_contains="不许盖掉一份新的待审批请求",
     ),
     dict(
         name="K-WP01A 假件不再复刻指针闸（SQL 有、复刻没有 → 两边分家）",
         file="src/lib/kernel/__tests__/fake-supabase.ts",
-        old="""    if (expectedDecisionId !== null && run.authorization_decision_id !== expectedDecisionId) {
-      return no('decision_not_current')
-    }""",
+        old="""      if (run.authorization_decision_id !== expectedDecisionId) return no('decision_not_current')""",
         new="""    // mutated: 不再复刻指针闸""",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
-        expect_fail_contains="失败落地被 CAS 挡住",
+        test="src/lib/kernel-approval/__tests__/write-path-cas.test.ts",
+        expect_fail_contains="不许盖掉一份新的待审批请求",
     ),
     dict(
         # 🔴 这一刀验的是「假件跟 SQL 不许分家」那道守卫本身 ——
@@ -2087,7 +2085,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel-approval/service.ts",
         old="  const found = lookupDefinition(run)\n  return found.ok ? found.definition : null",
         new="  void lookupDefinition\n  return ACTION_REGISTRY.get(run.action_key)",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
         expect_fail_contains="版本对不上时不许拿新版定义顶替",
     ),
     dict(
@@ -2130,7 +2128,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel-approval/queries.ts",
         old="    query = query.or(",
         new="    query = query.gt('updated_at', cursor.updatedAt) && query.or(",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/pagination.test.ts",
         expect_fail_contains="时间戳撞在一起时游标不整批跳过同伴",
     ),
     dict(
@@ -2138,7 +2136,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel-approval/queries.ts",
         old="      `updated_at.gt.${cursor.updatedAt},and(updated_at.eq.${cursor.updatedAt},id.gt.${cursor.id})`,",
         new="      `updated_at.gt.${cursor.updatedAt},updated_at.gt.${cursor.updatedAt}`,",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/pagination.test.ts",
         expect_fail_contains="时间戳撞在一起时游标不整批跳过同伴",
     ),
     dict(
@@ -2146,7 +2144,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel-approval/queries.ts",
         old="  if (!isUuid(id)) return null",
         new="  if (false) return null",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/pagination.test.ts",
         expect_fail_contains="游标读不成就当没给",
     ),
     dict(
@@ -2154,7 +2152,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel-approval/queries.ts",
         old="    nextCursor: hasMore && runs.length > 0 ? encodeCursor(runs[runs.length - 1]) : null,",
         new="    nextCursor: null,",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/pagination.test.ts",
         expect_fail_contains="游标能真的翻到后面去",
     ),
     dict(
@@ -2166,7 +2164,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel/__tests__/fake-supabase.ts",
         old="  return splitTopLevel(expr).some((cond) => {",
         new="  return expr.split(',').some((cond) => {",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/pagination.test.ts",
         expect_fail_contains="已经翻过去的行不许倒回来",
     ),
     # 🔴 **这里没有「应用层拒绝路径归属核对」那一刀。**
@@ -2188,7 +2186,7 @@ const approveRun = async (d: never, r: string, u: string) => {
       return no('pending_identity_mismatch')
     }""",
         new="    // mutated: 身份核对退回 approve 分支",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
         expect_fail_contains="数据库那道也拦",
     ),
     dict(
@@ -2223,7 +2221,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel/human-approval.ts",
         old="  if (POLICY_RACE_REASONS.has(reason)) {",
         new="  if (false) {",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/write-path-cas.test.ts",
         expect_fail_contains="不是「已经有结论了」",
     ),
     dict(
@@ -2231,7 +2229,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel/human-approval.ts",
         old="  'policy_mode_changed',\n])",
         new="])",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/write-path-cas.test.ts",
         expect_fail_contains="不是「已经有结论了」",
     ),
     dict(
@@ -2240,7 +2238,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel/human-approval.ts",
         old="  if (PENDING_INCONSISTENT_REASONS.has(reason)) {",
         new="  if (false) {",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
         expect_fail_contains="拒绝的写路径",
     ),
     dict(
@@ -2258,7 +2256,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel/human-approval.ts",
         old="  return registered && registered.version === run.action_version ? registered : null",
         new="  return registered",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
         expect_fail_contains="不许写新版的契约快照",
     ),
     dict(
@@ -2276,7 +2274,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         file="src/lib/kernel-approval/service.ts",
         old="      'pending_inconsistent',",
         new="      'not_pending',",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
         expect_fail_contains="还活着的不一致不许用终态码报",
     ),
     dict(
@@ -2287,6 +2285,76 @@ const approveRun = async (d: never, r: string, u: string) => {
         new="] as const",
         test="src/lib/kernel-approval/__tests__/architecture.test.ts",
         expect_fail_contains="扫描清单不许被悄悄改短",
+    ),
+    # ── K-WP01A · round 10（Build Control Room 裁决） ─────────────────────────
+    dict(
+        name="K-WP01A SQL 锚身份：不再核对 action_run_id（跨 run 错挂放行）",
+        file="supabase/migrations/20260813000000_kernel_approval_identity_guards.sql",
+        old="""    IF v_pending.action_run_id <> v_run.id THEN
+      RETURN QUERY SELECT false, 'pending_run_mismatch', NULL::uuid; RETURN;
+    END IF;""",
+        new="""    IF false THEN
+      RETURN QUERY SELECT false, 'pending_run_mismatch', NULL::uuid; RETURN;
+    END IF;""",
+        test="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        expect_fail_contains="锚身份判据",
+    ),
+    dict(
+        name="K-WP01A 假件锚身份：不再核对 action_run_id",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="      if (pending.action_run_id !== run.id) return no('pending_run_mismatch')",
+        new="      // mutated: 不再核对 action_run_id",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
+        expect_fail_contains="同客户、另一条 run",
+    ),
+    dict(
+        name="K-WP01A 假件锚身份：不再核对 client_id / action_key / version / 幂等键",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""      if (
+        pending.client_id !== run.client_id ||
+        pending.action_key !== run.action_key ||
+        pending.action_version !== run.action_version ||
+        pending.idempotency_key !== run.idempotency_key
+      ) {
+        return no('pending_identity_mismatch')
+      }""",
+        new="      // mutated: 不再核对四元身份",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
+        expect_fail_contains="只有客户不对",
+    ),
+    dict(
+        name="K-WP01A 假件锚身份：不再要求锚是 require_approval",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="      if (pending.verdict !== 'require_approval') return no('not_require_approval')",
+        new="      // mutated: 什么 verdict 都当审批请求",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
+        expect_fail_contains="锚不是 require_approval",
+    ),
+    dict(
+        # 🔴 锚身份对不上被压成终态 → 界面把一条还活着的待办抹掉。
+        name="K-WP01A 锚身份不一致被压成终态 INVALID_STATE（活待办被抹掉）",
+        file="src/lib/kernel/authorize.ts",
+        old="    if (PENDING_NOT_TERMINAL_REASONS.has(written.reason)) {",
+        new="    if (false) {",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
+        expect_fail_contains="零新决策、run 状态与指针一个字没动",
+    ),
+    dict(
+        # 🔴 误伤检查：把这道闸也套到自动授权路径上 = preflight 失败的自动 run 落不了 deny。
+        name="K-WP01A 锚身份闸误伤自动授权路径（不带 expectedDecisionId 也卡）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="    if (expectedDecisionId !== null) {\n      if (run.authorization_decision_id !== expectedDecisionId) return no('decision_not_current')",
+        new="    if (true) {\n      if (run.authorization_decision_id !== expectedDecisionId) return no('decision_not_current')",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
+        expect_fail_contains="自动授权路径",
+    ),
+    dict(
+        name="K-WP01A 文件行数守卫的清单漏掉一个真实文件（给它免检）",
+        file="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        old="    'src/lib/kernel-approval/__tests__/pagination.test.ts',\n",
+        new="",
+        test="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        expect_fail_contains="清单盖住审批面上每一个真实文件",
     ),
     # ── K-WP01A · UUID 边界（Codex round 2 · P2） ─────────────────────────────
     dict(
@@ -2335,8 +2403,8 @@ const approveRun = async (d: never, r: string, u: string) => {
     dict(
         name="K-WP01A 指针闸用 <> 而不是 IS DISTINCT FROM（遇 NULL 等于没判）",
         file="supabase/migrations/20260813000000_kernel_approval_identity_guards.sql",
-        old="""     AND v_run.authorization_decision_id IS DISTINCT FROM p_expected_decision_id THEN""",
-        new="""     AND v_run.authorization_decision_id <> p_expected_decision_id THEN""",
+        old="""    IF v_run.authorization_decision_id IS DISTINCT FROM p_expected_decision_id THEN""",
+        new="""    IF v_run.authorization_decision_id <> p_expected_decision_id THEN""",
         test="src/lib/kernel-approval/__tests__/architecture.test.ts",
         expect_fail_contains="跟 resolve_pending_approval 那道同源",
     ),

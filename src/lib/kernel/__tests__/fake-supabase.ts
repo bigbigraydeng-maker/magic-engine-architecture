@@ -1111,8 +1111,25 @@ export function createFakeSupabase(
     }
     // 🔴 指针闸 —— 跟 SQL 第 ④ 步同一道：run 当前指着的必须还是调用方看到的那份。
     //    只建模状态闸的话，「期间被重新排成另一份待审批请求」那条路在假件里走不到。
-    if (expectedDecisionId !== null && run.authorization_decision_id !== expectedDecisionId) {
-      return no('decision_not_current')
+    if (expectedDecisionId !== null) {
+      if (run.authorization_decision_id !== expectedDecisionId) return no('decision_not_current')
+
+      // 🔴 **锚的完整身份 —— 跟 SQL 逐条对齐。**（Codex P2）
+      //    只比指针不够：外键只保证那条决策**存在**，不保证它属于这条 run、
+      //    这个客户。错挂之后失败落地会把别人那份决策的 policy_id / 版本
+      //    抄进这个客户的审计记录。假件少一条，那条路在测试里就走不到。
+      const pending = tableOf('authorization_decisions').find((x) => x.id === expectedDecisionId)
+      if (!pending) return no('pending_not_found')
+      if (pending.action_run_id !== run.id) return no('pending_run_mismatch')
+      if (pending.verdict !== 'require_approval') return no('not_require_approval')
+      if (
+        pending.client_id !== run.client_id ||
+        pending.action_key !== run.action_key ||
+        pending.action_version !== run.action_version ||
+        pending.idempotency_key !== run.idempotency_key
+      ) {
+        return no('pending_identity_mismatch')
+      }
     }
 
     const nowIso = (options.now?.() ?? new Date()).toISOString()

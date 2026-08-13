@@ -37,6 +37,22 @@ import {
 } from './store'
 import { KernelError } from './errors'
 
+/**
+ * 🔴 `kernel_record_fenced_deny` 里**只读返回、一个字没写**的那几条原因。
+ *
+ *    共同点：run 仍然停在 `pending_approval` —— 那件事还等着人点。
+ *    所以它们一律翻成 `STALE_DECISION`（非终态），**不许**压成 `INVALID_STATE`。
+ *    清单跟 `human-approval.ts` 的 `PENDING_INCONSISTENT_REASONS` 同源，
+ *    有一条一致性测试盯着两边不许分家。
+ */
+export const PENDING_NOT_TERMINAL_REASONS: ReadonlySet<string> = new Set([
+  'decision_not_current',
+  'pending_identity_mismatch',
+  'pending_run_mismatch',
+  'pending_not_found',
+  'not_require_approval',
+])
+
 export interface AuthorizationOutcome {
   verdict: Verdict
   decision: AuthorizationDecision
@@ -192,13 +208,19 @@ export async function recordDeny(deps: KernelDeps, args: DenyArgs): Promise<Auth
         { detail: { runId: args.run.id, denyCode: args.code, reason: written.reason } },
       )
     }
-    if (written.reason === 'decision_not_current') {
-      // 指针在锁里对不上 = 这条 run 期间被重新排成了另一份待审批请求。
-      // 跟「已经被批准/拒绝过」不是一回事：那边已经有结论了，这边刷新还能重新决定。
+    // 🔴 **锁内的这几条都是「只读返回、一个字没写」—— 全都不是终态。**（Codex P2）
+    //
+    //    `decision_not_current` = 期间被重新排成了另一份待审批请求；
+    //    另外四条 = 锚的身份对不上（库里数据不一致）。
+    //    两类的共同点是：run **仍然停在 `pending_approval`**，那件事还等着人点。
+    //    压成 `INVALID_STATE`（→ 接口的 `not_pending`）等于告诉界面「已经有结论了」，
+    //    界面会把一条还活着的待办从列表里抹掉 —— 从此没有人看得见它，
+    //    也没有人会去修它。那正是铁律里「发现不许死在日志里」的那种烂尾。
+    if (PENDING_NOT_TERMINAL_REASONS.has(written.reason)) {
       throw new KernelError(
         'STALE_DECISION',
-        '你看到的那份审批请求已经不是最新的了（这条动作期间被重新排过）——' +
-          '这次操作没有生效，也没有改动任何东西。刷新一下再决定',
+        `这条动作指着的那份审批请求对不上或已经不是最新的（${written.reason}）——` +
+          '这次操作没有生效，也没有改动任何东西。它仍然停在「等人点头」',
         { detail: { runId: args.run.id, denyCode: args.code, reason: written.reason } },
       )
     }
