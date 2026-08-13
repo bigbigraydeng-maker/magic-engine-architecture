@@ -64,6 +64,47 @@ describe('canAuthorizeAction · 冻结判定', () => {
     }
   })
 
+  it('🔴 **未知的 required tier** 同样 fail closed（这是否定判断会漏掉的那一半）', () => {
+    // 🔴 早先写的是 `paid_client → requiredTier !== 'admin'`。那是否定判断：
+    //    注册表哪天用上一个还没分类的新门槛（比如更高权限的 super_admin），
+    //    它「不等于 admin」，paid_client 立刻就获得批准权 —— 跟 fail closed 相反。
+    //    穷举白名单的默认答案是「不许」，否定判断的默认答案是「放行」。
+    for (const unknownRequired of ['super_admin', 'owner', 'ADMIN', 'paid_client ', '', 'staff']) {
+      expect(
+        canAuthorizeAction('paid_client', unknownRequired),
+        `paid_client → 未知门槛「${unknownRequired}」必须拒`,
+      ).toBe(false)
+      expect(
+        canAuthorizeAction('admin', unknownRequired),
+        `admin → 未知门槛「${unknownRequired}」同样必须拒（表里没有就是没有）`,
+      ).toBe(false)
+    }
+  })
+
+  it('🔴 真值表逐格钉死 —— 加一档新 tier 必须回来改这张表', () => {
+    const TRUTH: ReadonlyArray<[actor: string, required: string, expected: boolean]> = [
+      ['admin', 'admin', true],
+      ['admin', 'paid_client', true],
+      ['admin', 'self_serve', true],
+      ['admin', 'portal_only', true],
+      ['paid_client', 'admin', false],
+      ['paid_client', 'paid_client', true],
+      ['paid_client', 'self_serve', true],
+      ['paid_client', 'portal_only', true],
+      ['self_serve', 'admin', false],
+      ['self_serve', 'paid_client', false],
+      ['self_serve', 'self_serve', false],
+      ['self_serve', 'portal_only', false],
+      ['portal_only', 'admin', false],
+      ['portal_only', 'paid_client', false],
+      ['portal_only', 'self_serve', false],
+      ['portal_only', 'portal_only', false],
+    ]
+    for (const [actor, required, expected] of TRUTH) {
+      expect(canAuthorizeAction(actor, required), `${actor} → ${required}`).toBe(expected)
+    }
+  })
+
   it('🔴 认不出的档次 fail closed —— 加一个新档次忘了分类，默认是「不许」', () => {
     for (const unknown of ['', 'superuser', 'ADMIN', 'admin ', 'fde', 'both', 'client']) {
       expect(canAuthorizeAction(unknown, 'paid_client'), `未知档次「${unknown}」`).toBe(false)

@@ -30,8 +30,15 @@ const RUN_COLUMNS =
   'id, client_id, purpose, goal_id, action_key, action_version, input, rationale, evidence, ' +
   'status, authorization_decision_id, cost_cap_usd, cost_estimate_usd, updated_at, created_at'
 
-const DECISION_COLUMNS =
-  'id, action_run_id, client_id, verdict, reason, policy_id, policy_version, created_at'
+/**
+ * 🔴 `action_key` / `action_version` / `idempotency_key` **不是给界面看的** ——
+ *    它们是**身份判据**：`decisionBelongsToRun()` 要拿它们跟 run 逐条比。
+ *    读不回来就比不了，读路径就会比 SQL 写路径松一截（Codex P2）。
+ *    列出来之后不许再删：删掉不会报错，只会让那三条判据静静地永远为真。
+ */
+export const DECISION_COLUMNS =
+  'id, action_run_id, client_id, action_key, action_version, idempotency_key, ' +
+  'verdict, reason, policy_id, policy_version, created_at'
 
 /** 一页默认多少条。审批是人一条条看的，不做无上限列表。 */
 export const PENDING_APPROVAL_PAGE_SIZE = 50

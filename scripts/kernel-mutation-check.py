@@ -55,38 +55,20 @@ MUTATIONS = [
     ),
     # ── P1-1：人工批准重新校验 ───────────────────────────────────────────
     dict(
+        # 🔴 判据已随 approveRun 迁到 human-approval.ts（模块拆分），锚点跟着搬。
+        #    留在 authorize.ts 的话脚本会静默 SKIP —— 那道闸就等于没验过。
         name="P1-1 人工批准不再重跑授权闸",
-        file="src/lib/kernel/authorize.ts",
+        file="src/lib/kernel/human-approval.ts",
         old="""  const pf = await preflight(deps, run, now)
-  if (!pf.ok) {
-    return recordDeny(deps, {
-      run,
-      definition: pf.definition,
-      policy: pf.policy,
-      code: pf.code,
-      reason: `${approvedByUser} 点了同意，但这条现在已经不能做了：${pf.reason}`,
-      costEstimate: pf.costEstimate,
-      onlyIfStatus: 'pending_approval',
-    })
-  }""",
+  if (!pf.ok) {""",
         new="""  const pf = await preflight(deps, run, now)
-  if (false) {
-    return recordDeny(deps, {
-      run,
-      definition: pf.definition,
-      policy: (pf as { policy?: unknown }).policy as never,
-      code: 'no_policy',
-      reason: `${approvedByUser}`,
-      costEstimate: null,
-      onlyIfStatus: 'pending_approval',
-    })
-  }""",
+  if (false) {""",
         test="src/lib/kernel/__tests__/human-approval.test.ts",
         expect_fail_contains="挂起期间政策被删掉",
     ),
     dict(
         name="P1-1 人工批准不再要求政策仍是 require_approval",
-        file="src/lib/kernel/authorize.ts",
+        file="src/lib/kernel/human-approval.ts",
         old="""  if (policy.mode !== 'require_approval') {""",
         new="""  if (false) {""",
         test="src/lib/kernel/__tests__/human-approval.test.ts",
@@ -94,7 +76,7 @@ MUTATIONS = [
     ),
     dict(
         name="P1-1 人工批准不再比对政策版本",
-        file="src/lib/kernel/authorize.ts",
+        file="src/lib/kernel/human-approval.ts",
         old="""  if (policy.policy_version !== pending.policy_version) {""",
         new="""  if (false) {""",
         test="src/lib/kernel/__tests__/human-approval.test.ts",
@@ -102,9 +84,9 @@ MUTATIONS = [
     ),
     dict(
         name="P1-1 找不到原审批请求也照签",
-        file="src/lib/kernel/authorize.ts",
-        old="""  if (!pending || pending.verdict !== 'require_approval') {""",
-        new="""  if (false) {""",
+        file="src/lib/kernel/human-approval.ts",
+        old="""  if (pending && pending.verdict === 'require_approval') return { ok: true, pending }""",
+        new="""  if (true) return { ok: true, pending: pending as AuthorizationDecision }""",
         test="src/lib/kernel/__tests__/human-approval.test.ts",
         expect_fail_contains="当初那份审批请求找不到了",
     ),
@@ -389,7 +371,7 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
     # ── P2-1：reject 的应用层状态闸（跟 RPC 那道可区分） ─────────────────
     dict(
         name="P2-1 rejectRun 去掉应用层状态闸（只剩 RPC 那道，错误话术变了）",
-        file="src/lib/kernel/authorize.ts",
+        file="src/lib/kernel/human-approval.ts",
         old="""  if (run.status !== 'pending_approval') {
     throw new KernelError(
       'INVALID_STATE',
@@ -1894,18 +1876,17 @@ const approveRun = async (d: never, r: string, u: string) => {
         expect_fail_contains="self_serve / portal_only 拿到 403 forbidden_tier",
     ),
     dict(
-        # 🔴 tier 闸的第二刀：判据反过来写成「黑名单」。
-        #    表面上 self_serve / portal_only 照样被拒，但**认不出的档次会被放行** ——
-        #    新加一个枚举值忘了分类，就等于悄悄开了一道门。
+        # 🔴 退回**否定判断**：表面上 self_serve / portal_only 照样被拒，
+        #    但「未知的 required tier」会被放行 —— 注册表哪天用上一个还没分类的
+        #    新门槛，paid_client 立刻获得批准权。fail closed 的默认答案必须是「不许」。
         name="K-WP01A tier 闸退回黑名单（未知档次被放行）",
         file="src/lib/kernel-approval/service.ts",
-        old="""  if (actorTier === 'admin') return true
-  if (actorTier === 'paid_client') return requiredTier !== 'admin'
-  return false""",
+        old="""  return APPROVAL_MATRIX[actorTier]?.has(requiredTier) ?? false""",
         new="""  if (actorTier === 'self_serve' || actorTier === 'portal_only') return false
-  return requiredTier !== 'admin' || actorTier === 'admin'""",
+  if (actorTier === 'admin') return true
+  return requiredTier !== 'admin'""",
         test="src/lib/kernel-approval/__tests__/tier-gate.test.ts",
-        expect_fail_contains="认不出的档次 fail closed",
+        expect_fail_contains="未知的 required tier",
     ),
     dict(
         name="K-WP01A 删掉 expectedDecisionId 的应用层 CAS（批的是页面上早就换掉的那一份）",
@@ -2355,6 +2336,39 @@ const approveRun = async (d: never, r: string, u: string) => {
         new="",
         test="src/lib/kernel-approval/__tests__/architecture.test.ts",
         expect_fail_contains="清单盖住审批面上每一个真实文件",
+    ),
+    dict(
+        name="K-WP01A 读路径不比 action_key（错挂的 key 被当成正常待办）",
+        file="src/lib/kernel-approval/service.ts",
+        old="  if (decision.action_key !== run.action_key) return false",
+        new="  // mutated: 不再比 action_key",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
+        expect_fail_contains="action_key 对不上",
+    ),
+    dict(
+        name="K-WP01A 读路径不比 action_version",
+        file="src/lib/kernel-approval/service.ts",
+        old="  if (decision.action_version !== run.action_version) return false",
+        new="  // mutated: 不再比 action_version",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
+        expect_fail_contains="action_version 对不上",
+    ),
+    dict(
+        name="K-WP01A 读路径不比 idempotency_key",
+        file="src/lib/kernel-approval/service.ts",
+        old="  if (decision.idempotency_key !== run.idempotency_key) return false",
+        new="  // mutated: 不再比 idempotency_key",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
+        expect_fail_contains="idempotency_key 对不上",
+    ),
+    dict(
+        # 🔴 判据写得再全，列没读回来就是拿 undefined 去比。
+        name="K-WP01A DECISION_COLUMNS 少选身份三件套（判据静静地永远为真）",
+        file="src/lib/kernel-approval/queries.ts",
+        old="  'id, action_run_id, client_id, action_key, action_version, idempotency_key, ' +",
+        new="  'id, action_run_id, client_id, ' +",
+        test="src/lib/kernel-approval/__tests__/anchor-identity.test.ts",
+        expect_fail_contains="真的选了这三个身份字段",
     ),
     # ── K-WP01A · UUID 边界（Codex round 2 · P2） ─────────────────────────────
     dict(

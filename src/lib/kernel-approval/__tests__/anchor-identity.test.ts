@@ -14,6 +14,7 @@
 import { describe, it, expect } from 'vitest'
 import { CLIENT_A, CLIENT_B } from '@/lib/kernel/__tests__/fixtures'
 import { ApprovalError } from '../errors'
+import { DECISION_COLUMNS } from '../queries'
 import { buildApprovalDetail, decideApproval, listPendingApprovals, loadRunForApproval } from '../service'
 import { authorizeRun } from '@/lib/kernel/authorize'
 import { ACTOR, KEY, pendingFixture } from './_fixtures'
@@ -24,12 +25,19 @@ import { ACTOR, KEY, pendingFixture } from './_fixtures'
 describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个客户', () => {
   it('指针挂到**另一个客户**那条决策上 → 详情拒绝，不把对方的理由吐出来', async () => {
     const { f, runId } = await pendingFixture()
+    f.tables.action_runs[0].idempotency_key = 'idem-of-this-run'
 
     // 造一条属于 B 客户、别的 run 的 require_approval 决策，并把 A 的 run 错挂过去
     f.tables.authorization_decisions.push({
       id: '0d000000-0000-4000-8000-0000000000cb',
       action_run_id: '40000000-0000-4000-8000-0000000000cb',
       client_id: CLIENT_B,
+      // 🔴 身份三件套**跟 run 一致** —— 只让客户（和/或 run）不同。
+      //    不补的话，新加的 key/version/幂等键 三条判据会先把它拦下来，
+      //    「客户」那一半就永远验不到（本 PR 已经踩过两次遮蔽闸）。
+      action_key: KEY,
+      action_version: 1,
+      idempotency_key: 'idem-of-this-run',
       verdict: 'require_approval',
       reason: 'B 客户的机密理由：给 xxx 投 $4000',
       policy_id: '901c0000-0000-4000-8000-0000000000cb',
@@ -56,10 +64,17 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
     //    这里让 action_run_id **对得上**，只有 client_id 不对，把它单独暴露出来。
     //    （Kernel 的 reuseLiveAuthorization 对同一形状抛 CROSS_CLIENT。）
     const { f, runId } = await pendingFixture()
+    f.tables.action_runs[0].idempotency_key = 'idem-of-this-run'
     f.tables.authorization_decisions.push({
       id: '0d000000-0000-4000-8000-00000000c1a1',
       action_run_id: runId,
       client_id: CLIENT_B,
+      // 🔴 身份三件套**跟 run 一致** —— 只让客户（和/或 run）不同。
+      //    不补的话，新加的 key/version/幂等键 三条判据会先把它拦下来，
+      //    「客户」那一半就永远验不到（本 PR 已经踩过两次遮蔽闸）。
+      action_key: KEY,
+      action_version: 1,
+      idempotency_key: 'idem-of-this-run',
       verdict: 'require_approval',
       reason: 'B 客户的机密理由：给 xxx 投 $4000',
       policy_id: '901c0000-0000-4000-8000-0000000000cb',
@@ -82,10 +97,14 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
 
   it('指针挂到**同客户但另一条 run** 的决策上 → 一样拒绝', async () => {
     const { f, runId } = await pendingFixture()
+    f.tables.action_runs[0].idempotency_key = 'idem-of-this-run'
     f.tables.authorization_decisions.push({
       id: '0d000000-0000-4000-8000-00000000a107',
       action_run_id: '40000000-0000-4000-8000-00000000a107',
       client_id: CLIENT_A,
+      action_key: KEY,
+      action_version: 1,
+      idempotency_key: 'idem-of-this-run',
       verdict: 'require_approval',
       reason: '另一件事的理由',
       policy_id: '901c0000-0000-4000-8000-000000000001',
@@ -102,10 +121,17 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
 
   it('列表侧同样拦：错挂的那条进 skipped，不冒充一条能点的待办', async () => {
     const { f } = await pendingFixture()
+    f.tables.action_runs[0].idempotency_key = 'idem-of-this-run'
     f.tables.authorization_decisions.push({
       id: '0d000000-0000-4000-8000-0000000000cb',
       action_run_id: '40000000-0000-4000-8000-0000000000cb',
       client_id: CLIENT_B,
+      // 🔴 身份三件套**跟 run 一致** —— 只让客户（和/或 run）不同。
+      //    不补的话，新加的 key/version/幂等键 三条判据会先把它拦下来，
+      //    「客户」那一半就永远验不到（本 PR 已经踩过两次遮蔽闸）。
+      action_key: KEY,
+      action_version: 1,
+      idempotency_key: 'idem-of-this-run',
       verdict: 'require_approval',
       reason: 'B 客户的机密理由',
       policy_id: '901c0000-0000-4000-8000-0000000000cb',
@@ -124,6 +150,7 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
     //    client_id 属于别人的错挂决策「读不出来但拒得掉」，
     //    而新签的 deny 会把对方的 policy_id / 版本抄进这个客户的审计记录。
     const { f, runId } = await pendingFixture()
+    f.tables.action_runs[0].idempotency_key = 'idem-of-this-run'
     f.tables.authorization_decisions.push({
       id: '0d000000-0000-4000-8000-00000000c1a1',
       action_run_id: runId, // 🔴 run 对得上，只有客户不对
@@ -167,6 +194,7 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
   it('🔴 数据库那道也拦（应用层那道拆了也守得住）', async () => {
     // 直接打 RPC —— 绕过应用层的前置校验，验的是锁内那道 pending_identity_mismatch。
     const { f, runId } = await pendingFixture()
+    f.tables.action_runs[0].idempotency_key = 'idem-of-this-run'
     f.tables.authorization_decisions.push({
       id: '0d000000-0000-4000-8000-00000000c1a2',
       action_run_id: runId,
@@ -206,9 +234,13 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
 
 describe('🔴 Codex round 2 · 版本对不上时不许拿新版定义顶替', () => {
   it('列表和详情都不贴新版的标题 / 风险 / 副作用 / 门槛', async () => {
-    const { f, runId } = await pendingFixture()
-    // 契约升版：库里那条 run 记的还是旧版
+    const { f, runId, expectedDecisionId } = await pendingFixture()
+    // 契约升版：库里那条 run 记的还是旧版。
+    // 🔴 它的**锚也要跟着是 99** —— run 和它自己那份审批请求本来就是同一版
+    //    （对不上的是**注册表**，不是这两者）。只改 run 会变成一条「错挂」，
+    //    那测的就是另一件事了（身份判据现在逐条比 action_version）。
     f.tables.action_runs[0].action_version = 99
+    f.tables.authorization_decisions.find((d) => d.id === expectedDecisionId)!.action_version = 99
 
     const { items } = await listPendingApprovals(f.supabase, CLIENT_A)
     expect(items).toHaveLength(1)
@@ -415,5 +447,87 @@ describe('🔴 失败落地前核对审批锚的完整身份', () => {
     const outcome = await authorizeRun(f.kernel, (await loadRunForApproval(f.supabase, String(run.id))))
     expect(outcome.verdict).toBe('deny')
     expect(f.tables.action_runs[0].status).toBe('denied')
+  })
+})
+
+/**
+ * 🔴 **读路径的身份判据必须跟 SQL 写路径逐条一致。**（Codex round 11 · P2）
+ *
+ * 早先读路径只比 verdict / action_run_id / client_id 三条。于是
+ * 「run 和客户都对、但 action_key / 版本 / 幂等键对不上」这一类错挂：
+ *   · 列表把它当成**正常待办**显示；
+ *   · 详情把**错挂那份**的 reason / policyId / 政策版本吐给这个客户；
+ *   · 人一点提交，RPC 才以 `pending_identity_mismatch` 拒掉。
+ * 读写两套口径 —— 界面上完全看不出异常，直到点下去才炸。
+ *
+ * 🔴 三条判据**各一个独立用例**，每条只改那一个字段。
+ *    一起改的话，删掉其中任意一条判据都会被另外两条遮住（本 PR 已经踩过
+ *    两次遮蔽闸），那样探针抓不住、闸也就没被验证过。
+ */
+describe('🔴 读路径身份判据：key / version / 幂等键各自独立可红', () => {
+  const CASES: ReadonlyArray<[label: string, patch: Record<string, unknown>]> = [
+    ['action_key 对不上', { action_key: 'geo.rewrite_the_whole_site' }],
+    ['action_version 对不上', { action_version: 99 }],
+    ['idempotency_key 对不上', { idempotency_key: 'someone-elses-idempotency-key' }],
+  ]
+
+  it.each(CASES)('%s → 列表进 skipped，不冒充一条能点的待办', async (_label, patch) => {
+    const { f, expectedDecisionId } = await pendingFixture()
+    // 🔴 只改这一个字段：run / 客户 / verdict 全都仍然对得上，
+    //    所以前三条判据一条都拦不住它 —— 只有被测的那一条能。
+    Object.assign(
+      f.tables.authorization_decisions.find((d) => d.id === expectedDecisionId)!,
+      { reason: '错挂那份的机密理由：给 xxx 投 $4000', policy_id: 'p-of-someone-else', ...patch },
+    )
+
+    const { items, skippedRunIds } = await listPendingApprovals(f.supabase, CLIENT_A)
+    expect(items, '身份对不上的不许出现在列表里').toEqual([])
+    expect(skippedRunIds).toHaveLength(1)
+  })
+
+  it.each(CASES)('%s → 详情 409 pending_inconsistent，且不泄露错挂那份的信息', async (_label, patch) => {
+    const { f, runId, expectedDecisionId } = await pendingFixture()
+    Object.assign(
+      f.tables.authorization_decisions.find((d) => d.id === expectedDecisionId)!,
+      { reason: '错挂那份的机密理由：给 xxx 投 $4000', policy_id: 'p-of-someone-else', ...patch },
+    )
+
+    const err = await buildApprovalDetail(
+      f.supabase,
+      await loadRunForApproval(f.supabase, runId),
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ApprovalError)
+    // 🔴 **非终态** —— run 还停在等审批
+    expect((err as ApprovalError).code).toBe('pending_inconsistent')
+    expect((err as ApprovalError).status).toBe(409)
+    expect(f.tables.action_runs[0].status).toBe('pending_approval')
+    const dumped = JSON.stringify(err)
+    expect(dumped, '错挂那份的理由一个字都不许漏出去').not.toContain('机密理由')
+    expect(dumped, '错挂那份的政策 id 也不许漏出去').not.toContain('p-of-someone-else')
+  })
+
+  it('✅ 三条全对时照常出现在列表和详情里（判据不是把所有人都拦掉）', async () => {
+    const { f, runId, expectedDecisionId } = await pendingFixture()
+    const { items } = await listPendingApprovals(f.supabase, CLIENT_A)
+    expect(items).toHaveLength(1)
+    const detail = await buildApprovalDetail(f.supabase, await loadRunForApproval(f.supabase, runId))
+    expect(detail.decision.id).toBe(expectedDecisionId)
+  })
+
+  it('🔴 `DECISION_COLUMNS` 真的选了这三个身份字段（少一列 = 判据静静地永远为真）', () => {
+    // 🔴 判据比得再全，`select()` 里没列出来就是拿 `undefined` 去比 ——
+    //    `undefined !== run.action_key` 恒真，于是每一条都被判成「错挂」；
+    //    反过来某些写法会恒假。两种都是静默失效。
+    //
+    //    这里断言的是**列清单字符串本身**，不是查回来的行：内存假件不做列投影
+    //    （它把整行返回），所以「读回来有没有这个字段」在假件上根本问不出来 ——
+    //    拿它当判据会是一条永远绿的空转测试（实测变异探针 MISSED）。
+    for (const field of ['action_key', 'action_version', 'idempotency_key']) {
+      expect(
+        DECISION_COLUMNS,
+        `DECISION_COLUMNS 少选了 ${field} —— 身份判据会拿 undefined 去比`,
+      ).toContain(field)
+    }
   })
 })

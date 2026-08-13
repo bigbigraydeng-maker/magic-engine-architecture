@@ -43,22 +43,42 @@ import type {
 /**
  * 这个档次的人能不能授权门槛为 `required` 的动作。
  *
- * 🔴 **冻结判定，白名单式，认不出一律 false。**
- *    · `admin`       —— 内部人员，可以授权任何动作；
- *    · `paid_client` —— 付费客户 / 代其操作的 FDE，可以授权门槛**不是 admin** 的动作；
- *    · `self_serve`  —— 自助免费档，一律不许授权（它连付费功能都进不去）；
- *    · `portal_only` —— 老门户，一律不许；
- *    · 认不出的档次 —— 一律不许（新加一档如果忘了在这里分类，默认是「不许」，
- *      不是「放行」。反过来写的话，加一个枚举值就等于悄悄开一道门）。
+ * 🔴 **真正的白名单：两边都要查得到，才放行。**（Codex round 11 · P2）
+ *
+ *    早先写的是 `paid_client → requiredTier !== 'admin'`。那是个**否定判断**：
+ *    只要将来注册表用上一个还没在这里分类的新门槛（比如更高权限的
+ *    `super_admin`），它「不等于 admin」，`paid_client` 立刻就获得了批准权 ——
+ *    跟这段注释宣称的 fail closed 正好相反，而且没有任何测试会红。
+ *    否定判断的默认答案是「放行」；穷举白名单的默认答案是「不许」。
+ *
+ *    真值表（`APPROVAL_MATRIX`）：
+ *      | actor \ required | admin | paid_client | self_serve | portal_only | 未知 |
+ *      | admin            |  ✅   |     ✅      |     ✅     |     ✅      |  ❌  |
+ *      | paid_client      |  ❌   |     ✅      |     ✅     |     ✅      |  ❌  |
+ *      | self_serve       |  ❌   |     ❌      |     ❌     |     ❌      |  ❌  |
+ *      | portal_only      |  ❌   |     ❌      |     ❌     |     ❌      |  ❌  |
+ *      | 未知             |  ❌   |     ❌      |     ❌     |     ❌      |  ❌  |
+ *
+ *    加一档新的 `AccessTier` 时**必须回来改这张表** —— 不改的话它两个方向
+ *    都是「不许」，是安全的默认；而不是像否定判断那样悄悄开一道门。
  *
  * 🔴 这道闸**必须自己站得住**，不能靠「反正 requirePaidClientAccess 已经把
  *    self_serve 挡掉了」。前面那道闸是按客户归属判的，将来它一放宽，
  *    这里就成了唯一一道 —— 所以它有自己的直测用例，不靠前一道闸遮着。
  */
+const APPROVAL_MATRIX: Readonly<Record<string, ReadonlySet<string>>> = {
+  // 内部人员：现有四档门槛全部可以授权
+  admin: new Set<string>(['admin', 'paid_client', 'self_serve', 'portal_only']),
+  // 付费客户 / 代其操作的 FDE：除了 admin 门槛，其余都可以
+  paid_client: new Set<string>(['paid_client', 'self_serve', 'portal_only']),
+  // 自助免费档、老门户：一律不许授权（空集合，不是「缺这一项」）
+  self_serve: new Set<string>(),
+  portal_only: new Set<string>(),
+}
+
 export function canAuthorizeAction(actorTier: string, requiredTier: string): boolean {
-  if (actorTier === 'admin') return true
-  if (actorTier === 'paid_client') return requiredTier !== 'admin'
-  return false
+  // 🔴 **两边都必须在白名单里** —— 查表命中才放行，认不出一律 false。
+  return APPROVAL_MATRIX[actorTier]?.has(requiredTier) ?? false
 }
 
 /**
@@ -223,12 +243,32 @@ function toSummary(run: ActionRun, expectedDecisionId: string): PendingApprovalS
  *    审批的**读**路径没理由比执行路径松。
  */
 function decisionBelongsToRun(
-  decision: { id: string; action_run_id: string; client_id: string; verdict: string },
+  decision: {
+    id: string
+    action_run_id: string
+    client_id: string
+    action_key: string
+    action_version: number
+    idempotency_key: string
+    verdict: string
+  },
   run: ActionRun,
 ): boolean {
+  // 🔴 **七条判据跟 SQL 逐条对齐**，一条不少（Codex P2）。
+  //    指针（= 调用方拿到这条 decision 的方式）+ 下面六条 =
+  //    `kernel_resolve_pending_approval` 第 ④ / ④b 步、以及
+  //    `kernel_record_fenced_deny` 锁内那一段用的同一套。
+  //
+  //    早先只比前三条。于是「run 和客户都对、但 action_key / 版本 / 幂等键
+  //    对不上」这一类错挂**读路径全放行**：列表把它当成正常待办、详情把
+  //    错挂那份的 reason 和政策信息吐出去，而人一点提交，RPC 才以
+  //    `pending_identity_mismatch` 拒掉 —— 读写两套口径，界面上看不出任何异常。
   if (decision.verdict !== 'require_approval') return false
   if (decision.action_run_id !== run.id) return false
   if (decision.client_id !== run.client_id) return false
+  if (decision.action_key !== run.action_key) return false
+  if (decision.action_version !== run.action_version) return false
+  if (decision.idempotency_key !== run.idempotency_key) return false
   return true
 }
 
