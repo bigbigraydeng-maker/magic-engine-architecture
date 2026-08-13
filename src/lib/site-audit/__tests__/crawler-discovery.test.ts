@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { lookup } from 'node:dns/promises'
 import {
   discoverSitemapUrls,
   MIN_DISCOVERED_URLS,
@@ -37,12 +38,27 @@ vi.mock('../../brief/jina', () => ({
   fetchUrlRaw: vi.fn(),
 }))
 
+// SSRF guard (Codex review on PR #963): every child-sitemap fetch now runs
+// through assertPublicHost(), which calls dns.lookup() for any non-IP-literal
+// hostname — every fixture in this file uses domain names (example.com,
+// cdn.example.net, ...), so without this mock every test would perform a
+// REAL DNS lookup. Default to resolving anywhere to a fixed public IP; the
+// "SSRF guard" describe block below overrides this per-test to simulate a
+// public domain resolving to a private address.
+vi.mock('node:dns/promises', () => {
+  const lookup = vi.fn()
+  return { lookup, default: { lookup } }
+})
+const PUBLIC_IP = '93.184.216.34' // example.com's real public IP (RFC 2606), used only as a stand-in value
+
 describe('discoverSitemapUrls', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn())
     // Default: Jina unavailable — direct-fetch tests exercise levels 0-4 only
     vi.mocked(fetchUrlRaw).mockReset().mockRejectedValue(new Error('jina unavailable'))
     vi.mocked(fetchUrlAsMarkdown).mockReset().mockRejectedValue(new Error('jina unavailable'))
+    // Default: every hostname resolves to a public IP — no real network access.
+    vi.mocked(lookup).mockReset().mockResolvedValue({ address: PUBLIC_IP, family: 4 })
   })
 
   afterEach(() => {

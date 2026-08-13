@@ -8,6 +8,8 @@
  * Reference: ROADMAP.md P8.0.2 DNZ collection infrastructure
  */
 
+import { isFetchableScheme, assertPublicHost, BlockedAddressError } from '@/lib/ssrf-safe-fetch'
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -207,10 +209,7 @@ export function extractSameDomainLinks(
     const raw = m[1].trim()
     try {
       const abs = new URL(raw, origin).href
-      // Treat www.domain.com and domain.com as the same origin
-      const normAbs = abs.replace(/^(https?:\/\/)www\./, '$1')
-      const normOrigin = origin.replace(/^(https?:\/\/)www\./, '$1')
-      if (normAbs.startsWith(normOrigin) && !seen.has(abs)) {
+      if (isSameHost(abs, origin) && !seen.has(abs)) {
         seen.add(abs)
       }
     } catch {
@@ -230,7 +229,6 @@ export function extractMarkdownLinks(
   max: number = MAX_BFS_LINKS
 ): string[] {
   const seen = new Set<string>()
-  const normOrigin = origin.replace(/^(https?:\/\/)www\./, '$1')
 
   // Match markdown links: [text](https://...)
   const mdRe = /\]\((https?:\/\/[^\s)]+)\)/g
@@ -238,8 +236,7 @@ export function extractMarkdownLinks(
   while ((m = mdRe.exec(markdown)) !== null && seen.size < max) {
     try {
       const abs = new URL(m[1]).href
-      const normAbs = abs.replace(/^(https?:\/\/)www\./, '$1')
-      if (normAbs.startsWith(normOrigin)) seen.add(abs)
+      if (isSameHost(abs, origin)) seen.add(abs)
     } catch { /* skip */ }
   }
 
@@ -248,8 +245,7 @@ export function extractMarkdownLinks(
   while ((m = bareRe.exec(markdown)) !== null && seen.size < max) {
     try {
       const abs = new URL(m[0]).href
-      const normAbs = abs.replace(/^(https?:\/\/)www\./, '$1')
-      if (normAbs.startsWith(normOrigin)) seen.add(abs)
+      if (isSameHost(abs, origin)) seen.add(abs)
     } catch { /* skip */ }
   }
 
@@ -366,19 +362,12 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
       const childSitemapUrls = parseLocsFromXml(xml)
       const allLocs: string[] = []
       for (const childUrl of childSitemapUrls) {
-        try {
-          const childRes = await fetch(childUrl)
-          if (childRes.ok) {
-            const childXml = await childRes.text()
-            allLocs.push(...parseLocsFromXml(childXml))
-          } else {
-            // 🔴 404/503 不会抛 —— fetch 正常完成，只是 ok 为 false。
-            //    只在 catch 里上报，等于漏掉了子树失败最常见的那一种。
-            report('child-sitemap', `HTTP ${childRes.status}`, childUrl)
-          }
-        } catch (err) {
-          report('child-sitemap', err, childUrl)
-        }
+        // Same SSRF guard as fetchSitemapPageUrls() (Codex review on PR #963):
+        // childUrl comes straight out of /sitemap_index.xml's <loc> entries,
+        // which the audited site controls — validate scheme/host and follow
+        // redirects manually before ever calling fetch() on it.
+        const result = await fetchSitemapXmlSafely(childUrl, report, 'child-sitemap')
+        if (result.ok) allLocs.push(...parseLocsFromXml(result.xml))
       }
       const urls = keepOrEscalate(dedupeAndFilter(allLocs, origin))
       if (urls) return urls
@@ -602,6 +591,102 @@ async function resolveSitemapUrls(
 type Report = (stage: string, error: unknown, url?: string) => void
 
 const MAX_SITEMAP_DEPTH = 3
+/** Separate cap from MAX_SITEMAP_DEPTH — this bounds redirect hops for a
+ *  single sitemap fetch, not the depth of nested sitemap indexes. */
+const MAX_SITEMAP_REDIRECTS = 3
+
+type SafeSitemapFetch =
+  | { ok: true; xml: string }
+  | { ok: false }
+
+/**
+ * Fetch `url` expecting sitemap/robots XML, gated by the shared SSRF guard.
+ *
+ * 🔴 SSRF review on PR #963: every <loc> in a sitemap is attacker-controlled
+ *    — the site owner (or whoever compromised the site) writes the sitemap
+ *    content. Before this fix, fetchSitemapPageUrls() called fetch(url)
+ *    directly with fetch's default automatic redirect-following, so a
+ *    <loc>http://169.254.169.254/...</loc> or a public-looking <loc> that
+ *    302-redirects to an internal address would be requested straight from
+ *    Render's own network, with no check at all. Same-host filtering
+ *    (dedupeAndFilter) only trims the *returned* URL list — it can't recall
+ *    a request that already went out over the wire.
+ *
+ *    Every hop here is validated before it's fetched: scheme must be
+ *    http/https, and assertPublicHost() must confirm the host doesn't
+ *    resolve to a private/loopback/link-local/CGNAT/cloud-metadata address.
+ *    Redirects are followed manually (redirect: 'manual') specifically so
+ *    each hop re-runs both checks — fetch's automatic redirect-follow would
+ *    skip validation on every hop after the first. A rejection is always
+ *    reported via `report()` and never thrown, so one poisoned <loc> in a
+ *    sitemap index doesn't stop its legitimate siblings from being fetched.
+ */
+async function fetchSitemapXmlSafely(
+  startUrl: string,
+  report: Report,
+  /** Stage name for "genuinely unreachable" failures (fetch threw / non-OK
+   *  response / DNS lookup failure) — the two call sites predate this SSRF
+   *  fix with their own distinct stage names ('sitemap-fetch' vs.
+   *  'child-sitemap'), which existing onIssue tests assert on; the new
+   *  SSRF-specific stages below are shared verbatim by both. */
+  genericFailureStage: string = 'sitemap-fetch',
+): Promise<SafeSitemapFetch> {
+  let url = startUrl
+  for (let hop = 0; hop <= MAX_SITEMAP_REDIRECTS; hop++) {
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch (err) {
+      report('sitemap-invalid-url', err, url)
+      return { ok: false }
+    }
+    if (!isFetchableScheme(parsed)) {
+      report('sitemap-unsupported-scheme', `blocked scheme: ${parsed.protocol}`, url)
+      return { ok: false }
+    }
+    try {
+      await assertPublicHost(parsed)
+    } catch (err) {
+      if (err instanceof BlockedAddressError) {
+        report('sitemap-blocked-host', err, url)
+      } else {
+        // DNS lookup failure — genuinely unreachable, not "blocked".
+        report(genericFailureStage, err, url)
+      }
+      return { ok: false }
+    }
+
+    let res: Response
+    try {
+      res = await fetch(url, { redirect: 'manual' })
+    } catch (err) {
+      report(genericFailureStage, err, url)
+      return { ok: false }
+    }
+
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location')
+      if (!location) {
+        report('sitemap-redirect-without-location', `HTTP ${res.status}`, url)
+        return { ok: false }
+      }
+      try {
+        url = new URL(location, url).href
+      } catch (err) {
+        report('sitemap-invalid-url', err, location)
+        return { ok: false }
+      }
+      continue
+    }
+    if (!res.ok) {
+      report(genericFailureStage, `HTTP ${res.status}`, url)
+      return { ok: false }
+    }
+    return { ok: true, xml: await res.text() }
+  }
+  report('sitemap-too-many-redirects', `exceeded ${MAX_SITEMAP_REDIRECTS} redirects`, startUrl)
+  return { ok: false }
+}
 
 /**
  * Expand a sitemap index's child <loc> URLs into real page URLs, reusing
@@ -631,43 +716,46 @@ async function fetchSitemapPageUrls(url: string, depth: number, report: Report =
     report('sitemap-depth-limit', `depth limit ${MAX_SITEMAP_DEPTH} reached`, url)
     return []
   }
-  try {
-    const res = await fetch(url)
-    if (!res.ok) {
-      report('sitemap-fetch', `HTTP ${res.status}`, url)
-      return []
-    }
-    const xml = await res.text()
-    if (/<sitemapindex/i.test(xml)) {
-      return expandSitemapIndexChildren(parseLocsFromXml(xml), depth + 1, report)
-    }
-    return parseLocsFromXml(xml)
-  } catch (err) {
-    report('sitemap-fetch', err, url)
-    return []
+  const result = await fetchSitemapXmlSafely(url, report)
+  if (!result.ok) return []
+  if (/<sitemapindex/i.test(result.xml)) {
+    return expandSitemapIndexChildren(parseLocsFromXml(result.xml), depth + 1, report)
   }
+  return parseLocsFromXml(result.xml)
 }
 
 /**
- * Normalise a URL's origin for comparison, stripping the www. prefix.
- * e.g. https://www.example.com → https://example.com
+ * True when `candidate`'s hostname is exactly `origin`'s hostname (each side
+ * has a leading "www." stripped first, so domain.com and www.domain.com are
+ * still treated as the same site — the crawler's existing convention).
+ *
+ * 🔴 SSRF review on PR #963: this used to be a string-prefix check
+ *    (`normU.startsWith(normOrigin)`), which wrongly accepts
+ *    https://example.com.evil.test as belonging to example.com — the literal
+ *    string "https://example.com" IS a prefix of that hostname. Comparing
+ *    parsed hostnames for exact equality closes that hole.
  */
-function normaliseOriginForCompare(url: string): string {
-  return url.replace(/^(https?:\/\/)www\./, '$1')
+function isSameHost(candidate: string, origin: string): boolean {
+  let candidateHost: string
+  let originHost: string
+  try {
+    candidateHost = new URL(candidate).hostname.toLowerCase().replace(/^www\./, '')
+    originHost = new URL(origin).hostname.toLowerCase().replace(/^www\./, '')
+  } catch {
+    return false
+  }
+  return candidateHost === originHost
 }
 
 /**
- * Remove duplicates and filter to same-origin URLs only.
- * Treats www.domain.com and domain.com as the same origin.
+ * Remove duplicates and filter to same-host URLs only.
+ * Treats www.domain.com and domain.com as the same host.
  */
 function dedupeAndFilter(urls: string[], origin: string): string[] {
   const seen = new Set<string>()
   const result: string[] = []
-  // Normalise origin for comparison (strip www.)
-  const normOrigin = normaliseOriginForCompare(origin)
   for (const u of urls) {
-    const normU = normaliseOriginForCompare(u)
-    if (!seen.has(u) && normU.startsWith(normOrigin)) {
+    if (!seen.has(u) && isSameHost(u, origin)) {
       seen.add(u)
       result.push(u)
     }
