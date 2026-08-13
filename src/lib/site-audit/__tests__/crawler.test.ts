@@ -442,6 +442,197 @@ describe('discoverSitemapUrls', () => {
     })
   })
 
+  /**
+   * Issue #955 — Level 1 (/sitemap.xml) must detect <sitemapindex> from the
+   * XML response structure and recursively expand it via fetchSitemapPageUrls(),
+   * instead of returning the index's own <loc> entries (child sitemap URLs) as
+   * if they were pages, and instead of guessing "is this a sitemap" from a
+   * `.xml` suffix (real sites use extension-less and query-string child sitemaps).
+   */
+  describe('Level 1 — /sitemap.xml is itself a sitemap index (Issue #955)', () => {
+    it('🔴 recurses into child sitemaps instead of returning index <loc> entries as pages', async () => {
+      // Naive parseLocsFromXml(xml) on SITEMAP_INDEX_XML yields exactly 2 <loc>
+      // entries — both child *sitemap* URLs. That happens to be >= MIN_DISCOVERED_URLS,
+      // so the old bug (no structure check) would return those 2 sitemap documents
+      // as the final "page" candidates and never fetch the children below.
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))       // robots.txt
+        .mockResolvedValueOnce(mockResponse(SITEMAP_INDEX_XML))      // sitemap.xml (is an index)
+        .mockResolvedValueOnce(mockResponse(SITEMAP_POSTS_XML))      // sitemap-posts.xml (3 pages)
+        .mockResolvedValueOnce(mockResponse(SITEMAP_PAGES_XML))      // sitemap-pages.xml (3 pages)
+      )
+
+      const urls = await discoverSitemapUrls('example.com')
+
+      expect(urls).toHaveLength(6)
+      expect(urls).toContain('https://example.com/post-1')
+      expect(urls).toContain('https://example.com/about')
+      // The sitemap documents themselves must never be returned as page candidates.
+      expect(urls.some((u) => u.endsWith('.xml'))).toBe(false)
+    })
+
+    it('recurses through a multi-level nested sitemap index', async () => {
+      const topIndex = `<?xml version="1.0"?>
+<sitemapindex><sitemap><loc>https://example.com/sitemap-region.xml</loc></sitemap></sitemapindex>`
+      const regionIndex = `<?xml version="1.0"?>
+<sitemapindex><sitemap><loc>https://example.com/sitemap-region-posts.xml</loc></sitemap></sitemapindex>`
+      const regionPosts = `<?xml version="1.0"?>
+<urlset><url><loc>https://example.com/region/post-1</loc></url><url><loc>https://example.com/region/post-2</loc></url></urlset>`
+
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
+        .mockResolvedValueOnce(mockResponse(topIndex))          // sitemap.xml → index
+        .mockResolvedValueOnce(mockResponse(regionIndex))       // sitemap-region.xml → still an index
+        .mockResolvedValueOnce(mockResponse(regionPosts))       // sitemap-region-posts.xml → real pages
+      )
+
+      const urls = await discoverSitemapUrls('example.com')
+
+      expect(urls).toEqual([
+        'https://example.com/region/post-1',
+        'https://example.com/region/post-2',
+      ])
+    })
+
+    it('follows an extension-less child sitemap URL (e.g. /sitemap/posts)', async () => {
+      const indexWithNoExtChild = `<?xml version="1.0"?>
+<sitemapindex><sitemap><loc>https://example.com/sitemap/posts</loc></sitemap></sitemapindex>`
+      const postsUrlset = `<?xml version="1.0"?>
+<urlset><url><loc>https://example.com/blog/post-1</loc></url><url><loc>https://example.com/blog/post-2</loc></url></urlset>`
+
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
+        .mockResolvedValueOnce(mockResponse(indexWithNoExtChild))  // sitemap.xml → index, child has no extension
+        .mockResolvedValueOnce(mockResponse(postsUrlset))          // /sitemap/posts → real pages
+      )
+
+      const urls = await discoverSitemapUrls('example.com')
+
+      expect(urls).toEqual(['https://example.com/blog/post-1', 'https://example.com/blog/post-2'])
+    })
+
+    it('follows a query-string child sitemap URL (e.g. /sitemap.php?type=post)', async () => {
+      const indexWithQueryChild = `<?xml version="1.0"?>
+<sitemapindex><sitemap><loc>https://example.com/sitemap.php?type=post</loc></sitemap></sitemapindex>`
+      const postsUrlset = `<?xml version="1.0"?>
+<urlset><url><loc>https://example.com/news/post-1</loc></url><url><loc>https://example.com/news/post-2</loc></url></urlset>`
+
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
+        .mockResolvedValueOnce(mockResponse(indexWithQueryChild))  // sitemap.xml → index, child has query string
+        .mockResolvedValueOnce(mockResponse(postsUrlset))          // sitemap.php?type=post → real pages
+      )
+
+      const urls = await discoverSitemapUrls('example.com')
+
+      expect(urls).toEqual(['https://example.com/news/post-1', 'https://example.com/news/post-2'])
+    })
+
+    it('filters out-of-host child sitemap results while keeping same-host pages', async () => {
+      const indexWithForeignChild = `<?xml version="1.0"?>
+<sitemapindex>
+  <sitemap><loc>https://example.com/sitemap-local.xml</loc></sitemap>
+  <sitemap><loc>https://cdn.example.net/sitemap-foreign.xml</loc></sitemap>
+</sitemapindex>`
+      const localUrlset = `<?xml version="1.0"?>
+<urlset><url><loc>https://example.com/local-1</loc></url></urlset>`
+      const foreignUrlset = `<?xml version="1.0"?>
+<urlset><url><loc>https://cdn.example.net/foreign-1</loc></url></urlset>`
+
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
+        .mockResolvedValueOnce(mockResponse(indexWithForeignChild))
+        .mockResolvedValueOnce(mockResponse(localUrlset))
+        .mockResolvedValueOnce(mockResponse(foreignUrlset))
+        .mockResolvedValue(mockNotFound())                          // remaining levels (2/4) 404 out
+      )
+
+      const urls = await discoverSitemapUrls('example.com')
+
+      // Only 1 same-host page — foreign-host page is filtered, so total is
+      // below MIN_DISCOVERED_URLS and discovery escalates past this level;
+      // fetch is exhausted (Jina rejects by default), so the best partial
+      // result — the one local page — is what's ultimately returned.
+      expect(urls).toEqual(['https://example.com/local-1'])
+    })
+
+    it('reports a child sitemap fetch failure but still returns the sibling pages', async () => {
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
+        .mockResolvedValueOnce(mockResponse(SITEMAP_INDEX_XML))   // sitemap.xml → index (2 children)
+        .mockRejectedValueOnce(new Error('Timeout'))              // sitemap-posts.xml throws
+        .mockResolvedValueOnce(mockResponse(SITEMAP_PAGES_XML))   // sitemap-pages.xml ok
+      )
+      const issues: DiscoveryIssue[] = []
+
+      const urls = await discoverSitemapUrls('example.com', { onIssue: (i) => issues.push(i) })
+
+      expect(urls).toEqual(['https://example.com/about', 'https://example.com/contact', 'https://example.com/services'])
+      expect(issues).toContainEqual(
+        expect.objectContaining({ stage: 'sitemap-fetch', url: 'https://example.com/sitemap-posts.xml' })
+      )
+    })
+
+    it('bounds a self-referencing sitemap index at MAX_SITEMAP_DEPTH instead of looping forever', async () => {
+      const selfIndexXml =
+        '<sitemapindex><sitemap><loc>https://example.com/sitemap.xml</loc></sitemap></sitemapindex>'
+
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))     // robots.txt
+        .mockResolvedValueOnce(mockResponse(selfIndexXml))         // sitemap.xml — depth 0 (Level 1's own fetch)
+        .mockResolvedValueOnce(mockResponse(selfIndexXml))         // recursion depth 1
+        .mockResolvedValueOnce(mockResponse(selfIndexXml))         // recursion depth 2
+        .mockResolvedValue(mockNotFound())                         // depth-limit stops before a 4th fetch; remaining levels 404
+      vi.stubGlobal('fetch', fetchMock)
+
+      const issues: DiscoveryIssue[] = []
+      const urls = await discoverSitemapUrls('example.com', { onIssue: (i) => issues.push(i) })
+
+      expect(urls).toEqual([])
+      expect(issues).toContainEqual(
+        expect.objectContaining({ stage: 'sitemap-depth-limit', url: 'https://example.com/sitemap.xml' })
+      )
+      // Exactly 3 fetches of the self-referencing URL (depth 0, 1, 2) — the 4th
+      // (depth 3) is refused before ever calling fetch, proving termination.
+      const selfFetches = fetchMock.mock.calls.filter(([u]) => u === 'https://example.com/sitemap.xml').length
+      expect(selfFetches).toBe(3)
+    })
+
+    it('stays silent when a sitemap index resolves cleanly (no swallowed failures)', async () => {
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
+        .mockResolvedValueOnce(mockResponse(SITEMAP_INDEX_XML))
+        .mockResolvedValueOnce(mockResponse(SITEMAP_POSTS_XML))
+        .mockResolvedValueOnce(mockResponse(SITEMAP_PAGES_XML))
+      )
+      const issues: DiscoveryIssue[] = []
+
+      const urls = await discoverSitemapUrls('example.com', { onIssue: (i) => issues.push(i) })
+
+      expect(urls).toHaveLength(6)
+      expect(issues).toEqual([])
+    })
+
+    it('a plain 404 on /sitemap.xml itself stays silent, same as before this fix', async () => {
+      // Guards the pre-existing "normal fallback, not a swallowed failure"
+      // semantics: Level 1's own fetch failing must not emit an issue — only
+      // failures while expanding a *confirmed* index should be reported.
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
+        .mockResolvedValueOnce(mockNotFound())                    // sitemap.xml 404
+        .mockResolvedValueOnce(mockResponse(SITEMAP_INDEX_XML))   // sitemap_index.xml
+        .mockResolvedValueOnce(mockResponse(SITEMAP_POSTS_XML))
+        .mockResolvedValueOnce(mockResponse(SITEMAP_PAGES_XML))
+      )
+      const issues: DiscoveryIssue[] = []
+
+      const urls = await discoverSitemapUrls('example.com', { onIssue: (i) => issues.push(i) })
+
+      expect(urls).toHaveLength(6)
+      expect(issues).toEqual([])
+    })
+  })
+
   describe('fallback 1 — sitemap.xml 404, sitemap_index.xml resolves', () => {
     it('fetches child sitemaps and returns 6 URLs total', async () => {
       vi.stubGlobal('fetch', vi.fn()

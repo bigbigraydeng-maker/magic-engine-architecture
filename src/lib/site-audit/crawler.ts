@@ -277,11 +277,21 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
   }
 
   // Level 1: /sitemap.xml
+  //
+  // 🔴 Issue #955: 一个 <urlset> 里的 <loc> 都是真实页面，可以直接解析；但 /sitemap.xml
+  //    也可能本身是一个 <sitemapindex>（尤其大站），那样 <loc> 指向的是子 sitemap 文档，
+  //    不是页面。判断只能看响应内容里有没有 <sitemapindex>，不能靠 URL 后缀猜 —— 子
+  //    sitemap 常见写法里就有 /sitemap/posts（无扩展名）、/sitemap.php?type=post（带 query）。
+  //    命中 index 就复用 fetchSitemapPageUrls() 的递归展开，跟其它入口（robots.txt
+  //    directive、/sitemap_index.xml）共用同一套深度限制和失败上报。
   try {
     const res = await fetch(`${origin}/sitemap.xml`)
     if (res.ok) {
       const xml = await res.text()
-      const urls = keepOrEscalate(dedupeAndFilter(parseLocsFromXml(xml), origin))
+      const locs = /<sitemapindex/i.test(xml)
+        ? await expandSitemapIndexChildren(parseLocsFromXml(xml), 1, report)
+        : parseLocsFromXml(xml)
+      const urls = keepOrEscalate(dedupeAndFilter(locs, origin))
       if (urls) return urls
     }
   } catch (err) {
@@ -535,6 +545,23 @@ type Report = (stage: string, error: unknown, url?: string) => void
 const MAX_SITEMAP_DEPTH = 3
 
 /**
+ * Expand a sitemap index's child <loc> URLs into real page URLs, reusing
+ * fetchSitemapPageUrls() so nested indexes, non-.xml sitemap paths, and
+ * fetch failures are all handled by the one existing recursive implementation.
+ */
+async function expandSitemapIndexChildren(
+  childUrls: string[],
+  depth: number,
+  report: Report = () => {},
+): Promise<string[]> {
+  const nested: string[] = []
+  for (const childUrl of childUrls) {
+    nested.push(...(await fetchSitemapPageUrls(childUrl, depth, report)))
+  }
+  return nested
+}
+
+/**
  * Recursively fetch page URLs from a sitemap or sitemap index.
  * If the fetched XML is a <sitemapindex>, recurses into each child.
  * Depth-limited to MAX_SITEMAP_DEPTH to guard against malformed cycles.
@@ -553,12 +580,7 @@ async function fetchSitemapPageUrls(url: string, depth: number, report: Report =
     }
     const xml = await res.text()
     if (/<sitemapindex/i.test(xml)) {
-      const childUrls = parseLocsFromXml(xml)
-      const nested: string[] = []
-      for (const childUrl of childUrls) {
-        nested.push(...(await fetchSitemapPageUrls(childUrl, depth + 1, report)))
-      }
-      return nested
+      return expandSitemapIndexChildren(parseLocsFromXml(xml), depth + 1, report)
     }
     return parseLocsFromXml(xml)
   } catch (err) {
