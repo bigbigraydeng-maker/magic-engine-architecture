@@ -441,6 +441,7 @@ describe('🔴 审批面的文件不许越过 800 行', () => {
     'src/lib/kernel-approval/__tests__/decision.test.ts',
     'src/lib/kernel-approval/__tests__/not-provisioned.test.ts',
     'src/lib/kernel-approval/__tests__/pagination.test.ts',
+    'src/lib/kernel-approval/__tests__/rollout-compat.test.ts',
     'src/lib/kernel-approval/__tests__/sql-contract.test.ts',
     'src/lib/kernel-approval/__tests__/tier-gate.test.ts',
     'src/lib/kernel-approval/__tests__/write-path-cas.test.ts',

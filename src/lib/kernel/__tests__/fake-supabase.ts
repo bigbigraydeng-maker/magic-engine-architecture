@@ -1307,7 +1307,27 @@ export function createFakeSupabase(
       if (name === 'kernel_claim_or_takeover_run') {
         return { data: [claimOrTakeoverRun(args)], error: null }
       }
+      // 🔴 两个**名字不同**的入口，按真库的形状分开建模。
+      //    历史五参入口在真库里**没有** p_expected_decision_id 这个参数 ——
+      //    PostgREST 按参数名找函数，多带一个它就找不到、回 PGRST202。
+      //    假件必须照着炸：不然「不小心把指针传给了旧入口」这种回归
+      //    会在测试里静静地生效，而生产上那道闸根本没跑。
       if (name === 'kernel_record_fenced_deny') {
+        if ('p_expected_decision_id' in args) {
+          return {
+            data: null,
+            error: {
+              code: 'PGRST202',
+              message:
+                'Could not find the function public.kernel_record_fenced_deny(' +
+                'p_decision, p_expected_decision_id, p_expected_generation, p_expected_status, ' +
+                'p_reason, p_run_id) in the schema cache',
+            },
+          }
+        }
+        return { data: [recordFencedDeny({ ...args, p_expected_decision_id: null })], error: null }
+      }
+      if (name === 'kernel_record_fenced_deny_v2') {
         return { data: [recordFencedDeny(args)], error: null }
       }
       if (name === 'kernel_ensure_run_steps') {

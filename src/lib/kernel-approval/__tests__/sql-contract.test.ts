@@ -69,6 +69,7 @@ describe('🔴 RPC 参数：应用层 / 假件 / SQL 三处不许分家', () => 
   const STORE = 'src/lib/kernel/store.ts'
   const GUARDED_RPCS = [
     'kernel_record_fenced_deny',
+    'kernel_record_fenced_deny_v2',
     'kernel_resolve_pending_approval',
     'kernel_claim_run_recovery',
   ] as const
@@ -95,31 +96,55 @@ describe('🔴 RPC 参数：应用层 / 假件 / SQL 三处不许分家', () => 
     expect(new RegExp('\\bp_totally_made_up\\b').test(readSql())).toBe(false)
   })
 
-  it('🔴 前向迁移必须把旧签名 DROP 掉（带默认值的新参会形成有歧义的重载）', () => {
+  it('🔴 历史五参入口**不许被 DROP** —— 数据库和代码必须能各自独立上线', () => {
     const forward = readFileSync(join(ROOT, FORWARD_MIGRATION), 'utf8')
     expect(
-      /DROP\s+FUNCTION\s+IF\s+EXISTS\s+public\.kernel_record_fenced_deny\(uuid,\s*bigint,\s*text,\s*jsonb,\s*text\)/i.test(
-        forward,
-      ),
-      '不 DROP 旧五参版本的话，五参调用会变成 "Could not choose the best candidate function"',
-    ).toBe(true)
+      /DROP\s+FUNCTION[^;]*\bkernel_record_fenced_deny\b/i.test(forward),
+      'DROP 掉五参签名 = migration 一 apply 就当场打死所有还没重新部署的旧代码。' +
+        '新行为必须挂在新名字上（_v2），不是把老入口拆了。',
+    ).toBe(false)
   })
 
-  it('🔴 新签名的 EXECUTE 也收了口（anon key 印在浏览器 bundle 里）', () => {
+  it('🔴 两个入口都在，且五参那个签名一字未改', () => {
     const forward = readFileSync(join(ROOT, FORWARD_MIGRATION), 'utf8')
-    const sig = String.raw`\(uuid,\s*bigint,\s*text,\s*jsonb,\s*text,\s*uuid\)`
-    expect(
-      new RegExp(
-        String.raw`REVOKE\s+EXECUTE\s+ON\s+FUNCTION\s+public\.kernel_record_fenced_deny${sig}\s*\n?\s*FROM\s+PUBLIC\s*,\s*anon\s*,\s*authenticated`,
-        'i',
-      ).test(forward),
-    ).toBe(true)
-    expect(
-      new RegExp(
-        String.raw`GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+public\.kernel_record_fenced_deny${sig}\s*\n?\s*TO\s+service_role`,
-        'i',
-      ).test(forward),
-    ).toBe(true)
+    const bodyOf = (name: string): string => {
+      const start = forward.indexOf(`CREATE OR REPLACE FUNCTION public.${name}(`)
+      expect(start, `${name} 必须在这条前向迁移里`).toBeGreaterThan(-1)
+      const end = forward.indexOf('$$;', start)
+      expect(end, `${name} 的函数体没闭合`).toBeGreaterThan(start)
+      return forward.slice(start, end)
+    }
+    // 五参：参数列表里**不许**出现 p_expected_decision_id
+    const legacy = bodyOf('kernel_record_fenced_deny')
+    expect(legacy).not.toContain('p_expected_decision_id uuid')
+    // 六参：新名字、新参数
+    expect(bodyOf('kernel_record_fenced_deny_v2')).toContain('p_expected_decision_id uuid')
+    // 老入口是转发壳，逻辑只有一份 —— 两处逐字抄必然漂移
+    expect(legacy).toContain('kernel_record_fenced_deny_v2(')
+  })
+
+  it('🔴 两个入口的 EXECUTE 都收了口（anon key 印在浏览器 bundle 里）', () => {
+    const forward = readFileSync(join(ROOT, FORWARD_MIGRATION), 'utf8')
+    const cases: [string, string][] = [
+      ['kernel_record_fenced_deny_v2', String.raw`\(uuid,\s*bigint,\s*text,\s*jsonb,\s*text,\s*uuid\)`],
+      ['kernel_record_fenced_deny', String.raw`\(uuid,\s*bigint,\s*text,\s*jsonb,\s*text\)`],
+    ]
+    for (const [fn, sig] of cases) {
+      expect(
+        new RegExp(
+          String.raw`REVOKE\s+EXECUTE\s+ON\s+FUNCTION\s+public\.${fn}${sig}\s*\n?\s*FROM\s+PUBLIC\s*,\s*anon\s*,\s*authenticated`,
+          'i',
+        ).test(forward),
+        `${fn} 没 REVOKE`,
+      ).toBe(true)
+      expect(
+        new RegExp(
+          String.raw`GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+public\.${fn}${sig}\s*\n?\s*TO\s+service_role`,
+          'i',
+        ).test(forward),
+        `${fn} 没 GRANT`,
+      ).toBe(true)
+    }
   })
 
   it('🔴 「政策竞态」清单跟 SQL 不许分家', () => {
@@ -210,19 +235,19 @@ describe('🔴 锚身份判据在 SQL 两个 RPC 里逐条对齐', () => {
   it.each([...ANCHOR_IDENTITY_CHECKS])(
     '🔴 kernel_record_fenced_deny 也有「%s」（失败落地这条路不许更松）',
     (_label, needle) => {
-      expect(functionBody('kernel_record_fenced_deny')).toContain(needle)
+      expect(functionBody('kernel_record_fenced_deny_v2')).toContain(needle)
     },
   )
 
   it('🔴 四元身份四个字段一个都不少', () => {
-    const body = functionBody('kernel_record_fenced_deny')
+    const body = functionBody('kernel_record_fenced_deny_v2')
     for (const field of ['client_id', 'action_key', 'action_version', 'idempotency_key']) {
       expect(body, `锚身份少比了 ${field}`).toContain(`v_pending.${field} <> v_run.${field}`)
     }
   })
 
   it('🔴 锚身份闸只在带 expectedDecisionId 时生效（不许误伤自动授权路径）', () => {
-    const body = functionBody('kernel_record_fenced_deny')
+    const body = functionBody('kernel_record_fenced_deny_v2')
     expect(
       body,
       '整段必须包在 `IF p_expected_decision_id IS NOT NULL THEN` 里 —— ' +
@@ -231,7 +256,7 @@ describe('🔴 锚身份判据在 SQL 两个 RPC 里逐条对齐', () => {
   })
 
   it('🔴 **不**镜像政策三连（那会让政策漂移的 deny 永远落不了地）', () => {
-    const body = functionBody('kernel_record_fenced_deny')
+    const body = functionBody('kernel_record_fenced_deny_v2')
     for (const forbidden of ['policy_identity_changed', 'stale_policy_version', 'policy_mode_changed']) {
       expect(
         body,
@@ -258,7 +283,7 @@ describe('🔴 锚身份判据在 SQL 两个 RPC 里逐条对齐', () => {
 
   it('🔴 指针闸用 IS DISTINCT FROM（跟 resolve_pending_approval 那道同源）', () => {
     // `<>` 遇到 NULL 求值成 NULL（不是 true）——指针为空时那道闸等于没判。
-    expect(functionBody('kernel_record_fenced_deny')).toContain(
+    expect(functionBody('kernel_record_fenced_deny_v2')).toContain(
       'v_run.authorization_decision_id IS DISTINCT FROM p_expected_decision_id',
     )
   })
@@ -369,10 +394,69 @@ describe('🔴 人工批准的政策行锁', () => {
 
   it('🔴 `kernel_record_fenced_deny` 不碰政策（它只拿前两把锁）', () => {
     const src = readFileSync(join(ROOT, MIGRATION), 'utf8')
-    const start = src.indexOf('CREATE OR REPLACE FUNCTION public.kernel_record_fenced_deny(')
+    const start = src.indexOf('CREATE OR REPLACE FUNCTION public.kernel_record_fenced_deny_v2(')
     expect(
       src.slice(start, src.indexOf('$$;', start)),
       '失败落地那条路正是为了记下「政策变了所以做不了」—— 它读政策就会自锁',
     ).not.toContain('FROM public.client_automation_policies')
+  })
+})
+
+/**
+ * 🔴 **同一个 客户+动作 不许有两条同时生效的政策。**（Build Control Room blocker ②）
+ *
+ * 光有 `ORDER BY effective_from DESC LIMIT 1 FOR UPDATE` 是不够的：锁 SELECT
+ * 拦不住 INSERT。并发事务可以插进一条 `effective_from` 更晚、此刻已经生效的新政策，
+ * 于是审批这边拿着被锁住的旧行签出 allow，而按那句 SQL 的口径当家的已经换人了 ——
+ * 审计表里留下一条**照着不当家的规则**签出来的放行。
+ *
+ * 根治靠数据模型：让「同时有效」在库里根本表示不出来。
+ */
+describe('🔴 政策生效窗口不许重叠', () => {
+  const FORWARD_MIGRATION = 'supabase/migrations/20260813000000_kernel_approval_identity_guards.sql'
+  const sql = (): string => readFileSync(join(ROOT, FORWARD_MIGRATION), 'utf8')
+
+  it('EXCLUDE 约束按 (客户, 动作, 时间窗) 三元组建', () => {
+    const src = sql()
+    const at = src.indexOf('EXCLUDE USING gist')
+    expect(at, '必须有 EXCLUDE 约束 —— 唯一索引管不了「区间相交」').toBeGreaterThan(-1)
+    const block = src.slice(at, at + 400)
+    expect(block).toMatch(/client_id\s+WITH\s+=/i)
+    expect(block).toMatch(/action_key\s+WITH\s+=/i)
+    // 半开区间 [from, to)：跟 RPC 里 `effective_from <= now() AND (effective_to IS NULL
+    // OR effective_to > now())` 的口径必须逐字一致，差一个端点就是差一条边界记录。
+    expect(block).toMatch(/tstzrange\(\s*effective_from\s*,\s*effective_to\s*,\s*'\[\)'\s*\)\s*WITH\s+&&/i)
+  })
+
+  it('btree_gist 必须显式装上（gist 原生不认 uuid / text 的 `=`）', () => {
+    expect(sql()).toMatch(/CREATE\s+EXTENSION\s+IF\s+NOT\s+EXISTS\s+btree_gist/i)
+  })
+
+  it('🔴 存量重叠让迁移当场失败，且**不自动改客户数据**', () => {
+    const src = sql()
+    const check = src.indexOf('tstzrange(a.effective_from')
+    const addConstraint = src.indexOf('EXCLUDE USING gist')
+    expect(check, '必须先自己查一遍存量重叠').toBeGreaterThan(-1)
+    expect(
+      check < addConstraint,
+      '存量检查必须排在 ADD CONSTRAINT **之前** —— 排在后面的话，' +
+        '人看到的是一条只带内部行号的约束冲突，不知道是哪个客户、哪两行',
+    ).toBe(true)
+
+    const block = src.slice(check - 1200, addConstraint)
+    expect(block, '查出来必须 RAISE 掉，不能只是记一笔').toMatch(/RAISE\s+EXCEPTION/i)
+
+    // 🔴 「顺手修一下」是这里最大的诱惑，也是最不能干的事：
+    //    自动截断某一行的 effective_to = 替客户改他们的自动化规则，
+    //    而哪一行才是他们真正想要的那条只有他们自己知道。
+    expect(block).not.toMatch(/UPDATE\s+public\.client_automation_policies/i)
+    expect(block).not.toMatch(/DELETE\s+FROM\s+public\.client_automation_policies/i)
+  })
+
+  it('🔴 判据本身有效：把 EXCLUDE 换成普通唯一索引，上面那条必须挂', () => {
+    // 唯一索引只能保证「同一个 (客户,动作,起点) 不重复」，两条起点不同、
+    // 区间相交的行它一条都拦不住 —— 这正是要防的那种。
+    const notEnough = 'CREATE UNIQUE INDEX ON client_automation_policies (client_id, action_key)'
+    expect(/EXCLUDE\s+USING\s+gist/i.test(notEnough)).toBe(false)
   })
 })

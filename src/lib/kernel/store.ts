@@ -473,16 +473,75 @@ export async function recordFencedDeny(
     decision: Record<string, unknown>
   },
 ): Promise<FencedDenyResult> {
-  const { data, error } = await sb.rpc('kernel_record_fenced_deny', {
+  const expectedDecisionId = args.expectedDecisionId ?? null
+
+  // 🔴 **不带指针 = 历史五参入口；带指针 = 只能走 v2。**
+  //    分成两个名字不同的函数，是为了让代码和数据库能各自独立上线：
+  //    给老函数加带默认值的第六参会产生有歧义的重载，而 DROP 掉老签名会让
+  //    「migration 先 apply」这一步当场打死所有还没重新部署的旧代码。
+  //
+  // 🔴 **函数名写字面量、参数逐条写全，都不许「整理」成常量或对象展开。**
+  //    sql-contract 那条判据是拿 AST 去比对的：它只认
+  //    `sb.rpc('字面量', { p_x: … })` 这个形状。抽成 `RPC_NAME` 常量，
+  //    或者把公共参数 `...spread` 进去，判据当场看不见这次调用 ——
+  //    而它的报错是「没找到调用」，不是「参数对不上」，很容易被当成噪音跳过。
+  //    这两处的重复是**故意留的**，代价是少写五行、换一道闸不空跑。
+  if (expectedDecisionId === null) {
+    return unwrapFencedDeny(
+      await sb.rpc('kernel_record_fenced_deny', {
+        p_run_id: args.runId,
+        p_expected_generation: args.expectedGeneration ?? null,
+        p_expected_status: args.expectedStatus ?? null,
+        p_decision: args.decision,
+        p_reason: args.reason,
+      }),
+    )
+  }
+
+  const result = await sb.rpc('kernel_record_fenced_deny_v2', {
     p_run_id: args.runId,
     p_expected_generation: args.expectedGeneration ?? null,
     p_expected_status: args.expectedStatus ?? null,
     p_decision: args.decision,
     p_reason: args.reason,
-    p_expected_decision_id: args.expectedDecisionId ?? null,
+    p_expected_decision_id: expectedDecisionId,
   })
-  if (error) fail('落拒绝决策', error)
-  const row = (data ?? [])[0] as unknown as { ok: boolean; reason: string; decision_id: string | null } | undefined
+
+  // 🔴 **v2 没部署 ⇒ 抛错，绝不回退到五参入口。**
+  //    回退看起来「更可用」，实际是把这次调用降级成没有指针闸的写入：
+  //    `pending_approval` 期间这条 run 已经被重新排成**另一份**待审批请求时，
+  //    一次迟到的「批不了」会把那份**新的、还没人看过的**请求盖成 denied，
+  //    而正在看它的人什么都不知道。宁可这次审批报错、run 原样停在等审批。
+  if (result.error && isMissingRpc(result.error)) {
+    throw new Error(
+      '[kernel/store] 落拒绝决策 失败：kernel_record_fenced_deny_v2 在这个数据库里还不存在。' +
+        '人工审批的拒绝路径必须带决策指针闸，这里 fail closed —— ' +
+        '绝不退回没有 fence 的 kernel_record_fenced_deny。请先 apply 对应 migration。',
+    )
+  }
+  return unwrapFencedDeny(result)
+}
+
+/**
+ * 「这个函数在库里不存在」——**只认函数缺失**，不认缺表、不认连接失败。
+ *
+ * 🔴 判得宽一点点都会变成安全问题：这个判定的唯一用途是决定「要不要把
+ *    fail closed 的话说得更清楚」。要是把网络抖动、权限不足也算进来，
+ *    真正的故障就会被描述成「没 apply migration」，运维照着去 apply 也修不好。
+ *    PG 报缺函数是 `42883`，PostgREST 的 schema cache 找不到是 `PGRST202`。
+ */
+function isMissingRpc(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false
+  if (error.code === '42883' || error.code === 'PGRST202') return true
+  return /function\s+[^\n]{1,200}?\s+does not exist|could not find the function\b/i.test(
+    error.message ?? '',
+  )
+}
+
+function unwrapFencedDeny(result: { data: unknown; error: { message?: string } | null }): FencedDenyResult {
+  if (result.error) fail('落拒绝决策', result.error)
+  const rows = (result.data ?? []) as { ok: boolean; reason: string; decision_id: string | null }[]
+  const row = rows[0]
   if (!row) fail('落拒绝决策', { message: 'RPC 没有返回结果行' })
   return { ok: Boolean(row.ok), reason: String(row.reason ?? 'unknown'), decisionId: row.decision_id ?? null }
 }

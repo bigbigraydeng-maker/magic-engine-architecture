@@ -246,18 +246,76 @@ const approveRun = async (d: never, r: string, u: string) => {
         #    自动修那一版正是只改了应用层和假件、没改 SQL，测试却全绿。
         name="K-WP01A store 传一个 SQL 里不存在的 RPC 参数（假件跟 SQL 分家）",
         file="src/lib/kernel/store.ts",
-        old="""    p_expected_decision_id: args.expectedDecisionId ?? null,""",
-        new="""    p_expected_decision_id_typo: args.expectedDecisionId ?? null,""",
+        old="""    p_expected_decision_id: expectedDecisionId,""",
+        new="""    p_expected_decision_id_typo: expectedDecisionId,""",
         test="src/lib/kernel-approval/__tests__/sql-contract.test.ts",
         expect_fail_contains="store 传的每个参数在 SQL 里都声明了",
     ),
     dict(
-        name="K-WP01A 前向迁移忘了 DROP 旧签名（五参调用变成有歧义的重载）",
+        # 🔴 部署兼容 blocker ①：DROP 掉五参签名 = migration 一 apply
+        #    就当场打死所有还没重新部署的旧代码。数据库和代码必须能各自独立上线。
+        name="K-WP01A 前向迁移 DROP 掉历史五参入口（一 apply 就打死未部署的旧代码）",
         file="supabase/migrations/20260813000000_kernel_approval_identity_guards.sql",
-        old="""DROP FUNCTION IF EXISTS public.kernel_record_fenced_deny(uuid, bigint, text, jsonb, text);""",
-        new="""-- mutated: 不再 DROP 旧签名""",
+        old="""CREATE OR REPLACE FUNCTION public.kernel_record_fenced_deny_v2(
+  p_run_id              uuid,""",
+        new="""DROP FUNCTION IF EXISTS public.kernel_record_fenced_deny(uuid, bigint, text, jsonb, text);
+CREATE OR REPLACE FUNCTION public.kernel_record_fenced_deny_v2(
+  p_run_id              uuid,""",
         test="src/lib/kernel-approval/__tests__/sql-contract.test.ts",
-        expect_fail_contains="必须把旧签名 DROP 掉",
+        expect_fail_contains="不许被 DROP",
+    ),
+    dict(
+        # 🔴 blocker ① 的核心安全后果：退回没有 fence 的五参调用，那次迟到的
+        #    「批不了」会把审批人正在看的**另一份**请求盖成 denied。
+        #    注意这一刀改完**照样会抛错** —— 只验「抛没抛」的测试抓不到它。
+        name="K-WP01A v2 缺失时退回无 fence 的五参入口（先写再抛错）",
+        file="src/lib/kernel/store.ts",
+        old="""  if (result.error && isMissingRpc(result.error)) {
+    throw new Error(""",
+        new="""  if (result.error && isMissingRpc(result.error)) {
+    await sb.rpc('kernel_record_fenced_deny', {
+      p_run_id: args.runId,
+      p_expected_generation: args.expectedGeneration ?? null,
+      p_expected_status: args.expectedStatus ?? null,
+      p_decision: args.decision,
+      p_reason: args.reason,
+    })
+    throw new Error(""",
+        test="src/lib/kernel-approval/__tests__/rollout-compat.test.ts",
+        expect_fail_contains="一次都没被调用过",
+    ),
+    dict(
+        # 分流没了 = 人工审批路径打到五参入口上，指针闸整条失效。
+        name="K-WP01A 拒绝路径不再分流（带指针也打历史五参入口）",
+        file="src/lib/kernel/store.ts",
+        old="  if (expectedDecisionId === null) {",
+        new="  if (true) {",
+        test="src/lib/kernel-approval/__tests__/rollout-compat.test.ts",
+        expect_fail_contains="人工审批路径（带指针）打的是 v2",
+    ),
+    dict(
+        # 🔴 blocker ②：没有这条约束，并发插进来的更晚政策会越过那把行锁当家，
+        #    审计表里留下一条照着不当家的规则签出来的放行。
+        name="K-WP01A 政策生效窗口可以重叠（并发插新政策越过行锁当家）",
+        file="supabase/migrations/20260813000000_kernel_approval_identity_guards.sql",
+        old="""  EXCLUDE USING gist (
+    client_id  WITH =,""",
+        new="""  EXCLUDE USING gist (
+    id  WITH =,""",
+        test="src/lib/kernel-approval/__tests__/sql-contract.test.ts",
+        expect_fail_contains="EXCLUDE 约束按 (客户, 动作, 时间窗) 三元组建",
+    ),
+    dict(
+        # 存量重叠自动修 = 替客户改他们的自动化规则。必须停下等人。
+        name="K-WP01A 存量重叠自动截断 effective_to（替客户改规则）",
+        file="supabase/migrations/20260813000000_kernel_approval_identity_guards.sql",
+        old="""  IF v_conflicts IS NOT NULL THEN
+    RAISE EXCEPTION""",
+        new="""  IF v_conflicts IS NOT NULL THEN
+    UPDATE public.client_automation_policies SET effective_to = now() WHERE false;
+    RAISE NOTICE""",
+        test="src/lib/kernel-approval/__tests__/sql-contract.test.ts",
+        expect_fail_contains="不自动改客户数据",
     ),
     dict(
         # 版本不判 = 契约升版后拿新版 requiredCapabilityTier 去批旧请求。

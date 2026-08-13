@@ -17,25 +17,37 @@
 --   判据跟 `kernel_resolve_pending_approval` 第 ③ 步逐字一致。
 --   传 NULL = 跳过（自动授权路径没有「审批人看到的那份」这个概念）。
 --
--- 🔴 为什么要先 DROP：加了带默认值的第六参之后，旧的五参版本**不会**被替换掉，
---    两个重载会同时存在，而五参形式的调用从此有歧义（PostgREST 会报
---    "Could not choose the best candidate function"）。必须先把旧签名删干净。
---    这个函数除 Kernel 之外没有任何调用方，删了不影响别的东西。
+-- 🔴 **为什么是新名字 `_v2`，而不是给老函数加一个带默认值的第六参。**（Build Control Room blocker ①）
 --
--- 函数体其余部分与历史迁移里的版本逐字相同。
+--    加默认参数那条路有两个都会咬人的问题：
+--      · 加了之后旧的五参版本**不会**被替换掉，两个重载并存，五参形式的调用
+--        从此有歧义（PostgREST 报 "Could not choose the best candidate function"）；
+--      · 为了消歧义去 DROP 五参版本，就把**部署顺序**变成了单向不可逆：
+--        migration 一 apply，还没重新部署的旧代码立刻全部报「函数不存在」。
+--        代码和数据库必须能各自独立上线，这是硬要求。
+--
+--    所以拆成两个**名字不同**的函数：
+--      · `kernel_record_fenced_deny`      —— 历史五参入口，签名一字不动，永远可调用；
+--      · `kernel_record_fenced_deny_v2`   —— 新的六参入口，带决策指针闸。
+--    没有重载 = 没有歧义。老代码继续打老入口，新代码在需要 fence 时打 v2。
+--
+-- 🔴 **调用方的分流规则（src/lib/kernel/store.ts 强制）**：
+--      expectedDecisionId == null（自动授权路径）→ 历史五参入口
+--      expectedDecisionId != null（人工审批路径）→ **只能**走 v2；
+--      v2 还没部署 → **fail closed 抛错**，绝不退回没有 fence 的五参调用。
+--      退回去的话，那次迟到的「批不了」会把审批人正在看的**另一份**请求盖成 denied。
+--
+-- 逻辑只写一份：v2 是实现，五参入口是传 NULL 的转发壳。两份逐字抄会漂移。
 -- 见 src/lib/kernel/store.ts 的 recordFencedDeny 与 authorize.ts 的 recordDeny。
 -- ============================================================================
 
--- 旧签名（五参）—— 先删，避免与新签名形成有歧义的重载
-DROP FUNCTION IF EXISTS public.kernel_record_fenced_deny(uuid, bigint, text, jsonb, text);
-
-CREATE OR REPLACE FUNCTION public.kernel_record_fenced_deny(
+CREATE OR REPLACE FUNCTION public.kernel_record_fenced_deny_v2(
   p_run_id              uuid,
   p_expected_generation bigint,
   p_expected_status     text,
   p_decision            jsonb,
   p_reason              text,
-  p_expected_decision_id uuid DEFAULT NULL
+  p_expected_decision_id uuid
 )
 RETURNS TABLE (ok boolean, reason text, decision_id uuid)
 LANGUAGE plpgsql
@@ -160,12 +172,48 @@ BEGIN
 END;
 $$;
 
--- 🔴 签名变了，收口语句必须跟着变到新签名上。
---    漏掉 REVOKE 的话，新函数对 PUBLIC / anon / authenticated 保持默认可执行 ——
---    而 anon key 是印在浏览器 bundle 里的。
-REVOKE EXECUTE ON FUNCTION public.kernel_record_fenced_deny(uuid, bigint, text, jsonb, text, uuid)
+-- 🔴 新函数必须自己收一次口。新建的函数对 PUBLIC 默认就是可执行的 ——
+--    漏掉 REVOKE 的话 anon / authenticated 都能调，而 anon key 是印在浏览器
+--    bundle 里的。（历史五参入口的授权是它自己那次 migration 给的，这里不动。）
+REVOKE EXECUTE ON FUNCTION public.kernel_record_fenced_deny_v2(uuid, bigint, text, jsonb, text, uuid)
   FROM PUBLIC, anon, authenticated;
-GRANT  EXECUTE ON FUNCTION public.kernel_record_fenced_deny(uuid, bigint, text, jsonb, text, uuid)
+GRANT  EXECUTE ON FUNCTION public.kernel_record_fenced_deny_v2(uuid, bigint, text, jsonb, text, uuid)
+  TO service_role;
+
+
+-- ============================================================================
+-- 历史五参入口 —— **签名一字不动**，转发到 v2 并把决策指针闸关掉。
+--
+-- 🔴 为什么是 CREATE OR REPLACE 而不是原样留着不管：
+--    v2 里那条跨客户闸（决策的 client_id 必须等于 run 的 client_id）是这次新加的，
+--    自动授权路径同样需要它 —— 不然同一类漏洞堵了一半。转发让两条路共用一份逻辑，
+--    也就不会出现「新入口严、老入口松」这种被绕过去的形状。
+--
+--    签名没变 ⇒ 没有重载歧义、ACL 原样保留、旧代码调用行为不变
+--    （v2 传 NULL = 跳过指针闸 = 与历史语义逐字一致）。
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION public.kernel_record_fenced_deny(
+  p_run_id              uuid,
+  p_expected_generation bigint,
+  p_expected_status     text,
+  p_decision            jsonb,
+  p_reason              text
+)
+RETURNS TABLE (ok boolean, reason text, decision_id uuid)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  RETURN QUERY SELECT * FROM public.kernel_record_fenced_deny_v2(
+    p_run_id, p_expected_generation, p_expected_status, p_decision, p_reason, NULL::uuid);
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.kernel_record_fenced_deny(uuid, bigint, text, jsonb, text)
+  FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.kernel_record_fenced_deny(uuid, bigint, text, jsonb, text)
   TO service_role;
 
 
@@ -308,6 +356,12 @@ BEGIN
   --       三把锁在这个函数里永远按这个顺序拿；`kernel_record_fenced_deny`
   --       只拿前两把（它不读政策）。顺序一致 = 不会互相成环 = 不会死锁。
   --
+  --    🔴 **这把锁单独用是不够的 —— 它必须跟本文件末尾那条 EXCLUDE 约束一起看。**
+  --       锁 SELECT 拦不住 INSERT：没有那条约束的话，并发事务可以插进一条
+  --       `effective_from` 更晚、此刻已经生效的新政策，直接越过这把行锁当家。
+  --       约束保证同一时刻最多一行有效 ⇒ `LIMIT 1` 选出来的就是唯一那行
+  --       ⇒ 这把 FOR UPDATE 才真的锁住了「当家的那个」。
+  --
   --    🔴 `ORDER BY … LIMIT 1 FOR UPDATE` 的语义要说清：并发事务把选中那行
   --       改成不再满足 WHERE 时，Postgres 会重新求值（EvalPlanQual）并返回 0 行 ——
   --       于是这里走 `no_active_policy`，那是**正确**的答案（此刻确实没有生效的规则）。
@@ -372,3 +426,82 @@ BEGIN
   RETURN QUERY SELECT true, 'approved', v_new_id;
 END;
 $$;
+
+
+-- ============================================================================
+-- 同一个 客户 + 动作 的生效时间窗不许重叠（Build Control Room blocker ②）
+--
+-- 🔴 **只锁住「当前活动的那一行」是不够的。**
+--    上面那句 `ORDER BY effective_from DESC LIMIT 1 FOR UPDATE` 锁的是**已经存在**
+--    的那一行。锁 SELECT 拦不住 INSERT —— 并发事务完全可以在同一个
+--    (client_id, action_key) 上插进一条 `effective_from` 更晚、但**此刻已经生效**
+--    的新政策。于是：
+--      · 审批这边拿着被锁住的旧行做完三连、签出 allow、run → authorized；
+--      · 而按 `ORDER BY effective_from DESC LIMIT 1` 的口径，现在当家的已经是新行了。
+--    审计表里那条放行是**照着一份已经不当家的规则**签出来的，而 Gateway 开跑前
+--    重读政策会读到新行 —— 于是这条 run 还得再走一次重新授权。
+--    这不是锁没锁对，是**数据模型允许两行同时有效**。
+--
+--    根治办法是让「同时有效」这件事在库里根本表示不出来：EXCLUDE 约束把
+--    (client_id, action_key) 相同、且时间窗相交的两行直接拒掉。有了它，
+--    `ORDER BY … LIMIT 1` 选出来的那一行就是**唯一**可能生效的行，
+--    上面那把 FOR UPDATE 才真的锁住了「当家的那个」。
+--
+--    切换政策的正确写法因此变成：先把旧行 `effective_to` 收到新行的
+--    `effective_from`，再插新行 —— 两步在同一个事务里。旧写法「先插新行、
+--    回头再关旧行」会被这条约束当场拒掉，**这是有意的**。
+-- ============================================================================
+
+-- btree_gist：EXCLUDE 里要拿 uuid / text 做 `=` 比较就得有它
+-- （gist 原生只认范围类型那种可重叠的操作符）。
+-- search_path 显式带上 extensions —— Supabase 把扩展装在那个 schema 里，
+-- 不带的话下面 ALTER TABLE 找不到 uuid / text 的 gist 操作符类。
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+SET search_path = public, extensions;
+
+-- 🔴 **存量重叠一律让 migration 当场失败，绝不自动改客户数据。**
+--
+--    直接加约束的话，PostgreSQL 报的是一条只带内部行号的约束冲突 ——
+--    看的人不知道是哪个客户、哪个动作、哪两行。更要命的是「顺手修一下」
+--    的冲动：自动去截断某一行的 effective_to，就是在**替客户改他们的自动化规则**，
+--    而哪一行才是他们真正想要的那条只有他们自己知道。
+--    所以这里先自己查一遍、把冲突行原样报出来，然后停下等人处理。
+DO $$
+DECLARE
+  v_conflicts text;
+BEGIN
+  SELECT string_agg(
+           format('client_id=%s action_key=%s 行 %s 与行 %s 的生效时间窗相交',
+                  a.client_id, a.action_key, a.id, b.id),
+           E'\n')
+    INTO v_conflicts
+    FROM public.client_automation_policies a
+    JOIN public.client_automation_policies b
+      ON a.client_id  = b.client_id
+     AND a.action_key = b.action_key
+     AND a.id < b.id
+     AND tstzrange(a.effective_from, a.effective_to, '[)')
+      && tstzrange(b.effective_from, b.effective_to, '[)');
+
+  IF v_conflicts IS NOT NULL THEN
+    RAISE EXCEPTION
+      E'存量数据里已经有「同一个客户+动作、同时生效的多条政策」，迁移中止。\n%\n'
+      '不自动修：截断哪一行的 effective_to 等于替客户改他们的自动化规则，'
+      '哪一条才是他们要的只有他们知道。请人工把每组冲突收敛成一条后重跑。',
+      v_conflicts;
+  END IF;
+END $$;
+
+ALTER TABLE public.client_automation_policies
+  ADD CONSTRAINT client_automation_policies_no_window_overlap
+  EXCLUDE USING gist (
+    client_id  WITH =,
+    action_key WITH =,
+    tstzrange(effective_from, effective_to, '[)') WITH &&
+  );
+
+COMMENT ON CONSTRAINT client_automation_policies_no_window_overlap
+  ON public.client_automation_policies IS
+  '同一个 客户+动作 任何时刻最多只有一条政策生效。'
+  'kernel_resolve_pending_approval 的 ORDER BY effective_from DESC LIMIT 1 FOR UPDATE '
+  '靠这条约束才成立 —— 没有它，并发插进来的更晚政策会越过那把行锁当家。';
