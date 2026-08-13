@@ -171,7 +171,7 @@ export function violationsFor(file: string, code: string): string[] {
  */
 describe('🔴 RPC 参数：应用层 / 假件 / SQL 三处不许分家', () => {
   const KERNEL_MIGRATION = 'supabase/migrations/20260808000003_me2_execution_kernel_v1.sql'
-  const FORWARD_MIGRATION = 'supabase/migrations/20260813000000_kernel_fenced_deny_decision_cas.sql'
+  const FORWARD_MIGRATION = 'supabase/migrations/20260813000000_kernel_approval_identity_guards.sql'
 
   const readSql = (): string =>
     readFileSync(join(ROOT, KERNEL_MIGRATION), 'utf8') +
@@ -258,6 +258,20 @@ describe('🔴 RPC 参数：应用层 / 假件 / SQL 三处不许分家', () => 
         String.raw`GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+public\.kernel_record_fenced_deny${sig}\s*\n?\s*TO\s+service_role`,
         'i',
       ).test(forward),
+    ).toBe(true)
+  })
+
+  it('🔴 身份核对必须在 approve / reject 的公共分支（reject 不许绕过去）', () => {
+    // 🔴 只在 approve 分支里判的话，一条 client_id 属于别人的错挂决策
+    //    可以被当前客户拒掉，而新签的 deny 会把对方的 policy_id / 版本抄过来。
+    const forward = readFileSync(join(ROOT, FORWARD_MIGRATION), 'utf8')
+    const idAt = forward.indexOf('pending_identity_mismatch')
+    const rejectAt = forward.indexOf("IF p_resolution = 'reject' THEN")
+    expect(idAt, '前向迁移里必须有身份核对').toBeGreaterThan(-1)
+    expect(rejectAt, '前向迁移里必须有 reject 分支').toBeGreaterThan(-1)
+    expect(
+      idAt < rejectAt,
+      '身份核对必须排在 reject 分支**之前** —— 排在后面等于 reject 整条路绕过它',
     ).toBe(true)
   })
 

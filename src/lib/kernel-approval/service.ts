@@ -514,6 +514,15 @@ export async function decideApproval(
 
   try {
     if (input.resolution === 'reject') {
+      // 🔴 拒绝的写路径**也**要过归属核对（错挂到别人的决策不许拒得掉，
+      //    否则新签的 deny 会把对方的 policy_id / 版本抄进这个客户的审计记录）——
+      //    但那道闸在**数据库里**：`kernel_resolve_pending_approval` 的
+      //    `pending_identity_mismatch` 已经从 approve 分支提到了 approve/reject
+      //    的公共分支（见 20260813000000 那条前向迁移）。
+      //
+      //    这里**刻意不再加一道应用层的同判据**：加了也是被数据库那道遮住的死闸 ——
+      //    拆掉它测试照样全绿（实测变异探针 MISSED），而它每次还要多读一次库。
+      //    真闸在锁里，这是对的地方。
       const outcome = await rejectRun(deps, run.id, actorEmail, input.reason ?? '', {
         expectedDecisionId: input.expectedDecisionId,
       })

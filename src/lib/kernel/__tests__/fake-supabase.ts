@@ -757,6 +757,17 @@ export function createFakeSupabase(
     if (!pending) return no('pending_not_found')
     if (pending.action_run_id !== run.id) return no('pending_run_mismatch')
     if (pending.verdict !== 'require_approval') return no('not_require_approval')
+    // 🔴 身份核对 —— 跟 SQL 一样放在 approve / reject 的**公共**分支。
+    //    只在 approve 里判的话，一条 client_id 属于别人的错挂决策可以被
+    //    当前客户拒掉，而新签的 deny 会把对方的 policy_id / 版本抄过来。
+    if (
+      pending.client_id !== run.client_id ||
+      pending.action_key !== run.action_key ||
+      pending.action_version !== run.action_version ||
+      pending.idempotency_key !== run.idempotency_key
+    ) {
+      return no('pending_identity_mismatch')
+    }
 
     const nowIso = (options.now?.() ?? new Date()).toISOString()
 
@@ -812,14 +823,6 @@ export function createFakeSupabase(
     if (policy.policy_version !== pending.policy_version) return no('stale_policy_version')
     if (policy.mode !== 'require_approval') return no('policy_mode_changed')
 
-    if (
-      pending.client_id !== run.client_id ||
-      pending.action_key !== run.action_key ||
-      pending.action_version !== run.action_version ||
-      pending.idempotency_key !== run.idempotency_key
-    ) {
-      return no('pending_identity_mismatch')
-    }
 
     const costCap = Number(policy.spend_cap_per_run_usd ?? 0)
     const ttl = Number(policy.decision_ttl_seconds ?? 900)

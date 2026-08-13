@@ -2066,7 +2066,7 @@ const approveRun = async (d: never, r: string, u: string) => {
     ),
     dict(
         name="K-WP01A 前向迁移忘了 DROP 旧签名（五参调用变成有歧义的重载）",
-        file="supabase/migrations/20260813000000_kernel_fenced_deny_decision_cas.sql",
+        file="supabase/migrations/20260813000000_kernel_approval_identity_guards.sql",
         old="""DROP FUNCTION IF EXISTS public.kernel_record_fenced_deny(uuid, bigint, text, jsonb, text);""",
         new="""-- mutated: 不再 DROP 旧签名""",
         test="src/lib/kernel-approval/__tests__/architecture.test.ts",
@@ -2169,6 +2169,43 @@ const approveRun = async (d: never, r: string, u: string) => {
         test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
         expect_fail_contains="已经翻过去的行不许倒回来",
     ),
+    # 🔴 **这里没有「应用层拒绝路径归属核对」那一刀。**
+    #    加过，实测 MISSED：数据库那道（pending_identity_mismatch，已提到
+    #    approve/reject 公共分支）会先把同一件事挡下来，两者外部表现一模一样。
+    #    被遮蔽的闸拆掉也不会红 —— 那不是覆盖，是错觉。真闸在锁里，由下面
+    #    「假件把身份核对退回 approve 分支」和「前向迁移里的身份核对退回 approve 分支」
+    #    两刀各自盯住。
+    dict(
+        # 数据库那道：身份核对退回只在 approve 分支（reject 之前就返回了）。
+        name="K-WP01A 假件把身份核对退回 approve 分支（reject 绕过去）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="""    if (
+      pending.client_id !== run.client_id ||
+      pending.action_key !== run.action_key ||
+      pending.action_version !== run.action_version ||
+      pending.idempotency_key !== run.idempotency_key
+    ) {
+      return no('pending_identity_mismatch')
+    }""",
+        new="    // mutated: 身份核对退回 approve 分支",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="数据库那道也拦",
+    ),
+    dict(
+        name="K-WP01A 前向迁移里的身份核对退回 approve 分支",
+        file="supabase/migrations/20260813000000_kernel_approval_identity_guards.sql",
+        old="""  IF v_pending.client_id <> v_run.client_id
+     OR v_pending.action_key <> v_run.action_key
+     OR v_pending.action_version <> v_run.action_version
+     OR v_pending.idempotency_key <> v_run.idempotency_key THEN
+    RETURN QUERY SELECT false, 'pending_identity_mismatch', NULL::uuid; RETURN;
+  END IF;
+
+  IF p_resolution = 'reject' THEN""",
+        new="""  IF p_resolution = 'reject' THEN""",
+        test="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        expect_fail_contains="身份核对必须在 approve / reject 的公共分支",
+    ),
     # ── K-WP01A · UUID 边界（Codex round 2 · P2） ─────────────────────────────
     dict(
         name="K-WP01A 详情/决定路由不再校验 runId（畸形路径变成 500）",
@@ -2215,7 +2252,7 @@ const approveRun = async (d: never, r: string, u: string) => {
     ),
     dict(
         name="K-WP01A 指针闸用 <> 而不是 IS DISTINCT FROM（遇 NULL 等于没判）",
-        file="supabase/migrations/20260813000000_kernel_fenced_deny_decision_cas.sql",
+        file="supabase/migrations/20260813000000_kernel_approval_identity_guards.sql",
         old="""     AND v_run.authorization_decision_id IS DISTINCT FROM p_expected_decision_id THEN""",
         new="""     AND v_run.authorization_decision_id <> p_expected_decision_id THEN""",
         test="src/lib/kernel-approval/__tests__/architecture.test.ts",

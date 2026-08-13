@@ -164,6 +164,80 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
     expect(skippedRunIds).toHaveLength(1)
   })
 
+  it('🔴 **拒绝的写路径**同样拦：错挂到另一个客户的决策拒不掉，也不抄它的政策版本', async () => {
+    // 🔴 早先只有列表和详情这两条**读**路径过归属核对 —— 于是一条
+    //    client_id 属于别人的错挂决策「读不出来但拒得掉」，
+    //    而新签的 deny 会把对方的 policy_id / 版本抄进这个客户的审计记录。
+    const { f, runId } = await pendingFixture()
+    f.tables.authorization_decisions.push({
+      id: '0d000000-0000-4000-8000-00000000c1a1',
+      action_run_id: runId, // 🔴 run 对得上，只有客户不对
+      client_id: CLIENT_B,
+      action_key: KEY,
+      action_version: 1,
+      idempotency_key: 'whatever',
+      verdict: 'require_approval',
+      reason: 'B 客户的机密理由',
+      policy_id: '901c0000-0000-4000-8000-0000000000cb',
+      policy_version: 7,
+      created_at: '2026-08-13T00:00:00.000Z',
+    })
+    f.tables.action_runs[0].authorization_decision_id = '0d000000-0000-4000-8000-00000000c1a1'
+    const before = f.tables.authorization_decisions.length
+
+    const err = await decideApproval(f.kernel, {
+      run: await loadRunForApproval(f.supabase, runId),
+      actorEmail: ACTOR,
+      input: {
+        resolution: 'reject',
+        expectedDecisionId: '0d000000-0000-4000-8000-00000000c1a1',
+        reason: '不做',
+      },
+    }).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ApprovalError)
+    expect((err as ApprovalError).code).toBe('not_pending')
+    expect(f.tables.authorization_decisions, '一条决策都不许新签').toHaveLength(before)
+    expect(f.tables.action_runs[0].status).toBe('pending_approval')
+    expect(
+      JSON.stringify(f.tables.authorization_decisions),
+      '另一个客户的政策版本不许被抄进任何新记录',
+    ).not.toContain('"policy_version":7,"decided_by":"human"')
+  })
+
+  it('🔴 数据库那道也拦（应用层那道拆了也守得住）', async () => {
+    // 直接打 RPC —— 绕过应用层的前置校验，验的是锁内那道 pending_identity_mismatch。
+    const { f, runId } = await pendingFixture()
+    f.tables.authorization_decisions.push({
+      id: '0d000000-0000-4000-8000-00000000c1a2',
+      action_run_id: runId,
+      client_id: CLIENT_B,
+      action_key: KEY,
+      action_version: 1,
+      idempotency_key: 'whatever',
+      verdict: 'require_approval',
+      reason: 'B 客户的机密理由',
+      policy_id: '901c0000-0000-4000-8000-0000000000cb',
+      policy_version: 7,
+      created_at: '2026-08-13T00:00:00.000Z',
+    })
+    f.tables.action_runs[0].authorization_decision_id = '0d000000-0000-4000-8000-00000000c1a2'
+
+    const { data } = await (f.supabase as unknown as {
+      rpc: (n: string, a: Record<string, unknown>) => Promise<{ data: Array<{ ok: boolean; reason: string }> }>
+    }).rpc('kernel_resolve_pending_approval', {
+      p_run_id: runId,
+      p_pending_decision_id: '0d000000-0000-4000-8000-00000000c1a2',
+      p_resolution: 'reject',
+      p_resolved_by: ACTOR,
+      p_reason: '不做',
+      p_policy_snapshot: {},
+      p_cost_estimate_usd: null,
+    })
+    expect(data[0].ok).toBe(false)
+    expect(data[0].reason).toBe('pending_identity_mismatch')
+  })
+
   it('✅ 正常挂着自己那条的时候照常返回（判据不是把所有人都拦掉）', async () => {
     const { f, runId, expectedDecisionId } = await pendingFixture()
     const detail = await buildApprovalDetail(f.supabase, await loadRunForApproval(f.supabase, runId))
