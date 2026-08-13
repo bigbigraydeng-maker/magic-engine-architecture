@@ -290,8 +290,18 @@ export function createFakeSupabase(
     let op: 'select' | 'insert' | 'update' | 'delete' = 'select'
     let payload: Row[] = []
     let patch: Row = {}
-    let orderBy: { column: string; ascending: boolean } | null = null
+    /**
+     * 排序键，**按调用顺序**（跟 PostgREST 一致：先按第一个排，平手再按第二个）。
+     *
+     * 🔴 早先这里是单个 `orderBy`，后一次 `.order()` 把前一次**覆盖**掉。
+     *    于是「先按时间、平手再按 id」这种写法在假件里悄悄退化成「只按 id」——
+     *    被测代码的主排序键根本没生效，而测试照样绿。
+     *    实测：一条专门验「等得最久的排最前」的变异探针因此完全抓不住。
+     */
+    const orderKeys: Array<{ column: string; ascending: boolean }> = []
     let limitN: number | null = null
+    /** `.range(from, to)` 的起点。0 = 没翻页。 */
+    let rangeFrom = 0
     let wantsReturn = false
     let singleMode: 'single' | 'maybeSingle' | null = null
 
@@ -347,11 +357,23 @@ export function createFakeSupabase(
       return chain()
     }
     builder.order = (column: string, opts?: { ascending?: boolean }) => {
-      orderBy = { column, ascending: opts?.ascending !== false }
+      orderKeys.push({ column, ascending: opts?.ascending !== false })
       return chain()
     }
     builder.limit = (n: number) => {
       limitN = n
+      return chain()
+    }
+    /**
+     * PostgREST 的 `.range(from, to)` —— **两端都含**（`Range: 0-9` 是 10 行）。
+     *
+     * 🔴 复刻它是因为「翻页」这件事必须能被测：只建模 `.limit()` 的话，
+     *    分页逻辑在假件里永远只看得到第一页，而「第二页拿到的是不是接着的」
+     *    这个问题在测试里根本问不出来。
+     */
+    builder.range = (from: number, to: number) => {
+      rangeFrom = from
+      limitN = to - from + 1
       return chain()
     }
     builder.single = () => {
@@ -532,15 +554,20 @@ export function createFakeSupabase(
         rows = removed
       } else {
         rows = tableOf(table).filter((r) => matches(r, filters))
-        if (orderBy) {
-          const { column, ascending } = orderBy
+        if (orderKeys.length > 0) {
           rows = [...rows].sort((a, b) => {
-            const av = readPath(a, column)
-            const bv = readPath(b, column)
-            const cmp = av === bv ? 0 : (av as never) < (bv as never) ? -1 : 1
-            return ascending ? cmp : -cmp
+            for (const { column, ascending } of orderKeys) {
+              const av = readPath(a, column)
+              const bv = readPath(b, column)
+              if (av === bv) continue // 这一键平手 → 交给下一键
+              const cmp = (av as never) < (bv as never) ? -1 : 1
+              return ascending ? cmp : -cmp
+            }
+            return 0
           })
         }
+        // 🔴 先跳过 offset 再截断 —— 顺序反了的话第二页拿到的还是第一页那几条
+        if (rangeFrom > 0) rows = rows.slice(rangeFrom)
         if (limitN !== null) rows = rows.slice(0, limitN)
       }
 

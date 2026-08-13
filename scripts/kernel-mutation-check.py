@@ -1975,6 +1975,65 @@ const approveRun = async (d: never, r: string, u: string) => {
         test="src/lib/kernel-approval/__tests__/decision-input.test.ts",
         expect_fail_contains="reject 不写原因",
     ),
+    # ── K-WP01A · Codex 第一轮四条 P2 的回归探针 ──────────────────────────────
+    dict(
+        name="K-WP01A P2-1 权限查不了被压成 403（系统故障伪装成没权限）",
+        file="src/lib/kernel-approval/http.ts",
+        old="""    if (access.status === 403 || access.status === 402) {""",
+        new="""    if (access.status !== 401) {""",
+        test="src/app/api/kernel/approvals/__tests__/route.test.ts",
+        expect_fail_contains="权限**查不了**（500 lookup_failed）不许被伪装成 403",
+    ),
+    dict(
+        name="K-WP01A P2-2 不再核对决策归属（跨客户元数据泄露）",
+        file="src/lib/kernel-approval/service.ts",
+        old="""  if (decision.action_run_id !== run.id) return false
+  if (decision.client_id !== run.client_id) return false""",
+        new="""  // mutated: 只看 verdict，不看它到底是谁的""",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="另一个客户",
+    ),
+    dict(
+        # 只拆客户那一半 —— 两条判据各自独立，只验一条的话另一条被删掉不会红。
+        name="K-WP01A P2-2 只核对 run 不核对客户",
+        file="src/lib/kernel-approval/service.ts",
+        old="""  if (decision.client_id !== run.client_id) return false""",
+        new="""  // mutated: 不再核对客户""",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="另一个客户",
+    ),
+    dict(
+        name="K-WP01A P2-3 RPC 缺失退回 500（读路径 503、写路径 500，契约自相矛盾）",
+        file="src/lib/kernel-approval/service.ts",
+        old="""  if (isKernelNotProvisioned(err) || isKernelNotProvisioned({ message: messageOf(err) })) {""",
+        new="""  if (false) {""",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="RPC 缺失",
+    ),
+    dict(
+        name="K-WP01A P2-4 截断重新变成静默的（hasMore 恒假）",
+        file="src/lib/kernel-approval/queries.ts",
+        old="""  const hasMore = rows.length > limit""",
+        new="""  const hasMore = false""",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="hasMore 是 true",
+    ),
+    dict(
+        name="K-WP01A P2-4 退回「最新优先」（最老那几条被永远挤出去）",
+        file="src/lib/kernel-approval/queries.ts",
+        old="""    .order('updated_at', { ascending: true })""",
+        new="""    .order('updated_at', { ascending: false })""",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="等得最久的排最前",
+    ),
+    dict(
+        name="K-WP01A P2-4 分页忽略 offset（永远只给第一页）",
+        file="src/lib/kernel-approval/queries.ts",
+        old="""    .range(offset, offset + limit)""",
+        new="""    .range(0, limit)""",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="offset 能真的翻到后面去",
+    ),
 ]
 
 

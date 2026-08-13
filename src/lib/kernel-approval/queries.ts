@@ -32,29 +32,67 @@ const RUN_COLUMNS =
 const DECISION_COLUMNS =
   'id, action_run_id, client_id, verdict, reason, policy_id, policy_version, created_at'
 
-/** 一次最多回多少条。审批是人一条条看的，不做无上限列表。 */
-export const PENDING_APPROVAL_PAGE_SIZE = 100
+/** 一页默认多少条。审批是人一条条看的，不做无上限列表。 */
+export const PENDING_APPROVAL_PAGE_SIZE = 50
+/** 一页最多多少条。再大就不是「给人看的一页」了。 */
+export const PENDING_APPROVAL_MAX_PAGE_SIZE = 200
+
+export interface PendingRunsPage {
+  runs: ActionRun[]
+  /** 🔴 后面还有没有。**截断绝不许是静默的。** */
+  hasMore: boolean
+  limit: number
+  offset: number
+}
 
 /**
- * 这个客户当前等人点头的动作。
+ * 这个客户当前等人点头的动作，**一页**。
  *
  * `clientId` 由调用方给，但**必须**是已经过 `requirePaidClientAccess` 的那一个 ——
  * 这里只负责把它当成数据库侧的硬过滤条件用。
+ *
+ * 🔴 **等得最久的排最前（`updated_at` 升序），不是最新的排最前。**（Codex P2）
+ *
+ *    这不是审美问题。待审批是一条**要被排空的队列**：新的一直在进来，
+ *    如果按「最新优先」截断，最老那几条会被永远挤在第 101 名开外 ——
+ *    产生速度只要高于处理速度，它们就再也不会出现在任何一页上，
+ *    而界面看起来完全正常。倒过来排之后，排最前的永远是等得最久的那一条。
+ *
+ * 🔴 **截断必须说出来。** 多取一条来判断「后面还有没有」，用 `hasMore` 如实报，
+ *    并且给 `offset` 让调用方能翻到后面去。一个静默截断的列表长得跟
+ *    「就这么多」一模一样 —— 这个仓库为这种事故写过好几条铁律。
  */
 export async function listPendingRunsForClient(
   sb: SupabaseClient,
   clientId: string,
-): Promise<ActionRun[]> {
+  page: { limit?: number; offset?: number } = {},
+): Promise<PendingRunsPage> {
+  const limit = clampPageSize(page.limit)
+  const offset = Math.max(0, Math.trunc(page.offset ?? 0))
+
+  // 多取一条 —— 拿回来的比 limit 多，就说明后面还有
   const { data, error } = await sb
     .from(TABLE_RUNS)
     .select(RUN_COLUMNS)
     .eq('client_id', clientId)
     .eq('status', 'pending_approval')
-    .order('updated_at', { ascending: false })
-    .limit(PENDING_APPROVAL_PAGE_SIZE)
+    .order('updated_at', { ascending: true })
+    // 🔴 `updated_at` 会撞（同一批被一起挂起的 run 时间戳一样），
+    //    没有第二个排序键的话翻页会跳条 / 重条。`id` 是稳定的总序。
+    .order('id', { ascending: true })
+    .range(offset, offset + limit)
 
   if (error) translateQueryError('读取等待审批的动作', error)
-  return (data ?? []) as unknown as ActionRun[]
+  const rows = (data ?? []) as unknown as ActionRun[]
+  const hasMore = rows.length > limit
+  return { runs: hasMore ? rows.slice(0, limit) : rows, hasMore, limit, offset }
+}
+
+/** 页大小夹到 [1, MAX]；给的不是个正整数就用默认值（**不报错，也不当成无上限**）。 */
+export function clampPageSize(requested: unknown): number {
+  const n = typeof requested === 'number' ? requested : Number(requested)
+  if (!Number.isFinite(n) || n < 1) return PENDING_APPROVAL_PAGE_SIZE
+  return Math.min(Math.trunc(n), PENDING_APPROVAL_MAX_PAGE_SIZE)
 }
 
 /**

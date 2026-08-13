@@ -23,7 +23,7 @@ import { ACTION_REGISTRY } from '@/lib/kernel/registry'
 import { approveRun, rejectRun } from '@/lib/kernel/authorize'
 import { KernelError } from '@/lib/kernel/errors'
 import { createKernelDeps, type KernelDeps } from '@/lib/kernel/deps'
-import { ApprovalError } from './errors'
+import { ApprovalError, isKernelNotProvisioned } from './errors'
 import {
   getDecisionForApproval,
   getDecisionsByIds,
@@ -121,6 +121,30 @@ function toSummary(run: ActionRun, expectedDecisionId: string): PendingApprovalS
 }
 
 /**
+ * 这份审批请求**真的**是这条 run 的那一份吗。
+ *
+ * 🔴 光看 `verdict === 'require_approval'` 不够。（Codex P2）
+ *    `action_runs.authorization_decision_id` 是个外键，数据库只保证这个 id
+ *    **存在**，不保证它指着的那条决策属于这条 run、属于这个客户。
+ *    库里一次错挂（并发写、恢复路径写歪、手工改数据）就会让详情接口
+ *    把**另一个客户**那条决策的 `reason` / `policyId` / 政策版本
+ *    原样返回给当前这个客户 —— 一次错挂变成一次跨客户元数据泄露。
+ *
+ *    Kernel 的 `reuseLiveAuthorization` 早就在做同一组核对
+ *    （`decision.client_id` + `decision.action_run_id`，对不上抛 `CROSS_CLIENT`）。
+ *    审批的**读**路径没理由比执行路径松。
+ */
+function decisionBelongsToRun(
+  decision: { id: string; action_run_id: string; client_id: string; verdict: string },
+  run: ActionRun,
+): boolean {
+  if (decision.verdict !== 'require_approval') return false
+  if (decision.action_run_id !== run.id) return false
+  if (decision.client_id !== run.client_id) return false
+  return true
+}
+
+/**
  * 这个客户当前等人点头的动作。
  *
  * 🔴 指针为空、或指着的那份审批请求读不回来的 run **不进列表**：
@@ -131,9 +155,16 @@ function toSummary(run: ActionRun, expectedDecisionId: string): PendingApprovalS
 export async function listPendingApprovals(
   sb: SupabaseClient,
   clientId: string,
-): Promise<{ items: PendingApprovalSummary[]; skippedRunIds: string[] }> {
-  const runs = await listPendingRunsForClient(sb, clientId)
-  if (runs.length === 0) return { items: [], skippedRunIds: [] }
+  page: { limit?: number; offset?: number } = {},
+): Promise<{
+  items: PendingApprovalSummary[]
+  skippedRunIds: string[]
+  hasMore: boolean
+  limit: number
+  offset: number
+}> {
+  const { runs, hasMore, limit, offset } = await listPendingRunsForClient(sb, clientId, page)
+  if (runs.length === 0) return { items: [], skippedRunIds: [], hasMore, limit, offset }
 
   const decisionIds = runs
     .map((run) => run.authorization_decision_id)
@@ -145,13 +176,14 @@ export async function listPendingApprovals(
   for (const run of runs) {
     const decisionId = run.authorization_decision_id
     const decision = decisionId ? decisions.get(decisionId) : undefined
-    if (!decisionId || !decision || decision.verdict !== 'require_approval') {
+    // 🔴 不只是「读得回来」—— 还必须真的是这条 run、这个客户的那一份
+    if (!decisionId || !decision || !decisionBelongsToRun(decision, run)) {
       skippedRunIds.push(run.id)
       continue
     }
     items.push(toSummary(run, decisionId))
   }
-  return { items, skippedRunIds }
+  return { items, skippedRunIds, hasMore, limit, offset }
 }
 
 /**
@@ -186,11 +218,13 @@ export async function buildApprovalDetail(
   }
   const decisionId = run.authorization_decision_id
   const decision = decisionId ? await getDecisionForApproval(sb, decisionId) : null
-  if (!decisionId || !decision || decision.verdict !== 'require_approval') {
-    // 🔴 不编一份审批请求出来。没有锚就没法安全地点头（Kernel 那边也会拒）。
+  if (!decisionId || !decision || !decisionBelongsToRun(decision, run)) {
+    // 🔴 不编一份审批请求出来，也**不把一份不属于这条 run 的决策原样吐出去**
+    //    —— 后者会把另一个客户的理由和政策版本泄露给当前这个客户。
+    //    没有锚就没法安全地点头（Kernel 那边也会拒）。
     throw new ApprovalError(
       'not_pending',
-      '这条动作标着「等人点头」，但当初那份审批请求找不到了 —— 库里状态不一致，先别点，请重新排一次',
+      '这条动作标着「等人点头」，但当初那份审批请求对不上 —— 库里状态不一致，先别点，请重新排一次',
       { runId: run.id, decisionId },
     )
   }
@@ -310,6 +344,9 @@ export function createApprovalKernelDeps(sb: SupabaseClient): KernelDeps {
  *    就是拿一句好听的话盖住一个还没被理解的失败。
  */
 function translateKernelError(err: unknown): never {
+  // 已经是审批层的失败了就别再翻一遍
+  if (err instanceof ApprovalError) throw err
+
   if (err instanceof KernelError) {
     if (err.code === 'STALE_DECISION') {
       throw new ApprovalError('stale_decision', err.humanReason, err.detail)
@@ -320,7 +357,32 @@ function translateKernelError(err: unknown): never {
       throw new ApprovalError('not_pending', err.humanReason, err.detail)
     }
   }
+
+  // 🔴 **表在、RPC 不在**这一种要单独接住。（Codex P2）
+  //
+  //    分阶段 apply、或者函数刚建好但 PostgREST 的 schema cache 还没刷新时，
+  //    前面的读取全都成功（表是真的在），只有提交决定这一下会炸 ——
+  //    而 Kernel 的 store 把它包成一个**普通 Error**（`[kernel/store] … 失败：…`），
+  //    错误码在那一层就丢了，只剩下嵌在文案里的那句 `function … does not exist`。
+  //    不认它的话，同一件事（内核没配齐）在读路径答 503、在写路径答 500，
+  //    接口自己的失败契约就先破了。
+  if (isKernelNotProvisioned(err) || isKernelNotProvisioned({ message: messageOf(err) })) {
+    throw new ApprovalError(
+      'kernel_not_provisioned',
+      '执行内核在这个环境里还没配齐（处理审批用的那个数据库函数还不存在）——' +
+        '这次操作没有生效，也没有改动任何东西。表已经建好但函数还没建，或者刚建完还没生效',
+      { dbMessage: messageOf(err) },
+    )
+  }
+
   throw err
+}
+
+/** 从任意异常里取一段可读文案。取不到给空串（**不编**）。 */
+function messageOf(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (typeof err === 'string') return err
+  return ''
 }
 
 /**

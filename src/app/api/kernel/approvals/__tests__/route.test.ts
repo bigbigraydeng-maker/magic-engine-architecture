@@ -85,7 +85,13 @@ const decisionReq = (body: unknown, raw?: string, qs = '') =>
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.requirePaidClientAccess.mockResolvedValue(access('paid_client'))
-  mocks.listPendingApprovals.mockResolvedValue({ items: [], skippedRunIds: [] })
+  mocks.listPendingApprovals.mockResolvedValue({
+    items: [],
+    skippedRunIds: [],
+    hasMore: false,
+    limit: 50,
+    offset: 0,
+  })
   mocks.loadRunForApproval.mockResolvedValue(pendingRun())
   mocks.buildApprovalDetail.mockResolvedValue({ runId: RUN_ID, expectedDecisionId: DECISION_ID })
   mocks.decideApproval.mockResolvedValue({
@@ -146,9 +152,79 @@ describe('GET /api/kernel/approvals', () => {
     expect(await res.json()).toMatchObject({ code: 'forbidden_client', detail: { reason: 'paid_only' } })
   })
 
+  it('🔴 Codex P2-1 · 权限**查不了**（500 lookup_failed）不许被伪装成 403', async () => {
+    // client_portal_users 查询超时 / 库不可用 → requirePaidClientAccess 给 500。
+    // 压成 403 的话：界面把系统故障当成永久权限问题引导人去找管理员，
+    // 而服务端监控一条 5xx 都收不到 —— 故障就此隐形。
+    mocks.requirePaidClientAccess.mockResolvedValue({
+      ok: false,
+      status: 500,
+      error: 'Authorization check failed',
+      reason: 'lookup_failed',
+    })
+    const res = await listGET(listReq(`?clientId=${CLIENT_A}`))
+    expect(res.status, '「查不了权限」必须是 500，不是 403').toBe(500)
+    expect(await res.json()).toMatchObject({ code: 'internal_error' })
+    expect(mocks.listPendingApprovals).not.toHaveBeenCalled()
+  })
+
+  it('🔴 决定路由同样：500 lookup_failed → 500，且不落任何决定', async () => {
+    mocks.requirePaidClientAccess.mockResolvedValue({
+      ok: false,
+      status: 500,
+      error: 'Authorization check failed',
+      reason: 'lookup_failed',
+    })
+    const res = await decisionPOST(
+      decisionReq({ resolution: 'approve', expectedDecisionId: DECISION_ID }),
+      runCtx(),
+    )
+    expect(res.status).toBe(500)
+    expect(mocks.decideApproval).not.toHaveBeenCalled()
+  })
+
   it('🔴 查询过滤钉死在鉴权过的那个 clientId 上', async () => {
     await listGET(listReq(`?clientId=${CLIENT_A}`))
-    expect(mocks.listPendingApprovals).toHaveBeenCalledWith(expect.anything(), CLIENT_A)
+    expect(mocks.listPendingApprovals).toHaveBeenCalledWith(
+      expect.anything(),
+      CLIENT_A,
+      expect.anything(),
+    )
+  })
+
+  it('limit / offset 原样透给审批层；读不成数字就当没给（不是当成 0）', async () => {
+    await listGET(listReq(`?clientId=${CLIENT_A}&limit=25&offset=50`))
+    expect(mocks.listPendingApprovals).toHaveBeenCalledWith(expect.anything(), CLIENT_A, {
+      limit: 25,
+      offset: 50,
+    })
+
+    vi.clearAllMocks()
+    mocks.requirePaidClientAccess.mockResolvedValue(access('paid_client'))
+    mocks.listPendingApprovals.mockResolvedValue({
+      items: [],
+      skippedRunIds: [],
+      hasMore: false,
+      limit: 50,
+      offset: 0,
+    })
+    await listGET(listReq(`?clientId=${CLIENT_A}&limit=abc&offset=`))
+    expect(mocks.listPendingApprovals).toHaveBeenCalledWith(expect.anything(), CLIENT_A, {
+      limit: undefined,
+      offset: undefined,
+    })
+  })
+
+  it('🔴 hasMore 一路透到返回体 —— 截断不许静默', async () => {
+    mocks.listPendingApprovals.mockResolvedValue({
+      items: [],
+      skippedRunIds: [],
+      hasMore: true,
+      limit: 50,
+      offset: 0,
+    })
+    const body = await (await listGET(listReq(`?clientId=${CLIENT_A}`))).json()
+    expect(body.hasMore, '后面还有却不说，界面会当成「就这么多」').toBe(true)
   })
 
   it('🔴 内核表不存在 → 503 kernel_not_provisioned，不是 200 []', async () => {
@@ -165,7 +241,14 @@ describe('GET /api/kernel/approvals', () => {
   it('内核已启用、这个客户没有等审批的 → 200 []', async () => {
     const res = await listGET(listReq(`?clientId=${CLIENT_A}`))
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ clientId: CLIENT_A, items: [], skippedRunIds: [] })
+    expect(await res.json()).toEqual({
+      clientId: CLIENT_A,
+      items: [],
+      skippedRunIds: [],
+      hasMore: false,
+      limit: 50,
+      offset: 0,
+    })
   })
 
   it('🔴 认不出来的失败 → 500，绝不降级成 503 或空列表', async () => {

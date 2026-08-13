@@ -36,7 +36,15 @@ export function approvalErrorResponse(err: unknown): NextResponse {
  * 对某个客户做**真实**的付费客户权限校验，并把**会话里的**操作者身份取出来。
  *
  * `requirePaidClientAccess` 负责：没登录 → 401；不属于这个客户 → 403；
- * self_serve / portal_only → 403。这里补最后一条：
+ * self_serve / portal_only → 403。这里补两条：
+ *
+ * 🔴 **「没权限」和「查不了权限」必须分开。**（Codex P2）
+ *    `requirePaidClientAccess` 在 `client_portal_users` 查询失败时返回
+ *    `500 / lookup_failed` —— 那是**系统故障**，不是「这个人没权限」。
+ *    早先这里把所有非 401 都压成 403，于是一次数据库抖动会被答成
+ *    「你无权访问」：界面会当成永久的权限问题引导人去找管理员，
+ *    而服务端监控收不到任何 5xx，故障就此隐形。
+ *    认不出的状态一律按内部故障抛（→ 500），**不许猜成某个权限结论**。
  *
  * 🔴 **会话里没有邮箱的一律不许操作。** 人签的决策必须记得下是谁签的，
  *    记不下就不该发生 —— 一条 `decided_by_user` 为空的人工授权，
@@ -45,10 +53,16 @@ export function approvalErrorResponse(err: unknown): NextResponse {
 export async function requireApprovalActor(clientId: string): Promise<ApprovalActor> {
   const access = await requirePaidClientAccess(clientId)
   if (!access.ok) {
-    throw new ApprovalError(
-      access.status === 401 ? 'unauthorized' : 'forbidden_client',
-      access.error,
-      { reason: access.reason ?? null },
+    if (access.status === 401) {
+      throw new ApprovalError('unauthorized', access.error, { reason: access.reason ?? null })
+    }
+    if (access.status === 403 || access.status === 402) {
+      throw new ApprovalError('forbidden_client', access.error, { reason: access.reason ?? null })
+    }
+    // 500 lookup_failed 以及将来任何新增的状态：**查不了 ≠ 没权限**。
+    // 原样抛成内部故障，由 approvalErrorResponse 答 500 并记日志。
+    throw new Error(
+      `[kernel-approval] 权限校验没能完成（status=${access.status}, reason=${access.reason ?? '未说明'}）：${access.error}`,
     )
   }
 

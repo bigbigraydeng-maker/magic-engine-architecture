@@ -89,9 +89,10 @@ describe('🔴 列表：三条「空」的来路各走各的', () => {
 
   it('② 表在、这个客户没有等审批的 → 200 []', async () => {
     const f = makeFixture({ registry: ACTION_REGISTRY, capabilities: () => ({}) })
-    await expect(listPendingApprovals(f.supabase, CLIENT_A)).resolves.toEqual({
+    await expect(listPendingApprovals(f.supabase, CLIENT_A)).resolves.toMatchObject({
       items: [],
       skippedRunIds: [],
+      hasMore: false,
     })
   })
 

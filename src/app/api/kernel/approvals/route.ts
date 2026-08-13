@@ -19,6 +19,18 @@ import { ApprovalError } from '@/lib/kernel-approval/errors'
 import { approvalErrorResponse, requireApprovalActor } from '@/lib/kernel-approval/http'
 import { listPendingApprovals } from '@/lib/kernel-approval/service'
 
+/**
+ * 查询串里的数字参数。
+ *
+ * 🔴 读不成数字返回 `undefined`（= 用默认值），**不返回 0**。
+ *    把「没给」和「给了 0」当成一回事，`?offset=abc` 就会静静地被当成第一页。
+ */
+function numericParam(raw: string | null): number | undefined {
+  if (raw === null || raw.trim() === '') return undefined
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : undefined
+}
+
 export async function GET(req: NextRequest): Promise<NextResponse> {
   try {
     const clientId = (req.nextUrl.searchParams.get('clientId') ?? '').trim()
@@ -30,7 +42,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     await requireApprovalActor(clientId)
 
     // ② 再查，且客户过滤钉死在数据库侧
-    const { items, skippedRunIds } = await listPendingApprovals(supabaseAdmin, clientId)
+    const { items, skippedRunIds, hasMore, limit, offset } = await listPendingApprovals(
+      supabaseAdmin,
+      clientId,
+      {
+        limit: numericParam(req.nextUrl.searchParams.get('limit')),
+        offset: numericParam(req.nextUrl.searchParams.get('offset')),
+      },
+    )
 
     return NextResponse.json({
       clientId,
@@ -38,6 +57,11 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       // 🔴 数据不一致的那几条如实报出来，不悄悄少给。
       //    少给一条等审批的动作 = 它永远不会被处理，而界面上看不出少了东西。
       skippedRunIds,
+      // 🔴 截断绝不许是静默的。`hasMore` 为真时，用 offset 往后翻。
+      //    等得最久的排在最前面，所以第一页永远是最该先看的那几条。
+      hasMore,
+      limit,
+      offset,
     })
   } catch (err) {
     return approvalErrorResponse(err)
