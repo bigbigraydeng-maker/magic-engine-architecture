@@ -633,6 +633,20 @@ function assertDecisionStillCurrent(
 }
 
 /**
+ * RPC 在锁内发现「政策变了」的那几个原因。
+ *
+ * 🔴 它们的共同点是：**只读返回，一个字都没写**，run 仍然停在 `pending_approval`。
+ *    判据来自迁移里 `kernel_resolve_pending_approval` 的政策三连
+ *    （见 20260813000000 那条前向迁移）—— 两边不许分家。
+ */
+const POLICY_RACE_REASONS: ReadonlySet<string> = new Set([
+  'no_active_policy',
+  'policy_identity_changed',
+  'stale_policy_version',
+  'policy_mode_changed',
+])
+
+/**
  * 原子 RPC 失败 → Kernel 错误。
  *
  * 🔴 `decision_not_current` 必须保留成 `STALE_DECISION`，不能跟别的失败
@@ -655,6 +669,23 @@ function resolveFailureToError(
       'STALE_DECISION',
       `${actor} 看到的那份审批请求已经不是最新的了（这条动作期间被重新排过）——` +
         `这次${verb}没有生效，也没有改动任何东西。刷新一下再决定`,
+      { detail: { runId, reason } },
+    )
+  }
+
+  // 🔴 政策竞态同样**不是终态**。（Codex P2）
+  //    应用层的 preflight 跟 RPC 拿到行锁之间，客户的规则可能被删 / 换 / 升版 /
+  //    改模式。RPC 这几条分支都是**只读返回、一个字不写**，run 仍然停在
+  //    `pending_approval` —— 那件事还等着人点。
+  //    压成 INVALID_STATE（→ 接口的 `not_pending`）等于告诉界面「已经有结论了」，
+  //    界面会把一条还活着的待办从列表里抹掉。
+  //    刷新之后再来一次，preflight 会如实落一条说清「规则变成什么了」的拒绝 ——
+  //    那才是这件事该有的结局，而不是在这里被静静吞掉。
+  if (POLICY_RACE_REASONS.has(reason)) {
+    throw new KernelError(
+      'STALE_DECISION',
+      `这个客户的规则在${actor}点下去的这一瞬间被改过了（${reason}）——` +
+        `这次${verb}没有生效，也没有改动任何东西。刷新一下再看`,
       { detail: { runId, reason } },
     )
   }

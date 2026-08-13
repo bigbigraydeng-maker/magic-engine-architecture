@@ -2216,6 +2216,24 @@ const approveRun = async (d: never, r: string, u: string) => {
         test="src/lib/kernel-approval/__tests__/decision.test.ts",
         expect_fail_contains="比完之后、RPC 之前 run 换了另一份审批请求",
     ),
+    dict(
+        # 🔴 政策竞态被压成 INVALID_STATE → 接口答 not_pending「已经有结论了」，
+        #    而 run 其实还停在 pending_approval 等着人点，界面会把它抹掉。
+        name="K-WP01A 政策竞态被说成「已经有结论了」（还活着的待办被抹掉）",
+        file="src/lib/kernel/authorize.ts",
+        old="  if (POLICY_RACE_REASONS.has(reason)) {",
+        new="  if (false) {",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="不是「已经有结论了」",
+    ),
+    dict(
+        name="K-WP01A 政策竞态清单漏一条（那一条又变回「已有结论」）",
+        file="src/lib/kernel/authorize.ts",
+        old="  'policy_mode_changed',\n])",
+        new="])",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="不是「已经有结论了」",
+    ),
     # ── K-WP01A · UUID 边界（Codex round 2 · P2） ─────────────────────────────
     dict(
         name="K-WP01A 详情/决定路由不再校验 runId（畸形路径变成 500）",

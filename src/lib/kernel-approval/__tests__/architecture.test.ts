@@ -261,6 +261,30 @@ describe('🔴 RPC 参数：应用层 / 假件 / SQL 三处不许分家', () => 
     ).toBe(true)
   })
 
+  it('🔴 「政策竞态」清单跟 SQL 不许分家', () => {
+    // authorize.ts 里那份 POLICY_RACE_REASONS 说的是「RPC 这几条分支只读返回」。
+    // SQL 里真有这几条，判据才站得住 —— 两处各写一份必然分家。
+    const sql = readSql()
+    for (const reason of [
+      'no_active_policy',
+      'policy_identity_changed',
+      'stale_policy_version',
+      'policy_mode_changed',
+    ]) {
+      expect(sql.includes(reason), `SQL 里必须真有 ${reason} 这条分支`).toBe(true)
+    }
+    const src = readFileSync(join(ROOT, 'src/lib/kernel/authorize.ts'), 'utf8')
+    const block = src.slice(src.indexOf('POLICY_RACE_REASONS'))
+    for (const reason of [
+      'no_active_policy',
+      'policy_identity_changed',
+      'stale_policy_version',
+      'policy_mode_changed',
+    ]) {
+      expect(block.includes(reason), `authorize.ts 的清单里少了 ${reason}`).toBe(true)
+    }
+  })
+
   it('🔴 身份核对必须在 approve / reject 的公共分支（reject 不许绕过去）', () => {
     // 🔴 只在 approve 分支里判的话，一条 client_id 属于别人的错挂决策
     //    可以被当前客户拒掉，而新签的 deny 会把对方的 policy_id / 版本抄过来。

@@ -269,6 +269,65 @@ describe('🔴 Codex round 2 · 版本对不上时不许拿新版定义顶替', 
   })
 })
 
+describe('🔴 Codex round 6 · 锁内政策竞态不是终态', () => {
+  it.each([
+    'no_active_policy',
+    'policy_identity_changed',
+    'stale_policy_version',
+    'policy_mode_changed',
+  ])('RPC 报「%s」→ stale_decision（不是「已经有结论了」），且 run 还停在等审批', async (reason) => {
+    // 🔴 这几条 RPC 分支都是**只读返回、一个字不写** —— run 仍然停在
+    //    pending_approval，那件事还等着人点。报成 not_pending 的话，
+    //    界面会把一条还活着的待办从列表里抹掉。
+    const { f, runId, expectedDecisionId } = await pendingFixture()
+    const kernel = {
+      ...f.kernel,
+      supabase: {
+        ...f.supabase,
+        rpc: async (name: string) =>
+          name === 'kernel_resolve_pending_approval'
+            ? { data: [{ ok: false, reason, decision_id: null }], error: null }
+            : { data: [], error: null },
+      },
+    } as unknown as typeof f.kernel
+
+    const err = await decideApproval(kernel, {
+      run: await loadRunForApproval(f.supabase, runId),
+      actorEmail: ACTOR,
+      input: { resolution: 'approve', expectedDecisionId },
+    }).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ApprovalError)
+    expect((err as ApprovalError).code, `${reason} 不该被说成「已经有结论了」`).toBe(
+      'stale_decision',
+    )
+    expect(f.tables.action_runs[0].status, 'run 必须还停在等审批').toBe('pending_approval')
+    expect(
+      f.tables.authorization_decisions.filter((d) => d.decided_by === 'human'),
+    ).toHaveLength(0)
+  })
+
+  it('🔴 真正的终态仍然是 not_pending（判据不是把所有失败都说成「刷新一下」）', async () => {
+    const { f, runId, expectedDecisionId } = await pendingFixture()
+    const kernel = {
+      ...f.kernel,
+      supabase: {
+        ...f.supabase,
+        rpc: async () => ({
+          data: [{ ok: false, reason: 'not_pending:succeeded', decision_id: null }],
+          error: null,
+        }),
+      },
+    } as unknown as typeof f.kernel
+    const err = await decideApproval(kernel, {
+      run: await loadRunForApproval(f.supabase, runId),
+      actorEmail: ACTOR,
+      input: { resolution: 'approve', expectedDecisionId },
+    }).catch((e: unknown) => e)
+    expect((err as ApprovalError).code).toBe('not_pending')
+  })
+})
+
 // ── P2-3 ─────────────────────────────────────────────────────────────────────
 
 describe('🔴 Codex P2-3 · 表在但 RPC 不在 → 仍然是 503，不是 500', () => {
