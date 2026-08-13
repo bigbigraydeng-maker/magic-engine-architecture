@@ -18,6 +18,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ActionRun, AuthorizationDecision } from '@/lib/kernel/types'
 import { TABLE_RUNS, TABLE_DECISIONS } from '@/lib/kernel/store'
+import { isUuid } from '@/lib/validation-utils'
 import { translateQueryError } from './errors'
 
 /**
@@ -42,50 +43,81 @@ export interface PendingRunsPage {
   /** 🔴 后面还有没有。**截断绝不许是静默的。** */
   hasMore: boolean
   limit: number
-  offset: number
+  /**
+   * 下一页的游标。`hasMore` 为假时是 null。
+   * 不透明字符串 —— 调用方原样回传，不许自己拼。
+   */
+  nextCursor: string | null
 }
 
 /**
- * 这个客户当前等人点头的动作，**一页**。
+ * 游标 = 上一页最后一条的 `(updated_at, id)`。
  *
- * `clientId` 由调用方给，但**必须**是已经过 `requirePaidClientAccess` 的那一个 ——
- * 这里只负责把它当成数据库侧的硬过滤条件用。
+ * 🔴 **为什么不能用 offset。**（Codex P2）
+ *    待审批是一条**活的**队列：翻页期间，第一页那几条可能正好被处理掉，
+ *    于是它们退出 `pending_approval` 过滤集、结果集整体左移。
+ *    这时 `offset=limit` 会从**缩短之后**的集合里再跳过 limit 行 ——
+ *    紧接在第一页后面的那几条**一条都不会被返回**，而调用方毫不知情。
+ *    稳定的排序键只能保证「同一份数据里顺序不变」，救不了这种位移。
  *
- * 🔴 **等得最久的排最前（`updated_at` 升序），不是最新的排最前。**（Codex P2）
- *
- *    这不是审美问题。待审批是一条**要被排空的队列**：新的一直在进来，
- *    如果按「最新优先」截断，最老那几条会被永远挤在第 101 名开外 ——
- *    产生速度只要高于处理速度，它们就再也不会出现在任何一页上，
- *    而界面看起来完全正常。倒过来排之后，排最前的永远是等得最久的那一条。
- *
- * 🔴 **截断必须说出来。** 多取一条来判断「后面还有没有」，用 `hasMore` 如实报，
- *    并且给 `offset` 让调用方能翻到后面去。一个静默截断的列表长得跟
- *    「就这么多」一模一样 —— 这个仓库为这种事故写过好几条铁律。
+ *    keyset 游标是按**值**定位的：「给我排在 (t, id) 之后的那些」。
+ *    前面的行被删掉多少都不影响这个判据 —— 位移根本不存在。
  */
+function encodeCursor(run: ActionRun): string {
+  return `${run.updated_at}|${run.id}`
+}
+
+function decodeCursor(raw: unknown): { updatedAt: string; id: string } | null {
+  if (typeof raw !== 'string') return null
+  const sep = raw.lastIndexOf('|')
+  if (sep <= 0 || sep === raw.length - 1) return null
+  const updatedAt = raw.slice(0, sep)
+  const id = raw.slice(sep + 1)
+  // 🔴 读不成就当**没给**，不是当成第一页的某个位置 —— 编一个位置出来会跳条。
+  if (!isUuid(id)) return null
+  if (Number.isNaN(Date.parse(updatedAt))) return null
+  return { updatedAt, id }
+}
+
 export async function listPendingRunsForClient(
   sb: SupabaseClient,
   clientId: string,
-  page: { limit?: number; offset?: number } = {},
+  page: { limit?: number; cursor?: unknown } = {},
 ): Promise<PendingRunsPage> {
   const limit = clampPageSize(page.limit)
-  const offset = Math.max(0, Math.trunc(page.offset ?? 0))
+  const cursor = decodeCursor(page.cursor)
 
-  // 多取一条 —— 拿回来的比 limit 多，就说明后面还有
-  const { data, error } = await sb
+  let query = sb
     .from(TABLE_RUNS)
     .select(RUN_COLUMNS)
     .eq('client_id', clientId)
     .eq('status', 'pending_approval')
+
+  if (cursor) {
+    // 「严格排在 (updatedAt, id) 之后」—— 跟下面的排序键一一对应。
+    // 🔴 第二段的 `and(...)` 不能省：`updated_at` 会撞（同一批一起挂起的 run
+    //    时间戳一样），只比时间的话，撞在游标那一刻的同伴会被整批跳过。
+    query = query.or(
+      `updated_at.gt.${cursor.updatedAt},and(updated_at.eq.${cursor.updatedAt},id.gt.${cursor.id})`,
+    )
+  }
+
+  // 多取一条 —— 拿回来的比 limit 多，就说明后面还有
+  const { data, error } = await query
     .order('updated_at', { ascending: true })
-    // 🔴 `updated_at` 会撞（同一批被一起挂起的 run 时间戳一样），
-    //    没有第二个排序键的话翻页会跳条 / 重条。`id` 是稳定的总序。
     .order('id', { ascending: true })
-    .range(offset, offset + limit)
+    .limit(limit + 1)
 
   if (error) translateQueryError('读取等待审批的动作', error)
   const rows = (data ?? []) as unknown as ActionRun[]
   const hasMore = rows.length > limit
-  return { runs: hasMore ? rows.slice(0, limit) : rows, hasMore, limit, offset }
+  const runs = hasMore ? rows.slice(0, limit) : rows
+  return {
+    runs,
+    hasMore,
+    limit,
+    nextCursor: hasMore && runs.length > 0 ? encodeCursor(runs[runs.length - 1]) : null,
+  }
 }
 
 /** 页大小夹到 [1, MAX]；给的不是个正整数就用默认值（**不报错，也不当成无上限**）。 */

@@ -123,11 +123,15 @@ describe('🔴 parseDecisionInput · 其余不合法输入', () => {
     }
   })
 
-  it('大小写混排的合法 UUID 照收（Postgres 的 uuid 不区分大小写）', () => {
+  it('🔴 大小写混排的合法 UUID 照收，但**归一成小写**再往下传', () => {
+    // 🔴 这条测的是一个真实的功能性坑：`expectedDecisionId` 后面要跟
+    //    从库里读出来的 `authorization_decision_id` 做**字符串**比较，
+    //    而 Postgres 吐的永远是小写。不归一的话，提交大写形式的合法 id
+    //    会被判成 STALE_DECISION —— 批准和拒绝都永远提交不上去。
     const upper = '0D000000-0000-4000-8000-0000000000AB'
     expect(parseDecisionInput({ resolution: 'approve', expectedDecisionId: upper })).toEqual({
       resolution: 'approve',
-      expectedDecisionId: upper,
+      expectedDecisionId: '0d000000-0000-4000-8000-0000000000ab',
     })
   })
 

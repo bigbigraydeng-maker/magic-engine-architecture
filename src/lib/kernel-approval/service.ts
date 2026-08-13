@@ -243,16 +243,16 @@ function decisionBelongsToRun(
 export async function listPendingApprovals(
   sb: SupabaseClient,
   clientId: string,
-  page: { limit?: number; offset?: number } = {},
+  page: { limit?: number; cursor?: unknown } = {},
 ): Promise<{
   items: PendingApprovalSummary[]
   skippedRunIds: string[]
   hasMore: boolean
   limit: number
-  offset: number
+  nextCursor: string | null
 }> {
-  const { runs, hasMore, limit, offset } = await listPendingRunsForClient(sb, clientId, page)
-  if (runs.length === 0) return { items: [], skippedRunIds: [], hasMore, limit, offset }
+  const { runs, hasMore, limit, nextCursor } = await listPendingRunsForClient(sb, clientId, page)
+  if (runs.length === 0) return { items: [], skippedRunIds: [], hasMore, limit, nextCursor }
 
   const decisionIds = runs
     .map((run) => run.authorization_decision_id)
@@ -271,7 +271,7 @@ export async function listPendingApprovals(
     }
     items.push(toSummary(run, decisionId))
   }
-  return { items, skippedRunIds, hasMore, limit, offset }
+  return { items, skippedRunIds, hasMore, limit, nextCursor }
 }
 
 /**
@@ -409,7 +409,14 @@ export function parseDecisionInput(body: unknown): ApprovalDecisionInput {
 
   return {
     resolution,
-    expectedDecisionId: expectedDecisionId.trim(),
+    // 🔴 **归一成小写。**（Codex P2）
+    //    UUID 的大小写不影响它是哪一个值，所以上面那道校验刻意收大写 ——
+    //    但 `expectedDecisionId` 后面要跟**从库里读出来的** `authorization_decision_id`
+    //    做**字符串**比较，而 Postgres 吐出来的永远是小写。
+    //    不归一的话，提交大写形式会被判成 STALE_DECISION：
+    //    一个合法的批准 / 拒绝**永远提交不上去**，而且报的还是「你看到的不是最新的」
+    //    这种完全指错方向的话。
+    expectedDecisionId: expectedDecisionId.trim().toLowerCase(),
     ...(reason.length > 0 ? { reason } : {}),
   }
 }

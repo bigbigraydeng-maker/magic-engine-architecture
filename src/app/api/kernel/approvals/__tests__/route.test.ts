@@ -94,7 +94,7 @@ beforeEach(() => {
     skippedRunIds: [],
     hasMore: false,
     limit: 50,
-    offset: 0,
+    nextCursor: null,
   })
   mocks.loadRunForApproval.mockResolvedValue(pendingRun())
   mocks.buildApprovalDetail.mockResolvedValue({ runId: RUN_ID, expectedDecisionId: DECISION_ID })
@@ -171,6 +171,22 @@ describe('🔴 POST …/[runId]/decision · 非法 runId', () => {
     expect(res.status).toBe(400)
     expect(mocks.loadRunForApproval).not.toHaveBeenCalled()
     expect(mocks.decideApproval).not.toHaveBeenCalled()
+  })
+
+  it('🔴 大写形式的 expectedDecisionId 必须真能批得动（不是被判成 stale）', async () => {
+    // 🔴 校验层刻意接受大写（UUID 大小写不影响它是哪个值），但下游要拿它跟
+    //    库里读出来的小写值做**字符串**比较。不归一的话，一个合法的批准
+    //    会被判成 STALE_DECISION —— 永远提交不上去，报的还是完全指错方向的话。
+    const res = await decisionPOST(
+      decisionReq({ resolution: 'approve', expectedDecisionId: DECISION_ID.toUpperCase() }),
+      runCtx(),
+    )
+    expect(res.status, '大写形式必须走得通').toBe(200)
+    const [, args] = mocks.decideApproval.mock.calls[0]
+    expect(
+      args.input.expectedDecisionId,
+      '往下传的必须是小写 —— 库里存的就是小写',
+    ).toBe(DECISION_ID)
   })
 
   it('🔴 请求体里的 expectedDecisionId 非法 → 400，且零查询零鉴权零写入', async () => {
@@ -292,11 +308,12 @@ describe('GET /api/kernel/approvals', () => {
     )
   })
 
-  it('limit / offset 原样透给审批层；读不成数字就当没给（不是当成 0）', async () => {
-    await listGET(listReq(`?clientId=${CLIENT_A}&limit=25&offset=50`))
+  it('limit / cursor 原样透给审批层；limit 读不成数字就当没给（不是当成 0）', async () => {
+    const CURSOR = '2026-08-05T00:00:00.000Z|40000000-0000-4000-8000-000000000009'
+    await listGET(listReq(`?clientId=${CLIENT_A}&limit=25&cursor=${encodeURIComponent(CURSOR)}`))
     expect(mocks.listPendingApprovals).toHaveBeenCalledWith(expect.anything(), CLIENT_A, {
       limit: 25,
-      offset: 50,
+      cursor: CURSOR,
     })
 
     vi.clearAllMocks()
@@ -306,13 +323,27 @@ describe('GET /api/kernel/approvals', () => {
       skippedRunIds: [],
       hasMore: false,
       limit: 50,
-      offset: 0,
+      nextCursor: null,
     })
-    await listGET(listReq(`?clientId=${CLIENT_A}&limit=abc&offset=`))
+    await listGET(listReq(`?clientId=${CLIENT_A}&limit=abc`))
     expect(mocks.listPendingApprovals).toHaveBeenCalledWith(expect.anything(), CLIENT_A, {
       limit: undefined,
-      offset: undefined,
+      cursor: undefined,
     })
+  })
+
+  it('🔴 hasMore 为真时把 nextCursor 一路透到返回体', async () => {
+    const CURSOR = '2026-08-05T00:00:00.000Z|40000000-0000-4000-8000-000000000009'
+    mocks.listPendingApprovals.mockResolvedValue({
+      items: [],
+      skippedRunIds: [],
+      hasMore: true,
+      limit: 50,
+      nextCursor: CURSOR,
+    })
+    const body = await (await listGET(listReq(`?clientId=${CLIENT_A}`))).json()
+    expect(body.hasMore).toBe(true)
+    expect(body.nextCursor, '说了后面还有却不给游标 = 调用方翻不过去').toBe(CURSOR)
   })
 
   it('🔴 hasMore 一路透到返回体 —— 截断不许静默', async () => {
@@ -321,7 +352,7 @@ describe('GET /api/kernel/approvals', () => {
       skippedRunIds: [],
       hasMore: true,
       limit: 50,
-      offset: 0,
+      nextCursor: null,
     })
     const body = await (await listGET(listReq(`?clientId=${CLIENT_A}`))).json()
     expect(body.hasMore, '后面还有却不说，界面会当成「就这么多」').toBe(true)
@@ -347,7 +378,7 @@ describe('GET /api/kernel/approvals', () => {
       skippedRunIds: [],
       hasMore: false,
       limit: 50,
-      offset: 0,
+      nextCursor: null,
     })
   })
 

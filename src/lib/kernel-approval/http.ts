@@ -26,7 +26,9 @@ import { ApprovalError } from './errors'
  * @param label 出错时告诉调用方是**哪个**字段不对（三处入口共用一份文案模板）
  */
 export function requireUuid(value: unknown, label: string): string {
-  if (isUuid(value)) return value
+  // 🔴 归一成小写 —— 库里存的是小写，任何跟它做字符串比较的地方都得是同一口径。
+  //    （`.eq()` 打在 uuid 列上时 Postgres 自己会归一，但拿来跟读出来的值比字符串时不会。）
+  if (isUuid(value)) return value.toLowerCase()
   throw new ApprovalError(
     'invalid_request',
     `${label} 不是一个合法的 id（应该长成 8-4-4-4-12 的那种）—— 多半是链接被截断了，或者哪里手打错了一位`,

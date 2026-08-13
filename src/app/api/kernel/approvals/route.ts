@@ -51,12 +51,13 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     await requireApprovalActor(clientId)
 
     // ③ 再查，且客户过滤钉死在数据库侧
-    const { items, skippedRunIds, hasMore, limit, offset } = await listPendingApprovals(
+    const { items, skippedRunIds, hasMore, limit, nextCursor } = await listPendingApprovals(
       supabaseAdmin,
       clientId,
       {
         limit: numericParam(req.nextUrl.searchParams.get('limit')),
-        offset: numericParam(req.nextUrl.searchParams.get('offset')),
+        // 🔴 游标是不透明的：原样收、原样回，服务端不解释它的语义给调用方听。
+        cursor: req.nextUrl.searchParams.get('cursor') ?? undefined,
       },
     )
 
@@ -66,11 +67,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       // 🔴 数据不一致的那几条如实报出来，不悄悄少给。
       //    少给一条等审批的动作 = 它永远不会被处理，而界面上看不出少了东西。
       skippedRunIds,
-      // 🔴 截断绝不许是静默的。`hasMore` 为真时，用 offset 往后翻。
-      //    等得最久的排在最前面，所以第一页永远是最该先看的那几条。
+      // 🔴 截断绝不许是静默的。`hasMore` 为真时，把 `nextCursor` 原样回传来翻下一页。
+      //    用游标不用 offset：待审批是活队列，翻页期间前面的条目被处理掉之后
+      //    offset 会整体左移、跳掉紧接着的那几条（见 queries.ts）。
       hasMore,
       limit,
-      offset,
+      nextCursor,
     })
   } catch (err) {
     return approvalErrorResponse(err)

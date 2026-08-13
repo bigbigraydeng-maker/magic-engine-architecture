@@ -318,7 +318,7 @@ describe('🔴 Codex P2-4 · 列表截断不许静默，等得最久的排最前
     expect(page.items).toHaveLength(PENDING_APPROVAL_PAGE_SIZE)
     expect(page.hasMore, '截断了却说 hasMore=false，界面会当成「就这么多」').toBe(true)
     expect(page.limit).toBe(PENDING_APPROVAL_PAGE_SIZE)
-    expect(page.offset).toBe(0)
+    expect(page.nextCursor, '还有后续就必须给游标').toBeTruthy()
   })
 
   it('🔴 等得最久的排最前 —— 新的挤不掉老的（防饿死）', async () => {
@@ -430,13 +430,19 @@ describe('🔴 Codex P2-4 · 列表截断不许静默，等得最久的排最前
     ])
   })
 
-  it('🔴 offset 能真的翻到后面去，而且不跳条不重条', async () => {
+  it('🔴 游标能真的翻到后面去，而且不跳条不重条', async () => {
     const { f } = await pendingFixture()
     const total = 25
     seedPending(f, total)
-    const first = await listPendingApprovals(f.supabase, CLIENT_A, { limit: 10, offset: 0 })
-    const second = await listPendingApprovals(f.supabase, CLIENT_A, { limit: 10, offset: 10 })
-    const third = await listPendingApprovals(f.supabase, CLIENT_A, { limit: 10, offset: 20 })
+    const first = await listPendingApprovals(f.supabase, CLIENT_A, { limit: 10 })
+    const second = await listPendingApprovals(f.supabase, CLIENT_A, {
+      limit: 10,
+      cursor: first.nextCursor,
+    })
+    const third = await listPendingApprovals(f.supabase, CLIENT_A, {
+      limit: 10,
+      cursor: second.nextCursor,
+    })
 
     expect(first.items).toHaveLength(10)
     expect(first.hasMore).toBe(true)
@@ -444,12 +450,160 @@ describe('🔴 Codex P2-4 · 列表截断不许静默，等得最久的排最前
     expect(second.hasMore).toBe(true)
     expect(third.items).toHaveLength(5)
     expect(third.hasMore, '最后一页不许再说「后面还有」').toBe(false)
+    expect(third.nextCursor, '没有下一页就不许给游标').toBeNull()
 
     const seen = [...first.items, ...second.items, ...third.items].map((i) => i.runId)
     expect(new Set(seen).size, '翻完三页不许有重复').toBe(total)
-    expect(seen).toEqual(
-      Array.from({ length: total }, (_, i) => seededRunId(i)),
+    expect(seen).toEqual(Array.from({ length: total }, (_, i) => seededRunId(i)))
+  })
+
+  it('🔴 翻页期间第一页那些被处理掉 → 第二页仍然不跳条（offset 会跳，游标不会）', async () => {
+    // 🔴 这条就是 offset 分页挂掉的那个形状：待审批是**活的**队列，
+    //    第一页那 10 条被别人处理掉之后，结果集整体左移；
+    //    `offset=10` 会从缩短后的集合再跳过 10 行 —— 紧接着的第 11~20 条
+    //    一条都不会被返回，而调用方毫不知情。
+    //    游标是按**值**定位的（「排在 (t,id) 之后的那些」），位移根本不存在。
+    const { f } = await pendingFixture()
+    const total = 25
+    seedPending(f, total)
+
+    const first = await listPendingApprovals(f.supabase, CLIENT_A, { limit: 10 })
+    expect(first.items.map((i) => i.runId)).toEqual(
+      Array.from({ length: 10 }, (_, i) => seededRunId(i)),
     )
+
+    // 第一页那 10 条全被处理掉了（退出 pending_approval 过滤集）
+    const donePage = new Set(first.items.map((i) => i.runId))
+    for (const run of f.tables.action_runs) {
+      if (donePage.has(String(run.id))) run.status = 'authorized'
+    }
+
+    const second = await listPendingApprovals(f.supabase, CLIENT_A, {
+      limit: 10,
+      cursor: first.nextCursor,
+    })
+    expect(
+      second.items.map((i) => i.runId),
+      '第二页必须紧接着第一页 —— 一条都不许被跳过',
+    ).toEqual(Array.from({ length: 10 }, (_, i) => seededRunId(i + 10)))
+  })
+
+  it('🔴 游标读不成就当没给（当成某个位置会跳条）', async () => {
+    const { f } = await pendingFixture()
+    seedPending(f, 5)
+    for (const cursor of ['', 'garbage', '|', 'not-a-date|' + seededRunId(0), '2026-08-01T00:00:00.000Z|not-a-uuid', 42, null, {}]) {
+      const page = await listPendingApprovals(f.supabase, CLIENT_A, { limit: 3, cursor })
+      expect(page.items[0]?.runId, `游标「${String(cursor)}」应当被忽略并从头给`).toBe(seededRunId(0))
+    }
+  })
+
+  it('🔴 已经翻过去的行不许倒回来（游标的两段必须是「与」，不是各管各的）', async () => {
+    // 🔴 这条专门区分一种**看起来等价**的写坏法：把
+    //      `updated_at.gt.T , and(updated_at.eq.T , id.gt.I)`
+    //    退化成两个各自独立的条件（例如假件把嵌套 and 按逗号劈开）。
+    //    时间与 id 同向时两者结果一样 —— 所以光有前面那些用例抓不住。
+    //    这里让**时间早的那一行 id 反而更大**：退化版的 `id > I` 会把
+    //    一条**早就翻过去的**行重新捞回来，而正确的下一行永远出不来。
+    const { f } = await pendingFixture()
+    f.tables.action_runs.length = 0
+    f.tables.authorization_decisions.length = 0
+    const rows = [
+      { id: '40000000-0000-4000-8000-0000000000ff', at: '2026-08-01T00:00:00.000Z' }, // 最老，id 最大
+      { id: '40000000-0000-4000-8000-0000000000aa', at: '2026-08-02T00:00:00.000Z' },
+      { id: '40000000-0000-4000-8000-0000000000bb', at: '2026-08-03T00:00:00.000Z' },
+    ]
+    rows.forEach(({ id, at }, i) => {
+      const decisionId = `0d000000-0000-4000-8000-${String(i).padStart(12, '0')}`
+      f.tables.authorization_decisions.push({
+        id: decisionId,
+        action_run_id: id,
+        client_id: CLIENT_A,
+        verdict: 'require_approval',
+        reason: '',
+        policy_id: '901c0000-0000-4000-8000-000000000001',
+        policy_version: 1,
+        created_at: at,
+      })
+      f.tables.action_runs.push({
+        id,
+        client_id: CLIENT_A,
+        purpose: 'growth',
+        goal_id: null,
+        action_key: KEY,
+        action_version: 1,
+        input: {},
+        rationale: null,
+        evidence: {},
+        status: 'pending_approval',
+        authorization_decision_id: decisionId,
+        cost_cap_usd: 0,
+        cost_estimate_usd: 0,
+        updated_at: at,
+        created_at: at,
+      })
+    })
+
+    const p1 = await listPendingApprovals(f.supabase, CLIENT_A, { limit: 1 })
+    expect(p1.items.map((i) => i.runId)).toEqual([rows[0].id])
+
+    const p2 = await listPendingApprovals(f.supabase, CLIENT_A, { limit: 1, cursor: p1.nextCursor })
+    expect(p2.items.map((i) => i.runId)).toEqual([rows[1].id])
+
+    const p3 = await listPendingApprovals(f.supabase, CLIENT_A, { limit: 1, cursor: p2.nextCursor })
+    expect(
+      p3.items.map((i) => i.runId),
+      '第三页必须是第三行 —— 不许把已经翻过去的第一行倒回来',
+    ).toEqual([rows[2].id])
+
+    const seen = [...p1.items, ...p2.items, ...p3.items].map((i) => i.runId)
+    expect(new Set(seen).size, '翻完不许有重复').toBe(3)
+  })
+
+  it('🔴 时间戳撞在一起时游标不整批跳过同伴（第二段 and(...) 不能省）', async () => {
+    const { f } = await pendingFixture()
+    f.tables.action_runs.length = 0
+    f.tables.authorization_decisions.length = 0
+    const SAME = '2026-08-05T00:00:00.000Z'
+    for (let i = 0; i < 4; i++) {
+      const id = seededRunId(i)
+      f.tables.authorization_decisions.push({
+        id: `0d000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        action_run_id: id,
+        client_id: CLIENT_A,
+        verdict: 'require_approval',
+        reason: '',
+        policy_id: '901c0000-0000-4000-8000-000000000001',
+        policy_version: 1,
+        created_at: SAME,
+      })
+      f.tables.action_runs.push({
+        id,
+        client_id: CLIENT_A,
+        purpose: 'growth',
+        goal_id: null,
+        action_key: KEY,
+        action_version: 1,
+        input: {},
+        rationale: null,
+        evidence: {},
+        status: 'pending_approval',
+        authorization_decision_id: `0d000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        cost_cap_usd: 0,
+        cost_estimate_usd: 0,
+        updated_at: SAME,
+        created_at: SAME,
+      })
+    }
+    const first = await listPendingApprovals(f.supabase, CLIENT_A, { limit: 2 })
+    const second = await listPendingApprovals(f.supabase, CLIENT_A, {
+      limit: 2,
+      cursor: first.nextCursor,
+    })
+    expect(first.items.map((i) => i.runId)).toEqual([seededRunId(0), seededRunId(1)])
+    expect(
+      second.items.map((i) => i.runId),
+      '只比时间的话，撞在游标那一刻的同伴会被整批跳过',
+    ).toEqual([seededRunId(2), seededRunId(3)])
   })
 
   it('页大小夹在 [1, MAX]，给的不是正整数就用默认值（不当成无上限）', () => {

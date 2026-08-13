@@ -150,8 +150,41 @@ export interface Filter {
  * 🔴 只实现内核真用到的算子（is.null / gt / gte / lt / lte / eq）——
  *    认不出的算子直接 throw，不能静默当「匹配」（那会把过滤器变成漏勺）。
  */
+/**
+ * 按**顶层**逗号切开 —— 括号里的逗号不算分隔符。
+ *
+ * 🔴 PostgREST 的 `.or()` 允许嵌套：`or(a.gt.1,and(a.eq.1,b.gt.2))`。
+ *    直接 `split(',')` 会把 `and(...)` 从中间劈开，切出两截语法垃圾，
+ *    然后按「认不出的算子」抛错 —— 于是 keyset 分页那种写法在假件里根本跑不了，
+ *    而它恰恰是唯一能在活跃队列上不跳条的分页方式。
+ */
+function splitTopLevel(expr: string): string[] {
+  const parts: string[] = []
+  let depth = 0
+  let start = 0
+  for (let i = 0; i < expr.length; i++) {
+    const ch = expr[i]
+    if (ch === '(') depth += 1
+    else if (ch === ')') depth -= 1
+    else if (ch === ',' && depth === 0) {
+      parts.push(expr.slice(start, i))
+      start = i + 1
+    }
+  }
+  parts.push(expr.slice(start))
+  return parts.filter((p) => p.length > 0)
+}
+
 function orMatches(row: Row, expr: string): boolean {
-  return expr.split(',').some((cond) => {
+  return splitTopLevel(expr).some((cond) => {
+    // 嵌套组：and(...) 全真才真；or(...) 递归
+    if (cond.startsWith('and(') && cond.endsWith(')')) {
+      const inner = cond.slice('and('.length, -1)
+      return splitTopLevel(inner).every((c) => orMatches(row, c))
+    }
+    if (cond.startsWith('or(') && cond.endsWith(')')) {
+      return orMatches(row, cond.slice('or('.length, -1))
+    }
     const firstDot = cond.indexOf('.')
     const secondDot = cond.indexOf('.', firstDot + 1)
     const column = cond.slice(0, firstDot)

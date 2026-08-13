@@ -2026,14 +2026,6 @@ const approveRun = async (d: never, r: string, u: string) => {
         test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
         expect_fail_contains="等得最久的排最前",
     ),
-    dict(
-        name="K-WP01A P2-4 分页忽略 offset（永远只给第一页）",
-        file="src/lib/kernel-approval/queries.ts",
-        old="""    .range(offset, offset + limit)""",
-        new="""    .range(0, limit)""",
-        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
-        expect_fail_contains="offset 能真的翻到后面去",
-    ),
     # ── K-WP01A · 自动修那一轮指出的另外两条（按正确方式修，含 SQL） ──────────
     dict(
         name="K-WP01A 批准备注不往下传（人写的话被静默丢弃）",
@@ -2123,12 +2115,66 @@ const approveRun = async (d: never, r: string, u: string) => {
         test="src/lib/kernel-approval/__tests__/tier-gate.test.ts",
         expect_fail_contains="permissions 仍然说「可以拒绝」",
     ),
+    dict(
+        # 🔴 大写形式的合法 id 会被判成 STALE_DECISION —— 批准和拒绝都永远提交不上去。
+        name="K-WP01A expectedDecisionId 不再归一大小写（大写提交永远批不动）",
+        file="src/lib/kernel-approval/service.ts",
+        old="    expectedDecisionId: expectedDecisionId.trim().toLowerCase(),",
+        new="    expectedDecisionId: expectedDecisionId.trim(),",
+        test="src/lib/kernel-approval/__tests__/decision-input.test.ts",
+        expect_fail_contains="归一成小写",
+    ),
+    dict(
+        # 🔴 活队列上用 offset：前面的被处理掉之后结果集左移，紧接着的那几条被整段跳过。
+        name="K-WP01A 分页退回 offset（活队列翻页跳条）",
+        file="src/lib/kernel-approval/queries.ts",
+        old="    query = query.or(",
+        new="    query = query.gt('updated_at', cursor.updatedAt) && query.or(",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="时间戳撞在一起时游标不整批跳过同伴",
+    ),
+    dict(
+        name="K-WP01A 游标只比时间不比 id（撞时间戳的同伴被整批跳过）",
+        file="src/lib/kernel-approval/queries.ts",
+        old="      `updated_at.gt.${cursor.updatedAt},and(updated_at.eq.${cursor.updatedAt},id.gt.${cursor.id})`,",
+        new="      `updated_at.gt.${cursor.updatedAt},updated_at.gt.${cursor.updatedAt}`,",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="时间戳撞在一起时游标不整批跳过同伴",
+    ),
+    dict(
+        name="K-WP01A 读不成的游标被当成某个位置（跳条）",
+        file="src/lib/kernel-approval/queries.ts",
+        old="  if (!isUuid(id)) return null",
+        new="  if (false) return null",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="游标读不成就当没给",
+    ),
+    dict(
+        name="K-WP01A hasMore 为真却不给 nextCursor（调用方翻不过去）",
+        file="src/lib/kernel-approval/queries.ts",
+        old="    nextCursor: hasMore && runs.length > 0 ? encodeCursor(runs[runs.length - 1]) : null,",
+        new="    nextCursor: null,",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="游标能真的翻到后面去",
+    ),
+    dict(
+        # 假件的 or 解析退回按逗号硬切 —— 嵌套 and(...) 被劈开，keyset 分页在假件里跑不了。
+        # 🔴 期望的是「已经翻过去的行不许倒回来」那条：时间与 id **反向**时，
+        #    劈开后的 `id > I` 会把早就翻过去的行重新捞回来。
+        #    时间与 id 同向的那几条用例抓不住这一刀 —— 劈开后恰好等价。
+        name="K-WP01A 假件的 or 解析退回硬切逗号（嵌套 and 被劈开）",
+        file="src/lib/kernel/__tests__/fake-supabase.ts",
+        old="  return splitTopLevel(expr).some((cond) => {",
+        new="  return expr.split(',').some((cond) => {",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="已经翻过去的行不许倒回来",
+    ),
     # ── K-WP01A · UUID 边界（Codex round 2 · P2） ─────────────────────────────
     dict(
         name="K-WP01A 详情/决定路由不再校验 runId（畸形路径变成 500）",
         file="src/lib/kernel-approval/http.ts",
-        old="  if (isUuid(value)) return value",
-        new="  if (true) return value as string",
+        old="  if (isUuid(value)) return value.toLowerCase()",
+        new="  if (true) return String(value)",
         test="src/app/api/kernel/approvals/__tests__/route.test.ts",
         expect_fail_contains="非法 runId",
     ),
