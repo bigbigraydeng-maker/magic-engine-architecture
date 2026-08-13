@@ -2080,6 +2080,24 @@ const approveRun = async (d: never, r: string, u: string) => {
         test="src/lib/kernel-approval/__tests__/architecture.test.ts",
         expect_fail_contains="必须把旧签名 DROP 掉",
     ),
+    dict(
+        # 版本不判 = 契约升版后拿新版 requiredCapabilityTier 去批旧请求。
+        name="K-WP01A 不再核对 action_version（拿新版规则批旧请求）",
+        file="src/lib/kernel-approval/service.ts",
+        old="  if (definition.version !== run.action_version) {",
+        new="  if (false) {",
+        test="src/lib/kernel-approval/__tests__/tier-gate.test.ts",
+        expect_fail_contains="契约升过版",
+    ),
+    dict(
+        # 展示侧那一半：definitionFor 忽略版本 → 新版标题贴在旧请求上。
+        name="K-WP01A 展示侧忽略版本（新版标题贴在旧请求上）",
+        file="src/lib/kernel-approval/service.ts",
+        old="  const found = lookupDefinition(run)\n  return found.ok ? found.definition : null",
+        new="  void lookupDefinition\n  return ACTION_REGISTRY.get(run.action_key)",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="版本对不上时不许拿新版定义顶替",
+    ),
     # ── K-WP01A · UUID 边界（Codex round 2 · P2） ─────────────────────────────
     dict(
         name="K-WP01A 详情/决定路由不再校验 runId（畸形路径变成 500）",

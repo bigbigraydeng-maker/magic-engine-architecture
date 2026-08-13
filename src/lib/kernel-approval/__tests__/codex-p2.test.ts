@@ -171,6 +171,30 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
   })
 })
 
+describe('🔴 Codex round 2 · 版本对不上时不许拿新版定义顶替', () => {
+  it('列表和详情都不贴新版的标题 / 风险 / 副作用 / 门槛', async () => {
+    const { f, runId } = await pendingFixture()
+    // 契约升版：库里那条 run 记的还是旧版
+    f.tables.action_runs[0].action_version = 99
+
+    const { items } = await listPendingApprovals(f.supabase, CLIENT_A)
+    expect(items).toHaveLength(1)
+    const item = items[0]
+    expect(item.actionVersion, '如实回报 run 自己记的版本').toBe(99)
+    expect(item.title, '不许把新版标题贴在旧请求上').toBeNull()
+    expect(item.risk).toBeNull()
+    expect(item.sideEffect).toBeNull()
+    expect(item.requiredCapabilityTier, '门槛说不清就是 null，不拿新版的顶').toBeNull()
+
+    const detail = await buildApprovalDetail(
+      f.supabase,
+      await loadRunForApproval(f.supabase, runId),
+    )
+    expect(detail.title).toBeNull()
+    expect(detail.requiredCapabilityTier).toBeNull()
+  })
+})
+
 // ── P2-3 ─────────────────────────────────────────────────────────────────────
 
 describe('🔴 Codex P2-3 · 表在但 RPC 不在 → 仍然是 503，不是 500', () => {

@@ -62,27 +62,62 @@ export function canAuthorizeAction(actorTier: string, requiredTier: string): boo
 }
 
 /**
- * 找出这条 run 对应的动作定义。
+ * 找出这条 run 对应的动作定义 —— **必须是同一个 key 且同一版**。
  *
  * 🔴 注册表认不出 = **不许授权**，不是「先批了再说」。
  *    认不出就说明没有人给它定过风险、副作用和授权门槛 ——
  *    那么「谁有资格点这个头」这个问题在系统里根本没有答案，只能 fail closed。
+ *
+ * 🔴 **版本对不上也算认不出。**（Codex P2）
+ *    注册表只存**当前**这一版。契约升过版之后，库里那些按旧版排的
+ *    `pending_approval` 拿 `action_key` 是查得到定义的 —— 查到的是**新版**。
+ *    后果有两层，都不能接受：
+ *      · **权限**：`requiredCapabilityTier` 会按新版判。旧版要 admin、新版
+ *        降成 paid_client 的话，一条本该只有内部人能批的旧动作，就对付费客户开了；
+ *      · **展示**：列表和详情会把新版的标题 / 风险 / 副作用贴在一条旧请求上，
+ *        人看着 A 点的头，实际那条 run 记的是 B。
+ *
+ *    Kernel 的 `preflight` 早就在判这一条（版本对不上 → `unknown_action_version`
+ *    直接 deny）。审批的读 / 鉴权路径没理由比执行路径松 ——
+ *    跟 `decisionBelongsToRun` 是同一个道理。
  */
+type DefinitionLookup =
+  | { readonly ok: true; readonly definition: ActionDefinition }
+  | { readonly ok: false; readonly reason: 'unknown_action' | 'unknown_action_version' }
+
+function lookupDefinition(run: ActionRun): DefinitionLookup {
+  const definition = ACTION_REGISTRY.get(run.action_key)
+  if (!definition) return { ok: false, reason: 'unknown_action' }
+  if (definition.version !== run.action_version) {
+    return { ok: false, reason: 'unknown_action_version' }
+  }
+  return { ok: true, definition }
+}
+
+/** 只在 key 和版本都对得上时给定义；否则 null（**不拿新版顶替旧版**）。 */
 function definitionFor(run: ActionRun): ActionDefinition | null {
-  return ACTION_REGISTRY.get(run.action_key)
+  const found = lookupDefinition(run)
+  return found.ok ? found.definition : null
 }
 
 /** 档次不够就抛 403。够就安静返回。 */
 export function assertActorMayAuthorize(run: ActionRun, actorTier: AccessTier): void {
-  const definition = definitionFor(run)
-  if (!definition) {
-    throw new ApprovalError(
-      'forbidden_tier',
-      `系统认不出「${run.action_key}」这个动作 —— 没有人给它定过谁有资格授权它，` +
-        '所以现在谁也批不了。这条已经安全停住，不会自动执行',
-      { runId: run.id, actionKey: run.action_key, reason: 'unknown_action' },
-    )
+  const found = lookupDefinition(run)
+  if (!found.ok) {
+    const humanReason =
+      found.reason === 'unknown_action_version'
+        ? `这条动作是按第 ${run.action_version} 版契约排的，系统现在跑的是另一版 ——` +
+          '契约变过，不能拿新版的规则来批一条旧请求。这条已经安全停住，请重新排一次'
+        : `系统认不出「${run.action_key}」这个动作 —— 没有人给它定过谁有资格授权它，` +
+          '所以现在谁也批不了。这条已经安全停住，不会自动执行'
+    throw new ApprovalError('forbidden_tier', humanReason, {
+      runId: run.id,
+      actionKey: run.action_key,
+      actionVersion: run.action_version,
+      reason: found.reason,
+    })
   }
+  const { definition } = found
   if (!canAuthorizeAction(actorTier, definition.requiredCapabilityTier)) {
     throw new ApprovalError(
       'forbidden_tier',

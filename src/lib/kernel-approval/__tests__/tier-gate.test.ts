@@ -92,6 +92,38 @@ describe('assertActorMayAuthorize', () => {
     }
   })
 
+  it('🔴 契约升过版 → 旧请求不许拿新版的规则来批（fail closed）', () => {
+    // 🔴 注册表只存**当前**这一版。旧 run 按 action_key 是查得到定义的 ——
+    //    查到的是新版。真实后果有两层：
+    //      · 权限：requiredCapabilityTier 按新版判。旧版要 admin、新版降成
+    //        paid_client 的话，一条本该只有内部人能批的旧动作就对付费客户开了；
+    //      · 展示：把新版标题 / 风险 / 副作用贴在一条旧请求上。
+    //    Kernel 的 preflight 早就在判这一条，审批路径没理由更松。
+    const current = ACTION_REGISTRY.get('seo.build_publish_package')!
+    const oldVersionRun = fakeRun({ action_version: current.version + 1 })
+
+    for (const tier of ['admin', 'paid_client'] as const) {
+      const err = (() => {
+        try {
+          assertActorMayAuthorize(oldVersionRun, tier)
+          return null
+        } catch (e) {
+          return e
+        }
+      })()
+      expect(err, `${tier} 也不许批一条版本对不上的请求`).toBeInstanceOf(ApprovalError)
+      expect((err as ApprovalError).code).toBe('forbidden_tier')
+      expect((err as ApprovalError).detail.reason).toBe('unknown_action_version')
+    }
+  })
+
+  it('✅ 版本对得上时照常放行（判据不是把所有人都拦掉）', () => {
+    const current = ACTION_REGISTRY.get('seo.build_publish_package')!
+    expect(() =>
+      assertActorMayAuthorize(fakeRun({ action_version: current.version }), 'paid_client'),
+    ).not.toThrow()
+  })
+
   it('🔴 注册表认不出这个动作 → 谁也批不了（fail closed，不是「先批了再说」）', () => {
     const err = (() => {
       try {
