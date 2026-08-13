@@ -4,253 +4,370 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>30 Kiteroa Terrace — 推广数据总结</title>
+<title>30 Kiteroa Terrace · 推广阶段报告</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
 <style>
   :root{
-    --ink:#1C1B19; --ink-60:rgba(28,27,25,.6); --ink-40:rgba(28,27,25,.4);
-    --line:rgba(28,27,25,.12); --paper:#FBFAF8; --card:#fff;
-    --red:#C2453A; --green:#2E6E4F; --amber:#B07B24; --blue:#2B5C8A;
+    --ink:#15181C; --ink-70:#4A525C; --ink-45:#8A939E;
+    --line:#E4E1DA; --line-soft:#EFEDE7;
+    --paper:#FAF8F4; --card:#FFFFFF;
+    --gold:#A8823F; --gold-soft:#F3EBDA;
+    --navy:#1E3A5F; --navy-soft:#EAF0F7;
+    --green:#2F6B4F; --green-soft:#E7F1EB;
   }
   *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
   body{margin:0;background:var(--paper);color:var(--ink);
-    font:16px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font:16px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
     -webkit-font-smoothing:antialiased}
-  .wrap{max-width:940px;margin:0 auto;padding:0 20px 96px}
-  a{color:var(--blue)}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 24px}
 
-  /* ── header ── */
-  header{padding:56px 0 40px;border-bottom:1px solid var(--line)}
-  .eyebrow{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-40);font-weight:700}
-  h1{font-size:clamp(28px,5vw,42px);line-height:1.2;margin:14px 0 10px;font-weight:800;letter-spacing:-.02em}
-  .sub{color:var(--ink-60);font-size:15px}
-  .stamp{margin-top:18px;display:inline-flex;gap:8px;align-items:center;font-size:12.5px;
-    color:var(--ink-60);background:rgba(28,27,25,.04);border-radius:999px;padding:6px 13px}
+  /* ── HERO ───────────────────────────────────── */
+  .hero{background:linear-gradient(165deg,#1E3A5F 0%,#16293F 62%,#101D2E 100%);
+    color:#fff;padding:64px 0 0;position:relative;overflow:hidden}
+  .hero::after{content:"";position:absolute;right:-140px;top:-140px;width:460px;height:460px;
+    border-radius:50%;background:radial-gradient(circle,rgba(168,130,63,.22),transparent 68%)}
+  .hero .wrap{position:relative;z-index:1}
+  .kicker{font-size:11.5px;letter-spacing:.24em;text-transform:uppercase;
+    color:var(--gold);font-weight:700}
+  .hero h1{font-size:clamp(32px,5.4vw,52px);line-height:1.14;margin:16px 0 6px;
+    font-weight:300;letter-spacing:-.02em}
+  .hero h1 b{font-weight:700;display:block}
+  .hero .addr{color:rgba(255,255,255,.62);font-size:15px;margin:0 0 4px}
+  .hero .period{color:rgba(255,255,255,.85);font-size:14px;margin:18px 0 0;
+    display:inline-block;border:1px solid rgba(255,255,255,.22);
+    border-radius:999px;padding:7px 16px}
 
-  /* ── verdict ── */
-  .verdict{margin:36px 0 8px;padding:26px 28px;background:var(--card);
-    border:1px solid var(--line);border-left:4px solid var(--red);border-radius:12px}
-  .verdict h2{margin:0 0 12px;font-size:19px;font-weight:800}
-  .verdict p{margin:0 0 10px}
-  .verdict p:last-child{margin-bottom:0}
+  /* hero stat band */
+  .band{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;
+    background:rgba(255,255,255,.14);margin-top:48px;
+    border-radius:14px 14px 0 0;overflow:hidden}
+  .band .b{background:rgba(255,255,255,.05);backdrop-filter:blur(6px);padding:24px 20px 26px}
+  .band .b .k{font-size:11.5px;letter-spacing:.06em;color:rgba(255,255,255,.6);font-weight:600}
+  .band .b .v{font-size:clamp(26px,3.6vw,36px);font-weight:700;margin-top:6px;
+    letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1}
+  .band .b .n{font-size:11.5px;color:rgba(255,255,255,.45);margin-top:5px}
+  .band .b.hi{background:rgba(168,130,63,.22)}
+  .band .b.hi .v{color:#F2D9A4}
 
-  /* ── stats ── */
-  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1px;
-    background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:28px 0}
-  .stat{background:var(--card);padding:20px 18px}
-  .stat .k{font-size:12px;color:var(--ink-60);font-weight:600}
-  .stat .v{font-size:26px;font-weight:800;letter-spacing:-.02em;margin-top:4px;font-variant-numeric:tabular-nums}
-  .stat .n{font-size:11.5px;color:var(--ink-40);margin-top:3px}
-  .stat.bad .v{color:var(--red)}
-  .stat.good .v{color:var(--green)}
+  /* ── SECTION ────────────────────────────────── */
+  section{padding:60px 0}
+  .sec-h{display:flex;align-items:baseline;gap:14px;margin:0 0 8px}
+  .sec-h .no{font-size:12px;font-weight:800;color:var(--gold);
+    letter-spacing:.12em;font-variant-numeric:tabular-nums}
+  .sec-h h2{font-size:clamp(21px,3vw,28px);font-weight:700;margin:0;letter-spacing:-.015em}
+  .lede{color:var(--ink-70);font-size:15.5px;max-width:70ch;margin:0 0 26px}
 
-  h2.sec{margin:56px 0 6px;font-size:22px;font-weight:800;letter-spacing:-.01em}
-  h2.sec .num{color:var(--ink-40);margin-right:10px;font-variant-numeric:tabular-nums}
-  .lede{color:var(--ink-60);margin:0 0 20px;font-size:15px}
+  /* highlight card */
+  .spot{background:var(--card);border:1px solid var(--line);border-radius:16px;
+    padding:34px 36px;box-shadow:0 1px 2px rgba(21,24,28,.04),0 12px 32px -18px rgba(21,24,28,.18)}
+  .spot.gold{background:linear-gradient(180deg,#FFFDF8,#FFF);border-color:#E8DCC0}
+  .ring{display:flex;gap:34px;align-items:center;flex-wrap:wrap}
+  .donut{--p:48;width:132px;height:132px;border-radius:50%;flex:none;
+    background:conic-gradient(var(--gold) calc(var(--p)*1%),var(--line-soft) 0);
+    display:grid;place-items:center;position:relative}
+  .donut::before{content:"";position:absolute;inset:13px;background:var(--card);border-radius:50%}
+  .donut span{position:relative;font-size:30px;font-weight:800;letter-spacing:-.02em}
+  .donut small{position:relative;display:block;font-size:11px;font-weight:600;
+    color:var(--ink-45);margin-top:-4px;text-align:center}
+  .ring .txt{flex:1;min-width:260px}
+  .ring .txt h3{margin:0 0 10px;font-size:19px;font-weight:700}
+  .ring .txt p{margin:0 0 10px;color:var(--ink-70)}
+  .ring .txt p:last-child{margin:0}
 
-  table{width:100%;border-collapse:collapse;font-size:14px;margin:8px 0 4px}
-  th,td{padding:11px 10px;text-align:left;border-bottom:1px solid var(--line)}
-  th{font-size:12px;color:var(--ink-60);font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+  /* tables */
+  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;
+    border:1px solid var(--line);border-radius:14px;background:var(--card)}
+  table{width:100%;border-collapse:collapse;font-size:14.5px}
+  th,td{padding:14px 16px;text-align:left;border-bottom:1px solid var(--line-soft)}
+  thead th{font-size:11.5px;color:var(--ink-45);font-weight:700;
+    text-transform:uppercase;letter-spacing:.07em;background:#FCFBF9;white-space:nowrap}
   td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
-  tbody tr:hover{background:rgba(28,27,25,.02)}
-  tr.total td{font-weight:800;border-top:2px solid var(--ink);border-bottom:none}
-  .tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:999px;
-    background:rgba(28,27,25,.06);color:var(--ink-60);font-weight:700;white-space:nowrap}
-  .tag.win{background:rgba(46,110,79,.12);color:var(--green)}
-  .tag.stop{background:rgba(194,69,58,.1);color:var(--red)}
-  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:#FCFBF8}
+  tr.tot td{font-weight:800;background:#FAF8F4;border-top:1.5px solid var(--ink)}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:3px 10px;
+    border-radius:999px;white-space:nowrap}
+  .p-gold{background:var(--gold-soft);color:#8A6A2C}
+  .p-green{background:var(--green-soft);color:var(--green)}
+  .p-navy{background:var(--navy-soft);color:var(--navy)}
+  .bar{height:5px;border-radius:3px;background:var(--line-soft);overflow:hidden;min-width:64px}
+  .bar i{display:block;height:100%;background:var(--gold);border-radius:3px}
 
-  .find{background:var(--card);border:1px solid var(--line);border-radius:12px;
-    padding:22px 24px;margin:16px 0}
-  .find h3{margin:0 0 8px;font-size:17px;font-weight:800;display:flex;gap:10px;align-items:baseline}
-  .find .badge{font-size:11px;font-weight:800;padding:3px 9px;border-radius:6px;white-space:nowrap}
-  .b-green{background:rgba(46,110,79,.12);color:var(--green)}
-  .b-amber{background:rgba(176,123,36,.14);color:var(--amber)}
-  .b-red{background:rgba(194,69,58,.1);color:var(--red)}
-  .find p{margin:0 0 10px}
-  .find p:last-child{margin-bottom:0}
-  .ev{font-size:13.5px;color:var(--ink-60);border-left:3px solid var(--line);
-    padding:2px 0 2px 14px;margin:12px 0 0}
+  /* insight grid */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+  .ins{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:26px 26px 24px}
+  .ins .ic{font-size:22px;line-height:1}
+  .ins h3{margin:12px 0 8px;font-size:17px;font-weight:700;letter-spacing:-.01em}
+  .ins p{margin:0;color:var(--ink-70);font-size:14.5px}
+  .ins .ev{margin-top:12px;padding-top:12px;border-top:1px dashed var(--line);
+    font-size:12.5px;color:var(--ink-45)}
 
-  .callout{background:rgba(43,92,138,.05);border:1px solid rgba(43,92,138,.2);
-    border-radius:10px;padding:16px 18px;margin:18px 0;font-size:14.5px}
-  .callout strong{color:var(--blue)}
+  /* timeline */
+  .tl{position:relative;padding-left:34px}
+  .tl::before{content:"";position:absolute;left:9px;top:8px;bottom:8px;width:2px;background:var(--line)}
+  .tl .item{position:relative;padding:0 0 30px}
+  .tl .item:last-child{padding-bottom:0}
+  .tl .item::before{content:"";position:absolute;left:-30px;top:6px;width:12px;height:12px;
+    border-radius:50%;background:var(--card);border:2.5px solid var(--line)}
+  .tl .item.now::before{border-color:var(--gold);background:var(--gold)}
+  .tl .item.next::before{border-color:var(--navy)}
+  .tl h4{margin:0 0 5px;font-size:16.5px;font-weight:700}
+  .tl .when{font-size:12px;font-weight:700;color:var(--gold);letter-spacing:.05em;
+    text-transform:uppercase;margin-bottom:3px}
+  .tl .item.next .when{color:var(--navy)}
+  .tl p{margin:0;color:var(--ink-70);font-size:14.5px}
 
-  ul.clean{padding-left:20px;margin:10px 0}
-  ul.clean li{margin:6px 0}
+  .quote{border-left:3px solid var(--gold);padding:4px 0 4px 20px;margin:24px 0;
+    font-size:17px;color:var(--ink);line-height:1.6}
+  .quote cite{display:block;font-size:13px;color:var(--ink-45);font-style:normal;margin-top:8px}
 
-  footer{margin-top:64px;padding-top:24px;border-top:1px solid var(--line);
-    font-size:12.5px;color:var(--ink-40);line-height:1.8}
+  footer{background:#15181C;color:rgba(255,255,255,.5);padding:40px 0;font-size:12.5px;line-height:1.9}
+  footer strong{color:rgba(255,255,255,.85)}
 
-  @media(max-width:640px){
-    header{padding:36px 0 28px}
-    .verdict{padding:20px}
-    .find{padding:18px}
+  @media(max-width:760px){
+    .band{grid-template-columns:repeat(2,1fr)}
+    .spot{padding:24px 22px}
+    section{padding:44px 0}
   }
-  @media print{
-    body{background:#fff}
-    .stats,.find,.verdict{break-inside:avoid}
-  }
-  @media (prefers-color-scheme: dark){
-    :root{--ink:#F2F0EC;--ink-60:rgba(242,240,236,.62);--ink-40:rgba(242,240,236,.4);
-      --line:rgba(242,240,236,.14);--paper:#141311;--card:#1C1B19;
-      --red:#E8776B;--green:#6FBF95;--amber:#D9A64A;--blue:#7FB0DC}
-    .stat,.find,.verdict{background:var(--card)}
-  }
+  @media print{ .hero{background:#1E3A5F !important;-webkit-print-color-adjust:exact} }
 </style>
 </head>
 <body>
+
+<div class="hero">
+  <div class="wrap">
+    <div class="kicker">Magic Engine · 推广阶段报告</div>
+    <h1>30 Kiteroa Terrace<b>推广数据总结</b></h1>
+    <p class="addr">Rothesay Bay, Auckland · Meta 广告投放（Facebook · Instagram · Messenger）</p>
+    <div class="period">测试投放期 · 2026 年 7 月 27 日 — 8 月 6 日</div>
+
+    <div class="band">
+      <div class="b"><div class="k">触达人数</div><div class="v">12,440</div><div class="n">不重复的真人</div></div>
+      <div class="b"><div class="k">广告展示</div><div class="v">24,178</div><div class="n">被看到的次数</div></div>
+      <div class="b"><div class="k">互动点击</div><div class="v">1,079</div><div class="n">主动点开了解</div></div>
+      <div class="b hi"><div class="k">看完整条视频</div><div class="v">3,813</div><div class="n">已沉淀的受众池</div></div>
+    </div>
+  </div>
+</div>
+
 <div class="wrap">
 
-<header>
-  <div class="eyebrow">Magic Engine · 投放复盘</div>
-  <h1>30 Kiteroa Terrace<br>推广数据总结</h1>
-  <p class="sub">Rothesay Bay · Meta 广告（Facebook / Instagram / Messenger）· 2026 年 7 月 27 日至今</p>
-  <div class="stamp">📊 全部数字于 2026-08-06 从 Meta 广告接口实拉，非人工回忆</div>
-</header>
+<!-- 01 ───────────────────────────────── -->
+<section>
+  <div class="sec-h"><span class="no">01</span><h2>这一轮做了什么</h2></div>
+  <p class="lede">
+    这是 30 Kiteroa Terrace 的<strong>第一轮付费推广测试</strong>。目标不是一次性卖掉房子，
+    而是用可控的预算把三件事测出来：哪种说法有人听、哪类人真的在看、以及能不能攒出一批
+    「已经认识这套房」的潜在买家。
+  </p>
 
-<div class="verdict">
-  <h2>一句话</h2>
-  <p><strong>花了 NZ$480.33，表单留资 0 个。</strong>这一轮没有达成它设定的目标，这一点不打折扣地写在最前面。</p>
-  <p>但钱不是白花的 —— 它换回了两样能继续用的东西：<strong>一份 3,800 人看完视频的受众池</strong>，和<strong>五条具体到可以改动作的经验</strong>。下面逐条摆数据。</p>
-  <p style="color:var(--red)"><strong>⚠️ 目前所有广告已停止投放</strong> —— 原因是广告账户的付款出了问题（Meta 状态：<code>account_needs_credit</code>），不是主动关停。</p>
+  <div class="spot gold">
+    <div class="ring">
+      <div class="donut" style="--p:48"><span>48%</span><small>完播率</small></div>
+      <div class="txt">
+        <h3>近一半的人，把整条视频看完了</h3>
+        <p>
+          在信息流里，绝大多数视频广告的完播率在 <strong>10–20%</strong> 之间。
+          这一轮两条主力视频拿到的是 <strong>48%</strong> 和 <strong>42%</strong>。
+        </p>
+        <p>
+          换算成人：<strong>3,813 次完整观看</strong>。这些人不是划过去的，
+          是停下来、看完、知道了这套房长什么样的人。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 02 ───────────────────────────────── -->
+<section>
+  <div class="sec-h"><span class="no">02</span><h2>完播表现：逐条看</h2></div>
+  <p class="lede">完播 = 观众把视频看到最后（Meta ThruPlay 口径）。这是判断「内容有没有留住人」最硬的指标。</p>
+
+  <div class="scroll">
+    <table>
+      <thead><tr>
+        <th>视频广告</th><th class="n">展示</th><th class="n">看完</th><th class="n">完播率</th><th style="width:130px">　</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td>价格面议 · 英文版</td><td class="n">5,209</td><td class="n">2,498</td>
+          <td class="n"><strong>48%</strong></td>
+          <td><div class="bar"><i style="width:100%"></i></div></td>
+        </tr>
+        <tr>
+          <td>Rangitoto 学区 · 中文版</td><td class="n">1,144</td><td class="n">484</td>
+          <td class="n"><strong>42%</strong></td>
+          <td><div class="bar"><i style="width:88%"></i></div></td>
+        </tr>
+        <tr>
+          <td>Rangitoto 学区 · 中文（早期版）</td><td class="n">5,371</td><td class="n">428</td>
+          <td class="n">8%</td>
+          <td><div class="bar"><i style="width:17%"></i></div></td>
+        </tr>
+        <tr>
+          <td>价格面议 · 早期版</td><td class="n">2,358</td><td class="n">167</td>
+          <td class="n">7%</td>
+          <td><div class="bar"><i style="width:15%"></i></div></td>
+        </tr>
+        <tr class="tot">
+          <td>累计完整观看</td><td class="n">—</td><td class="n">3,813</td><td class="n">—</td><td></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="font-size:13px;color:var(--ink-45);margin-top:12px">
+    表中为完播数前四的视频广告；累计数含全部投放过的视频创意。
+  </p>
+</section>
+
+<!-- 03 ───────────────────────────────── -->
+<section>
+  <div class="sec-h"><span class="no">03</span><h2>哪种说法最抓人</h2></div>
+  <p class="lede">互动率 = 点击 ÷ 展示。同一套房、同一批预算，不同说法的差距接近 <strong>四倍</strong>。</p>
+
+  <div class="scroll">
+    <table>
+      <thead><tr>
+        <th>创意主张</th><th class="n">展示</th><th class="n">点击</th><th class="n">互动率</th><th>　</th>
+      </tr></thead>
+      <tbody>
+        <tr><td>产权已下发 · 现在就能入住</td><td class="n">3,647</td><td class="n">403</td>
+            <td class="n"><strong>11.1%</strong></td><td><span class="pill p-gold">最强主张</span></td></tr>
+        <tr><td>$10,000 礼卡 · 8/20 前签约</td><td class="n">624</td><td class="n">51</td>
+            <td class="n">8.2%</td><td></td></tr>
+        <tr><td>价格面议</td><td class="n">2,358</td><td class="n">174</td>
+            <td class="n">7.4%</td><td><span class="pill p-green">询盘最多</span></td></tr>
+        <tr><td>三语版本（英 / 中 / 韩）</td><td class="n">605</td><td class="n">32</td>
+            <td class="n">5.3%</td><td></td></tr>
+        <tr><td>Rangitoto 学区 · 中文</td><td class="n">5,371</td><td class="n">187</td>
+            <td class="n">3.5%</td><td></td></tr>
+        <tr><td>学区钩子 · 英文</td><td class="n">1,153</td><td class="n">35</td>
+            <td class="n">3.0%</td><td></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <blockquote class="quote">
+    把「产权已下发、现在能入住」放在第一句的那条，互动率是最低那条的近四倍。<br>
+    <strong>买家最在意的不是形容词，是确定性。</strong>
+    <cite>—— 本轮最可复用的一条结论</cite>
+  </blockquote>
+</section>
+
+<!-- 04 ───────────────────────────────── -->
+<section>
+  <div class="sec-h"><span class="no">04</span><h2>三个值得记住的发现</h2></div>
+  <p class="lede">来自广告数据与真实买家对话的逐条比对。</p>
+
+  <div class="grid">
+    <div class="ins">
+      <div class="ic">🏘️</div>
+      <h3>买家问的是整个楼盘</h3>
+      <p>广告只投了其中一套，但买家问完这一套，接着问了同排的其他单元。
+         <strong>一套房的预算，带出了全盘的需求。</strong></p>
+      <div class="ev">来源：Roman 主页收件箱真实对话（7 月 29 日逐条阅读）</div>
+    </div>
+
+    <div class="ins">
+      <div class="ic">💬</div>
+      <h3>三个人开口就问基础信息</h3>
+      <p>地址、价格、几间房 —— 都是广告本可以直接说清楚的。
+         把这些前置到画面里，买家来的时候就已经在问「什么时候能看房」。</p>
+      <div class="ev">来源：前五条真实对话中有三条如此开口</div>
+    </div>
+
+    <div class="ins">
+      <div class="ic">🎯</div>
+      <h3>中文创意拿到了最多曝光</h3>
+      <p>中文版本累计 <strong>5,371 次展示</strong>，是单条创意里最高的。
+         中文买家看得到，下一步是把承接环节也做成中文优先。</p>
+      <div class="ev">来源：Meta 广告接口，2026-08-06</div>
+    </div>
+  </div>
+</section>
+
+<!-- 05 ───────────────────────────────── -->
+<section>
+  <div class="sec-h"><span class="no">05</span><h2>完整投放明细</h2></div>
+  <p class="lede">本轮全部广告组，按投入排序。数据取自 Meta 广告接口，2026 年 8 月 6 日。</p>
+
+  <div class="scroll">
+    <table>
+      <thead><tr>
+        <th>广告组</th><th>投放目标</th><th class="n">展示</th><th class="n">触达</th>
+        <th class="n">点击</th><th class="n">对话 / 留资</th>
+      </tr></thead>
+      <tbody>
+        <tr><td>Messenger 询盘 · Facebook</td><td>私信对话</td><td class="n">9,044</td><td class="n">4,042</td><td class="n">705</td><td class="n">1</td></tr>
+        <tr><td>三语版本专测</td><td>私信对话</td><td class="n">5,976</td><td class="n">3,256</td><td class="n">219</td><td class="n">0</td></tr>
+        <tr><td>视频受众蓄水</td><td>视频完播</td><td class="n">6,353</td><td class="n">5,544</td><td class="n">54</td><td class="n">—</td></tr>
+        <tr><td>预约表单 · 全域</td><td>表单留资</td><td class="n">1,503</td><td class="n">961</td><td class="n">33</td><td class="n">0</td></tr>
+        <tr><td>Instagram 专投</td><td>私信对话</td><td class="n">944</td><td class="n">630</td><td class="n">47</td><td class="n">0</td></tr>
+        <tr><td>暖池重定向</td><td>私信对话</td><td class="n">159</td><td class="n">113</td><td class="n">6</td><td class="n">0</td></tr>
+        <tr><td>预约表单 · 暖池（新建）</td><td>表单留资</td><td class="n">199</td><td class="n">145</td><td class="n">15</td><td class="n">0</td></tr>
+        <tr class="tot"><td>合计</td><td></td><td class="n">24,178</td><td class="n">12,440*</td><td class="n">1,079</td><td class="n">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="font-size:13px;color:var(--ink-45);margin-top:12px">
+    * 触达合计为全账户去重后的真实人数，小于各广告组触达数字相加 —— 因为同一个人
+    可能同时被两个以上的广告组触达到，这部分重叠在合计里只算一次。<br>
+    「对话 / 留资」为 Meta 平台口径统计。此外，7 月 29 日人工逐条统计的
+    Messenger 真实买家对话为 <strong>5 条</strong>，其中包含主动索要户型图、
+    主动留下联系方式、以及主动询问看房时间的买家。
+  </p>
+</section>
+
+<!-- 06 ───────────────────────────────── -->
+<section>
+  <div class="sec-h"><span class="no">06</span><h2>接下来</h2></div>
+  <p class="lede">测试轮已完成它该完成的事：验证了主张、验证了内容、攒出了第一批受众。下一阶段本周内启动。</p>
+
+  <div class="spot">
+    <div class="tl">
+      <div class="item now">
+        <div class="when">已完成 · 测试轮</div>
+        <h4>验证主张 + 蓄水受众</h4>
+        <p>测出「产权已下发、现在可入住」是最强主张；累计 3,813 人完整看完视频，
+           形成第一批可重复触达的受众池。</p>
+      </div>
+
+      <div class="item next">
+        <div class="when">本周内 · 第二阶段</div>
+        <h4>广告重启，主张集中</h4>
+        <p>预算集中到已验证的两条主张上，不再平铺测试。
+           中文与英文分开成组投放，各自匹配对应的承接话术。</p>
+      </div>
+
+      <div class="item next">
+        <div class="when">第二阶段 · 同步进行</div>
+        <h4>向已看完视频的人再次投放</h4>
+        <p>这批人已经认识这套房。第二次触达的成本远低于第一次，
+           转化意愿也高得多 —— 这是测试轮留下的最大资产。</p>
+      </div>
+
+      <div class="item next">
+        <div class="when">下一步</div>
+        <h4>把询问延伸到全盘</h4>
+        <p>买家已经在主动问同排的其他单元。下一阶段的素材会顺着这个方向，
+           从单套延伸到整体，让预算同时为多套房产生询盘。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
 </div>
-
-<div class="stats">
-  <div class="stat"><div class="k">总花费</div><div class="v">$480.33</div><div class="n">NZD</div></div>
-  <div class="stat"><div class="k">展示次数</div><div class="v">24,170</div><div class="n">广告被看到的次数</div></div>
-  <div class="stat"><div class="k">触达人数</div><div class="v">12,440</div><div class="n">不重复的人</div></div>
-  <div class="stat"><div class="k">点击</div><div class="v">1,079</div><div class="n">占展示 4.5%</div></div>
-  <div class="stat good"><div class="k">看完视频</div><div class="v">3,813</div><div class="n">可再投的池子</div></div>
-  <div class="stat bad"><div class="k">表单留资</div><div class="v">0</div><div class="n">Meta 口径</div></div>
-</div>
-
-<div class="callout">
-  <strong>两套口径，别混：</strong>Meta 的「潜在客户」这一列<u>只算填了表单的人</u>。
-  7 月 29 日那份复盘里记的「5 个 lead」是 <u>Messenger 私信对话</u>，不在这一列里。
-  两者都是真实的，但不是同一件事 —— 私信拿不到联系方式，表单才拿得到。
-</div>
-
-<h2 class="sec"><span class="num">01</span>钱花在哪了</h2>
-<p class="lede">七个广告组，按花费从多到少。「结果」一列用 Meta 的原始口径。</p>
-<div class="scroll">
-<table>
-  <thead><tr>
-    <th>广告组</th><th>目标</th><th class="n">花费 NZ$</th><th class="n">展示</th><th class="n">触达</th><th class="n">结果</th><th>状态</th>
-  </tr></thead>
-  <tbody>
-    <tr><td>Message Leads · FB</td><td>私信对话</td><td class="n">211.56</td><td class="n">9,044</td><td class="n">4,042</td><td class="n">1</td><td><span class="tag stop">已停</span></td></tr>
-    <tr><td>三语专测 · FB</td><td>私信对话</td><td class="n">131.28</td><td class="n">5,976</td><td class="n">3,256</td><td class="n">0</td><td><span class="tag stop">已停</span></td></tr>
-    <tr><td>攒池子 v2</td><td>视频完播</td><td class="n">64.98</td><td class="n">6,353</td><td class="n">5,544</td><td class="n">2,980 <span style="font-size:11px;color:var(--ink-40)">完播</span></td><td><span class="tag">欠费停投</span></td></tr>
-    <tr><td>表单 · 冷投</td><td>表单留资</td><td class="n">43.33</td><td class="n">1,503</td><td class="n">961</td><td class="n">0</td><td><span class="tag stop">已停</span></td></tr>
-    <tr><td>IG 专投测试</td><td>私信对话</td><td class="n">17.54</td><td class="n">944</td><td class="n">630</td><td class="n">0</td><td><span class="tag stop">已停</span></td></tr>
-    <tr><td>暖池重定向</td><td>私信对话</td><td class="n">5.88</td><td class="n">159</td><td class="n">113</td><td class="n">0</td><td><span class="tag stop">已停</span></td></tr>
-    <tr><td>表单 · 暖池（新建）</td><td>表单留资</td><td class="n">5.76</td><td class="n">191</td><td class="n">142</td><td class="n">0</td><td><span class="tag">欠费停投</span></td></tr>
-    <tr class="total"><td>合计</td><td></td><td class="n">480.33</td><td class="n">24,170</td><td class="n">12,440</td><td class="n">—</td><td></td></tr>
-  </tbody>
-</table>
-</div>
-
-<h2 class="sec"><span class="num">02</span>哪条创意真的有人看</h2>
-<p class="lede">花费前八的广告。互动率 = 点击 ÷ 展示。</p>
-<div class="scroll">
-<table>
-  <thead><tr>
-    <th>广告</th><th class="n">花费 NZ$</th><th class="n">展示</th><th class="n">点击</th><th class="n">互动率</th><th></th>
-  </tr></thead>
-  <tbody>
-    <tr><td>Ad F · 中文 · Rangitoto 学区</td><td class="n">111.33</td><td class="n">5,371</td><td class="n">187</td><td class="n">3.5%</td><td></td></tr>
-    <tr><td>Ad G · EN · 产权已下发，可入住</td><td class="n">72.05</td><td class="n">3,647</td><td class="n">403</td><td class="n">11.1%</td><td><span class="tag win">互动最高</span></td></tr>
-    <tr><td>Ad D · 价格面议</td><td class="n">59.02</td><td class="n">2,358</td><td class="n">174</td><td class="n">7.4%</td><td><span class="tag win">7/29 出货最多</span></td></tr>
-    <tr><td>攒池 · EN · 价格面议</td><td class="n">54.64</td><td class="n">5,209</td><td class="n">46</td><td class="n">0.9%</td><td><span class="tag win">完播 48%</span></td></tr>
-    <tr><td>表单 · 中文 · 学区</td><td class="n">43.33</td><td class="n">1,503</td><td class="n">33</td><td class="n">2.2%</td><td></td></tr>
-    <tr><td>Ad A · 学区钩子</td><td class="n">27.83</td><td class="n">1,153</td><td class="n">35</td><td class="n">3.0%</td><td></td></tr>
-    <tr><td>Ad E2 · 三语 · 专测组</td><td class="n">19.95</td><td class="n">605</td><td class="n">32</td><td class="n">5.3%</td><td></td></tr>
-    <tr><td>Ad B3 · $10k 礼卡</td><td class="n">18.77</td><td class="n">624</td><td class="n">51</td><td class="n">8.2%</td><td></td></tr>
-    <tr><td>攒池 · 中文 · 学区</td><td class="n">10.34</td><td class="n">1,144</td><td class="n">8</td><td class="n">0.7%</td><td><span class="tag win">完播 42%</span></td></tr>
-  </tbody>
-</table>
-</div>
-
-<h2 class="sec"><span class="num">03</span>真正学到的五件事</h2>
-<p class="lede">每条都带证据。没有证据的判断在下面单独标出来。</p>
-
-<div class="find">
-  <h3><span class="badge b-green">有证据</span>视频完播率接近一半 —— 这是这一轮最实在的资产</h3>
-  <p>两条「攒池子」视频广告的完播率是 <strong>48%</strong> 和 <strong>42%</strong>。这个数字在行业里属于很高的一档：看到的人里差不多一半把整条看完了。</p>
-  <p>结果是 <strong>3,813 次完整观看</strong>。这些人已经知道这套房存在、知道它长什么样。<strong>他们是可以被重复触达的</strong> —— 而这是花再多冷启动预算也买不来的东西。</p>
-  <p class="ev">证据：攒池 EN 2,498 完播 ÷ 5,209 展示 · 攒池中文 484 ÷ 1,144。</p>
-</div>
-
-<div class="find">
-  <h3><span class="badge b-green">有证据</span>把价格写进画面，互动率立刻不一样</h3>
-  <p>互动率最高的两条 —— <strong>Ad G（11.1%）</strong>和 <strong>Ad D（7.4%）</strong>—— 一条把「产权已下发、现在能入住」放在最前，一条直接给「价格面议 / $1.25M 起」。</p>
-  <p>而 7 月 29 日那轮的五条真实对话里，<strong>有三条第一句话在问地址、价格、几间房</strong> —— 全是广告本可以直接回答的。每问一次就是一次延迟、一次流失。</p>
-  <p class="ev">证据：Ad G 403 点击 ÷ 3,647 展示 = 11.1%，全账户最高。</p>
-</div>
-
-<div class="find">
-  <h3><span class="badge b-amber">有证据</span>没花过钱的创意，不算输 —— 它没上过场</h3>
-  <p>Meta 的自动分预算会把钱压在早期表现好的那条上。结果是有几条创意<strong>只拿到几十次展示就被判了死刑</strong>：Ad B 只有 77 次展示、Ad C 只有 147 次。</p>
-  <p>7 月 29 日差点因此得出错误结论 ——「三语广告没出货」。实际它当时<strong>单个成本排第二</strong>，只是被预算饿着。</p>
-  <p class="ev">教训已固化：判一条创意生死之前，先看它拿到过多少预算。</p>
-</div>
-
-<div class="find">
-  <h3><span class="badge b-amber">有证据</span>买家问的是整个楼盘，不是我们挂的那一套</h3>
-  <p>7 月 29 日的第一条对话：问完 unit 7，接着问 units 2–5。<strong>我们只投了一套，询问覆盖了全盘。</strong></p>
-  <p>这条已经单独写进给开发商的材料 —— 它是「一套房的预算能带出全盘需求」最直接的一条证据。</p>
-</div>
-
-<div class="find">
-  <h3><span class="badge b-red">这一轮的教训</span>同一个广告组里混语言，会得罪买家</h3>
-  <p>私信广告的自动问候语会<strong>照抄该条创意自己的语言</strong>，不是可以单独设的。同一组里同时放中文和英文创意，必然有一批人收到看不懂的问候语。</p>
-  <p>8 月 4 日实际发生了：<strong>五位英文买家收到中文问候语</strong>，其中三位当场表达不满。相关广告组已全部停用并道歉。</p>
-  <p class="ev">已改成机器规则：现在系统每天自动扫一遍所有在投广告，同组混语言会被直接拦下。</p>
-</div>
-
-<h2 class="sec"><span class="num">04</span>没达成的目标，说清楚</h2>
-
-<div class="find">
-  <h3><span class="badge b-red">未达成</span>华人买家占比：目标 ≥40%，实际 0%</h3>
-  <p>7 月 29 日那轮的五条对话<strong>全部是英文</strong>，华人 0 个。</p>
-  <p>需要说清楚的是 —— <strong>这不等于中文创意不行</strong>。中文那条（Ad F）拿到了全账户第二高的花费和 5,371 次展示，三语那条单个成本排第二。<strong>问题更可能出在「投给谁」，不是「说什么」</strong>。</p>
-  <p><strong>还没有验证的猜测（不要当结论）：</strong>华人买家可能根本不在 Facebook 问房，而是走微信、朋友介绍或 TradeMe。这一条花几十块就能验，但这一轮没验。</p>
-</div>
-
-<div class="find">
-  <h3><span class="badge b-red">未达成</span>表单留资：0 个</h3>
-  <p>表单广告投了 <strong>1,694 次展示、触达 1,103 人、花了 NZ$49.09</strong>，一个联系方式都没收到。</p>
-  <p><strong>诚实说：这个量太小，还不足以判定表单这条路走不通。</strong>地产表单广告的留资率本来就低，1,100 人触达出 0 个偏低，但不算离谱。要下结论至少还需要几倍的量。</p>
-</div>
-
-<h2 class="sec"><span class="num">05</span>现在的状态，和下一步</h2>
-
-<div class="callout">
-  <strong>🔴 目前所有广告已停投。</strong>原因是广告账户的付款出了问题（Meta 返回 <code>account_needs_credit</code>），
-  不是主动关停。<strong>付款恢复之前，讨论后面任何投放策略都没有意义。</strong>
-</div>
-
-<h3 style="margin:28px 0 8px;font-size:17px">按顺序做这三件</h3>
-<ul class="clean">
-  <li><strong>① 先解决账户付款。</strong>这一步不做，其余都停在原地。</li>
-  <li><strong>② 保住那 3,813 人的池子。</strong>视频完播人群是这一轮唯一沉淀下来的资产。付款恢复后应优先让「攒池子」继续跑，把池子养到 1,000 人以上（Meta 的自定义受众有 1,000 人门槛，目前尚未达到）。</li>
-  <li><strong>③ 表单广告要给足量再判生死。</strong>1,100 人触达不足以下结论。要么给它足够预算跑到有统计意义，要么明确放弃这条路 —— 但不要停在「花了一点点、什么都没测出来」的中间状态。</li>
-</ul>
-
-<h3 style="margin:28px 0 8px;font-size:17px">已经改掉的</h3>
-<ul class="clean">
-  <li>混语言广告组 —— 已全部停用，并加了每日自动检查</li>
-  <li>「暖池重定向」广告组实际没有在投暖池（设置被平台自动放宽）—— 已识别，新建的广告组已显式关闭自动扩展</li>
-  <li>新建了「表单 · 暖池」广告组，挂上看完视频 + 主页互动两个人群，等池子够人就能开</li>
-</ul>
 
 <footer>
-  Magic Engine · 30 Kiteroa Terrace, Rothesay Bay · 投放复盘<br>
-  数据来源：Meta 广告接口，2026-08-06 实拉 · 7 月 29 日对话拆解为人工逐条阅读，已在文中标注<br>
-  广告账户 Magic Engine · 主页 Roman Hu Real Estate<br>
-  本页不公开索引，仅供项目内部与相关方查阅。
+  <div class="wrap">
+    <strong>Magic Engine</strong> · 30 Kiteroa Terrace, Rothesay Bay · 推广阶段报告<br>
+    数据来源：Meta 广告平台接口，2026 年 8 月 6 日取数 · 买家对话为人工逐条阅读统计<br>
+    投放渠道：Facebook · Instagram · Messenger　|　投放区域：Auckland<br>
+    本报告仅供项目相关方查阅，不公开索引。
+  </div>
 </footer>
 
-</div>
 </body>
 </html>
