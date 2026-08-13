@@ -196,7 +196,11 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
     }).catch((e: unknown) => e)
 
     expect(err).toBeInstanceOf(ApprovalError)
-    expect((err as ApprovalError).code).toBe('not_pending')
+    // 🔴 **不是** not_pending：run 仍然停在 pending_approval（RPC 那条分支
+    //    只读返回、一个字没写）。报成「已经有结论了」会让界面把一条
+    //    既没结论、又还没人理顺的 run 抹掉，从此没人看得见它。
+    expect((err as ApprovalError).code).toBe('stale_decision')
+    expect(f.tables.action_runs[0].status, 'run 必须还停在等审批').toBe('pending_approval')
     expect(f.tables.authorization_decisions, '一条决策都不许新签').toHaveLength(before)
     expect(f.tables.action_runs[0].status).toBe('pending_approval')
     expect(

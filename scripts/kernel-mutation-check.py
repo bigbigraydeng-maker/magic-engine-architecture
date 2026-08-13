@@ -1853,8 +1853,8 @@ GRANT SELECT ON public.kernel_action_lineage TO service_role;""",
         # 「不执行」不只写在架构清单里，跑起来也真的没跑。
         name="K-WP01A 审批层改调 approveAndRun（人一点头东西就发出去了）",
         file="src/lib/kernel-approval/service.ts",
-        old="""import { approveRun, rejectRun } from '@/lib/kernel/authorize'""",
-        new="""import { rejectRun } from '@/lib/kernel/authorize'
+        old="""import { approveRun, rejectRun } from '@/lib/kernel/human-approval'""",
+        new="""import { rejectRun } from '@/lib/kernel/human-approval'
 import { approveAndRun } from '@/lib/kernel/runner'
 const approveRun = async (d: never, r: string, u: string) => {
   const o = await approveAndRun(d, r, u)
@@ -1909,7 +1909,7 @@ const approveRun = async (d: never, r: string, u: string) => {
     ),
     dict(
         name="K-WP01A 删掉 expectedDecisionId 的应用层 CAS（批的是页面上早就换掉的那一份）",
-        file="src/lib/kernel/authorize.ts",
+        file="src/lib/kernel/human-approval.ts",
         old="""  if (run.authorization_decision_id === expectedDecisionId) return""",
         new="""  if (true) return""",
         test="src/lib/kernel-approval/__tests__/decision.test.ts",
@@ -1919,7 +1919,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         # 拒绝那条路单独一刀 —— 两处 assert 是各自独立的调用，
         # 只验批准那一条的话，拒绝这边被删掉不会有任何测试变红。
         name="K-WP01A 拒绝路径不再校验 expectedDecisionId",
-        file="src/lib/kernel/authorize.ts",
+        file="src/lib/kernel/human-approval.ts",
         old="""  assertDecisionStillCurrent(run, options.expectedDecisionId, rejectedByUser)""",
         new="""  void options""",
         test="src/lib/kernel-approval/__tests__/decision.test.ts",
@@ -2210,7 +2210,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         # 🔴 锁内指针变化被压成 INVALID_STATE → 界面说「已经有结论了」，
         #    而 run 其实还停在 pending_approval 等着人点。
         name="K-WP01A 锁内指针变化不再保留 STALE_DECISION（说成「已有结论」）",
-        file="src/lib/kernel/authorize.ts",
+        file="src/lib/kernel/human-approval.ts",
         old="  if (reason === 'decision_not_current') {",
         new="  if (false) {",
         test="src/lib/kernel-approval/__tests__/decision.test.ts",
@@ -2220,7 +2220,7 @@ const approveRun = async (d: never, r: string, u: string) => {
         # 🔴 政策竞态被压成 INVALID_STATE → 接口答 not_pending「已经有结论了」，
         #    而 run 其实还停在 pending_approval 等着人点，界面会把它抹掉。
         name="K-WP01A 政策竞态被说成「已经有结论了」（还活着的待办被抹掉）",
-        file="src/lib/kernel/authorize.ts",
+        file="src/lib/kernel/human-approval.ts",
         old="  if (POLICY_RACE_REASONS.has(reason)) {",
         new="  if (false) {",
         test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
@@ -2228,11 +2228,29 @@ const approveRun = async (d: never, r: string, u: string) => {
     ),
     dict(
         name="K-WP01A 政策竞态清单漏一条（那一条又变回「已有结论」）",
-        file="src/lib/kernel/authorize.ts",
+        file="src/lib/kernel/human-approval.ts",
         old="  'policy_mode_changed',\n])",
         new="])",
         test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
         expect_fail_contains="不是「已经有结论了」",
+    ),
+    dict(
+        # 🔴 身份闸原因被压成终态 → 一条既没结论、又还没人理顺的 run 被界面抹掉。
+        name="K-WP01A 身份闸原因被说成「已经有结论了」（run 从列表里消失）",
+        file="src/lib/kernel/human-approval.ts",
+        old="  if (PENDING_INCONSISTENT_REASONS.has(reason)) {",
+        new="  if (false) {",
+        test="src/lib/kernel-approval/__tests__/codex-p2.test.ts",
+        expect_fail_contains="拒绝的写路径",
+    ),
+    dict(
+        # 800 行上限那道守卫本身：判据写成永真就等于没有。
+        name="K-WP01A 行数上限守卫空跑（清单为空照样绿）",
+        file="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        old="  const lineCount = (file: string): number =>",
+        new="  const lineCount = (_file: string): number => 1 as number\n  const _unusedLineCount = (file: string): number =>",
+        test="src/lib/kernel-approval/__tests__/architecture.test.ts",
+        expect_fail_contains="800 行",
     ),
     # ── K-WP01A · UUID 边界（Codex round 2 · P2） ─────────────────────────────
     dict(

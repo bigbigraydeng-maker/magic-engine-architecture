@@ -262,7 +262,7 @@ describe('🔴 RPC 参数：应用层 / 假件 / SQL 三处不许分家', () => 
   })
 
   it('🔴 「政策竞态」清单跟 SQL 不许分家', () => {
-    // authorize.ts 里那份 POLICY_RACE_REASONS 说的是「RPC 这几条分支只读返回」。
+    // human-approval.ts 里那份 POLICY_RACE_REASONS 说的是「RPC 这几条分支只读返回」。
     // SQL 里真有这几条，判据才站得住 —— 两处各写一份必然分家。
     const sql = readSql()
     for (const reason of [
@@ -273,7 +273,7 @@ describe('🔴 RPC 参数：应用层 / 假件 / SQL 三处不许分家', () => 
     ]) {
       expect(sql.includes(reason), `SQL 里必须真有 ${reason} 这条分支`).toBe(true)
     }
-    const src = readFileSync(join(ROOT, 'src/lib/kernel/authorize.ts'), 'utf8')
+    const src = readFileSync(join(ROOT, 'src/lib/kernel/human-approval.ts'), 'utf8')
     const block = src.slice(src.indexOf('POLICY_RACE_REASONS'))
     for (const reason of [
       'no_active_policy',
@@ -281,7 +281,7 @@ describe('🔴 RPC 参数：应用层 / 假件 / SQL 三处不许分家', () => 
       'stale_policy_version',
       'policy_mode_changed',
     ]) {
-      expect(block.includes(reason), `authorize.ts 的清单里少了 ${reason}`).toBe(true)
+      expect(block.includes(reason), `human-approval.ts 的清单里少了 ${reason}`).toBe(true)
     }
   })
 
@@ -306,6 +306,69 @@ describe('🔴 RPC 参数：应用层 / 假件 / SQL 三处不许分家', () => 
       '指针闸必须用 IS DISTINCT FROM（`<>` 遇到 NULL 是 NULL，等于没判）',
     ).toBe(true)
     expect(/decision_not_current/.test(forward)).toBe(true)
+  })
+})
+
+/**
+ * 🔴 **文件行数上限是仓库铁律，不是建议**（CLAUDE.md：函数 < 50 行，文件 < 800 行）。
+ *
+ * 这条盯的是审批链路上那几个**安全核心**文件。它们最容易一点点长胖 ——
+ * 自动授权 + 授权复用 + 人工审批 + 错误翻译全挤在一个文件里之后，
+ * 后续改动就很难被完整审查（实测：`authorize.ts` 曾涨到 894 行，Codex P1）。
+ */
+describe('🔴 安全核心文件不许越过 800 行', () => {
+  const MAX_LINES = 800
+  const GUARDED = [
+    'src/lib/kernel/authorize.ts',
+    'src/lib/kernel/human-approval.ts',
+    'src/lib/kernel/store.ts',
+    'src/lib/kernel-approval/service.ts',
+    'src/lib/kernel-approval/queries.ts',
+    'src/lib/kernel-approval/http.ts',
+    'src/lib/kernel-approval/errors.ts',
+  ] as const
+
+  /**
+   * 🔴 **历史欠账，只准变短。**
+   *
+   *    `gateway.ts` 在本 PR 之前就是 1222 行 —— 不是这次改出来的，
+   *    拆它也远超本 PR 的范围。但**不许静默放过**：记在这里，
+   *    并且钉住当前行数，它再涨就红。要拆是另一件事、另一个 PR。
+   */
+  const GRANDFATHERED: Readonly<Record<string, number>> = {
+    'src/lib/kernel/gateway.ts': 1222,
+  }
+
+  const lineCount = (file: string): number =>
+    readFileSync(join(ROOT, file), 'utf8').split('\n').length
+
+  it.each([...GUARDED])('%s < 800 行', (file) => {
+    const lines = lineCount(file)
+    expect(lines, `${file} 有 ${lines} 行，越过了 ${MAX_LINES} 行的上限 —— 该拆了`).
+      toBeLessThanOrEqual(MAX_LINES)
+  })
+
+  it('🔴 判据本身有效：数出来的是真行数，不是一个常数', () => {
+    // 🔴 没有这一条的话，把 `lineCount` 写成 `() => 1` 全套照样绿 ——
+    //    「文件都没超」和「根本没在数」长得一模一样（实测变异探针 MISSED）。
+    //    拿历史欠账那个文件当锚：它**确实**超过上限，数对了才可能看见。
+    expect(
+      lineCount('src/lib/kernel/gateway.ts'),
+      '这个文件本来就 >800 行；数出来没超 = 计数坏了，整道闸在空跑',
+    ).toBeGreaterThan(MAX_LINES)
+    // 再钉一个下界，防止「返回一个够大的常数」也能糊过去
+    expect(lineCount('src/lib/kernel-approval/types.ts')).toBeLessThan(200)
+  })
+
+  it('🔴 历史欠账只准变短，不许再涨', () => {
+    for (const [file, cap] of Object.entries(GRANDFATHERED)) {
+      const lines = lineCount(file)
+      expect(
+        lines,
+        `${file} 从 ${cap} 涨到了 ${lines} 行。它本来就欠着账，不许再往上加 —— ` +
+          '要么把新代码放到别处，要么先把它拆了。',
+      ).toBeLessThanOrEqual(cap)
+    }
   })
 })
 
