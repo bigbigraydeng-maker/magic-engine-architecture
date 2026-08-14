@@ -161,9 +161,9 @@ Roman 的 15 条同样是真角度：`Rangitoto 学区 hook` / `By negotiation` 
 >
 > - `ad_creative_links` 的**素材归因那一半**确实接好了 —— `boost-post/route.ts:122` 与 `winner-reel-sync/engine.ts:214` 都在调 `linkAdToCreative`。它是 0 行是因为这两条路径自 2026-08-01 以来一次都没建成过广告。
 > - 但**打法账本那一半没接**：两处调用都没传 `play` / `playSource`，所以 `persistLink` 会把这两列写成 `NULL`。即使这两条路径明天跑起来，打法账本仍然是空的。
-> - 而 `ads.create_ad` 那条流水只有 `draft-and-gate.ts` 会写，**它反过来从不调 `linkAdToCreative`**（`creative-link.ts:54` 的注释里预留了 `'me_ad_launch'`，至今没加）。
+> - 而 `ads.create_ad` 那条流水只有 `draft-and-gate.ts` 会写，**它反过来从不调 `linkAdToCreative`** —— 而且不是"忘了调"：那条路径用 `object_story_spec` 建全新创意，**没有帖子 id 可传**，`ad_creative_links.post_id` 又是 `NOT NULL`，所以它今天**在结构上就记不进这张表**（`creative-link.ts:54` 预留的 `'me_ad_launch'` 至今没加，正是因为这个）。
 >
-> 结论：**这三张表是三条不同的路各写一部分，没有任何一条路能同时写全。** 详见 §7 ①。
+> 结论：**这三张表是三条不同的路各写一部分，没有任何一条路能同时写全；而且 draft 那条路缺的不止是调用，是素材身份和一次 migration。** 详见 §7 ①。
 
 ### 3.8 winner 判定现在判的是什么
 
@@ -234,7 +234,9 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 | Next-generation creative creation | **MISSING** | `variant_from_winner` 工单 0 条 |
 | Learning persistence | **MISSING** | `ad_creative_links.play/play_source/play_context` 三列已建但 0 行，且**两条建广告路径都没传 `play`**，跑起来也仍是 NULL；`PLAY_CATALOG.knownTraps` 是手写的，不是学来的 |
 
-**一句话**：右半圈（拿数据、判疲劳、止损）**DONE**；左半圈（出角度、建广告、记素材、学赢家、扩下一轮）**几乎全是 MISSING/PARTIAL**。断点大部分在接线（§7 ①②），但"批量出角度"那一段是真缺能力、需要新增开发（§7 ③）。
+**一句话**：右半圈（拿数据、判疲劳、止损）**DONE**；左半圈（出角度、建广告、记素材、学赢家、扩下一轮）**几乎全是 MISSING/PARTIAL**。
+
+断点的性质分三档，别混为一谈（这一点本审计自己写错过两次，见 §7）：**真·接线**只有一处（给两个已有调用点传 `play`，§7 ①a）；**要改数据契约 + migration** 一处（让 ME 起草的广告能记进 `ad_creative_links`，§7 ①b）；**真缺能力、要新增开发**一处（批量出角度，§7 ③）。
 
 ---
 
@@ -252,16 +254,34 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 
 也就是说：**没有任何一条现存路径能同时点亮四件事。** 现在直接去投一条真广告，花掉的是客户预算，而素材归因和打法账本仍然会是空的 —— 正是本审计在批评的那种"各环节都正常、并排看才发现断了"。
 
-所以顺序必须是**先补另一半接线，再投**。两件小事，都在已有文件里：
+⚠️⚠️ **第二次更正**（Codex 复审第二轮 P1，同样核实成立）。上一版说"补两处接线就行"，其中 **`draft-and-gate` 那一处不是接线，是接不上** —— 逐行核对：
 
-1. **`draft-and-gate.ts` 建成之后调一次 `linkAdToCreative`** —— 需要同时给 `creative-link.ts:48` 的 `AdCreationPath` 加一个 `'me_ad_launch'` 值。该文件注释里已经预留了这一项，并写明"等那个路由真的存在了再加"—— 现在路由已经存在（`meta-ads/draft` + `draft-listing`），所以这一项该加了。
-2. **两条建广告路径把 `play` 传进去** —— `LinkAdToCreativeArgs` 已经有 `play` / `playSource` / `playContext` 三个可选参数，`persistLink` 也已经在写这三列。`draft-and-gate` 侧的打法是现成的（`DRAFT_PLAY[draft.kind]`，`playSource: 'declared_at_creation'`）；`boost-post` 侧固定是 `boost_organic_post`。
+- `ad-publisher.ts:120-148` 的 `creativeSpec()` 用 `object_story_spec`（`link_data` / `video_data` + `image_hash` / `video_id`）建**全新创意**。这条路径下**根本不存在帖子**，所以没有 `postId` 可传；
+- 而 `linkAdToCreative` 的 `postId` 是**必填**（`creative-link.ts:175`），且 `loadPublishedCandidates` 只从 `content_work_orders.published_ref.post_id` 找候选；
+- `draft-listing/route.ts:238` 手里**确实握着 ME 的素材身份**（`client_assets.id`），但它没被带进 `AdDraftCreative` —— 那个类型只有 `imageHash` / `videoId`，到了 publisher 就只剩 Meta 的 hash 了；
+- `CreativeSource` 是封闭 union，目前只有 `'content_work_order'`，**`client_assets` 连表示都表示不了**；
+- **最硬的一条**：`ad_creative_links.post_id` 在 migration 里是 `text NOT NULL`。**draft 建出来的广告今天在这张表里根本存不下。**
 
-补完这两处之后，再投一条真实广告，四件事才会一起亮。
+所以正确的拆法是把 ① 拆成两半，成本完全不同：
 
-建议标的：CTS 下一条 Reels 投流（有素材、有历史、闸门已在跑）。
+**①a — 真·小活，先做（不需要 migration）**
 
-> 这一步没做之前，后面所有"学习"都是在空表上做设计。
+把 `play` / `playSource` 传给已有的两个调用点：`boost-post/route.ts:122` 固定 `'boost_organic_post'`、`winner-reel-sync/engine.ts:214` 固定 `'thruplay_pool_build'`，`playSource` 都是 `'declared_at_creation'`。`LinkAdToCreativeArgs` 和 `persistLink` 早就支持这三列，纯粹是调用方没传。
+
+**首条 ME 自建广告走 `boost-post` 路径，不走 `draft-and-gate`** —— 因为 boost 的对象本来就是一个已发布的帖子，`postId` 天然有、候选也查得到。库里现在有 1 条 `published_ref` 非空的工单，投它就能让 `creative_ref` 第一次写出非 NULL 值。
+
+**①b — 需要 PM 拍板的一块（含 migration）**
+
+要让 `draft-and-gate` 那条路径也能记账，缺的是「**每条 creative 的素材身份贯穿到发布结果**」这件事本身，不是一次函数调用：
+
+1. `AdDraftCreative` 增加素材身份字段（`assetIds`），由 `draft-listing` 从 `client_assets` 带下来；
+2. `publishDraftPaused` 的返回值把 `adId` 和它对应的那条 creative 关联起来（它本来就是 `for (const c of d.creatives)` 循环建的，映射天然存在，只是现在丢了）；
+3. `ad_creative_links` 需要 **migration**：`post_id` 放开 NOT NULL，`creative_source` 加 `'client_asset'`，并给 `linkAdToCreative` 加一个不依赖 `postId` 的直接持久化入口（`adId → creativeRef`）;
+4. 然后才轮到 `AdCreationPath` 加 `'me_ad_launch'`。
+
+按 CLAUDE.md，migration 属于**不可逆操作，必须 PM 显式 `go apply`**，所以 ①b 不能自己拍板开工。
+
+> 这一步（至少 ①a）没做之前，后面所有"学习"都是在空表上做设计。
 
 ### ② 把 `ad-publisher.ts:116` 的 Advantage+ 默认值按打法分开
 
@@ -303,7 +323,9 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 - 私信类广告仍然一个 ad set 一种语言（`mixed_script_messaging_adset` 闸门，2026-08-04 得罪 5 个买家那次）；
 - 多角度测试**必须跑带成效的目标**（`LEAD_GENERATION` / `CONVERSATIONS`），不要再跑 THRUPLAY —— 否则测完还是不知道哪个角度带生意（问题 3）。
 
-**不建议现在做的**：重构 winner 判定、建"意图 → 角度"模型、把 `ad-level-breakdown` 改成会宣布赢家。这三件事都要有真实的 creative 级数据才能设计，而那些数据要等 ①③ 跑起来才有。
+**不建议现在做的**：重构 winner 判定、建"意图 → 角度"模型、把 `ad-level-breakdown` 改成会宣布赢家。这三件事都要有真实的 creative 级数据才能设计，而那些数据要等 ①a / ①b 跑起来才有。
+
+**建议的执行顺序**：①a（小活，今天就能做）→ 投第一条走 boost 路径的真广告 → ①b（要 PM `go apply` 一次 migration）→ ② → ③。
 
 ---
 
@@ -317,7 +339,9 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 
 2. **广告"说什么"这件事，我们还在用老办法。** 钱最多的三条广告，加起来只有 4 条不同的片子；而我们真正试过十几个不同说法的那两次，一次花了 $432、一次花了 $366 —— 钱太少，试完也分不出胜负。**说白了：我们把所有钱押在少数几条片子上，同时用零花钱去做真正该做的测试。这个次序反了。**
 
-3. **最关键的一环还没通电：我们至今说不清哪一条片子带来了哪一个客户。** 39 个已经追到"哪条广告"的客户里，**没有一个**能追到"哪条片子"。记这件事的表已经建好，但**记录这件事的三段路只各修了一段、还没接到一起** —— 得先花很小的功夫把它们接上，然后由 ME 自己去建一条广告，才能真的记下来。（只有建广告的那一刻才知道对应关系，事后问 Facebook 是问不出来的。）
+3. **最关键的一环还没通电：我们至今说不清哪一条片子带来了哪一个客户。** 39 个已经追到"哪条广告"的客户里，**没有一个**能追到"哪条片子"。记这件事的表已经建好，但**记录这件事的几段路只各修了一段、还没接到一起**。
+
+  好消息是有一条路今天就走得通：给一条**已经发出去的帖子**投流，我们记得下来它是哪条片子。所以第一条 ME 自己投的广告应该走这条路。另一条路（ME 从素材直接起草一条全新广告）要记得下来，得先改一次数据库结构 —— 那个要你点头才能动。（为什么非要在建广告那一刻记：只有那一刻知道对应关系，事后问 Facebook 是问不出来的。）
 
 **如果按现在的方向继续做，Magic Engine 在 Meta 广告上真正能形成的竞争优势是这个：**
 
@@ -327,7 +351,9 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 >
 > **但这条护城河成立的前提，是"哪条片子带来哪个客户"这条线必须真的通。现在它是断的。**
 >
-> 第 ①②件事是把断掉的接上 —— 小活，不用重构。第 ③ 件（一次出十几个不同说法）**是要真写新东西的**，别按"接个线就好"估工期。三件事里，①② 先做，因为 ③ 做出来的东西如果没有 ①②，照样不知道哪个说法赢了。
+> 接通它的活分三档，别按同一个价钱估：**①a 是真小活**（今天就能做，做完投一条 boost 广告就能第一次记下"哪条片子带来谁"）；**①b 要改一次数据库结构，需要你点头**；**③（一次出十几个不同说法）是要真写新东西的**，半周到一周，别按"接个线就好"估。
+>
+> 顺序上 ①a 先走，因为 ③ 做出来的东西如果没有 ①，照样不知道哪个说法赢了。
 
 ---
 
