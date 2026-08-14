@@ -113,7 +113,10 @@
   - ⚠️ **光"重跑一次"不够，会漏掉最要命的那条检查**：`expectedGeo` 只存在于 `CreateDraftDeps`（`draft-and-gate.ts:62`，创建时用一次），**没有落进 `DraftRecord`**；而 `approveDraft(actionId, supabase, accessToken)` 手上根本没有它。缺了它 `adaptMetaAdSet` 会传 `null`，`launch-readback.ts:281` 的 `if (input.expectedGeo && ...)` 直接跳过 **`geo_mismatch`** —— 也就是"等待期间被改到别的国家"这个核心场景照样放行。**修的时候必须同时**：创建时把可信地区持久化进 `DraftRecord`（⚠️ **不能只重载 `clients.country`**，见 `AD-GEO-1`）
 - [ ] 🔴 **AD-ISO-1 生产同步把整账户数据写成单个客户的 —— 混账户下正在污染健康诊断/月报/Goal 指标【已上线在跑】**（第二十八轮发现）：
   - `ads-strategy/daily-insights.ts:209+` 的 `syncCampaignDailyInsights(clientId, adAccountId, …)` 拉的是 **`getCampaignDailyInsights(adAccountId, …)`（整账户）**，然后 `rows.map(r => toInsightRow({ clientId, … }))` —— **把每一行都写成该 client，零 campaign 归属过滤**；ad 级同理；
-  - `google-data-pullback-daily/route.ts:595+` 更直接：把 `getAdAccountInsights` 的**账户级聚合**整个 `insert` 进该 client 的 `meta_ads_snapshots`，而那张表正是 `MetaAdsAdapter`（Goal 指标）、月报、production package 读的。
+  - `google-data-pullback-daily/route.ts:595+`（**定时**）：把 `getAdAccountInsights` 的**账户级聚合**整个 `insert` 进该 client 的 `meta_ads_snapshots`,而那张表正是 `MetaAdsAdapter`(Goal 指标)、月报、production package 读的;
+  - `clients/[id]/meta-ads/sync/route.ts:82-111`(**手动**,第三十轮补入):同样 `getAdAccountInsights(adAccountId, …)` 整账户 → `insert({ client_id: clientId, … })`;更要命的是 `:119-127` 会把这条 snapshot 用 `production_package_id` **永久绑到一份已交付的 production package 上** —— 污染就此固化进交付物,不是跑一次就过去的指标。
+
+  **三个写入口必须共用同一套 campaign→client 归属过滤**,只修定时任务,手动同步照样能生成掺了别家投放的月报和交付记录。
 
   CTS 绑的就是混账户 `act_2775766642787274`，里面**确有 Oztop 的投流**。`20260721000001_ad_daily_insights.sql:17-22` 自己写着「该账户仍带 4 条 legacy Oztop campaign……**任何账户级 rollup 必须从过滤后的 campaign 行聚合，不能信账户级总数**」—— **要求写了，写入侧没实现。**
   ⚠️ 现在看着"干净"只是因为那几条 Oztop campaign 近期没投放（migration 注释里就写着"最近 7 天零花费"）—— **它一旦重新投放，CTS 的健康诊断、月报和 Goal 指标立刻被污染**。这不是补读一次能解决的，`AD-EVID-1` 只管审计取证，管不了每天在跑的同步。
