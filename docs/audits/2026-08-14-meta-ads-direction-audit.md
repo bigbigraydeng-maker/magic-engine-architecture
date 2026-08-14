@@ -395,6 +395,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 | 9 | **赢家→下一轮的通路是空的** | `winner_structures` 0 行，唯一写入方是 Airtable 人工表单 |
 | 10 | **每条帖子一个 campaign + 一个 ad set** | CTS 账户 26 个 ad set 里 14 个是 `帖子："…"` 型 boost，单条 $2–$37，学习数据被彻底打散 |
 | 11 | 🔴 **已上线的止损按钮能动别家客户的广告** | `meta-ads/execute/route.ts:71+` 的 `campaign_id` 取自请求体，只校验 URL 里的客户，**从不与该客户的 `meta_ad_account_id` 对账**；混账户下有 CTS 权限即可暂停 / 改预算 Oztop 的在投广告。strategy doc §2.4 记的 R5 写越权，**至今未修**（登记为 `AD-SEC-1`）|
+| 13 | 🔴 **每天的同步把整账户数据写成单个客户的** | `daily-insights.ts:209+` 拉整账户后 `rows.map(… clientId …)`，**零 campaign 归属过滤**；`google-data-pullback-daily/route.ts:595+` 把账户级聚合直接插进该 client 的 `meta_ads_snapshots`（Goal 指标 / 月报 / production package 都读它）。CTS 绑的就是混账户，而 `20260721000001` 的注释自己写着「任何账户级 rollup 必须从过滤后的 campaign 行聚合」—— **要求写了、写入侧没实现**。现在看着干净只因那几条 Oztop campaign 近期没投放（登记为 `AD-ISO-1`）|
 | 12 | 🔴 **改预算的输入框写死 AUD，账户却是 NZD** | `AdsFixDrawer.tsx:309`「新日预算（AUD）」→ `execute/route.ts:157` `newBudget * 100` 直发 Meta，不读币种不换算；Meta 按账户币种解释 → 人以为填 AUD，钱按 NZD 花（登记为 `AD-CUR-2`）|
 
 **关于问题 10 的说明**：这是本仓最典型的 audience fragmentation，但它的成因不是"按兴趣拆人群"，而是"每次 boost 一条帖子就新开一套"。表现一样：小预算跑不出 learning，创意之间无法在同一个竞价里公平竞争。
@@ -764,4 +765,4 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
    两张表都是裸 `NUMERIC`、原样存账户币种、不换算不记币种；而 CTS/Roman 是 NZD、Oztop 是 AUD（均已实读）。**只修前者修不到报表侧** —— `20260721000001` 的注释本身就写明报表仍读 `meta_ads_snapshots`。所以任何跨客户的花费汇总、排行、预算比较都会算错。
    修法：`ad_daily_insights` 加 `currency` 列（Graph 的 `account_currency` 字段直接给），跨客户汇总时按基准日折算并注明汇率。
 
-   ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现与未完成动作已一并登记（**19 条**）：`AD-CUR-1/2` · `AD-PLAY-1` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · **`AD-FORM-1`**（选表单不看语言，首条真钱广告的前置）· `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1` · **`AD-EXPL-1`**（每臂最低探索量，决定「找出赢家」这个卖点成不成立）· 🔴 **`AD-GEO-0`**（`targetingFor` 国家+城市并集，ME 起草的广告天生投整个国家 —— 首发前必修）· **`AD-GEO-1`**（geo 闸门只到国家级，抓不到它自己引用的那次事故）· `AD-EVID-1` · `AD-FRAG-1`。
+   ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现与未完成动作已一并登记（**20 条**）：`AD-CUR-1/2` · `AD-PLAY-1` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · **`AD-FORM-1`**（选表单不看语言，首条真钱广告的前置）· `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1` · **`AD-EXPL-1`**（每臂最低探索量，决定「找出赢家」这个卖点成不成立）· 🔴 **`AD-ISO-1`**（生产同步把整账户写成单个客户，已上线在跑）· 🔴 **`AD-GEO-0`**（`targetingFor` 国家+城市并集，ME 起草的广告天生投整个国家 —— 首发前必修）· **`AD-GEO-1`**（geo 闸门只到国家级，抓不到它自己引用的那次事故）· `AD-EVID-1` · `AD-FRAG-1`。

@@ -111,6 +111,13 @@
   修：三处都回读账户币种,UI 显示、请求契约与持久化记录都按**账户币种**表达(或显式换算并标注汇率)。⚠️ 只修 boost,既漏了最常用的执行抽屉,也漏了首发要走的草案路径
 - [ ] **AD-GATE-1 `approveDraft` 激活前不重新回读**：只查 `payload.status` 就 `activatePublished`，不重跑 `fetchAdSetReadback` / `checkLaunch`。草案在共用账户里躺几天，期间被改则批准人看到的是旧快照、钱按新配置花 —— 这违背 `launch-readback.ts` 自己"只有回读能看见"的立论。修：激活前重跑回读 + 闸门，有 blocker 拒绝激活。**不需 migration**
   - ⚠️ **光"重跑一次"不够，会漏掉最要命的那条检查**：`expectedGeo` 只存在于 `CreateDraftDeps`（`draft-and-gate.ts:62`，创建时用一次），**没有落进 `DraftRecord`**；而 `approveDraft(actionId, supabase, accessToken)` 手上根本没有它。缺了它 `adaptMetaAdSet` 会传 `null`，`launch-readback.ts:281` 的 `if (input.expectedGeo && ...)` 直接跳过 **`geo_mismatch`** —— 也就是"等待期间被改到别的国家"这个核心场景照样放行。**修的时候必须同时**：创建时把可信地区持久化进 `DraftRecord`（⚠️ **不能只重载 `clients.country`**，见 `AD-GEO-1`）
+- [ ] 🔴 **AD-ISO-1 生产同步把整账户数据写成单个客户的 —— 混账户下正在污染健康诊断/月报/Goal 指标【已上线在跑】**（第二十八轮发现）：
+  - `ads-strategy/daily-insights.ts:209+` 的 `syncCampaignDailyInsights(clientId, adAccountId, …)` 拉的是 **`getCampaignDailyInsights(adAccountId, …)`（整账户）**，然后 `rows.map(r => toInsightRow({ clientId, … }))` —— **把每一行都写成该 client，零 campaign 归属过滤**；ad 级同理；
+  - `google-data-pullback-daily/route.ts:595+` 更直接：把 `getAdAccountInsights` 的**账户级聚合**整个 `insert` 进该 client 的 `meta_ads_snapshots`，而那张表正是 `MetaAdsAdapter`（Goal 指标）、月报、production package 读的。
+
+  CTS 绑的就是混账户 `act_2775766642787274`，里面**确有 Oztop 的投流**。`20260721000001_ad_daily_insights.sql:17-22` 自己写着「该账户仍带 4 条 legacy Oztop campaign……**任何账户级 rollup 必须从过滤后的 campaign 行聚合，不能信账户级总数**」—— **要求写了，写入侧没实现。**
+  ⚠️ 现在看着"干净"只是因为那几条 Oztop campaign 近期没投放（migration 注释里就写着"最近 7 天零花费"）—— **它一旦重新投放，CTS 的健康诊断、月报和 Goal 指标立刻被污染**。这不是补读一次能解决的，`AD-EVID-1` 只管审计取证，管不了每天在跑的同步。
+  修：同步侧按 campaign→client 归属过滤（或推进账户拆分，`docs/strategy/meta-flywheel-risk-and-sequencing.md` §2.1 的结论）；`meta_ads_snapshots` 那条改为从过滤后的 campaign 行聚合，不用账户级总数
 - [ ] 🔴 **AD-GEO-0 `targetingFor` 把国家和城市一起发出去，城市半径形同虚设 —— ME 建的广告从一开始就投整个国家【投第一条真广告前必修】**（第二十七轮发现，比 `AD-GEO-1` 更根本）：`ad-publisher.ts:105-109`
   ```ts
   const geo = { countries: d.geoCountries }            // ['NZ']
