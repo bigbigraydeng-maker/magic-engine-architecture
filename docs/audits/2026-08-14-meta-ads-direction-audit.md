@@ -13,7 +13,7 @@
 
 1. **投放侧（delivery）实际上已经在 Andromeda 打法上** —— 但这个结论**只覆盖 CTS 一家、总花费的 47.7%**（$3,733.59 / $7,822.57）：把混账户按 `campaign_id` 归属后，CTS 已追踪的 6 组 ad set **一个兴趣定向都没有**，73.6% 的花费明确开着 `advantage_audience: 1`（唯一关掉的是重定向组，那本来就该关）。**Oztop（46.1%）和 Roman（6.1%）的账户都查不到 targeting**，合计 52.3% 的花费无证据（见 §3.1 与附录 1）。
 2. **但那不是 ME 做的** —— 是人在 Ads Manager 里点出来的。ME 自己唯一的建广告代码 `ad-publisher.ts:116` 写死 `targeting_automation: { advantage_audience: 0 }`，即**主动关掉** Advantage+ 受众。这条代码路径**没有留下任何成功建广告的记录**（`ads.create_ad` 0 条 —— ⚠️ 但该账本会静默丢记录，见 §2 注，所以只能说"没记录"，不能说"从没建过"），所以这个冲突**目前看是潜在的**，不是已确认发生的。
-3. **钱高度集中在少数广告上**（按客户分开看，避开混币种）：**CTS 80.7% 的钱压在 2 条广告上**；**Oztop 63.4% 压在 1 条上**；而两次真多角度测试分别只拿到该客户的 **12.0%**（Oztop 13 条 hook）和摊薄到每条 $24（Roman 15 条 angle）。**多角度测试只发生在没钱的地方。**（⚠️ 这里数的是广告条数；单条广告内部可能还有多套文案，库里看不到 —— 见 §3.3 注）
+3. **钱高度集中在少数广告上**（按客户分开看，避开混币种）：**CTS 80.7% 的钱压在 2 条广告上**；**Oztop 63.4% 压在 1 条上**；而两次真多角度测试分别只拿到该客户的 **12.0%**（Oztop 14 条 hook）和摊薄到每条 $24（Roman 15 条 angle）。**多角度测试只发生在没钱的地方。**（⚠️ 这里数的是广告条数；单条广告内部可能还有多套文案，库里看不到 —— 见 §3.3 注）
 4. **闭环没有通电**：`ad_creative_links` 0 行、`contacts.attr_creative_ref` 0 行（39 条已归因 lead 无一条能说清是哪条素材）、`winner_structures` 0 行、`variant_from_winner` 工单 0 条、`flywheel_actions` 里 `ads.create_ad` 0 条。**数据结构全都建好了，一个都没被写过。**
 
 不是 RED，因为架构没有和 Andromeda 打架 —— 该有的表、该有的 ad 级日度数据（376 行）、该有的角度生成器都已经存在。不是 GREEN，因为**从"发现赢家"到"生成下一轮"这半圈，一次都没有真实跑通过**。
@@ -214,7 +214,7 @@ function targetingFor(d: AdDraft): Record<string, unknown> {
 | Campaign | 广告数 | 花费 | 结果 | 占该客户 |
 |---|---|---|---|---|
 | `Oztop — Lead Form — Cold Broad — 20260709` | **2**（97.6% 在一条上） | $2,288.52 | 78 | 63.4% |
-| `OZ-THRU-S1-hooktest-202607` | **13** | $432.50 | 0 | 12.0% |
+| `OZ-THRU-S1-hooktest-202607` | **14** | $432.50 | 0 | 12.0% |
 
 → **Oztop 六成多的钱压在 1 条创意上；13 个角度的测试只分到 12%。**
 
@@ -246,7 +246,7 @@ function targetingFor(d: AdDraft): Record<string, unknown> {
 
 ### 3.4 那两次真正的多角度测试，角度是真的不同
 
-不是"换个颜色换个标题"—— Oztop 的 13 条 hook 覆盖了不同痛点 / 人群 / 场景 / 报价：
+不是"换个颜色换个标题"—— Oztop 的 14 条 hook 覆盖了不同痛点 / 人群 / 场景 / 报价：
 
 ```
 OZ-S1-A-spill（洒水）      OZ-S1-B-warp（起翘）    OZ-S1-C-alex（人物）
@@ -256,13 +256,15 @@ OZ-S3-T2-spillpromo        OZ-S3-T3-julyspecial    OZ-S3-W1-pricetag
 OZ-S3-W2-stockscale        OZ-S3-W3-texture        OZ-S1-D-Showroom-SR01
 ```
 
+*（⚠️ **数量第二十一轮才改对**：前二十版一直写"13 条"，而这个 campaign `120252412058510790` 下实际是 **14 条**广告 —— 上面 14 个标识全部属于它，逐条花费相加正好 $432.50，与文中一直引用的总额吻合。是我数错了，Codex 靠"列了 14 个却写 13"发现的。）*
+
 Roman 的 15 条同样是真角度：`Rangitoto 学区 hook` / `By negotiation` / `$10k Prezzy offer` / `价格前置` / `Room to grow` / 三语 / 韩语挑战者 / IG 专投。
 
 **这说明"多角度"这件事我们会做，是人做的，而且做对了。问题在别处（见 3.5、3.6）。**
 
 ### 3.5 两次多角度测试，ME 都读不出结论（但原因各不相同）
 
-⚠️ **本节初稿把第一条写反了，已更正**（Codex 复审第六轮 P1，核实成立）。原稿写的是「Oztop 13 条 hook 跑的是 `THRUPLAY` 目标 → results 全为 0，测完不知道哪个角度带生意」，把它当成实验设计的缺陷。**这是本仓 2026-08-04 那次误判的重演。**
+⚠️ **本节初稿把第一条写反了，已更正**（Codex 复审第六轮 P1，核实成立）。原稿写的是「Oztop 14 条 hook 跑的是 `THRUPLAY` 目标 → results 全为 0，测完不知道哪个角度带生意」，把它当成实验设计的缺陷。**这是本仓 2026-08-04 那次误判的重演。**
 
 `src/lib/flywheel/ads-expected-metric.ts:108-123` 原文（就是为这个 campaign 写的）：
 
@@ -272,11 +274,11 @@ Roman 的 15 条同样是真角度：`Rangitoto 学区 hook` / `By negotiation` 
 
 **所以准确的说法是：**
 
-- **Oztop 13 条 hook 的目标选对了。** 它是攒池实验（`OZ-THRU-S1-hooktest`，打法 `thruplay_pool_build`），要筛的是"哪个 hook 能最便宜地让人看完"，`THRUPLAY` 正是该用的目标，results=0 是设计如此。
+- **Oztop 14 条 hook 的目标选对了。** 它是攒池实验（`OZ-THRU-S1-hooktest`，打法 `thruplay_pool_build`），要筛的是"哪个 hook 能最便宜地让人看完"，`THRUPLAY` 正是该用的目标，results=0 是设计如此。
 - **真正的缺陷在 ME 这一侧：这个实验该看的指标，我们一个都没入库。** `ad_daily_insights`（migration `20260721000001`）只有 `spend / impressions / reach / clicks / frequency / cpm / ctr / cpc / leads / messaging_conversations / results / cost_per_result` —— **没有完播次数、没有单次完播成本、没有 `video_p100`、也没有受众池增长**。于是花掉的 $432.50 在 ME 里唯一读得出的结论是「0 结果」，而那个数按仓库自己的规矩根本不该拿来判好坏。
 - 这件事**已经登记但没做，而且是两条不是一条**：ROADMAP `P21.K.8`（objective 感知 + 视频完播指标）补的是"看完成本"那一半；"池子涨了多少人"那一半在 `P18.E.3`（池 size 快照，依赖 `P18.E.2`）。**两条都没做，所以 `play-vocabulary.ts:55-62` 定义的成效信号一个也读不出来。**
-- **而且还有第三层，连登记都没有**：即使这两条都做完，也只知道"池子整体涨了多少"，**不知道 13 个 hook 里是哪个带来的** —— `client_audience_assets` 按 `audience_id` 唯一、无创意维度，而 `videoEventRule` 本来就是把一批视频灌进同一个池。要按 hook 归因，得一 hook 一池或另建创意级增长映射（详见 §7 执行顺序第 7 步）。
-- 另外钱确实高度集中：`OZ-S1-A-spill` 一条吃掉 $280.72 / $432.50（65%）—— 这一条与目标无关，是 13 个角度之间没跑成公平竞争。
+- **而且还有第三层，连登记都没有**：即使这两条都做完，也只知道"池子整体涨了多少"，**不知道 14 个 hook 里是哪个带来的** —— `client_audience_assets` 按 `audience_id` 唯一、无创意维度，而 `videoEventRule` 本来就是把一批视频灌进同一个池。要按 hook 归因，得一 hook 一池或另建创意级增长映射（详见 §7 执行顺序第 7 步）。
+- 另外钱确实高度集中：`OZ-S1-A-spill` 一条吃掉 $280.72 / $432.50（**64.9%**）—— 这一条与目标无关，是 14 个角度之间没跑成公平竞争。剩下 13 条分 $151.78，其中 3 条不到 $1（$0.23 / $0.20 / $0.01）。
 - **Roman 15 条 angle 总预算只有 $366**，平均每条 $24。最贵的一条 `Ad F · 中文 · Rangitoto 学区` $111.33 拿到 21 个对话（$5.30/对话），最便宜的几条只有 $2.54–$4.82、**展示数是个位数到两位数**。在这个量级上，多数臂根本没有可读的信号 —— 这一条靠数据本身就成立，不需要功效计算。
 
   ⚠️ **不要拿 `$1,835` 那个数来证明这一点**（Codex 复审第八轮 P2，核实成立；前几版这么用了）。`play-vocabulary.ts:6-8` 算的是**两组对比**（中文 vs 英文，实测 1.84 倍、p ≈ 0.22）所需的样本量，那是个双臂显著性检验；而这里是 **15 个角度里挑赢家**的多臂选择问题 —— 基线转化率、各臂预算分配、多重比较修正都不一样，`$1,835` 不能平移过来。要给下一次多角度测试定预算，得**按每条变体的实际指标重做一次样本量估算**，不能引用那个数。
@@ -359,7 +361,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 2. **ad 级日度数据脊柱是真的**（376 行，每天在写，带 `parent_id`）。绝大多数同类系统只有 campaign 级 —— 没有 ad 级就永远做不了 creative-level 学习。这块地基已经打好了。
 3. **不拿汇总骗自己**：`ad-level-breakdown.ts` 会在子项差异 ≥1.5 倍时明说"这个汇总在掩盖差异"，还会拦住"表单留资 + 私信对话被加在同一列"的不可比比较。这是很多投放团队都没有的纪律。
 4. **建完必回读**：`launch-readback.ts` 承认"创建接口的回显不含 Meta 自己补上的东西"，强制建成暂停 → 回读 → 人点头。这在 Advantage+ 时代**更重要**，因为平台会自动加的东西只会越来越多。
-5. **多角度这件事我们会做**（3.4 的 13 条 hook / 15 条 angle 是真角度，不是换色）。缺的是把它变成系统行为，不是缺能力。
+5. **多角度这件事我们会做**（3.4 的 14 条 hook / 15 条 angle 是真角度，不是换色）。缺的是把它变成系统行为，不是缺能力。
 6. **模板不会自行新增事实**：`listing-draft-builder` 没有自由文本入口，买家读到的每一句都是由 `ListingFacts` / `AgentFacts` 的字段拼出来的，**AI 不会凭空多写一个价格或一句战绩**；禁用词命中直接拒绝出稿（`BannedPhraseError`，不是标红让人审）。
 
   ⚠️ **但这不等于"编不出假话"**（Codex 复审第十轮 P1，核实成立；本条初稿写成了"结构上不可能编价格/战绩"，把安全性说大了）：
@@ -378,7 +380,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 |---|---|---|
 | 1 | **ME 自己的建广告代码默认关掉 Advantage+ 受众** | `ad-publisher.ts:116` `advantage_audience: 0`，无差别 |
 | 2 | **钱全压在单条广告上** | CTS 80.7% 的花费在 2 条广告上；Oztop 63.4% 在 1 条上（各自单一币种口径，见 §3.3）|
-| 3 | **视频/攒池类实验该看的指标 ME 一个都没采** —— 目标本身是对的，读不出结论是我们的问题 | `ad_daily_insights` 无完播次数 / 单次完播成本 / `video_p100` / 池子增长；13 条 hook 的 $432.50 在 ME 里只读得出「0 结果」，而那个数按 `ads-expected-metric.ts:108-123` 本就不该用来判好坏。ROADMAP `P21.K.8` 已登记未做 |
+| 3 | **视频/攒池类实验该看的指标 ME 一个都没采** —— 目标本身是对的，读不出结论是我们的问题 | `ad_daily_insights` 无完播次数 / 单次完播成本 / `video_p100` / 池子增长；14 条 hook 的 $432.50 在 ME 里只读得出「0 结果」，而那个数按 `ads-expected-metric.ts:108-123` 本就不该用来判好坏。ROADMAP `P21.K.8` 已登记未做 |
 | 4 | **多角度测试的预算不足以出结论** | Roman 15 条 / $366，平均每条 $24，多数臂展示数只有个位数到两位数（⚠️ 不引用 `$1,835`，那是双臂检验的数，见 §3.5）|
 | 5 | **ME 出的草案结构上只能有一条创意** | `listing-draft-builder.ts:193,254` 硬写 `creatives: [creative]`。<br>⚠️ **"按语言拆 ad set"不算问题**（第九轮更正）：`lead_form` 草案的所有创意共用同一个 `d.leadFormId`（`ad-publisher.ts:142`），而混语言闸门只管私信广告（`launch-readback.ts:192`）—— 所以在现有契约下，**按语言拆是必要的安全边界，不是缺陷**。要改成能合并，前置是表单身份下沉到每条 creative + 补表单广告的混语言闸门（见 §7 ③）|
 | 6 | **creative 级归因断链** | 39 条 lead 有 `attr_ad_id`，0 条有 `attr_creative_ref` |
@@ -626,7 +628,7 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
    ⚠️ **但这两条加起来仍然答不出"哪个 hook 最快把池子做大"**（Codex 复审第十三轮 P1，核实成立；上一版把 `P18.E.3` 写成了这个问题的充分前置）：
 
    - `client_audience_assets`（migration `20260728144156`）的唯一键是 **`audience_id`**，维度只有 `layer` / `ladder_stage` / `scope` —— **没有"哪条视频/哪条创意"这一维**；
-   - 而 `audience-ladder.ts` 的 `videoEventRule(videoIds, pageId, event)` 是把**一批 videoId 灌进同一个池**。13 个 hook 喂同一个池，`P18.E.3` 只会给出**一个**净增数字。
+   - 而 `audience-ladder.ts` 的 `videoEventRule(videoIds, pageId, event)` 是把**一批 videoId 灌进同一个池**。14 个 hook 喂同一个池，`P18.E.3` 只会给出**一个**净增数字。
 
    所以攒池型角度测试的成效信号，现状是**一半可得、一半不可得**：
 
