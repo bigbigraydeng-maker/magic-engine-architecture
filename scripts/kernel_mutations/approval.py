@@ -270,17 +270,15 @@ CREATE OR REPLACE FUNCTION public.kernel_record_fenced_deny_v2(
         #    注意这一刀改完**照样会抛错** —— 只验「抛没抛」的测试抓不到它。
         name="K-WP01A v2 缺失时退回无 fence 的五参入口（先写再抛错）",
         file="src/lib/kernel/store.ts",
-        old="""  if (result.error && isMissingRpc(result.error)) {
-    throw new Error(""",
-        new="""  if (result.error && isMissingRpc(result.error)) {
-    await sb.rpc('kernel_record_fenced_deny', {
-      p_run_id: args.runId,
-      p_expected_generation: args.expectedGeneration ?? null,
-      p_expected_status: args.expectedStatus ?? null,
-      p_decision: args.decision,
-      p_reason: args.reason,
-    })
-    throw new Error(""",
+        old="""  failClosedIfRpcMissing('kernel_record_fenced_deny_v2', result.error, {""",
+        new="""  if (result.error) await sb.rpc('kernel_record_fenced_deny', {
+    p_run_id: args.runId,
+    p_expected_generation: args.expectedGeneration ?? null,
+    p_expected_status: args.expectedStatus ?? null,
+    p_decision: args.decision,
+    p_reason: args.reason,
+  })
+  failClosedIfRpcMissing('kernel_record_fenced_deny_v2', result.error, {""",
         test="src/lib/kernel-approval/__tests__/rollout-compat.test.ts",
         expect_fail_contains="一次都没被调用过",
     ),

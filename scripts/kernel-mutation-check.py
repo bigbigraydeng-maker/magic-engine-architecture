@@ -99,7 +99,44 @@ def judge(m, code, names, out):
     return (m["name"], "CAUGHT", "; ".join(names[:4]))
 
 
+def preflight():
+    """跑之前先把**所有**探针的锚点核一遍，不命中的一次性全列出来。
+
+    🔴 锚点失配是**静默**的：脚本会把那条记成 SKIP 接着跑下去，
+       而 SKIP 长得跟「探针本来就少几条」一模一样。真正的代价是时间 ——
+       上一轮拆了个模块，一条锚点跟着漂了，等整套跑完两小时才看见。
+       这里几秒钟就能把同样的事说清楚。
+
+    返回不命中的清单；空 = 可以跑。
+    """
+    bad = []
+    for m in MUTATIONS:
+        if "rename" in m:
+            if not os.path.exists(m["rename"][0]):
+                bad.append((m["name"], "rename 源文件不存在：" + m["rename"][0]))
+            continue
+        try:
+            src = open(m["file"], encoding="utf-8").read()
+        except OSError:
+            bad.append((m["name"], "目标文件不存在：" + m["file"]))
+            continue
+        if m["old"] not in src:
+            bad.append((m["name"], "old 锚点没命中（代码改过了，探针要跟着更新）"))
+        elif "old2" in m and m["old2"] not in src.replace(m["old"], m["new"], 1):
+            bad.append((m["name"], "old2 锚点没命中"))
+        if not os.path.exists(m["test"]):
+            bad.append((m["name"], "目标测试文件不存在：" + m["test"]))
+    return bad
+
+
 def main():
+    drifted = preflight()
+    if drifted:
+        print(f"🔴 预检：{len(drifted)} 条探针的锚点没命中，先修它们再跑（跑完再发现要花两小时）：")
+        for name, why in drifted:
+            print(f"  [ANCHOR] {name} | {why}")
+        return 1
+
     results = []
     for m in MUTATIONS:
         # 改名型变异：P1-4 防的是文件名撞车，破坏点不在代码里
