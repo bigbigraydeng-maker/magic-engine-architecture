@@ -8,6 +8,10 @@
  * Reference: ROADMAP.md P8.0.2 DNZ collection infrastructure
  */
 
+import { isSitemapIndexDocument } from './sitemap-root'
+import { createSitemapFetchBudget, type SitemapFetchBudget } from './sitemap-budget'
+import { fetchSitemapXmlSafely, type Report } from './sitemap-fetch'
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -79,6 +83,16 @@ export const MIN_DISCOVERED_URLS = 2
 /** Spacing between Jina child-sitemap fetches (anonymous tier ≈ 20 RPM). */
 export const JINA_SITEMAP_DELAY_MS = 3_500
 
+/**
+ * Levels 1 and 2 probe well-known paths, so a 404 is the ordinary "try the next
+ * level" signal and stays silent — the behaviour every onIssue test asserts. A
+ * child named inside an index is the opposite: the document promised it exists,
+ * so its 404 is a missing subtree and is reported.
+ */
+const LEVEL_1_PROBE = { failureStage: 'sitemap.xml', silentOnHttpError: true } as const
+const LEVEL_2_PROBE = { failureStage: 'sitemap_index.xml', silentOnHttpError: true } as const
+const CHILD_SITEMAP_READ = { failureStage: 'child-sitemap' } as const
+
 // ---------------------------------------------------------------------------
 // Internal helpers (exported for unit testing)
 // ---------------------------------------------------------------------------
@@ -93,14 +107,73 @@ export function normaliseDomain(input: string): string {
 }
 
 /**
+ * XML 1.0 §2.2 legal character range:
+ *   Char ::= #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
+ * Rejects surrogate halves (0xD800–0xDFFF, the gap between the second and
+ * third range) and anything past the Unicode ceiling (0x10FFFF) — both of
+ * which make String.fromCodePoint() throw RangeError.
+ */
+function isValidXmlCodePoint(codePoint: number): boolean {
+  return (
+    codePoint === 0x9 || codePoint === 0xa || codePoint === 0xd ||
+    (codePoint >= 0x20 && codePoint <= 0xd7ff) ||
+    (codePoint >= 0xe000 && codePoint <= 0xfffd) ||
+    (codePoint >= 0x10000 && codePoint <= 0x10ffff)
+  )
+}
+
+/**
+ * Decode XML entities in <loc> text (Codex review on PR #963, P2).
+ *
+ * 🔴 Sitemap XML is required to escape `&` as `&amp;` — a query string like
+ *    `?type=post&page=2` is written `?type=post&amp;page=2` in valid XML.
+ *    parseLocsFromXml() used to return that text verbatim, and callers fetch
+ *    it as-is: the literal `amp;page=2` param goes out on the wire instead of
+ *    `page=2`, so multi-param sitemap/page URLs 404 or resolve to the wrong
+ *    resource. This is a single left-to-right pass — each entity match is
+ *    consumed once, so `&amp;amp;` (an XML-escaped literal "&amp;" string)
+ *    decodes to `&amp;`, not `&` — no double-decoding of already-normal text.
+ */
+function decodeXmlEntities(text: string): string {
+  return text.replace(/&(#[xX][0-9a-fA-F]+|#[0-9]+|amp|lt|gt|quot|apos);/g, (match, entity: string) => {
+    if (entity[0] === '#') {
+      const isHex = entity[1] === 'x' || entity[1] === 'X'
+      const codePoint = parseInt(entity.slice(isHex ? 2 : 1), isHex ? 16 : 10)
+      // 🔴 Codex review on PR #963 (P2): a malformed sitemap can carry an
+      //    out-of-range numeric entity (&#1114112;, a surrogate half, or a
+      //    digit string long enough to overflow to Infinity). parseInt()
+      //    never throws, but String.fromCodePoint() does — and this runs
+      //    inside the one parse call for the whole XML document, so one bad
+      //    <loc> would abort parsing and drop every valid page in the same
+      //    file. Validate the range first; an illegal entity keeps its
+      //    original source text instead of decoding (or crashing).
+      if (!Number.isFinite(codePoint) || !isValidXmlCodePoint(codePoint)) return match
+      return String.fromCodePoint(codePoint)
+    }
+    switch (entity) {
+      case 'amp': return '&'
+      case 'lt': return '<'
+      case 'gt': return '>'
+      case 'quot': return '"'
+      case 'apos': return "'"
+      default: return match
+    }
+  })
+}
+
+/**
  * Parse <loc> text nodes from a sitemap XML string.
+ * XML entities (&amp;, &#38;, &#x26;, ...) are decoded here — this is the
+ * one shared parsing boundary every caller (Level 1, Level 2, robots.txt
+ * directive, sitemap-index recursion, Jina fallback) goes through, so fixing
+ * it here fixes it everywhere instead of patching individual call sites.
  */
 export function parseLocsFromXml(xml: string): string[] {
   const locs: string[] = []
   const re = /<loc>\s*(https?:\/\/[^\s<]+)\s*<\/loc>/gi
   let m: RegExpExecArray | null
   while ((m = re.exec(xml)) !== null) {
-    locs.push(m[1].trim())
+    locs.push(decodeXmlEntities(m[1].trim()))
   }
   return locs
 }
@@ -133,8 +206,21 @@ export function isFullyCrawlBlocked(robotsTxt: string): boolean {
 }
 
 /**
+ * A BFS candidate has to be a web page. 🔴 Codex review on PR #963 (P2):
+ * `new URL()` parses `ftp://example.com/f`, `data://…` and `javascript://…`
+ * into a hostname *equal* to the audited site's, so hostname equality alone
+ * admits them — and they would consume MAX_BFS_LINKS slots, ending discovery
+ * early and handing Jina URLs it cannot fetch. The `startsWith(origin)` prefix
+ * test this PR replaced rejected them as a side effect; keep that explicitly.
+ * A link-candidate filter, not a network guard (that is safe-fetch.ts).
+ */
+function isWebPageScheme(url: URL): boolean {
+  return url.protocol === 'http:' || url.protocol === 'https:'
+}
+
+/**
  * Extract same-origin href values from raw HTML.
- * Returns de-duped absolute URLs limited to `max` entries.
+ * Returns de-duped absolute http(s) URLs limited to `max` entries.
  */
 export function extractSameDomainLinks(
   html: string,
@@ -147,12 +233,10 @@ export function extractSameDomainLinks(
   while ((m = re.exec(html)) !== null && seen.size < max) {
     const raw = m[1].trim()
     try {
-      const abs = new URL(raw, origin).href
-      // Treat www.domain.com and domain.com as the same origin
-      const normAbs = abs.replace(/^(https?:\/\/)www\./, '$1')
-      const normOrigin = origin.replace(/^(https?:\/\/)www\./, '$1')
-      if (normAbs.startsWith(normOrigin) && !seen.has(abs)) {
-        seen.add(abs)
+      const parsed = new URL(raw, origin)
+      // Rejected candidates are never added, so they cannot occupy a `max` slot.
+      if (isWebPageScheme(parsed) && isSameHost(parsed.href, origin) && !seen.has(parsed.href)) {
+        seen.add(parsed.href)
       }
     } catch {
       // ignore malformed hrefs
@@ -171,7 +255,6 @@ export function extractMarkdownLinks(
   max: number = MAX_BFS_LINKS
 ): string[] {
   const seen = new Set<string>()
-  const normOrigin = origin.replace(/^(https?:\/\/)www\./, '$1')
 
   // Match markdown links: [text](https://...)
   const mdRe = /\]\((https?:\/\/[^\s)]+)\)/g
@@ -179,8 +262,7 @@ export function extractMarkdownLinks(
   while ((m = mdRe.exec(markdown)) !== null && seen.size < max) {
     try {
       const abs = new URL(m[1]).href
-      const normAbs = abs.replace(/^(https?:\/\/)www\./, '$1')
-      if (normAbs.startsWith(normOrigin)) seen.add(abs)
+      if (isSameHost(abs, origin)) seen.add(abs)
     } catch { /* skip */ }
   }
 
@@ -189,8 +271,7 @@ export function extractMarkdownLinks(
   while ((m = bareRe.exec(markdown)) !== null && seen.size < max) {
     try {
       const abs = new URL(m[0]).href
-      const normAbs = abs.replace(/^(https?:\/\/)www\./, '$1')
-      if (normAbs.startsWith(normOrigin)) seen.add(abs)
+      if (isSameHost(abs, origin)) seen.add(abs)
     } catch { /* skip */ }
   }
 
@@ -250,11 +331,48 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
   const report = (stage: string, error: unknown, url?: string): void =>
     opts?.onIssue?.({ stage, url, error: error instanceof Error ? error.message : String(error) })
   let best: string[] = []
+
+  /**
+   * Pages found by the **sitemap** levels (robots.txt directives, Level 1,
+   * Level 2), already same-host filtered, accumulated across the whole run.
+   *
+   * 🔴 Codex review on PR #963 (P2). The run-wide fetch ledger means a sitemap
+   *    named by two levels is only *read* once — correct, but it made the
+   *    second level see nothing. With a per-level "best single result" rule, a
+   *    robots.txt directive yielding `/a` and a Level 1 index yielding `/b`
+   *    each stayed under MIN_DISCOVERED_URLS, and discovery silently returned
+   *    one page instead of two. Merging is the fix that keeps de-duplication:
+   *    the document is still fetched once, its pages just are not thrown away.
+   *
+   *    Deliberately kept here in the orchestration layer, not in
+   *    SitemapFetchBudget — that ledger owns "may this URL be requested", not
+   *    XML, parse results or caching.
+   */
+  const discovered = new Set<string>()
+
+  /** Sitemap levels: merge into the run, then answer once the run is big enough. */
+  const collectSitemapPages = (urls: string[]): string[] | null => {
+    for (const url of urls) discovered.add(url)
+    return discovered.size >= MIN_DISCOVERED_URLS ? Array.from(discovered) : null
+  }
+
+  /** Non-sitemap levels (homepage BFS): unchanged "best single result" rule. */
   const keepOrEscalate = (urls: string[]): string[] | null => {
     if (urls.length >= MIN_DISCOVERED_URLS) return urls
     if (urls.length > best.length) best = urls
     return null
   }
+
+  // 🔴 Scope note (PR #963 / issue #965): every **sitemap** read below goes
+  //    through safeFetchText(). The robots.txt and homepage-BFS reads here
+  //    deliberately still use a plain fetch(): they only ever hit `origin`,
+  //    which this function derived itself from the client's registered domain,
+  //    not a URL some fetched document handed us. Migrating them is a separate,
+  //    separately-verified change — do not "fix" one of them in isolation.
+
+  // One allowance for the whole run, shared by Level 1, the robots.txt
+  // directives, Level 2 and every recursion level (Codex review on PR #963).
+  const budget = createSitemapFetchBudget()
 
   // Check robots.txt first for crawl permission
   try {
@@ -268,7 +386,8 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
       // Try sitemap directives from robots.txt
       const directives = parseSitemapDirectives(robotsTxt)
       if (directives.length > 0) {
-        const urls = keepOrEscalate(dedupeAndFilter(await resolveSitemapUrls(directives, origin, report), origin))
+        const directiveLocs = await resolveSitemapUrls(directives, origin, report, budget)
+        const urls = collectSitemapPages(dedupeAndFilter(directiveLocs, origin))
         if (urls) return urls
       }
     }
@@ -277,11 +396,22 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
   }
 
   // Level 1: /sitemap.xml
+  //
+  // 🔴 Issue #955: 一个 <urlset> 里的 <loc> 都是真实页面，可以直接解析；但 /sitemap.xml
+  //    也可能本身是一个 <sitemapindex>（尤其大站），那样 <loc> 指向的是子 sitemap 文档，
+  //    不是页面。判断只能看响应内容里有没有 <sitemapindex>，不能靠 URL 后缀猜 —— 子
+  //    sitemap 常见写法里就有 /sitemap/posts（无扩展名）、/sitemap.php?type=post（带 query）。
+  //    命中 index 就复用 fetchSitemapPageUrls() 的递归展开，跟其它入口（robots.txt
+  //    directive、/sitemap_index.xml）共用同一套深度限制和失败上报。
+  //    「是不是 index」由 isSitemapIndexDocument() 按 XML 根元素判定 —— Level 1 和
+  //    递归路径共用同一个判据，不能两处分叉。
   try {
-    const res = await fetch(`${origin}/sitemap.xml`)
-    if (res.ok) {
-      const xml = await res.text()
-      const urls = keepOrEscalate(dedupeAndFilter(parseLocsFromXml(xml), origin))
+    const level1 = await fetchSitemapXmlSafely(`${origin}/sitemap.xml`, report, budget, LEVEL_1_PROBE)
+    if (level1.ok) {
+      const locs = isSitemapIndexDocument(level1.xml)
+        ? await expandSitemapIndexChildren(parseLocsFromXml(level1.xml), 1, report, budget)
+        : parseLocsFromXml(level1.xml)
+      const urls = collectSitemapPages(dedupeAndFilter(locs, origin))
       if (urls) return urls
     }
   } catch (err) {
@@ -290,28 +420,18 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
 
   // Level 2: /sitemap_index.xml
   try {
-    const res = await fetch(`${origin}/sitemap_index.xml`)
-    if (res.ok) {
-      const xml = await res.text()
+    const level2 = await fetchSitemapXmlSafely(`${origin}/sitemap_index.xml`, report, budget, LEVEL_2_PROBE)
+    if (level2.ok) {
       // sitemap_index contains <loc> entries pointing to child sitemaps
-      const childSitemapUrls = parseLocsFromXml(xml)
       const allLocs: string[] = []
-      for (const childUrl of childSitemapUrls) {
-        try {
-          const childRes = await fetch(childUrl)
-          if (childRes.ok) {
-            const childXml = await childRes.text()
-            allLocs.push(...parseLocsFromXml(childXml))
-          } else {
-            // 🔴 404/503 不会抛 —— fetch 正常完成，只是 ok 为 false。
-            //    只在 catch 里上报，等于漏掉了子树失败最常见的那一种。
-            report('child-sitemap', `HTTP ${childRes.status}`, childUrl)
-          }
-        } catch (err) {
-          report('child-sitemap', err, childUrl)
-        }
+      for (const childUrl of parseLocsFromXml(level2.xml)) {
+        // Same SSRF guard as fetchSitemapPageUrls() (Codex review on PR #963):
+        // childUrl comes straight out of /sitemap_index.xml's <loc> entries,
+        // which the audited site controls — it must never reach a raw fetch().
+        const result = await fetchSitemapXmlSafely(childUrl, report, budget, CHILD_SITEMAP_READ)
+        if (result.ok) allLocs.push(...parseLocsFromXml(result.xml))
       }
-      const urls = keepOrEscalate(dedupeAndFilter(allLocs, origin))
+      const urls = collectSitemapPages(dedupeAndFilter(allLocs, origin))
       if (urls) return urls
     }
   } catch (err) {
@@ -382,10 +502,17 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
   }
 
   // 走到这里 = 每一级都没凑够阈值，返回的是「最好的那一份残缺结果」。
-  if (best.length > 0) {
+  // 🔴 Codex review on PR #963 (P2): the sitemap levels' accumulated pages are
+  //    unioned in, not discarded in favour of the single longest level. A run
+  //    that found /a via a robots.txt directive and /b via Level 1 must return
+  //    both here, exactly as it would have if either level had reached the
+  //    threshold on its own.
+  const partial = Array.from(discovered)
+  for (const url of best) if (!discovered.has(url)) partial.push(url)
+  if (partial.length > 0) {
     report('partial-best-effort', `no level reached ${MIN_DISCOVERED_URLS} URLs; returning best partial result`, origin)
   }
-  return best
+  return partial
 }
 
 /**
@@ -521,72 +648,113 @@ async function resolveSitemapUrls(
   sitemapUrls: string[],
   origin: string,
   report: Report = () => {},
+  budget: SitemapFetchBudget = createSitemapFetchBudget(),
 ): Promise<string[]> {
   const all: string[] = []
   for (const url of sitemapUrls) {
-    all.push(...(await fetchSitemapPageUrls(url, 0, report)))
+    all.push(...(await fetchSitemapPageUrls(url, 0, report, budget)))
   }
   return all
 }
 
-/** 失败上报口。默认空实现 = 既有行为。 */
-type Report = (stage: string, error: unknown, url?: string) => void
-
 const MAX_SITEMAP_DEPTH = 3
 
 /**
- * Recursively fetch page URLs from a sitemap or sitemap index.
- * If the fetched XML is a <sitemapindex>, recurses into each child.
- * Depth-limited to MAX_SITEMAP_DEPTH to guard against malformed cycles.
+ * Expand a sitemap index's child <loc> URLs into real page URLs, reusing
+ * fetchSitemapPageUrls() so nested indexes, non-.xml sitemap paths, and
+ * fetch failures are all handled by the one existing recursive implementation.
  */
-async function fetchSitemapPageUrls(url: string, depth: number, report: Report = () => {}): Promise<string[]> {
+async function expandSitemapIndexChildren(
+  childUrls: string[],
+  depth: number,
+  report: Report = () => {},
+  budget: SitemapFetchBudget = createSitemapFetchBudget(),
+): Promise<string[]> {
+  const nested: string[] = []
+  for (const childUrl of childUrls) {
+    nested.push(...(await fetchSitemapPageUrls(childUrl, depth, report, budget)))
+  }
+  return nested
+}
+
+/**
+ * Recursively fetch page URLs from a sitemap or sitemap index.
+ * If the fetched XML's root element is <sitemapindex>, recurses into each child.
+ *
+ * Two independent bounds, both required: MAX_SITEMAP_DEPTH caps how deep the
+ * recursion nests, and `budget` caps how many documents the whole run may
+ * request in total (a single level can be 50,000 entries wide). Neither
+ * substitutes for the other.
+ */
+async function fetchSitemapPageUrls(
+  url: string,
+  depth: number,
+  report: Report = () => {},
+  budget: SitemapFetchBudget = createSitemapFetchBudget(),
+): Promise<string[]> {
   if (depth >= MAX_SITEMAP_DEPTH) {
     // 截断跟「这棵子树是空的」长得一样 —— 深度上限也是一次没取到。
     report('sitemap-depth-limit', `depth limit ${MAX_SITEMAP_DEPTH} reached`, url)
     return []
   }
+  const result = await fetchSitemapXmlSafely(url, report, budget)
+  if (!result.ok) return []
+  if (isSitemapIndexDocument(result.xml)) {
+    return expandSitemapIndexChildren(parseLocsFromXml(result.xml), depth + 1, report, budget)
+  }
+  return parseLocsFromXml(result.xml)
+}
+
+/**
+ * A URL's hostname reduced to the form the crawler compares, or null if it
+ * cannot be parsed:
+ *
+ *   1. lower-cased;
+ *   2. **one** trailing DNS root dot removed — `example.com.` is the absolute
+ *      form of `example.com` and WHATWG URL keeps the dot in `hostname`
+ *      (Codex review on PR #963, P2). Exactly one, so `example.com..` — which
+ *      is not a legal rooted name — still reduces to `example.com.` and stays
+ *      a different host;
+ *   3. a leading `www.` removed, the crawler's pre-existing equivalence.
+ */
+function comparableHost(url: string): string | null {
   try {
-    const res = await fetch(url)
-    if (!res.ok) {
-      report('sitemap-fetch', `HTTP ${res.status}`, url)
-      return []
-    }
-    const xml = await res.text()
-    if (/<sitemapindex/i.test(xml)) {
-      const childUrls = parseLocsFromXml(xml)
-      const nested: string[] = []
-      for (const childUrl of childUrls) {
-        nested.push(...(await fetchSitemapPageUrls(childUrl, depth + 1, report)))
-      }
-      return nested
-    }
-    return parseLocsFromXml(xml)
-  } catch (err) {
-    report('sitemap-fetch', err, url)
-    return []
+    const host = new URL(url).hostname
+      .toLowerCase()
+      .replace(/\.$/, '')
+      .replace(/^www\./, '')
+    return host === '' ? null : host
+  } catch {
+    return null
   }
 }
 
 /**
- * Normalise a URL's origin for comparison, stripping the www. prefix.
- * e.g. https://www.example.com → https://example.com
+ * True when `candidate` and `origin` reduce to exactly the same hostname.
+ *
+ * 🔴 SSRF review on PR #963: this used to be a string-prefix check
+ *    (`normU.startsWith(normOrigin)`), which wrongly accepts
+ *    https://example.com.evil.test as belonging to example.com — the literal
+ *    string "https://example.com" IS a prefix of that hostname. Comparing
+ *    reduced hostnames for exact equality closes that hole, and the root-dot
+ *    normalisation above does not reopen it: `example.com.evil.test` and
+ *    `example.com..evil.test` have no trailing dot to remove.
  */
-function normaliseOriginForCompare(url: string): string {
-  return url.replace(/^(https?:\/\/)www\./, '$1')
+function isSameHost(candidate: string, origin: string): boolean {
+  const candidateHost = comparableHost(candidate)
+  const originHost = comparableHost(origin)
+  return candidateHost !== null && candidateHost === originHost
 }
 
 /**
- * Remove duplicates and filter to same-origin URLs only.
- * Treats www.domain.com and domain.com as the same origin.
+ * Remove duplicates and filter to same-host URLs only.
+ * Treats www.domain.com and domain.com as the same host.
  */
 function dedupeAndFilter(urls: string[], origin: string): string[] {
   const seen = new Set<string>()
   const result: string[] = []
-  // Normalise origin for comparison (strip www.)
-  const normOrigin = normaliseOriginForCompare(origin)
   for (const u of urls) {
-    const normU = normaliseOriginForCompare(u)
-    if (!seen.has(u) && normU.startsWith(normOrigin)) {
+    if (!seen.has(u) && isSameHost(u, origin)) {
       seen.add(u)
       result.push(u)
     }
