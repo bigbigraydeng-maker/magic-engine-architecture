@@ -699,7 +699,11 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
    它的 campaign 叫 `Cold Broad`，但名字不算证据（本仓 `play-vocabulary.ts` 自己写过"最花钱那条名字零信息量"）。补完最终判断的办法：**在有该 token 的环境里**跑 `GET /act_1735240120460765/adsets?fields=targeting,name,status,optimization_goal`。**这不是"再试一次就好"，是必须换环境。**
 2. **`ad_daily_insights` 里没有 ad set 这一层** —— `level='ad'` 行的 `parent_id` 存的是 campaign（`ad-level-breakdown.ts` 头部注释明确说过，两个 agent 都误读过）。所以"一个 audience 是否被拆成很多 ad set"只能从 Meta live 侧回答（CTS：26 个 ad set / 17 个 campaign），库里答不了。
 3. **创意的 angle 标签没有落库** —— 角度信息只存在于广告名字里（`OZ-S2-R6-kidsdog`），`ad_creative_links.play_context` 本来就是放这个的字段，但表是空的。所以"角度 A 比角度 B 好"这类问题现在只能靠人读名字，系统答不了。
-4. **🆕 `ad_daily_insights` 没有币种列，跨客户金额不可加总** —— 本审计发现的新缺口，**ROADMAP 里没有登记过**。`spend` 是裸 `NUMERIC`，`parseDailyMetrics` 把 Graph 返回的账户币种金额原样存下、不做换算；而 CTS/Roman 是 NZD、Oztop 是 AUD。影响面不止本审计：**任何跨客户的花费汇总、排行、预算比较都会算错**（月报、Goal 指标、production package 都在读这条线）。
+4. **🆕 广告花费表都没有币种列，跨客户金额不可加总** —— 本审计发现的新缺口，**ROADMAP 里没有登记过**，而且**是两张表**（第十八轮更正：上一版只点了 `ad_daily_insights`，把影响面挂错了表）：
+   - `ad_daily_insights.spend` → 喂广告健康引擎 / ad-engine 看板
+   - `meta_ads_snapshots.spend` → 喂 **`MetaAdsAdapter.ts:90`（Goal 指标）、月报、production package（`production/[packageId]/route.ts:117`）**
+
+   两张表都是裸 `NUMERIC`、原样存账户币种、不换算不记币种；而 CTS/Roman 是 NZD、Oztop 是 AUD（均已实读）。**只修前者修不到报表侧** —— `20260721000001` 的注释本身就写明报表仍读 `meta_ads_snapshots`。所以任何跨客户的花费汇总、排行、预算比较都会算错。
    修法：`ad_daily_insights` 加 `currency` 列（Graph 的 `account_currency` 字段直接给），跨客户汇总时按基准日折算并注明汇率。
 
-   ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现与未完成动作已一并登记（**14 条**）：`AD-CUR-1/2` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1` · **`AD-EVID-1`**（补读 Oztop/Roman targeting，§7 第 0 步）· **`AD-FRAG-1`**（每次 boost 新建 campaign/ad set 的碎片化，§5 问题 10）。
+   ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现与未完成动作已一并登记（**15 条**）：`AD-CUR-1/2` · `AD-PLAY-1` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1` · `AD-EVID-1` · `AD-FRAG-1`。

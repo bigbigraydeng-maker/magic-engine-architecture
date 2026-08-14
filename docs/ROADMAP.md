@@ -90,7 +90,12 @@
 
 > 全部来自只读审计 + 16 轮复审逐条核实，未改生产代码。审计只报缺口不写方案的，这里登记成可排期的条目。
 
-- [ ] **AD-CUR-1 `ad_daily_insights` 没有币种列 —— 跨客户金额全是混币种加总【影响面最大】**：`spend` 是裸 `NUMERIC`，`parseDailyMetrics` 把 Graph 返回的账户币种金额原样存下不换算。2026-08-14 实读账户 `currency`：Oztop `1735240120460765` = **AUD**，CTS / Roman / 混账户 = NZD。**月报、Goal 指标、production package 都在读这条线**，任何跨客户汇总/排行/预算比较都会算错。修：加 `currency` 列（Graph `account_currency` 直接给）+ 汇总时按基准日折算并注明汇率
+- [ ] **AD-CUR-1 广告花费表都没有币种列 —— 跨客户金额全是混币种加总【影响面最大，且是两张表】**：2026-08-14 实读账户 `currency`：Oztop `1735240120460765` = **AUD**，CTS / Roman / 混账户 = NZD；而两张表都把 Graph 返回的账户币种金额原样存下、不换算、不记币种。
+  - `ad_daily_insights.spend`（裸 `NUMERIC`，`parseDailyMetrics` 写）→ 喂**广告健康引擎 / ad-engine 看板**
+  - `meta_ads_snapshots.spend`（裸 `NUMERIC`，注释直言 "total spend in account currency"）→ 喂 **`MetaAdsAdapter.ts:90`（Goal 指标）、月报、production package（`production/[packageId]/route.ts:117`）**
+
+  ⚠️ **只修 `ad_daily_insights` 修不到报表侧** —— `20260721000001` 的注释本身就写明 "meta_ads_snapshots is left untouched — MetaAdsAdapter, the monthly report and the production-package view all still read it"。**两张表必须一起加 `currency` 列**（Graph `account_currency` 直接给），并在任何跨客户汇总处按基准日折算 + 注明汇率；否则本条完成后报表仍然是错的
+- [ ] **AD-PLAY-1 两个建广告调用点没传 `play` / `playSource`，打法账本恒为 NULL**：`boost-post/route.ts:122` 与 `winner-reel-sync/engine.ts:214` 都调了 `linkAdToCreative`，但**三个打法参数一个没传**，而 `persistLink` 会照写 NULL。`LinkAdToCreativeArgs` 和 `persistLink` 早就支持这三列 —— **纯粹是调用方没传，真·接线活**。`boost-post` 固定 `boost_organic_post`、`winner-reel-sync` 固定 `thruplay_pool_build`，`playSource` 均为 `declared_at_creation`。注意 `AD-LINK-1` 解决的是 variant 身份 + migration，**不覆盖这两条帖子路径**，不能互相替代
 - [ ] **AD-CUR-2 `boost-post` 用 `daily_budget_aud` 却不读账户币种**：`daily_budget_aud * 100` 原样发给账户，Meta 按**账户币种**解释。CTS/Roman 是 NZD → 批准的"AUD 金额"实际按 NZD 花掉，回显的 `estimated_total_aud` 也是错的。修：回读账户币种，预算按账户币种表达或显式换算
 - [ ] **AD-GATE-1 `approveDraft` 激活前不重新回读**：只查 `payload.status` 就 `activatePublished`，不重跑 `fetchAdSetReadback` / `checkLaunch`。草案在共用账户里躺几天，期间被改则批准人看到的是旧快照、钱按新配置花 —— 这违背 `launch-readback.ts` 自己"只有回读能看见"的立论。修：激活前重跑回读 + 闸门，有 blocker 拒绝激活。**不需 migration**
 - [ ] **AD-SEC-1 `boost-post` 不校验 page/post 归属**：`post_id`/`page_id` 直接取自请求体，只从 `clients` 取广告账户。混账户下有 A 客户权限即可提交 B 客户的帖子（strategy doc §2.4 的 R5 写越权）。修：`page/post → client` 归属校验，或推进账户拆分（§2.1 子牙意见：根治靠账户治理）
