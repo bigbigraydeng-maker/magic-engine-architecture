@@ -63,6 +63,8 @@ const ADMIN_SECTIONS: NavSection[] = [
       { key: 'prospecting',      label: 'Prospecting',     mark: 'PS', href: '/dashboard/admin/prospecting' },
       { key: 'industry-baselines', label: 'Industry Baselines', mark: 'IB', href: '/dashboard/industry-baselines' },
       { key: 'cron-health',     label: 'Cron Health',     mark: 'CH', href: '/dashboard/admin/cron-health' },
+      { key: 'ad-engine',       label: '广告引擎',         mark: 'AE', href: '/dashboard/ad-engine' },
+      { key: 'ad-approval',     label: '等你点头的广告',    mark: 'OK', href: '/dashboard/ad-approval' },
       { key: 'team-memory',     label: '团队工作记忆',     mark: 'TM', href: '/dashboard/team-memory' },
     ],
   },
@@ -163,7 +165,7 @@ function buildSelfServeSections(clientId: string): NavSection[] {
         { key: 'strategy',    label: 'Strategy',    mark: 'ST', href: `/dashboard/clients/${clientId}/strategy`,    paidOnlyFeature: 'Strategy' },
         { key: 'diagnostic',  label: 'Diagnostic',  mark: 'DG', href: `/dashboard/clients/${clientId}/diagnostic`,  paidOnlyFeature: 'Diagnostic' },
         { key: 'execution',   label: 'Execution',   mark: 'EX', href: `/dashboard/clients/${clientId}/execution`,   paidOnlyFeature: 'Execution' },
-        { key: 'connectors',  label: 'Connectors',  mark: 'CN', href: `/dashboard/clients/${clientId}/connectors`,  paidOnlyFeature: 'Connectors' },
+        { key: 'connectors',  label: 'Connectors',  mark: 'CN', href: `/dashboard/clients/${clientId}/settings?tab=connect`,  paidOnlyFeature: 'Connectors' },
       ],
     },
   ]
@@ -188,7 +190,14 @@ function buildScopedAdminSections(clientId: string, industry: string | null): Na
     ...(feat.listings ? [{ key: 'listings', label: '房子', mark: 'LI', href: at('/listings') }] : []),
   ]
   return [
-    { items: [{ key: 'client-home', label: '客户工作台', mark: 'CL', href: at('') }] },
+    {
+      items: [
+        { key: 'client-home', label: '客户工作台', mark: 'CL', href: at('') },
+        // 演示账号可能有多个客户（不同行业长出不同的工具）。列表页对受限
+        // 管理员只返回他有权的客户，所以它天然就是切换器。
+        { key: 'clients', label: '切换客户', mark: 'SW', href: '/dashboard/clients' },
+      ],
+    },
     {
       title: '诊断与策略',
       items: [
@@ -207,7 +216,7 @@ function buildScopedAdminSections(clientId: string, industry: string | null): Na
         // 放在「客户跟进」前面 —— 他每天开的是这一页，不是内部那张排班表。
         { key: 'contacts',    label: '我的客人', mark: 'MY', href: at('/contacts') },
         { key: 'crm',         label: '客户跟进', mark: 'CR', href: at('/crm') },
-        { key: 'connectors',  label: '数据连接', mark: 'CN', href: at('/connectors') },
+        { key: 'connectors',  label: '数据连接', mark: 'CN', href: at('/settings?tab=connect') },
       ],
     },
   ]

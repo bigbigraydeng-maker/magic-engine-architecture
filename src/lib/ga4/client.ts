@@ -2,7 +2,15 @@
  * Google Analytics 4 — Data API v1beta client.
  *
  * Fetches traffic snapshots via the GA4 Data API.
- * Auth: per-client OAuth token from google_oauth_tokens (must have analytics.readonly scope).
+ *
+ * Authentication priority (mirrors gsc/client.ts's resolveAccessToken — same
+ * migration, same reasoning, see docs/specs/2026-08-11-onboarding-integrations-
+ * unify-v1.md §2.2 and PR3a):
+ *   1. Per-client OAuth token from platform_oauth_connections (provider='google_ga4')
+ *   2. Legacy per-client OAuth token from google_oauth_tokens — this is the SAME
+ *      underlying Google grant GSC uses (COMBINED_GOOGLE_SCOPES requests both
+ *      analytics.readonly and webmasters.readonly in one consent), just not yet
+ *      split into its own platform_oauth_connections row for older connections.
  *
  * Usage (P17.A.2):
  *   const snapshot = await fetchGa4Snapshot(propertyId, clientId)
@@ -12,6 +20,7 @@
  */
 
 import { getValidAccessToken } from '@/lib/google-oauth/client'
+import { getValidToken, PlatformConnectionNotFoundError } from '@/lib/platform-oauth/token-manager'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -81,6 +90,27 @@ export interface Ga4SiteSnapshot {
   synced_at:            string
 }
 
+// ─── Token resolution ─────────────────────────────────────────────────────────
+
+async function resolveAccessToken(
+  clientId: string,
+  opts?: { forceRefresh?: boolean },
+): Promise<string | null> {
+  // 1. New encrypted path (platform_oauth_connections, provider='google_ga4')
+  try {
+    const token = await getValidToken(clientId, 'google_ga4', opts)
+    if (token) return token
+  } catch (err) {
+    if (!(err instanceof PlatformConnectionNotFoundError)) {
+      console.warn('[ga4/client] getValidToken error:', err instanceof Error ? err.message : err)
+    }
+    // Fall through to legacy path
+  }
+
+  // 2. Legacy OAuth token (google_oauth_tokens table) — same underlying grant GSC uses
+  return getValidAccessToken(clientId, opts)
+}
+
 // ─── Internal GA4 API shapes ─────────────────────────────────────────────────
 
 interface Ga4DimensionValue { value: string }
@@ -108,7 +138,7 @@ export async function fetchGa4Snapshot(
   clientId: string,
   periodDays: number = DEFAULT_PERIOD_DAYS,
 ): Promise<Ga4SiteSnapshot | null> {
-  const token = await getValidAccessToken(clientId)
+  const token = await resolveAccessToken(clientId)
   if (!token) return null
 
   const normalized  = normalizePropertyId(propertyId)
@@ -143,7 +173,7 @@ export async function fetchGa4Snapshot(
     // (06-27/06-28/06-30 cron runs). Force-refresh and try once more.
     if (err instanceof Ga4ApiError && err.httpStatus === 401) {
       console.warn(`[ga4/client] 401 on cached token for ${clientId} — force-refreshing and retrying once`)
-      const fresh = await getValidAccessToken(clientId, { forceRefresh: true })
+      const fresh = await resolveAccessToken(clientId, { forceRefresh: true })
       if (!fresh) return null
       ;[totals, topPages, topSources] = await runReports(fresh)
     } else {
@@ -197,7 +227,7 @@ export async function fetchGa4PaidSearchMetrics(
   clientId: string,
   periodDays: number = DEFAULT_PERIOD_DAYS,
 ): Promise<Ga4PaidSearchMetrics | null> {
-  const token = await getValidAccessToken(clientId)
+  const token = await resolveAccessToken(clientId)
   if (!token) return null
 
   const normalized  = normalizePropertyId(propertyId)
@@ -303,4 +333,46 @@ function daysAgo(n: number): Date {
 
 function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
+}
+
+/**
+ * 关键事件按事件名拆开 + 表单开始次数。
+ *
+ * 存在理由：`leads_count` 取的是 GA4「关键事件」总数，**不区分事件是什么** ——
+ * 只要有人把浏览之类也标成关键事件，或者某个事件的触发规则太宽，
+ * 「客资数」就会虚高，而仪表盘上完全看不出来。
+ * 2026-08-04 实测 CTS：28 天 341 个「客资」，而**开始填表只有 86 次** ——
+ * 人还没动表单，「产生线索」先响了 4 遍。
+ *
+ * 拿这两个数就能判断这个客资数值不值得信。
+ */
+export async function fetchGa4KeyEventBreakdown(
+  propertyId: string,
+  clientId: string,
+  periodDays: number = DEFAULT_PERIOD_DAYS,
+): Promise<{ keyEventsByName: Record<string, number>; formStarts: number } | null> {
+  const token = await resolveAccessToken(clientId)
+  if (!token) return null
+
+  const normalized = normalizePropertyId(propertyId)
+  const periodEnd = toIsoDate(new Date())
+  const periodStart = toIsoDate(daysAgo(periodDays))
+
+  const report = await runReport(token, normalized, periodStart, periodEnd, {
+    dimensions: ['eventName'],
+    metrics: ['keyEvents', 'eventCount'],
+    limit: 100,
+  })
+
+  const keyEventsByName: Record<string, number> = {}
+  let formStarts = 0
+  for (const row of report.rows ?? []) {
+    const name = row.dimensionValues?.[0]?.value ?? ''
+    const key = Number(row.metricValues?.[0]?.value ?? '0')
+    const count = Number(row.metricValues?.[1]?.value ?? '0')
+    if (key > 0) keyEventsByName[name] = key
+    // form_start 是 GA4 增强测量自带的事件，代表「有人真的动了表单」
+    if (name === 'form_start') formStarts = count
+  }
+  return { keyEventsByName, formStarts }
 }

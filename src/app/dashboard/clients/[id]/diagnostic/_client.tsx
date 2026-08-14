@@ -45,13 +45,14 @@ const DIMENSION_LABELS: Record<DiagnosticDimension, string> = {
   competitor:    '竞品',
 }
 
-// Routes to the most relevant connector/config page for each dimension
+// Routes to the most relevant connector/config page for each dimension.
+// PR5: /connectors retired, everything lives in settings' "connect" tab now.
 const DIMENSION_CONFIG_ANCHOR: Record<DiagnosticDimension, string> = {
-  seo:           'connectors/gsc',
+  seo:           'settings?tab=connect',
   ai_visibility: 'zhangqian',
-  ads:           'connectors/google-ads',
-  social:        'connectors/social',
-  reputation:    'connectors/gbp',
+  ads:           'settings?tab=connect',
+  social:        'settings?tab=connect',
+  reputation:    'settings?tab=connect',
   competitor:    'zhangqian',
 }
 

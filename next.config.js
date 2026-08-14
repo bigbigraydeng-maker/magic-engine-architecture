@@ -16,6 +16,24 @@ const nextConfig = {
       allowedOrigins: ['localhost:3000', 'localhost:3001'],
     },
   },
+  // PR5 (docs/specs/2026-08-11-onboarding-integrations-unify-v1.md §2.4):
+  // /connectors retired — everything it did now lives in one place, the
+  // settings page's "connect" tab (GbpPanel/GscPanel/Ga4Panel/GoogleAdsPanel/
+  // OtherDataSourcesPanel). Old bookmarks/hardcoded links must not 404.
+  async redirects() {
+    return [
+      {
+        source: '/dashboard/clients/:id/connectors',
+        destination: '/dashboard/clients/:id/settings?tab=connect',
+        permanent: true,
+      },
+      {
+        source: '/dashboard/clients/:id/connectors/:anchor',
+        destination: '/dashboard/clients/:id/settings?tab=connect',
+        permanent: true,
+      },
+    ]
+  },
 };
 
 module.exports = nextConfig;

@@ -5,6 +5,507 @@
 
 ---
 
+### 2026-08-12（站点页面台账：把「谁批准了这一页」变成一道过不去就不许跑的闸）
+
+Issue [#930](https://github.com/bigbigraydeng-maker/magic-engine/issues/930) ·
+PR [#956](https://github.com/bigbigraydeng-maker/magic-engine/pull/956)（合并提交 `a11d2ba7`）·
+复审全记录见 [#935](https://github.com/bigbigraydeng-maker/magic-engine/pull/935)。
+
+**这次解决的一件事**：现有 site-audit 能发现页面、抓取、分类、按租户落库，但**没有「页面身份」这个概念** ——
+边发现边 upsert，人还没看过就已经进库；「审核」步骤在写入**之后**，只能整体点一个「看起来没问题」。
+本次补上 4 样，一行采集逻辑都没重写：精确主机边界 · 版本化 URL 归一（`inventory-url-rules@1`）·
+无写入的可复核计划（带确定性哈希 + 复核签名）· fail-closed 激活闸。
+
+🔴 **值得记住的那条现场事实**：crawler 的同源判定是「剥 `www.` + 字符串前缀比较」
+（`crawler.ts:133-135`、`:509-529`），于是裸域与 `www.` 被当成同一个站 ——
+而 #930 的现场是这两个主机下面挂着**两个不同的站**（一个现站、一个旧品牌残留）。
+照那套判定凑名单，会把**别人家的页面**记成这个客户的。前缀比较还会把
+`example.com.evil.com` 判成同源。**这一层因此不复用任何现成的「canonical」**：
+`seo-patrol#canonicalUrl` 也不行 —— 它**故意**合并 bare/www 服务跨源分析，目标与台账身份相反。
+
+**顺序就是这道闸的全部意义**：校验（全过才继续）→ 抓取+富集（全成才继续）→ 一次性写入 → 精确集合对账。
+任何一步没过，后面一步**根本不会发生**：校验没过就一次抓取都不发；富集没全成就一行都不写；
+写完拿写入方返回的清单跟被接受集合逐条比对，少一条多一条都不许报「完成」。
+
+**复用而不是重造**：`crawler.ts`（发现/抓取/反爬指纹）· `classifier.ts` + `geo-detector.ts` ·
+`client_site_pages` **现有列**（不加列、不加表、无 migration）。对既有代码只两处外科手术 ——
+富集逻辑抽成 `page-enrichment.ts`（行为逐字不变）· crawler 加**可选**观察口 `onIssue`
+（不传 = 完全维持既有行为，79 条既有 crawler 测试全绿）。
+
+**这次没做、且是故意的**：**没有落库实现、没有 route / cron / UI** ——
+代码里**不存在一条能写到生产台账的路径**，架构测试强制这一点。
+真正激活另需 Product Owner 单独授权 + 一把签名密钥 + 一个 `CanonicalInventoryStore` 实现。
+
+**过程本身留了个教训**：Codex 自动复审跑了 **13 轮、29 个发现全部属实**，没有收敛趋势
+（每轮都在新写的代码里找到新的真问题）。实测两条反直觉的结论已立项写进 [#951](https://github.com/bigbigraydeng-maker/magic-engine/issues/951)：
+**不要按 P1/P2 过滤**（最危险的几个全是 P2：整站缺页无人发现 / 目录文件被当成页面记账 /
+决策拼错一个字母导致页面从所有账里蒸发；而 P1 里有 3 个只是「函数超 50 行」——
+它的严重性标记与真实后果基本无关）· **不要升级审核模型**（29 个 0 误报，它没乱报）。
+另立 [#952](https://github.com/bigbigraydeng-maker/magic-engine/issues/952)（变异脚本被打断会把**关掉的安全闸**提交进库，测试还是绿的）·
+[#955](https://github.com/bigbigraydeng-maker/magic-engine/issues/955)（发现器应按响应结构递归展开 sitemap index，别靠 `.xml` 后缀猜）。
+
+**已知残留**（写在这里免得下次当新发现）：重定向 / HTTP 状态证据不可得
+（Jina 的 200 只证明 Jina 成功）→ accepted 记录**故意不写** `status_code`，
+审计恒标 `redirectEvidence: 'unavailable'` · 逐条接受/拒绝的复核**界面**未做 ·
+`cms_connections = 0` 仍是独立的 WP09 阻塞项。
+
+---
+
+### 2026-08-13（记忆会自相矛盾：同一个动作「管用」和「不管用」同时生效，而且关不掉）
+
+Issue [#859](https://github.com/bigbigraydeng-maker/magic-engine/issues/859) 架构判断 6 ·
+PR [#949](https://github.com/bigbigraydeng-maker/magic-engine/pull/949)（合并提交 `d87742cb`）·
+migration `20260812100000_memory_supersession_v1` **已 apply 到生产**（2026-08-13，PM 授权后手工执行）。
+
+**这次解决的两件事**：
+
+1. **结论翻转后正反经验并存。** PR #862 把 `flywheel_outcomes` 改成按自然键 upsert
+   （`job.ts::upsertOutcome`，注释里就写着 "See Issue #859"），`outcome.id` 稳定了 ——
+   但同一行现在**原地 UPDATE**，verdict 能 `confirmed` ↔ `reversed` 来回翻。
+   抽取器是「见过这个 `source_id` 就跳过」，于是翻第二次之后彻底卡死：
+   正面经验写完留着，负面经验再写一条，两条一起喂给 agent；翻回来时**一条都动不了**。
+   而 `client_failed_experiments` 建表时（`20260610000001`）就漏了 `is_active`
+   （另两张记忆表都有），**想关都没地方关**。
+
+2. **一个动作被数成三次。** 一个 GSC 动作一次快照产出 clicks / impressions / avg_position
+   三行 outcome，双窗口开了再翻倍。`extractor` 按行累加、`learning-rollup` 只
+   `select('verdict')`（连 `action_id` 都没查），而 `MIN_OCCURRENCES_FOR_PREFERENCE = 3`
+   —— **一个动作自己就能凑够阈值**，凭一次事件写出「持续跑赢」的偏好。
+
+🔴 **值得单独记住的**：稳定身份不是「缓解」了第 1 条，是**让它变成唯一形态**。
+修好「每天造副本」的那一刀，同时把「同一行会被改写」变成常态 —— 上游修对了，
+下游那套按「见过就跳过」写的幂等逻辑就从对的变成错的。
+**幂等的写法要跟着上游的身份语义走，不能一次写完就当永远成立。**
+
+**改了什么**：`client_failed_experiments` 补 `is_active` / `updated_at` + 触发器（三表对齐）·
+两张派生表加 `source_action_id`（去重与互斥的单位是**动作**，不是 outcome 行；
+不改 `source_id` 含义，存量 23 条不被重新解释，该列为 NULL = legacy）·
+**跨表互斥用 DB 触发器**而不是 executor 里的 if —— 写这两张表的不止抽取器，
+还有 FDE 标注接口 `/api/clients/[id]/memory/annotate`，放 DB 层谁都绕不过去
+（#859 判断 3）· 抽取器从「追加」改成「对账」，存量行按 `outcome_id → action_id` 认领回来 ·
+`extractor` + `learning-rollup` 接上 `keepOneCasePerAction`（库里早有，
+`aggregate` / `case-library` / execution board 三处都在用，**只有记忆侧没接**）。
+
+**验证**：新增 18 条测试，`src/lib/memory` 135/135 全绿 · **变异 8/8**，每道闸单独破坏都有用例变红 ·
+**其中 M8 第一次没抓住**：原用例里动作承诺的指标正好和兜底排序第一名相同，两条路径答案一样，
+删掉 `expected_metric` 测不出来；补了「承诺 impressions 而 clicks 结论相反」的用例才锁住 ——
+这个 case 出错不是少记，是**记反** · 假 Supabase **按表建模**且**刻意不实现互斥触发器**，
+绿说明应用层单独站得住，不是靠触发器兜的 · 全量 107 红与本次零交集
+（那条可疑的红专门切回干净 main 用同样并行负载复现，数字逐字相同）。
+
+**生产实查**（按对象存在性，不认文件名）：新列 3 + 1、新触发器 3、
+`client_failed_experiments` 8/8 生效、`client_proven_patterns` 15/15 生效 ——
+`is_active` 默认 TRUE，**存量记忆一条没被误关**。
+
+**仍未启用**：`ATTRIBUTION_DUAL_WINDOW_ENABLED` 仍关着（本次只解除它的阻塞条件）·
+`memory-extractor` 仍未排班（enablement 是单独一个 PR）。
+
+⚠️ **过程教训**：#949 是按 Draft 开的，却在 Codex 复审到达**前 2 分 17 秒**被翻成 ready 并合并，
+于是「代码先上、migration 后到」，中间窗口里六条读记忆的线会静默拿到空数组、
+FDE 标注会写不进去。**改 schema 的 PR，merge 与 apply 的先后必须当成一件事安排**，
+不能各自当独立决定。
+
+---
+
+### 2026-08-12（架构守卫的扫描面：五套声明了八种后缀却没接上，实际只扫 `.ts`）
+
+Issue [#938](https://github.com/bigbigraydeng-maker/magic-engine/issues/938) ·
+PR [#944](https://github.com/bigbigraydeng-maker/magic-engine/pull/944)（合并提交 `948f0a78`）。
+
+**这次解决的一件事**：七套架构守卫里，只有 `kernel` / `action-bridge` 的 walker 真的用了
+`isScannedSource()`。另外五套（`geo-baseline` / `geo-measurement-runtime` / `geo-measurement` /
+`growth` / `page-optimization`）**都声明了那份 8 种后缀的 `SOURCE_EXTENSIONS`**（八行齐全，就在文件里），
+但声明位置在 walker **之后**、只喂给 `scriptKindFor()` 选 ScriptKind，walker 自己还是
+`entry.endsWith('.ts')` —— **连 `.tsx` 都不收**。
+
+🔴 **这条值得单独记住的原因**：它不是「忘了扩后缀」，是**扩了却没接上**。
+grep `SOURCE_EXTENSIONS` 一眼看过去像已经覆盖八种，复核的人会直接放过 ——
+清单在、看着对、实际没接线。**「看起来修好了」比没修更难发现。**
+
+**实测证据**（真放违规文件，不是推理）：`src/lib/growth/violation-probe.tsx` 里
+`import { supabaseAdmin } from '@/lib/supabase'` —— 修复后 **2 条红**（禁止导入 + 禁止符号两道都抓到）；
+walker 回退成 `.ts` 后那 2 条红**消失**，文件对守卫完全不存在。探针未入库。
+
+**改了什么**：五套的清单 + `isScannedSource` 提到 walker 之前并真正接上（必须提前 ——
+`walk()` 在模块初始化时就被调用，引用后声明的 `const` 会 TDZ 抛错）· `page-optimization` 的
+`isTest` 改成跟 walker 同源 · **`strip-comments-consistency` 那条「盯着七份 `stripComments()`
+副本别漂」的盯梢，它自己的 walker 也只收 `.ts`/`.tsx`，一并改** —— 扫描面缩小时它不会红，
+找不到的副本直接从判据里消失、盯梢照样全绿，是同一个形状。
+
+**六个文件各补两条测试**：8 种后缀的断言 + 真磁盘 fixture（`mkdtemp` 写 8 个文件断言 walker
+全收，`.md`/`.json` 不许收）。照 `kernel` 既有写法，不自创。**没抽共享 helper** —— 七份 walker
+有意各自独立（删掉任一，其余六个仍拦得住自己那半边），抽了等于给七道闸装同一个总开关。
+
+**验证**：57 个测试文件 / 1259 条全绿 · **变异 6/6**（逐个文件退回 `.ts`，每次都是新加的
+fixture 那条响，还原后复绿）· tsc 198 条基线报错与本次改动零交集。
+
+---
+
+### 2026-08-12（ME2 Backlog Cleanup Gate：GitHub 状态与 ROADMAP 对齐，三个已完成 WP 结账）
+
+Epic [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872) ·
+PR [#936](https://github.com/bigbigraydeng-maker/magic-engine/pull/936)（合并提交 `f7a6bfc1`）。
+
+**这次解决的一件事**：ME2 的 GitHub 状态、ROADMAP 和已合并实现三者互相说不上话 —— 五个 WP
+的代码早已上线，ROADMAP 却还挂在「未完成」；三个 WP 的活干完了 issue 还开着；Epic 正文的
+勾选表落后五条、序列漏四条。新窗口读哪一份都会得到错的授权判断。
+
+**做了什么**（全程只读核验后才动，无运行时改动）：
+
+- **三个 WP 结账关闭**：#874 WP04（PR #914 / `caf8d481`）· #917 WP04A（PR #922 / `885fe6e1`）·
+  #882 K-WP02（PR #898 / `2d9e426a`）。每条附合并提交 + acceptance 逐项对账 + 余项承接；
+  相关 872 个测试实跑全绿。
+  🔴 #882 的关闭说明逐字写明「**已合并 ≠ 已启用**」—— 它映射表为空、零调用方，
+  依赖的内核四张表在生产不存在。
+- **Epic #872 正文重写**：补勾 8 条 · 补入 #917 / #930 / #932 / #911 · 删掉已作废的
+  「只授权 #877」· 新增 2026-08-12 生产实查表与「Merged is not enabled」一节。
+- **ROADMAP 对齐**（PR #936，接手另一窗口开的 PR 而非重开）：补上原版漏掉的 WP06 #878 ·
+  把 K-WP02 拆出来标「已合并、零调用方、生产未启用」· 把它的主实现指向
+  `src/lib/action-bridge/`（`MAPPING_TABLE` 在那儿，不在 Kernel）· 记清 WP06 交付的是被
+  缩小的范围（无成本闸门是照实施指令做的，两份契约文档打架时后发的赢）。
+- **#930 / #932 边界裁定**：页面台账归 #930（唯一权威），#932 只留复测节奏 + WP09 就位登记。
+- **归档 #911 / PR #912**：中继试点唯一标的 #910 已关闭，是注定空转的自动化。
+- **存量清理**：#421 / #422 / #424 关（从未实现且价值已衰减）· #423 关（核实后确认已实现）·
+  #420 / #425 / #426 **保持开启**并附核实结论（三条都还是真问题，关掉等于谎报已处理）。
+
+**顺带挖出两条会静默失效的东西，各自开了 issue 承接**：
+
+- [#939](https://github.com/bigbigraydeng-maker/magic-engine/issues/939) 🔴 Codex 复审 → Claude 自动修
+  **从来没成功过** —— `ops-codex-to-claude-fix.yml` 没给 action 传 `allowed_bots`，
+  Codex 机器人一提意见就必挂（#935 / #936 均实测复现）。PR #931「复审干净就自动合并」的硬前置。
+- [#938](https://github.com/bigbigraydeng-maker/magic-engine/issues/938) architecture 守卫的 walker
+  只收 `.ts`，而 tsconfig 是 `allowJs` —— 放个 `.js` / `.tsx` 会整文件静默不扫描。
+
+**WP05 开工 Gate**：8 条中 7 条已满足，只剩「获批的 canonical page set」（依赖 #930 的
+PR #935 先解掉那条 P1）。
+
+---
+
+### 2026-08-12（ME2 WP04A：GEO 测量线接上真东西，并跑出 Roman 首个生产 baseline）
+
+issue [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) ·
+PR [#922](https://github.com/bigbigraydeng-maker/magic-engine/pull/922)（2026-08-11 合并）·
+已审查 head `769cb15d` · 合并提交 `885fe6e1`。
+
+**这次解决的一件事**：WP04 的测量运行时早就合进 `main` 了，但它的三个注入点
+`deps.{provider, parse, store}` 全仓只有假件，模块**零 importer** —— 没有任何东西能调用它。
+PR #922 把这三个点接到真的 provider / parser / store 上，并给一个**默认 dry-run** 的人工触发脚本。
+
+新增 21 个文件、**零个既有文件被改**：`src/lib/geo-baseline/`
+（`provider` / `transport-openai` / `parser` / `store` / `query-set` / `plan-builder` / `config` / `types` / `index`
+＋9 个测试文件）· `scripts/geo-baseline-run.ts`（`--live` 才真跑）·
+`scripts/geo-baseline-mutation-check.sh` · migration `20260812000001_me2_geo_persist_batch_atomic_v1.sql`。
+
+**落库只有一条路**：单个事务型 RPC `geo_persist_batch_v1` —— 批次 / 观测 / 证据三张表
+在同一个数据库事务里写完，任一步失败整批回滚、一行不留。这三张表的 UPDATE/DELETE 被 WP03 的
+触发器全禁，半截数据既补不上也删不掉，所以必须是「阻止污染」而不是「事后发现污染」。
+该 migration 已在生产 apply（账本号 `20260812002017`，⚠️ 与文件名不同，判 apply 只认对象存在性）。
+
+**为什么另开第三个目录**：WP04 目录的架构测试禁止 import supabase / openai，WP03 目录禁止导出
+任何写函数 —— 真 provider 与真 store 在结构上就放不进那两个目录。好处是 WP02 / WP03 / WP04 一个字都没改。
+
+#### Roman Baseline v1 —— 冻结的测量事实
+
+Product Owner 于 2026-08-12 验收通过，认定批次 `688bd8ae-2db6-4300-b761-b850f30c32c5` 为 Roman
+**首个有效生产 GEO baseline**。**本段是测量事实，冻结** —— 不因后续优化、诊断或重解释而回写、
+修改或重新表述。完整审计记录见
+[#883 的冻结审计评论](https://github.com/bigbigraydeng-maker/magic-engine/issues/883#issuecomment-5260895662)。
+
+采集身份：查询集 `roman_geo_baseline_v1`（12 条问题，首个批次落地时由数据库触发器自动上锁）·
+市场 / 语言 `nz` / `en-NZ` · provider OpenAI、模型 `gpt-5-search-api-2025-10-14`
+（精确带日期的 ID，不是浮动别名）· 1 sample/query、禁止自动重试 · parser `geo-baseline/parser/v1`。
+
+批次结果：12 计划 / 12 尝试 / 12 成功 / 0 失败 · 12 条观测 ＋ 12 条证据（原始响应逐字保留）·
+孤儿行 0 · 跨租户引用 0 · 重复观测 0 · 结构漂移 0。
+
+**能算出来的**：
+
+- 引用总数 **142** 条 · 被引不同域名 **47** 个 · 单条回答引用数 7–20
+- **回答含引用的比例 12 / 12 = 100%** —— 这是「12 个回答都带了引用」，
+  **不等于** Roman 在这 12 个回答里被提及或被推荐
+- **owned-domain citation coverage = 2 / 12 = 16.7%** —— 目前**唯一**已确认的 Roman 可见度事实
+- 自有域名引用条数 4 / 142，实际被引的 host 只有 `romanhu.com`（无任何子域被引）
+- 引用到自有域名的那 2 条 query 都是**点名 "Roman Hu" 的品牌词**。中性记录，不作业务外推
+
+**算不出来的**（连原因一起记，免得以后被当成 0）：
+
+- `direct_owned_page_citation` —— 页面台账 0 条、本轮不做页面级归属，142 条引用的 `ownedPage`
+  **全部记 `not_computable`，无一写成 0 或 false**
+- qualified mention / recommendation / conditional rank —— 判据 M1 未决；指标计算属 WP05 / WP10，
+  不在 WP08 范围
+
+**成本**：本轮累计**记账** **US$0.708 / US$5.00 上限**（记账单价刻意取高、系统性高估）。
+逐次成本不落库（WP03 只在批次级存 `cost_usd`），**确切的最高单次成本无处可查**；
+能诚实断言的只有一条 —— **所有正式调用都没有触发 US$0.08 的单次上界**（触发会 fail closed 停批，而未触发）。
+
+另有两个失败批次**永久留存、未删未改未复用**：`c9dfb7ea…`（模型已下线，provider 404）·
+`667d202a…`（单次成本超过**当时**的 US$0.05 上界，fail closed 停批；该上界后由 Product Owner 调整为 US$0.08）。
+有效批次是从冻结查询集**完整重跑 12 条**得来的，没有把任何失败观测复用成成功结果。
+
+**本轮未执行**：diagnosis · optimization action · 第二轮测量 · 页面台账补录 · Roman 网站修改 ·
+内容或广告发布。Issue #883 仍 OPEN。
+
+验证：`npx vitest run src/lib/geo-baseline` 139 条全过 · WP02 / WP03 / WP04 基线 297 条不受影响 ·
+`npm run build` 通过 · 变异验证 32 道闸逐道单独确认会响 ·
+Codex 在隔离 PostgreSQL 环境对 `geo_persist_batch_v1` 做过真实事务验证（六类失败场景全部三表回滚）。
+
+---
+
+### 2026-08-11 ~ 08-12（Onboarding / 第三方对接页面简化，PM 起因："对接页面有点乱，好几个页面都能连"）
+
+方案：[specs/2026-08-11-onboarding-integrations-unify-v1.md](../specs/2026-08-11-onboarding-integrations-unify-v1.md)。
+PR1 [#908](https://github.com/bigbigraydeng-maker/magic-engine/pull/908) · PR2 [#909](https://github.com/bigbigraydeng-maker/magic-engine/pull/909) ·
+PR3a [#913](https://github.com/bigbigraydeng-maker/magic-engine/pull/913) · PR5 [#916](https://github.com/bigbigraydeng-maker/magic-engine/pull/916) ·
+PR6 [#918](https://github.com/bigbigraydeng-maker/magic-engine/pull/918)。每个 PR 设计+实施两阶段都过了独立 agent 复审（魏征挑刺 + 板桥客户视角）。
+
+**新客户现在的路径**：注册验证邮箱 → 直接落地正式的 5 步自助向导（此前这个向导已经建好但从未激活，新客户走的是一个只有 5 个字段的单页表单）→ 业务档案 / 网站 / 一键连 Google Business Profile + GA4/GSC（真 OAuth，不用再去 Supabase 后台手填 token）/ Meta 广告号（手填，Meta App Review 周期不可控，本轮不做真授权）/ 上传素材。
+
+**FDE/客户设置页现在的路径**：GA4、GSC、GBP、GTM 全部走同一套统一 OAuth 组件真授权；此前分散在 `/connectors`、`/connectors/[anchor]`、settings 页里的三处重复入口合并成一个，旧地址自动跳转（19 处内部链接同步改掉）；Google Ads 从一个假的"已连接"状态提示改成能直接编辑的 customer_id 字段；老的 `google_oauth_tokens` 表数据回填进新的 `platform_oauth_connections`。
+
+**顺手堵上的洞**：Google OAuth 发起/回调接口此前对 admin/wizard 两条流程完全零鉴权（拿到一个 client UUID 就能劫持任何人的授权）；诸葛亮工作台（内部中文 FDE 工具）此前无条件对自助客户可见；向导 Step1/2 表单不回填已保存数据，客户隔天回来会像丢了数据。
+
+验证：新增/改动测试全过（194 条覆盖到的目录）；`npm run build` 每个 PR 都过。
+
+剩余：PR3b（停止读写老 token 表）、一条低优先级的 OAuth 失败态提示——见 [ROADMAP.md](../ROADMAP.md#近期待办跨-phase-汇总)。
+
+---
+
+### 2026-08-10（ME2 WP01：Growth Module 契约进仓，尚未启用）
+
+issue [#877](https://github.com/bigbigraydeng-maker/magic-engine/issues/877) · PR [#890](https://github.com/bigbigraydeng-maker/magic-engine/pull/890) · 合并提交 `700f57e`。
+
+新增 `src/lib/growth/` 五个文件，落下任何 Domain Module 共用的五段推理契约：
+`GrowthEvidence` / `GrowthFinding` / `GrowthPrescription` /
+`GrowthActionCandidate` / `GrowthVerificationDefinition`。
+
+**已合入 `main`，运行时仍不活动**：全仓没有任何代码 import 这个模块
+（`grep -rn "lib/growth" src/ --exclude-dir=growth` 零结果），无 schema、无 migration、
+无 provider 调用，不改变任何现有功能的行为。
+
+验证：Growth 71 条测试、Kernel 架构回归 25 条全过。
+
+WP01 是后续 WP 的代码前置，**本身不交付任何用户可见能力**。
+
+---
+
+### 2026-08-09（首页覆盖率正贴着上限 —— 小客户随时会从统计里消失）
+
+**这条不是「以后可能出问题」，是随时会出。** 首页四段飞轮的覆盖率百分比，
+读的是「行」来回答一个关于「客户」的问题。数据库单次查询**硬顶 1000 行且不报任何错**，
+超过之后多出来的行静默消失。
+
+`execution_items` 当时**正好 1000 行**，一行不多一行不少 —— 下一条插进去就开始截断。
+而且分布很陡：16 个客户里最忙的两个占了 540 行，最小的那个只有 2 行。
+被挤掉的恰恰是这种小客户，**而覆盖率这个数字本来就是给人看小客户的**。
+Prioritise / Execute 两段会悄悄变小，页面上没有任何东西提示这个数是短的。
+
+顺手确认了 1000 不是「计数本身也被截断」造出来的假象 —— 同样查法 `flywheel_metrics` 返回 1813，
+说明计数不受限，那 1000 就是真实行数。
+
+**修法照抄 #862 已经铺好的路**：`fetchAll` 分页 + `.order('id')` 稳定排序
+（`range` 不配稳定唯一排序的话，翻页之间会重复或漏行）。
+`prescriptions`（16 行，离上限还远）一并修了，因为它只会长不会缩，
+而且跨线那天不会有任何东西吭声。
+
+**抽成独立文件是为了能测**：首页是个一口气发十几条查询的服务端组件，
+「有没有漏掉一个客户」这种事，渲染测试永远不会发现。
+执行项的状态分类（哪种状态算 Prioritise、哪种算 Execute）也一起挪进去，
+这样同一个测试能把分页和分类一起盖住。
+
+**故意改掉的一个行为**：查询失败时原来 `.data ?? []` 会悄悄变成空集合、页面显示 0%；
+现在会抛错让人看见。跟 #862 对 `flywheel_outcomes` 的处理一致 ——
+宁可报错，也不要悄悄给出半份数据，因为静默 0% 正是这次要消灭的那个毛病。
+
+**范围卡死没扩**：同一批里另外几条无上限查询（`flywheel_actions` 28 行、
+`flywheel_metrics` 4 和 1、`ai_visibility_runs` 130）都实测过，离上限很远，
+而且是做聚合不是建集合，形状不一样，留着没动。
+
+验证留了可复跑的脚本 `scripts/verify-phase-coverage-paging.sh`：
+故意把每一道闸单独破坏一次（分页、稳定排序、表名、状态分类），确认测试真的会红 ——
+**8 处全部被抓到**。不这么做的话，测试可能只是在验证「我塞进去的数据能取出来」，
+锁不住任何东西。
+
+`[P12.A.M38]` · PR #866 · 上线后 Prioritise / Execute 两个数字可能变大，那是修好了不是坏了。
+
+### 2026-08-06（看板上排好的动作终于有人跑了 —— DAPE E 段自动执行循环，先空跑）
+
+**起点是一个数字**：`execution_items` 里 281 件待办，**最后一件「完成」是 7-21，15 天前**。
+判定该不该自动跑的两道闸（背书 + 白名单）2026-08-04 就写好了，**零调用方** ——
+「诊断 → 方案 → 动作」这条链跑到最后一步就停在看板上给人看。这次补上最后一步。
+
+**做得刻意窄**：一轮最多 3 件、每客户 1 件；只跑白名单里那三种「写博客初稿」；
+产物只落 `blog_posts.status='draft'`，不发布、不开 PR、不碰客户网站、不花广告费。
+
+**不另起炉灶**：生成走周更那条线（`generateWeeklyBlogForClient`）。另开一条会同时踩两个坑 ——
+一周一篇的总量闸、60 天题目去重、`checkContentDuplicate`、站内已覆盖检查全部绕过；
+而且反向掐死周更（它的冷却是「6 天内有任何非失败 post 就跳过」）。
+一周一篇这个数字收进 `lib/blog/cadence`，两条路径读同一个。
+
+**主安全闸真的接上了**：背书推导 join `prescriptions.status`（只看 `prescription_id` 有没有值的话，
+「挂在已作废方案下」那条分支永远不触发 = 死代码），`marketing_plan_id` 作为第二根锚
+（表约束不允许它同时挂方案，只认方案会把营销计划派下来的 33 件整批误判成没人认领）。
+方案也有保质期（45 天）—— 此前 `recent_analysis` 给 8 天而方案无限期，
+生产里仅有的 2 件可跑动作背后的方案是 69 天和 83 天前批的，等于永久通行证。
+
+**别的几道**：客户闸用既有的 `seo_config.weekly_blog`（`client_status` 没有 demo 这一维，
+拦不住演示账号）；卡上点名了关键词/页面的不自动跑（我只会按数据自己挑题，写歪了还标完成 =
+拿不相干的文章冒充战略动作做完）；认领是行级原子的（`.eq('status','pending')` + `.select()`）；
+失败按 2^n 天退避、3 次停手并进今日待办；机器自己一套记账列，**不碰** FDE 手点生成那一对
+（`generation_started_at`/`generation_error`），否则看板会把机器的活显示成「FDE 正在做」。
+库里 20 件人手拖成「进行中」的僵尸卡一件没碰。
+
+**上线方式**：cron 现在挂着 `?dry_run=1` —— **只选不做**，把每条候选的判定打出来给人眼确认。
+确认名单对了之后分两步放开（去掉 `dry_run` 只留 `?max=1` 试水一轮 → 再去掉 `max`），
+两步各是 `render.yaml` 里的一行改动。
+
+`[P22.E.S19]` · 一篇博客真实成本 US$0.0498（26 篇均价）—— 风险从来不在钱，在写错东西。
+
+---
+
+### 2026-08-05（广告引擎中心收口 + 地产房源素材管道）
+
+**广告引擎**
+- 上线闸门触发点从「ME 建完广告」改成**每天扫所有在投广告组** —— 谁建的都管。覆盖率从约等于 0 变成 100%，因为真正得罪 5 个买家那批广告不是 ME 建的
+  `feat(ads): 广告闸门改成每天扫在投广告 [P21.J.M2]` · cron `ad-readback-sweep-daily` 20:40 UTC · 结果进今日待办「需要你动手」
+- ME 现在能发广告：起草 → 建成**暂停** → 过闸门 → 人点头才花钱。`/dashboard/ad-approval` 把买家会看到的原话放最前面、花多少钱印在按钮上
+  `feat(ads): ME 能发广告了 [P21.J.M3]` · 硬顶 $50/天 + 30 天 · 账本复用 flywheel_actions 无 migration
+- 草案生成器只能拼已核实事实，**编造在结构上不可能**（没有自由文本入口）；客户禁用词成为广告线硬闸，命中直接不出稿
+  `feat(ads): 草案生成器 [P21.J.M4]` · `feat(ads): 客户禁用词硬闸 [P21.J.M4]`
+- 经验共享闸从**漏 82%** 修到 34 种写法 0 漏 0 误拦，并接上唯一写入口（原来零个生产调用方）
+  `fix(memory): 经验共享闸 + 唯一写入口 [P21.J.M6,M7]`
+- 补齐轮播 / 动态商品 / 自然帖投流三种创意的文案摘取（自然帖会去主页取）；页面加 90 天窗口 + 行数上限；行业归一化两处合一
+  `fix(ads): 三种创意形态 + 页面截断 + 归一化漂移 [P21.J.M8,M9,M10]`
+
+**地产房源素材管道**
+- 素材从「归到客户」改成**归到一套房**：一房一条上传链接，归类由链接完成，上传方仍是三步不填表。原来 83 个素材 0 个知道属于哪套房
+  `feat(assets): 素材归到一套房 + 三道严谨性闸门 [P21.J.M13]`
+- 库层两道锁（migration `20260805090000`，已 apply 并在真库探针验过）：**绑定后不可改挂房源**、**文件不可就地替换**。放库层不放应用层，因为这是地产合规问题，应用层闸门会被手敲 SQL 绕过
+- 房源详情页新增素材面板：专属上传链接 + 逐张过闸 + 逐张签字，不能投的**逐张写清缺什么**，刻意无「一键全部通过」
+  `feat(assets): 房源素材面板 [P21.J.M14]`
+
+---
+
+### 2026-08-05（文案写了价格、配图来源没核实 → 界面拦 / 服务端三条路都拦 / 顺带补两处裸奔接口）
+
+起点是一条谁都没在看的红线：**真实价格只能配真实画面**。`client_assets.source` 这个字段
+（2026-08-03 建的）在社媒这条路上**一次都没被读过** —— FDE 从素材库挑一张来源不明的图，
+直接进贴文、发出去，界面上从头到尾看不出这张图是哪来的。配文里要是写了价格，
+客人按图下单拿到的东西对不上，投诉算客户的。
+
+**① 界面先看得见、再拦得住**（PR #848）。选图弹窗每张图带来源徽章，绿 = 能给真价背书，
+灰 = 不能；绿灰口径直接问 `canBackRealPrice`，界面不另立一套判断，红线哪天改了不会漏改。
+交付前那道闸**只在文案真的报了价时才响** —— 库里 83 张历史素材全是「来源不明」，
+无条件拦会让所有社媒发帖当场瘫痪。拦下来给两条可操作的路（去掉价格 / 去素材库确认），带直达链接。
+
+顺带补了一个会让功能白做的洞：`visual_assets` 那张表**没有来源列**，不在 GET 里按 `storage_url`
+回查素材库的话，**页面一刷新徽章和闸就全瞎了**。
+
+**② 价格识别分了宽严两档**（同 PR）。工厂那条（`copy-generator`）命中只是落模板兜底，
+误杀无害，所以口径宽；社媒这条**会挡住人干活**，直接套宽口径的后果是实打实的 ——
+`100% Kiwi owned`、`Top 10 for 2026` 会被当成报价，把大量正常文案判死。两档并排放在
+`lib/content/price-claim`，各写一套迟早漂移。
+
+**③ 闸推到服务端，绕过界面的三条路也拦**（PR #849）。界面上的闸挡的是手滑，
+`publer/create-post`（Airtable 审批过自动发）和 `publer/schedule`（Visuals 页面直接排期）
+跑起来东西就真出去了，之前一条没挡。判定跟界面**完全同源**，不会出现「界面拦了后端放行」
+这种最难查的不一致。
+
+其中 `create-post` 是**自动路径、人不在场** —— 只回一个 409 的话帖子会永远停在 approved，
+现象是「排着排着就没了」，发现死在 webhook 日志里 = 断头。所以配套加了今日待办
+「🙋 需要你动手」的捞取：不落新状态、不加新表，判定条件跟闸同源，
+文案改好或素材确认好这条自己就消失。
+
+测试这块特意防的是「查错了还看不出来」：假 supabase 按表建模、没建模的表直接 throw，
+「查询报错」和「没查到」分成两条用例；「没价格就一次库都不查」用**一张表都不建模**来锁，
+比断言 `blocked === false` 硬。跑过变异探针 —— 手动去掉 `client_id` 过滤，隔离用例当场变红。
+
+**④ 读代码时撞见两条裸奔接口**（PR #851）。`POST /api/publer/schedule`（把素材真发到客户社媒账号）
+和 `GET /api/publer/draft/[assetId]`（吐出贴文正文 + 全部 Publer 账号列表）**一直没有任何鉴权** ——
+有一个 `asset_id` 就能动别人客户的账号。两条都只有后台一个调用方，已补。鉴权点放在
+**读到 asset 之后**，客户身份由素材自己的 `client_id` 决定，不让调用方把客户身份当参数传进来。
+
+`create-post` 同样无鉴权但**故意没修**：它被 Zapier webhook 调用（没有会话），
+加登录鉴权会当场打断线上自动化。正解是 Bearer Token，token 要同时配到 Zapier 那边，
+需要 PM 动手一次 —— 此项 2025 年就登记过、躺在 `archive/AUTOMATION_SPEC.md` 里没人看，
+本次捞进主线 ROADMAP（`P21.J.SEC-2`）。
+
+> ⚠️ 验证方式上的两个坑（这轮实测踩到）：`next.config` 里 `typescript.ignoreBuildErrors: true`，
+> **`npm run build` 过了不代表类型没问题**，`tsc` 得单独跑；而 `tsc --noEmit` 用默认 2GB 堆会
+> **OOM 崩掉**（报的是 `heap out of memory`，不是类型错），要 `NODE_OPTIONS=--max-old-space-size=8192`。
+
+### 2026-08-04（客人名单里不该有客户的同事 → 分类 / 域名清单界面 / 电话判断层 / 配置中心分页签）
+
+起点是客户的一句话：**「contact 里面怎么还有工作人员？」** 查下来 info@ 接进来的 37 个新联系人
+里只有一半是真散客，另一半是同行旅行社（House of Travel 四个门店、TravelManagers、Orbit… 约 16 人）
+和 CTS 自己的员工（`pa@chinatravel.co.nz` —— 系统里只登记了 `ctstours.co.nz` 一个域名，
+「同事不建人」那条没拦住）。PM 定口径：**同行单独标记分类，「今天该联系谁」主要还是终端客户。**
+
+**① 机器人发件人从「开头匹配」改成「按段匹配」**（PR #816）。`testflight_no_reply@email.apple.com`
+不以任何机器人词开头，旧判据放行，它变成了 CTS 名单上一张显示名叫「Meta Platform,lnc. via TestFlight」
+的卡。`前缀_noreply@` 是系统邮件最常见的形式之一，只判开头等于放过一整类。代价是
+`Bonnie.Newsletter@` 这种真会被误伤 —— 但那个顾虑是想出来的，**漏判是真发生的**。
+
+**② 按邮箱域名分终端客户 / 同行 / 自己人**（PR #819），**算出来的，不存列** —— 跟首次来源同一个
+道理，域名清单一改，存下来的那一列就全是旧的。子域名要算（`mail.hot.co.nz` 命中 `hot.co.nz`），
+但**不能拿 `endsWith` 硬判**：那样 `nothot.co.nz` 会命中 `hot.co.nz`，把不相干的公司误标成同行，
+而被误标的人会从主名单上消失 —— 这是三种分错里**最贵**的一种。
+
+**③ #819 合太快，Codex 复审当场抓到一个会伤客户的漏**（PR #820）。筛选只作用在 `people` 上，
+`batchEmails` 原样沿用服务端那份 —— 于是「只看终端客户」时复制出来的地址里**仍然带着同行**，
+一封面向散客的群发信会发给每周订十次位的同行；而「已发出」那一笔只按筛后的人记，
+**实际收件人和 CRM 记录对不上**。后半条更毒：名单一旦开始说假话，销售就不再信它，
+而这套东西存在的全部理由就是那份名单可信。群发地址必须**从筛后的人重新推**。
+同时修 `countTrade` 不算 offList —— 同行若全都成交/停止，切换器不渲染，他们在界面上彻底翻不到。
+
+**④ 域名清单补上设置界面**（PR #822）。判断逻辑当天做好了，但清单只能改数据库 —— 以后新遇到
+一家同行 FDE 加不进去。「要 FDE 填的字段必须连界面一起做完」是铁律。填错的**当场退回**，
+绝不默默存下：`House of Travel` 存进去永远不会命中任何邮箱，而填的人以为已经标好了。
+空格拆不拆定成「拆开之后是不是全都成立」—— 无条件拆会让退回消息变成「House、of、Travel 不是域名」。
+顺带补一个真漏洞：「客户自己的域名」此前**只在归类那一侧生效**，邮件同步照样为同事建人、
+建完藏起来，数据还是脏的；现在在建人那一步就生效。
+
+**⑤ 电话接进 CRM —— 判断层**（PR #821）。电话是 CTS 最主要的成交渠道，而它在系统里完全不存在：
+客人打进来没人接（「有人想订、我们错过了」）没有任何记录，广告带来的电话归因在响铃那一刻断掉。
+按邮件那条线同一个分法把取数和判断拆开，**判断层不依赖 3CX 接口长什么样**，所以对方还没开分机
+也先做完先审完了。六条判断：内部通话整条丢 · 号码认不出就丢 · 未接来电必须建人 ·
+纯外呼不建人 · 没接通/秒挂的外呼不算「跟过」· 转接只算一次（合并后**必须重判**第五条，
+转接第一段往往只有几秒，照它走会把一次五分钟通话记成「没聊上」）。录音**只存编号不存链接**。
+⚠️ 取数层卡在对方：要开一个分机才有真实记录验证字段名。
+
+**⑥ 客户配置中心改成分页签**（PR #811）。PM：「当前的页面太长，不好用」—— 23 个板块堆在一根
+768px 竖列里全部展开，打开一次同时发 20 多个请求。改成五组，**只挂载当前这一组**
+（不是 CSS 藏起来 —— 藏起来照样挂载照样发请求）。授权回跳必须落在「接通」组，
+否则人授权完看到一片跟他无关的东西，会以为没成功然后重来一遍。
+
+六个 PR 全部做了变异测试（判据逐条改错，确认每条都有测试当场失败），共 8+3+8 处；
+CRM 相关 586 条测试通过，`npm run build` 通过。**无 migration。**
+
+### 2026-08-04（开窗口自动读 STATE.md + 清掉 13 份废弃工作副本）
+
+**CLAUDE.md 里那句「每次开新会话先读 docs/STATE.md」是纸条，不是闸门。** 当天一场会话照着
+CLAUDE.md 干了一整场、一次没打开 STATE.md，于是拿着 7/25 之前的旧文档体系下判断，还提议去做
+一件早就做完的事 —— 把 5101 行的 `ROADMAP.md` 拆开，而那正是 7/25 文档重构已经做完的事
+（拆成了 `docs/ROADMAP.md` 280 行 + `docs/archive/`）。
+
+根因不是那场会话不听话，是**「先读」这种要求本身没有强制力**。改成 SessionStart 钩子直接把
+`docs/STATE.md` 读进上下文，跟 CLAUDE.md 同等待遇（PR #823）。顺带修掉一个连带的坑：原来
+`if (!text) return` 会在团队记忆为空时整段跳过，STATE 也跟着没了；现在按段拼装，任一段有内容
+就输出。64KB 上限 + try/catch 兜底 —— **没有这个文件的项目静默跳过，读不到永远不能拦住开窗口。**
+
+验过 5 种情况：正常项目 274 行（STATE 排最前）· 团队记忆取不到仍出 244 行 · 无 STATE 文件的
+项目不受影响 · 非 git 目录静默退出 · 目录不存在静默退出。
+
+**边界要说清楚**：本改动只保证 STATE.md **被读到**，不保证它**是新的**。它自己写着「最后核对
+2026-07-25」，今后改完系统要顺手更新它，否则自动读到的是一份旧现状。
+
+同日清掉 **13 份 PR 已合并、干完活没人收的工作副本**（26G → 19G，分支一个没删）。删之前逐文件
+对 `origin/main` 查过，救出 **28 个只存在于那些副本里的文件** —— 20 篇 CTS/Oztop 客户成品、
+`src/lib/meta/{conversions,timezone}.ts`、`src/lib/crm/email-deal-parser.ts` 及配套测试、
+两条 PM 拍板过但从没进仓库的规矩，暂存在 `~/Documents/Claude/_rescued-2026-08-04/` 待归位。
+**教训**：squash 合并会让 `git merge-base --is-ancestor` 误报「不在主线」，判断「活儿干完了」
+只能认 `gh pr list --head <分支> --state all` 的 MERGED；`.claude/worktrees/` 是隐藏目录，
+`ls` 看不见，盘点必须用 `git worktree list`。
+
 ### 2026-08-04（处方页「重新生成」修好 + 审批留痕落成字段）
 
 **处方页那个「重新生成」按钮，从上线起就没成功过一次。** 点它会先把当前这份标成「已拒绝」，
