@@ -24,6 +24,7 @@ import type {
   StepStatus,
   VerificationResult,
 } from './types'
+import { failClosedIfRpcMissing } from './rpc-versioning'
 
 export const TABLE_RUNS = 'action_runs'
 export const TABLE_STEPS = 'action_run_steps'
@@ -315,7 +316,19 @@ export async function resolvePendingApproval(
     costEstimateUsd: number | null
   },
 ): Promise<ResolveApprovalResult> {
-  const { data, error } = await sb.rpc('kernel_resolve_pending_approval', {
+  // 🔴 **只打 `_v2`，绝不打历史原名。**（Build Control Room blocker ①）
+  //
+  //    历史那个 `kernel_resolve_pending_approval` 至今仍然存在、仍然可调用 ——
+  //    这正是危险的地方：代码先部署、前向 migration 还没 apply 时，打历史原名
+  //    会**成功**打在旧实现上，而本 PR 新加的锚身份闸、政策行锁、挂钟复核
+  //    在整个上线窗口里**一条都不存在**，调用方却拿到「成功」。
+  //    静默降级比报错危险得多 —— 报错会停下，降级会继续往下走。
+  //
+  //    反过来那半边由数据库接住：migration 先 apply 时，历史原名被换成了
+  //    转发到 v2 的兼容壳，所以还没换代码的旧调用方也自动拿到新的安全实现。
+  //
+  // 🔴 函数名写字面量、参数逐条写全 —— 理由同 recordFencedDeny 那段。
+  const { data, error } = await sb.rpc('kernel_resolve_pending_approval_v2', {
     p_run_id: args.runId,
     p_pending_decision_id: args.pendingDecisionId,
     p_resolution: args.resolution,
@@ -323,6 +336,10 @@ export async function resolvePendingApproval(
     p_reason: args.reason,
     p_policy_snapshot: args.policySnapshot,
     p_cost_estimate_usd: args.costEstimateUsd,
+  })
+  failClosedIfRpcMissing('kernel_resolve_pending_approval_v2', error, {
+    why: '人工批准/拒绝必须带锚身份闸、政策行锁和挂钟复核',
+    neverFallBackTo: 'kernel_resolve_pending_approval',
   })
   if (error) fail('人工批准/拒绝', error)
   const row = (data ?? [])[0] as unknown as
@@ -512,30 +529,11 @@ export async function recordFencedDeny(
   //    `pending_approval` 期间这条 run 已经被重新排成**另一份**待审批请求时，
   //    一次迟到的「批不了」会把那份**新的、还没人看过的**请求盖成 denied，
   //    而正在看它的人什么都不知道。宁可这次审批报错、run 原样停在等审批。
-  if (result.error && isMissingRpc(result.error)) {
-    throw new Error(
-      '[kernel/store] 落拒绝决策 失败：kernel_record_fenced_deny_v2 在这个数据库里还不存在。' +
-        '人工审批的拒绝路径必须带决策指针闸，这里 fail closed —— ' +
-        '绝不退回没有 fence 的 kernel_record_fenced_deny。请先 apply 对应 migration。',
-    )
-  }
+  failClosedIfRpcMissing('kernel_record_fenced_deny_v2', result.error, {
+    why: '人工审批的拒绝路径必须带决策指针闸',
+    neverFallBackTo: 'kernel_record_fenced_deny',
+  })
   return unwrapFencedDeny(result)
-}
-
-/**
- * 「这个函数在库里不存在」——**只认函数缺失**，不认缺表、不认连接失败。
- *
- * 🔴 判得宽一点点都会变成安全问题：这个判定的唯一用途是决定「要不要把
- *    fail closed 的话说得更清楚」。要是把网络抖动、权限不足也算进来，
- *    真正的故障就会被描述成「没 apply migration」，运维照着去 apply 也修不好。
- *    PG 报缺函数是 `42883`，PostgREST 的 schema cache 找不到是 `PGRST202`。
- */
-function isMissingRpc(error: { code?: string; message?: string } | null): boolean {
-  if (!error) return false
-  if (error.code === '42883' || error.code === 'PGRST202') return true
-  return /function\s+[^\n]{1,200}?\s+does not exist|could not find the function\b/i.test(
-    error.message ?? '',
-  )
 }
 
 function unwrapFencedDeny(result: { data: unknown; error: { message?: string } | null }): FencedDenyResult {

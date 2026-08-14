@@ -234,7 +234,7 @@ GRANT  EXECUTE ON FUNCTION public.kernel_record_fenced_deny(uuid, bigint, text, 
 -- 所以这里是真正的 CREATE OR REPLACE（不需要 DROP，也不动 REVOKE/GRANT）。
 -- ============================================================================
 
-CREATE OR REPLACE FUNCTION public.kernel_resolve_pending_approval(
+CREATE OR REPLACE FUNCTION public.kernel_resolve_pending_approval_v2(
   p_run_id              uuid,
   p_pending_decision_id uuid,
   p_resolution          text,     -- 'approve' | 'reject'
@@ -254,6 +254,8 @@ DECLARE
   v_policy   public.client_automation_policies%ROWTYPE;
   v_new_id   uuid;
   v_cost_cap numeric;
+  -- 🔴 **真实签发时刻**（挂钟），不是事务开始时间。见下面 ⑤ 那一段。
+  v_signing_at timestamptz;
 BEGIN
   IF p_resolution NOT IN ('approve','reject') THEN
     RETURN QUERY SELECT false, 'bad_resolution', NULL::uuid; RETURN;
@@ -369,18 +371,44 @@ BEGIN
   --    ⚠️ 代价要写明：锁住当前活动行会挡住并发的 UPDATE / DELETE，也会挡住
   --       「先关掉旧行、再插一条新活动行」那种切换流程 —— 它得等这次审批提交。
   --       这是刻意的取舍：审批只占一个很短的事务，而拿旧快照签放行是错的。
+  --
+  -- 🔴 **时刻一律用挂钟 `clock_timestamp()`，不用 `now()`。**（Build Control Room blocker ②）
+  --
+  --    `now()` = `transaction_timestamp()`，在**事务开始那一刻**就定死了。
+  --    这个函数会在 run 锁、待审批决策锁、政策锁上排队 —— 排队多久，
+  --    `now()` 就比真实时间旧多久。于是一条**有结束时间**的政策完全可能：
+  --    事务开始时还生效，等锁等完已经过期，而 `now()` 照样说它生效。
+  --    结果是拿一份**签发当时就已经失效**的政策签出 allow、把 run 推到
+  --    `authorized`、并向审批人回「成功」。Gateway 开跑前会再拦一次，
+  --    所以不会真的执行；但 append-only 的审计表里已经留下一条假记录 ——
+  --    审计说的必须是当时的事实。
+  --
+  --    「既有代码也用 now()」不构成豁免：签一张已经过期的授权就是错的。
+  v_signing_at := clock_timestamp();
   SELECT * INTO v_policy
     FROM public.client_automation_policies p
    WHERE p.client_id = v_run.client_id
      AND p.action_key = v_run.action_key
-     AND p.effective_from <= now()
-     AND (p.effective_to IS NULL OR p.effective_to > now())
+     AND p.effective_from <= v_signing_at
+     AND (p.effective_to IS NULL OR p.effective_to > v_signing_at)
    ORDER BY p.effective_from DESC
    LIMIT 1
      FOR UPDATE;
   IF NOT FOUND THEN
     RETURN QUERY SELECT false, 'no_active_policy', NULL::uuid; RETURN;
   END IF;
+
+  -- 🔴 **拿到政策锁之后重新取一次挂钟，再复核一遍时间窗。**
+  --    上面那次取值发生在**等政策锁之前**；`FOR UPDATE` 自己也会排队。
+  --    所以真正的签发时刻只有这里才知道，窗口必须按它再验一次。
+  --    下面 INSERT 的 `expires_at` 也从**同一个** v_signing_at 推导 ——
+  --    两个时刻各算各的话，会签出一张有效期起点比自己还早的授权。
+  v_signing_at := clock_timestamp();
+  IF NOT (v_policy.effective_from <= v_signing_at
+          AND (v_policy.effective_to IS NULL OR v_policy.effective_to > v_signing_at)) THEN
+    RETURN QUERY SELECT false, 'policy_expired_before_signing', NULL::uuid; RETURN;
+  END IF;
+
   -- 🔴 三连一律在**拿到锁之后**核对 —— 锁之前比等于比一份可能马上过期的快照。
   IF v_policy.id IS DISTINCT FROM v_pending.policy_id THEN
     RETURN QUERY SELECT false, 'policy_identity_changed', NULL::uuid; RETURN;
@@ -404,7 +432,9 @@ BEGIN
      NULL, p_reason, p_policy_snapshot, v_policy.id, v_policy.policy_version,
      'human', p_resolved_by, v_cost_cap, p_cost_estimate_usd,
      v_run.idempotency_key,
-     now() + (v_policy.decision_ttl_seconds * interval '1 second'))
+     -- 🔴 有效期从**同一个**签发时刻推导（不是 now()）——
+     --    用 now() 的话，锁上排了 30 秒，这张授权就凭空少活 30 秒。
+     v_signing_at + (v_policy.decision_ttl_seconds * interval '1 second'))
   RETURNING id INTO v_new_id;
 
   UPDATE public.action_runs
@@ -426,6 +456,227 @@ BEGIN
   RETURN QUERY SELECT true, 'approved', v_new_id;
 END;
 $$;
+
+REVOKE EXECUTE ON FUNCTION public.kernel_resolve_pending_approval_v2(uuid, uuid, text, text, text, jsonb, numeric)
+  FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.kernel_resolve_pending_approval_v2(uuid, uuid, text, text, text, jsonb, numeric)
+  TO service_role;
+
+
+-- ============================================================================
+-- 历史 `kernel_resolve_pending_approval` —— **签名一字不动**，转发到 v2
+--
+-- 🔴 为什么必须版本化（Build Control Room blocker ①）：
+--    上一版新代码仍然打**历史原名**。代码先部署、这条 migration 还没 apply 时，
+--    那次调用会**成功**打在旧实现上 —— 于是本 PR 新加的锚身份闸、政策行锁、
+--    挂钟复核**在整个上线窗口里全部不存在**，而调用方拿到的是「成功」。
+--    静默降级比报错危险得多：报错会停下，降级会继续往下走。
+--
+--    所以：新代码只打 `_v2`，`_v2` 不存在就 fail closed（见 src/lib/kernel/store.ts）。
+--
+-- 🔴 反过来那半边也要接住：**migration 先 apply、代码还没换**的时候，
+--    旧代码打的是历史原名 —— 这个壳把它转发到 v2，于是它**自动拿到新的安全实现**。
+--    两个方向都不会退化成旧逻辑。
+--
+--    签名没变 ⇒ 没有重载歧义、ACL 原样保留；这里的 REVOKE/GRANT 是照着
+--    历史那次 migration 原样重申一遍，不改变任何既有授权。
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION public.kernel_resolve_pending_approval(
+  p_run_id              uuid,
+  p_pending_decision_id uuid,
+  p_resolution          text,     -- 'approve' | 'reject'
+  p_resolved_by         text,
+  p_reason              text,
+  p_policy_snapshot     jsonb DEFAULT '{}',
+  p_cost_estimate_usd   numeric DEFAULT NULL
+)
+RETURNS TABLE (ok boolean, reason text, decision_id uuid)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  RETURN QUERY SELECT * FROM public.kernel_resolve_pending_approval_v2(
+    p_run_id, p_pending_decision_id, p_resolution, p_resolved_by, p_reason,
+    p_policy_snapshot, p_cost_estimate_usd);
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.kernel_resolve_pending_approval(uuid, uuid, text, text, text, jsonb, numeric)
+  FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.kernel_resolve_pending_approval(uuid, uuid, text, text, text, jsonb, numeric)
+  TO service_role;
+
+
+-- ============================================================================
+-- `kernel_begin_authorized_run` —— 同一种「锁等待 / 检查时刻」漏洞，一起堵
+--
+-- 🔴 它跟 resolve 是**同一个形状**：先 `FOR UPDATE` 锁 run、再锁 decision，
+--    然后用 `now()` 判 `expires_at` 和政策时间窗。锁上排队多久，`now()` 就旧多久 ——
+--    于是一张在等锁期间刚过期的授权、一条刚失效的政策，照样被判成「还有效」，
+--    run 被放进 `running` 真的开跑。resolve 那边最坏是审计留假记录，
+--    这边最坏是**真的执行了一次已经不被授权的动作**。
+--
+-- 🔴 **为什么这个不需要版本化**（跟 resolve / fenced_deny 不同）：
+--    版本化是因为**新代码依赖新保证** —— 保证没上线就必须 fail closed。
+--    这里没有任何新代码依赖它：签名不变、没有新参数、应用层一个字没改。
+--    未 apply = 今天的行为（不退化），apply 后 = 正确的行为。
+--    两边都不会崩，所以不需要 v2、不需要兼容壳、也没有上线顺序问题。
+--
+-- 🔴 **函数体是从历史迁移里程序化复制的**，只做了四处替换：
+--    加 `v_now` 声明 · 两把锁之后取一次挂钟 · `expires_at` 比 v_now ·
+--    政策时间窗比 v_now。写入用的时间戳（`consumed_at` / `started_at` /
+--    `updated_at`）**一律保持 now()** —— 那些记的是「什么时候写的」，不是判据。
+--    有一条守卫测试逐字比对这份副本与历史原文，只允许这四处不同：
+--    手抄一个 132 行的执行闸，抄漏一条判据是不会有人发现的。
+--
+--    **没有修改历史迁移文件**，这是一次前向 CREATE OR REPLACE。
+--    签名没变 ⇒ ACL 原样保留；下面的 REVOKE/GRANT 照历史原样重申一遍。
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.kernel_begin_authorized_run(
+  p_run_id              uuid,
+  p_decision_id         uuid,
+  p_worker_id           text,
+  -- 🔴 F1：兑换授权也要出示自己那一代。过期的执行者不许把授权用掉 ——
+  --    授权一旦被消费就再也签不回来，那是不可逆的。
+  p_expected_generation bigint DEFAULT NULL
+)
+RETURNS TABLE (ok boolean, reason text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_run      public.action_runs%ROWTYPE;
+  v_decision public.authorization_decisions%ROWTYPE;
+  v_policy_id      uuid;
+  v_policy_version integer;
+  v_policy_mode    text;
+  v_policy_found   boolean;
+  -- 🔴 真实时刻（挂钟）。见函数头那段说明。
+  v_now            timestamptz;
+BEGIN
+  -- ① 先锁 run。谁拿到这把锁，谁才有资格谈执行权。
+  SELECT * INTO v_run FROM public.action_runs
+   WHERE id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'run_not_found'; RETURN;
+  END IF;
+
+  -- ② 再锁决策（顺序固定 run → decision，避免与其他路径互相死锁）
+  SELECT * INTO v_decision FROM public.authorization_decisions
+   WHERE id = p_decision_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT false, 'decision_not_found'; RETURN;
+  END IF;
+
+  -- 🔴 两把行锁都拿到了，**现在**才知道真实时刻。下面所有「还有效吗」
+  --    一律按它判，不按事务开始时间。
+  v_now := clock_timestamp();
+
+  -- ③ run 必须正好停在「已授权、还没开跑」
+  IF v_run.status <> 'authorized' THEN
+    RETURN QUERY SELECT false, 'run_not_authorized:' || v_run.status; RETURN;
+  END IF;
+
+  -- ③b 🔴 F1 代际闸：只有**当前这一代**的执行者能把授权兑换掉。
+  --     状态闸和指针闸都拦不住这一种：接管者把 run 重新推回 authorized、
+  --     指针也指向新签的那条决策之后，上一代要是恰好拿着同一条决策的 id
+  --     （比如接管发生在它读完之后），状态和指针都能对上 —— 只有代际能分开。
+  IF p_expected_generation IS NOT NULL AND v_run.claim_generation <> p_expected_generation THEN
+    RETURN QUERY SELECT false, 'stale_generation:' || v_run.claim_generation::text; RETURN;
+  END IF;
+
+  -- ④ 🔴 双向绑定：run 当前指着的必须就是这一条决策，且这条决策也必须属于这个 run。
+  --    这一条是「同一个 run 的两份 allow 决策只有一份能兑换执行权」的实现。
+  IF v_run.authorization_decision_id IS DISTINCT FROM p_decision_id THEN
+    RETURN QUERY SELECT false, 'decision_not_current'; RETURN;
+  END IF;
+  IF v_decision.action_run_id <> v_run.id THEN
+    RETURN QUERY SELECT false, 'decision_run_mismatch'; RETURN;
+  END IF;
+
+  -- ⑤ 身份与契约必须逐项对得上
+  IF v_decision.client_id <> v_run.client_id THEN
+    RETURN QUERY SELECT false, 'cross_client'; RETURN;
+  END IF;
+  IF v_decision.action_key <> v_run.action_key THEN
+    RETURN QUERY SELECT false, 'action_key_mismatch'; RETURN;
+  END IF;
+  IF v_decision.action_version <> v_run.action_version THEN
+    RETURN QUERY SELECT false, 'action_version_mismatch'; RETURN;
+  END IF;
+  IF v_decision.idempotency_key <> v_run.idempotency_key THEN
+    RETURN QUERY SELECT false, 'idempotency_mismatch'; RETURN;
+  END IF;
+
+  -- ⑥ 授权本身必须有效
+  IF v_decision.verdict <> 'allow' THEN
+    RETURN QUERY SELECT false, 'not_allow:' || v_decision.verdict; RETURN;
+  END IF;
+  IF v_decision.consumed_at IS NOT NULL THEN
+    RETURN QUERY SELECT false, 'already_consumed'; RETURN;
+  END IF;
+  IF v_decision.expires_at IS NOT NULL AND v_decision.expires_at <= v_now THEN
+    RETURN QUERY SELECT false, 'expired'; RETURN;
+  END IF;
+
+  -- ⑦ 政策必须还是**签发时那一行、那一版、且模式仍允许这类授权**。
+  --    时间窗（C5）：带结束时间但还没到期的政策一样是生效的，
+  --    不能用 effective_to IS NULL 把它当成「没有政策」。
+  SELECT p.id, p.policy_version, p.mode
+    INTO v_policy_id, v_policy_version, v_policy_mode
+    FROM public.client_automation_policies p
+   WHERE p.client_id = v_run.client_id
+     AND p.action_key = v_run.action_key
+     AND p.effective_from <= v_now
+     AND (p.effective_to IS NULL OR p.effective_to > v_now)
+   ORDER BY p.effective_from DESC
+   LIMIT 1;
+  v_policy_found := FOUND;
+
+  -- 🔴 政策被删掉 ≠ 「没有版本号所以随便过」。没有生效政策 = 不许执行。
+  IF NOT v_policy_found THEN
+    RETURN QUERY SELECT false, 'no_active_policy'; RETURN;
+  END IF;
+  -- 🔴 身份（C2）：版本号只在同一行政策内有意义。
+  --    「auto v1 → 删掉 → 重建 deny v1」两条版本号一样，只有行 id 分得开。
+  IF v_decision.policy_id IS DISTINCT FROM v_policy_id THEN
+    RETURN QUERY SELECT false, 'policy_identity_changed'; RETURN;
+  END IF;
+  IF v_decision.policy_version IS DISTINCT FROM v_policy_version THEN
+    RETURN QUERY SELECT false, 'stale_policy_version'; RETURN;
+  END IF;
+  -- 🔴 模式复核（C2）：机器签的放行只在「现在仍是自动」时有效，
+  --    人签的放行只在「现在仍要人审」时有效 —— 模式一换，旧授权作废。
+  IF v_decision.decided_by = 'policy' AND v_policy_mode <> 'auto_approve' THEN
+    RETURN QUERY SELECT false, 'policy_mode_changed'; RETURN;
+  END IF;
+  IF v_decision.decided_by = 'human' AND v_policy_mode <> 'require_approval' THEN
+    RETURN QUERY SELECT false, 'policy_mode_changed'; RETURN;
+  END IF;
+
+  -- ⑧ 一次性完成：兑换授权 + run 进入 running
+  UPDATE public.authorization_decisions
+     SET consumed_at = now(), consumed_by = p_worker_id
+   WHERE id = p_decision_id;
+
+  UPDATE public.action_runs
+     SET status     = 'running',
+         started_at = COALESCE(started_at, now()),
+         last_error = NULL,
+         updated_at = now()
+   WHERE id = p_run_id;
+
+  RETURN QUERY SELECT true, 'ok';
+END;
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.kernel_begin_authorized_run(uuid, uuid, text, bigint)
+  FROM PUBLIC, anon, authenticated;
+GRANT  EXECUTE ON FUNCTION public.kernel_begin_authorized_run(uuid, uuid, text, bigint)
+  TO service_role;
 
 
 -- ============================================================================

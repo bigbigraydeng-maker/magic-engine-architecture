@@ -1292,7 +1292,11 @@ export function createFakeSupabase(
       if (name === 'kernel_begin_authorized_run') {
         return { data: [beginAuthorizedRun(args)], error: null }
       }
-      if (name === 'kernel_resolve_pending_approval') {
+      // 🔴 历史原名今天**仍然存在**（前向迁移把它换成了转发到 v2 的兼容壳），
+      //    所以假件也必须让它可调用并给出同样的结果 —— 建模成「不存在」会把
+      //    「代码打了历史原名」这种真实回归伪装成一次干脆的失败，
+      //    而生产上它是**静默成功**打在旧实现上的，那才是要防的形状。
+      if (name === 'kernel_resolve_pending_approval' || name === 'kernel_resolve_pending_approval_v2') {
         return { data: [resolvePendingApproval(args)], error: null }
       }
       if (name === 'kernel_claim_run_recovery') {

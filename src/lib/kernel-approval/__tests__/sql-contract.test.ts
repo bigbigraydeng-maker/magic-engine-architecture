@@ -70,7 +70,10 @@ describe('🔴 RPC 参数：应用层 / 假件 / SQL 三处不许分家', () => 
   const GUARDED_RPCS = [
     'kernel_record_fenced_deny',
     'kernel_record_fenced_deny_v2',
-    'kernel_resolve_pending_approval',
+    // 🔴 是 `_v2`，不是历史原名 —— store 只许打版本化入口。
+    //    历史原名今天仍然存在（兼容壳），所以打错名字不会报错，会静默
+    //    成功打在旧实现上；那条由 rollout-compat 的行为断言盯着。
+    'kernel_resolve_pending_approval_v2',
     'kernel_claim_run_recovery',
   ] as const
 
@@ -226,9 +229,9 @@ describe('🔴 锚身份判据在 SQL 两个 RPC 里逐条对齐', () => {
   ]
 
   it.each([...ANCHOR_IDENTITY_CHECKS])(
-    'kernel_resolve_pending_approval 有「%s」',
+    'kernel_resolve_pending_approval_v2 有「%s」',
     (_label, needle) => {
-      expect(functionBody('kernel_resolve_pending_approval')).toContain(needle)
+      expect(functionBody('kernel_resolve_pending_approval_v2')).toContain(needle)
     },
   )
 
@@ -270,7 +273,7 @@ describe('🔴 锚身份判据在 SQL 两个 RPC 里逐条对齐', () => {
     //    新签的 deny 把**别人那份决策**的 policy_id / 版本抄进这个客户的审计记录。
     //    「这份请求是不是这条 run 的」跟批不批准无关 —— 判据必须排在
     //    `IF p_resolution = 'reject'` **之前**，两条路都过。
-    const body = functionBody('kernel_resolve_pending_approval')
+    const body = functionBody('kernel_resolve_pending_approval_v2')
     const identityAt = body.indexOf("'pending_identity_mismatch'")
     const rejectBranchAt = body.indexOf("IF p_resolution = 'reject' THEN")
     expect(identityAt, '身份核对没找到').toBeGreaterThan(-1)
@@ -322,7 +325,7 @@ describe('🔴 人工批准的政策行锁', () => {
 
   const resolveBody = (): string => {
     const src = readFileSync(join(ROOT, MIGRATION), 'utf8')
-    const start = src.indexOf('CREATE OR REPLACE FUNCTION public.kernel_resolve_pending_approval(')
+    const start = src.indexOf('CREATE OR REPLACE FUNCTION public.kernel_resolve_pending_approval_v2(')
     expect(start, 'kernel_resolve_pending_approval 必须在这条前向迁移里').toBeGreaterThan(-1)
     return src.slice(start, src.indexOf('$$;', start))
   }
@@ -458,5 +461,160 @@ describe('🔴 政策生效窗口不许重叠', () => {
     // 区间相交的行它一条都拦不住 —— 这正是要防的那种。
     const notEnough = 'CREATE UNIQUE INDEX ON client_automation_policies (client_id, action_key)'
     expect(/EXCLUDE\s+USING\s+gist/i.test(notEnough)).toBe(false)
+  })
+})
+
+/**
+ * 🔴 **审批状态迁移 RPC 的版本化 + 挂钟复核。**
+ * （Build Control Room blocker ① / ②）
+ */
+describe('🔴 kernel_resolve_pending_approval 版本化与签发时刻', () => {
+  const HIST = 'supabase/migrations/20260808000003_me2_execution_kernel_v1.sql'
+  const FWD = 'supabase/migrations/20260813000000_kernel_approval_identity_guards.sql'
+  const fwd = (): string => readFileSync(join(ROOT, FWD), 'utf8')
+
+  function bodyOf(src: string, name: string): string {
+    const start = src.indexOf(`CREATE OR REPLACE FUNCTION public.${name}(`)
+    expect(start, `${name} 必须在这份 SQL 里`).toBeGreaterThan(-1)
+    const end = src.indexOf('$$;', start)
+    expect(end, `${name} 的函数体没闭合`).toBeGreaterThan(start)
+    return src.slice(start, end)
+  }
+
+  it('两个入口都在：v2 是实现，历史原名是转发壳', () => {
+    const v2 = bodyOf(fwd(), 'kernel_resolve_pending_approval_v2')
+    const legacy = bodyOf(fwd(), 'kernel_resolve_pending_approval')
+    // v2 里有真逻辑
+    expect(v2).toContain('pending_identity_mismatch')
+    // 历史原名只转发 —— 逻辑写两份必然漂移
+    expect(legacy).toContain('kernel_resolve_pending_approval_v2(')
+    expect(legacy).not.toContain('pending_identity_mismatch')
+  })
+
+  it('🔴 历史原名不许被 DROP（迁移先 apply 时旧代码还得能调）', () => {
+    expect(/DROP\s+FUNCTION[^;]*\bkernel_resolve_pending_approval\b/i.test(fwd())).toBe(false)
+  })
+
+  it('🔴 转发壳的签名跟历史逐字一致（不一致 CREATE OR REPLACE 直接失败）', () => {
+    const sig = (src: string, name: string): string => {
+      const b = bodyOf(src, name)
+      return b
+        .slice(b.indexOf('('), b.indexOf('AS $$'))
+        .replace(new RegExp(name, 'g'), 'FN')
+        .replace(/--[^\n]*/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    }
+    expect(sig(fwd(), 'kernel_resolve_pending_approval')).toBe(
+      sig(readFileSync(join(ROOT, HIST), 'utf8'), 'kernel_resolve_pending_approval'),
+    )
+  })
+
+  it('🔴 两个入口的 EXECUTE 都收了口', () => {
+    const sig = String.raw`\(uuid,\s*uuid,\s*text,\s*text,\s*text,\s*jsonb,\s*numeric\)`
+    for (const fn of ['kernel_resolve_pending_approval_v2', 'kernel_resolve_pending_approval']) {
+      expect(
+        new RegExp(String.raw`REVOKE\s+EXECUTE\s+ON\s+FUNCTION\s+public\.${fn}${sig}\s*\n?\s*FROM\s+PUBLIC\s*,\s*anon\s*,\s*authenticated`, 'i').test(fwd()),
+        `${fn} 没 REVOKE`,
+      ).toBe(true)
+      expect(
+        new RegExp(String.raw`GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+public\.${fn}${sig}\s*\n?\s*TO\s+service_role`, 'i').test(fwd()),
+        `${fn} 没 GRANT`,
+      ).toBe(true)
+    }
+  })
+
+  it('🔴 签放行按**挂钟**判，不按事务开始时间', () => {
+    const v2 = bodyOf(fwd(), 'kernel_resolve_pending_approval_v2')
+    // 锁之后重新取挂钟，并且用它复核窗口
+    expect(v2).toContain('v_signing_at := clock_timestamp()')
+    expect(v2).toContain('policy_expired_before_signing')
+    // 有效期从**同一个**签发时刻推导 —— 用 now() 的话锁上排多久就少活多久
+    expect(v2).toContain('v_signing_at + (v_policy.decision_ttl_seconds')
+
+    // 🔴 政策时间窗一个 now() 都不许剩下：剩一个就等于这道闸没修
+    const windowLines = v2
+      .split('\n')
+      .filter((l) => /effective_from|effective_to/.test(l) && !l.trim().startsWith('--'))
+    expect(windowLines.length, '没找到时间窗判据 —— 判据空跑了').toBeGreaterThan(0)
+    expect(
+      windowLines.filter((l) => l.includes('now()')),
+      '政策时间窗还在用 now()（事务开始时间），锁等待期间过期的政策会被判成有效',
+    ).toEqual([])
+  })
+
+  it('🔴 挂钟必须取在**拿到政策锁之后**（锁之前取等于没修）', () => {
+    const v2 = bodyOf(fwd(), 'kernel_resolve_pending_approval_v2')
+    const lockAt = v2.indexOf('FOR UPDATE;', v2.indexOf('client_automation_policies'))
+    const recheckAt = v2.indexOf('policy_expired_before_signing')
+    expect(lockAt).toBeGreaterThan(-1)
+    expect(recheckAt, '复核必须排在政策锁之后').toBeGreaterThan(lockAt)
+  })
+})
+
+/**
+ * 🔴 **`kernel_begin_authorized_run` 的前向副本，只许跟历史原文差那四处。**
+ *
+ * 它是执行闸：132 行里抄漏一条判据，是不会有人发现的 —— 测试照样绿，
+ * 而生产上少了一道「现在还准不准跑」。所以这里逐行比对，
+ * 把「允许的差异」写死成一张清单。
+ */
+describe('🔴 begin_authorized_run 前向副本与历史原文逐行比对', () => {
+  const HIST = 'supabase/migrations/20260808000003_me2_execution_kernel_v1.sql'
+  const FWD = 'supabase/migrations/20260813000000_kernel_approval_identity_guards.sql'
+
+  /** 去掉注释和空行 —— 只比真正会执行的那些行。 */
+  function codeLines(src: string): string[] {
+    const start = src.indexOf('CREATE OR REPLACE FUNCTION public.kernel_begin_authorized_run(')
+    expect(start).toBeGreaterThan(-1)
+    return src
+      .slice(start, src.indexOf('$$;', start))
+      .split('\n')
+      .map((l) => l.replace(/--.*$/, '').trimEnd())
+      .filter((l) => l.trim().length > 0)
+  }
+
+  //: 允许出现在前向副本里、历史原文里没有的行
+  const ALLOWED_ADDED = [
+    'v_now            timestamptz;',
+    'v_now := clock_timestamp();',
+    'AND p.effective_from <= v_now',
+    'AND (p.effective_to IS NULL OR p.effective_to > v_now)',
+    "IF v_decision.expires_at IS NOT NULL AND v_decision.expires_at <= v_now THEN",
+  ]
+  //: 允许消失的行（被上面那些替换掉的）
+  const ALLOWED_REMOVED = [
+    'AND p.effective_from <= now()',
+    'AND (p.effective_to IS NULL OR p.effective_to > now())',
+    "IF v_decision.expires_at IS NOT NULL AND v_decision.expires_at <= now() THEN",
+  ]
+
+  it('差异恰好就是那四处时间源，一行不多一行不少', () => {
+    const hist = codeLines(readFileSync(join(ROOT, HIST), 'utf8')).map((l) => l.trim())
+    const fwd = codeLines(readFileSync(join(ROOT, FWD), 'utf8')).map((l) => l.trim())
+
+    const added = fwd.filter((l) => !hist.includes(l))
+    const removed = hist.filter((l) => !fwd.includes(l))
+
+    expect(added.sort(), '前向副本里多出了计划外的行 —— 抄的时候改了别的东西').toEqual(
+      [...ALLOWED_ADDED].sort(),
+    )
+    expect(removed.sort(), '前向副本里丢了行 —— 抄漏一条判据 = 少一道执行闸').toEqual(
+      [...ALLOWED_REMOVED].sort(),
+    )
+  })
+
+  it('🔴 写入用的时间戳仍然是 now()（那些记「什么时候写的」，不是判据）', () => {
+    const fwd = codeLines(readFileSync(join(ROOT, FWD), 'utf8')).join('\n')
+    expect(fwd).toContain('consumed_at = now()')
+    expect(fwd).toContain('started_at = COALESCE(started_at, now())')
+  })
+
+  it('🔴 挂钟取在两把行锁之后（锁之前取等于没修）', () => {
+    const fwd = codeLines(readFileSync(join(ROOT, FWD), 'utf8')).join('\n')
+    const decisionLock = fwd.indexOf("WHERE id = p_decision_id FOR UPDATE;")
+    const clockAt = fwd.indexOf('v_now := clock_timestamp();')
+    expect(decisionLock).toBeGreaterThan(-1)
+    expect(clockAt, '取挂钟必须排在 decision 锁之后').toBeGreaterThan(decisionLock)
   })
 })

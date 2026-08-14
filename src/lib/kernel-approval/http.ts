@@ -9,7 +9,7 @@ import { NextResponse } from 'next/server'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import type { AccessTier } from '@/lib/auth/access-types'
 import { isUuid } from '@/lib/validation-utils'
-import { ApprovalError } from './errors'
+import { ApprovalError, isKernelNotProvisioned } from './errors'
 
 /**
  * 来自 HTTP 的 uuid：**读库之前**就得判。
@@ -49,6 +49,30 @@ export function approvalErrorResponse(err: unknown): NextResponse {
       { status: err.status },
     )
   }
+  // 🔴 **版本化 RPC 还没 apply ⇒ 503，不是 500。**（Build Control Room blocker ③）
+  //
+  //    内核层 fail closed 时抛的是带码的 `KernelRpcMissingError`（`42883` /
+  //    `PGRST202`）。上一版抛的是普通 Error，码在抛出那一刻就丢了 —— 于是这条
+  //    **已经声明过** `503 kernel_not_provisioned` 的路，实际答的是
+  //    `500 internal_error`。两者对运维是完全不同的指令：
+  //    500 =「有 bug，去查日志」，503 =「这套东西还没打开，去 apply migration」。
+  //
+  //    `isKernelNotProvisioned` 只认那几个码和「找不到函数/表」的明确文案 ——
+  //    网络故障、超时、权限不足（`42501`）一律落到下面的 500，**不许**被
+  //    描述成「没 apply」：那会让运维照着去 apply 也修不好，而监控上只看到一条无害的 503。
+  if (isKernelNotProvisioned(err)) {
+    return NextResponse.json(
+      {
+        error:
+          '执行内核在这个环境里还没启用（数据库那几张表 / 那几个函数还没建）——' +
+          '所以现在没法处理审批。这不是「出错了」，是这套东西还没打开',
+        code: 'kernel_not_provisioned',
+        detail: { rpc: (err as { rpc?: unknown }).rpc ?? null },
+      },
+      { status: 503 },
+    )
+  }
+
   // 🔴 认不出来的一律 500 并原样记日志。**绝不降级成 200 或空结果** ——
   //    「查炸了」被答成「没有待办」是这条路上最危险的一种谎。
   console.error('[kernel-approval] 未预期的失败：', err)

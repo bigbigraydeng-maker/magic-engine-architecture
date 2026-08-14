@@ -105,6 +105,33 @@ export class KernelError extends Error {
   }
 }
 
+/**
+ * **这个版本化 RPC 在库里还不存在** —— 代码上线了、对应的 migration 还没 apply。
+ *
+ * 🔴 为什么必须是一个**带机器可读 code** 的类型，而不是 `new Error('...没部署')`：
+ *    上一版就是抛的普通 Error。抛之前明明已经认出了 `42883` / `PGRST202`，
+ *    抛出去的时候却把码和原始英文消息一起丢了 —— 于是接口层再也认不出来，
+ *    只能答 `500 internal_error`，而这条路**声明过**它答 `503 kernel_not_provisioned`。
+ *    两者对运维是完全不同的指令：500 = 「去查日志找 bug」，
+ *    503 = 「这套东西还没打开，去 apply migration」。丢掉码 = 把后者伪装成前者。
+ *
+ * 🔴 **方向**：这个类型放在 `src/lib/kernel`，由 `kernel-approval` 去认它。
+ *    反过来（内核层 import 审批层的 `ApprovalError`）会形成反向依赖 ——
+ *    `kernel-approval` 本来就依赖 `kernel`，那样就成环了，而架构测试正盯着这条线。
+ */
+export class KernelRpcMissingError extends Error {
+  /** 原始的 PG / PostgREST 错误码（`42883` 或 `PGRST202`），原样带出。 */
+  readonly code: string
+  /** 缺的那个 RPC 名字 —— 让运维不用去日志里翻。 */
+  readonly rpc: string
+  constructor(args: { rpc: string; code: string; message: string; cause?: unknown }) {
+    super(args.message, { cause: args.cause })
+    this.name = 'KernelRpcMissingError'
+    this.code = args.code
+    this.rpc = args.rpc
+  }
+}
+
 /** capability 内部用的：这次失败换个时间再试有意义（网络抖动、上游 429）。 */
 export class RetryableCapabilityError extends Error {
   readonly retryable = true as const

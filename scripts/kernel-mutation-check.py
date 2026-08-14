@@ -12,7 +12,7 @@
     python3 scripts/kernel-mutation-check.py
 退出码：有任何一条不是 CAUGHT 就返回 1。
 """
-import subprocess, sys, os, json
+import subprocess, sys, os, json, tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from kernel_mutations import load_all  # noqa: E402
@@ -26,15 +26,51 @@ MUTATIONS = load_all()
 
 
 
+#: 结构化结果落盘的地方。用 JSON reporter 而不是去 grep 终端输出 ——
+#: 见 run_test 里那段说明。
+RESULT_JSON = os.path.join(tempfile.gettempdir(), "kernel-mutation-result.json")
+
+
 def run_test(path):
+    """跑一个测试文件，返回 (退出码, 红掉的用例全名列表 | None, 原始输出)。
+
+    🔴 **用 JSON reporter，不再从终端输出里 grep `×` 开头的行。**
+
+       原来那种做法有一个**偶发**失效：`basic` reporter 的逐条用例行是
+       带 ANSI 的终端输出，在负载高、输出被截断、或 reporter 换了行首标记时，
+       一条 `×` 都 grep 不到 —— 而退出码仍然是 1。于是判定看到的是
+       「红了，但一条红的用例都没有」，直接报 WRONG_TEST。
+       实测就撞到过一次：单独重跑三次全是 CAUGHT，只有那次完整跑里解析成了空。
+
+       结构化输出没有这个问题：用例名从 JSON 里读，不依赖任何排版。
+
+    🔴 **解析不出来必须返回 None，不能返回空列表。**
+       两者长得一样，处置完全相反：空列表 = 「确实没有用例红」（→ 判据没命中），
+       None = 「我不知道有没有红」（→ 必须当失败停下来查）。
+       把后者当成前者，正是上面那次 WRONG_TEST 的成因。
+    """
+    if os.path.exists(RESULT_JSON):
+        os.remove(RESULT_JSON)
     r = subprocess.run(
-        ["npx", "vitest", "run", path, "--reporter=basic"],
+        ["npx", "vitest", "run", path, "--reporter=json", "--outputFile", RESULT_JSON],
         capture_output=True, text=True, cwd=ROOT,
     )
-    return r.returncode, r.stdout + r.stderr
+    names = None
+    try:
+        with open(RESULT_JSON, encoding="utf-8") as fh:
+            data = json.load(fh)
+        names = [
+            " > ".join(a.get("ancestorTitles", []) + [a.get("title", "")])
+            for res in data.get("testResults", [])
+            for a in res.get("assertionResults", [])
+            if a.get("status") == "failed"
+        ]
+    except (OSError, ValueError):
+        names = None
+    return r.returncode, names, r.stdout + r.stderr
 
 
-def judge(m, code, out):
+def judge(m, code, names, out):
     """判定一次变异到底有没有被**想验的那道闸**抓住。
 
     🔴 早先这里只看 `code != 0` —— 「CAUGHT」的真实含义只是
@@ -47,7 +83,10 @@ def judge(m, code, out):
     留空表示「这条变异会牵连一大片，不指定具体用例」——那是刻意的例外，
     要在探针里写清楚为什么。
     """
-    names = [l.strip() for l in out.splitlines() if l.strip().startswith("×")]
+    if names is None:
+        # 🔴 单列一类。混进 WRONG_TEST 会把「工具没读到结果」说成
+        #    「闸验错了地方」—— 前者要修脚本，后者要修测试，完全两回事。
+        return (m["name"], "UNREADABLE", "拿不到结构化结果（vitest 没写出 JSON）——工具问题，不是判据结论")
     if code == 0:
         return (m["name"], "MISSED", "测试全绿 —— 这道闸没有被任何测试盯着")
     want = m.get("expect_fail_contains", "")
@@ -95,10 +134,11 @@ def main():
     # 🔴 四类分开报。把 SKIP 混进「漏掉」里看不出「那道闸从没被验过」——
     #    锚点失配是**静默**的，它长得跟「探针少了几条」一模一样。
     counts = {k: sum(1 for r in results if r[1] == k)
-              for k in ("CAUGHT", "SKIP", "MISSED", "WRONG_TEST")}
+              for k in ("CAUGHT", "SKIP", "MISSED", "WRONG_TEST", "UNREADABLE")}
     print(
         f"\n总计 {len(results)} | CAUGHT={counts['CAUGHT']} "
-        f"SKIP={counts['SKIP']} MISSED={counts['MISSED']} WRONG_TEST={counts['WRONG_TEST']}"
+        f"SKIP={counts['SKIP']} MISSED={counts['MISSED']} WRONG_TEST={counts['WRONG_TEST']} "
+        f"UNREADABLE={counts['UNREADABLE']}"
     )
     for r in results:
         if r[1] != "CAUGHT":

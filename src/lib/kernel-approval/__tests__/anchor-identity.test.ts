@@ -212,7 +212,7 @@ describe('🔴 Codex P2-2 · 审批请求必须真的属于这条 run 和这个�
 
     const { data } = await (f.supabase as unknown as {
       rpc: (n: string, a: Record<string, unknown>) => Promise<{ data: Array<{ ok: boolean; reason: string }> }>
-    }).rpc('kernel_resolve_pending_approval', {
+    }).rpc('kernel_resolve_pending_approval_v2', {
       p_run_id: runId,
       p_pending_decision_id: '0d000000-0000-4000-8000-00000000c1a2',
       p_resolution: 'reject',

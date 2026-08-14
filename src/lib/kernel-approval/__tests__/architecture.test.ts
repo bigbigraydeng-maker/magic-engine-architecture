@@ -190,6 +190,7 @@ describe('🔴 安全核心文件不许越过 800 行', () => {
     'src/lib/kernel/authorize.ts',
     'src/lib/kernel/human-approval.ts',
     'src/lib/kernel/store.ts',
+    'src/lib/kernel/rpc-versioning.ts',
     'src/lib/kernel-approval/service.ts',
     'src/lib/kernel-approval/queries.ts',
     'src/lib/kernel-approval/http.ts',

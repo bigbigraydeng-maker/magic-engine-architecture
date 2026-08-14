@@ -183,7 +183,7 @@ describe('K-WP01A · expectedDecisionId 过期', () => {
     expect(
       rpcCalls,
       '🔴 明显过期的 id 必须在**打库之前**就被拒 —— 一次原子 RPC 都不许发出去',
-    ).not.toContain('kernel_resolve_pending_approval')
+    ).not.toContain('kernel_resolve_pending_approval_v2')
 
     // 🔴 「什么都没被改动」不是一句安慰话 —— 逐条比
     expect(f.tables.authorization_decisions).toHaveLength(before)
@@ -210,7 +210,7 @@ describe('K-WP01A · expectedDecisionId 过期', () => {
     expect(
       rpcCalls,
       '🔴 拒绝那条路的应用层闸同样要在打库之前拦下来',
-    ).not.toContain('kernel_resolve_pending_approval')
+    ).not.toContain('kernel_resolve_pending_approval_v2')
     expect(f.tables.authorization_decisions).toHaveLength(before)
     expect(f.tables.action_runs[0].status).toBe('pending_approval')
     expect(f.tables.action_runs[0].authorization_decision_id).toBe(expectedDecisionId)
@@ -230,7 +230,7 @@ describe('K-WP01A · expectedDecisionId 过期', () => {
         policy: APPROVAL_POLICY,
         supabaseOptions: {
           beforeRpc: (name, args) => {
-            if (name === 'kernel_resolve_pending_approval') seen.push(args)
+            if (name === 'kernel_resolve_pending_approval_v2') seen.push(args)
           },
         },
       },
@@ -280,7 +280,7 @@ describe('K-WP01A · expectedDecisionId 过期', () => {
         policy: APPROVAL_POLICY,
         supabaseOptions: {
           beforeRpc: (name) => {
-            if (name !== 'kernel_resolve_pending_approval' || swapped) return
+            if (name !== 'kernel_resolve_pending_approval_v2' || swapped) return
             swapped = true
             // 系统在这一瞬间重新排了一次：run 换上了另一份审批请求
             const run = f.tables.action_runs[0]

@@ -34,7 +34,7 @@ describe('🔴 Codex round 6 · 锁内政策竞态不是终态', () => {
       supabase: {
         ...f.supabase,
         rpc: async (name: string) =>
-          name === 'kernel_resolve_pending_approval'
+          name === 'kernel_resolve_pending_approval_v2'
             ? { data: [{ ok: false, reason, decision_id: null }], error: null }
             : { data: [], error: null },
       },
