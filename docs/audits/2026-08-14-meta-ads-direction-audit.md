@@ -678,6 +678,7 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
    - 🔴 **`AD-GEO-0`**：`targetingFor` 把国家和城市一起发,Meta 按并集生效 → 广告实际投整个国家,10km 半径形同虚设（第二十七轮新发现,**首发前必修**,否则第一条广告就是那次事故的复刻）；
    - **`AD-FORM-1`**：`pickForm` 不看语言、只有一个表单时直接选中,英文广告可能把买家送进中文表单（第二十三轮新发现）。⚠️ **修法不是"把语言传进 `pickForm`"**（第二十九轮更正）—— `BuildOptions` 早就有 `lang`（`listing-draft-builder.ts:55`），缺的是**另一侧**：`lead-forms.ts:118` 只取 `id,name,status`，**表单本身没有语言可比**。得先有 form→language 的可靠来源（显式配置最稳）；
    - **`AD-CUR-2` 的草案那一路**：`ad-publisher.ts:195` 按账户币种发预算，而审批页只显示 `$` —— **批准人不知道自己批的是 AUD 还是 NZD**（第二十九轮补入首投前置；之前只登记了，没进这一步）；
+   - 🔴 **`AD-GATE-1` 的"批准/否决必须原子认领"那一半**（第三十六轮补入首投前置）：`approveDraft` 和 `rejectDraft` 都是**先读状态、再无条件写状态**，中间没有任何条件更新。两个人（或两个标签页）同时点，批准那边已经把 Meta 实体激活、否决那边最后落账 —— **账本和页面显示「已否决」，广告却在花钱**。⚠️ 而且 `rejectDraft` 比这更松：它**根本不查状态**（`draft-and-gate.ts:225-227` 只判 `payload` 存在），所以否决一条**已经 `active` 的**草案，会直接把账本改成 `rejected` 而广告照跑。修：用条件更新或 RPC **从 `awaiting_approval` 原子认领唯一决策**（`.eq('id').eq(payload->>status,'awaiting_approval')` 之类），并为"已激活但落账冲突"留一条停投/对账路径 —— 这是真钱路径上唯一没人兜底的一步。
 5. 前置全部落地后，**投第一条真广告 —— 走 `draft-listing` 的 `lead_form`**（不走 REACH boost，也不走还没补归属校验的通用 `meta-ads/draft`）；
 6. **③** 批量角度（半周到一周）。事实来源校验已在第 4 步做掉；若还要跨语言合并，再加"表单身份下沉 + 表单混语言闸门"；
 7. 若要做**攒池型**角度测试（视频 hook 筛选），前置是**两条已登记的 ROADMAP 项，不是一条**（第十一轮更正 —— 上一版把池子增长错记进 `P21.K.8`，实际它不在那条里）：
