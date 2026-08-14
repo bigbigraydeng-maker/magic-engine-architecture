@@ -157,7 +157,13 @@ Roman 的 15 条同样是真角度：`Rangitoto 学区 hook` / `By negotiation` 
 | `flywheel_actions` where `action_type='ads.create_ad'` | **0** | ❌ ME 起草建广告那条路从没走过 |
 | `ad_strategy_configs` | **0** | ⚠️ 每客户开关表没人填（走默认） |
 
-> 注意一个重要区别：`ad_creative_links` 的写入方**已经接好了**（`boost-post/route.ts:122`、`winner-reel-sync/engine.ts:214` 都在调 `linkAdToCreative`）。它是 0 行不是因为没接线，而是因为**这两条路径自 2026-08-01 上线以来一次都没建成过广告**。这是好消息：不用写新代码，只要让它跑一次。
+> **写入方接线到什么程度**（初稿说"已经接好了"，不够准确，按源码逐行更正）：
+>
+> - `ad_creative_links` 的**素材归因那一半**确实接好了 —— `boost-post/route.ts:122` 与 `winner-reel-sync/engine.ts:214` 都在调 `linkAdToCreative`。它是 0 行是因为这两条路径自 2026-08-01 以来一次都没建成过广告。
+> - 但**打法账本那一半没接**：两处调用都没传 `play` / `playSource`，所以 `persistLink` 会把这两列写成 `NULL`。即使这两条路径明天跑起来，打法账本仍然是空的。
+> - 而 `ads.create_ad` 那条流水只有 `draft-and-gate.ts` 会写，**它反过来从不调 `linkAdToCreative`**（`creative-link.ts:54` 的注释里预留了 `'me_ad_launch'`，至今没加）。
+>
+> 结论：**这三张表是三条不同的路各写一部分，没有任何一条路能同时写全。** 详见 §7 ①。
 
 ### 3.8 winner 判定现在判的是什么
 
@@ -223,24 +229,37 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 | Campaign deployment | **PARTIAL** | `draft-and-gate` 全链路已实现且有闸门，生产使用 **0 次** |
 | Broad / Advantage+ delivery | **DONE（人工）/ CONFLICT（ME 代码）** | live 23/26 开着；但 `ad-publisher.ts:116` 写死关闭 |
 | Performance ingestion | **DONE** | `ad_daily_insights` campaign 201 行 + ad 376 行，日 cron |
-| Creative-level attribution | **MISSING** | `ad_creative_links` 0 行 / `attr_creative_ref` 0 行（写入方已接线，从未触发）|
+| Creative-level attribution | **MISSING** | `ad_creative_links` 0 行 / `attr_creative_ref` 0 行。素材归因写入方已接线但从未触发；`ads.create_ad` 那条路径**根本不调它**（见 §3.7 注）|
 | Winning-angle detection | **PARTIAL** | 有 divergence 检测但拒绝下结论；winner 判定用的是自然互动分 |
 | Next-generation creative creation | **MISSING** | `variant_from_winner` 工单 0 条 |
-| Learning persistence | **PARTIAL** | `ad_creative_links.play/play_source/play_context` 打法账本已建（0 行）；`PLAY_CATALOG.knownTraps` 是手写的，不是学来的 |
+| Learning persistence | **MISSING** | `ad_creative_links.play/play_source/play_context` 三列已建但 0 行，且**两条建广告路径都没传 `play`**，跑起来也仍是 NULL；`PLAY_CATALOG.knownTraps` 是手写的，不是学来的 |
 
-**一句话**：右半圈（拿数据、判疲劳、止损）**DONE**；左半圈（出角度、建广告、记素材、学赢家、扩下一轮）**几乎全是 MISSING/PARTIAL**。而且断点不在能力，在**接线**。
+**一句话**：右半圈（拿数据、判疲劳、止损）**DONE**；左半圈（出角度、建广告、记素材、学赢家、扩下一轮）**几乎全是 MISSING/PARTIAL**。断点大部分在接线（§7 ①②），但"批量出角度"那一段是真缺能力、需要新增开发（§7 ③）。
 
 ---
 
 ## 7. Highest-Leverage Next Step（最多 3 个，按优先级）
 
-### ① 让 ME 真的建出下一条广告（把已有组件接通，零新架构）
+### ① 先把记账补齐，再让 ME 建出下一条广告
 
-`draft-and-gate` 全链路、`boost-post` 路由、`linkAdToCreative` 写入方**全都已经写好并接线了**。缺的只是"跑一次"。
+⚠️ **本节初稿写错过一次，已按实际代码更正**（Codex 复审 P1 抓到，核实成立）。原稿说"跑通一条广告会同时点亮四件事"—— **不成立**。逐行核对后的真实接线状况：
 
-跑通一条真实广告会同时点亮四件事：`ad_creative_links` 从 0 变有行 → `attr_creative_ref` 开始有值 → 打法账本（`play` / `play_source`）开始记账 → `ads.create_ad` 有第一条流水。
+| 路径 | `linkAdToCreative` | `play` / `play_source` | `flywheel_actions` (`ads.create_ad`) |
+|---|---|---|---|
+| `boost-post/route.ts:122` | ✅ 调了 | ❌ **没传**（只给 clientId/adId/postId/pageId/createdBy） | ❌ 不写 |
+| `winner-reel-sync/engine.ts:214` | ✅ 调了 | ❌ 没传 | ❌ 不写 |
+| `draft-and-gate.ts` | ❌ **从不调** | — | ✅ 写 |
 
-建议标的：CTS 下一条 Reels 投流（有素材、有历史、闸门已在跑）。工作量以"配置 + 一次真实发布"计，不是开发。
+也就是说：**没有任何一条现存路径能同时点亮四件事。** 现在直接去投一条真广告，花掉的是客户预算，而素材归因和打法账本仍然会是空的 —— 正是本审计在批评的那种"各环节都正常、并排看才发现断了"。
+
+所以顺序必须是**先补另一半接线，再投**。两件小事，都在已有文件里：
+
+1. **`draft-and-gate.ts` 建成之后调一次 `linkAdToCreative`** —— 需要同时给 `creative-link.ts:48` 的 `AdCreationPath` 加一个 `'me_ad_launch'` 值。该文件注释里已经预留了这一项，并写明"等那个路由真的存在了再加"—— 现在路由已经存在（`meta-ads/draft` + `draft-listing`），所以这一项该加了。
+2. **两条建广告路径把 `play` 传进去** —— `LinkAdToCreativeArgs` 已经有 `play` / `playSource` / `playContext` 三个可选参数，`persistLink` 也已经在写这三列。`draft-and-gate` 侧的打法是现成的（`DRAFT_PLAY[draft.kind]`，`playSource: 'declared_at_creation'`）；`boost-post` 侧固定是 `boost_organic_post`。
+
+补完这两处之后，再投一条真实广告，四件事才会一起亮。
+
+建议标的：CTS 下一条 Reels 投流（有素材、有历史、闸门已在跑）。
 
 > 这一步没做之前，后面所有"学习"都是在空表上做设计。
 
@@ -248,18 +267,37 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 
 现在改的成本是 **0**（那条路径还没建过任何广告）；等它开始建广告再改，就是在真钱上改。
 
-- `lead_form_harvest` / `thruplay_pool_build` / `reach_awareness` → `advantage_audience: 1`
-- `warm_pool_retarget` → 保持 `0`（重定向名单被扩量确实是事故，闸门那条规则是对的，别动）
+⚠️ **初稿这里也写岔了一点**（Codex 复审 P2，核实成立）。原稿列了一张含 `warm_pool_retarget` / `reach_awareness` 的打法表，但 `ad-draft.ts:23` 的 `DraftKind` **目前只有两种**：
 
-同时把 `launch-readback` 的 `retargeting_advantage_audience` blocker 保留原样 —— 它只在 `claimsRetargeting` 时触发，不会误伤冷启动。
+```ts
+export type DraftKind = 'lead_form' | 'video_thruplay'
+export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thruplay_pool_build' }
+```
 
-> 这是**唯一一处 ME 代码与 Andromeda 逻辑正面冲突**的地方，且是一行的事。
+`warm_pool_retarget` / `reach_awareness` **根本走不到 `targetingFor`**，为它们写规则等于写了不会执行的分支。而且 `targetingFor(d: AdDraft)` 拿到的是 `d.kind`，不是打法。
+
+所以本次的准确范围是：
+
+- **现存这两种草案（`lead_form` / `video_thruplay`）都是冷投，两个都改成 `advantage_audience: 1`。** 这就是全部改动 —— 不是"按打法分开"，是"把仅有的两种冷投打开"。
+- **重定向的保护写成注释 + 一条测试留在原地**：等将来真的加 `warm_pool_retarget` 这种 `DraftKind` 时，它必须显式关闭扩量。现在没有这个 kind，写不出这个分支。
+- `launch-readback` 的 `retargeting_advantage_audience` blocker **保留原样** —— 它只在 `claimsRetargeting` 时触发，不会误伤这两种冷投草案。
+
+> 这是**唯一一处 ME 代码与 Andromeda 逻辑正面冲突**的地方，改动本身仍然只有一行。
 
 ### ③ 一个草案出 5–8 条不同角度的创意，投进同一个 ad set
 
 `AdDraft.creatives` 已经是数组，`ad-publisher.ts:215` 已经在循环建创意 —— **管道已经支持多条，只有 `listing-draft-builder` 硬写了单条。**
 
-要接的是已有的角度生成能力（`factory/copy-generator.ts` 的 `hookIntentFor` / `ctaIntentFor` + `strategist` 的角度去重），让它按 pain point / persona / offer / objection 出多条，**全部塞进同一个 ad set 让 Meta 自己分配**，而不是按语言拆成多个草案多个 ad set。
+⚠️ **但这一条不是"零开发"**（Codex 复审 P2，核实成立；初稿把它写成了接线活，低估了）。核对结果：
+
+- `copy-generator.ts` 的 `hookIntentFor(metric)` / `ctaIntentFor(metric)` 是 **switch，按一个北极星指标返回一句固定的战略意图提示语**，不是角度生成器；
+- `strategist.ts:178` 的 `pickAngle(ctx, winner)` 从已有的 `content_pillars` / `core_proposition` 里**挑第一个没被拦截的角度**，返回单个 `AnglePick`，一次只产出一条工单。
+
+所以"把这些函数接上"不会得到 5–8 条角度。真正缺的是一个**批量角度选择/生成 + 去重 + 逐条溯源**的编排层：既要出多条，又要每条都受本仓已有的两道约束管住（`listing-draft-builder` 的事实可溯 + `scanRedlineHits` 禁用词硬闸）。这是**新增开发**，不是接线 —— 按半周到一周估，别按零估。
+
+管道那一半（`AdDraft.creatives` 数组 + publisher 循环建）确实是白拿的，省掉的只是"怎么把多条创意发出去"，不是"多条创意从哪来"。
+
+出多条之后**全部塞进同一个 ad set 让 Meta 自己分配**，而不是按语言拆成多个草案多个 ad set。
 
 配套两条约束（都来自本仓已有的事故记录，不是新规矩）：
 - 私信类广告仍然一个 ad set 一种语言（`mixed_script_messaging_adset` 闸门，2026-08-04 得罪 5 个买家那次）；
@@ -279,7 +317,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 
 2. **广告"说什么"这件事，我们还在用老办法。** 钱最多的三条广告，加起来只有 4 条不同的片子；而我们真正试过十几个不同说法的那两次，一次花了 $432、一次花了 $366 —— 钱太少，试完也分不出胜负。**说白了：我们把所有钱押在少数几条片子上，同时用零花钱去做真正该做的测试。这个次序反了。**
 
-3. **最关键的一环还没通电：我们至今说不清哪一条片子带来了哪一个客户。** 39 个已经追到"哪条广告"的客户里，**没有一个**能追到"哪条片子"。记这件事的表已经建好、代码也接好了，就差 ME 自己去建一条广告 —— 因为只有建的那一刻才知道对应关系，事后问 Facebook 是问不出来的。
+3. **最关键的一环还没通电：我们至今说不清哪一条片子带来了哪一个客户。** 39 个已经追到"哪条广告"的客户里，**没有一个**能追到"哪条片子"。记这件事的表已经建好，但**记录这件事的三段路只各修了一段、还没接到一起** —— 得先花很小的功夫把它们接上，然后由 ME 自己去建一条广告，才能真的记下来。（只有建广告的那一刻才知道对应关系，事后问 Facebook 是问不出来的。）
 
 **如果按现在的方向继续做，Magic Engine 在 Meta 广告上真正能形成的竞争优势是这个：**
 
@@ -287,7 +325,9 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 >
 > 所以我们能做到的是：**一次投十几条真正不同说法的广告，让平台自己去找哪种人吃哪一套，两周内告诉客户"你的生意真正打动人的是哪句话"，然后照着那句话再生成下一批。** 这个能力代理公司做不了（他们出不起十几条片子的人工），普通自助工具也做不了（他们不认识客户的真实产品）。
 >
-> **但这条护城河成立的前提，是"哪条片子带来哪个客户"这条线必须真的通。现在它是断的。** 上面第 ① 和第 ③ 件事就是把它接通 —— 都不需要重构，只需要让已经写好的东西真的跑一次。
+> **但这条护城河成立的前提，是"哪条片子带来哪个客户"这条线必须真的通。现在它是断的。**
+>
+> 第 ①②件事是把断掉的接上 —— 小活，不用重构。第 ③ 件（一次出十几个不同说法）**是要真写新东西的**，别按"接个线就好"估工期。三件事里，①② 先做，因为 ③ 做出来的东西如果没有 ①②，照样不知道哪个说法赢了。
 
 ---
 
