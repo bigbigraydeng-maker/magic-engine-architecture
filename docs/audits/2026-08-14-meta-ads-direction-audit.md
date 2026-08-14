@@ -14,7 +14,7 @@
 1. **投放侧（delivery）实际上已经在 Andromeda 打法上** —— 但这个结论**只覆盖 CTS 已被 ME 追踪的 6 条 campaign、占已追踪花费的 47.7%**（$3,733.59 / $7,822.57）：把混账户按 `campaign_id` 归属后，CTS 已追踪的 6 组 ad set **一个兴趣定向都没有**，73.6% 的花费明确开着 `advantage_audience: 1`（唯一关掉的是重定向组，那本来就该关）。**Oztop（46.1%）和 Roman（6.1%）的账户都查不到 targeting**，合计 52.3% 的花费无证据（见 §3.1 与附录 1）。
 2. **但那不是 ME 做的** —— 是人在 Ads Manager 里点出来的。ME 自己唯一的建广告代码 `ad-publisher.ts:116` 写死 `targeting_automation: { advantage_audience: 0 }`，即**主动关掉** Advantage+ 受众。这条代码路径**没有留下任何成功建广告的记录**（`ads.create_ad` 0 条 —— ⚠️ 但该账本会静默丢记录，见 §2 注，所以只能说"没记录"，不能说"从没建过"），所以这个冲突**目前看是潜在的**，不是已确认发生的。
 3. **钱高度集中在少数广告上**（按客户分开看，避开混币种）：**CTS 80.7% 的钱压在 2 条广告上**；**Oztop 63.4% 压在 1 条上**；而两次真多角度测试分别只拿到该客户的 **12.0%**（Oztop 14 条 hook）和摊薄到每条 $24（Roman 15 条 angle）。**多角度测试只发生在没钱的地方。**（⚠️ 这里数的是广告条数；单条广告内部可能还有多套文案，库里看不到 —— 见 §3.3 注）
-4. **闭环没有通电**：`ad_creative_links` 0 行、`contacts.attr_creative_ref` 0 行（39 条已归因 lead 无一条能说清是哪条素材）、`winner_structures` 0 行、`variant_from_winner` 工单 0 条、`flywheel_actions` 里 `ads.create_ad` 0 条。**数据结构全都建好了，一个都没被写过。**
+4. **闭环没有通电**：`ad_creative_links` 0 行、`contacts.attr_creative_ref` 0 行（39 条已归因 lead 无一条能说清是哪条素材）、`winner_structures` 0 行、`variant_from_winner` 工单 0 条、`flywheel_actions` 里 `ads.create_ad` 0 条。**这几张表都建好了，一个都没被写过。**（⚠️ 不要读成"数据结构全都齐了、只差往里写" —— 端到端的**变体归因**模型还没建齐：首选的 `draft-and-gate` 路径没有稳定的 creative variant 身份、也没有落它的地方，`ad_creative_links.post_id` 还是 `NOT NULL`、`CreativeSource` 契约和发布结果映射都要改，是 migration + 代码的活。见 §4.2 与 `AD-LINK-1`）
 
 不是 RED，因为架构没有和 Andromeda 打架 —— 该有的表、该有的 ad 级日度数据（376 行）、该有的角度生成器都已经存在。不是 GREEN，因为**从"发现赢家"到"生成下一轮"这半圈，一次都没有真实跑通过**。
 
@@ -173,7 +173,7 @@ Reborn-Winner-Stand-in-Front-20260624
 > - **Oztop**（$3,608.27，46.1%）：账户 `1735240120460765` 的 `is_ads_mcp_enabled = false`（Meta 尚未放量）。campaign 名字叫 `Cold Broad`，但名字不算证据 —— `play-vocabulary.ts` 自己写过"最花钱那条名字零信息量"。
 > - **Roman**（$480.71，6.1%）：花费所在的 `act_1018365291238494` 返回 `is_queryable: false`（状态 UNSETTLED）。
 >
-> **所以"broad / Advantage+"这个结论目前只对 CTS 一家成立**，Oztop 和 Roman 两侧都是 inference。
+> **所以"broad / Advantage+"这个结论目前只对 CTS 已被 ME 追踪的那 6 条 campaign 成立**（不是"CTS 这家"）—— 同账户里还有 20 组没归属清楚，其中既有 Oztop 投流也有 ME 没在追踪的 CTS boost，而**全部 8 个带兴趣定向的组都在这 20 组里**；Oztop 和 Roman 两侧则整体都是 inference。要说到"CTS 这家"，得先做完 `AD-EVID-1`。
 >
 > **两条路都实测过，都不通**（2026-08-14 本次审计内重试）：
 > - Meta MCP 直接拒绝：`This ad account is not enabled for the Ads MCP. Ad account ID: 1735240120460765`
@@ -580,7 +580,7 @@ CLAUDE.md 铁律 2 的原文是：技术决策自己拍 + 召 agent 复审，**�
 
 ### ② 把 `ad-publisher.ts:116` 的 Advantage+ 默认值按打法分开
 
-现在改的成本是 **0**（那条路径还没建过任何广告）；等它开始建广告再改，就是在真钱上改。
+现在改的成本**看起来**是 0 —— 但准确说法是"**那条路径没有留下任何成功建广告的记录**"，不等于没建过：`draft-and-gate.ts` 的 `record()` 不读 Supabase 的 `error`（见 §2 注），`publishDraftPaused` 成功而落账失败，就会出现"建了但没记上"。所以**改之前先去 Meta 侧核一遍创建记录 / 调用日志**；核不出来就当"可能已被使用"来安排验证，别按 0 风险动手。等它开始建广告再改，就是在真钱上改。
 
 ⚠️ **初稿这里也写岔了一点**（Codex 复审 P2，核实成立）。原稿列了一张含 `warm_pool_retarget` / `reach_awareness` 的打法表，但 `ad-draft.ts:23` 的 `DraftKind` **目前只有两种**：
 
