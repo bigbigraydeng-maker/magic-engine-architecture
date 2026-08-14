@@ -11,7 +11,7 @@
 
 四句话：
 
-1. **投放侧（delivery）实际上已经在 Andromeda 打法上** —— 但这个结论**只覆盖 CTS 已被 ME 追踪的 6 条 campaign、占已追踪花费的 47.7%**（$3,733.59 / $7,822.57）：把混账户按 `campaign_id` 归属后，CTS 已追踪的 6 组 ad set **一个兴趣定向都没有**，73.6% 的花费明确开着 `advantage_audience: 1`（唯一关掉的是重定向组，那本来就该关）。**Oztop（46.1%）和 Roman（6.1%）的账户都查不到 targeting**，合计 52.3% 的花费无证据（见 §3.1 与附录 1）。
+1. **投放侧（delivery）实际上已经在 Andromeda 打法上** —— 但这个结论**只覆盖 CTS 已被 ME 追踪的 6 条 campaign —— 3 家客户里的 1 家、17 条 campaign 里的 6 条**（花费只能分币种说：已核对 NZD 3,733.59，未核对 NZD 480.71 + **AUD** 3,608.27）：把混账户按 `campaign_id` 归属后，CTS 已追踪的 6 组 ad set **一个兴趣定向都没有**，73.6% 的花费明确开着 `advantage_audience: 1`（唯一关掉的是重定向组，那本来就该关）。**Oztop 和 Roman 的账户都查不到 targeting**，两家的花费全部无证据（见 §3.1 与附录 1）。
 2. **但那不是 ME 做的** —— 是人在 Ads Manager 里点出来的。ME 自己唯一的建广告代码 `ad-publisher.ts:116` 写死 `targeting_automation: { advantage_audience: 0 }`，即**主动关掉** Advantage+ 受众。这条代码路径**没有留下任何成功建广告的记录**（`ads.create_ad` 0 条 —— ⚠️ 但该账本会静默丢记录，见 §2 注，所以只能说"没记录"，不能说"从没建过"），所以这个冲突**目前看是潜在的**，不是已确认发生的。
 3. **钱高度集中在少数广告上**（按客户分开看，避开混币种）：**CTS 80.7% 的钱压在 2 条广告上**；**Oztop 61.9% 压在 1 条上**（该 campaign 合计 63.4%，其中 97.6% 在单条上）；而两次真多角度测试分别只拿到该客户的 **12.0%**（Oztop 14 条 hook）和摊薄到每条 $24（Roman 15 条 angle）。**多角度测试只发生在没钱的地方。**（⚠️ 这里数的是广告条数；单条广告内部可能还有多套文案，库里看不到 —— 见 §3.3 注）
 4. **闭环没有通电**：`ad_creative_links` 0 行、`contacts.attr_creative_ref` 0 行（39 条已归因 lead 无一条能说清是哪条素材）、`winner_structures` 0 行、`variant_from_winner` 工单 0 条、`flywheel_actions` 里 `ads.create_ad` 0 条。**这几张表都建好了，一个都没被写过。**（⚠️ 不要读成"数据结构全都齐了、只差往里写" —— 端到端的**变体归因**模型还没建齐：首选的 `draft-and-gate` 路径没有稳定的 creative variant 身份、也没有落它的地方，`ad_creative_links.post_id` 还是 `NOT NULL`、`CreativeSource` 契约和发布结果映射都要改，是 migration + 代码的活。见 §4.2 与 `AD-LINK-1`）
@@ -40,7 +40,7 @@
 >
 > *（第十五轮更正：上一版用 `boost-post` 路由的入参名 `daily_budget_aud` 当作 Oztop 是 AUD 的证据 —— 那只是一个通用路由的字段名，不构成证据。Codex P2 指出后已改为实读账户 `currency` 字段。**结论不变，但现在是读来的。**）*
 >
-> **所以 `$7,822.57` 是 NZD + AUD 直接相加的结果**，由它派生的一切跨客户比例（47.7% 覆盖率、46.1% Oztop 占比、创意集中度等）都**没有共同单位**。NZD/AUD 汇率接近 1（约 1.08–1.10），所以这些比例作为**数量级判断**仍然可用，但**不能当精确数字引用**，也不该拿去做客户间预算比较。
+> **所以 `$7,822.57` 是 NZD + AUD 直接相加的结果**，由它派生的一切跨客户比例都**没有共同单位，一律不引用**（第四十八轮起全文改用「客户数 / campaign 数 + 分币种金额」口径）。⚠️ 本次审计**没有可引用的基准日汇率来源**，所以也不做换算 —— 编一个汇率去凑出"看起来精确"的百分比，比不给百分比更糟。
 >
 > 因此本审计**凡是能在单一客户内部说清的结论，一律改成按客户分开说**（见 §3.3）。要得到真正可加总的口径，需要给 `ad_daily_insights` 加币种列 + 按基准日折算 —— 这是本审计发现的一个新缺口，**ROADMAP 里没有登记过**。
 
@@ -135,17 +135,24 @@ Meta Graph 实时读账户 `act_2775766642787274`，共 26 个 ad set。
 >
 > | | 花费 | 占比 | targeting 是否回读 |
 > |---|---|---|---|
-> | CTS 的 campaign | **$3,733.59** | **47.7%** | ✅ 已回读 |
-> | Roman 的 campaign | $480.71 | 6.1% | ❌ 账户不可查 |
-> | Oztop 的 campaign | $3,608.27 | 46.1% | ❌ MCP 未放量 |
-> | **未回读小计** | **$4,088.98** | **52.3%** | ❌ |
-> | 合计 | $7,822.57 | 100% | — |
+> | CTS 的 campaign | **NZD 3,733.59** | ✅ 已回读 |
+> | Roman 的 campaign | NZD 480.71 | ❌ 账户不可查 |
+> | Oztop 的 campaign | **AUD** 3,608.27 | ❌ MCP 未放量 |
 >
-> （$3,733.59 + $4,088.98 = $7,822.57，与 §2 精确对账。）
+> 🔴 **不给"占比"这一列 —— 给不出**（第四十八轮 Codex P2 更正，成立）：上一版这里列过 `47.7% / 6.1% / 46.1% / 52.3%`，那是拿 **NZD 和 AUD 直接相加**出来的 `$7,822.57` 当分母算的。同一份文档 §2 自己写着跨客户金额不能跨币种求和，这里却用它算了覆盖率，**自相矛盾**。本次审计**没有可引用的基准日汇率来源**，凭空编一个汇率比不给更糟，所以直接改用不依赖金额相加的口径：
+>
+> | 覆盖口径（不含汇率假设） | 已核对 / 总数 |
+> |---|---|
+> | **客户** | **1 / 3**（只有 CTS） |
+> | **campaign** | **6 / 17** |
+> | NZD 侧花费 | 已核对 3,733.59 / 未核对 480.71（CTS + Roman 同币种，可加） |
+> | AUD 侧花费 | 已核对 0 / 未核对 3,608.27（Oztop 全部未核对） |
+>
+> 要说一句话：**三家客户里只核对了一家，十七条 campaign 里只核对了六条；AUD 那一侧一条都没核对。**
 >
 > ⚠️ **Roman 这一行是第七轮才改对的**：上一版把 Roman 算进"已回读"，但他 $480.71 的花费在 `act_1018365291238494`，而 `ads_get_ad_accounts` 对该账户返回 `is_queryable: false` / `not_queryable_reason: "Unknown error"`（账户状态 UNSETTLED）。本次实际读到的那条 Roman ad set（`North Shore 15km · Message Leads · 4-Creative Race`）在另一个账户、且花费为 **$0.00**，代表不了那 $480.71。
 >
-> **所以本审计关于 broad / Advantage+ 的结论，证据只覆盖 CTS 已被 ME 追踪的那 6 条 campaign、占已追踪花费的 47.7%。**
+> **所以本审计关于 broad / Advantage+ 的结论，证据只覆盖 CTS 已被 ME 追踪的那 6 条 campaign、也就是 17 条 campaign 里的 6 条、3 家客户里的 1 家。**
 >
 > ⚠️ **注意这里有两层收窄，别只记住一层**（第二十五轮补正）：
 > 1. **不是"CTS 这家"，是"CTS 已被 ME 追踪的 6 条 campaign"** —— 被排除的那 20 组里就含**未被 ME 追踪的 CTS boost**，而**全部 8 个带兴趣定向的组恰好都在那 20 组里**。所以"CTS 零兴趣定向"这句话，严格讲只对那 6 条成立，**不能推广到 CTS 的全部投放**；
@@ -169,9 +176,9 @@ Reborn-Winner-Stand-in-Front-20260624
 
 另外读到一条名为 `North Shore 15km · Message Leads · 4-Creative Race` 的 ad set，带 `targeting_optimization: "expansion_all"` + `advantage_audience: 1`，形态上正是 Andromeda 想要的。**但它 `status: PAUSED`、花费 `$0.00`，且不在 Roman 那 $480.71 所在的账户里 —— 只能当"有人这么设过"的旁证，不能算 Roman 的投放证据。**
 
-> ⚠️ **未回读的两家（合计 52.3% 花费）**：
-> - **Oztop**（$3,608.27，46.1%）：账户 `1735240120460765` 的 `is_ads_mcp_enabled = false`（Meta 尚未放量）。campaign 名字叫 `Cold Broad`，但名字不算证据 —— `play-vocabulary.ts` 自己写过"最花钱那条名字零信息量"。
-> - **Roman**（$480.71，6.1%）：花费所在的 `act_1018365291238494` 返回 `is_queryable: false`（状态 UNSETTLED）。
+> ⚠️ **未回读的两家**：
+> - **Oztop**（AUD 3,608.27）：账户 `1735240120460765` 的 `is_ads_mcp_enabled = false`（Meta 尚未放量）。campaign 名字叫 `Cold Broad`，但名字不算证据 —— `play-vocabulary.ts` 自己写过"最花钱那条名字零信息量"。
+> - **Roman**（NZD 480.71）：花费所在的 `act_1018365291238494` 返回 `is_queryable: false`（状态 UNSETTLED）。
 >
 > **所以"broad / Advantage+"这个结论目前只对 CTS 已被 ME 追踪的那 6 条 campaign 成立**（不是"CTS 这家"）—— 同账户里还有 20 组没归属清楚，其中既有 Oztop 投流也有 ME 没在追踪的 CTS boost，而**全部 8 个带兴趣定向的组都在这 20 组里**；Oztop 和 Roman 两侧则整体都是 inference。要说到"CTS 这家"，得先做完 `AD-EVID-1`。
 >
@@ -365,7 +372,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 
 ## 4. What We Are Doing Right
 
-1. **实际投放已经是 broad + Advantage+** —— CTS 已追踪的 6 组 ad set **零兴趣定向**，73.6% 的花费开着 Advantage+ 受众，且唯一关掉的那组正好是该关的重定向组。这一条最重要，也最容易被自己低估 —— 但**证据只覆盖 CTS 已追踪的 6 条 campaign（占已追踪花费 47.7%）**；Roman + Oztop 的账户查不到，混账户里另有 20 组（含未被追踪的 CTS boost、8 个兴趣定向组全在其中）也没归属清楚。口径见 §3.1。
+1. **实际投放已经是 broad + Advantage+** —— CTS 已追踪的 6 组 ad set **零兴趣定向**，73.6% 的花费开着 Advantage+ 受众，且唯一关掉的那组正好是该关的重定向组。这一条最重要，也最容易被自己低估 —— 但**证据只覆盖 CTS 已追踪的 6 条 campaign（3 家客户里的 1 家、17 条里的 6 条）**；Roman + Oztop 的账户查不到，混账户里另有 20 组（含未被追踪的 CTS boost、8 个兴趣定向组全在其中）也没归属清楚。口径见 §3.1。
 2. **ad 级日度数据脊柱是真的**（376 行，每天在写，带 `parent_id`）。绝大多数同类系统只有 campaign 级 —— 没有 ad 级就永远做不了 creative-level 学习。这块地基已经打好了。
 3. **不拿汇总骗自己**：`ad-level-breakdown.ts` 会在子项差异 ≥1.5 倍时明说"这个汇总在掩盖差异"，还会拦住"表单留资 + 私信对话被加在同一列"的不可比比较。这是很多投放团队都没有的纪律。
 4. **建完必回读**：`launch-readback.ts` 承认"创建接口的回显不含 Meta 自己补上的东西"，强制建成暂停 → 回读 → 人点头。这在 Advantage+ 时代**更重要**，因为平台会自动加的东西只会越来越多。
@@ -430,7 +437,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 | Creative generation | **PARTIAL** | 内容工厂 22 条工单，仅 1 条发布；广告线只会模板拼装单条 |
 | *（新增缺口）* **创意变体数本身不可观测** | **MISSING** | `ad_daily_insights` 的 ad 级行没有 `creative_id` / `asset_feed_spec`，`ad-level-breakdown.ts` 也只到 ad 级 —— **"我们到底投了多少种说法"这个问题，ME 现在答不出来**。要回答得回 Graph 读 `creative` 及其 asset feed |
 | Campaign deployment | **PARTIAL** | `draft-and-gate` 全链路已实现且有闸门，生产使用 **0 次** |
-| Broad / Advantage+ delivery | **DONE（人工，仅 CTS 已验证）/ CONFLICT（ME 代码）** | CTS 6 组零兴趣定向、73.6% 花费开着 Advantage+；但 `ad-publisher.ts:116` 写死关闭。Roman/Oztop（52.3% 花费）未验证 |
+| Broad / Advantage+ delivery | **DONE（人工，仅 CTS 已验证）/ CONFLICT（ME 代码）** | CTS 6 组零兴趣定向、73.6% 花费开着 Advantage+；但 `ad-publisher.ts:116` 写死关闭。Roman / Oztop 两家未验证（AUD 侧一条都没核对） |
 | Performance ingestion | **DONE** | `ad_daily_insights` campaign 201 行 + ad 376 行，日 cron |
 | Creative-level attribution | **MISSING** | `ad_creative_links` 0 行 / `attr_creative_ref` 0 行。素材归因写入方已接线但从未触发；`ads.create_ad` 那条路径**根本不调它**（见 §3.7 注）|
 | Winning-angle detection | **PARTIAL** | 有 divergence 检测但拒绝下结论；winner 判定用的是自然互动分；**且视频/攒池类实验该看的指标根本没入库** —— 完播成本在 `P21.K.8`、池子净增在 `P18.E.3`，**两条都未做**，那类角度测试在 ME 里天然判不了 |
@@ -661,7 +668,7 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 
 **建议的执行顺序**（经三轮更正后的版本）：
 
-0. **补读 Oztop + Roman 两个账户的 targeting** —— 必须在**有 `META_SYSTEM_USER_TOKEN` 的环境**里直调 Graph（本次审计环境没有该 token，MCP 那条路 Oztop 被 Meta 拒绝、Roman 的 `act_1018365291238494` 返回 `is_queryable: false`，都实测过，见附录 1）。活不大，但**它决定"投放侧已经做对了"这个判断能不能覆盖另外 52.3% 的花费** —— 现在这条结论的证据只覆盖 CTS 一家、47.7%；
+0. **补读 Oztop + Roman 两个账户的 targeting** —— 必须在**有 `META_SYSTEM_USER_TOKEN` 的环境**里直调 Graph（本次审计环境没有该 token，MCP 那条路 Oztop 被 Meta 拒绝、Roman 的 `act_1018365291238494` 返回 `is_queryable: false`，都实测过，见附录 1）。活不大，但**它决定"投放侧已经做对了"这个判断能不能覆盖另外两家客户** —— 现在这条结论的证据只覆盖 3 家里的 1 家、17 条 campaign 里的 6 条；
 1. **①a** 传 `play` —— 小活，今天就能做，但它本身不产生第一条记录；
 2. **②** `ad-publisher.ts:116` 改 `advantage_audience: 1` —— 一行，现在改成本为 0；
 3. **做 ①b（= 方案 (ii)，让 `draft-and-gate` 那条路径能记账）** —— 这是「投出第一条 ME 自建广告并验通完整链路」的真正前置。**不能用方案 (i) 顶替**：修好 boost 路径的四样问题也不改 `REACH`，`results` 恒为 0，验不了"某个客户是被哪条创意带来的"那半截（见 ① 的说明）。设计与编码自己拍板，只在最后对生产库 `apply_migration` 那一下停下来等 PM 一句 `go apply`；
@@ -720,7 +727,7 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 1. **广告投给谁这件事，在查得清楚的那几条广告上，已经做对了。** CTS 那 6 条**我们系统在管的**广告逐组查了：**没有一组在做"人群精挑细选"**，钱的七成多明确开着"让 Facebook 自己去找人"，唯一关掉的那组是专门投老客户的，那组本来就该关。这正是现在 Facebook 最吃香的做法，**这 6 条不用改**。
   ⚠️ **但不能说成"CTS 的广告都查过了"**：CTS 那个账户里还有 20 个广告组没归属清楚，里面既有 Oztop 的投流，**也有我们系统没在管的 CTS 自己的推广**；而**全部 8 个在做"人群精挑细选"的组，恰好全在这 20 个里**。所以在补完这笔账（`AD-EVID-1`）之前，正确说法只能是"**已追踪的 6 条没问题**"，不是"CTS 这家没问题"。
 
-  ⚠️ 但**这句话只覆盖不到一半的钱**：查过的只有 CTS 一家（$3,733，占 47.7%）。**Oztop（46.1%）和 Roman（6.1%）两家的广告账户 Facebook 都不让我们读**，合计 52.3% 的花费没有任何证据 —— 它们是好是坏，现在纯属猜测。
+  ⚠️ 但**这句话只覆盖不到一半的钱**：**三家客户里只查过 CTS 一家**。**Oztop 和 Roman 两家的广告账户 Facebook 都不让我们读**，这两家的花费没有任何证据 —— 它们是好是坏，现在纯属猜测。
 
   所以准确说法是「**查过的那 48% 做对了**」，不是「我们做对了」。想把这句话说全，得先补读另外两个账户。
 
@@ -779,7 +786,7 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 
 ## 附：数据不足、无法下结论的地方（不猜）
 
-1. **Oztop 账户（$3,608.27，占总花费 46.1%）的 targeting 这次读不到** —— 本审计内**两条路都实测过，都不通**：
+1. **Oztop 账户（AUD 3,608.27）的 targeting 这次读不到** —— 本审计内**两条路都实测过，都不通**：
    - Meta MCP：`This ad account is not enabled for the Ads MCP. Ad account ID: 1735240120460765`（`is_ads_mcp_enabled: false`，Meta 尚未放量）
    - 直调 Graph：**本次审计环境没有 `META_SYSTEM_USER_TOKEN`**（仓库里只有 `.env.example`）
 
