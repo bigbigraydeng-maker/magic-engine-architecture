@@ -13,7 +13,7 @@
 
 1. **投放侧（delivery）实际上已经在 Andromeda 打法上** —— 但这个结论**只覆盖 CTS 一家、总花费的 47.7%**（$3,733.59 / $7,822.57）：把混账户按 `campaign_id` 归属后，CTS 已追踪的 6 组 ad set **一个兴趣定向都没有**，73.6% 的花费明确开着 `advantage_audience: 1`（唯一关掉的是重定向组，那本来就该关）。**Oztop（46.1%）和 Roman（6.1%）的账户都查不到 targeting**，合计 52.3% 的花费无证据（见 §3.1 与附录 1）。
 2. **但那不是 ME 做的** —— 是人在 Ads Manager 里点出来的。ME 自己唯一的建广告代码 `ad-publisher.ts:116` 写死 `targeting_automation: { advantage_audience: 0 }`，即**主动关掉** Advantage+ 受众。这条代码路径至今建过 0 条广告，所以冲突还是潜在的，不是已发生的。
-3. **创意侧是真正传统的那一半**（按客户分开看，避开混币种）：**CTS 80.7% 的钱压在 2 条广告上**；**Oztop 63.4% 压在 1 条上**；而两次真多角度测试分别只拿到该客户的 **12.0%**（Oztop 13 条 hook）和摊薄到每条 $24（Roman 15 条 angle）。**创意多样性只发生在没钱的地方。**
+3. **钱高度集中在少数广告上**（按客户分开看，避开混币种）：**CTS 80.7% 的钱压在 2 条广告上**；**Oztop 63.4% 压在 1 条上**；而两次真多角度测试分别只拿到该客户的 **12.0%**（Oztop 13 条 hook）和摊薄到每条 $24（Roman 15 条 angle）。**多角度测试只发生在没钱的地方。**（⚠️ 这里数的是广告条数；单条广告内部可能还有多套文案，库里看不到 —— 见 §3.3 注）
 4. **闭环没有通电**：`ad_creative_links` 0 行、`contacts.attr_creative_ref` 0 行（39 条已归因 lead 无一条能说清是哪条素材）、`winner_structures` 0 行、`variant_from_winner` 工单 0 条、`flywheel_actions` 里 `ads.create_ad` 0 条。**数据结构全都建好了，一个都没被写过。**
 
 不是 RED，因为架构没有和 Andromeda 打架 —— 该有的表、该有的 ad 级日度数据（376 行）、该有的角度生成器都已经存在。不是 GREEN，因为**从"发现赢家"到"生成下一轮"这半圈，一次都没有真实跑通过**。
@@ -26,7 +26,19 @@
 
 > ⚠️ **计量口径警告 —— 全文所有跨客户金额都是混币种的**（Codex 复审第十二轮 P2，核实成立）。
 >
-> `ad_daily_insights`（migration `20260721000001`）只有一个裸的 `spend NUMERIC` 列，**没有币种列**；`parseDailyMetrics` 把 Graph 返回的**账户币种金额原样存下**，不做任何换算。而 CTS / Roman 的账户是 **NZD**（live 回读返回 `NZ$`），Oztop 是 **AUD**（`boost-post` 路由的入参就叫 `daily_budget_aud`）。
+> `ad_daily_insights`（migration `20260721000001`）只有一个裸的 `spend NUMERIC` 列，**没有币种列**；`parseDailyMetrics` 把 Graph 返回的**账户币种金额原样存下**，不做任何换算。
+>
+> **各账户币种（2026-08-14 从 Meta 账户节点实读，不是推断）**：
+>
+> | 账户 | 归属 | 币种 |
+> |---|---|---|
+> | `1735240120460765` | Oztop Building Supplies Pty Ltd | **AUD** |
+> | `2202695063810470` | CTStours | NZD |
+> | `1260456876069575` | Roman Hu（30 Kiteroa） | NZD |
+> | `1018365291238494` | Magic Engine（Roman 花费实际所在） | NZD |
+> | `2775766642787274` | 无归属（混账户） | NZD |
+>
+> *（第十五轮更正：上一版用 `boost-post` 路由的入参名 `daily_budget_aud` 当作 Oztop 是 AUD 的证据 —— 那只是一个通用路由的字段名，不构成证据。Codex P2 指出后已改为实读账户 `currency` 字段。**结论不变，但现在是读来的。**）*
 >
 > **所以 `$7,822.57` 是 NZD + AUD 直接相加的结果**，由它派生的一切跨客户比例（47.7% 覆盖率、46.1% Oztop 占比、创意集中度等）都**没有共同单位**。NZD/AUD 汇率接近 1（约 1.08–1.10），所以这些比例作为**数量级判断**仍然可用，但**不能当精确数字引用**，也不该拿去做客户间预算比较。
 >
@@ -60,7 +72,20 @@ ME 用「跟自己历史比」的相对基线判疲劳 → ad_health_narratives�
 >
 > 加上这张表 2026-08-01 才建，**之前的 boost 本来就不会留记录**。所以 0 行的正确读法是「**没有成功记下任何归因**」，不是「从没跑过」。
 >
-> 要判断 boost 路径到底用没用过，得查 Meta 侧的 campaign/ad 创建记录或调用日志 —— 本次没查。**不过这不影响主结论**：`ads.create_ad` 那 0 条是 `flywheel_actions` 里的正常插入（不吞错误），而三条路径合起来也解释不了 $7,822.57 的绝大部分（那些 campaign 的命名与形态都指向人工创建）。
+> ⚠️ **而且 `ads.create_ad` 那 0 条也一样**（第十五轮更正 —— 上一版说它"不吞错误"，**那句话是错的**，Codex P2 指出后核实）。`draft-and-gate.ts:70-82` 的 `record()`：
+>
+> ```ts
+> const { data } = await supabase.from('flywheel_actions').insert({...}).select('id').maybeSingle()
+> return (data as { id?: string } | null)?.id ?? null
+> ```
+>
+> **只解构 `data`，`error` 连接都没接。** 插入失败 → 返回 `null`，而 `createDraftForApproval` 照常往下走。更要命的是 `record()` 发生在 `publishDraftPaused` **已经在 Meta 上建出实体之后** —— 所以「账本 0 条」也可能意味着「广告建出来了、账本没写上」。
+>
+> **三张表全都会静默丢记录**（`ad_creative_links` 故意吞、`flywheel_actions` 无意漏），所以本节这张表的正确读法是「**ME 没有留下任何自建广告的成功记录**」，不是「ME 一次都没建过」。
+>
+> 要坐实到底建没建过，得查 Meta 侧的 campaign/ad 创建记录或调用日志 —— 本次没查。**不过主结论不依赖它**：$7,822.57 里的绝大部分（尤其 CTS `Reborn`、Oztop `Cold Broad` 这两条最大的）从命名、形态到手工改名的痕迹都指向人工创建，而 §3.7 那批表 0 行也确实意味着 ME 侧没有可用的归因数据 —— **不管当初是谁建的，"现在读不出哪条片子带来谁"这个事实不变。**
+>
+> 顺带：`record()` 漏读 `error` 本身就是个应该修的小 bug（不是审计范围，但记在这里）。
 ## 3. Evidence
 
 ### 3.1 投放确实是 broad + Advantage+（live 回读，不是文档）
@@ -208,9 +233,16 @@ function targetingFor(d: AdDraft): Record<string, unknown> {
 > - 如果某条广告用了 Meta 的**动态素材 / Advantage+ 素材自动化**，它内部可能装着好几套文案和图 —— 库里仍然只是 1 行；
 > - 反过来，多条广告也可能复用同一个 creative。
 >
-> 换句话说，**真实的创意变体数可能比这里的"广告数"多**（对"创意太少"这个结论是保守方向，不会把结论撑大）。要拿到准确的变体数，得回 Graph 读每条 ad 的 `creative` 及其 `asset_feed_spec` —— 本次没做，故全文一律按"广告数"表述。
+> ⚠️ **偏差方向未知，不要当成"保守估计"**（第十五轮更正 —— 上一版写成"这对结论是保守方向"，Codex P2 指出后核实，那句话是错的）：
 >
-> 顺带一提，`meta/readback.ts:137` 里已经有专门摘 `asset_feed_spec` 文案的代码，说明这种形态在本仓是**遇到过的**，不是理论可能。
+> - 一条广告用 `asset_feed_spec` 装了 10 套文案 → 数成 1 条，**会把"创意太少"这个结论夸大**；
+> - 多条广告复用同一个 creative → **会把它缩小**。
+>
+> 两个方向都可能，**净偏差不可知**。所以在回 Graph 读 `creative` / `asset_feed_spec` 之前，这一节能支撑的结论只有：**预算高度集中在少数广告实体上**。"创意多样性不足"这个更强的说法**要等那次回读才能确认**。
+>
+> 两点补充：
+> - `meta/readback.ts:137` 已有专门摘 `asset_feed_spec` 文案的代码，说明这种形态在本仓**遇到过**，不是理论可能 —— 所以这不是个可以忽略的边角情况；
+> - **ME 自己现在也答不了这个问题**：`ad-level-breakdown.ts` 同样只到 ad 级。也就是说"我们到底投了多少种说法"这个问题，**系统当前无法回答** —— 这本身就该记进 §6 的缺口。
 
 ### 3.4 那两次真正的多角度测试，角度是真的不同
 
@@ -276,7 +308,7 @@ Roman 的 15 条同样是真角度：`Rangitoto 学区 hook` / `By negotiation` 
 | `contacts.attr_creative_ref` | **0**（`attr_ad_id` 有 39 条） | ❌ 归因停在广告级，到不了创意级 |
 | `winner_structures` | **0** | ❌ 赢家骨架库是空的 |
 | `content_work_orders` where `order_type='variant_from_winner'` | **0**（22 条全是 `fresh_angle`） | ❌ 「从赢家扩展下一轮」从没发生 |
-| `flywheel_actions` where `action_type='ads.create_ad'` | **0** | ❌ ME 起草建广告那条路从没走过 |
+| `flywheel_actions` where `action_type='ads.create_ad'` | **0** | ❌ 没有任何 ME 自建广告的成功记录（⚠️ `record()` 漏读 `error`，理论上也可能是"建了没记上"，见 §2 注）|
 | `ad_strategy_configs` | **0** | ⚠️ 每客户开关表没人填（走默认） |
 
 > **写入方接线到什么程度**（初稿说"已经接好了"，不够准确，按源码逐行更正）：
@@ -367,6 +399,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 | Audience intents | **MISSING** | 无意图建模。`audience-ladder.ts` 是行为分层（看过视频/开过表单）的重定向阶梯，不是"意图 → 角度" |
 | Creative angles | **PARTIAL** | `copy-generator.hookIntentFor/ctaIntentFor` + `strategist.normalizeAngle` 存在，但只服务自然内容，广告线无角度概念 |
 | Creative generation | **PARTIAL** | 内容工厂 22 条工单，仅 1 条发布；广告线只会模板拼装单条 |
+| *（新增缺口）* **创意变体数本身不可观测** | **MISSING** | `ad_daily_insights` 的 ad 级行没有 `creative_id` / `asset_feed_spec`，`ad-level-breakdown.ts` 也只到 ad 级 —— **"我们到底投了多少种说法"这个问题，ME 现在答不出来**。要回答得回 Graph 读 `creative` 及其 asset feed |
 | Campaign deployment | **PARTIAL** | `draft-and-gate` 全链路已实现且有闸门，生产使用 **0 次** |
 | Broad / Advantage+ delivery | **DONE（人工，仅 CTS 已验证）/ CONFLICT（ME 代码）** | CTS 6 组零兴趣定向、73.6% 花费开着 Advantage+；但 `ad-publisher.ts:116` 写死关闭。Roman/Oztop（52.3% 花费）未验证 |
 | Performance ingestion | **DONE** | `ad_daily_insights` campaign 201 行 + ad 376 行，日 cron |
