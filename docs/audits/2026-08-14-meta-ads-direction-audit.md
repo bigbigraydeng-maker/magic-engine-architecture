@@ -121,9 +121,13 @@ Reborn-Winner-Stand-in-Front-20260624
                 targeting_automation: { advantage_audience: 1 } }
 ```
 
-Roman 的 `North Shore 15km · Message Leads · 4-Creative Race` 还带 `targeting_optimization: "expansion_all"` —— 这已经是 Andromeda 想要的形态。
+另外读到一条名为 `North Shore 15km · Message Leads · 4-Creative Race` 的 ad set，带 `targeting_optimization: "expansion_all"` + `advantage_audience: 1`，形态上正是 Andromeda 想要的。**但它 `status: PAUSED`、花费 `$0.00`，且不在 Roman 那 $480.71 所在的账户里 —— 只能当"有人这么设过"的旁证，不能算 Roman 的投放证据。**
 
-> ⚠️ Oztop 账户 `1735240120460765` 的 `is_ads_mcp_enabled = false`（Meta 尚未放量），**它的 targeting 这次没读到**。Oztop 占总花费 $3,608.27（46.1%），所以"broad 占比"这个结论目前只对 CTS/Roman 侧成立，Oztop 侧是 inference（campaign 名字叫 `Cold Broad`，但名字不算证据 —— `play-vocabulary.ts` 自己写过"最花钱那条名字零信息量"）。
+> ⚠️ **未回读的两家（合计 52.3% 花费）**：
+> - **Oztop**（$3,608.27，46.1%）：账户 `1735240120460765` 的 `is_ads_mcp_enabled = false`（Meta 尚未放量）。campaign 名字叫 `Cold Broad`，但名字不算证据 —— `play-vocabulary.ts` 自己写过"最花钱那条名字零信息量"。
+> - **Roman**（$480.71，6.1%）：花费所在的 `act_1018365291238494` 返回 `is_queryable: false`（状态 UNSETTLED）。
+>
+> **所以"broad / Advantage+"这个结论目前只对 CTS 一家成立**，Oztop 和 Roman 两侧都是 inference。
 >
 > **两条路都实测过，都不通**（2026-08-14 本次审计内重试）：
 > - Meta MCP 直接拒绝：`This ad account is not enabled for the Ads MCP. Ad account ID: 1735240120460765`
@@ -210,7 +214,11 @@ Roman 的 15 条同样是真角度：`Rangitoto 学区 hook` / `By negotiation` 
     creatives: [creative],     // ← 两个 builder 都是硬写单条
 ```
 
-而且文件头明写 **「一个草案 = 一种语言」**，两种语言 = 两份草案 = **两个 ad set**。也就是说 ME 目前的产出方式，天然就是"少量素材 + 按语言拆组"—— 正是要避免的那个形态。
+文件头还明写 **「一个草案 = 一种语言」**，两种语言 = 两份草案 = 两个 ad set。
+
+⚠️ **但按语言拆这一条不是缺陷**（第九轮更正；初稿把它和"只能一条创意"并列成问题了）：`lead_form` 草案的所有创意共用同一个 `d.leadFormId`（`ad-publisher.ts:142`），而混语言闸门只覆盖私信广告（`launch-readback.ts:192`）—— 在现有契约下，中英创意同组必然让一半买家进到看不懂的表单，**按语言拆正是挡住这件事的边界**。
+
+**所以本节真正的缺陷只有一个：一个草案只能出一条创意。** 同一语言内出 5–8 个角度，管道本来就支持（`AdDraft.creatives` 是数组、publisher 在循环建），是 builder 硬写死了单条。
 
 （`AdDraft.creatives` 本身是数组，`ad-publisher.ts:215` 也已经在循环建创意 —— **管道支持多条，只有 builder 没给。**）
 
@@ -255,7 +263,18 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 
 `src/lib/factory/copy-generator.ts` 有按北极星指标切换的 hook / CTA 战略意图生成（`hookIntentFor` / `ctaIntentFor`），`strategist.ts` 有 `normalizeAngle` + 角度去重（`FACTORY_ANGLE_DEDUPE_DAYS`）+ `angle_source` 溯源，`winner_structures` 表有 `hook_segment / middle_segment / cta_segment` 三段骨架。
 
-**这正是"AI 自动生成多个 hooks / angles"要的那套东西 —— 它已经写好了，但它服务的是自然内容工厂（22 条工单，1 条发布），从来没有为广告出过一条创意。**
+⚠️ **但这只是"单角度"的基础零件，不是"批量出角度"的引擎**（Codex 复审第九轮 P2，核实成立；本节初稿写成了"整套能力已经写好"，跟 §7 ③ 的源码核对自相矛盾）。逐个核对：
+
+| 组件 | 它实际做什么 | 是不是批量角度生成 |
+|---|---|---|
+| `hookIntentFor(metric)` / `ctaIntentFor(metric)` | **switch**，按一个北极星指标返回**一句固定的**战略意图提示语 | ❌ 连生成都不是，是 prompt 里的一句话 |
+| `strategist.pickAngle(ctx, winner)` | 从已有 `content_pillars` / `core_proposition` 里挑**第一个**没被拦截的角度，返回单个 `AnglePick` | ❌ 一次一个 |
+| `normalizeAngle` + `FACTORY_ANGLE_DEDUPE_DAYS` | 角度去重 | ⚠️ 只是零件 |
+| `winner_structures` 三段骨架 | 表结构在，**0 行** | ❌ 空的 |
+
+**准确的说法**：ME 已经有"出**一个**角度、并且不跟最近用过的重复"的能力，也有把它落成文案的品牌接地管道；**缺的是"一次出 5–8 个互不重复、各自可溯源的角度"那一层编排**，那一层现在一行都没有。而且这套零件服务的是自然内容工厂（22 条工单、1 条发布），**从来没有为广告出过一条创意**。
+
+工期按 §7 ③ 估：**新增开发，半周到一周，不是接线。**
 
 ---
 
@@ -278,7 +297,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 | 2 | **钱全压在单条创意上** | 前三大 campaign $5,300 / 4 条创意 |
 | 3 | **视频/攒池类实验该看的指标 ME 一个都没采** —— 目标本身是对的，读不出结论是我们的问题 | `ad_daily_insights` 无完播次数 / 单次完播成本 / `video_p100` / 池子增长；13 条 hook 的 $432.50 在 ME 里只读得出「0 结果」，而那个数按 `ads-expected-metric.ts:108-123` 本就不该用来判好坏。ROADMAP `P21.K.8` 已登记未做 |
 | 4 | **多角度测试的预算不足以出结论** | Roman 15 条 / $366，平均每条 $24，多数臂展示数只有个位数到两位数（⚠️ 不引用 `$1,835`，那是双臂检验的数，见 §3.5）|
-| 5 | **ME 出的草案结构上只能有一条创意 + 按语言拆 ad set** | `listing-draft-builder.ts:193,254` |
+| 5 | **ME 出的草案结构上只能有一条创意** | `listing-draft-builder.ts:193,254` 硬写 `creatives: [creative]`。<br>⚠️ **"按语言拆 ad set"不算问题**（第九轮更正）：`lead_form` 草案的所有创意共用同一个 `d.leadFormId`（`ad-publisher.ts:142`），而混语言闸门只管私信广告（`launch-readback.ts:192`）—— 所以在现有契约下，**按语言拆是必要的安全边界，不是缺陷**。要改成能合并，前置是表单身份下沉到每条 creative + 补表单广告的混语言闸门（见 §7 ③）|
 | 6 | **creative 级归因断链** | 39 条 lead 有 `attr_ad_id`，0 条有 `attr_creative_ref` |
 | 7 | **赢家按自然互动选，不按付费成效选** | `rankVideoWinners` 只看 `score`（互动） |
 | 8 | **系统刻意不给赢家结论** | `ad-level-breakdown` 明确"从不宣称谁赢了" |
@@ -488,11 +507,11 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 
 三件事说清楚：
 
-1. **广告投给谁这件事，在我们看得到的那部分账户里，已经做对了。** CTS 和 Roman 这两个账户的花费里，接近九成没有做"人群精挑细选"，而是把范围放宽、让平台自己去找人 —— 这正是现在 Facebook 后台最吃香的做法。这部分不用改。
+1. **广告投给谁这件事，在查得到的那家客户身上，已经做对了。** CTS 的广告我们逐组查了：**没有一组在做"人群精挑细选"**，钱的七成多明确开着"让 Facebook 自己去找人"，唯一关掉的那组是专门投老客户的，那组本来就该关。这正是现在 Facebook 最吃香的做法，这部分不用改。
 
-  ⚠️ 但**这句话只覆盖不到一半的钱**：真正查过的只有 CTS 一家（$3,733，占 47.7%）。Oztop（46.1%）和 Roman（6.1%）的广告账户 Facebook 那边都读不了，**这两家一眼都没看到**，合计 52.3% 的花费没有证据。
+  ⚠️ 但**这句话只覆盖不到一半的钱**：查过的只有 CTS 一家（$3,733，占 47.7%）。**Oztop（46.1%）和 Roman（6.1%）两家的广告账户 Facebook 都不让我们读**，合计 52.3% 的花费没有任何证据 —— 它们是好是坏，现在纯属猜测。
 
-  所以准确说法是「**查过的那 48% 做对了**」，不是「我们做对了」。而且连"48% 里有多大比例是 broad"我们也没算 —— 能说的只是"查到的 26 组广告里有 23 组开着自动扩量"，**那是组数，不是钱数**。想把这句话说全，得先补读另外两个账户。
+  所以准确说法是「**查过的那 48% 做对了**」，不是「我们做对了」。想把这句话说全，得先补读另外两个账户。
 
 2. **广告"说什么"这件事，我们还在用老办法。** 钱最多的三条广告，加起来只有 4 条不同的片子；而我们真正试过十几个不同说法的那两次，一次花了 $432、一次花了 $366 —— **两次都没能得出结论，但原因不一样**：Oztop 那次（$432）**方法是对的**，是我们的系统没把该看的数（多少人把片子看完、看完一次多少钱）收进来，所以现在读不出谁赢；Roman 那次（$366）是钱太少，十几条片子分下去每条只有二十几块，谁赢基本靠运气。
 
