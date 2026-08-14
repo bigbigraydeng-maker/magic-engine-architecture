@@ -99,8 +99,10 @@
 - [ ] **AD-OBS-1 创意变体数不可观测**：`ad_daily_insights` 的 ad 级行无 `creative_id` / `asset_feed_spec`，`ad-level-breakdown.ts` 也只到 ad 级 —— "我们到底投了多少种说法"系统答不出来（用了 Advantage+ 素材自动化的广告尤其）。修：回读 `creative` + asset feed 并落库
 - [ ] **AD-OBS-2 攒池测试无法按 hook 归因**：`client_audience_assets` 按 `audience_id` 唯一、无创意维度，而 `videoEventRule` 把一批 videoId 灌进同一个池 → `P18.E.3` 只给得出池子整体净增。修：一 hook 一池，或另建创意级增长映射。（完播成本那半由 `P21.K.8` 覆盖）
 - [ ] **AD-LOG-1 `draft-and-gate.ts` 的 `record()` 漏读 `error`**：`const { data } = await supabase...insert()`，`error` 连接都没接；且发生在 Meta 实体已建出之后 → 账本 0 条也可能是"建了没记上"。小 bug，顺手修
-- [ ] **AD-ADV-1 `ad-publisher.ts:116` 写死 `advantage_audience: 0`**：无差别关掉 Advantage+ 受众，是 ME 代码唯一与 Andromeda 打法正面冲突处。现有两种 `DraftKind`（`lead_form` / `video_thruplay`）都是冷投，应改为 `1`；将来加 `warm_pool_retarget` 这类 kind 时才需要显式关闭。**该路径至今建过 0 条广告，现在改成本为 0**
+- [ ] **AD-ADV-1 `ad-publisher.ts:116` 写死 `advantage_audience: 0`**：无差别关掉 Advantage+ 受众，是 ME 代码唯一与 Andromeda 打法正面冲突处。现有两种 `DraftKind`（`lead_form` / `video_thruplay`）都是冷投，应改为 `1`；将来加 `warm_pool_retarget` 这类 kind 时才需要显式关闭。**该路径没有留下任何成功建广告的记录（账本会静默丢记录，故只能说"无记录"），现在改成本极低**
 - [ ] **AD-DRAFT-1 `listing-draft-builder` 硬写单条创意**：`creatives: [creative]`（`:193`/`:254`），而 `AdDraft.creatives` 是数组、publisher 已在循环建。同一语言内出 5–8 个角度需新增"批量角度选择/生成 + 去重 + 逐条溯源"编排层（**新增开发，半周到一周**，不是接线）。跨语言合并另需表单身份下沉到每条 creative + 表单广告混语言闸门
+- [ ] **AD-EVID-1 补读 Oztop + Roman 两个账户的 targeting【审计结论覆盖率的前置】**：本次审计的 broad/Advantage+ 结论**只覆盖 CTS 一家、总花费的 47.7%**；Oztop（46.1%）的 `1735240120460765` 是 `is_ads_mcp_enabled: false`，Roman（6.1%）的花费在 `1018365291238494`（`is_queryable: false`，UNSETTLED）。两条路本次都实测过、都不通，**必须在有 `META_SYSTEM_USER_TOKEN` 的环境里**跑 `GET /act_<id>/adsets?fields=targeting,name,status,optimization_goal`。活不大，但没做之前"投放侧已经做对了"这句话只能覆盖一半的钱
+- [ ] **AD-FRAG-1 每条帖子一个 campaign + 一个 ad set，学习数据被打散**：CTS 账户 26 个 ad set 里 14 个是 `帖子："…"` 型 boost，单条 $2–$37。这不是"按兴趣拆人群"那种碎片化，但后果一样 —— 小预算跑不出 learning，创意之间无法在同一个竞价里公平竞争。修：boost 走统一的常驻 campaign/ad set（爆款池那条已有雏形），而不是每次新建
 - [ ] **AD-LINK-1 `creative_ref` 的身份粒度要按 variant 不按素材**：5–8 个角度常共用同一张图，按素材 id 记会让所有角度写同一个 `creative_ref`，角度归因归零。需 variant 稳定 id + 素材关系另存 + `adId → variantId` 绑定；配套 migration（`ad_creative_links.post_id` 放开 NOT NULL、`creative_source` 加 variant 层）**待 PM `go apply`**
 
 ### Onboarding / 第三方对接页面简化（2026-08-11，方案见 [specs/2026-08-11-onboarding-integrations-unify-v1.md](./specs/2026-08-11-onboarding-integrations-unify-v1.md)）
