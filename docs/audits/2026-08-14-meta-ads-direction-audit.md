@@ -127,7 +127,9 @@ Meta Graph 实时读账户 `act_2775766642787274`，共 26 个 ad set。
 
 > 🔢 **覆盖率要用同一个分母算**（Codex 复审第五轮 P2 起，经第七、八轮才收敛）。
 >
-> `act_2775766642787274` 是本仓记录在案的**混账户** —— `docs/strategy/meta-flywheel-risk-and-sequencing.md`（2026-06-06）写明「所有 boost 都在这里，CTS 旅游帖 + Oztop flooring 帖混跑」。所以它的账户级合计 `$5,066.52` **既混客户又混币种，不能当任何分母**（上面已改成按 `campaign_id` 归属后再统计）。
+> `act_2775766642787274` 是本仓记录在案的**混账户** —— `docs/strategy/meta-flywheel-risk-and-sequencing.md`（2026-06-06）写明「所有 boost 都在这里，CTS 旅游帖 + Oztop flooring 帖混跑」。所以它的账户级合计 `$5,066.52` **混了客户，不能当任何分母**（上面已改成按 `campaign_id` 归属后再统计）。
+>
+> ⚠️ **第三十一轮更正（Codex 复审 P2，核实成立）**：上一版把这个数写成「既混客户又混币种」，**「混币种」那半句是错的** —— 一个 Meta 广告账户只有一个 `currency`，该账户实测为 **NZD**，账户内所有 campaign 的花费都按同一币种计价，哪怕它们分属 CTS 和 Oztop。混币种只发生在**跨账户求和**（§2 那个 $7,822.57）。留着错的说法会让后面对账的人以为同一个账户内部还要逐 campaign 换汇。
 >
 > 覆盖率的分母用 ME 库 `ad_daily_insights` 的 campaign 级花费（§2 的 $7,822.57）：
 >
@@ -395,10 +397,25 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 | 9 | **赢家→下一轮的通路是空的** | `winner_structures` 0 行，唯一写入方是 Airtable 人工表单 |
 | 10 | **每条帖子一个 campaign + 一个 ad set** | CTS 账户 26 个 ad set 里 14 个是 `帖子："…"` 型 boost，单条 $2–$37，学习数据被彻底打散 |
 | 11 | 🔴 **已上线的止损按钮能动别家客户的广告** | `meta-ads/execute/route.ts:71+` 的 `campaign_id` 取自请求体，只校验 URL 里的客户，**从不与该客户的 `meta_ad_account_id` 对账**；混账户下有 CTS 权限即可暂停 / 改预算 Oztop 的在投广告。strategy doc §2.4 记的 R5 写越权，**至今未修**（登记为 `AD-SEC-1`）|
-| 13 | 🔴 **每天的同步把整账户数据写成单个客户的** | `daily-insights.ts:209+` 拉整账户后 `rows.map(… clientId …)`，**零 campaign 归属过滤**；`google-data-pullback-daily/route.ts:595+`（定时）和 `meta-ads/sync/route.ts:82-111`（手动）**都**把账户级聚合直接插进该 client 的 `meta_ads_snapshots`（Goal 指标 / 月报 / production package 都读它），后者还会用 `production_package_id` **把这条污染 snapshot 永久绑进已交付的交付物**。CTS 绑的就是混账户，而 `20260721000001` 的注释自己写着「任何账户级 rollup 必须从过滤后的 campaign 行聚合」—— **要求写了、写入侧没实现**。现在看着干净只因那几条 Oztop campaign 近期没投放（登记为 `AD-ISO-1`）|
+| 13 | 🟠 **每天的同步把整账户数据写成单个客户的（隐患已上线，但库里尚未被污染）** | `daily-insights.ts:209+` 拉整账户后 `rows.map(… clientId …)`，**零 campaign 归属过滤**；`google-data-pullback-daily/route.ts:595+`（定时）和 `meta-ads/sync/route.ts:82-111`（手动）**都**把账户级聚合直接插进该 client 的 `meta_ads_snapshots`（Goal 指标 / 月报都读它）。`20260721000001` 的注释自己写着「任何账户级 rollup 必须从过滤后的 campaign 行聚合」—— **要求写了、写入侧没实现**。现在看着干净只因那几条 Oztop campaign 近期没投放（登记为 `AD-ISO-1`）|
+| 14 | 🔴 **production package 的「广告」那一栏从来就是空的** | `meta_ads_snapshots` **根本没有 `production_package_id` 这一列**（实查 `information_schema`，16 列里没有）。写侧 `sync/route.ts:119-127` 是个不 await 的 `.update({ production_package_id })`，必然报错、只进 `console.error`，接口照样返回 200；读侧 `production/[packageId]/route.ts:116-120` 用同一个不存在的列 `.eq()` 过滤，错误被 `?? []` 吞掉 —— **P13.D 这条链路自上线起一次都没通过**（登记为 `AD-PKG-1`）|
 | 12 | 🔴 **改预算的输入框写死 AUD，账户却是 NZD** | `AdsFixDrawer.tsx:309`「新日预算（AUD）」→ `execute/route.ts:157` `newBudget * 100` 直发 Meta，不读币种不换算；Meta 按账户币种解释 → 人以为填 AUD，钱按 NZD 花（登记为 `AD-CUR-2`）|
 
 **关于问题 10 的说明**：这是本仓最典型的 audience fragmentation，但它的成因不是"按兴趣拆人群"，而是"每次 boost 一条帖子就新开一套"。表现一样：小预算跑不出 learning，创意之间无法在同一个竞价里公平竞争。
+
+**关于问题 13 / 14 的实测（第三十一轮补，两条都是上一版说重了、说错了的更正）**：把 `meta_ads_snapshots` **全表 105 行**逐行拆开核对（2026-04-01 ~ 2026-08-14，4 个客户）：
+
+| 核对项 | 实测结果 |
+|---|---|
+| 每行 `campaigns` 里的 `campaign_id` 是否都属于该行的客户 | ✅ **全部属于**。CTS 的 9 条 campaign 全部 `…0307`（CTS 账户）且名字全是 CTS 旅游内容；`20260721000001` 注释里那 4 条 legacy Oztop campaign **一次都没出现过**（那段窗口它们零花费） |
+| 账户级 `spend` 是否等于 `campaigns` 明细之和 | 105 行里 **101 行相等**，2 行差 $0.09（四舍五入），**2 行差得离谱**：CTS `2026-07-02→08-01` 记了 **$2,840.49** 而 `campaigns` 是 `null`；Oztop `2026-07-09→08-08` 记了 **$2,668.64** 同样 `campaigns` 是 `null` |
+| 是否存在两个 ME 客户共用一个广告账户 | ❌ 当前没有（`clients.meta_ad_account_id` 无重复）。`act_1018365291238494` 在 `30 Kiteroa Rothesay Bay`（至 07-31）和 `Roman HU`（自 08-01）名下各有若干行，但那是**同一个楼盘换了客户档案**、时间上首尾相接，不是并行双记 |
+
+> **两条更正**：
+> ① 上一版说 `AD-ISO-1` "**正在**污染健康诊断/月报/Goal 指标"—— **说重了**。代码路径确实允许，但**库里现存的 105 行没有一行被污染**。准确说法是：**隐患已上线在跑，损害尚未发生**；那 4 条 legacy Oztop campaign 一旦重新投放，当天就会发生。
+> ② 上一版说手动同步会把污染 snapshot "**永久绑进已交付的交付物**"—— **说错了，撤回**。那一列压根不存在，绑定从来没成功过（见上表问题 14）。这不是"影响更小"，而是**换了个毛病**：交付物里的广告数据一直是空的，而且写和读两边都不报错。
+>
+> 另外那 2 行 `campaigns = null` 但照记账户总额的 snapshot，是**既不能证伪也不能采信**的：归属过滤唯一的依据（campaign 明细）被丢掉了，账户总额却照样喂给了 Goal 指标和月报。拉不到明细就该记不下来，不该只记总数 —— 这条并进 `AD-ISO-1` 一起修。
 
 ---
 
@@ -761,9 +778,9 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 3. **创意的 angle 标签没有落库** —— 角度信息只存在于广告名字里（`OZ-S2-R6-kidsdog`），`ad_creative_links.play_context` 本来就是放这个的字段，但表是空的。所以"角度 A 比角度 B 好"这类问题现在只能靠人读名字，系统答不了。
 4. **🆕 广告花费表都没有币种列，跨客户金额不可加总** —— 本审计发现的新缺口，**ROADMAP 里没有登记过**，而且**是两张表**（第十八轮更正：上一版只点了 `ad_daily_insights`，把影响面挂错了表）：
    - `ad_daily_insights.spend` → 喂广告健康引擎 / ad-engine 看板
-   - `meta_ads_snapshots.spend` → 喂 **`MetaAdsAdapter.ts:90`（Goal 指标）、月报、production package（`production/[packageId]/route.ts:117`）**
+   - `meta_ads_snapshots.spend` → 喂 **`MetaAdsAdapter.ts:90`（Goal 指标）、月报**（`production/[packageId]/route.ts:117` 也读它，但那条路一直是断的 —— 见 `AD-PKG-1`）
 
    两张表都是裸 `NUMERIC`、原样存账户币种、不换算不记币种；而 CTS/Roman 是 NZD、Oztop 是 AUD（均已实读）。**只修前者修不到报表侧** —— `20260721000001` 的注释本身就写明报表仍读 `meta_ads_snapshots`。所以任何跨客户的花费汇总、排行、预算比较都会算错。
    修法：`ad_daily_insights` 加 `currency` 列（Graph 的 `account_currency` 字段直接给），跨客户汇总时按基准日折算并注明汇率。
 
-   ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现与未完成动作已一并登记（**20 条**）：`AD-CUR-1/2` · `AD-PLAY-1` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · **`AD-FORM-1`**（选表单不看语言，首条真钱广告的前置）· `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1` · **`AD-EXPL-1`**（每臂最低探索量，决定「找出赢家」这个卖点成不成立）· 🔴 **`AD-ISO-1`**（生产同步把整账户写成单个客户，已上线在跑）· 🔴 **`AD-GEO-0`**（`targetingFor` 国家+城市并集，ME 起草的广告天生投整个国家 —— 首发前必修）· **`AD-GEO-1`**（geo 闸门只到国家级，抓不到它自己引用的那次事故）· `AD-EVID-1` · `AD-FRAG-1`。
+   ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现与未完成动作已一并登记（**21 条**）：`AD-CUR-1/2` · `AD-PLAY-1` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · **`AD-FORM-1`**（选表单不看语言，首条真钱广告的前置）· `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1` · **`AD-EXPL-1`**（每臂最低探索量，决定「找出赢家」这个卖点成不成立）· 🟠 **`AD-ISO-1`**（生产同步把整账户写成单个客户，已上线在跑；库里现存 105 行实测未被污染，是隐患不是已发生的损害）· 🔴 **`AD-PKG-1`**（交付物的广告栏从上线起就是空的，写读两侧都指向不存在的列且都不报错）· 🔴 **`AD-GEO-0`**（`targetingFor` 国家+城市并集，ME 起草的广告天生投整个国家 —— 首发前必修）· **`AD-GEO-1`**（geo 闸门只到国家级，抓不到它自己引用的那次事故）· `AD-EVID-1` · `AD-FRAG-1`。

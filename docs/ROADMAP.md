@@ -96,7 +96,7 @@
 
   ⚠️ **只修 `ad_daily_insights` 修不到报表侧** —— `20260721000001` 的注释本身就写明 "meta_ads_snapshots is left untouched — MetaAdsAdapter, the monthly report and the production-package view all still read it"。**两张表必须一起加 `currency` 列**（Graph `account_currency` 直接给），并在任何跨客户汇总处按基准日折算 + 注明汇率。
 
-  ⚠️ **而且加列 + 改新拉取还不够，历史行仍然没有单位**：`meta_ads_snapshots` 是**每次同步只追加一行**的表，而 production package **会永久关联某一条旧 snapshot** —— 新的同步不会修好已交付的记录；`ad_daily_insights` 的历史行一旦超出回拉窗口也会一直是 NULL。所以本条必须包含：**① 按 `ad_account_id` 回填历史币种**（账户币种不随时间变，可安全回填）**② 读侧显式处理 NULL**（宁可拒绝汇总也不要默认同币种）。否则 migration 做完，旧月报、Goal 历史和已交付的 production package 照样解释不了
+  ⚠️ **而且加列 + 改新拉取还不够，历史行仍然没有单位**：`meta_ads_snapshots` 是**每次同步只追加一行**的表，月报和 Goal 历史读的就是当时那一行 —— 新的同步不会修好已发出去的旧月报；（⚠️ 第三十一轮订正：这里原写 "production package 会永久关联某一条旧 snapshot"，**那条关联从来没成立过**，见 `AD-PKG-1`）`ad_daily_insights` 的历史行一旦超出回拉窗口也会一直是 NULL。所以本条必须包含：**① 按 `ad_account_id` 回填历史币种**（账户币种不随时间变，可安全回填）**② 读侧显式处理 NULL**（宁可拒绝汇总也不要默认同币种）。否则 migration 做完，旧月报、Goal 历史和已交付的 production package 照样解释不了
 - [ ] **AD-PLAY-1 两个建广告调用点没传 `play` / `playSource`，打法账本恒为 NULL**：`boost-post/route.ts:122` 与 `winner-reel-sync/engine.ts:214` 都调了 `linkAdToCreative`，但**三个打法参数一个没传**，而 `persistLink` 会照写 NULL。`LinkAdToCreativeArgs` 和 `persistLink` 早就支持这三列 —— **纯粹是调用方没传，真·接线活**。**两条路径的处理方式不同，不能一起硬编码**：
   - `boost-post` → 固定 `boost_organic_post` + `declared_at_creation`。安全：给自然帖投流，这个路由干的就是这件事，打法由路由本身决定
   - `winner-reel-sync` → ⚠️ **不能硬编码 `thruplay_pool_build`**。`engine.ts:203-211` 只是往 `winner_reel_sync_config.target_adset_id` 指定的广告组里加广告，而**那张配置表没有打法/目标字段**（`20260711000001` 只有 `target_adset_id`），代码也**从不回读该广告组的 `optimization_goal`**。目标组要是被换成非 ThruPlay 的，所有新广告就会被贴上错标签 —— 这正好违反 `play` 那条"拿不到就留空，绝不猜"的契约，而且 `declared_at_creation` 在 `PLAY_SOURCE_TRUST` 里是**高可信**，错标签会污染打法学习。修：要么给配置表加受校验的打法字段，要么建广告时回读目标组 `optimization_goal` 确认后再写；**两者都做不到就留 NULL**
@@ -114,13 +114,20 @@
 - [ ] 🔴 **AD-ISO-1 生产同步把整账户数据写成单个客户的 —— 混账户下正在污染健康诊断/月报/Goal 指标【已上线在跑】**（第二十八轮发现）：
   - `ads-strategy/daily-insights.ts:209+` 的 `syncCampaignDailyInsights(clientId, adAccountId, …)` 拉的是 **`getCampaignDailyInsights(adAccountId, …)`（整账户）**，然后 `rows.map(r => toInsightRow({ clientId, … }))` —— **把每一行都写成该 client，零 campaign 归属过滤**；ad 级同理；
   - `google-data-pullback-daily/route.ts:595+`（**定时**）：把 `getAdAccountInsights` 的**账户级聚合**整个 `insert` 进该 client 的 `meta_ads_snapshots`,而那张表正是 `MetaAdsAdapter`(Goal 指标)、月报、production package 读的;
-  - `clients/[id]/meta-ads/sync/route.ts:82-111`(**手动**,第三十轮补入):同样 `getAdAccountInsights(adAccountId, …)` 整账户 → `insert({ client_id: clientId, … })`;更要命的是 `:119-127` 会把这条 snapshot 用 `production_package_id` **永久绑到一份已交付的 production package 上** —— 污染就此固化进交付物,不是跑一次就过去的指标。
+  - `clients/[id]/meta-ads/sync/route.ts:82-111`(**手动**,第三十轮补入):同样 `getAdAccountInsights(adAccountId, …)` 整账户 → `insert({ client_id: clientId, … })`;
+  - ⚠️ **第三十一轮更正**:上一版在这里写"`:119-127` 会用 `production_package_id` 把污染 snapshot 永久绑进已交付的交付物"—— **撤回,那一列不存在**,绑定从来没成功过(改记为独立的 `AD-PKG-1`)。
 
   **三个写入口必须共用同一套 campaign→client 归属过滤**,只修定时任务,手动同步照样能生成掺了别家投放的月报和交付记录。
 
   CTS 绑的就是混账户 `act_2775766642787274`，里面**确有 Oztop 的投流**。`20260721000001_ad_daily_insights.sql:17-22` 自己写着「该账户仍带 4 条 legacy Oztop campaign……**任何账户级 rollup 必须从过滤后的 campaign 行聚合，不能信账户级总数**」—— **要求写了，写入侧没实现。**
-  ⚠️ 现在看着"干净"只是因为那几条 Oztop campaign 近期没投放（migration 注释里就写着"最近 7 天零花费"）—— **它一旦重新投放，CTS 的健康诊断、月报和 Goal 指标立刻被污染**。这不是补读一次能解决的，`AD-EVID-1` 只管审计取证，管不了每天在跑的同步。
-  修：同步侧按 campaign→client 归属过滤（或推进账户拆分，`docs/strategy/meta-flywheel-risk-and-sequencing.md` §2.1 的结论）；`meta_ads_snapshots` 那条改为从过滤后的 campaign 行聚合，不用账户级总数
+  ✅ **第三十一轮实测：库里现存 105 行 snapshot 一行都没被污染**（每行 `campaigns` 里的 campaign 全部属于该行客户；那 4 条 legacy Oztop campaign 一次都没出现）。所以本条的准确定性是**隐患已上线在跑、损害尚未发生**，不是"正在污染"—— 但优先级不降：那几条 campaign 一旦重新投放，**当天**就会污染 CTS 的健康诊断、月报和 Goal 指标。这不是补读一次能解决的，`AD-EVID-1` 只管审计取证，管不了每天在跑的同步。
+  ⚠️ **同一轮还查出 2 行"记了总额、丢了明细"的 snapshot**：CTS `2026-07-02→08-01` 记 `spend=2840.49`、Oztop `2026-07-09→08-08` 记 `spend=2668.64`，两行的 `campaigns` 都是 `null`。归属过滤唯一的依据被丢掉了，账户总额却照样喂给了 Goal 指标和月报 —— **这两行既不能证伪也不能采信**。
+  修：① 同步侧按 campaign→client 归属过滤（或推进账户拆分，`docs/strategy/meta-flywheel-risk-and-sequencing.md` §2.1 的结论）；② `meta_ads_snapshots` 那条改为从过滤后的 campaign 行聚合，不用账户级总数；③ **拉不到 campaign 明细时不许只落账户总额**（要么整行不写、要么显式标为不可用），并回头处理已存在的那 2 行
+- [ ] 🔴 **AD-PKG-1 交付物里的「广告」那一栏从上线起就是空的 —— 写和读都指向一个不存在的列，两边都不报错【已上线在跑】**（第三十一轮发现）：实查 `information_schema`，`meta_ads_snapshots` 的 16 列里**没有 `production_package_id`**。
+  - 写侧 `clients/[id]/meta-ads/sync/route.ts:119-127`：`.update({ production_package_id })` 是个**不 await 的浮动 Promise**，必然报错，错误只进 `console.error`，接口照样返回 200 —— 调用方以为绑上了；
+  - 读侧 `clients/[id]/production/[packageId]/route.ts:116-120`：用同一个不存在的列 `.eq('production_package_id', packageId)` 过滤，PostgREST 报错被 `?? []` 吞成空数组 —— **每一份 production package 的 ads 维度都一直是空的，没有任何地方会喊一声**。
+  - 这正是 CLAUDE.md 铁律 3 下半说的"发现死在日志里"的机器版：两端都在静默兜底，于是"没数据"和"链路根本没通"长得一模一样。
+  修：先定这条链路还要不要（P13.D 的原意是把当期广告数据钉进交付物）。要 → 补列 + 索引（**migration 待 PM `go apply`**），并把两侧的静默兜底改成显式报错；不要 → 把写侧和读侧一起删掉，别留一段永远返回空的代码。**顺带把 `AD-CUR-1` 里"production package 会永久关联某一条旧 snapshot"那句一并订正**（关联从来没成立过）
 - [ ] 🔴 **AD-GEO-0 `targetingFor` 把国家和城市一起发出去，城市半径形同虚设 —— ME 建的广告从一开始就投整个国家【投第一条真广告前必修】**（第二十七轮发现，比 `AD-GEO-1` 更根本）：`ad-publisher.ts:105-109`
   ```ts
   const geo = { countries: d.geoCountries }            // ['NZ']
