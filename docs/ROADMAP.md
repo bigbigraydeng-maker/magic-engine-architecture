@@ -130,7 +130,14 @@
   - 🔴 **补列之前必须先补归属校验，否则一补列就变成跨客户注入**（第三十一轮 Codex P1，核实成立）：`sync/route.ts:33-51` 的 `production_package_id` **直接取自请求体**，鉴权只有 `requirePaidClientAccess(params.id)`（URL 里那个客户），**从不核对 `production_packages.client_id` 是不是同一个**；而读侧 `production/[packageId]/route.ts:116-120` 查 snapshot 时只按 package ID 过滤、不带 `client_id`。
     ⚠️ 方向要说准：读侧对 package 本身是**有**客户隔离的（`:37-46` 同时 `.eq('id')` + `.eq('client_id')`），所以这不是"能读走别家的包"，而是**"能往别家的包里塞东西"** —— A 客户提交 B 客户的包 ID，B 的授权用户打开自己的交付物，看到的是 A 的广告数据。跟 `AD-SEC-1` 同源：**信请求体里的外部主键，只校验 URL 里的客户**。
     现在因为列不存在而无害，**正因如此必须写进修复口径**：补列的那一刻它就活了。
-  修：先定这条链路还要不要（P13.D 的原意是把当期广告数据钉进交付物）。要 → 补列 + 索引（**migration 待 PM `go apply`**）+ **写前按 `id + client_id` 校验包归属、读侧 snapshot 查询同时按 `client_id` 限定**，并把两侧的静默兜底改成显式报错；不要 → 把写侧和读侧一起删掉，别留一段永远返回空的代码。**顺带把 `AD-CUR-1` 里"production package 会永久关联某一条旧 snapshot"那句一并订正**（关联从来没成立过）
+  - 🔎 **根因是 schema 漂移，不是"这个功能没做"**（第三十五轮 Codex 指出，已实测确认）：仓库里**早就有** `supabase/migrations/20260522000001_p13d_production_package_links.sql`，它同时给 `meta_ads_snapshots` 和 `project_reviews` 加列 + partial index。但生产的迁移账本里**只有 `p13d_project_reviews_pkg_link`（20260524111001）这半边**，那个仓库文件整份从没登记过。实测三张表：
+    | 表 | `production_package_id` | 说明 |
+    |---|---|---|
+    | `project_reviews` | ✅ 有 | 单独那半边跑过了 → **口碑维度是好的** |
+    | `competitor_snapshots` | ✅ 有 | 走的是 `p13e_pre_competitor_snapshots` → **竞品维度是好的** |
+    | `meta_ads_snapshots` | ❌ **没有** | 仓库文件里的那半边**从没跑过** → 只有广告维度是断的 |
+    **所以不要新写一个只补 `meta_ads_snapshots` 的 migration** —— 那会在仓库里留下两份意图重复的迁移，把真正的问题（仓库有、生产没有）盖过去。正确做法：先核对 `20260522000001` 这份文件与生产账本的差异，再决定重放它（文件本身是 `ADD COLUMN IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`，重放安全）还是写一份显式覆盖两侧的修复迁移。⚠️ 顺带查一遍**还有没有别的仓库迁移没落库** —— 账本里已经有一条 `backfill_drifted_schema`，说明这类漂移不是第一次。
+  修：先定这条链路还要不要（P13.D 的原意是把当期广告数据钉进交付物）。要 → **按上面的口径处理漂移、把列补上**（**migration 待 PM `go apply`**）+ **写前按 `id + client_id` 校验包归属、读侧 snapshot 查询同时按 `client_id` 限定**，并把两侧的静默兜底改成显式报错；不要 → 把写侧和读侧一起删掉，**并把仓库里那份没落库的 migration 一并清理**，别留一段永远返回空的代码配一份永远不跑的迁移。**顺带把 `AD-CUR-1` 里"production package 会永久关联某一条旧 snapshot"那句一并订正**（关联从来没成立过）
 - [ ] 🔴 **AD-GEO-0 `targetingFor` 把国家和城市一起发出去，城市半径形同虚设 —— ME 建的广告从一开始就投整个国家【投第一条真广告前必修】**（第二十七轮发现，比 `AD-GEO-1` 更根本）：`ad-publisher.ts:105-109`
   ```ts
   const geo = { countries: d.geoCountries }            // ['NZ']
