@@ -200,8 +200,21 @@ export function isFullyCrawlBlocked(robotsTxt: string): boolean {
 }
 
 /**
+ * A BFS candidate has to be a web page. 🔴 Codex review on PR #963 (P2):
+ * `new URL()` parses `ftp://example.com/f`, `data://…` and `javascript://…`
+ * into a hostname *equal* to the audited site's, so hostname equality alone
+ * admits them — and they would consume MAX_BFS_LINKS slots, ending discovery
+ * early and handing Jina URLs it cannot fetch. The `startsWith(origin)` prefix
+ * test this PR replaced rejected them as a side effect; keep that explicitly.
+ * A link-candidate filter, not a network guard (that is safe-fetch.ts).
+ */
+function isWebPageScheme(url: URL): boolean {
+  return url.protocol === 'http:' || url.protocol === 'https:'
+}
+
+/**
  * Extract same-origin href values from raw HTML.
- * Returns de-duped absolute URLs limited to `max` entries.
+ * Returns de-duped absolute http(s) URLs limited to `max` entries.
  */
 export function extractSameDomainLinks(
   html: string,
@@ -214,9 +227,10 @@ export function extractSameDomainLinks(
   while ((m = re.exec(html)) !== null && seen.size < max) {
     const raw = m[1].trim()
     try {
-      const abs = new URL(raw, origin).href
-      if (isSameHost(abs, origin) && !seen.has(abs)) {
-        seen.add(abs)
+      const parsed = new URL(raw, origin)
+      // Rejected candidates are never added, so they cannot occupy a `max` slot.
+      if (isWebPageScheme(parsed) && isSameHost(parsed.href, origin) && !seen.has(parsed.href)) {
+        seen.add(parsed.href)
       }
     } catch {
       // ignore malformed hrefs
@@ -608,12 +622,24 @@ const MAX_SITEMAP_DEPTH = 3
 const MAX_SITEMAP_REDIRECTS = 3
 
 /**
- * Every sitemap read in this file goes through safeFetchText() with these
- * options. Timeout, DNS timeout and response size cap are left at the
- * primitive's defaults — the crawler has no reason to want different ones, and
- * restating them here would be a second place to keep in sync.
+ * 🔴 Codex review on PR #963 (P2): safeFetchText's 10 MiB default sits *below*
+ * the 50 MB one uncompressed sitemap may be, so a large but perfectly legal
+ * sitemap would fail with ResponseTooLargeError where the previous unbounded
+ * fetch() succeeded — and the Jina fallback truncates at 1,000,000 chars, so it
+ * cannot recover those pages either. The read stays bounded; the bound is just
+ * the protocol's own limit instead of the primitive's generic default.
  */
-const SITEMAP_FETCH_OPTIONS = { maxRedirects: MAX_SITEMAP_REDIRECTS } as const
+const MAX_SITEMAP_RESPONSE_BYTES = 52_428_800 // 50 MB, sitemaps.org
+
+/**
+ * Every sitemap read in this file goes through safeFetchText() with these
+ * options. Timeout and DNS timeout stay at the primitive's defaults — restating
+ * them here would just be a second place to keep in sync.
+ */
+const SITEMAP_FETCH_OPTIONS = {
+  maxRedirects: MAX_SITEMAP_REDIRECTS,
+  maxResponseBytes: MAX_SITEMAP_RESPONSE_BYTES,
+} as const
 
 type SafeSitemapFetch =
   | { ok: true; xml: string }
@@ -621,14 +647,12 @@ type SafeSitemapFetch =
 
 /**
  * Map an error thrown by safeFetchText() onto this file's existing
- * DiscoveryIssue stage names.
- *
- * 🔴 The stages are a public contract: the canonical-inventory adapter and the
- *    onIssue tests both key off them, so consuming a shared primitive must not
- *    silently re-label a rejection. Anything the primitive does not classify
- *    (network error, TLS error, timeout, oversized body, DNS failure) keeps the
- *    caller's own "genuinely unreachable" stage, which is what those failures
- *    were reported as before.
+ * DiscoveryIssue stage names. 🔴 The stages are a public contract: the
+ * canonical-inventory adapter and the onIssue tests both key off them, so
+ * consuming a shared primitive must not silently re-label a rejection. Anything
+ * the primitive does not classify (network/TLS error, timeout, oversized body,
+ * DNS failure) keeps the caller's own "genuinely unreachable" stage — which is
+ * what those failures were reported as before.
  */
 function sitemapFailureStage(err: unknown, genericFailureStage: string): string {
   if (err instanceof BlockedAddressError) return 'sitemap-blocked-host'
@@ -644,26 +668,22 @@ function sitemapFailureStage(err: unknown, genericFailureStage: string): string 
  * SSRF-safe primitive (`src/lib/net/safe-fetch.ts`, PR #970 / issue #965).
  *
  * 🔴 SSRF review on PR #963: every <loc> in a sitemap is attacker-controlled —
- *    the site owner (or whoever compromised the site) writes the sitemap
- *    content. Before this fix, fetchSitemapPageUrls() called fetch(url)
- *    directly with fetch's default automatic redirect-following, so a
- *    <loc>http://169.254.169.254/...</loc> or a public-looking <loc> that
- *    302-redirects to an internal address would be requested straight from
- *    Render's own network, with no check at all. Same-host filtering
- *    (dedupeAndFilter) only trims the *returned* URL list — it can't recall a
- *    request that already went out over the wire.
+ *    the site owner (or whoever compromised it) writes the sitemap content.
+ *    Before this fix, fetchSitemapPageUrls() called fetch(url) directly with
+ *    automatic redirect-following, so a <loc>http://169.254.169.254/...</loc>
+ *    — or a public-looking <loc> that 302-redirects to an internal address —
+ *    was requested straight from Render's own network, unchecked. Same-host
+ *    filtering (dedupeAndFilter) only trims the *returned* list; it can't
+ *    recall a request that already went out over the wire.
  *
  *    This function deliberately owns **no** address, scheme, redirect, timeout
- *    or size logic of its own. #963's first attempt did, and its handwritten
- *    string-prefix IP rules had real bypasses (fea0::1, ::ffff:7f00:1) and a
- *    DNS TOCTOU gap between validating and connecting. safeFetchText() resolves
- *    every candidate address, fails closed if any is disallowed, and pins the
- *    validated address to the socket, repeating the whole cycle per hop. All
- *    this file does is translate a rejection into a DiscoveryIssue.
- *
- *    A rejection is always reported via `report()` and never thrown, so one
- *    poisoned <loc> in a sitemap index doesn't stop its legitimate siblings
- *    from being fetched.
+ *    or size logic. #963's first attempt did, and its handwritten string-prefix
+ *    IP rules had real bypasses (fea0::1, ::ffff:7f00:1) plus a DNS TOCTOU gap.
+ *    safeFetchText() resolves every candidate address, fails closed if any is
+ *    disallowed, and pins the validated address to the socket, per hop. All
+ *    this file does is translate a rejection into a DiscoveryIssue — always via
+ *    `report()`, never thrown, so one poisoned <loc> in an index doesn't stop
+ *    its legitimate siblings from being fetched.
  */
 async function fetchSitemapXmlSafely(
   startUrl: string,

@@ -161,7 +161,32 @@ describe('discoverSitemapUrls — sitemap reads are delegated to safeFetchText (
 
     expect(safeFetchTextMock).toHaveBeenCalled()
     for (const [, options] of safeFetchTextMock.mock.calls) {
-      expect(options).toEqual({ maxRedirects: 3 })
+      expect(options).toEqual({ maxRedirects: 3, maxResponseBytes: 52_428_800 })
+    }
+  })
+
+  /**
+   * Codex review on PR #963 (P2): safeFetchText's 10 MiB default is below the
+   * 50 MB the sitemap protocol allows, so a large but legal sitemap would fail
+   * where the previous unbounded fetch() succeeded. The read must stay bounded
+   * — this asserts the configured bound, it does not build a 50 MB fixture.
+   */
+  it('bounds every sitemap read at the sitemap protocol limit, not the 10 MiB default', async () => {
+    safeFetchTextMock.mockImplementation(async (url) => {
+      if (String(url) === 'https://example.com/sitemap.xml') return textResponse(SITEMAP_INDEX)
+      if (String(url) === 'https://example.com/sitemap-posts.xml') return textResponse(SITEMAP_POSTS)
+      return textResponse('Not Found', 404)
+    })
+
+    await discoverSitemapUrls('example.com')
+
+    const readUrls = safeFetchUrls()
+    // Both the top-level read and the index-child expansion are covered.
+    expect(readUrls).toContain('https://example.com/sitemap.xml')
+    expect(readUrls).toContain('https://example.com/sitemap-posts.xml')
+    for (const [url, options] of safeFetchTextMock.mock.calls) {
+      expect(options?.maxResponseBytes, String(url)).toBe(52_428_800)
+      expect(options?.maxResponseBytes, String(url)).not.toBe(10 * 1024 * 1024)
     }
   })
 

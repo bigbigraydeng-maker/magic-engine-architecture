@@ -283,6 +283,46 @@ describe('extractSameDomainLinks', () => {
     expect(links).toContain('https://example.com/valid')
   })
 
+  /**
+   * Codex review on PR #963 (P2): `new URL()` parses `ftp://example.com/f`,
+   * `data://example.com/x` and `javascript://example.com/x` into a hostname
+   * equal to the site's own, so hostname equality alone would admit them.
+   */
+  describe('non-web schemes with a matching hostname (Codex review P2)', () => {
+    it('excludes same-host ftp:, data: and javascript: absolute hrefs', () => {
+      const html = `<a href="ftp://example.com/file">ftp</a>
+        <a href="data://example.com/payload">data</a>
+        <a href="javascript://example.com/x">js</a>`
+      expect(extractSameDomainLinks(html, origin)).toEqual([])
+    })
+
+    it('keeps same-host http:, https: and relative hrefs alongside them', () => {
+      const html = `<a href="ftp://example.com/file">ftp</a>
+        <a href="https://example.com/secure">https</a>
+        <a href="http://example.com/plain">http</a>
+        <a href="/relative">relative</a>`
+      expect(extractSameDomainLinks(html, origin)).toEqual([
+        'https://example.com/secure',
+        'http://example.com/plain',
+        'https://example.com/relative',
+      ])
+    })
+
+    it('does not let a rejected scheme consume one of the `max` slots', () => {
+      // 3 ftp: links first, then 2 real pages, with max = 2. If the rejected
+      // links occupied slots, the loop would stop before reaching the pages.
+      const html = `<a href="ftp://example.com/a">a</a>
+        <a href="ftp://example.com/b">b</a>
+        <a href="ftp://example.com/c">c</a>
+        <a href="/page-1">1</a>
+        <a href="/page-2">2</a>`
+      expect(extractSameDomainLinks(html, origin, 2)).toEqual([
+        'https://example.com/page-1',
+        'https://example.com/page-2',
+      ])
+    })
+  })
+
   it('does not throw when called with a non-URL origin (covers internal catch)', () => {
     // When origin is completely invalid, new URL(href, origin) throws for relative hrefs.
     // The function must silently skip those and not propagate the error.
