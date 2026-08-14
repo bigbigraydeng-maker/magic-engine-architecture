@@ -13,14 +13,10 @@
  * function never throws (a poison URL must not wedge the audit batch).
  */
 
+import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
 import { getOnPageInstant, type OnPageResult } from '@/lib/dataforseo/onpage'
 import { detectTrackingSignals, type TrackingSignals } from './tracking-detector'
-import { isPrivateIp, isFetchableScheme, assertPublicHost, BlockedAddressError } from '@/lib/ssrf-safe-fetch'
-
-// Re-exported so existing importers (and this file's own test suite) keep
-// working unchanged — the SSRF rule itself now lives in ssrf-safe-fetch.ts,
-// shared with site-audit/crawler.ts, so both call the identical check.
-export { isPrivateIp }
 
 export interface ProspectAudit {
   fetched_at:  string
@@ -56,6 +52,42 @@ export function normaliseUrl(raw: string): string | null {
   }
 }
 
+// ─── SSRF guard ───────────────────────────────────────────────────────────────
+
+function isPrivateIpV4(ip: string): boolean {
+  const [a, b] = ip.split('.').map(Number)
+  return a === 0 || a === 10 || a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||   // CGNAT
+    (a === 169 && b === 254) ||             // link-local / cloud metadata
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+}
+
+/** Exported for tests. */
+export function isPrivateIp(ip: string): boolean {
+  if (isIP(ip) === 4) return isPrivateIpV4(ip)
+  const v6 = ip.toLowerCase().replace(/^\[|\]$/g, '')
+  if (v6 === '::' || v6 === '::1') return true
+  if (v6.startsWith('fc') || v6.startsWith('fd') || v6.startsWith('fe8') || v6.startsWith('fe9')) return true
+  const mapped = v6.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
+  return mapped ? isPrivateIpV4(mapped[1]) : false
+}
+
+/** Throws when the URL's host resolves to a private / internal address. */
+async function assertPublicHost(url: URL): Promise<void> {
+  const host = url.hostname
+  if (isIP(host)) {
+    if (isPrivateIp(host)) throw new BlockedAddressError(host)
+    return
+  }
+  const { address } = await lookup(host)
+  if (isPrivateIp(address)) throw new BlockedAddressError(host)
+}
+
+class BlockedAddressError extends Error {
+  constructor(host: string) { super(`blocked private address: ${host}`) }
+}
+
 // ─── Homepage fetch ───────────────────────────────────────────────────────────
 
 type FetchOutcome =
@@ -79,7 +111,7 @@ async function fetchHomepage(startUrl: string): Promise<FetchOutcome> {
   try {
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       const parsed = new URL(url)
-      if (!isFetchableScheme(parsed)) {
+      if (!/^https?:$/.test(parsed.protocol)) {
         return { ok: false, https_ok: null, error: 'non_http_redirect' }
       }
       await assertPublicHost(parsed)

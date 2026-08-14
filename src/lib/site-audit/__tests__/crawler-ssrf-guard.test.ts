@@ -12,13 +12,19 @@
  * 127.0.0.1, cloud metadata, or any internal address and Render's own
  * network would make that request.
  *
- * These tests never touch the real network — fetch and DNS (node:dns/promises)
- * are both mocked. See crawler-test-files.ts for the fixed manifest this file
- * is registered in.
+ * The guard itself is NOT reimplemented here: since the #965/#970 prerequisite
+ * landed, crawler.ts delegates every sitemap read to the shared
+ * connection-bound primitive `safeFetchText()` (src/lib/net/safe-fetch.ts).
+ * These tests run that real primitive — only its socket is swapped out — so
+ * they prove the crawler is actually wired to it, with the address rules and
+ * per-hop redirect validation coming from the one shared implementation.
+ *
+ * These tests never touch the real network — the transport and DNS
+ * (node:dns/promises) are both mocked. See crawler-test-files.ts for the fixed
+ * manifest this file is registered in.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { lookup } from 'node:dns/promises'
 import { discoverSitemapUrls, type DiscoveryIssue } from '../crawler'
 import { fetchUrlRaw, fetchUrlAsMarkdown } from '../../brief/jina'
 import { ROBOTS_TXT_EMPTY, mockResponse, mockNotFound } from './crawler-fixtures'
@@ -28,12 +34,30 @@ vi.mock('../../brief/jina', () => ({
   fetchUrlRaw: vi.fn(),
 }))
 
-vi.mock('node:dns/promises', () => {
-  const lookup = vi.fn()
-  return { lookup, default: { lookup } }
+// safeFetchText asks for `{ all: true }`, so every answer is an ARRAY.
+const dnsLookupMock = vi.hoisted(() => vi.fn())
+vi.mock('node:dns/promises', () => ({ lookup: dnsLookupMock, default: { lookup: dnsLookupMock } }))
+
+// safeFetchText dispatches through undici, not the global fetch. Swapping only
+// undici's transport for the stubbed global fetch keeps the REAL guard in the
+// loop — classification, resolve-all/validate-all and per-hop revalidation all
+// execute; only the socket is replaced. Mocking safeFetchText itself would
+// reduce these tests to asserting against a stub of the thing under test.
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>()
+  class PassthroughAgent {
+    async close(): Promise<void> {}
+  }
+  return {
+    ...actual,
+    Agent: PassthroughAgent,
+    fetch: (input: unknown, init?: unknown) =>
+      (globalThis.fetch as unknown as (i: unknown, n?: unknown) => Promise<Response>)(input, init),
+  }
 })
 
 const PUBLIC_IP = '93.184.216.34' // example.com's real public IP (RFC 2606) — stand-in value only
+const PUBLIC_DNS_ANSWER = [{ address: PUBLIC_IP, family: 4 }]
 
 function mockRedirect(location: string, status = 302): Response {
   return new Response(null, { status, headers: { location } })
@@ -46,7 +70,7 @@ describe('discoverSitemapUrls — SSRF guard on child sitemap fetches (Codex rev
     vi.mocked(fetchUrlAsMarkdown).mockReset().mockRejectedValue(new Error('jina unavailable'))
     // Default: every hostname resolves to a public IP — tests override this
     // per-case to simulate a private/loopback resolution. No real network access.
-    vi.mocked(lookup).mockReset().mockResolvedValue({ address: PUBLIC_IP, family: 4 })
+    dnsLookupMock.mockReset().mockResolvedValue(PUBLIC_DNS_ANSWER)
   })
 
   afterEach(() => {
@@ -58,7 +82,7 @@ describe('discoverSitemapUrls — SSRF guard on child sitemap fetches (Codex rev
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
       .mockResolvedValueOnce(mockResponse(index))
-      .mockResolvedValue(mockNotFound())
+      .mockImplementation(async () => mockNotFound())
     vi.stubGlobal('fetch', fetchMock)
     const issues: DiscoveryIssue[] = []
 
@@ -72,14 +96,14 @@ describe('discoverSitemapUrls — SSRF guard on child sitemap fetches (Codex rev
   })
 
   it('blocks a child sitemap whose hostname resolves to loopback (localhost)', async () => {
-    vi.mocked(lookup).mockImplementation(async (hostname) =>
-      hostname === 'localhost' ? { address: '127.0.0.1', family: 4 } : { address: PUBLIC_IP, family: 4 }
+    dnsLookupMock.mockImplementation(async (hostname) =>
+      hostname === 'localhost' ? [{ address: '127.0.0.1', family: 4 }] : PUBLIC_DNS_ANSWER
     )
     const index = '<sitemapindex><sitemap><loc>http://localhost/admin-sitemap.xml</loc></sitemap></sitemapindex>'
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
       .mockResolvedValueOnce(mockResponse(index))
-      .mockResolvedValue(mockNotFound())
+      .mockImplementation(async () => mockNotFound())
     vi.stubGlobal('fetch', fetchMock)
     const issues: DiscoveryIssue[] = []
 
@@ -97,7 +121,7 @@ describe('discoverSitemapUrls — SSRF guard on child sitemap fetches (Codex rev
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
       .mockResolvedValueOnce(mockResponse(index))
-      .mockResolvedValue(mockNotFound())
+      .mockImplementation(async () => mockNotFound())
     vi.stubGlobal('fetch', fetchMock)
     const issues: DiscoveryIssue[] = []
 
@@ -119,7 +143,7 @@ describe('discoverSitemapUrls — SSRF guard on child sitemap fetches (Codex rev
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
       .mockResolvedValueOnce(mockResponse(index))
-      .mockResolvedValue(mockNotFound())
+      .mockImplementation(async () => mockNotFound())
     vi.stubGlobal('fetch', fetchMock)
     const issues: DiscoveryIssue[] = []
 
@@ -149,7 +173,7 @@ describe('discoverSitemapUrls — SSRF guard on child sitemap fetches (Codex rev
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
       .mockResolvedValueOnce(mockResponse(index))
-      .mockResolvedValue(mockNotFound())
+      .mockImplementation(async () => mockNotFound())
     vi.stubGlobal('fetch', fetchMock)
     const issues: DiscoveryIssue[] = []
 
@@ -165,14 +189,14 @@ describe('discoverSitemapUrls — SSRF guard on child sitemap fetches (Codex rev
   })
 
   it('blocks a public-looking domain whose DNS resolves to a private IP', async () => {
-    vi.mocked(lookup).mockImplementation(async (hostname) =>
-      hostname === 'internal-redirector.example' ? { address: '10.8.8.8', family: 4 } : { address: PUBLIC_IP, family: 4 }
+    dnsLookupMock.mockImplementation(async (hostname) =>
+      hostname === 'internal-redirector.example' ? [{ address: '10.8.8.8', family: 4 }] : PUBLIC_DNS_ANSWER
     )
     const index = '<sitemapindex><sitemap><loc>https://internal-redirector.example/sitemap.xml</loc></sitemap></sitemapindex>'
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
       .mockResolvedValueOnce(mockResponse(index))
-      .mockResolvedValue(mockNotFound())
+      .mockImplementation(async () => mockNotFound())
     vi.stubGlobal('fetch', fetchMock)
     const issues: DiscoveryIssue[] = []
 
@@ -191,7 +215,7 @@ describe('discoverSitemapUrls — SSRF guard on child sitemap fetches (Codex rev
       .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
       .mockResolvedValueOnce(mockResponse(index))
       .mockResolvedValueOnce(mockRedirect('http://127.0.0.1/secret-sitemap.xml')) // sitemap-region.xml → 302
-      .mockResolvedValue(mockNotFound())
+      .mockImplementation(async () => mockNotFound())
     vi.stubGlobal('fetch', fetchMock)
     const issues: DiscoveryIssue[] = []
 
@@ -201,21 +225,28 @@ describe('discoverSitemapUrls — SSRF guard on child sitemap fetches (Codex rev
     // The redirect's public starting URL WAS requested; its private target never was.
     expect(fetchMock.mock.calls.some(([u]) => String(u) === 'https://example.com/sitemap-region.xml')).toBe(true)
     expect(fetchMock.mock.calls.some(([u]) => String(u).includes('127.0.0.1'))).toBe(false)
+    // `url` names the sitemap entry that failed (safeFetchText owns the hop
+    // loop, so the crawler never sees the intermediate hop); the blocked
+    // address itself is named in the error message.
     expect(issues).toContainEqual(
-      expect.objectContaining({ stage: 'sitemap-blocked-host', url: expect.stringContaining('127.0.0.1') })
+      expect.objectContaining({
+        stage: 'sitemap-blocked-host',
+        url: 'https://example.com/sitemap-region.xml',
+        error: expect.stringContaining('127.0.0.1'),
+      })
     )
   })
 
   it('reports a genuine DNS failure distinctly from a blocked address', async () => {
-    vi.mocked(lookup).mockImplementation(async (hostname) => {
+    dnsLookupMock.mockImplementation(async (hostname) => {
       if (hostname === 'broken-dns.example') throw Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' })
-      return { address: PUBLIC_IP, family: 4 }
+      return PUBLIC_DNS_ANSWER
     })
     const index = '<sitemapindex><sitemap><loc>https://broken-dns.example/sitemap.xml</loc></sitemap></sitemapindex>'
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
       .mockResolvedValueOnce(mockResponse(index))
-      .mockResolvedValue(mockNotFound())
+      .mockImplementation(async () => mockNotFound())
     vi.stubGlobal('fetch', fetchMock)
     const issues: DiscoveryIssue[] = []
 
@@ -237,7 +268,7 @@ describe('discoverSitemapUrls — SSRF guard on child sitemap fetches (Codex rev
       .mockResolvedValueOnce(mockRedirect(chain[2])) // redirect-1 → redirect-2
       .mockResolvedValueOnce(mockRedirect(chain[3])) // redirect-2 → redirect-3
       .mockResolvedValueOnce(mockRedirect(chain[4])) // redirect-3 → redirect-4 (exceeds the cap)
-      .mockResolvedValue(mockNotFound())
+      .mockImplementation(async () => mockNotFound())
     vi.stubGlobal('fetch', fetchMock)
     const issues: DiscoveryIssue[] = []
 
@@ -314,7 +345,7 @@ describe('discoverSitemapUrls — exact host comparison, not string-prefix (Code
     vi.stubGlobal('fetch', vi.fn())
     vi.mocked(fetchUrlRaw).mockReset().mockRejectedValue(new Error('jina unavailable'))
     vi.mocked(fetchUrlAsMarkdown).mockReset().mockRejectedValue(new Error('jina unavailable'))
-    vi.mocked(lookup).mockReset().mockResolvedValue({ address: PUBLIC_IP, family: 4 })
+    dnsLookupMock.mockReset().mockResolvedValue(PUBLIC_DNS_ANSWER)
   })
 
   afterEach(() => {
@@ -329,7 +360,7 @@ describe('discoverSitemapUrls — exact host comparison, not string-prefix (Code
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))
       .mockResolvedValueOnce(mockResponse(urlset))
-      .mockResolvedValue(mockNotFound()) // only 1 same-host URL — below MIN_DISCOVERED_URLS, so
+      .mockImplementation(async () => mockNotFound()) // only 1 same-host URL — below MIN_DISCOVERED_URLS, so
     )                                    // discovery escalates through the remaining levels
 
     const urls = await discoverSitemapUrls('example.com')

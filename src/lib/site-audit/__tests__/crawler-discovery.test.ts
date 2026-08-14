@@ -9,7 +9,6 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { lookup } from 'node:dns/promises'
 import {
   discoverSitemapUrls,
   MIN_DISCOVERED_URLS,
@@ -38,18 +37,36 @@ vi.mock('../../brief/jina', () => ({
   fetchUrlRaw: vi.fn(),
 }))
 
-// SSRF guard (Codex review on PR #963): every child-sitemap fetch now runs
-// through assertPublicHost(), which calls dns.lookup() for any non-IP-literal
-// hostname — every fixture in this file uses domain names (example.com,
-// cdn.example.net, ...), so without this mock every test would perform a
-// REAL DNS lookup. Default to resolving anywhere to a fixed public IP; the
-// "SSRF guard" describe block below overrides this per-test to simulate a
-// public domain resolving to a private address.
-vi.mock('node:dns/promises', () => {
-  const lookup = vi.fn()
-  return { lookup, default: { lookup } }
-})
+// SSRF guard (Codex review on PR #963): every sitemap fetch now runs through
+// safeFetchText(), which resolves the hostname itself — every fixture in this
+// file uses domain names (example.com, cdn.example.net, ...), so without this
+// mock every test would perform a REAL DNS lookup. Default to resolving
+// anywhere to a fixed public IP. safeFetchText asks for `{ all: true }`, so the
+// answer must be an ARRAY of candidates, not a single record.
+const dnsLookupMock = vi.hoisted(() => vi.fn())
+vi.mock('node:dns/promises', () => ({ lookup: dnsLookupMock, default: { lookup: dnsLookupMock } }))
 const PUBLIC_IP = '93.184.216.34' // example.com's real public IP (RFC 2606), used only as a stand-in value
+const PUBLIC_DNS_ANSWER = [{ address: PUBLIC_IP, family: 4 }]
+
+// safeFetchText dispatches through undici, not the global fetch. Swap undici's
+// transport for the stubbed global fetch so each test keeps its single
+// sequential response queue, while the REAL safeFetchText still runs: scheme
+// check, resolve-all/validate-all, per-hop redirect validation and the pinned
+// dispatcher are all exercised, only the socket is replaced. A fresh Agent per
+// hop is meaningless without a socket, so it becomes a no-op stub.
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>()
+  class PassthroughAgent {
+    async close(): Promise<void> {}
+  }
+  return {
+    ...actual,
+    Agent: PassthroughAgent,
+    // Read globalThis.fetch at call time — vi.stubGlobal replaces it per test.
+    fetch: (input: unknown, init?: unknown) =>
+      (globalThis.fetch as unknown as (i: unknown, n?: unknown) => Promise<Response>)(input, init),
+  }
+})
 
 describe('discoverSitemapUrls', () => {
   beforeEach(() => {
@@ -58,7 +75,7 @@ describe('discoverSitemapUrls', () => {
     vi.mocked(fetchUrlRaw).mockReset().mockRejectedValue(new Error('jina unavailable'))
     vi.mocked(fetchUrlAsMarkdown).mockReset().mockRejectedValue(new Error('jina unavailable'))
     // Default: every hostname resolves to a public IP — no real network access.
-    vi.mocked(lookup).mockReset().mockResolvedValue({ address: PUBLIC_IP, family: 4 })
+    dnsLookupMock.mockReset().mockResolvedValue(PUBLIC_DNS_ANSWER)
   })
 
   afterEach(() => {
@@ -277,7 +294,7 @@ describe('discoverSitemapUrls', () => {
         .mockResolvedValueOnce(mockResponse(indexWithForeignChild))
         .mockResolvedValueOnce(mockResponse(localUrlset))
         .mockResolvedValueOnce(mockResponse(foreignUrlset))
-        .mockResolvedValue(mockNotFound())                          // remaining levels (2/4) 404 out
+        .mockImplementation(async () => mockNotFound())                          // remaining levels (2/4) 404 out
       )
 
       const urls = await discoverSitemapUrls('example.com')
@@ -315,7 +332,7 @@ describe('discoverSitemapUrls', () => {
         .mockResolvedValueOnce(mockResponse(selfIndexXml))         // sitemap.xml — depth 0 (Level 1's own fetch)
         .mockResolvedValueOnce(mockResponse(selfIndexXml))         // recursion depth 1
         .mockResolvedValueOnce(mockResponse(selfIndexXml))         // recursion depth 2
-        .mockResolvedValue(mockNotFound())                         // depth-limit stops before a 4th fetch; remaining levels 404
+        .mockImplementation(async () => mockNotFound())                         // depth-limit stops before a 4th fetch; remaining levels 404
       vi.stubGlobal('fetch', fetchMock)
 
       const issues: DiscoveryIssue[] = []
@@ -327,7 +344,8 @@ describe('discoverSitemapUrls', () => {
       )
       // Exactly 3 fetches of the self-referencing URL (depth 0, 1, 2) — the 4th
       // (depth 3) is refused before ever calling fetch, proving termination.
-      const selfFetches = fetchMock.mock.calls.filter(([u]) => u === 'https://example.com/sitemap.xml').length
+      // String(): safeFetchText hands undici a URL object, not the raw string.
+      const selfFetches = fetchMock.mock.calls.filter(([u]) => String(u) === 'https://example.com/sitemap.xml').length
       expect(selfFetches).toBe(3)
     })
 
@@ -388,7 +406,7 @@ describe('discoverSitemapUrls', () => {
 
       expect(urls).toEqual(['https://example.com/blog/post-1', 'https://example.com/blog/post-2'])
       // The child sitemap must be requested with a decoded query string.
-      const requestedUrls = fetchMock.mock.calls.map(([u]) => u)
+      const requestedUrls = fetchMock.mock.calls.map(([u]) => String(u))
       expect(requestedUrls).toContain('https://example.com/sitemap.php?type=post&page=2')
       expect(requestedUrls.some((u) => u.includes('amp;'))).toBe(false)
     })
@@ -523,7 +541,7 @@ describe('discoverSitemapUrls', () => {
         .mockResolvedValueOnce(indexTo('https://example.com/sitemap-b.xml'))       // depth 0
         .mockResolvedValueOnce(indexTo('https://example.com/sitemap-c.xml'))       // depth 1
         .mockResolvedValueOnce(indexTo('https://example.com/sitemap-d.xml'))       // depth 2
-        .mockResolvedValue(mockResponse(SITEMAP_XML_10_URLS))                      // 后续回退
+        .mockImplementation(async () => mockResponse(SITEMAP_XML_10_URLS))                      // 后续回退
       )
       const issues: DiscoveryIssue[] = []
 
@@ -691,7 +709,7 @@ describe('discoverSitemapUrls', () => {
 </body></html>`
 
     it('discovers full sitemap via Jina when every direct fetch is blocked', async () => {
-      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse('Forbidden', 403)))
+      vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => mockResponse('Forbidden', 403)))
       vi.mocked(fetchUrlRaw).mockResolvedValue(SITEMAP_XML_10_URLS)
 
       const urls = await discoverSitemapUrls('example.com')

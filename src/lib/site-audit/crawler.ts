@@ -8,7 +8,13 @@
  * Reference: ROADMAP.md P8.0.2 DNZ collection infrastructure
  */
 
-import { isFetchableScheme, assertPublicHost, BlockedAddressError } from '@/lib/ssrf-safe-fetch'
+import {
+  safeFetchText,
+  BlockedAddressError,
+  DisallowedSchemeError,
+  InvalidRedirectError,
+  TooManyRedirectsError,
+} from '@/lib/net/safe-fetch'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -311,6 +317,13 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
     return null
   }
 
+  // 🔴 Scope note (PR #963 / issue #965): every **sitemap** read below goes
+  //    through safeFetchText(). The robots.txt and homepage-BFS reads here
+  //    deliberately still use a plain fetch(): they only ever hit `origin`,
+  //    which this function derived itself from the client's registered domain,
+  //    not a URL some fetched document handed us. Migrating them is a separate,
+  //    separately-verified change — do not "fix" one of them in isolation.
+
   // Check robots.txt first for crawl permission
   try {
     const robotsRes = await fetch(`${origin}/robots.txt`)
@@ -340,9 +353,9 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
   //    命中 index 就复用 fetchSitemapPageUrls() 的递归展开，跟其它入口（robots.txt
   //    directive、/sitemap_index.xml）共用同一套深度限制和失败上报。
   try {
-    const res = await fetch(`${origin}/sitemap.xml`)
+    const res = await safeFetchText(`${origin}/sitemap.xml`, SITEMAP_FETCH_OPTIONS)
     if (res.ok) {
-      const xml = await res.text()
+      const xml = res.text
       const locs = /<sitemapindex/i.test(xml)
         ? await expandSitemapIndexChildren(parseLocsFromXml(xml), 1, report)
         : parseLocsFromXml(xml)
@@ -355,17 +368,16 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
 
   // Level 2: /sitemap_index.xml
   try {
-    const res = await fetch(`${origin}/sitemap_index.xml`)
+    const res = await safeFetchText(`${origin}/sitemap_index.xml`, SITEMAP_FETCH_OPTIONS)
     if (res.ok) {
-      const xml = await res.text()
+      const xml = res.text
       // sitemap_index contains <loc> entries pointing to child sitemaps
       const childSitemapUrls = parseLocsFromXml(xml)
       const allLocs: string[] = []
       for (const childUrl of childSitemapUrls) {
         // Same SSRF guard as fetchSitemapPageUrls() (Codex review on PR #963):
         // childUrl comes straight out of /sitemap_index.xml's <loc> entries,
-        // which the audited site controls — validate scheme/host and follow
-        // redirects manually before ever calling fetch() on it.
+        // which the audited site controls — it must never reach a raw fetch().
         const result = await fetchSitemapXmlSafely(childUrl, report, 'child-sitemap')
         if (result.ok) allLocs.push(...parseLocsFromXml(result.xml))
       }
@@ -595,97 +607,87 @@ const MAX_SITEMAP_DEPTH = 3
  *  single sitemap fetch, not the depth of nested sitemap indexes. */
 const MAX_SITEMAP_REDIRECTS = 3
 
+/**
+ * Every sitemap read in this file goes through safeFetchText() with these
+ * options. Timeout, DNS timeout and response size cap are left at the
+ * primitive's defaults — the crawler has no reason to want different ones, and
+ * restating them here would be a second place to keep in sync.
+ */
+const SITEMAP_FETCH_OPTIONS = { maxRedirects: MAX_SITEMAP_REDIRECTS } as const
+
 type SafeSitemapFetch =
   | { ok: true; xml: string }
   | { ok: false }
 
 /**
- * Fetch `url` expecting sitemap/robots XML, gated by the shared SSRF guard.
+ * Map an error thrown by safeFetchText() onto this file's existing
+ * DiscoveryIssue stage names.
  *
- * 🔴 SSRF review on PR #963: every <loc> in a sitemap is attacker-controlled
- *    — the site owner (or whoever compromised the site) writes the sitemap
+ * 🔴 The stages are a public contract: the canonical-inventory adapter and the
+ *    onIssue tests both key off them, so consuming a shared primitive must not
+ *    silently re-label a rejection. Anything the primitive does not classify
+ *    (network error, TLS error, timeout, oversized body, DNS failure) keeps the
+ *    caller's own "genuinely unreachable" stage, which is what those failures
+ *    were reported as before.
+ */
+function sitemapFailureStage(err: unknown, genericFailureStage: string): string {
+  if (err instanceof BlockedAddressError) return 'sitemap-blocked-host'
+  if (err instanceof DisallowedSchemeError) return 'sitemap-unsupported-scheme'
+  if (err instanceof TooManyRedirectsError) return 'sitemap-too-many-redirects'
+  if (err instanceof InvalidRedirectError) return 'sitemap-redirect-without-location'
+  if ((err as NodeJS.ErrnoException)?.code === 'ERR_INVALID_URL') return 'sitemap-invalid-url'
+  return genericFailureStage
+}
+
+/**
+ * Fetch `url` expecting sitemap XML, through the shared connection-bound
+ * SSRF-safe primitive (`src/lib/net/safe-fetch.ts`, PR #970 / issue #965).
+ *
+ * 🔴 SSRF review on PR #963: every <loc> in a sitemap is attacker-controlled —
+ *    the site owner (or whoever compromised the site) writes the sitemap
  *    content. Before this fix, fetchSitemapPageUrls() called fetch(url)
  *    directly with fetch's default automatic redirect-following, so a
  *    <loc>http://169.254.169.254/...</loc> or a public-looking <loc> that
  *    302-redirects to an internal address would be requested straight from
  *    Render's own network, with no check at all. Same-host filtering
- *    (dedupeAndFilter) only trims the *returned* URL list — it can't recall
- *    a request that already went out over the wire.
+ *    (dedupeAndFilter) only trims the *returned* URL list — it can't recall a
+ *    request that already went out over the wire.
  *
- *    Every hop here is validated before it's fetched: scheme must be
- *    http/https, and assertPublicHost() must confirm the host doesn't
- *    resolve to a private/loopback/link-local/CGNAT/cloud-metadata address.
- *    Redirects are followed manually (redirect: 'manual') specifically so
- *    each hop re-runs both checks — fetch's automatic redirect-follow would
- *    skip validation on every hop after the first. A rejection is always
- *    reported via `report()` and never thrown, so one poisoned <loc> in a
- *    sitemap index doesn't stop its legitimate siblings from being fetched.
+ *    This function deliberately owns **no** address, scheme, redirect, timeout
+ *    or size logic of its own. #963's first attempt did, and its handwritten
+ *    string-prefix IP rules had real bypasses (fea0::1, ::ffff:7f00:1) and a
+ *    DNS TOCTOU gap between validating and connecting. safeFetchText() resolves
+ *    every candidate address, fails closed if any is disallowed, and pins the
+ *    validated address to the socket, repeating the whole cycle per hop. All
+ *    this file does is translate a rejection into a DiscoveryIssue.
+ *
+ *    A rejection is always reported via `report()` and never thrown, so one
+ *    poisoned <loc> in a sitemap index doesn't stop its legitimate siblings
+ *    from being fetched.
  */
 async function fetchSitemapXmlSafely(
   startUrl: string,
   report: Report,
-  /** Stage name for "genuinely unreachable" failures (fetch threw / non-OK
-   *  response / DNS lookup failure) — the two call sites predate this SSRF
-   *  fix with their own distinct stage names ('sitemap-fetch' vs.
-   *  'child-sitemap'), which existing onIssue tests assert on; the new
-   *  SSRF-specific stages below are shared verbatim by both. */
+  /** Stage name for "genuinely unreachable" failures (network error / non-OK
+   *  response / DNS failure) — the two call sites predate this SSRF fix with
+   *  their own distinct stage names ('sitemap-fetch' vs. 'child-sitemap'),
+   *  which existing onIssue tests assert on; the SSRF-specific stages in
+   *  sitemapFailureStage() are shared verbatim by both. */
   genericFailureStage: string = 'sitemap-fetch',
 ): Promise<SafeSitemapFetch> {
-  let url = startUrl
-  for (let hop = 0; hop <= MAX_SITEMAP_REDIRECTS; hop++) {
-    let parsed: URL
-    try {
-      parsed = new URL(url)
-    } catch (err) {
-      report('sitemap-invalid-url', err, url)
-      return { ok: false }
-    }
-    if (!isFetchableScheme(parsed)) {
-      report('sitemap-unsupported-scheme', `blocked scheme: ${parsed.protocol}`, url)
-      return { ok: false }
-    }
-    try {
-      await assertPublicHost(parsed)
-    } catch (err) {
-      if (err instanceof BlockedAddressError) {
-        report('sitemap-blocked-host', err, url)
-      } else {
-        // DNS lookup failure — genuinely unreachable, not "blocked".
-        report(genericFailureStage, err, url)
-      }
-      return { ok: false }
-    }
-
-    let res: Response
-    try {
-      res = await fetch(url, { redirect: 'manual' })
-    } catch (err) {
-      report(genericFailureStage, err, url)
-      return { ok: false }
-    }
-
-    if (res.status >= 300 && res.status < 400) {
-      const location = res.headers.get('location')
-      if (!location) {
-        report('sitemap-redirect-without-location', `HTTP ${res.status}`, url)
-        return { ok: false }
-      }
-      try {
-        url = new URL(location, url).href
-      } catch (err) {
-        report('sitemap-invalid-url', err, location)
-        return { ok: false }
-      }
-      continue
-    }
+  try {
+    const res = await safeFetchText(startUrl, SITEMAP_FETCH_OPTIONS)
     if (!res.ok) {
-      report(genericFailureStage, `HTTP ${res.status}`, url)
+      report(genericFailureStage, `HTTP ${res.status}`, startUrl)
       return { ok: false }
     }
-    return { ok: true, xml: await res.text() }
+    return { ok: true, xml: res.text }
+  } catch (err) {
+    // `url` is the sitemap entry that failed, not the hop it failed on — the
+    // blocked hop is named in the error message (safeFetchText owns the loop).
+    report(sitemapFailureStage(err, genericFailureStage), err, startUrl)
+    return { ok: false }
   }
-  report('sitemap-too-many-redirects', `exceeded ${MAX_SITEMAP_REDIRECTS} redirects`, startUrl)
-  return { ok: false }
 }
 
 /**

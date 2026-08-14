@@ -27,6 +27,7 @@ export const CRAWLER_SPLIT_TEST_FILES = [
   'crawler-jina-fallback.test.ts',
   'crawler-crawling.test.ts',
   'crawler-ssrf-guard.test.ts',
+  'crawler-safe-fetch-wiring.test.ts',
 ] as const
 
 // This guard file's own name matches the crawler-*.test.ts glob below but is
