@@ -200,7 +200,7 @@ Roman 的 15 条同样是真角度：`Rangitoto 学区 hook` / `By negotiation` 
 
 - **Oztop 13 条 hook 的目标选对了。** 它是攒池实验（`OZ-THRU-S1-hooktest`，打法 `thruplay_pool_build`），要筛的是"哪个 hook 能最便宜地让人看完"，`THRUPLAY` 正是该用的目标，results=0 是设计如此。
 - **真正的缺陷在 ME 这一侧：这个实验该看的指标，我们一个都没入库。** `ad_daily_insights`（migration `20260721000001`）只有 `spend / impressions / reach / clicks / frequency / cpm / ctr / cpc / leads / messaging_conversations / results / cost_per_result` —— **没有完播次数、没有单次完播成本、没有 `video_p100`、也没有受众池增长**。于是花掉的 $432.50 在 ME 里唯一读得出的结论是「0 结果」，而那个数按仓库自己的规矩根本不该拿来判好坏。
-- 这件事**已经登记但没做**：ROADMAP `P21.K.8`（objective 感知 + 视频疲劳正向检测）就是补这批指标的那一条。
+- 这件事**已经登记但没做，而且是两条不是一条**：ROADMAP `P21.K.8`（objective 感知 + 视频完播指标）补的是"看完成本"那一半；"池子涨了多少人"那一半在 `P18.E.3`（池 size 快照 → `flywheel_metrics.ads.audience.*`，依赖 `P18.E.2`）。**两条都没做，所以 `play-vocabulary.ts:55-62` 定义的成效信号一个也读不出来。**
 - 另外钱确实高度集中：`OZ-S1-A-spill` 一条吃掉 $280.72 / $432.50（65%）—— 这一条与目标无关，是 13 个角度之间没跑成公平竞争。
 - **Roman 15 条 angle 总预算只有 $366**，平均每条 $24。最贵的一条 `Ad F · 中文 · Rangitoto 学区` $111.33 拿到 21 个对话（$5.30/对话），最便宜的几条只有 $2.54–$4.82、**展示数是个位数到两位数**。在这个量级上，多数臂根本没有可读的信号 —— 这一条靠数据本身就成立，不需要功效计算。
 
@@ -328,7 +328,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 | Broad / Advantage+ delivery | **DONE（人工，仅 CTS 已验证）/ CONFLICT（ME 代码）** | CTS 6 组零兴趣定向、73.6% 花费开着 Advantage+；但 `ad-publisher.ts:116` 写死关闭。Roman/Oztop（52.3% 花费）未验证 |
 | Performance ingestion | **DONE** | `ad_daily_insights` campaign 201 行 + ad 376 行，日 cron |
 | Creative-level attribution | **MISSING** | `ad_creative_links` 0 行 / `attr_creative_ref` 0 行。素材归因写入方已接线但从未触发；`ads.create_ad` 那条路径**根本不调它**（见 §3.7 注）|
-| Winning-angle detection | **PARTIAL** | 有 divergence 检测但拒绝下结论；winner 判定用的是自然互动分；**且视频/攒池类实验该看的指标（完播成本、池子增长）根本没入库**，那类角度测试在 ME 里天然判不了（ROADMAP `P21.K.8`） |
+| Winning-angle detection | **PARTIAL** | 有 divergence 检测但拒绝下结论；winner 判定用的是自然互动分；**且视频/攒池类实验该看的指标根本没入库** —— 完播成本在 `P21.K.8`、池子净增在 `P18.E.3`，**两条都未做**，那类角度测试在 ME 里天然判不了 |
 | Next-generation creative creation | **MISSING** | `variant_from_winner` 工单 0 条 |
 | Learning persistence | **MISSING** | `ad_creative_links.play/play_source/play_context` 三列已建但 0 行，且**两条建广告路径都没传 `play`**，跑起来也仍是 NULL；`PLAY_CATALOG.knownTraps` 是手写的，不是学来的 |
 
@@ -397,9 +397,16 @@ ad        status: 'ACTIVE'
   ⚠️ **而且这三样还不够**（Codex 复审第八轮 P1，核实成立）：`boost-post/route.ts` 的 `post_id` / `page_id` **直接取自请求体**，服务端只从 `clients` 表取 `meta_ad_account_id`，**从不校验这个帖子/主页是不是这个客户的**。放在混账户 `act_2775766642787274` 上（CTS 与 Oztop 同账户），一个有 CTS 权限的调用方**可以提交 Oztop 的帖子**，过完闸门就把别家的素材投进共享账户、烧到共享账户的钱上 —— 这正是 `docs/strategy/meta-flywheel-risk-and-sequencing.md` §2.4 狄仁杰记的 R5 写越权，那份文档已经要求写操作前加实体归属守卫。
 
   所以方案 (i) 的完整前置是**四样**：建 `PAUSED` · 地区取自客户 · 接闸门 · **`page/post → client` 归属校验**（或干脆先做账户拆分，那才是根治 —— 同一份文档 §2.1 子牙的结论就是"最省的根治不是写白名单代码，而是账户治理"）。
-- **(ii) 先做 ①b**：让安全的那条路径也能记账（要 migration，见下）。
+
+  ⚠️ **但即使这四样全补上，方案 (i) 也验不了闭环的下半截**（Codex 复审第十一轮 P1，核实成立）：那四样都不改 `objective`，`boostPagePost` 依然是 `REACH` —— 而本节上面第 3 点自己就写了，触达类目标的 `results` 恒为 0。**没有 lead，就没有 `contacts.attr_ad_id` → `attr_creative_ref` 那一跳可验。**
+
+  所以方案 (i) 的能力上限要说清楚：**它只能验证"上半截"（`adId → creative` 记账写没写对），验不了"下半截"（某个客户是被哪条创意带来的）**。要让 boost 路径也能验下半截，等于还得换成能产 lead 的目标 + 配套的创意契约（表单或落地页）—— 那基本就是把它重做成 `draft-and-gate` 了。
+
+- **(ii) 先做 ①b**：让安全的那条路径也能记账（要 migration，见下）。它天然带 `lead_form` 打法（`OUTCOME_LEADS` / `LEAD_GENERATION`），**是唯一能端到端验完整条链路的路径**。
 
 在 (i) 或 (ii) 落地之前，**①a 只是把 `play` 传上、等下次真有广告被建时能记上**，它本身不产生第一条记录。
+
+> 📌 **结论**：想省事先走 (i) 是可以的，但要接受它**只验一半**；**真正的首条端到端验证必须走 (ii)**。别把 (i) 跑通当成"闭环通了"—— 那正是本审计在批评的那种"各环节都正常，只有并排看才发现断了"。
 
 **①b — 需要 PM 拍板的一块（含 migration）**
 
@@ -493,7 +500,7 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 - **目标按实验目的选，不要一刀切**（Codex 复审第六轮 P1 更正 —— 上一版写死「必须跑 `LEAD_GENERATION` / `CONVERSATIONS`，不要再跑 THRUPLAY」，那会把合法的攒池实验废掉）：
   - 问题是「**哪个角度直接带来生意**」→ 用 `LEAD_GENERATION` / `CONVERSATIONS`；
   - 问题是「**哪个 hook 最便宜地让人看完 / 最快把池子做大**」→ `THRUPLAY` 就是对的目标，`results = 0` 是设计如此，不是失败（`play-vocabulary.ts:55-62`）。
-  - **前置**：选后者之前，先做 ROADMAP `P21.K.8` 把完播次数 / 单次完播成本 / 池子增长采进 `ad_daily_insights` —— 否则又是一次"跑对了目标、ME 读不出结论"（§3.5）。
+  - **前置（两条，不是一条）**：`P21.K.8` 补完播指标（看完成本）+ `P18.E.3` 补池 size 净增（池子增长）。少任何一条，攒池测试跑完仍读不出 `play-vocabulary.ts:55-62` 定义的成效（§3.5）。
 
 **不建议现在做的**：重构 winner 判定、建"意图 → 角度"模型、把 `ad-level-breakdown` 改成会宣布赢家。这三件事都要有真实的 creative 级数据才能设计，而那些数据要等 ①a / ①b 跑起来才有。
 
@@ -502,10 +509,15 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 0. **补读 Oztop + Roman 两个账户的 targeting** —— 必须在**有 `META_SYSTEM_USER_TOKEN` 的环境**里直调 Graph（本次审计环境没有该 token，MCP 那条路 Oztop 被 Meta 拒绝、Roman 的 `act_1018365291238494` 返回 `is_queryable: false`，都实测过，见附录 1）。活不大，但**它决定"投放侧已经做对了"这个判断能不能覆盖另外 52.3% 的花费** —— 现在这条结论的证据只覆盖 CTS 一家、47.7%；
 1. **①a** 传 `play` —— 小活，今天就能做，但它本身不产生第一条记录；
 2. **②** `ad-publisher.ts:116` 改 `advantage_audience: 1` —— 一行，现在改成本为 0；
-3. **在 ①(i) 修 boost 路径 与 ①(ii)/①b 让 draft 路径能记账 之间二选一** —— 这是「投出第一条 ME 自建广告」的真正前置。两个选项的设计与编码都自己拍板，选 (ii) 时只在最后对生产库 `apply_migration` 那一下停下来等 PM 一句 `go apply`；
-4. 前置落地后，**投第一条真广告**；
+3. **做 ①b（= 方案 (ii)，让 `draft-and-gate` 那条路径能记账）** —— 这是「投出第一条 ME 自建广告并验通完整链路」的真正前置。**不能用方案 (i) 顶替**：修好 boost 路径的四样问题也不改 `REACH`，`results` 恒为 0，验不了"某个客户是被哪条创意带来的"那半截（见 ① 的说明）。设计与编码自己拍板，只在最后对生产库 `apply_migration` 那一下停下来等 PM 一句 `go apply`；
+   *（若想更早拿到一点信号，可以顺手把方案 (i) 的四样也修了 —— 但要认清它只验上半截的记账，不算闭环。）*
+4. 前置落地后，**投第一条真广告（走 `lead_form`，不走 REACH boost）**；
 5. **③** 批量角度（半周到一周）。**前置：事实来源校验**（按 `sourceUrl` 抓页面核对，或只接受 ME 已核实数据源）—— 现在的 `assertFacts` 只查 URL 非空却盖"官网可溯"章，批量扩会按倍数放大这个洞（§4 第 6 条）。若还要跨语言合并，再加"表单身份下沉 + 表单混语言闸门"；
-6. 若要做**攒池型**角度测试（视频 hook 筛选），先落 ROADMAP **`P21.K.8`**（完播次数 / 单次完播成本 / 池子增长入 `ad_daily_insights`）—— 否则又一次"跑对了目标、ME 读不出结论"（§3.5）。
+6. 若要做**攒池型**角度测试（视频 hook 筛选），前置是**两条已登记的 ROADMAP 项，不是一条**（第十一轮更正 —— 上一版把池子增长错记进 `P21.K.8`，实际它不在那条里）：
+   - **`P21.K.8`** —— `objective` 列 + 视频完播指标（ThruPlay 完播成本 / CPM / `video_p100`）+ 按 objective 切换判定。**这条只解决"哪个 hook 让人看完最便宜"。**
+   - **`P18.E.3`** —— 池 size 快照 → `flywheel_metrics` 的 `ads.audience.*`，台账画**净增 = 新进 − 到期掉出**（受众是衰减存量）。**"哪个 hook 最快把池子做大"要靠这条**，它依赖 `P18.E.2`。
+
+   只做 `P21.K.8` 就去跑攒池测试，仍然答不出 `play-vocabulary.ts:55-62` 写的那半个成效信号（"池子涨了多少人"）—— 又是一次"跑对了目标、ME 读不出结论"（§3.5）。
 
 > ⚠️ 这一节被更正了三轮（每轮都是 Codex 抓到、逐行核对后成立）。三次错误有同一个形状：**看见"表已经建好 / 函数已经存在"就推断"接上就能用"，而没有核对它到底怎么被调用、怎么花钱、字段是哪一级的**。这正是本审计在 §5 批评系统的那件事，作者本人连犯三次 —— 记在这里，因为下一个照这份文档动手的人最可能踩的就是同一个坑。
 
@@ -531,8 +543,12 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 
   更麻烦的是：**今天两条路各缺一半，没有一条能马上用。**
 
-  - 一条路（给已发出的帖子投流）**记得住**是哪条片子，但它建出来的广告**立刻就开始花钱、没有人点头那一关，而且投放地区写死了澳洲+新西兰** —— 拿它投 CTS 会把新西兰客户的广告投到澳洲去。这条路要先修。
-  - 另一条路（ME 从素材直接起草一条新广告）**该有的把关都有**（先建成暂停、回读一遍、你点头才开），但它**记不下来**是哪条片子 —— 要记得下来得改一次数据库结构。**这个不用等你**：写代码、写改动方案、找人复审都由我们自己推进，**只有最后真正动生产数据库那一下需要你回一句「go apply」**。
+  - 一条路（给已发出的帖子投流）**记得住**是哪条片子，但毛病不少：广告**建出来立刻就开始花钱、没有你点头那一关**，投放地区**写死了澳洲+新西兰**（拿它投 CTS 会把新西兰客户的广告投到澳洲），而且它是"**只求多少人看见**"的广告，**根本不会产生询盘** —— 所以就算修好前面那些，它也回答不了"这个客户是被哪条片子带来的"。修它只能验证半截。
+  - 另一条路（ME 从素材直接起草一条新广告）**该有的把关都有**（先建成暂停、回读一遍、你点头才开），而且它是**收联系方式**的广告，能真的产生询盘 —— **只有这条路能把"哪条片子带来哪个客户"整条验通**。它现在的问题只有一个：**记不下来**是哪条片子，要记得下来得改一次数据库结构。
+
+    **这个不用等你**：写代码、写改动方案、找人复审都由我们自己推进，**只有最后真正动生产数据库那一下需要你回一句「go apply」**。
+
+  **所以第一条广告应该走第二条路。** 第一条路可以顺手修，但别把它跑通当成"通了"。
 
   所以「让 ME 投出第一条广告」不是今天就能做的事，得先在这两条路里挑一条补齐。（为什么非要在建广告那一刻记：只有那一刻知道对应关系，事后问 Facebook 是问不出来的。）
 
