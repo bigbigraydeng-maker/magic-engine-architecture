@@ -141,7 +141,7 @@
   - 🔴 **另一半：批准/否决必须原子认领，否则"显示已否决、广告在花钱"**（第三十六轮补入，**升级为首投前置**）：`approveDraft`（`:179-209`）和 `rejectDraft`（`:213-235`）都是**先读状态、再无条件写状态**，中间没有条件更新。两人同时点 → 批准那边已激活 Meta 实体、否决那边最后落账 → **账本和页面写着 `rejected`，广告继续花钱，没有任何地方会喊**。⚠️ 而且 `rejectDraft` 更松：它**连状态都不查**（`:225-227` 只判 `payload` 存在），否决一条已经 `active` 的草案会直接把账本改成 `rejected` 而广告照跑 —— 这条不用并发也能触发。
     修：用条件更新或 RPC **从 `awaiting_approval` 原子认领唯一决策**（写入时带 `payload->>status = 'awaiting_approval'` 的前置条件，认领失败就不执行动作），并为"Meta 已激活但落账冲突"留一条**停投 + 对账**路径。**不需 migration**（条件更新即可；要做 RPC 才需要，届时待 PM `go apply`）
   - ⚠️ **光"重跑一次"不够，会漏掉最要命的那条检查**：`expectedGeo` 只存在于 `CreateDraftDeps`（`draft-and-gate.ts:62`，创建时用一次），**没有落进 `DraftRecord`**；而 `approveDraft(actionId, supabase, accessToken)` 手上根本没有它。缺了它 `adaptMetaAdSet` 会传 `null`，`launch-readback.ts:281` 的 `if (input.expectedGeo && ...)` 直接跳过 **`geo_mismatch`** —— 也就是"等待期间被改到别的国家"这个核心场景照样放行。**修的时候必须同时**：创建时把可信地区持久化进 `DraftRecord`（⚠️ **不能只重载 `clients.country`**，见 `AD-GEO-1`）
-- [ ] 🔴 **AD-ISO-1 生产同步把整账户数据写成单个客户的 —— 混账户下正在污染健康诊断/月报/Goal 指标【已上线在跑】**（第二十八轮发现）：
+- [ ] 🟠 **AD-ISO-1 生产同步把整账户数据写成单个客户的 —— 同步路径允许跨客户污染，隐患已上线在跑，损害尚未证实【已上线在跑】**（第二十八轮发现；标题第五十轮更正 —— 原写"正在污染"，与本条自己第 31 轮的实测结论自相矛盾）：
   - `ads-strategy/daily-insights.ts:209+` 的 `syncCampaignDailyInsights(clientId, adAccountId, …)` 拉的是 **`getCampaignDailyInsights(adAccountId, …)`（整账户）**，然后 `rows.map(r => toInsightRow({ clientId, … }))` —— **把每一行都写成该 client，零 campaign 归属过滤**；ad 级同理；
   - `google-data-pullback-daily/route.ts:595+`（**定时**）：把 `getAdAccountInsights` 的**账户级聚合**整个 `insert` 进该 client 的 `meta_ads_snapshots`,而那张表正是 `MetaAdsAdapter`(Goal 指标)、月报、production package 读的;
   - `clients/[id]/meta-ads/sync/route.ts:82-111`(**手动**,第三十轮补入):同样 `getAdAccountInsights(adAccountId, …)` 整账户 → `insert({ client_id: clientId, … })`;
@@ -221,7 +221,10 @@
   正确修法两条一起：
   1. **信任根是客户配置的域名，不是请求体** —— `sourceUrl` 的 host 必须落在该客户已登记的官网/房源系统域名内（`master_briefs.source_website_urls` / `website` 这类已有字段），否则直接拒绝出稿；或干脆**只接受来自 ME 已核实数据记录的事实**（首条广告用这条最省）；
   2. **抓取必须走 `src/lib/net/safe-fetch.ts` 的 `safeFetchText`**（#965 刚落的 GET-only、连接绑定、带重定向与内网地址防护的原语），**不要自己 `fetch`**
-  3. 🔴 **事实必须和"哪套房"绑定 —— 光有域名白名单还是能张冠李戴**（第四十六轮 Codex P1，已核实）：`draft-listing/route.ts` **从头到尾没查过 `listings` 表**。`listingId`（`:191-229`）只被拿去做**素材归属闸**（`pickUsableForListing(found, body.listingId, clientId)`），而 `body.listing`（`ListingFacts`：价格、地址、战绩）和 `sourceUrl` **全部来自请求体，从不与那套房的记录核对**。
+  3. 🔴 **逐句来源必须持久化并显示在审批页 —— 现在它在创建请求结束时就没了**（第五十轮 Codex P1，已核实）：`draft-listing/route.ts:306-312` 的 `traceClaims(...)` **只写进 HTTP 响应**，代码注释自己写着「逐句可溯来源随交付一起给出 —— **红线要求，不是调试信息**」；但 `DraftRecord`（`draft-and-gate.ts:40-55`）**没有 `claims` 这个字段**，唯一的审批页（`ad-approval/page.tsx`）也只展示 `buyerWillSee`。全仓没有第二个调用方接住那份响应。
+     → 于是「批准人逐句核对来源再点头」这件事**根本没法做** —— 到他面前时，那份逐字段来源已经不存在了，他只能看着文案批一条真金白银的广告。**校验做得再对，结论没传到决策点，等于没做。**
+     修：`claims` 落进 `DraftRecord` 一起存，审批页在「开始投放」按钮前把每一句的来源标注（官网可溯 / brief 可溯 / 未证实）显示出来
+  4. 🔴 **事实必须和"哪套房"绑定 —— 光有域名白名单还是能张冠李戴**（第四十六轮 Codex P1，已核实）：`draft-listing/route.ts` **从头到尾没查过 `listings` 表**。`listingId`（`:191-229`）只被拿去做**素材归属闸**（`pickUsableForListing(found, body.listingId, clientId)`），而 `body.listing`（`ListingFacts`：价格、地址、战绩）和 `sourceUrl` **全部来自请求体，从不与那套房的记录核对**。
      → 于是「**A 房的价格地址 + B 房的真实照片**」这种组合，域名白名单和素材闸**两道都过** —— 素材确实属于 B 房、URL 确实在客户域名下，但广告在拿 B 房的照片宣传 A 房的价格。这直接踩 CLAUDE.md §8「绝不凭空注入客户业务数据」那条红线，而且比编造更难发现（每一项单看都是真的）。
      修：**按 `id + client_id` 把那套房从 `listings` 读出来**当身份锚点；退一步至少要校验 `sourceUrl`、`ListingFacts` 与 `listingId` 三者指向同一套房，对不上就拒绝出稿
      ⚠️ **但"事实由 `listings` 这条记录派生"做不到，别照着施工**（第四十七轮 Codex P1，已核实 —— 上一版就是这么写的，错了）：`20260730145332_listings.sql:38-82` 里**没有 `sourceUrl`，也没有精确价格**。它有的是 `address_line` / `suburb` / `property_type` / `bedrooms`，价格只有 **`price_band` 档位**（`under_1m` / `1m_1_5m` / …），而且那个档位是**刻意**这么设计的 —— 迁移注释写明「NZ 很多房子 price by negotiation，真实要价到成交都不公开，**存一个编出来的数字比存档位更糟**」。另有 `status` / `vendor_notes` 是**内部**字段（`prospect` / `withdrawn` / 卖家备注）。
