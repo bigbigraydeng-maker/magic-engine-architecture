@@ -11,7 +11,7 @@
 
 四句话：
 
-1. **投放侧（delivery）实际上已经在 Andromeda 打法上**：CTS 账户 26 个 ad set 里 23 个开着 `advantage_audience: 1`，兴趣定向只占 12.5% 的花费，最大那条 $2,251 的 campaign 是纯 broad + Advantage+ 受众。
+1. **投放侧（delivery）实际上已经在 Andromeda 打法上** —— 但这个结论**只覆盖已回读的账户**（CTS + Roman，$5,066）：26 个 ad set 里 23 个开着 `advantage_audience: 1`，兴趣定向只占**该账户花费的** 12.5%，最大那条 $2,251 的 campaign 是纯 broad + Advantage+ 受众。**Oztop 占总花费 46%，targeting 这次一眼没看到**（见 §3.1 与附录），所以这条不能外推成"全部广告费"。
 2. **但那不是 ME 做的** —— 是人在 Ads Manager 里点出来的。ME 自己唯一的建广告代码 `ad-publisher.ts:116` 写死 `targeting_automation: { advantage_audience: 0 }`，即**主动关掉** Advantage+ 受众。这条代码路径至今建过 0 条广告，所以冲突还是潜在的，不是已发生的。
 3. **创意侧是真正传统的那一半**：钱最多的三条 campaign（$5,300，占总花费 67.8%）总共只有 **4 条创意**；而做了真多角度测试的两次（Oztop 13 条 hook、Roman 15 条 angle）加起来只花了 $799，占 10.2%。**创意多样性只发生在没钱的地方。**
 4. **闭环没有通电**：`ad_creative_links` 0 行、`contacts.attr_creative_ref` 0 行（39 条已归因 lead 无一条能说清是哪条素材）、`winner_structures` 0 行、`variant_from_winner` 工单 0 条、`flywheel_actions` 里 `ads.create_ad` 0 条。**数据结构全都建好了，一个都没被写过。**
@@ -190,7 +190,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 
 ## 4. What We Are Doing Right
 
-1. **实际投放已经是 broad + Advantage+**（23/26 ad set），兴趣定向只剩 12.5% 的花费。这一条最重要，也最容易被自己低估。
+1. **实际投放已经是 broad + Advantage+**（已回读账户 23/26 ad set），兴趣定向只剩**该账户花费的** 12.5%。这一条最重要，也最容易被自己低估 —— 但只对 CTS/Roman 成立，Oztop（总花费 46%）未回读。
 2. **ad 级日度数据脊柱是真的**（376 行，每天在写，带 `parent_id`）。绝大多数同类系统只有 campaign 级 —— 没有 ad 级就永远做不了 creative-level 学习。这块地基已经打好了。
 3. **不拿汇总骗自己**：`ad-level-breakdown.ts` 会在子项差异 ≥1.5 倍时明说"这个汇总在掩盖差异"，还会拦住"表单留资 + 私信对话被加在同一列"的不可比比较。这是很多投放团队都没有的纪律。
 4. **建完必回读**：`launch-readback.ts` 承认"创建接口的回显不含 Meta 自己补上的东西"，强制建成暂停 → 回读 → 人点头。这在 Advantage+ 时代**更重要**，因为平台会自动加的东西只会越来越多。
@@ -308,7 +308,16 @@ ad        status: 'ACTIVE'
 3. `ad_creative_links` 需要 **migration**：`post_id` 放开 NOT NULL，`creative_source` 加 `'client_asset'`，并给 `linkAdToCreative` 加一个不依赖 `postId` 的直接持久化入口（`adId → creativeRef`）;
 4. 然后才轮到 `AdCreationPath` 加 `'me_ad_launch'`。
 
-按 CLAUDE.md，migration 属于**不可逆操作，必须 PM 显式 `go apply`**，所以 ①b 不能自己拍板开工。
+⚠️ **授权边界更正**（Codex 复审第四轮 P2，核实成立）：上一版写成"migration 要 PM 拍板，所以 ①b 不能自己拍板开工"，**把两件事混在一起了**。
+
+CLAUDE.md 铁律 2 的原文是：技术决策自己拍 + 召 agent 复审，**不上抛 PM**；「把技术选择题塞回 PM = 失职」。唯一例外是**不可逆操作**必须 PM 显式 `go` —— 列举的是 `gh pr merge` / `apply_migration` / `git push --force` / 删客户数据。
+
+所以准确的边界是：
+
+- **设计、写 migration 文件、改代码、走 2 审 —— 全部自己拍，不问 PM。** 按上一版那句话执行，等于在设计阶段就把技术选择题上抛，正是铁律 2 说的失职。
+- **只有对生产库执行 `apply_migration` 那一下需要 PM 显式 `go apply`。**
+
+①b 因此**现在就可以开工**，只是最后一步落库前停下来等一句话。
 
 > 这一步（至少 ①a）没做之前，后面所有"学习"都是在空表上做设计。
 
@@ -367,9 +376,10 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 
 **建议的执行顺序**（经三轮更正后的版本）：
 
+0. **补读 Oztop 账户的 targeting** —— 用 Render 上的 `META_SYSTEM_USER_TOKEN` 直调 Graph（见附录 1）。半小时的活，但**它决定 §1 那条 GREEN 的判断能不能覆盖总花费的 46%** —— 现在的 YELLOW 是在只看了一半钱的情况下下的；
 1. **①a** 传 `play` —— 小活，今天就能做，但它本身不产生第一条记录；
 2. **②** `ad-publisher.ts:116` 改 `advantage_audience: 1` —— 一行，现在改成本为 0；
-3. **在 ①(i) 修 boost 路径 与 ①(ii)/①b 让 draft 路径能记账 之间二选一** —— 这是「投出第一条 ME 自建广告」的真正前置。选 (ii) 要 PM 显式 `go apply` 一次 migration；
+3. **在 ①(i) 修 boost 路径 与 ①(ii)/①b 让 draft 路径能记账 之间二选一** —— 这是「投出第一条 ME 自建广告」的真正前置。两个选项的设计与编码都自己拍板，选 (ii) 时只在最后对生产库 `apply_migration` 那一下停下来等 PM 一句 `go apply`；
 4. 前置落地后，**投第一条真广告**；
 5. **③** 批量角度（半周到一周），外加"表单身份下沉 + 表单混语言闸门"若要跨语言合并。
 
@@ -383,7 +393,9 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 
 三件事说清楚：
 
-1. **广告投给谁这件事，我们已经做对了。** 花掉的钱里有接近九成没有做"人群精挑细选"，而是把范围放宽、让平台自己去找人 —— 这正是现在 Facebook 后台最吃香的做法。这一点不用改。
+1. **广告投给谁这件事，在我们看得到的那部分账户里，已经做对了。** CTS 和 Roman 这两个账户的花费里，接近九成没有做"人群精挑细选"，而是把范围放宽、让平台自己去找人 —— 这正是现在 Facebook 后台最吃香的做法。这部分不用改。
+
+  ⚠️ 但**这句话不能套到全部广告费上**：Oztop 占了总花费的 46%，而它的账户 Facebook 那边还没对我们开放读取，**这次一眼都没看到**。所以准确说法是「已经查过的那部分做对了」，不是「我们做对了」。想把这句话说全，得先补读 Oztop 的账户设置 —— 那是个小活，但没做之前别把结论扩大。
 
 2. **广告"说什么"这件事，我们还在用老办法。** 钱最多的三条广告，加起来只有 4 条不同的片子；而我们真正试过十几个不同说法的那两次，一次花了 $432、一次花了 $366 —— 钱太少，试完也分不出胜负。**说白了：我们把所有钱押在少数几条片子上，同时用零花钱去做真正该做的测试。这个次序反了。**
 
