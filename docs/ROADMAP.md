@@ -149,7 +149,9 @@
     | `competitor_snapshots` | ✅ 有 | 走的是 `p13e_pre_competitor_snapshots` → **竞品维度是好的** |
     | `meta_ads_snapshots` | ❌ **没有** | 仓库文件里的那半边**从没跑过** → 只有广告维度是断的 |
     **所以不要新写一个只补 `meta_ads_snapshots` 的 migration** —— 那会在仓库里留下两份意图重复的迁移，把真正的问题（仓库有、生产没有）盖过去。正确做法：先核对 `20260522000001` 这份文件与生产账本的差异，再决定重放它（文件本身是 `ADD COLUMN IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`，重放安全）还是写一份显式覆盖两侧的修复迁移。⚠️ 顺带查一遍**还有没有别的仓库迁移没落库** —— 账本里已经有一条 `backfill_drifted_schema`，说明这类漂移不是第一次。
-  修：先定这条链路还要不要（P13.D 的原意是把当期广告数据钉进交付物）。要 → **按上面的口径处理漂移、把列补上**（**migration 待 PM `go apply`**）+ **写前按 `id + client_id` 校验包归属、读侧 snapshot 查询同时按 `client_id` 限定**，并把两侧的静默兜底改成显式报错；不要 → 把写侧和读侧一起删掉，**并把仓库里那份没落库的 migration 一并清理**，别留一段永远返回空的代码配一份永远不跑的迁移。**顺带把 `AD-CUR-1` 里"production package 会永久关联某一条旧 snapshot"那句一并订正**（关联从来没成立过）
+  修：先定这条链路还要不要（P13.D 的原意是把当期广告数据钉进交付物）。要 → **按上面的口径处理漂移、把列补上**（**migration 待 PM `go apply`**）+ **写前按 `id + client_id` 校验包归属、读侧 snapshot 查询同时按 `client_id` 限定**，并把两侧的静默兜底改成显式报错；不要 → 把写侧和读侧一起删掉，别留一段永远返回空的代码。
+  🔴 **但绝对不能顺手删掉 `20260522000001` 这个文件**（第四十一轮 Codex 指出，已核实 —— 上一版这里写的"把那份没落库的 migration 一并清理"**是危险建议，已撤回**）：它是**仓库里唯一**给 `project_reviews` 加 `production_package_id` + 索引的迁移（`grep` 全 `supabase/migrations/`，只此一份），而口碑链路（`review/route.ts`、`review/agent.ts`、交付包读侧）**正在用这一列**。生产之所以有这列，靠的是账本里那条单独的 `p13d_project_reviews_pkg_link` —— **那条在仓库里没有对应文件**。删了文件，生产照跑，但**任何新建/重建的数据库都会缺这一列**，口碑写入和交付包读取当场报错。真要清理，只能删该文件里 `meta_ads_snapshots` 那一段，**`project_reviews` 那一段必须留着**（或先补一份等价迁移）。
+  ⚠️ 这本身就是 `AD-PKG-1` 那个漂移的第二个面：**生产账本和仓库文件对不上，两个方向都对不上** —— 仓库有生产没跑的（`meta_ads_snapshots` 半边），生产跑了仓库没有的（`p13d_project_reviews_pkg_link`）。修漂移时两边都要对，别只对一个方向。**顺带把 `AD-CUR-1` 里"production package 会永久关联某一条旧 snapshot"那句一并订正**（关联从来没成立过）
 - [ ] 🔴 **AD-SPEC-1 房源广告没声明「住房」特殊类别 —— 建的时候不声明、回读也不查【投第一条真广告前必修，须与 `AD-GEO-0` 一起定】**（第三十八轮发现）：
   - `ad-publisher.ts:176` 写死 `special_ad_categories: JSON.stringify([])`，**不看客户业务类型**；
   - 而首投要走的 `draft-listing` 恰恰是**房源**（Roman / 30 Kiteroa 是住宅），客户服务协议 `docs/clients/30-kiteroa-rothesay-bay/service-agreement/2026-07-13-30-kiteroa-lead-gen-test-v1.html:380-383` 明确要求遵守住房广告与反歧视政策；
