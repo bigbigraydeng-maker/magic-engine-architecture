@@ -324,15 +324,28 @@ describe('discoverSitemapUrls', () => {
     })
 
     it('bounds a self-referencing sitemap index at MAX_SITEMAP_DEPTH instead of looping forever', async () => {
-      const selfIndexXml =
-        '<sitemapindex><sitemap><loc>https://example.com/sitemap.xml</loc></sitemap></sitemapindex>'
+      // 🔴 The chain uses DISTINCT URLs on purpose (Codex review on PR #963).
+      //    The run-wide de-duplication added alongside the fetch budget would
+      //    stop a literally self-referencing chain after one request, which
+      //    would make this test pass with the depth limit deleted. Distinct
+      //    URLs isolate the depth limit as the only thing that can terminate
+      //    the recursion — see crawler-sitemap-budget.test.ts for the cycle /
+      //    de-duplication behaviour, which is a separate bound.
+      const indexPointingAt = (loc: string) =>
+        `<sitemapindex><sitemap><loc>${loc}</loc></sitemap></sitemapindex>`
+      const chain = [
+        'https://example.com/sitemap.xml',
+        'https://example.com/sitemap-a.xml',
+        'https://example.com/sitemap-b.xml',
+        'https://example.com/sitemap-c.xml',
+      ]
 
       const fetchMock = vi.fn()
-        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))     // robots.txt
-        .mockResolvedValueOnce(mockResponse(selfIndexXml))         // sitemap.xml — depth 0 (Level 1's own fetch)
-        .mockResolvedValueOnce(mockResponse(selfIndexXml))         // recursion depth 1
-        .mockResolvedValueOnce(mockResponse(selfIndexXml))         // recursion depth 2
-        .mockImplementation(async () => mockNotFound())                         // depth-limit stops before a 4th fetch; remaining levels 404
+        .mockResolvedValueOnce(mockResponse(ROBOTS_TXT_EMPTY))          // robots.txt
+        .mockResolvedValueOnce(mockResponse(indexPointingAt(chain[1]))) // sitemap.xml — Level 1's own fetch
+        .mockResolvedValueOnce(mockResponse(indexPointingAt(chain[2]))) // recursion depth 1
+        .mockResolvedValueOnce(mockResponse(indexPointingAt(chain[3]))) // recursion depth 2
+        .mockImplementation(async () => mockNotFound())                 // depth-limit stops before a 4th sitemap fetch
       vi.stubGlobal('fetch', fetchMock)
 
       const issues: DiscoveryIssue[] = []
@@ -340,13 +353,14 @@ describe('discoverSitemapUrls', () => {
 
       expect(urls).toEqual([])
       expect(issues).toContainEqual(
-        expect.objectContaining({ stage: 'sitemap-depth-limit', url: 'https://example.com/sitemap.xml' })
+        expect.objectContaining({ stage: 'sitemap-depth-limit', url: chain[3] })
       )
-      // Exactly 3 fetches of the self-referencing URL (depth 0, 1, 2) — the 4th
-      // (depth 3) is refused before ever calling fetch, proving termination.
+      // Exactly 3 sitemap fetches (depth 0, 1, 2) — the 4th (depth 3) is refused
+      // before ever calling fetch, proving termination.
       // String(): safeFetchText hands undici a URL object, not the raw string.
-      const selfFetches = fetchMock.mock.calls.filter(([u]) => String(u) === 'https://example.com/sitemap.xml').length
-      expect(selfFetches).toBe(3)
+      const requested = fetchMock.mock.calls.map(([u]) => String(u))
+      expect(chain.slice(0, 3).every((u) => requested.includes(u))).toBe(true)
+      expect(requested).not.toContain(chain[3])
     })
 
     it('stays silent when a sitemap index resolves cleanly (no swallowed failures)', async () => {

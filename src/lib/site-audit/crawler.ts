@@ -8,13 +8,9 @@
  * Reference: ROADMAP.md P8.0.2 DNZ collection infrastructure
  */
 
-import {
-  safeFetchText,
-  BlockedAddressError,
-  DisallowedSchemeError,
-  InvalidRedirectError,
-  TooManyRedirectsError,
-} from '@/lib/net/safe-fetch'
+import { isSitemapIndexDocument } from './sitemap-root'
+import { createSitemapFetchBudget, type SitemapFetchBudget } from './sitemap-budget'
+import { fetchSitemapXmlSafely, type Report } from './sitemap-fetch'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -86,6 +82,16 @@ export const MAX_BFS_LINKS = 50
 export const MIN_DISCOVERED_URLS = 2
 /** Spacing between Jina child-sitemap fetches (anonymous tier ≈ 20 RPM). */
 export const JINA_SITEMAP_DELAY_MS = 3_500
+
+/**
+ * Levels 1 and 2 probe well-known paths, so a 404 is the ordinary "try the next
+ * level" signal and stays silent — the behaviour every onIssue test asserts. A
+ * child named inside an index is the opposite: the document promised it exists,
+ * so its 404 is a missing subtree and is reported.
+ */
+const LEVEL_1_PROBE = { failureStage: 'sitemap.xml', silentOnHttpError: true } as const
+const LEVEL_2_PROBE = { failureStage: 'sitemap_index.xml', silentOnHttpError: true } as const
+const CHILD_SITEMAP_READ = { failureStage: 'child-sitemap' } as const
 
 // ---------------------------------------------------------------------------
 // Internal helpers (exported for unit testing)
@@ -338,6 +344,10 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
   //    not a URL some fetched document handed us. Migrating them is a separate,
   //    separately-verified change — do not "fix" one of them in isolation.
 
+  // One allowance for the whole run, shared by Level 1, the robots.txt
+  // directives, Level 2 and every recursion level (Codex review on PR #963).
+  const budget = createSitemapFetchBudget()
+
   // Check robots.txt first for crawl permission
   try {
     const robotsRes = await fetch(`${origin}/robots.txt`)
@@ -350,7 +360,8 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
       // Try sitemap directives from robots.txt
       const directives = parseSitemapDirectives(robotsTxt)
       if (directives.length > 0) {
-        const urls = keepOrEscalate(dedupeAndFilter(await resolveSitemapUrls(directives, origin, report), origin))
+        const directiveLocs = await resolveSitemapUrls(directives, origin, report, budget)
+        const urls = keepOrEscalate(dedupeAndFilter(directiveLocs, origin))
         if (urls) return urls
       }
     }
@@ -366,13 +377,14 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
   //    sitemap 常见写法里就有 /sitemap/posts（无扩展名）、/sitemap.php?type=post（带 query）。
   //    命中 index 就复用 fetchSitemapPageUrls() 的递归展开，跟其它入口（robots.txt
   //    directive、/sitemap_index.xml）共用同一套深度限制和失败上报。
+  //    「是不是 index」由 isSitemapIndexDocument() 按 XML 根元素判定 —— Level 1 和
+  //    递归路径共用同一个判据，不能两处分叉。
   try {
-    const res = await safeFetchText(`${origin}/sitemap.xml`, SITEMAP_FETCH_OPTIONS)
-    if (res.ok) {
-      const xml = res.text
-      const locs = /<sitemapindex/i.test(xml)
-        ? await expandSitemapIndexChildren(parseLocsFromXml(xml), 1, report)
-        : parseLocsFromXml(xml)
+    const level1 = await fetchSitemapXmlSafely(`${origin}/sitemap.xml`, report, budget, LEVEL_1_PROBE)
+    if (level1.ok) {
+      const locs = isSitemapIndexDocument(level1.xml)
+        ? await expandSitemapIndexChildren(parseLocsFromXml(level1.xml), 1, report, budget)
+        : parseLocsFromXml(level1.xml)
       const urls = keepOrEscalate(dedupeAndFilter(locs, origin))
       if (urls) return urls
     }
@@ -382,17 +394,15 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
 
   // Level 2: /sitemap_index.xml
   try {
-    const res = await safeFetchText(`${origin}/sitemap_index.xml`, SITEMAP_FETCH_OPTIONS)
-    if (res.ok) {
-      const xml = res.text
+    const level2 = await fetchSitemapXmlSafely(`${origin}/sitemap_index.xml`, report, budget, LEVEL_2_PROBE)
+    if (level2.ok) {
       // sitemap_index contains <loc> entries pointing to child sitemaps
-      const childSitemapUrls = parseLocsFromXml(xml)
       const allLocs: string[] = []
-      for (const childUrl of childSitemapUrls) {
+      for (const childUrl of parseLocsFromXml(level2.xml)) {
         // Same SSRF guard as fetchSitemapPageUrls() (Codex review on PR #963):
         // childUrl comes straight out of /sitemap_index.xml's <loc> entries,
         // which the audited site controls — it must never reach a raw fetch().
-        const result = await fetchSitemapXmlSafely(childUrl, report, 'child-sitemap')
+        const result = await fetchSitemapXmlSafely(childUrl, report, budget, CHILD_SITEMAP_READ)
         if (result.ok) allLocs.push(...parseLocsFromXml(result.xml))
       }
       const urls = keepOrEscalate(dedupeAndFilter(allLocs, origin))
@@ -605,110 +615,16 @@ async function resolveSitemapUrls(
   sitemapUrls: string[],
   origin: string,
   report: Report = () => {},
+  budget: SitemapFetchBudget = createSitemapFetchBudget(),
 ): Promise<string[]> {
   const all: string[] = []
   for (const url of sitemapUrls) {
-    all.push(...(await fetchSitemapPageUrls(url, 0, report)))
+    all.push(...(await fetchSitemapPageUrls(url, 0, report, budget)))
   }
   return all
 }
 
-/** 失败上报口。默认空实现 = 既有行为。 */
-type Report = (stage: string, error: unknown, url?: string) => void
-
 const MAX_SITEMAP_DEPTH = 3
-/** Separate cap from MAX_SITEMAP_DEPTH — this bounds redirect hops for a
- *  single sitemap fetch, not the depth of nested sitemap indexes. */
-const MAX_SITEMAP_REDIRECTS = 3
-
-/**
- * 🔴 Codex review on PR #963 (P2): safeFetchText's 10 MiB default sits *below*
- * the 50 MB one uncompressed sitemap may be, so a large but perfectly legal
- * sitemap would fail with ResponseTooLargeError where the previous unbounded
- * fetch() succeeded — and the Jina fallback truncates at 1,000,000 chars, so it
- * cannot recover those pages either. The read stays bounded; the bound is just
- * the protocol's own limit instead of the primitive's generic default.
- */
-const MAX_SITEMAP_RESPONSE_BYTES = 52_428_800 // 50 MB, sitemaps.org
-
-/**
- * Every sitemap read in this file goes through safeFetchText() with these
- * options. Timeout and DNS timeout stay at the primitive's defaults — restating
- * them here would just be a second place to keep in sync.
- */
-const SITEMAP_FETCH_OPTIONS = {
-  maxRedirects: MAX_SITEMAP_REDIRECTS,
-  maxResponseBytes: MAX_SITEMAP_RESPONSE_BYTES,
-} as const
-
-type SafeSitemapFetch =
-  | { ok: true; xml: string }
-  | { ok: false }
-
-/**
- * Map an error thrown by safeFetchText() onto this file's existing
- * DiscoveryIssue stage names. 🔴 The stages are a public contract: the
- * canonical-inventory adapter and the onIssue tests both key off them, so
- * consuming a shared primitive must not silently re-label a rejection. Anything
- * the primitive does not classify (network/TLS error, timeout, oversized body,
- * DNS failure) keeps the caller's own "genuinely unreachable" stage — which is
- * what those failures were reported as before.
- */
-function sitemapFailureStage(err: unknown, genericFailureStage: string): string {
-  if (err instanceof BlockedAddressError) return 'sitemap-blocked-host'
-  if (err instanceof DisallowedSchemeError) return 'sitemap-unsupported-scheme'
-  if (err instanceof TooManyRedirectsError) return 'sitemap-too-many-redirects'
-  if (err instanceof InvalidRedirectError) return 'sitemap-redirect-without-location'
-  if ((err as NodeJS.ErrnoException)?.code === 'ERR_INVALID_URL') return 'sitemap-invalid-url'
-  return genericFailureStage
-}
-
-/**
- * Fetch `url` expecting sitemap XML, through the shared connection-bound
- * SSRF-safe primitive (`src/lib/net/safe-fetch.ts`, PR #970 / issue #965).
- *
- * 🔴 SSRF review on PR #963: every <loc> in a sitemap is attacker-controlled —
- *    the site owner (or whoever compromised it) writes the sitemap content.
- *    Before this fix, fetchSitemapPageUrls() called fetch(url) directly with
- *    automatic redirect-following, so a <loc>http://169.254.169.254/...</loc>
- *    — or a public-looking <loc> that 302-redirects to an internal address —
- *    was requested straight from Render's own network, unchecked. Same-host
- *    filtering (dedupeAndFilter) only trims the *returned* list; it can't
- *    recall a request that already went out over the wire.
- *
- *    This function deliberately owns **no** address, scheme, redirect, timeout
- *    or size logic. #963's first attempt did, and its handwritten string-prefix
- *    IP rules had real bypasses (fea0::1, ::ffff:7f00:1) plus a DNS TOCTOU gap.
- *    safeFetchText() resolves every candidate address, fails closed if any is
- *    disallowed, and pins the validated address to the socket, per hop. All
- *    this file does is translate a rejection into a DiscoveryIssue — always via
- *    `report()`, never thrown, so one poisoned <loc> in an index doesn't stop
- *    its legitimate siblings from being fetched.
- */
-async function fetchSitemapXmlSafely(
-  startUrl: string,
-  report: Report,
-  /** Stage name for "genuinely unreachable" failures (network error / non-OK
-   *  response / DNS failure) — the two call sites predate this SSRF fix with
-   *  their own distinct stage names ('sitemap-fetch' vs. 'child-sitemap'),
-   *  which existing onIssue tests assert on; the SSRF-specific stages in
-   *  sitemapFailureStage() are shared verbatim by both. */
-  genericFailureStage: string = 'sitemap-fetch',
-): Promise<SafeSitemapFetch> {
-  try {
-    const res = await safeFetchText(startUrl, SITEMAP_FETCH_OPTIONS)
-    if (!res.ok) {
-      report(genericFailureStage, `HTTP ${res.status}`, startUrl)
-      return { ok: false }
-    }
-    return { ok: true, xml: res.text }
-  } catch (err) {
-    // `url` is the sitemap entry that failed, not the hop it failed on — the
-    // blocked hop is named in the error message (safeFetchText owns the loop).
-    report(sitemapFailureStage(err, genericFailureStage), err, startUrl)
-    return { ok: false }
-  }
-}
 
 /**
  * Expand a sitemap index's child <loc> URLs into real page URLs, reusing
@@ -719,29 +635,39 @@ async function expandSitemapIndexChildren(
   childUrls: string[],
   depth: number,
   report: Report = () => {},
+  budget: SitemapFetchBudget = createSitemapFetchBudget(),
 ): Promise<string[]> {
   const nested: string[] = []
   for (const childUrl of childUrls) {
-    nested.push(...(await fetchSitemapPageUrls(childUrl, depth, report)))
+    nested.push(...(await fetchSitemapPageUrls(childUrl, depth, report, budget)))
   }
   return nested
 }
 
 /**
  * Recursively fetch page URLs from a sitemap or sitemap index.
- * If the fetched XML is a <sitemapindex>, recurses into each child.
- * Depth-limited to MAX_SITEMAP_DEPTH to guard against malformed cycles.
+ * If the fetched XML's root element is <sitemapindex>, recurses into each child.
+ *
+ * Two independent bounds, both required: MAX_SITEMAP_DEPTH caps how deep the
+ * recursion nests, and `budget` caps how many documents the whole run may
+ * request in total (a single level can be 50,000 entries wide). Neither
+ * substitutes for the other.
  */
-async function fetchSitemapPageUrls(url: string, depth: number, report: Report = () => {}): Promise<string[]> {
+async function fetchSitemapPageUrls(
+  url: string,
+  depth: number,
+  report: Report = () => {},
+  budget: SitemapFetchBudget = createSitemapFetchBudget(),
+): Promise<string[]> {
   if (depth >= MAX_SITEMAP_DEPTH) {
     // 截断跟「这棵子树是空的」长得一样 —— 深度上限也是一次没取到。
     report('sitemap-depth-limit', `depth limit ${MAX_SITEMAP_DEPTH} reached`, url)
     return []
   }
-  const result = await fetchSitemapXmlSafely(url, report)
+  const result = await fetchSitemapXmlSafely(url, report, budget)
   if (!result.ok) return []
-  if (/<sitemapindex/i.test(result.xml)) {
-    return expandSitemapIndexChildren(parseLocsFromXml(result.xml), depth + 1, report)
+  if (isSitemapIndexDocument(result.xml)) {
+    return expandSitemapIndexChildren(parseLocsFromXml(result.xml), depth + 1, report, budget)
   }
   return parseLocsFromXml(result.xml)
 }
