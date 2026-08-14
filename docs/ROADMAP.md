@@ -108,7 +108,13 @@
 
   修：两处都回读账户币种，UI 显示与提交都按**账户币种**表达（或做显式换算并标注汇率）。⚠️ 只修 boost 不修执行抽屉，等于把最常用的那个入口留在错的状态
 - [ ] **AD-GATE-1 `approveDraft` 激活前不重新回读**：只查 `payload.status` 就 `activatePublished`，不重跑 `fetchAdSetReadback` / `checkLaunch`。草案在共用账户里躺几天，期间被改则批准人看到的是旧快照、钱按新配置花 —— 这违背 `launch-readback.ts` 自己"只有回读能看见"的立论。修：激活前重跑回读 + 闸门，有 blocker 拒绝激活。**不需 migration**
-  - ⚠️ **光"重跑一次"不够，会漏掉最要命的那条检查**：`expectedGeo` 只存在于 `CreateDraftDeps`（`draft-and-gate.ts:62`，创建时用一次），**没有落进 `DraftRecord`**；而 `approveDraft(actionId, supabase, accessToken)` 手上根本没有它。缺了它 `adaptMetaAdSet` 会传 `null`，`launch-readback.ts:281` 的 `if (input.expectedGeo && ...)` 直接跳过 **`geo_mismatch`** —— 也就是"等待期间被改到别的国家"这个核心场景照样放行。**修的时候必须同时**：创建时把可信地区持久化进 `DraftRecord`，或批准时从 `clients.country` 重新加载
+  - ⚠️ **光"重跑一次"不够，会漏掉最要命的那条检查**：`expectedGeo` 只存在于 `CreateDraftDeps`（`draft-and-gate.ts:62`，创建时用一次），**没有落进 `DraftRecord`**；而 `approveDraft(actionId, supabase, accessToken)` 手上根本没有它。缺了它 `adaptMetaAdSet` 会传 `null`，`launch-readback.ts:281` 的 `if (input.expectedGeo && ...)` 直接跳过 **`geo_mismatch`** —— 也就是"等待期间被改到别的国家"这个核心场景照样放行。**修的时候必须同时**：创建时把可信地区持久化进 `DraftRecord`（⚠️ **不能只重载 `clients.country`**，见 `AD-GEO-1`）
+- [ ] **AD-GEO-1 `geo_mismatch` 闸门只到国家级，抓不到它自己写明的那次事故**（第二十五轮发现）：
+  - `draft-listing/route.ts:302` 传的 `expectedGeo` 是 **`c.country`**（国家级）；
+  - `launch-readback.ts:281-290` 只判断 `expectedGeo` 与 `geoNames` 是否互为子串，**从不比较草案里的 `geoCityKeys`**（`targetingFor` 里那个 10km 半径）。
+
+  于是「北岸 10km 被放宽成整个新西兰」这种改动**照样通过** —— 而这条规则的 `learnedFrom` 写的正是「2026-08-04 Roman『IG 专投测试』把奥克兰北岸 $1.25M 的房投给了整个新西兰」。**规则抓不到它自己引用的那次事故。**
+  修：把**可信的完整 targeting 包络**（国家 + `geoCityKeys` + 半径）持久化进 `DraftRecord`，激活前**按同一粒度**比较；国家级匹配只能当兜底，不能当唯一判据
 - [ ] **AD-SEC-1 实体归属校验缺失 —— 三个入口，其中一个已上线在用【本次审计发现的最严重一条】**：混账户下（CTS/Oztop 同账户）任何"只校验 URL 里的客户、实体 id 却取自请求体"的写路径，都能被 A 客户的调用方拿去动 B 客户的东西。这就是 strategy doc §2.4 狄仁杰记的 **R5 写越权**，那份文档还指出「ROADMAP §Phase 18 安全边界声称已校验账户 ownership，**与实现不符**」—— 至今仍不符。
   - 🔴 **`meta-ads/execute/route.ts:71+`（已上线、正在用的止损按钮）**：`campaign_id` 直接取自请求体，只做 `requirePaidClientAccess(clientId)`，**从不把 campaign 归属与该客户的 `meta_ad_account_id` 对账**，随后就用共享 system-user token 暂停广告 / 改预算。有 CTS 看板权限的人提交一个 Oztop campaign id 即可动别家的在投广告。**这条比 boost 那条严重 —— 它已经在生产里跑**
   - `boost-post/route.ts`：`post_id`/`page_id` 取自请求体（详见 AD-SEC-2 同类）
@@ -129,6 +135,7 @@
 - [ ] **AD-FORM-1 选表单时不看语言，英文广告可能把买家送进中文表单【首条真钱广告的前置】**：`draft-listing/route.ts:82-105` 的 `pickForm(forms, wanted?)` **不接语言参数**，且该主页只有一个可用表单时**直接返回它**、不问语言；`launch-readback` 也不检查表单语言（它的混语言闸只覆盖私信）。于是按语言拆了草案也没用 —— 后果与 §5 问题 5 的"同一草案混语言"相同，只是路径不同。修：`AdDraftCreative` / `BuildOptions` 带上语言并在 `pickForm` 里匹配，或给表单广告补一条"表单语言 ≠ 文案语言"的闸门
 - [ ] **AD-EXPL-1 多角度测试要设"每臂最低探索量"，否则学不到东西【决定「找出赢家」这个卖点成不成立】**：把 5–8 个角度塞进同一个 ad set 让 Meta 分配，拿到的是**投放优化**，不是**可比较的角度实验** —— Oztop 那 14 条 hook 正是这个结构，`OZ-S1-A-spill` 一条吃掉 64.9%，另外 3 条不足 $1，大多数角度零探索。本仓 `ad-level-breakdown.ts:89-91` 早就写明「Meta 在同一广告系列内会先预测谁会转化再分配展示……把这种广告当成对照组会得出反向结论」，同文件的 `MIN_RESULTS_FOR_COMPARISON = 3` 与「从不宣称谁赢了」也是同一个意思。修：每臂最低展示/花费下限 + 分批放量，或直接用 Meta 原生 A/B test（`ads_experiment_abtest_*`，平台侧公平分流）。⚠️ **这要额外预算，属业务决策，需 PM 拍板**；没做之前对外只能说"多试几种说法、平台挑出跑得最好的"，**不能说"告诉你哪句话最打动人"**
 - [ ] **AD-EVID-1 补读 Oztop + Roman 两个账户的 targeting【审计结论覆盖率的前置】**：本次审计的 broad/Advantage+ 结论**只覆盖 CTS 一家、总花费的 47.7%**；Oztop（46.1%）的 `1735240120460765` 是 `is_ads_mcp_enabled: false`，Roman（6.1%）的花费在 `1018365291238494`（`is_queryable: false`，UNSETTLED）。两条路本次都实测过、都不通，**必须在有 `META_SYSTEM_USER_TOKEN` 的环境里**跑 `GET /act_<id>/adsets?fields=targeting,name,status,optimization_goal,campaign_id`。
+  ⚠️ **还要把混账户里剩下的 20 组也归属清楚**：`act_2775766642787274` 里只有 6 组能对上 ME 追踪的 CTS campaign,另外 20 组($1,278.76)含 Oztop 投流**和未被 ME 追踪的 CTS boost**,而**全部 8 个带兴趣定向的组都落在这 20 组里**。不归属清楚,"CTS 零兴趣定向"就只能说到"那 6 条 campaign",提不到"CTS 这家"。
   ⚠️ **必须带 `campaign_id` 并按归属过滤,不能拿整账户当某个客户的**：`act_1018365291238494` 挂在客户 Roman HU 名下,但 30 Kiteroa 那个楼盘(独立 client)的广告数据也落在同一账户里(见 `docs/clients/30-kiteroa-rothesay-bay/campaigns/live-ops-handoff.md`「广告数据其实一直在回流,只是记在了另一个客户名下」)。不过滤就会重演本审计第八轮那个错误 —— 把混账户的统计安到单个客户头上。活不大,但没做之前"投放侧已经做对了"这句话只能覆盖 CTS 一家、47.7% 的花费
 - [ ] **AD-FRAG-1 每条帖子一个 campaign + 一个 ad set，学习数据被打散**：CTS 账户 26 个 ad set 里 14 个是 `帖子："…"` 型 boost，单条 $2–$37。这不是"按兴趣拆人群"那种碎片化，但后果一样 —— 小预算跑不出 learning，创意之间无法在同一个竞价里公平竞争。修：boost 走统一的常驻 campaign/ad set（爆款池那条已有雏形），而不是每次新建
 - [ ] **AD-LINK-1 `creative_ref` 的身份粒度要按 variant 不按素材**：5–8 个角度常共用同一张图，按素材 id 记会让所有角度写同一个 `creative_ref`，角度归因归零。需 variant 稳定 id + 素材关系另存 + `adId → variantId` 绑定；配套 migration（`ad_creative_links.post_id` 放开 NOT NULL、`creative_source` 加 variant 层）**待 PM `go apply`**

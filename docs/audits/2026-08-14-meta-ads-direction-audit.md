@@ -11,7 +11,7 @@
 
 四句话：
 
-1. **投放侧（delivery）实际上已经在 Andromeda 打法上** —— 但这个结论**只覆盖 CTS 一家、总花费的 47.7%**（$3,733.59 / $7,822.57）：把混账户按 `campaign_id` 归属后，CTS 已追踪的 6 组 ad set **一个兴趣定向都没有**，73.6% 的花费明确开着 `advantage_audience: 1`（唯一关掉的是重定向组，那本来就该关）。**Oztop（46.1%）和 Roman（6.1%）的账户都查不到 targeting**，合计 52.3% 的花费无证据（见 §3.1 与附录 1）。
+1. **投放侧（delivery）实际上已经在 Andromeda 打法上** —— 但这个结论**只覆盖 CTS 已被 ME 追踪的 6 条 campaign、占已追踪花费的 47.7%**（$3,733.59 / $7,822.57）：把混账户按 `campaign_id` 归属后，CTS 已追踪的 6 组 ad set **一个兴趣定向都没有**，73.6% 的花费明确开着 `advantage_audience: 1`（唯一关掉的是重定向组，那本来就该关）。**Oztop（46.1%）和 Roman（6.1%）的账户都查不到 targeting**，合计 52.3% 的花费无证据（见 §3.1 与附录 1）。
 2. **但那不是 ME 做的** —— 是人在 Ads Manager 里点出来的。ME 自己唯一的建广告代码 `ad-publisher.ts:116` 写死 `targeting_automation: { advantage_audience: 0 }`，即**主动关掉** Advantage+ 受众。这条代码路径**没有留下任何成功建广告的记录**（`ads.create_ad` 0 条 —— ⚠️ 但该账本会静默丢记录，见 §2 注，所以只能说"没记录"，不能说"从没建过"），所以这个冲突**目前看是潜在的**，不是已确认发生的。
 3. **钱高度集中在少数广告上**（按客户分开看，避开混币种）：**CTS 80.7% 的钱压在 2 条广告上**；**Oztop 63.4% 压在 1 条上**；而两次真多角度测试分别只拿到该客户的 **12.0%**（Oztop 14 条 hook）和摊薄到每条 $24（Roman 15 条 angle）。**多角度测试只发生在没钱的地方。**（⚠️ 这里数的是广告条数；单条广告内部可能还有多套文案，库里看不到 —— 见 §3.3 注）
 4. **闭环没有通电**：`ad_creative_links` 0 行、`contacts.attr_creative_ref` 0 行（39 条已归因 lead 无一条能说清是哪条素材）、`winner_structures` 0 行、`variant_from_winner` 工单 0 条、`flywheel_actions` 里 `ads.create_ad` 0 条。**数据结构全都建好了，一个都没被写过。**
@@ -143,7 +143,13 @@ Meta Graph 实时读账户 `act_2775766642787274`，共 26 个 ad set。
 >
 > ⚠️ **Roman 这一行是第七轮才改对的**：上一版把 Roman 算进"已回读"，但他 $480.71 的花费在 `act_1018365291238494`，而 `ads_get_ad_accounts` 对该账户返回 `is_queryable: false` / `not_queryable_reason: "Unknown error"`（账户状态 UNSETTLED）。本次实际读到的那条 Roman ad set（`North Shore 15km · Message Leads · 4-Creative Race`）在另一个账户、且花费为 **$0.00**，代表不了那 $480.71。
 >
-> **所以本审计关于 broad / Advantage+ 的结论，证据只覆盖 CTS 一家、总花费的 47.7%。**
+> **所以本审计关于 broad / Advantage+ 的结论，证据只覆盖 CTS 已被 ME 追踪的那 6 条 campaign、占已追踪花费的 47.7%。**
+>
+> ⚠️ **注意这里有两层收窄，别只记住一层**（第二十五轮补正）：
+> 1. **不是"CTS 这家"，是"CTS 已被 ME 追踪的 6 条 campaign"** —— 被排除的那 20 组里就含**未被 ME 追踪的 CTS boost**，而**全部 8 个带兴趣定向的组恰好都在那 20 组里**。所以"CTS 零兴趣定向"这句话，严格讲只对那 6 条成立，**不能推广到 CTS 的全部投放**；
+> 2. **`$7,822.57` 是"ME 追踪到的花费"，不是"客户实际花的钱"** —— 混账户里另有 $1,278.76（Meta 侧）根本没进 `ad_daily_insights`。所以全文所有百分比的分母都是**追踪口径**，不是账单口径。
+>
+> 要把结论提到"CTS 这家"，得把那 20 组也逐 campaign 归属清楚（已并入 `AD-EVID-1`）。
 >
 > 两侧口径的小差额是正常的：ME 库记 CTS 这 6 条 campaign 为 `$3,733.59`，Meta 侧同 6 组回读为 `$3,787.76`（差 1.4%，来自归因回填与取数时点）。**覆盖率一律用 ME 库那个数**（跟 §2 同源）；**targeting 的花费加权比例用 Meta 侧那个数**（跟 targeting 同源）。两者不混用。
 >
@@ -357,7 +363,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 
 ## 4. What We Are Doing Right
 
-1. **实际投放已经是 broad + Advantage+** —— CTS 已追踪的 6 组 ad set **零兴趣定向**，73.6% 的花费开着 Advantage+ 受众，且唯一关掉的那组正好是该关的重定向组。这一条最重要，也最容易被自己低估 —— 但**证据只覆盖 CTS 一家、总花费的 47.7%**，Roman + Oztop 合计 52.3% 的账户查不到，口径见 §3.1。
+1. **实际投放已经是 broad + Advantage+** —— CTS 已追踪的 6 组 ad set **零兴趣定向**，73.6% 的花费开着 Advantage+ 受众，且唯一关掉的那组正好是该关的重定向组。这一条最重要，也最容易被自己低估 —— 但**证据只覆盖 CTS 已追踪的 6 条 campaign（占已追踪花费 47.7%）**；Roman + Oztop 的账户查不到，混账户里另有 20 组（含未被追踪的 CTS boost、8 个兴趣定向组全在其中）也没归属清楚。口径见 §3.1。
 2. **ad 级日度数据脊柱是真的**（376 行，每天在写，带 `parent_id`）。绝大多数同类系统只有 campaign 级 —— 没有 ad 级就永远做不了 creative-level 学习。这块地基已经打好了。
 3. **不拿汇总骗自己**：`ad-level-breakdown.ts` 会在子项差异 ≥1.5 倍时明说"这个汇总在掩盖差异"，还会拦住"表单留资 + 私信对话被加在同一列"的不可比比较。这是很多投放团队都没有的纪律。
 4. **建完必回读**：`launch-readback.ts` 承认"创建接口的回显不含 Meta 自己补上的东西"，强制建成暂停 → 回读 → 人点头。这在 Advantage+ 时代**更重要**，因为平台会自动加的东西只会越来越多。
@@ -641,7 +647,9 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 2. **②** `ad-publisher.ts:116` 改 `advantage_audience: 1` —— 一行，现在改成本为 0；
 3. **做 ①b（= 方案 (ii)，让 `draft-and-gate` 那条路径能记账）** —— 这是「投出第一条 ME 自建广告并验通完整链路」的真正前置。**不能用方案 (i) 顶替**：修好 boost 路径的四样问题也不改 `REACH`，`results` 恒为 0，验不了"某个客户是被哪条创意带来的"那半截（见 ① 的说明）。设计与编码自己拍板，只在最后对生产库 `apply_migration` 那一下停下来等 PM 一句 `go apply`；
    **并进来一起做（不需要 migration、不需要 PM 点头）**：`approveDraft` 在 `activatePublished` 之前**重跑一次回读 + `checkLaunch`**。现在批准只查 `payload.status`，草案躺在共用账户里几天，激活时用的是建的那一刻的快照 —— 而这恰恰违背 `launch-readback.ts` 自己"只有回读能看见"的立论。
-   ⚠️ **但光"重跑一次"会漏掉最要命的那条**（第十九轮更正）：`expectedGeo` 只在 `CreateDraftDeps` 里（创建时用一次），**没落进 `DraftRecord`**，而 `approveDraft` 手上没有它 → `launch-readback.ts:281` 的 `geo_mismatch` 会被整条跳过，"等待期间被改到别的国家"这个核心场景照样放行。**必须同时**把可信地区持久化进 `DraftRecord`，或批准时从 `clients.country` 重新加载。
+   ⚠️ **但光"重跑一次"会漏掉最要命的那条**（第十九轮更正）：`expectedGeo` 只在 `CreateDraftDeps` 里（创建时用一次），**没落进 `DraftRecord`**，而 `approveDraft` 手上没有它 → `launch-readback.ts:281` 的 `geo_mismatch` 会被整条跳过。
+   ⚠️⚠️ **而且就算把它补回来，那条闸门本身也不够用**（第二十五轮发现）：`draft-listing/route.ts:302` 传的是 **`c.country`**（国家级），而闸门只判断 `expectedGeo` 与 `geoNames` 是否互为子串，**从不比较草案里的 `geoCityKeys`**（`targetingFor` 里那个 10km 半径）。所以「北岸 10km 被放宽成整个新西兰」照样通过 —— 而这条规则的 `learnedFrom` 写的正是那次事故（2026-08-04 Roman 把北岸 $1.25M 的房投给全新西兰）。**规则抓不到它自己引用的那次事故。**
+   **正确修法**：把**完整 targeting 包络**（国家 + `geoCityKeys` + 半径）持久化进 `DraftRecord`，激活前按同一粒度比较（登记为 `AD-GEO-1`）。
    *（若想更早拿到一点信号，可以顺手把方案 (i) 的四样也修了 —— 但要认清它只验上半截的记账，不算闭环。）*
 4. **补事实来源校验** —— ⚠️ **这一步是第十三轮才前移到这里的**（Codex P1，核实成立）。上一版把它挂在第 5 步（批量角度）之前，理由是"批量扩会放大这个洞"—— **但第 4 步已经在花真钱了**。`assertFacts` 只查 `sourceUrl` 非空、从不抓页面核对，而 `traceClaims` 照盖"官网可溯"章（§4 第 6 条）。所以**只要调用方给错房价/地址/战绩，第一条付费广告就会带着未核实内容过审、投出去** —— 这不是"量大了才危险"，是第一条就危险。
    ⚠️ **做法不能是"按 `sourceUrl` 抓页核对"**（第二十四轮更正）：**事实和 `sourceUrl` 是同一个调用方给的**，他可以指向自己控制、写着假价格的页面，抓下来照样"对得上"、照样拿到"官网可溯"的章 —— **拿请求体里的 URL 当信任根等于没校验**；而且直抓任意 URL 还会引入 SSRF。
@@ -745,4 +753,4 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
    两张表都是裸 `NUMERIC`、原样存账户币种、不换算不记币种；而 CTS/Roman 是 NZD、Oztop 是 AUD（均已实读）。**只修前者修不到报表侧** —— `20260721000001` 的注释本身就写明报表仍读 `meta_ads_snapshots`。所以任何跨客户的花费汇总、排行、预算比较都会算错。
    修法：`ad_daily_insights` 加 `currency` 列（Graph 的 `account_currency` 字段直接给），跨客户汇总时按基准日折算并注明汇率。
 
-   ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现与未完成动作已一并登记（**17 条**）：`AD-CUR-1/2` · `AD-PLAY-1` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · **`AD-FORM-1`**（选表单不看语言，首条真钱广告的前置）· `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1` · **`AD-EXPL-1`**（每臂最低探索量，决定「找出赢家」这个卖点成不成立）· `AD-EVID-1` · `AD-FRAG-1`。
+   ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现与未完成动作已一并登记（**18 条**）：`AD-CUR-1/2` · `AD-PLAY-1` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · **`AD-FORM-1`**（选表单不看语言，首条真钱广告的前置）· `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1` · **`AD-EXPL-1`**（每臂最低探索量，决定「找出赢家」这个卖点成不成立）· **`AD-GEO-1`**（geo 闸门只到国家级，抓不到它自己引用的那次事故）· `AD-EVID-1` · `AD-FRAG-1`。
