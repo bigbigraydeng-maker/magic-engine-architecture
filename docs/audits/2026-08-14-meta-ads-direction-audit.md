@@ -398,7 +398,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 | 10 | **每条帖子一个 campaign + 一个 ad set** | CTS 账户 26 个 ad set 里 14 个是 `帖子："…"` 型 boost，单条 $2–$37，学习数据被彻底打散 |
 | 11 | 🔴 **已上线的止损按钮能动别家客户的广告** | `meta-ads/execute/route.ts:71+` 的 `campaign_id` 取自请求体，只校验 URL 里的客户，**从不与该客户的 `meta_ad_account_id` 对账**；混账户下有 CTS 权限即可暂停 / 改预算 Oztop 的在投广告。strategy doc §2.4 记的 R5 写越权，**至今未修**（登记为 `AD-SEC-1`）|
 | 13 | 🟠 **每天的同步把整账户数据写成单个客户的（隐患已上线，但库里尚未被污染）** | `daily-insights.ts:209+` 拉整账户后 `rows.map(… clientId …)`，**零 campaign 归属过滤**；`google-data-pullback-daily/route.ts:595+`（定时）和 `meta-ads/sync/route.ts:82-111`（手动）**都**把账户级聚合直接插进该 client 的 `meta_ads_snapshots`（Goal 指标 / 月报都读它）。`20260721000001` 的注释自己写着「任何账户级 rollup 必须从过滤后的 campaign 行聚合」—— **要求写了、写入侧没实现**。现在看着干净只因那几条 Oztop campaign 近期没投放（登记为 `AD-ISO-1`）|
-| 14 | 🔴 **production package 的「广告」那一栏从来就是空的** | `meta_ads_snapshots` **根本没有 `production_package_id` 这一列**（实查 `information_schema`，16 列里没有）。写侧 `sync/route.ts:119-127` 是个不 await 的 `.update({ production_package_id })`，必然报错、只进 `console.error`，接口照样返回 200；读侧 `production/[packageId]/route.ts:116-120` 用同一个不存在的列 `.eq()` 过滤，错误被 `?? []` 吞掉 —— **P13.D 这条链路自上线起一次都没通过**（登记为 `AD-PKG-1`）|
+| 14 | 🔴 **production package 的「广告」那一栏从来就是空的** | `meta_ads_snapshots` **根本没有 `production_package_id` 这一列**（实查 `information_schema`，16 列里没有）。写侧 `sync/route.ts:119-127` 是个不 await 的 `.update({ production_package_id })`，必然报错、只进 `console.error`，接口照样返回 200；读侧 `production/[packageId]/route.ts:116-120` 用同一个不存在的列 `.eq()` 过滤，错误被 `?? []` 吞掉 —— **P13.D 这条链路自上线起一次都没通过**。⚠️ 而且 `production_package_id` **直接取自请求体、从不核对 `production_packages.client_id`**（鉴权只看 URL 里的客户），读侧查 snapshot 时也不带 `client_id` —— **补列的那一刻就变成"能往别家的交付物里塞自己的广告数据"**（读侧对 package 本身有隔离，所以是注入方向，不是读取方向）。跟 `AD-SEC-1` 同源：信请求体里的外部主键（登记为 `AD-PKG-1`）|
 | 12 | 🔴 **改预算的输入框写死 AUD，账户却是 NZD** | `AdsFixDrawer.tsx:309`「新日预算（AUD）」→ `execute/route.ts:157` `newBudget * 100` 直发 Meta，不读币种不换算；Meta 按账户币种解释 → 人以为填 AUD，钱按 NZD 花（登记为 `AD-CUR-2`）|
 
 **关于问题 10 的说明**：这是本仓最典型的 audience fragmentation，但它的成因不是"按兴趣拆人群"，而是"每次 boost 一条帖子就新开一套"。表现一样：小预算跑不出 learning，创意之间无法在同一个竞价里公平竞争。
@@ -407,15 +407,16 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 
 | 核对项 | 实测结果 |
 |---|---|
-| 每行 `campaigns` 里的 `campaign_id` 是否都属于该行的客户 | ✅ **全部属于**。CTS 的 9 条 campaign 全部 `…0307`（CTS 账户）且名字全是 CTS 旅游内容；`20260721000001` 注释里那 4 条 legacy Oztop campaign **一次都没出现过**（那段窗口它们零花费） |
+| 每行 `campaigns` 里的 `campaign_id` 是否都属于该行的客户 | ✅ **有明细的行全部属于**（103 行）。CTS 的 9 条 campaign 全部 `…0307`（CTS 账户）且名字全是 CTS 旅游内容；`20260721000001` 注释里那 4 条 legacy Oztop campaign **一次都没出现过**（那段窗口它们零花费）。⚠️ 另 **2 行 `campaigns = null`，无从核对** |
 | 账户级 `spend` 是否等于 `campaigns` 明细之和 | 105 行里 **101 行相等**，2 行差 $0.09（四舍五入），**2 行差得离谱**：CTS `2026-07-02→08-01` 记了 **$2,840.49** 而 `campaigns` 是 `null`；Oztop `2026-07-09→08-08` 记了 **$2,668.64** 同样 `campaigns` 是 `null` |
 | 是否存在两个 ME 客户共用一个广告账户 | ❌ 当前没有（`clients.meta_ad_account_id` 无重复）。`act_1018365291238494` 在 `30 Kiteroa Rothesay Bay`（至 07-31）和 `Roman HU`（自 08-01）名下各有若干行，但那是**同一个楼盘换了客户档案**、时间上首尾相接，不是并行双记 |
 
 > **两条更正**：
-> ① 上一版说 `AD-ISO-1` "**正在**污染健康诊断/月报/Goal 指标"—— **说重了**。代码路径确实允许，但**库里现存的 105 行没有一行被污染**。准确说法是：**隐患已上线在跑，损害尚未发生**；那 4 条 legacy Oztop campaign 一旦重新投放，当天就会发生。
+> ① 上一版说 `AD-ISO-1` "**正在**污染健康诊断/月报/Goal 指标"—— **说重了**。代码路径确实允许，但**已核对的 101 行没有一行被污染**。准确说法是：**隐患已上线在跑；已核对的部分未见损害，另有 2 行无法核对**；那 4 条 legacy Oztop campaign 一旦重新投放，当天就会发生。
+> （⚠️ 本轮再更正一次：这句原写的是"105 行没有一行被污染"，**跟同一张表里那 2 行 `campaigns = null` 自相矛盾** —— 没有 campaign 明细就没有判断依据，那 2 行是**未知**，不是干净。不能拿"没查到污染"当"没有污染"，这正是本仓 `launch-readback.ts` 自己立的规矩：「查不出来」永远不等于「没问题」。）
 > ② 上一版说手动同步会把污染 snapshot "**永久绑进已交付的交付物**"—— **说错了，撤回**。那一列压根不存在，绑定从来没成功过（见上表问题 14）。这不是"影响更小"，而是**换了个毛病**：交付物里的广告数据一直是空的，而且写和读两边都不报错。
 >
-> 另外那 2 行 `campaigns = null` 但照记账户总额的 snapshot，是**既不能证伪也不能采信**的：归属过滤唯一的依据（campaign 明细）被丢掉了，账户总额却照样喂给了 Goal 指标和月报。拉不到明细就该记不下来，不该只记总数 —— 这条并进 `AD-ISO-1` 一起修。
+> 另外那 2 行 `campaigns = null` 但照记账户总额的 snapshot，是**既不能证伪也不能采信**的：归属过滤唯一的依据（campaign 明细）被丢掉了，账户总额却照样喂给了 Goal 指标和月报。**在按 Graph API 重拉那两个窗口的 campaign 级数据对上账之前，这两行只能记为「未知」**。拉不到明细就该记不下来，不该只记总数 —— 这条并进 `AD-ISO-1` 一起修，重建对账是交付项。
 
 ---
 
@@ -783,4 +784,4 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
    两张表都是裸 `NUMERIC`、原样存账户币种、不换算不记币种；而 CTS/Roman 是 NZD、Oztop 是 AUD（均已实读）。**只修前者修不到报表侧** —— `20260721000001` 的注释本身就写明报表仍读 `meta_ads_snapshots`。所以任何跨客户的花费汇总、排行、预算比较都会算错。
    修法：`ad_daily_insights` 加 `currency` 列（Graph 的 `account_currency` 字段直接给），跨客户汇总时按基准日折算并注明汇率。
 
-   ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现与未完成动作已一并登记（**21 条**）：`AD-CUR-1/2` · `AD-PLAY-1` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · **`AD-FORM-1`**（选表单不看语言，首条真钱广告的前置）· `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1` · **`AD-EXPL-1`**（每臂最低探索量，决定「找出赢家」这个卖点成不成立）· 🟠 **`AD-ISO-1`**（生产同步把整账户写成单个客户，已上线在跑；库里现存 105 行实测未被污染，是隐患不是已发生的损害）· 🔴 **`AD-PKG-1`**（交付物的广告栏从上线起就是空的，写读两侧都指向不存在的列且都不报错）· 🔴 **`AD-GEO-0`**（`targetingFor` 国家+城市并集，ME 起草的广告天生投整个国家 —— 首发前必修）· **`AD-GEO-1`**（geo 闸门只到国家级，抓不到它自己引用的那次事故）· `AD-EVID-1` · `AD-FRAG-1`。
+   ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现与未完成动作已一并登记（**21 条**）：`AD-CUR-1/2` · `AD-PLAY-1` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · **`AD-FORM-1`**（选表单不看语言，首条真钱广告的前置）· `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1` · **`AD-EXPL-1`**（每臂最低探索量，决定「找出赢家」这个卖点成不成立）· 🟠 **`AD-ISO-1`**（生产同步把整账户写成单个客户，已上线在跑；105 行里 101 行实测干净、2 行丢了明细无从核对，是隐患不是已确认的损害）· 🔴 **`AD-PKG-1`**（交付物的广告栏从上线起就是空的，写读两侧都指向不存在的列且都不报错；补列前须先补包归属校验，否则一补列就变成跨客户注入）· 🔴 **`AD-GEO-0`**（`targetingFor` 国家+城市并集，ME 起草的广告天生投整个国家 —— 首发前必修）· **`AD-GEO-1`**（geo 闸门只到国家级，抓不到它自己引用的那次事故）· `AD-EVID-1` · `AD-FRAG-1`。
