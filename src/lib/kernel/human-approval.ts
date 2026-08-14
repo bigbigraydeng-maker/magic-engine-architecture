@@ -102,6 +102,12 @@ const POLICY_RACE_REASONS: ReadonlySet<string> = new Set([
   'policy_identity_changed',
   'stale_policy_version',
   'policy_mode_changed',
+  // 🔴 政策在**等锁那段时间里过期了**（RPC 拿到政策行锁之后按挂钟复核出来的）。
+  //    跟上面几条同一性质：只读返回、一个字没写、run 仍停在 pending_approval。
+  //    漏在这张表外面的话会掉进 INVALID_STATE → 接口答终态的 `not_pending`，
+  //    界面就把一条**还等着人点**的待办从列表里抹掉了 —— 这正是这条清单存在的理由。
+  //    新增 RPC 返回码时必须回来加一行；SQL 那边有守卫测试盯着两处不许分家。
+  'policy_expired_before_signing',
 ])
 
 /**

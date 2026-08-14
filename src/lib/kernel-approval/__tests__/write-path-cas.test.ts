@@ -24,6 +24,10 @@ describe('🔴 Codex round 6 · 锁内政策竞态不是终态', () => {
     'policy_identity_changed',
     'stale_policy_version',
     'policy_mode_changed',
+    // 🔴 政策在**等锁那段时间里过期**（挂钟复核出来的）。加这条 RPC 返回码时
+    //    差点漏了这张映射表 —— 漏掉就会掉进 INVALID_STATE → 接口答终态的
+    //    `not_pending`，界面把一条还等着人点的待办抹掉。
+    'policy_expired_before_signing',
   ])('RPC 报「%s」→ stale_decision（不是「已经有结论了」），且 run 还停在等审批', async (reason) => {
     // 🔴 这几条 RPC 分支都是**只读返回、一个字不写** —— run 仍然停在
     //    pending_approval，那件事还等着人点。报成 not_pending 的话，

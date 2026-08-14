@@ -472,8 +472,8 @@ CREATE OR REPLACE FUNCTION public.kernel_record_fenced_deny_v2(
     dict(
         name="K-WP01A 政策竞态清单漏一条（那一条又变回「已有结论」）",
         file="src/lib/kernel/human-approval.ts",
-        old="  'policy_mode_changed',\n])",
-        new="])",
+        old="  'policy_mode_changed',",
+        new="",
         test="src/lib/kernel-approval/__tests__/write-path-cas.test.ts",
         expect_fail_contains="不是「已经有结论了」",
     ),

@@ -618,3 +618,81 @@ describe('🔴 begin_authorized_run 前向副本与历史原文逐行比对', ()
     expect(clockAt, '取挂钟必须排在 decision 锁之后').toBeGreaterThan(decisionLock)
   })
 })
+
+/**
+ * 🔴 **v2 返回的每一个原因码都必须被显式归类。**
+ *
+ * 这条是踩出来的：`policy_expired_before_signing` 是本批次新加的 RPC 返回码，
+ * 加的时候**忘了**同步 `POLICY_RACE_REASONS`。后果不是报错 —— 是它掉进
+ * 兜底的 `INVALID_STATE`，接口答终态的 `not_pending`，界面把一条
+ * **还等着人点**的待办从列表里抹掉。整套测试当时是全绿的。
+ *
+ * 所以判据不能是「这几个码在清单里」（那还是手抄一份），
+ * 而是**反过来**：从 SQL 里把码全捞出来，每一个都必须能在应用层找到归宿。
+ * 新加一个码却不归类 → 当场红。
+ */
+describe('🔴 SQL 返回码必须在应用层有归宿（漏一个就会被当成终态）', () => {
+  const FWD = 'supabase/migrations/20260813000000_kernel_approval_identity_guards.sql'
+  const HUMAN = 'src/lib/kernel/human-approval.ts'
+
+  /**
+   * 刻意**不**归进那两张「非终态」清单的码，每一条都写清为什么。
+   * 往这里加东西 = 明确声明「这个码就是终态 / 就是程序错误」。
+   */
+  const DELIBERATELY_UNCLASSIFIED: Readonly<Record<string, string>> = {
+    approved: '成功',
+    rejected: '成功',
+    not_pending: '真·终态：run 已经有结论了，这正是要表达的意思',
+    decision_not_current: 'resolveFailureToError 里单独一条分支处理（也是非终态）',
+    run_not_found: '调用方传了不存在的 run —— 程序错误，不是竞态',
+    bad_resolution: '调用方传了非法的 resolution —— 程序错误',
+  }
+
+  it('每个返回码要么在两张非终态清单里，要么在「刻意不归类」里写明了理由', () => {
+    const sql = readFileSync(join(ROOT, FWD), 'utf8')
+    const start = sql.indexOf('CREATE OR REPLACE FUNCTION public.kernel_resolve_pending_approval_v2(')
+    expect(start).toBeGreaterThan(-1)
+    const body = sql.slice(start, sql.indexOf('$$;', start))
+
+    // `RETURN QUERY SELECT false, 'xxx'` / `'not_' || …` / `SELECT true, 'approved'`
+    const codes = new Set<string>()
+    // 🔴 用 Array.from 而不是 for…of 直接迭代 matchAll —— 仓库 tsconfig 没设
+    //    target，直接迭代会报 TS2802（跟之前 `[...someSet]` 那次同一类）。
+    for (const m of Array.from(body.matchAll(/RETURN QUERY SELECT (?:false|true), '([a-z_]+)'/g))) {
+      codes.add(m[1])
+    }
+    for (const m of Array.from(body.matchAll(/RETURN QUERY SELECT false, '([a-z_]+)' \|\|/g))) {
+      codes.add(m[1].replace(/_$/, ''))
+    }
+    expect(codes.size, '一个返回码都没捞到 —— 判据空跑了').toBeGreaterThan(8)
+
+    const human = readFileSync(join(ROOT, HUMAN), 'utf8')
+    const setBody = (name: string): string => {
+      const at = human.indexOf(name)
+      expect(at, `${name} 必须存在`).toBeGreaterThan(-1)
+      return human.slice(at, human.indexOf('])', at))
+    }
+    const classified = setBody('POLICY_RACE_REASONS') + setBody('PENDING_INCONSISTENT_REASONS')
+
+    const orphans = Array.from(codes).filter(
+      (c) => !classified.includes(`'${c}'`) && !(c in DELIBERATELY_UNCLASSIFIED),
+    )
+    expect(
+      orphans.sort(),
+      '这些 SQL 返回码在应用层没有归宿 —— 它们会掉进兜底的 INVALID_STATE，\n' +
+        '接口答终态的 not_pending，界面把一条还等着人点的待办从列表里抹掉。\n' +
+        '要么加进非终态清单，要么在 DELIBERATELY_UNCLASSIFIED 里写明它为什么是终态。',
+    ).toEqual([])
+  })
+
+  it('🔴 判据本身有效：把新加的那个码从清单里拿掉，必须被抓出来', () => {
+    // 这就是本批次真实发生过的那一步。
+    const human = readFileSync(join(ROOT, HUMAN), 'utf8')
+    expect(human).toContain("'policy_expired_before_signing'")
+    const without = human.replace("  'policy_expired_before_signing',\n", '')
+    const at = without.indexOf('POLICY_RACE_REASONS')
+    expect(without.slice(at, without.indexOf('])', at))).not.toContain(
+      'policy_expired_before_signing',
+    )
+  })
+})

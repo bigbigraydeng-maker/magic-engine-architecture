@@ -151,4 +151,16 @@ CREATE OR REPLACE FUNCTION public.kernel_resolve_pending_approval_v2(""",
         test="src/lib/kernel-approval/__tests__/rollout-compat.test.ts",
         expect_fail_contains="→ 503",
     ),
+    dict(
+        # 🔴 本批次真实踩到的那一步：加了新 RPC 返回码，忘了同步非终态清单。
+        #    后果不是报错，是它掉进兜底的 INVALID_STATE → 接口答终态的
+        #    not_pending → 界面把一条还等着人点的待办抹掉。当时整套测试是全绿的。
+        name="K-WP01A 新返回码没归类（非终态被答成终态，待办被抹掉）",
+        file="src/lib/kernel/human-approval.ts",
+        old="""  'policy_expired_before_signing',
+])""",
+        new="""])""",
+        test="src/lib/kernel-approval/__tests__/sql-contract.test.ts",
+        expect_fail_contains="每个返回码要么在两张非终态清单里",
+    ),
 ]

@@ -27,7 +27,7 @@ EXPECTED_MODULES = [
 ]
 
 #: 探针总数。改动探针数量时必须同步 —— 它是「有没有人偷偷删探针压行数」的闸。
-EXPECTED_TOTAL = 246
+EXPECTED_TOTAL = 247
 
 
 class MutationRegistryError(RuntimeError):

@@ -129,46 +129,38 @@ def preflight():
     return bad
 
 
-def main():
-    drifted = preflight()
-    if drifted:
-        print(f"🔴 预检：{len(drifted)} 条探针的锚点没命中，先修它们再跑（跑完再发现要花两小时）：")
-        for name, why in drifted:
-            print(f"  [ANCHOR] {name} | {why}")
-        return 1
-
-    results = []
-    for m in MUTATIONS:
-        # 改名型变异：P1-4 防的是文件名撞车，破坏点不在代码里
-        if "rename" in m:
-            src, dst = m["rename"]
-            os.rename(src, dst)
-            try:
-                results.append(judge(m, *run_test(m["test"])))
-            finally:
-                os.rename(dst, src)
-            continue
-
-        f = m["file"]
-        original = open(f, encoding="utf-8").read()
-        if m["old"] not in original:
-            results.append((m["name"], "SKIP", "锚点没匹配上（代码改过了，变异脚本要跟着更新）"))
-            continue
-        mutated = original.replace(m["old"], m["new"], 1)
-        # 有些变异要同时动两处（比如「把两条语句调个个儿」= 从这儿删、到那儿加）
-        if "old2" in m:
-            if m["old2"] not in mutated:
-                results.append((m["name"], "SKIP", "第二个锚点没匹配上（变异脚本要跟着更新）"))
-                continue
-            mutated = mutated.replace(m["old2"], m["new2"], 1)
-        open(f, "w", encoding="utf-8").write(mutated)
+def run_one(m):
+    """跑一条探针：破坏 → 跑测试 → **无论如何都还原**。"""
+    # 改名型变异：P1-4 防的是文件名撞车，破坏点不在代码里
+    if "rename" in m:
+        src, dst = m["rename"]
+        os.rename(src, dst)
         try:
-            results.append(judge(m, *run_test(m["test"])))
+            return judge(m, *run_test(m["test"]))
         finally:
-            open(f, "w", encoding="utf-8").write(original)
+            os.rename(dst, src)
 
+    f = m["file"]
+    original = open(f, encoding="utf-8").read()
+    if m["old"] not in original:
+        return (m["name"], "SKIP", "锚点没匹配上（代码改过了，变异脚本要跟着更新）")
+    mutated = original.replace(m["old"], m["new"], 1)
+    # 有些变异要同时动两处（比如「把两条语句调个个儿」= 从这儿删、到那儿加）
+    if "old2" in m:
+        if m["old2"] not in mutated:
+            return (m["name"], "SKIP", "第二个锚点没匹配上（变异脚本要跟着更新）")
+        mutated = mutated.replace(m["old2"], m["new2"], 1)
+    open(f, "w", encoding="utf-8").write(mutated)
+    try:
+        return judge(m, *run_test(m["test"]))
+    finally:
+        open(f, "w", encoding="utf-8").write(original)
+
+
+def report(results):
+    """打印结果并返回退出码。"""
     print(json.dumps(results, ensure_ascii=False, indent=2))
-    # 🔴 四类分开报。把 SKIP 混进「漏掉」里看不出「那道闸从没被验过」——
+    # 🔴 各类分开报。把 SKIP 混进「漏掉」里看不出「那道闸从没被验过」——
     #    锚点失配是**静默**的，它长得跟「探针少了几条」一模一样。
     counts = {k: sum(1 for r in results if r[1] == k)
               for k in ("CAUGHT", "SKIP", "MISSED", "WRONG_TEST", "UNREADABLE")}
@@ -181,6 +173,16 @@ def main():
         if r[1] != "CAUGHT":
             print(f"  [{r[1]}] {r[0]} | {r[2][:200]}")
     return 0 if counts["CAUGHT"] == len(results) else 1
+
+
+def main():
+    drifted = preflight()
+    if drifted:
+        print(f"🔴 预检：{len(drifted)} 条探针的锚点没命中，先修它们再跑（跑完再发现要花两小时）：")
+        for name, why in drifted:
+            print(f"  [ANCHOR] {name} | {why}")
+        return 1
+    return report([run_one(m) for m in MUTATIONS])
 
 
 if __name__ == "__main__":
