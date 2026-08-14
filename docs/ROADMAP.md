@@ -200,14 +200,19 @@
 
   于是「北岸 10km 被放宽成整个新西兰」这种改动**照样通过** —— 而这条规则的 `learnedFrom` 写的正是「2026-08-04 Roman『IG 专投测试』把奥克兰北岸 $1.25M 的房投给了整个新西兰」。**规则抓不到它自己引用的那次事故。**
   修：把**可信的完整 targeting 包络**（国家 + `geoCityKeys` + 半径）持久化进 `DraftRecord`，激活前**按同一粒度**比较；国家级匹配只能当兜底，不能当唯一判据
-- [ ] **AD-SEC-1 实体归属校验缺失 —— 四个入口，其中两个已上线在跑【本次审计发现的最严重一条】**：混账户下（CTS/Oztop 同账户）任何"只校验 URL 里的客户、实体 id 却取自请求体"的写路径，都能被 A 客户的调用方拿去动 B 客户的东西。这就是 strategy doc §2.4 狄仁杰记的 **R5 写越权**，那份文档还指出「ROADMAP §Phase 18 安全边界声称已校验账户 ownership，**与实现不符**」—— 至今仍不符。
+- [ ] **AD-SEC-1 实体归属校验缺失 —— 五个入口，其中三个已上线在跑【本次审计发现的最严重一条】**：混账户下（CTS/Oztop 同账户）任何"只校验 URL 里的客户、实体 id 却取自请求体"的写路径，都能被 A 客户的调用方拿去动 B 客户的东西。这就是 strategy doc §2.4 狄仁杰记的 **R5 写越权**，那份文档还指出「ROADMAP §Phase 18 安全边界声称已校验账户 ownership，**与实现不符**」—— 至今仍不符。
   - 🔴 **`meta-ads/execute/route.ts:71+`（已上线、正在用的止损按钮）**：`campaign_id` 直接取自请求体，只做 `requirePaidClientAccess(clientId)`，**从不把 campaign 归属与该客户的 `meta_ad_account_id` 对账**，随后就用共享 system-user token 暂停广告 / 改预算。有 CTS 看板权限的人提交一个 Oztop campaign id 即可动别家的在投广告。**这条比 boost 那条严重 —— 它已经在生产里跑**
+  - 🔴 **`ad-health/stop-loss/route.ts:94-115`（已上线、第五个入口，第四十九轮补入）**：跟 `execute` 同一个模子 —— `requirePaidClientAccess(clientId)` 只校验 URL 里的客户，`campaign_id` **直接取自请求体**，随后 `executeStopLoss(campaignId, action, …)` 就去暂停 campaign 或改它的 ad set / campaign 预算。**混账户下 A 客户点"止损"能停掉 B 客户的在投广告。**
+    ⚠️ 注意这条和 `execute/route.ts` **是两个独立端点**，不是同一个的两种叫法 —— 修了一个不会自动修好另一个。
   - `boost-post/route.ts`：`post_id`/`page_id` 取自请求体（详见 AD-SEC-2 同类）
   - 通用 `meta-ads/draft`：见 AD-SEC-2
   - 🔴 **`winner-reel-sync/engine.ts`（第四十七轮补入 —— 原来这条清单漏了它，标题的"三个入口"实为四个）**：`loadConfig(clientId)`（`:69-84`）只按 `client_id` 取 `winner_reel_sync_config`，然后把 `ad_account_id` / `target_adset_id` / `fb_page_id` **原样拿去用，从不核验这个 ad set、这个账户、这个主页是不是这个客户的**。随后 `:187-218` 直接往那个组里建广告，`:228-272` 的每日任务还会按 CTR **暂停组内已有的广告**。
     → 所以 `target_adset_id` 一旦配错或残留成共享账户里**别家客户的组**，ME 会（a）把 A 客户的内容塞进 B 客户的广告组，（b）**自动暂停 B 正在投的广告**。这条跟 `execute/route.ts` 的区别是：**id 不来自请求体，来自一张没人校验过的配置表** —— 所以只加"别信请求体"那种守卫挡不住它。
     ⚠️ 这条还跟 `AD-PLAY-1` 咬合：那条已经指出 `winner_reel_sync_config` **没有打法/目标字段、代码也从不回读目标组的 `optimization_goal`**。同一张配置表，既没归属校验也没内容校验，却直接驱动建广告和停广告。
     修：让这条路径共用同一套**实体归属守卫**（ad set / account / page 三者都要），**归属查不出来就 fail closed**，别默认放行
+    ↳ 触发它的有两处：`cron/winner-reel-sync-daily` 和看板上的「补新素材」按钮（`ad-health/execute-prescription/route.ts`）。**这两处本身不收实体 id**（`execute-prescription` 只按 `client_id` 查 `winner_reel_sync_config.enabled`），所以修守卫要修在 engine 里，不是修在这两个入口上。
+
+  ✅ **第四十九轮已把全仓 Meta 写路径重扫一遍**（`pauseAd` / `updateCampaignBudget` / `executeStopLoss` / `boostPagePost` / `publishDraftPaused` / `activatePublished` + `src/app/api` 下所有 ads 相关 route），**没有第六个**。另核实 `meta-ads/draft/route.ts:58-64` 那句「不信请求体」的注释**只兑现了一半** —— `pageId: client.facebook_page_id ?? body.pageId ?? ''`，客户没配主页时**仍然回退到请求体**，所以 `AD-SEC-2` 依旧成立。
 
   修：统一加 **实体 → client 归属守卫**（campaign / page / post / form / creative 都要），或推进账户拆分（§2.1 子牙意见：**根治靠账户治理，不是写白名单**）
 - [ ] **AD-SEC-2 通用 `meta-ads/draft` 不校验素材归属**：`...(body as AdDraft)` 整体展开，`leadFormId`/`imageHash`/`videoId` 原样来自请求体，客户没配主页时 `pageId` 还回退 `body.pageId`；闸门只查买家可见内容不查资产归属。对比 `draft-listing` 已有 `client_assets` 租户守卫。修：补 page/form/creative 归属校验
@@ -237,7 +242,9 @@
   ⚠️ **必须沿 `paging.next` 翻到底，不能只读首屏**（第三十二轮 Codex P2）：Graph 的 `/adsets` 默认一页 25 条，而本次审计遇到的 CTS 账户就有 **26 个 ad set** —— 裸调一次会静默少一条，而"少读了"和"没有"长得一模一样，覆盖率和归属结论都会偏。照 `src/lib/meta/ads-posts.ts:36-66` 的写法（`while (url) { … url = json.paging?.next ?? null }` + 页数 guard），**并且撞到 guard 上限时必须把结果标成「不完整」，不能拿首屏去补审计结论**。
   ⚠️ **还要把混账户里剩下的 20 组也归属清楚**：`act_2775766642787274` 里只有 6 组能对上 ME 追踪的 CTS campaign,另外 20 组($1,278.76)含 Oztop 投流**和未被 ME 追踪的 CTS boost**,而**全部 8 个带兴趣定向的组都落在这 20 组里**。不归属清楚,"CTS 零兴趣定向"就只能说到"那 6 条 campaign",提不到"CTS 这家"。
   ⚠️ **必须带 `campaign_id` 并按归属过滤,不能拿整账户当某个客户的**：`act_1018365291238494` 挂在客户 Roman HU 名下,但 30 Kiteroa 那个楼盘(独立 client)的广告数据也落在同一账户里(见 `docs/clients/30-kiteroa-rothesay-bay/campaigns/live-ops-handoff.md`「广告数据其实一直在回流,只是记在了另一个客户名下」)。不过滤就会重演本审计第八轮那个错误 —— 把混账户的统计安到单个客户头上。活不大,但没做之前"投放侧已经做对了"这句话只能覆盖 3 家里的 1 家、17 条 campaign 里的 6 条
-- [ ] **AD-FRAG-1 每条帖子一个 campaign + 一个 ad set，学习数据被打散**：CTS 账户 26 个 ad set 里 14 个是 `帖子："…"` 型 boost，单条 $2–$37。这不是"按兴趣拆人群"那种碎片化，但后果一样 —— 小预算跑不出 learning，创意之间无法在同一个竞价里公平竞争。修：**campaign 层做归并**（boost 走统一的常驻 campaign，爆款池那条已有雏形），而不是每次新建一整套。
+- [ ] **AD-FRAG-1 每条帖子一个 campaign + 一个 ad set，学习数据被打散**：CTS 账户 26 个 ad set 里 14 个是 `帖子："…"` 型 boost，单条 $2–$37。这不是"按兴趣拆人群"那种碎片化，但后果一样 —— 小预算跑不出 learning，创意之间无法在同一个竞价里公平竞争。⚠️ **这一条要拆成两件事，别当成一条修完**（第四十九轮 Codex P2，成立）：上一版改完变成"campaign 复用、预算或排期不同的各自一个 ad set" —— 但**本条声称要解决的"小预算跑不出 learning、创意无法在同一竞价里公平竞争"是 ad set 这一层的性质**。各自留一个 ad set，那个问题原样还在。所以现在这条修法**只是后台组织整洁，不是碎片化的解药**，不能记成同一件事做完了。
+  - **(a) 组织归并（本条，低风险可先做）**：boost 走统一的常驻 campaign，不再每次新建一整套。收益是账户可读、报表可归并 —— **就到这儿，别声称它修好了 learning**。
+  - **(b) 真正的碎片化修复（另一件事，须单独设计）**：要让创意真正进同一个 ad set 竞价，前提是**共享预算 + 单条广告自己的生命周期**（按广告起停，而不是靠 ad set 的 `start_time`/`end_time` 排期）。这会改掉 `boost-post` 现有的每次一份 `daily_budget_aud` + `duration_days` 契约（`route.ts:45-70,101`，预算与起止时间设在 ad set 层，见 `client.ts:696-698`），**属于新设计，不是顺手做**。
   ⚠️ **但不能一路并到"同一个 ad set"—— 那会打断现有请求契约**（第四十八轮 Codex P2，已核实。上一版写的是"统一的常驻 campaign/**ad set**"，那半句错了）：`boost-post/route.ts:45-70,101` 每次接受**这一次自己的** `daily_budget_aud` 和 `duration_days`（1–30 天），而 `client.ts:696-698` 的 `boostPagePost` 把 `daily_budget` / `start_time` / `end_time` **设在 ad set 这一层**。所以复用同一个 ad set 会有两个后果：① **新帖子没法有自己的预算和截止日期**；② **改这个组的预算/排期会同时影响之前所有还在跑的帖子**。
   → 正确口径：**campaign 复用（归并的收益主要在这一层）；预算或排期不同的仍然各自一个 ad set**。真要并到单个 ad set，得先把契约改掉 —— 定义共享预算 + 单条广告自己的生命周期（按广告起停而不是按组排期），那是另一件事，不能顺手做
 - [ ] **AD-LINK-1 `creative_ref` 的身份粒度要按 variant 不按素材**：5–8 个角度常共用同一张图，按素材 id 记会让所有角度写同一个 `creative_ref`，角度归因归零。需 variant 稳定 id + 素材关系另存 + `adId → variantId` 绑定；配套 migration（`ad_creative_links.post_id` 放开 NOT NULL、`creative_source` 加 variant 层）**待 PM `go apply`**
