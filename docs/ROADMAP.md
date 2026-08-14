@@ -155,7 +155,14 @@
   ⚠️ **"从过滤后的 campaign 行聚合"这句本身有个坑，不点破就会少算钱**（第三十七轮 Codex 指出，已核实）：定时和手动两个写入口拿 campaign 明细走的都是 `src/lib/meta/client.ts:123-166` 的 `getAdCampaignInsights`，它**默认 `limit = 10`、`sort=spend_descending`、且不读 `paging.next`** —— 也就是只拿花钱最多的 10 条（`20260721000001` 注释里"truncated to the top 10 by spend"说的就是它）。**账户里超过 10 条 campaign 有花费时，照这个明细重算 = 跨客户污染是过滤掉了，但本客户的花费被静默截断**，Goal、月报、交付物一起少算。
     → 实施 `AD-ISO-1` 时**必须同时改成完整分页并带 completeness 状态**：沿 `paging.next` 取全，**分页没取完就不许用部分行聚合**（宁可这一行不写/标为不可用）。
     ✅ 顺带确认：现存 105 行 snapshot 的 `campaigns` 最多只有 8 条（CTS 最多 6、Oztop 最多 8），**没有一行撞到 10 这个上限**，所以上面那个"101 行已核对干净"的结论不受截断影响。
-  修：① 同步侧按 campaign→client 归属过滤（或推进账户拆分，`docs/strategy/meta-flywheel-risk-and-sequencing.md` §2.1 的结论）；② `meta_ads_snapshots` 那条改为从过滤后的 campaign 行聚合，不用账户级总数，**且明细必须分页取全**；③ **拉不到 campaign 明细、或分页没取完时不许只落账户总额**（要么整行不写、要么显式标为不可用），并回头处理已存在的那 2 行
+  🔴 **⚠️ "按 campaign→client 归属过滤"这句现在没有依据可用 —— 归属表根本不存在**（第四十六轮 Codex P1，已核实。这是我开的药方本身缺前置，不是实施细节）：全仓搜遍 `supabase/migrations/`，**没有任何一张持久化的 Meta `campaign_id → client_id` 归属表**。现有几个带 campaign id 的地方都不能当依据：
+  - `ad_daily_insights.client_id` —— **正是本条指出的那条错误同步路径写进去的**，拿它当归属证据是循环论证；
+  - `meta_ads_snapshots.campaigns` —— 同一次整账户拉取的产物，同样不独立；
+  - `flywheel_actions` payload —— 只覆盖 **ME 自建且成功落账**的广告（今天是 0 条，且 `AD-LOG-1` 那条路还会丢记录）；
+  - `contacts.attr_campaign_id` —— 只覆盖真出了 lead 的 campaign。
+  → 所以实施时若"按现有 insight 行过滤"，污染原样保留；若"只保留已知 id"，**会静默丢掉人在 Ads Manager 里给本客户建的 campaign**（今天绝大多数广告都是这么来的）。两种都错。
+  **必须先建立并回填一张权威归属登记**（campaign_id → client_id，带来源与置信度），**对未知 campaign 采取 fail-closed 或标记 completeness**，或者干脆先做账户拆分（`meta-flywheel-risk-and-sequencing.md` §2.1 的结论）。
+  修：① 同步侧按 campaign→client 归属过滤（**前提是先有上面那张归属表**；或推进账户拆分）；② `meta_ads_snapshots` 那条改为从过滤后的 campaign 行聚合，不用账户级总数，**且明细必须分页取全**；③ **拉不到 campaign 明细、或分页没取完时不许只落账户总额**（要么整行不写、要么显式标为不可用），并回头处理已存在的那 2 行
 - [ ] 🔴 **AD-PKG-1 交付物里的「广告」那一栏从上线起就是空的 —— 写和读都指向一个不存在的列，两边都不报错【已上线在跑】**（第三十一轮发现）：实查 `information_schema`，`meta_ads_snapshots` 的 16 列里**没有 `production_package_id`**。
   - 写侧 `clients/[id]/meta-ads/sync/route.ts:119-127`：`.update({ production_package_id })` 是个**不 await 的浮动 Promise**，必然报错，错误只进 `console.error`，接口照样返回 200 —— 调用方以为绑上了；
   - 读侧 `clients/[id]/production/[packageId]/route.ts:116-120`：用同一个不存在的列 `.eq('production_package_id', packageId)` 过滤，PostgREST 报错被 `?? []` 吞成空数组 —— **每一份 production package 的 ads 维度都一直是空的，没有任何地方会喊一声**。
@@ -205,6 +212,9 @@
   正确修法两条一起：
   1. **信任根是客户配置的域名，不是请求体** —— `sourceUrl` 的 host 必须落在该客户已登记的官网/房源系统域名内（`master_briefs.source_website_urls` / `website` 这类已有字段），否则直接拒绝出稿；或干脆**只接受来自 ME 已核实数据记录的事实**（首条广告用这条最省）；
   2. **抓取必须走 `src/lib/net/safe-fetch.ts` 的 `safeFetchText`**（#965 刚落的 GET-only、连接绑定、带重定向与内网地址防护的原语），**不要自己 `fetch`**
+  3. 🔴 **事实必须和"哪套房"绑定 —— 光有域名白名单还是能张冠李戴**（第四十六轮 Codex P1，已核实）：`draft-listing/route.ts` **从头到尾没查过 `listings` 表**。`listingId`（`:191-229`）只被拿去做**素材归属闸**（`pickUsableForListing(found, body.listingId, clientId)`），而 `body.listing`（`ListingFacts`：价格、地址、战绩）和 `sourceUrl` **全部来自请求体，从不与那套房的记录核对**。
+     → 于是「**A 房的价格地址 + B 房的真实照片**」这种组合，域名白名单和素材闸**两道都过** —— 素材确实属于 B 房、URL 确实在客户域名下，但广告在拿 B 房的照片宣传 A 房的价格。这直接踩 CLAUDE.md §8「绝不凭空注入客户业务数据」那条红线，而且比编造更难发现（每一项单看都是真的）。
+     修：**按 `id + client_id` 把那套房从 `listings` 读出来，事实由这条记录派生**（而不是由调用方给）；退一步至少要校验 `sourceUrl`、`ListingFacts` 与 `listingId` 三者指向同一套房，对不上就拒绝出稿
 - [ ] **AD-OBS-1 创意变体数不可观测**：`ad_daily_insights` 的 ad 级行无 `creative_id` / `asset_feed_spec`，`ad-level-breakdown.ts` 也只到 ad 级 —— "我们到底投了多少种说法"系统答不出来（用了 Advantage+ 素材自动化的广告尤其）。修：回读 `creative` + asset feed 并落库
 - [ ] **AD-OBS-2 攒池测试无法按 hook 归因**：`client_audience_assets` 按 `audience_id` 唯一、无创意维度，而 `videoEventRule` 把一批 videoId 灌进同一个池 → `P18.E.3` 只给得出池子整体净增。修：一 hook 一池，或另建创意级增长映射。（完播成本那半由 `P21.K.8` 覆盖）
 - [ ] 🔴 **AD-LOG-1 `record()` 漏读 `error`,而且失败时会留下失联的暂停实体【投第一条真广告前必修 —— 第四十五轮补入首投前置】**（第二十七轮升级,原写"小 bug 顺手修",低估了）：`const { data } = await supabase...insert()`,`error` 连接都没接;且它发生在 `publishDraftPaused` **已经建出 campaign / ad set / ads 之后**。
