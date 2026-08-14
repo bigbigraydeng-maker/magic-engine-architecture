@@ -94,16 +94,27 @@
   - `ad_daily_insights.spend`（裸 `NUMERIC`，`parseDailyMetrics` 写）→ 喂**广告健康引擎 / ad-engine 看板**
   - `meta_ads_snapshots.spend`（裸 `NUMERIC`，注释直言 "total spend in account currency"）→ 喂 **`MetaAdsAdapter.ts:90`（Goal 指标）、月报、production package（`production/[packageId]/route.ts:117`）**
 
-  ⚠️ **只修 `ad_daily_insights` 修不到报表侧** —— `20260721000001` 的注释本身就写明 "meta_ads_snapshots is left untouched — MetaAdsAdapter, the monthly report and the production-package view all still read it"。**两张表必须一起加 `currency` 列**（Graph `account_currency` 直接给），并在任何跨客户汇总处按基准日折算 + 注明汇率；否则本条完成后报表仍然是错的
+  ⚠️ **只修 `ad_daily_insights` 修不到报表侧** —— `20260721000001` 的注释本身就写明 "meta_ads_snapshots is left untouched — MetaAdsAdapter, the monthly report and the production-package view all still read it"。**两张表必须一起加 `currency` 列**（Graph `account_currency` 直接给），并在任何跨客户汇总处按基准日折算 + 注明汇率。
+
+  ⚠️ **而且加列 + 改新拉取还不够，历史行仍然没有单位**：`meta_ads_snapshots` 是**每次同步只追加一行**的表，而 production package **会永久关联某一条旧 snapshot** —— 新的同步不会修好已交付的记录；`ad_daily_insights` 的历史行一旦超出回拉窗口也会一直是 NULL。所以本条必须包含：**① 按 `ad_account_id` 回填历史币种**（账户币种不随时间变，可安全回填）**② 读侧显式处理 NULL**（宁可拒绝汇总也不要默认同币种）。否则 migration 做完，旧月报、Goal 历史和已交付的 production package 照样解释不了
 - [ ] **AD-PLAY-1 两个建广告调用点没传 `play` / `playSource`，打法账本恒为 NULL**：`boost-post/route.ts:122` 与 `winner-reel-sync/engine.ts:214` 都调了 `linkAdToCreative`，但**三个打法参数一个没传**，而 `persistLink` 会照写 NULL。`LinkAdToCreativeArgs` 和 `persistLink` 早就支持这三列 —— **纯粹是调用方没传，真·接线活**。**两条路径的处理方式不同，不能一起硬编码**：
   - `boost-post` → 固定 `boost_organic_post` + `declared_at_creation`。安全：给自然帖投流，这个路由干的就是这件事，打法由路由本身决定
   - `winner-reel-sync` → ⚠️ **不能硬编码 `thruplay_pool_build`**。`engine.ts:203-211` 只是往 `winner_reel_sync_config.target_adset_id` 指定的广告组里加广告，而**那张配置表没有打法/目标字段**（`20260711000001` 只有 `target_adset_id`），代码也**从不回读该广告组的 `optimization_goal`**。目标组要是被换成非 ThruPlay 的，所有新广告就会被贴上错标签 —— 这正好违反 `play` 那条"拿不到就留空，绝不猜"的契约，而且 `declared_at_creation` 在 `PLAY_SOURCE_TRUST` 里是**高可信**，错标签会污染打法学习。修：要么给配置表加受校验的打法字段，要么建广告时回读目标组 `optimization_goal` 确认后再写；**两者都做不到就留 NULL**
 
   注意 `AD-LINK-1` 解决的是 variant 身份 + migration，**不覆盖这两条帖子路径**，不能互相替代
-- [ ] **AD-CUR-2 `boost-post` 用 `daily_budget_aud` 却不读账户币种**：`daily_budget_aud * 100` 原样发给账户，Meta 按**账户币种**解释。CTS/Roman 是 NZD → 批准的"AUD 金额"实际按 NZD 花掉，回显的 `estimated_total_aud` 也是错的。修：回读账户币种，预算按账户币种表达或显式换算
+- [ ] **AD-CUR-2 写预算的入口都写死 AUD、却不读账户币种 —— 两个入口，其中一个已上线在用**：Meta 一律按**账户币种**解释传进去的数字，而 CTS/Roman 账户是 **NZD**（已实读）。
+  - 🔴 **执行抽屉（已上线）**：`AdsFixDrawer.tsx:309` 的输入框标签写死 **「新日预算（AUD）」**，`meta-ads/execute/route.ts:157` 直接 `Math.round(newBudget * 100)` 发给 Meta，**不读币种、不换算** → 人以为在填 AUD，钱按 NZD 花。注释里那句 "minor currency units (cents for USD/AUD)" 本身就默认了账户是 AUD
+  - `boost-post`：收 `daily_budget_aud`、同样乘 100 原样发送，回显的 `estimated_total_aud` 也是错的
+
+  修：两处都回读账户币种，UI 显示与提交都按**账户币种**表达（或做显式换算并标注汇率）。⚠️ 只修 boost 不修执行抽屉，等于把最常用的那个入口留在错的状态
 - [ ] **AD-GATE-1 `approveDraft` 激活前不重新回读**：只查 `payload.status` 就 `activatePublished`，不重跑 `fetchAdSetReadback` / `checkLaunch`。草案在共用账户里躺几天，期间被改则批准人看到的是旧快照、钱按新配置花 —— 这违背 `launch-readback.ts` 自己"只有回读能看见"的立论。修：激活前重跑回读 + 闸门，有 blocker 拒绝激活。**不需 migration**
   - ⚠️ **光"重跑一次"不够，会漏掉最要命的那条检查**：`expectedGeo` 只存在于 `CreateDraftDeps`（`draft-and-gate.ts:62`，创建时用一次），**没有落进 `DraftRecord`**；而 `approveDraft(actionId, supabase, accessToken)` 手上根本没有它。缺了它 `adaptMetaAdSet` 会传 `null`，`launch-readback.ts:281` 的 `if (input.expectedGeo && ...)` 直接跳过 **`geo_mismatch`** —— 也就是"等待期间被改到别的国家"这个核心场景照样放行。**修的时候必须同时**：创建时把可信地区持久化进 `DraftRecord`，或批准时从 `clients.country` 重新加载
-- [ ] **AD-SEC-1 `boost-post` 不校验 page/post 归属**：`post_id`/`page_id` 直接取自请求体，只从 `clients` 取广告账户。混账户下有 A 客户权限即可提交 B 客户的帖子（strategy doc §2.4 的 R5 写越权）。修：`page/post → client` 归属校验，或推进账户拆分（§2.1 子牙意见：根治靠账户治理）
+- [ ] **AD-SEC-1 实体归属校验缺失 —— 三个入口，其中一个已上线在用【本次审计发现的最严重一条】**：混账户下（CTS/Oztop 同账户）任何"只校验 URL 里的客户、实体 id 却取自请求体"的写路径，都能被 A 客户的调用方拿去动 B 客户的东西。这就是 strategy doc §2.4 狄仁杰记的 **R5 写越权**，那份文档还指出「ROADMAP §Phase 18 安全边界声称已校验账户 ownership，**与实现不符**」—— 至今仍不符。
+  - 🔴 **`meta-ads/execute/route.ts:71+`（已上线、正在用的止损按钮）**：`campaign_id` 直接取自请求体，只做 `requirePaidClientAccess(clientId)`，**从不把 campaign 归属与该客户的 `meta_ad_account_id` 对账**，随后就用共享 system-user token 暂停广告 / 改预算。有 CTS 看板权限的人提交一个 Oztop campaign id 即可动别家的在投广告。**这条比 boost 那条严重 —— 它已经在生产里跑**
+  - `boost-post/route.ts`：`post_id`/`page_id` 取自请求体（详见 AD-SEC-2 同类）
+  - 通用 `meta-ads/draft`：见 AD-SEC-2
+
+  修：统一加 **实体 → client 归属守卫**（campaign / page / post / form / creative 都要），或推进账户拆分（§2.1 子牙意见：**根治靠账户治理，不是写白名单**）
 - [ ] **AD-SEC-2 通用 `meta-ads/draft` 不校验素材归属**：`...(body as AdDraft)` 整体展开，`leadFormId`/`imageHash`/`videoId` 原样来自请求体，客户没配主页时 `pageId` 还回退 `body.pageId`；闸门只查买家可见内容不查资产归属。对比 `draft-listing` 已有 `client_assets` 租户守卫。修：补 page/form/creative 归属校验
 - [ ] **AD-FACT-1 事实来源从不校验，却盖"官网可溯"章**：`assertFacts` 只查 `sourceUrl` 非空，从不抓页面核对价格/地址/战绩，而 `traceClaims` 把原样传入的字段标成"官网可溯"。**第一条付费广告就会带着未核实内容投出去**，不是量大了才危险。修：按 `sourceUrl` 抓页核对，或只接受 ME 已核实数据源
 - [ ] **AD-OBS-1 创意变体数不可观测**：`ad_daily_insights` 的 ad 级行无 `creative_id` / `asset_feed_spec`，`ad-level-breakdown.ts` 也只到 ad 级 —— "我们到底投了多少种说法"系统答不出来（用了 Advantage+ 素材自动化的广告尤其）。修：回读 `creative` + asset feed 并落库

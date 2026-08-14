@@ -386,6 +386,8 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 | 8 | **系统刻意不给赢家结论** | `ad-level-breakdown` 明确"从不宣称谁赢了" |
 | 9 | **赢家→下一轮的通路是空的** | `winner_structures` 0 行，唯一写入方是 Airtable 人工表单 |
 | 10 | **每条帖子一个 campaign + 一个 ad set** | CTS 账户 26 个 ad set 里 14 个是 `帖子："…"` 型 boost，单条 $2–$37，学习数据被彻底打散 |
+| 11 | 🔴 **已上线的止损按钮能动别家客户的广告** | `meta-ads/execute/route.ts:71+` 的 `campaign_id` 取自请求体，只校验 URL 里的客户，**从不与该客户的 `meta_ad_account_id` 对账**；混账户下有 CTS 权限即可暂停 / 改预算 Oztop 的在投广告。strategy doc §2.4 记的 R5 写越权，**至今未修**（登记为 `AD-SEC-1`）|
+| 12 | 🔴 **改预算的输入框写死 AUD，账户却是 NZD** | `AdsFixDrawer.tsx:309`「新日预算（AUD）」→ `execute/route.ts:157` `newBudget * 100` 直发 Meta，不读币种不换算；Meta 按账户币种解释 → 人以为填 AUD，钱按 NZD 花（登记为 `AD-CUR-2`）|
 
 **关于问题 10 的说明**：这是本仓最典型的 audience fragmentation，但它的成因不是"按兴趣拆人群"，而是"每次 boost 一条帖子就新开一套"。表现一样：小预算跑不出 learning，创意之间无法在同一个竞价里公平竞争。
 
