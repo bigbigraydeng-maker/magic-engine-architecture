@@ -143,6 +143,12 @@
     | `meta_ads_snapshots` | ❌ **没有** | 仓库文件里的那半边**从没跑过** → 只有广告维度是断的 |
     **所以不要新写一个只补 `meta_ads_snapshots` 的 migration** —— 那会在仓库里留下两份意图重复的迁移，把真正的问题（仓库有、生产没有）盖过去。正确做法：先核对 `20260522000001` 这份文件与生产账本的差异，再决定重放它（文件本身是 `ADD COLUMN IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS`，重放安全）还是写一份显式覆盖两侧的修复迁移。⚠️ 顺带查一遍**还有没有别的仓库迁移没落库** —— 账本里已经有一条 `backfill_drifted_schema`，说明这类漂移不是第一次。
   修：先定这条链路还要不要（P13.D 的原意是把当期广告数据钉进交付物）。要 → **按上面的口径处理漂移、把列补上**（**migration 待 PM `go apply`**）+ **写前按 `id + client_id` 校验包归属、读侧 snapshot 查询同时按 `client_id` 限定**，并把两侧的静默兜底改成显式报错；不要 → 把写侧和读侧一起删掉，**并把仓库里那份没落库的 migration 一并清理**，别留一段永远返回空的代码配一份永远不跑的迁移。**顺带把 `AD-CUR-1` 里"production package 会永久关联某一条旧 snapshot"那句一并订正**（关联从来没成立过）
+- [ ] 🔴 **AD-SPEC-1 房源广告没声明「住房」特殊类别 —— 建的时候不声明、回读也不查【投第一条真广告前必修，须与 `AD-GEO-0` 一起定】**（第三十八轮发现）：
+  - `ad-publisher.ts:176` 写死 `special_ad_categories: JSON.stringify([])`，**不看客户业务类型**；
+  - 而首投要走的 `draft-listing` 恰恰是**房源**（Roman / 30 Kiteroa 是住宅），客户服务协议 `docs/clients/30-kiteroa-rothesay-bay/service-agreement/2026-07-13-30-kiteroa-lead-gen-test-v1.html:380-383` 明确要求遵守住房广告与反歧视政策；
+  - 闸门也看不见这个字段：`launch-readback.ts` / `readback.ts` / `meta-readback-adapter.ts` 三个文件里 `special` **零命中** —— 既不声明也不校验，**轻则拒登，重则违反投放限制**。
+  ⚠️ **必须和 `AD-GEO-0` 同批设计**：住房类别下 Meta 会限制定向能力并对地理半径设下限（**具体口径动手前查一次 Meta 官方文档，不要照抄任何二手记忆值**）。也就是说 `AD-GEO-0` 那个"只发城市 + 10km 半径"的修法**在房源广告上可能根本不成立**。两条一起定，否则 geo 会按一个用不了的方案做出来。
+  修：按**可信的客户业务类型**（不是请求体传进来的）决定 `special_ad_categories`，并把它加进激活前的回读校验（读 campaign 的 `special_ad_categories` 与预期比对，不符就拦）。**不需 migration**（业务类型若无现成字段，则需一列，届时待 PM `go apply`）
 - [ ] 🔴 **AD-GEO-0 `targetingFor` 把国家和城市一起发出去，城市半径形同虚设 —— ME 建的广告从一开始就投整个国家【投第一条真广告前必修】**（第二十七轮发现，比 `AD-GEO-1` 更根本）：`ad-publisher.ts:105-109`
   ```ts
   const geo = { countries: d.geoCountries }            // ['NZ']
