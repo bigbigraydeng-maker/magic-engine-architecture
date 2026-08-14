@@ -90,13 +90,16 @@
 
 > 全部来自只读审计 + 16 轮复审逐条核实，未改生产代码。审计只报缺口不写方案的，这里登记成可排期的条目。
 
-- [ ] **AD-CUR-1 广告花费表都没有币种列 —— 跨客户金额全是混币种加总【影响面最大，且是两张表】**：2026-08-14 实读账户 `currency`：Oztop `1735240120460765` = **AUD**，CTS / Roman / 混账户 = NZD；而两张表都把 Graph 返回的账户币种金额原样存下、不换算、不记币种。
+- [ ] **AD-CUR-1 广告花费表都没有币种列 —— 跨客户金额全是混币种加总【影响面最大，且是三张表】**：2026-08-14 实读账户 `currency`：Oztop `1735240120460765` = **AUD**，CTS / Roman / 混账户 = NZD；而两张表都把 Graph 返回的账户币种金额原样存下、不换算、不记币种。
   - `ad_daily_insights.spend`（裸 `NUMERIC`，`parseDailyMetrics` 写）→ 喂**广告健康引擎 / ad-engine 看板**
   - `meta_ads_snapshots.spend`（裸 `NUMERIC`，注释直言 "total spend in account currency"）→ 喂 **`MetaAdsAdapter.ts:90`（Goal 指标）、月报、production package（`production/[packageId]/route.ts:117`）**
 
   ⚠️ **只修 `ad_daily_insights` 修不到报表侧** —— `20260721000001` 的注释本身就写明 "meta_ads_snapshots is left untouched — MetaAdsAdapter, the monthly report and the production-package view all still read it"。**两张表必须一起加 `currency` 列**（Graph `account_currency` 直接给），并在任何跨客户汇总处按基准日折算 + 注明汇率。
 
-  ⚠️ **而且加列 + 改新拉取还不够，历史行仍然没有单位**：`meta_ads_snapshots` 是**每次同步只追加一行**的表，月报和 Goal 历史读的就是当时那一行 —— 新的同步不会修好已发出去的旧月报；（⚠️ 第三十一轮订正：这里原写 "production package 会永久关联某一条旧 snapshot"，**那条关联从来没成立过**，见 `AD-PKG-1`）`ad_daily_insights` 的历史行一旦超出回拉窗口也会一直是 NULL。所以本条必须包含：**① 按 `ad_account_id` 回填历史币种**（账户币种不随时间变，可安全回填）**② 读侧显式处理 NULL**（宁可拒绝汇总也不要默认同币种）。否则 migration 做完，旧月报、Goal 历史和已交付的 production package 照样解释不了
+  ⚠️ **而且加列 + 改新拉取还不够，历史行仍然没有单位**：`meta_ads_snapshots` 是**每次同步只追加一行**的表，月报和 Goal 历史读的就是当时那一行 —— 新的同步不会修好已发出去的旧月报；（⚠️ 第三十一轮订正：这里原写 "production package 会永久关联某一条旧 snapshot"，**那条关联从来没成立过**，见 `AD-PKG-1`）`ad_daily_insights` 的历史行一旦超出回拉窗口也会一直是 NULL。所以本条必须包含：**① 按 `ad_account_id` 回填历史币种**（账户币种不随时间变，可安全回填）**② 读侧显式处理 NULL**（宁可拒绝汇总也不要默认同币种）。否则 migration 做完，旧月报和 Goal 历史照样解释不了
+
+  ⚠️ **其实是三张表，不是两张 —— 派生出去的飞轮指标也裸存账户币种**（第四十轮 Codex 指出，已核实）：`flywheel/adapters/MetaAdsAdapter.ts:118-145` 把 snapshot 的 `spend` / `cpc` **原样复制**进 `flywheel_metrics.metric_value`，而它写的 `source_ref` 只有 `{snapshot_id, ad_account_id, period_start, period_end}`，**没有币种**；下游 `flywheel/attribution/job.ts:290-313` 的 `latestMetricValue` 又只取 `Number(data.metric_value)` —— 一个没有单位的裸数字。**所以回填 snapshot 修不好已经生成的飞轮历史**，Goal 和归因照样会把 AUD 和 NZD 当同一个单位比。
+  → 本条必须一并规定：**`flywheel_metrics` 怎么带币种**（加列，或统一折成基准币种存），并**重放或作废已有的 `ads.account.spend` / `ads.account.cpc` 及其派生结果**。✅ 好消息是可回填 —— `source_ref.ad_account_id` 在，按账户查币种即可
 - [ ] **AD-PLAY-1 两个建广告调用点没传 `play` / `playSource`，打法账本恒为 NULL**：`boost-post/route.ts:122` 与 `winner-reel-sync/engine.ts:214` 都调了 `linkAdToCreative`，但**三个打法参数一个没传**，而 `persistLink` 会照写 NULL。`LinkAdToCreativeArgs` 和 `persistLink` 早就支持这三列 —— **纯粹是调用方没传，真·接线活**。**两条路径的处理方式不同，不能一起硬编码**：
   - `boost-post` → 固定 `boost_organic_post` + `declared_at_creation`。安全：给自然帖投流，这个路由干的就是这件事，打法由路由本身决定
   - `winner-reel-sync` → ⚠️ **不能硬编码 `thruplay_pool_build`**。`engine.ts:203-211` 只是往 `winner_reel_sync_config.target_adset_id` 指定的广告组里加广告，而**那张配置表没有打法/目标字段**（`20260711000001` 只有 `target_adset_id`），代码也**从不回读该广告组的 `optimization_goal`**。目标组要是被换成非 ThruPlay 的，所有新广告就会被贴上错标签 —— 这正好违反 `play` 那条"拿不到就留空，绝不猜"的契约，而且 `declared_at_creation` 在 `PLAY_SOURCE_TRUST` 里是**高可信**，错标签会污染打法学习。修：要么给配置表加受校验的打法字段，要么建广告时回读目标组 `optimization_goal` 确认后再写；**两者都做不到就留 NULL**
