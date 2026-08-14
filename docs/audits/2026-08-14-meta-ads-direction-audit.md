@@ -504,6 +504,8 @@ ad        status: 'ACTIVE'
 
 在 (i) 或 (ii) 落地之前，**①a 只是把 `play` 传上、等下次真有广告被建时能记上**，它本身不产生第一条记录。
 
+> ⚠️ **①a 里 `winner-reel-sync` 那一半不能硬编码打法**（第十九轮更正）：它只是往配置里指定的 `target_adset_id` 加广告，而 `winner_reel_sync_config` **没有打法/目标字段**、代码也不回读该组的 `optimization_goal`。目标组一旦不是 ThruPlay 组，硬写 `thruplay_pool_build` 就是在猜 —— 而 `declared_at_creation` 在 `PLAY_SOURCE_TRUST` 里算**高可信**，错标签会直接污染打法学习。要么给配置加受校验的打法字段、要么回读目标确认，**都做不到就留 NULL**。`boost-post` 那一半没这个问题（路由本身就决定了打法）。
+
 > 📌 **结论**：想省事先走 (i) 是可以的，但要接受它**只验一半**；**真正的首条端到端验证必须走 (ii)**。别把 (i) 跑通当成"闭环通了"—— 那正是本审计在批评的那种"各环节都正常，只有并排看才发现断了"。
 
 **①b — 需要 PM 拍板的一块（含 migration）**
@@ -609,6 +611,7 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 2. **②** `ad-publisher.ts:116` 改 `advantage_audience: 1` —— 一行，现在改成本为 0；
 3. **做 ①b（= 方案 (ii)，让 `draft-and-gate` 那条路径能记账）** —— 这是「投出第一条 ME 自建广告并验通完整链路」的真正前置。**不能用方案 (i) 顶替**：修好 boost 路径的四样问题也不改 `REACH`，`results` 恒为 0，验不了"某个客户是被哪条创意带来的"那半截（见 ① 的说明）。设计与编码自己拍板，只在最后对生产库 `apply_migration` 那一下停下来等 PM 一句 `go apply`；
    **并进来一起做（不需要 migration、不需要 PM 点头）**：`approveDraft` 在 `activatePublished` 之前**重跑一次回读 + `checkLaunch`**。现在批准只查 `payload.status`，草案躺在共用账户里几天，激活时用的是建的那一刻的快照 —— 而这恰恰违背 `launch-readback.ts` 自己"只有回读能看见"的立论。
+   ⚠️ **但光"重跑一次"会漏掉最要命的那条**（第十九轮更正）：`expectedGeo` 只在 `CreateDraftDeps` 里（创建时用一次），**没落进 `DraftRecord`**，而 `approveDraft` 手上没有它 → `launch-readback.ts:281` 的 `geo_mismatch` 会被整条跳过，"等待期间被改到别的国家"这个核心场景照样放行。**必须同时**把可信地区持久化进 `DraftRecord`，或批准时从 `clients.country` 重新加载。
    *（若想更早拿到一点信号，可以顺手把方案 (i) 的四样也修了 —— 但要认清它只验上半截的记账，不算闭环。）*
 4. **补事实来源校验** —— ⚠️ **这一步是第十三轮才前移到这里的**（Codex P1，核实成立）。上一版把它挂在第 5 步（批量角度）之前，理由是"批量扩会放大这个洞"—— **但第 4 步已经在花真钱了**。`assertFacts` 只查 `sourceUrl` 非空、从不抓页面核对，而 `traceClaims` 照盖"官网可溯"章（§4 第 6 条）。所以**只要调用方给错房价/地址/战绩，第一条付费广告就会带着未核实内容过审、投出去** —— 这不是"量大了才危险"，是第一条就危险。
    做法二选一：按 `sourceUrl` 抓页面核对关键字段，或**只接受来自 ME 已核实数据源的事实**（后者更省，首条广告用它就够）；
