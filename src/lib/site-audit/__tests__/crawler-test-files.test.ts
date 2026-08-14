@@ -29,6 +29,7 @@ export const CRAWLER_SPLIT_TEST_FILES = [
   'crawler-ssrf-guard.test.ts',
   'crawler-safe-fetch-wiring.test.ts',
   'crawler-sitemap-budget.test.ts',
+  'crawler-same-host.test.ts',
 ] as const
 
 // This guard file's own name matches the crawler-*.test.ts glob below but is

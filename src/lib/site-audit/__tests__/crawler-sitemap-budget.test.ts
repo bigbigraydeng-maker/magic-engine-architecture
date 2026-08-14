@@ -262,6 +262,56 @@ describe('discoverSitemapUrls — one shared sitemap request budget per run', ()
     expect(countRequests('https://example.com/sitemap.xml')).toBe(1)
   })
 
+  /**
+   * 🔴 Codex review on PR #963 (P2). De-duplication is right — the shared
+   *    sitemap must only be READ once — but the level that reaches it second
+   *    used to see nothing, and the old "best single level wins" rule then
+   *    silently returned one page instead of two.
+   */
+  it('merges pages found by the robots directive and Level 1 instead of keeping only the longer one', async () => {
+    const robots = 'User-agent: *\nAllow: /\n\nSitemap: https://example.com/shared.xml'
+    vi.stubGlobal('fetch', serve({
+      'https://example.com/robots.txt': robots,
+      // Named by robots.txt AND listed again by Level 1's index.
+      'https://example.com/shared.xml': urlset(['https://example.com/a']),
+      'https://example.com/sitemap.xml': index([
+        'https://example.com/shared.xml',
+        'https://example.com/other.xml',
+      ]),
+      'https://example.com/other.xml': urlset(['https://example.com/b']),
+    }))
+
+    const urls = await discoverSitemapUrls('example.com')
+
+    // Neither level reached MIN_DISCOVERED_URLS alone; together they do.
+    expect(urls).toEqual(['https://example.com/a', 'https://example.com/b'])
+    // …and the shared sitemap was still only requested once for the whole run.
+    expect(countRequests('https://example.com/shared.xml')).toBe(1)
+  })
+
+  it('keeps the accumulated sitemap pages in the final partial best-effort result', async () => {
+    // robots directive yields one page; every sitemap level then dead-ends and
+    // the homepage BFS finds one different link. Neither reaches the threshold,
+    // so the run ends in partial-best-effort — which must return both, not the
+    // single longest source.
+    const robots = 'User-agent: *\nAllow: /\n\nSitemap: https://example.com/shared.xml'
+    vi.stubGlobal('fetch', serve({
+      'https://example.com/robots.txt': robots,
+      'https://example.com/shared.xml': urlset(['https://example.com/a']),
+      'https://example.com': '<html><a href="/c">c</a></html>',
+    }))
+    const issues: DiscoveryIssue[] = []
+
+    const urls = await discoverSitemapUrls('example.com', { onIssue: (i) => issues.push(i) })
+
+    expect(urls).toEqual(expect.arrayContaining([
+      'https://example.com/a',
+      'https://example.com/c',
+    ]))
+    expect(urls).toHaveLength(2)
+    expect(issues.some((i) => i.stage === 'partial-best-effort')).toBe(true)
+  })
+
   it('continues with the remaining siblings after one child fails', async () => {
     vi.stubGlobal('fetch', serve({
       'https://example.com/robots.txt': ROBOTS_TXT_EMPTY,

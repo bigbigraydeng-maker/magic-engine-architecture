@@ -331,6 +331,32 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
   const report = (stage: string, error: unknown, url?: string): void =>
     opts?.onIssue?.({ stage, url, error: error instanceof Error ? error.message : String(error) })
   let best: string[] = []
+
+  /**
+   * Pages found by the **sitemap** levels (robots.txt directives, Level 1,
+   * Level 2), already same-host filtered, accumulated across the whole run.
+   *
+   * 🔴 Codex review on PR #963 (P2). The run-wide fetch ledger means a sitemap
+   *    named by two levels is only *read* once — correct, but it made the
+   *    second level see nothing. With a per-level "best single result" rule, a
+   *    robots.txt directive yielding `/a` and a Level 1 index yielding `/b`
+   *    each stayed under MIN_DISCOVERED_URLS, and discovery silently returned
+   *    one page instead of two. Merging is the fix that keeps de-duplication:
+   *    the document is still fetched once, its pages just are not thrown away.
+   *
+   *    Deliberately kept here in the orchestration layer, not in
+   *    SitemapFetchBudget — that ledger owns "may this URL be requested", not
+   *    XML, parse results or caching.
+   */
+  const discovered = new Set<string>()
+
+  /** Sitemap levels: merge into the run, then answer once the run is big enough. */
+  const collectSitemapPages = (urls: string[]): string[] | null => {
+    for (const url of urls) discovered.add(url)
+    return discovered.size >= MIN_DISCOVERED_URLS ? Array.from(discovered) : null
+  }
+
+  /** Non-sitemap levels (homepage BFS): unchanged "best single result" rule. */
   const keepOrEscalate = (urls: string[]): string[] | null => {
     if (urls.length >= MIN_DISCOVERED_URLS) return urls
     if (urls.length > best.length) best = urls
@@ -361,7 +387,7 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
       const directives = parseSitemapDirectives(robotsTxt)
       if (directives.length > 0) {
         const directiveLocs = await resolveSitemapUrls(directives, origin, report, budget)
-        const urls = keepOrEscalate(dedupeAndFilter(directiveLocs, origin))
+        const urls = collectSitemapPages(dedupeAndFilter(directiveLocs, origin))
         if (urls) return urls
       }
     }
@@ -385,7 +411,7 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
       const locs = isSitemapIndexDocument(level1.xml)
         ? await expandSitemapIndexChildren(parseLocsFromXml(level1.xml), 1, report, budget)
         : parseLocsFromXml(level1.xml)
-      const urls = keepOrEscalate(dedupeAndFilter(locs, origin))
+      const urls = collectSitemapPages(dedupeAndFilter(locs, origin))
       if (urls) return urls
     }
   } catch (err) {
@@ -405,7 +431,7 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
         const result = await fetchSitemapXmlSafely(childUrl, report, budget, CHILD_SITEMAP_READ)
         if (result.ok) allLocs.push(...parseLocsFromXml(result.xml))
       }
-      const urls = keepOrEscalate(dedupeAndFilter(allLocs, origin))
+      const urls = collectSitemapPages(dedupeAndFilter(allLocs, origin))
       if (urls) return urls
     }
   } catch (err) {
@@ -476,10 +502,17 @@ export async function discoverSitemapUrls(domain: string, opts?: DiscoverOptions
   }
 
   // 走到这里 = 每一级都没凑够阈值，返回的是「最好的那一份残缺结果」。
-  if (best.length > 0) {
+  // 🔴 Codex review on PR #963 (P2): the sitemap levels' accumulated pages are
+  //    unioned in, not discarded in favour of the single longest level. A run
+  //    that found /a via a robots.txt directive and /b via Level 1 must return
+  //    both here, exactly as it would have if either level had reached the
+  //    threshold on its own.
+  const partial = Array.from(discovered)
+  for (const url of best) if (!discovered.has(url)) partial.push(url)
+  if (partial.length > 0) {
     report('partial-best-effort', `no level reached ${MIN_DISCOVERED_URLS} URLs; returning best partial result`, origin)
   }
-  return best
+  return partial
 }
 
 /**
@@ -673,26 +706,44 @@ async function fetchSitemapPageUrls(
 }
 
 /**
- * True when `candidate`'s hostname is exactly `origin`'s hostname (each side
- * has a leading "www." stripped first, so domain.com and www.domain.com are
- * still treated as the same site — the crawler's existing convention).
+ * A URL's hostname reduced to the form the crawler compares, or null if it
+ * cannot be parsed:
+ *
+ *   1. lower-cased;
+ *   2. **one** trailing DNS root dot removed — `example.com.` is the absolute
+ *      form of `example.com` and WHATWG URL keeps the dot in `hostname`
+ *      (Codex review on PR #963, P2). Exactly one, so `example.com..` — which
+ *      is not a legal rooted name — still reduces to `example.com.` and stays
+ *      a different host;
+ *   3. a leading `www.` removed, the crawler's pre-existing equivalence.
+ */
+function comparableHost(url: string): string | null {
+  try {
+    const host = new URL(url).hostname
+      .toLowerCase()
+      .replace(/\.$/, '')
+      .replace(/^www\./, '')
+    return host === '' ? null : host
+  } catch {
+    return null
+  }
+}
+
+/**
+ * True when `candidate` and `origin` reduce to exactly the same hostname.
  *
  * 🔴 SSRF review on PR #963: this used to be a string-prefix check
  *    (`normU.startsWith(normOrigin)`), which wrongly accepts
  *    https://example.com.evil.test as belonging to example.com — the literal
  *    string "https://example.com" IS a prefix of that hostname. Comparing
- *    parsed hostnames for exact equality closes that hole.
+ *    reduced hostnames for exact equality closes that hole, and the root-dot
+ *    normalisation above does not reopen it: `example.com.evil.test` and
+ *    `example.com..evil.test` have no trailing dot to remove.
  */
 function isSameHost(candidate: string, origin: string): boolean {
-  let candidateHost: string
-  let originHost: string
-  try {
-    candidateHost = new URL(candidate).hostname.toLowerCase().replace(/^www\./, '')
-    originHost = new URL(origin).hostname.toLowerCase().replace(/^www\./, '')
-  } catch {
-    return false
-  }
-  return candidateHost === originHost
+  const candidateHost = comparableHost(candidate)
+  const originHost = comparableHost(origin)
+  return candidateHost !== null && candidateHost === originHost
 }
 
 /**
