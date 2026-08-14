@@ -101,6 +101,16 @@
   ⚠️ **其实是三张表，不是两张 —— 派生出去的飞轮指标也裸存账户币种**（第四十轮 Codex 指出，已核实）：`flywheel/adapters/MetaAdsAdapter.ts:118-145` 把 snapshot 的 `spend` / `cpc` **原样复制**进 `flywheel_metrics.metric_value`，而它写的 `source_ref` 只有 `{snapshot_id, ad_account_id, period_start, period_end}`，**没有币种**；下游 `flywheel/attribution/job.ts:290-313` 的 `latestMetricValue` 又只取 `Number(data.metric_value)` —— 一个没有单位的裸数字。**所以回填 snapshot 修不好已经生成的飞轮历史**，Goal 和归因照样会把 AUD 和 NZD 当同一个单位比。
   → ⚠️ **而且补币种之前先做 `AD-ATTR-1`** —— 读侧连"这行是 Meta 还是 Google"都不分，币种对了平台还是错的。
   → 本条必须一并规定：**`flywheel_metrics` 怎么带币种**（加列，或统一折成基准币种存），并**重放或作废已有的 `ads.account.spend` / `ads.account.cpc` 及其派生结果**。✅ 好消息是可回填 —— `source_ref.ad_account_id` 在，按账户查币种即可
+- [ ] 🔴 **AD-ORPH-1 被闸门拦下和被人否决的草案，Meta 那边的实体没人收 —— 既不删也不下发人工任务**（第四十三轮发现，`AD-GATE-1` 的同一段生命周期）：`publishDraftPaused` 成功后 campaign / ad set / creative / ads **都已经在 Meta 建出来了（暂停着）**，然后：
+  - `createDraftForApproval` 的 `blocked` 分支（`draft-and-gate.ts:137-141` 回读失败、`:158-163` 闸门拦下）**只写账本，不删实体**；
+  - `rejectDraft`（`:213-235`）同样**只改 payload 状态**。
+  而 `publishDraftPaused` 里那套逆序 `graphDelete` 回滚**只在建的过程中失败时才跑**（`:165-169`），终态是 blocked / rejected 时根本不触发。结果：**一堆永远不可能再被批准的暂停广告长期堆在 Meta 后台**，而它们看起来跟正常的暂停草案一模一样 —— **后台的人一手滑就能把它开起来花钱**。
+  ⚠️ 这正好撞在 CLAUDE.md 铁律 3 下半：能自动就自动（终态时逆序删掉），确实删不掉（比如 Meta 报错、实体被引用）**就必须下发人工任务并进同一个管道**，带齐 what（这几条是废弃草案、别开）· how（在 Meta 后台删掉这几个 id）· href（直达链接）。现在两样都没有 —— `DraftRecord.orphans` 这个字段**只在建失败那条路上会被填**，blocked / rejected 根本不写它。
+  修：终态（blocked / rejected）自动逆序删除实体；删不掉的落进 `orphans` **并下发人工任务**（`src/lib/pm-todo/manual-items.ts` 的「🙋 需要你动手」栏）
+- [ ] 🔴 **AD-QUEUE-1 审批页按"最近 50 条"截断后才在内存里筛待办 —— 早的待批草案会从唯一入口永久消失**（第四十三轮发现，**首投前置**）：`ad-approval/page.tsx:34-44` 的查询**不带任何状态条件**，只 `.order('created_at', desc).limit(PAGE_LIMIT + 1)`（`PAGE_LIMIT = 50`），拿回来之后才在 `:80` 用 `rows.filter(r => r.payload?.status === 'awaiting_approval')` **在内存里**筛。页面自己在 `:23` 写明「**不做分页**」。
+  → 只要 `flywheel_actions` 里攒够 50 条更新的 `active` / `rejected` / `blocked` / `failed`，**更早但仍在等人点头的草案就再也不会出现在这个页面上** —— 而这是**唯一**的审批入口。
+  ⚠️ 更阴的是 `:246-248` 那句兜底文案：「还有更早的记录没显示（这页只列最近 50 条）」—— 它把漏掉的东西说成**历史记录**，看的人不会意识到**里面可能有正在等他点头的活**。这张页面存在的意义就是保证"该你点头的都在这儿"，而这个保证现在不成立。
+  修：**把状态条件下推到数据库**（按 `payload->>status = 'awaiting_approval'` 查，或落一列可索引的状态），或做真分页 / 待办完整队列；兜底文案也要分清"历史被截断"和"待办被截断"
 - [ ] 🔴 **AD-ATTR-1 归因取数不按来源过滤 —— Meta 和 Google Ads 共用同一批 `ads.account.*` key【隐患已武装，Oztop 两边都配了】**（第四十二轮发现，`AD-CUR-1` 的前置）：
   - `google-data-pullback-daily/route.ts:710-716` 的注释自己写着：Google Ads 的账户级指标"写进**共享的 `ads.account.*` 命名空间**，靠 `source='google_ads_pullback'` 区分，好让同时接了 Meta + Google 的客户仍然分得开"；
   - 但读侧 `flywheel/attribution/job.ts:290-313` 的 `latestMetricValue` **只按 `client_id` + `metric_key` + 时间窗取最新一行，压根不过滤 `source`**（也不过滤账户、币种）。**写侧声明的那个"分得开"，读侧没实现** —— 又一次"要求写了、另一侧没做"，跟 `20260721000001` 那条一模一样。
