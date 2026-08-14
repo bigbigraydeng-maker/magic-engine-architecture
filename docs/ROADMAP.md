@@ -375,7 +375,9 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - 但那些看得懂内容的标签（`shot_note`）来源是 `source_meta.tagged_by = 'human-reviewed 2026-08-03'` —— **人工逐条看完手写，系统未参与**
 - `client_assets` 视频行 **0 条**：免登录上传通道从未收到过视频（图片 83 条，81 条已自动打标）
 - 19 条分两批进来，来源不同：Oztop 7 条走 `scripts/factory-worker/ingest-clips.mjs`（`source_meta.seed='b4-ingest'`，`scene_tag` 从文件名推，不看画面内容）；Roman 12 条是人工逐条看完手写（带 `shot_note` + `tagged_by`）
-- ⚠️ `usage_count` **不能当消费证据** —— 全仓无任何 `+1` 写入方（`evaluate.ts` 只读、`strategist.ts` 只用于排序、`ingest-clips.mjs` 只初始化为 0），值恒为入库时的初值。素材有没有被真正用过，目前**无法从库里判断**
+- ⚠️ `usage_count` **不能当消费证据** —— 全仓无任何 `+1` 写入方（`evaluate.ts` 只读、`strategist.ts` 只用于排序、`ingest-clips.mjs` 只初始化为 0），值恒为入库初值。实测对不上：a_real 计数合计 2、b_generated 合计 0
+- ✅ 但**消费事实查得出来**：`evaluate.ts:375` 建单时把选中的素材写进 `content_work_order_clips`，而 `complete-work-order.ts` 只在红线复扫 → clip 入库 → 台账落账**全部成功后**才把工单置 `in_review`（且用 `.select()` 判行数，防被 sweeper 收回后伪装成功）。所以「关联表 ⋈ 已交付工单」就是可信的消费真值
+- 实测（2026-08-14）：关联表 75 行 / 工单 22 个（8 个已交付）；**a_real 19 条中 5 条已进入交付成片**，b_generated 231 条中 8 条
 
 **为什么现在不做**：人工整理**只发生过 1 次**，尚未构成「重复操作」。铁律 3 针对的是把重复丢给人工，单次不触发。
 PM 2026-08-14 答复：无第二批真拍素材排队，**且不确定后续是否会有** —— 所以按触发条件等，不预先建设。
@@ -384,11 +386,20 @@ PM 2026-08-14 答复：无第二批真拍素材排队，**且不确定后续是�
 
 1. 第二次需要人工整理真拍素材时
 2. 单批真拍素材 ≥ 30 条时
+3. **进入交付成片的 a_real 素材累计 ≥ 15 条**（当前 5 条 / 共 19 条）—— 判据用关联表，不用 `usage_count`：
 
-> 原拟的第 3 条「`usage_count` 合计 ≥ 20」**已撤下**：该计数无写入方（见上），永远不会增长，写进来就是一条静默失效的死条件。
-> 想用「素材真被消费起来了」当触发条件，得先有人记账 —— 单独登记为下面这条欠账，不在本条目内顺手做。
+```sql
+select count(distinct c.clip_id)
+from content_work_order_clips c
+join content_work_orders o on o.id = c.work_order_id
+join video_clips v on v.id = c.clip_id
+where o.status in ('in_review','approved','published','rendered') and v.track = 'a_real';
+```
 
-- [ ] **P21.F.1 用片计数落库**（P3，无人认领）— 出片选用某条 `video_clips` 后原子 `usage_count + 1` 并写 `last_used_at`。当前 `strategist.ts` 按 `usage_count` 排序做「冷素材优先」，而这个值恒为 0，等于该排序规则**现在是空转的**。修完之后「素材消费量」才可以当触发条件用。
+> 该条曾一度按「`usage_count` 合计 ≥ 20」写、又一度整条撤下，两次都不对：计数确实是死的，但消费事实本就有现成真值（关联表），撤掉等于无故阻断这个触发条件。
+> **不要**改去依赖 `usage_count` —— 那会让同一件事有两份真值，早晚漂移。
+
+- [ ] **P21.F.1 用片计数回填**（P3，无人认领）— `strategist.ts:288` 按 `usage_count` 排序做「冷素材优先」，而该值恒为 0，等于**这条排序规则现在是空转的**（所有素材看起来一样冷）。这是个**排序缓存**问题，与上面的消费触发条件无关，不构成它的前置。修法应是从关联表回填 / 派生，而不是另起一份计数。
 
 **开工时风险级别：A 级**（命中质量闸 §2 三项）—— ①供应商花费：转写／视频理解按量计费，须先声明单条成本与硬上限，**建不起来 fail closed**；②要加列存内容标签；③跨客户边界：`loadIngestedPaths` 现有「查询恒带 client_id」约束扩展时必须保持。
 
