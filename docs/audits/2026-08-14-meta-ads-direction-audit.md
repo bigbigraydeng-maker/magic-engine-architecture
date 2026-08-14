@@ -648,13 +648,16 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 3. **做 ①b（= 方案 (ii)，让 `draft-and-gate` 那条路径能记账）** —— 这是「投出第一条 ME 自建广告并验通完整链路」的真正前置。**不能用方案 (i) 顶替**：修好 boost 路径的四样问题也不改 `REACH`，`results` 恒为 0，验不了"某个客户是被哪条创意带来的"那半截（见 ① 的说明）。设计与编码自己拍板，只在最后对生产库 `apply_migration` 那一下停下来等 PM 一句 `go apply`；
    **并进来一起做（不需要 migration、不需要 PM 点头）**：`approveDraft` 在 `activatePublished` 之前**重跑一次回读 + `checkLaunch`**。现在批准只查 `payload.status`，草案躺在共用账户里几天，激活时用的是建的那一刻的快照 —— 而这恰恰违背 `launch-readback.ts` 自己"只有回读能看见"的立论。
    ⚠️ **但光"重跑一次"会漏掉最要命的那条**（第十九轮更正）：`expectedGeo` 只在 `CreateDraftDeps` 里（创建时用一次），**没落进 `DraftRecord`**，而 `approveDraft` 手上没有它 → `launch-readback.ts:281` 的 `geo_mismatch` 会被整条跳过。
-   ⚠️⚠️ **而且就算把它补回来，那条闸门本身也不够用**（第二十五轮发现）：`draft-listing/route.ts:302` 传的是 **`c.country`**（国家级），而闸门只判断 `expectedGeo` 与 `geoNames` 是否互为子串，**从不比较草案里的 `geoCityKeys`**（`targetingFor` 里那个 10km 半径）。所以「北岸 10km 被放宽成整个新西兰」照样通过 —— 而这条规则的 `learnedFrom` 写的正是那次事故（2026-08-04 Roman 把北岸 $1.25M 的房投给全新西兰）。**规则抓不到它自己引用的那次事故。**
+   🔴🔴 **而且还有一条更根本的 —— ME 起草的广告本身就投错地方**（第二十七轮发现）：`ad-publisher.ts:105-109` 的 `targetingFor` **同时**把 `countries`（如 `['NZ']`）和 `cities`（10km 半径）放进 `geo_locations`，而 Meta 的包含项**按并集生效** → `NZ ∪ 北岸10km = 整个 NZ`。**也就是说我们推荐用来投第一条真广告的那条路径，天生就在干"把北岸的房投给整个新西兰"这件事** —— 正是那条闸门引用的 2026-08-04 事故。更糟的是回读会读到同一个错包络，**闸门自己跟自己比、永远一致、永远放行**。修法必须**先**去掉覆盖城市的国家级包含项（`AD-GEO-0`），**再**谈持久化比较（`AD-GEO-1`）。
+   ⚠️⚠️ **就算把 `expectedGeo` 补回来，那条闸门本身也不够用**（第二十五轮发现）：`draft-listing/route.ts:302` 传的是 **`c.country`**（国家级），而闸门只判断 `expectedGeo` 与 `geoNames` 是否互为子串，**从不比较草案里的 `geoCityKeys`**（`targetingFor` 里那个 10km 半径）。所以「北岸 10km 被放宽成整个新西兰」照样通过 —— 而这条规则的 `learnedFrom` 写的正是那次事故（2026-08-04 Roman 把北岸 $1.25M 的房投给全新西兰）。**规则抓不到它自己引用的那次事故。**
    **正确修法**：把**完整 targeting 包络**（国家 + `geoCityKeys` + 半径）持久化进 `DraftRecord`，激活前按同一粒度比较（登记为 `AD-GEO-1`）。
    *（若想更早拿到一点信号，可以顺手把方案 (i) 的四样也修了 —— 但要认清它只验上半截的记账，不算闭环。）*
 4. **补事实来源校验** —— ⚠️ **这一步是第十三轮才前移到这里的**（Codex P1，核实成立）。上一版把它挂在第 5 步（批量角度）之前，理由是"批量扩会放大这个洞"—— **但第 4 步已经在花真钱了**。`assertFacts` 只查 `sourceUrl` 非空、从不抓页面核对，而 `traceClaims` 照盖"官网可溯"章（§4 第 6 条）。所以**只要调用方给错房价/地址/战绩，第一条付费广告就会带着未核实内容过审、投出去** —— 这不是"量大了才危险"，是第一条就危险。
    ⚠️ **做法不能是"按 `sourceUrl` 抓页核对"**（第二十四轮更正）：**事实和 `sourceUrl` 是同一个调用方给的**，他可以指向自己控制、写着假价格的页面，抓下来照样"对得上"、照样拿到"官网可溯"的章 —— **拿请求体里的 URL 当信任根等于没校验**；而且直抓任意 URL 还会引入 SSRF。
    正确做法：**① 信任根是客户已登记的域名**（`sourceUrl` 的 host 必须落在 `master_briefs.source_website_urls` / `website` 这类已配置字段内，否则拒绝出稿），或**只接受来自 ME 已核实数据记录的事实**（首条广告用这条最省）；**② 真要抓页就走 `src/lib/net/safe-fetch.ts` 的 `safeFetchText`**（#965 刚落的 GET-only、连接绑定、防重定向与内网地址的原语），别自己 `fetch`；
-   **同一步一起做掉 `AD-FORM-1`**：`pickForm` 不看语言、只有一个表单时直接选中，英文广告可能把买家送进中文表单 —— 这也是第一条就会踩的（第二十三轮新发现）；
+   **同一步一起做掉另外两条,都是第一条就会踩的**：
+   - 🔴 **`AD-GEO-0`**：`targetingFor` 把国家和城市一起发,Meta 按并集生效 → 广告实际投整个国家,10km 半径形同虚设（第二十七轮新发现,**首发前必修**,否则第一条广告就是那次事故的复刻）；
+   - **`AD-FORM-1`**：`pickForm` 不看语言、只有一个表单时直接选中,英文广告可能把买家送进中文表单（第二十三轮新发现）；
 5. 前置全部落地后，**投第一条真广告 —— 走 `draft-listing` 的 `lead_form`**（不走 REACH boost，也不走还没补归属校验的通用 `meta-ads/draft`）；
 6. **③** 批量角度（半周到一周）。事实来源校验已在第 4 步做掉；若还要跨语言合并，再加"表单身份下沉 + 表单混语言闸门"；
 7. 若要做**攒池型**角度测试（视频 hook 筛选），前置是**两条已登记的 ROADMAP 项，不是一条**（第十一轮更正 —— 上一版把池子增长错记进 `P21.K.8`，实际它不在那条里）：
@@ -761,4 +764,4 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
    两张表都是裸 `NUMERIC`、原样存账户币种、不换算不记币种；而 CTS/Roman 是 NZD、Oztop 是 AUD（均已实读）。**只修前者修不到报表侧** —— `20260721000001` 的注释本身就写明报表仍读 `meta_ads_snapshots`。所以任何跨客户的花费汇总、排行、预算比较都会算错。
    修法：`ad_daily_insights` 加 `currency` 列（Graph 的 `account_currency` 字段直接给），跨客户汇总时按基准日折算并注明汇率。
 
-   ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现与未完成动作已一并登记（**18 条**）：`AD-CUR-1/2` · `AD-PLAY-1` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · **`AD-FORM-1`**（选表单不看语言，首条真钱广告的前置）· `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1` · **`AD-EXPL-1`**（每臂最低探索量，决定「找出赢家」这个卖点成不成立）· **`AD-GEO-1`**（geo 闸门只到国家级，抓不到它自己引用的那次事故）· `AD-EVID-1` · `AD-FRAG-1`。
+   ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现与未完成动作已一并登记（**19 条**）：`AD-CUR-1/2` · `AD-PLAY-1` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · **`AD-FORM-1`**（选表单不看语言，首条真钱广告的前置）· `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1` · **`AD-EXPL-1`**（每臂最低探索量，决定「找出赢家」这个卖点成不成立）· 🔴 **`AD-GEO-0`**（`targetingFor` 国家+城市并集，ME 起草的广告天生投整个国家 —— 首发前必修）· **`AD-GEO-1`**（geo 闸门只到国家级，抓不到它自己引用的那次事故）· `AD-EVID-1` · `AD-FRAG-1`。

@@ -106,9 +106,19 @@
   - 🔴 **执行抽屉（已上线）**：`AdsFixDrawer.tsx:309` 的输入框标签写死 **「新日预算（AUD）」**，`meta-ads/execute/route.ts:157` 直接 `Math.round(newBudget * 100)` 发给 Meta，**不读币种、不换算** → 人以为在填 AUD，钱按 NZD 花。注释里那句 "minor currency units (cents for USD/AUD)" 本身就默认了账户是 AUD
   - `boost-post`：收 `daily_budget_aud`、同样乘 100 原样发送，回显的 `estimated_total_aud` 也是错的
 
-  修：两处都回读账户币种，UI 显示与提交都按**账户币种**表达（或做显式换算并标注汇率）。⚠️ 只修 boost 不修执行抽屉，等于把最常用的那个入口留在错的状态
+  - **草案 → 审批那条路（就是本审计推荐的首发路径）**：`ad-publisher.ts:195` 同样 `String(Math.round(d.dailyBudget * 100))` 按账户币种发送,而审批页的 `describeDraft` 和按钮只显示 `$`,**不告诉批准人这是 AUD 还是 NZD** → 币种不明就点了"开"
+
+  修：三处都回读账户币种,UI 显示、请求契约与持久化记录都按**账户币种**表达(或显式换算并标注汇率)。⚠️ 只修 boost,既漏了最常用的执行抽屉,也漏了首发要走的草案路径
 - [ ] **AD-GATE-1 `approveDraft` 激活前不重新回读**：只查 `payload.status` 就 `activatePublished`，不重跑 `fetchAdSetReadback` / `checkLaunch`。草案在共用账户里躺几天，期间被改则批准人看到的是旧快照、钱按新配置花 —— 这违背 `launch-readback.ts` 自己"只有回读能看见"的立论。修：激活前重跑回读 + 闸门，有 blocker 拒绝激活。**不需 migration**
   - ⚠️ **光"重跑一次"不够，会漏掉最要命的那条检查**：`expectedGeo` 只存在于 `CreateDraftDeps`（`draft-and-gate.ts:62`，创建时用一次），**没有落进 `DraftRecord`**；而 `approveDraft(actionId, supabase, accessToken)` 手上根本没有它。缺了它 `adaptMetaAdSet` 会传 `null`，`launch-readback.ts:281` 的 `if (input.expectedGeo && ...)` 直接跳过 **`geo_mismatch`** —— 也就是"等待期间被改到别的国家"这个核心场景照样放行。**修的时候必须同时**：创建时把可信地区持久化进 `DraftRecord`（⚠️ **不能只重载 `clients.country`**，见 `AD-GEO-1`）
+- [ ] 🔴 **AD-GEO-0 `targetingFor` 把国家和城市一起发出去，城市半径形同虚设 —— ME 建的广告从一开始就投整个国家【投第一条真广告前必修】**（第二十七轮发现，比 `AD-GEO-1` 更根本）：`ad-publisher.ts:105-109`
+  ```ts
+  const geo = { countries: d.geoCountries }            // ['NZ']
+  if (d.geoCityKeys?.length) geo.cities = […radius 10km]  // 北岸 10km
+  return { geo_locations: geo, … }
+  ```
+  Meta 的 `geo_locations` **包含项按并集生效** —— `NZ ∪ 北岸10km = 整个 NZ`。**也就是说 ME 自己起草的广告，天生就是"把北岸的房投给整个新西兰"**，正是 `launch-readback` 那条 `geo_mismatch` 引用的 2026-08-04 事故。而且回读会读到同一个错包络，**闸门自己跟自己比，永远一致、永远放行**（所以 `AD-GEO-1` 必须排在这条之后做）。
+  修：**有城市就不要再发覆盖它的国家级包含项**（或把国家降为 `excluded_geo_locations` 之外的边界用法），再按 Meta 实际生效范围做批准前比较
 - [ ] **AD-GEO-1 `geo_mismatch` 闸门只到国家级，抓不到它自己写明的那次事故**（第二十五轮发现）：
   - `draft-listing/route.ts:302` 传的 `expectedGeo` 是 **`c.country`**（国家级）；
   - `launch-readback.ts:281-290` 只判断 `expectedGeo` 与 `geoNames` 是否互为子串，**从不比较草案里的 `geoCityKeys`**（`targetingFor` 里那个 10km 半径）。
@@ -129,7 +139,9 @@
   2. **抓取必须走 `src/lib/net/safe-fetch.ts` 的 `safeFetchText`**（#965 刚落的 GET-only、连接绑定、带重定向与内网地址防护的原语），**不要自己 `fetch`**
 - [ ] **AD-OBS-1 创意变体数不可观测**：`ad_daily_insights` 的 ad 级行无 `creative_id` / `asset_feed_spec`，`ad-level-breakdown.ts` 也只到 ad 级 —— "我们到底投了多少种说法"系统答不出来（用了 Advantage+ 素材自动化的广告尤其）。修：回读 `creative` + asset feed 并落库
 - [ ] **AD-OBS-2 攒池测试无法按 hook 归因**：`client_audience_assets` 按 `audience_id` 唯一、无创意维度，而 `videoEventRule` 把一批 videoId 灌进同一个池 → `P18.E.3` 只给得出池子整体净增。修：一 hook 一池，或另建创意级增长映射。（完播成本那半由 `P21.K.8` 覆盖）
-- [ ] **AD-LOG-1 `draft-and-gate.ts` 的 `record()` 漏读 `error`**：`const { data } = await supabase...insert()`，`error` 连接都没接；且发生在 Meta 实体已建出之后 → 账本 0 条也可能是"建了没记上"。小 bug，顺手修
+- [ ] **AD-LOG-1 `record()` 漏读 `error`,而且失败时会留下失联的暂停实体**（第二十七轮升级,原写"小 bug 顺手修",低估了）：`const { data } = await supabase...insert()`,`error` 连接都没接;且它发生在 `publishDraftPaused` **已经建出 campaign / ad set / ads 之后**。
+  所以插入失败时不只是"少一条账本":**那套暂停实体没有 `actionId`,既批不了也拒不了**,重试还会再建一套 —— 而 `ad-publisher.ts` 头部自己写着「半成品留在账户里比失败更糟:它会出现在后台、会被人误开、会进第二天的扫描」。
+  修:① `record()` 读 `error`;② 账本写失败时按已返回的 Meta id **回滚**(publisher 已有逆序删除逻辑),或持久化可恢复/幂等状态;③ 回滚也失败时**下发人工任务**(what/how/href 三件套),不能只写 `console.error` —— 铁律 3「发现不许死在日志里」
 - [ ] **AD-ADV-1 `ad-publisher.ts:116` 写死 `advantage_audience: 0`**：无差别关掉 Advantage+ 受众，是 ME 代码唯一与 Andromeda 打法正面冲突处。现有两种 `DraftKind`（`lead_form` / `video_thruplay`）都是冷投，应改为 `1`；将来加 `warm_pool_retarget` 这类 kind 时才需要显式关闭。**该路径没有留下任何成功建广告的记录（账本会静默丢记录，故只能说"无记录"），现在改成本极低**
 - [ ] **AD-DRAFT-1 `listing-draft-builder` 硬写单条创意**：`creatives: [creative]`（`:193`/`:254`），而 `AdDraft.creatives` 是数组、publisher 已在循环建。同一语言内出 5–8 个角度需新增"批量角度选择/生成 + 去重 + 逐条溯源"编排层（**新增开发，半周到一周**，不是接线）。跨语言合并另需表单身份下沉到每条 creative + 表单广告混语言闸门
 - [ ] **AD-FORM-1 选表单时不看语言，英文广告可能把买家送进中文表单【首条真钱广告的前置】**：`draft-listing/route.ts:82-105` 的 `pickForm(forms, wanted?)` **不接语言参数**，且该主页只有一个可用表单时**直接返回它**、不问语言；`launch-readback` 也不检查表单语言（它的混语言闸只覆盖私信）。于是按语言拆了草案也没用 —— 后果与 §5 问题 5 的"同一草案混语言"相同，只是路径不同。修：`AdDraftCreative` / `BuildOptions` 带上语言并在 `pickForm` 里匹配，或给表单广告补一条"表单语言 ≠ 文案语言"的闸门
