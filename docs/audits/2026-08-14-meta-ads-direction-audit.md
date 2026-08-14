@@ -11,7 +11,7 @@
 
 四句话：
 
-1. **投放侧（delivery）实际上已经在 Andromeda 打法上** —— 但这个结论**只覆盖 53.9% 的花费**（CTS + Roman 的 campaign，$4,214.30 / $7,822.57）：回读到的 26 个 ad set 里 23 个开着 `advantage_audience: 1`，最大那条 $2,251 的 campaign 是纯 broad + Advantage+ 受众。**Oztop 占 46.1%（$3,608.27），targeting 一眼没看到**（见 §3.1 与附录 1），所以这条不能外推成"全部广告费"。
+1. **投放侧（delivery）实际上已经在 Andromeda 打法上** —— 但这个结论**只覆盖 CTS 一家、总花费的 47.7%**（$3,733.59 / $7,822.57）：回读到的 26 个 ad set 里 23 个开着 `advantage_audience: 1`（**条数比，不是花费比**），最大那条 $2,251 的 campaign 是纯 broad + Advantage+ 受众。**Oztop（46.1%）和 Roman（6.1%）的账户都查不到 targeting**，合计 52.3% 的花费无证据（见 §3.1 对账表与附录 1）。
 2. **但那不是 ME 做的** —— 是人在 Ads Manager 里点出来的。ME 自己唯一的建广告代码 `ad-publisher.ts:116` 写死 `targeting_automation: { advantage_audience: 0 }`，即**主动关掉** Advantage+ 受众。这条代码路径至今建过 0 条广告，所以冲突还是潜在的，不是已发生的。
 3. **创意侧是真正传统的那一半**：钱最多的三条 campaign（$5,300，占总花费 67.8%）总共只有 **4 条创意**；而做了真多角度测试的两次（Oztop 13 条 hook、Roman 15 条 angle）加起来只花了 $799，占 10.2%。**创意多样性只发生在没钱的地方。**
 4. **闭环没有通电**：`ad_creative_links` 0 行、`contacts.attr_creative_ref` 0 行（39 条已归因 lead 无一条能说清是哪条素材）、`winner_structures` 0 行、`variant_from_winner` 工单 0 条、`flywheel_actions` 里 `ads.create_ad` 0 条。**数据结构全都建好了，一个都没被写过。**
@@ -69,15 +69,23 @@ Meta Graph 实时读 CTS 账户 `act_2775766642787274` 的 26 个 ad set：
 >
 > | | 花费 | 占比 | targeting 是否回读 |
 > |---|---|---|---|
-> | CTS 的 campaign | $3,733.59 | 47.7% | ✅ |
-> | Roman 的 campaign | $480.71 | 6.1% | ✅ |
-> | **已核实小计** | **$4,214.30** | **53.9%** | ✅ |
-> | Oztop 的 campaign | $3,608.27 | **46.1%** | ❌ |
+> | CTS 的 campaign | **$3,733.59** | **47.7%** | ✅ 已回读 |
+> | Roman 的 campaign | $480.71 | 6.1% | ❌ 账户不可查 |
+> | Oztop 的 campaign | $3,608.27 | 46.1% | ❌ MCP 未放量 |
+> | **未回读小计** | **$4,088.98** | **52.3%** | ❌ |
 > | 合计 | $7,822.57 | 100% | — |
 >
-> （$4,214.30 + $3,608.27 = $7,822.57，与 §2 精确对账。）
+> （$3,733.59 + $4,088.98 = $7,822.57，与 §2 精确对账。）
 >
-> 所以本审计关于 broad / Advantage+ 的结论，**证据覆盖 53.9% 的花费**；12.5% 那个比例描述的是"已回读那批 ad set 内部的兴趣定向占比"，**不是**"全部广告费里有 12.5% 用了兴趣定向"。
+> ⚠️ **Roman 这一行是第七轮才改对的**：上一版把 Roman 算进"已回读"，但他 $480.71 的花费在 `act_1018365291238494`，而 `ads_get_ad_accounts` 对该账户返回 `is_queryable: false` / `not_queryable_reason: "Unknown error"`（账户状态 UNSETTLED）。本次实际读到的那条 Roman ad set（`North Shore 15km · Message Leads · 4-Creative Race`）在另一个账户、且花费为 **$0.00**，代表不了那 $480.71。
+>
+> **所以本审计关于 broad / Advantage+ 的结论，证据只覆盖 CTS 一家、$3,733.59、总花费的 47.7%。**
+>
+> 还有两个数**不能当覆盖率用**，只描述"已回读的那 26 个 ad set 内部"：
+> - `23 / 26` 是**条数比**，不是花费比；
+> - `12.5%` 的分母是 `$5,066.52`，那是混账户的 Meta 侧合计（混客户 + 混币种），**跟 $3,733.59 不是一回事**。
+>
+> 本审计**没有**把 targeting 按 CTS 的 $3,733.59 重新汇总（跨账户口径对不齐，见上），所以文中任何"某某比例的花费是 broad"的说法都只对那批 ad set 成立，不对客户花费成立。
 
 最大那条：
 
@@ -227,7 +235,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 
 ## 4. What We Are Doing Right
 
-1. **实际投放已经是 broad + Advantage+**（已回读的 26 个 ad set 里 23 个），其中带兴趣定向的只占那批 ad set 花费的 12.5%。这一条最重要，也最容易被自己低估 —— 但**证据只覆盖 53.9% 的花费**（CTS + Roman），Oztop 的 46.1% 未回读，口径见 §3.1 的对账表。
+1. **实际投放已经是 broad + Advantage+** —— 已回读的 26 个 ad set 里 23 个开着（条数比），其中带兴趣定向的占那批 ad set 花费的 12.5%。这一条最重要，也最容易被自己低估 —— 但**证据只覆盖 CTS 一家、总花费的 47.7%**，Roman + Oztop 合计 52.3% 的账户查不到，口径见 §3.1 的对账表。
 2. **ad 级日度数据脊柱是真的**（376 行，每天在写，带 `parent_id`）。绝大多数同类系统只有 campaign 级 —— 没有 ad 级就永远做不了 creative-level 学习。这块地基已经打好了。
 3. **不拿汇总骗自己**：`ad-level-breakdown.ts` 会在子项差异 ≥1.5 倍时明说"这个汇总在掩盖差异"，还会拦住"表单留资 + 私信对话被加在同一列"的不可比比较。这是很多投放团队都没有的纪律。
 4. **建完必回读**：`launch-readback.ts` 承认"创建接口的回显不含 Meta 自己补上的东西"，强制建成暂停 → 回读 → 人点头。这在 Advantage+ 时代**更重要**，因为平台会自动加的东西只会越来越多。
@@ -340,15 +348,25 @@ ad        status: 'ACTIVE'
 
 要让 `draft-and-gate` 那条路径也能记账，缺的是「**每条 creative 的素材身份贯穿到发布结果**」这件事本身，不是一次函数调用：
 
-1. **每条 creative 记下它「实际用到」的那个素材身份** —— ⚠️ 注意不是简单把 `assetIds` 数组透传下去（Codex 复审第五轮 P2，核实成立）：`draft-listing/route.ts:250-264` 会把传入的素材**全部上传**，但接着是
-   ```ts
-   if (up.asset.kind === 'image') opts.imageHash ??= up.asset.hash
-   else                            opts.videoId  ??= up.asset.videoId
-   ```
-   `??=` 意味着**每种类型只有第一张真正被用上**，其余上传了却没进广告。把整个 `assetIds` 挂到这条 ad，等于把没投出去的素材也算进归因 —— 多角度实验里这会直接让"哪条素材有效"学出错的结论，正是本表 `creative_ref` 那条「宁可留空也不猜」要防的事。
-   正确做法：**上传时就保留精确的 `imageHash` / `videoId → client_assets.id` 映射**，每条 creative 只写它实际使用的那一个身份；若将来一条 creative 真会用多个素材（轮播），那要显式定义一对多模型，而不是靠数组默认；
+1. **给每条 creative variant 一个自己的稳定身份** —— 这一点前后被更正了两轮，最终结论是：**`creative_ref` 记的必须是"这条广告说了什么"，不是"它用了哪张图"**。
+
+   两轮更正的过程（都是 Codex 抓到、核实成立，写在这里因为中间那版看着很像对的）：
+
+   - **第一版**（错）：把 `assetIds` 数组透传给每条 creative。错在 `draft-listing/route.ts:250-264` 会把素材**全部上传**，但紧接着是
+     ```ts
+     if (up.asset.kind === 'image') opts.imageHash ??= up.asset.hash
+     else                            opts.videoId  ??= up.asset.videoId
+     ```
+     `??=` → **每种类型只有第一张真正进广告**，其余上传了没投。整个数组挂上去 = 把没投出去的素材也算进归因。
+   - **第二版**（仍错，且更隐蔽）：改成"保留精确的 `imageHash` / `videoId → client_assets.id` 映射，每条 creative 只写实际用到的那个素材 id"。看着严谨，但**放到 ③ 的场景里直接失效**：5–8 个角度**共用同一张图**是常态（这正是"用文案找人"的打法），于是 publisher 建出来的 5–8 条 `primaryText` / `headline` 各不相同的广告，会**全部写同一个 `creative_ref`**。之后 `contacts.attr_creative_ref` 和赢家学习只能分辨"用了哪张图"，**照样不知道哪个角度带来了客户** —— 而角度归因恰恰是 ③ 的全部目的。等于绕一圈回到原点。
+   - **最终**：身份的粒度必须是 **creative variant**（角度 + 文案 + 素材的那一整份），不是原始素材。具体：
+     - 给每条 variant 一个稳定 id（ME 侧的记录，含 angle、primaryText、headline、以及它用了哪个 `client_assets.id`）；
+     - **素材关系另存**（variant → asset，一对一或一对多都可表达，轮播天然是多）；
+     - `ad_creative_links` 按 `adId → variantId` 绑定 —— 而 `publishDraftPaused` 的 `for (const c of d.creatives)` 循环里，adId 和 variant 的对应关系本来就在手上（第 2 点）。
+
+   **一句话：别把素材 id 当创意 id。** 这也意味着 `CreativeSource` 那个封闭 union 要加的不是 `'client_asset'`，而是 variant 这一层；
 2. `publishDraftPaused` 的返回值把 `adId` 和它对应的那条 creative 关联起来（它本来就是 `for (const c of d.creatives)` 循环建的，映射天然存在，只是现在丢了）；
-3. `ad_creative_links` 需要 **migration**：`post_id` 放开 NOT NULL，`creative_source` 加 `'client_asset'`，并给 `linkAdToCreative` 加一个不依赖 `postId` 的直接持久化入口（`adId → creativeRef`）;
+3. **migration**：`ad_creative_links.post_id` 放开 NOT NULL；`creative_source` 加的是 **variant 这一层**（不是 `'client_asset'` —— 理由见第 1 点）；variant 本身要有落脚的地方（新表或复用现有工单表，属技术选型，自己拍）；并给 `linkAdToCreative` 加一个不依赖 `postId` 的直接持久化入口（`adId → variantId`）;
 4. 然后才轮到 `AdCreationPath` 加 `'me_ad_launch'`。
 
 ⚠️ **授权边界更正**（Codex 复审第四轮 P2，核实成立）：上一版写成"migration 要 PM 拍板，所以 ①b 不能自己拍板开工"，**把两件事混在一起了**。
@@ -422,7 +440,7 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 
 **建议的执行顺序**（经三轮更正后的版本）：
 
-0. **补读 Oztop 账户的 targeting** —— 必须在**有 `META_SYSTEM_USER_TOKEN` 的环境**里直调 Graph（本次审计环境没有该 token，MCP 那条路也被 Meta 拒绝，两条都实测过，见附录 1）。活不大，但**它决定"投放侧已经做对了"这个判断能不能覆盖另外 46.1% 的花费** —— 现在这条结论的证据只覆盖 53.9%；
+0. **补读 Oztop + Roman 两个账户的 targeting** —— 必须在**有 `META_SYSTEM_USER_TOKEN` 的环境**里直调 Graph（本次审计环境没有该 token，MCP 那条路 Oztop 被 Meta 拒绝、Roman 的 `act_1018365291238494` 返回 `is_queryable: false`，都实测过，见附录 1）。活不大，但**它决定"投放侧已经做对了"这个判断能不能覆盖另外 52.3% 的花费** —— 现在这条结论的证据只覆盖 CTS 一家、47.7%；
 1. **①a** 传 `play` —— 小活，今天就能做，但它本身不产生第一条记录；
 2. **②** `ad-publisher.ts:116` 改 `advantage_audience: 1` —— 一行，现在改成本为 0；
 3. **在 ①(i) 修 boost 路径 与 ①(ii)/①b 让 draft 路径能记账 之间二选一** —— 这是「投出第一条 ME 自建广告」的真正前置。两个选项的设计与编码都自己拍板，选 (ii) 时只在最后对生产库 `apply_migration` 那一下停下来等 PM 一句 `go apply`；
@@ -442,7 +460,9 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 
 1. **广告投给谁这件事，在我们看得到的那部分账户里，已经做对了。** CTS 和 Roman 这两个账户的花费里，接近九成没有做"人群精挑细选"，而是把范围放宽、让平台自己去找人 —— 这正是现在 Facebook 后台最吃香的做法。这部分不用改。
 
-  ⚠️ 但**这句话只覆盖一半多一点的钱**：查过的是 CTS 和 Roman 的广告（$4,214，占 53.9%）；Oztop 那 46.1%（$3,608）的账户 Facebook 还没对我们开放读取，**这次一眼都没看到**。所以准确说法是「查过的那 54% 做对了」，不是「我们做对了」。想把这句话说全，得先补读 Oztop —— 活不大，但没做之前别把结论扩大。
+  ⚠️ 但**这句话只覆盖不到一半的钱**：真正查过的只有 CTS 一家（$3,733，占 47.7%）。Oztop（46.1%）和 Roman（6.1%）的广告账户 Facebook 那边都读不了，**这两家一眼都没看到**，合计 52.3% 的花费没有证据。
+
+  所以准确说法是「**查过的那 48% 做对了**」，不是「我们做对了」。而且连"48% 里有多大比例是 broad"我们也没算 —— 能说的只是"查到的 26 组广告里有 23 组开着自动扩量"，**那是组数，不是钱数**。想把这句话说全，得先补读另外两个账户。
 
 2. **广告"说什么"这件事，我们还在用老办法。** 钱最多的三条广告，加起来只有 4 条不同的片子；而我们真正试过十几个不同说法的那两次，一次花了 $432、一次花了 $366 —— **两次都没能得出结论，但原因不一样**：Oztop 那次（$432）**方法是对的**，是我们的系统没把该看的数（多少人把片子看完、看完一次多少钱）收进来，所以现在读不出谁赢；Roman 那次（$366）是钱太少，十几条片子分下去每条只有二十几块，谁赢基本靠运气。
 
