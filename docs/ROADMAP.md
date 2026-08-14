@@ -200,10 +200,14 @@
 
   于是「北岸 10km 被放宽成整个新西兰」这种改动**照样通过** —— 而这条规则的 `learnedFrom` 写的正是「2026-08-04 Roman『IG 专投测试』把奥克兰北岸 $1.25M 的房投给了整个新西兰」。**规则抓不到它自己引用的那次事故。**
   修：把**可信的完整 targeting 包络**（国家 + `geoCityKeys` + 半径）持久化进 `DraftRecord`，激活前**按同一粒度**比较；国家级匹配只能当兜底，不能当唯一判据
-- [ ] **AD-SEC-1 实体归属校验缺失 —— 三个入口，其中一个已上线在用【本次审计发现的最严重一条】**：混账户下（CTS/Oztop 同账户）任何"只校验 URL 里的客户、实体 id 却取自请求体"的写路径，都能被 A 客户的调用方拿去动 B 客户的东西。这就是 strategy doc §2.4 狄仁杰记的 **R5 写越权**，那份文档还指出「ROADMAP §Phase 18 安全边界声称已校验账户 ownership，**与实现不符**」—— 至今仍不符。
+- [ ] **AD-SEC-1 实体归属校验缺失 —— 四个入口，其中两个已上线在跑【本次审计发现的最严重一条】**：混账户下（CTS/Oztop 同账户）任何"只校验 URL 里的客户、实体 id 却取自请求体"的写路径，都能被 A 客户的调用方拿去动 B 客户的东西。这就是 strategy doc §2.4 狄仁杰记的 **R5 写越权**，那份文档还指出「ROADMAP §Phase 18 安全边界声称已校验账户 ownership，**与实现不符**」—— 至今仍不符。
   - 🔴 **`meta-ads/execute/route.ts:71+`（已上线、正在用的止损按钮）**：`campaign_id` 直接取自请求体，只做 `requirePaidClientAccess(clientId)`，**从不把 campaign 归属与该客户的 `meta_ad_account_id` 对账**，随后就用共享 system-user token 暂停广告 / 改预算。有 CTS 看板权限的人提交一个 Oztop campaign id 即可动别家的在投广告。**这条比 boost 那条严重 —— 它已经在生产里跑**
   - `boost-post/route.ts`：`post_id`/`page_id` 取自请求体（详见 AD-SEC-2 同类）
   - 通用 `meta-ads/draft`：见 AD-SEC-2
+  - 🔴 **`winner-reel-sync/engine.ts`（第四十七轮补入 —— 原来这条清单漏了它，标题的"三个入口"实为四个）**：`loadConfig(clientId)`（`:69-84`）只按 `client_id` 取 `winner_reel_sync_config`，然后把 `ad_account_id` / `target_adset_id` / `fb_page_id` **原样拿去用，从不核验这个 ad set、这个账户、这个主页是不是这个客户的**。随后 `:187-218` 直接往那个组里建广告，`:228-272` 的每日任务还会按 CTR **暂停组内已有的广告**。
+    → 所以 `target_adset_id` 一旦配错或残留成共享账户里**别家客户的组**，ME 会（a）把 A 客户的内容塞进 B 客户的广告组，（b）**自动暂停 B 正在投的广告**。这条跟 `execute/route.ts` 的区别是：**id 不来自请求体，来自一张没人校验过的配置表** —— 所以只加"别信请求体"那种守卫挡不住它。
+    ⚠️ 这条还跟 `AD-PLAY-1` 咬合：那条已经指出 `winner_reel_sync_config` **没有打法/目标字段、代码也从不回读目标组的 `optimization_goal`**。同一张配置表，既没归属校验也没内容校验，却直接驱动建广告和停广告。
+    修：让这条路径共用同一套**实体归属守卫**（ad set / account / page 三者都要），**归属查不出来就 fail closed**，别默认放行
 
   修：统一加 **实体 → client 归属守卫**（campaign / page / post / form / creative 都要），或推进账户拆分（§2.1 子牙意见：**根治靠账户治理，不是写白名单**）
 - [ ] **AD-SEC-2 通用 `meta-ads/draft` 不校验素材归属**：`...(body as AdDraft)` 整体展开，`leadFormId`/`imageHash`/`videoId` 原样来自请求体，客户没配主页时 `pageId` 还回退 `body.pageId`；闸门只查买家可见内容不查资产归属。对比 `draft-listing` 已有 `client_assets` 租户守卫。修：补 page/form/creative 归属校验
@@ -214,7 +218,10 @@
   2. **抓取必须走 `src/lib/net/safe-fetch.ts` 的 `safeFetchText`**（#965 刚落的 GET-only、连接绑定、带重定向与内网地址防护的原语），**不要自己 `fetch`**
   3. 🔴 **事实必须和"哪套房"绑定 —— 光有域名白名单还是能张冠李戴**（第四十六轮 Codex P1，已核实）：`draft-listing/route.ts` **从头到尾没查过 `listings` 表**。`listingId`（`:191-229`）只被拿去做**素材归属闸**（`pickUsableForListing(found, body.listingId, clientId)`），而 `body.listing`（`ListingFacts`：价格、地址、战绩）和 `sourceUrl` **全部来自请求体，从不与那套房的记录核对**。
      → 于是「**A 房的价格地址 + B 房的真实照片**」这种组合，域名白名单和素材闸**两道都过** —— 素材确实属于 B 房、URL 确实在客户域名下，但广告在拿 B 房的照片宣传 A 房的价格。这直接踩 CLAUDE.md §8「绝不凭空注入客户业务数据」那条红线，而且比编造更难发现（每一项单看都是真的）。
-     修：**按 `id + client_id` 把那套房从 `listings` 读出来，事实由这条记录派生**（而不是由调用方给）；退一步至少要校验 `sourceUrl`、`ListingFacts` 与 `listingId` 三者指向同一套房，对不上就拒绝出稿
+     修：**按 `id + client_id` 把那套房从 `listings` 读出来**当身份锚点；退一步至少要校验 `sourceUrl`、`ListingFacts` 与 `listingId` 三者指向同一套房，对不上就拒绝出稿
+     ⚠️ **但"事实由 `listings` 这条记录派生"做不到，别照着施工**（第四十七轮 Codex P1，已核实 —— 上一版就是这么写的，错了）：`20260730145332_listings.sql:38-82` 里**没有 `sourceUrl`，也没有精确价格**。它有的是 `address_line` / `suburb` / `property_type` / `bedrooms`，价格只有 **`price_band` 档位**（`under_1m` / `1m_1_5m` / …），而且那个档位是**刻意**这么设计的 —— 迁移注释写明「NZ 很多房子 price by negotiation，真实要价到成交都不公开，**存一个编出来的数字比存档位更糟**」。另有 `status` / `vendor_notes` 是**内部**字段（`prospect` / `withdrawn` / 卖家备注）。
+     → 所以照上一版施工会有两个后果：① `listing-draft-builder` 因为拿不到 `sourceUrl` **直接抛错、出不了稿**；② 更糟的是有人为了跑通，把 `price_band` 当价格、把 `status` 当对外说法**翻译成广告文案** —— 那是把内部档位和内部状态变成对客户的公开声明，本身就踩 §8。
+     → 正确口径：**身份按 `id + client_id` 绑定（这半对），但事实必须取自一条带精确声明 + 逐字段来源的已核实记录** —— 这条记录今天不存在。**要么先扩数据契约**（给 listings 补 `source_url` + 精确价格声明 + 每个字段的 provenance），**要么首条广告只用 ME 已核实的数据记录**，不要从 `listings` 硬凑
 - [ ] **AD-OBS-1 创意变体数不可观测**：`ad_daily_insights` 的 ad 级行无 `creative_id` / `asset_feed_spec`，`ad-level-breakdown.ts` 也只到 ad 级 —— "我们到底投了多少种说法"系统答不出来（用了 Advantage+ 素材自动化的广告尤其）。修：回读 `creative` + asset feed 并落库
 - [ ] **AD-OBS-2 攒池测试无法按 hook 归因**：`client_audience_assets` 按 `audience_id` 唯一、无创意维度，而 `videoEventRule` 把一批 videoId 灌进同一个池 → `P18.E.3` 只给得出池子整体净增。修：一 hook 一池，或另建创意级增长映射。（完播成本那半由 `P21.K.8` 覆盖）
 - [ ] 🔴 **AD-LOG-1 `record()` 漏读 `error`,而且失败时会留下失联的暂停实体【投第一条真广告前必修 —— 第四十五轮补入首投前置】**（第二十七轮升级,原写"小 bug 顺手修",低估了）：`const { data } = await supabase...insert()`,`error` 连接都没接;且它发生在 `publishDraftPaused` **已经建出 campaign / ad set / ads 之后**。
