@@ -86,6 +86,23 @@
 - [ ] **P21.J.M5** 素材上传还没接：`imageHash` / `videoId` 要人先传到 Meta 才有。要么接 `ads_creative_upload_*`，要么从 ME 已有的成片直传
 - [x] ~~**P21.J.M6/M7/M8/M9/M10**~~ 2026-08-05 全部完成：共享闸 34 种写法 0 漏 0 误拦（原漏 28 种）+ 唯一写入口 `write-lesson.ts` + `POST /api/ad-engine/lessons`；页面加 90 天窗口 + 5000 行上限 + 撞顶告警；轮播/动态商品/自然帖投流三种文案形态补齐（自然帖会去主页把文案取回来）；行业归一化统一成 `normaliseIndustry` 一个函数
 
+#### 2026-08-14 Meta 方向审计（[docs/audits/2026-08-14-meta-ads-direction-audit.md](./audits/2026-08-14-meta-ads-direction-audit.md)）新发现，按影响面排序
+
+> 全部来自只读审计 + 16 轮复审逐条核实，未改生产代码。审计只报缺口不写方案的，这里登记成可排期的条目。
+
+- [ ] **AD-CUR-1 `ad_daily_insights` 没有币种列 —— 跨客户金额全是混币种加总【影响面最大】**：`spend` 是裸 `NUMERIC`，`parseDailyMetrics` 把 Graph 返回的账户币种金额原样存下不换算。2026-08-14 实读账户 `currency`：Oztop `1735240120460765` = **AUD**，CTS / Roman / 混账户 = NZD。**月报、Goal 指标、production package 都在读这条线**，任何跨客户汇总/排行/预算比较都会算错。修：加 `currency` 列（Graph `account_currency` 直接给）+ 汇总时按基准日折算并注明汇率
+- [ ] **AD-CUR-2 `boost-post` 用 `daily_budget_aud` 却不读账户币种**：`daily_budget_aud * 100` 原样发给账户，Meta 按**账户币种**解释。CTS/Roman 是 NZD → 批准的"AUD 金额"实际按 NZD 花掉，回显的 `estimated_total_aud` 也是错的。修：回读账户币种，预算按账户币种表达或显式换算
+- [ ] **AD-GATE-1 `approveDraft` 激活前不重新回读**：只查 `payload.status` 就 `activatePublished`，不重跑 `fetchAdSetReadback` / `checkLaunch`。草案在共用账户里躺几天，期间被改则批准人看到的是旧快照、钱按新配置花 —— 这违背 `launch-readback.ts` 自己"只有回读能看见"的立论。修：激活前重跑回读 + 闸门，有 blocker 拒绝激活。**不需 migration**
+- [ ] **AD-SEC-1 `boost-post` 不校验 page/post 归属**：`post_id`/`page_id` 直接取自请求体，只从 `clients` 取广告账户。混账户下有 A 客户权限即可提交 B 客户的帖子（strategy doc §2.4 的 R5 写越权）。修：`page/post → client` 归属校验，或推进账户拆分（§2.1 子牙意见：根治靠账户治理）
+- [ ] **AD-SEC-2 通用 `meta-ads/draft` 不校验素材归属**：`...(body as AdDraft)` 整体展开，`leadFormId`/`imageHash`/`videoId` 原样来自请求体，客户没配主页时 `pageId` 还回退 `body.pageId`；闸门只查买家可见内容不查资产归属。对比 `draft-listing` 已有 `client_assets` 租户守卫。修：补 page/form/creative 归属校验
+- [ ] **AD-FACT-1 事实来源从不校验，却盖"官网可溯"章**：`assertFacts` 只查 `sourceUrl` 非空，从不抓页面核对价格/地址/战绩，而 `traceClaims` 把原样传入的字段标成"官网可溯"。**第一条付费广告就会带着未核实内容投出去**，不是量大了才危险。修：按 `sourceUrl` 抓页核对，或只接受 ME 已核实数据源
+- [ ] **AD-OBS-1 创意变体数不可观测**：`ad_daily_insights` 的 ad 级行无 `creative_id` / `asset_feed_spec`，`ad-level-breakdown.ts` 也只到 ad 级 —— "我们到底投了多少种说法"系统答不出来（用了 Advantage+ 素材自动化的广告尤其）。修：回读 `creative` + asset feed 并落库
+- [ ] **AD-OBS-2 攒池测试无法按 hook 归因**：`client_audience_assets` 按 `audience_id` 唯一、无创意维度，而 `videoEventRule` 把一批 videoId 灌进同一个池 → `P18.E.3` 只给得出池子整体净增。修：一 hook 一池，或另建创意级增长映射。（完播成本那半由 `P21.K.8` 覆盖）
+- [ ] **AD-LOG-1 `draft-and-gate.ts` 的 `record()` 漏读 `error`**：`const { data } = await supabase...insert()`，`error` 连接都没接；且发生在 Meta 实体已建出之后 → 账本 0 条也可能是"建了没记上"。小 bug，顺手修
+- [ ] **AD-ADV-1 `ad-publisher.ts:116` 写死 `advantage_audience: 0`**：无差别关掉 Advantage+ 受众，是 ME 代码唯一与 Andromeda 打法正面冲突处。现有两种 `DraftKind`（`lead_form` / `video_thruplay`）都是冷投，应改为 `1`；将来加 `warm_pool_retarget` 这类 kind 时才需要显式关闭。**该路径至今建过 0 条广告，现在改成本为 0**
+- [ ] **AD-DRAFT-1 `listing-draft-builder` 硬写单条创意**：`creatives: [creative]`（`:193`/`:254`），而 `AdDraft.creatives` 是数组、publisher 已在循环建。同一语言内出 5–8 个角度需新增"批量角度选择/生成 + 去重 + 逐条溯源"编排层（**新增开发，半周到一周**，不是接线）。跨语言合并另需表单身份下沉到每条 creative + 表单广告混语言闸门
+- [ ] **AD-LINK-1 `creative_ref` 的身份粒度要按 variant 不按素材**：5–8 个角度常共用同一张图，按素材 id 记会让所有角度写同一个 `creative_ref`，角度归因归零。需 variant 稳定 id + 素材关系另存 + `adId → variantId` 绑定；配套 migration（`ad_creative_links.post_id` 放开 NOT NULL、`creative_source` 加 variant 层）**待 PM `go apply`**
+
 ### Onboarding / 第三方对接页面简化（2026-08-11，方案见 [specs/2026-08-11-onboarding-integrations-unify-v1.md](./specs/2026-08-11-onboarding-integrations-unify-v1.md)）
 
 已上线（PR1 [#908](https://github.com/bigbigraydeng-maker/magic-engine/pull/908) / PR2 [#909](https://github.com/bigbigraydeng-maker/magic-engine/pull/909) / PR3a [#913](https://github.com/bigbigraydeng-maker/magic-engine/pull/913) / PR5 [#916](https://github.com/bigbigraydeng-maker/magic-engine/pull/916)）：GA4/GTM 补进真 OAuth provider 白名单 + DB 约束扩容 · GA4/GSC 真授权 + 老 `google_oauth_tokens` 表回填进新表 · 三处重复对接入口（`/connectors` 等）合并进 settings 页一个入口，19 处内部链接跟着改 · 顺手补上 Google OAuth 发起/回调此前零鉴权的越权漏洞。

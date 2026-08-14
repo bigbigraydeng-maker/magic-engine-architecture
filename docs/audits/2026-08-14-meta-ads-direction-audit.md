@@ -472,7 +472,9 @@ ad        status: 'ACTIVE'
 
   ⚠️ **而且这三样还不够**（Codex 复审第八轮 P1，核实成立）：`boost-post/route.ts` 的 `post_id` / `page_id` **直接取自请求体**，服务端只从 `clients` 表取 `meta_ad_account_id`，**从不校验这个帖子/主页是不是这个客户的**。放在混账户 `act_2775766642787274` 上（CTS 与 Oztop 同账户），一个有 CTS 权限的调用方**可以提交 Oztop 的帖子**，过完闸门就把别家的素材投进共享账户、烧到共享账户的钱上 —— 这正是 `docs/strategy/meta-flywheel-risk-and-sequencing.md` §2.4 狄仁杰记的 R5 写越权，那份文档已经要求写操作前加实体归属守卫。
 
-  所以方案 (i) 的完整前置是**四样**：建 `PAUSED` · 地区取自客户 · 接闸门 · **`page/post → client` 归属校验**（或干脆先做账户拆分，那才是根治 —— 同一份文档 §2.1 子牙的结论就是"最省的根治不是写白名单代码，而是账户治理"）。
+  所以方案 (i) 的完整前置是**五样**：建 `PAUSED` · 地区取自客户 · 接闸门 · **`page/post → client` 归属校验**（或干脆先做账户拆分，那才是根治 —— 同一份文档 §2.1 子牙的结论就是"最省的根治不是写白名单代码，而是账户治理"）· **预算按账户币种表达**。
+
+  最后那一样是第十六轮才补上的（Codex P2，核实成立），而**本次实读账户币种恰好证明它是真问题**：`boost-post` 收 `daily_budget_aud`、`daily_budget_aud * 100` 原样发给账户，而 **Meta 按账户币种解释这个数**。CTS 和 Roman 的账户都是 **NZD** —— 也就是说批准人以为批的是 AUD 预算，钱按 NZD 花掉，回显的 `estimated_total_aud` 同样是错的。代码**既不读币种也不换算**。
 
   ⚠️ **但即使这四样全补上，方案 (i) 也验不了闭环的下半截**（Codex 复审第十一轮 P1，核实成立）：那四样都不改 `objective`，`boostPagePost` 依然是 `REACH` —— 而本节上面第 3 点自己就写了，触达类目标的 `results` 恒为 0。**没有 lead，就没有 `contacts.attr_ad_id` → `attr_creative_ref` 那一跳可验。**
 
@@ -698,4 +700,6 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 2. **`ad_daily_insights` 里没有 ad set 这一层** —— `level='ad'` 行的 `parent_id` 存的是 campaign（`ad-level-breakdown.ts` 头部注释明确说过，两个 agent 都误读过）。所以"一个 audience 是否被拆成很多 ad set"只能从 Meta live 侧回答（CTS：26 个 ad set / 17 个 campaign），库里答不了。
 3. **创意的 angle 标签没有落库** —— 角度信息只存在于广告名字里（`OZ-S2-R6-kidsdog`），`ad_creative_links.play_context` 本来就是放这个的字段，但表是空的。所以"角度 A 比角度 B 好"这类问题现在只能靠人读名字，系统答不了。
 4. **🆕 `ad_daily_insights` 没有币种列，跨客户金额不可加总** —— 本审计发现的新缺口，**ROADMAP 里没有登记过**。`spend` 是裸 `NUMERIC`，`parseDailyMetrics` 把 Graph 返回的账户币种金额原样存下、不做换算；而 CTS/Roman 是 NZD、Oztop 是 AUD。影响面不止本审计：**任何跨客户的花费汇总、排行、预算比较都会算错**（月报、Goal 指标、production package 都在读这条线）。
-   修法：`ad_daily_insights` 加 `currency` 列（Graph 的 `account_currency` 字段直接给），跨客户汇总时按基准日折算并注明汇率。**建议登记成 ROADMAP 一条**（不在本审计范围内，故此处只报缺口不写方案）。
+   修法：`ad_daily_insights` 加 `currency` 列（Graph 的 `account_currency` 字段直接给），跨客户汇总时按基准日折算并注明汇率。
+
+   ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现已一并登记（`AD-CUR-1/2` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1`）。
