@@ -372,18 +372,23 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 **现状（2026-08-14 生产库实测，非文档推断）**
 
 - `video_clips` track=`a_real`：19 条（Oztop 展厅 7 + Roman 30-Kiteroa 12），全部已带 `scene_tag` 与 `shot_note`（细到「中段楼梯糊焦」「有一帧拍到垃圾桶」「镜中出现拍摄者」）
-- 但标签来源是 `source_meta.tagged_by = 'human-reviewed 2026-08-03'` —— **人工逐条看完手写，系统未参与**
+- 但那些看得懂内容的标签（`shot_note`）来源是 `source_meta.tagged_by = 'human-reviewed 2026-08-03'` —— **人工逐条看完手写，系统未参与**
 - `client_assets` 视频行 **0 条**：免登录上传通道从未收到过视频（图片 83 条，81 条已自动打标）
-- 19 条真拍素材 `usage_count` 绝大多数为 0，仅 2 条用过 1 次 —— **整理完了但还没被消费**
+- 19 条分两批进来，来源不同：Oztop 7 条走 `scripts/factory-worker/ingest-clips.mjs`（`source_meta.seed='b4-ingest'`，`scene_tag` 从文件名推，不看画面内容）；Roman 12 条是人工逐条看完手写（带 `shot_note` + `tagged_by`）
+- ⚠️ `usage_count` **不能当消费证据** —— 全仓无任何 `+1` 写入方（`evaluate.ts` 只读、`strategist.ts` 只用于排序、`ingest-clips.mjs` 只初始化为 0），值恒为入库时的初值。素材有没有被真正用过，目前**无法从库里判断**
 
 **为什么现在不做**：人工整理**只发生过 1 次**，尚未构成「重复操作」。铁律 3 针对的是把重复丢给人工，单次不触发。
-PM 2026-08-14 确认：无第二批真拍素材排队。
+PM 2026-08-14 答复：无第二批真拍素材排队，**且不确定后续是否会有** —— 所以按触发条件等，不预先建设。
 
 **触发条件（满足任一即立即开工，不再重新讨论）**
 
 1. 第二次需要人工整理真拍素材时
 2. 单批真拍素材 ≥ 30 条时
-3. `video_clips` a_real 的 `usage_count` 合计 ≥ 20（素材真被消费起来了）
+
+> 原拟的第 3 条「`usage_count` 合计 ≥ 20」**已撤下**：该计数无写入方（见上），永远不会增长，写进来就是一条静默失效的死条件。
+> 想用「素材真被消费起来了」当触发条件，得先有人记账 —— 单独登记为下面这条欠账，不在本条目内顺手做。
+
+- [ ] **P21.F.1 用片计数落库**（P3，无人认领）— 出片选用某条 `video_clips` 后原子 `usage_count + 1` 并写 `last_used_at`。当前 `strategist.ts` 按 `usage_count` 排序做「冷素材优先」，而这个值恒为 0，等于该排序规则**现在是空转的**。修完之后「素材消费量」才可以当触发条件用。
 
 **开工时风险级别：A 级**（命中质量闸 §2 三项）—— ①供应商花费：转写／视频理解按量计费，须先声明单条成本与硬上限，**建不起来 fail closed**；②要加列存内容标签；③跨客户边界：`loadIngestedPaths` 现有「查询恒带 client_id」约束扩展时必须保持。
 
@@ -391,13 +396,14 @@ PM 2026-08-14 确认：无第二批真拍素材排队。
 
 | 零件 | 位置 | 现在的用途 |
 |---|---|---|
-| 真拍进料（ffprobe 探测 + 幂等 + 画幅判定） | `src/lib/factory/real-footage-ingest.ts` | **已写好，零生产调用方**（仅测试引用） |
+| 真拍进料**判断段**（ffprobe 探测 + 查重 + 画幅判定 + 生成候选） | `src/lib/factory/real-footage-ingest.ts` | 纯判断逻辑，**到 `buildCandidates` 为止**；不上传、不入库。零生产调用方（仅测试引用） |
+| 真拍进料**落地段**（上传 Storage + 插 `video_clips`） | `scripts/factory-worker/ingest-clips.mjs` | 手工命令行脚本，要人在终端敲；`scene_tag` 从文件名推，**不看画面内容** |
 | 视频内容理解（Gemini 看片打分 + 提炼手法） | `src/lib/reels/viral-analyzer.ts` | 只用于拆他人爆款 |
 | 带时间轴转写（start/end/text 分段） | `src/lib/supadata/client.ts` | 只吃外部平台 URL |
 | 转写 → 结构提炼（钩子/结构/节奏/CTA） | `src/lib/content/video-analyzer.ts` | 只用于爆款拆解 |
 | 图片自动打标 | `/api/cron/vision-analyzer` | 在跑，只处理图片 |
 
-即：**不是新建系统，是把已有 4 个零件接到那条已写好但未接的管子上。**
+即：**不是新建系统，但也不是「接上一根现成的管子」** —— 进料管本身是断成两截的（判断段在 lib、落地段在手工脚本，两边各自实现了一遍 ffprobe 与查重），开工时第一步是把这两截并成一条能被程序调用的路径，再往上接内容理解。
 
 **明确不做**：不自建时间线剪辑器。ChatCut（无服务端接口，须真人全程陪同）与 OpenChatCut（AGPL 传染 + 对外接口不含导出 + 需图形界面）2026-08-14 已逐条核查否决。
 
