@@ -106,7 +106,11 @@
   - `rejectDraft`（`:213-235`）同样**只改 payload 状态**。
   而 `publishDraftPaused` 里那套逆序 `graphDelete` 回滚**只在建的过程中失败时才跑**（`:165-169`），终态是 blocked / rejected 时根本不触发。结果：**一堆永远不可能再被批准的暂停广告长期堆在 Meta 后台**，而它们看起来跟正常的暂停草案一模一样 —— **后台的人一手滑就能把它开起来花钱**。
   ⚠️ 这正好撞在 CLAUDE.md 铁律 3 下半：能自动就自动（终态时逆序删掉），确实删不掉（比如 Meta 报错、实体被引用）**就必须下发人工任务并进同一个管道**，带齐 what（这几条是废弃草案、别开）· how（在 Meta 后台删掉这几个 id）· href（直达链接）。现在两样都没有 —— `DraftRecord.orphans` 这个字段**只在建失败那条路上会被填**，blocked / rejected 根本不写它。
-  修：终态（blocked / rejected）自动逆序删除实体；删不掉的落进 `orphans` **并下发人工任务**（`src/lib/pm-todo/manual-items.ts` 的「🙋 需要你动手」栏）
+  ⚠️ **但"逆序删除实体"这句现在做不到 —— 三个前置得先补**（第四十四轮 Codex 指出，已核实。上一版直接写了这句修法，是**承诺了一个当前结构根本执行不了的动作**）：
+  1. **creative id 根本没被带出来**：`ad-publisher.ts:224` 的 `created.push(creative.id)` 只进了 `publishDraftPaused` 内部那个局部数组，而 `PublishedDraft`（`:22-28`）只有 `campaignId` / `adSetId` / `adIds` / `orphans`，`:243` 返回时**不含任何 creative id**。事后想删创意，连 id 都拿不到。⚠️ 而且创意在 Meta 是**账户级对象、不是 campaign 的子对象** —— 删 campaign 不会把它带走，所以这批必然漏；
+  2. **`rollback` 是个局部闭包**（`:165-169`），函数一返回就不可调用 —— 终态清理需要一个**可复用的清理能力**，不能指望复用它；
+  3. **否决那条路手上没有 token**：`rejectDraft(actionId, supabase, reason?)`（`draft-and-gate.ts:213-217`）**签名里就没有 accessToken**，它连 Meta 都调不了。
+  修：① **`PublishedDraft` 带上 creative ids 并落进 `DraftRecord`**；② 把清理逻辑从闭包里提出来做成可复用函数（建失败回滚和终态清理共用）；③ 给 `rejectDraft` 补授权；④ 然后才谈终态（blocked / rejected）自动逆序删除；⑤ 删不掉的落进 `orphans` **并下发人工任务**（`src/lib/pm-todo/manual-items.ts` 的「🙋 需要你动手」栏）—— 注意①没做的话，**这个人工任务本身也是残缺的**（列不全要删哪些东西）
 - [ ] 🔴 **AD-QUEUE-1 审批页按"最近 50 条"截断后才在内存里筛待办 —— 早的待批草案会从唯一入口永久消失**（第四十三轮发现，**首投前置**）：`ad-approval/page.tsx:34-44` 的查询**不带任何状态条件**，只 `.order('created_at', desc).limit(PAGE_LIMIT + 1)`（`PAGE_LIMIT = 50`），拿回来之后才在 `:80` 用 `rows.filter(r => r.payload?.status === 'awaiting_approval')` **在内存里**筛。页面自己在 `:23` 写明「**不做分页**」。
   → 只要 `flywheel_actions` 里攒够 50 条更新的 `active` / `rejected` / `blocked` / `failed`，**更早但仍在等人点头的草案就再也不会出现在这个页面上** —— 而这是**唯一**的审批入口。
   ⚠️ 更阴的是 `:246-248` 那句兜底文案：「还有更早的记录没显示（这页只列最近 50 条）」—— 它把漏掉的东西说成**历史记录**，看的人不会意识到**里面可能有正在等他点头的活**。这张页面存在的意义就是保证"该你点头的都在这儿"，而这个保证现在不成立。
