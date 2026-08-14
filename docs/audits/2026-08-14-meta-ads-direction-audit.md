@@ -150,9 +150,22 @@ Roman 的 15 条同样是真角度：`Rangitoto 学区 hook` / `By negotiation` 
 
 **这说明"多角度"这件事我们会做，是人做的，而且做对了。问题在别处（见 3.5、3.6）。**
 
-### 3.5 两次多角度测试都被设计废掉了
+### 3.5 两次多角度测试，ME 都读不出结论（但原因各不相同）
 
-- **Oztop 13 条 hook 跑的是 `THRUPLAY` 目标** → `results` 全为 0，`leads` 全为 0。测了 13 个角度，**测完之后无法知道哪个角度带来生意**，只知道谁播放便宜。而且钱高度集中：`OZ-S1-A-spill` 一条吃掉 $280.72 / $432.50（65%）。
+⚠️ **本节初稿把第一条写反了，已更正**（Codex 复审第六轮 P1，核实成立）。原稿写的是「Oztop 13 条 hook 跑的是 `THRUPLAY` 目标 → results 全为 0，测完不知道哪个角度带生意」，把它当成实验设计的缺陷。**这是本仓 2026-08-04 那次误判的重演。**
+
+`src/lib/flywheel/ads-expected-metric.ts:108-123` 原文（就是为这个 campaign 写的）：
+
+> 2026-08-04 真实误判：`OZ-THRU-S1-hooktest`（$432）、`CTS - ThruPlay Reels`（$233）、`OZ-REACH-Warmpool`（$169）三条都是 0 结果，我一度当成「$834 打水漂」报给 PM。实际上它们的目标分别是看完视频和触达 —— **results 列对这类目标本来就恒为 0，0 是对的，报警才是错的。**
+
+`play-vocabulary.ts:55-62` 也写明 `thruplay_pool_build` 的成效是「单次完播成本 + 池子涨了多少人。**results 恒为 0，不是失败**」。
+
+**所以准确的说法是：**
+
+- **Oztop 13 条 hook 的目标选对了。** 它是攒池实验（`OZ-THRU-S1-hooktest`，打法 `thruplay_pool_build`），要筛的是"哪个 hook 能最便宜地让人看完"，`THRUPLAY` 正是该用的目标，results=0 是设计如此。
+- **真正的缺陷在 ME 这一侧：这个实验该看的指标，我们一个都没入库。** `ad_daily_insights`（migration `20260721000001`）只有 `spend / impressions / reach / clicks / frequency / cpm / ctr / cpc / leads / messaging_conversations / results / cost_per_result` —— **没有完播次数、没有单次完播成本、没有 `video_p100`、也没有受众池增长**。于是花掉的 $432.50 在 ME 里唯一读得出的结论是「0 结果」，而那个数按仓库自己的规矩根本不该拿来判好坏。
+- 这件事**已经登记但没做**：ROADMAP `P21.K.8`（objective 感知 + 视频疲劳正向检测）就是补这批指标的那一条。
+- 另外钱确实高度集中：`OZ-S1-A-spill` 一条吃掉 $280.72 / $432.50（65%）—— 这一条与目标无关，是 13 个角度之间没跑成公平竞争。
 - **Roman 15 条 angle 总预算只有 $366**，平均每条 $24。最贵的一条 `Ad F · 中文 · Rangitoto 学区` $111.33 拿到 21 个对话（$5.30/对话），最便宜的几条只有 $2.54–$4.82、个位数展示。这个量级下"谁赢了"是掷硬币。仓库自己算过这笔账（`play-vocabulary.ts` 头部注释）：**要测出中英差异的显著性需要 $1,835，而一个楼盘总预算 $2,000。**
 
 ### 3.6 ME 自己出的草案，结构上就只能出一条创意
@@ -229,7 +242,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 |---|---|---|
 | 1 | **ME 自己的建广告代码默认关掉 Advantage+ 受众** | `ad-publisher.ts:116` `advantage_audience: 0`，无差别 |
 | 2 | **钱全压在单条创意上** | 前三大 campaign $5,300 / 4 条创意 |
-| 3 | **多角度测试跑在错误的目标上** | 13 条 hook 跑 THRUPLAY → results 全 0，测完不知道谁带生意 |
+| 3 | **视频/攒池类实验该看的指标 ME 一个都没采** —— 目标本身是对的，读不出结论是我们的问题 | `ad_daily_insights` 无完播次数 / 单次完播成本 / `video_p100` / 池子增长；13 条 hook 的 $432.50 在 ME 里只读得出「0 结果」，而那个数按 `ads-expected-metric.ts:108-123` 本就不该用来判好坏。ROADMAP `P21.K.8` 已登记未做 |
 | 4 | **多角度测试的预算不足以出结论** | Roman 15 条 / $366，仓库自己算过需要 $1,835 |
 | 5 | **ME 出的草案结构上只能有一条创意 + 按语言拆 ad set** | `listing-draft-builder.ts:193,254` |
 | 6 | **creative 级归因断链** | 39 条 lead 有 `attr_ad_id`，0 条有 `attr_creative_ref` |
@@ -254,7 +267,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 | Broad / Advantage+ delivery | **DONE（人工）/ CONFLICT（ME 代码）** | live 23/26 开着；但 `ad-publisher.ts:116` 写死关闭 |
 | Performance ingestion | **DONE** | `ad_daily_insights` campaign 201 行 + ad 376 行，日 cron |
 | Creative-level attribution | **MISSING** | `ad_creative_links` 0 行 / `attr_creative_ref` 0 行。素材归因写入方已接线但从未触发；`ads.create_ad` 那条路径**根本不调它**（见 §3.7 注）|
-| Winning-angle detection | **PARTIAL** | 有 divergence 检测但拒绝下结论；winner 判定用的是自然互动分 |
+| Winning-angle detection | **PARTIAL** | 有 divergence 检测但拒绝下结论；winner 判定用的是自然互动分；**且视频/攒池类实验该看的指标（完播成本、池子增长）根本没入库**，那类角度测试在 ME 里天然判不了（ROADMAP `P21.K.8`） |
 | Next-generation creative creation | **MISSING** | `variant_from_winner` 工单 0 条 |
 | Learning persistence | **MISSING** | `ad_creative_links.play/play_source/play_context` 三列已建但 0 行，且**两条建广告路径都没传 `play`**，跑起来也仍是 NULL；`PLAY_CATALOG.knownTraps` 是手写的，不是学来的 |
 
@@ -307,7 +320,7 @@ ad        status: 'ACTIVE'
 
 1. **建成即花钱、无人点头** —— 直接违反本仓「没有任何一条路径能让 ME 自己让广告开始花钱」这条规矩（`ad-draft.ts` / `draft-and-gate.ts` 头部都写着）；
 2. **把 CTS（NZ 客户）的广告投到澳洲** —— `geo_locations` 写死 `['AU','NZ']`。§3.1 里那条 `geo_mismatch` blocker，正是为这一类错误存在的（2026-08-04 Roman 把北岸的房投给全新西兰）；
-3. **objective 是 `REACH`** —— results 恒为 0。就算记上了是哪条片子，也学不到"这条片子带不带生意"，正是 §5 问题 3 那个毛病。
+3. **objective 写死 `REACH`，而这条广告的目的是"验证归因链路通不通"** —— 触达类目标的 `results` 恒为 0（`ads-expected-metric.ts:165-171`，这是对的、不是失败），但**首条广告要证明的恰恰是"这条片子带来了哪个客户"**，用一个结构上产不出 lead 的目标去验证，就算 `creative_ref` 记上了也验不到链路的下半截。（注意：这是"目标与本次目的不匹配"，**不是**"REACH/THRUPLAY 是坏目标"—— 见 §3.5。）
 
 **真实结论：今天没有任何一条路径同时满足「安全」和「记得下来」。**
 
@@ -400,7 +413,10 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 
 其余两条约束不变：
 - 私信类广告一个 ad set 一种语言（`mixed_script_messaging_adset` 闸门，2026-08-04 那次）；
-- 多角度测试**必须跑带成效的目标**（`LEAD_GENERATION` / `CONVERSATIONS`），不要再跑 THRUPLAY —— 否则测完还是不知道哪个角度带生意（问题 3）。
+- **目标按实验目的选，不要一刀切**（Codex 复审第六轮 P1 更正 —— 上一版写死「必须跑 `LEAD_GENERATION` / `CONVERSATIONS`，不要再跑 THRUPLAY」，那会把合法的攒池实验废掉）：
+  - 问题是「**哪个角度直接带来生意**」→ 用 `LEAD_GENERATION` / `CONVERSATIONS`；
+  - 问题是「**哪个 hook 最便宜地让人看完 / 最快把池子做大**」→ `THRUPLAY` 就是对的目标，`results = 0` 是设计如此，不是失败（`play-vocabulary.ts:55-62`）。
+  - **前置**：选后者之前，先做 ROADMAP `P21.K.8` 把完播次数 / 单次完播成本 / 池子增长采进 `ad_daily_insights` —— 否则又是一次"跑对了目标、ME 读不出结论"（§3.5）。
 
 **不建议现在做的**：重构 winner 判定、建"意图 → 角度"模型、把 `ad-level-breakdown` 改成会宣布赢家。这三件事都要有真实的 creative 级数据才能设计，而那些数据要等 ①a / ①b 跑起来才有。
 
@@ -411,7 +427,8 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 2. **②** `ad-publisher.ts:116` 改 `advantage_audience: 1` —— 一行，现在改成本为 0；
 3. **在 ①(i) 修 boost 路径 与 ①(ii)/①b 让 draft 路径能记账 之间二选一** —— 这是「投出第一条 ME 自建广告」的真正前置。两个选项的设计与编码都自己拍板，选 (ii) 时只在最后对生产库 `apply_migration` 那一下停下来等 PM 一句 `go apply`；
 4. 前置落地后，**投第一条真广告**；
-5. **③** 批量角度（半周到一周），外加"表单身份下沉 + 表单混语言闸门"若要跨语言合并。
+5. **③** 批量角度（半周到一周），外加"表单身份下沉 + 表单混语言闸门"若要跨语言合并；
+6. 若要做**攒池型**角度测试（视频 hook 筛选），先落 ROADMAP **`P21.K.8`**（完播次数 / 单次完播成本 / 池子增长入 `ad_daily_insights`）—— 否则又一次"跑对了目标、ME 读不出结论"（§3.5）。
 
 > ⚠️ 这一节被更正了三轮（每轮都是 Codex 抓到、逐行核对后成立）。三次错误有同一个形状：**看见"表已经建好 / 函数已经存在"就推断"接上就能用"，而没有核对它到底怎么被调用、怎么花钱、字段是哪一级的**。这正是本审计在 §5 批评系统的那件事，作者本人连犯三次 —— 记在这里，因为下一个照这份文档动手的人最可能踩的就是同一个坑。
 
@@ -427,7 +444,9 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 
   ⚠️ 但**这句话只覆盖一半多一点的钱**：查过的是 CTS 和 Roman 的广告（$4,214，占 53.9%）；Oztop 那 46.1%（$3,608）的账户 Facebook 还没对我们开放读取，**这次一眼都没看到**。所以准确说法是「查过的那 54% 做对了」，不是「我们做对了」。想把这句话说全，得先补读 Oztop —— 活不大，但没做之前别把结论扩大。
 
-2. **广告"说什么"这件事，我们还在用老办法。** 钱最多的三条广告，加起来只有 4 条不同的片子；而我们真正试过十几个不同说法的那两次，一次花了 $432、一次花了 $366 —— 钱太少，试完也分不出胜负。**说白了：我们把所有钱押在少数几条片子上，同时用零花钱去做真正该做的测试。这个次序反了。**
+2. **广告"说什么"这件事，我们还在用老办法。** 钱最多的三条广告，加起来只有 4 条不同的片子；而我们真正试过十几个不同说法的那两次，一次花了 $432、一次花了 $366 —— **两次都没能得出结论，但原因不一样**：Oztop 那次（$432）**方法是对的**，是我们的系统没把该看的数（多少人把片子看完、看完一次多少钱）收进来，所以现在读不出谁赢；Roman 那次（$366）是钱太少，十几条片子分下去每条只有二十几块，谁赢基本靠运气。
+
+  **说白了：我们把所有钱押在少数几条片子上，同时用零花钱去做真正该做的测试 —— 这个次序反了；而且就算测了，有一类测试我们的系统还读不懂。**
 
 3. **最关键的一环还没通电：我们至今说不清哪一条片子带来了哪一个客户。** 39 个已经追到"哪条广告"的客户里，**没有一个**能追到"哪条片子"。记这件事的表已经建好，但**记录这件事的几段路只各修了一段、还没接到一起**。
 
