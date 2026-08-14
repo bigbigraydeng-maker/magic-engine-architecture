@@ -444,7 +444,10 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 
 **①a — 真·小活，先做（不需要 migration）**
 
-把 `play` / `playSource` 传给已有的两个调用点：`boost-post/route.ts:122` 固定 `'boost_organic_post'`、`winner-reel-sync/engine.ts:214` 固定 `'thruplay_pool_build'`，`playSource` 都是 `'declared_at_creation'`。`LinkAdToCreativeArgs` 和 `persistLink` 早就支持这三列，纯粹是调用方没传。
+把 `play` / `playSource` 传给已有的两个调用点。`LinkAdToCreativeArgs` 和 `persistLink` 早就支持这三列，纯粹是调用方没传 —— **但两条路径的处理方式不同，不能一起硬编码**（第十九轮更正；初版写的"两边都固定值"是错的，别照那个施工）：
+
+- `boost-post/route.ts:122` → 固定 `boost_organic_post` + `declared_at_creation`。**安全**：这个路由干的就是给自然帖投流，打法由路由本身决定；
+- `winner-reel-sync/engine.ts:214` → 🔴 **不能固定 `thruplay_pool_build`**。它只是往 `winner_reel_sync_config.target_adset_id` 指定的广告组加广告，而那张配置表**没有打法/目标字段**、代码也**从不回读该组的 `optimization_goal`**。目标组一旦不是 ThruPlay 组就会贴错标签 —— 而 `declared_at_creation` 在 `PLAY_SOURCE_TRUST` 里算**高可信**，错标签会直接污染打法学习，正好违反 `play` 那条「拿不到就留空，绝不猜」。要么给配置加**受校验的**打法字段、要么建广告时回读目标确认，**两者都做不到就留 NULL**。
 
 ~~首条 ME 自建广告走 `boost-post` 路径~~ ⚠️⚠️⚠️ **第三次更正 —— 这条建议已撤回**（Codex 复审第三轮 P1，核实成立）。
 
@@ -512,7 +515,7 @@ ad        status: 'ACTIVE'
 
 > 📌 **结论**：想省事先走 (i) 是可以的，但要接受它**只验一半**；**真正的首条端到端验证必须走 (ii)**。别把 (i) 跑通当成"闭环通了"—— 那正是本审计在批评的那种"各环节都正常，只有并排看才发现断了"。
 
-**①b — 需要 PM 拍板的一块（含 migration）**
+**①b — 现在就能开工，只有生产落库那一下需要 PM 授权**
 
 要让 `draft-and-gate` 那条路径也能记账，缺的是「**每条 creative 的素材身份贯穿到发布结果**」这件事本身，不是一次函数调用：
 
@@ -616,6 +619,10 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 所以本条的准确表述是：
 
 - **角度合并的边界是"同一语言"，不是"同一草案类型"** —— 5–8 个角度全部同语言，投一个 ad set；要做另一种语言就是另一份草案 + 另一个表单。
+
+  ⚠️ **但"另一个表单"这件事现在也没人管**（Codex 复审第二十三轮 P2，核实成立 —— **新发现**）：`draft-listing/route.ts:82-105` 的 `pickForm(forms, wanted?)` **根本不接语言参数**，而且当该主页只有一个可用表单时**直接返回它**（`return { formId: pool[0].formId }`），不问语言；回读闸门也不检查表单语言。
+  所以**就算按语言拆了草案，英文广告照样可能把买家送进中文表单** —— 跟 §5 问题 5 说的"同一草案混语言"是同一个后果，只是走的另一条路。
+  **这一项是投第一条真钱广告的前置**（第一条就会踩），已登记为 `AD-FORM-1`。
 - 要真正做到"跨语言也能合并"，前置是把**表单身份下沉到每条 creative**（`AdDraftCreative` 带自己的 `leadFormId`）**并给表单广告补一条混合语言闸门** —— 这是 ③ 之外的额外一项，别顺手默认它已经有了。
 
 其余两条约束不变：
@@ -638,6 +645,7 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
    *（若想更早拿到一点信号，可以顺手把方案 (i) 的四样也修了 —— 但要认清它只验上半截的记账，不算闭环。）*
 4. **补事实来源校验** —— ⚠️ **这一步是第十三轮才前移到这里的**（Codex P1，核实成立）。上一版把它挂在第 5 步（批量角度）之前，理由是"批量扩会放大这个洞"—— **但第 4 步已经在花真钱了**。`assertFacts` 只查 `sourceUrl` 非空、从不抓页面核对，而 `traceClaims` 照盖"官网可溯"章（§4 第 6 条）。所以**只要调用方给错房价/地址/战绩，第一条付费广告就会带着未核实内容过审、投出去** —— 这不是"量大了才危险"，是第一条就危险。
    做法二选一：按 `sourceUrl` 抓页面核对关键字段，或**只接受来自 ME 已核实数据源的事实**（后者更省，首条广告用它就够）；
+   **同一步一起做掉 `AD-FORM-1`**：`pickForm` 不看语言、只有一个表单时直接选中，英文广告可能把买家送进中文表单 —— 这也是第一条就会踩的（第二十三轮新发现）；
 5. 前置全部落地后，**投第一条真广告 —— 走 `draft-listing` 的 `lead_form`**（不走 REACH boost，也不走还没补归属校验的通用 `meta-ads/draft`）；
 6. **③** 批量角度（半周到一周）。事实来源校验已在第 4 步做掉；若还要跨语言合并，再加"表单身份下沉 + 表单混语言闸门"；
 7. 若要做**攒池型**角度测试（视频 hook 筛选），前置是**两条已登记的 ROADMAP 项，不是一条**（第十一轮更正 —— 上一版把池子增长错记进 `P21.K.8`，实际它不在那条里）：
@@ -736,4 +744,4 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
    两张表都是裸 `NUMERIC`、原样存账户币种、不换算不记币种；而 CTS/Roman 是 NZD、Oztop 是 AUD（均已实读）。**只修前者修不到报表侧** —— `20260721000001` 的注释本身就写明报表仍读 `meta_ads_snapshots`。所以任何跨客户的花费汇总、排行、预算比较都会算错。
    修法：`ad_daily_insights` 加 `currency` 列（Graph 的 `account_currency` 字段直接给），跨客户汇总时按基准日折算并注明汇率。
 
-   ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现与未完成动作已一并登记（**16 条**）：`AD-CUR-1/2` · `AD-PLAY-1` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1` · **`AD-EXPL-1`**（每臂最低探索量，决定「找出赢家」这个卖点成不成立）· `AD-EVID-1` · `AD-FRAG-1`。
+   ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现与未完成动作已一并登记（**17 条**）：`AD-CUR-1/2` · `AD-PLAY-1` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · **`AD-FORM-1`**（选表单不看语言，首条真钱广告的前置）· `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1` · **`AD-EXPL-1`**（每臂最低探索量，决定「找出赢家」这个卖点成不成立）· `AD-EVID-1` · `AD-FRAG-1`。
