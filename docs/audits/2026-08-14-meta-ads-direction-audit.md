@@ -658,7 +658,8 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
    正确做法：**① 信任根是客户已登记的域名**（`sourceUrl` 的 host 必须落在 `master_briefs.source_website_urls` / `website` 这类已配置字段内，否则拒绝出稿），或**只接受来自 ME 已核实数据记录的事实**（首条广告用这条最省）；**② 真要抓页就走 `src/lib/net/safe-fetch.ts` 的 `safeFetchText`**（#965 刚落的 GET-only、连接绑定、防重定向与内网地址的原语），别自己 `fetch`；
    **同一步一起做掉另外两条,都是第一条就会踩的**：
    - 🔴 **`AD-GEO-0`**：`targetingFor` 把国家和城市一起发,Meta 按并集生效 → 广告实际投整个国家,10km 半径形同虚设（第二十七轮新发现,**首发前必修**,否则第一条广告就是那次事故的复刻）；
-   - **`AD-FORM-1`**：`pickForm` 不看语言、只有一个表单时直接选中,英文广告可能把买家送进中文表单（第二十三轮新发现）；
+   - **`AD-FORM-1`**：`pickForm` 不看语言、只有一个表单时直接选中,英文广告可能把买家送进中文表单（第二十三轮新发现）。⚠️ **修法不是"把语言传进 `pickForm`"**（第二十九轮更正）—— `BuildOptions` 早就有 `lang`（`listing-draft-builder.ts:55`），缺的是**另一侧**：`lead-forms.ts:118` 只取 `id,name,status`，**表单本身没有语言可比**。得先有 form→language 的可靠来源（显式配置最稳）；
+   - **`AD-CUR-2` 的草案那一路**：`ad-publisher.ts:195` 按账户币种发预算，而审批页只显示 `$` —— **批准人不知道自己批的是 AUD 还是 NZD**（第二十九轮补入首投前置；之前只登记了，没进这一步）；
 5. 前置全部落地后，**投第一条真广告 —— 走 `draft-listing` 的 `lead_form`**（不走 REACH boost，也不走还没补归属校验的通用 `meta-ads/draft`）；
 6. **③** 批量角度（半周到一周）。事实来源校验已在第 4 步做掉；若还要跨语言合并，再加"表单身份下沉 + 表单混语言闸门"；
 7. 若要做**攒池型**角度测试（视频 hook 筛选），前置是**两条已登记的 ROADMAP 项，不是一条**（第十一轮更正 —— 上一版把池子增长错记进 `P21.K.8`，实际它不在那条里）：
