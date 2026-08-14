@@ -116,7 +116,11 @@
 
   修：统一加 **实体 → client 归属守卫**（campaign / page / post / form / creative 都要），或推进账户拆分（§2.1 子牙意见：**根治靠账户治理，不是写白名单**）
 - [ ] **AD-SEC-2 通用 `meta-ads/draft` 不校验素材归属**：`...(body as AdDraft)` 整体展开，`leadFormId`/`imageHash`/`videoId` 原样来自请求体，客户没配主页时 `pageId` 还回退 `body.pageId`；闸门只查买家可见内容不查资产归属。对比 `draft-listing` 已有 `client_assets` 租户守卫。修：补 page/form/creative 归属校验
-- [ ] **AD-FACT-1 事实来源从不校验，却盖"官网可溯"章**：`assertFacts` 只查 `sourceUrl` 非空，从不抓页面核对价格/地址/战绩，而 `traceClaims` 把原样传入的字段标成"官网可溯"。**第一条付费广告就会带着未核实内容投出去**，不是量大了才危险。修：按 `sourceUrl` 抓页核对，或只接受 ME 已核实数据源
+- [ ] **AD-FACT-1 事实来源从不校验，却盖"官网可溯"章**：`assertFacts` 只查 `sourceUrl` 非空，从不抓页面核对价格/地址/战绩，而 `traceClaims` 把原样传入的字段标成"官网可溯"。**第一条付费广告就会带着未核实内容投出去**，不是量大了才危险。⚠️ **修法不能是"按 `sourceUrl` 抓页核对"**（第二十四轮更正，Codex P1，核实成立）：**事实和 `sourceUrl` 是同一个调用方给的** —— 他完全可以指向一个自己控制、写着假价格假战绩的页面，抓下来照样"对得上"，然后拿到"官网可溯"的章。**拿请求体里的 URL 当信任根，等于没校验。** 而且直抓任意调用方给的 URL 还会引入 SSRF。
+
+  正确修法两条一起：
+  1. **信任根是客户配置的域名，不是请求体** —— `sourceUrl` 的 host 必须落在该客户已登记的官网/房源系统域名内（`master_briefs.source_website_urls` / `website` 这类已有字段），否则直接拒绝出稿；或干脆**只接受来自 ME 已核实数据记录的事实**（首条广告用这条最省）；
+  2. **抓取必须走 `src/lib/net/safe-fetch.ts` 的 `safeFetchText`**（#965 刚落的 GET-only、连接绑定、带重定向与内网地址防护的原语），**不要自己 `fetch`**
 - [ ] **AD-OBS-1 创意变体数不可观测**：`ad_daily_insights` 的 ad 级行无 `creative_id` / `asset_feed_spec`，`ad-level-breakdown.ts` 也只到 ad 级 —— "我们到底投了多少种说法"系统答不出来（用了 Advantage+ 素材自动化的广告尤其）。修：回读 `creative` + asset feed 并落库
 - [ ] **AD-OBS-2 攒池测试无法按 hook 归因**：`client_audience_assets` 按 `audience_id` 唯一、无创意维度，而 `videoEventRule` 把一批 videoId 灌进同一个池 → `P18.E.3` 只给得出池子整体净增。修：一 hook 一池，或另建创意级增长映射。（完播成本那半由 `P21.K.8` 覆盖）
 - [ ] **AD-LOG-1 `draft-and-gate.ts` 的 `record()` 漏读 `error`**：`const { data } = await supabase...insert()`，`error` 连接都没接；且发生在 Meta 实体已建出之后 → 账本 0 条也可能是"建了没记上"。小 bug，顺手修
