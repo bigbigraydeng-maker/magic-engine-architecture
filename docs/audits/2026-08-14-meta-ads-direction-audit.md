@@ -224,7 +224,7 @@ function targetingFor(d: AdDraft): Record<string, unknown> {
 | `Oztop — Lead Form — Cold Broad — 20260709` | **2**（97.6% 在一条上） | $2,288.52 | 78 | 63.4% |
 | `OZ-THRU-S1-hooktest-202607` | **14** | $432.50 | 0 | 12.0% |
 
-→ **Oztop 六成多的钱压在 1 条创意上；13 个角度的测试只分到 12%。**
+→ **Oztop 六成多的钱压在 1 条创意上；14 个角度的测试只分到 12%。**
 
 **Roman（NZD，总 $480.71）**
 
@@ -323,7 +323,7 @@ Roman 的 15 条同样是真角度：`Rangitoto 学区 hook` / `By negotiation` 
 
 > **写入方接线到什么程度**（初稿说"已经接好了"，不够准确，按源码逐行更正）：
 >
-> - `ad_creative_links` 的**素材归因那一半**确实接好了 —— `boost-post/route.ts:122` 与 `winner-reel-sync/engine.ts:214` 都在调 `linkAdToCreative`。它是 0 行是因为这两条路径自 2026-08-01 以来一次都没建成过广告。
+> - `ad_creative_links` 的**素材归因那一半**确实接好了 —— `boost-post/route.ts:122` 与 `winner-reel-sync/engine.ts:214` 都在调 `linkAdToCreative`。它是 0 行，**只能说明这两条路径自 2026-08-01 以来一次都没成功记下过链接 —— 不能推出"没建成过广告"**：`persistLink`（`creative-link.ts:223-259`）是**刻意吞掉全部错误**的，广告在 Meta 那边建成了、写库失败了，表照样是 0 行，而 boost 路径没有第二本账可以对照。要归因到"没建过"，得另查 Meta 的创建记录或调用日志（并进 `AD-LINK-1`）。
 > - 但**打法账本那一半没接**：两处调用都没传 `play` / `playSource`，所以 `persistLink` 会把这两列写成 `NULL`。即使这两条路径明天跑起来，打法账本仍然是空的。
 > - 而 `ads.create_ad` 那条流水只有 `draft-and-gate.ts` 会写，**它反过来从不调 `linkAdToCreative`** —— 而且不是"忘了调"：那条路径用 `object_story_spec` 建全新创意，**没有帖子 id 可传**，`ad_creative_links.post_id` 又是 `NOT NULL`，所以它今天**在结构上就记不进这张表**（`creative-link.ts:54` 预留的 `'me_ad_launch'` 至今没加，正是因为这个）。
 >
@@ -709,7 +709,8 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 
 三件事说清楚：
 
-1. **广告投给谁这件事，在查得到的那家客户身上，已经做对了。** CTS 的广告我们逐组查了：**没有一组在做"人群精挑细选"**，钱的七成多明确开着"让 Facebook 自己去找人"，唯一关掉的那组是专门投老客户的，那组本来就该关。这正是现在 Facebook 最吃香的做法，这部分不用改。
+1. **广告投给谁这件事，在查得清楚的那几条广告上，已经做对了。** CTS 那 6 条**我们系统在管的**广告逐组查了：**没有一组在做"人群精挑细选"**，钱的七成多明确开着"让 Facebook 自己去找人"，唯一关掉的那组是专门投老客户的，那组本来就该关。这正是现在 Facebook 最吃香的做法，**这 6 条不用改**。
+  ⚠️ **但不能说成"CTS 的广告都查过了"**：CTS 那个账户里还有 20 个广告组没归属清楚，里面既有 Oztop 的投流，**也有我们系统没在管的 CTS 自己的推广**；而**全部 8 个在做"人群精挑细选"的组，恰好全在这 20 个里**。所以在补完这笔账（`AD-EVID-1`）之前，正确说法只能是"**已追踪的 6 条没问题**"，不是"CTS 这家没问题"。
 
   ⚠️ 但**这句话只覆盖不到一半的钱**：查过的只有 CTS 一家（$3,733，占 47.7%）。**Oztop（46.1%）和 Roman（6.1%）两家的广告账户 Facebook 都不让我们读**，合计 52.3% 的花费没有任何证据 —— 它们是好是坏，现在纯属猜测。
 
@@ -774,7 +775,7 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
    - Meta MCP：`This ad account is not enabled for the Ads MCP. Ad account ID: 1735240120460765`（`is_ads_mcp_enabled: false`，Meta 尚未放量）
    - 直调 Graph：**本次审计环境没有 `META_SYSTEM_USER_TOKEN`**（仓库里只有 `.env.example`）
 
-   它的 campaign 叫 `Cold Broad`，但名字不算证据（本仓 `play-vocabulary.ts` 自己写过"最花钱那条名字零信息量"）。补完最终判断的办法：**在有该 token 的环境里**跑 `GET /act_1735240120460765/adsets?fields=targeting,name,status,optimization_goal`。**这不是"再试一次就好"，是必须换环境。**
+   它的 campaign 叫 `Cold Broad`，但名字不算证据（本仓 `play-vocabulary.ts` 自己写过"最花钱那条名字零信息量"）。补完最终判断的办法：**在有该 token 的环境里**跑 `GET /act_1735240120460765/adsets?fields=targeting,name,status,optimization_goal,campaign_id`，**并沿 `paging.next` 翻到底**（Graph 默认一页 25 条；照 `src/lib/meta/ads-posts.ts:36-66` 的写法，撞到页数 guard 就把结果标成「不完整」，不能拿首屏补结论）。**这不是"再试一次就好"，是必须换环境。**
 2. **`ad_daily_insights` 里没有 ad set 这一层** —— `level='ad'` 行的 `parent_id` 存的是 campaign（`ad-level-breakdown.ts` 头部注释明确说过，两个 agent 都误读过）。所以"一个 audience 是否被拆成很多 ad set"只能从 Meta live 侧回答（CTS：26 个 ad set / 17 个 campaign），库里答不了。
 3. **创意的 angle 标签没有落库** —— 角度信息只存在于广告名字里（`OZ-S2-R6-kidsdog`），`ad_creative_links.play_context` 本来就是放这个的字段，但表是空的。所以"角度 A 比角度 B 好"这类问题现在只能靠人读名字，系统答不了。
 4. **🆕 广告花费表都没有币种列，跨客户金额不可加总** —— 本审计发现的新缺口，**ROADMAP 里没有登记过**，而且**是两张表**（第十八轮更正：上一版只点了 `ad_daily_insights`，把影响面挂错了表）：
@@ -782,6 +783,6 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
    - `meta_ads_snapshots.spend` → 喂 **`MetaAdsAdapter.ts:90`（Goal 指标）、月报**（`production/[packageId]/route.ts:117` 也读它，但那条路一直是断的 —— 见 `AD-PKG-1`）
 
    两张表都是裸 `NUMERIC`、原样存账户币种、不换算不记币种；而 CTS/Roman 是 NZD、Oztop 是 AUD（均已实读）。**只修前者修不到报表侧** —— `20260721000001` 的注释本身就写明报表仍读 `meta_ads_snapshots`。所以任何跨客户的花费汇总、排行、预算比较都会算错。
-   修法：`ad_daily_insights` 加 `currency` 列（Graph 的 `account_currency` 字段直接给），跨客户汇总时按基准日折算并注明汇率。
+   修法：**两张表都加 `currency` 列**（`ad_daily_insights` **和** `meta_ads_snapshots`；Graph 的 `account_currency` 字段直接给），并**按 `ad_account_id` 回填历史行**（账户币种不随时间变，可安全回填），**读侧显式处理 NULL**（宁可拒绝汇总也不要默认同币种）；跨客户汇总时按基准日折算并注明汇率。⚠️ **只给 `ad_daily_insights` 加列修不到报表侧** —— Goal 指标和月报读的是 `meta_ads_snapshots`。
 
    ✅ **已登记为 `AD-CUR-1`**（`docs/ROADMAP.md` §广告引擎中心）。第十六轮更正 —— 上一版写的是"建议登记，不在本审计范围内"，那等于把发现留在文档里等人捡，正是 CLAUDE.md 铁律 3 下半禁止的「发现死在日志里」，也违反 §9「未完成任务回写 ROADMAP」。本次审计的全部新发现与未完成动作已一并登记（**21 条**）：`AD-CUR-1/2` · `AD-PLAY-1` · `AD-GATE-1` · `AD-SEC-1/2` · `AD-FACT-1` · **`AD-FORM-1`**（选表单不看语言，首条真钱广告的前置）· `AD-OBS-1/2` · `AD-LOG-1` · `AD-ADV-1` · `AD-DRAFT-1` · `AD-LINK-1` · **`AD-EXPL-1`**（每臂最低探索量，决定「找出赢家」这个卖点成不成立）· 🟠 **`AD-ISO-1`**（生产同步把整账户写成单个客户，已上线在跑；105 行里 101 行实测干净、2 行丢了明细无从核对，是隐患不是已确认的损害）· 🔴 **`AD-PKG-1`**（交付物的广告栏从上线起就是空的，写读两侧都指向不存在的列且都不报错；补列前须先补包归属校验，否则一补列就变成跨客户注入）· 🔴 **`AD-GEO-0`**（`targetingFor` 国家+城市并集，ME 起草的广告天生投整个国家 —— 首发前必修）· **`AD-GEO-1`**（geo 闸门只到国家级，抓不到它自己引用的那次事故）· `AD-EVID-1` · `AD-FRAG-1`。
