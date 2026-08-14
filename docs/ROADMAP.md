@@ -207,8 +207,9 @@
   2. **抓取必须走 `src/lib/net/safe-fetch.ts` 的 `safeFetchText`**（#965 刚落的 GET-only、连接绑定、带重定向与内网地址防护的原语），**不要自己 `fetch`**
 - [ ] **AD-OBS-1 创意变体数不可观测**：`ad_daily_insights` 的 ad 级行无 `creative_id` / `asset_feed_spec`，`ad-level-breakdown.ts` 也只到 ad 级 —— "我们到底投了多少种说法"系统答不出来（用了 Advantage+ 素材自动化的广告尤其）。修：回读 `creative` + asset feed 并落库
 - [ ] **AD-OBS-2 攒池测试无法按 hook 归因**：`client_audience_assets` 按 `audience_id` 唯一、无创意维度，而 `videoEventRule` 把一批 videoId 灌进同一个池 → `P18.E.3` 只给得出池子整体净增。修：一 hook 一池，或另建创意级增长映射。（完播成本那半由 `P21.K.8` 覆盖）
-- [ ] **AD-LOG-1 `record()` 漏读 `error`,而且失败时会留下失联的暂停实体**（第二十七轮升级,原写"小 bug 顺手修",低估了）：`const { data } = await supabase...insert()`,`error` 连接都没接;且它发生在 `publishDraftPaused` **已经建出 campaign / ad set / ads 之后**。
+- [ ] 🔴 **AD-LOG-1 `record()` 漏读 `error`,而且失败时会留下失联的暂停实体【投第一条真广告前必修 —— 第四十五轮补入首投前置】**（第二十七轮升级,原写"小 bug 顺手修",低估了）：`const { data } = await supabase...insert()`,`error` 连接都没接;且它发生在 `publishDraftPaused` **已经建出 campaign / ad set / ads 之后**。
   所以插入失败时不只是"少一条账本":**那套暂停实体没有 `actionId`,既批不了也拒不了**,重试还会再建一套 —— 而 `ad-publisher.ts` 头部自己写着「半成品留在账户里比失败更糟:它会出现在后台、会被人误开、会进第二天的扫描」。
+  ⚠️ **这比 `AD-ORPH-1` 更糟,不是同一回事**（第四十五轮补）:blocked / rejected 至少还有一条账本行记着 `campaignId` / `adSetId` / `adIds`,后面的人能顺着找;而这里**连行都没有**,那套暂停实体在 Meta 里彻底失联,**没有任何 ME 里的东西知道它存在**。而且 `:158-165` 拿到 `null` 照样返回 `status: 'awaiting_approval'`,调用方看到"成功"于是重试,再建一整套。
   修:① `record()` 读 `error`;② 账本写失败时按已返回的 Meta id **回滚**(publisher 已有逆序删除逻辑),或持久化可恢复/幂等状态;③ 回滚也失败时**下发人工任务**(what/how/href 三件套),不能只写 `console.error` —— 铁律 3「发现不许死在日志里」
 - [ ] **AD-ADV-1 `ad-publisher.ts:116` 写死 `advantage_audience: 0`**：无差别关掉 Advantage+ 受众，是 ME 代码唯一与 Andromeda 打法正面冲突处。现有两种 `DraftKind`（`lead_form` / `video_thruplay`）都是冷投，应改为 `1`；将来加 `warm_pool_retarget` 这类 kind 时才需要显式关闭。**该路径没有留下任何成功建广告的记录（账本会静默丢记录，故只能说"无记录"），现在改成本极低**
 - [ ] **AD-DRAFT-1 `listing-draft-builder` 硬写单条创意**：`creatives: [creative]`（`:193`/`:254`），而 `AdDraft.creatives` 是数组、publisher 已在循环建。同一语言内出 5–8 个角度需新增"批量角度选择/生成 + 去重 + 逐条溯源"编排层（**新增开发，半周到一周**，不是接线）。跨语言合并另需表单身份下沉到每条 creative + 表单广告混语言闸门
