@@ -11,7 +11,7 @@
 
 四句话：
 
-1. **投放侧（delivery）实际上已经在 Andromeda 打法上** —— 但这个结论**只覆盖 CTS 一家、总花费的 47.7%**（$3,733.59 / $7,822.57）：回读到的 26 个 ad set 里 23 个开着 `advantage_audience: 1`（**条数比，不是花费比**），最大那条 $2,251 的 campaign 是纯 broad + Advantage+ 受众。**Oztop（46.1%）和 Roman（6.1%）的账户都查不到 targeting**，合计 52.3% 的花费无证据（见 §3.1 对账表与附录 1）。
+1. **投放侧（delivery）实际上已经在 Andromeda 打法上** —— 但这个结论**只覆盖 CTS 一家、总花费的 47.7%**（$3,733.59 / $7,822.57）：把混账户按 `campaign_id` 归属后，CTS 已追踪的 6 组 ad set **一个兴趣定向都没有**，73.6% 的花费明确开着 `advantage_audience: 1`（唯一关掉的是重定向组，那本来就该关）。**Oztop（46.1%）和 Roman（6.1%）的账户都查不到 targeting**，合计 52.3% 的花费无证据（见 §3.1 与附录 1）。
 2. **但那不是 ME 做的** —— 是人在 Ads Manager 里点出来的。ME 自己唯一的建广告代码 `ad-publisher.ts:116` 写死 `targeting_automation: { advantage_audience: 0 }`，即**主动关掉** Advantage+ 受众。这条代码路径至今建过 0 条广告，所以冲突还是潜在的，不是已发生的。
 3. **创意侧是真正传统的那一半**：钱最多的三条 campaign（$5,300，占总花费 67.8%）总共只有 **4 条创意**；而做了真多角度测试的两次（Oztop 13 条 hook、Roman 15 条 angle）加起来只花了 $799，占 10.2%。**创意多样性只发生在没钱的地方。**
 4. **闭环没有通电**：`ad_creative_links` 0 行、`contacts.attr_creative_ref` 0 行（39 条已归因 lead 无一条能说清是哪条素材）、`winner_structures` 0 行、`variant_from_winner` 工单 0 条、`flywheel_actions` 里 `ads.create_ad` 0 条。**数据结构全都建好了，一个都没被写过。**
@@ -52,20 +52,46 @@ ME 用「跟自己历史比」的相对基线判疲劳 → ad_health_narratives�
 
 ### 3.1 投放确实是 broad + Advantage+（live 回读，不是文档）
 
-Meta Graph 实时读 CTS 账户 `act_2775766642787274` 的 26 个 ad set：
+Meta Graph 实时读账户 `act_2775766642787274`，共 26 个 ad set。
 
-| 事实 | 数字 |
-|---|---|
-| `targeting_automation.advantage_audience = 1` | **23 / 26** |
-| `advantage_audience = 0` | 2（`Retargeting - VideoViewers + FormOpeners`、一条 boost）|
-| 完全没有兴趣/行为定向（`flexible_spec` 与 `interests` 均空） | 18 / 26 |
-| 带兴趣定向的 ad set 合计花费 | **$635.63 / $5,066.52 ≈ 12.5%**（⚠️ 分母见下方警告，**不是**覆盖率）|
+⚠️ **但这 26 组不全是 CTS 的**（Codex 复审第八轮 P2，核实成立）。该账户是本仓记录在案的**混账户**，第 66 行早就承认了这一点，前几版却仍拿 26 组的统计去描述 CTS —— 自相矛盾。
 
-> 🔢 **两个数不能相加**（Codex 复审第五轮 P2，核实成立；上一版把它们混用了）。
+已按 `campaign_id` 把每一组归回客户（对照 ME 库里 CTS 的 6 条 campaign id）：
+
+| | 组数 | Meta 侧花费 |
+|---|---|---|
+| 属于 CTS **已追踪的 campaign** | **6** | **$3,787.76** |
+| 其余（Oztop 投流 + 未被 ME 追踪的 CTS boost） | 20 | $1,278.76 |
+
+**下面所有 targeting 结论，只统计那 6 组：**
+
+| 事实（仅 CTS 已追踪的 6 组） | 组数 | 花费占比 |
+|---|---|---|
+| **带兴趣/行为定向** | **0 / 6** | **$0.00 · 0.0%** |
+| `advantage_audience = 1` | 4 / 6 | $2,787.73 · **73.6%** |
+| `advantage_audience = 0` | 1 / 6（`Retargeting - VideoViewers + FormOpeners`）| $807.37 · 21.3% |
+| 字段缺失（Meta 未返回） | 1 / 6（`CTS - WA CTWA - Video 50% - Warm`）| $192.66 · 5.1% |
+
+逐组明细：
+
+```
+  2251.80  aa=1  interests=0   Reborn-Winner-Stand-in-Front-20260624
+   807.37  aa=0  interests=0   Retargeting - VideoViewers + FormOpeners   ← 重定向组关掉扩量，这是对的
+   269.07  aa=1  interests=0   Post: "🐦 Even our Kiwi knows — Shanghai…"
+   232.62  aa=1  interests=0   ThruPlay - NZ - Reels
+   192.66  aa=?  interests=0   CTS - WA CTWA - Video 50% - Warm
+    34.24  aa=1  interests=0   Post: "Each of the 8,000 Terracotta Warriors…"
+```
+
+**这个口径下结论反而更强**：CTS 已追踪的这 6 组**一个兴趣定向都没有**（不是"只剩 12.5%"），73.6% 的花费明确开着 Advantage+ 受众，唯一关掉的那组是重定向组 —— 而重定向组本来就该关（`launch-readback.ts` 那条 blocker 正是为它写的）。
+
+> 📌 之前几版引用的 `12.5%`（$635.63 / $5,066.52）**已作废**：那是 26 组混账户的合计，8 个带兴趣定向的组**全部落在那 20 组"其余"里**，跟 CTS 已追踪的花费无关。
+
+> 🔢 **覆盖率要用同一个分母算**（Codex 复审第五轮 P2 起，经第七、八轮才收敛）。
 >
-> `$5,066.52` 是 **Meta 侧**广告账户 `2775766642787274` 里 26 个 ad set 的合计（NZD）。而 `act_2775766642787274` 是本仓记录在案的**混账户** —— `docs/strategy/meta-flywheel-risk-and-sequencing.md`（2026-06-06）写明「所有 boost 都在这里，CTS 旅游帖 + Oztop flooring 帖混跑」。**它既混客户又混币种，不能当覆盖率的分母。**
+> `act_2775766642787274` 是本仓记录在案的**混账户** —— `docs/strategy/meta-flywheel-risk-and-sequencing.md`（2026-06-06）写明「所有 boost 都在这里，CTS 旅游帖 + Oztop flooring 帖混跑」。所以它的账户级合计 `$5,066.52` **既混客户又混币种，不能当任何分母**（上面已改成按 `campaign_id` 归属后再统计）。
 >
-> 覆盖率必须在**同一个分母**上算，即 ME 库 `ad_daily_insights` 的 campaign 级花费（§2 的 $7,822.57）：
+> 覆盖率的分母用 ME 库 `ad_daily_insights` 的 campaign 级花费（§2 的 $7,822.57）：
 >
 > | | 花费 | 占比 | targeting 是否回读 |
 > |---|---|---|---|
@@ -79,13 +105,11 @@ Meta Graph 实时读 CTS 账户 `act_2775766642787274` 的 26 个 ad set：
 >
 > ⚠️ **Roman 这一行是第七轮才改对的**：上一版把 Roman 算进"已回读"，但他 $480.71 的花费在 `act_1018365291238494`，而 `ads_get_ad_accounts` 对该账户返回 `is_queryable: false` / `not_queryable_reason: "Unknown error"`（账户状态 UNSETTLED）。本次实际读到的那条 Roman ad set（`North Shore 15km · Message Leads · 4-Creative Race`）在另一个账户、且花费为 **$0.00**，代表不了那 $480.71。
 >
-> **所以本审计关于 broad / Advantage+ 的结论，证据只覆盖 CTS 一家、$3,733.59、总花费的 47.7%。**
+> **所以本审计关于 broad / Advantage+ 的结论，证据只覆盖 CTS 一家、总花费的 47.7%。**
 >
-> 还有两个数**不能当覆盖率用**，只描述"已回读的那 26 个 ad set 内部"：
-> - `23 / 26` 是**条数比**，不是花费比；
-> - `12.5%` 的分母是 `$5,066.52`，那是混账户的 Meta 侧合计（混客户 + 混币种），**跟 $3,733.59 不是一回事**。
+> 两侧口径的小差额是正常的：ME 库记 CTS 这 6 条 campaign 为 `$3,733.59`，Meta 侧同 6 组回读为 `$3,787.76`（差 1.4%，来自归因回填与取数时点）。**覆盖率一律用 ME 库那个数**（跟 §2 同源）；**targeting 的花费加权比例用 Meta 侧那个数**（跟 targeting 同源）。两者不混用。
 >
-> 本审计**没有**把 targeting 按 CTS 的 $3,733.59 重新汇总（跨账户口径对不齐，见上），所以文中任何"某某比例的花费是 broad"的说法都只对那批 ad set 成立，不对客户花费成立。
+> ⚠️ **作废的旧说法**（前几版出现过，别再引用）：`23 / 26`（混了 20 组非 CTS 的组，且是条数比不是花费比）、`12.5%`（分母是混账户合计）、`53.9% 已回读`（错把 Roman 算成已读）。
 
 最大那条：
 
@@ -174,7 +198,9 @@ Roman 的 15 条同样是真角度：`Rangitoto 学区 hook` / `By negotiation` 
 - **真正的缺陷在 ME 这一侧：这个实验该看的指标，我们一个都没入库。** `ad_daily_insights`（migration `20260721000001`）只有 `spend / impressions / reach / clicks / frequency / cpm / ctr / cpc / leads / messaging_conversations / results / cost_per_result` —— **没有完播次数、没有单次完播成本、没有 `video_p100`、也没有受众池增长**。于是花掉的 $432.50 在 ME 里唯一读得出的结论是「0 结果」，而那个数按仓库自己的规矩根本不该拿来判好坏。
 - 这件事**已经登记但没做**：ROADMAP `P21.K.8`（objective 感知 + 视频疲劳正向检测）就是补这批指标的那一条。
 - 另外钱确实高度集中：`OZ-S1-A-spill` 一条吃掉 $280.72 / $432.50（65%）—— 这一条与目标无关，是 13 个角度之间没跑成公平竞争。
-- **Roman 15 条 angle 总预算只有 $366**，平均每条 $24。最贵的一条 `Ad F · 中文 · Rangitoto 学区` $111.33 拿到 21 个对话（$5.30/对话），最便宜的几条只有 $2.54–$4.82、个位数展示。这个量级下"谁赢了"是掷硬币。仓库自己算过这笔账（`play-vocabulary.ts` 头部注释）：**要测出中英差异的显著性需要 $1,835，而一个楼盘总预算 $2,000。**
+- **Roman 15 条 angle 总预算只有 $366**，平均每条 $24。最贵的一条 `Ad F · 中文 · Rangitoto 学区` $111.33 拿到 21 个对话（$5.30/对话），最便宜的几条只有 $2.54–$4.82、**展示数是个位数到两位数**。在这个量级上，多数臂根本没有可读的信号 —— 这一条靠数据本身就成立，不需要功效计算。
+
+  ⚠️ **不要拿 `$1,835` 那个数来证明这一点**（Codex 复审第八轮 P2，核实成立；前几版这么用了）。`play-vocabulary.ts:6-8` 算的是**两组对比**（中文 vs 英文，实测 1.84 倍、p ≈ 0.22）所需的样本量，那是个双臂显著性检验；而这里是 **15 个角度里挑赢家**的多臂选择问题 —— 基线转化率、各臂预算分配、多重比较修正都不一样，`$1,835` 不能平移过来。要给下一次多角度测试定预算，得**按每条变体的实际指标重做一次样本量估算**，不能引用那个数。
 
 ### 3.6 ME 自己出的草案，结构上就只能出一条创意
 
@@ -235,7 +261,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 
 ## 4. What We Are Doing Right
 
-1. **实际投放已经是 broad + Advantage+** —— 已回读的 26 个 ad set 里 23 个开着（条数比），其中带兴趣定向的占那批 ad set 花费的 12.5%。这一条最重要，也最容易被自己低估 —— 但**证据只覆盖 CTS 一家、总花费的 47.7%**，Roman + Oztop 合计 52.3% 的账户查不到，口径见 §3.1 的对账表。
+1. **实际投放已经是 broad + Advantage+** —— CTS 已追踪的 6 组 ad set **零兴趣定向**，73.6% 的花费开着 Advantage+ 受众，且唯一关掉的那组正好是该关的重定向组。这一条最重要，也最容易被自己低估 —— 但**证据只覆盖 CTS 一家、总花费的 47.7%**，Roman + Oztop 合计 52.3% 的账户查不到，口径见 §3.1。
 2. **ad 级日度数据脊柱是真的**（376 行，每天在写，带 `parent_id`）。绝大多数同类系统只有 campaign 级 —— 没有 ad 级就永远做不了 creative-level 学习。这块地基已经打好了。
 3. **不拿汇总骗自己**：`ad-level-breakdown.ts` 会在子项差异 ≥1.5 倍时明说"这个汇总在掩盖差异"，还会拦住"表单留资 + 私信对话被加在同一列"的不可比比较。这是很多投放团队都没有的纪律。
 4. **建完必回读**：`launch-readback.ts` 承认"创建接口的回显不含 Meta 自己补上的东西"，强制建成暂停 → 回读 → 人点头。这在 Advantage+ 时代**更重要**，因为平台会自动加的东西只会越来越多。
@@ -251,7 +277,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 | 1 | **ME 自己的建广告代码默认关掉 Advantage+ 受众** | `ad-publisher.ts:116` `advantage_audience: 0`，无差别 |
 | 2 | **钱全压在单条创意上** | 前三大 campaign $5,300 / 4 条创意 |
 | 3 | **视频/攒池类实验该看的指标 ME 一个都没采** —— 目标本身是对的，读不出结论是我们的问题 | `ad_daily_insights` 无完播次数 / 单次完播成本 / `video_p100` / 池子增长；13 条 hook 的 $432.50 在 ME 里只读得出「0 结果」，而那个数按 `ads-expected-metric.ts:108-123` 本就不该用来判好坏。ROADMAP `P21.K.8` 已登记未做 |
-| 4 | **多角度测试的预算不足以出结论** | Roman 15 条 / $366，仓库自己算过需要 $1,835 |
+| 4 | **多角度测试的预算不足以出结论** | Roman 15 条 / $366，平均每条 $24，多数臂展示数只有个位数到两位数（⚠️ 不引用 `$1,835`，那是双臂检验的数，见 §3.5）|
 | 5 | **ME 出的草案结构上只能有一条创意 + 按语言拆 ad set** | `listing-draft-builder.ts:193,254` |
 | 6 | **creative 级归因断链** | 39 条 lead 有 `attr_ad_id`，0 条有 `attr_creative_ref` |
 | 7 | **赢家按自然互动选，不按付费成效选** | `rankVideoWinners` 只看 `score`（互动） |
@@ -272,7 +298,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 | Creative angles | **PARTIAL** | `copy-generator.hookIntentFor/ctaIntentFor` + `strategist.normalizeAngle` 存在，但只服务自然内容，广告线无角度概念 |
 | Creative generation | **PARTIAL** | 内容工厂 22 条工单，仅 1 条发布；广告线只会模板拼装单条 |
 | Campaign deployment | **PARTIAL** | `draft-and-gate` 全链路已实现且有闸门，生产使用 **0 次** |
-| Broad / Advantage+ delivery | **DONE（人工）/ CONFLICT（ME 代码）** | live 23/26 开着；但 `ad-publisher.ts:116` 写死关闭 |
+| Broad / Advantage+ delivery | **DONE（人工，仅 CTS 已验证）/ CONFLICT（ME 代码）** | CTS 6 组零兴趣定向、73.6% 花费开着 Advantage+；但 `ad-publisher.ts:116` 写死关闭。Roman/Oztop（52.3% 花费）未验证 |
 | Performance ingestion | **DONE** | `ad_daily_insights` campaign 201 行 + ad 376 行，日 cron |
 | Creative-level attribution | **MISSING** | `ad_creative_links` 0 行 / `attr_creative_ref` 0 行。素材归因写入方已接线但从未触发；`ads.create_ad` 那条路径**根本不调它**（见 §3.7 注）|
 | Winning-angle detection | **PARTIAL** | 有 divergence 检测但拒绝下结论；winner 判定用的是自然互动分；**且视频/攒池类实验该看的指标（完播成本、池子增长）根本没入库**，那类角度测试在 ME 里天然判不了（ROADMAP `P21.K.8`） |
@@ -340,6 +366,10 @@ ad        status: 'ACTIVE'
 所以"投第一条 ME 自建广告"**不是可以马上做的事**，它有前置，二选一：
 
 - **(i) 先修 boost 路径**：`boostPagePost` 改成建 `PAUSED`、地区从客户配置取（不写死）、接进 `PAUSED → readback → approval` 闸门。不需要 migration，但也不是接线，是改一个正在被引用的函数 + 补闸门接入。
+
+  ⚠️ **而且这三样还不够**（Codex 复审第八轮 P1，核实成立）：`boost-post/route.ts` 的 `post_id` / `page_id` **直接取自请求体**，服务端只从 `clients` 表取 `meta_ad_account_id`，**从不校验这个帖子/主页是不是这个客户的**。放在混账户 `act_2775766642787274` 上（CTS 与 Oztop 同账户），一个有 CTS 权限的调用方**可以提交 Oztop 的帖子**，过完闸门就把别家的素材投进共享账户、烧到共享账户的钱上 —— 这正是 `docs/strategy/meta-flywheel-risk-and-sequencing.md` §2.4 狄仁杰记的 R5 写越权，那份文档已经要求写操作前加实体归属守卫。
+
+  所以方案 (i) 的完整前置是**四样**：建 `PAUSED` · 地区取自客户 · 接闸门 · **`page/post → client` 归属校验**（或干脆先做账户拆分，那才是根治 —— 同一份文档 §2.1 子牙的结论就是"最省的根治不是写白名单代码，而是账户治理"）。
 - **(ii) 先做 ①b**：让安全的那条路径也能记账（要 migration，见下）。
 
 在 (i) 或 (ii) 落地之前，**①a 只是把 `play` 传上、等下次真有广告被建时能记上**，它本身不产生第一条记录。
