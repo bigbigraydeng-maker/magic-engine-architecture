@@ -97,10 +97,13 @@ interface Calls {
 /** attachByUniqueFullName 查同名时，库里返回什么 / 它拿什么名字去查。 */
 let nameLookupRows: { id: string; display_name: string | null }[] = []
 let nameLookupArg: string | null = null
+/** 库里那条 `<会话>:out` 触点已有的时间（测「只往前推，绝不回拨」）。 */
+let existingOutboundAt: string | null = null
 
 function stubSupabase(): Calls {
   nameLookupRows = []
   nameLookupArg = null
+  existingOutboundAt = null
   const calls: Calls = {
     conversationsUpdate: 0,
     identityUpserts: [],
@@ -122,6 +125,11 @@ function stubSupabase(): Calls {
       in: () => chain,
       // resolveContact 建人时走 insert().select().single()，要还它一个 id。
       single: async () => ({ data: { id: 'contact-NEW' }, error: null }),
+      // latestOutboundTouchAt 读库里那条既有的出站触点。
+      maybeSingle: async () =>
+        table === 'contact_touchpoints'
+          ? { data: existingOutboundAt ? { occurred_at: existingOutboundAt } : null, error: null }
+          : { data: null, error: null },
       then: (resolve: (v: unknown) => unknown) =>
         Promise.resolve({ data: null, error: null }).then(resolve),
       update: () => {
@@ -448,5 +456,56 @@ describe('唯一全名认亲', () => {
     )
     expect(res).toMatchObject({ contactId: 'contact-A', matchedBy: 'psid' })
     expect(nameLookupArg).toBeNull()
+  })
+})
+
+/**
+ * 🔴 **「我们最后一次回他」这个时间只往前推，绝不回拨**
+ * （Codex 复审 2026-08-15，PR #988 P1）。
+ *
+ * 销售在 ME 页面回私信时会就地写一笔出站触点，卡片当场变灰（不然要等最长
+ * 一小时的同步）。它跟这里用**同一个幂等键**，两边落在同一行上。
+ *
+ * 问题出在下一次同步：「回得太快 = 机器」那条判据（30 秒内）会把**销售盯着
+ * 页面秒回**这种最该鼓励的行为判成自动回复 → `lastHumanOutboundAt` 退回到更早
+ * 的某条回复 → upsert 把时间往回拨 → `/crm/today` 不再认为今天跟过他 →
+ * **卡片重新亮起，销售再回一遍，客人收到两条一样的消息。**
+ */
+describe('出站触点的时间只往前推', () => {
+  const fastReply = {
+    ...baseInput,
+    messages: [
+      { direction: 'inbound' as const, body: '还有位吗', sentAt: '2026-07-24T10:00:00+0000' },
+      // 10 秒后回的 —— 真人盯着屏幕秒回，但会被「秒回 = 机器」判成自动回复
+      { direction: 'outbound' as const, body: '有的', sentAt: '2026-07-24T10:00:10+0000', tags: [] },
+    ],
+  }
+
+  it('库里已有更晚的时间（ME 刚写的）→ 保住它，不被同步拨回去', async () => {
+    const calls = stubSupabase()
+    existingOutboundAt = '2026-07-24T10:00:10.000Z' // ME 发送时就地写下的
+    await linkMessengerConversation(fastReply, index({ psids: [['psid_9', 'contact-1']] }))
+
+    const out = calls.touchpointUpserts.flat().find((r) => r.direction === 'outbound')
+    expect(out?.occurred_at).toBe('2026-07-24T10:00:10.000Z')
+  })
+
+  it('库里没有 → 照常用这次算出来的（没有既有值可保）', async () => {
+    const calls = stubSupabase()
+    existingOutboundAt = null
+    await linkMessengerConversation(baseInput, index({ psids: [['psid_9', 'contact-1']] }))
+
+    const out = calls.touchpointUpserts.flat().find((r) => r.direction === 'outbound')
+    expect(out?.occurred_at).toBe('2026-07-24T10:00:00+0000')
+  })
+
+  /** 这次算出来的更晚（正常情况）→ 用新的，不能被旧值卡住。 */
+  it('这次算出来的更晚 → 往前推', async () => {
+    const calls = stubSupabase()
+    existingOutboundAt = '2026-07-20T08:00:00.000Z'
+    await linkMessengerConversation(baseInput, index({ psids: [['psid_9', 'contact-1']] }))
+
+    const out = calls.touchpointUpserts.flat().find((r) => r.direction === 'outbound')
+    expect(out?.occurred_at).toBe('2026-07-24T10:00:00+0000')
   })
 })
