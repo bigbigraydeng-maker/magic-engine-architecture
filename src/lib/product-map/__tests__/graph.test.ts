@@ -63,6 +63,17 @@ describe('neighboursOf', () => {
     const na = neighboursOf('platform.a', [a, b])
     expect(na.upstream).toEqual([{ id: 'platform.b', type: 'requires' }])
   })
+
+  it('blocks 边方向单独反转:A blocks B → B 在 A 的下游、A 在 B 的上游(与环检测口径一致)', () => {
+    const a = makeComponent({ id: 'platform.a', dependencies: [{ type: 'blocks', target: 'platform.b' }] })
+    const b = makeComponent({ id: 'platform.b' })
+    const na = neighboursOf('platform.a', [a, b])
+    expect(na.downstream).toEqual([{ id: 'platform.b', type: 'blocks' }])
+    expect(na.upstream).toHaveLength(0)
+    const nb = neighboursOf('platform.b', [a, b])
+    expect(nb.upstream).toEqual([{ id: 'platform.a', type: 'blocks' }])
+    expect(nb.downstream).toHaveLength(0)
+  })
 })
 
 describe('propagateBlocked', () => {

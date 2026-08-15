@@ -129,8 +129,9 @@ export const GEO_COMPONENTS: readonly ProductMapComponent[] = [
     ownerRole: 'claude-code',
   },
   {
+    // name 不带真实供应商名(CLAUDE.md 封装名铁律,UI 会展示 name);id 是内部标识可保留
     id: 'adapter.geo-baseline-openai',
-    name: 'GEO baseline OpenAI 接线（WP04A）',
+    name: 'GEO baseline 测量引擎接线（WP04A）',
     componentType: 'adapter',
     businessLane: 'geo',
     dapeStages: ['execution'],

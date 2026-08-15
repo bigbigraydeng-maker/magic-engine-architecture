@@ -212,7 +212,7 @@ export const SEO_COMPONENTS: readonly ProductMapComponent[] = [
   },
   {
     id: 'adapter.dataforseo',
-    name: 'Keyword Intelligence adapter（DataForSEO）',
+    name: 'Keyword Intelligence adapter',
     componentType: 'adapter',
     businessLane: 'seo',
     dapeStages: ['discovery'],

@@ -78,23 +78,33 @@ export function findOrderingCycles(components: readonly ProductMapComponent[]): 
 }
 
 export interface ComponentNeighbours {
-  /** 本组件声明依赖的上游（requires/consumes/... 的 target）。 */
+  /** 排在本组件之前的邻居（我 requires/consumes 的对象;以及 blocks 我的人）。 */
   readonly upstream: readonly { id: string; type: ComponentDependency['type'] }[]
-  /** 声明依赖本组件的下游（谁的 dependencies 指向我）。 */
+  /** 排在本组件之后的邻居（依赖我的人;以及我 blocks 的对象）。 */
   readonly downstream: readonly { id: string; type: ComponentDependency['type'] }[]
 }
 
+/**
+ * 🔴 blocks 边方向要单独反转:`A blocks B` 的排序语义是 A 在 B 上游 ——
+ *    跟 findOrderingCycles 的方向保持一致,否则 PR3 会把阻塞关系上下游画反。
+ */
 export function neighboursOf(
   componentId: string,
   components: readonly ProductMapComponent[],
 ): ComponentNeighbours {
-  const self = components.find((c) => c.id === componentId)
-  const upstream = (self?.dependencies ?? []).map((d) => ({ id: d.target, type: d.type }))
+  const upstream: { id: string; type: ComponentDependency['type'] }[] = []
   const downstream: { id: string; type: ComponentDependency['type'] }[] = []
+  const self = components.find((c) => c.id === componentId)
+  for (const dep of self?.dependencies ?? []) {
+    if (dep.type === 'blocks') downstream.push({ id: dep.target, type: dep.type })
+    else upstream.push({ id: dep.target, type: dep.type })
+  }
   for (const c of components) {
     if (c.id === componentId) continue
     for (const dep of c.dependencies) {
-      if (dep.target === componentId) downstream.push({ id: c.id, type: dep.type })
+      if (dep.target !== componentId) continue
+      if (dep.type === 'blocks') upstream.push({ id: c.id, type: dep.type })
+      else downstream.push({ id: c.id, type: dep.type })
     }
   }
   return { upstream, downstream }

@@ -120,11 +120,17 @@ export function deriveMaturity(
   const { ceiling, reason } = evidenceCeiling(component, facts)
   const effective = minMaturity(component.declaredMaturity, ceiling)
 
+  // 按撑起当前等级的那类证据分别判,不许混数组 —— 混着 .every() 会让一条
+  // 无关的 repo_verified learning 条目把「生产证据全是手填」的事实盖掉
+  const prodAllManual =
+    component.productionEvidence.length > 0 &&
+    component.productionEvidence.every((e) => e.verification === 'manual_claim')
+  const recurring = component.learningEvidence.filter((e) => e.kind === 'recurring_outcome')
+  const learnAllManual =
+    recurring.length > 0 && recurring.every((e) => e.verification === 'manual_claim')
   const critical =
-    maturityRank(effective) >= maturityRank('M4_PRODUCTION_VALIDATED') &&
-    [...component.productionEvidence, ...component.learningEvidence].every(
-      (e) => e.verification === 'manual_claim',
-    )
+    (maturityRank(effective) >= maturityRank('M4_PRODUCTION_VALIDATED') && prodAllManual) ||
+    (effective === 'M5_OPERATING_AND_LEARNING' && learnAllManual)
 
   return {
     componentId: component.id,

@@ -180,4 +180,18 @@ describe('effectiveMaturity = min(declared, ceiling)', () => {
     })
     expect(deriveMaturity(c, makeFacts([mergedPr(100)])).unverifiedCriticalEvidence).toBe(true)
   })
+
+  it('一条无关的已核验 learning 条目不许掩盖「生产证据全是手填」', () => {
+    const c = makeComponent({
+      declaredMaturity: 'M4_PRODUCTION_VALIDATED',
+      contractEvidence: [CONTRACT],
+      linkedPullRequests: [{ number: 100, role: 'implements' }],
+      integrationEvidence: [INTEGRATION],
+      productionEvidence: [PRODUCTION],
+      learningEvidence: [
+        { kind: 'memory_writeback', ref: 'x', observedAt: '2026-08-14', verification: 'sync_verified' },
+      ],
+    })
+    expect(deriveMaturity(c, makeFacts([mergedPr(100)])).unverifiedCriticalEvidence).toBe(true)
+  })
 })
