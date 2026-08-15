@@ -144,3 +144,40 @@ describe('存完那句确认', () => {
     expect(onDone).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * 🔴 **防重键跟着「这段文字」走**（Codex 复审 2026-08-15）。
+ *
+ * 第一次请求已经把触点插进去了、但后面那步失败 —— 输入框留在原地让人改。
+ * 改完再回车如果还用老键，服务端认成重复提交，**改过的那版笔记被整个丢掉**。
+ *
+ * 更糟的是服务端**先解析新文本、再去重，去重之后照样更新联系人**：
+ * 新文本里那句「别再联系」会把这个人的状态改掉，却没有任何一条触点记着它。
+ */
+describe('防重键：同样的字复用，改过的字换新', () => {
+  const refOf = (call: unknown[]) =>
+    JSON.parse((call[1] as RequestInit).body as string).clientRef as string
+
+  it('同一段字重试 → 用同一个键（双击不会记两笔）', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('网络断了'))
+    const { box } = setup()
+    await userEvent.type(box, '聊过了{Enter}')
+    await waitFor(() => expect(screen.getByText(/网络断了/)).toBeTruthy())
+
+    // 一个字都没改，直接再回车
+    await userEvent.type(box, '{Enter}')
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(refOf(fetchMock.mock.calls[1])).toBe(refOf(fetchMock.mock.calls[0]))
+  })
+
+  it('失败之后改了字 → 换一个新键，这一版才存得进去', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('网络断了'))
+    const { box } = setup()
+    await userEvent.type(box, '聊过了{Enter}')
+    await waitFor(() => expect(screen.getByText(/网络断了/)).toBeTruthy())
+
+    await userEvent.type(box, '，客户说别再联系了{Enter}')
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(refOf(fetchMock.mock.calls[1])).not.toBe(refOf(fetchMock.mock.calls[0]))
+  })
+})

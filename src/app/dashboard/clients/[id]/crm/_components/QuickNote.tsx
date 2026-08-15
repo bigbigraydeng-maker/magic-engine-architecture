@@ -25,10 +25,12 @@
  * 「记好了」的话，他**无法确认那个「周五」被读懂了没有** —— 只能自己再记一遍
  * （功能白做），或者信了而周五没人提醒（比白做更糟，答应客人的事砸了）。
  *
- * **③ 幂等键挂载时生成一次。** 点击时才生成的话，双击 = 两笔记录。
+ * **③ 防重键跟着「这段文字」走。** 同一段文字重试用同一个（双击不会记两笔）；
+ * 失败之后**改过字**就换一个 —— 否则改过的那版会被服务端当成重复丢掉，
+ * 详见下面 `clientRefRef` 的说明。
  */
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { noteConfirmation } from '@/lib/crm/next-step'
 
 export function QuickNote({
@@ -43,8 +45,23 @@ export function QuickNote({
   onDone: (msg: string) => void
   onCancel: () => void
 }) {
-  // 挂载时生成一次，整个提交生命周期复用 —— 双击不会记成两笔。
-  const [clientRef] = useState(() => globalThis.crypto.randomUUID())
+  /**
+   * 防重键。**同一段文字重试用同一个；文字改过就必须换一个。**
+   *
+   * 前半句是为了防双击 / 网络重试记成两笔。
+   *
+   * 后半句是 Codex 复审 2026-08-15 指出的（真的会丢数据）：第一次请求已经
+   * 把触点插进去了、但后面那步（更新联系人 / 回传）失败 —— 输入框留在原地
+   * 让人改。改完再回车如果还用老键，服务端认成重复提交，**改过的那版笔记
+   * 被整个丢掉**，只回一句 `created:false`。
+   *
+   * 更糟的是：服务端**先解析新文本、再去重，而且去重之后照样更新联系人**。
+   * 于是新文本里那句「别再联系」会把这个人的状态改掉，却**没有任何一条触点
+   * 记着这件事**——「真相源是不可变的触点」那条约定当场破掉。
+   */
+  const clientRefRef = useRef(globalThis.crypto.randomUUID())
+  /** 上一次提交出去的原文 —— 用来判断「这次是重试还是改过了」。 */
+  const lastSubmittedRef = useRef<string | null>(null)
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -54,11 +71,23 @@ export function QuickNote({
     if (!text || saving) return
     setSaving(true)
     setErr(null)
+
+    // 上一次失败之后改过字 → 换一个防重键，否则这一版会被服务端当重复丢掉。
+    if (lastSubmittedRef.current !== null && lastSubmittedRef.current !== text) {
+      clientRefRef.current = globalThis.crypto.randomUUID()
+    }
+    lastSubmittedRef.current = text
+
     try {
       const res = await fetch(`/api/clients/${clientId}/crm/touchpoints`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contactId, direction: 'outbound', note: text, clientRef }),
+        body: JSON.stringify({
+          contactId,
+          direction: 'outbound',
+          note: text,
+          clientRef: clientRefRef.current,
+        }),
       })
       const json = (await res.json()) as {
         error?: string

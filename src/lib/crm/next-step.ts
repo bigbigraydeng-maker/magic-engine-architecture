@@ -59,32 +59,47 @@ const TRAVEL_HINTS = [
   /\b(depart|departure|travel|fly|flying|arrive|arrival|trip)\b/i,
 ]
 
+/** 一句笔记按标点切成几段 —— 出行和下一步常常各占一段。 */
+function clausesOf(note: string): string[] {
+  return note
+    .split(/[，,。；;、\n]+/)
+    .map((c) => c.trim())
+    .filter(Boolean)
+}
+
 /**
- * 一句话里像不像提到了「**下次什么时候联系他**」。
+ * 这句话里像不像提到了「**下次什么时候联系他**」。
  *
  * ⚠️ **不能只看有没有日期**（Codex 复审 2026-08-15）。「客户想 8 月 20 日
  * 出发」里那个日期是**出行时间**；解析器正确地不把它排成回访，而这里如果
  * 报 true，销售会看到一句「没读懂你说的下次时间」—— 一条**根本不存在的
- * 失败警告**。
+ * 失败警告**。CTS 的笔记里出行日期到处都是，假警报一多真警报也会被无视。
  *
- * 而 CTS 的笔记里出行日期到处都是。假警报一多，真警报也会被无视 ——
- * 那条护栏（说了时间却没排上，必须告诉他）就彻底废了。
+ * ⚠️ **但排除必须按「子句」，不能按整句**（同一轮复审的第二条，
+ * 而且是上一版修法自己引入的）：「客户十月出发，**周五联系**」——
+ * 整句里有「出发」，就把后半句那个**真的回访日期**一起屏蔽掉了 →
+ * 静默不提醒 → 销售以为排好了，周五没人叫他。
  *
- * 判断顺序：
- *   1. 明说了下一步动作（「再打」「给报价」）→ 是，不管有没有日期
- *   2. 有日期、但那是出行的日期 → 不是
- *   3. 光有日期 → 是（「下周二」这种单说时间的，宁可多问一句）
+ * **漏报比误报危险得多**（漏报 = 答应客人的事砸了），所以宁可切细一点。
+ *
+ * 逐段判断，任一段成立即算：
+ *   1. 这段明说了下一步动作（「再打」「给报价」）→ 是
+ *   2. 这段有日期、但同一段里在讲出行 → 不是
+ *   3. 这段光有日期 → 是（「下周二」这种，宁可多问一句）
  */
 export function mentionsTime(note: string): boolean {
   const t = note.trim()
   if (!t) return false
 
+  // 整句先看一遍下一步动作：动作词和时间词可能被标点分在两段
+  // （「周五，再打给他」），那种情况整句判定更稳。
   if (FOLLOWUP_HINTS.some((p) => p.test(t))) return true
 
-  const hasTime = TIME_HINTS.some((p) => p.test(t))
-  if (!hasTime) return false
-
-  return !TRAVEL_HINTS.some((p) => p.test(t))
+  return clausesOf(t).some((c) => {
+    if (!TIME_HINTS.some((p) => p.test(c))) return false
+    // 这一段的日期是在讲出行 —— 那不是「我下次联系他」的时间。
+    return !TRAVEL_HINTS.some((p) => p.test(c))
+  })
 }
 
 /**
