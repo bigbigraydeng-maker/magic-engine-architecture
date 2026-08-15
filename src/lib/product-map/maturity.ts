@@ -66,13 +66,20 @@ function hasProductionValidation(c: ProductMapComponent): boolean {
   return c.origin === 'me2_native' && c.productionEvidence.length > 0
 }
 
+/** 严格 YYYY-MM-DD 且真实日历日:'foo'/'bar' 这类脏值按字面去重会绕开 M5 硬门。 */
+function isValidObservationDay(value: string | undefined): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const parsed = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
+}
+
 /** M5：≥2 条 recurring_outcome 且观察日不同 —— 一次性跑通不算「持续在学习」。 */
 function hasRecurringLearning(c: ProductMapComponent): boolean {
   if (c.origin !== 'me2_native') return false
   const days = new Set(
     c.learningEvidence
-      .filter((e) => e.kind === 'recurring_outcome' && e.observedAt)
-      .map((e) => e.observedAt as string),
+      .filter((e) => e.kind === 'recurring_outcome' && isValidObservationDay(e.observedAt))
+      .map((e) => e.observedAt),
   )
   return days.size >= 2
 }

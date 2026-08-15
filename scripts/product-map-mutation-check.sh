@@ -136,6 +136,12 @@ check "同前缀兄弟模块冒充 importer 证据" "$GEO_REG" \
   "ref: 'src/lib/geo-baseline/parser.ts'," \
   "ref: 'src/lib/geo-baseline/store.ts',"
 
+# 11. observedAt 不验日期(Codex P2:'foo'/'bar' 字面去重绕开 M5 双日硬门)
+#     变异 = 精确还原修复前的调用点(只查非空,不查日期合法性)
+check "M5 观察日不验格式" "$MAT" \
+  ".filter((e) => e.kind === 'recurring_outcome' && isValidObservationDay(e.observedAt))" \
+  ".filter((e) => e.kind === 'recurring_outcome' && !!e.observedAt)"
+
 echo
 if [ "$fail_count" -gt 0 ]; then
   echo "❌ $total_count 道闸里 $fail_count 道没响"

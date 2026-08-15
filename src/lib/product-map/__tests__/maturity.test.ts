@@ -108,6 +108,19 @@ describe('M4/M5 的硬门', () => {
     const oneOnly = makeComponent({ ...base, learningEvidence: [learning('2026-08-14')] })
     expect(evidenceCeiling(oneOnly, makeFacts([mergedPr(100)])).ceiling).toBe('M4_PRODUCTION_VALIDATED')
   })
+
+  it("observedAt 必须是真实的 YYYY-MM-DD:'foo'/'bar' 按字面去重不许骗到 M5", () => {
+    const base = {
+      contractEvidence: [CONTRACT],
+      linkedPullRequests: [{ number: 100, role: 'implements' as const }],
+      integrationEvidence: [INTEGRATION],
+      productionEvidence: [PRODUCTION],
+    }
+    const dirty = makeComponent({ ...base, learningEvidence: [learning('foo'), learning('bar')] })
+    expect(evidenceCeiling(dirty, makeFacts([mergedPr(100)])).ceiling).toBe('M4_PRODUCTION_VALIDATED')
+    const fakeDay = makeComponent({ ...base, learningEvidence: [learning('2026-02-30'), learning('2026-08-14')] })
+    expect(evidenceCeiling(fakeDay, makeFacts([mergedPr(100)])).ceiling).toBe('M4_PRODUCTION_VALIDATED')
+  })
 })
 
 describe('legacy 轴', () => {
