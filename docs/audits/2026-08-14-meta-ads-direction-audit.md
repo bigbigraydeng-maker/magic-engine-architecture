@@ -12,7 +12,7 @@
 四句话：
 
 1. **投放侧（delivery）实际上已经在 Andromeda 打法上** —— 但这个结论**只覆盖 CTS 已被 ME 追踪的 6 条 campaign —— 3 家客户里的 1 家、17 条 campaign 里的 6 条**（花费只能分币种说：已核对 NZD 3,733.59，未核对 NZD 480.71 + **AUD** 3,608.27）：把混账户按 `campaign_id` 归属后，CTS 已追踪的 6 组 ad set **一个兴趣定向都没有**，73.6% 的花费明确开着 `advantage_audience: 1`（唯一关掉的是重定向组，那本来就该关）。**Oztop 和 Roman 的账户都查不到 targeting**，两家的花费全部无证据（见 §3.1 与附录 1）。
-2. **但那不是 ME 做的** —— 是人在 Ads Manager 里点出来的。ME 自己唯一的建广告代码 `ad-publisher.ts:116` 写死 `targeting_automation: { advantage_audience: 0 }`，即**主动关掉** Advantage+ 受众。这条代码路径**没有留下任何成功建广告的记录**（`ads.create_ad` 0 条 —— ⚠️ 但该账本会静默丢记录，见 §2 注，所以只能说"没记录"，不能说"从没建过"），所以这个冲突**目前看是潜在的**，不是已确认发生的。
+2. **但那不是 ME 的程序化建广告链路做的** —— 这些广告不是由 ME 当前可追踪的程序化建广告链路留下完整 lineage；Product Owner 确认其创建方式是 AI 驱动的浏览器 / Ads Manager 工作流，现有 ME 账本无法独立证明具体操作者或重建创建 lineage（详见 §2 更正说明）。ME 自己唯一的建广告代码 `ad-publisher.ts:116` 写死 `targeting_automation: { advantage_audience: 0 }`，即**主动关掉** Advantage+ 受众。这条代码路径**没有留下任何成功建广告的记录**（`ads.create_ad` 0 条 —— ⚠️ 但该账本会静默丢记录，见 §2 注，所以只能说"没记录"，不能说"从没建过"），所以这个冲突**目前看是潜在的**，不是已确认发生的。
 3. **钱高度集中在少数广告上**（按客户分开看，避开混币种）：**CTS 80.7% 的钱压在 2 条广告上**；**Oztop 61.9% 压在 1 条上**（该 campaign 合计 63.4%，其中 97.6% 在单条上）；而两次真多角度测试分别只拿到该客户的 **12.0%**（Oztop 14 条 hook）和摊薄到每条 $24（Roman 15 条 angle）。**多角度测试只发生在没钱的地方。**（⚠️ 这里数的是广告条数；单条广告内部可能还有多套文案，库里看不到 —— 见 §3.3 注）
 4. **闭环没有通电**：`ad_creative_links` 0 行、`contacts.attr_creative_ref` 0 行（39 条已归因 lead 无一条能说清是哪条素材）、`winner_structures` 0 行、`variant_from_winner` 工单 0 条、`flywheel_actions` 里 `ads.create_ad` 0 条。**这几张表都建好了，一个都没被写过。**（⚠️ 不要读成"数据结构全都齐了、只差往里写" —— 端到端的**变体归因**模型还没建齐：首选的 `draft-and-gate` 路径没有稳定的 creative variant 身份、也没有落它的地方，`ad_creative_links.post_id` 还是 `NOT NULL`、`CreativeSource` 契约和发布结果映射都要改，是 migration + 代码的活。见 §4.2 与 `AD-LINK-1`）
 
@@ -45,8 +45,8 @@
 > 因此本审计**凡是能在单一客户内部说清的结论，一律改成按客户分开说**（见 §3.3）。要得到真正可加总的口径，需要给 `ad_daily_insights` 加币种列 + 按基准日折算 —— 这是本审计发现的一个新缺口，**ROADMAP 里没有登记过**。
 
 ```
-人在 Ads Manager 里手工建 campaign / ad set / 创意
-        ↓（ME 完全没参与建的过程）
+广告实体在 Ads Manager 里被建出来（不是 ME 当前程序化建广告链路留下的 lineage）
+        ↓（ME 没有参与这一步，现有账本也证不了具体操作者）
 ME 每天 cron 拉回 campaign 级 + ad 级日度数据 → ad_daily_insights
         ↓
 ME 用「跟自己历史比」的相对基线判疲劳 → ad_health_narratives（63 行）
@@ -55,6 +55,8 @@ ME 用「跟自己历史比」的相对基线判疲劳 → ad_health_narratives�
         ↓
 人决定要不要按
 ```
+
+> ⚠️ **创建方式更正（Issue #981 closeout，PO 口径）**：上一版这里及全文多处写"人在 Ads Manager 里手工建"，并拿命名 / 手工改名痕迹当人工创建的证据。Product Owner 已确认：这些历史广告是 **AI 通过浏览器操作 Ads Manager 创建**的，不是人手工逐项创建。正确口径是——这些广告不是由 ME 当前可追踪的程序化建广告链路留下完整 lineage；Product Owner 确认其创建方式是 AI 驱动的浏览器 / Ads Manager 工作流。**现有 ME 账本无法独立证明具体操作者或重建创建 lineage**——这是 PO 的说明，不是数据库/Meta API 可独立核实的运行证据，两者不能混为一谈。无论由人还是浏览器 Agent 操作，当前可证实的问题都是同一个：**ME 无法把广告实体、创意、授权和 outcome 连接起来。** 本节及全文其余依赖"人工创建"才能成立的表述已按此口径更正（见下方 §2 注、§3.4、§6、§8）。
 
 也就是：**ME 现在是一个"看广告的仪表盘 + 止损手"，不是一个"投广告的引擎"。**
 
@@ -83,7 +85,7 @@ ME 用「跟自己历史比」的相对基线判疲劳 → ad_health_narratives�
 >
 > **三张表全都会静默丢记录**（`ad_creative_links` 故意吞、`flywheel_actions` 无意漏），所以本节这张表的正确读法是「**ME 没有留下任何自建广告的成功记录**」，不是「ME 一次都没建过」。
 >
-> 要坐实到底建没建过，得查 Meta 侧的 campaign/ad 创建记录或调用日志 —— 本次没查。**不过主结论不依赖它**：$7,822.57 里的绝大部分（尤其 CTS `Reborn`、Oztop `Cold Broad` 这两条最大的）从命名、形态到手工改名的痕迹都指向人工创建，而 §3.7 那批表 0 行也确实意味着 ME 侧没有可用的归因数据 —— **不管当初是谁建的，"现在读不出哪条片子带来谁"这个事实不变。**
+> 要坐实具体操作者，得查 Meta 侧的 campaign/ad 创建记录或调用日志 —— 本次没查，而且这类日志本身也分不清"人手工点"还是"AI 操作同一个 Ads Manager UI"。**不过主结论不依赖它**：$7,822.57 里的绝大部分（尤其 CTS `Reborn`、Oztop `Cold Broad` 这两条最大的）都不是 ME 当前程序化建广告链路留下的 lineage（Product Owner 确认创建方式是 AI 驱动的浏览器 / Ads Manager 工作流，见 §2 顶部更正），而 §3.7 那批表 0 行也确实意味着 ME 侧没有可用的归因数据 —— **不管当初是人还是浏览器 Agent 操作，"现在读不出哪条片子带来谁"这个事实不变。**
 >
 > 顺带：`record()` 漏读 `error` 本身就是个应该修的小 bug（不是审计范围，但记在这里）。
 ## 3. Evidence
@@ -275,7 +277,7 @@ OZ-S3-W2-stockscale        OZ-S3-W3-texture        OZ-S1-D-Showroom-SR01
 
 Roman 的 15 条同样是真角度：`Rangitoto 学区 hook` / `By negotiation` / `$10k Prezzy offer` / `价格前置` / `Room to grow` / 三语 / 韩语挑战者 / IG 专投。
 
-**这说明"多角度"这件事我们会做，是人做的，而且做对了。问题在别处（见 3.5、3.6）。**
+**这说明"多角度"这件事历史投放里做到了，角度选得对（创建方式见 §2 顶部更正 —— 不是 ME 程序化链路留下的 lineage，具体操作者证不了）。问题在别处（见 3.5、3.6）。**
 
 ### 3.5 两次多角度测试，ME 都读不出结论（但原因各不相同）
 
@@ -437,7 +439,7 @@ posts.filter(p => p.mediaType === 'video').filter(p => p.score >= minScore)
 | Creative generation | **PARTIAL** | 内容工厂 22 条工单，仅 1 条发布；广告线只会模板拼装单条 |
 | *（新增缺口）* **创意变体数本身不可观测** | **MISSING** | `ad_daily_insights` 的 ad 级行没有 `creative_id` / `asset_feed_spec`，`ad-level-breakdown.ts` 也只到 ad 级 —— **"我们到底投了多少种说法"这个问题，ME 现在答不出来**。要回答得回 Graph 读 `creative` 及其 asset feed |
 | Campaign deployment | **PARTIAL** | `draft-and-gate` 全链路已实现且有闸门，生产使用 **0 次** |
-| Broad / Advantage+ delivery | **DONE（人工，仅 CTS 已验证）/ CONFLICT（ME 代码）** | CTS 6 组零兴趣定向、73.6% 花费开着 Advantage+；但 `ad-publisher.ts:116` 写死关闭。Roman / Oztop 两家未验证（AUD 侧一条都没核对） |
+| Broad / Advantage+ delivery | **DONE（历史广告，非 ME 程序化链路，仅 CTS 已验证）/ CONFLICT（ME 代码）** | CTS 6 组零兴趣定向、73.6% 花费开着 Advantage+；但 `ad-publisher.ts:116` 写死关闭。Roman / Oztop 两家未验证（AUD 侧一条都没核对） |
 | Performance ingestion | **DONE** | `ad_daily_insights` campaign 201 行 + ad 376 行，日 cron |
 | Creative-level attribution | **MISSING** | `ad_creative_links` 0 行 / `attr_creative_ref` 0 行。素材归因写入方已接线但从未触发；`ads.create_ad` 那条路径**根本不调它**（见 §3.7 注）|
 | Winning-angle detection | **PARTIAL** | 有 divergence 检测但拒绝下结论；winner 判定用的是自然互动分；**且视频/攒池类实验该看的指标根本没入库** —— 完播成本在 `P21.K.8`、池子净增在 `P18.E.3`，**两条都未做**，那类角度测试在 ME 里天然判不了 |
@@ -721,7 +723,7 @@ export const DRAFT_PLAY = { lead_form: 'lead_form_harvest', video_thruplay: 'thr
 
 ## 8. Final answer to Product Owner（大白话）
 
-**我们走在对的路上，但现在真正在跑的那一半，是人做的，不是系统做的。**
+**我们走在对的路上，但现在真正在跑的那一半，不是 ME 系统做的**——Product Owner 已确认这些历史广告是 AI 通过浏览器操作 Ads Manager 建的，不是人手工逐项建的；但 ME 现有账本同样证不了具体操作者，两件事分开说。
 
 三件事说清楚：
 
