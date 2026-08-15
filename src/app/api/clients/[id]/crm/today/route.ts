@@ -264,11 +264,16 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
         engagement: engagementFromMetadata(t.metadata),
         // 机器发的（群发 / AI 外呼）不算「我们出手」—— 见 day-list 的 needsMeAgain
         automated: isAutomatedTouch(t.source, t.metadata),
-        // 销售按的是哪个按钮。判断层只关心「推迟」这一个 —— 冻结副本靠它把
-        // snoozeUntil 清掉，人才不会点完推迟就从名单上消失。
-        // 「取消推迟」在这里落成 null：它本来就不该清任何东西（见 segments 的
-        // 说明），而「不算已联系」那一条在上面的 touchedTodayIds 里已经处理了。
-        action: t.metadata?.action === 'snooze' ? ('snooze' as const) : null,
+        // 销售按的是哪个按钮。**两个值都要如实传下去**，不能把 unsnooze 压成
+        // null：判断层除了「清不清推迟」（只认 snooze），还要判「这一笔算不算
+        // 我们出手了」（两个都不算 —— 客人那头什么都没收到）。压成 null 的话，
+        // 一次「叫回来」会盖住客人当天的回信，把他折叠成已处理（Codex 第六轮）。
+        action:
+          t.metadata?.action === 'snooze'
+            ? ('snooze' as const)
+            : t.metadata?.action === 'unsnooze'
+              ? ('unsnooze' as const)
+              : null,
       })),
       // 这个人实际能怎么被联系到 —— 决定「建议用哪个渠道」落在哪。
       // 私信能力看他有没有 messenger 触点（有触点就说明那条线是通的）。

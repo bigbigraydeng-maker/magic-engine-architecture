@@ -982,3 +982,55 @@ describe('取消推迟的标记不清任何东西', () => {
     ).toHaveLength(1)
   })
 })
+
+/**
+ * 🔴 **管理动作不许盖住客人的回信**（Codex 复审 2026-08-15 第六轮）。
+ *
+ * 跟魏征 2026-08-06 抓到的「群发盖住回信」是同一种伤害，另一个入口：
+ * 「推迟 / 取消推迟」也写成真人出站触点（为了留痕），但**客人那头什么都没
+ * 收到**，它们不能算「我们出手了」。
+ *
+ * 会真发生的一串：09:00 我们发了邮件 → 10:00 客人回信 →
+ * 11:00 销售从名单外把另一个人叫回来。不排掉的话「我们最后一次出手」
+ * 变成 11:00，客人 10:00 那封回信就「早于我们出手」→ 判定他没在等 →
+ * **一个正等着回话的客人当天被折叠进「今天动过」。**
+ */
+describe('推迟 / 取消推迟不算「我们出手了」', () => {
+  const AT_9 = '2026-08-05T02:00:00.000Z'
+  const AT_10 = '2026-08-05T03:00:00.000Z'
+  const AT_11 = '2026-08-05T04:00:00.000Z'
+
+  const withAdminAction = (action: 'snooze' | 'unsnooze') =>
+    person([
+      ...YESTERDAY_LEAD,
+      tp({ direction: 'outbound', occurredAt: AT_9 }),            // 09:00 我们发的
+      tp({ direction: 'inbound', occurredAt: AT_10 }),            // 10:00 客人回的
+      tp({ direction: 'outbound', occurredAt: AT_11, action }),   // 11:00 管理动作
+    ])
+
+  it.each(['snooze', 'unsnooze'] as const)(
+    '%s 之后，客人 10 点那封回信照样算「他在等我」',
+    (action) => {
+      const r = dayRow(withAdminAction(action), new Date(AT_11), {
+        dayStartMs: DAY_START,
+        touchedToday: true,
+      })
+      expect(r.handled).toBe(false)
+    },
+  )
+
+  /** 对照：真的又发了一封（不是管理动作）—— 那才叫我们回过他了。 */
+  it('对照：11 点真的又发了一封 → 算我们回过他了', () => {
+    const r = dayRow(
+      person([
+        ...YESTERDAY_LEAD,
+        tp({ direction: 'outbound', occurredAt: AT_9 }),
+        tp({ direction: 'inbound', occurredAt: AT_10 }),
+        tp({ direction: 'outbound', occurredAt: AT_11 }),
+      ]),
+      new Date(AT_11),
+      { dayStartMs: DAY_START, touchedToday: true },
+    )
+    expect(r.handled).toBe(true)
+  })
+})

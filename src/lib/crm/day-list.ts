@@ -275,11 +275,21 @@ export function needsMeAgain(
       //    那个人当天变灰、收进折叠区、算进「已完成」，而他正在等回话。
       //    `AUTOMATED_SOURCES` 里就有 mailchimp，AI 外呼也标 automated，
       //    日发一封 newsletter 就能让当天最烫的几个全中。
+      //
+      // 🔴 **推迟 / 取消推迟同样要排掉**（Codex 复审 2026-08-15 第六轮）——
+      //    同一种伤害，另一个入口。这两笔也写成真人出站触点（为了留痕），
+      //    但客人那头什么都没收到，它们不能算「我们出手了」。
+      //
+      //    实际会发生的一串：09:00 我们发了邮件 → 10:00 客人回信 →
+      //    11:00 销售从名单外把**另一个人**叫回来。不排掉的话 `ourLast` 变成
+      //    11:00，客人 10:00 那封回信「早于我们最后一次出手」→ 判定他没在等 →
+      //    卡片被折叠进「今天动过」。**一个正等着回话的客人当天被藏起来。**
       .filter(
         (t) =>
           t.direction === 'outbound' &&
           !t.engagement &&
           !t.automated &&
+          !t.action &&
           tsOf(t.occurredAt) >= dayStartMs,
       )
       .map((t) => tsOf(t.occurredAt)),
