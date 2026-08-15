@@ -92,6 +92,9 @@ interface Calls {
   contactsUpdate: number
   contactsWrite: number // insert/upsert into contacts —— 只有「按 psid 建人」那条路允许 >0
   contactInserts: Record<string, unknown>[]
+  /** `:out` 那条的「只增」写法：插入（有则不动）+ 条件推进。 */
+  outboundInserts: { row: Record<string, unknown>; opts: unknown }[]
+  outboundAdvances: { patch: Record<string, unknown>; onlyIfEarlierThan: string | null }[]
 }
 
 /** attachByUniqueFullName 查同名时，库里返回什么 / 它拿什么名字去查。 */
@@ -99,11 +102,14 @@ let nameLookupRows: { id: string; display_name: string | null }[] = []
 let nameLookupArg: string | null = null
 /** 库里那条 `<会话>:out` 触点已有的时间（测「只往前推，绝不回拨」）。 */
 let existingOutboundAt: string | null = null
+/** update() 的 payload 暂存，等 .lt() 来配对成一次「条件推进」。 */
+let pendingPatch: Record<string, unknown> | null = null
 
 function stubSupabase(): Calls {
   nameLookupRows = []
   nameLookupArg = null
   existingOutboundAt = null
+  pendingPatch = null
   const calls: Calls = {
     conversationsUpdate: 0,
     identityUpserts: [],
@@ -111,6 +117,8 @@ function stubSupabase(): Calls {
     contactsUpdate: 0,
     contactsWrite: 0,
     contactInserts: [],
+    outboundInserts: [],
+    outboundAdvances: [],
   }
   ;(supabaseAdmin.from as ReturnType<typeof vi.fn>).mockImplementation((table: string) => {
     const chain: Record<string, unknown> = {
@@ -121,7 +129,14 @@ function stubSupabase(): Calls {
       },
       eq: () => chain,
       is: () => chain,
-      lt: () => chain,
+      lt: (_col: string, value: string) => {
+        // advanceOutboundTouch 的条件推进：只在库里那条更早时才生效。
+        if (table === 'contact_touchpoints' && pendingPatch) {
+          calls.outboundAdvances.push({ patch: pendingPatch, onlyIfEarlierThan: value })
+          pendingPatch = null
+        }
+        return chain
+      },
       in: () => chain,
       // resolveContact 建人时走 insert().select().single()，要还它一个 id。
       single: async () => ({ data: { id: 'contact-NEW' }, error: null }),
@@ -132,9 +147,10 @@ function stubSupabase(): Calls {
           : { data: null, error: null },
       then: (resolve: (v: unknown) => unknown) =>
         Promise.resolve({ data: null, error: null }).then(resolve),
-      update: () => {
+      update: (payload: Record<string, unknown>) => {
         if (table === 'conversations') calls.conversationsUpdate++
         else if (table === 'contacts') calls.contactsUpdate++
+        else if (table === 'contact_touchpoints') pendingPatch = payload
         return chain
       },
       insert: (payload: Record<string, unknown>) => {
@@ -144,11 +160,20 @@ function stubSupabase(): Calls {
         }
         return chain
       },
-      upsert: (payload: Record<string, unknown> | Record<string, unknown>[]) => {
+      upsert: (payload: Record<string, unknown> | Record<string, unknown>[], upsertOpts?: unknown) => {
         if (table === 'contact_identities')
           // resolveContact 传数组、link-contacts 传单对象 —— 摊平成一串行，断言只看行。
           calls.identityUpserts.push(...(Array.isArray(payload) ? payload : [payload]))
-        else if (table === 'contact_touchpoints') calls.touchpointUpserts.push(payload as Record<string, unknown>[])
+        else if (table === 'contact_touchpoints') {
+          if (Array.isArray(payload)) calls.touchpointUpserts.push(payload)
+          else {
+            // 单对象 = advanceOutboundTouch 的第一步（插入，有则不动）。
+            // 也并进 touchpointUpserts —— 对「写了哪些触点」这类断言来说，
+            // 它跟以前那条 outbound 行是同一件事，只是走了另一条写法。
+            calls.outboundInserts.push({ row: payload, opts: upsertOpts })
+            calls.touchpointUpserts.push([payload])
+          }
+        }
         else if (table === 'contacts') calls.contactsWrite++
         return chain
       },
@@ -197,7 +222,7 @@ describe('linkMessengerConversation', () => {
     })
     // 对话接上了，触点也写了 —— 这个人从此出现在「今天该联系谁」里。
     expect(calls.conversationsUpdate).toBe(1)
-    expect(calls.touchpointUpserts[0]).toHaveLength(1)
+    expect(calls.touchpointUpserts.flat()).toHaveLength(1)
   })
 
   it('建人时只带 fb_psid 一个身份 —— 结构上不可能合并两个真人', async () => {
@@ -265,7 +290,7 @@ describe('linkMessengerConversation', () => {
     expect(calls.identityUpserts).toHaveLength(1)
     expect(calls.identityUpserts[0]).toMatchObject({ kind: 'fb_psid', value: 'psid_9', contact_id: 'contact-R' })
     // 一条 inbound + 一条 outbound 触点
-    const tps = calls.touchpointUpserts[0]
+    const tps = calls.touchpointUpserts.flat()
     expect(tps).toHaveLength(2)
     expect(tps.map((t) => t.direction).sort()).toEqual(['inbound', 'outbound'])
     expect(tps.every((t) => t.channel === 'messenger')).toBe(true)
@@ -282,7 +307,7 @@ describe('linkMessengerConversation', () => {
     )
     expect(res).toMatchObject({ contactId: 'contact-OLD', linked: false, matchedBy: 'already' })
     expect(calls.conversationsUpdate).toBe(0) // 已接过，不再改 contact_id
-    expect(calls.touchpointUpserts[0]).toHaveLength(2) // 但触点照常刷新
+    expect(calls.touchpointUpserts.flat()).toHaveLength(2) // 但触点照常刷新
     expect(calls.contactsWrite).toBe(0)
   })
 })
@@ -305,7 +330,7 @@ async function segmentAfterLink(messages: ThreadMsg[]) {
     { ...baseInput, messages, existingContactId: null, psid: 'psid_9' },
     index({ psids: [['psid_9', 'contact-Z']] }),
   )
-  const rows = calls.touchpointUpserts[0] ?? []
+  const rows = calls.touchpointUpserts.flat()
   const touchpoints: TouchpointLike[] = rows.map((r) => ({
     channel: r.channel as string,
     direction: r.direction as 'inbound' | 'outbound',
@@ -471,7 +496,7 @@ describe('唯一全名认亲', () => {
  * 的某条回复 → upsert 把时间往回拨 → `/crm/today` 不再认为今天跟过他 →
  * **卡片重新亮起，销售再回一遍，客人收到两条一样的消息。**
  */
-describe('出站触点的时间只往前推', () => {
+describe('出站触点的时间只往前推 —— 而且是数据库自己判，不是先读再写', () => {
   const fastReply = {
     ...baseInput,
     messages: [
@@ -481,31 +506,55 @@ describe('出站触点的时间只往前推', () => {
     ],
   }
 
-  it('库里已有更晚的时间（ME 刚写的）→ 保住它，不被同步拨回去', async () => {
+  /**
+   * 第一步：**有了就绝不覆盖**。回拨就是从这里来的 ——
+   * ME 刚写下的新时间，不能被同步算出来的旧时间盖掉。
+   */
+  it('插入那一步带 ignoreDuplicates —— 已有的一律不动', async () => {
     const calls = stubSupabase()
-    existingOutboundAt = '2026-07-24T10:00:10.000Z' // ME 发送时就地写下的
+    await linkMessengerConversation(baseInput, index({ psids: [['psid_9', 'contact-1']] }))
+
+    expect(calls.outboundInserts).toHaveLength(1)
+    expect(calls.outboundInserts[0].opts).toEqual({
+      onConflict: 'client_id,source,source_ref',
+      ignoreDuplicates: true,
+    })
+  })
+
+  /**
+   * 第二步：条件推进。`WHERE occurred_at < 新值` 交给数据库判 ——
+   * **这一步只可能让时间变晚**，不管跟谁交错。
+   *
+   * 上一版是「读出来取最大值再写」，有竞态（Codex 第二轮 P2）：同步读到旧值
+   * 之后、写回之前销售正好发送成功，缓存的旧值照样会盖掉新值。
+   * 窗口很窄，但「客人收到两条一样的消息」这种代价不该赌概率。
+   */
+  it('推进那一步把「只在更早时才改」交给数据库判', async () => {
+    const calls = stubSupabase()
+    await linkMessengerConversation(baseInput, index({ psids: [['psid_9', 'contact-1']] }))
+
+    expect(calls.outboundAdvances).toHaveLength(1)
+    expect(calls.outboundAdvances[0].onlyIfEarlierThan).toBe('2026-07-24T10:00:00+0000')
+    expect(calls.outboundAdvances[0].patch.occurred_at).toBe('2026-07-24T10:00:00+0000')
+  })
+
+  /** 秒回被判成机器人时也一样 —— 算出来的时间照旧只能往前推，推不动就不动。 */
+  it('秒回被判成机器人 → 这次算不出真人回复，一个字都不写', async () => {
+    const calls = stubSupabase()
     await linkMessengerConversation(fastReply, index({ psids: [['psid_9', 'contact-1']] }))
 
-    const out = calls.touchpointUpserts.flat().find((r) => r.direction === 'outbound')
-    expect(out?.occurred_at).toBe('2026-07-24T10:00:10.000Z')
+    // 那条 10 秒内的回复被 isAutomatedPageMessage 跳过，没有别的真人出站 →
+    // 不写出站触点。库里 ME 刚写的那条**原样留着**，卡片保持灰色。
+    expect(calls.outboundInserts).toHaveLength(0)
+    expect(calls.outboundAdvances).toHaveLength(0)
   })
 
-  it('库里没有 → 照常用这次算出来的（没有既有值可保）', async () => {
+  /** 客户来信那条不受影响，照旧正常刷新。 */
+  it('入站那条照旧走普通刷新', async () => {
     const calls = stubSupabase()
-    existingOutboundAt = null
     await linkMessengerConversation(baseInput, index({ psids: [['psid_9', 'contact-1']] }))
 
-    const out = calls.touchpointUpserts.flat().find((r) => r.direction === 'outbound')
-    expect(out?.occurred_at).toBe('2026-07-24T10:00:00+0000')
-  })
-
-  /** 这次算出来的更晚（正常情况）→ 用新的，不能被旧值卡住。 */
-  it('这次算出来的更晚 → 往前推', async () => {
-    const calls = stubSupabase()
-    existingOutboundAt = '2026-07-20T08:00:00.000Z'
-    await linkMessengerConversation(baseInput, index({ psids: [['psid_9', 'contact-1']] }))
-
-    const out = calls.touchpointUpserts.flat().find((r) => r.direction === 'outbound')
-    expect(out?.occurred_at).toBe('2026-07-24T10:00:00+0000')
+    const inbound = calls.touchpointUpserts.flat().filter((r) => r.direction === 'inbound')
+    expect(inbound).toHaveLength(1)
   })
 })

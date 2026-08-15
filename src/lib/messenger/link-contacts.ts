@@ -230,7 +230,7 @@ function lastHumanOutboundAt(messages: LinkConversationInput['messages']): strin
 }
 
 /**
- * 「我们最后一次真人回复」这个时间**只往前推，绝不回拨**。
+ * 「我们最后一次真人回他」这个时间 —— **只往前推，绝不回拨**。
  *
  * ## 为什么需要这条不变式（Codex 复审 2026-08-15，PR #988 P1）
  *
@@ -241,46 +241,63 @@ function lastHumanOutboundAt(messages: LinkConversationInput['messages']): strin
  * 问题出在下一次同步：`isAutomatedPageMessage` 有一条「回得太快 = 机器」的
  * 判据（30 秒内）。销售盯着这一页、客人消息一进来就秒回 —— **那是我们最想
  * 鼓励的行为** —— 却会被这条规则判成自动回复，于是 `lastHumanOutboundAt`
- * 退回到更早的某条真人回复，upsert 把 `occurred_at` **往回拨**。
+ * 退回到更早的某条真人回复，把 `occurred_at` **往回拨**。
  *
  * 后果：下一次同步之后，`/crm/today` 不再认为今天跟过他，**卡片重新亮起**，
  * 销售照着再回一遍 —— 客人收到两条一样的消息。
  *
- * 根因是那条秒回判据误伤了「从我们自己页面发出的、确定是真人的」消息
- * （它本可以不靠猜 —— `conversation_outbound_log` 里记着每一条 ME 发出的
- * 消息 id）。那个改动面更大、影响整条同步链，单独做。
+ * ## 为什么是两条语句，而不是「读出来取最大值再写」
  *
- * 这里先把不变式钉住：**这个时间在语义上就不该倒退**。「我们最后一次回他」
- * 只会越来越晚，除非消息被删 —— 而那种情况下宁可多记一次「跟过了」，
- * 也不要让一个已经回过的人重新冒出来被回第二遍。
+ * 先读再写有竞态（Codex 第二轮 P2）：同步读到旧时间之后、写回之前，销售正好
+ * 发送成功 —— 那个缓存下来的旧时间照样会盖掉刚写的新值，卡片还是会重新亮起。
+ * 窗口很窄，但「客人收到两条一样的消息」这种代价不该赌概率。
  *
- * @param fromMessages 这次从消息里算出来的时间（可能为 null）
- * @returns 库里那条和这次算出来的，取更晚的那个
+ * 所以拆成两条**各自原子**的语句，合起来在任何交错顺序下都不会倒退：
+ *
+ *   1. 没有就插一条；**已有则原样不动**（`ignoreDuplicates`）—— 不可能回拨
+ *   2. `WHERE occurred_at < 新值` 的条件更新 —— 只可能往前推
+ *
+ * 比较在数据库里做，不在这个进程里。
+ *
+ * 根因（秒回判据误伤 ME 发出的消息）改动面更大、影响整条同步链，单独做 ——
+ * `conversation_outbound_log` 里记着每一条 ME 发出的消息 id，本可以不靠猜。
  */
-async function latestOutboundTouchAt(
+async function advanceOutboundTouch(
   clientId: string,
   conversationId: string,
-  fromMessages: string | null,
-): Promise<string | null> {
-  try {
-    const { data } = await supabaseAdmin
-      .from('contact_touchpoints')
-      .select('occurred_at')
-      .eq('client_id', clientId)
-      .eq('source', 'messenger')
-      .eq('source_ref', `${conversationId}:out`)
-      .maybeSingle()
-
-    const existing = (data?.occurred_at as string | undefined) ?? null
-    if (!existing) return fromMessages
-    if (!fromMessages) return existing
-    return existing > fromMessages ? existing : fromMessages
-  } catch (err) {
-    // 读不到就按这次算出来的走 —— 退回改动前的行为，不因为一次读失败
-    // 让整段对话的触点写不进去。
-    console.error('[messenger/link-contacts] 读既有出站触点失败，按本次算出的时间走:', err)
-    return fromMessages
+  contactId: string,
+  at: string,
+): Promise<void> {
+  const sourceRef = `${conversationId}:out`
+  const body = {
+    summary: '我们在 Messenger 回复过',
+    metadata: { thread_id: conversationId, sender: 'page' },
   }
+
+  // 1) 还没有这条就建 —— 已经有了绝不覆盖（那正是回拨的来源）。
+  await supabaseAdmin.from('contact_touchpoints').upsert(
+    {
+      client_id: clientId,
+      contact_id: contactId,
+      channel: 'messenger',
+      direction: 'outbound',
+      occurred_at: at,
+      ...body,
+      source: 'messenger',
+      source_ref: sourceRef,
+    },
+    { onConflict: 'client_id,source,source_ref', ignoreDuplicates: true },
+  )
+
+  // 2) 只在库里那条**更早**时才推上去。条件在 WHERE 里，数据库自己判 ——
+  //    这一步永远只能让时间变晚，不管跟谁交错。
+  await supabaseAdmin
+    .from('contact_touchpoints')
+    .update({ occurred_at: at, ...body })
+    .eq('client_id', clientId)
+    .eq('source', 'messenger')
+    .eq('source_ref', sourceRef)
+    .lt('occurred_at', at)
 }
 
 /**
@@ -444,14 +461,7 @@ export async function linkMessengerConversation(
   // 否则一条机器人问候会把从没人碰过的热新线索顶出「今天该联系谁」名单。
   const lastIn = lastSentAt(input.messages, 'inbound')
   // tags 缺失时一条出站触点都不写（理由见 LinkConversationInput.tagsAvailable）。
-  const lastOutFromMessages =
-    input.tagsAvailable === false ? null : lastHumanOutboundAt(input.messages)
-  // **只往前推，绝不回拨**（Codex 复审 2026-08-15，PR #988 P1）。理由见下。
-  const lastOut = await latestOutboundTouchAt(
-    input.clientId,
-    input.conversationId,
-    lastOutFromMessages,
-  )
+  const lastOut = input.tagsAvailable === false ? null : lastHumanOutboundAt(input.messages)
 
   const rows: Record<string, unknown>[] = []
   if (lastIn) {
@@ -473,25 +483,16 @@ export async function linkMessengerConversation(
       source_ref: `${input.conversationId}:in`,
     })
   }
-  if (lastOut) {
-    rows.push({
-      client_id: input.clientId,
-      contact_id: contactId,
-      channel: 'messenger',
-      direction: 'outbound',
-      occurred_at: lastOut,
-      summary: '我们在 Messenger 回复过',
-      metadata: { thread_id: input.conversationId, sender: 'page' },
-      source: 'messenger',
-      source_ref: `${input.conversationId}:out`,
-    })
-  }
-
   if (rows.length > 0) {
     // 不加 ignoreDuplicates → ON CONFLICT DO UPDATE：重同步刷新 occurred_at。
     await supabaseAdmin
       .from('contact_touchpoints')
       .upsert(rows, { onConflict: 'client_id,source,source_ref' })
+  }
+
+  // 出站那条**单独走「只增」写法**，不跟上面一起 upsert —— 理由见函数注释。
+  if (lastOut) {
+    await advanceOutboundTouch(input.clientId, input.conversationId, contactId, lastOut)
   }
 
   // last_seen 只往前推：仅当现值早于本对话最后活动时才更新，绝不回拨。
