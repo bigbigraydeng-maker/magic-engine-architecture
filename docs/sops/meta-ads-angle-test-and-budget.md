@@ -2,6 +2,7 @@
 
 > 立项日期：2026-08-15 · 依据：[2026-08-14 Meta 广告方向审计](../audits/2026-08-14-meta-ads-direction-audit.md)（PR [#972](https://github.com/bigbigraydeng-maker/magic-engine/pull/972)）
 > 适用：FDE 月付轨的 Meta 广告投放。self-serve 轨暂不适用（预算量级不同，需另定）。
+> 引擎侧的建设顺序见：[ME2 · Meta 广告在七层里的位置与建设顺序 v1](../specs/2026-08-15-me2-ads-build-order-v1.md)
 >
 > ⚠️ **这份 SOP 现在是「人照着做」的流程，不是系统自动跑的规则。**
 > 第 4 节「谁赢了」系统今天**明确拒绝回答**，第 6 节要求的四项记录**一项都没在落库**
