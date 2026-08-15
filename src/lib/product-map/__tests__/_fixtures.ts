@@ -8,6 +8,7 @@ export function makeComponent(overrides: Partial<ProductMapComponent> = {}): Pro
     id: 'platform.test-component',
     name: '测试组件',
     componentType: 'platform',
+    architecturalRole: 'kernel',
     businessLane: 'shared',
     dapeStages: ['execution'],
     businessOutcome: '测试',

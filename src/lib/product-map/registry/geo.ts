@@ -16,6 +16,7 @@ export const GEO_COMPONENTS: readonly ProductMapComponent[] = [
     id: 'platform.geo-measurement-contract',
     name: 'GEO 测量契约（WP02）',
     componentType: 'platform',
+    architecturalRole: 'measurement',
     businessLane: 'geo',
     dapeStages: ['discovery', 'verification'],
     businessOutcome: '「这次测的 AI 可见度能不能跟上次比」有唯一判定标准，测量结果不再各说各话',
@@ -48,6 +49,8 @@ export const GEO_COMPONENTS: readonly ProductMapComponent[] = [
     id: 'platform.geo-measurement-store',
     name: 'GEO 测量不可变存储（WP03）',
     componentType: 'platform',
+    // WP00 §3.3 Measurement 的"证据保全"边界：不可变存储是它的落地形态。
+    architecturalRole: 'measurement',
     businessLane: 'geo',
     dapeStages: ['discovery', 'outcome'],
     businessOutcome: '测量结果一旦写入就改不了，半年后还能证明「当时真是这么测的」',
@@ -88,6 +91,9 @@ export const GEO_COMPONENTS: readonly ProductMapComponent[] = [
     id: 'capability.geo-measurement-runtime',
     name: 'GEO 测量执行（WP04）',
     componentType: 'capability',
+    // WP00 §3.3 Measurement 的"覆盖率与成本的如实记录"边界：预算闸 + 观测循环
+    // 是这一条的落地，不是 Shared Capability（后者是"准备可评审改动"）。
+    architecturalRole: 'measurement',
     businessLane: 'geo',
     dapeStages: ['discovery', 'execution'],
     businessOutcome: '按冻结计划跑一批测量：预算预检、逐条观测、对账落库,超预算就停',
@@ -133,6 +139,11 @@ export const GEO_COMPONENTS: readonly ProductMapComponent[] = [
     id: 'adapter.geo-baseline-openai',
     name: 'GEO baseline 测量引擎接线（WP04A）',
     componentType: 'adapter',
+    // Adapter 不是顶层角色（Build Control Room 2026-08-15 05:43 复审 Blocker 1）：
+    // 这是 capability.geo-measurement-runtime 的 supporting artifact，
+    // architecturalRole 继承父组件的 measurement，adapterOf 挂回父组件 id。
+    architecturalRole: 'measurement',
+    adapterOf: 'capability.geo-measurement-runtime',
     businessLane: 'geo',
     dapeStages: ['execution'],
     businessOutcome: '测量计划能真的打到 AI 引擎上拿回答案和引用',
@@ -172,6 +183,8 @@ export const GEO_COMPONENTS: readonly ProductMapComponent[] = [
     id: 'module.geo-visibility',
     name: 'GEO Module v1（WP05）',
     componentType: 'module',
+    // WP00 §3.2 明文点名："GEO Module（#879）是第一个 Domain Module"。
+    architecturalRole: 'domain_module',
     businessLane: 'geo',
     dapeStages: ['analysis', 'prescription'],
     businessOutcome: '把测量结果解释成「你在 AI 搜索里缺什么、该修哪几页」的发现和处方',

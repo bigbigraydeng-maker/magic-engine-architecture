@@ -59,6 +59,7 @@ describe('防夸大规则', () => {
   it('legacy 件带 ME2 生产/学习证据 = hard error', () => {
     const c = makeComponent({
       origin: 'legacy',
+      architecturalRole: undefined,
       operationalStatus: 'operating_legacy',
       ownedPaths: ['src/lib/x/'],
       productionEvidence: [{ kind: 'production_run', ref: 'x', verification: 'manual_claim' }],
@@ -67,8 +68,50 @@ describe('防夸大规则', () => {
   })
 
   it('legacy 件标 operating_me2 = hard error', () => {
-    const c = makeComponent({ origin: 'legacy', operationalStatus: 'operating_me2', ownedPaths: ['src/lib/x/'] })
+    const c = makeComponent({
+      origin: 'legacy',
+      architecturalRole: undefined,
+      operationalStatus: 'operating_me2',
+      ownedPaths: ['src/lib/x/'],
+    })
     expect(errorCodes([c])).toContain('legacy_operating_me2')
+  })
+
+  it('me2_native 组件缺 architecturalRole = hard error', () => {
+    const c = makeComponent({ architecturalRole: undefined })
+    expect(errorCodes([c])).toContain('missing_architectural_role')
+  })
+
+  it('architecturalRole 非法值被运行时抓住', () => {
+    const c = makeComponent({ architecturalRole: 'platform' as unknown as ProductMapComponent['architecturalRole'] })
+    expect(errorCodes([c])).toContain('illegal_enum')
+  })
+
+  it('legacy 组件声明 architecturalRole = hard error（不许伪装成已纳入 ME2 治理）', () => {
+    const c = makeComponent({
+      origin: 'legacy',
+      operationalStatus: 'operating_legacy',
+      ownedPaths: ['src/lib/x/'],
+    })
+    expect(errorCodes([c])).toContain('legacy_with_architectural_role')
+  })
+
+  it('adapterOf 指向不存在的组件报错', () => {
+    const c = makeComponent({ componentType: 'adapter', adapterOf: 'platform.ghost' })
+    expect(errorCodes([c])).toContain('dangling_adapter_of')
+  })
+
+  it('非 adapter 声明 adapterOf 报错', () => {
+    const parent = makeComponent({ id: 'platform.parent' })
+    const c = makeComponent({ id: 'capability.c', componentType: 'capability', adapterOf: 'platform.parent' })
+    expect(errorCodes([c, parent])).toContain('adapter_of_from_non_adapter')
+  })
+
+  it('adapter 正确挂靠真实父组件不误伤', () => {
+    const parent = makeComponent({ id: 'platform.parent' })
+    const c = makeComponent({ id: 'adapter.c', componentType: 'adapter', adapterOf: 'platform.parent' })
+    expect(errorCodes([c, parent])).not.toContain('dangling_adapter_of')
+    expect(errorCodes([c, parent])).not.toContain('adapter_of_from_non_adapter')
   })
 
   it('声明高于证据上限 → warning 露头(不是 error)', () => {

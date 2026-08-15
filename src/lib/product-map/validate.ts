@@ -11,6 +11,7 @@ import { deriveMaturity } from './maturity'
 import { findDanglingDependencies, findOrderingCycles } from './graph'
 import type { ComponentType, DependencyType, ProductMapComponent } from './types'
 import {
+  ARCHITECTURAL_ROLE,
   BLOCKER_KIND,
   BUSINESS_LANE,
   COMPONENT_ORIGIN,
@@ -103,16 +104,42 @@ export function validateRegistry(
   const ownedPathClaims = new Map<string, string>()
 
   for (const c of components) {
+    // 🔴 故意没有 "id 前缀必须等于 componentType" 的检查：id 是稳定契约、
+    //    不可改名（Build Control Room 2026-08-15 05:43 复审裁决），componentType
+    //    只是历史形状分类，两者不再假设互相对应。
     if (!ID_PATTERN.test(c.id)) {
       err(c.id, 'bad_id_format', `id 必须是 '<type>.<name>' 全小写 kebab 形态`)
-    } else if (c.id.split('.')[0] !== c.componentType) {
-      err(c.id, 'id_type_mismatch', `id 前缀 '${c.id.split('.')[0]}' 与 componentType '${c.componentType}' 不一致`)
     }
 
     // 运行时枚举校验：挡住 as-cast / JSON 注入绕过编译期检查的路
     for (const [field, ok] of enumChecks) {
       if (!ok(c)) err(c.id, 'illegal_enum', `${field} 取值非法`)
     }
+
+    // WP00 §3 七层角色 —— origin 双向硬校验（Build Control Room 2026-08-15
+    // 05:43 复审裁决：me2_native 必须落在冻结七层之一；legacy 不许借架构角色
+    // 伪装成已纳入 ME2 治理）
+    if (c.origin === 'me2_native') {
+      if (c.architecturalRole === undefined) {
+        err(c.id, 'missing_architectural_role', 'me2_native 组件必须声明 architecturalRole（WP00 冻结七层之一）')
+      } else if (!(ARCHITECTURAL_ROLE as readonly string[]).includes(c.architecturalRole)) {
+        err(c.id, 'illegal_enum', `architecturalRole 取值非法：'${c.architecturalRole}'`)
+      }
+    } else if (c.architecturalRole !== undefined) {
+      err(c.id, 'legacy_with_architectural_role', 'legacy 组件不得声明 architecturalRole（尚未纳入 ME2 七层 / Kernel 治理）')
+    }
+
+    // adapterOf：只有 componentType === 'adapter' 的组件可以声明"我是谁的零件"，
+    // 且必须指向登记册里真实存在的组件（防悬空 + 防用这个字段偷造第八层）
+    if (c.adapterOf !== undefined) {
+      if (c.componentType !== 'adapter') {
+        err(c.id, 'adapter_of_from_non_adapter', 'adapterOf 只能由 componentType=adapter 的组件声明')
+      }
+      if (!components.some((t) => t.id === c.adapterOf)) {
+        err(c.id, 'dangling_adapter_of', `adapterOf 指向不存在的组件 '${c.adapterOf}'`)
+      }
+    }
+
     for (const s of c.dapeStages) {
       if (!(DAPE_STAGE as readonly string[]).includes(s)) err(c.id, 'illegal_enum', `dapeStages 含非法值 '${s}'`)
     }

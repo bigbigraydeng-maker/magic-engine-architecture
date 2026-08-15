@@ -36,7 +36,7 @@ export interface MaturityDerivation {
  * ownedPaths」通路（registry.test 对着文件系统验），M3 起仍要真证据，
  * M4/M5 对 legacy 永不开放。
  */
-function hasContract(c: ProductMapComponent): boolean {
+export function hasContract(c: ProductMapComponent): boolean {
   if (c.origin === 'legacy') return c.ownedPaths.length > 0
   return c.contractEvidence.length > 0
 }
@@ -47,7 +47,7 @@ function hasContract(c: ProductMapComponent): boolean {
  * - legacy：交付 PR 是考古题，合法通路是「认领的代码路径真实存在」
  *   （registry.test 对着磁盘核验 ownedPaths —— 见子牙设计审第 3 条）。
  */
-function hasImplementation(c: ProductMapComponent, facts: ExternalFacts): boolean {
+export function hasImplementation(c: ProductMapComponent, facts: ExternalFacts): boolean {
   if (c.origin === 'legacy') return c.ownedPaths.length > 0
   return c.linkedPullRequests.some((pr) => {
     if (pr.role !== 'implements') return false
@@ -57,12 +57,12 @@ function hasImplementation(c: ProductMapComponent, facts: ExternalFacts): boolea
 }
 
 /** M3：真接上了线。 */
-function hasIntegration(c: ProductMapComponent): boolean {
+export function hasIntegration(c: ProductMapComponent): boolean {
   return c.integrationEvidence.length > 0
 }
 
 /** M4：生产真跑过 —— 只对 ME2 原生件开放（legacy 的生产人生记在 operationalStatus）。 */
-function hasProductionValidation(c: ProductMapComponent): boolean {
+export function hasProductionValidation(c: ProductMapComponent): boolean {
   return c.origin === 'me2_native' && c.productionEvidence.length > 0
 }
 

@@ -14,7 +14,11 @@
  */
 
 // ---------------------------------------------------------------------------
-// 冻结枚举（WP 明文规定，不得增删值；新增需求走新字段，不改这些）
+// 🔴 componentType —— 这不是 WP00 architectural role（Build Control Room
+//    2026-08-15 05:43 复审 Blocker 1）。它是本登记册沿用的历史 / 目录形状
+//    分类（"这条东西长得像什么"），legacy 件也用它描述考古形状。
+//    ME2 冻结七层角色见下方 ARCHITECTURAL_ROLE，两个字段独立存在、独立校验，
+//    不得互相推断（id 前缀 === componentType 的假设已删除，见 validate.ts）。
 // ---------------------------------------------------------------------------
 
 export const COMPONENT_TYPE = [
@@ -27,6 +31,34 @@ export const COMPONENT_TYPE = [
   'registry',
 ] as const
 export type ComponentType = (typeof COMPONENT_TYPE)[number]
+
+// ---------------------------------------------------------------------------
+// WP00 §3 冻结的七层架构角色："ME2 只有下面七个角色。没有第八个。"
+// （docs/specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md §3）
+//
+// 只适用于 origin === 'me2_native' 的组件：
+// - me2_native 必须填 architecturalRole，且只能是这七个值之一；
+// - legacy 必须不填（校验器双向硬校验，见 validate.ts）——
+//   legacy 件的生产人生记在 operationalStatus / legacyOperationalNote，
+//   不得借架构角色伪装成已纳入 ME2 治理契约。
+//
+// Adapter / Playbook / Platform / Registry 不是第八个角色：
+// - Adapter 是所属七层组件的 supporting artifact，用 adapterOf 挂回父组件；
+// - Playbook 是跨组件编排视图，不落这个字段；
+// - Platform 是产品口语，真实对象落回 kernel / shared_capability / measurement；
+// - Registry（含本工具自己）是基础设施，不是 ME2 组件角色。
+// ---------------------------------------------------------------------------
+
+export const ARCHITECTURAL_ROLE = [
+  'agent',
+  'domain_module',
+  'measurement',
+  'shared_capability',
+  'kernel',
+  'attribution_flywheel',
+  'operating_brief',
+] as const
+export type ArchitecturalRole = (typeof ARCHITECTURAL_ROLE)[number]
 
 export const BUSINESS_LANE = ['shared', 'geo', 'seo', 'social', 'ads'] as const
 export type BusinessLane = (typeof BUSINESS_LANE)[number]
@@ -236,6 +268,18 @@ export interface ProductMapComponent {
   readonly id: string
   readonly name: string
   readonly componentType: ComponentType
+  /**
+   * WP00 冻结七层角色。origin === 'me2_native' 时必填；origin === 'legacy'
+   * 时必须不填（validate.ts 的 missing_architectural_role /
+   * legacy_with_architectural_role 双向硬校验）。
+   */
+  readonly architecturalRole?: ArchitecturalRole
+  /**
+   * 本组件是所属七层父组件的 supporting artifact（典型是 provider adapter）时，
+   * 填父组件的 id。只有这类"零件"允许填；填了必须指向登记册里真实存在的组件，
+   * 且不得借这个字段绕过七层边界自己造一个独立角色。
+   */
+  readonly adapterOf?: string
   readonly businessLane: BusinessLane
   /**
    * 组件覆盖的 DAPE 阶段。填写指引：
@@ -287,4 +331,17 @@ export function maturityRank(m: Maturity): number {
 
 export function minMaturity(a: Maturity, b: Maturity): Maturity {
   return maturityRank(a) <= maturityRank(b) ? a : b
+}
+
+export const GOVERNANCE_STATUS = ['me2_governed', 'not_mapped_to_me2'] as const
+export type GovernanceStatus = (typeof GOVERNANCE_STATUS)[number]
+
+/**
+ * 治理状态是从 origin 派生的只读投影,不是第二份手填真值——只有一个字段
+ * （origin）能决定它,这里只是给消费方一个语义清楚的名字，不建第二套真值。
+ * 'not_mapped_to_me2' 明确表达 Build Control Room 2026-08-15 复审的要求：
+ * legacy 组件即使天天在生产跑,也不构成"已纳入 ME2 七层 / Kernel 治理"。
+ */
+export function governanceStatusOf(component: ProductMapComponent): GovernanceStatus {
+  return component.origin === 'me2_native' ? 'me2_governed' : 'not_mapped_to_me2'
 }
