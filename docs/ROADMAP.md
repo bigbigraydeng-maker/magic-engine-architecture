@@ -389,14 +389,22 @@ PM 2026-08-14 答复：无第二批真拍素材排队，**且不确定后续是�
 3. **进入交付成片的 a_real 素材累计 ≥ 15 条**（当前 5 条 / 共 19 条）—— 判据用关联表，不用 `usage_count`：
 
 ```sql
--- 判据取「排除未完成态」而非「枚举已完成态」：工单状态会继续流转
+-- 判据取「排除未交付态」而非「枚举已完成态」：工单状态会继续流转
 -- (in_review → approved → publishing → published/publish_failed，或 → review_rejected)，
 -- 用正列表枚举会让已计入的素材随状态变化掉出累计值，计数倒退。
+--
+-- 排除的五个状态分两类，缺一类就会算错：
+--   还没跑完：queued / claimed / producing            —— 算进来 = 提前触发
+--   跑挂了：  failed / dead_letter                    —— 同上，这两个是终态但从未交付
+--     · failed     = evaluate.ts 在 clip 关联已插入、后续持久化失败时置
+--                    (reject_reason='persist_incomplete')，关联表有行但成片不存在
+--     · dead_letter= worker/[id]/fail 不可重试或超限时置
 select count(distinct c.clip_id)
 from content_work_order_clips c
 join content_work_orders o on o.id = c.work_order_id
 join video_clips v on v.id = c.clip_id
-where o.status not in ('queued','claimed','producing') and v.track = 'a_real';
+where o.status not in ('queued','claimed','producing','failed','dead_letter')
+  and v.track = 'a_real';
 ```
 
 > 🔴 **不要改用 `output is not null`** —— 实测 `queued` 状态的工单也带 `output`（22 个工单全部非空），拿它当交付事实会把没跑完的也算进来。
