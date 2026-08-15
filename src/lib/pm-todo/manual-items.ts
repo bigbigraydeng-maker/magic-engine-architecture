@@ -61,6 +61,7 @@ export type ManualItemKind =
   | 'price_claim_unbacked'
   | 'auto_run_blocked'
   | 'auto_run_stuck'
+  | CommentScopeTodoKind
   /** 执行内核停手 / 等审批 / 被规则挡下 —— 必须有人看见，不许死在日志里 */
   | 'kernel_needs_human'
   | AttributionItemKind
@@ -121,6 +122,7 @@ import { judgeWorkerPresence } from '@/lib/factory/worker-presence'
 import { auditGoalBaselines } from '@/lib/strategy/baseline-audit'
 import { fetchBlogDraftTodos } from '@/lib/pm-todo/blog-drafts'
 import { fetchAutoRunTodos } from '@/lib/pm-todo/auto-run-items'
+import { fetchCommentScopeTodos, type CommentScopeTodoKind } from '@/lib/pm-todo/comment-scope-items'
 import { fetchKernelHandoffTodos } from '@/lib/kernel/handoff'
 import { auditCrossClientLeaks } from '@/lib/clients/cross-client-audit'
 import { containsPriceClaim } from '@/lib/content/price-claim'
@@ -236,6 +238,11 @@ export async function loadManualItems(
   // 只写进 cron 的运行记录 = 发现死在日志里（管道断头那条铁律的反面教材）。
   await pushAutoRunItems(supabase, items, now, nameOf).catch((e) =>
     console.warn('[manual-items] 自动执行待办生成失败（不阻塞其他待办）:', e),
+  )
+
+  // 评论读不到（缺权限 / 令牌被拒）—— 只有人能补，日志里那行 console.error 没人会看
+  await pushCommentScopeItems(supabase, items, now, nameOf).catch((e) =>
+    console.warn('[manual-items] 评论权限待办生成失败（不阻塞其他待办）:', e),
   )
 
   // 执行内核停手的 / 等你点头的 / 被规则挡下的 —— 死信不许只写进库里没人看
@@ -752,6 +759,31 @@ async function pushAutoRunItems(
   for (const t of todos) {
     items.push({
       kind: t.stuck ? 'auto_run_stuck' : 'auto_run_blocked',
+      client_id: t.client_id,
+      client_name: nameOf(t.client_id),
+      what: t.what,
+      how: t.how,
+      href: t.href,
+    })
+  }
+}
+
+/**
+ * 评论自动回复读不到评论 → 下发。
+ *
+ * 判定与文案都在 `comment-scope-items.ts`：那边直接读 cron 自己写的运行记录，
+ * 所以这里说的话跟机器真遇到的失败永远一致。
+ */
+async function pushCommentScopeItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+  nameOf: (id: string) => string,
+): Promise<void> {
+  const todos = await fetchCommentScopeTodos(supabase, now)
+  for (const t of todos) {
+    items.push({
+      kind: t.kind,
       client_id: t.client_id,
       client_name: nameOf(t.client_id),
       what: t.what,

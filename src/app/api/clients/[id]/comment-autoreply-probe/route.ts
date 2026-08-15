@@ -16,10 +16,17 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { getMetaTokenForClient } from '@/lib/meta/token-manager'
 import { getPageAccessToken, fetchPagePosts } from '@/lib/meta/page-posts'
-import { fetchPostComments } from '@/lib/meta/comments'
+import { fetchPostCommentsResult } from '@/lib/meta/comments'
 
 const GRAPH_BASE = 'https://graph.facebook.com/v20.0'
-const REQUIRED_SCOPES = ['pages_read_engagement', 'pages_manage_engagement', 'pages_messaging'] as const
+// pages_read_user_content 是读**别人写的**评论要的那一条；少了它，这个功能
+// 看起来在跑，实际每个帖子都被 Meta 挡在 #10（2026-08-15 生产实测）。
+const REQUIRED_SCOPES = [
+  'pages_read_engagement',
+  'pages_read_user_content',
+  'pages_manage_engagement',
+  'pages_messaging',
+] as const
 
 interface ProbeResult {
   token_resolved: boolean
@@ -105,10 +112,18 @@ export async function GET(
   try {
     const posts = await fetchPagePosts(pageId, pageToken, 1)
     if (posts.length > 0) {
-      result.sample_post_id = posts[0].postId
-      const comments = await fetchPostComments(posts[0].postId, pageId, pageToken, 5)
-      result.live_read_ok = true
-      result.sample_comment_count = comments.length
+      // 用 fullId（`<主页id>_<帖子id>`）：给裸 id 时 Graph 会当成老式 status
+      // 对象、直接回 #12，那是端点用错了，不是权限问题。
+      result.sample_post_id = posts[0].fullId
+      const read = await fetchPostCommentsResult(posts[0].fullId, pageId, pageToken, 5)
+      // 🔴 读失败不能记成 live_read_ok=true。此前这里无论 Meta 回什么都往下走，
+      //    于是「检查 Meta 权限」按钮在权限缺失时照样显示 ✅ 就绪 —— 这个探针
+      //    存在的意义就是别让人靠 cron 静默空转才发现问题。
+      result.live_read_ok = read.ok
+      result.sample_comment_count = read.ok ? read.comments.length : null
+      if (!read.ok) {
+        notes.push(`实测读取评论失败（${read.failure.reason}）：${read.failure.message}`)
+      }
     } else {
       result.live_read_ok = true
       result.sample_comment_count = 0
