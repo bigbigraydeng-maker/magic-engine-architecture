@@ -50,7 +50,7 @@ function candidate(over: Partial<ProductCandidate> = {}): ProductCandidate {
     cumulativeSold: m(50_287),
     rating: m(4),
     imageUrl: 'https://example.test/a.jpg',
-    sourcing: sourcing(5),
+    sourcing: sourcing(4),
     demand: [demand('AU', 900, 'rising'), demand('NZ', 200, 'flat')],
     ...over,
   }
@@ -98,8 +98,8 @@ describe('四道闸', () => {
     expect(gate?.reason).toContain('270')
   })
 
-  it('毛利不足 3 倍 → REJECT', () => {
-    const thin = candidate({ retailPriceUsd: m(12), sourcing: sourcing(6) })
+  it('毛利不足 6 倍 → REJECT（新西兰固定成本高，3 倍不够）', () => {
+    const thin = candidate({ retailPriceUsd: m(12), sourcing: sourcing(3) })
     expect(scoreCandidate(thin).verdict).toBe('REJECT')
   })
 
@@ -128,14 +128,14 @@ describe('四道闸', () => {
   it('每条 reason 都带实际数值，不许是空话', () => {
     const gates = scoreCandidate(candidate()).gates
     expect(gates.find((g) => g.gate === 'proven_demand')?.reason).toContain('50,287')
-    expect(gates.find((g) => g.gate === 'margin_multiple')?.reason).toContain('6.0×')
+    expect(gates.find((g) => g.gate === 'margin_multiple')?.reason).toContain('7.5×')
   })
 })
 
 describe('排序', () => {
   it('通过闸数优先于销量 —— 证据强度不是销量排行', () => {
     const strong = candidate({ cumulativeSold: m(1_500) })
-    const weak = candidate({ cumulativeSold: m(900_000), sourcing: sourcing(20) })
+    const weak = candidate({ cumulativeSold: m(900_000), sourcing: sourcing(25) })
     const ranked = rankCandidates([weak, strong])
     expect(ranked[0].candidate.cumulativeSold.value).toBe(1_500)
     expect(ranked[0].verdict).toBe('TEST_NOW')
