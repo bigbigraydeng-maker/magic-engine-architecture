@@ -26,7 +26,8 @@ import { PersonDrawer, type DrawerRow } from './_components/PersonDrawer'
 // 两边对不上，tsc 才把它顶出来 —— 而它本可以一直静静地错下去。
 import type { Segment } from '@/lib/crm/segments'
 import { CONTACT_KIND_LABEL, type ContactKind } from '@/lib/crm/contact-kind'
-import { countTrade, filterBucketByKind, type KindView } from '@/lib/crm/kind-filter'
+import { batchRecipients, countTrade, filterBucketByKind, type KindView } from '@/lib/crm/kind-filter'
+import { dayProgress } from '@/lib/crm/day-list'
 
 interface Row {
   contactId: string
@@ -47,6 +48,10 @@ interface Row {
   suggestedStage: { toStage: string; label: string; why: string } | null
   /** 今天已经有人联系过他 —— 卡片变浅，不用靠记。 */
   doneToday?: boolean
+  /** 今天是怎么处理的（今天联系过了 / 标了：他说不买了…）。没处理就是 null。 */
+  handledWhy?: string | null
+  /** 「跟进了」还是「关掉了」—— 两个数字分开显示，不混成一个「处理了 N 人」。 */
+  handledKind?: 'followed' | 'closed' | null
   /** 上次是谁跟的。不知道就是 null，页面不假装。 */
   lastBy?: string | null
   /** 他打开过邮件、之后没人跟。只是提示，不参与排序。 */
@@ -93,7 +98,6 @@ interface Payload {
   counts: Record<Segment, number>
   totalContacts: number
   todoTotal: number
-  doneToday: number
   /** 从抽屉里发私信时，发出去的话挂在谁名下。 */
   viewerEmail?: string | null
   error?: string
@@ -277,6 +281,14 @@ function Card({
         done ? 'opacity-50 hover:opacity-100' : ''
       } ${row.pinned ? 'border-me-ochre/60' : 'border-me-charcoal/10 hover:border-me-ochre/50'}`}
     >
+      {/* 今天是怎么处理的 —— 光一个灰色只说明「动过」，说不清「我到底做了什么」。
+          PM 2026-08-05 问的正是「我如何确认真的记上了」。 */}
+      {done && row.handledWhy && (
+        <p className="rounded-t-xl bg-emerald-50 px-3 py-1 text-[12px] font-bold text-emerald-700">
+          ✓ {row.handledWhy}
+        </p>
+      )}
+
       {/* 图钉：钉住的人排在本桶最前 */}
       <button
         type="button"
@@ -380,7 +392,7 @@ function CardExits({
   row: Row
   onLogged: (msg: string, reload?: boolean) => void
 }) {
-  const [menu, setMenu] = useState<null | 'snooze' | 'wrong'>(null)
+  const [menu, setMenu] = useState<null | 'snooze' | 'wrong' | 'drop'>(null)
   const [busy, setBusy] = useState(false)
 
   const post = async (url: string, body: unknown, ok: string) => {
@@ -415,6 +427,27 @@ function CardExits({
           <button type="button" disabled={busy} onClick={() => setMenu('snooze')} className={quiet}>
             推迟
           </button>
+          {/* 🔴 **不可逆的动作不能一点就生效**（板桥 2026-08-06）。
+              原先这三个键同样的灰字同样的大小，而「推迟」点了会展开二次选择、
+              「他不买了」一点就落库 —— 手滑一下，一个还有戏的客人当天就被
+              排出群发名单，而且他不会发现。所以跟「推迟」一样做成两步。 */}
+          <button type="button" disabled={busy} onClick={() => setMenu('drop')} className={quiet}>
+            他不买了
+          </button>
+          <button type="button" disabled={busy} onClick={() => setMenu('wrong')} className={quiet}>
+            分错了
+          </button>
+        </div>
+      )}
+
+      {menu === 'drop' && (
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="mr-0.5 text-[12.5px] text-me-charcoal/45">
+            {/* 跟下面那句成功提示、以及卡片真实的样子保持一致（Codex 第五轮）：
+                这一版他今天**留在原地变灰**，明天起才不出现。原先这里写「从今天起
+                不再出现」，销售在按下去之前和按下去之后会收到两句相反的说明。 */}
+            确定？卡片今天留个记号，明天起不再出现在名单里
+          </span>
           <button
             type="button"
             disabled={busy}
@@ -429,15 +462,18 @@ function CardExits({
                   outcome: 'not_interested',
                   clientRef: crypto.randomUUID(),
                 },
-                '记下了 —— 他不会再出现在名单上',
+                // 板桥：这句原先写「他不会再出现在名单上」，跟眼前的画面说反话
+                // —— 这一版他是留在原地打勾的。销售低头一看人还在，要么以为
+                // 没记上再点一次，要么信了这句话、明天发现人还在，从此不信这一页。
+                '记下了 —— 卡片留在这做个记号，明天起不再出现',
               )
             }
-            className={quiet}
+            className={`${base} bg-[#C2453A]/10 text-[#C2453A] hover:bg-[#C2453A]/15`}
           >
-            他不买了
+            确定
           </button>
-          <button type="button" disabled={busy} onClick={() => setMenu('wrong')} className={quiet}>
-            分错了
+          <button type="button" disabled={busy} onClick={() => setMenu(null)} className={quiet}>
+            算了
           </button>
         </div>
       )}
@@ -458,7 +494,10 @@ function CardExits({
                 void post(
                   `/api/clients/${clientId}/crm/contacts/${row.contactId}/snooze`,
                   { days: o.d, clientRef: crypto.randomUUID() },
-                  `先放着了 —— ${o.label}后他自己回来`,
+                  // 板桥要的「把话说满」照旧，但事实变了：推迟的人现在**当天
+                  // 留在原位变灰**（冻结副本会把 snooze 清掉），不再当场消失。
+                  // 说「收起来了」而人还在，销售会以为没点上又点一次（Codex 复审）。
+                  `先放着了 —— 卡片今天留在原地做个记号，${o.label}后他自己回来`,
                 )
               }
               className={`${base} border border-me-charcoal/15 text-me-charcoal/70 hover:border-me-ochre/50`}
@@ -565,6 +604,41 @@ const CARDS_BEFORE_FOLD = 12
  *
  * 现在一行摆 4 张卡，页面多宽就用多宽，窄屏自动掉成 1 列。
  */
+/**
+ * 顶上那条进度 —— 「还剩多少」是销售真正关心的数字。
+ *
+ * 「已联系 8 人 👍」听着像表扬，但回答不了「我还有多远到头」。一条流水线
+ * 最要紧的信息是**还剩几个**：看得见头，人才愿意一路推到底。
+ *
+ * **「动过」不是「处理了」，而且干完不庆祝**（板桥 2026-08-06）：
+ * 一个把十来个人全标「不买了」的早上，原先那句「全推完了 🎉」照样会跳出来
+ * —— 庆祝一件没发生的事，比不庆祝伤害大。等下一版能在这里分清
+ * 「跟进」和「关掉」了，再谈庆祝。
+ */
+function DayProgressBar({ total, done, left }: { total: number; done: number; left: number }) {
+  if (total === 0) return null
+
+  if (left === 0) {
+    return (
+      <span className="rounded-full bg-emerald-100 px-3 py-1.5 text-xs font-black text-emerald-700">
+        今天这 {total} 个都过了一遍 ✓
+      </span>
+    )
+  }
+
+  const pct = Math.round((done / total) * 100)
+  return (
+    <span className="flex items-center gap-2 rounded-full bg-me-ivory px-3 py-1.5 text-xs font-black text-me-charcoal/70">
+      <span className="tabular-nums">
+        今天 {total} 个 · 动过 {done} · <b className="text-me-ochre">还剩 {left}</b>
+      </span>
+      <span className="h-1.5 w-16 overflow-hidden rounded-full bg-me-charcoal/10" aria-hidden>
+        <span className="block h-full rounded-full bg-me-ochre" style={{ width: `${pct}%` }} />
+      </span>
+    </span>
+  )
+}
+
 function BucketBlock({
   clientId,
   bucket,
@@ -581,10 +655,28 @@ function BucketBlock({
   onLogged: (msg: string, reload?: boolean) => void
 }) {
   const [expanded, setExpanded] = useState(false)
-  const shown = expanded ? bucket.people : bucket.people.slice(0, CARDS_BEFORE_FOLD)
+  /** 今天已经处理掉的那几个，默认收到这一批的底部。 */
+  const [showDone, setShowDone] = useState(false)
+
+  /**
+   * 待办和已处理分开铺。
+   *
+   * 混在一起的话，处理过的灰卡会夹在没处理的中间，你得一张张认颜色 ——
+   * 那不是流水线。已处理的整批挪到底部收起来，上面永远只剩「还没动的」。
+   * **但它们仍然在这一批里、点得开** —— 收起来不等于消失，
+   * PM 要的正是「我如何确认刚才那一下真的记上了」。
+   */
+  const todo = bucket.people.filter((p) => !p.doneToday)
+  const done = bucket.people.filter((p) => p.doneToday)
+  // 「跟进了」和「关掉了」分开数 —— 理由见下面折叠按钮上的注释。
+  const followedCount = done.filter((p) => p.handledKind === 'followed').length
+  const closedCount = done.filter((p) => p.handledKind === 'closed').length
+
+  const shown = expanded ? todo : todo.slice(0, CARDS_BEFORE_FOLD)
   // 折起来的人数要算上后端封顶没发过来的那些 —— 只数手上这一批会少报，
-  // 让人以为「展开就能看到全部」。
-  const folded = bucket.total - shown.length
+  // 让人以为「展开就能看到全部」。已处理的不算在「还有 N 人」里：
+  // 那句话说的是「还有多少要做」，把做完的算进去等于在催一件已经做完的事。
+  const folded = bucket.total - done.length - shown.length
 
   return (
     // 缩进 + 左边一根细竖线：从属关系用位置说，不靠标题字号猜。
@@ -625,10 +717,61 @@ function BucketBlock({
         </div>
       )}
 
+      {/* 「这批现在没人」和「这批今天都过了一遍」意思完全不同，措辞要分得开 ——
+          原先两句都是「清空了 ✓ / 推完了 ✓」，扫一眼分不清是自己干完的
+          还是系统压根没给数据（板桥 2026-08-06）。 */}
       {bucket.total === 0 && (
         <p className="rounded-xl border border-dashed border-me-charcoal/10 py-4 text-center text-[13px] text-me-charcoal/30">
-          这批清空了 ✓
+          这批现在没人
         </p>
+      )}
+
+      {bucket.total > 0 && todo.length === 0 && done.length > 0 && (
+        <p className="rounded-xl border border-dashed border-emerald-300/60 bg-emerald-50/40 py-4 text-center text-[13px] font-bold text-emerald-700">
+          这批今天都过了一遍 ✓
+        </p>
+      )}
+
+      {done.length > 0 && (
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={() => setShowDone((v) => !v)}
+            className="w-full rounded-xl bg-me-ivory py-2 text-[13px] font-bold text-me-charcoal/45 hover:text-me-charcoal"
+          >
+            {/**
+             * 🔴 **「跟进」和「关掉」必须分开数**（板桥 2026-08-06）。
+             *
+             * 原先写「今天处理了 8 人」，而那 8 个里可能只有 5 个是真打了电话、
+             * 回了邮件（活还在），另外 3 个是标死的（线断了）。板桥的原话：
+             * **「一个不该当业绩看的数字，长得太像业绩了。」**
+             *
+             * 更别扭的一层：混着数之后，**清空今天名单最快的办法变成把人全标死**。
+             * 不是说销售会故意这么干，是说这个数字不该长成那样。
+             *
+             * 「处理」也换成「动过」—— 只陈述事实，不像工作量。
+             */}
+            ✓ 今天动过 {done.length} 人
+            {followedCount > 0 && closedCount > 0 && `（跟进 ${followedCount} · 关掉 ${closedCount}）`}
+            {' '}
+            {showDone ? '▾ 收起' : '▸ 展开看'}
+          </button>
+          {showDone && (
+            <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {done.map((r) => (
+                <Card
+                  key={r.contactId}
+                  clientId={clientId}
+                  row={r}
+                  onOpen={() => onOpen(r)}
+                  onTogglePin={onTogglePin}
+                  onAcceptStage={onAcceptStage}
+                  onLogged={onLogged}
+                />
+              ))}
+            </div>
+          )}
+        </div>
       )}
 
       {folded > 0 && !expanded && (
@@ -764,7 +907,15 @@ function BatchEmail({
   const [logging, setLogging] = useState(false)
   const [clientRef] = useState(() => globalThis.crypto.randomUUID())
 
-  const emails = bucket.batchEmails
+  /**
+   * 收信人只算一次 —— 地址、「记一笔」的名单、「另有几人没邮箱」全从这里出。
+   *
+   * 上一版地址和 contactIds 各推各的：复制出 17 个地址，却给 20 个人各记了
+   * 一笔「群发了一封邮件」，其中 3 位今天刚说过「不买了」。实际收件人和
+   * CRM 记录对不上 —— 那是这套东西最不能犯的错（见 kind-filter 开头）。
+   */
+  const recipients = batchRecipients(bucket)
+  const emails = recipients.map((p) => p.email)
   if (emails.length === 0) return null
 
   const copy = async () => {
@@ -786,7 +937,8 @@ function BatchEmail({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contactIds: bucket.people.map((p) => p.contactId),
+          // 跟 emails 同一批人 —— 分开推必然分叉（上一版就是这么错的）
+          contactIds: recipients.map((p) => p.contactId),
           note: '群发了一封邮件',
           clientRef,
         }),
@@ -801,7 +953,9 @@ function BatchEmail({
     }
   }
 
-  const missing = bucket.total - emails.length
+  // 「另有 N 人没留邮箱」：只数**本该收信但没邮箱**的。
+  // 用 total - emails 会把今天已处理的人也算成「没留邮箱」—— 那是另一件事。
+  const missing = bucket.people.filter((p) => !p.doneToday && !p.email).length
 
   if (!open) {
     return (
@@ -1136,7 +1290,10 @@ export default function CrmTodayPage() {
    */
   const afterWrite = (msg: string, reload = true) => {
     setToast(msg)
-    if (reload) void load()
+    // 重新拉数据时把乐观计数清零 —— 服务端那份已经把这一笔算进去了，
+    // 不清零就会重复计一次：「还剩」提前归零，进度条会在还有活没干完时
+    // 弹出「今天全推完了 🎉」。那跟名单说假话是同一种伤害。
+    if (reload) { setLocalDone(0); void load() }
     else setLocalDone((n) => n + 1)
     window.setTimeout(() => setToast(null), 2200)
   }
@@ -1172,7 +1329,19 @@ export default function CrmTodayPage() {
         credentials: 'include',
       })
       if (!res.ok) throw new Error('操作失败')
-      afterWrite(`${row.name} 已改为「${row.suggestedStage.label}」`)
+      // ⚠️ **这句话必须跟眼前的画面一致**（Codex 复审 2026-08-15）。
+      //
+      // 原话是「从今天名单上收起来了」—— 那是上一版的事实。现在改阶段的人
+      // **当天留在原位变灰**（冻结副本会把 stageSuppressed 清掉），
+      // 说「收起来了」而人还在，销售会以为没点上、再点一次；
+      // 或者信了这句话，明天发现人还在，从此不信这一页。
+      //
+      // 板桥那条「怕的不是消失，是找不回来」照旧成立，所以后半句保留 ——
+      // 只是把时间说准：今天还看得见，明天起才在那一栏。
+      afterWrite(
+        `${row.name} 已改为「${row.suggestedStage.label}」—— 不用再跟了。` +
+          `卡片今天留在原地做个记号，明天起在下面「不用再联系」那一栏找他`,
+      )
     } catch {
       afterWrite('改阶段失败，请重试', false)
     }
@@ -1209,7 +1378,32 @@ export default function CrmTodayPage() {
   const rawBuckets = data?.buckets ?? []
   const tradeCount = countTrade(rawBuckets, data?.offList ?? [])
   const buckets = rawBuckets.map((b) => filterBucketByKind(b, kindView))
-  const doneToday = (data?.doneToday ?? 0) + localDone
+  /**
+   * 顶上那条进度：今天一共几个 · 处理了几个 · 还剩几个。
+   *
+   * `localDone` 是**乐观计数** —— 刚点完还没重新拉数据的那几秒，数字先动起来，
+   * 不然人会以为没记上又点一次。服务端一回来就以服务端为准。
+   *
+   * 「还剩」不用总数减：万一两边口径差一点，减出来可能是负数，
+   * 而一个负数出现在销售的进度条上，这一页就不可信了。
+   */
+  /**
+   * **进度条必须跟屏幕上铺出来的一致。**
+   *
+   * 服务端那份 `data.progress` 是**没按「终端客户 / 同行」筛过**的。直接用它，
+   * 顶上会写「今天 120 个 · 还剩 95」而底下只铺了 40 张卡 —— 销售数得出来对不上，
+   * 而一个数得出来的谎话足以让整页不被信任。
+   *
+   * 所以从筛后的桶现算。`localDone` 只在「还没重新拉数据」的那几秒垫一下，
+   * 拉回来就清零（见 afterWrite）。
+   */
+  const shown = buckets.flatMap((b) => b.people)
+  const base = dayProgress(shown.map((p) => ({ handled: p.doneToday === true })))
+  const progress = {
+    total: base.total,
+    done: Math.min(base.total, base.done + localDone),
+    left: Math.max(0, base.left - localDone),
+  }
 
   // 搜全部人：看板各列 + 不在名单上的，合起来就是这个客户的所有人。
   const kw = q.trim().toLowerCase()
@@ -1317,11 +1511,7 @@ export default function CrmTodayPage() {
                 ))}
               </div>
             )}
-            {doneToday > 0 && (
-              <span className="rounded-full bg-me-ochre/12 px-3 py-1.5 text-xs font-black text-me-ochre">
-                今天已联系 {doneToday} 人 👍
-              </span>
-            )}
+            <DayProgressBar total={progress.total} done={progress.done} left={progress.left} />
           </div>
 
           {searching ? (
