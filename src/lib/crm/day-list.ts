@@ -320,9 +320,11 @@ export function needsMeAgain(
  * 「已排除」→ 被 `dayWorklist` 的 `onList` 过滤掉 → **人点完就消失**，
  * 跟这套冻结机制要修的毛病一模一样。
  *
- * 两条时间证据本来就在库里，只是以前没读：
+ * 两条证据本来就在库里，只是以前没读：
  *   · 推迟 → 那一笔出站触点的 `action === 'snooze'`（snooze 路由写的）
- *   · 改阶段 → `contacts.stage_updated_at`（改阶段路由每次都在写）
+ *   · 改阶段 → `contact_stage_events` 里今天那一条的 `from_stage`
+ *     （改阶段路由每次都写。**要看改之前那个阶段抑不抑制**，不能只看
+ *     「今天改过」—— 见 `ContactLike.stageSuppressedToday`）
  *
  * **只清今天弄下去的**。昨天推迟的人今天本来就不该在名单上，清了他会冒出来 ——
  * 那是另一个方向的错。
@@ -362,14 +364,13 @@ export function withoutOurActionsSince(contact: ContactLike, sinceMs: number): C
   // 今天按过「推迟」→ 冻结副本上当作还没推迟。
   const snoozedToday = contact.touchpoints.some((t) => t.action === 'snooze' && ourOutboundToday(t))
 
-  // 今天改过阶段 → 冻结副本上当作还没改。
-  const stageAt = contact.stageUpdatedAt ? new Date(contact.stageUpdatedAt).getTime() : NaN
-  const stagedToday = !Number.isNaN(stageAt) && stageAt >= sinceMs
-
   return {
     ...contact,
     ...(snoozedToday ? { snoozeUntil: null } : {}),
-    ...(stagedToday ? { stageSuppressed: false } : {}),
+    // 今天从「还在名单上」被推进到「不再联系」→ 冻结副本上当作还没推。
+    // **判据由读路径按改之前那个阶段算好**，不是「今天改过阶段」就清 ——
+    // 理由见 `ContactLike.stageSuppressedToday`（已成交的人会被塞回名单）。
+    ...(contact.stageSuppressedToday ? { stageSuppressed: false } : {}),
     touchpoints: contact.touchpoints.filter((t) => !ourOutboundToday(t)),
   }
 }

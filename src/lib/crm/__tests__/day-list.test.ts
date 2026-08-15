@@ -335,7 +335,7 @@ describe('真正进生产的那个函数', () => {
     ['推迟', { snoozeUntil: '2026-08-12T00:00:00.000Z' }, [SNOOZE_TODAY]],
     [
       '推到成交',
-      { stageSuppressed: true, stageLabel: '已成交', stageUpdatedAt: '2026-08-05T03:00:00.000Z' },
+      { stageSuppressed: true, stageLabel: '已成交', stageSuppressedToday: true },
       [],
     ],
   ])('今天%s：留在名单上，不消失', (_label, over, extra) => {
@@ -353,11 +353,37 @@ describe('真正进生产的那个函数', () => {
     ['推迟', { snoozeUntil: '2026-08-12T00:00:00.000Z' }, []],
     [
       '推到成交',
-      { stageSuppressed: true, stageLabel: '已成交', stageUpdatedAt: '2026-08-01T03:00:00.000Z' },
+      { stageSuppressed: true, stageLabel: '已成交', stageSuppressedToday: false },
       [],
     ],
   ])('昨天%s 的人，今天照旧不在名单上', (_label, over, extra) => {
     expect(list(person([...YESTERDAY_LEAD, ...extra], over))).toHaveLength(0)
+  })
+
+  /**
+   * 🔴 **已经不在名单上的人，今天在两个「不再联系」的阶段之间挪动，不许冒回来**
+   * （Codex 复审 2026-08-15 第二轮）。
+   *
+   * CTS 的「付了定金」「付清了」「快出行了」都是不进名单的阶段。一位已付定金的
+   * 客人今天被推到「付清了」—— 如果只凭「今天改过阶段」就清掉抑制，冻结版会按
+   * 历史触点把他判成 warm，**塞进今天要联系的名单**：一个已经付清全款的客人
+   * 跳出来让销售去推销他。
+   *
+   * 所以判据是「改**之前**那个阶段抑不抑制」（读路径按 `from_stage` 算），
+   * 不是「今天改过没有」。这里 `stageSuppressedToday: false` 代表的正是
+   * 「他今天早上本来就不在名单上」。
+   */
+  it('已成交的人今天改到另一个成交阶段：不许被塞回名单', () => {
+    expect(
+      list(
+        person(YESTERDAY_LEAD, {
+          stageSuppressed: true,
+          stageLabel: '付清了',
+          // 改之前是「付了定金」—— 同样不在名单上
+          stageSuppressedToday: false,
+        }),
+      ),
+    ).toHaveLength(0)
   })
 
   /**

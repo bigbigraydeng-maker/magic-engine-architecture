@@ -49,7 +49,6 @@ interface ContactRow {
   stage: string | null
   pinned_at: string | null
   snooze_until: string | null
-  stage_updated_at: string | null
 }
 
 interface TouchRow {
@@ -108,9 +107,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       fetchAll<ContactRow>((from, to) =>
         supabaseAdmin
           .from('contacts')
-          // stage_updated_at：冻结副本靠它认出「这个人是**今天**被推到成交/停止
-          // 营销的」，从而不让他点完就从名单上消失（原 M2.7a 缺口）。
-          .select('id, display_name, primary_phone, primary_email, do_not_contact, stage, pinned_at, snooze_until, stage_updated_at')
+          .select('id, display_name, primary_phone, primary_email, do_not_contact, stage, pinned_at, snooze_until')
           .eq('client_id', clientId)
           .order('id', { ascending: true })
           .range(from, to),
@@ -255,8 +252,6 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       stageLabel: stage?.label ?? null,
       // 销售把他推迟了 —— 到期之前不进名单，到期自己回来（见 lib/crm/segments）。
       snoozeUntil: c.snooze_until,
-      // 只给冻结副本用（见 withoutOurActionsSince）。segmentContact 不读它。
-      stageUpdatedAt: (c.stage_updated_at as string | null) ?? null,
       touchpoints: tps.map((t) => ({
         channel: t.channel,
         direction: t.direction,
@@ -328,16 +323,59 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
   )
 
   /**
+   * 今天**从「还在名单上」被推进到「不再联系」**的那些人。
+   *
+   * 冻结副本要靠它把 `stageSuppressed` 清掉，让卡片留在原位变灰。
+   *
+   * ⚠️ **必须看改之前那个阶段抑不抑制，不能只看「今天改过阶段」**
+   * （Codex 复审 2026-08-15）：一个本来就不在名单上的人（已付定金）今天被推到
+   * 另一个同样不在名单上的阶段（付清了），光凭「今天改过」就清掉抑制，
+   * 冻结版会按历史触点把他判成 warm、**塞进今天要联系的名单** ——
+   * 一个已经付清全款的客人跳出来让人去推销他。
+   *
+   * `from_stage` 为空（第一次挂阶段）当作「本来在名单上」—— 那时他确实在。
+   * 一天内改了多次就看**最早那一条**的 from_stage，那才是今天早上的状态。
+   * 读不到就当没有：最坏结果是人照旧当天消失（改动前的行为），不会多打电话。
+   */
+  const stageSuppressedTodayIds = new Set<string>()
+  /** 已经看过今天第一条变更的人 —— 后面的都不看了。 */
+  const seenStageEvent = new Set<string>()
+  try {
+    const { data: events } = await supabaseAdmin
+      .from('contact_stage_events')
+      .select('contact_id, from_stage, created_at')
+      .eq('client_id', clientId)
+      .gte('created_at', new Date(localDayStartMs(now, timeZone)).toISOString())
+      .order('created_at', { ascending: true })
+
+    for (const e of events ?? []) {
+      const cid = e.contact_id as string
+      // 只认今天最早那一条 —— 后面的 from_stage 已经是今天改过之后的状态了。
+      if (seenStageEvent.has(cid)) continue
+      seenStageEvent.add(cid)
+      const from = e.from_stage as string | null
+      const wasOnList = !from || !(stageMeta.get(from)?.suppressed ?? false)
+      if (wasOnList) stageSuppressedTodayIds.add(cid)
+    }
+  } catch (err) {
+    console.error('[crm/today] 读今天的阶段变更失败，按「没改过」算:', err)
+  }
+
+  /**
    * 今天这份名单**一天之内不变**（判据见 lib/crm/day-list）。
    *
    * 跟原来的 `todayWorklist` 只差一条：分批按「今天开工那一刻」算，
    * 于是今天做的动作不会把任何人挪走或挪没 —— 处理过的就地变灰留在原位。
    * 客人今天的动作照常实时进来（今天进线的当天就上名单，今天回话的当场升顶）。
    */
-  const ranked = dayWorklist(models, now, {
-    dayStartMs: localDayStartMs(now, timeZone),
-    touchedToday: (id) => touchedTodayIds.has(id),
-  })
+  const ranked = dayWorklist(
+    models.map((m) => ({ ...m, stageSuppressedToday: stageSuppressedTodayIds.has(m.id) })),
+    now,
+    {
+      dayStartMs: localDayStartMs(now, timeZone),
+      touchedToday: (id) => touchedTodayIds.has(id),
+    },
+  )
 
   /**
    * 系统提议改阶段 —— 提议，不自动改。
@@ -478,8 +516,9 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
        * 冻结版看不见 —— 那几个人会留在原地并且看起来没被处理过。
        *
        * 「推迟」和「推到成交」同样就地变灰（原 M2.7a 缺口，2026-08-15 补上）：
-       * 上面的 SELECT 取了 `stage_updated_at`，推迟那一笔触点带 `action:'snooze'`，
-       * 冻结副本据此把这两样清掉 —— 详见 `withoutOurActionsSince`。
+       * 推迟那一笔触点带 `action:'snooze'`，改阶段看今天那条变更记录的
+       * `from_stage`（**只有改之前还在名单上的才算**，见上面 stageSuppressedTodayIds
+       * 那段），冻结副本据此把这两样清掉 —— 详见 `withoutOurActionsSince`。
        */
       doneToday: c.handled,
       /** 是怎么处理的（今天联系过了 / 标了：他说不买了…）。没处理就是 null。 */

@@ -190,13 +190,20 @@ export interface ContactLike {
    */
   snoozeUntil?: string | null
   /**
-   * 阶段最后一次被改的时间（`contacts.stage_updated_at`，改阶段路由每次都在写）。
+   * 今天被推进到一个「不再联系」的阶段，**而且今天早上他本来在名单上**。
    *
    * `segmentContact` 自己不读它 —— 用处只有一个：让 `withoutOurActionsSince`
-   * 判断「这个人是**今天**被推到成交/停止营销的」，从而在冻结副本上把
-   * `stageSuppressed` 清掉，人留在原位变灰，而不是点完就消失。
+   * 在冻结副本上把 `stageSuppressed` 清掉，人留在原位变灰，而不是点完就消失。
+   *
+   * ⚠️ 后半句是关键（Codex 复审 2026-08-15）：光看「今天改过阶段」不够。
+   * 一个**本来就不在名单上**的人（已付定金）今天被推到另一个同样不在名单上的
+   * 阶段（付清了），光凭「今天改过」就清掉抑制，冻结版会按历史触点把他判成
+   * warm、**塞进今天要联系的名单** —— 一个已经付清全款的客人跳出来让人去推销。
+   *
+   * 所以由读路径按 `contact_stage_events.from_stage` 算好：改之前那个阶段
+   * 抑不抑制。改之前就抑制 → 他早上本来就不在名单上 → 不清。
    */
-  stageUpdatedAt?: string | null
+  stageSuppressedToday?: boolean
   /**
    * 这个人**实际能怎么被联系到**。
    *
