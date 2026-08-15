@@ -38,6 +38,8 @@ interface Captured {
   auditInserts: Record<string, unknown>[]
   auditUpdates: Record<string, unknown>[]
   messageInserts: Record<string, unknown>[]
+  /** 发完之后往 CRM 记的那一笔（决定卡片当场变不变灰）。 */
+  touchpointUpserts: { row: Record<string, unknown>; opts: unknown }[]
 }
 
 /**
@@ -49,8 +51,15 @@ function stubSupabase(opts: {
   lastInboundAt?: string | null
   psid?: string | null
   channel?: string
+  /** 这段会话有没有认领到人。null = 无主会话。 */
+  contactId?: string | null
 }): Captured {
-  const captured: Captured = { auditInserts: [], auditUpdates: [], messageInserts: [] }
+  const captured: Captured = {
+    auditInserts: [],
+    auditUpdates: [],
+    messageInserts: [],
+    touchpointUpserts: [],
+  }
 
   mockFrom.mockImplementation((table: string) => {
     let result: unknown = { data: null, error: null }
@@ -90,6 +99,11 @@ function stubSupabase(opts: {
         result = { data: null, error: null }
         return chain
       },
+      upsert: (row: Record<string, unknown>, upsertOpts: unknown) => {
+        if (table === 'contact_touchpoints') captured.touchpointUpserts.push({ row, opts: upsertOpts })
+        result = { data: null, error: null }
+        return chain
+      },
     }
 
     if (table === 'conversations') {
@@ -105,6 +119,7 @@ function stubSupabase(opts: {
                 // conversations 是四渠道共用的表。默认给私信，个别用例覆盖成
                 // 别的渠道，验证「不是私信就不许在这里发」。
                 channel: opts.channel ?? 'messenger',
+                contact_id: opts.contactId === undefined ? 'contact-1' : opts.contactId,
               },
         error: null,
       }
@@ -318,5 +333,73 @@ describe('sendReply — 渠道', () => {
 
     expect(res).toMatchObject({ ok: false, status: 409, reason: 'wrong_channel' })
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * 回完私信，那张卡必须**当场**变灰。
+ *
+ * 「今天该联系谁」判断灰不灰，看的是 `contact_touchpoints` 里今天有没有一笔
+ * 我们发出的真人联系。而 Messenger 的出站触点原先**只有每小时那次同步才写**
+ * —— 销售在页面里回完一条私信，卡片最长一小时不变灰。
+ *
+ * 那正是 PM 2026-08-05 抱怨的毛病本身，只是换了个渠道：他会以为没记上，
+ * 再回一遍，客人收到两条。
+ */
+describe('回完私信，CRM 那边当场记上', () => {
+  it('发送成功 → 写一笔 messenger 出站触点', async () => {
+    const cap = stubSupabase({ lastInboundAt: '2026-07-26T10:00:00.000Z' })
+    mockUserToken.mockResolvedValue('user-token')
+    mockPageToken.mockResolvedValue('page-token')
+    await sendReply({ clientId: CTS, conversationId: CONVO, body: '好的，我这就发给您', sentByEmail: 'a@b.com' })
+
+    expect(cap.touchpointUpserts).toHaveLength(1)
+    const { row } = cap.touchpointUpserts[0]
+    expect(row.direction).toBe('outbound')
+    expect(row.channel).toBe('messenger')
+    expect(row.contact_id).toBe('contact-1')
+  })
+
+  /**
+   * 🔴 **幂等键必须跟每小时同步用的那一个一模一样。**
+   *
+   * 换个新键的话，同一段对话会同时存在「发送时写的」和「同步写的汇总」两行，
+   * 任何按触点条数做的渠道统计当场失真。用同一个键，两边落在同一行上
+   * （`ON CONFLICT DO UPDATE` 刷新时间），永远只有一条。
+   */
+  it('幂等键跟同步写的那一行相同 —— 不会变成两条', async () => {
+    const cap = stubSupabase({ lastInboundAt: '2026-07-26T10:00:00.000Z' })
+    mockUserToken.mockResolvedValue('user-token')
+    mockPageToken.mockResolvedValue('page-token')
+    await sendReply({ clientId: CTS, conversationId: CONVO, body: 'hi', sentByEmail: 'a@b.com' })
+
+    const { row, opts } = cap.touchpointUpserts[0]
+    expect(row.source).toBe('messenger')
+    expect(row.source_ref).toBe(`${CONVO}:out`)
+    expect(opts).toEqual({ onConflict: 'client_id,source,source_ref' })
+  })
+
+  /** 没认领的会话挂不到人 —— 没有人可标，别写一条 contact_id 为空的脏数据。 */
+  it('无主会话（还没认领到人）→ 不写触点', async () => {
+    const cap = stubSupabase({ lastInboundAt: '2026-07-26T10:00:00.000Z', contactId: null })
+    mockUserToken.mockResolvedValue('user-token')
+    mockPageToken.mockResolvedValue('page-token')
+    await sendReply({ clientId: CTS, conversationId: CONVO, body: 'hi', sentByEmail: 'a@b.com' })
+
+    expect(cap.touchpointUpserts).toHaveLength(0)
+  })
+
+  /**
+   * 发送失败时绝不能记 —— 记了就是骗人：卡片变灰说「今天联系过了」，
+   * 而客人**什么都没收到**，这个人当天再也不会被人想起来。
+   */
+  it('Meta 拒了这条消息 → 一个字都不记', async () => {
+    const cap = stubSupabase({ lastInboundAt: '2026-07-26T10:00:00.000Z' })
+    mockUserToken.mockResolvedValue('user-token')
+    mockPageToken.mockResolvedValue(null) // 拿不到 page token，发不出去
+    const r = await sendReply({ clientId: CTS, conversationId: CONVO, body: 'hi', sentByEmail: 'a@b.com' })
+
+    expect(r.ok).toBe(false)
+    expect(cap.touchpointUpserts).toHaveLength(0)
   })
 })
