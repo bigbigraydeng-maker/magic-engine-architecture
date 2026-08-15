@@ -5,6 +5,28 @@
 
 ---
 
+### 2026-08-15（ME2 Product Map PR2:账本开始自己跟着 GitHub 走 —— 并且已在生产接通）
+
+PR [#979](https://github.com/bigbigraydeng-maker/magic-engine/pull/979)(合并提交 `1bff9ec5`)·
+诊断补丁 [#983](https://github.com/bigbigraydeng-maker/magic-engine/pull/983)。
+
+**这次解决的一件事**:PR1 的组件账本靠人工核对 GitHub 状态,写死在代码里的手工快照。
+本段把事实来源换成自动同步:webhook 秒级推送 + 每日全量对账 + admin 手动刷新,
+落进 5 张表(`product_map_*`),经 facts-adapter 喂回 PR1 的成熟度推导(签名未变)。
+承重墙:验签 fail-closed · 投递幂等 claim-first(failed 可重试,不永久吞事件)·
+RPC 逐行单调守卫(旧数据打不回新状态)· 收编显式确认制(30 天没动静的发现不许被误消)·
+限流中止时已抓成果照常落库 · 表未 apply 时 cron 报红不静默。
+229 测试 + 12 道变异探针,设计/实施各过双审 + 一轮攻击验证(零打穿)。
+
+**生产 provisioning 同日完成**(migration apply · ME 仓 webhook 新建 · token/cron 密钥):
+首轮全量同步实测 12 PR / 14 issue / 28 条待分类工作 / 272 条 webhook 投递全部验签落库。
+
+🔴 **值得记住的两个现场事实**:① Render 的环境变量 key **大小写敏感** ——
+变量被存成 `Github_Token`,面板上肉眼完全正常,进程读不到,三次重部署都没用;
+是让 fail-closed 路由自报「进程可见的 GITHUB_* 变量名+长度」一次锁定的。
+② 换对名字后 GitHub 回 **404 而不是 403** —— fine-grained PAT 对自家私有仓没授权就是这个表现,
+换 classic token(只勾 `repo`)一次通过。
+
 ### 2026-08-15（ME2 Product Map PR1:组件账本上线,「完成」从此有六级刻度）
 
 PR [#976](https://github.com/bigbigraydeng-maker/magic-engine/pull/976)(合并提交 `bd17712b`;前身 [#975](https://github.com/bigbigraydeng-maker/magic-engine/pull/975) 因分支改名被挤关,复审记录在彼)。

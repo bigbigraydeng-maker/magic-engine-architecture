@@ -66,7 +66,8 @@
 - [ ] **WP09 / WP10** [#884](https://github.com/bigbigraydeng-maker/magic-engine/issues/884) / [#885](https://github.com/bigbigraydeng-maker/magic-engine/issues/885) 首次 1–3 页优化 → T+7/14/28 复测与学习（严格串行，**两项均未开工**）
 - [x] ~~**U11**~~ ✅ **已完成** —— `docs/STATE.md` 与本文件的 ME2 条目已补齐（本 PR）
 - [ ] **WP00 §15 其余未决项**（**U1–U10、U12**）仍**单独**以未决形态挂着，**任何 WP 不许把它们当既定假设**
-- [ ] **Product Map PR2 / PR3**（WP「ME2 Product Map v1」的后两段;PR1 组件登记册＋成熟度引擎已于 2026-08-15 合并,PR [#976](https://github.com/bigbigraydeng-maker/magic-engine/pull/976),代码在 `src/lib/product-map/`,25 组件 / 136 测试 / 11 变异探针）—— **PR2**:GitHub 只读动态同步（webhook 验签＋防重投＋定时对账＋快照持久化 migration 文件＋fake store;真 credential / webhook secret / migration apply 全部另行授权）· **PR3**:`/dashboard/me2/product-map` PO 控制台四视图（业务总览 / 组件清单 / 依赖 / 待拍板队列;同步未开通时降级显示登记册）。两段开工均需 PO 授权,严格顺序 PR2 → PR3
+- [ ] **Product Map PR3**（WP「ME2 Product Map v1」的最后一段）—— **PR1**（组件登记册＋成熟度引擎,PR [#976](https://github.com/bigbigraydeng-maker/magic-engine/pull/976)）与 **PR2**（GitHub 只读动态同步,PR [#979](https://github.com/bigbigraydeng-maker/magic-engine/pull/979)）均已于 2026-08-15 合并**并完成生产 provisioning**（migration 已 apply · ME 仓 webhook 已建并有真实投递 · GITHUB_TOKEN/cron 密钥已配 · 首轮全量同步实测 12 PR / 14 issue / 28 条待分类）。剩 **PR3**:`/dashboard/me2/product-map` PO 控制台四视图（业务总览 / 组件清单 / 依赖 / 待拍板队列）——必须渲染 partial 轮、`manual_claim` 未核验标记、factsSource 三态,不许把不完整快照显示成完整。开工需 PO 授权。
+      ⚠️ 已知遗留:同步的 `unresolved_threads` 恒 null(GraphQL 那一步静默失败),故每轮标 partial —— 独立修复任务在案,不阻塞 PR3
 
 **独立并行、不并入本链**：[#886](https://github.com/bigbigraydeng-maker/magic-engine/issues/886) Operating Brief（参考闭环稳定前不开工）· [#887](https://github.com/bigbigraydeng-maker/magic-engine/issues/887) 广告安全泳道（**不许夹带进任何 ME2 的 WP**）
 
