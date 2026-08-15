@@ -66,6 +66,7 @@ const ADMIN_SECTIONS: NavSection[] = [
       { key: 'ad-engine',       label: '广告引擎',         mark: 'AE', href: '/dashboard/ad-engine' },
       { key: 'ad-approval',     label: '等你点头的广告',    mark: 'OK', href: '/dashboard/ad-approval' },
       { key: 'team-memory',     label: '团队工作记忆',     mark: 'TM', href: '/dashboard/team-memory' },
+      { key: 'product-map',     label: 'ME2 产品地图',    mark: 'PM', href: '/dashboard/me2/product-map' },
     ],
   },
 ]
