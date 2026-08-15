@@ -377,7 +377,7 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - 19 条分两批进来，来源不同：Oztop 7 条走 `scripts/factory-worker/ingest-clips.mjs`（`source_meta.seed='b4-ingest'`，`scene_tag` 从文件名推，不看画面内容）；Roman 12 条是人工逐条看完手写（带 `shot_note` + `tagged_by`）
 - ⚠️ `usage_count` **不能当消费证据** —— 全仓无任何 `+1` 写入方（`evaluate.ts` 只读、`strategist.ts` 只用于排序、`ingest-clips.mjs` 只初始化为 0），值恒为入库初值。实测对不上：a_real 计数合计 2、b_generated 合计 0
 - ✅ 但**消费事实查得出来**：`evaluate.ts:375` 建单时把选中的素材写进 `content_work_order_clips`，而 `complete-work-order.ts` 只在红线复扫 → clip 入库 → 台账落账**全部成功后**才把工单置 `in_review`（且用 `.select()` 判行数，防被 sweeper 收回后伪装成功）。所以「关联表 ⋈ 已交付工单」就是可信的消费真值
-- 实测（2026-08-14）：关联表 75 行 / 工单 22 个（8 个已交付）；**a_real 19 条中 5 条已进入交付成片**，b_generated 231 条中 8 条
+- 实测（2026-08-14）：关联表 75 行 / 工单 22 个（**最大一类是 `review_rejected` 9 个**，其余 in_review 6 / archived 3 / published·rendered·queued·superseded 各 1）；按下方判据算，**a_real 19 条中 5 条已进入成片**，b_generated 231 条中 17 条
 
 **为什么现在不做**：人工整理**只发生过 1 次**，尚未构成「重复操作」。铁律 3 针对的是把重复丢给人工，单次不触发。
 PM 2026-08-14 答复：无第二批真拍素材排队，**且不确定后续是否会有** —— 所以按触发条件等，不预先建设。
@@ -389,12 +389,18 @@ PM 2026-08-14 答复：无第二批真拍素材排队，**且不确定后续是�
 3. **进入交付成片的 a_real 素材累计 ≥ 15 条**（当前 5 条 / 共 19 条）—— 判据用关联表，不用 `usage_count`：
 
 ```sql
+-- 判据取「排除未完成态」而非「枚举已完成态」：工单状态会继续流转
+-- (in_review → approved → publishing → published/publish_failed，或 → review_rejected)，
+-- 用正列表枚举会让已计入的素材随状态变化掉出累计值，计数倒退。
 select count(distinct c.clip_id)
 from content_work_order_clips c
 join content_work_orders o on o.id = c.work_order_id
 join video_clips v on v.id = c.clip_id
-where o.status in ('in_review','approved','published','rendered') and v.track = 'a_real';
+where o.status not in ('queued','claimed','producing') and v.track = 'a_real';
 ```
+
+> 🔴 **不要改用 `output is not null`** —— 实测 `queued` 状态的工单也带 `output`（22 个工单全部非空），拿它当交付事实会把没跑完的也算进来。
+> 拒绝走的是**新开一单**（`review-apply.ts` 的 `reopened_work_order_id`），旧单停在 `review_rejected` 不再变，所以排除未完成态的判据是单调的。
 
 > 该条曾一度按「`usage_count` 合计 ≥ 20」写、又一度整条撤下，两次都不对：计数确实是死的，但消费事实本就有现成真值（关联表），撤掉等于无故阻断这个触发条件。
 > **不要**改去依赖 `usage_count` —— 那会让同一件事有两份真值，早晚漂移。
