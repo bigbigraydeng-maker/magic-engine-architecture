@@ -9,11 +9,11 @@ import type { CostAssumptions } from '../landed-cost'
 /** 2026-08-15 的真实取值，见各字段来源注释。 */
 const A: CostAssumptions = {
   fxUsdToNzd: 1.6981,
-  airFreightUsdPerKg: 6.71,
+  freightNzdPerKg: 2.0,
   chargeableWeightKg: 0.8,
   importLevyNzd: 2.21,
   dutyRatePct: 0,
-  domesticDeliveryNzd: 8.4,
+  domesticDeliveryNzd: 3.99,
   paymentFeePct: 2.9,
   paymentFeeFixedNzd: 0.3,
   gstRatePct: 15,
@@ -24,9 +24,9 @@ describe('calculateLandedCost', () => {
   it('货价 + 运费 + 关税 + 征费，四项都算进去', () => {
     const landed = calculateLandedCost(4.5, A)!
     expect(landed.goodsNzd).toBeCloseTo(7.64, 2)
-    expect(landed.freightNzd).toBeCloseTo(9.12, 2)
+    expect(landed.freightNzd).toBeCloseTo(1.60, 2)
     expect(landed.levyNzd).toBe(2.21)
-    expect(landed.totalNzd).toBeCloseTo(18.97, 2)
+    expect(landed.totalNzd).toBeCloseTo(11.45, 2)
   })
 
   it('🔴 重量未知 → null，不许拿默认重量硬算', () => {
@@ -36,7 +36,7 @@ describe('calculateLandedCost', () => {
 
   it('关税按 CIF（货价+运费）计，不是只按货价', () => {
     const withDuty = calculateLandedCost(4.5, { ...A, dutyRatePct: 10 })!
-    expect(withDuty.dutyNzd).toBeCloseTo((7.64 + 9.12) * 0.1, 1)
+    expect(withDuty.dutyNzd).toBeCloseTo((7.64 + 1.60) * 0.1, 1)
   })
 })
 
@@ -51,7 +51,7 @@ describe('priceBreakdown', () => {
   it('毛利 = 净收入 − 到岸 − 本地配送 − 支付费', () => {
     const landed = calculateLandedCost(4.5, A)!
     const b = priceBreakdown(39.9, landed, A)
-    const expected = b.netRevenueNzd - landed.totalNzd - 8.4 - (39.9 * 0.029 + 0.3)
+    const expected = b.netRevenueNzd - landed.totalNzd - 3.99 - (39.9 * 0.029 + 0.3)
     expect(b.grossProfitNzd).toBeCloseTo(expected, 4)
   })
 
@@ -63,7 +63,7 @@ describe('priceBreakdown', () => {
 
   it('🔴 标价太低时毛利为负 —— 不许被截成 0', () => {
     const landed = calculateLandedCost(4.5, A)!
-    const b = priceBreakdown(19.9, landed, A)
+    const b = priceBreakdown(14.9, landed, A)
     expect(b.grossProfitNzd).toBeLessThan(0)
     expect(b.grossMarginPct).toBeLessThan(0)
   })

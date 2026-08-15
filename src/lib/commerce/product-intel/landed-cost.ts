@@ -19,8 +19,13 @@
 export interface CostAssumptions {
   /** 1 USD = ? NZD */
   readonly fxUsdToNzd: number
-  /** 空运费率（USD/kg）。散货空运与快递差价很大，调用方自己选。 */
-  readonly airFreightUsdPerKg: number
+  /**
+   * 国际运费费率（**NZD/kg**，不是 USD）。
+   *
+   * 用 NZD 是因为货代给的报价本来就是 NZD —— 先折成 USD 再折回来只会多一次
+   * 汇率误差。空运散货、快递、海运拼柜差价能到 3 倍，调用方按实际渠道传。
+   */
+  readonly freightNzdPerKg: number
   /**
    * 计费重量（kg）= max(实重, 体积重)。体积重（空运）= 长×宽×高(cm) ÷ 6000。
    * **拿不到就传 null** —— 整个计算返回 null，不许猜。
@@ -70,7 +75,7 @@ export function calculateLandedCost(
   if (unitCostUsd <= 0) return null
 
   const goodsNzd = unitCostUsd * a.fxUsdToNzd
-  const freightNzd = a.chargeableWeightKg * a.airFreightUsdPerKg * a.fxUsdToNzd
+  const freightNzd = a.chargeableWeightKg * a.freightNzdPerKg
   // 关税基数是货价 + 国际运费（CIF 口径）。
   const dutyNzd = (goodsNzd + freightNzd) * (a.dutyRatePct / 100)
   const levyNzd = a.importLevyNzd

@@ -27,23 +27,28 @@ const MIN_CUMULATIVE_SOLD = 1_000
 const MIN_AUNZ_MONTHLY_SEARCHES = 200
 
 /**
- * 毛利倍数门槛。
+ * 毛利倍数门槛 —— **粗筛用，不是判据**。
  *
- * 🔴 **不是通行的 3 倍 —— 新西兰必须用 6 倍。** 2026-08-15 实算推翻了 3 倍：
- *    每单有一笔**与货价无关的固定成本** ≈ NZ$10.9
- *    （本地配送 8.40 + 低值货物征费 2.21 + 支付固定费 0.30），
- *    再加 GST 从标价里先拿走 13%。对 NZ$7.6 货价的小件，光固定成本就是货价的 1.4 倍。
+ * 5 倍是从真实成本反解出来的，不是行业经验：PM 2026-08-15 提供实际费率
+ * （本地快递 NZ$3.99/件、中国到新西兰 NZ$2.00/kg）后实算 ——
+ * 货价 US$4.50、计费重量 0.8kg 的小件，到岸 NZ$11.45，
+ * 做到 **50% 毛利需要标价 NZ$38.79 = 货价的 5.1 倍**。
  *
- *    实算：货价 US$4.50 的便携榨汁机，散货空运到岸 NZ$15.29，
- *    要做到 50% 毛利，标价得 NZ$59 —— 相当于货价的 **7.6 倍**。
- *    而 Trade Me 上同款实际在卖 NZ$5.90–34.90。按 3 倍闸它会误判成「值得测」，
- *    按真实模型它每单毛利只有 NZ$1.15，**广告一投就亏**。
+ * 通行的「3 倍」在新西兰不成立：每单有一笔**与货价无关的固定成本** NZ$6.50
+ * （本地配送 3.99 + 低值货物征费 2.21 + 支付固定费 0.30），GST 再从标价拿走 13%。
+ * 货价越低，这笔固定成本占比越离谱 —— 所以倍数在低价位段一定失真，
+ * 它按比例缩放而固定成本不缩放。
  *
- * 🔴 倍数只是**粗筛**。真正的判据是 `landed-cost.ts` 的完整模型
- *    （到岸 + 本地配送 + 支付 + GST → 每单广告上限）。倍数在低价位段一定失真，
- *    因为它按比例缩放，而固定成本不缩放。拿到重量后一律以完整模型为准。
+ * 🔴 **这道闸用的是美国售价当价格代理，会偏保守。** 实测同一件便携榨汁机
+ *    美国 TikTok 卖 US$15.86，新西兰 Trade Me 主流带在 NZ$29.90–34.90
+ *    （≈US$17.6–20.6，**比美国高约 30%**）。所以按美国价算不过关的品，
+ *    换成新西兰实际售价可能是过得去的 —— 误杀比误放行安全，先这样。
+ *
+ * 🔴 真正的判据是 `landed-cost.ts` 的完整模型（到岸 + 本地配送 + 支付 + GST
+ *    → 每单广告上限）。它需要**计费重量**和**新西兰市场售价**，两个都拿到之后
+ *    一律以完整模型为准，这道闸只负责在拿到之前先砍掉明显不行的。
  */
-const MIN_MARGIN_MULTIPLE = 6
+const MIN_MARGIN_MULTIPLE = 5
 
 function gateProvenDemand(candidate: ProductCandidate): GateResult {
   const sold = candidate.cumulativeSold.value
@@ -108,8 +113,9 @@ function gateMargin(candidate: ProductCandidate): GateResult {
   return {
     gate: 'margin_multiple',
     outcome: multiple >= MIN_MARGIN_MULTIPLE ? 'PASS' : 'FAIL',
-    reason: `US$${retail.toFixed(2)} ÷ US$${cost.toFixed(2)} = ${multiple.toFixed(1)}× `
-      + `（门槛 ${MIN_MARGIN_MULTIPLE}×，未扣运费关税）`,
+    reason: `美国售价 US$${retail.toFixed(2)} ÷ 货价 US$${cost.toFixed(2)} = `
+      + `${multiple.toFixed(1)}×（门槛 ${MIN_MARGIN_MULTIPLE}×，粗筛；`
+      + `新西兰实际售价通常更高，此闸偏保守）`,
   }
 }
 
