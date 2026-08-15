@@ -38,6 +38,10 @@ export const META_PAGE_SCOPES = [
   'pages_show_list',
   'pages_messaging',
   'pages_read_engagement',
+  // 读**别人写的**评论必须有这一条 —— pages_read_engagement 只够读我们自己发的
+  // 东西。没有它,评论自动回复对每个帖子都拿到 Graph #10,客人的提问系统一条
+  // 都看不见(2026-08-15 生产日志实测)。已经连过的客户要重新点一次「连接 Meta」。
+  'pages_read_user_content',
   // 发内容到主页(Reel/贴文)必须有这一条。没有它,存下来的 token 只能读不能发——
   // 2026-08-04 讲课片发布就卡在「读得到、发不出去」。
   // 已经连过的客户(CTS/Roman)只做收件箱同步,不受影响;要发内容的客户重新点一次「连接 Meta」即可。
