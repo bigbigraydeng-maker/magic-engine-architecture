@@ -22,27 +22,69 @@
  * 要靠调用方把「原话里像是提了时间」这个信号传进来，见 `mentionsTime`。
  */
 
-/** 一句话里像不像提到了「下次什么时候」。宁可多报 —— 多问一句好过静悄悄漏掉。 */
+/** 像时间的说法：周几 / 明后天 / 下周 / 几月几号。 */
 const TIME_HINTS = [
-  // 中文：周几 / 明后天 / 下周 / 几号 / 月份 / 再联系类
   /周[一二三四五六日天末]/,
   /礼拜[一二三四五六日天]/,
   /星期[一二三四五六日天]/,
   /明天|后天|大后天|今晚|下周|下星期|下个?月|月底|月初/,
   /\d{1,2}\s*[月号日]/,
-  /再(打|联系|说|聊|谈|发|问)/,
-  /回头(打|联系|说|再)/,
-  // 英文
   /\b(mon|tue|wed|thu|fri|sat|sun)(day|s)?\b/i,
   /\b(tomorrow|tonight|next week|next month|later this week)\b/i,
-  /\bcall (him|her|them|back)\b/i,
-  /\bfollow[- ]?up\b/i,
 ]
 
+/**
+ * 「我下次要做什么」——**这类说法本身就等于约了下一步**，不用再找时间词。
+ */
+const FOLLOWUP_HINTS = [
+  /再(打|联系|说|聊|谈|发|问|约)/,
+  /回头(打|联系|说|发|再)/,
+  /(给|发)(他|她|客人|客户)?(报价|方案|行程|资料|价格)/,
+  /跟进|回电|回复他|回他/,
+  /\bcall (him|her|them|back)\b/i,
+  /\bfollow[- ]?up\b/i,
+  /\b(send|email|quote)\b.*\b(him|her|them|quote|itinerary)\b/i,
+]
+
+/**
+ * 这句话里的日期说的是**客人什么时候出行**，不是「我下次什么时候联系他」。
+ *
+ * 旅游生意的笔记里出行日期到处都是（「客户想 8 月 20 日出发」），
+ * 而那种日期**本来就不该排成回访** —— 解析器留 `callback_at: null` 是对的。
+ */
+const TRAVEL_HINTS = [
+  /出发|出行|启程|动身|成行/,
+  /(去|飞|到)(中国|北京|上海|南岛|北岛|欧洲|日本)/,
+  /入境|落地|抵达|回国/,
+  /\b(depart|departure|travel|fly|flying|arrive|arrival|trip)\b/i,
+]
+
+/**
+ * 一句话里像不像提到了「**下次什么时候联系他**」。
+ *
+ * ⚠️ **不能只看有没有日期**（Codex 复审 2026-08-15）。「客户想 8 月 20 日
+ * 出发」里那个日期是**出行时间**；解析器正确地不把它排成回访，而这里如果
+ * 报 true，销售会看到一句「没读懂你说的下次时间」—— 一条**根本不存在的
+ * 失败警告**。
+ *
+ * 而 CTS 的笔记里出行日期到处都是。假警报一多，真警报也会被无视 ——
+ * 那条护栏（说了时间却没排上，必须告诉他）就彻底废了。
+ *
+ * 判断顺序：
+ *   1. 明说了下一步动作（「再打」「给报价」）→ 是，不管有没有日期
+ *   2. 有日期、但那是出行的日期 → 不是
+ *   3. 光有日期 → 是（「下周二」这种单说时间的，宁可多问一句）
+ */
 export function mentionsTime(note: string): boolean {
   const t = note.trim()
   if (!t) return false
-  return TIME_HINTS.some((p) => p.test(t))
+
+  if (FOLLOWUP_HINTS.some((p) => p.test(t))) return true
+
+  const hasTime = TIME_HINTS.some((p) => p.test(t))
+  if (!hasTime) return false
+
+  return !TRAVEL_HINTS.some((p) => p.test(t))
 }
 
 /**

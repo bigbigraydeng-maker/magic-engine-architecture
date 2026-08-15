@@ -141,3 +141,42 @@ describe('确认用的时区 = 服务端排程用的时区', () => {
     expect(s).not.toContain('没读懂')
   })
 })
+
+/**
+ * 🔴 **出行日期 ≠ 下次联系日期**（Codex 复审 2026-08-15）。
+ *
+ * 旅游生意的笔记里出行日期到处都是：「客户想 8 月 20 日出发」。
+ * 那个日期**本来就不该排成回访**，解析器留 null 是对的 —— 但如果这里报
+ * 「说了时间」，销售会看到一句「没读懂你说的下次时间」，**一条根本不存在的
+ * 失败警告**。
+ *
+ * 假警报一多，真警报也会被无视 —— 那条护栏（说了时间却没排上必须告诉他）
+ * 就彻底废了。而那条护栏正是这个功能最要紧的一半。
+ */
+describe('出行日期不算「说了下次联系时间」', () => {
+  it.each([
+    '客户想 8 月 20 日出发',
+    '10月3日出发，两个人',
+    '想 12 月飞北京',
+    '客户 8 月 15 日抵达奥克兰',
+    'departing 20 August, two pax',
+    'wants to travel next month',
+  ])('不误报「%s」', (note) => {
+    expect(mentionsTime(note)).toBe(false)
+    expect(noteConfirmation(note, { callbackAt: null }, NZ)).toBe('✓ 记好了')
+  })
+
+  /** 同一句里既说了出行、又约了下一步 → 照旧要报（下一步是真的）。 */
+  it.each([
+    '8月20日出发，周五给他报价',
+    '10月出发，明天再打给他',
+    'departing October, call him back Friday',
+  ])('出行 + 明确下一步「%s」→ 照旧报', (note) => {
+    expect(mentionsTime(note)).toBe(true)
+  })
+
+  /** 只说了个时间、没说要干嘛 —— 宁可多问一句，别静悄悄漏掉。 */
+  it.each(['下周二', '周五', '明天上午'])('光说时间「%s」→ 还是报', (note) => {
+    expect(mentionsTime(note)).toBe(true)
+  })
+})
