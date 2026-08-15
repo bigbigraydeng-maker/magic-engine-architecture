@@ -326,6 +326,27 @@ export function needsMeAgain(
  *
  * **只清今天弄下去的**。昨天推迟的人今天本来就不该在名单上，清了他会冒出来 ——
  * 那是另一个方向的错。
+ *
+ * ## ⛔ 「别再联系」**故意不清**，别顺手把它补上
+ *
+ * Codex 2026-08-15 复审提出：今天记一笔被读成「别再联系」的笔记，
+ * `contacts.do_not_contact` 会被置 true，而这里不清它 —— 于是冻结版照样判
+ * `excluded`，卡片**当天就消失**，跟「他不买了」（留在原位变灰）不一致。
+ *
+ * 事实没错，**但这个不一致是刻意的**：
+ *
+ *   · 「他不买了」= 这一单没戏了，人还是我们的客户 → 留着变灰，看得见自己做过
+ *   · 「别再联系」= 对方划下的界线 → **最安全的状态是立刻离开拨号名单**。
+ *     留一张灰卡在那，同事顺手点一下「打电话」就是一次骚扰。
+ *
+ * 而且技术上也没有安全的做法：`do_not_contact` 是个**没有时间戳的布尔列**，
+ * 历史导入也会直接写它。任何「按证据重建冻结值」的写法，都可能让一个很久以前
+ * 就说过「别再打」的人重新出现在今天的名单上 —— 那是 CLAUDE.md 的客户数据红线，
+ * 代价完全不对称：名单上少一个人是噪音，多打一通骚扰电话是伤害。
+ *
+ * 真要做成一致的，前提是先加一列 `do_not_contact_at`（改 schema，A 级改动）。
+ * 在那之前，这里保持现状。**要修的不是消失，是「消失了却不说话」** ——
+ * 那一半已经修了，见 `ComposeNote.tsx` 里读 `parsed.do_not_contact` 的那段。
  */
 export function withoutOurActionsSince(contact: ContactLike, sinceMs: number): ContactLike {
   const ourOutboundToday = (t: TouchpointLike): boolean => {
@@ -399,8 +420,24 @@ export function localDayStartMs(now: Date, timeZone: string): number {
     }).format(now)
     // 先当成 UTC 的零点，再减去该时区的偏移量。
     const asUtc = new Date(`${day}T00:00:00.000Z`).getTime()
-    const offsetMs = tzOffsetMs(new Date(asUtc), timeZone)
-    return asUtc - offsetMs
+
+    /**
+     * **偏移量要在「当地午夜那一刻」取，不能在 asUtc 那一刻取**
+     * （Codex 复审 2026-08-15，给了精确复现）。
+     *
+     * `asUtc` 落在当地的**中午**附近（NZ 是 UTC+12/+13）。平时中午和午夜的
+     * 偏移一样，所以看不出问题；但换季那两天不一样：
+     *
+     *   奥克兰 2026-04-05 真实零点 = `2026-04-04T11:00Z`（还是夏令时 +13），
+     *   而在 asUtc 那一刻取到的是切换后的 +12 → 算成 `12:00Z`，**晚了一小时**。
+     *   → 当地 00:00–01:00 做的动作不算「今天」，那一小时的卡片不变灰。
+     *   春季那天反过来，把前一天最后一小时算进今天。
+     *
+     * 一次迭代就收敛：拿第一次的估计值回去重新取偏移，再算一遍。
+     * 估计值已经落在当地午夜附近，取到的就是午夜那一侧的偏移。
+     */
+    const firstGuess = asUtc - tzOffsetMs(new Date(asUtc), timeZone)
+    return asUtc - tzOffsetMs(new Date(firstGuess), timeZone)
   } catch {
     // 时区字符串坏了也不能炸掉整页 —— 退回 UTC 当天零点。最坏结果是
     // 名单在某几个小时里按错的「今天」算，而不是这一页打不开。

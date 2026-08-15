@@ -491,9 +491,10 @@ function CardExits({
                 void post(
                   `/api/clients/${clientId}/crm/contacts/${row.contactId}/snooze`,
                   { days: o.d, clientRef: crypto.randomUUID() },
-                  // 板桥：把话说满。加「从名单上收起来」这几个字，消失就成了
-                  // 预期内的事，不是故障 —— 这一版只有推迟和改阶段还会消失。
-                  `先放着了 —— 从名单上收起来，${o.label}后他自己回来`,
+                  // 板桥要的「把话说满」照旧，但事实变了：推迟的人现在**当天
+                  // 留在原位变灰**（冻结副本会把 snooze 清掉），不再当场消失。
+                  // 说「收起来了」而人还在，销售会以为没点上又点一次（Codex 复审）。
+                  `先放着了 —— 卡片今天留在原地做个记号，${o.label}后他自己回来`,
                 )
               }
               className={`${base} border border-me-charcoal/15 text-me-charcoal/70 hover:border-me-ochre/50`}
@@ -1325,12 +1326,18 @@ export default function CrmTodayPage() {
         credentials: 'include',
       })
       if (!res.ok) throw new Error('操作失败')
-      // 板桥：这个按钮最坑 —— 一点预告都没有，点完人凭空没了，销售第一反应是
-      // 「我是不是把他删了」。**最后半句「在哪能找到他」是关键**：
-      // 销售怕的不是消失，是找不回来。
+      // ⚠️ **这句话必须跟眼前的画面一致**（Codex 复审 2026-08-15）。
+      //
+      // 原话是「从今天名单上收起来了」—— 那是上一版的事实。现在改阶段的人
+      // **当天留在原位变灰**（冻结副本会把 stageSuppressed 清掉），
+      // 说「收起来了」而人还在，销售会以为没点上、再点一次；
+      // 或者信了这句话，明天发现人还在，从此不信这一页。
+      //
+      // 板桥那条「怕的不是消失，是找不回来」照旧成立，所以后半句保留 ——
+      // 只是把时间说准：今天还看得见，明天起才在那一栏。
       afterWrite(
-        `${row.name} 已改为「${row.suggestedStage.label}」—— 不用再跟了，` +
-          `从今天名单上收起来了。在下面「不用再联系」那一栏能找到他`,
+        `${row.name} 已改为「${row.suggestedStage.label}」—— 不用再跟了。` +
+          `卡片今天留在原地做个记号，明天起在下面「不用再联系」那一栏找他`,
       )
     } catch {
       afterWrite('改阶段失败，请重试', false)

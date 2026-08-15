@@ -67,7 +67,11 @@ export function ComposeNote({
           clientRef,
         }),
       })
-      const json = (await res.json()) as { error?: string; created?: boolean }
+      const json = (await res.json()) as {
+        error?: string
+        created?: boolean
+        parsed?: { do_not_contact?: boolean }
+      }
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`)
 
       // created=false 说明这一笔之前就存过（同一个记录框重试）。要说出来，
@@ -92,7 +96,23 @@ export function ComposeNote({
           return
         }
       }
-      onDone('✓ 记好了')
+      /**
+       * ⚠️ **读出「别再联系」时必须当场说出来**（Codex 复审 2026-08-15 指出的
+       * 那个缺口的真正痛点）。
+       *
+       * 别的动作现在都是「就地变灰、留在原位」，唯独这一条**人会立刻从名单上
+       * 消失** —— 而且是解析器从你打的字里读出来的，你可能根本没打算这么做
+       * （「客户说这次先不考虑，别再打了」）。原先只回一句「✓ 记好了」，
+       * 人就没了，销售第一反应是「我是不是把他删了」。
+       *
+       * 消失本身是**刻意的、不改**（理由见 day-list.ts 里那段说明）：说过
+       * 「别再打」的人，最安全的状态就是立刻离开拨号名单。要修的是「不说话」。
+       */
+      onDone(
+        json.parsed?.do_not_contact
+          ? '✓ 记好了 —— 读出他说「别再联系」，已经从名单上撤下来。在下面「不用再联系」那一栏能找到他'
+          : '✓ 记好了',
+      )
     } catch (e) {
       setErr(e instanceof Error ? e.message : '没存上，再试一次')
     } finally {
