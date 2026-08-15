@@ -1,0 +1,136 @@
+/**
+ * 依赖图工具：悬空检测、requires/blocks 环检测、上下游查询。
+ *
+ * v1 刻意只有邻接表 + DFS —— 依赖列表比「大蜘蛛网」可读（WP 明文），
+ * 不引图形库、不做布局。
+ */
+
+import type { ComponentDependency, ProductMapComponent } from './types'
+
+/** 会形成「必须先于」关系、因此不允许成环的边类型。 */
+const ORDERING_EDGE_TYPES: ReadonlySet<ComponentDependency['type']> = new Set<
+  ComponentDependency['type']
+>(['requires', 'blocks'])
+
+export interface DanglingDependency {
+  readonly componentId: string
+  readonly dependency: ComponentDependency
+}
+
+export function findDanglingDependencies(
+  components: readonly ProductMapComponent[],
+): DanglingDependency[] {
+  const ids = new Set(components.map((c) => c.id))
+  const dangling: DanglingDependency[] = []
+  for (const c of components) {
+    for (const dep of c.dependencies) {
+      if (!ids.has(dep.target)) dangling.push({ componentId: c.id, dependency: dep })
+    }
+  }
+  return dangling
+}
+
+/**
+ * requires/blocks 环检测。返回找到的环（组件 id 序列，首尾同一个）；空数组 = 无环。
+ *
+ * 边方向统一成「先做谁」：`A requires B` → B 先于 A；`A blocks B` → A 先于 B。
+ * 两种边混在一张图上找环 —— 「A requires B 且 B requires A」和
+ * 「A requires B 且 A blocks B 的前置」一样是排不出顺序的死结。
+ */
+export function findOrderingCycles(components: readonly ProductMapComponent[]): string[][] {
+  const edges = new Map<string, string[]>()
+  const ids = new Set(components.map((c) => c.id))
+  for (const c of components) {
+    for (const dep of c.dependencies) {
+      if (!ORDERING_EDGE_TYPES.has(dep.type) || !ids.has(dep.target)) continue
+      const [from, to] = dep.type === 'requires' ? [dep.target, c.id] : [c.id, dep.target]
+      const list = edges.get(from) ?? []
+      list.push(to)
+      edges.set(from, list)
+    }
+  }
+
+  const cycles: string[][] = []
+  const visited = new Set<string>()
+  const onStack = new Set<string>()
+  const stack: string[] = []
+
+  function dfs(node: string): void {
+    visited.add(node)
+    onStack.add(node)
+    stack.push(node)
+    for (const next of edges.get(node) ?? []) {
+      if (onStack.has(next)) {
+        const start = stack.indexOf(next)
+        cycles.push([...stack.slice(start), next])
+      } else if (!visited.has(next)) {
+        dfs(next)
+      }
+    }
+    stack.pop()
+    onStack.delete(node)
+  }
+
+  for (const id of Array.from(ids)) {
+    if (!visited.has(id)) dfs(id)
+  }
+  return cycles
+}
+
+export interface ComponentNeighbours {
+  /** 本组件声明依赖的上游（requires/consumes/... 的 target）。 */
+  readonly upstream: readonly { id: string; type: ComponentDependency['type'] }[]
+  /** 声明依赖本组件的下游（谁的 dependencies 指向我）。 */
+  readonly downstream: readonly { id: string; type: ComponentDependency['type'] }[]
+}
+
+export function neighboursOf(
+  componentId: string,
+  components: readonly ProductMapComponent[],
+): ComponentNeighbours {
+  const self = components.find((c) => c.id === componentId)
+  const upstream = (self?.dependencies ?? []).map((d) => ({ id: d.target, type: d.type }))
+  const downstream: { id: string; type: ComponentDependency['type'] }[] = []
+  for (const c of components) {
+    if (c.id === componentId) continue
+    for (const dep of c.dependencies) {
+      if (dep.target === componentId) downstream.push({ id: c.id, type: dep.type })
+    }
+  }
+  return { upstream, downstream }
+}
+
+/**
+ * 被 blocker 卡住的组件，会沿 requires 边把「卡住」传导给下游
+ * （X 有 blocker 且 Y requires X → Y 实际也动不了）。
+ * 返回每个组件的传导来源列表（空 = 没被传导卡住）。
+ */
+export function propagateBlocked(
+  components: readonly ProductMapComponent[],
+): Map<string, string[]> {
+  const directlyBlocked = new Set(
+    components.filter((c) => c.currentBlockers.length > 0).map((c) => c.id),
+  )
+  const result = new Map<string, string[]>()
+  const byId = new Map(components.map((c) => [c.id, c]))
+
+  function blockedSources(id: string, seen: Set<string>): string[] {
+    if (seen.has(id)) return []
+    seen.add(id)
+    const c = byId.get(id)
+    if (!c) return []
+    const sources: string[] = []
+    for (const dep of c.dependencies) {
+      if (dep.type !== 'requires') continue
+      if (directlyBlocked.has(dep.target)) sources.push(dep.target)
+      sources.push(...blockedSources(dep.target, seen))
+    }
+    return sources
+  }
+
+  for (const c of components) {
+    const sources = Array.from(new Set(blockedSources(c.id, new Set())))
+    if (sources.length > 0) result.set(c.id, sources)
+  }
+  return result
+}
