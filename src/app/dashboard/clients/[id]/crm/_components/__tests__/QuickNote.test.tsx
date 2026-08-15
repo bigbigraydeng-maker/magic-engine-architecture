@@ -211,3 +211,29 @@ describe('方向：我打的 / 他打来的', () => {
     expect(directionOf(fetchMock.mock.calls[0])).toBe('inbound')
   })
 })
+
+/**
+ * 🔴 **方向变了也要换防重键**（Codex 复审 2026-08-15）。
+ *
+ * 第一次以「我打的」提交失败（触点可能已经写进去了），销售发现记错了方向、
+ * 切成「他打来的」、**原文一个字不改**再回车 —— 只比文字的话会复用老键，
+ * 服务端认成重复，**那通来电照旧被存成我们打出去的**，还可能因此把卡片
+ * 标成今天已处理，把一个还在等回复的客人藏起来。
+ */
+describe('方向变了也要换防重键', () => {
+  const refOf = (call: unknown[]) =>
+    JSON.parse((call[1] as RequestInit).body as string).clientRef as string
+
+  it('原文不变、只把方向切了 → 换一个新键', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('网络断了'))
+    const { box } = setup()
+    await userEvent.type(box, '客户打进来问报价{Enter}')
+    await waitFor(() => expect(screen.getByText(/网络断了/)).toBeTruthy())
+
+    await userEvent.click(screen.getByText('他打来的'))
+    await userEvent.type(box, '{Enter}')
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+
+    expect(refOf(fetchMock.mock.calls[1])).not.toBe(refOf(fetchMock.mock.calls[0]))
+  })
+})

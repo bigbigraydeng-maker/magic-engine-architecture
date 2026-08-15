@@ -182,6 +182,12 @@ export async function POST(
         tour_interest: result.parsed.tour_interest,
         competitor: result.parsed.competitor,
         callback_at: result.parsed.callback_at,
+        /**
+         * 解析器自己回答的「有没有约一个还没做的下一步」。
+         * 页面拿它决定要不要提示「没读懂你说的下次时间」——
+         * 比在前端用正则猜准得多（见 lib/crm/next-step 文件头）。
+         */
+        mentioned_next_step: result.parsed.mentioned_next_step,
       },
     })
   } catch (err) {

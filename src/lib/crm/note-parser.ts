@@ -45,6 +45,15 @@ export const NoteParseSchema = z.object({
   competitor: z.string().nullable(),
   /** 约定的下次联系时间，ISO；说不清就 null。 */
   callback_at: z.string().nullable(),
+  /**
+   * 这句话里**有没有承诺一个还没做的下一步**（不管时间说得清不清）。
+   *
+   * 跟 `callback_at` 分开的理由：那个是「算不算得出具体时刻」，这个是
+   * 「他到底有没有约」。两件事都要知道，才分得清三种结局 ——
+   * 约了且算得出（排上了）/ 约了但算不出（要告诉他没排上）/ 压根没约（别啰嗦）。
+   * 见 lib/crm/next-step。
+   */
+  mentioned_next_step: z.boolean().optional(),
   /** 一句中文人话，给销售看。 */
   summary: z.string(),
 })
@@ -155,6 +164,12 @@ Rules:
   time zone (also given). If no hour was said, use 09:00 local — the salesperson means "that morning".
   Still null when genuinely vague ("sometime next week", "will call back later") or when no next
   step was promised at all.
+- mentioned_next_step: true ONLY when the note promises a follow-up that has NOT happened yet
+  ("周五给报价" / "明天再打给他" / "call him back Friday").
+  **A COMPLETED action is false**: "刚给他报价了" / "资料发他了" / "已经打过了" / "sent the quote"
+  all describe what ALREADY happened — there is no pending next step.
+  A customer's TRAVEL date is not a next step either ("客户想 8 月 20 日出发" → false).
+  This is independent of callback_at: a vague "下周再联系" is true here but null there.
 - Never invent. If the note does not say it, the field is null.
 - outcome / do_not_contact are decided by rules elsewhere; fill your best guess, it will be overridden.
 
@@ -182,6 +197,7 @@ const NOTE_JSON_SCHEMA = {
     tour_interest: { type: ['string', 'null'] },
     competitor: { type: ['string', 'null'] },
     callback_at: { type: ['string', 'null'] },
+    mentioned_next_step: { type: 'boolean' },
     summary: { type: 'string' },
   },
   required: [
@@ -191,6 +207,7 @@ const NOTE_JSON_SCHEMA = {
     'tour_interest',
     'competitor',
     'callback_at',
+    'mentioned_next_step',
     'summary',
   ],
 } as const

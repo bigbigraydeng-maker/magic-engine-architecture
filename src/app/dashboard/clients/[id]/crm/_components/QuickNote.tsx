@@ -60,7 +60,13 @@ export function QuickNote({
    * 记着这件事**——「真相源是不可变的触点」那条约定当场破掉。
    */
   const clientRefRef = useRef(globalThis.crypto.randomUUID())
-  /** 上一次提交出去的原文 —— 用来判断「这次是重试还是改过了」。 */
+  /**
+   * 上一次提交出去的**完整内容**（原文 + 方向）—— 用来判断「这次是重试还是改过了」。
+   *
+   * 方向也必须算进去（Codex 复审 2026-08-15）：第一次失败后把「我打的」切成
+   * 「他打来的」、原文不改再回车 —— 只比文字的话会复用老键，服务端认成重复，
+   * **那通来电照旧被存成我们打出去的**，还可能因此把卡片标成今天已处理。
+   */
   const lastSubmittedRef = useRef<string | null>(null)
   const [note, setNote] = useState('')
   /**
@@ -85,11 +91,13 @@ export function QuickNote({
     setSaving(true)
     setErr(null)
 
-    // 上一次失败之后改过字 → 换一个防重键，否则这一版会被服务端当重复丢掉。
-    if (lastSubmittedRef.current !== null && lastSubmittedRef.current !== text) {
+    // 上一次失败之后改过内容（文字**或方向**）→ 换一个防重键，
+    // 否则这一版会被服务端当成重复丢掉。
+    const signature = `${inbound ? 'in' : 'out'}:${text}`
+    if (lastSubmittedRef.current !== null && lastSubmittedRef.current !== signature) {
       clientRefRef.current = globalThis.crypto.randomUUID()
     }
-    lastSubmittedRef.current = text
+    lastSubmittedRef.current = signature
 
     try {
       const res = await fetch(`/api/clients/${clientId}/crm/touchpoints`, {
@@ -107,7 +115,12 @@ export function QuickNote({
         created?: boolean
         /** 服务端解析下次时间时**实际用的**时区 —— 必须用它来显示，见下。 */
         timeZone?: string
-        parsed?: { callback_at?: string | null; do_not_contact?: boolean }
+        parsed?: {
+          callback_at?: string | null
+          do_not_contact?: boolean
+          /** 解析器自己回答的「有没有约下一步」—— 有它就别用正则猜。 */
+          mentioned_next_step?: boolean
+        }
       }
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`)
 
@@ -123,6 +136,7 @@ export function QuickNote({
           {
             callbackAt: json.parsed?.callback_at ?? null,
             doNotContact: json.parsed?.do_not_contact,
+            mentionedNextStep: json.parsed?.mentioned_next_step,
           },
           // 用**服务端排程时用的那个时区**，不是这里猜一个。差一个时区，
           // 确认里的日期就可能跟真正排上的那天差一天（澳洲客户按悉尼排，

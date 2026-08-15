@@ -239,3 +239,46 @@ describe('确认不许暗示这几天他会从名单上消失', () => {
     expect(msg()).toContain('最前面')
   })
 })
+
+/**
+ * 🔴 **解析器自己的回答优先于正则**（Codex 复审 2026-08-15 第四轮）。
+ *
+ * 正则分不清「刚给他报价了」（**已经做完**）和「周五给他报价」（还没做）——
+ * 而 QuickNote 本来就是用来记刚发生的事的，前者是常态。每记一笔就误报一次
+ * 「没读懂你说的下次时间」，假警报很快就会让真警报也被无视。
+ *
+ * 「有没有约一个还没做的下一步」是语义判断，读这句话的模型才答得准。
+ */
+describe('有没有约下一步：先信解析器，正则只兜底', () => {
+  it('解析器说「没约」→ 不提示，哪怕正则觉得像', () => {
+    // 正则会因为「给他报价」命中，但这件事已经做完了
+    const note = '刚给他报价了'
+    expect(mentionsTime(note)).toBe(true) // 正则的判断（会误报）
+    expect(noteConfirmation(note, { callbackAt: null, mentionedNextStep: false }, NZ)).toBe(
+      '✓ 记好了',
+    )
+  })
+
+  it('解析器说「约了」但没算出时间 → 照旧提示没排上', () => {
+    // 正则看不出这句里有下一步（没时间词、没动作词），但解析器读懂了
+    const note = '等他确认完人数我再报'
+    expect(mentionsTime(note)).toBe(false)
+    expect(
+      noteConfirmation(note, { callbackAt: null, mentionedNextStep: true }, NZ),
+    ).toContain('没读懂')
+  })
+
+  it('解析器没跑（undefined）→ 退回正则，不能整个不提示', () => {
+    expect(noteConfirmation('周五给报价', { callbackAt: null }, NZ)).toContain('没读懂')
+  })
+
+  /** 算出时间了就直接说哪天 —— 这个信号不影响那一支。 */
+  it('算出时间了，这个信号不改变结果', () => {
+    const s = noteConfirmation(
+      '周五给报价',
+      { callbackAt: '2026-08-20T21:00:00.000Z', mentionedNextStep: false },
+      NZ,
+    )
+    expect(s).toContain('周五')
+  })
+})
