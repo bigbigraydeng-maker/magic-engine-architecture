@@ -42,8 +42,12 @@ export interface ComponentSnapshot {
 export interface ProductMapSnapshot {
   readonly components: readonly ComponentSnapshot[]
   readonly validation: ValidationResult
-  /** 这份快照用的外部事实是哪来的（PR 1 恒为手工快照,控制台必须明示）。 */
-  readonly factsSource: 'manual_snapshot' | 'github_sync'
+  /**
+   * 外部事实来源(控制台必须明示):
+   * manual_snapshot = 全部手抄;github_sync = 全部来自同步;
+   * mixed = 混源 —— 不许把部分同步的快照整体自称机器核验。
+   */
+  readonly factsSource: 'manual_snapshot' | 'github_sync' | 'mixed'
 }
 
 export function buildProductMapSnapshot(
@@ -57,14 +61,16 @@ export function buildProductMapSnapshot(
     neighbours: neighboursOf(component.id, components),
     inheritedBlockedBy: blocked.get(component.id) ?? [],
   }))
-  // TODO(PR2): 混源快照(部分 PR 已同步、部分仍手抄)不许整体自称 github_sync ——
-  // PR2 落地前改为按 PR 粒度暴露来源,或加 'mixed' 档。PR1 阶段恒为 manual_snapshot,无混源。
-  const allSynced =
-    Object.values(facts.pullRequests).length > 0 &&
-    Object.values(facts.pullRequests).every((f) => f.source === 'github_sync')
+  const sources = Object.values(facts.pullRequests).map((f) => f.source)
+  const factsSource =
+    sources.length > 0 && sources.every((s) => s === 'github_sync')
+      ? 'github_sync'
+      : sources.some((s) => s === 'github_sync')
+        ? 'mixed'
+        : 'manual_snapshot'
   return {
     components: snapshots,
     validation: validateRegistry(components, facts),
-    factsSource: allSynced ? 'github_sync' : 'manual_snapshot',
+    factsSource,
   }
 }
