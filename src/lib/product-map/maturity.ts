@@ -66,21 +66,11 @@ function hasProductionValidation(c: ProductMapComponent): boolean {
   return c.origin === 'me2_native' && c.productionEvidence.length > 0
 }
 
-const OBSERVED_AT_PATTERN = /^\d{4}-\d{2}-\d{2}$/
-
-/**
- * observedAt 必须是合法的 `YYYY-MM-DD` 真实日历日期 —— 否则任意两条不同的
- * 非法字符串（如 'foo' / 'bar'）也能撑起「两个不同观察日」，绕过 M5 硬门。
- */
-function isValidObservedAt(observedAt: string): boolean {
-  if (!OBSERVED_AT_PATTERN.test(observedAt)) return false
-  const [year, month, day] = observedAt.split('-').map(Number)
-  const date = new Date(Date.UTC(year, month - 1, day))
-  return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day
-  )
+/** 严格 YYYY-MM-DD 且真实日历日:'foo'/'bar' 这类脏值按字面去重会绕开 M5 硬门。 */
+function isValidObservationDay(value: string | undefined): value is string {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const parsed = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
 }
 
 /** M5：≥2 条 recurring_outcome 且观察日不同 —— 一次性跑通不算「持续在学习」。 */
@@ -88,8 +78,8 @@ function hasRecurringLearning(c: ProductMapComponent): boolean {
   if (c.origin !== 'me2_native') return false
   const days = new Set(
     c.learningEvidence
-      .filter((e) => e.kind === 'recurring_outcome' && e.observedAt && isValidObservedAt(e.observedAt))
-      .map((e) => e.observedAt as string),
+      .filter((e) => e.kind === 'recurring_outcome' && isValidObservationDay(e.observedAt))
+      .map((e) => e.observedAt),
   )
   return days.size >= 2
 }

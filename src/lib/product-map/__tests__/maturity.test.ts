@@ -109,26 +109,17 @@ describe('M4/M5 的硬门', () => {
     expect(evidenceCeiling(oneOnly, makeFacts([mergedPr(100)])).ceiling).toBe('M4_PRODUCTION_VALIDATED')
   })
 
-  it('observedAt 非法格式（非 YYYY-MM-DD）不算数,不许拿两条乱码字符串凑出 M5', () => {
+  it("observedAt 必须是真实的 YYYY-MM-DD:'foo'/'bar' 按字面去重不许骗到 M5", () => {
     const base = {
       contractEvidence: [CONTRACT],
       linkedPullRequests: [{ number: 100, role: 'implements' as const }],
       integrationEvidence: [INTEGRATION],
       productionEvidence: [PRODUCTION],
     }
-    const c = makeComponent({ ...base, learningEvidence: [learning('foo'), learning('bar')] })
-    expect(evidenceCeiling(c, makeFacts([mergedPr(100)])).ceiling).toBe('M4_PRODUCTION_VALIDATED')
-  })
-
-  it('observedAt 是不存在的日历日期（如 2026-02-30）不算数', () => {
-    const base = {
-      contractEvidence: [CONTRACT],
-      linkedPullRequests: [{ number: 100, role: 'implements' as const }],
-      integrationEvidence: [INTEGRATION],
-      productionEvidence: [PRODUCTION],
-    }
-    const c = makeComponent({ ...base, learningEvidence: [learning('2026-02-30'), learning('2026-08-14')] })
-    expect(evidenceCeiling(c, makeFacts([mergedPr(100)])).ceiling).toBe('M4_PRODUCTION_VALIDATED')
+    const dirty = makeComponent({ ...base, learningEvidence: [learning('foo'), learning('bar')] })
+    expect(evidenceCeiling(dirty, makeFacts([mergedPr(100)])).ceiling).toBe('M4_PRODUCTION_VALIDATED')
+    const fakeDay = makeComponent({ ...base, learningEvidence: [learning('2026-02-30'), learning('2026-08-14')] })
+    expect(evidenceCeiling(fakeDay, makeFacts([mergedPr(100)])).ceiling).toBe('M4_PRODUCTION_VALIDATED')
   })
 })
 
