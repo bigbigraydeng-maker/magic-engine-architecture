@@ -32,10 +32,18 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   const cronRun = await startCronRun('product-map-sync')
 
-  const token = process.env.GITHUB_TOKEN
+  const token = process.env.GITHUB_TOKEN?.trim()
   if (!token) {
+    // 诊断:只报「进程里看得见哪些 GITHUB_* 变量名 + 值长度」,绝不输出值。
+    // 「面板显示变量在」≠「进程读得到」,这一行让下一次点火直接看清是空值/错名/没重部署。
+    const seen = Object.keys(process.env)
+      .filter((k) => k.toUpperCase().includes('GITHUB'))
+      .map((k) => `${k}(len=${process.env[k]?.length ?? 0})`)
     await cronRun.finish({ error: 'GITHUB_TOKEN 未配置 —— 同步无法运行' })
-    return NextResponse.json({ status: 'failed', reason: 'GITHUB_TOKEN 未配置' }, { status: 500 })
+    return NextResponse.json(
+      { status: 'failed', reason: 'GITHUB_TOKEN 未配置', github_env_seen: seen },
+      { status: 500 },
+    )
   }
 
   try {
