@@ -361,7 +361,25 @@ export function withoutOurActionsSince(contact: ContactLike, sinceMs: number): C
     return at >= sinceMs
   }
 
-  // 今天按过「推迟」→ 冻结副本上当作还没推迟。
+  /**
+   * 今天按过「推迟」→ 冻结副本上当作还没推迟。
+   *
+   * ⚠️ **给以后加「重新推迟」入口的人**（Codex 复审 2026-08-15 第五轮提出，
+   * 当前界面到不了，所以这一版不动行为，只把雷标出来）：
+   *
+   * 这里假定「今天推迟过」等于「他今天早上还在名单上」。目前成立 ——
+   * 推迟按钮只长在今天名单的卡片上，昨天推迟的人根本不在那儿；今天推迟的人
+   * 虽然还在（灰卡），但他早上确实在名单上，清掉是对的。
+   *
+   * 一旦有了「给已经推迟的人改期 / 延期」的入口，这个假定就破了：一个上周
+   * 推到下个月的人今天被延期，会带上一笔今天的 `'snooze'` → 这里无条件清掉
+   * 冻结副本上那个**日初就有效**的推迟 → 他按历史触点被判回 warm，
+   * 塞进今天的名单。
+   *
+   * 那时的修法跟阶段那条对称（见 `stageSuppressedToday`）：写入侧比较
+   * 「改之前有没有还没到期的推迟」，是延期就换一个不清任何东西的标记值
+   * （`'unsnooze'` 那样），别在这里猜。
+   */
   const snoozedToday = contact.touchpoints.some((t) => t.action === 'snooze' && ourOutboundToday(t))
 
   return {

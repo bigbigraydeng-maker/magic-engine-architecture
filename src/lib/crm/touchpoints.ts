@@ -109,9 +109,25 @@ export async function recordManualTouchpoint(
     throw new Error('recordManualTouchpoint 需要 clientRef(幂等键)')
   }
 
+  /**
+   * **相对日期要按「这通电话是什么时候打的」算，不是按「什么时候录进系统的」**
+   * （Codex 复审 2026-08-15 第五轮）。
+   *
+   * 这个接口本来就支持补记（路由注释写着「补记历史电话是常态」）。补记昨天
+   * 那通电话、笔记里写「明天上午再打」—— 不传 `occurredAt` 当基准的话，
+   * 「明天」会按今天算，**下一步整整晚一天排上**，而销售以为已经排好了。
+   *
+   * 时间坏掉时 `new Date()` 兜底：解析器宁可按今天算，也不能拿 Invalid Date
+   * 去推日期（那会让整条 callback 变成 null，静悄悄少排一次跟进）。
+   */
+  const noteBasis = new Date(occurredAt)
   const parsed =
     input.parsed ??
-    (await parseNote(note, { brandTerms: input.brandTerms, timeZone: input.timeZone }))
+    (await parseNote(note, {
+      brandTerms: input.brandTerms,
+      timeZone: input.timeZone,
+      now: Number.isNaN(noteBasis.getTime()) ? new Date() : noteBasis,
+    }))
 
   // 1) 幂等写触点。ignoreDuplicates → ON CONFLICT DO NOTHING:
   //    命中冲突时 select 返回空,maybeSingle() 得到 null,created=false。

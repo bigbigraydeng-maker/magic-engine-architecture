@@ -443,7 +443,10 @@ function CardExits({
       {menu === 'drop' && (
         <div className="flex flex-wrap items-center gap-1">
           <span className="mr-0.5 text-[12.5px] text-me-charcoal/45">
-            确定？他从今天起不再出现在名单里
+            {/* 跟下面那句成功提示、以及卡片真实的样子保持一致（Codex 第五轮）：
+                这一版他今天**留在原地变灰**，明天起才不出现。原先这里写「从今天起
+                不再出现」，销售在按下去之前和按下去之后会收到两句相反的说明。 */}
+            确定？卡片今天留个记号，明天起不再出现在名单里
           </span>
           <button
             type="button"
