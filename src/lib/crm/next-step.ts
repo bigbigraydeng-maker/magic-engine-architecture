@@ -86,15 +86,18 @@ export interface NoteOutcome {
 export function noteConfirmation(
   note: string,
   outcome: NoteOutcome,
-  timeZone = 'Pacific/Auckland',
+  timeZone?: string | null,
 ): string {
+  // 调用方（页面）拿的是服务端回的时区。老部署 / 字段缺失时退回 NZ ——
+  // 两个客户目前都在纽西兰，猜错也只差两小时，比整句话不显示强。
+  const tz = timeZone || 'Pacific/Auckland'
   // 「别再联系」优先说 —— 这一条人会立刻从名单上消失，不说清楚他会以为自己删错了。
   // （消失本身是刻意的，理由见 lib/crm/day-list 的 withoutOurActionsSince。）
   if (outcome.doNotContact) {
     return '✓ 记好了 —— 读出他说「别再联系」，他不会再进「今天要联系」的名单。档案还在，「全部客人」里随时翻得到'
   }
 
-  const when = outcome.callbackAt ? nextStepDate(outcome.callbackAt, timeZone) : null
+  const when = outcome.callbackAt ? nextStepDate(outcome.callbackAt, tz) : null
   if (when) {
     return `✓ 记好了 —— ${when} 会把他放回今天的名单，到时候提醒你`
   }

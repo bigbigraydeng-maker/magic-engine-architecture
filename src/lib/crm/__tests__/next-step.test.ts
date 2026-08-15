@@ -110,3 +110,34 @@ describe('像不像提到了下次时间', () => {
     expect(mentionsTime(s)).toBe(false)
   })
 })
+
+/**
+ * 🔴 **确认里那个日期，必须跟服务端真正排上的那天是同一天**
+ * （Codex 复审 2026-08-15）。
+ *
+ * 澳洲客户的路由用 `Australia/Sydney` 解析相对时间。如果页面这边按
+ * `Pacific/Auckland` 显示，销售说的「周五晚上 11 点」会被排在悉尼周五、
+ * 却确认成奥克兰周六 —— **而这句话存在的全部意义就是让他核对**。
+ * 差一天的确认比不确认更糟：他会以为自己记错了，或者信了错的那天。
+ */
+describe('确认用的时区 = 服务端排程用的时区', () => {
+  // 悉尼周五 23:00 = UTC 13:00；同一时刻在奥克兰已经是周六 01:00
+  const FRI_NIGHT_SYDNEY = '2026-08-21T13:00:00.000Z'
+
+  it('澳洲客户按悉尼说 —— 周五就是周五', () => {
+    const s = noteConfirmation('周五晚上给报价', { callbackAt: FRI_NIGHT_SYDNEY }, 'Australia/Sydney')
+    expect(s).toContain('周五')
+  })
+
+  it('同一时刻按奥克兰说会变成周六 —— 正是要避免的那个结果', () => {
+    const s = noteConfirmation('周五晚上给报价', { callbackAt: FRI_NIGHT_SYDNEY }, 'Pacific/Auckland')
+    expect(s).toContain('周六')
+  })
+
+  /** 服务端没回时区（老部署 / 字段缺失）→ 退回 NZ，不能整句话不显示。 */
+  it.each([undefined, null, ''])('时区缺失（%s）→ 退回纽西兰，照常给出日期', (tz) => {
+    const s = noteConfirmation('周五给报价', { callbackAt: '2026-08-20T21:00:00.000Z' }, tz)
+    expect(s).toContain('周五')
+    expect(s).not.toContain('没读懂')
+  })
+})

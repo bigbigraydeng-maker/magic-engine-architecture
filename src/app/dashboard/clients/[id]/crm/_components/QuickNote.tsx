@@ -63,6 +63,8 @@ export function QuickNote({
       const json = (await res.json()) as {
         error?: string
         created?: boolean
+        /** 服务端解析下次时间时**实际用的**时区 —— 必须用它来显示，见下。 */
+        timeZone?: string
         parsed?: { callback_at?: string | null; do_not_contact?: boolean }
       }
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`)
@@ -74,10 +76,17 @@ export function QuickNote({
       }
 
       onDone(
-        noteConfirmation(text, {
-          callbackAt: json.parsed?.callback_at ?? null,
-          doNotContact: json.parsed?.do_not_contact,
-        }),
+        noteConfirmation(
+          text,
+          {
+            callbackAt: json.parsed?.callback_at ?? null,
+            doNotContact: json.parsed?.do_not_contact,
+          },
+          // 用**服务端排程时用的那个时区**，不是这里猜一个。差一个时区，
+          // 确认里的日期就可能跟真正排上的那天差一天（澳洲客户按悉尼排，
+          // 这边按奥克兰显示）—— 而这句话存在的全部意义就是让他核对。
+          json.timeZone,
+        ),
       )
     } catch (e) {
       setErr(e instanceof Error ? e.message : '没存上，再试一次')
@@ -96,6 +105,16 @@ export function QuickNote({
         value={note}
         onChange={(e) => setNote(e.target.value)}
         onKeyDown={(e) => {
+          // 🔴 **正在选字时按的回车不算提交**（Codex 复审 2026-08-15）。
+          //
+          // CTS 的销售打中文：敲拼音 → 候选框弹出来 → **按回车选字**。
+          // 那一下的按键事件同样是 Enter，但 `isComposing` 是 true。
+          // 不挡的话，笔记会在**只打了半句**的时候存下去、输入框当场收起 ——
+          // 而且他多半不会重打一遍，那半句就成了这个客人的全部记录。
+          //
+          // 用 `e.nativeEvent.isComposing`：React 的合成事件不带这个字段。
+          if (e.nativeEvent.isComposing) return
+
           // 回车提交、Shift+回车换行 —— 他另一只手在拿电话。
           if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
