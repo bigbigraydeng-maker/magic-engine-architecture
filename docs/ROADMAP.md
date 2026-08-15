@@ -66,6 +66,7 @@
 - [ ] **WP09 / WP10** [#884](https://github.com/bigbigraydeng-maker/magic-engine/issues/884) / [#885](https://github.com/bigbigraydeng-maker/magic-engine/issues/885) 首次 1–3 页优化 → T+7/14/28 复测与学习（严格串行，**两项均未开工**）
 - [x] ~~**U11**~~ ✅ **已完成** —— `docs/STATE.md` 与本文件的 ME2 条目已补齐（本 PR）
 - [ ] **WP00 §15 其余未决项**（**U1–U10、U12**）仍**单独**以未决形态挂着，**任何 WP 不许把它们当既定假设**
+- [ ] **Product Map PR2 / PR3**（WP「ME2 Product Map v1」的后两段;PR1 组件登记册＋成熟度引擎已于 2026-08-15 合并,PR [#976](https://github.com/bigbigraydeng-maker/magic-engine/pull/976),代码在 `src/lib/product-map/`,25 组件 / 136 测试 / 11 变异探针）—— **PR2**:GitHub 只读动态同步（webhook 验签＋防重投＋定时对账＋快照持久化 migration 文件＋fake store;真 credential / webhook secret / migration apply 全部另行授权）· **PR3**:`/dashboard/me2/product-map` PO 控制台四视图（业务总览 / 组件清单 / 依赖 / 待拍板队列;同步未开通时降级显示登记册）。两段开工均需 PO 授权,严格顺序 PR2 → PR3
 
 **独立并行、不并入本链**：[#886](https://github.com/bigbigraydeng-maker/magic-engine/issues/886) Operating Brief（参考闭环稳定前不开工）· [#887](https://github.com/bigbigraydeng-maker/magic-engine/issues/887) 广告安全泳道（**不许夹带进任何 ME2 的 WP**）
 
@@ -529,74 +530,6 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] **做片任务表防双击唯一索引** —— 动数据库，🔴 **PM `go apply`**
 - [ ] **数字人首跑实测** —— 生成要花钱，需 PM 说一声再试
 - [ ] **发布端按平台带不同 CTA 接线**
-
-## Phase 21.F — 真拍素材内容整理自动化 ⛔ 已登记，**暂不开工**（2026-08-14 核查）
-
-> **结论：现在不做。** 触发条件未满足。按 [ENGINEERING_QUALITY_GATES §4.2](./ENGINEERING_QUALITY_GATES.md)，
-> 「素材越攒越值钱 / 以后可能用」**不构成立项理由**，必须有当前调用方或验收条件。
-
-**现状（2026-08-14 生产库实测，非文档推断）**
-
-- `video_clips` track=`a_real`：19 条（Oztop 展厅 7 + Roman 30-Kiteroa 12），全部已带 `scene_tag` 与 `shot_note`（细到「中段楼梯糊焦」「有一帧拍到垃圾桶」「镜中出现拍摄者」）
-- 但那些看得懂内容的标签（`shot_note`）来源是 `source_meta.tagged_by = 'human-reviewed 2026-08-03'` —— **人工逐条看完手写，系统未参与**
-- `client_assets` 视频行 **0 条**：免登录上传通道从未收到过视频（图片 83 条，81 条已自动打标）
-- 19 条分两批进来，来源不同：Oztop 7 条走 `scripts/factory-worker/ingest-clips.mjs`（`source_meta.seed='b4-ingest'`，`scene_tag` 从文件名推，不看画面内容）；Roman 12 条是人工逐条看完手写（带 `shot_note` + `tagged_by`）
-- ⚠️ `usage_count` **不能当消费证据** —— 全仓无任何 `+1` 写入方（`evaluate.ts` 只读、`strategist.ts` 只用于排序、`ingest-clips.mjs` 只初始化为 0），值恒为入库初值。实测对不上：a_real 计数合计 2、b_generated 合计 0
-- ✅ 但**消费事实查得出来**：`evaluate.ts:375` 建单时把选中的素材写进 `content_work_order_clips`，而 `complete-work-order.ts` 只在红线复扫 → clip 入库 → 台账落账**全部成功后**才把工单置 `in_review`（且用 `.select()` 判行数，防被 sweeper 收回后伪装成功）。所以「关联表 ⋈ 已交付工单」就是可信的消费真值
-- 实测（2026-08-14）：关联表 75 行 / 工单 22 个（**最大一类是 `review_rejected` 9 个**，其余 in_review 6 / archived 3 / published·rendered·queued·superseded 各 1）；按下方判据算，**a_real 19 条中 5 条已进入成片**，b_generated 231 条中 17 条
-
-**为什么现在不做**：人工整理**只发生过 1 次**，尚未构成「重复操作」。铁律 3 针对的是把重复丢给人工，单次不触发。
-PM 2026-08-14 答复：无第二批真拍素材排队，**且不确定后续是否会有** —— 所以按触发条件等，不预先建设。
-
-**触发条件（满足任一即立即开工，不再重新讨论）**
-
-1. 第二次需要人工整理真拍素材时
-2. 单批真拍素材 ≥ 30 条时
-3. **进入交付成片的 a_real 素材累计 ≥ 15 条**（当前 5 条 / 共 19 条）—— 判据用关联表，不用 `usage_count`：
-
-```sql
--- 判据取「排除未交付态」而非「枚举已完成态」：工单状态会继续流转
--- (in_review → approved → publishing → published/publish_failed，或 → review_rejected)，
--- 用正列表枚举会让已计入的素材随状态变化掉出累计值，计数倒退。
---
--- 排除的五个状态分两类，缺一类就会算错：
---   还没跑完：queued / claimed / producing            —— 算进来 = 提前触发
---   跑挂了：  failed / dead_letter                    —— 同上，这两个是终态但从未交付
---     · failed     = evaluate.ts 在 clip 关联已插入、后续持久化失败时置
---                    (reject_reason='persist_incomplete')，关联表有行但成片不存在
---     · dead_letter= worker/[id]/fail 不可重试或超限时置
-select count(distinct c.clip_id)
-from content_work_order_clips c
-join content_work_orders o on o.id = c.work_order_id
-join video_clips v on v.id = c.clip_id
-where o.status not in ('queued','claimed','producing','failed','dead_letter')
-  and v.track = 'a_real';
-```
-
-> 🔴 **不要改用 `output is not null`** —— 实测 `queued` 状态的工单也带 `output`（22 个工单全部非空），拿它当交付事实会把没跑完的也算进来。
-> 拒绝走的是**新开一单**（`review-apply.ts` 的 `reopened_work_order_id`），旧单停在 `review_rejected` 不再变，所以排除未完成态的判据是单调的。
-
-> 该条曾一度按「`usage_count` 合计 ≥ 20」写、又一度整条撤下，两次都不对：计数确实是死的，但消费事实本就有现成真值（关联表），撤掉等于无故阻断这个触发条件。
-> **不要**改去依赖 `usage_count` —— 那会让同一件事有两份真值，早晚漂移。
-
-- [ ] **P21.F.1 用片计数回填**（P3，无人认领）— `strategist.ts:288` 按 `usage_count` 排序做「冷素材优先」，而该值恒为 0，等于**这条排序规则现在是空转的**（所有素材看起来一样冷）。这是个**排序缓存**问题，与上面的消费触发条件无关，不构成它的前置。修法应是从关联表回填 / 派生，而不是另起一份计数。
-
-**开工时风险级别：A 级**（命中质量闸 §2 三项）—— ①供应商花费：转写／视频理解按量计费，须先声明单条成本与硬上限，**建不起来 fail closed**；②要加列存内容标签；③跨客户边界：`loadIngestedPaths` 现有「查询恒带 client_id」约束扩展时必须保持。
-
-**已有可复用零件（开工时直接接，不要重写）**
-
-| 零件 | 位置 | 现在的用途 |
-|---|---|---|
-| 真拍进料**判断段**（ffprobe 探测 + 查重 + 画幅判定 + 生成候选） | `src/lib/factory/real-footage-ingest.ts` | 纯判断逻辑，**到 `buildCandidates` 为止**；不上传、不入库。零生产调用方（仅测试引用） |
-| 真拍进料**落地段**（上传 Storage + 插 `video_clips`） | `scripts/factory-worker/ingest-clips.mjs` | 手工命令行脚本，要人在终端敲；`scene_tag` 从文件名推，**不看画面内容** |
-| 视频内容理解（Gemini 看片打分 + 提炼手法） | `src/lib/reels/viral-analyzer.ts` | 只用于拆他人爆款 |
-| 带时间轴转写（start/end/text 分段） | `src/lib/supadata/client.ts` | 只吃外部平台 URL |
-| 转写 → 结构提炼（钩子/结构/节奏/CTA） | `src/lib/content/video-analyzer.ts` | 只用于爆款拆解 |
-| 图片自动打标 | `/api/cron/vision-analyzer` | 在跑，只处理图片 |
-
-即：**不是新建系统，但也不是「接上一根现成的管子」** —— 进料管本身是断成两截的（判断段在 lib、落地段在手工脚本，两边各自实现了一遍 ffprobe 与查重），开工时第一步是把这两截并成一条能被程序调用的路径，再往上接内容理解。
-
-**明确不做**：不自建时间线剪辑器。ChatCut（无服务端接口，须真人全程陪同）与 OpenChatCut（AGPL 传染 + 对外接口不含导出 + 需图形界面）2026-08-14 已逐条核查否决。
 
 ## Phase 22.E — SEO 盯梢体系（S15-S18）📋 2026-07-31 立项，按序推进
 
