@@ -126,6 +126,27 @@ export interface TouchpointLike {
    * 信号本身就不可信。
    */
   engagement?: 'open' | 'click' | null
+  /**
+   * 这一笔出站是**机器发的**（群发工具、AI 外呼），不是人做的动作。
+   *
+   * 判据在 lib/crm/automated-touch。加在这里是因为 `needsMeAgain`（day-list）
+   * 要判「我们今天最后一次**真人**出手是几点」—— 拿一封 16:00 的群发当
+   * 「我们出手了」，会把 15:00 客人的回信整个盖住，当天最热的线索被折叠掉。
+   *
+   * ⚠️ **本文件的 `segmentContact` 目前不读它**（ROADMAP M2.7f）—— 一封群发
+   * 照样被它当成「我们最后一次出站」，于是「客人回话了」那条规则不成立，
+   * 人掉进别的桶。这里写明，是因为**一个只接了一半的概念会坑下一个人**，
+   * 而这个字段本身就是为了修那种坑才加的。
+   */
+  automated?: boolean
+  /**
+   * 这一笔是销售**按了哪个按钮**，不是聊了什么（目前只有 `'snooze'`）。
+   *
+   * `withoutOurActionsSince`（day-list）靠它认出「今天这个人是被推迟的」，
+   * 从而在冻结副本上把 `snoozeUntil` 一起清掉 —— 否则冻结版和实时版双双
+   * 「已排除」，人点完推迟就从名单上消失了。写入侧见 `RecordTouchpointInput.action`。
+   */
+  action?: 'snooze' | null
   outcome?: string | null
   travelWindow?: string | null
   callbackAt?: string | null
@@ -168,6 +189,14 @@ export interface ContactLike {
    * 于是重算的结果跟着变；而手动改分组是把结果按住，那种状态没人会去维护。
    */
   snoozeUntil?: string | null
+  /**
+   * 阶段最后一次被改的时间（`contacts.stage_updated_at`，改阶段路由每次都在写）。
+   *
+   * `segmentContact` 自己不读它 —— 用处只有一个：让 `withoutOurActionsSince`
+   * 判断「这个人是**今天**被推到成交/停止营销的」，从而在冻结副本上把
+   * `stageSuppressed` 清掉，人留在原位变灰，而不是点完就消失。
+   */
+  stageUpdatedAt?: string | null
   /**
    * 这个人**实际能怎么被联系到**。
    *
@@ -404,8 +433,12 @@ export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
     return make('excluded', label ? `已经是「${label}」了` : '已推进到不再联系的阶段', 'none')
   }
   if (outcomes.some((o) => DEAD_OUTCOMES.has(o))) {
-    const why = latestOutcome === 'bad_number' ? '号码是坏的，打不通也发不了短信'
-      : latestOutcome === 'not_interested' ? '聊过了，明确没兴趣'
+    // 措辞按销售的说法写（板桥 2026-08-06）：
+    //  · 「号码是坏的」不是人说的话（电池是坏的；号码是空号 / 停机）
+    //  · 按钮上写「他不买了」，这里原先写「聊过了，明确没兴趣」——
+    //    销售得在脑子里翻译一次才能确认「我刚才点的是这个吗」，两处用同一句话
+    const why = latestOutcome === 'bad_number' ? '号码不通，得换个号才能联系'
+      : latestOutcome === 'not_interested' ? '他说不买了'
       : '结局已定'
     return make('excluded', why, 'none')
   }
@@ -531,11 +564,21 @@ export function todayWorklist(
   return contacts
     .map((c) => ({ ...c, seg: segmentContact(c, now) }))
     .filter((c) => c.seg.temperature === 'hot' || c.seg.temperature === 'warm')
-    .sort(
-      (a, b) =>
-        a.seg.priority - b.seg.priority ||
+    .sort((a, b) => compareForWorklist(a.seg, b.seg))
+}
+
+/**
+ * 名单里谁排前面。
+ *
+ * 单独导出是因为「今天的名单一天不变」那条路（lib/crm/day-list）要用同一个
+ * 排序 —— 两边各写一套的话，同一个人在两处会排在不同位置，而排序正是
+ * 销售用来记「我推到哪了」的东西。
+ */
+export function compareForWorklist(a: SegmentResult, b: SegmentResult): number {
+  return (
+        a.priority - b.priority ||
         // 约好的时间越早越该先打
-        (a.seg.dueAt && b.seg.dueAt ? ts(a.seg.dueAt) - ts(b.seg.dueAt) : 0) ||
+        (a.dueAt && b.dueAt ? ts(a.dueAt) - ts(b.dueAt) : 0) ||
         // 其余按桶的性质决定方向 —— 两种需求是真的冲突，不能一刀切：
         //
         //  · 热线索桶（新客人 / 客户回话了）：最近的排前面。线索会凉，
@@ -544,10 +587,10 @@ export function todayWorklist(
         //    自相矛盾。
         //  · 回捞桶（打过没人接 / 聊过没下文）：等得最久的排前面。这批人本来
         //    就是要防止沉底才单独成桶的，按最近排等于让老线索永远轮不到。
-        (FRESH_FIRST_SEGMENTS.has(a.seg.segment) && FRESH_FIRST_SEGMENTS.has(b.seg.segment)
-          ? ts(b.seg.lastTouchAt) - ts(a.seg.lastTouchAt)
-          : ts(a.seg.lastTouchAt) - ts(b.seg.lastTouchAt)),
-    )
+        (FRESH_FIRST_SEGMENTS.has(a.segment) && FRESH_FIRST_SEGMENTS.has(b.segment)
+          ? ts(b.lastTouchAt) - ts(a.lastTouchAt)
+          : ts(a.lastTouchAt) - ts(b.lastTouchAt))
+  )
 }
 
 /** 各段人数，给页面顶部的统计条。 */

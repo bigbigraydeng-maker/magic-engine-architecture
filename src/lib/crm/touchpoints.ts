@@ -34,6 +34,12 @@ export interface RecordTouchpointInput {
   clientRef: string
   /** 竞品清洗用的品牌词(客户 brand_aliases);不传则 parseNote 用内置 CTS 词。 */
   brandTerms?: string[]
+  /**
+   * 客户所在地时区（NZ 客户传 Pacific/Auckland）。解析「周五给报价」这类
+   * **相对日期**的下一步时间要靠它 —— 按服务器的 UTC 算，销售晚上记的
+   * 「明天上午」会落到他心里的今天，这一笔当场就过期。
+   */
+  timeZone?: string
   /** contact 现有的 last_seen_at,用于取 max、不把时间往回拨。 */
   currentLastSeenAt?: string | null
   /**
@@ -55,6 +61,20 @@ export interface RecordTouchpointInput {
    * 生成的、根本不含客户信息,解析它没有任何意义。
    */
   parsed?: NoteParse
+  /**
+   * 这一笔不是「聊了什么」，是**销售按了哪个按钮**（目前只有 `'snooze'`）。
+   *
+   * 为什么必须留这个标记（day-list 的 M2.7a 缺口）：「推迟」改的是 contact 上的
+   * `snooze_until`，冻结副本原样带过去，于是冻结版和实时版**双双**判「已排除」，
+   * 被名单过滤掉 —— 人点完就消失，正是这套冻结机制要修的那个毛病。
+   *
+   * 修法不需要加列：推迟本来就写了一笔今天的出站触点，只要能认出「这一笔是
+   * 推迟」，`withoutOurActionsSince` 就能在摘掉它的同时把冻结副本上的
+   * `snoozeUntil` 一起清掉，人就留在原位变灰。
+   *
+   * 只标**按钮动作**，不标聊天内容 —— 手打的笔记不带这个字段。
+   */
+  action?: 'snooze' | null
 }
 
 export interface RecordTouchpointResult {
@@ -83,7 +103,9 @@ export async function recordManualTouchpoint(
     throw new Error('recordManualTouchpoint 需要 clientRef(幂等键)')
   }
 
-  const parsed = input.parsed ?? (await parseNote(note, { brandTerms: input.brandTerms }))
+  const parsed =
+    input.parsed ??
+    (await parseNote(note, { brandTerms: input.brandTerms, timeZone: input.timeZone }))
 
   // 1) 幂等写触点。ignoreDuplicates → ON CONFLICT DO NOTHING:
   //    命中冲突时 select 返回空,maybeSingle() 得到 null,created=false。
@@ -107,6 +129,9 @@ export async function recordManualTouchpoint(
           callback_at: parsed.callback_at,
           // 谁记的。没有它，销售早上分不清「昨天聊过」是不是自己聊的。
           logged_by: loggedByEmail ?? null,
+          // 销售按的是哪个按钮（只有「推迟」会带）。读路径靠它把冻结副本上的
+          // snooze_until 一并清掉，人才不会点完就消失。见 RecordTouchpointInput.action。
+          action: input.action ?? null,
         },
         source: 'me_manual',
         source_ref: clientRef,

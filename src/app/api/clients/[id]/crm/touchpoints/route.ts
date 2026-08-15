@@ -119,11 +119,14 @@ export async function POST(
   }
 
   // 竞品清洗用客户自己的品牌词(没有就让 parseNote 用内置 CTS 词)。
+  // country 用来定时区 —— 「周五给报价」这类相对日期要按客户所在地算。
   const { data: client } = await supabaseAdmin
     .from('clients')
-    .select('brand_aliases')
+    .select('brand_aliases, country')
     .eq('id', clientId)
     .maybeSingle()
+  const timeZone =
+    (client?.country ?? '').toUpperCase() === 'AU' ? 'Australia/Sydney' : 'Pacific/Auckland'
   const aliases = client?.brand_aliases
   const brandTerms =
     Array.isArray(aliases) && aliases.length > 0
@@ -139,6 +142,7 @@ export async function POST(
       occurredAt,
       clientRef,
       brandTerms,
+      timeZone,
       currentLastSeenAt: contact.last_seen_at as string | null,
       // 结论已经确定就不再问 AI。note 是我们自己写死的一句话，
       // 里面没有任何客户信息，解析它既慢又白花钱，而且可能读错。

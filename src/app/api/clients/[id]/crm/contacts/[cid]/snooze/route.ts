@@ -85,6 +85,9 @@ export async function PATCH(
       clientRef: typeof body.clientRef === 'string' && body.clientRef ? body.clientRef : crypto.randomUUID(),
       loggedByEmail: access.user?.email ?? null,
       currentLastSeenAt: (existing.last_seen_at as string | null) ?? null,
+      // 标成「按钮动作」。没有它，今天被推迟的人会从名单上凭空消失 ——
+      // 冻结副本还带着 snooze_until，两个版本双双「已排除」被筛掉。
+      action: 'snooze',
       // 这句话是系统生成的固定文案，不含任何客户信息 —— 送去 AI 解析既慢又白花钱。
       parsed: {
         summary: when ? `推迟到 ${when}` : '取消推迟',

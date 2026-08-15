@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { classifyNote } from '../note-parser'
+import { classifyNote, todayContext } from '../note-parser'
 
 const outcome = (s: string) => classifyNote(s).outcome
 const dnc = (s: string) => classifyNote(s).do_not_contact
@@ -152,5 +152,53 @@ describe('AI 输出清洗', () => {
     const now = new Date('2026-07-26T00:00:00Z')
     expect(cleanTravelWindowForTest('明年三月', now)).toBe('明年三月')
     expect(cleanTravelWindowForTest('2027 年三月', now)).toBe('2027 年三月')
+  })
+})
+
+/**
+ * 「说好周五给报价，周五名单上就有他」—— 这一段钉的是那句话的**前提**。
+ *
+ * PM 2026-08-15 拍板要的功能：销售在卡片上敲一行「三月两个人去南岛，周五给报价」，
+ * 回车，系统自己在周五那天的名单上生成一张卡。
+ *
+ * 后半段（约定时间到了自动回名单）早就通了 —— `segmentContact` 的规则 3 读
+ * `callbackAt`。缺的是前半段：解析器**不知道今天几号**，于是「周五」这种相对
+ * 日期要么被判成 null（没排上，销售以为排上了），要么被瞎猜成某个过去的日期
+ * （被 `saneCallbackInstant` 丢掉，同样没排上）。
+ *
+ * 而销售嘴里说出来的下一步**基本都是相对的**：「周五」「下周二」「明天上午」。
+ * 几乎没人说「2026 年 8 月 21 日」。所以这一句上下文不是锦上添花，
+ * 它决定这个功能成不成立。
+ */
+describe('告诉模型今天几号 —— 相对日期的下一步能不能排上，全看这一句', () => {
+  const NOW = new Date('2026-08-15T04:00:00.000Z') // 新西兰 8/15 周六下午 4 点
+
+  it('带上星期几 —— 「周五」要靠它才算得出来', () => {
+    expect(todayContext(NOW, 'Pacific/Auckland')).toContain('Saturday')
+  })
+
+  it('带上完整日期', () => {
+    const s = todayContext(NOW, 'Pacific/Auckland')
+    expect(s).toContain('2026')
+    expect(s).toContain('15')
+  })
+
+  /**
+   * 必须按**客户所在地**报，不能按服务器。
+   *
+   * 服务器跑在 UTC。新西兰 8/15 下午 4 点，UTC 还是 8/15 上午 4 点 —— 这次同一天，
+   * 但一天里有 12 个小时两边不同日（NZ 是 UTC+12/+13）。销售晚上 9 点记一笔
+   * 「明天上午给他打」，按 UTC 算出来的「明天」是他心里的**今天**，
+   * 这一笔当场就过期了。
+   */
+  it('按客户所在地的日子报，不按服务器', () => {
+    // 新西兰已经是 8/15 周六上午，UTC 还停在 8/14 周五晚上。
+    const nzMorning = new Date('2026-08-14T20:00:00.000Z')
+    expect(todayContext(nzMorning, 'Pacific/Auckland')).toContain('Saturday')
+    expect(todayContext(nzMorning, 'UTC')).toContain('Friday')
+  })
+
+  it('时区名原样写进去 —— 模型要靠它定「上午 9 点」是哪个 9 点', () => {
+    expect(todayContext(NOW, 'Australia/Sydney')).toContain('Australia/Sydney')
   })
 })

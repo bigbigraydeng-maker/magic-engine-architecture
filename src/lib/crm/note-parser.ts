@@ -149,7 +149,12 @@ Rules:
 - travel_window: what the CUSTOMER said about when they travel, in their own terms ("明年三月" / "2027 年底"). Null if they never said.
 - tour_interest: tour name in ENGLISH exactly as written ("Best of China", "Tale of Two Cities", "Silk Road"). Null if none named.
 - competitor: another travel company the customer mentioned using or quoting. Null if none.
-- callback_at: only when a specific time was agreed AND you can express it as an ISO 8601 instant. A vague "call next week" is null.
+- callback_at: when the salesperson committed to a next step at a nameable time, as an ISO 8601 instant.
+  RESOLVE RELATIVE DAYS against TODAY given in the user message — "周五给报价" / "call him Friday"
+  / "下周二" / "明天下午3点" are all specific once you know today's date. Use the agency's local
+  time zone (also given). If no hour was said, use 09:00 local — the salesperson means "that morning".
+  Still null when genuinely vague ("sometime next week", "will call back later") or when no next
+  step was promised at all.
 - Never invent. If the note does not say it, the field is null.
 - outcome / do_not_contact are decided by rules elsewhere; fill your best guess, it will be overridden.
 
@@ -287,9 +292,26 @@ export const CTS_BRAND_TERMS = [
  * 解析一条记录。没有 API key 时退回纯规则版本，
  * 这样导入脚本和测试永远不依赖网络。
  */
+/**
+ * 告诉模型「今天是星期几、几号、在哪个时区」。
+ *
+ * 没有这一句，`callback_at` 对相对日期完全失效 —— 而销售嘴里说出来的下一步
+ * 基本都是相对的（「周五」「下周二」「明天上午」），几乎没人说完整日期。
+ */
+export function todayContext(now: Date, timeZone: string): string {
+  const fmt = new Intl.DateTimeFormat('en-NZ', {
+    timeZone,
+    weekday: 'long',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+  return `TODAY is ${fmt.format(now)} in ${timeZone}. Resolve any relative day against it.`
+}
+
 export async function parseNote(
   raw: string,
-  opts: { brandTerms?: string[]; now?: Date } = {},
+  opts: { brandTerms?: string[]; now?: Date; timeZone?: string } = {},
 ): Promise<NoteParse> {
   const brandTerms = (opts.brandTerms ?? CTS_BRAND_TERMS).map((b) => b.toLowerCase())
   const now = opts.now ?? new Date()
@@ -314,7 +336,10 @@ export async function parseNote(
       model: process.env.CRM_NOTE_MODEL ?? 'gpt-4o-mini',
       input: [
         { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: raw },
+        // 今天几号必须告诉它，否则「周五给报价」这类**相对日期**要么返回空、
+        // 要么被瞎猜成某个过去的日期（然后被 saneCallbackInstant 丢掉）——
+        // 而「说好周五给报价，周五名单上就有他」正是这一栏存在的全部意义。
+        { role: 'user', content: `${todayContext(now, opts.timeZone ?? 'Pacific/Auckland')}\n\n${raw}` },
       ],
       text: { format: { type: 'json_schema', name: 'crm_note', schema: NOTE_JSON_SCHEMA } },
     } as Parameters<typeof client.responses.create>[0])
