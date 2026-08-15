@@ -139,10 +139,6 @@
     修：① **把批准人当时看到的那套钱的包络持久化进 `DraftRecord`**（日预算 + **账户币种**，见 `AD-CUR-2` + 排期）；② `ADSET_FIELDS` 补上预算与排期字段；③ 激活前逐项比对，**对不上就是 blocker，不是 warn**
   - 🔴 **买家看不到文案时只报 warn，照样放行；创意数组为空时连 warn 都没有**（第三十九轮 Codex P2，已核实）：`launch-readback.ts:294-303` 的 `creative_without_buyer_text` severity 是 `'warn'`，而 `safeToActivate = !findings.some(f => f.severity === 'blocker')` —— **warn 不拦人**，审批页（`ad-approval/page.tsx:147-150`）只是"建议你去 Meta 看一眼"。更糟的是那条规则来自 `adSet.creatives.filter(...)`：**`creatives` 是空数组时 filter 出来也是空，一条 finding 都不产生**，于是"一条广告都没回读到"和"全都回读干净了"在闸门眼里长得一模一样。
     修：**首条真钱广告之前，把"每条预期广告都回读到完整买家可见文案"设成 blocker**（含"回读到的广告条数 ≠ 建出来的广告条数"这一种），别把这一步推给批准人肉眼核对 —— 这正是 `launch-readback.ts` 开篇自己写的「查不出来 ≠ 没问题」
-  - 🔴 **草案在队列里躺过了头，排期不会重算 —— 批准即等于投一条已经过期的广告**（第五十一轮补登，已对 main 核实）：`ad-publisher.ts:186-197` 在**建成 PAUSED 的那一刻**就写死 `start_time = now`、`end_time = now + durationDays`，而 `approveDraft` 只翻状态、不碰排期。
-    → 7 天的草案第 6 天才获批，**只剩 1 天**；超过 7 天才获批，`end_time` 已经在过去，**根本投不出去**。
-    ⚠️ 注意这条**不是**「持久化排期再逐项比对」能解决的 —— 那只能证明「没人改过它」，补不回排队时间。
-    修：**按获批时间重设 `start_time` / `end_time` 并回读确认**，或把超期草案作废重建；两者都要在激活前完成。
   - 🔴 **另一半：批准/否决必须原子认领，否则"显示已否决、广告在花钱"**（第三十六轮补入，**升级为首投前置**）：`approveDraft`（`:179-209`）和 `rejectDraft`（`:213-235`）都是**先读状态、再无条件写状态**，中间没有条件更新。两人同时点 → 批准那边已激活 Meta 实体、否决那边最后落账 → **账本和页面写着 `rejected`，广告继续花钱，没有任何地方会喊**。⚠️ 而且 `rejectDraft` 更松：它**连状态都不查**（`:225-227` 只判 `payload` 存在），否决一条已经 `active` 的草案会直接把账本改成 `rejected` 而广告照跑 —— 这条不用并发也能触发。
     修：用条件更新或 RPC **从 `awaiting_approval` 原子认领唯一决策**（写入时带 `payload->>status = 'awaiting_approval'` 的前置条件，认领失败就不执行动作），并为"Meta 已激活但落账冲突"留一条**停投 + 对账**路径。**不需 migration**（条件更新即可；要做 RPC 才需要，届时待 PM `go apply`）
   - ⚠️ **光"重跑一次"不够，会漏掉最要命的那条检查**：`expectedGeo` 只存在于 `CreateDraftDeps`（`draft-and-gate.ts:62`，创建时用一次），**没有落进 `DraftRecord`**；而 `approveDraft(actionId, supabase, accessToken)` 手上根本没有它。缺了它 `adaptMetaAdSet` 会传 `null`，`launch-readback.ts:281` 的 `if (input.expectedGeo && ...)` 直接跳过 **`geo_mismatch`** —— 也就是"等待期间被改到别的国家"这个核心场景照样放行。**修的时候必须同时**：创建时把可信地区持久化进 `DraftRecord`（⚠️ **不能只重载 `clients.country`**，见 `AD-GEO-1`）
@@ -226,14 +222,10 @@
   正确修法两条一起：
   1. **信任根是客户配置的域名，不是请求体** —— `sourceUrl` 的 host 必须落在该客户已登记的官网/房源系统域名内（`master_briefs.source_website_urls` / `website` 这类已有字段），否则直接拒绝出稿；或干脆**只接受来自 ME 已核实数据记录的事实**（首条广告用这条最省）；
   2. **抓取必须走 `src/lib/net/safe-fetch.ts` 的 `safeFetchText`**（#965 刚落的 GET-only、连接绑定、带重定向与内网地址防护的原语），**不要自己 `fetch`**
-  3. 🔴 **逐句来源要按字段各自保源 —— 现在只要有房源，中介的战绩和服务区域也会被标成"官网可溯（房源页）"**（第五十一轮补登，已对 main 核实）：`listing-draft-builder.ts:269-288` 的 `traceClaims` 先把房源事实和中介事实**摊平进同一个 `factValues` 数组**，命中之后统一标成 `sources.listing?.sourceUrl ?? sources.agent.sourceUrl` —— **只要 listing 存在，中介自己的战绩就被指向房源页**，来源是错的。
-     ⚠️ 而且 `bedrooms` **压根没进 `factValues`**，所以提到房型的句子会被标成「固定话术 · 不含事实主张」—— 一条真事实主张被标成了没有主张。
-     → 后果：审批页就算把 claims 显示出来了，**批准人逐句核对的也是错的证据**。所以本条必须排在下一条（把 claims 送到审批页）**之前**，否则等于把错来源更醒目地摆到决策点上。
-     修：每个字段各自携带自己的来源（房源事实 → 房源页，中介事实 → 中介来源），并把 `bedrooms` 等漏掉的事实补进覆盖范围。
-  4. 🔴 **逐句来源必须持久化并显示在审批页 —— 现在它在创建请求结束时就没了**（第五十轮 Codex P1，已核实）：`draft-listing/route.ts:306-312` 的 `traceClaims(...)` **只写进 HTTP 响应**，代码注释自己写着「逐句可溯来源随交付一起给出 —— **红线要求，不是调试信息**」；但 `DraftRecord`（`draft-and-gate.ts:40-55`）**没有 `claims` 这个字段**，唯一的审批页（`ad-approval/page.tsx`）也只展示 `buyerWillSee`。全仓没有第二个调用方接住那份响应。
+  3. 🔴 **逐句来源必须持久化并显示在审批页 —— 现在它在创建请求结束时就没了**（第五十轮 Codex P1，已核实）：`draft-listing/route.ts:306-312` 的 `traceClaims(...)` **只写进 HTTP 响应**，代码注释自己写着「逐句可溯来源随交付一起给出 —— **红线要求，不是调试信息**」；但 `DraftRecord`（`draft-and-gate.ts:40-55`）**没有 `claims` 这个字段**，唯一的审批页（`ad-approval/page.tsx`）也只展示 `buyerWillSee`。全仓没有第二个调用方接住那份响应。
      → 于是「批准人逐句核对来源再点头」这件事**根本没法做** —— 到他面前时，那份逐字段来源已经不存在了，他只能看着文案批一条真金白银的广告。**校验做得再对，结论没传到决策点，等于没做。**
      修：`claims` 落进 `DraftRecord` 一起存，审批页在「开始投放」按钮前把每一句的来源标注（官网可溯 / brief 可溯 / 未证实）显示出来
-  5. 🔴 **事实必须和"哪套房"绑定 —— 光有域名白名单还是能张冠李戴**（第四十六轮 Codex P1，已核实）：`draft-listing/route.ts` **从头到尾没查过 `listings` 表**。`listingId`（`:191-229`）只被拿去做**素材归属闸**（`pickUsableForListing(found, body.listingId, clientId)`），而 `body.listing`（`ListingFacts`：价格、地址、战绩）和 `sourceUrl` **全部来自请求体，从不与那套房的记录核对**。
+  4. 🔴 **事实必须和"哪套房"绑定 —— 光有域名白名单还是能张冠李戴**（第四十六轮 Codex P1，已核实）：`draft-listing/route.ts` **从头到尾没查过 `listings` 表**。`listingId`（`:191-229`）只被拿去做**素材归属闸**（`pickUsableForListing(found, body.listingId, clientId)`），而 `body.listing`（`ListingFacts`：价格、地址、战绩）和 `sourceUrl` **全部来自请求体，从不与那套房的记录核对**。
      → 于是「**A 房的价格地址 + B 房的真实照片**」这种组合，域名白名单和素材闸**两道都过** —— 素材确实属于 B 房、URL 确实在客户域名下，但广告在拿 B 房的照片宣传 A 房的价格。这直接踩 CLAUDE.md §8「绝不凭空注入客户业务数据」那条红线，而且比编造更难发现（每一项单看都是真的）。
      修：**按 `id + client_id` 把那套房从 `listings` 读出来**当身份锚点；退一步至少要校验 `sourceUrl`、`ListingFacts` 与 `listingId` 三者指向同一套房，对不上就拒绝出稿
      ⚠️ **但"事实由 `listings` 这条记录派生"做不到，别照着施工**（第四十七轮 Codex P1，已核实 —— 上一版就是这么写的，错了）：`20260730145332_listings.sql:38-82` 里**没有 `sourceUrl`，也没有精确价格**。它有的是 `address_line` / `suburb` / `property_type` / `bedrooms`，价格只有 **`price_band` 档位**（`under_1m` / `1m_1_5m` / …），而且那个档位是**刻意**这么设计的 —— 迁移注释写明「NZ 很多房子 price by negotiation，真实要价到成交都不公开，**存一个编出来的数字比存档位更糟**」。另有 `status` / `vendor_notes` 是**内部**字段（`prospect` / `withdrawn` / 卖家备注）。
