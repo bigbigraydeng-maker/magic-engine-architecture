@@ -944,3 +944,41 @@ describe('取消推迟：捞回来的人必须是待办，不是已联系', () =
     expect(r.handledKind).toBe('closed')
   })
 })
+
+/**
+ * **「取消推迟」这个标记绝不能去清冻结副本上的推迟**（Codex 第四轮）。
+ *
+ * 写入是两步、且不在一个事务里：先写这一笔记录，再把 `snooze_until` 清空。
+ * 第二步失败时，**旧的推迟依然有效**。这时如果那一笔记录标的是 `'snooze'`，
+ * 读路径会拿它去清掉那个真实存在的推迟 —— 一次**失败**的「叫回来」，
+ * 刷新之后反而把人挪进了今天的名单，还标成灰的。
+ *
+ * 所以两个动作必须是两个值：`'snooze'` 清，`'unsnooze'` 什么都不清。
+ */
+describe('取消推迟的标记不清任何东西', () => {
+  const list = (c: ContactLike) =>
+    dayWorklist([c], NOW, { dayStartMs: DAY_START, touchedToday: () => false })
+
+  const UNSNOOZE = tp({
+    direction: 'outbound',
+    occurredAt: '2026-08-05T03:00:00.000Z',
+    action: 'unsnooze',
+  })
+
+  it('叫回来失败了（推迟还在）→ 人照旧不在今天的名单上', () => {
+    expect(
+      list(person([...YESTERDAY_LEAD, UNSNOOZE], { snoozeUntil: '2026-09-12T00:00:00.000Z' })),
+    ).toHaveLength(0)
+  })
+
+  it('对照：同样的场景换成 snooze 标记，人会被放回名单 —— 正是要避免的那个结果', () => {
+    const withSnoozeMark = tp({
+      direction: 'outbound',
+      occurredAt: '2026-08-05T03:00:00.000Z',
+      action: 'snooze',
+    })
+    expect(
+      list(person([...YESTERDAY_LEAD, withSnoozeMark], { snoozeUntil: '2026-09-12T00:00:00.000Z' })),
+    ).toHaveLength(1)
+  })
+})

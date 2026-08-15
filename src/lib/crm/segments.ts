@@ -140,13 +140,19 @@ export interface TouchpointLike {
    */
   automated?: boolean
   /**
-   * 这一笔是销售**按了哪个按钮**，不是聊了什么（目前只有 `'snooze'`）。
+   * 这一笔是销售**按了哪个按钮**，不是聊了什么。
    *
-   * `withoutOurActionsSince`（day-list）靠它认出「今天这个人是被推迟的」，
-   * 从而在冻结副本上把 `snoozeUntil` 一起清掉 —— 否则冻结版和实时版双双
-   * 「已排除」，人点完推迟就从名单上消失了。写入侧见 `RecordTouchpointInput.action`。
+   * · `'snooze'`（推迟）—— `withoutOurActionsSince`（day-list）靠它认出
+   *   「今天这个人是被推迟的」，从而在冻结副本上把 `snoozeUntil` 一起清掉；
+   *   否则冻结版和实时版双双「已排除」，人点完推迟就从名单上消失了。
+   * · `'unsnooze'`（取消推迟）—— **什么都不清**，只表示「这一笔是安排名单，
+   *   不是联系了这个人」。两者必须分开：写入是两步且不在一个事务里，
+   *   取消推迟若第二步失败，一个 `'snooze'` 标记会去清掉依然有效的旧推迟。
+   *
+   * 两个值都要被读路径排除在「今天动过谁」之外 —— 客人那头什么都没收到。
+   * 写入侧见 `RecordTouchpointInput.action`。
    */
-  action?: 'snooze' | null
+  action?: 'snooze' | 'unsnooze' | null
   outcome?: string | null
   travelWindow?: string | null
   callbackAt?: string | null

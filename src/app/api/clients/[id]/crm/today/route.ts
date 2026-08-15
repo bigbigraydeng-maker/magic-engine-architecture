@@ -264,8 +264,10 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
         engagement: engagementFromMetadata(t.metadata),
         // 机器发的（群发 / AI 外呼）不算「我们出手」—— 见 day-list 的 needsMeAgain
         automated: isAutomatedTouch(t.source, t.metadata),
-        // 销售按的是哪个按钮。只有「推迟」会带，冻结副本靠它把 snoozeUntil 清掉，
-        // 人才不会点完推迟就从名单上消失。
+        // 销售按的是哪个按钮。判断层只关心「推迟」这一个 —— 冻结副本靠它把
+        // snoozeUntil 清掉，人才不会点完推迟就从名单上消失。
+        // 「取消推迟」在这里落成 null：它本来就不该清任何东西（见 segments 的
+        // 说明），而「不算已联系」那一条在上面的 touchedTodayIds 里已经处理了。
         action: t.metadata?.action === 'snooze' ? ('snooze' as const) : null,
       })),
       // 这个人实际能怎么被联系到 —— 决定「建议用哪个渠道」落在哪。
@@ -328,6 +330,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
           !isAutomatedTouch(t.source, t.metadata) &&
           !engagementFromMetadata(t.metadata) &&
           t.metadata?.action !== 'snooze' &&
+          t.metadata?.action !== 'unsnooze' &&
           localDay(t.occurred_at, timeZone) === todayLocal,
       )
       .map((t) => t.contact_id),

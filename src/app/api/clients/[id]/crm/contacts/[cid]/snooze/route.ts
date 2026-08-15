@@ -79,6 +79,15 @@ export async function PATCH(
    *
    * 两张表没法在一个事务里提交（走的是 REST），所以取「失败时偏向让人留在
    * 名单上」的那个顺序 —— 名单上多一个人是噪音，少一个人是丢单。
+   *
+   * ⚠️ **标记分 snooze / unsnooze 两个值**（Codex 第四轮）。取消推迟时若第二步
+   * 失败，旧的 `snooze_until` **依然有效**；这时留下一个 `'snooze'` 标记，
+   * 读路径会拿它去清冻结副本上那个真实的旧推迟 —— 一次失败的「叫回来」，
+   * 刷新后反而把人挪进今天的名单还标成灰的。`'unsnooze'` 不清任何东西。
+   *
+   * （前端每次点击都新生成 `clientRef`，所以重试**不会**命中幂等键、
+   * 会多留一笔记录。这里不假装它会收敛：多一笔「取消推迟」的记录是噪音，
+   * 而上面那个方向错的清除是会骗人的，两害相权取前者。）
    */
   const when = parsed.until
     ? new Date(parsed.until).toLocaleDateString('zh-CN', { timeZone: 'Pacific/Auckland' })
@@ -94,8 +103,9 @@ export async function PATCH(
       clientRef: typeof body.clientRef === 'string' && body.clientRef ? body.clientRef : crypto.randomUUID(),
       loggedByEmail: access.user?.email ?? null,
       currentLastSeenAt: (existing.last_seen_at as string | null) ?? null,
-      // 冻结副本靠它认出「今天推的」。没有它，人会从名单上凭空消失。
-      action: 'snooze',
+      // 推迟 → 冻结副本靠它认出「今天推的」，没有它人会凭空消失。
+      // 取消推迟 → 只标「这一笔不是联系」，绝不能用 'snooze'（见上面的说明）。
+      action: parsed.until ? 'snooze' : 'unsnooze',
       // 这句话是系统生成的固定文案，不含任何客户信息 —— 送去 AI 解析既慢又白花钱。
       parsed: {
         summary: when ? `推迟到 ${when}` : '取消推迟',

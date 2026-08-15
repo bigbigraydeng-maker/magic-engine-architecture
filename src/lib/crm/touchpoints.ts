@@ -72,9 +72,15 @@ export interface RecordTouchpointInput {
    * 推迟」，`withoutOurActionsSince` 就能在摘掉它的同时把冻结副本上的
    * `snoozeUntil` 一起清掉，人就留在原位变灰。
    *
+   * **推迟和取消推迟必须是两个值**（Codex 复审 2026-08-15 第四轮）。
+   * 取消推迟时，如果后面那步「把 snooze_until 清空」失败了，而这里已经写下
+   * `'snooze'`，读路径会拿它去清冻结副本上**依然有效的旧推迟** ——
+   * 一次失败的「叫回来」，刷新后反而把人挪进了今天的名单还标成灰的。
+   * 用 `'unsnooze'` 就没这个歧义：它不清任何东西，只表示「这一笔不是联系」。
+   *
    * 只标**按钮动作**，不标聊天内容 —— 手打的笔记不带这个字段。
    */
-  action?: 'snooze' | null
+  action?: 'snooze' | 'unsnooze' | null
 }
 
 export interface RecordTouchpointResult {

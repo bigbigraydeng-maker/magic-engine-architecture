@@ -104,14 +104,18 @@ export async function PATCH(
    *
    * 名单上多一个人是噪音，少一个人是丢单。
    */
-  const { error: evtErr } = await supabaseAdmin.from('contact_stage_events').insert({
-    client_id: clientId,
-    contact_id: contactId,
-    from_stage: fromStage,
-    to_stage: toStage,
-    changed_by: access.user.email ?? null,
-    note,
-  })
+  const { data: evt, error: evtErr } = await supabaseAdmin
+    .from('contact_stage_events')
+    .insert({
+      client_id: clientId,
+      contact_id: contactId,
+      from_stage: fromStage,
+      to_stage: toStage,
+      changed_by: access.user.email ?? null,
+      note,
+    })
+    .select('id')
+    .single()
 
   if (evtErr) {
     return NextResponse.json({ error: `改阶段失败: ${evtErr.message}` }, { status: 500 })
@@ -124,6 +128,23 @@ export async function PATCH(
     .eq('client_id', clientId)
 
   if (updErr) {
+    /**
+     * **把刚写的那条记录撤掉**（Codex 复审第四轮）。
+     *
+     * 这张表已经不只是内部证据了 —— `contacts/[cid]/timeline` 会把它原样铺给
+     * 销售看。留一条「新询价 → 已成交」而阶段其实根本没变，等于在客户的往来
+     * 记录里写了一件没发生过的事；重试还会再插一条重复的。
+     *
+     * 撤不掉也只能记日志：残留一条审计噪音，比让请求假装成功好得多。
+     */
+    const { error: rbErr } = await supabaseAdmin
+      .from('contact_stage_events')
+      .delete()
+      .eq('id', evt.id)
+      .eq('client_id', clientId)
+    if (rbErr) {
+      console.error('[crm/stage] 阶段没改成，撤回那条变更记录也失败了:', rbErr.message)
+    }
     return NextResponse.json({ error: `改阶段失败: ${updErr.message}` }, { status: 500 })
   }
 
