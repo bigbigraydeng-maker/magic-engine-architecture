@@ -12,7 +12,20 @@
 四句话：
 
 1. **投放侧（delivery）实际上已经在 Andromeda 打法上** —— 但这个结论**只覆盖 CTS 已被 ME 追踪的 6 条 campaign —— 3 家客户里的 1 家、17 条 campaign 里的 6 条**（花费只能分币种说：已核对 NZD 3,733.59，未核对 NZD 480.71 + **AUD** 3,608.27）：把混账户按 `campaign_id` 归属后，CTS 已追踪的 6 组 ad set **一个兴趣定向都没有**，73.6% 的花费明确开着 `advantage_audience: 1`（唯一关掉的是重定向组，那本来就该关）。**Oztop 和 Roman 的账户都查不到 targeting**，两家的花费全部无证据（见 §3.1 与附录 1）。
-2. **但那不是 ME 做的** —— 是人在 Ads Manager 里点出来的。ME 自己唯一的建广告代码 `ad-publisher.ts:116` 写死 `targeting_automation: { advantage_audience: 0 }`，即**主动关掉** Advantage+ 受众。这条代码路径**没有留下任何成功建广告的记录**（`ads.create_ad` 0 条 —— ⚠️ 但该账本会静默丢记录，见 §2 注，所以只能说"没记录"，不能说"从没建过"），所以这个冲突**目前看是潜在的**，不是已确认发生的。
+2. **但那不是 ME 的产品代码做的** —— 是 **AI 通过浏览器自动化建的**（2026-08-15 PM 更正：这些广告全部由 AI 按自己的建议建出，**没有一条是人手工建的**；本文初版写的「人在 Ads Manager 里点出来的」是我未经核实的推断，**已撤回**）。ME 自己唯一的建广告代码 `ad-publisher.ts:116` 写死 `targeting_automation: { advantage_audience: 0 }`，即**主动关掉** Advantage+ 受众。这条代码路径**没有留下任何成功建广告的记录**（`ads.create_ad` 0 条 —— ⚠️ 但该账本会静默丢记录，见 §2 注，所以只能说"没记录"，不能说"从没建过"），所以这个冲突**目前看是潜在的**，不是已确认发生的。
+> 🔴 **这条更正改了三处结论，值得单独读一遍**（2026-08-15，依据 PM 提供的事实）：
+> 1. **做对投放的是 AI，不是人的经验。** broad + Advantage+ 这个打法是 AI 自己选的，
+>    并且已经用真金白银验证过 —— 决策层不用重建，它已经是对的。
+> 2. **五张空表的含义变了。** `ad_creative_links` / `winner_structures` 等 0 行，
+>    不是「没人用这条闭环」，而是**用的那条路（浏览器）根本不经过 ME 的账本**。
+> 3. **同一个系统现在有两条路，一条做对一条做错。** 浏览器那条**开着** Advantage+ 受众；
+>    产品代码那条（`ad-publisher.ts:116`）**写死关掉**。谁先规模化谁定调 ——
+>    所以 `AD-ADV-1` 必须排在把浏览器路径产品化之前，否则 ME 一上线就会推翻 AI 自己验证过的结论。
+>
+> 按 CLAUDE.md 铁律 3，浏览器自动化本来就是允许的中间态，链条是
+> 「UI 入口 → Graph API 直调 → 页面注入 → DevTools 自动化 → **沉淀成 ME 产品能力**」——
+> **卡在最后一步**。用 ME2 的话说：那条路是一个**还没被治理的 Shared Capability**。
+
 3. **钱高度集中在少数广告上**（按客户分开看，避开混币种）：**CTS 80.7% 的钱压在 2 条广告上**；**Oztop 61.9% 压在 1 条上**（该 campaign 合计 63.4%，其中 97.6% 在单条上）；而两次真多角度测试分别只拿到该客户的 **12.0%**（Oztop 14 条 hook）和摊薄到每条 $24（Roman 15 条 angle）。**多角度测试只发生在没钱的地方。**（⚠️ 这里数的是广告条数；单条广告内部可能还有多套文案，库里看不到 —— 见 §3.3 注）
 4. **闭环没有通电**：`ad_creative_links` 0 行、`contacts.attr_creative_ref` 0 行（39 条已归因 lead 无一条能说清是哪条素材）、`winner_structures` 0 行、`variant_from_winner` 工单 0 条、`flywheel_actions` 里 `ads.create_ad` 0 条。**这几张表都建好了，一个都没被写过。**（⚠️ 不要读成"数据结构全都齐了、只差往里写" —— 端到端的**变体归因**模型还没建齐：首选的 `draft-and-gate` 路径没有稳定的 creative variant 身份、也没有落它的地方，`ad_creative_links.post_id` 还是 `NOT NULL`、`CreativeSource` 契约和发布结果映射都要改，是 migration + 代码的活。见 §4.2 与 `AD-LINK-1`）
 
@@ -45,8 +58,8 @@
 > 因此本审计**凡是能在单一客户内部说清的结论，一律改成按客户分开说**（见 §3.3）。要得到真正可加总的口径，需要给 `ad_daily_insights` 加币种列 + 按基准日折算 —— 这是本审计发现的一个新缺口，**ROADMAP 里没有登记过**。
 
 ```
-人在 Ads Manager 里手工建 campaign / ad set / 创意
-        ↓（ME 完全没参与建的过程）
+AI 通过浏览器自动化建 campaign / ad set / 创意（不经 ME 产品代码，不落 ME 账本）
+        ↓（ME 的产品代码完全没参与建的过程）
 ME 每天 cron 拉回 campaign 级 + ad 级日度数据 → ad_daily_insights
         ↓
 ME 用「跟自己历史比」的相对基线判疲劳 → ad_health_narratives（63 行）
