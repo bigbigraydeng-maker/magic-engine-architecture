@@ -900,3 +900,47 @@ describe('处理过的人留在原位，顺序一字不变', () => {
     expect(after.find((r) => r.id === 'b')!.handled).toBe(true)
   })
 })
+
+/**
+ * 「取消推迟」= 把人**捞回来打电话**，不是「已经联系过他了」。
+ *
+ * Codex 复审 2026-08-15 第三轮。推迟和取消推迟都会写一笔真人出站触点
+ * （为了留痕，也为了让冻结判据认得出），但那是**安排名单**的动作，
+ * 客人那头什么都没收到。
+ *
+ * 不排掉的话，最刺眼的是取消推迟：销售在「不在今天名单上的人」里点
+ * 「现在就叫回来」，人回到名单上却**当场是灰的、写着「今天联系过了」**，
+ * 进度还加了一格 —— 他刚刚明明是想把这个人捞回来打电话。
+ *
+ * 这里钉的是 `dayRow` 这一侧的契约：`touchedToday` 传 false 时（读路径已经
+ * 把 snooze 触点排掉了），人必须是**待办**，不是已处理。
+ */
+describe('取消推迟：捞回来的人必须是待办，不是已联系', () => {
+  const UNSNOOZE_TODAY = tp({
+    direction: 'outbound',
+    occurredAt: '2026-08-05T03:00:00.000Z',
+    action: 'snooze',
+  })
+
+  it('捞回来的人留在名单上，而且不是灰的', () => {
+    // snoozeUntil 已被清空（取消推迟），读路径把 snooze 触点排除在「今天动过」之外
+    const r = row(person([...YESTERDAY_LEAD, UNSNOOZE_TODAY], { snoozeUntil: null }), false)
+    expect(r.onList).toBe(true)
+    expect(r.handled).toBe(false)
+    expect(r.handledWhy).toBeNull()
+  })
+
+  /**
+   * 反过来那一头不能被误伤：**真的推迟**照样要算已处理。
+   * 它不靠 `touchedToday`，靠实时版看得见 `snooze_until` → `droppedOff`。
+   */
+  it('真推迟的人照样变灰（走 droppedOff，不靠「今天动过」）', () => {
+    const r = row(
+      person([...YESTERDAY_LEAD, UNSNOOZE_TODAY], { snoozeUntil: '2026-08-12T00:00:00.000Z' }),
+      false,
+    )
+    expect(r.onList).toBe(true)
+    expect(r.handled).toBe(true)
+    expect(r.handledKind).toBe('closed')
+  })
+})

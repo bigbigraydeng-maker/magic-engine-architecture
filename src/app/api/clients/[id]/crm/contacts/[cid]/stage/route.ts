@@ -84,6 +84,39 @@ export async function PATCH(
   }
 
   const nowIso = new Date().toISOString()
+
+  /**
+   * ⚠️ **先写这条变更记录，再改 contacts.stage —— 顺序不能倒过来**
+   * （Codex 复审 2026-08-15）。
+   *
+   * 这条以前纯粹是审计，「失败也只是少一条历史」，所以放在 UPDATE 之后、
+   * 连 error 都不看。现在不一样了：`today` 路由靠它的 `from_stage` 判断
+   * 「这个人今天早上本来在不在名单上」，从而决定卡片是留在原位变灰还是消失。
+   * **名单对不对，现在要靠这一条。**
+   *
+   * 写失败而 stage 已经改成「不再联系」时，读路径找不到证据 → 冻结副本不清
+   * `stageSuppressed` → **卡片在一句「已改为 XX」的成功提示之后当场消失**。
+   *
+   * 两张表没法在一个事务里提交（走 REST），所以取「失败时偏向让人留在名单上」
+   * 的那个顺序，跟 snooze 路由一致：
+   *   · 记录写失败 → 500，两边都没动，重试即可
+   *   · 改库失败   → 500，留下一条孤立的记录，但人**没被改阶段、留在名单上**
+   *
+   * 名单上多一个人是噪音，少一个人是丢单。
+   */
+  const { error: evtErr } = await supabaseAdmin.from('contact_stage_events').insert({
+    client_id: clientId,
+    contact_id: contactId,
+    from_stage: fromStage,
+    to_stage: toStage,
+    changed_by: access.user.email ?? null,
+    note,
+  })
+
+  if (evtErr) {
+    return NextResponse.json({ error: `改阶段失败: ${evtErr.message}` }, { status: 500 })
+  }
+
   const { error: updErr } = await supabaseAdmin
     .from('contacts')
     .update({ stage: toStage, stage_updated_at: nowIso, updated_at: nowIso })
@@ -93,16 +126,6 @@ export async function PATCH(
   if (updErr) {
     return NextResponse.json({ error: `改阶段失败: ${updErr.message}` }, { status: 500 })
   }
-
-  // 审计。UPDATE 已成、这条即使失败也只是少一条历史,低危(幂等已挡重复)。
-  await supabaseAdmin.from('contact_stage_events').insert({
-    client_id: clientId,
-    contact_id: contactId,
-    from_stage: fromStage,
-    to_stage: toStage,
-    changed_by: access.user.email ?? null,
-    note,
-  })
 
   return NextResponse.json({ stage: toStage, changed: true })
 }

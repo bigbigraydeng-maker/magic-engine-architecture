@@ -305,9 +305,19 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
    * 原位 —— 这正是 PM 2026-08-05 那句「做完动作回到目录页，我如何知道哪个
    * 已经联系了」要修的东西。
    *
-   * 两条排除，两条都是真事故：
+   * 三条排除，三条都是真事故：
    *  · 群发不算（一封 Mailchimp 能把整页标成已跟过）
    *  · 打开/点击不算（那是客人做的，不是我们跟进）
+   *  · **推迟 / 取消推迟不算**（Codex 复审 2026-08-15）——
+   *    这两个动作也写一笔真人出站触点（为了留痕和冻结判据），但它们是
+   *    「安排名单」，不是「联系了这个人」，客人那头什么都没收到。
+   *
+   *    不排掉的话最刺眼的是**取消推迟**：销售在「不在今天名单上的人」里点
+   *    「现在就叫回来」，人回到名单上却**当场是灰的、写着「今天联系过了」**，
+   *    还把进度加了一格 —— 他刚刚明明是想把这个人捞回来打电话。
+   *
+   *    真推迟的那一头不受影响：live 版看得见 `snooze_until`，
+   *    `dayRow` 靠 `droppedOff` 照样把他标成已处理（理由写「标了：先放着…」）。
    */
   const todayLocal = localDay(now.toISOString(), timeZone)
   const touchedTodayIds = new Set(
@@ -317,6 +327,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
           t.direction === 'outbound' &&
           !isAutomatedTouch(t.source, t.metadata) &&
           !engagementFromMetadata(t.metadata) &&
+          t.metadata?.action !== 'snooze' &&
           localDay(t.occurred_at, timeZone) === todayLocal,
       )
       .map((t) => t.contact_id),
@@ -621,7 +632,16 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
   // 否则员工一点「已付定金」，这个人就从 ME 唯一的 CRM 页面消失、再也翻不到 ——
   // 而「已付定金」「即将出行」恰恰是最需要继续跟进的两批（催余款、确认行程）。
   // 误点也必须能改回来，所以这里带上他们的当前阶段。
+  //
+  // 🔴 **今天还冻结在名单上的人不能同时出现在这里**（Codex 复审 2026-08-15）。
+  //    这一栏按**实时**状态算，而名单按冻结状态算 —— 今天刚标了「不买了」/
+  //    推迟 / 推到成交的人，实时看已经下名单（进这一栏），冻结看还在名单上
+  //    （留在原位变灰）。两边各算各的，同一个人当天**在页面上出现两次**；
+  //    搜索时两组直接拼起来，还会撞出重复的 React key。
+  //    今天以冻结的那份为准，明天冻结失效他自然落到这一栏。
+  const rankedIds = new Set(ranked.map((c) => c.id))
   const off = models
+    .filter((c) => !rankedIds.has(c.id))
     .map((c) => ({ c, seg: segmentContact(c, now) }))
     .filter((x) => x.seg.temperature === 'cold' || x.seg.temperature === 'off')
     .slice(0, 300)
