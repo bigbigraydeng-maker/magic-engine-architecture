@@ -84,19 +84,40 @@ export interface ComponentNeighbours {
   readonly downstream: readonly { id: string; type: ComponentDependency['type'] }[]
 }
 
+/**
+ * upstream/downstream 必须跟 findOrderingCycles 对 `blocks` 的方向定义一致：
+ * `A requires B` → B 是 A 的上游；`A blocks B` → A 是 B 的上游（方向相反）。
+ * 不按类型拆开的话，`blocks` 边会被当成 `requires` 一样处理，把阻塞关系的
+ * 上下游画反。
+ */
 export function neighboursOf(
   componentId: string,
   components: readonly ProductMapComponent[],
 ): ComponentNeighbours {
   const self = components.find((c) => c.id === componentId)
-  const upstream = (self?.dependencies ?? []).map((d) => ({ id: d.target, type: d.type }))
+  const upstream: { id: string; type: ComponentDependency['type'] }[] = []
   const downstream: { id: string; type: ComponentDependency['type'] }[] = []
+
+  for (const dep of self?.dependencies ?? []) {
+    if (dep.type === 'blocks') {
+      downstream.push({ id: dep.target, type: dep.type })
+    } else {
+      upstream.push({ id: dep.target, type: dep.type })
+    }
+  }
+
   for (const c of components) {
     if (c.id === componentId) continue
     for (const dep of c.dependencies) {
-      if (dep.target === componentId) downstream.push({ id: c.id, type: dep.type })
+      if (dep.target !== componentId) continue
+      if (dep.type === 'blocks') {
+        upstream.push({ id: c.id, type: dep.type })
+      } else {
+        downstream.push({ id: c.id, type: dep.type })
+      }
     }
   }
+
   return { upstream, downstream }
 }
 

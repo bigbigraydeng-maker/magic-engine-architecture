@@ -130,11 +130,20 @@ export function deriveMaturity(
   const { ceiling, reason } = evidenceCeiling(component, facts)
   const effective = minMaturity(component.declaredMaturity, ceiling)
 
-  const critical =
+  // M4 与 M5 各自撑起自己那一级的证据必须分开查 —— 合并成一个数组再 .every()
+  // 会被另一级里一条不相干但已核验的证据（比如支撑 M4 的一条 repo_verified
+  // production 证据）盖住 M5 recurring outcome 全是 manual_claim 的事实，反之亦然。
+  const productionUnverified =
     maturityRank(effective) >= maturityRank('M4_PRODUCTION_VALIDATED') &&
-    [...component.productionEvidence, ...component.learningEvidence].every(
-      (e) => e.verification === 'manual_claim',
-    )
+    component.productionEvidence.every((e) => e.verification === 'manual_claim')
+
+  const recurringOutcomeUnverified =
+    maturityRank(effective) >= maturityRank('M5_OPERATING_AND_LEARNING') &&
+    component.learningEvidence
+      .filter((e) => e.kind === 'recurring_outcome')
+      .every((e) => e.verification === 'manual_claim')
+
+  const critical = productionUnverified || recurringOutcomeUnverified
 
   return {
     componentId: component.id,

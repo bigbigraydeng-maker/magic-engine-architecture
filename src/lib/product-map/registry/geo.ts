@@ -130,7 +130,7 @@ export const GEO_COMPONENTS: readonly ProductMapComponent[] = [
   },
   {
     id: 'adapter.geo-baseline-openai',
-    name: 'GEO baseline OpenAI 接线（WP04A）',
+    name: 'GEO baseline Content Engine 接线（WP04A）',
     componentType: 'adapter',
     businessLane: 'geo',
     dapeStages: ['execution'],

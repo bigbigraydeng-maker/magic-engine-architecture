@@ -63,6 +63,17 @@ describe('neighboursOf', () => {
     const na = neighboursOf('platform.a', [a, b])
     expect(na.upstream).toEqual([{ id: 'platform.b', type: 'requires' }])
   })
+
+  it('blocks 方向跟 requires 相反:A blocks B → A 是 B 的上游', () => {
+    const a = makeComponent({ id: 'platform.a', dependencies: [{ type: 'blocks', target: 'platform.b' }] })
+    const b = makeComponent({ id: 'platform.b' })
+    const na = neighboursOf('platform.a', [a, b])
+    expect(na.upstream).toHaveLength(0)
+    expect(na.downstream).toEqual([{ id: 'platform.b', type: 'blocks' }])
+    const nb = neighboursOf('platform.b', [a, b])
+    expect(nb.upstream).toEqual([{ id: 'platform.a', type: 'blocks' }])
+    expect(nb.downstream).toHaveLength(0)
+  })
 })
 
 describe('propagateBlocked', () => {

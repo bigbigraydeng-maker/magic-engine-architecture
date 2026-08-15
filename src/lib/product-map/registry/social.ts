@@ -35,7 +35,7 @@ export const SOCIAL_COMPONENTS: readonly ProductMapComponent[] = [
   },
   {
     id: 'adapter.publer',
-    name: 'Publishing Hub adapter（Publer）',
+    name: 'Publishing Hub adapter',
     componentType: 'adapter',
     businessLane: 'social',
     dapeStages: ['execution', 'verification'],
