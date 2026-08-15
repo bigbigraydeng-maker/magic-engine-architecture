@@ -165,6 +165,15 @@ export async function POST(
     return NextResponse.json({
       created: result.created,
       touchpointId: result.touchpointId,
+      /**
+       * 解析下次时间时**实际用的**那个时区。
+       *
+       * 页面拿它去把 `callback_at` 说成「几月几号周几」——必须跟这里用的是
+       * 同一个，否则确认里那个日期会跟真正排上的那天差一天（Codex 复审
+       * 2026-08-15）：澳洲客户按悉尼排，页面却按奥克兰显示，销售说的
+       * 「周五晚上」会被确认成周六 —— 而这句话存在的全部意义就是让他核对。
+       */
+      timeZone,
       parsed: {
         summary: result.parsed.summary,
         outcome: result.parsed.outcome,
@@ -173,6 +182,12 @@ export async function POST(
         tour_interest: result.parsed.tour_interest,
         competitor: result.parsed.competitor,
         callback_at: result.parsed.callback_at,
+        /**
+         * 解析器自己回答的「有没有约一个还没做的下一步」。
+         * 页面拿它决定要不要提示「没读懂你说的下次时间」——
+         * 比在前端用正则猜准得多（见 lib/crm/next-step 文件头）。
+         */
+        mentioned_next_step: result.parsed.mentioned_next_step,
       },
     })
   } catch (err) {

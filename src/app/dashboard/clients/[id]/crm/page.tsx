@@ -21,6 +21,7 @@ import Link from 'next/link'
 import { type StageOption } from './_components/ComposeNote'
 import { CrmTabs } from './_components/CrmTabs'
 import { PersonDrawer, type DrawerRow } from './_components/PersonDrawer'
+import { QuickNote } from './_components/QuickNote'
 // 从唯一那份定义引，**不要在这里再抄一遍**。
 // 2026-08-03 就是抄的那份走散了：lib 里删掉了一个段，页面这份还留着，
 // 两边对不上，tsc 才把它顶出来 —— 而它本可以一直静静地错下去。
@@ -275,6 +276,8 @@ function Card({
   // 今天已经跟过的整张卡变浅 —— 销售扫一眼就知道还剩哪些没动，
   // 不用靠脑子记。鼠标移上去恢复，因为还是要能点进去看。
   const done = row.doneToday === true
+  // 卡上那个「打电话时顺手记一行」的输入框，默认收着（14 张卡全开是一片噪音）。
+  const [noting, setNoting] = useState(false)
   return (
     <div
       className={`relative rounded-xl border bg-white shadow-sm transition ${
@@ -341,6 +344,39 @@ function Card({
           没号码的人绝不显示「打电话」：CTS 名单里 124 人（26%）没有电话，
           其中 106 人只有 Facebook 身份。让销售去打一个打不了的人，这一页就废了。 */}
       <ReachAction row={row} />
+
+      {/**
+       * 打完电话顺手记一行 —— **卡上直接记，不用点进抽屉**。
+       *
+       * 板桥（销售视角）说这是他最想要的一个功能，比三段式改版还重要：
+       * 一手拿电话时，「点开抽屉 → 点记一笔 → 打字 → 点存」这一串做不了。
+       * 这里是：点一下 → 打字 → 回车。
+       *
+       * 说了时间（「周五给报价」）会自动排上，到那天把人放回名单 ——
+       * 存完那句确认会告诉他排在哪天，没读懂也会明说（见 lib/crm/next-step）。
+       */}
+      {noting ? (
+        <QuickNote
+          clientId={clientId}
+          contactId={row.contactId}
+          onCancel={() => setNoting(false)}
+          onDone={(msg) => {
+            setNoting(false)
+            onLogged(msg)
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            setNoting(true)
+          }}
+          className="block w-full border-t border-me-charcoal/8 px-3 py-2 text-left text-[13px] font-bold text-me-charcoal/45 hover:bg-me-ivory/60 hover:text-me-charcoal"
+        >
+          ✎ 记一笔
+        </button>
+      )}
 
       {/* 早上要一眼看懂的三件事：谁跟的、聊到哪了、他有没有打开过邮件 */}
       <FollowUpMarks row={row} />
