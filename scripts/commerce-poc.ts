@@ -32,10 +32,29 @@ import {
 } from '../src/lib/commerce/product-intel/normalize'
 import { measureAuNzDemand } from '../src/lib/commerce/product-intel/validate-aunz'
 import { rankCandidates } from '../src/lib/commerce/product-intel/score'
+import type { CostAssumptions } from '../src/lib/commerce/product-intel/landed-cost'
 import type {
   ProductCandidate,
   ScoredCandidate,
 } from '../src/lib/commerce/product-intel/types'
+
+/**
+ * 成本假设 —— PM 2026-08-15 提供的真实费率 + 实时汇率。
+ *
+ * 🔴 这些值会过期。汇率每天变、货代报价每季度变、征费随法规变。
+ *    真正上生产时应该从配置读，不是写死在脚本里。
+ */
+const COST_ASSUMPTIONS: Omit<CostAssumptions, 'chargeableWeightKg'> = {
+  fxUsdToNzd: 1.6981,        // frankfurter, 2026-08-14
+  freightNzdPerKg: 2.0,      // PM 提供
+  importLevyNzd: 2.21,       // NZ Customs 低值货物征费（空运），2026-04-01 起
+  dutyRatePct: 0,            // 中新 FTA 多数消费品；**按 HS code 逐个确认**
+  domesticDeliveryNzd: 3.99, // PM 提供
+  paymentFeePct: 2.9,
+  paymentFeeFixedNzd: 0.3,
+  gstRatePct: 15,
+  asOf: '2026-08-16',
+}
 
 /** 单价来自 2026-08-15 实测的 actor 定价表（BRONZE 档）。 */
 const COST_PER_TIKTOK_ROW_USD = 0.0045
@@ -164,7 +183,7 @@ async function mainFromFile(opts: Options): Promise<void> {
   }
   console.log('\n① 读样本…')
   const { seedKeyword, candidates } = await runFromFile(opts.fromFile!, opts.enrich)
-  const ranked = rankCandidates(candidates)
+  const ranked = rankCandidates(candidates, COST_ASSUMPTIONS)
   if (opts.json) {
     console.log(JSON.stringify(ranked, null, 2))
     return
@@ -210,7 +229,7 @@ async function main(): Promise<void> {
   console.log(`\n② 对销量前 ${shortlist.length} 条做以图搜款 + 澳新需求验证…`)
   const enriched = await enrichCandidates(shortlist, opts.keyword)
 
-  const ranked = rankCandidates(enriched)
+  const ranked = rankCandidates(enriched, COST_ASSUMPTIONS)
   if (opts.json) {
     console.log(JSON.stringify(ranked, null, 2))
     return

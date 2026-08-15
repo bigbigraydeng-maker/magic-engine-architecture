@@ -57,6 +57,26 @@ export interface MarketDemand {
   readonly competition: Measured<number>
 }
 
+/**
+ * 目标市场的**本地在售**证据（Trade Me 等）。
+ *
+ * 🔴 这是判定的关键输入之一：我们卖货的价格由**新西兰市场**决定，不由美国售价决定。
+ *    实测同一件便携榨汁机美国 TikTok US$15.86、新西兰 Trade Me NZ$29.90–34.90
+ *    （高约 30%）——拿美国价当代理会系统性低估。
+ */
+export interface LocalMarketEvidence {
+  readonly market: TargetMarket
+  /** 本地在售价中位数（NZD，含 GST —— 消费者看到的标价）。 */
+  readonly medianPriceNzd: Measured<number>
+  /** 在售条目数。少 = 竞争弱。 */
+  readonly listingCount: Measured<number>
+  /**
+   * 有没有低价倾销（标题带 CLEARANCE / OVER STOCKED，或价格显著低于主流带）。
+   * **true 是一票否决级信号** —— 有人在不赚钱地清库存，你进去就是陪跑。
+   */
+  readonly hasDumping: Measured<boolean>
+}
+
 /** 中国供货端证据。来自以图搜款 —— 是**款式价格带**，不是这件商品的成本。 */
 export interface SourcingEvidence {
   /** 近似款报价中位数（USD）。 */
@@ -78,8 +98,15 @@ export interface ProductCandidate {
   readonly cumulativeSold: Measured<number>
   readonly rating: Measured<number>
   readonly imageUrl: string | null
+  /**
+   * 计费重量（kg）= max(实重, 体积重)。空运/海运都按它计价。
+   * 🔴 取不到就是 null —— 没有重量就算不出到岸成本，判定退回粗筛。
+   */
+  readonly chargeableWeightKg: Measured<number>
   /** 供货端证据。未跑以图搜款时为 null。 */
   readonly sourcing: SourcingEvidence | null
+  /** 目标市场本地在售证据。未跑 Trade Me 时为 null。 */
+  readonly localMarket: LocalMarketEvidence | null
   /** 澳新需求证据。未跑市场验证时为空数组。 */
   readonly demand: readonly MarketDemand[]
 }
@@ -102,8 +129,10 @@ export type GateId =
   | 'aunz_searched'
   /** 澳新需求趋势没在掉。 */
   | 'aunz_not_declining'
-  /** 毛利倍数够。 */
-  | 'margin_multiple'
+  /** 本地没有低价倾销。 */
+  | 'no_local_dumping'
+  /** 单件经济撑得起广告（完整到岸模型；数据不全时退回倍数粗筛，且只能证伪）。 */
+  | 'unit_economics'
 
 export type GateOutcome = 'PASS' | 'FAIL' | 'UNKNOWN'
 

@@ -11,6 +11,7 @@
 import type { RawTikTokShopProduct } from '@/lib/apify/tiktok-shop'
 import type { RawSourcingMatch } from '@/lib/apify/sourcing-by-image'
 import type {
+  LocalMarketEvidence,
   Measured,
   ProductCandidate,
   ProvenanceKind,
@@ -56,9 +57,33 @@ export function normalizeTikTokProduct(
     cumulativeSold: measured(finiteNumber(raw.soldCount), 'observed', source, collectedAt),
     rating: measured(finiteNumber(raw.rating), 'observed', source, collectedAt),
     imageUrl: raw.primaryImage ?? null,
+    // TikTok Shop 不返回重量 —— 只能从中国供货端或实测样品拿，这里必须留空。
+    chargeableWeightKg: measured(null, 'observed', source, collectedAt),
     sourcing: null,
+    localMarket: null,
     demand: [],
   }
+}
+
+/** 把计费重量挂到候选上（来自 1688 或实测样品）。 */
+export function withChargeableWeight(
+  candidate: ProductCandidate,
+  weightKg: number | null,
+  source: string,
+  collectedAt: string,
+): ProductCandidate {
+  return {
+    ...candidate,
+    chargeableWeightKg: measured(weightKg, 'observed', source, collectedAt),
+  }
+}
+
+/** 把本地在售证据挂到候选上（来自 Trade Me 等）。 */
+export function withLocalMarket(
+  candidate: ProductCandidate,
+  localMarket: LocalMarketEvidence,
+): ProductCandidate {
+  return { ...candidate, localMarket }
 }
 
 /** 起订量 actor 回的是字符串（如 "2"）；解不出整数就是 null。 */
