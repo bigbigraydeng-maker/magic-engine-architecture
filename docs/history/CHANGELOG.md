@@ -5,6 +5,22 @@
 
 ---
 
+### 2026-08-15（ME2 Product Map PR1:组件账本上线,「完成」从此有六级刻度）
+
+PR [#976](https://github.com/bigbigraydeng-maker/magic-engine/pull/976)(合并提交 `bd17712b`;前身 [#975](https://github.com/bigbigraydeng-maker/magic-engine/pull/975) 因分支改名被挤关,复审记录在彼)。
+
+**这次解决的一件事**:PO 一直没法回答「Module / Capability / Adapter 各做到哪了」——
+「issue 关了」「PR 合了」「生产在跑」在汇报里长得一模一样。本次交付 `src/lib/product-map/`:
+仓库内 schema 校验的组件登记册(25 个组件,7 类型 × 5 泳道 × 8 DAPE 阶段)+
+**不可夸大的成熟度推导**(M0–M5 严格累积梯子:merged PR 封顶 M2;无生产证据不上 M4;
+无重复 outcome 不上 M5;legacy 在跑 ≠ ME2 完成,由 operationalStatus 单独表达)。
+PR 状态走 `ExternalFacts` 注入(本段为手工快照,PR2 换 GitHub 自动同步)。
+质量:136 测试 · 11 道变异探针全响 · 设计/实施各过双审 · Codex 两轮 6 条意见全修。
+
+🔴 **值得记住的现场事实**:对账测试(登记 vs 仓库现实)在开发中真实抓掉 2 条我自己写错的证据
+——隔层 cron 冒充直接调用方、同前缀兄弟模块(`geo-measurement` vs `-runtime`)误命中;
+后者修法是 import 匹配必须带终结符。「声明了≠接上了」这次连登记册自己也没放过。
+
 ### 2026-08-12（站点页面台账：把「谁批准了这一页」变成一道过不去就不许跑的闸）
 
 Issue [#930](https://github.com/bigbigraydeng-maker/magic-engine/issues/930) ·
