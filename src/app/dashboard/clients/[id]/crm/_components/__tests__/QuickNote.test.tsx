@@ -181,3 +181,33 @@ describe('防重键：同样的字复用，改过的字换新', () => {
     expect(refOf(fetchMock.mock.calls[1])).not.toBe(refOf(fetchMock.mock.calls[0]))
   })
 })
+
+/**
+ * 🔴 **「客户打回来了」必须能记成入站**（Codex 复审 2026-08-15）。
+ *
+ * 页面顶上那个搜索框写的就是「客户打回来了？按名字/电话/邮箱找他」，
+ * 而**搜索结果用的是同一张卡**。销售找到刚打进来的客人、就地记一笔，
+ * 如果固定写成「我们打出去的」：
+ *   · `segmentContact` 认不出「客户来消息了」
+ *   · today 路由把它当成「今天我们出手过」→ **卡片当场变灰**
+ * 一个刚打电话进来、还在等回复的客人，就这么被折叠起来了。
+ */
+describe('方向：我打的 / 他打来的', () => {
+  const directionOf = (call: unknown[]) =>
+    JSON.parse((call[1] as RequestInit).body as string).direction as string
+
+  it('默认「我打的」—— 一只手时不用碰它', async () => {
+    const { box } = setup()
+    await userEvent.type(box, '聊过了{Enter}')
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(directionOf(fetchMock.mock.calls[0])).toBe('outbound')
+  })
+
+  it('切成「他打来的」→ 记成入站，不会把等回复的人标成已处理', async () => {
+    const { box } = setup()
+    await userEvent.click(screen.getByText('他打来的'))
+    await userEvent.type(box, '客户打进来问报价{Enter}')
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled())
+    expect(directionOf(fetchMock.mock.calls[0])).toBe('inbound')
+  })
+})

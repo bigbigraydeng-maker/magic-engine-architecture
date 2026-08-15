@@ -63,6 +63,19 @@ export function QuickNote({
   /** 上一次提交出去的原文 —— 用来判断「这次是重试还是改过了」。 */
   const lastSubmittedRef = useRef<string | null>(null)
   const [note, setNote] = useState('')
+  /**
+   * 这一笔是**我打给他**还是**他打给我**。
+   *
+   * 默认「我打的」—— 卡片上顺手记的绝大多数是自己打出去的那通。
+   *
+   * 但**必须能切**（Codex 复审 2026-08-15）：页面顶上那个搜索框写的就是
+   * 「客户打回来了？按名字/电话/邮箱找他」，而搜索结果**用的是同一张卡**。
+   * 销售找到刚打进来的客人、就地记一笔，如果固定写成「我们打出去的」：
+   *   · `segmentContact` 认不出「客户来消息了」
+   *   · today 路由把它当成「今天我们出手过」→ **卡片当场变灰**
+   * 一个刚打电话进来、还在等回复的客人，就这么被折叠起来了。
+   */
+  const [inbound, setInbound] = useState(false)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
@@ -84,7 +97,7 @@ export function QuickNote({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contactId,
-          direction: 'outbound',
+          direction: inbound ? 'inbound' : 'outbound',
           note: text,
           clientRef: clientRefRef.current,
         }),
@@ -130,6 +143,24 @@ export function QuickNote({
       // 卡片主体点了会打开抽屉 —— 在输入框里点不该触发它。
       onClick={(e) => e.stopPropagation()}
     >
+      {/* 方向。默认「我打的」，一只手也不用碰它；只有「客户打回来了」那条
+          流程需要切一下 —— 切错会让一个还在等回复的客人当场变灰。 */}
+      <div className="mb-1 flex gap-1">
+        {([false, true] as const).map((v) => (
+          <button
+            key={String(v)}
+            type="button"
+            onClick={() => setInbound(v)}
+            disabled={saving}
+            className={`rounded-full px-2 py-0.5 text-[11.5px] font-bold ${
+              inbound === v ? 'bg-me-charcoal text-white' : 'bg-white text-me-charcoal/45'
+            }`}
+          >
+            {v ? '他打来的' : '我打的'}
+          </button>
+        ))}
+      </div>
+
       <textarea
         value={note}
         onChange={(e) => setNote(e.target.value)}
