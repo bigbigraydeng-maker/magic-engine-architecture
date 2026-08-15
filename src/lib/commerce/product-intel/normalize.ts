@@ -58,7 +58,7 @@ export function normalizeTikTokProduct(
     rating: measured(finiteNumber(raw.rating), 'observed', source, collectedAt),
     imageUrl: raw.primaryImage ?? null,
     // TikTok Shop 不返回重量 —— 只能从中国供货端或实测样品拿，这里必须留空。
-    chargeableWeightKg: measured(null, 'observed', source, collectedAt),
+    chargeableWeightKg: measured<number>(null, 'observed', source, collectedAt),
     sourcing: null,
     localMarket: null,
     demand: [],
