@@ -81,6 +81,8 @@ interface ConversationRow {
   page_id: string
   participant_psid: string | null
   channel: string
+  /** 认领过的会话才挂得上人；没认领的是 null，那种情况不写触点。 */
+  contact_id: string | null
 }
 
 /** Most recent message the CUSTOMER sent — the clock Meta's window runs on. */
@@ -140,7 +142,8 @@ export async function sendReply(input: SendReplyInput): Promise<SendReplyResult>
 
   const { data: convo } = await supabaseAdmin
     .from('conversations')
-    .select('id, client_id, page_id, participant_psid, channel')
+    // contact_id：发完之后要就地把卡片标成「今天联系过了」，见文件末尾。
+    .select('id, client_id, page_id, participant_psid, channel, contact_id')
     .eq('id', input.conversationId)
     .maybeSingle<ConversationRow>()
 
@@ -230,5 +233,60 @@ export async function sendReply(input: SendReplyInput): Promise<SendReplyResult>
     .update({ last_message_at: new Date().toISOString(), last_message_from: 'page' })
     .eq('id', convo.id)
 
+  await markContactFollowedUp(convo)
+
   return { ok: true, metaMessageId: sent.messageId, window: window.kind }
+}
+
+/**
+ * 在 CRM 那一侧记一笔「我们回过他了」。
+ *
+ * ## 为什么非要在这里写
+ *
+ * 「今天该联系谁」判断卡片灰不灰，看的是 `contact_touchpoints` 里今天有没有
+ * 一笔我们发出的、真人做的联系。而 Messenger 的出站触点**只有每小时那次同步
+ * 才会写**（`link-contacts`）—— 于是销售在页面里回完一条私信，那张卡最长
+ * 一小时不变灰。
+ *
+ * 那正是 PM 2026-08-05 抱怨的毛病本身（「做了动作回到目录页，我如何知道哪个
+ * 已经联系了」），只是换了个渠道：他会以为没记上，再回一遍。
+ *
+ * ## 为什么用跟同步完全一样的那一行
+ *
+ * `source_ref` 用 `<会话 id>:out`、`source` 用 `messenger` —— **跟
+ * `link-contacts` 写的是同一个幂等键**。于是这一笔和之后每小时那次同步
+ * 落在同一行上（`ON CONFLICT DO UPDATE` 刷新时间），永远只有一条。
+ *
+ * 换个新键的话，同一段对话会同时存在「我写的每条一行」和「同步写的汇总一行」，
+ * 任何按触点条数做的统计当场失真 —— 而这张表已经有人在按渠道聚合了。
+ *
+ * ## 失败不影响发送
+ *
+ * 话已经发出去了，为一条记录把整个请求判失败，只会让销售再发一遍
+ * （客人就收到两条）。这里跟 snooze 路由那条**刻意相反**：那边的记录是
+ * 名单正确性的必要条件，这边只是让卡片早一点变灰 —— 最坏结果是等下一次同步，
+ * 也就是改动前的行为。
+ */
+async function markContactFollowedUp(convo: ConversationRow): Promise<void> {
+  // 没认领的会话挂不到人（`contact_id` 为空）—— 没有人可标，跳过。
+  if (!convo.contact_id) return
+
+  try {
+    await supabaseAdmin.from('contact_touchpoints').upsert(
+      {
+        client_id: convo.client_id,
+        contact_id: convo.contact_id,
+        channel: 'messenger',
+        direction: 'outbound',
+        occurred_at: new Date().toISOString(),
+        summary: '我们在 Messenger 回复过',
+        metadata: { thread_id: convo.id, sender: 'page' },
+        source: 'messenger',
+        source_ref: `${convo.id}:out`,
+      },
+      { onConflict: 'client_id,source,source_ref' },
+    )
+  } catch (err) {
+    console.error('[messenger/send] 记 CRM 触点失败（不影响已发出的消息）:', err)
+  }
 }
