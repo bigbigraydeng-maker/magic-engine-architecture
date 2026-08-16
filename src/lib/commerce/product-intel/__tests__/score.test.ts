@@ -205,23 +205,34 @@ describe('单件经济闸（这道是判据本身）', () => {
   })
 })
 
-describe('粗筛：只能证伪，不能证实', () => {
+describe('缺新西兰售价时：既不能证实，也不能证伪', () => {
   it('🔴 缺完整数据 + 倍数尚可 → UNKNOWN，绝不给 PASS', () => {
     const g = gateOf(tyreInflator({ localMarket: null, chargeableWeightKg: m<number>(null) }),
       'unit_economics')
     expect(g?.outcome).toBe('UNKNOWN')
-    expect(g?.reason).toContain('不能证明可行')
+    expect(g?.reason).toContain('仅供参考')
   })
 
-  it('缺完整数据 + 倍数低于 3× → 仍可 FAIL（排除是安全的）', () => {
+  it('🔴 倍数低也不许排除 —— 搭电宝 2.28× 但完整模型是 60% 毛利的赢家', () => {
+    const noLocalPrice = candidate({ localMarket: null, chargeableWeightKg: m<number>(null) })
+    // 42.99 / 18.84 = 2.28×，老的 3× 线会把它当垃圾扔掉。
+    const g = gateOf(noLocalPrice, 'unit_economics')
+    expect(g?.outcome).toBe('UNKNOWN')
+    expect(g?.outcome).not.toBe('FAIL')
+    expect(g?.reason).toContain('2.3×')
+
+    // 同一个候选，把新西兰售价补上就通过 —— 证明当初排除它是误杀。
+    expect(gateOf(candidate(), 'unit_economics')?.outcome).toBe('PASS')
+  })
+
+  it('🔴 倍数极低（2×）同样只判 UNKNOWN，不许 FAIL', () => {
     const g = gateOf(candidate({
       localMarket: null,
       chargeableWeightKg: m<number>(null),
       retailPriceUsd: m(12),
       sourcing: sourcing(6),
     }), 'unit_economics')
-    expect(g?.outcome).toBe('FAIL')
-    expect(g?.reason).toContain('粗筛排除')
+    expect(g?.outcome).toBe('UNKNOWN')
   })
 
   it('🔴 单件经济是核心闸，UNKNOWN 时整体判 UNKNOWN 不许降级成 WATCH', () => {

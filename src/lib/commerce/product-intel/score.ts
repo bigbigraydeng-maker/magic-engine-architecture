@@ -47,13 +47,20 @@ const MIN_AUNZ_MONTHLY_SEARCHES = 200
 const MEDIAN_ECOMMERCE_CVR_PCT = 1.57
 
 /**
- * 粗筛的排除线（美国售价 ÷ 中国货价）。
+ * 🔴 **没有新西兰售价时，倍数连"证伪"都做不到** —— 2026-08-16 第二次实测推翻了
+ *    原来那条 3× 排除线。
  *
- * 🔴 **粗筛只能证伪，不能证实** —— 见 `gateUnitEconomics` 的说明。
- *    3 倍以下连最乐观的情形都撑不住固定成本，可以直接排除；
- *    3 倍以上**不代表可行**，只代表"还不能排除"，一律判 UNKNOWN 等完整数据。
+ *    搭电宝一体机：美国售价 US$42.99 ÷ 中国货价 US$18.84 = **2.28×**，会被 3× 线排除；
+ *    但它在新西兰卖 NZ$129.90，完整模型算出来是 **60% 毛利、只需要 0.8% 转化率**，
+ *    是整批里最好的一个。
+ *
+ *    根因跟当初 5× 毛利闸误杀是同一个：**分子用错了市场**。我们的收入由新西兰售价
+ *    决定，而两地价差实测可达 1.78 倍（NZ$129.90 vs US$42.99×1.6981 = NZ$73.01）。
+ *    美国那边的倍数低，只说明美国那个市场加价少，跟我们能不能赚钱无关。
+ *
+ *    所以缺新西兰售价时**一律 UNKNOWN**：倍数照算、照写进 reason 供人参考，
+ *    但**不作判据**。要排除，就得先把新西兰售价取到。
  */
-const COARSE_REJECT_MULTIPLE = 3
 
 function gateProvenDemand(candidate: ProductCandidate): GateResult {
   const sold = candidate.cumulativeSold.value
@@ -137,26 +144,24 @@ function clickCostNzd(
   return usd === null || usd <= 0 ? null : usd * fxUsdToNzd
 }
 
-/** 数据不全时的粗筛。**只返回 FAIL 或 UNKNOWN，永远不给 PASS。** */
+/**
+ * 数据不全时**只报口径，不下判决** —— 永远返回 UNKNOWN。
+ *
+ * 见上方 COARSE 那段注释：美国倍数既不能证实也不能证伪，
+ * 所以这里一个 PASS 和一个 FAIL 都不许出。
+ */
 function coarseScreen(candidate: ProductCandidate, missing: string): GateResult {
   const retailUsd = candidate.retailPriceUsd.value
   const costUsd = candidate.sourcing?.medianUnitCostUsd.value ?? null
   if (retailUsd === null || costUsd === null || costUsd <= 0) {
-    return { gate: 'unit_economics', outcome: 'UNKNOWN', reason: `算不了：${missing}，也没有货价可粗筛` }
+    return { gate: 'unit_economics', outcome: 'UNKNOWN', reason: `算不了：缺${missing}，也没有货价` }
   }
   const multiple = retailUsd / costUsd
-  if (multiple < COARSE_REJECT_MULTIPLE) {
-    return {
-      gate: 'unit_economics',
-      outcome: 'FAIL',
-      reason: `粗筛排除：美国售价 ÷ 货价 = ${multiple.toFixed(1)}×，低于 ${COARSE_REJECT_MULTIPLE}× 连固定成本都撑不住`,
-    }
-  }
   return {
     gate: 'unit_economics',
     outcome: 'UNKNOWN',
-    reason: `粗筛 ${multiple.toFixed(1)}× 不足以判定（缺${missing}）——`
-      + `倍数只能排除明显不行的，不能证明可行`,
+    reason: `判不了：缺${missing}。美国售价 ÷ 货价 = ${multiple.toFixed(1)}× 仅供参考 ——`
+      + `我们的收入由新西兰售价决定，美国倍数低不代表这里赚不到钱`,
   }
 }
 
