@@ -902,6 +902,35 @@ describe('暂时不考虑的人交给系统跟，不是停掉', () => {
     expect(segmentContact(hardNo, NOW).segment).toBe('excluded')
   })
 
+  /**
+   * 🔴 **系统自己群发的那封邮件，不许抹掉客人那句「现在先不考虑」**
+   * （Codex 复审 2026-08-16）。
+   *
+   * 这个人落在「交给系统跟」，而那一桶提供的动作就是一次性群发。群发走的是
+   * 同一条手记通道，备注是系统写的「群发了一封邮件」，兜底成 `spoke` ——
+   * 用「最新的任意结果」判的话，第二天这个人就掉回「聊过了没下文」，
+   * **又被推回真人逐个打电话的名单**。等于我们打给一个刚说过别现在打的人。
+   */
+  it('群发一封邮件之后，他照旧是「暂时不考虑」', () => {
+    const r = segmentContact(
+      softNo({
+        touchpoints: [
+          form('2026-07-01T00:00:00Z'),
+          call('2026-07-10T00:00:00Z', 'not_interested_now'),
+          // 系统群发写下的那一笔：兜底 outcome 是 spoke
+          {
+            channel: 'phone',
+            direction: 'outbound' as const,
+            occurredAt: '2026-07-12T00:00:00Z',
+            outcome: 'spoke',
+          },
+        ],
+      }),
+      NOW,
+    )
+    expect(r.segment).toBe('handoff_sop')
+  })
+
   /** 他一开口就跳回最上面 —— 「客户回话了」排在这条规则前面。 */
   it('说完「再说吧」之后他又来消息 → 立刻回到最高优先', () => {
     const r = segmentContact(

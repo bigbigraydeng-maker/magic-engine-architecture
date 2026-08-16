@@ -207,8 +207,12 @@ const SOFT_NO_PATTERNS: RegExp[] = [
   /\bmaybe\s+(later|next\s+year)\b/i,
   /\b(think|thinking)\s+(about\s+it|it\s+over)\b/i,
   /\bhave\s+a\s+think\b/i,
-  /\bnot\s+ready\b/i,
-  /\btoo\s+early\b/i,
+  // ⚠️ `ready` / `early` 必须绑住**买卖或出行**（Codex 复审 2026-08-16）：
+  // 裸的 `not ready` 会吃掉「not ready to talk, call back tomorrow」——
+  // 那明明是约了回电，却被判成「暂时不考虑」，回电时间也一并丢了。
+  /\bnot\s+ready\s+(to\s+(book|travel|go|commit|decide|pay)|for\s+(a\s+)?(trip|tour|booking))/i,
+  /\bnot\s+ready\s+yet\b/i,
+  /\btoo\s+early\s+(to\s+(book|decide|plan)|for\s+(a\s+)?(trip|tour|booking))/i,
 ]
 
 const CALLBACK_PATTERNS: RegExp[] = [

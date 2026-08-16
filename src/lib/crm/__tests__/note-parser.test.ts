@@ -238,7 +238,8 @@ describe('暂时不考虑 ≠ 明确不要了', () => {
     ['not interested right now'],
     ['thinking about it'],
     ['maybe later'],
-    ['too early for him'],
+    ['too early to book'],
+    ['not ready to book yet'],
   ])('「%s」→ 暂时不考虑，继续跟', (note) => {
     expect(outcome(note)).toBe('not_interested_now')
   })
@@ -318,6 +319,17 @@ describe('暂时不考虑 ≠ 明确不要了', () => {
    *   · 「暂不考虑」→ 退化成「聊过了」，人白白留在名单上被反复打
    *   · 「暂不感兴趣」→ 命中硬拒绝，**人被永久停掉** —— 正是本 PR 要修的那件事
    */
+  /**
+   * 🔴 **`ready` / `early` 必须绑住买卖或出行**（Codex 复审 2026-08-16）。
+   *
+   * 裸的 `not ready` 会吃掉「not ready to talk, call back tomorrow」——
+   * 那明明是**约了回电**，却被判成「暂时不考虑」，回电时间也一并丢了，
+   * 这个人还会收到一个「改成短期内不考虑」的提议。
+   */
+  it('「not ready to talk, call back tomorrow」→ 约了回电，不是不考虑', () => {
+    expect(outcome('not ready to talk, call back tomorrow')).toBe('callback_set')
+  })
+
   it.each([
     ['暂不考虑'],
     ['暂不感兴趣'],
