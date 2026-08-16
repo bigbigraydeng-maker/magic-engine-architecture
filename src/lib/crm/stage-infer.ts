@@ -18,6 +18,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase'
+import { isMarketingAction, stageSuppressesWorklist } from './pipeline'
 import {
   STAGE_SYSTEM_PROMPT,
   StageVerdictSchema,
@@ -157,13 +158,40 @@ async function loadClientsWithSafeStages(): Promise<string[]> {
     .map(([clientId]) => clientId)
 }
 
-/** 这个客户配置里真的有哪些阶段。没配的不许写进去。 */
-async function loadConfiguredStages(clientId: string): Promise<Set<string>> {
-  const { data } = await supabaseAdmin
+/**
+ * 这个客户配置里真的有哪些阶段，以及**其中哪些会把人挡出名单**。
+ *
+ * 两样一起读：没配的不许写进去，会挡出名单的更不许由模型来写
+ * （见 `usableStage()` 第 4 道闸）。抑制与否用 `stageSuppressesWorklist()` 判，
+ * 跟名单本身同一个函数 —— 客户改了配置这里自动跟上。
+ */
+async function loadConfiguredStages(
+  clientId: string,
+): Promise<{ configured: Set<string>; suppressing: Set<string> }> {
+  const { data, error } = await supabaseAdmin
     .from('client_pipeline_stages')
-    .select('stage_key')
+    .select('stage_key, marketing_action, is_terminal')
     .eq('client_id', clientId)
-  return new Set(((data ?? []) as { stage_key: string }[]).map((s) => s.stage_key))
+  if (error) throw new Error(`读阶段配置失败: ${error.message}`)
+
+  const configured = new Set<string>()
+  const suppressing = new Set<string>()
+  for (const row of (data ?? []) as {
+    stage_key: string
+    marketing_action: string | null
+    is_terminal: boolean | null
+  }[]) {
+    configured.add(row.stage_key)
+    if (
+      stageSuppressesWorklist(
+        isMarketingAction(row.marketing_action) ? row.marketing_action : null,
+        row.is_terminal,
+      )
+    ) {
+      suppressing.add(row.stage_key)
+    }
+  }
+  return { configured, suppressing }
 }
 
 /**
@@ -368,15 +396,18 @@ export async function inferStagesFromConversations(
   result.candidates = candidates.length
   if (candidates.length === 0) return result
 
-  const configuredByClient = new Map<string, Set<string>>()
+  const stagesByClient = new Map<string, { configured: Set<string>; suppressing: Set<string> }>()
   for (const clientId of Array.from(new Set(candidates.map((c) => c.client_id)))) {
-    configuredByClient.set(clientId, await loadConfiguredStages(clientId))
+    stagesByClient.set(clientId, await loadConfiguredStages(clientId))
   }
 
   for (const c of candidates) {
     if (result.asked >= MAX_CONTACTS_PER_RUN) break
     try {
-      const configured = configuredByClient.get(c.client_id) ?? new Set<string>()
+      const { configured, suppressing } = stagesByClient.get(c.client_id) ?? {
+        configured: new Set<string>(),
+        suppressing: new Set<string>(),
+      }
       const lines = await loadTranscriptLines(c.client_id, c.id)
 
       /**
@@ -437,7 +468,7 @@ export async function inferStagesFromConversations(
       // 模型答不上来 / 答歪了 / 证据是编的 / 落点不许用 —— 都不算数，进池子。
       // 「读不出来」不等于「不知道该拿他怎么办」：他就是个潜在客户。
       const stage = verdict
-        ? usableStage(verdict, transcript, configured)
+        ? usableStage(verdict, transcript, configured, suppressing)
         : null
       if (!stage || !verdict) {
         result.rejected++

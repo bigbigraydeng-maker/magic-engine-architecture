@@ -82,3 +82,37 @@ describe('号码好好的人，一个字都不该变', () => {
     expect(screen.queryByText(/这个号打不通/)).toBeNull()
   })
 })
+
+/**
+ * 🔴 **说了不联系，就别把联系按钮摆在手边**（狄仁杰复审 2026-08-16）。
+ *
+ * 原先这一屏同时出现「我们任何渠道都不会再联系他」和三个能点的入口 ——
+ * 拨号、邮箱、以及紧挨着黄条下方一个**功能完整**的私信输入框。
+ * 一句话和三个按钮打架，销售顺手一点就是一次骚扰。
+ */
+describe('拒联的人，一个能点的联系入口都不给', () => {
+  it('不给拨号链接', () => {
+    draw({ doNotContact: true })
+    expect(dialLink()).toBeUndefined()
+  })
+
+  it('不给邮件链接', () => {
+    draw({ doNotContact: true })
+    expect(
+      Array.from(document.querySelectorAll('a')).find((a) =>
+        a.getAttribute('href')?.startsWith('mailto:'),
+      ),
+    ).toBeUndefined()
+  })
+
+  it('号码和邮箱本身还看得见 —— 要核对得先看得到', () => {
+    draw({ doNotContact: true })
+    expect(screen.getByText(/\+64211234567/)).toBeTruthy()
+    expect(screen.getByText(/sue@example\.com/)).toBeTruthy()
+  })
+
+  it('没标拒联的人照常能点', () => {
+    draw()
+    expect(dialLink()).toBeTruthy()
+  })
+})

@@ -56,11 +56,18 @@ function stubDb(over: Partial<Fake> = {}) {
   mocks.from.mockImplementation((table: string) => {
     if (table === 'client_pipeline_stages') {
       // 两个用途共用一张表：先找「配齐了那几档的客户」，再查某客户配了哪些档。
-      const rows = f.stages.map((stage_key) => ({ stage_key, client_id: CLIENT }))
+      const rows = f.stages.map((stage_key) => ({
+        stage_key,
+        client_id: CLIENT,
+        // 「即将出行」在 CTS 真实配置里是 postsale（抑制档）—— 照实建模，
+        // 这样「模型不许落抑制档」那条能在端到端这一层也被验到。
+        marketing_action: stage_key === 'traveling_soon' ? 'postsale' : 'nurture',
+        is_terminal: false,
+      }))
       return {
         select: () => ({
           in: async () => ({ data: rows, error: null }),
-          eq: async () => ({ data: rows }),
+          eq: async () => ({ data: rows, error: null }),
         }),
       }
     }
@@ -422,5 +429,22 @@ describe('读不出来 → 潜在客户池', () => {
     const r = await inferStagesFromConversations(NOW, ask)
     expect(written.stage).toBeUndefined()
     expect(r.toPool).toBe(0)
+  })
+})
+
+/**
+ * 🔴 端到端钉住：模型说「即将出行」，而这一档在 CTS 是抑制档 —— 落进去人就
+ * 从今天该联系的名单上消失。判断层那道闸（`usableStage` 第 4 道）必须真的
+ * 接到客户配置，不能只是参数默认值。
+ */
+describe('抑制档挡到落库这一层', () => {
+  it('模型说「即将出行」→ 不写那一档，人进潜在客户池', async () => {
+    stubDb()
+    answer({ stage: 'traveling_soon', evidence: CUSTOMER_LINE, reason: '他说十月要飞北京' })
+
+    const r = await inferStagesFromConversations(NOW, ask)
+    expect(written.stage).not.toBe('traveling_soon')
+    expect(written.stage).toBe('new')
+    expect(r.rejected).toBe(1)
   })
 })

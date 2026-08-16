@@ -218,3 +218,36 @@ describe('新填的表单挡住「无下文」', () => {
     )
   })
 })
+
+/**
+ * 🔴 **白名单挡不住抑制档**（子牙复审 2026-08-16，这是上线版真实的洞）。
+ *
+ * `traveling_soon` 在白名单里，而它在 CTS 的配置里是 `postsale` —— 抑制档，
+ * 落进去人第二天就从今天该联系的名单上消失。客人在邮件里写
+ * "we're flying to Beijing in October"（可能跟别家订的、可能只是打算），
+ * 模型读成「即将出行」，一个还在谈的人被静默移出名单。
+ *
+ * 所以第 4 道闸看的是**客户自己的配置**，不是这份白名单。
+ */
+describe('会把人挡出名单的档，模型一律不许落', () => {
+  const transcript = renderTranscript([line()])
+  const v = (stage: string) => ({ ...verdict(), stage }) as unknown as StageVerdict
+
+  it('🔴 「即将出行」在这个客户是抑制档 → 不接', () => {
+    expect(
+      usableStage(v('traveling_soon'), transcript, CONFIGURED, new Set(['traveling_soon'])),
+    ).toBeNull()
+  })
+
+  it('同一档在别的客户不抑制 → 照常接', () => {
+    expect(usableStage(v('traveling_soon'), transcript, CONFIGURED, new Set())).toBe('traveling_soon')
+  })
+
+  it('客户把「短期内不考虑」也配成抑制 → 一样挡住，不靠白名单人肉审', () => {
+    expect(usableStage(v('deferred'), transcript, CONFIGURED, new Set(['deferred']))).toBeNull()
+  })
+
+  it('不抑制的档不受影响', () => {
+    expect(usableStage(v('quoted'), transcript, CONFIGURED, new Set(['traveling_soon']))).toBe('quoted')
+  })
+})

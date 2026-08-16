@@ -165,7 +165,17 @@ export function PersonDrawer({
                 ⚠️ 这个号打不通 —— 用下面的邮箱 / 私信联系，顺便问他要个新号
               </span>
             )}
-            {row.phone && !row.phoneUnusable && (
+            {/* 🔴 **说了不联系，就别把联系按钮摆在手边**（狄仁杰复审 2026-08-16）。
+                原先这一屏同时出现「我们任何渠道都不会再联系他」和三个能点的
+                联系入口（拨号 / 邮箱 / 私信框）—— 一句话和三个按钮打架，
+                销售顺手一点就是一次骚扰。做法照抄同一屏里坏号那一段：
+                **照旧显示（要核对得看得见），但点不动。** */}
+            {row.phone && !row.phoneUnusable && row.doNotContact && (
+              <span className="rounded-lg border border-me-stone bg-black/[0.04] px-3 py-2 text-sm font-semibold text-me-charcoal/45 line-through">
+                📞 {row.phone}
+              </span>
+            )}
+            {row.phone && !row.phoneUnusable && !row.doNotContact && (
               <a
                 href={`tel:${row.phone}`}
                 className="rounded-lg border border-me-stone bg-white px-3 py-2 text-sm font-semibold text-me-charcoal"
@@ -173,7 +183,12 @@ export function PersonDrawer({
                 📞 {row.phone}
               </a>
             )}
-            {row.email && (
+            {row.email && row.doNotContact && (
+              <span className="break-all rounded-lg border border-me-stone bg-black/[0.04] px-3 py-2 text-sm font-semibold text-me-charcoal/45 line-through">
+                ✉️ {row.email}
+              </span>
+            )}
+            {row.email && !row.doNotContact && (
               <a
                 href={`mailto:${row.email}`}
                 className="break-all rounded-lg border border-me-stone bg-white px-3 py-2 text-sm font-semibold text-me-charcoal"
@@ -275,16 +290,21 @@ export function PersonDrawer({
           {/* 在这一页直接回私信 —— 没有私信线的人这里什么都不渲染。
               110 位 CTS 客人只有 Facebook 身份，卡上写着「只能在 Messenger
               回他」，之前却要跳去另一个页面才回得了。 */}
-          <MessengerReply
-            clientId={clientId}
-            contactId={row.contactId}
-            customerName={row.name}
-            viewerEmail={viewerEmail}
-            onSent={() => {
-              setTimelineKey((k) => k + 1)
-              onSaved('✓ 私信已发出', false)
-            }}
-          />
+          {/* 🔴 拒联的人这里**整个不渲染**（狄仁杰复审 2026-08-16）。
+              「任何渠道都不许再发」包括私信 —— 而这个框原先无条件出现在
+              那句黄条正下方，打完字按一下就真的发出去了。 */}
+          {!row.doNotContact && (
+            <MessengerReply
+              clientId={clientId}
+              contactId={row.contactId}
+              customerName={row.name}
+              viewerEmail={viewerEmail}
+              onSent={() => {
+                setTimelineKey((k) => k + 1)
+                onSaved('✓ 私信已发出', false)
+              }}
+            />
+          )}
 
           {/* 往来记录：表单 / 电话 / 私信（以后是邮件、外呼），一条线倒序 */}
           <div className="mt-5">

@@ -254,12 +254,24 @@ function ContactDetail({
             ⚠️ 这个号打不通 —— 用邮件 / 私信联系，顺便问他要个新号
           </span>
         )}
-        {row.phone && !row.phoneUnusable && (
+        {/* 🔴 拒联的人不给可点的联系入口（狄仁杰复审 2026-08-16）——
+            跟抽屉那一页说同一件事。照旧显示，但点不动。 */}
+        {row.phone && !row.phoneUnusable && row.doNotContact && (
+          <span className="rounded-lg border border-me-stone bg-black/[0.04] px-3 py-1.5 text-sm font-semibold text-me-charcoal/45 line-through">
+            📞 {row.phone}
+          </span>
+        )}
+        {row.phone && !row.phoneUnusable && !row.doNotContact && (
           <a href={`tel:${row.phone}`} className="rounded-lg border border-me-stone px-3 py-1.5 text-sm font-semibold text-me-charcoal">
             📞 {row.phone}
           </a>
         )}
-        {row.email && (
+        {row.email && row.doNotContact && (
+          <span className="break-all rounded-lg border border-me-stone bg-black/[0.04] px-3 py-1.5 text-sm font-semibold text-me-charcoal/45 line-through">
+            ✉️ {row.email}
+          </span>
+        )}
+        {row.email && !row.doNotContact && (
           <a href={`mailto:${row.email}`} className="break-all rounded-lg border border-me-stone px-3 py-1.5 text-sm font-semibold text-me-charcoal">
             ✉️ {row.email}
           </a>

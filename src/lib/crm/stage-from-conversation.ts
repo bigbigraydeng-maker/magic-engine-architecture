@@ -38,7 +38,12 @@
 import { z } from 'zod'
 
 /**
- * 允许模型落的阶段 —— **全是「还会继续跟」的档**。
+ * 允许模型落的阶段 —— 白名单，**第一道闸**。
+ *
+ * 🔴 光有这份名单**不够**（子牙复审 2026-08-16）：`traveling_soon` 在 CTS
+ * 的配置里是 `postsale`，那是抑制档，落进去人就退出名单。白名单是按「这几个
+ * 词听起来还会继续跟」挑的，而一档到底抑不抑制**由客户自己的配置决定**，
+ * 不由这份名单决定。所以 `usableStage()` 还有第二道闸去读客户配置。
  *
  * 对照 CTS 那 9 档（`20260728000001_leads_pipeline_stages.sql`）：
  *
@@ -186,20 +191,42 @@ export function quoteIsGrounded(evidence: string, transcript: string): boolean {
  * @param transcript  喂给它的原文
  * @param configured  这个客户配置里**真的有**的阶段（`client_pipeline_stages`）
  *
- * 返回落哪一档，或者 null（= 继续空着）。四道闸，任何一道不过就 null：
+ * @param suppressing 这个客户配置里**会把人挡出名单**的那些档
+ *
+ * 返回落哪一档，或者 null（= 继续空着）。五道闸，任何一道不过就 null：
  *   1. 模型自己说读不出来
  *   2. 落点不在「还会继续跟」的白名单里（终结档 / 涉及钱的档不接）
  *   3. 这个客户压根没配这一档 —— 写进去会变成界面上一个认不出的 stage_key
- *   4. 证据在原文里找不到 = 编的
+ *   4. **这一档会把人挡出名单** —— 见下面那段
+ *   5. 证据在原文里找不到 = 编的
+ *
+ * 🔴 **第 4 道闸是补上的**（子牙复审 2026-08-16，这是上一版真实的洞）。
+ *
+ * 上一版只有白名单一道防线，而白名单里的 `traveling_soon`（即将出行）在 CTS
+ * 的配置里是 `marketing_action = 'postsale'` —— 那是**抑制档**，落进去这个人
+ * 第二天就从今天该联系的名单上消失。也就是说这个文件头上写的那条不变量
+ * （「模型只允许落在还会继续跟的那几档」）**自己破了自己**。
+ *
+ * 坏法很具体：客人在邮件里写 "we're flying to Beijing in October"（可能是跟
+ * 别家订的，可能只是打算），模型读成「即将出行」，写库 —— 一个还在谈的人
+ * 被静默移出名单，没有任何提示说发生过什么。这跟当初刻意排除
+ * `deposit_paid` / `paid_full` 是同一条理由（一封「明天转账」的邮件不等于
+ * 钱到账），只是「即将出行」漏过了那次筛选。
+ *
+ * 所以这一道**不看白名单，看客户自己的配置**：判据用 `stageSuppressesWorklist()`，
+ * 跟名单本身同一个函数。以后哪个客户把 `deferred` 也配成 suppress，这里
+ * 自动挡住，不靠白名单里有没有人肉审到。
  */
 export function usableStage(
   verdict: StageVerdict,
   transcript: string,
   configured: ReadonlySet<string>,
+  suppressing: ReadonlySet<string> = new Set(),
 ): SafeStage | null {
   if (verdict.stage === NO_VERDICT) return null
   if (!(SAFE_STAGES as readonly string[]).includes(verdict.stage)) return null
   if (!configured.has(verdict.stage)) return null
+  if (suppressing.has(verdict.stage)) return null
   if (!quoteIsGrounded(verdict.evidence, transcript)) return null
   return verdict.stage
 }

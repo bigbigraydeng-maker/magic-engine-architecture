@@ -15,6 +15,8 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase'
+// 「别再联系」判据全仓只有一份 —— 发送链路也必须走它，不许自己判。
+import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
 import { getMetaTokenForClient } from '@/lib/meta/token-manager'
 import { getPageAccessToken } from '@/lib/meta/page-posts'
 
@@ -71,6 +73,8 @@ export type SendReplyResult =
         | 'wrong_channel'
         | 'empty_body'
         | 'window_closed'
+        /** 他说过「别再联系」—— 任何渠道都不发。 */
+        | 'do_not_contact'
         | 'no_token'
         | 'graph_failed'
     }
@@ -171,6 +175,50 @@ export async function sendReply(input: SendReplyInput): Promise<SendReplyResult>
 
   if (!convo.participant_psid) {
     return { ok: false, status: 409, error: '这条对话没有可回复的收件人', reason: 'window_closed' }
+  }
+
+  /**
+   * 🔴 **说过「别再联系」的人，私信也不许发**（狄仁杰复审 2026-08-16）。
+   *
+   * 「任何渠道都不许再发」这句话原先只在 CRM 页面上说，发送链路一个字都没判 ——
+   * 抽屉里那句黄条正下方就摆着一个能用的私信框。前端已经不渲染它了，但**前端
+   * 禁用永远只是提示**：私信收件箱那一页照旧能回，脚本更不看界面。这一道是兜底。
+   *
+   * 判据只有一份（`lib/crm/dnc`），跟今日名单、群发、分段用的是同一个函数。
+   * 没认领的会话挂不到人（`contact_id` 为空），那种情况没有拒联可查，照常放行。
+   */
+  if (convo.contact_id) {
+    const [{ data: contactRow }, { data: dncTouches }] = await Promise.all([
+      supabaseAdmin
+        .from('contacts')
+        .select('do_not_contact')
+        .eq('id', convo.contact_id)
+        .eq('client_id', convo.client_id)
+        .maybeSingle<{ do_not_contact: boolean }>(),
+      supabaseAdmin
+        .from('contact_touchpoints')
+        .select('metadata, occurred_at')
+        .eq('client_id', convo.client_id)
+        .eq('contact_id', convo.contact_id),
+    ])
+
+    const touches: DncTouch[] = ((dncTouches ?? []) as {
+      metadata: Record<string, unknown> | null
+      occurred_at: string
+    }[]).map((t) => ({
+      outcome: (t.metadata?.outcome as string) ?? null,
+      flagged: t.metadata?.do_not_contact === true,
+      occurredAt: t.occurred_at,
+    }))
+
+    if (isDoNotContact(contactRow?.do_not_contact === true, touches)) {
+      return {
+        ok: false,
+        status: 409,
+        error: '他说过别再联系 —— 任何渠道都不发。判错了的话，先在客人卡片上点「放回名单」',
+        reason: 'do_not_contact',
+      }
+    }
   }
 
   const window = messagingWindow(await lastInboundAt(input.conversationId))

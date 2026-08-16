@@ -23,6 +23,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { recordManualTouchpoint } from '@/lib/crm/touchpoints'
 import { classifyNote, type NoteParse } from '@/lib/crm/note-parser'
 import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
+import { fetchAll } from '@/lib/supabase-paginate'
 
 /** 一次最多记这么多，防手滑把整库刷一遍。CTS 最大的桶 108 人，够用。 */
 const MAX_BATCH = 500
@@ -96,27 +97,45 @@ export async function POST(
    * 只要那次镜像更新没成功，这个人就会被群发**永远跳过**，而界面上已经显示
    * 他回到名单了。判据只有一份，见 `lib/crm/dnc`。
    */
-  const { data: dncTouches, error: dErr } = await supabaseAdmin
-    .from('contact_touchpoints')
-    .select('contact_id, metadata, occurred_at')
-    .eq('client_id', clientId)
-    .in('contact_id', rows.map((r) => r.id))
-
   /**
-   * 🔴 读不到真相源就整批不写（Codex 复审 2026-08-16）。把这次失败当成
-   * 「他们都没有拒联触点」，就会给一个明确说过别再联系的人记上一笔群发 ——
-   * 这正是这套判据存在的理由。宁可让人重发一次。
+   * 🔴 **必须分页拉全**（狄仁杰复审 2026-08-16）。
+   *
+   * Supabase 单次查询硬顶 1000 行，**被砍不报错**（`lib/supabase-paginate` 头注：
+   * 2026-07-29 实测 CTS 库里 1271 条只回 1000 条）。一次最多群发 500 人，
+   * 按 CTS 约 2.2 触点/人 算就有 1100 行 —— 稳稳超顶。
+   *
+   * 被砍掉的那些行里只要有某人**唯一那条**拒联触点，他的触点集就成了空，
+   * `isDoNotContact` 判 false（镜像列本来就可能没写上），于是**一个明确说过
+   * 别再联系的人被记上一笔群发**。下面那道「读不到真相源就整批不写」的闸
+   * 拦不住它 —— 截断根本不报错，正好从闸底下钻过去。
    */
-  if (dErr) {
-    return NextResponse.json({ error: dErr.message }, { status: 500 })
+  let dncTouches: { contact_id: string; metadata: Record<string, unknown> | null; occurred_at: string }[]
+  try {
+    dncTouches = await fetchAll<{
+      contact_id: string
+      metadata: Record<string, unknown> | null
+      occurred_at: string
+    }>((from, to) =>
+      supabaseAdmin
+        .from('contact_touchpoints')
+        .select('contact_id, metadata, occurred_at')
+        .eq('client_id', clientId)
+        .in('contact_id', rows.map((r) => r.id))
+        // 分页必须有稳定排序，否则页与页之间可能重复/漏行。
+        .order('occurred_at', { ascending: true })
+        .range(from, to),
+    )
+  } catch (e) {
+    /**
+     * 读不到真相源就整批不写（Codex 复审 2026-08-16）。把失败当成
+     * 「他们都没有拒联触点」，就会给一个明确说过别再联系的人记上一笔群发 ——
+     * 这正是这套判据存在的理由。宁可让人重发一次。
+     */
+    return NextResponse.json({ error: e instanceof Error ? e.message : '读取拒联记录失败' }, { status: 500 })
   }
 
   const touchesByContact = new Map<string, DncTouch[]>()
-  for (const t of (dncTouches ?? []) as {
-    contact_id: string
-    metadata: Record<string, unknown> | null
-    occurred_at: string
-  }[]) {
+  for (const t of dncTouches) {
     const list = touchesByContact.get(t.contact_id) ?? []
     list.push({
       outcome: (t.metadata?.outcome as string) ?? null,

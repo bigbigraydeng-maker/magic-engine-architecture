@@ -394,12 +394,31 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
   /** 已经看过今天第一条变更的人 —— 后面的都不看了。 */
   const seenStageEvent = new Set<string>()
   try {
-    const { data: events } = await supabaseAdmin
-      .from('contact_stage_events')
-      .select('contact_id, from_stage, created_at')
-      .eq('client_id', clientId)
-      .gte('created_at', new Date(localDayStartMs(now, timeZone)).toISOString())
-      .order('created_at', { ascending: true })
+    /**
+     * 🔴 **这一条必须分页拉全**（子牙复审 2026-08-16）。
+     *
+     * Supabase 单次查询硬顶 1000 行、被砍还不报错（本文件上面那几个查询都
+     * 因此走了 `fetchAll`）。这一条原先漏了。
+     *
+     * 以前不容易触发：一天没那么多人改阶段。但「读往来记录自动填阶段」上线后，
+     * 每小时最多写 60 条阶段变更，一天可以过千 —— 而这里是**正序**，被砍掉的
+     * 正是当天最新那些。后果是下午被改过阶段的人拿不到 `stageSuppressedToday`，
+     * 冻结副本不清抑制，**卡片在下午凭空消失** —— 正是 day-list 整个文件
+     * 存在的理由（PM 2026-08-05：「做完动作回到目录页，我如何知道哪个已经联系了」）。
+     */
+    const events = await fetchAll<{
+      contact_id: string
+      from_stage: string | null
+      created_at: string
+    }>((from, to) =>
+      supabaseAdmin
+        .from('contact_stage_events')
+        .select('contact_id, from_stage, created_at')
+        .eq('client_id', clientId)
+        .gte('created_at', new Date(localDayStartMs(now, timeZone)).toISOString())
+        .order('created_at', { ascending: true })
+        .range(from, to),
+    )
 
     for (const e of events ?? []) {
       const cid = e.contact_id as string
