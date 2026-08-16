@@ -185,10 +185,43 @@ export function usableStage(
  * 值不值得为这个人花一次模型调用。
  *
  * 只有我们单方面发过东西、对方一个字都没回过的，读了也读不出什么 ——
- * 那是 `no_response`，规则自己就能定，不必花钱问模型。
+ * 那种情况交给下面 `ruleOnlyStage()` 判，不必花钱问模型。
  */
 export function worthReading(lines: TranscriptLine[]): boolean {
   return lines.some((l) => l.direction === 'inbound' && l.body.trim().length > 0)
+}
+
+/**
+ * 我们发过、对方多久没回，就算「无下文」。
+ *
+ * 两周：短于这个数会把「昨天刚发的邮件」写成无下文 —— 人家可能今天就回。
+ */
+const NO_RESPONSE_AFTER_MS = 14 * 86_400_000
+
+/**
+ * 不用问模型就定得下来的那一档。
+ *
+ * 🔴 **只判「无下文」这一种**（Codex 复审 2026-08-16）。原先这里只是 `continue`，
+ * 于是注释里写着「规则自己就能定」的那一档**其实从来没有人写**：这些人永远
+ * 停在空阶段、每小时被重新捞一遍，还占着候选窗口挡住后面的人。
+ *
+ * 判据窄到不可能出错：**一条入站都没有**（客人一个字没说过，没有任何可误读的
+ * 语义）+ 我们确实发过 + 最后一次发出去已经过了两周。任何一条不成立就返回 null，
+ * 继续空着。
+ */
+export function ruleOnlyStage(lines: TranscriptLine[], now: Date): 'no_response' | null {
+  if (worthReading(lines)) return null
+
+  const lastOutbound = Math.max(
+    0,
+    ...lines
+      .filter((l) => l.direction === 'outbound' && l.body.trim().length > 0)
+      .map((l) => new Date(l.at).getTime())
+      .filter((t) => !Number.isNaN(t)),
+  )
+  if (lastOutbound === 0) return null
+  if (now.getTime() - lastOutbound < NO_RESPONSE_AFTER_MS) return null
+  return 'no_response'
 }
 
 export const STAGE_SYSTEM_PROMPT = `You read the full conversation between CTS Tours New Zealand and one prospective customer, then say which stage of the sales pipeline that person is at.

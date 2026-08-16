@@ -47,11 +47,11 @@ function stubDb(over: Partial<Fake> = {}) {
 
   mocks.from.mockImplementation((table: string) => {
     if (table === 'client_pipeline_stages') {
-      // 两个用途共用一张表：先找「配了这些档的客户」，再查某客户配了哪些档。
+      // 两个用途共用一张表：先找「配齐了那几档的客户」，再查某客户配了哪些档。
       const rows = f.stages.map((stage_key) => ({ stage_key, client_id: CLIENT }))
       return {
         select: () => ({
-          in: async () => ({ data: f.candidates.length > 0 ? rows : [] }),
+          in: async () => ({ data: rows, error: null }),
           eq: async () => ({ data: rows }),
         }),
       }
@@ -59,7 +59,19 @@ function stubDb(over: Partial<Fake> = {}) {
     if (table === 'contacts') {
       return {
         select: () => ({
-          in: () => ({ is: () => ({ eq: () => ({ limit: async () => ({ data: f.candidates }) }) }) }),
+          in: () => ({
+            is: () => ({
+              eq: () => ({
+                order: () => ({
+                  // 窗口按小时滚动 —— 测试里固定 0 点，起点就是 0。
+                  range: async (from: number) => ({
+                    data: from === 0 ? f.candidates : [],
+                    error: null,
+                  }),
+                }),
+              }),
+            }),
+          }),
         }),
         update: (patch: Record<string, unknown>) => ({
           eq: () => ({
@@ -126,7 +138,7 @@ describe('没配 key 就一步都不走', () => {
     vi.stubEnv('OPENAI_API_KEY', '')
     stubDb()
     const r = await inferStagesFromConversations(NOW, ask)
-    expect(r).toEqual({ candidates: 0, asked: 0, filled: 0, rejected: 0, failed: 0 })
+    expect(r).toEqual({ candidates: 0, asked: 0, filled: 0, byRule: 0, rejected: 0, failed: 0 })
     expect(mocks.from).not.toHaveBeenCalled()
   })
 })
@@ -175,15 +187,6 @@ describe('填空着的阶段', () => {
     expect(r.filled).toBe(0)
     expect(r.failed).toBe(0)
   })
-
-  it('客户没配这一档 → 不写，界面上不该冒出认不出的阶段', async () => {
-    stubDb({ stages: ['new', 'contacted'] })
-    answer({ stage: 'quoted', evidence: CUSTOMER_LINE, reason: '这个客户没有报价这一档' })
-
-    const r = await inferStagesFromConversations(NOW, ask)
-    expect(r.rejected).toBe(1)
-    expect(written.stage).toBeUndefined()
-  })
 })
 
 describe('绝不覆盖人工判断', () => {
@@ -219,6 +222,86 @@ describe('不值得花的模型调用一次都不花', () => {
     stubDb({ candidates: [] })
     const r = await inferStagesFromConversations(NOW, ask)
     expect(r.asked).toBe(0)
+    expect(r.filled).toBe(0)
+  })
+})
+
+
+/**
+ * 🔴 提示词讲的是 CTS 的旅游生意（团 / 行程 / 出行月份）。地产那套漏斗也有
+ * `contacted` 和 `no_response`，「配了其中任意一档就跑」会拿旅游漏斗去判一个
+ * 看房的人 —— 写进去的是错的客户数据。
+ */
+describe('只跑配齐了整条旅游漏斗的客户', () => {
+  it('少一档（地产那套只有 contacted / no_response）→ 一步都不走', async () => {
+    stubDb({ stages: ['contacted', 'no_response'] })
+    const r = await inferStagesFromConversations(NOW, ask)
+    expect(r.candidates).toBe(0)
+    expect(ask).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * 🔴 少读了一路就不许再判：拼出来的是残缺对话，而落下的阶段是永久的。
+ * 最典型的坏法 —— 邮件那一路挂了，只剩两个月前的电话手记，正在邮件里谈价的人
+ * 被写成「无下文」。
+ */
+describe('取数出错时不许硬判', () => {
+  it('读对话出错 → 记一笔 failed，不写阶段', async () => {
+    stubDb()
+    const real = mocks.from.getMockImplementation()!
+    mocks.from.mockImplementation((table: string) => {
+      if (table === 'conversations') {
+        return {
+          select: () => ({
+            eq: () => ({ eq: async () => ({ data: null, error: { message: '数据库抽风' } }) }),
+          }),
+        }
+      }
+      return real(table)
+    })
+    answer({ stage: 'quoted', evidence: CUSTOMER_LINE, reason: '不该走到这一步' })
+
+    const r = await inferStagesFromConversations(NOW, ask)
+    expect(r.failed).toBe(1)
+    expect(r.filled).toBe(0)
+    expect(written.stage).toBeUndefined()
+  })
+})
+
+/**
+ * 原先这里只是 `continue` —— 于是「规则自己就能定」的那一档其实从来没人写：
+ * 这些人永远停在空阶段、每小时被重捞一遍，还占着候选窗口挡住后面的人。
+ */
+describe('对方一个字没回过的，规则自己定', () => {
+  const outbound = (sent_at: string) => ({
+    direction: 'outbound' as const,
+    body: 'Following up on your enquiry',
+    sent_at,
+  })
+
+  it('发出去两周多还没回 → 写「无下文」，不花模型钱', async () => {
+    stubDb({ messages: [outbound('2026-07-01T00:00:00Z')] })
+    const r = await inferStagesFromConversations(NOW, ask)
+    expect(r.filled).toBe(1)
+    expect(r.byRule).toBe(1)
+    expect(r.asked).toBe(0)
+    expect(ask).not.toHaveBeenCalled()
+    expect(written.stage).toBe('no_response')
+    // 没有原话可引，别在时间线上留一个空引号。
+    expect(String(written.audit?.note)).not.toContain('「」')
+  })
+
+  it('昨天才发的 → 继续空着，人家可能今天就回', async () => {
+    stubDb({ messages: [outbound('2026-08-15T00:00:00Z')] })
+    const r = await inferStagesFromConversations(NOW, ask)
+    expect(r.filled).toBe(0)
+    expect(written.stage).toBeUndefined()
+  })
+
+  it('我们也没发过 → 继续空着，那不叫无下文', async () => {
+    stubDb({ messages: [] })
+    const r = await inferStagesFromConversations(NOW, ask)
     expect(r.filled).toBe(0)
   })
 })

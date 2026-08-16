@@ -23,6 +23,7 @@ import {
   StageVerdictSchema,
   SAFE_STAGES,
   renderTranscript,
+  ruleOnlyStage,
   usableStage,
   worthReading,
   type SafeStage,
@@ -52,13 +53,22 @@ export interface StageInferResult {
   asked: number
   /** 填上阶段的。 */
   filled: number
+  /** 其中没问模型、规则自己定下来的（「无下文」）。 */
+  byRule: number
   /** 模型有答案、但没过验证（证据编的 / 阶段不许落）而丢掉的。 */
   rejected: number
   /** 写库失败的。 */
   failed: number
 }
 
-const EMPTY: StageInferResult = { candidates: 0, asked: 0, filled: 0, rejected: 0, failed: 0 }
+const EMPTY: StageInferResult = {
+  candidates: 0,
+  asked: 0,
+  filled: 0,
+  byRule: 0,
+  rejected: 0,
+  failed: 0,
+}
 
 function chunk<T>(items: readonly T[], size: number): T[][] {
   const out: T[][] = []
@@ -114,17 +124,33 @@ export async function askStage(transcript: string): Promise<StageVerdict | null>
 }
 
 /**
- * 哪些客户配了「还会继续跟」的那几档 —— 一档都没配的客户，这套东西一步都不走。
+ * 哪些客户跑这套东西 —— **必须把那几档全配齐**。
  *
- * 作用范围天然收口（同 `qualified-buyer-autotag` 的做法）：不需要再维护一份
- * 客户白名单，配置里没有那些档的客户结构上就碰不到。
+ * 🔴 「配了其中任意一档」是不够的（Codex 复审 2026-08-16）：地产那套漏斗
+ * （`20260730145441_real_estate_pipeline_seed.sql`）也有 `contacted` 和
+ * `no_response`，于是三个地产客户会被这条 cron 一并扫进来 —— 而
+ * `STAGE_SYSTEM_PROMPT` 从头到尾讲的是 CTS 的旅游生意（团、行程、出行月份）。
+ * 拿旅游漏斗去判一个看房的人，写进去的是**错的客户数据**。
+ *
+ * 配齐 = 这个客户的漏斗**就是**那条漏斗（`traveling_soon` 即将出行是旅游独有的）。
+ * 以后哪个行业要用，得先给它写自己的阶段定义和提示词，而不是共用这一份。
  */
 async function loadClientsWithSafeStages(): Promise<string[]> {
-  const { data } = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from('client_pipeline_stages')
-    .select('client_id')
+    .select('client_id, stage_key')
     .in('stage_key', [...SAFE_STAGES])
-  return Array.from(new Set(((data ?? []) as { client_id: string }[]).map((s) => s.client_id)))
+  if (error) throw new Error(`读阶段配置失败: ${error.message}`)
+
+  const byClient = new Map<string, Set<string>>()
+  for (const row of (data ?? []) as { client_id: string; stage_key: string }[]) {
+    const set = byClient.get(row.client_id) ?? new Set<string>()
+    set.add(row.stage_key)
+    byClient.set(row.client_id, set)
+  }
+  return Array.from(byClient.entries())
+    .filter(([, set]) => SAFE_STAGES.every((k) => set.has(k)))
+    .map(([clientId]) => clientId)
 }
 
 /** 这个客户配置里真的有哪些阶段。没配的不许写进去。 */
@@ -146,7 +172,7 @@ export async function loadTranscriptLines(
   clientId: string,
   contactId: string,
 ): Promise<TranscriptLine[]> {
-  const [{ data: convs }, { data: touches }] = await Promise.all([
+  const [{ data: convs, error: cErr }, { data: touches, error: tErr }] = await Promise.all([
     supabaseAdmin.from('conversations').select('id').eq('client_id', clientId).eq('contact_id', contactId),
     supabaseAdmin
       .from('contact_touchpoints')
@@ -157,6 +183,19 @@ export async function loadTranscriptLines(
       .order('occurred_at', { ascending: false })
       .limit(200),
   ])
+
+  /**
+   * 🔴 **少读了一路，就不许再判**（Codex 复审 2026-08-16）。
+   *
+   * Supabase 出瞬时错误时返回的是 `data: null` + `error`。把它当成「这个人
+   * 没有邮件」，拼出来的就是一段**残缺**的对话 —— 而模型据此落下的阶段是
+   * **永久**写进档案的。最典型的坏法：邮件那一路挂了，只剩两个月前的电话手记，
+   * 于是一个正在邮件里谈价的人被写成「无下文」。
+   *
+   * 宁可这一轮跳过他（外层记一笔 failed，下一轮再来），也不要一个错的结论。
+   */
+  if (cErr) throw new Error(`读对话失败: ${cErr.message}`)
+  if (tErr) throw new Error(`读触点失败: ${tErr.message}`)
 
   const lines: TranscriptLine[] = []
 
@@ -174,12 +213,14 @@ export async function loadTranscriptLines(
 
   const convIds = ((convs ?? []) as { id: string }[]).map((c) => c.id)
   if (convIds.length > 0) {
-    const { data: msgs } = await supabaseAdmin
+    const { data: msgs, error: mErr } = await supabaseAdmin
       .from('conversation_messages')
       .select('direction, body, sent_at')
       .in('conversation_id', convIds)
       .order('sent_at', { ascending: false })
       .limit(500)
+    // 同上：邮件 / 私信原文正是这套东西存在的理由，读不到就别判。
+    if (mErr) throw new Error(`读往来原文失败: ${mErr.message}`)
     for (const m of (msgs ?? []) as {
       direction: 'inbound' | 'outbound'
       body: string | null
@@ -227,7 +268,10 @@ async function applyStage(
     from_stage: null,
     to_stage: stage,
     changed_by: STAGE_INFER_ACTOR,
-    note: `读往来记录判的：${verdict.reason}｜原话：「${verdict.evidence.slice(0, 200)}」`,
+    // 规则那一档（无下文）本来就没有原话可引 —— 别在时间线上留一个空引号。
+    note: verdict.evidence
+      ? `读往来记录判的：${verdict.reason}｜原话：「${verdict.evidence.slice(0, 200)}」`
+      : `读往来记录判的：${verdict.reason}`,
   })
 
   return true
@@ -254,16 +298,41 @@ export async function inferStagesFromConversations(
 
   const result: StageInferResult = { ...EMPTY }
 
-  // 空阶段的人 —— 结构上就够不着已经标过的人。
+  /**
+   * 空阶段的人 —— 结构上就够不着已经标过的人。
+   *
+   * 🔴 **窗口必须转**（Codex 复审 2026-08-16）。固定取前 N 条的话，那些**填不上**
+   * 的人（模型一直答 unclear、证据一直核不过）会永远占着队头，排在他们后面的人
+   * 一次都轮不到 —— 556 个人里可能只有前面那几十个被看过。
+   *
+   * 没有「上次什么时候试过」那一列（加列是 A 级改动，得 PM 点头），所以按
+   * **当前是第几个小时**滚动起点：`id` 排序稳定，每小时挪一窗，一天之内整份
+   * 名单都会被扫到。窗口取 4 倍是因为其中大部分会被「对方一个字没回」直接跳过，
+   * 不占模型预算。
+   */
+  const WINDOW = MAX_CONTACTS_PER_RUN * 4
+  const offset = now.getUTCHours() * WINDOW
+
   const candidates: { id: string; client_id: string }[] = []
   for (const ids of chunk(clientIds, IN_CHUNK)) {
-    const { data } = await supabaseAdmin
-      .from('contacts')
-      .select('id, client_id')
-      .in('client_id', ids)
-      .is('stage', null)
-      .eq('do_not_contact', false)
-      .limit(MAX_CONTACTS_PER_RUN * 4)
+    const page = async (from: number) =>
+      supabaseAdmin
+        .from('contacts')
+        .select('id, client_id')
+        .in('client_id', ids)
+        .is('stage', null)
+        .eq('do_not_contact', false)
+        .order('id', { ascending: true })
+        .range(from, from + WINDOW - 1)
+
+    let { data, error } = await page(offset)
+    if (error) throw new Error(`捞空阶段联系人失败: ${error.message}`)
+    // 起点越过了名单末尾（人数没那么多 / 已经填掉一批）→ 回到队头，
+    // 否则那一小时会白跑一轮。
+    if ((data ?? []).length === 0 && offset > 0) {
+      ;({ data, error } = await page(0))
+      if (error) throw new Error(`捞空阶段联系人失败: ${error.message}`)
+    }
     candidates.push(...((data ?? []) as { id: string; client_id: string }[]))
   }
   result.candidates = candidates.length
@@ -278,8 +347,28 @@ export async function inferStagesFromConversations(
     if (result.asked >= MAX_CONTACTS_PER_RUN) break
     try {
       const lines = await loadTranscriptLines(c.client_id, c.id)
-      // 只有我们单方面发过、对方一个字没回的：读了也读不出什么，不花这一次钱。
-      if (!worthReading(lines)) continue
+
+      /**
+       * 对方一个字都没回过 —— 不问模型，规则自己定。
+       *
+       * 判据窄到不可能出错（见 `ruleOnlyStage`）：一条入站都没有 + 我们确实
+       * 发过 + 最后一次发出去已经两周。落不下来就继续空着。
+       */
+      if (!worthReading(lines)) {
+        const byRule = ruleOnlyStage(lines, now)
+        if (byRule && (configuredByClient.get(c.client_id)?.has(byRule) ?? false)) {
+          const verdict: StageVerdict = {
+            stage: byRule,
+            evidence: '',
+            reason: '我们发过消息，两周多了对方一直没回',
+          }
+          if (await applyStage(c.client_id, c.id, byRule, verdict, now)) {
+            result.filled++
+            result.byRule++
+          }
+        }
+        continue
+      }
 
       const transcript = renderTranscript(lines)
       if (!transcript) continue

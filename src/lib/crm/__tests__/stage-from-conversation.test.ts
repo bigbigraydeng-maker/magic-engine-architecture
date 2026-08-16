@@ -12,6 +12,7 @@ import {
   SAFE_STAGES,
   quoteIsGrounded,
   renderTranscript,
+  ruleOnlyStage,
   usableStage,
   worthReading,
   type StageVerdict,
@@ -142,5 +143,30 @@ describe('哪些判断能真的落到客户档案上', () => {
 
   it('白名单里全是「还会继续跟」的档 —— 谁往里加终结档，这条会拦住他', () => {
     expect([...SAFE_STAGES]).toEqual(['contacted', 'quoted', 'deferred', 'no_response', 'traveling_soon'])
+  })
+})
+
+/**
+ * 「无下文」是唯一一档不用问模型就定得下来的：客人一个字都没说过，没有任何
+ * 可误读的语义。但判据必须窄 —— 昨天刚发的邮件不叫无下文。
+ */
+describe('不问模型就定得下来的那一档', () => {
+  const out = (at: string) => line({ direction: 'outbound', body: 'Following up', at })
+  const NOW = new Date('2026-08-16T00:00:00Z')
+
+  it('我们发过、两周多没回 → 无下文', () => {
+    expect(ruleOnlyStage([out('2026-07-01T00:00:00Z')], NOW)).toBe('no_response')
+  })
+
+  it('昨天才发的 → 不判，人家可能今天就回', () => {
+    expect(ruleOnlyStage([out('2026-08-15T00:00:00Z')], NOW)).toBeNull()
+  })
+
+  it('🔴 对方回过话 → 不归规则管，交给模型', () => {
+    expect(ruleOnlyStage([out('2026-07-01T00:00:00Z'), line()], NOW)).toBeNull()
+  })
+
+  it('我们也没发过 → 不判，那不叫无下文', () => {
+    expect(ruleOnlyStage([], NOW)).toBeNull()
   })
 })
