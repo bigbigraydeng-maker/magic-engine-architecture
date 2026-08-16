@@ -43,6 +43,8 @@ interface Row {
   suggestedChannel: 'phone' | 'sms' | 'email' | 'messenger' | 'none'
   /** 库里有号码，但那个号打不通。跟「压根没留电话」是两句不同的话。 */
   phoneUnusable?: boolean
+  /** 被标成「别再联系」—— 抽屉靠它给出取消入口。 */
+  doNotContact?: boolean
   dueAt: string | null
   lastTouchAt: string | null
   lastNote: string | null
@@ -88,6 +90,8 @@ interface OffRow {
    * 「这个号打不通，去补一个」，点开却能拨那个号是最刺眼的事。
    */
   phoneUnusable?: boolean
+  /** 被标成「别再联系」—— 抽屉靠它给出取消入口。 */
+  doNotContact?: boolean
   lastNote: string | null
   /** 被推迟到什么时候 —— 有值就能一键提前叫回来。 */
   snoozeUntil?: string | null

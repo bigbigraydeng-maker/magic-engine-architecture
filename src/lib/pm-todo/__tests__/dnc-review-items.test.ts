@@ -83,7 +83,7 @@ describe('被一句「不打算去」误判成永久拒联的人，必须出现�
       [person('c1', 'Christine Matehaere')],
       [{ contact_id: 'c1', raw: 'not intending to go' }],
     )
-    expect(item.how).toContain('取消')
+    expect(item.how).toContain('放回名单')
   })
 
   /**

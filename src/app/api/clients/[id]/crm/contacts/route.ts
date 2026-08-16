@@ -24,6 +24,7 @@ import {
   engagementFromMetadata,
 } from '@/lib/crm/segments'
 import { reclassifyStoredOutcome } from '@/lib/crm/note-parser'
+import { isDoNotContact } from '@/lib/crm/dnc'
 import { stageSuppressesWorklist, isMarketingAction } from '@/lib/crm/pipeline'
 import { fetchAll } from '@/lib/supabase-paginate'
 import {
@@ -164,11 +165,15 @@ export async function GET(
       id: c.id,
       displayName: c.display_name,
       // 「别再联系」真相源是不可变触点（contacts 列写失败过 / 历史导入只写 outcome）。
-      doNotContact:
-        c.do_not_contact ||
-        tps.some(
-          (t) => t.metadata?.do_not_contact === true || t.metadata?.outcome === 'do_not_contact',
-        ),
+      // 判据只有一份，见 lib/crm/dnc —— 它同时认「人明确纠正过这条判错了」。
+      doNotContact: isDoNotContact(
+        c.do_not_contact,
+        tps.map((t) => ({
+          outcome: (t.metadata?.outcome as string) ?? null,
+          flagged: t.metadata?.do_not_contact === true,
+          occurredAt: t.occurred_at,
+        })),
+      ),
       stageSuppressed: stage?.suppressed ?? false,
       stageLabel: stage?.label ?? null,
       // 时间线按时间正序：最早的在最上，一条条往下读，跟人回忆一段关系的

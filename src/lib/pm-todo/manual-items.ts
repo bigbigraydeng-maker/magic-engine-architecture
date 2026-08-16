@@ -758,7 +758,7 @@ export async function pushDncReviewItems(
       client_id: c.client_id as string,
       client_name: nameOf(c.client_id as string),
       what: `${name} 被标成「永久别再联系」，但他原话只说了「不打算去」—— 可能是系统早前判错了，这个人现在收不到我们任何消息`,
-      how: '点开他的往来记录看一眼原话：只是「不打算去」就在他资料里取消「别再联系」的勾；真的说过「别再联系」就不用动',
+      how: '点开他，卡片顶上有一条黄条写着「他被标成别再联系」——先看下面的往来记录确认原话只是「不打算去」，再点那条上的「判错了？点这里放回名单」',
       // 🔴 绝对网址 —— 相对路径会被链接闸判成 broken，整条待办被丢掉
       //    （狄仁杰 2026-08-05 实测 kept=0，理由见 pushCrossClientItems）。
       href: `https://app.magicengine.com.au/dashboard/clients/${c.client_id as string}/crm/all?contact=${c.id as string}`,
