@@ -275,6 +275,22 @@ function evaluateUnitEconomics(
       }
 }
 
+/**
+ * 本地价合理性上限（本地中位 USD ÷ 美国单品售价）。**超过就判本地价污染。**
+ *
+ * 🔴 本地价用**品类词**查 Google 商品块，歧义词会把高价错品类混进来 ——
+ *    2026-08-17 实测 "water fountain" 把庭院喷泉/商用饮水台混进猫饮水机，
+ *    本地中位被拉到 NZ$1659–2505（是美国售价的 17–41×），毛利虚高到 NZ$1352，
+ *    是最危险的假阳性。用美国**单品真实售价**当标尺校验：
+ *      · 真候选（榨汁杯/狗碗/三脚架）实测全 ≤2.5×
+ *      · 价格拉爆型污染全 ≥4×
+ *    4× 落在干净空档里，剔污染碰不到真候选。被剔的判 UNKNOWN（退实测），不冤枉。
+ *
+ *    ⚠️ 它只抓「本地混入高价错品类」型污染；「整词就是错品类」型（water trough
+ *    = 集雨桶，美国本地同为错品类、比值正常）它抓不到 —— 那要靠种子词层面收紧。
+ */
+const MAX_LOCAL_TO_US_RATIO = 4
+
 function gateUnitEconomics(
   candidate: ProductCandidate,
   assumptions: Omit<CostAssumptions, 'chargeableWeightKg'>,
@@ -283,6 +299,21 @@ function gateUnitEconomics(
   const costUsd = candidate.sourcing?.medianUnitCostUsd.value ?? null
   const weightKg = candidate.chargeableWeightKg.value
   const cpcNzd = clickCostNzd(candidate.demand, assumptions.fxUsdToNzd)
+
+  // 本地价合理性：中位换算成 USD 若远超美国单品售价，说明品类词混进了高价错品类，
+  // 本地价不可信 —— 直接判不了，绝不拿污染价算出假毛利放行。
+  const retailUsd = candidate.retailPriceUsd.value
+  if (nzPrice !== null && retailUsd !== null && retailUsd > 0) {
+    const ratio = (nzPrice / assumptions.fxUsdToNzd) / retailUsd
+    if (ratio > MAX_LOCAL_TO_US_RATIO) {
+      return {
+        gate: 'unit_economics',
+        outcome: 'UNKNOWN',
+        reason: `本地中位 NZ$${nzPrice.toFixed(2)} 是美国售价 US$${retailUsd.toFixed(2)} 的 `
+          + `${ratio.toFixed(1)}×，品类词疑似把高价错品类混进商品块 —— 本地价不可信，判不了`,
+      }
+    }
+  }
 
   // 只缺计费重量、其余三个都齐 → 用保守估重跑一遍（只证实，不证伪）。
   if (weightKg === null && nzPrice !== null && costUsd !== null && cpcNzd !== null) {

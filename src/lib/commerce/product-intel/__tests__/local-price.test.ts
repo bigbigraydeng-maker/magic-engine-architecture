@@ -189,6 +189,50 @@ function healthyBand(): LocalListing[] {
   ]
 }
 
+describe('本地价污染校验：本地中位远超美国售价 = 品类词混错品类', () => {
+  // 实测数字：cat water fountain 混入庭院喷泉，本地 NZ$1659.5，美国 US$41.97（23×）。
+  function pollutedFountain(medianNzd: number): ProductCandidate {
+    const c = jumpStarter(healthyBand())
+    return {
+      ...c,
+      retailPriceUsd: m(41.97),
+      localMarket: normalizeLocalMarket(
+        // 5 家不同商家都报高价 → 中位过闸，但价本身是错品类拉爆的。
+        [41.97, medianNzd, medianNzd, medianNzd, medianNzd].map((p, i) =>
+          listing({ price: p, seller: `Shop${i}` })),
+        'NZ', SOURCE, AT,
+      ),
+    }
+  }
+
+  it('🔴 本地中位是美国售价的 23× → unit_economics 判 UNKNOWN，不冒充毛利', () => {
+    const g = scoreCandidate(pollutedFountain(1659.5), ASSUMPTIONS)
+      .gates.find((x) => x.gate === 'unit_economics')!
+    expect(g.outcome).toBe('UNKNOWN')
+    expect(g.reason).toContain('高价错品类')
+    expect(g.reason).toContain('23.3×')
+  })
+
+  it('🔴 污染候选整体判不了，不进「值得测/观察」', () => {
+    expect(scoreCandidate(pollutedFountain(1659.5), ASSUMPTIONS).verdict).toBe('UNKNOWN')
+  })
+
+  it('本地价合理（1.9× 榨汁杯）不受影响，正常判定', () => {
+    const blender = {
+      ...jumpStarter(healthyBand()),
+      retailPriceUsd: m(15.86),
+      localMarket: normalizeLocalMarket(
+        [45, 48, 50.14, 52, 55].map((p, i) => listing({ price: p, seller: `Shop${i}` })),
+        'NZ', SOURCE, AT,
+      ),
+    }
+    const g = scoreCandidate(blender, ASSUMPTIONS)
+      .gates.find((x) => x.gate === 'unit_economics')!
+    expect(g.outcome).not.toBe('UNKNOWN')   // 1.9× 远低于 4× 上限，正常算
+    expect(g.reason).not.toContain('错品类')
+  })
+})
+
 describe('接进判定', () => {
   it('拿到本地价带后，毛利闸走完整模型并通过（不再退回粗筛）', () => {
     const scored = scoreCandidate(jumpStarter(healthyBand()), ASSUMPTIONS)
