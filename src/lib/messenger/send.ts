@@ -216,11 +216,13 @@ export async function sendReply(input: SendReplyInput): Promise<SendReplyResult>
         metadata: Record<string, unknown> | null
         occurred_at: string
         raw: string | null
+        direction: string | null
+        source: string | null
       }>(
         (from, to) =>
           supabaseAdmin
             .from('contact_touchpoints')
-            .select('id, metadata, occurred_at, raw')
+            .select('id, metadata, occurred_at, raw, direction, source')
             .eq('client_id', convo.client_id)
             .eq('contact_id', convo.contact_id as string)
             // 唯一排序键，理由同 touchpoints/batch：并列的时间戳会让
@@ -242,7 +244,11 @@ export async function sendReply(input: SendReplyInput): Promise<SendReplyResult>
 
     const touches: DncTouch[] = touchRows.map((t) => ({
       // 存量里「其实是别再联系」的原话，读的时候重判一次（见 reclassifyStoredOutcome）。
-      outcome: reclassifyStoredOutcome((t.metadata?.outcome as string) ?? null, t.raw) ?? null,
+      outcome:
+        reclassifyStoredOutcome((t.metadata?.outcome as string) ?? null, t.raw, {
+          direction: t.direction,
+          source: t.source,
+        }) ?? null,
       flagged: t.metadata?.do_not_contact === true,
       occurredAt: t.occurred_at,
     }))

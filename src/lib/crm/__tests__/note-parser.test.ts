@@ -535,13 +535,22 @@ describe('「all sorted」得分清是跟谁订的', () => {
  * 镜像列也是 false。读的时候不重判的话，一个两个月前写下「stop contacting
  * me」的客人照旧在今天的名单上，还能穿过这一轮刚加的私信发送闸。
  */
+/** 客人自己写的。 */
+const CUSTOMER = { direction: 'inbound', source: 'ms_graph' }
+/** 销售手打的那句「客户说…」—— 方向是出站，但记的是客人的话。 */
+const SALES_NOTE = { direction: 'outbound', source: 'me_manual' }
+/** 我们自己发出去的邮件 —— 页脚里就有 unsubscribe。 */
+const OUR_EMAIL = { direction: 'outbound', source: 'ms_graph' }
+
 describe('存量里其实是「别再联系」的记录，读的时候要认出来', () => {
   it('🔴 存成 spoke、原话是「stop contacting me」→ 读成别再联系', () => {
-    expect(reclassifyStoredOutcome('spoke', 'stop contacting me')).toBe('do_not_contact')
+    expect(reclassifyStoredOutcome('spoke', 'stop contacting me', CUSTOMER)).toBe('do_not_contact')
   })
 
   it('🔴 存成 callback_set、原话是「do not call me again」→ 读成别再联系', () => {
-    expect(reclassifyStoredOutcome('callback_set', 'do not call me again')).toBe('do_not_contact')
+    expect(reclassifyStoredOutcome('callback_set', 'do not call me again', CUSTOMER)).toBe(
+      'do_not_contact',
+    )
   })
 
   /**
@@ -551,17 +560,19 @@ describe('存量里其实是「别再联系」的记录，读的时候要认出�
    * **取消这个功能整个失效**。
    */
   it('🔴 人工纠正那条不许被自己的原话反噬', () => {
-    expect(reclassifyStoredOutcome('dnc_cleared', '人工复核：这条「别再联系」判错了')).toBe(
-      'dnc_cleared',
-    )
+    expect(
+      reclassifyStoredOutcome('dnc_cleared', '人工复核：这条「别再联系」判错了', SALES_NOTE),
+    ).toBe('dnc_cleared')
   })
 
   it('只朝一个方向升级 —— 已经是拒联的不许被读回去', () => {
-    expect(reclassifyStoredOutcome('do_not_contact', '客户说想再看看行程')).toBe('do_not_contact')
+    expect(reclassifyStoredOutcome('do_not_contact', '客户说想再看看行程', CUSTOMER)).toBe(
+      'do_not_contact',
+    )
   })
 
   it('原话没说过划界的，原样返回', () => {
-    expect(reclassifyStoredOutcome('spoke', '聊得不错，下周发行程')).toBe('spoke')
+    expect(reclassifyStoredOutcome('spoke', '聊得不错，下周发行程', CUSTOMER)).toBe('spoke')
   })
 
   it('原有的「明确不要 → 暂时不考虑」那条不受影响', () => {
@@ -602,5 +613,46 @@ describe('句子别处的拒绝词，不许否掉一个明确的新回电安排'
 
   it('软拒绝 + 明确回电 → 照旧是约了回电', () => {
     expect(classifyNote('not ready to talk, call back tomorrow').outcome).toBe('callback_set')
+  })
+})
+
+/**
+ * 🔴 **不看「谁写的」就会把我们自己的话当成客人的**（Codex 复审 2026-08-16）。
+ *
+ * `mail-ingest` 把**出站**邮件也原样存进 `raw`，而我们群发的页脚里写着
+ * 「click here to unsubscribe」。读的时候重判会把这句合规文案当成客人要求
+ * 退订，于是今日名单、群发、私信发送闸一起把他永久挡住 —— 一个从没说过
+ * 任何话的客人，被我们自己的邮件模板拉黑。
+ */
+describe('重判只认代表客人意愿的记录', () => {
+  /**
+   * 用一句**会命中词表**的页脚 —— 否则这条用例只验到了收窄那一层，
+   * 验不到「看谁写的」这一层。真实的群发页脚就是这种写法。
+   */
+  const FOOTER =
+    'Thanks for your enquiry! You can unsubscribe from the list at any time using the link below.'
+
+  it('🔴 我们自己发出去的邮件（含退订页脚）→ 不许读成客人拒联', () => {
+    expect(reclassifyStoredOutcome('spoke', FOOTER, OUR_EMAIL)).toBe('spoke')
+  })
+
+  it('客人自己写的「please unsubscribe me」→ 认', () => {
+    expect(reclassifyStoredOutcome('spoke', 'please unsubscribe me', CUSTOMER)).toBe(
+      'do_not_contact',
+    )
+  })
+
+  it('销售手记「客户说 stop contacting me」→ 认（方向是出站，但记的是客人的话）', () => {
+    expect(reclassifyStoredOutcome('spoke', 'customer said stop contacting me', SALES_NOTE)).toBe(
+      'do_not_contact',
+    )
+  })
+
+  it('不传「谁写的」→ 保守，不做拒联升级', () => {
+    expect(reclassifyStoredOutcome('spoke', 'stop contacting me')).toBe('spoke')
+  })
+
+  it('🔴 否定句「did not unsubscribe」不算退订', () => {
+    expect(classifyNote('customer did not unsubscribe').do_not_contact).toBe(false)
   })
 })

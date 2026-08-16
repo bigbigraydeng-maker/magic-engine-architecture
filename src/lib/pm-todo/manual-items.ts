@@ -772,7 +772,7 @@ export async function pushDncReviewItems(
     .from('contact_touchpoints')
     // metadata / occurred_at 是给判据用的：有人纠正过「这条判错了」之后，
     // 这条任务不许再冒出来 —— 否则 FDE 每天被同一个已经处理完的人骚扰一次。
-    .select('contact_id, raw, metadata, occurred_at')
+    .select('contact_id, raw, metadata, occurred_at, direction, source')
     .in('contact_id', contacts.map((c) => c.id as string))
   if (!touches) return
 
@@ -793,7 +793,11 @@ export async function pushDncReviewItems(
     const dncList = touchesByContact.get(cid) ?? []
     dncList.push({
       // 存量里「其实是别再联系」的原话，读的时候重判一次。
-      outcome: reclassifyStoredOutcome((meta.outcome as string) ?? null, t.raw as string | null) ?? null,
+      outcome:
+        reclassifyStoredOutcome((meta.outcome as string) ?? null, t.raw as string | null, {
+          direction: t.direction as string | null,
+          source: t.source as string | null,
+        }) ?? null,
       flagged: meta.do_not_contact === true,
       occurredAt: t.occurred_at as string,
     })

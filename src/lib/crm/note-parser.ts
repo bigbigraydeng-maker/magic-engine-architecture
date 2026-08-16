@@ -114,7 +114,13 @@ const DNC_PATTERNS: RegExp[] = [
    * 所以后面必须真的出现退订的对象（名单 / 数据库 / 邮件列表…）。
    */
   /(take|remove)\s*(me|him|her|them)\s*(off|from)\b[^.!?\n]{0,20}\b(list|database|mailing|email list|records?|system)\b/i,
-  /unsubscribe/i,
+  /**
+   * ⚠️ 「unsubscribe」**不能裸词匹配**（Codex 复审 2026-08-16）：我们自己群发的
+   * 邮件页脚就写着「click here to unsubscribe」，而 `mail-ingest` 把**出站**
+   * 邮件也存进 `raw`。裸词会把我们自己的合规文案读成客人拒联。
+   * 必须是他在**要求**退订，并且排除「did not unsubscribe」这类否定。
+   */
+  /(?<!(did|do|does)\s*not\s)(?<!never\s)(please\s*)?(unsubscribe\s*me|want\s*to\s*unsubscribe|unsubscribe\s*from\s*(your|the)\s*(list|emails?|mailing))/i,
   /opt(ed)?\s*out/i,
   /no\s*(further|more)\s*contact/i,
   // 🔴 `not intending to go` **从这一组移走了**（Codex 复审 2026-08-16）。
@@ -428,8 +434,25 @@ export function classifyNote(raw: string): {
 export function reclassifyStoredOutcome(
   outcome: string | null | undefined,
   raw: string | null | undefined,
+  /**
+   * 这条 `raw` 是**谁写的**。
+   *
+   * 🔴 不看这个就会把我们自己的话当成客人的（Codex 复审 2026-08-16）：
+   * `mail-ingest` 把**出站**邮件也原样存进 `raw`，而我们群发的页脚里写着
+   * 「click here to unsubscribe」—— 读的时候重判会把这句合规文案当成客人
+   * 要求退订，于是今日名单、群发、私信发送闸一起把他永久挡住。
+   *
+   * 只认两种「代表客人意愿」的记录：
+   *   · `direction: 'inbound'` —— 客人自己写的
+   *   · `source: 'me_manual'`  —— 销售手打的那句「客户说别再打电话」
+   * 其余（同步进来的出站邮件 / 私信）一律不重判。
+   *
+   * 不传这个参数时**不做拒联升级**（保守），只保留原有的「明确不要 → 暂时不考虑」。
+   */
+  by?: { direction?: string | null; source?: string | null },
 ): string | null | undefined {
   if (!raw) return outcome
+  const fromCustomer = by?.direction === 'inbound' || by?.source === 'me_manual'
 
   /**
    * 🔴 **存量里那些「其实是别再联系」的记录，必须读的时候认出来**
@@ -457,6 +480,7 @@ export function reclassifyStoredOutcome(
    * `dnc_cleared` 是**人明确下的判决**，比任何词表都硬（同 `lib/crm/dnc`）。
    */
   if (
+    fromCustomer &&
     outcome !== 'do_not_contact' &&
     outcome !== DNC_CLEARED_OUTCOME &&
     classifyNote(raw).do_not_contact

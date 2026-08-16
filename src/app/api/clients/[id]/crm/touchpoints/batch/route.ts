@@ -115,6 +115,8 @@ export async function POST(
     metadata: Record<string, unknown> | null
     occurred_at: string
     raw: string | null
+    direction: string | null
+    source: string | null
   }[]
   try {
     dncTouches = await fetchAll<{
@@ -123,10 +125,12 @@ export async function POST(
       metadata: Record<string, unknown> | null
       occurred_at: string
       raw: string | null
+      direction: string | null
+      source: string | null
     }>((from, to) =>
       supabaseAdmin
         .from('contact_touchpoints')
-        .select('id, contact_id, metadata, occurred_at, raw')
+        .select('id, contact_id, metadata, occurred_at, raw, direction, source')
         .eq('client_id', clientId)
         .in('contact_id', rows.map((r) => r.id))
         /**
@@ -154,7 +158,11 @@ export async function POST(
     const list = touchesByContact.get(t.contact_id) ?? []
     list.push({
       // 存量里「其实是别再联系」的原话，读的时候重判一次（见 reclassifyStoredOutcome）。
-      outcome: reclassifyStoredOutcome((t.metadata?.outcome as string) ?? null, t.raw) ?? null,
+      outcome:
+        reclassifyStoredOutcome((t.metadata?.outcome as string) ?? null, t.raw, {
+          direction: t.direction,
+          source: t.source,
+        }) ?? null,
       flagged: t.metadata?.do_not_contact === true,
       occurredAt: t.occurred_at,
     })
