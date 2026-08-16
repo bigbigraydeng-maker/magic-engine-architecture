@@ -59,8 +59,16 @@ function stubDb(opts: {
   updateErr?: string
   /** 这个人当前所在阶段的配置（null = 查不到）。 */
   stageRow?: { label: string; marketing_action: string | null; is_terminal: boolean } | null
+  /** 读阶段配置是否失败。 */
+  stageErr?: string
 } = {}) {
-  const { contactRow = { id: CONTACT_ID, stage: null }, touchErr, updateErr, stageRow = null } = opts
+  const {
+    contactRow = { id: CONTACT_ID, stage: null },
+    touchErr,
+    updateErr,
+    stageRow = null,
+    stageErr,
+  } = opts
   calls = []
   mocks.from.mockImplementation((table: string) => {
     if (table === 'contact_touchpoints') {
@@ -81,7 +89,12 @@ function stubDb(opts: {
     if (table === 'client_pipeline_stages') {
       return {
         select: () => ({
-          eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: stageRow }) }) }),
+          eq: () => ({
+            eq: () => ({
+              maybeSingle: async () =>
+                stageErr ? { data: null, error: { message: stageErr } } : { data: stageRow, error: null },
+            }),
+          }),
         }),
       }
     }
@@ -197,5 +210,15 @@ describe('还有一档挡着的时候要说出来', () => {
     stubDb()
     const res = await POST(req(), ctx)
     expect((await res.json()).blockingStageLabel).toBeNull()
+  })
+
+  /**
+   * 🔴 吞掉这个错误就等于回一句「放回来了，没有别的挡着」—— 页面据此重拉列表、
+   * 黄条消失，而那一档其实还在把他挡在名单外，重试入口也没了。
+   */
+  it('读阶段配置出错 → 报失败，别宣称没有别的挡着', async () => {
+    stubDb({ contactRow: { id: CONTACT_ID, stage: 'not_interested' }, stageErr: '数据库抽风' })
+    const res = await POST(req(), ctx)
+    expect(res.status).toBe(500)
   })
 })

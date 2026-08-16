@@ -31,9 +31,17 @@ interface Fake {
   messages: { direction: 'inbound' | 'outbound'; body: string | null; sent_at: string }[]
   /** UPDATE 命中几行（0 = 有人抢先标过了）。 */
   updated: number
+  /** 写审计是否失败。 */
+  auditErr?: string
 }
 
-let written: { stage?: string; audit?: Record<string, unknown>; guard?: string }
+let written: {
+  stage?: string
+  audit?: Record<string, unknown>
+  guard?: string
+  /** 留痕失败后退回成了什么（null = 退回空阶段）。 */
+  revertedTo?: string | null
+}
 
 function stubDb(over: Partial<Fake> = {}) {
   const f: Fake = {
@@ -85,6 +93,13 @@ function stubDb(over: Partial<Fake> = {}) {
                   return { data: f.updated > 0 ? [{ id: CONTACT }] : [], error: null }
                 },
               }),
+              // 留痕失败后把阶段退回去那一条（多两个 .eq，没有 .is）。
+              eq: () => ({
+                eq: async () => {
+                  written.revertedTo = patch.stage as string | null
+                  return { error: null }
+                },
+              }),
             }),
           }),
         }),
@@ -110,6 +125,7 @@ function stubDb(over: Partial<Fake> = {}) {
     // contact_stage_events
     return {
       insert: async (row: Record<string, unknown>) => {
+        if (f.auditErr) return { error: { message: f.auditErr } }
         written.audit = row
         return { error: null }
       },
@@ -303,5 +319,76 @@ describe('对方一个字没回过的，规则自己定', () => {
     stubDb({ messages: [] })
     const r = await inferStagesFromConversations(NOW, ask)
     expect(r.filled).toBe(0)
+  })
+})
+
+
+/**
+ * 🔴 留痕写不上，这一条就不算数 —— 否则会留下一个**没有任何来历**的自动阶段：
+ * 销售看不到理由、看不到原话、也看不出是机器填的，而这个人从此不在候选里、
+ * 再也不会被重填。这套东西敢动 556 个人的档案，靠的就是「每一条都说得出为什么」。
+ */
+describe('留痕写不上就把阶段退回去', () => {
+  it('审计失败 → 记一笔 failed，并把刚写的阶段退回空', async () => {
+    stubDb({ auditErr: '数据库抽风' })
+    answer({ stage: 'quoted', evidence: CUSTOMER_LINE, reason: '客户主动要行程' })
+
+    const r = await inferStagesFromConversations(NOW, ask)
+    expect(r.failed).toBe(1)
+    expect(r.filled).toBe(0)
+    expect(written.revertedTo).toBeNull()
+  })
+})
+
+/**
+ * 🔴 填表不是「他回话了」：FB 客资表单在触点表里也是 inbound。把它当成回话，
+ * 会让一整批「只填过表、我们追了几次、他一个字没说过」的人每小时都花一次
+ * 模型调用，而且永远落不进「无下文」。
+ */
+describe('只填过表、从没说过话的人', () => {
+  it('不问模型，两周后按规则写「无下文」', async () => {
+    stubDb({ messages: [] })
+    const real = mocks.from.getMockImplementation()!
+    mocks.from.mockImplementation((table: string) => {
+      if (table === 'contact_touchpoints') {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                neq: () => ({
+                  order: () => ({
+                    limit: async () => ({
+                      data: [
+                        {
+                          channel: 'meta_lead_form',
+                          direction: 'inbound',
+                          occurred_at: '2026-06-01T00:00:00Z',
+                          raw: null,
+                          summary: 'Facebook 客资表单：Best of China',
+                        },
+                        {
+                          channel: 'email',
+                          direction: 'outbound',
+                          occurred_at: '2026-07-01T00:00:00Z',
+                          raw: 'Following up on your enquiry',
+                          summary: null,
+                        },
+                      ],
+                      error: null,
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }
+      }
+      return real(table)
+    })
+
+    const r = await inferStagesFromConversations(NOW, ask)
+    expect(ask).not.toHaveBeenCalled()
+    expect(written.stage).toBe('no_response')
+    expect(r.byRule).toBe(1)
   })
 })

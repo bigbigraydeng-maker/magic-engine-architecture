@@ -170,3 +170,30 @@ describe('不问模型就定得下来的那一档', () => {
     expect(ruleOnlyStage([], NOW)).toBeNull()
   })
 })
+
+/**
+ * 🔴 **填表不是「他回话了」**。FB 客资表单 / 官网表单在触点表里也是 `inbound`
+ * —— 那是他留下线索的那一刻，不是一次往来。表单内容仍然进对话（团意向、
+ * 出行时间都在里面），只是不算他说过话。
+ */
+describe('表单不算回话', () => {
+  const formLine = line({ channel: 'meta_lead_form', body: 'Best of China' })
+  const NOW = new Date('2026-08-16T00:00:00Z')
+
+  it('只有表单 + 我们追过 → 不值得问模型', () => {
+    expect(worthReading([formLine, line({ direction: 'outbound', body: 'Following up' })])).toBe(false)
+  })
+
+  it('只有表单 + 我们两周前追过 → 规则判「无下文」', () => {
+    const lines = [formLine, line({ direction: 'outbound', body: 'Following up', at: '2026-07-01T00:00:00Z' })]
+    expect(ruleOnlyStage(lines, NOW)).toBe('no_response')
+  })
+
+  it('表单之外他真的说过话 → 照旧交给模型', () => {
+    expect(worthReading([formLine, line({ channel: 'email' })])).toBe(true)
+  })
+
+  it('表单内容还是要进对话 —— 团意向和出行时间都在里面', () => {
+    expect(renderTranscript([formLine])).toContain('Best of China')
+  })
+})

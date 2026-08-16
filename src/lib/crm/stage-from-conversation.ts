@@ -182,13 +182,28 @@ export function usableStage(
 }
 
 /**
+ * 🔴 **填表不是「他回话了」**（Codex 复审 2026-08-16）。
+ *
+ * FB 客资表单和官网表单在触点表里也是 `inbound`（见
+ * `scripts/import-cts-fb-leads.ts`）—— 那是他**留下线索的那一刻**，不是
+ * 一次往来。把它当成回话，会让一整批「只填过表、我们追了几次、他一个字
+ * 没说过」的人每小时都去花一次模型调用，而且永远落不进「无下文」。
+ *
+ * 表单内容仍然进对话（团意向、出行时间都在里面，模型该看见），
+ * 只是不算「他说过话」。
+ */
+const FORM_CHANNELS: ReadonlySet<string> = new Set(['meta_lead_form', 'web_form'])
+
+/**
  * 值不值得为这个人花一次模型调用。
  *
  * 只有我们单方面发过东西、对方一个字都没回过的，读了也读不出什么 ——
  * 那种情况交给下面 `ruleOnlyStage()` 判，不必花钱问模型。
  */
 export function worthReading(lines: TranscriptLine[]): boolean {
-  return lines.some((l) => l.direction === 'inbound' && l.body.trim().length > 0)
+  return lines.some(
+    (l) => l.direction === 'inbound' && !FORM_CHANNELS.has(l.channel) && l.body.trim().length > 0,
+  )
 }
 
 /**

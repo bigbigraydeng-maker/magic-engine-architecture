@@ -152,12 +152,22 @@ export async function POST(
    */
   let blockingStageLabel: string | null = null
   if (contact.stage) {
-    const { data: stageRow } = await supabaseAdmin
+    const { data: stageRow, error: sErr } = await supabaseAdmin
       .from('client_pipeline_stages')
       .select('label, marketing_action, is_terminal')
       .eq('client_id', clientId)
       .eq('stage_key', contact.stage)
       .maybeSingle()
+    /**
+     * 🔴 **这一步读失败也算整件事没成**（Codex 复审 2026-08-16）。
+     *
+     * 吞掉它就等于回一句「放回来了，没有别的挡着」—— 页面据此重拉列表、黄条
+     * 消失，而那一档其实还在把他挡在名单外，重试入口也没了。宁可报失败让人
+     * 再点一下：`clientRef` 是幂等键，重试不会记成第二笔纠正。
+     */
+    if (sErr) {
+      return NextResponse.json({ error: '只改了一半，再点一下' }, { status: 500 })
+    }
     const row = stageRow as {
       label: string
       marketing_action: string | null

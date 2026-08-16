@@ -262,7 +262,7 @@ async function applyStage(
   if (!data || data.length === 0) return false
 
   // 留痕：为什么这么判 + 依据的原话。销售在时间线上看得到，不服可以直接改。
-  await supabaseAdmin.from('contact_stage_events').insert({
+  const { error: aErr } = await supabaseAdmin.from('contact_stage_events').insert({
     client_id: clientId,
     contact_id: contactId,
     from_stage: null,
@@ -273,6 +273,29 @@ async function applyStage(
       ? `读往来记录判的：${verdict.reason}｜原话：「${verdict.evidence.slice(0, 200)}」`
       : `读往来记录判的：${verdict.reason}`,
   })
+
+  /**
+   * 🔴 **留痕写不上，这一条就不算数**（Codex 复审 2026-08-16）。
+   *
+   * Supabase 的 `insert()` 失败是返回 `{ error }`，不抛。不管它的话，会留下
+   * 一个**没有任何来历**的自动阶段：销售看不到理由、看不到原话、也看不出是
+   * 机器填的，而这个人从此不在候选里、再也不会被重填。这套东西敢动 556 个人
+   * 的档案，靠的就是「每一条都说得出为什么」。
+   *
+   * 所以把刚写的阶段退回去 —— 条件卡死在**我们这一次**写的那两个值上，
+   * 中间若有人手工改过就命中 0 行，不会误伤他。退不掉也只能报失败，
+   * 下一轮不会重来（stage 已经不空了），但至少 cron 摘要里看得见。
+   */
+  if (aErr) {
+    await supabaseAdmin
+      .from('contacts')
+      .update({ stage: null, stage_updated_at: null })
+      .eq('id', contactId)
+      .eq('client_id', clientId)
+      .eq('stage', stage)
+      .eq('stage_updated_at', nowIso)
+    throw new Error(`留痕失败，已把阶段退回: ${aErr.message}`)
+  }
 
   return true
 }
@@ -310,8 +333,17 @@ export async function inferStagesFromConversations(
    * 名单都会被扫到。窗口取 4 倍是因为其中大部分会被「对方一个字没回」直接跳过，
    * 不占模型预算。
    */
-  const WINDOW = MAX_CONTACTS_PER_RUN * 4
-  const offset = now.getUTCHours() * WINDOW
+  /**
+   * 🔴 **步长要等于一轮真正处理得完的量**（Codex 复审 2026-08-16）。
+   *
+   * 取一大窗、却在问满 60 个之后就停 —— 那么每小时只有窗口最前面那 60 个被
+   * 处理过，而起点却往前跳了一整窗。556 个人里，60–239、300–479 那两段
+   * **永远轮不到**。窗口开大只是为了「多取一些备着」（其中很多会被
+   * 「他一个字没回」直接跳过、不花模型钱），真正推进的步子必须是 60。
+   */
+  const STEP = MAX_CONTACTS_PER_RUN
+  const WINDOW = STEP * 4
+  const offset = now.getUTCHours() * STEP
 
   const candidates: { id: string; client_id: string }[] = []
   for (const ids of chunk(clientIds, IN_CHUNK)) {
