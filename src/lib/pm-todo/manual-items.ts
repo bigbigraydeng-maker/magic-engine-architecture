@@ -61,6 +61,8 @@ export type ManualItemKind =
   | 'price_claim_unbacked'
   | 'auto_run_blocked'
   | 'auto_run_stuck'
+  /** 被一句「不打算去」误判成永久拒联 —— 只有人能看一眼原话再决定 */
+  | 'dnc_maybe_wrong'
   | CommentScopeTodoKind
   /** 执行内核停手 / 等审批 / 被规则挡下 —— 必须有人看见，不许死在日志里 */
   | 'kernel_needs_human'
@@ -254,6 +256,11 @@ export async function loadManualItems(
   // 实测查到 CTS 的发布通道指向 Oztop 的网站，填错两个多月没人发现。
   await pushCrossClientItems(supabase, items).catch((e) =>
     console.warn('[manual-items] 串台检查失败（不阻塞其他待办）:', e),
+  )
+
+  // 可能被一句「不打算去」误判成永久拒联的人 —— 刻意不自动解除，交给人看一眼。
+  await pushDncReviewItems(supabase, items, ids, nameOf).catch((e) =>
+    console.warn('[manual-items] 拒联复核待办生成失败（不阻塞其他待办）:', e),
   )
 
   // 归因侧两条通道（黑洞 / 孤儿数据），理由见 attribution-items.ts
@@ -690,6 +697,75 @@ async function pushBaselineItems(supabase: SupabaseClient, items: ManualItem[]):
  * 这条**不按客户过滤**：串台天生涉及两个客户，任何一方被过滤掉都会让问题
  * 从待办里消失。也不做「只报 active 客户」—— 潜客的资料串进正式客户同样是事故。
  */
+/**
+ * 可能被误判成「永久别再联系」的人。
+ *
+ * 🔴 **这一条是刻意不自动化的**（PM 2026-08-16）。
+ *
+ * 旧的判词把「not intending to go」（我不打算去）当成了「别再联系我」，而
+ * `contacts.do_not_contact` 是全系统最重的一个标记：**任何渠道都不许再发**。
+ * 词表已经改好，新写的备注不会再落这个坑，但**存量那几个人不会自己回来**。
+ *
+ * 为什么不写自动解除：本仓一贯的判断是「漏判是骚扰，误判只是少打一通」。
+ * 让一段正则去**解开**这个闸，方向恰好反了 —— 万一某人原话里同时含着真正的
+ * 拒绝，我们就会去骚扰一个明确说过别联系的客人。这是客户红线，不该由规则来赌。
+ *
+ * 所以按铁律 3 的下半条办：**确实不该自动化，就下发成人工任务，且进同一个管道**。
+ * 判据只挑「原话里只有『不打算去』、没有任何划界限说法」的那些 —— 真的说过
+ * 「别再联系 / 不要打电话 / 只邮件联系」的人不在里面，不会被打扰。
+ */
+export async function pushDncReviewItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  ids: string[],
+  nameOf: (id: string) => string,
+): Promise<void> {
+  if (ids.length === 0) return
+
+  const { data: contacts } = await supabase
+    .from('contacts')
+    .select('id, client_id, display_name')
+    .in('client_id', ids)
+    .eq('do_not_contact', true)
+  if (!contacts || contacts.length === 0) return
+
+  const { data: touches } = await supabase
+    .from('contact_touchpoints')
+    .select('contact_id, raw')
+    .in('contact_id', contacts.map((c) => c.id as string))
+  if (!touches) return
+
+  /** 客户真的在划界限的说法 —— 命中任何一条就不算误判，别去打扰。 */
+  const BOUNDARY =
+    /do not follow up|no need\s*(to\s*)?follow up|do(es)? not want to talk|do not (like|want) (phone|call)|不要.?电话|不需要联系|别再(联系|打)|只邮件联系/i
+  const SOFT = /not intending to go/i
+
+  const byContact = new Map<string, string[]>()
+  for (const t of touches) {
+    const list = byContact.get(t.contact_id as string) ?? []
+    if (typeof t.raw === 'string' && t.raw) list.push(t.raw)
+    byContact.set(t.contact_id as string, list)
+  }
+
+  for (const c of contacts) {
+    const raws = byContact.get(c.id as string) ?? []
+    if (raws.some((r) => BOUNDARY.test(r))) continue
+    if (!raws.some((r) => SOFT.test(r))) continue
+
+    const name = (c.display_name as string) || '未留姓名'
+    items.push({
+      kind: 'dnc_maybe_wrong',
+      client_id: c.client_id as string,
+      client_name: nameOf(c.client_id as string),
+      what: `${name} 被标成「永久别再联系」，但他原话只说了「不打算去」—— 可能是系统早前判错了，这个人现在收不到我们任何消息`,
+      how: '点开他的往来记录看一眼原话：只是「不打算去」就在他资料里取消「别再联系」的勾；真的说过「别再联系」就不用动',
+      // 🔴 绝对网址 —— 相对路径会被链接闸判成 broken，整条待办被丢掉
+      //    （狄仁杰 2026-08-05 实测 kept=0，理由见 pushCrossClientItems）。
+      href: `https://app.magicengine.com.au/dashboard/clients/${c.client_id as string}/crm/all?contact=${c.id as string}`,
+    })
+  }
+}
+
 async function pushCrossClientItems(supabase: SupabaseClient, items: ManualItem[]): Promise<void> {
   const findings = await auditCrossClientLeaks(supabase)
   for (const f of findings) {
