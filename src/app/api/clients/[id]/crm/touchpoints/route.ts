@@ -119,11 +119,14 @@ export async function POST(
   }
 
   // 竞品清洗用客户自己的品牌词(没有就让 parseNote 用内置 CTS 词)。
+  // country 用来定时区 —— 「周五给报价」这类相对日期要按客户所在地算。
   const { data: client } = await supabaseAdmin
     .from('clients')
-    .select('brand_aliases')
+    .select('brand_aliases, country')
     .eq('id', clientId)
     .maybeSingle()
+  const timeZone =
+    (client?.country ?? '').toUpperCase() === 'AU' ? 'Australia/Sydney' : 'Pacific/Auckland'
   const aliases = client?.brand_aliases
   const brandTerms =
     Array.isArray(aliases) && aliases.length > 0
@@ -139,6 +142,7 @@ export async function POST(
       occurredAt,
       clientRef,
       brandTerms,
+      timeZone,
       currentLastSeenAt: contact.last_seen_at as string | null,
       // 结论已经确定就不再问 AI。note 是我们自己写死的一句话，
       // 里面没有任何客户信息，解析它既慢又白花钱，而且可能读错。
@@ -161,6 +165,15 @@ export async function POST(
     return NextResponse.json({
       created: result.created,
       touchpointId: result.touchpointId,
+      /**
+       * 解析下次时间时**实际用的**那个时区。
+       *
+       * 页面拿它去把 `callback_at` 说成「几月几号周几」——必须跟这里用的是
+       * 同一个，否则确认里那个日期会跟真正排上的那天差一天（Codex 复审
+       * 2026-08-15）：澳洲客户按悉尼排，页面却按奥克兰显示，销售说的
+       * 「周五晚上」会被确认成周六 —— 而这句话存在的全部意义就是让他核对。
+       */
+      timeZone,
       parsed: {
         summary: result.parsed.summary,
         outcome: result.parsed.outcome,
@@ -169,6 +182,12 @@ export async function POST(
         tour_interest: result.parsed.tour_interest,
         competitor: result.parsed.competitor,
         callback_at: result.parsed.callback_at,
+        /**
+         * 解析器自己回答的「有没有约一个还没做的下一步」。
+         * 页面拿它决定要不要提示「没读懂你说的下次时间」——
+         * 比在前端用正则猜准得多（见 lib/crm/next-step 文件头）。
+         */
+        mentioned_next_step: result.parsed.mentioned_next_step,
       },
     })
   } catch (err) {

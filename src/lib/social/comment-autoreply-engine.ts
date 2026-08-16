@@ -21,7 +21,15 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { getMetaTokenForClient } from '@/lib/meta/token-manager'
 import { getPageAccessToken, fetchPagePosts, fetchPageReels } from '@/lib/meta/page-posts'
 import { fetchAdStoryIds } from '@/lib/meta/ads-posts'
-import { fetchPostComments, replyToComment, sendPrivateReply, hideComment, PageComment } from '@/lib/meta/comments'
+import { fetchPostCommentsResult, replyToComment, sendPrivateReply, hideComment, PageComment } from '@/lib/meta/comments'
+import {
+  isPersistableFailure,
+  isStillSkipped,
+  loadPostSkips,
+  mergeSkip,
+  savePostSkips,
+  type PostSkip,
+} from './comment-post-skips'
 import { classifyComment, CommentDecision, CommentCategory } from './comment-classifier'
 import { ReplyContext } from './comment-guardrails'
 
@@ -49,6 +57,23 @@ export interface ClientRunResult {
   needs_human?: number
   failed?: number
   error?: string
+  /** Page these numbers belong to — the to-do lane needs it to name the Page. */
+  page_id?: string
+  /** Known-bad posts we did not call Meta for at all this run. */
+  posts_skipped?: number
+  /** Posts that failed this run in a way retrying cannot fix. */
+  posts_unreadable?: number
+  /**
+   * How many OWN-Page posts Meta refused for lack of a comment-reading scope.
+   * Own-Page only: a refused post on someone ELSE's Page is not our scope
+   * problem, and sending a human to widen permissions would be a wild goose
+   * chase.
+   */
+  permission_denied_count?: number
+  /** A few of those post ids, so a human can spot-check. Not the whole list. */
+  permission_denied_sample?: string[]
+  /** Set when the token itself was rejected — the scan stops, nothing else works. */
+  token_invalid?: string
 }
 
 /** Max send attempts before a 'failed' row stops being retried. */
@@ -86,20 +111,57 @@ export async function processClientComments(config: CommentConfig): Promise<Clie
       fetchPagePosts(config.fb_page_id, pageToken, 100),
       fetchPageReels(config.fb_page_id, pageToken, 100),
     ])
-    const postIds = new Set([...recent.map(p => p.postId), ...reels.map(r => r.postId)])
+    // 🔴 用 fullId（`<page_id>_<post_id>`），不是拆过的 postId。
+    //    /comments 边上给裸 id，Graph 会把它当成老式 singular status 对象，
+    //    直接回 #12「该端点自 v2.4 起已下线」—— 2026-08-15 生产日志里那批
+    //    每半小时重复一次的 400 就是这么来的。Reels 的 fullId 就是视频 id，
+    //    两边可以一视同仁。
+    const postIds = new Set([...recent.map(p => p.fullId), ...reels.map(r => r.fullId)])
     for (const pid of config.pinned_post_ids ?? []) if (pid) postIds.add(pid)
     // Boosted posts/Reels carry paid-delivery comments on the ad's story object,
     // which the organic endpoints undercount. Pull those story ids via the Ads API.
     if (ctxBase.adAccountId) {
       const storyIds = await fetchAdStoryIds(ctxBase.adAccountId, userToken).catch(() => [])
-      for (const sid of storyIds) postIds.add(sid)
+      // 广告账户里会混进**别人主页**的素材（老广告、合作方主页）。用本主页的
+      // token 去读它们，Meta 一律回 #10 —— 那不是我们缺权限，是根本不该问。
+      for (const sid of storyIds) if (belongsToPage(sid, config.fb_page_id)) postIds.add(sid)
     }
+
+    const now = new Date()
+    const skips = new Map<string, PostSkip>()
+    for (const s of await loadPostSkips(supabaseAdmin, clientId)) skips.set(s.post_id, s)
+    const scan = { skipped: 0, unreadable: 0, permissionDenied: [] as string[] }
+    let tokenInvalid: string | undefined
+    // 名单没变就不写库 —— 每 30 分钟一次无意义的 UPDATE 没有任何收益
+    let skipsChanged = false
 
     const comments: PageComment[] = []
     for (const postId of Array.from(postIds)) {
-      const cs = await fetchPostComments(postId, config.fb_page_id, pageToken, 100)
-      comments.push(...cs.filter(c => !c.isFromPage && new Date(c.createdAt).getTime() >= cutoff))
+      if (isStillSkipped(skips.get(postId), now)) {
+        scan.skipped++
+        continue
+      }
+      const r = await fetchPostCommentsResult(postId, config.fb_page_id, pageToken, 100)
+      if (r.ok) {
+        // 读通了就把旧标记撤掉 —— 权限补上 / 帖子恢复后不该还挂着
+        if (skips.delete(postId)) skipsChanged = true
+        comments.push(...r.comments.filter(c => !c.isFromPage && new Date(c.createdAt).getTime() >= cutoff))
+        continue
+      }
+      if (r.failure.reason === 'token_invalid') {
+        // 令牌本身被拒 —— 剩下的帖子问一遍也是同一个答案，这一轮到此为止
+        tokenInvalid = r.failure.message
+        break
+      }
+      if (!isPersistableFailure(r.failure)) continue
+      scan.unreadable++
+      if (r.failure.reason === 'permission_denied' && belongsToPage(postId, config.fb_page_id)) {
+        scan.permissionDenied.push(postId)
+      }
+      skips.set(postId, mergeSkip(skips.get(postId), postId, r.failure, now))
+      skipsChanged = true
     }
+    if (skipsChanged) await savePostSkips(supabaseAdmin, clientId, Array.from(skips.values()))
 
     const candidates = (await filterProcessable(comments)).slice(0, config.max_replies_per_run)
 
@@ -115,10 +177,35 @@ export async function processClientComments(config: CommentConfig): Promise<Clie
       tally.failed += outcome.failed ? 1 : 0
     }
 
-    return { client_id: clientId, ok: true, posts_scanned: postIds.size, new_comments: candidates.length, ...tally }
+    return {
+      client_id: clientId,
+      // 令牌被拒时这一轮并没有真的跑完 —— 记成 ok 就是那种「报告一切正常、
+      // 其实什么都没读到」的静默失败
+      ok: !tokenInvalid,
+      page_id: config.fb_page_id,
+      posts_scanned: postIds.size,
+      posts_skipped: scan.skipped,
+      posts_unreadable: scan.unreadable,
+      permission_denied_count: scan.permissionDenied.length,
+      permission_denied_sample: scan.permissionDenied.slice(0, 5),
+      new_comments: candidates.length,
+      ...tally,
+      ...(tokenInvalid ? { token_invalid: tokenInvalid, error: `Meta token rejected: ${tokenInvalid}` } : {}),
+    }
   } catch (err) {
     return { client_id: clientId, ok: false, error: err instanceof Error ? err.message : 'unknown' }
   }
+}
+
+/**
+ * Is this post id one of OUR Page's objects?
+ *
+ * Page feed posts and ad story ids look like `<page_id>_<post_id>`; Reels and
+ * videos are a bare numeric id and only ever reach us from this Page's own
+ * endpoints, so they count as ours.
+ */
+export function belongsToPage(postId: string, pageId: string): boolean {
+  return !postId.includes('_') || postId.startsWith(`${pageId}_`)
 }
 
 interface CommentContext extends ReplyContext { clientId: string; adAccountId: string | null }

@@ -59,23 +59,41 @@ export async function PATCH(
   }
   if (!existing) return NextResponse.json({ error: '联系人不存在' }, { status: 404 })
 
-  const { error: updateErr } = await supabaseAdmin
-    .from('contacts')
-    .update({ snooze_until: parsed.until, updated_at: new Date().toISOString() })
-    .eq('id', cid)
-    .eq('client_id', clientId)
+  /**
+   * ⚠️ **先写这一笔，再改 snooze_until —— 顺序不能倒过来**
+   * （Codex 复审 2026-08-15）。
+   *
+   * 这一笔以前只是「留痕」，失败了无所谓，所以包在一个吞异常的 try 里。
+   * 现在不一样了：`withoutOurActionsSince` 靠它上面的 `action:'snooze'` 认出
+   * 「这个人是**今天**被推迟的」，从而把冻结副本上的 snooze 清掉、让卡片留在
+   * 原位变灰。**名单对不对，现在要靠这一笔。**
+   *
+   * 两条路都想过了：
+   *   · 沿用「先改库、再尽力留痕」→ 留痕失败时 snooze_until 已经生效、
+   *     标记却没有 → 冻结副本清不掉 → **卡片当天直接消失**，
+   *     而接口还返回成功。正是这次要修的那个毛病，换了个触发条件。
+   *   · 改成「先留痕、再改库」→ 两种失败都安全：
+   *       留痕失败   → 500，两边都没动，重试（同 clientRef 幂等）即可
+   *       改库失败   → 500，留下一笔孤立的记录，但人**没被推迟、留在名单上**，
+   *                    冻结副本清一个 null 是空操作。重试会收敛。
+   *
+   * 两张表没法在一个事务里提交（走的是 REST），所以取「失败时偏向让人留在
+   * 名单上」的那个顺序 —— 名单上多一个人是噪音，少一个人是丢单。
+   *
+   * ⚠️ **标记分 snooze / unsnooze 两个值**（Codex 第四轮）。取消推迟时若第二步
+   * 失败，旧的 `snooze_until` **依然有效**；这时留下一个 `'snooze'` 标记，
+   * 读路径会拿它去清冻结副本上那个真实的旧推迟 —— 一次失败的「叫回来」，
+   * 刷新后反而把人挪进今天的名单还标成灰的。`'unsnooze'` 不清任何东西。
+   *
+   * （前端每次点击都新生成 `clientRef`，所以重试**不会**命中幂等键、
+   * 会多留一笔记录。这里不假装它会收敛：多一笔「取消推迟」的记录是噪音，
+   * 而上面那个方向错的清除是会骗人的，两害相权取前者。）
+   */
+  const when = parsed.until
+    ? new Date(parsed.until).toLocaleDateString('zh-CN', { timeZone: 'Pacific/Auckland' })
+    : null
 
-  if (updateErr) {
-    console.error('[crm/snooze] 更新失败:', updateErr.message)
-    return NextResponse.json({ error: '操作失败' }, { status: 500 })
-  }
-
-  // 留痕。失败不影响主结果 —— 人已经被推迟了，为一条记录把整个操作判失败，
-  // 只会让销售再点一次、然后看到同样的错误。
   try {
-    const when = parsed.until
-      ? new Date(parsed.until).toLocaleDateString('zh-CN', { timeZone: 'Pacific/Auckland' })
-      : null
     await recordManualTouchpoint({
       clientId,
       contactId: cid,
@@ -85,6 +103,9 @@ export async function PATCH(
       clientRef: typeof body.clientRef === 'string' && body.clientRef ? body.clientRef : crypto.randomUUID(),
       loggedByEmail: access.user?.email ?? null,
       currentLastSeenAt: (existing.last_seen_at as string | null) ?? null,
+      // 推迟 → 冻结副本靠它认出「今天推的」，没有它人会凭空消失。
+      // 取消推迟 → 只标「这一笔不是联系」，绝不能用 'snooze'（见上面的说明）。
+      action: parsed.until ? 'snooze' : 'unsnooze',
       // 这句话是系统生成的固定文案，不含任何客户信息 —— 送去 AI 解析既慢又白花钱。
       parsed: {
         summary: when ? `推迟到 ${when}` : '取消推迟',
@@ -99,7 +120,19 @@ export async function PATCH(
       },
     })
   } catch (err) {
-    console.error('[crm/snooze] 记录留痕失败（不影响推迟本身）:', err)
+    console.error('[crm/snooze] 写留痕失败，推迟未生效:', err)
+    return NextResponse.json({ error: '操作失败' }, { status: 500 })
+  }
+
+  const { error: updateErr } = await supabaseAdmin
+    .from('contacts')
+    .update({ snooze_until: parsed.until, updated_at: new Date().toISOString() })
+    .eq('id', cid)
+    .eq('client_id', clientId)
+
+  if (updateErr) {
+    console.error('[crm/snooze] 更新失败:', updateErr.message)
+    return NextResponse.json({ error: '操作失败' }, { status: 500 })
   }
 
   return NextResponse.json({ snoozeUntil: parsed.until })

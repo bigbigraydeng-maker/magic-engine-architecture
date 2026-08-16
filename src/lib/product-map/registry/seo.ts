@@ -43,6 +43,7 @@ export const SEO_COMPONENTS: readonly ProductMapComponent[] = [
     id: 'capability.seo-build-publish-package',
     name: 'SEO 发布包构建（内核首个 capability）',
     componentType: 'capability',
+    architecturalRole: 'shared_capability',
     businessLane: 'seo',
     dapeStages: ['execution', 'verification'],
     businessOutcome: '博客草稿变成完整性可验证的发布包,发布动作有据可查',
