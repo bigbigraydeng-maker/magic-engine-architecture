@@ -24,13 +24,29 @@ import { cx } from '@/components/ui/me-theme'
 import { BUCKET_LABEL } from '@/lib/product-map/presenter'
 import type { ComponentView, ConsolePresentation, DecisionView } from '@/lib/product-map/presenter'
 
-type ViewKey = 'decisions' | 'lanes' | 'list'
+type ViewKey = 'decisions' | 'lanes' | 'list' | 'search' | 'graph'
 
+// 顺序:决策入口永远第一(板桥 S1);查阅类(查一件事 / 谁垫着谁)排最后,检索在关系图前(板桥建议 5)。
 const VIEWS: { key: ViewKey; label: string }[] = [
   { key: 'decisions', label: '等你拍板' },
   { key: 'lanes', label: '各条线做到哪了' },
   { key: 'list', label: '一件件看' },
+  { key: 'search', label: '查一件事' },
+  { key: 'graph', label: '谁垫着谁' },
 ]
+
+// 「在不在跑」的颜色(节点主色):在跑 > 建到哪一步(板桥 M1)。
+const BUCKET_COLOR: Record<string, string> = {
+  operating: '#4B7A3A',
+  built_not_live: '#B5852A',
+  building: '#8A9099',
+}
+const BUCKET_TEXT: Record<string, string> = {
+  operating: '在生产干活',
+  built_not_live: '建好了但没通电',
+  building: '还在建',
+}
+const LANE_PALETTE = ['#2F6E7A', '#4B7A3A', '#3E5C8A', '#6E4E8A', '#9A6B1E']
 
 function trustTone(v: ConsolePresentation['trust']): 'track' | 'exec' | 'rej' {
   if (v.loadOutcome === 'sync_error' || v.health === 'run_error') return 'rej'
@@ -523,6 +539,414 @@ function ListView({ data }: { data: ConsolePresentation }) {
   )
 }
 
+// ── 查一件事:issue/PR 检索 ─────────────────────────────────────────────
+function SearchView({ data }: { data: ConsolePresentation }) {
+  const [q, setQ] = useState('')
+  const [kind, setKind] = useState<'all' | 'pr' | 'issue'>('all')
+
+  const filtered = useMemo(() => {
+    const ql = q.trim().toLowerCase()
+    return data.catalog.filter((it) => {
+      if (kind !== 'all' && it.kind !== kind) return false
+      if (!ql) return true
+      // id 参与不到匹配(catalog 里根本没有 id)——只在人话字段上搜(板桥必改 5)
+      // 纯数字按编号精确/前缀匹配,不用子串——否则搜「86」会把 863/8600/1863 全冒出来,
+      // 而 PM 多半是照着一个具体编号找(魏征实施后复审)。
+      const isNumericQuery = /^\d+$/.test(ql)
+      return (
+        (isNumericQuery
+          ? String(it.number) === ql || String(it.number).startsWith(ql)
+          : String(it.number).includes(ql)) ||
+        it.title.toLowerCase().includes(ql) ||
+        it.components.some(
+          (c) => c.name.toLowerCase().includes(ql) || c.businessOutcome.toLowerCase().includes(ql),
+        )
+      )
+    })
+  }, [data.catalog, q, kind])
+
+  // 同步没开通 → catalog 全空:说清「要等同步」,不是「查无结果」(子牙 S4 / 板桥必改 9)
+  if (data.catalog.length === 0) {
+    return (
+      <MePanel>
+        <p className="text-[13px] text-black/60">
+          还没有从 GitHub 同步到任何 issue / PR —— <strong>检索要等同步开通</strong>。
+          同步跑起来后,这里就能按编号 / 标题 / 组件名查了。
+        </p>
+      </MePanel>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="搜编号 / 标题 / 组件名 —— 例:内核、863、审批"
+          className="min-w-[240px] flex-1 rounded-xl border border-black/10 bg-white px-4 py-2.5 text-[14px] text-me-charcoal shadow-[0_1px_2px_rgba(26,26,26,.04)] outline-none placeholder:text-black/35 focus:border-me-ochre/50"
+        />
+        <div className="inline-flex items-center gap-1 rounded-xl border border-black/10 bg-white p-1 shadow-[0_1px_2px_rgba(26,26,26,.04)]">
+          {(
+            [
+              ['all', '全部'],
+              ['pr', 'PR'],
+              ['issue', 'Issue'],
+            ] as const
+          ).map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setKind(k)}
+              className={cx(
+                'rounded-lg px-3.5 py-1.5 text-[12.5px] font-semibold transition',
+                kind === k ? 'bg-me-charcoal text-[#FBF8F3]' : 'text-black/55 hover:bg-me-stone',
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <span className="text-[12px] text-black/40">
+          {filtered.length} / {data.catalog.length}
+        </span>
+      </div>
+
+      {filtered.length === 0 ? (
+        <MePanel>
+          <p className="text-[13px] text-black/60">
+            没找到匹配的。如果你确定它存在,可能是同步还没覆盖到 —— agent 会处理,不代表它不存在。
+          </p>
+        </MePanel>
+      ) : (
+        <div className="space-y-2.5">
+          {filtered.map((it) => (
+            <a
+              key={`${it.kind}-${it.number}`}
+              href={it.url}
+              target="_blank"
+              rel="noreferrer"
+              className="block rounded-xl border border-black/10 bg-white p-3.5 transition hover:border-me-ochre/40"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <MeChip>{it.kind === 'pr' ? 'PR' : 'Issue'}</MeChip>
+                <span className="font-display text-[15px] font-semibold tabular-nums text-me-charcoal">
+                  #{it.number}
+                </span>
+                <MeChip gold={it.stateLabel.includes('开着') || it.stateLabel.includes('草稿')}>
+                  {it.stateLabel}
+                </MeChip>
+                <span className="text-[12.5px] text-me-ochre">在 GitHub 打开 ↗</span>
+              </div>
+              <div className="mt-1.5 text-[13.5px] text-me-charcoal">{it.title}</div>
+              {/* 让 PM 把陌生编号挂回「哦这是那件事」——给业务人话名(板桥必改 6) */}
+              {it.components.length === 0 ? (
+                <p className="mt-1.5 text-[12px] text-black/45">
+                  还没挂到任何组件(老系统 / 或还没开工)—— 不代表它无关。
+                </p>
+              ) : (
+                <div className="mt-1.5 space-y-0.5">
+                  {it.components.map((c, ci) => (
+                    <div key={`${c.name}-${ci}`} className="text-[12px] text-black/55">
+                      属于「<span className="text-black/75">{c.name}</span>」· {c.businessOutcome} · {c.laneLabel}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 谁垫着谁:全局依赖图(横轴=先后)────────────────────────────────────
+function GraphPanel({ data }: { data: ConsolePresentation }) {
+  const [sel, setSel] = useState<string | null>(null)
+
+  const laneColor = useMemo(() => {
+    const m: Record<string, string> = {}
+    data.lanes.forEach((l, i) => {
+      m[l.laneLabel] = LANE_PALETTE[i % LANE_PALETTE.length]
+    })
+    return m
+  }, [data.lanes])
+
+  const connected = useMemo(() => data.graph.nodes.filter((n) => !n.isolated), [data.graph.nodes])
+  const isolated = useMemo(() => data.graph.nodes.filter((n) => n.isolated), [data.graph.nodes])
+
+  const layout = useMemo(() => {
+    const NW = 148,
+      NH = 46,
+      COLGAP = 52,
+      ROWGAP = 12,
+      LEFT = 16,
+      TOP = 10,
+      LANEPAD = 30,
+      LANEGAP = 14
+    const colX = (d: number) => LEFT + d * (NW + COLGAP)
+    const laneOrder = data.lanes
+      .map((l) => l.laneLabel)
+      .filter((ll) => connected.some((n) => n.laneLabel === ll))
+    const pos: Record<string, { x: number; y: number }> = {}
+    const bands: { label: string; top: number; height: number; color: string }[] = []
+    let y = TOP
+    let maxDepth = 0
+    for (const n of connected) maxDepth = Math.max(maxDepth, n.depth)
+    for (const ll of laneOrder) {
+      const laneNodes = connected.filter((n) => n.laneLabel === ll)
+      const byDepth: Record<number, typeof laneNodes> = {}
+      for (const n of laneNodes) (byDepth[n.depth] = byDepth[n.depth] || []).push(n)
+      const maxRows = Math.max(1, ...Object.values(byDepth).map((a) => a.length))
+      const bandTop = y
+      const bandH = LANEPAD + maxRows * (NH + ROWGAP)
+      for (const d of Object.keys(byDepth)) {
+        byDepth[+d].forEach((n, i) => {
+          pos[n.key] = { x: colX(+d), y: bandTop + LANEPAD + i * (NH + ROWGAP) }
+        })
+      }
+      bands.push({ label: ll, top: bandTop, height: bandH, color: laneColor[ll] })
+      y = bandTop + bandH + LANEGAP
+    }
+    return { pos, bands, width: colX(maxDepth) + NW + 14, height: y - LANEGAP + 10, NW, NH }
+  }, [connected, data.lanes, laneColor])
+
+  const neighbourKeys = useMemo(() => {
+    const s = new Set<string>()
+    if (!sel) return s
+    s.add(sel)
+    for (const e of data.graph.edges) {
+      if (e.fromKey === sel) s.add(e.toKey)
+      if (e.toKey === sel) s.add(e.fromKey)
+    }
+    return s
+  }, [sel, data.graph.edges])
+
+  const nameOf = (k: string) => data.graph.nodes.find((n) => n.key === k)?.name ?? '(未知)'
+  const trunc = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '…' : s)
+  const selNode = sel ? data.graph.nodes.find((n) => n.key === sel) : null
+  const selUp = sel ? data.graph.edges.filter((e) => e.toKey === sel) : []
+  const selDown = sel ? data.graph.edges.filter((e) => e.fromKey === sel) : []
+  const { pos, bands, width, height, NW, NH } = layout
+  const edges = data.graph.edges.filter((e) => pos[e.fromKey] && pos[e.toKey])
+
+  return (
+    <div className="space-y-4">
+      {/* 导览:别把横轴读成时间表(板桥必改 1) */}
+      <MePanel>
+        <p className="text-[13px] text-black/70">
+          <strong className="text-me-charcoal">怎么读:</strong>越靠左的,是越底层、别人要先靠它才能动的(总闸、口径、插头);越靠右越依赖别人。
+          <strong> 这不是「先做哪个后做哪个」的时间表,是「谁垫在谁下面」。</strong>
+        </p>
+        <p className="mt-1.5 text-[12.5px] text-black/50">
+          日常拍板不用看这个 —— 想一眼看清全局怎么搭起来时才点它。竖着按业务线分组;颜色是「在不在跑」。
+        </p>
+      </MePanel>
+
+      {/* 图例(板桥必改 2) */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border border-black/10 bg-white px-4 py-3 text-[12px] text-black/60">
+        <span className="font-semibold text-black/45">颜色=在不在跑</span>
+        {(['operating', 'built_not_live', 'building'] as const).map((b) => (
+          <span key={b} className="inline-flex items-center gap-1.5">
+            <span
+              className={cx('h-3 w-3 rounded-sm', b === 'building' && 'motion-safe:animate-pulse')}
+              style={{ background: BUCKET_COLOR[b] }}
+            />
+            {BUCKET_TEXT[b]}
+            {b === 'building' && <span className="text-black/40">(跳动的=正在开发中)</span>}
+          </span>
+        ))}
+        <span className="inline-flex items-center gap-1.5">
+          <svg width="26" height="8" aria-hidden="true">
+            {/* 跟画布真箭头同一个灰(#B7B2A8),别跟「还在建」状态色(#8A9099)撞(板桥实施后复审) */}
+            <line x1="0" y1="4" x2="20" y2="4" stroke="#B7B2A8" strokeWidth="1.5" />
+            <polygon points="20,1 26,4 20,7" fill="#B7B2A8" />
+          </svg>
+          箭头:左边这件要先有,右边才动
+        </span>
+      </div>
+
+      {connected.length === 0 ? (
+        // 没有任何已登记依赖时,画布会是一条几乎看不见的空条 —— 那不是「图坏了」,
+        // 是「还没登记依赖」,必须说出来,不能让空白被读成故障(魏征实施后复审)
+        <MePanel>
+          <p className="text-[13px] text-black/60">还没有任何登记的依赖关系,所以暂时画不出图。</p>
+        </MePanel>
+      ) : (
+      <MePanel className="overflow-x-auto">
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          width={width}
+          height={height}
+          className="max-w-full"
+          role="img"
+          aria-label="全局依赖图:横轴为谁垫着谁,纵向按业务线分组"
+          onClick={() => setSel(null)}
+        >
+          <defs>
+            <marker id="pm-arrow" markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto">
+              <path d="M0,0 L6,3 L0,6 z" fill="#B7B2A8" />
+            </marker>
+            <marker id="pm-arrow-on" markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto">
+              <path d="M0,0 L6,3 L0,6 z" fill="#3A3A3A" />
+            </marker>
+          </defs>
+          {bands.map((b) => (
+            <g key={b.label}>
+              <rect x={0} y={b.top} width={width} height={b.height - 2} rx={10} fill={b.color} opacity={0.06} />
+              <text x={12} y={b.top + 17} fontSize={12} fontWeight={700} fill={b.color}>
+                {b.label}
+              </text>
+            </g>
+          ))}
+          {edges.map((e, i) => {
+            const a = pos[e.fromKey],
+              z = pos[e.toKey]
+            const x1 = a.x + NW,
+              y1 = a.y + NH / 2,
+              x2 = z.x,
+              y2 = z.y + NH / 2
+            const mx = (x1 + x2) / 2
+            const on = !!sel && (e.fromKey === sel || e.toKey === sel)
+            const dim = !!sel && !on
+            return (
+              <path
+                key={i}
+                d={`M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2 - 4},${y2}`}
+                fill="none"
+                stroke={on ? '#3A3A3A' : '#B7B2A8'}
+                strokeWidth={on ? 2 : 1.3}
+                opacity={dim ? 0.12 : 0.85}
+                markerEnd={`url(#pm-arrow${on ? '-on' : ''})`}
+              />
+            )
+          })}
+          {connected.map((n) => {
+            const p = pos[n.key]
+            if (!p) return null
+            const c = BUCKET_COLOR[n.bucket]
+            const dim = !!sel && !neighbourKeys.has(n.key)
+            return (
+              <g
+                key={n.key}
+                onClick={(e) => {
+                  e.stopPropagation() // 别冒泡到背景的「点空白取消选中」(魏征实施后复审)
+                  setSel(sel === n.key ? null : n.key)
+                }}
+                style={{ cursor: 'pointer' }}
+                opacity={dim ? 0.32 : 1}
+              >
+                <title>{n.name}</title>
+                <rect
+                  x={p.x}
+                  y={p.y}
+                  width={NW}
+                  height={NH}
+                  rx={9}
+                  fill="#fff"
+                  stroke={c}
+                  strokeWidth={sel === n.key ? 2.4 : 1.4}
+                />
+                {/* 「还在建」的件跳动提示「正在开发中」——静态色块+文字本就够区分,
+                    动画是锦上添花,所以 prefers-reduced-motion 时安心退化成静态(不额外做降级标记)。 */}
+                <rect
+                  x={p.x}
+                  y={p.y}
+                  width={4}
+                  height={NH}
+                  rx={2}
+                  fill={c}
+                  className={n.bucket === 'building' ? 'motion-safe:animate-pulse' : undefined}
+                />
+                <text x={p.x + 13} y={p.y + 19} fontSize={12.5} fontWeight={600} fill="#2A2A2A">
+                  {trunc(n.name, 9)}
+                </text>
+                <text x={p.x + 13} y={p.y + 35} fontSize={10} fill="#8A8A8A">
+                  {BUCKET_TEXT[n.bucket]}
+                  {n.bucket === 'building' && (
+                    <tspan className="motion-safe:animate-pulse" fill="#B5852A">
+                      {' '}●
+                    </tspan>
+                  )}
+                </text>
+              </g>
+            )
+          })}
+        </svg>
+      </MePanel>
+      )}
+
+      {selNode && (
+        <MePanel>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-display text-[15px] font-semibold text-me-charcoal">{selNode.name}</span>
+            <MeChip>{selNode.laneLabel}</MeChip>
+            <MePill
+              tone={
+                selNode.bucket === 'operating' ? 'track' : selNode.bucket === 'built_not_live' ? 'exec' : 'attn'
+              }
+            >
+              {BUCKET_TEXT[selNode.bucket]}
+            </MePill>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div>
+              {/* 跟「一件件看」行展开用同一套词(要先有它/它在等这件事),别让 PM 对照时要多想一步(板桥实施后复审) */}
+              <div className="text-[11px] uppercase tracking-wide text-black/40">要先有它</div>
+              {selUp.length === 0 ? (
+                <p className="mt-1 text-[12.5px] text-black/45">不依赖别的组件 —— 是条地基。</p>
+              ) : (
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {selUp.map((e, i) => (
+                    <MeChip key={i}>
+                      {nameOf(e.fromKey)}({e.typeLabel})
+                    </MeChip>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div>
+              <div className="text-[11px] uppercase tracking-wide text-black/40">它在等这件事</div>
+              {selDown.length === 0 ? (
+                <p className="mt-1 text-[12.5px] text-black/45">目前没有别的组件依赖它。</p>
+              ) : (
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {selDown.map((e, i) => (
+                    <MeChip key={i}>
+                      {nameOf(e.toKey)}({e.typeLabel})
+                    </MeChip>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </MePanel>
+      )}
+
+      {isolated.length > 0 && (
+        <MePanel>
+          <MePanelHeader title={`这些暂时没登记依赖关系(${isolated.length})`} />
+          <p className="mb-2.5 text-[12.5px] text-black/55">
+            可能是<strong>真的独立</strong>,也可能是<strong>关系还没登记</strong> —— 两者不同,先如实标出来,不当成「确认无依赖」。
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {isolated.map((n) => (
+              <span
+                key={n.key}
+                className="inline-flex items-center gap-1.5 rounded-full border border-black/10 bg-white px-2.5 py-1 text-[12px] text-black/60"
+              >
+                <span className="h-2 w-2 rounded-full" style={{ background: BUCKET_COLOR[n.bucket] }} />
+                {n.name}
+              </span>
+            ))}
+          </div>
+        </MePanel>
+      )}
+    </div>
+  )
+}
+
 export default function ProductMapClient({ data }: { data: ConsolePresentation }) {
   const [view, setView] = useState<ViewKey>('decisions')
 
@@ -547,7 +971,13 @@ export default function ProductMapClient({ data }: { data: ConsolePresentation }
           {VIEWS.map((v) => {
             const active = view === v.key
             const count =
-              v.key === 'decisions' ? data.decisionsNow.length : v.key === 'list' ? data.totalComponents : undefined
+              v.key === 'decisions'
+                ? data.decisionsNow.length
+                : v.key === 'list'
+                  ? data.totalComponents
+                  : v.key === 'search'
+                    ? data.catalog.length
+                    : undefined
             return (
               <button
                 key={v.key}
@@ -572,6 +1002,8 @@ export default function ProductMapClient({ data }: { data: ConsolePresentation }
         {view === 'decisions' && <DecisionsView data={data} />}
         {view === 'lanes' && <LanesView data={data} />}
         {view === 'list' && <ListView data={data} />}
+        {view === 'search' && <SearchView data={data} />}
+        {view === 'graph' && <GraphPanel data={data} />}
       </div>
     </div>
   )
