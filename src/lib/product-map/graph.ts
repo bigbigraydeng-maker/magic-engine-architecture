@@ -21,7 +21,7 @@ const ORDERING_EDGE_TYPES: ReadonlySet<ComponentDependency['type']> = new Set<
  *   **故意排除 blocks**（blocks 是「卡住」语义，不是数据流先后）。
  * 别把 blocks 加进来，否则横轴先后就和环检测口径打架。
  */
-const DEPTH_EDGE_TYPES: ReadonlySet<ComponentDependency['type']> = new Set<
+export const DEPTH_EDGE_TYPES: ReadonlySet<ComponentDependency['type']> = new Set<
   ComponentDependency['type']
 >(['requires', 'consumes', 'implements', 'adapts'])
 

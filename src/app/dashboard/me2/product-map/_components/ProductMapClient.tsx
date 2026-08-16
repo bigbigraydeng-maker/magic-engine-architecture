@@ -550,8 +550,13 @@ function SearchView({ data }: { data: ConsolePresentation }) {
       if (kind !== 'all' && it.kind !== kind) return false
       if (!ql) return true
       // id 参与不到匹配(catalog 里根本没有 id)——只在人话字段上搜(板桥必改 5)
+      // 纯数字按编号精确/前缀匹配,不用子串——否则搜「86」会把 863/8600/1863 全冒出来,
+      // 而 PM 多半是照着一个具体编号找(魏征实施后复审)。
+      const isNumericQuery = /^\d+$/.test(ql)
       return (
-        String(it.number).includes(ql) ||
+        (isNumericQuery
+          ? String(it.number) === ql || String(it.number).startsWith(ql)
+          : String(it.number).includes(ql)) ||
         it.title.toLowerCase().includes(ql) ||
         it.components.some(
           (c) => c.name.toLowerCase().includes(ql) || c.businessOutcome.toLowerCase().includes(ql),
@@ -641,8 +646,8 @@ function SearchView({ data }: { data: ConsolePresentation }) {
                 </p>
               ) : (
                 <div className="mt-1.5 space-y-0.5">
-                  {it.components.map((c) => (
-                    <div key={c.name} className="text-[12px] text-black/55">
+                  {it.components.map((c, ci) => (
+                    <div key={`${c.name}-${ci}`} className="text-[12px] text-black/55">
                       属于「<span className="text-black/75">{c.name}</span>」· {c.businessOutcome} · {c.laneLabel}
                     </div>
                   ))}
@@ -744,18 +749,31 @@ function GraphPanel({ data }: { data: ConsolePresentation }) {
         <span className="font-semibold text-black/45">颜色=在不在跑</span>
         {(['operating', 'built_not_live', 'building'] as const).map((b) => (
           <span key={b} className="inline-flex items-center gap-1.5">
-            <span className="h-3 w-3 rounded-sm" style={{ background: BUCKET_COLOR[b] }} /> {BUCKET_TEXT[b]}
+            <span
+              className={cx('h-3 w-3 rounded-sm', b === 'building' && 'motion-safe:animate-pulse')}
+              style={{ background: BUCKET_COLOR[b] }}
+            />
+            {BUCKET_TEXT[b]}
+            {b === 'building' && <span className="text-black/40">(跳动的=正在开发中)</span>}
           </span>
         ))}
         <span className="inline-flex items-center gap-1.5">
           <svg width="26" height="8" aria-hidden="true">
-            <line x1="0" y1="4" x2="20" y2="4" stroke="#8A9099" strokeWidth="1.5" />
-            <polygon points="20,1 26,4 20,7" fill="#8A9099" />
+            {/* 跟画布真箭头同一个灰(#B7B2A8),别跟「还在建」状态色(#8A9099)撞(板桥实施后复审) */}
+            <line x1="0" y1="4" x2="20" y2="4" stroke="#B7B2A8" strokeWidth="1.5" />
+            <polygon points="20,1 26,4 20,7" fill="#B7B2A8" />
           </svg>
           箭头:左边这件要先有,右边才动
         </span>
       </div>
 
+      {connected.length === 0 ? (
+        // 没有任何已登记依赖时,画布会是一条几乎看不见的空条 —— 那不是「图坏了」,
+        // 是「还没登记依赖」,必须说出来,不能让空白被读成故障(魏征实施后复审)
+        <MePanel>
+          <p className="text-[13px] text-black/60">还没有任何登记的依赖关系,所以暂时画不出图。</p>
+        </MePanel>
+      ) : (
       <MePanel className="overflow-x-auto">
         <svg
           viewBox={`0 0 ${width} ${height}`}
@@ -764,6 +782,7 @@ function GraphPanel({ data }: { data: ConsolePresentation }) {
           className="max-w-full"
           role="img"
           aria-label="全局依赖图:横轴为谁垫着谁,纵向按业务线分组"
+          onClick={() => setSel(null)}
         >
           <defs>
             <marker id="pm-arrow" markerWidth="7" markerHeight="7" refX="5.5" refY="3" orient="auto">
@@ -811,7 +830,10 @@ function GraphPanel({ data }: { data: ConsolePresentation }) {
             return (
               <g
                 key={n.key}
-                onClick={() => setSel(sel === n.key ? null : n.key)}
+                onClick={(e) => {
+                  e.stopPropagation() // 别冒泡到背景的「点空白取消选中」(魏征实施后复审)
+                  setSel(sel === n.key ? null : n.key)
+                }}
                 style={{ cursor: 'pointer' }}
                 opacity={dim ? 0.32 : 1}
               >
@@ -826,18 +848,34 @@ function GraphPanel({ data }: { data: ConsolePresentation }) {
                   stroke={c}
                   strokeWidth={sel === n.key ? 2.4 : 1.4}
                 />
-                <rect x={p.x} y={p.y} width={4} height={NH} rx={2} fill={c} />
+                {/* 「还在建」的件跳动提示「正在开发中」——静态色块+文字本就够区分,
+                    动画是锦上添花,所以 prefers-reduced-motion 时安心退化成静态(不额外做降级标记)。 */}
+                <rect
+                  x={p.x}
+                  y={p.y}
+                  width={4}
+                  height={NH}
+                  rx={2}
+                  fill={c}
+                  className={n.bucket === 'building' ? 'motion-safe:animate-pulse' : undefined}
+                />
                 <text x={p.x + 13} y={p.y + 19} fontSize={12.5} fontWeight={600} fill="#2A2A2A">
                   {trunc(n.name, 9)}
                 </text>
                 <text x={p.x + 13} y={p.y + 35} fontSize={10} fill="#8A8A8A">
                   {BUCKET_TEXT[n.bucket]}
+                  {n.bucket === 'building' && (
+                    <tspan className="motion-safe:animate-pulse" fill="#B5852A">
+                      {' '}●
+                    </tspan>
+                  )}
                 </text>
               </g>
             )
           })}
         </svg>
       </MePanel>
+      )}
 
       {selNode && (
         <MePanel>
@@ -854,7 +892,8 @@ function GraphPanel({ data }: { data: ConsolePresentation }) {
           </div>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <div>
-              <div className="text-[11px] uppercase tracking-wide text-black/40">它要先有(垫在它下面)</div>
+              {/* 跟「一件件看」行展开用同一套词(要先有它/它在等这件事),别让 PM 对照时要多想一步(板桥实施后复审) */}
+              <div className="text-[11px] uppercase tracking-wide text-black/40">要先有它</div>
               {selUp.length === 0 ? (
                 <p className="mt-1 text-[12.5px] text-black/45">不依赖别的组件 —— 是条地基。</p>
               ) : (
@@ -868,7 +907,7 @@ function GraphPanel({ data }: { data: ConsolePresentation }) {
               )}
             </div>
             <div>
-              <div className="text-[11px] uppercase tracking-wide text-black/40">谁靠着它(它垫着)</div>
+              <div className="text-[11px] uppercase tracking-wide text-black/40">它在等这件事</div>
               {selDown.length === 0 ? (
                 <p className="mt-1 text-[12.5px] text-black/45">目前没有别的组件依赖它。</p>
               ) : (

@@ -24,7 +24,7 @@ import type {
   ProductMapComponent,
 } from './types'
 import { maturityRank } from './types'
-import { layerByDepth } from './graph'
+import { DEPTH_EDGE_TYPES, layerByDepth } from './graph'
 import type { ProductMapSnapshot } from './index'
 
 // ---------------------------------------------------------------------------
@@ -680,9 +680,12 @@ export function buildPresentation(input: PresenterInput): ConsolePresentation {
     for (const dep of c.dependencies) {
       const targetKey = keyById.get(dep.target)
       if (!targetKey) continue // 悬空依赖 validate 已拦,此处防御跳过
-      // 方向统一成「先 → 后」:blocks =「我卡着 target」→ 我在上游;其余 =「我依赖 target」→ target 在上游。
-      const [fromKey, toKey] = dep.type === 'blocks' ? [selfKey, targetKey] : [targetKey, selfKey]
-      graphEdges.push({ fromKey, toKey, typeLabel: DEP_EDGE_LABEL[dep.type] })
+      // 🔴 只画 DEPTH_EDGE_TYPES 认可的边(与 layerByDepth 同一个真值源,魏征+子牙复审)——
+      //    blocks/verifies 没有「先后」语义,硬画进这张「谁垫着谁」图会指反箭头,
+      //    当场打脸图例「左边这件要先有」。它们属于「卡住」/「验证」,不是先后关系。
+      if (!DEPTH_EDGE_TYPES.has(dep.type)) continue
+      // target 排在 self 之前(先 → 后):`A requires/consumes/implements/adapts B` → B 更浅、在左。
+      graphEdges.push({ fromKey: targetKey, toKey: selfKey, typeLabel: DEP_EDGE_LABEL[dep.type] })
     }
   }
   const touchedKeys = new Set<string>()
