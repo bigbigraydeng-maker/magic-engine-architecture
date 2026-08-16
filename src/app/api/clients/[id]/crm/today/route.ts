@@ -572,6 +572,8 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
        */
       reason: c.handled && c.handledWhy ? c.handledWhy : c.seg.reason,
       suggestedChannel: c.seg.suggestedChannel,
+      /** 号码在库里但打不通 —— 卡片靠它把「没留电话」和「号是坏的」分开说。 */
+      phoneUnusable: c.seg.phoneUnusable ?? false,
       dueAt: c.seg.dueAt,
       lastTouchAt: c.seg.lastTouchAt,
       lastNote: last?.summary ?? null,

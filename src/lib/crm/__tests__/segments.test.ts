@@ -39,14 +39,87 @@ describe('先挡住不该打的人', () => {
     expect(r.suggestedChannel).toBe('none')
   })
 
-  it('号码是坏的就别再排进名单', () => {
-    const c = contact({ touchpoints: [form('2026-07-01T00:00:00Z'), call('2026-07-01T00:00:00Z', 'bad_number')] })
-    expect(segmentContact(c, NOW).segment).toBe('excluded')
-  })
-
   it('明确说没兴趣的也排除', () => {
     const c = contact({ touchpoints: [call('2026-07-01T00:00:00Z', 'not_interested')] })
     expect(segmentContact(c, NOW).segment).toBe('excluded')
+  })
+})
+
+/**
+ * 🔴 **「号码是坏的」是渠道故障，不是这个人的结局**（PM 2026-08-16 从线上截图抓到）。
+ *
+ * 线上真实数据：CTS 24 个被标坏号的人里 **23 个后来又来过消息**，15 个一直在跟
+ * 我们邮件往来。Sue Masson 7 月 6 号被标坏号，此后来了 11 封信、最后一封是当天，
+ * 却一直躺在「号码是坏的·补一个对的就能继续跟」那一栏里没人回。
+ *
+ * 判据必须分层：**联系方式是渠道属性，成不成是人的状态，两件事不许互相覆盖。**
+ */
+describe('号码打不通 ≠ 这个人不要了', () => {
+  const badNumberThenEmail = (over: Partial<ContactLike> = {}) =>
+    contact({
+      touchpoints: [
+        form('2026-07-01T00:00:00Z'),
+        call('2026-07-02T00:00:00Z', 'bad_number'),
+        // 标了坏号之后，他自己发邮件回来了 —— 这个人显然还活着
+        { channel: 'email', direction: 'inbound', occurredAt: '2026-07-26T02:00:00Z' },
+      ],
+      hasPhone: true,
+      hasEmail: true,
+      ...over,
+    })
+
+  it('坏号之后客人又来信 → 照旧进「客户回话了」，不再被埋掉', () => {
+    const r = segmentContact(badNumberThenEmail(), NOW)
+    expect(r.segment).toBe('replied')
+  })
+
+  it('坏号的人建议渠道降级到邮件 —— 绝不让销售再打那个号', () => {
+    expect(segmentContact(badNumberThenEmail(), NOW).suggestedChannel).toBe('email')
+  })
+
+  it('只有 Messenger 的坏号客人 → 降级到 Messenger', () => {
+    const r = segmentContact(
+      badNumberThenEmail({ hasEmail: false, hasMessenger: true }),
+      NOW,
+    )
+    expect(r.suggestedChannel).toBe('messenger')
+  })
+
+  /**
+   * 卡片必须分得清「没留电话」和「号是坏的」—— 对一个抽屉里明明存着号码的人
+   * 说「没留电话」，销售一眼就能戳穿，而这一页最贵的资产是「它说的话可信」。
+   */
+  it('库里有号码但打不通 → 标出来，好让卡片说对话', () => {
+    expect(segmentContact(badNumberThenEmail(), NOW).phoneUnusable).toBe(true)
+  })
+
+  it('压根没留过电话的人 → 不许说成「号打不通」', () => {
+    const r = segmentContact(
+      badNumberThenEmail({ hasPhone: false, hasEmail: true }),
+      NOW,
+    )
+    expect(r.phoneUnusable).toBe(false)
+  })
+
+  /** 电话打不通、又真的没有第二条路 —— 这时候才该退出名单。 */
+  it('坏号 + 没邮箱 + 没 Messenger → 仍然排除，并说清缺什么', () => {
+    const r = segmentContact(
+      badNumberThenEmail({ hasEmail: false, hasMessenger: false }),
+      NOW,
+    )
+    expect(r.segment).toBe('excluded')
+    expect(r.reason).toContain('补个联系方式')
+  })
+
+  /**
+   * 调用方一个联系方式字段都没给（老调用方）→ 不凭空判他联系不上。
+   * 本文件一贯的偏向：多一个人是噪音，少一个是丢单。
+   */
+  it('没告诉我们有哪些联系方式 → 不替他判死刑', () => {
+    const c = contact({
+      touchpoints: [form('2026-07-01T00:00:00Z'), call('2026-07-02T00:00:00Z', 'bad_number')],
+    })
+    expect(segmentContact(c, NOW).segment).not.toBe('excluded')
   })
 })
 

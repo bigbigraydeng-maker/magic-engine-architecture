@@ -237,6 +237,16 @@ export interface SegmentResult {
    * 让销售去打一个打不了的人，这一页就会开始不被信任。
    */
   suggestedChannel: 'phone' | 'sms' | 'email' | 'messenger' | 'none'
+  /**
+   * 库里有号码，但**这个号打不通**（有人点过「号码是坏的」）。
+   *
+   * 卡片必须靠它区分两种长得一样、说法完全不同的情况：
+   *   · 没留电话   → 「没留电话 —— 只能发邮件」
+   *   · 号码是坏的 → 「这个号打不通 —— 先用邮件，顺便问他要个新号」
+   * 对一个抽屉里明明存着号码的人说「没留电话」，销售一眼就能戳穿，
+   * 而这一页最贵的资产就是「它说的话可信」。
+   */
+  phoneUnusable?: boolean
   /** 约定的回电时间，有就带上。销售拿起电话前一定会想「我约的几点」。 */
   dueAt: string | null
   /**
@@ -282,7 +292,22 @@ function snoozeText(iso: string, now: Date): string {
 }
 
 /** 结论性的通话结果 —— 这些人不该出现在今天的名单上。 */
-const DEAD_OUTCOMES = new Set(['bad_number', 'not_interested', 'do_not_contact'])
+/**
+ * 「这个人到此为止了」—— 判到就整个人退出名单。
+ *
+ * 🔴 **`bad_number` 故意不在里面**（PM 2026-08-16 从线上截图抓到）。
+ *
+ * 「号码是坏的」说的是**这条电话线打不通**，不是**这个人不要了**。把它当成
+ * 结局，等于让一个渠道故障判了整个人的死刑 —— 而这正是 CTS 线上真实发生的事：
+ * 24 个被标了坏号的人里 **23 个后来又来过消息**，15 个一直在跟我们邮件往来。
+ * Sue Masson 7 月 6 号被标坏号，此后来了 11 封信、最后一封是**昨天**，
+ * 却一直躺在「号码是坏的·补一个对的就能继续跟」那一栏里没人回。
+ *
+ * 判据分层：**联系方式是渠道属性，成不成是人的状态，两件事不许互相覆盖。**
+ * 坏号只把电话这条路关掉（见 `phoneIsDead`），人照旧走下面的规则；
+ * 只有当他**真的一条路都没有**时，才回到「联系不上」那一栏。
+ */
+const DEAD_OUTCOMES = new Set(['not_interested', 'do_not_contact'])
 
 /**
  * 打了没接，几天之后不再让真人一个个重打。
@@ -419,11 +444,27 @@ export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
   const lastAny = Math.max(lastInbound, lastOutbound)
   const lastTouchAt = lastAny > 0 ? new Date(lastAny).toISOString() : null
 
+  /**
+   * 这条电话线打不通 —— **只关掉电话，不关掉这个人**（见 `DEAD_OUTCOMES` 头上那段）。
+   *
+   * 只在调用方**如实给了联系方式**时才生效。三个字段都没给的老调用方保持原样：
+   * 这里宁可把人留在名单上，也不凭空判他联系不上 —— 本文件一贯的偏向是
+   * 「多一个人是噪音，少一个是丢单」。
+   */
+  const reachKnown =
+    contact.hasPhone !== undefined ||
+    contact.hasEmail !== undefined ||
+    contact.hasMessenger !== undefined
+  const phoneIsDead = outcomes.includes('bad_number')
+  const reach = phoneIsDead && reachKnown ? { ...contact, hasPhone: false } : contact
+
   const make = (segment: Segment, reason: string, ch: SegmentResult['suggestedChannel'], dueAt: string | null = null) => ({
     segment,
     ...SEGMENT_META[segment],
     reason,
-    suggestedChannel: reachableChannel(ch, contact),
+    suggestedChannel: reachableChannel(ch, reach),
+    // 只有「库里有号码但打不通」才算 —— 压根没号码的人不该说成「号打不通」。
+    phoneUnusable: phoneIsDead && contact.hasPhone === true,
     dueAt,
     lastTouchAt,
   })
@@ -450,10 +491,19 @@ export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
     //  · 「号码是坏的」不是人说的话（电池是坏的；号码是空号 / 停机）
     //  · 按钮上写「他不买了」，这里原先写「聊过了，明确没兴趣」——
     //    销售得在脑子里翻译一次才能确认「我刚才点的是这个吗」，两处用同一句话
-    const why = latestOutcome === 'bad_number' ? '号码不通，得换个号才能联系'
-      : latestOutcome === 'not_interested' ? '他说不买了'
-      : '结局已定'
+    const why = latestOutcome === 'not_interested' ? '他说不买了' : '结局已定'
     return make('excluded', why, 'none')
+  }
+
+  /**
+   * 电话打不通，**而且真的没有别的路** —— 这时候才该退出名单。
+   *
+   * 这一栏原先吞掉的是「电话打不通」的全部人（线上 24 个里 23 个还在跟我们
+   * 邮件往来）。现在只留下真正联系不上的那些，文案也照实说清缺什么，
+   * 否则 FDE 看到「补一个对的就能继续跟」却不知道补的是号码还是邮箱。
+   */
+  if (phoneIsDead && reachKnown && contact.hasEmail !== true && contact.hasMessenger !== true) {
+    return make('excluded', '号码不通，又没有邮箱和 Messenger —— 补个联系方式才能继续跟', 'none')
   }
 
   // 2) 客户回了话，还没人接。三个条件缺一不可：
