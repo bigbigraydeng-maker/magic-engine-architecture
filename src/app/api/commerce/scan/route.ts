@@ -43,27 +43,28 @@ export async function POST(req: Request): Promise<Response> {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const enc = new TextEncoder()
+      // 客户端断连后 controller 已关闭，enqueue 会抛 —— 吞掉，别让它冒泡成 unhandled。
       const send = (obj: unknown): void => {
-        controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`))
+        try {
+          controller.enqueue(enc.encode(`data: ${JSON.stringify(obj)}\n\n`))
+        } catch { /* 连接已关，无处可发 */ }
       }
       try {
         const results = []
         for (let i = 0; i < seeds.length; i++) {
+          // 🔴 admin 关页面/断连后别再烧剩余种子词的付费调用（狄仁杰 2026-08-17）。
+          if (req.signal.aborted) break
           send({ type: 'progress', done: i, total: seeds.length, current: seeds[i] })
           const result = await scanSeedKeyword(seeds[i], assumptions, { maxResults, enrichCount })
           results.push(result)
         }
-        send({
-          type: 'done',
-          market,
-          assumptions,
-          results,
-          generatedAt: new Date().toISOString(),
-        })
+        if (!req.signal.aborted) {
+          send({ type: 'done', market, assumptions, results, generatedAt: new Date().toISOString() })
+        }
       } catch (err) {
         send({ type: 'error', error: err instanceof Error ? err.message : String(err) })
       } finally {
-        controller.close()
+        try { controller.close() } catch { /* 已关 */ }
       }
     },
   })
