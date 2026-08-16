@@ -60,6 +60,10 @@ describe('meta-oauth consent url', () => {
     expect(META_PAGE_SCOPES).toContain('pages_show_list')
   })
 
+  it('asks for pages_read_user_content — without it every comment read is refused with Graph #10', () => {
+    expect(META_PAGE_SCOPES).toContain('pages_read_user_content')
+  })
+
   it('carries the state and the redirect back to Meta', () => {
     const url = new URL(buildAuthUrl('state-value', 'https://me.test/api/auth/facebook/callback'))
     expect(url.searchParams.get('state')).toBe('state-value')

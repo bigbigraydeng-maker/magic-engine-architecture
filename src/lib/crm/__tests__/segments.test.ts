@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  segmentContact, todayWorklist, segmentCounts, engagementFromMetadata, reachableChannel,
+  segmentContact, todayWorklist, segmentCounts, engagementFromMetadata, reachableChannel, isPhoneVerdict, isFailedReach,
   type ContactLike, type TouchpointLike,
 } from '../segments'
 
@@ -39,14 +39,167 @@ describe('先挡住不该打的人', () => {
     expect(r.suggestedChannel).toBe('none')
   })
 
-  it('号码是坏的就别再排进名单', () => {
-    const c = contact({ touchpoints: [form('2026-07-01T00:00:00Z'), call('2026-07-01T00:00:00Z', 'bad_number')] })
-    expect(segmentContact(c, NOW).segment).toBe('excluded')
-  })
-
   it('明确说没兴趣的也排除', () => {
     const c = contact({ touchpoints: [call('2026-07-01T00:00:00Z', 'not_interested')] })
     expect(segmentContact(c, NOW).segment).toBe('excluded')
+  })
+})
+
+/**
+ * 🔴 **人纠正过「这条别再联系判错了」之后，他得真的回到名单上**
+ * （Codex 复审 2026-08-16）。
+ *
+ * 光让判据返回 false 不够 —— 那条误判的触点还在库里，而这里看的是触点上的
+ * 结果值。分段不跟着作废的话，结局是最坏的一种：黄条消失了、人工任务也不再
+ * 冒出来（判据说他不是拒联了），**但他照样不出现在今天该联系的人里**，
+ * 而且再没有任何按钮可以处理他 —— 看起来修好了，实际人被彻底埋掉。
+ */
+describe('被推翻过的拒联判词不算数', () => {
+  const dnc = (at: string) => call(at, 'do_not_contact')
+  const cleared = (at: string) => call(at, 'dnc_cleared')
+
+  it('纠正晚于那条误判 → 回到名单', () => {
+    const c = contact({
+      touchpoints: [
+        dnc('2026-07-01T00:00:00Z'),
+        cleared('2026-07-02T00:00:00Z'),
+        { channel: 'email', direction: 'inbound', occurredAt: '2026-07-26T11:00:00Z' },
+      ],
+    })
+    expect(segmentContact(c, NOW).segment).not.toBe('excluded')
+  })
+
+  it('纠正早于那条拒联 → 仍然排除，后来他真的说了', () => {
+    const c = contact({
+      touchpoints: [cleared('2026-07-01T00:00:00Z'), dnc('2026-07-02T00:00:00Z')],
+    })
+    expect(segmentContact(c, NOW).segment).toBe('excluded')
+  })
+
+  it('🔴 只作废「别再联系」—— 没资格替客人收回「我不买了」', () => {
+    const c = contact({
+      touchpoints: [
+        call('2026-07-01T00:00:00Z', 'not_interested'),
+        cleared('2026-07-02T00:00:00Z'),
+      ],
+    })
+    expect(segmentContact(c, NOW).segment).toBe('excluded')
+  })
+})
+
+/**
+ * 🔴 **「号码是坏的」是渠道故障，不是这个人的结局**（PM 2026-08-16 从线上截图抓到）。
+ *
+ * 线上真实数据：CTS 24 个被标坏号的人里 **23 个后来又来过消息**，15 个一直在跟
+ * 我们邮件往来。Sue Masson 7 月 6 号被标坏号，此后来了 11 封信、最后一封是当天，
+ * 却一直躺在「号码是坏的·补一个对的就能继续跟」那一栏里没人回。
+ *
+ * 判据必须分层：**联系方式是渠道属性，成不成是人的状态，两件事不许互相覆盖。**
+ */
+describe('号码打不通 ≠ 这个人不要了', () => {
+  const badNumberThenEmail = (over: Partial<ContactLike> = {}) =>
+    contact({
+      touchpoints: [
+        form('2026-07-01T00:00:00Z'),
+        call('2026-07-02T00:00:00Z', 'bad_number'),
+        // 标了坏号之后，他自己发邮件回来了 —— 这个人显然还活着
+        { channel: 'email', direction: 'inbound', occurredAt: '2026-07-26T02:00:00Z' },
+      ],
+      hasPhone: true,
+      hasEmail: true,
+      ...over,
+    })
+
+  it('坏号之后客人又来信 → 照旧进「客户回话了」，不再被埋掉', () => {
+    const r = segmentContact(badNumberThenEmail(), NOW)
+    expect(r.segment).toBe('replied')
+  })
+
+  it('坏号的人建议渠道降级到邮件 —— 绝不让销售再打那个号', () => {
+    expect(segmentContact(badNumberThenEmail(), NOW).suggestedChannel).toBe('email')
+  })
+
+  it('只有 Messenger 的坏号客人 → 降级到 Messenger', () => {
+    const r = segmentContact(
+      badNumberThenEmail({ hasEmail: false, hasMessenger: true }),
+      NOW,
+    )
+    expect(r.suggestedChannel).toBe('messenger')
+  })
+
+  /**
+   * 卡片必须分得清「没留电话」和「号是坏的」—— 对一个抽屉里明明存着号码的人
+   * 说「没留电话」，销售一眼就能戳穿，而这一页最贵的资产是「它说的话可信」。
+   */
+  it('库里有号码但打不通 → 标出来，好让卡片说对话', () => {
+    expect(segmentContact(badNumberThenEmail(), NOW).phoneUnusable).toBe(true)
+  })
+
+  it('压根没留过电话的人 → 不许说成「号打不通」', () => {
+    const r = segmentContact(
+      badNumberThenEmail({ hasPhone: false, hasEmail: true }),
+      NOW,
+    )
+    expect(r.phoneUnusable).toBe(false)
+  })
+
+  /** 电话打不通、又真的没有第二条路 —— 这时候才该退出名单。 */
+  it('坏号 + 没邮箱 + 没 Messenger → 仍然排除，并说清缺什么', () => {
+    const r = segmentContact(
+      badNumberThenEmail({ hasEmail: false, hasMessenger: false }),
+      NOW,
+    )
+    expect(r.segment).toBe('excluded')
+    expect(r.reason).toContain('补个联系方式')
+  })
+
+  /**
+   * 🔴 **坏号不是永久判决**（Codex 复审 2026-08-16）。
+   *
+   * 号码会被改对（FDE 补一个新号），当初也可能就标错了。语音桥接接通时会写
+   * 一条 `spoke` —— 「标错之后又打通了」是真实可发生的。永久判死的话，一个
+   * 已经打得通的号会被永远藏起来，销售还会看到「这个号打不通」，
+   * 而他手上刚打通过 —— 这一页当场失去可信度。
+   */
+  it('后来真的打通过 → 电话这条路恢复，不再说它打不通', () => {
+    const c = contact({
+      touchpoints: [
+        form('2026-07-01T00:00:00Z'),
+        call('2026-07-02T00:00:00Z', 'bad_number'),
+        call('2026-07-20T00:00:00Z', 'spoke'),
+        { channel: 'email', direction: 'inbound', occurredAt: '2026-07-26T02:00:00Z' },
+      ],
+      hasPhone: true,
+      hasEmail: true,
+    })
+    const r = segmentContact(c, NOW)
+    expect(r.phoneUnusable).toBe(false)
+    expect(r.suggestedChannel).toBe('phone')
+  })
+
+  /** 「打了没人接」不是「号码是坏的」—— 中午没接的人晚上会接。 */
+  it('坏号之后只是没人接 → 仍然算打不通，别把电话又推回去', () => {
+    const c = contact({
+      touchpoints: [
+        call('2026-07-02T00:00:00Z', 'bad_number'),
+        call('2026-07-20T00:00:00Z', 'no_answer'),
+        { channel: 'email', direction: 'inbound', occurredAt: '2026-07-26T02:00:00Z' },
+      ],
+      hasPhone: true,
+      hasEmail: true,
+    })
+    expect(segmentContact(c, NOW).phoneUnusable).toBe(true)
+  })
+
+  /**
+   * 调用方一个联系方式字段都没给（老调用方）→ 不凭空判他联系不上。
+   * 本文件一贯的偏向：多一个人是噪音，少一个是丢单。
+   */
+  it('没告诉我们有哪些联系方式 → 不替他判死刑', () => {
+    const c = contact({
+      touchpoints: [form('2026-07-01T00:00:00Z'), call('2026-07-02T00:00:00Z', 'bad_number')],
+    })
+    expect(segmentContact(c, NOW).segment).not.toBe('excluded')
   })
 })
 
@@ -653,5 +806,185 @@ describe('从没人联系过：新的留在名单上，陈年积压交给系统'
 
   it('陈年积压仍然是 warm —— 不是被埋进折叠区就等于扔了', () => {
     expect(segmentContact(enquiredAt('2021-07-26T00:00:00Z'), NOW).temperature).toBe('warm')
+  })
+})
+
+/**
+ * 「什么算对电话线的判决」必须**只有一份**（Codex 复审 2026-08-16 第二轮）。
+ *
+ * today 路由分「号码要修」那一组时读的是原始 DB 行，没法直接调 `segmentContact`。
+ * 它原先自己写了一套「最新的任意一条结果是不是坏号」，于是跟分段判据裂开：
+ * 一个只有坏号、之后又打了一次没人接的人，分段判他「号码打不通」，分组却把他
+ * 丢进「不要再联系」—— **补号码这件该有人动手的事又一次被藏起来**。
+ *
+ * 现在两边共用这个谓词。它一改，两边一起改。
+ */
+describe('什么算对电话线的判决', () => {
+  it('坏号和打通了都算', () => {
+    expect(isPhoneVerdict('bad_number')).toBe(true)
+    expect(isPhoneVerdict('spoke')).toBe(true)
+  })
+
+  it('打了没人接不算 —— 中午没接的人晚上会接', () => {
+    expect(isPhoneVerdict('no_answer')).toBe(false)
+  })
+
+  it('跟电话无关的结果都不算', () => {
+    for (const o of ['not_interested', 'callback_set', 'unknown', '', null, undefined]) {
+      expect(isPhoneVerdict(o)).toBe(false)
+    }
+  })
+
+  /**
+   * 🔴 **手打笔记里那个 `spoke` 不算打通了电话**（Codex 复审 2026-08-16 第四轮）。
+   *
+   * `recordManualTouchpoint` 把每条手记都写成 `channel: 'phone'`，而 `classifyNote`
+   * 的**兜底值就是 `spoke`** —— 任何没命中规则的普通备注都会变成它。于是销售给
+   * 坏号客人记一句「已经邮件发他了」，电话当场被判成「打通了」，那个明知打不通
+   * 的号又变回可拨。**而这类记录恰恰是坏号客人的常态**（他们本来就只能靠邮件联系）。
+   *
+   * 一个兜底值不许推翻一个人明确按下的判断。
+   */
+  it('手打笔记里的 spoke 不算打通 —— 它只是兜底值', () => {
+    expect(isPhoneVerdict('spoke', 'me_manual')).toBe(false)
+  })
+
+  it('语音桥接写的 spoke 才算打通', () => {
+    expect(isPhoneVerdict('spoke', 'voice_bridge')).toBe(true)
+  })
+
+  /** 「号码是坏的」从来不是兜底值，是有人明说的 —— 两边都认。 */
+  it('手打的「号码是坏的」照旧算数', () => {
+    expect(isPhoneVerdict('bad_number', 'me_manual')).toBe(true)
+  })
+})
+
+/**
+ * 端到端把上面那条钉在分段结果上：坏号客人之后记了一句普通的邮件沟通，
+ * 号码**不许**变回可拨。
+ */
+describe('给坏号客人记一句邮件沟通，号码不许复活', () => {
+  it('手记之后照旧是打不通', () => {
+    const c = contact({
+      touchpoints: [
+        { channel: 'phone', direction: 'outbound', occurredAt: '2026-07-02T00:00:00Z', outcome: 'bad_number', source: 'me_manual' },
+        // 销售在抽屉里记的一句「已经邮件发他了」—— 走的是同一条手记通道，
+        // channel 被写死成 phone，outcome 兜底成 spoke
+        { channel: 'phone', direction: 'outbound', occurredAt: '2026-07-20T00:00:00Z', outcome: 'spoke', source: 'me_manual' },
+      ],
+      hasPhone: true,
+      hasEmail: true,
+    })
+    const r = segmentContact(c, NOW)
+    expect(r.phoneUnusable).toBe(true)
+    expect(r.suggestedChannel).not.toBe('phone')
+  })
+})
+
+/**
+ * 「这一笔算不算我们今天跟进过他」—— today 路由和 day-list 共用这一份。
+ *
+ * 拨到一个空号**没有到达客人**：他什么都没收到，正确的下一步（改用邮件 /
+ * 私信）一次都还没做。算成「今天出手过」的话，卡片当场折进「今天已处理」、
+ * 进度条算完成、群发邮件还会把他排除掉 —— 待办被藏起来（铁律 3）。
+ */
+describe('拨到空号不算我们出手过', () => {
+  it('号码是坏的 → 不算', () => {
+    expect(isFailedReach('bad_number')).toBe(true)
+  })
+
+  /** 「打了没人接」是一次正常尝试 —— 今天试过了、晚点再试，那就是做过了。 */
+  it('打了没人接 → 算做过了', () => {
+    expect(isFailedReach('no_answer')).toBe(false)
+  })
+
+  it('其余结果都算做过了', () => {
+    for (const o of ['spoke', 'callback_set', 'not_interested', 'unknown', null, undefined]) {
+      expect(isFailedReach(o)).toBe(false)
+    }
+  })
+})
+
+/**
+ * 🔴 **「暂时不考虑」的人不许从名单上消失**（PM 2026-08-16 给的业务事实）。
+ *
+ * 系统在此之前只有一个「不感兴趣」，而它是终结性的 —— 一句「明年再说」
+ * 会让这个人从此不出现在任何名单上，没有任何东西会把他叫醒。
+ * 跟「号码是坏的」是同一个病：一个软信号被当成了最终结论。
+ */
+describe('暂时不考虑的人交给系统跟，不是停掉', () => {
+  const softNo = (over: Partial<ContactLike> = {}) =>
+    contact({
+      touchpoints: [
+        form('2026-07-01T00:00:00Z'),
+        call('2026-07-10T00:00:00Z', 'not_interested_now'),
+      ],
+      hasPhone: true,
+      hasEmail: true,
+      ...over,
+    })
+
+  it('不排除 —— 人还在，自动跟进照发', () => {
+    const r = segmentContact(softNo(), NOW)
+    expect(r.segment).toBe('handoff_sop')
+    expect(r.segment).not.toBe('excluded')
+  })
+
+  it('理由说人话，不用真人一个个打', () => {
+    expect(segmentContact(softNo(), NOW).reason).toContain('现在先不考虑')
+  })
+
+  /** 对照：明确说不要了的，照旧停掉 —— 这两种的下场必须不一样。 */
+  it('对照：明确不要了 → 停掉', () => {
+    const hardNo = contact({
+      touchpoints: [call('2026-07-10T00:00:00Z', 'not_interested')],
+      hasPhone: true,
+      hasEmail: true,
+    })
+    expect(segmentContact(hardNo, NOW).segment).toBe('excluded')
+  })
+
+  /**
+   * 🔴 **系统自己群发的那封邮件，不许抹掉客人那句「现在先不考虑」**
+   * （Codex 复审 2026-08-16）。
+   *
+   * 这个人落在「交给系统跟」，而那一桶提供的动作就是一次性群发。群发走的是
+   * 同一条手记通道，备注是系统写的「群发了一封邮件」，兜底成 `spoke` ——
+   * 用「最新的任意结果」判的话，第二天这个人就掉回「聊过了没下文」，
+   * **又被推回真人逐个打电话的名单**。等于我们打给一个刚说过别现在打的人。
+   */
+  it('群发一封邮件之后，他照旧是「暂时不考虑」', () => {
+    const r = segmentContact(
+      softNo({
+        touchpoints: [
+          form('2026-07-01T00:00:00Z'),
+          call('2026-07-10T00:00:00Z', 'not_interested_now'),
+          // 系统群发写下的那一笔：兜底 outcome 是 spoke
+          {
+            channel: 'phone',
+            direction: 'outbound' as const,
+            occurredAt: '2026-07-12T00:00:00Z',
+            outcome: 'spoke',
+          },
+        ],
+      }),
+      NOW,
+    )
+    expect(r.segment).toBe('handoff_sop')
+  })
+
+  /** 他一开口就跳回最上面 —— 「客户回话了」排在这条规则前面。 */
+  it('说完「再说吧」之后他又来消息 → 立刻回到最高优先', () => {
+    const r = segmentContact(
+      softNo({
+        touchpoints: [
+          form('2026-07-01T00:00:00Z'),
+          call('2026-07-10T00:00:00Z', 'not_interested_now'),
+          { channel: 'email', direction: 'inbound', occurredAt: '2026-07-26T02:00:00Z' },
+        ],
+      }),
+      NOW,
+    )
+    expect(r.segment).toBe('replied')
   })
 })
