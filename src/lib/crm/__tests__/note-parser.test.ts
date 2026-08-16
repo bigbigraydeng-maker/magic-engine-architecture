@@ -527,3 +527,32 @@ describe('「all sorted」得分清是跟谁订的', () => {
     expect(classifyNote('all sorted, thanks anyway').outcome).toBe('not_interested')
   })
 })
+
+/**
+ * 🔴 **词表改了，存量不会自己回来**（Codex 复审 2026-08-16）。
+ *
+ * 上面那一族划界说法在补进词表之前，原话被存成了 `spoke` / `callback_set`，
+ * 镜像列也是 false。读的时候不重判的话，一个两个月前写下「stop contacting
+ * me」的客人照旧在今天的名单上，还能穿过这一轮刚加的私信发送闸。
+ */
+describe('存量里其实是「别再联系」的记录，读的时候要认出来', () => {
+  it('🔴 存成 spoke、原话是「stop contacting me」→ 读成别再联系', () => {
+    expect(reclassifyStoredOutcome('spoke', 'stop contacting me')).toBe('do_not_contact')
+  })
+
+  it('🔴 存成 callback_set、原话是「do not call me again」→ 读成别再联系', () => {
+    expect(reclassifyStoredOutcome('callback_set', 'do not call me again')).toBe('do_not_contact')
+  })
+
+  it('只朝一个方向升级 —— 已经是拒联的不许被读回去', () => {
+    expect(reclassifyStoredOutcome('do_not_contact', '客户说想再看看行程')).toBe('do_not_contact')
+  })
+
+  it('原话没说过划界的，原样返回', () => {
+    expect(reclassifyStoredOutcome('spoke', '聊得不错，下周发行程')).toBe('spoke')
+  })
+
+  it('原有的「明确不要 → 暂时不考虑」那条不受影响', () => {
+    expect(reclassifyStoredOutcome('not_interested', '客户暂时不感兴趣')).toBe('not_interested_now')
+  })
+})

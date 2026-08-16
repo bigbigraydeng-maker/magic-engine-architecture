@@ -17,6 +17,7 @@
 import { supabaseAdmin } from '@/lib/supabase'
 // 「别再联系」判据全仓只有一份 —— 发送链路也必须走它，不许自己判。
 import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
+import { reclassifyStoredOutcome } from '@/lib/crm/note-parser'
 import { fetchAll } from '@/lib/supabase-paginate'
 import { getMetaTokenForClient } from '@/lib/meta/token-manager'
 import { getPageAccessToken } from '@/lib/meta/page-posts'
@@ -210,14 +211,15 @@ export async function sendReply(input: SendReplyInput): Promise<SendReplyResult>
         .eq('id', convo.contact_id)
         .eq('client_id', convo.client_id)
         .maybeSingle<{ do_not_contact: boolean }>(),
-      fetchAll<{ metadata: Record<string, unknown> | null; occurred_at: string }>((from, to) =>
-        supabaseAdmin
-          .from('contact_touchpoints')
-          .select('metadata, occurred_at')
-          .eq('client_id', convo.client_id)
-          .eq('contact_id', convo.contact_id as string)
-          .order('occurred_at', { ascending: true })
-          .range(from, to),
+      fetchAll<{ metadata: Record<string, unknown> | null; occurred_at: string; raw: string | null }>(
+        (from, to) =>
+          supabaseAdmin
+            .from('contact_touchpoints')
+            .select('metadata, occurred_at, raw')
+            .eq('client_id', convo.client_id)
+            .eq('contact_id', convo.contact_id as string)
+            .order('occurred_at', { ascending: true })
+            .range(from, to),
       ).catch((e: unknown) => e as Error),
     ])
 
@@ -231,7 +233,8 @@ export async function sendReply(input: SendReplyInput): Promise<SendReplyResult>
     }
 
     const touches: DncTouch[] = touchRows.map((t) => ({
-      outcome: (t.metadata?.outcome as string) ?? null,
+      // 存量里「其实是别再联系」的原话，读的时候重判一次（见 reclassifyStoredOutcome）。
+      outcome: reclassifyStoredOutcome((t.metadata?.outcome as string) ?? null, t.raw) ?? null,
       flagged: t.metadata?.do_not_contact === true,
       occurredAt: t.occurred_at,
     }))

@@ -33,6 +33,8 @@ interface Fake {
   updated: number
   /** 写审计是否失败。 */
   auditErr?: string
+  /** 客户把这些档配成了「会把人挡出名单」。 */
+  suppress?: string[]
 }
 
 let written: {
@@ -49,6 +51,7 @@ function stubDb(over: Partial<Fake> = {}) {
     stages: ['new', 'contacted', 'quoted', 'deferred', 'no_response', 'traveling_soon'],
     messages: [{ direction: 'inbound', body: CUSTOMER_LINE, sent_at: '2026-08-01T00:00:00Z' }],
     updated: 1,
+    suppress: ['traveling_soon'],
     ...over,
   }
   written = {}
@@ -61,7 +64,7 @@ function stubDb(over: Partial<Fake> = {}) {
         client_id: CLIENT,
         // 「即将出行」在 CTS 真实配置里是 postsale（抑制档）—— 照实建模，
         // 这样「模型不许落抑制档」那条能在端到端这一层也被验到。
-        marketing_action: stage_key === 'traveling_soon' ? 'postsale' : 'nurture',
+        marketing_action: (f.suppress ?? []).includes(stage_key) ? 'postsale' : 'nurture',
         is_terminal: false,
       }))
       return {
@@ -446,5 +449,36 @@ describe('抑制档挡到落库这一层', () => {
     expect(written.stage).not.toBe('traveling_soon')
     expect(written.stage).toBe('new')
     expect(r.rejected).toBe(1)
+  })
+})
+
+/**
+ * 🔴 **兜底落点也要过抑制闸**（Codex 复审 2026-08-16）。
+ *
+ * 抑制闸原先只挡模型那一路。`new` 和 `no_response` 同样是**客户可配的**档 ——
+ * 谁把它们配成 suppress / terminal / postsale，这两条兜底就会绕过刚加的保护，
+ * 把人静默移出今日名单。
+ */
+describe('兜底落点同样不许写进抑制档', () => {
+  it('客户把「新线索」配成抑制 → 读不出来时宁可继续空着', async () => {
+    stubDb({ suppress: ['new'] })
+    answer({ stage: 'unclear', evidence: '', reason: '对话太薄' })
+
+    const r = await inferStagesFromConversations(NOW, ask)
+    expect(written.stage).toBeUndefined()
+    expect(r.toPool).toBe(0)
+  })
+
+  it('客户把「无下文」配成抑制 → 规则那一路也不写', async () => {
+    stubDb({
+      suppress: ['no_response'],
+      messages: [
+        { direction: 'outbound', body: 'Following up on your enquiry', sent_at: '2026-07-01T00:00:00Z' },
+      ],
+    })
+
+    const r = await inferStagesFromConversations(NOW, ask)
+    expect(written.stage).not.toBe('no_response')
+    expect(r.byRule).toBe(0)
   })
 })

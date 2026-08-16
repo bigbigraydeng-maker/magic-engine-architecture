@@ -131,6 +131,7 @@ import { containsPriceClaim } from '@/lib/content/price-claim'
 import { judgeOutgoingPost } from '@/lib/content/price-claim-gate'
 import { SOURCE_LABELS } from '@/lib/assets/provenance'
 import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
+import { reclassifyStoredOutcome } from '@/lib/crm/note-parser'
 
 export function daysAgo(iso: string | null, now: Date): number | null {
   if (!iso) return null
@@ -791,7 +792,8 @@ export async function pushDncReviewItems(
     const meta = (t.metadata ?? {}) as Record<string, unknown>
     const dncList = touchesByContact.get(cid) ?? []
     dncList.push({
-      outcome: (meta.outcome as string) ?? null,
+      // 存量里「其实是别再联系」的原话，读的时候重判一次。
+      outcome: reclassifyStoredOutcome((meta.outcome as string) ?? null, t.raw as string | null) ?? null,
       flagged: meta.do_not_contact === true,
       occurredAt: t.occurred_at as string,
     })

@@ -21,7 +21,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import { supabaseAdmin } from '@/lib/supabase'
 import { recordManualTouchpoint } from '@/lib/crm/touchpoints'
-import { classifyNote, type NoteParse } from '@/lib/crm/note-parser'
+import { classifyNote, reclassifyStoredOutcome, type NoteParse } from '@/lib/crm/note-parser'
 import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
 import { fetchAll } from '@/lib/supabase-paginate'
 
@@ -109,16 +109,22 @@ export async function POST(
    * 别再联系的人被记上一笔群发**。下面那道「读不到真相源就整批不写」的闸
    * 拦不住它 —— 截断根本不报错，正好从闸底下钻过去。
    */
-  let dncTouches: { contact_id: string; metadata: Record<string, unknown> | null; occurred_at: string }[]
+  let dncTouches: {
+    contact_id: string
+    metadata: Record<string, unknown> | null
+    occurred_at: string
+    raw: string | null
+  }[]
   try {
     dncTouches = await fetchAll<{
       contact_id: string
       metadata: Record<string, unknown> | null
       occurred_at: string
+      raw: string | null
     }>((from, to) =>
       supabaseAdmin
         .from('contact_touchpoints')
-        .select('contact_id, metadata, occurred_at')
+        .select('contact_id, metadata, occurred_at, raw')
         .eq('client_id', clientId)
         .in('contact_id', rows.map((r) => r.id))
         // 分页必须有稳定排序，否则页与页之间可能重复/漏行。
@@ -138,7 +144,8 @@ export async function POST(
   for (const t of dncTouches) {
     const list = touchesByContact.get(t.contact_id) ?? []
     list.push({
-      outcome: (t.metadata?.outcome as string) ?? null,
+      // 存量里「其实是别再联系」的原话，读的时候重判一次（见 reclassifyStoredOutcome）。
+      outcome: reclassifyStoredOutcome((t.metadata?.outcome as string) ?? null, t.raw) ?? null,
       flagged: t.metadata?.do_not_contact === true,
       occurredAt: t.occurred_at,
     })

@@ -398,7 +398,27 @@ export function reclassifyStoredOutcome(
   outcome: string | null | undefined,
   raw: string | null | undefined,
 ): string | null | undefined {
-  if (outcome !== 'not_interested' || !raw) return outcome
+  if (!raw) return outcome
+
+  /**
+   * 🔴 **存量里那些「其实是别再联系」的记录，必须读的时候认出来**
+   * （Codex 复审 2026-08-16）。
+   *
+   * 这一轮给词表补了 `stop contacting me` / `take me off your list` /
+   * `unsubscribe` / `do not call me again` 那一族 —— 但那只对**以后**写的触点
+   * 生效。此前这些原话被存成了 `spoke`（还有的存成 `callback_set`），镜像列
+   * 也是 false。读的时候不重判的话，一个两个月前写下「stop contacting me」
+   * 的客人**照旧在今天的名单上**，而且能穿过这一轮刚加的私信发送闸。
+   * 词表改了、存量不回来 —— 这个坑本文件下面那段已经记过一次。
+   *
+   * **只朝一个方向升级**：非拒联 → 拒联。反过来绝不做 —— 那等于让一段正则
+   * 去解除一条已经成立的拒联，方向恰好反了（见 `lib/crm/dnc` 的同一条推理）。
+   */
+  if (outcome !== 'do_not_contact' && classifyNote(raw).do_not_contact) {
+    return 'do_not_contact'
+  }
+
+  if (outcome !== 'not_interested') return outcome
   return classifyNote(raw).outcome === 'not_interested_now' ? 'not_interested_now' : outcome
 }
 

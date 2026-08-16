@@ -419,6 +419,10 @@ export async function inferStagesFromConversations(
        */
       const toPool = async (why: string): Promise<void> => {
         if (!configured.has(POOL_STAGE)) return
+        // 兜底落点也要过抑制闸（Codex 复审 2026-08-16）：`new` 也是客户可配的，
+        // 谁把它配成 suppress/terminal，这条兜底就会把人静默移出名单 ——
+        // 那正是这一轮加抑制闸要防的事，不能只防模型那一路。
+        if (suppressing.has(POOL_STAGE)) return
         const ok = await applyStage(
           c.client_id,
           c.id,
@@ -441,7 +445,8 @@ export async function inferStagesFromConversations(
        */
       if (!worthReading(lines)) {
         const byRule = ruleOnlyStage(lines, now)
-        if (byRule && configured.has(byRule)) {
+        // 同上：`no_response` 同样是客户可配的档，配成抑制就不许由规则来写。
+        if (byRule && configured.has(byRule) && !suppressing.has(byRule)) {
           const verdict: StageVerdict = {
             stage: byRule,
             evidence: '',
