@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { classifyNote, todayContext } from '../note-parser'
+import { classifyNote, reclassifyStoredOutcome, todayContext } from '../note-parser'
 
 const outcome = (s: string) => classifyNote(s).outcome
 const dnc = (s: string) => classifyNote(s).do_not_contact
@@ -21,9 +21,23 @@ describe('别再联系 —— 一条都不能漏', () => {
     'indian no need follow up',
     'does not want to talk',
     'follow up with best of china neve been to China but do not like phone call',
-    'not intending to go',
   ])('抓到: %s', (note) => {
     expect(dnc(note)).toBe(true)
+  })
+
+  /**
+   * 🔴 **`not intending to go` 从这一组移走了**（Codex 复审 2026-08-16）。
+   *
+   * 它说的是「我不打算去」，不是「别再联系我」。而 `do_not_contact` 会被
+   * **永久写进联系人**（任何渠道都不许再发），是全系统最重的一个标记 ——
+   * 一句「not intending to go **right now**」落在这里，等于「今年先不去了」
+   * 把人永久封死。
+   *
+   * 现在它落到「停止营销」（可逆），带时间限定时更会先被「暂时不考虑」接住。
+   * 这一组只留**客户真的在划界限**的说法。
+   */
+  it('「不打算去」不算划界限 —— 那是没兴趣，不是别再联系我', () => {
+    expect(dnc('not intending to go')).toBe(false)
   })
 
   it('正常的记录不会被误判成拒绝', () => {
@@ -200,5 +214,254 @@ describe('告诉模型今天几号 —— 相对日期的下一步能不能排�
 
   it('时区名原样写进去 —— 模型要靠它定「上午 9 点」是哪个 9 点', () => {
     expect(todayContext(NOW, 'Australia/Sydney')).toContain('Australia/Sydney')
+  })
+})
+
+/**
+ * 🔴 **「暂时不考虑」和「明确不要了」必须分开**（PM 2026-08-16 给的业务事实）。
+ *
+ * 「leads 沟通后会变成暂时不感兴趣、还需要继续营销的，或者明确表达不感兴趣的。」
+ *
+ * 分不开的代价是真实的：线上 17 个人被标成终结性的 `not_interested`，
+ * 从此不出现在任何名单上、没有任何东西会把他们叫醒 —— 而按 PM 的说法，
+ * 其中「明年再说」那一类才是多数。跟「号码是坏的」是同一个病：
+ * **一个软信号被当成了最终结论。**
+ */
+describe('暂时不考虑 ≠ 明确不要了', () => {
+
+  it.each([
+    ['暂时不感兴趣'],
+    ['客户说现在不考虑，明年再说'],
+    ['过段时间再说'],
+    ['他要再看看'],
+    ['还没决定，考虑一下'],
+    ['not interested right now'],
+    ['thinking about it'],
+    ['maybe later'],
+    ['too early to book'],
+    ['not ready to book yet'],
+  ])('「%s」→ 暂时不考虑，继续跟', (note) => {
+    expect(outcome(note)).toBe('not_interested_now')
+  })
+
+  /**
+   * ⚠️ 这一条是整组的关键：「暂时不感兴趣」**里面就含着「不感兴趣」**。
+   * 硬拒绝先判的话，那个「暂时」当场被吞掉，人被永久停掉。
+   */
+  it('「暂时」压得住「不感兴趣」—— 顺序不能反', () => {
+    expect(outcome('暂时不感兴趣')).toBe('not_interested_now')
+    expect(outcome('暂时不感兴趣')).not.toBe('not_interested')
+  })
+
+  it.each([
+    ['客户对旅游不感兴趣'],
+    ['已经在别家订了'],
+    ['not interested'],
+  ])('「%s」→ 明确不要了，停掉', (note) => {
+    expect(outcome(note)).toBe('not_interested')
+  })
+
+  /**
+   * 🔴 **时间限定词必须贴着「买不买」那件事**（Codex 复审 2026-08-16）。
+   *
+   * 第一版写成「只要出现『现在不』就算」，于是这些跟买卖毫无关系的日常备注
+   * 全被判成「暂时不考虑」—— 人被移出真人通话名单，还收到一个
+   * 「改成短期内不考虑」的阶段提议。一个只是此刻没空接电话的客人，
+   * 被系统判成「这阵子别碰他」。
+   */
+  it.each([
+    ['客户现在不方便接电话'],
+    ['客户现在不在新西兰'],
+    ['他现在不在办公室'],
+    // 🔴 否定管不到转折后面那半句（Codex 复审 2026-08-16）：这个人
+    //    **明确说想去**，只是此刻不方便 —— 判成暂时不考虑等于把他移出名单。
+    ['客户目前不方便，但想去'],
+    ['现在不太好联系，不过他想走三月那班'],
+  ])('「%s」→ 跟买不买无关，不许判成暂时不考虑', (note) => {
+    expect(outcome(note)).not.toBe('not_interested_now')
+  })
+
+  /** 🔴 跟**我们**订的是一单成交，不是「明确不要了」。 */
+  it('「already booked Best of China with us」→ 不许判成不要了', () => {
+    expect(outcome('already booked Best of China with us')).not.toBe('not_interested')
+  })
+
+  it('对照：在别家订的 → 照旧是明确不要了', () => {
+    expect(outcome('already booked with another company')).toBe('not_interested')
+  })
+
+  /**
+   * 🔴 中文同样要认（Codex 复审 2026-08-16）—— CTS 的备注绝大多数是中文，
+   * 只给英文加保护等于对真实数据不生效。
+   */
+  it.each([
+    ['客户已经跟我们订了 Best of China'],
+    ['已经订了我们的团'],
+  ])('「%s」→ 是成交，不许判成不要了', (note) => {
+    expect(outcome(note)).not.toBe('not_interested')
+  })
+
+  it('对照：中文在别家订的 → 照旧是明确不要了', () => {
+    expect(outcome('已经在别家订了')).toBe('not_interested')
+  })
+
+  /**
+   * 🔴 **他现在就想买的话，前面那半句犹豫不算数** —— 一条规则覆盖一整族
+   * （Codex 复审 2026-08-16）。
+   *
+   * 前七轮反复出现同一种形状：前半句是过去的犹豫、后半句是当下的结论，
+   * 而软拒绝词命中了前半句。每次给那一条正则单独加前瞻是在按词打地鼠。
+   */
+  it.each([
+    ['之前不考虑，但现在想去'],
+    ['客户之前说考虑一下，但现在想报名'],
+    ['本来还在想，决定了要订'],
+    ['was thinking about it, but now ready to book'],
+  ])('「%s」→ 他要买了，不许判成暂时不考虑', (note) => {
+    expect(outcome(note)).not.toBe('not_interested_now')
+  })
+
+  /** ⚠️ 「想买」的判断里不许夹否定词 —— 「目前没打算去」还是软拒绝。 */
+  it('对照：「目前没打算去」照旧是暂时不考虑', () => {
+    expect(outcome('目前没打算去')).toBe('not_interested_now')
+  })
+
+  /**
+   * 🔴 **说定了的下一次通话压过含糊的「现在还不…」** —— 同样是一次性结清一族
+   * （Codex 复审 2026-08-16）。
+   *
+   * 「not ready to talk, call back tomorrow」「not going to talk right now,
+   * call back tomorrow」—— 软拒绝词吃掉前半句，**约好的回电整个丢了**。
+   */
+  it.each([
+    ['not ready to talk, call back tomorrow'],
+    ['not ready yet, call back tomorrow'],
+    ['not going to talk right now, call back tomorrow'],
+    ['not ready to book, ring me next week'],
+  ])('「%s」→ 约了回电', (note) => {
+    expect(outcome(note)).toBe('callback_set')
+  })
+
+  /**
+   * 🔴 **事实压过心情**（同一轮复审）：前半句是犹豫，后半句是这单已经没了。
+   * 软的赢会让一个已经在别家下单的人继续收我们的跟进邮件。
+   */
+  it('「想了想，但已经在别家订了」→ 明确不要了', () => {
+    expect(outcome('I was thinking about it but already booked with another company')).toBe(
+      'not_interested',
+    )
+    expect(outcome('本来还在考虑，已经在别家订了')).toBe('not_interested')
+  })
+
+  /**
+   * 🔴 **「我不打算去」不是「别再联系我」**（同一轮复审）。
+   *
+   * 它原先在 DNC 词表里，而 DNC 会把「任何渠道都不许再发」**永久写进联系人**
+   * —— 全系统最重的一个标记。一句带时间限定的「not intending to go right now」
+   * 落在那里，等于「今年先不去了」把人永久封死。
+   */
+  it('「not intending to go right now」→ 暂时不考虑，绝不是永久拉黑', () => {
+    const r = classifyNote('not intending to go right now')
+    expect(r.outcome).toBe('not_interested_now')
+    expect(r.do_not_contact).toBe(false)
+  })
+
+  it('「not intending to go」（没有时间限定）→ 停止营销，仍然不是永久拉黑', () => {
+    const r = classifyNote('not intending to go')
+    expect(r.outcome).toBe('not_interested')
+    expect(r.do_not_contact).toBe(false)
+  })
+
+  /** 对照：真的划界限的说法照旧永久拉黑。 */
+  it('对照：「别再联系」照旧是永久拉黑', () => {
+    expect(classifyNote('客户说别再联系了').do_not_contact).toBe(true)
+  })
+
+  /**
+   * 🔴 **「暂不」自己就含着那个「不」**（Codex 复审 2026-08-16）。
+   *
+   * 把它当成普通时间词的话，规则会再要一个「不」，于是这两条最常见的写法整个漏掉：
+   *   · 「暂不考虑」→ 退化成「聊过了」，人白白留在名单上被反复打
+   *   · 「暂不感兴趣」→ 命中硬拒绝，**人被永久停掉** —— 正是本 PR 要修的那件事
+   */
+  /**
+   * 🔴 **`ready` / `early` 必须绑住买卖或出行**（Codex 复审 2026-08-16）。
+   *
+   * 裸的 `not ready` 会吃掉「not ready to talk, call back tomorrow」——
+   * 那明明是**约了回电**，却被判成「暂时不考虑」，回电时间也一并丢了，
+   * 这个人还会收到一个「改成短期内不考虑」的提议。
+   */
+  /**
+   * 🔴 **过去时的犹豫不算数**（Codex 复审 2026-08-16）。
+   *
+   * 「was thinking about it, but now ready to book」前半句是过去时、后半句才是
+   * 结论。裸词会把一个**正要成交**的人判成「暂时不考虑」、移出销售名单 ——
+   * 而规则结果模型覆盖不了。
+   */
+  it('对照：真的还在犹豫 → 照旧算暂时不考虑', () => {
+    expect(outcome('still thinking about it')).toBe('not_interested_now')
+    expect(outcome('thinking about it')).toBe('not_interested_now')
+  })
+
+  /**
+   * 🔴 **中文的否定不止一个「不」**（Codex 复审 2026-08-16）。
+   *
+   * 只认「不」的话，「暂时没兴趣」会落到硬拒绝的 `/没有?兴趣/`，
+   * **人被永久停掉** —— 正是本 PR 要修的那件事，而且这是最常见的写法之一。
+   * 「目前没打算去」更惨：连硬拒绝都不命中，退化成「聊过了」。
+   */
+  it.each([
+    ['暂时没兴趣'],
+    ['现在没有兴趣'],
+    ['目前没打算去'],
+    ['客户暂时没考虑'],
+  ])('「%s」→ 暂时不考虑（「没」也是否定）', (note) => {
+    expect(outcome(note)).toBe('not_interested_now')
+  })
+
+  it.each([
+    ['暂不考虑'],
+    ['暂不感兴趣'],
+    ['客户暂不打算出行'],
+    ['暂时不考虑'],
+  ])('「%s」→ 暂时不考虑', (note) => {
+    expect(outcome(note)).toBe('not_interested_now')
+  })
+})
+
+/**
+ * 🔴 **存量记录读的时候要重判一次**（Codex 复审 2026-08-16）。
+ *
+ * 没有这一步，这次改动只对**以后**记的笔记生效：线上那些已经被标成
+ * `not_interested` 的人，`segmentContact` 一看到旧值就把他们排除，
+ * **永远走不到新加的「暂时不考虑」那一支**。PM 打开页面会看到「什么都没变」——
+ * 而这个改动存在的全部意义就是把那批人放回来。
+ */
+describe('存量记录读的时候重判一次', () => {
+  it('旧的「明确不要」+ 原话其实是「暂时」→ 读成暂时不考虑', () => {
+    expect(reclassifyStoredOutcome('not_interested', '客户暂时不感兴趣，明年再说')).toBe(
+      'not_interested_now',
+    )
+  })
+
+  it('原话确实是明确不要 → 原样不动', () => {
+    expect(reclassifyStoredOutcome('not_interested', '客户对旅游不感兴趣')).toBe('not_interested')
+  })
+
+  /** 🔴 只做一个方向 —— 绝不把「暂时」升级成「明确不要」，那会凭空停掉客人。 */
+  it('绝不反过来：暂时不考虑不会被升级成明确不要', () => {
+    expect(reclassifyStoredOutcome('not_interested_now', '客户对旅游不感兴趣')).toBe(
+      'not_interested_now',
+    )
+  })
+
+  it('别的结果值一概不碰', () => {
+    expect(reclassifyStoredOutcome('bad_number', '暂时不考虑')).toBe('bad_number')
+    expect(reclassifyStoredOutcome('spoke', '暂时不考虑')).toBe('spoke')
+  })
+
+  it('没有原话就没得重判 —— 原样返回', () => {
+    expect(reclassifyStoredOutcome('not_interested', null)).toBe('not_interested')
+    expect(reclassifyStoredOutcome(null, '暂时不考虑')).toBe(null)
   })
 })

@@ -28,7 +28,9 @@ import {
   engagementFromMetadata,
   isPhoneVerdict,
   isFailedReach,
+  latestIntentVerdict,
 } from '@/lib/crm/segments'
+import { reclassifyStoredOutcome } from '@/lib/crm/note-parser'
 import { WORKLIST_GROUPS, groupDisplayMeta } from '@/lib/crm/worklist-groups'
 import { contactCardTitle } from '@/lib/crm/display-name'
 import { followUpMarks, localDay } from '@/lib/crm/follow-up-marks'
@@ -60,6 +62,8 @@ interface TouchRow {
   direction: 'inbound' | 'outbound'
   occurred_at: string
   summary: string | null
+  /** 原话。存量结果值读的时候要靠它重判一次（见 reclassifyStoredOutcome）。 */
+  raw: string | null
   metadata: Record<string, unknown> | null
 }
 
@@ -147,7 +151,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       fetchAll<TouchRow>((from, to) =>
         supabaseAdmin
           .from('contact_touchpoints')
-          .select('contact_id, channel, direction, occurred_at, summary, metadata, source')
+          .select('contact_id, channel, direction, occurred_at, summary, raw, metadata, source')
           .eq('client_id', clientId)
           .order('occurred_at', { ascending: false })
           .range(from, to),
@@ -276,7 +280,9 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
         channel: t.channel,
         direction: t.direction,
         occurredAt: t.occurred_at,
-        outcome: (t.metadata?.outcome as string) ?? null,
+        // 存量记录读的时候顺手重判一次 —— 否则这次的软硬之分只对以后的
+        // 笔记生效，已经被埋掉的人永远回不来（见 reclassifyStoredOutcome）。
+        outcome: reclassifyStoredOutcome((t.metadata?.outcome as string) ?? null, t.raw) ?? null,
         // 判「电话线通不通」要靠它分清真打通了和手打出来的 spoke（见 isPhoneVerdict）
         source: t.source,
         travelWindow: (t.metadata?.travel_window as string) ?? null,
@@ -436,14 +442,41 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
    * 用 marketing_action 而不是写死阶段名 —— 每个客户的阶段是自己配的
    * （诊所叫「不适合治疗」，旅行社叫「已流失」）。
    */
+  /**
+   * 一条阶段提议。`stillFollowed` 决定**点完之后跟销售怎么说** ——
+   *
+   * 🔴 这三条提议指向的阶段行为完全不同（Codex 复审 2026-08-16）：
+   *   · 停止营销 → 人从名单上收起来
+   *   · 短期内不考虑 / 已报价 → **人还在名单上，系统继续跟**
+   *
+   * 原先三条共用同一句「不用再跟了，明天起在『不用再联系』那一栏找他」。
+   * 对后两条来说那是**反话**：销售照着去那一栏找人，找不到；或者信了这句话
+   * 不再管他，而系统其实还在跟。判据用 `stageSuppressesWorklist`，
+   * 跟名单本身用的是同一个函数，不另写一套。
+   */
+  interface StageSuggestion {
+    toStage: string
+    label: string
+    why: string
+    /** true = 点完之后这个人**照旧留在名单上**，系统继续跟。 */
+    stillFollowed: boolean
+  }
+
   const suppressStage = stageRows.find(
     (s) => s.marketing_action === 'suppress',
   )
+  /**
+   * 「短期内不考虑」那一档 —— 客户自己配的名字，按 marketing_action 找。
+   *
+   * PM 2026-08-16 给的业务事实：leads 聊过之后有「暂时不感兴趣、还要继续营销」
+   * 和「明确不要了」两种，下场必须不一样。上面那条只覆盖了后者。
+   */
+  const deferStage = stageRows.find((s) => s.marketing_action === 'defer')
 
   const suggestStage = (
     c: (typeof ranked)[number],
     currentStage: string | null,
-  ): { toStage: string; label: string; why: string } | null => {
+  ): StageSuggestion | null => {
     if (!suppressStage) return null
     if (currentStage === suppressStage.stage_key) return null
 
@@ -456,6 +489,45 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       toStage: suppressStage.stage_key,
       label: suppressStage.label,
       why: '通话记录里客户明确说过不感兴趣 / 别再联系',
+      stillFollowed: !stageSuppressesWorklist(
+        isMarketingAction(suppressStage.marketing_action) ? suppressStage.marketing_action : 'suppress',
+        suppressStage.is_terminal,
+      ),
+    }
+  }
+
+  /**
+   * 「他说现在先不考虑」→ 提议移到「短期内不考虑」那一档。
+   *
+   * 这是**阶段自己填自己**的第一块：系统已经在读每一通电话，读到这句话就该
+   * 把人放到对的格子里，而不是等谁记得回来手填。CTS 583 个人里 556 个阶段
+   * 是空的 —— 靠人填的状态列一定会烂（那份 128 行的手工 CRM 就是这么死的）。
+   *
+   * 仍然只是**提议**：卡片上出现一个按钮，人点一下才生效。AI 读错的代价
+   * 不该由客户承担。
+   */
+  const suggestDeferred = (
+    c: (typeof ranked)[number],
+    currentStage: string | null,
+  ): StageSuggestion | null => {
+    if (!deferStage) return null
+    if (currentStage === deferStage.stage_key) return null
+    // 🔴 判据必须跟 `segmentContact` 用**同一个函数**（Codex 复审 2026-08-16）。
+    //
+    // 原先这里取「最近一次的任意结果」：这个人按建议收到一封群发之后，
+    // 群发写下的那笔兜底 `spoke` 会更晚，于是分段那边靠 latestIntentVerdict
+    // 照旧把他留在「交给系统跟」，而这条提议**当场消失** —— 同一件事两处
+    // 判法不同，页面自相矛盾。今天已经在别处栽过两次，这次不再写第二套。
+    if (latestIntentVerdict(c.touchpoints) !== 'not_interested_now') return null
+
+    return {
+      toStage: deferStage.stage_key,
+      label: deferStage.label,
+      why: '通话记录里他说现在先不考虑 —— 不是不要了，过阵子还该跟',
+      stillFollowed: !stageSuppressesWorklist(
+        isMarketingAction(deferStage.marketing_action) ? deferStage.marketing_action : 'suppress',
+        deferStage.is_terminal,
+      ),
     }
   }
 
@@ -473,7 +545,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
   const suggestQuoted = (
     name: string | null,
     currentStage: string | null,
-  ): { toStage: string; label: string; why: string } | null => {
+  ): StageSuggestion | null => {
     if (!quoteStage || !name) return null
     if (!quotedNames.has(name.trim().toLowerCase())) return null
     if (currentStage === quoteStage.stage_key) return null
@@ -487,6 +559,10 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       toStage: quoteStage.stage_key,
       label: quoteStage.label,
       why: '行程单已经发给这位客人了',
+      stillFollowed: !stageSuppressesWorklist(
+        isMarketingAction(quoteStage.marketing_action) ? quoteStage.marketing_action : 'suppress',
+        quoteStage.is_terminal,
+      ),
     }
   }
 
@@ -608,6 +684,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       snoozeUntil: row?.snooze_until ?? null,
       suggestedStage:
         suggestStage(c, row?.stage ?? null) ??
+        suggestDeferred(c, row?.stage ?? null) ??
         suggestQuoted(c.displayName, row?.stage ?? null),
     }
   }

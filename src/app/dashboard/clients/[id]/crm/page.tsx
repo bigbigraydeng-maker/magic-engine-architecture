@@ -48,7 +48,13 @@ interface Row {
   lastNote: string | null
   pinned: boolean
   pinnedAt: string | null
-  suggestedStage: { toStage: string; label: string; why: string } | null
+  suggestedStage: {
+    toStage: string
+    label: string
+    why: string
+    /** true = 点完之后这个人**照旧留在名单上**，系统继续跟。决定提示语怎么说。 */
+    stillFollowed?: boolean
+  } | null
   /** 今天已经有人联系过他 —— 卡片变浅，不用靠记。 */
   doneToday?: boolean
   /** 今天是怎么处理的（今天联系过了 / 标了：他说不买了…）。没处理就是 null。 */
@@ -1399,9 +1405,20 @@ export default function CrmTodayPage() {
       //
       // 板桥那条「怕的不是消失，是找不回来」照旧成立，所以后半句保留 ——
       // 只是把时间说准：今天还看得见，明天起才在那一栏。
+      /**
+       * 🔴 **提示语必须跟目标阶段真正的行为对上**（Codex 复审 2026-08-16）。
+       *
+       * 三条提议指向的阶段行为完全不同：「停止营销」会把人从名单上收起来，
+       * 而「短期内不考虑」「已报价」**不会** —— 人还在名单上，系统继续跟。
+       * 三条共用同一句「不用再跟了，明天起在『不用再联系』那一栏找他」的话，
+       * 对后两条来说是**反话**：销售照着去那一栏找人找不到，或者信了这句话
+       * 不再管他，而系统其实还在跟。
+       */
       afterWrite(
-        `${row.name} 已改为「${row.suggestedStage.label}」—— 不用再跟了。` +
-          `卡片今天留在原地做个记号，明天起在下面「不用再联系」那一栏找他`,
+        row.suggestedStage.stillFollowed
+          ? `${row.name} 已改为「${row.suggestedStage.label}」—— 他还在名单上，系统继续跟着，他一开口就跳回最上面`
+          : `${row.name} 已改为「${row.suggestedStage.label}」—— 不用再跟了。` +
+            `卡片今天留在原地做个记号，明天起在下面「不用再联系」那一栏找他`,
       )
     } catch {
       afterWrite('改阶段失败，请重试', false)

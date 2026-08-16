@@ -23,6 +23,7 @@ import {
   type ContactLike,
   engagementFromMetadata,
 } from '@/lib/crm/segments'
+import { reclassifyStoredOutcome } from '@/lib/crm/note-parser'
 import { stageSuppressesWorklist, isMarketingAction } from '@/lib/crm/pipeline'
 import { fetchAll } from '@/lib/supabase-paginate'
 import {
@@ -49,6 +50,8 @@ interface TouchRow {
   direction: 'inbound' | 'outbound'
   occurred_at: string
   summary: string | null
+  /** 原话。存量结果值读的时候要靠它重判一次（见 reclassifyStoredOutcome）。 */
+  raw: string | null
   metadata: Record<string, unknown> | null
   source: string | null
 }
@@ -105,7 +108,7 @@ export async function GET(
       fetchAll<TouchRow>((from, to) =>
         supabaseAdmin
           .from('contact_touchpoints')
-          .select('id, contact_id, channel, direction, occurred_at, summary, metadata, source')
+          .select('id, contact_id, channel, direction, occurred_at, summary, raw, metadata, source')
           .eq('client_id', clientId)
           .order('occurred_at', { ascending: false })
           // 同一时刻的多条（导入数据里表单与通话常共用一个时间戳）需要一个
@@ -177,7 +180,9 @@ export async function GET(
         channel: t.channel,
         direction: t.direction,
         occurredAt: t.occurred_at,
-        outcome: (t.metadata?.outcome as string) ?? null,
+        // 存量记录读的时候顺手重判一次 —— 否则这次的软硬之分只对以后的
+        // 笔记生效，已经被埋掉的人永远回不来（见 reclassifyStoredOutcome）。
+        outcome: reclassifyStoredOutcome((t.metadata?.outcome as string) ?? null, t.raw) ?? null,
         // 判「电话线通不通」要靠它分清真打通了和手打出来的 spoke（见 isPhoneVerdict）
         source: t.source,
         travelWindow: (t.metadata?.travel_window as string) ?? null,

@@ -445,6 +445,39 @@ export function isFailedReach(outcome: string | null | undefined): boolean {
   return outcome === 'bad_number'
 }
 
+/**
+ * 「客人自己对这单的结论」—— 只有这几种算数。
+ *
+ * 🔴 **不能用「最新的任意一条 outcome」**（Codex 复审 2026-08-16）。
+ *
+ * 一个说了「现在先不考虑」的人会落到「交给系统跟」，而那一桶提供的动作就是
+ * **一次性群发邮件**。群发走的是同一条手记通道，备注是系统自己写的
+ * 「群发了一封邮件」，`classifyNote` 兜底成 `spoke` —— 第二天最新结果就不再是
+ * 软拒绝了，这个人掉回「聊过了没下文」，**又被推回真人逐个打电话的名单**。
+ *
+ * 也就是说：**系统自己的第一次跟进，就把客人那句「现在先不考虑」抹掉了**，
+ * 然后我们打给一个刚说过别现在打的人。
+ *
+ * 跟 `isPhoneVerdict`、`isFailedReach` 是同一条道理：
+ * **一个兜底值不许推翻一个客人明确表达过的结论。**
+ *
+ * 客人真的回心转意了怎么办 —— 靠前面两条规则，它们都排在这一支之前：
+ * 他来一条消息 → 规则 2「客户回话了」；约了回电 → 规则 3「该回电了」。
+ * 那两件事都是**他自己做的**，比我们群发一封邮件有力得多。
+ */
+const INTENT_VERDICTS: ReadonlySet<string> = new Set([
+  'not_interested',
+  'not_interested_now',
+  'do_not_contact',
+])
+
+export function latestIntentVerdict(tps: TouchpointLike[]): string | null {
+  const latest = tps
+    .filter((t) => t.outcome && INTENT_VERDICTS.has(t.outcome))
+    .sort((a, b) => ts(b.occurredAt) - ts(a.occurredAt))[0]
+  return latest?.outcome ?? null
+}
+
 export function isPhoneVerdict(
   outcome: string | null | undefined,
   source?: string | null,
@@ -646,6 +679,26 @@ export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
     } else {
       return make('nurture_future', `客户说 ${spoken.travelWindow} 才走，现在打是打扰`, 'email')
     }
+  }
+
+  /**
+   * 4.5) 他说的是「**暂时**不考虑」，不是「不要了」。
+   *
+   * 🔴 PM 2026-08-16 给的实际业务事实：「leads 沟通后会变成暂时不感兴趣、
+   * 还需要继续营销的，或者明确表达不感兴趣的。」这两种的下场必须不一样。
+   *
+   * 在此之前系统只有一个「不感兴趣」，而它是**终结性**的 —— 一句「明年再说」
+   * 会让这个人从此不出现在任何名单上，没有任何东西会把他叫醒。
+   * 跟「号码是坏的」是同一个病：**一个软信号被当成了最终结论**。
+   *
+   * 落到「交给系统跟」而不是排除：不用真人一个个打（他刚说了现在不是时候），
+   * 但自动跟进照发，而且**他一开口就跳回名单最上面**（规则 2 在这条之前）。
+   *
+   * 位置刻意排在「客户回话了」「约好的时间到了」「说了什么时候走」之后 ——
+   * 那三件事都比一句旧的「再说吧」新鲜、也更硬。
+   */
+  if (latestIntentVerdict(tps) === 'not_interested_now') {
+    return make('handoff_sop', '他说现在先不考虑 —— 系统继续跟着，他一开口就跳回最上面', 'email')
   }
 
   // 5) 进线了但从没人联系过
