@@ -1113,3 +1113,44 @@ describe('号码今天打通了，卡片当天就得恢复', () => {
     expect(row(badThenSpokeToday, true).seg.suggestedChannel).toBe('phone')
   })
 })
+
+/**
+ * 🔴 **拨到一个空号不算「今天跟进过他了」**（Codex 复审 2026-08-16 第五轮）。
+ *
+ * 销售拨过去发现是空号、顺手标了坏号 —— **这件事没有到达客人**：他什么都没
+ * 收到，还在等我们。算成「今天出手过」的话，卡片当场折进「今天已处理」、
+ * 进度条算完成、群发邮件还会把他排除掉，而正确的下一步（改用邮件 / 私信联系他）
+ * **一次都还没做**。待办就这么被藏起来了。
+ *
+ * ⚠️ 判据本身在 today 路由的 `touchedTodayIds` 里（它才决定这个开关），
+ * 共用 `isFailedReach`。这里钉的是**开关拨到该拨的位置时，这个人的样子**：
+ * 不变灰、留在名单上，等着有人改用邮件联系他。
+ */
+describe('拨到空号不算今天跟进过', () => {
+  const dialedDeadToday = person(
+    [
+      ...YESTERDAY_LEAD,
+      tp({
+        direction: 'outbound',
+        channel: 'phone',
+        occurredAt: '2026-08-05T03:00:00.000Z',
+        outcome: 'bad_number',
+      }),
+    ],
+    { hasPhone: true, hasEmail: true },
+  )
+
+  it('不折进「今天已处理」—— 该发的邮件一封都还没发', () => {
+    expect(row(dialedDeadToday, false).handled).toBe(false)
+  })
+
+  it('人还在名单上，等着有人改用邮件联系他', () => {
+    expect(row(dialedDeadToday, false).onList).toBe(true)
+  })
+
+  it('卡片当天就说这个号打不通，并把渠道降到邮件', () => {
+    const r = row(dialedDeadToday, false)
+    expect(r.seg.phoneUnusable).toBe(true)
+    expect(r.seg.suggestedChannel).toBe('email')
+  })
+})

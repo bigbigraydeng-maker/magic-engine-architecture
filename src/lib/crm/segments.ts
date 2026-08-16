@@ -428,6 +428,23 @@ const PHONE_VERDICTS: ReadonlySet<string> = new Set(['bad_number', 'spoke'])
  * 复用同一份判据 —— 两边各写一套，就会出现分段说「打不通」、分组却说
  * 「不要再联系」的裂缝，补号码那件事又一次被藏起来。
  */
+/**
+ * 这一笔出站**没有真的把人联系上** —— 所以不算「今天跟进过他了」。
+ *
+ * 🔴 只有「号码是坏的」（Codex 复审 2026-08-16 第五轮）。销售拨过去发现是空号、
+ * 顺手标了坏号，这件事**没有到达客人**：他什么都没收到，还在等我们。
+ * 算成「今天出手过」的话，卡片当场折进「今天已处理」、进度条算完成、
+ * 群发邮件还会把他排除掉 —— 而正确的下一步（改用邮件 / 私信联系他）
+ * **一次都还没做**。待办就这么被藏起来了（铁律 3：发现不许死在日志里）。
+ *
+ * `no_answer`（打了没人接）**不在里面**，这是刻意的：那是一次正常的尝试，
+ * 「今天试过了、晚点再试」本来就是销售那一天对这个人做完的事。
+ * 坏号不一样 —— 它是「这条路永久关闭了，今天得换一条走」。
+ */
+export function isFailedReach(outcome: string | null | undefined): boolean {
+  return outcome === 'bad_number'
+}
+
 export function isPhoneVerdict(
   outcome: string | null | undefined,
   source?: string | null,

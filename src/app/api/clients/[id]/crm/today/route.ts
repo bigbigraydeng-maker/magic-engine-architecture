@@ -27,6 +27,7 @@ import {
   type Segment,
   engagementFromMetadata,
   isPhoneVerdict,
+  isFailedReach,
 } from '@/lib/crm/segments'
 import { WORKLIST_GROUPS, groupDisplayMeta } from '@/lib/crm/worklist-groups'
 import { contactCardTitle } from '@/lib/crm/display-name'
@@ -357,6 +358,9 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
           !engagementFromMetadata(t.metadata) &&
           t.metadata?.action !== 'snooze' &&
           t.metadata?.action !== 'unsnooze' &&
+          // 拨到一个空号不算「我们出手了」—— 客人什么都没收到，
+          // 该走的备用渠道一次都还没走。判据跟 day-list 共用同一个函数。
+          !isFailedReach(t.metadata?.outcome as string | undefined) &&
           localDay(t.occurred_at, timeZone) === todayLocal,
       )
       .map((t) => t.contact_id),

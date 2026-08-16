@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  segmentContact, todayWorklist, segmentCounts, engagementFromMetadata, reachableChannel, isPhoneVerdict,
+  segmentContact, todayWorklist, segmentCounts, engagementFromMetadata, reachableChannel, isPhoneVerdict, isFailedReach,
   type ContactLike, type TouchpointLike,
 } from '../segments'
 
@@ -836,5 +836,29 @@ describe('给坏号客人记一句邮件沟通，号码不许复活', () => {
     const r = segmentContact(c, NOW)
     expect(r.phoneUnusable).toBe(true)
     expect(r.suggestedChannel).not.toBe('phone')
+  })
+})
+
+/**
+ * 「这一笔算不算我们今天跟进过他」—— today 路由和 day-list 共用这一份。
+ *
+ * 拨到一个空号**没有到达客人**：他什么都没收到，正确的下一步（改用邮件 /
+ * 私信）一次都还没做。算成「今天出手过」的话，卡片当场折进「今天已处理」、
+ * 进度条算完成、群发邮件还会把他排除掉 —— 待办被藏起来（铁律 3）。
+ */
+describe('拨到空号不算我们出手过', () => {
+  it('号码是坏的 → 不算', () => {
+    expect(isFailedReach('bad_number')).toBe(true)
+  })
+
+  /** 「打了没人接」是一次正常尝试 —— 今天试过了、晚点再试，那就是做过了。 */
+  it('打了没人接 → 算做过了', () => {
+    expect(isFailedReach('no_answer')).toBe(false)
+  })
+
+  it('其余结果都算做过了', () => {
+    for (const o of ['spoke', 'callback_set', 'not_interested', 'unknown', null, undefined]) {
+      expect(isFailedReach(o)).toBe(false)
+    }
   })
 })
