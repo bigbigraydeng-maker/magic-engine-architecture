@@ -80,6 +80,29 @@ const DNC_PATTERNS: RegExp[] = [
   /do\s*not\s*want\s*to\s*talk/i,
   /does\s*not\s*want\s*to\s*talk/i,
   /do\s*not\s*(like|want)\s*(phone|call)/i,
+  /**
+   * 🔴 **英文里最常见的那几句划界，原先一条都没覆盖**（魏征复审 2026-08-16，
+   * 直接跑 `classifyNote` 实测）。
+   *
+   * 实测原先的下场：
+   *   `stop contacting me`           → `spoke`
+   *   `take me off your list`        → `spoke`
+   *   `unsubscribe me`               → `spoke`
+   *   `remove me from your database` → `spoke`
+   *   `do not call me again`         → `callback_set`（还被当成约了回电！）
+   *
+   * `spoke` 会走到兜底桶「聊过了，没下文」，文案是「挑等得最久的回一句」——
+   * 也就是说，一个写下「stop contacting me」的客人，被放进**今天该打电话的
+   * 那一桶**。这不是准确率问题，这是红线本身。
+   *
+   * `don't` / `dont` 都要认：`normalise()` 只做小写和空白，不动撇号。
+   */
+  /(do\s*not|don'?t)\s*(ever\s*)?(call|contact|phone|ring|email|message)\s*(me|him|her|them|again)/i,
+  /stop\s*(contacting|calling|emailing|messaging)/i,
+  /(take|remove)\s*(me|him|her|them)\s*(off|from)\b/i,
+  /unsubscribe/i,
+  /opt(ed)?\s*out/i,
+  /no\s*(further|more)\s*contact/i,
   // 🔴 `not intending to go` **从这一组移走了**（Codex 复审 2026-08-16）。
   //
   // 它说的是「我不打算去」，不是「别再联系我」。而这一组会把
@@ -128,7 +151,16 @@ const BOOKED_ELSEWHERE_PATTERNS: RegExp[] = [
   // China **with us**」是一单成交，判成「明确不要了」会把刚成交的客人踢出名单。
   /already\s*(booked|sorted)\b(?!.{0,30}\bwith\s+(us|you|cts)\b)/i,
   /\bbooked\s+(with|through)\s+(another|someone|somebody)/i,
-  /all\s*sorted/i,
+  /**
+   * 🔴 **`all sorted` 也得排除「跟我们订的」**（魏征复审 2026-08-16，实测）。
+   *
+   * 上面那条 `already (booked|sorted)` 加了负向前瞻，同一个数组里这一条裸词
+   * 却没加 —— 于是实测 `all sorted with us` / `all sorted, deposit paid last
+   * week` 双双判成「明确不要了」。后果链是最坏的那种：`not_interested`
+   * 属于终结判词，人直接退出名单，而今日名单还会**主动建议**把他改到
+   * 「停止营销」。一个刚付定金的客人，系统先判他不买了，再劝销售永久停掉他。
+   */
+  /all\s*sorted\b(?!.{0,30}\b(with\s+(us|you|cts)|deposit|paid|invoice)\b)/i,
   // 「已经在别家订了」「找了另一家」——「已经…订」中间常隔着地点词，
   // 「另一家」也和「别家」一样常见，所以这里放宽而不是逐字枚举。
   // ⚠️ 中文这几条同样**不能命中跟我们订的**（Codex 复审 2026-08-16）——
@@ -136,7 +168,8 @@ const BOOKED_ELSEWHERE_PATTERNS: RegExp[] = [
   // 判成「明确不要了」会把刚下单的客人踢出跟进名单。CTS 的备注绝大多数是中文，
   // 只给英文加例外等于这个保护对真实数据不生效。
   /已经?(?!.{0,10}(跟|和|在)?我们)(?!.{0,10}我们的).{0,6}(订|预订|报名|买)了/,
-  /(找|换)了(别|另|其他).{0,3}家/,
+  // 同上：中文这两条也不能命中跟我们订的。
+  /(?!.{0,10}我们)(找|换)了(别|另|其他).{0,3}家/,
   /(别|另|其他).{0,3}家(订|预订|报名)了/,
 ]
 
@@ -295,8 +328,8 @@ export function classifyNote(raw: string): {
   const dnc = anyMatch(t, DNC_PATTERNS)
 
   // 顺序即优先级：
-  //   号码是坏的 > 明确拒绝 > 没接通 > **已经在别家订了** > **暂时**不考虑
-  //   > 明确没兴趣 > 约了回电 > 聊过了
+  //   号码是坏的 > 明确拒绝 > 没接通 > 已经在别家订了 > 约了回电（硬拒绝时让位）
+  //   > 现在就想买 > **暂时**不考虑 > 明确没兴趣 > 聊过了
   if (anyMatch(t, BAD_NUMBER_PATTERNS)) return { outcome: 'bad_number', do_not_contact: dnc }
   if (dnc) return { outcome: 'do_not_contact', do_not_contact: true }
   if (anyMatch(t, NO_ANSWER_PATTERNS)) return { outcome: 'no_answer', do_not_contact: false }
@@ -313,14 +346,33 @@ export function classifyNote(raw: string): {
   //
   //    真正的关系是：一个**说定了的下一次通话**比一句含糊的「现在还不…」更硬、
   //    更可执行。所以整体提到软拒绝前面，这一族一次性结清。
-  if (anyMatch(t, CALLBACK_PATTERNS)) return { outcome: 'callback_set', do_not_contact: false }
+  /**
+   * 🔴 **明确说了不要，就不许再判成「约了回电」**（魏征复审 2026-08-16，实测）。
+   *
+   * 原先 `CALLBACK_PATTERNS` 无条件压在 `NO_INTEREST_PATTERNS` 前面，于是：
+   *   `not interested, no need to call back` → `callback_set`
+   * 时间线上对着一个说「不要了」的客人写「约了回电」，人还原样留在名单上。
+   *
+   * 但**不能**简单把 NO_INTEREST 整体提到前面 —— 那会连「暂时不感兴趣」一起
+   * 吞掉（「暂时不感兴趣」里含着「不感兴趣」），人被永久停掉，正是下面那条
+   * 「软拒绝必须排在明确没兴趣前面」在防的事。
+   *
+   * 所以做成一个**闸**而不是换顺序：只有「命中硬拒绝、且**不是**软拒绝」时，
+   * 才不许再判回电。三条既有规矩同时成立：
+   *   `not ready to talk, call back tomorrow` → 软拒绝 → 回电照旧赢 ✅
+   *   `not interested, no need to call back`  → 硬拒绝 → 判「明确不要了」 ✅
+   *   `暂时不感兴趣`                          → 软拒绝 → 判「暂时不考虑」 ✅
+   */
+  const hardNo = anyMatch(t, NO_INTEREST_PATTERNS) && !anyMatch(t, SOFT_NO_PATTERNS)
+  if (!hardNo && anyMatch(t, CALLBACK_PATTERNS)) {
+    return { outcome: 'callback_set', do_not_contact: false }
+  }
   // 🔴 **他现在就想买的话，前面那半句犹豫不算数**（见 POSITIVE_INTENT_NOW）。
   if (anyMatch(t, POSITIVE_INTENT_NOW)) return { outcome: 'spoke', do_not_contact: false }
   // 🔴 软拒绝必须排在「明确没兴趣」前面：「暂时不感兴趣」里含着「不感兴趣」，
   //    反过来判的话那个「暂时」当场被吞掉，人被永久停掉。
   if (anyMatch(t, SOFT_NO_PATTERNS)) return { outcome: 'not_interested_now', do_not_contact: false }
   if (anyMatch(t, NO_INTEREST_PATTERNS)) return { outcome: 'not_interested', do_not_contact: false }
-  if (anyMatch(t, CALLBACK_PATTERNS)) return { outcome: 'callback_set', do_not_contact: false }
   return { outcome: 'spoke', do_not_contact: false }
 }
 

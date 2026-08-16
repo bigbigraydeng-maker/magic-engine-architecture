@@ -13,7 +13,7 @@
 
 import React from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { PersonDrawer, type DrawerRow } from '../PersonDrawer'
 
 const row = (over: Partial<DrawerRow> = {}): DrawerRow => ({
@@ -113,6 +113,33 @@ describe('拒联的人，一个能点的联系入口都不给', () => {
 
   it('没标拒联的人照常能点', () => {
     draw()
+    expect(dialLink()).toBeTruthy()
+  })
+})
+
+/**
+ * 🔴 抽屉拿的是**打开那一刻的快照**（Codex 复审 2026-08-16）。父页面重拉列表
+ * 不会更新它 —— 点完「放回名单」，黄条还在、电话邮箱还是点不动、私信框还是
+ * 不显示，人得关掉抽屉再点开一次才联系得上刚放回来的人。
+ */
+describe('点完「放回名单」，这一屏当场就该能联系他', () => {
+  it('点确认之后，黄条消失、拨号链接回来', async () => {
+    // 抽屉里同时有时间线在拉数据 —— 按 URL 分流，否则时间线拿到 dnc 的响应会崩。
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => ({
+        ok: true,
+        json: async () =>
+          url.includes('/dnc') ? { blockingStageLabel: null } : { timeline: [], omittedMessages: 0 },
+      })),
+    )
+    draw({ doNotContact: true })
+
+    expect(dialLink()).toBeUndefined()
+    fireEvent.click(screen.getByText(/判错了？点这里放回名单/))
+    fireEvent.click(screen.getByText('确认放回名单'))
+
+    await waitFor(() => expect(screen.queryByText(/判错了？点这里放回名单/)).toBeNull())
     expect(dialLink()).toBeTruthy()
   })
 })

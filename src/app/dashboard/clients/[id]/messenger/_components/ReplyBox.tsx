@@ -30,6 +30,19 @@ interface Props {
 
 /** Server failures, said the way a salesperson can act on. */
 function humanError(status: number, reason?: string): string {
+  /**
+   * 🔴 **这两条必须排在 409 前面**（Codex 复审 2026-08-16）。
+   *
+   * 服务端刚刚**成功挡下**一条发给拒联客人的私信，返回的是 409；而下面那句
+   * 通用的 409 文案会当场教销售「改用电话或邮件联系客户」—— 把一次成功的
+   * 拦截翻译成一句「换个渠道去打扰他」，比不拦还糟。
+   */
+  if (reason === 'do_not_contact') {
+    return '他说过别再联系 —— 任何渠道都不要发。判错了的话，去客人卡片上点「判错了？点这里放回名单」。'
+  }
+  if (reason === 'dnc_unknown') {
+    return '暂时查不到他能不能联系，先别发 —— 过一会儿再试一次。'
+  }
   if (reason === 'window_closed' || status === 409) {
     return 'Facebook 已经不让回这条了 —— 请改用电话或邮件联系客户。'
   }

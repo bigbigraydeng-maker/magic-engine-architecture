@@ -53,6 +53,12 @@ function stubSupabase(opts: {
   channel?: string
   /** 这段会话有没有认领到人。null = 无主会话。 */
   contactId?: string | null
+  /** 这个人被标成「别再联系」了吗（`contacts` 那一列）。 */
+  doNotContact?: boolean
+  /** 他的触点 —— 拒联判据的真相源。 */
+  dncTouches?: { metadata: Record<string, unknown> | null; occurred_at: string }[]
+  /** 拒联判据读不出来（模拟数据库瞬时故障）。 */
+  dncReadFails?: boolean
 }): Captured {
   const captured: Captured = {
     auditInserts: [],
@@ -73,6 +79,11 @@ function stubSupabase(opts: {
       },
       order: () => chain,
       limit: () => chain,
+      // 拒联判据那两条查询：contacts 走 maybeSingle，触点走 fetchAll 的 range。
+      range: async () =>
+        opts.dncReadFails
+          ? { data: null, error: { message: '数据库抽风' } }
+          : { data: opts.dncTouches ?? [], error: null },
       single: async () => result,
       maybeSingle: async () => {
         if (table === 'conversation_messages' && selectingInbound) {
@@ -104,6 +115,12 @@ function stubSupabase(opts: {
         result = { data: null, error: null }
         return chain
       },
+    }
+
+    if (table === 'contacts') {
+      result = opts.dncReadFails
+        ? { data: null, error: { message: '数据库抽风' } }
+        : { data: { do_not_contact: opts.doNotContact === true }, error: null }
     }
 
     if (table === 'conversations') {
@@ -401,5 +418,71 @@ describe('回完私信，CRM 那边当场记上', () => {
 
     expect(r.ok).toBe(false)
     expect(cap.touchpointUpserts).toHaveLength(0)
+  })
+})
+
+/**
+ * 🔴 **「任何渠道都不许再发」必须在服务端成立**（狄仁杰复审 2026-08-16）。
+ *
+ * 这句话原先只写在 CRM 页面上，发送链路一个字都没判 —— 抽屉里那句黄条正下方
+ * 就摆着一个能用的私信框。前端已经不渲染它了，但**前端禁用永远只是提示**：
+ * 私信收件箱那一页照旧能回，脚本更不看界面。
+ */
+describe('sendReply — 别再联系', () => {
+  const send = () =>
+    sendReply(
+      {
+        clientId: CTS,
+        conversationId: CONVO,
+        body: 'hi there',
+        sentByEmail: 'fde@test.com',
+      },
+      fetchMock as never,
+    )
+
+  it('🔴 他说过别再联系 → 不发，理由分得出来', async () => {
+    stubSupabase({ lastInboundAt: NOW.toISOString(), doNotContact: true })
+    const res = await send()
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.reason).toBe('do_not_contact')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('🔴 只有触点说过（镜像列没写上）→ 一样不发', async () => {
+    stubSupabase({
+      lastInboundAt: NOW.toISOString(),
+      doNotContact: false,
+      dncTouches: [
+        { metadata: { outcome: 'do_not_contact' }, occurred_at: '2026-07-01T00:00:00Z' },
+      ],
+    })
+    const res = await send()
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.reason).toBe('do_not_contact')
+  })
+
+  it('🔴 判据读不出来 → 也不发（闸门朝「关」的方向倒）', async () => {
+    stubSupabase({ lastInboundAt: NOW.toISOString(), dncReadFails: true })
+    const res = await send()
+    expect(res.ok).toBe(false)
+    if (!res.ok) expect(res.reason).toBe('dnc_unknown')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('人纠正过「这条判错了」→ 照常能发', async () => {
+    stubSupabase({
+      lastInboundAt: NOW.toISOString(),
+      doNotContact: true,
+      dncTouches: [
+        { metadata: { outcome: 'do_not_contact' }, occurred_at: '2026-07-01T00:00:00Z' },
+        { metadata: { outcome: 'dnc_cleared' }, occurred_at: '2026-07-10T00:00:00Z' },
+      ],
+    })
+    expect((await send()).ok).toBe(true)
+  })
+
+  it('无主会话（挂不到人）→ 没有拒联可查，照常发', async () => {
+    stubSupabase({ lastInboundAt: NOW.toISOString(), contactId: null })
+    expect((await send()).ok).toBe(true)
   })
 })

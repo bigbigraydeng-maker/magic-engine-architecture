@@ -465,3 +465,65 @@ describe('存量记录读的时候重判一次', () => {
     expect(reclassifyStoredOutcome(null, '暂时不考虑')).toBe(null)
   })
 })
+
+/**
+ * 🔴 魏征 2026-08-16 直接跑 `classifyNote` 实测出来的四族，每一条都是红线。
+ * 原先的下场写在各自的用例名里。
+ */
+describe('英文里最常见的划界说法，一条都不许漏', () => {
+  it('「stop contacting me」→ 别再联系（原先判成「聊过了」，人进今天该打的桶）', () => {
+    const r = classifyNote('stop contacting me')
+    expect(r.outcome).toBe('do_not_contact')
+    expect(r.do_not_contact).toBe(true)
+  })
+
+  it('「take me off your list」→ 别再联系', () => {
+    expect(classifyNote('take me off your list').do_not_contact).toBe(true)
+  })
+
+  it('「unsubscribe me」→ 别再联系', () => {
+    expect(classifyNote('unsubscribe me').do_not_contact).toBe(true)
+  })
+
+  it('「remove me from your database」→ 别再联系', () => {
+    expect(classifyNote('remove me from your database').do_not_contact).toBe(true)
+  })
+
+  it("撇号写法也要认：「don't contact me again」", () => {
+    expect(classifyNote("don't contact me again").do_not_contact).toBe(true)
+  })
+
+  it('🔴「do not call me again」→ 别再联系（原先判成「约了回电」，还没打拒联标记）', () => {
+    const r = classifyNote('customer not interested, do not call me again')
+    expect(r.outcome).toBe('do_not_contact')
+    expect(r.do_not_contact).toBe(true)
+  })
+})
+
+describe('明确说了不要，就不许再判成「约了回电」', () => {
+  it('🔴「not interested, no need to call back」→ 明确不要了', () => {
+    expect(classifyNote('not interested, no need to call back').outcome).toBe('not_interested')
+  })
+
+  it('软拒绝 + 约好的回电 → 照旧是约了回电（这条规矩不能被上一条弄坏）', () => {
+    expect(classifyNote('not ready to talk, call back tomorrow').outcome).toBe('callback_set')
+  })
+
+  it('「暂时不感兴趣」→ 仍然是暂时不考虑，没被硬拒绝吞掉', () => {
+    expect(classifyNote('客户暂时不感兴趣').outcome).toBe('not_interested_now')
+  })
+})
+
+describe('「all sorted」得分清是跟谁订的', () => {
+  it('🔴「all sorted with us」→ 不许判成「他不买了」（那是一单成交）', () => {
+    expect(classifyNote('all sorted with us').outcome).not.toBe('not_interested')
+  })
+
+  it('🔴「all sorted, deposit paid last week」→ 同上', () => {
+    expect(classifyNote('all sorted, deposit paid last week').outcome).not.toBe('not_interested')
+  })
+
+  it('没说跟谁订的 → 照旧判「已经在别家订了」', () => {
+    expect(classifyNote('all sorted, thanks anyway').outcome).toBe('not_interested')
+  })
+})

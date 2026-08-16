@@ -63,6 +63,15 @@ export function PersonDrawer({
   onClose: () => void
   onSaved: (msg: string, reload?: boolean) => void
 }) {
+  /**
+   * 刚在这一屏点过「放回名单」的那个人。
+   *
+   * 抽屉拿的是打开那一刻的快照，父页面重拉列表不会更新它。存 contactId 而不是
+   * 布尔值：换一个人打开时自动失效，不会把上一个人的状态带过去。
+   */
+  const [clearedDncId, setClearedDncId] = useState<string | null>(null)
+  const isDnc = row.doNotContact === true && clearedDncId !== row.contactId
+
   const [composing, setComposing] = useState(false)
   const [changingStage, setChangingStage] = useState(false)
   /** 阶段的「其他」展开没有 —— 默认只给下一步 + 一个出口。 */
@@ -170,12 +179,12 @@ export function PersonDrawer({
                 联系入口（拨号 / 邮箱 / 私信框）—— 一句话和三个按钮打架，
                 销售顺手一点就是一次骚扰。做法照抄同一屏里坏号那一段：
                 **照旧显示（要核对得看得见），但点不动。** */}
-            {row.phone && !row.phoneUnusable && row.doNotContact && (
+            {row.phone && !row.phoneUnusable && isDnc && (
               <span className="rounded-lg border border-me-stone bg-black/[0.04] px-3 py-2 text-sm font-semibold text-me-charcoal/45 line-through">
                 📞 {row.phone}
               </span>
             )}
-            {row.phone && !row.phoneUnusable && !row.doNotContact && (
+            {row.phone && !row.phoneUnusable && !isDnc && (
               <a
                 href={`tel:${row.phone}`}
                 className="rounded-lg border border-me-stone bg-white px-3 py-2 text-sm font-semibold text-me-charcoal"
@@ -183,12 +192,12 @@ export function PersonDrawer({
                 📞 {row.phone}
               </a>
             )}
-            {row.email && row.doNotContact && (
+            {row.email && isDnc && (
               <span className="break-all rounded-lg border border-me-stone bg-black/[0.04] px-3 py-2 text-sm font-semibold text-me-charcoal/45 line-through">
                 ✉️ {row.email}
               </span>
             )}
-            {row.email && !row.doNotContact && (
+            {row.email && !isDnc && (
               <a
                 href={`mailto:${row.email}`}
                 className="break-all rounded-lg border border-me-stone bg-white px-3 py-2 text-sm font-semibold text-me-charcoal"
@@ -196,8 +205,14 @@ export function PersonDrawer({
                 ✉️ {row.email}
               </a>
             )}
-            {row.doNotContact && (
-              <DncBanner clientId={clientId} contactId={row.contactId} name={row.name} onSaved={onSaved} />
+            {isDnc && (
+              <DncBanner
+                clientId={clientId}
+                contactId={row.contactId}
+                name={row.name}
+                onSaved={onSaved}
+                onCleared={() => setClearedDncId(row.contactId)}
+              />
             )}
             {!row.phone && !row.email && (
               <span className="text-xs text-me-charcoal/45">没留电话和邮箱，只能在私信里回他</span>
@@ -293,7 +308,7 @@ export function PersonDrawer({
           {/* 🔴 拒联的人这里**整个不渲染**（狄仁杰复审 2026-08-16）。
               「任何渠道都不许再发」包括私信 —— 而这个框原先无条件出现在
               那句黄条正下方，打完字按一下就真的发出去了。 */}
-          {!row.doNotContact && (
+          {!isDnc && (
             <MessengerReply
               clientId={clientId}
               contactId={row.contactId}

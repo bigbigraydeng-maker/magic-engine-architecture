@@ -34,12 +34,21 @@ export function DncBanner({
   contactId,
   name,
   onSaved,
+  onCleared,
 }: {
   clientId: string
   contactId: string
   name: string
   /** 第二个参数 = 要不要顺手重拉列表；失败时传 false，别让人以为改上了。 */
   onSaved: (msg: string, reload?: boolean) => void
+  /**
+   * 放回成功了。
+   *
+   * 🔴 抽屉那一页需要它（Codex 复审 2026-08-16）：抽屉拿的是**打开那一刻的
+   * 快照**，重拉列表不会更新它 —— 于是点完「放回名单」，黄条还在、电话邮箱
+   * 还是点不动、私信框还是不显示，人得关掉抽屉再点开一次才联系得上刚放回来的人。
+   */
+  onCleared?: () => void
 }) {
   const [asking, setAsking] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -64,6 +73,7 @@ export function DncBanner({
        * 改阶段的按钮就在同一屏上。
        */
       const json = (await res.json()) as { blockingStageLabel?: string | null }
+      onCleared?.()
       onSaved(
         json.blockingStageLabel
           ? `✓ 放回来了，但他还停在「${json.blockingStageLabel}」这一档 —— 用下面的「跟进到哪步」改掉才会出现在名单上`

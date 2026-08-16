@@ -17,6 +17,7 @@
 import { supabaseAdmin } from '@/lib/supabase'
 // 「别再联系」判据全仓只有一份 —— 发送链路也必须走它，不许自己判。
 import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
+import { fetchAll } from '@/lib/supabase-paginate'
 import { getMetaTokenForClient } from '@/lib/meta/token-manager'
 import { getPageAccessToken } from '@/lib/meta/page-posts'
 
@@ -75,6 +76,8 @@ export type SendReplyResult =
         | 'window_closed'
         /** 他说过「别再联系」—— 任何渠道都不发。 */
         | 'do_not_contact'
+        /** 判据暂时读不到 —— 拦截闸朝「关」的方向倒，不是朝「开」。 */
+        | 'dnc_unknown'
         | 'no_token'
         | 'graph_failed'
     }
@@ -188,30 +191,52 @@ export async function sendReply(input: SendReplyInput): Promise<SendReplyResult>
    * 没认领的会话挂不到人（`contact_id` 为空），那种情况没有拒联可查，照常放行。
    */
   if (convo.contact_id) {
-    const [{ data: contactRow }, { data: dncTouches }] = await Promise.all([
+    /**
+     * 🔴 **读不到判据就不发**（Codex 复审 2026-08-16）。
+     *
+     * Supabase 出错时返回的是 `{ data: null, error }`，`Promise.all` 不会 reject。
+     * 吞掉这两个 error 的后果是**闸门朝开的方向失效**：拿 `false` + 空触点去判，
+     * 于是「真相源暂时读不到」= 「他没说过别再联系」，消息照发。
+     * 一道拦截闸失效时必须朝**关**的方向倒（fail closed）。
+     *
+     * 触点也必须**分页拉全**：单次查询硬顶 1000 行、被砍不报错。漏掉的若是那条
+     * 拒联记录就误发；漏掉的若是较新的 `dnc_cleared`，已经被人放回名单的人反而
+     * 回不了话。排序固定，页与页之间才不会重复或漏。
+     */
+    const [contactRes, touchRows] = await Promise.all([
       supabaseAdmin
         .from('contacts')
         .select('do_not_contact')
         .eq('id', convo.contact_id)
         .eq('client_id', convo.client_id)
         .maybeSingle<{ do_not_contact: boolean }>(),
-      supabaseAdmin
-        .from('contact_touchpoints')
-        .select('metadata, occurred_at')
-        .eq('client_id', convo.client_id)
-        .eq('contact_id', convo.contact_id),
+      fetchAll<{ metadata: Record<string, unknown> | null; occurred_at: string }>((from, to) =>
+        supabaseAdmin
+          .from('contact_touchpoints')
+          .select('metadata, occurred_at')
+          .eq('client_id', convo.client_id)
+          .eq('contact_id', convo.contact_id as string)
+          .order('occurred_at', { ascending: true })
+          .range(from, to),
+      ).catch((e: unknown) => e as Error),
     ])
 
-    const touches: DncTouch[] = ((dncTouches ?? []) as {
-      metadata: Record<string, unknown> | null
-      occurred_at: string
-    }[]).map((t) => ({
+    if (contactRes.error || touchRows instanceof Error) {
+      return {
+        ok: false,
+        status: 409,
+        error: '暂时查不到他能不能联系 —— 先别发，过一会儿再试',
+        reason: 'dnc_unknown',
+      }
+    }
+
+    const touches: DncTouch[] = touchRows.map((t) => ({
       outcome: (t.metadata?.outcome as string) ?? null,
       flagged: t.metadata?.do_not_contact === true,
       occurredAt: t.occurred_at,
     }))
 
-    if (isDoNotContact(contactRow?.do_not_contact === true, touches)) {
+    if (isDoNotContact(contactRes.data?.do_not_contact === true, touches)) {
       return {
         ok: false,
         status: 409,
