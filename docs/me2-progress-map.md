@@ -59,7 +59,7 @@ migration apply 证明的是 **provisioning**（schema 存在），不是"生产
 
 - **没查过 = `unknown`，不是 `no`** —— 界面不装懂。
 - **docs / Issue / 对话只能当线索，不能单独把格子填成 `yes`**。
-- **`yes` 必须由带日期的机器证据支撑** —— 拿不到核验日期就退回 `unknown`，不编一个无日期的 `yes`。
+- **`yes` 必须由**机器核验**的、带真实日期的证据支撑** —— 证据 `verification ∈ {repo_verified, sync_verified}`，或 PR 事实 `source==='github_sync'`。人工手填的 `manual_claim` / `manual_snapshot` 即便带了日期也**只判 `unknown`**（人手写个日期不算机器确认）。所以在实时同步（#992）上线前，四问的正向格大量诚实显示"待核验"。
 
 > 证据优先级（继承 WP00 §2）：生产对象存在性 ＞ origin/main 代码 ＞ main migration ＞ docs ＞ Issue/PR ＞ 对话记忆。
 
@@ -68,36 +68,42 @@ migration apply 证明的是 **provisioning**（schema 存在），不是"生产
 ## 4. 当前快照 · as of 2026-08-17
 
 > 数据来源：主线登记表 + GitHub 实时 PR 状态。**这是时间点快照，会过期**；判据（第 2、3 节）才是稳定的。
+>
+> ⚠️ **四问一栏读法**：实时同步（#992）尚未上线，当前登记册的证据全是人工声明（`manual_claim` / `manual_snapshot`）。按第 3 节的机器核验规则，正向格一律显示**"待核验"**，不显示"是"——这不是没进展，是"还没被机器确认"。等同步任务跑一次、GitHub 事实进库后，这些格子才会填上真实的"是/否"。**成熟度（M 列）不受此影响**，它是另一套判据。
 
-**总览**：25 个组件，跨 5 条业务线。真正"生产跑过"的只有 **2 个**（都在 GEO 线）。达到 M5 的：**0 个**。
+**总览**：25 个组件，跨 5 条业务线。**经机器核验的生产运行：0**（同步未上线）。GEO 那条线有 **2 个**组件有真实生产运行记录（Roman Baseline），但目前是人工声明、未机器核验，四问显示"待核验"。达到 M5 的：**0 个**。
 
-**成熟度分布**：M0 · 1｜M1 · 1｜M2 · 5｜M3 · 15｜M4 · 3｜M5 · 0
+**成熟度分布（不受机器核验影响）**：M0 · 1｜M1 · 1｜M2 · 5｜M3 · 15｜M4 · 3｜M5 · 0
 
 **在等 PO / 总控室拍板（2 件）**：
 - **执行内核** —— 授权把内核 4 张表建到生产（不建表，整个执行链路空转）。
 - **GEO Module v1（WP05）** —— 页面台账余项完成后授权实施。
 
-### GEO · AI 可见度（全线最靠前，唯一有生产运行的业务线）
+> 四问列格式：代码进主线 / 生产依赖 / 真实调用方 / 生产跑过。"待核验"= 有人工声明但未机器核验（见上方读法）。
 
-| 组件 | 成熟度 | 代码进主线 / 生产依赖 / 真实调用方 / 生产跑过 |
+### GEO · AI 可见度（全线最靠前，唯一有真实生产运行记录的业务线）
+
+| 组件 | 成熟度 | 四问（正向格 = 待核验，未上线同步） |
 |---|---|---|
-| GEO 测量执行（WP04）`capability.geo-measurement-runtime` | M4 | 是 / 未知 / 未知 / **是** |
-| GEO baseline 引擎接线（WP04A）`adapter.geo-baseline-openai` | M4 | 是 / 未知 / 未知 / **是** |
-| GEO 测量不可变存储（WP03）`platform.geo-measurement-store` | M4 | 是 / 是 / 未知 / 否 |
-| GEO 测量契约（WP02）`platform.geo-measurement-contract` | M3 | 是 / 未知 / 未知 / 否 |
+| GEO 测量执行（WP04）`capability.geo-measurement-runtime` | M4 | 待核验 / 未知 / 未知 / 待核验※ |
+| GEO baseline 引擎接线（WP04A）`adapter.geo-baseline-openai` | M4 | 待核验 / 未知 / 未知 / 待核验※ |
+| GEO 测量不可变存储（WP03）`platform.geo-measurement-store` | M4 | 待核验 / 待核验 / 未知 / 否 |
+| GEO 测量契约（WP02）`platform.geo-measurement-contract` | M3 | 待核验 / 未知 / 未知 / 否 |
 | GEO Module v1（WP05）`module.geo-visibility` | M1 | 未知 / 未知 / 未知 / 否 · **等授权** |
 | 行业品牌别名登记册 `registry.industry-brand-canonical` | M3 (legacy) | 未知 ×4 |
+
+※ 这两个组件有真实的 Roman Baseline v1 生产运行（2026-08-12），证据在册但是 `manual_claim`；机器核验（同步上线）后"生产跑过"会转为"是"。
 
 ### 共享内核与能力（地基：大多已建成，还没接上真实调用）
 
 | 组件 | 成熟度 | 四问 |
 |---|---|---|
-| 执行内核 `platform.execution-kernel` | M2 | 是 / 否 / 未知 / 否 · **等你授权建表** |
-| Action Bridge `platform.action-bridge` | M2 | 是 / 未知 / 未知 / 否 |
-| Growth 契约 `platform.growth-contract` | M2 | 是 / 未知 / 否 / 否 |
-| 内核审批边界（K-WP01A）`platform.kernel-approval-boundary` | M0※ | 是 / 未知 / 未知 / 否 |
-| 站点页面台账 `registry.canonical-page-inventory` | M2 | 是 / 未知 / 否 / 否 |
-| Page Optimization `capability.page-optimization` | M2 | 是 / 未知 / 未知 / 否 |
+| 执行内核 `platform.execution-kernel` | M2 | 待核验 / 否 / 未知 / 否 · **等你授权建表** |
+| Action Bridge `platform.action-bridge` | M2 | 待核验 / 未知 / 未知 / 否 |
+| Growth 契约 `platform.growth-contract` | M2 | 待核验 / 未知 / 否 / 否 |
+| 内核审批边界（K-WP01A）`platform.kernel-approval-boundary` | M0※ | 待核验 / 未知 / 未知 / 否 |
+| 站点页面台账 `registry.canonical-page-inventory` | M2 | 待核验 / 未知 / 否 / 否 |
+| Page Optimization `capability.page-optimization` | M2 | 待核验 / 未知 / 未知 / 否 |
 | Meta 平台接口 `adapter.meta` | M3 (legacy) | 未知 ×4 |
 
 ※ 登记表是旧快照：服务端边界 #962 与审批界面 #1001 其实都已合并，成熟度还没在登记表里更新 —— 这正是自动同步（PR #992）要修的。
@@ -119,4 +125,10 @@ migration apply 证明的是 **provisioning**（schema 存在），不是"生产
 
 登记表在 `src/lib/product-map/registry/`。推导逻辑在 `maturity.ts`（成熟度）+ `operational-snapshot.ts`（四问）。把当前登记表 + GitHub 实时 PR 状态喂进去即可重算 —— PR #992（同步）上线后这一步会自动化，PR #994（控制台）会把它变成 ME 后台的实时页面。
 
-**收口队列**：#1005（登记表模型纠正 B1–B4）→ #992（同步可观测性对账）→ #994（控制台 / 进度看板界面）。
+**收口队列进度**（2026-08-17）：
+- ✅ **#1005**（登记表模型纠正 B1–B4）—— 已合并（commit `96bb20d4`；Codex 三轮共 7 条，全部处理）。
+- ✅ **同步建表 migration `20260815000001`** —— 已 apply 到生产（5 表 + RPC + service-role RLS，0 匿名泄露，按对象存在性核实）。含未分类队列表 `product_map_unclassified_work`。
+- 🔄 **#992**（同步可观测性对账 + `codeInMain` 校验 PR `base_ref==main`）—— 对账中。
+- ⏳ **#994**（控制台 / 进度看板界面，含动态未分类队列）—— 排在 #992 之后。
+
+> 另有一件**独立**的 PO 授权待办：把**执行内核**的 4 张表（`action_runs` 等）apply 到生产 —— 那跟上面的同步表是两回事，内核链路仍在等它。
