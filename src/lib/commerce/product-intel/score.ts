@@ -129,9 +129,17 @@ function gateNotDeclining(demand: readonly MarketDemand[]): GateResult {
  * 价格只有主流带的三分之一。那是有人在不赚钱地清库存，进去就是陪跑。
  */
 function gateNoDumping(candidate: ProductCandidate): GateResult {
-  const dumping = candidate.localMarket?.hasDumping.value ?? null
+  const local = candidate.localMarket
+  const dumping = local?.hasDumping.value ?? null
   if (dumping === null) {
-    return { gate: 'no_local_dumping', outcome: 'UNKNOWN', reason: '没查本地在售情况' }
+    // 🔴 「查到了本地价但判不了倾销」≠「根本没查本地」。Google 商品块给得出价、
+    //    给不出同款倾销判断（见 local-price.ts），此时如实说清，别谎报「没查」。
+    const listings = local?.listingCount.value ?? null
+    const reason = local && listings !== null
+      ? `本地 ${listings} 条在售、中位 NZ$${local.medianPriceNzd.value?.toFixed(2) ?? '—'}，`
+        + `但倾销需同款比价，商品块判不了（等 Trade Me）`
+      : '没查本地在售情况'
+    return { gate: 'no_local_dumping', outcome: 'UNKNOWN', reason }
   }
   const listings = candidate.localMarket?.listingCount.value
   const detail = listings === null || listings === undefined

@@ -206,6 +206,14 @@ describe('接进判定', () => {
     expect(scored.gates.find((g) => g.gate === 'no_local_dumping')?.outcome).toBe('UNKNOWN')
   })
 
+  it('🔴 有本地价但判不了倾销时，如实说明价与条数，不谎报「没查本地」', () => {
+    const gate = scoreCandidate(jumpStarter(healthyBand()), ASSUMPTIONS)
+      .gates.find((g) => g.gate === 'no_local_dumping')!
+    expect(gate.reason).toContain('本地 5 条在售')
+    expect(gate.reason).toContain('NZ$129.90')
+    expect(gate.reason).not.toContain('没查本地在售情况')
+  })
+
   it('🔴 价带太薄（2 家）→ 毛利闸判 UNKNOWN，**不是 FAIL**（否则就是误杀）', () => {
     const thin = [
       listing({ price: 99, seller: 'Repco' }),
