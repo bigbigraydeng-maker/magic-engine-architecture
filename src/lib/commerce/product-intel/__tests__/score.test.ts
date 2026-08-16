@@ -257,6 +257,48 @@ describe('缺新西兰售价时：既不能证实，也不能证伪', () => {
   })
 })
 
+describe('保守估重：只缺重量时用它证实，不用它证伪', () => {
+  // 只把重量抹掉，本地价/货价/点击成本都保留（= canary 里的真实处境）。
+  const onlyWeightMissing = (over = {}) =>
+    candidate({ chargeableWeightKg: m<number>(null), ...over })
+
+  it('🔴 只缺重量、保守估重下仍能过 → PASS，且标注是估重', () => {
+    const g = gateOf(onlyWeightMissing(), 'unit_economics')
+    expect(g?.outcome).toBe('PASS')
+    expect(g?.reason).toContain('保守估重 1kg')
+    expect(g?.reason).toContain('实测更轻只会更好')
+  })
+
+  it('🔴 保守估重下过不了 → UNKNOWN，绝不 FAIL（可能只是估太重）', () => {
+    // 本地价压到很低，1kg 估重把毛利挤到不够 —— 但真实更轻可能翻盘。
+    const g = gateOf(onlyWeightMissing({ localMarket: localMarket(34.9, false) }),
+      'unit_economics')
+    expect(g?.outcome).toBe('UNKNOWN')
+    expect(g?.outcome).not.toBe('FAIL')
+    expect(g?.reason).toContain('实测更轻可能翻盘')
+  })
+
+  it('🔴 有真实重量时不走估重路径 —— reason 不带「估重」字样', () => {
+    const g = gateOf(candidate(), 'unit_economics')   // 默认 weightKg=1.2
+    expect(g?.outcome).toBe('PASS')
+    expect(g?.reason).not.toContain('估重')
+  })
+
+  it('🔴 除重量外还缺别的（本地价）→ 不启用估重，退回粗筛 UNKNOWN', () => {
+    const g = gateOf(onlyWeightMissing({ localMarket: null }), 'unit_economics')
+    expect(g?.outcome).toBe('UNKNOWN')
+    expect(g?.reason).toContain('仅供参考')   // 粗筛的措辞，不是估重的
+  })
+
+  it('估重 PASS 时整体仍停在 WATCH（倾销未验），不冒进 TEST_NOW', () => {
+    // localMarket 有价但 hasDumping=null → no_local_dumping 判 UNKNOWN。
+    const scored = score(onlyWeightMissing({ localMarket: localMarket(129.9, null) }))
+    expect(gateOf(onlyWeightMissing({ localMarket: localMarket(129.9, null) }),
+      'unit_economics')?.outcome).toBe('PASS')
+    expect(scored.verdict).toBe('WATCH')
+  })
+})
+
 describe('排序', () => {
   it('通过闸数优先于销量', () => {
     const strong = candidate({ cumulativeSold: m(1_500) })

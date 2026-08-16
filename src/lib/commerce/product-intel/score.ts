@@ -196,6 +196,85 @@ function coarseScreen(candidate: ProductCandidate, missing: string): GateResult 
  *    价格越高倍数要求越低，**一个固定门槛在整条价格带上不可能都对**。
  *    倍数因此降级成粗筛，且只保留"证伪"这一半能力。
  */
+/**
+ * 保守估重（kg）—— **只在「只缺计费重量、其余三个输入都齐」时启用**。
+ *
+ * 🔴 **偏高是刻意的，因为它只能证实、不能证伪。** 往重里估 = 对我们不利
+ *    （空运运费偏高 → 到岸偏高 → 毛利偏低），算出来的是**毛利下限**：
+ *      · 下限都能过 → 真实（更轻）只会更好 → **稳健 PASS**
+ *      · 下限过不了 → 可能只是估太重了 → 退 UNKNOWN 等实测，**绝不 FAIL**
+ *    这样它和粗筛（只证伪不证实）正好对称，谁都不越权。
+ *
+ *    1.0kg 对 3C / 宠物这批轻小件普遍偏高（充电宝/手机配件实测多在 0.2–0.6kg），
+ *    保证「过了就是真过」。带水泵的饮水机等偏重品可能被压到 UNKNOWN —— 那是
+ *    安全的（退给实测），不冤枉谁。真要投的品仍须买样品实测称重换掉这个估值。
+ *
+ *    landed-cost.ts 的红线不变：它照样「拿到重量才算、null→null」，
+ *    这里传进去的是一个**显式**估值，不是在 landed-cost 里埋默认。
+ */
+const CONSERVATIVE_WEIGHT_KG = 1.0
+
+/** 用给定重量把单件经济算到底。`estimated` 决定它是完整判据还是只证实。 */
+function evaluateUnitEconomics(
+  nzPrice: number,
+  costUsd: number,
+  cpcNzd: number,
+  weightKg: number,
+  assumptions: Omit<CostAssumptions, 'chargeableWeightKg'>,
+  estimated: boolean,
+): GateResult {
+  const full: CostAssumptions = { ...assumptions, chargeableWeightKg: weightKg }
+  const landed = calculateLandedCost(costUsd, full)
+  if (landed === null) {
+    return { gate: 'unit_economics', outcome: 'UNKNOWN', reason: '到岸成本算不出来' }
+  }
+  const breakdown = priceBreakdown(nzPrice, landed, full)
+  const required = requiredConversionRatePct(cpcNzd, {
+    retailPriceNzd: nzPrice,
+    grossProfitNzd: breakdown.grossProfitNzd,
+  })
+
+  // 毛利为负。真实重量下这是铁的 FAIL；估重下可能是估太重，退 UNKNOWN。
+  if (required === null) {
+    if (estimated) {
+      return {
+        gate: 'unit_economics',
+        outcome: 'UNKNOWN',
+        reason: `保守估重 ${weightKg}kg 下毛利为负（到岸 NZ$${landed.totalNzd.toFixed(2)}），`
+          + `但重量是估的，实测更轻可能翻盘 —— 判不了，别急着排除`,
+      }
+    }
+    return {
+      gate: 'unit_economics',
+      outcome: 'FAIL',
+      reason: `按本地售价 NZ$${nzPrice.toFixed(2)} 算毛利为负`
+        + `（到岸 NZ$${landed.totalNzd.toFixed(2)}），再高的转化率也救不回来`,
+    }
+  }
+
+  const passes = required <= MEDIAN_ECOMMERCE_CVR_PCT
+  const detail = `本地售价 NZ$${nzPrice.toFixed(2)} · 到岸 NZ$${landed.totalNzd.toFixed(2)}`
+    + ` → 毛利 NZ$${breakdown.grossProfitNzd.toFixed(2)}（${breakdown.grossMarginPct.toFixed(0)}%）；`
+    + `按点击成本 NZ$${cpcNzd.toFixed(2)} 需要转化率 ${required.toFixed(2)}%（中位 ${MEDIAN_ECOMMERCE_CVR_PCT}%）`
+
+  if (!estimated) {
+    return { gate: 'unit_economics', outcome: passes ? 'PASS' : 'FAIL', reason: detail }
+  }
+  // 估重：过了才 PASS（稳健，最坏都过）；没过退 UNKNOWN（可能估太重，不 FAIL）。
+  return passes
+    ? {
+        gate: 'unit_economics',
+        outcome: 'PASS',
+        reason: `${detail}【保守估重 ${weightKg}kg，实测更轻只会更好】`,
+      }
+    : {
+        gate: 'unit_economics',
+        outcome: 'UNKNOWN',
+        reason: `保守估重 ${weightKg}kg 下需要转化率 ${required.toFixed(2)}% 偏高（中位 `
+          + `${MEDIAN_ECOMMERCE_CVR_PCT}%），但重量是估的，实测更轻可能翻盘 —— 判不了`,
+      }
+}
+
 function gateUnitEconomics(
   candidate: ProductCandidate,
   assumptions: Omit<CostAssumptions, 'chargeableWeightKg'>,
@@ -204,6 +283,11 @@ function gateUnitEconomics(
   const costUsd = candidate.sourcing?.medianUnitCostUsd.value ?? null
   const weightKg = candidate.chargeableWeightKg.value
   const cpcNzd = clickCostNzd(candidate.demand, assumptions.fxUsdToNzd)
+
+  // 只缺计费重量、其余三个都齐 → 用保守估重跑一遍（只证实，不证伪）。
+  if (weightKg === null && nzPrice !== null && costUsd !== null && cpcNzd !== null) {
+    return evaluateUnitEconomics(nzPrice, costUsd, cpcNzd, CONSERVATIVE_WEIGHT_KG, assumptions, true)
+  }
 
   const missing = [
     nzPrice === null ? '新西兰售价' : null,
@@ -214,32 +298,7 @@ function gateUnitEconomics(
 
   if (missing.length > 0) return coarseScreen(candidate, missing.join('/'))
 
-  const full: CostAssumptions = { ...assumptions, chargeableWeightKg: weightKg }
-  const landed = calculateLandedCost(costUsd!, full)
-  if (landed === null) {
-    return { gate: 'unit_economics', outcome: 'UNKNOWN', reason: '到岸成本算不出来' }
-  }
-  const breakdown = priceBreakdown(nzPrice!, landed, full)
-  const required = requiredConversionRatePct(cpcNzd!, {
-    retailPriceNzd: nzPrice!,
-    grossProfitNzd: breakdown.grossProfitNzd,
-  })
-  if (required === null) {
-    return {
-      gate: 'unit_economics',
-      outcome: 'FAIL',
-      reason: `按本地售价 NZ$${nzPrice!.toFixed(2)} 算毛利为负`
-        + `（到岸 NZ$${landed.totalNzd.toFixed(2)}），再高的转化率也救不回来`,
-    }
-  }
-  return {
-    gate: 'unit_economics',
-    outcome: required <= MEDIAN_ECOMMERCE_CVR_PCT ? 'PASS' : 'FAIL',
-    reason: `本地售价 NZ$${nzPrice!.toFixed(2)} · 到岸 NZ$${landed.totalNzd.toFixed(2)}`
-      + ` → 毛利 NZ$${breakdown.grossProfitNzd.toFixed(2)}（${breakdown.grossMarginPct.toFixed(0)}%）；`
-      + `按点击成本 NZ$${cpcNzd!.toFixed(2)} 需要转化率 ${required.toFixed(2)}%`
-      + `（中位 ${MEDIAN_ECOMMERCE_CVR_PCT}%）`,
-  }
+  return evaluateUnitEconomics(nzPrice!, costUsd!, cpcNzd!, weightKg!, assumptions, false)
 }
 
 /** 核心闸 —— 这几道 UNKNOWN 就判不了，不能降级成 WATCH。 */
