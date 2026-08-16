@@ -81,10 +81,16 @@ export async function runFullSync(
   const threadsFailures: string[] = []
   let partial = false
 
-  // 已 merged 且有 merged_commit_sha 的 PR 事实不可变 —— 不重抓,省限流配额
+  // 已 merged 且有 merged_commit_sha 的 PR 事实基本冻结 —— 不重抓,省限流配额。
+  // 但 unresolved_threads=null 是"抓取失败(限流)"而非"确实没有意见":把这类事故遗留行
+  // 当不可变,会永久锁死那个空值 —— full sync 既不重试 GraphQL、也不为它生成 threadsFailures,
+  // 甚至可能把整轮误标 ok,恰恰违背本 PR"每个 null 都要说得出原因"的契约。故只有 threads
+  // 已有可信值(非 null)时才算不可变;事故遗留的 null 行照常重抓,拿到真值或如实报原因。
   const existing = await deps.store.readPrFacts()
   const immutable = new Set(
-    existing.filter((r) => r.state === 'merged' && r.merged_commit_sha).map((r) => r.pr_number),
+    existing
+      .filter((r) => r.state === 'merged' && r.merged_commit_sha && r.unresolved_threads !== null)
+      .map((r) => r.pr_number),
   )
   const prNumbers = Array.from(registryPrNumbers()).filter((n) => !immutable.has(n))
   const issueNumbers = Array.from(registryIssueNumbers())

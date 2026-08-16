@@ -173,6 +173,43 @@ describe('runFullSync', () => {
     expect(store.prFacts.get(863)?.state).toBe('merged')
   })
 
+  it('P1:事故遗留的 merged+空 threads 行不算不可变 → 下一轮重抓补上真值(不永久锁死 null)', async () => {
+    const store = new FakeSyncStore()
+    // 第一轮 = 事故形状:863 已 merged、有 commit sha,但 threads 抓取被限流 → 落一行 unresolved_threads=null
+    const p1 = seededProvider()
+    p1.prs.set(863, makePrFact({ number: 863, state: 'merged', mergedCommitSha: 'abc', unresolvedThreads: null, unresolvedThreadsError: 'GitHub graphql 限流:配额已尽', observedAt: '2026-08-15T01:00:00Z' }))
+    const r1 = await runFullSync(deps(p1, store), 'cron')
+    expect(r1.status).toBe('partial')
+    expect(store.prFacts.get(863)?.unresolved_threads).toBeNull() // 事故遗留 null 已落库
+
+    // 第二轮:配额恢复,863 这次能拿到真 threads 值。
+    // 修复后:863 因 threads=null 不进 immutable → 被重抓 → 真值 6 覆盖 null。
+    // 变异证据:删掉 `&& r.unresolved_threads !== null`,863 会被判 immutable、永不重抓,
+    // 这行断言会红(threads 停在 null),精确钉住本 P1 修复。
+    const p2 = seededProvider()
+    p2.prs.set(863, makePrFact({ number: 863, state: 'merged', mergedCommitSha: 'abc', unresolvedThreads: 6, observedAt: '2026-08-16T00:00:00Z' }))
+    const r2 = await runFullSync(deps(p2, store), 'cron')
+    expect(store.prFacts.get(863)?.unresolved_threads).toBe(6)
+    expect(r2.status).toBe('ok')
+  })
+
+  it('P1:事故遗留行重抓时仍限流 → 该 PR 进 threadsFailures 并标 partial,不被 immutable 静默吞成 ok', async () => {
+    const store = new FakeSyncStore()
+    const p1 = seededProvider()
+    p1.prs.set(863, makePrFact({ number: 863, state: 'merged', mergedCommitSha: 'abc', unresolvedThreads: null, unresolvedThreadsError: 'GitHub graphql 限流:第一轮', observedAt: '2026-08-15T01:00:00Z' }))
+    await runFullSync(deps(p1, store), 'cron')
+
+    // 第二轮仍限流,863 依旧拿不到 threads。
+    // 修复后:863 仍被重抓 → 空值有原因、整轮 partial。
+    // 变异证据:删该谓词 → 863 被 immutable 排除 → 不进 prFacts → 无 threadsFailures 且整轮误标 ok,
+    // 下面两条断言都会红。Codex 原话("既不重试、也不生成 threadsFailures、甚至误标 ok")逐条钉死。
+    const p2 = seededProvider()
+    p2.prs.set(863, makePrFact({ number: 863, state: 'merged', mergedCommitSha: 'abc', unresolvedThreads: null, unresolvedThreadsError: 'GitHub graphql 限流:仍未恢复', observedAt: '2026-08-16T00:00:00Z' }))
+    const r2 = await runFullSync(deps(p2, store), 'cron')
+    expect(r2.status).toBe('partial')
+    expect(r2.stats.threadsFailures.some((f) => f.startsWith('pr#863:'))).toBe(true)
+  })
+
   it('provider 整体炸掉(非限流)→ error run 落台账,原始错误在 stats 里可见', async () => {
     const store = new FakeSyncStore()
     const p = seededProvider()
