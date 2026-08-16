@@ -16,6 +16,7 @@
 
 import type {
   BusinessLane,
+  ComponentDependency,
   ComponentType,
   DapeStage,
   Maturity,
@@ -23,6 +24,7 @@ import type {
   ProductMapComponent,
 } from './types'
 import { maturityRank } from './types'
+import { layerByDepth } from './graph'
 import type { ProductMapSnapshot } from './index'
 
 // ---------------------------------------------------------------------------
@@ -267,6 +269,49 @@ export interface TrustView {
   readonly syncIssues: readonly string[]
 }
 
+/**
+ * 全局依赖图的一个节点。**只带 key,不带 id**(id 含供应商真名,板桥 M8)——
+ * 所有显示值都从已建好的 ComponentView 投影,不重算(子牙 M4)。
+ */
+export interface GraphNodeView {
+  readonly key: string
+  readonly name: string
+  readonly laneLabel: string
+  readonly maturityLabel: string
+  readonly bucket: RunBucket
+  readonly isLegacy: boolean
+  /** 分层深度:越小越靠左 / 越先做(别人要先靠它)。 */
+  readonly depth: number
+  /** 没有任何登记依赖(上游或下游)——「独立」还是「关系没登记」由 UI 显式说明,不默认无依赖(板桥 M8/诚实)。 */
+  readonly isolated: boolean
+}
+
+/** 一条依赖边:`fromKey` 排在 `toKey` 之前(上游 → 下游 / 先 → 后)。端点走 key,不走 id(子牙 S1/S2)。 */
+export interface GraphEdgeView {
+  readonly fromKey: string
+  readonly toKey: string
+  readonly typeLabel: string
+}
+
+export interface GraphView {
+  readonly nodes: readonly GraphNodeView[]
+  readonly edges: readonly GraphEdgeView[]
+}
+
+/**
+ * 检索目录的一条:一个 issue/PR + 它挂在哪些组件上(人话)。
+ * 标题/状态是**动态事实**(来自同步快照),不写回登记册。组件用 name/businessOutcome,
+ * 绝不上 id(板桥 M4)。componentNames 为空 = 还没挂到任何组件(孤儿),UI 据此诚实提示。
+ */
+export interface CatalogItemView {
+  readonly kind: 'pr' | 'issue'
+  readonly number: number
+  readonly title: string
+  readonly stateLabel: string
+  readonly url: string
+  readonly components: readonly { name: string; businessOutcome: string; laneLabel: string }[]
+}
+
 export interface ConsolePresentation {
   readonly trust: TrustView
   readonly buckets: Readonly<Record<RunBucket, number>>
@@ -277,6 +322,10 @@ export interface ConsolePresentation {
   readonly decisionsLater: readonly DecisionView[]
   readonly blocked: readonly ComponentView[]
   readonly unclassified: readonly UnclassifiedItemView[]
+  /** 全局「谁垫着谁」依赖图(横轴=先后)。 */
+  readonly graph: GraphView
+  /** issue/PR 检索目录(标题来自同步,可能为空 = 同步未开通)。 */
+  readonly catalog: readonly CatalogItemView[]
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +474,32 @@ const FACTS_SOURCE_LABEL: Readonly<Record<string, string>> = {
   mixed: '一部分程序同步、一部分人工登记',
 }
 
+/**
+ * PR 状态 → 中文。**唯一真值源**:linkedPrs 和 catalog 都调它,禁止第二套人话(子牙 M3)。
+ * 没抓到时按同步是否开通分「没同步到 / 未同步」——「不知道」不装成「不存在」。
+ */
+function prStateLabel(fact: PrFactView | undefined, syncActive: boolean): string {
+  if (!fact) return syncActive ? '没同步到' : '未同步'
+  if (fact.state === 'merged') return '已合并'
+  if (fact.isDraft) return '草稿'
+  return fact.state === 'open' ? '开着' : '已关闭'
+}
+
+/** Issue 状态 → 中文。「已关闭」必带「≠已上线」(子牙 M9)。同上,唯一真值源。 */
+function issueStateLabel(fact: IssueFactView | undefined): string {
+  return !fact ? '未同步' : fact.state === 'closed' ? '已关闭(≠已上线)' : '开着'
+}
+
+/** 依赖边类型 → 中文(图例用同一套词,不另造)。 */
+const DEP_EDGE_LABEL: Readonly<Record<ComponentDependency['type'], string>> = {
+  requires: '必须先有',
+  consumes: '调用',
+  implements: '实现',
+  adapts: '适配',
+  verifies: '验证',
+  blocks: '卡住',
+}
+
 export function buildPresentation(input: PresenterInput): ConsolePresentation {
   const { snapshot } = input
   const prByNumber = new Map(input.prFacts.map((p) => [p.number, p]))
@@ -496,17 +571,7 @@ export function buildPresentation(input: PresenterInput): ConsolePresentation {
         return {
           number: pr.number,
           url: `${REPO_URL}/pull/${pr.number}`,
-          stateLabel: !fact
-            ? syncActive
-              ? '没同步到'
-              : '未同步'
-            : fact.state === 'merged'
-              ? '已合并'
-              : fact.isDraft
-                ? '草稿'
-                : fact.state === 'open'
-                  ? '开着'
-                  : '已关闭',
+          stateLabel: prStateLabel(fact, syncActive),
           unresolvedThreads: fact?.unresolvedThreads ?? null,
         }
       }),
@@ -515,8 +580,8 @@ export function buildPresentation(input: PresenterInput): ConsolePresentation {
         return {
           number: n,
           url: `${REPO_URL}/issues/${n}`,
-          // 🔴 「已关闭」旁必须提醒:Issue 关了 ≠ 生产完成(子牙 M9)
-          stateLabel: !fact ? '未同步' : fact.state === 'closed' ? '已关闭(≠已上线)' : '开着',
+          // 🔴 「已关闭」旁必须提醒:Issue 关了 ≠ 生产完成(子牙 M9)——见 issueStateLabel
+          stateLabel: issueStateLabel(fact),
         }
       }),
       nextMilestone: c.nextMilestone
@@ -604,6 +669,80 @@ export function buildPresentation(input: PresenterInput): ConsolePresentation {
     }
   })
 
+  // 全局依赖图:节点从现成 ComponentView 投影(子牙 M4),边从 dependencies 权威单声明派生(子牙 S1)。
+  const keyById = new Map(snapshot.components.map((s, i) => [s.component.id, `c${i}`]))
+  const depthById = layerByDepth(snapshot.components.map((s) => s.component))
+  const graphEdges: GraphEdgeView[] = []
+  for (const s of snapshot.components) {
+    const c = s.component
+    const selfKey = keyById.get(c.id)
+    if (!selfKey) continue
+    for (const dep of c.dependencies) {
+      const targetKey = keyById.get(dep.target)
+      if (!targetKey) continue // 悬空依赖 validate 已拦,此处防御跳过
+      // 方向统一成「先 → 后」:blocks =「我卡着 target」→ 我在上游;其余 =「我依赖 target」→ target 在上游。
+      const [fromKey, toKey] = dep.type === 'blocks' ? [selfKey, targetKey] : [targetKey, selfKey]
+      graphEdges.push({ fromKey, toKey, typeLabel: DEP_EDGE_LABEL[dep.type] })
+    }
+  }
+  const touchedKeys = new Set<string>()
+  for (const e of graphEdges) {
+    touchedKeys.add(e.fromKey)
+    touchedKeys.add(e.toKey)
+  }
+  const graphNodes: GraphNodeView[] = components.map((v, i) => ({
+    key: v.key,
+    name: v.name,
+    laneLabel: v.laneLabel,
+    maturityLabel: v.maturityLabel,
+    bucket: v.bucket,
+    isLegacy: v.isLegacy,
+    depth: depthById.get(snapshot.components[i].component.id) ?? 0,
+    isolated: !touchedKeys.has(v.key),
+  }))
+  const graph: GraphView = { nodes: graphNodes, edges: graphEdges }
+
+  // 检索目录:issue/PR 事实(带标题) × 组件反查(人话名)。孤儿(components 空)也进,UI 据此诚实标注。
+  type CompMeta = { name: string; businessOutcome: string; laneLabel: string }
+  const compsByPr = new Map<number, CompMeta[]>()
+  const compsByIssue = new Map<number, CompMeta[]>()
+  for (const s of snapshot.components) {
+    const c = s.component
+    const meta: CompMeta = {
+      name: c.name,
+      businessOutcome: c.businessOutcome,
+      laneLabel: LANE_LABEL[c.businessLane],
+    }
+    for (const pr of c.linkedPullRequests) {
+      const list = compsByPr.get(pr.number) ?? []
+      list.push(meta)
+      compsByPr.set(pr.number, list)
+    }
+    for (const n of c.linkedIssues) {
+      const list = compsByIssue.get(n) ?? []
+      list.push(meta)
+      compsByIssue.set(n, list)
+    }
+  }
+  const catalog: CatalogItemView[] = [
+    ...input.prFacts.map((f) => ({
+      kind: 'pr' as const,
+      number: f.number,
+      title: f.title,
+      stateLabel: prStateLabel(f, true),
+      url: `${REPO_URL}/pull/${f.number}`,
+      components: compsByPr.get(f.number) ?? [],
+    })),
+    ...input.issueFacts.map((f) => ({
+      kind: 'issue' as const,
+      number: f.number,
+      title: f.title,
+      stateLabel: issueStateLabel(f),
+      url: `${REPO_URL}/issues/${f.number}`,
+      components: compsByIssue.get(f.number) ?? [],
+    })),
+  ]
+
   const health = computeHealth(input)
   const { verdict, detail } = trustVerdict(input.loadOutcome, health)
 
@@ -632,6 +771,8 @@ export function buildPresentation(input: PresenterInput): ConsolePresentation {
     decisionsLater,
     blocked: components.filter((c) => c.isBlocked),
     unclassified: input.unclassified,
+    graph,
+    catalog,
   }
 }
 

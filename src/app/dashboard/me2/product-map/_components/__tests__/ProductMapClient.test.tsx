@@ -5,7 +5,7 @@
 
 import * as React from 'react'
 import { describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 
 // vitest 配置未开 automatic JSX runtime —— 显式挂到全局(与仓库其它组件测试同法)
 ;(globalThis as unknown as { React: typeof React }).React = React
@@ -53,5 +53,29 @@ describe('ProductMapClient', () => {
     })
     render(<ProductMapClient data={data} />)
     expect(screen.getByText(/进度可能被低估/)).toBeDefined()
+  }, 30_000)
+
+  it('切到「谁垫着谁」:导览强调不是时间表 + 孤立件单列', () => {
+    render(<ProductMapClient data={present()} />)
+    fireEvent.click(screen.getByText('谁垫着谁'))
+    expect(screen.getByText(/谁垫在谁下面/)).toBeDefined()
+    expect(screen.getByText(/这些暂时没登记依赖关系/)).toBeDefined()
+  }, 30_000)
+
+  it('切到「查一件事」:同步没开通说「要等同步」,不是查无结果', () => {
+    render(<ProductMapClient data={present()} />)
+    fireEvent.click(screen.getByText('查一件事'))
+    expect(screen.getByText(/检索要等同步开通/)).toBeDefined()
+  }, 30_000)
+
+  it('切到「查一件事」:有同步时 PR 标题 + 业务人话名上屏,且不漏 id', () => {
+    const data = present({
+      prFacts: [{ number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: '内核 PR 真标题' }],
+    })
+    const { container } = render(<ProductMapClient data={data} />)
+    fireEvent.click(screen.getByText('查一件事'))
+    expect(screen.getByText('内核 PR 真标题')).toBeDefined()
+    expect(container.textContent).toContain('执行内核') // 业务人话名
+    expect(container.textContent).not.toContain('platform.execution-kernel') // 内部 id 绝不上屏
   }, 30_000)
 })

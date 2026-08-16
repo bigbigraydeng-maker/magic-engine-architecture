@@ -172,6 +172,76 @@ describe('id 绝不出渲染层(板桥 M8:id 里带真实供应商名)', () => {
     const p = buildPresentation(input())
     for (const c of p.components) expect(c.key).toMatch(/^c\d+$/)
   })
+
+  it('依赖图节点、检索目录都不漏 id(填了事实也不漏)', () => {
+    const p = buildPresentation(
+      input({
+        prFacts: [{ number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: 't' }],
+        issueFacts: [{ number: 859, state: 'closed', title: 't' }],
+      }),
+    )
+    for (const n of p.graph.nodes) expect(n.key).toMatch(/^c\d+$/)
+    const json = JSON.stringify({ graph: p.graph, catalog: p.catalog })
+    expect(json).not.toContain('platform.execution-kernel')
+    for (const vendor of ['dataforseo', 'publer', 'openai']) expect(json).not.toContain(vendor)
+  })
+})
+
+describe('全局依赖图(谁垫着谁:横轴=先后)', () => {
+  const nodeByName = (p: ReturnType<typeof buildPresentation>, needle: string) =>
+    p.graph.nodes.find((n) => n.name.includes(needle))
+
+  it('地基件 depth=0,依赖它的更深(按值锁分层)', () => {
+    const p = buildPresentation(input())
+    expect(nodeByName(p, '执行内核')?.depth).toBe(0) // 零依赖 = 地基
+    expect(nodeByName(p, '动作名字对表')?.depth).toBe(1) // requires 内核
+    expect(nodeByName(p, 'GEO 分析脑')?.depth).toBe(3) // 契约/存储/执行叠三层
+  })
+
+  it('边方向是 上游 → 下游:内核 → 动作名字对表', () => {
+    const p = buildPresentation(input())
+    const kernel = nodeByName(p, '执行内核')!
+    const bridge = nodeByName(p, '动作名字对表')!
+    const edge = p.graph.edges.find((e) => e.fromKey === kernel.key && e.toKey === bridge.key)
+    expect(edge).toBeDefined()
+    expect(edge?.typeLabel).toBe('必须先有')
+  })
+
+  it('孤立件(无上下游)显式标 isolated,不默认无依赖', () => {
+    const p = buildPresentation(input())
+    expect(nodeByName(p, 'SEO 诊断')?.isolated).toBe(true) // 无依赖也无人依赖它
+    expect(nodeByName(p, '执行内核')?.isolated).toBe(false) // 被多件依赖
+  })
+})
+
+describe('检索目录(catalog:issue/PR 反查组件,标题来自同步)', () => {
+  it('PR 标题落到正确的组件名下(按值锁 join,不只看长度)', () => {
+    const p = buildPresentation(
+      input({
+        prFacts: [
+          { number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: '内核 PR 真标题' },
+        ],
+      }),
+    )
+    const pr = p.catalog.find((c) => c.kind === 'pr' && c.number === 863)
+    expect(pr?.title).toBe('内核 PR 真标题')
+    expect(pr?.stateLabel).toBe('已合并')
+    const names = pr!.components.map((c) => c.name)
+    // #863 同时挂 执行内核 与「把博客草稿打包成能发的成品」—— join 必须两个都在
+    expect(names.some((n) => n.includes('执行内核'))).toBe(true)
+    expect(names.some((n) => n.includes('打包成能发'))).toBe(true)
+  })
+
+  it('Issue 关闭必带「≠已上线」(复用同一映射,不另造词)', () => {
+    const p = buildPresentation(input({ issueFacts: [{ number: 859, state: 'closed', title: 'x' }] }))
+    const iss = p.catalog.find((c) => c.kind === 'issue' && c.number === 859)
+    expect(iss?.stateLabel).toBe('已关闭(≠已上线)')
+  })
+
+  it('同步没开通 → catalog 为空(而不是编造条目)', () => {
+    const p = buildPresentation(input({ prFacts: [], issueFacts: [] }))
+    expect(p.catalog).toHaveLength(0)
+  })
 })
 
 describe('ceilingReason 说人话(子牙 M5 + 板桥 M4)', () => {
