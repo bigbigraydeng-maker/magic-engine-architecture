@@ -31,6 +31,7 @@ import {
   latestIntentVerdict,
 } from '@/lib/crm/segments'
 import { reclassifyStoredOutcome } from '@/lib/crm/note-parser'
+import { isDoNotContact, withoutClearedDnc } from '@/lib/crm/dnc'
 import { WORKLIST_GROUPS, groupDisplayMeta } from '@/lib/crm/worklist-groups'
 import { contactCardTitle } from '@/lib/crm/display-name'
 import { followUpMarks, localDay } from '@/lib/crm/follow-up-marks'
@@ -265,13 +266,15 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       // 两种写法都认：新写入走 metadata.do_not_contact，历史导入的 294 条
       // 跟进记录只写了 metadata.outcome（见 scripts/import-cts-fb-leads.ts）。
       // 少打一通电话的代价，远小于打给明确说过别打的人。
-      doNotContact:
-        c.do_not_contact ||
-        tps.some(
-          (t) =>
-            t.metadata?.do_not_contact === true ||
-            t.metadata?.outcome === 'do_not_contact',
-        ),
+      // 判据只有一份，见 lib/crm/dnc —— 它同时认「人明确纠正过这条判错了」。
+      doNotContact: isDoNotContact(
+        c.do_not_contact,
+        tps.map((t) => ({
+          outcome: (t.metadata?.outcome as string) ?? null,
+          flagged: t.metadata?.do_not_contact === true,
+          occurredAt: t.occurred_at,
+        })),
+      ),
       stageSuppressed: stage?.suppressed ?? false,
       stageLabel: stage?.label ?? null,
       // 销售把他推迟了 —— 到期之前不进名单，到期自己回来（见 lib/crm/segments）。
@@ -480,7 +483,15 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
     if (!suppressStage) return null
     if (currentStage === suppressStage.stage_key) return null
 
-    const dead = c.touchpoints.some(
+    /**
+     * 🔴 **已经被人推翻过的拒联判词不许再拿来建议**（Codex 复审 2026-08-16）。
+     *
+     * 不滤的话会出现一个直接反噬的循环：FDE 刚点完「这条判错了，放回名单」，
+     * 这个人第二天一出现在名单上，系统立刻建议把他改到「停止营销」——
+     * 跟他刚做的纠正正好相反。他顺手一点，人又被永久埋回去，白干一场。
+     * 跟 `segments.ts` 用**同一个**函数。
+     */
+    const dead = withoutClearedDnc(c.touchpoints).some(
       (t) => t.outcome === 'not_interested' || t.outcome === 'do_not_contact',
     )
     if (!dead) return null
@@ -675,6 +686,8 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       suggestedChannel: c.seg.suggestedChannel,
       /** 号码在库里但打不通 —— 卡片靠它把「没留电话」和「号是坏的」分开说。 */
       phoneUnusable: c.seg.phoneUnusable ?? false,
+      /** 被标成「别再联系」—— 抽屉靠它给出取消入口（早前判词误判过一批人）。 */
+      doNotContact: c.doNotContact === true,
       dueAt: c.seg.dueAt,
       lastTouchAt: c.seg.lastTouchAt,
       lastNote: last?.summary ?? null,
@@ -777,6 +790,15 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
          * 点开它就能拨那个已知打不通的号，是这一组里最不该出现的事。
          */
         phoneUnusable: seg.phoneUnusable ?? false,
+        /** 被标成「别再联系」—— 抽屉靠它给出取消入口。 */
+        doNotContact: isDoNotContact(
+          row?.do_not_contact ?? false,
+          (byContact.get(c.id) ?? []).map((t) => ({
+            outcome: (t.metadata?.outcome as string) ?? null,
+            flagged: t.metadata?.do_not_contact === true,
+            occurredAt: t.occurred_at,
+          })),
+        ),
         // 为什么不在今天名单上。成交跟「明确拒绝」混在一堆叫「已排除」很刺眼，
         // 而且成交客户恰恰最该继续维护（催余款、确认行程）—— 页面按这个分开显示。
         /** 被推迟到什么时候。有值 = 他是被人手推迟的，不是被规则排除的。 */

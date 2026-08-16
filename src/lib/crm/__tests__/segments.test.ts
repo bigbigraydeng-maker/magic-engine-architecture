@@ -46,6 +46,48 @@ describe('先挡住不该打的人', () => {
 })
 
 /**
+ * 🔴 **人纠正过「这条别再联系判错了」之后，他得真的回到名单上**
+ * （Codex 复审 2026-08-16）。
+ *
+ * 光让判据返回 false 不够 —— 那条误判的触点还在库里，而这里看的是触点上的
+ * 结果值。分段不跟着作废的话，结局是最坏的一种：黄条消失了、人工任务也不再
+ * 冒出来（判据说他不是拒联了），**但他照样不出现在今天该联系的人里**，
+ * 而且再没有任何按钮可以处理他 —— 看起来修好了，实际人被彻底埋掉。
+ */
+describe('被推翻过的拒联判词不算数', () => {
+  const dnc = (at: string) => call(at, 'do_not_contact')
+  const cleared = (at: string) => call(at, 'dnc_cleared')
+
+  it('纠正晚于那条误判 → 回到名单', () => {
+    const c = contact({
+      touchpoints: [
+        dnc('2026-07-01T00:00:00Z'),
+        cleared('2026-07-02T00:00:00Z'),
+        { channel: 'email', direction: 'inbound', occurredAt: '2026-07-26T11:00:00Z' },
+      ],
+    })
+    expect(segmentContact(c, NOW).segment).not.toBe('excluded')
+  })
+
+  it('纠正早于那条拒联 → 仍然排除，后来他真的说了', () => {
+    const c = contact({
+      touchpoints: [cleared('2026-07-01T00:00:00Z'), dnc('2026-07-02T00:00:00Z')],
+    })
+    expect(segmentContact(c, NOW).segment).toBe('excluded')
+  })
+
+  it('🔴 只作废「别再联系」—— 没资格替客人收回「我不买了」', () => {
+    const c = contact({
+      touchpoints: [
+        call('2026-07-01T00:00:00Z', 'not_interested'),
+        cleared('2026-07-02T00:00:00Z'),
+      ],
+    })
+    expect(segmentContact(c, NOW).segment).toBe('excluded')
+  })
+})
+
+/**
  * 🔴 **「号码是坏的」是渠道故障，不是这个人的结局**（PM 2026-08-16 从线上截图抓到）。
  *
  * 线上真实数据：CTS 24 个被标坏号的人里 **23 个后来又来过消息**，15 个一直在跟

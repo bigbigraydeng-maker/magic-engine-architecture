@@ -11,6 +11,7 @@ import { useState } from 'react'
 import { ComposeNote, type StageOption } from './ComposeNote'
 import { ContactTimeline } from './ContactTimeline'
 import { MessengerReply } from './MessengerReply'
+import { DncBanner } from './DncBanner'
 import { drawerActions, nextStageChoices, type Channel } from '@/lib/crm/drawer-actions'
 import type { Segment } from '@/lib/crm/segments'
 
@@ -36,6 +37,14 @@ export interface DrawerRow {
    * 销售照样一点就拨那个已知打不通的号。
    */
   phoneUnusable?: boolean
+  /**
+   * 这个人现在被标成「别再联系」——**任何渠道都不许再发**。
+   *
+   * 抽屉里要给一条**取消**的路：早前的判词把「不打算去」当成过「别再联系」，
+   * 被误判的人收不到我们任何消息，而在这之前系统里根本没有取消入口
+   * （见 `lib/crm/dnc` 与 `api/.../dnc` 路由）。
+   */
+  doNotContact?: boolean
 }
 
 export function PersonDrawer({
@@ -172,6 +181,9 @@ export function PersonDrawer({
                 ✉️ {row.email}
               </a>
             )}
+            {row.doNotContact && (
+              <DncBanner clientId={clientId} contactId={row.contactId} name={row.name} onSaved={onSaved} />
+            )}
             {!row.phone && !row.email && (
               <span className="text-xs text-me-charcoal/45">没留电话和邮箱，只能在私信里回他</span>
             )}
@@ -286,3 +298,4 @@ export function PersonDrawer({
     </>
   )
 }
+
