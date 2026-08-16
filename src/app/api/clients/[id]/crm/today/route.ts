@@ -409,16 +409,21 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
      * 存在的理由（PM 2026-08-05：「做完动作回到目录页，我如何知道哪个已经联系了」）。
      */
     const events = await fetchAll<{
+      id: string
       contact_id: string
       from_stage: string | null
       created_at: string
     }>((from, to) =>
       supabaseAdmin
         .from('contact_stage_events')
-        .select('contact_id, from_stage, created_at')
+        .select('id, contact_id, from_stage, created_at')
         .eq('client_id', clientId)
         .gte('created_at', new Date(localDayStartMs(now, timeZone)).toISOString())
+        // 排序键必须**唯一**（Codex 复审 2026-08-16）：并列的 created_at 在
+        // 两次 range 请求之间可以换序，页与页之间就会重复或漏行。漏掉某人
+        // 当天最早那条变更，`stageSuppressedTodayIds` 就算错，卡片照旧消失。
         .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
         .range(from, to),
     )
 

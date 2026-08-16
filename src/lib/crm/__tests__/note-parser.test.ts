@@ -568,3 +568,39 @@ describe('存量里其实是「别再联系」的记录，读的时候要认出�
     expect(reclassifyStoredOutcome('not_interested', '客户暂时不感兴趣')).toBe('not_interested_now')
   })
 })
+
+/**
+ * 🔴 这两条都是补词表那一轮**自己造出来的误伤**（Codex 复审 2026-08-16 实测）。
+ * 一家旅游公司的备注里，「take me from A to B」是最正常不过的接送需求。
+ */
+describe('退订词表不许误伤正常的旅游需求', () => {
+  it('🔴「take me from Auckland to Beijing」→ 不是拒联（原先判成永久别再联系）', () => {
+    expect(classifyNote('take me from Auckland to Beijing').do_not_contact).toBe(false)
+  })
+
+  it('🔴「can you take me off at the hotel」→ 不是拒联', () => {
+    expect(classifyNote('can you take me off at the hotel').do_not_contact).toBe(false)
+  })
+
+  it('真的说「把我从名单里去掉」→ 照旧是拒联', () => {
+    expect(classifyNote('take me off your list').do_not_contact).toBe(true)
+    expect(classifyNote('remove me from your database').do_not_contact).toBe(true)
+  })
+})
+
+describe('句子别处的拒绝词，不许否掉一个明确的新回电安排', () => {
+  it('🔴「不要团队游，回电聊私家团」→ 约了回电（原先判成明确不要了、人退出名单）', () => {
+    expect(
+      classifyNote('not interested in the group tour, call me back about a private option').outcome,
+    ).toBe('callback_set')
+  })
+
+  it('回电本身被否定 → 才不算约了回电', () => {
+    expect(classifyNote('not interested, no need to call back').outcome).toBe('not_interested')
+    expect(classifyNote('do not call me back').do_not_contact).toBe(true)
+  })
+
+  it('软拒绝 + 明确回电 → 照旧是约了回电', () => {
+    expect(classifyNote('not ready to talk, call back tomorrow').outcome).toBe('callback_set')
+  })
+})

@@ -101,7 +101,19 @@ const DNC_PATTERNS: RegExp[] = [
    */
   /(do\s*not|don'?t)\s*(ever\s*)?(call|contact|phone|ring|email|message)\s*(me|him|her|them|again)/i,
   /stop\s*(contacting|calling|emailing|messaging)/i,
-  /(take|remove)\s*(me|him|her|them)\s*(off|from)\b/i,
+  /**
+   * ⚠️ **必须限定在「名单 / 数据库」语境**（Codex 复审 2026-08-16）。
+   *
+   * 原先写成 `(take|remove) (me|him|…) (off|from)\b`，在一家**旅游公司**的
+   * 备注里正好命中最正常不过的接送需求 —— 实测：
+   *   `take me from Auckland to Beijing`  → do_not_contact
+   *   `can you take me off at the hotel`  → do_not_contact
+   * 而且这个结果会被 `reclassifyStoredOutcome()` 应用到存量触点上，
+   * 一个真实询价的客人就此被永久禁止联系。
+   *
+   * 所以后面必须真的出现退订的对象（名单 / 数据库 / 邮件列表…）。
+   */
+  /(take|remove)\s*(me|him|her|them)\s*(off|from)\b[^.!?\n]{0,20}\b(list|database|mailing|email list|records?|system)\b/i,
   /unsubscribe/i,
   /opt(ed)?\s*out/i,
   /no\s*(further|more)\s*contact/i,
@@ -118,6 +130,20 @@ const DNC_PATTERNS: RegExp[] = [
   /不需要联系/,
   /别再(联系|打)/,
   /只邮件联系/,
+]
+
+/**
+ * 「回电」这两个字被**否定掉**的写法。
+ *
+ * 命中它就不许判 `callback_set` —— 见 `classifyNote` 里那一段。判据只看
+ * 回电本身，不看句子别处有没有拒绝词（那会误伤「不要团队游，回电聊私家团」）。
+ */
+const NEGATED_CALLBACK_PATTERNS: RegExp[] = [
+  /(no|not)\s*(need|point|use)\s*(to\s*|in\s*)?(call|ring|phone)\s*(back|again)?/i,
+  /(do\s*not|don'?t)\s*(call|ring|phone)\s*(me\s*)?(back|again)/i,
+  /(no|not)\s*(further|more)\s*calls?/i,
+  /不(用|需要)(再)?(回电|打回来|来电)/,
+  /别(再)?回电/,
 ]
 
 const NO_ANSWER_PATTERNS: RegExp[] = [
@@ -349,24 +375,27 @@ export function classifyNote(raw: string): {
   //    真正的关系是：一个**说定了的下一次通话**比一句含糊的「现在还不…」更硬、
   //    更可执行。所以整体提到软拒绝前面，这一族一次性结清。
   /**
-   * 🔴 **明确说了不要，就不许再判成「约了回电」**（魏征复审 2026-08-16，实测）。
+   * 🔴 **被否定掉的「回电」不算约了回电**（魏征复审 2026-08-16 实测发现，
+   * Codex 复审同日收窄）。
    *
-   * 原先 `CALLBACK_PATTERNS` 无条件压在 `NO_INTEREST_PATTERNS` 前面，于是：
-   *   `not interested, no need to call back` → `callback_set`
+   * 起因：`not interested, no need to call back` 被判成 `callback_set` ——
    * 时间线上对着一个说「不要了」的客人写「约了回电」，人还原样留在名单上。
+   * 根子在 `CALLBACK_PATTERNS` 会匹配 "call back" 这三个字，**不看它前面
+   * 那句「no need to」**。
    *
-   * 但**不能**简单把 NO_INTEREST 整体提到前面 —— 那会连「暂时不感兴趣」一起
-   * 吞掉（「暂时不感兴趣」里含着「不感兴趣」），人被永久停掉，正是下面那条
-   * 「软拒绝必须排在明确没兴趣前面」在防的事。
+   * 第一版修法是「整句里出现硬拒绝就不许判回电」—— 那个过宽：
+   *   `not interested in the group tour, call me back about a private option`
+   * 前半句拒的是团队游，后半句是一个**明确的新安排**，判成终结性的
+   * 「明确不要了」会把一个正要谈私家团的客人踢出名单。
    *
-   * 所以做成一个**闸**而不是换顺序：只有「命中硬拒绝、且**不是**软拒绝」时，
-   * 才不许再判回电。三条既有规矩同时成立：
-   *   `not ready to talk, call back tomorrow` → 软拒绝 → 回电照旧赢 ✅
-   *   `not interested, no need to call back`  → 硬拒绝 → 判「明确不要了」 ✅
-   *   `暂时不感兴趣`                          → 软拒绝 → 判「暂时不考虑」 ✅
+   * 所以只否定**回电本身被否定**的那种写法，不看句子别处有没有拒绝词。
+   * 四条规矩同时成立：
+   *   `not ready to talk, call back tomorrow`        → 约了回电 ✅
+   *   `not interested, no need to call back`         → 不是回电 ✅
+   *   `不感兴趣团队游，call me back 聊私家团`         → 约了回电 ✅
+   *   `暂时不感兴趣`                                  → 暂时不考虑 ✅
    */
-  const hardNo = anyMatch(t, NO_INTEREST_PATTERNS) && !anyMatch(t, SOFT_NO_PATTERNS)
-  if (!hardNo && anyMatch(t, CALLBACK_PATTERNS)) {
+  if (!anyMatch(t, NEGATED_CALLBACK_PATTERNS) && anyMatch(t, CALLBACK_PATTERNS)) {
     return { outcome: 'callback_set', do_not_contact: false }
   }
   // 🔴 **他现在就想买的话，前面那半句犹豫不算数**（见 POSITIVE_INTENT_NOW）。
