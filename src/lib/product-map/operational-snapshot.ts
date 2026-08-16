@@ -18,9 +18,12 @@
  *   "docs/Issue 只能是线索，不能单独把格子填成 yes"。
  */
 
-import type { ExternalFacts } from './external-facts'
+import type { ExternalFacts, PullRequestFact } from './external-facts'
 import type { ProductMapComponent } from './types'
 import { isValidObservationDay } from './maturity'
+
+/** 本仓库的主干分支名（部署真相源，非 master）。「代码已进入 main」只认合入它。 */
+const MAIN_BRANCH = 'main'
 
 export const PROBE_STATUS = ['yes', 'no', 'unknown'] as const
 export type ProbeStatus = (typeof PROBE_STATUS)[number]
@@ -84,6 +87,23 @@ function pendingUnknown(evidenceSource: string): OperationalProbe {
   return { status: 'unknown', evidenceSource: `${evidenceSource}（仅人工声明，等机器核验）`, checkedAt: null }
 }
 
+/**
+ * 一条 merged 声明撑不起「代码已进入 main」时的诚实 unknown（不判 yes 也不判确定的 no）：
+ * - github_sync 但合入非 main 分支 → 机器事实明确指向 staging/功能分支，绝不能冒充 main；
+ * - 人工快照 或 github_sync 但脏日期 → 缺机器核验，等核验。
+ */
+function mergedButUnconfirmedProbe(number: number, fact: PullRequestFact): OperationalProbe {
+  if (fact.source === 'github_sync' && fact.baseRef !== MAIN_BRANCH) {
+    return {
+      status: 'unknown',
+      evidenceSource: `#${number} 合并进 ${fact.baseRef}（非 main，未证明代码已进入 main）`,
+      checkedAt: null,
+    }
+  }
+  const why = fact.source === 'github_sync' ? '同步事实日期无效' : '人工快照'
+  return pendingUnknown(`#${number} 合并（${why}）`)
+}
+
 function deriveCodeInMain(c: ProductMapComponent, facts: ExternalFacts): OperationalProbe {
   if (c.origin === 'legacy') {
     // ownedPaths 存在于磁盘 ≠ 带日期地证明它在 main。没有 GitHub 同步事实 → unknown。
@@ -98,18 +118,22 @@ function deriveCodeInMain(c: ProductMapComponent, facts: ExternalFacts): Operati
   if (implementsPrs.length === 0) {
     return { status: 'unknown', evidenceSource: '未登记 role=implements 的 PR', checkedAt: null }
   }
-  // yes 只认机器同步来源（source==='github_sync'）且日期合法，manual_snapshot 是人工快照不算。
-  let mergedByManual: number | null = null
+  // yes 只认机器同步来源（source==='github_sync'）**且合入 main（baseRef==='main'）**且日期合法。
+  // 🔴 state='merged' 单独不够：合入 staging / 功能分支的 PR 也是 merged，判成「进入 main」就是误报。
+  //    manual_snapshot 是人工快照不算机器核验；github_sync 但非 main / 脏日期也撑不起 yes。
+  let mergedUnconfirmed: OperationalProbe | null = null
   for (const pr of implementsPrs) {
     const fact = facts.pullRequests[pr.number]
-    if (fact?.state === 'merged') {
-      if (fact.source === 'github_sync' && isValidObservationDay(fact.observedAt)) return machineYes(`#${pr.number}`, fact.observedAt)
-      mergedByManual = pr.number
+    if (fact?.state !== 'merged') continue
+    if (fact.source === 'github_sync' && fact.baseRef === MAIN_BRANCH && isValidObservationDay(fact.observedAt)) {
+      return machineYes(`#${pr.number}`, fact.observedAt)
     }
+    // 有合并声明但撑不起「进入 main」——记下第一条，稍后判 unknown。
+    if (mergedUnconfirmed === null) mergedUnconfirmed = mergedButUnconfirmedProbe(pr.number, fact)
   }
-  // Codex 复审：只要**存在**一条合并声明（哪怕人工快照），就不能判"确定的 no" ——
-  // 人工合并声明不能证明 yes，但也意味着无法确定代码不在 main → unknown。
-  if (mergedByManual !== null) return pendingUnknown(`#${mergedByManual} 合并（人工快照）`)
+  // Codex 复审：只要**存在**一条合并声明（人工快照 / 合入非 main / 脏日期），就不能判"确定的 no" ——
+  // 它证不了 yes，但也意味着无法确定代码不在 main → unknown。
+  if (mergedUnconfirmed !== null) return mergedUnconfirmed
   // 没有任何合并声明，才看有没有明确的非合并机器事实 → no
   for (const pr of implementsPrs) {
     const fact = facts.pullRequests[pr.number]

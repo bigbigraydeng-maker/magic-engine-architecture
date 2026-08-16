@@ -35,6 +35,9 @@ export function rowsToExternalFacts(
       number: row.pr_number,
       state: row.state,
       isDraft: row.is_draft,
+      // 🔴 base_ref 是「代码是否已进入 main」的必要证据，边界上必须原样透传：
+      //    丢掉它，推导层就只能凭 state=merged 瞎判，会把合入 staging/功能分支误报为 main。
+      baseRef: row.base_ref,
       observedAt: row.observed_at.slice(0, 10),
       source: 'github_sync',
     }

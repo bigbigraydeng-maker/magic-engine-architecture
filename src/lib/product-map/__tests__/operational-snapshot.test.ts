@@ -12,17 +12,39 @@
 import { describe, expect, it } from 'vitest'
 import { EMPTY_EXTERNAL_FACTS } from '../external-facts'
 import { deriveOperationalSnapshot } from '../operational-snapshot'
-import { makeComponent, makeFacts, mergedPr, mergedPrSync, openDraftPr } from './_fixtures'
+import { makeComponent, makeFacts, mergedPr, mergedPrSync, mergedPrSyncIntoBranch, openDraftPr } from './_fixtures'
 
 const repoEv = (over: Record<string, unknown> = {}) => ({ kind: 'importer', ref: 'src/a.ts', observedAt: '2026-08-14', verification: 'repo_verified', ...over })
 
 describe('code in main?', () => {
-  it('机器同步的 merged PR → yes，evidenceSource 带 PR 号 + checkedAt', () => {
+  it('正向 main：机器同步、合入 main 的 merged PR → yes，evidenceSource 带 PR 号 + checkedAt', () => {
     const c = makeComponent({ linkedPullRequests: [{ number: 100, role: 'implements' }] })
     const s = deriveOperationalSnapshot(c, makeFacts([mergedPrSync(100)]))
     expect(s.codeInMain.status).toBe('yes')
     expect(s.codeInMain.evidenceSource).toContain('#100')
     expect(s.codeInMain.checkedAt).toBe('2026-08-15')
+  })
+
+  it('负向非 main：机器同步但合入 staging 的 merged PR → 不判 yes（unknown，不得误报 main）', () => {
+    const c = makeComponent({ linkedPullRequests: [{ number: 100, role: 'implements' }] })
+    const s = deriveOperationalSnapshot(c, makeFacts([mergedPrSyncIntoBranch(100, 'staging')]))
+    expect(s.codeInMain.status).not.toBe('yes')
+    expect(s.codeInMain.status).toBe('unknown')
+    expect(s.codeInMain.checkedAt).toBeNull()
+    // 证据身份必须点名它进的是非 main 分支，而不是冒充「合并=进 main」
+    expect(s.codeInMain.evidenceSource).toContain('staging')
+  })
+
+  it('负向非 main：合入功能分支的 merged PR 也不判 yes', () => {
+    const c = makeComponent({ linkedPullRequests: [{ number: 100, role: 'implements' }] })
+    const s = deriveOperationalSnapshot(c, makeFacts([mergedPrSyncIntoBranch(100, 'feat/x')]))
+    expect(s.codeInMain.status).toBe('unknown')
+  })
+
+  it('缺证据 unknown：合入非 main + 另一条查无此号 → unknown（既不 yes 也不确定的 no）', () => {
+    const c = makeComponent({ linkedPullRequests: [{ number: 100, role: 'implements' }, { number: 200, role: 'implements' }] })
+    const s = deriveOperationalSnapshot(c, makeFacts([mergedPrSyncIntoBranch(100, 'staging')]))
+    expect(s.codeInMain.status).toBe('unknown')
   })
 
   it('B3：仅人工快照(manual_snapshot)的 merged PR → unknown，不判 yes', () => {
@@ -57,7 +79,7 @@ describe('code in main?', () => {
 
   it('Codex：github_sync 但 observedAt 是脏值 → 不判 yes（日期必须真实日历日）', () => {
     const c = makeComponent({ linkedPullRequests: [{ number: 100, role: 'implements' }] })
-    const facts = makeFacts([{ number: 100, state: 'merged', isDraft: false, observedAt: 'foo', source: 'github_sync' }])
+    const facts = makeFacts([{ number: 100, state: 'merged', isDraft: false, baseRef: 'main', observedAt: 'foo', source: 'github_sync' }])
     expect(deriveOperationalSnapshot(c, facts).codeInMain.status).not.toBe('yes')
   })
 

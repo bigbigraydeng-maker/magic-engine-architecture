@@ -17,6 +17,14 @@ export interface PullRequestFact {
   /** 这份事实是哪天观察到的（YYYY-MM-DD）。 */
   readonly observedAt: string
   /**
+   * 🔴「代码已进入 main」的必要证据：这个 PR 合入/指向哪个分支（GitHub base_ref）。
+   *    state='merged' 只说明「合进了某个分支」，合进 staging / 功能分支的 PR
+   *    **绝不能**被判成代码已进 main —— 判定必须同时验 baseRef==='main'
+   *    （见 operational-snapshot.ts deriveCodeInMain）。sync fact 里本就带 base_ref，
+   *    facts-adapter 必须原样透传，不许在边界丢掉这条证据。
+   */
+  readonly baseRef: string
+  /**
    * - `manual_snapshot`：人工核对 GitHub 后手写（PR 1 的全部来源）——控制台必须明示。
    * - `github_sync`：GitHub 同步器写入（PR 2 起）。
    */
@@ -39,17 +47,17 @@ export const EMPTY_EXTERNAL_FACTS: ExternalFacts = Object.freeze({
  */
 export const MANUAL_FACTS_SNAPSHOT: ExternalFacts = Object.freeze({
   pullRequests: Object.freeze({
-    863: { number: 863, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'manual_snapshot' },
-    890: { number: 890, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'manual_snapshot' },
-    894: { number: 894, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'manual_snapshot' },
-    895: { number: 895, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'manual_snapshot' },
-    897: { number: 897, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'manual_snapshot' },
-    898: { number: 898, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'manual_snapshot' },
-    907: { number: 907, state: 'open', isDraft: true, observedAt: '2026-08-15', source: 'manual_snapshot' },
-    914: { number: 914, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'manual_snapshot' },
-    922: { number: 922, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'manual_snapshot' },
-    956: { number: 956, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'manual_snapshot' },
-    962: { number: 962, state: 'open', isDraft: true, observedAt: '2026-08-15', source: 'manual_snapshot' },
-    973: { number: 973, state: 'open', isDraft: true, observedAt: '2026-08-15', source: 'manual_snapshot' },
+    863: { number: 863, state: 'merged', isDraft: false, baseRef: 'main', observedAt: '2026-08-15', source: 'manual_snapshot' },
+    890: { number: 890, state: 'merged', isDraft: false, baseRef: 'main', observedAt: '2026-08-15', source: 'manual_snapshot' },
+    894: { number: 894, state: 'merged', isDraft: false, baseRef: 'main', observedAt: '2026-08-15', source: 'manual_snapshot' },
+    895: { number: 895, state: 'merged', isDraft: false, baseRef: 'main', observedAt: '2026-08-15', source: 'manual_snapshot' },
+    897: { number: 897, state: 'merged', isDraft: false, baseRef: 'main', observedAt: '2026-08-15', source: 'manual_snapshot' },
+    898: { number: 898, state: 'merged', isDraft: false, baseRef: 'main', observedAt: '2026-08-15', source: 'manual_snapshot' },
+    907: { number: 907, state: 'open', isDraft: true, baseRef: 'main', observedAt: '2026-08-15', source: 'manual_snapshot' },
+    914: { number: 914, state: 'merged', isDraft: false, baseRef: 'main', observedAt: '2026-08-15', source: 'manual_snapshot' },
+    922: { number: 922, state: 'merged', isDraft: false, baseRef: 'main', observedAt: '2026-08-15', source: 'manual_snapshot' },
+    956: { number: 956, state: 'merged', isDraft: false, baseRef: 'main', observedAt: '2026-08-15', source: 'manual_snapshot' },
+    962: { number: 962, state: 'open', isDraft: true, baseRef: 'main', observedAt: '2026-08-15', source: 'manual_snapshot' },
+    973: { number: 973, state: 'open', isDraft: true, baseRef: 'main', observedAt: '2026-08-15', source: 'manual_snapshot' },
   } satisfies Record<number, PullRequestFact>),
 })

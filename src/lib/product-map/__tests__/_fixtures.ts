@@ -49,14 +49,22 @@ export function makeFacts(prs: PullRequestFact[]): ExternalFacts {
 
 /** 人工快照的已合并 PR —— source='manual_snapshot'，不算机器核验（codeInMain 判 unknown）。 */
 export function mergedPr(number: number): PullRequestFact {
-  return { number, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'manual_snapshot' }
+  return { number, state: 'merged', isDraft: false, baseRef: 'main', observedAt: '2026-08-15', source: 'manual_snapshot' }
 }
 
-/** GitHub 同步来的已合并 PR —— source='github_sync'，机器核验（codeInMain 可判 yes）。 */
+/** GitHub 同步来的、合入 main 的已合并 PR —— 机器核验 + baseRef=main（codeInMain 可判 yes）。 */
 export function mergedPrSync(number: number): PullRequestFact {
-  return { number, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'github_sync' }
+  return { number, state: 'merged', isDraft: false, baseRef: 'main', observedAt: '2026-08-15', source: 'github_sync' }
+}
+
+/**
+ * GitHub 同步来的、合入**非 main 分支**的已合并 PR —— state=merged 但 baseRef≠main，
+ * 绝不能被判成「代码已进入 main」（codeInMain 判 unknown，不是 yes）。
+ */
+export function mergedPrSyncIntoBranch(number: number, baseRef: string): PullRequestFact {
+  return { number, state: 'merged', isDraft: false, baseRef, observedAt: '2026-08-15', source: 'github_sync' }
 }
 
 export function openDraftPr(number: number): PullRequestFact {
-  return { number, state: 'open', isDraft: true, observedAt: '2026-08-15', source: 'github_sync' }
+  return { number, state: 'open', isDraft: true, baseRef: 'main', observedAt: '2026-08-15', source: 'github_sync' }
 }

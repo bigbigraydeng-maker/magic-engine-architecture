@@ -5,12 +5,12 @@ import { buildProductMapSnapshot } from '@/lib/product-map'
 import { rowsToExternalFacts } from '../facts-adapter'
 import type { PrFactRow } from '../types'
 
-function row(number: number, state: PrFactRow['state'], observedAt: string): PrFactRow {
+function row(number: number, state: PrFactRow['state'], observedAt: string, baseRef = 'main'): PrFactRow {
   return {
     pr_number: number,
     state,
     is_draft: false,
-    base_ref: 'main',
+    base_ref: baseRef,
     head_sha: `sha-${number}`,
     merged_commit_sha: state === 'merged' ? `m-${number}` : null,
     mergeable_state: 'clean',
@@ -43,5 +43,15 @@ describe('rowsToExternalFacts', () => {
     expect(synced).not.toBeNull()
     const snapshot = buildProductMapSnapshot(synced?.facts)
     expect(snapshot.factsSource).toBe('github_sync')
+  })
+
+  it('base_ref 原样透传：合入 main 保 main', () => {
+    const synced = rowsToExternalFacts([row(863, 'merged', '2026-08-15T00:00:00Z', 'main')], null)
+    expect(synced?.facts.pullRequests[863].baseRef).toBe('main')
+  })
+
+  it('base_ref 原样透传：合入 staging 的 PR 不许被洗成 main（否则推导层会误报进 main）', () => {
+    const synced = rowsToExternalFacts([row(900, 'merged', '2026-08-15T00:00:00Z', 'staging')], null)
+    expect(synced?.facts.pullRequests[900].baseRef).toBe('staging')
   })
 })
