@@ -67,7 +67,7 @@ export function hasProductionValidation(c: ProductMapComponent): boolean {
 }
 
 /** 严格 YYYY-MM-DD 且真实日历日:'foo'/'bar' 这类脏值按字面去重会绕开 M5 硬门。 */
-function isValidObservationDay(value: string | undefined): value is string {
+export function isValidObservationDay(value: string | undefined): value is string {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const parsed = new Date(`${value}T00:00:00Z`)
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value

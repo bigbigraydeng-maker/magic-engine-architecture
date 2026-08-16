@@ -20,6 +20,7 @@
 
 import type { ExternalFacts } from './external-facts'
 import type { ProductMapComponent } from './types'
+import { isValidObservationDay } from './maturity'
 
 export const PROBE_STATUS = ['yes', 'no', 'unknown'] as const
 export type ProbeStatus = (typeof PROBE_STATUS)[number]
@@ -60,7 +61,9 @@ const NO_CALLER_PATTERN = /零\s*(个\s*)?(importer|调用方|caller)|没有(任
  */
 const MACHINE_VERIFICATIONS: ReadonlySet<string> = new Set(['repo_verified', 'sync_verified'])
 function isMachineVerified(e: { verification: string; observedAt?: string }): boolean {
-  return MACHINE_VERIFICATIONS.has(e.verification) && !!e.observedAt
+  // Codex 复审：observedAt 必须是**真实日历日**（复用 maturity 的严格校验）——
+  // 'foo' / 无效日期这类脏值不许当 checkedAt 塞进一个 yes，破坏 OperationalProbe 契约。
+  return MACHINE_VERIFICATIONS.has(e.verification) && isValidObservationDay(e.observedAt)
 }
 /**
  * 在一组证据里找**第一条机器核验且带日期**的（Codex 复审：不固定取第一条 ——
@@ -95,23 +98,25 @@ function deriveCodeInMain(c: ProductMapComponent, facts: ExternalFacts): Operati
   if (implementsPrs.length === 0) {
     return { status: 'unknown', evidenceSource: '未登记 role=implements 的 PR', checkedAt: null }
   }
-  // yes 只认机器同步来源（source==='github_sync'），manual_snapshot 是人工快照不算。
+  // yes 只认机器同步来源（source==='github_sync'）且日期合法，manual_snapshot 是人工快照不算。
   let mergedByManual: number | null = null
   for (const pr of implementsPrs) {
     const fact = facts.pullRequests[pr.number]
     if (fact?.state === 'merged') {
-      if (fact.source === 'github_sync' && fact.observedAt) return machineYes(`#${pr.number}`, fact.observedAt)
+      if (fact.source === 'github_sync' && isValidObservationDay(fact.observedAt)) return machineYes(`#${pr.number}`, fact.observedAt)
       mergedByManual = pr.number
     }
   }
-  // 负向来自机器事实（同步快照），带 observedAt —— 明确的非合并状态可判 no
+  // Codex 复审：只要**存在**一条合并声明（哪怕人工快照），就不能判"确定的 no" ——
+  // 人工合并声明不能证明 yes，但也意味着无法确定代码不在 main → unknown。
+  if (mergedByManual !== null) return pendingUnknown(`#${mergedByManual} 合并（人工快照）`)
+  // 没有任何合并声明，才看有没有明确的非合并机器事实 → no
   for (const pr of implementsPrs) {
     const fact = facts.pullRequests[pr.number]
     if (fact !== undefined && fact.state !== 'merged') {
       return { status: 'no', evidenceSource: `#${pr.number}`, checkedAt: fact.observedAt ?? null }
     }
   }
-  if (mergedByManual !== null) return pendingUnknown(`#${mergedByManual} 合并（人工快照）`)
   return { status: 'unknown', evidenceSource: 'PR 状态未同步（ExternalFacts 查无此 PR）', checkedAt: null }
 }
 

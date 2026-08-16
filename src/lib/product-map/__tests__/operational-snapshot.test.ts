@@ -54,6 +54,19 @@ describe('code in main?', () => {
     const s = deriveOperationalSnapshot(c, EMPTY_EXTERNAL_FACTS)
     expect(s.codeInMain.status).toBe('unknown')
   })
+
+  it('Codex：github_sync 但 observedAt 是脏值 → 不判 yes（日期必须真实日历日）', () => {
+    const c = makeComponent({ linkedPullRequests: [{ number: 100, role: 'implements' }] })
+    const facts = makeFacts([{ number: 100, state: 'merged', isDraft: false, observedAt: 'foo', source: 'github_sync' }])
+    expect(deriveOperationalSnapshot(c, facts).codeInMain.status).not.toBe('yes')
+  })
+
+  it('Codex：一条人工 merged + 另一条 open → unknown，不判确定的 no', () => {
+    const c = makeComponent({ linkedPullRequests: [{ number: 100, role: 'implements' }, { number: 200, role: 'implements' }] })
+    const facts = makeFacts([mergedPr(100), openDraftPr(200)])
+    // 存在合并声明(人工)，无法确定代码不在 main → unknown，而不是被 open 的那条压成 no
+    expect(deriveOperationalSnapshot(c, facts).codeInMain.status).toBe('unknown')
+  })
 })
 
 describe('production prerequisites actually exist?', () => {
@@ -74,6 +87,11 @@ describe('production prerequisites actually exist?', () => {
 
   it('B3：manual_claim 的 production_data（即便带日期）→ unknown', () => {
     const c = makeComponent({ productionEvidence: [{ kind: 'production_data', ref: 'geo_batches=3', observedAt: '2026-08-12', verification: 'manual_claim' }] })
+    expect(deriveOperationalSnapshot(c, EMPTY_EXTERNAL_FACTS).productionPrerequisitesExist.status).toBe('unknown')
+  })
+
+  it('Codex：repo_verified 但 observedAt 是脏值 → unknown（日期必须真实日历日）', () => {
+    const c = makeComponent({ productionEvidence: [{ kind: 'production_data', ref: 'geo_batches=3', observedAt: 'foo', verification: 'repo_verified' }] })
     expect(deriveOperationalSnapshot(c, EMPTY_EXTERNAL_FACTS).productionPrerequisitesExist.status).toBe('unknown')
   })
 
