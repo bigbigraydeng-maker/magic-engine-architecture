@@ -15,6 +15,7 @@ export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
     id: 'platform.execution-kernel',
     name: 'Execution Kernel（执行内核）',
     componentType: 'platform',
+    architecturalRole: 'kernel',
     businessLane: 'shared',
     dapeStages: ['authorization', 'execution', 'verification'],
     businessOutcome: '所有会产生外部副作用的自动执行都必须经过同一道授权闸，客户资产不被未经批准的动作碰到',
@@ -66,6 +67,9 @@ export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
     id: 'platform.action-bridge',
     name: 'Action Bridge（候选身份治理）',
     componentType: 'platform',
+    // ActionCandidate → ActionKey 的治理映射（WP00 §8），是 Kernel CAN/SHOULD/
+    // AUTHORIZED 三问里 CAN 那问的注册表实现，不是独立的域推理。
+    architecturalRole: 'kernel',
     businessLane: 'shared',
     dapeStages: ['prescription', 'authorization'],
     businessOutcome: '域模块产出的「动作候选」翻译成内核认识的 ActionKey，词汇表受治理不野蛮生长',
@@ -99,6 +103,10 @@ export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
     id: 'platform.growth-contract',
     name: 'Growth 契约（Finding / Prescription / ActionCandidate）',
     componentType: 'platform',
+    // WP00 §5 的五个概念结构（Evidence/Finding/Prescription/ActionCandidate/
+    // VerificationDefinition）是"任何 Domain Module 都按同一条五段链推理"（§4）
+    // 的共用词汇表，语义上属于 Domain Module 这一层，不是独立角色。
+    architecturalRole: 'domain_module',
     businessLane: 'shared',
     dapeStages: ['discovery', 'analysis', 'prescription'],
     businessOutcome: '所有域模块用同一套「发现 / 处方 / 动作候选」语言说话，模块之间可比较、可审计',
@@ -132,6 +140,7 @@ export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
     id: 'platform.kernel-approval-boundary',
     name: '内核审批边界（K-WP01A）',
     componentType: 'platform',
+    architecturalRole: 'kernel',
     businessLane: 'shared',
     dapeStages: ['authorization'],
     businessOutcome: 'PO/FDE 能在受认证的入口批准或拒绝待批动作，而不是进数据库手改',
@@ -162,6 +171,9 @@ export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
     id: 'registry.canonical-page-inventory',
     name: '站点页面台账（canonical inventory）',
     componentType: 'registry',
+    // 不是 WP00 第八层"Registry"——它是 Page 能力 resolve 段（WP06："路由决策
+    // 与规范页面身份分开"）依赖的规范页面身份来源，语义上落在 Shared Capability。
+    architecturalRole: 'shared_capability',
     businessLane: 'shared',
     dapeStages: ['discovery'],
     businessOutcome: '「客户网站到底有哪些页面」有一份人工审过、可信、可追责的长期真值，页面级动作不再各说各话',
@@ -199,6 +211,7 @@ export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
     id: 'capability.page-optimization',
     name: 'Page Optimization（页面修改共享能力）',
     componentType: 'capability',
+    architecturalRole: 'shared_capability',
     businessLane: 'shared',
     dapeStages: ['execution', 'verification'],
     businessOutcome: 'SEO 和 GEO 共用同一门「改页面」手艺：定位 → 快照 → 草拟 → 差异 → 校验，不各造一套',
