@@ -290,6 +290,26 @@ describe('暂时不考虑 ≠ 明确不要了', () => {
     expect(outcome('already booked with another company')).toBe('not_interested')
   })
 
+  /**
+   * 🔴 中文同样要认（Codex 复审 2026-08-16）—— CTS 的备注绝大多数是中文，
+   * 只给英文加保护等于对真实数据不生效。
+   */
+  it.each([
+    ['客户已经跟我们订了 Best of China'],
+    ['已经订了我们的团'],
+  ])('「%s」→ 是成交，不许判成不要了', (note) => {
+    expect(outcome(note)).not.toBe('not_interested')
+  })
+
+  it('对照：中文在别家订的 → 照旧是明确不要了', () => {
+    expect(outcome('已经在别家订了')).toBe('not_interested')
+  })
+
+  /** 🔴 中文反向语序也不许跨过转折：他已经改主意了。 */
+  it('「之前不考虑，但现在想去」→ 不许判成暂时不考虑', () => {
+    expect(outcome('之前不考虑，但现在想去')).not.toBe('not_interested_now')
+  })
+
   it('「not ready yet, call back tomorrow」→ 约了回电', () => {
     expect(outcome('not ready yet, call back tomorrow')).toBe('callback_set')
   })
