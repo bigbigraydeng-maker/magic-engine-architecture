@@ -27,6 +27,14 @@ export type KindView = 'retail' | 'trade' | 'all'
 export interface KindedPerson {
   email: string | null
   kind?: ContactKind
+  /**
+   * 今天已经处理过他了。
+   *
+   * 名单改成「一天不变」之后，处理过的人**留在桶里**（就地变灰），
+   * 所以群发地址不能再照抄整桶 —— 否则一个今天亲口说「不买了」的人
+   * 当天会收到一封面向他的群发信。
+   */
+  doneToday?: boolean
 }
 
 export interface KindedBucket<P extends KindedPerson> {
@@ -48,6 +56,10 @@ export function matchesKindView(kind: ContactKind | undefined, view: KindView): 
  *   people      —— 铺出来的卡片
  *   total       —— 列头那个数字（对不上，人会以为系统丢了人）
  *   batchEmails —— **群发地址**（对不上，信会发错人）
+ *
+ * 群发地址还要再窄一层：**今天已经处理过的人不进去**。名单改成「一天不变」
+ * 之后处理过的人留在桶里就地变灰，照抄整桶等于给今天说过「不买了」的人
+ * 发一封面向他的群发信。
  */
 export function filterBucketByKind<P extends KindedPerson, B extends KindedBucket<P>>(
   bucket: B,
@@ -58,11 +70,34 @@ export function filterBucketByKind<P extends KindedPerson, B extends KindedBucke
     ...bucket,
     people,
     total: people.length,
-    batchEmails:
-      bucket.batch === 'send_email'
-        ? people.map((p) => p.email).filter((e): e is string => !!e)
-        : [],
+    batchEmails: batchRecipients({ ...bucket, people }).map((p) => p.email),
   }
+}
+
+/**
+ * 这一批群发**到底会发给谁**。
+ *
+ * 🔴 **地址和「记一笔」必须从这一个函数出**，不许各推各的。
+ *
+ * 上一版就是各推各的：地址排掉了今天已处理的人，而「都发出去了，帮我记一笔」
+ * 提交的还是整桶。于是 20 人的桶里 3 个今天点了「他不买了」——
+ * 复制出来 17 个地址，却给 20 个人各记了一笔「群发了一封邮件」。
+ * 那 3 位收到了一封**他们根本没收到的信**的记录，而系统还回报「已给 20 人记了一笔」。
+ *
+ * 这正是 kind-filter 开头标注为「**比前面那条更毒**」的那一条：
+ * 实际收件人和 CRM 记录对不上。而且那笔假触点会把他们的「最后来往时间」
+ * 推到今天，明天在回捞桶里排到队尾。
+ *
+ * 两个条件缺一不可：**今天没处理过** + **有邮箱**。
+ */
+export function batchRecipients<P extends KindedPerson>(
+  bucket: KindedBucket<P>,
+): Array<P & { email: string }> {
+  if (bucket.batch !== 'send_email') return []
+  // 返回类型带上 `email: string`，调用方就不用 `as string` 把 null 硬转过去了。
+  // 那种 cast 在过滤条件哪天改了之后会静静放一个 null 过去，
+  // 群发地址里出现一个空地址。
+  return bucket.people.filter((p): p is P & { email: string } => !p.doneToday && !!p.email)
 }
 
 /**

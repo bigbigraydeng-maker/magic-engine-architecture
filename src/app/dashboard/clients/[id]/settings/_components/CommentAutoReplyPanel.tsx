@@ -56,6 +56,8 @@ interface ProbeResult {
 
 const SCOPE_LABEL: Record<string, string> = {
   pages_read_engagement: '读取评论',
+  // pages_read_engagement 只够读我们自己发的东西；客人写的评论要这一条
+  pages_read_user_content: '读客人写的评论',
   pages_manage_engagement: '回帖 / 隐藏',
   pages_messaging: '私信引导',
 }
