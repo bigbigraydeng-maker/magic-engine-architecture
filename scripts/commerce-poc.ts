@@ -21,10 +21,8 @@
  */
 
 import { readFileSync } from 'node:fs'
-import { searchTikTokShop } from '../src/lib/apify/tiktok-shop'
 import type { RawTikTokShopProduct } from '../src/lib/apify/tiktok-shop'
 import type { RawSourcingMatch } from '../src/lib/apify/sourcing-by-image'
-import { findSourcingByImage } from '../src/lib/apify/sourcing-by-image'
 import {
   normalizeSourcing,
   normalizeTikTokProduct,
@@ -34,6 +32,7 @@ import {
 import { measureAuNzDemand } from '../src/lib/commerce/product-intel/validate-aunz'
 import { measureLocalPrice } from '../src/lib/commerce/product-intel/validate-local-price'
 import { rankCandidates } from '../src/lib/commerce/product-intel/score'
+import { scanSeedKeyword } from '../src/lib/commerce/product-intel/scan'
 import type { CostAssumptions } from '../src/lib/commerce/product-intel/landed-cost'
 import type {
   ProductCandidate,
@@ -138,34 +137,6 @@ function estimateCostUsd(opts: Options): number {
     + DFSE_CALLS_PER_RUN * COST_PER_DFSE_CALL_USD
 }
 
-/** 对 shortlist 补供货证据 + 澳新需求。澳新是品类级，整批共用一次查询。 */
-async function enrichCandidates(
-  shortlist: readonly ProductCandidate[],
-  seedKeyword: string,
-): Promise<readonly ProductCandidate[]> {
-  // 需求与售价都是品类级 —— 整批共用一次查询，互不阻断。
-  const [demand, localMarket] = await Promise.all([
-    measureAuNzDemand(seedKeyword),
-    measureLocalPrice(seedKeyword, 'NZ'),
-  ])
-  const enriched = await Promise.all(
-    shortlist.map(async (candidate) => {
-      const base = withLocalMarket({ ...candidate, demand }, localMarket)
-      if (!candidate.imageUrl) return base
-      const sourcing = await findSourcingByImage(candidate.imageUrl)
-      if (sourcing.error) {
-        console.warn(`  ⚠️ 以图搜款失败（${candidate.source.sourceProductId}）：${sourcing.error}`)
-        return base
-      }
-      const evidence = normalizeSourcing(
-        sourcing.matches, sourcing.runId, new Date().toISOString(),
-      )
-      return withSourcing(base, evidence)
-    }),
-  )
-  return enriched
-}
-
 const VERDICT_LABEL: Record<string, string> = {
   TEST_NOW: '✅ 值得测',
   WATCH: '👀 观察',
@@ -247,25 +218,15 @@ async function main(): Promise<void> {
     return
   }
 
-  console.log('\n① 搜 TikTok Shop US…')
-  const search = await searchTikTokShop({
-    keywords: [opts.keyword], region: 'US', maxResultsPerKeyword: opts.max,
+  console.log('\n① 扫 TikTok Shop US + 供货 + 澳新/本地价…')
+  const result = await scanSeedKeyword(opts.keyword, COST_ASSUMPTIONS, {
+    maxResults: opts.max, enrichCount: opts.enrich,
   })
-  if (search.error) {
-    console.error(`搜索失败：${search.error}`)
+  if (result.error) {
+    console.error(`搜索失败：${result.error}`)
     process.exit(1)
   }
-  const collectedAt = new Date().toISOString()
-  const all = search.products.map((p) => normalizeTikTokProduct(p, search.runId, collectedAt))
-  console.log(`   拿到 ${all.length} 条`)
-
-  const shortlist = [...all]
-    .sort((a, b) => (b.cumulativeSold.value ?? 0) - (a.cumulativeSold.value ?? 0))
-    .slice(0, opts.enrich)
-  console.log(`\n② 对销量前 ${shortlist.length} 条做以图搜款 + 澳新需求验证…`)
-  const enriched = await enrichCandidates(shortlist, opts.keyword)
-
-  const ranked = rankCandidates(enriched, COST_ASSUMPTIONS)
+  const ranked = result.scored
   if (opts.json) {
     console.log(JSON.stringify(ranked, null, 2))
     return
