@@ -27,6 +27,15 @@ export interface DrawerRow {
   segment?: Segment
   /** 他实际能被联系到的渠道 —— 决定按钮的措辞（没电话的人不给「没打通」）。 */
   suggestedChannel?: Channel
+  /**
+   * 库里有号码，但那个号打不通。
+   *
+   * 🔴 **抽屉必须跟卡片说同一件事**（Codex 复审 2026-08-16）。坏号的人只要还有
+   * 邮箱或 Messenger 就会留在名单上，卡片已经把拨号动作换成「这个号打不通」；
+   * 但点进抽屉之后，这里原先只看有没有号码就无条件渲染一个 `tel:` 链接 ——
+   * 销售照样一点就拨那个已知打不通的号。
+   */
+  phoneUnusable?: boolean
 }
 
 export function PersonDrawer({
@@ -134,7 +143,20 @@ export function PersonDrawer({
         <div className="flex-1 overflow-y-auto px-4 py-3">
           {/* 联系方式 —— 手机上点一下就拨 */}
           <div className="flex flex-wrap gap-2">
-            {row.phone && (
+            {/* 号码打不通就**不给拨号链接** —— 号码照旧显示出来（要改号得先看得见），
+                但点不动，并说清该做什么。给一个已知打不通的号配一个拨号按钮，
+                等于请他再白打一次。 */}
+            {row.phone && row.phoneUnusable && (
+              <span className="rounded-lg border border-me-stone bg-black/[0.04] px-3 py-2 text-sm font-semibold text-me-charcoal/45 line-through">
+                📞 {row.phone}
+              </span>
+            )}
+            {row.phone && row.phoneUnusable && (
+              <span className="w-full text-xs font-semibold text-me-charcoal/55">
+                ⚠️ 这个号打不通 —— 用下面的邮箱 / 私信联系，顺便问他要个新号
+              </span>
+            )}
+            {row.phone && !row.phoneUnusable && (
               <a
                 href={`tel:${row.phone}`}
                 className="rounded-lg border border-me-stone bg-white px-3 py-2 text-sm font-semibold text-me-charcoal"

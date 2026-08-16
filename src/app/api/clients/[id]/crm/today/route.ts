@@ -26,6 +26,7 @@ import {
   type ContactLike,
   type Segment,
   engagementFromMetadata,
+  isPhoneVerdict,
 } from '@/lib/crm/segments'
 import { WORKLIST_GROUPS, groupDisplayMeta } from '@/lib/crm/worklist-groups'
 import { contactCardTitle } from '@/lib/crm/display-name'
@@ -73,6 +74,24 @@ function latestOutcomeOf(touches: TouchRow[]): string | null {
     if (typeof o === 'string' && o) return o
   }
   return null
+}
+
+/**
+ * 这条电话线通不通 —— **判据跟 `segmentContact` 是同一份**（`isPhoneVerdict`）。
+ *
+ * 原先这里看「最新的任意一条结果是不是坏号」，跟分段那边不一致：一个只有坏号、
+ * 之后又打了一次没人接的人，分段判他「号码打不通」，这里却因为最新一条是
+ * `no_answer` 而把他丢进「不要再联系」—— **补号码这件该有人动手的事又一次被
+ * 藏起来**（铁律 3：发现不许死在日志里）。
+ *
+ * `touches` 已按 occurred_at 倒序（见下面的查询），所以第一条判决就是最近那次。
+ */
+function phoneLineDeadFrom(touches: TouchRow[]): boolean {
+  for (const t of touches) {
+    const o = t.metadata?.outcome
+    if (typeof o === 'string' && isPhoneVerdict(o)) return o === 'bad_number'
+  }
+  return false
 }
 
 interface IdentityRow {
@@ -684,7 +703,12 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
         group:
           row?.snooze_until && new Date(row.snooze_until).getTime() > now.getTime()
             ? ('snoozed' as const)
-            : latestOutcomeOf(byContact.get(c.id) ?? []) === 'bad_number'
+            // 🔴 必须跟 `segmentContact` 用**同一个判据**（Codex 复审 2026-08-16）。
+            // 原先看「最新的任意一条结果是不是坏号」：一个只有坏号、之后又打了
+            // 一次没人接的人，分段那边照旧判他「号码打不通」，这里却因为最新
+            // 一条是 no_answer 而把他丢进「不要再联系」—— 补号码这件该有人动手的
+            // 事又一次被藏起来（铁律 3：发现不许死在日志里）。
+            : phoneLineDeadFrom(byContact.get(c.id) ?? [])
               ? ('fix_number' as const)
               : meta?.action === 'won' || meta?.action === 'postsale'
                 ? ('won' as const)

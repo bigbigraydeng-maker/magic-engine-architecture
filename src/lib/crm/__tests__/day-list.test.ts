@@ -1078,3 +1078,38 @@ describe('号码今天刚标坏，卡片当天就得认', () => {
     expect(r.seg.suggestedChannel).toBe('phone')
   })
 })
+
+/**
+ * 🔴 **号码今天修好了，也得当天恢复**（Codex 复审 2026-08-16 第二轮）。
+ *
+ * 只处理「今天变坏」那一半的话，早上还是坏号、今天真的打通了的人，卡上会
+ * **整天继续说这个号打不通**、电话一直被禁用 —— 而销售手上刚打通过。
+ */
+describe('号码今天打通了，卡片当天就得恢复', () => {
+  const badThenSpokeToday = person(
+    [
+      ...YESTERDAY_LEAD,
+      tp({
+        direction: 'outbound',
+        channel: 'phone',
+        occurredAt: '2026-08-03T03:00:00.000Z',
+        outcome: 'bad_number',
+      }),
+      tp({
+        direction: 'outbound',
+        channel: 'phone',
+        occurredAt: '2026-08-05T03:00:00.000Z',
+        outcome: 'spoke',
+      }),
+    ],
+    { hasPhone: true, hasEmail: true },
+  )
+
+  it('当天就不再说「这个号打不通」', () => {
+    expect(row(badThenSpokeToday, true).seg.phoneUnusable).toBe(false)
+  })
+
+  it('电话当天就放回来 —— 他刚打通过', () => {
+    expect(row(badThenSpokeToday, true).seg.suggestedChannel).toBe('phone')
+  })
+})

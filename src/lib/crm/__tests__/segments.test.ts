@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  segmentContact, todayWorklist, segmentCounts, engagementFromMetadata, reachableChannel,
+  segmentContact, todayWorklist, segmentCounts, engagementFromMetadata, reachableChannel, isPhoneVerdict,
   type ContactLike, type TouchpointLike,
 } from '../segments'
 
@@ -764,5 +764,32 @@ describe('从没人联系过：新的留在名单上，陈年积压交给系统'
 
   it('陈年积压仍然是 warm —— 不是被埋进折叠区就等于扔了', () => {
     expect(segmentContact(enquiredAt('2021-07-26T00:00:00Z'), NOW).temperature).toBe('warm')
+  })
+})
+
+/**
+ * 「什么算对电话线的判决」必须**只有一份**（Codex 复审 2026-08-16 第二轮）。
+ *
+ * today 路由分「号码要修」那一组时读的是原始 DB 行，没法直接调 `segmentContact`。
+ * 它原先自己写了一套「最新的任意一条结果是不是坏号」，于是跟分段判据裂开：
+ * 一个只有坏号、之后又打了一次没人接的人，分段判他「号码打不通」，分组却把他
+ * 丢进「不要再联系」—— **补号码这件该有人动手的事又一次被藏起来**。
+ *
+ * 现在两边共用这个谓词。它一改，两边一起改。
+ */
+describe('什么算对电话线的判决', () => {
+  it('坏号和打通了都算', () => {
+    expect(isPhoneVerdict('bad_number')).toBe(true)
+    expect(isPhoneVerdict('spoke')).toBe(true)
+  })
+
+  it('打了没人接不算 —— 中午没接的人晚上会接', () => {
+    expect(isPhoneVerdict('no_answer')).toBe(false)
+  })
+
+  it('跟电话无关的结果都不算', () => {
+    for (const o of ['not_interested', 'callback_set', 'unknown', '', null, undefined]) {
+      expect(isPhoneVerdict(o)).toBe(false)
+    }
   })
 })

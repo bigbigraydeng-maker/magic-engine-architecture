@@ -85,7 +85,11 @@ import { compareForWorklist, reachableChannel, segmentContact } from './segments
  * 拨号链接**，要到明天才承认它是坏的。他刚刚才发现打不通，系统却请他再打一次。
  *
  * 「这条路通不通」是**渠道事实**，不是「我们今天做过什么」—— 一开始就不该
- * 进冻结的范围。这里只把电话那一路按实时结果降级，桶和排序仍然全按冻结版。
+ * 进冻结的范围。这里只把电话那一路按实时结果重算，桶和排序仍然全按冻结版。
+ *
+ * ⚠️ **两个方向都要走**（Codex 复审 2026-08-16 第二轮）：只处理「今天变坏」的话，
+ * 早上还是坏号、今天真的打通了（语音桥接写一条 `spoke`）的人，卡上会**整天
+ * 继续说这个号打不通**、电话一直被禁用，要到明天才恢复 —— 而他手上刚打通过。
  */
 function withLiveReach(
   frozen: SegmentResult,
@@ -93,13 +97,20 @@ function withLiveReach(
   contact: ContactLike,
 ): SegmentResult {
   const seg = { ...frozen, dueAt: live.dueAt ?? frozen.dueAt }
-  if (!live.phoneUnusable || frozen.phoneUnusable) return seg
+  if (live.phoneUnusable === frozen.phoneUnusable) return seg
   return {
     ...seg,
-    phoneUnusable: true,
-    // 用冻结版原本想要的渠道重新解一次，只是这次电话不算数 ——
-    // 直接抄 live.suggestedChannel 会把冻结版的桶意图一起换掉。
-    suggestedChannel: reachableChannel(frozen.suggestedChannel, { ...contact, hasPhone: false }),
+    phoneUnusable: live.phoneUnusable,
+    // 从冻结版**本来想用**的那个渠道重新解一次（`wantedChannel`），按实时的
+    // 电话状况算。
+    //
+    // ⚠️ 不能拿 `frozen.suggestedChannel` 去重解：号码今天修好了的时候，
+    // 它已经是**被降级成邮件**的那个值，再解一次永远爬不回电话。
+    // 也不能直接抄 `live.suggestedChannel` —— 那会把冻结版的桶意图一起换掉。
+    suggestedChannel: reachableChannel(frozen.wantedChannel ?? frozen.suggestedChannel, {
+      ...contact,
+      hasPhone: live.phoneUnusable ? false : contact.hasPhone,
+    }),
   }
 }
 

@@ -247,6 +247,14 @@ export interface SegmentResult {
    * 而这一页最贵的资产就是「它说的话可信」。
    */
   phoneUnusable?: boolean
+  /**
+   * 这一段**本来**想用哪个渠道 —— 还没按「他能不能被联系到」降级之前的那个。
+   *
+   * `dayRow` 的冻结合并要用它：号码今天修好了要把电话放回来，如果拿
+   * `suggestedChannel`（**已经降级成邮件**的那个）去重解一次，永远爬不回电话。
+   * 必须从这一段原本的意图重新解。
+   */
+  wantedChannel?: SegmentResult['suggestedChannel']
   /** 约定的回电时间，有就带上。销售拿起电话前一定会想「我约的几点」。 */
   dueAt: string | null
   /**
@@ -407,6 +415,17 @@ function ts(v: string | null | undefined): number {
 const PHONE_VERDICTS: ReadonlySet<string> = new Set(['bad_number', 'spoke'])
 
 /**
+ * 这条通话结果算不算「对电话线的判决」。
+ *
+ * 导出是为了让**读原始 DB 行**的调用方（today 路由分「号码要修」那一组）
+ * 复用同一份判据 —— 两边各写一套，就会出现分段说「打不通」、分组却说
+ * 「不要再联系」的裂缝，补号码那件事又一次被藏起来。
+ */
+export function isPhoneVerdict(outcome: string | null | undefined): boolean {
+  return !!outcome && PHONE_VERDICTS.has(outcome)
+}
+
+/**
  * 这条电话线现在通不通 —— **看最后一次判决，不看历史上有没有出现过坏号**。
  *
  * ⚠️ 不能用「只要出现过 bad_number 就永久判死」（Codex 复审 2026-08-16）：
@@ -415,7 +434,7 @@ const PHONE_VERDICTS: ReadonlySet<string> = new Set(['bad_number', 'spoke'])
  * 永久判死的话，一个已经打得通的号码会被永远藏起来，销售还会看到一句
  * 「这个号打不通」—— 他手上刚打通过，这一页当场失去可信度。
  */
-function phoneLineIsDead(tps: TouchpointLike[]): boolean {
+export function phoneLineIsDead(tps: TouchpointLike[]): boolean {
   const latest = tps
     .filter((t) => t.outcome && PHONE_VERDICTS.has(t.outcome))
     .sort((a, b) => ts(b.occurredAt) - ts(a.occurredAt))[0]
@@ -487,6 +506,7 @@ export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
     ...SEGMENT_META[segment],
     reason,
     suggestedChannel: reachableChannel(ch, reach),
+    wantedChannel: ch,
     // 只有「库里有号码但打不通」才算 —— 压根没号码的人不该说成「号打不通」。
     phoneUnusable: phoneIsDead && contact.hasPhone === true,
     dueAt,
