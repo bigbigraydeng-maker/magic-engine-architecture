@@ -273,8 +273,25 @@ describe('暂时不考虑 ≠ 明确不要了', () => {
     ['客户现在不方便接电话'],
     ['客户现在不在新西兰'],
     ['他现在不在办公室'],
+    // 🔴 否定管不到转折后面那半句（Codex 复审 2026-08-16）：这个人
+    //    **明确说想去**，只是此刻不方便 —— 判成暂时不考虑等于把他移出名单。
+    ['客户目前不方便，但想去'],
+    ['现在不太好联系，不过他想走三月那班'],
   ])('「%s」→ 跟买不买无关，不许判成暂时不考虑', (note) => {
     expect(outcome(note)).not.toBe('not_interested_now')
+  })
+
+  /** 🔴 跟**我们**订的是一单成交，不是「明确不要了」。 */
+  it('「already booked Best of China with us」→ 不许判成不要了', () => {
+    expect(outcome('already booked Best of China with us')).not.toBe('not_interested')
+  })
+
+  it('对照：在别家订的 → 照旧是明确不要了', () => {
+    expect(outcome('already booked with another company')).toBe('not_interested')
+  })
+
+  it('「not ready yet, call back tomorrow」→ 约了回电', () => {
+    expect(outcome('not ready yet, call back tomorrow')).toBe('callback_set')
   })
 
   /**

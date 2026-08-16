@@ -124,7 +124,9 @@ const BAD_NUMBER_PATTERNS: RegExp[] = [
  * 事实压过心情 —— 反过来不成立。
  */
 const BOOKED_ELSEWHERE_PATTERNS: RegExp[] = [
-  /already\s*(booked|sorted)/i,
+  // ⚠️ **不能是跟我们订的**（Codex 复审 2026-08-16）：「already booked Best of
+  // China **with us**」是一单成交，判成「明确不要了」会把刚成交的客人踢出名单。
+  /already\s*(booked|sorted)\b(?!.{0,30}\bwith\s+(us|you|cts)\b)/i,
   /\bbooked\s+(with|through)\s+(another|someone|somebody)/i,
   /all\s*sorted/i,
   // 「已经在别家订了」「找了另一家」——「已经…订」中间常隔着地点词，
@@ -198,12 +200,21 @@ const TIME_QUALIFIER_WITH_NO = '(暂不|暂时不|暂时没有?|近期不|近期
  * 连硬拒绝都不命中，退化成「聊过了」。
  */
 const NEGATION = '(不|没有|没)'
+/**
+ * 否定和购买意向之间允许隔的东西 —— **不许跨过标点或转折词**
+ * （Codex 复审 2026-08-16）。
+ *
+ * 原先写 `.{0,4}`，于是「客户**目前不**方便，**但想去**」命中了软拒绝：
+ * 一个明确说想去、只是此刻不方便的客人，被移出真人名单还收到 defer 提议。
+ * 否定词管不到转折后面那半句。
+ */
+const NEAR = '[^，,。；;、!?！？　 但可是不过然而]{0,3}'
 
 const SOFT_NO_PATTERNS: RegExp[] = [
   // 「暂时/现在/目前」+ 否定 + **跟买卖有关的动词**（中间最多隔 4 个字）
-  new RegExp(`${TIME_QUALIFIER}.{0,4}${NEGATION}.{0,4}${BUY_INTENT}`),
+  new RegExp(`${TIME_QUALIFIER}${NEAR}${NEGATION}${NEAR}${BUY_INTENT}`),
   // 「暂不考虑」「暂不感兴趣」—— 否定已经含在时间词里
-  new RegExp(`${TIME_QUALIFIER_WITH_NO}.{0,4}${BUY_INTENT}`),
+  new RegExp(`${TIME_QUALIFIER_WITH_NO}${NEAR}${BUY_INTENT}`),
   // 否定在前、时间词在后：「不考虑了，明年再说」这种语序
   new RegExp(`${NEGATION}${BUY_INTENT}.{0,6}${TIME_QUALIFIER}`),
   // 明确把事情推到以后
@@ -228,7 +239,6 @@ const SOFT_NO_PATTERNS: RegExp[] = [
   // 裸的 `not ready` 会吃掉「not ready to talk, call back tomorrow」——
   // 那明明是约了回电，却被判成「暂时不考虑」，回电时间也一并丢了。
   /\bnot\s+ready\s+(to\s+(book|travel|go|commit|decide|pay)|for\s+(a\s+)?(trip|tour|booking))/i,
-  /\bnot\s+ready\s+yet\b/i,
   /\btoo\s+early\s+(to\s+(book|decide|plan)|for\s+(a\s+)?(trip|tour|booking))/i,
 ]
 
