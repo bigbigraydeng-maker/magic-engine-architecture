@@ -410,13 +410,52 @@ function leadInAt(text: string, index: number): string {
   return text.slice(0, index)
 }
 
-/** 「他并没有要求别再联系」—— 命中词紧邻的前文是个否定。 */
-const NEGATED_LEAD_IN =
-  /\b(do|does|did|has|have|had|is|are|was|were|will|would|wo|ca|could|should)\s*n[o']?t\b[^.!?]{0,20}$|\bnever\b[^.!?]{0,20}$|\bnot\b[^.!?]{0,20}$|(不(想|要|会|愿意)|没有?|并未|未曾)[^，。]{0,10}$/i
+/**
+ * 否定词 / 时间词必须**真的修饰那句拒联**，不能「同一句里出现过」就算数
+ * （Codex 复审 2026-08-16）。
+ *
+ * 判在整句上会误伤两种再正常不过的写法：
+ *   `I'm not interested and please unsubscribe me` —— `not` 修饰的是
+ *     「不感兴趣」，后半句那句退订是**另一个谓语**，货真价实
+ *   `I asked today to unsubscribe me` —— `today` 说的是他**什么时候提的**，
+ *     不是「只是今天别联系」
+ * 两句都会被判成不拒联，然后照旧被联系 —— 正是这套判据要防的事。
+ *
+ * 所以看**距离**：否定得紧贴在命中词前面（`I don't · want to unsubscribe`
+ * 中间没东西；`not · interested and please · unsubscribe me` 隔了一整个谓语，
+ * 管不到后面那句）；时间词得紧跟在命中词后面（`don't call me **now**`）
+ * 或紧贴在前面（`**现在**别再打`）。
+ */
 
-/** 「只是这一阵别打」—— 带时间限定的暂时勿扰，不是永久拒联。 */
-const TEMPORARY_SCOPE =
-  /\b(right\s+now|for\s+now|at\s+the\s+moment|today|this\s+week|until|till|while|before)\b|\bnow\b|(现在|这几天|这阵子|今天|暂时|等.{0,6}(之后|以后|再))/i
+/** 否定词本身。 */
+const NEGATOR =
+  /(\b(do|does|did|has|have|had|is|are|was|were|will|would|wo|ca|could|should)\s*n[o']?t\b|\bnever\b|\bnot\b|不(想|要|会|愿意)|没有?|并未|未曾)/gi
+
+/** 否定词和命中词之间最多隔这么远，再远就不是在修饰它了。 */
+const NEGATOR_GAP = 8
+
+/** 命中词前面那个否定，是不是真的在否定它。 */
+function negatedRightBefore(leadIn: string): boolean {
+  NEGATOR.lastIndex = 0
+  let last: RegExpExecArray | null = null
+  for (let m = NEGATOR.exec(leadIn); m !== null; m = NEGATOR.exec(leadIn)) {
+    if (m[0].length === 0) NEGATOR.lastIndex++
+    last = m
+  }
+  if (!last) return false
+  const gap = leadIn.slice(last.index + last[0].length)
+  return gap.trim().length <= NEGATOR_GAP
+}
+
+/** 时间词 —— 只是这一阵别打，不是永久。 */
+const TIME_WORD =
+  /\b(right\s+now|for\s+now|at\s+the\s+moment|today|this\s+week|until|till|while|before|now)\b|(现在|这几天|这阵子|今天|暂时|等.{0,6}(之后|以后|再))/i
+
+/** 紧跟在命中词**后面**的时间词：`don't call me now` / `do not email her until…`。 */
+const TIME_WORD_TRAILING = new RegExp(`^\\s*(${TIME_WORD.source})`, 'i')
+
+/** 紧贴在命中词**前面**的时间词：`现在别再打`。 */
+const TIME_WORD_LEADING = new RegExp(`(${TIME_WORD.source})[\\s，,]{0,2}$`, 'i')
 
 /**
  * 这句「别再联系」算不算数。
@@ -457,11 +496,17 @@ function matchedUnnegated(
       // 零宽命中会让 lastIndex 不前进 —— 手动推一格，否则死循环。
       if (m[0].length === 0) re.lastIndex++
 
+      const leadIn = leadInAt(text, m.index)
+
       // 被否定 → 这一处不算数，看这条正则的下一处命中。
-      if (NEGATED_LEAD_IN.test(leadInAt(text, m.index))) continue
+      if (negatedRightBefore(leadIn)) continue
+
       // 只是暂时 → 同样不算数（他往往还在同一句里给了下次时间）。
-      if (opts.rejectTemporary && TEMPORARY_SCOPE.test(clauseAt(text, m.index, m[0].length))) {
-        continue
+      if (opts.rejectTemporary) {
+        const after = clauseAt(text, m.index, m[0].length).slice(
+          leadIn.length + m[0].length,
+        )
+        if (TIME_WORD_TRAILING.test(after) || TIME_WORD_LEADING.test(leadIn)) continue
       }
       return true
     }

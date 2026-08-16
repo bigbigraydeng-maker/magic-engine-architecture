@@ -794,3 +794,31 @@ describe('前半句被否掉，后半句真正的拒联还要看得见', () => {
     )
   })
 })
+
+/**
+ * 🔴 **否定 / 时间词必须真的修饰那句拒联**（Codex 复审 2026-08-16，R2）。
+ *
+ * 「同一句里出现过」就算数是不行的 —— 会误伤两种再正常不过的写法，
+ * 而且方向最危险：明确要求退订的人被判成可以继续联系。
+ */
+describe('否定和时间词要真的修饰那句拒联', () => {
+  it("🔴「I'm not interested and please unsubscribe me」→ 是拒联（not 修饰的是前半句）", () => {
+    expect(classifyNote("I'm not interested and please unsubscribe me").do_not_contact).toBe(true)
+  })
+
+  it('🔴「I asked today to unsubscribe me」→ 是拒联（today 说的是他什么时候提的）', () => {
+    expect(classifyNote('I asked today to unsubscribe me').do_not_contact).toBe(true)
+  })
+
+  it('否定紧贴着才算：「I don\'t want to unsubscribe」仍不是拒联', () => {
+    expect(classifyNote("I don't want to unsubscribe").do_not_contact).toBe(false)
+  })
+
+  it('时间词紧跟在后面才算：「don\'t call me now」仍不是永久拒联', () => {
+    expect(classifyNote("don't call me now, call me tomorrow").do_not_contact).toBe(false)
+  })
+
+  it('中文时间词紧贴在前面也算：「现在别再打电话」不是永久拒联', () => {
+    expect(classifyNote('客户说现在别再打电话给他').do_not_contact).toBe(false)
+  })
+})
