@@ -83,7 +83,13 @@ beforeEach(() => {
 })
 
 describe('群发的备注永远推不出「别再联系」', () => {
-  it('🔴 备注里带着退订页脚 → 一个人都不许被标成拒联', async () => {
+  /**
+   * 🔴 在**入口**挡掉，而不是在下游一处处补。上一版只写死了
+   * `do_not_contact: false`，但 `outcome` 仍是 `'do_not_contact'` ——
+   * `isDoNotContact()` 同样认那个值；而且这条触点以 `source: 'me_manual'` 存，
+   * 读的时候还会被当成「代表客人意愿」再升级一次。
+   */
+  it('🔴 备注里带着退订页脚 → 整批不写，并告诉调用方换一句', async () => {
     stubDb([{ id: 'c1' }, { id: 'c2' }])
     const res = await POST(
       req({
@@ -93,17 +99,25 @@ describe('群发的备注永远推不出「别再联系」', () => {
       ctx,
     )
 
-    expect(res.status).toBe(200)
-    expect(mocks.recordManualTouchpoint).toHaveBeenCalledTimes(2)
-    for (const call of mocks.recordManualTouchpoint.mock.calls) {
-      expect(call[0].parsed.do_not_contact).toBe(false)
-    }
+    expect(res.status).toBe(400)
+    expect(mocks.recordManualTouchpoint).not.toHaveBeenCalled()
+    expect((await res.json()).error).toContain('单独记一笔')
   })
 
-  it('🔴 就算备注直接写「客户说别再联系」也不行 —— 那不是这批人说的话', async () => {
+  it('🔴 备注直接写「客户说别再联系」→ 同样挡掉，那不是这批人说的话', async () => {
     stubDb([{ id: 'c1' }])
-    await POST(req({ contactIds: ['c1'], note: '客户说别再联系' }), ctx)
-    expect(mocks.recordManualTouchpoint.mock.calls[0][0].parsed.do_not_contact).toBe(false)
+    const res = await POST(req({ contactIds: ['c1'], note: '客户说别再联系' }), ctx)
+    expect(res.status).toBe(400)
+    expect(mocks.recordManualTouchpoint).not.toHaveBeenCalled()
+  })
+
+  it('正常的群发备注照常记，且不带拒联判词', async () => {
+    stubDb([{ id: 'c1' }])
+    const res = await POST(req({ contactIds: ['c1'], note: '群发了八月行程' }), ctx)
+    expect(res.status).toBe(200)
+    const parsed = mocks.recordManualTouchpoint.mock.calls[0][0].parsed
+    expect(parsed.do_not_contact).toBe(false)
+    expect(parsed.outcome).not.toBe('do_not_contact')
   })
 })
 

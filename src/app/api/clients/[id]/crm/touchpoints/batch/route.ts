@@ -177,22 +177,33 @@ export async function POST(
 
   // 整批共用一份解析结果。这句话是系统自己生成的、不含客户信息，
   // 送去 AI 解析 108 次既慢（整个请求必超时）又白花钱。规则层足够。
+  /**
+   * 🔴 **群发备注不许带着拒联判词进来**（Codex 复审 2026-08-16）。
+   *
+   * 上一版只把 `do_not_contact` 写死 false，但 `outcome` 仍是
+   * `rules.outcome === 'do_not_contact'` —— `isDoNotContact()` 同样认这个值，
+   * 于是最多 500 人照旧被拉黑。而且这条触点是以
+   * `direction: 'outbound'` + `source: 'me_manual'` 存的，读的时候
+   * `reclassifyStoredOutcome()` 把 `me_manual` 当成「代表客人意愿」，
+   * 还会**再升级一次**。
+   *
+   * 所以在入口就挡掉，而不是在下游一处处补：这句话是**我们自己**对这次群发
+   * 的描述，本来就不该含拒联语义。真有客人说了别再联系，走单条记一笔 ——
+   * 那才是一个人对一个人的判断。
+   */
   const rules = classifyNote(note)
+  if (rules.do_not_contact || rules.outcome === 'do_not_contact') {
+    return NextResponse.json(
+      {
+        error:
+          '这句备注里有「别再联系 / 退订」这类字样 —— 群发的备注会原样记到每个人身上，换一句只描述这次发了什么的话（例如「群发了八月行程」）。某个客人真的说了别再联系，请在他自己的卡片上单独记一笔。',
+      },
+      { status: 400 },
+    )
+  }
   const parsed: NoteParse = {
     outcome: rules.outcome,
-    /**
-     * 🔴 **群发的备注永远推不出「别再联系」**（Codex 复审 2026-08-16）。
-     *
-     * 这句 `note` 是**我们自己**对这次群发的描述（「群发了一封邮件」，或者
-     * 调用方粘进来的发送说明 / 邮件摘要）—— 不是任何一个客人说的话。里面
-     * 只要出现一次 `unsubscribe from the list` 这种页脚原文，这一整批
-     * **最多 500 个人**就会被同一份判词一起拉黑，而取消是一次一个人的，
-     * 没有批量入口。
-     *
-     * 上一轮给读路径加的「只认代表客人意愿的记录」那道方向闸管不到这里 ——
-     * 这是**写**路径。所以在这里写死：群发只记「我们联系过他」，
-     * 客人拒不拒联只能来自他自己的话（单条记一笔 / 入站消息）。
-     */
+    // 走到这里说明备注里没有拒联语义（上面已经 400 挡掉了），写死更保险。
     do_not_contact: false,
     travel_window: null,
     tour_interest: null,

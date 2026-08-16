@@ -128,7 +128,13 @@ const DNC_PATTERNS: RegExp[] = [
    * 必须明确指向营销联系本身。
    */
   /opt(ed)?\s*(me|him|her|them|us)?\s*out\s*(of\s*)?(all\s*)?(your\s*|our\s*|the\s*)?(email|mail|marketing|newsletter|communication|contact|promo)/i,
-  /no\s*(further|more)\s*contact/i,
+  /**
+   * ⚠️ 「no further contact」也不能裸词（Codex 复审 2026-08-16）：销售手记里
+   * `No further contact since quote was sent`（报价后还没再联系上）和
+   * `No more contact details were provided`（没留更多联系方式）说的都是
+   * **现状**，不是客人的要求。必须是他在**要求**停止联系。
+   */
+  /((wants?|requests?|asked\s*for|please)\s*)no\s*(further|more)\s*contact|no\s*(further|more)\s*contact\s*(please|requested|wanted)/i,
   // 🔴 `not intending to go` **从这一组移走了**（Codex 复审 2026-08-16）。
   //
   // 它说的是「我不打算去」，不是「别再联系我」。而这一组会把

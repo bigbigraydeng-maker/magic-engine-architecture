@@ -677,3 +677,23 @@ describe('opt out 必须指向营销联系，不是某个自费项目', () => {
     expect(classifyNote('please opt me out of your newsletter').do_not_contact).toBe(true)
   })
 })
+
+/**
+ * 🔴 「no further contact」在销售手记里最常见的意思是**陈述现状**
+ * （Codex 复审 2026-08-16）：报价后还没再联系上、没留更多联系方式。
+ * 而手工触点的 source 是 me_manual —— 会被存量重判当成客人意愿。
+ */
+describe('no further contact 必须是客人在要求，不是陈述现状', () => {
+  it('🔴「No further contact since quote was sent」→ 不是拒联', () => {
+    expect(classifyNote('No further contact since quote was sent').do_not_contact).toBe(false)
+  })
+
+  it('🔴「No more contact details were provided」→ 不是拒联', () => {
+    expect(classifyNote('No more contact details were provided').do_not_contact).toBe(false)
+  })
+
+  it('客人真的要求停止联系 → 照旧是拒联', () => {
+    expect(classifyNote('customer wants no further contact').do_not_contact).toBe(true)
+    expect(classifyNote('no further contact please').do_not_contact).toBe(true)
+  })
+})
