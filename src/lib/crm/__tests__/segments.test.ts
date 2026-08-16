@@ -112,6 +112,44 @@ describe('号码打不通 ≠ 这个人不要了', () => {
   })
 
   /**
+   * 🔴 **坏号不是永久判决**（Codex 复审 2026-08-16）。
+   *
+   * 号码会被改对（FDE 补一个新号），当初也可能就标错了。语音桥接接通时会写
+   * 一条 `spoke` —— 「标错之后又打通了」是真实可发生的。永久判死的话，一个
+   * 已经打得通的号会被永远藏起来，销售还会看到「这个号打不通」，
+   * 而他手上刚打通过 —— 这一页当场失去可信度。
+   */
+  it('后来真的打通过 → 电话这条路恢复，不再说它打不通', () => {
+    const c = contact({
+      touchpoints: [
+        form('2026-07-01T00:00:00Z'),
+        call('2026-07-02T00:00:00Z', 'bad_number'),
+        call('2026-07-20T00:00:00Z', 'spoke'),
+        { channel: 'email', direction: 'inbound', occurredAt: '2026-07-26T02:00:00Z' },
+      ],
+      hasPhone: true,
+      hasEmail: true,
+    })
+    const r = segmentContact(c, NOW)
+    expect(r.phoneUnusable).toBe(false)
+    expect(r.suggestedChannel).toBe('phone')
+  })
+
+  /** 「打了没人接」不是「号码是坏的」—— 中午没接的人晚上会接。 */
+  it('坏号之后只是没人接 → 仍然算打不通，别把电话又推回去', () => {
+    const c = contact({
+      touchpoints: [
+        call('2026-07-02T00:00:00Z', 'bad_number'),
+        call('2026-07-20T00:00:00Z', 'no_answer'),
+        { channel: 'email', direction: 'inbound', occurredAt: '2026-07-26T02:00:00Z' },
+      ],
+      hasPhone: true,
+      hasEmail: true,
+    })
+    expect(segmentContact(c, NOW).phoneUnusable).toBe(true)
+  })
+
+  /**
    * 调用方一个联系方式字段都没给（老调用方）→ 不凭空判他联系不上。
    * 本文件一贯的偏向：多一个人是噪音，少一个是丢单。
    */

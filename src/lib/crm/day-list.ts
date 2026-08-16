@@ -68,7 +68,40 @@
  */
 
 import type { ContactLike, SegmentResult, TouchpointLike } from './segments'
-import { compareForWorklist, segmentContact } from './segments'
+import { compareForWorklist, reachableChannel, segmentContact } from './segments'
+
+/**
+ * 冻结版 + 两个**永远不该被冻结**的显示值。
+ *
+ * 冻结要挡住的是「我们今天做了什么」对**位置**的影响。但下面两件事跟位置
+ * 无关，冻结它们只会让卡片说错话：
+ *
+ * **① 约好几点回电（`dueAt`）** —— 今晨刚约的「今天 14:00」被冻结版丢掉，
+ * 卡片会翻出身上那个过期旧约，销售拿起电话第一句就说错。
+ *
+ * **② 电话通不通（`phoneUnusable` / 建议渠道）**（Codex 复审 2026-08-16）——
+ * 销售今天刚标了「号码是坏的」，那条出站触点会被 `withoutOurActionsSince`
+ * 从冻结副本里摘掉，于是冻结版照旧认为电话能打，卡上**继续挂着那个号码的
+ * 拨号链接**，要到明天才承认它是坏的。他刚刚才发现打不通，系统却请他再打一次。
+ *
+ * 「这条路通不通」是**渠道事实**，不是「我们今天做过什么」—— 一开始就不该
+ * 进冻结的范围。这里只把电话那一路按实时结果降级，桶和排序仍然全按冻结版。
+ */
+function withLiveReach(
+  frozen: SegmentResult,
+  live: SegmentResult,
+  contact: ContactLike,
+): SegmentResult {
+  const seg = { ...frozen, dueAt: live.dueAt ?? frozen.dueAt }
+  if (!live.phoneUnusable || frozen.phoneUnusable) return seg
+  return {
+    ...seg,
+    phoneUnusable: true,
+    // 用冻结版原本想要的渠道重新解一次，只是这次电话不算数 ——
+    // 直接抄 live.suggestedChannel 会把冻结版的桶意图一起换掉。
+    suggestedChannel: reachableChannel(frozen.suggestedChannel, { ...contact, hasPhone: false }),
+  }
+}
 
 /** 一个人今天在名单上的样子，外加「今天动过他没有」。 */
 export interface DayRow {
@@ -190,7 +223,7 @@ export function dayRow(contact: ContactLike, now: Date, opts: DayRowOptions): Da
      * 方向、时间、通话结果、出行意向**全部**对冻结版可见 —— 冻结当场失效。
      * 真正需要逃出冻结的只有 `dueAt` 这一个显示值。
      */
-    seg: escalated ? live : { ...frozen, dueAt: live.dueAt ?? frozen.dueAt },
+    seg: escalated ? live : withLiveReach(frozen, live, contact),
     onList,
     /**
      * 🔴 **升级过的人绝不能算「已处理」。**

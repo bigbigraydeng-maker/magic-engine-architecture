@@ -399,6 +399,30 @@ function ts(v: string | null | undefined): number {
 }
 
 /**
+ * 只有这两种结果算「对这条电话线的判决」。
+ *
+ * `no_answer`（打了没人接）**故意不在里面** —— 没人接不代表号码是坏的，
+ * 中午没接的人晚上会接。把它算进来，等于因为一次没接就把电话这条路关掉。
+ */
+const PHONE_VERDICTS: ReadonlySet<string> = new Set(['bad_number', 'spoke'])
+
+/**
+ * 这条电话线现在通不通 —— **看最后一次判决，不看历史上有没有出现过坏号**。
+ *
+ * ⚠️ 不能用「只要出现过 bad_number 就永久判死」（Codex 复审 2026-08-16）：
+ * 号码会被改对（FDE 补一个新号）、也可能当初就标错了，之后真的打通过。
+ * 语音桥接接通时会写一条 `spoke`，所以「标错之后又打通了」是真实可发生的。
+ * 永久判死的话，一个已经打得通的号码会被永远藏起来，销售还会看到一句
+ * 「这个号打不通」—— 他手上刚打通过，这一页当场失去可信度。
+ */
+function phoneLineIsDead(tps: TouchpointLike[]): boolean {
+  const latest = tps
+    .filter((t) => t.outcome && PHONE_VERDICTS.has(t.outcome))
+    .sort((a, b) => ts(b.occurredAt) - ts(a.occurredAt))[0]
+  return latest?.outcome === 'bad_number'
+}
+
+/**
  * 一个人属于哪一段。
  *
  * `now` 必须显式传进来，段位才可测 —— 「约的时间到没到」完全取决于它。
@@ -455,7 +479,7 @@ export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
     contact.hasPhone !== undefined ||
     contact.hasEmail !== undefined ||
     contact.hasMessenger !== undefined
-  const phoneIsDead = outcomes.includes('bad_number')
+  const phoneIsDead = phoneLineIsDead(tps)
   const reach = phoneIsDead && reachKnown ? { ...contact, hasPhone: false } : contact
 
   const make = (segment: Segment, reason: string, ch: SegmentResult['suggestedChannel'], dueAt: string | null = null) => ({

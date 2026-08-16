@@ -1034,3 +1034,47 @@ describe('推迟 / 取消推迟不算「我们出手了」', () => {
     expect(r.handled).toBe(true)
   })
 })
+
+/**
+ * 🔴 **「这条路通不通」不该被冻结**（Codex 复审 2026-08-16）。
+ *
+ * 冻结要挡住的是「我们今天做了什么」对**位置**的影响。但销售今天刚标了
+ * 「号码是坏的」，那条出站触点会被 `withoutOurActionsSince` 从冻结副本里
+ * 摘掉 —— 冻结版照旧认为电话能打，卡上**继续挂着那个号码的拨号链接**，
+ * 要到明天才承认它是坏的。他刚刚才发现打不通，系统却请他再打一次。
+ */
+describe('号码今天刚标坏，卡片当天就得认', () => {
+  const markedBadToday = (over: Partial<ContactLike> = {}) =>
+    person(
+      [
+        ...YESTERDAY_LEAD,
+        tp({
+          direction: 'outbound',
+          channel: 'phone',
+          occurredAt: '2026-08-05T03:00:00.000Z',
+          outcome: 'bad_number',
+        }),
+      ],
+      { hasPhone: true, hasEmail: true, ...over },
+    )
+
+  it('当天就说「这个号打不通」，不用等到明天', () => {
+    expect(row(markedBadToday(), true).seg.phoneUnusable).toBe(true)
+  })
+
+  it('建议渠道当天就降级到邮件 —— 别再把那个号推回去让他打', () => {
+    expect(row(markedBadToday(), true).seg.suggestedChannel).toBe('email')
+  })
+
+  /** 但位置照旧按冻结版走 —— 这才是「名单一天不变」那条规则本身。 */
+  it('人还留在原来那一批，没因为标了坏号就换位置', () => {
+    expect(row(markedBadToday(), true).seg.segment).toBe('new_untouched')
+  })
+
+  /** 没标坏号的人，一个字都不该变。 */
+  it('号码好好的人不受影响', () => {
+    const r = row(person(YESTERDAY_LEAD, { hasPhone: true, hasEmail: true }))
+    expect(r.seg.phoneUnusable).toBe(false)
+    expect(r.seg.suggestedChannel).toBe('phone')
+  })
+})
