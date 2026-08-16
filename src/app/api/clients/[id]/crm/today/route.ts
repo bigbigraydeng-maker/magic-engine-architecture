@@ -28,6 +28,7 @@ import {
   engagementFromMetadata,
   isPhoneVerdict,
   isFailedReach,
+  latestIntentVerdict,
 } from '@/lib/crm/segments'
 import { reclassifyStoredOutcome } from '@/lib/crm/note-parser'
 import { WORKLIST_GROUPS, groupDisplayMeta } from '@/lib/crm/worklist-groups'
@@ -511,11 +512,13 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
   ): StageSuggestion | null => {
     if (!deferStage) return null
     if (currentStage === deferStage.stage_key) return null
-    // 只认**最近一次**的结果：他后来又聊热了的话，这条早就不成立了。
-    const latest = [...c.touchpoints]
-      .filter((t) => t.outcome)
-      .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())[0]
-    if (latest?.outcome !== 'not_interested_now') return null
+    // 🔴 判据必须跟 `segmentContact` 用**同一个函数**（Codex 复审 2026-08-16）。
+    //
+    // 原先这里取「最近一次的任意结果」：这个人按建议收到一封群发之后，
+    // 群发写下的那笔兜底 `spoke` 会更晚，于是分段那边靠 latestIntentVerdict
+    // 照旧把他留在「交给系统跟」，而这条提议**当场消失** —— 同一件事两处
+    // 判法不同，页面自相矛盾。今天已经在别处栽过两次，这次不再写第二套。
+    if (latestIntentVerdict(c.touchpoints) !== 'not_interested_now') return null
 
     return {
       toStage: deferStage.stage_key,

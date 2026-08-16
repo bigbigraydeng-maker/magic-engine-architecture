@@ -326,8 +326,27 @@ describe('暂时不考虑 ≠ 明确不要了', () => {
    * 那明明是**约了回电**，却被判成「暂时不考虑」，回电时间也一并丢了，
    * 这个人还会收到一个「改成短期内不考虑」的提议。
    */
-  it('「not ready to talk, call back tomorrow」→ 约了回电，不是不考虑', () => {
-    expect(outcome('not ready to talk, call back tomorrow')).toBe('callback_set')
+  it.each([
+    ['not ready to talk, call back tomorrow'],
+    ['not ready to talk yet, call back tomorrow'],
+  ])('「%s」→ 约了回电，不是不考虑', (note) => {
+    expect(outcome(note)).toBe('callback_set')
+  })
+
+  /**
+   * 🔴 **过去时的犹豫不算数**（Codex 复审 2026-08-16）。
+   *
+   * 「was thinking about it, but now ready to book」前半句是过去时、后半句才是
+   * 结论。裸词会把一个**正要成交**的人判成「暂时不考虑」、移出销售名单 ——
+   * 而规则结果模型覆盖不了。
+   */
+  it('「还在犹豫，但现在打算订了」→ 不许判成暂时不考虑', () => {
+    expect(outcome('was thinking about it, but now ready to book')).not.toBe('not_interested_now')
+  })
+
+  it('对照：真的还在犹豫 → 照旧算暂时不考虑', () => {
+    expect(outcome('still thinking about it')).toBe('not_interested_now')
+    expect(outcome('thinking about it')).toBe('not_interested_now')
   })
 
   it.each([

@@ -202,10 +202,17 @@ const SOFT_NO_PATTERNS: RegExp[] = [
   /(等|要等).{0,8}(再|才)(说|定|联系|考虑)/,
   // 英文。「not interested right now」中间隔着词，所以 not…now 之间放宽 ——
   // 但只放 20 个字符，免得跨过整句去误配（「not going, call me now」）。
-  /\bnot\s+(interested|going|ready|intending|planning)\b.{0,20}\b(right now|at the moment|yet|this year)\b/i,
-  /\bnot\s+(interested|going|ready)\s+(right\s+)?now\b/i,
+  // ⚠️ `ready` 不在这一条里（Codex 复审 2026-08-16）：留着的话
+  // 「not ready to talk **yet**, call back tomorrow」还是会被吃掉，
+  // 约好的回电一并丢了。`ready` 一律走下面绑住买卖语义的那两条。
+  /\bnot\s+(interested|going|intending|planning)\b.{0,20}\b(right now|at the moment|yet|this year)\b/i,
+  /\bnot\s+(interested|going)\s+(right\s+)?now\b/i,
   /\bmaybe\s+(later|next\s+year)\b/i,
-  /\b(think|thinking)\s+(about\s+it|it\s+over)\b/i,
+  // ⚠️ 「还在犹豫」只算**当下仍然犹豫**（Codex 复审 2026-08-16）。
+  // 「was thinking about it, but now ready to book」里那半句是**过去时**，
+  // 后半句才是结论。裸词会把一个正要成交的人判成「暂时不考虑」、
+  // 移出销售名单 —— 而规则结果模型覆盖不了。
+  /\b(?:still\s+)?(?:is|are|he's|she's|they're)?\s*think(?:s|ing)?\s+(about\s+it|it\s+over)\b(?!.*\b(now|but)\b.{0,30}\b(ready|book|booking|keen|confirm)\b)/i,
   /\bhave\s+a\s+think\b/i,
   // ⚠️ `ready` / `early` 必须绑住**买卖或出行**（Codex 复审 2026-08-16）：
   // 裸的 `not ready` 会吃掉「not ready to talk, call back tomorrow」——

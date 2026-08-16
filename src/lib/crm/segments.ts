@@ -471,7 +471,7 @@ const INTENT_VERDICTS: ReadonlySet<string> = new Set([
   'do_not_contact',
 ])
 
-function latestIntentVerdict(tps: TouchpointLike[]): string | null {
+export function latestIntentVerdict(tps: TouchpointLike[]): string | null {
   const latest = tps
     .filter((t) => t.outcome && INTENT_VERDICTS.has(t.outcome))
     .sort((a, b) => ts(b.occurredAt) - ts(a.occurredAt))[0]
