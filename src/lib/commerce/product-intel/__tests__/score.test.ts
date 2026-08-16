@@ -140,6 +140,17 @@ describe('五道闸', () => {
     expect(g?.reason).toContain('270')
   })
 
+  it('🔴 门槛放宽到 100（PM 2026-08-16）：合计 150 过、合计 50 砍', () => {
+    // 过去 200 门槛会把外溢需求（合计 150）误砍，现在放行。
+    expect(gateOf(candidate({
+      demand: [demand('AU', 90, 'flat'), demand('NZ', 60, 'flat')],
+    }), 'aunz_searched')?.outcome).toBe('PASS')
+    // 但真的太薄（合计 50）仍然砍 —— 松的是门槛，不是拆掉这道闸。
+    expect(gateOf(candidate({
+      demand: [demand('AU', 30, 'flat'), demand('NZ', 20, 'flat')],
+    }), 'aunz_searched')?.outcome).toBe('FAIL')
+  })
+
   it('🔴 本地有低价倾销 = 一票否决', () => {
     const s = score(candidate({ localMarket: localMarket(49.9, true, 20) }))
     expect(s.gates.find((g) => g.gate === 'no_local_dumping')?.outcome).toBe('FAIL')
