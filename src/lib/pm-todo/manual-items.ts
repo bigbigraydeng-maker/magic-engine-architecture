@@ -61,6 +61,9 @@ export type ManualItemKind =
   | 'price_claim_unbacked'
   | 'auto_run_blocked'
   | 'auto_run_stuck'
+  /** 被一句「不打算去」误判成永久拒联 —— 只有人能看一眼原话再决定 */
+  | 'dnc_maybe_wrong'
+  | CommentScopeTodoKind
   /** 执行内核停手 / 等审批 / 被规则挡下 —— 必须有人看见，不许死在日志里 */
   | 'kernel_needs_human'
   | AttributionItemKind
@@ -121,11 +124,13 @@ import { judgeWorkerPresence } from '@/lib/factory/worker-presence'
 import { auditGoalBaselines } from '@/lib/strategy/baseline-audit'
 import { fetchBlogDraftTodos } from '@/lib/pm-todo/blog-drafts'
 import { fetchAutoRunTodos } from '@/lib/pm-todo/auto-run-items'
+import { fetchCommentScopeTodos, type CommentScopeTodoKind } from '@/lib/pm-todo/comment-scope-items'
 import { fetchKernelHandoffTodos } from '@/lib/kernel/handoff'
 import { auditCrossClientLeaks } from '@/lib/clients/cross-client-audit'
 import { containsPriceClaim } from '@/lib/content/price-claim'
 import { judgeOutgoingPost } from '@/lib/content/price-claim-gate'
 import { SOURCE_LABELS } from '@/lib/assets/provenance'
+import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
 
 export function daysAgo(iso: string | null, now: Date): number | null {
   if (!iso) return null
@@ -238,6 +243,11 @@ export async function loadManualItems(
     console.warn('[manual-items] 自动执行待办生成失败（不阻塞其他待办）:', e),
   )
 
+  // 评论读不到（缺权限 / 令牌被拒）—— 只有人能补，日志里那行 console.error 没人会看
+  await pushCommentScopeItems(supabase, items, now, nameOf).catch((e) =>
+    console.warn('[manual-items] 评论权限待办生成失败（不阻塞其他待办）:', e),
+  )
+
   // 执行内核停手的 / 等你点头的 / 被规则挡下的 —— 死信不许只写进库里没人看
   await pushKernelItems(supabase, items, now, nameOf).catch((e) =>
     console.warn('[manual-items] 执行内核待办生成失败（不阻塞其他待办）:', e),
@@ -247,6 +257,11 @@ export async function loadManualItems(
   // 实测查到 CTS 的发布通道指向 Oztop 的网站，填错两个多月没人发现。
   await pushCrossClientItems(supabase, items).catch((e) =>
     console.warn('[manual-items] 串台检查失败（不阻塞其他待办）:', e),
+  )
+
+  // 可能被一句「不打算去」误判成永久拒联的人 —— 刻意不自动解除，交给人看一眼。
+  await pushDncReviewItems(supabase, items, ids, nameOf).catch((e) =>
+    console.warn('[manual-items] 拒联复核待办生成失败（不阻塞其他待办）:', e),
   )
 
   // 归因侧两条通道（黑洞 / 孤儿数据），理由见 attribution-items.ts
@@ -683,6 +698,146 @@ async function pushBaselineItems(supabase: SupabaseClient, items: ManualItem[]):
  * 这条**不按客户过滤**：串台天生涉及两个客户，任何一方被过滤掉都会让问题
  * 从待办里消失。也不做「只报 active 客户」—— 潜客的资料串进正式客户同样是事故。
  */
+/**
+ * 可能被误判成「永久别再联系」的人。
+ *
+ * 🔴 **这一条是刻意不自动化的**（PM 2026-08-16）。
+ *
+ * 旧的判词把「not intending to go」（我不打算去）当成了「别再联系我」，而
+ * `contacts.do_not_contact` 是全系统最重的一个标记：**任何渠道都不许再发**。
+ * 词表已经改好，新写的备注不会再落这个坑，但**存量那几个人不会自己回来**。
+ *
+ * 为什么不写自动解除：本仓一贯的判断是「漏判是骚扰，误判只是少打一通」。
+ * 让一段正则去**解开**这个闸，方向恰好反了 —— 万一某人原话里同时含着真正的
+ * 拒绝，我们就会去骚扰一个明确说过别联系的客人。这是客户红线，不该由规则来赌。
+ *
+ * 所以按铁律 3 的下半条办：**确实不该自动化，就下发成人工任务，且进同一个管道**。
+ * 判据只挑「原话里只有『不打算去』、没有任何划界限说法」的那些 —— 真的说过
+ * 「别再联系 / 不要打电话 / 只邮件联系」的人不在里面，不会被打扰。
+ */
+interface ContactRowForDnc {
+  id: string
+  client_id: string
+  display_name: string
+  do_not_contact?: boolean
+}
+
+export async function pushDncReviewItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  ids: string[],
+  nameOf: (id: string) => string,
+): Promise<void> {
+  if (ids.length === 0) return
+
+  /**
+   * 候选人从**两头**取（Codex 复审 2026-08-16）：
+   *
+   *   · 镜像列 `do_not_contact = true` 的
+   *   · 触点里说过拒联的 —— 那才是真相源
+   *
+   * 只按镜像列筛会漏掉最该被复核的一批：写触点成功、镜像列那一步失败的人。
+   * 那种半写入状态确实存在（取消接口正因为它才回 500），而这些人恰恰
+   * **被今日名单和分段当成拒联继续排除着** —— 漏了他们，这条任务就白设了。
+   */
+  const { data: flaggedRows } = await supabase
+    .from('contacts')
+    .select('id, client_id, display_name, do_not_contact')
+    .in('client_id', ids)
+    .eq('do_not_contact', true)
+
+  const { data: dncTouchRows } = await supabase
+    .from('contact_touchpoints')
+    .select('contact_id')
+    .in('client_id', ids)
+    .eq('metadata->>outcome', 'do_not_contact')
+
+  const extraIds = Array.from(
+    new Set(((dncTouchRows ?? []) as { contact_id: string }[]).map((t) => t.contact_id)),
+  ).filter((id) => !(flaggedRows ?? []).some((c) => (c.id as string) === id))
+
+  let contacts = (flaggedRows ?? []) as ContactRowForDnc[]
+  if (extraIds.length > 0) {
+    const { data: extra } = await supabase
+      .from('contacts')
+      .select('id, client_id, display_name, do_not_contact')
+      .in('client_id', ids)
+      .in('id', extraIds)
+    contacts = contacts.concat((extra ?? []) as ContactRowForDnc[])
+  }
+  if (contacts.length === 0) return
+
+  const { data: touches } = await supabase
+    .from('contact_touchpoints')
+    // metadata / occurred_at 是给判据用的：有人纠正过「这条判错了」之后，
+    // 这条任务不许再冒出来 —— 否则 FDE 每天被同一个已经处理完的人骚扰一次。
+    .select('contact_id, raw, metadata, occurred_at')
+    .in('contact_id', contacts.map((c) => c.id as string))
+  if (!touches) return
+
+  /** 客户真的在划界限的说法 —— 命中任何一条就不算误判，别去打扰。 */
+  const BOUNDARY =
+    /do not follow up|no need\s*(to\s*)?follow up|do(es)? not want to talk|do not (like|want) (phone|call)|不要.?电话|不需要联系|别再(联系|打)|只邮件联系/i
+  const SOFT = /not intending to go/i
+
+  const byContact = new Map<string, string[]>()
+  const touchesByContact = new Map<string, DncTouch[]>()
+  for (const t of touches) {
+    const cid = t.contact_id as string
+    const list = byContact.get(cid) ?? []
+    if (typeof t.raw === 'string' && t.raw) list.push(t.raw)
+    byContact.set(cid, list)
+
+    const meta = (t.metadata ?? {}) as Record<string, unknown>
+    const dncList = touchesByContact.get(cid) ?? []
+    dncList.push({
+      outcome: (meta.outcome as string) ?? null,
+      flagged: meta.do_not_contact === true,
+      occurredAt: t.occurred_at as string,
+    })
+    touchesByContact.set(cid, dncList)
+  }
+
+  for (const c of contacts) {
+    /**
+     * 🔴 **别再拿那一列当判据**（Codex 复审 2026-08-16）。
+     *
+     * `contacts.do_not_contact` 是尽力维护的镜像，写失败过。人已经点过
+     * 「判错了，放回名单」、纠正的触点也写好了，只要那一次镜像更新没成功，
+     * 这条任务第二天照旧冒出来 —— FDE 会以为自己上次点的按钮是假的。
+     * 判据只有一份，见 `lib/crm/dnc`。
+     */
+    // 镜像列按它**实际的值**传，别写死：只按触点找来的那批，列可能是 false
+    // （正是「触点写成功、镜像那一步失败」的那种半写入状态）。
+    if (!isDoNotContact(c.do_not_contact === true, touchesByContact.get(c.id as string) ?? [])) {
+      continue
+    }
+
+    const raws = byContact.get(c.id as string) ?? []
+    if (raws.some((r) => BOUNDARY.test(r))) continue
+    if (!raws.some((r) => SOFT.test(r))) continue
+
+    const name = (c.display_name as string) || '未留姓名'
+    items.push({
+      kind: 'dnc_maybe_wrong',
+      client_id: c.client_id as string,
+      client_name: nameOf(c.client_id as string),
+      what: `${name} 被标成「永久别再联系」，但他原话只说了「不打算去」—— 可能是系统早前判错了，这个人现在收不到我们任何消息`,
+      how: '点链接直接就展开到他了 —— 联系方式下面有一条黄条写着「他被标成别再联系」。先看黄条下面的往来记录，确认他原话只是「不打算去」、没说过「别再打给我」，再点黄条上的「判错了？点这里放回名单」',
+      /**
+       * 🔴 绝对网址 —— 相对路径会被链接闸判成 broken，整条待办被丢掉
+       *    （狄仁杰 2026-08-05 实测 kept=0，理由见 pushCrossClientItems）。
+       *
+       * 🔴 `?contact=` 这个参数「全部客人」那一页**真的读**（Codex 复审
+       *    2026-08-16）：点进去自动展开到这个人，并且那一页就有取消入口。
+       *    改这个链接前先确认新落点也满足这两条 —— 否则 FDE 点进去只会看到
+       *    一张 583 行的表，还得自己搜名字，进去了也找不到上面说的那个按钮。
+       */
+      href: `https://app.magicengine.com.au/dashboard/clients/${c.client_id as string}/crm/all?contact=${c.id as string}`,
+    })
+  }
+}
+
 async function pushCrossClientItems(supabase: SupabaseClient, items: ManualItem[]): Promise<void> {
   const findings = await auditCrossClientLeaks(supabase)
   for (const f of findings) {
@@ -752,6 +907,31 @@ async function pushAutoRunItems(
   for (const t of todos) {
     items.push({
       kind: t.stuck ? 'auto_run_stuck' : 'auto_run_blocked',
+      client_id: t.client_id,
+      client_name: nameOf(t.client_id),
+      what: t.what,
+      how: t.how,
+      href: t.href,
+    })
+  }
+}
+
+/**
+ * 评论自动回复读不到评论 → 下发。
+ *
+ * 判定与文案都在 `comment-scope-items.ts`：那边直接读 cron 自己写的运行记录，
+ * 所以这里说的话跟机器真遇到的失败永远一致。
+ */
+async function pushCommentScopeItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+  nameOf: (id: string) => string,
+): Promise<void> {
+  const todos = await fetchCommentScopeTodos(supabase, now)
+  for (const t of todos) {
+    items.push({
+      kind: t.kind,
       client_id: t.client_id,
       client_name: nameOf(t.client_id),
       what: t.what,
