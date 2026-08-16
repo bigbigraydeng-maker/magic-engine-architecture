@@ -442,13 +442,29 @@ function matchedUnnegated(
   opts: { rejectTemporary?: boolean } = {},
 ): boolean {
   for (const p of patterns) {
-    const m = new RegExp(p.source, p.flags.includes('g') ? p.flags : p.flags + 'g').exec(text)
-    if (!m) continue
-    // 被否定 → 这一条不算数，继续看有没有别的词命中。
-    if (NEGATED_LEAD_IN.test(leadInAt(text, m.index))) continue
-    // 只是暂时 → 同样不算数（他往往还在同一句里给了下次时间）。
-    if (opts.rejectTemporary && TEMPORARY_SCOPE.test(clauseAt(text, m.index, m[0].length))) continue
-    return true
+    /**
+     * 🔴 **同一条词表要走完所有命中**（Codex 复审 2026-08-16）。
+     *
+     * 只看第一次命中的话，第一次被否掉就直接换下一条正则了 ——
+     * 「I don't want to unsubscribe, **actually please unsubscribe me**」
+     * 前半句被正确否掉，后半句那句真正的退订**根本没被看到**，
+     * 于是这个人照旧会被联系。前半句是幌子，后半句才是他的结论。
+     *
+     * 每条正则都从头扫到尾，找到一个站得住的命中就成立。
+     */
+    const re = new RegExp(p.source, p.flags.includes('g') ? p.flags : p.flags + 'g')
+    for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+      // 零宽命中会让 lastIndex 不前进 —— 手动推一格，否则死循环。
+      if (m[0].length === 0) re.lastIndex++
+
+      // 被否定 → 这一处不算数，看这条正则的下一处命中。
+      if (NEGATED_LEAD_IN.test(leadInAt(text, m.index))) continue
+      // 只是暂时 → 同样不算数（他往往还在同一句里给了下次时间）。
+      if (opts.rejectTemporary && TEMPORARY_SCOPE.test(clauseAt(text, m.index, m[0].length))) {
+        continue
+      }
+      return true
+    }
   }
   return false
 }

@@ -774,3 +774,23 @@ describe('「他现在就想订」同样怕被否定', () => {
     expect(classifyNote('now ready to book').outcome).toBe('spoke')
   })
 })
+
+/**
+ * 🔴 **同一条词表要走完所有命中**（Codex 复审 2026-08-16，R2）。
+ *
+ * 只看第一次命中的话，第一次被否掉就直接换下一条正则 —— 后面那句真正的
+ * 拒联根本没被看到。前半句是幌子，后半句才是他的结论。
+ */
+describe('前半句被否掉，后半句真正的拒联还要看得见', () => {
+  it("🔴「I don't want to unsubscribe, actually please unsubscribe me」→ 是拒联", () => {
+    expect(
+      classifyNote("I don't want to unsubscribe, actually please unsubscribe me").do_not_contact,
+    ).toBe(true)
+  })
+
+  it("🔴「don't call me now, actually do not call me again」→ 是拒联", () => {
+    expect(classifyNote("don't call me now, actually do not call me again").do_not_contact).toBe(
+      true,
+    )
+  })
+})
