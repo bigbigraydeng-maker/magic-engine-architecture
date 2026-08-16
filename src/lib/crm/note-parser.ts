@@ -255,6 +255,28 @@ const CALLBACK_PATTERNS: RegExp[] = [
   /\bcallback\b/i,
 ]
 
+/**
+ * **他现在就想买** —— 出现这类说法时，前面那半句犹豫一概不算数。
+ *
+ * 🔴 这是对**一整族问题**的一次性修法（Codex 复审 2026-08-16 第七/八轮）。
+ *
+ * 前七轮里反复出现同一种形状：一句备注前半句是过去的犹豫、后半句是当下的
+ * 结论，而软拒绝词命中了前半句 ——「was thinking about it, **but now ready to
+ * book**」「之前不考虑，**但现在想去**」「客户之前说考虑一下，**但现在想报名**」。
+ * 每次都给那一条正则单独加负向前瞻，是在按词打地鼠：换个说法就再冒一个。
+ *
+ * 所以改成**一条独立的判断**，在软拒绝之前先问一句「他现在是不是要买了」。
+ * 一条规则覆盖全族，以后再冒新说法只需要往这一个词表里加。
+ */
+const POSITIVE_INTENT_NOW: RegExp[] = [
+  // ⚠️ 中间**不许夹否定词**：「目前**没**打算去」是软拒绝，不是想买。
+  /(现在|如今|这次|目前)[^不没未别无]{0,4}(想|要|打算|准备)(报名|订|定|买|走|去|出发|确认)/,
+  /(决定|确定)了?[^不没未别无]{0,4}(要|想)?(报名|订|定|买|走|去|出发)/,
+  /(now|finally).{0,20}(ready to (book|go|travel|pay)|wants? to (book|go|travel)|keen to (book|go))/i,
+  /ready to (book|pay|confirm)/i,
+  /(confirmed|going ahead|will book)/i,
+]
+
 function anyMatch(text: string, patterns: RegExp[]): boolean {
   return patterns.some((p) => p.test(text))
 }
@@ -282,6 +304,18 @@ export function classifyNote(raw: string): {
   //    两边都命中，前半句是犹豫、后半句是这单已经没了。软的赢会让一个已经
   //    在别家下单的人继续收我们的跟进邮件。
   if (anyMatch(t, BOOKED_ELSEWHERE_PATTERNS)) return { outcome: 'not_interested', do_not_contact: false }
+  // 🔴 **明确约好的回电压过软拒绝**（Codex 复审 2026-08-16，一次性解决一整族）。
+  //
+  //    前几轮反复出现同一种形状：「not ready **to talk**, call back tomorrow」
+  //    「not going **to talk** right now, call back tomorrow」—— 软拒绝词吃掉了
+  //    前半句，**约好的回电整个丢了**，人还被移去「交给系统跟」。
+  //    每次给那一个词单独绑买卖语义，是在按词打地鼠。
+  //
+  //    真正的关系是：一个**说定了的下一次通话**比一句含糊的「现在还不…」更硬、
+  //    更可执行。所以整体提到软拒绝前面，这一族一次性结清。
+  if (anyMatch(t, CALLBACK_PATTERNS)) return { outcome: 'callback_set', do_not_contact: false }
+  // 🔴 **他现在就想买的话，前面那半句犹豫不算数**（见 POSITIVE_INTENT_NOW）。
+  if (anyMatch(t, POSITIVE_INTENT_NOW)) return { outcome: 'spoke', do_not_contact: false }
   // 🔴 软拒绝必须排在「明确没兴趣」前面：「暂时不感兴趣」里含着「不感兴趣」，
   //    反过来判的话那个「暂时」当场被吞掉，人被永久停掉。
   if (anyMatch(t, SOFT_NO_PATTERNS)) return { outcome: 'not_interested_now', do_not_contact: false }

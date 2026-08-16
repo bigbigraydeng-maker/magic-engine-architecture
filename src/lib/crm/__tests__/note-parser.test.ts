@@ -305,13 +305,41 @@ describe('暂时不考虑 ≠ 明确不要了', () => {
     expect(outcome('已经在别家订了')).toBe('not_interested')
   })
 
-  /** 🔴 中文反向语序也不许跨过转折：他已经改主意了。 */
-  it('「之前不考虑，但现在想去」→ 不许判成暂时不考虑', () => {
-    expect(outcome('之前不考虑，但现在想去')).not.toBe('not_interested_now')
+  /**
+   * 🔴 **他现在就想买的话，前面那半句犹豫不算数** —— 一条规则覆盖一整族
+   * （Codex 复审 2026-08-16）。
+   *
+   * 前七轮反复出现同一种形状：前半句是过去的犹豫、后半句是当下的结论，
+   * 而软拒绝词命中了前半句。每次给那一条正则单独加前瞻是在按词打地鼠。
+   */
+  it.each([
+    ['之前不考虑，但现在想去'],
+    ['客户之前说考虑一下，但现在想报名'],
+    ['本来还在想，决定了要订'],
+    ['was thinking about it, but now ready to book'],
+  ])('「%s」→ 他要买了，不许判成暂时不考虑', (note) => {
+    expect(outcome(note)).not.toBe('not_interested_now')
   })
 
-  it('「not ready yet, call back tomorrow」→ 约了回电', () => {
-    expect(outcome('not ready yet, call back tomorrow')).toBe('callback_set')
+  /** ⚠️ 「想买」的判断里不许夹否定词 —— 「目前没打算去」还是软拒绝。 */
+  it('对照：「目前没打算去」照旧是暂时不考虑', () => {
+    expect(outcome('目前没打算去')).toBe('not_interested_now')
+  })
+
+  /**
+   * 🔴 **说定了的下一次通话压过含糊的「现在还不…」** —— 同样是一次性结清一族
+   * （Codex 复审 2026-08-16）。
+   *
+   * 「not ready to talk, call back tomorrow」「not going to talk right now,
+   * call back tomorrow」—— 软拒绝词吃掉前半句，**约好的回电整个丢了**。
+   */
+  it.each([
+    ['not ready to talk, call back tomorrow'],
+    ['not ready yet, call back tomorrow'],
+    ['not going to talk right now, call back tomorrow'],
+    ['not ready to book, ring me next week'],
+  ])('「%s」→ 约了回电', (note) => {
+    expect(outcome(note)).toBe('callback_set')
   })
 
   /**
@@ -363,13 +391,6 @@ describe('暂时不考虑 ≠ 明确不要了', () => {
    * 那明明是**约了回电**，却被判成「暂时不考虑」，回电时间也一并丢了，
    * 这个人还会收到一个「改成短期内不考虑」的提议。
    */
-  it.each([
-    ['not ready to talk, call back tomorrow'],
-    ['not ready to talk yet, call back tomorrow'],
-  ])('「%s」→ 约了回电，不是不考虑', (note) => {
-    expect(outcome(note)).toBe('callback_set')
-  })
-
   /**
    * 🔴 **过去时的犹豫不算数**（Codex 复审 2026-08-16）。
    *
@@ -377,10 +398,6 @@ describe('暂时不考虑 ≠ 明确不要了', () => {
    * 结论。裸词会把一个**正要成交**的人判成「暂时不考虑」、移出销售名单 ——
    * 而规则结果模型覆盖不了。
    */
-  it('「还在犹豫，但现在打算订了」→ 不许判成暂时不考虑', () => {
-    expect(outcome('was thinking about it, but now ready to book')).not.toBe('not_interested_now')
-  })
-
   it('对照：真的还在犹豫 → 照旧算暂时不考虑', () => {
     expect(outcome('still thinking about it')).toBe('not_interested_now')
     expect(outcome('thinking about it')).toBe('not_interested_now')
