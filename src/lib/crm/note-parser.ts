@@ -20,6 +20,8 @@
  */
 
 import { z } from 'zod'
+// 人工纠正那条判决 —— 判据和常量都在 dnc.ts，这里只用它的名字。
+import { DNC_CLEARED_OUTCOME } from './dnc'
 
 export const CONTACT_OUTCOMES = [
   'no_answer',      // 打了没人接 / 语音信箱 / 打不通
@@ -414,7 +416,22 @@ export function reclassifyStoredOutcome(
    * **只朝一个方向升级**：非拒联 → 拒联。反过来绝不做 —— 那等于让一段正则
    * 去解除一条已经成立的拒联，方向恰好反了（见 `lib/crm/dnc` 的同一条推理）。
    */
-  if (outcome !== 'do_not_contact' && classifyNote(raw).do_not_contact) {
+  /**
+   * ⚠️ **人工纠正那条触点绝不能被这一步反噬**（Codex 复审 2026-08-16）。
+   *
+   * 取消接口写下的 `raw` 默认就是「人工复核：这条『别再联系』判错了」——
+   * 里面**含着**「别再联系」四个字，正好命中上面那条中文词表。不排除的话，
+   * FDE 点完「放回名单」，这条纠正当场被读回成 `do_not_contact`：黄条刷新
+   * 就回来、私信照旧发不出去、群发照旧跳过他 —— **取消这个功能整个失效**，
+   * 而且是被我自己这一步打掉的。
+   *
+   * `dnc_cleared` 是**人明确下的判决**，比任何词表都硬（同 `lib/crm/dnc`）。
+   */
+  if (
+    outcome !== 'do_not_contact' &&
+    outcome !== DNC_CLEARED_OUTCOME &&
+    classifyNote(raw).do_not_contact
+  ) {
     return 'do_not_contact'
   }
 

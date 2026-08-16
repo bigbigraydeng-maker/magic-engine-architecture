@@ -211,14 +211,22 @@ export async function sendReply(input: SendReplyInput): Promise<SendReplyResult>
         .eq('id', convo.contact_id)
         .eq('client_id', convo.client_id)
         .maybeSingle<{ do_not_contact: boolean }>(),
-      fetchAll<{ metadata: Record<string, unknown> | null; occurred_at: string; raw: string | null }>(
+      fetchAll<{
+        id: string
+        metadata: Record<string, unknown> | null
+        occurred_at: string
+        raw: string | null
+      }>(
         (from, to) =>
           supabaseAdmin
             .from('contact_touchpoints')
-            .select('metadata, occurred_at, raw')
+            .select('id, metadata, occurred_at, raw')
             .eq('client_id', convo.client_id)
             .eq('contact_id', convo.contact_id as string)
+            // 唯一排序键，理由同 touchpoints/batch：并列的时间戳会让
+            // 页与页之间重复或漏行，漏掉那条拒联记录就误发。
             .order('occurred_at', { ascending: true })
+            .order('id', { ascending: true })
             .range(from, to),
       ).catch((e: unknown) => e as Error),
     ])

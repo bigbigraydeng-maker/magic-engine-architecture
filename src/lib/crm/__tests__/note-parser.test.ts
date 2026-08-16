@@ -544,6 +544,18 @@ describe('存量里其实是「别再联系」的记录，读的时候要认出�
     expect(reclassifyStoredOutcome('callback_set', 'do not call me again')).toBe('do_not_contact')
   })
 
+  /**
+   * 🔴 取消接口写的 `raw` 默认是「人工复核：这条『别再联系』判错了」——
+   * 里面含着「别再联系」四个字。不排除的话，FDE 点完「放回名单」，这条纠正
+   * 当场被读回成拒联：黄条刷新就回来、私信照旧发不出去、群发照旧跳过他，
+   * **取消这个功能整个失效**。
+   */
+  it('🔴 人工纠正那条不许被自己的原话反噬', () => {
+    expect(reclassifyStoredOutcome('dnc_cleared', '人工复核：这条「别再联系」判错了')).toBe(
+      'dnc_cleared',
+    )
+  })
+
   it('只朝一个方向升级 —— 已经是拒联的不许被读回去', () => {
     expect(reclassifyStoredOutcome('do_not_contact', '客户说想再看看行程')).toBe('do_not_contact')
   })

@@ -110,6 +110,7 @@ export async function POST(
    * 拦不住它 —— 截断根本不报错，正好从闸底下钻过去。
    */
   let dncTouches: {
+    id: string
     contact_id: string
     metadata: Record<string, unknown> | null
     occurred_at: string
@@ -117,6 +118,7 @@ export async function POST(
   }[]
   try {
     dncTouches = await fetchAll<{
+      id: string
       contact_id: string
       metadata: Record<string, unknown> | null
       occurred_at: string
@@ -124,11 +126,18 @@ export async function POST(
     }>((from, to) =>
       supabaseAdmin
         .from('contact_touchpoints')
-        .select('contact_id, metadata, occurred_at, raw')
+        .select('id, contact_id, metadata, occurred_at, raw')
         .eq('client_id', clientId)
         .in('contact_id', rows.map((r) => r.id))
-        // 分页必须有稳定排序，否则页与页之间可能重复/漏行。
+        /**
+         * 分页必须有**唯一**的排序键（Codex 复审 2026-08-16）。
+         * 只按 `occurred_at` 排不够 —— 这个接口自己就会给整批人写同一个
+         * `occurredAt`，并列的那一堆在不同 range 请求里可以换顺序，
+         * 页与页之间就会重复或漏行。漏掉的若是某人唯一那条拒联触点，
+         * 他就被留下、被记成群发过了。补 `id` 做 tie-breaker。
+         */
         .order('occurred_at', { ascending: true })
+        .order('id', { ascending: true })
         .range(from, to),
     )
   } catch (e) {
