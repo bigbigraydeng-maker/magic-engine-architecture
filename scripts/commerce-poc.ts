@@ -28,9 +28,11 @@ import { findSourcingByImage } from '../src/lib/apify/sourcing-by-image'
 import {
   normalizeSourcing,
   normalizeTikTokProduct,
+  withLocalMarket,
   withSourcing,
 } from '../src/lib/commerce/product-intel/normalize'
 import { measureAuNzDemand } from '../src/lib/commerce/product-intel/validate-aunz'
+import { measureLocalPrice } from '../src/lib/commerce/product-intel/validate-local-price'
 import { rankCandidates } from '../src/lib/commerce/product-intel/score'
 import type { CostAssumptions } from '../src/lib/commerce/product-intel/landed-cost'
 import type {
@@ -59,6 +61,9 @@ const COST_ASSUMPTIONS: Omit<CostAssumptions, 'chargeableWeightKg'> = {
 /** 单价来自 2026-08-15 实测的 actor 定价表（BRONZE 档）。 */
 const COST_PER_TIKTOK_ROW_USD = 0.0045
 const COST_PER_IMAGE_SEARCH_USD = 0.006
+/** DataForSEO 实测单价（2026-08-16）。每跑一次固定 3 次：AU 搜索量 + NZ 搜索量 + NZ 售价。 */
+const COST_PER_DFSE_CALL_USD = 0.0035
+const DFSE_CALLS_PER_RUN = 3
 
 interface Options {
   keyword: string
@@ -111,19 +116,26 @@ async function runFromFile(path: string, enrich: number): Promise<{
   const shortlist = [...all]
     .sort((a, b) => (b.cumulativeSold.value ?? 0) - (a.cumulativeSold.value ?? 0))
     .slice(0, enrich)
-  const demand = await measureAuNzDemand(fixture.seedKeyword)
+  // 需求与售价都是品类级 —— 整批共用一次查询，互不阻断。
+  const [demand, localMarket] = await Promise.all([
+    measureAuNzDemand(fixture.seedKeyword),
+    measureLocalPrice(fixture.seedKeyword, 'NZ'),
+  ])
 
   const candidates = shortlist.map((candidate) => {
+    const withMarket = withLocalMarket({ ...candidate, demand }, localMarket)
     const raw = fixture.sourcing[candidate.source.sourceProductId]
-    if (!raw) return { ...candidate, demand }
+    if (!raw) return withMarket
     const evidence = normalizeSourcing(raw.matches, raw.runId, collectedAt)
-    return { ...withSourcing(candidate, evidence), demand }
+    return withSourcing(withMarket, evidence)
   })
   return { seedKeyword: fixture.seedKeyword, candidates }
 }
 
 function estimateCostUsd(opts: Options): number {
-  return opts.max * COST_PER_TIKTOK_ROW_USD + opts.enrich * COST_PER_IMAGE_SEARCH_USD
+  return opts.max * COST_PER_TIKTOK_ROW_USD
+    + opts.enrich * COST_PER_IMAGE_SEARCH_USD
+    + DFSE_CALLS_PER_RUN * COST_PER_DFSE_CALL_USD
 }
 
 /** 对 shortlist 补供货证据 + 澳新需求。澳新是品类级，整批共用一次查询。 */
@@ -131,19 +143,24 @@ async function enrichCandidates(
   shortlist: readonly ProductCandidate[],
   seedKeyword: string,
 ): Promise<readonly ProductCandidate[]> {
-  const demand = await measureAuNzDemand(seedKeyword)
+  // 需求与售价都是品类级 —— 整批共用一次查询，互不阻断。
+  const [demand, localMarket] = await Promise.all([
+    measureAuNzDemand(seedKeyword),
+    measureLocalPrice(seedKeyword, 'NZ'),
+  ])
   const enriched = await Promise.all(
     shortlist.map(async (candidate) => {
-      if (!candidate.imageUrl) return { ...candidate, demand }
+      const base = withLocalMarket({ ...candidate, demand }, localMarket)
+      if (!candidate.imageUrl) return base
       const sourcing = await findSourcingByImage(candidate.imageUrl)
       if (sourcing.error) {
         console.warn(`  ⚠️ 以图搜款失败（${candidate.source.sourceProductId}）：${sourcing.error}`)
-        return { ...candidate, demand }
+        return base
       }
       const evidence = normalizeSourcing(
         sourcing.matches, sourcing.runId, new Date().toISOString(),
       )
-      return { ...withSourcing(candidate, evidence), demand }
+      return withSourcing(base, evidence)
     }),
   )
   return enriched
@@ -154,6 +171,25 @@ const VERDICT_LABEL: Record<string, string> = {
   WATCH: '👀 观察',
   REJECT: '❌ 排除',
   UNKNOWN: '❓ 判不了',
+}
+
+/**
+ * 打印这一批共用的市场口径。**必须打** —— 需求和售价都是品类级，
+ * 不说清楚的话读的人会以为那是单品的数。
+ */
+function printMarketContext(
+  seedKeyword: string,
+  ranked: readonly ScoredCandidate[],
+): void {
+  console.log(`   ⚠️ 澳新需求与新西兰售价都是「${seedKeyword}」这个品类词的量，不是单品的量。`)
+  const local = ranked[0]?.candidate.localMarket
+  if (!local) return
+  const median = local.medianPriceNzd.value
+  const count = local.listingCount.value ?? 0
+  console.log(median === null
+    ? `   ⚠️ 本地售价没取到：${local.medianPriceNzd.source}`
+    : `   本地零售中位价 NZ$${median.toFixed(2)}（${count} 条在售）`)
+  console.log(`   倾销：${local.hasDumping.value === null ? '未检测（需同款比价，等 Trade Me）' : local.hasDumping.value}`)
 }
 
 function printCandidate(scored: ScoredCandidate, index: number): void {
@@ -189,7 +225,7 @@ async function mainFromFile(opts: Options): Promise<void> {
     return
   }
   console.log(`\n② 结果（按证据强度排，不是按预测销量）`)
-  console.log(`   ⚠️ 澳新需求是「${seedKeyword}」这个品类词的量，不是单品的量。`)
+  printMarketContext(seedKeyword, ranked)
   ranked.forEach(printCandidate)
 }
 
@@ -235,7 +271,7 @@ async function main(): Promise<void> {
     return
   }
   console.log(`\n③ 结果（按证据强度排，不是按预测销量）`)
-  console.log(`   ⚠️ 澳新需求是「${opts.keyword}」这个品类词的量，不是单品的量。`)
+  printMarketContext(opts.keyword, ranked)
   ranked.forEach(printCandidate)
 }
 
