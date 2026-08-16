@@ -27,17 +27,32 @@ interface ClientOption {
   readonly name: string
 }
 
-async function loadClients(): Promise<ClientOption[]> {
-  const { data } = await supabaseAdmin
+/**
+ * 🔴 查客户失败 ≠ 没有客户。
+ *    `data ?? []` 会把网络抖动 / 权限问题 / 库故障一律变成空数组，页面于是宣称
+ *    「还没有任何客户」—— 一句假话，而且看起来不像故障，没人会去查。
+ *    这跟列表侧那三种空状态是同一条规矩，页面这一层也不能例外。
+ */
+type ClientLoad =
+  | { readonly ok: true; readonly clients: ClientOption[] }
+  | { readonly ok: false; readonly message: string }
+
+async function loadClients(): Promise<ClientLoad> {
+  const { data, error } = await supabaseAdmin
     .from('clients')
     .select('id, name')
     .order('name', { ascending: true })
 
-  return ((data ?? []) as ClientOption[]).map((c) => ({ id: c.id, name: c.name }))
+  if (error) return { ok: false, message: error.message }
+
+  return {
+    ok: true,
+    clients: ((data ?? []) as ClientOption[]).map((c) => ({ id: c.id, name: c.name })),
+  }
 }
 
 export default async function KernelApprovalsPage() {
-  const clients = await loadClients()
+  const loaded = await loadClients()
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8">
@@ -50,12 +65,20 @@ export default async function KernelApprovalsPage() {
         </p>
       </header>
 
-      {clients.length === 0 ? (
+      {!loaded.ok ? (
+        <div className="rounded-lg bg-red-50 p-4 text-sm text-red-800 ring-1 ring-red-200">
+          <p className="font-medium">客户名单读不出来</p>
+          <p className="mt-1">
+            这不是「没有客户」——是这次查询失败了，所以下面什么都不能显示。
+          </p>
+          <p className="mt-1 text-xs text-red-700">原话：{loaded.message}</p>
+        </div>
+      ) : loaded.clients.length === 0 ? (
         <p className="rounded-lg bg-slate-50 p-4 text-sm text-slate-600 ring-1 ring-slate-200">
           还没有任何客户，先去客户管理里建一个。
         </p>
       ) : (
-        <ApprovalQueue clients={clients} />
+        <ApprovalQueue clients={loaded.clients} />
       )}
     </div>
   )

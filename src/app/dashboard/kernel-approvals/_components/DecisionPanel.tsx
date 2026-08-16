@@ -45,10 +45,16 @@ type PanelState =
   | { kind: 'ready'; detail: DetailResponse }
   | { kind: 'done'; result: DecisionResult }
 
+/**
+ * 🔴 这里的 key 必须跟服务端 `approvalPermissionsFor` 真实返回的字符串逐字一致
+ *    （`service.ts`：`insufficient_tier` / `unknown_action` / `unknown_action_version`）。
+ *    对不上不会报错，只会安静地退回去显示原始英文码 —— 审批人看不懂，
+ *    而我们也不会知道这条提示从来没生效过。
+ */
 const BLOCKED_REASON_LABEL: Record<string, string> = {
   insufficient_tier: '你的账号权限不够批这条（可以点「先不做」）',
   unknown_action: '系统认不出这个动作，不给批（可以点「先不做」）',
-  contract_version_mismatch: '这条是旧版本的请求，不能用新规则批（可以点「先不做」）',
+  unknown_action_version: '这条是旧版本的请求，不能用新规则批（可以点「先不做」）',
 }
 
 export default function DecisionPanel({

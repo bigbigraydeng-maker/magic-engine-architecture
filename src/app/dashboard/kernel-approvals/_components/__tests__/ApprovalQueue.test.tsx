@@ -10,11 +10,33 @@
  * 同理 skippedRunIds / hasMore：服务端专门如实回传，界面藏起来就等于白传。
  */
 import React from 'react'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import ApprovalQueue from '../ApprovalQueue'
 
 const CLIENTS = [{ id: '11111111-1111-4111-8111-111111111111', name: '测试客户' }]
+
+const TWO_CLIENTS = [
+  { id: '11111111-1111-4111-8111-111111111111', name: '客户 A' },
+  { id: '22222222-2222-4222-8222-222222222222', name: '客户 B' },
+]
+
+function summary(runId: string, title: string, clientId: string) {
+  return {
+    runId,
+    clientId,
+    expectedDecisionId: `dec-${runId}`,
+    actionKey: 'seo.publish_page',
+    actionVersion: 1,
+    title,
+    risk: null,
+    sideEffect: null,
+    costEstimateUsd: null,
+    costCapUsd: null,
+    rationale: null,
+    requestedAt: '2026-08-16T00:00:00.000Z',
+  }
+}
 
 const EMPTY_OK = { items: [], skippedRunIds: [], hasMore: false, nextCursor: null }
 
@@ -62,6 +84,44 @@ describe('ApprovalQueue —— 三种「没东西看」必须互相区分', () =
     expect(screen.getByText(/审批接口出错了/)).toBeTruthy()
     expect(screen.queryByText(/都处理完了/)).toBeNull()
     expect(screen.queryByText(/还没在这个环境启用/)).toBeNull()
+  })
+})
+
+describe('ApprovalQueue —— 切客户时的并发', () => {
+  it('旧客户的慢响应回来了也不许盖掉新客户的列表', async () => {
+    // A 慢、B 快：先选中 A（慢请求在飞），立刻切到 B（快请求先回）。
+    // 没有防护的话，A 的响应后到、覆盖 B —— 下拉框写着 B、列表却是 A 的待办。
+    // 在审批场景里这不是显示问题，是可能对着 A 的动作按下 B 的批准。
+    global.fetch = vi.fn().mockImplementation((url: string) => {
+      const isA = url.includes(TWO_CLIENTS[0].id)
+      const payload = {
+        items: [
+          isA
+            ? summary('run-a', 'A 的待办', TWO_CLIENTS[0].id)
+            : summary('run-b', 'B 的待办', TWO_CLIENTS[1].id),
+        ],
+        skippedRunIds: [],
+        hasMore: false,
+        nextCursor: null,
+      }
+      return new Promise((resolve) =>
+        setTimeout(
+          () => resolve({ ok: true, status: 200, json: async () => payload }),
+          isA ? 60 : 5,
+        ),
+      )
+    }) as unknown as typeof fetch
+
+    render(<ApprovalQueue clients={TWO_CLIENTS} />)
+    fireEvent.change(screen.getByRole('combobox'), {
+      target: { value: TWO_CLIENTS[1].id },
+    })
+
+    await waitFor(() => expect(screen.getByText('B 的待办')).toBeTruthy())
+    // A 的慢响应此时已经回来了；它绝不能出现
+    await new Promise((r) => setTimeout(r, 120))
+    expect(screen.queryByText('A 的待办')).toBeNull()
+    expect(screen.getByText('B 的待办')).toBeTruthy()
   })
 })
 

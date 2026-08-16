@@ -14,7 +14,7 @@
  *    不会被处理，而界面上看不出少了东西。这里把它们藏起来就等于把服务端的努力废掉。
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import DecisionPanel from './DecisionPanel'
 
 export interface ClientOption {
@@ -89,10 +89,21 @@ export default function ApprovalQueue({ clients }: { clients: ClientOption[] }) 
   const [state, setState] = useState<LoadState>({ kind: 'idle' })
   const [selected, setSelected] = useState<PendingApprovalSummary | null>(null)
 
+  /**
+   * 🔴 只有「最后一次发出的请求」有资格写状态。
+   *    审批人在上一个客户还没读完时切下拉框，两个请求会并发；旧的那个如果更慢，
+   *    它回来时会盖掉新的 —— 结果是下拉框写着客户 B、列表却是客户 A 的待办。
+   *    在审批场景里这不是显示问题，是**可能让人对着 A 的动作按了 B 的批准**。
+   */
+  const requestSeq = useRef(0)
+
   const load = useCallback(async (id: string, cursor: string | null = null) => {
     if (!id) return
+    const seq = ++requestSeq.current
     setState({ kind: 'loading' })
-    setState(await fetchPage(id, cursor))
+    const next = await fetchPage(id, cursor)
+    if (seq !== requestSeq.current) return
+    setState(next)
   }, [])
 
   useEffect(() => {
