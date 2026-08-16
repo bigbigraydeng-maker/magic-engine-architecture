@@ -82,6 +82,15 @@ describe('ideasToSeeds', () => {
     expect(seeds.map((s) => s.keyword)).toEqual(['car air compressor'])
   })
 
+  it('🔴 整词错品类剔除：排气扇 / 集雨桶（50 词实测漏网的两类）', () => {
+    const seeds = ideasToSeeds('pet', 'pet water fountain', [
+      idea('bathroom exhaust fan', 900),
+      idea('water trough', 880),
+      idea('cat water fountain', 480),   // 唯一该留的
+    ])
+    expect(seeds.map((s) => s.keyword)).toEqual(['cat water fountain'])
+  })
+
   it('🔴 零售商名与漏网品牌剔除（PB Tech / Bulbs Direct / eufy）', () => {
     const seeds = ideasToSeeds('phone_tech', 'wireless charger', [
       idea('pb tech power bank', 590),

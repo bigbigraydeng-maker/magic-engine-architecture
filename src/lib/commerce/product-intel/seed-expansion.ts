@@ -88,6 +88,9 @@ const BRAND_DENYLIST: ReadonlySet<string> = new Set([
 const NON_ARBITRAGE_ROOTS: ReadonlySet<string> = new Set([
   'battery', 'batteries', 'cable', 'litter', 'bulb', 'bulbs',
   'light', 'lights', 'led', 'garden', 'camera', 'cameras',
+  // 2026-08-17 50 词实测新增：整词错品类，比值校验抓不到（美国本地同为错品类），
+  // 只能在种子词层面剔。bathroom/exhaust → 装修排气扇；trough → 牲畜水槽/集雨桶。
+  'bathroom', 'exhaust', 'trough',
 ])
 
 /** 一个带来源的种子词 —— 能追到「哪个方向、从哪个锚点长的、搜索量多少」。 */
