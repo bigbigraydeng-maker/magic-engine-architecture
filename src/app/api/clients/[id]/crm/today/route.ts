@@ -686,6 +686,14 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
         stageLabel: meta?.label ?? row?.stage ?? null,
         segment: seg.segment,
         reason: seg.reason,
+        /**
+         * 号码在库里但打不通 —— **不在名单上的人同样要带**（Codex 复审 2026-08-16）。
+         *
+         * 不带的话，抽屉里那个值是 `undefined`，照旧渲染成可点的拨号链接 ——
+         * 而这一组（`fix_number`）**整组存在的意义就是「这个号打不通，去补一个」**。
+         * 点开它就能拨那个已知打不通的号，是这一组里最不该出现的事。
+         */
+        phoneUnusable: seg.phoneUnusable ?? false,
         // 为什么不在今天名单上。成交跟「明确拒绝」混在一堆叫「已排除」很刺眼，
         // 而且成交客户恰恰最该继续维护（催余款、确认行程）—— 页面按这个分开显示。
         /** 被推迟到什么时候。有值 = 他是被人手推迟的，不是被规则排除的。 */

@@ -75,6 +75,13 @@ interface OffRow {
   segment: Segment
   reason: string
   group: 'won' | 'later' | 'stop' | 'snoozed' | 'fix_number'
+  /**
+   * 号码在库里但打不通 —— 抽屉靠它决定给不给拨号链接。
+   *
+   * 不在名单上的人**同样要带**：`fix_number` 那一组整组的意义就是
+   * 「这个号打不通，去补一个」，点开却能拨那个号是最刺眼的事。
+   */
+  phoneUnusable?: boolean
   lastNote: string | null
   /** 被推迟到什么时候 —— 有值就能一键提前叫回来。 */
   snoozeUntil?: string | null
