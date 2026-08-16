@@ -21,9 +21,23 @@ describe('别再联系 —— 一条都不能漏', () => {
     'indian no need follow up',
     'does not want to talk',
     'follow up with best of china neve been to China but do not like phone call',
-    'not intending to go',
   ])('抓到: %s', (note) => {
     expect(dnc(note)).toBe(true)
+  })
+
+  /**
+   * 🔴 **`not intending to go` 从这一组移走了**（Codex 复审 2026-08-16）。
+   *
+   * 它说的是「我不打算去」，不是「别再联系我」。而 `do_not_contact` 会被
+   * **永久写进联系人**（任何渠道都不许再发），是全系统最重的一个标记 ——
+   * 一句「not intending to go **right now**」落在这里，等于「今年先不去了」
+   * 把人永久封死。
+   *
+   * 现在它落到「停止营销」（可逆），带时间限定时更会先被「暂时不考虑」接住。
+   * 这一组只留**客户真的在划界限**的说法。
+   */
+  it('「不打算去」不算划界限 —— 那是没兴趣，不是别再联系我', () => {
+    expect(dnc('not intending to go')).toBe(false)
   })
 
   it('正常的记录不会被误判成拒绝', () => {
@@ -244,5 +258,56 @@ describe('暂时不考虑 ≠ 明确不要了', () => {
     ['not interested'],
   ])('「%s」→ 明确不要了，停掉', (note) => {
     expect(outcome(note)).toBe('not_interested')
+  })
+
+  /**
+   * 🔴 **时间限定词必须贴着「买不买」那件事**（Codex 复审 2026-08-16）。
+   *
+   * 第一版写成「只要出现『现在不』就算」，于是这些跟买卖毫无关系的日常备注
+   * 全被判成「暂时不考虑」—— 人被移出真人通话名单，还收到一个
+   * 「改成短期内不考虑」的阶段提议。一个只是此刻没空接电话的客人，
+   * 被系统判成「这阵子别碰他」。
+   */
+  it.each([
+    ['客户现在不方便接电话'],
+    ['客户现在不在新西兰'],
+    ['他现在不在办公室'],
+  ])('「%s」→ 跟买不买无关，不许判成暂时不考虑', (note) => {
+    expect(outcome(note)).not.toBe('not_interested_now')
+  })
+
+  /**
+   * 🔴 **事实压过心情**（同一轮复审）：前半句是犹豫，后半句是这单已经没了。
+   * 软的赢会让一个已经在别家下单的人继续收我们的跟进邮件。
+   */
+  it('「想了想，但已经在别家订了」→ 明确不要了', () => {
+    expect(outcome('I was thinking about it but already booked with another company')).toBe(
+      'not_interested',
+    )
+    expect(outcome('本来还在考虑，已经在别家订了')).toBe('not_interested')
+  })
+
+  /**
+   * 🔴 **「我不打算去」不是「别再联系我」**（同一轮复审）。
+   *
+   * 它原先在 DNC 词表里，而 DNC 会把「任何渠道都不许再发」**永久写进联系人**
+   * —— 全系统最重的一个标记。一句带时间限定的「not intending to go right now」
+   * 落在那里，等于「今年先不去了」把人永久封死。
+   */
+  it('「not intending to go right now」→ 暂时不考虑，绝不是永久拉黑', () => {
+    const r = classifyNote('not intending to go right now')
+    expect(r.outcome).toBe('not_interested_now')
+    expect(r.do_not_contact).toBe(false)
+  })
+
+  it('「not intending to go」（没有时间限定）→ 停止营销，仍然不是永久拉黑', () => {
+    const r = classifyNote('not intending to go')
+    expect(r.outcome).toBe('not_interested')
+    expect(r.do_not_contact).toBe(false)
+  })
+
+  /** 对照：真的划界限的说法照旧永久拉黑。 */
+  it('对照：「别再联系」照旧是永久拉黑', () => {
+    expect(classifyNote('客户说别再联系了').do_not_contact).toBe(true)
   })
 })

@@ -80,7 +80,15 @@ const DNC_PATTERNS: RegExp[] = [
   /do\s*not\s*want\s*to\s*talk/i,
   /does\s*not\s*want\s*to\s*talk/i,
   /do\s*not\s*(like|want)\s*(phone|call)/i,
-  /not\s*intending\s*to\s*go/i,
+  // 🔴 `not intending to go` **从这一组移走了**（Codex 复审 2026-08-16）。
+  //
+  // 它说的是「我不打算去」，不是「别再联系我」。而这一组会把
+  // `do_not_contact` **永久写进联系人**（任何渠道都不许再发），是全系统最重的
+  // 一个标记。「not intending to go **right now**」这种带时间限定的说法落在
+  // 这里，等于一句「今年先不去了」把人永久封死 —— 而它本该是「暂时不考虑」。
+  //
+  // 现在它落到 NO_INTEREST_PATTERNS（停止营销，可逆），带时间限定时更会
+  // 先被 SOFT_NO_PATTERNS 接住。这一组只留**客户真的在划界限**的说法。
   /不要(打)?电话/,
   /不需要联系/,
   /别再(联系|打)/,
@@ -105,22 +113,40 @@ const BAD_NUMBER_PATTERNS: RegExp[] = [
   /wrong\s*number/i,
 ]
 
-const NOT_INTERESTED_PATTERNS: RegExp[] = [
+/**
+ * **已经在别家订了** —— 这是一件**已经发生的事实**，不是一种心情。
+ *
+ * 🔴 单独成组，而且**压过软拒绝**（Codex 复审 2026-08-16）：
+ * 「I was thinking about it but already booked with another company」
+ * 两边都命中，但前半句是犹豫、后半句是**这单已经没了**。软的赢会让一个
+ * 已经在别家下单的人继续收我们的跟进邮件。
+ *
+ * 事实压过心情 —— 反过来不成立。
+ */
+const BOOKED_ELSEWHERE_PATTERNS: RegExp[] = [
+  /already\s*(booked|sorted)/i,
+  /\bbooked\s+(with|through)\s+(another|someone|somebody)/i,
+  /all\s*sorted/i,
+  // 「已经在别家订了」「找了另一家」——「已经…订」中间常隔着地点词，
+  // 「另一家」也和「别家」一样常见，所以这里放宽而不是逐字枚举。
+  /已经?.{0,6}(订|预订|报名|买)了/,
+  /(找|换)了(别|另|其他).{0,3}家/,
+  /(别|另|其他).{0,3}家(订|预订|报名)了/,
+]
+
+/** 明确说了没兴趣 —— 一种态度，可以被「暂时」这类时间限定词修饰。 */
+const NO_INTEREST_PATTERNS: RegExp[] = [
   /not\s*interested/i,
   /no\s*interest/i,
-  /already\s*(booked|sorted)/i,
-  /all\s*sorted/i,
+  // 「我不打算去」不是「别再联系我」—— 原先它在 DNC 组里，一句带时间限定的
+  // 「not intending to go right now」会把人**永久封死**。挪到这里（可逆）。
+  /not\s*intending\s*to\s*go/i,
   // 中文。原先整组只有英文，而 CTS 员工的通话备注绝大多数是中文写的 ——
   //「客户对旅游不感兴趣」一条都匹配不上，人照旧留在今天的名单里被反复打。
   /不感兴趣/,
   /没有?兴趣/,
   /不想去/,
   /不打算去/,
-  // 「已经在别家订了」「找了另一家」——「已经…订」中间常隔着地点词，
-  // 「另一家」也和「别家」一样常见，所以这里放宽而不是逐字枚举。
-  /已经?.{0,6}(订|预订|报名|买)了/,
-  /(找|换)了(别|另|其他).{0,3}家/,
-  /(别|另|其他).{0,3}家(订|预订|报名)了/,
 ]
 
 /**
@@ -132,17 +158,39 @@ const NOT_INTERESTED_PATTERNS: RegExp[] = [
  * 判不准时的偏向：**宁可判成「暂时」**。判错成暂时 = 多发几封跟进邮件（噪音）；
  * 判错成明确不要 = 一个还在考虑的客人从此消失（丢单）。
  */
+/**
+ * ⚠️ **时间限定词必须贴着「买不买」那件事**（Codex 复审 2026-08-16）。
+ *
+ * 第一版写成「只要出现『现在不』就算」，于是这些**跟买不买毫无关系**的
+ * 日常备注全被判成「暂时不考虑」：
+ *
+ *   · 「客户**现在不**方便接电话」  → 只是这一刻没空
+ *   · 「客户**现在不**在新西兰」    → 只是人在外地
+ *
+ * 后果不是少发几封邮件那么轻：这个人会被移出真人通话名单（交给系统跟），
+ * 还会收到一个「改成短期内不考虑」的阶段提议 —— 一个只是此刻不方便接电话的
+ * 客人，被系统judged 成「这阵子别碰他」。
+ *
+ * 所以时间词只有**修饰购买意向**时才算数：不考虑 / 不感兴趣 / 不打算 / 不想 /
+ * 不定 / 不订 / 不去。而 `parseNote` 最终**无条件采用规则结果**（AI 覆盖不了它），
+ * 所以宁可这里收窄，也不能靠模型去纠正。
+ */
+const BUY_INTENT = '(考虑|感兴趣|兴趣|打算|想去|想走|定|订|走|去|出发|报名|买)'
+const TIME_QUALIFIER = '(暂时|暂不|现在|目前|这(段时间|阵子)|近期|最近|眼下)'
+
 const SOFT_NO_PATTERNS: RegExp[] = [
-  // 「暂时 / 现在 / 目前 / 这段时间」+ 任何否定说法
-  /(暂时|暂不|现在不|目前不|这(段时间|阵子)不|近期不)/,
+  // 「暂时/现在/目前」+ 不 + **跟买卖有关的动词**（中间最多隔 4 个字）
+  new RegExp(`${TIME_QUALIFIER}.{0,4}不.{0,4}${BUY_INTENT}`),
+  // 「不」在前、时间词在后：「不考虑了，明年再说」这种语序
+  new RegExp(`不${BUY_INTENT}.{0,6}${TIME_QUALIFIER}`),
   // 明确把事情推到以后
-  /(明年|以后|过段时间|过阵子|晚点|迟些|再过|下半年|年底)再(说|看|联系|考虑|定|议)/,
-  /(再看看|再想想|还没(决定|定|想好)|考虑一下|考虑考虑)/,
+  /(明年|以后|过段时间|过阵子|晚点|迟些|再过|下半年|年底|开年)再(说|看|联系|考虑|定|议)/,
+  /(再看看|再想想|还没(决定|定下来|想好)|考虑一下|考虑考虑|容我考虑)/,
   /(等|要等).{0,8}(再|才)(说|定|联系|考虑)/,
   // 英文。「not interested right now」中间隔着词，所以 not…now 之间放宽 ——
   // 但只放 20 个字符，免得跨过整句去误配（「not going, call me now」）。
-  /\bnot\b.{0,20}\bright now\b/i,
-  /\bnot\s+(right\s+)?now\b/i,
+  /\bnot\s+(interested|going|ready|intending|planning)\b.{0,20}\b(right now|at the moment|yet|this year)\b/i,
+  /\bnot\s+(interested|going|ready)\s+(right\s+)?now\b/i,
   /\bmaybe\s+(later|next\s+year)\b/i,
   /\b(think|thinking)\s+(about\s+it|it\s+over)\b/i,
   /\bhave\s+a\s+think\b/i,
@@ -176,13 +224,20 @@ export function classifyNote(raw: string): {
 
   const dnc = anyMatch(t, DNC_PATTERNS)
 
-  // 顺序即优先级：号码是坏的 > 明确拒绝 > 没接通 > **暂时**不考虑 > 明确没兴趣 > 约了回电 > 聊过了
+  // 顺序即优先级：
+  //   号码是坏的 > 明确拒绝 > 没接通 > **已经在别家订了** > **暂时**不考虑
+  //   > 明确没兴趣 > 约了回电 > 聊过了
   if (anyMatch(t, BAD_NUMBER_PATTERNS)) return { outcome: 'bad_number', do_not_contact: dnc }
   if (dnc) return { outcome: 'do_not_contact', do_not_contact: true }
   if (anyMatch(t, NO_ANSWER_PATTERNS)) return { outcome: 'no_answer', do_not_contact: false }
-  // 🔴 软拒绝必须先判：「暂时不感兴趣」里含着「不感兴趣」，反过来会被吞掉。
+  // 🔴 **事实压过心情**（Codex 复审 2026-08-16）：「想了想，但已经在别家订了」
+  //    两边都命中，前半句是犹豫、后半句是这单已经没了。软的赢会让一个已经
+  //    在别家下单的人继续收我们的跟进邮件。
+  if (anyMatch(t, BOOKED_ELSEWHERE_PATTERNS)) return { outcome: 'not_interested', do_not_contact: false }
+  // 🔴 软拒绝必须排在「明确没兴趣」前面：「暂时不感兴趣」里含着「不感兴趣」，
+  //    反过来判的话那个「暂时」当场被吞掉，人被永久停掉。
   if (anyMatch(t, SOFT_NO_PATTERNS)) return { outcome: 'not_interested_now', do_not_contact: false }
-  if (anyMatch(t, NOT_INTERESTED_PATTERNS)) return { outcome: 'not_interested', do_not_contact: false }
+  if (anyMatch(t, NO_INTEREST_PATTERNS)) return { outcome: 'not_interested', do_not_contact: false }
   if (anyMatch(t, CALLBACK_PATTERNS)) return { outcome: 'callback_set', do_not_contact: false }
   return { outcome: 'spoke', do_not_contact: false }
 }

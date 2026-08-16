@@ -91,6 +91,9 @@ const OUTCOME_LABEL: Record<string, string> = {
   bad_number: '号码不通',
   do_not_contact: '别再联系',
   not_interested: '没兴趣',
+  // 少了这一条，「暂时不考虑」这个结论在时间线上完全不显示 ——
+  // 软硬拒绝分开这件事，在最主要的翻查视图里就等于没做。
+  not_interested_now: '暂时不考虑',
   spoke: '聊上了',
   callback_set: '约了回电',
 }
