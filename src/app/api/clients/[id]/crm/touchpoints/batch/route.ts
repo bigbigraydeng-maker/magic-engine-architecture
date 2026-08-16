@@ -96,11 +96,20 @@ export async function POST(
    * 只要那次镜像更新没成功，这个人就会被群发**永远跳过**，而界面上已经显示
    * 他回到名单了。判据只有一份，见 `lib/crm/dnc`。
    */
-  const { data: dncTouches } = await supabaseAdmin
+  const { data: dncTouches, error: dErr } = await supabaseAdmin
     .from('contact_touchpoints')
     .select('contact_id, metadata, occurred_at')
     .eq('client_id', clientId)
     .in('contact_id', rows.map((r) => r.id))
+
+  /**
+   * 🔴 读不到真相源就整批不写（Codex 复审 2026-08-16）。把这次失败当成
+   * 「他们都没有拒联触点」，就会给一个明确说过别再联系的人记上一笔群发 ——
+   * 这正是这套判据存在的理由。宁可让人重发一次。
+   */
+  if (dErr) {
+    return NextResponse.json({ error: dErr.message }, { status: 500 })
+  }
 
   const touchesByContact = new Map<string, DncTouch[]>()
   for (const t of (dncTouches ?? []) as {

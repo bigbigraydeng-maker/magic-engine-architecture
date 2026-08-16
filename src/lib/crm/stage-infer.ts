@@ -22,11 +22,12 @@ import {
   STAGE_SYSTEM_PROMPT,
   StageVerdictSchema,
   SAFE_STAGES,
+  POOL_STAGE,
   renderTranscript,
   ruleOnlyStage,
   usableStage,
   worthReading,
-  type SafeStage,
+  type AppliedStage,
   type StageVerdict,
   type TranscriptLine,
 } from './stage-from-conversation'
@@ -55,6 +56,8 @@ export interface StageInferResult {
   filled: number
   /** 其中没问模型、规则自己定下来的（「无下文」）。 */
   byRule: number
+  /** 其中读不出来、放进潜在客户池的。 */
+  toPool: number
   /** 模型有答案、但没过验证（证据编的 / 阶段不许落）而丢掉的。 */
   rejected: number
   /** 写库失败的。 */
@@ -66,6 +69,7 @@ const EMPTY: StageInferResult = {
   asked: 0,
   filled: 0,
   byRule: 0,
+  toPool: 0,
   rejected: 0,
   failed: 0,
 }
@@ -245,8 +249,10 @@ export async function loadTranscriptLines(
 async function applyStage(
   clientId: string,
   contactId: string,
-  stage: SafeStage,
-  verdict: StageVerdict,
+  stage: AppliedStage,
+  // 只用得到这两样：为什么这么判、依据哪句原话。不收整个 verdict，
+  // 兜底进池子那条路本来就没有 verdict 可给。
+  verdict: { reason: string; evidence: string },
   now: Date,
 ): Promise<boolean> {
   const nowIso = now.toISOString()
@@ -287,13 +293,27 @@ async function applyStage(
    * 下一轮不会重来（stage 已经不空了），但至少 cron 摘要里看得见。
    */
   if (aErr) {
-    await supabaseAdmin
+    const { error: rErr, data: rolled } = await supabaseAdmin
       .from('contacts')
       .update({ stage: null, stage_updated_at: null })
       .eq('id', contactId)
       .eq('client_id', clientId)
       .eq('stage', stage)
       .eq('stage_updated_at', nowIso)
+      .select('id')
+
+    /**
+     * 退不掉的话别嘴上说「已经退回」（Codex 复审 2026-08-16）—— 留痕失败往往
+     * 是数据库正在抽风，紧跟着的这条 UPDATE 大概率也失败。这时这个人身上
+     * 挂着一个**没有来历**的阶段、而且再不会被重填，必须在错误里说清楚，
+     * 才能从 cron 摘要里认出他、手工清掉。
+     */
+    if (rErr || !rolled || rolled.length === 0) {
+      throw new Error(
+        `留痕失败且阶段没退回（contact=${contactId} stage=${stage}）: ${aErr.message}` +
+          (rErr ? ` / 退回也失败: ${rErr.message}` : ''),
+      )
+    }
     throw new Error(`留痕失败，已把阶段退回: ${aErr.message}`)
   }
 
@@ -324,47 +344,25 @@ export async function inferStagesFromConversations(
   /**
    * 空阶段的人 —— 结构上就够不着已经标过的人。
    *
-   * 🔴 **窗口必须转**（Codex 复审 2026-08-16）。固定取前 N 条的话，那些**填不上**
-   * 的人（模型一直答 unclear、证据一直核不过）会永远占着队头，排在他们后面的人
-   * 一次都轮不到 —— 556 个人里可能只有前面那几十个被看过。
+   * **永远从队头取，不需要任何轮转**（PM 2026-08-16 定的简化）。因为
+   * 每个看过的人都会拿到一个阶段：判得出来就落判出来那一档，判不出来就进
+   * 潜在客户池（见 `POOL_STAGE`）。看一个少一个，队列自己就往前走。
    *
-   * 没有「上次什么时候试过」那一列（加列是 A 级改动，得 PM 点头），所以按
-   * **当前是第几个小时**滚动起点：`id` 排序稳定，每小时挪一窗，一天之内整份
-   * 名单都会被扫到。窗口取 4 倍是因为其中大部分会被「对方一个字没回」直接跳过，
-   * 不占模型预算。
+   * 之前为了绕开「填不上的人堵在队头」，这里做过按小时滚动窗口 —— 那是在
+   * 「读不出来就什么都不写」的前提下才需要的补丁。前提没了，补丁也就该删掉：
+   * 留着反而会跳过人（队列每轮都在变短，固定的起点会滑过去）。
    */
-  /**
-   * 🔴 **步长要等于一轮真正处理得完的量**（Codex 复审 2026-08-16）。
-   *
-   * 取一大窗、却在问满 60 个之后就停 —— 那么每小时只有窗口最前面那 60 个被
-   * 处理过，而起点却往前跳了一整窗。556 个人里，60–239、300–479 那两段
-   * **永远轮不到**。窗口开大只是为了「多取一些备着」（其中很多会被
-   * 「他一个字没回」直接跳过、不花模型钱），真正推进的步子必须是 60。
-   */
-  const STEP = MAX_CONTACTS_PER_RUN
-  const WINDOW = STEP * 4
-  const offset = now.getUTCHours() * STEP
-
   const candidates: { id: string; client_id: string }[] = []
   for (const ids of chunk(clientIds, IN_CHUNK)) {
-    const page = async (from: number) =>
-      supabaseAdmin
-        .from('contacts')
-        .select('id, client_id')
-        .in('client_id', ids)
-        .is('stage', null)
-        .eq('do_not_contact', false)
-        .order('id', { ascending: true })
-        .range(from, from + WINDOW - 1)
-
-    let { data, error } = await page(offset)
+    const { data, error } = await supabaseAdmin
+      .from('contacts')
+      .select('id, client_id')
+      .in('client_id', ids)
+      .is('stage', null)
+      .eq('do_not_contact', false)
+      .order('id', { ascending: true })
+      .limit(MAX_CONTACTS_PER_RUN * 4)
     if (error) throw new Error(`捞空阶段联系人失败: ${error.message}`)
-    // 起点越过了名单末尾（人数没那么多 / 已经填掉一批）→ 回到队头，
-    // 否则那一小时会白跑一轮。
-    if ((data ?? []).length === 0 && offset > 0) {
-      ;({ data, error } = await page(0))
-      if (error) throw new Error(`捞空阶段联系人失败: ${error.message}`)
-    }
     candidates.push(...((data ?? []) as { id: string; client_id: string }[]))
   }
   result.candidates = candidates.length
@@ -378,17 +376,41 @@ export async function inferStagesFromConversations(
   for (const c of candidates) {
     if (result.asked >= MAX_CONTACTS_PER_RUN) break
     try {
+      const configured = configuredByClient.get(c.client_id) ?? new Set<string>()
       const lines = await loadTranscriptLines(c.client_id, c.id)
+
+      /**
+       * 读不出来时的落点 —— 潜在客户池（PM 2026-08-16）。
+       *
+       * 「看过了，还看不出他到哪一步」本身就是一个答案，而且是**真的**答案：
+       * 他现在就是个还没聊开的潜在客户。写下来，他就不在候选里了 ——
+       * 不必再记「上次什么时候试过」，也不必轮转队列。
+       */
+      const toPool = async (why: string): Promise<void> => {
+        if (!configured.has(POOL_STAGE)) return
+        const ok = await applyStage(
+          c.client_id,
+          c.id,
+          POOL_STAGE,
+          { evidence: '', reason: why },
+          now,
+        )
+        if (ok) {
+          result.filled++
+          result.toPool++
+        }
+      }
 
       /**
        * 对方一个字都没回过 —— 不问模型，规则自己定。
        *
        * 判据窄到不可能出错（见 `ruleOnlyStage`）：一条入站都没有 + 我们确实
-       * 发过 + 最后一次发出去已经两周。落不下来就继续空着。
+       * 发过 + 最后一次发出去已经两周。规则也定不下来（比如我们压根没发过、
+       * 或者才刚发出去）就进池子。
        */
       if (!worthReading(lines)) {
         const byRule = ruleOnlyStage(lines, now)
-        if (byRule && (configuredByClient.get(c.client_id)?.has(byRule) ?? false)) {
+        if (byRule && configured.has(byRule)) {
           const verdict: StageVerdict = {
             stage: byRule,
             evidence: '',
@@ -398,23 +420,28 @@ export async function inferStagesFromConversations(
             result.filled++
             result.byRule++
           }
+        } else {
+          await toPool('他还没跟我们说过话')
         }
         continue
       }
 
       const transcript = renderTranscript(lines)
-      if (!transcript) continue
-
-      result.asked++
-      const verdict = await ask(transcript)
-      if (!verdict) {
-        result.rejected++
+      if (!transcript) {
+        await toPool('还没有任何往来记录')
         continue
       }
 
-      const stage = usableStage(verdict, transcript, configuredByClient.get(c.client_id) ?? new Set())
-      if (!stage) {
+      result.asked++
+      const verdict = await ask(transcript)
+      // 模型答不上来 / 答歪了 / 证据是编的 / 落点不许用 —— 都不算数，进池子。
+      // 「读不出来」不等于「不知道该拿他怎么办」：他就是个潜在客户。
+      const stage = verdict
+        ? usableStage(verdict, transcript, configured)
+        : null
+      if (!stage || !verdict) {
         result.rejected++
+        await toPool('看过往来记录，还看不出他到哪一步')
         continue
       }
 

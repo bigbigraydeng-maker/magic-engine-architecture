@@ -197,3 +197,24 @@ describe('表单不算回话', () => {
     expect(renderTranscript([formLine])).toContain('Best of China')
   })
 })
+
+/**
+ * 🔴 **他又填了一次表 = 他又来了**（Codex 复审 2026-08-16）。
+ * 一份比我们最后一次联系还新的表单，是这个人今天又主动留了资料。
+ * 照旧写「无下文」等于把一个刚刚举手的活客人标成没反应的。
+ */
+describe('新填的表单挡住「无下文」', () => {
+  const NOW = new Date('2026-08-16T00:00:00Z')
+  const out = (at: string) => line({ direction: 'outbound', body: 'Following up', at })
+  const form = (at: string) => line({ channel: 'meta_lead_form', body: 'Best of China', at })
+
+  it('表单比我们最后一次联系还新 → 不判，交给模型读', () => {
+    expect(ruleOnlyStage([out('2026-07-01T00:00:00Z'), form('2026-08-14T00:00:00Z')], NOW)).toBeNull()
+  })
+
+  it('表单是当初留资那次（早于我们联系）→ 照旧判「无下文」', () => {
+    expect(ruleOnlyStage([form('2026-06-01T00:00:00Z'), out('2026-07-01T00:00:00Z')], NOW)).toBe(
+      'no_response',
+    )
+  })
+})

@@ -24,7 +24,13 @@ function makeFake(tables: Record<string, Row[]>) {
     const api: Record<string, unknown> = {}
     const chain = () => api
     api.select = () => chain()
-    api.eq = (c: string, v: unknown) => (filters.push((r) => r[c] === v), chain())
+    // `metadata->>outcome` 这种 JSON 取值也要认 —— 生产查询就是这么写的。
+    const read = (r: Row, col: string): unknown => {
+      if (!col.includes('->>')) return r[col]
+      const [outer, key] = col.split('->>')
+      return (r[outer] as Record<string, unknown> | undefined)?.[key]
+    }
+    api.eq = (c: string, v: unknown) => (filters.push((r) => read(r, c) === v), chain())
     api.in = (c: string, v: unknown[]) => (filters.push((r) => v.includes(r[c])), chain())
     api.then = (resolve: (v: unknown) => unknown) =>
       Promise.resolve({
@@ -119,6 +125,40 @@ describe('真的说过「别再联系」的人，一条都不许打扰', () => {
 
   it('压根没说过「不打算去」的 → 不下发（别把正常拒联翻出来）', async () => {
     const items = await run([person('c1', '某人')], [{ contact_id: 'c1', raw: '不感兴趣' }])
+    expect(items).toHaveLength(0)
+  })
+})
+
+/**
+ * 🔴 **半写入状态的人也得被捞出来**（Codex 复审 2026-08-16）。
+ *
+ * 取消接口是两步写：先写触点，再放下镜像列。第二步失败时，触点说他拒联、
+ * 镜像列却是 false —— 而今日名单和分段都按触点判，他照旧被排除着。
+ * 这条任务只按镜像列筛的话，最该被复核的这一批永远不会出现。
+ */
+describe('镜像列没写上的人也要捞出来', () => {
+  it('触点说拒联、镜像列是 false → 照样下发', async () => {
+    const items = await run(
+      [{ id: 'c9', client_id: CLIENT, display_name: 'Half Written', do_not_contact: false }],
+      [
+        {
+          contact_id: 'c9',
+          client_id: CLIENT,
+          raw: 'not intending to go',
+          metadata: { outcome: 'do_not_contact' },
+          occurred_at: '2026-07-01T00:00:00Z',
+        },
+      ],
+    )
+    expect(items).toHaveLength(1)
+    expect(items[0].what).toContain('Half Written')
+  })
+
+  it('既没标过、触点也没说过 → 不打扰', async () => {
+    const items = await run(
+      [{ id: 'c9', client_id: CLIENT, display_name: 'Normal', do_not_contact: false }],
+      [{ contact_id: 'c9', client_id: CLIENT, raw: 'not intending to go' }],
+    )
     expect(items).toHaveLength(0)
   })
 })

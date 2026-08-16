@@ -715,6 +715,13 @@ async function pushBaselineItems(supabase: SupabaseClient, items: ManualItem[]):
  * 判据只挑「原话里只有『不打算去』、没有任何划界限说法」的那些 —— 真的说过
  * 「别再联系 / 不要打电话 / 只邮件联系」的人不在里面，不会被打扰。
  */
+interface ContactRowForDnc {
+  id: string
+  client_id: string
+  display_name: string
+  do_not_contact?: boolean
+}
+
 export async function pushDncReviewItems(
   supabase: SupabaseClient,
   items: ManualItem[],
@@ -723,12 +730,42 @@ export async function pushDncReviewItems(
 ): Promise<void> {
   if (ids.length === 0) return
 
-  const { data: contacts } = await supabase
+  /**
+   * 候选人从**两头**取（Codex 复审 2026-08-16）：
+   *
+   *   · 镜像列 `do_not_contact = true` 的
+   *   · 触点里说过拒联的 —— 那才是真相源
+   *
+   * 只按镜像列筛会漏掉最该被复核的一批：写触点成功、镜像列那一步失败的人。
+   * 那种半写入状态确实存在（取消接口正因为它才回 500），而这些人恰恰
+   * **被今日名单和分段当成拒联继续排除着** —— 漏了他们，这条任务就白设了。
+   */
+  const { data: flaggedRows } = await supabase
     .from('contacts')
-    .select('id, client_id, display_name')
+    .select('id, client_id, display_name, do_not_contact')
     .in('client_id', ids)
     .eq('do_not_contact', true)
-  if (!contacts || contacts.length === 0) return
+
+  const { data: dncTouchRows } = await supabase
+    .from('contact_touchpoints')
+    .select('contact_id')
+    .in('client_id', ids)
+    .eq('metadata->>outcome', 'do_not_contact')
+
+  const extraIds = Array.from(
+    new Set(((dncTouchRows ?? []) as { contact_id: string }[]).map((t) => t.contact_id)),
+  ).filter((id) => !(flaggedRows ?? []).some((c) => (c.id as string) === id))
+
+  let contacts = (flaggedRows ?? []) as ContactRowForDnc[]
+  if (extraIds.length > 0) {
+    const { data: extra } = await supabase
+      .from('contacts')
+      .select('id, client_id, display_name, do_not_contact')
+      .in('client_id', ids)
+      .in('id', extraIds)
+    contacts = contacts.concat((extra ?? []) as ContactRowForDnc[])
+  }
+  if (contacts.length === 0) return
 
   const { data: touches } = await supabase
     .from('contact_touchpoints')
@@ -770,7 +807,11 @@ export async function pushDncReviewItems(
      * 这条任务第二天照旧冒出来 —— FDE 会以为自己上次点的按钮是假的。
      * 判据只有一份，见 `lib/crm/dnc`。
      */
-    if (!isDoNotContact(true, touchesByContact.get(c.id as string) ?? [])) continue
+    // 镜像列按它**实际的值**传，别写死：只按触点找来的那批，列可能是 false
+    // （正是「触点写成功、镜像那一步失败」的那种半写入状态）。
+    if (!isDoNotContact(c.do_not_contact === true, touchesByContact.get(c.id as string) ?? [])) {
+      continue
+    }
 
     const raws = byContact.get(c.id as string) ?? []
     if (raws.some((r) => BOUNDARY.test(r))) continue

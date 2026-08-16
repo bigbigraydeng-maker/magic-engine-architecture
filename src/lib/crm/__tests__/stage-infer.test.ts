@@ -70,13 +70,8 @@ function stubDb(over: Partial<Fake> = {}) {
           in: () => ({
             is: () => ({
               eq: () => ({
-                order: () => ({
-                  // 窗口按小时滚动 —— 测试里固定 0 点，起点就是 0。
-                  range: async (from: number) => ({
-                    data: from === 0 ? f.candidates : [],
-                    error: null,
-                  }),
-                }),
+                // 永远从队头取，不轮转 —— 每看一个少一个，队列自己往前走。
+                order: () => ({ limit: async () => ({ data: f.candidates, error: null }) }),
               }),
             }),
           }),
@@ -154,7 +149,15 @@ describe('没配 key 就一步都不走', () => {
     vi.stubEnv('OPENAI_API_KEY', '')
     stubDb()
     const r = await inferStagesFromConversations(NOW, ask)
-    expect(r).toEqual({ candidates: 0, asked: 0, filled: 0, byRule: 0, rejected: 0, failed: 0 })
+    expect(r).toEqual({
+      candidates: 0,
+      asked: 0,
+      filled: 0,
+      byRule: 0,
+      toPool: 0,
+      rejected: 0,
+      failed: 0,
+    })
     expect(mocks.from).not.toHaveBeenCalled()
   })
 })
@@ -175,15 +178,13 @@ describe('填空着的阶段', () => {
     expect(String(written.audit?.note)).toContain('October itinerary')
   })
 
-  it('🔴 证据是编的 → 一个字都不写', async () => {
+  it('🔴 证据是编的 → 模型说的那一档一个字都不写', async () => {
     stubDb()
     answer({ stage: 'quoted', evidence: 'He said he will pay the deposit tomorrow', reason: '编的' })
 
     const r = await inferStagesFromConversations(NOW, ask)
     expect(r.rejected).toBe(1)
-    expect(r.filled).toBe(0)
-    expect(written.stage).toBeUndefined()
-    expect(written.audit).toBeUndefined()
+    expect(written.stage).not.toBe('quoted')
   })
 
   it('🔴 模型想落终结档 → 不接，那个人会从所有名单上消失', async () => {
@@ -192,16 +193,7 @@ describe('填空着的阶段', () => {
 
     const r = await inferStagesFromConversations(NOW, ask)
     expect(r.rejected).toBe(1)
-    expect(written.stage).toBeUndefined()
-  })
-
-  it('模型说读不出来 → 继续空着，不是失败', async () => {
-    stubDb()
-    answer({ stage: 'unclear', evidence: '', reason: '对话太薄' })
-
-    const r = await inferStagesFromConversations(NOW, ask)
-    expect(r.filled).toBe(0)
-    expect(r.failed).toBe(0)
+    expect(written.stage).not.toBe('not_interested')
   })
 })
 
@@ -308,17 +300,17 @@ describe('对方一个字没回过的，规则自己定', () => {
     expect(String(written.audit?.note)).not.toContain('「」')
   })
 
-  it('昨天才发的 → 继续空着，人家可能今天就回', async () => {
+  it('昨天才发的 → 不写「无下文」，进潜在客户池等他回', async () => {
     stubDb({ messages: [outbound('2026-08-15T00:00:00Z')] })
     const r = await inferStagesFromConversations(NOW, ask)
-    expect(r.filled).toBe(0)
-    expect(written.stage).toBeUndefined()
+    expect(written.stage).toBe('new')
+    expect(r.byRule).toBe(0)
   })
 
-  it('我们也没发过 → 继续空着，那不叫无下文', async () => {
+  it('我们也没发过 → 不写「无下文」，进潜在客户池', async () => {
     stubDb({ messages: [] })
-    const r = await inferStagesFromConversations(NOW, ask)
-    expect(r.filled).toBe(0)
+    await inferStagesFromConversations(NOW, ask)
+    expect(written.stage).toBe('new')
   })
 })
 
@@ -390,5 +382,45 @@ describe('只填过表、从没说过话的人', () => {
     expect(ask).not.toHaveBeenCalled()
     expect(written.stage).toBe('no_response')
     expect(r.byRule).toBe(1)
+  })
+})
+
+
+/**
+ * 🔴 **读不出来就进潜在客户池**（PM 2026-08-16）。
+ *
+ * 原先读不出来就什么都不写，于是这个人每天被重读一遍、每次都读不出来
+ * （对话太薄的人永远读不出来）。为了不重复烧钱我一度打算加一列记「上次
+ * 什么时候试过」—— PM 一句话点破：读不出来本来就该进潜在客户池，那才是他
+ * 现在真实的位置。写下来他就不在候选里了，那一列和轮转队列都不用做了。
+ */
+describe('读不出来 → 潜在客户池', () => {
+  it('模型说读不出来 → 落「新线索」，不是继续空着', async () => {
+    stubDb()
+    answer({ stage: 'unclear', evidence: '', reason: '对话太薄' })
+
+    const r = await inferStagesFromConversations(NOW, ask)
+    expect(written.stage).toBe('new')
+    expect(r.toPool).toBe(1)
+    expect(r.filled).toBe(1)
+    expect(r.failed).toBe(0)
+  })
+
+  it('留痕说清是「看过还看不出来」，不是假装读懂了', async () => {
+    stubDb()
+    answer({ stage: 'unclear', evidence: '', reason: '对话太薄' })
+
+    await inferStagesFromConversations(NOW, ask)
+    expect(String(written.audit?.note)).toContain('还看不出他到哪一步')
+    expect(written.audit?.to_stage).toBe('new')
+  })
+
+  it('客户没配「新线索」这一档 → 不硬塞，继续空着', async () => {
+    stubDb({ stages: ['contacted', 'quoted', 'deferred', 'no_response', 'traveling_soon'] })
+    answer({ stage: 'unclear', evidence: '', reason: '对话太薄' })
+
+    const r = await inferStagesFromConversations(NOW, ask)
+    expect(written.stage).toBeUndefined()
+    expect(r.toPool).toBe(0)
   })
 })

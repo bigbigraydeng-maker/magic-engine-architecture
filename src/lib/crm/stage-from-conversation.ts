@@ -63,6 +63,29 @@ export const SAFE_STAGES = ['contacted', 'quoted', 'deferred', 'no_response', 't
 
 export type SafeStage = (typeof SAFE_STAGES)[number]
 
+/**
+ * 读不出来时的落点 —— **潜在客户池**（CTS 那 9 档里的「新线索」）。
+ *
+ * 🔴 这是 PM 2026-08-16 拍的，也是这套东西最重要的一条简化。
+ *
+ * 原先读不出来就**什么都不写**，于是这个人第二天、第三天……每天都被重新读一遍，
+ * 每次都读不出来（对话太薄的人永远读不出来）。为了不重复烧钱，我一度打算加一列
+ * 记「上次什么时候试过」—— PM 一句话点破：**读不出来本来就该进潜在客户池**，
+ * 那才是他现在真实的位置。
+ *
+ * 这么一改，三个问题一起没了：
+ *   · 不用记「试过没有」—— 他已经不在候选里了
+ *   · 不用轮转候选窗口 —— 每读一个少一个，队列自己就往前走
+ *   · 界面上也更诚实：「新线索」比一片空白说得清楚
+ *
+ * 安全性：`new` 是整条漏斗里**最不下结论**的一档 —— 不终结、不停止营销、
+ * 照常跟进，而且只填在本来就空着的人身上。销售随时可以改。
+ */
+export const POOL_STAGE = 'new' as const
+
+/** 真正会被写进档案的阶段：模型判出来的那几档，加上兜底的潜在客户池。 */
+export type AppliedStage = SafeStage | typeof POOL_STAGE
+
 /** 模型什么都读不出来时给的答案 —— 空着比猜一个强。 */
 export const NO_VERDICT = 'unclear' as const
 
@@ -227,15 +250,28 @@ const NO_RESPONSE_AFTER_MS = 14 * 86_400_000
 export function ruleOnlyStage(lines: TranscriptLine[], now: Date): 'no_response' | null {
   if (worthReading(lines)) return null
 
-  const lastOutbound = Math.max(
-    0,
-    ...lines
-      .filter((l) => l.direction === 'outbound' && l.body.trim().length > 0)
-      .map((l) => new Date(l.at).getTime())
-      .filter((t) => !Number.isNaN(t)),
-  )
+  const at = (l: TranscriptLine): number => {
+    const t = new Date(l.at).getTime()
+    return Number.isNaN(t) ? 0 : t
+  }
+  const latest = (pick: (l: TranscriptLine) => boolean): number =>
+    Math.max(0, ...lines.filter((l) => pick(l) && l.body.trim().length > 0).map(at))
+
+  const lastOutbound = latest((l) => l.direction === 'outbound')
   if (lastOutbound === 0) return null
   if (now.getTime() - lastOutbound < NO_RESPONSE_AFTER_MS) return null
+
+  /**
+   * 🔴 **他又填了一次表 = 他又来了**（Codex 复审 2026-08-16）。
+   *
+   * 表单不算「回复我们的跟进」（上面 `FORM_CHANNELS` 那段），但一份**比我们
+   * 最后一次联系还新**的表单是另一回事：这个人今天又主动留了一次资料。
+   * 照旧写「无下文」，等于把一个刚刚举手的活客人标成没反应的。
+   *
+   * 这种情况不归规则管，交给模型去读那份表单里写了什么。
+   */
+  if (latest((l) => FORM_CHANNELS.has(l.channel)) > lastOutbound) return null
+
   return 'no_response'
 }
 
