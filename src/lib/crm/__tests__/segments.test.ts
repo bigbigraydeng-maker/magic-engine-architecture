@@ -792,4 +792,49 @@ describe('什么算对电话线的判决', () => {
       expect(isPhoneVerdict(o)).toBe(false)
     }
   })
+
+  /**
+   * 🔴 **手打笔记里那个 `spoke` 不算打通了电话**（Codex 复审 2026-08-16 第四轮）。
+   *
+   * `recordManualTouchpoint` 把每条手记都写成 `channel: 'phone'`，而 `classifyNote`
+   * 的**兜底值就是 `spoke`** —— 任何没命中规则的普通备注都会变成它。于是销售给
+   * 坏号客人记一句「已经邮件发他了」，电话当场被判成「打通了」，那个明知打不通
+   * 的号又变回可拨。**而这类记录恰恰是坏号客人的常态**（他们本来就只能靠邮件联系）。
+   *
+   * 一个兜底值不许推翻一个人明确按下的判断。
+   */
+  it('手打笔记里的 spoke 不算打通 —— 它只是兜底值', () => {
+    expect(isPhoneVerdict('spoke', 'me_manual')).toBe(false)
+  })
+
+  it('语音桥接写的 spoke 才算打通', () => {
+    expect(isPhoneVerdict('spoke', 'voice_bridge')).toBe(true)
+  })
+
+  /** 「号码是坏的」从来不是兜底值，是有人明说的 —— 两边都认。 */
+  it('手打的「号码是坏的」照旧算数', () => {
+    expect(isPhoneVerdict('bad_number', 'me_manual')).toBe(true)
+  })
+})
+
+/**
+ * 端到端把上面那条钉在分段结果上：坏号客人之后记了一句普通的邮件沟通，
+ * 号码**不许**变回可拨。
+ */
+describe('给坏号客人记一句邮件沟通，号码不许复活', () => {
+  it('手记之后照旧是打不通', () => {
+    const c = contact({
+      touchpoints: [
+        { channel: 'phone', direction: 'outbound', occurredAt: '2026-07-02T00:00:00Z', outcome: 'bad_number', source: 'me_manual' },
+        // 销售在抽屉里记的一句「已经邮件发他了」—— 走的是同一条手记通道，
+        // channel 被写死成 phone，outcome 兜底成 spoke
+        { channel: 'phone', direction: 'outbound', occurredAt: '2026-07-20T00:00:00Z', outcome: 'spoke', source: 'me_manual' },
+      ],
+      hasPhone: true,
+      hasEmail: true,
+    })
+    const r = segmentContact(c, NOW)
+    expect(r.phoneUnusable).toBe(true)
+    expect(r.suggestedChannel).not.toBe('phone')
+  })
 })

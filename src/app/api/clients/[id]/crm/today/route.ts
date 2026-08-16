@@ -89,7 +89,7 @@ function latestOutcomeOf(touches: TouchRow[]): string | null {
 function phoneLineDeadFrom(touches: TouchRow[]): boolean {
   for (const t of touches) {
     const o = t.metadata?.outcome
-    if (typeof o === 'string' && isPhoneVerdict(o)) return o === 'bad_number'
+    if (typeof o === 'string' && isPhoneVerdict(o, t.source)) return o === 'bad_number'
   }
   return false
 }
@@ -276,6 +276,8 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
         direction: t.direction,
         occurredAt: t.occurred_at,
         outcome: (t.metadata?.outcome as string) ?? null,
+        // 判「电话线通不通」要靠它分清真打通了和手打出来的 spoke（见 isPhoneVerdict）
+        source: t.source,
         travelWindow: (t.metadata?.travel_window as string) ?? null,
         callbackAt: (t.metadata?.callback_at as string) ?? null,
         // 邮件被打开 / 链接被点 = 行为信号，不是真人消息。分段逻辑必须区分，

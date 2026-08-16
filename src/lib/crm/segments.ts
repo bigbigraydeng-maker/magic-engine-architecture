@@ -153,6 +153,13 @@ export interface TouchpointLike {
    * 写入侧见 `RecordTouchpointInput.action`。
    */
   action?: 'snooze' | 'unsnooze' | null
+  /**
+   * 这一笔从哪来的（`contact_touchpoints.source`）。
+   *
+   * 目前只有一个用处，但很要紧：判「电话线通不通」时要分得清
+   * **真的打通了** 和 **销售打字打出来的 `spoke`**。见 `phoneLineIsDead`。
+   */
+  source?: string | null
   outcome?: string | null
   travelWindow?: string | null
   callbackAt?: string | null
@@ -421,8 +428,23 @@ const PHONE_VERDICTS: ReadonlySet<string> = new Set(['bad_number', 'spoke'])
  * 复用同一份判据 —— 两边各写一套，就会出现分段说「打不通」、分组却说
  * 「不要再联系」的裂缝，补号码那件事又一次被藏起来。
  */
-export function isPhoneVerdict(outcome: string | null | undefined): boolean {
-  return !!outcome && PHONE_VERDICTS.has(outcome)
+export function isPhoneVerdict(
+  outcome: string | null | undefined,
+  source?: string | null,
+): boolean {
+  if (!outcome || !PHONE_VERDICTS.has(outcome)) return false
+  // 🔴 手打的笔记里那个 `spoke` **不算打通了电话**（Codex 复审 2026-08-16）。
+  //
+  // `recordManualTouchpoint` 把每一条手记都写成 `channel: 'phone'`，而
+  // `classifyNote` 的**兜底值就是 `spoke`** —— 任何没命中规则的普通备注都会变成它。
+  // 于是销售给坏号客人记一句「已经邮件发他了」，电话当场被判成「打通了」，
+  // 刷新之后那个明知打不通的号又变回可拨 —— 而这类记录**恰恰是坏号客人的常态**。
+  //
+  // 一个**兜底值**不许推翻一个**人明确按下的判断**。所以只认非手记来源的
+  // `spoke`（语音桥接接通时写的那种）。「号码是坏的」两边都认：它从来不是兜底值，
+  // 是有人明说的。
+  if (outcome === 'spoke' && source === 'me_manual') return false
+  return true
 }
 
 /**
@@ -436,7 +458,7 @@ export function isPhoneVerdict(outcome: string | null | undefined): boolean {
  */
 export function phoneLineIsDead(tps: TouchpointLike[]): boolean {
   const latest = tps
-    .filter((t) => t.outcome && PHONE_VERDICTS.has(t.outcome))
+    .filter((t) => isPhoneVerdict(t.outcome, t.source))
     .sort((a, b) => ts(b.occurredAt) - ts(a.occurredAt))[0]
   return latest?.outcome === 'bad_number'
 }

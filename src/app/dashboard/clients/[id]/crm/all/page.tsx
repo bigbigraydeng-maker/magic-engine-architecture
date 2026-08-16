@@ -25,6 +25,8 @@ interface ContactRow {
   firstSeenAt: string
   lastTouchAt: string | null
   phone: string | null
+  /** 号码在库里但打不通 —— 跟「今天该联系谁」那一页说同一件事。 */
+  phoneUnusable?: boolean
   email: string | null
   hasMessenger: boolean
   stage: string | null
@@ -233,7 +235,19 @@ function ContactDetail({
     <div className="space-y-4">
       {/* 联系方式 —— 展开里再给一次，方便直接拨号/发信 */}
       <div className="flex flex-wrap gap-2">
-        {row.phone && (
+        {/* 号码打不通就不给拨号链接 —— 号码照旧显示（要改号得先看得见），
+            但点不动。两个 CRM 入口必须说同一件事，否则销售两边都不再信。 */}
+        {row.phone && row.phoneUnusable && (
+          <span className="rounded-lg border border-me-stone bg-black/[0.04] px-3 py-1.5 text-sm font-semibold text-me-charcoal/45 line-through">
+            📞 {row.phone}
+          </span>
+        )}
+        {row.phone && row.phoneUnusable && (
+          <span className="w-full text-xs font-semibold text-me-charcoal/55">
+            ⚠️ 这个号打不通 —— 用邮件 / 私信联系，顺便问他要个新号
+          </span>
+        )}
+        {row.phone && !row.phoneUnusable && (
           <a href={`tel:${row.phone}`} className="rounded-lg border border-me-stone px-3 py-1.5 text-sm font-semibold text-me-charcoal">
             📞 {row.phone}
           </a>
