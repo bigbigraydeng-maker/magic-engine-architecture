@@ -107,6 +107,27 @@ describe('防夸大规则', () => {
     expect(errorCodes([parent, dirty])).toContain('supporting_artifact_with_role')
   })
 
+  it('B2（Codex）：me2_native 的 adapter 省略 adapterOf 就报错，不给它当顶层角色的口子', () => {
+    // componentType=adapter、me2_native、有 architecturalRole、没 adapterOf ——
+    // 类型层会把它当 Me2RoleComponent 放行，运行时闸必须堵死
+    const c = makeComponent({ id: 'adapter.rogue', componentType: 'adapter' }) // 默认 me2_native + kernel role
+    expect(errorCodes([c])).toContain('native_adapter_must_attach')
+  })
+
+  it('B2（Codex）：adapterOf 指向 legacy 父组件 = 报错（角色语义无处继承）', () => {
+    const legacyParent = makeComponent({ id: 'platform.legacy-parent', origin: 'legacy', architecturalRole: undefined })
+    const child = makeComponent({ id: 'adapter.child', componentType: 'adapter', adapterOf: 'platform.legacy-parent' })
+    expect(errorCodes([legacyParent, child])).toContain('adapter_of_invalid_parent')
+  })
+
+  it('B2（Codex）：adapterOf 指向另一个 supporting artifact = 报错（它自己没角色可继承）', () => {
+    const roleParent = makeComponent({ id: 'capability.root', componentType: 'capability' })
+    // 真正的 supporting artifact：无 architecturalRole（显式清掉 makeComponent 的默认 role）
+    const supporting = makeComponent({ id: 'adapter.mid', componentType: 'adapter', adapterOf: 'capability.root', architecturalRole: undefined })
+    const child = makeComponent({ id: 'adapter.leaf', componentType: 'adapter', adapterOf: 'adapter.mid', architecturalRole: undefined })
+    expect(errorCodes([roleParent, supporting, child])).toContain('adapter_of_invalid_parent')
+  })
+
   it('adapterOf 指向不存在的组件报错', () => {
     const c = makeComponent({ componentType: 'adapter', adapterOf: 'platform.ghost' })
     expect(errorCodes([c])).toContain('dangling_adapter_of')

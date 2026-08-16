@@ -133,12 +133,18 @@ export function validateRegistry(
       } else if (!(ARCHITECTURAL_ROLE as readonly string[]).includes(c.architecturalRole)) {
         err(c.id, 'illegal_enum', `architecturalRole 取值非法：'${c.architecturalRole}'`)
       }
+
+      // B2（Codex 复审补漏）：me2_native 的 adapter **必须**是 supporting artifact
+      // （挂了 adapterOf）。省略 adapterOf 再填个 architecturalRole，类型会把它当顶层
+      // Me2RoleComponent 放行 —— 那就重新给了 adapter 冒充七层角色的口子。堵死。
+      if (c.componentType === 'adapter' && c.adapterOf === undefined) {
+        err(c.id, 'native_adapter_must_attach', 'me2_native 的 adapter 必须通过 adapterOf 挂靠七层父组件，不得作为顶层角色')
+      }
     } else if (c.architecturalRole !== undefined) {
       err(c.id, 'legacy_with_architectural_role', 'legacy 组件不得声明 architecturalRole（尚未纳入 ME2 七层 / Kernel 治理）')
     }
 
-    // adapterOf：只有 componentType === 'adapter' 的 me2_native 组件可以声明"我是谁的
-    // 零件"，且必须指向登记册里真实存在的组件（防悬空 + 防用这个字段偷造第八层）
+    // adapterOf：只有 componentType === 'adapter' 的 me2_native 组件可以声明"我是谁的零件"
     if (c.adapterOf !== undefined) {
       if (c.origin !== 'me2_native') {
         err(c.id, 'legacy_with_adapter_of', 'legacy 组件不得声明 adapterOf（它不是任何 ME2 组件的零件）')
@@ -146,8 +152,19 @@ export function validateRegistry(
       if (c.componentType !== 'adapter') {
         err(c.id, 'adapter_of_from_non_adapter', 'adapterOf 只能由 componentType=adapter 的组件声明')
       }
-      if (!components.some((t) => t.id === c.adapterOf)) {
+      // B2（Codex 复审补漏）：父组件必须是**真正的七层顶层组件** —— me2_native 且有
+      // 合法 architecturalRole。指向 legacy、或指向另一个 supporting artifact（它自己
+      // 没角色可继承）都会让"继承父组件角色"这句话断裂，还可能被 governanceStatusOf
+      // 错标成已治理。存在性之外，验身份。
+      const parent = components.find((t) => t.id === c.adapterOf)
+      if (parent === undefined) {
         err(c.id, 'dangling_adapter_of', `adapterOf 指向不存在的组件 '${c.adapterOf}'`)
+      } else if (
+        parent.origin !== 'me2_native' ||
+        parent.architecturalRole === undefined ||
+        !(ARCHITECTURAL_ROLE as readonly string[]).includes(parent.architecturalRole)
+      ) {
+        err(c.id, 'adapter_of_invalid_parent', `adapterOf 必须指向 me2_native 且拥有合法七层 architecturalRole 的父组件（'${c.adapterOf}' 不满足）`)
       }
     }
 

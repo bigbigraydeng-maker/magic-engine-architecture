@@ -33,9 +33,10 @@ export interface OperationalProbe {
   readonly evidenceSource: string
   /**
    * YYYY-MM-DD 的机器核验日期。
-   * 🔴 B3：`status==='yes'` ⟹ 此值**必非 null** —— 正向断言必须由带日期的机器证据
-   *    支撑，拿不到日期就退回 unknown（见 confirmedYes）。`no`（来自已登记 blocker /
-   *    operationalStatus 的结构性负向信号）与 `unknown` 允许 null。
+   * 🔴 B3：`status==='yes'` ⟹ 此值**必非 null**，且证据必须是**机器核验**的
+   *    （evidence.verification ∈ {repo_verified, sync_verified}，或 PR fact.source==='github_sync'）——
+   *    人工手填的 manual_claim / manual_snapshot 即便带了日期也只判 unknown（见 machineYes / pendingUnknown）。
+   *    `no`（来自已登记 blocker / operationalStatus 的结构性负向信号）与 `unknown` 允许 null。
    */
   readonly checkedAt: string | null
 }
@@ -52,21 +53,37 @@ export interface OperationalSnapshot {
 const NO_CALLER_PATTERN = /零\s*(个\s*)?(importer|调用方|caller)|没有(任何)?调用方|未接(入|线)|电没通/
 
 /**
- * B3：把"yes"这一步收成"必须有 checkedAt"。正向断言（code in main / 生产依赖存在 /
- * 真实调用方 / 生产跑过）是对动态现实的声明，会过期；没有带日期的机器证据就不能确认，
- * 退回 unknown，而不是编一个 checkedAt=null 的 yes。
+ * B3（Codex 复审收紧）：什么才算"机器证据"。
+ * 🔴 `manual_claim` 是人工手填的声明，**不是机器核验** —— 哪怕它带了 observedAt，
+ *    也只是"人手写了个日期"，不能把运营格判成 yes。只有 registry.test 对磁盘核验过
+ *    （repo_verified）或 GitHub 同步核验过（sync_verified）才算。
  */
-function confirmedYes(evidenceSource: string, checkedAt: string | null): OperationalProbe {
-  if (checkedAt === null) {
-    return { status: 'unknown', evidenceSource: `${evidenceSource}（缺 checkedAt，无法确认）`, checkedAt: null }
-  }
+const MACHINE_VERIFICATIONS: ReadonlySet<string> = new Set(['repo_verified', 'sync_verified'])
+function isMachineVerified(e: { verification: string; observedAt?: string }): boolean {
+  return MACHINE_VERIFICATIONS.has(e.verification) && !!e.observedAt
+}
+/**
+ * 在一组证据里找**第一条机器核验且带日期**的（Codex 复审：不固定取第一条 ——
+ * 数组里可能第一条是无日期的旧声明、后面才有合格的那条）。
+ */
+function firstMachineVerified<E extends { verification: string; observedAt?: string }>(
+  list: readonly E[],
+): E | null {
+  return list.find(isMachineVerified) ?? null
+}
+
+/** 一条 yes（机器核验 + 带日期）；调用方已保证 checkedAt 非 null。 */
+function machineYes(evidenceSource: string, checkedAt: string): OperationalProbe {
   return { status: 'yes', evidenceSource, checkedAt }
+}
+/** 有声明但都不是机器核验 → 诚实标 unknown「等机器核验」，不编 yes。 */
+function pendingUnknown(evidenceSource: string): OperationalProbe {
+  return { status: 'unknown', evidenceSource: `${evidenceSource}（仅人工声明，等机器核验）`, checkedAt: null }
 }
 
 function deriveCodeInMain(c: ProductMapComponent, facts: ExternalFacts): OperationalProbe {
   if (c.origin === 'legacy') {
-    // B3：ownedPaths 存在于磁盘 ≠ 带日期地证明它在 main。没有 GitHub 同步事实就没有
-    // checkedAt → unknown（PR2 的同步快照到位后，这里可变成带日期的 yes）。
+    // ownedPaths 存在于磁盘 ≠ 带日期地证明它在 main。没有 GitHub 同步事实 → unknown。
     return {
       status: 'unknown',
       evidenceSource: 'legacy: 无 GitHub 同步事实可确认 main 归属（PR2 起提供带日期的 sync fact）',
@@ -78,19 +95,23 @@ function deriveCodeInMain(c: ProductMapComponent, facts: ExternalFacts): Operati
   if (implementsPrs.length === 0) {
     return { status: 'unknown', evidenceSource: '未登记 role=implements 的 PR', checkedAt: null }
   }
+  // yes 只认机器同步来源（source==='github_sync'），manual_snapshot 是人工快照不算。
+  let mergedByManual: number | null = null
   for (const pr of implementsPrs) {
     const fact = facts.pullRequests[pr.number]
     if (fact?.state === 'merged') {
-      return confirmedYes(`#${pr.number}`, fact.observedAt ?? null)
+      if (fact.source === 'github_sync' && fact.observedAt) return machineYes(`#${pr.number}`, fact.observedAt)
+      mergedByManual = pr.number
     }
   }
+  // 负向来自机器事实（同步快照），带 observedAt —— 明确的非合并状态可判 no
   for (const pr of implementsPrs) {
     const fact = facts.pullRequests[pr.number]
-    if (fact !== undefined) {
-      // 负向来自机器事实（同步快照），带 observedAt
+    if (fact !== undefined && fact.state !== 'merged') {
       return { status: 'no', evidenceSource: `#${pr.number}`, checkedAt: fact.observedAt ?? null }
     }
   }
+  if (mergedByManual !== null) return pendingUnknown(`#${mergedByManual} 合并（人工快照）`)
   return { status: 'unknown', evidenceSource: 'PR 状态未同步（ExternalFacts 查无此 PR）', checkedAt: null }
 }
 
@@ -100,29 +121,33 @@ function deriveProductionPrerequisites(c: ProductMapComponent): OperationalProbe
     // 已登记的结构性负向信号：身份 = blocker id，允许 checkedAt=null
     return { status: 'no', evidenceSource: `blocker:${provisioning.id}`, checkedAt: null }
   }
-  const dataEvidence = c.productionEvidence.find((e) => e.kind === 'production_data')
-  if (dataEvidence) {
-    return confirmedYes(`production_data:${dataEvidence.ref}`, dataEvidence.observedAt ?? null)
-  }
+  const dataList = c.productionEvidence.filter((e) => e.kind === 'production_data')
+  const ok = firstMachineVerified(dataList)
+  if (ok) return machineYes(`production_data:${ok.ref}`, ok.observedAt as string)
+  if (dataList.length > 0) return pendingUnknown(`production_data:${dataList[0].ref}`)
   return { status: 'unknown', evidenceSource: '未登记 provisioning blocker 或 production_data 证据', checkedAt: null }
 }
 
 function deriveRealCallerWired(c: ProductMapComponent): OperationalProbe {
-  const first = c.integrationEvidence[0]
-  if (first) {
-    return confirmedYes(`${first.kind}:${first.ref}`, first.observedAt ?? null)
-  }
+  const ok = firstMachineVerified(c.integrationEvidence)
+  if (ok) return machineYes(`${ok.kind}:${ok.ref}`, ok.observedAt as string)
   const negative = c.currentBlockers.find((b) => NO_CALLER_PATTERN.test(b.summary))
   if (negative) {
     return { status: 'no', evidenceSource: `blocker:${negative.id}`, checkedAt: null }
   }
+  if (c.integrationEvidence.length > 0) return pendingUnknown(`${c.integrationEvidence[0].kind}:${c.integrationEvidence[0].ref}`)
   return { status: 'unknown', evidenceSource: '未登记 integrationEvidence，也无明确负向 blocker', checkedAt: null }
 }
 
 function deriveProductionRunObserved(c: ProductMapComponent): OperationalProbe {
   if (c.origin === 'me2_native') {
-    const run = c.productionEvidence.find((e) => e.kind === 'production_run')
-    if (run) return confirmedYes(`production_run:${run.ref}`, run.observedAt ?? null)
+    const runList = c.productionEvidence.filter((e) => e.kind === 'production_run')
+    const ok = firstMachineVerified(runList)
+    if (ok) return machineYes(`production_run:${ok.ref}`, ok.observedAt as string)
+    // 有 run 声明但没机器核验 → unknown。**先于 not_operating 判**：这一问是"生产
+    // 曾经跑过吗"，一条 run 声明（哪怕没核验）意味着"不是确定没跑过"；而 not_operating
+    // 说的是"当前没在运营"，是另一回事，不能拿它把一条 run 声明压成 no。
+    if (runList.length > 0) return pendingUnknown(`production_run:${runList[0].ref}`)
     if (c.operationalStatus === 'not_operating') {
       return { status: 'no', evidenceSource: 'operationalStatus:not_operating', checkedAt: null }
     }

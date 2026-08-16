@@ -47,10 +47,16 @@ export function makeFacts(prs: PullRequestFact[]): ExternalFacts {
   return { pullRequests: map }
 }
 
+/** 人工快照的已合并 PR —— source='manual_snapshot'，不算机器核验（codeInMain 判 unknown）。 */
 export function mergedPr(number: number): PullRequestFact {
   return { number, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'manual_snapshot' }
 }
 
+/** GitHub 同步来的已合并 PR —— source='github_sync'，机器核验（codeInMain 可判 yes）。 */
+export function mergedPrSync(number: number): PullRequestFact {
+  return { number, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'github_sync' }
+}
+
 export function openDraftPr(number: number): PullRequestFact {
-  return { number, state: 'open', isDraft: true, observedAt: '2026-08-15', source: 'manual_snapshot' }
+  return { number, state: 'open', isDraft: true, observedAt: '2026-08-15', source: 'github_sync' }
 }
