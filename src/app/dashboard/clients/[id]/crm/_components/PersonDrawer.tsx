@@ -7,10 +7,11 @@
  * 滑出，手机上铺满整屏。prospecting 的看板也是这个交互。
  */
 
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { ComposeNote, type StageOption } from './ComposeNote'
 import { ContactTimeline } from './ContactTimeline'
 import { MessengerReply } from './MessengerReply'
+import { DncBanner } from './DncBanner'
 import { drawerActions, nextStageChoices, type Channel } from '@/lib/crm/drawer-actions'
 import type { Segment } from '@/lib/crm/segments'
 
@@ -180,7 +181,9 @@ export function PersonDrawer({
                 ✉️ {row.email}
               </a>
             )}
-            {row.doNotContact && <DncBanner clientId={clientId} row={row} onSaved={onSaved} />}
+            {row.doNotContact && (
+              <DncBanner clientId={clientId} contactId={row.contactId} name={row.name} onSaved={onSaved} />
+            )}
             {!row.phone && !row.email && (
               <span className="text-xs text-me-charcoal/45">没留电话和邮箱，只能在私信里回他</span>
             )}
@@ -296,91 +299,3 @@ export function PersonDrawer({
   )
 }
 
-/**
- * 「这个人被标成别再联系」的提示条 + 取消入口。
- *
- * 🔴 **这条路以前不存在**（PM 2026-08-16）。早前的判词把「not intending to go」
- * （我不打算去）当成了「别再联系我」，被误判的人从此收不到我们任何消息 ——
- * 而判据看的是触点，取消客户档案上那个勾**没有用**，况且那个勾在界面上
- * 也没有入口。于是「这个人判错了」是一件**没人做得到**的事。
- *
- * 只给「取消」这一个方向：反向（把人标成别再联系）已经有路了 ——
- * 销售记一笔「客户说别再联系」，解析器会认出来。多一个直接置位的按钮，
- * 只会多一个误伤客户的入口。
- *
- * 点之前先确认一次：这是覆盖系统判断的动作，按错了会去打扰一个真的
- * 说过别再联系的人。
- */
-function DncBanner({
-  clientId,
-  row,
-  onSaved,
-}: {
-  clientId: string
-  row: DrawerRow
-  onSaved: (msg: string, reload?: boolean) => void
-}) {
-  const [asking, setAsking] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const refRef = useRef(globalThis.crypto.randomUUID())
-
-  const clear = async () => {
-    setSaving(true)
-    try {
-      const res = await fetch(`/api/clients/${clientId}/crm/contacts/${row.contactId}/dnc`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clientRef: refRef.current }),
-      })
-      if (!res.ok) throw new Error(String(res.status))
-      onSaved(`✓ ${row.name} 放回名单了 —— 明天起会正常出现`)
-    } catch {
-      onSaved('没改上，再点一下试试', false)
-    } finally {
-      setSaving(false)
-      setAsking(false)
-    }
-  }
-
-  return (
-    <div className="w-full rounded-lg border border-me-ochre/40 bg-me-ochre/10 px-3 py-2">
-      <p className="text-[13px] font-bold text-me-charcoal">
-        🚫 他被标成「别再联系」—— 我们任何渠道都不会再联系他
-      </p>
-      {!asking ? (
-        <button
-          type="button"
-          onClick={() => setAsking(true)}
-          className="mt-1.5 text-[13px] font-bold text-me-ochre underline"
-        >
-          判错了？点这里放回名单
-        </button>
-      ) : (
-        <div className="mt-1.5">
-          <p className="text-[12.5px] text-me-charcoal/70">
-            先看一眼下面的往来记录：他原话真的说过「别再联系 / 不要打电话」吗？
-            只是「不打算去」的话，放回来是对的。
-          </p>
-          <div className="mt-1.5 flex gap-2">
-            <button
-              type="button"
-              onClick={() => void clear()}
-              disabled={saving}
-              className="rounded-lg bg-me-charcoal px-3 py-1.5 text-[13px] font-bold text-white disabled:opacity-50"
-            >
-              {saving ? '改着…' : '确认放回名单'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setAsking(false)}
-              disabled={saving}
-              className="text-[13px] font-semibold text-me-charcoal/45"
-            >
-              算了
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}

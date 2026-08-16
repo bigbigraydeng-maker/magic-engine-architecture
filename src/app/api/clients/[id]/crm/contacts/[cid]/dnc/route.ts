@@ -120,10 +120,22 @@ export async function POST(
     .eq('id', contactId)
     .eq('client_id', clientId)
 
-  // 那一列没放下也不算失败：判据已经以触点为准，人已经回到名单上了。
-  // 但要说出来，别让它悄悄不一致。
+  /**
+   * 🔴 那一列没放下就是**没成**（Codex 复审 2026-08-16）。
+   *
+   * 判据（`lib/crm/dnc`）确实以触点为准，但**不是所有消费方都走判据**：
+   * 今日待办的 `pushDncReviewItems()` 和群发接口都还直接按
+   * `contacts.do_not_contact = true` 筛人。这一列没放下来，页面上写着
+   * 「放回名单了」，实际这个人照旧被群发跳过，那条人工任务第二天又冒出来 ——
+   * FDE 会以为自己点了个假按钮。
+   *
+   * 所以报失败，让人再点一下：`clientRef` 是幂等键，重试不会记成两笔纠正，
+   * 触点已经写好了，重试补的就是这第二步。跟 `recordManualTouchpoint()`
+   * 遇到同类镜像更新失败时的做法一致。
+   */
   if (uErr) {
     console.warn('[crm/dnc] 触点已写，contacts 列没更新上:', uErr.message)
+    return NextResponse.json({ error: '只改了一半，再点一下' }, { status: 500 })
   }
 
   return NextResponse.json({ ok: true, touchpointId: inserted?.id ?? null })

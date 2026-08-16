@@ -758,9 +758,16 @@ export async function pushDncReviewItems(
       client_id: c.client_id as string,
       client_name: nameOf(c.client_id as string),
       what: `${name} 被标成「永久别再联系」，但他原话只说了「不打算去」—— 可能是系统早前判错了，这个人现在收不到我们任何消息`,
-      how: '点开他，卡片顶上有一条黄条写着「他被标成别再联系」——先看下面的往来记录确认原话只是「不打算去」，再点那条上的「判错了？点这里放回名单」',
-      // 🔴 绝对网址 —— 相对路径会被链接闸判成 broken，整条待办被丢掉
-      //    （狄仁杰 2026-08-05 实测 kept=0，理由见 pushCrossClientItems）。
+      how: '点链接直接就展开到他了 —— 联系方式下面有一条黄条写着「他被标成别再联系」。先看黄条下面的往来记录，确认他原话只是「不打算去」、没说过「别再打给我」，再点黄条上的「判错了？点这里放回名单」',
+      /**
+       * 🔴 绝对网址 —— 相对路径会被链接闸判成 broken，整条待办被丢掉
+       *    （狄仁杰 2026-08-05 实测 kept=0，理由见 pushCrossClientItems）。
+       *
+       * 🔴 `?contact=` 这个参数「全部客人」那一页**真的读**（Codex 复审
+       *    2026-08-16）：点进去自动展开到这个人，并且那一页就有取消入口。
+       *    改这个链接前先确认新落点也满足这两条 —— 否则 FDE 点进去只会看到
+       *    一张 583 行的表，还得自己搜名字，进去了也找不到上面说的那个按钮。
+       */
       href: `https://app.magicengine.com.au/dashboard/clients/${c.client_id as string}/crm/all?contact=${c.id as string}`,
     })
   }

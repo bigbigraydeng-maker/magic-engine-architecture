@@ -18,6 +18,7 @@ import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { CrmTabs } from '../_components/CrmTabs'
 import { ComposeNote, type StageOption } from '../_components/ComposeNote'
+import { DncBanner } from '../_components/DncBanner'
 
 interface ContactRow {
   contactId: string
@@ -27,6 +28,8 @@ interface ContactRow {
   phone: string | null
   /** 号码在库里但打不通 —— 跟「今天该联系谁」那一页说同一件事。 */
   phoneUnusable?: boolean
+  /** 被标成「别再联系」—— 展开里给一条取消的路（见 DncBanner）。 */
+  doNotContact?: boolean
   email: string | null
   hasMessenger: boolean
   stage: string | null
@@ -260,6 +263,16 @@ function ContactDetail({
             ✉️ {row.email}
           </a>
         )}
+        {/* 「可能被误判成永久拒联」那条人工任务的 href 就落在这一页 ——
+            控件必须在这里，不然 FDE 照着任务点进来会找不到任务里说的按钮。 */}
+        {row.doNotContact && (
+          <DncBanner
+            clientId={clientId}
+            contactId={row.contactId}
+            name={row.name}
+            onSaved={onWrote}
+          />
+        )}
       </div>
 
       {/* 往来时间线 */}
@@ -422,6 +435,40 @@ export default function CrmAllContactsPage() {
     [clientId],
   )
 
+  /**
+   * 直达链接 `?contact=<id>` —— 列表加载完自动展开那个人并滚过去。
+   *
+   * 🔴 今日待办的人工任务靠这个才算「直达」（Codex 复审 2026-08-16）。原先这页
+   * 根本不读这个参数，点进来只是打开整张 583 行的表，FDE 还得自己搜名字 ——
+   * 那不叫直达，那叫「我给了你一个入口，剩下你自己找」。
+   *
+   * 只认一次：认完就清掉，之后同事点谁就是谁，不会被链接拽回去。
+   * 用 `window.location.search` 而不是 `useSearchParams`，免得为一个可选参数
+   * 给整页套 Suspense 边界。
+   */
+  const [deepLinkId, setDeepLinkId] = useState<string | null>(null)
+  useEffect(() => {
+    setDeepLinkId(new URLSearchParams(window.location.search).get('contact'))
+  }, [])
+
+  useEffect(() => {
+    if (!deepLinkId || rows.length === 0) return
+    setDeepLinkId(null)
+    // 这个人不在表里（换客户了 / 记录被删）——**必须说出来**，
+    // 否则页面一声不吭，FDE 只会以为链接坏了。
+    if (!rows.some((r) => r.contactId === deepLinkId)) {
+      setToast('这个人不在这份名单里了 —— 用上面的搜索框找找看')
+      window.setTimeout(() => setToast(null), 4000)
+      return
+    }
+    setExpandedId(deepLinkId)
+    void loadTimeline(deepLinkId)
+    // 展开那一行渲染完再滚 —— 直接滚会停在旧位置。
+    window.setTimeout(() => {
+      document.getElementById(`contact-${deepLinkId}`)?.scrollIntoView({ block: 'center' })
+    }, 120)
+  }, [deepLinkId, rows, loadTimeline])
+
   const toggleDetail = (contactId: string) => {
     if (expandedId === contactId) {
       setExpandedId(null)
@@ -564,6 +611,8 @@ export default function CrmAllContactsPage() {
                   return [
                     <tr
                       key={r.contactId}
+                      // 直达链接靠它定位（?contact=<id> 展开后滚到这一行）
+                      id={`contact-${r.contactId}`}
                       onClick={() => toggleDetail(r.contactId)}
                       className={`border-b border-me-charcoal/5 cursor-pointer hover:bg-me-ivory/40 ${expanded ? 'bg-me-ivory/50' : ''}`}
                     >

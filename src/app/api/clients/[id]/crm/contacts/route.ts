@@ -238,6 +238,15 @@ export async function GET(
        * 展开却照旧能一点就拨。销售会以为其中一边是过时的，而两边他都不再信。
        */
       phoneUnusable: seg.phoneUnusable ?? false,
+      /**
+       * 被标成「别再联系」—— 页面据此给出**取消**那条路。
+       *
+       * 今日待办下发的「可能被误判成永久拒联」人工任务，href 指向的正是
+       * 「全部客人」这一页（Codex 复审 2026-08-16）。不带这个字段，FDE 照着
+       * 任务点进来会发现根本没有任务里说的那个按钮 —— 照着做也做不成的
+       * 人工任务，比不下发更糟。用上面 model 已经算好的那份，不重算。
+       */
+      doNotContact: model.doNotContact,
       email: c.primary_email,
       // 电话邮箱都没有时，页面据此显示「仅 FB 私信」而不是「没留联系方式」。
       hasMessenger: tps.some((t) => t.channel === 'messenger'),
