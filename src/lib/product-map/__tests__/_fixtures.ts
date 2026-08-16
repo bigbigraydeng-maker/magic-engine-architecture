@@ -52,11 +52,19 @@ export function mergedPr(number: number): PullRequestFact {
   return { number, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'manual_snapshot' }
 }
 
-/** GitHub 同步来的已合并 PR —— source='github_sync'，机器核验（codeInMain 可判 yes）。 */
+/** GitHub 同步来的已合并到 main 的 PR —— source='github_sync' + baseRef='main'，机器核验（codeInMain 判 yes）。 */
 export function mergedPrSync(number: number): PullRequestFact {
-  return { number, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'github_sync' }
+  return { number, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'github_sync', baseRef: 'main' }
+}
+
+/**
+ * GitHub 同步来的、合并到**非 main 分支**的已合并 PR（默认 staging）——
+ * 是机器核验的 merged，但目标分支不是 main，不能宣称代码进了 main（codeInMain 不判 yes）。
+ */
+export function mergedPrSyncToBranch(number: number, baseRef = 'staging'): PullRequestFact {
+  return { number, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'github_sync', baseRef }
 }
 
 export function openDraftPr(number: number): PullRequestFact {
-  return { number, state: 'open', isDraft: true, observedAt: '2026-08-15', source: 'github_sync' }
+  return { number, state: 'open', isDraft: true, observedAt: '2026-08-15', source: 'github_sync', baseRef: 'main' }
 }
