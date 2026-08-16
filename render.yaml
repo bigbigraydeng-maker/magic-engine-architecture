@@ -162,9 +162,13 @@ services:
     startCommand: |
       curl -fsS --max-time 300 -H "Authorization: Bearer $CRON_SECRET" \
         https://app.magicengine.com.au/api/cron/job-boards-weekly
+    # 2026-08-16 [OPS] sync:false → fromGroup：密钥自动挂上，不用人去后台 link。
+    # ⚠️ 这条的「30 天没跑成」根因**不是**密钥 —— 是主开关 JOB_SIGNAL_INGEST_ENABLED
+    #    没开（route 在开关那里直接 return，走不到写运行记录那一步）。换 fromGroup 只是
+    #    顺手排除掉第二个可能原因；真要让它干活，得 PM 决定开外呼线（花 Places 的钱 +
+    #    开始碰真实 NZ 公司），不是这个 PR 能定的。
     envVars:
-      - key: CRON_SECRET
-        sync: false
+      - fromGroup: me-shared-cron-secret
 
   # Blog generation sweeper — every 5 minutes
   # Marks blog_posts stuck at status='generating' (>10 min) as failed.
@@ -467,9 +471,11 @@ services:
     startCommand: |
       curl -fsS --max-time 300 -H "Authorization: Bearer $CRON_SECRET" \
         https://app.magicengine.com.au/api/cron/benchmark-accumulator
+    # 2026-08-16 [OPS] sync:false → fromGroup。这条 route 在鉴权之后立刻写运行记录、
+    # 中间没有任何开关，所以「30 天零运行记录」只可能是压根没跑成 —— 401 静默失败。
+    # 参照 mailchimp-activity-daily 的写法，密钥由环境变量组自动挂上。
     envVars:
-      - key: CRON_SECRET
-        sync: false
+      - fromGroup: me-shared-cron-secret
 
   # 发布通道自动重测 —— 让临时故障自己好。
   # 🔴 起因:Oztop 的 WordPress 通道 2026-06-19 被客户主机商的安全防护拦了一次,
@@ -897,8 +903,9 @@ services:
   #
   # 查出来的 blocker 进「今日待办 → 需要你动手」,不留在日志里。
   # 跑在 20:40 UTC(NZ 早上 8:40 左右):人上班第一眼就能看到,而不是等到花完一天钱。
-  # ⚠️ 部署后必须在 Render 后台 link `me-shared-cron-secret` 环境变量组,
-  #    否则每天 401 静默失败(上一个踩这个坑的 cron 哑了 51 天)。
+  # ⚠️ 2026-08-16 [OPS]:上面这句「部署后必须去 Render 后台 link」当初**没人去做**,
+  #    结果它从上线起 30 天零运行记录 —— 每天 20:40 准点 401,悄无声息。
+  #    现在改成 fromGroup 自动挂密钥,不再依赖任何人记得去点后台。
   - type: cron
     name: ad-readback-sweep-daily
     env: node
@@ -908,8 +915,7 @@ services:
       curl -fsS --max-time 620 -H "Authorization: Bearer $CRON_SECRET" \
         https://app.magicengine.com.au/api/cron/ad-readback-sweep
     envVars:
-      - key: CRON_SECRET
-        sync: false
+      - fromGroup: me-shared-cron-secret
 
   # 做片拼片 worker — 常驻容器(node+python-PIL+ffmpeg)轮询 content_factory_render_jobs，
   # 领排队任务 → 分镜 → 画面(gpt-image+Muapi i2v) → 配音(MiniMax) → ffmpeg 拼竖屏成片 → 标待审。
