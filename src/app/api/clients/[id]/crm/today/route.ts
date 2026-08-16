@@ -31,7 +31,7 @@ import {
   latestIntentVerdict,
 } from '@/lib/crm/segments'
 import { reclassifyStoredOutcome } from '@/lib/crm/note-parser'
-import { isDoNotContact } from '@/lib/crm/dnc'
+import { isDoNotContact, withoutClearedDnc } from '@/lib/crm/dnc'
 import { WORKLIST_GROUPS, groupDisplayMeta } from '@/lib/crm/worklist-groups'
 import { contactCardTitle } from '@/lib/crm/display-name'
 import { followUpMarks, localDay } from '@/lib/crm/follow-up-marks'
@@ -483,7 +483,15 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
     if (!suppressStage) return null
     if (currentStage === suppressStage.stage_key) return null
 
-    const dead = c.touchpoints.some(
+    /**
+     * 🔴 **已经被人推翻过的拒联判词不许再拿来建议**（Codex 复审 2026-08-16）。
+     *
+     * 不滤的话会出现一个直接反噬的循环：FDE 刚点完「这条判错了，放回名单」，
+     * 这个人第二天一出现在名单上，系统立刻建议把他改到「停止营销」——
+     * 跟他刚做的纠正正好相反。他顺手一点，人又被永久埋回去，白干一场。
+     * 跟 `segments.ts` 用**同一个**函数。
+     */
+    const dead = withoutClearedDnc(c.touchpoints).some(
       (t) => t.outcome === 'not_interested' || t.outcome === 'do_not_contact',
     )
     if (!dead) return null

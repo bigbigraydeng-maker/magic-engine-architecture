@@ -54,11 +54,13 @@ let calls: string[] = []
  * @param updateErr   放下 contacts.do_not_contact 那一列是否失败
  */
 function stubDb(opts: {
-  contactRow?: { id: string } | null
+  contactRow?: { id: string; stage?: string | null } | null
   touchErr?: string
   updateErr?: string
+  /** 这个人当前所在阶段的配置（null = 查不到）。 */
+  stageRow?: { label: string; marketing_action: string | null; is_terminal: boolean } | null
 } = {}) {
-  const { contactRow = { id: CONTACT_ID }, touchErr, updateErr } = opts
+  const { contactRow = { id: CONTACT_ID, stage: null }, touchErr, updateErr, stageRow = null } = opts
   calls = []
   mocks.from.mockImplementation((table: string) => {
     if (table === 'contact_touchpoints') {
@@ -74,6 +76,13 @@ function stubDb(opts: {
             }),
           }
         },
+      }
+    }
+    if (table === 'client_pipeline_stages') {
+      return {
+        select: () => ({
+          eq: () => ({ eq: () => ({ maybeSingle: async () => ({ data: stageRow }) }) }),
+        }),
       }
     }
     // contacts 表被用两次：先 select 做 IDOR 闸，再 update 放下那一列。
@@ -156,5 +165,37 @@ describe('幂等键', () => {
     const res = await POST(req({}), ctx)
     expect(res.status).toBe(400)
     expect(calls).toEqual([])
+  })
+})
+
+
+/**
+ * 🔴 当初那条误判往往还带来第二个后果：有人接受了「改到停止营销」的建议。
+ * 那一档照旧把人挡在名单外 —— 黄条这时已经消失，人却还是不回来，而且再没有
+ * 入口。**不替他改阶段**（那是人手动确认过的），但绝不能默不作声。
+ */
+describe('还有一档挡着的时候要说出来', () => {
+  it('停在会被抑制的阶段 → 把那一档的名字告诉界面', async () => {
+    stubDb({
+      contactRow: { id: CONTACT_ID, stage: 'not_interested' },
+      stageRow: { label: '不感兴趣', marketing_action: 'suppress', is_terminal: true },
+    })
+    const res = await POST(req(), ctx)
+    expect((await res.json()).blockingStageLabel).toBe('不感兴趣')
+  })
+
+  it('停在还会继续跟的阶段 → 不多嘴', async () => {
+    stubDb({
+      contactRow: { id: CONTACT_ID, stage: 'contacted' },
+      stageRow: { label: '已联系', marketing_action: 'nurture', is_terminal: false },
+    })
+    const res = await POST(req(), ctx)
+    expect((await res.json()).blockingStageLabel).toBeNull()
+  })
+
+  it('压根没标过阶段 → 不多嘴', async () => {
+    stubDb()
+    const res = await POST(req(), ctx)
+    expect((await res.json()).blockingStageLabel).toBeNull()
   })
 })

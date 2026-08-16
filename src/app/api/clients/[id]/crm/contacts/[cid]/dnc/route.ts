@@ -33,6 +33,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import { supabaseAdmin } from '@/lib/supabase'
 import { DNC_CLEARED_OUTCOME } from '@/lib/crm/dnc'
+import { isMarketingAction, stageSuppressesWorklist } from '@/lib/crm/pipeline'
 
 interface Body {
   note?: unknown
@@ -71,7 +72,7 @@ export async function POST(
   // ── IDOR 闸：contact 必须属于 path 上的 client ──
   const { data: contact, error: cErr } = await supabaseAdmin
     .from('contacts')
-    .select('id')
+    .select('id, stage')
     .eq('id', contactId)
     .eq('client_id', clientId)
     .maybeSingle()
@@ -138,5 +139,44 @@ export async function POST(
     return NextResponse.json({ error: '只改了一半，再点一下' }, { status: 500 })
   }
 
-  return NextResponse.json({ ok: true, touchpointId: inserted?.id ?? null })
+  /**
+   * 🔴 **还差一步的话，必须当面说**（Codex 复审 2026-08-16）。
+   *
+   * 当初这条误判往往还带来了第二个后果：有人接受了系统「改到停止营销」的建议。
+   * 那一档会让他照旧被排除在名单外 —— 于是黄条消失了、人工任务也不再冒出来，
+   * 人却还是不回来，而且再没有入口。
+   *
+   * 这里**不替他改阶段**：那一档是**人**手动确认过的，比这次纠正更该由人来定
+   * （万一他当时另有理由呢）。但也绝不能默不作声 —— 把还挡着的那一档的名字
+   * 告诉界面，界面直接说「还得把『XX』这一档改掉」，改阶段的按钮就在同一屏上。
+   */
+  let blockingStageLabel: string | null = null
+  if (contact.stage) {
+    const { data: stageRow } = await supabaseAdmin
+      .from('client_pipeline_stages')
+      .select('label, marketing_action, is_terminal')
+      .eq('client_id', clientId)
+      .eq('stage_key', contact.stage)
+      .maybeSingle()
+    const row = stageRow as {
+      label: string
+      marketing_action: string | null
+      is_terminal: boolean | null
+    } | null
+    if (
+      row &&
+      stageSuppressesWorklist(
+        isMarketingAction(row.marketing_action) ? row.marketing_action : null,
+        row.is_terminal,
+      )
+    ) {
+      blockingStageLabel = row.label
+    }
+  }
+
+  return NextResponse.json({
+    ok: true,
+    touchpointId: inserted?.id ?? null,
+    blockingStageLabel,
+  })
 }

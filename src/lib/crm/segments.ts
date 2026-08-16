@@ -30,7 +30,7 @@ export type Segment =
 
 import { resolveTravelDate, isDueToWake } from './travel-date'
 // 「别再联系」的判据全仓只有一份 —— 这里要的是「什么时候被人推翻过」。
-import { dncClearedAt } from './dnc'
+import { withoutClearedDnc } from './dnc'
 
 export type Temperature = 'hot' | 'warm' | 'cold' | 'off'
 
@@ -564,11 +564,7 @@ export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
    * 只作废 `do_not_contact` 这一种：`not_interested` 是另一个判词，
    * 「别再联系判错了」这句话没资格替客人收回「我不买了」。
    */
-  const clearedAt = dncClearedAt(
-    tps.map((t) => ({ outcome: t.outcome, occurredAt: t.occurredAt })),
-  )
-  const outcomes = tps
-    .filter((t) => !(t.outcome === 'do_not_contact' && ts(t.occurredAt) < clearedAt))
+  const outcomes = withoutClearedDnc(tps)
     .map((t) => t.outcome)
     .filter(Boolean) as string[]
   const latestOutcome = tps

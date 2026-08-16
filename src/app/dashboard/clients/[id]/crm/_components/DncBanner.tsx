@@ -55,7 +55,20 @@ export function DncBanner({
         body: JSON.stringify({ clientRef: refRef.current }),
       })
       if (!res.ok) throw new Error(String(res.status))
-      onSaved(`✓ ${name} 放回名单了 —— 明天起会正常出现`)
+      /**
+       * 🔴 **还差一步就得当面说**（Codex 复审 2026-08-16）。
+       *
+       * 当初这条误判常常还带来第二个后果：有人接受了「改到停止营销」的建议。
+       * 那一档照旧把人挡在名单外 —— 黄条这时已经消失，人却还是不回来，
+       * 而且再没有入口。所以接口把还挡着的那一档告诉我们，这里直接说出来，
+       * 改阶段的按钮就在同一屏上。
+       */
+      const json = (await res.json()) as { blockingStageLabel?: string | null }
+      onSaved(
+        json.blockingStageLabel
+          ? `✓ 放回来了，但他还停在「${json.blockingStageLabel}」这一档 —— 用下面的「跟进到哪步」改掉才会出现在名单上`
+          : `✓ ${name} 放回名单了 —— 明天起会正常出现`,
+      )
     } catch {
       onSaved('没改上，再点一下试试', false)
     } finally {

@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { dncClearedAt, isDoNotContact, DNC_CLEARED_OUTCOME } from '../dnc'
+import { dncClearedAt, isDoNotContact, withoutClearedDnc, DNC_CLEARED_OUTCOME } from '../dnc'
 
 const at = (d: string) => `2026-08-${d}T00:00:00Z`
 const cleared = (d: string) => ({ outcome: DNC_CLEARED_OUTCOME, occurredAt: at(d) })
@@ -91,5 +91,36 @@ describe('纠正的时间点要给分段用', () => {
 
   it('时间戳是坏的不许算成「刚刚纠正过」', () => {
     expect(dncClearedAt([{ outcome: 'dnc_cleared', occurredAt: 'not-a-date' }])).toBe(0)
+  })
+})
+
+/**
+ * 谁拿触点上的 `outcome` 做判断，谁就得先过这一道。已经踩过两次：分段看到它
+ * 判 excluded；今日名单的「建议改到停止营销」看到它，会**立刻建议把刚纠正过的
+ * 人再埋一次** —— FDE 顺手一点，白干。
+ */
+describe('把被推翻过的拒联触点滤掉', () => {
+  const dnc = (d: string) => ({ outcome: 'do_not_contact', occurredAt: at(d) })
+
+  it('没纠正过 → 原样返回', () => {
+    expect(withoutClearedDnc([dnc('01')])).toHaveLength(1)
+  })
+
+  it('纠正晚于它 → 滤掉', () => {
+    expect(withoutClearedDnc([dnc('01'), cleared('02')]).map((t) => t.outcome)).toEqual([
+      'dnc_cleared',
+    ])
+  })
+
+  it('纠正早于它 → 留着，后来他真的说了', () => {
+    expect(withoutClearedDnc([cleared('01'), dnc('02')])).toHaveLength(2)
+  })
+
+  it('🔴 只滤「别再联系」—— 没资格替客人收回「我不买了」', () => {
+    const kept = withoutClearedDnc([
+      { outcome: 'not_interested', occurredAt: at('01') },
+      cleared('02'),
+    ])
+    expect(kept.map((t) => t.outcome)).toContain('not_interested')
   })
 })

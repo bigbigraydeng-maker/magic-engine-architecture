@@ -81,6 +81,27 @@ export function dncClearedAt(touches: DncTouch[]): number {
   )
 }
 
+/**
+ * 把**已经被人推翻过**的那些拒联触点滤掉，其余原样返回。
+ *
+ * 谁在拿触点上的 `outcome` 做判断，谁就得先过这一道 —— 否则那条误判的触点
+ * 会在别的地方借尸还魂。已经踩过两次：
+ *
+ *   · 分段（`segments.ts`）看到它就判 `excluded`，人永远不回名单
+ *   · 今日名单的「建议改到停止营销」看到它，会**立刻建议把刚纠正过的人再埋一次**，
+ *     FDE 顺手一点，白干
+ *
+ * 只滤 `do_not_contact` 这一种：`not_interested` 是另一个判词，
+ * 「别再联系判错了」这句话没资格替客人收回「我不买了」。
+ */
+export function withoutClearedDnc<T extends { outcome?: string | null; occurredAt: string }>(
+  touches: readonly T[],
+): T[] {
+  const clearedAt = dncClearedAt(touches as unknown as DncTouch[])
+  if (clearedAt === 0) return [...touches]
+  return touches.filter((t) => !(t.outcome === 'do_not_contact' && ts(t.occurredAt) < clearedAt))
+}
+
 export function isDoNotContact(contactFlag: boolean, touches: DncTouch[]): boolean {
   const said = (t: DncTouch): boolean =>
     t.flagged === true || t.outcome === 'do_not_contact'
