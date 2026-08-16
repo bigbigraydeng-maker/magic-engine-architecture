@@ -176,11 +176,24 @@ const NO_INTEREST_PATTERNS: RegExp[] = [
  * 所以宁可这里收窄，也不能靠模型去纠正。
  */
 const BUY_INTENT = '(考虑|感兴趣|兴趣|打算|想去|想走|定|订|走|去|出发|报名|买)'
-const TIME_QUALIFIER = '(暂时|暂不|现在|目前|这(段时间|阵子)|近期|最近|眼下)'
+/**
+ * 只表示时间的限定词 —— 后面还要再跟一个「不」。
+ *
+ * ⚠️ **「暂不」不在这里**（Codex 复审 2026-08-16）：它自己**已经含着那个「不」**。
+ * 放进来的话，「暂不考虑」会被要求出现第二个「不」而整条漏掉 ——
+ * 而它恰恰是销售最常写的那种写法。漏掉的后果分两种，都很糟：
+ *   · 「暂不考虑」→ 退化成「聊过了」，这个人白白留在名单上被反复打
+ *   · 「暂不感兴趣」→ 命中硬拒绝，**人被永久停掉**，正是本 PR 要修的那件事
+ */
+const TIME_QUALIFIER = '(暂时|现在|目前|这(段时间|阵子)|近期|最近|眼下)'
+/** 自带否定的时间词 —— 后面直接接购买意向，不再要第二个「不」。 */
+const TIME_QUALIFIER_WITH_NO = '(暂不|暂时不|近期不|目前不|现在不|最近不)'
 
 const SOFT_NO_PATTERNS: RegExp[] = [
   // 「暂时/现在/目前」+ 不 + **跟买卖有关的动词**（中间最多隔 4 个字）
   new RegExp(`${TIME_QUALIFIER}.{0,4}不.{0,4}${BUY_INTENT}`),
+  // 「暂不考虑」「暂不感兴趣」—— 否定已经含在时间词里
+  new RegExp(`${TIME_QUALIFIER_WITH_NO}.{0,4}${BUY_INTENT}`),
   // 「不」在前、时间词在后：「不考虑了，明年再说」这种语序
   new RegExp(`不${BUY_INTENT}.{0,6}${TIME_QUALIFIER}`),
   // 明确把事情推到以后
@@ -240,6 +253,32 @@ export function classifyNote(raw: string): {
   if (anyMatch(t, NO_INTEREST_PATTERNS)) return { outcome: 'not_interested', do_not_contact: false }
   if (anyMatch(t, CALLBACK_PATTERNS)) return { outcome: 'callback_set', do_not_contact: false }
   return { outcome: 'spoke', do_not_contact: false }
+}
+
+/**
+ * 存量触点的结果值 —— **读的时候顺手重判一次**。
+ *
+ * 🔴 没有这一步，这次改动只对**以后**记的笔记生效（Codex 复审 2026-08-16）。
+ *
+ * 线上那 17 个被标成 `not_interested` 的人，`metadata.outcome` 里存的是旧值；
+ * `segmentContact` 一看到它就把人排除，**永远走不到新加的「暂时不考虑」那一支**。
+ * 也就是说 PM 明天打开页面，会看到「什么都没变」—— 而这个 PR 存在的全部意义
+ * 就是把那批人放回来。
+ *
+ * 选择在**读的时候**重判、而不是回填数据库：
+ *   · 不动客户数据（回填是不可逆操作，得 PM 显式点头）
+ *   · 词表以后再改，存量记录跟着一起变，不需要再回填一次
+ *   · `raw` 是当时的原话，是**事实**；`outcome` 只是我们对它的解读，解读可以更新
+ *
+ * 只做**这一个方向**的重判（明确不要 → 暂时不考虑），因为只有它是「旧词表分不出来
+ * 的那一类」。绝不反过来把「暂时」升级成「明确不要」—— 那会凭空停掉客人。
+ */
+export function reclassifyStoredOutcome(
+  outcome: string | null | undefined,
+  raw: string | null | undefined,
+): string | null | undefined {
+  if (outcome !== 'not_interested' || !raw) return outcome
+  return classifyNote(raw).outcome === 'not_interested_now' ? 'not_interested_now' : outcome
 }
 
 // ── AI 层：细微的部分 ────────────────────────────────────────────────────

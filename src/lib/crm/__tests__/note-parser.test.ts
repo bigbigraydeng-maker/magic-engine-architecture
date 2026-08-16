@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { classifyNote, todayContext } from '../note-parser'
+import { classifyNote, reclassifyStoredOutcome, todayContext } from '../note-parser'
 
 const outcome = (s: string) => classifyNote(s).outcome
 const dnc = (s: string) => classifyNote(s).do_not_contact
@@ -309,5 +309,58 @@ describe('暂时不考虑 ≠ 明确不要了', () => {
   /** 对照：真的划界限的说法照旧永久拉黑。 */
   it('对照：「别再联系」照旧是永久拉黑', () => {
     expect(classifyNote('客户说别再联系了').do_not_contact).toBe(true)
+  })
+
+  /**
+   * 🔴 **「暂不」自己就含着那个「不」**（Codex 复审 2026-08-16）。
+   *
+   * 把它当成普通时间词的话，规则会再要一个「不」，于是这两条最常见的写法整个漏掉：
+   *   · 「暂不考虑」→ 退化成「聊过了」，人白白留在名单上被反复打
+   *   · 「暂不感兴趣」→ 命中硬拒绝，**人被永久停掉** —— 正是本 PR 要修的那件事
+   */
+  it.each([
+    ['暂不考虑'],
+    ['暂不感兴趣'],
+    ['客户暂不打算出行'],
+    ['暂时不考虑'],
+  ])('「%s」→ 暂时不考虑', (note) => {
+    expect(outcome(note)).toBe('not_interested_now')
+  })
+})
+
+/**
+ * 🔴 **存量记录读的时候要重判一次**（Codex 复审 2026-08-16）。
+ *
+ * 没有这一步，这次改动只对**以后**记的笔记生效：线上那些已经被标成
+ * `not_interested` 的人，`segmentContact` 一看到旧值就把他们排除，
+ * **永远走不到新加的「暂时不考虑」那一支**。PM 打开页面会看到「什么都没变」——
+ * 而这个改动存在的全部意义就是把那批人放回来。
+ */
+describe('存量记录读的时候重判一次', () => {
+  it('旧的「明确不要」+ 原话其实是「暂时」→ 读成暂时不考虑', () => {
+    expect(reclassifyStoredOutcome('not_interested', '客户暂时不感兴趣，明年再说')).toBe(
+      'not_interested_now',
+    )
+  })
+
+  it('原话确实是明确不要 → 原样不动', () => {
+    expect(reclassifyStoredOutcome('not_interested', '客户对旅游不感兴趣')).toBe('not_interested')
+  })
+
+  /** 🔴 只做一个方向 —— 绝不把「暂时」升级成「明确不要」，那会凭空停掉客人。 */
+  it('绝不反过来：暂时不考虑不会被升级成明确不要', () => {
+    expect(reclassifyStoredOutcome('not_interested_now', '客户对旅游不感兴趣')).toBe(
+      'not_interested_now',
+    )
+  })
+
+  it('别的结果值一概不碰', () => {
+    expect(reclassifyStoredOutcome('bad_number', '暂时不考虑')).toBe('bad_number')
+    expect(reclassifyStoredOutcome('spoke', '暂时不考虑')).toBe('spoke')
+  })
+
+  it('没有原话就没得重判 —— 原样返回', () => {
+    expect(reclassifyStoredOutcome('not_interested', null)).toBe('not_interested')
+    expect(reclassifyStoredOutcome(null, '暂时不考虑')).toBe(null)
   })
 })

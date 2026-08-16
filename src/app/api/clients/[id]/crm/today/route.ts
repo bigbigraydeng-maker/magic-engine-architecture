@@ -29,6 +29,7 @@ import {
   isPhoneVerdict,
   isFailedReach,
 } from '@/lib/crm/segments'
+import { reclassifyStoredOutcome } from '@/lib/crm/note-parser'
 import { WORKLIST_GROUPS, groupDisplayMeta } from '@/lib/crm/worklist-groups'
 import { contactCardTitle } from '@/lib/crm/display-name'
 import { followUpMarks, localDay } from '@/lib/crm/follow-up-marks'
@@ -60,6 +61,8 @@ interface TouchRow {
   direction: 'inbound' | 'outbound'
   occurred_at: string
   summary: string | null
+  /** 原话。存量结果值读的时候要靠它重判一次（见 reclassifyStoredOutcome）。 */
+  raw: string | null
   metadata: Record<string, unknown> | null
 }
 
@@ -147,7 +150,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       fetchAll<TouchRow>((from, to) =>
         supabaseAdmin
           .from('contact_touchpoints')
-          .select('contact_id, channel, direction, occurred_at, summary, metadata, source')
+          .select('contact_id, channel, direction, occurred_at, summary, raw, metadata, source')
           .eq('client_id', clientId)
           .order('occurred_at', { ascending: false })
           .range(from, to),
@@ -276,7 +279,9 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
         channel: t.channel,
         direction: t.direction,
         occurredAt: t.occurred_at,
-        outcome: (t.metadata?.outcome as string) ?? null,
+        // 存量记录读的时候顺手重判一次 —— 否则这次的软硬之分只对以后的
+        // 笔记生效，已经被埋掉的人永远回不来（见 reclassifyStoredOutcome）。
+        outcome: reclassifyStoredOutcome((t.metadata?.outcome as string) ?? null, t.raw) ?? null,
         // 判「电话线通不通」要靠它分清真打通了和手打出来的 spoke（见 isPhoneVerdict）
         source: t.source,
         travelWindow: (t.metadata?.travel_window as string) ?? null,
@@ -436,6 +441,26 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
    * 用 marketing_action 而不是写死阶段名 —— 每个客户的阶段是自己配的
    * （诊所叫「不适合治疗」，旅行社叫「已流失」）。
    */
+  /**
+   * 一条阶段提议。`stillFollowed` 决定**点完之后跟销售怎么说** ——
+   *
+   * 🔴 这三条提议指向的阶段行为完全不同（Codex 复审 2026-08-16）：
+   *   · 停止营销 → 人从名单上收起来
+   *   · 短期内不考虑 / 已报价 → **人还在名单上，系统继续跟**
+   *
+   * 原先三条共用同一句「不用再跟了，明天起在『不用再联系』那一栏找他」。
+   * 对后两条来说那是**反话**：销售照着去那一栏找人，找不到；或者信了这句话
+   * 不再管他，而系统其实还在跟。判据用 `stageSuppressesWorklist`，
+   * 跟名单本身用的是同一个函数，不另写一套。
+   */
+  interface StageSuggestion {
+    toStage: string
+    label: string
+    why: string
+    /** true = 点完之后这个人**照旧留在名单上**，系统继续跟。 */
+    stillFollowed: boolean
+  }
+
   const suppressStage = stageRows.find(
     (s) => s.marketing_action === 'suppress',
   )
@@ -450,7 +475,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
   const suggestStage = (
     c: (typeof ranked)[number],
     currentStage: string | null,
-  ): { toStage: string; label: string; why: string } | null => {
+  ): StageSuggestion | null => {
     if (!suppressStage) return null
     if (currentStage === suppressStage.stage_key) return null
 
@@ -463,6 +488,10 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       toStage: suppressStage.stage_key,
       label: suppressStage.label,
       why: '通话记录里客户明确说过不感兴趣 / 别再联系',
+      stillFollowed: !stageSuppressesWorklist(
+        isMarketingAction(suppressStage.marketing_action) ? suppressStage.marketing_action : 'suppress',
+        suppressStage.is_terminal,
+      ),
     }
   }
 
@@ -479,7 +508,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
   const suggestDeferred = (
     c: (typeof ranked)[number],
     currentStage: string | null,
-  ): { toStage: string; label: string; why: string } | null => {
+  ): StageSuggestion | null => {
     if (!deferStage) return null
     if (currentStage === deferStage.stage_key) return null
     // 只认**最近一次**的结果：他后来又聊热了的话，这条早就不成立了。
@@ -492,6 +521,10 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       toStage: deferStage.stage_key,
       label: deferStage.label,
       why: '通话记录里他说现在先不考虑 —— 不是不要了，过阵子还该跟',
+      stillFollowed: !stageSuppressesWorklist(
+        isMarketingAction(deferStage.marketing_action) ? deferStage.marketing_action : 'suppress',
+        deferStage.is_terminal,
+      ),
     }
   }
 
@@ -509,7 +542,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
   const suggestQuoted = (
     name: string | null,
     currentStage: string | null,
-  ): { toStage: string; label: string; why: string } | null => {
+  ): StageSuggestion | null => {
     if (!quoteStage || !name) return null
     if (!quotedNames.has(name.trim().toLowerCase())) return null
     if (currentStage === quoteStage.stage_key) return null
@@ -523,6 +556,10 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       toStage: quoteStage.stage_key,
       label: quoteStage.label,
       why: '行程单已经发给这位客人了',
+      stillFollowed: !stageSuppressesWorklist(
+        isMarketingAction(quoteStage.marketing_action) ? quoteStage.marketing_action : 'suppress',
+        quoteStage.is_terminal,
+      ),
     }
   }
 
