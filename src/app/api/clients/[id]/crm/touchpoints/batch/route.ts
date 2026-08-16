@@ -22,6 +22,7 @@ import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import { supabaseAdmin } from '@/lib/supabase'
 import { recordManualTouchpoint } from '@/lib/crm/touchpoints'
 import { classifyNote, type NoteParse } from '@/lib/crm/note-parser'
+import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
 
 /** 一次最多记这么多，防手滑把整库刷一遍。CTS 最大的桶 108 人，够用。 */
 const MAX_BATCH = 500
@@ -87,8 +88,38 @@ export async function POST(
 
   const rows = (owned ?? []) as { id: string; last_seen_at: string | null; do_not_contact: boolean }[]
 
-  // 说过「别再联系」的人，即使前端传进来也绝不记 —— 群发时最容易误伤的就是他们。
-  const targets = rows.filter((r) => !r.do_not_contact)
+  /**
+   * 说过「别再联系」的人，即使前端传进来也绝不记 —— 群发时最容易误伤的就是他们。
+   *
+   * 🔴 判据不是那一列，是触点（Codex 复审 2026-08-16）。`contacts.do_not_contact`
+   * 是尽力维护的镜像，写失败过；反过来，有人明确纠正过「这条判错了」之后，
+   * 只要那次镜像更新没成功，这个人就会被群发**永远跳过**，而界面上已经显示
+   * 他回到名单了。判据只有一份，见 `lib/crm/dnc`。
+   */
+  const { data: dncTouches } = await supabaseAdmin
+    .from('contact_touchpoints')
+    .select('contact_id, metadata, occurred_at')
+    .eq('client_id', clientId)
+    .in('contact_id', rows.map((r) => r.id))
+
+  const touchesByContact = new Map<string, DncTouch[]>()
+  for (const t of (dncTouches ?? []) as {
+    contact_id: string
+    metadata: Record<string, unknown> | null
+    occurred_at: string
+  }[]) {
+    const list = touchesByContact.get(t.contact_id) ?? []
+    list.push({
+      outcome: (t.metadata?.outcome as string) ?? null,
+      flagged: t.metadata?.do_not_contact === true,
+      occurredAt: t.occurred_at,
+    })
+    touchesByContact.set(t.contact_id, list)
+  }
+
+  const targets = rows.filter(
+    (r) => !isDoNotContact(r.do_not_contact, touchesByContact.get(r.id) ?? []),
+  )
 
   const occurredAt = new Date().toISOString()
 

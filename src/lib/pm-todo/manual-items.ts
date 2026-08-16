@@ -130,6 +130,7 @@ import { auditCrossClientLeaks } from '@/lib/clients/cross-client-audit'
 import { containsPriceClaim } from '@/lib/content/price-claim'
 import { judgeOutgoingPost } from '@/lib/content/price-claim-gate'
 import { SOURCE_LABELS } from '@/lib/assets/provenance'
+import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
 
 export function daysAgo(iso: string | null, now: Date): number | null {
   if (!iso) return null
@@ -731,7 +732,9 @@ export async function pushDncReviewItems(
 
   const { data: touches } = await supabase
     .from('contact_touchpoints')
-    .select('contact_id, raw')
+    // metadata / occurred_at 是给判据用的：有人纠正过「这条判错了」之后，
+    // 这条任务不许再冒出来 —— 否则 FDE 每天被同一个已经处理完的人骚扰一次。
+    .select('contact_id, raw, metadata, occurred_at')
     .in('contact_id', contacts.map((c) => c.id as string))
   if (!touches) return
 
@@ -741,13 +744,34 @@ export async function pushDncReviewItems(
   const SOFT = /not intending to go/i
 
   const byContact = new Map<string, string[]>()
+  const touchesByContact = new Map<string, DncTouch[]>()
   for (const t of touches) {
-    const list = byContact.get(t.contact_id as string) ?? []
+    const cid = t.contact_id as string
+    const list = byContact.get(cid) ?? []
     if (typeof t.raw === 'string' && t.raw) list.push(t.raw)
-    byContact.set(t.contact_id as string, list)
+    byContact.set(cid, list)
+
+    const meta = (t.metadata ?? {}) as Record<string, unknown>
+    const dncList = touchesByContact.get(cid) ?? []
+    dncList.push({
+      outcome: (meta.outcome as string) ?? null,
+      flagged: meta.do_not_contact === true,
+      occurredAt: t.occurred_at as string,
+    })
+    touchesByContact.set(cid, dncList)
   }
 
   for (const c of contacts) {
+    /**
+     * 🔴 **别再拿那一列当判据**（Codex 复审 2026-08-16）。
+     *
+     * `contacts.do_not_contact` 是尽力维护的镜像，写失败过。人已经点过
+     * 「判错了，放回名单」、纠正的触点也写好了，只要那一次镜像更新没成功，
+     * 这条任务第二天照旧冒出来 —— FDE 会以为自己上次点的按钮是假的。
+     * 判据只有一份，见 `lib/crm/dnc`。
+     */
+    if (!isDoNotContact(true, touchesByContact.get(c.id as string) ?? [])) continue
+
     const raws = byContact.get(c.id as string) ?? []
     if (raws.some((r) => BOUNDARY.test(r))) continue
     if (!raws.some((r) => SOFT.test(r))) continue

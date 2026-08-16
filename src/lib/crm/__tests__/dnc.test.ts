@@ -10,9 +10,10 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { isDoNotContact, DNC_CLEARED_OUTCOME } from '../dnc'
+import { dncClearedAt, isDoNotContact, DNC_CLEARED_OUTCOME } from '../dnc'
 
 const at = (d: string) => `2026-08-${d}T00:00:00Z`
+const cleared = (d: string) => ({ outcome: DNC_CLEARED_OUTCOME, occurredAt: at(d) })
 
 describe('说过别再联系的，一条都不许漏', () => {
   it('触点里说过 → 算', () => {
@@ -34,7 +35,6 @@ describe('说过别再联系的，一条都不许漏', () => {
 })
 
 describe('人明确纠正过「这条判错了」', () => {
-  const cleared = (d: string) => ({ outcome: DNC_CLEARED_OUTCOME, occurredAt: at(d) })
 
   it('纠正晚于那条误判 → 这个人回到名单上', () => {
     expect(
@@ -68,5 +68,28 @@ describe('人明确纠正过「这条判错了」', () => {
     expect(
       isDoNotContact(false, [cleared('01'), { outcome: 'do_not_contact', occurredAt: at('02') }]),
     ).toBe(true)
+  })
+})
+
+/**
+ * 光让 `isDoNotContact()` 返回 false 不够 —— 那条误判的触点还在库里，而分段
+ * 逻辑看的是触点上的结果值。分段那边不跟着作废，就会出现最坏的一种结局：
+ * 黄条消失了、人工任务也不再冒出来，人却照样不回名单，且再没有按钮能处理他。
+ */
+describe('纠正的时间点要给分段用', () => {
+  it('没纠正过 → 0', () => {
+    expect(dncClearedAt([{ outcome: 'do_not_contact', occurredAt: at('01') }])).toBe(0)
+  })
+
+  it('纠正过 → 那一刻', () => {
+    expect(dncClearedAt([cleared('02')])).toBe(new Date(at('02')).getTime())
+  })
+
+  it('纠正过多次 → 取最后一次', () => {
+    expect(dncClearedAt([cleared('02'), cleared('05')])).toBe(new Date(at('05')).getTime())
+  })
+
+  it('时间戳是坏的不许算成「刚刚纠正过」', () => {
+    expect(dncClearedAt([{ outcome: 'dnc_cleared', occurredAt: 'not-a-date' }])).toBe(0)
   })
 })

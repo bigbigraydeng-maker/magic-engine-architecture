@@ -29,6 +29,8 @@ export type Segment =
   | 'excluded'         // 别再联系 / 号码是坏的 / 明确没兴趣
 
 import { resolveTravelDate, isDueToWake } from './travel-date'
+// 「别再联系」的判据全仓只有一份 —— 这里要的是「什么时候被人推翻过」。
+import { dncClearedAt } from './dnc'
 
 export type Temperature = 'hot' | 'warm' | 'cold' | 'off'
 
@@ -550,7 +552,25 @@ export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
   )
   const clickPending =
     lastClick > 0 && nowMs - lastClick <= CLICK_WINDOW_MS && lastOutbound < lastClick
-  const outcomes = tps.map((t) => t.outcome).filter(Boolean) as string[]
+  /**
+   * 🔴 **被人推翻过的拒联判词不算数**（Codex 复审 2026-08-16）。
+   *
+   * 有人明确纠正过「这条别再联系判错了」之后，比那次纠正更早的
+   * `do_not_contact` 触点就已经作废了。不这么筛的话会出现最坏的一种结局：
+   * FDE 点了「放回名单」，黄条消失、人工任务不再冒出来（判据说他不是拒联了），
+   * **但他照样不出现在今天该联系的人里** —— 而且再没有按钮可以处理他。
+   * 看起来修好了，实际人被彻底埋掉。
+   *
+   * 只作废 `do_not_contact` 这一种：`not_interested` 是另一个判词，
+   * 「别再联系判错了」这句话没资格替客人收回「我不买了」。
+   */
+  const clearedAt = dncClearedAt(
+    tps.map((t) => ({ outcome: t.outcome, occurredAt: t.occurredAt })),
+  )
+  const outcomes = tps
+    .filter((t) => !(t.outcome === 'do_not_contact' && ts(t.occurredAt) < clearedAt))
+    .map((t) => t.outcome)
+    .filter(Boolean) as string[]
   const latestOutcome = tps
     .filter((t) => t.outcome)
     .sort((a, b) => ts(b.occurredAt) - ts(a.occurredAt))[0]?.outcome ?? null

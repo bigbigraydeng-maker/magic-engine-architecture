@@ -60,6 +60,27 @@ function ts(v: string | null | undefined): number {
  *   1. 有人**明确纠正过**，而且那次纠正**晚于**最后一条拒联证据 → 不算
  *   2. 否则只要那一列说是、或任何一条触点说过 → 算（宁可少打一通）
  */
+/**
+ * 最后一次「人说这条判错了」是什么时候（毫秒；没纠正过就 0）。
+ *
+ * 🔴 光让 `isDoNotContact()` 返回 false **不够**（Codex 复审 2026-08-16）。
+ * 那条误判的触点还躺在库里，而分段逻辑（`segments.ts`）看的是**触点上的结果值**：
+ * 只要历史上出现过一条 `do_not_contact`，这个人就被判 `excluded`、永远不回名单。
+ *
+ * 于是会出现最坏的一种结局：FDE 点了「放回名单」，黄条消失了、人工任务也不再
+ * 冒出来（判据说他不是拒联了），**但他照样不出现在今天该联系的人里** ——
+ * 而且已经没有任何按钮可以再处理他。看起来修好了，实际人被彻底埋掉。
+ *
+ * 所以纠正的时间点要**导出**给分段用：比它更早的那些 `do_not_contact` 判词，
+ * 已经被人推翻过了，不该再算数。
+ */
+export function dncClearedAt(touches: DncTouch[]): number {
+  return Math.max(
+    0,
+    ...touches.filter((t) => t.outcome === DNC_CLEARED_OUTCOME).map((t) => ts(t.occurredAt)),
+  )
+}
+
 export function isDoNotContact(contactFlag: boolean, touches: DncTouch[]): boolean {
   const said = (t: DncTouch): boolean =>
     t.flagged === true || t.outcome === 'do_not_contact'

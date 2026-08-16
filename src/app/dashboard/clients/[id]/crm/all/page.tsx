@@ -212,7 +212,8 @@ function ContactDetail({
   timeline: TimelineEntry[] | null
   omitted: number
   loading: boolean
-  onWrote: (msg: string) => void
+  /** 第二个参数 = 要不要顺手重拉列表；失败时传 false。 */
+  onWrote: (msg: string, reload?: boolean) => void
 }) {
   const [composing, setComposing] = useState(false)
   const [changingStage, setChangingStage] = useState(false)
@@ -482,10 +483,21 @@ export default function CrmAllContactsPage() {
 
   // 写完（记一笔 / 改阶段）后：刷新列表拿到最新冷热/阶段/最近联系，并重拉这个人的
   // 时间线；保持展开不收起，同事不丢位置。
-  const afterWrite = (msg: string) => {
+  /**
+   * 写完（记一笔 / 改阶段 / 取消别再联系）之后。
+   *
+   * 🔴 `reload` 必须一路传到这里（Codex 复审 2026-08-16）。取消「别再联系」
+   * 那一步是**两步写**：触点先写、镜像列后放。第二步失败时接口回 500，
+   * 但触点已经落库了 —— 这时候若照旧重拉列表，判据会算出「他不是拒联了」，
+   * 黄条和重试按钮当场消失，而镜像列还是 true。人看到一句「没改上」，
+   * 却连再点一次的地方都没有了。失败就别刷新，把按钮留在原地。
+   */
+  const afterWrite = (msg: string, reload = true) => {
     setToast(msg)
-    void loadList()
-    if (expandedId) void loadTimeline(expandedId)
+    if (reload) {
+      void loadList()
+      if (expandedId) void loadTimeline(expandedId)
+    }
     window.setTimeout(() => setToast(null), 2400)
   }
 
