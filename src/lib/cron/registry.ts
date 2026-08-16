@@ -98,5 +98,6 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   { service: 'weekly-seo-report', jobName: 'weekly-seo-report', schedule: '30 18 * * 0', logsRuns: true },
   { service: 'winner-reel-sync-daily', jobName: 'winner-reel-sync-daily', schedule: '0 15 * * *', logsRuns: true },
   { service: 'zhangqian-sweeper', jobName: 'zhangqian-sweeper', schedule: '35 * * * *', logsRuns: true },
-  { service: 'zhuge-weekly-recalculate', jobName: 'zhuge-weekly-recalculate', schedule: '0 3 * * 1', logsRuns: true },
+  // zhuge-weekly-recalculate 已停用 2026-08-17（PM 拍板）——
+  // 输出无人消费 + 判据存在采集面盲区，详见 render.yaml 同名条目的注释。
 ] as const

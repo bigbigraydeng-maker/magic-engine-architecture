@@ -341,23 +341,33 @@ services:
       - key: CRON_SECRET
         sync: false
 
-  # Weekly 诸葛亮 recalculation — every Monday at 3am UTC
-  # Re-runs priority analysis for all clients with confirmed discovery,
-  # writes fresh recommendations to execution_items kanban.
-  # Reference: ROADMAP.md P24.B
-  # healthchecks.io: zhuge-weekly-recalculate (a2c4d128-e09c-41eb-843e-98c9a0afecba)
-  - type: cron
-    name: zhuge-weekly-recalculate
-    env: node
-    schedule: "0 3 * * 1"
-    buildCommand: ""
-    startCommand: |
-      curl -fsS --max-time 900 -H "Authorization: Bearer $CRON_SECRET" \
-        https://app.magicengine.com.au/api/cron/zhuge-recalculate \
-        && curl -fsS "https://hc-ping.com/a2c4d128-e09c-41eb-843e-98c9a0afecba"
-    envVars:
-      - key: CRON_SECRET
-        sync: false
+  # Weekly 诸葛亮 recalculation — 已停用 2026-08-17（PM 拍板）
+  #
+  # 停用原因：它每周向 flywheel_actions 写入的优先级建议**无人消费**（PM 2026-08-17 确认），
+  # 且它据以判断的数据存在结构性盲区 —— 只读工具集 src/lib/agent-tools/readonly/ 四个工具
+  # 全部只覆盖网站侧 / 搜索侧，看不到平台侧客资（Meta 表单/私信广告的客人不进网站）。
+  # 实测 CTS 2026-07-19~08-16：GA4 看到 FB 50 会话，Meta 后台同期 106 条客资。
+  # 按它能看到的数据排优先级，会系统性低估 Meta。
+  #
+  # 恢复前必须先过：docs/specs/2026-08-17-me2-channel-value-evidence-contract-v1.0.md
+  # （该契约 §5 明确：若此输出将来重新被消费，需先按契约评估，否则不得恢复消费）
+  #
+  # 路由 src/app/api/cron/zhuge-recalculate 仍在，可手动触发；此处只摘掉自动调度。
+  # 同步改动：src/lib/cron/registry.ts 已同步移除该条目（health 检查读的是 registry 那份）。
+  # healthchecks.io ping a2c4d128-e09c-41eb-843e-98c9a0afecba 将不再收到心跳，属预期。
+  #
+  # - type: cron
+  #   name: zhuge-weekly-recalculate
+  #   env: node
+  #   schedule: "0 3 * * 1"
+  #   buildCommand: ""
+  #   startCommand: |
+  #     curl -fsS --max-time 900 -H "Authorization: Bearer $CRON_SECRET" \
+  #       https://app.magicengine.com.au/api/cron/zhuge-recalculate \
+  #       && curl -fsS "https://hc-ping.com/a2c4d128-e09c-41eb-843e-98c9a0afecba"
+  #   envVars:
+  #     - key: CRON_SECRET
+  #       sync: false
 
   # Viral reference analyzer worker — every 2 minutes
   # Throttled queue drainer: picks up to 8 pending videos, runs Gemini analysis
