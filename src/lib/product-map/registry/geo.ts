@@ -139,10 +139,9 @@ export const GEO_COMPONENTS: readonly ProductMapComponent[] = [
     id: 'adapter.geo-baseline-openai',
     name: 'GEO baseline 测量引擎接线（WP04A）',
     componentType: 'adapter',
-    // Adapter 不是顶层角色（Build Control Room 2026-08-15 05:43 复审 Blocker 1）：
-    // 这是 capability.geo-measurement-runtime 的 supporting artifact，
-    // architecturalRole 继承父组件的 measurement，adapterOf 挂回父组件 id。
-    architecturalRole: 'measurement',
+    // B2：supporting artifact 不占顶层七角色。它是 capability.geo-measurement-runtime
+    // 的零件，语义靠 adapterOf 继承父组件（measurement），**自己不设 architecturalRole**
+    // —— 类型层已把 Me2SupportingComponent.architecturalRole 锁成 never。
     adapterOf: 'capability.geo-measurement-runtime',
     businessLane: 'geo',
     dapeStages: ['execution'],

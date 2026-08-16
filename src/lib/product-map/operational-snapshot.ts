@@ -26,9 +26,17 @@ export type ProbeStatus = (typeof PROBE_STATUS)[number]
 
 export interface OperationalProbe {
   readonly status: ProbeStatus
-  /** 可审计指针：证据 ref / blocker ref / 字段名，禁止散文结论。 */
+  /**
+   * B4：可审计的**证据身份指针**，不是散文结论。形如 `#962`（PR 号）/
+   * `production_run:<ref>` / `importer:<path>` / `blocker:<id>` / `operationalStatus:<值>`。
+   */
   readonly evidenceSource: string
-  /** YYYY-MM-DD；探针从未跑过时为 null，不得虚构一个日期。 */
+  /**
+   * YYYY-MM-DD 的机器核验日期。
+   * 🔴 B3：`status==='yes'` ⟹ 此值**必非 null** —— 正向断言必须由带日期的机器证据
+   *    支撑，拿不到日期就退回 unknown（见 confirmedYes）。`no`（来自已登记 blocker /
+   *    operationalStatus 的结构性负向信号）与 `unknown` 允许 null。
+   */
   readonly checkedAt: string | null
 }
 
@@ -43,16 +51,27 @@ export interface OperationalSnapshot {
 /** 只认这几种明确写出"零调用方"的措辞；查不到不等于查到了"没有"。 */
 const NO_CALLER_PATTERN = /零\s*(个\s*)?(importer|调用方|caller)|没有(任何)?调用方|未接(入|线)|电没通/
 
+/**
+ * B3：把"yes"这一步收成"必须有 checkedAt"。正向断言（code in main / 生产依赖存在 /
+ * 真实调用方 / 生产跑过）是对动态现实的声明，会过期；没有带日期的机器证据就不能确认，
+ * 退回 unknown，而不是编一个 checkedAt=null 的 yes。
+ */
+function confirmedYes(evidenceSource: string, checkedAt: string | null): OperationalProbe {
+  if (checkedAt === null) {
+    return { status: 'unknown', evidenceSource: `${evidenceSource}（缺 checkedAt，无法确认）`, checkedAt: null }
+  }
+  return { status: 'yes', evidenceSource, checkedAt }
+}
+
 function deriveCodeInMain(c: ProductMapComponent, facts: ExternalFacts): OperationalProbe {
   if (c.origin === 'legacy') {
-    if (c.ownedPaths.length > 0) {
-      return {
-        status: 'yes',
-        evidenceSource: `ownedPaths 对磁盘核验（registry.test 持续复验）：${c.ownedPaths[0]}`,
-        checkedAt: null,
-      }
+    // B3：ownedPaths 存在于磁盘 ≠ 带日期地证明它在 main。没有 GitHub 同步事实就没有
+    // checkedAt → unknown（PR2 的同步快照到位后，这里可变成带日期的 yes）。
+    return {
+      status: 'unknown',
+      evidenceSource: 'legacy: 无 GitHub 同步事实可确认 main 归属（PR2 起提供带日期的 sync fact）',
+      checkedAt: null,
     }
-    return { status: 'unknown', evidenceSource: '未登记 ownedPaths，没有探针可跑', checkedAt: null }
   }
 
   const implementsPrs = c.linkedPullRequests.filter((pr) => pr.role === 'implements')
@@ -62,21 +81,14 @@ function deriveCodeInMain(c: ProductMapComponent, facts: ExternalFacts): Operati
   for (const pr of implementsPrs) {
     const fact = facts.pullRequests[pr.number]
     if (fact?.state === 'merged') {
-      return {
-        status: 'yes',
-        evidenceSource: `PR #${pr.number} merged（${fact.source}）`,
-        checkedAt: fact.observedAt,
-      }
+      return confirmedYes(`#${pr.number}`, fact.observedAt ?? null)
     }
   }
   for (const pr of implementsPrs) {
     const fact = facts.pullRequests[pr.number]
     if (fact !== undefined) {
-      return {
-        status: 'no',
-        evidenceSource: `PR #${pr.number} state=${fact.state}（${fact.source}）`,
-        checkedAt: fact.observedAt,
-      }
+      // 负向来自机器事实（同步快照），带 observedAt
+      return { status: 'no', evidenceSource: `#${pr.number}`, checkedAt: fact.observedAt ?? null }
     }
   }
   return { status: 'unknown', evidenceSource: 'PR 状态未同步（ExternalFacts 查无此 PR）', checkedAt: null }
@@ -85,15 +97,12 @@ function deriveCodeInMain(c: ProductMapComponent, facts: ExternalFacts): Operati
 function deriveProductionPrerequisites(c: ProductMapComponent): OperationalProbe {
   const provisioning = c.currentBlockers.find((b) => b.kind === 'provisioning')
   if (provisioning) {
-    return {
-      status: 'no',
-      evidenceSource: `blocker '${provisioning.id}'：${provisioning.summary}`,
-      checkedAt: null,
-    }
+    // 已登记的结构性负向信号：身份 = blocker id，允许 checkedAt=null
+    return { status: 'no', evidenceSource: `blocker:${provisioning.id}`, checkedAt: null }
   }
   const dataEvidence = c.productionEvidence.find((e) => e.kind === 'production_data')
   if (dataEvidence) {
-    return { status: 'yes', evidenceSource: dataEvidence.ref, checkedAt: dataEvidence.observedAt ?? null }
+    return confirmedYes(`production_data:${dataEvidence.ref}`, dataEvidence.observedAt ?? null)
   }
   return { status: 'unknown', evidenceSource: '未登记 provisioning blocker 或 production_data 证据', checkedAt: null }
 }
@@ -101,11 +110,11 @@ function deriveProductionPrerequisites(c: ProductMapComponent): OperationalProbe
 function deriveRealCallerWired(c: ProductMapComponent): OperationalProbe {
   const first = c.integrationEvidence[0]
   if (first) {
-    return { status: 'yes', evidenceSource: `${first.kind}:${first.ref}`, checkedAt: first.observedAt ?? null }
+    return confirmedYes(`${first.kind}:${first.ref}`, first.observedAt ?? null)
   }
   const negative = c.currentBlockers.find((b) => NO_CALLER_PATTERN.test(b.summary))
   if (negative) {
-    return { status: 'no', evidenceSource: `blocker '${negative.id}'：${negative.summary}`, checkedAt: null }
+    return { status: 'no', evidenceSource: `blocker:${negative.id}`, checkedAt: null }
   }
   return { status: 'unknown', evidenceSource: '未登记 integrationEvidence，也无明确负向 blocker', checkedAt: null }
 }
@@ -113,23 +122,28 @@ function deriveRealCallerWired(c: ProductMapComponent): OperationalProbe {
 function deriveProductionRunObserved(c: ProductMapComponent): OperationalProbe {
   if (c.origin === 'me2_native') {
     const run = c.productionEvidence.find((e) => e.kind === 'production_run')
-    if (run) return { status: 'yes', evidenceSource: run.ref, checkedAt: run.observedAt ?? null }
+    if (run) return confirmedYes(`production_run:${run.ref}`, run.observedAt ?? null)
     if (c.operationalStatus === 'not_operating') {
-      return { status: 'no', evidenceSource: "operationalStatus='not_operating'", checkedAt: null }
+      return { status: 'no', evidenceSource: 'operationalStatus:not_operating', checkedAt: null }
     }
     return { status: 'unknown', evidenceSource: '未登记 production_run 证据', checkedAt: null }
   }
-  if (c.operationalStatus === 'operating_legacy' && c.legacyOperationalNote) {
-    return { status: 'yes', evidenceSource: c.legacyOperationalNote, checkedAt: null }
-  }
+  // legacy：legacyOperationalNote 是静态声明，非机器核验 —— Blocker 3 明确它不能单独把
+  // 运营格变成 yes。operating_legacy → unknown（有声明但无带日期核验）；
+  // not_operating 是明确负向 → no。
   if (c.operationalStatus === 'not_operating') {
-    return { status: 'no', evidenceSource: "operationalStatus='not_operating'", checkedAt: null }
+    return { status: 'no', evidenceSource: 'operationalStatus:not_operating', checkedAt: null }
   }
-  return {
-    status: 'unknown',
-    evidenceSource: 'operationalStatus=operating_legacy 但未登记 legacyOperationalNote',
-    checkedAt: null,
+  if (c.operationalStatus === 'operating_legacy') {
+    return {
+      status: 'unknown',
+      evidenceSource: c.legacyOperationalNote
+        ? 'operationalStatus:operating_legacy（legacyOperationalNote 是静态声明，无带日期核验）'
+        : 'operationalStatus:operating_legacy（未登记 legacyOperationalNote）',
+      checkedAt: null,
+    }
   }
+  return { status: 'unknown', evidenceSource: 'operationalStatus 未提供可判定信号', checkedAt: null }
 }
 
 export function deriveOperationalSnapshot(

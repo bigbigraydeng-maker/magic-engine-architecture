@@ -3,8 +3,13 @@
 import type { ExternalFacts, PullRequestFact } from '../external-facts'
 import type { ProductMapComponent } from '../types'
 
+/**
+ * 默认造一个 me2_native 顶层组件（带 architecturalRole）。
+ * 覆写 origin:'legacy' 时，判别式 union 结构上不允许 architecturalRole/adapterOf ——
+ * 这里统一清掉，保证产出对象与 union 一致（旧测试仍可传 architecturalRole:undefined，无害）。
+ */
 export function makeComponent(overrides: Partial<ProductMapComponent> = {}): ProductMapComponent {
-  return {
+  const merged: Record<string, unknown> = {
     id: 'platform.test-component',
     name: '测试组件',
     componentType: 'platform',
@@ -29,6 +34,11 @@ export function makeComponent(overrides: Partial<ProductMapComponent> = {}): Pro
     ownerRole: 'test',
     ...overrides,
   }
+  if (merged.origin === 'legacy') {
+    delete merged.architecturalRole
+    delete merged.adapterOf
+  }
+  return merged as unknown as ProductMapComponent
 }
 
 export function makeFacts(prs: PullRequestFact[]): ExternalFacts {

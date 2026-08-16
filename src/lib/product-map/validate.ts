@@ -116,12 +116,20 @@ export function validateRegistry(
       if (!ok(c)) err(c.id, 'illegal_enum', `${field} 取值非法`)
     }
 
-    // WP00 §3 七层角色 —— origin 双向硬校验（Build Control Room 2026-08-15
-    // 05:43 复审裁决：me2_native 必须落在冻结七层之一；legacy 不许借架构角色
-    // 伪装成已纳入 ME2 治理）
+    // WP00 §3 七层角色 —— 判别式 union 的运行时闸（B1/B2；也挡 JSON 注入 / as-cast
+    // 绕过编译期）。三种合法形态：
+    //   me2_native 顶层     → 必须有七层之一的 architecturalRole，不得有 adapterOf
+    //   me2_native 支持件    → 必须有 adapterOf，不得有 architecturalRole（B2：不占角色）
+    //   legacy              → 两者都不得有
+    const isSupporting = c.origin === 'me2_native' && c.adapterOf !== undefined
     if (c.origin === 'me2_native') {
-      if (c.architecturalRole === undefined) {
-        err(c.id, 'missing_architectural_role', 'me2_native 组件必须声明 architecturalRole（WP00 冻结七层之一）')
+      if (isSupporting) {
+        // B2：supporting artifact 是父组件的零件，绝不占顶层七角色
+        if (c.architecturalRole !== undefined) {
+          err(c.id, 'supporting_artifact_with_role', 'adapterOf 已设的 supporting artifact 不得声明 architecturalRole —— 它是七层父组件的零件，不占顶层角色')
+        }
+      } else if (c.architecturalRole === undefined) {
+        err(c.id, 'missing_architectural_role', 'me2_native 顶层组件必须声明 architecturalRole（WP00 冻结七层之一）')
       } else if (!(ARCHITECTURAL_ROLE as readonly string[]).includes(c.architecturalRole)) {
         err(c.id, 'illegal_enum', `architecturalRole 取值非法：'${c.architecturalRole}'`)
       }
@@ -129,9 +137,12 @@ export function validateRegistry(
       err(c.id, 'legacy_with_architectural_role', 'legacy 组件不得声明 architecturalRole（尚未纳入 ME2 七层 / Kernel 治理）')
     }
 
-    // adapterOf：只有 componentType === 'adapter' 的组件可以声明"我是谁的零件"，
-    // 且必须指向登记册里真实存在的组件（防悬空 + 防用这个字段偷造第八层）
+    // adapterOf：只有 componentType === 'adapter' 的 me2_native 组件可以声明"我是谁的
+    // 零件"，且必须指向登记册里真实存在的组件（防悬空 + 防用这个字段偷造第八层）
     if (c.adapterOf !== undefined) {
+      if (c.origin !== 'me2_native') {
+        err(c.id, 'legacy_with_adapter_of', 'legacy 组件不得声明 adapterOf（它不是任何 ME2 组件的零件）')
+      }
       if (c.componentType !== 'adapter') {
         err(c.id, 'adapter_of_from_non_adapter', 'adapterOf 只能由 componentType=adapter 的组件声明')
       }

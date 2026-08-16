@@ -88,12 +88,23 @@ describe('防夸大规则', () => {
   })
 
   it('legacy 组件声明 architecturalRole = hard error（不许伪装成已纳入 ME2 治理）', () => {
-    const c = makeComponent({
+    // 判别式 union 在类型层已禁掉 legacy+architecturalRole；这里绕过类型强行构造脏对象,
+    // 验证运行时闸也拦得住（PR2 从 JSON 快照 hydrate 时这是唯一的门）。
+    const base = makeComponent({
       origin: 'legacy',
       operationalStatus: 'operating_legacy',
       ownedPaths: ['src/lib/x/'],
     })
-    expect(errorCodes([c])).toContain('legacy_with_architectural_role')
+    const dirty = { ...base, architecturalRole: 'kernel' } as unknown as ProductMapComponent
+    expect(errorCodes([dirty])).toContain('legacy_with_architectural_role')
+  })
+
+  it('B2：supporting artifact（me2_native + adapterOf）声明 architecturalRole = hard error', () => {
+    // 同样绕过类型层，验证运行时守卫 supporting_artifact_with_role
+    const parent = makeComponent({ id: 'capability.parent', componentType: 'capability' })
+    const base = makeComponent({ id: 'adapter.child', componentType: 'adapter', adapterOf: 'capability.parent' })
+    const dirty = { ...base, architecturalRole: 'measurement' } as unknown as ProductMapComponent
+    expect(errorCodes([parent, dirty])).toContain('supporting_artifact_with_role')
   })
 
   it('adapterOf 指向不存在的组件报错', () => {
