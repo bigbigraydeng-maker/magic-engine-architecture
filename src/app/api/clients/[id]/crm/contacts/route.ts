@@ -50,6 +50,7 @@ interface TouchRow {
   occurred_at: string
   summary: string | null
   metadata: Record<string, unknown> | null
+  source: string | null
 }
 
 interface StageRow {
@@ -104,7 +105,7 @@ export async function GET(
       fetchAll<TouchRow>((from, to) =>
         supabaseAdmin
           .from('contact_touchpoints')
-          .select('id, contact_id, channel, direction, occurred_at, summary, metadata')
+          .select('id, contact_id, channel, direction, occurred_at, summary, metadata, source')
           .eq('client_id', clientId)
           .order('occurred_at', { ascending: false })
           // 同一时刻的多条（导入数据里表单与通话常共用一个时间戳）需要一个
@@ -177,6 +178,8 @@ export async function GET(
         direction: t.direction,
         occurredAt: t.occurred_at,
         outcome: (t.metadata?.outcome as string) ?? null,
+        // 判「电话线通不通」要靠它分清真打通了和手打出来的 spoke（见 isPhoneVerdict）
+        source: t.source,
         travelWindow: (t.metadata?.travel_window as string) ?? null,
         callbackAt: (t.metadata?.callback_at as string) ?? null,
         // 邮件被打开 / 链接被点 = 行为信号，不是真人消息。分段逻辑必须区分，
@@ -218,6 +221,13 @@ export async function GET(
       firstSeenAt: firstTouch > 0 ? new Date(firstTouch).toISOString() : c.first_seen_at,
       lastTouchAt: lastTouch > 0 ? new Date(lastTouch).toISOString() : null,
       phone: c.primary_phone,
+      /**
+       * 号码在库里但打不通 —— **两个 CRM 入口必须说同一件事**（Codex 复审 2026-08-16）。
+       *
+       * 不带的话，同一个已判坏的号在「今天该联系谁」被禁用，切到「全部客人」
+       * 展开却照旧能一点就拨。销售会以为其中一边是过时的，而两边他都不再信。
+       */
+      phoneUnusable: seg.phoneUnusable ?? false,
       email: c.primary_email,
       // 电话邮箱都没有时，页面据此显示「仅 FB 私信」而不是「没留联系方式」。
       hasMessenger: tps.some((t) => t.channel === 'messenger'),

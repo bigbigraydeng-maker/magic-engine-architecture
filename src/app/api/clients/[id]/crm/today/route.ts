@@ -26,6 +26,8 @@ import {
   type ContactLike,
   type Segment,
   engagementFromMetadata,
+  isPhoneVerdict,
+  isFailedReach,
 } from '@/lib/crm/segments'
 import { WORKLIST_GROUPS, groupDisplayMeta } from '@/lib/crm/worklist-groups'
 import { contactCardTitle } from '@/lib/crm/display-name'
@@ -73,6 +75,24 @@ function latestOutcomeOf(touches: TouchRow[]): string | null {
     if (typeof o === 'string' && o) return o
   }
   return null
+}
+
+/**
+ * 这条电话线通不通 —— **判据跟 `segmentContact` 是同一份**（`isPhoneVerdict`）。
+ *
+ * 原先这里看「最新的任意一条结果是不是坏号」，跟分段那边不一致：一个只有坏号、
+ * 之后又打了一次没人接的人，分段判他「号码打不通」，这里却因为最新一条是
+ * `no_answer` 而把他丢进「不要再联系」—— **补号码这件该有人动手的事又一次被
+ * 藏起来**（铁律 3：发现不许死在日志里）。
+ *
+ * `touches` 已按 occurred_at 倒序（见下面的查询），所以第一条判决就是最近那次。
+ */
+function phoneLineDeadFrom(touches: TouchRow[]): boolean {
+  for (const t of touches) {
+    const o = t.metadata?.outcome
+    if (typeof o === 'string' && isPhoneVerdict(o, t.source)) return o === 'bad_number'
+  }
+  return false
 }
 
 interface IdentityRow {
@@ -257,6 +277,8 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
         direction: t.direction,
         occurredAt: t.occurred_at,
         outcome: (t.metadata?.outcome as string) ?? null,
+        // 判「电话线通不通」要靠它分清真打通了和手打出来的 spoke（见 isPhoneVerdict）
+        source: t.source,
         travelWindow: (t.metadata?.travel_window as string) ?? null,
         callbackAt: (t.metadata?.callback_at as string) ?? null,
         // 邮件被打开 / 链接被点 = 行为信号，不是真人消息。分段逻辑必须区分，
@@ -336,6 +358,9 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
           !engagementFromMetadata(t.metadata) &&
           t.metadata?.action !== 'snooze' &&
           t.metadata?.action !== 'unsnooze' &&
+          // 拨到一个空号不算「我们出手了」—— 客人什么都没收到，
+          // 该走的备用渠道一次都还没走。判据跟 day-list 共用同一个函数。
+          !isFailedReach(t.metadata?.outcome as string | undefined) &&
           localDay(t.occurred_at, timeZone) === todayLocal,
       )
       .map((t) => t.contact_id),
@@ -572,6 +597,8 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
        */
       reason: c.handled && c.handledWhy ? c.handledWhy : c.seg.reason,
       suggestedChannel: c.seg.suggestedChannel,
+      /** 号码在库里但打不通 —— 卡片靠它把「没留电话」和「号是坏的」分开说。 */
+      phoneUnusable: c.seg.phoneUnusable ?? false,
       dueAt: c.seg.dueAt,
       lastTouchAt: c.seg.lastTouchAt,
       lastNote: last?.summary ?? null,
@@ -665,6 +692,14 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
         stageLabel: meta?.label ?? row?.stage ?? null,
         segment: seg.segment,
         reason: seg.reason,
+        /**
+         * 号码在库里但打不通 —— **不在名单上的人同样要带**（Codex 复审 2026-08-16）。
+         *
+         * 不带的话，抽屉里那个值是 `undefined`，照旧渲染成可点的拨号链接 ——
+         * 而这一组（`fix_number`）**整组存在的意义就是「这个号打不通，去补一个」**。
+         * 点开它就能拨那个已知打不通的号，是这一组里最不该出现的事。
+         */
+        phoneUnusable: seg.phoneUnusable ?? false,
         // 为什么不在今天名单上。成交跟「明确拒绝」混在一堆叫「已排除」很刺眼，
         // 而且成交客户恰恰最该继续维护（催余款、确认行程）—— 页面按这个分开显示。
         /** 被推迟到什么时候。有值 = 他是被人手推迟的，不是被规则排除的。 */
@@ -682,7 +717,12 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
         group:
           row?.snooze_until && new Date(row.snooze_until).getTime() > now.getTime()
             ? ('snoozed' as const)
-            : latestOutcomeOf(byContact.get(c.id) ?? []) === 'bad_number'
+            // 🔴 必须跟 `segmentContact` 用**同一个判据**（Codex 复审 2026-08-16）。
+            // 原先看「最新的任意一条结果是不是坏号」：一个只有坏号、之后又打了
+            // 一次没人接的人，分段那边照旧判他「号码打不通」，这里却因为最新
+            // 一条是 no_answer 而把他丢进「不要再联系」—— 补号码这件该有人动手的
+            // 事又一次被藏起来（铁律 3：发现不许死在日志里）。
+            : phoneLineDeadFrom(byContact.get(c.id) ?? [])
               ? ('fix_number' as const)
               : meta?.action === 'won' || meta?.action === 'postsale'
                 ? ('won' as const)

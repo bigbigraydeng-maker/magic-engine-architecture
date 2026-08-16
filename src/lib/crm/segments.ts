@@ -153,6 +153,13 @@ export interface TouchpointLike {
    * 写入侧见 `RecordTouchpointInput.action`。
    */
   action?: 'snooze' | 'unsnooze' | null
+  /**
+   * 这一笔从哪来的（`contact_touchpoints.source`）。
+   *
+   * 目前只有一个用处，但很要紧：判「电话线通不通」时要分得清
+   * **真的打通了** 和 **销售打字打出来的 `spoke`**。见 `phoneLineIsDead`。
+   */
+  source?: string | null
   outcome?: string | null
   travelWindow?: string | null
   callbackAt?: string | null
@@ -237,6 +244,24 @@ export interface SegmentResult {
    * 让销售去打一个打不了的人，这一页就会开始不被信任。
    */
   suggestedChannel: 'phone' | 'sms' | 'email' | 'messenger' | 'none'
+  /**
+   * 库里有号码，但**这个号打不通**（有人点过「号码是坏的」）。
+   *
+   * 卡片必须靠它区分两种长得一样、说法完全不同的情况：
+   *   · 没留电话   → 「没留电话 —— 只能发邮件」
+   *   · 号码是坏的 → 「这个号打不通 —— 先用邮件，顺便问他要个新号」
+   * 对一个抽屉里明明存着号码的人说「没留电话」，销售一眼就能戳穿，
+   * 而这一页最贵的资产就是「它说的话可信」。
+   */
+  phoneUnusable?: boolean
+  /**
+   * 这一段**本来**想用哪个渠道 —— 还没按「他能不能被联系到」降级之前的那个。
+   *
+   * `dayRow` 的冻结合并要用它：号码今天修好了要把电话放回来，如果拿
+   * `suggestedChannel`（**已经降级成邮件**的那个）去重解一次，永远爬不回电话。
+   * 必须从这一段原本的意图重新解。
+   */
+  wantedChannel?: SegmentResult['suggestedChannel']
   /** 约定的回电时间，有就带上。销售拿起电话前一定会想「我约的几点」。 */
   dueAt: string | null
   /**
@@ -282,7 +307,22 @@ function snoozeText(iso: string, now: Date): string {
 }
 
 /** 结论性的通话结果 —— 这些人不该出现在今天的名单上。 */
-const DEAD_OUTCOMES = new Set(['bad_number', 'not_interested', 'do_not_contact'])
+/**
+ * 「这个人到此为止了」—— 判到就整个人退出名单。
+ *
+ * 🔴 **`bad_number` 故意不在里面**（PM 2026-08-16 从线上截图抓到）。
+ *
+ * 「号码是坏的」说的是**这条电话线打不通**，不是**这个人不要了**。把它当成
+ * 结局，等于让一个渠道故障判了整个人的死刑 —— 而这正是 CTS 线上真实发生的事：
+ * 24 个被标了坏号的人里 **23 个后来又来过消息**，15 个一直在跟我们邮件往来。
+ * Sue Masson 7 月 6 号被标坏号，此后来了 11 封信、最后一封是**昨天**，
+ * 却一直躺在「号码是坏的·补一个对的就能继续跟」那一栏里没人回。
+ *
+ * 判据分层：**联系方式是渠道属性，成不成是人的状态，两件事不许互相覆盖。**
+ * 坏号只把电话这条路关掉（见 `phoneIsDead`），人照旧走下面的规则；
+ * 只有当他**真的一条路都没有**时，才回到「联系不上」那一栏。
+ */
+const DEAD_OUTCOMES = new Set(['not_interested', 'do_not_contact'])
 
 /**
  * 打了没接，几天之后不再让真人一个个重打。
@@ -374,6 +414,73 @@ function ts(v: string | null | undefined): number {
 }
 
 /**
+ * 只有这两种结果算「对这条电话线的判决」。
+ *
+ * `no_answer`（打了没人接）**故意不在里面** —— 没人接不代表号码是坏的，
+ * 中午没接的人晚上会接。把它算进来，等于因为一次没接就把电话这条路关掉。
+ */
+const PHONE_VERDICTS: ReadonlySet<string> = new Set(['bad_number', 'spoke'])
+
+/**
+ * 这条通话结果算不算「对电话线的判决」。
+ *
+ * 导出是为了让**读原始 DB 行**的调用方（today 路由分「号码要修」那一组）
+ * 复用同一份判据 —— 两边各写一套，就会出现分段说「打不通」、分组却说
+ * 「不要再联系」的裂缝，补号码那件事又一次被藏起来。
+ */
+/**
+ * 这一笔出站**没有真的把人联系上** —— 所以不算「今天跟进过他了」。
+ *
+ * 🔴 只有「号码是坏的」（Codex 复审 2026-08-16 第五轮）。销售拨过去发现是空号、
+ * 顺手标了坏号，这件事**没有到达客人**：他什么都没收到，还在等我们。
+ * 算成「今天出手过」的话，卡片当场折进「今天已处理」、进度条算完成、
+ * 群发邮件还会把他排除掉 —— 而正确的下一步（改用邮件 / 私信联系他）
+ * **一次都还没做**。待办就这么被藏起来了（铁律 3：发现不许死在日志里）。
+ *
+ * `no_answer`（打了没人接）**不在里面**，这是刻意的：那是一次正常的尝试，
+ * 「今天试过了、晚点再试」本来就是销售那一天对这个人做完的事。
+ * 坏号不一样 —— 它是「这条路永久关闭了，今天得换一条走」。
+ */
+export function isFailedReach(outcome: string | null | undefined): boolean {
+  return outcome === 'bad_number'
+}
+
+export function isPhoneVerdict(
+  outcome: string | null | undefined,
+  source?: string | null,
+): boolean {
+  if (!outcome || !PHONE_VERDICTS.has(outcome)) return false
+  // 🔴 手打的笔记里那个 `spoke` **不算打通了电话**（Codex 复审 2026-08-16）。
+  //
+  // `recordManualTouchpoint` 把每一条手记都写成 `channel: 'phone'`，而
+  // `classifyNote` 的**兜底值就是 `spoke`** —— 任何没命中规则的普通备注都会变成它。
+  // 于是销售给坏号客人记一句「已经邮件发他了」，电话当场被判成「打通了」，
+  // 刷新之后那个明知打不通的号又变回可拨 —— 而这类记录**恰恰是坏号客人的常态**。
+  //
+  // 一个**兜底值**不许推翻一个**人明确按下的判断**。所以只认非手记来源的
+  // `spoke`（语音桥接接通时写的那种）。「号码是坏的」两边都认：它从来不是兜底值，
+  // 是有人明说的。
+  if (outcome === 'spoke' && source === 'me_manual') return false
+  return true
+}
+
+/**
+ * 这条电话线现在通不通 —— **看最后一次判决，不看历史上有没有出现过坏号**。
+ *
+ * ⚠️ 不能用「只要出现过 bad_number 就永久判死」（Codex 复审 2026-08-16）：
+ * 号码会被改对（FDE 补一个新号）、也可能当初就标错了，之后真的打通过。
+ * 语音桥接接通时会写一条 `spoke`，所以「标错之后又打通了」是真实可发生的。
+ * 永久判死的话，一个已经打得通的号码会被永远藏起来，销售还会看到一句
+ * 「这个号打不通」—— 他手上刚打通过，这一页当场失去可信度。
+ */
+export function phoneLineIsDead(tps: TouchpointLike[]): boolean {
+  const latest = tps
+    .filter((t) => isPhoneVerdict(t.outcome, t.source))
+    .sort((a, b) => ts(b.occurredAt) - ts(a.occurredAt))[0]
+  return latest?.outcome === 'bad_number'
+}
+
+/**
  * 一个人属于哪一段。
  *
  * `now` 必须显式传进来，段位才可测 —— 「约的时间到没到」完全取决于它。
@@ -419,11 +526,28 @@ export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
   const lastAny = Math.max(lastInbound, lastOutbound)
   const lastTouchAt = lastAny > 0 ? new Date(lastAny).toISOString() : null
 
+  /**
+   * 这条电话线打不通 —— **只关掉电话，不关掉这个人**（见 `DEAD_OUTCOMES` 头上那段）。
+   *
+   * 只在调用方**如实给了联系方式**时才生效。三个字段都没给的老调用方保持原样：
+   * 这里宁可把人留在名单上，也不凭空判他联系不上 —— 本文件一贯的偏向是
+   * 「多一个人是噪音，少一个是丢单」。
+   */
+  const reachKnown =
+    contact.hasPhone !== undefined ||
+    contact.hasEmail !== undefined ||
+    contact.hasMessenger !== undefined
+  const phoneIsDead = phoneLineIsDead(tps)
+  const reach = phoneIsDead && reachKnown ? { ...contact, hasPhone: false } : contact
+
   const make = (segment: Segment, reason: string, ch: SegmentResult['suggestedChannel'], dueAt: string | null = null) => ({
     segment,
     ...SEGMENT_META[segment],
     reason,
-    suggestedChannel: reachableChannel(ch, contact),
+    suggestedChannel: reachableChannel(ch, reach),
+    wantedChannel: ch,
+    // 只有「库里有号码但打不通」才算 —— 压根没号码的人不该说成「号打不通」。
+    phoneUnusable: phoneIsDead && contact.hasPhone === true,
     dueAt,
     lastTouchAt,
   })
@@ -450,10 +574,19 @@ export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
     //  · 「号码是坏的」不是人说的话（电池是坏的；号码是空号 / 停机）
     //  · 按钮上写「他不买了」，这里原先写「聊过了，明确没兴趣」——
     //    销售得在脑子里翻译一次才能确认「我刚才点的是这个吗」，两处用同一句话
-    const why = latestOutcome === 'bad_number' ? '号码不通，得换个号才能联系'
-      : latestOutcome === 'not_interested' ? '他说不买了'
-      : '结局已定'
+    const why = latestOutcome === 'not_interested' ? '他说不买了' : '结局已定'
     return make('excluded', why, 'none')
+  }
+
+  /**
+   * 电话打不通，**而且真的没有别的路** —— 这时候才该退出名单。
+   *
+   * 这一栏原先吞掉的是「电话打不通」的全部人（线上 24 个里 23 个还在跟我们
+   * 邮件往来）。现在只留下真正联系不上的那些，文案也照实说清缺什么，
+   * 否则 FDE 看到「补一个对的就能继续跟」却不知道补的是号码还是邮箱。
+   */
+  if (phoneIsDead && reachKnown && contact.hasEmail !== true && contact.hasMessenger !== true) {
+    return make('excluded', '号码不通，又没有邮箱和 Messenger —— 补个联系方式才能继续跟', 'none')
   }
 
   // 2) 客户回了话，还没人接。三个条件缺一不可：

@@ -41,6 +41,8 @@ interface Row {
   temperature: 'hot' | 'warm' | 'cold' | 'off'
   reason: string
   suggestedChannel: 'phone' | 'sms' | 'email' | 'messenger' | 'none'
+  /** 库里有号码，但那个号打不通。跟「压根没留电话」是两句不同的话。 */
+  phoneUnusable?: boolean
   dueAt: string | null
   lastTouchAt: string | null
   lastNote: string | null
@@ -73,6 +75,13 @@ interface OffRow {
   segment: Segment
   reason: string
   group: 'won' | 'later' | 'stop' | 'snoozed' | 'fix_number'
+  /**
+   * 号码在库里但打不通 —— 抽屉靠它决定给不给拨号链接。
+   *
+   * 不在名单上的人**同样要带**：`fix_number` 那一组整组的意义就是
+   * 「这个号打不通，去补一个」，点开却能拨那个号是最刺眼的事。
+   */
+  phoneUnusable?: boolean
   lastNote: string | null
   /** 被推迟到什么时候 —— 有值就能一键提前叫回来。 */
   snoozeUntil?: string | null
@@ -204,6 +213,22 @@ function ReachAction({ row }: { row: Row }) {
       >
         📞 {row.phone}
       </a>
+    )
+  }
+
+  /**
+   * 🔴 号码在库里、但那个号打不通 —— **不能说成「没留电话」**。
+   *
+   * 抽屉里明明存着号码，卡上却写「没留电话」，销售一眼就能戳穿，
+   * 而这一页最贵的资产是「它说的话可信」。顺带把该做的事说出来：
+   * 用别的渠道回，**顺手问他要个新号**，否则这个号永远是坏的。
+   */
+  if (row.phoneUnusable) {
+    const how = row.suggestedChannel === 'messenger' ? '先在 Messenger 回他' : '先发邮件'
+    return (
+      <p className={`${base} bg-me-ivory/40 text-me-charcoal/60`}>
+        ⚠️ 这个号打不通 —— {how}，顺便问他要个新号
+      </p>
     )
   }
 

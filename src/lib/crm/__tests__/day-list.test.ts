@@ -1034,3 +1034,123 @@ describe('推迟 / 取消推迟不算「我们出手了」', () => {
     expect(r.handled).toBe(true)
   })
 })
+
+/**
+ * 🔴 **「这条路通不通」不该被冻结**（Codex 复审 2026-08-16）。
+ *
+ * 冻结要挡住的是「我们今天做了什么」对**位置**的影响。但销售今天刚标了
+ * 「号码是坏的」，那条出站触点会被 `withoutOurActionsSince` 从冻结副本里
+ * 摘掉 —— 冻结版照旧认为电话能打，卡上**继续挂着那个号码的拨号链接**，
+ * 要到明天才承认它是坏的。他刚刚才发现打不通，系统却请他再打一次。
+ */
+describe('号码今天刚标坏，卡片当天就得认', () => {
+  const markedBadToday = (over: Partial<ContactLike> = {}) =>
+    person(
+      [
+        ...YESTERDAY_LEAD,
+        tp({
+          direction: 'outbound',
+          channel: 'phone',
+          occurredAt: '2026-08-05T03:00:00.000Z',
+          outcome: 'bad_number',
+        }),
+      ],
+      { hasPhone: true, hasEmail: true, ...over },
+    )
+
+  it('当天就说「这个号打不通」，不用等到明天', () => {
+    expect(row(markedBadToday(), true).seg.phoneUnusable).toBe(true)
+  })
+
+  it('建议渠道当天就降级到邮件 —— 别再把那个号推回去让他打', () => {
+    expect(row(markedBadToday(), true).seg.suggestedChannel).toBe('email')
+  })
+
+  /** 但位置照旧按冻结版走 —— 这才是「名单一天不变」那条规则本身。 */
+  it('人还留在原来那一批，没因为标了坏号就换位置', () => {
+    expect(row(markedBadToday(), true).seg.segment).toBe('new_untouched')
+  })
+
+  /** 没标坏号的人，一个字都不该变。 */
+  it('号码好好的人不受影响', () => {
+    const r = row(person(YESTERDAY_LEAD, { hasPhone: true, hasEmail: true }))
+    expect(r.seg.phoneUnusable).toBe(false)
+    expect(r.seg.suggestedChannel).toBe('phone')
+  })
+})
+
+/**
+ * 🔴 **号码今天修好了，也得当天恢复**（Codex 复审 2026-08-16 第二轮）。
+ *
+ * 只处理「今天变坏」那一半的话，早上还是坏号、今天真的打通了的人，卡上会
+ * **整天继续说这个号打不通**、电话一直被禁用 —— 而销售手上刚打通过。
+ */
+describe('号码今天打通了，卡片当天就得恢复', () => {
+  const badThenSpokeToday = person(
+    [
+      ...YESTERDAY_LEAD,
+      tp({
+        direction: 'outbound',
+        channel: 'phone',
+        occurredAt: '2026-08-03T03:00:00.000Z',
+        outcome: 'bad_number',
+      }),
+      tp({
+        direction: 'outbound',
+        channel: 'phone',
+        occurredAt: '2026-08-05T03:00:00.000Z',
+        outcome: 'spoke',
+      }),
+    ],
+    { hasPhone: true, hasEmail: true },
+  )
+
+  it('当天就不再说「这个号打不通」', () => {
+    expect(row(badThenSpokeToday, true).seg.phoneUnusable).toBe(false)
+  })
+
+  it('电话当天就放回来 —— 他刚打通过', () => {
+    expect(row(badThenSpokeToday, true).seg.suggestedChannel).toBe('phone')
+  })
+})
+
+/**
+ * 🔴 **拨到一个空号不算「今天跟进过他了」**（Codex 复审 2026-08-16 第五轮）。
+ *
+ * 销售拨过去发现是空号、顺手标了坏号 —— **这件事没有到达客人**：他什么都没
+ * 收到，还在等我们。算成「今天出手过」的话，卡片当场折进「今天已处理」、
+ * 进度条算完成、群发邮件还会把他排除掉，而正确的下一步（改用邮件 / 私信联系他）
+ * **一次都还没做**。待办就这么被藏起来了。
+ *
+ * ⚠️ 判据本身在 today 路由的 `touchedTodayIds` 里（它才决定这个开关），
+ * 共用 `isFailedReach`。这里钉的是**开关拨到该拨的位置时，这个人的样子**：
+ * 不变灰、留在名单上，等着有人改用邮件联系他。
+ */
+describe('拨到空号不算今天跟进过', () => {
+  const dialedDeadToday = person(
+    [
+      ...YESTERDAY_LEAD,
+      tp({
+        direction: 'outbound',
+        channel: 'phone',
+        occurredAt: '2026-08-05T03:00:00.000Z',
+        outcome: 'bad_number',
+      }),
+    ],
+    { hasPhone: true, hasEmail: true },
+  )
+
+  it('不折进「今天已处理」—— 该发的邮件一封都还没发', () => {
+    expect(row(dialedDeadToday, false).handled).toBe(false)
+  })
+
+  it('人还在名单上，等着有人改用邮件联系他', () => {
+    expect(row(dialedDeadToday, false).onList).toBe(true)
+  })
+
+  it('卡片当天就说这个号打不通，并把渠道降到邮件', () => {
+    const r = row(dialedDeadToday, false)
+    expect(r.seg.phoneUnusable).toBe(true)
+    expect(r.seg.suggestedChannel).toBe('email')
+  })
+})
