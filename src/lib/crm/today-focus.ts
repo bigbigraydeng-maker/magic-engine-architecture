@@ -1,7 +1,8 @@
 /**
- * 「今天该关注谁」—— 只读决策清单（CI-WP01）。
+ * 「今天该关注谁」—— 只读决策清单（CI-WP01 · 执行锚点 #1009）。
  *
- * 这是 #999 Customer Intelligence 授权的第一个、也是唯一一个切片：**presenter 层**。
+ * 产品方向来源：#999 Customer Intelligence。执行与验收在 #1009。
+ * 这是该方向下的第一个、也是唯一一个切片：**presenter 层**。
  * 它不算分、不建人、不建事件、不落任何库，只做一件事 ——
  * 把 `/api/clients/[id]/crm/today` 已经算好的桶，拍平成一条「谁 · 为什么 · 下一步」
  * 的决策清单。
@@ -14,7 +15,7 @@
  *  · 纯函数 = 能被单测直接钉住「拍平顺序 / 已处理留在原位 / 下一步映射 / 缺证据
  *    走 defer」，页面组件测不了这些。
  *
- * 硬边界（见 #999 CI-WP01 授权评论）：只读、无副作用、不猜。缺失或互相冲突的
+ * 硬边界（见 #1009 CI-WP01 执行 Issue）：只读、无副作用、不猜。缺失或互相冲突的
  * 证据一律显示「先不急 / 待补」，绝不编一个「现在就打」出来。
  */
 
@@ -134,9 +135,19 @@ export function recommendedNextStep(p: FocusPersonInput): NextStep {
   }
 
   // 号在库里、但那个号打不通 —— 不能说成「没留电话」。换个渠道回，顺手要个新号。
+  //
+  // 🔴 只能用**真实存在**的 suggestedChannel。原先这里 `ch==='messenger' ? … : '发邮件'`
+  //    把所有非私信情形（含 `none`、和「渠道说 phone 但号已死」这种自相矛盾的输入）
+  //    一律兜成「发邮件」—— 凭空建议一个可能根本不存在的邮箱渠道，正是 CI-WP01
+  //    最不能犯的「无证据建议」。没有别的可用渠道就 defer，去补个能用的联系方式。
   if (p.phoneUnusable === true) {
-    const how = ch === 'messenger' ? '在 Messenger 回他' : '发邮件'
-    return { kind: 'act', text: `这个号打不通 —— 先${how}，顺便问他要个新号` }
+    if (ch === 'messenger') {
+      return { kind: 'act', text: '这个号打不通 —— 先在 Messenger 回他，顺便问他要个新号' }
+    }
+    if (ch === 'email') {
+      return { kind: 'act', text: '这个号打不通 —— 先发邮件，顺便问他要个新号' }
+    }
+    return { kind: 'defer', text: '这个号打不通，又没有别的可用联系方式 —— 先补个能用的号/联系方式再跟' }
   }
 
   if (ch === 'messenger') {
@@ -152,21 +163,48 @@ export function recommendedNextStep(p: FocusPersonInput): NextStep {
 }
 
 /**
+ * payload 是不是一份「结构对得上」的 today 响应。
+ *
+ * 🔴 页面靠它把**数据异常**和**真的没人**分开 —— 二者绝不能长成同一个画面。
+ *    上游若回了个 200 但结构不对（没有 buckets、buckets 不是数组、某个桶缺 people/
+ *    layer），拍平出来会是空清单，若照「今天没人」渲染，就是拿一次读取失败冒充
+ *    「今天过关」（failure-as-success）。这里判死结构，页面据此进「数据异常」态。
+ */
+export function isFocusPayloadShaped(data: unknown): data is FocusPayloadInput {
+  if (!data || typeof data !== 'object') return false
+  const buckets = (data as { buckets?: unknown }).buckets
+  if (!Array.isArray(buckets)) return false
+  return buckets.every(
+    (b) =>
+      !!b &&
+      typeof b === 'object' &&
+      typeof (b as { layer?: unknown }).layer === 'string' &&
+      Array.isArray((b as { people?: unknown }).people),
+  )
+}
+
+/**
  * 把 today payload 拍平成决策清单。
  *
  * 顺序完全沿用 today 路由给的：桶按 WORKLIST_GROUPS 排、桶内按 day-list 排好，
  * 这里只按层优先级把桶归拢，**不重排任何人** —— 当天名单要稳定，已处理的要留在
  * 原位置，靠的就是「不动它给的顺序」。
+ *
+ * 同行（kind==='trade'）在这里**整个排除**（PO 2026-08-17 裁定：只展示终端客户 /
+ * 真实机会，且不加筛选按钮）。判据用 today API 已经算好的 `kind`，presenter 不自己
+ * 判同行；`undefined` 当终端客户处理（跟看板 `k ?? 'retail'` 同口径）。
  */
 export function buildFocusList(payload: FocusPayloadInput): FocusRow[] {
   const rows: FocusRow[] = []
-  // 兜底：正常情况下 today 路由 200 必带 buckets，但上游一旦回了个没有 buckets 的
-  // 200，`for...of undefined` 会抛错、整页白屏 —— 只读清单宁可显示「今天没人」。
+  // 兜底：presenter 永不抛错（结构异常由 isFocusPayloadShaped 在页面侧拦成「数据异常」，
+  // 不走到这里）。即便真喂进一个没有 buckets 的对象，也只回空数组、不 `for...of undefined`。
   const buckets = payload.buckets ?? []
   for (const layer of LAYER_ORDER) {
     for (const bucket of buckets) {
       if (bucket.layer !== layer) continue
       for (const p of bucket.people) {
+        // 同行不进决策清单（PO 裁定）。
+        if (p.kind === 'trade') continue
         rows.push({
           contactId: p.contactId,
           name: p.name,

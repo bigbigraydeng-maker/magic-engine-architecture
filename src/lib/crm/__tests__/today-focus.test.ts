@@ -3,6 +3,7 @@ import {
   buildFocusList,
   recommendedNextStep,
   focusSummary,
+  isFocusPayloadShaped,
   type FocusPayloadInput,
   type FocusPersonInput,
 } from '../today-focus'
@@ -36,6 +37,25 @@ describe('recommendedNextStep — 渠道映射跟 ReachAction 语义等价（且
     expect(s.text).toContain('打不通')
     expect(s.text).toContain('新号')
     expect(s.text).not.toContain('没留电话')
+  })
+
+  it('号打不通 + 没有别的可用渠道（none）→ defer，绝不默认建议「发邮件」', () => {
+    // 这是「无证据建议」的收口：坏号 + 无 email/messenger，不能凭空造一个邮箱渠道。
+    const s = recommendedNextStep(
+      person({ contactId: 'a', suggestedChannel: 'none', phone: '021 555', phoneUnusable: true }),
+    )
+    expect(s.kind).toBe('defer')
+    expect(s.text).not.toContain('发邮件')
+    expect(s.text).not.toContain('Messenger')
+  })
+
+  it('号打不通 + 真有私信渠道 → act 用 Messenger（不是默认邮件）', () => {
+    const s = recommendedNextStep(
+      person({ contactId: 'a', suggestedChannel: 'messenger', phone: '021 555', phoneUnusable: true }),
+    )
+    expect(s.kind).toBe('act')
+    expect(s.text).toContain('Messenger')
+    expect(s.text).not.toContain('发邮件')
   })
 
   it('phoneUnusable 优先于「有号能打」—— 打不通的号不能被建议去拨', () => {
@@ -130,12 +150,50 @@ describe('buildFocusList — 拍平顺序、层过滤、已处理留原位', () 
     expect(buildFocusList({ buckets: [] })).toEqual([])
   })
 
-  it('上游 200 却没带 buckets → 空清单，不抛错白屏', () => {
+  it('presenter 永不抛错：真喂进没有 buckets 的对象也只回空数组（结构异常由页面侧拦成「数据异常」）', () => {
     expect(buildFocusList({} as FocusPayloadInput)).toEqual([])
   })
 
   it('presenter 不凭空造人 —— 输出人数恰好等于 waiting+acted 输入人数', () => {
     expect(buildFocusList(payload)).toHaveLength(4)
+  })
+
+  it('同行（kind==="trade"）整个排除；终端客户 retail 和未标 kind 的都保留（PO 裁定）', () => {
+    const p: FocusPayloadInput = {
+      buckets: [
+        {
+          layer: 'waiting',
+          people: [
+            person({ contactId: 'retail1', kind: 'retail' }),
+            person({ contactId: 'trade1', kind: 'trade' }),
+            person({ contactId: 'unknown1' }), // 没标 kind = 当终端客户
+            person({ contactId: 'trade2', kind: 'trade' }),
+          ],
+        },
+      ],
+    }
+    expect(buildFocusList(p).map((r) => r.contactId)).toEqual(['retail1', 'unknown1'])
+  })
+})
+
+describe('isFocusPayloadShaped — 把「数据异常」和「真的没人」分开，杜绝 failure-as-success', () => {
+  it('结构对得上（buckets 是数组、每桶有 layer+people）→ true，空 buckets 也算对', () => {
+    expect(isFocusPayloadShaped({ buckets: [] })).toBe(true)
+    expect(isFocusPayloadShaped({ buckets: [{ layer: 'waiting', people: [] }] })).toBe(true)
+  })
+
+  it('null / 非对象 / 缺 buckets / buckets 非数组 → false', () => {
+    expect(isFocusPayloadShaped(null)).toBe(false)
+    expect(isFocusPayloadShaped('oops')).toBe(false)
+    expect(isFocusPayloadShaped({})).toBe(false)
+    expect(isFocusPayloadShaped({ buckets: 'nope' })).toBe(false)
+    expect(isFocusPayloadShaped({ error: '500' })).toBe(false)
+  })
+
+  it('桶缺 people 或 layer（结构异常）→ false，绝不当「空清单」放行', () => {
+    expect(isFocusPayloadShaped({ buckets: [{ layer: 'waiting' }] })).toBe(false)
+    expect(isFocusPayloadShaped({ buckets: [{ people: [] }] })).toBe(false)
+    expect(isFocusPayloadShaped({ buckets: [null] })).toBe(false)
   })
 })
 

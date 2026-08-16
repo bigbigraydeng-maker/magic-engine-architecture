@@ -1,9 +1,9 @@
 'use client'
 
 /**
- * 今天该关注谁 —— 只读决策清单（CI-WP01）。
+ * 今天该关注谁 —— 只读决策清单（CI-WP01 · 执行锚点 #1009）。
  *
- * #999 Customer Intelligence 授权的第一个切片。第一屏只回答三件事：
+ * 产品方向来源 #999，执行与验收 #1009。第一屏只回答三件事：
  *   谁需要我关注 · 为什么是他 · 下一步建议做什么。
  *
  * 它是「今天该联系谁」看板（../page.tsx）的一个**只读投影**：数据同一个来源
@@ -12,7 +12,7 @@
  * 没有录入、发消息、打电话、记笔记、改阶段、审批、执行按钮，一个副作用都没有。
  * 要动手仍回看板那一页。
  *
- * 为什么单独一页而不塞进现有导航：#999 的产品原则是「每多一个按钮都是设计失败，
+ * 为什么单独一页而不塞进现有导航：#1009 的产品原则是「每多一个按钮都是设计失败，
  * 直到被证明必要」。这一版先把「决策清单」这个形态跑通、交 PO 定夺，所以刻意
  * 不进主导航、不动看板 —— 直达 URL 即可（/dashboard/clients/[id]/crm/focus）。
  */
@@ -23,6 +23,7 @@ import Link from 'next/link'
 import {
   buildFocusList,
   focusSummary,
+  isFocusPayloadShaped,
   type FocusPayloadInput,
   type FocusRow,
 } from '@/lib/crm/today-focus'
@@ -83,11 +84,8 @@ function FocusRowCard({ row }: { row: FocusRow }) {
             {LAYER_LABEL[row.layer]}
           </span>
         )}
-        {row.kind && row.kind !== 'retail' && (
-          <span className="rounded-full bg-me-charcoal/8 px-2 py-0.5 text-[11px] font-bold text-me-charcoal/55">
-            {row.kind === 'trade' ? '同行' : row.kind}
-          </span>
-        )}
+        {/* 同行已在 presenter 层整个排除（PO 裁定只展示终端客户），这里不再需要
+            「同行」标记 —— 清单里出现的都是终端客户 / 真实机会。 */}
         {row.stageLabel && (
           <span className="ml-auto truncate rounded-full bg-me-ivory px-2 py-0.5 text-[12px] font-bold text-me-charcoal/55">
             {row.stageLabel}
@@ -139,6 +137,13 @@ export default function CrmFocusPage() {
       const json = (await res.json()) as TodayPayload
       if (!res.ok) {
         setError(json.error ?? '加载失败')
+        return
+      }
+      // 🔴 结构异常绝不能冒充「今天没人」（failure-as-success）。上游若回了个
+      //    200 但没有 buckets / 结构不对，拍平会是空清单 —— 那时必须进「数据异常」
+      //    态、给重试，而不是让销售看见「今天没有需要关注的人」以为过关了。
+      if (!isFocusPayloadShaped(json)) {
+        setError('数据异常：服务器返回的结构不对，先别信这一页，点重试或回看板。')
         return
       }
       setData(json)
