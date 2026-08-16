@@ -697,3 +697,80 @@ describe('no further contact 必须是客人在要求，不是陈述现状', () 
     expect(classifyNote('no further contact please').do_not_contact).toBe(true)
   })
 })
+
+/**
+ * 🔴 **拒联的两条统一否决条件**（PM 限定任务 R1，2026-08-16）。
+ *
+ * 前几轮每加一个拒联词，就要再往那个词上补一层「除非前面有 did not」
+ * 「除非后面跟着 now」—— 补一处漏一处（`I don't want to unsubscribe`
+ * 就从 `did/do/does not` 那个断言底下钻了过去）。
+ *
+ * 这两件事跟具体哪个词无关，是语义层面的，所以判在**命中词所在那一句**上，
+ * 一次覆盖整张词表：被否定的不算，只是暂时的也不算。
+ */
+describe('别再联系：被否定的不算', () => {
+  it("🔴「I don't want to unsubscribe」→ 不是拒联", () => {
+    expect(classifyNote("I don't want to unsubscribe").do_not_contact).toBe(false)
+  })
+
+  it('🔴「customer has not opted out of marketing emails」→ 不是拒联', () => {
+    expect(classifyNote('customer has not opted out of marketing emails').do_not_contact).toBe(false)
+  })
+
+  it('🔴「please do not opt me out of your newsletter」→ 不是拒联', () => {
+    expect(classifyNote('please do not opt me out of your newsletter').do_not_contact).toBe(false)
+  })
+
+  it('中文否定同样认：「客户没有要求别再联系」', () => {
+    expect(classifyNote('客户没有要求别再联系').do_not_contact).toBe(false)
+  })
+
+  /**
+   * 🔴 否定只看**同一句**。前一句的 not 不能把后一句真正的拒联否掉 ——
+   * 那正是这个人明确说出来的话。
+   */
+  it('🔴 前一句的否定不算：「not interested, do not call me again」仍是拒联', () => {
+    expect(classifyNote('not interested, do not call me again').do_not_contact).toBe(true)
+  })
+})
+
+describe('别再联系：只是这一阵别打，不是永久', () => {
+  it("🔴「don't call me now, call me tomorrow」→ 不是拒联，而且回电要留住", () => {
+    const r = classifyNote("don't call me now, call me tomorrow")
+    expect(r.do_not_contact).toBe(false)
+    expect(r.outcome).toBe('callback_set')
+  })
+
+  it('🔴「do not email her until the booking is confirmed」→ 不是拒联', () => {
+    expect(classifyNote('do not email her until the booking is confirmed').do_not_contact).toBe(
+      false,
+    )
+  })
+
+  it('中文同样：「现在别打给他」', () => {
+    expect(classifyNote('客户说现在别再打电话给他').do_not_contact).toBe(false)
+  })
+
+  it('没有时间限定 → 照旧是拒联', () => {
+    expect(classifyNote('do not call me again').do_not_contact).toBe(true)
+    expect(classifyNote('stop contacting me').do_not_contact).toBe(true)
+    expect(classifyNote('please unsubscribe me').do_not_contact).toBe(true)
+    expect(classifyNote('别再联系我').do_not_contact).toBe(true)
+  })
+})
+
+/**
+ * 🔴 本文件里有几处 `\b` 曾被写成**退格符**（0x08），那几条正则从来没生效过。
+ * 修好之后 `POSITIVE_INTENT_NOW` 复活，随即暴露出它自己的洞：裸的
+ * `ready to book` 会把「**not** ready to book yet」判成「他现在就想订」。
+ * 同一条否定判据兜住 —— 这就是「统一语义」该起的作用。
+ */
+describe('「他现在就想订」同样怕被否定', () => {
+  it('🔴「not ready to book yet」→ 暂时不考虑，不是想订了', () => {
+    expect(classifyNote('not ready to book yet').outcome).toBe('not_interested_now')
+  })
+
+  it('「now ready to book」→ 他现在就想订', () => {
+    expect(classifyNote('now ready to book').outcome).toBe('spoke')
+  })
+})

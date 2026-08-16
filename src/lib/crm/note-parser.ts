@@ -120,7 +120,7 @@ const DNC_PATTERNS: RegExp[] = [
    * 邮件也存进 `raw`。裸词会把我们自己的合规文案读成客人拒联。
    * 必须是他在**要求**退订，并且排除「did not unsubscribe」这类否定。
    */
-  /(?<!(did|do|does)\s*not\s)(?<!never\s)(please\s*)?(unsubscribe\s*me|want\s*to\s*unsubscribe|unsubscribe\s*from\s*(your|the)\s*(list|emails?|mailing))/i,
+  /(please\s*)?(unsubscribe\s*me|want\s*to\s*unsubscribe|unsubscribe\s*from\s*(your|the)\s*(list|emails?|mailing))/i,
   /**
    * ⚠️ 「opt out」同样**不能裸词**（Codex 复审 2026-08-16）：旅游备注里
    * `opted out of the optional insurance` / `opted out of the helicopter
@@ -351,13 +351,106 @@ const POSITIVE_INTENT_NOW: RegExp[] = [
   // ⚠️ 中间**不许夹否定词**：「目前**没**打算去」是软拒绝，不是想买。
   /(现在|如今|这次|目前)[^不没未别无]{0,4}(想|要|打算|准备)(报名|订|定|买|走|去|出发|确认)/,
   /(决定|确定)了?[^不没未别无]{0,4}(要|想)?(报名|订|定|买|走|去|出发)/,
-  /(now|finally).{0,20}(ready to (book|go|travel|pay)|wants? to (book|go|travel)|keen to (book|go))/i,
-  /ready to (book|pay|confirm)/i,
-  /(confirmed|going ahead|will book)/i,
+  /\b(now|finally)\b.{0,20}\b(ready to (book|go|travel|pay)|wants? to (book|go|travel)|keen to (book|go))\b/i,
+  /\bready to (book|pay|confirm)\b/i,
+  /\b(confirmed|going ahead|will book)\b/i,
 ]
 
 function anyMatch(text: string, patterns: RegExp[]): boolean {
   return patterns.some((p) => p.test(text))
+}
+
+/**
+ * 「他要求别再联系」这件事的**两条统一否决条件** —— 不再往每个词上挂断言。
+ *
+ * 🔴 前几轮每加一个词就要再补一层「除非前面有 did not」「除非后面跟着 now」，
+ * 补一处漏一处（`I don't want to unsubscribe` 就从 `did/do/does not` 那个
+ * 断言底下钻了过去）。这两件事跟**具体哪个词**无关，是语义层面的：
+ *
+ *   1. 那句话被**否定**了 —— `I don't want to unsubscribe`、
+ *      `customer has not opted out`、`please do not opt me out`
+ *   2. 那句话只是**暂时**的 —— `don't call me now, call me tomorrow`、
+ *      `do not email her until the booking is confirmed`
+ *
+ * 所以判在**匹配到的那一句上**，一次覆盖整张词表。
+ */
+
+/** 分句边界。判据只看命中词所在的那一句，不跨句取词。 */
+const CLAUSE_BREAK = /[,.;!?，。；！？\n]/
+
+/** 命中词所在那一句（含命中词本身）。 */
+function clauseAt(text: string, index: number, length: number): string {
+  let from = 0
+  for (let i = index - 1; i >= 0; i--) {
+    if (CLAUSE_BREAK.test(text[i])) {
+      from = i + 1
+      break
+    }
+  }
+  let to = text.length
+  for (let i = index + length; i < text.length; i++) {
+    if (CLAUSE_BREAK.test(text[i])) {
+      to = i
+      break
+    }
+  }
+  return text.slice(from, to)
+}
+
+/**
+ * 命中词**之前**那一段（同一句内）。
+ *
+ * 只看句内是关键：`not interested, do not call me again` 里前一句的 `not`
+ * 不能把后一句真正的拒联否掉 —— 那正是这个人明确说出来的话。
+ */
+function leadInAt(text: string, index: number): string {
+  for (let i = index - 1; i >= 0; i--) {
+    if (CLAUSE_BREAK.test(text[i])) return text.slice(i + 1, index)
+  }
+  return text.slice(0, index)
+}
+
+/** 「他并没有要求别再联系」—— 命中词紧邻的前文是个否定。 */
+const NEGATED_LEAD_IN =
+  /\b(do|does|did|has|have|had|is|are|was|were|will|would|wo|ca|could|should)\s*n[o']?t\b[^.!?]{0,20}$|\bnever\b[^.!?]{0,20}$|\bnot\b[^.!?]{0,20}$|(不(想|要|会|愿意)|没有?|并未|未曾)[^，。]{0,10}$/i
+
+/** 「只是这一阵别打」—— 带时间限定的暂时勿扰，不是永久拒联。 */
+const TEMPORARY_SCOPE =
+  /\b(right\s+now|for\s+now|at\s+the\s+moment|today|this\s+week|until|till|while|before)\b|\bnow\b|(现在|这几天|这阵子|今天|暂时|等.{0,6}(之后|以后|再))/i
+
+/**
+ * 这句「别再联系」算不算数。
+ *
+ * @returns true = 成立（真的要求停止联系）
+ */
+function dncRequested(text: string): boolean {
+  return matchedUnnegated(text, DNC_PATTERNS, { rejectTemporary: true })
+}
+
+/**
+ * 命中词表，**而且那一句没被否定**。
+ *
+ * 抽成一个函数是因为这件事不止拒联需要：「他现在就想订」同样怕被否定 ——
+ * `not ready to book` 跟 `ready to book` 差一个词，结论正好相反。
+ * 谁要判「客人主动说了某件事」谁就走这里，别再各自往词表里塞断言。
+ *
+ * @param rejectTemporary 带时间限定就不算数（只有拒联需要：暂时勿扰 ≠ 永久）
+ */
+function matchedUnnegated(
+  text: string,
+  patterns: RegExp[],
+  opts: { rejectTemporary?: boolean } = {},
+): boolean {
+  for (const p of patterns) {
+    const m = new RegExp(p.source, p.flags.includes('g') ? p.flags : p.flags + 'g').exec(text)
+    if (!m) continue
+    // 被否定 → 这一条不算数，继续看有没有别的词命中。
+    if (NEGATED_LEAD_IN.test(leadInAt(text, m.index))) continue
+    // 只是暂时 → 同样不算数（他往往还在同一句里给了下次时间）。
+    if (opts.rejectTemporary && TEMPORARY_SCOPE.test(clauseAt(text, m.index, m[0].length))) continue
+    return true
+  }
+  return false
 }
 
 /**
@@ -371,7 +464,8 @@ export function classifyNote(raw: string): {
   const t = (raw ?? '').trim()
   if (!t) return { outcome: 'unknown', do_not_contact: false }
 
-  const dnc = anyMatch(t, DNC_PATTERNS)
+  // 统一判据：命中词表 **且** 没被否定、也不只是暂时（见 dncRequested）。
+  const dnc = dncRequested(t)
 
   // 顺序即优先级：
   //   号码是坏的 > 明确拒绝 > 没接通 > 已经在别家订了 > 约了回电（硬拒绝时让位）
@@ -417,7 +511,19 @@ export function classifyNote(raw: string): {
     return { outcome: 'callback_set', do_not_contact: false }
   }
   // 🔴 **他现在就想买的话，前面那半句犹豫不算数**（见 POSITIVE_INTENT_NOW）。
-  if (anyMatch(t, POSITIVE_INTENT_NOW)) return { outcome: 'spoke', do_not_contact: false }
+  /**
+   * ⚠️ 这里必须走 `matchedUnnegated`，不能裸 `anyMatch`。
+   *
+   * 这几条词表里有 `ready to book` 这种**裸的正向短语**，而
+   * 「**not** ready to book yet」正好是它的反面：那是「暂时不考虑」。
+   * 判成「他现在就想订」，会把一个还在犹豫的人当成快成交的推上去。
+   *
+   * 这个洞是修好本文件几处坏掉的 `\b`（被写成了退格符，那几条其实从来
+   * 没生效过）之后才现形的 —— 词表一复活，它跟着冒出来。
+   */
+  if (matchedUnnegated(t, POSITIVE_INTENT_NOW)) {
+    return { outcome: 'spoke', do_not_contact: false }
+  }
   // 🔴 软拒绝必须排在「明确没兴趣」前面：「暂时不感兴趣」里含着「不感兴趣」，
   //    反过来判的话那个「暂时」当场被吞掉，人被永久停掉。
   if (anyMatch(t, SOFT_NO_PATTERNS)) return { outcome: 'not_interested_now', do_not_contact: false }
