@@ -46,7 +46,7 @@
 
 ```
 广告实体在 Ads Manager 里被建出来（不是 ME 当前程序化建广告链路留下的 lineage）
-        ↓（ME 没有参与这一步，现有账本也证不了具体操作者）
+        ↓（现有 ME 账本证不了具体操作者 / 重建不出创建 lineage；创建方式按 PO 口径见下方 §2 注）
 ME 每天 cron 拉回 campaign 级 + ad 级日度数据 → ad_daily_insights
         ↓
 ME 用「跟自己历史比」的相对基线判疲劳 → ad_health_narratives（63 行）
