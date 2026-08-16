@@ -112,8 +112,12 @@ export function normalizeLocalMarket(
   collectedAt: string,
 ): LocalMarketEvidence {
   const stats = summariseListings(listings)
+  // 有限性检查必须与 summariseListings 同口径 —— 否则 Infinity 会污染中位数而
+  // 商家数/条数却已排除它，两处对不上。当前 popular-products 的 finite() 已保证，
+  // 但 Trade Me 采集器将来接同一形状进来时来源不一定保证有限。
   const nzdPrices = listings
-    .filter((l) => l.currency?.toUpperCase() === ACCEPTED_CURRENCY && l.price > 0)
+    .filter((l) => l.currency?.toUpperCase() === ACCEPTED_CURRENCY
+      && Number.isFinite(l.price) && l.price > 0)
     .map((l) => l.price)
 
   const enoughSellers = stats.distinctSellers >= MIN_DISTINCT_SELLERS

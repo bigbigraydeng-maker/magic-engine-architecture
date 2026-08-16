@@ -33,36 +33,17 @@ import { measureAuNzDemand } from '../src/lib/commerce/product-intel/validate-au
 import { measureLocalPrice } from '../src/lib/commerce/product-intel/validate-local-price'
 import { rankCandidates } from '../src/lib/commerce/product-intel/score'
 import { scanSeedKeyword } from '../src/lib/commerce/product-intel/scan'
-import type { CostAssumptions } from '../src/lib/commerce/product-intel/landed-cost'
 import type {
   ProductCandidate,
   ScoredCandidate,
 } from '../src/lib/commerce/product-intel/types'
-
-/**
- * 成本假设 —— PM 2026-08-15 提供的真实费率 + 实时汇率。
- *
- * 🔴 这些值会过期。汇率每天变、货代报价每季度变、征费随法规变。
- *    真正上生产时应该从配置读，不是写死在脚本里。
- */
-const COST_ASSUMPTIONS: Omit<CostAssumptions, 'chargeableWeightKg'> = {
-  fxUsdToNzd: 1.6981,        // frankfurter, 2026-08-14
-  freightNzdPerKg: 2.0,      // PM 提供
-  importLevyNzd: 2.21,       // NZ Customs 低值货物征费（空运），2026-04-01 起
-  dutyRatePct: 0,            // 中新 FTA 多数消费品；**按 HS code 逐个确认**
-  domesticDeliveryNzd: 3.99, // PM 提供
-  paymentFeePct: 2.9,
-  paymentFeeFixedNzd: 0.3,
-  gstRatePct: 15,
-  asOf: '2026-08-16',
-}
-
-/** 单价来自 2026-08-15 实测的 actor 定价表（BRONZE 档）。 */
-const COST_PER_TIKTOK_ROW_USD = 0.0045
-const COST_PER_IMAGE_SEARCH_USD = 0.006
-/** DataForSEO 实测单价（2026-08-16）。每跑一次固定 3 次：AU 搜索量 + NZ 搜索量 + NZ 售价。 */
-const COST_PER_DFSE_CALL_USD = 0.0035
-const DFSE_CALLS_PER_RUN = 3
+import {
+  COST_ASSUMPTIONS,
+  COST_PER_TIKTOK_ROW_USD,
+  COST_PER_IMAGE_SEARCH_USD,
+  COST_PER_DFSE_CALL_USD,
+  DFSE_CALLS_PER_SEED,
+} from './commerce-cost-assumptions'
 
 interface Options {
   keyword: string
@@ -134,7 +115,7 @@ async function runFromFile(path: string, enrich: number): Promise<{
 function estimateCostUsd(opts: Options): number {
   return opts.max * COST_PER_TIKTOK_ROW_USD
     + opts.enrich * COST_PER_IMAGE_SEARCH_USD
-    + DFSE_CALLS_PER_RUN * COST_PER_DFSE_CALL_USD
+    + DFSE_CALLS_PER_SEED * COST_PER_DFSE_CALL_USD
 }
 
 const VERDICT_LABEL: Record<string, string> = {

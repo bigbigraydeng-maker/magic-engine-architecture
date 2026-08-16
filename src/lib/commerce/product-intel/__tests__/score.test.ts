@@ -151,6 +151,35 @@ describe('五道闸', () => {
     }), 'aunz_searched')?.outcome).toBe('FAIL')
   })
 
+  it('🔴 一地取不到 + 另一地不足门槛 → UNKNOWN，绝不 FAIL（缺的可能顶过门槛）', () => {
+    // 魏征复审实测的错杀场景：AU=null、NZ=80，旧代码判 FAIL→REJECT，错杀潜在赢家。
+    expect(gateOf(candidate({
+      demand: [demand('AU', null, 'flat'), demand('NZ', 80, 'flat')],
+    }), 'aunz_searched')?.outcome).toBe('UNKNOWN')
+    // 但已知那一地本身就够门槛 → 照样 PASS（缺的只会更多）。
+    expect(gateOf(candidate({
+      demand: [demand('AU', null, 'flat'), demand('NZ', 150, 'flat')],
+    }), 'aunz_searched')?.outcome).toBe('PASS')
+    // 两地都已知且真不足 → 才 FAIL。
+    expect(gateOf(candidate({
+      demand: [demand('AU', 30, 'flat'), demand('NZ', 20, 'flat')],
+    }), 'aunz_searched')?.outcome).toBe('FAIL')
+  })
+
+  it('🔴 一地趋势取不到 + 另一地在跌 → UNKNOWN，不硬 FAIL（未知那地可能在涨）', () => {
+    expect(gateOf(candidate({
+      demand: [demand('AU', 4400, 'declining'), demand('NZ', 590, null)],
+    }), 'aunz_not_declining')?.outcome).toBe('UNKNOWN')
+    // 一地取不到但另一地在涨 → 放行。
+    expect(gateOf(candidate({
+      demand: [demand('AU', 4400, 'rising'), demand('NZ', 590, null)],
+    }), 'aunz_not_declining')?.outcome).toBe('PASS')
+    // 两地都已知且都在跌 → 才 FAIL。
+    expect(gateOf(candidate({
+      demand: [demand('AU', 4400, 'declining'), demand('NZ', 590, 'declining')],
+    }), 'aunz_not_declining')?.outcome).toBe('FAIL')
+  })
+
   it('🔴 本地有低价倾销 = 一票否决', () => {
     const s = score(candidate({ localMarket: localMarket(49.9, true, 20) }))
     expect(s.gates.find((g) => g.gate === 'no_local_dumping')?.outcome).toBe('FAIL')

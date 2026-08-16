@@ -85,23 +85,39 @@ function gateProvenDemand(candidate: ProductCandidate): GateResult {
   }
 }
 
-function totalSearches(demand: readonly MarketDemand[]): number | null {
-  const values = demand
-    .map((d) => d.monthlySearches.value)
-    .filter((v): v is number => v !== null)
-  return values.length === 0 ? null : values.reduce((sum, v) => sum + v, 0)
+/** 已知市场的搜索量之和 + 有没有市场取不到。区分两者是为了别拿残缺和硬判 FAIL。 */
+function totalSearches(demand: readonly MarketDemand[]): { knownSum: number | null; hasNull: boolean } {
+  let knownSum = 0
+  let knownCount = 0
+  let hasNull = false
+  for (const d of demand) {
+    const v = d.monthlySearches.value
+    if (v === null) hasNull = true
+    else { knownSum += v; knownCount += 1 }
+  }
+  return { knownSum: knownCount === 0 ? null : knownSum, hasNull }
 }
 
 function gateAuNzSearched(demand: readonly MarketDemand[]): GateResult {
-  const total = totalSearches(demand)
-  if (total === null) {
+  const { knownSum, hasNull } = totalSearches(demand)
+  if (knownSum === null) {
     return { gate: 'aunz_searched', outcome: 'UNKNOWN', reason: '澳新搜索量取不到' }
   }
-  return {
-    gate: 'aunz_searched',
-    outcome: total >= MIN_AUNZ_MONTHLY_SEARCHES ? 'PASS' : 'FAIL',
-    reason: `AU+NZ 月搜索量合计 ${total.toLocaleString()}（门槛 ${MIN_AUNZ_MONTHLY_SEARCHES}）`,
+  const label = `AU+NZ 月搜索量合计 ${knownSum.toLocaleString()}（门槛 ${MIN_AUNZ_MONTHLY_SEARCHES}）`
+  if (knownSum >= MIN_AUNZ_MONTHLY_SEARCHES) {
+    return { gate: 'aunz_searched', outcome: 'PASS', reason: label }
   }
+  // 🔴 已知和不足门槛，但若有市场取不到，缺的那个可能把合计顶过门槛 —— 判不了，
+  //    绝不 FAIL（FAIL→REJECT 会错杀潜在赢家，尤其低搜索量外溢品这条带）。
+  if (hasNull) {
+    return {
+      gate: 'aunz_searched',
+      outcome: 'UNKNOWN',
+      reason: `已知市场合计 ${knownSum.toLocaleString()} 不足门槛 ${MIN_AUNZ_MONTHLY_SEARCHES}，`
+        + `但有市场搜索量取不到，可能顶过门槛 —— 判不了`,
+    }
+  }
+  return { gate: 'aunz_searched', outcome: 'FAIL', reason: label }
 }
 
 function gateNotDeclining(demand: readonly MarketDemand[]): GateResult {
@@ -114,12 +130,20 @@ function gateNotDeclining(demand: readonly MarketDemand[]): GateResult {
     return { gate: 'aunz_not_declining', outcome: 'UNKNOWN', reason: '澳新趋势曲线取不到' }
   }
   const detail = known.map((t) => `${t.market}=${t.value}`).join(' · ')
-  const allDeclining = known.every((t) => t.value === 'declining')
-  return {
-    gate: 'aunz_not_declining',
-    outcome: allDeclining ? 'FAIL' : 'PASS',
-    reason: `12 个月轨迹 ${detail}`,
+  // 有任一市场不在跌 → 放行（这道闸只否决"全在跌"）。
+  if (known.some((t) => t.value !== 'declining')) {
+    return { gate: 'aunz_not_declining', outcome: 'PASS', reason: `12 个月轨迹 ${detail}` }
   }
+  // 🔴 已知的都在跌，但若还有市场取不到，未知那个可能在涨 —— 判不了，不硬 FAIL。
+  //    只有所有市场都已知且都在跌，才是铁的 FAIL。
+  if (known.length < demand.length) {
+    return {
+      gate: 'aunz_not_declining',
+      outcome: 'UNKNOWN',
+      reason: `已知市场都在跌（${detail}），但有市场趋势取不到 —— 判不了`,
+    }
+  }
+  return { gate: 'aunz_not_declining', outcome: 'FAIL', reason: `12 个月轨迹 ${detail}` }
 }
 
 /**

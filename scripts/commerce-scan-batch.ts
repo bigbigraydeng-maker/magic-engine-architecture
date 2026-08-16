@@ -16,34 +16,20 @@
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { scanSeedKeyword } from '../src/lib/commerce/product-intel/scan'
-import type { CostAssumptions } from '../src/lib/commerce/product-intel/landed-cost'
 import type { ScoredCandidate, Verdict } from '../src/lib/commerce/product-intel/types'
 import type { SeedKeyword } from '../src/lib/commerce/product-intel/seed-expansion'
-
-/**
- * 成本假设 —— 与 scripts/commerce-poc.ts 一致（PM 2026-08-15 费率 + 实时汇率）。
- * 🔴 两处必须同值，改一处要同步另一处；真正上生产应从配置读，不写死。
- */
-const COST_ASSUMPTIONS: Omit<CostAssumptions, 'chargeableWeightKg'> = {
-  fxUsdToNzd: 1.6981,
-  freightNzdPerKg: 2.0,
-  importLevyNzd: 2.21,
-  dutyRatePct: 0,
-  domesticDeliveryNzd: 3.99,
-  paymentFeePct: 2.9,
-  paymentFeeFixedNzd: 0.3,
-  gstRatePct: 15,
-  asOf: '2026-08-17',
-}
-
-const COST_PER_TIKTOK_ROW_USD = 0.0045
-const COST_PER_IMAGE_SEARCH_USD = 0.006
-const COST_PER_DFSE_CALL_USD = 0.0035
-const DFSE_CALLS_PER_SEED = 3   // AU 搜索量 + NZ 搜索量 + NZ 售价
+import {
+  COST_ASSUMPTIONS,
+  COST_PER_TIKTOK_ROW_USD,
+  COST_PER_IMAGE_SEARCH_USD,
+  COST_PER_DFSE_CALL_USD,
+  DFSE_CALLS_PER_SEED,
+} from './commerce-cost-assumptions'
 
 const VERDICT_LABEL: Record<Verdict, string> = {
   TEST_NOW: '✅ 值得测',
-  WATCH: '👀 观察（值得实测重量）',
+  // 落 WATCH 可能因倾销未查（等 Trade Me）或重量是估的 —— 标签保持中性，别谎称只差重量。
+  WATCH: '👀 观察（需实测重量 / 查倾销）',
   UNKNOWN: '❓ 判不了',
   REJECT: '❌ 排除',
 }
