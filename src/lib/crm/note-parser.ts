@@ -25,7 +25,18 @@ export const CONTACT_OUTCOMES = [
   'no_answer',      // 打了没人接 / 语音信箱 / 打不通
   'bad_number',     // 号码本身是错的
   'do_not_contact', // 客户明确说别再联系
-  'not_interested', // 聊过了，没兴趣
+  'not_interested', // 聊过了，明确不要了
+  /**
+   * **暂时**不考虑 —— 「现在不打算」「明年再说」「过段时间再看」。
+   *
+   * 🔴 跟 `not_interested` 分开是 PM 2026-08-16 定的实际业务事实：
+   * 「leads 沟通后会变成暂时不感兴趣、还需要继续营销的，或者明确表达不感兴趣的。」
+   * 这两种在系统里的下场必须不一样 —— 前者继续跟，后者才停。
+   *
+   * 分不开的代价是真实的：线上 17 个人被标成 `not_interested`（终结性、
+   * 从此不出现在任何名单上），而按 PM 的说法，其中「明年再说」那类才是多数。
+   */
+  'not_interested_now',
   'spoke',          // 真的聊上了
   'callback_set',   // 约了下次
   'unknown',
@@ -112,6 +123,33 @@ const NOT_INTERESTED_PATTERNS: RegExp[] = [
   /(别|另|其他).{0,3}家(订|预订|报名)了/,
 ]
 
+/**
+ * **暂时**不考虑 —— 人还在，只是现在不是时候。
+ *
+ * 🔴 **必须排在 `NOT_INTERESTED_PATTERNS` 前面判**：「暂时不感兴趣」里就含着
+ * 「不感兴趣」，先判硬拒绝的话，一句「暂时」当场被吞掉，这个人被永久停掉。
+ *
+ * 判不准时的偏向：**宁可判成「暂时」**。判错成暂时 = 多发几封跟进邮件（噪音）；
+ * 判错成明确不要 = 一个还在考虑的客人从此消失（丢单）。
+ */
+const SOFT_NO_PATTERNS: RegExp[] = [
+  // 「暂时 / 现在 / 目前 / 这段时间」+ 任何否定说法
+  /(暂时|暂不|现在不|目前不|这(段时间|阵子)不|近期不)/,
+  // 明确把事情推到以后
+  /(明年|以后|过段时间|过阵子|晚点|迟些|再过|下半年|年底)再(说|看|联系|考虑|定|议)/,
+  /(再看看|再想想|还没(决定|定|想好)|考虑一下|考虑考虑)/,
+  /(等|要等).{0,8}(再|才)(说|定|联系|考虑)/,
+  // 英文。「not interested right now」中间隔着词，所以 not…now 之间放宽 ——
+  // 但只放 20 个字符，免得跨过整句去误配（「not going, call me now」）。
+  /\bnot\b.{0,20}\bright now\b/i,
+  /\bnot\s+(right\s+)?now\b/i,
+  /\bmaybe\s+(later|next\s+year)\b/i,
+  /\b(think|thinking)\s+(about\s+it|it\s+over)\b/i,
+  /\bhave\s+a\s+think\b/i,
+  /\bnot\s+ready\b/i,
+  /\btoo\s+early\b/i,
+]
+
 const CALLBACK_PATTERNS: RegExp[] = [
   /call\s*(back|me|tomorrow|after|at|next)/i,
   /ring\s*me/i,
@@ -138,10 +176,12 @@ export function classifyNote(raw: string): {
 
   const dnc = anyMatch(t, DNC_PATTERNS)
 
-  // 顺序即优先级：号码是坏的 > 明确拒绝 > 没接通 > 没兴趣 > 约了回电 > 聊过了
+  // 顺序即优先级：号码是坏的 > 明确拒绝 > 没接通 > **暂时**不考虑 > 明确没兴趣 > 约了回电 > 聊过了
   if (anyMatch(t, BAD_NUMBER_PATTERNS)) return { outcome: 'bad_number', do_not_contact: dnc }
   if (dnc) return { outcome: 'do_not_contact', do_not_contact: true }
   if (anyMatch(t, NO_ANSWER_PATTERNS)) return { outcome: 'no_answer', do_not_contact: false }
+  // 🔴 软拒绝必须先判：「暂时不感兴趣」里含着「不感兴趣」，反过来会被吞掉。
+  if (anyMatch(t, SOFT_NO_PATTERNS)) return { outcome: 'not_interested_now', do_not_contact: false }
   if (anyMatch(t, NOT_INTERESTED_PATTERNS)) return { outcome: 'not_interested', do_not_contact: false }
   if (anyMatch(t, CALLBACK_PATTERNS)) return { outcome: 'callback_set', do_not_contact: false }
   return { outcome: 'spoke', do_not_contact: false }

@@ -439,6 +439,13 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
   const suppressStage = stageRows.find(
     (s) => s.marketing_action === 'suppress',
   )
+  /**
+   * 「短期内不考虑」那一档 —— 客户自己配的名字，按 marketing_action 找。
+   *
+   * PM 2026-08-16 给的业务事实：leads 聊过之后有「暂时不感兴趣、还要继续营销」
+   * 和「明确不要了」两种，下场必须不一样。上面那条只覆盖了后者。
+   */
+  const deferStage = stageRows.find((s) => s.marketing_action === 'defer')
 
   const suggestStage = (
     c: (typeof ranked)[number],
@@ -456,6 +463,35 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       toStage: suppressStage.stage_key,
       label: suppressStage.label,
       why: '通话记录里客户明确说过不感兴趣 / 别再联系',
+    }
+  }
+
+  /**
+   * 「他说现在先不考虑」→ 提议移到「短期内不考虑」那一档。
+   *
+   * 这是**阶段自己填自己**的第一块：系统已经在读每一通电话，读到这句话就该
+   * 把人放到对的格子里，而不是等谁记得回来手填。CTS 583 个人里 556 个阶段
+   * 是空的 —— 靠人填的状态列一定会烂（那份 128 行的手工 CRM 就是这么死的）。
+   *
+   * 仍然只是**提议**：卡片上出现一个按钮，人点一下才生效。AI 读错的代价
+   * 不该由客户承担。
+   */
+  const suggestDeferred = (
+    c: (typeof ranked)[number],
+    currentStage: string | null,
+  ): { toStage: string; label: string; why: string } | null => {
+    if (!deferStage) return null
+    if (currentStage === deferStage.stage_key) return null
+    // 只认**最近一次**的结果：他后来又聊热了的话，这条早就不成立了。
+    const latest = [...c.touchpoints]
+      .filter((t) => t.outcome)
+      .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime())[0]
+    if (latest?.outcome !== 'not_interested_now') return null
+
+    return {
+      toStage: deferStage.stage_key,
+      label: deferStage.label,
+      why: '通话记录里他说现在先不考虑 —— 不是不要了，过阵子还该跟',
     }
   }
 
@@ -608,6 +644,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       snoozeUntil: row?.snooze_until ?? null,
       suggestedStage:
         suggestStage(c, row?.stage ?? null) ??
+        suggestDeferred(c, row?.stage ?? null) ??
         suggestQuoted(c.displayName, row?.stage ?? null),
     }
   }

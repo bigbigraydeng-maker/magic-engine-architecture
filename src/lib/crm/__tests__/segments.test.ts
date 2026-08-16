@@ -862,3 +862,58 @@ describe('拨到空号不算我们出手过', () => {
     }
   })
 })
+
+/**
+ * 🔴 **「暂时不考虑」的人不许从名单上消失**（PM 2026-08-16 给的业务事实）。
+ *
+ * 系统在此之前只有一个「不感兴趣」，而它是终结性的 —— 一句「明年再说」
+ * 会让这个人从此不出现在任何名单上，没有任何东西会把他叫醒。
+ * 跟「号码是坏的」是同一个病：一个软信号被当成了最终结论。
+ */
+describe('暂时不考虑的人交给系统跟，不是停掉', () => {
+  const softNo = (over: Partial<ContactLike> = {}) =>
+    contact({
+      touchpoints: [
+        form('2026-07-01T00:00:00Z'),
+        call('2026-07-10T00:00:00Z', 'not_interested_now'),
+      ],
+      hasPhone: true,
+      hasEmail: true,
+      ...over,
+    })
+
+  it('不排除 —— 人还在，自动跟进照发', () => {
+    const r = segmentContact(softNo(), NOW)
+    expect(r.segment).toBe('handoff_sop')
+    expect(r.segment).not.toBe('excluded')
+  })
+
+  it('理由说人话，不用真人一个个打', () => {
+    expect(segmentContact(softNo(), NOW).reason).toContain('现在先不考虑')
+  })
+
+  /** 对照：明确说不要了的，照旧停掉 —— 这两种的下场必须不一样。 */
+  it('对照：明确不要了 → 停掉', () => {
+    const hardNo = contact({
+      touchpoints: [call('2026-07-10T00:00:00Z', 'not_interested')],
+      hasPhone: true,
+      hasEmail: true,
+    })
+    expect(segmentContact(hardNo, NOW).segment).toBe('excluded')
+  })
+
+  /** 他一开口就跳回最上面 —— 「客户回话了」排在这条规则前面。 */
+  it('说完「再说吧」之后他又来消息 → 立刻回到最高优先', () => {
+    const r = segmentContact(
+      softNo({
+        touchpoints: [
+          form('2026-07-01T00:00:00Z'),
+          call('2026-07-10T00:00:00Z', 'not_interested_now'),
+          { channel: 'email', direction: 'inbound', occurredAt: '2026-07-26T02:00:00Z' },
+        ],
+      }),
+      NOW,
+    )
+    expect(r.segment).toBe('replied')
+  })
+})

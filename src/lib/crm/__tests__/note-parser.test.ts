@@ -202,3 +202,47 @@ describe('告诉模型今天几号 —— 相对日期的下一步能不能排�
     expect(todayContext(NOW, 'Australia/Sydney')).toContain('Australia/Sydney')
   })
 })
+
+/**
+ * 🔴 **「暂时不考虑」和「明确不要了」必须分开**（PM 2026-08-16 给的业务事实）。
+ *
+ * 「leads 沟通后会变成暂时不感兴趣、还需要继续营销的，或者明确表达不感兴趣的。」
+ *
+ * 分不开的代价是真实的：线上 17 个人被标成终结性的 `not_interested`，
+ * 从此不出现在任何名单上、没有任何东西会把他们叫醒 —— 而按 PM 的说法，
+ * 其中「明年再说」那一类才是多数。跟「号码是坏的」是同一个病：
+ * **一个软信号被当成了最终结论。**
+ */
+describe('暂时不考虑 ≠ 明确不要了', () => {
+
+  it.each([
+    ['暂时不感兴趣'],
+    ['客户说现在不考虑，明年再说'],
+    ['过段时间再说'],
+    ['他要再看看'],
+    ['还没决定，考虑一下'],
+    ['not interested right now'],
+    ['thinking about it'],
+    ['maybe later'],
+    ['too early for him'],
+  ])('「%s」→ 暂时不考虑，继续跟', (note) => {
+    expect(outcome(note)).toBe('not_interested_now')
+  })
+
+  /**
+   * ⚠️ 这一条是整组的关键：「暂时不感兴趣」**里面就含着「不感兴趣」**。
+   * 硬拒绝先判的话，那个「暂时」当场被吞掉，人被永久停掉。
+   */
+  it('「暂时」压得住「不感兴趣」—— 顺序不能反', () => {
+    expect(outcome('暂时不感兴趣')).toBe('not_interested_now')
+    expect(outcome('暂时不感兴趣')).not.toBe('not_interested')
+  })
+
+  it.each([
+    ['客户对旅游不感兴趣'],
+    ['已经在别家订了'],
+    ['not interested'],
+  ])('「%s」→ 明确不要了，停掉', (note) => {
+    expect(outcome(note)).toBe('not_interested')
+  })
+})
