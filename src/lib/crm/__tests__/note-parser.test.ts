@@ -656,3 +656,24 @@ describe('重判只认代表客人意愿的记录', () => {
     expect(classifyNote('customer did not unsubscribe').do_not_contact).toBe(false)
   })
 })
+
+/**
+ * 🔴 「opt out」在旅游备注里最常见的意思是**不参加某个自费项目**
+ * （Codex 复审 2026-08-16），跟「别再联系我」毫无关系。
+ */
+describe('opt out 必须指向营销联系，不是某个自费项目', () => {
+  it('🔴「opted out of the optional insurance」→ 不是拒联', () => {
+    expect(classifyNote('customer opted out of the optional insurance').do_not_contact).toBe(false)
+  })
+
+  it('🔴「opted out of the helicopter activity」→ 不是拒联', () => {
+    expect(classifyNote('opted out of the helicopter activity').do_not_contact).toBe(false)
+  })
+
+  it('真的说不要营销邮件 → 照旧是拒联', () => {
+    expect(classifyNote('customer wants to opt out of all marketing emails').do_not_contact).toBe(
+      true,
+    )
+    expect(classifyNote('please opt me out of your newsletter').do_not_contact).toBe(true)
+  })
+})

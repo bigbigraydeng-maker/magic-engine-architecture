@@ -121,7 +121,13 @@ const DNC_PATTERNS: RegExp[] = [
    * 必须是他在**要求**退订，并且排除「did not unsubscribe」这类否定。
    */
   /(?<!(did|do|does)\s*not\s)(?<!never\s)(please\s*)?(unsubscribe\s*me|want\s*to\s*unsubscribe|unsubscribe\s*from\s*(your|the)\s*(list|emails?|mailing))/i,
-  /opt(ed)?\s*out/i,
+  /**
+   * ⚠️ 「opt out」同样**不能裸词**（Codex 复审 2026-08-16）：旅游备注里
+   * `opted out of the optional insurance` / `opted out of the helicopter
+   * activity` 说的是他不参加某个自费项目，跟「别再联系我」毫无关系。
+   * 必须明确指向营销联系本身。
+   */
+  /opt(ed)?\s*(me|him|her|them|us)?\s*out\s*(of\s*)?(all\s*)?(your\s*|our\s*|the\s*)?(email|mail|marketing|newsletter|communication|contact|promo)/i,
   /no\s*(further|more)\s*contact/i,
   // 🔴 `not intending to go` **从这一组移走了**（Codex 复审 2026-08-16）。
   //

@@ -180,7 +180,20 @@ export async function POST(
   const rules = classifyNote(note)
   const parsed: NoteParse = {
     outcome: rules.outcome,
-    do_not_contact: rules.do_not_contact,
+    /**
+     * 🔴 **群发的备注永远推不出「别再联系」**（Codex 复审 2026-08-16）。
+     *
+     * 这句 `note` 是**我们自己**对这次群发的描述（「群发了一封邮件」，或者
+     * 调用方粘进来的发送说明 / 邮件摘要）—— 不是任何一个客人说的话。里面
+     * 只要出现一次 `unsubscribe from the list` 这种页脚原文，这一整批
+     * **最多 500 个人**就会被同一份判词一起拉黑，而取消是一次一个人的，
+     * 没有批量入口。
+     *
+     * 上一轮给读路径加的「只认代表客人意愿的记录」那道方向闸管不到这里 ——
+     * 这是**写**路径。所以在这里写死：群发只记「我们联系过他」，
+     * 客人拒不拒联只能来自他自己的话（单条记一笔 / 入站消息）。
+     */
+    do_not_contact: false,
     travel_window: null,
     tour_interest: null,
     competitor: null,
