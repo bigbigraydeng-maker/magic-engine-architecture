@@ -298,7 +298,7 @@ export function applyReviewDecisions(
 /**
  * 计划哈希。
  *
- * 覆盖契约版本 / 规则版本 / 租户 / 边界 / 每条候选的全部身份字段 / 复核签名。
+ * 覆盖契约版本 / 规则版本 / 租户 / 边界 / 每条候选的全部身份字段 / 计数 / 复核签名。
  * 少盖任何一项，那一项就能在批准之后被悄悄改掉。
  */
 export function computePlanHash(plan: Omit<CanonicalInventoryPlan, 'planHash'>): string {
@@ -327,6 +327,13 @@ export function computePlanHash(plan: Omit<CanonicalInventoryPlan, 'planHash'>):
       notes: [...c.notes].sort(compareStrings),
       duplicateOf: c.duplicateOf ?? null,
     })),
+    counts: {
+      discovered: plan.counts.discovered,
+      pending: plan.counts.pending,
+      accepted: plan.counts.accepted,
+      rejected: plan.counts.rejected,
+      deferred: plan.counts.deferred,
+    },
     review: plan.review === null ? null : {
       reviewedBy: plan.review.reviewedBy,
       reviewedAt: plan.review.reviewedAt,
@@ -388,11 +395,53 @@ function applyDecisionsToCandidates(
  *
  *    所以这里**从原始 URL 把整份机器候选重新构造一遍，逐字段比对** ——
  *    决策、原因码、归一留痕、撞车指向，一个字段都不放过。
+ *
+ * 🔴 光比对「计划里现有的候选」还不够 —— 另一条绕过路径是**整条删掉某个主机的候选**：
+ *    `discovery` 仍声称 `shop.example.com` 有 1 条，`candidates` 里那条已经被拿掉，
+ *    重新构造/逐字段比对只看剩下的候选，看不出「本该有一条却没有」。
+ *    `assertDiscoveryConsistent()` 只查主机覆盖（有没有这个主机的发现记录），
+ *    不查数量对不对得上 —— 所以这里必须重新跑一遍
+ *    `buildInventoryPlan()` 生成时用过的那道计数对账。
+ *
+ * 🔴 上面那道对账**只覆盖批准主机**——删掉一条 malformed 或未批准主机的候选，
+ *    它本来就不进任何主机的逐主机统计，对账天生看不见，逐字段比对也看不见
+ *    （比对只看「剩下的候选」，少一条不会让剩下的字段对不上）。这类候选唯一
+ *    还留着的痕迹是 `counts.discovered`（`countCandidates()` 在生成时算过一次），
+ *    所以最后再补一道：拿现在的 `candidates` 重新数一遍，跟 `counts` 里的数字比对。
+ *    这道放在 `assertCandidatesMachineDerived()` **之后**——候选内容被篡改
+ *    （决策 / 撞车重复）时，前面那道更具体的错误应该先响，这道只兜「整条消失」。
  */
 export function assertPlanIntact(plan: CanonicalInventoryPlan): void {
   assertVersionsAndHash(plan)
   assertDiscoveryConsistent(plan)
+  assertDiscoveryMatchesCandidates(
+    plan.discovery,
+    plan.candidates.map((c) => c.originalUrl),
+  )
   assertCandidatesMachineDerived(plan)
+  assertCountsMachineDerived(plan)
+}
+
+/** `counts` 必须是当前 `candidates` 用 `countCandidates()` 重新数出来的那一份，一个字段都不许对不上。 */
+function assertCountsMachineDerived(plan: CanonicalInventoryPlan): void {
+  const expected = countCandidates(plan.candidates)
+  const actual = plan.counts
+  if (
+    actual.discovered !== expected.discovered ||
+    actual.pending !== expected.pending ||
+    actual.accepted !== expected.accepted ||
+    actual.rejected !== expected.rejected ||
+    actual.deferred !== expected.deferred
+  ) {
+    throw new InventoryPlanError(
+      'counts_not_machine_derived',
+      `计划自带的计数（发现 ${actual.discovered} / 待判 ${actual.pending} / 已批 ${actual.accepted} / ` +
+        `已拒 ${actual.rejected} / 暂缓 ${actual.deferred}）跟拿当前候选清单重新数出来的` +
+        `（发现 ${expected.discovered} / 待判 ${expected.pending} / 已批 ${expected.accepted} / ` +
+        `已拒 ${expected.rejected} / 暂缓 ${expected.deferred}）对不上 —— ` +
+        '最常见的原因是候选被整条删掉、却没有同步改计数，尤其是 malformed / 未批准主机这类不进逐主机统计的候选',
+    )
+  }
 }
 
 /**
@@ -521,11 +570,43 @@ export function countCandidates(candidates: readonly InventoryCandidate[]): Inve
 // 私有
 // ---------------------------------------------------------------------------
 
+/**
+ * 人工原因码运行时白名单。跟 `RejectionReasonCode` 手动保持同步 ——
+ * 联合类型只在编译期挡人，反序列化进来的拼写错误 / 旧枚举值靠这份清单在运行时挡。
+ */
+const ALLOWED_REASON_CODES: readonly RejectionReasonCode[] = [
+  'malformed_url',
+  'unsupported_scheme',
+  'insecure_scheme',
+  'credentials_present',
+  'non_default_port',
+  'host_not_approved',
+  'duplicate_canonical_target',
+  'reviewer_rejected',
+  'reviewer_deferred',
+]
+
+/**
+ * 🔴 人工原因码在盖章前必须逐项校验。它跟决策值一样是反序列化进来的：
+ *    拼错一个值（如 `reviewr_rejected`）会原样被哈希和签名，激活侧只确认它是数组，
+ *    最终进入拒绝 / 暂缓审计，却破坏了「按机器原因码分组统计」这条契约唯一的保证。
+ */
 function resolveReasonCodes(decision: ReviewDecision): readonly RejectionReasonCode[] {
-  if (decision.reasonCodes !== undefined) return decision.reasonCodes
-  if (decision.decision === 'rejected') return ['reviewer_rejected']
-  if (decision.decision === 'defer') return ['reviewer_deferred']
-  return []
+  if (decision.reasonCodes === undefined) {
+    if (decision.decision === 'rejected') return ['reviewer_rejected']
+    if (decision.decision === 'defer') return ['reviewer_deferred']
+    return []
+  }
+  for (const code of decision.reasonCodes) {
+    if (!ALLOWED_REASON_CODES.includes(code)) {
+      throw new InventoryPlanError(
+        'invalid_reason_code',
+        `原因码「${String(code)}」不认识，只接受 ${ALLOWED_REASON_CODES.join(' / ')} —— ` +
+          '认不出来的值必须当场拒，不能带着签名往下走',
+      )
+    }
+  }
+  return decision.reasonCodes
 }
 
 function finalisePlan(parts: {

@@ -78,6 +78,9 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   { service: 'oztop-seo-optimizer', jobName: 'oztop-seo-optimizer', schedule: '0 5 * * 1', logsRuns: true },
   { service: 'pm-daily-todo', jobName: 'pm-daily-todo', schedule: '0 19 * * 0-4', logsRuns: true },
   { service: 'poll-visual-jobs', jobName: 'poll-visual-jobs', schedule: '*/10 * * * *', logsRuns: true },
+  // ME2 Product Map 每日全量对账(webhook 的兜底)。表未 apply 前它会天天报 failed ——
+  // 这是设计行为:不许把「什么都没干」显示成健康。apply migration 后自动转绿。
+  { service: 'product-map-sync-daily', jobName: 'product-map-sync', schedule: '15 18 * * *', logsRuns: true, addedAt: '2026-08-15' },
   { service: 'prescription-weekly', jobName: 'prescription-weekly', schedule: '0 8 * * 2', logsRuns: true, addedAt: '2026-08-04' },
   { service: 'cms-connection-retest', jobName: 'cms-connection-retest', schedule: '10 6 * * *', logsRuns: true, addedAt: '2026-08-05' },
   { service: 'proposal-view-digest', jobName: 'proposal-view-digest', schedule: '0 19 * * *', logsRuns: true },

@@ -16,6 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import { supabaseAdmin } from '@/lib/supabase'
+import { reclassifyStoredOutcome } from '@/lib/crm/note-parser'
 
 interface RouteParams {
   params: { id: string; cid: string }
@@ -99,7 +100,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
     // 免得「Messenger 私信（5 条往来）」和真实 5 条消息在时间线里重复。
     supabaseAdmin
       .from('contact_touchpoints')
-      .select('channel, direction, occurred_at, summary, metadata')
+      .select('channel, direction, occurred_at, summary, raw, metadata')
       .eq('client_id', clientId)
       .eq('contact_id', contactId)
       .neq('channel', 'messenger')
@@ -159,6 +160,8 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
     direction: 'inbound' | 'outbound'
     occurred_at: string
     summary: string | null
+    /** 原话。存量结果值读的时候要靠它重判一次（见 reclassifyStoredOutcome）。 */
+    raw: string | null
     metadata: Record<string, unknown> | null
   }[]) {
     const m = t.metadata ?? {}
@@ -170,7 +173,15 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       summary: t.summary,
       // 这一条触点自己带的团意向：FB 表单下拉优先，其次手工笔记解析值。
       tour: cleanStr(m.tour_interest_raw) ?? cleanStr(m.tour_interest),
-      outcome: cleanStr(m.outcome),
+      /**
+       * 存量结果值读的时候重判一次 —— 跟 today / 全部客人两条读模型用**同一个**
+       * 函数（Codex 复审 2026-08-16）。
+       *
+       * 不做的话，同一个人在列表里写「暂时不考虑」、点开时间线却写「没兴趣」——
+       * 而时间线是**翻查这个人到底发生过什么**的主要视图。两处结论打架，
+       * 销售会两边都不信。
+       */
+      outcome: cleanStr(reclassifyStoredOutcome(m.outcome as string | null, t.raw)),
       travelWindow: cleanStr(m.travel_window),
       callbackAt: cleanStr(m.callback_at),
       competitor: cleanStr(m.competitor),

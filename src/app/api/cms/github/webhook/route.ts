@@ -27,12 +27,15 @@
  */
 
 import { createHmac, timingSafeEqual } from 'crypto'
+import { randomUUID } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getValidAccessToken } from '@/lib/google-oauth/client'
 import { requestIndexing } from '@/lib/gsc/indexing-client'
 import { pingSitemap, buildSitemapUrlFromDomain, type SitemapPingSummary } from '@/lib/gsc/sitemap-ping'
 import { markMergedByPr } from '@/lib/cms/geo-deployments-store'
+import { APPROVED_REPO } from '@/lib/product-map/types'
+import { GithubRestProvider, NotProvisionedError, SupabaseSyncStore, runTargetedSync } from '@/lib/product-map-sync'
 
 interface GithubPullRequestEvent {
   action: string
@@ -96,16 +99,26 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   if (event === 'ping') {
     return NextResponse.json({ pong: true })
   }
+
+  // ── 仓门分流(ME2 Product Map,PR2)────────────────────────────────────
+  // 本 endpoint 同时服务两类 webhook:客户站仓(blog/GEO 发布闭环,下面的既有
+  // 逻辑)和 ME 自己的仓(product-map 同步)。按 repository.full_name 分流,
+  // 两路互斥 —— 客户仓事件永远不会触发 product-map 同步,反之亦然。
+  let parsed: { repository?: { full_name?: string } }
+  try {
+    parsed = JSON.parse(rawBody) as { repository?: { full_name?: string } }
+  } catch {
+    return NextResponse.json({ error: 'invalid JSON' }, { status: 400 })
+  }
+  if (parsed.repository?.full_name === APPROVED_REPO) {
+    return handleProductMapEvent(req, event, parsed as ProductMapEventBody)
+  }
+
   if (event !== 'pull_request') {
     return NextResponse.json({ ignored: `event=${event}` })
   }
 
-  let body: GithubPullRequestEvent
-  try {
-    body = JSON.parse(rawBody) as GithubPullRequestEvent
-  } catch {
-    return NextResponse.json({ error: 'invalid JSON' }, { status: 400 })
-  }
+  const body = parsed as unknown as GithubPullRequestEvent
 
   if (body.action !== 'closed' || !body.pull_request?.merged) {
     return NextResponse.json({ ignored: 'not a merge' })
@@ -183,6 +196,109 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     sitemap_ping:             sitemapResult,
     gsc_indexing:             gscResult,
   })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ME2 Product Map 分支(只吃 APPROVED_REPO 的事件)
+//
+// 约束:
+// - 除验签外永远 200(GitHub 会禁用高失败率 webhook);失败进 deliveries/sync_runs 台账;
+// - 投递幂等 claim-first,GitHub Redeliver 复用同一 GUID:processed/skipped 才跳,
+//   failed 允许重试(否则失败事件被永久吞掉);
+// - targeted sync 硬预算(单号码),重活留给每日对账 cron;
+// - 表未 apply(NotProvisionedError)→ 200 not_provisioned,cron 侧会把这事报红。
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PRODUCT_MAP_SYNC_EVENTS = new Set([
+  'pull_request',
+  'pull_request_review_thread',
+  'issues',
+  'push',
+  'workflow_run',
+])
+
+interface ProductMapEventBody {
+  action?: string
+  pull_request?: { number: number }
+  issue?: { number: number }
+  workflow_run?: { pull_requests?: { number: number }[] }
+}
+
+async function handleProductMapEvent(
+  req: NextRequest,
+  event: string,
+  body: ProductMapEventBody,
+): Promise<NextResponse> {
+  if (!PRODUCT_MAP_SYNC_EVENTS.has(event)) {
+    return NextResponse.json({ ignored: `product-map: event=${event}` })
+  }
+
+  const store = new SupabaseSyncStore(supabaseAdmin)
+  const deliveryId = req.headers.get('x-github-delivery') ?? `missing-${randomUUID()}`
+
+  try {
+    const claim = await store.claimDelivery(deliveryId, event, body.action ?? null)
+    if (claim === 'duplicate') {
+      return NextResponse.json({ status: 'skipped_duplicate', delivery: deliveryId })
+    }
+
+    // 事件 → 受影响号码。push / workflow_run 无直接号码(或号码列表可能为空):
+    // 只登记投递,状态刷新交给每日对账 cron —— targeted 只做单号码硬预算内的活。
+    // 🔴 number 必须运行时校验(狄仁杰 T1):TS 类型不是运行时护栏,payload 里的
+    //    字符串会一路拼进 GitHub API 路径;不合法一律降级 deferred_to_cron。
+    const validNumber = (n: unknown): n is number =>
+      typeof n === 'number' && Number.isInteger(n) && n > 0 && n < 2_147_483_647
+    const target = validNumber(body.pull_request?.number)
+      ? ({ kind: 'pr', number: body.pull_request!.number } as const)
+      : event === 'issues' && validNumber(body.issue?.number)
+        ? ({ kind: 'issue', number: body.issue!.number } as const)
+        : validNumber(body.workflow_run?.pull_requests?.[0]?.number)
+          ? ({ kind: 'pr', number: body.workflow_run!.pull_requests![0].number } as const)
+          : null
+
+    if (!target) {
+      await store.markDelivery(deliveryId, 'processed')
+      return NextResponse.json({ status: 'recorded', delivery: deliveryId, sync: 'deferred_to_cron' })
+    }
+
+    const token = process.env.GITHUB_TOKEN
+    if (!token) {
+      await store.markDelivery(deliveryId, 'failed', 'GITHUB_TOKEN 未配置')
+      return NextResponse.json({ status: 'failed', reason: 'GITHUB_TOKEN 未配置' })
+    }
+
+    const result = await runTargetedSync(
+      {
+        provider: new GithubRestProvider({ token, timeoutMs: 3_000 }),
+        store,
+        newRunId: () => randomUUID(),
+        now: () => new Date().toISOString(),
+      },
+      target,
+    )
+    if (result === null) {
+      // 非登记册号码:不落 facts(孤儿行会钉死快照鲜度),未分类发现是 cron 的活
+      await store.markDelivery(deliveryId, 'processed')
+      return NextResponse.json({ status: 'recorded', delivery: deliveryId, sync: 'not_registry_linked' })
+    }
+    await store.markDelivery(
+      deliveryId,
+      result.status === 'error' ? 'failed' : 'processed',
+      result.status === 'error' ? result.stats.failedItems.join('; ') || 'sync error' : undefined,
+    )
+    return NextResponse.json({ status: result.status, run_id: result.runId, delivery: deliveryId })
+  } catch (err) {
+    if (err instanceof NotProvisionedError) {
+      return NextResponse.json({ status: 'not_provisioned', detail: err.message })
+    }
+    console.error('[github-webhook] product-map 分支失败', err)
+    try {
+      await store.markDelivery(deliveryId, 'failed', err instanceof Error ? err.message : 'unknown')
+    } catch {
+      // deliveries 表本身不可用 —— 已在上面 not_provisioned 分支covered;此处兜底静默仅限标记失败
+    }
+    return NextResponse.json({ status: 'failed' })
+  }
 }
 
 async function tryPingSitemap(clientId: string): Promise<SitemapPingSummary | { attempted: false; reason: string }> {

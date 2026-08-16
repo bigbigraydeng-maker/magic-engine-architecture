@@ -9,6 +9,7 @@ import {
   type StoredMessage,
 } from '@/lib/messenger/brief'
 import { autoTagQualifiedBuyers, type AutoTagResult } from '@/lib/crm/qualified-buyer-autotag'
+import { inferStagesFromConversations, type StageInferResult } from '@/lib/crm/stage-infer'
 
 /**
  * GET /api/cron/messenger-brief-hourly
@@ -19,6 +20,10 @@ import { autoTagQualifiedBuyers, type AutoTagResult } from '@/lib/crm/qualified-
  * 简报写完后跑第二遍：把够格的人自动标成「真买家」（lib/crm/qualified-buyer）。
  * 挂在这里而不是新开一个 cron，是因为规则要读刚写好的简报，而且新 cron 要手工
  * link 密钥的环境变量组、漏了会每天静默 401。第二遍失败不影响简报那一遍。
+ *
+ * 第三遍：读已有的邮件 / 私信 / 电话记录，把**空着**的「跟进到哪一步」填上
+ * （lib/crm/stage-infer）。挂这里同上一条理由。候选人只从 stage 为空的里挑，
+ * 填一个少一个，跑完之后每小时捞到 0 个、一次模型调用都不发生。
  *
  * Auth: Bearer ${CRON_SECRET}
  */
@@ -144,6 +149,20 @@ export async function GET(req: NextRequest) {
     console.error('[crm/qualified-buyer] 自动打标整轮失败:', err)
   }
 
+  /**
+   * 第三遍：读往来内容填空着的阶段。
+   *
+   * 放在最后：它是三遍里唯一「可以整轮不跑也没关系」的 —— 简报和真买家都直接
+   * 影响销售今天看到什么，而阶段是空的本来就已经空了两个月。整轮失败只记一笔。
+   */
+  let stageInfer: StageInferResult | { error: string }
+  try {
+    stageInfer = await inferStagesFromConversations(now)
+  } catch (err) {
+    stageInfer = { error: err instanceof Error ? err.message : String(err) }
+    console.error('[crm/stage-infer] 读往来填阶段整轮失败:', err)
+  }
+
   await run.finish({
     processed: due.length,
     completed: generated,
@@ -154,8 +173,16 @@ export async function GET(req: NextRequest) {
       failed,
       capped: MAX_BRIEFS_PER_RUN,
       qualifiedBuyers,
+      stageInfer,
     },
   })
 
-  return NextResponse.json({ ok: true, candidates: due.length, generated, failed, qualifiedBuyers })
+  return NextResponse.json({
+    ok: true,
+    candidates: due.length,
+    generated,
+    failed,
+    qualifiedBuyers,
+    stageInfer,
+  })
 }

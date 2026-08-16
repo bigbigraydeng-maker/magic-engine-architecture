@@ -1,0 +1,158 @@
+/** 校验器测试 —— 每条 hard error 规则至少一个触发用例 + 一个不误伤用例。 */
+
+import { describe, expect, it } from 'vitest'
+import { EMPTY_EXTERNAL_FACTS } from '../external-facts'
+import type { ProductMapComponent } from '../types'
+import { validateRegistry } from '../validate'
+import { makeComponent, makeFacts, mergedPr } from './_fixtures'
+
+function errorCodes(components: readonly ProductMapComponent[]): string[] {
+  return validateRegistry(components, EMPTY_EXTERNAL_FACTS).errors.map((e) => e.code)
+}
+
+describe('结构规则', () => {
+  it('重复 id 报错', () => {
+    expect(errorCodes([makeComponent(), makeComponent()])).toContain('duplicate_id')
+  })
+
+  it('悬空依赖报错', () => {
+    const c = makeComponent({ dependencies: [{ type: 'requires', target: 'platform.ghost' }] })
+    expect(errorCodes([c])).toContain('dangling_dependency')
+  })
+
+  it('requires 成环报错', () => {
+    const a = makeComponent({ id: 'platform.a', dependencies: [{ type: 'requires', target: 'platform.b' }] })
+    const b = makeComponent({ id: 'platform.b', dependencies: [{ type: 'requires', target: 'platform.a' }] })
+    expect(errorCodes([a, b])).toContain('ordering_cycle')
+  })
+
+  it('as-cast 绕过编译期的非法枚举被运行时抓住', () => {
+    const c = makeComponent({ businessLane: 'growth' as unknown as ProductMapComponent['businessLane'] })
+    expect(errorCodes([c])).toContain('illegal_enum')
+  })
+
+  it('id 格式不合契约报错', () => {
+    expect(errorCodes([makeComponent({ id: 'BadName' })])).toContain('bad_id_format')
+  })
+
+  it('两个组件认领同一路径报错', () => {
+    const a = makeComponent({ id: 'platform.a', ownedPaths: ['src/lib/x/'] })
+    const b = makeComponent({ id: 'platform.b', ownedPaths: ['src/lib/x/'] })
+    expect(errorCodes([a, b])).toContain('owned_path_conflict')
+  })
+})
+
+describe('防夸大规则', () => {
+  it('声明 M4 但 productionEvidence 为空 = hard error', () => {
+    const c = makeComponent({ declaredMaturity: 'M4_PRODUCTION_VALIDATED' })
+    expect(errorCodes([c])).toContain('declared_m4_without_evidence')
+  })
+
+  it('声明 M5 但 learningEvidence 为空 = hard error', () => {
+    const c = makeComponent({
+      declaredMaturity: 'M5_OPERATING_AND_LEARNING',
+      productionEvidence: [{ kind: 'production_run', ref: 'x', verification: 'manual_claim' }],
+    })
+    expect(errorCodes([c])).toContain('declared_m5_without_evidence')
+  })
+
+  it('legacy 件带 ME2 生产/学习证据 = hard error', () => {
+    const c = makeComponent({
+      origin: 'legacy',
+      operationalStatus: 'operating_legacy',
+      ownedPaths: ['src/lib/x/'],
+      productionEvidence: [{ kind: 'production_run', ref: 'x', verification: 'manual_claim' }],
+    })
+    expect(errorCodes([c])).toContain('legacy_with_me2_evidence')
+  })
+
+  it('legacy 件标 operating_me2 = hard error', () => {
+    const c = makeComponent({ origin: 'legacy', operationalStatus: 'operating_me2', ownedPaths: ['src/lib/x/'] })
+    expect(errorCodes([c])).toContain('legacy_operating_me2')
+  })
+
+  it('声明高于证据上限 → warning 露头(不是 error)', () => {
+    const c = makeComponent({ declaredMaturity: 'M2_IMPLEMENTED' })
+    const r = validateRegistry([c], EMPTY_EXTERNAL_FACTS)
+    expect(r.errors).toHaveLength(0)
+    expect(r.warnings.map((w) => w.code)).toContain('declared_above_ceiling')
+  })
+
+  it('声明与证据相符时无 warning', () => {
+    const c = makeComponent({
+      declaredMaturity: 'M2_IMPLEMENTED',
+      contractEvidence: [{ kind: 'frozen_contract', ref: 'docs/x.md', verification: 'manual_claim' }],
+      linkedPullRequests: [{ number: 5, role: 'implements' }],
+    })
+    const r = validateRegistry([c], makeFacts([mergedPr(5)]))
+    expect(r.errors).toHaveLength(0)
+    expect(r.warnings).toHaveLength(0)
+  })
+})
+
+describe('组件语义边界(module / adapter / agent)', () => {
+  it('module 声明 execution 阶段 = hard error', () => {
+    const c = makeComponent({ id: 'module.x', componentType: 'module', dapeStages: ['analysis', 'execution'] })
+    expect(errorCodes([c])).toContain('module_declares_execution')
+  })
+
+  it('module 认领对外写入口模块 = hard error(别名已归一化)', () => {
+    const c = makeComponent({ id: 'module.x', componentType: 'module', dapeStages: ['analysis'], ownedPaths: ['src/lib/cms/'] })
+    expect(errorCodes([c])).toContain('module_owns_provider_write')
+  })
+
+  it('module 认领普通路径不误伤', () => {
+    const c = makeComponent({ id: 'module.x', componentType: 'module', dapeStages: ['analysis'], ownedPaths: ['src/lib/diagnostic/'] })
+    expect(errorCodes([c])).not.toContain('module_owns_provider_write')
+  })
+
+  it('module 带 adapts 边 = hard error', () => {
+    const t = makeComponent({ id: 'capability.t', componentType: 'capability' })
+    const c = makeComponent({ id: 'module.x', componentType: 'module', dapeStages: ['analysis'], dependencies: [{ type: 'adapts', target: 'capability.t' }] })
+    expect(errorCodes([c, t])).toContain('module_adapts')
+  })
+
+  it('adapter 声明 authorization / prescription 阶段 = hard error', () => {
+    const a = makeComponent({ id: 'adapter.x', componentType: 'adapter', dapeStages: ['authorization'] })
+    expect(errorCodes([a])).toContain('adapter_owns_business_stage')
+    const b = makeComponent({ id: 'adapter.y', componentType: 'adapter', dapeStages: ['prescription'] })
+    expect(errorCodes([b])).toContain('adapter_owns_business_stage')
+  })
+
+  it('agent implements 一个 module = hard error(#870:Agent 不随 Module 增殖)', () => {
+    const m = makeComponent({ id: 'module.m', componentType: 'module', dapeStages: ['analysis'] })
+    const a = makeComponent({ id: 'agent.a', componentType: 'agent', dependencies: [{ type: 'implements', target: 'module.m' }] })
+    expect(errorCodes([m, a])).toContain('agent_implements_module')
+  })
+
+  it('非 adapter 带 adapts 边 = hard error', () => {
+    const t = makeComponent({ id: 'capability.t', componentType: 'capability' })
+    const c = makeComponent({ id: 'capability.c', componentType: 'capability', dependencies: [{ type: 'adapts', target: 'capability.t' }] })
+    expect(errorCodes([c, t])).toContain('adapts_from_non_adapter')
+  })
+
+  it('consumes 指向 module = 超出允许矩阵', () => {
+    const m = makeComponent({ id: 'module.m', componentType: 'module', dapeStages: ['analysis'] })
+    const c = makeComponent({ id: 'capability.c', componentType: 'capability', dependencies: [{ type: 'consumes', target: 'module.m' }] })
+    expect(errorCodes([c, m])).toContain('edge_target_not_allowed')
+  })
+})
+
+describe('blocker 与里程碑', () => {
+  it('blocker id 重复报错', () => {
+    const c = makeComponent({
+      currentBlockers: [
+        { id: 'b1', kind: 'code', summary: 'x' },
+        { id: 'b1', kind: 'data', summary: 'y' },
+      ],
+    })
+    expect(errorCodes([c])).toContain('duplicate_blocker_id')
+  })
+
+  it('nextMilestone 引用不存在的 blocker 报错(防散文断头)', () => {
+    const c = makeComponent({
+      nextMilestone: { target: 'M2_IMPLEMENTED', unlockedBy: ['ghost-blocker'] },
+    })
+    expect(errorCodes([c])).toContain('milestone_dangling_blocker')
+  })
+})
