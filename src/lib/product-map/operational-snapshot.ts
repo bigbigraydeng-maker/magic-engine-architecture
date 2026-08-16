@@ -98,18 +98,33 @@ function deriveCodeInMain(c: ProductMapComponent, facts: ExternalFacts): Operati
   if (implementsPrs.length === 0) {
     return { status: 'unknown', evidenceSource: '未登记 role=implements 的 PR', checkedAt: null }
   }
-  // yes 只认机器同步来源（source==='github_sync'）且日期合法，manual_snapshot 是人工快照不算。
-  let mergedByManual: number | null = null
+  // yes 三个硬前提缺一不可：机器同步来源（source==='github_sync'）+ 日期合法 +
+  // 目标分支确为 main（baseRef==='main'）。合并到 staging / 功能分支不能宣称代码进了 main；
+  // manual_snapshot 是人工快照也不算。任一不满足 → 记为"有合并声明但未证明进 main"。
+  let mergedUnproven: OperationalProbe | null = null
   for (const pr of implementsPrs) {
     const fact = facts.pullRequests[pr.number]
     if (fact?.state === 'merged') {
-      if (fact.source === 'github_sync' && isValidObservationDay(fact.observedAt)) return machineYes(`#${pr.number}`, fact.observedAt)
-      mergedByManual = pr.number
+      if (fact.source === 'github_sync' && isValidObservationDay(fact.observedAt) && fact.baseRef === 'main') {
+        return machineYes(`#${pr.number}`, fact.observedAt)
+      }
+      // 只记第一条即可（都无法证明进 main）。区分两种未证明来路，措辞如实：
+      // 机器同步但合到非 main 分支（或缺 baseRef）≠ 人工快照，不能套「仅人工声明」的话术。
+      if (mergedUnproven === null) {
+        mergedUnproven =
+          fact.source === 'github_sync'
+            ? {
+                status: 'unknown',
+                evidenceSource: `#${pr.number} 合并到 ${fact.baseRef ?? '未知分支'}（非 main），不能确认代码进 main`,
+                checkedAt: null,
+              }
+            : pendingUnknown(`#${pr.number} 合并（人工快照）`)
+      }
     }
   }
-  // Codex 复审：只要**存在**一条合并声明（哪怕人工快照），就不能判"确定的 no" ——
-  // 人工合并声明不能证明 yes，但也意味着无法确定代码不在 main → unknown。
-  if (mergedByManual !== null) return pendingUnknown(`#${mergedByManual} 合并（人工快照）`)
+  // Codex 复审：只要**存在**一条合并声明，就不能判"确定的 no" —— 它证明不了 yes，
+  // 但也意味着无法确定代码不在 main → unknown（缺 baseRef / 合到非 main 分支同理，fail-safe）。
+  if (mergedUnproven !== null) return mergedUnproven
   // 没有任何合并声明，才看有没有明确的非合并机器事实 → no
   for (const pr of implementsPrs) {
     const fact = facts.pullRequests[pr.number]
