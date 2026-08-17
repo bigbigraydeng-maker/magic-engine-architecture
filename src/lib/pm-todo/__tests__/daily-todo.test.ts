@@ -201,3 +201,58 @@ describe('nzWeekday', () => {
     expect(nzWeekday(new Date('2026-08-01T19:05:00Z'))).toBe(0)
   })
 })
+
+/**
+ * 🔴 人工待办的正文里**有客人自己写的字** —— `dm_maybe_stop` 会把 Facebook
+ * 私信原话摘一段进 `what`，联系人姓名也是客人自己填的。
+ *
+ * 不转义的话，任何一个陌生人只要在私信里发一段带标记的话，就能往**我们自己
+ * 发出去的官方日报**里注入链接 / 图片 —— 收件人是 PM 和 FDE，那封邮件看起来
+ * 完全可信。（Codex 复审 PR #1037，2026-08-17）
+ */
+describe('buildTodoEmail · 人工待办正文要转义', () => {
+  const evil = (over: Partial<TodoCounts['manualItems'][number]> = {}) => ({
+    kind: 'dm_maybe_stop' as const,
+    client_id: 'c1',
+    client_name: 'CTS',
+    what: '客人说了「do not follow up <a href="https://evil.example">点我领奖</a>」',
+    how: '看一眼',
+    href: 'https://app.magicengine.com.au/dashboard/clients/c1/crm/all?contact=p1',
+    ...over,
+  })
+
+  it('what 里的标记被转义，不会变成真链接', () => {
+    const html = buildTodoEmail(3, { ...EMPTY, manualItems: [evil()] }, 'x').html
+    expect(html).not.toContain('<a href="https://evil.example"')
+    expect(html).toContain('&lt;a href=&quot;https://evil.example&quot;&gt;')
+  })
+
+  it('how 和客户名一样要转义', () => {
+    const html = buildTodoEmail(
+      3,
+      { ...EMPTY, manualItems: [evil({ how: '<script>x</script>', client_name: '<b>x</b>' })] },
+      'x',
+    ).html
+    expect(html).not.toContain('<script>x</script>')
+    expect(html).not.toContain('<b>x</b>：')
+  })
+
+  it('href 当属性值转义 —— 引号闭合不了才注不进新属性', () => {
+    const html = buildTodoEmail(
+      3,
+      { ...EMPTY, manualItems: [evil({ href: 'https://x.test/" onmouseover="alert(1)' })] },
+      'x',
+    ).html
+    expect(html).not.toContain('onmouseover="alert(1)"')
+  })
+
+  it('正常条目的样子不变（现有条目正文都是纯文字）', () => {
+    const html = buildTodoEmail(
+      3,
+      { ...EMPTY, manualItems: [evil({ what: '出片余额用完了', how: '去充值' })] },
+      'x',
+    ).html
+    expect(html).toContain('出片余额用完了')
+    expect(html).toContain('去充值')
+  })
+})
