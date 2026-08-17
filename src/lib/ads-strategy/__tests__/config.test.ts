@@ -11,7 +11,12 @@ vi.mock('@/lib/supabase', () => ({
   },
 }))
 
-import { defaultConfig, resolveDigestRecipients, loadAdStrategyConfigWithSource } from '../config'
+import {
+  currencyForCountry,
+  defaultConfig,
+  resolveDigestRecipients,
+  loadAdStrategyConfigWithSource,
+} from '../config'
 
 describe('loadAdStrategyConfigWithSource — asymmetric fail-open', () => {
   beforeEach(() => { maybeSingle.mockReset(); vi.spyOn(console, 'warn').mockImplementation(() => {}) })
@@ -46,6 +51,20 @@ describe('defaultConfig', () => {
     const c = defaultConfig('client-1')
     expect(c.enabled).toBe(true)
     expect(c.digest_recipients).toEqual([])
+  })
+
+  it('🔴 币种按客户所在国推荐，判断不出来就返回 null（不给默认币种）', () => {
+    // 写死一个默认币种会让 AU 客户（Oztop）的预算被默默存成纽币 —— AD-CUR-1 的新入口
+    expect(currencyForCountry('AU')).toBe('AUD')
+    expect(currencyForCountry('au')).toBe('AUD')
+    expect(currencyForCountry(' Australia ')).toBe('AUD')
+    expect(currencyForCountry('NZ')).toBe('NZD')
+    expect(currencyForCountry('New Zealand')).toBe('NZD')
+    // 拿不准一律 null，让界面强制人选一次
+    expect(currencyForCountry(null)).toBeNull()
+    expect(currencyForCountry('')).toBeNull()
+    expect(currencyForCountry('US')).toBeNull()
+    expect(currencyForCountry(42)).toBeNull()
   })
 
   it('🔴 月预算默认是 null，不给任何猜测值 —— 猜出来的池子是真要花出去的钱', () => {

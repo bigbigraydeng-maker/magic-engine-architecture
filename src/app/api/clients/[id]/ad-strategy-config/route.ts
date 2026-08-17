@@ -11,6 +11,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import {
   AD_BUDGET_CURRENCIES,
+  currencyForCountry,
   isAdBudgetCurrency,
   loadAdStrategyConfig,
   toRealAmount,
@@ -27,7 +28,24 @@ export async function GET(
   if (!access.ok) return NextResponse.json({ error: access.error }, { status: access.status })
 
   const config = await loadAdStrategyConfig(clientId)
-  return NextResponse.json({ success: true, config })
+  /**
+   * 🔴 币种建议按客户所在国给，**不给全局默认值**。
+   *
+   *    设置页不能自己写死一个默认币种：迁移之后所有客户都还没存过币种，
+   *    写死 NZD 会让 AU 客户（Oztop）的预算被默默存成纽币。
+   *    国家判断不出来时返回 null，界面据此强制人选一次。
+   */
+  const { data: client } = await supabaseAdmin
+    .from('clients')
+    .select('country')
+    .eq('id', clientId)
+    .maybeSingle<{ country: string | null }>()
+
+  return NextResponse.json({
+    success: true,
+    config,
+    suggested_currency: currencyForCountry(client?.country),
+  })
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/

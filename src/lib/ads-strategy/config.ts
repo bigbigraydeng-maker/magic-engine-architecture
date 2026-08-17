@@ -18,6 +18,33 @@ export function isAdBudgetCurrency(v: unknown): v is AdBudgetCurrency {
   return typeof v === 'string' && (AD_BUDGET_CURRENCIES as readonly string[]).includes(v)
 }
 
+/**
+ * 按客户所在国推荐预算币种。**拿不准就返回 null，不猜。**
+ *
+ * 🔴 为什么不能给一个「默认币种」兜底：设置页第一版把下拉框写死默认 NZD，
+ *    而迁移之后**所有客户都还没存过币种**。于是给 Oztop（AU）填预算时，
+ *    只要没特意去点那个下拉框，**澳币的钱会被存成纽币** —— 探索池跟着算错，
+ *    正是 `AD-CUR-1` 那类混币种问题的新入口。
+ *
+ *    所以这里只在**真的知道**的时候给建议；不知道就返回 null，让界面强制人选一次。
+ *    宁可多点一下，也不要默默存一个错的币种。
+ */
+export function currencyForCountry(country: unknown): AdBudgetCurrency | null {
+  if (typeof country !== 'string') return null
+  switch (country.trim().toUpperCase()) {
+    case 'AU':
+    case 'AUS':
+    case 'AUSTRALIA':
+      return 'AUD'
+    case 'NZ':
+    case 'NZL':
+    case 'NEW ZEALAND':
+      return 'NZD'
+    default:
+      return null
+  }
+}
+
 export interface AdStrategyConfig {
   client_id: string
   enabled: boolean

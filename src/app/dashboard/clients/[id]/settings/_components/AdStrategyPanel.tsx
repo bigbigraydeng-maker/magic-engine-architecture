@@ -49,7 +49,15 @@ export function AdStrategyPanel({ clientId }: Props) {
   const [state, setState] = useState<PanelState>({ phase: 'loading' })
   const [recipientsDraft, setRecipientsDraft] = useState('')
   const [budgetDraft, setBudgetDraft] = useState('')
-  const [currencyDraft, setCurrencyDraft] = useState<BudgetCurrency>('NZD')
+  /**
+   * 🔴 **初始值刻意是空的，不预选任何币种。**
+   *
+   *    第一版写死默认 NZD，而迁移之后所有客户都还没存过币种 —— 给 Oztop（AU）
+   *    填预算时只要没点这个下拉框，澳币的钱就会被默默存成纽币，探索池跟着算错。
+   *    现在：已存过就用存的；没存过就用接口按客户所在国给的建议；
+   *    国家也判断不出来就保持空，保存时强制先选一次。
+   */
+  const [currencyDraft, setCurrencyDraft] = useState<BudgetCurrency | ''>('')
   const [saving, setSaving] = useState(false)
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
 
@@ -58,11 +66,15 @@ export function AdStrategyPanel({ clientId }: Props) {
     try {
       const res = await fetch(`/api/clients/${clientId}/ad-strategy-config`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const { config } = (await res.json()) as { config: Config }
+      const { config, suggested_currency: suggested } = (await res.json()) as {
+        config: Config
+        suggested_currency: BudgetCurrency | null
+      }
       setState({ phase: 'ready', config })
       setRecipientsDraft(config.digest_recipients.join('\n'))
       setBudgetDraft(config.monthly_ad_budget === null ? '' : String(config.monthly_ad_budget))
-      if (config.monthly_ad_budget_currency) setCurrencyDraft(config.monthly_ad_budget_currency)
+      // 已存过 > 按客户所在国建议 > 空（强制人选）
+      setCurrencyDraft(config.monthly_ad_budget_currency ?? suggested ?? '')
     } catch (err) {
       setState({ phase: 'error', message: err instanceof Error ? err.message : String(err) })
     }
@@ -141,6 +153,11 @@ export function AdStrategyPanel({ clientId }: Props) {
     const n = Number(raw)
     if (!Number.isFinite(n) || n <= 0) {
       setBanner({ kind: 'err', text: '月预算要填一个大于 0 的数字,比如 2000。这个月不投就整个留空。' })
+      return
+    }
+    // 🔴 币种没选就不许存 —— 存错币种比没存更糟，探索池会按错的口径算钱
+    if (currencyDraft === '') {
+      setBanner({ kind: 'err', text: '先选币种（这个客户是澳洲还是新西兰的账户），再保存。' })
       return
     }
     save(
@@ -255,10 +272,18 @@ export function AdStrategyPanel({ clientId }: Props) {
         <div className="mt-2 flex items-center gap-2">
           <select
             value={currencyDraft}
-            onChange={e => setCurrencyDraft(e.target.value as BudgetCurrency)}
+            onChange={e => setCurrencyDraft(e.target.value as BudgetCurrency | '')}
             aria-label="预算币种"
-            className="rounded-lg border border-gray-200 px-2 py-1.5 text-sm focus:border-gray-400 focus:outline-none"
+            className={`rounded-lg border px-2 py-1.5 text-sm focus:outline-none ${
+              currencyDraft === ''
+                ? 'border-amber-300 text-amber-700'
+                : 'border-gray-200 focus:border-gray-400'
+            }`}
           >
+            {/* 没选中任何币种时才出现 —— 逼人明确选一次，不给「默认币种」这种会存错钱的东西 */}
+            <option value="" disabled>
+              选币种
+            </option>
             <option value="NZD">NZD</option>
             <option value="AUD">AUD</option>
           </select>
