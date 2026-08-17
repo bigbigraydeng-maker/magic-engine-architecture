@@ -148,6 +148,11 @@ export async function loadAdStrategyConfigWithSource(
  */
 export function toRealAmount(raw: unknown): number | null {
   if (raw === null || raw === undefined) return null
+  // 🔴 只认数字和数字字符串。`Number()` 对别的类型太宽容 ——
+  //    `Number(true) === 1`、`Number([2000]) === 2000`，于是一个坏掉的调用方
+  //    能把「预算 1 元」写进库，而数据库约束（> 0）看不出这是类型转换出来的。
+  //    金额这种东西宁可拒绝，也不要猜。
+  if (typeof raw !== 'number' && typeof raw !== 'string') return null
   if (typeof raw === 'string' && raw.trim() === '') return null
   const n = typeof raw === 'number' ? raw : Number(raw)
   if (!Number.isFinite(n) || n <= 0) return null

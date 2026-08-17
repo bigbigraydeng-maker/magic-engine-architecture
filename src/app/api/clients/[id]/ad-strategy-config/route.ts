@@ -116,6 +116,15 @@ export async function PATCH(
         { status: 400 },
       )
     } else {
+      // 🔴 先卡类型再谈数值。不卡的话 `true` / `[2000]` 这类 JSON 会被
+      //    `Number()` 悄悄转成 1 / 2000 写进库 —— 存进去的不是任何人填过的数字，
+      //    而库里的 `> 0` 约束对这种「转换出来的合法值」完全无感。
+      if (typeof rawAmount !== 'number' && typeof rawAmount !== 'string') {
+        return NextResponse.json(
+          { error: '月预算必须是数字（收到的是 ' + typeof rawAmount + '）' },
+          { status: 400 },
+        )
+      }
       const amount = toRealAmount(rawAmount)
       if (amount === null) {
         return NextResponse.json(

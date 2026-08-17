@@ -127,6 +127,15 @@ describe('toRealAmount —— 「没填」和「填了 0」必须分得开', () 
     expect(toRealAmount(2000)).toBe(2000)
     expect(toRealAmount('1234.56')).toBe(1234.56)
   })
+
+  it('🔴 只认数字和数字字符串 —— Number() 会把 true 变成 1、[2000] 变成 2000', () => {
+    // 不卡类型的话，一个坏掉的调用方能把「预算 1 元」写进库，
+    // 而库里的 > 0 约束对这种「转换出来的合法值」完全无感
+    expect(toRealAmount(true)).toBeNull()
+    expect(toRealAmount([2000])).toBeNull()
+    expect(toRealAmount({ amount: 2000 })).toBeNull()
+    expect(toRealAmount(() => 2000)).toBeNull()
+  })
 })
 
 describe('explorationPool', () => {
