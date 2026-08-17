@@ -49,7 +49,11 @@ export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
       {
         id: 'approval-surface-missing',
         kind: 'code',
-        summary: '审批/拒绝界面（K-WP01）未交付，须人工批的动作没有入口',
+        // 🔴 PM 让另一窗口审查发现半句过期(2026-08-17):PR #962 已合并,服务端边界
+        // 代码真实存在(src/lib/kernel-approval/),不能再写「未交付」。但结论没变——
+        // 一没有人能点的界面(#881 K-WP01 整体在 GitHub 上仍开着),二就算有界面,
+        // 内核 4 张表没建也全报错。「没有能用的入口」这个大白话结论依然成立。
+        summary: '服务端授权边界已合并(PR #962),但没有人能点的界面(#881 未交付)，就算有界面 4 张表没建也全报错——人工批的动作还是没有能用的入口',
         ref: '#881',
       },
     ],
