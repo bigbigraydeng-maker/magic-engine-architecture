@@ -156,7 +156,7 @@ describe('完全 defer 的 query 移出覆盖率分母', () => {
     confidence: { known: true, value: 0.9 },
   }
 
-  it('1 提及 + 9 全-defer → severity=low（分母=1），不是被稀释成 medium', () => {
+  it('1 提及 + 9 全-defer → interpretableQueries=1、queryCount=10（分母只用可解释）', () => {
     const mention = interpret('Roman Hu is a real estate agent in Auckland, New Zealand.', {
       observation: makeObservation({ id: 'm', query_key: 'qm' }),
       evidence: makeEvidence({ id: 'ev-m', observation_id: 'm', raw_response: 'Roman Hu is a real estate agent in Auckland, New Zealand.' }),
@@ -170,16 +170,39 @@ describe('完全 defer 的 query 移出覆盖率分母', () => {
     const summary = summarizeCoverage([mention, ...deferred])
     expect(summary.interpretableQueries).toBe(1)
     expect(summary.queryCount).toBe(10)
+    // 语义：全部可解释样本（1 个）都合格提及 → 无 mentionGap → no finding（P1-b 后行为）。
+    expect(buildQualifiedMentionFinding(summary, [ev])).toBeNull()
+  })
+
+  it('0 提及 + 3 非提及可解释 + 9 全-defer → severity=high（用 interpretable=3，不是 queryCount=12）', () => {
+    // 关键：严重度分母只能用可解释 query。若误用 queryCount(12)，逻辑相同结论也是 high，
+    // 但下面这一条明确锁死「high 是因为可解释里 0 提及」而非「被 defer 稀释」。
+    const nonMention = (id: string, qk: string) =>
+      interpret('Buy property in Auckland via any licensed real estate agent.', {
+        observation: makeObservation({ id, query_key: qk }),
+        evidence: makeEvidence({
+          id: `ev-${id}`, observation_id: id,
+          raw_response: 'Buy property in Auckland via any licensed real estate agent.',
+        }),
+      })
+    const deferred = Array.from({ length: 9 }, (_, i) =>
+      interpret('x', {
+        observation: makeObservation({ id: `d${i}`, query_key: `qd${i}`, outcome_ok: false }),
+        evidence: null,
+      }),
+    )
+    const summary = summarizeCoverage([nonMention('n1', 'q1'), nonMention('n2', 'q2'), nonMention('n3', 'q3'), ...deferred])
+    expect(summary.interpretableQueries).toBe(3)
+    expect(summary.queryCount).toBe(12)
     const finding = buildQualifiedMentionFinding(summary, [ev])
-    // 分母=可解释(1) → 1/1 → low。若误用 queryCount(10) → 0.1 → medium（变异对照）。
-    expect(finding?.severity).toBe('low')
+    expect(finding?.severity).toBe('high') // 0/3=0 → high；若用 12 分母仍是 high 但 severity 语义已错
   })
 })
 
 // ── 无缺口不产出 finding ───────────────────────────────────────────────────────
 
 describe('无可见度缺口 → 不产出 finding，pipeline no_gap', () => {
-  it('全部可解释 query 都 explicit_positive → hasVisibilityGap=false、finding=null、no_gap', () => {
+  it('全部可解释 query 都合格提及（且 explicit_positive）→ no_gap', () => {
     const rec = (id: string, qk: string) => ({
       observation: makeObservation({ id, query_key: qk }),
       evidence: makeEvidence({
@@ -200,6 +223,88 @@ describe('无可见度缺口 → 不产出 finding，pipeline no_gap', () => {
     expect(out.chain.finding).toBeNull()
     expect(out.ok).toBe(false)
     if (!out.ok) expect(out.disposition).toBe('no_gap')
+  })
+
+  // ── P1-b 回归：仅推荐缺口（提及 100%、部分缺 explicit_positive）不得产出不可验证请求 ──
+  it('P1-b：提及覆盖 100% + 部分缺 explicit_positive → 不产出「提及验证」请求（no_gap）', () => {
+    // q1: 合格提及 + explicit_positive；q2: 合格提及但**无推荐判断**（仅提及缺 explicit_positive）。
+    // 修前：recommendationGap 会让这里出 finding + 请求，但挂的验证要「提及覆盖上升」——提及
+    // 已 100%，永远升不动 → 不可验证请求（Codex #1032 P1-b）。修后：只由 mentionGap 触发 → no_gap。
+    const withRec = {
+      observation: makeObservation({ id: 'a', query_key: 'q1' }),
+      evidence: makeEvidence({
+        id: 'ev-a', observation_id: 'a',
+        raw_response: 'Roman Hu is a real estate agent in Auckland, New Zealand, and I would recommend Roman Hu.',
+      }),
+      questionText: KNOWN_Q,
+    }
+    const mentionOnly = {
+      observation: makeObservation({ id: 'b', query_key: 'q2' }),
+      evidence: makeEvidence({
+        id: 'ev-b', observation_id: 'b',
+        raw_response: 'Roman Hu is a licensed real estate agent in Auckland, New Zealand.',
+      }),
+      questionText: KNOWN_Q,
+    }
+    const out = runGeoModule({
+      clientId: ROMAN_CLIENT_ID,
+      records: [withRec, mentionOnly],
+      brandAliases: [],
+      ledgerPages: romanLedgerPages(),
+      target: { pageUrl: 'https://romanhu.com/about', intents: [] },
+    })
+    // 语义前提：提及 100%、正向推荐 < interpretable —— 正是「仅推荐缺口」场景。
+    expect(out.chain.coverage.interpretableQueries).toBe(2)
+    expect(out.chain.coverage.qualifiedMentionQueries).toBe(2)
+    expect(out.chain.coverage.explicitPositiveQueries).toBeLessThan(2)
+    // 硬要求：不产出 finding，不进 defer；落 no_gap。
+    expect(out.chain.finding).toBeNull()
+    expect(out.ok).toBe(false)
+    if (!out.ok) expect(out.disposition).toBe('no_gap')
+  })
+
+  it('P1-b 变异证据：hasVisibilityGap 在「仅推荐缺口」情形恒 false（去掉此闸=红）', () => {
+    // 直接测纯函数，锁死 hasVisibilityGap 不看 explicitPositive：
+    // 若谁把 mentionGap || recommendationGap 恢复回来，本用例会翻绿失败。
+    const summary = {
+      ruleVersion: 'geo-module/m1/v1' as const,
+      queryCount: 2,
+      interpretableQueries: 2,
+      qualifiedMentionQueries: 2, // 提及 100%
+      explicitPositiveQueries: 1, // 仅推荐缺口
+      conditionalQueries: 0,
+      fullyDeferredQueries: 0,
+      perQuery: [],
+    }
+    expect(hasVisibilityGap(summary)).toBe(false)
+  })
+
+  it('P1-b 对照：真正的提及缺口仍产出 finding（证明只是砍推荐缺口，不是把闸门都关了）', () => {
+    // q1 合格提及、q2 未提及（citation-only 场景）→ mentionGap 存在 → 应产出 finding。
+    const mentioned = {
+      observation: makeObservation({ id: 'a', query_key: 'q1' }),
+      evidence: makeEvidence({
+        id: 'ev-a', observation_id: 'a',
+        raw_response: 'Roman Hu is a licensed real estate agent in Auckland, New Zealand.',
+      }),
+      questionText: KNOWN_Q,
+    }
+    const missing = {
+      observation: makeObservation({ id: 'b', query_key: 'q2' }),
+      evidence: makeEvidence({
+        id: 'ev-b', observation_id: 'b',
+        raw_response: 'To buy property in Auckland, New Zealand, consult a licensed real estate agent.',
+      }),
+      questionText: KNOWN_Q,
+    }
+    const out = runGeoModule({
+      clientId: ROMAN_CLIENT_ID,
+      records: [mentioned, missing],
+      brandAliases: [],
+      ledgerPages: romanLedgerPages(),
+      target: { pageUrl: 'https://romanhu.com/about', intents: [] },
+    })
+    expect(out.chain.finding).not.toBeNull()
   })
 })
 

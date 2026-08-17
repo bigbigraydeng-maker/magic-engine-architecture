@@ -220,6 +220,36 @@ describe('§6 证据不足 → defer，绝不静默转 false/0', () => {
     expect(r.disposition).toBe('defer')
     expect(r.reasonCodes).toContain('confidence_below_threshold')
   })
+
+  // ── P1-a 回归：阈值对齐冻结策略 GEO_COMPARABILITY_POLICY_V1.minParserConfidence（=0.80）──
+  it('P1-a：阈值恒等于测量层冻结策略 minParserConfidence（0.80）', () => {
+    expect(DEFAULT_CONFIDENCE_THRESHOLD).toBe(0.8)
+  })
+
+  it('P1-a：confidence=0.79 → defer（低于策略下限）', () => {
+    const r = interpret('Roman Hu is a licensed real estate agent in Auckland, New Zealand.', {
+      confidence: 0.79,
+    })
+    expect(r.disposition).toBe('defer')
+    expect(r.reasonCodes).toContain('confidence_below_threshold')
+  })
+
+  it('P1-a：confidence=0.80 → 可解释（达到策略下限，不 defer）', () => {
+    const r = interpret('Roman Hu is a licensed real estate agent in Auckland, New Zealand.', {
+      confidence: 0.8,
+    })
+    expect(r.disposition).toBe('interpreted')
+    expect(r.reasonCodes).not.toContain('confidence_below_threshold')
+  })
+
+  it('P1-a 变异证据：若阈值退回 0.5，0.79 会错判为可解释（本 spec 用来锁 0.8 语义）', () => {
+    // 0.5 < 0.79 < 0.8：当前 0.8 阈值下 defer；若谁改回 0.5 阈值，同一输入会翻成 interpreted。
+    // 这条 spec 就是那道翻绿信号 —— 与上一条对照，锁死「阈值必须 >= 0.79 + epsilon」。
+    const r = interpret('Roman Hu is a licensed real estate agent in Auckland, New Zealand.', {
+      confidence: 0.79,
+    })
+    expect(r.disposition).not.toBe('interpreted')
+  })
 })
 
 describe('§6 结构化审计输出：血缘齐全', () => {

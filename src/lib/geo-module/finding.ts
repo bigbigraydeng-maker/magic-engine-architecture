@@ -97,15 +97,19 @@ function groupKeyOf(it: GeoObservationInterpretation): string {
 /**
  * 是否存在 AI 可见度缺口（M1：finding = 问题 / 机会，没缺口就不该产出 finding）。
  *
- * 🔴 只在有**可解释** query 且其中存在「未合格提及」或「未获显式正向推荐」时才算有缺口。
- *    可解释 query 为 0（全 defer / 无 query）→ 无法断言缺口，返回 false（走 defer，不硬判）。
- *    全部可解释 query 都已合格提及且都 explicit_positive → 无缺口，不产出 finding。
+ * 🔴 **v1 只由「合格提及缺口」触发**（Codex #1032 P1-b · PO 方案 A）。理由：本链挂的
+ *    验证是 `buildQualifiedMentionVerification`，成功判据是「合格提及覆盖相对基线上升」。
+ *    如果因「推荐缺口」也产出请求，会出现「提及覆盖已 100%、但缺 explicit_positive」的场景
+ *    ——那个请求就算把推荐修好，验证也永远升不动，本质是**不可验证的请求**。
+ *
+ * 🔴 「推荐缺口」不是不存在，而是**留给后续 WP** 拿真验证判据（独立 finding/指标/验证）
+ *    后再上；本链不掺推荐维度。
+ *
+ * 可解释 query 为 0（全 defer / 无 query）→ 无法断言缺口，返回 false（调用方走 defer，不硬判）。
  */
 export function hasVisibilityGap(summary: GeoCoverageSummary): boolean {
   if (summary.interpretableQueries === 0) return false
-  const mentionGap = summary.qualifiedMentionQueries < summary.interpretableQueries
-  const recommendationGap = summary.explicitPositiveQueries < summary.interpretableQueries
-  return mentionGap || recommendationGap
+  return summary.qualifiedMentionQueries < summary.interpretableQueries
 }
 
 /**

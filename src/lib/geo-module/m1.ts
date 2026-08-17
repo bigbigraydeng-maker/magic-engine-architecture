@@ -13,7 +13,7 @@
  */
 
 import type { GeoEvidenceRow, GeoObservationRow } from '@/lib/geo-measurement-store/types'
-import type { GeoCitation } from '@/lib/geo-measurement'
+import { GEO_COMPARABILITY_POLICY_V1, type GeoCitation } from '@/lib/geo-measurement'
 import type { GrowthMaybeUnknown } from '@/lib/growth'
 import {
   GEO_CANONICAL_ENTITY,
@@ -48,8 +48,15 @@ export interface GeoM1Input {
   readonly questionText: GrowthMaybeUnknown<string>
 }
 
-/** 解析置信度阈值。低于它或未知 → defer（M1 §6 末条）。注入以便测试与调参。 */
-export const DEFAULT_CONFIDENCE_THRESHOLD = 0.5
+/**
+ * 解析置信度阈值。低于它或未知 → defer（M1 §6 末条）。
+ *
+ * 🔴 **复用测量层冻结策略 `GEO_COMPARABILITY_POLICY_V1.minParserConfidence`（=0.80）**，
+ *    绝不裸写 `0.5`。同一测量体系不能一边判某观测「不满足质量线」、一边用它驱动处方
+ *    ——那正是 Codex #1032 P1-a 挑出的自相矛盾（geo-measurement/types.ts:277）。
+ *    改一处（冻结策略升版本）这里自动跟上。
+ */
+export const DEFAULT_CONFIDENCE_THRESHOLD = GEO_COMPARABILITY_POLICY_V1.minParserConfidence
 
 // ── 文本归一（M1 §1：Unicode 归一 + case-fold + 空白折叠） ─────────────────────
 
