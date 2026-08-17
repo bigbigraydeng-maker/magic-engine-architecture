@@ -75,9 +75,9 @@ Safe to run before OAuth (returns "❌ skip"), safe to run after OAuth (returns 
 
 ---
 
-## 4. T0 evidence — measurement state before this PR merges
+## 4. T0 evidence — pre/post PM runbook execution
 
-`verify-measurement.ts` run on 2026-08-18 against production:
+### 4.1 Pre-OAuth state (initial, 2026-08-18 early)
 
 ```
 [1] client_connectors rows: 0
@@ -90,7 +90,47 @@ Preconditions:
 [5] Skipping live pullback — preconditions not met.
 ```
 
-**This is the last snapshot of the "before" state.** After PM completes §2.1 + §2.2, re-running the script produces the "after" — that transition is the actual instrumentation moment. The PR body will link the two.
+### 4.2 Post-OAuth state (after PM completed §2.1 + §2.2, 2026-08-18)
+
+```
+[1] client_connectors rows: 2
+     google-ads: status=connected site_url=(none) connected_at=2026-08-17T13:27:51Z
+     gsc:        status=connected site_url=sc-domain:magicengine.com.au connected_at=2026-08-17T13:37:55Z
+[2] platform_oauth_connections rows: 1
+     google_gsc: status=active display=bigbigraydeng@gmail.com scopes=5
+[3] gsc_performance_snapshots rows matching magicengine.com.au: 0
+[4] ga4_traffic_snapshots rows: 0
+Preconditions:
+   GSC connector connected + site_url set: ✅
+   Google OAuth token active:              ✅
+[5] Pullback returned null — expected for a newly-connected property with no data yet.
+     GSC typically needs 24-48h after verification before search-analytics rows exist.
+```
+
+**Instrumentation timestamps (captured automatically, not manually asserted)**:
+
+| Signal | Timestamp | Source |
+|---|---|---|
+| GSC connector connected | **2026-08-17T13:37:55Z** | `client_connectors.connected_at` for `anchor='gsc'` |
+| GSC OAuth token granted | ≈ 2026-08-17T13:28Z (token_expiry - 3600s) | derived from `platform_oauth_connections.token_expiry=2026-08-17T14:28:16Z` |
+| GA4 property + Web stream created | 2026-08-18 (PM confirmed) | `analytics.google.com` UI action |
+| GA4 tag deployed to `magicengine.com.au` | **not yet — deferred** | Cloudflare Pages deploy is a separate authorization |
+| First GSC snapshot row | expected 24-48h after 2026-08-17T13:37Z (i.e. earliest 2026-08-19) | `gsc_performance_snapshots.created_at` |
+| First GA4 event | expected within seconds of Cloudflare deploy | `ga4_traffic_snapshots.created_at` after cron pull |
+
+**Any T+ remeasurement window must start no earlier than the corresponding row above.** Per PM run rule "not_measured ≠ 0", the period before each timestamp remains `not_measured`, never `0`.
+
+### 4.3 Real identifiers (public, non-secret — safe to record)
+
+| System | Identifier | Notes |
+|---|---|---|
+| Google Ads pixel | `AW-18192230281` | Pre-existing, unchanged |
+| Google Tag container | `GT-PBNTPHCJ` | Informational — PM's GTM container "Magic Engine Agency". This PR loads `gtag.js` **directly** (not via GTM), so `GT-PBNTPHCJ` is not referenced in `website/google-tag.js`. Future migration to GTM would replace the direct loader with the GTM snippet. |
+| GA4 Measurement ID | `G-4JL29VZ1L4` | Written to `website/google-tag.js:16` this PR (replaces `G-XXXXXXXXXX` placeholder). Public identifier — visible in page source once deployed. |
+| GA4 Stream ID | `15451115029` | Recorded here for provenance; not written into any code path (Data API queries key on Property ID, not Stream ID). |
+| GA4 Property ID | **pending PM's next step** | Needed when inserting the GA4 `client_connectors` row (`config.property_id`). PM captures this via ME's UI: after Google OAuth done, ME's GA4 property picker calls `/api/clients/[id]/ga4-properties` and PM selects — the Property ID is written into the connector config at that point. |
+| OAuth grantor account | `bigbigraydeng@gmail.com` | Same account that owns the DNS-verified GSC property (`sc-domain:magicengine.com.au`). |
+| OAuth scopes granted | `webmasters.readonly`, `analytics.readonly`, `indexing`, `userinfo.email`, `openid` | 5 scopes — covers both GSC pullback and GA4 pullback via the same token. |
 
 ---
 
@@ -109,15 +149,15 @@ Preconditions:
 
 ## 6. Known gaps (this PR closes some, flags others)
 
-| Gap | Status after PR merges | Owner |
+| Gap | Status | Owner |
 |---|---|---|
-| GSC OAuth connector | **Documented + verify script**; actual OAuth is a PM UI step (§2.1) | PM |
-| GA4 property + web stream | **Documented**; requires PM Google Analytics UI action (§2.2) | PM |
-| GA4 Measurement ID placeholder | **Placeholder shipped**, PM replaces after property exists (§2.2 step 2) | PM |
-| `website/` deploy | **Not deployed**; PM authorises separately (§2.2 step 4) | PM |
-| First GSC snapshot | **Deferred to post-OAuth**; verify script attempts it once preconditions are met | Automated after §2 |
-| First GA4 event | **Deferred to post-deploy**; visible in GA4 Realtime once §2.2 step 4 completes | Automated after §2 |
-| Instrumentation timestamp | **Not yet set**; will be captured as (a) the OAuth callback timestamp in `platform_oauth_connections.created_at` for GSC, (b) the Cloudflare deploy timestamp for GA4 | Captured automatically once §2 completes |
+| GSC OAuth connector | ✅ **Done** — PM completed OAuth grant 2026-08-17T13:37Z; connector `status='connected'` with `site_url=sc-domain:magicengine.com.au` | Done |
+| GA4 property + Web stream | ✅ **Done** — Measurement ID `G-4JL29VZ1L4`, Stream ID `15451115029` | Done |
+| GA4 Measurement ID in code | ✅ **Done** — `website/google-tag.js:16` now `G-4JL29VZ1L4` (replaces placeholder) | Done |
+| GA4 `client_connectors` row (property_id in config) | ⚠️ Pending — PM picks property via ME's UI (`/dashboard/clients/[id]/settings?tab=connect` → GA4 property panel) after this PR merges. That flow captures Property ID and inserts `client_connectors` row for `anchor='ga4'`. | PM |
+| `website/` deploy to Cloudflare Pages | ⚠️ **Not deployed** — separately authorised per #1052 boundary | PM |
+| First GSC snapshot row | ⚠️ Pending — GSC needs 24-48h after verification to populate search-analytics; verify script attempted pullback and got null (expected). Re-run the verify script after 2026-08-19 to catch the first non-null pullback. | Automated once GSC has data |
+| First GA4 event | ⚠️ Pending — visible in GA4 Realtime once `website/` deploys with the new `google-tag.js` | Automated after deploy |
 
 ---
 

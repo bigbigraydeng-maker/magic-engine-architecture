@@ -80,8 +80,14 @@ async function main() {
   console.log(`\n[5] Attempting live GSC pullback for ${siteUrl}...`)
   try {
     const snapshot = await fetchGscSnapshot({ clientId: CLIENT_ID, siteUrl, periodDays: 7 })
-    console.log(`     ✅ Snapshot fetched: totalClicks=${snapshot.total_clicks} totalImpressions=${snapshot.total_impressions}`)
-    console.log(`     Persist to DB: use POST /api/clients/${CLIENT_ID}/gsc/sync to store an official snapshot row`)
+    if (snapshot === null) {
+      console.log(`     ⚠️ Pullback returned null — expected for a newly-connected property with no data yet`)
+      console.log(`     GSC typically needs 24-48h after verification before search-analytics rows exist.`)
+      console.log(`     Re-run this script tomorrow; if still null, check that ${siteUrl} shows data in the Search Console UI.`)
+    } else {
+      console.log(`     ✅ Snapshot fetched: totalClicks=${snapshot.total_clicks} totalImpressions=${snapshot.total_impressions}`)
+      console.log(`     Persist to DB: use POST /api/clients/${CLIENT_ID}/gsc/sync to store an official snapshot row`)
+    }
   } catch (err) {
     const msg = err instanceof GscApiError ? `GscApiError: ${err.message}` : String(err)
     console.log(`     ❌ Pullback failed: ${msg}`)
