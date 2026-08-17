@@ -47,6 +47,13 @@ describe('defaultConfig', () => {
     expect(c.enabled).toBe(true)
     expect(c.digest_recipients).toEqual([])
   })
+
+  it('🔴 月预算默认是 null，不给任何猜测值 —— 猜出来的池子是真要花出去的钱', () => {
+    const c = defaultConfig('client-1')
+    expect(c.monthly_ad_budget).toBeNull()
+    expect(c.monthly_ad_budget_currency).toBeNull()
+    expect(c.monthly_ad_budget_updated_at).toBeNull()
+  })
 })
 
 describe('resolveDigestRecipients', () => {
@@ -55,18 +62,18 @@ describe('resolveDigestRecipients', () => {
   afterEach(() => { if (OLD) process.env.AD_HEALTH_DIGEST_TO = OLD; else delete process.env.AD_HEALTH_DIGEST_TO })
 
   it('uses the client list when set', () => {
-    expect(resolveDigestRecipients({ client_id: 'x', enabled: true, digest_recipients: ['a@b.com', 'c@d.com'] }))
+    expect(resolveDigestRecipients({ digest_recipients: ['a@b.com', 'c@d.com'] }))
       .toEqual(['a@b.com', 'c@d.com'])
   })
 
   it('falls back to the env inbox when the client list is empty', () => {
     process.env.AD_HEALTH_DIGEST_TO = 'ops@magicengine.com.au'
-    expect(resolveDigestRecipients({ client_id: 'x', enabled: true, digest_recipients: [] }))
+    expect(resolveDigestRecipients({ digest_recipients: [] }))
       .toEqual(['ops@magicengine.com.au'])
   })
 
   it('falls back to the shared verified-domain ME inbox when no env is set', () => {
-    expect(resolveDigestRecipients({ client_id: 'x', enabled: true, digest_recipients: [] }))
+    expect(resolveDigestRecipients({ digest_recipients: [] }))
       .toEqual(['hello@magicengine.cloud'])
   })
 })

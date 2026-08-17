@@ -66,6 +66,8 @@ export type ManualItemKind =
   | CommentScopeTodoKind
   /** 执行内核停手 / 等审批 / 被规则挡下 —— 必须有人看见，不许死在日志里 */
   | 'kernel_needs_human'
+  /** 在投广告却没登记月预算 —— 角度测试 SOP 的探索池算不出来 */
+  | 'ads_budget_unknown'
   | AttributionItemKind
   | ClientRosterItemKind
 
@@ -126,6 +128,7 @@ import { fetchBlogDraftTodos } from '@/lib/pm-todo/blog-drafts'
 import { fetchAutoRunTodos } from '@/lib/pm-todo/auto-run-items'
 import { fetchCommentScopeTodos, type CommentScopeTodoKind } from '@/lib/pm-todo/comment-scope-items'
 import { fetchKernelHandoffTodos } from '@/lib/kernel/handoff'
+import { fetchAdsAngleTestTodos } from '@/lib/pm-todo/ads-angle-test-items'
 import { auditCrossClientLeaks } from '@/lib/clients/cross-client-audit'
 import { containsPriceClaim } from '@/lib/content/price-claim'
 import { judgeOutgoingPost } from '@/lib/content/price-claim-gate'
@@ -251,6 +254,12 @@ export async function loadManualItems(
   // 执行内核停手的 / 等你点头的 / 被规则挡下的 —— 死信不许只写进库里没人看
   await pushKernelItems(supabase, items, now, nameOf).catch((e) =>
     console.warn('[manual-items] 执行内核待办生成失败（不阻塞其他待办）:', e),
+  )
+
+  // 在投广告但没登记月预算 —— 角度测试 SOP 的第一步就卡在这，
+  // 而它此前只写在文档里等人想起来翻（铁律 3 下半句：发现不许死在文档里）。
+  await pushAdsBudgetItems(supabase, items, now, nameOf).catch((e) =>
+    console.warn('[manual-items] 广告预算待办生成失败（不阻塞其他待办）:', e),
   )
 
   // 客户之间有没有串台 —— PM 2026-08-05：「坚决不能胡窜」。
@@ -960,6 +969,35 @@ async function pushKernelItems(
   for (const t of todos) {
     items.push({
       kind: 'kernel_needs_human',
+      client_id: t.client_id,
+      client_name: nameOf(t.client_id),
+      what: t.what,
+      how: t.how,
+      href: t.href,
+    })
+  }
+}
+
+/**
+ * 在投广告却没登记月广告预算 → 下发。
+ *
+ * 判定与文案都在 `ads-angle-test-items.ts`，那边直接读本月真实花费，
+ * 所以这里说的话跟账上发生的事永远一致。
+ *
+ * 🔴 这条是 SOP《Meta 广告角度测试与预算分配》的管道出口。没有它，
+ *    「这个客户的探索池算不出来」只存在于那份文档的 §6b 里 ——
+ *    而文档不会自己找上门，跟死在日志里是同一个毛病。
+ */
+async function pushAdsBudgetItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+  nameOf: (id: string) => string,
+): Promise<void> {
+  const todos = await fetchAdsAngleTestTodos(supabase, now)
+  for (const t of todos) {
+    items.push({
+      kind: 'ads_budget_unknown',
       client_id: t.client_id,
       client_name: nameOf(t.client_id),
       what: t.what,

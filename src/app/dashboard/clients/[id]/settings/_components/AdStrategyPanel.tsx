@@ -21,9 +21,15 @@ interface Props {
   clientId: string
 }
 
+type BudgetCurrency = 'AUD' | 'NZD'
+
 interface Config {
   enabled: boolean
   digest_recipients: string[]
+  /** 这个月**准备投**多少（不是已经花了多少）。null = 还没问到。 */
+  monthly_ad_budget: number | null
+  monthly_ad_budget_currency: BudgetCurrency | null
+  monthly_ad_budget_updated_at: string | null
 }
 
 type PanelState =
@@ -41,6 +47,8 @@ function parseRecipients(raw: string): string[] {
 export function AdStrategyPanel({ clientId }: Props) {
   const [state, setState] = useState<PanelState>({ phase: 'loading' })
   const [recipientsDraft, setRecipientsDraft] = useState('')
+  const [budgetDraft, setBudgetDraft] = useState('')
+  const [currencyDraft, setCurrencyDraft] = useState<BudgetCurrency>('NZD')
   const [saving, setSaving] = useState(false)
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
 
@@ -52,6 +60,8 @@ export function AdStrategyPanel({ clientId }: Props) {
       const { config } = (await res.json()) as { config: Config }
       setState({ phase: 'ready', config })
       setRecipientsDraft(config.digest_recipients.join('\n'))
+      setBudgetDraft(config.monthly_ad_budget === null ? '' : String(config.monthly_ad_budget))
+      if (config.monthly_ad_budget_currency) setCurrencyDraft(config.monthly_ad_budget_currency)
     } catch (err) {
       setState({ phase: 'error', message: err instanceof Error ? err.message : String(err) })
     }
@@ -72,11 +82,22 @@ export function AdStrategyPanel({ clientId }: Props) {
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`)
       setState({ phase: 'ready', config: json.config })
       setRecipientsDraft(json.config.digest_recipients.join('\n'))
+      setBudgetDraft(
+        json.config.monthly_ad_budget === null ? '' : String(json.config.monthly_ad_budget),
+      )
+      if (json.config.monthly_ad_budget_currency) {
+        setCurrencyDraft(json.config.monthly_ad_budget_currency)
+      }
       setBanner({ kind: 'ok', text: okText })
-    } catch {
-      // Humanised — never surface the raw backend string, and reassure that
-      // nothing was lost so the FDE knows the old setting still stands.
-      setBanner({ kind: 'err', text: '保存没成功,原来的设置还在。请稍后重试。' })
+    } catch (err) {
+      // 🔴 预算这一项要把后端的具体理由说出来（金额不合法 / 币种没选 / 只填了一半）。
+      //    其余项沿用原来的兜底话术：不外泄原始错误串，并明确「原设置还在」。
+      const detail = err instanceof Error ? err.message : ''
+      const isValidation = /预算|币种|金额/.test(detail)
+      setBanner({
+        kind: 'err',
+        text: isValidation ? detail : '保存没成功,原来的设置还在。请稍后重试。',
+      })
     } finally {
       setSaving(false)
     }
@@ -98,6 +119,33 @@ export function AdStrategyPanel({ clientId }: Props) {
       return
     }
     save({ digest_recipients: emails }, emails.length > 0 ? `已保存 ${emails.length} 个收件人。` : '已清空收件人,改发到 ME 团队默认邮箱。')
+  }
+
+  /**
+   * 月预算保存。
+   *
+   * 🔴 清空 = 两个字段都置空，**不是填 0**。0 会被数据库的 `> 0` 约束拒掉，
+   *    而且「这个月不投广告」和「预算是零元」是两件事：前者不该算探索池，
+   *    后者会算出一个 0 元的池子、看起来像「算过了，结论是别测」。
+   */
+  const saveBudget = () => {
+    const raw = budgetDraft.trim()
+    if (raw === '') {
+      save(
+        { monthly_ad_budget: null, monthly_ad_budget_currency: null },
+        '已清空月预算。这个客户这个月不按 20% 探索池的规矩跑角度测试。',
+      )
+      return
+    }
+    const n = Number(raw)
+    if (!Number.isFinite(n) || n <= 0) {
+      setBanner({ kind: 'err', text: '月预算要填一个大于 0 的数字,比如 2000。这个月不投就整个留空。' })
+      return
+    }
+    save(
+      { monthly_ad_budget: n, monthly_ad_budget_currency: currencyDraft },
+      `已保存月预算 ${currencyDraft} ${n.toLocaleString('en-US')}，探索池 ${currencyDraft} ${Math.round(n * 0.2).toLocaleString('en-US')}。`,
+    )
   }
 
   if (state.phase === 'loading') {
@@ -185,6 +233,67 @@ export function AdStrategyPanel({ clientId }: Props) {
           已暂停。{savedCount > 0 ? `收件人已保存(${savedCount} 人),重新开启即恢复。` : '重新开启即恢复每天体检。'}
         </p>
       )}
+
+      {/* 月广告预算 —— 刻意不跟着上面的开关走：预算是投放规矩的输入，
+          跟「要不要每天体检」是两件事,把监测关掉不代表这个月不投广告。 */}
+      <div className="mt-5 border-t border-gray-100 pt-4">
+        <label className="block text-sm font-medium text-gray-700">月广告预算</label>
+        <p className="mt-0.5 text-xs text-gray-400">
+          这个客户这个月<span className="text-gray-700">准备投</span>多少 ——
+          <span className="text-gray-700">不是已经花了多少</span>。
+          按投放规矩，每月拿其中 20% 出来试没验证过的说法；没有这个数就算不出来。
+        </p>
+
+        <div className="mt-2 flex items-center gap-2">
+          <select
+            value={currencyDraft}
+            onChange={e => setCurrencyDraft(e.target.value as BudgetCurrency)}
+            aria-label="预算币种"
+            className="rounded-lg border border-gray-200 px-2 py-1.5 text-sm focus:border-gray-400 focus:outline-none"
+          >
+            <option value="NZD">NZD</option>
+            <option value="AUD">AUD</option>
+          </select>
+          <input
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="50"
+            value={budgetDraft}
+            onChange={e => setBudgetDraft(e.target.value)}
+            placeholder="2000"
+            aria-label="月广告预算金额"
+            className="w-40 rounded-lg border border-gray-200 px-2 py-1.5 text-sm focus:border-gray-400 focus:outline-none"
+          />
+          <button
+            type="button"
+            disabled={saving}
+            onClick={saveBudget}
+            className="rounded-lg bg-gray-800 px-3 py-1.5 text-sm text-white hover:bg-gray-700 disabled:opacity-50"
+          >
+            保存预算
+          </button>
+        </div>
+
+        {config.monthly_ad_budget !== null && config.monthly_ad_budget_currency ? (
+          <p className="mt-2 text-xs text-gray-500">
+            当前：{config.monthly_ad_budget_currency}{' '}
+            {config.monthly_ad_budget.toLocaleString('en-US')} / 月 · 其中探索池{' '}
+            <span className="text-gray-700">
+              {config.monthly_ad_budget_currency}{' '}
+              {Math.round(config.monthly_ad_budget * 0.2).toLocaleString('en-US')}
+            </span>
+            {config.monthly_ad_budget_updated_at
+              ? ` · 最后更新 ${config.monthly_ad_budget_updated_at.slice(0, 10)}`
+              : ''}
+          </p>
+        ) : (
+          <p className="mt-2 text-xs text-amber-600">
+            还没填 —— 这个客户只要还在投广告，今日待办里就会一直提醒。
+            这个月确实不投就留空，不要填 0。
+          </p>
+        )}
+      </div>
     </div>
   )
 }
