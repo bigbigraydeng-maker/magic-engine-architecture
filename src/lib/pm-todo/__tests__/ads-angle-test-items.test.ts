@@ -38,12 +38,21 @@ interface ConfigRow {
   monthly_ad_budget_updated_at?: unknown
 }
 
+/** 记录假件被怎么调用的 —— 用来证明「真的走了分页」，而不是只看结果对不对。 */
+const calls = { ranged: false }
+
+/** 空的一页：`fetchAll` 见到它就停。 */
+function emptyPage() {
+  return Promise.resolve({ data: [], error: null })
+}
+
 function fakeSupabase(opts: {
   insights?: InsightRow[]
   insightsError?: string
   configs?: ConfigRow[]
   configsError?: string
 }) {
+  calls.ranged = false
   return {
     from(table: string) {
       // 🔴 假件必须真的执行 `.in('client_id', …)` 过滤。
@@ -76,6 +85,12 @@ function fakeSupabase(opts: {
       const chain: Record<string, unknown> = {}
       chain.select = () => chain
       chain.gte = () => chain
+      chain.order = () => chain
+      chain.range = (from: number) => {
+        calls.ranged = true
+        // 只有第一页有数据：fetchAll 见到不满一页就收工
+        return from === 0 ? chain : emptyPage()
+      }
       chain.in = (col: string, vals: string[]) => {
         filters[col] = vals
         return chain
@@ -185,6 +200,15 @@ describe('loadMonthSpendByClient', () => {
     expect(await loadMonthSpendByClient(fakeSupabase({}), NOW, [])).toEqual([])
   })
 
+  it('🔴 必须走分页读全 —— PostgREST 硬顶 1000 行且不报错，截断后分组会让排在后面的客户整个消失', async () => {
+    await loadMonthSpendByClient(
+      fakeSupabase({ insights: [{ client_id: 'oztop', level: 'campaign', spend: 10 }] }),
+      NOW,
+      ACTIVE,
+    )
+    expect(calls.ranged).toBe(true)
+  })
+
   it('读不到就当没有，不炸（不阻塞其他待办）', async () => {
     expect(
       await loadMonthSpendByClient(fakeSupabase({ insightsError: 'boom' }), NOW, ACTIVE),
@@ -242,6 +266,40 @@ describe('loadBudgetStateByClient —— 预算按月失效', () => {
   it('只填金额没填币种 → missing（AD-CUR-1 的同一个洞）', async () => {
     const m = await loadBudgetStateByClient(
       fakeSupabase({ configs: [row({ monthly_ad_budget_currency: null })] }),
+      ['oztop'],
+      NOW,
+    )
+    expect(m!.get('oztop')!.status).toBe('missing')
+  })
+
+  it('🔴 这个月清空过 → declined（本月确认不投），不是 missing', async () => {
+    const m = await loadBudgetStateByClient(
+      fakeSupabase({
+        configs: [
+          row({
+            monthly_ad_budget: null,
+            monthly_ad_budget_currency: null,
+            monthly_ad_budget_updated_at: '2026-08-11T00:00:00Z',
+          }),
+        ],
+      }),
+      ['oztop'],
+      NOW,
+    )
+    expect(m!.get('oztop')!.status).toBe('declined')
+  })
+
+  it('🔴 上个月清空的不算数 → missing —— 上个月不投不代表这个月也不投', async () => {
+    const m = await loadBudgetStateByClient(
+      fakeSupabase({
+        configs: [
+          row({
+            monthly_ad_budget: null,
+            monthly_ad_budget_currency: null,
+            monthly_ad_budget_updated_at: '2026-07-11T00:00:00Z',
+          }),
+        ],
+      }),
       ['oztop'],
       NOW,
     )
@@ -377,6 +435,25 @@ describe('fetchAdsAngleTestTodos', () => {
       ['cts'], // oztop 已停用
     )
     expect(todos.map((t) => t.client_id)).toEqual(['cts'])
+  })
+
+  it('🔴 本月确认不投的客户不再被催 —— 否则「留空」就是一个做了也没用的指示', async () => {
+    const todos = await fetchAdsAngleTestTodos(
+      fakeSupabase({
+        insights: [spending[0]], // 月初花过钱，之后确认本月停投
+        configs: [
+          {
+            client_id: 'oztop',
+            monthly_ad_budget: null,
+            monthly_ad_budget_currency: null,
+            monthly_ad_budget_updated_at: '2026-08-11T00:00:00Z',
+          },
+        ],
+      }),
+      NOW,
+      ACTIVE,
+    )
+    expect(todos).toEqual([])
   })
 
   it('没在投广告的客户不打扰 —— 没投就还不需要定预算', async () => {

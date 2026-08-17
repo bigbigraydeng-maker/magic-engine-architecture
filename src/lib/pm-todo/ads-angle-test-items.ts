@@ -28,6 +28,8 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { toRealAmount } from '@/lib/ads-strategy/config'
+import { businessMonthStart, isInBusinessMonth } from '@/lib/ads-strategy/business-month'
+import { fetchAll } from '@/lib/supabase-paginate'
 
 export interface AdsAngleTestTodo {
   client_id: string
@@ -49,33 +51,8 @@ export function explorationPool(monthlyBudget: number): number {
   return monthlyBudget * EXPLORATION_BUDGET_SHARE
 }
 
-/**
- * 「业务月份」按 **NZ 本地时间** 算，不按 UTC。
- *
- * 🔴 `ad_daily_insights.insight_date` 是广告账户所在地的**本地日期**（AU/NZ），
- *    而今日待办的 cron 固定 19:00 UTC 跑。用 UTC 算月初会在每月第一天出错：
- *    9 月 1 日 07:00 NZ 时，UTC 还是 8 月 31 日 → 窗口从 8 月 1 日开始 →
- *    把上个月一整月的花费当成「这个月」报出来。
- *
- *    取 NZ 而不是 AU：19:00 UTC 那一刻 NZ(+12/13) 与 AU(+10/11) 都已进入新的
- *    一天，两边同月；而 NZ 是本仓主市场（CLAUDE.md 时区写的是 NZST/AEST）。
- *    ⚠️ 严格说每个账户该按自己的时区切，但账户时区目前没落库；跨月那两小时的
- *    误差只影响「AU 账户在月末最后两小时的花费算进哪个月」，不影响判定结论。
- */
-export function businessMonth(d: Date): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Pacific/Auckland',
-    year: 'numeric',
-    month: '2-digit',
-  })
-    .format(d)
-    .slice(0, 7)
-}
-
-/** 本业务月的第一天，`YYYY-MM-DD`，用来截 `insight_date`。 */
-export function businessMonthStart(d: Date): string {
-  return `${businessMonth(d)}-01`
-}
+// 业务月份判据是**一份**，服务端与设置页共用，见 ads-strategy/business-month.ts
+export { businessMonth, businessMonthStart } from '@/lib/ads-strategy/business-month'
 
 /** 该客户这个月在 Meta 上花掉的钱（账户币种，本表没有币种列）。 */
 interface MonthSpend {
@@ -106,20 +83,40 @@ export async function loadMonthSpendByClient(
   if (activeClientIds.length === 0) return []
   const monthStart = businessMonthStart(now)
 
-  const { data, error } = await supabase
-    .from('ad_daily_insights')
-    .select('client_id, level, spend')
-    .gte('insight_date', monthStart)
-    .in('client_id', activeClientIds)
-    .in('level', ['campaign', 'ad'])
-
-  if (error) {
-    console.warn('[ads-angle-test] 本月花费读取失败（不阻塞其他待办）:', error.message)
+  /**
+   * 🔴 必须分页读全。PostgREST 单次查询**硬顶 1000 行且不报错**
+   *    （`supabase-paginate.ts` 记着 2026-07-29 静默丢 271 条触点那次事故）。
+   *
+   *    这里被截断的后果特别隐蔽：分组是在截断**之后**做的，所以排在后面的客户
+   *    可能整个不出现在结果里 —— 他就永远收不到预算待办，而系统看起来一切正常。
+   *    这正是本功能要修的那类「发现死在暗处」的毛病，不能自己再造一个。
+   *
+   *    ad 级明细一个月轻易上千行（`daily-insights.ts` 自己写过一次 30 天回填
+   *    就可能有数千行），所以这不是理论风险。
+   */
+  let data: Array<{ client_id: string; level: string; spend: unknown }>
+  try {
+    data = await fetchAll<{ client_id: string; level: string; spend: unknown }>((from, to) =>
+      supabase
+        .from('ad_daily_insights')
+        .select('client_id, level, spend')
+        .gte('insight_date', monthStart)
+        .in('client_id', activeClientIds)
+        .in('level', ['campaign', 'ad'])
+        // range 必须配稳定排序，否则分页之间会重复或漏行
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+  } catch (e) {
+    console.warn(
+      '[ads-angle-test] 本月花费读取失败（不阻塞其他待办）:',
+      e instanceof Error ? e.message : e,
+    )
     return []
   }
 
   const byClient = new Map<string, { campaign: number; ad: number; any: boolean }>()
-  for (const row of (data ?? []) as Array<{ client_id: string; level: string; spend: unknown }>) {
+  for (const row of data) {
     const cur = byClient.get(row.client_id) ?? { campaign: 0, ad: 0, any: false }
     const amount = toRealAmount(row.spend) ?? 0
     if (row.level === 'campaign') cur.campaign += amount
@@ -148,7 +145,18 @@ export async function loadMonthSpendByClient(
  *    当成 `filled` 的话，9 月的待办永远不出现，FDE 也就永远不会去确认，
  *    而系统会拿着上个月的池子继续算 —— 一个没人复核过的花钱额度。
  */
-export type BudgetStatus = 'filled' | 'stale' | 'missing'
+/**
+ * 🔴 `declined` 也必须是独立的一档。
+ *
+ *    待办和设置页都告诉 FDE「这个月确实不投广告就留空」，但**留空之后如果跟
+ *    「压根没问过」长得一模一样**，第二天这条待办照旧冒出来 —— 一直催到月底。
+ *    那就是给了一个「做了也没用」的指示，比不给指示更糟。
+ *
+ *    判据不用新加列：清空时接口会写 `monthly_ad_budget_updated_at`，
+ *    所以「金额为空 + 时间戳落在本业务月」= 这个月有人明确清过 = 已确认不投；
+ *    「金额为空 + 时间戳缺失或是上个月的」= 从没问过 / 上个月的决定不算数。
+ */
+export type BudgetStatus = 'filled' | 'stale' | 'missing' | 'declined'
 
 export interface BudgetState {
   status: BudgetStatus
@@ -177,7 +185,6 @@ export async function loadBudgetStateByClient(
     return null
   }
 
-  const thisMonth = businessMonth(now)
   const out = new Map<string, BudgetState>()
   for (const row of (data ?? []) as Array<{
     client_id: string
@@ -193,18 +200,34 @@ export async function loadBudgetStateByClient(
     const updatedAt =
       typeof row.monthly_ad_budget_updated_at === 'string' ? row.monthly_ad_budget_updated_at : null
 
+    const touchedThisMonth = isInBusinessMonth(updatedAt, now)
+
+    /**
+     * 🔴 「干净地清空」才算确认不投 —— 金额和币种**都**是空。
+     *
+     *    不能用「金额算不出有效值」当判据：填了 0、填了负数、只填了币种没填
+     *    金额，这些都是**填错**，不是「确认不投」。当成 declined 的话，
+     *    一个手滑填 0 的客户会被永久标成「本月不投」，再也没人去问 ——
+     *    而他其实正在花钱。方向必须反过来：拿不准就继续催。
+     */
+    const cleanlyCleared =
+      (row.monthly_ad_budget === null || row.monthly_ad_budget === undefined) && currency === null
+
     // 成对才算填过（与 config.ts 读侧口径一致）
     if (amount === null || currency === null) {
-      out.set(row.client_id, { status: 'missing', amount: null, currency: null, updatedAt })
+      out.set(row.client_id, {
+        status: cleanlyCleared && touchedThisMonth ? 'declined' : 'missing',
+        amount: null,
+        currency: null,
+        updatedAt,
+      })
       continue
     }
 
     // 填过，但是不是**这个月**填的？时间戳解析不出来时按 stale 处理 ——
     // 方向安全：多问一次，好过拿一个说不清是哪个月的数字去算花钱额度。
-    const ts = updatedAt ? Date.parse(updatedAt) : NaN
-    const fresh = Number.isFinite(ts) && businessMonth(new Date(ts)) === thisMonth
     out.set(row.client_id, {
-      status: fresh ? 'filled' : 'stale',
+      status: touchedThisMonth ? 'filled' : 'stale',
       amount,
       currency,
       updatedAt,
@@ -250,7 +273,8 @@ export async function fetchAdsAngleTestTodos(
       currency: null,
       updatedAt: null,
     }
-    if (state.status === 'filled') continue
+    // filled = 这个月填了预算；declined = 这个月明确说了不投。两者都不用再催。
+    if (state.status === 'filled' || state.status === 'declined') continue
 
     /**
      * 🔴 金额只敢说到「账户口径」，不敢说成「这个客户花的」。

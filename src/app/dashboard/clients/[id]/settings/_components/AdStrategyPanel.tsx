@@ -16,6 +16,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
+import { isInBusinessMonth } from '@/lib/ads-strategy/business-month'
 
 interface Props {
   clientId: string
@@ -133,7 +134,7 @@ export function AdStrategyPanel({ clientId }: Props) {
     if (raw === '') {
       save(
         { monthly_ad_budget: null, monthly_ad_budget_currency: null },
-        '已清空月预算。这个客户这个月不按 20% 探索池的规矩跑角度测试。',
+        '已记成「本月确认不投广告」—— 今日待办不再提醒。改主意就填个数再保存。',
       )
       return
     }
@@ -161,6 +162,13 @@ export function AdStrategyPanel({ clientId }: Props) {
 
   const { config } = state
   const savedCount = config.digest_recipients.length
+  /**
+   * 这个预算（或「不投」的决定）是不是**这个月**确认的。
+   *
+   * 判据跟今日待办用的是**同一份代码**（`ads-strategy/business-month.ts`）——
+   * 两边各写一份必然分家，然后就会出现「界面说填好了、待办还在催」。
+   */
+  const budgetIsCurrentMonth = isInBusinessMonth(config.monthly_ad_budget_updated_at, new Date())
 
   return (
     <div className="rounded-xl border border-gray-200 p-5">
@@ -284,13 +292,29 @@ export function AdStrategyPanel({ clientId }: Props) {
               {Math.round(config.monthly_ad_budget * 0.2).toLocaleString('en-US')}
             </span>
             {config.monthly_ad_budget_updated_at
-              ? ` · 最后更新 ${config.monthly_ad_budget_updated_at.slice(0, 10)}`
+              ? ` · ${config.monthly_ad_budget_updated_at.slice(0, 10)} 确认`
               : ''}
+            {!budgetIsCurrentMonth && (
+              <span className="text-amber-600">
+                {' '}
+                · ⚠️ 这是上个月确认的，本月还没复核（今日待办会提醒）
+              </span>
+            )}
+          </p>
+        ) : budgetIsCurrentMonth ? (
+          /* 金额为空、但这个月有人动过 = 明确清空了 = 本月确认不投。
+             这一档必须跟「还没填」分开显示，否则 FDE 会以为自己刚才那下没生效。 */
+          <p className="mt-2 text-xs text-gray-500">
+            本月已确认<span className="text-gray-700">不投广告</span>
+            {config.monthly_ad_budget_updated_at
+              ? `（${config.monthly_ad_budget_updated_at.slice(0, 10)} 确认）`
+              : ''}
+            ，今日待办不再提醒。改主意就直接填个数保存。
           </p>
         ) : (
           <p className="mt-2 text-xs text-amber-600">
             还没填 —— 这个客户只要还在投广告，今日待办里就会一直提醒。
-            这个月确实不投就留空，不要填 0。
+            这个月确实不投就留空保存一次（会记成「本月确认不投」），不要填 0。
           </p>
         )}
       </div>
