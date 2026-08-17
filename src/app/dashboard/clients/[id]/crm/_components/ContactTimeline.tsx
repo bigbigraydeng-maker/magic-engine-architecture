@@ -44,6 +44,11 @@ export interface TimelineEntry {
    * 而系统据这个 true 全渠道停联。只看 `outcome` 会漏掉整条外呼渠道。
    */
   dncFlag?: boolean
+  /**
+   * `raw` 里装的是逐字原话还是 AI 摘要。外呼那条路写的是模型生成的通话摘要，
+   * 标成「原话」会让销售以为自己在看客人说的话。
+   */
+  rawKind?: 'verbatim' | 'ai_summary'
   tour?: string | null
   outcome?: string | null
   travelWindow?: string | null
@@ -274,7 +279,10 @@ function Verdict({ e }: { e: TimelineEntry }) {
     <>
       {e.raw && e.raw !== e.summary && (
         <p className="mt-1.5 whitespace-pre-wrap rounded-lg bg-me-charcoal/[0.04] px-2 py-1.5 text-[12px] leading-relaxed text-me-charcoal/70">
-          原话：{e.raw}
+          {/* 🔴 外呼那条路的 raw 是**模型生成**的通话摘要，不是逐字原话 —— 标错了，
+              销售会以为自己在看客人说的话，然后据此决定要不要解除全渠道停联。 */}
+          {e.rawKind === 'ai_summary' ? '通话摘要（AI 整理，非逐字原话）：' : '原话：'}
+          {e.raw}
         </p>
       )}
       <p

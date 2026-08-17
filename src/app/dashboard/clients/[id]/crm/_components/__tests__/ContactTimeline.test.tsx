@@ -238,6 +238,36 @@ describe('判决旁边的是原话，不是 AI 摘要', () => {
     await waitFor(() => expect(screen.getAllByText('别再联系我')).toHaveLength(1))
   })
 
+  /**
+   * 🔴 **不是所有 `raw` 都是逐字原话**（Codex 复审 PR #1048，2026-08-17）。
+   * 外呼那条路写的是 `raw: call.summary`，而那是**模型生成**的通话摘要
+   * （`voice/finalize.ts` 拼的 `Caller discussed: …`）。标成「原话」，
+   * 销售会以为自己在看客人说的话，然后据此决定要不要解除全渠道停联。
+   */
+  it('🔴 外呼记录的 raw 是 AI 摘要 → 必须标明，不能叫「原话」', async () => {
+    mockTimeline([
+      touch({
+        summary: '外呼 · 已接通',
+        raw: 'Caller discussed: tours. Next: send quote.',
+        rawKind: 'ai_summary',
+        outcome: 'not_interested',
+        dncFlag: true,
+      }),
+    ])
+    draw()
+    await waitFor(() => expect(screen.getByText(/通话摘要（AI 整理，非逐字原话）/)).toBeTruthy())
+    expect(screen.queryByText(/^原话：/)).toBeNull()
+  })
+
+  it('手工记录 / 邮件那种才叫原话', async () => {
+    mockTimeline([
+      touch({ summary: '摘要', raw: '客户说别再打了', rawKind: 'verbatim', outcome: 'do_not_contact' }),
+    ])
+    draw()
+    await waitFor(() => expect(screen.getByText(/原话：/)).toBeTruthy())
+    expect(screen.queryByText(/AI 整理/)).toBeNull()
+  })
+
   it('普通记录不铺原话 —— 摘要更短更好读', async () => {
     mockTimeline([touch({ summary: '聊了两句', raw: '客人问了价格然后说再想想', outcome: 'spoke' })])
     draw()
