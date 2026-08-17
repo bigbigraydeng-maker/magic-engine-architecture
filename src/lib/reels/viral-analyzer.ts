@@ -319,15 +319,16 @@ const DEFAULT_VIEW_THRESHOLD = 5000
  * - content_goal: keep user override if provided, else use detected
  * - is_learnable: false if our_video OR (view_count known AND < threshold)
  */
-async function finalizeAnalysis(
+export async function finalizeAnalysis(
   referenceId: string,
   result: ViralAnalysisResult,
   metadata: { view_count: number | null; like_count: number | null; published_at: string | null; video_title: string | null; channel_title: string | null },
 ): Promise<void> {
   // Read existing row to honor user-set fields (content_goal override, is_our_video)
+  // and to fall back to when `metadata` has nothing new — see 🔴 below.
   const { data: existing } = await supabaseAdmin
     .from('viral_reference_library')
-    .select('content_goal, is_our_video, view_threshold_min')
+    .select('content_goal, is_our_video, view_threshold_min, view_count, like_count, published_at, video_title, channel_title')
     .eq('id', referenceId)
     .maybeSingle()
 
@@ -339,9 +340,21 @@ async function finalizeAnalysis(
   // (if user picked 'brand' it might just be the default — we trust Gemini)
   const finalGoal = userGoal && userGoal !== 'brand' ? userGoal : result.detected_content_goal
 
+  // 🔴 `metadata` comes from `fetchYouTubeMetadata`, which returns all-null for
+  // every non-YouTube source (by design — see its own comment). Writing those
+  // nulls unconditionally wiped whatever engagement data the *inserting* pipeline
+  // (Apify scrape, etc.) had already written — confirmed 2026-08-17: every
+  // Facebook (14/14) and Xiaohongshu (8/8) 'done' row had like_count=null.
+  // Fresh data wins when we have it; otherwise keep what was already on the row.
+  const view_count    = metadata.view_count    ?? existing?.view_count    ?? null
+  const like_count    = metadata.like_count    ?? existing?.like_count    ?? null
+  const published_at  = metadata.published_at  ?? existing?.published_at  ?? null
+  const video_title   = metadata.video_title   ?? existing?.video_title   ?? null
+  const channel_title = metadata.channel_title ?? existing?.channel_title ?? null
+
   // is_learnable: our own videos NEVER, low-view videos NEVER
-  const viewCountKnown = metadata.view_count !== null
-  const isLearnable = !isOurVideo && (!viewCountKnown || (metadata.view_count ?? 0) >= threshold)
+  const viewCountKnown = view_count !== null
+  const isLearnable = !isOurVideo && (!viewCountKnown || (view_count ?? 0) >= threshold)
 
   await supabaseAdmin
     .from('viral_reference_library')
@@ -356,11 +369,11 @@ async function finalizeAnalysis(
       opening_hook: (result.opening_hook.type) ? result.opening_hook : null,
       content_goal: finalGoal,
       is_learnable: isLearnable,
-      view_count:    metadata.view_count,
-      like_count:    metadata.like_count,
-      published_at:  metadata.published_at,
-      video_title:   metadata.video_title,
-      channel_title: metadata.channel_title,
+      view_count,
+      like_count,
+      published_at,
+      video_title,
+      channel_title,
       analysis_status: 'done',
       analyzed_at: new Date().toISOString(),
     })
