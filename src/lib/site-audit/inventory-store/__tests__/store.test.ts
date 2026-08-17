@@ -157,7 +157,7 @@ describe('writeAcceptedPages · page_type 收敛到 CHECK 允许值', () => {
     const db = new FakeSupabase()
     const { error } = await db
       .from('client_site_pages')
-      .insert([{ client_id: TARGET, url: 'u', path: '/u', page_type: 'landing', crawl_status: 'crawled' }])
+      .insert([{ client_id: TARGET, url: 'u', path: '/u', page_type: 'landing', crawl_status: 'crawled', topics: [], has_geo_block: false }])
       .select('url')
     expect(error?.code).toBe('23514')
     expect(db.rows).toHaveLength(0)

@@ -46,6 +46,9 @@ const UNIQUE_VIOLATION = '23505'
 /**
  * `page_type` 的 CHECK 允许值 —— **2026-08-17 生产实测**
  * （`client_site_pages_page_type_check`，列已从 enum 漂移成 text+CHECK；迁移文件不可信）。
+ *
+ * 🔗 交叉引用：测试假件 `__tests__/fake-supabase.ts` 的 `CHECK_PAGE_TYPE` 是同一份生产 CHECK 的镜像，
+ *    必须与本清单逐值一致 —— 改一处同步另一处，否则假件放过生产会拒的值（本次 page_type 事故形状）。
  */
 export const ALLOWED_PAGE_TYPES = ['service', 'blog', 'about', 'home', 'product', 'faq', 'other'] as const
 export type AllowedPageType = (typeof ALLOWED_PAGE_TYPES)[number]
