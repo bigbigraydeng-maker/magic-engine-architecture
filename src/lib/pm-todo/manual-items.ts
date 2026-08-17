@@ -22,6 +22,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { pushAttributionItems, type AttributionItemKind } from './attribution-items'
 import { clientListUnreadableItem, loadActiveClients, type ClientRosterItemKind, type ClientRow } from './client-roster'
 import { isHtmlPageUrl } from '@/lib/seo/url-kind'
+import { findMessengerStopSignals } from '@/lib/crm/messenger-stop-signal'
 import { AUTO_LANDED_AGENT } from '@/lib/diagnostic/auto-prescribe'
 import { isHandAddedItem } from '@/lib/diagnostic/prescription-landing'
 
@@ -63,6 +64,8 @@ export type ManualItemKind =
   | 'auto_run_stuck'
   /** 被一句「不打算去」误判成永久拒联 —— 只有人能看一眼原话再决定 */
   | 'dnc_maybe_wrong'
+  /** 客人在 Facebook 私信里像是说了「别再联系」，而判据从来读不到私信 —— 只提示，不自动封 */
+  | 'dm_maybe_stop'
   | CommentScopeTodoKind
   /** 执行内核停手 / 等审批 / 被规则挡下 —— 必须有人看见，不许死在日志里 */
   | 'kernel_needs_human'
@@ -262,6 +265,12 @@ export async function loadManualItems(
   // 可能被一句「不打算去」误判成永久拒联的人 —— 刻意不自动解除，交给人看一眼。
   await pushDncReviewItems(supabase, items, ids, nameOf).catch((e) =>
     console.warn('[manual-items] 拒联复核待办生成失败（不阻塞其他待办）:', e),
+  )
+
+  // 反向的那一半：客人在私信里像是说了「别再联系」，而判据从来读不到私信（#1025）。
+  // 刻意**不自动封渠道**，只提示 —— 理由见 lib/crm/messenger-stop-signal.ts 文件头。
+  await pushMessengerStopItems(supabase, items, ids, now, nameOf).catch((e) =>
+    console.warn('[manual-items] 私信拒联提示生成失败（不阻塞其他待办）:', e),
   )
 
   // 归因侧两条通道（黑洞 / 孤儿数据），理由见 attribution-items.ts
@@ -834,6 +843,72 @@ export async function pushDncReviewItems(
        *    一张 583 行的表，还得自己搜名字，进去了也找不到上面说的那个按钮。
        */
       href: `https://app.magicengine.com.au/dashboard/clients/${c.client_id as string}/crm/all?contact=${c.id as string}`,
+    })
+  }
+}
+
+/**
+ * 客人在 Facebook 私信里像是说了「别再联系」—— 提示销售去看一眼。
+ *
+ * 🔴 **只提示，不自动封渠道**（PM 2026-08-17 拍板 B 方案）。判据本身现在还判不准
+ * （issue #1019），把 2099 条私信喂进去自动写 `do_not_contact`，代价是一批正常客人
+ * 被永久静默排除，而解除只能一个个手动点。风险方向倒过来：判错了浪费销售 10 秒，
+ * 判漏了跟今天一样。完整理由见 `lib/crm/messenger-stop-signal.ts` 文件头。
+ *
+ * 那个模块**一行写操作都没有** —— 这是它的核心纪律，别在这里给它补上。
+ */
+export async function pushMessengerStopItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  ids: string[],
+  now: Date,
+  nameOf: (id: string) => string,
+): Promise<void> {
+  if (ids.length === 0) return
+
+  const { signals, dropped } = await findMessengerStopSignals(supabase, ids, now)
+  if (dropped > 0) {
+    // 🔴 上限压掉了多少必须说出来 —— 静默截断会被读成「就这么几条」。
+    console.warn(`[manual-items] 私信拒联提示：每客户上限压下 ${dropped} 条，本轮未下发`)
+  }
+  if (signals.length === 0) return
+
+  const { data: names } = await supabase
+    .from('contacts')
+    .select('id, display_name')
+    .in('id', signals.map((s) => s.contactId))
+  const nameById = new Map(
+    ((names ?? []) as { id: string; display_name: string | null }[]).map((c) => [
+      c.id,
+      c.display_name,
+    ]),
+  )
+
+  for (const s of signals) {
+    const who = nameById.get(s.contactId) || '未留姓名'
+    items.push({
+      kind: 'dm_maybe_stop',
+      client_id: s.clientId,
+      client_name: nameOf(s.clientId),
+      what: `${who} 在 Facebook 私信里说了「${s.quote}」—— 听着像是不想再被联系，但系统读不懂私信，他现在**照常留在名单里**，明天还会被打扰`,
+      /**
+       * 🔴 **两条路都必须让人留一笔**（Codex 复审 PR #1037，2026-08-17）。
+       *
+       * 初版写的是「只是这次不想去 → 什么都不用做，这条明天不再冒出来」——
+       * 那是假的：光点开链接不写任何东西，抑制条件（那条私信之后有一笔
+       * `me_manual` 触点）就不成立，同一条会**连着冒 30 天**。
+       *
+       * 一条说明不准的人工任务比没有更糟：FDE 照做、发现没用、下次就整栏跳过。
+       * 所以两条路都收在「写一句」上 —— 顺带这一笔也成了留痕，
+       * 下一个人能看见当初是谁、按什么理由判的。
+       */
+      how: '点链接直接展开到他，先把私信原话看完整（同一段对话里可能后面又改口了）。真要停 → 在他的记录里写一句「客户说别再联系」，系统会停掉所有渠道；只是这次不想去 → 写一句「只是这次不去，可以继续联系」。**两种都得写一句**，写完这条才不会再冒出来（没写就等于没人看过，明天还来）',
+      /**
+       * 🔴 绝对网址 —— 相对路径会被链接闸判成 broken，整条待办被丢掉
+       *    （狄仁杰 2026-08-05 实测 kept=0，理由见 pushCrossClientItems）。
+       *    `?contact=` 那一页真的读，点进去自动展开到这个人，同 pushDncReviewItems。
+       */
+      href: `https://app.magicengine.com.au/dashboard/clients/${s.clientId}/crm/all?contact=${s.contactId}`,
     })
   }
 }

@@ -51,7 +51,12 @@ describe('buildTodoEmail — manual lane', () => {
     expect(html).toContain('需要你动手')
     expect(html).toContain('谷歌爬过但没收录')
     expect(html).toContain('请求编入索引')
-    expect(html).toContain(item.href)
+    /**
+     * `&` 在 HTML 属性里写成 `&amp;` 才是**正确**的（浏览器会还原成 `&`，链接照常能点）。
+     * 从 PR #1037 起 `href` 走统一转义 —— 那一刀是为了挡住客人在私信里发的标记
+     * 注进我们自己的日报，见 `daily-todo.ts` 的 `esc()`。
+     */
+    expect(html).toContain('https://search.google.com/search-console/inspect?resource_id=x&amp;id=y')
     expect(html).toContain('去做这件事')
   })
 

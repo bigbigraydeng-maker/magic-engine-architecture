@@ -256,6 +256,29 @@ export interface TodoEmail {
 
 export const ZH_DAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 
+/**
+ * 拼进邮件 HTML 之前先转义。
+ *
+ * 🔴 **人工待办的 what / how / href 里有客人自己写的字**（Codex 复审 PR #1037，
+ * 2026-08-17）：`dm_maybe_stop` 会把 Facebook 私信原话摘一段进 `what`，
+ * 联系人姓名也是客人自己填的。不转义的话，任何一个陌生人只要在私信里发一段
+ * `do not follow up <a href="...">`，就能往**我们自己发出去的官方日报**里
+ * 注入链接、图片或别的标记 —— 收件人是 PM 和 FDE，那封邮件看起来完全可信。
+ *
+ * 转义放在**渲染这一层**，不是放在造条目的地方：造条目的有二十多处，
+ * 少写一处就漏一处；渲染只有这两行。同一个判断只允许存在一份。
+ *
+ * 现有条目的正文都是纯文字（实测无一处含尖括号），所以这一刀不会改变它们的样子。
+ */
+export function esc(v: string): string {
+  return v
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 export function buildTodoEmail(weekday: number, counts: TodoCounts, nzDateLabel: string): TodoEmail {
   const theme = DAY_THEMES[weekday] ?? { title: '日常', hint: '' }
 
@@ -298,8 +321,8 @@ export function buildTodoEmail(weekday: number, counts: TodoCounts, nzDateLabel:
   if (actionItems.length > 0) {
     const rows = actionItems.map((m) => `
       <div style="margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid #f1f5f9">
-        <p style="margin:0 0 2px;font-size:14px;color:#0f172a"><b>${m.client_name}</b>：${m.what}</p>
-        <p style="margin:0;font-size:13px;color:#475569">→ ${m.how} · <a href="${m.href}" style="color:#0891b2">去做这件事</a></p>
+        <p style="margin:0 0 2px;font-size:14px;color:#0f172a"><b>${esc(m.client_name)}</b>：${esc(m.what)}</p>
+        <p style="margin:0;font-size:13px;color:#475569">→ ${esc(m.how)} · <a href="${esc(m.href)}" style="color:#0891b2">去做这件事</a></p>
       </div>`)
     sections.push(sectionCard('🙋', '需要你动手（系统做不了的）', rows))
   }
@@ -307,8 +330,8 @@ export function buildTodoEmail(weekday: number, counts: TodoCounts, nzDateLabel:
   if (infoItems.length > 0) {
     const rows = infoItems.map((m) => `
       <div style="margin:0 0 10px;padding-bottom:8px;border-bottom:1px solid #f1f5f9">
-        <p style="margin:0 0 2px;font-size:14px;color:#0f172a"><b>${m.client_name}</b>：${m.what}</p>
-        <p style="margin:0;font-size:13px;color:#475569">→ ${m.how} · <a href="${m.href}" style="color:#0891b2">去看看</a></p>
+        <p style="margin:0 0 2px;font-size:14px;color:#0f172a"><b>${esc(m.client_name)}</b>：${esc(m.what)}</p>
+        <p style="margin:0;font-size:13px;color:#475569">→ ${esc(m.how)} · <a href="${esc(m.href)}" style="color:#0891b2">去看看</a></p>
       </div>`)
     // 「不用动手」字面上等于「可以跳过」，但这条通知存在的全部理由，
     // 就是让 PM 知道客户的方向被自动改成了什么 —— 他不用干活，但必须过目。

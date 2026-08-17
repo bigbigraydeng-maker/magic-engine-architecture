@@ -95,6 +95,13 @@ interface Calls {
   /** `:out` 那条的「只增」写法：插入（有则不动）+ 条件推进。 */
   outboundInserts: { row: Record<string, unknown>; opts: unknown }[]
   outboundAdvances: { patch: Record<string, unknown>; onlyIfEarlierThan: string | null }[]
+  /**
+   * 写 contacts 时的 payload + 它带的 `.is(col, null)` 空值守卫。
+   *
+   * 守卫必须被断言到 —— 「只补空栏，绝不覆盖」是这条路上唯一防止把表单里的旧
+   * 号码盖掉客人后来亲口更正的号码的东西（铁律 8）。
+   */
+  contactUpdates: { patch: Record<string, unknown>; onlyIfNull: string[] }[]
 }
 
 /** attachByUniqueFullName 查同名时，库里返回什么 / 它拿什么名字去查。 */
@@ -102,6 +109,16 @@ let nameLookupRows: { id: string; display_name: string | null }[] = []
 let nameLookupArg: string | null = null
 /** 库里那条 `<会话>:out` 触点已有的时间（测「只往前推，绝不回拨」）。 */
 let existingOutboundAt: string | null = null
+/** `contact_identities` 里这个号码/邮箱当前归谁（测「归属冲突就不写档案」）。 */
+let identityOwner: string | null = null
+/** `clients.country` —— 决定本地号码补哪个国码。null = 读不出来。 */
+let clientCountry: string | null = 'NZ'
+/** 档案上现有的主联系方式（决定旧值能不能挂成身份）。 */
+let identityWriteFails = false
+let contactCurrent: { primary_phone: string | null; primary_email: string | null } | null = {
+  primary_phone: null,
+  primary_email: null,
+}
 /** update() 的 payload 暂存，等 .lt() 来配对成一次「条件推进」。 */
 let pendingPatch: Record<string, unknown> | null = null
 
@@ -109,6 +126,10 @@ function stubSupabase(): Calls {
   nameLookupRows = []
   nameLookupArg = null
   existingOutboundAt = null
+  identityOwner = null
+  clientCountry = 'NZ'
+  contactCurrent = { primary_phone: null, primary_email: null }
+  identityWriteFails = false
   pendingPatch = null
   const calls: Calls = {
     conversationsUpdate: 0,
@@ -119,7 +140,10 @@ function stubSupabase(): Calls {
     contactInserts: [],
     outboundInserts: [],
     outboundAdvances: [],
+    contactUpdates: [],
   }
+  // 当前这条 update 链上收集到的 `.is(col, null)`。
+  let isNullCols: string[] = []
   ;(supabaseAdmin.from as ReturnType<typeof vi.fn>).mockImplementation((table: string) => {
     const chain: Record<string, unknown> = {
       select: () => chain,
@@ -128,7 +152,10 @@ function stubSupabase(): Calls {
         return { limit: async () => ({ data: nameLookupRows, error: null }) }
       },
       eq: () => chain,
-      is: () => chain,
+      is: (col: string, value: unknown) => {
+        if (value === null) isNullCols.push(col)
+        return chain
+      },
       lt: (_col: string, value: string) => {
         // advanceOutboundTouch 的条件推进：只在库里那条更早时才生效。
         if (table === 'contact_touchpoints' && pendingPatch) {
@@ -141,16 +168,33 @@ function stubSupabase(): Calls {
       // resolveContact 建人时走 insert().select().single()，要还它一个 id。
       single: async () => ({ data: { id: 'contact-NEW' }, error: null }),
       // latestOutboundTouchAt 读库里那条既有的出站触点。
-      maybeSingle: async () =>
-        table === 'contact_touchpoints'
-          ? { data: existingOutboundAt ? { occurred_at: existingOutboundAt } : null, error: null }
-          : { data: null, error: null },
+      maybeSingle: async () => {
+        if (table === 'contact_touchpoints') {
+          return { data: existingOutboundAt ? { occurred_at: existingOutboundAt } : null, error: null }
+        }
+        if (table === 'contact_identities') {
+          return { data: identityOwner ? { contact_id: identityOwner } : null, error: null }
+        }
+        if (table === 'contacts') {
+          return { data: contactCurrent, error: null }
+        }
+        if (table === 'clients') {
+          return { data: clientCountry ? { country: clientCountry } : null, error: null }
+        }
+        return { data: null, error: null }
+      },
       then: (resolve: (v: unknown) => unknown) =>
         Promise.resolve({ data: null, error: null }).then(resolve),
       update: (payload: Record<string, unknown>) => {
         if (table === 'conversations') calls.conversationsUpdate++
-        else if (table === 'contacts') calls.contactsUpdate++
-        else if (table === 'contact_touchpoints') pendingPatch = payload
+        else if (table === 'contacts') {
+          calls.contactsUpdate++
+          // `.is()` 在 update() 之后才被调用。这里给这条链新开一个数组并把
+          // **引用**存进 entry —— 后面的 `.is()` 往同一个数组里推，下一条 update
+          // 再换一个新数组，互不串味。
+          isNullCols = []
+          calls.contactUpdates.push({ patch: payload, onlyIfNull: isNullCols })
+        } else if (table === 'contact_touchpoints') pendingPatch = payload
         return chain
       },
       insert: (payload: Record<string, unknown>) => {
@@ -161,9 +205,13 @@ function stubSupabase(): Calls {
         return chain
       },
       upsert: (payload: Record<string, unknown> | Record<string, unknown>[], upsertOpts?: unknown) => {
-        if (table === 'contact_identities')
+        if (table === 'contact_identities') {
           // resolveContact 传数组、link-contacts 传单对象 —— 摊平成一串行，断言只看行。
           calls.identityUpserts.push(...(Array.isArray(payload) ? payload : [payload]))
+          if (identityWriteFails) {
+            return { error: { message: '身份表写失败' } } as never
+          }
+        }
         else if (table === 'contact_touchpoints') {
           if (Array.isArray(payload)) calls.touchpointUpserts.push(payload)
           else {
@@ -556,5 +604,284 @@ describe('出站触点的时间只往前推 —— 而且是数据库自己判�
 
     const inbound = calls.touchpointUpserts.flat().filter((r) => r.direction === 'inbound')
     expect(inbound).toHaveLength(1)
+  })
+})
+
+/**
+ * 🔴 **PM 2026-08-17 报的线上问题**：卡片写着「💬 没留电话 —— 只能在 Messenger
+ * 回他」，而那个人明明在第一条私信里留了电话和邮箱。
+ *
+ * 正文早就同步进来了，只是从来没人把它取出来 —— 认人用完就丢。
+ * 销售信了卡片那句话跑去私信回，而客人在等电话。
+ */
+describe('「点私信」开场白里的电话邮箱 → 补进档案', () => {
+  /** PM 从线上后台照抄的原文。 */
+  const INTRO = `Hello! I filled out your form and would like to know more about your business.
+Full name: Jordan Avery
+Phone number: 021 555 0134
+Which tour interests you most?: Still deciding — show me all 4
+Email: jordan.avery.example@example.com`
+
+  /**
+   * 只看**补档案**那几条 —— `linkMessengerConversation` 还会顺手推
+   * `last_seen_at` / `updated_at`，那是另一件事。
+   */
+  const BACKFILL_COLS = ['primary_phone', 'primary_email', 'display_name']
+  const backfillUpdates = (calls: Calls) =>
+    calls.contactUpdates.filter((u) => Object.keys(u.patch).some((c) => BACKFILL_COLS.includes(c)))
+
+  const introInput = {
+    ...baseInput,
+    existingContactId: 'contact-M',
+    messages: [{ direction: 'inbound' as const, body: INTRO, sentAt: '2026-07-24T08:00:00+0000' }],
+  }
+
+  it('电话和邮箱都挂成身份', async () => {
+    const calls = stubSupabase()
+    await linkMessengerConversation(introInput, index({}))
+
+    const byKind = new Map(calls.identityUpserts.map((i) => [i.kind, i.value]))
+    expect(byKind.get('phone')).toBe('+64215550134')
+    expect(byKind.get('email')).toBe('jordan.avery.example@example.com')
+  })
+
+  it('档案上的电话和邮箱补上', async () => {
+    const calls = stubSupabase()
+    await linkMessengerConversation(introInput, index({}))
+
+    const patches = backfillUpdates(calls).map((u) => u.patch)
+    expect(patches).toContainEqual({ primary_phone: '+64215550134' })
+    expect(patches).toContainEqual({ primary_email: 'jordan.avery.example@example.com' })
+  })
+
+  /**
+   * 🔴 这条是整段最要紧的：**只补空栏，绝不覆盖**（铁律 8）。
+   * 客人后来亲口更正过的号码，比表单里那个新。
+   */
+  it('🔴 每一条写入都带着「只在还空着时才写」的守卫', async () => {
+    const calls = stubSupabase()
+    await linkMessengerConversation(introInput, index({}))
+
+    const updates = backfillUpdates(calls)
+    expect(updates.length).toBeGreaterThan(0)
+    for (const u of updates) {
+      const col = Object.keys(u.patch)[0]
+      expect(u.onlyIfNull).toContain(col)
+    }
+  })
+
+  /** 一栏一条语句 —— 合成一条的话，只要有一栏已有值，另一栏也跟着写不进去。 */
+  it('一条语句只写一栏', async () => {
+    const calls = stubSupabase()
+    await linkMessengerConversation(introInput, index({}))
+    for (const u of backfillUpdates(calls)) expect(Object.keys(u.patch)).toHaveLength(1)
+  })
+
+  it('普通聊天不会被当成开场白', async () => {
+    const calls = stubSupabase()
+    await linkMessengerConversation(
+      {
+        ...introInput,
+        messages: [
+          {
+            direction: 'inbound',
+            body: 'Hi, my number is 021 555 000, is the March tour still on?',
+            sentAt: '2026-07-24T08:00:00+0000',
+          },
+        ],
+      },
+      index({}),
+    )
+    expect(backfillUpdates(calls)).toHaveLength(0)
+    expect(calls.identityUpserts.map((i) => i.kind)).not.toContain('phone')
+  })
+
+
+  /**
+   * 🔴 **号码已经归别人了就别写进这个人的档案**（Codex 复审 2026-08-17）。
+   *
+   * 身份表那句 `ignoreDuplicates` 只保证身份不被抢走，挡不住继续把同一个号码
+   * 写进**这个人**的 `primary_phone` —— 那样两份档案显示同一个号码，而身份表
+   * 指向原来那个人，销售照着卡片打过去联系的是另一个人。
+   */
+  it('🔴 电话/邮箱已归另一个联系人 → 那两栏不写进这个人的档案', async () => {
+    const calls = stubSupabase()
+    identityOwner = 'contact-SOMEONE-ELSE'
+    await linkMessengerConversation(introInput, index({}))
+
+    const cols = backfillUpdates(calls).flatMap((u) => Object.keys(u.patch))
+    expect(cols).not.toContain('primary_phone')
+    expect(cols).not.toContain('primary_email')
+    // 名字不受身份归属影响 —— 它不是唯一键，补上只是把 Facebook 昵称换成全名。
+    expect(cols).toContain('display_name')
+  })
+
+  it('身份本来就归他自己 → 照旧补', async () => {
+    const calls = stubSupabase()
+    identityOwner = 'contact-M'
+    await linkMessengerConversation(introInput, index({}))
+    expect(backfillUpdates(calls).length).toBeGreaterThan(0)
+  })
+
+  /**
+   * 🔴 **市场认不出来就不写电话**（Codex 复审 2026-08-17）。原先退回 NZ ——
+   * AU 客户的 `04...` 会被永久写成 `+64...`，销售拨过去是陌生人，
+   * 错值还会占住唯一身份表，让以后正确的 AU 身份挂不上。
+   */
+  it('🔴 读不到客户所在市场 → 本地号码不写', async () => {
+    const calls = stubSupabase()
+    clientCountry = null
+    await linkMessengerConversation(introInput, index({}))
+
+    const cols = backfillUpdates(calls).flatMap((u) => Object.keys(u.patch))
+    expect(cols).not.toContain('primary_phone')
+    // 邮箱和名字不受市场影响，照旧补。
+    expect(cols).toContain('primary_email')
+  })
+
+  it('AU 客户按 +61 补，不按 +64', async () => {
+    const calls = stubSupabase()
+    clientCountry = 'AU'
+    await linkMessengerConversation(introInput, index({}))
+
+    const phone = calls.identityUpserts.find((i) => i.kind === 'phone')?.value
+    expect(String(phone).startsWith('+61')).toBe(true)
+  })
+
+  /**
+   * 🔴 **同一个线程里重填过表单 → 取最后一次**（Codex 复审 2026-08-17）。
+   * 第一次填错号码、第二次改对；命中就停会把旧值永久写进档案并注册成身份，
+   * 而且以后每轮同步都命中同一条旧消息，正确的新值永远没机会。
+   */
+  it('🔴 重填过表单 → 用后一次的号码，不是第一次的', async () => {
+    const calls = stubSupabase()
+    const second = INTRO.replace('021 555 0134', '021 555 9999')
+    await linkMessengerConversation(
+      {
+        ...introInput,
+        messages: [
+          { direction: 'inbound', body: INTRO, sentAt: '2026-07-24T08:00:00+0000' },
+          { direction: 'inbound', body: second, sentAt: '2026-07-25T08:00:00+0000' },
+        ],
+      },
+      index({}),
+    )
+    const phone = calls.identityUpserts.find((i) => i.kind === 'phone')?.value
+    expect(phone).toBe('+64215559999')
+  })
+
+  /**
+   * 🔴 **身份没写成，档案就不能写**（Codex 复审 2026-08-17）。否则卡片显示着
+   * 号码、身份表里却没有它：认人认不到，别的渠道进来会再建一个重复的人；
+   * 而这个人两栏都满了，又从回填候选集里退出去，再也不会被修。
+   */
+  it('🔴 身份写入失败 → 档案那两栏也不写', async () => {
+    const calls = stubSupabase()
+    identityWriteFails = true
+    await linkMessengerConversation(introInput, index({}))
+
+    const cols = backfillUpdates(calls).flatMap((u) => Object.keys(u.patch))
+    expect(cols).not.toContain('primary_phone')
+    expect(cols).not.toContain('primary_email')
+  })
+
+  /**
+   * 🔴 **两张表单各只补一半 → 按字段各取各的最新非空值**（Codex 复审 2026-08-17）。
+   * 整对象取最后一条的话，后一张只更正电话时，前一张里那个有效的邮箱会被丢掉，
+   * 而邮箱那一栏仍然空着、下一轮又选中同一个末次对象，永远补不回来。
+   */
+  it('🔴 后一张表单只带电话 → 前一张的邮箱不能丢', async () => {
+    const calls = stubSupabase()
+    const second =
+      'Hello! I filled out your form and would like to know more about your business.\nPhone number: 021 555 9999'
+    await linkMessengerConversation(
+      {
+        ...introInput,
+        messages: [
+          { direction: 'inbound', body: INTRO, sentAt: '2026-07-24T08:00:00+0000' },
+          { direction: 'inbound', body: second, sentAt: '2026-07-25T08:00:00+0000' },
+        ],
+      },
+      index({}),
+    )
+    const byKind = new Map(calls.identityUpserts.map((i) => [i.kind, i.value]))
+    expect(byKind.get('phone')).toBe('+64215559999')
+    expect(byKind.get('email')).toBe('jordan.avery.example@example.com')
+  })
+
+  /**
+   * 🔴 **档案上已有一个更正过的号码时，旧号码连身份都不该挂**
+   * （Codex 复审 2026-08-17）。身份表是认人用的键 —— 那个号码以后被重新分配、
+   * 或当初就填错，`resolveContact` 会把带着它的新线索认成这个人，甚至自动合并
+   * 两个人的历史，而合并不可逆。
+   */
+  it('🔴 档案上已有别的号码 → 表单里那个旧号码不挂成身份', async () => {
+    const calls = stubSupabase()
+    contactCurrent = { primary_phone: '+64211111111', primary_email: null }
+    await linkMessengerConversation(introInput, index({}))
+
+    expect(calls.identityUpserts.map((i) => i.kind)).not.toContain('phone')
+    // 邮箱那一栏还空着，照旧补。
+    expect(calls.identityUpserts.map((i) => i.kind)).toContain('email')
+  })
+
+  it('档案上那个号码跟表单里一模一样 → 照旧挂（幂等）', async () => {
+    const calls = stubSupabase()
+    contactCurrent = { primary_phone: '+64215550134', primary_email: null }
+    await linkMessengerConversation(introInput, index({}))
+    expect(calls.identityUpserts.map((i) => i.kind)).toContain('phone')
+  })
+
+  /**
+   * 🔴 **对话中途转发同行者的资料，不许写进这个人的档案**（Codex 复审 2026-08-17）。
+   * 「两条标准字段」那条兜底只对第一条入站消息成立。
+   */
+  it('🔴 先普通聊天、后面才出现两条字段的转发 → 不补', async () => {
+    const calls = stubSupabase()
+    await linkMessengerConversation(
+      {
+        ...introInput,
+        messages: [
+          { direction: 'inbound', body: 'Hi, is the March tour still on?', sentAt: '2026-07-24T08:00:00+0000' },
+          {
+            direction: 'inbound',
+            body: 'My friend is coming too.\nName: Sam Riley\nPhone: 021 555 999',
+            sentAt: '2026-07-24T09:00:00+0000',
+          },
+        ],
+      },
+      index({}),
+    )
+    expect(backfillUpdates(calls)).toHaveLength(0)
+  })
+
+  it('中途那条带着表单问候语 → 照旧认（那是真的开场白，只是不在第一条）', async () => {
+    const calls = stubSupabase()
+    await linkMessengerConversation(
+      {
+        ...introInput,
+        messages: [
+          { direction: 'inbound', body: 'Hi there', sentAt: '2026-07-24T08:00:00+0000' },
+          { direction: 'inbound', body: INTRO, sentAt: '2026-07-24T09:00:00+0000' },
+        ],
+      },
+      index({}),
+    )
+    expect(backfillUpdates(calls).length).toBeGreaterThan(0)
+  })
+
+  /** 我们自己发出去的模板不作数 —— 只认客人自己发的那条。 */
+  it('出站方向的同样一段文字 → 不补', async () => {
+    const calls = stubSupabase()
+    await linkMessengerConversation(
+      {
+        ...introInput,
+        messages: [
+          { direction: 'outbound', body: INTRO, sentAt: '2026-07-24T08:00:00+0000', tags: ['source:chat'] },
+        ],
+      },
+      index({}),
+    )
+    expect(backfillUpdates(calls)).toHaveLength(0)
   })
 })
