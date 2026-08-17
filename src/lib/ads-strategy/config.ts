@@ -18,6 +18,68 @@ export function isAdBudgetCurrency(v: unknown): v is AdBudgetCurrency {
   return typeof v === 'string' && (AD_BUDGET_CURRENCIES as readonly string[]).includes(v)
 }
 
+/** 月预算补丁的解析结果：要么给出该写入的列，要么给出一句说人话的拒绝理由。 */
+export type BudgetPatch =
+  | { ok: true; kind: 'clear'; amount: null; currency: null }
+  | { ok: true; kind: 'set'; amount: number; currency: AdBudgetCurrency }
+  | { ok: false; error: string }
+  /** 请求里压根没提预算 —— 不是错误，只是这次不动它。 */
+  | { ok: true; kind: 'untouched' }
+
+/**
+ * 解析 PATCH 请求里的月预算部分。
+ *
+ * 🔴 **金额和币种必须一起出现，「清空」也不例外。**
+ *
+ *    早先用 `body.monthly_ad_budget ?? null` 取值，于是「字段没传」和「显式传了
+ *    null」变成同一件事：调用方只传 `{ monthly_ad_budget: null }`（没提币种）时，
+ *    币种也被当成 null → 判成「完整清空」→ **把已填的预算删掉，还顺手把这个客户
+ *    标成「本月确认不投」，整个月不再提醒**。一次部分更新造成两处损失，
+ *    而接口注释里写的本来是「这种情况返回 400」。
+ *
+ *    所以判据改成「这个键在不在请求体里」（`in`），不是「取出来是不是 null」。
+ */
+export function parseBudgetPatch(body: Record<string, unknown>): BudgetPatch {
+  const hasAmount = Object.prototype.hasOwnProperty.call(body, 'monthly_ad_budget')
+  const hasCurrency = Object.prototype.hasOwnProperty.call(body, 'monthly_ad_budget_currency')
+
+  if (!hasAmount && !hasCurrency) return { ok: true, kind: 'untouched' }
+  if (!hasAmount || !hasCurrency) {
+    return {
+      ok: false,
+      error: '月预算的金额和币种必须一起传；要清空就两个都显式传 null',
+    }
+  }
+
+  const rawAmount = body.monthly_ad_budget
+  const rawCurrency = body.monthly_ad_budget_currency
+
+  if (rawAmount === null && rawCurrency === null) {
+    return { ok: true, kind: 'clear', amount: null, currency: null }
+  }
+  if (rawAmount === null || rawCurrency === null) {
+    return {
+      ok: false,
+      error: '月预算的金额和币种必须一起填；要清空就两个都留空',
+    }
+  }
+
+  // 🔴 先卡类型再谈数值：`Number(true) === 1`、`Number([2000]) === 2000`，
+  //    不卡的话一个坏掉的调用方能写进「预算 1 元」，而库里的 `> 0` 约束
+  //    对这种转换出来的合法值完全无感。
+  if (typeof rawAmount !== 'number' && typeof rawAmount !== 'string') {
+    return { ok: false, error: `月预算必须是数字（收到的是 ${typeof rawAmount}）` }
+  }
+  const amount = toRealAmount(rawAmount)
+  if (amount === null) {
+    return { ok: false, error: '月预算必须是一个大于 0 的金额（不收 0、负数、NaN、无穷大）' }
+  }
+  if (!isAdBudgetCurrency(rawCurrency)) {
+    return { ok: false, error: `币种只支持 ${AD_BUDGET_CURRENCIES.join(' / ')}` }
+  }
+  return { ok: true, kind: 'set', amount, currency: rawCurrency }
+}
+
 /**
  * 按客户所在国推荐预算币种。**拿不准就返回 null，不猜。**
  *

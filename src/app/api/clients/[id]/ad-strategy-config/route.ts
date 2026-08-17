@@ -10,11 +10,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import {
-  AD_BUDGET_CURRENCIES,
   currencyForCountry,
-  isAdBudgetCurrency,
   loadAdStrategyConfig,
-  toRealAmount,
+  parseBudgetPatch,
 } from '@/lib/ads-strategy/config'
 
 export const dynamic = 'force-dynamic'
@@ -90,59 +88,18 @@ export async function PATCH(
   }
 
   /**
-   * 月广告预算 —— 金额和币种**必须一起传**。
+   * 月广告预算 —— 判据与文案都在 `parseBudgetPatch`（纯函数，可直接测）。
    *
-   * 🔴 只传金额不传币种是 `AD-CUR-1` 那个洞的新入口（库里存了个数字，没人知道
-   *    是 AUD 还是 NZD，下一步就是跨客户混币种加总）。数据库有 paired 约束，
-   *    但接口层要先把话说清楚，别让 FDE 收到一句看不懂的约束报错。
-   *
-   * 🔴 清空用「两个都传 null」，不是传 0 —— 0 会被库里的 `> 0` 约束拒掉。
-   *    「这个月不投广告」的表达方式是清空，不是填 0。
+   * 🔴 金额和币种**必须一起传，清空也不例外**：只传一个会让另一个被当成 null，
+   *    从而把一次部分更新变成「删掉预算 + 标记本月确认不投」，整月不再提醒。
    */
-  const budgetTouched =
-    body.monthly_ad_budget !== undefined || body.monthly_ad_budget_currency !== undefined
-  if (budgetTouched) {
-    const rawAmount = body.monthly_ad_budget ?? null
-    const rawCurrency = body.monthly_ad_budget_currency ?? null
-
-    if (rawAmount === null && rawCurrency === null) {
-      update.monthly_ad_budget = null
-      update.monthly_ad_budget_currency = null
-      update.monthly_ad_budget_updated_at = new Date().toISOString()
-      update.monthly_ad_budget_updated_by = access.user.email ?? null
-    } else if (rawAmount === null || rawCurrency === null) {
-      return NextResponse.json(
-        { error: '月预算的金额和币种必须一起填；要清空就两个都留空' },
-        { status: 400 },
-      )
-    } else {
-      // 🔴 先卡类型再谈数值。不卡的话 `true` / `[2000]` 这类 JSON 会被
-      //    `Number()` 悄悄转成 1 / 2000 写进库 —— 存进去的不是任何人填过的数字，
-      //    而库里的 `> 0` 约束对这种「转换出来的合法值」完全无感。
-      if (typeof rawAmount !== 'number' && typeof rawAmount !== 'string') {
-        return NextResponse.json(
-          { error: '月预算必须是数字（收到的是 ' + typeof rawAmount + '）' },
-          { status: 400 },
-        )
-      }
-      const amount = toRealAmount(rawAmount)
-      if (amount === null) {
-        return NextResponse.json(
-          { error: '月预算必须是一个大于 0 的金额（不收 0、负数、NaN、无穷大）' },
-          { status: 400 },
-        )
-      }
-      if (!isAdBudgetCurrency(rawCurrency)) {
-        return NextResponse.json(
-          { error: `币种只支持 ${AD_BUDGET_CURRENCIES.join(' / ')}` },
-          { status: 400 },
-        )
-      }
-      update.monthly_ad_budget = amount
-      update.monthly_ad_budget_currency = rawCurrency
-      update.monthly_ad_budget_updated_at = new Date().toISOString()
-      update.monthly_ad_budget_updated_by = access.user.email ?? null
-    }
+  const patch = parseBudgetPatch(body as Record<string, unknown>)
+  if (!patch.ok) return NextResponse.json({ error: patch.error }, { status: 400 })
+  if (patch.kind !== 'untouched') {
+    update.monthly_ad_budget = patch.kind === 'clear' ? null : patch.amount
+    update.monthly_ad_budget_currency = patch.kind === 'clear' ? null : patch.currency
+    update.monthly_ad_budget_updated_at = new Date().toISOString()
+    update.monthly_ad_budget_updated_by = access.user.email ?? null
   }
 
   const { error } = await supabaseAdmin
