@@ -148,9 +148,10 @@ describe('§5 rank：只认显式精确序数', () => {
     expect(r.rank).toEqual({ status: 'computed', position: 1 })
   })
 
-  it('冲突序数 → not_computable（ordinal_ambiguous）', () => {
+  it('冲突序数（同一句内）→ not_computable（ordinal_ambiguous）', () => {
+    // 🔴 冲突序数必须在 Roman **同一句**内才算冲突；跨句 / 跨破折号的序数已被句子级绑定切离。
     const r = interpret(
-      'Roman Hu is a real estate agent in Auckland, New Zealand — ranked first choice by some, second choice by others.',
+      'Roman Hu, a real estate agent in Auckland, New Zealand, is ranked first choice by some and second choice by others.',
     )
     expect(r.rank.status).toBe('not_computable')
     expect(r.reasonCodes).toContain('ordinal_ambiguous')

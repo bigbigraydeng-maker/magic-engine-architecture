@@ -55,6 +55,34 @@ describe('句子级绑定：消歧 / 推荐 / 序数只看 Roman 所在句', () 
     const r = interpret('Roman Hu is a real estate agent in Auckland, New Zealand. Jane Doe is the first choice.')
     expect(r.rank.status).not.toBe('computed')
   })
+
+  // ── 分号 / 冒号 / 破折号连接的多主体也必须切开（魏征复审：只切 .!? 会被绕过）──
+  it('分号连接别人 → Roman 不合格提及', () => {
+    const r = interpret('Roman Hu is an author; Jane Doe is a licensed real estate agent in Auckland, New Zealand')
+    expect(r.qualifiedMention.qualified).toBe(false)
+  })
+
+  it('冒号连接、推荐别人 → 非 explicit_positive', () => {
+    const r = interpret('Roman Hu is a real estate agent in Auckland, New Zealand: I recommend Jane Doe')
+    expect(r.recommendation).not.toBe('explicit_positive')
+  })
+
+  it('破折号连接、推荐别人 → 非 explicit_positive', () => {
+    const r = interpret('Roman Hu is a real estate agent in Auckland, New Zealand - I would recommend Jane Doe instead')
+    expect(r.recommendation).not.toBe('explicit_positive')
+  })
+
+  it('破折号连接、序数说别人 → 非 computed', () => {
+    const r = interpret('Roman Hu is a real estate agent in Auckland, New Zealand; Jane Doe is the first choice')
+    expect(r.rank.status).not.toBe('computed')
+  })
+
+  it('对照：连字词 real-estate 不被破折号切断（仍需两侧空格才切）', () => {
+    const r = interpret('Roman Hu is a real-estate agent in Auckland, New Zealand')
+    // real-estate 不含 'real estate' 子串 → 靠 realty/realtor 也没有 → 消歧不足（保守），
+    // 关键是：不会因为破折号把句子切碎导致解析异常。
+    expect(r.disposition).toBe('interpreted')
+  })
 })
 
 // ── 问句缺失闸 ────────────────────────────────────────────────────────────────
@@ -98,6 +126,13 @@ describe('聚合分组键含 locale / market', () => {
   it('同 query_key 同 locale 同 market → 并池（1 个 query）', () => {
     const s = summarizeCoverage([qualified('a', 'q1', 'en-NZ', 'nz'), qualified('b', 'q1', 'en-NZ', 'nz')])
     expect(s.queryCount).toBe(1)
+  })
+
+  it('构造分隔符碰撞的 locale/market 值不并池（groupKey 用 JSON 编码，不可碰撞）', () => {
+    // 裸 `|` 拼接会让 (locale='x', market='y|m:z') 与 (locale='x|m:y', market='z') 撞成同一 key。
+    const a = qualified('a', 'q1', 'x', 'y|m:z')
+    const b = qualified('b', 'q1', 'x|m:y', 'z')
+    expect(summarizeCoverage([a, b]).queryCount).toBe(2)
   })
 
   it('locale 未知 → 各自成组（未知也隔离）', () => {

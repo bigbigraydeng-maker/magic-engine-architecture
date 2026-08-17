@@ -127,6 +127,11 @@ const ORDINAL_PATTERNS: readonly { readonly re: RegExp; readonly position: numbe
 const containsAny = (haystack: string, needles: readonly string[]): string[] =>
   needles.filter((n) => haystack.includes(n))
 
+/** reason 码去重（保序）—— 多道闸可能对同一情形各记一次，审计读起来不该有重复噪声。 */
+function dedupeReasons(reasons: readonly GeoM1ReasonCode[]): GeoM1ReasonCode[] {
+  return Array.from(new Set(reasons))
+}
+
 /**
  * 句子级绑定（M1 §2 / §4 / §5 精度要害）。
  *
@@ -137,7 +142,11 @@ const containsAny = (haystack: string, needles: readonly string[]): string[] =>
  *    正是 M1 要的方向（宁可漏，不可假阳）。
  */
 function splitSentences(text: string): string[] {
-  return text.split(/[.!?]+|\n+/).map((s) => s.trim()).filter((s) => s.length > 0)
+  // 🔴 切分必须含**从句分隔符** `; :` 与**两侧带空格的破折号** —— 真实 AI 答案常用
+  //    「Roman Hu is an author; Jane Doe is the agent」这种把不同人连进一句的写法，
+  //    只按 `.!?` 切会让别人的锚点 / 推荐 / 序数整句进 romanCtx，绕过句子级绑定（假阳）。
+  //    破折号要求两侧空格，避免切断 `well-known` / `real-estate` 这类连字词。
+  return text.split(/[.!?;:]+|\s[-–—]\s|\n+/).map((s) => s.trim()).filter((s) => s.length > 0)
 }
 
 /** 返回**含实体命中**的句子拼成的上下文（用含别名的 matcher）。没有则空串。 */
@@ -273,7 +282,7 @@ export function interpretObservation(input: GeoM1Input): GeoObservationInterpret
     qualifiedMention,
     recommendation,
     rank,
-    reasonCodes: reasons,
+    reasonCodes: dedupeReasons(reasons),
   }
 }
 
@@ -442,7 +451,7 @@ function defer(
     qualifiedMention: { qualified: false, reason: 'no_name_match' },
     recommendation: 'none',
     rank: { status: 'not_applicable' },
-    reasonCodes: reasons,
+    reasonCodes: dedupeReasons(reasons),
   }
 }
 

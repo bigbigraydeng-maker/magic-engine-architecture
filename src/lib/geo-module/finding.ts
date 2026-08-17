@@ -85,8 +85,13 @@ export function summarizeCoverage(
  *    不能假设两个「未知 locale」是同一个。
  */
 function groupKeyOf(it: GeoObservationInterpretation): string {
-  if (!it.queryKey.known || !it.locale.known || !it.market.known) return `iso:${it.observationId}`
-  return `q:${it.queryKey.value}|l:${it.locale.value}|m:${it.market.value}`
+  if (!it.queryKey.known || !it.locale.known || !it.market.known) {
+    return JSON.stringify(['iso', it.observationId])
+  }
+  // 🔴 用 JSON.stringify 编码，**不用 `|` 拼接**：三个值都来自数据面，裸拼分隔符可被
+  //    构造出碰撞（locale=`x`,market=`y|m:z` 与 locale=`x|m:y`,market=`z` 拼出同一串）
+  //    → 同租户内跨 locale/market 错误并池，恰是本函数硬承诺要防的事。JSON 编码不可碰撞。
+  return JSON.stringify(['q', it.queryKey.value, it.locale.value, it.market.value])
 }
 
 /**
