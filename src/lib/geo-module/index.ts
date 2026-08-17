@@ -37,6 +37,7 @@ export { toGrowthEvidence, GEO_EVIDENCE_SOURCE_KIND, type GeoEvidenceInput } fro
 export {
   summarizeCoverage,
   buildQualifiedMentionFinding,
+  hasVisibilityGap,
   GEO_QUALIFIED_MENTION_FINDING_REF,
 } from './finding'
 

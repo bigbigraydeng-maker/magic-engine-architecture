@@ -97,12 +97,32 @@ async function fetchEvidence(sb: SupabaseClient, observationIds: string[]): Prom
   return map
 }
 
-/** query_key → question_text。同 key 文本冲突则标未知（不猜）。 */
-async function fetchQuestionMap(sb: SupabaseClient): Promise<Map<string, GrowthMaybeUnknown<string>>> {
+/** 读该批次所属的查询集 id —— 问句必须限定到这个集合（query_key 只在单个集合内唯一）。 */
+async function fetchBatchQuerySetId(sb: SupabaseClient): Promise<string> {
+  const { data, error } = await sb
+    .from('geo_batches')
+    .select('query_set_id')
+    .eq('client_id', ROMAN_CLIENT_ID)
+    .eq('id', ROMAN_BATCH_ID)
+    .limit(1)
+  const rows = orThrow('读 geo_batches', data, error) as { query_set_id: string }[]
+  if (rows.length === 0) throw new Error(`批次 ${ROMAN_BATCH_ID} 读不到 —— 无法确定查询集`)
+  return rows[0].query_set_id
+}
+
+/**
+ * query_key → question_text，**限定到该批次的查询集**（Codex #1032 P2）。
+ * `geo_queries.query_key` 只在单个 query_set 内唯一，跨集合取会撞车。同 key 文本冲突则标未知。
+ */
+async function fetchQuestionMap(
+  sb: SupabaseClient,
+  querySetId: string,
+): Promise<Map<string, GrowthMaybeUnknown<string>>> {
   const { data, error } = await sb
     .from('geo_queries')
     .select('query_key, question_text')
     .eq('client_id', ROMAN_CLIENT_ID)
+    .eq('query_set_id', querySetId)
   const rows = orThrow('读 geo_queries', data, error) as { query_key: string; question_text: string }[]
   const seen = new Map<string, string>()
   const conflict = new Set<string>()
@@ -168,7 +188,8 @@ function main(): void {
         return
       }
       const evidenceByObs = await fetchEvidence(sb, observations.map((o) => o.id))
-      const questionMap = await fetchQuestionMap(sb)
+      const querySetId = await fetchBatchQuerySetId(sb)
+      const questionMap = await fetchQuestionMap(sb, querySetId)
       const ledgerPages = await fetchLedgerPages(sb)
       line(`   证据行：${evidenceByObs.size}  ·  问句映射：${questionMap.size}  ·  台账页：${ledgerPages.length}`)
 
@@ -199,7 +220,7 @@ function main(): void {
       // ③ 聚合 finding
       line('\n③ 聚合覆盖 + Finding')
       const cov = outcome.chain.coverage
-      line(`   query 数=${cov.queryCount}  合格提及 query=${cov.qualifiedMentionQueries}  explicit_positive query=${cov.explicitPositiveQueries}  conditional query=${cov.conditionalQueries}  全 defer query=${cov.fullyDeferredQueries}`)
+      line(`   query 数=${cov.queryCount}  可解释 query=${cov.interpretableQueries}（覆盖率分母）  合格提及 query=${cov.qualifiedMentionQueries}  explicit_positive query=${cov.explicitPositiveQueries}  conditional query=${cov.conditionalQueries}  全 defer query=${cov.fullyDeferredQueries}`)
       if (outcome.chain.finding) {
         const f = outcome.chain.finding
         line(`   Finding：支柱=${f.pillar}  严重度=${f.severity}  证据数=${f.evidence.length}`)
@@ -233,6 +254,8 @@ function main(): void {
         line(`   ✅ PageOptimizationRequest 产出：page=${outcome.request.page.url}`)
         line(`      intents=${outcome.request.intents.length}  doNotTouch=[${outcome.request.constraints.doNotTouch.join(', ')}]`)
         line(`      lineage.findingRefs=[${outcome.request.lineage.findingRefs.join(', ')}]`)
+      } else if (outcome.disposition === 'no_gap') {
+        line('   ✅ 无可见度缺口（可解释覆盖已满）—— 不产出 finding / 请求。这是正向结论，不是 defer。')
       } else {
         line(`   ⏸️ 诚实 defer：reason=${outcome.reason}`)
         line('      （intents 留空是刻意的：WP05 只推理、不凭空造页面文案；proposedValue 须上游 grounding 后传入。）')

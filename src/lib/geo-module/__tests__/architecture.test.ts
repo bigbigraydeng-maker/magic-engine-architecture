@@ -43,20 +43,37 @@ const FORBIDDEN: readonly { readonly needle: string; readonly why: string }[] = 
   { needle: '@/lib/geo-baseline', why: '不复测、不走真实采集/落库 store' },
 ]
 
+/**
+ * 抽出文件里所有 import/require 的**模块说明符**（引号内的目标）。
+ *
+ * 🔴 直接抓 `from '...'` / `import '...'` / `require('...')` 的引号内容，**不按行过滤** ——
+ *    多行 import（`import {\n a,\n b\n} from '@/lib/x'`）的 `from '...'` 在单独一行，
+ *    「import 与 from 同一行」的老写法会漏扫它（Codex #1032 P2：扫不到=没有边界）。
+ *    只取说明符，注释里提到 supabase 之类不会误报（除非注释真写了 `from '...'`）。
+ */
+function importSpecifiers(src: string): string[] {
+  const specs: string[] = []
+  const re = /(?:\bfrom|\bimport|\brequire\s*\()\s*['"]([^'"]+)['"]/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(src)) !== null) specs.push(m[1])
+  return specs
+}
+
 describe('geo-module 只推理：禁止危险 import', () => {
   for (const file of productionFiles) {
     it(`${file.replace(process.cwd() + '/', '')} 不 import 任何越界目标`, () => {
-      const src = readFileSync(file, 'utf8')
-      // 只看 import/require 行，避免注释里提到 supabase 触发误报。
-      const importLines = src
-        .split('\n')
-        .filter((l) => /^\s*(import|export)\b.*from\s+['"]/.test(l) || /require\(['"]/.test(l))
-        .join('\n')
+      const specifiers = importSpecifiers(readFileSync(file, 'utf8'))
       for (const { needle, why } of FORBIDDEN) {
-        expect(importLines, `${file} 违反：${why}`).not.toContain(needle)
+        const offender = specifiers.find((s) => s.includes(needle))
+        expect(offender, `${file} 违反：${why}`).toBeUndefined()
       }
     })
   }
+
+  it('多行 import 也被扫到（守卫自身回归）', () => {
+    const multiline = "import {\n  a,\n  b,\n} from '@/lib/supabase'\n"
+    expect(importSpecifiers(multiline)).toContain('@/lib/supabase')
+  })
 })
 
 describe('门面导出面稳定', () => {

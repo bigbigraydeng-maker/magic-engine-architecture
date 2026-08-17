@@ -39,8 +39,7 @@ export function summarizeCoverage(
 ): GeoCoverageSummary {
   const groups = new Map<string, GeoObservationInterpretation[]>()
   for (const it of interpretations) {
-    // 分组键：query_key 已知 → 用其值；未知 → 用 observationId 保证各自独立，不混池。
-    const key = it.queryKey.known ? `q:${it.queryKey.value}` : `obs:${it.observationId}`
+    const key = groupKeyOf(it)
     const bucket = groups.get(key)
     if (bucket) bucket.push(it)
     else groups.set(key, [it])
@@ -64,28 +63,60 @@ export function summarizeCoverage(
     })
   }
 
+  const fullyDeferredQueries = perQuery.filter((q) => q.deferredCount === q.observationCount).length
   return {
     ruleVersion: GEO_M1_RULE_VERSION,
     queryCount: perQuery.length,
+    interpretableQueries: perQuery.length - fullyDeferredQueries,
     qualifiedMentionQueries: perQuery.filter((q) => q.hasQualifiedMention).length,
     explicitPositiveQueries: perQuery.filter((q) => q.hasExplicitPositive).length,
     conditionalQueries: perQuery.filter((q) => q.hasConditional).length,
-    fullyDeferredQueries: perQuery.filter((q) => q.deferredCount === q.observationCount).length,
+    fullyDeferredQueries,
     perQuery,
   }
+}
+
+/**
+ * 分组键（M1 §7：query 级先于聚合、locale 不混池）。
+ *
+ * 🔴 采集身份把 locale / market 视为独立维度。同一 `query_key` 不同 locale / market 的观测
+ *    **不得并池**（否则「英文未提及 + 中文提及」会汇成一条「英文已提及」）。
+ * 🔴 任一维度未知（query_key / locale / market）→ 该观测**各自成组**：未知值也必须保持隔离，
+ *    不能假设两个「未知 locale」是同一个。
+ */
+function groupKeyOf(it: GeoObservationInterpretation): string {
+  if (!it.queryKey.known || !it.locale.known || !it.market.known) return `iso:${it.observationId}`
+  return `q:${it.queryKey.value}|l:${it.locale.value}|m:${it.market.value}`
+}
+
+/**
+ * 是否存在 AI 可见度缺口（M1：finding = 问题 / 机会，没缺口就不该产出 finding）。
+ *
+ * 🔴 只在有**可解释** query 且其中存在「未合格提及」或「未获显式正向推荐」时才算有缺口。
+ *    可解释 query 为 0（全 defer / 无 query）→ 无法断言缺口，返回 false（走 defer，不硬判）。
+ *    全部可解释 query 都已合格提及且都 explicit_positive → 无缺口，不产出 finding。
+ */
+export function hasVisibilityGap(summary: GeoCoverageSummary): boolean {
+  if (summary.interpretableQueries === 0) return false
+  const mentionGap = summary.qualifiedMentionQueries < summary.interpretableQueries
+  const recommendationGap = summary.explicitPositiveQueries < summary.interpretableQueries
+  return mentionGap || recommendationGap
 }
 
 /**
  * 从覆盖账 + 证据构建一条 AI 可见度 Finding。
  *
  * 🔴 `evidence` **至少一条**（WP01 §5.2 红线：指不回证据的 Finding 不许存在）。
- *    传空数组返回 `null` —— 由调用方决定 defer，不硬造一条无证据的发现。
+ * 🔴 **无缺口不产出**：可解释覆盖已满（全提及 + 全 explicit_positive）或无可解释样本时返回 `null`
+ *    —— finding 是问题 / 机会，凭空产出一条「其实没缺口」的发现会驱动错误处方（Codex #1032 P1）。
+ *    调用方据 `null` 走 no_gap / defer。
  */
 export function buildQualifiedMentionFinding(
   summary: GeoCoverageSummary,
   evidence: readonly GrowthEvidence[],
 ): GrowthFinding | null {
   if (evidence.length === 0) return null
+  if (!hasVisibilityGap(summary)) return null
   return {
     pillar: 'ai_visibility',
     severity: severityOf(summary),
@@ -96,17 +127,16 @@ export function buildQualifiedMentionFinding(
 
 /**
  * 严重度：合格提及覆盖为 0 = 高（AI 答案里根本没被作为人 / 选项提及）；
- * 有一定覆盖但偏低 = 中；覆盖较好 = 低。全部由 query 级覆盖账推，不看 citation。
+ * 有一定覆盖但偏低 = 中；覆盖较好 = 低。
  *
- * 🔴 **「全部 defer」不是「确认缺席」**：每个 query 的样本都证据不足时，`qualifiedMentionQueries`
- *    同样是 0，但那是「读不出」不是「没被提及」。把它判成 high 就是本模块反复禁止的
- *    「拿不到数据≠真没有」。所以全 defer → `info`，绝不 high。
+ * 🔴 分母只用**可解释** query（`interpretableQueries`），不用 `queryCount`：完全 defer 的 query
+ *    是「判不准」不是「未提及」，混进分母会仅因数据缺失就抬高严重度、驱动错误处方
+ *    （Codex #1032 P1）。可解释 query 为 0（全 defer）→ `info`，绝不 high。
  */
 function severityOf(summary: GeoCoverageSummary): DiagnosticSeverity {
-  if (summary.queryCount === 0) return 'info'
-  if (summary.fullyDeferredQueries === summary.queryCount) return 'info'
+  if (summary.interpretableQueries === 0) return 'info'
   if (summary.qualifiedMentionQueries === 0) return 'high'
-  const ratio = summary.qualifiedMentionQueries / summary.queryCount
+  const ratio = summary.qualifiedMentionQueries / summary.interpretableQueries
   if (ratio < 0.5) return 'medium'
   return 'low'
 }

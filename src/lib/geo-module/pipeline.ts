@@ -26,7 +26,7 @@ import {
 import type { PageOptimizationIntent, PageOptimizationRequest } from '@/lib/page-optimization'
 import { interpretObservation } from './m1'
 import { toGrowthEvidence } from './evidence'
-import { buildQualifiedMentionFinding, summarizeCoverage } from './finding'
+import { buildQualifiedMentionFinding, hasVisibilityGap, summarizeCoverage } from './finding'
 import { buildPrescription } from './prescription'
 import { buildCandidate } from './candidate'
 import { buildQualifiedMentionVerification, type BuildVerificationInput } from './verification'
@@ -80,6 +80,11 @@ export type GeoModuleOutcome =
       readonly reason: GeoModuleDeferReason
       readonly chain: GeoModuleChain
     }
+  /**
+   * 引擎跑完、证据充分，但**可解释覆盖已满、不存在可见度缺口** —— 这是一个正向结论
+   * （「没缺口，无需处方」），不是 defer（判不准）。不产出 finding / 请求。
+   */
+  | { readonly ok: false; readonly disposition: 'no_gap'; readonly chain: GeoModuleChain }
 
 /** 租户隔离读侧断言。任一行不属于 clientId 直接抛 —— fail-closed。 */
 export class GeoModuleTenantError extends Error {
@@ -127,6 +132,12 @@ function assertTenant(input: GeoModulePipelineInput): void {
         `证据 ${r.evidence.id} 属于租户 ${r.evidence.client_id}，与入参 ${clientId} 不符`,
       )
     }
+    // 🔴 证据↔观测配对校验：同租户内也不能把 A 观测的证据配到 B 观测上（否则读的是错的正文）。
+    if (r.evidence !== null && r.evidence.observation_id !== r.observation.id) {
+      throw new GeoModuleTenantError(
+        `证据 ${r.evidence.id} 的 observation_id=${r.evidence.observation_id} 与配对观测 ${r.observation.id} 不一致`,
+      )
+    }
   }
   // 台账行的越租户不在这里抛（resolveLedgerPage 会按 clientId 过滤后再匹配），
   // 但空 clientId 已在上面挡掉，跨租户页永远进不了解析结果。
@@ -154,14 +165,14 @@ export function runGeoModule(input: GeoModulePipelineInput): GeoModuleOutcome {
   const coverage = summarizeCoverage(interpretations)
   const finding = buildQualifiedMentionFinding(coverage, evidence)
 
-  // 没有证据 → 建不出 finding → 诚实 defer（不硬造无证据的发现）。
   if (finding === null) {
-    return {
-      ok: false,
-      disposition: 'defer',
-      reason: 'no_evidence_for_finding',
-      chain: { interpretations, evidence, coverage, finding: null, prescription: null, candidate: null },
+    const emptyChain: GeoModuleChain = { interpretations, evidence, coverage, finding: null, prescription: null, candidate: null }
+    // no_gap 只在**有可解释样本**且它们都已覆盖时成立（正向结论）。
+    // 无可解释样本（全 defer / 无 query）→ 判不准 → defer，绝不当成「没缺口」。
+    if (evidence.length > 0 && coverage.interpretableQueries > 0 && !hasVisibilityGap(coverage)) {
+      return { ok: false, disposition: 'no_gap', chain: emptyChain }
     }
+    return { ok: false, disposition: 'defer', reason: 'no_evidence_for_finding', chain: emptyChain }
   }
 
   const prescription = buildPrescription(finding)

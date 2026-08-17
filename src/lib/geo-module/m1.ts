@@ -80,8 +80,17 @@ function buildEntityMatcher(aliases: readonly string[]): RegExp {
 
 // ── 消歧锚点（M1 §2：锁奥克兰 / NZ 地产本人） ──────────────────────────────────
 
-/** 地域锚点。命中任一即满足「奥克兰 / NZ」一侧。 */
-const GEO_ANCHORS: readonly string[] = ['auckland', 'new zealand', 'aotearoa', ' nz ']
+/** 多词地域锚点（子串命中即可）。 */
+const GEO_ANCHORS_MULTIWORD: readonly string[] = ['auckland', 'new zealand', 'aotearoa']
+/** `nz` 缩写按**词边界**匹配 —— `' nz '` 字面量会漏掉句首 / 句尾 / 标点旁的 `nz`。 */
+const NZ_ANCHOR_RE = /\bnz\b/
+
+/** 文本里是否有地域锚点，返回命中列表（供审计）。 */
+function geoAnchorsIn(text: string): string[] {
+  const hits = GEO_ANCHORS_MULTIWORD.filter((a) => text.includes(a))
+  if (NZ_ANCHOR_RE.test(text)) hits.push('nz')
+  return hits
+}
 /**
  * 行业锚点。命中任一即满足「**地产**从业者」一侧（M1 §2：锁地产本人）。
  *
@@ -117,6 +126,29 @@ const ORDINAL_PATTERNS: readonly { readonly re: RegExp; readonly position: numbe
 
 const containsAny = (haystack: string, needles: readonly string[]): string[] =>
   needles.filter((n) => haystack.includes(n))
+
+/**
+ * 句子级绑定（M1 §2 / §4 / §5 精度要害）。
+ *
+ * 🔴 消歧 / 推荐 / 序数**只能在 Roman 所在的句子里**判，不能做全文级扫描：否则
+ *    「另一位奥克兰地产人在别的句子里出现」会替 Roman 完成消歧，「答案推荐的是别人」
+ *    会被算成推荐 Roman（真误配风险，Codex #1032 P1）。
+ *    代价是跨句代词指代（"Roman Hu is great. I recommend him."）会漏 —— 保守欠报，
+ *    正是 M1 要的方向（宁可漏，不可假阳）。
+ */
+function splitSentences(text: string): string[] {
+  return text.split(/[.!?]+|\n+/).map((s) => s.trim()).filter((s) => s.length > 0)
+}
+
+/** 返回**含实体命中**的句子拼成的上下文（用含别名的 matcher）。没有则空串。 */
+function romanContext(bodyEcho: string, matcher: RegExp): string {
+  return splitSentences(bodyEcho)
+    .filter((sentence) => {
+      matcher.lastIndex = 0
+      return matcher.test(sentence)
+    })
+    .join(' . ')
+}
 
 /**
  * 否定探测（§4 / §5 反读防御）。裸 `.includes()` 会把「被否定的背书 / 序数」判成正向，
@@ -205,22 +237,33 @@ export function interpretObservation(input: GeoM1Input): GeoObservationInterpret
   const body = normalizeText((evidence as GeoEvidenceRow).raw_response as string)
   const citations = ((evidence as GeoEvidenceRow).citations ?? []) as readonly GeoCitation[]
 
-  // ── §1–§2 实体匹配 + 消歧 ──
+  // ── §1 实体匹配 ──
   const matcher = buildEntityMatcher(brandAliases)
   // 引用命中所用的 alnum 针从规范实体 + 别名派生，**不硬编码**（换实体 / 加别名自动跟着变）。
   const citationNeedles = [GEO_CANONICAL_ENTITY, ...brandAliases].map(alnumOnly).filter((n) => n.length > 0)
-  const bodyEcho = stripQueryEcho(body, input.questionText)
   const entityMatch = matchEntity(body, citations, matcher, citationNeedles, reasons)
-  const disambiguation = disambiguate(entityMatch, bodyEcho, reasons)
+
+  // ── 问句缺失闸（M1 §3 第 3 条）──
+  // 正文里有实体命中却拿不到问句 → 无法剔除回显、无法验证语义参与 → defer，
+  // 不拿「无法排除回显」当正向覆盖。（无命中的观测不受影响，正常判「未提及」。）
+  if (entityMatch.kind === 'body_match' && !input.questionText.known) {
+    reasons.push('question_text_unknown')
+    return defer({ ...meta, entityMatch }, reasons)
+  }
+
+  // ── §2 消歧 + §4 推荐 + §5 rank 全部**绑定到 Roman 所在句** ──
+  const bodyEcho = stripQueryEcho(body, input.questionText)
+  const romanCtx = romanContext(bodyEcho, buildEntityMatcher(brandAliases))
+  const disambiguation = disambiguate(entityMatch, romanCtx, reasons)
 
   // ── §3 合格提及 ──
   const qualifiedMention = qualifyMention(entityMatch, disambiguation, body, bodyEcho, brandAliases, reasons)
 
-  // ── §4 推荐（仅在合格提及成立时判极性；否则 none，除非歧义要 indeterminate） ──
-  const recommendation = classifyRecommendation(qualifiedMention, bodyEcho, reasons)
+  // ── §4 推荐（仅在合格提及成立时判极性；只看 Roman 所在句） ──
+  const recommendation = classifyRecommendation(qualifiedMention, romanCtx, reasons)
 
-  // ── §5 rank ──
-  const rank = computeRank(qualifiedMention, bodyEcho, reasons)
+  // ── §5 rank（只看 Roman 所在句） ──
+  const rank = computeRank(qualifiedMention, romanCtx, reasons)
 
   return {
     ...meta,
@@ -274,16 +317,17 @@ function matchEntity(
 
 function disambiguate(
   entityMatch: GeoEntityMatch,
-  bodyEcho: string,
+  romanCtx: string,
   reasons: GeoM1ReasonCode[],
 ): GeoDisambiguation {
   if (entityMatch.kind !== 'body_match') {
     return { qualified: false, reason: 'disambiguation_insufficient' }
   }
-  // 锚点必须在**答案正文**里（M1 §2：引用 / 标题 / URL / 问句回显都不建立身份）。
-  // 用剔除回显后的正文找锚点，避免问句里的「Auckland」被当成答案上下文。
-  const geo = containsAny(bodyEcho, GEO_ANCHORS)
-  const domain = containsAny(bodyEcho, DOMAIN_ANCHORS)
+  // 🔴 锚点必须在**Roman 所在的句子**里（M1 §2：引用 / 标题 / URL / 问句回显、以及
+  //    描述别人的句子都不建立 Roman 的身份）。`romanCtx` 已是「含实体命中的句子」拼成，
+  //    别处的 Auckland / real estate 不会替 Roman 完成消歧。
+  const geo = geoAnchorsIn(romanCtx)
+  const domain = containsAny(romanCtx, DOMAIN_ANCHORS)
   if (geo.length > 0 && domain.length > 0) {
     return { qualified: true, anchors: [...geo, ...domain] }
   }
@@ -308,15 +352,15 @@ function qualifyMention(
       reason: entityMatch.kind === 'citation_only' ? 'name_only_in_citation' : 'no_name_match',
     }
   }
-  if (!disambiguation.qualified) {
-    return { qualified: false, reason: 'disambiguation_insufficient' }
-  }
-  // 语义参与近似：去掉问句逐字回显后，正文里还留着实体命中，才算真参与
-  // （M1 §3 第 3 条 / §7 第 2 条）。🔴 用**含别名**的 matcher，与 §1 的 matchEntity 同一套判据
+  // 语义参与近似（先于消歧判，以给出准确原因码）：去掉问句逐字回显后正文里还留着实体命中，
+  // 才算真参与（M1 §3 第 3 条 / §7 第 2 条）。🔴 用**含别名**的 matcher，与 §1 matchEntity 同一套
   //   —— 否则别名注册表非空时，仅靠别名命中的正文提及会在这里被误判 query_echo_only。
   if (!buildEntityMatcher(brandAliases).test(bodyEcho)) {
     reasons.push('query_echo_only')
     return { qualified: false, reason: 'query_echo_only' }
+  }
+  if (!disambiguation.qualified) {
+    return { qualified: false, reason: 'disambiguation_insufficient' }
   }
   const spans = body.match(buildEntityMatcher(brandAliases)) ?? []
   return { qualified: true, spans }
@@ -326,7 +370,7 @@ function qualifyMention(
 
 function classifyRecommendation(
   qualifiedMention: GeoQualifiedMention,
-  bodyEcho: string,
+  ctx: string, // 🔴 Roman 所在句的上下文，不是全文（防「推荐的是别人」误配）
   reasons: GeoM1ReasonCode[],
 ): GeoRecommendationClass {
   if (!qualifiedMention.qualified) {
@@ -334,17 +378,17 @@ function classifyRecommendation(
     return 'none'
   }
   // 正向信号 = 有一处**未被否定**的背书短语。
-  const positive = ENDORSE_TERMS.some((t) => hasUnnegated(bodyEcho, t))
+  const positive = ENDORSE_TERMS.some((t) => hasUnnegated(ctx, t))
   // 负向信号 = 有直接负面词，**或**某处背书被否定（「wouldn't go with」= 差评）。
   const negative =
-    NEGATIVE_TERMS.some((t) => bodyEcho.includes(t)) || ENDORSE_TERMS.some((t) => hasNegated(bodyEcho, t))
+    NEGATIVE_TERMS.some((t) => ctx.includes(t)) || ENDORSE_TERMS.some((t) => hasNegated(ctx, t))
   if (positive && negative) {
     reasons.push('recommendation_ambiguous')
     return 'indeterminate'
   }
   if (negative) return 'negative'
   if (positive) {
-    const conditional = containsAny(bodyEcho, CONDITIONAL_MARKERS).length > 0
+    const conditional = containsAny(ctx, CONDITIONAL_MARKERS).length > 0
     return conditional ? 'conditional' : 'explicit_positive'
   }
   reasons.push('no_recommendation_judgment')
@@ -355,12 +399,12 @@ function classifyRecommendation(
 
 function computeRank(
   qualifiedMention: GeoQualifiedMention,
-  bodyEcho: string,
+  ctx: string, // 🔴 Roman 所在句的上下文，不是全文（防「序数说的是别人」误配）
   reasons: GeoM1ReasonCode[],
 ): GeoRankStatus {
   if (!qualifiedMention.qualified) return { status: 'not_applicable' }
   // 只认**未被否定**的显式序数（"not the first choice" 不是 rank 证据）。
-  const hits = ORDINAL_PATTERNS.filter((p) => matchUnnegated(bodyEcho, p.re))
+  const hits = ORDINAL_PATTERNS.filter((p) => matchUnnegated(ctx, p.re))
   if (hits.length === 0) {
     reasons.push('no_explicit_ordinal')
     return { status: 'not_computable', reason: 'no_explicit_ordinal' }
@@ -384,13 +428,16 @@ function stripQueryEcho(body: string, questionText: GrowthMaybeUnknown<string>):
 }
 
 function defer(
-  meta: Omit<GeoObservationInterpretation, 'disposition' | 'entityMatch' | 'disambiguation' | 'qualifiedMention' | 'recommendation' | 'rank' | 'reasonCodes'>,
+  meta: Omit<GeoObservationInterpretation, 'disposition' | 'entityMatch' | 'disambiguation' | 'qualifiedMention' | 'recommendation' | 'rank' | 'reasonCodes'> &
+    Partial<Pick<GeoObservationInterpretation, 'entityMatch'>>,
   reasons: readonly GeoM1ReasonCode[],
 ): GeoObservationInterpretation {
+  const { entityMatch, ...rest } = meta
   return {
-    ...meta,
+    ...rest,
     disposition: 'defer',
-    entityMatch: { kind: 'no_match' },
+    // 默认 no_match；问句缺失闸会传入真实的 body_match，让审计看到「命中了但不敢判」。
+    entityMatch: entityMatch ?? { kind: 'no_match' },
     disambiguation: { qualified: false, reason: 'disambiguation_insufficient' },
     qualifiedMention: { qualified: false, reason: 'no_name_match' },
     recommendation: 'none',

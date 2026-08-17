@@ -91,8 +91,8 @@ describe('端到端：Roman 基线证据 + 台账页 → 合法 PageOptimization
 })
 
 describe('诚实 defer', () => {
-  it('全部观测失败（无证据）→ defer no_evidence_for_finding？否 —— 证据仍映射得出，但 finding 建得出', () => {
-    // 失败观测仍产出一条 GrowthEvidence（观测发生过），故 finding 能建（severity=high）。
+  it('全部观测失败（全 defer）→ 不建缺口 finding → defer（读不出≠确认缺席）', () => {
+    // 🔴 修正后：全 defer 时可解释 query=0，不产出高危缺口 finding，整体 defer。
     const out = runGeoModule({
       clientId: ROMAN_CLIENT_ID,
       records: [
@@ -106,8 +106,15 @@ describe('诚实 defer', () => {
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },
     })
-    expect(out.ok).toBe(true)
-    if (out.ok) expect(out.chain.coverage.fullyDeferredQueries).toBe(1)
+    expect(out.ok).toBe(false)
+    if (!out.ok && out.disposition === 'defer') {
+      expect(out.reason).toBe('no_evidence_for_finding')
+      expect(out.chain.finding).toBeNull()
+      expect(out.chain.coverage.fullyDeferredQueries).toBe(1)
+      expect(out.chain.coverage.interpretableQueries).toBe(0)
+    } else {
+      throw new Error('expected defer')
+    }
   })
 
   it('目标页不在本租户台账 → defer unattributable_page，不落到别处', () => {
@@ -119,11 +126,13 @@ describe('诚实 defer', () => {
       target: { pageUrl: 'https://not-in-ledger.example/x', intents: groundedIntents },
     })
     expect(out.ok).toBe(false)
-    if (!out.ok) {
+    if (!out.ok && out.disposition === 'defer') {
       expect(out.reason).toBe('unattributable_page')
       // 链仍带到 prescription，供审阅
       expect(out.chain.prescription).not.toBeNull()
       expect(out.chain.candidate).toBeNull()
+    } else {
+      throw new Error('expected defer')
     }
   })
 
@@ -136,7 +145,8 @@ describe('诚实 defer', () => {
       target: { pageUrl: 'https://romanhu.com/about', intents: [] },
     })
     expect(out.ok).toBe(false)
-    if (!out.ok) expect(out.reason).toBe('unattributable_proposed_value')
+    if (!out.ok && out.disposition === 'defer') expect(out.reason).toBe('unattributable_proposed_value')
+    else throw new Error('expected defer')
   })
 })
 
@@ -186,7 +196,8 @@ describe('读侧租户隔离（fail-closed）', () => {
       target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },
     })
     expect(out.ok).toBe(false)
-    if (!out.ok) expect(out.reason).toBe('unattributable_page')
+    if (!out.ok && out.disposition === 'defer') expect(out.reason).toBe('unattributable_page')
+    else throw new Error('expected defer')
   })
 })
 

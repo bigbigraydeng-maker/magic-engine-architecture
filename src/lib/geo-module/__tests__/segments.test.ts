@@ -45,7 +45,8 @@ describe('聚合护栏（M1 §7）', () => {
       observation: makeObservation({ id, query_key: queryKey }),
       evidence: makeEvidence({ id: `ev-${id}`, observation_id: id, raw_response: rawResponse }),
       brandAliases: [],
-      questionText: NO_QUESTION,
+      // 已知问句（不与正文重合、不点名 Roman）——否则 body_match + 问句未知会触发 defer。
+      questionText: { known: true, value: 'who is a good agent to hire?' },
     })
   }
 

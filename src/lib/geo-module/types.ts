@@ -60,6 +60,11 @@ export type GeoM1ReasonCode =
   | 'confidence_unknown'
   /** 解析置信度低于阈值（M1 §6 末条）。 */
   | 'confidence_below_threshold'
+  /**
+   * 问句原文未知（未读到 / 来源冲突）→ 无法剔除回显、无法验证语义参与（M1 §3 第 3 条）。
+   * 正文里有实体命中却拿不到问句时，「无法排除回显」不得当成正向覆盖 —— 一律 defer。
+   */
+  | 'question_text_unknown'
   /** 别名注册表为空：解释为什么不认任何别名 / 队名 / 姓氏 / 域名（M1 §1）。 */
   | 'brand_alias_registry_empty'
 
@@ -161,8 +166,15 @@ export interface GeoQueryOutcome {
  */
 export interface GeoCoverageSummary {
   readonly ruleVersion: GeoM1RuleVersion
-  /** 参与聚合的 query 总数。 */
+  /** 参与聚合的 query 总数（含完全 defer 的）。 */
   readonly queryCount: number
+  /**
+   * **可解释** query 数 = queryCount − 完全 defer 的 query。
+   *
+   * 🔴 覆盖率分母只能用这个，不能用 `queryCount`：完全 defer 的 query 是「判不准」不是
+   *    「未提及」，混进分母会仅因数据缺失就抬高严重度、驱动错误处方（Codex #1032 P1）。
+   */
+  readonly interpretableQueries: number
   /** 有合格提及的 query 数。 */
   readonly qualifiedMentionQueries: number
   /** 有 `explicit_positive` 的 query 数（v1 推荐指标）。 */

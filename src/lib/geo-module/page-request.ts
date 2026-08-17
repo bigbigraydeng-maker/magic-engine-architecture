@@ -41,6 +41,8 @@ export type GeoPageRequestReason =
   | 'unattributable_proposed_value'
   /** 提案字段超出 v1 冻结的三字段词汇。 */
   | 'unsupported_field'
+  /** 同一字段传了多条意图 —— 会自相矛盾（doNotTouch 折叠成一个但请求留了两条），拒。 */
+  | 'duplicate_field_intent'
 
 export type PageResolutionResult =
   | { readonly ok: true; readonly url: string }
@@ -103,6 +105,9 @@ export function buildPageOptimizationRequest(input: BuildPageRequestInput): Buil
     if (typeof intent.proposedValue !== 'string' || intent.proposedValue.trim().length === 0) {
       return { ok: false, reason: 'unattributable_proposed_value' }
     }
+    // 🔴 同字段重复意图直接拒：Set 会把字段名折叠成一条算 doNotTouch，但请求仍留两条 intent
+    //    → 一个字段两个 proposedValue 自相矛盾，下游无从选择。fail-closed，不静默留双份。
+    if (touched.has(intent.field)) return { ok: false, reason: 'duplicate_field_intent' }
     touched.add(intent.field)
   }
   const doNotTouch = PAGE_OPTIMIZATION_FIELDS.filter((f) => !touched.has(f))

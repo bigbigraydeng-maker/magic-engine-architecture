@@ -11,6 +11,12 @@ import { makeObservation, makeEvidence, ownedCitation } from './fixtures'
 
 const NO_QUESTION = { known: false, reason: 'not_recorded_by_source' } as const
 const NO_ALIASES: readonly string[] = []
+/**
+ * 默认已知问句，且**不与任何测试正文逐字重合**（避免误触回显剔除），也**不点名 Roman**
+ * （branded=false）。问句未知会触发新的「question_text_unknown → defer」闸，所以判定类用例
+ * 必须给一个已知问句。
+ */
+const KNOWN_QUESTION = { known: true, value: 'who should i contact to buy or sell a home?' } as const
 
 function interpret(rawResponse: string, opts: {
   citations?: unknown[]
@@ -26,7 +32,7 @@ function interpret(rawResponse: string, opts: {
     observation,
     evidence,
     brandAliases: NO_ALIASES,
-    questionText: opts.questionText ?? NO_QUESTION,
+    questionText: opts.questionText ?? KNOWN_QUESTION,
   })
 }
 
