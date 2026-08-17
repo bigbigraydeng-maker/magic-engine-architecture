@@ -71,7 +71,10 @@ export const PAGE_TYPE_MAP: Readonly<Record<string, AllowedPageType>> = {
 }
 
 function toAllowedPageType(raw: string): AllowedPageType {
-  const mapped = PAGE_TYPE_MAP[raw.trim().toLowerCase()]
+  const key = raw.trim().toLowerCase()
+  // 🔴 用 hasOwn 查，不裸 PAGE_TYPE_MAP[key] —— 否则 'constructor'/'__proto__'/'toString'
+  //    会命中 Object 原型链、返回一个非法真值绕过 fail-closed。原型键必须也走「认不出来」。
+  const mapped = Object.prototype.hasOwnProperty.call(PAGE_TYPE_MAP, key) ? PAGE_TYPE_MAP[key] : undefined
   if (mapped === undefined) {
     throw new InventoryStoreError(
       'unmappable_page_type',

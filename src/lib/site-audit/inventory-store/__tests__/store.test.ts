@@ -140,6 +140,18 @@ describe('writeAcceptedPages · page_type 收敛到 CHECK 允许值', () => {
     expect(db.rows).toHaveLength(0)
   })
 
+  it('原型链键（constructor/__proto__/toString）也走 fail-closed，不绕过映射', async () => {
+    const { store, db } = storeWith()
+    for (const evil of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) {
+      const err = await store
+        .writeAcceptedPages({ clientId: TARGET, pages: [makePage({ pageType: evil })], requireEmptyInventory: true })
+        .catch((e) => e)
+      expect(err, `pageType=${evil} 应 fail-closed`).toBeInstanceOf(InventoryStoreError)
+      expect(err.code).toBe('unmappable_page_type')
+    }
+    expect(db.rows).toHaveLength(0)
+  })
+
   it('假件确实建模了 page_type CHECK（非法值被 23514 拒）', async () => {
     // 直接往假件塞一个非法 page_type 的插入，确认它像 Postgres 一样拒（自证 CHECK 建模非空跑）。
     const db = new FakeSupabase()
