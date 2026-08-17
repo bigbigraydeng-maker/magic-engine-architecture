@@ -9,11 +9,14 @@ import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { looksLikeVideoResponse, normalizeRecordingLink } from '@/lib/factory/recording-link'
+import { safeProbeRemoteFile } from '@/lib/factory/safe-remote-fetch'
 
 export const dynamic = 'force-dynamic'
 
 const BUCKET = 'content-factory'
 const VIDEO_EXT = /\.(mp4|mov|m4v|webm)$/
+/** 做片流水线还没结束的状态 —— 这些状态下不许手动挂片 */
+const ACTIVE_JOB_STATUSES = ['queued', 'planning', 'rendering', 'assembling']
 
 type Params = { params: { id: string; postId: string } }
 
@@ -35,15 +38,59 @@ async function loadPost(clientId: string, postId: string) {
   return data
 }
 
-/** 挂片到这条内容上。双重限定，防越权改到别客户。 */
-async function attachVideo(clientId: string, postId: string, url: string | null) {
-  const { error } = await supabaseAdmin
+/**
+ * 这条内容是不是正在被流水线做片。
+ *
+ * 🔴 非讲课式内容在「确认选题」时也会 enqueueRenderJob，做片期间同样停在「备料」。
+ *    此时手动挂片，卡片会先进「出片」，等做片跑完 `render-assemble.ts` 又会
+ *    无条件覆盖 `source_video_url` —— 人传的片被静默换掉，一句提示都没有。
+ *    所以有活跃任务时一律拒绝挂片。
+ */
+async function hasActiveRenderJob(postId: string): Promise<boolean> {
+  const { data } = await supabaseAdmin
+    .from('content_factory_render_jobs')
+    .select('id')
+    .eq('content_post_id', postId)
+    .in('status', ACTIVE_JOB_STATUSES)
+    .limit(1)
+  return Boolean(data?.length)
+}
+
+/**
+ * 挂片到这条内容上。
+ *
+ * 三重限定：client_id（防越权改别客户）+ id + **status='approved'**。
+ * status 作为原子条件写进 update，而不是先读后判 —— 否则旧标签页里的「换一条」、
+ * 或直接调 API，能清掉已经 scheduled / published 的片，毁掉待发素材和历史记录。
+ * 返回 false = 没命中，状态已经变了。
+ */
+async function attachVideo(
+  clientId: string,
+  postId: string,
+  url: string | null,
+): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
     .from('content_posts')
     .update({ source_video_url: url })
     .eq('client_id', clientId)
     .eq('id', postId)
+    .eq('status', 'approved')
+    .select('id')
   if (error) throw error
+  return Boolean(data?.length)
 }
+
+const staleResponse = () =>
+  NextResponse.json(
+    { error: '这条内容的状态已经变了（可能已排期或已发布）— 刷新页面再看一下' },
+    { status: 409 },
+  )
+
+const busyResponse = () =>
+  NextResponse.json(
+    { error: '这条正在自动做片，等它做完；要用自己的片就先「打回重做」再挂' },
+    { status: 409 },
+  )
 
 /**
  * POST — 签一个直传地址回去。
@@ -63,6 +110,9 @@ export async function POST(req: NextRequest, { params }: Params) {
         { status: 400 },
       )
     }
+
+    if (post.status !== 'approved') return staleResponse()
+    if (await hasActiveRenderJob(params.postId)) return busyResponse()
 
     const ext = (body.fileName ?? '').toLowerCase().match(VIDEO_EXT)?.[1]
     if (!ext) return NextResponse.json({ error: '只支持 mp4 / mov / m4v / webm 视频文件' }, { status: 400 })
@@ -107,6 +157,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       )
     }
 
+    // 做片流水线在跑的时候不许碰片（clear 也不行 —— 那只会制造更混乱的中间态）
+    if (await hasActiveRenderJob(params.postId)) return busyResponse()
+
     switch (body.action) {
       case 'uploaded': {
         // 路径必须严格是本条内容目录下、由上面 POST 签出的文件名格式。
@@ -122,7 +175,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
           )
         }
         const { data: pub } = supabaseAdmin.storage.from(BUCKET).getPublicUrl(body.path)
-        await attachVideo(params.id, params.postId, pub.publicUrl)
+        if (!(await attachVideo(params.id, params.postId, pub.publicUrl))) return staleResponse()
         return NextResponse.json({ ok: true, videoUrl: pub.publicUrl })
       }
 
@@ -131,38 +184,25 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         if (!norm.ok || !norm.url) {
           return NextResponse.json({ error: norm.error ?? '这个链接用不了' }, { status: 400 })
         }
-        // 当场探一下能不能真下到视频——别拖到发布时才发现是个网页
-        let head: Response
-        try {
-          head = await fetch(norm.url, {
-            headers: { Range: 'bytes=0-1023' },
-            redirect: 'follow',
-            signal: AbortSignal.timeout(20000),
-          })
-        } catch {
-          return NextResponse.json(
-            { error: '打不开这个链接 — 确认链接没过期、并且设成「知道链接的人都能看」' },
-            { status: 400 },
-          )
+        // 探活走逐跳校验的安全版：不许自动跟随跳转，每跳都重新查协议和解析出的 IP。
+        // 直接 redirect:'follow' 只校验首个 URL，等于给人一个让服务器代访内网的口子。
+        const probe = await safeProbeRemoteFile(norm.url)
+        if (!probe.ok) {
+          return NextResponse.json({ error: probe.error ?? '这个链接用不了' }, { status: 400 })
         }
-        if (!head.ok && head.status !== 206) {
-          return NextResponse.json(
-            { error: '打不开这个链接 — 确认链接没过期、并且设成「知道链接的人都能看」' },
-            { status: 400 },
-          )
-        }
-        if (!looksLikeVideoResponse(head.headers.get('content-type'), norm.url)) {
+        if (!looksLikeVideoResponse(probe.contentType ?? null, probe.finalUrl ?? norm.url)) {
           return NextResponse.json(
             { error: '这个链接指向的不是视频文件 — 对着那条视频本身「复制链接」再粘一次' },
             { status: 400 },
           )
         }
-        await attachVideo(params.id, params.postId, norm.url)
+        // 存规范化后的原始链接（不存 finalUrl —— 跳转目标常带一次性签名，会过期）
+        if (!(await attachVideo(params.id, params.postId, norm.url))) return staleResponse()
         return NextResponse.json({ ok: true, videoUrl: norm.url })
       }
 
       case 'clear': {
-        await attachVideo(params.id, params.postId, null)
+        if (!(await attachVideo(params.id, params.postId, null))) return staleResponse()
         return NextResponse.json({ ok: true, videoUrl: null })
       }
 

@@ -39,6 +39,7 @@ interface Card {
   pillar: string
   visualBrief: string
   mode?: string          // '讲课式' 等制作形态
+  rendering?: boolean    // 流水线正在给这条做片 —— 做片中不给挂片入口
 }
 
 interface Lesson extends Card {
@@ -105,12 +106,19 @@ export default function ContentFactoryBoardPage() {
   const [board, setBoard] = useState<BoardData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [selected, setSelected] = useState<Card | null>(null)
+  const [selected, setSelectedRaw] = useState<Card | null>(null)
   const [acting, setActing] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [uploadPct, setUploadPct] = useState<number | null>(null)
   const [videoLink, setVideoLink] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // 换卡片/关抽屉一律把链接输入框清空 —— 在 A 里粘了链接不提交就关掉，
+  // 再打开 B 时输入框还留着 A 的链接，点确定就把错的片挂到 B 上了。
+  const setSelected = useCallback((c: Card | null) => {
+    setSelectedRaw(c)
+    setVideoLink('')
+  }, [])
 
   const load = useCallback(async () => {
     if (!clientId) { setLoading(false); return }
@@ -440,7 +448,7 @@ export default function ContentFactoryBoardPage() {
 
             {/* 备料段 · 非讲课式：片子是人自己录/自己剪的，从这里挂上去。
                 讲课式不显示 —— 它的成片由系统做，手动挂会盖掉做片结果。 */}
-            {selected.stage === '备料' && selected.mode !== '讲课式' && (
+            {selected.stage === '备料' && selected.mode !== '讲课式' && !selected.rendering && (
               <div className="sticky bottom-0 bg-white pt-3 border-t border-me-stone">
                 <div className="text-[11px] font-semibold text-me-taupe mb-2">
                   录好了？把成片挂上来 — 挂完这条就进「出片」列
@@ -481,6 +489,12 @@ export default function ContentFactoryBoardPage() {
                 <div className="text-[11px] text-me-taupe mt-2">
                   链接要设成「知道链接的人都能看」，粘之前对着视频本身复制链接。
                 </div>
+              </div>
+            )}
+
+            {selected.stage === '备料' && selected.mode !== '讲课式' && selected.rendering && (
+              <div className="sticky bottom-0 bg-white pt-3 border-t border-me-stone text-[11px] text-me-taupe">
+                这条正在自动做片，做好会进「出片」列。要改用自己录的片，先「打回重做」再来挂。
               </div>
             )}
 
