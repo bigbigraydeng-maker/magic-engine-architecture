@@ -307,16 +307,19 @@ describe('待拍板拆两栏(板桥 M5)', () => {
   })
 
   it('每条决策都有直达链接;PR 类决策带未解决线程数(有同步事实时)', () => {
+    // 🔴 PR #962 已于 2026-08-16 真实合并(PM 查生产核实),原用例挂的
+    // 「要不要合代码」决策已随之从登记表清除 —— 换一条仍然真实存在的待拍板
+    // 决策(执行内核建表,挂在 PR #863 上)来验证同一条能力,不编造假数据。
     const p = buildPresentation(
       input({
-        prFacts: [pr({ number: 962, state: 'open', isDraft: true, unresolvedThreads: 3, title: 'x' })],
+        prFacts: [pr({ number: 863, state: 'merged', isDraft: false, unresolvedThreads: 3, title: 'x' })],
       }),
     )
     for (const d of [...p.decisionsNow, ...p.decisionsLater]) {
       expect(d.links.length).toBeGreaterThan(0)
     }
-    const merge = [...p.decisionsNow, ...p.decisionsLater].find((d) => d.kindLabel === '要不要合代码')
-    expect(merge?.unresolvedThreads).toBe(3)
+    const migration = [...p.decisionsNow, ...p.decisionsLater].find((d) => d.kindLabel === '要不要建表')
+    expect(migration?.unresolvedThreads).toBe(3)
   })
 
   it('决策文案回答「不做会怎样」(不是光一句 go)', () => {
