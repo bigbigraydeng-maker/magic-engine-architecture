@@ -38,7 +38,7 @@ function fullRun(overrides: Partial<Parameters<typeof Object.assign>[0]> = {}) {
     main_head_sha: 'abc',
     started_at: '2026-08-15T09:00:00Z',
     finished_at: '2026-08-15T09:01:00Z',
-    stats: { prsSynced: 1, issuesSynced: 0, unclassifiedSeen: 0, failedItems: [], skippedStale: 0, truncations: [] },
+    stats: { prsSynced: 1, issuesSynced: 0, unclassifiedSeen: 0, failedItems: [], skippedStale: 0, truncations: [], threadsFailures: [] },
     error_message: null,
     ...overrides,
   }
@@ -109,7 +109,7 @@ describe('loadProductMapConsole 四态', () => {
 
   it('跑过一轮但零 PR ≠ 从没同步过(判据看 run,不看行数)', async () => {
     const store = new FakeSyncStore()
-    store.runs.push(fullRun({ stats: { prsSynced: 0, issuesSynced: 0, unclassifiedSeen: 0, failedItems: [], skippedStale: 0, truncations: [] } }))
+    store.runs.push(fullRun({ stats: { prsSynced: 0, issuesSynced: 0, unclassifiedSeen: 0, failedItems: [], skippedStale: 0, truncations: [], threadsFailures: [] } }))
     const p = await loadProductMapConsole(store, NOW)
     expect(p.trust.loadOutcome).toBe('ok')
   })
@@ -125,7 +125,7 @@ describe('loadProductMapConsole 四态', () => {
       main_head_sha: null,
       started_at: '2026-08-15T11:00:00Z',
       finished_at: '2026-08-15T11:00:05Z',
-      stats: { prsSynced: 1, issuesSynced: 0, unclassifiedSeen: 0, failedItems: [], skippedStale: 0, truncations: [] },
+      stats: { prsSynced: 1, issuesSynced: 0, unclassifiedSeen: 0, failedItems: [], skippedStale: 0, truncations: [], threadsFailures: [] },
       error_message: null,
     })
     const p = await loadProductMapConsole(store, NOW)

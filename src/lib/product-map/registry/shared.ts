@@ -149,30 +149,31 @@ export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
     dapeStages: ['authorization'],
     businessOutcome: 'PO/FDE 能在受认证的入口批准或拒绝待批动作，而不是进数据库手改',
     description:
-      '「只签授权，不执行」的服务端边界。PR #962 仍是 open draft —— 代码未进 main，' +
-      '所以这里是 M0：登记了、还没交付（draft PR 不构成任何证据）。',
+      '「只签授权，不执行」的服务端边界。PR #962 已于 2026-08-16 合并，代码真实落地在' +
+      'src/lib/kernel-approval/。但还没有一份冻结过的契约文档撑住 M1，登记表按「宁可保守」' +
+      '的规矩不虚报等级；而且它 requires 执行内核，内核那 4 张表没建好之前，这个入口批不了' +
+      '任何真实动作（那条卡点记在 platform.execution-kernel 上，这里不重复记）。',
     origin: 'me2_native',
     operationalStatus: 'not_operating',
     declaredMaturity: 'M0_REGISTERED',
     dependencies: [{ type: 'requires', target: 'platform.execution-kernel' }],
     linkedIssues: [881],
     linkedPullRequests: [{ number: 962, role: 'implements' }],
-    ownedPaths: [],
+    ownedPaths: ['src/lib/kernel-approval/'],
     contractEvidence: [],
     integrationEvidence: [],
     productionEvidence: [],
     learningEvidence: [],
     currentBlockers: [
-      { id: 'pr-962-in-review', kind: 'code', summary: 'PR #962 复审中，未合并', ref: '#962' },
-    ],
-    poDecisionRequired: [
       {
-        kind: 'merge',
-        decision:
-          '批准合并「批准或拒绝的入口」这段代码(PR #962)。不合:须人工批的动作永远没有入口,只能进数据库手改。合了:只加服务端代码,不改任何已上线行为。复审意见全解决后回 `go merge 962`。',
+        id: 'no-frozen-contract',
+        kind: 'code',
+        summary: '代码已合并，但还没有一份冻结过的契约文档，登记表按规矩不能凭代码存在就跳过 M1',
+        ref: '#962',
       },
     ],
-    nextMilestone: { target: 'M2_IMPLEMENTED', unlockedBy: ['pr-962-in-review'] },
+    poDecisionRequired: [],
+    nextMilestone: { target: 'M1_CONTRACT_FROZEN', unlockedBy: ['no-frozen-contract'] },
     ownerRole: 'claude-code',
   },
   {
