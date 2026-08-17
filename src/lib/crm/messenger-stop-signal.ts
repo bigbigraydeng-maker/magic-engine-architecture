@@ -61,6 +61,25 @@ export const MAX_PER_CLIENT = 20
 /** 原话截多长。够销售判断，又不至于把整页刷满。 */
 const QUOTE_MAX = 120
 
+/**
+ * `.in()` 一次最多塞多少个 id。
+ *
+ * 🔴 **不是性能优化，是能不能跑起来**（Codex 复审 PR #1037，2026-08-17）。
+ * PostgREST 的 `.in()` 走 URL 查询串：CTS 线上 658 个会话，光 UUID 就约 24 KB，
+ * 请求会在到数据库之前因为 URL 过长直接失败。而这条通道的异常被
+ * `loadManualItems` 的 catch 吞掉 —— 结果是**整条通道只留一行日志、一条待办都不下发**，
+ * 正是铁律 3「发现不许死在日志里」要防的那种失败。
+ *
+ * 同仓 `qualified-buyer-autotag.ts` 对同一张消息表已经按 100 分批，这里跟它一致。
+ */
+const IN_CHUNK = 100
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
+}
+
 export interface InboundDm {
   clientId: string
   contactId: string
@@ -210,16 +229,20 @@ export async function findMessengerStopSignals(
 
   // 2) 窗口内客人**自己发的**那些消息。我们自己发出去的不能拿来判客人拒联
   //    （同 PR #998 里邮件页脚那个事故）。
-  const msgs = await fetchAll<MessageRow>((from, to) =>
-    supabase
-      .from('conversation_messages')
-      .select('conversation_id, body, sent_at')
-      .in('conversation_id', convIds)
-      .eq('direction', 'inbound')
-      .gte('sent_at', cutoff)
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
+  const msgs: MessageRow[] = []
+  for (const part of chunk(convIds, IN_CHUNK)) {
+    const rows = await fetchAll<MessageRow>((from, to) =>
+      supabase
+        .from('conversation_messages')
+        .select('conversation_id, body, sent_at')
+        .in('conversation_id', part)
+        .eq('direction', 'inbound')
+        .gte('sent_at', cutoff)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    msgs.push(...rows)
+  }
   if (msgs.length === 0) return empty
 
   const messages: InboundDm[] = []
@@ -237,14 +260,18 @@ export async function findMessengerStopSignals(
 
   // 3) 这批人的触点：既拿来判「已经算拒联了吗」，也拿来判「有人看过了吗」。
   const contactIds = Array.from(new Set(messages.map((m) => m.contactId)))
-  const touches = await fetchAll<TouchRow>((from, to) =>
-    supabase
-      .from('contact_touchpoints')
-      .select('contact_id, occurred_at, source, metadata')
-      .in('contact_id', contactIds)
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
+  const touches: TouchRow[] = []
+  for (const part of chunk(contactIds, IN_CHUNK)) {
+    const rows = await fetchAll<TouchRow>((from, to) =>
+      supabase
+        .from('contact_touchpoints')
+        .select('contact_id, occurred_at, source, metadata')
+        .in('contact_id', part)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    touches.push(...rows)
+  }
 
   const dnc = new Map<string, { flag: boolean; touches: DncTouch[] }>()
   const lastHumanTouchAt = new Map<string, string>()
@@ -266,14 +293,18 @@ export async function findMessengerStopSignals(
 
   // 4) 镜像列。`isDoNotContact` 要两边都给 —— 触点是真相源，列是尽力维护的镜像，
   //    但「触点写成功、镜像失败」和「镜像写成功、触点没写」两种半写入状态都出现过。
-  const flags = await fetchAll<{ id: string; do_not_contact: boolean | null }>((from, to) =>
-    supabase
-      .from('contacts')
-      .select('id, do_not_contact')
-      .in('id', contactIds)
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
+  const flags: { id: string; do_not_contact: boolean | null }[] = []
+  for (const part of chunk(contactIds, IN_CHUNK)) {
+    const rows = await fetchAll<{ id: string; do_not_contact: boolean | null }>((from, to) =>
+      supabase
+        .from('contacts')
+        .select('id, do_not_contact')
+        .in('id', part)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    flags.push(...rows)
+  }
   for (const f of flags) {
     const entry = dnc.get(f.id) ?? { flag: false, touches: [] }
     entry.flag = f.do_not_contact === true
