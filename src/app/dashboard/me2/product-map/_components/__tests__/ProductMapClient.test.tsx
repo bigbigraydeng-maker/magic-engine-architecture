@@ -136,4 +136,20 @@ describe('ProductMapClient', () => {
     expect(screen.getByText(/关掉了/)).toBeDefined()
     expect(screen.getByText(/不一定是做完/)).toBeDefined()
   }, 30_000)
+
+  it('接下来要做什么:明说不是日历,且按依赖顺序排列(PM 二轮反馈)', () => {
+    const { container } = render(<ProductMapClient data={present()} />)
+    fireEvent.click(screen.getByText('接下来要做什么'))
+    expect(screen.getByText(/系统里没有真实排期数据/)).toBeDefined()
+    const text = container.textContent ?? ''
+    // 执行内核是地基,必须排在依赖它的"动作名字对表"前面
+    expect(text.indexOf('执行内核')).toBeGreaterThanOrEqual(0)
+    expect(text.indexOf('执行内核')).toBeLessThan(text.indexOf('动作名字对表'))
+  }, 30_000)
+
+  it('接下来要做什么:等你拍板的项带明显标记(注意 tab 按钮自己也叫这个名字,必须 >1 次才算真有徽章)', () => {
+    render(<ProductMapClient data={present()} />)
+    fireEvent.click(screen.getByText('接下来要做什么'))
+    expect(screen.getAllByText('等你拍板').length).toBeGreaterThan(1)
+  }, 30_000)
 })
