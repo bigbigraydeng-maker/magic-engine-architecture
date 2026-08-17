@@ -98,24 +98,27 @@ Also flagged from Phase 0 investigation (new corrections not listed in #1041):
 | `semrush_db` | `au` (assumed; needs confirmation) | Drives `location_code`; see C-7 |
 | `created_at` | 2026-08-01 | Older than #1039 |
 
-**`master_briefs` status**: **0 rows** for this client_id. This is the only true "brief" gap.
+**`master_briefs` status**: **0 rows** for this client_id.
 
-**Minimum truthful brief this PR proposes to insert** (nothing invented; every field cites its source):
+**Minimum brief needed to run Phase 0 measurements**: **zero rows required.**
+
+- §0.4 site crawl reads only `clients.domain` — no brief needed.
+- §0.5 DataForSEO probe reads only `clients.domain` + `clients.semrush_db` — no brief needed. Cluster hypotheses come from #1039 §15, are explicit in this PR (§0.5), and get validated by the probe itself.
+- §0.6 GEO baseline reads a `geo_query_sets` row (frozen 18-query set in §0.6 below) — no brief needed; the query set is a first-class artifact.
+
+Therefore this PR **does not insert a `master_briefs` row**. Populating it is a Phase 1 activity that must be co-decided with the product owner and grounded in (a) §0.5 probe results and (b) an explicit positioning review — never in author interpretation of marketing-site copy.
+
+**What a truthful Phase 1 seed would look like** (documented here so the follow-up PR does not have to re-derive it):
 
 | Field | Value | Source |
 |---|---|---|
-| `client_id` | `f1d062ca-929e-4b4e-ba6e-84752b748552` | above |
-| `version` | 1 | first row |
-| `is_active` | true | |
 | `brand_name` | `Magic Engine` | `clients.name` |
 | `website` | `https://magicengine.com.au` | live probe |
-| `source_website_urls` | `["https://magicengine.com.au/", "https://magicengine.com.au/discover.html", "https://magicengine.com.au/features.html", "https://magicengine.com.au/ai-growth-engine.html", "https://magicengine.com.au/geo.html"]` | live probe (existing pages, HTTP 200) |
-| `status` | `t0_baseline_only` | signal this is intentionally minimal |
-| `generated_by` | `phase0-t0-baseline-2026-08-17` | provenance |
+| `source_website_urls` | 5 canonical HTML URLs on the domain | live probe (HTTP 200) |
+| `status` | `t0_baseline` | (varchar(20) limit) |
+| `generated_by` | `phase0-2026-08-17` | (varchar(20) limit) |
 
-All other fields (tone, VI, keyword_seeds, competitor_domains, content_pillars, …) are **deliberately left NULL**. Filling them is a Phase 1 activity that must be grounded in (a) §0.5 probe results and (b) an explicit product-owner review of positioning — not in author interpretation of marketing-site copy.
-
-**Insertion is done in the same PR** via a one-off SQL statement recorded below §9 (idempotent — `ON CONFLICT (client_id, version) DO NOTHING`).
+All other fields (tone, VI, keyword_seeds, competitor_domains, content_pillars, target_audience, brand_voice, …) **remain NULL until Phase 1** co-decides them with product owner sign-off.
 
 ---
 
@@ -345,5 +348,5 @@ Goal per #1041: extract a reusable Organic Growth playbook without introducing a
 - No deploy
 - No merge
 - No publication
-- Only DB writes: `master_briefs` insert (1 row, minimal) + `keyword_snapshots`/`serp_ai_overview_snapshots`/`competitor_keyword_snapshots` inserts from §0.5 + `geo_batches`/`geo_queries`/`geo_observations`/`geo_evidence` inserts from §0.6
+- Only DB writes: `client_site_pages` inserts from §0.4 + `keyword_snapshots`/`serp_ai_overview_snapshots`/`competitor_keyword_snapshots` inserts from §0.5 + `geo_batches`/`geo_queries`/`geo_observations`/`geo_evidence` inserts from §0.6. **No `master_briefs` write** — populating that is a Phase 1 activity requiring product-owner sign-off.
 - All third-party spend within PM-authorized US$6.00 cap; receipts recorded in §10
