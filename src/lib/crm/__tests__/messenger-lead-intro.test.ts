@@ -44,19 +44,30 @@ describe('写法上的变体都要认', () => {
   })
 
   it('姓 + 名分成两行', () => {
-    expect(parseLeadIntroMessage('First name: Jane\nLast name: Doe\nEmail: j@x.com')?.name).toBe(
-      'Jane Doe',
-    )
+    expect(
+      parseLeadIntroMessage('First name: Jane\nLast name: Doe\nPhone: 021 555 000\nEmail: j@x.com')
+        ?.name,
+    ).toBe('Jane Doe')
   })
 
+  /**
+   * 下面几条只验「标签 / 冒号怎么解析」，不验收不收。所以带上那句问候语走 marker 那条路，
+   * 免得跟「三条字段全齐」的门槛缠在一起 —— 门槛本身另有专门的用例钉。
+   */
+  const HELLO = 'Hello! I filled out your form and would like to know more about your business.\n'
+
   it('中文冒号 + 中文自定义问题', () => {
-    const r = parseLeadIntroMessage('Full name: 陈小明\nEmail: chen@example.com\n想去哪个团？：丝绸之路')
+    const r = parseLeadIntroMessage(
+      `${HELLO}Full name: 陈小明\nEmail: chen@example.com\n想去哪个团？：丝绸之路`,
+    )
     expect(r?.name).toBe('陈小明')
     expect(r?.custom['想去哪个团？']).toBe('丝绸之路')
   })
 
   it('值里再出现冒号 → 只在第一个冒号切开', () => {
-    const r = parseLeadIntroMessage('Full name: Jane\nEmail: jane@example.com\nWhich tour?: 3:1 私家团')
+    const r = parseLeadIntroMessage(
+      `${HELLO}Full name: Jane\nEmail: jane@example.com\nWhich tour?: 3:1 私家团`,
+    )
     expect(r?.custom['Which tour?']).toBe('3:1 私家团')
   })
 })
@@ -97,6 +108,45 @@ describe('不该认的一律不认', () => {
   it('🔴「my friend filled out the form」+ 同行者资料 → 不认', () => {
     const forwarded = 'my friend filled out the form\nName: Sam Riley\nPhone: 021 555 999'
     expect(parseLeadIntroMessage(forwarded, { requireMarker: true })).toBeNull()
+  })
+
+  /**
+   * 🔴 **门槛是三条标准字段，不是两条**（Codex 复审 PR #1033，2026-08-17）。
+   *
+   * 调用方对**第一条**入站消息传 `requireMarker: false`，所以「两条就认」那版里，
+   * 转发同行者资料只要恰好落在对话第一条，就能冒充开场白 ——
+   * 把**别人的号码**写进这个人的档案。这两条用例就是钉这个门槛的。
+   */
+  it('🔴 转发同行者资料落在第一条（不要求问候语）+ 两条字段 → 仍然不认', () => {
+    const forwarded = 'my friend filled out the form\nName: Sam Riley\nPhone: 021 555 999'
+    // requireMarker 不传 = 调用方处理第一条消息时的真实调用方式
+    expect(parseLeadIntroMessage(forwarded)).toBeNull()
+  })
+
+  it('🔴 没有问候语时两条字段一律不认，三条全齐才认', () => {
+    // 姓名 + 电话
+    expect(parseLeadIntroMessage('Name: Sam Riley\nPhone: 021 555 999')).toBeNull()
+    // 姓名 + 邮箱
+    expect(parseLeadIntroMessage('Name: Sam Riley\nEmail: sam@example.com')).toBeNull()
+    // 电话 + 邮箱
+    expect(parseLeadIntroMessage('Phone: 021 555 999\nEmail: sam@example.com')).toBeNull()
+
+    // 三条全齐 —— 真表单自带的形状，即使换了语言、问候语认不出来也要收得下
+    const three = parseLeadIntroMessage(
+      'Kia ora! Kua oti i ahau te puka\nName: Sam Riley\nPhone: 021 555 999\nEmail: sam@example.com',
+    )
+    expect(three?.name).toBe('Sam Riley')
+    expect(three?.phone).toBe('021 555 999')
+    expect(three?.email).toBe('sam@example.com')
+  })
+
+  it('三条全齐但调用方要求问候语（第一条之后的消息）→ 照样不认', () => {
+    expect(
+      parseLeadIntroMessage(
+        'my friend filled out the form\nName: Sam\nPhone: 021 555 999\nEmail: sam@example.com',
+        { requireMarker: true },
+      ),
+    ).toBeNull()
   })
 
   it('带着那句问候语时，一条标准字段也认（那就是真的表单开场白）', () => {
