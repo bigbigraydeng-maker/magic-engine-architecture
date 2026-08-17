@@ -12,7 +12,7 @@
 import { describe, expect, it } from 'vitest'
 import { EMPTY_EXTERNAL_FACTS } from '../external-facts'
 import { deriveOperationalSnapshot } from '../operational-snapshot'
-import { makeComponent, makeFacts, mergedPr, mergedPrSync, openDraftPr } from './_fixtures'
+import { makeComponent, makeFacts, mergedPr, mergedPrSync, mergedPrSyncToBranch, openDraftPr } from './_fixtures'
 
 const repoEv = (over: Record<string, unknown> = {}) => ({ kind: 'importer', ref: 'src/a.ts', observedAt: '2026-08-14', verification: 'repo_verified', ...over })
 
@@ -30,6 +30,33 @@ describe('code in main?', () => {
     const s = deriveOperationalSnapshot(c, makeFacts([mergedPr(100)]))
     expect(s.codeInMain.status).toBe('unknown')
     expect(s.codeInMain.checkedAt).toBeNull()
+  })
+
+  it('base-branch 闸：merged 到非 main 分支（github_sync）→ 不判 yes，退回 unknown', () => {
+    const c = makeComponent({ linkedPullRequests: [{ number: 100, role: 'implements' }] })
+    const s = deriveOperationalSnapshot(c, makeFacts([mergedPrSyncToBranch(100, 'staging')]))
+    // 变异验证：若判据只看 source==='github_sync' 而漏掉 baseRef==='main'，这里会误判 yes。
+    expect(s.codeInMain.status).toBe('unknown')
+    expect(s.codeInMain.status).not.toBe('yes')
+    expect(s.codeInMain.checkedAt).toBeNull()
+    expect(s.codeInMain.evidenceSource).toContain('staging')
+    expect(s.codeInMain.evidenceSource).toContain('#100')
+  })
+
+  it('base-branch 闸：merged 但 baseRef 缺失（github_sync）→ fail-safe 不判 yes', () => {
+    const c = makeComponent({ linkedPullRequests: [{ number: 100, role: 'implements' }] })
+    // 显式构造一条缺 baseRef 的 github_sync merged fact（历史行 / 未回填）。
+    const facts = makeFacts([{ number: 100, state: 'merged', isDraft: false, observedAt: '2026-08-15', source: 'github_sync' }])
+    expect(deriveOperationalSnapshot(c, facts).codeInMain.status).toBe('unknown')
+    expect(deriveOperationalSnapshot(c, facts).codeInMain.status).not.toBe('yes')
+  })
+
+  it('base-branch 闸：同一 component 里 staging 合并 + 另一条 main 合并 → main 那条判 yes', () => {
+    const c = makeComponent({ linkedPullRequests: [{ number: 100, role: 'implements' }, { number: 200, role: 'implements' }] })
+    // 存在合到 main 的机器事实，应优先判 yes，而不是被 staging 那条压成 unknown。
+    const s = deriveOperationalSnapshot(c, makeFacts([mergedPrSyncToBranch(100, 'staging'), mergedPrSync(200)]))
+    expect(s.codeInMain.status).toBe('yes')
+    expect(s.codeInMain.evidenceSource).toContain('#200')
   })
 
   it('open draft PR → no（明确负向，带机器事实日期）', () => {

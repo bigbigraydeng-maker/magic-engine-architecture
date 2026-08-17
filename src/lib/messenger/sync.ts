@@ -15,6 +15,7 @@ import { getPageAccessToken } from '@/lib/meta/page-posts'
 import { fetchPageConversations, type MessengerConversation } from '@/lib/meta/conversations'
 import { linkMessengerConversation, loadIdentityIndex } from '@/lib/messenger/link-contacts'
 import { backfillUnlinkedConversations } from '@/lib/messenger/backfill'
+import { backfillLeadIntroDetails } from '@/lib/messenger/lead-intro-backfill'
 
 export interface MessengerSyncClient {
   id: string
@@ -45,6 +46,8 @@ export interface MessengerSyncResult {
   backfilled: number
   /** Stored threads still attached to nobody after this run's sweep. */
   backfillRemaining: number
+  /** 这一轮翻过私信找开场白的人数（补电话邮箱用）。 */
+  leadIntroScanned: number
   skipped?: 'no_page_id' | 'no_meta_token' | 'no_page_token'
   error?: string
 }
@@ -173,10 +176,23 @@ export async function syncClientMessenger(
     created: 0,
     backfilled: 0,
     backfillRemaining: 0,
+    leadIntroScanned: 0,
   }
 
   const pageId = client.facebook_page_id
   if (!pageId) return { ...base, skipped: 'no_page_id' }
+
+  /**
+   * 🔴 **本地补档案要跑在 Meta 凭证闸之前**（Codex 复审 2026-08-17）。
+   *
+   * 这一步**只读我们自己的数据库**（已经存下来的私信正文），跟 Meta 通不通没关系。
+   * 原先放在函数末尾，于是 token 过期 / 没授权 / 换不到 Page token 的客户会在
+   * 上面几行提前 return —— 他们的 CRM 卡片就一直缺着电话邮箱，而那些号码明明
+   * 早就躺在消息表里。授权断掉的客户恰恰最需要这条本地路还在跑。
+   *
+   * 函数自己吞异常，失败不影响下面的同步。
+   */
+  const details = await backfillLeadIntroDetails(client.id)
 
   // Preferred: a Page token stored by the "连接 Meta" button. Falls back to
   // deriving one from an env-var user token, which only works when that
@@ -242,6 +258,7 @@ export async function syncClientMessenger(
     // 一次重新处理。放在实时同步之后，且复用同一个 index（刚建的人已经在里面）。
     const sweep = await backfillUnlinkedConversations(client.id, index)
 
+
     return {
       ...base,
       conversations: conversations.length,
@@ -250,6 +267,7 @@ export async function syncClientMessenger(
       created,
       backfilled: sweep.created,
       backfillRemaining: sweep.remaining,
+      leadIntroScanned: details.scanned,
     }
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)

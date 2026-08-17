@@ -13,14 +13,14 @@ import type { ProductMapComponent } from '../types'
 export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
   {
     id: 'platform.execution-kernel',
-    name: 'Execution Kernel（执行内核）',
+    name: '自动执行的总闸(执行内核)',
     componentType: 'platform',
     architecturalRole: 'kernel',
     businessLane: 'shared',
     dapeStages: ['authorization', 'execution', 'verification'],
     businessOutcome: '所有会产生外部副作用的自动执行都必须经过同一道授权闸，客户资产不被未经批准的动作碰到',
     description:
-      '提交 action_run → 授权判定 → 分步执行 → 留痕回收的执行底座。代码已合并（PR #863 + 后续加固），但 4 张表未在生产建立、零生产调用方 —— 「代码在」不等于「在跑」。',
+      '任何会动客户资产的自动动作,都要先在这里排队等批准,做完留档。代码已合并(PR #863 + 后续加固),但它要用的 4 张表还没在生产建好、也还没有任何地方调用它 —— 「代码在」不等于「在跑」。',
     origin: 'me2_native',
     operationalStatus: 'not_operating',
     declaredMaturity: 'M2_IMPLEMENTED',
@@ -49,12 +49,20 @@ export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
       {
         id: 'approval-surface-missing',
         kind: 'code',
-        summary: '审批/拒绝界面（K-WP01）未交付，须人工批的动作没有入口',
+        // 🔴 PM 让另一窗口审查发现半句过期(2026-08-17):PR #962 已合并,服务端边界
+        // 代码真实存在(src/lib/kernel-approval/),不能再写「未交付」。但结论没变——
+        // 一没有人能点的界面(#881 K-WP01 整体在 GitHub 上仍开着),二就算有界面,
+        // 内核 4 张表没建也全报错。「没有能用的入口」这个大白话结论依然成立。
+        summary: '服务端授权边界已合并(PR #962),但没有人能点的界面(#881 未交付)，就算有界面 4 张表没建也全报错——人工批的动作还是没有能用的入口',
         ref: '#881',
       },
     ],
     poDecisionRequired: [
-      { kind: 'migration_apply', decision: '授权把内核 4 张表的 migration apply 到生产（回 go apply kernel 即可）' },
+      {
+        kind: 'migration_apply',
+        decision:
+          '执行内核的 4 张新表还没在生产建好。不建:自动执行这条线一步都跑不了,一直空转。建了:只加 4 张空表,不碰任何现有客户数据。回 `go apply kernel` 就行。',
+      },
     ],
     nextMilestone: {
       target: 'M3_INTEGRATED',
@@ -65,16 +73,16 @@ export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
   },
   {
     id: 'platform.action-bridge',
-    name: 'Action Bridge（候选身份治理）',
+    name: '动作名字对表(哪个动作叫什么)',
     componentType: 'platform',
     // ActionCandidate → ActionKey 的治理映射（WP00 §8），是 Kernel CAN/SHOULD/
     // AUTHORIZED 三问里 CAN 那问的注册表实现，不是独立的域推理。
     architecturalRole: 'kernel',
     businessLane: 'shared',
     dapeStages: ['prescription', 'authorization'],
-    businessOutcome: '域模块产出的「动作候选」翻译成内核认识的 ActionKey，词汇表受治理不野蛮生长',
+    businessOutcome: '以后加新战线不用重新发明一遍动作名,省返工',
     description:
-      'K-WP02 交付。MAPPING_TABLE 目前是刻意的空数组：零调用方、零生产 ActionKey 映射，等第一个域模块（WP05）进来才有第一条记录。',
+      '对照表现在是空的,等第一条战线接进来才有第一条 —— 这是刻意的,不是漏做。',
     origin: 'me2_native',
     operationalStatus: 'not_operating',
     declaredMaturity: 'M2_IMPLEMENTED',
@@ -101,7 +109,7 @@ export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
   },
   {
     id: 'platform.growth-contract',
-    name: 'Growth 契约（Finding / Prescription / ActionCandidate）',
+    name: '统一说法:发现 / 处方 / 建议动作',
     componentType: 'platform',
     // WP00 §5 的五个概念结构（Evidence/Finding/Prescription/ActionCandidate/
     // VerificationDefinition）是"任何 Domain Module 都按同一条五段链推理"（§4）
@@ -109,8 +117,8 @@ export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
     architecturalRole: 'domain_module',
     businessLane: 'shared',
     dapeStages: ['discovery', 'analysis', 'prescription'],
-    businessOutcome: '所有域模块用同一套「发现 / 处方 / 动作候选」语言说话，模块之间可比较、可审计',
-    description: 'WP01 交付的纯类型 + 校验器。零 importer —— WP05 GEO Module 是它的第一个约定消费者。',
+    businessOutcome: 'GEO 说的问题和 SEO 说的问题能放一起比,客户报告口径一致',
+    description: '只是一套说法的定义,还没有任何地方在用 —— 第一个用它的是 GEO 分析脑(还没开工)。',
     origin: 'me2_native',
     operationalStatus: 'not_operating',
     declaredMaturity: 'M2_IMPLEMENTED',
@@ -138,47 +146,52 @@ export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
   },
   {
     id: 'platform.kernel-approval-boundary',
-    name: '内核审批边界（K-WP01A）',
+    name: '批准或拒绝的入口',
     componentType: 'platform',
     architecturalRole: 'kernel',
     businessLane: 'shared',
     dapeStages: ['authorization'],
     businessOutcome: 'PO/FDE 能在受认证的入口批准或拒绝待批动作，而不是进数据库手改',
     description:
-      '「只签授权，不执行」的服务端边界。PR #962 仍是 open draft —— 代码未进 main，' +
-      '所以这里是 M0：登记了、还没交付（draft PR 不构成任何证据）。',
+      '「只签授权，不执行」的服务端边界。PR #962 已于 2026-08-16 合并，代码真实落地在' +
+      'src/lib/kernel-approval/。但还没有一份冻结过的契约文档撑住 M1，登记表按「宁可保守」' +
+      '的规矩不虚报等级；而且它 requires 执行内核，内核那 4 张表没建好之前，这个入口批不了' +
+      '任何真实动作（那条卡点记在 platform.execution-kernel 上，这里不重复记）。',
     origin: 'me2_native',
     operationalStatus: 'not_operating',
     declaredMaturity: 'M0_REGISTERED',
     dependencies: [{ type: 'requires', target: 'platform.execution-kernel' }],
     linkedIssues: [881],
     linkedPullRequests: [{ number: 962, role: 'implements' }],
-    ownedPaths: [],
+    ownedPaths: ['src/lib/kernel-approval/'],
     contractEvidence: [],
     integrationEvidence: [],
     productionEvidence: [],
     learningEvidence: [],
     currentBlockers: [
-      { id: 'pr-962-in-review', kind: 'code', summary: 'PR #962 复审中，未合并', ref: '#962' },
+      {
+        id: 'no-frozen-contract',
+        kind: 'code',
+        summary: '代码已合并，但还没有一份冻结过的契约文档，登记表按规矩不能凭代码存在就跳过 M1',
+        ref: '#962',
+      },
     ],
-    poDecisionRequired: [
-      { kind: 'merge', decision: 'PR #962 复审线程全解决后决定是否合并（回 go merge 962）' },
-    ],
-    nextMilestone: { target: 'M2_IMPLEMENTED', unlockedBy: ['pr-962-in-review'] },
+    poDecisionRequired: [],
+    nextMilestone: { target: 'M1_CONTRACT_FROZEN', unlockedBy: ['no-frozen-contract'] },
     ownerRole: 'claude-code',
   },
   {
     id: 'registry.canonical-page-inventory',
-    name: '站点页面台账（canonical inventory）',
+    name: '客户网站页面清单',
     componentType: 'registry',
     // 不是 WP00 第八层"Registry"——它是 Page 能力 resolve 段（WP06："路由决策
     // 与规范页面身份分开"）依赖的规范页面身份来源，语义上落在 Shared Capability。
     architecturalRole: 'shared_capability',
     businessLane: 'shared',
     dapeStages: ['discovery'],
-    businessOutcome: '「客户网站到底有哪些页面」有一份人工审过、可信、可追责的长期真值，页面级动作不再各说各话',
+    businessOutcome: '「客户网站到底有哪些页面」有一份人工审过的可信清单 —— 不然改错页、漏改页,客户会发现',
     description:
-      '#930 交付：发现 → 出台账计划 → 人工复核 → 激活 的纯逻辑层。没有 store 实现、没有 route/cron/UI 调用方（架构测试在盯）。PR #973 正在给它加生成时可信锚点（L1 信封）。',
+      '发现页面 → 出清单草案 → 人工复核 → 生效 的逻辑已写好,但还没有任何地方在用它。#973 在给它加一道防篡改的封条。',
     origin: 'me2_native',
     operationalStatus: 'not_operating',
     declaredMaturity: 'M2_IMPLEMENTED',
@@ -209,7 +222,7 @@ export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
   },
   {
     id: 'capability.page-optimization',
-    name: 'Page Optimization（页面修改共享能力）',
+    name: '改页面的手艺(SEO 和 GEO 共用)',
     componentType: 'capability',
     architecturalRole: 'shared_capability',
     businessLane: 'shared',
@@ -246,11 +259,11 @@ export const SHARED_COMPONENTS: readonly ProductMapComponent[] = [
   },
   {
     id: 'adapter.meta',
-    name: 'Meta 平台 adapter（Publishing/Ads/Messenger）',
+    name: '连 Facebook / Instagram 的插头',
     componentType: 'adapter',
     businessLane: 'shared',
     dapeStages: ['execution', 'verification'],
-    businessOutcome: '发帖、投广告、收发私信这些动作能翻译成 Meta Graph API 调用',
+    businessOutcome: '发帖、投广告、收发私信这些动作能翻译成 Facebook / Instagram 听得懂的指令',
     description: 'legacy 在跑：广告执行、页面发帖、留资同步、私信收件箱都走它。尚未以 ME2 adapter 契约重述。',
     origin: 'legacy',
     operationalStatus: 'operating_legacy',
