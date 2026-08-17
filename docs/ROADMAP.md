@@ -549,7 +549,13 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 与上面的 M2.7h / M2.7m 是同一件事的四个面，**票在 GitHub 上，这里只做索引**）：
 - [ ] [#1019](https://github.com/bigbigraydeng-maker/magic-engine/issues/1019) 换掉「他是不是要求别再联系」的判据 —— **怎么判**
 - [ ] [#1025](https://github.com/bigbigraydeng-maker/magic-engine/issues/1025) 🔴 Facebook 私信正文根本进不了这个判据 —— **喂什么进去**。
-      私信是 CTS 客人说话最多的渠道（2099 条 / 658 会话），闸是硬的、闸后面是空的
+      私信是 CTS 客人说话最多的渠道（2099 条 / 658 会话），闸是硬的、闸后面是空的。
+      ✅ **提示这一半已上线**（PM 2026-08-17 拍板 B 方案）：私信里像是说「别再联系」的人
+      进今日待办「🙋 需要你动手」，销售点进去看原话再决定 ——
+      `lib/crm/messenger-stop-signal.ts`，**一行写操作都没有**。
+      ⏳ **接进判据自动封渠道那一半仍不做**，前提是 #1019 先把判据修准。
+      两条已知代价（都写在模块文件头）：只看最近 30 天 · 每客户每轮最多 20 条。
+      要做到「一条不漏又不重复骚扰」得加一列「已复核」（改 schema，A 级），单独立项
 - [ ] [#1026](https://github.com/bigbigraydeng-maker/magic-engine/issues/1026) 中文「别再联系我」这类写法漏判
 - [ ] [#1027](https://github.com/bigbigraydeng-maker/magic-engine/issues/1027) 「别打电话，只发邮件」记不住 —— 需要**按渠道**的信号。
       PO 2026-08-17 已拍板短期行为：这种人**继续发邮件、留在邮件营销池里**
