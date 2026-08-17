@@ -294,6 +294,43 @@ describe('摘要回传给抽屉', () => {
     expect(s.travelWindow).toBe('三月')
   })
 
+  /**
+   * 🔴 **旧请求的结果一律丢掉**（Codex 复审 PR #1038 第三轮，2026-08-17）。
+   *
+   * 抽屉刚打开、第一次请求还没回来时，销售可以立刻点「没打通」。写成功之后
+   * 抽屉会换掉 `key` —— **整个组件被换掉**。旧实例那次请求仍在路上，回来得晚
+   * 就会把**写入之前**的摘要盖回去：顶上那张卡说的是记这一笔之前的话，
+   * 下面的记录却是新的。两边打架，而销售没办法看出哪边是真的。
+   *
+   * 光在实例内部记「第几次请求」不够 —— 旧实例是另一个实例，有自己的计数器。
+   * 闸必须是「这个实例还活着吗」。这条用例就是卸载之后再放行响应。
+   */
+  it('🔴 组件已经被换掉之后，旧请求的结果不许再回调', async () => {
+    let release: (v: unknown) => void = () => {}
+    global.fetch = vi.fn().mockReturnValue(
+      new Promise((r) => {
+        release = r
+      }),
+    ) as unknown as typeof fetch
+
+    const onSummary = vi.fn()
+    const { unmount } = render(
+      <ContactTimeline clientId="cts" contactId="c1" onSummary={onSummary} />,
+    )
+    // 请求还在路上就把这个实例换掉（= 抽屉换 key）
+    unmount()
+    // 旧请求这时候才回来
+    release({
+      ok: true,
+      json: async () => ({
+        contact: { name: 'Sue', phone: null, email: null, stageLabel: null },
+        timeline: [touch({ summary: '这是写入之前的旧数据' })],
+      }),
+    })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(onSummary).not.toHaveBeenCalled()
+  })
+
   it('🔴 拉失败时把摘要清掉 —— 顶上留着上一个人的话比空着危险', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
