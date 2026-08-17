@@ -14,7 +14,7 @@
  * 数据来自 GET /crm/contacts/[cid]/timeline（CRM 页面线建的读模型，直接复用）。
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AUTO_TAG_ACTOR } from '@/lib/crm/qualified-buyer'
 
 /**
@@ -30,9 +30,14 @@ export interface TimelineEntry {
   kind: 'touch' | 'stage' | 'message'
   at: string
   // touch
-  channel?: string
+  channel?: string | null
   direction?: 'inbound' | 'outbound'
   summary?: string | null
+  /**
+   * 销售真正敲进去的那句话 —— **跟 `summary` 不是一回事**，后者是 AI 摘要。
+   * 只在判决行旁边展示，理由见 `VERDICT_ROW`。
+   */
+  raw?: string | null
   tour?: string | null
   outcome?: string | null
   travelWindow?: string | null
@@ -74,6 +79,101 @@ const CHANNEL_NAME: Record<string, string> = {
   whatsapp: 'WhatsApp',
 }
 
+/**
+ * 「系统给他上了闸」这一类判决 —— 必须一眼认出来，不能混在普通往来里。
+ *
+ * ## 为什么单独一档（PM 2026-08-17）
+ *
+ * 这两个结论跟别的结论**不是一回事**：其它结论只是记录「这次聊得怎么样」，
+ * 这两个直接决定**还能不能联系这个人**。`do_not_contact` 一旦成立，
+ * 电话、邮件、私信全停；解闸只能靠人明确说「判错了」。
+ *
+ * 而在这之前，它们在时间线上跟一条普通电话记录长得一模一样 —— 销售翻记录
+ * 只看得到一句话，看不到「就是这一句让系统把他全渠道停了」。于是最该被复核的
+ * 那一刻，恰恰是最看不见的。
+ *
+ * 🔴 **原话一定要留在旁边**：判断「是不是判错了」全靠原话（早前的词表把
+ * 「我不打算去」当成过「别再联系」）。所以这里只给卡片加一条头和一道红边，
+ * **不替换卡片内容**。
+ *
+ * 🔴 而且必须是 `raw`、不能是 `summary`（Codex 复审 PR #1038，2026-08-17）：
+ * `summary` 是 **AI 生成的摘要**，「暂时不去」和「别再联系我」摘要之后可能
+ * 长得一样 —— 判决却天差地别。拿摘要去复核一个全渠道封锁，等于没复核。
+ */
+const VERDICT_ROW: Record<string, { icon: string; text: string; tone: 'stop' | 'clear' }> = {
+  do_not_contact: {
+    icon: '🔒',
+    // 说后果，不说结论名。销售要知道的是「所以现在怎么样」。
+    text: '就是这一句让系统停了他 —— 从这天起电话 / 邮件 / 私信全都不再发给他',
+    tone: 'stop',
+  },
+  dnc_cleared: {
+    icon: '🔓',
+    text: '有人判断上面那次是误判，把他放回了名单 —— 现在可以正常联系',
+    tone: 'clear',
+  },
+}
+
+/**
+ * 其余结论 → 人话。
+ *
+ * 只挑**会影响销售下一步动作**的那几种；`spoke` / `unknown` 是兜底值
+ * （任何没命中规则的备注都会落成 `spoke`），标出来只会变成满屏噪音。
+ */
+const OUTCOME_CHIP: Record<string, string> = {
+  bad_number: '这个号打不通',
+  no_answer: '打了没人接',
+  not_interested: '他说不买了',
+  not_interested_now: '这次先不去',
+}
+
+/**
+ * 记录一多就把这块框起来、并停在**最新**那一条。
+ *
+ * ## 为什么（CTS 销售视角，PM 2026-08-17）
+ *
+ * 这条线是**从旧到新**排的（聊天倒着排会把回答排在提问前面，读不通），
+ * 但整个抽屉是一路往下滚的：点开一个熟客，看到的是他三个月前的第一条记录，
+ * 要知道他上次说了什么得一路滚到底。微信、WhatsApp 打开都停在最新一句，
+ * 我们停在最早一句 —— 每天每个销售白滚几十次。
+ *
+ * 记录少的时候不框：一屏就看完了，框起来反而多一层滚动条。
+ */
+const LONG_TIMELINE = 6
+
+/**
+ * 「他上次说了什么、想去哪、什么时候走」——给抽屉最上面那张摘要卡用。
+ *
+ * 这些字段**本来就在这条线里**，只是散在十几条记录的小标签里。销售开口前
+ * 要的就是这三样，不该为了看它们把整条历史翻一遍。
+ */
+export interface TimelineSummary {
+  /** 最后一句有内容的话（客人说的或我们记的）。 */
+  lastText: string | null
+  lastWho: string | null
+  lastAt: string | null
+  /** 最新一次提到的团意向 / 出行时间 —— 越新的越算数。 */
+  tour: string | null
+  travelWindow: string | null
+}
+
+/** 从整条线里提炼摘要。线是从旧到新的，所以后面的覆盖前面的。 */
+function summarise(timeline: TimelineEntry[]): TimelineSummary | null {
+  if (timeline.length === 0) return null
+  const s: TimelineSummary = { lastText: null, lastWho: null, lastAt: null, tour: null, travelWindow: null }
+  for (const e of timeline) {
+    if (e.tour) s.tour = e.tour
+    if (e.travelWindow) s.travelWindow = e.travelWindow
+    const text = e.kind === 'message' ? e.body : e.kind === 'touch' ? e.summary : null
+    if (text && text.trim()) {
+      s.lastText = text.trim()
+      s.lastWho = e.direction === 'inbound' ? (e.senderName || '客人') : '我们'
+      s.lastAt = e.at
+    }
+  }
+  return s.lastText || s.tour || s.travelWindow ? s : null
+}
+
 function when(iso: string): string {
   const d = new Date(iso)
   const days = Math.floor((Date.now() - d.getTime()) / 86_400_000)
@@ -84,108 +184,297 @@ function when(iso: string): string {
   return date
 }
 
-export function ContactTimeline({ clientId, contactId }: { clientId: string; contactId: string }) {
+/**
+ * 「他是从哪来的」—— 时间线**从旧到新**，所以第一条就是他第一次出现在我们面前。
+ *
+ * 单独提一行的理由（CTS 销售视角）：接手一个陌生人，第一个要判断的是「这人
+ * 值不值得马上打」，而来源就是最强的那个信号 —— 填过表单的人跟一句
+ * 「洗牙多少钱」进来的人，开场白根本不该一样。
+ *
+ * 🔴 **两道闸，缺一条就不说**（Codex 复审 PR #1038，2026-08-17）：
+ *
+ *   1. 必须是**客人来的**（`inbound`）。第一条是我们打出去的电话时，说明的是
+ *      「我们怎么找到他的」，不是「他从哪来的」—— 初版会照样写「他是从电话来的」。
+ *   2. 渠道必须**认得出**。原先把所有 `message` 硬编码成「私信」，
+ *      而对话表里还有 email / whatsapp / voice。
+ *
+ * 认不出就整行不显示 —— 这一行的价值全在「可信」，说错还不如不说。
+ */
+function originOf(timeline: TimelineEntry[]): { name: string; at: string } | null {
+  const first = timeline[0]
+  if (!first || (first.kind !== 'touch' && first.kind !== 'message')) return null
+  if (first.direction !== 'inbound') return null
+  const name = CHANNEL_NAME[first.channel ?? '']
+  return name ? { name, at: first.at } : null
+}
+
+/** 客人说的话 —— 白底靠左；我们说的 —— 灰底靠右缩进。一眼分得出谁在说。 */
+function MessageRow({ e }: { e: TimelineEntry }) {
+  const inbound = e.direction === 'inbound'
+  return (
+    <div className={inbound ? '' : 'pl-8'}>
+      <div className={`rounded-xl px-3 py-2 ${inbound ? 'bg-white border border-me-charcoal/10' : 'bg-me-ivory'}`}>
+        <p className="mb-0.5 text-[10px] font-bold text-me-charcoal/40">
+          {inbound ? (e.senderName || '客人') : '我们'} · {when(e.at)}
+        </p>
+        <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-me-charcoal/85">{e.body}</p>
+      </div>
+    </div>
+  )
+}
+
+function StageRow({ e }: { e: TimelineEntry }) {
+  return (
+    <div className="flex items-baseline gap-2 px-1 text-[11px] text-me-charcoal/45">
+      <span>🔀</span>
+      <span>
+        {e.fromLabel ?? '还没标'} → <span className="font-bold text-me-charcoal/70">{e.toLabel}</span>
+        {e.changedBy ? ` · ${changedByLabel(e.changedBy)}` : ''} · {when(e.at)}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * 判决那两块：原话 + 后果。
+ *
+ * 🔴 原话必须是 `raw` 不是 `summary`（后者是 AI 摘要）—— 复核一个全渠道封锁
+ * 靠的是「暂时不去」和「别再联系我」的字面差别，摘要一压缩两句可能长得一样。
+ * 摆在摘要**下面**：先读他说了什么，再看系统据此做了什么。
+ */
+function Verdict({ e }: { e: TimelineEntry }) {
+  const verdict = e.outcome ? VERDICT_ROW[e.outcome] : undefined
+  if (!verdict) return null
+  const stop = verdict.tone === 'stop'
+  return (
+    <>
+      {e.raw && e.raw !== e.summary && (
+        <p className="mt-1.5 whitespace-pre-wrap rounded-lg bg-me-charcoal/[0.04] px-2 py-1.5 text-[12px] leading-relaxed text-me-charcoal/70">
+          原话：{e.raw}
+        </p>
+      )}
+      <p
+        className={`mt-1.5 rounded-lg px-2 py-1.5 text-[11px] font-bold leading-relaxed ${
+          stop ? 'bg-[#C2453A]/8 text-[#C2453A]' : 'bg-me-ochre/12 text-me-ochre'
+        }`}
+      >
+        {verdict.icon} {verdict.text}
+      </p>
+    </>
+  )
+}
+
+function Chips({ items }: { items: string[] }) {
+  if (items.length === 0) return null
+  return (
+    <div className="mt-1.5 flex flex-wrap gap-1">
+      {items.map((c) => (
+        <span key={c} className="rounded-full bg-me-ochre/12 px-2 py-0.5 text-[10px] font-bold text-me-ochre">
+          {c}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/** 触点：电话 / 表单 / 以后的任何新渠道。判决那一档在这里加边加话。 */
+function TouchRow({ e }: { e: TimelineEntry }) {
+  const icon = CHANNEL_ICON[e.channel ?? ''] ?? '•'
+  const name = CHANNEL_NAME[e.channel ?? ''] ?? e.channel ?? '接触'
+  const chips = [
+    e.tour && `想去：${e.tour}`,
+    e.travelWindow && `${e.travelWindow} 走`,
+    e.competitor && `提到 ${e.competitor}`,
+    e.callbackAt && '约了回电',
+    e.outcome ? OUTCOME_CHIP[e.outcome] : null,
+  ].filter(Boolean) as string[]
+
+  const verdict = e.outcome ? VERDICT_ROW[e.outcome] : undefined
+  const stop = verdict?.tone === 'stop'
+
+  return (
+    <div
+      className={`rounded-xl border bg-white px-3 py-2 ${
+        verdict
+          ? `border-l-4 ${stop ? 'border-l-[#C2453A] border-[#C2453A]/25' : 'border-l-me-ochre border-me-ochre/30'}`
+          : 'border-me-charcoal/10'
+      }`}
+    >
+      <p className="text-[10px] font-bold text-me-charcoal/40">
+        {icon} {name}
+        {e.direction === 'inbound' ? ' · 客人来的' : ''} · {when(e.at)}
+      </p>
+      {e.summary && (
+        <p className="mt-0.5 text-[13px] leading-relaxed text-me-charcoal/85">{e.summary}</p>
+      )}
+      <Verdict e={e} />
+      <Chips items={chips} />
+    </div>
+  )
+}
+
+function Row({ e }: { e: TimelineEntry }) {
+  if (e.kind === 'message') return <MessageRow e={e} />
+  if (e.kind === 'stage') return <StageRow e={e} />
+  return <TouchRow e={e} />
+}
+
+/**
+ * 拉时间线，并把摘要交给抽屉。
+ *
+ * 🔴 **旧请求的结果一律丢掉**（Codex 复审 PR #1038 第三轮，2026-08-17）。
+ *
+ * 抽屉刚打开、第一次 GET 还没回来时，销售可以立刻点「没打通」。写成功之后
+ * 抽屉会换掉 `key` —— **整个组件被换掉，不是重新拉一次**。于是旧实例那次
+ * 请求仍在路上，回来得晚的话，它会通过父级回调把**写入之前**的摘要盖回去：
+ * 顶上那张卡说的是记这一笔之前的话，下面的记录却是新的。两边打架，
+ * 而销售没有任何办法看出哪边是真的。
+ *
+ * 光在实例内部记一个「第几次请求」不够 —— 旧实例是**另一个实例**，
+ * 它有自己的计数器。所以闸必须是「这个实例还活着吗」：卸载时置死，
+ * 死了之后一律不碰任何状态、也不回调。
+ *
+ * 顺带 abort 掉在途请求（省一次白跑），但 abort 抛出的错**不能**当成加载失败 ——
+ * 那会把摘要清成空，等于换个方式说假话。
+ */
+function useTimeline(
+  clientId: string,
+  contactId: string,
+  onSummary?: (s: TimelineSummary | null) => void,
+) {
   const [data, setData] = useState<Payload | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
+  const alive = useRef(true)
+  const [attempt, setAttempt] = useState(0)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setErr(null)
-    try {
-      const res = await fetch(`/api/clients/${clientId}/crm/contacts/${contactId}/timeline`)
-      const json = (await res.json()) as Payload
-      if (!res.ok) throw new Error(json.error ?? '加载失败')
-      setData(json)
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : '加载失败')
-    } finally {
-      setLoading(false)
+  useEffect(() => {
+    alive.current = true
+    const ctrl = new AbortController()
+    const run = async () => {
+      setLoading(true)
+      setErr(null)
+      try {
+        const res = await fetch(
+          `/api/clients/${clientId}/crm/contacts/${contactId}/timeline`,
+          { signal: ctrl.signal },
+        )
+        const json = (await res.json()) as Payload
+        if (!res.ok) throw new Error(json.error ?? '加载失败')
+        if (!alive.current) return
+        setData(json)
+        onSummary?.(summarise(json.timeline ?? []))
+      } catch (e) {
+        // 被自己 abort 掉的不是失败，什么都别改 —— 改了就是替一个已经作废的
+        // 请求说话，而它说的正好是旧的。
+        if (!alive.current || (e instanceof Error && e.name === 'AbortError')) return
+        setErr(e instanceof Error ? e.message : '加载失败')
+        // 拉失败时把摘要清掉 —— 顶上那张卡留着上一个人的话，比空着危险得多。
+        onSummary?.(null)
+      } finally {
+        if (alive.current) setLoading(false)
+      }
     }
-  }, [clientId, contactId])
+    void run()
+    return () => {
+      alive.current = false
+      ctrl.abort()
+    }
+  }, [clientId, contactId, onSummary, attempt])
 
-  useEffect(() => { void load() }, [load])
+  return { data, loading, err, retry: () => setAttempt((n) => n + 1) }
+}
 
+/**
+ * 记录多的时候停在**最新**那一条。
+ *
+ * 用容器自己的 `scrollTop`，不用 `scrollIntoView` —— 后者会把**抽屉整体**
+ * 一起滚下去，把上面的联系方式和摘要卡顶出屏幕，正好抵消这次改动的目的。
+ */
+function useStickToLatest(data: Payload | null) {
+  const listRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = listRef.current
+    if (!el || !data || data.timeline.length <= LONG_TIMELINE) return
+    el.scrollTop = el.scrollHeight
+  }, [data])
+  return listRef
+}
+
+/** 加载中 / 出错 / 还没有记录 —— 三种「没内容可看」的样子。 */
+function Placeholder({
+  loading,
+  err,
+  onRetry,
+}: {
+  loading: boolean
+  err: string | null
+  onRetry: () => void
+}) {
   if (loading) return <p className="py-6 text-center text-xs text-me-charcoal/40">加载往来记录…</p>
   if (err) {
     return (
       <div className="py-4 text-center">
         <p className="text-xs text-[#C2453A]">{err}</p>
-        <button onClick={() => void load()} className="mt-1 text-xs font-bold underline">重试</button>
+        <button onClick={onRetry} className="mt-1 text-xs font-bold underline">重试</button>
       </div>
     )
   }
-  if (!data || data.timeline.length === 0) {
-    return <p className="py-6 text-center text-xs text-me-charcoal/40">还没有往来记录。</p>
+  return <p className="py-6 text-center text-xs text-me-charcoal/40">还没有往来记录。</p>
+}
+
+export function ContactTimeline({
+  clientId,
+  contactId,
+  onSummary,
+}: {
+  clientId: string
+  contactId: string
+  /**
+   * 把摘要交给抽屉，让它渲染在**最上面**那张卡里。
+   *
+   * 为什么由这里算而不是抽屉再拉一次：同一份数据只该取一次，两次取意味着
+   * 两处判据、以后必然走散。这里是唯一拉时间线的地方。
+   */
+  onSummary?: (s: TimelineSummary | null) => void
+}) {
+  const { data, loading, err, retry } = useTimeline(clientId, contactId, onSummary)
+  const listRef = useStickToLatest(data)
+
+  if (loading || err || !data || data.timeline.length === 0) {
+    return <Placeholder loading={loading} err={err} onRetry={retry} />
   }
+
+  const origin = originOf(data.timeline)
+  const long = data.timeline.length > LONG_TIMELINE
 
   return (
     <div className="space-y-2.5">
-      {data.timeline.map((e, i) => {
-        // 客人说的话 —— 白底靠左；我们说的 —— 灰底靠右缩进。一眼分得出谁在说。
-        if (e.kind === 'message') {
-          const inbound = e.direction === 'inbound'
-          return (
-            <div key={i} className={inbound ? '' : 'pl-8'}>
-              <div className={`rounded-xl px-3 py-2 ${inbound ? 'bg-white border border-me-charcoal/10' : 'bg-me-ivory'}`}>
-                <p className="mb-0.5 text-[10px] font-bold text-me-charcoal/40">
-                  {inbound ? (e.senderName || '客人') : '我们'} · {when(e.at)}
-                </p>
-                <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-me-charcoal/85">{e.body}</p>
-              </div>
-            </div>
-          )
-        }
-
-        if (e.kind === 'stage') {
-          return (
-            <div key={i} className="flex items-baseline gap-2 px-1 text-[11px] text-me-charcoal/45">
-              <span>🔀</span>
-              <span>
-                {e.fromLabel ?? '还没标'} → <span className="font-bold text-me-charcoal/70">{e.toLabel}</span>
-                {e.changedBy ? ` · ${changedByLabel(e.changedBy)}` : ''} · {when(e.at)}
-              </span>
-            </div>
-          )
-        }
-
-        // 触点：电话 / 表单 / 以后的任何新渠道
-        const icon = CHANNEL_ICON[e.channel ?? ''] ?? '•'
-        const name = CHANNEL_NAME[e.channel ?? ''] ?? e.channel ?? '接触'
-        const chips = [
-          e.tour && `想去：${e.tour}`,
-          e.travelWindow && `${e.travelWindow} 走`,
-          e.competitor && `提到 ${e.competitor}`,
-          e.callbackAt && '约了回电',
-        ].filter(Boolean) as string[]
-
-        return (
-          <div key={i} className="rounded-xl border border-me-charcoal/10 bg-white px-3 py-2">
-            <p className="text-[10px] font-bold text-me-charcoal/40">
-              {icon} {name}
-              {e.direction === 'inbound' ? ' · 客人来的' : ''} · {when(e.at)}
-            </p>
-            {e.summary && (
-              <p className="mt-0.5 text-[13px] leading-relaxed text-me-charcoal/85">{e.summary}</p>
-            )}
-            {chips.length > 0 && (
-              <div className="mt-1.5 flex flex-wrap gap-1">
-                {chips.map((c) => (
-                  <span key={c} className="rounded-full bg-me-ochre/12 px-2 py-0.5 text-[10px] font-bold text-me-ochre">
-                    {c}
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-        )
-      })}
-
-      {!!data.omittedMessages && (
-        <p className="pt-1 text-center text-[10px] text-me-charcoal/30">
-          另有 {data.omittedMessages} 条图片 / 表情，没有文字
+      {/*
+        🔴 来源这一行必须在滚动区**外面**（Codex 复审 PR #1038，2026-08-17）。
+        它原先是滚动容器的第一个子元素，而下面那个 effect 会把容器直接滚到底 ——
+        记录多的人一打开这行就被顶出可视区，而那批人恰恰最需要知道来源。
+      */}
+      {origin && (
+        <p className="px-1 text-[11px] text-me-charcoal/45">
+          👋 他是从<span className="font-bold text-me-charcoal/70">{origin.name}</span>来的 ·{' '}
+          {when(origin.at)}
         </p>
       )}
+      <div
+        ref={listRef}
+        data-testid="timeline-list"
+        className={`space-y-2.5 ${long ? 'max-h-[52vh] overflow-y-auto pr-1' : ''}`}
+      >
+        {data.timeline.map((e, i) => (
+          <Row key={i} e={e} />
+        ))}
+        {!!data.omittedMessages && (
+          <p className="pt-1 text-center text-[10px] text-me-charcoal/30">
+            另有 {data.omittedMessages} 条图片 / 表情，没有文字
+          </p>
+        )}
+      </div>
     </div>
   )
 }
