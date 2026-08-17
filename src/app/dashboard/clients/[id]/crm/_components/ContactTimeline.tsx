@@ -14,7 +14,7 @@
  * 数据来自 GET /crm/contacts/[cid]/timeline（CRM 页面线建的读模型，直接复用）。
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AUTO_TAG_ACTOR } from '@/lib/crm/qualified-buyer'
 
 /**
@@ -30,9 +30,14 @@ export interface TimelineEntry {
   kind: 'touch' | 'stage' | 'message'
   at: string
   // touch
-  channel?: string
+  channel?: string | null
   direction?: 'inbound' | 'outbound'
   summary?: string | null
+  /**
+   * 销售真正敲进去的那句话 —— **跟 `summary` 不是一回事**，后者是 AI 摘要。
+   * 只在判决行旁边展示，理由见 `VERDICT_ROW`。
+   */
+  raw?: string | null
   tour?: string | null
   outcome?: string | null
   travelWindow?: string | null
@@ -90,6 +95,10 @@ const CHANNEL_NAME: Record<string, string> = {
  * 🔴 **原话一定要留在旁边**：判断「是不是判错了」全靠原话（早前的词表把
  * 「我不打算去」当成过「别再联系」）。所以这里只给卡片加一条头和一道红边，
  * **不替换卡片内容**。
+ *
+ * 🔴 而且必须是 `raw`、不能是 `summary`（Codex 复审 PR #1038，2026-08-17）：
+ * `summary` 是 **AI 生成的摘要**，「暂时不去」和「别再联系我」摘要之后可能
+ * 长得一样 —— 判决却天差地别。拿摘要去复核一个全渠道封锁，等于没复核。
  */
 const VERDICT_ROW: Record<string, { icon: string; text: string; tone: 'stop' | 'clear' }> = {
   do_not_contact: {
@@ -118,6 +127,53 @@ const OUTCOME_CHIP: Record<string, string> = {
   not_interested_now: '这次先不去',
 }
 
+/**
+ * 记录一多就把这块框起来、并停在**最新**那一条。
+ *
+ * ## 为什么（CTS 销售视角，PM 2026-08-17）
+ *
+ * 这条线是**从旧到新**排的（聊天倒着排会把回答排在提问前面，读不通），
+ * 但整个抽屉是一路往下滚的：点开一个熟客，看到的是他三个月前的第一条记录，
+ * 要知道他上次说了什么得一路滚到底。微信、WhatsApp 打开都停在最新一句，
+ * 我们停在最早一句 —— 每天每个销售白滚几十次。
+ *
+ * 记录少的时候不框：一屏就看完了，框起来反而多一层滚动条。
+ */
+const LONG_TIMELINE = 6
+
+/**
+ * 「他上次说了什么、想去哪、什么时候走」——给抽屉最上面那张摘要卡用。
+ *
+ * 这些字段**本来就在这条线里**，只是散在十几条记录的小标签里。销售开口前
+ * 要的就是这三样，不该为了看它们把整条历史翻一遍。
+ */
+export interface TimelineSummary {
+  /** 最后一句有内容的话（客人说的或我们记的）。 */
+  lastText: string | null
+  lastWho: string | null
+  lastAt: string | null
+  /** 最新一次提到的团意向 / 出行时间 —— 越新的越算数。 */
+  tour: string | null
+  travelWindow: string | null
+}
+
+/** 从整条线里提炼摘要。线是从旧到新的，所以后面的覆盖前面的。 */
+function summarise(timeline: TimelineEntry[]): TimelineSummary | null {
+  if (timeline.length === 0) return null
+  const s: TimelineSummary = { lastText: null, lastWho: null, lastAt: null, tour: null, travelWindow: null }
+  for (const e of timeline) {
+    if (e.tour) s.tour = e.tour
+    if (e.travelWindow) s.travelWindow = e.travelWindow
+    const text = e.kind === 'message' ? e.body : e.kind === 'touch' ? e.summary : null
+    if (text && text.trim()) {
+      s.lastText = text.trim()
+      s.lastWho = e.direction === 'inbound' ? (e.senderName || '客人') : '我们'
+      s.lastAt = e.at
+    }
+  }
+  return s.lastText || s.tour || s.travelWindow ? s : null
+}
+
 function when(iso: string): string {
   const d = new Date(iso)
   const days = Math.floor((Date.now() - d.getTime()) / 86_400_000)
@@ -128,10 +184,25 @@ function when(iso: string): string {
   return date
 }
 
-export function ContactTimeline({ clientId, contactId }: { clientId: string; contactId: string }) {
+export function ContactTimeline({
+  clientId,
+  contactId,
+  onSummary,
+}: {
+  clientId: string
+  contactId: string
+  /**
+   * 把摘要交给抽屉，让它渲染在**最上面**那张卡里。
+   *
+   * 为什么由这里算而不是抽屉再拉一次：同一份数据只该取一次，两次取意味着
+   * 两处判据、以后必然走散。这里是唯一拉时间线的地方。
+   */
+  onSummary?: (s: TimelineSummary | null) => void
+}) {
   const [data, setData] = useState<Payload | null>(null)
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -141,14 +212,29 @@ export function ContactTimeline({ clientId, contactId }: { clientId: string; con
       const json = (await res.json()) as Payload
       if (!res.ok) throw new Error(json.error ?? '加载失败')
       setData(json)
+      onSummary?.(summarise(json.timeline ?? []))
     } catch (e) {
       setErr(e instanceof Error ? e.message : '加载失败')
+      // 拉失败时把摘要清掉 —— 顶上那张卡留着上一个人的话，比空着危险得多。
+      onSummary?.(null)
     } finally {
       setLoading(false)
     }
-  }, [clientId, contactId])
+  }, [clientId, contactId, onSummary])
 
   useEffect(() => { void load() }, [load])
+
+  /**
+   * 记录多的时候停在**最新**那一条。
+   *
+   * 用容器自己的 `scrollTop`，不用 `scrollIntoView` —— 后者会把**抽屉整体**
+   * 一起滚下去，把上面的联系方式和摘要卡顶出屏幕，正好抵消这次改动的目的。
+   */
+  useEffect(() => {
+    const el = listRef.current
+    if (!el || !data || data.timeline.length <= LONG_TIMELINE) return
+    el.scrollTop = el.scrollHeight
+  }, [data])
 
   if (loading) return <p className="py-6 text-center text-xs text-me-charcoal/40">加载往来记录…</p>
   if (err) {
@@ -170,17 +256,31 @@ export function ContactTimeline({ clientId, contactId }: { clientId: string; con
    * 值不值得马上打」，而来源就是最强的那个信号 —— 填过表单的人跟一句
    * 「洗牙多少钱」进来的人，开场白根本不该一样。原先这条信息埋在最上面那张
    * 卡片的小字里，跟后面十几条长得一模一样，扫过去看不见。
+   *
+   * 🔴 **两道闸，缺一条就不说**（Codex 复审 PR #1038，2026-08-17）：
+   *
+   *   1. 必须是**客人来的**（`inbound`）。第一条是我们打出去的电话时，
+   *      那说明的是「我们怎么找到他的」，不是「他从哪来的」——
+   *      初版会照样写「他是从电话来的」，给销售一个错的开场依据。
+   *   2. 渠道必须**认得出**。原先把所有 `message` 硬编码成「私信」，
+   *      而对话表里还有 email / whatsapp / voice。
+   *
+   * 认不出就整行不显示 —— 这一行的价值全在「可信」，说错还不如不说。
    */
   const first = data.timeline[0]
   const originName =
-    first?.kind === 'touch'
-      ? (CHANNEL_NAME[first.channel ?? ''] ?? first.channel ?? null)
-      : first?.kind === 'message'
-        ? '私信'
-        : null
+    first && (first.kind === 'touch' || first.kind === 'message') && first.direction === 'inbound'
+      ? (CHANNEL_NAME[first.channel ?? ''] ?? null)
+      : null
+
+  const long = data.timeline.length > LONG_TIMELINE
 
   return (
-    <div className="space-y-2.5">
+    <div
+      ref={listRef}
+      data-testid="timeline-list"
+      className={`space-y-2.5 ${long ? 'max-h-[52vh] overflow-y-auto pr-1' : ''}`}
+    >
       {originName && (
         <p className="px-1 text-[11px] text-me-charcoal/45">
           👋 他是从<span className="font-bold text-me-charcoal/70">{originName}</span>来的 ·{' '}
@@ -244,6 +344,13 @@ export function ContactTimeline({ clientId, contactId }: { clientId: string; con
             </p>
             {e.summary && (
               <p className="mt-0.5 text-[13px] leading-relaxed text-me-charcoal/85">{e.summary}</p>
+            )}
+            {/* 🔴 判决旁边必须是**原话**，不是上面那句 AI 摘要 —— 复核靠字面差别。
+                摘要里没有的措辞（「暂时」「这次」）正是判断误判的全部依据。 */}
+            {verdict && e.raw && e.raw !== e.summary && (
+              <p className="mt-1.5 whitespace-pre-wrap rounded-lg bg-me-charcoal/[0.04] px-2 py-1.5 text-[12px] leading-relaxed text-me-charcoal/70">
+                原话：{e.raw}
+              </p>
             )}
             {/* 判决摆在原话**下面** —— 先读客人说了什么，再看系统据此做了什么。 */}
             {verdict && (
