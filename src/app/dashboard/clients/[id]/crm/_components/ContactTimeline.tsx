@@ -276,17 +276,26 @@ export function ContactTimeline({
   const long = data.timeline.length > LONG_TIMELINE
 
   return (
-    <div
-      ref={listRef}
-      data-testid="timeline-list"
-      className={`space-y-2.5 ${long ? 'max-h-[52vh] overflow-y-auto pr-1' : ''}`}
-    >
+    <div className="space-y-2.5">
+      {/*
+        🔴 来源这一行必须在滚动区**外面**（Codex 复审 PR #1038，2026-08-17）。
+
+        它原先是滚动容器的第一个子元素，而上面那个 effect 会把容器直接滚到底 ——
+        于是记录多的人一打开，这一行就被顶出可视区，销售得自己滚回顶部才看得到。
+        而记录多的人**恰恰是最需要知道来源的那批**（历史越长越记不清他哪来的）。
+        两个改动互相抵消，等于两个都白做。
+      */}
       {originName && (
         <p className="px-1 text-[11px] text-me-charcoal/45">
           👋 他是从<span className="font-bold text-me-charcoal/70">{originName}</span>来的 ·{' '}
           {when(first.at)}
         </p>
       )}
+      <div
+        ref={listRef}
+        data-testid="timeline-list"
+        className={`space-y-2.5 ${long ? 'max-h-[52vh] overflow-y-auto pr-1' : ''}`}
+      >
       {data.timeline.map((e, i) => {
         // 客人说的话 —— 白底靠左；我们说的 —— 灰底靠右缩进。一眼分得出谁在说。
         if (e.kind === 'message') {
@@ -380,6 +389,7 @@ export function ContactTimeline({
           另有 {data.omittedMessages} 条图片 / 表情，没有文字
         </p>
       )}
+      </div>
     </div>
   )
 }

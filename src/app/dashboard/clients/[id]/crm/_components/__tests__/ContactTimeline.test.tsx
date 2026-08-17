@@ -245,6 +245,25 @@ describe('记录多的时候停在最新一条', () => {
     }
   })
 
+  /**
+   * 🔴 来源那一行必须在滚动区**外面**（Codex 复审 PR #1038，2026-08-17）。
+   *
+   * 它原先是滚动容器的第一个子元素，而容器一打开就被滚到底 —— 记录多的人
+   * 一进来这行就被顶出可视区。而记录多的人恰恰最需要知道来源（历史越长越
+   * 记不清他哪来的）。两个改动互相抵消，等于两个都白做。
+   */
+  it('🔴 来源那一行不在滚动区里 —— 否则一滚到底就看不见了', async () => {
+    mockTimeline([
+      touch({ channel: 'meta_lead_form', direction: 'inbound', summary: '填了表单' }),
+      ...many(11),
+    ])
+    draw()
+    const origin = await waitFor(() => screen.getByText('Facebook 表单'))
+    const list = screen.getByTestId('timeline-list')
+    expect(list.className).toContain('overflow-y-auto')
+    expect(list.contains(origin)).toBe(false)
+  })
+
   it('记录少 → 不去动滚动位置', async () => {
     const spy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(2000)
     try {
