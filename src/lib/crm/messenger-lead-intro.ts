@@ -75,7 +75,7 @@ const LABEL_TO_FIELD: Record<string, string> = {
  * `Name: … / Phone: …` 的形状 —— 认了就会把**别人的号码**写进这个人的档案。
  *
  * Meta 的模板措辞可能随语言变，所以不强制要求它，而是当成两条路之一：
- * 有这句话 → 认；没有 → 必须**至少两条标准字段**（姓名/电话/邮箱里的两条），
+ * 有这句话 → 认；没有 → 必须**三条标准字段全齐**（姓名 + 电话 + 邮箱），
  * 且调用方对第一条入站消息之后的每一条都要求它。
  *
  * 🔴 **必须锚在开头、而且主语是「我」**（Codex 复审 2026-08-17）：裸的
@@ -112,8 +112,8 @@ export function parseLeadIntroMessage(
    * `true` = **必须**带那句问候语才认。
    *
    * 🔴 调用方对**第一条入站消息之后**的每一条都要传 true（Codex 复审 2026-08-17）：
-   * 「两条标准字段」这条兜底只对开场白位置成立；对话中途客人转发同行者的
-   * `Name: … / Phone: …`，恰好也是两条字段 —— 认了就把别人的号码写进这个人的档案。
+   * 「三条标准字段全齐」这条兜底只对开场白位置成立；对话中途客人转发同行者的
+   * `Name: … / Phone: … / Email: …`，恰好也能凑齐 —— 认了就把别人的号码写进这个人的档案。
    */
   opts: { requireMarker?: boolean } = {},
 ): ParsedLeadAnswers | null {
@@ -143,11 +143,21 @@ export function parseLeadIntroMessage(
   if (standardFields.size === 0) return null
 
   /**
-   * 🔴 没有那句问候语时，**必须两条以上标准字段**才算数（Codex 复审 2026-08-17）。
-   * 一条 `Phone: 021…` 太容易在正常聊天里出现（转发同行者资料、邮件签名），
-   * 而认错的代价是把别人的号码写进这个人的档案。
+   * 🔴 没有那句问候语时，**必须三条标准字段全齐**（姓名 + 电话 + 邮箱）才算数。
+   *
+   * 门槛从两条提到三条：Codex 复审 PR #1033（2026-08-17）指出，调用方对**第一条**
+   * 入站消息传 `requireMarker: false`，于是「`my friend filled out the form` +
+   * `Name:` + `Phone:`」只要恰好是对话第一条，就能靠两条字段冒充开场白 ——
+   * 而那正是客人转发同行者资料最自然的形状，认了就把**别人的号码**写进这个人的档案。
+   *
+   * 为什么是三条、不是「干脆一律要求问候语」：Meta 的模板措辞随语言变，卡死问候语
+   * 会漏掉真表单，把 PM 报的原始问题（留了电话却显示没留）放回来。而真表单同时收
+   * 姓名 / 电话 / 邮箱三样 —— 三条全齐是模板自带的形状，转发一段同行者资料通常凑不齐。
+   *
+   * ⚠️ 仍不是密不透风：转发的资料要是三样俱全，照样能过。写入侧的空栏守卫与号码
+   * 归属回查是最后一道 —— 判据这一层只做到「宁可少认」。
    */
-  if (!FORM_MARKER.test(body) && (opts.requireMarker || standardFields.size < 2)) return null
+  if (!FORM_MARKER.test(body) && (opts.requireMarker || standardFields.size < 3)) return null
 
   const parsed = parseLeadAnswers(answers)
   // 三样全空（比如只有一行 `Notes: ...` 被当成自定义问题）也不算。
