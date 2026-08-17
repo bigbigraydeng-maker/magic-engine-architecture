@@ -18,6 +18,11 @@ import type {
   GrowthMaybeUnknown,
   GrowthPrescription,
 } from '@/lib/growth'
+import {
+  validateGrowthActionCandidate,
+  validateGrowthPrescription,
+  validateGrowthVerificationDefinition,
+} from '@/lib/growth'
 import type { PageOptimizationIntent, PageOptimizationRequest } from '@/lib/page-optimization'
 import { interpretObservation } from './m1'
 import { toGrowthEvidence } from './evidence'
@@ -82,6 +87,27 @@ export class GeoModuleTenantError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'GeoModuleTenantError'
+  }
+}
+
+/**
+ * 出口不变量被破坏时抛 —— 表示本模块自己产出了不合契约的对象（是 bug，不是 defer）。
+ *
+ * 🔴 纵深防御：本模块是 Growth 契约的第一个消费方，产物在返回前再过一遍**运行时**校验器
+ *    （白名单拒多余字段、cost 无上界即非法、input JSON-safety、三档判据齐全）。
+ *    只靠编译期类型挡不住「多塞一个字段」「input 里混进 Date」这类 diff 里很无辜的退化。
+ */
+export class GeoModuleInvariantError extends Error {
+  readonly code = 'invariant_violated'
+  constructor(message: string) {
+    super(message)
+    this.name = 'GeoModuleInvariantError'
+  }
+}
+
+function assertContract(result: { readonly ok: boolean; readonly reason?: string }, what: string): void {
+  if (!result.ok) {
+    throw new GeoModuleInvariantError(`产出的 ${what} 未过契约校验：${result.reason ?? '未知'}`)
   }
 }
 
@@ -153,6 +179,11 @@ export function runGeoModule(input: GeoModulePipelineInput): GeoModuleOutcome {
   }
 
   const candidate = buildCandidate({ finding, targetPageUrl: resolution.url, summary: coverage, verification })
+
+  // 出口纵深防御：产物过一遍运行时契约校验器（fail-closed，破了就是 bug）。
+  assertContract(validateGrowthPrescription(prescription), 'prescription')
+  assertContract(validateGrowthVerificationDefinition(verification), 'verification')
+  assertContract(validateGrowthActionCandidate(candidate), 'candidate')
 
   const built = buildPageOptimizationRequest({
     clientId: input.clientId,

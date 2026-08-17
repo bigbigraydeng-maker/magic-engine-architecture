@@ -69,6 +69,7 @@ export {
 export {
   runGeoModule,
   GeoModuleTenantError,
+  GeoModuleInvariantError,
   type GeoObservationRecord,
   type GeoModulePipelineInput,
   type GeoModuleChain,

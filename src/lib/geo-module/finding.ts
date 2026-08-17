@@ -97,9 +97,14 @@ export function buildQualifiedMentionFinding(
 /**
  * 严重度：合格提及覆盖为 0 = 高（AI 答案里根本没被作为人 / 选项提及）；
  * 有一定覆盖但偏低 = 中；覆盖较好 = 低。全部由 query 级覆盖账推，不看 citation。
+ *
+ * 🔴 **「全部 defer」不是「确认缺席」**：每个 query 的样本都证据不足时，`qualifiedMentionQueries`
+ *    同样是 0，但那是「读不出」不是「没被提及」。把它判成 high 就是本模块反复禁止的
+ *    「拿不到数据≠真没有」。所以全 defer → `info`，绝不 high。
  */
 function severityOf(summary: GeoCoverageSummary): DiagnosticSeverity {
   if (summary.queryCount === 0) return 'info'
+  if (summary.fullyDeferredQueries === summary.queryCount) return 'info'
   if (summary.qualifiedMentionQueries === 0) return 'high'
   const ratio = summary.qualifiedMentionQueries / summary.queryCount
   if (ratio < 0.5) return 'medium'

@@ -35,10 +35,15 @@ export type GeoM1ReasonCode =
   | 'name_only_in_citation'
   /** 名字对上了，但上下文不足以锁定奥克兰 / NZ 地产本人（M1 §2）。 */
   | 'disambiguation_insufficient'
-  /** 正文里的出现只是把问题原文回显，去掉回显后就没了（M1 §3 / §7 第 2 条）。 */
+  /**
+   * 正文里的出现只是把问题原文回显，去掉回显后就没了（M1 §3 第 3 条 / §7 第 2 条）。
+   *
+   * 🔴 v1 对「语义参与」（M1 §3 第 3 条：Roman 作为相关人 / 候选 / 主体 / 选项参与）
+   *    只做**近似**：正文精确命中 + 奥克兰/NZ 地产锚点消歧 + 剔除问句逐字回显后仍留着命中。
+   *    v1 不判语法角色，因此**故意不设** `no_semantic_participation` 原因码 —— 声明一个永不
+   *    push 的空闸门比没有更误导（「声明了≠接上了」）。角色级判据留待后续版本。
+   */
   | 'query_echo_only'
-  /** 有匹配但 Roman 没作为相关人 / 候选 / 主体 / 选项参与（M1 §3 第 3 条）。 */
-  | 'no_semantic_participation'
   /** 提及了但没有任何推荐判断（M1 §4 `none`）。 */
   | 'no_recommendation_judgment'
   /** 推荐极性 / 归属 / 力度无法安全判定（M1 §4 `indeterminate`）。 */

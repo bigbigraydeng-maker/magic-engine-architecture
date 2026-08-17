@@ -114,8 +114,23 @@ describe('§4 推荐分级（只有 explicit_positive 进指标）', () => {
   })
 
   it('无合格提及 → 推荐 none（不落别的）', () => {
-    const r = interpret('Buy property in Auckland via any licensed agent.')
+    const r = interpret('Buy real estate in Auckland via any licensed realtor.')
     expect(r.recommendation).toBe('none')
+  })
+
+  // ── 否定处理（魏征复审：裸子串匹配会把被否定的背书判成 explicit_positive）──
+  it('被否定的背书（wouldn\'t go with）→ negative，不进正向指标', () => {
+    const r = interpret(
+      "Roman Hu is a real estate agent in Auckland, New Zealand, but I wouldn't go with Roman Hu.",
+    )
+    expect(r.recommendation).toBe('negative')
+  })
+
+  it('do not recommend（recommend 是子串）→ negative，不是 indeterminate', () => {
+    const r = interpret(
+      'Roman Hu is a real estate agent in Auckland, New Zealand. I do not recommend Roman Hu.',
+    )
+    expect(r.recommendation).toBe('negative')
   })
 })
 
@@ -143,6 +158,26 @@ describe('§5 rank：只认显式精确序数', () => {
   it('合格提及但无序数 → not_computable（no_explicit_ordinal）', () => {
     const r = interpret('Roman Hu is a real estate agent in Auckland, New Zealand.')
     expect(r.rank).toEqual({ status: 'not_computable', reason: 'no_explicit_ordinal' })
+  })
+
+  it('被否定的序数（not the first choice）→ 不判 computed', () => {
+    const r = interpret(
+      'Roman Hu is a real estate agent in Auckland, New Zealand, but he is not the first choice here.',
+    )
+    expect(r.rank.status).not.toBe('computed')
+  })
+})
+
+describe('§2 消歧锚点收紧：通用 agent 不误锁本人', () => {
+  it('travel agent（非地产）→ 消歧不足，不合格提及', () => {
+    const r = interpret('Roman Hu is a travel agent based in Auckland, New Zealand.')
+    expect(r.disambiguation.qualified).toBe(false)
+    expect(r.qualifiedMention.qualified).toBe(false)
+  })
+
+  it('licensed real estate agent（地产强锚）→ 合格提及', () => {
+    const r = interpret('Roman Hu is a licensed real estate agent in Auckland, New Zealand.')
+    expect(r.qualifiedMention.qualified).toBe(true)
   })
 })
 

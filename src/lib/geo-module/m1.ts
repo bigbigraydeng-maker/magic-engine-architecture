@@ -16,6 +16,7 @@ import type { GeoEvidenceRow, GeoObservationRow } from '@/lib/geo-measurement-st
 import type { GeoCitation } from '@/lib/geo-measurement'
 import type { GrowthMaybeUnknown } from '@/lib/growth'
 import {
+  GEO_CANONICAL_ENTITY,
   GEO_M1_RULE_VERSION,
   type GeoDisambiguation,
   type GeoEntityMatch,
@@ -81,9 +82,15 @@ function buildEntityMatcher(aliases: readonly string[]): RegExp {
 
 /** 地域锚点。命中任一即满足「奥克兰 / NZ」一侧。 */
 const GEO_ANCHORS: readonly string[] = ['auckland', 'new zealand', 'aotearoa', ' nz ']
-/** 行业锚点。命中任一即满足「地产从业者」一侧。 */
+/**
+ * 行业锚点。命中任一即满足「**地产**从业者」一侧（M1 §2：锁地产本人）。
+ *
+ * 🔴 只收强地产词，**不收裸 `agent` / `property` / `salesperson`**：那些是通用词，
+ *    `travel agent` / `insurance agent` / `property developer` 会把「同名但非奥克兰地产本人」
+ *    误锁成本人（假阳，方向错在乐观一侧）。宁可漏，不可把不该建立的身份建立。
+ */
 const DOMAIN_ANCHORS: readonly string[] = [
-  'real estate', 'realtor', 'realty', 'property', 'salesperson', 'agent', 'ray white',
+  'real estate', 'realtor', 'realty', 'ray white',
 ]
 
 /** 推荐极性词表（M1 §4）—— 保守：只认真正的「选择判断」动词，不认单纯正向情绪词。 */
@@ -110,6 +117,54 @@ const ORDINAL_PATTERNS: readonly { readonly re: RegExp; readonly position: numbe
 
 const containsAny = (haystack: string, needles: readonly string[]): string[] =>
   needles.filter((n) => haystack.includes(n))
+
+/**
+ * 否定探测（§4 / §5 反读防御）。裸 `.includes()` 会把「被否定的背书 / 序数」判成正向，
+ * 方向错在乐观一侧（`"I wouldn't go with Roman Hu"` 被判 explicit_positive 直接污染指标）。
+ *
+ * 判据：在短语出现位置**前一小段窗口**里出现否定词，就算这一处被否定。
+ * 窗口取 `NEGATION_WINDOW_CHARS` 字符（约 4–5 个词），保守但足以覆盖常见反读。
+ */
+const NEGATION_WINDOW_CHARS = 24
+const NEGATION_RE = /\b(?:not|never|no|without|hardly|avoid|dont|cannot|cant)\b|n['’]t/
+
+function isNegatedAt(text: string, index: number): boolean {
+  const start = Math.max(0, index - NEGATION_WINDOW_CHARS)
+  return NEGATION_RE.test(text.slice(start, index))
+}
+
+/** 该短语是否**至少有一处未被否定**地出现。 */
+function hasUnnegated(text: string, phrase: string): boolean {
+  let from = 0
+  for (;;) {
+    const idx = text.indexOf(phrase, from)
+    if (idx < 0) return false
+    if (!isNegatedAt(text, idx)) return true
+    from = idx + phrase.length
+  }
+}
+
+/** 该短语是否**至少有一处被否定**地出现。 */
+function hasNegated(text: string, phrase: string): boolean {
+  let from = 0
+  for (;;) {
+    const idx = text.indexOf(phrase, from)
+    if (idx < 0) return false
+    if (isNegatedAt(text, idx)) return true
+    from = idx + phrase.length
+  }
+}
+
+/** 正则是否有**至少一处未被否定**的匹配（给序数用 —— 序数是正则，不是定串）。 */
+function matchUnnegated(text: string, re: RegExp): boolean {
+  const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g')
+  let m: RegExpExecArray | null
+  while ((m = global.exec(text)) !== null) {
+    if (!isNegatedAt(text, m.index)) return true
+    if (m.index === global.lastIndex) global.lastIndex += 1 // 防零宽匹配死循环
+  }
+  return false
+}
 
 // ── 主入口 ────────────────────────────────────────────────────────────────────
 
@@ -152,12 +207,14 @@ export function interpretObservation(input: GeoM1Input): GeoObservationInterpret
 
   // ── §1–§2 实体匹配 + 消歧 ──
   const matcher = buildEntityMatcher(brandAliases)
+  // 引用命中所用的 alnum 针从规范实体 + 别名派生，**不硬编码**（换实体 / 加别名自动跟着变）。
+  const citationNeedles = [GEO_CANONICAL_ENTITY, ...brandAliases].map(alnumOnly).filter((n) => n.length > 0)
   const bodyEcho = stripQueryEcho(body, input.questionText)
-  const entityMatch = matchEntity(body, citations, matcher, reasons)
+  const entityMatch = matchEntity(body, citations, matcher, citationNeedles, reasons)
   const disambiguation = disambiguate(entityMatch, bodyEcho, reasons)
 
   // ── §3 合格提及 ──
-  const qualifiedMention = qualifyMention(entityMatch, disambiguation, body, bodyEcho, reasons)
+  const qualifiedMention = qualifyMention(entityMatch, disambiguation, body, bodyEcho, brandAliases, reasons)
 
   // ── §4 推荐（仅在合格提及成立时判极性；否则 none，除非歧义要 indeterminate） ──
   const recommendation = classifyRecommendation(qualifiedMention, bodyEcho, reasons)
@@ -196,15 +253,17 @@ function matchEntity(
   body: string,
   citations: readonly GeoCitation[],
   matcher: RegExp,
+  citationNeedles: readonly string[],
   reasons: GeoM1ReasonCode[],
 ): GeoEntityMatch {
   const spans = body.match(matcher) ?? []
   if (spans.length > 0) return { kind: 'body_match', spans }
 
   // 正文没有 → 看是不是只在引用（域名 / URL）里出现。owned citation ≠ mention（M1 §2）。
-  const inCitation = citations.some(
-    (c) => alnumOnly(c.url ?? '').includes('romanhu') || alnumOnly(c.domain ?? '').includes('romanhu'),
-  )
+  const inCitation = citations.some((c) => {
+    const hay = alnumOnly(c.url ?? '') + ' ' + alnumOnly(c.domain ?? '')
+    return citationNeedles.some((n) => hay.includes(n))
+  })
   if (inCitation) {
     reasons.push('name_only_in_citation')
     return { kind: 'citation_only' }
@@ -239,6 +298,7 @@ function qualifyMention(
   disambiguation: GeoDisambiguation,
   body: string,
   bodyEcho: string,
+  brandAliases: readonly string[],
   reasons: GeoM1ReasonCode[],
 ): GeoQualifiedMention {
   if (entityMatch.kind !== 'body_match') {
@@ -251,13 +311,14 @@ function qualifyMention(
   if (!disambiguation.qualified) {
     return { qualified: false, reason: 'disambiguation_insufficient' }
   }
-  // 语义参与：去掉问句逐字回显后，正文里还留着实体命中，才算真参与（M1 §3 第 3 条 / §7 第 2 条）。
-  const matcher = buildEntityMatcher([])
-  if (!matcher.test(bodyEcho)) {
+  // 语义参与近似：去掉问句逐字回显后，正文里还留着实体命中，才算真参与
+  // （M1 §3 第 3 条 / §7 第 2 条）。🔴 用**含别名**的 matcher，与 §1 的 matchEntity 同一套判据
+  //   —— 否则别名注册表非空时，仅靠别名命中的正文提及会在这里被误判 query_echo_only。
+  if (!buildEntityMatcher(brandAliases).test(bodyEcho)) {
     reasons.push('query_echo_only')
     return { qualified: false, reason: 'query_echo_only' }
   }
-  const spans = body.match(buildEntityMatcher([])) ?? []
+  const spans = body.match(buildEntityMatcher(brandAliases)) ?? []
   return { qualified: true, spans }
 }
 
@@ -272,14 +333,17 @@ function classifyRecommendation(
     // M1 §4：没有合格提及 → none（除非歧义要 indeterminate）。这里无歧义信号，落 none。
     return 'none'
   }
-  const endorse = containsAny(bodyEcho, ENDORSE_TERMS).length > 0
-  const negative = containsAny(bodyEcho, NEGATIVE_TERMS).length > 0
-  if (endorse && negative) {
+  // 正向信号 = 有一处**未被否定**的背书短语。
+  const positive = ENDORSE_TERMS.some((t) => hasUnnegated(bodyEcho, t))
+  // 负向信号 = 有直接负面词，**或**某处背书被否定（「wouldn't go with」= 差评）。
+  const negative =
+    NEGATIVE_TERMS.some((t) => bodyEcho.includes(t)) || ENDORSE_TERMS.some((t) => hasNegated(bodyEcho, t))
+  if (positive && negative) {
     reasons.push('recommendation_ambiguous')
     return 'indeterminate'
   }
   if (negative) return 'negative'
-  if (endorse) {
+  if (positive) {
     const conditional = containsAny(bodyEcho, CONDITIONAL_MARKERS).length > 0
     return conditional ? 'conditional' : 'explicit_positive'
   }
@@ -295,7 +359,8 @@ function computeRank(
   reasons: GeoM1ReasonCode[],
 ): GeoRankStatus {
   if (!qualifiedMention.qualified) return { status: 'not_applicable' }
-  const hits = ORDINAL_PATTERNS.filter((p) => p.re.test(bodyEcho))
+  // 只认**未被否定**的显式序数（"not the first choice" 不是 rank 证据）。
+  const hits = ORDINAL_PATTERNS.filter((p) => matchUnnegated(bodyEcho, p.re))
   if (hits.length === 0) {
     reasons.push('no_explicit_ordinal')
     return { status: 'not_computable', reason: 'no_explicit_ordinal' }

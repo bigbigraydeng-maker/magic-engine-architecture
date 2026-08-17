@@ -234,6 +234,9 @@ describe('变异证据：故意破坏每条不变量，断言校验器变红', (
     })
     if (!out.ok) throw new Error('expected ok')
     expect(out.chain.coverage.qualifiedMentionQueries).toBe(0)
+    // 🔴 直接锁 citation 闸：实体只在 owned 引用里、正文无名字 → entityMatch 必是 citation_only。
+    //    （不是靠「qualified===false」这种被回显闸遮蔽的影子断言。）
+    expect(out.chain.interpretations[0].entityMatch.kind).toBe('citation_only')
     expect(out.chain.interpretations[0].qualifiedMention.qualified).toBe(false)
   })
 })

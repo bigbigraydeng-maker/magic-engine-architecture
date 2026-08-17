@@ -57,6 +57,11 @@ export function resolveLedgerPage(
   clientId: string,
   targetUrl: string,
 ): PageResolutionResult {
+  // 🔴 纵深防御：空 clientId 绝不退化成「匹配 client_id === '' 的行」。
+  //    pipeline 已在更早处 fail-closed 挡掉空 clientId，这里再挡一次，防未来别处直接调本函数。
+  if (typeof clientId !== 'string' || clientId.length === 0) {
+    return { ok: false, reason: 'unattributable_page' }
+  }
   const owned = pages.filter((p) => p.client_id === clientId)
   const hit = owned.find((p) => p.url === targetUrl)
   if (!hit) return { ok: false, reason: 'unattributable_page' }
