@@ -90,17 +90,38 @@ ME2 侧凡涉及渠道价值的模块，合并前必须过：
 
 ---
 
-## 5. 对 legacy 的态度（明确不动）
+## 5. 对 legacy 的态度
 
-`src/lib/zhuge/conductor.ts` 及其只读工具集 `src/lib/agent-tools/readonly/` 是 ME 1.0 遗留（`src/lib/action-bridge/index.ts` 已标注 legacy）。它每周一 03:00 由 `zhuge-weekly-recalculate` 触发，向 `flywheel_actions` 写入。
+`src/lib/zhuge/conductor.ts` 及其只读工具集 `src/lib/agent-tools/readonly/` 是 ME 1.0 遗留（`src/lib/action-bridge/index.ts` 已标注 legacy）。它每周一 03:00 由 `zhuge-weekly-recalculate` 触发。
 
-PM 2026-08-17 确认：**该表输出当前无人消费。** 据此：
+### 5.1 🔴 更正：它的输出**有人消费**（2026-08-17 二次核实）
 
-- **不对 legacy 做整改**，本契约不构成对它的返工要求；
-- 本文 §3.5 引用它仅作反面样本；
-- 若将来该输出重新被消费，需先按本契约评估，否则不得恢复消费。
+本文初稿据「`flywheel_actions` 无人消费」提议停掉该 cron，**该前提不成立，提议已撤回**（PR #1014 的停用 commit 已 revert）。
 
-**遗留问题（未决，需 PM 决策）**：该 cron 每周仍在调用 Claude 产出无人消费的内容，是否停用属成本决策，不在本契约范围内。
+`persistZhugeActions`（`src/lib/zhuge/action-persister.ts`）写**三处**，不止一处：
+
+| 写入 | 谁在读 | 数据活跃度（2026-08-17 实读） |
+|---|---|---|
+| `flywheel_actions` | 无已知消费方 | 324 条，近 30 天 154 |
+| `zhuge_sessions` | `/api/clients/[id]/zhuge/latest-actions` → `ZhugePriorityWidget` → **客户详情页主界面** | 61 条，近 30 天 42 |
+| `execution_items` | 执行看板 + 每日推荐（`lib/zhuge/daily-recommendation.ts`） | 1067 条，近 30 天 278 |
+
+停掉调度会让**客户详情页上的优先建议无限期冻结在旧版本**，且不报错。
+
+**教训**：判断「有没有人在看」时问了单张表，而生成端写了三张。**问『这个模块的输出有没有人看』之前，先把它所有的写入端点列全**，否则拿到的「没人看」是对错误问题的正确回答。
+
+### 5.2 这让盲区问题更严重，不是更轻
+
+原以为是「没人看的垃圾在烧钱」，实际是**有人看的建议基于有盲区的数据在排优先级**。客户详情页每周展示的优先建议，其判据结构上看不到平台侧客资（§2）。
+
+据此：
+
+- **不对 legacy 做整改**，本契约不构成对它的返工要求（ME2 方向，PM 2026-08-17）；
+- 本文 §3.5 引用其工具描述仅作反面样本；
+- **但停用它需要先迁移** —— 若将来要停，必须先把 `zhuge_sessions` / `execution_items` 两个仍被消费的输出迁到独立任务，不能直接摘调度；
+- ME2 侧建成渠道相关模块时，§3 全部条款适用。
+
+**遗留问题（未决，需 PM 决策）**：客户详情页当前展示的优先建议存在渠道盲区。是接受（等 ME2 重做）、还是给 legacy 打一个最小补丁（让它能看到平台侧客资），属产品决策。
 
 ---
 
