@@ -53,6 +53,18 @@ type TimelineEntry =
        * 不是每条都铺出来：普通记录看摘要更短更好读。
        */
       raw: string | null
+      /**
+       * `metadata.do_not_contact === true` —— **跟 `outcome` 不是一回事**。
+       *
+       * 🔴 外呼那条路（`lib/voice/crm-bridge.ts`）写的是
+       * `outcome: 'not_interested'` **加上** `do_not_contact: true`，而
+       * `isDoNotContact` 认后者 → 这个人**全渠道被停**。只看 `outcome` 的话，
+       * 界面上只会显示一句「他说不买了」，销售完全看不到他已经被停了
+       * （Codex 复审 PR #1048，2026-08-17）。
+       *
+       * 判据只有一份（`lib/crm/dnc`），它两个都认，所以送给前端的也得两个都有。
+       */
+      dncFlag: boolean
       tour: string | null
       outcome: string | null
       travelWindow: string | null
@@ -196,6 +208,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       direction: t.direction,
       summary: t.summary,
       raw: cleanStr(t.raw),
+      dncFlag: m.do_not_contact === true,
       // 这一条触点自己带的团意向：FB 表单下拉优先，其次手工笔记解析值。
       tour: cleanStr(m.tour_interest_raw) ?? cleanStr(m.tour_interest),
       /**
