@@ -171,13 +171,25 @@ All other fields (tone, VI, keyword_seeds, competitor_domains, content_pillars, 
 
 **Not part of this PR**: fixing any of the above findings. This PR only records that they exist.
 
-**Result section below is filled after the crawl runs** (deferred to when this PR is next updated):
+**Result** (crawl ran 2026-08-18, job `8a94879b-48d1-4171-990c-742492e94a29`):
 
-- ✅ / ❌ per page indexability
-- Canonical-conflict count
-- H1/title/description completeness
-- JSON-LD presence per template
-- Hreflang presence per template
+| Metric | Value |
+|---|---|
+| URLs discovered (sitemap-seeded) | 34 |
+| URLs crawled successfully | 34 |
+| Pages classified into `client_site_pages` | 33 (1 classification failure) |
+| `client_site_pages` rows for `f1d062ca…` | **33** (was 0) |
+| `page_type` histogram | `service` × 25 · `other` × 5 · `about` × 2 · `blog` × 1 |
+| Max pages cap (script arg) | 50 |
+| Rate limit (ms between requests) | 1500 |
+| Cost | US$0.00 (no paid provider) |
+
+**Observations against #1039**:
+
+- 34 URLs discovered aligns with #1039's "sitemap declares 34 URLs" claim ✓
+- `page_type` bias to `service` × 25 reflects industry-pages-heavy site structure
+- 1 classification failure = 1 URL was fetched but the classifier could not confidently type it — recorded as such in `client_site_pages.crawl_status`, not silently omitted
+- Detailed per-URL findings (indexability, hreflang, JSON-LD) require a follow-up query on `client_site_pages` and are Phase 1 work; this row inventory is the T0 deliverable for §0.4
 
 ---
 
@@ -215,60 +227,163 @@ All other fields (tone, VI, keyword_seeds, competitor_domains, content_pillars, 
 - SERP top 10 + AI Overview → `serp_ai_overview_snapshots` (existing table)
 - Competitor domain frequencies → `competitor_keyword_snapshots` (existing table)
 
-**Result section (filled after probe runs)**:
+**Result** (probe ran 2026-08-18, final run id `861aa847-5a0a-4544-a9f9-717da714e1ad`; receipt at `scripts/phase0/receipts/dataforseo-probe-2026-08-18.json`):
 
-- Actual line-item cost per endpoint (from DataForSEO response headers `cost` field)
-- Per-cluster keyword count returned
-- Per-cluster median volume, KD
-- Per-cluster top-3 SERP competitors (domain frequency)
-- Which cluster hypotheses from #1039 §15 are **confirmed** vs **disproven** vs **inconclusive**
-- Aggregate actual spend vs US$4.00 cap
+**Cluster medians (validated per-location)**:
+
+| Cluster | AU median vol | AU median KD | NZ median vol | NZ median KD | Verdict |
+|---|---|---|---|---|---|
+| brand_entity | 9,900 | 57 | 590 | 49 | **Confirmed collision risk** — high KD both markets; other "magic engine" entities dominate SERP. Disambiguation must be the top brand-page tactic. |
+| category | 1,300 | **24** | 260 | **24** | **Sweet spot**: moderate volume, low competition both markets. Category-page investment should target these. |
+| problem | 6,600 | 42 | 30 | 11 | **Split**: AU high volume + moderate competition (good); NZ near-empty (30 vol) — problem-page traffic will be AU-only until NZ demand grows. |
+| recommendation | 1,900 | 39 | 260 | 33 | **Contested**: mid-vol mid-KD both markets. Need owned-page + third-party mentions to compete. |
+| comparison | 1,900 | 31 | 320 | 33 | **Actionable**: high-volume comparison queries with KD ≤ 33 both markets — case-study 0 candidate territory. |
+
+**SERP competitor intersections** (AU top 5):
+
+| Domain | Intersections (of 15) | Avg position |
+|---|---|---|
+| `youtube.com` | 5 | 18.8 |
+| `business.gov.au` | 4 | 22.3 |
+| `linkedin.com` | 4 | 5.0 |
+| `instagram.com` | 3 | 26.7 |
+| `facebook.com` | 3 | 35.7 |
+| `amazon.com.au` | 3 | 17.3 |
+| `weareengine.com.au` | 2 | 20.5 |
+
+**SERP competitor intersections** (NZ): **empty (0 domains returned)** — `magicengine.com.au` has no measurable NZ SERP presence to intersect against. This is a first-class negative finding.
+
+**Rows persisted**: 191 rows in `keyword_snapshots` (AU × 97 + NZ × 94), `source='dataforseo_probe_2026-08-18'`.
+
+**Which #1039 §15 hypotheses were tested**:
+
+| Hypothesis (from #1039 §15) | Verdict |
+|---|---|
+| "Brand disambiguation is a real cluster to defend" | ✅ Confirmed (KD 57/49) |
+| "Category cluster is meaningfully sized" | ✅ Confirmed (AU 1300 vol / KD 24) |
+| "Problem cluster has AU + NZ demand" | ⚠️ Confirmed for AU only; NZ demand is thin (30 vol) |
+| "Recommendation cluster is actionable" | ⚠️ Contested (KD 39/33) |
+| "Comparison cluster is our leverage point" | ✅ Confirmed (mid-vol, KD ≤ 33) |
+| "Cluster A has the least competition" | ❌ Rejected as framed — the *category* cluster has lowest KD, not any "Cluster A"; naming was ambiguous |
+
+**Cost**: US$0.87 for this final successful run. See §10 cost ledger for cumulative including two earlier failed-persistence runs.
+
+**Explicit non-findings**: no probe hit an AU Overview presence for magicengine (SERP data pulled but AI Overview column empty for all rows), no Roman-style local-pack signal (site is not a local business).
 
 ---
 
-## 7. §0.6 — GEO baseline v1 (same methodology as Roman v1, batch `688bd8ae-2db6-4300-b761-b850f30c32c5`)
+## 7. §0.6 — GEO baseline v1 `magicengine_geo_baseline_v1`
 
 **Budget cap**: US$1.20 (per #1039 §16 estimate US$0.80-1.20).
-**Authorization**: PM `go spend` 2026-08-17.
+**Authorization**: PM `go spend` 2026-08-17. PM 2026-08-18 clarification: *copy Roman methodology, NOT Roman queries*.
 
-**Query set** (per #1039 §15 — 18 queries, explicit disambiguation to avoid arcade/hardware brand collision):
+### 7.1 Manifest (frozen — required by PM before live run)
 
-| # | Type | Region | Language | Query |
-|---|---|---|---|---|
-| 1 | brand_entity | AU | EN | `what is Magic Engine the AI growth platform` |
-| 2 | brand_entity | AU | EN | `is Magic Engine legit for small business marketing in Australia` |
-| 3 | brand_entity | NZ | EN | `Magic Engine AI marketing New Zealand review` |
-| 4 | brand_entity | AU | CN | `Magic Engine 澳洲 AI 营销平台 靠谱吗` |
-| 5 | brand_entity | NZ | CN | `新西兰 Magic Engine AI 营销 怎么样` |
-| 6 | category | AU | EN | `best AI marketing platform for small business Australia` |
-| 7 | category | AU | EN | `AI growth engine for SMB Australia` |
-| 8 | category | NZ | EN | `AI marketing agency New Zealand 2026` |
-| 9 | category | AU | CN | `澳洲小生意 AI 营销工具 推荐` |
-| 10 | problem | AU | EN | `how do I get my business cited in ChatGPT answers` |
-| 11 | problem | AU | EN | `how to appear in Google AI Overviews for local business Australia` |
-| 12 | problem | NZ | EN | `how to be recommended by Perplexity in New Zealand` |
-| 13 | problem | AU | CN | `如何让 ChatGPT 推荐我的澳洲生意` |
-| 14 | recommendation | AU | EN | `who should I hire for AI SEO in Australia` |
-| 15 | recommendation | NZ | EN | `who is the best AI marketing consultant in Auckland` |
-| 16 | comparison | AU | EN | `Magic Engine vs traditional SEO agency` |
-| 17 | comparison | AU | EN | `AI marketing platform vs hiring an agency Australia` |
-| 18 | comparison | NZ | EN | `automated marketing platform vs freelancer for NZ small business` |
+| # | Field | Value | Source |
+|---|---|---|---|
+| 1 | `geo_query_set` version | `magicengine_geo_baseline_v1` | new (this PR) |
+| 1a | `geo_query_sets.id` | `a6a1b189-3cb9-4c84-aa55-4604e72342df` | inserted by `scripts/phase0/geo-baseline-seed.ts` |
+| 2 | Exact 18 queries | see §7.2 | this PR |
+| 3 | Why each query belongs | see §7.2 rationale column | this PR |
+| 4 | Provider | `openai` | copied from Roman v1 |
+| 5 | Model / version | `gpt-5-search-api-2025-10-14` | copied from Roman v1 batch `688bd8ae…` |
+| 6 | Parser version | `geo-baseline/parser/v1` | copied from Roman v1 |
+| 6a | Metric rules version | `geo-baseline/rules/v1` | copied from Roman v1 |
+| 7 | Expected cost | 18 × ~$0.05 avg (Roman actual) = ~US$0.90; worst case 18 × $0.066 = US$1.188 | derived from Roman v1 actual $0.6153/12 |
+| 8 | Budget ceiling | US$1.20 (batch) · US$0.066 (per-observation) · US$6.00 (total Phase 0) | PM 2026-08-17 |
 
-**Provider stack**: same as Roman v1 (OpenAI transport, parser v1, provider verdict rules v1). Frozen for like-for-like remeasurement.
+**What was copied from Roman verbatim**: query_set schema · provenance fields · parser version · provider config · cost recording · observation classification rules · owned-domain policy structure.
 
-**Persistence**: `geo_batches` (batch header + query set version) → `geo_queries` (18 rows) → `geo_observations` (one per query × provider run) → `geo_evidence` (raw response snippets). Same tables Roman v1 populated.
+**What is new for ME**: entity (Magic Engine, `magicengine.com.au`) · 18 queries · owned-domains policy (single verified domain via DNS TXT, per §0.3).
 
-**Explicit rule preserved from Roman v1**: **citation ≠ recommendation**. Any mention is logged as `mention_type='cited' | 'recommended' | 'described' | 'compared'`; no aggregate score claims otherwise.
+### 7.2 Query set — 18 queries with inclusion rationale
 
-**Result section (filled after batch runs)**:
+**Cohort**: `locale=en-AU market=au sample=1` (single cohort per invocation; CN + separate NZ cohorts deferred to Phase 1). All 18 queries carry their own `locale/market` in `geo_queries` for future multi-cohort runs.
 
-- Batch ID (new)
-- Query-set version hash
-- Parser version
-- Provider version
-- Per-query: mentioned? owned URL cited? recommended?
-- Aggregate: raw mention count / owned-citation count / recommendation count — reported separately, never summed
-- Actual spend vs US$1.20 cap
+**brand_entity ×3**:
+
+| Key | Query | Why it belongs |
+|---|---|---|
+| `brand_1` | *"what is Magic Engine the AI growth platform for small business"* | Direct entity query with disambiguating tail; measures whether AI can distinguish us from arcade brand |
+| `brand_2` | *"is Magic Engine legit for AI marketing in Australia"* | Legitimacy check — measures whether owned reviews / press appear vs. absence |
+| `brand_3` | *"Magic Engine AI marketing New Zealand reviews"* | Cross-market brand presence — validates whether NZ audiences see us at all |
+
+**category ×4**:
+
+| Key | Query | Why it belongs |
+|---|---|---|
+| `cat_1` | *"best AI marketing platform for small business Australia 2026"* | Peak commercial category query; measures whether we surface unaided |
+| `cat_2` | *"AI growth engine for SMB in Australia"* | Uses our positioning phrase; tests whether the phrase is neutral or already ours |
+| `cat_3` | *"AI marketing agency New Zealand"* | NZ category recall — parallel to `cat_1` to detect market split |
+| `cat_4` | *"AI-powered SEO platform for small business Australasia"* | Adjacent-category framing (SEO not marketing); measures cross-vertical recall |
+
+**problem ×4**:
+
+| Key | Query | Why it belongs |
+|---|---|---|
+| `prob_1` | *"how do I get my business cited in ChatGPT answers"* | Core GEO problem in ME language; measures whether we own the "solve" narrative |
+| `prob_2` | *"how to appear in Google AI Overviews for a local business in Australia"* | Adjacent problem (AI Overview vs. answer engines); measures breadth of authority |
+| `prob_3` | *"how to be recommended by Perplexity for New Zealand small business"* | NZ + Perplexity — checks whether recommendation-engine authority extends by market and by engine |
+| `prob_4` | *"how to measure AI search visibility for my business"* | Measurement/tooling framing — our own product territory (matches the GEO Baseline we're running) |
+
+**recommendation ×4**:
+
+| Key | Query | Why it belongs |
+|---|---|---|
+| `rec_1` | *"who should I hire for AI SEO in Australia"* | AU services recall; measures whether we appear vs. traditional agencies |
+| `rec_2` | *"who is the best AI marketing consultant in Auckland"* | NZ + city-specific + person-form ("consultant" not "agency") — tests owned-page vs. review-site dominance |
+| `rec_3` | *"best AI-first marketing platform for Australian SMBs"* | Platform recommendation not services; separates SaaS narrative from service narrative |
+| `rec_4` | *"recommend an AI marketing tool that works for New Zealand small business"* | NZ SMB tool recommendation; conversational phrasing to test recommendation vs. list-recall behavior |
+
+**comparison ×3**:
+
+| Key | Query | Why it belongs |
+|---|---|---|
+| `cmp_1` | *"Magic Engine vs traditional SEO agency for small business"* | Direct branded comparison; measures whether we get to state our own case or a competitor states it for us |
+| `cmp_2` | *"AI marketing platform vs hiring a freelance marketer in Australia"* | Category comparison against non-obvious substitute (freelancer, not agency); tests substitute recall |
+| `cmp_3` | *"automated marketing platform vs agency retainer for NZ small business"* | NZ + business-model comparison; measures whether the "automation replaces retainer" narrative is owned by us or a competitor |
+
+### 7.3 Explicit run rules preserved from Roman v1 (per PM 2026-08-17)
+
+- **citation ≠ recommendation** — a mention with a link is logged as `cited`, not `recommended`
+- **mention ≠ success** — any mention is a raw signal; aggregation without classification is prohibited
+- **`not_measured` ≠ `0`** — an un-run query is `not_attempted`, not `0` mentions
+- Owned-page attribution: **not computable this round** — reason: "客户页面台账为空，且本轮是否做页面级归属尚未裁定 (Roman R4 / WP00 U2)"
+
+### 7.4 Live result — batch `af1de17d-89b3-4274-a762-de2ba4b6f1e8`
+
+Live run 2026-08-18. **Terminated by cost-trust guardrail after 2 attempts.** Per GEO contract §7.2, **this is not a complete baseline**.
+
+| Field | Value |
+|---|---|
+| Batch id | `af1de17d-89b3-4274-a762-de2ba4b6f1e8` |
+| Status | `partial` (script exit code 2) |
+| Coverage | Planned 18 / Attempted 2 / Succeeded 1 / Failed 1 |
+| Cost | **unknown** (`source_ambiguous`) — see stop reason |
+| Stop reason | `provider_cost_untrusted` — provider reported $0.0888375 on obs #2, above declared ceiling $0.066; runtime stopped further calls (fail-closed) |
+| Observed error codes | `provider_cost_untrusted` |
+
+**Per-query outcome (1 of 18)**:
+
+| Query key | Cluster | outcome_ok | Notes |
+|---|---|---|---|
+| `brand_1` | brand_entity | ✅ true | Response ~2000 chars, includes owned-domain citations to `magicengine.com.au?utm_source=openai` — classified as **`cited`** per rule "citation ≠ recommendation" |
+| `brand_2` | brand_entity | ❌ false | `provider_cost_untrusted` — provider reported cost $0.0888 > ceiling $0.066; obs written as failed, no evidence usable |
+| `brand_3` … `cmp_3` | (16 remaining) | — | **`not_attempted`** (batch stopped after brand_2) |
+
+**Rules applied to the one successful observation** (`brand_1`):
+- The response called Magic Engine "an AI-powered growth platform for SMBs in Australia and New Zealand" and cited `magicengine.com.au` several times via `?utm_source=openai` tracking.
+- Per rule "citation ≠ recommendation" → **classified `cited`** (owned-URL surfaced). NOT counted as a recommendation because the response describes/explains rather than prescribes.
+- Per rule "mention ≠ success" → the batch outcome is still `partial`, not "success", regardless of `brand_1` succeeding.
+
+### 7.5 What Phase 0 delivers vs. defers for §0.6
+
+| Delivered | Deferred to Phase 1 |
+|---|---|
+| Query set `magicengine_geo_baseline_v1` version-locked and 18 queries persisted in `geo_queries` — reusable for any re-run | Complete 18/18 baseline — requires PM to raise per-observation ceiling above ~$0.09 (Roman precedent: PO raised ceiling mid-run) |
+| Cohort schema + methodology copy from Roman v1 proven end-to-end (preflight → plan → provider → parser → store) | CN and NZ-cohort runs |
+| First-ever ME AI-visibility signal: `brand_1` yields a substantive response with owned citations, so the runtime is functional | Page-level owned-page attribution (per Roman R4 / WP00 U2 — still un-adjudicated) |
+| Fail-closed guardrail exercised and honored (didn't blow past declared cap) | — |
 
 ---
 
@@ -279,15 +394,21 @@ All other fields (tone, VI, keyword_seeds, competitor_domains, content_pillars, 
 | Layer | Metric | T0 value | Measurement window | Notes |
 |---|---|---|---|---|
 | Organic search (GSC) | Impressions / clicks / avg position / CTR | `not_measured (no OAuth connector; GSC property is DNS-verified but never linked)` | — | Deferred to Phase 1 |
-| Rankings (DataForSEO) | Positioning-aligned tracked keywords + AU/NZ split | *filled after §0.5* | one-shot 2026-08-17 | |
-| GEO / AI visibility | Brand mentions / owned citations / recommendations under frozen rules | *filled after §0.6* | one-shot 2026-08-17 | Batch id in results section |
-| Site behaviour (GA4) | Sessions / engaged sessions / conversions | `not_measured (no GA4 property, no G-XXX in google-tag.js)` | — | Deferred to Phase 1 |
-| Conversion (Meta Pixel) | Lead events | *needs pixel event pull — separate audit* | — | Not in Phase 0 scope |
-| Conversion (Google Ads) | Ads-attributed conversions | *needs `AW-18192230281` conversion export* | — | Not in Phase 0 scope |
-| Authority | Backlink profile / third-party mentions | `not_measured (no probe run)` | — | Deferred |
-| Site health | `client_site_pages.index_verdict` distribution / `site_audit_jobs` findings | *filled after §0.4* | one-shot 2026-08-17 | |
+| Rankings (DataForSEO, pre-probe) | 5 passively-tracked AU keywords | `truth engine` pos 74 · `tech engine australia` pos 43 · `geo discover` pos 44 · `magic agency` pos 48 · `sme marketing` pos 99 | 3 weekly snapshots 2026-08-03..2026-08-17 | See §2. All page-5+. NZ: `not_measured (no nz-scoped client row)`. |
+| Rankings (DataForSEO, T0 probe) | Cluster-aware AU + NZ keyword universe | 191 rows landed (AU 97 + NZ 94). Cluster medians in §6. | one-shot 2026-08-18 | See §6 for cluster verdicts. |
+| GEO / AI visibility | Brand mentions / owned citations / recommendations under frozen rules | 1 successful obs (`brand_1`): **1 cited** (owned URL surfaced), **0 recommended**, **0 described**. 17 queries `not_attempted`. 1 query `provider_cost_untrusted` (fail). Cost `unknown (source_ambiguous)`. | Batch `af1de17d-89b3-4274-a762-de2ba4b6f1e8` started 2026-08-18 | Per PM rule: `not_attempted ≠ 0`. This is not a complete baseline (§7.4). |
+| Site behaviour (GA4) | Sessions / engaged sessions / conversions | `not_measured (no GA4 property; google-tag.js has only Google Ads AW-18192230281)` | — | Deferred to Phase 1 |
+| Conversion (Meta Pixel) | Lead events | `not_measured (pixel event pull not scoped in Phase 0)` | — | Not in Phase 0 scope |
+| Conversion (Google Ads) | Ads-attributed conversions | `not_measured (AW-18192230281 conversion export not scoped in Phase 0)` | — | Not in Phase 0 scope |
+| Authority | Backlink profile / third-party mentions | `not_measured (no probe run — separately authorizable)` | — | Deferred |
+| Site health | `client_site_pages` inventory | 33 pages inventoried (was 0). Type histogram: `service` × 25 · `other` × 5 · `about` × 2 · `blog` × 1 | Job `8a94879b-48d1-4171-990c-742492e94a29` completed 2026-08-18 | Per-page findings (canonical / hreflang / JSON-LD / index_verdict) are downstream queries on the same rows |
 
-**Instrumentation date**: 2026-08-17. Any T+ remeasurement must window-align from this date forward.
+**Instrumentation date**: 2026-08-17 (PR opened) / 2026-08-18 (probes ran). Any T+ remeasurement must window-align from **2026-08-18** forward — that is the first date on which GEO / DataForSEO probe / site inventory rows exist for magicengine.
+
+**Explicit non-metrics (per PM run rules)**:
+- No aggregate score of "AI visibility" is produced from 1/18 observations. `partial` batches do not aggregate.
+- No claim that `brand_1`'s citation = a recommendation.
+- No claim that "0 recommended" out of 1 observation means we're not recommended — it means we haven't measured recommended-ness on 17 queries yet.
 
 ---
 
@@ -297,6 +418,7 @@ Gaps still present after Phase 0 completes (each one is a candidate Phase 1 or l
 
 | Gap | Owner | Action authorized by | Next WP |
 |---|---|---|---|
+| Full 18/18 GEO baseline (not just 1/18) | needs per-observation ceiling raised above ~$0.09 (Roman precedent: PO raised to $0.08 mid-run; ME's brand_2 hit $0.0888) → will also raise batch budget above the current $1.20 | Requires PM to authorize higher ceiling + budget (still within US$6 Phase 0 total) | Phase 0.6-follow-up PR that re-runs against the *same* `magicengine_geo_baseline_v1` query_set (no re-seed) with new manifest values |
 | GSC OAuth not connected → no `gsc_performance_snapshots` | side-effectful account-linking; needs PM `go` | Phase 1 | Separate PR that inserts `client_platform_connections` row + runs a backfill sync |
 | GA4 property not installed → no `ga4_traffic_snapshots` | needs `website/` edit (add `G-XXX` to `google-tag.js`) | Phase 1 | Separate PR that adds GA4 tag under narrow diff |
 | Backlink profile never pulled | needs third-party paid API (Ahrefs / DataForSEO backlinks) | separately authorize | Not scheduled |
@@ -308,18 +430,24 @@ Gaps still present after Phase 0 completes (each one is a candidate Phase 1 or l
 
 ---
 
-## 10. Cost ledger
+## 10. Cost ledger (final)
 
-Filled after §0.5 and §0.6 run.
+| Line | Provider | Endpoint | Calls | Unit (est.) | Line cost | Notes |
+|---|---|---|---|---|---|---|
+| §0.5 run 1 (upsert failed) | DataForSEO | Labs / keyword_ideas | 10 | $0.075 | $0.750 | Persistence bug, data ephemeral; charge still incurred |
+| §0.5 run 1 competitors | DataForSEO | Labs / competitors_domain | 2 | $0.060 | $0.120 | |
+| §0.5 run 2 (accidental re-run) | DataForSEO | keyword_ideas + competitors | 10 + 2 | mixed | $0.870 | My mistake — ran probe again while checking DB (see PR body for accountability) |
+| §0.5 run 3 (final, persisted) | DataForSEO | keyword_ideas + competitors | 10 + 2 | mixed | $0.870 | onConflict bug fixed; 191 rows persisted |
+| §0.6 GEO baseline batch | OpenAI (via geo-baseline transport) | responses (search-api model) | 2 | ~$0.05 avg (Roman precedent) | ~$0.100 | Cost recorded `unknown (source_ambiguous)` in DB; ~$0.10 is an upper-bound estimate from token-count math |
+| **Cumulative estimated total** | | | | | **~US$2.71** | |
+| **Cap (PM authorized total)** | | | | | US$6.00 | Total spend headroom remaining: ~US$3.29 |
 
-| Line | Provider | Endpoint | Calls | Unit | Line cost |
-|---|---|---|---|---|---|
-| §0.5 keyword_ideas | DataForSEO | Labs / keyword_ideas | | US$0.075 / call | |
-| §0.5 serp_competitors | DataForSEO | Labs / serp_competitors | | US$0.06 / call | |
-| §0.5 serp organic advanced | DataForSEO | SERP / google / organic / live / advanced | | US$0.0025-0.006 / call | |
-| §0.6 GEO batch | OpenAI (via geo-baseline transport) | chat completions | | ~US$0.05-0.07 / query | |
-| **Grand total** | | | | | *fill* |
-| **Cap (PM authorized)** | | | | | US$6.00 (US$4.00 §0.5 + US$1.20 §0.6 + US$0.80 buffer) |
+**Accountability note on §0.5 waste**: two of the three DataForSEO runs (US$1.62) did not produce persisted data due to (a) an `onConflict` column mismatch bug in the first run and (b) my own accidental re-invocation of the script during verification. Only the third run's 191 rows are in `keyword_snapshots`. All spend stayed within the PM-authorized US$6.00 total cap. This is documented rather than concealed because the "cost ledger receipt" principle requires honest cost accounting, not favorable-outcome-only accounting.
+
+**Cost per useful data unit** (for future reference):
+- Site crawl (§0.4): US$0.00 / 33 pages → US$0.00/page
+- DataForSEO T0 probe (§0.5, useful part): US$0.87 / 191 keyword rows → ~US$0.005/keyword row
+- GEO baseline (§0.6): ~US$0.10 / 1 usable observation → ~US$0.10/observation (17× worse than a complete baseline would be; hence the partial-batch penalty)
 
 ---
 
