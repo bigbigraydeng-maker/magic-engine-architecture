@@ -49,6 +49,34 @@ export function explorationPool(monthlyBudget: number): number {
   return monthlyBudget * EXPLORATION_BUDGET_SHARE
 }
 
+/**
+ * 「业务月份」按 **NZ 本地时间** 算，不按 UTC。
+ *
+ * 🔴 `ad_daily_insights.insight_date` 是广告账户所在地的**本地日期**（AU/NZ），
+ *    而今日待办的 cron 固定 19:00 UTC 跑。用 UTC 算月初会在每月第一天出错：
+ *    9 月 1 日 07:00 NZ 时，UTC 还是 8 月 31 日 → 窗口从 8 月 1 日开始 →
+ *    把上个月一整月的花费当成「这个月」报出来。
+ *
+ *    取 NZ 而不是 AU：19:00 UTC 那一刻 NZ(+12/13) 与 AU(+10/11) 都已进入新的
+ *    一天，两边同月；而 NZ 是本仓主市场（CLAUDE.md 时区写的是 NZST/AEST）。
+ *    ⚠️ 严格说每个账户该按自己的时区切，但账户时区目前没落库；跨月那两小时的
+ *    误差只影响「AU 账户在月末最后两小时的花费算进哪个月」，不影响判定结论。
+ */
+export function businessMonth(d: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Pacific/Auckland',
+    year: 'numeric',
+    month: '2-digit',
+  })
+    .format(d)
+    .slice(0, 7)
+}
+
+/** 本业务月的第一天，`YYYY-MM-DD`，用来截 `insight_date`。 */
+export function businessMonthStart(d: Date): string {
+  return `${businessMonth(d)}-01`
+}
+
 /** 该客户这个月在 Meta 上花掉的钱（账户币种，本表没有币种列）。 */
 interface MonthSpend {
   clientId: string
@@ -67,15 +95,22 @@ interface MonthSpend {
 export async function loadMonthSpendByClient(
   supabase: SupabaseClient,
   now: Date,
+  /**
+   * 只看这些客户（`loadManualItems` 手上的活跃客户）。
+   *
+   * 🔴 不限定的话，本月花过钱、之后被停用的客户仍会出待办，而 `nameOf` 只能把
+   *    他显示成「未知客户」—— 于是每天的待办邮件都在催人处理一个已经停掉的客户。
+   */
+  activeClientIds: string[],
 ): Promise<MonthSpend[]> {
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
-    .toISOString()
-    .slice(0, 10)
+  if (activeClientIds.length === 0) return []
+  const monthStart = businessMonthStart(now)
 
   const { data, error } = await supabase
     .from('ad_daily_insights')
     .select('client_id, level, spend')
     .gte('insight_date', monthStart)
+    .in('client_id', activeClientIds)
     .in('level', ['campaign', 'ad'])
 
   if (error) {
@@ -104,38 +139,78 @@ export async function loadMonthSpendByClient(
   return out
 }
 
-/** 已填预算的客户集合（金额与币种成对才算填了 —— 与读侧口径一致）。 */
-async function loadClientsWithBudget(
+/**
+ * 一个客户的月预算在**本业务月**的状态。
+ *
+ * 🔴 `stale` 是独立的一档，不能并进 `filled`：预算是**按月**确认的业务事实
+ *    （SOP §0「月初按真实月预算算出这个月的探索池」）。8 月填过的数字，
+ *    9 月不会自动还成立 —— 客户完全可能这个月加码或者停投。
+ *    当成 `filled` 的话，9 月的待办永远不出现，FDE 也就永远不会去确认，
+ *    而系统会拿着上个月的池子继续算 —— 一个没人复核过的花钱额度。
+ */
+export type BudgetStatus = 'filled' | 'stale' | 'missing'
+
+export interface BudgetState {
+  status: BudgetStatus
+  /** `stale` 时带上上次填的值，好在待办里说清「上次填的是多少」。 */
+  amount: number | null
+  currency: string | null
+  updatedAt: string | null
+}
+
+export async function loadBudgetStateByClient(
   supabase: SupabaseClient,
   clientIds: string[],
-): Promise<Set<string>> {
-  if (clientIds.length === 0) return new Set()
+  now: Date,
+): Promise<Map<string, BudgetState> | null> {
+  if (clientIds.length === 0) return new Map()
   const { data, error } = await supabase
     .from('ad_strategy_configs')
-    .select('client_id, monthly_ad_budget, monthly_ad_budget_currency')
+    .select('client_id, monthly_ad_budget, monthly_ad_budget_currency, monthly_ad_budget_updated_at')
     .in('client_id', clientIds)
 
   if (error) {
-    // 🔴 读不到时**不下发**，不是「当成没填全推一遍」。
+    // 🔴 读不到时**整轮不下发**（返回 null），不是「当成没填全推一遍」。
     //    迁移还没 apply 的环境这里必然报错，那时候给每个客户推一条
     //    「没登记月预算」= 一条谁也没法处理的噪音。
     console.warn('[ads-angle-test] 广告预算配置读取失败（本轮不下发）:', error.message)
-    return new Set(clientIds)
+    return null
   }
 
-  const filled = new Set<string>()
+  const thisMonth = businessMonth(now)
+  const out = new Map<string, BudgetState>()
   for (const row of (data ?? []) as Array<{
     client_id: string
     monthly_ad_budget: unknown
     monthly_ad_budget_currency: unknown
+    monthly_ad_budget_updated_at: unknown
   }>) {
     const amount = toRealAmount(row.monthly_ad_budget)
-    const currency = row.monthly_ad_budget_currency
-    if (amount !== null && typeof currency === 'string' && currency !== '') {
-      filled.add(row.client_id)
+    const currency =
+      typeof row.monthly_ad_budget_currency === 'string' && row.monthly_ad_budget_currency !== ''
+        ? row.monthly_ad_budget_currency
+        : null
+    const updatedAt =
+      typeof row.monthly_ad_budget_updated_at === 'string' ? row.monthly_ad_budget_updated_at : null
+
+    // 成对才算填过（与 config.ts 读侧口径一致）
+    if (amount === null || currency === null) {
+      out.set(row.client_id, { status: 'missing', amount: null, currency: null, updatedAt })
+      continue
     }
+
+    // 填过，但是不是**这个月**填的？时间戳解析不出来时按 stale 处理 ——
+    // 方向安全：多问一次，好过拿一个说不清是哪个月的数字去算花钱额度。
+    const ts = updatedAt ? Date.parse(updatedAt) : NaN
+    const fresh = Number.isFinite(ts) && businessMonth(new Date(ts)) === thisMonth
+    out.set(row.client_id, {
+      status: fresh ? 'filled' : 'stale',
+      amount,
+      currency,
+      updatedAt,
+    })
   }
-  return filled
+  return out
 }
 
 /** 金额印成人看的样子：两位小数 + 千分位，不带币种符号（本表没有币种列）。 */
@@ -152,25 +227,70 @@ export function formatSpend(n: number): string {
 export async function fetchAdsAngleTestTodos(
   supabase: SupabaseClient,
   now: Date = new Date(),
+  activeClientIds: string[] = [],
 ): Promise<AdsAngleTestTodo[]> {
-  const spending = await loadMonthSpendByClient(supabase, now)
+  const spending = await loadMonthSpendByClient(supabase, now, activeClientIds)
   if (spending.length === 0) return []
 
-  const withBudget = await loadClientsWithBudget(
+  const states = await loadBudgetStateByClient(
     supabase,
     spending.map((s) => s.clientId),
+    now,
   )
+  // 配置读不到 → 整轮不下发（详见 loadBudgetStateByClient）
+  if (states === null) return []
 
+  const pct = Math.round(EXPLORATION_BUDGET_SHARE * 100)
   const todos: AdsAngleTestTodo[] = []
+
   for (const s of spending) {
-    if (withBudget.has(s.clientId)) continue
+    const state = states.get(s.clientId) ?? {
+      status: 'missing' as const,
+      amount: null,
+      currency: null,
+      updatedAt: null,
+    }
+    if (state.status === 'filled') continue
+
+    /**
+     * 🔴 金额只敢说到「账户口径」，不敢说成「这个客户花的」。
+     *
+     *    `syncCampaignDailyInsights` 把整个广告账户拉回来的每一行都盖上传入的
+     *    `clientId`（`daily-insights.ts` 的 `rows.map(... clientId ...)`），
+     *    而 `act_2775766642787274` 是记录在案的混账户（CTS 旅游帖 + Oztop
+     *    flooring 帖混跑）。所以这一列**证明不了 campaign 归属**。
+     *
+     *    审计 §3.1 正因为同一个原因撤回过「26 组都是 CTS 的」那句话，SOP §9
+     *    也刚为此更正过 —— 这里不重犯第三次。要按客户说准，得先做 `AD-EVID-1`
+     *    的 campaign→client 归属；那不在本条待办的范围内。
+     *
+     *    对这条待办来说影响可控：金额只是「真的有钱在动」的佐证，
+     *    而要做的事（去问这个客户的月预算）不依赖那个数精确到分。
+     */
+    const spendLine = `账上记到 ${formatSpend(s.spend!)}（账户口径，混账户下可能含别家 campaign）`
+
+    if (state.status === 'stale') {
+      const last = `${state.currency} ${state.amount!.toLocaleString('en-US')}`
+      const when = state.updatedAt ? state.updatedAt.slice(0, 10) : '更早以前'
+      todos.push({
+        client_id: s.clientId,
+        what:
+          `这个月已经有广告在花钱（${spendLine}），但月广告预算还是 ${when} 填的 ${last} —— ` +
+          '预算是按月确认的，上个月的数字不能直接拿来算这个月的探索池。',
+        how:
+          `跟客户确认这个月还是不是 ${last}：是就打开设置页把它重新保存一次（时间戳更新，这条就消失）；` +
+          '变了就改成新的数；这个月不投广告就把它清空。',
+        href: `https://app.magicengine.com.au/dashboard/clients/${s.clientId}/settings`,
+      })
+      continue
+    }
 
     todos.push({
       client_id: s.clientId,
       what:
-        `这个月广告已经花掉 ${formatSpend(s.spend!)}（账户币种），但系统里没登记他的月广告预算 —— ` +
-        `按规矩每月要拿 ${Math.round(EXPLORATION_BUDGET_SHARE * 100)}% 出来试没验证过的说法，` +
-        '这个数算不出来，这个月的角度测试就没法按规矩开。',
+        `这个月已经有广告在花钱（${spendLine}），但系统里没登记他的月广告预算 —— ` +
+        `按规矩每月要拿 ${pct}% 出来试没验证过的说法，这个数算不出来，` +
+        '这个月的角度测试就没法按规矩开。',
       how:
         '问客户或翻合同确认「这个月准备投多少广告」，填进设置页的「月广告预算」（链接直达，记得选对币种）。' +
         '⚠️ 别拿上面那个已花金额倒推 —— 那是花了多少，不是准备花多少，两者能差一倍。' +

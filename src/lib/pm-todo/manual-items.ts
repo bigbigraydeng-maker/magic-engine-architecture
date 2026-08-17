@@ -258,7 +258,7 @@ export async function loadManualItems(
 
   // 在投广告但没登记月预算 —— 角度测试 SOP 的第一步就卡在这，
   // 而它此前只写在文档里等人想起来翻（铁律 3 下半句：发现不许死在文档里）。
-  await pushAdsBudgetItems(supabase, items, now, nameOf).catch((e) =>
+  await pushAdsBudgetItems(supabase, items, now, ids, nameOf).catch((e) =>
     console.warn('[manual-items] 广告预算待办生成失败（不阻塞其他待办）:', e),
   )
 
@@ -992,9 +992,11 @@ async function pushAdsBudgetItems(
   supabase: SupabaseClient,
   items: ManualItem[],
   now: Date,
+  /** 只给活跃客户下发 —— 停用客户的历史花费行还在，不限定会天天催一个已经停掉的客户。 */
+  ids: string[],
   nameOf: (id: string) => string,
 ): Promise<void> {
-  const todos = await fetchAdsAngleTestTodos(supabase, now)
+  const todos = await fetchAdsAngleTestTodos(supabase, now, ids)
   for (const t of todos) {
     items.push({
       kind: 'ads_budget_unknown',
