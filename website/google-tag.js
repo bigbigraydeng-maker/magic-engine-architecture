@@ -13,7 +13,7 @@
  */
 (function initGoogleTags() {
   var GOOGLE_ADS_ID = 'AW-18192230281';
-  var GA4_MEASUREMENT_ID = 'G-XXXXXXXXXX'; // replace after GA4 property is created; leave placeholder to skip GA4
+  var GA4_MEASUREMENT_ID = 'G-4JL29VZ1L4'; // replace after GA4 property is created; leave placeholder to skip GA4
   var PLACEHOLDER_GA4 = 'G-XXXXXXXXXX';
 
   window.dataLayer = window.dataLayer || [];
