@@ -5,6 +5,31 @@
 
 ---
 
+### 2026-08-17（WP05 GEO Module v1 上线 —— Roman AI 可见度首个诊断可读出）
+
+**发生了什么**：把 Roman 一个月前测出来的 GEO 基线（AI 答案样本），第一次真的读成「有支柱、有严重度、有处方」的诊断。之前只有原始答案 + 引用覆盖率，看不出「AI 是不是把 Roman 作为**人**在答案里提出来」。
+
+**做了什么**（issue [#879](https://github.com/bigbigraydeng-maker/magic-engine/issues/879)，PR [#1032](https://github.com/bigbigraydeng-maker/magic-engine/pull/1032)）：
+1. **前置** [#930](https://github.com/bigbigraydeng-maker/magic-engine/issues/930)：Roman 站点页面台账（canonical inventory）激活 21 页，为 WP05 提供页面身份（PR [#1020](https://github.com/bigbigraydeng-maker/magic-engine/pull/1020) `CanonicalInventoryStore`）。
+2. **WP05 GEO Module v1** 建成 `src/lib/geo-module/`，把 #883 GEO 证据按冻结的 `geo-module/m1/v1` 语义读成五段链：`GrowthEvidence → GrowthFinding → GrowthPrescription → GrowthActionCandidate → PageOptimizationRequest`（或诚实 defer）。**纯推理**：不写生产、不复测、不回写 #883、不进执行队列、不自建 Agent。
+3. **Roman 首次诊断结果**：
+   - 12 个发现型问句里，Roman 被 AI **答案正文合格提及** = **2/12**
+   - **显式正向推荐**（v1 唯一进指标的档）= **0/12**
+   - defer（证据不足） = 0
+   - 病根：首页第一屏 H1 抽象诗意，subtitle 无「中介 + 奥克兰 + 中文」三信号连贯陈述，AI 抓不到候选人身份
+   - 处方：AI 可见度支柱 · 严重度 high · 目标页 = 首页 · 只改首屏 subtitle · 验证 = 「合格提及覆盖相对基线上升」
+   - 详见 [`docs/clients/roman-hu/reports/2026-08-17-geo-first-diagnosis-v1.md`](../clients/roman-hu/reports/2026-08-17-geo-first-diagnosis-v1.md)
+
+**关键澄清（必带）**：**冻结基线的「owned citation 2/12」是「引用覆盖」（Roman 的域名被引用），不是提及、不是推荐**。M1 §7 明令不得把「答案带引用」重述成提及/推荐覆盖。本次 2/12 提及、0/12 推荐是**答案正文里的判定**，与引用覆盖是两回事，不可混说、不可相加。
+
+**A 级质量闸**：92 单测（M1 各判据 + 端到端 + 变异证据 + 架构守卫）· `npm run build` 通过 · 基线 222 无回归 · 子牙 / 魏征 / 狄仁杰四轮复审闭合。
+
+**follow-up（不阻塞本次上线）**：[#1023](https://github.com/bigbigraydeng-maker/magic-engine/issues/1023) · [#1030](https://github.com/bigbigraydeng-maker/magic-engine/issues/1030) · [#1040](https://github.com/bigbigraydeng-maker/magic-engine/issues/1040)（聚合分组键需按引擎/模型/查询集版本隔离 + severity 分母独立锁 + finding statement 表述错位）。
+
+**下一步**：现在诚实 `defer=unattributable_proposed_value` —— WP05 只推理不造文案。首页 subtitle 的 grounding 文案（en+zh 各两行）已由协调会话给出，等落 `src/i18n/ui.ts` 后触发 WP06/WP07 apply（当前卡 `cms_connections=0`）。
+
+---
+
 ### 2026-08-17（客人在私信里说「别再联系」，终于有人看得见了 —— 但刻意只提示，不自动封）
 
 **缺口**（issue [#1025](https://github.com/bigbigraydeng-maker/magic-engine/issues/1025)）：
