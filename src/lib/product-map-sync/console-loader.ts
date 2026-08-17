@@ -64,8 +64,15 @@ export async function loadProductMapConsole(
       buildingCount: s.building_count,
     }))
   } catch (err) {
-    if (!(err instanceof NotProvisionedError)) throw err // 真的读库炸了要冒泡,不能吞
+    // 🔴 魏征实施后复审:这里原来写的是 throw,而 page.tsx 直接 await 本函数、
+    //    没有外层 try/catch —— 真读库炸了会把整个控制台页面崩掉,方向反了。
+    //    应该跟下面 PR/issue facts 那段一样降级成 sync_error,不吞、也不炸主页面。
     progressSnapshots = []
+    if (!(err instanceof NotProvisionedError)) {
+      loadOutcome = 'sync_error'
+      const raw = err instanceof Error ? err.message : String(err)
+      loadErrorSummary = raw.slice(0, ERROR_SUMMARY_MAX)
+    }
   }
 
   try {

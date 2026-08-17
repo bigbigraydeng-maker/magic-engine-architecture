@@ -1005,15 +1005,19 @@ function ProgressPanel({ data }: { data: ConsolePresentation }) {
   const width = 640
   const height = 120
   const pad = 10
-  const maxTotal = Math.max(1, ...points.map((p) => p.totalComponents))
+  // 🔴 魏征实施后复审:画 totalComponents 是画错了指标 —— 那个数字只在改注册表
+  //    (加/删组件)那天才会动,平时是条死平线,满足不了 PM「每天涨没涨」的诉求。
+  //    真正该涨的是 operatingCount(真在生产里跑的组件数);totalComponents 只用来
+  //    判定口径漂移(见下方 hasRegistryDrift),跟"画哪条线"是两回事,不能混用。
+  const maxOperating = Math.max(1, ...points.map((p) => p.operatingCount))
   const x = (i: number) => (points.length <= 1 ? pad : pad + (i / (points.length - 1)) * (width - pad * 2))
-  const y = (n: number) => height - pad - (n / maxTotal) * (height - pad * 2)
+  const y = (n: number) => height - pad - (n / maxOperating) * (height - pad * 2)
 
   // 断档/口径漂移的点前面不连线 —— 拆成多段独立折线,不能被画成一条平滑趋势(魏征设计审)
-  const segments: { date: string; total: number }[][] = []
+  const segments: { date: string; operating: number }[][] = []
   points.forEach((p, i) => {
     if (i === 0 || p.hasGapBeforeIt || p.hasRegistryDrift) segments.push([])
-    segments[segments.length - 1].push({ date: p.date, total: p.totalComponents })
+    segments[segments.length - 1].push({ date: p.date, operating: p.operatingCount })
   })
 
   return (
@@ -1060,17 +1064,19 @@ function ProgressPanel({ data }: { data: ConsolePresentation }) {
         {!hasEnoughData ? (
           <div className="flex h-[120px] items-center justify-center rounded-xl border border-dashed border-black/15 bg-[#FBF8F3]">
             <p className="text-[13px] text-black/45">
-              数据从今天开始记录,至少攒够 3 天才会画线 —— 现在是第 {points.length} 天。
+              {points.length === 0
+                ? '还没攒够数据,至少攒够 3 天才会画线。'
+                : `数据从今天开始记录,至少攒够 3 天才会画线 —— 现在是第 ${points.length} 天。`}
             </p>
           </div>
         ) : (
           <div>
-            <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height} className="max-w-full" role="img" aria-label="每日在生产干活组件数走势,断档处不连线">
+            <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height} className="max-w-full" role="img" aria-label="每日真在生产里跑的组件数走势,断档处不连线">
               {segments.map((seg, si) => {
                 if (seg.length < 2) return null
                 const startIdx = points.findIndex((p) => p.date === seg[0].date)
                 const path = seg
-                  .map((p, i) => `${i === 0 ? 'M' : 'L'}${x(startIdx + i).toFixed(1)},${y(p.total).toFixed(1)}`)
+                  .map((p, i) => `${i === 0 ? 'M' : 'L'}${x(startIdx + i).toFixed(1)},${y(p.operating).toFixed(1)}`)
                   .join(' ')
                 return <path key={si} d={path} fill="none" stroke="#4B7A3A" strokeWidth={2} />
               })}
@@ -1078,12 +1084,12 @@ function ProgressPanel({ data }: { data: ConsolePresentation }) {
                 <circle
                   key={p.date}
                   cx={x(i)}
-                  cy={y(p.totalComponents)}
+                  cy={y(p.operatingCount)}
                   r={p.hasRegistryDrift ? 4 : 2.5}
                   fill={p.hasRegistryDrift ? '#C4912E' : '#4B7A3A'}
                 >
                   <title>
-                    {p.date} · 共 {p.totalComponents} 个组件
+                    {p.date} · {p.operatingCount} 个在生产里跑(共登记 {p.totalComponents} 个组件)
                     {p.hasGapBeforeIt ? ' · 前一天没有数据' : ''}
                     {p.hasRegistryDrift ? ' · 登记表当天有变化,跟前一个点不完全可比' : ''}
                   </title>
@@ -1091,7 +1097,8 @@ function ProgressPanel({ data }: { data: ConsolePresentation }) {
               ))}
             </svg>
             <p className="mt-1 text-[11px] text-black/35">
-              竖线断开 = 那天没数据;金色点 = 登记表当天有变化,跟前一天不完全可比。悬停看每个点的详情。
+              这条线画的是「真在生产里跑」的组件数,不是登记表总数。竖线断开 = 那天没数据;
+              金色点 = 登记表当天有变化,跟前一天不完全可比。悬停看每个点的详情。
             </p>
           </div>
         )}

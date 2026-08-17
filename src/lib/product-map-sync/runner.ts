@@ -103,9 +103,22 @@ async function generateMissingSummaries(
   if (!deps.summarizer) return empty // 未接大模型 = 功能整体跳过,不算失败
 
   const [prRows, issueRows] = await Promise.all([deps.store.readPrFacts(), deps.store.readIssueFacts()])
+  // 🔴 魏征实施后复审:readPrFacts/readIssueFacts 不保证返回顺序,不排序的话
+  // 候选顺序不确定;按编号升序至少让"谁先被处理"是确定性的,不随数据库返回顺序漂移。
+  //
+  // 已知局限(v1 接受,不在本次修):黑名单命中的行(rejected)永远留 null,
+  // 每轮都会重新成为候选 —— 如果某条标题天然会被模型翻译出黑名单词,它会
+  // 长期占住硬顶名额,挤占真正的新号码。要根治需要加一列记重试次数,超出本次
+  // 改动范围(表结构改动 = 大任务),先接受这个已知边界,真出现了再补。
   const candidates: { kind: 'pr' | 'issue'; number: number; title: string }[] = [
-    ...prRows.filter((r) => r.human_summary === null).map((r) => ({ kind: 'pr' as const, number: r.pr_number, title: r.title })),
-    ...issueRows.filter((r) => r.human_summary === null).map((r) => ({ kind: 'issue' as const, number: r.issue_number, title: r.title })),
+    ...prRows
+      .filter((r) => r.human_summary === null)
+      .sort((a, b) => a.pr_number - b.pr_number)
+      .map((r) => ({ kind: 'pr' as const, number: r.pr_number, title: r.title })),
+    ...issueRows
+      .filter((r) => r.human_summary === null)
+      .sort((a, b) => a.issue_number - b.issue_number)
+      .map((r) => ({ kind: 'issue' as const, number: r.issue_number, title: r.title })),
   ]
   if (candidates.length === 0) return empty
 
@@ -138,16 +151,20 @@ async function generateMissingSummaries(
     generated++
   }
 
+  // 🔴 魏征实施后复审:budgetSkipped 必须在写库之前就算好,两条 return 路径都要用
+  //    同一个值 —— 原来只在成功路径算,失败路径漏加,会让 run.stats 里的
+  //    summariesSkippedBudget 比真实情况偏小(数字不准)。
+  const budgetSkipped = budgetExhausted ? capped.length - generated - failed - rejected : 0
+
   if (writes.length > 0) {
     try {
       await deps.store.writeSummaries(writes)
     } catch {
       // 生成成功但落库失败 —— 这批全部退回"失败",不装懂已经写成功了多少
-      return { generated: 0, failed: failed + generated, rejected, skippedBudget }
+      return { generated: 0, failed: failed + generated, rejected, skippedBudget: skippedBudget + budgetSkipped }
     }
   }
 
-  const budgetSkipped = budgetExhausted ? capped.length - generated - failed - rejected : 0
   return { generated, failed, rejected, skippedBudget: skippedBudget + budgetSkipped }
 }
 

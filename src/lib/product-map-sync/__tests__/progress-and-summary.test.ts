@@ -237,6 +237,37 @@ describe('摘要生成:调用失败(返回 null)留 null,不阻塞主流程', ()
     expect(result.stats.summariesFailed).toBe(2)
     store.writeSummaries = originalWrite
   })
+
+  it('预算耗尽 + 落库失败同时发生 → skippedBudget 不能漏加(魏征实施后复审建议 2)', async () => {
+    const store = new FakeSyncStore()
+    seedRegistryWithExistingSummaries(store)
+    // 3 条:预算为 0 时一条都不会真正被"处理"(全部落 budgetSkipped),
+    // 但既然候选存在,一旦预算给够又叠加写库失败,两处计数必须加总不漏。
+    store.issueFacts.set(9700, extraIssueRow(9700))
+    store.issueFacts.set(9701, extraIssueRow(9701))
+    store.issueFacts.set(9702, extraIssueRow(9702))
+    const gen = new FakeSummaryGenerator(() => '一句正常摘要')
+    store.writeSummaries = async () => {
+      throw new Error('模拟网络抖动')
+    }
+    // 预算只够处理前 1 条(近似模拟:第 2 条开始预算耗尽),第 1 条生成成功但落库失败
+    let calls = 0
+    const slowGen: SummaryGenerator = {
+      summarize: async (kind, title) => {
+        calls++
+        if (calls > 1) await new Promise((r) => setTimeout(r, 30)) // 让后续调用撞上预算
+        return gen.summarize(kind, title)
+      },
+    }
+    const result = await runFullSync(
+      deps(fullySeededProvider(), store, { summarizer: slowGen, summaryPhaseBudgetMs: 20 }),
+      'cron',
+    )
+    // 不精确断言具体切分点(时序相关),只锁住"总数不丢"这条不变式:
+    // failed(落库失败退回) + skippedBudget(预算耗尽部分) 必须覆盖全部 3 条候选
+    expect(result.stats.summariesGenerated).toBe(0)
+    expect((result.stats.summariesFailed ?? 0) + (result.stats.summariesSkippedBudget ?? 0)).toBe(3)
+  })
 })
 
 describe('每日进度快照:复用 buildPresentation 的结果,不另开推导', () => {

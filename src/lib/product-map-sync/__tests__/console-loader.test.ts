@@ -71,6 +71,32 @@ describe('loadProductMapConsole 四态', () => {
     expect(p.trust.detail.length).toBeLessThan(260)
   })
 
+  it('快照读取真的炸了(非 NotProvisionedError)→ 降级 sync_error,不把整页崩掉(魏征实施后复审必改)', async () => {
+    const store = new FakeSyncStore()
+    // 主路径(PR/issue facts)正常有数据 —— 唯一的问题只在快照读取,
+    // 隔离出"快照单独炸了"这一种场景,不跟"从没同步过"混在一起。
+    store.prFacts.set(863, prRow(863))
+    store.runs.push(fullRun())
+    store.readProgressSnapshots = async () => {
+      throw new Error('网络抖动')
+    }
+    // 断言不 throw:魏征挑出的原 bug 是这里会把异常甩到函数外面,page.tsx 没有兜底会崩页面
+    const p = await loadProductMapConsole(store, NOW)
+    expect(p.trust.loadOutcome).toBe('sync_error')
+  })
+
+  it('快照表未 apply(NotProvisionedError)→ 仍是 ok,只是趋势图没数据,不拖累整页', async () => {
+    const store = new FakeSyncStore()
+    store.readProgressSnapshots = async () => {
+      throw new (await import('../types')).NotProvisionedError('fake: 快照表未 apply')
+    }
+    store.prFacts.set(863, prRow(863))
+    store.runs.push(fullRun())
+    const p = await loadProductMapConsole(store, NOW)
+    expect(p.trust.loadOutcome).toBe('ok')
+    expect(p.progressTrend.hasEnoughData).toBe(false)
+  })
+
   it('有数据 → ok,PR 事实进快照并影响成熟度推导', async () => {
     const store = new FakeSyncStore()
     store.prFacts.set(863, prRow(863))
