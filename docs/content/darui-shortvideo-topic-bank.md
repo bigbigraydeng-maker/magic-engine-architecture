@@ -239,7 +239,7 @@ Claude 读本文件 → 取选题 → 配 `viral_reference_library` 里 `platfor
 
 写文案前必读的两个数据源（不可跳过）：
 1. `viral_reference_library` where platform='xiaohongshu'（历史累计爆款 + 套路标签，口径较宽）
-   - **紧扣海外数字营销平台时**，加 `and industry='digital_marketing'`（2026-08-18 新抓 96 条，见上方 v3；查询时排除 `私域流量运营`/`AI获客` 两桶，理由见上）
+   - **紧扣海外数字营销平台时**：表里没有可筛选的关键词桶字段，**别自己拼 `industry='digital_marketing'` 就当筛完了**——那样会连同已排除的 35 条一起取出来。直接执行上方 v3 小节的 **61-ID 白名单 SQL**（`id in (...)` 那段），或原样复制粘贴那段查询。
 2. `master_briefs` where client_id='377468af-…'（真实定位、受众、支柱、语气）
 
 ## 钩子公式（2026-07-25 从 73 条真实爆款算出，按平均点赞排序）
