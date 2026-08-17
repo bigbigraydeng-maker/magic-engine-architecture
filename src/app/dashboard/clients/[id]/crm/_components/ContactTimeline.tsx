@@ -74,6 +74,50 @@ const CHANNEL_NAME: Record<string, string> = {
   whatsapp: 'WhatsApp',
 }
 
+/**
+ * 「系统给他上了闸」这一类判决 —— 必须一眼认出来，不能混在普通往来里。
+ *
+ * ## 为什么单独一档（PM 2026-08-17）
+ *
+ * 这两个结论跟别的结论**不是一回事**：其它结论只是记录「这次聊得怎么样」，
+ * 这两个直接决定**还能不能联系这个人**。`do_not_contact` 一旦成立，
+ * 电话、邮件、私信全停；解闸只能靠人明确说「判错了」。
+ *
+ * 而在这之前，它们在时间线上跟一条普通电话记录长得一模一样 —— 销售翻记录
+ * 只看得到一句话，看不到「就是这一句让系统把他全渠道停了」。于是最该被复核的
+ * 那一刻，恰恰是最看不见的。
+ *
+ * 🔴 **原话一定要留在旁边**：判断「是不是判错了」全靠原话（早前的词表把
+ * 「我不打算去」当成过「别再联系」）。所以这里只给卡片加一条头和一道红边，
+ * **不替换卡片内容**。
+ */
+const VERDICT_ROW: Record<string, { icon: string; text: string; tone: 'stop' | 'clear' }> = {
+  do_not_contact: {
+    icon: '🔒',
+    // 说后果，不说结论名。销售要知道的是「所以现在怎么样」。
+    text: '就是这一句让系统停了他 —— 从这天起电话 / 邮件 / 私信全都不再发给他',
+    tone: 'stop',
+  },
+  dnc_cleared: {
+    icon: '🔓',
+    text: '有人判断上面那次是误判，把他放回了名单 —— 现在可以正常联系',
+    tone: 'clear',
+  },
+}
+
+/**
+ * 其余结论 → 人话。
+ *
+ * 只挑**会影响销售下一步动作**的那几种；`spoke` / `unknown` 是兜底值
+ * （任何没命中规则的备注都会落成 `spoke`），标出来只会变成满屏噪音。
+ */
+const OUTCOME_CHIP: Record<string, string> = {
+  bad_number: '这个号打不通',
+  no_answer: '打了没人接',
+  not_interested: '他说不买了',
+  not_interested_now: '这次先不去',
+}
+
 function when(iso: string): string {
   const d = new Date(iso)
   const days = Math.floor((Date.now() - d.getTime()) / 86_400_000)
@@ -119,8 +163,30 @@ export function ContactTimeline({ clientId, contactId }: { clientId: string; con
     return <p className="py-6 text-center text-xs text-me-charcoal/40">还没有往来记录。</p>
   }
 
+  /**
+   * 「他是从哪来的」—— 时间线**从旧到新**，所以第一条就是他第一次出现在我们面前。
+   *
+   * 单独提一行的理由（CTS 销售视角）：接手一个陌生人，第一个要判断的是「这人
+   * 值不值得马上打」，而来源就是最强的那个信号 —— 填过表单的人跟一句
+   * 「洗牙多少钱」进来的人，开场白根本不该一样。原先这条信息埋在最上面那张
+   * 卡片的小字里，跟后面十几条长得一模一样，扫过去看不见。
+   */
+  const first = data.timeline[0]
+  const originName =
+    first?.kind === 'touch'
+      ? (CHANNEL_NAME[first.channel ?? ''] ?? first.channel ?? null)
+      : first?.kind === 'message'
+        ? '私信'
+        : null
+
   return (
     <div className="space-y-2.5">
+      {originName && (
+        <p className="px-1 text-[11px] text-me-charcoal/45">
+          👋 他是从<span className="font-bold text-me-charcoal/70">{originName}</span>来的 ·{' '}
+          {when(first.at)}
+        </p>
+      )}
       {data.timeline.map((e, i) => {
         // 客人说的话 —— 白底靠左；我们说的 —— 灰底靠右缩进。一眼分得出谁在说。
         if (e.kind === 'message') {
@@ -157,16 +223,37 @@ export function ContactTimeline({ clientId, contactId }: { clientId: string; con
           e.travelWindow && `${e.travelWindow} 走`,
           e.competitor && `提到 ${e.competitor}`,
           e.callbackAt && '约了回电',
+          e.outcome ? OUTCOME_CHIP[e.outcome] : null,
         ].filter(Boolean) as string[]
 
+        const verdict = e.outcome ? VERDICT_ROW[e.outcome] : undefined
+        const stop = verdict?.tone === 'stop'
+
         return (
-          <div key={i} className="rounded-xl border border-me-charcoal/10 bg-white px-3 py-2">
+          <div
+            key={i}
+            className={`rounded-xl border bg-white px-3 py-2 ${
+              verdict
+                ? `border-l-4 ${stop ? 'border-l-[#C2453A] border-[#C2453A]/25' : 'border-l-me-ochre border-me-ochre/30'}`
+                : 'border-me-charcoal/10'
+            }`}
+          >
             <p className="text-[10px] font-bold text-me-charcoal/40">
               {icon} {name}
               {e.direction === 'inbound' ? ' · 客人来的' : ''} · {when(e.at)}
             </p>
             {e.summary && (
               <p className="mt-0.5 text-[13px] leading-relaxed text-me-charcoal/85">{e.summary}</p>
+            )}
+            {/* 判决摆在原话**下面** —— 先读客人说了什么，再看系统据此做了什么。 */}
+            {verdict && (
+              <p
+                className={`mt-1.5 rounded-lg px-2 py-1.5 text-[11px] font-bold leading-relaxed ${
+                  stop ? 'bg-[#C2453A]/8 text-[#C2453A]' : 'bg-me-ochre/12 text-me-ochre'
+                }`}
+              >
+                {verdict.icon} {verdict.text}
+              </p>
             )}
             {chips.length > 0 && (
               <div className="mt-1.5 flex flex-wrap gap-1">
