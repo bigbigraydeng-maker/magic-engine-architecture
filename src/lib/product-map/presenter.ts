@@ -65,12 +65,29 @@ export interface PrFactView {
   readonly isDraft: boolean
   readonly unresolvedThreads: number | null
   readonly title: string
+  /** 大模型生成的人话摘要,null = 还没生成(检索页兜底显示原标题)。 */
+  readonly humanSummary: string | null
+  /** 我们的核对任务上次看到这行是这个状态的时间 —— 不是 GitHub 官方的真实事件时间
+   *  (板桥设计审必改 1:两者可能差几小时到一天,措辞和字段名都不能暗示"精确时间线")。 */
+  readonly observedAt: string
 }
 
 export interface IssueFactView {
   readonly number: number
   readonly state: 'open' | 'closed'
   readonly title: string
+  readonly humanSummary: string | null
+  readonly observedAt: string
+}
+
+/** 每日进度快照(presenter 输入端口,DB 行由 page 层映射)。 */
+export interface ProgressSnapshotView {
+  /** YYYY-MM-DD。 */
+  readonly date: string
+  readonly totalComponents: number
+  readonly operatingCount: number
+  readonly builtNotLiveCount: number
+  readonly buildingCount: number
 }
 
 export interface PresenterInput {
@@ -88,6 +105,8 @@ export interface PresenterInput {
   readonly oldestObservedAt: string | null
   /** 判定 stale 用;测试注入。 */
   readonly now: Date
+  /** 按日期升序;缺的日期不补行(前端按日历序列识别断档,不插值连线)。 */
+  readonly progressSnapshots: readonly ProgressSnapshotView[]
 }
 
 // ---------------------------------------------------------------------------
@@ -310,6 +329,46 @@ export interface CatalogItemView {
   readonly stateLabel: string
   readonly url: string
   readonly components: readonly { name: string; businessOutcome: string; laneLabel: string }[]
+  /**
+   * 大模型翻译的人话摘要,null = 还没生成。🔴 板桥设计审必改 2:UI 展示时必须
+   * 视觉降权(不能跟人工核实过的信息长得一样),原标题必须保持可见,不能被替换掉。
+   */
+  readonly humanSummary: string | null
+}
+
+/** 趋势图上的一个点,附带渲染时要不要断线的判定(魏征设计审:缺口/口径漂移不能被连成平滑线)。 */
+export interface ProgressTrendPointView {
+  readonly date: string
+  readonly totalComponents: number
+  readonly operatingCount: number
+  readonly builtNotLiveCount: number
+  readonly buildingCount: number
+  /** 跟日历意义上紧邻的前一天没有连续快照(cron 那天没跑/没写成功)—— 这个点前面要断线。 */
+  readonly hasGapBeforeIt: boolean
+  /** totalComponents 跟前一个点不一样(登记表口径变了)—— 两点不可比,不能画成平滑趋势。 */
+  readonly hasRegistryDrift: boolean
+}
+
+export interface ProgressTrendView {
+  readonly points: readonly ProgressTrendPointView[]
+  /** 板桥设计审:至少攒够 3 天数据才有意义,不够时前端显示"数据从今天开始记录"。 */
+  readonly hasEnoughData: boolean
+}
+
+/**
+ * 最近动态:从已同步的 PR/issue 里挑最近变成"合并/关闭"的几条。
+ * 🔴 时间戳锚点是「我们核对任务上次看到它是这个状态」,不是 GitHub 真实事件时间
+ *    (板桥设计审必改 1);merge 与 close 用不同措辞,issue 关闭 ≠ 生产完成(板桥必改 6)。
+ */
+export interface RecentActivityItemView {
+  readonly kind: 'pr' | 'issue'
+  readonly number: number
+  readonly url: string
+  readonly verbLabel: string
+  readonly title: string
+  readonly humanSummary: string | null
+  readonly observedAtLabel: string
+  readonly componentNames: readonly string[]
 }
 
 export interface ConsolePresentation {
@@ -326,6 +385,10 @@ export interface ConsolePresentation {
   readonly graph: GraphView
   /** issue/PR 检索目录(标题来自同步,可能为空 = 同步未开通)。 */
   readonly catalog: readonly CatalogItemView[]
+  /** 每日进度快照趋势(可能为空/数据不足,前端据 hasEnoughData 决定要不要画)。 */
+  readonly progressTrend: ProgressTrendView
+  /** 最近合并/关闭的若干条,按观测时间倒序,上限见实现。 */
+  readonly recentActivity: readonly RecentActivityItemView[]
 }
 
 // ---------------------------------------------------------------------------
@@ -735,6 +798,7 @@ export function buildPresentation(input: PresenterInput): ConsolePresentation {
       stateLabel: prStateLabel(f, true),
       url: `${REPO_URL}/pull/${f.number}`,
       components: compsByPr.get(f.number) ?? [],
+      humanSummary: f.humanSummary,
     })),
     ...input.issueFacts.map((f) => ({
       kind: 'issue' as const,
@@ -743,8 +807,12 @@ export function buildPresentation(input: PresenterInput): ConsolePresentation {
       stateLabel: issueStateLabel(f),
       url: `${REPO_URL}/issues/${f.number}`,
       components: compsByIssue.get(f.number) ?? [],
+      humanSummary: f.humanSummary,
     })),
   ]
+
+  const progressTrend = buildProgressTrend(input.progressSnapshots)
+  const recentActivity = buildRecentActivity(input, compsByPr, compsByIssue)
 
   const health = computeHealth(input)
   const { verdict, detail } = trustVerdict(input.loadOutcome, health)
@@ -776,6 +844,88 @@ export function buildPresentation(input: PresenterInput): ConsolePresentation {
     unclassified: input.unclassified,
     graph,
     catalog,
+    progressTrend,
+    recentActivity,
   }
+}
+
+/**
+ * 趋势点标注:断档(跟前一个日历日不连续)和口径漂移(总数变了)都不能被画成
+ * 平滑连续线(魏征设计审)。输入已经是按日期升序的快照,不在这里重排序。
+ */
+function buildProgressTrend(snapshots: readonly ProgressSnapshotView[]): ProgressTrendView {
+  const points: ProgressTrendPointView[] = snapshots.map((s, i) => {
+    const prev = i > 0 ? snapshots[i - 1] : null
+    const hasGapBeforeIt = prev !== null && !isNextCalendarDay(prev.date, s.date)
+    const hasRegistryDrift = prev !== null && prev.totalComponents !== s.totalComponents
+    return {
+      date: s.date,
+      totalComponents: s.totalComponents,
+      operatingCount: s.operatingCount,
+      builtNotLiveCount: s.builtNotLiveCount,
+      buildingCount: s.buildingCount,
+      hasGapBeforeIt,
+      hasRegistryDrift,
+    }
+  })
+  // 板桥设计审:至少 3 天才有意义 —— 1~2 个点连不成有意义的趋势,显示"数据从今天开始记录"更诚实
+  return { points, hasEnoughData: points.length >= 3 }
+}
+
+function isNextCalendarDay(prevDate: string, date: string): boolean {
+  const prev = new Date(`${prevDate}T00:00:00Z`)
+  const cur = new Date(`${date}T00:00:00Z`)
+  return Math.round((cur.getTime() - prev.getTime()) / 86_400_000) === 1
+}
+
+const RECENT_ACTIVITY_LIMIT = 10
+
+/**
+ * 最近合并/关闭的若干条。板桥设计审必改 1/6:时间戳锚点是"我们核对时看到的状态"
+ * (不是 GitHub 真实事件时间),merge/close 用不同措辞(issue 关闭 ≠ 生产完成)。
+ */
+function buildRecentActivity(
+  input: PresenterInput,
+  compsByPr: Map<number, { name: string; businessOutcome: string; laneLabel: string }[]>,
+  compsByIssue: Map<number, { name: string; businessOutcome: string; laneLabel: string }[]>,
+): RecentActivityItemView[] {
+  const merged = input.prFacts
+    .filter((f) => f.state === 'merged')
+    .map((f) => ({
+      kind: 'pr' as const,
+      number: f.number,
+      url: `${REPO_URL}/pull/${f.number}`,
+      verbLabel: '合并了',
+      title: f.title,
+      humanSummary: f.humanSummary,
+      observedAt: f.observedAt,
+      componentNames: (compsByPr.get(f.number) ?? []).map((c) => c.name),
+    }))
+  const closed = input.issueFacts
+    .filter((f) => f.state === 'closed')
+    .map((f) => ({
+      kind: 'issue' as const,
+      number: f.number,
+      url: `${REPO_URL}/issues/${f.number}`,
+      // 🔴 不能写「完成了」——issue 关闭 ≠ 生产完成是仓库既有铁律,板桥设计审必改 6
+      verbLabel: '关掉了(不一定是做完,可能是不做了/重复了)',
+      title: f.title,
+      humanSummary: f.humanSummary,
+      observedAt: f.observedAt,
+      componentNames: (compsByIssue.get(f.number) ?? []).map((c) => c.name),
+    }))
+  return [...merged, ...closed]
+    .sort((a, b) => (a.observedAt < b.observedAt ? 1 : -1))
+    .slice(0, RECENT_ACTIVITY_LIMIT)
+    .map((item) => ({
+      kind: item.kind,
+      number: item.number,
+      url: item.url,
+      verbLabel: item.verbLabel,
+      title: item.title,
+      humanSummary: item.humanSummary,
+      observedAtLabel: `我们 ${nzStamp(new Date(item.observedAt))} 核对时看到的状态`,
+      componentNames: item.componentNames,
+    }))
 }
 

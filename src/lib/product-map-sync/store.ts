@@ -15,12 +15,31 @@ import type {
   DeliveryStatus,
   IssueFactRow,
   PrFactRow,
+  ProgressSnapshotRow,
   SyncMode,
   SyncRunRow,
   SyncStats,
   UnclassifiedWorkRow,
 } from './types'
 import { NotProvisionedError } from './types'
+
+export interface SummaryWrite {
+  readonly kind: 'pr' | 'issue'
+  readonly number: number
+  readonly summary: string
+  readonly generatedAt: string
+}
+
+export interface ProgressSnapshotWrite {
+  readonly snapshotDate: string
+  readonly totalComponents: number
+  readonly operatingCount: number
+  readonly builtNotLiveCount: number
+  readonly buildingCount: number
+  readonly maturityCounts: Readonly<Record<string, number>>
+  readonly syncRunId: string
+  readonly runStartedAt: string
+}
 
 export type DeliveryClaim = 'claimed' | 'duplicate' | 'retry_failed'
 
@@ -35,8 +54,10 @@ export interface ProductMapSyncStore {
   markDelivery(deliveryId: string, status: DeliveryStatus, error?: string): Promise<void>
   commitSync(input: {
     run: Omit<SyncRunRow, 'stats'> & { stats: SyncStats }
-    prFacts: readonly Omit<PrFactRow, 'sync_run_id'>[]
-    issueFacts: readonly Omit<IssueFactRow, 'sync_run_id'>[]
+    // 🔴 摘要两列不在这里:commitSync 的 RPC 从不引用它们(见 migration 注释),
+    //    专走 writeSummaries 这条独立路径 —— 两条写入路径互不覆盖。
+    prFacts: readonly Omit<PrFactRow, 'sync_run_id' | 'human_summary' | 'human_summary_generated_at'>[]
+    issueFacts: readonly Omit<IssueFactRow, 'sync_run_id' | 'human_summary' | 'human_summary_generated_at'>[]
     unclassified: readonly { kind: 'pr' | 'issue'; number: number; title: string; url: string; opened_at: string }[]
     /**
      * 收编名单(只在 full 轮生效):**逐条被复核确认**「已关闭或已进登记册/带合法标记」
@@ -55,6 +76,25 @@ export interface ProductMapSyncStore {
   /** 只数 trigger='webhook' 的 error runs —— cron/manual 的错误另有去处。 */
   countWebhookErrorRunsSince(sinceIso: string): Promise<number>
   pruneDeliveriesBefore(iso: string): Promise<number>
+  /**
+   * 写人话摘要 —— 独立于 commitSync 的路径,只 UPDATE 已存在的行(facts 必须先落库)。
+   * 单条失败不影响其它条:调用方(runner)已经过滤出「值得写」的摘要,这里尽力而为,
+   * 个别行更新失败只在 Supabase 层报错,由调用方决定要不要整体重试。
+   */
+  writeSummaries(items: readonly SummaryWrite[]): Promise<void>
+  /**
+   * 单调 upsert 今日进度快照。返回 written=false 表示被并发的更晚一轮讓过 ——
+   * 这是正常结果,不是错误(魏征设计审的并发护栏)。
+   */
+  upsertProgressSnapshot(row: ProgressSnapshotWrite): Promise<{ written: boolean }>
+  /** 按日期升序返回最近 N 天的快照(缺的日期不补行,前端按日历序列自己识别断档)。 */
+  readProgressSnapshots(limitDays: number): Promise<ProgressSnapshotRow[]>
+  /**
+   * 事后把摘要/快照阶段的记账 patch 进已落库 run 行的 stats(jsonb 浅合并)。
+   * 这两个阶段发生在 commitSync 原子写入**之后**,不能挤进那次事务,但结果不许
+   * 静默丢——子牙设计审:失败要能在巡检时一眼看到,不用去翻日志。
+   */
+  patchRunStats(runId: string, patch: Partial<SyncStats>): Promise<void>
 }
 
 const MISSING_OBJECT_CODES = new Set(['42P01', 'PGRST205', 'PGRST202'])
@@ -189,5 +229,61 @@ export class SupabaseSyncStore implements ProductMapSyncStore {
     throwIfNotProvisioned(error)
     if (error) throw new Error(`deliveries 清理失败:${error.message}`)
     return (data ?? []).length
+  }
+
+  async writeSummaries(items: readonly SummaryWrite[]): Promise<void> {
+    if (items.length === 0) return
+    for (const item of items) {
+      const table = item.kind === 'pr' ? 'product_map_pr_facts' : 'product_map_issue_facts'
+      const column = item.kind === 'pr' ? 'pr_number' : 'issue_number'
+      const { error } = await this.sb
+        .from(table)
+        .update({ human_summary: item.summary, human_summary_generated_at: item.generatedAt })
+        .eq(column, item.number)
+      throwIfNotProvisioned(error)
+      if (error) throw new Error(`摘要写入失败(${item.kind}#${item.number}):${error.message}`)
+    }
+  }
+
+  async upsertProgressSnapshot(row: ProgressSnapshotWrite): Promise<{ written: boolean }> {
+    const { data, error } = await this.sb.rpc('product_map_upsert_progress_snapshot_v1', {
+      p_snapshot_date: row.snapshotDate,
+      p_total_components: row.totalComponents,
+      p_operating_count: row.operatingCount,
+      p_built_not_live_count: row.builtNotLiveCount,
+      p_building_count: row.buildingCount,
+      p_maturity_counts: row.maturityCounts,
+      p_sync_run_id: row.syncRunId,
+      p_run_started_at: row.runStartedAt,
+    })
+    throwIfNotProvisioned(error)
+    if (error) throw new Error(`进度快照写入失败:${error.message}`)
+    return { written: data === true }
+  }
+
+  async readProgressSnapshots(limitDays: number): Promise<ProgressSnapshotRow[]> {
+    const { data, error } = await this.sb
+      .from('product_map_progress_snapshots')
+      .select('*')
+      .order('snapshot_date', { ascending: false })
+      .limit(limitDays)
+    throwIfNotProvisioned(error)
+    if (error) throw new Error(`进度快照读取失败:${error.message}`)
+    return ((data ?? []) as ProgressSnapshotRow[]).slice().reverse() // 升序返回,趋势图按时间正序画
+  }
+
+  async patchRunStats(runId: string, patch: Partial<SyncStats>): Promise<void> {
+    const { data, error: readErr } = await this.sb
+      .from('product_map_sync_runs')
+      .select('stats')
+      .eq('id', runId)
+      .maybeSingle<{ stats: SyncStats }>()
+    throwIfNotProvisioned(readErr)
+    if (readErr) throw new Error(`run 读取失败(patchRunStats):${readErr.message}`)
+    if (!data) return // run 行本身没写成功(理论上不会发生,防御性跳过)
+    const merged = { ...data.stats, ...patch }
+    const { error } = await this.sb.from('product_map_sync_runs').update({ stats: merged }).eq('id', runId)
+    throwIfNotProvisioned(error)
+    if (error) throw new Error(`run stats 更新失败:${error.message}`)
   }
 }

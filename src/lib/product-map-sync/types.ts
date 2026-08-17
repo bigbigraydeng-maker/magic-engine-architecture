@@ -116,6 +116,12 @@ export interface PrFactRow {
   readonly title: string
   readonly observed_at: string
   readonly sync_run_id: string
+  /**
+   * 人话摘要缓存(大模型生成,只重述标题在说什么,禁止推断完成状态)。
+   * null = 还没生成(下一轮 cron 会补)。一旦生成过就不重算(标题极少变,省成本)。
+   */
+  readonly human_summary: string | null
+  readonly human_summary_generated_at: string | null
 }
 
 export interface IssueFactRow {
@@ -125,6 +131,24 @@ export interface IssueFactRow {
   readonly updated_at: string
   readonly observed_at: string
   readonly sync_run_id: string
+  readonly human_summary: string | null
+  readonly human_summary_generated_at: string | null
+}
+
+/** 每日进度快照 —— 一天一行,复用 buildPresentation 算出的 buckets/成熟度分布。 */
+export interface ProgressSnapshotRow {
+  /** YYYY-MM-DD。 */
+  readonly snapshot_date: string
+  readonly total_components: number
+  readonly operating_count: number
+  readonly built_not_live_count: number
+  readonly building_count: number
+  /** `{ M0_REGISTERED: n, ... }` —— Maturity 枚举各多少个。 */
+  readonly maturity_counts: Readonly<Record<string, number>>
+  readonly sync_run_id: string
+  /** 单调守卫键:只有更晚(或同轮重放)的写入能覆盖已有行(魏征设计审并发必改项)。 */
+  readonly run_started_at: string
+  readonly created_at: string
 }
 
 export interface UnclassifiedWorkRow {
@@ -160,6 +184,19 @@ export interface SyncStats {
   /** 每日 cron 额外统计:自上一次 full 轮以来 status=error 的 webhook runs 数。 */
   readonly webhookErrorRunsSinceLastFull?: number
   readonly deliveriesPruned?: number
+  /**
+   * 人话摘要生成的记账(子牙设计审:失败不许静默,巡检要能一眼看到)。
+   * 生成阶段本身失败/跳过绝不阻塞 facts 落库 —— 这几个字段是事后 patch 进 run.stats 的,
+   * 不在 commitSync 那次原子写入里(见 runner.ts patchRunStats)。
+   */
+  readonly summariesGenerated?: number
+  readonly summariesFailed?: number
+  /** prompt 护栏拦下的(命中禁用状态词)—— 拒绝写入,不是失败,单独计数。 */
+  readonly summariesRejected?: number
+  /** 本轮时间预算不够,没来得及处理、留给下一轮的条数。 */
+  readonly summariesSkippedBudget?: number
+  /** 今日进度快照是否成功写入(false = 写入失败或被并发的更晚一轮让过)。 */
+  readonly progressSnapshotWritten?: boolean
 }
 
 export const EMPTY_SYNC_STATS: SyncStats = Object.freeze({

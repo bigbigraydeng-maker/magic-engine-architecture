@@ -25,6 +25,7 @@ function present(overrides: Partial<PresenterInput> = {}) {
     unclassified: [],
     oldestObservedAt: null,
     now: new Date('2026-08-15T12:00:00Z'),
+    progressSnapshots: [],
     ...overrides,
   })
 }
@@ -49,7 +50,7 @@ describe('ProductMapClient', () => {
 
   it('同步没覆盖到的 PR 会在横幅上露头(进度可能被低估)', () => {
     const data = present({
-      prFacts: [{ number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: 'x' }],
+      prFacts: [{ number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: 'x', humanSummary: null, observedAt: '2026-08-15T09:00:00Z' }],
     })
     render(<ProductMapClient data={data} />)
     expect(screen.getByText(/进度可能被低估/)).toBeDefined()
@@ -70,12 +71,69 @@ describe('ProductMapClient', () => {
 
   it('切到「查一件事」:有同步时 PR 标题 + 业务人话名上屏,且不漏 id', () => {
     const data = present({
-      prFacts: [{ number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: '内核 PR 真标题' }],
+      prFacts: [{ number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: '内核 PR 真标题', humanSummary: null, observedAt: '2026-08-15T09:00:00Z' }],
     })
     const { container } = render(<ProductMapClient data={data} />)
     fireEvent.click(screen.getByText('查一件事'))
     expect(screen.getByText('内核 PR 真标题')).toBeDefined()
     expect(container.textContent).toContain('执行内核') // 业务人话名
     expect(container.textContent).not.toContain('platform.execution-kernel') // 内部 id 绝不上屏
+  }, 30_000)
+
+  it('顶部摘要条:拆分数字 + 分母不暗示固定目标(板桥二轮设计审必改 3)', () => {
+    const { container } = render(<ProductMapClient data={present()} />)
+    expect(container.textContent).toContain('个真在生产里跑')
+    expect(container.textContent).toContain('个建好了但还没接上线')
+    expect(container.textContent).toContain('不是固定目标')
+    expect(container.textContent).toContain('不是功能完整度')
+  }, 30_000)
+
+  it('查一件事:摘要视觉降权,原标题依然可见(板桥二轮设计审必改 2)', () => {
+    const data = present({
+      prFacts: [
+        {
+          number: 863,
+          state: 'merged',
+          isDraft: false,
+          unresolvedThreads: 0,
+          title: '技术黑话标题',
+          humanSummary: '给登录页加了个记住密码的选项',
+          observedAt: '2026-08-15T09:00:00Z',
+        },
+      ],
+    })
+    render(<ProductMapClient data={data} />)
+    fireEvent.click(screen.getByText('查一件事'))
+    expect(screen.getByText('给登录页加了个记住密码的选项')).toBeDefined()
+    expect(screen.getByText(/AI 翻的,可能有出入/)).toBeDefined()
+    expect(screen.getByText(/原标题:技术黑话标题/)).toBeDefined()
+  }, 30_000)
+
+  it('最近进展:不足 3 天数据时显式说明,不画假趋势线(板桥二轮设计审)', () => {
+    render(<ProductMapClient data={present()} />)
+    fireEvent.click(screen.getByText('最近进展'))
+    expect(screen.getByText(/至少攒够 3 天才会画线/)).toBeDefined()
+  }, 30_000)
+
+  it('最近进展:合并与关闭用不同措辞,关闭不写「完成」(板桥二轮设计审必改 6)', () => {
+    const data = present({
+      prFacts: [
+        {
+          number: 863,
+          state: 'merged',
+          isDraft: false,
+          unresolvedThreads: 0,
+          title: 'x',
+          humanSummary: null,
+          observedAt: '2026-08-15T09:00:00Z',
+        },
+      ],
+      issueFacts: [{ number: 859, state: 'closed', title: 'y', humanSummary: null, observedAt: '2026-08-15T09:00:00Z' }],
+    })
+    render(<ProductMapClient data={data} />)
+    fireEvent.click(screen.getByText('最近进展'))
+    expect(screen.getByText('合并了')).toBeDefined()
+    expect(screen.getByText(/关掉了/)).toBeDefined()
+    expect(screen.getByText(/不一定是做完/)).toBeDefined()
   }, 30_000)
 })

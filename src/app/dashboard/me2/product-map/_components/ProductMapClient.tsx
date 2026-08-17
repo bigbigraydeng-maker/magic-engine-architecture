@@ -24,15 +24,17 @@ import { cx } from '@/components/ui/me-theme'
 import { BUCKET_LABEL } from '@/lib/product-map/presenter'
 import type { ComponentView, ConsolePresentation, DecisionView } from '@/lib/product-map/presenter'
 
-type ViewKey = 'decisions' | 'lanes' | 'list' | 'search' | 'graph'
+type ViewKey = 'decisions' | 'lanes' | 'list' | 'search' | 'graph' | 'progress'
 
-// 顺序:决策入口永远第一(板桥 S1);查阅类(查一件事 / 谁垫着谁)排最后,检索在关系图前(板桥建议 5)。
+// 顺序:决策入口永远第一(板桥 S1);查阅类排最后。「最近进展」是了解现状,不是决策入口,
+// 排在最后一个,不跟"等你拍板"抢首屏(板桥二轮设计审必改 5)。
 const VIEWS: { key: ViewKey; label: string }[] = [
   { key: 'decisions', label: '等你拍板' },
   { key: 'lanes', label: '各条线做到哪了' },
   { key: 'list', label: '一件件看' },
   { key: 'search', label: '查一件事' },
   { key: 'graph', label: '谁垫着谁' },
+  { key: 'progress', label: '最近进展' },
 ]
 
 // 「在不在跑」的颜色(节点主色):在跑 > 建到哪一步(板桥 M1)。
@@ -558,6 +560,7 @@ function SearchView({ data }: { data: ConsolePresentation }) {
           ? String(it.number) === ql || String(it.number).startsWith(ql)
           : String(it.number).includes(ql)) ||
         it.title.toLowerCase().includes(ql) ||
+        (it.humanSummary?.toLowerCase().includes(ql) ?? false) ||
         it.components.some(
           (c) => c.name.toLowerCase().includes(ql) || c.businessOutcome.toLowerCase().includes(ql),
         )
@@ -638,7 +641,24 @@ function SearchView({ data }: { data: ConsolePresentation }) {
                 </MeChip>
                 <span className="text-[12.5px] text-me-ochre">在 GitHub 打开 ↗</span>
               </div>
-              <div className="mt-1.5 text-[13.5px] text-me-charcoal">{it.title}</div>
+              {/* 摘要视觉降权(板桥二轮设计审必改 2):不能跟原标题长得一样自信,
+                  原标题永远保持可见,不能被摘要替换掉 —— 摘要是锦上添花,原文才是事实。*/}
+              {it.humanSummary ? (
+                <>
+                  <div className="mt-1.5 flex items-start gap-1.5">
+                    <span className="mt-0.5 shrink-0 rounded-full border border-dashed border-black/20 px-1.5 py-0.5 text-[10px] italic text-black/40">
+                      AI 翻的,可能有出入
+                    </span>
+                    <p className="text-[13.5px] italic text-black/65">{it.humanSummary}</p>
+                  </div>
+                  <div className="mt-1 text-[11.5px] text-black/40">原标题:{it.title}</div>
+                </>
+              ) : (
+                <>
+                  <div className="mt-1.5 text-[13.5px] text-me-charcoal">{it.title}</div>
+                  <div className="mt-1 text-[11px] text-black/35">还没生成人话摘要,明天会自动补上。</div>
+                </>
+              )}
               {/* 让 PM 把陌生编号挂回「哦这是那件事」——给业务人话名(板桥必改 6) */}
               {it.components.length === 0 ? (
                 <p className="mt-1.5 text-[12px] text-black/45">
@@ -947,6 +967,139 @@ function GraphPanel({ data }: { data: ConsolePresentation }) {
   )
 }
 
+// ── 顶部精简摘要条(板桥二轮设计审必改 3/5)──────────────────────────────
+// 不发明加权完成度百分比:两个数字并列显示,不做加总;三段色块条不是单一进度条;
+// 分母不暗示成固定目标(「当前登记了 N 个」而非「目标是 N 个」)。放在 TrustBanner
+// 和 tab 切换器之间,不占大面积,不会把"等你拍板"挤出首屏。
+function ProgressStrip({ data }: { data: ConsolePresentation }) {
+  const { operating, built_not_live: builtNotLive, building } = data.buckets
+  const total = data.totalComponents
+  const pct = (n: number) => (total > 0 ? (n / total) * 100 : 0)
+  return (
+    <div className="rounded-xl border border-black/10 bg-white px-4 py-3 shadow-[0_1px_2px_rgba(26,26,26,.04)]">
+      <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1.5">
+        <span className="text-[13px] text-black/70">
+          <strong className="font-display text-[17px] font-bold text-me-charcoal tabular-nums">{operating}</strong>
+          <span className="ml-1">个真在生产里跑</span>
+        </span>
+        <span className="text-[13px] text-black/55">
+          另外 <strong className="tabular-nums text-black/70">{builtNotLive}</strong> 个建好了但还没接上线
+        </span>
+        <span className="text-[12px] text-black/40">
+          当前登记了 <span className="tabular-nums">{total}</span> 个组件(不是固定目标,会跟着建设进度增减)
+        </span>
+      </div>
+      <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-me-stone">
+        <div style={{ width: `${pct(operating)}%`, background: BUCKET_COLOR.operating }} title={`在生产干活 · ${operating}`} />
+        <div style={{ width: `${pct(builtNotLive)}%`, background: BUCKET_COLOR.built_not_live }} title={`建好了但没通电 · ${builtNotLive}`} />
+        <div style={{ width: `${pct(building)}%`, background: BUCKET_COLOR.building }} title={`还在建 · ${building}`} />
+      </div>
+      <p className="mt-1.5 text-[11px] text-black/35">这是组件数量,不是功能完整度 —— 想看明细去「各条线做到哪了」。</p>
+    </div>
+  )
+}
+
+// ── 最近进展:最近动态 + 每日趋势(板桥二轮设计审:了解现状,不是决策入口,独立 tab)──
+function ProgressPanel({ data }: { data: ConsolePresentation }) {
+  const { points, hasEnoughData } = data.progressTrend
+  const width = 640
+  const height = 120
+  const pad = 10
+  const maxTotal = Math.max(1, ...points.map((p) => p.totalComponents))
+  const x = (i: number) => (points.length <= 1 ? pad : pad + (i / (points.length - 1)) * (width - pad * 2))
+  const y = (n: number) => height - pad - (n / maxTotal) * (height - pad * 2)
+
+  // 断档/口径漂移的点前面不连线 —— 拆成多段独立折线,不能被画成一条平滑趋势(魏征设计审)
+  const segments: { date: string; total: number }[][] = []
+  points.forEach((p, i) => {
+    if (i === 0 || p.hasGapBeforeIt || p.hasRegistryDrift) segments.push([])
+    segments[segments.length - 1].push({ date: p.date, total: p.totalComponents })
+  })
+
+  return (
+    <div className="space-y-6">
+      <MePanel>
+        <MePanelHeader title="最近有什么进展" />
+        {data.recentActivity.length === 0 ? (
+          <p className="text-[13px] text-black/55">最近没有观测到合并或关闭的动态。</p>
+        ) : (
+          <div className="space-y-3">
+            {data.recentActivity.map((item) => (
+              <div key={`${item.kind}-${item.number}`} className="rounded-xl border border-black/10 bg-[#FBF8F3] p-3.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <MeChip>{item.kind === 'pr' ? 'PR' : 'Issue'}</MeChip>
+                  <span className="font-display text-[14px] font-semibold tabular-nums text-me-charcoal">#{item.number}</span>
+                  <span className="text-[12.5px] font-semibold text-me-charcoal">{item.verbLabel}</span>
+                  <a href={item.url} target="_blank" rel="noreferrer" className="text-[12px] text-me-ochre hover:underline">
+                    去看 ↗
+                  </a>
+                </div>
+                {/* AI 摘要视觉降权(板桥二轮设计审必改 2):跟人工核实过的文案不能长得一样,
+                    原标题必须留在旁边,不能被摘要取代掉 */}
+                {item.humanSummary ? (
+                  <div className="mt-1.5 flex items-start gap-1.5">
+                    <span className="mt-0.5 shrink-0 rounded-full border border-dashed border-black/20 px-1.5 py-0.5 text-[10px] italic text-black/40">
+                      AI 翻的,可能有出入
+                    </span>
+                    <p className="text-[13px] italic text-black/65">{item.humanSummary}</p>
+                  </div>
+                ) : null}
+                <p className="mt-1 text-[12px] text-black/45">{item.title}</p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-black/40">
+                  <span>{item.observedAtLabel}</span>
+                  {item.componentNames.length > 0 && <span>属于:{item.componentNames.join('、')}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </MePanel>
+
+      <MePanel>
+        <MePanelHeader title="整体趋势" />
+        {!hasEnoughData ? (
+          <div className="flex h-[120px] items-center justify-center rounded-xl border border-dashed border-black/15 bg-[#FBF8F3]">
+            <p className="text-[13px] text-black/45">
+              数据从今天开始记录,至少攒够 3 天才会画线 —— 现在是第 {points.length} 天。
+            </p>
+          </div>
+        ) : (
+          <div>
+            <svg viewBox={`0 0 ${width} ${height}`} width={width} height={height} className="max-w-full" role="img" aria-label="每日在生产干活组件数走势,断档处不连线">
+              {segments.map((seg, si) => {
+                if (seg.length < 2) return null
+                const startIdx = points.findIndex((p) => p.date === seg[0].date)
+                const path = seg
+                  .map((p, i) => `${i === 0 ? 'M' : 'L'}${x(startIdx + i).toFixed(1)},${y(p.total).toFixed(1)}`)
+                  .join(' ')
+                return <path key={si} d={path} fill="none" stroke="#4B7A3A" strokeWidth={2} />
+              })}
+              {points.map((p, i) => (
+                <circle
+                  key={p.date}
+                  cx={x(i)}
+                  cy={y(p.totalComponents)}
+                  r={p.hasRegistryDrift ? 4 : 2.5}
+                  fill={p.hasRegistryDrift ? '#C4912E' : '#4B7A3A'}
+                >
+                  <title>
+                    {p.date} · 共 {p.totalComponents} 个组件
+                    {p.hasGapBeforeIt ? ' · 前一天没有数据' : ''}
+                    {p.hasRegistryDrift ? ' · 登记表当天有变化,跟前一个点不完全可比' : ''}
+                  </title>
+                </circle>
+              ))}
+            </svg>
+            <p className="mt-1 text-[11px] text-black/35">
+              竖线断开 = 那天没数据;金色点 = 登记表当天有变化,跟前一天不完全可比。悬停看每个点的详情。
+            </p>
+          </div>
+        )}
+      </MePanel>
+    </div>
+  )
+}
+
 export default function ProductMapClient({ data }: { data: ConsolePresentation }) {
   const [view, setView] = useState<ViewKey>('decisions')
 
@@ -966,6 +1119,7 @@ export default function ProductMapClient({ data }: { data: ConsolePresentation }
 
       <div className="space-y-6 px-8 py-7">
         <TrustBanner trust={data.trust} />
+        <ProgressStrip data={data} />
 
         <div className="inline-flex items-center gap-1 rounded-xl border border-black/10 bg-white p-1 shadow-[0_1px_2px_rgba(26,26,26,.04)]">
           {VIEWS.map((v) => {
@@ -977,7 +1131,9 @@ export default function ProductMapClient({ data }: { data: ConsolePresentation }
                   ? data.totalComponents
                   : v.key === 'search'
                     ? data.catalog.length
-                    : undefined
+                    : v.key === 'progress'
+                      ? data.recentActivity.length
+                      : undefined
             return (
               <button
                 key={v.key}
@@ -1004,6 +1160,7 @@ export default function ProductMapClient({ data }: { data: ConsolePresentation }
         {view === 'list' && <ListView data={data} />}
         {view === 'search' && <SearchView data={data} />}
         {view === 'graph' && <GraphPanel data={data} />}
+        {view === 'progress' && <ProgressPanel data={data} />}
       </div>
     </div>
   )

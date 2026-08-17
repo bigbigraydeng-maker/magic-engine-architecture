@@ -9,10 +9,14 @@
  * 名单),绝不做「本轮没扫到 = 已收编」的反推。
  */
 
-import { PRODUCT_MAP_COMPONENTS } from '@/lib/product-map'
+import { buildProductMapSnapshot, EMPTY_EXTERNAL_FACTS, PRODUCT_MAP_COMPONENTS } from '@/lib/product-map'
+import { buildPresentation } from '@/lib/product-map/presenter'
+import { rowsToExternalFacts } from './facts-adapter'
 import { extractComponentMarkers, isUnclassified } from './marker'
 import type { GithubReadProvider } from './provider'
-import type { ProductMapSyncStore } from './store'
+import type { ProductMapSyncStore, SummaryWrite } from './store'
+import type { SummaryGenerator } from './summary-generator'
+import { containsForbiddenStatusWord } from './summary-generator'
 import type {
   IssueFactRow,
   PrFactDetail,
@@ -27,6 +31,18 @@ import { NotProvisionedError } from './types'
 const DELIVERY_RETENTION_DAYS = 90
 const UNCLASSIFIED_SCAN_DAYS = 30
 
+// ---------------------------------------------------------------------------
+// 摘要生成 + 每日进度快照 —— 都发生在 commitSync 之后,失败不许拖垮 facts 落库
+// (子牙 + 魏征设计审共同要求:独立预算、独立 try/catch、结果记账不静默)
+// ---------------------------------------------------------------------------
+
+/** 摘要阶段自己的固定预算切片 —— 不看 GitHub 抓取用了多少,直接给保守上限,
+ *  远小于 route.ts 的 300s 总预算,不会顶到边界(子牙设计审)。*/
+const SUMMARY_PHASE_BUDGET_MS = 60_000
+/** 每轮硬顶 —— 注册表一次性大改动导致大量号码涌入时,分多天摊销而不是一次打爆
+ *  (子牙设计审「成本/频率」必改项)。 */
+const SUMMARY_MAX_ITEMS_PER_RUN = 25
+
 export interface SyncRunResult {
   readonly runId: string
   readonly status: SyncRunRow['status']
@@ -38,6 +54,10 @@ interface RunnerDeps {
   readonly store: ProductMapSyncStore
   readonly newRunId: () => string
   readonly now: () => string
+  /** 未提供 = 摘要功能整体跳过(不影响 facts 同步),route 层决定要不要接真实现。 */
+  readonly summarizer?: SummaryGenerator
+  /** 测试注入用,覆盖 SUMMARY_PHASE_BUDGET_MS(默认 60s,真实场景不用传)。 */
+  readonly summaryPhaseBudgetMs?: number
 }
 
 function registryPrNumbers(): Set<number> {
@@ -52,7 +72,7 @@ function registryIssueNumbers(): Set<number> {
   return set
 }
 
-function toPrRow(f: PrFactDetail): Omit<PrFactRow, 'sync_run_id'> {
+function toPrRow(f: PrFactDetail): Omit<PrFactRow, 'sync_run_id' | 'human_summary' | 'human_summary_generated_at'> {
   return {
     pr_number: f.number,
     state: f.state,
@@ -68,6 +88,110 @@ function toPrRow(f: PrFactDetail): Omit<PrFactRow, 'sync_run_id'> {
     title: f.title,
     observed_at: f.observedAt,
   }
+}
+
+/**
+ * 摘要生成阶段:补齐 human_summary 为 null 的行,独立预算+硬顶,失败绝不外抛。
+ * 🔴 判定集合从**重新查库**取(不是本轮刚抓到的那批)—— 覆盖两类来源:
+ *    今天新出现的号码,以及之前某轮因预算耗尽/失败而留下的陈年 null 行,
+ *    两者都满足同一个"IS NULL 就该补"的幂等判据,不需要分开处理。
+ */
+async function generateMissingSummaries(
+  deps: RunnerDeps,
+): Promise<{ generated: number; failed: number; rejected: number; skippedBudget: number }> {
+  const empty = { generated: 0, failed: 0, rejected: 0, skippedBudget: 0 }
+  if (!deps.summarizer) return empty // 未接大模型 = 功能整体跳过,不算失败
+
+  const [prRows, issueRows] = await Promise.all([deps.store.readPrFacts(), deps.store.readIssueFacts()])
+  const candidates: { kind: 'pr' | 'issue'; number: number; title: string }[] = [
+    ...prRows.filter((r) => r.human_summary === null).map((r) => ({ kind: 'pr' as const, number: r.pr_number, title: r.title })),
+    ...issueRows.filter((r) => r.human_summary === null).map((r) => ({ kind: 'issue' as const, number: r.issue_number, title: r.title })),
+  ]
+  if (candidates.length === 0) return empty
+
+  const budgetMs = deps.summaryPhaseBudgetMs ?? SUMMARY_PHASE_BUDGET_MS
+  const phaseStart = Date.now()
+  const capped = candidates.slice(0, SUMMARY_MAX_ITEMS_PER_RUN)
+  const skippedBudget = candidates.length - capped.length // 硬顶砍掉的部分,同样算"留给下一轮"
+
+  const writes: SummaryWrite[] = []
+  let generated = 0
+  let failed = 0
+  let rejected = 0
+  let budgetExhausted = false
+
+  for (const c of capped) {
+    if (Date.now() - phaseStart > budgetMs) {
+      budgetExhausted = true
+      break
+    }
+    const summary = await deps.summarizer.summarize(c.kind, c.title)
+    if (summary === null) {
+      failed++
+      continue
+    }
+    if (containsForbiddenStatusWord(summary)) {
+      rejected++ // 护栏生效,不是调用失败 —— 单独计数,留 null 等下轮重试
+      continue
+    }
+    writes.push({ kind: c.kind, number: c.number, summary, generatedAt: deps.now() })
+    generated++
+  }
+
+  if (writes.length > 0) {
+    try {
+      await deps.store.writeSummaries(writes)
+    } catch {
+      // 生成成功但落库失败 —— 这批全部退回"失败",不装懂已经写成功了多少
+      return { generated: 0, failed: failed + generated, rejected, skippedBudget }
+    }
+  }
+
+  const budgetSkipped = budgetExhausted ? capped.length - generated - failed - rejected : 0
+  return { generated, failed, rejected, skippedBudget: skippedBudget + budgetSkipped }
+}
+
+/**
+ * 每日进度快照:复用 buildPresentation 算出的 buckets/成熟度分布(不另开推导),
+ * 用 run_started_at 做并发护栏(魏征设计审)。只在 full 轮调用,失败不外抛。
+ */
+async function writeProgressSnapshot(
+  deps: RunnerDeps,
+  runId: string,
+  startedAt: string,
+): Promise<boolean> {
+  const freshPrRows = await deps.store.readPrFacts()
+  const synced = rowsToExternalFacts(freshPrRows, null)
+  const facts = synced?.facts ?? EMPTY_EXTERNAL_FACTS
+  const snapshot = buildProductMapSnapshot(facts)
+  const presentation = buildPresentation({
+    snapshot,
+    loadOutcome: 'ok',
+    latestRun: null,
+    lastFullRunAt: null,
+    prFacts: [],
+    issueFacts: [],
+    unclassified: [],
+    oldestObservedAt: null,
+    now: new Date(deps.now()),
+    // 这里只是借 buildPresentation 算 buckets/maturity,不需要趋势/最近动态那两块
+    progressSnapshots: [],
+  })
+  const maturityCounts: Record<string, number> = {}
+  for (const c of presentation.components) {
+    maturityCounts[c.maturityCode] = (maturityCounts[c.maturityCode] ?? 0) + 1
+  }
+  const { written } = await deps.store.upsertProgressSnapshot({
+    snapshotDate: startedAt.slice(0, 10),
+    totalComponents: presentation.totalComponents,
+    operatingCount: presentation.buckets.operating,
+    builtNotLiveCount: presentation.buckets.built_not_live,
+    buildingCount: presentation.buckets.building,
+    maturityCounts,
+    syncRunId: runId,
+    runStartedAt: startedAt,
+  })
+  return written
 }
 
 export async function runFullSync(
@@ -90,7 +214,7 @@ export async function runFullSync(
 
   let mainHeadSha: string | null = null
   let prFacts: PrFactDetail[] = []
-  let issueRows: Omit<IssueFactRow, 'sync_run_id'>[] = []
+  let issueRows: Omit<IssueFactRow, 'sync_run_id' | 'human_summary' | 'human_summary_generated_at'>[] = []
   const unclassified: { kind: 'pr' | 'issue'; number: number; title: string; url: string; opened_at: string }[] = []
   const resolve: { kind: 'pr' | 'issue'; number: number }[] = []
 
@@ -212,7 +336,40 @@ export async function runFullSync(
     resolve,
     mode: 'full',
   })
-  return { runId, status, stats: { ...stats, skippedStale } }
+
+  // 🔴 以下两阶段发生在 facts 已经落库**之后**——任何异常都必须留在这两个
+  //    独立 try/catch 里,绝不能让摘要/快照的问题把一次本该是 ok/partial 的
+  //    同步拖成 error(子牙 + 魏征设计审共同要求)。
+  let summaryStats = { generated: 0, failed: 0, rejected: 0, skippedBudget: 0 }
+  try {
+    summaryStats = await generateMissingSummaries(deps)
+  } catch {
+    // 阶段本身炸了(比如 store 读取失败)—— 全部记未完成,留给下一轮
+    summaryStats = { generated: 0, failed: 0, rejected: 0, skippedBudget: -1 }
+  }
+
+  let progressSnapshotWritten = false
+  try {
+    progressSnapshotWritten = await writeProgressSnapshot(deps, runId, startedAt)
+  } catch {
+    progressSnapshotWritten = false
+  }
+
+  const extraStats: Partial<SyncStats> = {
+    summariesGenerated: summaryStats.generated,
+    summariesFailed: summaryStats.failed,
+    summariesRejected: summaryStats.rejected,
+    summariesSkippedBudget: summaryStats.skippedBudget,
+    progressSnapshotWritten,
+  }
+  try {
+    await deps.store.patchRunStats(runId, extraStats)
+  } catch {
+    // patch 本身失败 —— run 行的 stats 里看不到这几个数字,但 facts/快照该落的已经落了,
+    // 不影响本轮 status。巡检工具后续可以用「有没有这几个字段」间接发现这类 patch 失败。
+  }
+
+  return { runId, status, stats: { ...stats, skippedStale, ...extraStats } }
 }
 
 /**
@@ -234,8 +391,8 @@ export async function runTargetedSync(
   const startedAt = deps.now()
 
   try {
-    let prRows: Omit<PrFactRow, 'sync_run_id'>[] = []
-    let issueRows: Omit<IssueFactRow, 'sync_run_id'>[] = []
+    let prRows: Omit<PrFactRow, 'sync_run_id' | 'human_summary' | 'human_summary_generated_at'>[] = []
+    let issueRows: Omit<IssueFactRow, 'sync_run_id' | 'human_summary' | 'human_summary_generated_at'>[] = []
     const failedItems: string[] = []
     let partial = false
 

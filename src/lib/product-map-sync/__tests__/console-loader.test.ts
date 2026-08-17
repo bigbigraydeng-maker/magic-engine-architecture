@@ -23,6 +23,8 @@ function prRow(number: number): PrFactRow {
     title: `PR ${number}`,
     observed_at: '2026-08-15T09:00:00Z',
     sync_run_id: 'run-1',
+    human_summary: null,
+    human_summary_generated_at: null,
   }
 }
 
