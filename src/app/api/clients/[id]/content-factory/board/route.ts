@@ -1,6 +1,9 @@
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
+
+/** 做片流水线还没结束的状态（与 video 路由同一套判据） */
+const ACTIVE_JOB_STATUSES = ['queued', 'planning', 'rendering', 'assembling']
 import {
   FACTORY_STAGES,
   stageOfContentPost,
@@ -77,21 +80,40 @@ export async function GET(
     }
 
     // 课程区的讲要能在列表上看到「做片失败」，不然失败永远显示「做片中」(板桥审)
-    const lessonIds = Array.from(courseMap.values()).flatMap((c) =>
-      (c.lessons as { id: string; status: string }[]).filter((l) => l.status === 'approved').map((l) => l.id),
-    )
+    // 平铺看板的卡片也要查做片任务：非讲课式内容确认后同样会排做片，做片期间
+    // 停在「备料」。界面据此决定要不要给「传成片」入口 —— 做片中还让人挂片，
+    // 挂完会被 render-assemble 无条件覆盖掉（接口那侧也拦，这里是别让人白挂一次）。
+    const approvedIds = [
+      ...Array.from(courseMap.values()).flatMap((c) =>
+        (c.lessons as { id: string; status: string }[])
+          .filter((l) => l.status === 'approved')
+          .map((l) => l.id),
+      ),
+      ...Object.values(stages)
+        .flat()
+        .filter((c) => (c as { status: string }).status === 'approved')
+        .map((c) => (c as { id: string }).id),
+    ]
     const failedPosts = new Set<string>()
-    if (lessonIds.length > 0) {
+    const renderingPosts = new Set<string>()
+    if (approvedIds.length > 0) {
       const { data: jobs } = await supabaseAdmin
         .from('content_factory_render_jobs')
         .select('content_post_id, status, created_at')
-        .in('content_post_id', lessonIds)
+        .in('content_post_id', approvedIds)
         .order('created_at', { ascending: false })
       const seen = new Set<string>()
       for (const j of jobs ?? []) {
-        if (seen.has(j.content_post_id)) continue // 只看每讲最新一条任务
+        if (seen.has(j.content_post_id)) continue // 只看每条最新一条任务
         seen.add(j.content_post_id)
         if (j.status === 'failed') failedPosts.add(j.content_post_id)
+        if (ACTIVE_JOB_STATUSES.includes(j.status)) renderingPosts.add(j.content_post_id)
+      }
+    }
+    // 挂到平铺看板的卡片上（课程区的讲走下面 courses 那条链路）
+    for (const list of Object.values(stages)) {
+      for (const c of list as { id: string; rendering?: boolean }[]) {
+        c.rendering = renderingPosts.has(c.id)
       }
     }
 

@@ -62,9 +62,16 @@ function fakeDb(table: string) {
       updates.push({ patch, filters })
       return builder
     },
-    insert: async (row: Row) => {
+    // 变更记录现在**先写、并取回 id**：它不再只是审计，`today` 路由靠它的
+    // `from_stage` 判断「这个人今天早上本来在不在名单上」；写失败要让整个请求
+    // 失败，改库失败要拿这个 id 把它定点删掉（见路由里的说明）。
+    // 所以桩要还一条 `.select().single()` 的链，不能只 await。
+    insert: (row: Row) => {
       inserts.push(row)
-      return { error: null }
+      return {
+        select: () => ({ single: async () => ({ data: { id: 'evt-1' }, error: null }) }),
+        then: (resolve: (v: { error: null }) => unknown) => resolve({ error: null }),
+      }
     },
     // update(...).eq(...).eq(...) 最后被 await
     then: (resolve: (v: { error: null }) => unknown) => resolve({ error: null }),

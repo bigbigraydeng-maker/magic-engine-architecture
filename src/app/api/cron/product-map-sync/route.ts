@@ -14,8 +14,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { startCronRun } from '@/lib/cron/run-logger'
 import {
+  AnthropicSummaryGenerator,
   GithubRestProvider,
   NotProvisionedError,
+  NullSummaryGenerator,
   SupabaseSyncStore,
   runFullSync,
 } from '@/lib/product-map-sync'
@@ -46,6 +48,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     )
   }
 
+  // 未配置 = 摘要功能整体跳过,不影响 facts 同步(人话摘要是锦上添花,不是主流程)
+  const anthropicKey = process.env.ANTHROPIC_API_KEY?.trim()
+  const summarizer = anthropicKey ? new AnthropicSummaryGenerator(anthropicKey) : new NullSummaryGenerator()
+
   try {
     const result = await runFullSync(
       {
@@ -53,6 +59,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         store: new SupabaseSyncStore(supabaseAdmin),
         newRunId: () => randomUUID(),
         now: () => new Date().toISOString(),
+        summarizer,
       },
       'cron',
     )

@@ -20,17 +20,22 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import { supabaseAdmin } from '@/lib/supabase'
 import {
-  todayWorklist,
   segmentCounts,
   segmentContact,
   SEGMENT_ACTION_META,
   type ContactLike,
   type Segment,
   engagementFromMetadata,
+  isPhoneVerdict,
+  isFailedReach,
+  latestIntentVerdict,
 } from '@/lib/crm/segments'
+import { reclassifyStoredOutcome } from '@/lib/crm/note-parser'
+import { isDoNotContact, withoutClearedDnc } from '@/lib/crm/dnc'
 import { WORKLIST_GROUPS, groupDisplayMeta } from '@/lib/crm/worklist-groups'
 import { contactCardTitle } from '@/lib/crm/display-name'
 import { followUpMarks, localDay } from '@/lib/crm/follow-up-marks'
+import { dayWorklist, localDayStartMs } from '@/lib/crm/day-list'
 import { stageSuppressesWorklist, isMarketingAction } from '@/lib/crm/pipeline'
 import { isAutomatedTouch } from '@/lib/crm/automated-touch'
 import { contactKindOf, readDomainRules, type ContactKind } from '@/lib/crm/contact-kind'
@@ -58,6 +63,8 @@ interface TouchRow {
   direction: 'inbound' | 'outbound'
   occurred_at: string
   summary: string | null
+  /** 原话。存量结果值读的时候要靠它重判一次（见 reclassifyStoredOutcome）。 */
+  raw: string | null
   metadata: Record<string, unknown> | null
 }
 
@@ -73,6 +80,24 @@ function latestOutcomeOf(touches: TouchRow[]): string | null {
     if (typeof o === 'string' && o) return o
   }
   return null
+}
+
+/**
+ * 这条电话线通不通 —— **判据跟 `segmentContact` 是同一份**（`isPhoneVerdict`）。
+ *
+ * 原先这里看「最新的任意一条结果是不是坏号」，跟分段那边不一致：一个只有坏号、
+ * 之后又打了一次没人接的人，分段判他「号码打不通」，这里却因为最新一条是
+ * `no_answer` 而把他丢进「不要再联系」—— **补号码这件该有人动手的事又一次被
+ * 藏起来**（铁律 3：发现不许死在日志里）。
+ *
+ * `touches` 已按 occurred_at 倒序（见下面的查询），所以第一条判决就是最近那次。
+ */
+function phoneLineDeadFrom(touches: TouchRow[]): boolean {
+  for (const t of touches) {
+    const o = t.metadata?.outcome
+    if (typeof o === 'string' && isPhoneVerdict(o, t.source)) return o === 'bad_number'
+  }
+  return false
 }
 
 interface IdentityRow {
@@ -127,7 +152,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       fetchAll<TouchRow>((from, to) =>
         supabaseAdmin
           .from('contact_touchpoints')
-          .select('contact_id, channel, direction, occurred_at, summary, metadata, source')
+          .select('contact_id, channel, direction, occurred_at, summary, raw, metadata, source')
           .eq('client_id', clientId)
           .order('occurred_at', { ascending: false })
           .range(from, to),
@@ -241,13 +266,15 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       // 两种写法都认：新写入走 metadata.do_not_contact，历史导入的 294 条
       // 跟进记录只写了 metadata.outcome（见 scripts/import-cts-fb-leads.ts）。
       // 少打一通电话的代价，远小于打给明确说过别打的人。
-      doNotContact:
-        c.do_not_contact ||
-        tps.some(
-          (t) =>
-            t.metadata?.do_not_contact === true ||
-            t.metadata?.outcome === 'do_not_contact',
-        ),
+      // 判据只有一份，见 lib/crm/dnc —— 它同时认「人明确纠正过这条判错了」。
+      doNotContact: isDoNotContact(
+        c.do_not_contact,
+        tps.map((t) => ({
+          outcome: (t.metadata?.outcome as string) ?? null,
+          flagged: t.metadata?.do_not_contact === true,
+          occurredAt: t.occurred_at,
+        })),
+      ),
       stageSuppressed: stage?.suppressed ?? false,
       stageLabel: stage?.label ?? null,
       // 销售把他推迟了 —— 到期之前不进名单，到期自己回来（见 lib/crm/segments）。
@@ -256,12 +283,28 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
         channel: t.channel,
         direction: t.direction,
         occurredAt: t.occurred_at,
-        outcome: (t.metadata?.outcome as string) ?? null,
+        // 存量记录读的时候顺手重判一次 —— 否则这次的软硬之分只对以后的
+        // 笔记生效，已经被埋掉的人永远回不来（见 reclassifyStoredOutcome）。
+        outcome: reclassifyStoredOutcome((t.metadata?.outcome as string) ?? null, t.raw) ?? null,
+        // 判「电话线通不通」要靠它分清真打通了和手打出来的 spoke（见 isPhoneVerdict）
+        source: t.source,
         travelWindow: (t.metadata?.travel_window as string) ?? null,
         callbackAt: (t.metadata?.callback_at as string) ?? null,
         // 邮件被打开 / 链接被点 = 行为信号，不是真人消息。分段逻辑必须区分，
         // 否则「打开了邮件」会冒充「客户回话了」挤进最高优先桶。
         engagement: engagementFromMetadata(t.metadata),
+        // 机器发的（群发 / AI 外呼）不算「我们出手」—— 见 day-list 的 needsMeAgain
+        automated: isAutomatedTouch(t.source, t.metadata),
+        // 销售按的是哪个按钮。**两个值都要如实传下去**，不能把 unsnooze 压成
+        // null：判断层除了「清不清推迟」（只认 snooze），还要判「这一笔算不算
+        // 我们出手了」（两个都不算 —— 客人那头什么都没收到）。压成 null 的话，
+        // 一次「叫回来」会盖住客人当天的回信，把他折叠成已处理（Codex 第六轮）。
+        action:
+          t.metadata?.action === 'snooze'
+            ? ('snooze' as const)
+            : t.metadata?.action === 'unsnooze'
+              ? ('unsnooze' as const)
+              : null,
       })),
       // 这个人实际能怎么被联系到 —— 决定「建议用哪个渠道」落在哪。
       // 私信能力看他有没有 messenger 触点（有触点就说明那条线是通的）。
@@ -293,7 +336,99 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
     // 读不到就按 NZ —— 两个客户目前都在纽西兰，猜错也只差两小时。
   }
 
-  const ranked = todayWorklist(models, now)
+  /**
+   * 今天动过谁。
+   *
+   * 必须在排名单**之前**算好：名单要靠它决定哪张卡是灰的，而灰卡必须留在
+   * 原位 —— 这正是 PM 2026-08-05 那句「做完动作回到目录页，我如何知道哪个
+   * 已经联系了」要修的东西。
+   *
+   * 三条排除，三条都是真事故：
+   *  · 群发不算（一封 Mailchimp 能把整页标成已跟过）
+   *  · 打开/点击不算（那是客人做的，不是我们跟进）
+   *  · **推迟 / 取消推迟不算**（Codex 复审 2026-08-15）——
+   *    这两个动作也写一笔真人出站触点（为了留痕和冻结判据），但它们是
+   *    「安排名单」，不是「联系了这个人」，客人那头什么都没收到。
+   *
+   *    不排掉的话最刺眼的是**取消推迟**：销售在「不在今天名单上的人」里点
+   *    「现在就叫回来」，人回到名单上却**当场是灰的、写着「今天联系过了」**，
+   *    还把进度加了一格 —— 他刚刚明明是想把这个人捞回来打电话。
+   *
+   *    真推迟的那一头不受影响：live 版看得见 `snooze_until`，
+   *    `dayRow` 靠 `droppedOff` 照样把他标成已处理（理由写「标了：先放着…」）。
+   */
+  const todayLocal = localDay(now.toISOString(), timeZone)
+  const touchedTodayIds = new Set(
+    touches
+      .filter(
+        (t) =>
+          t.direction === 'outbound' &&
+          !isAutomatedTouch(t.source, t.metadata) &&
+          !engagementFromMetadata(t.metadata) &&
+          t.metadata?.action !== 'snooze' &&
+          t.metadata?.action !== 'unsnooze' &&
+          // 拨到一个空号不算「我们出手了」—— 客人什么都没收到，
+          // 该走的备用渠道一次都还没走。判据跟 day-list 共用同一个函数。
+          !isFailedReach(t.metadata?.outcome as string | undefined) &&
+          localDay(t.occurred_at, timeZone) === todayLocal,
+      )
+      .map((t) => t.contact_id),
+  )
+
+  /**
+   * 今天**从「还在名单上」被推进到「不再联系」**的那些人。
+   *
+   * 冻结副本要靠它把 `stageSuppressed` 清掉，让卡片留在原位变灰。
+   *
+   * ⚠️ **必须看改之前那个阶段抑不抑制，不能只看「今天改过阶段」**
+   * （Codex 复审 2026-08-15）：一个本来就不在名单上的人（已付定金）今天被推到
+   * 另一个同样不在名单上的阶段（付清了），光凭「今天改过」就清掉抑制，
+   * 冻结版会按历史触点把他判成 warm、**塞进今天要联系的名单** ——
+   * 一个已经付清全款的客人跳出来让人去推销他。
+   *
+   * `from_stage` 为空（第一次挂阶段）当作「本来在名单上」—— 那时他确实在。
+   * 一天内改了多次就看**最早那一条**的 from_stage，那才是今天早上的状态。
+   * 读不到就当没有：最坏结果是人照旧当天消失（改动前的行为），不会多打电话。
+   */
+  const stageSuppressedTodayIds = new Set<string>()
+  /** 已经看过今天第一条变更的人 —— 后面的都不看了。 */
+  const seenStageEvent = new Set<string>()
+  try {
+    const { data: events } = await supabaseAdmin
+      .from('contact_stage_events')
+      .select('contact_id, from_stage, created_at')
+      .eq('client_id', clientId)
+      .gte('created_at', new Date(localDayStartMs(now, timeZone)).toISOString())
+      .order('created_at', { ascending: true })
+
+    for (const e of events ?? []) {
+      const cid = e.contact_id as string
+      // 只认今天最早那一条 —— 后面的 from_stage 已经是今天改过之后的状态了。
+      if (seenStageEvent.has(cid)) continue
+      seenStageEvent.add(cid)
+      const from = e.from_stage as string | null
+      const wasOnList = !from || !(stageMeta.get(from)?.suppressed ?? false)
+      if (wasOnList) stageSuppressedTodayIds.add(cid)
+    }
+  } catch (err) {
+    console.error('[crm/today] 读今天的阶段变更失败，按「没改过」算:', err)
+  }
+
+  /**
+   * 今天这份名单**一天之内不变**（判据见 lib/crm/day-list）。
+   *
+   * 跟原来的 `todayWorklist` 只差一条：分批按「今天开工那一刻」算，
+   * 于是今天做的动作不会把任何人挪走或挪没 —— 处理过的就地变灰留在原位。
+   * 客人今天的动作照常实时进来（今天进线的当天就上名单，今天回话的当场升顶）。
+   */
+  const ranked = dayWorklist(
+    models.map((m) => ({ ...m, stageSuppressedToday: stageSuppressedTodayIds.has(m.id) })),
+    now,
+    {
+      dayStartMs: localDayStartMs(now, timeZone),
+      touchedToday: (id) => touchedTodayIds.has(id),
+    },
+  )
 
   /**
    * 系统提议改阶段 —— 提议，不自动改。
@@ -310,18 +445,53 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
    * 用 marketing_action 而不是写死阶段名 —— 每个客户的阶段是自己配的
    * （诊所叫「不适合治疗」，旅行社叫「已流失」）。
    */
+  /**
+   * 一条阶段提议。`stillFollowed` 决定**点完之后跟销售怎么说** ——
+   *
+   * 🔴 这三条提议指向的阶段行为完全不同（Codex 复审 2026-08-16）：
+   *   · 停止营销 → 人从名单上收起来
+   *   · 短期内不考虑 / 已报价 → **人还在名单上，系统继续跟**
+   *
+   * 原先三条共用同一句「不用再跟了，明天起在『不用再联系』那一栏找他」。
+   * 对后两条来说那是**反话**：销售照着去那一栏找人，找不到；或者信了这句话
+   * 不再管他，而系统其实还在跟。判据用 `stageSuppressesWorklist`，
+   * 跟名单本身用的是同一个函数，不另写一套。
+   */
+  interface StageSuggestion {
+    toStage: string
+    label: string
+    why: string
+    /** true = 点完之后这个人**照旧留在名单上**，系统继续跟。 */
+    stillFollowed: boolean
+  }
+
   const suppressStage = stageRows.find(
     (s) => s.marketing_action === 'suppress',
   )
+  /**
+   * 「短期内不考虑」那一档 —— 客户自己配的名字，按 marketing_action 找。
+   *
+   * PM 2026-08-16 给的业务事实：leads 聊过之后有「暂时不感兴趣、还要继续营销」
+   * 和「明确不要了」两种，下场必须不一样。上面那条只覆盖了后者。
+   */
+  const deferStage = stageRows.find((s) => s.marketing_action === 'defer')
 
   const suggestStage = (
     c: (typeof ranked)[number],
     currentStage: string | null,
-  ): { toStage: string; label: string; why: string } | null => {
+  ): StageSuggestion | null => {
     if (!suppressStage) return null
     if (currentStage === suppressStage.stage_key) return null
 
-    const dead = c.touchpoints.some(
+    /**
+     * 🔴 **已经被人推翻过的拒联判词不许再拿来建议**（Codex 复审 2026-08-16）。
+     *
+     * 不滤的话会出现一个直接反噬的循环：FDE 刚点完「这条判错了，放回名单」，
+     * 这个人第二天一出现在名单上，系统立刻建议把他改到「停止营销」——
+     * 跟他刚做的纠正正好相反。他顺手一点，人又被永久埋回去，白干一场。
+     * 跟 `segments.ts` 用**同一个**函数。
+     */
+    const dead = withoutClearedDnc(c.touchpoints).some(
       (t) => t.outcome === 'not_interested' || t.outcome === 'do_not_contact',
     )
     if (!dead) return null
@@ -330,6 +500,45 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       toStage: suppressStage.stage_key,
       label: suppressStage.label,
       why: '通话记录里客户明确说过不感兴趣 / 别再联系',
+      stillFollowed: !stageSuppressesWorklist(
+        isMarketingAction(suppressStage.marketing_action) ? suppressStage.marketing_action : 'suppress',
+        suppressStage.is_terminal,
+      ),
+    }
+  }
+
+  /**
+   * 「他说现在先不考虑」→ 提议移到「短期内不考虑」那一档。
+   *
+   * 这是**阶段自己填自己**的第一块：系统已经在读每一通电话，读到这句话就该
+   * 把人放到对的格子里，而不是等谁记得回来手填。CTS 583 个人里 556 个阶段
+   * 是空的 —— 靠人填的状态列一定会烂（那份 128 行的手工 CRM 就是这么死的）。
+   *
+   * 仍然只是**提议**：卡片上出现一个按钮，人点一下才生效。AI 读错的代价
+   * 不该由客户承担。
+   */
+  const suggestDeferred = (
+    c: (typeof ranked)[number],
+    currentStage: string | null,
+  ): StageSuggestion | null => {
+    if (!deferStage) return null
+    if (currentStage === deferStage.stage_key) return null
+    // 🔴 判据必须跟 `segmentContact` 用**同一个函数**（Codex 复审 2026-08-16）。
+    //
+    // 原先这里取「最近一次的任意结果」：这个人按建议收到一封群发之后，
+    // 群发写下的那笔兜底 `spoke` 会更晚，于是分段那边靠 latestIntentVerdict
+    // 照旧把他留在「交给系统跟」，而这条提议**当场消失** —— 同一件事两处
+    // 判法不同，页面自相矛盾。今天已经在别处栽过两次，这次不再写第二套。
+    if (latestIntentVerdict(c.touchpoints) !== 'not_interested_now') return null
+
+    return {
+      toStage: deferStage.stage_key,
+      label: deferStage.label,
+      why: '通话记录里他说现在先不考虑 —— 不是不要了，过阵子还该跟',
+      stillFollowed: !stageSuppressesWorklist(
+        isMarketingAction(deferStage.marketing_action) ? deferStage.marketing_action : 'suppress',
+        deferStage.is_terminal,
+      ),
     }
   }
 
@@ -347,7 +556,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
   const suggestQuoted = (
     name: string | null,
     currentStage: string | null,
-  ): { toStage: string; label: string; why: string } | null => {
+  ): StageSuggestion | null => {
     if (!quoteStage || !name) return null
     if (!quotedNames.has(name.trim().toLowerCase())) return null
     if (currentStage === quoteStage.stage_key) return null
@@ -361,6 +570,10 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       toStage: quoteStage.stage_key,
       label: quoteStage.label,
       why: '行程单已经发给这位客人了',
+      stillFollowed: !stageSuppressesWorklist(
+        isMarketingAction(quoteStage.marketing_action) ? quoteStage.marketing_action : 'suppress',
+        quoteStage.is_terminal,
+      ),
     }
   }
 
@@ -426,8 +639,23 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       timeZone,
     )
     return {
-      /** 今天已经有人联系过他 —— 卡片当场变浅，不用靠记。 */
-      doneToday: marks.doneToday,
+      /**
+       * 今天已经动过他了 —— 卡片当场变浅，不用靠记。
+       *
+       * 取 day-list 算出来的那个，不是 `marks.doneToday`：后者只认「发出过
+       * 联系」，而「他不买了 / 号码是坏的」的结论写在触点的 outcome 上，
+       * 冻结版看不见 —— 那几个人会留在原地并且看起来没被处理过。
+       *
+       * 「推迟」和「推到成交」同样就地变灰（原 M2.7a 缺口，2026-08-15 补上）：
+       * 推迟那一笔触点带 `action:'snooze'`，改阶段看今天那条变更记录的
+       * `from_stage`（**只有改之前还在名单上的才算**，见上面 stageSuppressedTodayIds
+       * 那段），冻结副本据此把这两样清掉 —— 详见 `withoutOurActionsSince`。
+       */
+      doneToday: c.handled,
+      /** 是怎么处理的（今天联系过了 / 标了：他说不买了…）。没处理就是 null。 */
+      handledWhy: c.handledWhy,
+      /** 「跟进了」还是「关掉了」—— 两个数字必须分开显示，见 day-list 里的说明。 */
+      handledKind: c.handledKind,
       /** 上次是谁跟的。不知道就是 null，页面不假装。 */
       lastBy: marks.lastBy,
       /** 他打开过邮件、之后没人跟。只做提示，不参与排序（打开可能是 Apple 替他开的）。 */
@@ -446,8 +674,20 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       stageLabel: row?.stage ? (stageMeta.get(row.stage)?.label ?? row.stage) : null,
       segment: c.seg.segment,
       temperature: c.seg.temperature,
-      reason: c.seg.reason,
+      /**
+       * 卡片正文那句话。
+       *
+       * 已处理的人用 `handledWhy`，**不能用冻结版那句** —— 冻结版是「假装我们
+       * 今天什么都没做」算出来的，于是一张卡上会同时写着「✓ 今天联系过了」
+       * 和「客户来消息了，已经等了 18 小时」，而那个小时数还会**整天变大**。
+       * 两个销售共用这块屏时，第二个人看到「客户等了 18 小时」会再回一遍。
+       */
+      reason: c.handled && c.handledWhy ? c.handledWhy : c.seg.reason,
       suggestedChannel: c.seg.suggestedChannel,
+      /** 号码在库里但打不通 —— 卡片靠它把「没留电话」和「号是坏的」分开说。 */
+      phoneUnusable: c.seg.phoneUnusable ?? false,
+      /** 被标成「别再联系」—— 抽屉靠它给出取消入口（早前判词误判过一批人）。 */
+      doNotContact: c.doNotContact === true,
       dueAt: c.seg.dueAt,
       lastTouchAt: c.seg.lastTouchAt,
       lastNote: last?.summary ?? null,
@@ -457,6 +697,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       snoozeUntil: row?.snooze_until ?? null,
       suggestedStage:
         suggestStage(c, row?.stage ?? null) ??
+        suggestDeferred(c, row?.stage ?? null) ??
         suggestQuoted(c.displayName, row?.stage ?? null),
     }
   }
@@ -496,9 +737,18 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       people,
       // 整桶一次性群发用。只给「该发邮件」的桶 —— 这批人已经证明电话打不通，
       // 逐个点等于继续做无用功。没邮箱的人不在这里，页面要说出差额。
+      //
+      // 🔴 **今天已经处理过的人不进群发地址。** 名单改成「一天不变」之后，
+      //    处理过的人会留在桶里（就地变灰），而这里原样照抄整桶 ——
+      //    于是一个今天亲口说「不买了」的人，当天会收到一封面向他的群发信，
+      //    CRM 里还记一笔我们发过。这是 kind-filter 那次事故的翻版：
+      //    「名单一旦开始说假话，销售就不再信它」，只是这次从筛选侧挪到了冻结侧。
       batchEmails:
         meta.batch === 'send_email'
-          ? people.map((p) => p.email).filter((e): e is string => !!e)
+          ? people
+              .filter((p) => !p.doneToday)
+              .map((p) => p.email)
+              .filter((e): e is string => !!e)
           : [],
     }
   })
@@ -507,7 +757,16 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
   // 否则员工一点「已付定金」，这个人就从 ME 唯一的 CRM 页面消失、再也翻不到 ——
   // 而「已付定金」「即将出行」恰恰是最需要继续跟进的两批（催余款、确认行程）。
   // 误点也必须能改回来，所以这里带上他们的当前阶段。
+  //
+  // 🔴 **今天还冻结在名单上的人不能同时出现在这里**（Codex 复审 2026-08-15）。
+  //    这一栏按**实时**状态算，而名单按冻结状态算 —— 今天刚标了「不买了」/
+  //    推迟 / 推到成交的人，实时看已经下名单（进这一栏），冻结看还在名单上
+  //    （留在原位变灰）。两边各算各的，同一个人当天**在页面上出现两次**；
+  //    搜索时两组直接拼起来，还会撞出重复的 React key。
+  //    今天以冻结的那份为准，明天冻结失效他自然落到这一栏。
+  const rankedIds = new Set(ranked.map((c) => c.id))
   const off = models
+    .filter((c) => !rankedIds.has(c.id))
     .map((c) => ({ c, seg: segmentContact(c, now) }))
     .filter((x) => x.seg.temperature === 'cold' || x.seg.temperature === 'off')
     .slice(0, 300)
@@ -523,6 +782,23 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
         stageLabel: meta?.label ?? row?.stage ?? null,
         segment: seg.segment,
         reason: seg.reason,
+        /**
+         * 号码在库里但打不通 —— **不在名单上的人同样要带**（Codex 复审 2026-08-16）。
+         *
+         * 不带的话，抽屉里那个值是 `undefined`，照旧渲染成可点的拨号链接 ——
+         * 而这一组（`fix_number`）**整组存在的意义就是「这个号打不通，去补一个」**。
+         * 点开它就能拨那个已知打不通的号，是这一组里最不该出现的事。
+         */
+        phoneUnusable: seg.phoneUnusable ?? false,
+        /** 被标成「别再联系」—— 抽屉靠它给出取消入口。 */
+        doNotContact: isDoNotContact(
+          row?.do_not_contact ?? false,
+          (byContact.get(c.id) ?? []).map((t) => ({
+            outcome: (t.metadata?.outcome as string) ?? null,
+            flagged: t.metadata?.do_not_contact === true,
+            occurredAt: t.occurred_at,
+          })),
+        ),
         // 为什么不在今天名单上。成交跟「明确拒绝」混在一堆叫「已排除」很刺眼，
         // 而且成交客户恰恰最该继续维护（催余款、确认行程）—— 页面按这个分开显示。
         /** 被推迟到什么时候。有值 = 他是被人手推迟的，不是被规则排除的。 */
@@ -540,7 +816,12 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
         group:
           row?.snooze_until && new Date(row.snooze_until).getTime() > now.getTime()
             ? ('snoozed' as const)
-            : latestOutcomeOf(byContact.get(c.id) ?? []) === 'bad_number'
+            // 🔴 必须跟 `segmentContact` 用**同一个判据**（Codex 复审 2026-08-16）。
+            // 原先看「最新的任意一条结果是不是坏号」：一个只有坏号、之后又打了
+            // 一次没人接的人，分段那边照旧判他「号码打不通」，这里却因为最新
+            // 一条是 no_answer 而把他丢进「不要再联系」—— 补号码这件该有人动手的
+            // 事又一次被藏起来（铁律 3：发现不许死在日志里）。
+            : phoneLineDeadFrom(byContact.get(c.id) ?? [])
               ? ('fix_number' as const)
               : meta?.action === 'won' || meta?.action === 'postsale'
                 ? ('won' as const)
@@ -553,28 +834,19 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
     })
 
   /**
-   * 今天已经动过多少人。没有这个数字，销售打了 15 通电话也看不到自己的进度 ——
-   * 名单只会越看越像干不完，明天就不想打开了。按触点的**发生时间**算
-   * （不是写入时间），补记昨天的电话不会算进今天。
+   * 顶上那条进度**不在这里算**。
    *
-   * 两处曾经算错，都会让这个数字骗人：
-   *  · 按服务器（UTC）的日子算 —— 纽西兰上午做的活，到中午 UTC 跨日会集体
-   *    清零，销售以为系统把他一早的活弄丢了。
-   *  · 把 Mailchimp 群发算进去 —— 一封群发能让这个数字跳到几百，而实际上
-   *    没有任何一个人被真的跟过。
+   * 服务端这份没按「终端客户 / 同行」筛过，页面默认只看终端客户 ——
+   * 直接用会出现「顶上写 120、底下铺 40」这种**数得出来的谎话**。
+   * 所以页面从筛后的桶现算（`page.tsx` 的 `dayProgress(shown)`）。
+   *
+   * 那为什么不在这里按 kind 筛完再算？因为 kind 是**页面上可切的视图**，
+   * 服务端不知道人此刻在看哪一个。
+   *
+   * ⚠️ 之前这里算了 `progress` / `doneToday` 一起返回，页面没人读 ——
+   * 一个「有但不许用」的字段是最坏的选项：下一个人看到 `data.progress`
+   * 就在手边，十有八九会用上，正好掉进上面那个坑（魏征 2026-08-06 验收）。
    */
-  const today = localDay(now.toISOString(), timeZone)
-  const doneToday = new Set(
-    touches
-      .filter(
-        (t) =>
-          t.direction === 'outbound' &&
-          !isAutomatedTouch(t.source, t.metadata) &&
-          !engagementFromMetadata(t.metadata) &&
-          localDay(t.occurred_at, timeZone) === today,
-      )
-      .map((t) => t.contact_id),
-  ).size
 
   return NextResponse.json({
     buckets,
@@ -585,7 +857,6 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
     counts: segmentCounts(models, now),
     totalContacts: models.length,
     todoTotal: ranked.length,
-    doneToday,
     generatedAt: now.toISOString(),
   })
 }

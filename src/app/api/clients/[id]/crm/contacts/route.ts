@@ -23,6 +23,8 @@ import {
   type ContactLike,
   engagementFromMetadata,
 } from '@/lib/crm/segments'
+import { reclassifyStoredOutcome } from '@/lib/crm/note-parser'
+import { isDoNotContact } from '@/lib/crm/dnc'
 import { stageSuppressesWorklist, isMarketingAction } from '@/lib/crm/pipeline'
 import { fetchAll } from '@/lib/supabase-paginate'
 import {
@@ -49,7 +51,10 @@ interface TouchRow {
   direction: 'inbound' | 'outbound'
   occurred_at: string
   summary: string | null
+  /** 原话。存量结果值读的时候要靠它重判一次（见 reclassifyStoredOutcome）。 */
+  raw: string | null
   metadata: Record<string, unknown> | null
+  source: string | null
 }
 
 interface StageRow {
@@ -104,7 +109,7 @@ export async function GET(
       fetchAll<TouchRow>((from, to) =>
         supabaseAdmin
           .from('contact_touchpoints')
-          .select('id, contact_id, channel, direction, occurred_at, summary, metadata')
+          .select('id, contact_id, channel, direction, occurred_at, summary, raw, metadata, source')
           .eq('client_id', clientId)
           .order('occurred_at', { ascending: false })
           // 同一时刻的多条（导入数据里表单与通话常共用一个时间戳）需要一个
@@ -160,11 +165,15 @@ export async function GET(
       id: c.id,
       displayName: c.display_name,
       // 「别再联系」真相源是不可变触点（contacts 列写失败过 / 历史导入只写 outcome）。
-      doNotContact:
-        c.do_not_contact ||
-        tps.some(
-          (t) => t.metadata?.do_not_contact === true || t.metadata?.outcome === 'do_not_contact',
-        ),
+      // 判据只有一份，见 lib/crm/dnc —— 它同时认「人明确纠正过这条判错了」。
+      doNotContact: isDoNotContact(
+        c.do_not_contact,
+        tps.map((t) => ({
+          outcome: (t.metadata?.outcome as string) ?? null,
+          flagged: t.metadata?.do_not_contact === true,
+          occurredAt: t.occurred_at,
+        })),
+      ),
       stageSuppressed: stage?.suppressed ?? false,
       stageLabel: stage?.label ?? null,
       // 时间线按时间正序：最早的在最上，一条条往下读，跟人回忆一段关系的
@@ -176,7 +185,11 @@ export async function GET(
         channel: t.channel,
         direction: t.direction,
         occurredAt: t.occurred_at,
-        outcome: (t.metadata?.outcome as string) ?? null,
+        // 存量记录读的时候顺手重判一次 —— 否则这次的软硬之分只对以后的
+        // 笔记生效，已经被埋掉的人永远回不来（见 reclassifyStoredOutcome）。
+        outcome: reclassifyStoredOutcome((t.metadata?.outcome as string) ?? null, t.raw) ?? null,
+        // 判「电话线通不通」要靠它分清真打通了和手打出来的 spoke（见 isPhoneVerdict）
+        source: t.source,
         travelWindow: (t.metadata?.travel_window as string) ?? null,
         callbackAt: (t.metadata?.callback_at as string) ?? null,
         // 邮件被打开 / 链接被点 = 行为信号，不是真人消息。分段逻辑必须区分，
@@ -218,6 +231,22 @@ export async function GET(
       firstSeenAt: firstTouch > 0 ? new Date(firstTouch).toISOString() : c.first_seen_at,
       lastTouchAt: lastTouch > 0 ? new Date(lastTouch).toISOString() : null,
       phone: c.primary_phone,
+      /**
+       * 号码在库里但打不通 —— **两个 CRM 入口必须说同一件事**（Codex 复审 2026-08-16）。
+       *
+       * 不带的话，同一个已判坏的号在「今天该联系谁」被禁用，切到「全部客人」
+       * 展开却照旧能一点就拨。销售会以为其中一边是过时的，而两边他都不再信。
+       */
+      phoneUnusable: seg.phoneUnusable ?? false,
+      /**
+       * 被标成「别再联系」—— 页面据此给出**取消**那条路。
+       *
+       * 今日待办下发的「可能被误判成永久拒联」人工任务，href 指向的正是
+       * 「全部客人」这一页（Codex 复审 2026-08-16）。不带这个字段，FDE 照着
+       * 任务点进来会发现根本没有任务里说的那个按钮 —— 照着做也做不成的
+       * 人工任务，比不下发更糟。用上面 model 已经算好的那份，不重算。
+       */
+      doNotContact: model.doNotContact,
       email: c.primary_email,
       // 电话邮箱都没有时，页面据此显示「仅 FB 私信」而不是「没留联系方式」。
       hasMessenger: tps.some((t) => t.channel === 'messenger'),

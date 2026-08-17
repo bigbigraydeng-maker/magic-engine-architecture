@@ -48,7 +48,8 @@
 
 import { supabaseAdmin } from '@/lib/supabase'
 import { isAutomatedPageMessage } from '@/lib/messenger/automation'
-import { buildIdentities, resolveContact } from '@/lib/crm/identity'
+import { buildIdentities, normaliseEmail, normalisePhone, resolveContact } from '@/lib/crm/identity'
+import { parseLeadIntroMessage } from '@/lib/crm/messenger-lead-intro'
 
 export interface IdentityIndex {
   /** 归一化邮箱 -> contactId（同一 client 下邮箱唯一，所以是 1:1）。 */
@@ -230,6 +231,77 @@ function lastHumanOutboundAt(messages: LinkConversationInput['messages']): strin
 }
 
 /**
+ * 「我们最后一次真人回他」这个时间 —— **只往前推，绝不回拨**。
+ *
+ * ## 为什么需要这条不变式（Codex 复审 2026-08-15，PR #988 P1）
+ *
+ * 销售在 ME 页面里回一条私信时，`messenger/send` 会就地写一笔出站触点，
+ * 卡片当场变灰（否则要等最长一小时的同步，那正是 PM 抱怨的毛病）。
+ * 它用的是**和这里同一个幂等键**，两边落在同一行上。
+ *
+ * 问题出在下一次同步：`isAutomatedPageMessage` 有一条「回得太快 = 机器」的
+ * 判据（30 秒内）。销售盯着这一页、客人消息一进来就秒回 —— **那是我们最想
+ * 鼓励的行为** —— 却会被这条规则判成自动回复，于是 `lastHumanOutboundAt`
+ * 退回到更早的某条真人回复，把 `occurred_at` **往回拨**。
+ *
+ * 后果：下一次同步之后，`/crm/today` 不再认为今天跟过他，**卡片重新亮起**，
+ * 销售照着再回一遍 —— 客人收到两条一样的消息。
+ *
+ * ## 为什么是两条语句，而不是「读出来取最大值再写」
+ *
+ * 先读再写有竞态（Codex 第二轮 P2）：同步读到旧时间之后、写回之前，销售正好
+ * 发送成功 —— 那个缓存下来的旧时间照样会盖掉刚写的新值，卡片还是会重新亮起。
+ * 窗口很窄，但「客人收到两条一样的消息」这种代价不该赌概率。
+ *
+ * 所以拆成两条**各自原子**的语句，合起来在任何交错顺序下都不会倒退：
+ *
+ *   1. 没有就插一条；**已有则原样不动**（`ignoreDuplicates`）—— 不可能回拨
+ *   2. `WHERE occurred_at < 新值` 的条件更新 —— 只可能往前推
+ *
+ * 比较在数据库里做，不在这个进程里。
+ *
+ * 根因（秒回判据误伤 ME 发出的消息）改动面更大、影响整条同步链，单独做 ——
+ * `conversation_outbound_log` 里记着每一条 ME 发出的消息 id，本可以不靠猜。
+ */
+async function advanceOutboundTouch(
+  clientId: string,
+  conversationId: string,
+  contactId: string,
+  at: string,
+): Promise<void> {
+  const sourceRef = `${conversationId}:out`
+  const body = {
+    summary: '我们在 Messenger 回复过',
+    metadata: { thread_id: conversationId, sender: 'page' },
+  }
+
+  // 1) 还没有这条就建 —— 已经有了绝不覆盖（那正是回拨的来源）。
+  await supabaseAdmin.from('contact_touchpoints').upsert(
+    {
+      client_id: clientId,
+      contact_id: contactId,
+      channel: 'messenger',
+      direction: 'outbound',
+      occurred_at: at,
+      ...body,
+      source: 'messenger',
+      source_ref: sourceRef,
+    },
+    { onConflict: 'client_id,source,source_ref', ignoreDuplicates: true },
+  )
+
+  // 2) 只在库里那条**更早**时才推上去。条件在 WHERE 里，数据库自己判 ——
+  //    这一步永远只能让时间变晚，不管跟谁交错。
+  await supabaseAdmin
+    .from('contact_touchpoints')
+    .update({ occurred_at: at, ...body })
+    .eq('client_id', clientId)
+    .eq('source', 'messenger')
+    .eq('source_ref', sourceRef)
+    .lt('occurred_at', at)
+}
+
+/**
  * 只在 Facebook 上聊过的人 → 建一个**只带 fb_psid** 的联系人。建不了返回 null。
  *
  * 两条前置条件都不满足就不建（理由见模块头部护栏 1/2）：
@@ -307,6 +379,217 @@ async function attachByUniqueFullName(
 }
 
 /**
+ * 把「点私信」开场白里的姓名 / 电话 / 邮箱补进这个人的档案。
+ *
+ * 🔴 **PM 2026-08-17 报的线上问题**：卡片写着「💬 没留电话 —— 只能在 Messenger
+ * 回他」，而那个人明明在第一条消息里留了电话和邮箱。正文早就同步进来了，
+ * 只是从来没人把它取出来 —— `matchConversationToContact` 只拿正文里的邮箱去
+ * **认人**，认完就丢。于是销售信了卡片那句话，跑去私信里回，而客人在等电话。
+ *
+ * 三条纪律：
+ *
+ * 1. **只补空栏，绝不覆盖**（铁律 8）。客人后来亲口更正过的号码比表单里那个新，
+ *    `.is('primary_phone', null)` 保证只在还空着的时候写。
+ * 2. **身份用 upsert + ignoreDuplicates**。万一这个号码已经挂在**另一个人**
+ *    身上，什么都不做 —— 抢身份是不可逆的，宁可留白等人来看。
+ * 3. **认不出来就什么都不做**。`parseLeadIntroMessage` 判据宁可窄：认不出只是
+ *    维持现状，认错了会把别人的号码写进这个人的档案。
+ *
+ * 每次同步都跑（不只在新接上的时候）—— 存量那批人的档案也要因此补齐。
+ * 都是幂等写，跑一百遍结果一样。
+ */
+/** 档案上现有的主联系方式 —— 决定旧值能不能挂成身份 / 写进档案。 */
+interface ContactPrimaryFields {
+  primary_phone: string | null
+  primary_email: string | null
+}
+
+export async function backfillFromLeadIntro(
+  input: Pick<LinkConversationInput, 'clientId' | 'messages'>,
+  contactId: string,
+): Promise<void> {
+  // 只认**客人自己**发的那条。我们自己发出去的模板不作数。
+  // 各字段各取各的最新非空值 —— 用几个标量累计，不套 union，读起来也直白。
+  let gotIntro = false
+  let leadName: string | null = null
+  let leadPhone: string | null = null
+  let leadEmail: string | null = null
+  let seenInbound = false
+
+  for (const m of input.messages) {
+    if (m.direction !== 'inbound') continue
+    /**
+     * 🔴 三条纪律都在这一段里（Codex 复审 2026-08-17，三轮）：
+     *
+     * 1. 「两条标准字段」那条兜底**只对第一条入站消息成立**。对话中途客人转发
+     *    同行者的 `Name: … / Phone: …` 恰好也是两条字段 —— 认了就把**别人的
+     *    号码**写进这个人的档案。后面的消息必须带那句表单问候语。
+     * 2. **不是取第一条**。同一线程里客人可能重填过表单（第一次填错、第二次改对），
+     *    命中就停会把旧值永久写进档案，而且以后每轮都命中同一条旧消息。
+     * 3. **也不是整对象取最后一条**：后一张表单可能只更正了电话，整对象替换会
+     *    把前一张里那个有效的邮箱丢掉，而邮箱那一栏仍然空着、永远补不回来。
+     *    所以**按字段**各取各的最新非空值。
+     */
+    const parsed = parseLeadIntroMessage(m.body, { requireMarker: seenInbound })
+    seenInbound = true
+    if (!parsed) continue
+    gotIntro = true
+    if (parsed.name) leadName = parsed.name
+    if (parsed.phone) leadPhone = parsed.phone
+    if (parsed.email) leadEmail = parsed.email
+  }
+  if (!gotIntro) return
+
+  /**
+   * 🔴 **按客户所在市场补国码**（Codex 复审 2026-08-17）。
+   *
+   * `normalisePhone` 默认按 NZ 补 `+64`。Oztop 是 **AU** 客户 —— 表单里
+   * `04...` / `03...` 这种本地号码会被永久写成 `+64...`，销售照着拨就是陌生人，
+   * 而且这个错值还会进唯一身份表，把以后正确的 AU 身份挡在门外。
+   * `identity.ts` 里那段注释早就写明「调用方按 clients 的市场传进来」。
+   *
+   * 读不到就按 NZ（跟这个函数以前的行为一致，不因为读配置失败而整段罢工）。
+   */
+  let market: 'NZ' | 'AU' | null = null
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('clients')
+      .select('country')
+      .eq('id', input.clientId)
+      .maybeSingle()
+    const country = (data as { country?: string } | null)?.country
+    if (!error && (country === 'AU' || country === 'NZ')) market = country
+  } catch {
+    // 读不到 → market 留 null，下面按「不确定」处理
+  }
+
+  /**
+   * 🔴 **市场认不出来就不写电话**（Codex 复审 2026-08-17）。
+   *
+   * 原先读失败时退回 NZ —— 那会把 AU 客户的 `04...` 永久写成 `+64...`：
+   * 销售拨过去是陌生人，而且这个错值进了唯一身份表，以后正确的 AU 身份
+   * 反而挂不上。少补一个号码是现状，写错一个是伤害。
+   *
+   * 已经是国际格式（`+…`）的号码不受影响 —— 那种不需要猜国码。
+   */
+  const phone = market
+    ? normalisePhone(leadPhone, market)
+    : normalisePhone(leadPhone?.trim().startsWith('+') ? leadPhone : null)
+  const email = normaliseEmail(leadEmail)
+  if (!phone && !email && !leadName) return
+
+  /**
+   * 🔴 **档案上已经有一个（后来更正过的）值时，旧值连身份都不该挂**
+   * （Codex 复审 2026-08-17）。
+   *
+   * 空值守卫只挡住了「覆盖档案」，挡不住把表单里那个旧号码写进 `contact_identities`。
+   * 而身份表是**认人用的键**：那个号码以后被运营商重新分配给别人、或者当初就填错了，
+   * `resolveContact` 会把带着它的新线索认成这个人，甚至把两个人的历史自动合并 ——
+   * 合并不可逆。
+   *
+   * 所以先读一次现值：**那一栏是空的、或者跟解析出来的一模一样**，才挂这个身份。
+   * 读不出来一律跳过（跟其它几处一样，宁可少补）。
+   */
+  let current: ContactPrimaryFields | null = null
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('contacts')
+      .select('primary_phone, primary_email')
+      .eq('id', contactId)
+      .maybeSingle()
+    if (!error) current = data as ContactPrimaryFields | null
+  } catch {
+    // current 留 null → 下面一律跳过
+  }
+  if (!current) return
+
+  const phoneUsable = phone !== null && (!current.primary_phone || current.primary_phone === phone)
+  const emailUsable = email !== null && (!current.primary_email || current.primary_email === email)
+
+  // 身份表：多挂一个键，不动已有的。撞到别人身上就跳过（ignoreDuplicates）。
+  const identities = [
+    phoneUsable && phone ? { kind: 'phone' as const, value: phone } : null,
+    emailUsable && email ? { kind: 'email' as const, value: email } : null,
+  ].filter((x): x is { kind: 'phone' | 'email'; value: string } => x !== null)
+
+  /**
+   * 🔴 **身份没写成，档案就不能写**（Codex 复审 2026-08-17）。
+   *
+   * upsert 报错时如果照旧写档案，会落进最糟的中间态：卡片上显示着号码，
+   * 身份表里却没有它 —— 认人认不到，以后别的渠道进来会**再建一个重复的人**；
+   * 而这个人两栏都满了，又从每小时回填的候选集里退出去，再也不会被修。
+   */
+  let identityWriteFailed = false
+  if (identities.length > 0) {
+    const { error: identityError } = await supabaseAdmin.from('contact_identities').upsert(
+      identities.map((i) => ({
+        contact_id: contactId,
+        client_id: input.clientId,
+        kind: i.kind,
+        value: i.value,
+        first_source: 'messenger_lead_intro',
+      })),
+      { onConflict: 'client_id,kind,value', ignoreDuplicates: true },
+    )
+    if (identityError) {
+      console.error('[messenger/lead-intro] 身份写入失败，跳过档案:', identityError.message)
+      identityWriteFailed = true
+    }
+  }
+
+  /**
+   * 🔴 **这个号码 / 邮箱到底归谁**（Codex 复审 2026-08-17）。
+   *
+   * 上面的 `ignoreDuplicates` 只保证**身份表**不被抢走，挡不住下面继续把同一个
+   * 号码写进**这个人**的 `primary_phone`。那样两份档案会显示同一个号码，而身份
+   * 表指向的是原来那个人 —— 销售照着卡片打过去，联系的是另一个人。
+   *
+   * 所以写档案之前回查一次归属：**这条身份不存在、或确实归 `contactId`**，才写。
+   * 查不出来（读失败）一律当「不确定」跳过 —— 少补一栏是现状，写错是伤害。
+   */
+  const ownsValue = async (kind: 'phone' | 'email', value: string): Promise<boolean> => {
+    const { data, error } = await supabaseAdmin
+      .from('contact_identities')
+      .select('contact_id')
+      .eq('client_id', input.clientId)
+      .eq('kind', kind)
+      .eq('value', value)
+      .maybeSingle()
+    if (error) return false
+    const owner = (data as { contact_id?: string } | null)?.contact_id
+    return !owner || owner === contactId
+  }
+
+  // 档案上那两栏 —— 一栏一条语句，各自带 `.is(..., null)`。
+  // 合成一条 update 的话，只要有一栏已经有值，另一栏也跟着写不进去。
+  if (!identityWriteFailed && phoneUsable && phone && (await ownsValue('phone', phone))) {
+    await supabaseAdmin
+      .from('contacts')
+      .update({ primary_phone: phone })
+      .eq('id', contactId)
+      .is('primary_phone', null)
+  }
+  if (!identityWriteFailed && emailUsable && email && (await ownsValue('email', email))) {
+    await supabaseAdmin
+      .from('contacts')
+      .update({ primary_email: email })
+      .eq('id', contactId)
+      .is('primary_email', null)
+  }
+
+  // 名字：Facebook 昵称常常是占位符或只有名，表单里那个是他自己填的全名。
+  // 同样只在空着的时候写。
+  const name = leadName?.trim()
+  if (name) {
+    await supabaseAdmin
+      .from('contacts')
+      .update({ display_name: name })
+      .eq('id', contactId)
+      .is('display_name', null)
+  }
+}
+
+/**
  * 把一段已入库的对话接到人身上并写触点：先找已有的人，找不到就按 fb_psid 新建。
  *
  * index 会在命中/新建时就地更新（把 psid 记进去），让同一次同步里后面的对话
@@ -369,6 +652,9 @@ export async function linkMessengerConversation(
     }
   }
 
+  // 「点私信」广告那条开场白里带着他的电话和邮箱 —— 补进档案。
+  await backfillFromLeadIntro(input, contactId)
+
   // 来源归因：这两条触点的 attr_* 列**故意全部留 NULL**。
   //
   // 私信同步走 Graph `/{page}/conversations`（见 lib/meta/conversations.ts，messages
@@ -412,25 +698,16 @@ export async function linkMessengerConversation(
       source_ref: `${input.conversationId}:in`,
     })
   }
-  if (lastOut) {
-    rows.push({
-      client_id: input.clientId,
-      contact_id: contactId,
-      channel: 'messenger',
-      direction: 'outbound',
-      occurred_at: lastOut,
-      summary: '我们在 Messenger 回复过',
-      metadata: { thread_id: input.conversationId, sender: 'page' },
-      source: 'messenger',
-      source_ref: `${input.conversationId}:out`,
-    })
-  }
-
   if (rows.length > 0) {
     // 不加 ignoreDuplicates → ON CONFLICT DO UPDATE：重同步刷新 occurred_at。
     await supabaseAdmin
       .from('contact_touchpoints')
       .upsert(rows, { onConflict: 'client_id,source,source_ref' })
+  }
+
+  // 出站那条**单独走「只增」写法**，不跟上面一起 upsert —— 理由见函数注释。
+  if (lastOut) {
+    await advanceOutboundTouch(input.clientId, input.conversationId, contactId, lastOut)
   }
 
   // last_seen 只往前推：仅当现值早于本对话最后活动时才更新，绝不回拨。

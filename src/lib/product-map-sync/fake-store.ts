@@ -9,12 +9,14 @@
  * - notProvisioned 开关(模拟表未 apply)。
  */
 
-import type { DeliveryClaim, ProductMapSyncStore } from './store'
+import type { DeliveryClaim, ProductMapSyncStore, ProgressSnapshotWrite, SummaryWrite } from './store'
 import type {
   DeliveryStatus,
   IssueFactRow,
   PrFactRow,
+  ProgressSnapshotRow,
   SyncRunRow,
+  SyncStats,
   UnclassifiedWorkRow,
   WebhookDeliveryRow,
 } from './types'
@@ -26,6 +28,7 @@ export class FakeSyncStore implements ProductMapSyncStore {
   readonly unclassified = new Map<string, UnclassifiedWorkRow>()
   readonly deliveries = new Map<string, WebhookDeliveryRow>()
   readonly runs: SyncRunRow[] = []
+  readonly progressSnapshots = new Map<string, ProgressSnapshotRow>()
   notProvisioned = false
 
   private guard(): void {
@@ -79,6 +82,10 @@ export class FakeSyncStore implements ProductMapSyncStore {
             : fact.mergeable_state,
         unresolved_threads: fact.unresolved_threads ?? existing?.unresolved_threads ?? null,
         sync_run_id: input.run.id,
+        // 🔴 摘要两列不在 RPC 的 SET 列表里 —— commitSync 对它们零感知,
+        //    原样保留已有值(新行则是 null,等 writeSummaries 补)。
+        human_summary: existing?.human_summary ?? null,
+        human_summary_generated_at: existing?.human_summary_generated_at ?? null,
       })
     }
     for (const fact of input.issueFacts) {
@@ -87,7 +94,12 @@ export class FakeSyncStore implements ProductMapSyncStore {
         skippedStale++
         continue
       }
-      this.issueFacts.set(fact.issue_number, { ...fact, sync_run_id: input.run.id })
+      this.issueFacts.set(fact.issue_number, {
+        ...fact,
+        sync_run_id: input.run.id,
+        human_summary: existing?.human_summary ?? null,
+        human_summary_generated_at: existing?.human_summary_generated_at ?? null,
+      })
     }
     const now = new Date().toISOString()
     for (const u of input.unclassified) {
@@ -172,5 +184,64 @@ export class FakeSyncStore implements ProductMapSyncStore {
       }
     }
     return n
+  }
+
+  async writeSummaries(items: readonly SummaryWrite[]): Promise<void> {
+    this.guard()
+    const now = new Date().toISOString()
+    for (const item of items) {
+      if (item.kind === 'pr') {
+        const row = this.prFacts.get(item.number)
+        if (!row) continue // 对齐真 SQL:UPDATE 对不存在的行是 0-row no-op
+        this.prFacts.set(item.number, {
+          ...row,
+          human_summary: item.summary,
+          human_summary_generated_at: item.generatedAt || now,
+        })
+      } else {
+        const row = this.issueFacts.get(item.number)
+        if (!row) continue
+        this.issueFacts.set(item.number, {
+          ...row,
+          human_summary: item.summary,
+          human_summary_generated_at: item.generatedAt || now,
+        })
+      }
+    }
+  }
+
+  async upsertProgressSnapshot(row: ProgressSnapshotWrite): Promise<{ written: boolean }> {
+    this.guard()
+    const existing = this.progressSnapshots.get(row.snapshotDate)
+    // 单调守卫对齐 SQL:WHERE excluded.run_started_at >= 现有行.run_started_at
+    if (existing && existing.run_started_at > row.runStartedAt) {
+      return { written: false }
+    }
+    this.progressSnapshots.set(row.snapshotDate, {
+      snapshot_date: row.snapshotDate,
+      total_components: row.totalComponents,
+      operating_count: row.operatingCount,
+      built_not_live_count: row.builtNotLiveCount,
+      building_count: row.buildingCount,
+      maturity_counts: row.maturityCounts,
+      sync_run_id: row.syncRunId,
+      run_started_at: row.runStartedAt,
+      created_at: existing?.created_at ?? new Date().toISOString(),
+    })
+    return { written: true }
+  }
+
+  async readProgressSnapshots(limitDays: number): Promise<ProgressSnapshotRow[]> {
+    this.guard()
+    return Array.from(this.progressSnapshots.values())
+      .sort((a, b) => (a.snapshot_date < b.snapshot_date ? -1 : 1))
+      .slice(-limitDays)
+  }
+
+  async patchRunStats(runId: string, patch: Partial<SyncStats>): Promise<void> {
+    this.guard()
+    const idx = this.runs.findIndex((r) => r.id === runId)
+    if (idx === -1) return
+    this.runs[idx] = { ...this.runs[idx], stats: { ...this.runs[idx].stats, ...patch } }
   }
 }
