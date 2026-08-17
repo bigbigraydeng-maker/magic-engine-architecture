@@ -544,6 +544,36 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] `mailchimp-activity-sync` 没有 run-logging，断了看不出来
 - [ ] segments / display-name 里有 3 处写死的旅游业措辞，接第二个行业前要抽出来
 
+**M2.7n 「别再联系」判不准 —— 四张已开的票**（2026-08-17 从 PR
+[#998](https://github.com/bigbigraydeng-maker/magic-engine/pull/998) 拆出，
+与上面的 M2.7h / M2.7m 是同一件事的四个面，**票在 GitHub 上，这里只做索引**）：
+- [ ] [#1019](https://github.com/bigbigraydeng-maker/magic-engine/issues/1019) 换掉「他是不是要求别再联系」的判据 —— **怎么判**
+- [ ] [#1025](https://github.com/bigbigraydeng-maker/magic-engine/issues/1025) 🔴 Facebook 私信正文根本进不了这个判据 —— **喂什么进去**。
+      私信是 CTS 客人说话最多的渠道（2099 条 / 658 会话），闸是硬的、闸后面是空的
+- [ ] [#1026](https://github.com/bigbigraydeng-maker/magic-engine/issues/1026) 中文「别再联系我」这类写法漏判
+- [ ] [#1027](https://github.com/bigbigraydeng-maker/magic-engine/issues/1027) 「别打电话，只发邮件」记不住 —— 需要**按渠道**的信号。
+      PO 2026-08-17 已拍板短期行为：这种人**继续发邮件、留在邮件营销池里**
+
+**M2.7p 「点私信」开场白补档案的五条后续**（2026-08-17，PR
+[#1031](https://github.com/bigbigraydeng-maker/magic-engine/pull/1031) 上线时逐条登记不修；
+能力本身已上线，见 [CHANGELOG 2026-08-17](./history/CHANGELOG.md)）。
+五条同源 —— **补档案与认亲该有自己的一轮设计，不该继续在同步链路里加分支**：
+- [ ] 存量回填是逐个联系人串行查询，量级上去要改批量
+- [ ] 给「试过、补不上」的人打标 —— 现在每轮都重扫这批人，看着在跑其实原地踏步
+- [ ] 解绑了 Facebook 主页的客户跑不到本地回填（凭证闸之前那一步只覆盖已绑的）
+- [ ] 只留电话没留邮箱时按电话认人 —— 现在会多出一条重复联系人。
+      **刻意先不做**：认亲弄错是不可逆的（两个人并成一个），而重复联系人只是难看
+- [ ] 🔴 **第一条入站消息没有「主语是我」这层保护**（Codex 复审 PR #1033 提出，2026-08-17）——
+      `backfillFromLeadIntro` 对第一条消息传 `requireMarker: false`，于是
+      `my friend filled out the form` + `Name:` + `Phone:` 这种**转发同行者资料**
+      只要恰好是对话的第一条，就能凑够两条标准字段被认成表单开场白，
+      **把别人的号码写进这个人的档案**（写入侧的空栏守卫和归属回查仍在，
+      所以只在「这人档案本来就空 + 那号码还没主」时才落地）。
+      兜底当初是刻意留的：Meta 模板措辞随语言变，卡死问候语会漏掉真表单 ——
+      所以**不能简单地把第一条也改成必须带问候语**，那会把 PM 报的原始问题放回来。
+      要么提高字段门槛，要么给第一条另立判据，属设计题，**走 ≥2 审再动**；
+      文档措辞已先改成如实描述（不再把它写成无条件纪律）
+
 ## Phase 25 — Self-Serve Portal ⚠️ 已并入 Phase 20.0
 
 - [ ] **P25.A.1** Migration：`public_scan_jobs` 加 `client_id` 可空 FK
