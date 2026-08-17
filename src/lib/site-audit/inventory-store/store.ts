@@ -44,6 +44,44 @@ export const CRAWL_STATUS_CRAWLED = 'crawled'
 const UNIQUE_VIOLATION = '23505'
 
 /**
+ * `page_type` 的 CHECK 允许值 —— **2026-08-17 生产实测**
+ * （`client_site_pages_page_type_check`，列已从 enum 漂移成 text+CHECK；迁移文件不可信）。
+ */
+export const ALLOWED_PAGE_TYPES = ['service', 'blog', 'about', 'home', 'product', 'faq', 'other'] as const
+export type AllowedPageType = (typeof ALLOWED_PAGE_TYPES)[number]
+
+/**
+ * 把分类器产出的 page_type 收敛到台账 CHECK 的 7 个允许值。
+ *
+ * 🔴 分类器（`classifier.ts` PageType）会产出 `'landing'` 与 `'contact'`，这两个**不在** CHECK 里
+ *    —— 直接写会撞 `client_site_pages_page_type_check`、让整批激活 fail（正是本次 exit 2 的根因）。
+ *    映射是显式、可复核的：语义能对上就对上（landing 是首页→`home`），对不上落 `other`。
+ * 🔴 认不出来的值**不硬塞**：`toAllowedPageType` 抛错、整批 fail-closed，绝不写非法值。
+ */
+export const PAGE_TYPE_MAP: Readonly<Record<string, AllowedPageType>> = {
+  landing: 'home', // 分类器把首页判成 'landing'，CHECK 只认 'home'
+  home: 'home',
+  about: 'about',
+  blog: 'blog',
+  product: 'product',
+  service: 'service',
+  faq: 'faq',
+  contact: 'other', // CHECK 无 'contact'，诚实落 'other'（不假装它是 about）
+  other: 'other',
+}
+
+function toAllowedPageType(raw: string): AllowedPageType {
+  const mapped = PAGE_TYPE_MAP[raw.trim().toLowerCase()]
+  if (mapped === undefined) {
+    throw new InventoryStoreError(
+      'unmappable_page_type',
+      `分类产出的 page_type「${raw}」映射不到台账允许值 [${ALLOWED_PAGE_TYPES.join(', ')}] —— fail-closed，不写。`,
+    )
+  }
+  return mapped
+}
+
+/**
  * 落库时出的事。`inventoryTouched` 说清楚失败发生在写之前还是写之中 ——
  * 照抄 geo-baseline `GeoStoreError.committed` 的语义，让激活方 / 重试判断不至于把
  * 「还没碰过库」和「库里可能已有半批」混成一句「跑挂了」。
@@ -87,7 +125,7 @@ function toInsertRow(clientId: string, page: AcceptedPageRecord): Record<string,
     title: page.title,
     markdown_content: page.markdown,
     word_count: page.wordCount,
-    page_type: page.pageType,
+    page_type: toAllowedPageType(page.pageType), // 收敛到 CHECK 允许值；认不出来 fail-closed
     topics: page.topics,
     primary_keyword: page.primaryKeyword,
     classification_confidence: page.classificationConfidence,

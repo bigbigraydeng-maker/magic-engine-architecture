@@ -110,6 +110,48 @@ describe('writeAcceptedPages · 字段映射', () => {
   })
 })
 
+describe('writeAcceptedPages · page_type 收敛到 CHECK 允许值', () => {
+  // 变异证据：把 store 里 toAllowedPageType(page.pageType) 改回 page.pageType（不映射）→
+  // 'landing' 会撞假件的 page_type CHECK(23514) → 下面第 1 条转红。假件建模了真实 CHECK。
+  it('landing→home、contact→other、合法值原样', async () => {
+    const { store, db } = storeWith()
+    await store.writeAcceptedPages({
+      clientId: TARGET,
+      pages: [
+        makePage({ canonicalUrl: 'https://example.com/home', path: '/', pageType: 'landing' }),
+        makePage({ canonicalUrl: 'https://example.com/contact', path: '/contact', pageType: 'contact' }),
+        makePage({ canonicalUrl: 'https://example.com/svc', path: '/svc', pageType: 'service' }),
+      ],
+      requireEmptyInventory: true,
+    })
+    const byUrl = Object.fromEntries(db.rows.map((r) => [r.url, r.page_type]))
+    expect(byUrl['https://example.com/home']).toBe('home')
+    expect(byUrl['https://example.com/contact']).toBe('other')
+    expect(byUrl['https://example.com/svc']).toBe('service')
+  })
+
+  it('认不出来的 page_type → fail-closed 抛 unmappable_page_type，一行不写', async () => {
+    const { store, db } = storeWith()
+    const err = await store
+      .writeAcceptedPages({ clientId: TARGET, pages: [makePage({ pageType: 'nonsense' })], requireEmptyInventory: true })
+      .catch((e) => e)
+    expect(err).toBeInstanceOf(InventoryStoreError)
+    expect(err.code).toBe('unmappable_page_type')
+    expect(db.rows).toHaveLength(0)
+  })
+
+  it('假件确实建模了 page_type CHECK（非法值被 23514 拒）', async () => {
+    // 直接往假件塞一个非法 page_type 的插入，确认它像 Postgres 一样拒（自证 CHECK 建模非空跑）。
+    const db = new FakeSupabase()
+    const { error } = await db
+      .from('client_site_pages')
+      .insert([{ client_id: TARGET, url: 'u', path: '/u', page_type: 'landing', crawl_status: 'crawled' }])
+      .select('url')
+    expect(error?.code).toBe('23514')
+    expect(db.rows).toHaveLength(0)
+  })
+})
+
 describe('writeAcceptedPages · 唯一约束与写错', () => {
   it('抓取后、写入前有并发写入撞 url → 整批回滚，报 inventory_not_empty，touched=false', async () => {
     // onBeforeInsert 模拟另一次激活在空隙里塞了同一条 url。
