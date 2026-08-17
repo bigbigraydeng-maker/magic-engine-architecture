@@ -21,6 +21,8 @@ function row(number: number, state: PrFactRow['state'], observedAt: string, base
     title: '',
     observed_at: observedAt,
     sync_run_id: 'run-x',
+    human_summary: null,
+    human_summary_generated_at: null,
   }
 }
 

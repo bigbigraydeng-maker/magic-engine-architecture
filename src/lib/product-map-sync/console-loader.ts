@@ -21,6 +21,7 @@ import type {
   IssueFactView,
   LoadOutcome,
   PrFactView,
+  ProgressSnapshotView,
   SyncRunView,
   UnclassifiedItemView,
 } from '@/lib/product-map/presenter'
@@ -30,6 +31,8 @@ import type { ProductMapSyncStore } from './store'
 
 /** 错误摘要上限 —— Supabase 原始报错带 schema 细节,没必要印进 HTML(子牙 S4)。 */
 const ERROR_SUMMARY_MAX = 200
+/** 趋势图回看窗口 —— 一个月足够看出走势,太长了 UI 也画不下。 */
+const PROGRESS_TREND_DAYS = 30
 
 export async function loadProductMapConsole(
   store: ProductMapSyncStore,
@@ -44,6 +47,33 @@ export async function loadProductMapConsole(
   let issueFacts: IssueFactView[] = []
   let unclassified: UnclassifiedItemView[] = []
   let oldestObservedAt: string | null = null
+  let progressSnapshots: ProgressSnapshotView[] = []
+
+  // 🔴 快照表是本 PR 新加的,跟 PR/issue facts 表**不是同一次 migration**——
+  //    代码先部署、这张表的 migration 后 apply 是完全可能出现的窗口期(合并 ≠ 上线)。
+  //    这里必须独立 try/catch:新表没建不该把"PR/issue facts 明明读得到"的整页
+  //    拖成 not_provisioned,只是趋势图那块暂时没数据(progressSnapshots 留空数组,
+  //    presenter 那边 hasEnoughData=false 会显式说"还没有数据",不装懂但也不误伤主页面)。
+  try {
+    const snapshotRows = await store.readProgressSnapshots(PROGRESS_TREND_DAYS)
+    progressSnapshots = snapshotRows.map((s) => ({
+      date: s.snapshot_date,
+      totalComponents: s.total_components,
+      operatingCount: s.operating_count,
+      builtNotLiveCount: s.built_not_live_count,
+      buildingCount: s.building_count,
+    }))
+  } catch (err) {
+    // 🔴 魏征实施后复审:这里原来写的是 throw,而 page.tsx 直接 await 本函数、
+    //    没有外层 try/catch —— 真读库炸了会把整个控制台页面崩掉,方向反了。
+    //    应该跟下面 PR/issue facts 那段一样降级成 sync_error,不吞、也不炸主页面。
+    progressSnapshots = []
+    if (!(err instanceof NotProvisionedError)) {
+      loadOutcome = 'sync_error'
+      const raw = err instanceof Error ? err.message : String(err)
+      loadErrorSummary = raw.slice(0, ERROR_SUMMARY_MAX)
+    }
+  }
 
   try {
     const [prRows, issueRows, unclassifiedRows, runRow, fullRunAt] = await Promise.all([
@@ -69,6 +99,8 @@ export async function loadProductMapConsole(
         isDraft: r.is_draft,
         unresolvedThreads: r.unresolved_threads,
         title: r.title,
+        humanSummary: r.human_summary,
+        observedAt: r.observed_at,
       }))
     }
 
@@ -76,6 +108,8 @@ export async function loadProductMapConsole(
       number: r.issue_number,
       state: r.state,
       title: r.title,
+      humanSummary: r.human_summary,
+      observedAt: r.observed_at,
     }))
     unclassified = unclassifiedRows.map((r) => ({
       kind: r.kind,
@@ -118,5 +152,6 @@ export async function loadProductMapConsole(
     unclassified,
     oldestObservedAt,
     now,
+    progressSnapshots,
   })
 }

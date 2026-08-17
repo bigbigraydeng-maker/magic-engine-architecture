@@ -35,6 +35,29 @@ function input(overrides: Partial<PresenterInput> = {}): PresenterInput {
     unclassified: [],
     oldestObservedAt: '2026-08-15T09:00:00Z',
     now: NOW,
+    progressSnapshots: [],
+    ...overrides,
+  }
+}
+
+function pr(overrides: Partial<import('../presenter').PrFactView> & { number: number }): import('../presenter').PrFactView {
+  return {
+    state: 'open',
+    isDraft: false,
+    unresolvedThreads: 0,
+    title: 'x',
+    humanSummary: null,
+    observedAt: '2026-08-15T09:00:00Z',
+    ...overrides,
+  }
+}
+
+function issue(overrides: Partial<import('../presenter').IssueFactView> & { number: number }): import('../presenter').IssueFactView {
+  return {
+    state: 'open',
+    title: 'x',
+    humanSummary: null,
+    observedAt: '2026-08-15T09:00:00Z',
     ...overrides,
   }
 }
@@ -81,7 +104,7 @@ describe('coverageGap:同步没覆盖到 ≠ 活儿没干完(子牙 M3)', () => 
   it('登记册引用的 PR 没被同步到 → 标记缺口,不静默', () => {
     const p = buildPresentation(
       input({
-        prFacts: [{ number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: 'x' }],
+        prFacts: [pr({ number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: 'x' })],
       }),
     )
     expect(p.trust.coverageGapPrs.length).toBeGreaterThan(0)
@@ -98,7 +121,7 @@ describe('coverageGap:同步没覆盖到 ≠ 活儿没干完(子牙 M3)', () => 
   it('PR 没同步到时,状态显示「没同步到」而不是「已关闭」之类的臆断', () => {
     const p = buildPresentation(
       input({
-        prFacts: [{ number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: 'x' }],
+        prFacts: [pr({ number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: 'x' })],
       }),
     )
     const withGap = p.components.find((c) => c.coverageGapPrs.length > 0)
@@ -176,8 +199,8 @@ describe('id 绝不出渲染层(板桥 M8:id 里带真实供应商名)', () => {
   it('依赖图节点、检索目录都不漏 id(填了事实也不漏)', () => {
     const p = buildPresentation(
       input({
-        prFacts: [{ number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: 't' }],
-        issueFacts: [{ number: 859, state: 'closed', title: 't' }],
+        prFacts: [pr({ number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: 't' })],
+        issueFacts: [issue({ number: 859, state: 'closed', title: 't' })],
       }),
     )
     for (const n of p.graph.nodes) expect(n.key).toMatch(/^c\d+$/)
@@ -219,7 +242,15 @@ describe('检索目录(catalog:issue/PR 反查组件,标题来自同步)', () =>
     const p = buildPresentation(
       input({
         prFacts: [
-          { number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: '内核 PR 真标题' },
+          {
+            number: 863,
+            state: 'merged',
+            isDraft: false,
+            unresolvedThreads: 0,
+            title: '内核 PR 真标题',
+            humanSummary: null,
+            observedAt: '2026-08-15T09:00:00Z',
+          },
         ],
       }),
     )
@@ -233,7 +264,7 @@ describe('检索目录(catalog:issue/PR 反查组件,标题来自同步)', () =>
   })
 
   it('Issue 关闭必带「≠已上线」(复用同一映射,不另造词)', () => {
-    const p = buildPresentation(input({ issueFacts: [{ number: 859, state: 'closed', title: 'x' }] }))
+    const p = buildPresentation(input({ issueFacts: [issue({ number: 859, state: 'closed', title: 'x' })] }))
     const iss = p.catalog.find((c) => c.kind === 'issue' && c.number === 859)
     expect(iss?.stateLabel).toBe('已关闭(≠已上线)')
   })
@@ -278,7 +309,7 @@ describe('待拍板拆两栏(板桥 M5)', () => {
   it('每条决策都有直达链接;PR 类决策带未解决线程数(有同步事实时)', () => {
     const p = buildPresentation(
       input({
-        prFacts: [{ number: 962, state: 'open', isDraft: true, unresolvedThreads: 3, title: 'x' }],
+        prFacts: [pr({ number: 962, state: 'open', isDraft: true, unresolvedThreads: 3, title: 'x' })],
       }),
     )
     for (const d of [...p.decisionsNow, ...p.decisionsLater]) {
@@ -298,7 +329,7 @@ describe('待拍板拆两栏(板桥 M5)', () => {
 describe('其它必须露头的事实', () => {
   it('Issue「已关闭」必须带「≠已上线」提醒(子牙 M9)', () => {
     const p = buildPresentation(
-      input({ issueFacts: [{ number: 859, state: 'closed', title: 'x' }] }),
+      input({ issueFacts: [issue({ number: 859, state: 'closed', title: 'x' })] }),
     )
     const withIssue = p.components.find((c) => c.linkedIssues.some((i) => i.number === 859))
     expect(withIssue?.linkedIssues.find((i) => i.number === 859)?.stateLabel).toContain('≠已上线')

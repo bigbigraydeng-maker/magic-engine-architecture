@@ -684,6 +684,11 @@ services:
     envVars:
       - key: CRON_SECRET
         sync: false
+      # 未配置 = 人话摘要功能整体跳过(不影响 PR/issue facts 同步本身,route.ts 已做降级)。
+      # ⚠️ 部署后需在 Render 后台给这个服务手动 link ANTHROPIC_API_KEY(跟仓库里其它
+      #    需要它的服务同一个做法,sync:false 不会自动挂),否则摘要一直是"未接大模型"。
+      - key: ANTHROPIC_API_KEY
+        sync: false
 
   # CTS title executor — Monday 05:30 UTC, right after oztop-seo-optimizer.
   # GSC pos-4-20 pages → AI title/desc → narrow-lane edit of the site repo's
