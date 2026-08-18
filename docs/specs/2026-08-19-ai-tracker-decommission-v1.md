@@ -211,8 +211,9 @@
 ### 6.1 DROP 表清单（不可逆 · 需 PO 显式 `go apply`）
 
 ```sql
--- 前置：全仓已无对以下三表的任何读/写（grep 全 token + 生产零访问复核）
--- 且 §9 归档动作（若 PO 批）已完成：CTS 8 周 snapshots(含 raw_response) + 102 queries 已导出。
+-- 前置1（PO 已定，硬前置）：§9.3 归档已完成——CTS 8 周 snapshots(含 raw_response) + 102 queries
+--   已导出成 JSON 存 docs/clients/cts/。未归档不许 DROP。
+-- 前置2：全仓已无对以下三表的任何读/写（grep 全 token + 生产零访问复核）。
 DROP TABLE IF EXISTS ai_visibility_snapshots;
 DROP TABLE IF EXISTS ai_visibility_runs;
 DROP TABLE IF EXISTS ai_visibility_queries;
@@ -249,7 +250,7 @@ DROP TABLE IF EXISTS ai_visibility_queries;
 9. 组 I：`/clients/[id]/reports/monthly` 是**零调用方死端点 → DELETE**，别当 C 端交付物；活的是 FDE 看板那套；portal 月报读的是组 F。
 10. §4 各组补「连带要改的测试文件」（topic-selector / ai-visibility-collector / error-messages / validators / auto-fetch-ai-visibility / goal-current-value-refresh），避免 PR 一提交 test 闸红、分不清预期还是回归。
 
-**未闭合发现（随真删 PR 处理）**：§9.1 归因断供的最终处置（M1 补写路径 vs ROADMAP 登记+告警）、§9.2 living query set 设计、§9.3 归档是否执行——三项均待 PO 决策，本轮只登记不动手。
+**未闭合发现（随真删 PR 处理）**：§9.1 归因断供的最终处置（M1 补写路径 vs ROADMAP 登记+告警）、§9.2 living query set 设计——两项待 PO 决策，本轮只登记不动手。**§9.3 归档已由 PO 拍板：归档再删、归档是 DROP 的硬前置**（不再是待决项）。
 
 ---
 
@@ -265,9 +266,9 @@ ai-tracker 退役后**没有任何东西再往 `flywheel_metrics` 写 `geo.query
 
 张骞「边发现边追加高信号问题」在 M1 的「冻结不可变 query-set」下无对应形态。**显式登记进 P31.X.4**：M1 新增可受控追加、且与冻结基线隔离并保留 lineage 的 living query set，否则组 J 重接无落点、发现流失能。
 
-### 9.3 🟢 DROP 前归档（魏征强烈建议，PO 待决策）
+### 9.3 ✅ DROP 前归档（PO 2026-08-19 **已定：归档再删，硬前置**）
 
-判决「ME 未推广、无需保护存量」成立，但从挑刺角度，DROP 前值得**近零成本**导出留档：
+**PO 已拍板：DROP 三张表前必须先归档，未归档不许 DROP**（归档 = DROP 的硬前置条件，不是可选项）。导出对象：
 - CTS **8 周 `ai_visibility_snapshots`**——**含各引擎原始回答 `raw_response`，不可再生**，是唯一的历史对照语料；
 - CTS **102 条 `ai_visibility_queries`**——司马徽发现的高信号问题，可**直接当组 J / §9.2 living query set 的 M1 种子**，补上被删能力的缺口。
-- **动作**：DROP 前导出成 JSON 存 `docs/clients/cts/`（只读留档，不进代码路径）。**成本近零，收益是历史对照 + M1 种子。是否执行由 PO 定。**
+- **动作**：DROP 前导出成 JSON 存 `docs/clients/cts/`（只读留档，不进代码路径）。这一步进 DROP PR 的前置检查清单——**导出文件不在 `docs/clients/cts/` 就不许跑 DROP**。
