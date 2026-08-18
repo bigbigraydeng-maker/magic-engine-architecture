@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   storeTokens:       vi.fn(),
   encryptToken:      vi.fn((s: string) => `enc:${s}`),
   listGa4Properties: vi.fn(),
+  setGa4Property:    vi.fn(),
   requireDashboardClientAccess: vi.fn(),
   upsertCalls:       [] as Array<{ table: string; row: unknown; opts?: unknown }>,
   clientConnectorsExisting: null as { status: string; config: Record<string, unknown> | null } | null,
@@ -37,6 +38,16 @@ vi.mock('@/lib/platform-oauth/vocabulary', async (importOriginal) => {
 
 vi.mock('@/lib/ga4/admin', () => ({
   listGa4Properties: mocks.listGa4Properties,
+}))
+
+// setGa4Property() has its own full unit-test coverage in
+// src/lib/ga4/__tests__/property.test.ts (verification, clobber-prevention,
+// error-status writes). This file only needs to prove the callback decides
+// CORRECTLY *when* to call it — not re-exercise its internals — so it's
+// mocked here rather than left to hit the real (unmocked) Google/Supabase
+// calls underneath verifyGa4PropertyAccess().
+vi.mock('@/lib/ga4/property', () => ({
+  setGa4Property: mocks.setGa4Property,
 }))
 
 vi.mock('@/lib/supabase', () => ({
@@ -94,6 +105,7 @@ beforeEach(() => {
   mocks.fetchGoogleEmail.mockResolvedValue('owner@example.com')
   mocks.storeTokens.mockResolvedValue(undefined)
   mocks.listGa4Properties.mockResolvedValue({ ok: true, properties: [] })
+  mocks.setGa4Property.mockResolvedValue({ ok: true, status: 'connected', propertyId: '123456789' })
   mocks.requireDashboardClientAccess.mockResolvedValue(adminAccess())
 })
 
@@ -166,29 +178,34 @@ describe('GET /api/auth/google/callback', () => {
     })
   })
 
-  describe('GA4 resolution — real failure vs. genuinely no properties (spec §2.6)', () => {
-    it('auto-connects the first property when the account has exactly one', async () => {
+  describe('GA4 resolution (#1052 state invariant — PM Gate: OAuth active ≠ GA4 connected; only setGa4Property() may ever write status=connected)', () => {
+    it('calls the unified setGa4Property() — never writes client_connectors.ga4 directly — when exactly one candidate and no existing connector row', async () => {
       mocks.listGa4Properties.mockResolvedValue({
         ok: true,
         properties: [{ property: 'properties/123456789', displayName: 'My Website' }],
       })
+      mocks.clientConnectorsExisting = null   // no prior ga4 row — nothing to clobber
 
       await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
 
-      const ga4Row = mocks.upsertCalls.find(
+      // OAuth token itself is always stored, independent of the connector decision.
+      const ga4TokenRow = mocks.upsertCalls.find(
         (c) => c.table === 'platform_oauth_connections' && (c.row as { provider: string }).provider === 'google_ga4',
       )
-      expect(ga4Row).toBeDefined()
-      expect((ga4Row!.row as { account_id: string }).account_id).toBe('properties/123456789')
+      expect(ga4TokenRow).toBeDefined()
+      expect((ga4TokenRow!.row as { account_id: string }).account_id).toBe('properties/123456789')
 
-      const ga4Connector = mocks.upsertCalls.find(
+      // The callback must delegate to setGa4Property() — the only function
+      // allowed to verify-then-write status='connected' — never upsert
+      // client_connectors.ga4 itself.
+      expect(mocks.setGa4Property).toHaveBeenCalledWith(CLIENT_ID, 'properties/123456789')
+      const ga4ConnectorDirectWrite = mocks.upsertCalls.find(
         (c) => c.table === 'client_connectors' && (c.row as { anchor: string }).anchor === 'ga4',
       )
-      expect(ga4Connector).toBeDefined()
-      expect((ga4Connector!.row as { status: string }).status).toBe('connected')
+      expect(ga4ConnectorDirectWrite).toBeUndefined()
     })
 
-    it('takes the first property when several are available (MVP, same simplification as GBP)', async () => {
+    it('does NOT auto-select when several properties are available — no call to setGa4Property, user must pick via the settings page', async () => {
       mocks.listGa4Properties.mockResolvedValue({
         ok: true,
         properties: [
@@ -196,13 +213,59 @@ describe('GET /api/auth/google/callback', () => {
           { property: 'properties/222', displayName: 'Site B' },
         ],
       })
+      mocks.clientConnectorsExisting = null
 
       await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
 
-      const ga4Row = mocks.upsertCalls.find(
+      // The token is still stored so the settings page's picker has something to work with...
+      const ga4TokenRow = mocks.upsertCalls.find(
         (c) => c.table === 'platform_oauth_connections' && (c.row as { provider: string }).provider === 'google_ga4',
       )
-      expect((ga4Row!.row as { account_id: string }).account_id).toBe('properties/111')
+      expect(ga4TokenRow).toBeDefined()
+      // ...but nobody gets auto-picked. Property discovered ≠ Property selected.
+      expect(mocks.setGa4Property).not.toHaveBeenCalled()
+    })
+
+    it('does NOT call setGa4Property when a connected connector already exists — must not clobber a working, human-verified connection', async () => {
+      mocks.listGa4Properties.mockResolvedValue({
+        ok: true,
+        properties: [{ property: 'properties/999999999', displayName: 'A Different Property' }],
+      })
+      mocks.clientConnectorsExisting = { status: 'connected', config: { property_id: '123456789' } }
+
+      await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+      expect(mocks.setGa4Property).not.toHaveBeenCalled()
+    })
+
+    it('does NOT call setGa4Property when an error connector already exists — a re-auth must not silently flip a diagnosed failure back to connected', async () => {
+      mocks.listGa4Properties.mockResolvedValue({
+        ok: true,
+        properties: [{ property: 'properties/123456789', displayName: 'My Website' }],
+      })
+      mocks.clientConnectorsExisting = {
+        status: 'error',
+        config: { property_id: '123456789', error_reason: 'permission_denied' },
+      }
+
+      await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+      expect(mocks.setGa4Property).not.toHaveBeenCalled()
+    })
+
+    it('respects an existing connector regardless of where the newly-discovered property sorts in the list — selection is not order-dependent', async () => {
+      // A human previously picked '999' (now connected). This re-auth's Admin
+      // API happens to return '111' first — list order must never override
+      // what was explicitly chosen.
+      mocks.listGa4Properties.mockResolvedValue({
+        ok: true,
+        properties: [{ property: 'properties/111', displayName: 'Site A' }],
+      })
+      mocks.clientConnectorsExisting = { status: 'connected', config: { property_id: '999' } }
+
+      await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+      expect(mocks.setGa4Property).not.toHaveBeenCalled()
     })
 
     it('writes NOTHING for GA4 when the account genuinely has zero properties — not an error', async () => {
@@ -218,9 +281,10 @@ describe('GET /api/auth/google/callback', () => {
         (c) => c.table === 'platform_oauth_connections' && (c.row as { provider: string }).provider === 'google_ga4',
       )
       expect(ga4Row).toBeUndefined()
+      expect(mocks.setGa4Property).not.toHaveBeenCalled()
     })
 
-    it('writes NOTHING for GA4 when the Admin API call genuinely fails — must not be conflated with "no properties"', async () => {
+    it('writes NOTHING for GA4 — and does not touch the already-saved GSC connection — when the Admin API call genuinely fails', async () => {
       mocks.listGa4Properties.mockResolvedValue({ ok: false, reason: 'api_failed' })
       const consoleErr = vi.spyOn(console, 'error').mockImplementation(() => {})
 
@@ -230,8 +294,21 @@ describe('GET /api/auth/google/callback', () => {
         (c) => c.table === 'platform_oauth_connections' && (c.row as { provider: string }).provider === 'google_ga4',
       )
       expect(ga4Row).toBeUndefined()
+      expect(mocks.setGa4Property).not.toHaveBeenCalled()
       // Failure must be logged loudly, not silently treated as "customer has no GA4"
       expect(consoleErr).toHaveBeenCalledWith(expect.stringContaining('GA4 property list failed'))
+
+      // The GSC side of this same OAuth callback (already executed earlier in
+      // the handler) is completely independent — a GA4 Admin API outage must
+      // not degrade the GSC connection this same request just saved.
+      const gscTokenRow = mocks.upsertCalls.find(
+        (c) => c.table === 'platform_oauth_connections' && (c.row as { provider: string }).provider === 'google_gsc',
+      )
+      const gscConnectorRow = mocks.upsertCalls.find(
+        (c) => c.table === 'client_connectors' && (c.row as { anchor: string }).anchor === 'gsc',
+      )
+      expect(gscTokenRow).toBeDefined()
+      expect(gscConnectorRow).toBeDefined()
     })
   })
 

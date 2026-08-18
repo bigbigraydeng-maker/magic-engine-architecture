@@ -24,7 +24,19 @@ import { startAdvancedDiscovery } from '@/lib/zhangqian/start-advanced-discovery
 // ../../status/route.ts. `anchor` is a path param written straight into
 // client_connectors, so it is whitelisted here to keep junk rows out of the
 // table (the DB column has no CHECK constraint).
-const VALID_ANCHORS = new Set(['gsc', 'google-ads', 'gbp', 'meta-ads', 'reviews', 'ga4', 'publer', 'social'])
+//
+// 2026-08-18 (#1052 GA4 connector state-invariant fix): 'ga4' is
+// deliberately EXCLUDED — this endpoint upserts status='connected'
+// unconditionally with whatever config the caller sends, no verification.
+// That's the exact bug #1052 fixed for GA4 (a bad/unauthorized property_id
+// could get marked 'connected', or silently clobber a working connector).
+// GA4 has exactly one legitimate write path now: setGa4Property() (called
+// from POST/PATCH /api/clients/[id]/ga4-properties, and from the OAuth
+// callback's narrow single-candidate auto-connect case), which always
+// verifies live GA4 Data API access before ever writing 'connected'. No
+// other anchor currently needs that guarantee — see the explicit 400 below
+// if this ever gets called with anchor=ga4 again.
+const VALID_ANCHORS = new Set(['gsc', 'google-ads', 'gbp', 'meta-ads', 'reviews', 'publer', 'social'])
 
 // Anchors that unlock advanced discovery when connected.
 const ADVANCED_DISCOVERY_TRIGGERS = new Set(['meta-ads', 'gbp', 'gsc', 'google-ads'])
@@ -37,6 +49,17 @@ export async function POST(
   const access = await requireOnboardingClientAccess(clientId)
   if (!access.ok) {
     return NextResponse.json({ success: false, error: access.error }, { status: access.status })
+  }
+
+  if (anchor === 'ga4') {
+    return NextResponse.json(
+      {
+        success: false,
+        code:    'GA4_REQUIRES_PROPERTY_VERIFICATION',
+        error:   '这个连接器必须先验证才能标记"已连接"。用 GA4 Property 专属流程（/api/clients/[id]/ga4-properties）。',
+      },
+      { status: 400 },
+    )
   }
 
   if (!VALID_ANCHORS.has(anchor)) {
