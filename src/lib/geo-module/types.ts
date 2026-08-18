@@ -18,8 +18,44 @@ import type { GrowthMaybeUnknown } from '@/lib/growth'
 export const GEO_M1_RULE_VERSION = 'geo-module/m1/v1'
 export type GeoM1RuleVersion = typeof GEO_M1_RULE_VERSION
 
-/** 规范实体（M1 §1）。别名注册表当前**为空**，v1 不许推断任何别名。 */
-export const GEO_CANONICAL_ENTITY = 'Roman Hu'
+/**
+ * 客户/实体级 GEO 解释语义（Roman + Magic Engine 两个真实场景已证明不应存在于 shared runtime 的四组数据）。
+ *
+ * 🔴 **本 profile 是 required input，不允许 shared runtime 静默默认 Roman**。
+ *    调用方必须显式构造 —— Roman 调用方传 Roman profile，Magic Engine 调用方传 ME profile。
+ *    runtime 校验器（`validateEntityProfile`）在每次进入 pipeline / interpretObservation 前 fail-closed 检查。
+ *
+ * 🔴 v1 只泛化两个真实场景已证明可复用的部分。**不做**行业分层、不做 policy 引擎、不做 competitor 单独契约。
+ *    `disambiguationAnchors` 是单一字段：`real estate / realtor / realty / ray white` 在当前 M1 消歧判据里
+ *    走的是同一 `containsAny` 分支，行为完全一致，不拆。
+ */
+export interface GeoEntityProfile {
+  /**
+   * 对外可读的规范实体展示名。用于：
+   *   1. 实体匹配 token 派生（经 `normalizeText`）
+   *   2. 引用命中 alnum 针派生（经 `alnumOnly`）
+   *   3. Finding / Prescription 文本模板替换
+   *
+   * 🔴 profile 里只留 canonical display name 一个字段；normalized token / domain-embedded needle
+   *    全部由它派生 —— 同事实两处配置正是这次要消除的重复。
+   */
+  readonly canonicalDisplayName: string
+  /**
+   * 消歧行业锚点（M1 §2）。允许空数组 = 「本客户对这类信号显式无认可 evidence」，
+   * fail-closed；不做通用兜底。空 anchors 在当前 `geo && domain` 门下必然 100% 落
+   * `disambiguation_insufficient`，这是**by-design honest defer**，不是缺陷。
+   */
+  readonly disambiguationAnchors: readonly string[]
+  /**
+   * 多词地域锚点（子串命中即可）。允许空。
+   */
+  readonly geoAnchorsMultiword: readonly string[]
+  /**
+   * 短 token 地域锚点（内部编译成 `\b<token>\b` 词边界正则）。
+   * 例如 `["nz"]` / `["au","nz"]`。允许空。
+   */
+  readonly geoAnchorsShortWordBoundary: readonly string[]
+}
 
 /**
  * 机器可读的原因码 —— 为什么某一步落成了 none / indeterminate / not_applicable /

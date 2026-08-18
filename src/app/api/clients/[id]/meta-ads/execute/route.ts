@@ -13,6 +13,7 @@
  * Responses:
  *   200 { success, actionId, campaignId, before, after }
  *   400 missing required fields
+ *   403 campaign_id does not belong to this client's registered ad account (AD-SEC-1)
  *   422 action not supported or campaign has no daily_budget (for adjust_bid)
  *   424 META_SYSTEM_USER_TOKEN not configured
  *   502 Meta Graph API call failed
@@ -25,10 +26,10 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import { getMetaTokenForClient } from '@/lib/meta/token-manager'
 import {
-  getCampaignDetails,
   setCampaignStatus,
   setCampaignDailyBudget,
 } from '@/lib/meta/client'
+import { assertCampaignOwnedByClient } from '@/lib/meta/campaign-ownership'
 import { checkBudgetWithinSafeRange } from '@/lib/meta/guardrails'
 import { ADS_ACTION_TYPE } from '@/lib/flywheel/vocabulary'
 import { resolveAndLogAdsExpectedMetric } from '@/lib/flywheel/ads-expected-metric'
@@ -98,14 +99,14 @@ export async function POST(req: NextRequest, { params }: RouteParams): Promise<N
     )
   }
 
-  // ── Fetch before-state ────────────────────────────────────────────────────
-  const beforeDetails = await getCampaignDetails(campaign_id, accessToken)
-  if (!beforeDetails) {
-    return NextResponse.json(
-      { error: 'Failed to fetch campaign details from Meta. Check campaign ID and token.' },
-      { status: 502 },
-    )
+  // ── 归属校验（AD-SEC-1）：campaign_id 来自请求体，必须核对它真的属于这个
+  // 客户登记的广告账户，不能只信 URL 里的客户身份。局限见 campaign-ownership.ts
+  // 顶部注释——同账户共用的客户之间挡不住，那部分需要账户拆分，不是这里能解的。
+  const ownership = await assertCampaignOwnedByClient(campaign_id, clientId, accessToken)
+  if (!ownership.ok) {
+    return NextResponse.json({ error: ownership.error }, { status: 403 })
   }
+  const beforeDetails = ownership.campaign
 
   const before = {
     status:       beforeDetails.status,
