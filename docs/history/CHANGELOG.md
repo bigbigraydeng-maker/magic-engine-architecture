@@ -5,6 +5,18 @@
 
 ---
 
+### 2026-08-18（`client_connectors` 的 RLS 源码模板补回 `TO service_role` —— PR [#1071](https://github.com/bigbigraydeng-maker/magic-engine/pull/1071)）
+
+**起因**：例行代码复审时发现 `20260519000001_client_connectors.sql` 建表用的是缺 `TO service_role` 的旧模板——Postgres 里 `CREATE POLICY ... FOR ALL USING (true)` 不写 TO 子句等于 `TO PUBLIC`，含 `anon`。这正是 2026-08-03 那次「118 条策略对匿名访客敞开」事故（见 [DECISIONS.md](../DECISIONS.md)）的同一根因。
+
+**核实结论**：不是活的漏洞。`client_connectors` 建于 05-19，早于 08-03 那次批量收紧扫描（`20260803020000`，用动态 SQL 扫了 public schema 下所有匹配策略），PM 用只读查询确认生产现状是 `roles={service_role}`，早就被那次扫描一并修复了。问题只在**源码**——照这个文件从零重建这张表会重新踩坑。
+
+**做的事**：新增 `20260818000001_fix_client_connectors_rls_service_role.sql`，用 `ALTER POLICY ... TO service_role`（跟 08-03 那次同一手法，不 DROP 再 CREATE，无表裸奔窗口）把源码模板改对。已过子牙（架构/安全）+ 魏征（代码）两轮复审，PM 在生产手工 apply 确认（幂等空操作）。
+
+**顺手查出**：全仓还有约 44 个迁移文件、约 50 张表带同款旧模板，全部早于 08-03、大概率都已被那次扫描一并修复，08-03 之后没有再犯。这堆源码本身值不值得逐个补（收益低、纯卫生），以及要不要加一道 CI 检查防止未来复制这个坏模板，留给后续决定。
+
+---
+
 ### 2026-08-17（WP05 GEO Module v1 上线 —— Roman AI 可见度首个诊断可读出）
 
 **发生了什么**：把 Roman 一个月前测出来的 GEO 基线（AI 答案样本），第一次真的读成「有支柱、有严重度、有处方」的诊断。之前只有原始答案 + 引用覆盖率，看不出「AI 是不是把 Roman 作为**人**在答案里提出来」。
