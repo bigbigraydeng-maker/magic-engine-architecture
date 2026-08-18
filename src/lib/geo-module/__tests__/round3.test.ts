@@ -13,7 +13,7 @@ import { runGeoModule, GeoModuleTenantError } from '../pipeline'
 import type { GeoObservationInterpretation } from '../types'
 import type { GrowthEvidence } from '@/lib/growth'
 import type { PageOptimizationIntent } from '@/lib/page-optimization'
-import { makeObservation, makeEvidence, romanLedgerPages, ROMAN_CLIENT_ID, ROMAN_ENTITY_PROFILE } from './fixtures'
+import { makeObservation, makeEvidence, romanLedgerPages, ROMAN_CLIENT_ID, ROMAN_ENTITY_PROFILE, ROMAN_BATCH_ID } from './fixtures'
 
 const KNOWN_Q = { known: true, value: 'who should i hire to sell my house?' } as const
 
@@ -220,6 +220,7 @@ describe('无可见度缺口 → 不产出 finding，pipeline no_gap', () => {
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://romanhu.com/about', intents: [] },
+      verification: { baselineBatchId: ROMAN_BATCH_ID },
     })
     expect(hasVisibilityGap(out.chain.coverage)).toBe(false)
     expect(out.chain.finding).toBeNull()
@@ -255,6 +256,7 @@ describe('无可见度缺口 → 不产出 finding，pipeline no_gap', () => {
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://romanhu.com/about', intents: [] },
+      verification: { baselineBatchId: ROMAN_BATCH_ID },
     })
     // 语义前提：提及 100%、正向推荐 < interpretable —— 正是「仅推荐缺口」场景。
     expect(out.chain.coverage.interpretableQueries).toBe(2)
@@ -307,6 +309,7 @@ describe('无可见度缺口 → 不产出 finding，pipeline no_gap', () => {
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://romanhu.com/about', intents: [] },
+      verification: { baselineBatchId: ROMAN_BATCH_ID },
     })
     expect(out.chain.finding).not.toBeNull()
   })
@@ -324,7 +327,7 @@ describe('重复字段意图 → 拒', () => {
       clientId: ROMAN_CLIENT_ID,
       resolvedPageUrl: 'https://romanhu.com/about',
       intents,
-      verification: buildQualifiedMentionVerification(),
+      verification: buildQualifiedMentionVerification({ baselineBatchId: ROMAN_BATCH_ID }),
     })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.reason).toBe('duplicate_field_intent')
@@ -349,6 +352,7 @@ describe('证据↔观测配对（同租户内也校验）', () => {
         brandAliases: [],
         ledgerPages: romanLedgerPages(),
         target: { pageUrl: 'https://romanhu.com/about', intents: [] },
+        verification: { baselineBatchId: ROMAN_BATCH_ID },
       }),
     ).toThrow(GeoModuleTenantError)
   })

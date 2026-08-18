@@ -54,8 +54,8 @@ export {
 
 export {
   buildQualifiedMentionVerification,
-  ROMAN_BASELINE_BATCH_ID,
   DEFAULT_VERIFICATION_WINDOW_DAYS,
+  GeoBaselineRefError,
   type BuildVerificationInput,
 } from './verification'
 

@@ -12,8 +12,11 @@
 
 import { describe, expect, it } from 'vitest'
 import { interpretObservation, GeoEntityProfileError } from '../m1'
+import { buildPrescription } from '../prescription'
+import { buildQualifiedMentionVerification, GeoBaselineRefError } from '../verification'
 import type { GeoEntityProfile } from '../types'
-import { makeObservation, makeEvidence } from './fixtures'
+import type { GrowthFinding } from '@/lib/growth'
+import { makeObservation, makeEvidence, ROMAN_BATCH_ID } from './fixtures'
 
 /**
  * Magic Engine entity profile —— 每一项均来自 #1049 Entity Definition v1 approved fact
@@ -168,5 +171,96 @@ describe('GeoEntityProfile — fail-closed contract', () => {
       geoAnchorsShortWordBoundary: [''],
     }
     expect(() => interpretObservation({ ...base, entityProfile: bad })).toThrow(GeoEntityProfileError)
+  })
+})
+
+// ── 第二轮：Prescription / Verification Roman semantic residue cleanup ──
+// Magic Engine Customer Zero 真实运行生产了：`让 AI 答案真正把 Magic Engine 作为人 / 选项提及`
+// 和 `#883 基线批次 <Magic Engine batch id>` —— 这两段本轮 patch 后不应再出现。
+
+const FAKE_FINDING: GrowthFinding = {
+  pillar: 'ai_visibility',
+  severity: 'medium',
+  statement: 'stub finding for prescription text regression',
+  evidence: [
+    {
+      source: { kind: 'test', sourceId: 'fixture-1' },
+      observedAt: '2026-08-18T00:00:00.000Z',
+      rawLocator: { known: false, reason: 'not_recorded_by_source' },
+      interpretation: { known: false, reason: 'not_recorded_by_source' },
+      confidence: { known: false, reason: 'not_recorded_by_source' },
+    },
+  ],
+}
+
+describe('Prescription text — no "真人 Roman" semantics for brand entity', () => {
+  it('Roman prescription 保持语义自然（含 Roman 名字，不含 "作为人"）', () => {
+    const p = buildPrescription(FAKE_FINDING, 'Roman Hu')
+    const notDoingText = p.notDoing.map((x) => x.statement).join(' ')
+    // 中性 notDoing 文本不涉及 "姓氏" / "雇主"
+    expect(notDoingText).not.toContain('姓氏')
+    expect(notDoingText).not.toContain('雇主')
+    // Roman 名字必须自然出现在 orderingRationale
+    expect(p.orderingRationale).toContain('Roman Hu')
+    // Roman 版本不能再自诩「作为人 / 选项」——已改中性表达
+    expect(p.orderingRationale).not.toContain('作为人 / 选项')
+    // 应保留「作为相关选项明确提及」新中性表达
+    expect(p.orderingRationale).toContain('作为相关选项明确提及')
+  })
+
+  it('Magic Engine prescription 不含 "作为人" / "姓氏" / "雇主" 等真人语义', () => {
+    const p = buildPrescription(FAKE_FINDING, 'Magic Engine')
+    const notDoingText = p.notDoing.map((x) => x.statement).join(' ')
+    expect(notDoingText).not.toContain('作为人')
+    expect(notDoingText).not.toContain('姓氏')
+    expect(notDoingText).not.toContain('雇主')
+    expect(notDoingText).not.toContain('#883')
+    expect(p.orderingRationale).not.toContain('作为人')
+    expect(p.orderingRationale).toContain('Magic Engine')
+    expect(p.orderingRationale).toContain('作为相关选项明确提及')
+  })
+
+  it('notDoing 保留「禁止凭空建立身份关联」的原语义（中性表达）', () => {
+    const p = buildPrescription(FAKE_FINDING, 'Magic Engine')
+    const notDoingText = p.notDoing.map((x) => x.statement).join(' ')
+    expect(notDoingText).toContain('别名')
+    expect(notDoingText).toContain('身份关联')
+    expect(notDoingText).toContain('域名归属')
+    expect(notDoingText).toContain('组织关系')
+  })
+
+  it('notDoing 「不回写基线」不再带 #883 issue 号', () => {
+    const p = buildPrescription(FAKE_FINDING, 'Magic Engine')
+    const notDoingText = p.notDoing.map((x) => x.statement).join(' ')
+    expect(notDoingText).not.toContain('#883')
+    expect(notDoingText).toContain('基线观测')
+  })
+})
+
+describe('Verification — no Roman hidden default / no #883 in baseline text', () => {
+  it('缺 baselineBatchId → fail closed (GeoBaselineRefError)', () => {
+    // @ts-expect-error 故意漏传 —— runtime 校验器不能默默回 Roman
+    expect(() => buildQualifiedMentionVerification({})).toThrow(GeoBaselineRefError)
+  })
+
+  it('baselineBatchId 空串 → fail closed', () => {
+    expect(() => buildQualifiedMentionVerification({ baselineBatchId: '' })).toThrow(GeoBaselineRefError)
+  })
+
+  it('Magic Engine baseline 显式传入 → baseline 文本不含 Roman / #883', () => {
+    const v = buildQualifiedMentionVerification({
+      baselineBatchId: 'a2f09f81-ab65-4a25-b323-567fd70f8dff',
+    })
+    expect(v.baseline).not.toContain('Roman')
+    expect(v.baseline).not.toContain('#883')
+    // 应含中性表达 + 传入的 batch id
+    expect(v.baseline).toContain('基线批次 a2f09f81-ab65-4a25-b323-567fd70f8dff')
+    expect(v.baseline).toContain('geo-module/m1/v1')
+  })
+
+  it('Roman baseline 显式传入 → baseline 文本仍自然（含 batch id，不含 #883）', () => {
+    const v = buildQualifiedMentionVerification({ baselineBatchId: ROMAN_BATCH_ID })
+    expect(v.baseline).toContain(ROMAN_BATCH_ID)
+    expect(v.baseline).not.toContain('#883')
   })
 })

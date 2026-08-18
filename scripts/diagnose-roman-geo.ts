@@ -217,6 +217,7 @@ function main(): void {
         brandAliases: [], // 权威注册表当前为空（M1 §1）
         ledgerPages,
         target: { pageUrl: targetPageUrl, intents: [] },
+        verification: { baselineBatchId: ROMAN_BATCH_ID }, // Roman baseline 显式传（shared verification 无客户级默认）
       })
 
       // ② 每观测 M1 判定

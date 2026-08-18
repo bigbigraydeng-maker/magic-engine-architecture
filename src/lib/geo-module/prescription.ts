@@ -24,7 +24,7 @@ export function buildPrescription(finding: GrowthFinding, canonicalDisplayName: 
     covers: [finding],
     notDoing: [
       {
-        statement: '不基于未判定证据推断任何别名、队名、姓氏单称、域名或雇主关联',
+        statement: '不基于未判定证据推断任何别名、身份关联、域名归属或组织关系',
         reason: `${GEO_M1_RULE_VERSION} §1：brand_aliases 为空，禁止别名推断与模糊匹配`,
       },
       {
@@ -32,7 +32,7 @@ export function buildPrescription(finding: GrowthFinding, canonicalDisplayName: 
         reason: `${GEO_M1_RULE_VERSION} §7：引用覆盖不是提及 / 推荐覆盖的代理`,
       },
       {
-        statement: '不复测、不改动 #883 的观测 / 证据 / 引用 / 解析身份',
+        statement: '不回写或改动基线观测 / 证据 / 引用 / 解析身份',
         reason: `${GEO_M1_RULE_VERSION} §6：派生结论不得回写基线`,
       },
       {
@@ -42,6 +42,6 @@ export function buildPrescription(finding: GrowthFinding, canonicalDisplayName: 
     ],
     orderingRationale:
       `AI 可见度是 ${canonicalDisplayName} 首次诊断里证据最直接的一柱：基线显示答案普遍带引用却未建立正文合格提及，` +
-      `先补「让 AI 答案真正把 ${canonicalDisplayName} 作为人 / 选项提及」的页面可答性，优先级高于其它未被证据支撑的动作。`,
+      `先补「让 AI 答案真正把 ${canonicalDisplayName} 作为相关选项明确提及」的页面可答性，优先级高于其它未被证据支撑的动作。`,
   }
 }

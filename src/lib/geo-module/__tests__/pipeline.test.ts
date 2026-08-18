@@ -20,7 +20,7 @@ import {
 import { GEO_QUALIFIED_MENTION_FINDING_REF } from '../finding'
 import { buildQualifiedMentionVerification } from '../verification'
 import type { PageOptimizationIntent } from '@/lib/page-optimization'
-import { makeObservation, makeEvidence, ownedCitation, romanLedgerPages, ROMAN_CLIENT_ID, ROMAN_ENTITY_PROFILE } from './fixtures'
+import { makeObservation, makeEvidence, ownedCitation, romanLedgerPages, ROMAN_CLIENT_ID, ROMAN_ENTITY_PROFILE, ROMAN_BATCH_ID } from './fixtures'
 
 const NO_QUESTION = { known: false, reason: 'not_recorded_by_source' } as const
 
@@ -54,6 +54,7 @@ describe('端到端：Roman 基线证据 + 台账页 → 合法 PageOptimization
     brandAliases: [],
     ledgerPages: romanLedgerPages(),
     target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },
+    verification: { baselineBatchId: ROMAN_BATCH_ID },
   })
 
   it('产出 ok=true 且请求合法', () => {
@@ -107,6 +108,7 @@ describe('诚实 defer', () => {
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },
+      verification: { baselineBatchId: ROMAN_BATCH_ID },
     })
     expect(out.ok).toBe(false)
     if (!out.ok && out.disposition === 'defer') {
@@ -127,6 +129,7 @@ describe('诚实 defer', () => {
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://not-in-ledger.example/x', intents: groundedIntents },
+      verification: { baselineBatchId: ROMAN_BATCH_ID },
     })
     expect(out.ok).toBe(false)
     if (!out.ok && out.disposition === 'defer') {
@@ -147,6 +150,7 @@ describe('诚实 defer', () => {
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://romanhu.com/about', intents: [] },
+      verification: { baselineBatchId: ROMAN_BATCH_ID },
     })
     expect(out.ok).toBe(false)
     if (!out.ok && out.disposition === 'defer') expect(out.reason).toBe('unattributable_proposed_value')
@@ -170,6 +174,7 @@ describe('读侧租户隔离（fail-closed）', () => {
         brandAliases: [],
         ledgerPages: romanLedgerPages(),
         target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },
+        verification: { baselineBatchId: ROMAN_BATCH_ID },
       }),
     ).toThrow(GeoModuleTenantError)
   })
@@ -189,6 +194,7 @@ describe('读侧租户隔离（fail-closed）', () => {
         brandAliases: [],
         ledgerPages: romanLedgerPages(),
         target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },
+        verification: { baselineBatchId: ROMAN_BATCH_ID },
       }),
     ).toThrow(GeoModuleTenantError)
   })
@@ -201,6 +207,7 @@ describe('读侧租户隔离（fail-closed）', () => {
       brandAliases: [],
       ledgerPages: [{ client_id: 'someone-else', url: 'https://romanhu.com/about' }],
       target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },
+      verification: { baselineBatchId: ROMAN_BATCH_ID },
     })
     expect(out.ok).toBe(false)
     if (!out.ok && out.disposition === 'defer') expect(out.reason).toBe('unattributable_page')
@@ -227,6 +234,7 @@ describe('变异证据：故意破坏每条不变量，断言校验器变红', (
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },
+      verification: { baselineBatchId: ROMAN_BATCH_ID },
     })
     if (!base.ok) throw new Error('expected ok')
     const cand = base.chain.candidate as GrowthActionCandidate
@@ -238,7 +246,7 @@ describe('变异证据：故意破坏每条不变量，断言校验器变红', (
   })
 
   it('not_comparable 只能进 indeterminate，不进 failure（判据文本自带约束）', () => {
-    const v = buildQualifiedMentionVerification()
+    const v = buildQualifiedMentionVerification({ baselineBatchId: ROMAN_BATCH_ID })
     expect(v.criteria.indeterminate).toContain('not_comparable')
     expect(v.criteria.failure).not.toContain('not_comparable')
   })
@@ -251,6 +259,7 @@ describe('变异证据：故意破坏每条不变量，断言校验器变红', (
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },
+      verification: { baselineBatchId: ROMAN_BATCH_ID },
     })
     if (!out.ok) throw new Error('expected ok')
     expect(out.chain.coverage.qualifiedMentionQueries).toBe(0)

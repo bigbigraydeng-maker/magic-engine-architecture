@@ -63,7 +63,11 @@ export interface GeoModulePipelineInput {
     readonly pageUrl: string
     readonly intents: readonly PageOptimizationIntent[]
   }
-  readonly verification?: BuildVerificationInput
+  /**
+   * 验证定义参数 —— **必填**（fail-closed）。shared verification 不再默认任何客户 baseline，
+   * 调用方必须显式提供 `baselineBatchId`。Roman 调用方传 Roman batch，ME 调用方传 ME batch。
+   */
+  readonly verification: BuildVerificationInput
 }
 
 /** 五段链的中间产物 —— 无论成功或 defer 都尽量带全，供调用方审阅与 defer 归因。 */
