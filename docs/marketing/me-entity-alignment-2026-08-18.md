@@ -59,9 +59,9 @@ Applied across EN pages (`ai-search.html`, `ai-training.html`, `terms.html`, `pr
 
 `website/about.html`: a new `<p class="lead">` inserted directly under the `<h1>About Magic Engine</h1>` carrying the frozen #1049 canonical description verbatim. Existing "Who we are" copy at L72-77 is **untouched** (PM §B.9: "不要顺带重写其他 positioning").
 
-`website/cn/about.html`: **CN canonical text NOT added in this PR** — PM's #1049 froze the EN string; translating it to CN would be an act of positioning language creation. Flagged for PM confirmation before deploy (see PR body checklist).
+`website/cn/about.html`: PM approved a CN canonical description on 2026-08-19 (see §9.6). This is now applied as a plain-text `<p class="lead">` under `<h1>关于 Magic Engine</h1>` — the CN About page uses no `data-en`/`data-zh` attributes anywhere, so it follows the page's own convention.
 
-The `data-zh` attribute on the new EN lead paragraph is temporarily populated with the EN string as a translation placeholder — PM to confirm the CN translation before merge.
+The `data-zh` attribute on `website/about.html`'s lead paragraph, which round 1 temporarily populated with the EN string, now carries the same PM-frozen CN string. `data-en` and the rendered EN text are unchanged. See §9.6 for the clause-by-clause EN/CN semantic-equivalence check.
 
 ### 3.4 About page entity block (about.html + cn/about.html)
 
@@ -116,7 +116,9 @@ Added Entity clarification callouts / notes at the top of each file, without rew
 
 | # | Test | Result |
 |---|---|---|
-| E.1a | `ABC Plus Home Pty Limited` in `website/**` | 0 occurrences (LEGAL REVIEW comment intentionally rewords the reference to keep grep clean) |
+| E.1a | `ABC Plus Home Pty Limited` in `website/**` | 0 occurrences |
+
+**Two independent gates** — round 3 clarification: the **stale-entity scan** greps `website/**` (and, from round 2 onward, `src/**`) for the exact strings of the previous operating entity. The **legal-review gate** is a separate checklist that must be signed off by counsel before Terms/Privacy merge (§9.5). Neither gate substitutes for the other; passing one does not weaken the other. Round 1 tried to keep the two visually decoupled by rewording the historical entity reference inside a LEGAL REVIEW HTML comment — that comment was itself the wrong instrument and has been removed in round 3 (see §10.1). The stale-entity scan checks the exact old strings; the legal-review checklist is verified independently in the PR body and this document, not by grep.
 | E.1b | `ABN 45 674 442 445` in `website/**` | 0 occurrences |
 | E.1c | `Magic Engine by Magic Lab` in `website/**` | 0 occurrences |
 | E.1d | `parentOrganization` in `website/**` | 0 occurrences |
@@ -124,7 +126,10 @@ Added Entity clarification callouts / notes at the top of each file, without rew
 | E.1f | `by Magic Lab` / `由 Magic Lab` anywhere in `website/**` | 0 occurrences |
 | E.2 | EN + CN pages entity line consistency | Single canonical line: `Magic Engine AI Technology Limited · New Zealand · raydeng@magicengine.com.au` |
 | E.3 | JSON-LD blocks parse via `json.loads` | **25/25 valid, 0 failed** |
-| E.4 | Any `"address"` field in JSON-LD or `<address>` element on public site | 0 occurrences |
+| E.4 | Public **street/postal address** on the public site (JSON-LD `address` / `PostalAddress` node, or `<address>` used as a physical address) | **0 occurrences** |
+| E.4a | Any JSON-LD `PostalAddress` node in `website/**` | **0 occurrences** |
+| E.4b | `<address>` HTML element in `website/**` | **0 occurrences** |
+| E.4c | `<address>` HTML element in `src/app/**` used for anything other than a physical street/postal address | 2 occurrences (`src/app/about/page.tsx`, `src/app/privacy/page.tsx`) — both now contain the operator name and the single line `New Zealand` (jurisdiction), not a street address. `<address>` is the correct HTML element for contact information in general (`href="mailto:..."` blocks), so it is retained; removing it purely to satisfy a mis-worded audit assertion would be wrong |
 | E.5 | HTML structural sanity (all files parseable by python `html.parser`) | Passed (see §7 note) |
 | E.6 | `llms.txt` Legal entity section consistent with About + JSON-LD | Yes — all three name `Magic Engine AI Technology Limited` + `New Zealand` + `Ray Deng · Founder` |
 | E.7 | Exact overlap with #1056 | See §2 table — no line conflict, semantic coordination needed on `about.html` Organization JSON-LD union |
@@ -133,8 +138,8 @@ Non-Brisbane mentions retained (correctly — these are customer testimonials / 
 
 ## 7. Notes
 
-- All existing static HTML uses `data-en` / `data-zh` for i18n. The new About canonical `<p>` follows the same pattern; `data-zh` is temporarily populated with the EN string as a translation placeholder, subject to PM approval.
-- The `website/cn/about.html` body is deliberately not enriched with a translated canonical description — see §3.3.
+- `website/about.html` uses `data-en` / `data-zh` for i18n. The About lead paragraph's `data-zh` now carries the PM-frozen CN canonical description (§9.6) — it is no longer a placeholder.
+- `website/cn/about.html` uses no `data-en`/`data-zh` attributes anywhere; the PM-frozen CN canonical description is inserted as plain text under `<h1>`, mirroring that page's own convention.
 - No changes to `website/robots.txt`, `website/sitemap.xml`, `website/app.js`, `website/google-tag.js`, `website/meta-pixel.js`, `scripts/**`.
 - **Revised 2026-08-19 (round 2)**: `src/**` IS now in scope — see §9. The round-1 scan was limited to `website/**` and therefore missed the Next.js app's own public entity pages, which carried the same wrong facts.
 
@@ -200,16 +205,18 @@ Must be answered by counsel before ANY of the Terms/Privacy files merge:
 6. Contract migration effect on customer agreements signed under the previous operating entity.
 7. Whether the previous operating entity must remain named anywhere for continuity of existing contracts.
 
-### 9.6 CN canonical description — RESOLVED by PM 2026-08-19 (option a)
+### 9.6 CN canonical description — APPROVED by PM 2026-08-19
 
-PM froze the CN canonical description and chose option (a), a translation:
+**Status**: PM approved. Applied verbatim in the two places below. This sentence only — no other CN positioning copy has been written, extended, or rewritten.
+
+Frozen CN canonical description:
 
 > Magic Engine 帮助澳大利亚和新西兰的英语及中文团队，在一个平台中提升 SEO、GEO、培训和可上线的执行能力，把诊断转化为清晰可见的实际工作。
 
-Applied in two places, **this sentence only** — no other CN positioning copy was written, extended or rewritten:
+Actual code landing:
 
-- `website/cn/about.html` — new `<p class="lead">` directly under `<h1>关于 Magic Engine</h1>`, mirroring the EN page's structure. The page carries no `data-en`/`data-zh` attributes anywhere, so the paragraph is plain text in the page's own convention.
-- `website/about.html` — the lead paragraph's `data-zh` attribute previously held the EN string as an explicitly temporary placeholder (§7). It now holds the frozen CN string. `data-en` and the rendered EN body text are unchanged.
+- `website/about.html` — the lead paragraph's `data-zh` attribute now carries the frozen CN string. `data-en` and the rendered EN body text are unchanged.
+- `website/cn/about.html` — new plain-text `<p class="lead">` directly under `<h1>关于 Magic Engine</h1>`, mirroring the EN page's structure. This page uses no `data-en`/`data-zh` attributes anywhere, so the paragraph follows the page's own convention.
 
 **Semantic equivalence check** (EN → CN, clause by clause):
 
@@ -225,6 +232,80 @@ Applied in two places, **this sentence only** — no other CN positioning copy w
 No claim exists in one language and not the other. Both strings are PM-frozen; the two nuances above are recorded, not edited.
 
 **Still untranslated on `website/cn/about.html` (pre-existing, out of scope)**: the "Who we are" / "Our name" body paragraphs are still English on the CN page. That predates this PR and is positioning copy, so it is left alone.
+
+## 10. Round 3 (2026-08-19) — closure fixes
+
+Independent review of #1061 flagged nine items. All addressed here; none touch legal wording.
+
+### 10.1 Public HTML must not carry the legal-review comment (P1)
+
+The 4 static Terms/Privacy files (`website/{,cn/}terms.html`, `website/{,cn/}privacy.html`) previously carried a `<!-- LEGAL REVIEW REQUIRED BEFORE MERGE: … -->` block in `<head>`. That comment shipped to viewers whenever the page did — turning a review checklist item into public content. **Removed in all 4 files.**
+
+The Next.js source-file comments at the top of `src/app/terms/page.tsx` and `src/app/privacy/page.tsx` **do not appear** in the build output (verified: `grep -l 'LEGAL REVIEW' .next/server/app/` returns 0 files, both before and after this change). They are slimmed to a pointer at this document, and the full risk list lives in exactly three places: this doc (§5 + §9.5), the PR body, and the PR review checklist. **Removing the public HTML comment is a fact-hygiene fix; it is NOT a claim that legal review has been completed.** Terms/Privacy remain blocked from merge until counsel signs off.
+
+### 10.2 `<address>` element (P2-1)
+
+Round 1's E.4 was worded as "any `<address>` element on public site" — that was a mis-worded assertion, not a legal requirement. The actual claim that must be true is: **no public street/postal address, no `PostalAddress` JSON-LD node, and `<address>` (if used) must not carry a street address**. E.4 has been split (§6) and the mis-worded assertion retired. The 2 `<address>` elements in `src/app/about/page.tsx` and `src/app/privacy/page.tsx` are semantically correct HTML for contact-info blocks; they contain the operator name and the single line "New Zealand" (jurisdiction, not a street), and are retained.
+
+### 10.3 User-facing "Magic Lab administrator" copy (P2-2)
+
+Rewrote the current-product UI copy in **7 files** — every string a signed-in user actually sees. Full whole-repo classification pass done: 0 user-facing `Magic Lab` strings remain. Everything still greppable is one of three deliberately-retained categories, listed in §9.4 (Magic Lab Class the separate brand, the `Magic Lab` client-record name in `supabase/migrations/**` and diagnostic tests, and source-file comments).
+
+Files changed in round 3 for this:
+- `src/app/unauthorized/page.tsx` — "Contact your Magic Lab administrator." → "Contact your Magic Engine administrator."
+- `src/components/auth/FeatureLockGate.tsx` — "A Magic Lab field engineer …" → "A Magic Engine field engineer …" (the `Magic Lab Class` modal reference on L147 is Magic Lab Class the separate brand — retained.)
+- `src/lib/auth/client-access.ts` — "Contact Magic Lab to unlock." → "Contact Magic Engine to unlock."
+- `src/app/dashboard/clients/[id]/messenger/{page.tsx,_components/ReplyBox.tsx}` — "找 Magic Lab 团队 …" → "找 Magic Engine 团队 …"
+- `src/lib/messaging/adapters/messenger.ts` — same
+- `src/lib/mtc/charge.ts` + `src/app/api/clients/[id]/ai-factory/fan-out/route.ts` — "联系 Magic Lab 提升配额" → "联系 Magic Engine 提升配额"
+- `src/app/api/clients/[id]/assets/[assetId]/provenance/route.ts` — "素材确认必须由 Magic Lab 的人来做" → "素材确认必须由 Magic Engine 的人来做"
+
+### 10.4 Organization `@id` for #1056 semantic overlap (P2-3)
+
+`website/index.html` Organization node gains `"@id": "https://magicengine.com.au/#organization"` as its first field after `@type`. Existing fields (`name`, `legalName`, `founder`, `url`, `email`, `areaServed`, `contactPoint`) all retained.
+
+**Coordination note for #1056**: this PR does not import the About-page Organization patch from #1056. When #1056 lands, its About-page `Organization` node **must use the same `@id`**. Two nodes with the same `@id` are the same identity to consumers and their properties merge naturally; two nodes without a shared `@id`, or with different `@id`s, produce two distinct canonical Organization identities in structured data — a bug. Written explicitly into the PR body.
+
+### 10.5 Organization description aligned to canonical (P2-4)
+
+`website/index.html` Organization `description` field is now the frozen EN canonical description verbatim, replacing the earlier product-oriented sentence. There is now **one** canonical description in structured data.
+
+### 10.6 Compact footers unified (P2-5)
+
+All 6 short-form footers (`ai-growth-engine.html`, `industry-solutions.html`, `local-services.html`, `real-estate.html`, `travel.html`, `cn/industry-solutions.html`) now carry the single canonical line:
+
+`© 2026 Magic Engine AI Technology Limited · New Zealand · raydeng@magicengine.com.au`
+
+Previously several appended "Australia & New Zealand" or "Industry solution · X · Australia & New Zealand" as a second span, which — sitting adjacent to the legal-entity name — could be read as a second registered jurisdiction. The old secondary spans (industry / market context) were pure page-audience copy and are dropped from the compact footer; the same information is expressed elsewhere on those pages (nav, hero, sitemap). CN footer carries the same fact.
+
+### 10.7 Dead `.me-sub` CSS removed (P2-6)
+
+`me-sub` was the class on the "by Magic Lab" logo sub-line removed in round 1. Whole-repo scan (`website/**`, `src/**`, `public/**`, all JS) confirmed **0 selector consumers** outside the CSS file itself. Two stylesheet rules removed from `website/styles.css`. Not a behavioural change; a follow-up on round 1.
+
+### 10.8 `llms.txt` narrowed (P2-7)
+
+The prior wording "a company registered in New Zealand" implied an external registration fact we have not verified. Rewritten to the narrower fact PM has actually frozen:
+
+```
+Magic Engine is operated by Magic Engine AI Technology Limited in New Zealand.
+Magic Engine serves customers across Australia and New Zealand.
+Founder: Ray Deng.
+```
+
+No NZ Company Number, NZBN, or other registration identifier added. The canonical description line below it is unchanged.
+
+### 10.9 Why this PR touches `CLAUDE.md` and `ROADMAP.md` (P2-8)
+
+This is an entity-facts-only PR. The two doc edits are not a functional roadmap change:
+
+- **`CLAUDE.md`** is the project-wide instruction sheet every agent reads at session start. Leaving the old "Magic Lab 旗舰产品" phrasing there would guarantee future sessions re-introduce the wrong legal-entity claim into customer-facing outputs on their next fact-generating run. The edit re-anchors the shared fact source; it does not change any rule, workflow, or priority.
+- **`docs/ROADMAP.md`** received a callout at the top preserving the historical "Magic Lab Academy / Magic Lab Class" wording and re-labelling them as `internal working name; not a registered parent entity`. No item added, removed, or reordered.
+
+Recorded in the PR body so future window-owners see this deviation from the usual "don't touch shared docs from a feature branch" rule was intentional and scoped.
+
+### 10.10 Round-1 §5 wording corrected (P2-9)
+
+Round 1's E.1a table cell said the LEGAL REVIEW HTML comment was "intentionally reworded to keep grep clean". That framed the legal-review checklist as a scanner-avoidance artefact — the two gates are supposed to be independent. §5 has been rewritten to state that plainly: the stale-entity scan checks the exact old strings; the legal-review checklist is verified independently; passing one does not weaken the other. Round 3 also removes the underlying LEGAL REVIEW HTML comment (§10.1), so the coupling that provoked the mis-wording no longer exists.
 
 ## 8. Actions NOT performed (per PM directive)
 

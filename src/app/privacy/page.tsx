@@ -1,8 +1,7 @@
-/* LEGAL REVIEW REQUIRED BEFORE MERGE: operating-entity name updated per #1049 Entity Definition v1
- * to Magic Engine AI Technology Limited (New Zealand). Governing law, jurisdiction clause,
- * New Zealand Privacy Act 2020 vs Australian Privacy Principles applicability, Australian Consumer Law
- * reference, cross-border data disclosure, contract migration from the previous operating entity, and
- * NZ Company Number / NZBN display remain UNTOUCHED and require legal counsel review before merge. */
+/* LEGAL REVIEW REQUIRED BEFORE MERGE — see docs/marketing/me-entity-alignment-2026-08-18.md §5 + §9.5.
+ * Operating entity was updated to Magic Engine AI Technology Limited (New Zealand). This source
+ * comment is stripped by the build and never appears in served HTML; the full risk list lives in
+ * the audit doc, the PR body, and the PR review checklist. Do not merge without legal counsel. */
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
