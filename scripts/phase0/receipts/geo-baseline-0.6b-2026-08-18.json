@@ -1,0 +1,25 @@
+{
+  "schema_version": "1",
+  "surface": "geo_measurement",
+  "batch_id": "a2f09f81-ab65-4a25-b323-567fd70f8dff",
+  "query_set_version": "magicengine_geo_baseline_v1",
+  "market": "au",
+  "expected_queries": 18,
+  "completed_queries": 18,
+  "failed_queries": 0,
+  "classification_version": "manual-rules-v1",
+  "classification_categories": [
+    "cited",
+    "recommended",
+    "described",
+    "compared",
+    "not_present"
+  ],
+  "collected_at": "2026-08-17T12:47:37.423+00:00",
+  "evidence_source": "docs/marketing/me-organic-growth-t0-baseline-0.6b-2026-08-18.md §2 (this PR); production Supabase glbdnayojixmexgofbsd: geo_batches.id=a2f09f81-ab65-4a25-b323-567fd70f8dff (status=completed, actual_coverage.succeeded=18, actual_coverage.failed=0, cost_usd=1.0746674999999999), geo_query_sets.id=a6a1b189-3cb9-4c84-aa55-4604e72342df (locked_at=2026-08-17T12:23:40.389974+00:00), geo_observations (batch_id=a2f09f81-ab65-4a25-b323-567fd70f8dff, count=18, outcome_ok=true count=18), client_id=f1d062ca-929e-4b4e-ba6e-84752b748552",
+  "limitations": [
+    "Classification was applied through documented manual rules rather than a frozen executable classifier.",
+    "This receipt independently re-verifies batch-level status and observation counts (18/18 succeeded, 0 failed) via read-only production query on 2026-08-19. It does not independently re-run the per-query cited/recommended/described/compared/not_present classification against each of the 18 raw responses -- those labels are as reported in the PR body/doc, not re-derived by this receipt.",
+    "collected_at is geo_batches.completed_at (the batch's recorded completion timestamp), used as the best available single collection timestamp for the batch; individual per-observation timestamps were not extracted into this receipt."
+  ]
+}
