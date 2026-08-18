@@ -523,6 +523,8 @@ export interface CampaignDetails {
   daily_budget?: string   // Meta returns as string of cents e.g. "5000" = $50.00
   lifetime_budget?: string
   objective?: string
+  /** 裸数字（无 "act_" 前缀）—— 归属校验用（见 campaign-ownership.ts）。 */
+  account_id?: string
 }
 
 /**
@@ -534,7 +536,7 @@ export async function getCampaignDetails(
   accessToken: string,
 ): Promise<CampaignDetails | null> {
   const params = new URLSearchParams({
-    fields: 'id,name,status,daily_budget,lifetime_budget,objective',
+    fields: 'id,name,status,daily_budget,lifetime_budget,objective,account_id',
     access_token: accessToken,
   })
   const url = `${GRAPH_BASE}/${campaignId}?${params.toString()}`

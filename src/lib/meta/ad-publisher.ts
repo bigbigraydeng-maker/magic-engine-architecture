@@ -102,11 +102,16 @@ async function graphDelete(id: string, accessToken: string): Promise<boolean> {
   }
 }
 
+/**
+ * 🔴 城市和国家不能同时塞进 `geo_locations` —— Meta 按并集生效
+ * （`NZ ∪ 北岸10km半径` = 整个 NZ），城市半径形同虚设。给了城市就只用城市，
+ * 不再带国家（2026-08-04 事故：北岸 $1.25M 的房源投给了整个新西兰）。
+ */
 function targetingFor(d: AdDraft): Record<string, unknown> {
-  const geo: Record<string, unknown> = { countries: d.geoCountries }
-  if (d.geoCityKeys && d.geoCityKeys.length > 0) {
-    geo.cities = d.geoCityKeys.map((key) => ({ key, radius: 10, distance_unit: 'kilometer' }))
-  }
+  const geo: Record<string, unknown> =
+    d.geoCityKeys && d.geoCityKeys.length > 0
+      ? { cities: d.geoCityKeys.map((key) => ({ key, radius: 10, distance_unit: 'kilometer' })) }
+      : { countries: d.geoCountries }
   return {
     geo_locations: geo,
     age_min: d.ageMin ?? 25,
