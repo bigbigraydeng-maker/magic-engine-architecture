@@ -4,19 +4,24 @@ import { getAccounts, uploadMediaFromUrl, schedulePost } from '@/lib/publer/clie
 import { getAdapter } from '@/lib/flywheel/adapters/registry'
 import { SOCIAL_ACTION_TYPE } from '@/lib/flywheel/vocabulary'
 import { judgeOutgoingPost, priceGateMessage } from '@/lib/content/price-claim-gate'
+import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import '@/lib/flywheel/adapters/SocialContentAdapter'
 
 // POST /api/publer/create-post
 // 自动化流程用：Airtable approved → webhook → 这里
 // 用 post_id 找最新 ready 素材，自动选第一个匹配平台的 Publer 账号
 //
-// Auth: Bearer ${PUBLER_CREATE_POST_TOKEN}
+// Auth: Bearer ${PUBLER_CREATE_POST_TOKEN}（webhook 调用）**或**登录态对该
+// post 所属客户有权限（dashboard 调用）。
+//
 // P21.J.SEC-2：这条接口至今无鉴权——任何人拿一个 post_id 就能把该客户的
-// 成片发到他的社媒账号。不能像 schedule/draft/[assetId] 那样直接加登录鉴权，
-// 因为这条同时被 Zapier/Airtable webhook 调用（只带 body 的 post_id，没有
-// 会话），加了登录鉴权会当场打断线上自动化。同一个密钥要配进 Zapier/Airtable
-// 那边的 webhook header，这一步需要 PM/知道 Zapier 后台的人动手配一次
-// （代码这边做不了，见交接说明）。
+// 成片发到他的社媒账号。不能只加登录鉴权，因为这条同时被 Zapier/Airtable
+// webhook 调用（只带 body 的 post_id，没有会话）；也不能只加 Bearer 鉴权——
+// dashboard/content 页面「批量发布」也在调这条接口，走的是浏览器会话，不带
+// Bearer（密钥不能下发给浏览器）。所以两条路都留：Bearer 对了直接放行；
+// 没有 Bearer 或对不上，就退回去核对当前登录用户对这条 post 的客户有没有权限。
+// 同一个 Bearer 密钥要配进 Zapier/Airtable 那边的 webhook header，这一步需要
+// PM/知道 Zapier 后台的人动手配一次（代码这边做不了，见交接说明）。
 export async function POST(req: NextRequest) {
   const expectedToken = process.env.PUBLER_CREATE_POST_TOKEN
   if (!expectedToken) {
@@ -25,9 +30,7 @@ export async function POST(req: NextRequest) {
       { status: 500 },
     )
   }
-  if (req.headers.get('authorization') !== `Bearer ${expectedToken}`) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
-  }
+  const hasValidWebhookToken = req.headers.get('authorization') === `Bearer ${expectedToken}`
 
   try {
     const { post_id, schedule_at } = await req.json()
@@ -42,6 +45,16 @@ export async function POST(req: NextRequest) {
       .single()
 
     if (!post) return NextResponse.json({ success: false, error: 'Post not found' }, { status: 404 })
+
+    // Webhook 令牌对了就放行；不对/没带，退回去核对登录会话对这个 post 的
+    // 客户有没有权限——不能反过来先信登录态，那样等于给 Bearer 开了后门。
+    if (!hasValidWebhookToken) {
+      const access = await requireDashboardClientAccess(post.client_id)
+      if (!access.ok) {
+        return NextResponse.json({ success: false, error: access.error }, { status: access.status })
+      }
+    }
+
     if (post.status !== 'approved') {
       return NextResponse.json({ success: false, error: 'Post not approved' }, { status: 400 })
     }
