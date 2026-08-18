@@ -41,6 +41,43 @@ type TimelineEntry =
       channel: string
       direction: 'inbound' | 'outbound'
       summary: string | null
+      /**
+       * 销售**真正敲进去的那句话**（客人的原文 / FDE 的手记）。
+       *
+       * 🔴 跟 `summary` 不是一回事（Codex 复审 PR #1038，2026-08-17）：
+       * `recordManualTouchpoint` 存的 `summary` 是 **AI 生成的摘要**。而复核
+       * 「这个人是不是被误判成永久拒联」靠的恰恰是字面差别 ——
+       * 「暂时不去」和「别再联系我」摘要之后可能长得一样，判决却天差地别。
+       *
+       * 只在前端的**判决行**旁边展示（`do_not_contact` / `dnc_cleared`），
+       * 不是每条都铺出来：普通记录看摘要更短更好读。
+       */
+      raw: string | null
+      /**
+       * `metadata.do_not_contact === true` —— **跟 `outcome` 不是一回事**。
+       *
+       * 🔴 外呼那条路（`lib/voice/crm-bridge.ts`）写的是
+       * `outcome: 'not_interested'` **加上** `do_not_contact: true`，而
+       * `isDoNotContact` 认后者 → 这个人**全渠道被停**。只看 `outcome` 的话，
+       * 界面上只会显示一句「他说不买了」，销售完全看不到他已经被停了
+       * （Codex 复审 PR #1048，2026-08-17）。
+       *
+       * 判据只有一份（`lib/crm/dnc`），它两个都认，所以送给前端的也得两个都有。
+       */
+      dncFlag: boolean
+      /**
+       * `raw` 里装的到底是什么。
+       *
+       * 🔴 **不是所有 `raw` 都是逐字原话**（Codex 复审 PR #1048，2026-08-17）：
+       *   · 手工记录 / 邮件 → 人真敲的字、客人真发的信 = 逐字
+       *   · 外呼（`lib/voice/crm-bridge.ts`）→ `raw: call.summary`，而那是
+       *     **模型生成**的通话摘要（`voice/finalize.ts` 拼的 `Caller discussed: …`）
+       *
+       * 前端拿它判断该写「原话」还是「通话摘要」。把 AI 摘要标成原话，
+       * 销售会据此决定要不要解除全渠道停联 —— 而他以为自己在看客人说的话。
+       */
+      rawKind: 'verbatim' | 'ai_summary'
+
       tour: string | null
       outcome: string | null
       travelWindow: string | null
@@ -53,6 +90,14 @@ type TimelineEntry =
       direction: 'inbound' | 'outbound'
       senderName: string | null
       body: string
+      /**
+       * 这条消息走的哪个渠道（`conversations.channel`）。
+       *
+       * 🔴 前端原先把所有 `message` 硬编码成「私信」（Codex 复审 PR #1038）——
+       * 而对话表里还有 `email` / `whatsapp` / `voice`。「他是从哪来的」那一行
+       * 据此判断，认错渠道就是给销售一个错的开场依据。
+       */
+      channel: string | null
     }
   | {
       kind: 'stage'
@@ -120,7 +165,8 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
     // 这个人的对话（Messenger / 邮件线程），按 client_id + contact_id 收口。
     supabaseAdmin
       .from('conversations')
-      .select('id')
+      // channel：前端「他是从哪来的」那一行要用，不能把所有对话都当成私信。
+      .select('id, channel')
       .eq('client_id', clientId)
       .eq('contact_id', contactId),
   ])
@@ -131,8 +177,11 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
 
   // 对话原文（私信 / 邮件正文）。conv id 已按 client_id + contact_id 收口，消息
   // 按这些 id 取跨不了客户。空 body（图片 / 表情 / 附件 / 系统事件）下面丢掉。
-  const convIds = ((convs ?? []) as { id: string }[]).map((c) => c.id)
+  const convRows = (convs ?? []) as { id: string; channel: string | null }[]
+  const convIds = convRows.map((c) => c.id)
+  const convChannel = new Map(convRows.map((c) => [c.id, c.channel]))
   let messages: {
+    conversation_id: string
     direction: 'inbound' | 'outbound'
     sender_name: string | null
     body: string | null
@@ -141,7 +190,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
   if (convIds.length > 0) {
     const { data: msgs } = await supabaseAdmin
       .from('conversation_messages')
-      .select('direction, sender_name, body, sent_at')
+      .select('conversation_id, direction, sender_name, body, sent_at')
       .in('conversation_id', convIds)
       .order('sent_at', { ascending: false })
       .limit(3000)
@@ -171,6 +220,10 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       channel: t.channel,
       direction: t.direction,
       summary: t.summary,
+      raw: cleanStr(t.raw),
+      dncFlag: m.do_not_contact === true,
+      // 外呼那条路写的是模型摘要，不是逐字原话 —— 靠 voice_call_id 认出来。
+      rawKind: m.voice_call_id ? 'ai_summary' : 'verbatim',
       // 这一条触点自己带的团意向：FB 表单下拉优先，其次手工笔记解析值。
       tour: cleanStr(m.tour_interest_raw) ?? cleanStr(m.tour_interest),
       /**
@@ -223,6 +276,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       direction: msg.direction,
       senderName: msg.sender_name,
       body,
+      channel: convChannel.get(msg.conversation_id) ?? null,
     })
   }
 

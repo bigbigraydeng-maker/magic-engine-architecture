@@ -389,6 +389,27 @@ export interface ConsolePresentation {
   readonly progressTrend: ProgressTrendView
   /** 最近合并/关闭的若干条,按观测时间倒序,上限见实现。 */
   readonly recentActivity: readonly RecentActivityItemView[]
+  /**
+   * 路线图:接下来要做什么、按什么顺序、卡在哪 —— 不是日历,没有真实排期数据
+   * 不能编日期(PM 二轮反馈:要看"接下来该干什么",不是当下快照)。
+   * 只含有 nextMilestone 的组件(= 还有认领的下一步),按依赖深度升序
+   * (谁垫着谁的同一套顺序,越靠前越是别人要先等它的地基)。
+   */
+  readonly roadmap: readonly RoadmapItemView[]
+}
+
+/** 路线图的一行 —— 一个还没到终点的组件:现在到哪、下一步到哪、卡在什么。 */
+export interface RoadmapItemView {
+  readonly key: string
+  readonly name: string
+  readonly laneLabel: string
+  readonly bucket: RunBucket
+  readonly currentMaturityLabel: string
+  readonly nextMilestoneLabel: string
+  /** 已解析成人话的卡点摘要(跟「一件件看」行展开用的是同一份 nextMilestone.unlockedBy)。 */
+  readonly blockerSummaries: readonly string[]
+  /** 这个组件当前有没有等 PM 拍板的事(跟"等你拍板" tab 同一份 poDecisionRequired)。 */
+  readonly needsYourCall: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -768,6 +789,27 @@ export function buildPresentation(input: PresenterInput): ConsolePresentation {
   }))
   const graph: GraphView = { nodes: graphNodes, edges: graphEdges }
 
+  // 路线图:只挑有 nextMilestone 的组件(= 还有认领的下一步),按依赖深度升序 ——
+  // 跟依赖图同一个 depthById,不另开一套排序口径(PM 二轮反馈的产品要求)。
+  const roadmap: RoadmapItemView[] = components
+    .map((v, i) => ({
+      v,
+      depth: depthById.get(snapshot.components[i].component.id) ?? 0,
+      needsYourCall: snapshot.components[i].component.poDecisionRequired.length > 0,
+    }))
+    .filter(({ v }) => v.nextMilestone !== undefined)
+    .sort((a, b) => a.depth - b.depth)
+    .map(({ v, needsYourCall }) => ({
+      key: v.key,
+      name: v.name,
+      laneLabel: v.laneLabel,
+      bucket: v.bucket,
+      currentMaturityLabel: v.maturityLabel,
+      nextMilestoneLabel: v.nextMilestone!.targetLabel,
+      blockerSummaries: v.nextMilestone!.unlockedBy,
+      needsYourCall,
+    }))
+
   // 检索目录:issue/PR 事实(带标题) × 组件反查(人话名)。孤儿(components 空)也进,UI 据此诚实标注。
   type CompMeta = { name: string; businessOutcome: string; laneLabel: string }
   const compsByPr = new Map<number, CompMeta[]>()
@@ -846,6 +888,7 @@ export function buildPresentation(input: PresenterInput): ConsolePresentation {
     catalog,
     progressTrend,
     recentActivity,
+    roadmap,
   }
 }
 

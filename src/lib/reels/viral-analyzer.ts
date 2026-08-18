@@ -314,20 +314,49 @@ function parseAnalysisResponse(raw: string): ViralAnalysisResult {
 
 const DEFAULT_VIEW_THRESHOLD = 5000
 
+type FetchedMetadata = {
+  view_count: number | null
+  like_count: number | null
+  published_at: string | null
+  video_title: string | null
+  channel_title: string | null
+}
+
+/**
+ * 🔴 `fresh` 来自 `fetchYouTubeMetadata`，对非 YouTube 源永远全 null（函数自己的
+ * 注释也这么写）。之前无条件用它覆盖，等于每次分析完成都把插入时已经拿到的真实
+ * 互动数据冲成 null —— 生产库实查：Facebook 14/14、Xiaohongshu 8/8 的 done 行
+ * like_count 全部是 null。这里改成拿到新值才覆盖，拿不到就沿用插入时的旧值。
+ */
+function mergeFetchedMetadata(fresh: FetchedMetadata, existing: FetchedMetadata): FetchedMetadata {
+  return {
+    view_count:    fresh.view_count    ?? existing.view_count    ?? null,
+    like_count:    fresh.like_count    ?? existing.like_count    ?? null,
+    published_at:  fresh.published_at  ?? existing.published_at  ?? null,
+    video_title:   fresh.video_title   ?? existing.video_title   ?? null,
+    channel_title: fresh.channel_title ?? existing.channel_title ?? null,
+  }
+}
+
+const NO_METADATA: FetchedMetadata = {
+  view_count: null, like_count: null, published_at: null, video_title: null, channel_title: null,
+}
+
 /**
  * Save analysis results to DB with derived fields:
  * - content_goal: keep user override if provided, else use detected
  * - is_learnable: false if our_video OR (view_count known AND < threshold)
  */
-async function finalizeAnalysis(
+export async function finalizeAnalysis(
   referenceId: string,
   result: ViralAnalysisResult,
-  metadata: { view_count: number | null; like_count: number | null; published_at: string | null; video_title: string | null; channel_title: string | null },
+  metadata: FetchedMetadata,
 ): Promise<void> {
   // Read existing row to honor user-set fields (content_goal override, is_our_video)
+  // and to fall back to when `metadata` has nothing new (mergeFetchedMetadata above).
   const { data: existing } = await supabaseAdmin
     .from('viral_reference_library')
-    .select('content_goal, is_our_video, view_threshold_min')
+    .select('content_goal, is_our_video, view_threshold_min, view_count, like_count, published_at, video_title, channel_title')
     .eq('id', referenceId)
     .maybeSingle()
 
@@ -339,9 +368,11 @@ async function finalizeAnalysis(
   // (if user picked 'brand' it might just be the default — we trust Gemini)
   const finalGoal = userGoal && userGoal !== 'brand' ? userGoal : result.detected_content_goal
 
+  const merged = mergeFetchedMetadata(metadata, (existing as FetchedMetadata | null) ?? NO_METADATA)
+
   // is_learnable: our own videos NEVER, low-view videos NEVER
-  const viewCountKnown = metadata.view_count !== null
-  const isLearnable = !isOurVideo && (!viewCountKnown || (metadata.view_count ?? 0) >= threshold)
+  const viewCountKnown = merged.view_count !== null
+  const isLearnable = !isOurVideo && (!viewCountKnown || (merged.view_count ?? 0) >= threshold)
 
   await supabaseAdmin
     .from('viral_reference_library')
@@ -356,11 +387,7 @@ async function finalizeAnalysis(
       opening_hook: (result.opening_hook.type) ? result.opening_hook : null,
       content_goal: finalGoal,
       is_learnable: isLearnable,
-      view_count:    metadata.view_count,
-      like_count:    metadata.like_count,
-      published_at:  metadata.published_at,
-      video_title:   metadata.video_title,
-      channel_title: metadata.channel_title,
+      ...merged,
       analysis_status: 'done',
       analyzed_at: new Date().toISOString(),
     })
