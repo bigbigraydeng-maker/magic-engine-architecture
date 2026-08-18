@@ -478,4 +478,124 @@ Goal per #1041: extract a reusable Organic Growth playbook without introducing a
 - No merge
 - No publication
 - Only DB writes: `client_site_pages` inserts from §0.4 + `keyword_snapshots`/`serp_ai_overview_snapshots`/`competitor_keyword_snapshots` inserts from §0.5 + `geo_batches`/`geo_queries`/`geo_observations`/`geo_evidence` inserts from §0.6. **No `master_briefs` write** — populating that is a Phase 1 activity requiring product-owner sign-off.
+
+---
+
+## 13. T0 Freeze Gate (attached 2026-08-18 per PM ruling)
+
+This section is the appendix PM asked for. It supersedes any earlier Gate framing produced in-session; if a prior sentence in this document conflicts with §13, §13 wins. It is a **PR-approval checklist and dependency sequence**, not a re-analysis of §0 evidence.
+
+### 13.1 Framing corrections landed in this Gate
+
+Four earlier framings the PM explicitly overturned. Recorded so future readers don't re-inherit them:
+
+- **Not one Gate over all four PRs.** #1043 and #1051 are T0 **evidence receipts** with no website effect; they must be merged before any Phase 1 production intervention. They are not gated behind measurement wiring.
+- **#1055 pre-deploy Gate cannot require "GA4 connector = connected".** The current production connector-update endpoint has a bug — it is what #1055 is fixing. Gating deploy on the broken endpoint working is circular.
+- **`platform_oauth_connections.created_at` is not the GSC data start.** It is the OAuth grant receipt only. Data-start requires the first non-null pull and the first snapshot `collected_at` — recorded separately (§13.6).
+- **Reference Loop is not on this Gate.** Removed from the dependency graph. Handled by a separate future Issue / Draft PR.
+
+### 13.2 Gate A — #1043 T0 main receipt · review + merge only, no deploy
+
+| # | Condition | State |
+|---|---|---|
+| A1 | Phase 0 §0.1–§0.7 doc complete | ✅ |
+| A2 | 8 corrections to #1039 + C-9 landed | ✅ |
+| A3 | 191 `keyword_snapshots` + 33 `client_site_pages` evidence rows verifiable in prod | ✅ |
+| A4 | Every unavailable metric written as `not_measured (reason)`, never `0` | ✅ |
+| A5 | No `website/` / `src/` / migration / deploy effect | ✅ |
+| A6 | Double review pass | ⚠️ pending PM |
+
+### 13.3 Gate B — #1051 GEO baseline 18/18 · review + merge only, no deploy
+
+| # | Condition | State |
+|---|---|---|
+| B1 | batch `a2f09f81-ab65-4a25-b323-567fd70f8dff` status=`completed`, 18/18 succeeded | ✅ |
+| B2 | 4 `cited` / 0 `recommended` / 14 `not_present` classification reproducible from `geo_evidence` rows | ✅ |
+| B3 | No aggregate score summing across classification categories | ✅ |
+| B4 | Same "no side effect" clause as A5 | ✅ |
+| B5 | Double review pass | ⚠️ pending PM |
+
+### 13.4 Gate C — #1055 measurement wiring · merge + deploy prerequisite (measurement window owns this Gate)
+
+| # | Condition | Owner |
+|---|---|---|
+| C1 | Double review pass | Measurement window |
+| C2 | Targeted tests pass (GA4 connector repair path + rollback) | Measurement window |
+| C3 | GA4 Property ID `550203806` confirmed | Measurement window |
+| C4 | Standard PATCH path implemented, replacing the buggy production endpoint | Measurement window |
+| C5 | No production data written pre-deploy (do not poke the connector before the fix ships) | Measurement window |
+| C6 | Rollback / error semantics explicit | Measurement window |
+
+**Explicitly not required for C:** GA4 connector already `connected` state. That is Gate D's outcome, not C's precondition.
+
+### 13.5 Gate D — production GA4 property selection (`550203806`) · after #1055 deploy
+
+| # | Condition | Owner |
+|---|---|---|
+| D1 | Write `property_id=550203806` into `client_connectors.config` via the fixed standard PATCH path | Measurement window (via UI or PATCH after deploy) |
+| D2 | Connector validation pass (fixed endpoint returns success) | Measurement window |
+| D3 | Record connector `connected_at` timestamp | Automatic (DB) |
+
+### 13.6 Gate F — Instrumentation timestamp discipline (replaces the earlier "one timestamp per signal" shortcut)
+
+**GSC — 4 required timestamps, never collapsed:**
+
+| Signal | Source | State |
+|---|---|---|
+| GSC OAuth grant (receipt only, NOT data start) | `platform_oauth_connections.created_at` | Recorded — do not use as data start |
+| GSC connector `connected_at` | `client_connectors.connected_at` for `anchor='gsc'` | Recorded — do not use as data start |
+| GSC first successful pull time | Moment `fetchGscSnapshot` first returns non-null | Pending (GSC API 24–48h lag) |
+| GSC first snapshot `collected_at` | First row's `collected_at` in `gsc_performance_snapshots` for magicengine | Pending first successful pull |
+
+**GA4 — 4 required timestamps, never collapsed:**
+
+| Signal | Source | State |
+|---|---|---|
+| GA4 tag production deploy time | Cloudflare Pages deploy record | Pending #1055 deploy |
+| GA4 connector / property validation time | Gate D completion | Pending Gate D |
+| GA4 first successful sync time | First non-empty response from `/api/clients/[id]/ga4/sync` | Pending tag deploy |
+| GA4 first valid snapshot `collected_at` | First row in `ga4_traffic_snapshots` with real events | Pending real traffic |
+
+**Red line — "request succeeded but no data yet" ≠ "traffic data exists".** The former proves connection; the latter requires real events. These two timestamps stay separated and never substitute for each other. Any T+ remeasurement window must start no earlier than the corresponding "first valid snapshot" row above, per the "`not_measured` ≠ `0`" run rule.
+
+### 13.7 Gate E — #1056 Phase 1B technical SEO · merge + deploy prerequisite
+
+| # | Condition | State |
+|---|---|---|
+| E1 | #1055 already merged and deployed | Pending C + D |
+| E2 | GA4 connector validation pass (Gate D complete) | Pending D |
+| E3 | Instrumentation timestamps recorded (Gate F, all 4+4) | Pending D + first real events |
+| E4 | 5 SEO decisions table + C-9 cross-linked between #1043 and #1056 | ✅ |
+| E5 | Double review pass | ⚠️ pending PM |
+
+### 13.8 Dependency sequence (must run in this order)
+
+```
+A.  #1043 review → merge                     evidence only, no deploy
+B.  #1051 review → merge                     evidence only, no deploy
+        (A and B may proceed in parallel; both are pure evidence)
+        │
+        ↓
+C.  #1055 review → merge + deploy            includes GA4 connector fix + rollback
+        │
+        ↓
+D.  Production selects GA4 property 550203806, validates connector,
+    records timestamps (via the fixed standard PATCH path)
+        │
+        ↓
+E.  #1056 review → merge + deploy            Phase 1B surgical technical SEO
+        │
+        ↓
+F.  T+7 / T+14 / T+28 remeasurement          Case Study 0 comparison points
+```
+
+**Out of scope for this Gate**: Reference Loop. Handled separately by a future Issue / Draft PR — not a #1055 release blocker, not a Freeze Gate condition.
+
+### 13.9 What this Gate does not do
+
+- Does not by itself merge or deploy anything.
+- Does not make any of A / B / C / D / E happen — only orders and conditions them.
+- Does not require §0 evidence to be re-run; it treats §0.1–§0.7 as frozen inputs.
+- Does not decide whether Phase 1 succeeds — that is Case Study 0's T+ comparison, not this Gate's.
+- Does not authorize the measurement window to skip C1–C6 for expediency. Each condition is independently gating.
 - All third-party spend within PM-authorized US$6.00 cap; receipts recorded in §10
