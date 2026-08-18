@@ -18,10 +18,13 @@ describe('autoFetchMetricValue("ai_visibility_score") — severed (组 R)', () =
     },
   } as any
 
-  it('returns ok:false with a "no auto-fetch source" reason (no DB access)', async () => {
+  it('returns ok:false + severed:true (a removed source, not a fetch failure)', async () => {
     const result = await autoFetchMetricValue(supabase, 'client-1', 'ai_visibility_score')
     expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.reason).toMatch(/does not have an auto-fetch source/)
+    // `severed` lets the refresh cron skip it instead of counting a daily failure,
+    // and clear the stale industry-average value (see goal-current-value-refresh).
+    expect(result).toMatchObject({ ok: false, severed: true })
+    if (!result.ok) expect(result.reason).toMatch(/severed/)
   })
 
   it('does not read any industry_ai_visibility_* table (no masquerade source)', async () => {

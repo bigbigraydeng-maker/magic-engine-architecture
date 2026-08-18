@@ -11,11 +11,16 @@
 // Requires: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL) + SUPABASE_SERVICE_ROLE_KEY.
 
 import { writeFileSync, mkdirSync } from 'node:fs'
+import { gzipSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const CTS_CLIENT_ID = 'c0000000-0000-0000-0000-000000000000'
 const TABLES = ['ai_visibility_queries', 'ai_visibility_runs', 'ai_visibility_snapshots']
+// runs holds the raw_response corpus (~10MB) — store gzipped so re-running this
+// script reproduces the committed artifact (ai_visibility_runs.json.gz) exactly,
+// not a fresh 10MB .json. Small tables stay plain JSON for readability.
+const GZIP_TABLES = new Set(['ai_visibility_runs'])
 const PAGE = 1000
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL
@@ -53,11 +58,19 @@ async function main() {
   }
   for (const table of TABLES) {
     const rows = await fetchAll(table)
-    const file = `${table}.json`
     const json = JSON.stringify(rows, null, 2)
-    writeFileSync(join(OUT_DIR, file), json)
-    manifest.tables[table] = { row_count: rows.length, file, bytes: Buffer.byteLength(json) }
-    console.log(`${table}: ${rows.length} rows -> ${file} (${(Buffer.byteLength(json) / 1024).toFixed(1)} KB)`)
+    if (GZIP_TABLES.has(table)) {
+      const file = `${table}.json.gz`
+      const gz = gzipSync(Buffer.from(json))
+      writeFileSync(join(OUT_DIR, file), gz)
+      manifest.tables[table] = { row_count: rows.length, file, bytes: gz.length, uncompressed_bytes: Buffer.byteLength(json) }
+      console.log(`${table}: ${rows.length} rows -> ${file} (${(gz.length / 1024).toFixed(1)} KB gz, ${(Buffer.byteLength(json) / 1024).toFixed(1)} KB raw)`)
+    } else {
+      const file = `${table}.json`
+      writeFileSync(join(OUT_DIR, file), json)
+      manifest.tables[table] = { row_count: rows.length, file, bytes: Buffer.byteLength(json) }
+      console.log(`${table}: ${rows.length} rows -> ${file} (${(Buffer.byteLength(json) / 1024).toFixed(1)} KB)`)
+    }
   }
   writeFileSync(join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2))
   console.log('manifest.json written')

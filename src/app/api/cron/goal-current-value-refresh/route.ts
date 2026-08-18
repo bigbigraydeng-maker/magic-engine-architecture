@@ -26,12 +26,17 @@ interface GoalRow {
   id: string
   client_id: string
   primary_metric_key: string
+  current_value: number | null
 }
 
 interface CronResult {
   processed: number
   succeeded: number
   failed: number
+  // Metrics whose auto source was intentionally removed (e.g. ai_visibility_score
+  // after the ai-tracker decommission, 组 R). NOT failures — counted separately so
+  // they don't inflate `failed` / trip cron-health alarms.
+  severed: number
   errors: Array<{ goal_id: string; reason: string }>
   duration_ms: number
 }
@@ -53,7 +58,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // ── Load active goals ───────────────────────────────────────────────────
   const goalsRes = await supabaseAdmin
     .from('goals')
-    .select('id, client_id, primary_metric_key')
+    .select('id, client_id, primary_metric_key, current_value')
     .eq('status', 'active')
 
   const allGoals = (goalsRes as { data: GoalRow[] | null }).data ?? []
@@ -86,6 +91,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       processed: 0,
       succeeded: 0,
       failed: 0,
+      severed: 0,
       errors: [],
       duration_ms: Date.now() - startedAt,
     }
@@ -97,6 +103,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   // ── Process each goal independently (per-goal try/catch) ────────────────
   let succeeded = 0
   let failed = 0
+  let severed = 0
   const errors: Array<{ goal_id: string; reason: string }> = []
 
   for (const goal of goals) {
@@ -108,6 +115,24 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       )
 
       if (!result.ok) {
+        if (result.severed) {
+          // Auto source intentionally removed (组 R). Not a failure. Clear any
+          // stale current_value (the old industry-average masquerade) so the Goal
+          // shows an honest empty rather than a frozen wrong number. Idempotent:
+          // only writes when a stale value is actually present.
+          severed++
+          if (goal.current_value !== null) {
+            await supabaseAdmin
+              .from('goals')
+              .update({
+                current_value: null,
+                current_value_fetched_at: new Date().toISOString(),
+                current_value_source: 'auto.cron.severed',
+              })
+              .eq('id', goal.id)
+          }
+          continue
+        }
         failed++
         errors.push({ goal_id: goal.id, reason: result.reason })
         continue
@@ -144,6 +169,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     processed: goals.length,
     succeeded,
     failed,
+    severed,
     errors,
     duration_ms: Date.now() - startedAt,
   }

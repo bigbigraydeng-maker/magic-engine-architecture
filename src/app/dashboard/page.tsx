@@ -592,9 +592,19 @@ export default async function OverviewPage() {
                   {livePercentDisplay}
                 </div>
                 <p className="mt-1.5 text-[12px] leading-snug text-black/55">
-                  brand mention rate
-                  <br />
-                  across AI engines
+                  {aiVisibility.livePercent === null ? (
+                    <>
+                      not measured yet
+                      <br />
+                      (AI visibility measurement migrating)
+                    </>
+                  ) : (
+                    <>
+                      brand mention rate
+                      <br />
+                      across AI engines
+                    </>
+                  )}
                 </p>
               </div>
             </div>

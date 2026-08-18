@@ -35,7 +35,11 @@ import { locationCodeForDb } from '@/lib/seo-intelligence/keyword-snapshots'
 
 export type AutoFetchResult =
   | { ok: true;  value: number; source: string; snapshot_date: string; label: string }
-  | { ok: false; reason: string }
+  // `severed: true` = this metric's auto source was intentionally removed (not a
+  // transient fetch failure). Callers must NOT treat it as a failed fetch, and
+  // should clear any stale current_value (honest empty) rather than keep the old
+  // value. Currently only 'ai_visibility_score' (组 R, ai-tracker decommission).
+  | { ok: false; reason: string; severed?: boolean }
 
 /**
  * Attempt to auto-fetch a current value for the given metric key.
@@ -61,13 +65,19 @@ export async function autoFetchMetricValue(
       // We surface only the auto half here — the hybrid hint in CurrentValueCell
       // tells FDE to top up the rest.
       return fetchFormSubmissions(supabase, clientId)
-    // 'ai_visibility_score' auto-fetch SEVERED (spec
-    // 2026-08-19-ai-tracker-decommission-v1.md, 组 R): it read
-    // industry_ai_visibility_snapshots (system C = industry averages) and wrote
-    // that into Goals as if it were a per-client measurement — a masquerade.
-    // Client-level AI visibility must come from M1 client measurement (P31.X.4),
-    // not the industry baseline. Until then Goals' ai_visibility_score has no
-    // auto source and stays honestly empty (falls through to default below).
+    case 'ai_visibility_score':
+      // SEVERED (spec 2026-08-19-ai-tracker-decommission-v1.md, 组 R): it read
+      // industry_ai_visibility_snapshots (system C = industry averages) and wrote
+      // that into Goals as if it were a per-client measurement — a masquerade.
+      // Client-level AI visibility must come from M1 client measurement (P31.X.4),
+      // not the industry baseline. `severed: true` tells the refresh cron this is
+      // NOT a fetch failure: don't count it as failed, and clear the stale value
+      // so Goals show an honest empty instead of the old industry average.
+      return {
+        ok: false,
+        severed: true,
+        reason: 'ai_visibility_score auto-fetch severed (ai-tracker decommission); client-level source pending M1',
+      }
     default:
       return { ok: false, reason: `metric '${metricKey}' does not have an auto-fetch source yet` }
   }

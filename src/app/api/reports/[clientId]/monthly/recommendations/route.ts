@@ -36,19 +36,36 @@ export async function POST(
       .map(r => `"${r.question}" (rank: ${r.client_rank})`)
       .join('\n')
 
+    // ai-tracker (system B) decommissioned (spec 2026-08-19-ai-tracker-decommission
+    // -v1.md, 组 I). When there are no tracked queries the AI visibility figures
+    // are placeholder zeros = "not measured", NOT real zeros. Feeding those zeros
+    // to the model would fabricate advice premised on a fake "0 mentions" reading.
+    // So when not measured, tell the model so explicitly and steer it to the
+    // signals that ARE real (GEO deployment + published content). M1 re-wire: P31.X.4.
+    const aiNotMeasured = report.overview.queries_tracked === 0
+
     const systemPrompt = `You are a strategic AI visibility consultant preparing a monthly report for a client in the AU/NZ market.
 Write in a professional, direct tone. Be specific and actionable. Use Australian/New Zealand English spelling.
-Do NOT mention the internal tool name, OpenAI, Claude, or any AI vendor names. Use "AI Visibility Tracker" and "AI systems" generically.`
+Do NOT mention any internal tool name, OpenAI, Claude, or any AI vendor names. Refer to "AI systems" generically.${
+  aiNotMeasured
+    ? `\nAI visibility is NOT measured for this client this period (measurement is migrating to a new pipeline). Do NOT treat the AI visibility figures as real — do not claim mentions or rankings dropped, and do not base any recommendation on a "0 mentions" or "0 queries" reading. Base recommendations on GEO deployment and published content instead.`
+    : ''
+}`
 
-    const userPrompt = `## Client Report — ${report.period_label}
-Client: ${report.client_name}
-
-### AI Visibility Performance
+    const aiVisibilitySection = aiNotMeasured
+      ? `### AI Visibility Performance
+- Not measured this period (measurement is migrating to a new pipeline). Treat as unknown, not zero. Do not make recommendations based on these figures.`
+      : `### AI Visibility Performance
 - This month avg rank: ${report.overview.this_month_avg_rank ?? 'No data'}
 - Last month avg rank: ${report.overview.last_month_avg_rank ?? 'No data'}
 - Rank change: ${report.overview.rank_change != null ? (report.overview.rank_change > 0 ? `+${report.overview.rank_change} (worsened)` : `${report.overview.rank_change} (improved)`) : 'N/A'}
 - AI mentions this month: ${report.overview.this_month_mentions}
-- Queries tracked: ${report.overview.queries_tracked}
+- Queries tracked: ${report.overview.queries_tracked}`
+
+    const userPrompt = `## Client Report — ${report.period_label}
+Client: ${report.client_name}
+
+${aiVisibilitySection}
 
 ### Weak Areas (not in top 3)
 ${weakQueries || 'None identified yet'}
