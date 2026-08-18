@@ -7,6 +7,58 @@
 
 ---
 
+## 2026-08-19 · ai-tracker（系统 B）退役删除：AI 可见度判断归一到 M1，老诊断打分重做
+
+> **本条推翻同日早前版本**（原标题「三系统整合：判断层统一到 M1，ai-tracker 降级为采集层」，原结论是「降级保留 ai-tracker 采集层 + 五阶段小心迁移」）。PO **2026-08-19 追加授权做减法**（删老功能）：ai-tracker 不是降级保留，是**退役删除**。原判决的证据段（44% 抽取失败、子串匹配、`ai_visibility_score` 实读系统 C）全部成立、予以保留，只把结论从「保留采集层」改成「删」。
+
+**决策**：仓库里三套 AI 可见度系统（A=`geo-baseline`+`geo-module` M1 / B=`ai-tracker` / C=`industry-ai-visibility`），PO 拍板：
+
+1. **M1 是客户 AI 可见度唯一真相源**，神圣不可碰，只能往它靠。
+2. **ai-tracker（系统 B）整套退役删除**：`src/lib/ai-tracker/` + `src/app/api/ai-tracker/*` + `src/app/dashboard/ai-visibility/*` + `ai-tracker-weekly` cron（`render.yaml`）+ 三张表 `ai_visibility_queries` / `ai_visibility_runs` / `ai_visibility_snapshots`。**为什么现在能删而不是降级保留**：ME 尚未对外推广、无付费存量在被动消费这条线，不需要为存量而保留一套判断质量已知不达标的系统；两套并行只会持续制造「同名字段不同数据源」的混淆（见影响面）。**采集层不再保留**——原版「保留 question-generator + 采集节奏接上 M1」的方案随本次授权作废；但「按客户生成/沉淀跟踪问题」是 M1 目前缺的净能力，须显式列入 M1 待补（见拆除清单 §7 异议 2），别让它随代码蒸发。
+3. **老诊断打分（`src/lib/diagnostic`）的 AI 可见度维度：重做，取自 M1**（ROADMAP P31.X.4）。这条是客户可见分数、且是活的，属**改写搬迁**不是删——三张表 DROP 必须等它接到 M1 之后（拆除清单执行顺序已把 DROP 卡在最后）。
+4. **`industry-ai-visibility`（系统 C）不删、不合并**，但**切断它冒充客户级分数**：Goals 的 `ai_visibility_score` 现在错读系统 C 的行业均值（`auto-fetch.ts:65-66`），当成单客户分数写进 Goals。这条独立于 ai-tracker 删除（不同表、不同系统），走独立小 PR 先落。系统 C 的合法消费方是 **Industry Baselines 看板/API**（不是 Yellowbook——Yellowbook 只在 `industry-ai-visibility/types.ts:6` 注释里，尚无代码），保留。
+
+**完整拆除清单**（逐个缠线定性 DELETE / REWIRE→M1 / LEAVE-SEVER、删除执行顺序、DROP 表清单、我方异议）见 [`docs/specs/2026-08-19-ai-tracker-decommission-v1.md`](./specs/2026-08-19-ai-tracker-decommission-v1.md)。**本轮零删除、零 DROP、零 cron 改动**——真正的删除是复审干净 + PO 最后 `go` 之后的独立 PR。
+
+**为什么删而不是修**：`ai-tracker/parser.ts` 的品牌命中逻辑是**子串模糊匹配**（`brand.toLowerCase().includes(clientLower)`，且允许反向 includes，代码见 `parser.ts:119-125`），M1 明令禁止这种做法（M1 用 `buildEntityMatcher` 精确别名匹配 + 否定探测 + owned-citation 剔除）。**真实故障记录**（`docs/archive/DIAGNOSTIC_FINDINGS.md`）是 parser 成功率仅 **44%（11/25）**——多数情况下是直接抽不出品牌结果，而不是抽错；子串匹配本身**目前没有已发生的具体撞车事故记录**，是一个**理论假阳风险**（例如「CTS」与母公司「China Travel Service」这类子串包含关系，一旦答案里同时出现两个名字就可能误判），风险成立但不是「已实测命中」。品牌抽取本身是结构化 LLM 抽取（先让模型输出 `brands` 列表），子串匹配只发生在最后从这份列表里定位「哪一条是客户自己」这一步（`parser.ts:119-125`）——判断链条整体缺 disposition 分级、缺 defer/indeterminate、缺 lineage/审计字段。M1 有五档推荐分级（仅 `explicit_positive` 进指标）、`defer`/`indeterminate` 优先于编造的正结论、`reasonCodes` 全审计。既然判断层已判死、且无存量要保护，采集层单独留着没有意义——故整套删。
+
+**证据（代码对比）**：
+
+```ts
+// ai-tracker/parser.ts:119-125 —— 子串模糊匹配，双向 includes（真实故障：44% 抽取成功率）
+const clientMention = brands.find(b => {
+  const bLower = b.brand.toLowerCase()
+  return (
+    b.brand.toLowerCase().includes(clientLower) ||
+    (clientLower.length >= 3 && bLower.length >= 3 && clientLower.includes(bLower))
+  )
+})
+```
+
+```ts
+// geo-module/m1.ts —— 精确别名注册表 + 否定探测 + defer 优先
+function buildEntityMatcher(aliases: readonly string[]): RegExp { /* 精确别名，非子串 */ }
+// disposition: 'defer' 永远优先于一个可能编出来的正结论（见文件头注释）
+// owned citation ≠ mention（M1 §7，Codex #1032 第 5 轮 P1 生产实证）
+```
+
+**影响面**：
+- Cron：`ai-tracker-weekly`（`render.yaml:204`，每周一 01:00 UTC）**是删除对象**（拆除清单步骤 2，本轮不动）；`industry-ai-visibility-daily`（每天 02:30 UTC，⚠️ route 命名历史遗留为 `/api/cron/ai-visibility-weekly`，实际调 industry 逻辑）**不动**（系统 C）；`goal-current-value-refresh` 依赖链见下条订正。
+- **订正：`ai_visibility_score` 真实数据源是系统 C，不是系统 B**。`src/lib/strategy/auto-fetch.ts:442-524` 与 `goal-current-value-refresh` cron 证实，Goals 的 `ai_visibility_score` 读的是 `industry_ai_visibility_snapshots`（`auto-fetch.ts:496,522`），跟 ai-tracker 的 `ai_visibility_snapshots`/`ai_visibility_runs` 是两张不同表、不同系统。同名字段（`ai_visibility_score`）容易误判为同一数据源，实际链路互不相关。原判决与原 issue 的 Phase 3 都基于「Goals 读系统 B」这个错误前提，需要重新定义。
+- 依赖 `ai_visibility_score`（系统 C 口径）的代码：`src/app/api/cron/goal-current-value-refresh/route.ts`、`src/lib/strategy/baseline-audit.ts`、`src/lib/strategy/auto-fetch.ts`、`src/lib/flywheel/anomaly/rules.ts`、`src/lib/factory/copy-generator.ts`、`src/types/strategy.ts`。
+- **补充：ai-tracker（系统 B）真实消费方清单**（原判决遗漏，全仓核实后补齐）：
+  - `src/app/dashboard/ai-visibility/[clientId]/_components/RankingsTable.tsx:18-22` —— 前端独立实现了一份 `isClientBrand`（`a.includes(b) || b.includes(a)` 双向子串匹配），跟 parser.ts 是同一漏洞模式，直接消费 `ranking_table.brands`，判断逻辑跑在浏览器端，前端组件清单同时含 ModelStats / QueriesManager / EngineComparison。
+  - `src/lib/blog/topic-selector.ts`（读 `ai_visibility_runs.client_brand_rank` 决定博客选题）
+  - `src/lib/blog/page-seo-intelligence.ts`（读 `ai_visibility_snapshots` + `ai_visibility_runs.client_brand_rank` 找 GEO 内容缺口）
+  - `src/lib/monthly-report/collectors/ai-tracker.ts` + `src/lib/reports/monthly-aggregator.ts`（**客户月报数据源，C 端可见交付物**，读 `ai_visibility_runs`/`ai_visibility_snapshots`/`ai_visibility_queries`）
+  - `src/lib/diagnostic/collectors/ai-visibility-collector.ts`（诊断发现流，读 `ai_visibility_snapshots`）
+  - **拆除清单进一步发现**（原判决与早前版本均遗漏）：`src/lib/ai-tracker/` **不能整目录删**——`parser.ts`（`parseRanking`）被系统 C 的 `industry-ai-visibility/collector.ts:17`（要保留）与诊断 probe 复用，`runners/openai.ts`（`runOpenAI`）被 `prospecting/analyze.ts` 与诊断 probe 复用。必须先把这 4 个共享文件平移到中立目录再删，否则打断系统 C。另有 flywheel（`GeoComposerAdapter.ts:84`）、`geo/composer.ts:139`、`strategy/analyzer.ts:37/68`、主看板 `dashboard/page.tsx:166`、demo 种子、admin 维护路由、8 个死调试路由等缠线，逐条定性见拆除清单。
+- 表：`ai_visibility_queries` / `ai_visibility_runs` / `ai_visibility_snapshots`（ai-tracker，系统 B，**DROP 对象**）vs `geo_query_sets` / `geo_queries` / `geo_batches` / `geo_observations` / `geo_evidence`（geo-baseline，系统 A，冻结契约见 #883/#917 WP04A，**不动**）vs `industry_ai_visibility_snapshots`（industry，系统 C，Goals 实际读这张，**不删但断开冒充**）。
+
+**注意与 2026-05-17 决策的关系**：当时「AI Tracker 保留自建，不切 Apify」是判**采集端** vendor 选型。本条退役 ai-tracker 后该决策的对象不复存在（不再有 ai-tracker 采集端要选 vendor）；客户级采集能力今后由 M1 承担，行业级由系统 C（DataForSEO）承担，那条旧决策就此作废。
+
+**后续步骤**：拆除执行顺序（先断消费方 → 平移共享件 → 删代码 → 最后 DROP 表，DROP 不可逆需 PO `go apply`）见拆除清单 §6 与 tracking issue #1073。原「五阶段小心迁移」计划随本次授权作废。**子牙（架构）+ 魏征（挑刺）已复审拆除清单，判「可作真删 PR 依据」，修正意见已并入清单 §4/§8/§9**（含护城河靶心：flywheel `geo.query.mention_rate` 断供 → 诸葛亮归因失效，见清单 §9.1）。**A 级任务**，禁止一次性授权，**每一步单独要 PO `go`**。
+
 ## 2026-08-19 · Magic Engine 默认 Reuse First，未来垂直版本共享同一底层平台
 
 **决策**：Magic Engine 的长期形态是**一个共享平台 + 多个垂直版本**。真实客户与 Customer Zero 用来发现、验证、加固可复用能力，不默认发展成客户特供系统。未来在行业理解、数据与客户样本足够后，可以推出 **ME Real Estate / ME Travel** 等垂直版本，但底层默认共享 Capability、Adapter / Connector、Kernel / Governance、Measurement Contract、Growth Contract、Verification / Attribution / Flywheel，以及经证据证明可泛化的 Learning / Memory 机制。完整冻结原则见 [ME2 Reuse & Platformization Principle](./roadmap/2026-08-19-me2-platformization-principle.md)。
