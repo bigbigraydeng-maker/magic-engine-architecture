@@ -16,7 +16,9 @@
 1. **M1 是客户 AI 可见度唯一真相源**，神圣不可碰，只能往它靠。
 2. **ai-tracker（系统 B）整套退役删除**：`src/lib/ai-tracker/` + `src/app/api/ai-tracker/*` + `src/app/dashboard/ai-visibility/*` + `ai-tracker-weekly` cron（`render.yaml`）+ 三张表 `ai_visibility_queries` / `ai_visibility_runs` / `ai_visibility_snapshots`。**为什么现在能删而不是降级保留**：ME 尚未对外推广、无付费存量在被动消费这条线，不需要为存量而保留一套判断质量已知不达标的系统；两套并行只会持续制造「同名字段不同数据源」的混淆（见影响面）。**采集层不再保留**——原版「保留 question-generator + 采集节奏接上 M1」的方案随本次授权作废；但「按客户生成/沉淀跟踪问题」是 M1 目前缺的净能力，须显式列入 M1 待补（见拆除清单 §7 异议 2），别让它随代码蒸发。
 3. **老诊断打分（`src/lib/diagnostic`）的 AI 可见度维度：重做，取自 M1**（ROADMAP P31.X.4）。这条是客户可见分数、且是活的，属**改写搬迁**不是删——三张表 DROP 必须等它接到 M1 之后（拆除清单执行顺序已把 DROP 卡在最后）。
-4. **`industry-ai-visibility`（系统 C）不删、不合并**，但**切断它冒充客户级分数**：Goals 的 `ai_visibility_score` 现在错读系统 C 的行业均值（`auto-fetch.ts:65-66`），当成单客户分数写进 Goals。这条独立于 ai-tracker 删除（不同表、不同系统），走独立小 PR 先落。系统 C 的合法消费方是 **Industry Baselines 看板/API**（不是 Yellowbook——Yellowbook 只在 `industry-ai-visibility/types.ts:6` 注释里，尚无代码），保留。
+4. **`industry-ai-visibility`（系统 C）不删、不合并**，但**切断它冒充客户级分数**：Goals 的 `ai_visibility_score` 现在错读系统 C 的行业均值（`auto-fetch.ts:65-66`），当成单客户分数写进 Goals。这条独立于 ai-tracker 删除（不同表、不同系统）。系统 C 的合法消费方是 **Industry Baselines 看板/API**（不是 Yellowbook——Yellowbook 只在 `industry-ai-visibility/types.ts:6` 注释里，尚无代码），保留。
+
+> 🔴 **实施变更（子牙复审拍板）：组 R SEVER 已折进 ai-tracker 退役同一个 PR**（不再单独小 PR——PO 要减法要快、且两者架构不冲突）。**因此产生一处 Goals 行为变更,必须让 PO/未来的人一眼看到,别埋在大 diff 里**：**自本 PR 起,Goals 的 `ai_visibility_score` 失去自动来源、`autoFetchMetricValue` 对它返回 `ok:false`,current_value 留空**,直到 M1 按客户实测接上（P31.X.4）。**这是有意的**——它原先自动填的是系统 C 的行业均值冒充客户分,摘掉一个错数字留一个诚实的空,**不是 bug、不是无损 no-op**。`baseline-audit.ts` 的 `AUTO_METRICS` 同步去掉 `ai_visibility_score`（美化:否则清单里显示「auto 但拉不到」）。
 
 **完整拆除清单**（逐个缠线定性 DELETE / REWIRE→M1 / LEAVE-SEVER、删除执行顺序、DROP 表清单、我方异议）见 [`docs/specs/2026-08-19-ai-tracker-decommission-v1.md`](./specs/2026-08-19-ai-tracker-decommission-v1.md)。**本轮零删除、零 DROP、零 cron 改动**——真正的删除是复审干净 + PO 最后 `go` 之后的独立 PR。
 

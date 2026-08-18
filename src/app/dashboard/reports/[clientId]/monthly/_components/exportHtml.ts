@@ -78,6 +78,14 @@ export function buildExportHtml(report: MonthlyReportData, recommendations: stri
 
   <div class="section">
     <div class="section-title"><span class="badge">1</span> AI Visibility Overview</div>
+    ${overview.queries_tracked === 0 ? `
+    <!-- ai-tracker (system B) decommissioned (spec 2026-08-19-ai-tracker-decommission-v1.md, 组 I).
+         No tracked queries → "not measured", NOT a score of 0. Re-wire to M1: P31.X.4. -->
+    <p style="font-size:13px;color:rgba(26,26,26,0.60);margin:0;">
+      AI visibility is not measured for this period. Measurement is being migrated to the unified GEO
+      measurement pipeline — this is <strong>not a score of 0</strong>. Rankings, mentions and competitive
+      data will return once this client is onboarded there.
+    </p>` : `
     <div class="kpi-grid">
       <div class="kpi">
         <div class="kpi-label">Avg Rank (this month)</div>
@@ -99,7 +107,7 @@ export function buildExportHtml(report: MonthlyReportData, recommendations: stri
         <div class="kpi-value">${overview.engines_used.length}</div>
         <div class="kpi-sub">${escHtml(overview.engines_used.join(', ') || 'none')}</div>
       </div>
-    </div>
+    </div>`}
   </div>
 
   <div class="section">

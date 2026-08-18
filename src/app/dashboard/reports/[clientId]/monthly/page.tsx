@@ -133,6 +133,10 @@ export default function MonthlyReportPage() {
 
   const mentionArrow = overview.mention_change > 0 ? '↑' : overview.mention_change < 0 ? '↓' : '→';
   const mentionColor = overview.mention_change > 0 ? 'text-[#5C8A4A]' : overview.mention_change < 0 ? 'text-[#C2453A]' : 'text-me-charcoal/55';
+  // ai-tracker (system B) decommissioned — no tracked queries means the AI
+  // visibility block is "not measured" (0s from the backend), NOT a zero score.
+  // Drives the not-measured notice across §1/§2/§4 (spec 组 I; re-wire M1 P31.X.4).
+  const aiNotMeasured = overview.queries_tracked === 0;
 
   return (
     <div className="p-6 space-y-6 max-w-5xl">
@@ -163,8 +167,20 @@ export default function MonthlyReportPage() {
       </div>
 
       {/* ── §1 AI Visibility Overview ────────────────────────────────── */}
+      {/* ai-tracker (system B) decommissioned (spec 2026-08-19-ai-tracker-
+          decommission-v1.md, 组 I). When there are no tracked queries the
+          backend reports 0s across the AI visibility block — that is "not
+          measured", NOT a score of 0. Show a single clear notice instead of a
+          wall of zeros / a link to the deleted tracker. Re-wire to M1: P31.X.4. */}
       <section>
         <SectionHeader number="1" title="AI Visibility Overview" />
+        {aiNotMeasured ? (
+          <div className="bg-me-ivory rounded-xl border border-black/10 px-5 py-6 text-sm text-me-charcoal/60">
+            AI visibility is not measured for this period. Measurement is being migrated to
+            the unified GEO measurement pipeline — this is <span className="font-semibold">not a score of 0</span>.
+            Rankings, mentions and competitive data will return once this client is onboarded there.
+          </div>
+        ) : (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <KpiCard
             label="Avg AI Rank (this month)"
@@ -202,6 +218,7 @@ export default function MonthlyReportPage() {
             }
           />
         </div>
+        )}
       </section>
 
       {/* ── §2 4-week Trend ──────────────────────────────────────────── */}
@@ -210,7 +227,9 @@ export default function MonthlyReportPage() {
         <div className="bg-white rounded-xl border border-black/10 p-5">
           {trend.length < 2 ? (
             <p className="text-sm text-me-charcoal/45 text-center py-6">
-              Not enough data yet — run the AI Visibility Tracker for at least 2 weeks.
+              {aiNotMeasured
+                ? 'Not measured this period — AI visibility measurement is migrating to the unified GEO pipeline.'
+                : 'Not enough data yet — at least 2 weeks of measurement are needed for a trend.'}
             </p>
           ) : (
             <div className="space-y-3">
@@ -289,7 +308,9 @@ export default function MonthlyReportPage() {
         <div className="bg-white rounded-xl border border-black/10 overflow-hidden">
           {competitive.length === 0 ? (
             <p className="text-sm text-me-charcoal/45 text-center py-8">
-              No query run data yet. Run the AI Visibility Tracker first.
+              {aiNotMeasured
+                ? 'Not measured this period — AI visibility measurement is migrating to the unified GEO pipeline.'
+                : 'No query run data for this period yet.'}
             </p>
           ) : (
             <div className="overflow-x-auto">
@@ -488,6 +509,13 @@ function buildExportHtml(report: MonthlyReportData, recommendations: string): st
   <!-- §1 Overview -->
   <div class="section">
     <div class="section-title"><span class="badge">1</span> AI Visibility Overview</div>
+    ${overview.queries_tracked === 0 ? `
+    <!-- ai-tracker (system B) decommissioned (组 I). Not measured → not a 0 score. Re-wire M1: P31.X.4. -->
+    <p style="font-size:13px;color:rgba(26,26,26,0.60);margin:0;">
+      AI visibility is not measured for this period. Measurement is being migrated to the unified GEO
+      measurement pipeline — this is <strong>not a score of 0</strong>. Rankings, mentions and competitive
+      data will return once this client is onboarded there.
+    </p>` : `
     <div class="kpi-grid">
       <div class="kpi">
         <div class="kpi-label">Avg Rank (this month)</div>
@@ -509,7 +537,7 @@ function buildExportHtml(report: MonthlyReportData, recommendations: string): st
         <div class="kpi-value">${overview.engines_used.length}</div>
         <div class="kpi-sub">${escHtml(overview.engines_used.join(', ') || 'none')}</div>
       </div>
-    </div>
+    </div>`}
   </div>
 
   <!-- §3 GEO -->

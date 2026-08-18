@@ -161,8 +161,11 @@ export async function buildMonthlyReport(clientId: string): Promise<MonthlyRepor
   // ai-tracker (system B) decommissioned — `ai_visibility_snapshots` /
   // `ai_visibility_queries` / `ai_visibility_runs` sources are gone (spec
   // 2026-08-19-ai-tracker-decommission-v1.md, 组 I). Until M1 (geo_*) re-wire
-  // (P31.X.4), the AI visibility block is "not measured": queries_tracked = 0,
-  // which the FDE dashboard renders as 未测量 rather than zeros. Non-AI sections
+  // (P31.X.4), the AI visibility block is "not measured": queries_tracked = 0.
+  // The consumers gate on `queries_tracked === 0` and render a "not measured"
+  // notice instead of these zeros — both the FDE page
+  // (dashboard/reports/[clientId]/monthly/page.tsx §1/§2/§4) and its HTML export
+  // (page.tsx print template + _components/exportHtml.ts). Non-AI sections
   // (GEO directive, blogs, links/search/local/market) below are unaffected.
   const thisAvg: number | null = null
   const lastAvg: number | null = null

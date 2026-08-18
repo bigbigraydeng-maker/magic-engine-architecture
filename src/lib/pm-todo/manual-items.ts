@@ -71,6 +71,8 @@ export type ManualItemKind =
   | 'kernel_needs_human'
   /** AI 可见度支柱的归因已断（ai-tracker 退役后没人再写 geo.query.mention_rate）—— 必须有人看见，等 M1 接手（P31.X.4） */
   | 'ai_visibility_attribution_down'
+  /** ai-tracker-weekly cron 删了但 healthchecks.io 的 check 还挂着 —— 一次性,停用后删这条 */
+  | 'healthcheck_orphaned'
   | AttributionItemKind
   | ClientRosterItemKind
 
@@ -204,6 +206,9 @@ export async function loadManualItems(
   // AI 可见度归因已断 —— ai-tracker 退役后没人再写 geo.query.mention_rate，
   // 诸葛亮的 AI 可见度动作永久无法归因。不许静默死在 unattributable 桶里（铁律 3）。
   pushAttributionOutageItem(items)
+  // ai-tracker-weekly cron 已删 —— healthchecks.io 那个 check 没人 ping 会误报 late/down。
+  // 一次性活儿：停用后把这条 push 删掉（合并后 PO/FDE 动手）。别只留 render.yaml 注释（只有开发看得到）。
+  pushHealthcheckRetireItem(items)
   // 出片工单排队但没人干活 —— 装配跑在一台 Mac 上，不开机就没人做，而队列里看不出来
   await pushFactoryWorkerItems(supabase, items, now).catch((e) =>
     console.warn('[manual-items] 出片工人在岗检查失败（不阻塞其他待办）:', e),
@@ -508,9 +513,32 @@ function pushAttributionOutageItem(items: ManualItem[]): void {
       '没有任何东西再记录品牌在 AI 答案里的提及率，诸葛亮每条 AI 可见度动作都验证不了效果，' +
       '异常告警和健康分里的 AI 可见度那一块也一起空着。',
     how:
-      '这条不用你动手 —— 是排期上的活儿（P31.X.4：把 AI 可见度测量接到新的 GEO 测量系统，' +
-      '重新供上「提及率」这个指标）。在那之前，AI 可见度支柱的效果回流是断的，先让你知道这件事。',
+      '这条不用你动手 —— 是已排期的活儿（把 AI 可见度测量接到新的 GEO 测量系统，' +
+      '重新供上「提及率」这个指标）。在那之前，AI 可见度这条线「做了有没有用」是算不出来的，先让你知道这件事。',
     href: '',
+  })
+}
+
+/**
+ * ai-tracker-weekly cron 删了 —— 去 healthchecks.io 停用它那个 check，否则误报 down。
+ *
+ * 一次性人工活儿(第三方后台的按钮,我们这边点不到)。子牙 + 魏征复审都点名:只写进
+ * render.yaml 注释 = 只有开发看得到 = 又一个小型断头。放进同一个管道,给直达链接。
+ * ⚠️ 这条做完就该删(合并后 PO/FDE 停用完,把这个 push 从 loadManualItems 去掉),
+ *    不然它会天天冒 —— 它没有活状态可依,是硬编码的一次性提醒。
+ */
+function pushHealthcheckRetireItem(items: ManualItem[]): void {
+  items.push({
+    kind: 'healthcheck_orphaned',
+    client_id: 'infra',
+    client_name: 'Magic Engine 后台',
+    what:
+      '「AI 可见度追踪」那个每周自动任务已经删掉了，但它在监控站(healthchecks.io)上的' +
+      '心跳还挂着 —— 没人再报到，它会开始误报「任务挂了」，把真的告警淹掉。',
+    how:
+      '登录 healthchecks.io → 找到名字叫 ai-tracker-weekly 的那个 check(编号 ' +
+      'c4f101fe-c2cf-47f9-807f-08ea09d43934)→ 点 Pause 或 Remove。停完回我一句,我把这条提醒撤掉。',
+    href: 'https://healthchecks.io/',
   })
 }
 
