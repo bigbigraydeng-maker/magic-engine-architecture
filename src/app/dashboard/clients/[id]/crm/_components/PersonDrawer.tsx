@@ -7,9 +7,9 @@
  * 滑出，手机上铺满整屏。prospecting 的看板也是这个交互。
  */
 
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { ComposeNote, type StageOption } from './ComposeNote'
-import { ContactTimeline } from './ContactTimeline'
+import { ContactTimeline, type TimelineSummary } from './ContactTimeline'
 import { MessengerReply } from './MessengerReply'
 import { DncBanner } from './DncBanner'
 import { drawerActions, nextStageChoices, type Channel } from '@/lib/crm/drawer-actions'
@@ -71,6 +71,13 @@ export function PersonDrawer({
   const [quickBusy, setQuickBusy] = useState(false)
   /** 记完一笔换个 key，让时间线重新拉一次 —— 刚记的那条要立刻出现在上面。 */
   const [timelineKey, setTimelineKey] = useState(0)
+  /**
+   * 顶上那张「上次说到这」卡片的内容，由 `ContactTimeline` 算好回传。
+   * `useCallback` 是必须的：这个函数进了那边的 `load` 依赖，每次渲染换一个新
+   * 引用会让它无限重拉。
+   */
+  const [summary, setSummary] = useState<TimelineSummary | null>(null)
+  const onSummary = useCallback((s: TimelineSummary | null) => setSummary(s), [])
 
   const changeStage = async (toStage: string, label: string) => {
     if (!window.confirm(`现在：${row.stageLabel ?? '还没标到哪一步'} → 改成「${label}」？`)) return
@@ -150,6 +157,46 @@ export function PersonDrawer({
         </header>
 
         <div className="flex-1 overflow-y-auto px-4 py-3">
+          {/*
+            开口前要知道的三样，摆在**第一屏**（PM 2026-08-17，CTS 销售视角）。
+
+            抽屉原先的顺序是：联系方式 → 阶段 → 按钮 → 回私信 → 往来记录。
+            可销售脑子里的顺序是「他上次说了什么 → 我现在说什么 → 号码在哪」——
+            最该先看的那句话在最下面，还得再往下滚到那一段的末尾才看得到。
+
+            这三样都来自往来记录本身，不额外拉一次接口：`ContactTimeline`
+            算好之后回传（判据只有一份）。
+          */}
+          {summary && (summary.lastText || summary.tour || summary.travelWindow) && (
+            <div className="mb-3 rounded-xl border border-me-ochre/25 bg-me-ochre/[0.06] px-3 py-2.5">
+              {summary.lastText && (
+                <>
+                  <p className="text-[10px] font-black uppercase tracking-[0.12em] text-me-ochre">
+                    上次说到这
+                  </p>
+                  <p className="mt-1 line-clamp-3 text-[13px] leading-relaxed text-me-charcoal/85">
+                    <span className="font-bold">{summary.lastWho}：</span>
+                    {summary.lastText}
+                  </p>
+                </>
+              )}
+              {(summary.tour || summary.travelWindow) && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {summary.tour && (
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-bold text-me-charcoal/75">
+                      想去：{summary.tour}
+                    </span>
+                  )}
+                  {summary.travelWindow && (
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-bold text-me-charcoal/75">
+                      {summary.travelWindow} 走
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* 联系方式 —— 手机上点一下就拨 */}
           <div className="flex flex-wrap gap-2">
             {/* 号码打不通就**不给拨号链接** —— 号码照旧显示出来（要改号得先看得见），
@@ -291,7 +338,12 @@ export function PersonDrawer({
             <p className="mb-2 text-[11px] font-black uppercase tracking-[0.14em] text-me-ochre">
               往来记录
             </p>
-            <ContactTimeline key={timelineKey} clientId={clientId} contactId={row.contactId} />
+            <ContactTimeline
+              key={timelineKey}
+              clientId={clientId}
+              contactId={row.contactId}
+              onSummary={onSummary}
+            />
           </div>
         </div>
       </aside>
