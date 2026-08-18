@@ -70,11 +70,37 @@ export interface LaneSummaryView {
   readonly smallSample: boolean
 }
 
-const STATUS_LABEL: Readonly<Record<LaneStatusTone, (allOperating: boolean) => string>> = {
-  operating: (allOperating) => (allOperating ? '全部在跑' : '有在跑的，其余还在建'),
-  built_not_live: () => '建好了但没通电',
-  building: () => '还在建',
-  blocked: () => '卡住等你决定',
+/**
+ * 「其余那些」怎么说——按剩余组件的**实际 bucket** 生成，不能一律说「还在建」：
+ * 一条线同时有「建好了但没通电」和「还在建」时，笼统说成「还在建」会把已经
+ * 接完线、只差通电的组件说矮一档，跟组件详情页自相矛盾（Codex 复审 P2）。
+ */
+function restPhrase(rest: readonly LaneComponentInput[]): string {
+  const hasBuiltNotLive = rest.some((c) => c.bucket === 'built_not_live')
+  const hasBuilding = rest.some((c) => c.bucket === 'building')
+  if (hasBuiltNotLive && hasBuilding) return '有的建好了但没通电、有的还在建'
+  if (hasBuiltNotLive) return '建好了但没通电'
+  return '还在建'
+}
+
+function statusLabelOf(
+  tone: LaneStatusTone,
+  components: readonly LaneComponentInput[],
+  needsYourCall: boolean,
+): string {
+  if (tone === 'blocked') {
+    // 卡点分两种，措辞必须分开：`decisionsNow` 里有这条线的组件 = 真的等 PM 拍板；
+    // 否则是代码/数据/上游依赖的技术卡点，那是 agent 自己该处理的，
+    // 不能写成「等你决定」把活上抛给老板（CLAUDE.md 铁律 2 + 3，Codex 复审 P2）。
+    return needsYourCall ? '卡住等你决定' : '卡住了，我们在处理'
+  }
+  const rest = components.filter((c) => c.bucket !== 'operating')
+  if (tone === 'operating') {
+    return rest.length === 0 ? '全部在跑' : `有在跑的，其余${restPhrase(rest)}`
+  }
+  // 零在跑的两档（built_not_live / building）共用同一套「其余」措辞，
+  // 免得「建好了但没通电」把混在里面、还在建的组件一起吞掉。
+  return restPhrase(rest)
 }
 
 const SMALL_SAMPLE_THRESHOLD = 2
@@ -116,16 +142,19 @@ export function buildLaneSummaries(data: LaneSummaryInput): readonly LaneSummary
         ? '在跑的是老系统，新体系还在建——分数低不代表这条线没在干活'
         : null
 
+    // statusLabel 要靠它区分「真等你拍板」和「技术卡点」，所以先算出来。
+    const needsYourCall = lane.components.some((c) => decisionComponentNames.has(c.name))
+
     return {
       laneLabel: lane.laneLabel,
       statusTone,
-      statusLabel: STATUS_LABEL[statusTone](operating.length === total),
+      statusLabel: statusLabelOf(statusTone, lane.components, needsYourCall),
       operatingCount: operating.length,
       totalCount: total,
       blockedCount: blocked.length,
       legacyOperatingNote,
       nextStepLabel: firstRoadmapStepByLane.get(lane.laneLabel) ?? null,
-      needsYourCall: lane.components.some((c) => decisionComponentNames.has(c.name)),
+      needsYourCall,
       smallSample: total <= SMALL_SAMPLE_THRESHOLD,
     }
   })

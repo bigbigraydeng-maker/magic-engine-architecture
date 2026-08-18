@@ -75,12 +75,91 @@ describe('buildLaneSummaries — 状态灯判定', () => {
       }],
     }))
     expect(s.statusTone).toBe('blocked')
-    expect(s.statusLabel).toBe('卡住等你决定')
+    // decisionsNow 是空的 —— 这是技术卡点，不是等 PM 拍板（见下面 Codex 复审那一组）
+    expect(s.statusLabel).toBe('卡住了，我们在处理')
     // 卡住不代表没在跑 —— 5 个组件全部 bucket='operating'（含那个被卡住的），
     // 分数和卡住数分开存，UI 层各自展示，不挤成一句话自相矛盾
     expect(s.operatingCount).toBe(5)
     expect(s.totalCount).toBe(5)
     expect(s.blockedCount).toBe(1)
+  })
+})
+
+describe('buildLaneSummaries — 「其余那些」按实际 bucket 说（Codex 复审 P2）', () => {
+  it('剩余全是「建好了但没通电」→ 不能降级说成「还在建」', () => {
+    const [s] = buildLaneSummaries(input({
+      lanes: [{
+        laneLabel: 'SEO',
+        components: [component({ name: 'a' }), component({ name: 'b', bucket: 'built_not_live' })],
+      }],
+    }))
+    expect(s.statusLabel).toBe('有在跑的，其余建好了但没通电')
+  })
+
+  it('剩余「建好没通电」和「还在建」混着 → 两种都说到，不吞掉任何一种', () => {
+    const [s] = buildLaneSummaries(input({
+      lanes: [{
+        laneLabel: 'SEO',
+        components: [
+          component({ name: 'a' }),
+          component({ name: 'b', bucket: 'built_not_live' }),
+          component({ name: 'c', bucket: 'building' }),
+        ],
+      }],
+    }))
+    expect(s.statusLabel).toBe('有在跑的，其余有的建好了但没通电、有的还在建')
+  })
+
+  it('零在跑、「建好没通电」和「还在建」混着 → 黄灯，文案同样两种都说到', () => {
+    const [s] = buildLaneSummaries(input({
+      lanes: [{
+        laneLabel: '广告',
+        components: [
+          component({ name: 'a', bucket: 'built_not_live' }),
+          component({ name: 'b', bucket: 'building' }),
+        ],
+      }],
+    }))
+    expect(s.statusTone).toBe('built_not_live')
+    expect(s.statusLabel).toBe('有的建好了但没通电、有的还在建')
+  })
+
+  it('零在跑、全部「建好没通电」→ 文案保持原样', () => {
+    const [s] = buildLaneSummaries(input({
+      lanes: [{ laneLabel: '广告', components: [component({ name: 'a', bucket: 'built_not_live' })] }],
+    }))
+    expect(s.statusLabel).toBe('建好了但没通电')
+  })
+})
+
+describe('buildLaneSummaries — 卡点分「等你拍板」和「技术卡点」（Codex 复审 P2）', () => {
+  it('卡住 + 这条线确实有等 PM 拍板的事 → 才说「等你决定」', () => {
+    const [s] = buildLaneSummaries(input({
+      lanes: [{ laneLabel: 'geo', components: [component({ name: '审批界面', isBlocked: true })] }],
+      decisionsNow: [{ componentName: '审批界面' }],
+    }))
+    expect(s.statusTone).toBe('blocked')
+    expect(s.needsYourCall).toBe(true)
+    expect(s.statusLabel).toBe('卡住等你决定')
+  })
+
+  it('卡住但没有任何等拍板的事（代码/数据/上游依赖卡点）→ 不能上抛给老板', () => {
+    const [s] = buildLaneSummaries(input({
+      lanes: [{ laneLabel: 'geo', components: [component({ name: '抓取管道', bucket: 'building', isBlocked: true })] }],
+      decisionsNow: [],
+    }))
+    expect(s.statusTone).toBe('blocked')
+    expect(s.needsYourCall).toBe(false)
+    expect(s.statusLabel).toBe('卡住了，我们在处理')
+    expect(s.statusLabel).not.toContain('你')
+  })
+
+  it('卡住的组件属于别的线、本线没决策 → 本线文案也不能说「等你决定」', () => {
+    const [s] = buildLaneSummaries(input({
+      lanes: [{ laneLabel: 'geo', components: [component({ name: 'a', isBlocked: true })] }],
+      decisionsNow: [{ componentName: '别的线的组件' }],
+    }))
+    expect(s.statusLabel).toBe('卡住了，我们在处理')
   })
 })
 
