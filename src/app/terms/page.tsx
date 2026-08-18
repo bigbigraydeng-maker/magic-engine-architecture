@@ -1,3 +1,8 @@
+/* LEGAL REVIEW REQUIRED BEFORE MERGE: operating-entity name updated per #1049 Entity Definition v1
+ * to Magic Engine AI Technology Limited (New Zealand). Governing law, jurisdiction clause,
+ * New Zealand Privacy Act 2020 vs Australian Privacy Principles applicability, Australian Consumer Law
+ * reference, cross-border data disclosure, contract migration from the previous operating entity, and
+ * NZ Company Number / NZBN display remain UNTOUCHED and require legal counsel review before merge. */
 import type { Metadata } from 'next'
 
 export const metadata: Metadata = {
@@ -17,7 +22,7 @@ export default function TermsPage() {
 
         <p className="mb-8 text-gray-700">
           These Terms of Service (&ldquo;Terms&rdquo;) govern your access to and use of Magic
-          Engine, operated by Magic Lab (&ldquo;we&rdquo;, &ldquo;us&rdquo;, or &ldquo;our&rdquo;).
+          Engine, operated by Magic Engine AI Technology Limited (&ldquo;we&rdquo;, &ldquo;us&rdquo;, or &ldquo;our&rdquo;).
           By using Magic Engine, you agree to be bound by these Terms.
         </p>
 
@@ -87,7 +92,7 @@ export default function TermsPage() {
         <Section title="5. Intellectual Property">
           <p className="text-gray-700">
             The Magic Engine platform, including its software, design, and AI-generated analysis
-            framework, is owned by Magic Lab and protected by intellectual property laws. You may
+            framework, is owned by Magic Engine AI Technology Limited and protected by intellectual property laws. You may
             not copy, modify, distribute, or reverse-engineer any part of the platform.
           </p>
         </Section>
@@ -115,7 +120,7 @@ export default function TermsPage() {
 
         <Section title="7. Limitation of Liability">
           <p className="text-gray-700">
-            To the fullest extent permitted by law, Magic Lab shall not be liable for any indirect,
+            To the fullest extent permitted by law, Magic Engine AI Technology Limited shall not be liable for any indirect,
             incidental, special, or consequential damages arising from your use of Magic Engine,
             including but not limited to loss of revenue, loss of data, or loss of business
             opportunity. Our total liability for any claim shall not exceed the fees paid by you

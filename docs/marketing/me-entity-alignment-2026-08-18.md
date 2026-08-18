@@ -135,7 +135,76 @@ Non-Brisbane mentions retained (correctly — these are customer testimonials / 
 
 - All existing static HTML uses `data-en` / `data-zh` for i18n. The new About canonical `<p>` follows the same pattern; `data-zh` is temporarily populated with the EN string as a translation placeholder, subject to PM approval.
 - The `website/cn/about.html` body is deliberately not enriched with a translated canonical description — see §3.3.
-- No changes to `website/robots.txt`, `website/sitemap.xml`, `website/app.js`, `website/google-tag.js`, `website/meta-pixel.js`, `scripts/**`, `src/**`.
+- No changes to `website/robots.txt`, `website/sitemap.xml`, `website/app.js`, `website/google-tag.js`, `website/meta-pixel.js`, `scripts/**`.
+- **Revised 2026-08-19 (round 2)**: `src/**` IS now in scope — see §9. The round-1 scan was limited to `website/**` and therefore missed the Next.js app's own public entity pages, which carried the same wrong facts.
+
+## 9. Round 2 (2026-08-19) — app-layer entity surfaces + main refresh
+
+Round 1 (commit `ed098cf9`) scanned and fixed **`website/**` only**. A whole-repo scan in round 2 found the
+Next.js app serves its own public entity pages that round 1 never touched, still claiming the old facts.
+
+### 9.1 Branch refreshed onto latest main
+
+`git merge origin/main` (no rebase, per repo git rules). Main tip `1d66c7f3`; #1055 merge `330e4a5e` confirmed as
+an ancestor of main before any work started. Merge was clean — **0 conflicts**. Main had touched none of the
+`website/**` HTML in between; its only overlap with this branch's file set was `CLAUDE.md`, `docs/ROADMAP.md`
+and `website/google-tag.js` (the last is #1055 territory and remains untouched here).
+
+### 9.2 Public app pages corrected
+
+| File | Wrong claim (before) | Now |
+|---|---|---|
+| `src/app/about/page.tsx` | `Magic Lab — operator of Magic Engine`; `98 Beatrice Terrace, Ascot, Brisbane, Queensland, Australia`; footer `© Magic Lab` | `Magic Engine AI Technology Limited — operator of Magic Engine`; `New Zealand`; footer `© Magic Engine AI Technology Limited` |
+| `src/app/contact/page.tsx` | Brisbane street address; footer `© Magic Lab` | `New Zealand`; footer entity corrected |
+| `src/app/privacy/page.tsx` | Contact block `Magic Lab` + Brisbane street address | Entity name + `New Zealand`; **`LEGAL REVIEW REQUIRED BEFORE MERGE` marker added at file head** |
+| `src/app/terms/page.tsx` | `operated by Magic Lab`, `owned by Magic Lab`, `Magic Lab shall not be liable` (3 occurrences) | Entity name in all 3; **`LEGAL REVIEW REQUIRED BEFORE MERGE` marker added at file head** |
+| `src/app/layout.tsx` | `authors` / `creator` / `publisher` metadata all `Magic Lab` — emitted on **every** app page | All three now `Magic Engine AI Technology Limited` |
+| `src/app/authorisation/page.tsx` | `Magic Engine is built and operated by Magic Lab, which is the name you will see on invoices…`; footer `© Magic Lab` | Entity name in both. This is the platform-facing authorisation/anti-phishing disclosure — the invoice name it promises must match the real operating entity |
+| `src/app/page.tsx` | Homepage footer `© Magic Lab. All rights reserved.` | `© Magic Engine AI Technology Limited. All rights reserved.` |
+| `README.md` | `Magic Lab 2026 旗舰产品` in the repo subtitle | Subtitle de-parented; Magic Lab explicitly marked `proposed_future_holding_brand, unregistered, not current legal parent` |
+
+`src/app/terms/page.tsx` §9 Governing Law (`the laws of New South Wales, Australia`) is **deliberately untouched** —
+an NZ-incorporated operator with an NSW governing-law clause is exactly the kind of question this PR is not
+allowed to answer. It is a **legal blocker**, listed in §9.5.
+
+### 9.3 Canonical internal marker normalised
+
+The exact machine-readable label `proposed_future_holding_brand, unregistered, not current legal parent` now appears in
+`CLAUDE.md`, `README.md`, `docs/ARCHITECTURE.md`, `docs/PRODUCT.md`, `docs/ROADMAP.md` — round 1 had the meaning in prose
+but not one consistent greppable token.
+
+### 9.4 `Magic Lab` occurrences deliberately RETAINED (not entity claims)
+
+Left alone on purpose; flagged here so a future scan does not read silence as an oversight:
+
+- `src/app/unauthorized/page.tsx`, `src/components/auth/FeatureLockGate.tsx`, `src/lib/auth/client-access.ts`,
+  `src/lib/mtc/charge.ts`, `src/lib/messaging/adapters/messenger.ts`, `src/app/api/**` error strings — internal
+  support/team copy shown to authenticated users ("contact the Magic Lab team"), not a legal-entity or ownership claim.
+- `public/decks/magic-lab-class-membership/**` — Magic Lab Class is a separate brand/product surface, out of scope for
+  the Magic Engine entity layer.
+- `src/lib/diagnostic/scheduled-run.ts` + tests, `supabase/migrations/**` — `Magic Lab` there is a **client record name**
+  in the database. Factual; renaming it would corrupt data references.
+- `website/**` "Brisbane" hits — customer testimonials (`Café owner · Brisbane QLD`) and ads-targeting copy
+  (`Auckland + Brisbane Chinese market`, `areaServed` on `cn/ads.html`). Market/service-area facts, not the entity address.
+
+### 9.5 Legal blockers (unchanged + newly surfaced)
+
+Must be answered by counsel before ANY of the Terms/Privacy files merge:
+
+1. Governing law + jurisdiction — `website/terms.html`, `website/cn/terms.html` **and now `src/app/terms/page.tsx`
+   (currently New South Wales, Australia, against an NZ operating entity)**.
+2. NZ Privacy Act 2020 vs Australian Privacy Principles applicability boundary (both website and `src/app/privacy/page.tsx`).
+3. Australian Consumer Law reference.
+4. Cross-border data disclosure.
+5. NZ Company Number / NZBN public display requirement (nothing displayed today).
+6. Contract migration effect on customer agreements signed under the previous operating entity.
+7. Whether the previous operating entity must remain named anywhere for continuity of existing contracts.
+
+### 9.6 Open PM decision (not a technical choice)
+
+`website/cn/about.html` still has **no** canonical description paragraph, while `website/about.html` carries the frozen EN
+string. Two options, both need PM: (a) approve a CN translation, or (b) publish the frozen EN string verbatim on the CN
+page. Round 1 deferred it; round 2 keeps the deferral rather than inventing Chinese positioning language.
 
 ## 8. Actions NOT performed (per PM directive)
 
