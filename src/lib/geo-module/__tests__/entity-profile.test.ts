@@ -135,4 +135,38 @@ describe('GeoEntityProfile — fail-closed contract', () => {
     } as GeoEntityProfile
     expect(() => interpretObservation({ ...base, entityProfile: bad })).toThrow(GeoEntityProfileError)
   })
+
+  // ── 空字符串 anchor fail-closed 闸（Build Control Review 补口）──
+  // 背景：JS 里 `"anything".includes("") === true`，`[''] anchor` 会静默污染
+  // 消歧的 `geo && domain` 门，让任何文本都通过。**必须**堵在校验器。
+
+  it('disambiguationAnchors: [""] → fail closed（避免 includes("") 污染消歧门）', () => {
+    const bad: GeoEntityProfile = {
+      canonicalDisplayName: 'Magic Engine',
+      disambiguationAnchors: [''],
+      geoAnchorsMultiword: [],
+      geoAnchorsShortWordBoundary: [],
+    }
+    expect(() => interpretObservation({ ...base, entityProfile: bad })).toThrow(GeoEntityProfileError)
+  })
+
+  it('geoAnchorsMultiword: [" "] → fail closed（纯空白同样禁止）', () => {
+    const bad: GeoEntityProfile = {
+      canonicalDisplayName: 'Magic Engine',
+      disambiguationAnchors: ['seo'],
+      geoAnchorsMultiword: [' '],
+      geoAnchorsShortWordBoundary: [],
+    }
+    expect(() => interpretObservation({ ...base, entityProfile: bad })).toThrow(GeoEntityProfileError)
+  })
+
+  it('geoAnchorsShortWordBoundary: [""] → fail closed', () => {
+    const bad: GeoEntityProfile = {
+      canonicalDisplayName: 'Magic Engine',
+      disambiguationAnchors: ['seo'],
+      geoAnchorsMultiword: [],
+      geoAnchorsShortWordBoundary: [''],
+    }
+    expect(() => interpretObservation({ ...base, entityProfile: bad })).toThrow(GeoEntityProfileError)
+  })
 })

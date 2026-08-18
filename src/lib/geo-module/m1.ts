@@ -80,8 +80,19 @@ export function validateEntityProfile(profile: unknown): asserts profile is GeoE
   }
   for (const key of ['disambiguationAnchors', 'geoAnchorsMultiword', 'geoAnchorsShortWordBoundary'] as const) {
     const v = p[key]
-    if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) {
-      throw new GeoEntityProfileError(`entityProfile.${key} 必须是 string[]（允许空数组，禁止 undefined / null / 非字符串）`)
+    if (!Array.isArray(v)) {
+      throw new GeoEntityProfileError(`entityProfile.${key} 必须是 string[]（允许空数组，禁止 undefined / null / 非数组）`)
+    }
+    // 🔴 fail-closed 空字符串闸：JS 里 `"anything".includes("") === true`；空 / 纯空白字符串 anchor
+    //    会静默污染 `geo && domain` 消歧门（不修则 `['']` 可让任何文本通过消歧）。
+    //    这里只堵漏洞，不做 lowercase / normalization / dedup —— 数据清洗归调用方。
+    for (const item of v) {
+      if (typeof item !== 'string') {
+        throw new GeoEntityProfileError(`entityProfile.${key} 数组元素必须是 string（禁止 undefined / null / 非字符串）`)
+      }
+      if (item.trim().length === 0) {
+        throw new GeoEntityProfileError(`entityProfile.${key} 数组元素禁止空字符串或纯空白字符串`)
+      }
     }
   }
 }
