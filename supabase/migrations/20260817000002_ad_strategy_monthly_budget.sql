@@ -18,7 +18,9 @@
 --   · 界面：src/app/dashboard/clients/[id]/settings/_components/AdStrategyPanel.tsx
 --   · 待办：src/lib/pm-todo/ads-angle-test-items.ts（没填 → 进今日待办）
 --
--- 🔴 PM 显式 `go apply budget`（2026-08-17）之后才 apply。
+-- 🔴 **需要 Product Owner 重新说一次 `go apply budget` 才能 apply。**
+--    2026-08-17 授权过一次，但当时那一版没有 `monthly_ad_budget_month` 这一列
+--    （子牙 2026-08-18 复审后加的），**内容已经变了，旧的那次授权不算数**。
 -- ============================================================================
 
 ALTER TABLE public.ad_strategy_configs
