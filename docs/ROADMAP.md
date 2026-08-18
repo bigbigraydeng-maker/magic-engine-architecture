@@ -50,8 +50,12 @@
 > **别把「issue 已关闭」读成「功能已在生产生效」** —— 关闭只代表代码交付完成。
 
 **未完成**：
-- [ ] **WP05** [#879](https://github.com/bigbigraydeng-maker/magic-engine/issues/879) GEO Module v1 —— 第一个 Domain Module，**唯一明确的 `src/lib/growth` 首个消费方**。2026-08-12 已冻结 `geo-module/m1/v1` 语义（实体匹配 / 别名 / 消歧判据），**实现仍未授权**，卡在前置 #930
-- [ ] **WP05 前置** [#930](https://github.com/bigbigraydeng-maker/magic-engine/issues/930) Roman 页面台账的发现与激活边界 —— 草稿 PR [#935](https://github.com/bigbigraydeng-maker/magic-engine/pull/935) 复审中。⚠️ 与 #932 在「页面台账」上重叠，边界待 Build Control Room 裁定
+> WP05（#879）与前置 #930 已于 2026-08-17 合入 main（PR #1032 / #1020）—— 详见 [CHANGELOG](./history/CHANGELOG.md)，此处按仓库约定不再保留完成项。
+
+**WP05 follow-up**（本轮不扩，登记待排）：
+- [ ] **#1023** WP05 follow-up
+- [ ] **#1030** WP05 follow-up
+- [ ] [#1040](https://github.com/bigbigraydeng-maker/magic-engine/issues/1040) 聚合分组键需按 `engine_family / model_version / query_set_version` 隔离（未知 fail-closed）—— Codex #1032 第 4 轮 P1-c，Roman 单引擎/单模型未触发但结构上带洞；已在 [comment 5315681257](https://github.com/bigbigraydeng-maker/magic-engine/issues/1040#issuecomment-5315681257) 追加两条：severity 分母独立锁减弱（P1-b 副作用）· `buildStatement` 表述错位（仍报 explicit_positive/conditional 计数但本链已不承诺）
 - [ ] **WP07** [#880](https://github.com/bigbigraydeng-maker/magic-engine/issues/880) Kernel 授权的 apply / verify / rollback
 - [ ] **K-WP01** [#881](https://github.com/bigbigraydeng-maker/magic-engine/issues/881) 认证审批 / 拒绝界面 + 政策 Settings UI
 - [x] ~~**WP08**~~ ✅ **2026-08-12 完成** [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) Roman 首个有效生产 GEO baseline 已捕获并经 Product Owner 验收 —— 批次 `688bd8ae-2db6-4300-b761-b850f30c32c5`，冻结查询集 `roman_geo_baseline_v1`（12 条问题），12 / 12 观测成功 ＋ 12 条证据，累计记账成本 US$0.708 / US$5.00。
