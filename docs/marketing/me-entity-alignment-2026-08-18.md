@@ -200,11 +200,31 @@ Must be answered by counsel before ANY of the Terms/Privacy files merge:
 6. Contract migration effect on customer agreements signed under the previous operating entity.
 7. Whether the previous operating entity must remain named anywhere for continuity of existing contracts.
 
-### 9.6 Open PM decision (not a technical choice)
+### 9.6 CN canonical description — RESOLVED by PM 2026-08-19 (option a)
 
-`website/cn/about.html` still has **no** canonical description paragraph, while `website/about.html` carries the frozen EN
-string. Two options, both need PM: (a) approve a CN translation, or (b) publish the frozen EN string verbatim on the CN
-page. Round 1 deferred it; round 2 keeps the deferral rather than inventing Chinese positioning language.
+PM froze the CN canonical description and chose option (a), a translation:
+
+> Magic Engine 帮助澳大利亚和新西兰的英语及中文团队，在一个平台中提升 SEO、GEO、培训和可上线的执行能力，把诊断转化为清晰可见的实际工作。
+
+Applied in two places, **this sentence only** — no other CN positioning copy was written, extended or rewritten:
+
+- `website/cn/about.html` — new `<p class="lead">` directly under `<h1>关于 Magic Engine</h1>`, mirroring the EN page's structure. The page carries no `data-en`/`data-zh` attributes anywhere, so the paragraph is plain text in the page's own convention.
+- `website/about.html` — the lead paragraph's `data-zh` attribute previously held the EN string as an explicitly temporary placeholder (§7). It now holds the frozen CN string. `data-en` and the rendered EN body text are unchanged.
+
+**Semantic equivalence check** (EN → CN, clause by clause):
+
+| EN clause | CN clause | Equivalent |
+|---|---|---|
+| helps | 帮助 | ✅ |
+| English- and Chinese-speaking teams | 英语及中文团队 | ✅ |
+| across Australia and New Zealand | 澳大利亚和新西兰的 | ✅ |
+| improve SEO, GEO, training, and launch-ready execution | 提升 SEO、GEO、培训和可上线的执行能力 | ✅ |
+| in one place | 在一个平台中 | ✅ meaning preserved; CN says "platform" where EN says "place" — slightly more specific, still the same claim |
+| turning diagnosis into visible work | 把诊断转化为清晰可见的实际工作 | ✅ meaning preserved; CN adds "清晰/实际" (clear/actual) as natural Chinese emphasis |
+
+No claim exists in one language and not the other. Both strings are PM-frozen; the two nuances above are recorded, not edited.
+
+**Still untranslated on `website/cn/about.html` (pre-existing, out of scope)**: the "Who we are" / "Our name" body paragraphs are still English on the CN page. That predates this PR and is positioning copy, so it is left alone.
 
 ## 8. Actions NOT performed (per PM directive)
 
