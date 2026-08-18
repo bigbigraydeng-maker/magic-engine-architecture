@@ -73,6 +73,26 @@
 - [ ] **Product Map PR3**（WP「ME2 Product Map v1」的最后一段）—— **PR1**（组件登记册＋成熟度引擎,PR [#976](https://github.com/bigbigraydeng-maker/magic-engine/pull/976)）与 **PR2**（GitHub 只读动态同步,PR [#979](https://github.com/bigbigraydeng-maker/magic-engine/pull/979)）均已于 2026-08-15 合并**并完成生产 provisioning**（migration 已 apply · ME 仓 webhook 已建并有真实投递 · GITHUB_TOKEN/cron 密钥已配 · 首轮全量同步实测 12 PR / 14 issue / 28 条待分类）。剩 **PR3**:`/dashboard/me2/product-map` PO 控制台四视图（业务总览 / 组件清单 / 依赖 / 待拍板队列）——必须渲染 partial 轮、`manual_claim` 未核验标记、factsSource 三态,不许把不完整快照显示成完整。开工需 PO 授权。
       ⚠️ 已知遗留:同步的 `unresolved_threads` 恒 null(GraphQL 那一步静默失败),故每轮标 partial —— 独立修复任务在案,不阻塞 PR3
 
+### WP09 真改页 · 7 大堵点 follow-up 批（2026-08-18 路线图 v1.0 定稿）
+
+依据 `scratchpad/2026-08-18-wp09-real-page-changes-7-blockers-roadmap-v1.0.md`。**pilot = Roman 一个客户**，v1 目标 = 8 周内完成一次「引擎产处方 → PM 授权 → apply 到 GitHub-PR → 合并 → CF 自动部署 → T+7/14/28 复测」端到端闭环。
+
+**里程碑 M1 · v1 上线最小集合**（第 1–4 周，必须先做）
+- [ ] [#1062](https://github.com/bigbigraydeng-maker/magic-engine/issues/1062) 事实底座（per-client `facts.md` 三源合并）· 风险 A · P5/5 —— 阻塞 WP09 所有 apply；不修引擎全 defer
+- [ ] [#1064](https://github.com/bigbigraydeng-maker/magic-engine/issues/1064) 复测自动调度（T+7/14/28）· 风险 B · P4/5 —— 阻塞 WP10 首次复测；备选可撑首个 pilot
+
+**里程碑 M2 · v1 apply 前需就位**（第 3–5 周，与 M1 部分并行）
+- [ ] [#1030](https://github.com/bigbigraydeng-maker/magic-engine/issues/1030) page_type 词表全链漂移 · 风险 A · P3/5 —— 升级为 §5-D 三 PR 落地方案；v1 用人肉指定页面绕开
+- [ ] [#1066](https://github.com/bigbigraydeng-maker/magic-engine/issues/1066) 预生成回滚 diff + T+3/T+7 revert gate · 风险 A · P3/5 —— 首次 apply 后 7 天内必须上线
+
+**里程碑 M3 · 接第二个 pilot 客户前必解**（第 9 周之后）
+- [ ] [#1063](https://github.com/bigbigraydeng-maker/magic-engine/issues/1063) 授权分档三档策略 · 风险 A · P4/5 —— v1 用「PM 全审」备选可跑；规模化前必解
+- [ ] [#1065](https://github.com/bigbigraydeng-maker/magic-engine/issues/1065) Sanity provider 适配器 · 风险 A · P3/5 —— **依赖 PM 事实确认**：Roman 首页文案来自 Astro 源码 or Sanity？若 Sanity 则前置进 M2
+- [ ] [#1067](https://github.com/bigbigraydeng-maker/magic-engine/issues/1067) per-provider stale-snapshot 检测 · 风险 A · P3/5 —— GitHub-PR 天然安全；接第二个 provider 时同 PR 带上
+
+**依赖串行**：#1062 → #1064（复测要基于事实底座判断变化是不是自己造成的）· #1062 → #1063（授权分档要读红线短语）· #1065 → #1067（新 provider 必带 stale 检测）
+**可并行**：#1030 · #1065 · #1066 · #1067（provider 层与词表层无重叠）
+
 **独立并行、不并入本链**：[#886](https://github.com/bigbigraydeng-maker/magic-engine/issues/886) Operating Brief（参考闭环稳定前不开工）· [#887](https://github.com/bigbigraydeng-maker/magic-engine/issues/887) 广告安全泳道（**不许夹带进任何 ME2 的 WP**）
 
 **运维泳道（也不并入本链，等 PM 拍板）**：

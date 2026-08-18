@@ -5,6 +5,21 @@
 
 ---
 
+### 2026-08-18（WP09 真改页路线图 v1.0 定稿 + 7 大堵点 follow-up issue 建成）
+
+**发生了什么**：WP05 已经能给 Roman 出 GEO 处方了，但**处方要真的落到客户网站上**这条最后一公里，拆开有 7 个堵点——4 个硬堵点（文案 grounding 从哪来 / 谁来审 / 复测怎么触发 / 页面分类词表漂移）+ 3 个软堵点（客户网站架构多样化 / 灰度回滚 / 版本冲突）。路线图 v1.0 定稿（`scratchpad/2026-08-18-wp09-real-page-changes-7-blockers-roadmap-v1.0.md`），follow-up issue 全部建成、按里程碑排期，登记进 ROADMAP.md WP09 章节。
+
+**做了什么**（只登记 + 排期，不实施）：
+1. 6 个新 issue（§5-A/B/C/E/F/G）：[#1062](https://github.com/bigbigraydeng-maker/magic-engine/issues/1062) 事实底座 · [#1063](https://github.com/bigbigraydeng-maker/magic-engine/issues/1063) 授权分档 · [#1064](https://github.com/bigbigraydeng-maker/magic-engine/issues/1064) 复测自动调度 · [#1065](https://github.com/bigbigraydeng-maker/magic-engine/issues/1065) Sanity provider · [#1066](https://github.com/bigbigraydeng-maker/magic-engine/issues/1066) 预生成回滚 diff · [#1067](https://github.com/bigbigraydeng-maker/magic-engine/issues/1067) per-provider stale 检测
+2. §5-D 复用既有 [#1030](https://github.com/bigbigraydeng-maker/magic-engine/issues/1030)（page_type 词表全链漂移），追加评论升级为 A 级 + 拆三 PR 落地方案
+3. ROADMAP.md WP09 章节新增「7 大堵点 follow-up 批」三个里程碑清单（M1 v1 上线最小集合 / M2 v1 apply 前需就位 / M3 接第二个客户前必解）+ 依赖串并行说明
+
+**pilot 路径**：全部先在 Roman 上跑通，再复制到 CTS / Oztop。
+
+**下一步**：等 PO 决定实施顺序与主 / 备选取舍。**本 PR 不实施任何堵点、不改代码、不合并任何 apply PR**。
+
+---
+
 ### 2026-08-17（WP05 GEO Module v1 上线 —— Roman AI 可见度首个诊断可读出）
 
 **发生了什么**：把 Roman 一个月前测出来的 GEO 基线（AI 答案样本），第一次真的读成「有支柱、有严重度、有处方」的诊断。之前只有原始答案 + 引用覆盖率，看不出「AI 是不是把 Roman 作为**人**在答案里提出来」。
