@@ -131,10 +131,11 @@ async function migrateGa4(
     encryptToken: typeof import('../../src/lib/platform-oauth/vocabulary').encryptToken
     getValidAccessToken: typeof import('../../src/lib/google-oauth/client').getValidAccessToken
     listGa4Properties: typeof import('../../src/lib/ga4/admin').listGa4Properties
+    setGa4Property: typeof import('../../src/lib/ga4/property').setGa4Property
   },
   counts: { migrated: number; skipped: number; failed: number; noProperties: number },
 ): Promise<void> {
-  const { supabaseAdmin, encryptToken, getValidAccessToken, listGa4Properties } = deps
+  const { supabaseAdmin, encryptToken, getValidAccessToken, listGa4Properties, setGa4Property } = deps
   const label = `client=${row.client_id}`
 
   if (!row.scopes?.includes(GA4_SCOPE)) {
@@ -226,22 +227,31 @@ async function migrateGa4(
     return
   }
 
-  const now = new Date().toISOString()
-  await supabaseAdmin
-    .from('client_connectors')
-    .upsert(
-      {
-        client_id:    row.client_id,
-        anchor:       'ga4',
-        status:       'connected',
-        // google_email 跟线上 OAuth 回调（google/callback/route.ts）写的字段
-        // 对齐——settings 页面读这个字段显示"已连接为 xxx@gmail.com"。
-        config:       { google_email: row.google_email, property_id: chosen.property },
-        connected_at: now,
-        updated_at:   now,
-      },
-      { onConflict: 'client_id,anchor' },
+  // 2026-08-18 (#1052 PM Gate — final narrow review): this used to upsert
+  // client_connectors.anchor='ga4', status='connected' directly, mirroring
+  // (per this function's own header comment) "跟已经上线的行为保持一致" —
+  // the live OAuth callback's OLD auto-discovery logic. That logic has
+  // since been rewritten to route through setGa4Property() (the only
+  // function allowed to ever write status='connected', because it's the
+  // only one that calls verifyGa4PropertyAccess() first) — this script
+  // must match, or it reopens the exact bypass #1052 closed everywhere
+  // else. --live already gates every real Google call this function makes
+  // (see the dry-run return above), so calling setGa4Property() here is
+  // no less "live" than the listGa4Properties() call two lines up.
+  const connectResult = await setGa4Property(row.client_id, chosen.property)
+  if (!connectResult.ok) {
+    console.error(`[ga4] ${label} — setGa4Property rejected the migrated property (${connectResult.reason}), skip`)
+    counts.failed++
+    return
+  }
+  if (connectResult.status === 'error') {
+    console.warn(
+      `[ga4] ${label} — property=${chosen.property} saved but failed live verification ` +
+      `(${connectResult.reason}: ${connectResult.detail}) — connector left in status='error', not counted as migrated`,
     )
+    counts.failed++
+    return
+  }
   counts.migrated++
 }
 
@@ -250,6 +260,7 @@ async function main() {
   const { encryptToken } = await import('../../src/lib/platform-oauth/vocabulary')
   const { getValidAccessToken } = await import('../../src/lib/google-oauth/client')
   const { listGa4Properties } = await import('../../src/lib/ga4/admin')
+  const { setGa4Property } = await import('../../src/lib/ga4/property')
 
   console.log(`[migrate-google-oauth-tokens] mode=${LIVE ? 'LIVE (will write)' : 'DRY-RUN (zero writes, zero external calls)'}`)
 
@@ -280,7 +291,7 @@ async function main() {
     }
 
     try {
-      await migrateGa4(row, { supabaseAdmin, encryptToken, getValidAccessToken, listGa4Properties }, ga4Counts)
+      await migrateGa4(row, { supabaseAdmin, encryptToken, getValidAccessToken, listGa4Properties, setGa4Property }, ga4Counts)
     } catch (err) {
       console.error(`[ga4] client=${row.client_id} — unexpected error, skip and continue:`, err)
       ga4Counts.failed++
