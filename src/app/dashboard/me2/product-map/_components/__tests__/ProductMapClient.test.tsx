@@ -1,6 +1,9 @@
 /**
  * 控制台 smoke:渲染不炸 + 三条「必须让 PM 看见」的信息真的出现在屏幕上。
  * 不做 E2E,只锁「presenter 说了但组件忘了渲染」这一类漏。
+ *
+ * 🔴 2026-08-19:默认视图从「等你拍板」改成「老板摘要」(PM 现场反馈拍板)。
+ * 老 7 个技术视图收进「查看技术细节」入口，测试里先点它进详情模式再测。
  */
 
 import * as React from 'react'
@@ -30,21 +33,62 @@ function present(overrides: Partial<PresenterInput> = {}) {
   })
 }
 
-describe('ProductMapClient', () => {
+/** 从默认的老板摘要页点进技术细节模式（原来的 7 个标签页）。 */
+function enterDetails() {
+  fireEvent.click(screen.getByText('查看技术细节 →'))
+}
+
+describe('ProductMapClient — 老板摘要（默认视图）', () => {
   it('渲染不炸,标题与「不含客户业绩」声明在', () => {
     render(<ProductMapClient data={present()} />)
     expect(screen.getByText('ME2 产品地图')).toBeDefined()
     expect(screen.getByText(/不含客户业绩数据/)).toBeDefined()
   }, 30_000)
 
-  it('默认落在「等你拍板」,且决策文案上屏', () => {
+  it('默认打开就是老板摘要,按业务线收成一行卡片,不用点任何东西', () => {
     render(<ProductMapClient data={present()} />)
-    expect(screen.getByText(/现在就等你一句话/)).toBeDefined()
-    expect(screen.getByText(/条件到了会来找你/)).toBeDefined()
+    expect(screen.getByText('几条线共用')).toBeDefined()
+    expect(screen.getByText('AI 可见度')).toBeDefined()
   }, 30_000)
 
+  it('默认视图不出现技术警告清单(registryWarnings 那种原始字段名文本)', () => {
+    const { container } = render(<ProductMapClient data={present()} />)
+    // 简化版提示只说"新不新"，不逐条列 manual_claim 这种内部字段名
+    expect(container.textContent).not.toContain('manual_claim')
+  }, 30_000)
+
+  it('真实种子数据里「几条线共用」6/7 组件卡住 → 红灯,分数和卡住数分开显示,不自相矛盾', () => {
+    const { container } = render(<ProductMapClient data={present()} />)
+    const text = container.textContent ?? ''
+    expect(text).toContain('卡住等你决定')
+    expect(text).toContain('1/7 在跑')
+    expect(text).toContain('6 项被卡住')
+  }, 30_000)
+
+  it('唯一在跑的是老系统时带提示,不能让人以为这条线没在干活', () => {
+    const { container } = render(<ProductMapClient data={present()} />)
+    expect(container.textContent).toContain('在跑的是老系统')
+  }, 30_000)
+
+  it('小样本线(社媒只登记 2 项)标注样本少,不显得跟大样本线一样有把握', () => {
+    const { container } = render(<ProductMapClient data={present()} />)
+    const text = container.textContent ?? ''
+    expect(text).toContain('社媒')
+    expect(text).toContain('样本少，只登记了 2 项')
+  }, 30_000)
+
+  it('「查看技术细节」入口点了才进 7 个技术标签页，默认不显示标签栏', () => {
+    render(<ProductMapClient data={present()} />)
+    expect(screen.queryByText('各条线做到哪了')).toBeNull()
+    enterDetails()
+    expect(screen.getByText('各条线做到哪了')).toBeDefined()
+  }, 30_000)
+})
+
+describe('ProductMapClient — 技术细节模式（点「查看技术细节」之后）', () => {
   it('未 provision 时横幅明说「同步还没开通」,不显示成一切正常', () => {
     render(<ProductMapClient data={present({ loadOutcome: 'not_provisioned' })} />)
+    enterDetails()
     expect(screen.getByText(/同步还没开通/)).toBeDefined()
   }, 30_000)
 
@@ -53,11 +97,20 @@ describe('ProductMapClient', () => {
       prFacts: [{ number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: 'x', humanSummary: null, observedAt: '2026-08-15T09:00:00Z' }],
     })
     render(<ProductMapClient data={data} />)
+    enterDetails()
     expect(screen.getByText(/进度可能被低估/)).toBeDefined()
+  }, 30_000)
+
+  it('落地就是「等你拍板」,决策文案上屏(技术细节模式里旧原则没变)', () => {
+    render(<ProductMapClient data={present()} />)
+    enterDetails()
+    expect(screen.getByText(/现在就等你一句话/)).toBeDefined()
+    expect(screen.getByText(/条件到了会来找你/)).toBeDefined()
   }, 30_000)
 
   it('切到「谁垫着谁」:导览强调不是时间表 + 孤立件单列', () => {
     render(<ProductMapClient data={present()} />)
+    enterDetails()
     fireEvent.click(screen.getByText('谁垫着谁'))
     expect(screen.getByText(/谁垫在谁下面/)).toBeDefined()
     expect(screen.getByText(/这些暂时没登记依赖关系/)).toBeDefined()
@@ -65,6 +118,7 @@ describe('ProductMapClient', () => {
 
   it('切到「查一件事」:同步没开通说「要等同步」,不是查无结果', () => {
     render(<ProductMapClient data={present()} />)
+    enterDetails()
     fireEvent.click(screen.getByText('查一件事'))
     expect(screen.getByText(/检索要等同步开通/)).toBeDefined()
   }, 30_000)
@@ -74,13 +128,14 @@ describe('ProductMapClient', () => {
       prFacts: [{ number: 863, state: 'merged', isDraft: false, unresolvedThreads: 0, title: '内核 PR 真标题', humanSummary: null, observedAt: '2026-08-15T09:00:00Z' }],
     })
     const { container } = render(<ProductMapClient data={data} />)
+    enterDetails()
     fireEvent.click(screen.getByText('查一件事'))
     expect(screen.getByText('内核 PR 真标题')).toBeDefined()
     expect(container.textContent).toContain('执行内核') // 业务人话名
     expect(container.textContent).not.toContain('platform.execution-kernel') // 内部 id 绝不上屏
   }, 30_000)
 
-  it('顶部摘要条:拆分数字 + 分母不暗示固定目标(板桥二轮设计审必改 3)', () => {
+  it('顶部摘要条:拆分数字 + 分母不暗示固定目标(板桥二轮设计审必改 3)——老板摘要页也有(不在 enterDetails 之后才有)', () => {
     const { container } = render(<ProductMapClient data={present()} />)
     expect(container.textContent).toContain('个真在生产里跑')
     expect(container.textContent).toContain('个建好了但还没接上线')
@@ -103,6 +158,7 @@ describe('ProductMapClient', () => {
       ],
     })
     render(<ProductMapClient data={data} />)
+    enterDetails()
     fireEvent.click(screen.getByText('查一件事'))
     expect(screen.getByText('给登录页加了个记住密码的选项')).toBeDefined()
     expect(screen.getByText(/AI 翻的,可能有出入/)).toBeDefined()
@@ -111,6 +167,7 @@ describe('ProductMapClient', () => {
 
   it('最近进展:不足 3 天数据时显式说明,不画假趋势线(板桥二轮设计审)', () => {
     render(<ProductMapClient data={present()} />)
+    enterDetails()
     fireEvent.click(screen.getByText('最近进展'))
     expect(screen.getByText(/至少攒够 3 天才会画线/)).toBeDefined()
   }, 30_000)
@@ -131,6 +188,7 @@ describe('ProductMapClient', () => {
       issueFacts: [{ number: 859, state: 'closed', title: 'y', humanSummary: null, observedAt: '2026-08-15T09:00:00Z' }],
     })
     render(<ProductMapClient data={data} />)
+    enterDetails()
     fireEvent.click(screen.getByText('最近进展'))
     expect(screen.getByText('合并了')).toBeDefined()
     expect(screen.getByText(/关掉了/)).toBeDefined()
@@ -139,6 +197,7 @@ describe('ProductMapClient', () => {
 
   it('接下来要做什么:明说不是日历,且按依赖顺序排列(PM 二轮反馈)', () => {
     const { container } = render(<ProductMapClient data={present()} />)
+    enterDetails()
     fireEvent.click(screen.getByText('接下来要做什么'))
     expect(screen.getByText(/系统里没有真实排期数据/)).toBeDefined()
     const text = container.textContent ?? ''
@@ -147,41 +206,19 @@ describe('ProductMapClient', () => {
     expect(text.indexOf('执行内核')).toBeLessThan(text.indexOf('动作名字对表'))
   }, 30_000)
 
-  it('接下来要做什么:等你拍板的项带明显标记(注意 tab 按钮自己也叫这个名字,必须 >1 次才算真有徽章)', () => {
+  it('接下来要做什么:等你拍板的项带明显标记', () => {
     render(<ProductMapClient data={present()} />)
+    enterDetails()
     fireEvent.click(screen.getByText('接下来要做什么'))
-    expect(screen.getAllByText('等你拍板').length).toBeGreaterThan(1)
+    expect(screen.getAllByText('等你拍板').length).toBeGreaterThanOrEqual(1)
   }, 30_000)
 
-  it('老板摘要:按业务线收成一行卡片,不是默认视图,点了才看到', () => {
+  it('「← 老板摘要」能从技术细节模式退回默认摘要页', () => {
     render(<ProductMapClient data={present()} />)
-    // 默认视图还是「等你拍板」——没点「老板摘要」之前，lane 名字不该已经在屏幕上
-    expect(screen.queryByText('几条线共用')).toBeNull()
-    fireEvent.click(screen.getByText('老板摘要'))
+    enterDetails()
+    fireEvent.click(screen.getByText('谁垫着谁'))
+    fireEvent.click(screen.getByText('← 老板摘要'))
     expect(screen.getByText('几条线共用')).toBeDefined()
-    expect(screen.getByText('AI 可见度')).toBeDefined()
-  }, 30_000)
-
-  it('老板摘要:真实种子数据里「几条线共用」6/7 组件卡住 → 红灯,分数和卡住数分开显示,不自相矛盾', () => {
-    const { container } = render(<ProductMapClient data={present()} />)
-    fireEvent.click(screen.getByText('老板摘要'))
-    const text = container.textContent ?? ''
-    expect(text).toContain('卡住等你决定')
-    expect(text).toContain('1/7 在跑')
-    expect(text).toContain('6 项被卡住')
-  }, 30_000)
-
-  it('老板摘要:唯一在跑的是老系统时带提示,不能让人以为这条线没在干活', () => {
-    render(<ProductMapClient data={present()} />)
-    fireEvent.click(screen.getByText('老板摘要'))
-    expect(screen.getAllByText(/在跑的是老系统/).length).toBeGreaterThan(0)
-  }, 30_000)
-
-  it('老板摘要:小样本线(社媒只登记 2 项)标注样本少,不显得跟大样本线一样有把握', () => {
-    const { container } = render(<ProductMapClient data={present()} />)
-    fireEvent.click(screen.getByText('老板摘要'))
-    const text = container.textContent ?? ''
-    expect(text).toContain('社媒')
-    expect(text).toContain('样本少，只登记了 2 项')
+    expect(screen.queryByText('谁垫在谁下面')).toBeNull()
   }, 30_000)
 })

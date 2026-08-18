@@ -1,10 +1,16 @@
 'use client'
 
 /**
- * ME2 产品地图控制台 —— 三视图。
+ * ME2 产品地图控制台。
  *
- * 顺序按「PM 打开是为了做决定」排(板桥 S1):等你拍板 → 各条线做到哪了 → 一件件看。
- * 依赖关系并进「一件件看」的行展开(板桥 S2),不做独立视图。
+ * 🔴 2026-08-19 默认视图改为「老板摘要」(PM 现场直接反馈拍板,推翻了下面
+ * 「决策入口永远第一」那条 2026-08-15 锁定的旧原则——不是我自己单方面改的)。
+ * 打开就是干净的一屏:简化版数据新鲜度提示 + 按业务线收好的卡片,不顶技术
+ * 警告、不甩一排标签按钮。原来的 7 个技术视图（等你拍板/各条线做到哪了/…）
+ * 收进「查看技术细节」，从老板摘要点进去才看得到，FDE/工程师用这批照旧。
+ *
+ * 旧原则供参考(2026-08-15 板桥 S1):决策入口永远第一 —— 等你拍板 → 各条线
+ * 做到哪了 → 一件件看。依赖关系并进「一件件看」的行展开(板桥 S2),不做独立视图。
  */
 
 import { Fragment, useMemo, useState } from 'react'
@@ -27,10 +33,9 @@ import { SummaryView } from './SummaryView'
 
 type ViewKey = 'decisions' | 'summary' | 'lanes' | 'list' | 'search' | 'graph' | 'progress' | 'roadmap'
 
-// 顺序:决策入口永远第一(板桥 S1,二轮设计审必改 5)——这条原则本次没有推翻,
-// 默认打开的仍是「等你拍板」。「老板摘要」是新增的并列视图,不是默认视图,
-// 放第二位(决策之后、细节之前),让不想逐条看 50 个组件的人一步能到。
-// 查阅类排最后。「最近进展」「路线图」是了解现状/未来,不是决策入口。
+// 'summary' 是默认落地页,不出现在下面的技术标签栏里(渲染时单独处理,见
+// ProductMapClient 里的 detailViews)。技术标签栏内部顺序沿用旧原则:
+// 决策入口最靠前(板桥 S1)→ 各条线做到哪了 → 一件件看 → 查阅类排最后。
 const VIEWS: { key: ViewKey; label: string }[] = [
   { key: 'decisions', label: '等你拍板' },
   { key: 'summary', label: '老板摘要' },
@@ -89,8 +94,9 @@ function TrustBanner({ trust }: { trust: ConsolePresentation['trust'] }) {
         <div className="mt-2.5 rounded-lg bg-white/70 px-3 py-2">
           <div className="text-[12.5px] font-semibold text-me-charcoal">这轮没拉全的部分</div>
           <ul className="mt-1 space-y-0.5 text-[12px] text-black/65">
-            {trust.syncIssues.slice(0, 8).map((s) => (
-              <li key={s}>· {s}</li>
+            {trust.syncIssues.slice(0, 8).map((s, i) => (
+              // 🔴 同一句话可能出自不同组件、字面完全相同——不能拿文本当 key（会撞 key）。
+              <li key={i}>· {s}</li>
             ))}
           </ul>
         </div>
@@ -101,8 +107,8 @@ function TrustBanner({ trust }: { trust: ConsolePresentation['trust'] }) {
             这张表自己查出 {trust.registryWarnings.length} 处要留意的(agent 的活)
           </div>
           <ul className="mt-1 space-y-0.5 text-[12px] text-black/65">
-            {trust.registryWarnings.slice(0, 5).map((w) => (
-              <li key={w}>· {w}</li>
+            {trust.registryWarnings.slice(0, 5).map((w, i) => (
+              <li key={i}>· {w}</li>
             ))}
           </ul>
         </div>
@@ -113,13 +119,50 @@ function TrustBanner({ trust }: { trust: ConsolePresentation['trust'] }) {
             这张表自己查出 {trust.registryErrors.length} 处对不上(agent 的活)
           </div>
           <ul className="mt-1 space-y-0.5 text-[12px] text-black/65">
-            {trust.registryErrors.slice(0, 5).map((e) => (
-              <li key={e}>· {e}</li>
+            {trust.registryErrors.slice(0, 5).map((e, i) => (
+              <li key={i}>· {e}</li>
             ))}
           </ul>
         </div>
       )}
     </MePanel>
+  )
+}
+
+/**
+ * 老板摘要专用的简化版数据可信度提示——不出现 registryWarnings/registryErrors
+ * 那种带内部代码字段名的原始技术文本(如"M4+ 仅由 manual_claim 证据支撑")。
+ * 说清楚"数据新不新"这一件事就够;有问题时给一句人话 + 一个入口去看技术细节,
+ * 不在这一屏堆技术清单——但也不隐瞒(板桥原则:不许把不完整快照显示成完整)。
+ */
+function SummaryFreshnessNote({
+  trust,
+  onViewDetails,
+}: {
+  trust: ConsolePresentation['trust']
+  onViewDetails: () => void
+}) {
+  const tone = trustTone(trust)
+  const dot = tone === 'track' ? 'bg-[#4B7A3A]' : tone === 'rej' ? 'bg-[#C2453A]' : 'bg-[#C4912E]'
+  const issueCount = trust.registryWarnings.length + trust.registryErrors.length + trust.syncIssues.length
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-black/[.06] bg-white px-4 py-2.5 text-[12.5px] text-black/60">
+      <span className={cx('h-2 w-2 flex-none rounded-full', dot)} />
+      <span>{trust.freshnessText}</span>
+      {issueCount > 0 && (
+        <>
+          <span className="text-black/25">·</span>
+          <span>这张表自己标记了 {issueCount} 处要核实的地方</span>
+        </>
+      )}
+      <button
+        type="button"
+        onClick={onViewDetails}
+        className="ml-auto text-[12px] font-semibold text-me-ochre hover:underline"
+      >
+        查看技术细节 →
+      </button>
+    </div>
   )
 }
 
@@ -1167,7 +1210,14 @@ function RoadmapView({ data }: { data: ConsolePresentation }) {
 }
 
 export default function ProductMapClient({ data }: { data: ConsolePresentation }) {
-  const [view, setView] = useState<ViewKey>('decisions')
+  // 默认打开的是老板摘要,不是「等你拍板」——2026-08-19 PM 直接反馈现场纠正:
+  // 之前顾虑推翻板桥 S1「决策入口永远第一」这条锁定原则,没敢把默认视图改掉,
+  // 只加了个并列标签。但那样出来的东西还是「一屏技术警告 + 一排标签按钮」,
+  // 跟方案里承诺的「打开就是一屏干净摘要」不符。PM 当场表态改默认视图 = 这条
+  // 原则的例外已经拿到了唯一有权改它的人的许可,不是我自己单方面推翻。
+  const [view, setView] = useState<ViewKey>('summary')
+  const isSummary = view === 'summary'
+  const detailViews = VIEWS.filter((v) => v.key !== 'summary')
 
   return (
     <div className="font-sans">
@@ -1184,53 +1234,71 @@ export default function ProductMapClient({ data }: { data: ConsolePresentation }
       </header>
 
       <div className="space-y-6 px-8 py-7">
-        <TrustBanner trust={data.trust} />
+        {isSummary ? (
+          <SummaryFreshnessNote trust={data.trust} onViewDetails={() => setView('decisions')} />
+        ) : (
+          <TrustBanner trust={data.trust} />
+        )}
         <ProgressStrip data={data} />
 
-        <div className="inline-flex items-center gap-1 rounded-xl border border-black/10 bg-white p-1 shadow-[0_1px_2px_rgba(26,26,26,.04)]">
-          {VIEWS.map((v) => {
-            const active = view === v.key
-            const count =
-              v.key === 'decisions'
-                ? data.decisionsNow.length
-                : v.key === 'list'
-                  ? data.totalComponents
-                  : v.key === 'search'
-                    ? data.catalog.length
-                    : v.key === 'progress'
-                      ? data.recentActivity.length
-                      : v.key === 'roadmap'
-                        ? data.roadmap.length
-                        : undefined
-            return (
+        {isSummary ? (
+          <SummaryView data={data} />
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-2">
               <button
-                key={v.key}
                 type="button"
-                onClick={() => setView(v.key)}
-                className={cx(
-                  'rounded-lg px-3.5 py-1.5 text-[12.5px] font-semibold transition',
-                  active ? 'bg-me-charcoal text-[#FBF8F3]' : 'text-black/55 hover:bg-me-stone',
-                )}
+                onClick={() => setView('summary')}
+                className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-[12.5px] font-semibold text-black/55 shadow-[0_1px_2px_rgba(26,26,26,.04)] hover:bg-me-stone"
               >
-                {v.label}
-                {count !== undefined && (
-                  <span className={cx('ml-1.5 tabular-nums', active ? 'text-[#FBF8F3]/65' : 'text-black/35')}>
-                    {count}
-                  </span>
-                )}
+                ← 老板摘要
               </button>
-            )
-          })}
-        </div>
+              <div className="inline-flex items-center gap-1 rounded-xl border border-black/10 bg-white p-1 shadow-[0_1px_2px_rgba(26,26,26,.04)]">
+                {detailViews.map((v) => {
+                  const active = view === v.key
+                  const count =
+                    v.key === 'decisions'
+                      ? data.decisionsNow.length
+                      : v.key === 'list'
+                        ? data.totalComponents
+                        : v.key === 'search'
+                          ? data.catalog.length
+                          : v.key === 'progress'
+                            ? data.recentActivity.length
+                            : v.key === 'roadmap'
+                              ? data.roadmap.length
+                              : undefined
+                  return (
+                    <button
+                      key={v.key}
+                      type="button"
+                      onClick={() => setView(v.key)}
+                      className={cx(
+                        'rounded-lg px-3.5 py-1.5 text-[12.5px] font-semibold transition',
+                        active ? 'bg-me-charcoal text-[#FBF8F3]' : 'text-black/55 hover:bg-me-stone',
+                      )}
+                    >
+                      {v.label}
+                      {count !== undefined && (
+                        <span className={cx('ml-1.5 tabular-nums', active ? 'text-[#FBF8F3]/65' : 'text-black/35')}>
+                          {count}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
 
-        {view === 'decisions' && <DecisionsView data={data} />}
-        {view === 'summary' && <SummaryView data={data} />}
-        {view === 'lanes' && <LanesView data={data} />}
-        {view === 'list' && <ListView data={data} />}
-        {view === 'search' && <SearchView data={data} />}
-        {view === 'graph' && <GraphPanel data={data} />}
-        {view === 'progress' && <ProgressPanel data={data} />}
-        {view === 'roadmap' && <RoadmapView data={data} />}
+            {view === 'decisions' && <DecisionsView data={data} />}
+            {view === 'lanes' && <LanesView data={data} />}
+            {view === 'list' && <ListView data={data} />}
+            {view === 'search' && <SearchView data={data} />}
+            {view === 'graph' && <GraphPanel data={data} />}
+            {view === 'progress' && <ProgressPanel data={data} />}
+            {view === 'roadmap' && <RoadmapView data={data} />}
+          </>
+        )}
       </div>
     </div>
   )
