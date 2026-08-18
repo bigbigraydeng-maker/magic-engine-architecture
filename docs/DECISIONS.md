@@ -7,17 +7,20 @@
 
 ---
 
-## 2026-08-19 · AI 可见度三系统整合：判断层统一到 M1，ai-tracker 降级为采集层
+## 2026-08-19 · ai-tracker（系统 B）退役删除：AI 可见度判断归一到 M1，老诊断打分重做
 
-**决策**：仓库里同时存在三套 AI 可见度测量系统（`geo-baseline`+`geo-module` M1 / `ai-tracker` / `industry-ai-visibility`），PO 拍板做减法：
+> **本条推翻同日早前版本**（原标题「三系统整合：判断层统一到 M1，ai-tracker 降级为采集层」，原结论是「降级保留 ai-tracker 采集层 + 五阶段小心迁移」）。PO **2026-08-19 追加授权做减法**（删老功能）：ai-tracker 不是降级保留，是**退役删除**。原判决的证据段（44% 抽取失败、子串匹配、`ai_visibility_score` 实读系统 C）全部成立、予以保留，只把结论从「保留采集层」改成「删」。
 
-1. **判断层（品牌是否被提及/推荐/排名）统一到 `geo-module/m1.ts`**。`ai-tracker/parser.ts` 现有判断逻辑判定为技术负债、**停用**——不是删代码，是「以后新的判断结果一律走 M1，不再产生新的 parser.ts 判断」。
-2. **采集层保留 `ai-tracker` 的机制**：`question-generator.ts`（从 `master_briefs` 生成候选问题）+ 采集节奏，是 M1 现在没有的能力，保留、未来接上 M1 判断。**当前生产实际只有 3 个引擎在跑**（openai / perplexity / gemini）；Claude runner（`ai-tracker/runners/claude.ts`）默认被 `AI_TRACKER_ENABLE_CLAUDE!=='true'` 关闭（P7.1.13，Anthropic 30k tokens/min 限速），代码保留但不产生数据，不能按「4 引擎」计入迁移范围。**接通 M1 的实际工作量比「接根管子」大**：M1 的 `extractAnswerBody`（`geo-module/m1.ts:60-93`）只认 `KNOWN_ENVELOPE_VERSIONS = ['geo-baseline/openai/v1']` 一种信封格式，而 `ai-tracker/runners/{openai,gemini,perplexity,claude}.ts` 存的 `raw_response` 是裸文本、没有信封包裹——直接接会 100% `JSON.parse` 失败、全部落 defer。需要给每个采集器新注册一个信封版本 + 写行形状适配器，不是简单接线。
-3. **`industry-ai-visibility`（行业级，走 DataForSEO AI Overview/SERP）不动、不合并**——服务行业基准（未来 Yellowbook），不是单客户诊断，产品面本质不同。
-4. CTS 现有 102 条 `ai_visibility_queries`（`source=auto_generated`）当候选池保留，不作废；但已产出的 8 份 `ai_visibility_snapshots`（parser.ts 判断结果）**不能当 M1 级别的真提及率使用**，CTS 走 geo-baseline 路线时要用 M1 重新测一次干净基线。**候选池复用有个字段级限制**：`ai_visibility_queries.source` 只有 `'auto_generated'` 一个值，同时覆盖两种完全不同质量的来源——`question-generator.ts` 的 LLM 泛生成、和 `zhangqian/sync-ai-visibility.ts`（`:63`）里司马徽发现的高信号问题——库里字段层面无法区分，复用前要按内容/时间戳人工分层，不能整批当同质量数据用。**8 周历史快照可以细化处理**：M1 哲学是「宁可漏不可假阳」（`m1.ts:8` 注释），子串匹配的风险方向是假阳性（把不该算的算进去）而非假阴性，所以 8 周快照里「完全未提及」的负例可信度高于「有提及」的正例，可以单独保留做 sanity check，不必跟正例一起整批作废。
-5. **不能静默切**：迁移前必须先核实 `ai_visibility_score` 到底喂给谁——见下方「影响面」订正，**Goals 当前实际读的是系统 C（`industry_ai_visibility_snapshots`），不是 ai-tracker（系统 B）**。这条本身跟本决策要动的对象（parser.ts 判断层）没有直接依赖关系，但意味着原计划「把 Goals 切到 M1」字面上不成立（Goals 从来没读过 ai-tracker），需要先做全仓消费方审计再决定这一步的真实目标。前端 `/dashboard/ai-visibility/[clientId]/` 已存在真实客户看板——迁移必须分阶段、向后兼容，禁止一刀切断已上线功能。
+**决策**：仓库里三套 AI 可见度系统（A=`geo-baseline`+`geo-module` M1 / B=`ai-tracker` / C=`industry-ai-visibility`），PO 拍板：
 
-**为什么**：`ai-tracker/parser.ts` 的品牌命中逻辑是**子串模糊匹配**（`brand.toLowerCase().includes(clientLower)`，且允许反向 includes，代码见 `parser.ts:119-125`），M1 明令禁止这种做法（M1 用 `buildEntityMatcher` 精确别名匹配 + 否定探测 + owned-citation 剔除）。**真实故障记录**（`docs/archive/DIAGNOSTIC_FINDINGS.md`）是 parser 成功率仅 **44%（11/25）**——多数情况下是直接抽不出品牌结果，而不是抽错；子串匹配本身**目前没有已发生的具体撞车事故记录**，是一个**理论假阳风险**（例如「CTS」与母公司「China Travel Service」这类子串包含关系，一旦答案里同时出现两个名字就可能误判），风险成立但不是「已实测命中」。品牌抽取本身是结构化 LLM 抽取（先让模型输出 `brands` 列表），子串匹配只发生在最后从这份列表里定位「哪一条是客户自己」这一步（`parser.ts:119-125`）——判断链条整体缺 disposition 分级、缺 defer/indeterminate、缺 lineage/审计字段，这才是停用的核心理由。M1 有五档推荐分级（仅 `explicit_positive` 进指标）、`defer`/`indeterminate` 优先于编造的正结论、`reasonCodes` 全审计。
+1. **M1 是客户 AI 可见度唯一真相源**，神圣不可碰，只能往它靠。
+2. **ai-tracker（系统 B）整套退役删除**：`src/lib/ai-tracker/` + `src/app/api/ai-tracker/*` + `src/app/dashboard/ai-visibility/*` + `ai-tracker-weekly` cron（`render.yaml`）+ 三张表 `ai_visibility_queries` / `ai_visibility_runs` / `ai_visibility_snapshots`。**为什么现在能删而不是降级保留**：ME 尚未对外推广、无付费存量在被动消费这条线，不需要为存量而保留一套判断质量已知不达标的系统；两套并行只会持续制造「同名字段不同数据源」的混淆（见影响面）。**采集层不再保留**——原版「保留 question-generator + 采集节奏接上 M1」的方案随本次授权作废；但「按客户生成/沉淀跟踪问题」是 M1 目前缺的净能力，须显式列入 M1 待补（见拆除清单 §7 异议 2），别让它随代码蒸发。
+3. **老诊断打分（`src/lib/diagnostic`）的 AI 可见度维度：重做，取自 M1**（ROADMAP P31.X.4）。这条是客户可见分数、且是活的，属**改写搬迁**不是删——三张表 DROP 必须等它接到 M1 之后（拆除清单执行顺序已把 DROP 卡在最后）。
+4. **`industry-ai-visibility`（系统 C）不删、不合并**，但**切断它冒充客户级分数**：Goals 的 `ai_visibility_score` 现在错读系统 C 的行业均值（`auto-fetch.ts:65-66`），当成单客户分数写进 Goals。这条独立于 ai-tracker 删除（不同表、不同系统），走独立小 PR 先落。系统 C 的合法消费方是 **Industry Baselines 看板/API**（不是 Yellowbook——Yellowbook 只在 `industry-ai-visibility/types.ts:6` 注释里，尚无代码），保留。
+
+**完整拆除清单**（逐个缠线定性 DELETE / REWIRE→M1 / LEAVE-SEVER、删除执行顺序、DROP 表清单、我方异议）见 [`docs/specs/2026-08-19-ai-tracker-decommission-v1.md`](./specs/2026-08-19-ai-tracker-decommission-v1.md)。**本轮零删除、零 DROP、零 cron 改动**——真正的删除是复审干净 + PO 最后 `go` 之后的独立 PR。
+
+**为什么删而不是修**：`ai-tracker/parser.ts` 的品牌命中逻辑是**子串模糊匹配**（`brand.toLowerCase().includes(clientLower)`，且允许反向 includes，代码见 `parser.ts:119-125`），M1 明令禁止这种做法（M1 用 `buildEntityMatcher` 精确别名匹配 + 否定探测 + owned-citation 剔除）。**真实故障记录**（`docs/archive/DIAGNOSTIC_FINDINGS.md`）是 parser 成功率仅 **44%（11/25）**——多数情况下是直接抽不出品牌结果，而不是抽错；子串匹配本身**目前没有已发生的具体撞车事故记录**，是一个**理论假阳风险**（例如「CTS」与母公司「China Travel Service」这类子串包含关系，一旦答案里同时出现两个名字就可能误判），风险成立但不是「已实测命中」。品牌抽取本身是结构化 LLM 抽取（先让模型输出 `brands` 列表），子串匹配只发生在最后从这份列表里定位「哪一条是客户自己」这一步（`parser.ts:119-125`）——判断链条整体缺 disposition 分级、缺 defer/indeterminate、缺 lineage/审计字段。M1 有五档推荐分级（仅 `explicit_positive` 进指标）、`defer`/`indeterminate` 优先于编造的正结论、`reasonCodes` 全审计。既然判断层已判死、且无存量要保护，采集层单独留着没有意义——故整套删。
 
 **证据（代码对比）**：
 
@@ -40,7 +43,7 @@ function buildEntityMatcher(aliases: readonly string[]): RegExp { /* 精确别�
 ```
 
 **影响面**：
-- Cron：`ai-tracker-weekly`（`render.yaml`，每周一 01:00 UTC）继续跑，暂不改；`industry-ai-visibility-daily`（每天 02:30 UTC，⚠️ route 命名历史遗留为 `/api/cron/ai-visibility-weekly`，实际调 industry 逻辑）不动；`goal-current-value-refresh` 依赖链见下条订正。
+- Cron：`ai-tracker-weekly`（`render.yaml:204`，每周一 01:00 UTC）**是删除对象**（拆除清单步骤 2，本轮不动）；`industry-ai-visibility-daily`（每天 02:30 UTC，⚠️ route 命名历史遗留为 `/api/cron/ai-visibility-weekly`，实际调 industry 逻辑）**不动**（系统 C）；`goal-current-value-refresh` 依赖链见下条订正。
 - **订正：`ai_visibility_score` 真实数据源是系统 C，不是系统 B**。`src/lib/strategy/auto-fetch.ts:442-524` 与 `goal-current-value-refresh` cron 证实，Goals 的 `ai_visibility_score` 读的是 `industry_ai_visibility_snapshots`（`auto-fetch.ts:496,522`），跟 ai-tracker 的 `ai_visibility_snapshots`/`ai_visibility_runs` 是两张不同表、不同系统。同名字段（`ai_visibility_score`）容易误判为同一数据源，实际链路互不相关。原判决与原 issue 的 Phase 3 都基于「Goals 读系统 B」这个错误前提，需要重新定义。
 - 依赖 `ai_visibility_score`（系统 C 口径）的代码：`src/app/api/cron/goal-current-value-refresh/route.ts`、`src/lib/strategy/baseline-audit.ts`、`src/lib/strategy/auto-fetch.ts`、`src/lib/flywheel/anomaly/rules.ts`、`src/lib/factory/copy-generator.ts`、`src/types/strategy.ts`。
 - **补充：ai-tracker（系统 B）真实消费方清单**（原判决遗漏，全仓核实后补齐）：
@@ -49,12 +52,12 @@ function buildEntityMatcher(aliases: readonly string[]): RegExp { /* 精确别�
   - `src/lib/blog/page-seo-intelligence.ts`（读 `ai_visibility_snapshots` + `ai_visibility_runs.client_brand_rank` 找 GEO 内容缺口）
   - `src/lib/monthly-report/collectors/ai-tracker.ts` + `src/lib/reports/monthly-aggregator.ts`（**客户月报数据源，C 端可见交付物**，读 `ai_visibility_runs`/`ai_visibility_snapshots`/`ai_visibility_queries`）
   - `src/lib/diagnostic/collectors/ai-visibility-collector.ts`（诊断发现流，读 `ai_visibility_snapshots`）
-  - 上述五处均未在原判决列出，迁移计划的前端 touch list 需要加入第一项，消费方审计需要覆盖后四项（尤其月报，属于客户可见交付物，改动前必须单独评估）。
-- 表：`ai_visibility_queries` / `ai_visibility_runs` / `ai_visibility_snapshots`（ai-tracker，系统 B）vs `geo_query_sets` / `geo_queries` / `geo_batches` / `geo_observations` / `geo_evidence`（geo-baseline，系统 A，冻结契约见 #883/#917 WP04A）vs `industry_ai_visibility_snapshots`（industry，系统 C，Goals 实际读这张）。
+  - **拆除清单进一步发现**（原判决与早前版本均遗漏）：`src/lib/ai-tracker/` **不能整目录删**——`parser.ts`（`parseRanking`）被系统 C 的 `industry-ai-visibility/collector.ts:17`（要保留）与诊断 probe 复用，`runners/openai.ts`（`runOpenAI`）被 `prospecting/analyze.ts` 与诊断 probe 复用。必须先把这 4 个共享文件平移到中立目录再删，否则打断系统 C。另有 flywheel（`GeoComposerAdapter.ts:84`）、`geo/composer.ts:139`、`strategy/analyzer.ts:37/68`、主看板 `dashboard/page.tsx:166`、demo 种子、admin 维护路由、8 个死调试路由等缠线，逐条定性见拆除清单。
+- 表：`ai_visibility_queries` / `ai_visibility_runs` / `ai_visibility_snapshots`（ai-tracker，系统 B，**DROP 对象**）vs `geo_query_sets` / `geo_queries` / `geo_batches` / `geo_observations` / `geo_evidence`（geo-baseline，系统 A，冻结契约见 #883/#917 WP04A，**不动**）vs `industry_ai_visibility_snapshots`（industry，系统 C，Goals 实际读这张，**不删但断开冒充**）。
 
-**注意与 2026-05-17 决策的关系**：当时「AI Tracker 保留自建，不切 Apify」是判**采集端** vendor 选型，跟这条判**判断层**逻辑不冲突——ai-tracker 的自建采集机制（3 个在跑引擎的周度节奏）本条继续保留，只是判断结果的产出方式要换成 M1。
+**注意与 2026-05-17 决策的关系**：当时「AI Tracker 保留自建，不切 Apify」是判**采集端** vendor 选型。本条退役 ai-tracker 后该决策的对象不复存在（不再有 ai-tracker 采集端要选 vendor）；客户级采集能力今后由 M1 承担，行业级由系统 C（DataForSEO）承担，那条旧决策就此作废。
 
-**后续步骤**：五阶段迁移计划见 tracking issue（子牙 + 魏征已复审并核实源码，修正意见已并入本条正文；issue 内的分阶段计划已按复审重排）。**A 级任务**，禁止一次性授权，每阶段单独要 PO `go`。
+**后续步骤**：拆除执行顺序（先断消费方 → 平移共享件 → 删代码 → 最后 DROP 表，DROP 不可逆需 PO `go apply`）见拆除清单 §6 与 tracking issue #1073。原「五阶段小心迁移」计划随本次授权作废。**A 级任务**，禁止一次性授权，**每一步单独要 PO `go`**。
 
 ## 2026-08-14 · 工程质量按风险分级，不一刀切
 
