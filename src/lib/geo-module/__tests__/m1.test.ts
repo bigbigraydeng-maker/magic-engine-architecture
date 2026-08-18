@@ -7,7 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import { interpretObservation, DEFAULT_CONFIDENCE_THRESHOLD } from '../m1'
 import { GEO_M1_RULE_VERSION } from '../types'
-import { makeObservation, makeEvidence, ownedCitation } from './fixtures'
+import { makeObservation, makeEvidence, ownedCitation, ROMAN_ENTITY_PROFILE } from './fixtures'
 
 const NO_QUESTION = { known: false, reason: 'not_recorded_by_source' } as const
 const NO_ALIASES: readonly string[] = []
@@ -31,6 +31,7 @@ function interpret(rawResponse: string, opts: {
   return interpretObservation({
     observation,
     evidence,
+    entityProfile: ROMAN_ENTITY_PROFILE,
     brandAliases: NO_ALIASES,
     questionText: opts.questionText ?? KNOWN_QUESTION,
   })
@@ -191,7 +192,7 @@ describe('§2 消歧锚点收紧：通用 agent 不误锁本人', () => {
 describe('§6 证据不足 → defer，绝不静默转 false/0', () => {
   it('观测失败（无证据行）→ defer evidence_missing', () => {
     const observation = makeObservation({ outcome_ok: false, error_code: 'timeout', error_message: 'x', error_message_unknown_reason: null })
-    const r = interpretObservation({ observation, evidence: null, brandAliases: NO_ALIASES, questionText: NO_QUESTION })
+    const r = interpretObservation({ observation, evidence: null, entityProfile: ROMAN_ENTITY_PROFILE, brandAliases: NO_ALIASES, questionText: NO_QUESTION })
     expect(r.disposition).toBe('defer')
     expect(r.reasonCodes).toContain('evidence_missing')
     // 🔴 defer 不是 false：mention 是「未判定」，不是「判为没有」。
@@ -202,7 +203,7 @@ describe('§6 证据不足 → defer，绝不静默转 false/0', () => {
   it('原始响应读不出 → defer raw_response_unreadable', () => {
     const observation = makeObservation()
     const evidence = makeEvidence({ raw_response: null, raw_response_unknown_reason: 'not_recorded_by_source', raw_response_locator: null })
-    const r = interpretObservation({ observation, evidence, brandAliases: NO_ALIASES, questionText: NO_QUESTION })
+    const r = interpretObservation({ observation, evidence, entityProfile: ROMAN_ENTITY_PROFILE, brandAliases: NO_ALIASES, questionText: NO_QUESTION })
     expect(r.disposition).toBe('defer')
     expect(r.reasonCodes).toContain('raw_response_unreadable')
   })

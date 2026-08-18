@@ -13,7 +13,7 @@ import { runGeoModule, GeoModuleTenantError } from '../pipeline'
 import type { GeoObservationInterpretation } from '../types'
 import type { GrowthEvidence } from '@/lib/growth'
 import type { PageOptimizationIntent } from '@/lib/page-optimization'
-import { makeObservation, makeEvidence, romanLedgerPages, ROMAN_CLIENT_ID } from './fixtures'
+import { makeObservation, makeEvidence, romanLedgerPages, ROMAN_CLIENT_ID, ROMAN_ENTITY_PROFILE } from './fixtures'
 
 const KNOWN_Q = { known: true, value: 'who should i hire to sell my house?' } as const
 
@@ -21,6 +21,7 @@ function interpret(rawResponse: string, over: Partial<Parameters<typeof interpre
   return interpretObservation({
     observation: makeObservation(),
     evidence: makeEvidence({ raw_response: rawResponse }),
+    entityProfile: ROMAN_ENTITY_PROFILE,
     brandAliases: [],
     questionText: KNOWN_Q,
     ...over,
@@ -171,7 +172,7 @@ describe('完全 defer 的 query 移出覆盖率分母', () => {
     expect(summary.interpretableQueries).toBe(1)
     expect(summary.queryCount).toBe(10)
     // 语义：全部可解释样本（1 个）都合格提及 → 无 mentionGap → no finding（P1-b 后行为）。
-    expect(buildQualifiedMentionFinding(summary, [ev])).toBeNull()
+    expect(buildQualifiedMentionFinding(summary, [ev], ROMAN_ENTITY_PROFILE.canonicalDisplayName)).toBeNull()
   })
 
   it('0 提及 + 3 非提及可解释 + 9 全-defer → severity=high（用 interpretable=3，不是 queryCount=12）', () => {
@@ -194,7 +195,7 @@ describe('完全 defer 的 query 移出覆盖率分母', () => {
     const summary = summarizeCoverage([nonMention('n1', 'q1'), nonMention('n2', 'q2'), nonMention('n3', 'q3'), ...deferred])
     expect(summary.interpretableQueries).toBe(3)
     expect(summary.queryCount).toBe(12)
-    const finding = buildQualifiedMentionFinding(summary, [ev])
+    const finding = buildQualifiedMentionFinding(summary, [ev], ROMAN_ENTITY_PROFILE.canonicalDisplayName)
     expect(finding?.severity).toBe('high') // 0/3=0 → high；若用 12 分母仍是 high 但 severity 语义已错
   })
 })
@@ -215,6 +216,7 @@ describe('无可见度缺口 → 不产出 finding，pipeline no_gap', () => {
     const out = runGeoModule({
       clientId: ROMAN_CLIENT_ID,
       records: [rec('a', 'q1'), rec('b', 'q2')],
+      entityProfile: ROMAN_ENTITY_PROFILE,
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://romanhu.com/about', intents: [] },
@@ -249,6 +251,7 @@ describe('无可见度缺口 → 不产出 finding，pipeline no_gap', () => {
     const out = runGeoModule({
       clientId: ROMAN_CLIENT_ID,
       records: [withRec, mentionOnly],
+      entityProfile: ROMAN_ENTITY_PROFILE,
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://romanhu.com/about', intents: [] },
@@ -300,6 +303,7 @@ describe('无可见度缺口 → 不产出 finding，pipeline no_gap', () => {
     const out = runGeoModule({
       clientId: ROMAN_CLIENT_ID,
       records: [mentioned, missing],
+      entityProfile: ROMAN_ENTITY_PROFILE,
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://romanhu.com/about', intents: [] },
@@ -341,6 +345,7 @@ describe('证据↔观测配对（同租户内也校验）', () => {
             questionText: KNOWN_Q,
           },
         ],
+        entityProfile: ROMAN_ENTITY_PROFILE,
         brandAliases: [],
         ledgerPages: romanLedgerPages(),
         target: { pageUrl: 'https://romanhu.com/about', intents: [] },

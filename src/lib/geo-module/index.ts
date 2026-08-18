@@ -12,7 +12,7 @@
 
 export {
   GEO_M1_RULE_VERSION,
-  GEO_CANONICAL_ENTITY,
+  type GeoEntityProfile,
   type GeoM1RuleVersion,
   type GeoM1ReasonCode,
   type GeoEntityMatch,
@@ -28,6 +28,8 @@ export {
 export {
   interpretObservation,
   normalizeText,
+  validateEntityProfile,
+  GeoEntityProfileError,
   DEFAULT_CONFIDENCE_THRESHOLD,
   type GeoM1Input,
 } from './m1'

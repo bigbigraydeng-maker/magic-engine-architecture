@@ -59,6 +59,16 @@ function buildEntityMatcher(aliases: readonly string[]): RegExp { /* 精确别�
 
 **后续步骤**：拆除执行顺序（先断消费方 → 平移共享件 → 删代码 → 最后 DROP 表，DROP 不可逆需 PO `go apply`）见拆除清单 §6 与 tracking issue #1073。原「五阶段小心迁移」计划随本次授权作废。**子牙（架构）+ 魏征（挑刺）已复审拆除清单，判「可作真删 PR 依据」，修正意见已并入清单 §4/§8/§9**（含护城河靶心：flywheel `geo.query.mention_rate` 断供 → 诸葛亮归因失效，见清单 §9.1）。**A 级任务**，禁止一次性授权，**每一步单独要 PO `go`**。
 
+## 2026-08-19 · Magic Engine 默认 Reuse First，未来垂直版本共享同一底层平台
+
+**决策**：Magic Engine 的长期形态是**一个共享平台 + 多个垂直版本**。真实客户与 Customer Zero 用来发现、验证、加固可复用能力，不默认发展成客户特供系统。未来在行业理解、数据与客户样本足够后，可以推出 **ME Real Estate / ME Travel** 等垂直版本，但底层默认共享 Capability、Adapter / Connector、Kernel / Governance、Measurement Contract、Growth Contract、Verification / Attribution / Flywheel，以及经证据证明可泛化的 Learning / Memory 机制。完整冻结原则见 [ME2 Reuse & Platformization Principle](./roadmap/2026-08-19-me2-platformization-principle.md)。
+
+行业差异进入 **Industry Playbook / Profile / Policy**；客户差异进入 client configuration、approved evidence 与 client-private memory。Memory 明确分三层：client-private、industry、global platform；客户私有事实与学习绝不跨租户泄露，行业/global 学习必须有跨样本证据后才能升级。
+
+**为什么**：Roman GEO 已经暴露一个典型失败模式：接口和 `clientId` 看似通用，但实体名、Auckland/NZ、real-estate/Ray White 等语义仍硬编码在 shared-looking module 内。若不把“可复用机制”和“首个客户语义”分开，后续 CTS、ME 官网和新行业会不断复制/分叉，平台会越做越复杂。
+
+**影响**：所有开发窗口统一执行 `Repository Fact Gate → Domain Semantics Gate → Product Gate → Architecture / Reuse Gate → GO BUILD`。Current State Audit 第一行必须报告 `remote fetched at + exact main SHA`；没有 SHA，审计不成立。每个有实质产出的交付必须附 **Reuse Statement**，说明复用了什么、哪些是 platform-shared / industry-specific / client-specific，以及是否存在客户/行业语义进入 shared runtime。新增共享能力前先证明现有 Capability / Adapter / Contract 不能承载；客户名、客户 ID、行业规则默认不得进入 shared runtime。
+
 ## 2026-08-14 · 工程质量按风险分级，不一刀切
 
 **决策**：所有 Issue / PR 开工前声明 A / B / C 风险级别，测试、集成、mutation 和 review 强度按真实失败后果匹配。统一原则：**高风险地基慢而稳，普通业务正常推进，UI 和原型继续快。** 完整规则见 [ENGINEERING_QUALITY_GATES.md](./ENGINEERING_QUALITY_GATES.md)。

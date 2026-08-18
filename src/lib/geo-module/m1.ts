@@ -16,10 +16,10 @@ import type { GeoEvidenceRow, GeoObservationRow } from '@/lib/geo-measurement-st
 import { GEO_COMPARABILITY_POLICY_V1, type GeoCitation } from '@/lib/geo-measurement'
 import type { GrowthMaybeUnknown } from '@/lib/growth'
 import {
-  GEO_CANONICAL_ENTITY,
   GEO_M1_RULE_VERSION,
   type GeoDisambiguation,
   type GeoEntityMatch,
+  type GeoEntityProfile,
   type GeoM1ReasonCode,
   type GeoObservationInterpretation,
   type GeoQualifiedMention,
@@ -37,6 +37,11 @@ export interface GeoM1Input {
    */
   readonly evidence: GeoEvidenceRow | null
   /**
+   * 客户/实体级 GEO 解释语义。**必填**，无 shared runtime 默认（fail-closed）。
+   * Roman 调用方显式传 Roman profile；ME 调用方显式传 ME profile。
+   */
+  readonly entityProfile: GeoEntityProfile
+  /**
    * 权威 `brand_aliases` 注册表当前的内容。Roman 现在**为空**（M1 §1）。
    * 传空数组 = 不认任何别名；本模块绝不自己发明别名。
    */
@@ -46,6 +51,50 @@ export interface GeoM1Input {
    * 拿不到就显式未知 —— 不猜。
    */
   readonly questionText: GrowthMaybeUnknown<string>
+}
+
+/**
+ * runtime fail-closed 校验：entityProfile 必须显式提供且四字段齐全。
+ *
+ * 🔴 不能只靠 TypeScript required —— js 调用方 / 动态构造 / 序列化后重建都会绕过类型
+ *    检查；缺失 / 非数组 / canonicalDisplayName 空串一律抛。
+ *
+ * 🔴 空数组是**允许**的（客户 by-design 无认可 evidence，M1 会 honest defer）；
+ *    但字段缺失 / 类型不对是 bug —— 立即抛，不静默补默认。
+ */
+export class GeoEntityProfileError extends Error {
+  readonly code = 'entity_profile_invalid'
+  constructor(message: string) {
+    super(message)
+    this.name = 'GeoEntityProfileError'
+  }
+}
+
+export function validateEntityProfile(profile: unknown): asserts profile is GeoEntityProfile {
+  if (typeof profile !== 'object' || profile === null || Array.isArray(profile)) {
+    throw new GeoEntityProfileError('entityProfile 必须是对象 —— 缺失 / null / 数组一律拒绝')
+  }
+  const p = profile as Record<string, unknown>
+  if (typeof p.canonicalDisplayName !== 'string' || p.canonicalDisplayName.trim().length === 0) {
+    throw new GeoEntityProfileError('entityProfile.canonicalDisplayName 必须是非空字符串')
+  }
+  for (const key of ['disambiguationAnchors', 'geoAnchorsMultiword', 'geoAnchorsShortWordBoundary'] as const) {
+    const v = p[key]
+    if (!Array.isArray(v)) {
+      throw new GeoEntityProfileError(`entityProfile.${key} 必须是 string[]（允许空数组，禁止 undefined / null / 非数组）`)
+    }
+    // 🔴 fail-closed 空字符串闸：JS 里 `"anything".includes("") === true`；空 / 纯空白字符串 anchor
+    //    会静默污染 `geo && domain` 消歧门（不修则 `['']` 可让任何文本通过消歧）。
+    //    这里只堵漏洞，不做 lowercase / normalization / dedup —— 数据清洗归调用方。
+    for (const item of v) {
+      if (typeof item !== 'string') {
+        throw new GeoEntityProfileError(`entityProfile.${key} 数组元素必须是 string（禁止 undefined / null / 非字符串）`)
+      }
+      if (item.trim().length === 0) {
+        throw new GeoEntityProfileError(`entityProfile.${key} 数组元素禁止空字符串或纯空白字符串`)
+      }
+    }
+  }
 }
 
 /**
@@ -109,13 +158,16 @@ function alnumOnly(raw: string): string {
 }
 
 /**
- * 规范实体的 token 序列（M1 §1）：精确 `roman hu`，允许相邻普通标点与英文所有格。
+ * 规范实体的 token 序列（M1 §1）：从 `entityProfile.canonicalDisplayName` 经 `normalizeText`
+ * 派生（例如 `"Roman Hu"` → `"roman hu"`、`"Magic Engine"` → `"magic engine"`），
+ * 允许相邻普通标点与英文所有格。
  *
  * 🔴 用词边界 + 可选所有格构造正则，**不做模糊 / 音近 / 姓氏单独匹配**（M1 §1）。
  *    别名当前为空；一旦注册表非空，这里按**逐字**追加，不做任何变形。
+ * 🔴 canonical token **不重复配置** —— 唯一来源是 `entityProfile.canonicalDisplayName`。
  */
-function buildEntityMatcher(aliases: readonly string[]): RegExp {
-  const canonical = 'roman hu'
+function buildEntityMatcher(profile: GeoEntityProfile, aliases: readonly string[]): RegExp {
+  const canonical = normalizeText(profile.canonicalDisplayName)
   const terms = [canonical, ...aliases.map((a) => normalizeText(a))].filter((t) => t.length > 0)
   // 转义每个 term，token 间空白折叠成单空格已由 normalizeText 做过。
   const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
@@ -123,29 +175,23 @@ function buildEntityMatcher(aliases: readonly string[]): RegExp {
   return new RegExp(`(?<![a-z0-9])(?:${escaped.join('|')})(?:'s)?(?![a-z0-9])`, 'g')
 }
 
-// ── 消歧锚点（M1 §2：锁奥克兰 / NZ 地产本人） ──────────────────────────────────
+// ── 消歧锚点（M1 §2：从 profile 读，不再硬编码） ────────────────────────────────
 
-/** 多词地域锚点（子串命中即可）。 */
-const GEO_ANCHORS_MULTIWORD: readonly string[] = ['auckland', 'new zealand', 'aotearoa']
-/** `nz` 缩写按**词边界**匹配 —— `' nz '` 字面量会漏掉句首 / 句尾 / 标点旁的 `nz`。 */
-const NZ_ANCHOR_RE = /\bnz\b/
-
-/** 文本里是否有地域锚点，返回命中列表（供审计）。 */
-function geoAnchorsIn(text: string): string[] {
-  const hits = GEO_ANCHORS_MULTIWORD.filter((a) => text.includes(a))
-  if (NZ_ANCHOR_RE.test(text)) hits.push('nz')
+/**
+ * 文本里是否有地域锚点，返回命中列表（供审计）。
+ *
+ * 🔴 多词锚点走子串命中（`.includes`）；短 token 走**词边界**（`\b<token>\b`）——
+ *    否则 `nz` / `au` 之类短缩写会命中 `bonza` / `augment` 之类无关词。短 token 数组
+ *    内部编译成正则，profile 只传纯字符串以保证可序列化。
+ */
+function geoAnchorsIn(text: string, profile: GeoEntityProfile): string[] {
+  const hits = profile.geoAnchorsMultiword.filter((a) => text.includes(a))
+  for (const token of profile.geoAnchorsShortWordBoundary) {
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    if (new RegExp(`\\b${escaped}\\b`).test(text)) hits.push(token)
+  }
   return hits
 }
-/**
- * 行业锚点。命中任一即满足「**地产**从业者」一侧（M1 §2：锁地产本人）。
- *
- * 🔴 只收强地产词，**不收裸 `agent` / `property` / `salesperson`**：那些是通用词，
- *    `travel agent` / `insurance agent` / `property developer` 会把「同名但非奥克兰地产本人」
- *    误锁成本人（假阳，方向错在乐观一侧）。宁可漏，不可把不该建立的身份建立。
- */
-const DOMAIN_ANCHORS: readonly string[] = [
-  'real estate', 'realtor', 'realty', 'ray white',
-]
 
 /**
  * 推荐极性词表（M1 §4）—— 保守：只认真正的「选择判断」动词，不认单纯正向情绪词。
@@ -304,7 +350,8 @@ function matchUnnegated(text: string, re: RegExp): boolean {
  *    → 推荐（§4）→ rank（§5）。任一前置不成立，后续一律取最保守值 + 记原因码。
  */
 export function interpretObservation(input: GeoM1Input): GeoObservationInterpretation {
-  const { observation, evidence, brandAliases } = input
+  validateEntityProfile(input.entityProfile)
+  const { observation, evidence, brandAliases, entityProfile } = input
   const reasons: GeoM1ReasonCode[] = []
   const lineage = {
     batchId: observation.batch_id,
@@ -344,9 +391,11 @@ export function interpretObservation(input: GeoM1Input): GeoObservationInterpret
   const citations = ((evidence as GeoEvidenceRow).citations ?? []) as readonly GeoCitation[]
 
   // ── §1 实体匹配 ──
-  const matcher = buildEntityMatcher(brandAliases)
+  const matcher = buildEntityMatcher(entityProfile, brandAliases)
   // 引用命中所用的 alnum 针从规范实体 + 别名派生，**不硬编码**（换实体 / 加别名自动跟着变）。
-  const citationNeedles = [GEO_CANONICAL_ENTITY, ...brandAliases].map(alnumOnly).filter((n) => n.length > 0)
+  const citationNeedles = [entityProfile.canonicalDisplayName, ...brandAliases]
+    .map(alnumOnly)
+    .filter((n) => n.length > 0)
   const entityMatch = matchEntity(body, citations, matcher, citationNeedles, reasons)
 
   // ── 问句缺失闸（M1 §3 第 3 条）──
@@ -357,13 +406,13 @@ export function interpretObservation(input: GeoM1Input): GeoObservationInterpret
     return defer({ ...meta, entityMatch }, reasons)
   }
 
-  // ── §2 消歧 + §4 推荐 + §5 rank 全部**绑定到 Roman 所在句** ──
+  // ── §2 消歧 + §4 推荐 + §5 rank 全部**绑定到实体所在句** ──
   const bodyEcho = stripQueryEcho(body, input.questionText)
-  const romanCtx = romanContext(bodyEcho, buildEntityMatcher(brandAliases))
-  const disambiguation = disambiguate(entityMatch, romanCtx, reasons)
+  const romanCtx = romanContext(bodyEcho, buildEntityMatcher(entityProfile, brandAliases))
+  const disambiguation = disambiguate(entityMatch, romanCtx, reasons, entityProfile)
 
   // ── §3 合格提及 ──
-  const qualifiedMention = qualifyMention(entityMatch, disambiguation, body, bodyEcho, brandAliases, reasons)
+  const qualifiedMention = qualifyMention(entityMatch, disambiguation, body, bodyEcho, entityProfile, brandAliases, reasons)
 
   // ── §4 推荐（仅在合格提及成立时判极性；只看 Roman 所在句） ──
   const recommendation = classifyRecommendation(qualifiedMention, romanCtx, reasons)
@@ -425,15 +474,18 @@ function disambiguate(
   entityMatch: GeoEntityMatch,
   romanCtx: string,
   reasons: GeoM1ReasonCode[],
+  profile: GeoEntityProfile,
 ): GeoDisambiguation {
   if (entityMatch.kind !== 'body_match') {
     return { qualified: false, reason: 'disambiguation_insufficient' }
   }
-  // 🔴 锚点必须在**Roman 所在的句子**里（M1 §2：引用 / 标题 / URL / 问句回显、以及
-  //    描述别人的句子都不建立 Roman 的身份）。`romanCtx` 已是「含实体命中的句子」拼成，
-  //    别处的 Auckland / real estate 不会替 Roman 完成消歧。
-  const geo = geoAnchorsIn(romanCtx)
-  const domain = containsAny(romanCtx, DOMAIN_ANCHORS)
+  // 🔴 锚点必须在**实体所在的句子**里（M1 §2：引用 / 标题 / URL / 问句回显、以及
+  //    描述别人的句子都不建立实体身份）。`romanCtx` 已是「含实体命中的句子」拼成，
+  //    别处的地域 / 行业词不会替实体完成消歧。
+  // 🔴 门保持 `geo && domain`（M1 冻结判据不放宽）—— profile 允许空数组 = 客户显式
+  //    无认可 evidence 时 100% 落 `disambiguation_insufficient`，honest defer。
+  const geo = geoAnchorsIn(romanCtx, profile)
+  const domain = containsAny(romanCtx, profile.disambiguationAnchors)
   if (geo.length > 0 && domain.length > 0) {
     return { qualified: true, anchors: [...geo, ...domain] }
   }
@@ -448,6 +500,7 @@ function qualifyMention(
   disambiguation: GeoDisambiguation,
   body: string,
   bodyEcho: string,
+  profile: GeoEntityProfile,
   brandAliases: readonly string[],
   reasons: GeoM1ReasonCode[],
 ): GeoQualifiedMention {
@@ -461,14 +514,14 @@ function qualifyMention(
   // 语义参与近似（先于消歧判，以给出准确原因码）：去掉问句逐字回显后正文里还留着实体命中，
   // 才算真参与（M1 §3 第 3 条 / §7 第 2 条）。🔴 用**含别名**的 matcher，与 §1 matchEntity 同一套
   //   —— 否则别名注册表非空时，仅靠别名命中的正文提及会在这里被误判 query_echo_only。
-  if (!buildEntityMatcher(brandAliases).test(bodyEcho)) {
+  if (!buildEntityMatcher(profile, brandAliases).test(bodyEcho)) {
     reasons.push('query_echo_only')
     return { qualified: false, reason: 'query_echo_only' }
   }
   if (!disambiguation.qualified) {
     return { qualified: false, reason: 'disambiguation_insufficient' }
   }
-  const spans = body.match(buildEntityMatcher(brandAliases)) ?? []
+  const spans = body.match(buildEntityMatcher(profile, brandAliases)) ?? []
   return { qualified: true, spans }
 }
 
@@ -578,7 +631,7 @@ function parserVersionOf(observation: GeoObservationRow): GrowthMaybeUnknown<str
 function brandedOf(input: GeoM1Input): GrowthMaybeUnknown<boolean> {
   if (!input.questionText.known) return { known: false, reason: 'not_recorded_by_source' }
   const q = normalizeText(input.questionText.value)
-  return { known: true, value: buildEntityMatcher(input.brandAliases).test(q) }
+  return { known: true, value: buildEntityMatcher(input.entityProfile, input.brandAliases).test(q) }
 }
 
 /**

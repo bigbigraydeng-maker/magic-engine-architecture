@@ -67,8 +67,8 @@
  * 用例把现状钉住了 —— 修好之后它会失败，提醒回来把这段说明一起更新。
  */
 
-import type { ContactLike, SegmentResult, TouchpointLike } from './segments'
-import { compareForWorklist, reachableChannel, segmentContact } from './segments'
+import type { ContactLike, IndustryPlaybook, SegmentResult, TouchpointLike } from './segments'
+import { TOURISM_PLAYBOOK, compareForWorklist, reachableChannel, segmentContact } from './segments'
 
 /**
  * 冻结版 + 两个**永远不该被冻结**的显示值。
@@ -172,6 +172,11 @@ export interface DayRowOptions {
   dayStartMs: number
   /** 今天有没有一笔我们发出的、真人做的联系（调用方按触点算好传进来）。 */
   touchedToday: boolean
+  /**
+   * 这个客户走哪套行业判断。不传就是旅游剧本（`TOURISM_PLAYBOOK`）——
+   * 现有调用方都不传，行为不变。
+   */
+  playbook?: IndustryPlaybook
 }
 
 /**
@@ -189,8 +194,13 @@ export interface DayRowOptions {
  *   `handled`  灰不灰         ← 我们碰过他 **且** 他没回过头来找我们
  */
 export function dayRow(contact: ContactLike, now: Date, opts: DayRowOptions): DayRow {
-  const frozen = segmentContact(withoutOurActionsSince(contact, opts.dayStartMs), now)
-  const live = segmentContact(contact, now)
+  // 冻结版和实时版**必须读同一个 playbook 局部变量**，两次调用都显式传 ——
+  // 不能让任何一处漏传退回默认值：那样两个版本平时会因为都落在同一个默认值
+  // 上而看起来一致，只有将来接了第二个行业、真的传了非默认 playbook 时，
+  // 漏传的那一处才会悄悄裂开，而且不会有任何测试提醒（见下面专门钉住这条的用例）。
+  const playbook = opts.playbook ?? TOURISM_PLAYBOOK
+  const frozen = segmentContact(withoutOurActionsSince(contact, opts.dayStartMs), now, playbook)
+  const live = segmentContact(contact, now, playbook)
 
   // 今天开工那一刻他该不该在名单上。**只看冻结版** —— 我们今天做了什么，
   // 不能决定他今天出不出现，否则就又回到「做完就消失」。
@@ -461,12 +471,21 @@ export function withoutOurActionsSince(contact: ContactLike, sinceMs: number): C
 export function dayWorklist(
   contacts: ContactLike[],
   now: Date,
-  opts: { dayStartMs: number; touchedToday: (contactId: string) => boolean },
+  opts: {
+    dayStartMs: number
+    touchedToday: (contactId: string) => boolean
+    /** 不传就是旅游剧本 —— 现有调用方都不传，行为不变。 */
+    playbook?: IndustryPlaybook
+  },
 ): Array<ContactLike & DayRow> {
   return contacts
     .map((c) => ({
       ...c,
-      ...dayRow(c, now, { dayStartMs: opts.dayStartMs, touchedToday: opts.touchedToday(c.id) }),
+      ...dayRow(c, now, {
+        dayStartMs: opts.dayStartMs,
+        touchedToday: opts.touchedToday(c.id),
+        playbook: opts.playbook,
+      }),
     }))
     // **按 onList 筛，不按 seg.temperature 筛。**
     // 用 temperature 的话，今天被推迟 / 标不买 / 推成交的人两个版本双双是
