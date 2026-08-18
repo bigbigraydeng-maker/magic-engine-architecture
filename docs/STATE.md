@@ -24,7 +24,7 @@
 
 > ⚠️ 远程仍存在一个历史 `master` 分支。**部署跟它无关**，别往那推。
 
-**服务构成**（2026-08-12 实读）：1 个 web service + **47 个 Render Cron Job** + 12 个 GitHub Actions workflow（其中 5 个带 `schedule:`）。
+**服务构成**（2026-08-12 实读；2026-08-19 更正）：1 个 web service + **46 个 Render Cron Job**（ai-tracker-weekly 随系统 B 退役删除）+ 12 个 GitHub Actions workflow（其中 5 个带 `schedule:`）。
 > 旧版这里写「28 个 Render Cron Job」，与 §4.1 表格自己的数（41）都对不上，两处都已更正。
 
 **`main` 的分支保护（2026-08-12 实读，别再说「开不了」）**：ruleset **`Protect main`（id 20550157）enforcement=active** —— 禁删 · 禁 non-fast-forward · **只许 merge commit**（不许 squash / rebase）· **所有复审线程必须标记已解决** · 必过状态检查 `ai-orchestrator-tests`；approving review 数要求为 0。
@@ -89,7 +89,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 
 ## 4. 定时任务全表
 
-### 4.1 Render Cron（**47 个**，全部 curl `https://app.magicengine.com.au/api/cron/*`，带 `CRON_SECRET` Bearer）
+### 4.1 Render Cron（**46 个**，全部 curl `https://app.magicengine.com.au/api/cron/*`，带 `CRON_SECRET` Bearer）
 
 | Cron 名 | 调度 (UTC) | 端点 |
 |---|---|---|
@@ -124,7 +124,7 @@ DataForSEO(关键词主源) · Publer(发布) · Stripe(MTC 计费) · Resend(�
 | pm-daily-todo | `0 19 * * 0-4` | `/api/cron/pm-daily-todo` |
 | site-audit-weekly | `0 1 * * 0` | `/api/cron/site-audit-weekly` |
 | weekly-seo-report | `30 18 * * 0` | `/api/cron/weekly-seo-report` |
-| ai-tracker-weekly | `0 1 * * 1` | `/api/cron/ai-tracker-weekly` |
+| ~~ai-tracker-weekly~~ | — | **已删除**（ai-tracker 系统 B 退役，2026-08-19）：`render.yaml` 条目 + 路由 `/api/cron/ai-tracker-weekly` 都已删。healthchecks.io check 停用已下发今日待办。 |
 | job-boards-weekly | `0 2 * * 1` | `/api/cron/job-boards-weekly` |
 | keyword-snapshots-weekly | `0 2 * * 1` | `/api/cron/keyword-snapshots-weekly` |
 | zhuge-weekly-recalculate | `0 3 * * 1` | `/api/cron/zhuge-recalculate` |

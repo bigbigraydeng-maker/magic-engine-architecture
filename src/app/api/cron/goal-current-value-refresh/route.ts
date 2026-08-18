@@ -120,9 +120,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           // stale current_value (the old industry-average masquerade) so the Goal
           // shows an honest empty rather than a frozen wrong number. Idempotent:
           // only writes when a stale value is actually present.
-          severed++
           if (goal.current_value !== null) {
-            await supabaseAdmin
+            const clrRes = await supabaseAdmin
               .from('goals')
               .update({
                 current_value: null,
@@ -130,7 +129,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
                 current_value_source: 'auto.cron.severed',
               })
               .eq('id', goal.id)
+
+            // Must check the result — a rejected clear would otherwise leave the
+            // stale industry-average value in the Goal while the cron reports
+            // healthy (silent failure). Count it as an error so it surfaces.
+            const clrErr = (clrRes as { error: { message: string } | null }).error
+            if (clrErr) {
+              failed++
+              errors.push({ goal_id: goal.id, reason: `severed clear failed: ${clrErr.message}` })
+              continue
+            }
           }
+          severed++
           continue
         }
         failed++

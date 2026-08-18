@@ -28,6 +28,10 @@ interface FetchSuccess {
 interface FetchFailure {
   ok: false
   reason: string
+  /** true = the metric's auto source was intentionally removed (e.g.
+   *  ai_visibility_score after the ai-tracker decommission). A permanent,
+   *  non-retryable state — retrying can never succeed. */
+  severed?: boolean
 }
 
 type FetchResponse = FetchSuccess | FetchFailure
@@ -47,6 +51,9 @@ export function CurrentValueCell({ goal }: Props) {
   const [refreshing, setRefreshing] = useState(false)
   const [result, setResult] = useState<FetchSuccess | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Permanent, non-retryable state: the metric's auto source was removed. Never
+  // show a "retry" button here — retrying can only ever fail again.
+  const [severed, setSevered] = useState(false)
 
   const fetchValue = useCallback(async (manualRefresh: boolean) => {
     if (manualRefresh) setRefreshing(true)
@@ -59,8 +66,10 @@ export function CurrentValueCell({ goal }: Props) {
       const json = await res.json() as FetchResponse
       if (json.ok) {
         setResult(json)
+        setSevered(false)
       } else {
         setError(json.reason)
+        setSevered(json.severed === true)
       }
     } catch {
       setError('Network error')
@@ -136,7 +145,18 @@ export function CurrentValueCell({ goal }: Props) {
         </>
       )}
 
-      {!loading && error && (
+      {/* Severed source (e.g. ai_visibility_score after ai-tracker decommission):
+          not measured, and retrying can never succeed — so NO retry button. */}
+      {!loading && error && severed && (
+        <>
+          <div className="text-lg font-bold text-me-charcoal/40">—</div>
+          <div className="text-[10px] font-semibold text-me-charcoal/45" title={error}>
+            AI 可见度测量迁移中 · 暂不可用（不可重试）
+          </div>
+        </>
+      )}
+
+      {!loading && error && !severed && (
         <>
           <div className="text-lg font-bold text-me-charcoal/40">—</div>
           <div className="text-[10px] font-semibold text-me-charcoal/45" title={error}>
