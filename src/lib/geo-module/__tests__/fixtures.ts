@@ -10,11 +10,23 @@
  */
 
 import type { GeoEvidenceRow, GeoObservationRow } from '@/lib/geo-measurement-store/types'
+import type { GeoEntityProfile } from '../types'
 import type { SitePageRow } from '../page-request'
 
 /** Roman 客户 id（自营主体档，只读引用）。 */
 export const ROMAN_CLIENT_ID = 'e7465ac7-4f3d-4d6a-afbe-d036ab419708'
 export const ROMAN_BATCH_ID = '688bd8ae-2db6-4300-b761-b850f30c32c5'
+
+/**
+ * Roman 显式 entity profile —— 之前是 shared runtime 里的硬编码常量，refactor 后由调用方显式传。
+ * 四字段值与旧代码里被移除的 `GEO_CANONICAL_ENTITY / GEO_ANCHORS_MULTIWORD / NZ_ANCHOR_RE / DOMAIN_ANCHORS` 逐一对齐。
+ */
+export const ROMAN_ENTITY_PROFILE: GeoEntityProfile = {
+  canonicalDisplayName: 'Roman Hu',
+  disambiguationAnchors: ['real estate', 'realtor', 'realty', 'ray white'],
+  geoAnchorsMultiword: ['auckland', 'new zealand', 'aotearoa'],
+  geoAnchorsShortWordBoundary: ['nz'],
+}
 
 /** 一条成功观测的合法基线行 —— 每对身份字段恰好一个非空。 */
 export function makeObservation(overrides: Partial<GeoObservationRow> = {}): GeoObservationRow {
