@@ -53,6 +53,31 @@ type TimelineEntry =
        * 不是每条都铺出来：普通记录看摘要更短更好读。
        */
       raw: string | null
+      /**
+       * `metadata.do_not_contact === true` —— **跟 `outcome` 不是一回事**。
+       *
+       * 🔴 外呼那条路（`lib/voice/crm-bridge.ts`）写的是
+       * `outcome: 'not_interested'` **加上** `do_not_contact: true`，而
+       * `isDoNotContact` 认后者 → 这个人**全渠道被停**。只看 `outcome` 的话，
+       * 界面上只会显示一句「他说不买了」，销售完全看不到他已经被停了
+       * （Codex 复审 PR #1048，2026-08-17）。
+       *
+       * 判据只有一份（`lib/crm/dnc`），它两个都认，所以送给前端的也得两个都有。
+       */
+      dncFlag: boolean
+      /**
+       * `raw` 里装的到底是什么。
+       *
+       * 🔴 **不是所有 `raw` 都是逐字原话**（Codex 复审 PR #1048，2026-08-17）：
+       *   · 手工记录 / 邮件 → 人真敲的字、客人真发的信 = 逐字
+       *   · 外呼（`lib/voice/crm-bridge.ts`）→ `raw: call.summary`，而那是
+       *     **模型生成**的通话摘要（`voice/finalize.ts` 拼的 `Caller discussed: …`）
+       *
+       * 前端拿它判断该写「原话」还是「通话摘要」。把 AI 摘要标成原话，
+       * 销售会据此决定要不要解除全渠道停联 —— 而他以为自己在看客人说的话。
+       */
+      rawKind: 'verbatim' | 'ai_summary'
+
       tour: string | null
       outcome: string | null
       travelWindow: string | null
@@ -196,6 +221,9 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       direction: t.direction,
       summary: t.summary,
       raw: cleanStr(t.raw),
+      dncFlag: m.do_not_contact === true,
+      // 外呼那条路写的是模型摘要，不是逐字原话 —— 靠 voice_call_id 认出来。
+      rawKind: m.voice_call_id ? 'ai_summary' : 'verbatim',
       // 这一条触点自己带的团意向：FB 表单下拉优先，其次手工笔记解析值。
       tour: cleanStr(m.tour_interest_raw) ?? cleanStr(m.tour_interest),
       /**
