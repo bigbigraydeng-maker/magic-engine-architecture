@@ -516,11 +516,76 @@ export function phoneLineIsDead(tps: TouchpointLike[]): boolean {
 }
 
 /**
+ * 客人自己说过「要等到什么时候再联系」这类信号（旅游行业 = 客人说的出行时间）。
+ *
+ * 不是每个行业都有这个概念 —— 没有就不实现 `resolveWaitSignal`，规则会跳过，
+ * 不报错、不硬凑。
+ */
+export interface WaitSignal {
+  /** 现在该不该把人捞回来了。 */
+  due: boolean
+  /** 还没到期时，卡片上给销售看的理由 —— 由行业剧本自己组句，这里不猜措辞。 */
+  nurtureReason: string
+  /** 还没到期、但客人自己点了链接时的理由 —— 同上。 */
+  reengagedReason: string
+}
+
+/**
+ * 一个行业跑这套判断时，需要额外提供的东西。
+ *
+ * `segmentContact` 本身不认识「旅游」「出行」「行程」这类词 —— 它只知道
+ * 「有没有一个等待信号、到期没有、理由是什么」。所有行业专属的判断和措辞
+ * 都封在 playbook 里，以后新增行业专属信号，一律扩展这一个接口，
+ * 不要另起一套同名/近名的配置结构。
+ *
+ * ⚠️ 忘记实现 `resolveWaitSignal` 不会报错，那个行业「客人说过要等」这条
+ * 业务逻辑会悄悄从判断里消失 —— 接新行业时这是要显式核对的一项，不是
+ * 留空就当默认关闭。
+ */
+export interface IndustryPlaybook {
+  resolveWaitSignal?(contact: ContactLike, now: Date): WaitSignal | null
+  /** 点击链接后，多久算「还在热」（毫秒）。不给就用 `DEFAULT_CLICK_WINDOW_MS`。 */
+  clickWindowMs?: number
+}
+
+/** 没有行业剧本、或剧本没指定时的兜底窗口。 */
+const DEFAULT_CLICK_WINDOW_MS = 30 * 86_400_000
+
+/**
+ * 旅游业剧本 —— 现在唯一在用的一份，CTS 用这个。
+ *
+ * 这是从 `segmentContact` 里搬出来的原有逻辑，行为逐字不变，只是换了个家：
+ * 「客人说过出行时间」是旅游生意专属的信号，通用引擎不该认识它。
+ */
+export const TOURISM_PLAYBOOK: IndustryPlaybook = {
+  resolveWaitSignal(contact, now) {
+    const spoken = contact.touchpoints.find((t) => !!t.travelWindow)
+    if (!spoken) return null
+    const travelAt = resolveTravelDate(spoken.travelWindow, new Date(ts(spoken.occurredAt)))
+    return {
+      due: isDueToWake(travelAt, now),
+      nurtureReason: `客户说 ${spoken.travelWindow} 才走，现在打是打扰`,
+      reengagedReason: '他说以后才走，但刚点开了我们邮件里的链接 —— 现在在看了',
+    }
+  },
+  // 跟团游决策周期长（客人常提前几个月看），60 天窗口：出行当月的前两个月开始跟。
+  clickWindowMs: 60 * 86_400_000,
+}
+
+/**
  * 一个人属于哪一段。
  *
  * `now` 必须显式传进来，段位才可测 —— 「约的时间到没到」完全取决于它。
+ *
+ * `playbook` 默认是旅游剧本（`TOURISM_PLAYBOOK`）—— 现有调用方都不传这个参数，
+ * 所以行为不变。以后接第二个行业时，每个调用方都要显式核对该不该继续吃默认值，
+ * 不能指望这里的默认值替它们做决定。
  */
-export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
+export function segmentContact(
+  contact: ContactLike,
+  now: Date,
+  playbook: IndustryPlaybook = TOURISM_PLAYBOOK,
+): SegmentResult {
   const tps = contact.touchpoints
   const nowMs = now.getTime()
 
@@ -542,10 +607,10 @@ export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
    * 最近一次「点了链接」，且**那之后没有任何真人联系过他**。
    *
    * 只认点击、不认打开：打开可能是 Apple 自动干的，点击必须有人真的动手。
-   * 60 天窗口 —— 意向会凉，但跟团游决策周期长（客人常提前几个月看），
-   * 30 天会把还在比较的人过早丢掉。
+   * 窗口长度由行业剧本给（旅游剧本是 60 天 —— 意向会凉，但跟团游决策周期长，
+   * 客人常提前几个月看；没给剧本时兜底 30 天，太短会把还在比较的人过早丢掉）。
    */
-  const CLICK_WINDOW_MS = 60 * 86_400_000
+  const CLICK_WINDOW_MS = playbook.clickWindowMs ?? DEFAULT_CLICK_WINDOW_MS
   const lastClick = Math.max(
     0,
     ...tps.filter((t) => t.engagement === 'click').map((t) => ts(t.occurredAt)),
@@ -668,33 +733,31 @@ export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
     return make('callback_due', '之前约好这个时间回电', 'phone', dueCallback)
   }
 
-  // 4) 客户说过什么时候走。
+  // 4) 客户说过「要等到什么时候再联系」（旅游剧本 = 出行时间）。
   //
+  //    这条信号是不是存在、怎么判"到期了没"，全交给行业剧本（`playbook`）——
+  //    这个通用引擎不认识"出行""行程"这些词，只认识"有没有等待信号 / 到期
+  //    没有 / 理由是什么"三件事。旅游剧本的具体逻辑见 `TOURISM_PLAYBOOK`：
   //    以前这里只判断「有没有说过」，说过就无限期压进「以后才走」——
   //    于是「明年三月」永远是明年三月，到了三月也没有任何东西把人叫醒。
   //    19 个 CTS 客人卡在这个状态，其中一位说的是「下个月左右」，
-  //    那句话是上个月说的。
-  //
-  //    现在把那句话实时算成出行月份（不落库，历史数据自动生效），
-  //    到了跟进窗口就捞回名单。算不出来的（「看情况」「还没定」）
+  //    那句话是上个月说的。现在把那句话实时算成出行月份（不落库，历史数据
+  //    自动生效），到了跟进窗口就捞回名单。算不出来的（「看情况」「还没定」）
   //    照旧留在培育里 —— 猜一个日期比承认不知道更糟。
-  const spoken = tps.find((t) => !!t.travelWindow)
-  if (spoken) {
-    const travelAt = resolveTravelDate(spoken.travelWindow, new Date(ts(spoken.occurredAt)))
-    // 出行时间到了 —— **不再单独成一批**（PM 2026-08-03 拿掉「快出行了，该定了」）。
+  const wait = playbook.resolveWaitSignal?.(contact, now) ?? null
+  if (wait && !wait.due) {
+    // 还没到期 —— **不再单独成一批**（PM 2026-08-03 拿掉「快出行了，该定了」）。
     // 那一批靠 AI 从通话里解析出的月份来推断「他该定了」，是猜的不是事实；
-    // 而这一页现在只认客人真的说过话 / 真的动过手。到点的人落回下面的普通规则，
-    // 该打的照打，只是理由老老实实写「聊过一轮就断了」，不假装知道他急不急。
-    if (isDueToWake(travelAt, now)) {
-      // 落空 —— 往下走普通规则。
-    } else if (clickPending) {
-    // 他说过「以后才走」，但**刚点开了我们邮件里的链接** —— 一句几周前说的话，
-    // 抵不过他现在正在看这件事。不拦下来的话，这个人会被埋进培育桶（cold，
-    // 根本不进今天的名单）。
-      return make('clicked_link', '他说以后才走，但刚点开了我们邮件里的链接 —— 现在在看了', 'phone')
-    } else {
-      return make('nurture_future', `客户说 ${spoken.travelWindow} 才走，现在打是打扰`, 'email')
+    // 而这一页现在只认客人真的说过话 / 真的动过手。到点的人（`wait.due === true`）
+    // 落回下面的普通规则，该打的照打，只是理由老老实实写「聊过一轮就断了」，
+    // 不假装知道他急不急。
+    if (clickPending) {
+      // 他说过「以后才走」，但**刚点开了我们邮件里的链接** —— 一句几周前说的话，
+      // 抵不过他现在正在看这件事。不拦下来的话，这个人会被埋进培育桶（cold，
+      // 根本不进今天的名单）。
+      return make('clicked_link', wait.reengagedReason, 'phone')
     }
+    return make('nurture_future', wait.nurtureReason, 'email')
   }
 
   /**
@@ -775,9 +838,10 @@ export function segmentContact(contact: ContactLike, now: Date): SegmentResult {
 export function todayWorklist(
   contacts: ContactLike[],
   now: Date,
+  playbook: IndustryPlaybook = TOURISM_PLAYBOOK,
 ): Array<ContactLike & { seg: SegmentResult }> {
   return contacts
-    .map((c) => ({ ...c, seg: segmentContact(c, now) }))
+    .map((c) => ({ ...c, seg: segmentContact(c, now, playbook) }))
     .filter((c) => c.seg.temperature === 'hot' || c.seg.temperature === 'warm')
     .sort((a, b) => compareForWorklist(a.seg, b.seg))
 }
@@ -809,12 +873,16 @@ export function compareForWorklist(a: SegmentResult, b: SegmentResult): number {
 }
 
 /** 各段人数，给页面顶部的统计条。 */
-export function segmentCounts(contacts: ContactLike[], now: Date): Record<Segment, number> {
+export function segmentCounts(
+  contacts: ContactLike[],
+  now: Date,
+  playbook: IndustryPlaybook = TOURISM_PLAYBOOK,
+): Record<Segment, number> {
   const out: Record<Segment, number> = {
     replied: 0, callback_due: 0, new_untouched: 0, handoff_sop: 0,
     clicked_link: 0, retry_channel: 0, stale_conversation: 0,
     nurture_future: 0, excluded: 0,
   }
-  for (const c of contacts) out[segmentContact(c, now).segment]++
+  for (const c of contacts) out[segmentContact(c, now, playbook).segment]++
   return out
 }
