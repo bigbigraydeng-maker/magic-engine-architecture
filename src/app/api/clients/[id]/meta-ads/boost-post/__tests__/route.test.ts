@@ -131,4 +131,24 @@ describe('POST /meta-ads/boost-post — 归属校验(AD-SEC-1 同类)', () => {
     expect(res.status).toBe(422)
     expect(boostPagePost).not.toHaveBeenCalled()
   })
+
+  it('🔴 Codex 复审 P1 必改：page_id 校验通过，但 post_id 是复合格式且嵌了别家主页 → 照样拒绝', async () => {
+    // page_id 填的是自己的主页(校验会过)，但 post_id 复合格式里嵌的是别家主页——
+    // boostPagePost 底层只认 post_id 里的复合 id，不管 page_id 参数，这条不额外挡
+    // 的话，page_id 校验形同虚设。
+    const res = await POST(
+      req({ ...BODY, page_id: '748077268383005', post_id: '别家主页id_1004101655665734' }),
+      { params: { id: 'client-oztop' } },
+    )
+    expect(res.status).toBe(403)
+    expect(boostPagePost).not.toHaveBeenCalled()
+  })
+
+  it('post_id 是不带下划线的裸 id（没有复合主页信息）→ 不触发这条额外校验，走原有 page_id 校验', async () => {
+    const res = await POST(
+      req({ ...BODY, page_id: '748077268383005', post_id: '1004101655665734' }),
+      { params: { id: 'client-oztop' } },
+    )
+    expect(res.status).toBe(200)
+  })
 })
