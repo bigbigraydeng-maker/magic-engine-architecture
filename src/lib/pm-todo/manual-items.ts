@@ -131,7 +131,7 @@ import { fetchBlogDraftTodos } from '@/lib/pm-todo/blog-drafts'
 import { fetchAutoRunTodos } from '@/lib/pm-todo/auto-run-items'
 import { fetchCommentScopeTodos, type CommentScopeTodoKind } from '@/lib/pm-todo/comment-scope-items'
 import { fetchKernelHandoffTodos } from '@/lib/kernel/handoff'
-import { fetchAdsAngleTestTodos } from '@/lib/pm-todo/ads-angle-test-items'
+import { ADS_BUDGET_INFRA_CLIENT_ID, fetchAdsAngleTestTodos } from '@/lib/pm-todo/ads-angle-test-items'
 import { auditCrossClientLeaks } from '@/lib/clients/cross-client-audit'
 import { containsPriceClaim } from '@/lib/content/price-claim'
 import { judgeOutgoingPost } from '@/lib/content/price-claim-gate'
@@ -1076,7 +1076,10 @@ async function pushAdsBudgetItems(
     items.push({
       kind: 'ads_budget_unknown',
       client_id: t.client_id,
-      client_name: nameOf(t.client_id),
+      // 「预算这个功能整个没生效」那一条不属于任何客户，走既有的 infra 约定
+      // （跟 video_credits_out / factory_worker_idle 同一个写法）
+      client_name:
+        t.client_id === ADS_BUDGET_INFRA_CLIENT_ID ? 'Magic Engine 后台' : nameOf(t.client_id),
       what: t.what,
       how: t.how,
       href: t.href,

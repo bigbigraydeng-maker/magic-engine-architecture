@@ -12,6 +12,7 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+  ADS_BUDGET_INFRA_CLIENT_ID,
   EXPLORATION_BUDGET_SHARE,
   businessMonth,
   businessMonthStart,
@@ -30,16 +31,27 @@ interface InsightRow {
   client_id: string
   level: string
   spend: unknown
+  /** 🔴 必须带上 —— 假件真的会按它做月份过滤（见 `chain.gte`）。 */
+  insight_date?: string
 }
 interface ConfigRow {
   client_id: string
   monthly_ad_budget: unknown
   monthly_ad_budget_currency: unknown
   monthly_ad_budget_updated_at?: unknown
+  /** 这笔预算算哪个业务月 —— 四态判定读的是**它**，不再从时间戳推。 */
+  monthly_ad_budget_month?: unknown
+}
+interface ClientRow {
+  id: string
+  country: string | null
 }
 
+/** 本业务月内的一天 —— 不特意指定 `insight_date` 的花费行都落在这里。 */
+const THIS_MONTH_DAY = '2026-08-10'
+
 /** 记录假件被怎么调用的 —— 用来证明「真的走了分页」，而不是只看结果对不对。 */
-const calls = { ranged: false }
+const calls = { ranged: false, gtes: [] as Array<[string, string]> }
 
 /** 空的一页：`fetchAll` 见到它就停。 */
 function emptyPage() {
@@ -51,24 +63,49 @@ function fakeSupabase(opts: {
   insightsError?: string
   configs?: ConfigRow[]
   configsError?: string
+  clients?: ClientRow[]
+  clientsError?: string
 }) {
   calls.ranged = false
+  calls.gtes = []
   return {
     from(table: string) {
       // 🔴 假件必须真的执行 `.in('client_id', …)` 过滤。
       //    不执行的话，「只给活跃客户下发」这条测试永远是绿的 ——
       //    测了个寂寞，而那正是这次要修的缺陷之一。
       const filters: Record<string, string[]> = {}
+      /**
+       * 🔴 下界也要真的生效（魏征 2026-08-18 阻止项 B2）。
+       *
+       *    原先 `chain.gte = () => chain` 直接把参数丢掉，于是**把整行
+       *    `.gte('insight_date', monthStart)` 删掉，36 个测试照样全绿** ——
+       *    删掉的后果是去年投过广告、今年早停了的客户被永久催办；
+       *    列名写错则是整条待办永久静默。两种都测不出来。
+       */
+      const lowerBounds: Array<[string, string]> = []
 
       const settle = () => {
         const keep = <T extends { client_id: string }>(rows: T[]) =>
           filters.client_id ? rows.filter((r) => filters.client_id.includes(r.client_id)) : rows
 
+        const aboveBounds = <T extends Record<string, unknown>>(rows: T[]) =>
+          rows.filter((r) =>
+            lowerBounds.every(([col, min]) => {
+              const v = r[col]
+              // 列名写错 → 这里拿到 undefined → 整行被滤掉 → 测试立刻变红
+              return typeof v === 'string' && v >= min
+            }),
+          )
+
         if (table === 'ad_daily_insights') {
+          const rows = (opts.insights ?? []).map((r) => ({
+            insight_date: THIS_MONTH_DAY,
+            ...r,
+          }))
           return Promise.resolve(
             opts.insightsError
               ? { data: null, error: { message: opts.insightsError } }
-              : { data: keep(opts.insights ?? []), error: null },
+              : { data: aboveBounds(keep(rows)), error: null },
           )
         }
         if (table === 'ad_strategy_configs') {
@@ -78,13 +115,27 @@ function fakeSupabase(opts: {
               : { data: keep(opts.configs ?? []), error: null },
           )
         }
+        if (table === 'clients') {
+          const rows = (opts.clients ?? []).filter((r) =>
+            filters.id ? filters.id.includes(r.id) : true,
+          )
+          return Promise.resolve(
+            opts.clientsError
+              ? { data: null, error: { message: opts.clientsError } }
+              : { data: rows, error: null },
+          )
+        }
         throw new Error(`fake supabase: table '${table}' is not modelled`)
       }
 
       // 可在任意一环 await —— 查询链的长度不该让假件跟着改
       const chain: Record<string, unknown> = {}
       chain.select = () => chain
-      chain.gte = () => chain
+      chain.gte = (col: string, min: string) => {
+        lowerBounds.push([col, min])
+        calls.gtes.push([col, min])
+        return chain
+      }
       chain.order = () => chain
       chain.range = (from: number) => {
         calls.ranged = true
@@ -231,6 +282,7 @@ describe('loadBudgetStateByClient —— 预算按月失效', () => {
     monthly_ad_budget: 2000,
     monthly_ad_budget_currency: 'AUD',
     monthly_ad_budget_updated_at: '2026-08-05T00:00:00Z',
+    monthly_ad_budget_month: '2026-08',
     ...over,
   })
 
@@ -241,7 +293,11 @@ describe('loadBudgetStateByClient —— 预算按月失效', () => {
 
   it('🔴 上个月填的 → stale，不是 filled —— 否则这个月的待办永远不出现', async () => {
     const m = await loadBudgetStateByClient(
-      fakeSupabase({ configs: [row({ monthly_ad_budget_updated_at: '2026-07-20T00:00:00Z' })] }),
+      fakeSupabase({
+        configs: [
+          row({ monthly_ad_budget_updated_at: '2026-07-20T00:00:00Z', monthly_ad_budget_month: '2026-07' }),
+        ],
+      }),
       ['oztop'],
       NOW,
     )
@@ -251,10 +307,10 @@ describe('loadBudgetStateByClient —— 预算按月失效', () => {
     expect(s.currency).toBe('AUD')
   })
 
-  it('🔴 时间戳缺失或解析不出来 → 按 stale 处理（方向安全：多问一次好过用来路不明的数字算钱）', async () => {
-    for (const bad of [null, '', 'not-a-date']) {
+  it('🔴 月份缺失或形状歪了 → 按 stale 处理（方向安全：多问一次好过用来路不明的数字算钱）', async () => {
+    for (const bad of [null, '', 'not-a-month', '2026-13', 202608]) {
       const m = await loadBudgetStateByClient(
-        fakeSupabase({ configs: [row({ monthly_ad_budget_updated_at: bad })] }),
+        fakeSupabase({ configs: [row({ monthly_ad_budget_month: bad })] }),
         ['oztop'],
         NOW,
       )
@@ -262,14 +318,51 @@ describe('loadBudgetStateByClient —— 预算按月失效', () => {
     }
   })
 
-  it('时间戳落在 NZ 的本月内就算新 —— 边界按 NZ 切，不按 UTC', async () => {
-    // UTC 还是 7-31，NZ 已是 8-01 → 属于本业务月
+  it('🔴 判定只看存下来的月份，不看时间戳 —— 时间戳跨月也不影响结论', async () => {
+    // 时间戳是 7 月底那一刻，但当时按客户自己的时区算出来就是 8 月，存的就是 8 月。
+    // 旧实现会在这里重新推一次月份，推错就整月静默。
     const m = await loadBudgetStateByClient(
-      fakeSupabase({ configs: [row({ monthly_ad_budget_updated_at: '2026-07-31T13:00:00Z' })] }),
+      fakeSupabase({
+        configs: [
+          row({ monthly_ad_budget_updated_at: '2026-07-31T13:00:00Z', monthly_ad_budget_month: '2026-08' }),
+        ],
+      }),
       ['oztop'],
       NOW,
     )
     expect(m!.get('oztop')!.status).toBe('filled')
+  })
+
+  it('🔴 澳洲客户按悉尼时间算当前月份，不跟着纽西兰跳月（原 C1）', async () => {
+    // 这一刻：悉尼 2026-09-30 22:30（还在 9 月），奥克兰 2026-10-01 00:30（已进 10 月）
+    const boundary = new Date('2026-09-30T12:30:00Z')
+    const configs = [row({ monthly_ad_budget_month: '2026-09' })]
+
+    const au = await loadBudgetStateByClient(
+      fakeSupabase({ configs, clients: [{ id: 'oztop', country: 'AU' }] }),
+      ['oztop'],
+      boundary,
+    )
+    // 悉尼此刻还是 9 月 → 9 月填的预算就是「本月的」→ 不该催
+    expect(au!.get('oztop')!.status).toBe('filled')
+
+    const nz = await loadBudgetStateByClient(
+      fakeSupabase({ configs, clients: [{ id: 'oztop', country: 'NZ' }] }),
+      ['oztop'],
+      boundary,
+    )
+    // 同一份数据，纽西兰客户此刻已经进 10 月 → 9 月的数字该复核
+    expect(nz!.get('oztop')!.status).toBe('stale')
+  })
+
+  it('读不到客户所在国时按 NZ 兜底（方向安全：多催一次，不整月静默）', async () => {
+    const boundary = new Date('2026-09-30T12:30:00Z')
+    const m = await loadBudgetStateByClient(
+      fakeSupabase({ configs: [row({ monthly_ad_budget_month: '2026-09' })], clientsError: 'boom' }),
+      ['oztop'],
+      boundary,
+    )
+    expect(m!.get('oztop')!.status).toBe('stale')
   })
 
   it('只填金额没填币种 → missing（AD-CUR-1 的同一个洞）', async () => {
@@ -289,6 +382,7 @@ describe('loadBudgetStateByClient —— 预算按月失效', () => {
             monthly_ad_budget: null,
             monthly_ad_budget_currency: null,
             monthly_ad_budget_updated_at: '2026-08-11T00:00:00Z',
+            monthly_ad_budget_month: '2026-08',
           }),
         ],
       }),
@@ -306,6 +400,7 @@ describe('loadBudgetStateByClient —— 预算按月失效', () => {
             monthly_ad_budget: null,
             monthly_ad_budget_currency: null,
             monthly_ad_budget_updated_at: '2026-07-11T00:00:00Z',
+            monthly_ad_budget_month: '2026-07',
           }),
         ],
       }),
@@ -383,12 +478,14 @@ describe('fetchAdsAngleTestTodos', () => {
             monthly_ad_budget: 2000,
             monthly_ad_budget_currency: 'AUD',
             monthly_ad_budget_updated_at: '2026-08-02T00:00:00Z',
+            monthly_ad_budget_month: '2026-08',
           },
           {
             client_id: 'cts',
             monthly_ad_budget: '2400',
             monthly_ad_budget_currency: 'NZD',
             monthly_ad_budget_updated_at: '2026-08-16T00:00:00Z',
+            monthly_ad_budget_month: '2026-08',
           },
         ],
       }),
@@ -408,13 +505,16 @@ describe('fetchAdsAngleTestTodos', () => {
             monthly_ad_budget: 2000,
             monthly_ad_budget_currency: 'AUD',
             monthly_ad_budget_updated_at: '2026-07-03T00:00:00Z',
+            monthly_ad_budget_month: '2026-07',
           },
         ],
       }),
       NOW,
       ACTIVE,
     )
-    expect(t.what).toContain('2026-07-03')
+    // 说的是「哪个月定的」，不是「哪天点的保存」—— 后者拿时间戳切片，
+    // 时间戳歪掉时会把垃圾串印进待办（魏征 W7）
+    expect(t.what).toContain('2026-07')
     expect(t.what).toContain('AUD 2,000')
     expect(t.what).toContain('预算是按月确认的')
     // 上次填过的人不该被当成从没填过
@@ -456,6 +556,7 @@ describe('fetchAdsAngleTestTodos', () => {
             monthly_ad_budget: null,
             monthly_ad_budget_currency: null,
             monthly_ad_budget_updated_at: '2026-08-11T00:00:00Z',
+            monthly_ad_budget_month: '2026-08',
           },
         ],
       }),
@@ -469,12 +570,46 @@ describe('fetchAdsAngleTestTodos', () => {
     expect(await fetchAdsAngleTestTodos(fakeSupabase({ insights: [] }), NOW, ACTIVE)).toEqual([])
   })
 
-  it('🔴 配置表读不到时整轮不下发 —— 迁移没 apply 的环境会每个客户推一条谁也处理不了的噪音', async () => {
+  it('🔴 配置表读不到时不给客户下发 —— 迁移没 apply 的环境会每个客户推一条谁也处理不了的噪音', async () => {
     const todos = await fetchAdsAngleTestTodos(
       fakeSupabase({ insights: spending, configsError: 'column does not exist' }),
       NOW,
       ACTIVE,
     )
+    // 一个客户的催办都不许出
+    expect(todos.filter((t) => t.client_id !== ADS_BUDGET_INFRA_CLIENT_ID)).toEqual([])
+  })
+
+  it('🔴 但必须留下一条系统级待办说明「这个功能现在是关着的」（铁律 3 下半句）', async () => {
+    // 只静默的话：SOP §6b 写着「✅ 已接入」，实际一条没发，
+    // 唯一信号是一行 console.warn —— 文档在撒谎，发现死在日志里。
+    const todos = await fetchAdsAngleTestTodos(
+      fakeSupabase({ insights: spending, configsError: 'column does not exist' }),
+      NOW,
+      ACTIVE,
+    )
+    expect(todos).toHaveLength(1)
+    const [t] = todos
+    expect(t.client_id).toBe(ADS_BUDGET_INFRA_CLIENT_ID)
+    expect(t.what).toContain('关着的')
+    // 要说清漏检了几个在花钱的客户，不能只说「读失败」
+    expect(t.what).toContain('2 个')
+    expect(t.how).toContain('go apply budget')
+    expect(t.href).toMatch(/^https:\/\//)
+  })
+
+  it('🔴 月份下界必须真的落到 insight_date 上 —— 上个月的花费不许算进本月', async () => {
+    // 假件会真的执行 `.gte`（列名写错 → 整行被滤掉 → 这条立刻变红）
+    const todos = await fetchAdsAngleTestTodos(
+      fakeSupabase({
+        insights: [
+          { client_id: 'oztop', level: 'campaign', spend: 5000, insight_date: '2026-07-15' },
+        ],
+      }),
+      NOW,
+      ACTIVE,
+    )
     expect(todos).toEqual([])
+    expect(calls.gtes).toContainEqual(['insight_date', '2026-08-01'])
   })
 })

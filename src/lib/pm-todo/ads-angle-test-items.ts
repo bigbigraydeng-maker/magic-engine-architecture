@@ -27,8 +27,13 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { toRealAmount } from '@/lib/ads-strategy/config'
-import { businessMonthStart, isInBusinessMonth } from '@/lib/ads-strategy/business-month'
+import { normalizeBudgetFields, toRealAmount } from '@/lib/ads-strategy/config'
+import {
+  businessMonth,
+  businessMonthStart,
+  timeZoneForCountry,
+} from '@/lib/ads-strategy/business-month'
+import { EXPLORATION_BUDGET_PCT } from '@/lib/ads-strategy/budget-policy'
 import { fetchAll } from '@/lib/supabase-paginate'
 
 export interface AdsAngleTestTodo {
@@ -39,20 +44,24 @@ export interface AdsAngleTestTodo {
 }
 
 /**
- * 每月拿多少比例去试没验证过的说法 —— **Product Owner 决议（2026-08-15）**。
- *
- * 这不是数据算出来的自然常数，是一条可复核的业务政策。改它要 PO 点头。
- * 口径见 SOP §0：这是**整月共享池**，逐轮扣减，不是每轮各拿 20%。
+ * 20% 这条政策**住在 `ads-strategy/budget-policy`**（叶子模块，设置页也能 import）。
+ * 这里只转出去，不再自己写一份 —— 原先服务端一份、设置页硬编码两份，
+ * PO 一改政策就会出现两套口径同时摆在同一个 FDE 眼前（魏征 W2）。
  */
-export const EXPLORATION_BUDGET_SHARE = 0.2
-
-/** 本月探索池 = 月预算 × 20%。纯函数，好测。 */
-export function explorationPool(monthlyBudget: number): number {
-  return monthlyBudget * EXPLORATION_BUDGET_SHARE
-}
+export {
+  EXPLORATION_BUDGET_SHARE,
+  EXPLORATION_BUDGET_PCT,
+  explorationPool,
+} from '@/lib/ads-strategy/budget-policy'
 
 // 业务月份判据是**一份**，服务端与设置页共用，见 ads-strategy/business-month.ts
 export { businessMonth, businessMonthStart } from '@/lib/ads-strategy/business-month'
+
+/**
+ * 「这条待办不属于任何客户，属于系统自己」用的 id —— 与 manual-items 里
+ * `video_credits_out` / `factory_worker_idle` 同一个既有约定。
+ */
+export const ADS_BUDGET_INFRA_CLIENT_ID = 'infra'
 
 /** 该客户这个月在 Meta 上花掉的钱（账户币种，本表没有币种列）。 */
 interface MonthSpend {
@@ -152,9 +161,8 @@ export async function loadMonthSpendByClient(
  *    「压根没问过」长得一模一样**，第二天这条待办照旧冒出来 —— 一直催到月底。
  *    那就是给了一个「做了也没用」的指示，比不给指示更糟。
  *
- *    判据不用新加列：清空时接口会写 `monthly_ad_budget_updated_at`，
- *    所以「金额为空 + 时间戳落在本业务月」= 这个月有人明确清过 = 已确认不投；
- *    「金额为空 + 时间戳缺失或是上个月的」= 从没问过 / 上个月的决定不算数。
+ *    判据是「金额币种都空 + 这次决定记的是本业务月」= 这个月有人明确清过 = 已确认不投；
+ *    「金额为空 + 没有月份或记的是上个月」= 从没问过 / 上个月的决定不算数。
  */
 export type BudgetStatus = 'filled' | 'stale' | 'missing' | 'declined'
 
@@ -164,6 +172,37 @@ export interface BudgetState {
   amount: number | null
   currency: string | null
   updatedAt: string | null
+  /** 上次那笔预算（或那次「不投」的决定）算的是哪个业务月，`YYYY-MM`。 */
+  month: string | null
+}
+
+/**
+ * 每个客户「**现在**算哪个业务月」—— 按他自己所在国的时区。
+ *
+ * 🔴 不能全部按一个时区算（原 C1）：客户散在 AU/NZ，NZ 比 AU 早两小时进入新月份。
+ *    读不到 `clients.country` 时按 NZ 兜底 —— 方向安全，见 `DEFAULT_BUSINESS_TZ`：
+ *    最坏是月末那两小时对 AU 客户**多催一次**，而不是**整月不催**。
+ */
+export async function loadCurrentMonthByClient(
+  supabase: SupabaseClient,
+  clientIds: string[],
+  now: Date,
+): Promise<Map<string, string>> {
+  const countryOf = new Map<string, string | null>()
+  if (clientIds.length > 0) {
+    const { data, error } = await supabase.from('clients').select('id, country').in('id', clientIds)
+    if (error) {
+      console.warn('[ads-angle-test] 客户所在国读取失败（按 NZ 兜底）:', error.message)
+    }
+    for (const row of (data ?? []) as Array<{ id: string; country: string | null }>) {
+      countryOf.set(row.id, row.country)
+    }
+  }
+  const out = new Map<string, string>()
+  for (const id of clientIds) {
+    out.set(id, businessMonth(now, timeZoneForCountry(countryOf.get(id))))
+  }
+  return out
 }
 
 export async function loadBudgetStateByClient(
@@ -172,35 +211,40 @@ export async function loadBudgetStateByClient(
   now: Date,
 ): Promise<Map<string, BudgetState> | null> {
   if (clientIds.length === 0) return new Map()
+
   const { data, error } = await supabase
     .from('ad_strategy_configs')
-    .select('client_id, monthly_ad_budget, monthly_ad_budget_currency, monthly_ad_budget_updated_at')
+    .select(
+      'client_id, monthly_ad_budget, monthly_ad_budget_currency, monthly_ad_budget_updated_at, monthly_ad_budget_month',
+    )
     .in('client_id', clientIds)
 
   if (error) {
     // 🔴 读不到时**整轮不下发**（返回 null），不是「当成没填全推一遍」。
     //    迁移还没 apply 的环境这里必然报错，那时候给每个客户推一条
     //    「没登记月预算」= 一条谁也没法处理的噪音。
+    //    但也不能就这么静默 —— 调用方会另外下发一条**系统级**待办说明原因
+    //    （铁律 3 下半句：发现不许死在日志里）。
     console.warn('[ads-angle-test] 广告预算配置读取失败（本轮不下发）:', error.message)
     return null
   }
 
-  const out = new Map<string, BudgetState>()
-  for (const row of (data ?? []) as Array<{
-    client_id: string
-    monthly_ad_budget: unknown
-    monthly_ad_budget_currency: unknown
-    monthly_ad_budget_updated_at: unknown
-  }>) {
-    const amount = toRealAmount(row.monthly_ad_budget)
-    const currency =
-      typeof row.monthly_ad_budget_currency === 'string' && row.monthly_ad_budget_currency !== ''
-        ? row.monthly_ad_budget_currency
-        : null
-    const updatedAt =
-      typeof row.monthly_ad_budget_updated_at === 'string' ? row.monthly_ad_budget_updated_at : null
+  const currentMonthOf = await loadCurrentMonthByClient(supabase, clientIds, now)
 
-    const touchedThisMonth = isInBusinessMonth(updatedAt, now)
+  const out = new Map<string, BudgetState>()
+  for (const row of (data ?? []) as Array<Record<string, unknown>>) {
+    const clientId = typeof row.client_id === 'string' ? row.client_id : null
+    if (clientId === null) continue
+
+    // 读侧口径跟接口层是**同一份代码**，两边各写一份必然分家
+    const fields = normalizeBudgetFields(row)
+    const month = fields.monthly_ad_budget_month
+
+    /**
+     * 🔴 「是不是这个月的」用**存下来的月份**做字符串比对，不再从时间戳推。
+     *    推的那一刻用哪个时区就决定了结论，而写入时已经按客户自己的时区算好了。
+     */
+    const isThisMonth = month !== null && month === currentMonthOf.get(clientId)
 
     /**
      * 🔴 「干净地清空」才算确认不投 —— 金额和币种**都**是空。
@@ -211,26 +255,29 @@ export async function loadBudgetStateByClient(
      *    而他其实正在花钱。方向必须反过来：拿不准就继续催。
      */
     const cleanlyCleared =
-      (row.monthly_ad_budget === null || row.monthly_ad_budget === undefined) && currency === null
+      (row.monthly_ad_budget === null || row.monthly_ad_budget === undefined) &&
+      (row.monthly_ad_budget_currency === null || row.monthly_ad_budget_currency === undefined)
 
-    // 成对才算填过（与 config.ts 读侧口径一致）
-    if (amount === null || currency === null) {
-      out.set(row.client_id, {
-        status: cleanlyCleared && touchedThisMonth ? 'declined' : 'missing',
+    // 成对才算填过（`normalizeBudgetFields` 已经把只填一半的收成 null）
+    if (fields.monthly_ad_budget === null || fields.monthly_ad_budget_currency === null) {
+      out.set(clientId, {
+        status: cleanlyCleared && isThisMonth ? 'declined' : 'missing',
         amount: null,
         currency: null,
-        updatedAt,
+        updatedAt: fields.monthly_ad_budget_updated_at,
+        month,
       })
       continue
     }
 
-    // 填过，但是不是**这个月**填的？时间戳解析不出来时按 stale 处理 ——
+    // 填过，但是不是**这个月**填的？月份缺失（老数据 / 被手改过）一律按 stale ——
     // 方向安全：多问一次，好过拿一个说不清是哪个月的数字去算花钱额度。
-    out.set(row.client_id, {
-      status: touchedThisMonth ? 'filled' : 'stale',
-      amount,
-      currency,
-      updatedAt,
+    out.set(clientId, {
+      status: isThisMonth ? 'filled' : 'stale',
+      amount: fields.monthly_ad_budget,
+      currency: fields.monthly_ad_budget_currency,
+      updatedAt: fields.monthly_ad_budget_updated_at,
+      month,
     })
   }
   return out
@@ -260,10 +307,30 @@ export async function fetchAdsAngleTestTodos(
     spending.map((s) => s.clientId),
     now,
   )
-  // 配置读不到 → 整轮不下发（详见 loadBudgetStateByClient）
-  if (states === null) return []
+  /**
+   * 配置读不到 → 每客户的催办整轮不下发（详见 `loadBudgetStateByClient`），
+   * **但必须留下一条系统级待办**（魏征 W4）。
+   *
+   * 🔴 否则就是铁律 3 下半句禁止的形态：SOP §6b 已经把这一类标成「✅ 已接入」，
+   *    而实际上一条都没下发，唯一的信号是一行 `console.warn` —— 文档在撒谎，
+   *    发现死在日志里。这条待办是给 ME 自己的，不属于任何客户。
+   */
+  if (states === null) {
+    return [
+      {
+        client_id: ADS_BUDGET_INFRA_CLIENT_ID,
+        what:
+          '「在投广告却没登记月预算」这条提醒现在是关着的 —— 读不到月预算那几个字段（多半是数据库还没改完），' +
+          `所以今天有 ${spending.length} 个在花钱的客户没有被检查到。`,
+        how:
+          '这一步需要在数据库上加几个字段，我这边不能自己动手（不可逆操作要你点头）。' +
+          '回一句「go apply budget」我就去办；办完这条自己消失。',
+        href: 'https://github.com/bigbigraydeng-maker/magic-engine/pull/1036',
+      },
+    ]
+  }
 
-  const pct = Math.round(EXPLORATION_BUDGET_SHARE * 100)
+  const pct = EXPLORATION_BUDGET_PCT
   const todos: AdsAngleTestTodo[] = []
 
   for (const s of spending) {
@@ -295,11 +362,12 @@ export async function fetchAdsAngleTestTodos(
 
     if (state.status === 'stale') {
       const last = `${state.currency} ${state.amount!.toLocaleString('en-US')}`
-      const when = state.updatedAt ? state.updatedAt.slice(0, 10) : '更早以前'
+      // 用**存下来的业务月份**，不拿时间戳切片：时间戳解析不出来时切片会把垃圾串印进待办
+      const when = state.month ?? '更早以前'
       todos.push({
         client_id: s.clientId,
         what:
-          `这个月已经有广告在花钱（${spendLine}），但月广告预算还是 ${when} 填的 ${last} —— ` +
+          `这个月已经有广告在花钱（${spendLine}），但月广告预算还是 ${when} 那个月定的 ${last} —— ` +
           '预算是按月确认的，上个月的数字不能直接拿来算这个月的探索池。',
         how:
           `跟客户确认这个月还是不是 ${last}：是就打开设置页把它重新保存一次（时间戳更新，这条就消失）；` +

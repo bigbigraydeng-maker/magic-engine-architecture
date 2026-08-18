@@ -30,7 +30,14 @@ ALTER TABLE public.ad_strategy_configs
   ADD COLUMN IF NOT EXISTS monthly_ad_budget_currency   text,
   -- 谁什么时候填的 —— 预算是会变的业务事实，没有这两列就说不清「这个数还新不新」
   ADD COLUMN IF NOT EXISTS monthly_ad_budget_updated_at timestamptz,
-  ADD COLUMN IF NOT EXISTS monthly_ad_budget_updated_by text;
+  ADD COLUMN IF NOT EXISTS monthly_ad_budget_updated_by text,
+  -- 🔴 **这笔预算算哪个月的，要存下来，不要事后拿时间戳推**（子牙/魏征 2026-08-18 复审）。
+  --    「填的时刻」和「算哪个月」是两件事：推的时候用哪个时区就决定了结论，
+  --    而客户散在 AU/NZ 两个时区 —— 悉尼 9/30 22:30 保存的 9 月预算，按 NZ 推
+  --    会得到 10 月，于是整个 10 月不再复核（原 C1）。存下来则是**当时按客户
+  --    自己所在国的时区算好的事实**，以后升级成月度历史表时
+  --    `(client_id, monthly_ad_budget_month)` 天然就是主键，回填是精确的。
+  ADD COLUMN IF NOT EXISTS monthly_ad_budget_month      text;
 
 DO $$ BEGIN
   ALTER TABLE public.ad_strategy_configs
@@ -64,7 +71,26 @@ DO $$ BEGIN
     CHECK ((monthly_ad_budget IS NULL) = (monthly_ad_budget_currency IS NULL));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
+DO $$ BEGIN
+  -- `YYYY-MM`，别的一律拒绝。读侧是字符串直接比对，形状歪了就永远比不上，
+  -- 那会变成「看起来填了、待办天天催」，所以在库这一层就卡死。
+  ALTER TABLE public.ad_strategy_configs
+    ADD CONSTRAINT ad_strategy_monthly_budget_month_shape
+    CHECK (monthly_ad_budget_month IS NULL
+           OR monthly_ad_budget_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  -- 月份与时间戳同生同灭 —— 两者都是「有人在这个月动过预算」这一个事实的两面。
+  -- 只有其中一个，四态判定（填了 / 上月的 / 确认不投 / 没问过）就会有一档说不清。
+  ALTER TABLE public.ad_strategy_configs
+    ADD CONSTRAINT ad_strategy_monthly_budget_month_paired_with_ts
+    CHECK ((monthly_ad_budget_month IS NULL) = (monthly_ad_budget_updated_at IS NULL));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 COMMENT ON COLUMN public.ad_strategy_configs.monthly_ad_budget IS
   '客户这个月准备投的广告预算（不是已花金额）。SOP：本月探索池 = 本值 × 20%。NULL = 还没问到。';
 COMMENT ON COLUMN public.ad_strategy_configs.monthly_ad_budget_currency IS
   '预算币种（AUD / NZD）。必须与金额成对出现 —— ad_daily_insights 没有币种列，见 AD-CUR-1。';
+COMMENT ON COLUMN public.ad_strategy_configs.monthly_ad_budget_month IS
+  '这笔预算/这次「本月不投」的决定算哪个业务月（YYYY-MM），按客户所在国的时区在写入时算好。读侧只做字符串比对，不再从 updated_at 推。';

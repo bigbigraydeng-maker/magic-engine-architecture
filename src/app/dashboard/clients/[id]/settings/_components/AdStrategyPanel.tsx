@@ -16,7 +16,10 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import { isInBusinessMonth } from '@/lib/ads-strategy/business-month'
+import {
+  EXPLORATION_BUDGET_PCT,
+  explorationPool,
+} from '@/lib/ads-strategy/budget-policy'
 
 interface Props {
   clientId: string
@@ -31,7 +34,19 @@ interface Config {
   monthly_ad_budget: number | null
   monthly_ad_budget_currency: BudgetCurrency | null
   monthly_ad_budget_updated_at: string | null
+  /** 这笔预算算哪个业务月，`YYYY-MM`。服务端按客户所在国的时区算好存下来的。 */
+  monthly_ad_budget_month: string | null
 }
+
+/**
+ * 哪一块被保存了 —— 只重置这一块的草稿。
+ *
+ * 🔴 原先 `save()` 无条件把两块草稿都用服务端返回值重置（魏征 B3 / 原 C2）：
+ *    FDE 在金额框敲了 3000 还没保存，顺手先点「保存收件人」→ 金额框被清空 →
+ *    他以为 3000 还在，点「保存预算」→ 空 → **静默记成「本月确认不投」**。
+ *    既丢了输入，又把这个月的催办关掉了。所以必须按块重置。
+ */
+type SaveScope = 'enabled' | 'recipients' | 'budget'
 
 type PanelState =
   | { phase: 'loading' }
@@ -60,17 +75,34 @@ export function AdStrategyPanel({ clientId }: Props) {
   const [currencyDraft, setCurrencyDraft] = useState<BudgetCurrency | ''>('')
   const [saving, setSaving] = useState(false)
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
+  /**
+   * 现在算哪个业务月（`YYYY-MM`），**服务端按这个客户所在国的时区算好给的**。
+   * 🔴 浏览器端不再自己算月份 —— 两边各算一份必然分家，
+   *    然后就会出现「界面说填好了、今日待办还在催」。
+   */
+  const [currentMonth, setCurrentMonth] = useState<string | null>(null)
+  /** 预算那几列后端读到了没有。`false` = 功能还没生效，不是「还没填」。 */
+  const [budgetAvailable, setBudgetAvailable] = useState(true)
 
   const load = useCallback(async () => {
     setState({ phase: 'loading' })
     try {
       const res = await fetch(`/api/clients/${clientId}/ad-strategy-config`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const { config, suggested_currency: suggested } = (await res.json()) as {
+      const {
+        config,
+        suggested_currency: suggested,
+        current_business_month: month,
+        budget_available: available,
+      } = (await res.json()) as {
         config: Config
         suggested_currency: BudgetCurrency | null
+        current_business_month: string | null
+        budget_available: boolean
       }
       setState({ phase: 'ready', config })
+      setCurrentMonth(month ?? null)
+      setBudgetAvailable(available !== false)
       setRecipientsDraft(config.digest_recipients.join('\n'))
       setBudgetDraft(config.monthly_ad_budget === null ? '' : String(config.monthly_ad_budget))
       // 已存过 > 按客户所在国建议 > 空（强制人选）
@@ -82,7 +114,7 @@ export function AdStrategyPanel({ clientId }: Props) {
 
   useEffect(() => { load() }, [load])
 
-  const save = async (patch: Partial<Config>, okText: string) => {
+  const save = async (patch: Partial<Config>, okText: string, scope: SaveScope) => {
     setSaving(true)
     setBanner(null)
     try {
@@ -94,12 +126,19 @@ export function AdStrategyPanel({ clientId }: Props) {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`)
       setState({ phase: 'ready', config: json.config })
-      setRecipientsDraft(json.config.digest_recipients.join('\n'))
-      setBudgetDraft(
-        json.config.monthly_ad_budget === null ? '' : String(json.config.monthly_ad_budget),
-      )
-      if (json.config.monthly_ad_budget_currency) {
-        setCurrencyDraft(json.config.monthly_ad_budget_currency)
+      if (typeof json.current_business_month === 'string') setCurrentMonth(json.current_business_month)
+      if (typeof json.budget_available === 'boolean') setBudgetAvailable(json.budget_available)
+      // 🔴 只重置**这次真的保存了的**那一块的草稿，别人的输入不许动（魏征 B3 / 原 C2）
+      if (scope === 'recipients') {
+        setRecipientsDraft(json.config.digest_recipients.join('\n'))
+      }
+      if (scope === 'budget') {
+        setBudgetDraft(
+          json.config.monthly_ad_budget === null ? '' : String(json.config.monthly_ad_budget),
+        )
+        if (json.config.monthly_ad_budget_currency) {
+          setCurrencyDraft(json.config.monthly_ad_budget_currency)
+        }
       }
       setBanner({ kind: 'ok', text: okText })
     } catch (err) {
@@ -121,7 +160,11 @@ export function AdStrategyPanel({ clientId }: Props) {
       const ok = window.confirm('暂停后,这个客户的广告不再每天自动体检、不再预警。确定要暂停吗?')
       if (!ok) return
     }
-    save({ enabled: next }, next ? '已开启,从明天起每天体检。' : '已暂停,这个客户不再体检、不再预警。')
+    save(
+      { enabled: next },
+      next ? '已开启,从明天起每天体检。' : '已暂停,这个客户不再体检、不再预警。',
+      'enabled',
+    )
   }
 
   const saveRecipients = () => {
@@ -131,7 +174,11 @@ export function AdStrategyPanel({ clientId }: Props) {
       setBanner({ kind: 'err', text: `「${bad}」不像邮箱。一行只写一个邮箱,多个就换行。` })
       return
     }
-    save({ digest_recipients: emails }, emails.length > 0 ? `已保存 ${emails.length} 个收件人。` : '已清空收件人,改发到 ME 团队默认邮箱。')
+    save(
+      { digest_recipients: emails },
+      emails.length > 0 ? `已保存 ${emails.length} 个收件人。` : '已清空收件人,改发到 ME 团队默认邮箱。',
+      'recipients',
+    )
   }
 
   /**
@@ -144,9 +191,20 @@ export function AdStrategyPanel({ clientId }: Props) {
   const saveBudget = () => {
     const raw = budgetDraft.trim()
     if (raw === '') {
+      /**
+       * 🔴 清空要二次确认（魏征 B3）。同一个面板里破坏性小得多的「暂停监测」都要确认，
+       *    而这一下的后果更重：删掉库里的数字，**并且把这个客户整月标成「确认不投」**——
+       *    今日待办从此不再提醒，没人会发现。误点一次的代价是一个月的静默。
+       */
+      const ok = window.confirm(
+        '留空保存会记成「本月确认不投广告」:库里的月预算会被清掉,今日待办这个月不再提醒这个客户。\n\n' +
+          '如果你只是想改数字,请点取消,把新的数填进去再保存。确定要记成本月不投吗?',
+      )
+      if (!ok) return
       save(
         { monthly_ad_budget: null, monthly_ad_budget_currency: null },
         '已记成「本月确认不投广告」—— 今日待办不再提醒。改主意就填个数再保存。',
+        'budget',
       )
       return
     }
@@ -162,7 +220,9 @@ export function AdStrategyPanel({ clientId }: Props) {
     }
     save(
       { monthly_ad_budget: n, monthly_ad_budget_currency: currencyDraft },
-      `已保存月预算 ${currencyDraft} ${n.toLocaleString('en-US')}，探索池 ${currencyDraft} ${Math.round(n * 0.2).toLocaleString('en-US')}。`,
+      `已保存月预算 ${currencyDraft} ${n.toLocaleString('en-US')}，探索池 ${currencyDraft} ` +
+        `${Math.round(explorationPool(n)).toLocaleString('en-US')}。`,
+      'budget',
     )
   }
 
@@ -182,10 +242,12 @@ export function AdStrategyPanel({ clientId }: Props) {
   /**
    * 这个预算（或「不投」的决定）是不是**这个月**确认的。
    *
-   * 判据跟今日待办用的是**同一份代码**（`ads-strategy/business-month.ts`）——
-   * 两边各写一份必然分家，然后就会出现「界面说填好了、待办还在催」。
+   * 🔴 判据是**存下来的月份跟服务端给的当前业务月做字符串比对** —— 跟今日待办
+   *    用的是同一个字段、同一个口径。浏览器端不自己算月份：原先在这里用本地
+   *    时区推月份，跟服务端一旦不一致就会出现「界面说填好了、待办还在催」。
    */
-  const budgetIsCurrentMonth = isInBusinessMonth(config.monthly_ad_budget_updated_at, new Date())
+  const budgetIsCurrentMonth =
+    config.monthly_ad_budget_month !== null && config.monthly_ad_budget_month === currentMonth
 
   return (
     <div className="rounded-xl border border-gray-200 p-5">
@@ -266,7 +328,7 @@ export function AdStrategyPanel({ clientId }: Props) {
         <p className="mt-0.5 text-xs text-gray-400">
           这个客户这个月<span className="text-gray-700">准备投</span>多少 ——
           <span className="text-gray-700">不是已经花了多少</span>。
-          按投放规矩，每月拿其中 20% 出来试没验证过的说法；没有这个数就算不出来。
+          按投放规矩，每月拿其中 {EXPLORATION_BUDGET_PCT}% 出来试没验证过的说法；没有这个数就算不出来。
         </p>
 
         <div className="mt-2 flex items-center gap-2">
@@ -308,13 +370,20 @@ export function AdStrategyPanel({ clientId }: Props) {
           </button>
         </div>
 
-        {config.monthly_ad_budget !== null && config.monthly_ad_budget_currency ? (
+        {!budgetAvailable ? (
+          /* 🔴 读不到那几列 = 这个功能还没生效，**不是「还没填」**。
+             显示成「还没填」会让 FDE 白填一次然后奇怪为什么没反应。 */
+          <p className="mt-2 text-xs text-amber-700">
+            月预算这个功能还没生效（后台还差一步没做完），现在填了也存不进去。
+            今日待办里有一条「需要你动手」写着怎么办，处理完这里就能用了。
+          </p>
+        ) : config.monthly_ad_budget !== null && config.monthly_ad_budget_currency ? (
           <p className="mt-2 text-xs text-gray-500">
             当前：{config.monthly_ad_budget_currency}{' '}
             {config.monthly_ad_budget.toLocaleString('en-US')} / 月 · 其中探索池{' '}
             <span className="text-gray-700">
               {config.monthly_ad_budget_currency}{' '}
-              {Math.round(config.monthly_ad_budget * 0.2).toLocaleString('en-US')}
+              {Math.round(explorationPool(config.monthly_ad_budget)).toLocaleString('en-US')}
             </span>
             {config.monthly_ad_budget_updated_at
               ? ` · ${config.monthly_ad_budget_updated_at.slice(0, 10)} 确认`

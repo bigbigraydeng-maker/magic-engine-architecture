@@ -8,6 +8,7 @@
 
 import { supabaseAdmin } from '@/lib/supabase'
 import { ME_MAIL_TO_ADDRESS } from '@/lib/email/sender'
+import { businessMonth, isBusinessMonth, timeZoneForCountry } from './business-month'
 
 /** 目标市场 AU/NZ —— 账户币种实读只有这两个（`AD-CUR-1`）。 */
 export type AdBudgetCurrency = 'AUD' | 'NZD'
@@ -111,6 +112,22 @@ export interface AdStrategyConfig {
   client_id: string
   enabled: boolean
   digest_recipients: string[]
+}
+
+/**
+ * 月预算这几列**故意跟 `AdStrategyConfig` 分开读**（子牙 2026-08-18 复审的阻止项 1）。
+ *
+ * 🔴 早先把新列塞进 `loadAdStrategyConfigWithSource` 的 select 里，后果是：
+ *    migration 还没 apply 时 PostgREST 对不存在的列会让**整个查询报错**（42703），
+ *    于是 `source` 变成 `'fallback'`，而每日广告体检 cron 的发信闸是
+ *    `adConfigSource !== 'fallback'` —— **每个客户的广告日报邮件一封都不发，
+ *    日志里只有一行 console.warn**。那是一条已上线功能的静默停摆，
+ *    却是被一个还没上线的新功能带塌的。
+ *
+ *    拆开之后：列不存在只让**新功能**降级（预算读不到 → 待办整轮不下发，
+ *    另有一条系统级待办说明原因），碰不到日报。
+ */
+export interface AdBudgetFields {
   /**
    * 客户这个月**准备投**的广告预算 —— 不是已经花掉的。
    *
@@ -123,8 +140,26 @@ export interface AdStrategyConfig {
   monthly_ad_budget: number | null
   /** 预算币种。与金额成对出现（数据库层有 paired 约束）。 */
   monthly_ad_budget_currency: AdBudgetCurrency | null
-  /** 最后一次填的时间 —— 预算是会变的业务事实，没有它说不清这个数还新不新。 */
+  /** 最后一次填的时间 —— 给人看「什么时候确认的」，**不再用来推算哪个月**。 */
   monthly_ad_budget_updated_at: string | null
+  /**
+   * 这笔预算（或这次「本月不投」的决定）算哪个业务月，`YYYY-MM`。
+   *
+   * 🔴 写入时按**客户自己所在国**的时区算好存下来，读侧只做字符串比对。
+   *    不从 `updated_at` 推：推的那一刻用错时区就永久错（原 C1，
+   *    悉尼 9/30 22:30 保存的 9 月预算按 NZ 推会变成 10 月，整月不再复核）。
+   */
+  monthly_ad_budget_month: string | null
+}
+
+/** 空的预算三态 —— 「还没问到」。 */
+export function emptyBudgetFields(): AdBudgetFields {
+  return {
+    monthly_ad_budget: null,
+    monthly_ad_budget_currency: null,
+    monthly_ad_budget_updated_at: null,
+    monthly_ad_budget_month: null,
+  }
 }
 
 /**
@@ -135,20 +170,12 @@ export interface AdStrategyConfig {
  */
 export type ConfigSource = 'row' | 'default' | 'fallback'
 
-/**
- * Default when a client has no config row: on, digest to the global inbox.
- *
- * 🔴 预算默认 `null`（还没问到），**不给任何猜测值**。给个默认数字会让 SOP 的
- *    探索池算出一个看起来合理、其实没人确认过的金额，而那笔钱是真要花出去的。
- */
+/** Default when a client has no config row: on, digest to the global inbox. */
 export function defaultConfig(clientId: string): AdStrategyConfig {
   return {
     client_id: clientId,
     enabled: true,
     digest_recipients: [],
-    monthly_ad_budget: null,
-    monthly_ad_budget_currency: null,
-    monthly_ad_budget_updated_at: null,
   }
 }
 
@@ -164,11 +191,17 @@ export function defaultConfig(clientId: string): AdStrategyConfig {
 export async function loadAdStrategyConfigWithSource(
   clientId: string,
 ): Promise<{ config: AdStrategyConfig; source: ConfigSource }> {
+  /**
+   * 🔴 **只 select 这张表原有的三列，绝不把新加的列塞进来。**
+   *
+   *    这条查询喂的是每日广告体检 cron 的发信闸（`adConfigSource !== 'fallback'`）。
+   *    PostgREST 对不存在的列是**整个查询报错**（42703），不是把那列返回 null ——
+   *    所以只要往这里加一个还没 apply 到生产的列，日报邮件就会全客户静默停发。
+   *    新字段一律另开读函数（见 `loadAdBudgetFields`），让降级只影响新功能。
+   */
   const { data, error } = await supabaseAdmin
     .from('ad_strategy_configs')
-    .select(
-      'client_id, enabled, digest_recipients, monthly_ad_budget, monthly_ad_budget_currency, monthly_ad_budget_updated_at',
-    )
+    .select('client_id, enabled, digest_recipients')
     .eq('client_id', clientId)
     .maybeSingle()
 
@@ -178,27 +211,67 @@ export async function loadAdStrategyConfigWithSource(
   }
   if (!data) return { config: defaultConfig(clientId), source: 'default' }
 
-  // 🔴 金额只认「真实金额」。numeric 经 PostgREST 回来可能是数字也可能是字符串，
-  //    而 `Number('')` 是 0、`Number(null)` 也是 0 —— 直接 Number() 会把「没填」
-  //    变成「填了 0」，正是上面注释里说的那个必须分开的两件事。
-  const budget = toRealAmount(data.monthly_ad_budget)
-  const currency = isAdBudgetCurrency(data.monthly_ad_budget_currency)
-    ? data.monthly_ad_budget_currency
-    : null
-
   return {
     config: {
       client_id: clientId,
       enabled: data.enabled ?? true,
       digest_recipients: Array.isArray(data.digest_recipients) ? data.digest_recipients : [],
-      // 成对才算数：库里有 paired 约束，但读侧不依赖「约束一定没被绕过」——
-      // 只有金额没有币种时当成没填，不猜一个币种出来（`AD-CUR-1` 就是这么来的）。
-      monthly_ad_budget: budget !== null && currency !== null ? budget : null,
-      monthly_ad_budget_currency: budget !== null && currency !== null ? currency : null,
-      monthly_ad_budget_updated_at:
-        typeof data.monthly_ad_budget_updated_at === 'string' ? data.monthly_ad_budget_updated_at : null,
     },
     source: 'row',
+  }
+}
+
+/**
+ * 读一个客户的月预算字段。**读不到就返回 `null`，不是返回「都没填」。**
+ *
+ * 🔴 这两件事必须分得开（「空」有三种来路）：
+ *    · 返回 `emptyBudgetFields()` = 真的没填 → 该催；
+ *    · 返回 `null`                = 没查到（多半是 migration 还没 apply）
+ *      → 不该催，该说「这个功能还没生效」。
+ *    把后者当成前者，就会给每个客户推一条谁也处理不了的噪音。
+ */
+export async function loadAdBudgetFields(clientId: string): Promise<AdBudgetFields | null> {
+  const { data, error } = await supabaseAdmin
+    .from('ad_strategy_configs')
+    .select(
+      'monthly_ad_budget, monthly_ad_budget_currency, monthly_ad_budget_updated_at, monthly_ad_budget_month',
+    )
+    .eq('client_id', clientId)
+    .maybeSingle()
+
+  if (error) {
+    console.warn(`[ad-strategy] budget read failed for ${clientId}:`, error.message)
+    return null
+  }
+  if (!data) return emptyBudgetFields()
+  return normalizeBudgetFields(data)
+}
+
+/**
+ * 把库里回来的一行收敛成预算三件套 —— 读侧唯一的口径，服务端与待办共用。
+ *
+ * 🔴 成对才算数：库里有 paired 约束，但读侧不依赖「约束一定没被绕过」——
+ *    只有金额没有币种时当成没填，不猜一个币种出来（`AD-CUR-1` 就是这么来的）。
+ */
+export function normalizeBudgetFields(row: Record<string, unknown>): AdBudgetFields {
+  // 🔴 金额只认「真实金额」。numeric 经 PostgREST 回来可能是数字也可能是字符串，
+  //    而 `Number('')` 是 0、`Number(null)` 也是 0 —— 直接 Number() 会把「没填」
+  //    变成「填了 0」，正是必须分开的两件事。
+  const budget = toRealAmount(row.monthly_ad_budget)
+  const currency = isAdBudgetCurrency(row.monthly_ad_budget_currency)
+    ? row.monthly_ad_budget_currency
+    : null
+  const paired = budget !== null && currency !== null
+  return {
+    monthly_ad_budget: paired ? budget : null,
+    monthly_ad_budget_currency: paired ? currency : null,
+    monthly_ad_budget_updated_at:
+      typeof row.monthly_ad_budget_updated_at === 'string' ? row.monthly_ad_budget_updated_at : null,
+    // 形状不对就当没有 —— 歪掉的月份比对不上，会变成「看起来填了、待办天天催」，
+    // 而库里那条 CHECK 已经拦住了正常写入路径，能走到这里的只有手改过的数据。
+    monthly_ad_budget_month: isBusinessMonth(row.monthly_ad_budget_month)
+      ? row.monthly_ad_budget_month
+      : null,
   }
 }
 
@@ -219,6 +292,66 @@ export function toRealAmount(raw: unknown): number | null {
   const n = typeof raw === 'number' ? raw : Number(raw)
   if (!Number.isFinite(n) || n <= 0) return null
   return n
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+/**
+ * 把一次 PATCH 请求翻译成该写进库的那一行 —— **纯函数，可直接测**。
+ *
+ * 🔴 为什么从路由里抽出来（魏征 2026-08-18 复审的阻止项 B1）：
+ *    整套四态判定（填了 / 上月的 / 本月确认不投 / 从没问过）唯一的锚点，就是
+ *    这里写不写 `monthly_ad_budget_month` + `monthly_ad_budget_updated_at`。
+ *    这两行原本躺在路由里，而那个路由**一个测试都没有** —— 实测把写时间戳那
+ *    一行整行删掉，403 个测试全绿。也就是说，日后任何一次无关重构删掉它，
+ *    没有任何东西会响：FDE 清空预算之后界面照旧说「还没填」，
+ *    而今日待办每天继续催同一个客户到月底。
+ *
+ * 🔴 月份按**客户自己所在国**的时区算（`country`），不按全局时区 —— 原 C1。
+ */
+export function buildConfigUpdate(input: {
+  clientId: string
+  body: Record<string, unknown>
+  /** 谁在改 —— 留审计痕迹，判定不读它。 */
+  actorEmail: string | null
+  /** `clients.country`，决定这笔预算算哪个月。判不出来按 NZ（见 business-month）。 */
+  country: unknown
+  now: Date
+}): { ok: true; update: Record<string, unknown> } | { ok: false; error: string } {
+  const { clientId, body, actorEmail, country, now } = input
+  const update: Record<string, unknown> = {
+    client_id: clientId,
+    updated_at: now.toISOString(),
+  }
+
+  if (body.enabled !== undefined) {
+    if (typeof body.enabled !== 'boolean') return { ok: false, error: 'enabled must be a boolean' }
+    update.enabled = body.enabled
+  }
+
+  if (body.digest_recipients !== undefined) {
+    if (!Array.isArray(body.digest_recipients) || body.digest_recipients.some(e => typeof e !== 'string')) {
+      return { ok: false, error: 'digest_recipients must be an array of strings' }
+    }
+    const emails = (body.digest_recipients as string[]).map(e => e.trim()).filter(Boolean)
+    const bad = emails.find(e => !EMAIL_RE.test(e))
+    if (bad) return { ok: false, error: `Invalid email: ${bad}` }
+    update.digest_recipients = emails
+  }
+
+  const patch = parseBudgetPatch(body)
+  if (!patch.ok) return { ok: false, error: patch.error }
+  if (patch.kind !== 'untouched') {
+    update.monthly_ad_budget = patch.kind === 'clear' ? null : patch.amount
+    update.monthly_ad_budget_currency = patch.kind === 'clear' ? null : patch.currency
+    // 🔴 这三行是四态判定的全部锚点，删掉任何一行都会让待办永远催或永远不催。
+    //    「清空」也要写 —— 那是「本月确认不投」这个决定本身。
+    update.monthly_ad_budget_updated_at = now.toISOString()
+    update.monthly_ad_budget_month = businessMonth(now, timeZoneForCountry(country))
+    update.monthly_ad_budget_updated_by = actorEmail
+  }
+
+  return { ok: true, update }
 }
 
 /** Convenience wrapper for readers that don't care about provenance (e.g. the API). */
