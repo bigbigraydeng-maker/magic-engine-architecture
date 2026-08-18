@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/brief/jina', () => ({ fetchUrlAsMarkdown: vi.fn() }))
-vi.mock('@/lib/ai-tracker/runners/openai', () => ({ runOpenAI: vi.fn() }))
+vi.mock('@/lib/ai-probe/openai', () => ({ runOpenAI: vi.fn() }))
 vi.mock('@/lib/apify/social-scraper', () => ({
   scrapeFacebookPage: vi.fn(),
   scrapeInstagramProfile: vi.fn(),
@@ -12,7 +12,7 @@ vi.mock('@/lib/anthropic/client', () => ({
 }))
 
 import { fetchUrlAsMarkdown } from '@/lib/brief/jina'
-import { runOpenAI } from '@/lib/ai-tracker/runners/openai'
+import { runOpenAI } from '@/lib/ai-probe/openai'
 import { callClaudeChat } from '@/lib/anthropic/client'
 import { brandMentioned, validateSynthesis, analyzeProspect, type ProspectAnalysisInput } from '../analyze'
 

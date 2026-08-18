@@ -17,9 +17,9 @@
  *   - leads_count        → same source as form_submissions (hybrid metric — auto
  *                          half from GA4 conversions, FDE tops up phone/wechat
  *                          leads manually via Submit Verdict)
- *   - ai_visibility_score→ industry_ai_visibility_snapshots: client's top-3 AI
- *                          mention share × 100 (A2.1-γ). Has a same-day freshness
- *                          gate — returns ok:false if the snapshot isn't today's.
+ *   - ai_visibility_score→ SEVERED (组 R): previously read the industry average
+ *                          (industry_ai_visibility_snapshots) and passed it off
+ *                          as a client score. No auto source until M1 (P31.X.4).
  *
  * Not yet supported (data source missing or complex):
  *   - conversion_rate    → derived GA4 (events/sessions)
@@ -32,7 +32,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { bulkKeywordVolume } from '@/lib/dataforseo/labs'
 import { locationCodeForDb } from '@/lib/seo-intelligence/keyword-snapshots'
-import { resolveIndustryCode, matchAliases } from './industry-mapping'
 
 export type AutoFetchResult =
   | { ok: true;  value: number; source: string; snapshot_date: string; label: string }
@@ -62,8 +61,13 @@ export async function autoFetchMetricValue(
       // We surface only the auto half here — the hybrid hint in CurrentValueCell
       // tells FDE to top up the rest.
       return fetchFormSubmissions(supabase, clientId)
-    case 'ai_visibility_score':
-      return fetchAiVisibilityScore(supabase, clientId)
+    // 'ai_visibility_score' auto-fetch SEVERED (spec
+    // 2026-08-19-ai-tracker-decommission-v1.md, 组 R): it read
+    // industry_ai_visibility_snapshots (system C = industry averages) and wrote
+    // that into Goals as if it were a per-client measurement — a masquerade.
+    // Client-level AI visibility must come from M1 client measurement (P31.X.4),
+    // not the industry baseline. Until then Goals' ai_visibility_score has no
+    // auto source and stays honestly empty (falls through to default below).
     default:
       return { ok: false, reason: `metric '${metricKey}' does not have an auto-fetch source yet` }
   }
@@ -440,120 +444,11 @@ async function fetchFormSubmissions(
 }
 
 // ── ai_visibility_score ────────────────────────────────────────────────────
-//
-// Score = (questions where client brand appears in top3 / total questions
-//         in client's industry) * 100, computed against the LATEST collected
-// snapshot for that industry only.
-//
-// Guards (fail-fast order):
-//   - client.name missing → ok:false 'client has no name'
-//   - industry not in mapping table → ok:false 'industry "X" not mapped...'
-//   - no snapshot for this industry yet → ok:false 'no AI visibility snapshots'
-//   - latest snapshot < today → ok:false 'not refreshed today' (魏征 P1-2)
-//   - question count < 5 → ok:false 'insufficient questions (n<5)'
-//   - 0 hits → ok:true value:0 (REAL value, brand genuinely absent)
-
-interface ClientRow {
-  name: string | null
-  industry: string | null
-  brand_aliases: string[] | null
-}
-
-interface SnapshotRow {
-  question_id: string
-  top3_brands: string[] | null
-}
-
-async function fetchAiVisibilityScore(
-  supabase: SupabaseClient,
-  clientId: string,
-): Promise<AutoFetchResult> {
-  // 1. Client lookup
-  const { data: client, error: clientErr } = await supabase
-    .from('clients')
-    .select('name, industry, brand_aliases')
-    .eq('id', clientId)
-    .single()
-
-  if (clientErr) return { ok: false, reason: `Client query failed: ${clientErr.message}` }
-  if (!client) return { ok: false, reason: 'Client not found' }
-
-  const c = client as ClientRow
-  if (!c.name) return { ok: false, reason: 'client has no name' }
-
-  // 2. Resolve industry (free text → controlled enum)
-  const industryCode = resolveIndustryCode(c.industry)
-  if (!industryCode) {
-    return {
-      ok: false,
-      reason: `industry "${c.industry ?? 'null'}" not mapped to AI visibility question set. ` +
-              `Supported: travel / real_estate / restaurant / migration / flooring`,
-    }
-  }
-
-  // 3. Latest collected_date for THIS industry (魏征 P1-3: filter before max)
-  const { data: latestRow } = await supabase
-    .from('industry_ai_visibility_snapshots')
-    .select('collected_date, industry_ai_visibility_questions!inner(industry_code)')
-    .eq('industry_ai_visibility_questions.industry_code', industryCode)
-    .order('collected_date', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  if (!latestRow) {
-    return { ok: false, reason: `no AI visibility snapshots for industry "${industryCode}" yet` }
-  }
-
-  const latestDate = (latestRow as { collected_date: string }).collected_date
-  const today = new Date().toISOString().slice(0, 10)
-
-  // 4. Stale data guard (魏征 P1-2)
-  if (latestDate < today) {
-    return {
-      ok: false,
-      reason: `industry "${industryCode}" snapshot not refreshed today ` +
-              `(latest: ${latestDate}, expected: ${today}). ` +
-              `Wait for industry-ai-visibility-daily cron (02:30 UTC).`,
-    }
-  }
-
-  // 5. Pull today's snapshots for this industry
-  const { data: snaps, error: snapsErr } = await supabase
-    .from('industry_ai_visibility_snapshots')
-    .select('question_id, top3_brands, industry_ai_visibility_questions!inner(industry_code)')
-    .eq('industry_ai_visibility_questions.industry_code', industryCode)
-    .eq('collected_date', latestDate)
-
-  if (snapsErr) return { ok: false, reason: `snapshot query failed: ${snapsErr.message}` }
-
-  const snapshots = (snaps ?? []) as SnapshotRow[]
-  const uniqueQuestions = new Set(snapshots.map(s => s.question_id))
-
-  if (uniqueQuestions.size < 5) {
-    return {
-      ok: false,
-      reason: `insufficient questions for industry "${industryCode}" (n=${uniqueQuestions.size} < 5)`,
-    }
-  }
-
-  // 6. Count questions where brand appears in top3
-  const hitQuestions = new Set<string>()
-  for (const s of snapshots) {
-    const top3 = s.top3_brands ?? []
-    const matched = top3.some(b => matchAliases(b, c.name as string, c.brand_aliases))
-    if (matched) hitQuestions.add(s.question_id)
-  }
-
-  const score = Math.round((hitQuestions.size / uniqueQuestions.size) * 100)
-
-  return {
-    ok: true,
-    value: score,
-    source: 'auto.ai_visibility_top3',
-    snapshot_date: latestDate,
-    label: `${score}/100 — top3 in ${hitQuestions.size}/${uniqueQuestions.size} ${industryCode} questions`,
-  }
-}
+// Auto-fetch SEVERED (组 R). It previously read industry_ai_visibility_snapshots
+// (system C, industry averages) and presented that as a per-client score in
+// Goals. That masquerade is removed here; a client-level source from M1 is
+// P31.X.4. Until then Goals' ai_visibility_score has no auto source (default
+// branch above returns ok:false), which is the honest state.
 
 // ── helpers ────────────────────────────────────────────────────────────────
 

@@ -1,15 +1,23 @@
 /**
  * GeoComposerAdapter — in_house FlywheelAdapter for the GEO flywheel.
  *
- * P12.A.4: execute() writes a row to flywheel_actions and returns it.
- *          pullMetrics() is a stub — P12.A.7 will connect it to AI Tracker.
+ * execute() writes a row to flywheel_actions and returns it (unchanged).
+ *
+ * 🔴 pullMetrics() previously read ai-tracker (system B) `ai_visibility_snapshots`
+ * and wrote `flywheel_metrics.geo.query.mention_rate`. ai-tracker is
+ * decommissioned (spec 2026-08-19-ai-tracker-decommission-v1.md, 组 K), so this
+ * feed is SEVERED: nothing writes `geo.query.mention_rate` anymore. That is the
+ * attribution bullseye — every 诸葛亮 AI-visibility action's expected_metric
+ * points at that key, so those actions can no longer be attributed until M1
+ * re-supplies the feed. This is tracked as an explicit outage + visible alarm,
+ * NOT left silent — see ROADMAP P31.X.4 ("GEO 飞轮指标 feed 已断") and
+ * docs/specs/2026-08-19-ai-tracker-decommission-v1.md §9.1.
  *
  * Auto-registers itself to the adapter registry on import.
  */
 
 import { supabaseAdmin } from '../../supabase'
 import { isValidGeoActionType } from '../vocabulary'
-import { writeTrackerFlywheelMetrics } from '../metrics/writeTrackerMetrics'
 import { registerAdapter } from './registry'
 import type {
   ExecuteActionInput,
@@ -74,63 +82,15 @@ export class GeoComposerAdapter implements FlywheelAdapter {
   }
 
   /**
-   * Pull GEO metrics from the latest ai_visibility_snapshots row and write
-   * them to flywheel_metrics. Called by the metrics-cron job.
-   *
-   * Uses the most recent snapshot (any week) unless `since` is provided.
+   * SEVERED (组 K). The GEO metric feed was sourced from ai-tracker
+   * `ai_visibility_snapshots`, now decommissioned. Returns [] — no
+   * `geo.query.mention_rate` / `geo.engine.coverage` / `geo.query.avg_rank`
+   * rows are written. Re-supplying this feed from M1 (geo_*) is P31.X.4; the
+   * outage is registered in ROADMAP + surfaced as a visible alarm rather than
+   * being left silent (spec §9.1). `_since` kept for interface compatibility.
    */
-  async pullMetrics(clientId: string, since?: Date): Promise<FlywheelMetricRow[]> {
-    let query = supabaseAdmin
-      .from('ai_visibility_snapshots')
-      .select('id, week_of, avg_rank, mentions_count, total_runs, models_covered, created_at')
-      .eq('client_id', clientId)
-      .order('week_of', { ascending: false })
-      .limit(1)
-
-    if (since) {
-      query = query.gte('created_at', since.toISOString())
-    }
-
-    const { data, error } = await query.maybeSingle()
-
-    if (error || !data) return []
-
-    // Recompute engine_coverage: we only have models_covered here (not per-run
-    // engine-level data), so use model count as a lower-bound proxy.
-    const engineCoverage: number = Array.isArray(data.models_covered)
-      ? data.models_covered.length
-      : 0
-
-    await writeTrackerFlywheelMetrics(clientId, {
-      snapshotId: data.id as string,
-      mentionsCount: (data.mentions_count as number) ?? 0,
-      totalRuns: (data.total_runs as number) ?? 0,
-      avgRank: (data.avg_rank as number | null) ?? null,
-      engineCoverage,
-    })
-
-    // Return the rows that were written (re-query would add latency; return
-    // a minimal representation for the caller to log/inspect).
-    const now = new Date().toISOString()
-    const base = {
-      clientId,
-      flywheel: 'geo' as const,
-      source: 'ai_tracker',
-      sourceRef: { snapshot_id: data.id },
-      measuredAt: now,
-    }
-    const total = (data.total_runs as number) ?? 0
-    const mentions = (data.mentions_count as number) ?? 0
-    if (total === 0) return []
-
-    const rows: FlywheelMetricRow[] = [
-      { ...base, id: '', metricKey: 'geo.query.mention_rate', metricValue: mentions / total },
-      { ...base, id: '', metricKey: 'geo.engine.coverage',    metricValue: engineCoverage  },
-    ]
-    if (data.avg_rank !== null) {
-      rows.push({ ...base, id: '', metricKey: 'geo.query.avg_rank', metricValue: data.avg_rank as number })
-    }
-    return rows
+  async pullMetrics(_clientId: string, _since?: Date): Promise<FlywheelMetricRow[]> {
+    return []
   }
 }
 

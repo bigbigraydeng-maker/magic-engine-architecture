@@ -171,6 +171,8 @@ describe('GEO Measurement Runtime 不接生产、不自造可比性', () => {
       '@supabase/supabase-js',
       '@/lib/growth',
       '@/lib/ai-tracker',
+      // 组 B 平移落点，同样禁止（见 geo-baseline architecture.test.ts 注释）。
+      '@/lib/ai-probe',
       '@/lib/industry-ai-visibility',
       '@/lib/ai/',
       '@/lib/publer',

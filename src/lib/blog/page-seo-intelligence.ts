@@ -3,8 +3,9 @@
  *
  * Fetches real SEO + GEO signals for a specific page from:
  *   1. serp_rankings — keyword positions tracked for this page's URL
- *   2. ai_visibility_runs + ai_visibility_queries — GEO gaps (queries where
- *      the client brand is not mentioned or ranks poorly)
+ *   2. GEO gaps — previously sourced from ai-tracker (system B), now
+ *      decommissioned (spec 2026-08-19-ai-tracker-decommission-v1.md, 组 H).
+ *      Contributes no GEO gaps until M1 (geo_*) re-wire (P31.X.4).
  *
  * Used by upgrade-generator to build data-driven weakness signals instead of
  * the original simple heuristics (word_count < 500 / has_geo_block).
@@ -108,55 +109,15 @@ async function fetchSerpRankings(
 // ─── GEO / AI visibility fetcher ──────────────────────────────────────────────
 
 async function fetchGeoGaps(
-  clientId: string,
+  _clientId: string,
 ): Promise<{ gaps: GeoGapSignal[]; avgRank: number | null }> {
-  // Latest weekly snapshot avg_rank for quick score
-  const { data: snapshot } = await supabaseAdmin
-    .from('ai_visibility_snapshots')
-    .select('avg_rank')
-    .eq('client_id', clientId)
-    .order('week_of', { ascending: false })
-    .limit(1)
-    .single()
-
-  const avgRank = (snapshot?.avg_rank as number | null) ?? null
-
-  // Queries from recent runs where brand rank is null or > 3 (poor visibility)
-  const { data: runs } = await supabaseAdmin
-    .from('ai_visibility_runs')
-    .select('client_brand_rank, query:ai_visibility_queries!inner(question)')
-    .eq('client_id', clientId)
-    .or('client_brand_rank.is.null,client_brand_rank.gt.3')
-    .order('ran_at', { ascending: false })
-    .limit(50)
-
-  if (!runs) return { gaps: [], avgRank }
-
-  // Deduplicate by question — keep worst (null > high rank)
-  const seen = new Map<string, GeoGapSignal>()
-  for (const run of runs) {
-    const queryRaw = run.query as unknown
-    const question: string = Array.isArray(queryRaw)
-      ? ((queryRaw[0] as { question: string })?.question ?? '')
-      : ((queryRaw as { question: string } | null)?.question ?? '')
-    if (!seen.has(question)) {
-      seen.set(question, {
-        question,
-        brand_rank: run.client_brand_rank as number | null,
-      })
-    }
-  }
-
-  // Priority: null (not mentioned) first, then high rank
-  const gaps = Array.from(seen.values())
-    .sort((a, b) => {
-      if (a.brand_rank === null && b.brand_rank !== null) return -1
-      if (a.brand_rank !== null && b.brand_rank === null) return 1
-      return (a.brand_rank ?? 99) - (b.brand_rank ?? 99)
-    })
-    .slice(0, 5)
-
-  return { gaps, avgRank }
+  // ai-tracker (system B) decommissioned — the `ai_visibility_snapshots` /
+  // `ai_visibility_runs` / `ai_visibility_queries` sources for GEO gap signals
+  // are gone (spec 2026-08-19-ai-tracker-decommission-v1.md, 组 H). Until M1
+  // (geo_*) re-wire (P31.X.4), page SEO intelligence contributes no GEO gaps
+  // (SEO/SERP signals below are unaffected). Callers wrap this in `.catch`, so
+  // empty gaps degrade gracefully.
+  return { gaps: [], avgRank: null }
 }
 
 // ─── Weakness signal builder ───────────────────────────────────────────────────

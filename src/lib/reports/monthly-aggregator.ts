@@ -1,14 +1,17 @@
 /**
  * Monthly Report Aggregator
  *
- * Pulls data from ai_visibility_snapshots, ai_visibility_runs, geo_directives,
- * and blog_posts to build a complete MonthlyReportData object.
+ * Builds a complete MonthlyReportData object from geo_directives, blog_posts,
+ * and the Phase-8 collectors (links/search/local/market/usage). The AI
+ * visibility block (avg rank / mentions / competitive) was sourced from
+ * ai-tracker (system B), now decommissioned (spec
+ * 2026-08-19-ai-tracker-decommission-v1.md, 组 I): those fields report "not
+ * measured" (queries_tracked = 0) until M1 (geo_*) re-wire (P31.X.4).
  *
- * Reference: ROADMAP.md P7.4.1–P7.4.5, ARCHITECTURE.md §12, §13
+ * Reference: ROADMAP.md P7.4.1–P7.4.5, P31.X.4
  */
 
 import { supabaseAdmin } from '../supabase'
-import type { BrandMention } from '@/types/magic-engine'
 
 // ── Output types ──────────────────────────────────────────────────────────────
 
@@ -129,25 +132,9 @@ export interface MonthlyReportData {
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
-
-type SnapshotRow = {
-  week_of: string
-  avg_rank: number | null
-  mentions_count: number
-  total_runs: number
-  models_covered: string[] | null
-}
-
-function avgRank(snaps: SnapshotRow[]): number | null {
-  const valid = snaps.filter(s => s.avg_rank != null)
-  if (valid.length === 0) return null
-  const sum = valid.reduce((acc, s) => acc + (s.avg_rank ?? 0), 0)
-  return Math.round((sum / valid.length) * 10) / 10
-}
-
-function sumMentions(snaps: SnapshotRow[]): number {
-  return snaps.reduce((acc, s) => acc + (s.mentions_count ?? 0), 0)
-}
+// SnapshotRow / avgRank / sumMentions removed with ai-tracker (system B)
+// decommission (spec 2026-08-19-ai-tracker-decommission-v1.md, 组 I) — they only
+// aggregated `ai_visibility_snapshots`, which is no longer read.
 
 // ── Main aggregator ───────────────────────────────────────────────────────────
 
@@ -170,49 +157,21 @@ export async function buildMonthlyReport(clientId: string): Promise<MonthlyRepor
 
   const clientName = client?.name ?? 'Unknown Client'
 
-  // ── 2. Snapshots (up to 8 weeks = 2 months) ────────────────────────────────
-  const { data: snapsRaw } = await supabaseAdmin
-    .from('ai_visibility_snapshots')
-    .select('week_of, avg_rank, mentions_count, total_runs, models_covered')
-    .eq('client_id', clientId)
-    .order('week_of', { ascending: false })
-    .limit(8)
-
-  const snaps: SnapshotRow[] = (snapsRaw ?? []) as SnapshotRow[]
-
-  const thisSnaps = snaps.filter(s => s.week_of >= periodFrom && s.week_of <= periodTo)
-  const lastSnaps = snaps.filter(s => s.week_of >= lastFrom && s.week_of <= lastTo)
-
-  // Fallback: if no month-scoped snaps, use latest 4 vs prior 4
-  const thisUsed = thisSnaps.length > 0 ? thisSnaps : snaps.slice(0, 4)
-  const lastUsed = lastSnaps.length > 0 ? lastSnaps : snaps.slice(4, 8)
-
-  const thisAvg = avgRank(thisUsed)
-  const lastAvg = avgRank(lastUsed)
-  const rankChange =
-    thisAvg != null && lastAvg != null
-      ? Math.round((thisAvg - lastAvg) * 10) / 10
-      : null
-
-  const thisMentions = sumMentions(thisUsed)
-  const lastMentions = sumMentions(lastUsed)
-
-  const engines = Array.from(new Set(snaps.flatMap(s => s.models_covered ?? [])))
-
-  // ── 3. Queries tracked ─────────────────────────────────────────────────────
-  const { count: queriesCount } = await supabaseAdmin
-    .from('ai_visibility_queries')
-    .select('id', { count: 'exact', head: true })
-    .eq('client_id', clientId)
-    .eq('enabled', true)
-
-  // ── 4. Trend (4 points, oldest first for chart left→right) ────────────────
-  const trendSnaps = snaps.slice(0, 4).reverse()
-  const trend: TrendPoint[] = trendSnaps.map(s => ({
-    week_of:       s.week_of,
-    avg_rank:      s.avg_rank,
-    mentions_count: s.mentions_count,
-  }))
+  // ── 2–4. AI visibility (snapshots / queries / trend) ───────────────────────
+  // ai-tracker (system B) decommissioned — `ai_visibility_snapshots` /
+  // `ai_visibility_queries` / `ai_visibility_runs` sources are gone (spec
+  // 2026-08-19-ai-tracker-decommission-v1.md, 组 I). Until M1 (geo_*) re-wire
+  // (P31.X.4), the AI visibility block is "not measured": queries_tracked = 0,
+  // which the FDE dashboard renders as 未测量 rather than zeros. Non-AI sections
+  // (GEO directive, blogs, links/search/local/market) below are unaffected.
+  const thisAvg: number | null = null
+  const lastAvg: number | null = null
+  const rankChange: number | null = null
+  const thisMentions = 0
+  const lastMentions = 0
+  const engines: string[] = []
+  const queriesCount = 0
+  const trend: TrendPoint[] = []
 
   // ── 5. GEO directive ───────────────────────────────────────────────────────
   const { data: geo } = await supabaseAdmin
@@ -230,72 +189,9 @@ export async function buildMonthlyReport(clientId: string): Promise<MonthlyRepor
     .gte('published_at', periodFrom)
 
   // ── 6. Competitive comparison ──────────────────────────────────────────────
-  const { data: queries } = await supabaseAdmin
-    .from('ai_visibility_queries')
-    .select('id, question')
-    .eq('client_id', clientId)
-    .eq('enabled', true)
-    .order('created_at', { ascending: true })
-    .limit(10)
-
+  // Sourced from ai-tracker (system B), now decommissioned (组 I). Empty until
+  // M1 (geo_*) re-wire (P31.X.4).
   const competitive: CompetitiveRow[] = []
-
-  if (queries && queries.length > 0) {
-    const queryIds = queries.map((q: { id: string }) => q.id)
-    const questionMap = new Map<string, string>(
-      queries.map((q: { id: string; question: string }) => [q.id, q.question])
-    )
-
-    const { data: runs } = await supabaseAdmin
-      .from('ai_visibility_runs')
-      .select('query_id, ai_engine, client_brand_rank, brands_mentioned, ran_at')
-      .eq('client_id', clientId)
-      .in('query_id', queryIds)
-      .order('ran_at', { ascending: false })
-      .limit(queryIds.length * 4)
-
-    const seenQueries = new Set<string>()
-
-    for (const run of (runs ?? []) as Array<{
-      query_id: string
-      ai_engine: string
-      client_brand_rank: number | null
-      brands_mentioned: BrandMention[] | null
-      ran_at: string
-    }>) {
-      if (seenQueries.has(run.query_id)) continue
-      seenQueries.add(run.query_id)
-
-      const competitors = (run.brands_mentioned ?? [])
-        .filter(b => b.brand && b.rank != null)
-        .sort((a, b) => a.rank - b.rank)
-        .slice(0, 5)
-        .map(b => ({ brand: b.brand, rank: b.rank }))
-
-      competitive.push({
-        question:    questionMap.get(run.query_id) ?? '',
-        query_id:    run.query_id,
-        client_rank: run.client_brand_rank,
-        competitors,
-        engine:      run.ai_engine,
-        run_at:      run.ran_at,
-      })
-    }
-
-    // Fill in queries with no runs (show as unknown)
-    for (const q of queries as Array<{ id: string; question: string }>) {
-      if (!seenQueries.has(q.id)) {
-        competitive.push({
-          question:    q.question,
-          query_id:    q.id,
-          client_rank: null,
-          competitors: [],
-          engine:      '—',
-          run_at:      '',
-        })
-      }
-    }
-  }
 
   // ── Assemble base (Phase 7) ───────────────────────────────────────────────
   const base: MonthlyReportData = {

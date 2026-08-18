@@ -13,8 +13,8 @@
  *   - Mockable via the LiveProbe interface for tests
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { runOpenAI } from '@/lib/ai-tracker/runners/openai'
-import { parseRanking } from '@/lib/ai-tracker/parser'
+import { runOpenAI } from '@/lib/ai-probe/openai'
+import { parseRanking } from '@/lib/ai-probe/parser'
 import type { AiVisibilityQuery, MarketTag } from '@/types/magic-engine'
 
 export const LIVE_PROBE_QUESTION_LIMIT = 3
@@ -121,19 +121,15 @@ function emptyResult(start: number, reason: string): LiveProbeResult {
 }
 
 async function loadPriorityQueries(
-  supabase: SupabaseClient,
-  clientId: string,
+  _supabase: SupabaseClient,
+  _clientId: string,
 ): Promise<AiVisibilityQuery[]> {
-  const { data, error } = await supabase
-    .from('ai_visibility_queries')
-    .select('*')
-    .eq('client_id', clientId)
-    .eq('enabled', true)
-    .order('created_at', { ascending: true })
-    .limit(LIVE_PROBE_QUESTION_LIMIT)
-
-  if (error || !data) return []
-  return data as AiVisibilityQuery[]
+  // ai-tracker (system B) decommissioned — the `ai_visibility_queries` source
+  // is gone (spec 2026-08-19-ai-tracker-decommission-v1.md, 组 F). Until M1
+  // exposes a "living query set" (P31.X.4, spec §9.2), there is no per-client
+  // question source, so the probe returns no queries → the collector reports
+  // "not measured" (score: null) rather than a fabricated 0.
+  return []
 }
 
 /** Wraps a probe call with an overall timeout so a stuck engine cannot hang the diagnostic. */

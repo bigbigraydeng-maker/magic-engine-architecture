@@ -38,15 +38,13 @@ vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(() => mockSupabase),
 }))
 
-// Mock collector classes with proper structure
-vi.mock('../collectors/ai-tracker', () => ({
-  AITrackerCollector: vi.fn().mockImplementation(() => ({
-    datasource_type: 'ai_tracker',
-    name: 'AI Visibility Tracker',
-    execute: vi.fn(),
-  })),
-}))
-
+// Mock collector classes with proper structure.
+// AITrackerCollector mock removed — the collector was deregistered + its module
+// deleted with the ai-tracker (system B) decommission (spec
+// 2026-08-19-ai-tracker-decommission-v1.md, 组 I). The getSectionTitle /
+// generateInsights / generateRecommendations tests below still exercise the
+// 'ai_tracker' datasource string against the formatter (formatters.ts), which
+// is independent of whether a collector produces that datasource.
 vi.mock('../collectors/billing-monitor', () => ({
   BillingMonitorCollector: vi.fn().mockImplementation(() => ({
     datasource_type: 'billing',
@@ -562,16 +560,18 @@ describe('MonthlyReportAggregator', () => {
       expect(response.errors).toBeUndefined()
     })
 
-    it('should handle partial collector failures', async () => {
+    // ai-tracker (system B) decommissioned (spec 2026-08-19-ai-tracker-decommission
+    // -v1.md, 组 I): AITrackerCollector is deregistered from the aggregator, so
+    // only BillingMonitorCollector remains. "Partial failure" (one collector fails,
+    // another succeeds) is no longer expressible with a single collector — this
+    // now asserts the single-collector success path.
+    it('produces a report when the single collector succeeds', async () => {
       const mockCollectors = aggregator['collectors']
-      mockCollectors[0].execute = vi.fn().mockRejectedValueOnce(new Error('Collector failed'))
-      mockCollectors[1].execute = vi.fn().mockResolvedValueOnce({ datasource_type: 'link_intel', data: {} })
-      for (let i = 2; i < mockCollectors.length; i++) {
-        mockCollectors[i].execute = vi.fn().mockResolvedValueOnce({
-          datasource_type: mockCollectors[i].datasource_type,
-          data: {},
-        })
-      }
+      expect(mockCollectors.length).toBe(1)
+      mockCollectors[0].execute = vi.fn().mockResolvedValueOnce({
+        datasource_type: mockCollectors[0].datasource_type,
+        data: {},
+      })
 
       const mockReportData = {
         id: 1,
@@ -589,10 +589,8 @@ describe('MonthlyReportAggregator', () => {
 
       const response = await aggregator.generateReport('test-client', '2026-05')
 
-      expect(response.success).toBe(false)
-      expect(response.errors).toBeDefined()
-      expect(response.errors!.length).toBe(1)
-      expect(response.errors![0].datasource).toBe('ai_tracker')
+      expect(response.success).toBe(true)
+      expect(response.errors).toBeUndefined()
     })
 
     it('should return error when all collectors fail', async () => {
@@ -606,7 +604,7 @@ describe('MonthlyReportAggregator', () => {
       const response = await aggregator.generateReport('test-client', '2026-05')
 
       expect(response.success).toBe(false)
-      expect(response.errors).toHaveLength(2)
+      expect(response.errors).toHaveLength(1)
       expect(response.warnings).toContain('All datasources failed to collect data')
     })
 
@@ -705,10 +703,10 @@ describe('MonthlyReportAggregator', () => {
   })
 
   describe('integration - generateReport flow', () => {
-    it('should have all 6 collectors instantiated', () => {
-      // Verify collector array has correct length
+    it('has only the BillingMonitor collector after ai-tracker decommission (组 I)', () => {
+      // AITrackerCollector deregistered (spec 2026-08-19-ai-tracker-decommission-v1.md).
       expect(aggregator['collectors']).toBeDefined()
-      expect(aggregator['collectors'].length).toBe(2)
+      expect(aggregator['collectors'].length).toBe(1)
     })
 
 

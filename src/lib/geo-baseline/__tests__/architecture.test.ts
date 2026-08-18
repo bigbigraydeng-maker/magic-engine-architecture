@@ -186,6 +186,10 @@ describe('GEO Baseline 接线层的边界', () => {
       '@/lib/zhuge',
       // 🔴 legacy runner 的问题不是「旧」，是四态塌成一态 + 身份被静默丢掉（见 provider.ts 文件头）。
       '@/lib/ai-tracker',
+      // ai-tracker 退役后，其 parser/runner 平移到中立目录 @/lib/ai-probe（spec
+      // 2026-08-19-ai-tracker-decommission-v1.md 组 B）。同一份模糊匹配/身份塌缩隐患
+      // 还在那里，M1 一样不许 import —— 把围栏延伸过去。
+      '@/lib/ai-probe',
       '@/lib/industry-ai-visibility',
     ]
     const violations: string[] = []

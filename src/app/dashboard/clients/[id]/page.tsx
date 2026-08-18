@@ -650,7 +650,7 @@ export default function ClientDetailPage() {
                 <ToolCard href={`/dashboard/clients/${clientId}/blog`}           title="博客"           desc="双信号博客生产与管理"            badge="in_house" />
                 <ToolCard href={`/dashboard/content?client=${clientId}`}         title="社媒矩阵"       desc="Campaign · 排期 · 多平台发布"    badge="in_house" />
                 <ToolCard href={`/dashboard/geo-composer/${clientId}`}           title="GEO Composer"  desc="部署 AI 搜索优化指令"            badge="in_house" />
-                <ToolCard href={`/dashboard/ai-visibility/${clientId}`}          title="AI 可见度追踪" desc="监控 AI 搜索中的品牌曝光"         badge="in_house" />
+                {/* AI 可见度追踪入口随 ai-tracker (system B) 退役移除；能力将由 M1 (GEO measurement) 接管，P31.X.4 */}
                 <ToolCard href={`/dashboard/clients/${clientId}/settings?tab=connect`} title="平台连接"    desc="连接 GBP · GSC · GA4 · Meta 广告账户" badge="in_house" />
                 <ToolCard href={`/dashboard/clients/${clientId}/ads-health`}     title="广告健康"      desc="每天自动体检 · 每条广告跟自己最好一周比 · 疲劳预警" badge="in_house" />
                 {/* 视频工厂此前只在内部导航(跨客户总览),客户维度没有入口 —— 跟紧邻的

@@ -31,64 +31,18 @@ export async function fetchClientPages(clientId: string): Promise<ClientSitePage
   }
 }
 
-export async function fetchWeakAIQueries(clientId: string): Promise<WeakAIQuery[]> {
-  try {
-    const { data: queriesData, error: queriesError } = await supabaseAdmin
-      .from('ai_visibility_queries')
-      .select('id, question')
-      .eq('client_id', clientId)
-      .eq('enabled', true)
-
-    if (queriesError || !queriesData) return []
-
-    const queries = queriesData as Array<{ id: string; question: string }>
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-
-    const results: WeakAIQuery[] = []
-
-    for (const query of queries) {
-      const weakQuery = await fetchRunsForQuery(query.id, thirtyDaysAgo)
-      if (weakQuery !== null) {
-        results.push({ id: query.id, question: query.question, ...weakQuery })
-      }
-    }
-
-    return results
-  } catch {
-    return []
-  }
-}
-
-async function fetchRunsForQuery(
-  queryId: string,
-  thirtyDaysAgo: string
-): Promise<{ weak_model_count: number; avg_rank: number | null } | null> {
-  try {
-    const { data: runsData, error: runsError } = await supabaseAdmin
-      .from('ai_visibility_runs')
-      .select('client_brand_rank, ran_at')
-      .eq('query_id', queryId)
-      .gte('ran_at', thirtyDaysAgo)
-
-    if (runsError || !runsData) return null
-
-    const runs = runsData as Array<{ client_brand_rank: number | null; ran_at: string }>
-    const weakRuns = runs.filter(
-      r => r.client_brand_rank === null || r.client_brand_rank > 3
-    )
-
-    if (weakRuns.length === 0) return null
-
-    const rankedRuns = runs.filter(r => r.client_brand_rank !== null)
-    const avg_rank =
-      rankedRuns.length > 0
-        ? rankedRuns.reduce((sum, r) => sum + (r.client_brand_rank as number), 0) / rankedRuns.length
-        : null
-
-    return { weak_model_count: weakRuns.length, avg_rank }
-  } catch {
-    return null
-  }
+/**
+ * Weak AI queries drove "new blog" and GEO-mode opportunities from ai-tracker
+ * (system B) run history. ai-tracker is decommissioned (spec
+ * 2026-08-19-ai-tracker-decommission-v1.md, 组 M): the `ai_visibility_queries` /
+ * `ai_visibility_runs` sources are gone. Until M1 (geo_*) re-wire (P31.X.4),
+ * there are no AI-weak signals, so this returns [] and strategy generation
+ * falls back to page-upgrade + keyword opportunities (both unaffected). The
+ * downstream consumers (/strategy/generate, seo-gap/docx-generator) treat an
+ * empty weak-query list gracefully. Signature preserved for callers.
+ */
+export async function fetchWeakAIQueries(_clientId: string): Promise<WeakAIQuery[]> {
+  return []
 }
 
 /**

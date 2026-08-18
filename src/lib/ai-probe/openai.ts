@@ -1,5 +1,9 @@
 /**
- * AI Visibility Tracker — OpenAI (Content Engine) runner.
+ * AI probe — OpenAI (Content Engine) runner (neutral shared infra).
+ *
+ * Relocated from `src/lib/ai-tracker/runners/openai.ts` during the ai-tracker
+ * (system B) decommission (spec 2026-08-19-ai-tracker-decommission-v1.md, 组 B).
+ * Shared by survivors: prospecting analyze + the diagnostic live probe.
  *
  * Sends one question to GPT-4o with web search enabled (gpt-4o-search-preview),
  * localized to the client's target market (AU/NZ).

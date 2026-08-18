@@ -177,6 +177,8 @@ describe('GEO Measurement 契约是纯的', () => {
       '@/lib/gbp/',
       '@/lib/gsc/',
       '@/lib/ai-tracker/',
+      // 组 B 平移落点，同样禁止（见 geo-baseline architecture.test.ts 注释）。
+      '@/lib/ai-probe/',
       '@/lib/industry-ai-visibility/',
       '@/lib/ai/',
     ]

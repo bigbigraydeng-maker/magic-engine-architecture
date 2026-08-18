@@ -56,7 +56,6 @@ export function ZhugeGlobalFab({ clientId }: { clientId: string }) {
     { label: 'Launch Hub',   href: `/dashboard/content?client=${clientId}` },
     { label: '诊断',         href: `/dashboard/clients/${clientId}/diagnostic` },
     { label: '内容策略',     href: `/dashboard/clients/${clientId}/strategy` },
-    { label: 'AI 可见度',    href: `/dashboard/ai-visibility/${clientId}` },
   ]
 
   const clientLabel = client?.name ?? clientId.slice(0, 8)

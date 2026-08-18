@@ -21,7 +21,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 /** 能自动取值的指标 —— 只有这些才谈得上「起点和现值口径是否一致」。 */
-const AUTO_METRICS = ['organic_traffic', 'brand_search_volume', 'form_submissions', 'leads_count', 'ai_visibility_score']
+// 'ai_visibility_score' dropped from AUTO_METRICS with 组 R (spec
+// 2026-08-19-ai-tracker-decommission-v1.md): its auto-fetch was severed, so
+// leaving it here would flag it as "auto but unfetchable" — this is cosmetic
+// alignment, not a bug fix. Re-add when M1 supplies a client-level source (P31.X.4).
+const AUTO_METRICS = ['organic_traffic', 'brand_search_volume', 'form_submissions', 'leads_count']
 
 export interface BaselineSuspect {
   goalId: string

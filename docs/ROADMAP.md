@@ -318,6 +318,9 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] **P31.X.2** 主指标 measurement='auto' 时自动拉取 current_value（GA4 / SerpAPI / Apify）
 - [ ] **P31.X.3** AI 参谋升级：基于历史 outcome 推荐 Initiative 组合（依赖数据沉淀）
 - [ ] **P31.X.4** 评分公式重做（reputation / SEO / ai_visibility 维度独立大工程）
+  - [ ] **P31.X.4·断供登记（ai-tracker 退役后必接）** 🔴 GEO 飞轮指标 feed 已断：ai-tracker（系统 B）退役后**没有任何东西再往 `flywheel_metrics` 写 `geo.query.mention_rate`**，诸葛亮每条 AI 可见度动作永久无法归因、异常告警 `GEO-01` 与健康分 GEO 维度静默归零。已配可见告警（今日待办 infra 条 `ai_visibility_attribution_down`，见 `src/lib/pm-todo/manual-items.ts`）。**M1 接手 pending**：M1 侧补一条「客户级提及率 → `flywheel_metrics.geo.query.mention_rate`」写入路径，续上归因回流。（spec 2026-08-19-ai-tracker-decommission-v1.md §9.1）
+  - [ ] **P31.X.4·living query set 能力缺口** M1 的 query-set 是「冻结一次、触发器锁死」的不可变模型，没有张骞「边发现边追加高信号问题」的活体语义。ai-tracker 退役删掉了 `question-generator.ts`（按客户生成跟踪问题）+ `zhangqian/sync-ai-visibility.ts`（发现流活体追加）——per-client 建/养跟踪问题的唯一机制没了。M1 需新增**living query set**（可受控追加 + lineage，与冻结基线隔离）。种子已备：CTS 归档 102 问题在 `docs/clients/cts/ai-tracker-archive-2026-08-19/`。（spec §9.2 / 组 J）
+  - [ ] **P31.X.4·诊断 AI 可见度维度重接 M1** 组 F 诊断打分（`diagnostic/collectors/ai-visibility-collector.ts` + `ai-visibility-live-probe.ts`）现降级为「未测量」（score=null，非 0）。重接 M1 geo_* 后恢复真实打分。**三张孤表 DROP 前不强依赖此项**（已降级为未测量，不会静默归零）。（spec 组 F）
 - [ ] **P31.X.5** Retention / Reactivation intent（需先接通 CRM/EDM）
 - [ ] **P31.X.6** Initiative 类型扩展：Operations / Market Intelligence / Product / Partnerships
 - [ ] **P33.11** Goal 详情页 Initiative 卡片展开显示：关联 Campaign 数量 + action 完成率

@@ -498,13 +498,8 @@ export default function ClientBlogPage() {
 
         {opportunities.length === 0 ? (
           <div className="bg-gray-50 border border-gray-200 rounded-xl px-5 py-8 text-center text-sm text-gray-500">
-            No weak spots detected yet — run the AI Visibility Tracker first to generate topics.
-            <div className="mt-3">
-              <Link href={`/dashboard/ai-visibility/${clientId}`}
-                className="text-indigo-600 hover:text-indigo-800 font-medium">
-                → Go to AI Visibility Tracker
-              </Link>
-            </div>
+            No weak spots detected yet. AI-visibility-driven topics are pending re-wire to
+            the unified GEO measurement (M1); until then, topics come from other signals.
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">

@@ -170,76 +170,22 @@ describe('fetchClientPages', () => {
 // fetchWeakAIQueries tests
 // ---------------------------------------------------------------------------
 
-describe('fetchWeakAIQueries', () => {
+// fetchWeakAIQueries previously read ai-tracker (system B) `ai_visibility_queries`
+// + `ai_visibility_runs` to find queries where the brand ranked weakly. ai-tracker
+// is decommissioned (spec 2026-08-19-ai-tracker-decommission-v1.md, 组 M): the
+// source is gone, so it is a stub returning [] (no weak-AI signals) until M1
+// (geo_*) re-wire (P31.X.4). Strategy generation falls back to page-upgrade +
+// keyword opportunities. The old multi-call run-aggregation tests were removed
+// with the logic; analyzeOpportunities (below) still covers the weakQueries input.
+describe('fetchWeakAIQueries (degraded → [] pending M1, 组 M)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('returns empty array when first DB query (queries fetch) errors', async () => {
-    mockFrom.mockReturnValue(
-      makeSelectChain(null, { message: 'Network error' }) as unknown as ReturnType<typeof mockFrom>
-    )
+  it('returns [] without reading the database', async () => {
     const result = await fetchWeakAIQueries(CLIENT_ID)
     expect(result).toEqual([])
-  })
-
-  it('returns empty array when DB returns null queries', async () => {
-    mockFrom.mockReturnValue(
-      makeSelectChain(null, null) as unknown as ReturnType<typeof mockFrom>
-    )
-    const result = await fetchWeakAIQueries(CLIENT_ID)
-    expect(result).toEqual([])
-  })
-
-  it('returns only queries with weak_model_count > 0', async () => {
-    // First call: get enabled queries
-    // Second call: get runs for query 'q1' → 2 weak runs
-    // Third call: get runs for query 'q2' → 0 weak runs
-    const queries = [
-      { id: 'q1', question: 'best china tours', enabled: true },
-      { id: 'q2', question: 'another question', enabled: true },
-    ]
-    const runsForQ1 = [
-      { client_brand_rank: null, ran_at: new Date().toISOString() },
-      { client_brand_rank: 5, ran_at: new Date().toISOString() },
-    ]
-    const runsForQ2: unknown[] = []
-
-    let callCount = 0
-    mockFrom.mockImplementation(() => {
-      callCount++
-      if (callCount === 1) {
-        return makeSelectChain(queries, null) as unknown as ReturnType<typeof mockFrom>
-      } else if (callCount === 2) {
-        return makeSelectChain(runsForQ1, null) as unknown as ReturnType<typeof mockFrom>
-      } else {
-        return makeSelectChain(runsForQ2, null) as unknown as ReturnType<typeof mockFrom>
-      }
-    })
-
-    const result = await fetchWeakAIQueries(CLIENT_ID)
-    expect(result).toHaveLength(1)
-    expect(result[0].id).toBe('q1')
-    expect(result[0].weak_model_count).toBe(2)
-  })
-
-  it('sets avg_rank to null when no runs have valid ranks', async () => {
-    const queries = [{ id: 'q1', question: 'test question', enabled: true }]
-    const runs = [
-      { client_brand_rank: null, ran_at: new Date().toISOString() },
-    ]
-
-    let callCount = 0
-    mockFrom.mockImplementation(() => {
-      callCount++
-      if (callCount === 1) {
-        return makeSelectChain(queries, null) as unknown as ReturnType<typeof mockFrom>
-      }
-      return makeSelectChain(runs, null) as unknown as ReturnType<typeof mockFrom>
-    })
-
-    const result = await fetchWeakAIQueries(CLIENT_ID)
-    expect(result[0].avg_rank).toBeNull()
+    expect(mockFrom).not.toHaveBeenCalled()
   })
 })
 

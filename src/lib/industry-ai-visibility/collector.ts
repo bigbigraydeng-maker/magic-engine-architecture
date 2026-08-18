@@ -14,7 +14,7 @@
  */
 
 import { getOpenAIClient } from '@/lib/ai/openai-client'
-import { parseRanking } from '@/lib/ai-tracker/parser'
+import { parseRanking } from '@/lib/ai-probe/parser'
 import { getSerpPage } from '@/lib/dataforseo/serp'
 import { supabaseAdmin } from '@/lib/supabase'
 import { extractDomainBrandsFromOrganic } from './domain-normalise'

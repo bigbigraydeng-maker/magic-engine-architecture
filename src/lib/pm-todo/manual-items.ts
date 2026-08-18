@@ -69,6 +69,8 @@ export type ManualItemKind =
   | CommentScopeTodoKind
   /** 执行内核停手 / 等审批 / 被规则挡下 —— 必须有人看见，不许死在日志里 */
   | 'kernel_needs_human'
+  /** AI 可见度支柱的归因已断（ai-tracker 退役后没人再写 geo.query.mention_rate）—— 必须有人看见，等 M1 接手（P31.X.4） */
+  | 'ai_visibility_attribution_down'
   | AttributionItemKind
   | ClientRosterItemKind
 
@@ -199,6 +201,9 @@ export async function loadManualItems(
   await pushCronHealthItems(supabase, items, now)
   // 目标数字口径对不上 —— 错的方向感比没数字更危险(2026-08-03 差点据此给出反向建议)
   await pushBaselineItems(supabase, items)
+  // AI 可见度归因已断 —— ai-tracker 退役后没人再写 geo.query.mention_rate，
+  // 诸葛亮的 AI 可见度动作永久无法归因。不许静默死在 unattributable 桶里（铁律 3）。
+  pushAttributionOutageItem(items)
   // 出片工单排队但没人干活 —— 装配跑在一台 Mac 上，不开机就没人做，而队列里看不出来
   await pushFactoryWorkerItems(supabase, items, now).catch((e) =>
     console.warn('[manual-items] 出片工人在岗检查失败（不阻塞其他待办）:', e),
@@ -479,6 +484,35 @@ async function pushVideoCreditsItem(
   })
 }
 
+
+/**
+ * AI 可见度支柱的归因已断 —— 常驻告警（等 P31.X.4 接上 M1 后删掉这条）。
+ *
+ * ai-tracker（系统 B）退役后，没有任何东西再往 `flywheel_metrics` 写
+ * `geo.query.mention_rate`（组 K，spec §9.1）。这条 metric 是诸葛亮每条 AI 可见度
+ * 动作的 expected_metric —— 断供后那些动作永久无法归因，异常告警 `GEO-01`、健康分
+ * 的 AI 可见度维度一并静默归零，而 cron 照绿。护城河（诊断→执行→**归因回流**→飞轮）
+ * 正是断在这里。
+ *
+ * PO 已定：本轮不建 M1 飞轮 feed（P31.X.4 独立做），只**登记 + 配可见告警**。这条
+ * 就是那个可见告警 —— 不让「归因对 AI 可见度支柱失效」静默死在日志/unattributable 桶里
+ * （铁律 3 下半：发现不许死在日志里）。href 留空：动作在排期上，不是某个按钮。
+ */
+function pushAttributionOutageItem(items: ManualItem[]): void {
+  items.push({
+    kind: 'ai_visibility_attribution_down',
+    client_id: 'infra',
+    client_name: 'Magic Engine 后台',
+    what:
+      'AI 可见度这条线的「做了到底有没有用」现在归不了因 —— 老的 AI 可见度追踪退役后，' +
+      '没有任何东西再记录品牌在 AI 答案里的提及率，诸葛亮每条 AI 可见度动作都验证不了效果，' +
+      '异常告警和健康分里的 AI 可见度那一块也一起空着。',
+    how:
+      '这条不用你动手 —— 是排期上的活儿（P31.X.4：把 AI 可见度测量接到新的 GEO 测量系统，' +
+      '重新供上「提及率」这个指标）。在那之前，AI 可见度支柱的效果回流是断的，先让你知道这件事。',
+    href: '',
+  })
+}
 
 /** Render 后台首页 —— 稳定入口，登录后一定打得开（不是会 404 的深链）。 */
 const RENDER_DASHBOARD_URL = 'https://dashboard.render.com'

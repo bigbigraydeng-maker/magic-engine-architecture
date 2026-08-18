@@ -195,24 +195,12 @@ services:
       - key: CRON_SECRET
         sync: false
 
-  # Weekly AI Visibility Tracker — every Monday at 1am UTC (~1pm NZST)
-  # Processes all clients with enabled queries; writes runs + weekly snapshot.
-  # --max-time 30: route returns 202 immediately (fire-and-forget), so 30s is
-  # plenty. Avoids Cloudflare 524 timeout that killed previous sync runs.
-  # Reference: ROADMAP.md P7.4.13
-  # healthchecks.io: ai-tracker-weekly (c4f101fe-c2cf-47f9-807f-08ea09d43934)
-  - type: cron
-    name: ai-tracker-weekly
-    env: node
-    schedule: "0 1 * * 1"
-    buildCommand: ""
-    startCommand: |
-      curl -fsS --max-time 30 -H "Authorization: Bearer $CRON_SECRET" \
-        https://app.magicengine.com.au/api/cron/ai-tracker-weekly \
-        && curl -fsS "https://hc-ping.com/c4f101fe-c2cf-47f9-807f-08ea09d43934"
-    envVars:
-      - key: CRON_SECRET
-        sync: false
+  # ai-tracker-weekly cron removed with ai-tracker (system B) decommission
+  # (spec 2026-08-19-ai-tracker-decommission-v1.md, 组 E). The route
+  # /api/cron/ai-tracker-weekly is deleted in the same PR.
+  # MANUAL FOLLOW-UP (进管道): disable the healthchecks.io check
+  # ai-tracker-weekly (c4f101fe-c2cf-47f9-807f-08ea09d43934) so it stops
+  # alerting as "late" now that nothing pings it.
 
   # Daily Industry AI Visibility Archive — every day at 2:30am UTC (~2:30pm NZST)
   # Runs all 10+ industry questions × 3 platforms (ChatGPT / Google AI Overview /

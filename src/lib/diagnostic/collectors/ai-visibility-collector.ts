@@ -7,17 +7,6 @@ import {
   type LiveProbeResult,
 } from '../ai-visibility-live-probe'
 
-// ---------------------------------------------------------------------------
-// Snapshot shape (subset of ai_visibility_snapshots columns)
-// ---------------------------------------------------------------------------
-
-interface VisibilitySnapshot {
-  avg_rank: number | null
-  mentions_count: number
-  total_runs: number
-  week_of: string
-}
-
 interface ClientRow {
   name: string
 }
@@ -42,44 +31,22 @@ export class AiVisibilityCollector {
     _keywords: string[],
   ): Promise<CollectorResult> {
     try {
-      const { data, error } = await this.supabase
-        .from('ai_visibility_snapshots')
-        .select('avg_rank, mentions_count, total_runs, week_of')
-        .eq('client_id', clientId)
-        .order('week_of', { ascending: false })
-        .limit(1)
-
-      // P8.5.22: DB error → cannot evaluate, not "zero score"
-      if (error) return { score: null, findings: [] }
-
-      const snapshot = (data as VisibilitySnapshot[] | null)?.[0] ?? null
-
-      // P8.10.S2.5: run real-time probe so a freshly-onboarded client (no
-      // snapshot yet) still gets a real signal in this diagnostic. The probe
-      // is also useful when the snapshot is stale or shows 0 mentions — the
-      // probe can either confirm or contradict the cached state.
+      // ai-tracker (system B) decommissioned — the weekly `ai_visibility_snapshots`
+      // source is gone (spec 2026-08-19-ai-tracker-decommission-v1.md, 组 F).
+      // AI visibility now relies solely on the diagnostic-time live probe until
+      // M1 (geo_*) re-wire (P31.X.4). The probe currently has no per-client
+      // query source (M1 living query set is P31.X.4, spec §9.2), so it returns
+      // "skipped" → we report "not measured" (score: null), never a fabricated 0.
       const probe = await this.maybeRunLiveProbe(clientId)
 
-      if (!snapshot) {
-        // No weekly snapshot — fall back to live probe results when present.
-        if (probe && !probe.skipped && probe.runs > 0) {
-          return this.buildFromLiveProbe(clientId, probe)
-        }
-        return {
-          score: null,
-          findings: [this.makeAiVisibilityNotTrackedFinding(clientId)],
-        }
+      if (probe && !probe.skipped && probe.runs > 0) {
+        return this.buildFromLiveProbe(clientId, probe)
       }
 
-      // Snapshot exists with 0 mentions → real signal: client is invisible to AI
-      if (snapshot.mentions_count === 0) {
-        return {
-          score: 0,
-          findings: [this.makeNotMentionedFinding(clientId, probe)],
-        }
+      return {
+        score: null,
+        findings: [this.makeAiVisibilityNotTrackedFinding(clientId)],
       }
-
-      return this.buildResult(clientId, snapshot, probe)
     } catch {
       return { score: null, findings: [] }
     }
@@ -134,12 +101,12 @@ export class AiVisibilityCollector {
       dimension: 'ai_visibility',
       finding_type: 'ai_visibility_not_tracked',
       severity: 'critical',
-      title: 'AI Visibility Tracker not yet enabled',
+      title: 'AI Visibility not yet measured',
       description:
-        'No AI Visibility snapshot exists for this client — AI Tracker has never queried ChatGPT / Perplexity / Gemini for this brand. AI engine visibility is a core differentiator in the current GEO landscape; without tracking we cannot measure or improve it.',
-      evidence: makeEvidence({ parsed: { snapshots: 0 } }),
+        'AI engine visibility has not been measured for this brand yet. AI visibility measurement is being migrated to the unified GEO measurement pipeline; until this client is onboarded there, we cannot score or improve it. This is "not measured", not a zero score.',
+      evidence: makeEvidence({ parsed: { measured: false } }),
       recommendation:
-        'Enable weekly AI Tracker: configure 10–20 priority brand/category questions in Client Settings → AI Visibility, then wait for the next Monday cron run (or trigger an ad-hoc run via Run-once button).',
+        'Onboard this client into the unified GEO measurement pipeline so ChatGPT / Perplexity / Gemini brand visibility can be tracked and scored.',
       fix_type: 'me_auto',
       priority_score: 88,
     }
@@ -148,71 +115,6 @@ export class AiVisibilityCollector {
   // ---------------------------------------------------------------------------
   // Result composition
   // ---------------------------------------------------------------------------
-
-  private buildResult(
-    clientId: string,
-    snapshot: VisibilitySnapshot,
-    probe: LiveProbeResult | null,
-  ): CollectorResult {
-    const findings: NewFinding[] = []
-    const mentionRate = snapshot.mentions_count / Math.max(1, snapshot.total_runs)
-
-    const rankScore =
-      snapshot.avg_rank !== null
-        ? Math.max(0, (5 - snapshot.avg_rank) / 4)
-        : 0
-
-    const score = Math.min(100, Math.max(0, Math.round(mentionRate * 70 + rankScore * 30)))
-
-    if (snapshot.avg_rank !== null && snapshot.avg_rank > 3) {
-      findings.push({
-        client_id: clientId,
-        dimension: 'ai_visibility',
-        finding_type: 'low_ai_rank',
-        severity: 'high',
-        title: 'Low AI Ranking Position',
-        description: `Your brand appears at an average position of ${snapshot.avg_rank.toFixed(1)} in AI responses, below the recommended threshold of 3.`,
-        evidence: makeEvidence({
-          parsed: {
-            avg_rank: snapshot.avg_rank,
-            mentions_count: snapshot.mentions_count,
-            total_runs: snapshot.total_runs,
-            week_of: snapshot.week_of,
-            live_probe: probeEvidence(probe),
-          },
-        }),
-        recommendation:
-          'Strengthen your brand\'s online authority by creating comprehensive FAQ content, earning mentions on authoritative sites, and implementing GEO directives in your content.',
-        fix_type: 'fde_manual',
-        priority_score: 70,
-      })
-    }
-
-    // P8.10.S2.5: when the live probe contradicts a healthy snapshot
-    // (0 mentions across 3 fresh questions), surface the regression early.
-    if (probe && !probe.skipped && probe.runs > 0 && probe.mentions === 0 && snapshot.mentions_count > 0) {
-      findings.push({
-        client_id: clientId,
-        dimension: 'ai_visibility',
-        finding_type: 'live_probe_no_mention',
-        severity: 'high',
-        title: 'Live AI probe found no mentions',
-        description: `The diagnostic-time probe ran ${probe.runs} priority question(s) on ChatGPT and your brand was not mentioned, even though last week's snapshot showed ${snapshot.mentions_count} mention(s). This may indicate a regression in AI visibility.`,
-        evidence: makeEvidence({
-          parsed: {
-            snapshot_mentions: snapshot.mentions_count,
-            live_probe: probeEvidence(probe),
-          },
-        }),
-        recommendation:
-          'Re-run the AI Tracker to confirm the trend, then prioritise GEO content updates and authoritative citations to restore visibility.',
-        fix_type: 'fde_manual',
-        priority_score: 75,
-      })
-    }
-
-    return { score, findings }
-  }
 
   private buildFromLiveProbe(clientId: string, probe: LiveProbeResult): CollectorResult {
     const mentionRate = probe.mentions / Math.max(1, probe.runs)
@@ -231,7 +133,7 @@ export class AiVisibilityCollector {
         description: `A diagnostic-time probe ran ${probe.runs} priority question(s) on ChatGPT and your brand was not mentioned. AI-powered search is growing rapidly — missing from AI results means missing a key discovery channel.`,
         evidence: makeEvidence({ parsed: { live_probe: probeEvidence(probe) } }),
         recommendation:
-          'Add GEO directives to your content, create entity-rich FAQ pages, and build citations on authoritative NZ/AU sites to improve AI visibility. Enable the weekly AI Tracker to monitor progress.',
+          'Add GEO directives to your content, create entity-rich FAQ pages, and build citations on authoritative NZ/AU sites to improve AI visibility.',
         fix_type: 'fde_manual',
         priority_score: 95,
       })
@@ -252,25 +154,6 @@ export class AiVisibilityCollector {
     }
 
     return { score, findings }
-  }
-
-  private makeNotMentionedFinding(clientId: string, probe: LiveProbeResult | null): NewFinding {
-    return {
-      client_id: clientId,
-      dimension: 'ai_visibility',
-      finding_type: 'brand_not_mentioned',
-      severity: 'critical',
-      title: 'Brand Not Mentioned by AI',
-      description:
-        'Your brand was not mentioned in any AI engine responses this week. AI-powered search is growing rapidly — missing from AI results means missing a key discovery channel.',
-      evidence: probe && !probe.skipped
-        ? makeEvidence({ parsed: { live_probe: probeEvidence(probe) } })
-        : null,
-      recommendation:
-        'Add GEO directives to your content, create entity-rich FAQ pages, and build citations on authoritative NZ/AU sites to improve AI visibility.',
-      fix_type: 'fde_manual',
-      priority_score: 95,
-    }
   }
 }
 

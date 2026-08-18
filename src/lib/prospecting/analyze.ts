@@ -18,7 +18,7 @@
  */
 
 import { fetchUrlAsMarkdown } from '@/lib/brief/jina'
-import { runOpenAI } from '@/lib/ai-tracker/runners/openai'
+import { runOpenAI } from '@/lib/ai-probe/openai'
 import { scrapeFacebookPage, scrapeInstagramProfile } from '@/lib/apify/social-scraper'
 import { callClaudeChat, parseJsonResponse } from '@/lib/anthropic/client'
 import { deriveSegment, type ProspectSegment } from './segment'

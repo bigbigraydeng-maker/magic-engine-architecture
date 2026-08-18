@@ -72,28 +72,9 @@ export async function refreshDemoClient(): Promise<RefreshResult> {
   const { error: serpErr } = await supabaseAdmin.from('serp_rankings').insert(serpRows)
   if (serpErr) throw new Error(`serp_rankings 写入失败：${serpErr.message}`)
 
-  /* ---- AI 可见度：同样滚动 8 周 ---- */
-  await supabaseAdmin.from('ai_visibility_snapshots').delete().eq('client_id', DEMO_CLIENT_ID)
-
-  const snapshotRows = Array.from({ length: WEEKS }, (_, w) => {
-    const weekOf = isoDate(daysAgo((WEEKS - 1 - w) * 7))
-    const avgRank = Number((8.4 - w * 0.55 + jitter(`ai-${weekOf}`, 1) * 0.1).toFixed(1))
-    return {
-      client_id: DEMO_CLIENT_ID,
-      week_of: weekOf,
-      avg_rank: avgRank,
-      mentions_count: 2 + w * 2 + (jitter(`m-${weekOf}`, 1) > 0 ? 1 : 0),
-      total_runs: 20,
-      models_covered: w < 3 ? ['gpt-4o', 'claude'] : ['gpt-4o', 'claude', 'perplexity', 'gemini'],
-      ranking_table: {
-        'Harbourline Physio': avgRank,
-        'Physio Plus': Number((2.1 + w * 0.15).toFixed(1)),
-        'North Shore Physio': Number((4.8 - w * 0.05).toFixed(1)),
-      },
-    }
-  })
-  const { error: snapErr } = await supabaseAdmin.from('ai_visibility_snapshots').insert(snapshotRows)
-  if (snapErr) throw new Error(`ai_visibility_snapshots 写入失败：${snapErr.message}`)
+  /* ---- AI 可见度种子已随 ai-tracker (system B) 退役移除 ----
+     spec 2026-08-19-ai-tracker-decommission-v1.md 组 O。demo AI 可见度
+     数据待 M1 (geo_*) 接管后重建（P31.X.4）。 */
 
   /* ---- 目标进度：向目标缓慢推进，但不越过目标值 ---- */
   const { data: goals } = await supabaseAdmin

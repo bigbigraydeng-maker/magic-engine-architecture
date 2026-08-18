@@ -130,24 +130,14 @@ export async function generateGeoDirective(
   // (clients.competitor_domains > master_briefs.competitor_domains > none).
   const competitorDomains = await getClientCompetitorDomains(req.client_id, [], 10)
 
-  // 3. Optionally load Tracker weak spots
-  let snapshot: SnapshotRow | null = null
-  let weakSpots: RunWeakSpot[] = []
-
-  if (req.use_tracker !== false) {
-    const { data: snap } = await supabaseAdmin
-      .from('ai_visibility_snapshots')
-      .select('id, week_of, avg_rank, ranking_table')
-      .eq('client_id', req.client_id)
-      .order('week_of', { ascending: false })
-      .limit(1)
-      .maybeSingle<SnapshotRow>()
-
-    if (snap) {
-      snapshot = snap
-      weakSpots = extractWeakSpots(snap, client.name, brief?.brand_name ?? null)
-    }
-  }
+  // 3. Tracker weak spots — sourced from ai-tracker (system B), now
+  //    decommissioned (spec 2026-08-19-ai-tracker-decommission-v1.md, 组 L).
+  //    The `ai_visibility_snapshots` source is gone; the composer already
+  //    guarded this as optional (`use_tracker` + `if (snap)`), so it now
+  //    always runs without tracker weak spots. Re-wire to M1 (geo_*) is
+  //    P31.X.4. `snapshot` stays null → source_tracker_snapshot_id = null.
+  const snapshot: SnapshotRow | null = null
+  const weakSpots: RunWeakSpot[] = []
 
   // 4. Build user message
   const userMessage = buildUserMessage({
@@ -209,70 +199,10 @@ export async function generateGeoDirective(
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-/**
- * Extract weak spots from the latest snapshot:
- * queries where the client brand doesn't appear or ranks > 3.
- * Returns up to 5 weak spots with competitor brands that filled the gap.
- */
-function extractWeakSpots(
-  snapshot: SnapshotRow,
-  clientName: string,
-  brandName: string | null
-): RunWeakSpot[] {
-  const table = snapshot.ranking_table as {
-    brands?: Array<{
-      name: string
-      mentions: number
-      avg_rank: number | null
-      by_engine: Record<string, number[]>
-    }>
-  }
-
-  if (!table?.brands) return []
-
-  const targetName = (brandName ?? clientName).toLowerCase().trim()
-
-  // Find client brand entry
-  const clientEntry = table.brands.find(b => {
-    const n = b.name.toLowerCase().trim()
-    return n === targetName || n.includes(targetName) || targetName.includes(n)
-  })
-
-  // Competitors = brands that appear but aren't the client
-  const competitors = table.brands
-    .filter(b => {
-      const n = b.name.toLowerCase().trim()
-      return n !== targetName && !n.includes(targetName) && !targetName.includes(n)
-    })
-    .slice(0, 5)
-    .map(b => b.name)
-
-  // If client never appears or has poor avg_rank, that's the weak spot
-  if (!clientEntry || (clientEntry.avg_rank ?? 999) > 3) {
-    return [
-      {
-        question: `Queries where ${brandName ?? clientName} is under-represented`,
-        competitor_brands: competitors,
-      },
-    ]
-  }
-
-  // Additional: flag engines where client doesn't appear
-  const weakEngines = Object.entries(clientEntry.by_engine ?? {})
-    .filter(([, ranks]) => ranks.length === 0)
-    .map(([engine]) => engine)
-
-  if (weakEngines.length > 0) {
-    return [
-      {
-        question: `Missing from ${weakEngines.join(', ')} engine results`,
-        competitor_brands: competitors,
-      },
-    ]
-  }
-
-  return []
-}
+// extractWeakSpots() removed with ai-tracker (system B) decommission (spec
+// 2026-08-19-ai-tracker-decommission-v1.md, 组 L) — it only parsed
+// `ai_visibility_snapshots.ranking_table`, which is no longer read. Re-wire to
+// M1 (geo_*) weak-spot signals is P31.X.4.
 
 function buildUserMessage(input: {
   client: ClientRow

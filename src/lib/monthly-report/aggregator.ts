@@ -1,6 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
 import { DataSourceMonthlyReport, GenerateReportResponse } from '@/types/monthly-report'
-import { AITrackerCollector } from './collectors/ai-tracker'
 import { BillingMonitorCollector } from './collectors/billing-monitor'
 
 export class MonthlyReportAggregator {
@@ -10,8 +9,10 @@ export class MonthlyReportAggregator {
     { auth: { persistSession: false } }
   )
 
+  // AITrackerCollector removed with ai-tracker (system B) decommission
+  // (spec 2026-08-19-ai-tracker-decommission-v1.md, 组 I). AI visibility in
+  // monthly reports is pending re-wire to M1 (geo_*) under P31.X.4.
   private collectors = [
-    new AITrackerCollector(),
     new BillingMonitorCollector(),
   ]
 

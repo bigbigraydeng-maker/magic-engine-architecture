@@ -45,7 +45,8 @@ export const CRON_REGISTRY: readonly CronRegistryEntry[] = [
   //    按本字段自己的约定：老任务不补 addedAt。（Codex thread：registry.ts L41）
   { service: 'ad-readback-sweep-daily', jobName: 'ad-readback-sweep', schedule: '40 20 * * *', logsRuns: true },
   { service: 'agent-learning-rollup', jobName: 'agent-learning-rollup', schedule: '0 7 * * 1', logsRuns: true },
-  { service: 'ai-tracker-weekly', jobName: 'ai-tracker-weekly', schedule: '0 1 * * 1', logsRuns: true },
+  // ai-tracker-weekly removed with ai-tracker (system B) decommission (spec
+  // 2026-08-19-ai-tracker-decommission-v1.md, 组 E): render.yaml entry + route deleted.
   { service: 'anomaly-detector-daily', jobName: 'anomaly-detector-daily', schedule: '0 5 * * *', logsRuns: true },
   { service: 'attribution-cron', jobName: 'attribution-cron', schedule: '0 */6 * * *', logsRuns: true },
   { service: 'blog-stuck-generating-sweeper', jobName: 'blog-stuck-generating-sweeper', schedule: '45 * * * *', logsRuns: true },

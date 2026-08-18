@@ -161,11 +161,13 @@ async function getOverviewData() {
       .gte('measured_at', fourteenDaysAgo)
       .lt('measured_at', sevenDaysAgo),
 
-    // 4-engine ranking — last 7 days of AI Tracker runs
-    supabaseAdmin
-      .from('ai_visibility_runs')
-      .select('ai_engine, client_brand_rank, ran_at')
-      .gte('ran_at', sevenDaysAgo),
+    // 4-engine ranking — sourced from ai-tracker (system B), now decommissioned
+    // (spec 2026-08-19-ai-tracker-decommission-v1.md, 组 N). Empty until M1
+    // (geo_*) re-wire (P31.X.4); each engine then renders "—" (not measured).
+    // The AI Visibility Index legs above read flywheel_metrics geo.query.mention_rate,
+    // which nothing writes after 组 K severs the feed → the index degrades to null
+    // (未测量), not NaN. See ROADMAP P31.X.4 for the re-wire + attribution alarm.
+    Promise.resolve({ data: [] as Array<{ ai_engine: string; client_brand_rank: number | null; ran_at: string }> }),
 
     // Flywheel phase 1: Diagnose — clients with a prescription.
     loadClientsWithDiagnose(),

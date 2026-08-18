@@ -1,5 +1,10 @@
 /**
- * AI Visibility Tracker — Brand ranking parser.
+ * AI probe — Brand ranking parser (neutral shared infra).
+ *
+ * Relocated from `src/lib/ai-tracker/parser.ts` during the ai-tracker (system B)
+ * decommission (spec 2026-08-19-ai-tracker-decommission-v1.md, 组 B). Shared by
+ * survivors: industry-ai-visibility collector (system C), prospecting analyze,
+ * and the diagnostic live probe. NOT tied to system B.
  *
  * Takes a natural-language response from one of the runners and extracts
  * structured brand mentions + the client's own brand rank.
