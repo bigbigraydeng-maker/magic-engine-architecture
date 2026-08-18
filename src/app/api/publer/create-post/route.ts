@@ -9,7 +9,26 @@ import '@/lib/flywheel/adapters/SocialContentAdapter'
 // POST /api/publer/create-post
 // 自动化流程用：Airtable approved → webhook → 这里
 // 用 post_id 找最新 ready 素材，自动选第一个匹配平台的 Publer 账号
+//
+// Auth: Bearer ${PUBLER_CREATE_POST_TOKEN}
+// P21.J.SEC-2：这条接口至今无鉴权——任何人拿一个 post_id 就能把该客户的
+// 成片发到他的社媒账号。不能像 schedule/draft/[assetId] 那样直接加登录鉴权，
+// 因为这条同时被 Zapier/Airtable webhook 调用（只带 body 的 post_id，没有
+// 会话），加了登录鉴权会当场打断线上自动化。同一个密钥要配进 Zapier/Airtable
+// 那边的 webhook header，这一步需要 PM/知道 Zapier 后台的人动手配一次
+// （代码这边做不了，见交接说明）。
 export async function POST(req: NextRequest) {
+  const expectedToken = process.env.PUBLER_CREATE_POST_TOKEN
+  if (!expectedToken) {
+    return NextResponse.json(
+      { success: false, error: 'Server misconfiguration: PUBLER_CREATE_POST_TOKEN not set' },
+      { status: 500 },
+    )
+  }
+  if (req.headers.get('authorization') !== `Bearer ${expectedToken}`) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 })
+  }
+
   try {
     const { post_id, schedule_at } = await req.json()
     if (!post_id) {
