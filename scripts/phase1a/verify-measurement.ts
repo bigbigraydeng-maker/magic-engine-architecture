@@ -79,7 +79,7 @@ async function main() {
   const siteUrl = (gscConn.config as {site_url: string}).site_url
   console.log(`\n[5] Attempting live GSC pullback for ${siteUrl}...`)
   try {
-    const snapshot = await fetchGscSnapshot({ clientId: CLIENT_ID, siteUrl, periodDays: 7 })
+    const snapshot = await fetchGscSnapshot(siteUrl, CLIENT_ID, 7)
     if (snapshot === null) {
       console.log(`     ⚠️ Pullback returned null — expected for a newly-connected property with no data yet`)
       console.log(`     GSC typically needs 24-48h after verification before search-analytics rows exist.`)
