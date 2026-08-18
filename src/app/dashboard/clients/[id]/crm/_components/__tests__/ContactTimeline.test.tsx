@@ -62,6 +62,44 @@ describe('系统给他上了闸 —— 必须一眼看见', () => {
     draw()
     await waitFor(() => expect(screen.getByText(/放回了名单/)).toBeTruthy())
   })
+
+  /**
+   * 🔴 **外呼那条路不写 `outcome: 'do_not_contact'`**（Codex 复审 PR #1048，
+   * 2026-08-17）。`lib/voice/crm-bridge.ts` 写的是
+   * `outcome: 'not_interested'` **加上** `metadata.do_not_contact: true`，
+   * 而 `isDoNotContact` 认后者 —— 这个人是**全渠道被停**的。
+   *
+   * 只看 `outcome` 的话，销售看到的只有一句「他说不买了」，
+   * 完全不知道系统已经把所有渠道关了 —— 正是这个功能声称要消灭的那种「看不见」。
+   */
+  it('🔴 电话里说别再打了（outcome 是 not_interested + 停联标记）→ 照样显示上闸', async () => {
+    mockTimeline([
+      touch({ summary: '外呼：客人说别再打了', outcome: 'not_interested', dncFlag: true }),
+    ])
+    draw()
+    await waitFor(() =>
+      expect(screen.getByText(/电话 \/ 邮件 \/ 私信全都不再发给他/)).toBeTruthy(),
+    )
+  })
+
+  it('普通的「他说不买了」没有停联标记 → 不显示上闸（别把不买当成拒联）', async () => {
+    // summary 不能跟结论小标签同字，否则 getByText 命中两个元素、报的是歧义不是真失败
+    mockTimeline([touch({ summary: '聊完他决定不去了', outcome: 'not_interested' })])
+    draw()
+    await waitFor(() => expect(screen.getByText('聊完他决定不去了')).toBeTruthy())
+    expect(screen.queryByText(/全都不再发给他/)).toBeNull()
+  })
+
+  /**
+   * 人纠正过「判错了」时，那条纠正触点本身可能也带着停联标记的残留。
+   * 判据只有一份：`dnc_cleared` 是对上一次判决的**推翻**，优先级最高。
+   */
+  it('🔴 解闸那条即使带着停联标记，也要显示成解闸而不是上闸', async () => {
+    mockTimeline([touch({ summary: '这条判错了', outcome: 'dnc_cleared', dncFlag: true })])
+    draw()
+    await waitFor(() => expect(screen.getByText(/放回了名单/)).toBeTruthy())
+    expect(screen.queryByText(/全都不再发给他/)).toBeNull()
+  })
 })
 
 describe('其余结论只挑影响下一步动作的', () => {
@@ -198,6 +236,36 @@ describe('判决旁边的是原话，不是 AI 摘要', () => {
     mockTimeline([touch({ summary: '别再联系我', raw: '别再联系我', outcome: 'do_not_contact' })])
     draw()
     await waitFor(() => expect(screen.getAllByText('别再联系我')).toHaveLength(1))
+  })
+
+  /**
+   * 🔴 **不是所有 `raw` 都是逐字原话**（Codex 复审 PR #1048，2026-08-17）。
+   * 外呼那条路写的是 `raw: call.summary`，而那是**模型生成**的通话摘要
+   * （`voice/finalize.ts` 拼的 `Caller discussed: …`）。标成「原话」，
+   * 销售会以为自己在看客人说的话，然后据此决定要不要解除全渠道停联。
+   */
+  it('🔴 外呼记录的 raw 是 AI 摘要 → 必须标明，不能叫「原话」', async () => {
+    mockTimeline([
+      touch({
+        summary: '外呼 · 已接通',
+        raw: 'Caller discussed: tours. Next: send quote.',
+        rawKind: 'ai_summary',
+        outcome: 'not_interested',
+        dncFlag: true,
+      }),
+    ])
+    draw()
+    await waitFor(() => expect(screen.getByText(/通话摘要（AI 整理，非逐字原话）/)).toBeTruthy())
+    expect(screen.queryByText(/^原话：/)).toBeNull()
+  })
+
+  it('手工记录 / 邮件那种才叫原话', async () => {
+    mockTimeline([
+      touch({ summary: '摘要', raw: '客户说别再打了', rawKind: 'verbatim', outcome: 'do_not_contact' }),
+    ])
+    draw()
+    await waitFor(() => expect(screen.getByText(/原话：/)).toBeTruthy())
+    expect(screen.queryByText(/AI 整理/)).toBeNull()
   })
 
   it('普通记录不铺原话 —— 摘要更短更好读', async () => {

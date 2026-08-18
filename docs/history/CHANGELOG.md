@@ -5,6 +5,89 @@
 
 ---
 
+### 2026-08-17（WP05 GEO Module v1 上线 —— Roman AI 可见度首个诊断可读出）
+
+**发生了什么**：把 Roman 一个月前测出来的 GEO 基线（AI 答案样本），第一次真的读成「有支柱、有严重度、有处方」的诊断。之前只有原始答案 + 引用覆盖率，看不出「AI 是不是把 Roman 作为**人**在答案里提出来」。
+
+**做了什么**（issue [#879](https://github.com/bigbigraydeng-maker/magic-engine/issues/879)，PR [#1032](https://github.com/bigbigraydeng-maker/magic-engine/pull/1032)）：
+1. **前置** [#930](https://github.com/bigbigraydeng-maker/magic-engine/issues/930)：Roman 站点页面台账（canonical inventory）激活 21 页，为 WP05 提供页面身份（PR [#1020](https://github.com/bigbigraydeng-maker/magic-engine/pull/1020) `CanonicalInventoryStore`）。
+2. **WP05 GEO Module v1** 建成 `src/lib/geo-module/`，把 #883 GEO 证据按冻结的 `geo-module/m1/v1` 语义读成五段链：`GrowthEvidence → GrowthFinding → GrowthPrescription → GrowthActionCandidate → PageOptimizationRequest`（或诚实 defer）。**纯推理**：不写生产、不复测、不回写 #883、不进执行队列、不自建 Agent。
+3. **Roman 首次诊断结果**：
+   - 12 个发现型问句里，Roman 被 AI **答案正文合格提及** = **2/12**
+   - **显式正向推荐**（v1 唯一进指标的档）= **0/12**
+   - defer（证据不足） = 0
+   - 病根：首页第一屏 H1 抽象诗意，subtitle 无「中介 + 奥克兰 + 中文」三信号连贯陈述，AI 抓不到候选人身份
+   - 处方：AI 可见度支柱 · 严重度 high · 目标页 = 首页 · 只改首屏 subtitle · 验证 = 「合格提及覆盖相对基线上升」
+   - 详见 [`docs/clients/roman-hu/reports/2026-08-17-geo-first-diagnosis-v1.md`](../clients/roman-hu/reports/2026-08-17-geo-first-diagnosis-v1.md)
+
+**关键澄清（必带）**：**冻结基线的「owned citation 2/12」是「引用覆盖」（Roman 的域名被引用），不是提及、不是推荐**。M1 §7 明令不得把「答案带引用」重述成提及/推荐覆盖。本次 2/12 提及、0/12 推荐是**答案正文里的判定**，与引用覆盖是两回事，不可混说、不可相加。
+
+**A 级质量闸**：105 单测（M1 各判据 + 端到端 + 变异证据 + 架构守卫；含五轮修复的 round3/round5 回归+变异专测）· `npm run build` 通过 · 基线 222 无回归 · 子牙 / 魏征 / 狄仁杰**五轮**复审闭合。
+
+**follow-up（不阻塞本次上线）**：[#1023](https://github.com/bigbigraydeng-maker/magic-engine/issues/1023) · [#1030](https://github.com/bigbigraydeng-maker/magic-engine/issues/1030) · [#1040](https://github.com/bigbigraydeng-maker/magic-engine/issues/1040)（聚合分组键需按引擎/模型/查询集版本隔离 + severity 分母独立锁 + finding statement 表述错位）。
+
+**下一步**：现在诚实 `defer=unattributable_proposed_value` —— WP05 只推理不造文案。首页 subtitle 的 grounding 文案（en+zh 各两行）已由协调会话给出，落 Roman 站点仓的 i18n 后可触发 WP06。**WP07 apply 多重硬前置未就绪**：K-WP01（#881 认证审批 UI + 政策 Settings UI）· `action-bridge/mapping-table.ts` 的 `MAPPING_TABLE` 仍为空 · 生产 Kernel 表/RPC 未 apply · Roman 无 Goal · `cms_connections=0`——详见 Roman 首诊报告下一步段。
+
+---
+
+### 2026-08-17（往来记录里，系统的判决终于看得见了 —— PR [#1038](https://github.com/bigbigraydeng-maker/magic-engine/pull/1038)）
+
+**起因**：PM 拿了一套外部 CRM 的界面来比，问哪里值得学。挑出来最该抄的一条是
+**「对话里内联显示系统做了什么」**，而我们其实已经有一条合并时间线（电话 / 私信 /
+阶段流转都在里面）—— 缺的不是线，是**系统自己做的那些事没在上面留下可读的一行**。
+
+**最要命的一处**：`outcome`（这条记录的结论）**接口早就送到前端了**，甚至还跑了一次
+`reclassifyStoredOutcome` 重判 —— 组件一个字都没渲染。于是 `do_not_contact`
+在时间线上跟一条普通电话记录长得一模一样。那是全系统最重的标记（成立 =
+**电话 / 邮件 / 私信全停**，解闸只能靠人明确说「判错了」），**最该被复核的那一刻
+恰恰最看不见**。而早前的词表确实把「我不打算去」当成过「别再联系」。
+
+**做了三件**：
+
+1. **判决单独一档** —— 红 / 黄左边框 + 一行**写后果**的话（「从这天起电话 / 邮件 /
+   私信全都不再发给他」），不是写结论名。判据认**两个来源**：`outcome` 是
+   `do_not_contact`，**或者** `metadata.do_not_contact` 为真 —— 外呼那条路
+   （`lib/voice/crm-bridge.ts`）写的正是后者配 `outcome: 'not_interested'`，
+   只看前者会漏掉整条外呼渠道，销售只看到「他说不买了」，不知道人已经被全渠道停了。
+   判决旁边那段文字**按来源标明是什么**：手工记录 / 邮件是逐字原话，
+   外呼那条是**模型生成的通话摘要**（`voice/finalize.ts` 拼的），标成「原话」
+   会让销售以为自己在看客人说的话，然后据此决定要不要解除停联。判决旁边放**销售真正敲的原话**（`raw`），
+   **不是 AI 摘要**（`summary`）—— 复核靠「**这次**不去了」和「别再联系我」的字面差别，
+   摘要一压缩两句可能长得一样，拿摘要复核等于没复核。
+   兜底值 `spoke` / `unknown` 刻意不显示：任何没命中规则的备注都会落成 `spoke`，
+   标出来是噪音，而噪音会把真正的「闸」淹掉。
+2. **「他是从哪来的」单独一行** —— 销售接手陌生人时最强的信号。**两道闸缺一不显示**：
+   必须是客人来的（第一条是我们打出去的电话时，说的是「我们怎么找到他的」）·
+   渠道必须认得出（接口补返回 `conversations.channel`，不再把邮件 / WhatsApp
+   一律写成「私信」，也不把英文 key 甩给销售）。认不出就不说 —— 这一行的价值全在可信。
+3. **CTS 销售视角的两条**（PM 当天追加）：记录多时**停在最新一条**（原先打开熟客
+   看到的是三个月前第一条）· 抽屉**第一屏 = 上次说到这 + 想去哪 + 什么时候走**
+   （原顺序是联系方式 → 阶段 → 按钮 → 回私信 → 往来记录，而销售的顺序是
+   「他上次说了什么 → 我说什么 → 号码在哪」）。
+
+**刻意没做**：AI 应答标不出来 —— `lib/messenger/automation.ts` 文件头写着 Meta 的
+读接口没有任何公开文档化、可靠的字段能区分 AI 与真人。硬标就是编。
+
+**过程里的三个教训，如实记**（Codex 三轮五条，全部属实）：
+
+- **我把保证吹过头了两次** —— 代码注释和 PR 正文都写着「原话留在判决旁边」，
+  而接口给的是摘要；上一个 PR 也犯过同一类（把有条件的保护写成无条件纪律）
+- **两个改动被我做成互相抵消** —— 来源行在滚动容器里，「滚到最新」一执行就把它顶没了，
+  而记录多的人恰恰最需要知道来源。两个功能各自都「正常工作」，测试完全看不出来
+- **写坏了两个测试并自查出来** —— 一个永远通过（jsdom 里 `scrollHeight` 恒为 0），
+  一个抓不住它该抓的变异（只测了「完全没渠道」，与坏版本结果相同）。
+  **能不能失败的测试比没有更糟**
+
+还有一个真 race：抽屉记完一笔是**换 `key`**（整个组件被换掉），所以常规的
+「按请求序号保护」挡不住 —— 旧实例是另一个实例、有自己的计数器。闸做成
+「这个实例还活着吗」；同时 abort 在途请求，但 `AbortError` **不能**当加载失败，
+否则摘要被清空 = 换个方式说假话。
+
+**验证**：用例 0 → 21 条（此前零测试）；九条变异逐个改坏都被抓住；
+拆分（函数 < 50 行）**行为一行没改** —— 拆之前 20 条用例全程绿着。
+
+---
+
 ### 2026-08-17（ME2 Product Map 加「接下来要做什么」路线图 —— 按依赖顺序不按日历，PR [#1044](https://github.com/bigbigraydeng-maker/magic-engine/pull/1044)）
 
 **缺口**：PM 反馈看板信息够多但"不直观"，看不出整体进度、接下来该干什么。
