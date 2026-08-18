@@ -19,7 +19,12 @@ export async function countSitePages(clientId: string): Promise<number> {
     .select('id', { count: 'exact', head: true })
     .eq('client_id', clientId)
   if (error) throw error
-  return count ?? 0
+  if (count === null) {
+    // Null count with no error would silently understate the page count.
+    // Throw instead of coercing to 0 — this helper is for metrics where accuracy matters.
+    throw new Error(`countSitePages(${clientId}) returned null count with no error`)
+  }
+  return count
 }
 
 /**

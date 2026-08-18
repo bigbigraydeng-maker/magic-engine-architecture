@@ -50,8 +50,12 @@
 > **别把「issue 已关闭」读成「功能已在生产生效」** —— 关闭只代表代码交付完成。
 
 **未完成**：
-- [ ] **WP05** [#879](https://github.com/bigbigraydeng-maker/magic-engine/issues/879) GEO Module v1 —— 第一个 Domain Module，**唯一明确的 `src/lib/growth` 首个消费方**。2026-08-12 已冻结 `geo-module/m1/v1` 语义（实体匹配 / 别名 / 消歧判据），**实现仍未授权**，卡在前置 #930
-- [ ] **WP05 前置** [#930](https://github.com/bigbigraydeng-maker/magic-engine/issues/930) Roman 页面台账的发现与激活边界 —— 草稿 PR [#935](https://github.com/bigbigraydeng-maker/magic-engine/pull/935) 复审中。⚠️ 与 #932 在「页面台账」上重叠，边界待 Build Control Room 裁定
+> WP05（#879）与前置 #930 已于 2026-08-17 合入 main（PR #1032 / #1020）—— 详见 [CHANGELOG](./history/CHANGELOG.md)，此处按仓库约定不再保留完成项。
+
+**WP05 follow-up**（本轮不扩，登记待排）：
+- [ ] **#1023** WP05 follow-up
+- [ ] **#1030** WP05 follow-up
+- [ ] [#1040](https://github.com/bigbigraydeng-maker/magic-engine/issues/1040) 聚合分组键需按 `engine_family / model_version / query_set_version` 隔离（未知 fail-closed）—— Codex #1032 第 4 轮 P1-c，Roman 单引擎/单模型未触发但结构上带洞；已在 [comment 5315681257](https://github.com/bigbigraydeng-maker/magic-engine/issues/1040#issuecomment-5315681257) 追加两条：severity 分母独立锁减弱（P1-b 副作用）· `buildStatement` 表述错位（仍报 explicit_positive/conditional 计数但本链已不承诺）
 - [ ] **WP07** [#880](https://github.com/bigbigraydeng-maker/magic-engine/issues/880) Kernel 授权的 apply / verify / rollback
 - [ ] **K-WP01** [#881](https://github.com/bigbigraydeng-maker/magic-engine/issues/881) 认证审批 / 拒绝界面 + 政策 Settings UI
 - [x] ~~**WP08**~~ ✅ **2026-08-12 完成** [#883](https://github.com/bigbigraydeng-maker/magic-engine/issues/883) Roman 首个有效生产 GEO baseline 已捕获并经 Product Owner 验收 —— 批次 `688bd8ae-2db6-4300-b761-b850f30c32c5`，冻结查询集 `roman_geo_baseline_v1`（12 条问题），12 / 12 观测成功 ＋ 12 条证据，累计记账成本 US$0.708 / US$5.00。
@@ -549,30 +553,29 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 与上面的 M2.7h / M2.7m 是同一件事的四个面，**票在 GitHub 上，这里只做索引**）：
 - [ ] [#1019](https://github.com/bigbigraydeng-maker/magic-engine/issues/1019) 换掉「他是不是要求别再联系」的判据 —— **怎么判**
 - [ ] [#1025](https://github.com/bigbigraydeng-maker/magic-engine/issues/1025) 🔴 Facebook 私信正文根本进不了这个判据 —— **喂什么进去**。
-      私信是 CTS 客人说话最多的渠道（2099 条 / 658 会话），闸是硬的、闸后面是空的
+      私信是 CTS 客人说话最多的渠道（2099 条 / 658 会话），闸是硬的、闸后面是空的。
+      ✅ **提示这一半已上线**（PM 2026-08-17 拍板 B 方案）：私信里像是说「别再联系」的人
+      进今日待办「🙋 需要你动手」，销售点进去看原话再决定 ——
+      `lib/crm/messenger-stop-signal.ts`，**一行写操作都没有**。
+      ⏳ **接进判据自动封渠道那一半仍不做**，前提是 #1019 先把判据修准。
+      两条已知代价（都写在模块文件头）：只看最近 30 天 · 每客户每轮最多 20 条。
+      要做到「一条不漏又不重复骚扰」得加一列「已复核」（改 schema，A 级），单独立项
 - [ ] [#1026](https://github.com/bigbigraydeng-maker/magic-engine/issues/1026) 中文「别再联系我」这类写法漏判
 - [ ] [#1027](https://github.com/bigbigraydeng-maker/magic-engine/issues/1027) 「别打电话，只发邮件」记不住 —— 需要**按渠道**的信号。
       PO 2026-08-17 已拍板短期行为：这种人**继续发邮件、留在邮件营销池里**
 
-**M2.7p 「点私信」开场白补档案的五条后续**（2026-08-17，PR
+**M2.7p 「点私信」开场白补档案的四条后续**（2026-08-17，PR
 [#1031](https://github.com/bigbigraydeng-maker/magic-engine/pull/1031) 上线时逐条登记不修；
 能力本身已上线，见 [CHANGELOG 2026-08-17](./history/CHANGELOG.md)）。
-五条同源 —— **补档案与认亲该有自己的一轮设计，不该继续在同步链路里加分支**：
+四条同源 —— **补档案与认亲该有自己的一轮设计，不该继续在同步链路里加分支**：
 - [ ] 存量回填是逐个联系人串行查询，量级上去要改批量
 - [ ] 给「试过、补不上」的人打标 —— 现在每轮都重扫这批人，看着在跑其实原地踏步
 - [ ] 解绑了 Facebook 主页的客户跑不到本地回填（凭证闸之前那一步只覆盖已绑的）
 - [ ] 只留电话没留邮箱时按电话认人 —— 现在会多出一条重复联系人。
       **刻意先不做**：认亲弄错是不可逆的（两个人并成一个），而重复联系人只是难看
-- [ ] 🔴 **第一条入站消息没有「主语是我」这层保护**（Codex 复审 PR #1033 提出，2026-08-17）——
-      `backfillFromLeadIntro` 对第一条消息传 `requireMarker: false`，于是
-      `my friend filled out the form` + `Name:` + `Phone:` 这种**转发同行者资料**
-      只要恰好是对话的第一条，就能凑够两条标准字段被认成表单开场白，
-      **把别人的号码写进这个人的档案**（写入侧的空栏守卫和归属回查仍在，
-      所以只在「这人档案本来就空 + 那号码还没主」时才落地）。
-      兜底当初是刻意留的：Meta 模板措辞随语言变，卡死问候语会漏掉真表单 ——
-      所以**不能简单地把第一条也改成必须带问候语**，那会把 PM 报的原始问题放回来。
-      要么提高字段门槛，要么给第一条另立判据，属设计题，**走 ≥2 审再动**；
-      文档措辞已先改成如实描述（不再把它写成无条件纪律）
+
+> ✅ 原第五条「第一条入站消息没有『主语是我』这层保护」**已修**（2026-08-17）——
+> 没有问候语时的门槛由两条标准字段提到**三条全齐**，见 CHANGELOG 同日条目。
 
 ## Phase 25 — Self-Serve Portal ⚠️ 已并入 Phase 20.0
 

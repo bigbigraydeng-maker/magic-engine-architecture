@@ -24,10 +24,10 @@ import { cx } from '@/components/ui/me-theme'
 import { BUCKET_LABEL } from '@/lib/product-map/presenter'
 import type { ComponentView, ConsolePresentation, DecisionView } from '@/lib/product-map/presenter'
 
-type ViewKey = 'decisions' | 'lanes' | 'list' | 'search' | 'graph' | 'progress'
+type ViewKey = 'decisions' | 'lanes' | 'list' | 'search' | 'graph' | 'progress' | 'roadmap'
 
-// 顺序:决策入口永远第一(板桥 S1);查阅类排最后。「最近进展」是了解现状,不是决策入口,
-// 排在最后一个,不跟"等你拍板"抢首屏(板桥二轮设计审必改 5)。
+// 顺序:决策入口永远第一(板桥 S1);查阅类排最后。「最近进展」「路线图」是了解现状/
+// 未来,不是决策入口,排在最后,不跟"等你拍板"抢首屏(板桥二轮设计审必改 5)。
 const VIEWS: { key: ViewKey; label: string }[] = [
   { key: 'decisions', label: '等你拍板' },
   { key: 'lanes', label: '各条线做到哪了' },
@@ -35,6 +35,7 @@ const VIEWS: { key: ViewKey; label: string }[] = [
   { key: 'search', label: '查一件事' },
   { key: 'graph', label: '谁垫着谁' },
   { key: 'progress', label: '最近进展' },
+  { key: 'roadmap', label: '接下来要做什么' },
 ]
 
 // 「在不在跑」的颜色(节点主色):在跑 > 建到哪一步(板桥 M1)。
@@ -1107,6 +1108,60 @@ function ProgressPanel({ data }: { data: ConsolePresentation }) {
   )
 }
 
+// ── 接下来要做什么:路线图(PM 二轮反馈——要看未来该干什么,不是当下快照)──────
+// 🔴 不是日历:没有真实排期数据,不编"预计几号完成"。按依赖深度排先后顺序,
+// 每行给「现在到哪 → 下一步到哪 → 卡在什么」,诚实的顺序比编造的日期更有用。
+function RoadmapView({ data }: { data: ConsolePresentation }) {
+  return (
+    <div className="space-y-4">
+      <MePanel>
+        <p className="text-[13px] text-black/70">
+          <strong className="text-me-charcoal">怎么读:</strong>
+          这不是日历,系统里没有真实排期数据,编不出"预计几号完成"。
+          这是按<strong>依赖顺序</strong>排的:越靠前的越是别人要先等它的地基,后面的排完前面的才能往前走。
+        </p>
+      </MePanel>
+
+      {data.roadmap.length === 0 ? (
+        <MePanel>
+          <p className="text-[13px] text-black/55">目前没有登记"还有下一步"的组件 —— 要么都到终点了,要么还没登记下一步。</p>
+        </MePanel>
+      ) : (
+        <div className="space-y-2.5">
+          {data.roadmap.map((r, i) => (
+            <div key={r.key} className="rounded-xl border border-black/10 bg-white p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-display text-[12px] font-bold text-black/25 tabular-nums">{i + 1}</span>
+                <span className="font-display text-[15px] font-semibold text-me-charcoal">{r.name}</span>
+                <MeChip>{r.laneLabel}</MeChip>
+                <MePill tone={r.bucket === 'operating' ? 'track' : r.bucket === 'built_not_live' ? 'exec' : 'attn'}>
+                  {BUCKET_TEXT[r.bucket]}
+                </MePill>
+                {r.needsYourCall && <MeChip gold>等你拍板</MeChip>}
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-[12.5px] text-black/60">
+                <span>现在:{r.currentMaturityLabel}</span>
+                <span className="text-black/30">→</span>
+                <span className="font-semibold text-me-charcoal">下一步:{r.nextMilestoneLabel}</span>
+              </div>
+              {r.blockerSummaries.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {r.blockerSummaries.map((s, si) => (
+                    <div key={si} className="flex items-start gap-1.5 text-[12px] text-black/55">
+                      <span className="mt-0.5 shrink-0 text-[#C2453A]">●</span>
+                      <span>{s}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ProductMapClient({ data }: { data: ConsolePresentation }) {
   const [view, setView] = useState<ViewKey>('decisions')
 
@@ -1140,7 +1195,9 @@ export default function ProductMapClient({ data }: { data: ConsolePresentation }
                     ? data.catalog.length
                     : v.key === 'progress'
                       ? data.recentActivity.length
-                      : undefined
+                      : v.key === 'roadmap'
+                        ? data.roadmap.length
+                        : undefined
             return (
               <button
                 key={v.key}
@@ -1168,6 +1225,7 @@ export default function ProductMapClient({ data }: { data: ConsolePresentation }
         {view === 'search' && <SearchView data={data} />}
         {view === 'graph' && <GraphPanel data={data} />}
         {view === 'progress' && <ProgressPanel data={data} />}
+        {view === 'roadmap' && <RoadmapView data={data} />}
       </div>
     </div>
   )
