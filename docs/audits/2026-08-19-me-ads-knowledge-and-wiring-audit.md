@@ -109,7 +109,15 @@ return 'skip'
 
 `ads-strategy/stop-loss` · `ads-strategy/draft-and-gate`（→ `meta/ad-publisher`）· `ads-strategy/ad-draft`（→ `play-vocabulary`）·
 `ads-strategy/ad-level-breakdown` · `ads-strategy/listing-draft-builder` · `meta/adsets` · `meta/asset-upload` ·
-`meta/guardrails` · `meta/lead-forms` · `meta/page-posts` · `meta/ads-posts` · `meta/comments`
+`meta/guardrails` · `meta/lead-forms` · `meta/page-posts` · `meta/ads-posts` · `meta/comments` ·
+`meta/campaign-ownership`（见下）
+
+> 📌 **`meta/campaign-ownership.ts` 系本次扫描之后才合入 main 的**（`AD-SEC-1` 最低限度归属校验），
+> 已接进 `ad-health/stop-loss` 与 `meta-ads/execute` 两条写路径。
+> 它挡住的是「campaign_id 根本不在这个客户登记的广告账户里」这种最粗暴的越权。
+> 🔴 **但它明确挡不住 CTS / Oztop 当前的情况** —— 两家共用同一个 Meta 广告账户，`account_id` 本来就相同，
+> 同账户内的跨客户操作查不出来。该模块自己的头注释已如实写明这个局限，
+> **不要读成「混账户风险已解决」**。根治要么拆账户，要么补一张「谁创建了这条广告」的归属表。
 
 ### 4.3 🔴 孤儿（传递闭包后仍无任何调用方）
 
