@@ -154,6 +154,23 @@ describe('buildLaneSummaries — 卡点分「等你拍板」和「技术卡点�
     expect(s.statusLabel).not.toContain('你')
   })
 
+  it('🔴 卡住的是 A（技术卡点），同线另一个没卡住的 B 在等拍板 → 不能把 A 的卡点栽成「等你决定」', () => {
+    const [s] = buildLaneSummaries(input({
+      lanes: [{
+        laneLabel: 'geo',
+        components: [
+          component({ name: 'A 抓取管道', bucket: 'building', isBlocked: true }),
+          component({ name: 'B 审批界面' }),
+        ],
+      }],
+      decisionsNow: [{ componentName: 'B 审批界面' }],
+    }))
+    expect(s.statusTone).toBe('blocked')
+    expect(s.statusLabel).toBe('卡住了，我们在处理')
+    // 「这条线另有事等你拍板」照旧由独立字段表达，不跟卡点因果混在一句话里
+    expect(s.needsYourCall).toBe(true)
+  })
+
   it('卡住的组件属于别的线、本线没决策 → 本线文案也不能说「等你决定」', () => {
     const [s] = buildLaneSummaries(input({
       lanes: [{ laneLabel: 'geo', components: [component({ name: 'a', isBlocked: true })] }],
@@ -197,6 +214,35 @@ describe('buildLaneSummaries — 老系统在跑的提示（魏征二审发现�
       }],
     }))
     expect(s.legacyOperatingNote).toBeNull()
+  })
+})
+
+describe('buildLaneSummaries — 老系统提示里的「新体系余项」也按实际 bucket 说（Codex 复审第二轮）', () => {
+  it('新体系余项已建好只差通电 → 不能说成「还在建」', () => {
+    const [s] = buildLaneSummaries(input({
+      lanes: [{
+        laneLabel: 'AI 可见度',
+        components: [
+          component({ name: '行业品牌别名登记册', isLegacy: true }),
+          component({ name: '测量结果存档', bucket: 'built_not_live' }),
+        ],
+      }],
+    }))
+    expect(s.legacyOperatingNote).toBe('在跑的是老系统，新体系建好了但没通电——分数低不代表这条线没在干活')
+  })
+
+  it('新体系余项两种状态混着 → 两种都说到', () => {
+    const [s] = buildLaneSummaries(input({
+      lanes: [{
+        laneLabel: 'AI 可见度',
+        components: [
+          component({ name: 'legacy', isLegacy: true }),
+          component({ name: '存档', bucket: 'built_not_live' }),
+          component({ name: '抓取', bucket: 'building' }),
+        ],
+      }],
+    }))
+    expect(s.legacyOperatingNote).toBe('在跑的是老系统，新体系有的建好了但没通电、有的还在建——分数低不代表这条线没在干活')
   })
 })
 

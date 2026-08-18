@@ -86,13 +86,14 @@ function restPhrase(rest: readonly LaneComponentInput[]): string {
 function statusLabelOf(
   tone: LaneStatusTone,
   components: readonly LaneComponentInput[],
-  needsYourCall: boolean,
+  blockedAwaitsDecision: boolean,
 ): string {
   if (tone === 'blocked') {
-    // 卡点分两种，措辞必须分开：`decisionsNow` 里有这条线的组件 = 真的等 PM 拍板；
-    // 否则是代码/数据/上游依赖的技术卡点，那是 agent 自己该处理的，
-    // 不能写成「等你决定」把活上抛给老板（CLAUDE.md 铁律 2 + 3，Codex 复审 P2）。
-    return needsYourCall ? '卡住等你决定' : '卡住了，我们在处理'
+    // 「卡住等你决定」是一句**因果**话，只有当**被卡住的那个组件本人**在 `decisionsNow` 里
+    // 才成立。同线另一个没卡住的组件等拍板，不能拿来解释这次卡点——那是把代码/数据/上游
+    // 依赖的技术卡点栽给老板（CLAUDE.md 铁律 2 + 3，Codex 复审 P2 第二轮）。
+    // 「这条线另有事等你拍板」由 `needsYourCall` 字段 + UI 独立徽章表达，跟这句话分开。
+    return blockedAwaitsDecision ? '卡住等你决定' : '卡住了，我们在处理'
   }
   const rest = components.filter((c) => c.bucket !== 'operating')
   if (tone === 'operating') {
@@ -137,18 +138,22 @@ export function buildLaneSummaries(data: LaneSummaryInput): readonly LaneSummary
             : 'building'
 
     const legacyOperating = operating.filter((c) => c.isLegacy)
+    // 新体系余项同样按实际 bucket 说——固定写「新体系还在建」会把已经建好、
+    // 只差通电的新组件说矮一档，跟同一张卡的状态摘要打架（Codex 复审 P2 第二轮）。
     const legacyOperatingNote =
       operating.length > 0 && legacyOperating.length === operating.length && operating.length < total
-        ? '在跑的是老系统，新体系还在建——分数低不代表这条线没在干活'
+        ? `在跑的是老系统，新体系${restPhrase(lane.components.filter((c) => c.bucket !== 'operating'))}——分数低不代表这条线没在干活`
         : null
 
-    // statusLabel 要靠它区分「真等你拍板」和「技术卡点」，所以先算出来。
+    // 这条线有没有等 PM 拍板的事（lane 级，UI 独立徽章用）。
     const needsYourCall = lane.components.some((c) => decisionComponentNames.has(c.name))
+    // 「卡住等你决定」只认被卡住的组件本人是否在等拍板，不吃同线其他组件的决策。
+    const blockedAwaitsDecision = blocked.some((c) => decisionComponentNames.has(c.name))
 
     return {
       laneLabel: lane.laneLabel,
       statusTone,
-      statusLabel: statusLabelOf(statusTone, lane.components, needsYourCall),
+      statusLabel: statusLabelOf(statusTone, lane.components, blockedAwaitsDecision),
       operatingCount: operating.length,
       totalCount: total,
       blockedCount: blocked.length,
