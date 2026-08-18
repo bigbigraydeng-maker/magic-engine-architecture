@@ -145,20 +145,31 @@ function SummaryFreshnessNote({
   const tone = trustTone(trust)
   const dot = tone === 'track' ? 'bg-[#4B7A3A]' : tone === 'rej' ? 'bg-[#C2453A]' : 'bg-[#C4912E]'
   const issueCount = trust.registryWarnings.length + trust.registryErrors.length + trust.syncIssues.length
+  const hasCoverageGap = trust.coverageGapPrs.length > 0
+  // 🔴 Codex 复审 P1:不能只靠 issueCount 判断"要不要说话"——sync_error / partial /
+  // run_error 这几种状态下 failedItems、truncations 完全可能是空数组(issueCount=0),
+  // 但 trust.verdict 里"数据可能是旧的,别照着它做决定"这句结论必须露出来,不能
+  // 缩成一个不起眼的颜色点。判断露不露结论看 tone,不看 issueCount 是不是 > 0。
+  const mustShowVerdict = tone !== 'track' || hasCoverageGap
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-black/[.06] bg-white px-4 py-2.5 text-[12.5px] text-black/60">
-      <span className={cx('h-2 w-2 flex-none rounded-full', dot)} />
-      <span>{trust.freshnessText}</span>
-      {issueCount > 0 && (
-        <>
-          <span className="text-black/25">·</span>
-          <span>这张表自己标记了 {issueCount} 处要核实的地方</span>
-        </>
-      )}
+    <div className="flex flex-wrap items-start gap-2 rounded-xl border border-black/[.06] bg-white px-4 py-2.5 text-[12.5px] text-black/60">
+      <span className={cx('mt-1 h-2 w-2 flex-none rounded-full', dot)} />
+      <div className="min-w-0 flex-1">
+        <span>{mustShowVerdict ? trust.verdict : trust.freshnessText}</span>
+        {mustShowVerdict && <span className="ml-1.5 text-black/40">({trust.freshnessText})</span>}
+        {hasCoverageGap && (
+          <div className="mt-0.5">
+            有 {trust.coverageGapPrs.length} 项这轮没同步到,进度可能被低估,不是没做
+          </div>
+        )}
+        {issueCount > 0 && (
+          <div className="mt-0.5">这张表自己标记了 {issueCount} 处要核实的地方</div>
+        )}
+      </div>
       <button
         type="button"
         onClick={onViewDetails}
-        className="ml-auto text-[12px] font-semibold text-me-ochre hover:underline"
+        className="flex-none text-[12px] font-semibold text-me-ochre hover:underline"
       >
         查看技术细节 →
       </button>

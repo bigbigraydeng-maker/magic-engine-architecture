@@ -77,6 +77,13 @@ describe('ProductMapClient — 老板摘要（默认视图）', () => {
     expect(text).toContain('样本少，只登记了 2 项')
   }, 30_000)
 
+  it('🔴 Codex 复审 P1 必改:同步真的出错时,关键结论不能只剩一个颜色点,老板摘要页必须直接说出来', () => {
+    const { container } = render(<ProductMapClient data={present({ loadOutcome: 'sync_error' })} />)
+    // 不用点进技术细节——这句话必须在默认打开的这一屏就看得到
+    expect(container.textContent).toContain('同步出错了')
+    expect(container.textContent).toContain('别照着它做合并决定')
+  }, 30_000)
+
   it('「查看技术细节」入口点了才进 7 个技术标签页，默认不显示标签栏', () => {
     render(<ProductMapClient data={present()} />)
     expect(screen.queryByText('各条线做到哪了')).toBeNull()
@@ -206,11 +213,14 @@ describe('ProductMapClient — 技术细节模式（点「查看技术细节」�
     expect(text.indexOf('执行内核')).toBeLessThan(text.indexOf('动作名字对表'))
   }, 30_000)
 
-  it('接下来要做什么:等你拍板的项带明显标记', () => {
+  it('接下来要做什么:等你拍板的项带明显标记(Codex 复审 P2:排除导航栏那个同名标签按钮,不然测试测不出真回归)', () => {
     render(<ProductMapClient data={present()} />)
     enterDetails()
     fireEvent.click(screen.getByText('接下来要做什么'))
-    expect(screen.getAllByText('等你拍板').length).toBeGreaterThanOrEqual(1)
+    // 导航栏"等你拍板"是个 <button>;卡片上的徽章不是——按标签类型排除掉导航栏那个,
+    // 剩下的才是 RoadmapView 真的渲染出来的徽章数,RoadmapView 不渲染时这里会变 0。
+    const badgeMatches = screen.getAllByText('等你拍板').filter((el) => el.tagName !== 'BUTTON')
+    expect(badgeMatches.length).toBeGreaterThanOrEqual(1)
   }, 30_000)
 
   it('「← 老板摘要」能从技术细节模式退回默认摘要页', () => {
