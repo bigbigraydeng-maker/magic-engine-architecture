@@ -20,15 +20,35 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 const ROMAN_CLIENT_ID = 'e7465ac7-4f3d-4d6a-afbe-d036ab419708'
 const AUTHOR_EMAIL = 'bigbigraydeng@gmail.com'
 
-/** 摘要（≤300 字，中文，【GEO】格式）。内容为本次已确认的事实。 */
+/**
+ * 本次工作日志的**来源标签**（Codex #1032 第 5 轮 C · 幂等键修）。
+ *
+ * 🔴 幂等键不是 `(client_id, log_date)`：`fde_work_logs` 允许同天多条不同来源的日志
+ *    （PM 手写、其它 cron、别的 agent），只锁客户 + 日期会把当天更早的正常日志误当
+ *    「本次已写」，导致本次实际工作**静默漏写**。幂等键改为
+ *    `(client_id, log_date, summary 前缀 = SOURCE_TAG)`，只识别本会话来源、不吞别人的行。
+ * 🔴 SOURCE_TAG **必须放在 summary 最前面**（用 `startsWith` / `LIKE 'tag%'` 匹配）。
+ */
+const SOURCE_TAG = '【GEO WP05 首诊】'
+
+/**
+ * 摘要长度硬上限（Codex #1032 第 5 轮 D）。
+ *
+ * 🔴 CLAUDE.md 会话结束协议明写「摘要格式 …≤300 字」。库列虽无长度约束、写入不会报错，
+ *    但落进「客户 fde 日志」这种被人看的地方，超长静默入库是自欺。超限一律**抛错拒写**，
+ *    不静默截断（截断会把关键事实吃掉）。
+ */
+const MAX_SUMMARY_CHARS = 300
+
+/** 摘要（≤300 字，中文，SOURCE_TAG 起头）。本次事实。协调会话可按新诊断数字覆盖。 */
 const SUMMARY =
-  '【GEO】激活 Roman 21 页站点台账（canonical inventory，#930）；' +
-  '建成 WP05 GEO Module v1 纯推理引擎（#879/#1032，geo-module/m1/v1 冻结语义：' +
-  '认名/消歧/合格提及/推荐分级/rank，证据不足一律 defer，句子级绑定防误配）。' +
-  '对 Roman #883 基线首次诊断：12 问里正文合格提及 2/12、explicit_positive 推荐 0/12、defer 0。' +
-  'owned citation 2/12 是引用覆盖，M1 §7 明令不得当作提及/推荐，两者不可混。' +
-  '下一步：①字段级 grounding 后产出 PageOptimizationRequest（现诚实 defer=unattributable_proposed_value）；' +
-  '②WP09 页面写入（卡 cms_connections=0）；③WP10 归因回流。'
+  `${SOURCE_TAG}激活 Roman 21 页台账（#930）；` +
+  'WP05 GEO Module v1 上线（#879/#1032），首诊 12 问：' +
+  '正文合格提及 2/12、显式正向推荐 0/12、defer 0。' +
+  'owned citation 2/12 是引用覆盖，M1 §7 不得当提及/推荐。' +
+  '下一步：①grounding 后产出 PageOptimizationRequest' +
+  '（现 defer=unattributable_proposed_value）；' +
+  '②WP09 页面写入卡 cms_connections=0；③WP10 归因回流。'
 
 // ── 极简 .env.local 解析（不引 dotenv 依赖，同 diagnose 脚本）──────────────────
 
@@ -64,15 +84,30 @@ function main(): void {
 
   Promise.resolve()
     .then(async () => {
-      // 幂等保护：同客户同日已有日志则不重复插（避免多次放行插重复行）。
+      // ── D · 长度硬检查（Codex 第 5 轮 D）：超限拒写，不静默入库 ──
+      if (SUMMARY.length > MAX_SUMMARY_CHARS) {
+        throw new Error(
+          `摘要 ${SUMMARY.length} 字超上限 ${MAX_SUMMARY_CHARS} 字，拒写。请压缩摘要后重跑。`,
+        )
+      }
+      if (!SUMMARY.startsWith(SOURCE_TAG)) {
+        throw new Error(`摘要必须以 SOURCE_TAG「${SOURCE_TAG}」起头（幂等键需要），拒写。`)
+      }
+
+      // ── C · 幂等保护（Codex 第 5 轮 C）：按 SOURCE_TAG 前缀识别本会话来源 ──
+      //   PostgREST `like` 是大小写敏感精确前缀（`%` 通配后缀）。SOURCE_TAG 里的方括号
+      //   不是 SQL LIKE 元字符（那是 `%` / `_`），所以直接拼即可。
       const { data: existing, error: readErr } = await sb
         .from('fde_work_logs')
-        .select('id')
+        .select('id, summary')
         .eq('client_id', ROMAN_CLIENT_ID)
         .eq('log_date', today)
+        .like('summary', `${SOURCE_TAG}%`)
       if (readErr) throw new Error(`预检读取失败：${readErr.message}`)
       if (existing && existing.length > 0) {
-        process.stdout.write(`已存在 ${today} 的 Roman 工作日志（${existing.length} 条），不重复写入。\n`)
+        process.stdout.write(
+          `已存在 ${today} 的「${SOURCE_TAG}」工作日志（${existing.length} 条），不重复写入。\n`,
+        )
         return
       }
 

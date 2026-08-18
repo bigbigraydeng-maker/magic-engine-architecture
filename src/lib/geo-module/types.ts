@@ -65,6 +65,16 @@ export type GeoM1ReasonCode =
    * 正文里有实体命中却拿不到问句时，「无法排除回显」不得当成正向覆盖 —— 一律 defer。
    */
   | 'question_text_unknown'
+  /**
+   * `raw_response` 解不出 `geo-baseline/openai/v1` 信封（第 5 轮 Codex P1）。
+   *
+   * 🔴 provider 存的是 `JSON.stringify(GeoRawResponseEnvelope)`，含 `text`（真答案正文）
+   *    + `citationUrls` + `rawPayload`（完整 OpenAI 原始返回）。若把整段 JSON 当正文扫，
+   *    citation 元数据 / rawPayload 里的 title / URL 里的实体名会被误算成「答案正文提及」
+   *    ——这**恰恰是 M1 §7 明令禁止**的方向（把 citation 当 mention）。因此：
+   *    信封版本不匹配 / JSON 损坏 / `envelope.text` 为空或 null → 一律 defer，不猜。
+   */
+  | 'raw_response_envelope_unreadable'
   /** 别名注册表为空：解释为什么不认任何别名 / 队名 / 姓氏 / 域名（M1 §1）。 */
   | 'brand_alias_registry_empty'
 

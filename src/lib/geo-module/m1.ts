@@ -58,6 +58,44 @@ export interface GeoM1Input {
  */
 export const DEFAULT_CONFIDENCE_THRESHOLD = GEO_COMPARABILITY_POLICY_V1.minParserConfidence
 
+/**
+ * 已知的 `raw_response` 信封版本。
+ *
+ * 🔴 provider 层 `src/lib/geo-baseline/provider.ts:242-252` 把每条 `raw_response` 存成
+ *    `JSON.stringify({ envelope:'geo-baseline/openai/v1', text, citationUrls, rawPayload, ... })`。
+ *    只能读**认得的**信封版本；出现未知版本一律 defer，不猜、不宽松解析。
+ *    未来加新版本必须显式在此登记 + 单独适配器。
+ */
+export const KNOWN_ENVELOPE_VERSIONS: readonly string[] = ['geo-baseline/openai/v1']
+
+/**
+ * 从证据行的 `raw_response` 里提取真正的答案正文。
+ *
+ * 🔴 只信 `envelope.text`，绝不扫 `citationUrls` 或 `rawPayload`：那是 M1 §7
+ *    「owned citation ≠ mention」的另一面 —— 把 citation 元数据 / rawPayload 里的
+ *    `title` / URL / annotation 当作正文提及是同一个禁令的方向。
+ *
+ * 🔴 保守：未知 envelope 版本 / 不是对象 / JSON 损坏 / 缺 text / text 非字符串 / text 空串
+ *    一律返回 `{ok:false}` → 上游落 defer `raw_response_envelope_unreadable`。
+ */
+export function extractAnswerBody(
+  rawResponse: string,
+): { readonly ok: true; readonly text: string } | { readonly ok: false } {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawResponse)
+  } catch {
+    return { ok: false }
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return { ok: false }
+  const record = parsed as Record<string, unknown>
+  const version = record.envelope
+  if (typeof version !== 'string' || !KNOWN_ENVELOPE_VERSIONS.includes(version)) return { ok: false }
+  const text = record.text
+  if (typeof text !== 'string' || text.length === 0) return { ok: false }
+  return { ok: true, text }
+}
+
 // ── 文本归一（M1 §1：Unicode 归一 + case-fold + 空白折叠） ─────────────────────
 
 /** NFC 归一 + 小写 + 空白折叠。**不做任何词干 / 模糊处理**（M1 §1 禁止模糊匹配）。 */
@@ -109,9 +147,17 @@ const DOMAIN_ANCHORS: readonly string[] = [
   'real estate', 'realtor', 'realty', 'ray white',
 ]
 
-/** 推荐极性词表（M1 §4）—— 保守：只认真正的「选择判断」动词，不认单纯正向情绪词。 */
+/**
+ * 推荐极性词表（M1 §4）—— 保守：只认真正的「选择判断」动词，不认单纯正向情绪词。
+ *
+ * 🔴 显式列出 recommend 的常用屈折形（`recommends` / `recommended` / `recommending`），
+ *    **不做通配后缀匹配**：加了词边界后，裸 `recommend` 不会命中 `recommendations`
+ *    （名词复数，客户评价数）——那正是本次假阳的入口。别用正则通配 `recommend.*`
+ *    重新把 `recommendations` 放进来。
+ */
 const ENDORSE_TERMS: readonly string[] = [
-  'recommend', 'i would recommend', 'we recommend', 'you should contact', 'you should reach out',
+  'recommend', 'recommends', 'recommended', 'recommending',
+  'i would recommend', 'we recommend', 'you should contact', 'you should reach out',
   'suggest contacting', 'go with', 'a great agent to work with', 'strong choice', 'top choice',
   'best choice', 'best option',
 ]
@@ -181,24 +227,59 @@ function isNegatedAt(text: string, index: number): boolean {
   return NEGATION_RE.test(text.slice(start, index))
 }
 
-/** 该短语是否**至少有一处未被否定**地出现。 */
+/**
+ * 短语出现处是否满足 ASCII 词边界（Codex #1032 第 5 轮 A · 假阳修）。
+ *
+ * 🔴 裸 `.includes('recommend')` 会命中 `recommendations`（客户评价复数）→ 抬高 explicit_positive
+ *    覆盖。要求两侧都不是 `[a-z0-9]`（`_` 与非 ASCII 已被 normalizeText 抹平/隔开）。
+ *    我们的短语内部允许空格、撇号等（`"i would recommend"` / `"a great agent to work with"`），
+ *    只锁**外侧**边界；短语首/尾若本身以 `[a-z0-9]` 结尾/开头，词边界才生效。
+ */
+function isWordBoundedAt(text: string, phrase: string, idx: number): boolean {
+  const start = idx
+  const end = idx + phrase.length
+  const isAlnum = (ch: string): boolean => /[a-z0-9]/.test(ch)
+  if (phrase.length === 0) return true
+  const firstChar = phrase[0]
+  const lastChar = phrase[phrase.length - 1]
+  const before = start > 0 ? text[start - 1] : ''
+  const after = end < text.length ? text[end] : ''
+  // 短语起始是 alnum：前一字符不能也是 alnum。
+  if (isAlnum(firstChar) && before !== '' && isAlnum(before)) return false
+  // 短语结尾是 alnum：后一字符不能也是 alnum。
+  if (isAlnum(lastChar) && after !== '' && isAlnum(after)) return false
+  return true
+}
+
+/** 该短语是否**至少有一处词边界内**地出现（不看否定）。 */
+function containsWordBounded(text: string, phrase: string): boolean {
+  let from = 0
+  for (;;) {
+    const idx = text.indexOf(phrase, from)
+    if (idx < 0) return false
+    if (isWordBoundedAt(text, phrase, idx)) return true
+    from = idx + phrase.length
+  }
+}
+
+/** 该短语是否**至少有一处词边界内且未被否定**地出现。 */
 function hasUnnegated(text: string, phrase: string): boolean {
   let from = 0
   for (;;) {
     const idx = text.indexOf(phrase, from)
     if (idx < 0) return false
-    if (!isNegatedAt(text, idx)) return true
+    if (isWordBoundedAt(text, phrase, idx) && !isNegatedAt(text, idx)) return true
     from = idx + phrase.length
   }
 }
 
-/** 该短语是否**至少有一处被否定**地出现。 */
+/** 该短语是否**至少有一处词边界内且被否定**地出现。 */
 function hasNegated(text: string, phrase: string): boolean {
   let from = 0
   for (;;) {
     const idx = text.indexOf(phrase, from)
     if (idx < 0) return false
-    if (isNegatedAt(text, idx)) return true
+    if (isWordBoundedAt(text, phrase, idx) && isNegatedAt(text, idx)) return true
     from = idx + phrase.length
   }
 }
@@ -250,7 +331,16 @@ export function interpretObservation(input: GeoM1Input): GeoObservationInterpret
     return defer(meta, reasons)
   }
   // evidenceGate 过了 ⇒ evidence 非空、raw_response 非空。
-  const body = normalizeText((evidence as GeoEvidenceRow).raw_response as string)
+  // 🔴 raw_response 是 provider 存的 JSON 信封（`geo-baseline/openai/v1`），**不是**答案正文。
+  //    必须先按信封版本解包、只把 envelope.text 交给 normalizeText；否则 citationUrls /
+  //    rawPayload 里的 URL、title、annotation 会被 body 判据误算成「正文提及」，直接违反
+  //    M1 §7「owned citation ≠ mention」（Codex #1032 第 5 轮 P1 · 生产实证）。
+  const extracted = extractAnswerBody((evidence as GeoEvidenceRow).raw_response as string)
+  if (!extracted.ok) {
+    reasons.push('raw_response_envelope_unreadable')
+    return defer(meta, reasons)
+  }
+  const body = normalizeText(extracted.text)
   const citations = ((evidence as GeoEvidenceRow).citations ?? []) as readonly GeoCitation[]
 
   // ── §1 实体匹配 ──
@@ -397,7 +487,7 @@ function classifyRecommendation(
   const positive = ENDORSE_TERMS.some((t) => hasUnnegated(ctx, t))
   // 负向信号 = 有直接负面词，**或**某处背书被否定（「wouldn't go with」= 差评）。
   const negative =
-    NEGATIVE_TERMS.some((t) => ctx.includes(t)) || ENDORSE_TERMS.some((t) => hasNegated(ctx, t))
+    NEGATIVE_TERMS.some((t) => containsWordBounded(ctx, t)) || ENDORSE_TERMS.some((t) => hasNegated(ctx, t))
   if (positive && negative) {
     reasons.push('recommendation_ambiguous')
     return 'indeterminate'
