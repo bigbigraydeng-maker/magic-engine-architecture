@@ -7,6 +7,18 @@
 
 **新增任务的规则**：先登记到本文件，再写代码。完成后从本文件删除、追加到 `history/CHANGELOG.md`。commit 带 Phase ID，如 `feat(ads): xxx [P18.B.1]`。
 
+> ## 🔴 Roadmap 全局约束：Reuse First / Platformization
+>
+> 本文件**所有未完成事项**都受 [ME2 Reuse & Platformization Principle](./roadmap/2026-08-19-me2-platformization-principle.md) 约束。真实客户与 Customer Zero 用来验证平台能力，不得默认演化成客户特供系统；未来 **ME Real Estate / ME Travel** 等垂直版本必须建立在同一共享底层上。
+>
+> **开工顺序固定**：`Repository Fact Gate → Domain Semantics Gate → Product Gate → Architecture / Reuse Gate → GO BUILD`。
+>
+> - Current State Audit 第一行必须报告 `remote fetched at + exact main SHA`；没有 SHA，审计不成立。
+> - 复用 shared Module / Capability 前必须检查内部语义是否仍 hard-code 首个客户/行业；接口参数化不等于语义通用。
+> - 默认共享 Capability、Adapter / Connector、Kernel、Measurement/Growth Contract、Verification / Attribution / Flywheel 与可安全泛化的 Learning / Memory 机制。
+> - 行业差异进入 Playbook / Profile / Policy；客户差异进入 configuration / approved evidence / client-private memory。
+> - 每个有实质产出的交付必须附 **Reuse Statement**：说明复用了什么、哪些是 platform-shared / industry-specific / client-specific，以及有没有客户名、客户 ID、行业规则或客户私有事实进入 shared runtime。
+
 ---
 
 ## ME2 — Roman GEO / AI 可见度参考闭环（史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)）🔄 GEO 测量线已跑出首个生产 baseline（WP08）

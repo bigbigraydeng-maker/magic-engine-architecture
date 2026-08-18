@@ -19,6 +19,7 @@
 4. **`industry-ai-visibility`（系统 C）不删、不合并**，但**切断它冒充客户级分数**：Goals 的 `ai_visibility_score` 现在错读系统 C 的行业均值（`auto-fetch.ts:65-66`），当成单客户分数写进 Goals。这条独立于 ai-tracker 删除（不同表、不同系统）。系统 C 的合法消费方是 **Industry Baselines 看板/API**（不是 Yellowbook——Yellowbook 只在 `industry-ai-visibility/types.ts:6` 注释里，尚无代码），保留。
 
 > 🔴 **实施变更（子牙复审拍板）：组 R SEVER 已折进 ai-tracker 退役同一个 PR**（不再单独小 PR——PO 要减法要快、且两者架构不冲突）。**因此产生一处 Goals 行为变更,必须让 PO/未来的人一眼看到,别埋在大 diff 里**：**自本 PR 起,Goals 的 `ai_visibility_score` 失去自动来源、`autoFetchMetricValue` 对它返回 `ok:false`,current_value 留空**,直到 M1 按客户实测接上（P31.X.4）。**这是有意的**——它原先自动填的是系统 C 的行业均值冒充客户分,摘掉一个错数字留一个诚实的空,**不是 bug、不是无损 no-op**。`baseline-audit.ts` 的 `AUTO_METRICS` 同步去掉 `ai_visibility_score`（美化:否则清单里显示「auto 但拉不到」）。
+4. **`industry-ai-visibility`（系统 C）不删、不合并**，但**切断它冒充客户级分数**：Goals 的 `ai_visibility_score` 现在错读系统 C 的行业均值（`auto-fetch.ts:65-66`），当成单客户分数写进 Goals。这条独立于 ai-tracker 删除（不同表、不同系统），走独立小 PR 先落。系统 C 的合法消费方是 **Industry Baselines 看板/API**（不是 Yellowbook——Yellowbook 只在 `industry-ai-visibility/types.ts:6` 注释里，尚无代码），保留。
 
 **完整拆除清单**（逐个缠线定性 DELETE / REWIRE→M1 / LEAVE-SEVER、删除执行顺序、DROP 表清单、我方异议）见 [`docs/specs/2026-08-19-ai-tracker-decommission-v1.md`](./specs/2026-08-19-ai-tracker-decommission-v1.md)。**本轮零删除、零 DROP、零 cron 改动**——真正的删除是复审干净 + PO 最后 `go` 之后的独立 PR。
 
@@ -60,6 +61,16 @@ function buildEntityMatcher(aliases: readonly string[]): RegExp { /* 精确别�
 **注意与 2026-05-17 决策的关系**：当时「AI Tracker 保留自建，不切 Apify」是判**采集端** vendor 选型。本条退役 ai-tracker 后该决策的对象不复存在（不再有 ai-tracker 采集端要选 vendor）；客户级采集能力今后由 M1 承担，行业级由系统 C（DataForSEO）承担，那条旧决策就此作废。
 
 **后续步骤**：拆除执行顺序（先断消费方 → 平移共享件 → 删代码 → 最后 DROP 表，DROP 不可逆需 PO `go apply`）见拆除清单 §6 与 tracking issue #1073。原「五阶段小心迁移」计划随本次授权作废。**子牙（架构）+ 魏征（挑刺）已复审拆除清单，判「可作真删 PR 依据」，修正意见已并入清单 §4/§8/§9**（含护城河靶心：flywheel `geo.query.mention_rate` 断供 → 诸葛亮归因失效，见清单 §9.1）。**A 级任务**，禁止一次性授权，**每一步单独要 PO `go`**。
+
+## 2026-08-19 · Magic Engine 默认 Reuse First，未来垂直版本共享同一底层平台
+
+**决策**：Magic Engine 的长期形态是**一个共享平台 + 多个垂直版本**。真实客户与 Customer Zero 用来发现、验证、加固可复用能力，不默认发展成客户特供系统。未来在行业理解、数据与客户样本足够后，可以推出 **ME Real Estate / ME Travel** 等垂直版本，但底层默认共享 Capability、Adapter / Connector、Kernel / Governance、Measurement Contract、Growth Contract、Verification / Attribution / Flywheel，以及经证据证明可泛化的 Learning / Memory 机制。完整冻结原则见 [ME2 Reuse & Platformization Principle](./roadmap/2026-08-19-me2-platformization-principle.md)。
+
+行业差异进入 **Industry Playbook / Profile / Policy**；客户差异进入 client configuration、approved evidence 与 client-private memory。Memory 明确分三层：client-private、industry、global platform；客户私有事实与学习绝不跨租户泄露，行业/global 学习必须有跨样本证据后才能升级。
+
+**为什么**：Roman GEO 已经暴露一个典型失败模式：接口和 `clientId` 看似通用，但实体名、Auckland/NZ、real-estate/Ray White 等语义仍硬编码在 shared-looking module 内。若不把“可复用机制”和“首个客户语义”分开，后续 CTS、ME 官网和新行业会不断复制/分叉，平台会越做越复杂。
+
+**影响**：所有开发窗口统一执行 `Repository Fact Gate → Domain Semantics Gate → Product Gate → Architecture / Reuse Gate → GO BUILD`。Current State Audit 第一行必须报告 `remote fetched at + exact main SHA`；没有 SHA，审计不成立。每个有实质产出的交付必须附 **Reuse Statement**，说明复用了什么、哪些是 platform-shared / industry-specific / client-specific，以及是否存在客户/行业语义进入 shared runtime。新增共享能力前先证明现有 Capability / Adapter / Contract 不能承载；客户名、客户 ID、行业规则默认不得进入 shared runtime。
 
 ## 2026-08-14 · 工程质量按风险分级，不一刀切
 

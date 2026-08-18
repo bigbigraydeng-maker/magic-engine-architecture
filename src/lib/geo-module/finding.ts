@@ -119,17 +119,20 @@ export function hasVisibilityGap(summary: GeoCoverageSummary): boolean {
  * 🔴 **无缺口不产出**：可解释覆盖已满（全提及 + 全 explicit_positive）或无可解释样本时返回 `null`
  *    —— finding 是问题 / 机会，凭空产出一条「其实没缺口」的发现会驱动错误处方（Codex #1032 P1）。
  *    调用方据 `null` 走 no_gap / defer。
+ * 🔴 `canonicalDisplayName` 用于 statement 文本模板替换（原来是硬编码 `Roman`）——
+ *    由调用方从 `entityProfile.canonicalDisplayName` 传入。
  */
 export function buildQualifiedMentionFinding(
   summary: GeoCoverageSummary,
   evidence: readonly GrowthEvidence[],
+  canonicalDisplayName: string,
 ): GrowthFinding | null {
   if (evidence.length === 0) return null
   if (!hasVisibilityGap(summary)) return null
   return {
     pillar: 'ai_visibility',
     severity: severityOf(summary),
-    statement: buildStatement(summary),
+    statement: buildStatement(summary, canonicalDisplayName),
     evidence,
   }
 }
@@ -152,11 +155,12 @@ function severityOf(summary: GeoCoverageSummary): DiagnosticSeverity {
 
 /**
  * Finding 陈述 —— 说清「提及 ≠ 引用」，并把 defer 的 query 数一起报（覆盖率配样本量读）。
+ * 🔴 实体名从 `canonicalDisplayName` 替换（R7 templated），不硬编码 `Roman`。
  */
-function buildStatement(summary: GeoCoverageSummary): string {
+function buildStatement(summary: GeoCoverageSummary, canonicalDisplayName: string): string {
   return (
     `按 ${GEO_M1_RULE_VERSION}：` +
-    `在 ${summary.queryCount} 个 query 里，Roman 被 AI 答案正文合格提及的有 ` +
+    `在 ${summary.queryCount} 个 query 里，${canonicalDisplayName} 被 AI 答案正文合格提及的有 ` +
     `${summary.qualifiedMentionQueries} 个，明确正向推荐（explicit_positive）的有 ` +
     `${summary.explicitPositiveQueries} 个（另有 ${summary.conditionalQueries} 个为有条件推荐，单独计）。` +
     `其中 ${summary.fullyDeferredQueries} 个 query 的样本全部证据不足、判为 defer。` +

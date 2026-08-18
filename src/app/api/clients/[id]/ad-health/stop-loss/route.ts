@@ -13,6 +13,7 @@
  *
  * 200 → preview / outcome (see types below)
  * 400 missing campaign_id or bad action
+ * 403 campaign_id does not belong to this client's registered ad account (AD-SEC-1)
  * 424 no Meta token configured for this client
  * 502 campaign could not be read from Meta
  */
@@ -22,6 +23,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import { getMetaTokenForClient } from '@/lib/meta/token-manager'
 import { getCampaignDetails, setCampaignStatus, setCampaignDailyBudget } from '@/lib/meta/client'
+import { assertCampaignOwnedByClient } from '@/lib/meta/campaign-ownership'
 import { resolveAndLogAdsExpectedMetric } from '@/lib/flywheel/ads-expected-metric'
 import {
   listAdSetsInCampaign, setAdSetDailyBudget, getAdSetStatus, setAdSetStatus,
@@ -63,8 +65,10 @@ export async function GET(req: NextRequest, { params }: RouteParams): Promise<Ne
   const token = await resolveToken(params.id)
   if (!token) return NextResponse.json({ error: 'no_meta_token' }, { status: 424 })
 
-  const campaign = await getCampaignDetails(campaignId, token)
-  if (!campaign) return NextResponse.json({ error: 'campaign_unreadable' }, { status: 502 })
+  // 归属校验（AD-SEC-1）：见 campaign-ownership.ts 顶部注释里的局限说明。
+  const ownership = await assertCampaignOwnedByClient(campaignId, params.id, token)
+  if (!ownership.ok) return NextResponse.json({ error: ownership.error }, { status: 403 })
+  const campaign = ownership.campaign
 
   // Only look up ad sets when the campaign itself carries no budget — saves a
   // Meta round-trip on the common CBO case.
@@ -111,6 +115,11 @@ export async function POST(req: NextRequest, { params }: RouteParams): Promise<N
 
   const token = await resolveToken(clientId)
   if (!token) return NextResponse.json({ error: 'no_meta_token' }, { status: 424 })
+
+  // 归属校验（AD-SEC-1）：执行前必须核对这条 campaign 真的属于这个客户登记的
+  // 广告账户，不能只信请求体里的 campaign_id。局限见 campaign-ownership.ts。
+  const ownership = await assertCampaignOwnedByClient(campaignId, clientId, token)
+  if (!ownership.ok) return NextResponse.json({ error: ownership.error }, { status: 403 })
 
   const outcome = await executeStopLoss(campaignId, action, metaDeps(token))
   if (outcome === null) {

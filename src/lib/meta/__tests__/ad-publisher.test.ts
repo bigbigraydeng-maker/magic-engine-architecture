@@ -98,6 +98,38 @@ describe('publishDraftPaused — 建出来的一律暂停', () => {
   })
 })
 
+describe('targetingFor — 城市和国家不能同时给（2026-08-04 事故：北岸的房投给了整个新西兰）', () => {
+  it('给了城市 → geo_locations 只有 cities，不带 countries（Meta 按并集生效，两个都给等于城市半径形同虚设）', async () => {
+    vi.stubGlobal('fetch', mockGraph())
+    await publishDraftPaused(
+      { ...DRAFT, geoCountries: ['NZ'], geoCityKeys: ['2450022'] },
+      'act_1', 'tok',
+    )
+    const geo = JSON.parse(calls.find((c) => c.url.includes('/adsets'))!.body.get('targeting')!)
+      .geo_locations
+    expect(geo.cities).toEqual([{ key: '2450022', radius: 10, distance_unit: 'kilometer' }])
+    expect(geo.countries).toBeUndefined()
+  })
+
+  it('没给城市 → geo_locations 退回国家（全国投放本来就是本意时，这条路径不受影响）', async () => {
+    vi.stubGlobal('fetch', mockGraph())
+    await publishDraftPaused({ ...DRAFT, geoCountries: ['NZ'], geoCityKeys: undefined }, 'act_1', 'tok')
+    const geo = JSON.parse(calls.find((c) => c.url.includes('/adsets'))!.body.get('targeting')!)
+      .geo_locations
+    expect(geo.countries).toEqual(['NZ'])
+    expect(geo.cities).toBeUndefined()
+  })
+
+  it('城市数组给了但是空的 → 仍按国家算（空数组不是「有城市」）', async () => {
+    vi.stubGlobal('fetch', mockGraph())
+    await publishDraftPaused({ ...DRAFT, geoCountries: ['NZ'], geoCityKeys: [] }, 'act_1', 'tok')
+    const geo = JSON.parse(calls.find((c) => c.url.includes('/adsets'))!.body.get('targeting')!)
+      .geo_locations
+    expect(geo.countries).toEqual(['NZ'])
+    expect(geo.cities).toBeUndefined()
+  })
+})
+
 describe('publishDraftPaused — 建到一半失败要收拾干净', () => {
   it('建组失败 → 把已建的系列删掉，不留半成品', async () => {
     vi.stubGlobal('fetch', mockGraph({ onPath: '/adsets' }))
