@@ -23,13 +23,17 @@ import {
 import { cx } from '@/components/ui/me-theme'
 import { BUCKET_LABEL } from '@/lib/product-map/presenter'
 import type { ComponentView, ConsolePresentation, DecisionView } from '@/lib/product-map/presenter'
+import { SummaryView } from './SummaryView'
 
-type ViewKey = 'decisions' | 'lanes' | 'list' | 'search' | 'graph' | 'progress' | 'roadmap'
+type ViewKey = 'decisions' | 'summary' | 'lanes' | 'list' | 'search' | 'graph' | 'progress' | 'roadmap'
 
-// 顺序:决策入口永远第一(板桥 S1);查阅类排最后。「最近进展」「路线图」是了解现状/
-// 未来,不是决策入口,排在最后,不跟"等你拍板"抢首屏(板桥二轮设计审必改 5)。
+// 顺序:决策入口永远第一(板桥 S1,二轮设计审必改 5)——这条原则本次没有推翻,
+// 默认打开的仍是「等你拍板」。「老板摘要」是新增的并列视图,不是默认视图,
+// 放第二位(决策之后、细节之前),让不想逐条看 50 个组件的人一步能到。
+// 查阅类排最后。「最近进展」「路线图」是了解现状/未来,不是决策入口。
 const VIEWS: { key: ViewKey; label: string }[] = [
   { key: 'decisions', label: '等你拍板' },
+  { key: 'summary', label: '老板摘要' },
   { key: 'lanes', label: '各条线做到哪了' },
   { key: 'list', label: '一件件看' },
   { key: 'search', label: '查一件事' },
@@ -1220,6 +1224,7 @@ export default function ProductMapClient({ data }: { data: ConsolePresentation }
         </div>
 
         {view === 'decisions' && <DecisionsView data={data} />}
+        {view === 'summary' && <SummaryView data={data} />}
         {view === 'lanes' && <LanesView data={data} />}
         {view === 'list' && <ListView data={data} />}
         {view === 'search' && <SearchView data={data} />}

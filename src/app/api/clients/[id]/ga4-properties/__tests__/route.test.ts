@@ -3,10 +3,10 @@ import { NextRequest } from 'next/server'
 
 const mocks = vi.hoisted(() => ({
   requireOnboardingClientAccess: vi.fn(),
-  from:              vi.fn(),
-  getValidToken:     vi.fn(),
-  listGa4Properties: vi.fn(),
-  setGa4Property:    vi.fn(),
+  from:               vi.fn(),
+  resolveAccessToken: vi.fn(),
+  listGa4Properties:  vi.fn(),
+  setGa4Property:     vi.fn(),
 }))
 
 vi.mock('@/lib/auth/client-access', () => ({
@@ -17,13 +17,12 @@ vi.mock('@/lib/supabase', () => ({
   supabaseAdmin: { from: mocks.from },
 }))
 
-vi.mock('@/lib/platform-oauth/token-manager', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/lib/platform-oauth/token-manager')>()
-  return { ...actual, getValidToken: mocks.getValidToken }
-})
-
 vi.mock('@/lib/ga4/admin', () => ({
   listGa4Properties: mocks.listGa4Properties,
+}))
+
+vi.mock('@/lib/ga4/client', () => ({
+  resolveAccessToken: mocks.resolveAccessToken,
 }))
 
 vi.mock('@/lib/ga4/property', () => ({
@@ -31,7 +30,6 @@ vi.mock('@/lib/ga4/property', () => ({
 }))
 
 import { GET, PATCH } from '../route'
-import { PlatformConnectionNotFoundError } from '@/lib/platform-oauth/token-manager'
 
 const CLIENT_ID = 'client-abc'
 
@@ -43,10 +41,10 @@ function adminAccess() {
   return { ok: true as const, user: { email: 'admin@test.com' }, role: 'admin' as const, allowedClientId: null }
 }
 
-function chainResolvingMaybeSingle(data: unknown) {
+function connectorRow(config: Record<string, unknown> | null) {
   const chain: Record<string, unknown> = {}
-  ;['select', 'eq', 'limit'].forEach((m) => { chain[m] = vi.fn().mockReturnValue(chain) })
-  chain.maybeSingle = vi.fn().mockResolvedValue({ data })
+  ;['select', 'eq'].forEach((m) => { chain[m] = vi.fn().mockReturnValue(chain) })
+  chain.maybeSingle = vi.fn().mockResolvedValue({ data: config === null ? null : { config } })
   return chain
 }
 
@@ -74,46 +72,53 @@ describe('GET /api/clients/[id]/ga4-properties', () => {
     expect(res.status).toBe(401)
   })
 
-  it('returns connected:false when the client has no active GA4 connection', async () => {
-    mocks.from.mockReturnValue(chainResolvingMaybeSingle(null))
+  it('returns connected:false when no Google token resolves for this client at all (GA4-specific or GSC-shared)', async () => {
+    mocks.from.mockReturnValue(connectorRow(null))
+    mocks.resolveAccessToken.mockResolvedValue(null)
+
     const res = await GET(makeGetRequest(), routeContext())
     const body = await res.json()
+
     expect(body).toEqual({ connected: false, current: null, options: [] })
   })
 
-  it('returns needs_reauth when the connection cannot be found for a token', async () => {
-    mocks.from.mockReturnValue(chainResolvingMaybeSingle({ account_id: 'properties/1' }))
-    mocks.getValidToken.mockRejectedValue(new PlatformConnectionNotFoundError(CLIENT_ID, 'google_ga4'))
+  it('is connected via the GSC-shared fallback token even with no client_connectors.ga4 row yet (#1052 root cause)', async () => {
+    mocks.from.mockReturnValue(connectorRow(null))
+    mocks.resolveAccessToken.mockResolvedValue('gsc-shared-token')
+    mocks.listGa4Properties.mockResolvedValue({ ok: true, properties: [] })
 
     const res = await GET(makeGetRequest(), routeContext())
     const body = await res.json()
+
     expect(body.connected).toBe(true)
-    expect(body.error).toBe('needs_reauth')
-    expect(body.options).toEqual([])
+    expect(body.current).toBeNull()
   })
 
-  it('returns google_unavailable when the token refresh throws something other than "not found"', async () => {
-    mocks.from.mockReturnValue(chainResolvingMaybeSingle({ account_id: 'properties/1' }))
-    mocks.getValidToken.mockRejectedValue(new Error('refresh failed'))
+  it('reads `current` from client_connectors (not platform_oauth_connections) and formats it as a resource name', async () => {
+    mocks.from.mockReturnValue(connectorRow({ property_id: '550203806' }))
+    mocks.resolveAccessToken.mockResolvedValue('token')
+    mocks.listGa4Properties.mockResolvedValue({ ok: true, properties: [] })
 
     const res = await GET(makeGetRequest(), routeContext())
     const body = await res.json()
-    expect(body.error).toBe('google_unavailable')
+
+    expect(body.current).toBe('properties/550203806')
   })
 
   it('returns google_unavailable when listGa4Properties itself fails (distinct from "zero properties")', async () => {
-    mocks.from.mockReturnValue(chainResolvingMaybeSingle({ account_id: 'properties/1' }))
-    mocks.getValidToken.mockResolvedValue('access-token')
+    mocks.from.mockReturnValue(connectorRow(null))
+    mocks.resolveAccessToken.mockResolvedValue('token')
     mocks.listGa4Properties.mockResolvedValue({ ok: false, reason: 'api_failed' })
 
     const res = await GET(makeGetRequest(), routeContext())
     const body = await res.json()
+
     expect(body.error).toBe('google_unavailable')
   })
 
   it('returns the current selection + available options on success', async () => {
-    mocks.from.mockReturnValue(chainResolvingMaybeSingle({ account_id: 'properties/1' }))
-    mocks.getValidToken.mockResolvedValue('access-token')
+    mocks.from.mockReturnValue(connectorRow({ property_id: '1' }))
+    mocks.resolveAccessToken.mockResolvedValue('token')
     mocks.listGa4Properties.mockResolvedValue({
       ok: true,
       properties: [
@@ -124,6 +129,7 @@ describe('GET /api/clients/[id]/ga4-properties', () => {
 
     const res = await GET(makeGetRequest(), routeContext())
     const body = await res.json()
+
     expect(body).toEqual({
       connected: true,
       current: 'properties/1',
@@ -155,11 +161,44 @@ describe('PATCH /api/clients/[id]/ga4-properties', () => {
     expect(body.reason).toBe('not_connected')
   })
 
-  it('returns success:true on a valid bind', async () => {
-    mocks.setGa4Property.mockResolvedValue({ ok: true })
-    const res = await PATCH(makePatchRequest({ property: 'properties/1' }), routeContext())
+  it('returns 400 with a plain-language message when the property id is malformed', async () => {
+    mocks.setGa4Property.mockResolvedValue({ ok: false, reason: 'invalid' })
+    const res = await PATCH(makePatchRequest({ property: 'not-a-property' }), routeContext())
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.reason).toBe('invalid')
+  })
+
+  it('returns success + status:connected on a verified bind', async () => {
+    mocks.setGa4Property.mockResolvedValue({ ok: true, status: 'connected', propertyId: '550203806' })
+    const res = await PATCH(makePatchRequest({ property: '550203806' }), routeContext())
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body).toEqual({ success: true, property: 'properties/1' })
+    expect(body).toEqual({ success: true, property: 'properties/550203806', status: 'connected' })
+  })
+
+  it('returns success:true + status:error with a plain-language reason when verification fails (permission)', async () => {
+    mocks.setGa4Property.mockResolvedValue({
+      ok: true, status: 'error', propertyId: '550203806',
+      reason: 'permission_denied', detail: 'no access',
+    })
+    const res = await PATCH(makePatchRequest({ property: '550203806' }), routeContext())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.success).toBe(true)
+    expect(body.status).toBe('error')
+    expect(body.reason).toBe('permission_denied')
+    expect(typeof body.message).toBe('string')
+  })
+
+  it('returns success:true + status:error with a plain-language reason when the property does not exist', async () => {
+    mocks.setGa4Property.mockResolvedValue({
+      ok: true, status: 'error', propertyId: '999999999',
+      reason: 'not_found', detail: 'no such property',
+    })
+    const res = await PATCH(makePatchRequest({ property: '999999999' }), routeContext())
+    const body = await res.json()
+    expect(body.status).toBe('error')
+    expect(body.reason).toBe('not_found')
   })
 })

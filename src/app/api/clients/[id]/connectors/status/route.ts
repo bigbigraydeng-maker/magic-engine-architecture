@@ -117,8 +117,11 @@ export async function GET(
       description: c.description,
       setupHint: c.setupHint,
       docsUrl: (c as { docsUrl?: string }).docsUrl,
-      status: status as 'connected' | 'not_connected' | 'partial',
-      statusLabel: status === 'connected' ? '已连接' : status === 'partial' ? '部分配置' : '未连接',
+      status: status as 'connected' | 'not_connected' | 'partial' | 'error',
+      statusLabel:
+        status === 'connected' ? '已连接' :
+        status === 'partial'   ? '部分配置' :
+        status === 'error'     ? '连接有问题' : '未连接',
       connectedAt: row?.connected_at ?? null,
       config: row?.config ?? null,
     }

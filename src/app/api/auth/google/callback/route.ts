@@ -22,6 +22,7 @@ import {
 import { supabaseAdmin } from '@/lib/supabase'
 import { encryptToken } from '@/lib/platform-oauth/vocabulary'
 import { listGa4Properties } from '@/lib/ga4/admin'
+import { setGa4Property } from '@/lib/ga4/property'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -181,13 +182,40 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       { onConflict: 'client_id,anchor' },
     )
 
-  // GA4 — resolve which property (if any) this Google account can see, and
-  // auto-connect it. Zero properties is a normal "customer doesn't have GA4
-  // yet" state, not an error — only a genuine API failure gets logged loudly
-  // (spec §2.6: "真的没有" vs "接口报错" must not be conflated). Multiple
-  // properties: take the first (same MVP simplification GBP already uses for
-  // its account picker) — settings page lets someone change it later via
-  // /api/clients/[id]/ga4-properties.
+  // GA4 — resolve which properties (if any) this Google account can see.
+  // Zero properties is a normal "customer doesn't have GA4 yet" state, not
+  // an error — only a genuine API failure gets logged loudly (spec §2.6:
+  // "真的没有" vs "接口报错" must not be conflated).
+  //
+  // 2026-08-18 rewrite (#1052 GA4 connector state-invariant fix, PM Gate
+  // BLOCKED on the original version): this used to unconditionally upsert
+  // `client_connectors.anchor='ga4', status='connected'` the moment the
+  // Admin API returned ANY properties — no verification, and no check for
+  // whether a connector row already existed. That meant every subsequent
+  // re-auth could silently: (a) mark GA4 "connected" without ever proving
+  // read access, (b) overwrite a human's deliberately-chosen property with
+  // whichever one happened to sort first, and (c) flip a diagnosed
+  // status='error' row back to 'connected' with a different property,
+  // erasing the error without fixing anything. That's three violations of
+  // the state invariant this PR establishes:
+  //   OAuth active       ≠ GA4 connected
+  //   Property discovered ≠ Property selected
+  //   Property selected   ≠ Property verified
+  //   status='connected'  = the selected property passed verifyGa4PropertyAccess()
+  //
+  // The only place allowed to write status='connected' is setGa4Property()
+  // (src/lib/ga4/property.ts) — it's the single source of truth for "does
+  // this token actually have read access to this property", and it already
+  // refuses to clobber a different, already-working connector. This
+  // callback calls that same function instead of re-implementing any part
+  // of that logic, and only in the one case narrow enough to not need a
+  // human decision: exactly one candidate property AND no client_connectors
+  // row exists yet at all (nothing to clobber, nothing to second-guess).
+  // Every other case — zero properties, more than one candidate, or a
+  // connector row already present in ANY status (connected OR error) —
+  // does nothing here and leaves it to the settings page's property picker
+  // (GET/PATCH /api/clients/[id]/ga4-properties), which re-verifies live on
+  // every save regardless of what this callback did or didn't do.
   if (tokens.refresh_token) {
     const ga4Result = await listGa4Properties(tokens.access_token)
     if (!ga4Result.ok) {
@@ -214,24 +242,26 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         )
       if (ga4Err) {
         console.warn('[google/callback] GA4 connection write failed:', ga4Err.message)
-      } else {
-        // 向导 Step 3 和每日同步 cron 判定"已连接"读的是这张表，不是
-        // platform_oauth_connections——漏了这一步 GA4 数据永远不会真的被拉取，
-        // 界面却显示绿勾（2026-08-11 复审发现，见 spec §2.2）。
-        await supabaseAdmin
+      } else if (ga4Result.properties.length === 1) {
+        const { data: existingConnector } = await supabaseAdmin
           .from('client_connectors')
-          .upsert(
-            {
-              client_id:    clientId,
-              anchor:       'ga4',
-              status:       'connected',
-              config:       { google_email: googleEmail, property_id: chosen.property },
-              connected_at: now,
-              updated_at:   now,
-            },
-            { onConflict: 'client_id,anchor' },
-          )
+          .select('id')
+          .eq('client_id', clientId)
+          .eq('anchor', 'ga4')
+          .maybeSingle<{ id: string }>()
+
+        if (!existingConnector) {
+          // Nothing to clobber — verify-then-write through the one shared
+          // path. If verification fails, setGa4Property() itself records
+          // status='error' with the reason; either way this callback never
+          // writes 'connected' directly.
+          await setGa4Property(clientId, chosen.property)
+        }
+        // existingConnector already present (connected OR error) → leave
+        // it exactly as-is; re-auth must never silently override it.
       }
+      // properties.length > 1 → ambiguous, no auto-pick; user chooses via
+      // the settings page picker, which lists all of them live from Google.
     }
     // properties.length === 0 → customer genuinely has no GA4 account yet,
     // not an error — nothing to write, matches the wizard's skip-and-move-on path.

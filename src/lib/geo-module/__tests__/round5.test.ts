@@ -6,7 +6,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { interpretObservation, extractAnswerBody, KNOWN_ENVELOPE_VERSIONS } from '../m1'
-import { makeObservation, makeEvidence, makeEvidenceRaw, makeRawEnvelope, ownedCitation } from './fixtures'
+import { makeObservation, makeEvidence, makeEvidenceRaw, makeRawEnvelope, ownedCitation, ROMAN_ENTITY_PROFILE } from './fixtures'
 
 const KNOWN_Q = { known: true, value: 'who should i hire to sell my house?' } as const
 
@@ -14,6 +14,7 @@ function interp(rawResponse: string) {
   return interpretObservation({
     observation: makeObservation(),
     evidence: makeEvidence({ raw_response: rawResponse }),
+    entityProfile: ROMAN_ENTITY_PROFILE,
     brandAliases: [],
     questionText: KNOWN_Q,
   })
@@ -24,6 +25,7 @@ function interpRawUnwrapped(rawResponse: string | null, extra: Partial<Parameter
   return interpretObservation({
     observation: makeObservation(),
     evidence: makeEvidenceRaw(rawResponse, extra),
+    entityProfile: ROMAN_ENTITY_PROFILE,
     brandAliases: [],
     questionText: KNOWN_Q,
   })
@@ -64,6 +66,7 @@ describe('P1 · raw_response 是 geo-baseline/openai/v1 信封，只扫 envelope
     const r = interpretObservation({
       observation: makeObservation(),
       evidence: makeEvidence({ raw_response: raw, citations: [ownedCitation()] as never }),
+      entityProfile: ROMAN_ENTITY_PROFILE,
       brandAliases: [],
       questionText: KNOWN_Q,
     })
