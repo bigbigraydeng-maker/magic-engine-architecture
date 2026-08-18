@@ -96,7 +96,7 @@ Consistent with the About page canonical description and the index Organization 
 - Australian Consumer Law reference
 - Cross-border data disclosure sections
 - NZ Company Number / NZBN display requirements
-- Contract migration effect on existing customer agreements
+- Historical web-publication review — see §9.5 item 6
 - Terms/Privacy versioning/effective-date semantics
 
 **PR checklist blocker**: these 4 files (EN + CN Terms + Privacy) **must not merge without legal counsel sign-off**. Even if the rest of the PR is approved, these four remain blocked.
@@ -112,13 +112,46 @@ Added Entity clarification callouts / notes at the top of each file, without rew
 
 **No history rewritten**. Existing `docs/history/CHANGELOG.md` and `docs/marketing/me-organic-growth-t0-baseline-*.md` (PR #1043) untouched — those are frozen receipts. Any correction to those goes as an additive clarification, not a rewrite.
 
+## 5a. `ABC Plus Home Pty Limited` — factual record
+
+**ABC Plus Home Pty Limited is a separate company also owned by Ray Deng. It has not been renamed to
+Magic Engine or Magic Engine AI Technology Limited and is not the current operator, parent, or legal
+predecessor of the Magic Engine product. It has no current role in Magic Engine operations. No
+corporate handover, rename, contract migration, or business transfer is part of this entity-alignment work.**
+
+中文记录：
+
+> ABC Plus Home Pty Limited 是 Ray Deng 持有的另一家独立公司。该公司未更名为 Magic Engine 或
+> Magic Engine AI Technology Limited，不是 Magic Engine 当前运营方、母公司或法律前身，目前不参与
+> Magic Engine 业务。本次实体对齐不涉及公司交接、更名、合同迁移或业务转让。
+
+Why it appeared on Magic Engine's public pages: the static Terms / Privacy / About / footers on
+`magicengine.com.au` at one point named `ABC Plus Home Pty Limited · ABN 45 674 442 445 · 98 Beatrice
+Ave, Ascot, Brisbane QLD 4007, Australia` as if it were Magic Engine's operating entity. That naming
+was factually wrong — the two companies are not the same, and neither is the successor to the other.
+This PR removes those strings from Magic Engine's public surface. It does not touch, transfer, or
+otherwise affect ABC Plus Home Pty Limited itself.
+
+Nothing in this PR should be read as implying:
+
+- that ABC Plus Home Pty Limited was ever Magic Engine's operator, parent, predecessor, or a party
+  to any Magic Engine customer contract;
+- that a corporate rename, business transfer, contract migration, or handover has occurred, is
+  planned, or is a legal requirement created by this PR;
+- that ABC Plus Home Pty Limited needs to be named anywhere on Magic Engine's site or contracts
+  going forward.
+
+Those are open legal / factual questions for counsel to answer against the actual publication and
+acceptance record (§9.5 item 6). This PR states only what is verifiable in the repo: `ABC Plus Home
+Pty Limited` should not have been in Magic Engine's public copy, and it has been removed.
+
 ## 6. Test results (§E)
 
 | # | Test | Result |
 |---|---|---|
 | E.1a | `ABC Plus Home Pty Limited` in `website/**` | 0 occurrences |
 
-**Two independent gates** — round 3 clarification: the **stale-entity scan** greps `website/**` (and, from round 2 onward, `src/**`) for the exact strings of the previous operating entity. The **legal-review gate** is a separate checklist that must be signed off by counsel before Terms/Privacy merge (§9.5). Neither gate substitutes for the other; passing one does not weaken the other. Round 1 tried to keep the two visually decoupled by rewording the historical entity reference inside a LEGAL REVIEW HTML comment — that comment was itself the wrong instrument and has been removed in round 3 (see §10.1). The stale-entity scan checks the exact old strings; the legal-review checklist is verified independently in the PR body and this document, not by grep.
+**Two independent gates** — round 3 clarification: the **stale-entity scan** greps `website/**` (and, from round 2 onward, `src/**`) for exact strings that name the wrong entity — most notably `ABC Plus Home Pty Limited` and its Brisbane street address, which were previously (and incorrectly) used as if they identified Magic Engine's operating entity (see §5a for the correct status of that company). The **legal-review gate** is a separate checklist that must be signed off by counsel before Terms/Privacy merge (§9.5). Neither gate substitutes for the other; passing one does not weaken the other. Round 1 tried to keep the two visually decoupled by rewording the historical entity reference inside a LEGAL REVIEW HTML comment — that comment was itself the wrong instrument and has been removed in round 3 (see §10.1). The stale-entity scan checks the exact strings; the legal-review checklist is verified independently in the PR body and this document, not by grep.
 | E.1b | `ABN 45 674 442 445` in `website/**` | 0 occurrences |
 | E.1c | `Magic Engine by Magic Lab` in `website/**` | 0 occurrences |
 | E.1d | `parentOrganization` in `website/**` | 0 occurrences |
@@ -202,8 +235,7 @@ Must be answered by counsel before ANY of the Terms/Privacy files merge:
 3. Australian Consumer Law reference.
 4. Cross-border data disclosure.
 5. NZ Company Number / NZBN public display requirement (nothing displayed today).
-6. Contract migration effect on customer agreements signed under the previous operating entity.
-7. Whether the previous operating entity must remain named anywhere for continuity of existing contracts.
+6. **Historical web-publication review** — earlier public Terms/Privacy pages named `ABC Plus Home Pty Limited`. A qualified lawyer should determine whether prior published versions need to be retained, archived, versioned, or accompanied by a correction notice, if any users accepted or relied on those versions. This PR makes no assumption that users have or have not accepted the earlier text, that any contract migration is required, or that any prior entity name must remain on the site.
 
 ### 9.6 CN canonical description — APPROVED by PM 2026-08-19
 
@@ -249,7 +281,7 @@ Round 1's E.4 was worded as "any `<address>` element on public site" — that wa
 
 ### 10.3 User-facing "Magic Lab administrator" copy (P2-2)
 
-Rewrote the current-product UI copy in **7 files** — every string a signed-in user actually sees. Full whole-repo classification pass done: 0 user-facing `Magic Lab` strings remain. Everything still greppable is one of three deliberately-retained categories, listed in §9.4 (Magic Lab Class the separate brand, the `Magic Lab` client-record name in `supabase/migrations/**` and diagnostic tests, and source-file comments).
+Rewrote the current-product UI copy in **9 UI/runtime source files, grouped into 7 audit bullets below** — every string a signed-in user actually sees. Full whole-repo classification pass done: 0 user-facing `Magic Lab` strings remain. Everything still greppable is one of three deliberately-retained categories, listed in §9.4 (Magic Lab Class the separate brand, the `Magic Lab` client-record name in `supabase/migrations/**` and diagnostic tests, and source-file comments).
 
 Files changed in round 3 for this:
 - `src/app/unauthorized/page.tsx` — "Contact your Magic Lab administrator." → "Contact your Magic Engine administrator."
