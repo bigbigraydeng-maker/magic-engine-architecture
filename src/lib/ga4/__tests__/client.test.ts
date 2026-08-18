@@ -160,4 +160,19 @@ describe('verifyGa4PropertyAccess', () => {
     expect(result.ok).toBe(false)
     expect(result).toMatchObject({ reason: 'api_error' })
   })
+
+  // 魏征 2026-08-18 复审: resolveAccessToken()'s legacy fallback
+  // (getValidAccessToken) isn't wrapped in try/catch at its own call site —
+  // a genuine exception (e.g. a Supabase network failure while looking up
+  // the token row) must not propagate out of verifyGa4PropertyAccess and
+  // become an unhandled 500 in the PATCH route; it must degrade to the same
+  // structured api_error result every other failure path produces.
+  it('degrades to reason:api_error instead of throwing when resolveAccessToken itself throws', async () => {
+    mocks.getValidToken.mockRejectedValue(new PlatformConnectionNotFoundError(CLIENT_ID, 'google_ga4'))
+    mocks.getValidAccessToken.mockRejectedValue(new Error('supabase network failure'))
+
+    const result = await verifyGa4PropertyAccess(CLIENT_ID, '550203806')
+
+    expect(result).toEqual({ ok: false, reason: 'api_error', detail: 'supabase network failure' })
+  })
 })

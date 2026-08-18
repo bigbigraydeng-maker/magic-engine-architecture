@@ -20,8 +20,24 @@ function record(table: string, method: string, args: unknown[]) {
   mocks.calls.push({ table, method, args })
 }
 
-function connectorsTable() {
+/**
+ * `existingConnector` models the pre-write `select(...).eq(...).eq(...).maybeSingle()`
+ * read setGa4Property now does before ever writing a 'error' row — default
+ * `null` (no prior connector row) matches every pre-existing test's assumed
+ * starting state.
+ */
+function connectorsTable(existingConnector: { status: string; config: Record<string, unknown> | null } | null) {
+  const readChain: Record<string, unknown> = {}
+  ;['select', 'eq'].forEach((m) => {
+    readChain[m] = vi.fn((...args: unknown[]) => { record('client_connectors', m, args); return readChain })
+  })
+  readChain.maybeSingle = vi.fn(() => {
+    record('client_connectors', 'maybeSingle', [])
+    return Promise.resolve({ data: existingConnector })
+  })
+
   return {
+    select: readChain.select,
     upsert: vi.fn((...args: unknown[]) => {
       record('client_connectors', 'upsert', args)
       return Promise.resolve({ error: null })
@@ -29,9 +45,9 @@ function connectorsTable() {
   }
 }
 
-function mockTables() {
+function mockTables(existingConnector: { status: string; config: Record<string, unknown> | null } | null = null) {
   mocks.from.mockImplementation((table: string) => {
-    if (table === 'client_connectors') return connectorsTable()
+    if (table === 'client_connectors') return connectorsTable(existingConnector)
     throw new Error(`unexpected table in test: ${table}`)
   })
 }
@@ -76,7 +92,7 @@ describe('setGa4Property', () => {
     const result = await setGa4Property('client-1', '550203806')
 
     expect(result).toEqual({ ok: false, reason: 'not_connected' })
-    expect(mocks.calls.some(c => c.table === 'client_connectors')).toBe(false)
+    expect(mocks.calls.some(c => c.table === 'client_connectors' && c.method === 'upsert')).toBe(false)
   })
 
   it(
@@ -107,7 +123,8 @@ describe('setGa4Property', () => {
     expect(result).toEqual({ ok: true, status: 'connected', propertyId: '550203806' })
   })
 
-  it('writes status:error with the reason + detail when the account has no permission on this property', async () => {
+  it('writes status:error with the reason + detail when there was no prior connector and the account has no permission', async () => {
+    mockTables(null)
     mocks.verifyGa4PropertyAccess.mockResolvedValue({
       ok: false, reason: 'permission_denied', detail: 'no access',
     })
@@ -126,7 +143,8 @@ describe('setGa4Property', () => {
     }))
   })
 
-  it('writes status:error when the property id does not resolve to any GA4 resource', async () => {
+  it('writes status:error when there was no prior connector and the property id does not resolve to any GA4 resource', async () => {
+    mockTables(null)
     mocks.verifyGa4PropertyAccess.mockResolvedValue({
       ok: false, reason: 'not_found', detail: 'no such property',
     })
@@ -136,6 +154,63 @@ describe('setGa4Property', () => {
     expect(result).toEqual({
       ok: true, status: 'error', propertyId: '999999999',
       reason: 'not_found', detail: 'no such property',
+    })
+  })
+
+  // 魏征 2026-08-18 复审: this used to be an unconditional upsert — trying and
+  // failing to switch to a NEW property_id would silently clobber a
+  // different, already-'connected', currently-syncing connector's row with
+  // status='error', breaking live GA4 sync with no warning. These three
+  // tests pin the fix: the DB write must only happen when it can't destroy
+  // a working connection for a DIFFERENT property.
+  describe('does not clobber an existing working connector with a different failing property', () => {
+    it('leaves the existing connected row untouched — no upsert call at all — when a different property fails verification', async () => {
+      mockTables({ status: 'connected', config: { property_id: '111111111' } })
+      mocks.verifyGa4PropertyAccess.mockResolvedValue({
+        ok: false, reason: 'permission_denied', detail: 'no access to this one',
+      })
+
+      const result = await setGa4Property('client-1', '999999999')
+
+      // Caller still learns the attempt failed...
+      expect(result).toEqual({
+        ok: true, status: 'error', propertyId: '999999999',
+        reason: 'permission_denied', detail: 'no access to this one',
+      })
+      // ...but the DB was never touched, so the working '111111111' row survives.
+      expect(mocks.calls.some(c => c.table === 'client_connectors' && c.method === 'upsert')).toBe(false)
+    })
+
+    it('DOES write status:error when the failing property IS the currently-connected one (access genuinely revoked)', async () => {
+      mockTables({ status: 'connected', config: { property_id: '550203806' } })
+      mocks.verifyGa4PropertyAccess.mockResolvedValue({
+        ok: false, reason: 'permission_denied', detail: 'access revoked',
+      })
+
+      const result = await setGa4Property('client-1', '550203806')
+
+      expect(result).toEqual({
+        ok: true, status: 'error', propertyId: '550203806',
+        reason: 'permission_denied', detail: 'access revoked',
+      })
+      const write = mocks.calls.find(c => c.table === 'client_connectors' && c.method === 'upsert')
+      expect(write).toBeDefined()
+    })
+
+    it('still writes status:error when the prior row exists but is NOT status=connected (e.g. already error, or never verified)', async () => {
+      mockTables({ status: 'error', config: { property_id: '111111111', error_reason: 'not_found' } })
+      mocks.verifyGa4PropertyAccess.mockResolvedValue({
+        ok: false, reason: 'permission_denied', detail: 'still no access',
+      })
+
+      const result = await setGa4Property('client-1', '999999999')
+
+      expect(result).toEqual({
+        ok: true, status: 'error', propertyId: '999999999',
+        reason: 'permission_denied', detail: 'still no access',
+      })
+      const write = mocks.calls.find(c => c.table === 'client_connectors' && c.method === 'upsert')
+      expect(write).toBeDefined()
     })
   })
 })

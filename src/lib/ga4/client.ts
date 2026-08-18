@@ -278,7 +278,22 @@ export async function verifyGa4PropertyAccess(
   clientId: string,
   propertyId: string,
 ): Promise<Ga4VerifyResult> {
-  const token = await resolveAccessToken(clientId)
+  // 魏征 2026-08-18 复审：resolveAccessToken() 的兜底路径（legacy
+  // getValidAccessToken）在自己的 Supabase 查询上没有 try/catch —— 一次
+  // 瞬时网络故障会直接抛出，未包裹的话会一路冒到 setGa4Property 和 PATCH
+  // handler，Next.js 只能返回一个没有 reason 字段的裸 500，而不是这个函数本
+  // 该给出的「暂时联系不上，稍后重试」这类可读错误。跟下面 runReport 那段
+  // try/catch 走同一条「genuine error → api_error」路径。
+  let token: string | null
+  try {
+    token = await resolveAccessToken(clientId)
+  } catch (err) {
+    return {
+      ok: false,
+      reason: 'api_error',
+      detail: err instanceof Error ? err.message : String(err),
+    }
+  }
   if (!token) {
     return {
       ok: false,

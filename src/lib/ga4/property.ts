@@ -75,11 +75,43 @@ export async function setGa4Property(
   }
 
   // Verification ran and failed for a reason other than "no token at all"
-  // (bad permission, property doesn't exist, or a genuine API error). Still
-  // record the attempt — so the settings page can show *what* was tried and
-  // *why* it didn't work, instead of silently discarding the input — but
-  // mark it 'error' so ga4/sync's `status === 'connected'` gate keeps
-  // rejecting it (see Phase B point 8: sync must stay disabled here).
+  // (bad permission, property doesn't exist, or a genuine API error).
+  //
+  // 魏征 2026-08-18 复审：这里以前是无条件 upsert(onConflict: client_id,anchor)
+  // —— 如果这个客户已经有一个 status='connected' 且真的在正常同步的 GA4
+  // property，用户（或者手滑）在手动输入框里填错了一个自己没权限的新
+  // property_id，验证失败后这个 upsert 会直接把好用的那一行**覆盖**成
+  // status='error'，property_id 也换成了填错的那个 —— 原本工作正常的
+  // 同步立刻被打断，且没有任何"顺手改坏了"的提示。先查一次已存在的行：
+  // 只有在"没有已连接的行"或"失败的就是当前正在用的这个 property_id 本身"
+  // 两种情况下才落库为 error；如果失败的是一个"不同于当前已连接"的
+  // property_id，就不动 DB，只把失败原因带回给调用方展示，保留原来那个
+  // still-working 的连接。
+  const { data: existing } = await supabaseAdmin
+    .from('client_connectors')
+    .select('status, config')
+    .eq('client_id', clientId)
+    .eq('anchor', 'ga4')
+    .maybeSingle<{ status: string; config: { property_id?: string } | null }>()
+
+  const existingPropertyId = existing?.config?.property_id
+  const wouldClobberWorkingConnector =
+    existing?.status === 'connected' &&
+    typeof existingPropertyId === 'string' &&
+    existingPropertyId !== propertyId
+
+  if (wouldClobberWorkingConnector) {
+    return { ok: true, status: 'error', propertyId, reason: verified.reason, detail: verified.detail }
+  }
+
+  // Still record the attempt — so the settings page can show *what* was
+  // tried and *why* it didn't work, instead of silently discarding the
+  // input — but mark it 'error' so ga4/sync's `status === 'connected'`
+  // gate keeps rejecting it (see Phase B point 8: sync must stay disabled
+  // here). Safe to upsert here: either there was no working connector to
+  // begin with, or this IS the currently-connected property that just
+  // started failing (e.g. access revoked) and its status genuinely needs
+  // to flip to 'error'.
   const { error: upsertErr } = await supabaseAdmin
     .from('client_connectors')
     .upsert(

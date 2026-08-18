@@ -25,6 +25,17 @@ describe('normalizeGa4PropertyId', () => {
   it('rejects an empty string', () => {
     expect(normalizeGa4PropertyId('')).toEqual({ ok: false })
   })
+
+  it('accepts a 20-digit id at the length cap', () => {
+    const id = '1'.repeat(20)
+    expect(normalizeGa4PropertyId(id)).toEqual({ ok: true, propertyId: id })
+  })
+
+  it('rejects a pathologically long digit string past the length cap (魏征 2026-08-18: no upper bound before this fix)', () => {
+    const tooLong = '1'.repeat(21)
+    expect(normalizeGa4PropertyId(tooLong)).toEqual({ ok: false })
+    expect(normalizeGa4PropertyId('9'.repeat(5000))).toEqual({ ok: false })
+  })
 })
 
 describe('toGa4ResourceName', () => {

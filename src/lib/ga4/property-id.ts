@@ -18,11 +18,19 @@ export type Ga4PropertyIdResult =
   | { ok: true; propertyId: string }
   | { ok: false }
 
+// GA4 property IDs are Google-issued small integers (current production
+// values are 9-10 digits); 20 digits is generously above any real GA4
+// property ID (max int64, ~19 digits) with headroom, while still rejecting
+// pathological input — e.g. a pasted multi-KB digit string — from being
+// stored in client_connectors.config and echoed into an outgoing Google API
+// URL (魏征 2026-08-18 复审: `^\d+$` alone has no upper bound).
+const MAX_PROPERTY_ID_LENGTH = 20
+
 /** Accepts `"550203806"` or `"properties/550203806"` → canonical bare digits. */
 export function normalizeGa4PropertyId(input: string): Ga4PropertyIdResult {
   const trimmed = input.trim()
   const bare = trimmed.startsWith('properties/') ? trimmed.slice('properties/'.length) : trimmed
-  if (!/^\d+$/.test(bare)) return { ok: false }
+  if (!/^\d+$/.test(bare) || bare.length > MAX_PROPERTY_ID_LENGTH) return { ok: false }
   return { ok: true, propertyId: bare }
 }
 
