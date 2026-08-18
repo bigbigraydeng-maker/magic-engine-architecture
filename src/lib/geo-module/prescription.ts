@@ -15,8 +15,10 @@ import { GEO_M1_RULE_VERSION } from './types'
  * 从一条 AI 可见度 finding 构建处方。
  *
  * `goalId` 允许未知（WP01 §5.3：目标可能还没建，强行要 id 会逼调用方编一个）。
+ * 🔴 `canonicalDisplayName` 用于 notDoing / orderingRationale 文本模板替换
+ *    （R8/R9 templated），不硬编码 `Roman`。
  */
-export function buildPrescription(finding: GrowthFinding): GrowthPrescription {
+export function buildPrescription(finding: GrowthFinding, canonicalDisplayName: string): GrowthPrescription {
   return {
     goalId: { known: false, reason: 'not_recorded_by_source' },
     covers: [finding],
@@ -26,7 +28,7 @@ export function buildPrescription(finding: GrowthFinding): GrowthPrescription {
         reason: `${GEO_M1_RULE_VERSION} §1：brand_aliases 为空，禁止别名推断与模糊匹配`,
       },
       {
-        statement: '不把「答案带引用」重述成 Roman 被提及或被推荐',
+        statement: `不把「答案带引用」重述成 ${canonicalDisplayName} 被提及或被推荐`,
         reason: `${GEO_M1_RULE_VERSION} §7：引用覆盖不是提及 / 推荐覆盖的代理`,
       },
       {
@@ -39,7 +41,7 @@ export function buildPrescription(finding: GrowthFinding): GrowthPrescription {
       },
     ],
     orderingRationale:
-      'AI 可见度是 Roman 首次诊断里证据最直接的一柱：基线显示答案普遍带引用却未建立正文合格提及，' +
-      '先补「让 AI 答案真正把 Roman 作为人 / 选项提及」的页面可答性，优先级高于其它未被证据支撑的动作。',
+      `AI 可见度是 ${canonicalDisplayName} 首次诊断里证据最直接的一柱：基线显示答案普遍带引用却未建立正文合格提及，` +
+      `先补「让 AI 答案真正把 ${canonicalDisplayName} 作为人 / 选项提及」的页面可答性，优先级高于其它未被证据支撑的动作。`,
   }
 }

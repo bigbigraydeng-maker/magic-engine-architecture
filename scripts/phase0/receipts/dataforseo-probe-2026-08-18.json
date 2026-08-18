@@ -1,0 +1,249 @@
+{
+  "run_id": "861aa847-5a0a-4544-a9f9-717da714e1ad",
+  "started_at": "2026-08-17T12:18:37.392Z",
+  "domain": "magicengine.com.au",
+  "client_id": "f1d062ca-929e-4b4e-ba6e-84752b748552",
+  "hard_cap_usd": 4,
+  "estimated_total_cost_usd": 0.87,
+  "endpoint_receipts": [
+    {
+      "endpoint": "labs/keyword_ideas",
+      "args": "magic engine ai|2036",
+      "cost": 0.075,
+      "rows": 25
+    },
+    {
+      "endpoint": "labs/keyword_ideas",
+      "args": "magic engine ai|2554",
+      "cost": 0.075,
+      "rows": 25
+    },
+    {
+      "endpoint": "labs/keyword_ideas",
+      "args": "ai marketing platform|2036",
+      "cost": 0.075,
+      "rows": 25
+    },
+    {
+      "endpoint": "labs/keyword_ideas",
+      "args": "ai marketing platform|2554",
+      "cost": 0.075,
+      "rows": 25
+    },
+    {
+      "endpoint": "labs/keyword_ideas",
+      "args": "ai search visibility|2036",
+      "cost": 0.075,
+      "rows": 25
+    },
+    {
+      "endpoint": "labs/keyword_ideas",
+      "args": "ai search visibility|2554",
+      "cost": 0.075,
+      "rows": 25
+    },
+    {
+      "endpoint": "labs/keyword_ideas",
+      "args": "best ai marketing agency|2036",
+      "cost": 0.075,
+      "rows": 25
+    },
+    {
+      "endpoint": "labs/keyword_ideas",
+      "args": "best ai marketing agency|2554",
+      "cost": 0.075,
+      "rows": 25
+    },
+    {
+      "endpoint": "labs/keyword_ideas",
+      "args": "ai marketing vs seo agency|2036",
+      "cost": 0.075,
+      "rows": 25
+    },
+    {
+      "endpoint": "labs/keyword_ideas",
+      "args": "ai marketing vs seo agency|2554",
+      "cost": 0.075,
+      "rows": 25
+    },
+    {
+      "endpoint": "labs/competitors_domain",
+      "args": "magicengine.com.au|2036",
+      "cost": 0.06,
+      "rows": 14
+    },
+    {
+      "endpoint": "labs/competitors_domain",
+      "args": "magicengine.com.au|2554",
+      "cost": 0.06,
+      "rows": 0
+    }
+  ],
+  "per_cluster": {
+    "brand_entity": {
+      "au": 25,
+      "nz": 25,
+      "median_vol_au": 9900,
+      "median_kd_au": 57,
+      "top_kw_au": [
+        "humanize ai",
+        "ai humanizer",
+        "ai image generator",
+        "humanise ai",
+        "ai detection"
+      ],
+      "median_vol_nz": 590,
+      "median_kd_nz": 49,
+      "top_kw_nz": [
+        "ai image generator",
+        "flow ai",
+        "ai photo generator",
+        "free ai image generator",
+        "what is ai"
+      ]
+    },
+    "category": {
+      "au": 25,
+      "nz": 25,
+      "median_vol_au": 1300,
+      "median_kd_au": 24,
+      "top_kw_au": [
+        "social media",
+        "digital marketing",
+        "social media marketing",
+        "marketing",
+        "digital marketing agency"
+      ],
+      "median_vol_nz": 260,
+      "median_kd_nz": 24,
+      "top_kw_nz": [
+        "marketing association",
+        "marketing",
+        "digital marketing",
+        "affiliate marketing",
+        "google marketing platform"
+      ]
+    },
+    "problem": {
+      "au": 25,
+      "nz": 25,
+      "median_vol_au": 6600,
+      "median_kd_au": 42,
+      "top_kw_au": [
+        "abn search",
+        "google search",
+        "google search console",
+        "search",
+        "www google com search"
+      ],
+      "median_vol_nz": 30,
+      "median_kd_nz": 11,
+      "top_kw_nz": [
+        "reverse image search",
+        "image search",
+        "binary search",
+        "humanize ai",
+        "ai image generator"
+      ]
+    },
+    "recommendation": {
+      "au": 25,
+      "nz": 25,
+      "median_vol_au": 1900,
+      "median_kd_au": 39,
+      "top_kw_au": [
+        "marketing",
+        "marketing agency",
+        "digital marketing agency",
+        "affiliate marketing",
+        "digital marketing"
+      ],
+      "median_vol_nz": 260,
+      "median_kd_nz": 33,
+      "top_kw_nz": [
+        "marketing association",
+        "marketing",
+        "digital marketing agency",
+        "marketing agency",
+        "digital marketing"
+      ]
+    },
+    "comparison": {
+      "au": 25,
+      "nz": 25,
+      "median_vol_au": 1900,
+      "median_kd_au": 31,
+      "top_kw_au": [
+        "seo agency",
+        "marketing",
+        "marketing agency",
+        "digital marketing agency",
+        "affiliate marketing"
+      ],
+      "median_vol_nz": 320,
+      "median_kd_nz": 33,
+      "top_kw_nz": [
+        "marketing association",
+        "marketing",
+        "seo agency",
+        "digital marketing agency",
+        "marketing agency"
+      ]
+    }
+  },
+  "competitors": {
+    "au": [
+      {
+        "domain": "youtube.com",
+        "intersections": 5,
+        "avg_position": 18.8
+      },
+      {
+        "domain": "business.gov.au",
+        "intersections": 4,
+        "avg_position": 22.25
+      },
+      {
+        "domain": "linkedin.com",
+        "intersections": 4,
+        "avg_position": 5
+      },
+      {
+        "domain": "instagram.com",
+        "intersections": 3,
+        "avg_position": 26.666666666666668
+      },
+      {
+        "domain": "facebook.com",
+        "intersections": 3,
+        "avg_position": 35.666666666666664
+      },
+      {
+        "domain": "amazon.com.au",
+        "intersections": 3,
+        "avg_position": 17.333333333333332
+      },
+      {
+        "domain": "google.com",
+        "intersections": 2,
+        "avg_position": 28
+      },
+      {
+        "domain": "weareengine.com.au",
+        "intersections": 2,
+        "avg_position": 20.5
+      },
+      {
+        "domain": "mapquest.com",
+        "intersections": 2,
+        "avg_position": 14
+      },
+      {
+        "domain": "x.com",
+        "intersections": 2,
+        "avg_position": 47.5
+      }
+    ],
+    "nz": []
+  }
+}

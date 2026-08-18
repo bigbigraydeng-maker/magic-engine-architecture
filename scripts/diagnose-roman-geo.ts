@@ -23,12 +23,23 @@
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { runGeoModule, type GeoObservationRecord, type SitePageRow } from '../src/lib/geo-module'
+import { runGeoModule, type GeoEntityProfile, type GeoObservationRecord, type SitePageRow } from '../src/lib/geo-module'
 import type { GeoEvidenceRow, GeoObservationRow } from '../src/lib/geo-measurement-store/types'
 import type { GrowthMaybeUnknown } from '../src/lib/growth'
 
 const ROMAN_CLIENT_ID = 'e7465ac7-4f3d-4d6a-afbe-d036ab419708'
 const ROMAN_BATCH_ID = '688bd8ae-2db6-4300-b761-b850f30c32c5'
+
+/**
+ * Roman 显式 entity profile —— shared GEO Module 已 de-hardcode，Roman 调用方必须显式传。
+ * 四字段值与旧代码里被移除的 `GEO_CANONICAL_ENTITY / GEO_ANCHORS_MULTIWORD / NZ_ANCHOR_RE / DOMAIN_ANCHORS` 逐一对齐。
+ */
+const ROMAN_ENTITY_PROFILE: GeoEntityProfile = {
+  canonicalDisplayName: 'Roman Hu',
+  disambiguationAnchors: ['real estate', 'realtor', 'realty', 'ray white'],
+  geoAnchorsMultiword: ['auckland', 'new zealand', 'aotearoa'],
+  geoAnchorsShortWordBoundary: ['nz'],
+}
 
 // ── 极简 .env.local 解析（不引 dotenv 依赖）────────────────────────────────────
 
@@ -202,6 +213,7 @@ function main(): void {
       const outcome = runGeoModule({
         clientId: ROMAN_CLIENT_ID,
         records,
+        entityProfile: ROMAN_ENTITY_PROFILE, // Roman 显式传（shared runtime 无 Roman fallback）
         brandAliases: [], // 权威注册表当前为空（M1 §1）
         ledgerPages,
         target: { pageUrl: targetPageUrl, intents: [] },

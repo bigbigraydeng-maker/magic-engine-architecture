@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { dayProgress, dayRow, dayWorklist, localDayStartMs, withoutOurActionsSince } from '../day-list'
-import type { ContactLike, TouchpointLike } from '../segments'
+import type { ContactLike, IndustryPlaybook, TouchpointLike } from '../segments'
 
 const NOW = new Date('2026-08-05T04:00:00.000Z') // 新西兰 8/5 下午 4 点
 /** 新西兰 8/5 零点 = UTC 8/4 12:00（UTC+12）。 */
@@ -1152,5 +1152,60 @@ describe('拨到空号不算今天跟进过', () => {
     const r = row(dialedDeadToday, false)
     expect(r.seg.phoneUnusable).toBe(true)
     expect(r.seg.suggestedChannel).toBe('email')
+  })
+})
+
+/**
+ * 行业剧本拆分之后新加的测试。`dayRow` 内部对同一个 `contact` 调用了
+ * 两次 `segmentContact`（冻结版一次、实时版一次）—— 拆分前这两次调用都是
+ * 硬编码的旅游逻辑，拆分后两次都必须读同一个传入的 `playbook`，不能有
+ * 任何一次悄悄退回默认的 `TOURISM_PLAYBOOK`。默认值今天会把这种漏传焊死
+ * 到看起来一致（两边都落到默认剧本），所以必须用一个**非默认**的 playbook
+ * 才能把这条裂缝测出来。
+ */
+describe('自定义 playbook 必须真的接进 dayRow，不能悄悄退回默认剧本', () => {
+  const ALWAYS_DUE: IndustryPlaybook = {
+    resolveWaitSignal: () => ({ due: true, nurtureReason: 'x', reengagedReason: 'y' }),
+  }
+  // 很久以前（不是今天）说过出行时间，冻结不会把它摘掉。
+  const spokeLongAgo = [
+    tp({ direction: 'outbound', occurredAt: '2026-07-14T00:00:00.000Z', travelWindow: '明年三月' }),
+  ]
+
+  it('基准：默认旅游剧本判「以后才走」，不进今天名单', () => {
+    const r = dayRow(person(spokeLongAgo), NOW, { dayStartMs: DAY_START, touchedToday: false })
+    expect(r.seg.segment).toBe('nurture_future')
+    expect(r.onList).toBe(false)
+  })
+
+  it('换成「一律当到期」的剧本，onList 必须跟着变 —— 证明冻结版真的用了传入的 playbook', () => {
+    const r = dayRow(person(spokeLongAgo), NOW, {
+      dayStartMs: DAY_START, touchedToday: false, playbook: ALWAYS_DUE,
+    })
+    expect(r.seg.segment).not.toBe('nurture_future')
+    expect(r.onList).toBe(true)
+  })
+
+  it('resolveWaitSignal 恰好被调用两次 —— 冻结版和实时版用的是同一个传入的 playbook', () => {
+    let calls = 0
+    const spy: IndustryPlaybook = {
+      resolveWaitSignal: () => {
+        calls++
+        return null
+      },
+    }
+    dayRow(person(spokeLongAgo), NOW, { dayStartMs: DAY_START, touchedToday: false, playbook: spy })
+    expect(calls).toBe(2)
+  })
+
+  /** `dayWorklist` 也要把 playbook 透传给它内部调的 `dayRow`，不能在半路弄丢。 */
+  it('dayWorklist 同样把 playbook 传到底', () => {
+    const rows = dayWorklist([person(spokeLongAgo)], NOW, {
+      dayStartMs: DAY_START,
+      touchedToday: () => false,
+      playbook: ALWAYS_DUE,
+    })
+    expect(rows).toHaveLength(1)
+    expect(rows[0].seg.segment).not.toBe('nurture_future')
   })
 })

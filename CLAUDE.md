@@ -3,6 +3,7 @@
 **输出语言**：对话和说明**一律用中文**，无论用户用什么语言提问。代码 / 变量 / 注释保持英文。
 
 **每次开新会话先读**：[docs/STATE.md](./docs/STATE.md)（系统现状）→ [docs/ROADMAP.md](./docs/ROADMAP.md)（要做什么）。
+**平台化必读**：[ME2 Reuse & Platformization Principle](./docs/roadmap/2026-08-19-me2-platformization-principle.md) —— **所有开发窗口、Work Package、Claude Code/Codex 会话都受它约束。**
 **必读规则**：[`~/.claude/rules/coding-style.md`](~/.claude/rules/coding-style.md) · [`~/.claude/rules/development-workflow.md`](~/.claude/rules/development-workflow.md)
 
 ---
@@ -38,6 +39,34 @@ OpenAI→**Content Engine** · Claude→**Strategy Engine** · WaveSpeed/Muapi�
 ---
 
 ## 铁律
+
+### 0. 平台化 / Reuse First（所有任务的前置闸）
+
+Magic Engine 的目标是**一个共享平台 + 多个垂直版本**。真实客户、Customer Zero、Roman、CTS 等场景用于发现和验证平台能力，**不得默认演化成客户特供系统**。
+
+默认共享：**Capability · Adapter / Connector · Kernel / Governance · Measurement Contract · Growth Contract · Verification / Attribution / Flywheel · 可安全泛化的 Learning / Memory 机制**。
+
+行业差异进入 **Industry Playbook / Profile / Policy**；客户差异进入 **client configuration / approved evidence / private memory**。未来 **ME Real Estate / ME Travel** 应建立在同一底层平台上，而不是复制一套新系统。
+
+每个开发任务开工前必须依次通过：
+
+1. **Repository Fact Gate**：先 `git fetch origin`，Current State Audit 第一行必须报告 `remote fetched at + exact main SHA`；没有 SHA，审计不成立。
+2. **Domain Semantics Gate**：确认所谓“通用”模块内部没有把首个客户/行业语义硬编码成平台规则。`clientId` 参数化不等于语义通用。
+3. **Product Gate**：确认解决的是正确产品问题，不因现有代码反向改写产品目标。
+4. **Architecture / Reuse Gate**：先复用，再扩展；需要新能力时明确为什么现有 Capability / Adapter / Contract 不能承载。
+5. **GO BUILD**：前四关通过后才能进入实现。
+
+每个有实质产出的交付必须附 **Reuse Statement**，至少回答：
+- 复用了什么已有平台能力？
+- 新增内容哪些是真正 platform-shared？
+- 哪些是 industry-specific？
+- 哪些是 client-specific？
+- 有没有把客户名、客户 ID、行业判断或客户私有事实写进 shared runtime？如果有，为什么不是 Playbook / Profile / Policy / Configuration？
+- 哪些学习仍只在 client-private memory，哪些有证据升级到 industry/global memory？
+
+> **快速自检**：如果明天把 Roman 换成 CTS，再换成一个悉尼地产客户，这段 shared code 是否需要改？如果需要，必须解释为什么它不应该被下沉成 Playbook/Profile/Configuration。
+
+完整冻结原则见：[docs/roadmap/2026-08-19-me2-platformization-principle.md](./docs/roadmap/2026-08-19-me2-platformization-principle.md)。
 
 ### 1. 跟 PM 说话（PM 是非技术 PM）
 
@@ -137,6 +166,7 @@ Claude Code 干：大范围重构 · 跨模块长链路 · 复杂调试 · 架�
    摘要格式：`【SEO】… 【GEO】… 【Meta 广告】… 【GBP】… 下一步：…`（≤300 字，中文）
    客户 ID：CTS Tours NZ `c0000000-0000-0000-0000-000000000000` · Oztop `d5c98811-1c1d-4ded-bdf0-4cefec6afb84`
    纯对话 / 纯查询 / 未落地的讨论**不算**实际操作，不写。
+5. 有实质开发/审计交付时附 **Reuse Statement**；不能只写“完成了什么”，还要说明共享/行业/客户边界与是否复用了已有平台能力。
 
 ---
 
@@ -150,6 +180,7 @@ Claude Code 干：大范围重构 · 跨模块长链路 · 复杂调试 · 架�
 | [docs/DECISIONS.md](./docs/DECISIONS.md) | 为什么是现在这样 / 哪些老决策已作废 |
 | [docs/PITFALLS.md](./docs/PITFALLS.md) | **动手前扫一眼** — 真实事故清单 |
 | [docs/ENGINEERING_QUALITY_GATES.md](./docs/ENGINEERING_QUALITY_GATES.md) | **每个 Issue / PR 开工前** — A/B/C 风险级别、对应验证强度、review 停止条件 |
+| [docs/roadmap/2026-08-19-me2-platformization-principle.md](./docs/roadmap/2026-08-19-me2-platformization-principle.md) | **所有开发窗口必读** — Reuse First、垂直版本共享底层、五道 Build Gate、Memory 泛化边界 |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) · [docs/PRODUCT.md](./docs/PRODUCT.md) | 数据模型 / API 分域 · 产品愿景与商业模式 |
 | [docs/specs/](./docs/specs/) · [docs/sops/](./docs/sops/) | 单功能设计文档 · 可复用操作手册 |
 | [docs/agents/](./docs/agents/) · [docs/clients/](./docs/clients/) · [docs/history/](./docs/history/) | agent 人设（Codex 入口 `CODEX.md`）· 客户交付物 · 完成日志与历史快照 |
