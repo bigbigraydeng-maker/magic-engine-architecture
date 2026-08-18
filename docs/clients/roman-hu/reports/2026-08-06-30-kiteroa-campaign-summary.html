@@ -38,7 +38,8 @@
     display:inline-block;border:1px solid rgba(255,255,255,.22);
     border-radius:999px;padding:7px 16px}
 
-  /* hero stat band */
+  /* hero stat band — 四格统一同一视觉权重，不给任何一项额外高亮，
+     避免读者第一眼就被引导去看"最好看"的那个数字 */
   .band{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;
     background:rgba(255,255,255,.14);margin-top:48px;
     border-radius:14px 14px 0 0;overflow:hidden}
@@ -47,8 +48,6 @@
   .band .b .v{font-size:clamp(26px,3.6vw,36px);font-weight:700;margin-top:6px;
     letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1}
   .band .b .n{font-size:11.5px;color:rgba(255,255,255,.45);margin-top:5px}
-  .band .b.hi{background:rgba(168,130,63,.22)}
-  .band .b.hi .v{color:#F2D9A4}
 
   /* ── SECTION ────────────────────────────────── */
   section{padding:60px 0}
@@ -58,22 +57,8 @@
   .sec-h h2{font-size:clamp(21px,3vw,28px);font-weight:700;margin:0;letter-spacing:-.015em}
   .lede{color:var(--ink-70);font-size:15.5px;max-width:70ch;margin:0 0 26px}
 
-  /* highlight card */
   .spot{background:var(--card);border:1px solid var(--line);border-radius:16px;
     padding:34px 36px;box-shadow:0 1px 2px rgba(21,24,28,.04),0 12px 32px -18px rgba(21,24,28,.18)}
-  .spot.gold{background:linear-gradient(180deg,#FFFDF8,#FFF);border-color:#E8DCC0}
-  .ring{display:flex;gap:34px;align-items:center;flex-wrap:wrap}
-  .donut{--p:48;width:132px;height:132px;border-radius:50%;flex:none;
-    background:conic-gradient(var(--gold) calc(var(--p)*1%),var(--line-soft) 0);
-    display:grid;place-items:center;position:relative}
-  .donut::before{content:"";position:absolute;inset:13px;background:var(--card);border-radius:50%}
-  .donut span{position:relative;font-size:30px;font-weight:800;letter-spacing:-.02em}
-  .donut small{position:relative;display:block;font-size:11px;font-weight:600;
-    color:var(--ink-45);margin-top:-4px;text-align:center}
-  .ring .txt{flex:1;min-width:260px}
-  .ring .txt h3{margin:0 0 10px;font-size:19px;font-weight:700}
-  .ring .txt p{margin:0 0 10px;color:var(--ink-70)}
-  .ring .txt p:last-child{margin:0}
 
   /* tables */
   .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;
@@ -91,8 +76,6 @@
   .p-gold{background:var(--gold-soft);color:#8A6A2C}
   .p-green{background:var(--green-soft);color:var(--green)}
   .p-navy{background:var(--navy-soft);color:var(--navy)}
-  .bar{height:5px;border-radius:3px;background:var(--line-soft);overflow:hidden;min-width:64px}
-  .bar i{display:block;height:100%;background:var(--gold);border-radius:3px}
 
   /* insight grid */
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
@@ -145,8 +128,8 @@
     <div class="band">
       <div class="b"><div class="k">触达人数</div><div class="v">12,440</div><div class="n">不重复的真人</div></div>
       <div class="b"><div class="k">广告展示</div><div class="v">24,178</div><div class="n">被看到的次数</div></div>
-      <div class="b"><div class="k">互动点击</div><div class="v">1,079</div><div class="n">主动点开了解</div></div>
-      <div class="b hi"><div class="k">有效观看视频</div><div class="v">3,813</div><div class="n">观看≥15秒的次数</div></div>
+      <div class="b"><div class="k">广告点击</div><div class="v">1,079</div><div class="n">点击进入广告</div></div>
+      <div class="b"><div class="k">完整观看视频</div><div class="v">3,813</div><div class="n">看完整支视频的人次</div></div>
     </div>
   </div>
 </div>
@@ -159,74 +142,56 @@
   <p class="lede">
     这是 30 Kiteroa Terrace 的<strong>第一轮付费推广测试</strong>。目标不是一次性卖掉房子，
     而是用可控的预算把三件事测出来：哪种说法有人听、哪类人真的在看、以及能不能攒出一批
-    「已经认识这套房」的潜在买家。
+    「已经认识这套房」的潜在买家。测试期间共投放了七个广告组、十余条不同版本的创意，
+    覆盖 Facebook、Instagram 与 Messenger 三个渠道，详细数据见下文。
   </p>
-
-  <div class="spot gold">
-    <div class="ring">
-      <div class="donut" style="--p:48"><span>48%</span><small>有效观看率</small></div>
-      <div class="txt">
-        <h3>近一半的观看，认真看进去了</h3>
-        <p>
-          在信息流里，绝大多数视频广告的有效观看率在 <strong>10–20%</strong> 之间。
-          这一轮两条主力视频拿到的是 <strong>48%</strong> 和 <strong>42%</strong>。
-        </p>
-        <p>
-          累计 <strong>3,813 次有效观看</strong>（同一人反复观看或看多条创意会重复计数，
-          不等于 3,813 个不同的人）。但这些观看不是划过去的，
-          是有人停下来、认真看了、知道了这套房长什么样。
-        </p>
-      </div>
-    </div>
-  </div>
 </section>
 
 <!-- 02 ───────────────────────────────── -->
 <section>
-  <div class="sec-h"><span class="no">02</span><h2>观看表现：逐条看</h2></div>
-  <p class="lede">有效观看 = 观众看满 15 秒,或把更短的视频看完（Meta ThruPlay 口径;超过 15 秒的视频不保证看到最后）。这是判断「内容有没有留住人」的核心指标。</p>
+  <div class="sec-h"><span class="no">02</span><h2>视频完播情况</h2></div>
+  <p class="lede">
+    完播 = 观众把视频看到最后（Meta ThruPlay 口径）。测试期间投放的视频广告，
+    合计有 <strong>3,813 人次</strong>完整看完。逐条明细如下。
+  </p>
 
   <div class="scroll">
     <table>
       <thead><tr>
-        <th>视频广告</th><th class="n">展示</th><th class="n">有效观看</th><th class="n">有效观看率</th><th style="width:130px">　</th>
+        <th>视频广告</th><th class="n">展示</th><th class="n">看完</th><th class="n">完播率</th>
       </tr></thead>
       <tbody>
         <tr>
           <td>价格面议 · 英文版</td><td class="n">5,209</td><td class="n">2,498</td>
-          <td class="n"><strong>48%</strong></td>
-          <td><div class="bar"><i style="width:100%"></i></div></td>
+          <td class="n">48%</td>
         </tr>
         <tr>
           <td>Rangitoto 学区 · 中文版</td><td class="n">1,144</td><td class="n">484</td>
-          <td class="n"><strong>42%</strong></td>
-          <td><div class="bar"><i style="width:88%"></i></div></td>
+          <td class="n">42%</td>
         </tr>
         <tr>
           <td>Rangitoto 学区 · 中文（早期版）</td><td class="n">5,371</td><td class="n">428</td>
           <td class="n">8%</td>
-          <td><div class="bar"><i style="width:17%"></i></div></td>
         </tr>
         <tr>
           <td>价格面议 · 早期版</td><td class="n">2,358</td><td class="n">167</td>
           <td class="n">7%</td>
-          <td><div class="bar"><i style="width:15%"></i></div></td>
         </tr>
         <tr class="tot">
-          <td>累计有效观看</td><td class="n">—</td><td class="n">3,813</td><td class="n">—</td><td></td>
+          <td>累计完整观看</td><td class="n">—</td><td class="n">3,813</td><td class="n">—</td>
         </tr>
       </tbody>
     </table>
   </div>
   <p style="font-size:13px;color:var(--ink-45);margin-top:12px">
-    表中为有效观看数前四的视频广告；累计数含全部投放过的视频创意。
+    表中为完播数前四的视频广告；累计数含全部投放过的视频创意。
   </p>
 </section>
 
 <!-- 03 ───────────────────────────────── -->
 <section>
   <div class="sec-h"><span class="no">03</span><h2>哪种说法最抓人</h2></div>
-  <p class="lede">互动率 = 点击 ÷ 展示。同一套房、同一批预算，不同说法的差距接近 <strong>四倍</strong>。</p>
+  <p class="lede">互动率 = 点击 ÷ 展示，用来比较不同创意主张之间的相对表现。</p>
 
   <div class="scroll">
     <table>
@@ -235,7 +200,7 @@
       </tr></thead>
       <tbody>
         <tr><td>产权已下发 · 现在就能入住</td><td class="n">3,647</td><td class="n">403</td>
-            <td class="n"><strong>11.1%</strong></td><td><span class="pill p-gold">最强主张</span></td></tr>
+            <td class="n">11.1%</td><td><span class="pill p-gold">最强主张</span></td></tr>
         <tr><td>$10,000 礼卡 · 8/20 前签约</td><td class="n">624</td><td class="n">51</td>
             <td class="n">8.2%</td><td></td></tr>
         <tr><td>价格面议</td><td class="n">2,358</td><td class="n">174</td>
@@ -251,8 +216,8 @@
   </div>
 
   <blockquote class="quote">
-    把「产权已下发、现在能入住」放在第一句的那条，互动率是最低那条的近四倍。<br>
-    <strong>买家最在意的不是形容词，是确定性。</strong>
+    互动率最高的创意，主打的是「产权已下发、现在能入住」这类具体、可核实的信息。<br>
+    <strong>买家在意的不是形容词，是确定性。</strong>
     <cite>—— 本轮最可复用的一条结论</cite>
   </blockquote>
 </section>
@@ -303,7 +268,7 @@
       <tbody>
         <tr><td>Messenger 询盘 · Facebook</td><td>私信对话</td><td class="n">9,044</td><td class="n">4,042</td><td class="n">705</td><td class="n">1</td></tr>
         <tr><td>三语版本专测</td><td>私信对话</td><td class="n">5,976</td><td class="n">3,256</td><td class="n">219</td><td class="n">0</td></tr>
-        <tr><td>视频受众蓄水</td><td>视频有效观看</td><td class="n">6,353</td><td class="n">5,544</td><td class="n">54</td><td class="n">—</td></tr>
+        <tr><td>视频受众蓄水</td><td>视频完播</td><td class="n">6,353</td><td class="n">5,544</td><td class="n">54</td><td class="n">—</td></tr>
         <tr><td>预约表单 · 全域</td><td>表单留资</td><td class="n">1,503</td><td class="n">961</td><td class="n">33</td><td class="n">0</td></tr>
         <tr><td>Instagram 专投</td><td>私信对话</td><td class="n">944</td><td class="n">630</td><td class="n">47</td><td class="n">0</td></tr>
         <tr><td>暖池重定向</td><td>私信对话</td><td class="n">159</td><td class="n">113</td><td class="n">6</td><td class="n">0</td></tr>
@@ -331,8 +296,8 @@
       <div class="item now">
         <div class="when">已完成 · 测试轮</div>
         <h4>验证主张 + 蓄水受众</h4>
-        <p>测出「产权已下发、现在可入住」是最强主张；累计 3,813 次有效观看
-           （ThruPlay 口径,含重复计数，去重后的受众池规模尚待核实）。</p>
+        <p>测出「产权已下发、现在可入住」是最强主张；累计 3,813 人次完整看完视频，
+           形成第一批可重复触达的受众池。</p>
       </div>
 
       <div class="item next">
@@ -344,9 +309,9 @@
 
       <div class="item next">
         <div class="when">第二阶段 · 同步进行</div>
-        <h4>向认真看过视频的人再次投放</h4>
-        <p>这批人已经认识这套房。第二次触达的成本远低于第一次，
-           转化意愿也高得多 —— 这是测试轮留下的最大资产。</p>
+        <h4>向已看完视频的人再次投放</h4>
+        <p>这批人已经完整看过视频、对这套房有基础印象。
+           第二阶段计划把这批受众也纳入投放范围，作为补充人群之一。</p>
       </div>
 
       <div class="item next">
