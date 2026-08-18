@@ -7,6 +7,48 @@
 
 ---
 
+## 2026-08-19 · AI 可见度三系统整合：判断层统一到 M1，ai-tracker 降级为采集层
+
+**决策**：仓库里同时存在三套 AI 可见度测量系统（`geo-baseline`+`geo-module` M1 / `ai-tracker` / `industry-ai-visibility`），PO 拍板做减法：
+
+1. **判断层（品牌是否被提及/推荐/排名）统一到 `geo-module/m1.ts`**。`ai-tracker/parser.ts` 现有判断逻辑判定为技术负债、**停用**——不是删代码，是「以后新的判断结果一律走 M1，不再产生新的 parser.ts 判断」。
+2. **采集层保留 `ai-tracker` 的机制**：`question-generator.ts`（从 `master_briefs` 生成候选问题）+ 4 引擎（openai/gemini/perplexity/claude）周度采集节奏，是 M1 现在没有的能力，保留、未来接上 M1 判断。**迁移前必须核实** 4 个 runner 的 `raw_response` 有没有跟 geo-baseline/provider.ts 今天修过的同类 bug（JSON 信封污染判断文本）。
+3. **`industry-ai-visibility`（行业级，走 DataForSEO AI Overview/SERP）不动、不合并**——服务行业基准（未来 Yellowbook），不是单客户诊断，产品面本质不同。
+4. CTS 现有 102 条 `ai_visibility_queries`（`source=auto_generated`）当候选池保留，不作废；但已产出的 8 份 `ai_visibility_snapshots`（parser.ts 判断结果）**不能当 M1 级别的真提及率使用**，CTS 走 geo-baseline 路线时要用 M1 重新测一次干净基线。
+5. **不能静默切**：`ai_visibility_score` 已喂进 Goals（`goal-current-value-refresh` cron 读取），且前端 `/dashboard/ai-visibility/[clientId]/` 已存在真实客户看板——迁移必须分阶段、向后兼容，禁止一刀切断已上线功能。
+
+**为什么**：`ai-tracker/parser.ts` 的品牌命中逻辑是**子串模糊匹配**（`brand.toLowerCase().includes(clientLower)`，且允许反向 includes），M1 明令禁止这种做法（M1 用 `buildEntityMatcher` 精确别名匹配 + 否定探测 + owned-citation 剔除）。子串匹配已实测命中 CTS 客户档警告过的真实陷阱——「CTS」与母公司「China Travel Service」（1928）之间的混淆正是子串匹配最容易撞上的场景。此外 parser.ts 把「列表里出现」直接当「排名/推荐」，不区分提及 vs 推荐，无证据不足 defer 机制，无 lineage/审计字段；M1 有五档推荐分级（仅 `explicit_positive` 进指标）、`defer`/`indeterminate` 优先于编造的正结论、`reasonCodes` 全审计。
+
+**证据（代码对比）**：
+
+```ts
+// ai-tracker/parser.ts —— 子串模糊匹配，双向 includes
+const clientMention = brands.find(b => {
+  const bLower = b.brand.toLowerCase()
+  return (
+    b.brand.toLowerCase().includes(clientLower) ||
+    (clientLower.length >= 3 && bLower.length >= 3 && clientLower.includes(bLower))
+  )
+})
+```
+
+```ts
+// geo-module/m1.ts —— 精确别名注册表 + 否定探测 + defer 优先
+function buildEntityMatcher(aliases: readonly string[]): RegExp { /* 精确别名，非子串 */ }
+// disposition: 'defer' 永远优先于一个可能编出来的正结论（见文件头注释）
+// owned citation ≠ mention（M1 §7，Codex #1032 第 5 轮 P1 生产实证）
+```
+
+**影响面**：
+- Cron：`ai-tracker-weekly`（`render.yaml`，每周一 01:00 UTC）继续跑，暂不改；`industry-ai-visibility-daily`（每天 02:30 UTC，⚠️ route 命名历史遗留为 `/api/cron/ai-visibility-weekly`，实际调 industry 逻辑）不动；`goal-current-value-refresh`（读 `ai_visibility_score` 喂 Goals）依赖链未来要切换。
+- 依赖 `ai_visibility_score` 的代码：`src/app/api/cron/goal-current-value-refresh/route.ts`、`src/lib/strategy/baseline-audit.ts`、`src/lib/strategy/auto-fetch.ts`、`src/lib/flywheel/anomaly/rules.ts`、`src/lib/factory/copy-generator.ts`、`src/types/strategy.ts`。
+- 前端：`src/app/dashboard/ai-visibility/[clientId]/`（RankingsTable / ModelStats / QueriesManager / EngineComparison）。
+- 表：`ai_visibility_queries` / `ai_visibility_runs` / `ai_visibility_snapshots`（ai-tracker）vs `geo_query_sets` / `geo_queries` / `geo_batches` / `geo_observations` / `geo_evidence`（geo-baseline，冻结契约见 #883/#917 WP04A）。
+
+**注意与 2026-05-17 决策的关系**：当时「AI Tracker 保留自建，不切 Apify」是判**采集端** vendor 选型，跟这条判**判断层**逻辑不冲突——ai-tracker 的自建采集机制（4 引擎周度节奏）本条继续保留，只是判断结果的产出方式要换成 M1。
+
+**后续步骤**：五阶段迁移计划见 tracking issue（子牙 + 魏征已复审，意见追加在 issue 里，未闭合）。**A 级任务**，禁止一次性授权，每阶段单独要 PO `go`。
+
 ## 2026-08-14 · 工程质量按风险分级，不一刀切
 
 **决策**：所有 Issue / PR 开工前声明 A / B / C 风险级别，测试、集成、mutation 和 review 强度按真实失败后果匹配。统一原则：**高风险地基慢而稳，普通业务正常推进，UI 和原型继续快。** 完整规则见 [ENGINEERING_QUALITY_GATES.md](./ENGINEERING_QUALITY_GATES.md)。
