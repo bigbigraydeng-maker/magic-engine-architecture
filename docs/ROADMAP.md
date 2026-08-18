@@ -50,8 +50,7 @@
 > **别把「issue 已关闭」读成「功能已在生产生效」** —— 关闭只代表代码交付完成。
 
 **未完成**：
-- [x] ~~**WP05**~~ ✅ **2026-08-17 完成** [#879](https://github.com/bigbigraydeng-maker/magic-engine/issues/879) GEO Module v1（PR [#1032](https://github.com/bigbigraydeng-maker/magic-engine/pull/1032)）—— 第一个 Domain Module，`src/lib/growth` 首个消费方。按冻结的 `geo-module/m1/v1` 语义把 #883 GEO 证据读成 `GrowthEvidence → Finding → Prescription → ActionCandidate → PageOptimizationRequest`（或诚实 defer）。Roman 首次诊断：正文合格提及 **2/12**、explicit_positive 推荐 **0/12**、defer 0（详见 [`docs/clients/roman-hu/reports/2026-08-17-geo-first-diagnosis-v1.md`](./clients/roman-hu/reports/2026-08-17-geo-first-diagnosis-v1.md)）。**owned citation 2/12 是引用覆盖，M1 §7 明令不得当作提及/推荐**。
-- [x] ~~**WP05 前置**~~ ✅ **2026-08-17 完成** [#930](https://github.com/bigbigraydeng-maker/magic-engine/issues/930) Roman 页面台账的发现与激活边界 —— canonical inventory 已激活 21 页（PR [#1020](https://github.com/bigbigraydeng-maker/magic-engine/pull/1020) 台账落库适配器 CanonicalInventoryStore）。
+> WP05（#879）与前置 #930 已于 2026-08-17 合入 main（PR #1032 / #1020）—— 详见 [CHANGELOG](./history/CHANGELOG.md)，此处按仓库约定不再保留完成项。
 
 **WP05 follow-up**（本轮不扩，登记待排）：
 - [ ] **#1023** WP05 follow-up

@@ -22,11 +22,11 @@
 
 **关键澄清（必带）**：**冻结基线的「owned citation 2/12」是「引用覆盖」（Roman 的域名被引用），不是提及、不是推荐**。M1 §7 明令不得把「答案带引用」重述成提及/推荐覆盖。本次 2/12 提及、0/12 推荐是**答案正文里的判定**，与引用覆盖是两回事，不可混说、不可相加。
 
-**A 级质量闸**：92 单测（M1 各判据 + 端到端 + 变异证据 + 架构守卫）· `npm run build` 通过 · 基线 222 无回归 · 子牙 / 魏征 / 狄仁杰四轮复审闭合。
+**A 级质量闸**：105 单测（M1 各判据 + 端到端 + 变异证据 + 架构守卫；含五轮修复的 round3/round5 回归+变异专测）· `npm run build` 通过 · 基线 222 无回归 · 子牙 / 魏征 / 狄仁杰**五轮**复审闭合。
 
 **follow-up（不阻塞本次上线）**：[#1023](https://github.com/bigbigraydeng-maker/magic-engine/issues/1023) · [#1030](https://github.com/bigbigraydeng-maker/magic-engine/issues/1030) · [#1040](https://github.com/bigbigraydeng-maker/magic-engine/issues/1040)（聚合分组键需按引擎/模型/查询集版本隔离 + severity 分母独立锁 + finding statement 表述错位）。
 
-**下一步**：现在诚实 `defer=unattributable_proposed_value` —— WP05 只推理不造文案。首页 subtitle 的 grounding 文案（en+zh 各两行）已由协调会话给出，等落 `src/i18n/ui.ts` 后触发 WP06/WP07 apply（当前卡 `cms_connections=0`）。
+**下一步**：现在诚实 `defer=unattributable_proposed_value` —— WP05 只推理不造文案。首页 subtitle 的 grounding 文案（en+zh 各两行）已由协调会话给出，落 Roman 站点仓的 i18n 后可触发 WP06。**WP07 apply 多重硬前置未就绪**：K-WP01（#881 认证审批 UI + 政策 Settings UI）· `action-bridge/mapping-table.ts` 的 `MAPPING_TABLE` 仍为空 · 生产 Kernel 表/RPC 未 apply · Roman 无 Goal · `cms_connections=0`——详见 Roman 首诊报告下一步段。
 
 ---
 

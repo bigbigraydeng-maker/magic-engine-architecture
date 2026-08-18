@@ -76,7 +76,12 @@ subtitle 版本（en/zh 各两行），拟由后续 PR 落到 `src/i18n/ui.ts` �
 ## 下一步（依 WP 顺序）
 
 1. **grounding 落地**（`src/i18n/ui.ts` 首页 subtitle 两行 en+zh）→ WP06 draft/diff
-2. **WP07** 授权 apply（Kernel 授权 + `action_run`）—— **当前卡 `cms_connections = 0`**（Roman 站的 CMS 连接未建立）
+2. **WP07** 授权 apply（Kernel 授权 + `action_run`）—— **多重硬前置未就绪**，不是单一 `cms_connections = 0` 能解锁：
+   - `cms_connections = 0`（Roman 站的 CMS 连接未建立）
+   - **K-WP01（#881）** 认证审批 UI + 政策 Settings UI 未完成
+   - `src/lib/action-bridge/mapping-table.ts` 的 `MAPPING_TABLE` **仍为空数组**（候选身份→ActionKey 映射未登记）
+   - 生产 Kernel 表 / RPC **尚未 apply**（`action_runs` / `execution_items` 在生产库不存在）
+   - Roman 站**尚无 Goal**（增长动作会被数据库约束拒绝，见 [`docs/clients/roman-hu/2026-08-10-geo-reference-loop-scope-v1.0.md`](../2026-08-10-geo-reference-loop-scope-v1.0.md) §5.3）
 3. **WP10** 归因回流，读复测批次判 success / failure / indeterminate
 4. **follow-up**（不阻塞本次收官）
    - **#1023** WP05 待办
@@ -85,7 +90,7 @@ subtitle 版本（en/zh 各两行），拟由后续 PR 落到 `src/i18n/ui.ts` �
 
 ## 引擎与合规状态
 
-- **引擎**：`geo-module/m1/v1`（PR #1032）— 92 单测全绿、`npm run build` ✓、`growth/geo/page-optimization` 基线 222 无回归
-- **A 级验证**：证据五段链单测 + 端到端 + 变异证据（M1 各判据、句子级绑定、聚合护栏、租户隔离）
-- **三审**：子牙（架构）/ 魏征（挑刺）/ 狄仁杰（隔离）四轮复审闭合
+- **引擎**：`geo-module/m1/v1`（PR #1032）— 105 单测全绿、`npm run build` ✓、`growth/geo/page-optimization` 基线 222 无回归
+- **A 级验证**：证据五段链单测 + 端到端 + 变异证据（M1 各判据、句子级绑定、聚合护栏、租户隔离、envelope 解包、词边界）
+- **三审**：子牙（架构）/ 魏征（挑刺）/ 狄仁杰（隔离）**五轮**复审闭合
 - **数据边界**：只读 Roman 生产库（`geo_observations` / `geo_evidence` / `geo_queries` / `client_site_pages`），零写、未回写 #883、未 apply migration
