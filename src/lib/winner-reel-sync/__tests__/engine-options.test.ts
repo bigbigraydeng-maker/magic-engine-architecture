@@ -31,6 +31,12 @@ vi.mock('@/lib/meta/token-manager', () => ({
   getMetaTokenForClient: async () => 'user-token',
 }))
 
+// AD-SEC-1 归属校验(target_adset_id 那一半)要实拉 ad set——account_id 跟
+// CONFIG_ROW.ad_account_id 一致，代表"配置的 ad set 确实是这个账户下的"。
+vi.mock('@/lib/meta/adsets', () => ({
+  getAdSetStatus: async () => ({ id: 'adset1', name: 'x', status: 'ACTIVE', account_id: 'act_1' }),
+}))
+
 // 建广告后会去记「投的是哪条片」(lib/ads/creative-link)，它走 @/lib/supabase 而不是
 // 下面那个 createClient 替身。这里把库打成空的：链接一条都认不出来 —— 正好用来证明
 // 「认不出片子绝不能拖累建广告本身」，本文件的 adsAdded 断言仍然成立。

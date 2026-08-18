@@ -28,6 +28,12 @@ vi.mock('@/lib/meta/token-manager', () => ({
   getMetaTokenForClient: async () => 'user-token',
 }))
 
+// AD-SEC-1 归属校验(target_adset_id 那一半)要实拉 ad set——account_id 跟
+// CONFIG_ROW.ad_account_id 一致，代表"配置的 ad set 确实是这个账户下的"。
+vi.mock('@/lib/meta/adsets', () => ({
+  getAdSetStatus: async () => ({ id: 'adset1', name: 'x', status: 'ACTIVE', account_id: 'act_1' }),
+}))
+
 vi.mock('@/lib/ads/creative-link', () => ({
   linkAdToCreative: (...a: unknown[]) => linkAdToCreative(...a),
 }))

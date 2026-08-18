@@ -24,6 +24,11 @@ vi.mock('@/lib/meta/page-posts', () => ({
 vi.mock('@/lib/meta/token-manager', () => ({ getMetaTokenForClient: async () => 'user-token' }))
 vi.mock('@/lib/ads/creative-link', () => ({ linkAdToCreative: async () => ({ creativeRef: null, creativeSource: null, linkMethod: 'unresolved', unresolvedReason: null }) }))
 
+let adSetAccountId: string | null = 'act_111'
+vi.mock('@/lib/meta/adsets', () => ({
+  getAdSetStatus: async () => (adSetAccountId ? { id: 'adset1', name: 'x', status: 'ACTIVE', account_id: adSetAccountId } : null),
+}))
+
 const CONFIG_ROW = {
   client_id: 'client-a',
   fb_page_id: 'page-of-client-a',
@@ -69,6 +74,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   syncLogInserts = []
   clientRow = { meta_ad_account_id: 'act_111', facebook_page_id: 'page-of-client-a' }
+  adSetAccountId = 'act_111'
 })
 
 describe('syncWinnerReels — 配置归属校验', () => {
@@ -106,5 +112,23 @@ describe('syncWinnerReels — 配置归属校验', () => {
     clientRow = { meta_ad_account_id: '111', facebook_page_id: 'page-of-client-a' } // 无 act_ 前缀
     const r = await syncWinnerReels('client-a')
     expect(r.status).toBe('ok')
+  })
+
+  it('🔴 Codex 复审 P1 必改：账户/主页都对得上，但 target_adset_id 实查出来挂在别的账户下 → 拒绝', async () => {
+    // 账户和主页字段本身没配错，但配置表里的 target_adset_id 打错/串到了
+    // 另一个账户的 ad set——只核对 clients 表字段挡不住这种，必须真拉 Meta。
+    adSetAccountId = 'act_999_别的账户'
+    const r = await syncWinnerReels('client-a')
+    expect(r.status).toBe('error')
+    expect(r.errorMessage).toContain('target_adset_id')
+    expect(createAdFromPost).not.toHaveBeenCalled()
+    expect(pauseAd).not.toHaveBeenCalled()
+  })
+
+  it('target_adset_id 在 Meta 那边读不出来 → fail closed，不是当成"没关系继续跑"', async () => {
+    adSetAccountId = null
+    const r = await syncWinnerReels('client-a')
+    expect(r.status).toBe('error')
+    expect(createAdFromPost).not.toHaveBeenCalled()
   })
 })
