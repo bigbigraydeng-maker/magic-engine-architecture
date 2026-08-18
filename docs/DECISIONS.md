@@ -57,7 +57,7 @@ function buildEntityMatcher(aliases: readonly string[]): RegExp { /* 精确别�
 
 **注意与 2026-05-17 决策的关系**：当时「AI Tracker 保留自建，不切 Apify」是判**采集端** vendor 选型。本条退役 ai-tracker 后该决策的对象不复存在（不再有 ai-tracker 采集端要选 vendor）；客户级采集能力今后由 M1 承担，行业级由系统 C（DataForSEO）承担，那条旧决策就此作废。
 
-**后续步骤**：拆除执行顺序（先断消费方 → 平移共享件 → 删代码 → 最后 DROP 表，DROP 不可逆需 PO `go apply`）见拆除清单 §6 与 tracking issue #1073。原「五阶段小心迁移」计划随本次授权作废。**A 级任务**，禁止一次性授权，**每一步单独要 PO `go`**。
+**后续步骤**：拆除执行顺序（先断消费方 → 平移共享件 → 删代码 → 最后 DROP 表，DROP 不可逆需 PO `go apply`）见拆除清单 §6 与 tracking issue #1073。原「五阶段小心迁移」计划随本次授权作废。**子牙（架构）+ 魏征（挑刺）已复审拆除清单，判「可作真删 PR 依据」，修正意见已并入清单 §4/§8/§9**（含护城河靶心：flywheel `geo.query.mention_rate` 断供 → 诸葛亮归因失效，见清单 §9.1）。**A 级任务**，禁止一次性授权，**每一步单独要 PO `go`**。
 
 ## 2026-08-14 · 工程质量按风险分级，不一刀切
 
