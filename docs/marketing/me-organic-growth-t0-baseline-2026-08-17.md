@@ -240,6 +240,8 @@ All other fields (tone, VI, keyword_seeds, competitor_domains, content_pillars, 
 | recommendation | 1,900 | 39 | 260 | 33 | **Contested**: mid-vol mid-KD both markets. Need owned-page + third-party mentions to compete. |
 | comparison | 1,900 | 31 | 320 | 33 | **Actionable**: high-volume comparison queries with KD ≤ 33 both markets — case-study 0 candidate territory. |
 
+**Method limitation (added 2026-08-19, T0 Freeze Gate closure)**: DataForSEO `keyword_ideas` may produce semantically weak expansions for low-volume branded or entity terms. Brand/entity and problem-cluster medians are directional discovery signals, not confirmed collision or competitive-demand findings. Phase 1 decisions require query-level review and supporting GSC/market evidence.
+
 **SERP competitor intersections** (AU top 5):
 
 | Domain | Intersections (of 15) | Avg position |
