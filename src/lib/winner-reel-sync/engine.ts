@@ -92,6 +92,49 @@ async function loadConfig(clientId: string): Promise<SyncConfig | null> {
   }
 }
 
+function normalizeAccountId(id: string): string {
+  return id.startsWith('act_') ? id.slice(4) : id
+}
+
+/**
+ * AD-SEC-1：`winner_reel_sync_config` 这张表自己没有归属校验——如果某一行
+ * 配错/串成了别的客户的 ad_account_id / fb_page_id，这个 engine 会往错的
+ * 客户账户里建广告、暂停错客户的广告。触发它的两处（每日 cron + 看板「补新
+ * 素材」按钮）都不收实体 id，没法在入口拦，守卫只能放在这里、读配置之后、
+ * 碰 Meta 之前。
+ *
+ * 🔴 局限：只核对 `clients` 表登记的账户 / 主页是否跟配置行一致，挡的是
+ * 「配置行串到了别的客户」这一类。CTS / Oztop 这类共用同一个 Meta 广告账户
+ * 的客户，`ad_account_id` 天然相同——这条守卫对「同账户内配错到另一个共享
+ * 该账户的客户」挡不住，跟 `campaign-ownership.ts` 是同一个已知局限，根治
+ * 需要账户拆分（产品/运维决策）。`target_adset_id` 本身不在这里核对（不属于
+ * `clients` 表任何字段，逐个真拉 Meta 核对是更大改动，未包含在这次范围内）。
+ */
+async function assertConfigOwnedByClient(
+  cfg: SyncConfig,
+  clientId: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const { data: client, error } = await supabaseAdmin
+    .from('clients')
+    .select('meta_ad_account_id, facebook_page_id')
+    .eq('id', clientId)
+    .maybeSingle()
+
+  if (error) return { ok: false, reason: `查不到客户的账户登记：${error.message}` }
+  const registeredAccountId = (client as { meta_ad_account_id?: string | null } | null)
+    ?.meta_ad_account_id
+  const registeredPageId = (client as { facebook_page_id?: string | null } | null)
+    ?.facebook_page_id
+
+  if (!registeredAccountId || normalizeAccountId(cfg.adAccountId) !== normalizeAccountId(registeredAccountId)) {
+    return { ok: false, reason: 'winner_reel_sync_config 里的广告账户跟这个客户在 clients 表登记的对不上，已拒绝执行（防止配错到别家客户账户）' }
+  }
+  if (!registeredPageId || cfg.fbPageId !== registeredPageId) {
+    return { ok: false, reason: 'winner_reel_sync_config 里的 Facebook 主页跟这个客户在 clients 表登记的对不上，已拒绝执行' }
+  }
+  return { ok: true }
+}
+
 async function writeLog(result: SyncResult): Promise<void> {
   await supabaseAdmin.from('winner_reel_sync_log').insert({
     client_id: result.clientId,
@@ -156,6 +199,15 @@ export async function syncWinnerReels(clientId: string, opts: SyncOptions = {}):
     if (!cfg) {
       result.status = 'skipped'
       result.errorMessage = 'sync disabled or config missing'
+      await writeLog(result)
+      return result
+    }
+
+    // AD-SEC-1：读到配置之后、碰 Meta 之前，先核对这行配置真的是这个客户的。
+    const ownership = await assertConfigOwnedByClient(cfg, clientId)
+    if (!ownership.ok) {
+      result.status = 'error'
+      result.errorMessage = ownership.reason
       await writeLog(result)
       return result
     }

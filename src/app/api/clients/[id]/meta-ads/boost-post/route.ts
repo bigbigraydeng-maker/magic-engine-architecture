@@ -72,7 +72,7 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
   // Fetch client's Meta ad account ID
   const { data: client, error: clientErr } = await supabaseAdmin
     .from('clients')
-    .select('name, meta_ad_account_id')
+    .select('name, meta_ad_account_id, facebook_page_id')
     .eq('id', clientId)
     .single()
 
@@ -86,6 +86,23 @@ export async function POST(req: NextRequest, { params }: RouteContext) {
         error: 'Meta ad account not configured for this client. Set meta_ad_account_id in client settings.',
       },
       { status: 422 },
+    )
+  }
+
+  // AD-SEC-1 同类：page_id 来自请求体，必须核对它真的是这个客户登记的主页——
+  // 否则有权限的人能提交别家客户的 page_id/post_id，把广告花在别人的帖子上。
+  // 局限：只挡"这不是这个客户的主页"这一类，不核对 post_id 本身是不是那个
+  // 主页发的（Meta 建 boost campaign 时会自然校验 post 归属，建不出来就报错）。
+  if (!client.facebook_page_id) {
+    return NextResponse.json(
+      { error: 'Facebook page not configured for this client. Set facebook_page_id in client settings.' },
+      { status: 422 },
+    )
+  }
+  if (client.facebook_page_id !== page_id) {
+    return NextResponse.json(
+      { error: 'page_id does not match this client\'s registered Facebook page — rejected to prevent cross-client boosting.' },
+      { status: 403 },
     )
   }
 

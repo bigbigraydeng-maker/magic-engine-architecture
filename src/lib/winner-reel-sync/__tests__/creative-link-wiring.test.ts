@@ -48,6 +48,9 @@ const CONFIG_ROW = {
 
 let syncLogInserts: Record<string, unknown>[] = []
 
+// AD-SEC-1 归属校验用到的 clients 行——账户/主页跟 CONFIG_ROW 一致。
+const CLIENT_ROW = { meta_ad_account_id: 'act_1', facebook_page_id: '748077268383005' }
+
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
     from: (table: string) => {
@@ -57,7 +60,9 @@ vi.mock('@supabase/supabase-js', () => ({
         maybeSingle: async () =>
           table === 'winner_reel_sync_config'
             ? { data: CONFIG_ROW, error: null }
-            : { data: null, error: null },
+            : table === 'clients'
+              ? { data: CLIENT_ROW, error: null }
+              : { data: null, error: null },
         insert: async (row: Record<string, unknown>) => {
           if (table === 'winner_reel_sync_log') syncLogInserts.push(row)
           return { error: null }

@@ -60,6 +60,10 @@ const CONFIG_ROW = {
   slack_webhook_url: null,
 }
 
+// AD-SEC-1 归属校验用到的 clients 行——账户/主页跟 CONFIG_ROW 一致，
+// 代表「配置行确实是这个客户的」这条happy path。
+const CLIENT_ROW = { meta_ad_account_id: 'act_1', facebook_page_id: 'page1' }
+
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
     from: (table: string) => {
@@ -69,7 +73,9 @@ vi.mock('@supabase/supabase-js', () => ({
         maybeSingle: async () =>
           table === 'winner_reel_sync_config'
             ? { data: CONFIG_ROW, error: null }
-            : { data: null, error: null },
+            : table === 'clients'
+              ? { data: CLIENT_ROW, error: null }
+              : { data: null, error: null },
         insert: async () => ({ error: null }),
       }
       return builder

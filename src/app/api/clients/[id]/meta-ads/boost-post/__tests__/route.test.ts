@@ -16,15 +16,19 @@ vi.mock('@/lib/auth/client-access', () => ({
   requireDashboardClientAccess: async () => ({ ok: true }),
 }))
 
+// 让每个测试能各自覆盖客户行——归属校验（AD-SEC-1 同类）的测试需要模拟
+// facebook_page_id 缺失/对不上这两种拒绝路径。
+let clientRow: Record<string, unknown> | null = {
+  name: 'Oztop',
+  meta_ad_account_id: 'act_1',
+  facebook_page_id: '748077268383005',
+}
 vi.mock('@/lib/supabase', () => ({
   supabaseAdmin: {
     from: () => ({
       select: () => ({
         eq: () => ({
-          single: async () => ({
-            data: { name: 'Oztop', meta_ad_account_id: 'act_1' },
-            error: null,
-          }),
+          single: async () => ({ data: clientRow, error: clientRow ? null : { message: 'not found' } }),
         }),
       }),
     }),
@@ -56,6 +60,7 @@ const BODY = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  clientRow = { name: 'Oztop', meta_ad_account_id: 'act_1', facebook_page_id: '748077268383005' }
   process.env.META_SYSTEM_USER_TOKEN = 'token'
   boostPagePost.mockResolvedValue({ campaign_id: 'c', ad_set_id: 'as', ad_id: 'ad-777' })
   linkAdToCreative.mockResolvedValue({
@@ -107,5 +112,23 @@ describe('POST /meta-ads/boost-post', () => {
 
     expect(res.status).toBe(502)
     expect(linkAdToCreative).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /meta-ads/boost-post — 归属校验(AD-SEC-1 同类)', () => {
+  it('请求体 page_id 跟这个客户登记的主页对不上 → 拒绝，不建广告', async () => {
+    const res = await POST(
+      req({ ...BODY, page_id: '别家客户的主页id' }),
+      { params: { id: 'client-oztop' } },
+    )
+    expect(res.status).toBe(403)
+    expect(boostPagePost).not.toHaveBeenCalled()
+  })
+
+  it('客户还没配主页 → 拒绝，不静默信请求体', async () => {
+    clientRow = { name: 'Oztop', meta_ad_account_id: 'act_1', facebook_page_id: null }
+    const res = await POST(req(BODY), { params: { id: 'client-oztop' } })
+    expect(res.status).toBe(422)
+    expect(boostPagePost).not.toHaveBeenCalled()
   })
 })
