@@ -20,7 +20,7 @@ import {
 import { GEO_QUALIFIED_MENTION_FINDING_REF } from '../finding'
 import { buildQualifiedMentionVerification } from '../verification'
 import type { PageOptimizationIntent } from '@/lib/page-optimization'
-import { makeObservation, makeEvidence, ownedCitation, romanLedgerPages, ROMAN_CLIENT_ID } from './fixtures'
+import { makeObservation, makeEvidence, ownedCitation, romanLedgerPages, ROMAN_CLIENT_ID, ROMAN_ENTITY_PROFILE } from './fixtures'
 
 const NO_QUESTION = { known: false, reason: 'not_recorded_by_source' } as const
 
@@ -50,6 +50,7 @@ describe('端到端：Roman 基线证据 + 台账页 → 合法 PageOptimization
   const out = runGeoModule({
     clientId: ROMAN_CLIENT_ID,
     records: [citationOnlyRecord('obs-a', 'q1'), citationOnlyRecord('obs-b', 'q2')],
+    entityProfile: ROMAN_ENTITY_PROFILE,
     brandAliases: [],
     ledgerPages: romanLedgerPages(),
     target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },
@@ -102,6 +103,7 @@ describe('诚实 defer', () => {
           questionText: NO_QUESTION,
         },
       ],
+      entityProfile: ROMAN_ENTITY_PROFILE,
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },
@@ -121,6 +123,7 @@ describe('诚实 defer', () => {
     const out = runGeoModule({
       clientId: ROMAN_CLIENT_ID,
       records: [citationOnlyRecord('obs-a', 'q1')],
+      entityProfile: ROMAN_ENTITY_PROFILE,
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://not-in-ledger.example/x', intents: groundedIntents },
@@ -140,6 +143,7 @@ describe('诚实 defer', () => {
     const out = runGeoModule({
       clientId: ROMAN_CLIENT_ID,
       records: [citationOnlyRecord('obs-a', 'q1')],
+      entityProfile: ROMAN_ENTITY_PROFILE,
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://romanhu.com/about', intents: [] },
@@ -162,6 +166,7 @@ describe('读侧租户隔离（fail-closed）', () => {
             questionText: NO_QUESTION,
           },
         ],
+        entityProfile: ROMAN_ENTITY_PROFILE,
         brandAliases: [],
         ledgerPages: romanLedgerPages(),
         target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },
@@ -180,6 +185,7 @@ describe('读侧租户隔离（fail-closed）', () => {
             questionText: NO_QUESTION,
           },
         ],
+        entityProfile: ROMAN_ENTITY_PROFILE,
         brandAliases: [],
         ledgerPages: romanLedgerPages(),
         target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },
@@ -191,6 +197,7 @@ describe('读侧租户隔离（fail-closed）', () => {
     const out = runGeoModule({
       clientId: ROMAN_CLIENT_ID,
       records: [citationOnlyRecord('obs-a', 'q1')],
+      entityProfile: ROMAN_ENTITY_PROFILE,
       brandAliases: [],
       ledgerPages: [{ client_id: 'someone-else', url: 'https://romanhu.com/about' }],
       target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },
@@ -216,6 +223,7 @@ describe('变异证据：故意破坏每条不变量，断言校验器变红', (
     const base = runGeoModule({
       clientId: ROMAN_CLIENT_ID,
       records: [citationOnlyRecord('obs-a', 'q1')],
+      entityProfile: ROMAN_ENTITY_PROFILE,
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },
@@ -239,6 +247,7 @@ describe('变异证据：故意破坏每条不变量，断言校验器变红', (
     const out = runGeoModule({
       clientId: ROMAN_CLIENT_ID,
       records: [citationOnlyRecord('obs-a', 'q1')],
+      entityProfile: ROMAN_ENTITY_PROFILE,
       brandAliases: [],
       ledgerPages: romanLedgerPages(),
       target: { pageUrl: 'https://romanhu.com/about', intents: groundedIntents },

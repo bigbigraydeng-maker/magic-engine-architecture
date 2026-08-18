@@ -8,7 +8,7 @@ import { summarizeCoverage, buildQualifiedMentionFinding } from '../finding'
 import { resolveLedgerPage } from '../page-request'
 import { interpretObservation } from '../m1'
 import { validateGrowthEvidence } from '@/lib/growth'
-import { makeObservation, makeEvidence, romanLedgerPages, ROMAN_CLIENT_ID } from './fixtures'
+import { makeObservation, makeEvidence, romanLedgerPages, ROMAN_CLIENT_ID, ROMAN_ENTITY_PROFILE } from './fixtures'
 import type { GeoObservationInterpretation } from '../types'
 
 const NO_QUESTION = { known: false, reason: 'not_recorded_by_source' } as const
@@ -44,6 +44,7 @@ describe('聚合护栏（M1 §7）', () => {
     return interpretObservation({
       observation: makeObservation({ id, query_key: queryKey }),
       evidence: makeEvidence({ id: `ev-${id}`, observation_id: id, raw_response: rawResponse }),
+      entityProfile: ROMAN_ENTITY_PROFILE,
       brandAliases: [],
       // 已知问句（不与正文重合、不点名 Roman）——否则 body_match + 问句未知会触发 defer。
       questionText: { known: true, value: 'who is a good agent to hire?' },
@@ -61,11 +62,13 @@ describe('聚合护栏（M1 §7）', () => {
     const it1 = interpretObservation({
       observation: makeObservation({ id: 'u1', query_key: null, query_key_unknown_reason: 'not_recorded_by_source' }),
       evidence: makeEvidence({ id: 'ev-u1', observation_id: 'u1' }),
+      entityProfile: ROMAN_ENTITY_PROFILE,
       brandAliases: [], questionText: NO_QUESTION,
     })
     const it2 = interpretObservation({
       observation: makeObservation({ id: 'u2', query_key: null, query_key_unknown_reason: 'not_recorded_by_source' }),
       evidence: makeEvidence({ id: 'ev-u2', observation_id: 'u2' }),
+      entityProfile: ROMAN_ENTITY_PROFILE,
       brandAliases: [], questionText: NO_QUESTION,
     })
     expect(summarizeCoverage([it1, it2]).queryCount).toBe(2)
@@ -79,7 +82,7 @@ describe('聚合护栏（M1 §7）', () => {
 
   it('无证据 → 建不出 finding（返回 null，不硬造无证据发现）', () => {
     const s = summarizeCoverage([])
-    expect(buildQualifiedMentionFinding(s, [])).toBeNull()
+    expect(buildQualifiedMentionFinding(s, [], ROMAN_ENTITY_PROFILE.canonicalDisplayName)).toBeNull()
   })
 })
 

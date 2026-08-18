@@ -24,7 +24,7 @@ import {
   validateGrowthVerificationDefinition,
 } from '@/lib/growth'
 import type { PageOptimizationIntent, PageOptimizationRequest } from '@/lib/page-optimization'
-import { interpretObservation } from './m1'
+import { interpretObservation, validateEntityProfile } from './m1'
 import { toGrowthEvidence } from './evidence'
 import { buildQualifiedMentionFinding, hasVisibilityGap, summarizeCoverage } from './finding'
 import { buildPrescription } from './prescription'
@@ -36,7 +36,7 @@ import {
   type GeoPageRequestReason,
   type SitePageRow,
 } from './page-request'
-import type { GeoCoverageSummary, GeoObservationInterpretation } from './types'
+import type { GeoCoverageSummary, GeoEntityProfile, GeoObservationInterpretation } from './types'
 
 /** 一条观测记录：观测行 + 其证据行（失败观测为 null）+ 该 query 的问句原文。 */
 export interface GeoObservationRecord {
@@ -48,6 +48,12 @@ export interface GeoObservationRecord {
 export interface GeoModulePipelineInput {
   readonly clientId: string
   readonly records: readonly GeoObservationRecord[]
+  /**
+   * 客户/实体级 GEO 解释语义。**必填**（fail-closed）。
+   * Roman 调用方显式传 Roman profile；Magic Engine 调用方显式传 ME profile。
+   * shared runtime 不做 Roman fallback —— 缺失 / 非法立即抛 `GeoEntityProfileError`。
+   */
+  readonly entityProfile: GeoEntityProfile
   /** 权威 brand_aliases 注册表内容（Roman 现为空）。 */
   readonly brandAliases: readonly string[]
   /** 本租户台账（`client_site_pages` 读模型）。 */
@@ -151,19 +157,22 @@ function assertTenant(input: GeoModulePipelineInput): void {
  *    绝不静默产出一条落在错页上或凭空编值的请求。
  */
 export function runGeoModule(input: GeoModulePipelineInput): GeoModuleOutcome {
+  // fail-closed：entityProfile 缺失 / 非法立即抛（不 fallback Roman）。
+  validateEntityProfile(input.entityProfile)
   assertTenant(input)
 
   const interpretations = input.records.map((r) =>
     interpretObservation({
       observation: r.observation,
       evidence: r.evidence,
+      entityProfile: input.entityProfile,
       brandAliases: input.brandAliases,
       questionText: r.questionText,
     }),
   )
   const evidence = input.records.map((r) => toGrowthEvidence({ observation: r.observation, evidence: r.evidence }))
   const coverage = summarizeCoverage(interpretations)
-  const finding = buildQualifiedMentionFinding(coverage, evidence)
+  const finding = buildQualifiedMentionFinding(coverage, evidence, input.entityProfile.canonicalDisplayName)
 
   if (finding === null) {
     const emptyChain: GeoModuleChain = { interpretations, evidence, coverage, finding: null, prescription: null, candidate: null }
@@ -175,7 +184,7 @@ export function runGeoModule(input: GeoModulePipelineInput): GeoModuleOutcome {
     return { ok: false, disposition: 'defer', reason: 'no_evidence_for_finding', chain: emptyChain }
   }
 
-  const prescription = buildPrescription(finding)
+  const prescription = buildPrescription(finding, input.entityProfile.canonicalDisplayName)
   const verification = buildQualifiedMentionVerification(input.verification)
 
   // 台账页解析（本租户内）。解析不出 → defer，但把链带全到 prescription。
