@@ -133,7 +133,7 @@ async function migrateGa4(
     listGa4Properties: typeof import('../../src/lib/ga4/admin').listGa4Properties
     setGa4Property: typeof import('../../src/lib/ga4/property').setGa4Property
   },
-  counts: { migrated: number; skipped: number; failed: number; noProperties: number },
+  counts: { migrated: number; skipped: number; failed: number; noProperties: number; ambiguous: number },
 ): Promise<void> {
   const { supabaseAdmin, encryptToken, getValidAccessToken, listGa4Properties, setGa4Property } = deps
   const label = `client=${row.client_id}`
@@ -197,8 +197,23 @@ async function migrateGa4(
     counts.noProperties++
     return
   }
+  // 2026-08-18 (#1052 PM Gate — backfill final review): must match the live
+  // OAuth callback's narrowed rule exactly — auto-connect only when there is
+  // exactly ONE candidate. "Take the first of several" was this script's own
+  // pre-#1052 leftover (its header comment used to justify it by pointing at
+  // the callback's OLD behavior, which no longer exists). With 2+ candidates
+  // there's a real choice a human needs to make; guessing item[0] for
+  // potentially dozens of historical clients in one batch run is exactly the
+  // "Property discovered ≠ Property selected" violation this whole PR closed
+  // everywhere else.
+  if (result.properties.length > 1) {
+    console.log(`[ga4] ${label} — ${result.properties.length} candidate properties, ambiguous — ` +
+      `skip; connect via the settings page picker once someone picks one`)
+    counts.ambiguous++
+    return
+  }
 
-  const chosen = result.properties[0]   // same "take first" MVP as the live OAuth callback
+  const chosen = result.properties[0]
   console.log(`[ga4] ${label} — inserting property=${chosen.property} ("${chosen.displayName}")`)
 
   const { error: insErr } = await supabaseAdmin
@@ -238,6 +253,29 @@ async function migrateGa4(
   // else. --live already gates every real Google call this function makes
   // (see the dry-run return above), so calling setGa4Property() here is
   // no less "live" than the listGa4Properties() call two lines up.
+  //
+  // A batch job guessing wrong about which property applies is a different
+  // situation from a live user's own OAuth session failing verification —
+  // for a live session, status='error' is useful diagnostic feedback shown
+  // right back to the person who just tried. For this script, unconditionally
+  // leaving that same 'error' row behind would manufacture a brand-new
+  // "GA4 connection has a problem" badge on a client's settings page as a
+  // side effect of a data migration nobody there asked for or knows ran.
+  // So: check whether a client_connectors.ga4 row existed *before* this
+  // call — if not, and setGa4Property() just created a fresh 'error' one,
+  // delete it again. The client's real connection state ends this script
+  // exactly where it started (still nothing); a later live re-auth or
+  // manual picker pick gets a clean, fresh verification, not a stale
+  // artifact from an automated guess. If a row already existed before this
+  // call (any status), setGa4Property()'s own clobber-guard already did the
+  // right thing — leave that outcome untouched.
+  const { data: priorConnector } = await supabaseAdmin
+    .from('client_connectors')
+    .select('id')
+    .eq('client_id', row.client_id)
+    .eq('anchor', 'ga4')
+    .maybeSingle<{ id: string }>()
+
   const connectResult = await setGa4Property(row.client_id, chosen.property)
   if (!connectResult.ok) {
     console.error(`[ga4] ${label} — setGa4Property rejected the migrated property (${connectResult.reason}), skip`)
@@ -245,9 +283,20 @@ async function migrateGa4(
     return
   }
   if (connectResult.status === 'error') {
+    if (!priorConnector) {
+      const { error: cleanupErr } = await supabaseAdmin
+        .from('client_connectors')
+        .delete()
+        .eq('client_id', row.client_id)
+        .eq('anchor', 'ga4')
+        .eq('status', 'error')
+      if (cleanupErr) {
+        console.warn(`[ga4] ${label} — failed to clean up the error connector this run created:`, cleanupErr.message)
+      }
+    }
     console.warn(
-      `[ga4] ${label} — property=${chosen.property} saved but failed live verification ` +
-      `(${connectResult.reason}: ${connectResult.detail}) — connector left in status='error', not counted as migrated`,
+      `[ga4] ${label} — property=${chosen.property} failed live verification ` +
+      `(${connectResult.reason}: ${connectResult.detail}) — not counted as migrated, no connector row left behind`,
     )
     counts.failed++
     return
@@ -280,7 +329,7 @@ async function main() {
   console.log(`[migrate-google-oauth-tokens] ${oldRows.length} row(s) in google_oauth_tokens to consider`)
 
   const gscCounts = { migrated: 0, skipped: 0, failed: 0 }
-  const ga4Counts = { migrated: 0, skipped: 0, failed: 0, noProperties: 0 }
+  const ga4Counts = { migrated: 0, skipped: 0, failed: 0, noProperties: 0, ambiguous: 0 }
 
   for (const row of oldRows) {
     try {
@@ -301,7 +350,7 @@ async function main() {
   console.log('')
   console.log('[migrate-google-oauth-tokens] summary')
   console.log(`  GSC: migrated=${gscCounts.migrated} skipped=${gscCounts.skipped} failed=${gscCounts.failed}`)
-  console.log(`  GA4: migrated=${ga4Counts.migrated} skipped=${ga4Counts.skipped} no_properties=${ga4Counts.noProperties} failed=${ga4Counts.failed}`)
+  console.log(`  GA4: migrated=${ga4Counts.migrated} skipped=${ga4Counts.skipped} no_properties=${ga4Counts.noProperties} ambiguous=${ga4Counts.ambiguous} failed=${ga4Counts.failed}`)
   if (!LIVE) console.log('  (dry-run — nothing was written, no external calls made; re-run with --live to apply)')
 }
 
