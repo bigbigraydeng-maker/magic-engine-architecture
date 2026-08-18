@@ -39,7 +39,7 @@ Applied per #1041 §"Build Control Room corrections to PR #1039".
 | C-1 | GSC never connected (M-1) — inferred from absence of `<meta name="google-site-verification">` | **`dig TXT magicengine.com.au` returns `google-site-verification=xLoZcjdBGE7TW8Vi8jQZTGtwh36XA9eNh4fU-YOVkU4`.** DNS domain-level verification is present. Meta-tag absence is not evidence of unverified property. | M-1 must be reworded: "GSC property is DNS-verified; ME's `client_platform_connections` has no `gsc` connector row → `gsc_performance_snapshots` is empty because the OAuth pull-back never ran, not because the property is unverified." |
 | C-2 | Suggestion to add `<meta name="google-site-verification">` to every page | Rejected. DNS verification already exists; adding meta on every page would create a second, redundant verification method and increase page weight for no gain. | If future re-verification is needed, use the existing DNS TXT. Do not add site-wide meta. |
 | C-3 | Evidence Library "PUBLIC ×6" but 7 items enumerated | Confirmed inconsistent in PR body. #1039 body §12 needs one of {count, enumeration} corrected before merge. | Not fixed here (this PR does not modify #1039). Flagged as a #1039 merge blocker in §9 gaps. |
-| C-4 | "Cluster A has the least competition" and similar cluster claims | Confirmed unverified — no fresh SERP/keyword/competitor probe existed when #1039 was written. **§0.5 in this document validates or invalidates these hypotheses.** | Any Phase 1 planning must cite §0.5 results, not #1039 hypothetical clusters. |
+| C-4 | "Cluster A has the least competition" and similar cluster claims | Confirmed unverified — no fresh SERP/keyword/competitor probe existed when #1039 was written. **§0.5 in this document probes these hypotheses — the result is directional only, not a validation (see §6 method limitation).** | Any Phase 1 planning must cite §0.5 results, not #1039 hypothetical clusters, and must treat them as unvalidated until query-level review. |
 | C-5 | Website/SEO edits should not precede T0 capture | Agreed. This PR is Phase 0 only; no `website/` change. | Enforced by scope. |
 
 Also flagged from Phase 0 investigation (new corrections not listed in #1041):
@@ -230,15 +230,15 @@ All other fields (tone, VI, keyword_seeds, competitor_domains, content_pillars, 
 
 **Result** (probe ran 2026-08-18, final run id `861aa847-5a0a-4544-a9f9-717da714e1ad`; receipt at `scripts/phase0/receipts/dataforseo-probe-2026-08-18.json`):
 
-**Cluster medians (validated per-location)**:
+**Cluster medians (per-location, directional — see method limitation below)**:
 
-| Cluster | AU median vol | AU median KD | NZ median vol | NZ median KD | Verdict |
+| Cluster | AU median vol | AU median KD | NZ median vol | NZ median KD | Status (directional signal, not a verified finding) |
 |---|---|---|---|---|---|
-| brand_entity | 9,900 | 57 | 590 | 49 | **Confirmed collision risk** — high KD both markets; other "magic engine" entities dominate SERP. Disambiguation must be the top brand-page tactic. |
-| category | 1,300 | **24** | 260 | **24** | **Sweet spot**: moderate volume, low competition both markets. Category-page investment should target these. |
-| problem | 6,600 | 42 | 30 | 11 | **Split**: AU high volume + moderate competition (good); NZ near-empty (30 vol) — problem-page traffic will be AU-only until NZ demand grows. |
-| recommendation | 1,900 | 39 | 260 | 33 | **Contested**: mid-vol mid-KD both markets. Need owned-page + third-party mentions to compete. |
-| comparison | 1,900 | 31 | 320 | 33 | **Actionable**: high-volume comparison queries with KD ≤ 33 both markets — case-study 0 candidate territory. |
+| brand_entity | 9,900 | 57 | 590 | 49 | **Directional — possible collision risk, needs validation**: high KD both markets; other "magic engine" entities may dominate SERP. Disambiguation is a candidate brand-page tactic pending query-level review. |
+| category | 1,300 | **24** | 260 | **24** | **Directional — possible sweet spot, needs validation**: moderate volume, low competition both markets. Category-page investment is a candidate, not a settled target. |
+| problem | 6,600 | 42 | 30 | 11 | **Directional — apparent AU/NZ split, needs validation**: AU higher volume + moderate competition; NZ near-empty (30 vol). Do not treat the AU/NZ asymmetry as established demand until query-level review confirms the expansions are on-topic. |
+| recommendation | 1,900 | 39 | 260 | 33 | **Directional — contested, needs validation**: mid-vol mid-KD both markets. Competing would likely need owned-page + third-party mentions. |
+| comparison | 1,900 | 31 | 320 | 33 | **Directional — potentially actionable, needs validation**: comparison queries at KD ≤ 33 both markets — candidate case-study 0 territory. |
 
 **Method limitation (added 2026-08-19, T0 Freeze Gate closure)**: DataForSEO `keyword_ideas` may produce semantically weak expansions for low-volume branded or entity terms. Brand/entity and problem-cluster medians are directional discovery signals, not confirmed collision or competitive-demand findings. Phase 1 decisions require query-level review and supporting GSC/market evidence.
 
@@ -260,14 +260,16 @@ All other fields (tone, VI, keyword_seeds, competitor_domains, content_pillars, 
 
 **Which #1039 §15 hypotheses were tested**:
 
-| Hypothesis (from #1039 §15) | Verdict |
+| Hypothesis (from #1039 §15) | Status |
 |---|---|
-| "Brand disambiguation is a real cluster to defend" | ✅ Confirmed (KD 57/49) |
-| "Category cluster is meaningfully sized" | ✅ Confirmed (AU 1300 vol / KD 24) |
-| "Problem cluster has AU + NZ demand" | ⚠️ Confirmed for AU only; NZ demand is thin (30 vol) |
-| "Recommendation cluster is actionable" | ⚠️ Contested (KD 39/33) |
-| "Comparison cluster is our leverage point" | ✅ Confirmed (mid-vol, KD ≤ 33) |
+| "Brand disambiguation is a real cluster to defend" | ⚠️ Directional — needs validation (KD 57/49) |
+| "Category cluster is meaningfully sized" | ⚠️ Directional — needs validation (AU 1300 vol / KD 24) |
+| "Problem cluster has AU + NZ demand" | ⚠️ Directional — needs validation; AU signal only, NZ thin (30 vol) |
+| "Recommendation cluster is actionable" | ⚠️ Directional — needs validation, contested (KD 39/33) |
+| "Comparison cluster is our leverage point" | ⚠️ Directional — needs validation (mid-vol, KD ≤ 33) |
 | "Cluster A has the least competition" | ❌ Rejected as framed — the *category* cluster has lowest KD, not any "Cluster A"; naming was ambiguous |
+
+No hypothesis in this table reached "confirmed" status on this probe alone. Each requires the query-level and GSC/market validation named in the method limitation above before Phase 1 relies on it.
 
 **Cost**: US$0.87 for this final successful run. See §10 cost ledger for cumulative including two earlier failed-persistence runs.
 
@@ -429,7 +431,7 @@ Gaps still present after Phase 0 completes (each one is a candidate Phase 1 or l
 | Cluster hypotheses in #1039 | may become invalid depending on §0.5 result | §0.5 in this PR | Phase 1 planning must cite §0.5 outcome, not #1039 §15 |
 | #1039 evidence library count (PUBLIC×6 vs 7 items) | needs #1039 body edit | Not this PR | #1039 author must reconcile before merge |
 | 5 current tracked keywords are AU-only, poor positioning fit | cron currently reads passively | Phase 1 | Replace passive-only tracking with a curated tracked list once §0.5 identifies keepers |
-| `master_briefs` mostly NULL (only 8 fields populated in this PR) | intentional minimalism | Phase 1 | Product owner + author co-fill tone / VI / pillars grounded in real evidence, not intuition |
+| `master_briefs` still has **0 rows** for this client (read-only verified 2026-08-19). This PR writes none; §3 only *documents* the 8 seed fields a Phase 1 write would need. | intentional minimalism — seed not yet written | Phase 1 | Product owner + author co-fill the seed, then tone / VI / pillars, grounded in real evidence, not intuition |
 
 ---
 
