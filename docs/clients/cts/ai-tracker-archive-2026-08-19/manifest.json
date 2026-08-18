@@ -1,0 +1,23 @@
+{
+  "exported_at": "2026-08-18T13:44:02.194Z",
+  "client_id": "c0000000-0000-0000-0000-000000000000",
+  "client_name": "CTS Tours NZ",
+  "purpose": "Pre-DROP archive of ai-tracker (system B). See spec 2026-08-19-ai-tracker-decommission-v1.md §9.3.",
+  "tables": {
+    "ai_visibility_queries": {
+      "row_count": 102,
+      "file": "ai_visibility_queries.json",
+      "bytes": 50717
+    },
+    "ai_visibility_runs": {
+      "row_count": 3011,
+      "file": "ai_visibility_runs.json",
+      "bytes": 10208294
+    },
+    "ai_visibility_snapshots": {
+      "row_count": 8,
+      "file": "ai_visibility_snapshots.json",
+      "bytes": 533768
+    }
+  }
+}
