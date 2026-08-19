@@ -17,7 +17,9 @@
 import type { AdDraft, AdDraftCreative } from '@/lib/ads-strategy/ad-draft'
 import { metaTripletFor } from '@/lib/ads-strategy/ad-draft'
 
-const GRAPH_BASE = 'https://graph.facebook.com/v21.0'
+// 🔴 导出给 post-boost-publisher.ts 复用 —— 纯 HTTP 语义，跟 AdDraft 的
+//    kind 无关，不应该在两个文件里各写一份（2026-08-20 R3/M1）。
+export const GRAPH_BASE = 'https://graph.facebook.com/v21.0'
 
 export interface PublishedDraft {
   campaignId: string
@@ -36,7 +38,7 @@ export interface PublishFailure {
 
 export type PublishResult = ({ ok: true } & PublishedDraft) | PublishFailure
 
-async function graphPost(
+export async function graphPost(
   path: string,
   body: Record<string, string>,
   accessToken: string,
@@ -68,7 +70,7 @@ async function graphPost(
  * 跟 `graphPost` 分开是因为返回形状不同：建东西回 `{id}`，改东西回
  * `{"success":true}`。用同一个函数会把每次成功的修改读成失败。
  */
-async function graphUpdate(
+export async function graphUpdate(
   id: string,
   body: Record<string, string>,
   accessToken: string,
@@ -91,7 +93,7 @@ async function graphUpdate(
 }
 
 /** 删一个刚建出来的东西。删不掉就返回 false —— 由调用方如实上报，不假装干净。 */
-async function graphDelete(id: string, accessToken: string): Promise<boolean> {
+export async function graphDelete(id: string, accessToken: string): Promise<boolean> {
   try {
     const res = await fetch(`${GRAPH_BASE}/${id}?access_token=${encodeURIComponent(accessToken)}`, {
       method: 'DELETE',
