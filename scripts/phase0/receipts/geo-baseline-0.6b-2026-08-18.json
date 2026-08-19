@@ -1,0 +1,51 @@
+{
+  "schema_version": "1",
+  "surface": "geo_measurement",
+  "batch_id": "a2f09f81-ab65-4a25-b323-567fd70f8dff",
+  "query_set_version": "magicengine_geo_baseline_v1",
+  "market": "au",
+  "expected_queries": 18,
+  "completed_queries": 18,
+  "failed_queries": 0,
+  "classification_version": "manual-rules-v1",
+  "classification_categories": [
+    "cited",
+    "recommended",
+    "described",
+    "compared",
+    "not_present"
+  ],
+  "collected_at": "2026-08-17T12:47:37.423+00:00",
+  "evidence_source": "docs/marketing/me-organic-growth-t0-baseline-0.6b-2026-08-18.md §2 (this PR); production Supabase glbdnayojixmexgofbsd: geo_batches.id=a2f09f81-ab65-4a25-b323-567fd70f8dff (status=completed, actual_coverage.succeeded=18, actual_coverage.failed=0, cost_usd=1.0746674999999999), geo_query_sets.id=a6a1b189-3cb9-4c84-aa55-4604e72342df (locked_at=2026-08-17T12:23:40.389974+00:00), geo_observations (batch_id=a2f09f81-ab65-4a25-b323-567fd70f8dff, count=18, outcome_ok=true count=18), geo_evidence joined via geo_evidence.observation_id, client_id=f1d062ca-929e-4b4e-ba6e-84752b748552",
+  "category_counts": {
+    "cited": 4,
+    "recommended": 0,
+    "described": 0,
+    "compared": 0,
+    "not_present": 14
+  },
+  "reviewed_observations": 18,
+  "classification_reviewed_at": "2026-08-19T00:00:00+00:00",
+  "classification_review_method": "Independent read-only re-derivation during T0 Freeze Gate closure. For each of the 18 geo_observations rows in this batch, the joined geo_evidence row (raw_response + citations) was re-evaluated against the frozen §2.2 rules using three checks: (1) Magic Engine mentioned in response text; (2) owned domain magicengine.com.au present in any citation slot or in the response text; (3) prescriptive language ('we recommend' / 'our pick' / 'our recommendation' / 'recommended option' / 'go with' / 'best choice is' / 'you should use|choose|pick|hire') within 80 characters of a Magic Engine mention. Priority rule applied as documented: mention + owned URL resolves to `cited` and outranks `compared`. Generic decision verbs in neutral explanatory prose (e.g. a bare 'choose') were treated as non-prescriptive, matching the documented rule that `recommended` requires the response to prescribe Magic Engine rather than describe it. No provider was called, no measurement re-run, no database write.",
+  "classification_review_checks": {
+    "observations_fetched": 18,
+    "unique_query_keys": 18,
+    "outcome_ok_all_true": true,
+    "observations_missing_evidence_rows": 0,
+    "cohort_single_surface": true,
+    "cohort_engines": ["openai"],
+    "cohort_models": ["gpt-5-search-api-2025-10-14"],
+    "cohort_markets": ["au"],
+    "mention_not_counted_as_citation": "Verified. `cited` was asserted only where an owned-domain URL was actually present, not merely where Magic Engine was named. All 4 cited queries (brand_1, brand_2, brand_3, cmp_1) independently showed owned-domain presence; the 14 not_present queries showed no mention at all, so no mention was silently upgraded.",
+    "described_not_counted_as_recommendation": "Verified. Re-derivation found 0 queries meeting the prescriptive-language test, matching the documented `recommended`=0. No describing/citing response was promoted to `recommended`.",
+    "priority_rule_consistent": "Verified. cmp_1 is the only query matching both a comparison-anchor pattern and owned-URL presence; it resolves to `cited` under the documented priority rule, consistent with the doc's `compared`=0."
+  },
+  "mismatches_found": [],
+  "limitations": [
+    "Classification was applied through documented manual rules rather than a frozen executable classifier.",
+    "The re-derivation described in classification_review_method reimplemented the documented rules independently for audit purposes; it is not a committed, reusable classifier, so T+7/T+14/T+28 rounds still risk method drift until the rules are landed as code.",
+    "The prescriptive-language test depends on a finite phrase list. A prescription worded outside that list would be scored non-prescriptive by both the original pass and this review, so `recommended`=0 is 'no match against the documented phrase set', not a proof that no prescription of any wording exists.",
+    "collected_at is geo_batches.completed_at (the batch's recorded completion timestamp), used as the best available single collection timestamp for the batch; individual per-observation timestamps were not extracted into this receipt.",
+    "classification_reviewed_at is recorded at date granularity (2026-08-19) rather than the exact wall-clock instant of the review query."
+  ]
+}
