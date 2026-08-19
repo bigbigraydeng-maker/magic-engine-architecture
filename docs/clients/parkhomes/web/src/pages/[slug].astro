@@ -11,8 +11,22 @@ const { p } = Astro.props;
 const heroStyle = p.hero
   ? `background:linear-gradient(180deg,rgba(20,20,20,.30),rgba(20,20,20,.80)),url('${p.hero}') center/cover`
   : undefined;
+
+// Schedule A.4.1 — a Service entry per development. "Product" would need a single
+// numeric price (these are ranges like "$650k" / "$2m+", not valid Offer prices),
+// so Service is the schema.org type that actually fits without inventing data.
+const serviceSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'Service',
+  serviceType: 'Residential property development',
+  name: p.name,
+  provider: { '@type': 'Organization', name: 'The Park Homes Ltd' },
+  areaServed: p.eyebrow,
+  description: p.tagline,
+};
 ---
 <Base title={`${p.name} — Park Homes`} desc={p.tagline} active="projects">
+  <script type="application/ld+json" set:html={JSON.stringify(serviceSchema)} />
 
   <section class="hero" style={heroStyle}>
     <span class="tag">{p.hero ? "Artist's impression" : 'Project imagery — to be supplied'}</span>
@@ -50,11 +64,18 @@ const heroStyle = p.hero
     <div class="wrap" style="max-width:760px">
       <p class="eyebrow sec-eyebrow">Register your interest</p>
       <h2 style="color:#fff;font-size:clamp(26px,4vw,40px);margin-bottom:22px">Enquire on {p.name}</h2>
-      <form class="reg" onsubmit="return false">
-        <div><label>Name</label><input type="text" placeholder="Your name" /></div>
-        <div><label>Phone</label><input type="text" placeholder="Your phone" /></div>
-        <div class="full"><label>Email</label><input type="text" placeholder="you@email.com" /></div>
-        <div class="full"><button class="btn btn-primary btn-lg" style="width:100%">Register interest</button></div>
+      <form class="reg" id="reg-form" novalidate>
+        <div><label>Name</label><input type="text" name="name" placeholder="Your name" required /></div>
+        <div><label>Phone</label><input type="text" name="phone" placeholder="Your phone" required /></div>
+        <div class="full"><label>Email</label><input type="email" name="email" placeholder="you@email.com" /></div>
+        <div style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden" aria-hidden="true">
+          <label>Company<input type="text" name="company_hp" tabindex="-1" autocomplete="off" /></label>
+        </div>
+        <div class="full" id="reg-error" style="display:none;color:#ff9b9b;font-size:13px;margin-bottom:4px"></div>
+        <div class="full" id="reg-success" style="display:none;color:#8fd9b6;font-size:14px;padding:14px 0">
+          Thanks — your interest in {p.name} has been registered. Our agent will be in touch shortly.
+        </div>
+        <div class="full" id="reg-submit-row"><button class="btn btn-primary btn-lg" type="submit" style="width:100%">Register interest</button></div>
       </form>
       <p class="contact" style="text-align:left">Or contact our agent —</p>
       <AgentLine align="left" />
@@ -62,5 +83,71 @@ const heroStyle = p.hero
   </section>
 
   <p style="text-align:center;font-size:12px;color:var(--mute);padding:26px 20px 0">{p.footerAddress}</p>
+
+  <script is:inline define:vars={{ leadsEndpoint: 'https://app.magicengine.com.au/api/clients/19e025b7-555b-44fd-ba87-debc62a447a7/leads', projectName: p.name }}>
+    (function () {
+      var form    = document.getElementById('reg-form');
+      var errorEl = document.getElementById('reg-error');
+      var okEl    = document.getElementById('reg-success');
+      var submitRow = document.getElementById('reg-submit-row');
+      var btn     = submitRow.querySelector('button');
+
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        errorEl.style.display = 'none';
+        errorEl.textContent = '';
+
+        if (form.elements['company_hp'].value) {
+          form.style.display = 'none';
+          okEl.style.display = 'block';
+          return;
+        }
+
+        var name  = form.elements['name'].value.trim();
+        var phone = form.elements['phone'].value.trim();
+        var emailVal = form.elements['email'].value.trim();
+        if (!name || !phone) {
+          errorEl.textContent = 'Please fill in your name and phone number.';
+          errorEl.style.display = 'block';
+          return;
+        }
+        if (emailVal && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(emailVal)) {
+          errorEl.textContent = "That email doesn't look right — please check it, or leave it blank.";
+          errorEl.style.display = 'block';
+          return;
+        }
+
+        var payload = {
+          name:        name,
+          phone:       phone,
+          email:       emailVal,
+          message:     'Project: ' + projectName,
+          source_url:  window.location.href,
+          referrer:    document.referrer || null,
+          submitted_at: new Date().toISOString(),
+        };
+
+        btn.disabled = true;
+        btn.textContent = 'Sending…';
+
+        fetch(leadsEndpoint, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body:    JSON.stringify(payload),
+        })
+          .then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            form.style.display = 'none';
+            okEl.style.display = 'block';
+          })
+          .catch(function () {
+            errorEl.textContent = 'Something went wrong sending that — please call or email our agent directly (details above).';
+            errorEl.style.display = 'block';
+            btn.disabled = false;
+            btn.textContent = 'Register interest';
+          });
+      });
+    })();
+  </script>
 
 </Base>

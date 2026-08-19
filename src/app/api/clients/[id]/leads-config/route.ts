@@ -1,14 +1,18 @@
 /**
  * 客户的 leads 模块配置 —— GET / PATCH。
  *
- * 三项：
+ * 四项：
  *   · 要不要把这个客户的邮件反应（谁打开了、谁点了链接）同步进 CRM
  *   · **客户自己的邮件域名** —— 同域来信是同事，不进客人名单
  *   · **同行 / 分销的域名** —— 是真业务，但跟进方式完全不同，单独分类
+ *   · **网站表单来了新客资，发邮件通知谁** —— 客户自己的收件箱（而不是只进 ME 后台
+ *     CRM，FDE 才看得到）。2026-08-19 补上：Park Homes 的合同白纸黑字写了「表单要
+ *     把询盘发到 115parkhomes@gmail.com」，之前 /api/clients/[id]/leads 只落库，
+ *     客户自己的邮箱收不到——落库了不等于客户知道。
  *
- * 后两项 2026-08-04 补上界面（此前只能改数据库）。少了界面这条规则就是死的：
- * 以后新遇到一家同行，FDE 加不进去，只能来找开发 —— 而「要 FDE 填的字段必须
- * 连界面一起做完」是铁律，不是建议。
+ * 后三项 2026-08-04 / 2026-08-19 补上界面（此前只能改数据库）。少了界面这条规则
+ * 就是死的：以后新遇到一家同行，FDE 加不进去，只能来找开发 —— 而「要 FDE 填的
+ * 字段必须连界面一起做完」是铁律，不是建议。
  *
  * Responses: 200 { config } / 400 / 401 / 403 / 404 / 500
  */
@@ -17,6 +21,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import { supabaseAdmin } from '@/lib/supabase'
 import { parseDomainList, readDomainRules } from '@/lib/crm/contact-kind'
+import { parseEmailList } from '@/lib/leads/parse-email-list'
 
 export interface LeadsConfig {
   /** 开了才会把邮件打开/点击同步进这个客户的 CRM。 */
@@ -25,15 +30,21 @@ export interface LeadsConfig {
   ownEmailDomains: string[]
   /** 同行 / 分销商的域名。 */
   tradeDomains: string[]
+  /** 网站表单每来一条新客资，best-effort 邮件通知的收件人清单。 */
+  notifyEmails: string[]
 }
 
 function readConfig(raw: unknown): LeadsConfig {
   const o = (raw ?? {}) as Record<string, unknown>
   const rules = readDomainRules(o)
+  const notifyEmails = Array.isArray(o.notify_emails)
+    ? o.notify_emails.filter((x): x is string => typeof x === 'string')
+    : []
   return {
     mailchimpEnabled: o.mailchimp_enabled === true,
     ownEmailDomains: rules.own,
     tradeDomains: rules.trade,
+    notifyEmails,
   }
 }
 
@@ -63,6 +74,7 @@ interface PatchBody {
   mailchimpEnabled?: unknown
   ownEmailDomains?: unknown
   tradeDomains?: unknown
+  notifyEmails?: unknown
 }
 
 export async function PATCH(
@@ -105,6 +117,15 @@ export async function PATCH(
     }
     const parsed = parseDomainList(value)
     patch[column] = parsed.domains
+    rejected.push(...parsed.rejected)
+  }
+
+  if (body.notifyEmails !== undefined) {
+    if (typeof body.notifyEmails !== 'string' && !Array.isArray(body.notifyEmails)) {
+      return NextResponse.json({ error: 'notifyEmails 要么是一段文字，要么是一个清单' }, { status: 400 })
+    }
+    const parsed = parseEmailList(body.notifyEmails)
+    patch.notify_emails = parsed.emails
     rejected.push(...parsed.rejected)
   }
 
