@@ -146,8 +146,11 @@ export function createBuildPublishPackageCapability(
     version: 1,
     steps: {
       /** ① 组装：读真稿子、比对指纹、取品牌底稿、拼出包的内容。 */
-      async build({ ctx }): Promise<CapabilityStepResult> {
-        const input = await requireInput(sb, ctx.runId)
+      async build({ ctx, runInput }): Promise<CapabilityStepResult> {
+        // 🔴 A · Hardening：input 从 Gateway 深冻结的 `runInput` snapshot 读，
+        //    不许再回 `action_runs.input` 查询（TOCTOU 攻击面）。
+        //    有 architecture test 盯着 capability 不出现 select('input')。
+        const input = requireInputFromCtx(runInput)
         const post = await loadDraft(sb, ctx.clientId, input.blog_post_id)
 
         if (!PACKAGEABLE_STATUSES.has(post.status)) {
@@ -328,17 +331,18 @@ export function createBuildPublishPackageCapability(
 
 // ── 内部工具 ──────────────────────────────────────────────────────────────────
 
-/** 从 run 上把提交时的输入读回来 —— capability 不接受调用方现场递参数。 */
-async function requireInput(
-  sb: SupabaseClient,
-  runId: string,
-): Promise<{ blog_post_id: string; content_hash: string }> {
-  const { data, error } = await sb.from('action_runs').select('input').eq('id', runId).limit(1)
-  if (error) throw new RetryableCapabilityError(`读取执行输入失败：${error.message}`)
-  const row = (data ?? [])[0] as unknown as { input: Record<string, unknown> } | undefined
-  if (!row) throw new KernelError('INVALID_STATE', `找不到执行实例 ${runId}`)
-  const blogPostId = row.input?.blog_post_id
-  const contentHash = row.input?.content_hash
+/**
+ * 从 Gateway 深冻结的 `ctx.runInput` 里取出这一个 capability 需要的字段。
+ *
+ * 🔴 A · Hardening：换掉旧的 `requireInput(sb, runId)` —— 那个会重查 action_runs.input，
+ *    Gateway hash-check 通过之后被替换的 input 会被读到（TOCTOU）。
+ *    现在 input 来自深冻结的 snapshot，capability 手里那份就是 Gateway 验证过的那份。
+ */
+function requireInputFromCtx(
+  runInput: Readonly<Record<string, unknown>>,
+): { blog_post_id: string; content_hash: string } {
+  const blogPostId = runInput.blog_post_id
+  const contentHash = runInput.content_hash
   if (typeof blogPostId !== 'string' || typeof contentHash !== 'string') {
     throw new KernelError('INVALID_INPUT', '这次执行的输入里缺少稿子编号或内容指纹')
   }

@@ -408,6 +408,19 @@ export interface CapabilityStepContext {
   readonly idempotencyKey: string
   /** 上游步骤的产物。断点续跑时这里带着已完成步骤的 output。 */
   readonly priorOutputs: Readonly<Record<string, Record<string, unknown>>>
+  /**
+   * 🔴 本次 execution invocation 的**已由 Gateway hash-check 通过 + 深度冻结**的 input。
+   *
+   *    颗粒度是「一次 executeAuthorizedRun 调用」：单次 execution 内的 step retry
+   *    复用同一份 snapshot；新的 execution invocation（首次 execute / lease
+   *    takeover / dead-letter recovery）Gateway 会重跑 hash-check 再往 ctx 里
+   *    塞新的深冻结 snapshot。
+   *
+   *    capability handler **必须**从这里读，**禁止**再回 `action_runs.input` 查询
+   *    —— 否则 TOCTOU：Gateway 通过后 attacker UPDATE input，capability 读到新值。
+   *    见 architecture.test.ts 的「capability 禁止 select('input')」lint。
+   */
+  readonly runInput: Readonly<Record<string, unknown>>
 }
 
 export interface CapabilityStepResult {
@@ -421,9 +434,53 @@ export type CapabilityStepHandler = (
   step: CapabilityStepContext,
 ) => Promise<CapabilityStepResult>
 
+/**
+ * 🔴 Provider-native rollback 的结果。三态明确，落一行 `action_run_steps(step_key='rollback')`：
+ *
+ *   · `provider_native` + ok=true  → 外部资源真的撤了（GitHub PR closed / branch deleted）；
+ *   · `provider_native` + ok=false → handler 试图撤了但失败，外部状态不明；
+ *   · `noop`                       → handler 判定本次 execution 实际未产生 side effect
+ *                                     （e.g. handler 一次都没跑到 provider 调用之前），不需撤。
+ *
+ * 三态**都必须落一行**（noop 也不例外）—— 「考察了要不要 rollback，结论是..」这件事
+ * 永远可审计。省一行就是把「零信号」当成「什么都没发生」，正是我们要防的形状。
+ */
+export interface OutwardRollbackResult {
+  readonly ok: boolean
+  readonly rollbackKind: 'provider_native' | 'noop'
+  readonly detail: Readonly<Record<string, unknown>>
+  readonly failure_reason?: string
+}
+
+/**
+ * 🔴 Rollback handler 的签名。
+ *
+ * · `step`：跟 CapabilityStepHandler 拿到的一样的执行上下文（包含深冻结的
+ *    `runInput`、`priorOutputs`、`ctx`、`idempotencyKey`）—— rollback handler
+ *    要能看得见「我们打算撤的那一次执行当时用的是哪份 input、跑到了哪一步」。
+ *    `stepKey` = 'rollback'。
+ * · 返回 `OutwardRollbackResult` 三态，Gateway 按状态写 lineage。
+ * · 抛异常 = failed（异常本身作 failure_reason）。handler 内部**不许**抛
+ *    `RetryableCapabilityError` —— rollback 不重试（重试可能撤第二次）。
+ */
+export type OutwardRollbackHandler = (
+  step: CapabilityStepContext,
+  priorOutputs: Readonly<Record<string, Record<string, unknown>>>,
+) => Promise<OutwardRollbackResult>
+
 /** 一个 capability = 一组按 step_key 索引的处理器。 */
 export interface CapabilityImplementation {
   readonly actionKey: ActionKey
   readonly version: number
   readonly steps: Readonly<Record<string, CapabilityStepHandler>>
+  /**
+   * 🔴 `sideEffect:'outward' + outwardAuthorization.rollback:'provider_native'`
+   *    的 Action 对应的 capability **必须**提供 rollback handler。
+   *    Gateway 在 mint 执行 ctx 之前把这条当**执行前置条件**验证：
+   *    缺 handler → `ROLLBACK_HANDLER_MISSING` fail-closed，任何 provider 副作用
+   *    发生前停止；授权决策不消费（补上 handler 后同一份 approval 可以再用）。
+   *
+   *    非 outward 或 rollback ≠ 'provider_native' 的动作**可选**（不提供即 undefined）。
+   */
+  readonly rollback?: OutwardRollbackHandler
 }
