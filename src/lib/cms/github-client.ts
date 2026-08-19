@@ -216,6 +216,77 @@ export class GithubClient {
   }
 
   /**
+   * Read a PR's **full ownership shape** —— draft/state/head/base/body/merged。
+   *
+   * Used by `page.apply_optimization_request` capability to verify that any PR
+   * we're about to close or adopt actually belongs to the current run
+   * (body contains our `kernel_run_id` + `authorization_decision_id` receipt,
+   * head === our owned branch, base === current default_branch, draft === true,
+   * not merged). **This is the ownership proof for close/adopt paths.**
+   *
+   * Kept separate from `getPullRequestState` so existing pr-sync callers
+   * (which only need lifecycle state) stay on the smaller return type.
+   */
+  async getPullRequestDetail(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<{
+    number: number
+    state: 'open' | 'closed'
+    merged: boolean
+    mergedAt: string | null
+    draft: boolean
+    headRef: string
+    baseRef: string
+    title: string
+    body: string
+    htmlUrl: string
+  }> {
+    const pr = await this.request<{
+      number: number
+      state: 'open' | 'closed'
+      merged: boolean
+      merged_at: string | null
+      draft?: boolean
+      head: { ref: string }
+      base: { ref: string }
+      title: string
+      body: string | null
+      html_url: string
+    }>('GET', `/repos/${owner}/${repo}/pulls/${prNumber}`)
+    return {
+      number: pr.number,
+      state: pr.state,
+      merged: pr.merged === true,
+      mergedAt: pr.merged_at,
+      draft: pr.draft === true,
+      headRef: pr.head.ref,
+      baseRef: pr.base.ref,
+      title: pr.title,
+      body: pr.body ?? '',
+      htmlUrl: pr.html_url,
+    }
+  }
+
+  /**
+   * Read a commit's **message** (used to verify a branch tip is ours by
+   * looking for the `[kernel run <runId>]` marker embedded in our commit
+   * message convention). Minimal shape — only what ownership check needs.
+   */
+  async getCommit(
+    owner: string,
+    repo: string,
+    sha: string,
+  ): Promise<{ sha: string; message: string }> {
+    const commit = await this.request<{
+      sha: string
+      commit: { message: string }
+    }>('GET', `/repos/${owner}/${repo}/commits/${sha}`)
+    return { sha: commit.sha, message: commit.commit.message }
+  }
+
+  /**
    * Close a pull request without merging.
    * Used by GEO-B+ Stage 1 B2: when re-publishing the same directive, the
    * previous still-open PR is closed and a fresh one opened, so review

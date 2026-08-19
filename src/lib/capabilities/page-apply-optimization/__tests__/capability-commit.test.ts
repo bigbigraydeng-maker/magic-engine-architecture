@@ -110,14 +110,89 @@ describe('commit step · stale-race defense', () => {
     expect(getFileCalls).toBe(0)
   })
 
-  it('createBranch 报"已存在"是正常路径（重试）', async () => {
+  it('createBranch 422 + branch tip === baseSha（本 run 上次建了 branch 未 commit）→ adopt', async () => {
+    // 复审 2026-08-20 P0 修复：不再无条件吞 422；本条测"合法幂等场景 A"
     const gh = {
-      async getBranchSha() { return 'base' },
+      async getBranchSha(_o: string, _r: string, branch: string) {
+        // 两次调用都返回 'base'：default branch tip 与 owned branch tip 都是 base
+        return 'base'
+      },
       async createBranch() { throw new Error('422 Reference already exists') },
+      async getCommit() { throw new Error('should not be called when isFreshFromBase') },
       async commitFile() { /* success */ },
       async getFileContent() { return { sha: 's', content: '', size: 0, decodedContent: PATCHED } },
     }
     const result = await runCommit(gh)
     expect(result.output.commit_created).toBe(true)
+  })
+
+  it('createBranch 422 + branch tip commit **带本 run marker**（本 run 上次已 commit）→ adopt', async () => {
+    // 合法幂等场景 B：branch 已经在本 run 前次尝试里 commit 过；重试
+    let commitFileCalled = false
+    const gh = {
+      async getBranchSha(_o: string, _r: string, branch: string) {
+        if (branch === 'main') return 'base'
+        return 'newer-tip-sha' // owned branch tip !== base
+      },
+      async createBranch() { throw new Error('422 Reference already exists') },
+      async getCommit() { return { sha: 'newer-tip-sha', message: 'chore(page): [kernel run r]' } },
+      async commitFile() { commitFileCalled = true /* retry ok */ },
+      async getFileContent() { return { sha: 's', content: '', size: 0, decodedContent: PATCHED } },
+    }
+    const result = await runCommit(gh)
+    expect(result.output.commit_created).toBe(true)
+    expect(commitFileCalled).toBe(true)
+  })
+
+  it('🔴 攻击 · createBranch 422 + branch tip commit 不带本 run marker（客户手工建的同名分支）→ fail-closed', async () => {
+    const gh = {
+      async getBranchSha(_o: string, _r: string, branch: string) {
+        if (branch === 'main') return 'base'
+        return 'someone-else-sha'
+      },
+      async createBranch() { throw new Error('422 Reference already exists') },
+      async getCommit() { return { sha: 'someone-else-sha', message: 'fix: someone else committed' } },
+      async commitFile() { throw new Error('should not reach commitFile') },
+      async getFileContent() { throw new Error('should not reach') },
+    }
+    await expect(runCommit(gh)).rejects.toMatchObject({
+      code: 'INVALID_STATE',
+      humanReason: expect.stringMatching(/existing_branch_not_owned_by_run/),
+    })
+  })
+
+  it('🔴 攻击 · createBranch 422 + branch 回读失败（无法证明所有权）→ fail-closed', async () => {
+    let calls = 0
+    const gh = {
+      async getBranchSha(_o: string, _r: string, branch: string) {
+        calls++
+        if (branch === 'main') return 'base'
+        throw new Error('branch read failed')
+      },
+      async createBranch() { throw new Error('422 Reference already exists') },
+      async commitFile() { throw new Error('should not reach commitFile') },
+      async getFileContent() { throw new Error('should not reach') },
+    }
+    await expect(runCommit(gh)).rejects.toMatchObject({
+      code: 'INVALID_STATE',
+      humanReason: expect.stringMatching(/existing_branch_ownership_indeterminate|回读 branch SHA 失败/),
+    })
+  })
+
+  it('🔴 攻击 · createBranch 422 + getCommit 失败 → 保守视为未拥有 → fail-closed', async () => {
+    const gh = {
+      async getBranchSha(_o: string, _r: string, branch: string) {
+        if (branch === 'main') return 'base'
+        return 'unknown-sha'
+      },
+      async createBranch() { throw new Error('422 Reference already exists') },
+      async getCommit() { throw new Error('cannot read commit') },
+      async commitFile() { throw new Error('should not reach') },
+      async getFileContent() { throw new Error('should not reach') },
+    }
+    await expect(runCommit(gh)).rejects.toMatchObject({
+      code: 'INVALID_STATE',
+      humanReason: expect.stringMatching(/existing_branch_not_owned_by_run/),
+    })
   })
 })

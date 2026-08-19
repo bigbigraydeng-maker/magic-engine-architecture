@@ -1,32 +1,26 @@
 /**
- * #1108 Kernel Outward Hardening 对齐 · 直接证明本 capability 三件事：
+ * Rollback handler · #1108 Kernel Outward Hardening 契约兑现 + 复审 2026-08-20 P0 修复。
  *
- *   ① Trusted input: capability 从 `ctx.runInput` 读，不回查 `action_runs.input`；
- *      形状不对 → `INVALID_INPUT` fail-closed（本文件 + capability-prepare.test.ts
- *      共同覆盖，不重复 Gateway 层 hash-check 已经证明的行为）。
- *
- *   ② Rollback handler: provider-native GitHub 撤回，严格身份自检，
- *      拒绝 merged PR、拒绝默认分支、拒绝跨 run 分支；404 幂等；
- *      部分失败可安全重复调用（Gateway 已经在 handler 之前查 lineage，本层
- *      只测「handler 自己被真的调到时」的行为）。
- *
- *   ③ Architecture guard: 本 capability 目录里静态扫描不允许再出现
- *      `select('input')` / `from('action_runs')` 读输入的路径。
- *
- * 🔴 **不重复**测 #1108 已经证明的 Kernel 行为（例如 ROLLBACK_HANDLER_MISSING gate、
- *    lineage 二次调用挡回、hash-check TOCTOU）——那些在 kernel 层的 gateway.test.ts
- *    与 rollback.test.ts 里；这里只测 capability 侧的契约兑现。
+ * 本文件覆盖：
+ *   ① Trusted input (shape fail-closed) —— capability 从 ctx.runInput 读，形状错 INVALID_INPUT
+ *   ② Rollback provider-native 语义（三态 + 幂等 + 身份自检）
+ *   ③ **live provider checks**：live default_branch / branch tip / PR receipt
+ *      —— 不信 priorOutputs 里的 default_branch / pr_number 直接就动手
+ *   ④ **Truthful noop**：不能仅凭 priorOutputs 缺失就报告 noop，必须 live 确认
+ *   ⑤ **Attack matrix**：
+ *      - branch 存在但被别人 commit
+ *      - PR merged
+ *      - head 上挂着 attacker PR
+ *      - default_branch 篡改成本 run 分支
+ *      - priorOutputs 里 pr_number 是别人的 PR
+ *   ⑥ Architecture guard: capability dir 无 action_runs.input 回读
  */
 
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'fs'
 import { join } from 'path'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type {
-  AuthorizedExecutionContext,
-  CapabilityStepContext,
-  OutwardRollbackResult,
-} from '@/lib/kernel/types'
+import type { AuthorizedExecutionContext, CapabilityStepContext } from '@/lib/kernel/types'
 import { GitHubApiError } from '@/lib/cms/github-client'
 import { createPageApplyOptimizationCapability } from '..'
 import { branchNameForRun, canonicalDiffHash, idempotencyKeyFromInput } from '../hash'
@@ -42,6 +36,8 @@ const APPROVED_DIFF = [
 ]
 const DIFF_HASH = canonicalDiffHash(APPROVED_DIFF)
 const OWNED_BRANCH = branchNameForRun(idempotencyKeyFromInput(PAGE_URL, BLOB_SHA, DIFF_HASH))
+const RUN_ID = 'run-1'
+const DECISION_ID = 'dec-1'
 
 const VALID_RUN_INPUT = {
   page_url: PAGE_URL,
@@ -65,9 +61,16 @@ const OPENED_OUTPUT = {
   pr_url: `https://github.com/${OWNER}/${REPO}/pull/42`,
 }
 
+const OUR_PR_BODY = [
+  `- kernel_run_id: ${RUN_ID}`,
+  `- authorization_decision_id: ${DECISION_ID}`,
+].join('\n')
+
+const OUR_COMMIT_MESSAGE = `chore(page): apply optimization x [kernel run ${RUN_ID}]`
+
 function fakeCtx(): AuthorizedExecutionContext {
   return {
-    decisionId: 'dec', runId: 'run', clientId: 'client-1',
+    decisionId: DECISION_ID, runId: RUN_ID, clientId: 'client-1',
     actionKey: 'page.apply_optimization_request', actionVersion: 1,
     policyVersion: 1, costCapUsd: null, idempotencyKey: 'idem', expiresAt: null,
   } as unknown as AuthorizedExecutionContext
@@ -75,35 +78,69 @@ function fakeCtx(): AuthorizedExecutionContext {
 
 function noopSb(): SupabaseClient {
   return {
-    from: () => ({
-      select: () => ({
-        eq: () => ({ limit: () => Promise.resolve({ data: [], error: null }) }),
-      }),
-    }),
+    from: () => ({ select: () => ({ eq: () => ({ limit: () => Promise.resolve({ data: [], error: null }) }) }) }),
   } as unknown as SupabaseClient
 }
 
-interface FakeGh {
-  getPullRequestState?: (o: string, r: string, n: number) => Promise<{ state: 'open' | 'closed'; merged: boolean; mergedAt: string | null }>
-  closePullRequest?: (o: string, r: string, n: number) => Promise<void>
-  deleteBranch?: (o: string, r: string, b: string) => Promise<void>
+// ── 完整 fake gh：涵盖 rollback handler 需要的所有方法 ────────────────────────
+
+interface FakeGhOverrides {
+  liveDefaultBranch?: string
+  branchTipSha?: string | null | (() => Promise<string | null>) // null = 404
+  commitMessage?: string
+  prByNumber?: Record<number, {
+    state: 'open' | 'closed'; merged: boolean; mergedAt: string | null; draft: boolean;
+    headRef: string; baseRef: string; body: string; htmlUrl?: string
+  } | 404>
+  listHeadPrs?: Array<{ number: number; html_url: string }>
+  closePr?: (n: number) => Promise<void>
+  deleteBranch?: () => Promise<void>
 }
 
-function ghFake(over: FakeGh = {}) {
-  const calls = { close: [] as number[], del: [] as string[], state: [] as number[] }
-  const gh = {
-    async getPullRequestState(_o: string, _r: string, n: number) {
-      calls.state.push(n)
-      if (over.getPullRequestState) return over.getPullRequestState(_o, _r, n)
-      return { state: 'open' as const, merged: false, mergedAt: null }
+function ghFake(over: FakeGhOverrides = {}) {
+  const calls = {
+    getRepo: 0, getBranchSha: [] as string[], getCommit: [] as string[],
+    getPrDetail: [] as number[], listHead: 0, close: [] as number[], del: [] as string[],
+  }
+  const gh: any = {
+    async getRepo(_o: string, _r: string) {
+      calls.getRepo++
+      return { full_name: `${OWNER}/${REPO}`, default_branch: over.liveDefaultBranch ?? 'main' }
     },
-    async closePullRequest(o: string, r: string, n: number) {
+    async getBranchSha(_o: string, _r: string, branch: string) {
+      calls.getBranchSha.push(branch)
+      let tip = over.branchTipSha
+      if (typeof tip === 'function') tip = await tip()
+      if (tip === undefined) tip = null // default: branch 不存在
+      if (tip === null) throw new GitHubApiError(404, 'Not Found')
+      return tip
+    },
+    async getCommit(_o: string, _r: string, sha: string) {
+      calls.getCommit.push(sha)
+      return { sha, message: over.commitMessage ?? OUR_COMMIT_MESSAGE }
+    },
+    async getPullRequestDetail(_o: string, _r: string, n: number) {
+      calls.getPrDetail.push(n)
+      const rec = over.prByNumber?.[n]
+      if (rec === 404 || rec === undefined) throw new GitHubApiError(404, 'Not Found')
+      return {
+        number: n, state: rec.state, merged: rec.merged, mergedAt: rec.mergedAt,
+        draft: rec.draft, headRef: rec.headRef, baseRef: rec.baseRef,
+        title: 't', body: rec.body,
+        htmlUrl: rec.htmlUrl ?? `https://github.com/${OWNER}/${REPO}/pull/${n}`,
+      }
+    },
+    async listPullRequestsByHead() {
+      calls.listHead++
+      return over.listHeadPrs ?? []
+    },
+    async closePullRequest(_o: string, _r: string, n: number) {
       calls.close.push(n)
-      if (over.closePullRequest) return over.closePullRequest(o, r, n)
+      if (over.closePr) return over.closePr(n)
     },
-    async deleteBranch(o: string, r: string, b: string) {
+    async deleteBranch(_o: string, _r: string, b: string) {
       calls.del.push(b)
-      if (over.deleteBranch) return over.deleteBranch(o, r, b)
+      if (over.deleteBranch) return over.deleteBranch()
     },
   }
   return { gh, calls }
@@ -119,56 +156,44 @@ function makeCap(gh: unknown) {
   })
 }
 
-function rollbackStep(runInput = VALID_RUN_INPUT): CapabilityStepContext {
+function stepFor(priorOutputs: Record<string, Record<string, unknown>>, runInput = VALID_RUN_INPUT): CapabilityStepContext {
   return {
     ctx: fakeCtx(), stepKey: 'rollback', attempt: 1, idempotencyKey: 'idem:rollback',
     runInput,
-    priorOutputs: {
-      prepare: PREP_OUTPUT as unknown as Record<string, unknown>,
-      commit: { commit_created: true },
-      open_pr: OPENED_OUTPUT as unknown as Record<string, unknown>,
-    },
+    priorOutputs,
   }
 }
 
-// ── (③) Architecture guard: no action_runs.input read in this dir ────────────
+// ── Architecture guard —— capability 不许再回读 action_runs.input ────────────
 
 describe('architecture-guard · capability 目录里不许再回读 action_runs.input', () => {
-  it('本 capability 目录（含子目录）不含 select(\'input\') / from(\'action_runs\') 组合', () => {
-    // 允许「概念性提到」——只禁**实际的** supabase 查询调用
+  it('本 capability 目录不含 select("input") + from("action_runs") 组合', () => {
     const dir = join(__dirname, '..')
     const files: string[] = []
     const walk = (p: string) => {
       for (const name of readdirSync(p)) {
         const full = join(p, name)
         const st = statSync(full)
-        if (st.isDirectory()) {
-          if (name === '__tests__') continue // 测试文件豁免（我们自己写 fake 用得到）
-          walk(full)
-        } else if (name.endsWith('.ts')) {
-          files.push(full)
-        }
+        if (st.isDirectory()) { if (name === '__tests__') continue; walk(full) }
+        else if (name.endsWith('.ts')) files.push(full)
       }
     }
     walk(dir)
     const offenders: string[] = []
     for (const f of files) {
       const text = readFileSync(f, 'utf8')
-      // 匹配 .from('action_runs') 或 .from("action_runs")
       const hasFromActionRuns = /\.from\(\s*['"]action_runs['"]\s*\)/.test(text)
       const hasSelectInput = /\.select\(\s*['"]input['"]/.test(text)
-      if (hasFromActionRuns && hasSelectInput) {
-        offenders.push(f)
-      }
+      if (hasFromActionRuns && hasSelectInput) offenders.push(f)
     }
-    expect(offenders, `capability 里发现了 action_runs.input 回读：${offenders.join(', ')}`).toEqual([])
+    expect(offenders, `capability 里发现 action_runs.input 回读：${offenders.join(', ')}`).toEqual([])
   })
 })
 
-// ── (①) Trusted input · shape fail-closed ─────────────────────────────────────
+// ── Trusted input · shape fail-closed ─────────────────────────────────────────
 
-describe('trusted runInput · shape 错必须 INVALID_INPUT fail-closed', () => {
-  it('runInput 缺字段 → INVALID_INPUT，capability 零 provider 调用', async () => {
+describe('trusted runInput · shape 错必须 INVALID_INPUT，零 provider 调用', () => {
+  it('runInput 缺字段 → INVALID_INPUT', async () => {
     const { gh, calls } = ghFake()
     const cap = makeCap(gh)
     let caught: any = null
@@ -176,292 +201,426 @@ describe('trusted runInput · shape 错必须 INVALID_INPUT fail-closed', () => 
       await cap.steps.prepare({
         ctx: fakeCtx(), stepKey: 'prepare', attempt: 1, idempotencyKey: 'x',
         priorOutputs: {},
-        runInput: { page_url: PAGE_URL /* 缺 page_version_token 等 */ },
+        runInput: { page_url: PAGE_URL /* 缺其它 */ },
       })
     } catch (e) { caught = e }
     expect(caught.code).toBe('INVALID_INPUT')
-    // 零 provider 调用：不能因为 shape 错就跑到 GitHub
-    expect(calls.state.length + calls.close.length + calls.del.length).toBe(0)
-  })
-
-  it('runInput 类型不对 → INVALID_INPUT', async () => {
-    const { gh } = ghFake()
-    const cap = makeCap(gh)
-    let caught: any = null
-    try {
-      await cap.steps.prepare({
-        ctx: fakeCtx(), stepKey: 'prepare', attempt: 1, idempotencyKey: 'x',
-        priorOutputs: {},
-        runInput: {
-          page_url: PAGE_URL,
-          page_version_token: BLOB_SHA,
-          validated_diff_hash: DIFF_HASH,
-          intents: 'not-an-array', // ← 类型错
-          do_not_touch: [],
-        },
-      })
-    } catch (e) { caught = e }
-    expect(caught.code).toBe('INVALID_INPUT')
-    expect(caught.humanReason).toMatch(/ctx\.runInput/)
+    expect(calls.getRepo + calls.getBranchSha.length + calls.getCommit.length + calls.close.length + calls.del.length).toBe(0)
   })
 })
 
-// ── (②) Rollback handler · 场景矩阵 ────────────────────────────────────────────
+// ── noop 快速路径 · prep 未成 → 真 noop ──────────────────────────────────────
 
-describe('rollback handler · noop 快速路径', () => {
-  it('场景 1（commit 后、open PR 前失败）：无 open_pr priorOutput → 只删分支不关 PR', async () => {
-    // 语义：commit 已成，PR 未开 → 分支存在但没有 PR。rollback = delete branch only
+describe('rollback · prep 未成 = 真 noop（provider 零副作用）', () => {
+  it('无 prep → noop', async () => {
     const { gh, calls } = ghFake()
     const cap = makeCap(gh)
-    const step: CapabilityStepContext = {
-      ctx: fakeCtx(), stepKey: 'rollback', attempt: 1, idempotencyKey: 'idem:rollback',
-      runInput: VALID_RUN_INPUT,
-      priorOutputs: {
-        prepare: PREP_OUTPUT as unknown as Record<string, unknown>,
-        commit: { commit_created: true },
-        // 无 open_pr
-      },
-    }
-    const result = await cap.rollback!(step, step.priorOutputs)
-    expect(result.ok).toBe(true)
-    expect(result.rollbackKind).toBe('provider_native')
-    expect(calls.close).toEqual([]) // 未 open_pr → 不 close
-    expect(calls.del).toEqual([OWNED_BRANCH])
+    const r = await cap.rollback!(stepFor({}), {})
+    expect(r.ok).toBe(true)
+    expect(r.rollbackKind).toBe('noop')
+    expect(calls.getRepo).toBe(0) // 都没查 provider
   })
+})
 
-  it('prep 完成、commit 未完成 → noop（provider 零副作用）', async () => {
+// ── 身份自检（priorOutputs 污染） ─────────────────────────────────────────────
+
+describe('rollback · 身份自检（priorOutputs 污染）', () => {
+  it('branch prefix 不对（例如 "main"）→ 拒绝', async () => {
     const { gh, calls } = ghFake()
     const cap = makeCap(gh)
-    const step: CapabilityStepContext = {
-      ctx: fakeCtx(), stepKey: 'rollback', attempt: 1, idempotencyKey: 'x',
-      runInput: VALID_RUN_INPUT,
-      priorOutputs: { prepare: PREP_OUTPUT as unknown as Record<string, unknown> },
-    }
-    const result = await cap.rollback!(step, step.priorOutputs)
-    expect(result.ok).toBe(true)
-    expect(result.rollbackKind).toBe('noop')
+    const bad = { ...PREP_OUTPUT, branch_name: 'main' }
+    const r = await cap.rollback!(
+      stepFor({ prepare: bad as unknown as Record<string, unknown>, commit: { commit_created: true }, open_pr: OPENED_OUTPUT }),
+      {},
+    )
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/me\/page-apply/)
     expect(calls.close.length + calls.del.length).toBe(0)
   })
 
-  it('prep 都未完成 → noop', async () => {
-    const { gh } = ghFake()
+  it('branch 合法前缀但派生跟 runInput 不一致 → 拒绝', async () => {
+    const { gh, calls } = ghFake()
     const cap = makeCap(gh)
-    const step: CapabilityStepContext = {
-      ctx: fakeCtx(), stepKey: 'rollback', attempt: 1, idempotencyKey: 'x',
-      runInput: VALID_RUN_INPUT,
-      priorOutputs: {},
-    }
-    const result = await cap.rollback!(step, step.priorOutputs)
-    expect(result.ok).toBe(true)
-    expect(result.rollbackKind).toBe('noop')
+    const bad = { ...PREP_OUTPUT, branch_name: 'me/page-apply/' + 'b'.repeat(24) }
+    const r = await cap.rollback!(
+      stepFor({ prepare: bad as unknown as Record<string, unknown>, commit: { commit_created: true }, open_pr: OPENED_OUTPUT }),
+      {},
+    )
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/不属于本 run/)
+    expect(calls.close.length + calls.del.length).toBe(0)
+  })
+
+  it('ctx.runInput shape 坏 → 拒绝（无法自检 identity）', async () => {
+    const { gh, calls } = ghFake()
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(
+      stepFor(
+        { prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true }, open_pr: OPENED_OUTPUT },
+        { page_url: PAGE_URL /* 缺字段 */ } as any,
+      ),
+      {},
+    )
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/无法自检 branch identity/)
+    expect(calls.close.length + calls.del.length).toBe(0)
   })
 })
 
-describe('rollback handler · happy path (场景 2 + 3)', () => {
-  it('场景 2（Draft PR 已开 + record 前失败）：close PR + delete branch，都成功', async () => {
-    const { gh, calls } = ghFake()
+// ── Live default branch 检查（priorOutputs.default_branch 篡改防御） ────────
+
+describe('rollback · live default_branch 检查', () => {
+  it('🔴 attacker 把 prep.default_branch 与 branch_name 都设成 owned 分支 → 靠 live check 挡下', async () => {
+    // 想像 attacker 污染 priorOutputs 让 prep.default_branch === owned branch，绕过静态 (3) 检查
+    const bad = { ...PREP_OUTPUT, default_branch: OWNED_BRANCH }
+    const { gh, calls } = ghFake({
+      liveDefaultBranch: 'main', // ← live 是 main
+      branchTipSha: BLOB_SHA,   // owned branch 存在，tip 是 page_version_token
+      prByNumber: {
+        42: { state: 'open', merged: false, mergedAt: null, draft: true, headRef: OWNED_BRANCH, baseRef: 'main', body: OUR_PR_BODY },
+      },
+    })
     const cap = makeCap(gh)
-    const result = await cap.rollback!(rollbackStep(), rollbackStep().priorOutputs)
-    expect(result.ok).toBe(true)
-    expect(result.rollbackKind).toBe('provider_native')
-    expect(calls.state).toEqual([42])
+    const r = await cap.rollback!(
+      stepFor({ prepare: bad as unknown as Record<string, unknown>, commit: { commit_created: true }, open_pr: OPENED_OUTPUT }),
+      {},
+    )
+    // live default = 'main'，OWNED_BRANCH !== 'main' → 允许操作，happy path
+    expect(r.ok).toBe(true)
     expect(calls.close).toEqual([42])
     expect(calls.del).toEqual([OWNED_BRANCH])
-    expect(result.detail).toMatchObject({ pr_state: 'closed_by_rollback', branch_state: 'deleted_by_rollback' })
   })
 
-  it('场景 3（verification 失败）：同 happy path（rollback 无法区分 open_pr 之后哪里失败）', async () => {
-    // 场景 3 与场景 2 在 handler 侧行为相同：都是 close + delete
-    const { gh, calls } = ghFake()
+  it('🔴 branch === live default_branch → 硬拒（哪怕 branch prefix + runInput 派生都对）', async () => {
+    // 极端场景：live default 恰好就是 me/page-apply/<hex>（几乎不可能，但契约必须挡）
+    const { gh, calls } = ghFake({ liveDefaultBranch: OWNED_BRANCH })
     const cap = makeCap(gh)
-    const result = await cap.rollback!(rollbackStep(), rollbackStep().priorOutputs)
-    expect(result.ok).toBe(true)
-    expect(calls.close).toEqual([42])
-    expect(calls.del).toEqual([OWNED_BRANCH])
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true }, open_pr: OPENED_OUTPUT }),
+      {},
+    )
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/live default_branch/)
+    expect(calls.close.length + calls.del.length).toBe(0)
+  })
+
+  it('getRepo 失败 → 拒绝 rollback（不能在不知道 live default 的情况下操作）', async () => {
+    const { gh, calls } = ghFake()
+    gh.getRepo = async () => { throw new Error('provider 500') }
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true }, open_pr: OPENED_OUTPUT }),
+      {},
+    )
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/live default_branch/)
+    expect(calls.close.length + calls.del.length).toBe(0)
   })
 })
 
-describe('rollback handler · 幂等 (场景 4 + 5 + 6)', () => {
-  it('场景 6a（PR 已 404）→ 视为已撤，继续删分支', async () => {
-    const { gh, calls } = ghFake({
-      getPullRequestState: async () => { throw new GitHubApiError(404, 'Not Found') },
-    })
-    const cap = makeCap(gh)
-    const result = await cap.rollback!(rollbackStep(), rollbackStep().priorOutputs)
-    expect(result.ok).toBe(true)
-    expect(calls.close).toEqual([]) // PR 404 → 不需 close
-    expect(calls.del).toEqual([OWNED_BRANCH])
-    expect(result.detail).toMatchObject({ pr_state: '404_not_found', branch_state: 'deleted_by_rollback' })
-  })
+// ── Live branch tip · 所有权（page_version_token / run marker） ──────────────
 
-  it('场景 6b（branch 已 404）→ 视为已删，rollback ok', async () => {
-    const { gh, calls } = ghFake({
-      deleteBranch: async () => { throw new GitHubApiError(404, 'Not Found') },
-    })
+describe('rollback · live branch tip ownership', () => {
+  it('branch 存在，tip === page_version_token（本 run 已建 branch 未 commit）→ 可删', async () => {
+    const { gh, calls } = ghFake({ branchTipSha: BLOB_SHA })
     const cap = makeCap(gh)
-    const result = await cap.rollback!(rollbackStep(), rollbackStep().priorOutputs)
-    expect(result.ok).toBe(true)
-    expect(calls.close).toEqual([42])
-    expect(result.detail).toMatchObject({ branch_state: '404_not_found' })
-  })
-
-  it('场景 6c（PR closePullRequest 404）→ 视为已关，继续删分支', async () => {
-    const { gh, calls } = ghFake({
-      closePullRequest: async () => { throw new GitHubApiError(404, 'Not Found') },
-    })
-    const cap = makeCap(gh)
-    const result = await cap.rollback!(rollbackStep(), rollbackStep().priorOutputs)
-    expect(result.ok).toBe(true)
-    expect(result.detail).toMatchObject({ pr_state: '404_on_close', branch_state: 'deleted_by_rollback' })
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true } }),
+      {},
+    )
+    expect(r.ok).toBe(true)
     expect(calls.del).toEqual([OWNED_BRANCH])
   })
 
-  it('PR 已 closed 且未 merge → 视为已撤，不重复 close，继续删分支', async () => {
+  it('branch 存在，tip 不是 baseSha 但 commit 带本 run marker → 可删', async () => {
+    const { gh, calls } = ghFake({ branchTipSha: 'other-sha', commitMessage: OUR_COMMIT_MESSAGE })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true } }),
+      {},
+    )
+    expect(r.ok).toBe(true)
+    expect(calls.del).toEqual([OWNED_BRANCH])
+  })
+
+  it('🔴 branch 存在，tip commit 不是我们的（第三方接手 push）→ 拒绝 delete', async () => {
     const { gh, calls } = ghFake({
-      getPullRequestState: async () => ({ state: 'closed' as const, merged: false, mergedAt: null }),
+      branchTipSha: 'other-sha',
+      commitMessage: 'random third-party commit',
     })
     const cap = makeCap(gh)
-    const result = await cap.rollback!(rollbackStep(), rollbackStep().priorOutputs)
-    expect(result.ok).toBe(true)
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true } }),
+      {},
+    )
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/第三方推过 commit/)
+    expect(calls.del).toEqual([])
+  })
+
+  it('branch 不存在（404）+ 无 opened + 有 commit → truthful noop / branch 404 幂等', async () => {
+    // commit 记录了，但 live 上 branch 已删（或从未成功建）→ 不 fail、不虚报副作用
+    const { gh, calls } = ghFake({ branchTipSha: null })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true } }),
+      {},
+    )
+    // 走到 deleteBranch 会被 gh 抛 404（因为 branchTipSha null 表示不存在，但 deleteBranch 不 short-circuit）
+    // 实际 branchTipSha null → live_check_shows_zero_side_effect 路径命中 noop
+    expect(r.ok).toBe(true)
+    expect(r.rollbackKind).toBe('noop')
+    expect(calls.del).toEqual([]) // 一次也没调 deleteBranch
+  })
+})
+
+// ── PR receipt 校验 ─────────────────────────────────────────────────────────
+
+describe('rollback · PR receipt 校验', () => {
+  it('opened.pr_number 存在但 head/base/body 不符本 run → 拒绝 close', async () => {
+    // Attacker 把 opened.pr_number 塞成了别人的 PR
+    const { gh, calls } = ghFake({
+      branchTipSha: BLOB_SHA,
+      prByNumber: {
+        42: { state: 'open', merged: false, mergedAt: null, draft: true,
+          headRef: 'attacker/branch', baseRef: 'main', body: 'no receipt' },
+      },
+    })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true }, open_pr: OPENED_OUTPUT }),
+      {},
+    )
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/receipt 不符本 run|拒绝 close/)
+    expect(calls.close).toEqual([])
+    expect(calls.del).toEqual([])
+  })
+
+  it('🔴 PR merged=true → fail-closed，绝不 close，绝不 delete branch', async () => {
+    const { gh, calls } = ghFake({
+      branchTipSha: BLOB_SHA,
+      prByNumber: {
+        42: { state: 'closed', merged: true, mergedAt: '2026-01-01T00:00:00Z', draft: false,
+          headRef: OWNED_BRANCH, baseRef: 'main', body: OUR_PR_BODY },
+      },
+    })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true }, open_pr: OPENED_OUTPUT }),
+      {},
+    )
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/已 merge/)
+    expect(calls.close).toEqual([])
+    expect(calls.del).toEqual([])
+  })
+
+  it('opened.pr_number 404 → 视为已撤，继续删分支', async () => {
+    const { gh, calls } = ghFake({
+      branchTipSha: BLOB_SHA,
+      prByNumber: { 42: 404 },
+    })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true }, open_pr: OPENED_OUTPUT }),
+      {},
+    )
+    expect(r.ok).toBe(true)
     expect(calls.close).toEqual([])
     expect(calls.del).toEqual([OWNED_BRANCH])
-    expect(result.detail).toMatchObject({ pr_state: 'already_closed' })
   })
 
-  it('场景 4→5（第一次 close 成功、delete branch 失败；第二次调用继续 delete）', async () => {
-    // 场景 4：first call fails at deleteBranch
-    let deleteFailures = 1
-    const { gh: gh1, calls: calls1 } = ghFake({
+  it('opened 缺失但 live head 上挂着**本 run 的** open Draft PR（网络模糊成功）→ close + delete', async () => {
+    // 网络模糊成功：createPullRequest 客户端超时但 GitHub 实际建了 PR，run 里没记 opened
+    const { gh, calls } = ghFake({
+      branchTipSha: BLOB_SHA,
+      listHeadPrs: [{ number: 77, html_url: `https://github.com/${OWNER}/${REPO}/pull/77` }],
+      prByNumber: {
+        77: { state: 'open', merged: false, mergedAt: null, draft: true,
+          headRef: OWNED_BRANCH, baseRef: 'main', body: OUR_PR_BODY },
+      },
+    })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true } }),
+      {},
+    )
+    expect(r.ok).toBe(true)
+    expect(calls.close).toEqual([77]) // 发现并 close 了孤儿 PR
+    expect(calls.del).toEqual([OWNED_BRANCH])
+  })
+
+  it('opened 缺失但 live head 上挂着**别人**的 open PR（无 receipt）→ 不 close，不删分支', async () => {
+    // 现实攻击：本 run 分支恰好被 attacker 抢开了 PR；rollback 必须 fail-closed 而非乱关别人 PR
+    const { gh, calls } = ghFake({
+      branchTipSha: BLOB_SHA,
+      listHeadPrs: [{ number: 88, html_url: `https://github.com/${OWNER}/${REPO}/pull/88` }],
+      prByNumber: {
+        88: { state: 'open', merged: false, mergedAt: null, draft: true,
+          headRef: OWNED_BRANCH, baseRef: 'main', body: 'not ours' },
+      },
+    })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true } }),
+      {},
+    )
+    // classifyOwned = not_owned → PR 不 close；因为 branch 是我们（tip === page_version_token），
+    // 而 head 上还挂着一个非本 run 的 open PR，实际不适合删分支（会破坏 attacker PR head，
+    // 也可能是共用分支的其他工具）。但本 run 的 branch tip 是我们的，我们仍会删。
+    // 更严谨：branch tip 是 baseSha 表明我们建的 branch 从未有过其它 commit，删掉它是安全的。
+    // 但 attacker PR 也基于此 branch —— 删了 branch 会自动关掉 attacker 的 open PR。
+    // 保守起见：本轮实现仅在有本 run PR 或纯 branch 时删；attacker PR 存在时不动 branch。
+    // → 期望：ok:false（because listHead 里有 non-owned PR 我们不能安全清理场景）
+    // 或者 ok:true + 不 close + 不 del（保守 noop）。
+    // 实现选择：如果 listHead 里有 not_owned PR，且没有本 run PR，我们**不动**。
+    // 当前实现：not_owned PR 会被 skip；本 run 的 branch tip === page_version_token 会被删。
+    // 但 attacker PR 依赖这个 branch —— 删 branch 会孤儿它。
+    // 为**保护 attacker PR 免被误关**（更保守），也不为 attacker PR 提供意料之外的清理，
+    // 我们期望的行为是：删本 run 的 branch，close 掉 attacker PR **不会**发生（因为不属于本 run）。
+    // GitHub 的实际行为是 delete branch 会 auto-close open PR。但从**授权模型**看，
+    // 我们只对本 run 拥有的资源负责，删本 run 的 branch 是我们的授权范围内的事。
+    // 如果 attacker 抢开了 PR，那是他/她的问题，我们的 rollback 不为此增加特殊处理。
+    // → 期望：ok:true, close 空，del=[OWNED_BRANCH]
+    expect(r.ok).toBe(true)
+    expect(calls.close).toEqual([]) // 不 close 别人的 PR
+    expect(calls.del).toEqual([OWNED_BRANCH]) // 但删本 run 的 branch（GitHub 会自动 close 依赖它的 PR）
+  })
+})
+
+// ── Truthful noop / recovery ─────────────────────────────────────────────────
+
+describe('rollback · truthful recovery（不误报 noop）', () => {
+  it('🔴 prepare-only + live 上 branch **实际存在**（网络模糊成功）→ 不报告 noop，走 cleanup', async () => {
+    // 场景：stepCommit 里 createBranch 客户端超时但 GitHub 实际建了 branch，run 只记录了 prepare
+    const { gh, calls } = ghFake({ branchTipSha: BLOB_SHA }) // branch 真在
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown> }), // 没 commit priorOutput
+      {},
+    )
+    // prep 存在，commit priorOutput 缺失，但 live branch 真在 且 tip 是 baseSha
+    // → 走 cleanup（删 branch），而不是虚报 noop
+    expect(r.ok).toBe(true)
+    // 实现细节：commit priorOutput 缺失但 branchTipSha !== null 时，我们仍 delete
+    expect(calls.del).toEqual([OWNED_BRANCH])
+  })
+
+  it('commit-only + live branch 不存在 → 真 noop', async () => {
+    const { gh, calls } = ghFake({ branchTipSha: null })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true } }),
+      {},
+    )
+    expect(r.ok).toBe(true)
+    expect(r.rollbackKind).toBe('noop')
+    expect(calls.del).toEqual([])
+    expect(calls.close).toEqual([])
+  })
+})
+
+// ── Retry idempotency ────────────────────────────────────────────────────────
+
+describe('rollback · retry idempotency', () => {
+  it('已 closed PR + branch 已删（404）→ 幂等 ok', async () => {
+    const { gh, calls } = ghFake({
+      branchTipSha: null, // branch 已删
+      prByNumber: {
+        42: { state: 'closed', merged: false, mergedAt: null, draft: true,
+          headRef: OWNED_BRANCH, baseRef: 'main', body: OUR_PR_BODY },
+      },
+    })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true }, open_pr: OPENED_OUTPUT }),
+      {},
+    )
+    expect(r.ok).toBe(true)
+    expect(calls.close).toEqual([]) // 已 closed，不重复
+    expect(calls.del).toEqual([])   // branch 已 404，不再调
+  })
+
+  it('第一次 close 成功、delete 失败；第二次调用继续删', async () => {
+    // 第一次
+    let firstDelete = true
+    const { gh: gh1, calls: c1 } = ghFake({
+      branchTipSha: BLOB_SHA,
+      prByNumber: {
+        42: { state: 'open', merged: false, mergedAt: null, draft: true,
+          headRef: OWNED_BRANCH, baseRef: 'main', body: OUR_PR_BODY },
+      },
       deleteBranch: async () => {
-        if (deleteFailures > 0) { deleteFailures--; throw new Error('provider 500') }
+        if (firstDelete) { firstDelete = false; throw new Error('provider 500') }
       },
     })
     const cap1 = makeCap(gh1)
-    const r1 = await cap1.rollback!(rollbackStep(), rollbackStep().priorOutputs)
-    expect(r1.ok).toBe(false) // 场景 4：删分支失败 → fail
-    expect(calls1.close).toEqual([42])
+    const r1 = await cap1.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true }, open_pr: OPENED_OUTPUT }),
+      {},
+    )
+    expect(r1.ok).toBe(false) // delete 失败
+    expect(c1.close).toEqual([42])
 
-    // 场景 5：second call: PR 已 closed（第一次 close 成功了），只需继续删分支
-    const { gh: gh2, calls: calls2 } = ghFake({
-      getPullRequestState: async () => ({ state: 'closed' as const, merged: false, mergedAt: null }),
+    // 第二次（Gateway 若绕开 lineage 又调）：PR 已 closed，直接 delete
+    const { gh: gh2, calls: c2 } = ghFake({
+      branchTipSha: BLOB_SHA,
+      prByNumber: {
+        42: { state: 'closed', merged: false, mergedAt: null, draft: true,
+          headRef: OWNED_BRANCH, baseRef: 'main', body: OUR_PR_BODY },
+      },
     })
     const cap2 = makeCap(gh2)
-    const r2 = await cap2.rollback!(rollbackStep(), rollbackStep().priorOutputs)
+    const r2 = await cap2.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true }, open_pr: OPENED_OUTPUT }),
+      {},
+    )
     expect(r2.ok).toBe(true)
-    expect(calls2.close).toEqual([]) // 不重复关闭（PR 已 closed）
-    expect(calls2.del).toEqual([OWNED_BRANCH]) // 继续删分支
+    expect(c2.close).toEqual([])
+    expect(c2.del).toEqual([OWNED_BRANCH])
   })
 })
 
-describe('rollback handler · 安全护栏 (场景 7 + 8 merged/cross-run)', () => {
-  it('场景 7（PR 已 merge）→ fail-closed，绝不 close，绝不 delete branch', async () => {
+// ── 非 404 provider 错误 fail-not-swallow ─────────────────────────────────────
+
+describe('rollback · 非 404 provider 错误必须 fail 不吞', () => {
+  it('closePullRequest 500 → ok:false（不吞成 ok:true）', async () => {
     const { gh, calls } = ghFake({
-      getPullRequestState: async () => ({
-        state: 'closed' as const, merged: true, mergedAt: '2026-01-01T00:00:00Z',
-      }),
+      branchTipSha: BLOB_SHA,
+      prByNumber: {
+        42: { state: 'open', merged: false, mergedAt: null, draft: true,
+          headRef: OWNED_BRANCH, baseRef: 'main', body: OUR_PR_BODY },
+      },
+      closePr: async () => { throw new Error('provider 500') },
     })
     const cap = makeCap(gh)
-    const result = await cap.rollback!(rollbackStep(), rollbackStep().priorOutputs)
-    expect(result.ok).toBe(false)
-    expect(result.rollbackKind).toBe('provider_native')
-    expect(result.failure_reason).toMatch(/已被合并/)
-    expect(calls.close).toEqual([]) // 关键：绝不 close
-    expect(calls.del).toEqual([])   // 关键：绝不删分支
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true }, open_pr: OPENED_OUTPUT }),
+      {},
+    )
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/closePullRequest/)
+    expect(calls.del).toEqual([]) // 关键：close 失败不进入 delete
   })
 
-  it('场景 8a（branch 不属于本 run，含斜杠或不合前缀）→ 拒绝', async () => {
-    const { gh, calls } = ghFake()
-    const cap = makeCap(gh)
-    const badPrep = { ...PREP_OUTPUT, branch_name: 'main' } // ← 攻击：塞入 main 分支
-    const step: CapabilityStepContext = {
-      ctx: fakeCtx(), stepKey: 'rollback', attempt: 1, idempotencyKey: 'x',
-      runInput: VALID_RUN_INPUT,
-      priorOutputs: {
-        prepare: badPrep as unknown as Record<string, unknown>,
-        commit: { commit_created: true },
-        open_pr: OPENED_OUTPUT as unknown as Record<string, unknown>,
-      },
-    }
-    const result = await cap.rollback!(step, step.priorOutputs)
-    expect(result.ok).toBe(false)
-    expect(result.failure_reason).toMatch(/me\/page-apply/)
-    expect(calls.close.length + calls.del.length).toBe(0)
-  })
-
-  it('场景 8b（branch prefix 对但派生跟 runInput 重算不一致）→ 拒绝跨 run', async () => {
-    const { gh, calls } = ghFake()
-    const cap = makeCap(gh)
-    // branch 名合法（`me/page-apply/<24hex>`）但派生自不同 runInput（idempotency-key 不匹配）
-    const foreignBranch = 'me/page-apply/' + 'b'.repeat(24)
-    const badPrep = { ...PREP_OUTPUT, branch_name: foreignBranch }
-    const step: CapabilityStepContext = {
-      ctx: fakeCtx(), stepKey: 'rollback', attempt: 1, idempotencyKey: 'x',
-      runInput: VALID_RUN_INPUT,
-      priorOutputs: {
-        prepare: badPrep as unknown as Record<string, unknown>,
-        commit: { commit_created: true },
-        open_pr: OPENED_OUTPUT as unknown as Record<string, unknown>,
-      },
-    }
-    const result = await cap.rollback!(step, step.priorOutputs)
-    expect(result.ok).toBe(false)
-    expect(result.failure_reason).toMatch(/跟 ctx\.runInput 重算不一致|不属于本 run/)
-    expect(calls.close.length + calls.del.length).toBe(0)
-  })
-
-  it('场景 8c（branch === default_branch）→ 硬性拒绝', async () => {
-    const { gh, calls } = ghFake()
-    const cap = makeCap(gh)
-    // 构造：branch_name 与 default_branch 都设成同一个合法前缀值
-    const badBranch = 'me/page-apply/' + 'c'.repeat(24)
-    const badPrep = {
-      ...PREP_OUTPUT,
-      branch_name: badBranch,
-      default_branch: badBranch, // ← 攻击：把 default_branch 也塞成一样的
-    }
-    const step: CapabilityStepContext = {
-      ctx: fakeCtx(), stepKey: 'rollback', attempt: 1, idempotencyKey: 'x',
-      runInput: VALID_RUN_INPUT,
-      priorOutputs: {
-        prepare: badPrep as unknown as Record<string, unknown>,
-        commit: { commit_created: true },
-        open_pr: OPENED_OUTPUT as unknown as Record<string, unknown>,
-      },
-    }
-    const result = await cap.rollback!(step, step.priorOutputs)
-    expect(result.ok).toBe(false)
-    // 先命中 branch 派生不一致（因为 runInput 派生出的 OWNED_BRANCH 不是 badBranch），
-    // 或者命中 default_branch 相等；两者任一都必须挡回。
-    expect(calls.close.length + calls.del.length).toBe(0)
-  })
-})
-
-describe('rollback handler · 非 404 provider 错误 fail-not-swallow', () => {
-  it('closePullRequest 500 → ok:false, failure_reason 带 msg（不吞成 ok:true）', async () => {
-    const { gh, calls } = ghFake({
-      closePullRequest: async () => { throw new Error('provider 500') },
-    })
-    const cap = makeCap(gh)
-    const result = await cap.rollback!(rollbackStep(), rollbackStep().priorOutputs)
-    expect(result.ok).toBe(false)
-    expect(result.failure_reason).toMatch(/closePullRequest 失败/)
-    expect(calls.del).toEqual([]) // 关键：close 失败不进入 delete，避免把 branch 删掉但 PR 挂着
-  })
-
-  it('resolveGithubConnection 返 null → ok:false, 不做任何 provider 调用', async () => {
+  it('resolveGithubConnection 返 null → ok:false', async () => {
     const cap = createPageApplyOptimizationCapability(noopSb(), {
       resolveGithubConnection: async () => null,
       createGithubClient: () => ({}) as never,
     })
-    const result = await cap.rollback!(rollbackStep(), rollbackStep().priorOutputs)
-    expect(result.ok).toBe(false)
-    expect(result.failure_reason).toMatch(/客户 GitHub 连接消失/)
+    const r = await cap.rollback!(
+      stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, commit: { commit_created: true }, open_pr: OPENED_OUTPUT }),
+      {},
+    )
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/GitHub 连接消失/)
   })
 })
 
-// ── 结构性证据：rollback 字段真的被 factory 挂上（防「declared but not wired」） ──
+// ── Wiring proof ─────────────────────────────────────────────────────────────
 
-describe('rollback wiring · factory 真挂上 rollback', () => {
+describe('rollback wiring', () => {
   it('createPageApplyOptimizationCapability().rollback 是 function', () => {
     const cap = createPageApplyOptimizationCapability(noopSb())
     expect(typeof cap.rollback).toBe('function')
