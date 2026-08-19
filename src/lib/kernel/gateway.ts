@@ -348,25 +348,33 @@ export async function executeAuthorizedRun(
     //    的 Action 装配时必须已经提供 rollback handler。缺就在这里 fail-closed，
     //    绝不 beginAuthorizedRun、绝不消费授权 —— 补上 handler 后 approval 可以再用。
     assertRollbackHandlerAssembled(definition, assembled)
-  } else if (
-    // 🔴 A 级复审 P1-2 修复（子牙/魏征）：**outward + provider_native + capability
-    //    完全未装配**的死角。原来 `if (assembled)` 分支只在 assembled 非空时才验
-    //    rollback handler，capability 整个没注册时 gate 被绕过 —— 流程走
-    //    beginAuthorizedRun 消费掉授权、再 fail CAPABILITY_NOT_IMPLEMENTED，违背
-    //    「补上 handler 后 approval 可以再用」的 spec 承诺。
+  } else if (definition.sideEffect === 'outward') {
+    // 🔴 A 级复审 P1-2 修复（子牙/魏征 二轮）：**outward + capability 完全未装配**
+    //    的死角。原来 `if (assembled)` 分支只在 assembled 非空时才验 rollback
+    //    handler，capability 整个没注册时 gate 被绕过 —— 流程走 beginAuthorizedRun
+    //    消费掉授权、再 fail CAPABILITY_NOT_IMPLEMENTED，违背「补上 handler 后
+    //    approval 可以再用」的 spec 承诺。
     //
-    //    修复只覆盖 outward + provider_native（有 rollback 契约的动作）：
-    //    这类必须在 beginAuthorizedRun 之前 fail，不消费授权。**非 outward 的动作
-    //    保留既有 dead_letter + needs_human 行为**（PM 看到待办可以处理），
-    //    因为它们没有「rollback 装配契约」，也没有 provider 副作用要保护。
-    definition.sideEffect === 'outward' &&
-    definition.outwardAuthorization?.rollback === 'provider_native'
-  ) {
+    //    修复覆盖**所有 outward 动作**（不限 rollback mode）：
+    //    第一轮修复只覆盖 provider_native，魏征二轮指出 `snapshot_restore` +
+    //    capability 未装配同样漏授权消费。语义上这道闸的意图是「outward 动作
+    //    没装配就不许消费授权」，与具体 rollback 类型无关 —— 收窄成 provider_native
+    //    是画错了边界。
+    //
+    //    **非 outward 的动作保留既有 dead_letter + needs_human 行为**（PM 看到
+    //    待办可以处理），因为它们没有「rollback 装配契约」，也没有 provider
+    //    副作用要保护。
     throw new KernelError(
       'CAPABILITY_NOT_IMPLEMENTED',
-      `「${definition.title}」这个动作声明了对外副作用 + provider-native rollback，但装配的 capability ` +
-        `整个没注册 —— 已在 beginAuthorizedRun 之前停手（授权决策未消费，装配好后可复用同一份 approval）`,
-      { detail: { actionKey: ctx.actionKey, sideEffect: 'outward', rollback: 'provider_native' } },
+      `「${definition.title}」这个动作声明了对外副作用，但装配的 capability 整个没注册 —— ` +
+        `已在 beginAuthorizedRun 之前停手（授权决策未消费，装配好后可复用同一份 approval）`,
+      {
+        detail: {
+          actionKey: ctx.actionKey,
+          sideEffect: 'outward',
+          rollback: definition.outwardAuthorization?.rollback ?? null,
+        },
+      },
     )
   }
 
@@ -1396,18 +1404,28 @@ function rollbackResultFromStep(step: ActionRunStep): OutwardRollbackResult {
   }
 }
 
-/** 排错文本兜底：Error → .message；plain object → JSON.stringify（吞循环）；其它 → String()。 */
+/**
+ * 排错文本兜底：Error → .message；plain object → JSON.stringify（BigInt-safe，吞循环）；其它 → String()。
+ *
+ * 🔴 A 级复审 P2-b 修复（魏征二轮）：JSON.stringify 遇 BigInt 值抛 TypeError → catch
+ *    走原兜底会返回 `"[object Object]"`，退化到修复前的问题。加 replacer 把 BigInt
+ *    转成字符串，保留数值信息。循环引用仍靠 catch 兜底。
+ */
 function describeUnknownError(e: unknown): string {
   if (e instanceof Error) return e.message
   if (e !== null && typeof e === 'object') {
     try {
-      return JSON.stringify(e)
+      return JSON.stringify(e, bigIntSafeReplacer)
     } catch {
-      // 循环引用或 BigInt 等无法序列化 —— 兜底
+      // 循环引用或其它无法序列化 —— 兜底给一个可辨识但极简的字符串
       return Object.prototype.toString.call(e)
     }
   }
   return String(e)
+}
+
+function bigIntSafeReplacer(_key: string, value: unknown): unknown {
+  return typeof value === 'bigint' ? value.toString() : value
 }
 
 function composeRollbackNote(result: OutwardRollbackResult): string {

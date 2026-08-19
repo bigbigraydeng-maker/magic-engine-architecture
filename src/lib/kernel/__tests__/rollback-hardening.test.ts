@@ -429,7 +429,30 @@ describe('B5 · A 级复审 P1-2：capability 完全未注册时授权不消费'
     expect(f.tables.action_run_steps.length).toBe(0)
   })
 
-  it('非 outward 动作 capability 未注册时保留既有 dead_letter 行为（P1-2 修复只覆盖 outward+provider_native）', async () => {
+  it('🔴 P2-a：outward + snapshot_restore + capability 完全未装配 → 同样在 beginAuthorizedRun 之前 fail-closed，授权不消费', async () => {
+    // 魏征二轮报的边界画窄问题：第一轮修复只覆盖 provider_native，snapshot_restore 依然漏。
+    // 新契约扩到「所有 outward」——任何对外副作用 capability 未装配都保护授权。
+    const snapshotRestoreDef = outwardDefinition({
+      outwardAuthorization: { ...OUTWARD_DECL, rollback: 'snapshot_restore' },
+    })
+    const f = makeFixture({
+      registry: makeRegistry([snapshotRestoreDef]),
+      capabilities: () => ({}), // 完全未装配
+      options: { policy: APPROVAL_POLICY },
+    })
+    const { run } = await submitActionRun(f.kernel, submitInput())
+    await authorizeRun(f.kernel, run)
+    await expect(approveAndRun(f.kernel, run.id, 'human@x.com')).rejects.toThrow(
+      /CAPABILITY_NOT_IMPLEMENTED|声明了对外副作用/,
+    )
+    // 核心断言：授权决策未被消费（跟 provider_native 分支同一契约）
+    const allow = f.tables.authorization_decisions.find((d) => d.verdict === 'allow')
+    expect(allow).toBeDefined()
+    expect(allow!.consumed_at).toBeNull()
+    expect(f.tables.action_run_steps.length).toBe(0)
+  })
+
+  it('非 outward 动作 capability 未注册时保留既有 dead_letter 行为（P1-2 修复只覆盖 outward）', async () => {
     const internalDef = { ...outwardDefinition({ sideEffect: 'internal_write', outwardAuthorization: null }) }
     const f = makeFixture({
       registry: makeRegistry([internalDef]),
@@ -527,6 +550,31 @@ describe('B7 · A 级复审 P1-4：rollback handler 抛非 Error 对象时保留
     expect(String(rollbackStep!.last_error)).not.toBe('[object Object]')
     expect(String(rollbackStep!.last_error)).toContain('PROVIDER_FAILED')
     expect(String(rollbackStep!.last_error)).toContain('upstream 5xx')
+  })
+
+  it('🔴 P2-b：handler throw plain object 里含 BigInt → 保留数值信息，不退化成 "[object Object]"', async () => {
+    const rollbackHandler: OutwardRollbackHandler = async () => {
+      // eslint-disable-next-line @typescript-eslint/no-throw-literal
+      // 用 BigInt() 而非字面量 42n —— 仓库 tsconfig target < ES2020，字面量会 TS2737
+      throw { code: 'PROVIDER_FAILED', bigNum: BigInt(42), detail: { note: 'contains BigInt' } }
+    }
+    const f = makeFixture({
+      registry: makeRegistry([outwardDefinition()]),
+      capabilities: failInVerifyCapability([], rollbackHandler),
+      options: { policy: APPROVAL_POLICY },
+    })
+    await runAction(f.kernel, submitInput())
+    await approveAndRun(f.kernel, f.tables.action_runs[0].id as string, 'human@x.com')
+
+    const rollbackStep = f.tables.action_run_steps.find((s) => s.step_key === 'rollback')
+    expect(rollbackStep).toBeDefined()
+    const lastError = String(rollbackStep!.last_error)
+    // 绝不能退化成兜底字符串
+    expect(lastError).not.toBe('[object Object]')
+    // BigInt 数值信息保留（replacer 转成字符串）
+    expect(lastError).toContain('PROVIDER_FAILED')
+    expect(lastError).toContain('42')
+    expect(lastError).toContain('contains BigInt')
   })
 
   it('handler throw circular object → 不 crash，兜底走 Object.prototype.toString', async () => {
