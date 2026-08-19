@@ -106,6 +106,8 @@ PM **不**决策：分支策略 · 修复走 A 还是 B · 字段命名 · 测�
 
 设计阶段审一次（出方案后、动手前），实施完再审一次。**「我自己审过了」不算 2 审。**
 
+派**独立复审**类 agent（只读审查，不动手改）时必须先出一张**复审派工卡（Scope-Lock Card）**，把「审」和「顺手改代码」物理隔开，硬红线是 `DO NOT BUILD`（不修代码/不新提交/不 push/不 merge/不 deploy）。模板与用法见 [风险分级工程质量闸 §5.1](./docs/ENGINEERING_QUALITY_GATES.md#51-复审派工卡scope-lock-card)。**Claude Code 自己派复审 agent 时也必须照此执行，不是只写给别人看的文档。**
+
 #### 风险分级质量闸（强制）
 
 所有 Issue / PR **编码前先定 A / B / C 风险级别**，并按 [风险分级工程质量闸](./docs/ENGINEERING_QUALITY_GATES.md) 决定测试、集成、mutation 与 review 强度：

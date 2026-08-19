@@ -85,6 +85,22 @@ Magic Engine 不采用“一切改动都用最高强度验证”，也不回到�
 
 审查目标是收敛到可决策状态，不是把“还能想到什么”全部塞进当前 PR。
 
+### 5.1 复审派工卡（Scope-Lock Card）
+
+凡是派出**独立复审 / 只读审查**类 agent（尤其是「两路独立 A 级结论」场景），派工提示词必须先给出一张范围卡，把「审」和「顺手改」物理隔开：
+
+```yaml
+CURRENT SHORTEST BOARD: <这一轮锁定的 Issue/PR>
+ONE REQUIRED OUTCOME: <唯一必须回答的问题——例如某个 commit 是否达到本轮最低验收>
+MAXIMUM SCOPE: <允许做到什么程度——如：恢复候选分支、只读审查、复跑必要证据>
+STOP WHEN: <达到什么条件就算完成，例如两路独立 A 级结论 + 简短 receipt 齐全>
+DO NOT BUILD: 不修代码、不新提交、不 push、不 merge、不 deploy
+```
+
+- `DO NOT BUILD` 是硬红线，不是建议：复审 agent 发现问题只能记录、升级给下一轮或 Build Control Room 裁决，不能自己顺手修——一旦复审 agent 也能改代码，「独立」就名存实亡。
+- `MAXIMUM SCOPE` 之外的发现（例如「顺带看到一份不在 diff 范围内的可疑 spec」）必须显式标记为「范围疑点，交由 XX 裁决」，不得自行处理也不得沉默略过。
+- 这张卡覆盖「7. Agent 开工与交付模板」里 **Review agent** 的开工声明；**实施类** agent 仍按原开工声明 / 收口报告模板执行，不套用 `DO NOT BUILD`。
+
 ## 6. 验证运行策略
 
 开发过程中：
