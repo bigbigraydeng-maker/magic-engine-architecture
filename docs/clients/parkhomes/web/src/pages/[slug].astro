@@ -60,6 +60,35 @@ const serviceSchema = {
     </div>
   </section>
 
+  {p.floorPlans && p.floorPlans.length > 0 && (
+    <section>
+      <div class="wrap">
+        <p class="eyebrow sec-eyebrow">Floor plans</p>
+        <h2 class="sec-h" style="margin-bottom:8px">Every lot, to scale</h2>
+        <p style="color:var(--mute);margin-bottom:30px">Supplied by our appointed agent. For visual purposes only — buyers should verify all measurements.</p>
+        <div style="display:grid;gap:36px">
+          {p.floorPlans.map((fp) => (
+            <div style="border:1px solid var(--line-d);border-radius:4px;padding:20px;background:var(--paper-2)">
+              <img src={fp.src} alt={`Floor plan — ${fp.lot}, ${p.name}`} loading="lazy" style="width:100%;height:auto;border-radius:2px;display:block" />
+              <div style="display:flex;flex-wrap:wrap;gap:18px;align-items:center;margin-top:14px">
+                <strong style="font-size:16px">{fp.lot}</strong>
+                <span style="color:var(--mute);font-size:14px">{fp.beds} bed · {fp.baths} bath · {fp.floorArea} floor · {fp.landArea} land</span>
+                {fp.listingUrl
+                  ? <a href={fp.listingUrl} target="_blank" rel="noopener" class="link-p" style="margin-left:auto">View live listing →</a>
+                  : <span style="margin-left:auto;color:var(--mute);font-size:13px">Not currently listed</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+        {p.listingsSearchUrl && (
+          <p style="margin-top:26px">
+            <a class="btn btn-ghost" href={p.listingsSearchUrl} target="_blank" rel="noopener">See all current listings on Ray White →</a>
+          </p>
+        )}
+      </div>
+    </section>
+  )}
+
   <section id="register" class="dark">
     <div class="wrap" style="max-width:760px">
       <p class="eyebrow sec-eyebrow">Register your interest</p>
