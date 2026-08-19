@@ -25,6 +25,9 @@ import {
   KERNEL_NO_SUPABASE_ADMIN_DIRS,
   KERNEL_FORBIDDEN_MODULE_IMPORTS,
   ACTION_BRIDGE_FORBIDDEN_IMPORTS,
+  ACTION_SUBMISSION_FORBIDDEN_IMPORTS,
+  KERNEL_RUNNER_ALLOWED_CALLER_DIRS,
+  KERNEL_RUNNER_MODULE,
   MIGRATION_VERSION_COLLISIONS_GRANDFATHERED,
 } from '../boundaries'
 import { outwardBlockReason } from '../outward-authorization'
@@ -1633,6 +1636,85 @@ describe('依赖方向：Kernel 不许挂在被它治理的那些层上', () => 
       expect(stripComments(jsx, KERNEL_JSX)).not.toContain('@/lib/growth')
     })
   })
+
+  /**
+   * 🔴 `src/lib/action-submission/**` —— PageOptimizationRequest → Kernel 的
+   *    平台级 submission adapter。它的物理边界跟 bridge 类似（不许 provider
+   *    write / capability / 域模块 / 直连 supabase），但**允许** import
+   *    Kernel 与 bridge —— 这正是它的工作。
+   */
+  it('🔴 action-submission 目录里没有一处 import 禁止列表里的模块', () => {
+    const violations = ALL_FILES.filter((f) => f.startsWith('src/lib/action-submission/'))
+      .filter((f) => !isTest(f))
+      .flatMap((f) => violationReasons(f, readCode(f), ACTION_SUBMISSION_FORBIDDEN_IMPORTS))
+
+    expect(
+      violations,
+      'action-submission 是 submission boundary，不是 pipeline / executor。\n' +
+        'capability / provider-write / 域模块 / legacy 执行路径 / page-optimization 的\n' +
+        '子路径运行时实现都是被禁的 —— 数据访问一律走 KernelDeps 注入。\n' +
+        violations.join('\n'),
+    ).toEqual([])
+  }, SCAN_TIMEOUT_MS)
+
+  /**
+   * 🔴 **Kernel runner 只有一条对外调用面**。
+   *
+   *    `runAction` / `submitActionRun` 是 Kernel 对外仅有的两个入口（runner.ts §注释）。
+   *    在生产代码里被 import 的目录只能是：Kernel 自己 + `src/lib/action-submission/**`
+   *    + `src/lib/kernel-approval/**`（人点头之后走的授权入口）。
+   *
+   *    多一条 caller = 又开了第二条执行路径，跟 bridge 的"纯映射"边界失效
+   *    是同一种事故形状。
+   */
+  it('🔴 @/lib/kernel/runner 只能被 Kernel / action-submission / kernel-approval 三处 import', () => {
+    const allowedDirs = KERNEL_RUNNER_ALLOWED_CALLER_DIRS
+    const violations = ALL_FILES.filter((f) => !isTest(f))
+      .filter((f) => !allowedDirs.some((d) => f.startsWith(d)))
+      .filter((f) => importedModules(f, readCode(f)).some((spec) => spec === KERNEL_RUNNER_MODULE || spec.startsWith(`${KERNEL_RUNNER_MODULE}/`)))
+
+    expect(
+      violations,
+      'Kernel runner 是执行内核的对外入口。\n' +
+        '业务要让系统做一件事，只有一条路：调 action-submission 里的 caller，\n' +
+        '让它去构造 SubmitActionInput、走 bridge、进 Kernel。\n' +
+        '新增一条 caller 需要拆一次架构评审（改 boundaries.ts 是一次要过 review 的 diff）。\n' +
+        violations.join('\n'),
+    ).toEqual([])
+  }, SCAN_TIMEOUT_MS)
+
+  /**
+   * 🔴 caller 里**不许 hardcode** ActionKey 字面量。
+   *
+   *    ActionKey 只能从 `mapCandidateIdentity(...)` 的返回值拿。写死一个字面量 =
+   *    跳过 bridge = 又开了第二条 submit path。Spec §6 明列。
+   *
+   *    这里穷举本 spec 冻结前后可能出现的 page 相关 key（`page.apply_optimization_request`
+   *    在 main 上不存在，但在 #1097 branch 里存在），并留一条通用的 `page.*` 前缀检查。
+   */
+  it('🔴 action-submission 里不许出现 hardcode 的 ActionKey 字面量（page.* 系列）', () => {
+    const HARDCODED_ACTION_KEY_PATTERNS = [
+      /['"`]page\.apply_optimization_request['"`]/,
+      /['"`]page\.[a-z_]+['"`]/,
+    ]
+    const violations: string[] = []
+    for (const file of ALL_FILES) {
+      if (!file.startsWith('src/lib/action-submission/')) continue
+      if (isTest(file)) continue
+      const code = readCode(file)
+      for (const pattern of HARDCODED_ACTION_KEY_PATTERNS) {
+        const match = code.match(pattern)
+        if (match) violations.push(`${file} contains ${match[0]}`)
+      }
+    }
+
+    expect(
+      violations,
+      'ActionKey 只能从 mapCandidateIdentity 的返回值拿 —— hardcode 一个 page.* key\n' +
+        '等于跳过 bridge。Spec §6：禁止 submitActionRun({actionKey: "page.apply_optimization_request", ...})。\n' +
+        violations.join('\n'),
+    ).toEqual([])
+  }, SCAN_TIMEOUT_MS)
 })
 
 describe('L2 边界：授权上下文不许在别处被造出来', () => {
