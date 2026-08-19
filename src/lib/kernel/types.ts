@@ -484,7 +484,9 @@ export interface CapabilityImplementation {
   /**
    * 🔴 `sideEffect:'outward' + outwardAuthorization.rollback:'provider_native'`
    *    的 Action 对应的 capability **必须**提供 rollback handler。
-   *    Gateway 在 mint 执行 ctx 之前把这条当**执行前置条件**验证：
+   *    Gateway 在 `executeAuthorizedRun` 内、`beginAuthorizedRun` **之前**、任何
+   *    provider 副作用发生**之前**把这条当**执行前置条件**验证（此时
+   *    `AuthorizedExecutionContext` 已经存在，位置在 gate 上游）：
    *    缺 handler → `ROLLBACK_HANDLER_MISSING` fail-closed，任何 provider 副作用
    *    发生前停止；授权决策不消费（补上 handler 后同一份 approval 可以再用）。
    *

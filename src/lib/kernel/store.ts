@@ -705,7 +705,11 @@ export async function updateRunFenced(
  *   · failed    + rollback_kind='provider_native' —— 试图撤但失败，外部状态不明；
  *   · skipped   + rollback_kind='noop'            —— handler 判定本次没有 side effect 要撤。
  *
- * 复用现有 append-only step 表 + `(run_id, step_key)` 唯一约束（天然防同一 failRun 重触发）。
+ * 复用现有 `action_run_steps` 表 —— 每个 `(run_id, step_key)` 一条**可更新**行，
+ * UNIQUE 约束保住同一 failRun 重触发时不会写第二行；rollback 走 `step_key='rollback'`
+ * 的这条一行。**不是 append-only**（该表本身允许 UPDATE，见 `updateStepFenced`），
+ * 但对 rollback 这一行的策略是「第一次写入之后不覆盖」（`insertRollbackStep`
+ * 撞 UNIQUE → 读回既有行返回），把 rollback 结果冻在第一次观察上。
  * 不新建 rollback_integrity VerificationMethod；不新建 rollback 独立表；不加 migration。
  *
  * 幂等：同一 run 的第二次 insert 会撞 UNIQUE，返回既有那行（rollback 结果不该被覆盖）。

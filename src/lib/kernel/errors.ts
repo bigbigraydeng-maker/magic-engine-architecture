@@ -88,7 +88,8 @@ export type KernelErrorCode =
    * 🔴 sideEffect:'outward' + rollback:'provider_native' 的 Action，
    *    对应的 capability 没有提供 `rollback` handler。
    *
-   *    这是**装配前置条件**，Gateway 在 mint 执行 ctx 之前就要挡下 ——
+   *    这是**装配前置条件**，Gateway 在 `beginAuthorizedRun` 之前、任何 provider
+   *    副作用发生之前就要挡下（`AuthorizedExecutionContext` 此时已存在，位置在 gate 上游）——
    *    否则一旦 dead_letter 时 provider 副作用没人撤。授权决策**不消费**：
    *    补上 handler 之后同一份 approval 就能再用。
    *
