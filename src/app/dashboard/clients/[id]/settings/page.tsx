@@ -52,6 +52,7 @@ import { UploadLinkPanel } from './_components/UploadLinkPanel'
 import { FactoryConfigPanel } from './_components/FactoryConfigPanel'
 import { CommentAutoReplyPanel } from './_components/CommentAutoReplyPanel'
 import { LeadsConfigPanel } from './_components/LeadsConfigPanel'
+import { LeadNotifyEmailsPanel } from './_components/LeadNotifyEmailsPanel'
 import { DomainRulesPanel } from './_components/DomainRulesPanel'
 import { PipelineStagesPanel } from './_components/PipelineStagesPanel'
 import { CommentAuditList } from './_components/CommentAuditList'
@@ -159,6 +160,9 @@ function TabBody({ tab, clientId }: { tab: SettingsTab; clientId: string }) {
           </SettingsSection>
           <SettingsSection icon="📧" title="邮件反应同步（谁打开了 / 谁点了链接）">
             <LeadsConfigPanel clientId={clientId} />
+          </SettingsSection>
+          <SettingsSection icon="📨" title="网站表单来了新客资，发邮件通知谁">
+            <LeadNotifyEmailsPanel clientId={clientId} />
           </SettingsSection>
           <SettingsSection icon="📤" title="客户素材上传链接（免登录）">
             <UploadLinkPanel clientId={clientId} />
