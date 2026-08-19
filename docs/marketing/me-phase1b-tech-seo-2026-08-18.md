@@ -99,6 +99,12 @@ sitemap post-state sha256：`61f1feb00f9247e942abb9f930ca611894c77430d264f490782
 
 **验证**：三处 `<script type="application/ld+json">` 用 `JSON.parse` 逐个解析，无异常。类型分别：`WebPage,ItemList` / `WebPage,Service` / `AboutPage,Organization`。
 
+**与 #1061 Entity Layer 的协调（未来 merge 兼容）**：
+
+- 本 PR 的 `Organization` 使用**规范 @id** `"@id": "https://magicengine.com.au/#organization"`，只带**当前已批准字段**：`name` / `url` / `email` / `areaServed`
+- **未来 #1061（Entity Layer）合入时**：应使用同一个 `@id`，schema.org 会自动把两处属性归并到同一个 Organization identity —— 届时 `legalName` / `founder` / `sameAs` 等由 #1061 追加，本 PR 无需回改
+- 本 PR **未复制** #1061 分支上的任何 legalName / founder / footer entity block / Terms / Privacy 改动 —— #1061 目前仍在法律审核阻塞中，本 PR 不做任何 positioning 声明
+
 ---
 
 ### 5. sitemap `lastmod` 校正
