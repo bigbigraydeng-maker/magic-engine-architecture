@@ -128,3 +128,90 @@ describe('describeDraft — 审批页第一行必须说清花多少', () => {
     ).toContain('受众')
   })
 })
+
+// ── boost_existing_post（ME2 广告中枢 v1，2026-08-20 feat/me-ads-hub-v1）─────────
+// 这一段是 Codex 复审 BLOCKER #1 的应对：现有 publisher 只支持"从素材新建广告"
+// 不支持"boost 已发帖"。扩了第三种 DraftKind 后必须至少覆盖：validateDraft 挡下
+// 缺 objectStoryId / 缺 destinationUrl / advantageAudience 不显式关的错，
+// metaTripletFor 走 TRAFFIC/LINK_CLICKS。
+
+function boostDraft(over: Partial<AdDraft> = {}): AdDraft {
+  return {
+    kind: 'boost_existing_post',
+    clientId: 'c-cts',
+    campaignName: 'ME-Sandbox-2026-08-20-reel-abc',
+    adSetName: 'NZ 55+ Facebook+IG',
+    dailyBudget: 20,
+    durationDays: 5,
+    geoCountries: ['NZ'],
+    ageMin: 55,
+    ageMax: 65,
+    pageId: '1234567890',
+    creatives: [],  // boost 复用原帖 creative，不给数组
+    objectStoryId: '1234567890_9876543210',
+    publisherPlatforms: ['facebook', 'instagram'],
+    advantageAudience: 0,
+    destinationUrl: 'https://www.ctstours.co.nz/china-tours',
+    ...over,
+  }
+}
+
+describe('validateDraft — boost_existing_post 专属校验', () => {
+  it('齐全的 boost 草案没问题', () => {
+    expect(validateDraft(boostDraft())).toEqual([])
+  })
+
+  it('缺 objectStoryId → 拦（少了这个就不是"投已有帖"是新建广告）', () => {
+    const p = validateDraft(boostDraft({ objectStoryId: undefined }))
+    expect(p.map((x) => x.field)).toContain('objectStoryId')
+  })
+
+  it('objectStoryId 格式不对 → 拦（必须 pageId_postId）', () => {
+    const p = validateDraft(boostDraft({ objectStoryId: 'not_a_valid_id' }))
+    expect(p.map((x) => x.field)).toContain('objectStoryId')
+  })
+
+  it('缺 destinationUrl → 拦（点广告没地方跳）', () => {
+    const p = validateDraft(boostDraft({ destinationUrl: undefined }))
+    expect(p.map((x) => x.field)).toContain('destinationUrl')
+  })
+
+  it('advantageAudience 不显式关 → 拦（否则会反锁 ageMin ≤ 25）', () => {
+    // Meta 默认打开 advantage_audience 会让 ageMin 55 失效
+    const p = validateDraft(boostDraft({ advantageAudience: 1 }))
+    expect(p.map((x) => x.field)).toContain('advantageAudience')
+  })
+
+  it('advantageAudience 不填 → 拦（跟传 1 一样，必须显式给 0）', () => {
+    const p = validateDraft(boostDraft({ advantageAudience: undefined }))
+    expect(p.map((x) => x.field)).toContain('advantageAudience')
+  })
+
+  it('boost 类型 creatives 数组为空是允许的（reuse 原帖 creative）', () => {
+    // 关键差异：其他 kind 空 creatives 会挡下，boost 不挡
+    const p = validateDraft(boostDraft({ creatives: [] }))
+    expect(p.map((x) => x.field)).not.toContain('creatives')
+  })
+})
+
+describe('metaTripletFor — boost_existing_post 走 TRAFFIC/LINK_CLICKS', () => {
+  it('返 OUTCOME_TRAFFIC / LINK_CLICKS / WEBSITE', () => {
+    const t = metaTripletFor('boost_existing_post')
+    expect(t.objective).toBe('OUTCOME_TRAFFIC')
+    expect(t.optimizationGoal).toBe('LINK_CLICKS')
+    expect(t.destinationType).toBe('WEBSITE')
+  })
+
+  it('落点不是私信 —— 广告中枢 v1 不走私信', () => {
+    expect(['MESSENGER', 'WHATSAPP', 'INSTAGRAM_DIRECT']).not.toContain(
+      metaTripletFor('boost_existing_post').destinationType,
+    )
+  })
+})
+
+describe('describeDraft — boost_existing_post 说清是"推已发帖"', () => {
+  it('提到"已发的帖子"和"点赞/评论"（保留社交证明）', () => {
+    const s = describeDraft(boostDraft())
+    expect(s).toMatch(/已发|发的帖|点赞|评论/)
+  })
+})

@@ -71,6 +71,20 @@ export interface AdSetReadback {
     implicitLookalikeIds?: string[]
     /** 投放地区名，用于跟房源所在地对照。 */
     geoNames?: string[]
+    // ── Post-boost v1 扩展字段（2026-08-20，feat/me-ads-hub-v1）───────
+    /**
+     * 回读到的年龄下限。Meta 传参时叫 `age_min`；boost_existing_post
+     * v1 CTS 场景强要求 = 55，checkLaunch 会跟 `LaunchReadbackInput.expectedAgeMin`
+     * 对照（缺失不当"符合预期"，见 Day 5 verification）。
+     */
+    ageMin?: number
+    /** 回读到的年龄上限。Meta 上限 = 65（表示 65+），传 75 会报 INVALID_AGE_MAX。 */
+    ageMax?: number
+    /**
+     * 回读到的投放版位（facebook / instagram / audience_network / messenger）。
+     * boost_existing_post v1 默认 `['facebook','instagram']`，不给等于让 Meta 自动选。
+     */
+    publisherPlatforms?: readonly string[]
   }
   creatives: CreativeReadback[]
 }
@@ -81,6 +95,15 @@ export interface LaunchReadbackInput {
   claimsRetargeting?: boolean
   /** 房源/客户所在地区，用于对照投放地区。给不出就跳过这条检查。 */
   expectedGeo?: string | null
+  // ── Post-boost v1 verification 扩展字段（Day 5 会用到）────────────
+  /** 期望的年龄下限（boost_existing_post CTS v1 = 55）。给了就跟 `targeting.ageMin` 对照。 */
+  expectedAgeMin?: number
+  /** 期望的年龄上限（boost_existing_post CTS v1 = 65）。 */
+  expectedAgeMax?: number
+  /** 期望的版位。boost_existing_post CTS v1 = `['facebook','instagram']`。 */
+  expectedPublisherPlatforms?: readonly string[]
+  /** 期望 advantage_audience = 关。boost_existing_post 硬约束（v1 必须关，理由见 ad-draft）。 */
+  expectedAdvantageAudienceOff?: boolean
 }
 
 export interface LaunchReadbackReport {

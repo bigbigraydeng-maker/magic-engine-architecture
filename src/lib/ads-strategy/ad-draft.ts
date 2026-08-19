@@ -19,13 +19,21 @@
 
 import type { PlayKey } from './play-vocabulary'
 
-/** 目前 ME 会发的两种广告。要加第三种，先在 PLAY_CATALOG 里有对应打法。 */
-export type DraftKind = 'lead_form' | 'video_thruplay'
+/**
+ * ME 会发的广告类型。要加第 N 种，先在 PLAY_CATALOG 里有对应打法。
+ *
+ * `boost_existing_post` 是 ME2 广告中枢 v1 新增的第三种（2026-08-20，PR feat/me-ads-hub-v1）：
+ * 把一条**已经发出去的**帖子（Reel/图文）拿去投流。跟 lead_form/video_thruplay 的区别是
+ * 它 reuse `object_story_id`，Meta 端不新建 creative post，而是把付费流量导给现有帖子 ——
+ * 因此保留原帖的社交证明（点赞/评论/分享）。
+ */
+export type DraftKind = 'lead_form' | 'video_thruplay' | 'boost_existing_post'
 
 /** 打法 → 这个草案要走哪套 Meta 参数。两边必须对得上，别各自加。 */
 export const DRAFT_PLAY: Readonly<Record<DraftKind, PlayKey>> = {
   lead_form: 'lead_form_harvest',
   video_thruplay: 'thruplay_pool_build',
+  boost_existing_post: 'boost_organic_post',
 }
 
 export interface AdDraftCreative {
@@ -72,6 +80,32 @@ export interface AdDraft {
   pageId: string
   /** 一个草案下可以有多条创意；**同一个组里语言必须一致**（闸门会查）。 */
   creatives: AdDraftCreative[]
+
+  // ── boost_existing_post 专属字段（v1）─────────────────────────────
+  /**
+   * `pageId_postId` 稳定形式。boost_existing_post 必给。
+   * 这是 Meta 端「拿哪条已发帖去投流」的唯一入口 —— 传 videoId/imageHash 建的
+   * 是"新广告 creative"（不同的东西，观众看不到原帖的点赞数）。
+   */
+  objectStoryId?: string
+  /**
+   * 投放版位。boost_existing_post 显式给 —— 不填等于让 Meta 自动选。
+   * v1 CTS 默认 `['facebook','instagram']`。
+   */
+  publisherPlatforms?: readonly string[]
+  /**
+   * 「优势受众（advantage_audience）」开关。**boost_existing_post 显式关闭 = 0**。
+   *
+   * 为什么必须显式给 0：Meta 默认会打开 advantage_audience 从而**反锁 ageMin ≤ 25**，
+   * 而 v1 目标受众是 55+（`reference-meta-advantage-audience-locks-age-min-25.md`
+   * memory 明确记录）。不显式关掉的话，55+ 那部分预算 Meta 会自己划走。
+   */
+  advantageAudience?: 0 | 1
+  /**
+   * boost_existing_post 的落地页（点广告跳去哪）。
+   * 现有 `linkUrl` 是"表单广告的隐私政策/跳转"，语义不同，别复用。
+   */
+  destinationUrl?: string
 }
 
 /** 每天最多敢自动花多少 —— 超过这个数不是 ME 该自己决定的事。 */
@@ -116,9 +150,36 @@ export function validateDraft(d: AdDraft): DraftProblem[] {
     p.push({ field: 'geoCountries', message: '没说投给哪里 —— 投给全世界不是一个决定，是漏了一步' })
   }
 
-  if (d.creatives.length === 0) {
-    p.push({ field: 'creatives', message: '一条广告文案都没有' })
+  // boost_existing_post 不走 creative 数组（reuse 原帖 creative），要 objectStoryId
+  if (d.kind === 'boost_existing_post') {
+    if (!d.objectStoryId) {
+      p.push({
+        field: 'objectStoryId',
+        message: 'boost_existing_post 必须给 objectStoryId（pageId_postId 形式）—— 少了这个就不是「投已有帖」，是新建广告',
+      })
+    } else if (!/^\d+_\d+$/.test(d.objectStoryId)) {
+      p.push({
+        field: 'objectStoryId',
+        message: 'objectStoryId 格式必须是 pageId_postId（两段纯数字用下划线拼），实际是 ' + d.objectStoryId,
+      })
+    }
+    if (!d.destinationUrl) {
+      p.push({ field: 'destinationUrl', message: 'boost_existing_post 必须给 destinationUrl（点广告跳去哪）' })
+    }
+    if (d.advantageAudience !== 0) {
+      // v1 强制 0：Meta 默认打开会反锁 ageMin ≤ 25，跟 55+ 目标受众相冲
+      p.push({
+        field: 'advantageAudience',
+        message: 'boost_existing_post 的 advantageAudience 必须显式 = 0；打开会反锁 ageMin ≤ 25',
+      })
+    }
+  } else {
+    // 只有非 boost 类型才要求 creatives
+    if (d.creatives.length === 0) {
+      p.push({ field: 'creatives', message: '一条广告文案都没有' })
+    }
   }
+
   d.creatives.forEach((c, i) => {
     if (!c.primaryText.trim()) p.push({ field: `creatives[${i}].primaryText`, message: '正文是空的' })
     if (!c.headline.trim()) p.push({ field: `creatives[${i}].headline`, message: '标题是空的' })
@@ -167,6 +228,15 @@ export function metaTripletFor(kind: DraftKind): MetaObjectiveTriplet {
       destinationType: 'ON_AD', // 表单开在广告里，不把人带去私信
     }
   }
+  if (kind === 'boost_existing_post') {
+    // v1：把已发帖引流到 destinationUrl（默认 CTS china-tours）
+    return {
+      objective: 'OUTCOME_TRAFFIC',
+      optimizationGoal: 'LINK_CLICKS',
+      billingEvent: 'IMPRESSIONS',
+      destinationType: 'WEBSITE',
+    }
+  }
   return {
     objective: 'OUTCOME_AWARENESS',
     optimizationGoal: 'THRUPLAY',
@@ -181,6 +251,8 @@ export function describeDraft(d: AdDraft): string {
   const what =
     d.kind === 'lead_form'
       ? '收联系方式（填表单）'
+      : d.kind === 'boost_existing_post'
+      ? '给一条已发的帖子加钱推（保留原帖点赞/评论，导流去落地页）'
       : '养受众（让人看完视频，之后可以再投给他们）'
   return `${what}，每天 $${d.dailyBudget}、跑 ${d.durationDays} 天，最多花 $${total}`
 }
