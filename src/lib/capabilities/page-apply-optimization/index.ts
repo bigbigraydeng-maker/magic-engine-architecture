@@ -45,6 +45,43 @@ import type { PageApplyOptimizationDeps } from './deps'
 import { defaultDeps } from './deps'
 import { branchNameForRun, canonicalDiffHash, idempotencyKeyFromInput } from './hash'
 
+/**
+ * 🔴 **孤儿 artefact 提示（v1 fail-closed 的显式声明）。**
+ *
+ * v1 明确不带自动 rollback dispatch —— `outwardAuthorization.rollback: 'provider_native'`
+ * 只是**标注 provider 支持该路径的存在**，不是承诺 kernel/capability 会自动调它。
+ * 自动化的 rollback handler / gateway dispatch 由 Kernel Outward Execution Hardening PR
+ * 承担（见 `docs/specs/2026-08-19-me2-kernel-outward-execution-hardening-v1.0.md`）。
+ *
+ * 因此在 v1 里，任何**在 branch/PR 已被创建之后**发生的失败（stale-at-commit、
+ * open_pr 状态不自洽、record verification 失败），capability 必须在抛错的
+ * `humanReason` / `verification.failure_reason` 里带上孤儿 artefact 的**直达链接**，
+ * 让 kernel `failRun` → `handoff.ts` → 今日待办的 `what` 字段能被 PM 一眼看见并
+ * 手工去客户仓库 close PR + 删分支。
+ *
+ * 🔴 **禁止把这段变成通用工具或迁到 kernel。** 通用 rollback 是 hardening PR 的
+ *    职责边界，本函数只服务本 capability 的 fail-closed 语义。
+ */
+function orphanArtefactHint(args: {
+  repoOwner: string
+  repoName: string
+  branchName: string
+  prNumber?: number
+  prUrl?: string
+}): string {
+  const branchUrl =
+    `https://github.com/${args.repoOwner}/${args.repoName}/tree/${args.branchName}`
+  const lines = [
+    '',
+    '⚠️ 客户 GitHub 仓库残留孤儿 artefact（v1 不自动撤回，需手工清理）：',
+  ]
+  if (args.prNumber !== undefined && args.prUrl) {
+    lines.push(`  - Close 掉 Draft PR #${args.prNumber}：${args.prUrl}`)
+  }
+  lines.push(`  - 删除分支：${branchUrl}`)
+  return lines.join('\n')
+}
+
 // ── Input shape read from action_runs.input ──────────────────────────────────
 
 interface RunInput {
@@ -334,12 +371,25 @@ async function stepCommit(
     if (branchContent === prep.patched_content) {
       // (b) 幂等：前一次尝试已 commit 成功，本次是 retry，接受为成功
     } else {
-      // (a) 真 stale：main 在 prepare 到 commit 之间移动过，OCC 拒绝
+      // (a) 真 stale：main 在 prepare 到 commit 之间移动过，OCC 拒绝。
+      // branch 已经在上一步被创建（或以 idempotent 422 命中同名分支），是**孤儿**。
       throw new KernelError(
         'INVALID_STATE',
         'commit 冲突：main 在授权与执行之间移动过（stale_snapshot_at_commit），拒绝执行；' +
-          '需要重跑 pipeline 从新 snapshot 出发',
-        { detail: { commitFileError: msg } },
+          '需要重跑 pipeline 从新 snapshot 出发' +
+          orphanArtefactHint({
+            repoOwner: prep.repo_owner,
+            repoName: prep.repo_name,
+            branchName: prep.branch_name,
+          }),
+        {
+          detail: {
+            commitFileError: msg,
+            orphanBranch: prep.branch_name,
+            orphanBranchUrl:
+              `https://github.com/${prep.repo_owner}/${prep.repo_name}/tree/${prep.branch_name}`,
+          },
+        },
       )
     }
   }
@@ -398,22 +448,57 @@ async function stepOpenPr(
         const list = await gh.listPullRequestsByHead(prep.repo_owner, prep.repo_name, prep.branch_name)
         existing = list.find((p) => p.number) ?? null
       } catch (lookupErr) {
+        // branch + commit 都已经存在于客户仓库；PR 状态未知 → 视作分支孤儿
         throw new KernelError(
           'INVALID_STATE',
-          `pr_open_failed：createPullRequest 报"已存在"但查询也失败：${lookupErr instanceof Error ? lookupErr.message : String(lookupErr)}`,
-          { detail: { originalError: msg } },
+          `pr_open_failed：createPullRequest 报"已存在"但查询也失败：${lookupErr instanceof Error ? lookupErr.message : String(lookupErr)}` +
+            orphanArtefactHint({
+              repoOwner: prep.repo_owner,
+              repoName: prep.repo_name,
+              branchName: prep.branch_name,
+            }),
+          {
+            detail: {
+              originalError: msg,
+              orphanBranch: prep.branch_name,
+              orphanBranchUrl:
+                `https://github.com/${prep.repo_owner}/${prep.repo_name}/tree/${prep.branch_name}`,
+            },
+          },
         )
       }
       if (!existing) {
         throw new KernelError(
           'INVALID_STATE',
-          `pr_open_failed：createPullRequest 报"已存在"但按 head=${prep.branch_name} 找不到 —— provider 状态不自洽`,
-          { detail: { originalError: msg } },
+          `pr_open_failed：createPullRequest 报"已存在"但按 head=${prep.branch_name} 找不到 —— provider 状态不自洽` +
+            orphanArtefactHint({
+              repoOwner: prep.repo_owner,
+              repoName: prep.repo_name,
+              branchName: prep.branch_name,
+            }),
+          {
+            detail: {
+              originalError: msg,
+              orphanBranch: prep.branch_name,
+              orphanBranchUrl:
+                `https://github.com/${prep.repo_owner}/${prep.repo_name}/tree/${prep.branch_name}`,
+            },
+          },
         )
       }
       pr = existing
     } else {
-      throw new RetryableCapabilityError(`pr_open_failed：${msg}`)
+      // 重试可能成功；但若重试用尽，err.message 会被 humanReasonOf 原样写入
+      // run.last_error → handoff 今日待办。此时 branch 已经在 commit step 落下
+      // （commit_created:true 才会进到本 step），必须让 PM 一眼看到孤儿分支。
+      throw new RetryableCapabilityError(
+        `pr_open_failed：${msg}` +
+          orphanArtefactHint({
+            repoOwner: prep.repo_owner,
+            repoName: prep.repo_name,
+            branchName: prep.branch_name,
+          }),
+      )
     }
   }
 
@@ -544,9 +629,20 @@ async function stepRecord(
     checks,
     ...(failed.length > 0
       ? {
-          failure_reason: failed
-            .map((c) => `${c.name}${c.detail ? `（${c.detail}）` : ''}`)
-            .join('；'),
+          // 🔴 record 阶段失败时，PR + branch 都已经存在于客户仓库。
+          //    gateway.ts:886 会把这段 failure_reason 包进 VERIFICATION_FAILED 的
+          //    humanReason，进 run.last_error，进今日待办 —— 必须带直达链接。
+          failure_reason:
+            failed
+              .map((c) => `${c.name}${c.detail ? `（${c.detail}）` : ''}`)
+              .join('；') +
+            orphanArtefactHint({
+              repoOwner: prep.repo_owner,
+              repoName: prep.repo_name,
+              branchName: prep.branch_name,
+              prNumber: opened.pr_number,
+              prUrl: opened.pr_url,
+            }),
         }
       : {}),
   }

@@ -155,8 +155,22 @@ const PAGE_APPLY_OPTIMIZATION_REQUEST: ActionDefinition<'page.apply_optimization
   outwardAuthorization: {
     declaredIn: 'docs/specs/2026-08-19-me2-page-optimization-apply-action-v1.0.md',
     requiresHumanApproval: true,
-    // v1 Draft PR pre-merge = close PR + delete branch = provider 原生撤回路径。
-    // post-merge git revert 不是本 v1 责任。
+    // 🔴 v1 rollback 语义（复审 2026-08-19 两位 reviewer 一致挑出 P0，随此 commit 修正）：
+    //
+    //    本字段仅**标注 provider 支持该路径的存在**（Draft PR pre-merge 允许 close
+    //    PR + delete branch 复位），**不是**承诺 kernel/capability 会自动调用它。
+    //
+    //    v1 **不带自动 rollback dispatch**。任何在 branch/PR 已经创建之后失败的
+    //    路径（stale-at-commit、open_pr 状态不自洽、record verification 失败），
+    //    capability 会把孤儿 artefact 的直达链接写进 `humanReason` /
+    //    `verification.failure_reason` —— 经 `failRun → run.last_error →
+    //    handoff.ts → 今日待办的 what 字段`，PM 一眼可见并**手工**去客户
+    //    GitHub 关 PR + 删分支。
+    //
+    //    自动化的 rollback handler + gateway dispatch 由 Kernel Outward Execution
+    //    Hardening PR 承担（`docs/specs/2026-08-19-me2-kernel-outward-execution-hardening-v1.0.md`）。
+    //
+    //    post-merge git revert 不是本 v1 责任。
     rollback: 'provider_native',
   },
 

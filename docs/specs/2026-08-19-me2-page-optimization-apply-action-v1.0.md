@@ -18,7 +18,7 @@
 新建**一个**平台级、provider-neutral 的受治理动作 `page.apply_optimization_request`，把已经通过 Snapshot → Draft → Diff → Validation → Human Approval 的一份 `PageOptimizationRequest` 提交到目标 provider。
 
 - GitHub v1 = **Draft PR**（不直推 main、不 auto-merge）
-- rollback = **`provider_native`**（未合并 Draft PR = close PR + cleanup branch；post-merge git revert 不是本 Action v1 的职责）
+- rollback = **`provider_native`** 只是**声明 provider 支持该路径存在**（Draft PR pre-merge = close PR + cleanup branch）；**v1 不带自动 rollback dispatch** —— 孤儿 artefact 在失败时经 `run.last_error → 今日待办` 由 PM 手工清理，自动化 rollback defer 到 Kernel Outward Execution Hardening PR。post-merge git revert 不是本 Action v1 的职责。
 - verification = **execution-integrity only**（PR 是否真按批准的 diff/版本创建、`doNotTouch` 是否被守住、lineage 是否可回读）—— **`PR 创建成功 ≠ Growth success`**
 - Growth 层的 matched remeasurement 仍然发生在 merge/release 之后，走**现有** GEO Measurement 链，不由本 Action 承担、不由本 Action 调度
 
@@ -186,8 +186,10 @@ outwardAuthorization: {
 - **`declaredIn`**：本 spec 相对路径（拆版本时换 v1.1 spec 路径）
 - **`requiresHumanApproval: true`**：字面量 true（types 层锁死）。**含义**：`client_automation_policies.mode` 就算配了 `'auto_approve'`，本动作**仍然**要经 human approval —— outward 动作的一票否决 (kernel/types.ts:122)
 - **`rollback: 'provider_native'`**（union 不新增值）：
-  - **v1 Draft PR 未合并**时：`close PR + delete branch` = provider 原生撤回路径，符合 `'provider_native'` 语义
-  - **v1 明确不承担 post-merge rollback**：merge 后如需撤回，走**下一版 Action**（或人工 revert PR）—— 不由本 v1 处理
+  - **v1 明确不带自动 rollback dispatch**（复审 2026-08-19 修正）：本字段只**标注 provider 支持该路径的存在**（Draft PR pre-merge 允许 `close PR + delete branch` 复位），**不是**承诺 kernel/capability 会自动调用它。
+  - **v1 里孤儿 artefact 的处置 = 人工经今日待办**：任何在 branch/PR 已经创建之后失败的路径（stale-at-commit、open_pr 状态不自洽、record verification 失败），capability 在抛错的 `humanReason` 或 `verification.failure_reason` 里带上孤儿 artefact 的**直达链接**（PR URL + branch tree URL）；`failRun → run.last_error → handoff.ts → 今日待办的 what 字段` 让 PM **一眼可见**并手工去客户 GitHub 关 PR + 删分支。**这是 v1 的 fail-closed 语义**（PM 2026-08-19 拍板：能自动就自动，做不到就下发成人工任务且**必须带 what/how/href 三件套**；见 CLAUDE.md 铁律 §3 下半段）。
+  - **自动化 rollback handler 与 gateway dispatch defer 到** [Kernel Outward Execution Hardening v1.0 spec](./2026-08-19-me2-kernel-outward-execution-hardening-v1.0.md)。启用本 action 之前必须先落 hardening（详见 §18.1）。
+  - **v1 明确不承担 post-merge rollback**：merge 后如需撤回，走**下一版 Action**（或人工 revert PR）—— 不由本 v1 处理。
 - Kernel v1 明确要求 `reversible === true` 的对外动作才放行 (types.ts:117) → 本 spec `reversible: true` 已满足
 
 ### 6.1 Human Approval 与 Kernel Authorization 不是一件事 —— 关键区分
@@ -495,12 +497,19 @@ export const MAPPING_TABLE: readonly CandidateMappingEntry[] = [
 - **方案 A**（优先）：`src/lib/kernel/authorize.ts` 的 `snapshotOf()` 加一列 `input_hash` = `sha256(canonical(action_runs.input))`，落进 `authorization_decisions.policy_snapshot`；capability 侧 `prepare` step 拿 decision policy_snapshot 反查 `input_hash`，本次 `action_runs.input` 重算不等 → fail-closed `INVALID_INPUT('input_tampered_since_authorize')`
 - **方案 B**：`supabase/migrations/` 加 `action_runs.input` immutable 触发器（`AFTER UPDATE OF input` 且 old.status IN ('authorizing','pending_approval','authorized','running') → RAISE EXCEPTION）
 
-**B · 狄仁杰 Attack #3 · dead_letter rollback 未实现（Kernel 层）**
+**B · 狄仁杰 Attack #3 · dead_letter rollback 自动化（Kernel 层）**
 
-本 spec §6 声明 `rollback:'provider_native'`，语义 = "未合并 Draft PR = close PR + delete branch"，但**触发这条 rollback 的动作在 Kernel dead_letter 处理链里，本 capability 不承担**。目前 Kernel 侧无 `outward-rollback-runner`。需要 **Kernel 层 follow-up PR** 增加：
+**本 PR 已包含 v1 fail-closed 兜底**（2026-08-19 复审补丁）：capability 在任何**branch/PR 已经创建之后**发生的失败路径（stale-at-commit、open_pr 状态不自洽、record verification 失败），会在抛错的 `humanReason` / `RetryableCapabilityError.message` / `verification.failure_reason` 里带上孤儿 artefact 的**直达链接**（PR URL + branch tree URL），由 `failRun → run.last_error → handoff.ts → 今日待办的 what 字段` 让 PM 一眼可见并手工清理。这满足 CLAUDE.md 铁律 §3 下半段（做不到就下发人工任务且带 what/how/href 三件套）。
+
+**但完整的自动化 rollback 仍需 Kernel 层 follow-up PR**。语义 = "未合并 Draft PR = close PR + delete branch"，触发这条 rollback 的动作在 Kernel dead_letter 处理链里；目前 Kernel 侧无 `outward-rollback-runner`。需要 [Kernel Outward Execution Hardening PR](./2026-08-19-me2-kernel-outward-execution-hardening-v1.0.md) 增加：
 
 - Kernel `runner.ts` 或独立 `outward-rollback.ts`：run 转 `dead_letter` 且 `ActionDefinition.outwardAuthorization.rollback === 'provider_native'` 时，从 `action_run_steps` 找到本 run 已产生的 provider 副作用（本 action = `open_pr` step 的 output.pr_number + `commit` step 的 branch_name），调用 provider 的原生撤回接口（GitHub: close PR + delete branch）
 - capability 侧可能需要暴露一个 `rollback` 处理器（在 `CapabilityImplementation.steps` 之外或独立字段）
+
+**在 Kernel hardening 完成前**，本 action 启用条件必须**同时**满足：
+1. v1 fail-closed 兜底已生效（本 PR 已包含）
+2. Production Readiness Gate 的 4 条基础设施条件（§18 末段）
+3. PM 明确接受"孤儿 artefact 需要人工清理"这一 v1 运营成本
 
 **C · 子牙 Nit #2 · 缺 `PageProviderAdapter` 抽象（本 action tech debt）**
 
