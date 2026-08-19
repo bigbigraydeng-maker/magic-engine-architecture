@@ -69,6 +69,24 @@ function orphanArtefactHint(args: {
   prNumber?: number
   prUrl?: string
 }): string {
+  // 🔴 防御：owner / repo / branch 必须命中 GitHub slug 合法字符集，否则拒绝
+  //    渲染孤儿链接（改回一段无 URL 的告警）。这样即便 cms_connections 里塞了
+  //    带斜杠的攻击性 owner（e.g. `attacker/repo`），也不会拼出一条指向攻击者
+  //    仓库的可点链接。handoff.ts 里那道 URL 抽取器也严格校验一次，
+  //    双保险。
+  const OWNER_OK = /^[A-Za-z0-9-]{1,39}$/
+  const REPO_OK = /^[A-Za-z0-9._-]{1,100}$/
+  const BRANCH_OK = /^[A-Za-z0-9._/-]{1,255}$/
+  if (
+    !OWNER_OK.test(args.repoOwner) ||
+    !REPO_OK.test(args.repoName) ||
+    !BRANCH_OK.test(args.branchName)
+  ) {
+    return (
+      '\n⚠️ 客户 GitHub 仓库可能残留孤儿 artefact（v1 不自动撤回，需手工清理）；' +
+      '仓库标识含非法字符，未渲染直达链接 —— 请查 client cms_connections 配置。'
+    )
+  }
   const branchUrl =
     `https://github.com/${args.repoOwner}/${args.repoName}/tree/${args.branchName}`
   const lines = [
@@ -409,7 +427,27 @@ async function stepOpenPr(
   if (!prep) throw new KernelError('INVALID_STATE', 'prepare 产物不见了')
 
   const conn = await deps.resolveGithubConnection(args.clientId)
-  if (!conn) throw new KernelError('INVALID_INPUT', '客户 GitHub 连接消失')
+  if (!conn) {
+    // 🔴 到 open_pr 时 commit_created:true 已成立 → branch 一定在客户仓库
+    //    存在。conn 中途消失（token 被吊销 / cms_connections 被删）也必须带
+    //    orphan hint 让 PM 手工去关。
+    throw new KernelError(
+      'INVALID_INPUT',
+      '客户 GitHub 连接消失（open_pr 阶段）' +
+        orphanArtefactHint({
+          repoOwner: prep.repo_owner,
+          repoName: prep.repo_name,
+          branchName: prep.branch_name,
+        }),
+      {
+        detail: {
+          orphanBranch: prep.branch_name,
+          orphanBranchUrl:
+            `https://github.com/${prep.repo_owner}/${prep.repo_name}/tree/${prep.branch_name}`,
+        },
+      },
+    )
+  }
 
   const gh = deps.createGithubClient(conn.plainToken)
 
@@ -518,7 +556,30 @@ async function stepRecord(
   if (!prep || !opened) throw new KernelError('INVALID_STATE', '前置步骤产物不齐')
 
   const conn = await deps.resolveGithubConnection(args.clientId)
-  if (!conn) throw new KernelError('INVALID_INPUT', '客户 GitHub 连接消失')
+  if (!conn) {
+    // 🔴 到 record 时 prep + opened 都成立 → branch + Draft PR 都在客户仓库。
+    //    conn 消失也要让 PM 收到 orphan 直达链接。
+    throw new KernelError(
+      'INVALID_INPUT',
+      '客户 GitHub 连接消失（record 阶段）' +
+        orphanArtefactHint({
+          repoOwner: prep.repo_owner,
+          repoName: prep.repo_name,
+          branchName: prep.branch_name,
+          prNumber: opened.pr_number,
+          prUrl: opened.pr_url,
+        }),
+      {
+        detail: {
+          orphanBranch: prep.branch_name,
+          orphanBranchUrl:
+            `https://github.com/${prep.repo_owner}/${prep.repo_name}/tree/${prep.branch_name}`,
+          orphanPrNumber: opened.pr_number,
+          orphanPrUrl: opened.pr_url,
+        },
+      },
+    )
+  }
 
   const gh = deps.createGithubClient(conn.plainToken)
 
@@ -619,8 +680,21 @@ async function stepRecord(
   }
   record('output.run_reference 可反查', runRefResolvable, expectedRunRef)
 
-  const decisionOk = await loadDecisionExists(sb, args.decisionId)
-  record('authorization_decisions 行可回读', decisionOk, decisionOk ? undefined : args.decisionId)
+  // 🔴 子牙复审 (2026-08-19) 修正：loadDecisionExists 抛错时**不**外抛
+  //    RetryableCapabilityError（会跳过 verification 汇总 + orphan hint），
+  //    改成落一条 failed check。这样一来无论 Supabase 瞬时错还是 decision
+  //    行真丢，都走 verification failed 路径，failure_reason 里带 orphan URL。
+  let decisionOk = false
+  try {
+    decisionOk = await loadDecisionExists(sb, args.decisionId)
+    record('authorization_decisions 行可回读', decisionOk, decisionOk ? undefined : args.decisionId)
+  } catch (e) {
+    record(
+      'authorization_decisions 行可回读',
+      false,
+      `回读授权决策失败：${e instanceof Error ? e.message : String(e)}`,
+    )
+  }
 
   const failed = checks.filter((c) => !c.passed)
   const verification: VerificationResult = {
