@@ -89,8 +89,19 @@ export interface AdDraft {
    */
   objectStoryId?: string
   /**
-   * 投放版位。boost_existing_post 显式给 —— 不填等于让 Meta 自动选。
-   * v1 CTS 默认 `['facebook','instagram']`。
+   * 投放版位。boost_existing_post 必须显式给 —— 不填等于让 Meta 自动选，
+   * 自动选的结果没人能预判。
+   *
+   * 🔴 **只能给一个版位，不能 `['facebook','instagram']` 同时给**（R2 修复，
+   * 2026-08-20，R1 复核发现）：Meta 官方文档（reels-ads）里 Facebook Reel
+   * boost（`publisher_platforms:['facebook']`，落位 `facebook_reels`）和
+   * Instagram Reel boost（`publisher_platforms:['instagram']`，落位
+   * `reels`/`profile_reels`）是**两套独立系统**，复用已发内容的机制也分开
+   * （IG 侧专用 `source_instagram_media_id`）——没有文档记载的"一条 Reel
+   * 同时投两个平台"路径。Day 1 那版把 `['facebook','instagram']` 当默认值写
+   * 进了注释和测试夹具，`validateDraft` 又没有拦，是一个真实缺陷，不是口误。
+   *
+   * v1 CTS Reel 发在 Facebook 主页，默认给 `['facebook']`。
    */
   publisherPlatforms?: readonly string[]
   /**
@@ -171,6 +182,30 @@ export function validateDraft(d: AdDraft): DraftProblem[] {
       p.push({
         field: 'advantageAudience',
         message: 'boost_existing_post 的 advantageAudience 必须显式 = 0；打开会反锁 ageMin ≤ 25',
+      })
+    }
+    // R2 修复（2026-08-20，R1 复核发现）：publisherPlatforms 必须给且只能给一个。
+    // Meta 官方文档确认 Facebook Reel boost 和 Instagram Reel boost 是两套独立
+    // 系统（各自的 publisher_platforms + 落位值不同），没有文档记载的跨平台
+    // 同投路径。Day 1 那版把 ['facebook','instagram'] 当默认值只写进注释和
+    // 测试夹具，这里没拦 —— 现在补上。
+    if (!d.publisherPlatforms || d.publisherPlatforms.length === 0) {
+      p.push({
+        field: 'publisherPlatforms',
+        message: 'boost_existing_post 必须显式给 publisherPlatforms —— 不给等于让 Meta 自动选，没人能预判结果',
+      })
+    } else if (d.publisherPlatforms.length > 1) {
+      p.push({
+        field: 'publisherPlatforms',
+        message:
+          `boost_existing_post 只能给一个版位，不能同时给 ${d.publisherPlatforms.length} 个 ` +
+          `（实际：${d.publisherPlatforms.join(' + ')}）—— Meta 官方文档里 Facebook Reel boost 和 ` +
+          'Instagram Reel boost 是两套独立系统，没有已记载的跨平台同投路径',
+      })
+    } else if (!['facebook', 'instagram'].includes(d.publisherPlatforms[0].toLowerCase())) {
+      p.push({
+        field: 'publisherPlatforms',
+        message: `boost_existing_post 的 publisherPlatforms 只认 facebook 或 instagram，实际是「${d.publisherPlatforms[0]}」`,
       })
     }
   } else {

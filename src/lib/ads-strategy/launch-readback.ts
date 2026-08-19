@@ -314,6 +314,95 @@ export function checkLaunch(input: LaunchReadbackInput): LaunchReadbackReport {
     }
   }
 
+  // ── 坑 6：boost_existing_post 的年龄/版位/优势受众没对上期望值 ─────
+  // R2 修复（2026-08-20）：R1 复核发现 expectedAgeMin/expectedAgeMax/
+  // expectedPublisherPlatforms/expectedAdvantageAudienceOff 四个字段只声明
+  // 没使用 —— checkLaunch 对 boost_existing_post 完全没做任何对照，
+  // 一条年龄乱掉的 boost 广告照样能拿到 safeToActivate=true。
+  //
+  // 跟坑 2（重定向）同一套哲学：缺失 ≠ 符合预期。Meta 不返回某字段时
+  // 不能当成"反正是对的"，只能说"查不出来"，标 warn 逼人工看一眼。
+  if (input.expectedAgeMin !== undefined) {
+    if (t.ageMin === undefined) {
+      findings.push({
+        code: 'age_min_unknown',
+        severity: 'warn',
+        message: `期望年龄下限是 ${input.expectedAgeMin}，但回读不到 Meta 实际设置的年龄下限 —— 缺失不等于符合预期，要人工确认一次。`,
+        learnedFrom: '2026-08-20 R1 复核：expectedAgeMin 字段声明了却没人读，boost 广告年龄乱掉也会显示"可以开"',
+      })
+    } else if (t.ageMin !== input.expectedAgeMin) {
+      findings.push({
+        code: 'age_min_mismatch',
+        severity: 'blocker',
+        message: `期望年龄下限是 ${input.expectedAgeMin}，Meta 实际落地是 ${t.ageMin} —— 对不上。`,
+        learnedFrom: '2026-08-20 R1 复核：boost_existing_post v1 目标 55+，年龄传错会把预算投给不该投的人',
+      })
+    }
+  }
+
+  if (input.expectedAgeMax !== undefined) {
+    if (t.ageMax === undefined) {
+      findings.push({
+        code: 'age_max_unknown',
+        severity: 'warn',
+        message: `期望年龄上限是 ${input.expectedAgeMax}，但回读不到 Meta 实际设置的年龄上限 —— 缺失不等于符合预期，要人工确认一次。`,
+        learnedFrom: '2026-08-20 R1 复核：同上',
+      })
+    } else if (t.ageMax !== input.expectedAgeMax) {
+      findings.push({
+        code: 'age_max_mismatch',
+        severity: 'blocker',
+        message: `期望年龄上限是 ${input.expectedAgeMax}，Meta 实际落地是 ${t.ageMax} —— 对不上。`,
+        learnedFrom: '2026-08-20 R1 复核：同上',
+      })
+    }
+  }
+
+  if (input.expectedPublisherPlatforms && input.expectedPublisherPlatforms.length > 0) {
+    if (!t.publisherPlatforms || t.publisherPlatforms.length === 0) {
+      findings.push({
+        code: 'publisher_platforms_unknown',
+        severity: 'warn',
+        message: `期望版位是「${input.expectedPublisherPlatforms.join(' / ')}」，但回读不到 Meta 实际落地的版位 —— 缺失不等于符合预期，要人工确认一次。`,
+        learnedFrom: '2026-08-20 R1 复核：Meta Reel boost 的 FB/IG 版位是两套独立系统，传错版位可能导致广告建不出来或投给不对的受众',
+      })
+    } else {
+      // Set 展开在本项目 tsconfig target 下不可用（TS2802），改用 Array.from
+      const wantArr = Array.from(new Set(input.expectedPublisherPlatforms.map(p => p.toLowerCase())))
+      const gotArr = Array.from(new Set(t.publisherPlatforms.map(p => p.toLowerCase())))
+      const gotSet = new Set(gotArr)
+      const sameSet = wantArr.length === gotArr.length && wantArr.every(p => gotSet.has(p))
+      if (!sameSet) {
+        findings.push({
+          code: 'publisher_platforms_mismatch',
+          severity: 'blocker',
+          message: `期望版位是「${wantArr.join(' / ')}」，Meta 实际落地是「${gotArr.join(' / ')}」—— 对不上。`,
+          learnedFrom: '2026-08-20 R1 复核：Meta 官方文档确认 Facebook Reel boost（publisher_platforms=["facebook"]，位置 facebook_reels）和 Instagram Reel boost（publisher_platforms=["instagram"]，位置 reels/profile_reels）是两套独立系统，没有文档记载的跨平台同投路径',
+        })
+      }
+    }
+  }
+
+  // 独立于 claimsRetargeting：boost_existing_post 硬性要求关掉优势受众
+  // （不是"重定向组才要关"，是这个打法本身就要求）。
+  if (input.expectedAdvantageAudienceOff === true) {
+    if (t.advantageAudience === undefined) {
+      findings.push({
+        code: 'boost_advantage_audience_unknown',
+        severity: 'warn',
+        message: '要求关闭「优势受众」，但回读不到 Meta 实际设置 —— 缺失不等于关闭，要人工确认一次。',
+        learnedFrom: '2026-08-20 R1 复核：boost_existing_post 打开优势受众会反锁年龄下限 ≤ 25，冲掉 55+ 目标受众',
+      })
+    } else if (t.advantageAudience === true) {
+      findings.push({
+        code: 'boost_advantage_audience_not_off',
+        severity: 'blocker',
+        message: '要求关闭「优势受众」，但 Meta 实际设置是开着的 —— 年龄下限会被反锁到 25，55+ 目标受众的预算会被划走。',
+        learnedFrom: '2026-08-20 R1 复核：reference-meta-advantage-audience-locks-age-min-25 memory 记录过这个坑',
+      })
+    }
+  }
+
   // ── 坑 5：私信广告没有任何买家可见文案 ───────────────────────────
   const emptyCreatives = adSet.creatives.filter(c => c.buyerFacingText.every(l => !l.trim()))
   if (emptyCreatives.length > 0) {

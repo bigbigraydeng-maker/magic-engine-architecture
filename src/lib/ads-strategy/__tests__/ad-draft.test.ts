@@ -140,7 +140,10 @@ function boostDraft(over: Partial<AdDraft> = {}): AdDraft {
     kind: 'boost_existing_post',
     clientId: 'c-cts',
     campaignName: 'ME-Sandbox-2026-08-20-reel-abc',
-    adSetName: 'NZ 55+ Facebook+IG',
+    // R2 修复：CTS Reel 发在 Facebook 主页，v1 只投 Facebook 版位
+    // （不是 R1 之前那个 'NZ 55+ Facebook+IG' 名字 —— 那个组名本身就在暗示
+    // 一个 Meta 官方文档不支持的跨平台组合，见 publisherPlatforms 校验）
+    adSetName: 'NZ 55+ Facebook Reel',
     dailyBudget: 20,
     durationDays: 5,
     geoCountries: ['NZ'],
@@ -149,7 +152,7 @@ function boostDraft(over: Partial<AdDraft> = {}): AdDraft {
     pageId: '1234567890',
     creatives: [],  // boost 复用原帖 creative，不给数组
     objectStoryId: '1234567890_9876543210',
-    publisherPlatforms: ['facebook', 'instagram'],
+    publisherPlatforms: ['facebook'],
     advantageAudience: 0,
     destinationUrl: 'https://www.ctstours.co.nz/china-tours',
     ...over,
@@ -191,6 +194,39 @@ describe('validateDraft — boost_existing_post 专属校验', () => {
     // 关键差异：其他 kind 空 creatives 会挡下，boost 不挡
     const p = validateDraft(boostDraft({ creatives: [] }))
     expect(p.map((x) => x.field)).not.toContain('creatives')
+  })
+
+  // R2 新增（2026-08-20，R1 复核 BLOCKER）：Meta 官方文档确认 Facebook Reel boost
+  // 和 Instagram Reel boost 是两套独立系统（各自的 publisher_platforms + 落位值不同），
+  // 没有文档记载的跨平台同投路径。Day 1 那版没拦跨平台组合，这里补上。
+  it('publisherPlatforms 不给 → 拦（不给等于让 Meta 自动选，没人能预判）', () => {
+    const p = validateDraft(boostDraft({ publisherPlatforms: undefined }))
+    expect(p.map((x) => x.field)).toContain('publisherPlatforms')
+  })
+
+  it('publisherPlatforms 给空数组 → 拦', () => {
+    const p = validateDraft(boostDraft({ publisherPlatforms: [] }))
+    expect(p.map((x) => x.field)).toContain('publisherPlatforms')
+  })
+
+  it('publisherPlatforms 同时给 facebook+instagram → 拦（Meta 没有跨平台同投这条路）', () => {
+    const p = validateDraft(boostDraft({ publisherPlatforms: ['facebook', 'instagram'] }))
+    expect(p.map((x) => x.field)).toContain('publisherPlatforms')
+  })
+
+  it('publisherPlatforms 给不认识的平台 → 拦', () => {
+    const p = validateDraft(boostDraft({ publisherPlatforms: ['tiktok'] }))
+    expect(p.map((x) => x.field)).toContain('publisherPlatforms')
+  })
+
+  it('publisherPlatforms 只给 facebook 一个 → 放行', () => {
+    const p = validateDraft(boostDraft({ publisherPlatforms: ['facebook'] }))
+    expect(p.map((x) => x.field)).not.toContain('publisherPlatforms')
+  })
+
+  it('publisherPlatforms 只给 instagram 一个 → 放行', () => {
+    const p = validateDraft(boostDraft({ publisherPlatforms: ['instagram'] }))
+    expect(p.map((x) => x.field)).not.toContain('publisherPlatforms')
   })
 })
 

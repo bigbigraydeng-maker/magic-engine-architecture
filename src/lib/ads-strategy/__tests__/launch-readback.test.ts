@@ -158,6 +158,129 @@ describe('checkLaunch — 坑 3/4/5', () => {
   })
 })
 
+// R2 新增（2026-08-20，R1 复核 BLOCKER）：expectedAgeMin/expectedAgeMax/
+// expectedPublisherPlatforms/expectedAdvantageAudienceOff 四个字段 Day 1 只声明
+// 没使用，checkLaunch 对 boost_existing_post 完全没做任何对照。这里补上对照逻辑
+// 后的测试 —— 每个字段都要覆盖「对上/对不上/缺失」三态。
+describe('checkLaunch — 坑 6：boost_existing_post 年龄/版位/优势受众对照（R2 修复）', () => {
+  it('🔴 年龄下限对不上 → blocker', () => {
+    const r = checkLaunch(base({
+      adSet: { ...base().adSet, targeting: { ageMin: 25 } },
+      expectedAgeMin: 55,
+    }))
+    expect(r.findings.map(f => f.code)).toContain('age_min_mismatch')
+    expect(r.safeToActivate).toBe(false)
+  })
+
+  it('年龄下限对上就不报', () => {
+    const r = checkLaunch(base({
+      adSet: { ...base().adSet, targeting: { ageMin: 55 } },
+      expectedAgeMin: 55,
+    }))
+    expect(r.findings.map(f => f.code)).not.toContain('age_min_mismatch')
+  })
+
+  it('⚠️ 有期望值但回读不到年龄下限 → warn（缺失不等于符合预期）', () => {
+    const r = checkLaunch(base({
+      adSet: { ...base().adSet, targeting: {} },
+      expectedAgeMin: 55,
+    }))
+    expect(r.findings.map(f => f.code)).toContain('age_min_unknown')
+    expect(r.safeToActivate).toBe(true) // warn 不拦
+  })
+
+  it('没给 expectedAgeMin 就完全跳过这条检查', () => {
+    const r = checkLaunch(base({ adSet: { ...base().adSet, targeting: {} } }))
+    expect(r.findings.map(f => f.code)).not.toContain('age_min_unknown')
+    expect(r.findings.map(f => f.code)).not.toContain('age_min_mismatch')
+  })
+
+  it('🔴 年龄上限对不上 → blocker', () => {
+    const r = checkLaunch(base({
+      adSet: { ...base().adSet, targeting: { ageMax: 55 } },
+      expectedAgeMax: 65,
+    }))
+    expect(r.findings.map(f => f.code)).toContain('age_max_mismatch')
+    expect(r.safeToActivate).toBe(false)
+  })
+
+  it('⚠️ 有期望值但回读不到年龄上限 → warn', () => {
+    const r = checkLaunch(base({
+      adSet: { ...base().adSet, targeting: {} },
+      expectedAgeMax: 65,
+    }))
+    expect(r.findings.map(f => f.code)).toContain('age_max_unknown')
+  })
+
+  it('🔴 版位对不上 → blocker（回读到 instagram，期望只有 facebook）', () => {
+    const r = checkLaunch(base({
+      adSet: { ...base().adSet, targeting: { publisherPlatforms: ['instagram'] } },
+      expectedPublisherPlatforms: ['facebook'],
+    }))
+    expect(r.findings.map(f => f.code)).toContain('publisher_platforms_mismatch')
+    expect(r.safeToActivate).toBe(false)
+  })
+
+  it('版位对上就不报（大小写不敏感）', () => {
+    const r = checkLaunch(base({
+      adSet: { ...base().adSet, targeting: { publisherPlatforms: ['Facebook'] } },
+      expectedPublisherPlatforms: ['facebook'],
+    }))
+    expect(r.findings.map(f => f.code)).not.toContain('publisher_platforms_mismatch')
+  })
+
+  it('⚠️ 有期望版位但回读不到 → warn', () => {
+    const r = checkLaunch(base({
+      adSet: { ...base().adSet, targeting: {} },
+      expectedPublisherPlatforms: ['facebook'],
+    }))
+    expect(r.findings.map(f => f.code)).toContain('publisher_platforms_unknown')
+  })
+
+  it('🔴 要求关闭优势受众但 Meta 实际开着 → blocker', () => {
+    const r = checkLaunch(base({
+      adSet: { ...base().adSet, targeting: { advantageAudience: true } },
+      expectedAdvantageAudienceOff: true,
+    }))
+    expect(r.findings.map(f => f.code)).toContain('boost_advantage_audience_not_off')
+    expect(r.safeToActivate).toBe(false)
+  })
+
+  it('优势受众确实关着就不报', () => {
+    const r = checkLaunch(base({
+      adSet: { ...base().adSet, targeting: { advantageAudience: false } },
+      expectedAdvantageAudienceOff: true,
+    }))
+    expect(r.findings.map(f => f.code)).not.toContain('boost_advantage_audience_not_off')
+  })
+
+  it('⚠️ 要求关闭但回读不到优势受众设置 → warn', () => {
+    const r = checkLaunch(base({
+      adSet: { ...base().adSet, targeting: {} },
+      expectedAdvantageAudienceOff: true,
+    }))
+    expect(r.findings.map(f => f.code)).toContain('boost_advantage_audience_unknown')
+  })
+
+  it('四项全部符合预期的 boost 广告 → safeToActivate 仍是 true', () => {
+    const r = checkLaunch(base({
+      adSet: {
+        ...base().adSet,
+        optimizationGoal: 'LINK_CLICKS',
+        targeting: {
+          ageMin: 55, ageMax: 65,
+          publisherPlatforms: ['facebook'],
+          advantageAudience: false,
+        },
+      },
+      expectedAgeMin: 55, expectedAgeMax: 65,
+      expectedPublisherPlatforms: ['facebook'],
+      expectedAdvantageAudienceOff: true,
+    }))
+    expect(r.safeToActivate).toBe(true)
+  })
+})
+
 describe('renderReadback', () => {
   it('把买家会看到的原文放在最前面 —— 这比任何规则都管用', () => {
     const out = renderReadback(checkLaunch(base({
