@@ -1,11 +1,12 @@
 # ADR: 最小 Meta Provider-Object 归属契约（AD-ISO-1 真钱激活前 BLOCKER）
 
-**状态：DESIGN ONLY，R2 修订版 —— 零代码/Meta 调用/migration/部署，等 Build Control 聚焦复审**
-**日期**：2026-08-20 首版（`feb375b4`）/ 2026-08-20 R2 修订（Build Control R1 三项 BLOCKER + 两项契约细节）
+**状态：DESIGN ONLY，R3 修订版 —— 零代码/Meta 调用/migration/部署，等 Build Control 聚焦复审**
+**日期**：2026-08-20 首版（`feb375b4`）/ R2 修订（`8955b60f`，Build Control R1 三项 BLOCKER + 两项契约细节）/
+R3 修订（本次，Build Control R2 五项修正）
 **关联**：`docs/ROADMAP.md` `AD-ISO-1`、`docs/adr/2026-08-20-me-ads-hub-v1-irreversible-outward-contract.md`（已冻结，不碰）、
 `src/lib/meta/campaign-ownership.ts`（AD-SEC-1，写路径既有守卫）
 
-## R2 修订说明
+## R2 修订说明（历史记录，R3 在此基础上继续修订）
 
 R1 复审确认方向正确（新建权威归属表 + 账户级去重 + 按归属路由 + fail-closed +
 名字启发式只做候选），但抓到三个 BLOCKER：
@@ -18,11 +19,42 @@ R1 复审确认方向正确（新建权威归属表 + 账户级去重 + 按归�
 3. **只修未来不够**——`ad_daily_insights` 里已经有历史污染，不定切换策略，
    修完采集器污染数据照样在学习窗口里
 
-本次修订：①归属登记改成逐层原子写 + 三态状态机；②新增 quarantine 表；
+R2 修订：①归属登记改成逐层原子写 + 三态状态机；②新增 quarantine 表；
 ③选定历史污染处理方案；④补齐 campaign/ad 一致性规则 + `ad_account_id`
 规范形式。
 
-## 只读回显（本轮开工前确认，按指令要求）
+## R3 修订说明（本次）
+
+R2 提交（`8955b60f`）后 Build Control 又挑出五处需要修正的地方，全部是
+**R2 设计里真实存在的漏洞**，不是新增范围：
+
+1. **消费者过滤和 collector 必须是同一个实施切片**——R2 把"下游消费者加
+   `trusted` 过滤"排进"下一轮"，这个排期承诺本身是错的：trust 列如果没人
+   真的拿它过滤，这一整套修复就是不生效的装饰。已重排 Migration/Deploy/
+   Cutover 顺序（T3 现在要求两者同一切片一起交付）
+2. **Cutover 必须显式两态，完成后不留 NULL**——R2 的 cutover UPDATE 只处理
+   了"排除有证据的例外"这一半，另一半（有证据的历史行）被隐式跳过、既不是
+   `trusted` 也不是 `not_comparable`，停留在 NULL。改成列本身
+   `NOT NULL DEFAULT 'not_comparable'`，cutover 变成"从安全默认值显式提升
+   例外"，NULL 在结构上不可能出现
+3. **Quarantine 唯一约束在 `ad_id=NULL` 时是假的**——R2 写的
+   `UNIQUE(...,ad_id,...)` 对 campaign 级行（`ad_id` 恒 NULL）完全不生效
+   （Postgres 视 NULL 互不相等），"不重复累计"这条承诺对 campaign 级行是
+   假的。改成 `COALESCE(ad_id,'')` 的表达式唯一索引，并标注这条必须是
+   数据库级测试，应用层 mock 测不出来
+4. **`verified_at`/`verified_by` 改成跟 `status` 联动的 nullable + CHECK**——
+   R2 把这两个字段定成 `NOT NULL`，但 `provisional`/`orphaned_needs_
+   reconcile` 这两态本来就还没"验证"过，硬填时间戳是编数据。改成只在
+   `status='confirmed'` 时非空，并顺带修正了"部分成功恢复"一节里一处
+   会跟新约束打架的错误写法（`orphaned_needs_reconcile` 不能配
+   `source='unattributable'`）
+5. **新旧 collector 切换机制补成真实可执行的设计**——R2 只写"加个锁（本轮
+   不写代码）"，没有给出具体机制。补齐：`META_INSIGHTS_COLLECTOR_MODE`
+   feature flag（真正的"停"开关，纯环境变量，不需要重新部署）+
+   `meta_insights_sync_lease` 表（照抄 Kernel 既有 claim/lease 手法，
+   防同账户并发同步）
+
+## 只读回显（R2 轮次确认，R3 本次继续沿用同一 worktree/分支，未重新切换）
 
 ```
 pwd:      /Users/raydeng/Projects/magic-engine/.claude/worktrees/me-ads-hub-v1
@@ -125,8 +157,12 @@ CREATE TABLE meta_object_ownership (
   --    （object_id 不可用/不确定时才退回按 tag 查，见"reconcile 顺序"）
   deterministic_tag text,   -- 'ME-SANDBOX-<runId>'，跟 post-boost-publisher.ts 现有机制同一个值
 
-  verified_at      timestamptz NOT NULL,
-  verified_by      text NOT NULL,
+  -- 🔴 R3 修订（点④）：verified_at/verified_by 从 NOT NULL 改成 nullable，
+  --    跟 status 联动——"验证"这件事只对 confirmed 有意义，provisional/
+  --    orphaned_needs_reconcile 这两态本来就还没验证完，硬填一个时间戳/人名
+  --    进去是编数据，不是记录事实。
+  verified_at      timestamptz,
+  verified_by      text,
 
   created_at       timestamptz NOT NULL DEFAULT now(),
   updated_at       timestamptz NOT NULL DEFAULT now(),
@@ -137,6 +173,26 @@ CREATE TABLE meta_object_ownership (
     (source != 'unattributable' AND client_id IS NOT NULL)
   ),
 
+  -- 🔴 R3 新增（点④之一）：verified_at/verified_by 是否非空，由 status 决定，
+  --    不由 source 决定——不管哪种 source，只要还没到 confirmed，就还没"验证"过。
+  CONSTRAINT verified_matches_status CHECK (
+    (status = 'confirmed' AND verified_at IS NOT NULL AND verified_by IS NOT NULL)
+    OR
+    (status != 'confirmed' AND verified_at IS NULL AND verified_by IS NULL)
+  ),
+
+  -- 🔴 R3 新增（点④之二）：provisional / orphaned_needs_reconcile 这两态只对
+  --    declared_at_creation 有意义——它们描述的是"一次 Kernel run 正在逐层建
+  --    对象"这个过程中的中间状态。manually_verified / imported_verified /
+  --    unattributable 这三种来源没有"正在建"这回事，人工核实或判定不可归属
+  --    本身就是一次性的完成动作，写进表里那一刻就是 confirmed，不会经过
+  --    provisional，更不会卡在 orphaned_needs_reconcile。
+  CONSTRAINT status_matches_source CHECK (
+    (source = 'declared_at_creation')
+    OR
+    (source != 'declared_at_creation' AND status = 'confirmed')
+  ),
+
   UNIQUE (ad_account_id, level, object_id)
 );
 
@@ -145,9 +201,15 @@ ALTER TABLE meta_object_ownership ENABLE ROW LEVEL SECURITY;
 ```
 
 `status` 是**跨层的运行状态**，`source`/`client_id` 是**归属判定本身**——两者
-正交：一条 `declared_at_creation` 的行可以是 `provisional`（刚建完还没验证）
-也可以是 `confirmed`（验证过了），但**永远不会**是 `unattributable`（那是给
-"根本不知道是谁的"对象用的判定，跟"知道是谁的、但还没验证完"是两件事）。
+不是完全独立的两个维度（R3 修订：`status_matches_source` 约束收紧了这一点）：
+`declared_at_creation` 的行会真实经历 `provisional → confirmed`（或失败态
+`orphaned_needs_reconcile`）这条时间线；其余三种来源（人工核实/历史导入/
+判定不可归属）都是"一次性完成的判定"，落库那一刻就是 `confirmed`，没有
+"还没验证完"这个中间状态可言。`verified_at`/`verified_by` 因此只在
+`status='confirmed'` 时才有值——对 `declared_at_creation` 的行，这两个字段
+从"建 campaign 那一刻"的 NULL，变成"gate 验证通过那一刻"的非 NULL，记录的
+正是"真正被验证的那一刻"，不是"这一行第一次被写入的时间"（那是 `created_at`
+的职责，两者不该混用）。
 
 ### 逐层登记时序（取代首版"一次性写四层"）
 
@@ -171,11 +233,14 @@ ALTER TABLE meta_object_ownership ENABLE ROW LEVEL SECURITY;
    → 失败 → 立即停止（这是原来"四步"的最后一步，本来就没有下一层）
 
 ⑤ PAUSED package 回读验证通过（复用已实施的 gate 步骤 checkLaunch）
-   → UPDATE meta_object_ownership SET status='confirmed'
-     WHERE kernel_run_id = ctx.runId AND status = 'provisional'
-   → 验证不通过 → 保持 provisional（不是失败，是"还没验证过"，
-     人工介入的入口是 Kernel run 本身落 dead_letter+needs_human——
-     已实施的 gate 步骤失败路径，见"六、跟既有系统的关系"）
+   → UPDATE meta_object_ownership
+        SET status='confirmed', verified_at=now(), verified_by='system:ads.meta_boost_sandbox_reel'
+      WHERE kernel_run_id = ctx.runId AND status = 'provisional'
+     （🔴 R3：verified_at/verified_by 必须跟这次 UPDATE 一起写，不能只改 status——
+      否则会撞上 verified_matches_status 那条 CHECK 约束，UPDATE 本身直接失败）
+   → 验证不通过 → 保持 provisional（verified_at/by 继续是 NULL，这不是失败，
+     是"还没验证过"，人工介入的入口是 Kernel run 本身落 dead_letter+
+     needs_human——已实施的 gate 步骤失败路径，见"六、跟既有系统的关系"）
 ```
 
 **为什么每一步都要真的停下来，不能"先记个待办，回头再补"**：
@@ -201,9 +266,17 @@ Meta 对象创建成功，紧接着的 ownership INSERT 失败
   └─ 任何一层删除失败或结果不确定
        → 🔴 不能把对象当成不存在。已成功创建但归属登记失败的那一层，
          其 ownership 行手工/程序化补写为 status='orphaned_needs_reconcile'，
-         source='unattributable'，unattributable_reason='ownership insert
-         failed, rollback delete uncertain'（这一步能做到，是因为我们仍然
-         知道 object_id——它是 Meta create 调用刚返回的）
+         **source 保持 'declared_at_creation'**（R3 修订：不能写
+         'unattributable'——这行记录的是"这次 declared_at_creation 的尝试
+         没能干净收尾"，不是"我们判定这个对象不属于任何人"，两者是不同的
+         事实，`status_matches_source` 约束也不允许 unattributable 配
+         非 confirmed 状态），`client_id` 保持原来打算认领它的那个
+         `ctx.clientId`（我们仍然知道是谁在尝试，只是不确定尝试有没有
+         干净地成功/失败），`unattributable_reason` 字段借用来存一句说明
+         （约束只要求 source='unattributable' 时这个字段必填，不禁止其他
+         source 也写它）：'ownership insert failed, rollback delete
+         uncertain'（这一步能做到，是因为我们仍然知道 object_id——它是
+         Meta create 调用刚返回的）
        → 更早已经写成功的层（如果有）也一并改成 orphaned_needs_reconcile
          （整个 run 的这组对象状态一致，不允许"部分 provisional、部分
          orphaned"混着放）
@@ -332,16 +405,35 @@ CREATE TABLE meta_insight_quarantine (
   fingerprint      text NOT NULL,      -- ad_account_id+level+campaign_id+ad_id+insight_date+metrics_payload 的 hash，供人工快速判断"这次拉到的跟上次是否一致"，不是去重键本身
 
   created_at       timestamptz NOT NULL DEFAULT now(),
-  updated_at       timestamptz NOT NULL DEFAULT now(),
-
-  -- 幂等 upsert 键：同一个未知对象同一天重复拉取，更新 metrics_payload +
-  -- last_seen_at，不新增行（Meta 数据在归因窗口内可能被修正，用最新值）
-  UNIQUE (ad_account_id, level, campaign_id, ad_id, insight_date)
+  updated_at       timestamptz NOT NULL DEFAULT now()
 );
+
+-- 🔴 R3 修订（点③）：普通 UNIQUE (a,b,c,ad_id,e) 在 ad_id 为 NULL 时不成立——
+--    Postgres 的唯一约束把 NULL 视为"互不相等"，两条 campaign 级行（level=
+--    'campaign' 时 ad_id 恒为 NULL）即使 (ad_account_id, level, campaign_id,
+--    insight_date) 完全相同，也不会触发唯一冲突，"同一个未知 insight 重复
+--    拉取不重复累计"这条承诺对 campaign 级行是假的——首版的 UNIQUE 子句
+--    写对了字段、但没写对 NULL 的行为。
+--
+--    改成表达式唯一索引，用 COALESCE 把 NULL 转成一个跟任何真实 ad_id 都不会
+--    撞的哨兵值（Meta 的对象 id 是纯数字字符串，空字符串永远不会是一个真实
+--    ad_id，可以安全当哨兵）：
+CREATE UNIQUE INDEX meta_insight_quarantine_unique_idx
+  ON meta_insight_quarantine (ad_account_id, level, campaign_id, COALESCE(ad_id, ''), insight_date);
 
 ALTER TABLE meta_insight_quarantine ENABLE ROW LEVEL SECURITY;
 -- CREATE POLICY "service_role_full" ON meta_insight_quarantine FOR ALL TO service_role USING (true) WITH CHECK (true);
 ```
+
+**为什么这条必须有数据库级测试，不能只靠应用层单测**：这个 bug 的本质是
+Postgres 对 NULL 的比较语义（`NULL <> NULL`），不是 JS/TS 代码逻辑错误——
+用一个假的 Supabase 客户端（内存 mock）做单测，无法复现这条语义，因为 mock
+是我们自己写的，"NULL 互不相等"这条规则不会被一个没有实现它的假件意外正确
+地模拟出来。**这条必须是一次针对真实 Postgres 实例（或本地 Supabase 开发栈）
+的集成测试**：连续对同一个 `(ad_account_id, level='campaign', campaign_id,
+insight_date)` 组合、`ad_id` 都传 `NULL`，插入两次，断言第二次触发唯一冲突
+（或者用 upsert 语义断言表里最终只有一行）。测试矩阵那一条（原表里第 12 条）
+需要标注"数据库级测试，不可用应用层 mock 替代"。
 
 **为什么 `fingerprint` 不是唯一键**：唯一键必须是"这是同一个可观测对象"
 （账户+层级+实体+日期），而 `metrics_payload` 会随 Meta 侧数据修正而变化——
@@ -437,8 +529,10 @@ campaign_id, ad_id)` 组合（即 `first_seen_at` 是这次 cron 运行内新产
   高风险操作——归因判断错了，等于制造一批**新的**污染，而且是"看起来已经
   修复过"的污染，比现在这种"已知有问题"的状态更难发现。
 - **方案 B 不改写任何存量行**，只是**标注**它们不可信，下游可以选择性地
-  排除——改动面小到只是一列新标记 + 未来（不在本轮）每个消费者加一行过滤。
-  不确定的历史数据保持"不确定"这个诚实的状态，不伪装成"已核实"。
+  排除——改动面小到只是一列新标记 + 每个消费者加一行过滤（R3：这行过滤
+  必须跟 collector 同一实施切片交付，见"Migration/Deploy/Cutover 顺序"
+  T3，不是可以无限期推迟的独立工作）。不确定的历史数据保持"不确定"这个
+  诚实的状态，不伪装成"已核实"。
 
 **融合的 hybrid 部分**：cutover 发生时，如果某个历史对象**已经**有
 `manually_verified`/`imported_verified` 的归属记录（比如 AD-ISO-1 第 31 轮
@@ -448,47 +542,73 @@ campaign_id, ad_id)` 组合（即 `first_seen_at` 是这次 cron 运行内新产
 
 ### 设计
 
-**新增一列到既有 `ad_daily_insights` 表**（唯一涉及既有表的 schema 改动，
-且是纯加法、可空列，不影响任何现有查询）：
+**新增一列到既有 `ad_daily_insights` 表**——R3 修订（点②）：不再用可空列 +
+"cutover 时补一刀 UPDATE"这种依赖运维记得执行、且首版 UPDATE 只处理了一半
+（只排除例外行，没显式把其余行钉死成 `not_comparable`，导致有独立证据的
+历史行会被静默漏掉、停留在 NULL）的做法。改成**列本身就带安全默认值**，
+让"不可信"成为结构性默认，而不是一个需要额外操作才会生效的状态：
 
 ```sql
 ALTER TABLE ad_daily_insights
-  ADD COLUMN IF NOT EXISTS ownership_trust_status text
+  ADD COLUMN IF NOT EXISTS ownership_trust_status text NOT NULL
+    DEFAULT 'not_comparable'
     CHECK (ownership_trust_status IN ('trusted','not_comparable'));
 ```
 
+`ADD COLUMN ... NOT NULL DEFAULT 'not_comparable'` 这一条语句本身就让
+**所有既存行**立即拥有非 NULL 的值（Postgres 11+ 对常量 DEFAULT 的
+`ADD COLUMN` 不需要重写整张表，代价可控）——不再需要"先加列、再补一刀
+UPDATE 才能保证没有 NULL"这种两步、中间有窗口期的流程。列刚加完的那一刻，
+**所有历史行已经全部是 `not_comparable`**，这是安全侧默认，不需要任何后续
+操作来"补救"。
+
 **语义**：
-- 修复后的 collector（本设计的目标数据流）写入的**每一行**都显式带
-  `ownership_trust_status='trusted'`——因为按新设计，能写进这张表的行，
-  必然是 `meta_object_ownership` 里 `confirmed` 状态的产物，天然可信。
-- Cutover 那一刻，对**所有既存**行执行一次性 `UPDATE`：
+- 新版 collector 写入的**每一行**都显式带 `ownership_trust_status='trusted'`
+  （不是省略、依赖某个默认值——新写入必须显式声明，NOT NULL 约束会在漏写时
+  直接拒绝这条 INSERT，逼写入代码不能偷懒省略这个字段）。
+- Cutover 只需要**一条**显式 UPDATE，把有独立验证证据的历史行**从默认值
+  `not_comparable` 翻转成 `trusted`**（R3 修订点②：不是首版那种"排除例外、
+  其余隐式留白"，是"默认已经是安全值，只需要显式提升例外"）：
   ```sql
-  UPDATE ad_daily_insights
-     SET ownership_trust_status = 'not_comparable'
-   WHERE ownership_trust_status IS NULL
-     AND NOT EXISTS (
-       SELECT 1 FROM meta_object_ownership o
-        WHERE o.ad_account_id = ad_daily_insights.ad_account_id
-          AND o.level = ad_daily_insights.level
-          AND o.object_id = ad_daily_insights.entity_id
-          AND o.client_id = ad_daily_insights.client_id
-          AND o.status = 'confirmed'
-          AND o.source IN ('manually_verified','imported_verified')
-     );
+  UPDATE ad_daily_insights t
+     SET ownership_trust_status = 'trusted'
+    FROM meta_object_ownership o
+   WHERE o.ad_account_id = t.ad_account_id
+     AND o.level = t.level
+     AND o.object_id = t.entity_id
+     AND o.client_id = t.client_id
+     AND o.status = 'confirmed'
+     AND o.source IN ('manually_verified','imported_verified')
+     AND t.ownership_trust_status = 'not_comparable';  -- 只提升还没被标过的
   ```
-  这条 UPDATE 排除了"已经有独立验证证据"的历史行（hybrid 部分），其余
-  一律标 `not_comparable`。
+  跑完这条之后，全表 `SELECT count(*) WHERE ownership_trust_status IS NULL`
+  **结构性保证是 0**——不是因为这条 UPDATE 处理了所有行，是因为 NOT NULL
+  DEFAULT 从列被创建的那一刻起就没让任何一行处于 NULL 过。这条 UPDATE 唯一
+  的作用是把"默认安全值"里那些其实有资格更可信的行**显式提升**，不是"清理
+  遗留的 NULL"。
 - **不把历史未知值解释成 0**：`not_comparable` 是一个独立于"有花费"/
   "没花费"的第三态，不是"金额是 0"，任何读到这一列的地方都不能把它当
   "这天没花钱"处理。
 
-### 下游怎么用（本轮只设计契约，不改消费者代码——见"明确禁止"）
+### 下游怎么用：与 collector 同一实施切片，不能拆成"下一轮"（R3 修订点①）
 
-未来（下一轮实施，不在本次范围）每个消费者加一行过滤：
-`.eq('ownership_trust_status', 'trusted')` 或等价的 WHERE 条件。**本轮不碰
-`evaluate.ts`/`weekly-report`/`ad-benchmark-queries.ts` 等任何下游文件**——
-这是"八、明确禁止"里"顺手修下游报表、Goal、诊断或 Prescription"明确挡住的
-范围。
+首版把"消费者加 `ownership_trust_status='trusted'` 过滤"排进"下一轮"，
+理由是"不顺手修下游"——**这个理由不成立，R3 撤回**。区别在于：`evaluate.ts`/
+`weekly-report`/`ad-benchmark-queries.ts` 这些文件本身的诊断/报表逻辑，
+本设计确实不碰（不改它们"怎么算"）；但**给它们的查询加一行
+`.eq('ownership_trust_status','trusted')` 过滤**，不是"顺手优化"，是这次
+修复能不能生效的**必要条件**——如果 collector 侧已经在正确写 `trusted`/
+`not_comparable`，但读侧一行没改，读到的还是"trusted 和 not_comparable
+混在一起、无差别喂给 Prescription"，跟 AD-ISO-1 修复之前**没有任何实质区别
+**，只是多了一列没人看的标记。"归属登记 + quarantine + trust 列"这一整套
+如果不配上"至少有一处读侧真的按这一列过滤"，这次修复就是不完整的、
+不生效的——**collector 改动和至少一处消费者的过滤改动，必须是同一个可
+部署、可回滚的实施切片，不能分成两个可以无限期分开排期的"轮次"**。
+
+具体落在测试矩阵第 18 条（新增）：collector 的归属路由代码和至少一个消费者
+的 trusted 过滤代码，必须出现在同一次提交里。**本设计仍然不实现这些消费者
+文件的具体改动**（那是实施阶段的事，本文档不写代码）——R3 修的是"顺序和
+排期承诺"，不是提前把消费者的代码写出来。
 
 **报表如何说明基线从哪天开始可信**：`meta_account_ownership_cutover`
 （一张极小的配置表，一行一个账户）：
@@ -520,57 +640,151 @@ UI 一个可以直接引用的"这个账户从哪天起可信"的人类可读时
 ### CTS/Oztop/Roman 共享账户历史的具体处理
 
 不逐条重新归因（方案 A 的全量重归属不在本轮做）。Cutover 执行后：
-- 有独立证据（非名字）支持的历史行 → 保持可信，`ownership_trust_status`
-  不被 UPDATE 语句覆盖
-- 其余 → `not_comparable`，未来消费者加过滤后自然从 baseline/Goal/
-  Prescription 里退出，直到有人拿到独立证据补一条 `manually_verified`/
-  `imported_verified`（那时候如果需要，可以有一条独立的"回填个别历史对象"
-  操作，把它们对应的历史行也改回 trusted——这个回填机制本身不需要新设计，
-  复用"人工确认后一次性、幂等地转正"那套逻辑，只是这次转正的目标行已经
-  存在于 `ad_daily_insights`（不是从 quarantine 转入），走的是同一条
-  "改写 `ownership_trust_status`"的路，不是新机制）
+- 有独立证据（非名字）支持的历史行 → 从默认的 `not_comparable` **显式
+  提升**为 `trusted`（R3：不是"不被覆盖"，是主动 UPDATE 提升——见"设计"
+  一节的修订）
+- 其余 → 保持列刚创建时就有的默认值 `not_comparable`，未来消费者加过滤后
+  自然从 baseline/Goal/Prescription 里退出，直到有人拿到独立证据补一条
+  `manually_verified`/`imported_verified`（那时候如果需要，可以有一条独立
+  的"回填个别历史对象"操作，把它们对应的历史行也提升成 trusted——这个回填
+  机制本身不需要新设计，复用"人工确认后一次性、幂等地转正"那套逻辑，只是
+  这次转正的目标行已经存在于 `ad_daily_insights`（不是从 quarantine 转入），
+  走的是同一条"改写 `ownership_trust_status`"的路，不是新机制）
 
-### Migration / Deploy / Cutover 顺序
+### 新旧 collector 切换机制：真实可执行的 stop / lease / feature flag（R3 新增，点⑤）
+
+首版这里只写了"加一个分布式锁（本轮不写代码）"，没有给出可以真的照着实施
+的具体机制。R3 补齐三件东西：
+
+**1. Feature flag（真正的"停"开关，不需要重新部署代码）**
 
 ```
-① apply migration：meta_object_ownership + meta_insight_quarantine +
-   meta_account_ownership_cutover 三张新表 + ad_daily_insights 加
-   ownership_trust_status 列（全部 additive，不锁表、不改现有列语义）
-   （PM 显式 go 之后才 apply，本轮不做）
+环境变量：META_INSIGHTS_COLLECTOR_MODE = 'paused' | 'ownership_routed'
+默认值：'paused'（部署配置里写死默认，不依赖运维记得手动设置成安全值）
+```
 
-② 部署新版 collector（账户级去重 + 按归属路由 + fail-closed）
-   🔴 部署前提：meta_object_ownership 必须已经能查询（① 已完成）；
-      部署那一刻账户很可能还没有任何 confirmed 归属行——这是**预期状态**，
-      不是 bug：第一次跑新 collector 时，几乎所有历史 campaign 都会因为
-      查无归属而进 quarantine，这正是设计要的效果（不确定的东西先隔离，
-      不是"没准备好所以先别切"）
+新版 collector 代码在**每次**触发时，第一件事就是读这个变量：
+- `'paused'`：**完全不调用**`getCampaignDailyInsights`/`getAdDailyInsights`，
+  不写 `ad_daily_insights`、不写 `meta_insight_quarantine` 任何一行，只记一条
+  "collector paused，本次同步跳过"的日志。这不是"退回旧逻辑"——旧逻辑代码
+  在新版本部署的那一刻就已经从代码库里被替换掉了，`'paused'` 是一个全新的
+  第三态（既不是旧的不安全行为，也不是新的归属路由行为），专门用来覆盖
+  "代码已经部署、但归属数据还没准备好"这段过渡期。
+- `'ownership_routed'`：唯一允许真正调用 Meta insights API 并按归属路由写入
+  的模式。
 
-③ 对每个共享账户（先从 CTS 所在的 `act_2775766642787274` 开始）执行历史
-   backfill：人工确认已知的、有独立证据的历史 campaign/ad，写
-   manually_verified/imported_verified 行
+**为什么这是"真正的 stop"**：老版本 collector 的"停"，本质上就是"部署新
+代码，新代码里根本不存在老的无过滤逻辑"——这一步不需要额外设计，部署本身
+就是停止事件。这个 flag 解决的是**部署完成之后**的问题：新代码里虽然装的是
+安全的归属路由逻辑，但如果归属表还是空的（backfill 没做完）、或者 cutover
+还没跑，让它在这个阶段就以 `'ownership_routed'` 模式跑，会导致几乎所有历史
+campaign 因为查无归属被隔离进 quarantine——这不是错误行为（不会污染数据），
+但会让报表短时间内"看起来数据消失了"，容易被误判成故障。`'paused'` 让运维
+有一个明确的、不需要代码变更的开关，控制"归属路由到底从什么时候开始生效"，
+把这个决定权交给一次环境变量修改，而不是绑死在部署时间点上。
 
-④ 执行一次性 cutover UPDATE（"设计"节里那条 SQL），并写入
-   meta_account_ownership_cutover 一行，记录 `trusted_from` = 这一刻
+**2. Lease（同一账户并发同步互斥）**
 
-⑤（不在本轮）下游消费者逐个加 `ownership_trust_status='trusted'` 过滤
+```sql
+CREATE TABLE meta_insights_sync_lease (
+  ad_account_id     text PRIMARY KEY,
+  locked_by         text NOT NULL,
+  locked_at         timestamptz NOT NULL DEFAULT now(),
+  lease_expires_at  timestamptz NOT NULL
+);
+```
+
+这张表照抄 Kernel 既有的 claim/lease 手法（`action_run_steps` 的
+`claimed_by`/`lease_expires_at`/`heartbeat_at`，`kernel_claim_run_step()`
+那一套），不是发明新模式，只是把同一个思路用在"同一个 `ad_account_id` 的
+insights 同步不能被两次调用同时处理"这件更小的事情上：
+
+```
+collector 对每个唯一 ad_account_id：
+  1. 尝试原子认领：
+     INSERT INTO meta_insights_sync_lease (ad_account_id, locked_by, lease_expires_at)
+     VALUES ($1, $2, now() + interval '10 minutes')
+     ON CONFLICT (ad_account_id) DO UPDATE
+       SET locked_by = EXCLUDED.locked_by, locked_at = now(),
+           lease_expires_at = EXCLUDED.lease_expires_at
+     WHERE meta_insights_sync_lease.lease_expires_at < now()  -- 只有过期的锁才能被抢
+     RETURNING *;
+  2. 没有返回行 = 认领失败（别人正持有未过期的锁）→ 跳过这个账户，记日志，
+     不重试、不阻塞其他账户的处理
+  3. 认领成功 → 执行同步逻辑
+  4. 完成后 DELETE 这一行释放锁（或者干脆不主动释放，让它自然在
+     lease_expires_at 之后可以被下一次认领——两种都可以，"不主动释放"
+     对"进程崩溃、没机会执行释放逻辑"更稳健，见测试矩阵 16c）
+```
+
+这条锁解决的是"新旧 collector 同时跑"这个具体风险的落地问题：不管触发
+同步的是新代码还是理论上仍在运行的旧代码（正常部署流程下不该发生，但锁
+不依赖这个假设成立），只要两次调用都走同一张 `meta_insights_sync_lease`
+表抢同一把锁，就只会有一个真正执行。
+
+**3. 为什么 flag + lease 两个都要，不能只留一个**：flag 解决的是"要不要
+真的按新逻辑写数据"（时间维度的开关），lease 解决的是"同一时刻别让两次
+调用互相踩"（并发维度的互斥）。只有 flag 没有 lease：`'ownership_routed'`
+模式下，如果 cron 调度器因为某种原因（比如上一次没跑完、手动触发 + 定时
+触发撞在一起）对同一账户触发了两次并发调用，两次都会尝试写 insights ——
+`ad_daily_insights` 的 upsert 语义能兜底不产生脏数据，但 `meta_insight_
+quarantine` 的 `last_seen_at` 会被无意义地更新两次，`meta_object_ownership`
+的归属查询也会被打两倍的请求量。只有 lease 没有 flag：没有办法在"代码已
+部署、数据没准备好"这段过渡期里让 collector 保持不作为，锁只管"别同时跑"，
+不管"现在到底该不该跑"。
+
+### Migration / Deploy / Cutover 顺序（R3 重排，回应点①"消费者过滤必须
+同一实施切片"）
+
+```
+T0  apply migration：meta_object_ownership + meta_insight_quarantine +
+    meta_account_ownership_cutover + meta_insights_sync_lease 四张新表 +
+    ad_daily_insights 加 ownership_trust_status 列（NOT NULL DEFAULT
+    'not_comparable'，见"设计"一节，全部 additive）
+    此刻部署配置里 META_INSIGHTS_COLLECTOR_MODE 默认已经是 'paused'
+    （PM 显式 go 之后才 apply，本轮不做）
+
+T1  执行历史 backfill：人工确认已知的、有独立证据的历史 campaign/ad，写
+    manually_verified/imported_verified 行（先从 CTS 所在的
+    `act_2775766642787274` 开始）。这一步在 collector 处于 'paused' 状态下
+    进行，backfill 写 ownership 表不会跟任何并发的 insights 同步冲突
+
+T2  执行一次性 cutover UPDATE（"设计"节里那条 SQL，只做"提升"不做"覆盖
+    降级"），写入 meta_account_ownership_cutover 一行记录 trusted_from。
+    执行完立即跑不变量检查：
+    `SELECT count(*) FROM ad_daily_insights WHERE ownership_trust_status IS NULL`
+    必须是 0（结构性保证，见"设计"一节；这条检查更多是部署后自检，不是因为
+    真的可能出现 NULL）
+
+T3  🔴（R3 核心修订）**同一个部署切片**里，一起上线：
+      a) 新版 collector 代码（账户级去重 + 按归属路由 + fail-closed +
+         flag/lease 判断）
+      b) 至少一处下游消费者的 `ownership_trust_status='trusted'` 过滤
+    两者是同一次 PR/发布，不允许 a) 先上、b) 排进"以后再说"——这正是点①
+    要修的问题：trust 列如果没有任何读者真正过滤它，这一整套修复就是不
+    生效的装饰。**具体改哪个/哪些消费者文件、改动细节，本设计不展开**
+    （那是实施阶段的代码工作），R3 只锁定"排期上不能拆开"这条规则。
+
+T4  T3 部署完成、验证过 lease 机制工作正常后，把
+    META_INSIGHTS_COLLECTOR_MODE 改成 'ownership_routed'（纯环境变量修改，
+    不需要重新部署代码）。从这一刻起，新写入的 insights 行开始真正被按
+    归属路由，查无归属的历史 campaign 会开始进 quarantine（预期行为，
+    不是故障）
 ```
 
 ### 新旧 collector / migration 未 apply 时如何 fail closed
 
-- **migration 未 apply**（`meta_object_ownership` 表不存在）→ 新版 collector
-  的归属查询会失败（表不存在）→ **必须整体拒绝写入 `ad_daily_insights`**，
-  不能退回旧逻辑（那样等于悄悄绕过整个修复）。具体表现：collector 每一行
-  insights 的归属查询失败时，当作"查无归属"处理（进 quarantine 或者更保守
-  地——直接让这次 cron run 整体失败并告警，因为"表都不存在"不是单条数据的
-  归属问题，是整个机制没就绪，不该假装成"这一行不知道归属"那种正常情况）。
-  实施时需要在 collector 入口加一次性的"依赖表存在性自检"，缺表就整体
-  `fail closed` 并转告警，不逐行降级。
-- **新旧 collector 同时跑**（部署过程中的重叠窗口）→ **禁止同时重复写入**：
-  两版 collector 不能对同一个 `ad_account_id` 同时触发同步。最小实现（本轮
-  只设计，不写代码）：cron 入口加一个基于 `ad_account_id` 的短期分布式锁
-  （或者更简单——直接串行化整个 cron，不并发跑多个账户的同步任务，这本来
-  就是当前实现的实际情况，不需要新机制），部署时确保旧版本进程完全停止后
-  才启动新版本，不做"灰度并行"。
+- **migration 未 apply**（`meta_object_ownership` 表不存在）→ collector 入口
+  的依赖表存在性自检失败 → 整体 `fail closed`：不查询、不写入
+  `ad_daily_insights`、不写 quarantine，产生明确告警，**不退回旧逻辑**（那样
+  等于悄悄绕过整个修复；这条判定跟 `META_INSIGHTS_COLLECTOR_MODE` 无关——
+  即使 flag 已经是 `'ownership_routed'`，表不存在照样整体拒绝，flag 只管
+  "要不要跑"，不能越权代表"能不能跑"）。
+- **新旧 collector 同时跑**（部署过程中的重叠窗口）→ 由上面"Lease"机制挡住：
+  两次调用不管来自哪个版本，只要争抢同一个 `ad_account_id` 的锁，只有一方
+  能真正执行。部署时的操作纪律仍然是"确保旧版本进程完全停止后才启动新
+  版本，不做灰度并行"，但 lease 是**代码层面**的兜底，不完全依赖这条操作
+  纪律被严格遵守。
 
 ## 四、契约细节一：campaign/ad 父子一致性
 
@@ -616,7 +830,7 @@ campaign 级一行 insights → 只按 campaign ownership 路由，
 
 | 点 | 处理 |
 |---|---|
-| `act_123` 与 `123` 不得绕过唯一约束形成两条账户 | `meta_object_ownership`/`meta_insight_quarantine`/`meta_account_ownership_cutover` 的写入函数在写库前统一调用一次规范化（补前缀，若已有则不重复），保证同一账户物理上只有一种存法进表 |
+| `act_123` 与 `123` 不得绕过唯一约束形成两条账户 | `meta_object_ownership`/`meta_insight_quarantine`/`meta_account_ownership_cutover`/`meta_insights_sync_lease`（R3 新增，同样以 `ad_account_id` 为主键，同一条规范化规则必须覆盖它，否则 `act_123` 和 `123` 会拿到两把不同的锁，lease 机制形同虚设）的写入函数在写库前统一调用一次规范化（补前缀，若已有则不重复），保证同一账户物理上只有一种存法进表 |
 | 输入校验 | 新建的 `object-ownership.ts` 里的写入函数对 `ad_account_id` 参数做格式校验（正则 `^act_\d+$`），格式不对直接拒绝（fail closed，不静默纠正后继续） |
 | migration/backfill 规范化 | 历史 backfill 脚本读到任何形式（`act_xxx` 或裸数字）都先规范化成带前缀形式再写入 |
 | ownership unique key | `UNIQUE (ad_account_id, level, object_id)` 天然依赖 `ad_account_id` 已经是规范形式——这是**输入校验**要在写入前挡住格式问题的直接原因，唯一约束本身不做格式转换 |
@@ -654,12 +868,17 @@ campaign 级一行 insights → 只按 campaign ownership 路由，
 | 9 | provider create 成功、紧接着 ownership INSERT 失败 | 触发 rollback；rollback 成功则对象+ownership 行都不留痕；rollback 失败则该层（及之前各层）转 `orphaned_needs_reconcile`，预留保持占用 |
 | 10 | ownership 写成功后进程立即崩溃（模拟：写完某一层就停止，不再调用下一层） | 下次重试时，幂等检查（先查 ownership 表、再退回按 tag 查）能正确识别"这一层已经建过"，不重复创建 |
 | 11 | rollback 删除 Meta 对象失败 | 不当成"对象不存在"处理；ownership 行转 `orphaned_needs_reconcile`；`orphans` 机制如实上报 |
-| 12 | 同一条 unknown insight（同 account+level+campaign+ad+date）被多次 cron 拉取 | `meta_insight_quarantine` 只有一行，`last_seen_at` 更新，不产生重复行 |
+| 12 | 同一条 unknown insight（ad 级，同 account+level+campaign+ad+date）被多次 cron 拉取 | `meta_insight_quarantine` 只有一行，`last_seen_at` 更新，不产生重复行 |
+| 12b | 🔴（R3 新增，**数据库级测试，不可用应用层 mock 替代**）两条 campaign 级 quarantine 行，`ad_account_id`/`campaign_id`/`insight_date` 完全相同、`ad_id` 都是 NULL | 表达式唯一索引（`COALESCE(ad_id,'')`）生效，第二次写入触发冲突或 upsert 后表里只剩一行——证明普通 `UNIQUE` 在 NULL 上会静默放行重复行这件事已经被修正 |
 | 13 | quarantine 行经人工确认归属后转正 | `ad_daily_insights` 只出现一次该行数据；再次运行转正批处理（模拟重跑）不产生重复/不改变已有数值之外的副作用 |
-| 14 | cutover 执行后 | 无独立验证证据的历史行 `ownership_trust_status='not_comparable'`；有 `manually_verified`/`imported_verified` 支撑的历史行保持 `trusted` |
+| 14 | cutover 执行后 | 无独立验证证据的历史行 `ownership_trust_status='not_comparable'`（且**非 NULL**——R3 点②）；有 `manually_verified`/`imported_verified` 支撑的历史行**显式**标 `trusted`（不是"跳过不动"） |
+| 14b | 🔴（R3 新增）cutover UPDATE 执行完毕后，全表扫描 | `SELECT count(*) FROM ad_daily_insights WHERE ownership_trust_status IS NULL` 必须是 0——这条断言本身就是点②"完成后不得留 NULL"的直接验证 |
 | 15 | migration 未 apply（`meta_object_ownership` 表不存在）时 collector 跑一次 | 整体 fail closed，不写入任何 `ad_daily_insights` 行，不退回旧的无过滤逻辑，产生明确告警 |
-| 16 | 新旧版本 collector 同时对同一账户触发同步（模拟并发部署窗口） | 设计要求禁止此场景发生（串行化/锁），测试断言"不允许同时触发"这条约束本身被遵守，而不是断言两版数据不冲突（那样已经是允许了不该允许的场景） |
+| 16 | 🔴（R3 修订）`META_INSIGHTS_COLLECTOR_MODE='paused'` 时 collector 跑一次 | 不调用任何 Meta insights API（mock 零调用），不写入 `ad_daily_insights`/quarantine 任何行，只产生一条"paused"日志 |
+| 16b | 🔴（R3 新增）同一 `ad_account_id` 的两次 collector 调用并发发起（模拟同一 cron tick 内的重叠调用，或上一轮还没跑完下一轮又触发） | `meta_insights_sync_lease` 只放行一方成功认领；另一方认领失败、跳过、不重试、记日志 |
+| 16c | 🔴（R3 新增）lease 认领后进程崩溃（未释放、未到期） | 在 `lease_expires_at` 之前，同账户的新认领尝试失败（沿用 16b 的保护）；过期之后允许重新认领（不会永久卡死） |
 | 17 | 未知（quarantine）数据 | 不会在任何报表/诊断里显示为 spend=0 或 impressions=0——它应该完全不出现，而不是以"0"的形态出现（0 和"不知道"是两个不同的诚实状态，混淆会被误读成"这天真的没花钱"） |
+| 18 | 🔴（R3 新增，对应点①）`META_INSIGHTS_COLLECTOR_MODE='ownership_routed'` 上线那次部署 | collector 的归属路由逻辑代码 与 下游消费者的 `ownership_trust_status='trusted'` 过滤代码 必须在同一次 commit/PR 里一起出现——测试层面断言的是"代码评审清单"而不是运行时行为：CI 层面可以加一条检查（本设计不展开具体实现）确认改动集里两部分文件同时出现，防止未来有人只交一半 |
 
 ## 八、Reuse Statement
 
@@ -670,15 +889,19 @@ campaign 级一行 insights → 只按 campaign ownership 路由，
 `ads_spend_reservations`（预留/释放逻辑照搬到 ownership 失败场景）、
 `pm-todo/manual-items.ts`（告警契约复用其"what/how/href"三件套，不新建
 通知系统）、`flywheel_actions.action_run_id` 的"可空 lineage 边"设计手法
-（`meta_object_ownership.kernel_run_id` 照抄同一手法）。
+（`meta_object_ownership.kernel_run_id` 照抄同一手法）、**Kernel 既有的
+claim/lease 手法**（`action_run_steps` 的 `claimed_by`/`lease_expires_at`/
+`heartbeat_at` + `kernel_claim_run_step()`，R3 新增的 `meta_insights_sync_
+lease` 照抄同一个原子认领模式，不是发明新的并发控制手段）。
 
 **新增是 platform-shared**：`meta_object_ownership`/`meta_insight_
-quarantine`/`meta_account_ownership_cutover` 三张表的结构本身——`client_id`
-是参数化的，Oztop/Roman 甚至未来任何共享 Meta 账户的客户都能直接用同一套
-表，不需要为每个客户建专属逻辑。三态状态机（provisional/confirmed/
-orphaned_needs_reconcile）和 reconcile 顺序（先按 object ID、退回按 tag、
-按 0/1/多个分派）是通用的 Meta 对象生命周期模式，不含任何 CTS/Oztop/Roman
-的业务语义。
+quarantine`/`meta_account_ownership_cutover`/`meta_insights_sync_lease`
+（R3 新增）四张表的结构本身——`client_id` 是参数化的，Oztop/Roman 甚至未来
+任何共享 Meta 账户的客户都能直接用同一套表，不需要为每个客户建专属逻辑。
+三态状态机（provisional/confirmed/orphaned_needs_reconcile）和 reconcile
+顺序（先按 object ID、退回按 tag、按 0/1/多个分派）是通用的 Meta 对象生命
+周期模式，不含任何 CTS/Oztop/Roman 的业务语义。`META_INSIGHTS_COLLECTOR_
+MODE` feature flag 机制本身也是通用的开关模式，不针对某个特定账户。
 
 **新增是 client/行业特定的**：无——本设计不含任何客户名、客户 ID 或行业
 判断写死进 shared 结构。共享账户 `act_2775766642787274` 本身作为一个真实
@@ -717,11 +940,14 @@ orphaned_needs_reconcile）和 reconcile 顺序（先按 object ID、退回按 t
   不是推迟，是不存在这个需求
 - **不改造 `campaign-ownership.ts` 的写路径查询**——未来整合方向已在"六"
   写明，这次不动
-- **不修改任何下游消费者**（`evaluate.ts`/`weekly-report`/
+- **本次设计会话不修改任何下游消费者文件**（`evaluate.ts`/`weekly-report`/
   `ad-benchmark-queries.ts`/`own-ad-activity.ts`/`ad-engine/page.tsx`）——
-  本轮只交付 `ownership_trust_status` 这一列 + cutover 记录，让下游未来
-  能够低成本地加一行过滤；实际去加这行过滤，是下一轮的工作，明确不在
-  本次范围
+  这份文档本身不写代码，跟消费者过滤要不要写代码是两回事。
+  🔴 **R3 修订**：但"实际去加这行过滤是可以无限期排到以后的独立一轮"这个
+  说法已经被撤回（见"三、Migration/Deploy/Cutover 顺序"T3）——**排期上**，
+  消费者过滤代码必须跟 collector 代码在同一个实施切片里一起交付，不是
+  "以后有空再做"的推迟项。这里"延后"指的仅仅是"这次设计会话不动笔写它"，
+  不是"未来排期上可以拖到任意一轮"
 - **不做全量历史重归属（方案 A 的完整版本）**——只做 hybrid 里"已有独立
   证据的例外"部分，其余历史数据保持 `not_comparable`，不主动花力气去人工
   核实全部 105+ 行的真实归属
