@@ -1,15 +1,18 @@
-# ME2 · Page Optimization Request Caller —— v1.0 spec (Draft, awaiting PM approval)
+# ME2 · Page Optimization Request Caller —— v1.0 spec (Draft, Caller BUILD)
 
-**Status**: **Draft** —— spec only, no code. GO BUILD 之前不写实现。
-**Author window**: `magic-engine-gate-reviewer-2887e4`
-**Repository Fact Gate**: main = `a2dfcd8b8e9b100dda2ff00e75104ff5db5a4c78` (fetched 2026-08-19T05:00:04Z)
-**Frozen ordering (Build Control)**: **Caller spec → Caller Draft PR → Hardening BUILD → PR #1097 适配 Hardening → 三者进入同一个 Production Readiness Gate → 首次真实 `/geo` execution**。任何 outward real execution 前，Hardening 必须落地。
+**Status**: **Draft** —— 与实现 PR 同批提交。
+**Author window**: `feat/page-optimization-request-caller-v1`
+**Repository Fact Gate**: main = `a2dfcd8b8e9b100dda2ff00e75104ff5db5a4c78` (fetched 2026-08-19T05:39:58Z)
+**Frozen ordering (Build Control)**: **Caller spec + Caller Draft PR → Hardening BUILD → PR #1097 适配 Hardening → 三者进入同一个 Production Readiness Gate → 首次真实 `/geo` execution**。任何 outward real execution 前，Hardening 必须落地。
+
+**关于本 spec 与 `feat/page-apply-action-v1` 上那份的关系**：
+`feat/page-apply-action-v1` 分支携带过一份同名 Caller spec (Draft, gate reviewer 版本)。本 spec 是**在其基础上按当前 runtime 事实与 Build Control 木桶原则修正过**的 caller-owning 版本，与实现代码同一 PR 提交。清理 `feat/page-apply-action-v1` 上遗留的那一份由该 PR 自己的窗口处理，本窗口不动它。
 
 ---
 
 ## 0. 一句话
 
-新建**一根最小胶水管子**：接受一份已产生的 `PageOptimizationRequest`，用**现有** Action Bridge 映射到 ActionKey（**禁止 hardcode**），构造 Kernel `SubmitActionInput`，调**现有** `submitActionRun()`，返回 `{run_id, status, approvalRequired}`。**证明**"上游真的把一条业务意图送进 Kernel，并出现在 Human Approval 队列"—— 到此立即停止。**不做 orchestrator、不做 cron、不自动遍历、不多客户 dispatch、不写 ME client id 进 shared runtime、不做 `/geo` 专用 Kernel API**。
+新建**一根最小胶水管子**：接受一份已产生的 `PageOptimizationRequest` + 一个 `CandidateIdentity`，用**现有** Action Bridge 映射到 ActionKey（**禁止 hardcode**），构造 Kernel `SubmitActionInput`，调**现有** `runAction()` 走完 submit → authorize progression，返回结构化结果。**证明**"上游真的把一条业务意图送进 Kernel，出现在 Human Approval 队列，且 capability handler 一次都没被调"—— 到此立即停止。**不做 orchestrator、不做 cron、不自动遍历、不多客户 dispatch、不写 ME client id 进 shared runtime、不做 `/geo` 专用 Kernel API**。
 
 ---
 
@@ -19,21 +22,45 @@
 
 | 环节 | 状态 |
 |---|---|
-| GEO pipeline (WP03/WP05) 生成 `PageOptimizationRequest` | ✅ 代码存在，实际被调 = **只 tests + `scripts/diagnose-roman-geo.ts` 只读脚本** |
-| Action Bridge `mapCandidateIdentity` | ✅ 代码存在，实际被调 = **零**（bridge 自身 + tests 之外） |
-| Kernel 提交入口 `submitActionRun()` | ✅ 代码存在，实际被调 = **零**（kernel 内部 + tests 之外） |
-| Human Approval API `/api/kernel/approvals/*` + UI `/dashboard/kernel-approvals` + 服务层 `kernel-approval/service.ts` + 人批准触发 `runAction` | ✅ **完整就绪** |
+| GEO pipeline (WP03/WP05) 生成 `PageOptimizationRequest` | ✅ 代码存在，实际被调 = **只 tests + 只读脚本** |
+| Action Bridge `mapCandidateIdentity` | ✅ 代码存在，`MAPPING_TABLE = []`（刻意），实际被调 = **零**（bridge 自身 + tests 之外） |
+| Kernel 提交 + 授权入口 `runAction()` / `submitActionRun()` | ✅ 代码存在，实际被生产调用 = **零**（kernel 内部 + tests 之外） |
+| Human Approval API `/api/kernel/approvals/*` + UI + 服务层 + 人批准触发 `approveRun` | ✅ **完整就绪**（Human Approval 只签授权，不执行） |
 | 已注册的 `seo.build_publish_package` capability 的生产 caller | ❌ **零**（连它都没生产 caller，可以互证）|
 
-**功能最短板** = **"读 GEO pipeline 产出 → 用 Action Bridge 翻译 → 调 `submitActionRun()`" 这根胶水在 main 上从未被写过**。下游全就绪，上游全就绪，就缺中间这根管子。
+**功能最短板** = **"读一份 `PageOptimizationRequest` → 用 Action Bridge 翻译 → 调 `runAction()`" 这根胶水在 main 上从未被写过**。下游全就绪，上游全就绪，就缺中间这根管子。
 
-**安全最短板** = Hardening（狄仁杰 Attack #1 + #3 已用 review 证过，不需要再等生产事故）。
-
-两者是**同一条窄闭环的相邻两块板**，都必须补，只是本 spec 只涉及功能板。
+**安全最短板** = Hardening（狄仁杰 Attack #1 + #3 已用 review 证过）。跟本 spec 是**同一条窄闭环的相邻两块板**，都必须补，但本 spec 只涉及功能板。
 
 ---
 
-## 2. Scope hard-boundary —— Caller v1 IS
+## 2. Safety Fact Gate（Caller 复用 `runAction()` 的前提）
+
+Caller 选 `runAction()` 而不是 `submitActionRun()`，是因为：
+- `submitActionRun()` 只 INSERT `action_runs` 一行 (`status='queued'`)，**不走授权**，**不落 authorization_decision**，**不推 `pending_approval`**。它一个字都不写进 Approval Queue。
+- 真正的 `submit → authorize → pending_approval` progression 在 `runAction()` 里：`submitActionRun` → `driveIntermediateRun` → `authorizeRun`。
+
+**Caller v1 使用 `runAction()` 的安全前提**：对 `sideEffect: 'outward'` 的 action，`runAction()` 在结构上**不可能**到达 capability handler，除非另一个**显式的** `approveAndRun`（Human Approval）由人触发。
+
+**源码引用**（`src/lib/kernel/`）：
+- `authorize.ts:316-321` — outward 且无 `outwardAuthorization` 声明 → deny `outward_side_effect_blocked`；
+- `authorize.ts:361-370` — outward + `policy.mode === 'auto_approve'` → deny `outward_requires_human_policy`（对外动作永远要人点头，`auto_approve` 不足以放行）；
+- `authorize.ts:456-489` — outward + `policy.mode === 'require_approval'` → 返回 `verdict: 'require_approval'`，`run.status = 'pending_approval'`，**不调 executor**；
+- `runner.ts:392-400` — `driveIntermediateRun` 见 `verdict === 'require_approval'` → 直接 return，**不进 `executeAndWrap`**。
+
+**结论**：`runAction()` 对 `page.apply_optimization_request` (outward) 的三条终点只能是：
+1. `denied`（deny code 属于 §5 明列的四种之一）；
+2. `pending_approval`（本 caller v1 的**唯一** success）；
+3. `dead_letter`（授权前置校验中间步骤崩了 —— Kernel 会 fence 好，不会漏调 handler）。
+
+**Safety Gate PASS**。Caller 复用现成 progression，无需自己拼 `submitActionRun + authorizeRun`。
+
+**关联 tests**（已存在，本 caller 不改也不复制）：
+`src/lib/kernel/__tests__/outward-authorization.test.ts:194-244` 已经完整覆盖上述三条 outward 结构不变量。
+
+---
+
+## 3. Scope hard-boundary —— Caller v1 IS
 
 一个**纯**函数（library function）：
 
@@ -46,96 +73,104 @@ export async function submitPageOptimizationRequest(
 
 它做的**恰好**这几件事，一件不多：
 
-1. **接受**已产生的 `PageOptimizationRequest`（来自 WP06 `src/lib/page-optimization/types.ts` 的 `PageOptimizationRequest`，caller 不生成 request）
-2. **构造** `CandidateIdentity = {domain: 'geo', intent: 'optimize_page_answerability'}` —— **从 GEO Module 的 exported constants `GEO_CANDIDATE_DOMAIN` / `GEO_CANDIDATE_INTENT` 读**，不 hardcode 字符串
-3. **调**现有 `mapCandidateIdentity(identity)`（`src/lib/action-bridge/index.ts:232`）—— **禁止 hardcode `page.apply_optimization_request`**
-4. Bridge 返回 `outcome:'rejected'` → **不 submit**，直接返回结构化拒绝（含 bridge 给的 `code` + `reason`），caller 也不擅自 fallback
-5. Bridge 返回 `outcome:'mapped'` → 构造 `SubmitActionInput.input`（形状严格按 `ActionDefinition.inputSchema`）
-6. **调**现有 `submitActionRun(deps.kernelDeps, submitInput)`
-7. **返回** 标准化结果 `{runId, status, approvalRequired, existing}` —— caller **不**驱动执行（不调 `runAction` / `driveIntermediateRun` / `approveAndRun`），只提交
+1. **接受**已产生的 `PageOptimizationRequest`（`src/lib/page-optimization/types.ts`）+ 一个 `CandidateIdentity`（由触发端提供，不 hardcode 在 shared caller）
+2. **assert** `request.clientId === kernelMeta.clientId` —— 不一致 fail closed（`client_id_mismatch`）
+3. **assert** `request.basedOnVersion.known === true` —— unknown fail closed（`basedOnVersion_unknown`）
+4. **调**注入的 `mapCandidate(candidateIdentity)`（生产默认接线到 `mapCandidateIdentity`）—— **禁止 hardcode ActionKey**
+5. Bridge 返回 `outcome:'rejected'` → **不 submit**，直接返回结构化拒绝（`bridge_rejected`，含 bridge 给的 `code` + `reason`），caller 也不擅自 fallback
+6. Bridge 返回 `outcome:'mapped'` → 构造 `SubmitActionInput.input`（形状严格按 §7）
+7. **调**注入的 `runAction(kernelDeps, submitInput)`（生产默认接线到 `@/lib/kernel/runner` 的 `runAction`）
+8. **按 outcome 分派返回**（§8）：只有 `pending_approval` 是 success；其余（`denied`, `dead_letter`, `succeeded`, `idempotent_hit`, `in_progress`）返回结构化 non-success
 
-**验收 = "run 真进入 Approval Queue"**（`action_runs.status = 'pending_approval'` 且 `/api/kernel/approvals?clientId=...` GET 能列出它）—— 到此**立即停止**。
+**验收 = "run 真进入 Approval Queue"**：`action_runs.status = 'pending_approval'` **且** `authorization_decision_id != null` **且** `authorization_decisions.verdict === 'require_approval'` **且** `listPendingRunsForClient(...)` 能读到这条 run **且** capability handler call count = 0。到此**立即停止**。
 
-**Caller v1 不要求 `/geo` 页面被真的改掉**。Hardening 落地 + PR #1097 适配之前，这条 run 就停在 `pending_approval`，PM 点批准之后按 Kernel 现有语义会尝试进入执行 —— 但因为 PR #1097 未 merge，`page.apply_optimization_request` 尚未在生产 registry 里 —— Kernel 会落 `unknown_action` deny（这是**预期**的，也是**验证**："pipeline 送达 Kernel"这件事已经证明）。
+**Caller v1 不要求 `/geo` 页面被真的改掉**。Hardening 落地 + PR #1097 适配之前，这条 run 就停在 `pending_approval`，PM 即使去点批准，因为 `page.apply_optimization_request` 尚未在生产 registry 里 —— Kernel 会落 `unknown_action` deny（这是**预期**的）。
 
 ---
 
-## 3. Caller v1 明确不做（复述 PM 冻结的 forbid list）
+## 4. Caller v1 明确不做（复述 PM 冻结的 forbid list）
 
-- ❌ 通用 orchestrator
-- ❌ cron / 定时轮询
-- ❌ 自动遍历所有 GEO findings
-- ❌ 多客户 dispatch framework
-- ❌ 自动 submit 所有 ActionCandidate
-- ❌ retry scheduler
-- ❌ event bus
-- ❌ workflow engine
-- ❌ **ME client id 写进 shared runtime**
-- ❌ **`/geo` 专用 Kernel API**
-- ❌ 修改 Kernel / Action Bridge / GEO Module / WP06 pipeline / capability handler 任何一行
+- ❌ 通用 orchestrator / cron / 自动遍历 / 多客户 dispatch framework / retry scheduler / event bus / workflow engine
+- ❌ ME client id 写进 shared runtime
+- ❌ `/geo` 专用 Kernel API
+- ❌ 修改 Kernel / Action Bridge / GEO Module / WP06 pipeline / capability handler 任何一行 runtime code（只加最小架构 guard 到 `kernel/boundaries.ts` 与 `architecture.test.ts`）
 - ❌ 建 caller 自己的 provider write（本 caller 一次 provider 写都不发起）
-- ❌ **驱动执行**（不调 `runAction`，只 `submitActionRun`）
+- ❌ Caller 内驱动 execution 到 `authorized → running`（`runAction` 对 outward + require_approval 结构上停在 `pending_approval`，见 §2）
+- ❌ Caller 复制或重写 `canonicalDiffHash` 算法（那份权威 hash producer 在 #1097 branch，本 caller 只接受 `precomputed.validatedDiffHash: string`）
+- ❌ 修改真实 `MAPPING_TABLE`（`ActionKey` 是封闭 union，`page.apply_optimization_request` 未在 main 的类型里；tests 走 dep injection，真实映射入表由 #1097 落地时同批加）
+- ❌ Customer Zero CLI 触发脚本 with `--live` 真提交（v1 PR 不含 live 触发）
 
 ---
 
-## 4. 输入契约
+## 5. 输入契约
 
 ```ts
+export interface PageOptimizationRequestCallerDeps {
+  readonly kernelDeps: KernelDeps
+  /** 注入的映射器。生产默认 = `mapCandidateIdentity`。Tests 注入合成 mapper 指向合成 outward action。 */
+  readonly mapCandidate: (identity: unknown) => CandidateMappingResult
+  /** 注入的 Kernel progression。生产默认 = `runAction`。Tests 注入相同真实函数。 */
+  readonly runAction: (kd: KernelDeps, input: SubmitActionInput) => Promise<ActionRunOutcome>
+}
+
 export interface SubmitPageOptimizationRequestInput {
-  /** 已由 WP06 pipeline 产出并通过 Human Approval 意图确认的一份 request。 */
+  /**
+   * 由触发端显式提供。shared caller 不 import `@/lib/geo-module/candidate`，
+   * 也不 hardcode `{domain:'geo', intent:'optimize_page_answerability'}`。
+   * 触发端（Customer Zero trigger script / 未来其它域）负责传对应的 identity。
+   */
+  readonly candidateIdentity: CandidateIdentity
+
+  /** 已由 WP06 pipeline 产出并通过 validation 的 request。Caller 不重跑 pipeline、不重算 diff、不重跑 validate。 */
   readonly request: PageOptimizationRequest
 
   /** Kernel 需要的执行元信息 —— 由 caller 的调用方（触发端）显式提供。 */
   readonly kernelMeta: {
-    /** 必填 —— caller 不假设、不推断。*/
+    /** 必填 —— caller 不假设、不推断。必须 === `request.clientId`（不一致 fail closed）。 */
     readonly clientId: string
-    /** growth / compliance / ... —— 见 ActionPurpose union；本 caller v1 不限制值，Kernel 会验。 */
     readonly purpose: ActionPurpose
     /** growth 时必填（Kernel `submitActionRun` 会 fail-closed）。 */
     readonly goalId?: string | null
-    /** 可选：挂到执行看板卡片。 */
     readonly executionItemId?: string | null
-    /** 谁触发的：'human' / 'signal' / 'schedule' / 'agent' / 'run'。 */
     readonly triggeredBy: TriggeredBy
-    /** 可选：触发方引用（e.g. dashboard button click id / cron name）。 */
     readonly triggeredByRef?: string | null
-    /** 一句话人话："PM 在 /dashboard 手动触发首个 ME /geo apply"。 */
     readonly rationale?: string | null
-    /** Evidence 结构化痕迹，non-domain-vocab（形状通用）。 */
     readonly evidence?: Record<string, unknown>
-    /** 关联 correlation。 */
     readonly correlationId?: string
+  }
+
+  /**
+   * Caller 不自己算 hash（那会重复 WP06 pipeline 的工作，且权威 producer 未在 main）。
+   * 由触发端在建 request 时算好并显式传入。
+   */
+  readonly precomputed: {
+    readonly validatedDiffHash: string
   }
 }
 ```
 
-**为什么 `clientId` 显式传而不从 request 里挖**：`PageOptimizationRequest.clientId` 是 request 内部字段，但 Kernel 侧 `SubmitActionInput.clientId` 是**执行归属**。两者按契约必须一致，**caller 的职责是 assert 一致**（不一致 → fail-closed），不是二者取一。
+**为什么 `clientId` 显式传而不从 request 里挖**：`PageOptimizationRequest.clientId` 是 request 内部字段，Kernel `SubmitActionInput.clientId` 是**执行归属**。两者按契约必须一致，**caller 的职责是 assert 一致**（不一致 fail closed），不是二者取一。
+
+**为什么 `candidateIdentity` 由触发端显式传**：Shared caller 在 `src/lib/action-submission/` 里；它禁止 import `@/lib/geo-module/**`（否则 shared runtime 就绑死 GEO 语义）。触发端可以自由 import GEO Module 的 constants 传进来 —— 未来任何域的触发端同理，caller library 一行不改。
 
 ---
 
-## 5. Bridge use —— 禁止 hardcode ActionKey
+## 6. Bridge use —— 禁止 hardcode ActionKey
 
 ```ts
-// ✅ 唯一合法写法
-import { mapCandidateIdentity } from '@/lib/action-bridge'
-import { GEO_CANDIDATE_DOMAIN, GEO_CANDIDATE_INTENT } from '@/lib/geo-module/candidate'
-
-const mapping = mapCandidateIdentity({
-  domain: GEO_CANDIDATE_DOMAIN,
-  intent: GEO_CANDIDATE_INTENT,
-})
+const mapping = deps.mapCandidate(input.candidateIdentity)
 
 if (mapping.outcome === 'rejected') {
   return {
     ok: false,
     reason: 'bridge_rejected',
-    bridgeCode: mapping.code,       // malformed_identity / unmapped_identity / registry_drift
+    bridgeCode: mapping.code,        // malformed_identity / unmapped_identity / registry_drift
     bridgeReason: mapping.reason,
   }
 }
 
-const actionKey = mapping.actionKey        // ← 从 bridge 拿，不 hardcode
-const actionVersion = mapping.actionVersion // ← 用于 caller 侧日志/追溯
+const actionKey     = mapping.actionKey        // ← 从 bridge 拿，不 hardcode
+const actionVersion = mapping.actionVersion    // ← 用于 caller 侧日志/追溯（Kernel 会自己重取）
 ```
 
 **❌ 禁止**：
@@ -143,269 +178,225 @@ const actionVersion = mapping.actionVersion // ← 用于 caller 侧日志/追�
 - 任何"跳过 bridge、直接指定 ActionKey"的路径
 - 任何"bridge rejected 但 fallback 到默认 key"的路径
 
-**理由**：
-- Bridge 是 Kernel 治理层的唯一映射入口；跳过 bridge = 又开了第二条执行路径
-- 未来新增域 (crm, ads) 时 Bridge 只需加一行；hardcode 的 caller 会散落成 N 个"专用 caller"
-- 也是 v1 spec §12 已冻结的架构原则："shared runtime 里不写任何客户 id、页面 URL、行业语义"
+**理由**：Bridge 是 Kernel 治理层的唯一映射入口；跳过 bridge = 又开了第二条执行路径。也是 v1 spec §12 已冻结的架构原则："shared runtime 里不写任何客户 id、页面 URL、行业语义"。
+
+**关于 `MAPPING_TABLE = []`**：main 上映射表刻意是空的（未预注册未使用的映射）。测试通过 `deps.mapCandidate` 注入自己的 mapper 来证明"caller 拿 bridge 返回值构造正确 submit"这一行为，不改真实 `MAPPING_TABLE`，不假 mapping 落进 shared runtime。真实映射入表由 PR #1097 落地时同批加。
 
 ---
 
-## 6. Submit shape
-
-`SubmitActionInput.input` 的形状严格来自 **PR #1097 里 `page.apply_optimization_request` 的 `ActionDefinition.inputSchema`**（本 spec merge 时 PR #1097 尚未 merge，但 caller 的 input 构造**必须**匹配那份 schema —— 否则 Kernel `preflight` 层会 fail-closed）：
+## 7. Submit shape
 
 ```ts
 const submitInput: SubmitActionInput = {
-  clientId: kernelMeta.clientId,
-  actionKey: mapping.actionKey,   // ← 从 bridge 拿
-  purpose: kernelMeta.purpose,
-  goalId: kernelMeta.goalId ?? null,
-  executionItemId: kernelMeta.executionItemId ?? null,
-  triggeredBy: kernelMeta.triggeredBy,
-  triggeredByRef: kernelMeta.triggeredByRef ?? null,
-  rationale: kernelMeta.rationale ?? null,
-  evidence: kernelMeta.evidence ?? {},
-  correlationId: kernelMeta.correlationId,
+  clientId:         kernelMeta.clientId,
+  actionKey:        mapping.actionKey,          // ← 从 bridge 拿
+  purpose:          kernelMeta.purpose,
+  goalId:           kernelMeta.goalId ?? null,
+  executionItemId:  kernelMeta.executionItemId ?? null,
+  triggeredBy:      kernelMeta.triggeredBy,
+  triggeredByRef:   kernelMeta.triggeredByRef ?? null,
+  rationale:        kernelMeta.rationale ?? null,
+  evidence:         kernelMeta.evidence ?? {},
+  correlationId:    kernelMeta.correlationId,
   input: {
     page_url:            request.page.url,
-    page_version_token:  extractVersionToken(request),  // 见 §6.1
-    validated_diff_hash: extractValidatedDiffHash(request),  // 见 §6.1
-    intents:             request.intents,        // JSON-safe 由 WP01 保证
+    page_version_token:  request.basedOnVersion.value,     // basedOnVersion.known === true 已在 §5 assert
+    validated_diff_hash: precomputed.validatedDiffHash,    // 触发端传入，caller 原样绑定
+    intents:             request.intents,                  // JSON-safe 由 WP01 保证
     do_not_touch:        request.constraints.doNotTouch,
   },
 }
 
-const result = await submitActionRun(deps.kernelDeps, submitInput)
+const outcome = await deps.runAction(deps.kernelDeps, submitInput)
 ```
 
-### 6.1 `page_version_token` / `validated_diff_hash` 从哪里来
+Caller **不**：
+- 重跑 snapshot / draft / diff / validate
+- 改写 `proposedValue`
+- 重算 hash
+- 查询 provider
 
-**runtime 事实**：`PageOptimizationRequest.basedOnVersion` 是 `GrowthMaybeUnknown<string>`（可能是 unknown）；`validated_diff_hash` 目前**不在** WP06 `PageOptimizationRequest` 类型里 —— 它是 caller 侧算出来的（用 `canonicalDiffHash` 对 validated diff 算 SHA-256）。
-
-**Caller v1 只做形状 valid 的最小构造**，不重跑 pipeline：
-
-- **`page_version_token`**：如果 `request.basedOnVersion.known === true` → 用其 value；如果 unknown → **fail-closed**（PM Change: 未来 request 生产端应保证已知，本 caller v1 不为 unknown fallback）
-- **`validated_diff_hash`**：**Caller 侧不自己重算 diff**（那会重复 WP06 pipeline 的工作）。v1 由**触发端**（trigger surface）连同 `request` 一起显式传入 `validatedDiffHash: string`。见 §7 的入参扩展
-
-**修正 §4 输入契约**（增补）：
-
-```ts
-readonly precomputed: {
-  /** Caller 不重跑 WP06 pipeline；由触发端在建 request 时算好并显式传。 */
-  readonly validatedDiffHash: string
-}
-```
-
-这一条把"重跑 pipeline"的责任明确排除在 caller v1 外 —— caller 是**提交管道**，不是**验证管道**。
+Caller 是 submission boundary，不是 validation pipeline。
 
 ---
 
-## 7. 返回契约
+## 8. 返回契约
+
+**只有 `pending_approval` **且**带非空 authorization_decision_id** 才是 success**（复述 §3；见 Q7 冻结）。其它一律结构化 non-success。
 
 ```ts
 export type SubmitPageOptimizationRequestResult =
   | {
       readonly ok: true
+      readonly outcome: 'pending_approval'
       readonly runId: string
-      readonly runStatus: RunStatus
       /**
-       * 从 ActionDefinition + policy 推断，caller 不判决 —— 只**转达**给触发端。
-       * 用于触发端决定"要不要立刻把 PM 引导到 approval 队列"。
+       * 🔴 必须非空。Approval Queue 的读路径（`decisionBelongsToRun` 的 7 条判据锚点）
+       *    在 authorization_decision_id 为空时会**静默跳过**这条 run —— caller 若报
+       *    ok:true 承诺"能被人点头"，触发端去看队列时根本看不到。fail closed 让触发端知情。
        */
-      readonly approvalRequired: boolean
+      readonly authorizationDecisionId: string
+    }
+  | { readonly ok: false; readonly reason: 'client_id_mismatch'; readonly requestClientId: string; readonly kernelMetaClientId: string }
+  | { readonly ok: false; readonly reason: 'basedOnVersion_unknown' }
+  | { readonly ok: false; readonly reason: 'bridge_rejected'; readonly bridgeCode: CandidateMappingRejectionCode; readonly bridgeReason: string }
+  | { readonly ok: false; readonly reason: 'kernel_denied';       readonly runId: string; readonly humanReason: string | null }
+  | { readonly ok: false; readonly reason: 'kernel_dead_letter';  readonly runId: string; readonly humanReason: string | null }
+  | { readonly ok: false; readonly reason: 'kernel_unexpected_outcome'; readonly runId: string; readonly outcomeKind: string }
+  | {
       /**
-       * 幂等命中：这次提交拿到的是已存在的 run（Kernel 幂等键相同）。
-       * 触发端应把它当"正常复用"，不当"我又提了一次"。
+       * 🔴 Kernel 报 pending_approval，但 run 上没有 authorization_decision_id ——
+       *    库里状态不一致。Approval Queue 会静默跳过它，触发端应视作"未真正进入
+       *    审批队列"，需要人工排查后重新排一次，而不是当作 pending 等人点。
        */
-      readonly existing: boolean
-      /** 相对 URL，可选 —— 触发端如果是 UI 会用到。 */
-      readonly approvalQueueUrl?: string  // '/dashboard/kernel-approvals?clientId=<uuid>'
-    }
-  | {
       readonly ok: false
-      readonly reason: 'bridge_rejected'
-      readonly bridgeCode: CandidateMappingRejectionCode
-      readonly bridgeReason: string
-    }
-  | {
-      readonly ok: false
-      readonly reason: 'client_id_mismatch'
-      readonly requestClientId: string
-      readonly kernelMetaClientId: string
-    }
-  | {
-      readonly ok: false
-      readonly reason: 'basedOnVersion_unknown'
+      readonly reason: 'kernel_inconsistent_pending_approval'
+      readonly runId: string
     }
 ```
 
-**Caller 不重新包装 Kernel 抛出的 `KernelError`** —— 直接抛给触发端（`INVALID_INPUT` / `CROSS_CLIENT` 等由触发端决定怎么呈现）。理由：Kernel error 已经带 machine code + humanReason，包装一层会丢信息。
+**`kernel_unexpected_outcome`** 覆盖 `succeeded` / `idempotent_hit` / `in_progress`：
+对 outward + require_approval 的 action，`runAction()` 结构上不该在这次调用里出现这三种 —— 出现即意味着上游状态与预期不一致（例如 mapper 指向了内部动作、政策被改成 `auto_approve`、并发有人在跑）。Caller **不粉饰**，如实标出。
+
+**关于"幂等命中" (`existing`)**：v1 不报告这个信号。`runAction()` 的返回类型（`ActionRunOutcome`）**不携带** `SubmitResult.existing`（那是 Kernel 内部 `submitActionRun` 的返回字段，被 `runAction` 吞掉了）。Caller 无法在**不改 Kernel runtime** 的前提下如实报告"这是新排的一条还是幂等命中的老的一条"，所以直接不报 —— 触发端不做去重决策，真实幂等追溯留给 Kernel 审计表。（Codex #1101 PATCH #1）
+
+**Caller 不重新包装 Kernel 抛出的 `KernelError`** —— 直接抛给触发端。理由：Kernel error 已经带 machine code + humanReason，包装一层会丢信息。**唯一例外**：invariant violation 场景（例如 `runAction` 返回的对象结构对不上）Caller 可以 throw，不要静默返 success。
 
 ---
 
-## 8. 目录位置
+## 9. 目录位置与依赖白名单
 
 - **新目录**：`src/lib/action-submission/`
-  - `index.ts` — 本 spec 的公开函数与类型
+  - `index.ts` — 本 spec 的公开函数与默认 wiring
   - `types.ts` — Input / Result 类型
   - `__tests__/` — §11 全部测试
 
-**为什么不是 `src/lib/action-bridge/`**：Bridge 的物理边界（`kernel/boundaries.ts:137-148` `ACTION_BRIDGE_FORBIDDEN_IMPORTS`）明确禁止 bridge import capabilities / supabase / execution / cms 等 —— 它是**纯映射**层。本 caller 要调 `submitActionRun`，需要 supabase 依赖，属于 bridge 之外的**submission 层**。
+**依赖白名单**（新增到 `kernel/boundaries.ts` 的 `ACTION_SUBMISSION_ALLOWED_IMPORTS`）：
 
-**为什么不是 `src/lib/kernel/`**：Kernel `boundaries.ts:125-128` `KERNEL_FORBIDDEN_MODULE_IMPORTS` 禁止 Kernel import bridge 与 domain —— 本 caller 需要 import bridge 与 GEO Module constants，属于 Kernel 之外的**submission 层**。
-
-**为什么不是 `src/lib/geo-module/`**：GEO Module 也不 import Kernel / bridge（domain 独立）。放这里就把 domain 变成 submission 承载方，架构方向反转。
-
-**结论**：`src/lib/action-submission/` 是唯一物理上合法的位置 —— 它**依赖** kernel + bridge + domain constants + WP06 types，被**触发端**（API route / dashboard action / script）依赖。
-
-**新增架构规则**：`src/lib/action-submission/**` 可 import 以下：
-- `@/lib/kernel/runner`（`submitActionRun`, `SubmitActionInput`）
+允许 import：
+- `@/lib/kernel/runner`（`runAction`, `submitActionRun`, `SubmitActionInput`, `ActionRunOutcome`）
 - `@/lib/kernel/types`（type-only）
-- `@/lib/action-bridge`（`mapCandidateIdentity`, types）
-- `@/lib/geo-module/candidate`（constants only，type-only import）
+- `@/lib/kernel/deps`（`KernelDeps` type）
+- `@/lib/action-bridge`（`mapCandidateIdentity`, `CandidateMappingResult`, `CandidateIdentity`, `CandidateMappingRejectionCode`）
 - `@/lib/page-optimization`（type-only：`PageOptimizationRequest`）
 - `@/lib/kernel/errors`（type-only）
 - `@supabase/supabase-js`（type-only；`SupabaseClient` 走 `KernelDeps`）
 
-**明确禁止**：
-- ❌ import `@/lib/capabilities/**`
-- ❌ import 任何 provider-write 模块
-- ❌ 内部直连 `supabaseAdmin`（走 `KernelDeps` 注入）
+**明确禁止**（架构测试盯着）：
+- ❌ `@/lib/capabilities/**`
+- ❌ 任何 provider-write 模块（`PROVIDER_WRITE_MODULES` 里的每一条）
+- ❌ 内部直连 `@/lib/supabase`（走 `KernelDeps` 注入）
+- ❌ `@/lib/geo-module/**`（避免把 GEO 语义绑死进 shared submission runtime）
+- ❌ 直接 INSERT `action_runs` / `authorization_decisions`（所有 run persistence 必须经 Kernel）
 
-需要在 `kernel/boundaries.ts` 加一条 `ACTION_SUBMISSION_ALLOWED_IMPORTS`（本 spec 建议命名）。
+**为什么不是 `src/lib/action-bridge/`**：Bridge 的物理边界（`kernel/boundaries.ts:137-148` `ACTION_BRIDGE_FORBIDDEN_IMPORTS`）明确禁止 bridge import capabilities / supabase / execution / cms 等 —— 它是**纯映射**层。本 caller 要调 `runAction`，需要 Kernel deps 注入通道，属于 bridge 之外的**submission 层**。
+
+**为什么不是 `src/lib/kernel/`**：`KERNEL_FORBIDDEN_MODULE_IMPORTS` 禁止 Kernel import bridge 与 domain —— 本 caller 需要 import bridge 与 domain-neutral types，属于 Kernel 之外的**submission 层**。
 
 ---
 
-## 9. 触发端（Customer Zero 的一次触发场景）
+## 10. 触发端（Customer Zero 触发）
 
 **PM 明说**："首个 Customer Zero 可以是触发场景，但代码必须仍是平台级最小 submission path。"
 
-Caller 本身是平台级 library function。**Customer Zero 的触发**用**最小、最一次性、最不建设**的形态：
+**Caller Draft PR 不实现真实 Customer Zero trigger script**。理由（木桶原则）：
+- 权威 `canonicalDiffHash()` 只存在于 #1097 branch，未 merge 前 caller PR 不能复制它；
+- 真实 mapping table 里的 `{geo, optimize_page_answerability} → page.apply_optimization_request` 也在 #1097；
+- 现在硬建一份"看起来能跑但实际调不出正确 hash / 打到未注册 action"的假脚本 = 制造烂尾。
 
-**选 A（推荐）**：一个 **CLI script** `scripts/submit-me-geo-first-request.ts`（与 `scripts/diagnose-roman-geo.ts` 同一类），只做：
-1. 硬编 ME `clientId` + `/geo` 页 URL（这份 script 是"客户零号触发脚本"，本身允许含 ME id，因为它就是为 ME 一次性触发而生 —— **不进 shared runtime**，属于 client-specific trigger script）
-2. 跑 GEO pipeline 一次（或复用现有 `scripts/diagnose-roman-geo.ts` 相同的读法为 ME 读一次）
-3. 拿到 `PageOptimizationRequest` + 算 `validatedDiffHash`
-4. 调 `submitPageOptimizationRequest(deps, input)`
-5. 打印 `runId` + `approvalQueueUrl` + 让 PM 打开面板核验
+**触发脚本的建设推迟到 Production Readiness Gate**（Hardening + #1097 都落地后），届时那些依赖都真实存在。
 
-**选 B**：一个 **API route** `src/app/api/action-submission/page-optimization/route.ts`（POST）—— 但这引入面向 client 的入口，会带上鉴权决策 + 谁能触发的问题，超本 spec 范围。**v1 不做**。
+**未来触发脚本的形态**（记录用途，不在本 PR 实现）：
+- 一个 **CLI script** `scripts/submit-me-geo-first-request.ts`
+- 默认 `NO WRITE`；真提交需显式 `--live`；PM 显式 go 才跑
+- 硬编 ME `clientId` + `/geo` 页 URL（**允许含 ME 特有字符串**，因为它是触发方，天然 client-specific；**不进 shared runtime**）
 
-**选 C**：dashboard 里一个按钮 —— v1 不做（UI 会带出更多决策）。
-
-**推荐**：**A**（脚本触发一次证明闭环，把 API/UI 建设明确留到证明之后再决定）。
-
----
-
-## 10. 触发脚本的 client-specific 边界（重要）
-
-`scripts/submit-me-geo-first-request.ts` **允许**含 ME `clientId`、`/geo` URL、Magic Engine 特定 GEO batch id —— 因为它是**触发方**，本身就是"给客户 X 触发一次"的脚本，天然 client-specific。
-
-**Caller library (`src/lib/action-submission/**`) 里不允许出现任何 ME 特有字符串** —— 一行都不许。Caller 只知道"我接一份 request，去 bridge 找 ActionKey，去 Kernel submit"。它不知道 ME、不知道 `/geo`、不知道 GEO。这条边界是 shared runtime 与 client-specific trigger 的清晰切分。
-
-未来 Roman / Oztop / 任何客户第一次触发同类 caller 时，各自写一个 `scripts/submit-<client>-<intent>.ts` 触发脚本 —— **complete duplication OK**，因为触发脚本是一次性的。**Caller library 一行不改**。
+Shared caller (`src/lib/action-submission/`) 里**一行 ME 特有字符串都不许出现**。未来任何客户第一次触发 = 各自写一个 script，caller library 一行不改。
 
 ---
 
 ## 11. 测试要求
 
-**B 级**（普通业务逻辑；不是安全核心 —— 那是 Hardening 的事）：
+**B 级**（普通业务逻辑；不是安全核心 —— 那是 Hardening 的事）。
 
-### 11.1 单元测试
-- Happy path：bridge mapped + client id 一致 + basedOnVersion known → 提交成功；返回 `{ok:true, runId, runStatus:'pending_approval', approvalRequired:true}`
-- Bridge rejected (unmapped_identity) → `{ok:false, reason:'bridge_rejected', bridgeCode:'unmapped_identity'}`；未调 submitActionRun
-- Bridge rejected (registry_drift / malformed_identity) → 同上，各自 code
-- `request.clientId !== kernelMeta.clientId` → `{ok:false, reason:'client_id_mismatch'}`；未调 bridge、未调 submitActionRun
-- `request.basedOnVersion.known === false` → `{ok:false, reason:'basedOnVersion_unknown'}`
-- 幂等命中 (`submitActionRun` 返回 `existing:true`) → `{ok:true, existing:true, ...}`
-- Kernel 抛 `KernelError('INVALID_INPUT')` (e.g. goalId 不属于 clientId) → 抛出**原样**，不吞不改
-- Caller **不 hardcode** ActionKey：mutation 测试 —— 把 `mapping.actionKey` 换成假 key（e.g. `'garbage.x'`）→ caller 应该继续（因为拿的是 bridge 返回值），Kernel 侧 fail-closed（`unknown_action` deny）；这里断言 caller **透传** bridge 结果，不做 override
+### 11.1 单元测试（`src/lib/action-submission/__tests__/caller.test.ts`）
+Fail closed / 分派正确性，使用注入的 `mapCandidate` + 注入的 `runAction` mock：
 
-### 11.2 集成测试（fake supabase）
-- 端到端：构造真实 `PageOptimizationRequest` → 调 caller → 断言 `action_runs` 表里出现一行 status='pending_approval'
-- 断言 `action_runs.input` 字段包含 spec §6 的 5 个字段（page_url / page_version_token / validated_diff_hash / intents / do_not_touch）
-- 断言 `input.intents` 是 `request.intents` 逐字节相等（不 mutate、不 re-hash）
+1. `client_id_mismatch` → 不调 bridge、不调 kernel
+2. `basedOnVersion_unknown` → 不调 bridge、不调 kernel
+3. `bridge_rejected` (unmapped_identity / registry_drift / malformed_identity 各一条) → 不调 kernel
+4. Caller **不 hardcode** ActionKey：mapper 返回一个假 key → submitInput.actionKey 原样透传
+5. `precomputed.validatedDiffHash` 原样绑定到 `submitInput.input.validated_diff_hash`
+6. `runAction` 抛 `KernelError('INVALID_INPUT')` → 抛出**原样**，不吞不改
+7. Kernel outcome 分派：
+   - `pending_approval` **且带非空 authorization_decision_id** → `{ok:true, outcome:'pending_approval', ...}`
+   - `pending_approval` **但 authorization_decision_id === null** → `{ok:false, reason:'kernel_inconsistent_pending_approval', runId}` **（Codex #1101 PATCH #2）**
+   - `denied` → `{ok:false, reason:'kernel_denied', ...}`
+   - `dead_letter` → `{ok:false, reason:'kernel_dead_letter', ...}`
+   - `succeeded` / `idempotent_hit` / `in_progress` → `{ok:false, reason:'kernel_unexpected_outcome', ...}`
 
-### 11.3 架构测试
-- `src/lib/action-submission/**` 只 import §8 白名单里的模块（新增到 `kernel/architecture.test.ts`）
-- 全仓 grep `submitActionRun` 调用点：只允许 `src/lib/action-submission/**` 与 kernel 内部 —— 防止未来有人**绕过 caller** 又开一条 submit path
+### 11.2 Kernel 集成测试（`src/lib/action-submission/__tests__/kernel-progression.test.ts`）
+使用现成 `fake-supabase` + `makeFixture` + `makeRegistry` 造合成 outward test action + require_approval policy，注入**真实** `runAction`：
 
-### 11.4 端到端手动核验（Customer Zero 触发时）
-- 跑 `scripts/submit-me-geo-first-request.ts`
-- 打开 `/dashboard/kernel-approvals?clientId=<ME>` → 断言 UI 上真能看到这条 pending run
-- **不要求** PM 点批准（因 `page.apply_optimization_request` 尚未在生产 registry，PM 点批准后 Kernel 会 `unknown_action` deny —— 这正是**预期路径**，等 PR #1097 + Hardening merge 后再 PM 点批准）
+- Happy path：caller → Kernel → 断言：
+  - `action_runs[0].status === 'pending_approval'`
+  - `action_runs[0].authorization_decision_id != null`
+  - `authorization_decisions[0].verdict === 'require_approval'`
+  - `authorization_decisions[0].action_run_id === run.id`
+  - `authorization_decisions[0].client_id === run.client_id`
+  - `run.input` 包含 §7 的五个字段 + `intents` 字节相等（不 mutate、不 re-hash）
+  - **capability handler call count = 0**
+
+### 11.3 Approval Queue 集成测试
+用 §11.2 建好的库状态，调 `listPendingRunsForClient(sb, clientId)`：
+- 断言这条 run 出现在返回列表里
+- 断言 `authorization_decision_id` 与 `action_runs.authorization_decision_id` 一致
+
+### 11.4 架构测试（`src/lib/kernel/__tests__/architecture.test.ts` 追加）
+- `src/lib/action-submission/**` 只 import §9 白名单里的模块
+- 全仓 grep `submitActionRun` / `runAction` 调用点：只允许 `src/lib/action-submission/**` + Kernel 内部 + tests —— 防止未来有人**绕过 caller** 又开一条 submit path
+- `src/lib/action-submission/**` 不 hardcode `'page.apply_optimization_request'` 字面量
 
 ---
 
 ## 12. Reuse Statement
 
-- **复用**：`submitActionRun`（Kernel）· `mapCandidateIdentity`（Bridge）· `PageOptimizationRequest` type（WP06）· `GEO_CANDIDATE_DOMAIN` / `GEO_CANDIDATE_INTENT` constants（WP05）· `KernelDeps`（Kernel）· 现有 Human Approval API + UI（不改）
+- **复用**：
+  - `runAction`（Kernel）
+  - `submitActionRun` 的类型 `SubmitActionInput`
+  - `mapCandidateIdentity` + `CandidateMappingResult` / `CandidateIdentity` / `CandidateMappingRejectionCode`（Bridge）
+  - `PageOptimizationRequest` type（WP06）
+  - `KernelDeps`（Kernel）
+  - 现有 Human Approval API + UI（不改）
+  - Kernel 现有的 outward + require_approval safety invariant（authorize + gateway 各一层，见 §2 源码引用）
+  - Kernel 幂等（idempotency key + unique constraint）
+  - Kernel 客户归属校验（goalId / executionItemId 都必须同 clientId，见 `runner.ts:87-133`）
 - **新增 shared**：
   - 1 个新目录 `src/lib/action-submission/`（约 3 个文件：`index.ts` + `types.ts` + tests）
-  - 1 条架构规则（`ACTION_SUBMISSION_ALLOWED_IMPORTS` 加进 `kernel/boundaries.ts`）
-  - 1 条架构测试断言（`architecture.test.ts` 里禁止 `src/lib/action-submission/**` 之外的模块调 `submitActionRun`）
-- **修改 shared**：**零**（不改 Kernel / Bridge / GEO Module / WP06 / capability）
+  - 4 条架构常量（`ACTION_SUBMISSION_FORBIDDEN_IMPORTS` + `KERNEL_RUNNER_ALLOWED_CALLER_DIRS` + `KERNEL_RUNNER_SOURCE_MODULES` + `KERNEL_RUNNER_SYMBOLS` 加进 `kernel/boundaries.ts`）
+  - 架构测试新增：submission 层依赖白名单；Kernel progression 符号只走三处 caller（**同时覆盖 `@/lib/kernel/runner` 与 `@/lib/kernel` barrel**，符号级判据，非 type-only imports；见 Codex #1101 PATCH #3）；action-submission 内不 hardcode `page.*` ActionKey；合成源码 mutation 用例（正反两组，证明闸真会咬）
+- **Governance-only 修改**：`kernel/boundaries.ts` + `kernel/__tests__/architecture.test.ts`（不是 runtime shared logic）
+- **Runtime shared 修改**：**零**（不改 Kernel / Bridge / GEO Module / WP06 / capability 任何一行）
 - **industry / client 边界**：
-  - **caller library 里零 client-specific 字符串**（不含 ME id、不含 `/geo`、不含 GEO 术语；只操作 `PageOptimizationRequest` 通用形状 + `CandidateIdentity` 通用形状）
-  - Customer Zero 触发脚本（`scripts/submit-me-geo-first-request.ts`）**允许**含 ME id —— 属于 client-specific trigger，不进 shared runtime
+  - **caller library 里零 client-specific 字符串**（不含 ME id、不含 `/geo`、不含 GEO 术语）
   - 未来任何客户触发同类 caller = 再写一个 script，caller library 一行不改
 - **不新增 migration 文件、也不 apply migration**
-- **是否 production write**：本 spec 只是文档；实施 PR 涉及一次 `action_runs.insert`（通过 Kernel），但只有 Customer Zero 触发脚本在被 PM 显式执行时才产生这次 insert —— 不是自动的
+- **是否 production write**：本 PR 无 production write（不含 Customer Zero live trigger script）
 - **是否泄露 secret**：无
 
 ---
 
 ## 13. 显式不做（复述 PM forbid list）
 
-- ❌ 通用 orchestrator / cron / event bus / workflow engine / retry scheduler
-- ❌ 自动遍历所有 GEO findings / 自动 submit 所有 candidates
-- ❌ 多客户 dispatch framework
-- ❌ ME client id 写进 shared runtime
-- ❌ `/geo` 专用 Kernel API
-- ❌ v1 里 Caller 里驱动执行 (`runAction`)
-- ❌ v1 里做 API route / dashboard button（触发端限 script）
-- ❌ v1 里让 `/geo` 页面被真的改掉（那需要 Hardening + PR #1097 都落地）
+见 §4。
 
 ---
 
-## 14. Open questions for PM
+## 14. Open questions（本 spec 与实现同批提交，Q1-Q4 已按 PM 冻结的选项落地）
 
-**Q1. 触发端形态**
-- A: CLI script `scripts/submit-me-geo-first-request.ts`（推荐 —— 一次性，不建设 API/UI）
-- B: 极简 POST endpoint（引入鉴权决策，超本 spec 范围）
-- **推荐**：**A**
-
-**Q2. `validatedDiffHash` 从哪里来**
-- A: 触发端在建 request 时算好并显式传入 caller（推荐 —— caller 保持"纯 submission"）
-- B: Caller 内部再跑一次 WP06 pipeline 算 hash（会重复 pipeline 的工作）
-- **推荐**：**A**
-
-**Q3. Bridge `unmapped_identity` 时 caller 的错误信号**
-- A: 返回 `{ok:false, reason:'bridge_rejected', ...}` 让触发端决定怎么呈现（推荐）
-- B: caller 抛 `KernelError` 或普通 Error
-- **推荐**：**A**（return-style；符合"caller 是纯函数"定位）
-
-**Q4. Caller 是否要断言 request 已通过 `validatePageChange`**
-- A: 不断言（Caller 是 submission 层，不做 validation；触发端负责保证 request 已 valid）
-- B: caller 内部再跑一次 validate（重复 WP06）
-- **推荐**：**A**（跟 Q2 同理）
-
-**Q5. Customer Zero 触发脚本要走 dry-run 还是真提交**
-- A: 一次真提交（v1 目标 = "run 真进入 Approval Queue"，dry-run 证明不了）
-- B: 先 dry-run，print SubmitActionInput，不真调 submitActionRun
-- **推荐**：**A**（否则 v1 的验收标准无法真达成 —— 但触发时机由 PM 显式 go）
-
-**Q6. 本 spec merge 顺序**
-- A: Caller spec 先 review + approve → Caller Draft PR → Hardening BUILD → PR #1097 适配 → Production Readiness Gate 一起验（PM 冻结的顺序）
-- **推荐**：**A**（就是 PM 已冻结的顺序，Q6 只为记录用途）
-
----
-
-## 15. 一句话总结
-
-**建一个 `src/lib/action-submission/submitPageOptimizationRequest()` 纯函数：接受一份 `PageOptimizationRequest` + kernelMeta；用现有 Action Bridge 映射（禁 hardcode）→ 构造 `SubmitActionInput` → 调现有 `submitActionRun()` → 返回 `{runId, runStatus, approvalRequired, existing}`。Customer Zero 用一个一次性 script 触发，脚本允许含 ME id 但 caller library 里零 client-specific 字符串。到"run 出现在 Human Approval 队列"就停。不驱动执行、不做 orchestrator、不做 cron、不做 API/UI；不修 Kernel / Bridge / Domain / WP06 / capability 任何一行。Hardening 落地前不允许 PM 点批准执行（会被 Kernel `unknown_action` deny，这是预期）。**
-
-请你回一个：
-- `SPEC APPROVED — GO BUILD Caller Draft`
-- `SPEC APPROVED WITH CHANGES: <逐条>`
-- `DEFER SPEC — <理由>`
+- Q1 触发端形态 → **推迟到 Production Readiness Gate**（木桶原则；见 §10）
+- Q2 `validatedDiffHash` 来源 → **触发端传入**（`precomputed.validatedDiffHash`）
+- Q3 Bridge unmapped 时的错误信号 → **返回 `{ok:false, reason:'bridge_rejected', ...}`**
+- Q4 Caller 是否再跑一次 validate → **不跑**（触发端负责保证 request 已 valid）
+- Q5 Caller 使用 `submitActionRun` 还是 `runAction` → **`runAction`**（Safety Gate PASS，见 §2；`submitActionRun` 只 INSERT queued，不进 Approval Queue，达不成本 spec 的验收标准）
+- Q6 Merge 顺序 → Caller Draft PR → Hardening BUILD → PR #1097 适配 → 三者同一 Production Readiness Gate → 首次真实 `/geo` execution

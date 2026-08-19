@@ -1,5 +1,8 @@
 import { defineConfig } from 'astro/config';
+import sitemap from '@astrojs/sitemap';
+
 export default defineConfig({
-  site: 'https://parkhomes-site.pages.dev',
-  build: { format: 'directory' }
+  site: 'https://parkhomes.nz',
+  build: { format: 'directory' },
+  integrations: [sitemap()],
 });

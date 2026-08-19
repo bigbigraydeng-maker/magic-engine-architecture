@@ -402,12 +402,16 @@ describe('F1 · 外部副作用靠稳定的 step 幂等键收敛（不是靠 fen
     })
     // A 手动调一次 build —— 模拟「外部动作已经成功、数据库还没记上」
     const capability = f.kernel.capabilities[KEY]
+    // 🔴 Hardening v1：capability 现在从 ctx.runInput 读输入。手动构造 step 上下文时
+    //    必须把当前 run.input 塞进去 —— 走真正 executeAuthorizedRun 时 Gateway 会做这件事。
+    const runNow = await f.kernel.requireRun(run.id)
     await capability.steps.build({
       ctx: auth.ctx!,
       stepKey: 'build',
       attempt: 1,
       priorOutputs: {},
       idempotencyKey: `${CLIENT_A}:${run.idempotency_key}:build`,
+      runInput: runNow.input,
     })
     expect(externalCalls).toHaveLength(1)
 

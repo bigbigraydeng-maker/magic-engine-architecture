@@ -74,6 +74,36 @@ export type KernelErrorCode =
    *    自动重试可能再收一次钱。一律 fail closed，转人工判断。
    */
   | 'UNSAFE_RETRY'
+  /**
+   * 🔴 授权时 pin 的 canonical input hash 跟当前 `action_runs.input` 对不上
+   *    —— 意味着授权（或 human approval）签发之后，input 被改过。
+   *
+   *    跟 `STALE_DECISION` 分开是必须的：那个说的是「政策」变了、刷新重签能救；
+   *    这个说的是「input」被改了，同一件事不该再执行 —— 客户看见并授权的
+   *    是老那份，绝不允许悄悄换一份新的去实际做。修复只有一条路：**重新提交
+   *    这件事**（新的 idempotency_key、新的 authorize）。
+   */
+  | 'INPUT_TAMPERED_SINCE_AUTHORIZE'
+  /**
+   * 🔴 sideEffect:'outward' + rollback:'provider_native' 的 Action，
+   *    对应的 capability 没有提供 `rollback` handler。
+   *
+   *    这是**装配前置条件**，Gateway 在 `beginAuthorizedRun` 之前、任何 provider
+   *    副作用发生之前就要挡下（`AuthorizedExecutionContext` 此时已存在，位置在 gate 上游）——
+   *    否则一旦 dead_letter 时 provider 副作用没人撤。授权决策**不消费**：
+   *    补上 handler 之后同一份 approval 就能再用。
+   *
+   *    跟 `CAPABILITY_NOT_IMPLEMENTED` 分开：那个说「整个 capability 没注册」，
+   *    这个说「注册了但缺 rollback 必需字段」—— 补救方式不同。
+   */
+  | 'ROLLBACK_HANDLER_MISSING'
+  /**
+   * 🔴 一条 dead_letter run 上已经跑过 provider-native rollback（成功或失败），
+   *    same-run recovery 会让「已经succeeded 的步骤」跟外部资源现状分裂 ——
+   *    provider 那边可能已经被撤/或状态未知，DB 里那些 succeeded 的 step 却仍在。
+   *    禁止 same-run recovery：新开一条 run，走完整的授权 + input pinning。
+   */
+  | 'ROLLBACK_BLOCKS_SAME_RUN_RECOVERY'
 
 export class KernelError extends Error {
   readonly code: KernelErrorCode

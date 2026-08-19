@@ -76,6 +76,7 @@ const faqSchema = f.faq && f.faq.length
     </div>
   </section>
 
-  <!-- AI VISIBILITY BLOCK -->
-  <div class="ai-instructions" style="display:none" aria-hidden="true" set:html={f.aiBlock} />
+  <!-- AI VISIBILITY BLOCK (ME_GEO_BLOCK_V2 — see Base.astro for why three
+       redundant hiding signals instead of a single inline style) -->
+  <div hidden aria-hidden="true" class="me-geo-instructions seo-instructions" data-me-geo="v2" set:html={f.aiBlock} />
 </Base>

@@ -19,10 +19,17 @@ vi.mock('@/lib/supabase', () => ({
   supabaseAdmin: { from: vi.fn() },
 }))
 
+const sendMock = vi.fn().mockResolvedValue({ data: { id: 'email-id' }, error: null })
+vi.mock('resend', () => ({
+  Resend: vi.fn().mockImplementation(() => ({ emails: { send: (...a: unknown[]) => sendMock(...a) } })),
+}))
+
 import { POST, OPTIONS } from '../route'
 import { supabaseAdmin } from '@/lib/supabase'
+import { Resend } from 'resend'
 
 const mockFrom = vi.mocked(supabaseAdmin.from)
+const mockResend = vi.mocked(Resend)
 
 const CLIENT_ID = 'd5c98811-1c1d-4ded-bdf0-4cefec6afb84'   // oztop
 const OZTOP_HOST = 'https://oztopbuildingsupplies.com.au'
@@ -57,6 +64,8 @@ function makeOptions(opts: { origin?: string } = {}): NextRequest {
  */
 interface LeadsRouteMockOpts {
   clientDomain?:    string | null         // null → CLIENT_NOT_FOUND
+  clientName?:      string
+  notifyEmails?:    string[]              // leads_config.notify_emails
   recentCount?:     number                // for rate-limit check
   insertResult?:    { data: { id: string } | null; error: { message: string } | null }
   insertCapture?:   (row: Record<string, unknown>) => void
@@ -64,6 +73,8 @@ interface LeadsRouteMockOpts {
 
 function mockSupabaseFor({
   clientDomain,
+  clientName,
+  notifyEmails,
   recentCount = 0,
   insertResult,
   insertCapture,
@@ -75,8 +86,15 @@ function mockSupabaseFor({
         eq:          vi.fn().mockReturnThis(),
         maybeSingle: vi.fn().mockResolvedValue(
           clientDomain === null
-            ? { data: null,                 error: null }
-            : { data: { domain: clientDomain }, error: null },
+            ? { data: null, error: null }
+            : {
+                data: {
+                  domain: clientDomain,
+                  name: clientName ?? null,
+                  leads_config: notifyEmails ? { notify_emails: notifyEmails } : {},
+                },
+                error: null,
+              },
         ),
       }
       return chain as unknown as ReturnType<typeof supabaseAdmin.from>
@@ -436,5 +454,121 @@ describe('POST — rate limit', () => {
     expect(res.status).toBe(200)
     expect((await res.json()).lead_id).toBe('lead-rl-open')
     expect(inserted).toBe(true)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// POST — leads_config.notify_emails → best-effort client email notification
+// ═══════════════════════════════════════════════════════════════════════════════
+
+describe('POST — notify_emails email notification', () => {
+  const ORIGINAL_RESEND_KEY = process.env.RESEND_API_KEY
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    sendMock.mockClear()
+    sendMock.mockResolvedValue({ data: { id: 'email-id' }, error: null })
+    // Earlier describe blocks in this file call vi.resetAllMocks() in their own
+    // afterEach, which wipes the `Resend` mock's implementation set once at
+    // module load in the vi.mock('resend', ...) factory above — re-establish it
+    // here so this block doesn't depend on running before any prior resetAllMocks.
+    mockResend.mockImplementation(() => ({
+      emails: { send: (...a: unknown[]) => sendMock(...a) },
+    } as unknown as InstanceType<typeof Resend>))
+    process.env.RESEND_API_KEY = 'test-resend-key'
+  })
+  afterEach(() => {
+    vi.resetAllMocks()
+    process.env.RESEND_API_KEY = ORIGINAL_RESEND_KEY
+  })
+
+  it('emails every configured recipient with the lead details when notify_emails is set', async () => {
+    mockSupabaseFor({
+      clientDomain: 'oztopbuildingsupplies.com.au',
+      clientName:   'Oztop',
+      notifyEmails: ['owner@example.com', 'sales@example.com'],
+    })
+    const res = await POST(
+      makeRequest(
+        { name: 'Sarah Lee', phone: '0412345678', email: 'sarah@example.com', message: 'Need a quote' },
+        { origin: OZTOP_HOST, headers: { 'x-forwarded-for': '203.0.113.10' } },
+      ),
+      { params: { id: CLIENT_ID } },
+    )
+    expect(res.status).toBe(200)
+    expect(sendMock).toHaveBeenCalledTimes(1)
+    const call = sendMock.mock.calls[0][0]
+    expect(call.to).toEqual(['owner@example.com', 'sales@example.com'])
+    expect(call.replyTo).toBe('sarah@example.com')
+    expect(call.subject).toContain('Sarah Lee')
+    expect(call.html).toContain('Sarah Lee')
+  })
+
+  it('does not call Resend when notify_emails is empty', async () => {
+    mockSupabaseFor({ clientDomain: 'oztopbuildingsupplies.com.au', notifyEmails: [] })
+    const res = await POST(
+      makeRequest(
+        { name: 'No Notify', phone: '0412345678' },
+        { origin: OZTOP_HOST, headers: { 'x-forwarded-for': '203.0.113.11' } },
+      ),
+      { params: { id: CLIENT_ID } },
+    )
+    expect(res.status).toBe(200)
+    expect(sendMock).not.toHaveBeenCalled()
+  })
+
+  it('does not call Resend, and still succeeds, when RESEND_API_KEY is not configured', async () => {
+    delete process.env.RESEND_API_KEY
+    mockSupabaseFor({ clientDomain: 'oztopbuildingsupplies.com.au', notifyEmails: ['owner@example.com'] })
+    const res = await POST(
+      makeRequest(
+        { name: 'No Key', phone: '0412345678' },
+        { origin: OZTOP_HOST, headers: { 'x-forwarded-for': '203.0.113.12' } },
+      ),
+      { params: { id: CLIENT_ID } },
+    )
+    expect(res.status).toBe(200)
+    expect(sendMock).not.toHaveBeenCalled()
+  })
+
+  it('still returns success when the Resend call itself throws', async () => {
+    sendMock.mockRejectedValueOnce(new Error('Resend is down'))
+    mockSupabaseFor({ clientDomain: 'oztopbuildingsupplies.com.au', notifyEmails: ['owner@example.com'] })
+    const res = await POST(
+      makeRequest(
+        { name: 'Resend Down', phone: '0412345678' },
+        { origin: OZTOP_HOST, headers: { 'x-forwarded-for': '203.0.113.13' } },
+      ),
+      { params: { id: CLIENT_ID } },
+    )
+    expect(res.status).toBe(200)
+    expect((await res.json()).success).toBe(true)
+  })
+
+  it('omits replyTo when the lead did not supply an email', async () => {
+    mockSupabaseFor({ clientDomain: 'oztopbuildingsupplies.com.au', notifyEmails: ['owner@example.com'] })
+    await POST(
+      makeRequest(
+        { name: 'No Email', phone: '0412345678' },
+        { origin: OZTOP_HOST, headers: { 'x-forwarded-for': '203.0.113.14' } },
+      ),
+      { params: { id: CLIENT_ID } },
+    )
+    expect(sendMock).toHaveBeenCalledTimes(1)
+    expect(sendMock.mock.calls[0][0].replyTo).toBeUndefined()
+  })
+
+  it('strips CR/LF from the lead name before it reaches the email subject', async () => {
+    mockSupabaseFor({ clientDomain: 'oztopbuildingsupplies.com.au', notifyEmails: ['owner@example.com'] })
+    await POST(
+      makeRequest(
+        { name: 'Foo\r\nBcc: evil@example.com', phone: '0412345678' },
+        { origin: OZTOP_HOST, headers: { 'x-forwarded-for': '203.0.113.15' } },
+      ),
+      { params: { id: CLIENT_ID } },
+    )
+    expect(sendMock).toHaveBeenCalledTimes(1)
+    const subject = sendMock.mock.calls[0][0].subject as string
+    expect(subject).not.toMatch(/[\r\n]/)
   })
 })
