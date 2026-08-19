@@ -32,76 +32,17 @@ import type {
   PageDraftResult,
   PageOptimizationField,
   PageOptimizationIntent,
-  PageValidationResult,
-  ProviderCheckInput,
-  RedlineCheckInput,
 } from '@/lib/page-optimization'
 import {
   PAGE_OPTIMIZATION_FIELDS,
   draftPageChange,
   diffPageChange,
   extractGithubFieldValue,
-  validatePageChange,
 } from '@/lib/page-optimization'
 import { resolveStaticHtmlPath, patchStaticHtmlPage } from '@/lib/cms/static-html-page-upgrade'
 import type { PageApplyOptimizationDeps } from './deps'
 import { defaultDeps } from './deps'
 import { branchNameForRun, canonicalDiffHash, idempotencyKeyFromInput } from './hash'
-
-/**
- * 🔴 **孤儿 artefact 提示（v1 fail-closed 的显式声明）。**
- *
- * v1 明确不带自动 rollback dispatch —— `outwardAuthorization.rollback: 'provider_native'`
- * 只是**标注 provider 支持该路径的存在**，不是承诺 kernel/capability 会自动调它。
- * 自动化的 rollback handler / gateway dispatch 由 Kernel Outward Execution Hardening PR
- * 承担（见 `docs/specs/2026-08-19-me2-kernel-outward-execution-hardening-v1.0.md`）。
- *
- * 因此在 v1 里，任何**在 branch/PR 已被创建之后**发生的失败（stale-at-commit、
- * open_pr 状态不自洽、record verification 失败），capability 必须在抛错的
- * `humanReason` / `verification.failure_reason` 里带上孤儿 artefact 的**直达链接**，
- * 让 kernel `failRun` → `handoff.ts` → 今日待办的 `what` 字段能被 PM 一眼看见并
- * 手工去客户仓库 close PR + 删分支。
- *
- * 🔴 **禁止把这段变成通用工具或迁到 kernel。** 通用 rollback 是 hardening PR 的
- *    职责边界，本函数只服务本 capability 的 fail-closed 语义。
- */
-function orphanArtefactHint(args: {
-  repoOwner: string
-  repoName: string
-  branchName: string
-  prNumber?: number
-  prUrl?: string
-}): string {
-  // 🔴 防御：owner / repo / branch 必须命中 GitHub slug 合法字符集，否则拒绝
-  //    渲染孤儿链接（改回一段无 URL 的告警）。这样即便 cms_connections 里塞了
-  //    带斜杠的攻击性 owner（e.g. `attacker/repo`），也不会拼出一条指向攻击者
-  //    仓库的可点链接。handoff.ts 里那道 URL 抽取器也严格校验一次，
-  //    双保险。
-  const OWNER_OK = /^[A-Za-z0-9-]{1,39}$/
-  const REPO_OK = /^[A-Za-z0-9._-]{1,100}$/
-  const BRANCH_OK = /^[A-Za-z0-9._/-]{1,255}$/
-  if (
-    !OWNER_OK.test(args.repoOwner) ||
-    !REPO_OK.test(args.repoName) ||
-    !BRANCH_OK.test(args.branchName)
-  ) {
-    return (
-      '\n⚠️ 客户 GitHub 仓库可能残留孤儿 artefact（v1 不自动撤回，需手工清理）；' +
-      '仓库标识含非法字符，未渲染直达链接 —— 请查 client cms_connections 配置。'
-    )
-  }
-  const branchUrl =
-    `https://github.com/${args.repoOwner}/${args.repoName}/tree/${args.branchName}`
-  const lines = [
-    '',
-    '⚠️ 客户 GitHub 仓库残留孤儿 artefact（v1 不自动撤回，需手工清理）：',
-  ]
-  if (args.prNumber !== undefined && args.prUrl) {
-    lines.push(`  - Close 掉 Draft PR #${args.prNumber}：${args.prUrl}`)
-  }
-  lines.push(`  - 删除分支：${branchUrl}`)
-  return lines.join('\n')
-}
 
 // ── Input shape (populated from ctx.runInput —— deep-frozen by Gateway hash-check) ──
 //
@@ -268,36 +209,6 @@ async function stepPrepare(
     )
   }
 
-  // Validation 在这里不再重跑 redline/providerCheck —— 那是外部人审前的关卡；
-  // capability 已由 Kernel authorize + ctx 承接。此处调用 validatePageChange
-  // 只为复用 shared runtime 内部的 diff-request binding 断言（防"input 里的 diff
-  // 跟 diff-recompute 结果对不上"）。redline 传 noop（本层不管红线），
-  // providerCheck 传 noop-passed（provider check 在人审阶段已经做过）。
-  const _validation: PageValidationResult = validatePageChange(
-    {
-      clientId: args.clientId,
-      page: { url: input.page_url },
-      intents: input.intents,
-      lineage: { findingRefs: [] },
-      verification: {
-        metricRef: 'noop', windowDays: 1, baseline: 'noop',
-        criteria: { success: 'noop', failure: 'noop', indeterminate: 'noop' },
-      },
-      constraints: { doNotTouch: input.do_not_touch },
-      basedOnVersion: { known: true, value: input.page_version_token },
-    },
-    diff,
-    { available: true, phrases: [] } satisfies RedlineCheckInput,
-    { evaluated: true, passed: true } satisfies ProviderCheckInput,
-  )
-  if (!_validation.ok) {
-    throw new KernelError(
-      'INVALID_INPUT',
-      `pipeline_regression：capability 内重跑 validate 不通过：${_validation.reason}`,
-      { detail: { violations: _validation.violations ?? [] } },
-    )
-  }
-
   // 生成 patched content 交给 commit step。
   const byField = new Map(input.intents.map((i) => [i.field, i.proposedValue]))
   const metaTitle =
@@ -409,20 +320,8 @@ async function stepCommit(
       throw new KernelError(
         'INVALID_STATE',
         'commit 冲突：main 在授权与执行之间移动过（stale_snapshot_at_commit），拒绝执行；' +
-          '需要重跑 pipeline 从新 snapshot 出发' +
-          orphanArtefactHint({
-            repoOwner: prep.repo_owner,
-            repoName: prep.repo_name,
-            branchName: prep.branch_name,
-          }),
-        {
-          detail: {
-            commitFileError: msg,
-            orphanBranch: prep.branch_name,
-            orphanBranchUrl:
-              `https://github.com/${prep.repo_owner}/${prep.repo_name}/tree/${prep.branch_name}`,
-          },
-        },
+          '需要重跑 pipeline 从新 snapshot 出发',
+        { detail: { commitFileError: msg } },
       )
     }
   }
@@ -443,25 +342,7 @@ async function stepOpenPr(
 
   const conn = await deps.resolveGithubConnection(args.clientId)
   if (!conn) {
-    // 🔴 到 open_pr 时 commit_created:true 已成立 → branch 一定在客户仓库
-    //    存在。conn 中途消失（token 被吊销 / cms_connections 被删）也必须带
-    //    orphan hint 让 PM 手工去关。
-    throw new KernelError(
-      'INVALID_INPUT',
-      '客户 GitHub 连接消失（open_pr 阶段）' +
-        orphanArtefactHint({
-          repoOwner: prep.repo_owner,
-          repoName: prep.repo_name,
-          branchName: prep.branch_name,
-        }),
-      {
-        detail: {
-          orphanBranch: prep.branch_name,
-          orphanBranchUrl:
-            `https://github.com/${prep.repo_owner}/${prep.repo_name}/tree/${prep.branch_name}`,
-        },
-      },
-    )
+    throw new KernelError('INVALID_INPUT', '客户 GitHub 连接消失（open_pr 阶段）')
   }
 
   const gh = deps.createGithubClient(conn.plainToken)
@@ -501,57 +382,22 @@ async function stepOpenPr(
         const list = await gh.listPullRequestsByHead(prep.repo_owner, prep.repo_name, prep.branch_name)
         existing = list.find((p) => p.number) ?? null
       } catch (lookupErr) {
-        // branch + commit 都已经存在于客户仓库；PR 状态未知 → 视作分支孤儿
         throw new KernelError(
           'INVALID_STATE',
-          `pr_open_failed：createPullRequest 报"已存在"但查询也失败：${lookupErr instanceof Error ? lookupErr.message : String(lookupErr)}` +
-            orphanArtefactHint({
-              repoOwner: prep.repo_owner,
-              repoName: prep.repo_name,
-              branchName: prep.branch_name,
-            }),
-          {
-            detail: {
-              originalError: msg,
-              orphanBranch: prep.branch_name,
-              orphanBranchUrl:
-                `https://github.com/${prep.repo_owner}/${prep.repo_name}/tree/${prep.branch_name}`,
-            },
-          },
+          `pr_open_failed：createPullRequest 报"已存在"但查询也失败：${lookupErr instanceof Error ? lookupErr.message : String(lookupErr)}`,
+          { detail: { originalError: msg } },
         )
       }
       if (!existing) {
         throw new KernelError(
           'INVALID_STATE',
-          `pr_open_failed：createPullRequest 报"已存在"但按 head=${prep.branch_name} 找不到 —— provider 状态不自洽` +
-            orphanArtefactHint({
-              repoOwner: prep.repo_owner,
-              repoName: prep.repo_name,
-              branchName: prep.branch_name,
-            }),
-          {
-            detail: {
-              originalError: msg,
-              orphanBranch: prep.branch_name,
-              orphanBranchUrl:
-                `https://github.com/${prep.repo_owner}/${prep.repo_name}/tree/${prep.branch_name}`,
-            },
-          },
+          `pr_open_failed：createPullRequest 报"已存在"但按 head=${prep.branch_name} 找不到 —— provider 状态不自洽`,
+          { detail: { originalError: msg } },
         )
       }
       pr = existing
     } else {
-      // 重试可能成功；但若重试用尽，err.message 会被 humanReasonOf 原样写入
-      // run.last_error → handoff 今日待办。此时 branch 已经在 commit step 落下
-      // （commit_created:true 才会进到本 step），必须让 PM 一眼看到孤儿分支。
-      throw new RetryableCapabilityError(
-        `pr_open_failed：${msg}` +
-          orphanArtefactHint({
-            repoOwner: prep.repo_owner,
-            repoName: prep.repo_name,
-            branchName: prep.branch_name,
-          }),
-      )
+      throw new RetryableCapabilityError(`pr_open_failed：${msg}`)
     }
   }
 
@@ -572,28 +418,7 @@ async function stepRecord(
 
   const conn = await deps.resolveGithubConnection(args.clientId)
   if (!conn) {
-    // 🔴 到 record 时 prep + opened 都成立 → branch + Draft PR 都在客户仓库。
-    //    conn 消失也要让 PM 收到 orphan 直达链接。
-    throw new KernelError(
-      'INVALID_INPUT',
-      '客户 GitHub 连接消失（record 阶段）' +
-        orphanArtefactHint({
-          repoOwner: prep.repo_owner,
-          repoName: prep.repo_name,
-          branchName: prep.branch_name,
-          prNumber: opened.pr_number,
-          prUrl: opened.pr_url,
-        }),
-      {
-        detail: {
-          orphanBranch: prep.branch_name,
-          orphanBranchUrl:
-            `https://github.com/${prep.repo_owner}/${prep.repo_name}/tree/${prep.branch_name}`,
-          orphanPrNumber: opened.pr_number,
-          orphanPrUrl: opened.pr_url,
-        },
-      },
-    )
+    throw new KernelError('INVALID_INPUT', '客户 GitHub 连接消失（record 阶段）')
   }
 
   const gh = deps.createGithubClient(conn.plainToken)
@@ -696,9 +521,9 @@ async function stepRecord(
   record('output.run_reference 可反查', runRefResolvable, expectedRunRef)
 
   // 🔴 子牙复审 (2026-08-19) 修正：loadDecisionExists 抛错时**不**外抛
-  //    RetryableCapabilityError（会跳过 verification 汇总 + orphan hint），
-  //    改成落一条 failed check。这样一来无论 Supabase 瞬时错还是 decision
-  //    行真丢，都走 verification failed 路径，failure_reason 里带 orphan URL。
+  //    RetryableCapabilityError（会跳过 verification 汇总），改成落一条
+  //    failed check。这样一来无论 Supabase 瞬时错还是 decision 行真丢，
+  //    都走 verification failed 路径。
   let decisionOk = false
   try {
     decisionOk = await loadDecisionExists(sb, args.decisionId)
@@ -718,20 +543,9 @@ async function stepRecord(
     checks,
     ...(failed.length > 0
       ? {
-          // 🔴 record 阶段失败时，PR + branch 都已经存在于客户仓库。
-          //    gateway.ts:886 会把这段 failure_reason 包进 VERIFICATION_FAILED 的
-          //    humanReason，进 run.last_error，进今日待办 —— 必须带直达链接。
-          failure_reason:
-            failed
-              .map((c) => `${c.name}${c.detail ? `（${c.detail}）` : ''}`)
-              .join('；') +
-            orphanArtefactHint({
-              repoOwner: prep.repo_owner,
-              repoName: prep.repo_name,
-              branchName: prep.branch_name,
-              prNumber: opened.pr_number,
-              prUrl: opened.pr_url,
-            }),
+          failure_reason: failed
+            .map((c) => `${c.name}${c.detail ? `（${c.detail}）` : ''}`)
+            .join('；'),
         }
       : {}),
   }
