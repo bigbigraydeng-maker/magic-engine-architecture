@@ -93,8 +93,106 @@ const SEO_BUILD_PUBLISH_PACKAGE: ActionDefinition<'seo.build_publish_package'> =
   allowedPurposes: ['growth'],
 }
 
+/**
+ * `page.apply_optimization_request` —— v1 outward apply action.
+ *
+ * 把已经通过 Snapshot → Draft → Diff → Validation → Human Approval 的一份
+ * `PageOptimizationRequest` 提交到目标 provider。GitHub v1 = **Draft PR**
+ * （不直推 main、不 auto-merge）。verification = execution-integrity only；
+ * Growth 层的 matched remeasurement 走下游 Measurement/Verification 链，
+ * 不由本 action 承担、不由本 action 调度。
+ *
+ * spec: docs/specs/2026-08-19-me2-page-optimization-apply-action-v1.0.md
+ *
+ * 🔴 `sideEffect: 'outward'` + `outwardAuthorization` 非 null + `reversible: true`
+ *    这三条同时成立才被 outward-authorization 层放行；`requiresHumanApproval: true`
+ *    是字面量 true，policy 层 `auto_approve` 也会被 kernel 反手落
+ *    `outward_requires_human_policy` deny 码。
+ *
+ * 🔴 idempotency key = `(page_url, page_version_token, validated_diff_hash)`：
+ *    snapshot 或 diff 一变 → 是另一件事，重新走 authorize；
+ *    approval 不进 key，approval 是过程（谁批的）不是事（要做什么）。
+ */
+const PAGE_APPLY_OPTIMIZATION_REQUEST: ActionDefinition<'page.apply_optimization_request'> = {
+  actionKey: 'page.apply_optimization_request',
+  version: 1,
+  title: '把已授权的页面优化请求提交到目标 provider（GitHub v1: Draft PR，不合并）',
+
+  inputSchema: {
+    type: 'object',
+    required: [
+      'page_url',
+      'page_version_token',
+      'validated_diff_hash',
+      'intents',
+      'do_not_touch',
+    ],
+    properties: {
+      page_url:            { type: 'string' },
+      page_version_token:  { type: 'string' },
+      validated_diff_hash: { type: 'string' },
+      intents:             { type: 'array' },
+      do_not_touch:        { type: 'array' },
+    },
+    additionalProperties: false,
+  },
+  outputSchema: {
+    type: 'object',
+    required: ['provider', 'run_reference'],
+    properties: {
+      provider:      { type: 'string' },
+      run_reference: { type: 'string' },
+    },
+    additionalProperties: true,
+  },
+
+  capability: 'page.apply_optimization_request',
+  risk: 'medium',
+  // 🔴 对客户公开面写入；默认拒绝，靠下面 outwardAuthorization 逐动作放行。
+  sideEffect: 'outward',
+  reversible: true,
+
+  outwardAuthorization: {
+    declaredIn: 'docs/specs/2026-08-19-me2-page-optimization-apply-action-v1.0.md',
+    requiresHumanApproval: true,
+    // v1 Draft PR pre-merge = close PR + delete branch = provider 原生撤回路径。
+    // post-merge git revert 不是本 v1 责任。
+    rollback: 'provider_native',
+  },
+
+  // 三者共同确定唯一 run；snapshot 或 diff 一变 → 是另一件事。
+  idempotency: {
+    keyFields: ['page_url', 'page_version_token', 'validated_diff_hash'],
+    scope: 'client',
+  },
+
+  // 🔴 outward-authorization.ts 要求 outward 动作每一步都有显式上界；
+  //    GitHub API 免费，四步都是 0。
+  costModel: {
+    kind: 'fixed',
+    estimate: () => 0,
+    stepCeilingUsd: { prepare: 0, commit: 0, open_pr: 0, record: 0 },
+  },
+
+  // GitHub `POST /pulls` 用同 `head` 分支是幂等（返回既有 PR），
+  // `commitFile` 用同 blobSha 也幂等。
+  providerIdempotency: 'supported',
+
+  retryPolicy: { maxAttempts: 3, backoff: 'exponential', baseMs: 1000 },
+
+  // 🔴 execution-integrity only。不做 Growth 复测。
+  verification: { method: 'page_apply_integrity', delayMs: 0 },
+
+  requiredCapabilityTier: 'paid_client',
+
+  steps: ['prepare', 'commit', 'open_pr', 'record'],
+
+  allowedPurposes: ['growth'],
+}
+
 const DEFINITIONS: Readonly<Record<ActionKey, ActionDefinition>> = {
   'seo.build_publish_package': SEO_BUILD_PUBLISH_PACKAGE,
+  'page.apply_optimization_request': PAGE_APPLY_OPTIMIZATION_REQUEST,
 }
 
 export interface ActionRegistry {

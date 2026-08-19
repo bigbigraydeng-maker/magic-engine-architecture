@@ -146,6 +146,10 @@ export class GithubClient {
 
   /**
    * Open a pull request from `head` branch into `base` branch.
+   *
+   * `draft: true` opens the PR in Draft state (GitHub REST supports this
+   * natively on `POST /repos/{owner}/{repo}/pulls`). Defaults to `false`
+   * to keep existing callers' behavior unchanged.
    */
   async createPullRequest(
     owner: string,
@@ -155,12 +159,13 @@ export class GithubClient {
       body:  string
       head:  string   // source branch
       base:  string   // target branch (e.g. "main")
+      draft?: boolean // open as Draft PR (structural anti-auto-merge)
     },
   ): Promise<GitHubPullRequest> {
     return this.request<GitHubPullRequest>(
       'POST',
       `/repos/${owner}/${repo}/pulls`,
-      params,
+      { ...params, draft: params.draft ?? false },
     )
   }
 

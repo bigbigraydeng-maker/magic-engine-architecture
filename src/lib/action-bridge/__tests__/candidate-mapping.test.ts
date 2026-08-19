@@ -341,21 +341,31 @@ describe('受治理的词汇表', () => {
 })
 
 describe('生产实例：当前状态', () => {
-  it('🔴 生产配对表是空的 —— 没有真实调用方之前不预注册任何动作', () => {
-    expect(MAPPING_TABLE).toEqual([])
+  it('生产配对表只放"有真实调用方"的动作 —— 目前是 GEO → page.apply_optimization_request 一条', () => {
+    // 每条 mapping 都指向注册表里真实存在的 ActionKey（防"半成品映射"）。
+    expect(MAPPING_TABLE.length).toBeGreaterThan(0)
+    for (const entry of MAPPING_TABLE) {
+      expect(ACTION_REGISTRY.get(entry.actionKey)?.actionKey).toBe(entry.actionKey)
+    }
   })
 
-  it('生产词汇表因此是空的（而不是报错）', () => {
-    expect(listGovernedActionVocabulary()).toEqual([])
+  it('生产词汇表反映当前 MAPPING_TABLE，且不抛异常', () => {
+    const vocab = listGovernedActionVocabulary()
+    expect(vocab.length).toBe(MAPPING_TABLE.length)
   })
 
-  it('生产映射对任何候选都拒绝 —— 现在还没有任何身份被治理认领', () => {
+  it('GEO candidate 命中已治理映射', () => {
     const result = mapCandidateIdentity({ domain: 'geo', intent: 'optimize_page_answerability' })
+    expect(result.outcome).toBe('mapped')
+  })
+
+  it('陌生 candidate 仍返回 unmapped_identity', () => {
+    const result = mapCandidateIdentity({ domain: 'geo', intent: 'noop_never_registered' })
     expect(result.outcome).toBe('rejected')
     expect(result).toMatchObject({ code: 'unmapped_identity' })
   })
 
-  it('真注册表确实认得那个唯一的内部动作（证明上一条不是因为注册表是空的）', () => {
+  it('真注册表确实认得内部动作 seo.build_publish_package', () => {
     expect(ACTION_REGISTRY.get(REAL_KEY)?.actionKey).toBe(REAL_KEY)
   })
 })
