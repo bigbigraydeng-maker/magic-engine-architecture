@@ -300,7 +300,15 @@ async function stepCommit(
     }
   }
 
-  // commitFile 用旧 blob SHA 作乐观并发令牌；main 已经动过 → GitHub 直接 409/422。
+  // commitFile 用旧 blob SHA 作乐观并发令牌。有两条正常路径需要区分：
+  //   (a) main 从 prepare 到 commit 之间被别人推动了：blob 不再是 page_version_token，
+  //       GitHub 会 409/422 —— 这是**真 stale**，必须 fail-closed，不能被吞成"成功"。
+  //   (b) 本 run 的 commit step 之前已经成功过一次，现在是重试：branch 上的 blob
+  //       已经是我们的 patched 内容，用 page_version_token 再 commit 也会 409/422 ——
+  //       这是**真幂等**，应当当成 commit_created:true。
+  //
+  // 靠错误消息里有没有 "sha" 或 "conflict" 无法区分两者。唯一可靠的判据是**回读
+  // branch 上现在的文件内容**：等于 patched_content 就是 (b) 幂等；否则就是 (a) 真冲突。
   try {
     await gh.commitFile(
       prep.repo_owner,
@@ -313,10 +321,26 @@ async function stepCommit(
     )
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    // 幂等：同一 blob 内容已 commit 过（GitHub 会 422 "does not match" 或直接 no-op），
-    // 都视为 commit_created:true 让 open_pr 兜住。
-    if (!/409|422|conflict|sha/i.test(msg)) {
-      throw new RetryableCapabilityError(`commitFile 失败：${msg}`)
+    // 回读 branch 上现在的内容，判断是 (b) 幂等还是 (a) 真冲突
+    let branchContent: string | null = null
+    try {
+      const now = await gh.getFileContent(
+        prep.repo_owner, prep.repo_name, prep.content_path, prep.branch_name,
+      )
+      branchContent = now.decodedContent
+    } catch {
+      // 回读也失败 → 无法证明是幂等，保守走真冲突路径
+    }
+    if (branchContent === prep.patched_content) {
+      // (b) 幂等：前一次尝试已 commit 成功，本次是 retry，接受为成功
+    } else {
+      // (a) 真 stale：main 在 prepare 到 commit 之间移动过，OCC 拒绝
+      throw new KernelError(
+        'INVALID_STATE',
+        'commit 冲突：main 在授权与执行之间移动过（stale_snapshot_at_commit），拒绝执行；' +
+          '需要重跑 pipeline 从新 snapshot 出发',
+        { detail: { commitFileError: msg } },
+      )
     }
   }
 
@@ -366,12 +390,31 @@ async function stepOpenPr(
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    // 幂等：同 head 已开过 PR → provider 返回既有 PR 或 422；用 provider-side lookup 兜住。
+    // 幂等恢复：同 head → base 上 PR 已存在时 GitHub 返回 422，且该状态**永远**不会
+    // 随时间改变（这不是可重试错误）。查已有 PR 复用其编号；查不到 = 真失败。
     if (/422|already/i.test(msg)) {
-      // 简化：这里不做二次查询以保持 PR 面窄；后续如果测试要求，再加 gh.findPullRequestByHead。
-      throw new RetryableCapabilityError(`pr_open_failed（可能是已存在）：${msg}`)
+      let existing
+      try {
+        const list = await gh.listPullRequestsByHead(prep.repo_owner, prep.repo_name, prep.branch_name)
+        existing = list.find((p) => p.number) ?? null
+      } catch (lookupErr) {
+        throw new KernelError(
+          'INVALID_STATE',
+          `pr_open_failed：createPullRequest 报"已存在"但查询也失败：${lookupErr instanceof Error ? lookupErr.message : String(lookupErr)}`,
+          { detail: { originalError: msg } },
+        )
+      }
+      if (!existing) {
+        throw new KernelError(
+          'INVALID_STATE',
+          `pr_open_failed：createPullRequest 报"已存在"但按 head=${prep.branch_name} 找不到 —— provider 状态不自洽`,
+          { detail: { originalError: msg } },
+        )
+      }
+      pr = existing
+    } else {
+      throw new RetryableCapabilityError(`pr_open_failed：${msg}`)
     }
-    throw new RetryableCapabilityError(`pr_open_failed：${msg}`)
   }
 
   const output: OpenPrOutput = { pr_number: pr.number, pr_url: pr.html_url }
@@ -429,24 +472,21 @@ async function stepRecord(
   )
 
   // ③ PR diff 等于 approved validated diff（读 PR 分支 head 的文件，字段级重算 hash）
-  let integrityHash = ''
-  let integrityDiffChanges: PrepareOutput['diff_changes'] = []
+  //    逐字段对比 base main 上的值（approved before）与 head 上的值（after），
+  //    只保留 changed 的条目算 hash —— approved diff 里 changed=true 的正是这些。
+  let integrityChangedOnly: PrepareOutput['diff_changes'] = []
   try {
     const headFile = await gh.getFileContent(prep.repo_owner, prep.repo_name, prep.content_path, prep.branch_name)
-    // 逐字段对比 base main 上的值（就是 approved 的 before）与 head 上的值（after）。
     const baseFile = await gh.getFileContent(prep.repo_owner, prep.repo_name, prep.content_path, prep.default_branch)
-    integrityDiffChanges = PAGE_OPTIMIZATION_FIELDS.map((field) => {
+    integrityChangedOnly = PAGE_OPTIMIZATION_FIELDS.map((field) => {
       const before = extractGithubFieldValue(baseFile.decodedContent, field) ?? ''
       const after = extractGithubFieldValue(headFile.decodedContent, field) ?? ''
       return { field, before, after, changed: before !== after }
-    }).filter((c) => c.changed || prep.diff_changes.some((d) => d.field === c.field))
-    integrityHash = canonicalDiffHash(integrityDiffChanges)
+    }).filter((c) => c.changed)
   } catch (e) {
     record('PR head/base blob 可回读', false, e instanceof Error ? e.message : String(e))
   }
-  // 比 approved 的 diff hash（去掉 doNotTouch 之外的意外字段）
   const approvedHash = canonicalDiffHash(prep.diff_changes.filter((c) => c.changed))
-  const integrityChangedOnly = integrityDiffChanges.filter((c) => c.changed)
   const integrityChangedHash = canonicalDiffHash(integrityChangedOnly)
   record(
     'PR diff = approved validated diff',
@@ -475,12 +515,27 @@ async function stepRecord(
     doNotTouchViolations.length > 0 ? `违反字段：${doNotTouchViolations.join(',')}` : undefined,
   )
 
-  // ⑤ receipt / lineage 可回读
+  // ⑤ receipt / lineage 可回读 —— 两条独立断言：
+  //    (5a) `output.run_reference` 能被 provider 反查命中（PR 真实存在，且 output
+  //         字符串本身自洽）—— 用 pr_number 独立再取一次 PR，避免依赖 step ①
+  //         的结果。
+  //    (5b) `authorization_decisions.id` 命中（本 capability 由 Kernel ctx 承接，
+  //         正常路径下这条恒真；但把它写下来，让 append-only 表被误删或迁移出问题
+  //         时能就地看见）。
+  const expectedRunRef = `pr:${prep.repo_owner}/${prep.repo_name}#${opened.pr_number}`
+  let runRefResolvable = false
+  try {
+    // 独立再取一次（跟 step ① 的 getPullRequestState 是不同一次网络往返）
+    const again = await gh.getPullRequestState(prep.repo_owner, prep.repo_name, opened.pr_number)
+    runRefResolvable = again.state === 'open' || again.state === 'closed'
+  } catch (e) {
+    // e 落到 detail
+    record('output.run_reference 可反查', false, e instanceof Error ? e.message : String(e))
+  }
+  record('output.run_reference 可反查', runRefResolvable, expectedRunRef)
+
   const decisionOk = await loadDecisionExists(sb, args.decisionId)
   record('authorization_decisions 行可回读', decisionOk, decisionOk ? undefined : args.decisionId)
-
-  // 用外部忽略了 integrityHash 的 unused 提示消一下 lint（把它塞进 detail）
-  void integrityHash
 
   const failed = checks.filter((c) => !c.passed)
   const verification: VerificationResult = {

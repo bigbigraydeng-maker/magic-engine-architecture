@@ -161,7 +161,21 @@ describe('record · each of 5 assertions can fail-closed', () => {
     expect(r.verification?.failure_reason).toMatch(/doNotTouch/)
   })
 
-  it('⑤ authorization_decisions 找不到行 → fail', async () => {
+  it('⑤a output.run_reference 反查 PR 失败 → fail', async () => {
+    const gh = fakeGh()
+    // 让 getPullRequestState 在第二次调用（run_reference 反查）失败
+    let calls = 0
+    gh.getPullRequestState = async () => {
+      calls++
+      if (calls === 1) return { state: 'open' as const, merged: false, mergedAt: null }
+      throw new Error('404 Not Found')
+    }
+    const r = await runRecord(gh)
+    expect(r.verification?.passed).toBe(false)
+    expect(r.verification?.failure_reason).toMatch(/run_reference/)
+  })
+
+  it('⑤b authorization_decisions 找不到行 → fail', async () => {
     const r = await runRecord(fakeGh(), /*decisionExists*/ false)
     expect(r.verification?.passed).toBe(false)
     expect(r.verification?.failure_reason).toMatch(/authorization_decisions/)

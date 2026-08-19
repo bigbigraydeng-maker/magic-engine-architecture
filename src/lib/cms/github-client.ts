@@ -170,6 +170,27 @@ export class GithubClient {
   }
 
   /**
+   * List open PRs whose head is `head` branch (formatted `owner:branch`).
+   *
+   * Used by `page.apply_optimization_request` capability to recover from the
+   * 422 "A pull request already exists" case idempotently — that error is
+   * NEVER retryable (state won't change), so we look up the existing PR and
+   * return its number instead of letting Kernel burn retry budget.
+   */
+  async listPullRequestsByHead(
+    owner: string,
+    repo: string,
+    headBranch: string,
+  ): Promise<GitHubPullRequest[]> {
+    // GitHub head filter is `owner:branch`; state=open covers our idempotency case
+    // (Draft PRs count as open until merged/closed).
+    return this.request<GitHubPullRequest[]>(
+      'GET',
+      `/repos/${owner}/${repo}/pulls?state=open&head=${owner}:${encodeURIComponent(headBranch)}`,
+    )
+  }
+
+  /**
    * Read a PR's lifecycle state. Used by blog pr-sync (2026-08-01): posts in
    * status 'pr_open' poll this to learn whether the human merged or closed
    * the PR, so the post's status (and the site-content registry) stays true.

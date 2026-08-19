@@ -486,6 +486,31 @@ export const MAPPING_TABLE: readonly CandidateMappingEntry[] = [
 
 **任一项缺失 = 停在 Production Readiness Gate，本 PR 保持 Draft，不 merge 到 main、不启用。**
 
+### 18.1 Review 阶段发现的 Kernel-side 前置修复（**必须**在启用本 action 之前落）
+
+**A · 狄仁杰 Attack #1 · intents tamper race（Kernel 层）**
+
+授权后 / prepare 前，若攻击者能对 `action_runs.input` 直接 UPDATE 把 `intents` 换成新值、同时把 `validated_diff_hash` 换成 `canonicalDiffHash(新 diff)`，capability 侧的 hash 重算只能验证 input 自我一致，**无法**验证 input 与 human 授权时看到的东西一致（因为 `authorization_decisions.policy_snapshot` 没 pin `intents_hash` / `input_hash`）。本 capability **不能**自己修 —— 需要以下二选一的 **Kernel 层 follow-up PR**：
+
+- **方案 A**（优先）：`src/lib/kernel/authorize.ts` 的 `snapshotOf()` 加一列 `input_hash` = `sha256(canonical(action_runs.input))`，落进 `authorization_decisions.policy_snapshot`；capability 侧 `prepare` step 拿 decision policy_snapshot 反查 `input_hash`，本次 `action_runs.input` 重算不等 → fail-closed `INVALID_INPUT('input_tampered_since_authorize')`
+- **方案 B**：`supabase/migrations/` 加 `action_runs.input` immutable 触发器（`AFTER UPDATE OF input` 且 old.status IN ('authorizing','pending_approval','authorized','running') → RAISE EXCEPTION）
+
+**B · 狄仁杰 Attack #3 · dead_letter rollback 未实现（Kernel 层）**
+
+本 spec §6 声明 `rollback:'provider_native'`，语义 = "未合并 Draft PR = close PR + delete branch"，但**触发这条 rollback 的动作在 Kernel dead_letter 处理链里，本 capability 不承担**。目前 Kernel 侧无 `outward-rollback-runner`。需要 **Kernel 层 follow-up PR** 增加：
+
+- Kernel `runner.ts` 或独立 `outward-rollback.ts`：run 转 `dead_letter` 且 `ActionDefinition.outwardAuthorization.rollback === 'provider_native'` 时，从 `action_run_steps` 找到本 run 已产生的 provider 副作用（本 action = `open_pr` step 的 output.pr_number + `commit` step 的 branch_name），调用 provider 的原生撤回接口（GitHub: close PR + delete branch）
+- capability 侧可能需要暴露一个 `rollback` 处理器（在 `CapabilityImplementation.steps` 之外或独立字段）
+
+**C · 子牙 Nit #2 · 缺 `PageProviderAdapter` 抽象（本 action tech debt）**
+
+本 v1 把 provider 调用直接塞在 `src/lib/capabilities/page-apply-optimization/index.ts` 的 step handler 里，没有 `PageProviderAdapter` 抽象。今天无第二个 provider 所以不建（PM Change 3），但 v2 加 WordPress adapter 时**必须先抽 adapter**再加实现 —— 否则会形成 provider 分支散在 index.ts 里的形状。**登记为 v2 PR 的第一件事**。
+
+**这三条是"在启用本 action 之前必须先落的 Kernel-side 修复"**（A/B 是安全，C 是设计），跟 Production Readiness Gate 的 4 条基础设施条件是**互补**的：
+- 基础设施 4 条不满足 = 无法运行
+- 上面 A/B 不修复 = 可以运行但**存在已知安全缺口**
+- C 是启用 v2 时的债，v1 启用不受影响
+
 ---
 
 ## 19. 一句话总结（给 PM 审）

@@ -165,14 +165,10 @@ describe('prepare step · happy path', () => {
   })
 })
 
-describe('adversarial: forge AuthorizedExecutionContext', () => {
-  it('kernel/boundaries.ts 只允许 authorize.ts 造 ctx —— 架构测试在别处扫，这里只证明 fake ctx 编不进真运行时', () => {
-    // 这个断言的价值在于**编译**：`AuthorizedExecutionContext` 有 unique symbol brand，
-    // 模块外无法直接构造。我们上面用 `as unknown as AuthorizedExecutionContext`
-    // 是**显式**规避，这行代码会被 kernel/__tests__/architecture.test.ts 的
-    // "no forged contexts" 扫出（但那个扫描不覆盖 __tests__ 目录）。
-    // 这里保留断言是为了让"forge ctx 的路径必须是显式绕过"这件事有一个 breadcrumb。
-    const forged = { forged: true } as unknown as AuthorizedExecutionContext
-    expect(typeof forged).toBe('object')
-  })
-})
+// forge AuthorizedExecutionContext 的实际防线在 architecture level：
+//   * `src/lib/kernel/types.ts:377` unique symbol brand（编译期挡未 mint）
+//   * `src/lib/kernel/boundaries.ts:110` AUTHORIZED_CONTEXT_MINTERS 只允许 authorize.ts
+//   * `src/lib/kernel/__tests__/architecture.test.ts` "no forged contexts" 扫全仓
+//   * `src/lib/kernel/gateway.ts` assertDecisionMatches 独立重读 decision，forge ctx 过不了
+// 本 capability 的测试文件用 `as unknown as AuthorizedExecutionContext` 是显式规避
+// （测试文件被架构扫描排除，见 architecture.test.ts filter isTest）。这不是攻击面。

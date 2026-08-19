@@ -54,6 +54,95 @@ describe('open_pr · draft:true', () => {
     expect(capturedParams.base).toBe('main')
     expect(capturedParams.body).toMatch(/kernel_run_id: run/)
     expect(capturedParams.body).toMatch(/Draft PR/)
-    expect(result.output.provider === undefined || result.output.pr_number !== undefined || (result.output as any).pr_url !== undefined).toBeTruthy()
+    // output 明确断言（不是 `||` 的恒真串）
+    expect(result.output.pr_number).toBe(7)
+    expect(result.output.pr_url).toBe('https://github.com/o/r/pull/7')
+  })
+
+  it('createPullRequest 报"已存在" → 复用既有 PR，不当 retryable', async () => {
+    const fakeGh: any = {
+      async createPullRequest() {
+        throw new Error('422 Validation Failed: A pull request already exists')
+      },
+      async listPullRequestsByHead(_o: string, _r: string, headBranch: string) {
+        expect(headBranch).toBe('me/page-apply/idem')
+        return [{ number: 99, html_url: 'https://github.com/o/r/pull/99', title: 're-used' }]
+      },
+    }
+    const cap = createPageApplyOptimizationCapability(noopSb(), {
+      resolveGithubConnection: async () => ({
+        repoOwner: 'o', repoName: 'r', defaultBranch: 'main',
+        contentPaths: ['website/x.html'], plainToken: 't',
+      }),
+      createGithubClient: () => fakeGh,
+    })
+    const prepOutput = {
+      repo_owner: 'o', repo_name: 'r', default_branch: 'main',
+      content_path: 'website/x.html', page_version_token: 'sha1',
+      branch_name: 'me/page-apply/idem',
+      patched_content: '<html></html>',
+      diff_changes: [{ field: 'meta_description', before: 'a', after: 'b', changed: true }],
+    }
+    const result = await cap.steps.open_pr({
+      ctx: fakeCtx(), stepKey: 'open_pr', attempt: 1, idempotencyKey: 'x',
+      priorOutputs: { prepare: prepOutput as unknown as Record<string, unknown> },
+    })
+    expect(result.output.pr_number).toBe(99)
+  })
+
+  it('createPullRequest 报"已存在" 但 listPullRequestsByHead 找不到 → INVALID_STATE，不是 retryable', async () => {
+    const fakeGh: any = {
+      async createPullRequest() {
+        throw new Error('422 already exists')
+      },
+      async listPullRequestsByHead() { return [] },
+    }
+    const cap = createPageApplyOptimizationCapability(noopSb(), {
+      resolveGithubConnection: async () => ({
+        repoOwner: 'o', repoName: 'r', defaultBranch: 'main',
+        contentPaths: ['website/x.html'], plainToken: 't',
+      }),
+      createGithubClient: () => fakeGh,
+    })
+    const prepOutput = {
+      repo_owner: 'o', repo_name: 'r', default_branch: 'main',
+      content_path: 'website/x.html', page_version_token: 'sha1',
+      branch_name: 'me/page-apply/idem',
+      patched_content: '<html></html>',
+      diff_changes: [],
+    }
+    await expect(cap.steps.open_pr({
+      ctx: fakeCtx(), stepKey: 'open_pr', attempt: 1, idempotencyKey: 'x',
+      priorOutputs: { prepare: prepOutput as unknown as Record<string, unknown> },
+    })).rejects.toMatchObject({
+      code: 'INVALID_STATE',
+      humanReason: expect.stringMatching(/找不到/),
+    })
+  })
+
+  it('createPullRequest 其它错误 → RetryableCapabilityError', async () => {
+    const fakeGh: any = {
+      async createPullRequest() {
+        throw new Error('500 internal server error')
+      },
+    }
+    const cap = createPageApplyOptimizationCapability(noopSb(), {
+      resolveGithubConnection: async () => ({
+        repoOwner: 'o', repoName: 'r', defaultBranch: 'main',
+        contentPaths: ['website/x.html'], plainToken: 't',
+      }),
+      createGithubClient: () => fakeGh,
+    })
+    const prepOutput = {
+      repo_owner: 'o', repo_name: 'r', default_branch: 'main',
+      content_path: 'website/x.html', page_version_token: 'sha1',
+      branch_name: 'me/page-apply/idem',
+      patched_content: '<html></html>',
+      diff_changes: [],
+    }
+    await expect(cap.steps.open_pr({
+      ctx: fakeCtx(), stepKey: 'open_pr', attempt: 1, idempotencyKey: 'x',
+      priorOutputs: { prepare: prepOutput as unknown as Record<string, unknown> },
+    })).rejects.toThrow(/pr_open_failed/)
   })
 })
