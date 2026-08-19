@@ -91,9 +91,16 @@ export type SubmitPageOptimizationRequestResult =
       readonly ok: true
       readonly outcome: 'pending_approval'
       readonly runId: string
-      readonly authorizationDecisionId: string | null
-      /** 幂等命中：拿到的是已存在的 run。触发端应把它当"正常复用"。 */
-      readonly existing: boolean
+      /**
+       * 🔴 **必须非空**。Approval Queue 的读路径要拿这一份 decision id 做归属核对
+       *    （`decisionBelongsToRun` 里 7 条判据的锚点）。库里 `authorization_decision_id`
+       *    为空的 pending_approval run 会被 Queue **静默跳过**（记进 `skippedRunIds`
+       *    但不进 `items`）—— 那时 caller 报 `ok:true` = 承诺"能被人点头"，但触发端
+       *    去看队列时根本看不到。这是隐形失败，比直接 fail closed 危险得多。
+       *    所以这里的类型不接受 null；`interpretOutcome` 见到 null 会走
+       *    `kernel_inconsistent_pending_approval` 分支。
+       */
+      readonly authorizationDecisionId: string
     }
   | {
       readonly ok: false
@@ -125,4 +132,14 @@ export type SubmitPageOptimizationRequestResult =
       readonly reason: 'kernel_unexpected_outcome'
       readonly runId: string
       readonly outcomeKind: ActionRunOutcome['kind']
+    }
+  | {
+      /**
+       * 🔴 Kernel 报 pending_approval，但 run 上没有 authorization_decision_id ——
+       *    库里状态不一致。Approval Queue 会静默跳过它，触发端应视作**未真正进入
+       *    审批队列**，需要人工排查后重新排一次，而不是当作 pending 等人点。
+       */
+      readonly ok: false
+      readonly reason: 'kernel_inconsistent_pending_approval'
+      readonly runId: string
     }

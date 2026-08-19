@@ -186,9 +186,10 @@ export const ACTION_SUBMISSION_FORBIDDEN_IMPORTS = [
 /**
  * Kernel progression API 的调用面。
  *
- * `runAction` / `submitActionRun` 是 Kernel 对外**仅有**的两个入口
- * （runner.ts §注释）。为了防止将来又冒出"直接 import 一下就自己 submit"的
- * 第二条路径，这里锁死**只有**下面这些目录能在生产代码里 import 它们：
+ * `runAction` / `submitActionRun` / `approveAndRun` / `rejectPendingRun` /
+ * `resumeDeadLetterRun` / `recoverDeniedRun` 是 Kernel 对外**仅有**的几个进
+ * 状态机的入口（runner.ts §注释）。为了防止将来又冒出"直接 import 一下就自己
+ * submit"的第二条路径，这里锁死**只有**下面这些目录能在生产代码里 import 它们：
  *   · Kernel 自己（内部互相调用）
  *   · `src/lib/action-submission/**`（本轮新增的平台级 caller）
  *   · `src/lib/kernel-approval/**`（人点头之后的授权路径，见现有代码）
@@ -205,8 +206,39 @@ export const KERNEL_RUNNER_ALLOWED_CALLER_DIRS = [
   'src/lib/kernel-approval/',
 ] as const
 
-/** 被 caller 门槛管住的 Kernel runner 模块 —— 只有一条。 */
-export const KERNEL_RUNNER_MODULE = '@/lib/kernel/runner' as const
+/**
+ * 🔴 **哪些模块暴露 progression 符号**。两条都要看：
+ *
+ *    · `@/lib/kernel/runner` —— 定义地
+ *    · `@/lib/kernel`        —— barrel re-export（见 kernel/index.ts）
+ *
+ *    只盯 runner 会漏 barrel bypass：`import { runAction } from '@/lib/kernel'`
+ *    完全绕过一条"只 ban 了 runner 路径"的规则。所以两条都进闸。
+ *
+ * 🔴 **不 ban 整个 barrel** —— `@/lib/kernel` 还导出类型、`createKernel`、
+ *    `ACTION_REGISTRY` 之类的合法东西。判据是**符号级**：只有
+ *    `KERNEL_RUNNER_SYMBOLS` 里的名字在这两条路径下被具名导入时才算违规。
+ *    type-only imports 不算（拿签名类型不能真调 progression）。
+ */
+export const KERNEL_RUNNER_SOURCE_MODULES = ['@/lib/kernel/runner', '@/lib/kernel'] as const
+
+/**
+ * 🔴 **Kernel progression 符号清单**。只列真能推 run 状态的东西，不列类型
+ *    （`SubmitActionInput` / `ActionRunOutcome` 等）—— 那些是形状描述，
+ *    不是执行入口。
+ *
+ * 🔴 加一个新的 progression 入口（例如未来的 `resumeXxx`）必须回到这里显式加名，
+ *    否则新入口不会被这道闸覆盖。这条 boundary 的默认答案是"不许"，
+ *    穷举白名单而不是黑名单否定，同一个仓库反复踩过的坑。
+ */
+export const KERNEL_RUNNER_SYMBOLS = [
+  'runAction',
+  'submitActionRun',
+  'approveAndRun',
+  'rejectPendingRun',
+  'resumeDeadLetterRun',
+  'recoverDeniedRun',
+] as const
 
 /**
  * `supabase/migrations` 里**已经存在**的重复版本号 —— 同样只准变短。

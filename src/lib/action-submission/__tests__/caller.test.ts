@@ -257,7 +257,7 @@ describe('caller: SubmitActionInput 构造', () => {
 // —— Kernel outcome 分派 ──────────────────────────────────────────────────
 
 describe('caller: Kernel outcome 分派', () => {
-  it('pending_approval → ok:true + authorizationDecisionId 透传', async () => {
+  it('pending_approval + authorization_decision_id 非空 → ok:true + id 透传', async () => {
     const run = fakeRun({ authorization_decision_id: 'decision-42' })
     const { deps } = makeDeps({
       outcome: { kind: 'pending_approval', run, decision: null, execution: null, humanReason: '等' },
@@ -270,7 +270,25 @@ describe('caller: Kernel outcome 分派', () => {
       outcome: 'pending_approval',
       runId: run.id,
       authorizationDecisionId: 'decision-42',
-      existing: false,
+    })
+  })
+
+  it('🔴 pending_approval + authorization_decision_id === null → fail closed（Queue 会静默跳过这种 run）', async () => {
+    // Kernel 报 pending_approval 但 run 上没有 decision id，是库里状态不一致。
+    // 如果 caller 报 ok:true，触发端去看 Approval Queue 时根本看不到这条
+    // （queries.ts:283 的 listPendingApprovals 会把它记进 skippedRunIds、不放
+    // 进 items）—— 这是隐形失败：承诺"能被人点头"却根本没进队列。
+    const run = fakeRun({ authorization_decision_id: null })
+    const { deps } = makeDeps({
+      outcome: { kind: 'pending_approval', run, decision: null, execution: null, humanReason: '等' },
+    })
+
+    const result = await submitPageOptimizationRequest(deps, makeInput())
+
+    expect(result).toEqual({
+      ok: false,
+      reason: 'kernel_inconsistent_pending_approval',
+      runId: run.id,
     })
   })
 

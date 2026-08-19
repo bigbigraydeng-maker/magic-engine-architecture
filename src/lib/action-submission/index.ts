@@ -137,17 +137,22 @@ function interpretOutcome(outcome: ActionRunOutcome): SubmitPageOptimizationRequ
   const runId = outcome.run.id
 
   if (outcome.kind === 'pending_approval') {
+    const decisionId = outcome.run.authorization_decision_id
+    // 🔴 Approval Queue 的读路径要拿这一份 decision id 做归属核对
+    //    （`decisionBelongsToRun` 的 7 条判据锚点）。库里 authorization_decision_id
+    //    为空的 pending_approval run 会被 Queue **静默跳过**（进 skippedRunIds、
+    //    不进 items）—— caller 若报 ok:true 承诺"能被人点头"，触发端去看队列时
+    //    根本看不到。这是隐形失败，比 fail closed 危险得多。所以见到 null 时
+    //    如实返回结构化 non-success，让触发端排查而不是等着一份永远不会出现的
+    //    待办。
+    if (!decisionId) {
+      return { ok: false, reason: 'kernel_inconsistent_pending_approval', runId }
+    }
     return {
       ok: true,
       outcome: 'pending_approval',
       runId,
-      authorizationDecisionId: outcome.run.authorization_decision_id,
-      // Kernel 内部对 pending_approval 也走幂等键复用；如果这次拿到的是已存在
-      // 的 pending run，Kernel 会通过 `outcomeForSettledRun` 返回 kind:'pending_approval'。
-      // 分派层没法从 outcome 直接读 `existing`（那是 `SubmitResult` 上的字段），
-      // 但可以从 run 的时间戳 / decision 是否存在判断 —— v1 保守起见按 false 报，
-      // 触发端不依赖它做去重决策。真实幂等命中的追溯留给 Kernel 审计表。
-      existing: false,
+      authorizationDecisionId: decisionId,
     }
   }
 

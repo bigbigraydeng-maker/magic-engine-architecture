@@ -222,7 +222,7 @@ Caller 是 submission boundary，不是 validation pipeline。
 
 ## 8. 返回契约
 
-**只有 `pending_approval` 是 success**（复述 §3）。其它 Kernel outcome 一律结构化 non-success。
+**只有 `pending_approval` **且**带非空 authorization_decision_id** 才是 success**（复述 §3；见 Q7 冻结）。其它一律结构化 non-success。
 
 ```ts
 export type SubmitPageOptimizationRequestResult =
@@ -230,9 +230,12 @@ export type SubmitPageOptimizationRequestResult =
       readonly ok: true
       readonly outcome: 'pending_approval'
       readonly runId: string
-      readonly authorizationDecisionId: string | null
-      /** 幂等命中：这次拿到的是已存在的 run（Kernel 幂等键相同）。 */
-      readonly existing: boolean
+      /**
+       * 🔴 必须非空。Approval Queue 的读路径（`decisionBelongsToRun` 的 7 条判据锚点）
+       *    在 authorization_decision_id 为空时会**静默跳过**这条 run —— caller 若报
+       *    ok:true 承诺"能被人点头"，触发端去看队列时根本看不到。fail closed 让触发端知情。
+       */
+      readonly authorizationDecisionId: string
     }
   | { readonly ok: false; readonly reason: 'client_id_mismatch'; readonly requestClientId: string; readonly kernelMetaClientId: string }
   | { readonly ok: false; readonly reason: 'basedOnVersion_unknown' }
@@ -240,10 +243,22 @@ export type SubmitPageOptimizationRequestResult =
   | { readonly ok: false; readonly reason: 'kernel_denied';       readonly runId: string; readonly humanReason: string | null }
   | { readonly ok: false; readonly reason: 'kernel_dead_letter';  readonly runId: string; readonly humanReason: string | null }
   | { readonly ok: false; readonly reason: 'kernel_unexpected_outcome'; readonly runId: string; readonly outcomeKind: string }
+  | {
+      /**
+       * 🔴 Kernel 报 pending_approval，但 run 上没有 authorization_decision_id ——
+       *    库里状态不一致。Approval Queue 会静默跳过它，触发端应视作"未真正进入
+       *    审批队列"，需要人工排查后重新排一次，而不是当作 pending 等人点。
+       */
+      readonly ok: false
+      readonly reason: 'kernel_inconsistent_pending_approval'
+      readonly runId: string
+    }
 ```
 
 **`kernel_unexpected_outcome`** 覆盖 `succeeded` / `idempotent_hit` / `in_progress`：
 对 outward + require_approval 的 action，`runAction()` 结构上不该在这次调用里出现这三种 —— 出现即意味着上游状态与预期不一致（例如 mapper 指向了内部动作、政策被改成 `auto_approve`、并发有人在跑）。Caller **不粉饰**，如实标出。
+
+**关于"幂等命中" (`existing`)**：v1 不报告这个信号。`runAction()` 的返回类型（`ActionRunOutcome`）**不携带** `SubmitResult.existing`（那是 Kernel 内部 `submitActionRun` 的返回字段，被 `runAction` 吞掉了）。Caller 无法在**不改 Kernel runtime** 的前提下如实报告"这是新排的一条还是幂等命中的老的一条"，所以直接不报 —— 触发端不做去重决策，真实幂等追溯留给 Kernel 审计表。（Codex #1101 PATCH #1）
 
 **Caller 不重新包装 Kernel 抛出的 `KernelError`** —— 直接抛给触发端。理由：Kernel error 已经带 machine code + humanReason，包装一层会丢信息。**唯一例外**：invariant violation 场景（例如 `runAction` 返回的对象结构对不上）Caller 可以 throw，不要静默返 success。
 
@@ -314,11 +329,11 @@ Fail closed / 分派正确性，使用注入的 `mapCandidate` + 注入的 `runA
 5. `precomputed.validatedDiffHash` 原样绑定到 `submitInput.input.validated_diff_hash`
 6. `runAction` 抛 `KernelError('INVALID_INPUT')` → 抛出**原样**，不吞不改
 7. Kernel outcome 分派：
-   - `pending_approval` → `{ok:true, outcome:'pending_approval', ...}`
+   - `pending_approval` **且带非空 authorization_decision_id** → `{ok:true, outcome:'pending_approval', ...}`
+   - `pending_approval` **但 authorization_decision_id === null** → `{ok:false, reason:'kernel_inconsistent_pending_approval', runId}` **（Codex #1101 PATCH #2）**
    - `denied` → `{ok:false, reason:'kernel_denied', ...}`
    - `dead_letter` → `{ok:false, reason:'kernel_dead_letter', ...}`
    - `succeeded` / `idempotent_hit` / `in_progress` → `{ok:false, reason:'kernel_unexpected_outcome', ...}`
-8. `existing:true`（幂等命中的 pending_approval）→ 透传
 
 ### 11.2 Kernel 集成测试（`src/lib/action-submission/__tests__/kernel-progression.test.ts`）
 使用现成 `fake-supabase` + `makeFixture` + `makeRegistry` 造合成 outward test action + require_approval policy，注入**真实** `runAction`：
@@ -358,8 +373,8 @@ Fail closed / 分派正确性，使用注入的 `mapCandidate` + 注入的 `runA
   - Kernel 客户归属校验（goalId / executionItemId 都必须同 clientId，见 `runner.ts:87-133`）
 - **新增 shared**：
   - 1 个新目录 `src/lib/action-submission/`（约 3 个文件：`index.ts` + `types.ts` + tests）
-  - 1 条架构规则（`ACTION_SUBMISSION_ALLOWED_IMPORTS` 加进 `kernel/boundaries.ts`）
-  - 2 条架构测试断言（`architecture.test.ts` 里：submission 层依赖白名单 + `submitActionRun`/`runAction` 只走 caller 或 kernel 内部）
+  - 4 条架构常量（`ACTION_SUBMISSION_FORBIDDEN_IMPORTS` + `KERNEL_RUNNER_ALLOWED_CALLER_DIRS` + `KERNEL_RUNNER_SOURCE_MODULES` + `KERNEL_RUNNER_SYMBOLS` 加进 `kernel/boundaries.ts`）
+  - 架构测试新增：submission 层依赖白名单；Kernel progression 符号只走三处 caller（**同时覆盖 `@/lib/kernel/runner` 与 `@/lib/kernel` barrel**，符号级判据，非 type-only imports；见 Codex #1101 PATCH #3）；action-submission 内不 hardcode `page.*` ActionKey；合成源码 mutation 用例（正反两组，证明闸真会咬）
 - **Governance-only 修改**：`kernel/boundaries.ts` + `kernel/__tests__/architecture.test.ts`（不是 runtime shared logic）
 - **Runtime shared 修改**：**零**（不改 Kernel / Bridge / GEO Module / WP06 / capability 任何一行）
 - **industry / client 边界**：
