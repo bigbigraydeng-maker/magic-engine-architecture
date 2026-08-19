@@ -20,20 +20,13 @@ export interface RawFeedItem {
   excerpt: string
 }
 
-/** An item that passed the 48h window + dedupe + category match. */
+/** An item that passed the 48h window + dedupe + category match — this is what goes straight into the email. */
 export interface CandidateItem {
-  sourceId: string
   sourceName: string
   title: string
   url: string
   publishedAt: string | null
-  rawExcerpt: string
+  excerpt: string
   matchedCategory: MarketIntelCategory
   dedupeHash: string
-}
-
-export interface SummarizedItem extends CandidateItem {
-  headlineZh: string
-  summaryZh: string
-  groundingCheck: 'passed' | 'failed'
 }

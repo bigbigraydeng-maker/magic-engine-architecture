@@ -15,15 +15,13 @@ export async function GET(req: NextRequest) {
 
     await cronRun.finish({
       processed: result.itemsConsidered,
-      completed: result.itemsSentInEmail,
+      completed: result.itemsSelected,
       failed: result.sourceFailures.length,
       summary: {
         sent: result.sent,
         reason: result.reason ?? null,
         items_selected: result.itemsSelected,
-        items_flagged_for_review: result.itemsFlaggedForReview,
         source_failures: result.sourceFailures,
-        category_alerts: result.categoryAlerts,
       },
     })
 
