@@ -19,10 +19,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CapabilityImplementation,
+  CapabilityStepContext,
   CapabilityStepResult,
+  OutwardRollbackResult,
   VerificationResult,
 } from '@/lib/kernel/types'
 import { KernelError, RetryableCapabilityError } from '@/lib/kernel/errors'
+import { GitHubApiError } from '@/lib/cms/github-client'
 import type {
   GithubPageSnapshot,
   PageDiffResult,
@@ -100,7 +103,17 @@ function orphanArtefactHint(args: {
   return lines.join('\n')
 }
 
-// ── Input shape read from action_runs.input ──────────────────────────────────
+// ── Input shape (populated from ctx.runInput —— deep-frozen by Gateway hash-check) ──
+//
+// 🔴 **不许**从 `action_runs.input` 回读。#1108 Kernel Outward Hardening 把
+//    执行输入沉进 `CapabilityStepContext.runInput`，Gateway 已按授权时的 hash
+//    校验过一次并深冻结。capability 再走 supabase 读 `input` 就是 TOCTOU 漏洞
+//    （Gateway 通过后 attacker UPDATE input → capability 读到污染值）。
+//    见 `docs/specs/2026-08-19-me2-kernel-outward-execution-hardening-v1.0.md`
+//    与 `src/lib/kernel/types.ts::CapabilityStepContext.runInput`。
+//
+//    本文件内**唯一**允许从 `ctx.runInput` 构造 RunInput 的路径 = `parseRunInput()`。
+//    architecture-guard.test.ts 会静态扫本目录，禁止再次出现 `select('input')`。
 
 interface RunInput {
   readonly page_url: string
@@ -139,17 +152,20 @@ interface OpenPrOutput {
 
 // ── Loading helpers (server-side only, ctx-scoped) ────────────────────────────
 
-async function loadRunInput(sb: SupabaseClient, runId: string): Promise<RunInput> {
-  const { data, error } = await sb.from('action_runs').select('input').eq('id', runId).limit(1)
-  if (error) throw new RetryableCapabilityError(`读取执行输入失败：${error.message}`)
-  const row = (data ?? [])[0] as unknown as { input: Record<string, unknown> } | undefined
-  if (!row) throw new KernelError('INVALID_STATE', `找不到执行实例 ${runId}`)
-  const input = row.input ?? {}
-  const pageUrl = input.page_url
-  const versionToken = input.page_version_token
-  const diffHash = input.validated_diff_hash
-  const intents = input.intents
-  const doNotTouch = input.do_not_touch
+/**
+ * 🔴 从**已由 Gateway hash-check + 深度冻结**的 `ctx.runInput` 构造 RunInput。
+ *
+ *   纯函数、不查 DB —— 唯一入口，见上方 architecture-guard 说明。
+ *   缺字段或类型不对 → `INVALID_INPUT` fail-closed（不许 RetryableCapabilityError
+ *   —— Gateway 已经验过 hash，这里的缺字段是**代码 bug 或 schema 漂移**，重试
+ *   永远不会好起来）。
+ */
+function parseRunInput(runInput: Readonly<Record<string, unknown>>): RunInput {
+  const pageUrl = runInput.page_url
+  const versionToken = runInput.page_version_token
+  const diffHash = runInput.validated_diff_hash
+  const intents = runInput.intents
+  const doNotTouch = runInput.do_not_touch
   if (
     typeof pageUrl !== 'string' ||
     typeof versionToken !== 'string' ||
@@ -157,7 +173,7 @@ async function loadRunInput(sb: SupabaseClient, runId: string): Promise<RunInput
     !Array.isArray(intents) ||
     !Array.isArray(doNotTouch)
   ) {
-    throw new KernelError('INVALID_INPUT', '执行输入缺字段或类型不对')
+    throw new KernelError('INVALID_INPUT', '执行输入缺字段或类型不对（ctx.runInput）')
   }
   return {
     page_url: pageUrl,
@@ -181,11 +197,10 @@ async function loadDecisionExists(sb: SupabaseClient, decisionId: string): Promi
 // ── Step: prepare ─────────────────────────────────────────────────────────────
 
 async function stepPrepare(
-  sb: SupabaseClient,
   deps: PageApplyOptimizationDeps,
-  args: { runId: string; clientId: string },
+  args: { runId: string; clientId: string; input: RunInput },
 ): Promise<CapabilityStepResult> {
-  const input = await loadRunInput(sb, args.runId)
+  const input = args.input
 
   const conn = await deps.resolveGithubConnection(args.clientId)
   if (!conn) {
@@ -549,7 +564,7 @@ async function stepOpenPr(
 async function stepRecord(
   sb: SupabaseClient,
   deps: PageApplyOptimizationDeps,
-  args: { runId: string; clientId: string; decisionId: string; priorOutputs: Readonly<Record<string, Record<string, unknown>>> },
+  args: { runId: string; clientId: string; decisionId: string; input: RunInput; priorOutputs: Readonly<Record<string, Record<string, unknown>>> },
 ): Promise<CapabilityStepResult> {
   const prep = args.priorOutputs.prepare as unknown as PrepareOutput | undefined
   const opened = args.priorOutputs.open_pr as unknown as OpenPrOutput | undefined
@@ -645,9 +660,9 @@ async function stepRecord(
   try {
     const headFile = await gh.getFileContent(prep.repo_owner, prep.repo_name, prep.content_path, prep.branch_name)
     const baseFile = await gh.getFileContent(prep.repo_owner, prep.repo_name, prep.content_path, prep.default_branch)
-    // 从 run input 拿 doNotTouch —— 但 prep 里没带；改从 action_runs.input 再读一次。
-    const input = await loadRunInput(sb, args.runId)
-    for (const field of input.do_not_touch) {
+    // 🔴 do_not_touch 从 ctx.runInput（Gateway 已 hash-check + 深冻结）读，
+    //    **绝不**回查 action_runs.input（TOCTOU；见文件顶部说明）。
+    for (const field of args.input.do_not_touch) {
       const before = extractGithubFieldValue(baseFile.decodedContent, field) ?? ''
       const after = extractGithubFieldValue(headFile.decodedContent, field) ?? ''
       if (before !== after) doNotTouchViolations.push(field)
@@ -732,6 +747,208 @@ async function stepRecord(
   }
 }
 
+// ── Rollback handler (provider_native · GitHub Draft PR close + branch delete) ─
+//
+// 🔴 契约（`OutwardRollbackHandler`）由 #1108 Kernel Outward Hardening 冻结：
+//    - 三态返回（provider_native ok=true/false、noop）
+//    - Gateway 已在调本 handler **之前**查 `action_run_steps(step_key='rollback')` lineage；
+//      命中即跳过 handler → 本 handler **只**处理"第一次真调用"和"崩溃后接管重调"
+//    - 幂等义务：同 run 多次调用不许把 provider 弄坏
+//    - 抛异常 = failed（Gateway 会 catch 并落 lineage）；handler **禁抛** RetryableCapabilityError
+//
+// 🔴 Rollback 目标 identity **只**来自：
+//    (a) 上游 step 的 priorOutputs（deterministic branchName + pr_number/url）
+//    (b) `ctx.runInput`（deep-frozen；用于 branch prefix 校验的 idempotency 派生）
+//    绝不从任何外部/caller-provided 数字读 PR number 或 branch name。
+//
+// 🔴 v1 只处理 GitHub。不建 provider abstraction —— 未来 WordPress 走**另一个**
+//    action + 另一个 capability + 另一个 rollback handler，不是把本函数扩泛型。
+
+async function rollbackHandler(
+  deps: PageApplyOptimizationDeps,
+  step: CapabilityStepContext,
+  priorOutputs: Readonly<Record<string, Record<string, unknown>>>,
+): Promise<OutwardRollbackResult> {
+  const prep = priorOutputs.prepare as unknown as PrepareOutput | undefined
+  const opened = priorOutputs.open_pr as unknown as OpenPrOutput | undefined
+  const commit = priorOutputs.commit as unknown as CommitOutput | undefined
+
+  // ── noop 快速路径：从没跑到会产生 provider 副作用的位置 ─────────────────────
+  //    (a) 连 prepare 都没成 → 分支肯定没建
+  //    (b) prepare 成了但 commit 也没成（i.e. stepCommit 抛错的位置在 createBranch
+  //        之前）→ 分支未建。但 stepCommit 里 createBranch 是在 commit_created:true
+  //        之前的**必经步骤**，只要 commit 没成，branch 可能已建或未建 —— 保守起见：
+  //        没有 commit 记录 = 不去删可能不存在的分支（noop 更安全）。
+  //    这两条都对应 provider 实际零副作用；返回 noop 让 Gateway 落一行明确 lineage。
+  if (!prep) {
+    return {
+      ok: true,
+      rollbackKind: 'noop',
+      detail: { reason: 'prepare 未完成，provider 零副作用' },
+    }
+  }
+  if (!commit) {
+    return {
+      ok: true,
+      rollbackKind: 'noop',
+      detail: {
+        reason: 'commit step 未完成，无法确认是否已创建 branch；保守 noop',
+        branch_name: prep.branch_name,
+      },
+    }
+  }
+
+  // ── 身份自检：防止 caller/attacker 塞入不属于本 run 的 branch/PR ───────────
+  //
+  // (1) branchName 必须是 `me/page-apply/<24-hex>` 形状。
+  //     branchNameForRun() 用 sha256(page_url|page_version_token|validated_diff_hash) 前 24 位派生 ——
+  //     可从 runInput 再算一次做严格自检。
+  const OWNED_BRANCH_RE = /^me\/page-apply\/[0-9a-f]{24}$/
+  if (!OWNED_BRANCH_RE.test(prep.branch_name)) {
+    return {
+      ok: false,
+      rollbackKind: 'provider_native',
+      detail: { branch_name: prep.branch_name },
+      failure_reason:
+        `拒绝 rollback：branch_name 不符合 me/page-apply/<24hex> —— ` +
+        `不属于本 capability owned 前缀，可能是 priorOutputs 被污染`,
+    }
+  }
+  // (2) branchName 派生必须与 ctx.runInput 重算一致（TOCTOU 二次防线）
+  let expectedBranch: string
+  try {
+    const ri = parseRunInput(step.runInput)
+    const idKey = idempotencyKeyFromInput(ri.page_url, ri.page_version_token, ri.validated_diff_hash)
+    expectedBranch = branchNameForRun(idKey)
+  } catch (e) {
+    return {
+      ok: false,
+      rollbackKind: 'provider_native',
+      detail: { thrown: e instanceof Error ? e.message : String(e) },
+      failure_reason: `拒绝 rollback：ctx.runInput 形状不对，无法自检 branch identity`,
+    }
+  }
+  if (expectedBranch !== prep.branch_name) {
+    return {
+      ok: false,
+      rollbackKind: 'provider_native',
+      detail: { prior_branch: prep.branch_name, expected: expectedBranch },
+      failure_reason:
+        `拒绝 rollback：prep.branch_name 跟 ctx.runInput 重算不一致 —— 不属于本 run`,
+    }
+  }
+  // (3) 绝不能删默认分支
+  if (prep.branch_name === prep.default_branch) {
+    return {
+      ok: false,
+      rollbackKind: 'provider_native',
+      detail: { branch_name: prep.branch_name, default_branch: prep.default_branch },
+      failure_reason: `拒绝 rollback：branch_name === default_branch，绝不能删`,
+    }
+  }
+
+  // ── 拿 provider client ──────────────────────────────────────────────────
+  const conn = await deps.resolveGithubConnection(step.ctx.clientId)
+  if (!conn) {
+    return {
+      ok: false,
+      rollbackKind: 'provider_native',
+      detail: { clientId: step.ctx.clientId },
+      failure_reason: `拒绝 rollback：客户 GitHub 连接消失，无法执行 provider-native rollback`,
+    }
+  }
+  const gh = deps.createGithubClient(conn.plainToken)
+
+  const detail: Record<string, unknown> = {
+    branch_name: prep.branch_name,
+    repo: `${prep.repo_owner}/${prep.repo_name}`,
+  }
+
+  // ── (A) 如果有 PR：先 verify state → 未 merged 才可 close；merged 直接 fail-closed ──
+  let prClosed = false
+  if (opened) {
+    detail.pr_number = opened.pr_number
+    detail.pr_url = opened.pr_url
+
+    let prState: { state: 'open' | 'closed'; merged: boolean; mergedAt: string | null } | null = null
+    try {
+      prState = await gh.getPullRequestState(prep.repo_owner, prep.repo_name, opened.pr_number)
+    } catch (e) {
+      if (e instanceof GitHubApiError && e.status === 404) {
+        // PR 已不存在 —— 视为已撤，走 branch 清理
+        detail.pr_state = '404_not_found'
+        prClosed = true
+      } else {
+        return {
+          ok: false,
+          rollbackKind: 'provider_native',
+          detail,
+          failure_reason: `getPullRequestState 失败：${e instanceof Error ? e.message : String(e)}`,
+        }
+      }
+    }
+
+    if (prState) {
+      // 🔴 关键 fail-closed：PR 已 merge → 绝不 close、绝不 delete branch
+      if (prState.merged === true) {
+        return {
+          ok: false,
+          rollbackKind: 'provider_native',
+          detail: { ...detail, pr_state: 'merged', merged_at: prState.mergedAt },
+          failure_reason:
+            `拒绝 rollback：Draft PR #${opened.pr_number} 已被合并，v1 不做 post-merge revert；` +
+            `分支也**不**删（避免破坏 main 上已合的历史）；请人工判断`,
+        }
+      }
+      // 已 closed 且未 merge → 幂等成功；否则 close 掉
+      if (prState.state === 'closed') {
+        detail.pr_state = 'already_closed'
+        prClosed = true
+      } else {
+        try {
+          await gh.closePullRequest(prep.repo_owner, prep.repo_name, opened.pr_number)
+          detail.pr_state = 'closed_by_rollback'
+          prClosed = true
+        } catch (e) {
+          if (e instanceof GitHubApiError && e.status === 404) {
+            detail.pr_state = '404_on_close'
+            prClosed = true
+          } else {
+            return {
+              ok: false,
+              rollbackKind: 'provider_native',
+              detail,
+              failure_reason: `closePullRequest 失败：${e instanceof Error ? e.message : String(e)}`,
+            }
+          }
+        }
+      }
+    }
+  } else {
+    // 没有 open_pr priorOutput → 但 commit 已成 → 只需删分支
+    detail.pr_state = 'never_opened'
+  }
+
+  // ── (B) 删分支：404 视为幂等成功；其它错误 fail ──────────────────────────
+  try {
+    await gh.deleteBranch(prep.repo_owner, prep.repo_name, prep.branch_name)
+    detail.branch_state = 'deleted_by_rollback'
+  } catch (e) {
+    if (e instanceof GitHubApiError && e.status === 404) {
+      detail.branch_state = '404_not_found'
+    } else {
+      return {
+        ok: false,
+        rollbackKind: 'provider_native',
+        detail: { ...detail, pr_closed: prClosed },
+        failure_reason: `deleteBranch 失败：${e instanceof Error ? e.message : String(e)}`,
+      }
+    }
+  }
+
+  return { ok: true, rollbackKind: 'provider_native', detail }
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 export function createPageApplyOptimizationCapability(
@@ -744,8 +961,12 @@ export function createPageApplyOptimizationCapability(
     actionKey: 'page.apply_optimization_request',
     version: 1,
     steps: {
-      async prepare({ ctx }) {
-        return stepPrepare(sb, deps, { runId: ctx.runId, clientId: ctx.clientId })
+      async prepare({ ctx, runInput }) {
+        return stepPrepare(deps, {
+          runId: ctx.runId,
+          clientId: ctx.clientId,
+          input: parseRunInput(runInput),
+        })
       },
       async commit({ ctx, priorOutputs }) {
         return stepCommit(sb, deps, { runId: ctx.runId, clientId: ctx.clientId, priorOutputs })
@@ -758,14 +979,16 @@ export function createPageApplyOptimizationCapability(
           priorOutputs,
         })
       },
-      async record({ ctx, priorOutputs }) {
+      async record({ ctx, runInput, priorOutputs }) {
         return stepRecord(sb, deps, {
           runId: ctx.runId,
           clientId: ctx.clientId,
           decisionId: ctx.decisionId,
+          input: parseRunInput(runInput),
           priorOutputs,
         })
       },
     },
+    rollback: (step, priorOutputs) => rollbackHandler(deps, step, priorOutputs),
   }
 }

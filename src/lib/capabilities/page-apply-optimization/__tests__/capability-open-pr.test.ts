@@ -46,6 +46,7 @@ describe('open_pr · draft:true', () => {
 
     const result = await cap.steps.open_pr({
       ctx: fakeCtx(), stepKey: 'open_pr', attempt: 1, idempotencyKey: 'x',
+      runInput: {},
       priorOutputs: { prepare: prepOutput as unknown as Record<string, unknown> },
     })
 
@@ -85,6 +86,7 @@ describe('open_pr · draft:true', () => {
     }
     const result = await cap.steps.open_pr({
       ctx: fakeCtx(), stepKey: 'open_pr', attempt: 1, idempotencyKey: 'x',
+      runInput: {},
       priorOutputs: { prepare: prepOutput as unknown as Record<string, unknown> },
     })
     expect(result.output.pr_number).toBe(99)
@@ -113,6 +115,7 @@ describe('open_pr · draft:true', () => {
     }
     await expect(cap.steps.open_pr({
       ctx: fakeCtx(), stepKey: 'open_pr', attempt: 1, idempotencyKey: 'x',
+      runInput: {},
       priorOutputs: { prepare: prepOutput as unknown as Record<string, unknown> },
     })).rejects.toMatchObject({
       code: 'INVALID_STATE',
@@ -142,6 +145,7 @@ describe('open_pr · draft:true', () => {
     }
     await expect(cap.steps.open_pr({
       ctx: fakeCtx(), stepKey: 'open_pr', attempt: 1, idempotencyKey: 'x',
+      runInput: {},
       priorOutputs: { prepare: prepOutput as unknown as Record<string, unknown> },
     })).rejects.toThrow(/pr_open_failed/)
   })

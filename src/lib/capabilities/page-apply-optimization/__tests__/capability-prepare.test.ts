@@ -104,10 +104,13 @@ function makeInput(overrides?: Partial<Record<string, unknown>>): Record<string,
 }
 
 async function runPrepare(deps: PageApplyOptimizationDeps, input: Record<string, unknown>) {
+  // 🔴 #1108 Kernel Outward Hardening 之后 capability 从 ctx.runInput 读输入，
+  //    sb 不再承担 input 回读职责（保留只是为了继续测 loadDecisionExists）。
   const sb = makeFakeSb({ run1: { input } })
   const cap = createPageApplyOptimizationCapability(sb, deps)
   const step: CapabilityStepContext = {
     ctx: fakeCtx(), stepKey: 'prepare', attempt: 1, idempotencyKey: 'x', priorOutputs: {},
+    runInput: input,
   }
   return cap.steps.prepare(step)
 }

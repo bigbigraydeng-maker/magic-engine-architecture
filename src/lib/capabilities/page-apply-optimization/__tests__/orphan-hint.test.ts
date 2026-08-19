@@ -76,6 +76,7 @@ describe('orphan-hint · stepCommit stale', () => {
     try {
       await cap.steps.commit({
         ctx: ctx(), stepKey: 'commit', attempt: 1, idempotencyKey: 'x',
+        runInput: {},
         priorOutputs: { prepare: PREP as unknown as Record<string, unknown> },
       })
     } catch (e) { caught = e }
@@ -104,6 +105,7 @@ describe('orphan-hint · stepOpenPr 状态不自洽路径', () => {
     try {
       await cap.steps.open_pr({
         ctx: ctx(), stepKey: 'open_pr', attempt: 1, idempotencyKey: 'x',
+        runInput: {},
         priorOutputs: { prepare: PREP as unknown as Record<string, unknown> },
       })
     } catch (e) { caught = e }
@@ -123,6 +125,7 @@ describe('orphan-hint · stepOpenPr 状态不自洽路径', () => {
     try {
       await cap.steps.open_pr({
         ctx: ctx(), stepKey: 'open_pr', attempt: 1, idempotencyKey: 'x',
+        runInput: {},
         priorOutputs: { prepare: PREP as unknown as Record<string, unknown> },
       })
     } catch (e) { caught = e }
@@ -143,6 +146,7 @@ describe('orphan-hint · stepOpenPr retryable', () => {
     try {
       await cap.steps.open_pr({
         ctx: ctx(), stepKey: 'open_pr', attempt: 1, idempotencyKey: 'x',
+        runInput: {},
         priorOutputs: { prepare: PREP as unknown as Record<string, unknown> },
       })
     } catch (e) { caught = e }
@@ -219,6 +223,7 @@ describe('orphan-hint · round-2 边缘 conn-null / decision-lookup', () => {
     try {
       await cap.steps.open_pr({
         ctx: ctx(), stepKey: 'open_pr', attempt: 1, idempotencyKey: 'x',
+        runInput: {},
         priorOutputs: { prepare: PREP as unknown as Record<string, unknown> },
       })
     } catch (e) { caught = e }
@@ -241,6 +246,7 @@ describe('orphan-hint · round-2 边缘 conn-null / decision-lookup', () => {
     try {
       await cap.steps.record({
         ctx: ctx(), stepKey: 'record', attempt: 1, idempotencyKey: 'x',
+        runInput: RUN_INPUT,
         priorOutputs: {
           prepare: PREP_RECORD as unknown as Record<string, unknown>,
           open_pr: { pr_number: PR_NUMBER, pr_url: PR_URL },
@@ -281,6 +287,7 @@ describe('orphan-hint · round-2 边缘 conn-null / decision-lookup', () => {
     const cap = createPageApplyOptimizationCapability(sb, { ...connDeps(), createGithubClient: () => gh })
     const r = await cap.steps.record({
       ctx: ctx(), stepKey: 'record', attempt: 1, idempotencyKey: 'x',
+      runInput: RUN_INPUT,
       priorOutputs: {
         prepare: PREP_RECORD as unknown as Record<string, unknown>,
         open_pr: { pr_number: PR_NUMBER, pr_url: PR_URL },
@@ -321,6 +328,7 @@ describe('orphan-hint · 防御 · slug 注入拒渲染 URL', () => {
     try {
       await cap.steps.commit({
         ctx: ctx(), stepKey: 'commit', attempt: 1, idempotencyKey: 'x',
+        runInput: {},
         priorOutputs: { prepare: badPrep as unknown as Record<string, unknown> },
       })
     } catch (e) { caught = e }
@@ -350,6 +358,7 @@ describe('orphan-hint · stepRecord verification failure', () => {
     const cap = createPageApplyOptimizationCapability(sbForRecord(), { ...connDeps(), createGithubClient: () => gh })
     const result = await cap.steps.record({
       ctx: ctx(), stepKey: 'record', attempt: 1, idempotencyKey: 'x',
+      runInput: RUN_INPUT,
       priorOutputs: {
         prepare: PREP_RECORD as unknown as Record<string, unknown>,
         open_pr: { pr_number: PR_NUMBER, pr_url: PR_URL },

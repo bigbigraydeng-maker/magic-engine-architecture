@@ -116,6 +116,8 @@ async function runRecord(gh: any, decisionExists = true, runInput = RUN_INPUT) {
   const cap = createPageApplyOptimizationCapability(sb, deps(gh))
   return cap.steps.record({
     ctx: ctx(), stepKey: 'record', attempt: 1, idempotencyKey: 'x',
+    // 🔴 #1108 后：do_not_touch 从 ctx.runInput 读，sb 保留只测 loadDecisionExists
+    runInput,
     priorOutputs: {
       prepare: PREPARE_OUTPUT as unknown as Record<string, unknown>,
       open_pr: { pr_number: 7, pr_url: 'https://github.com/o/r/pull/7' },

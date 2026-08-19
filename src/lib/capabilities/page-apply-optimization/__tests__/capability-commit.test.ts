@@ -44,6 +44,8 @@ async function runCommit(gh: any) {
   })
   return cap.steps.commit({
     ctx: ctx(), stepKey: 'commit', attempt: 1, idempotencyKey: 'x',
+    // stepCommit 不用 runInput，但 CapabilityStepContext 类型层要求 —— 传空对象即可
+    runInput: {},
     priorOutputs: { prepare: PREP as unknown as Record<string, unknown> },
   })
 }
