@@ -38,6 +38,7 @@ import {
   ensureSteps,
   getActivePolicy,
   getDecision,
+  getRollbackStep,
   insertRollbackStep,
   listSteps,
   updateRun,
@@ -347,6 +348,26 @@ export async function executeAuthorizedRun(
     //    的 Action 装配时必须已经提供 rollback handler。缺就在这里 fail-closed，
     //    绝不 beginAuthorizedRun、绝不消费授权 —— 补上 handler 后 approval 可以再用。
     assertRollbackHandlerAssembled(definition, assembled)
+  } else if (
+    // 🔴 A 级复审 P1-2 修复（子牙/魏征）：**outward + provider_native + capability
+    //    完全未装配**的死角。原来 `if (assembled)` 分支只在 assembled 非空时才验
+    //    rollback handler，capability 整个没注册时 gate 被绕过 —— 流程走
+    //    beginAuthorizedRun 消费掉授权、再 fail CAPABILITY_NOT_IMPLEMENTED，违背
+    //    「补上 handler 后 approval 可以再用」的 spec 承诺。
+    //
+    //    修复只覆盖 outward + provider_native（有 rollback 契约的动作）：
+    //    这类必须在 beginAuthorizedRun 之前 fail，不消费授权。**非 outward 的动作
+    //    保留既有 dead_letter + needs_human 行为**（PM 看到待办可以处理），
+    //    因为它们没有「rollback 装配契约」，也没有 provider 副作用要保护。
+    definition.sideEffect === 'outward' &&
+    definition.outwardAuthorization?.rollback === 'provider_native'
+  ) {
+    throw new KernelError(
+      'CAPABILITY_NOT_IMPLEMENTED',
+      `「${definition.title}」这个动作声明了对外副作用 + provider-native rollback，但装配的 capability ` +
+        `整个没注册 —— 已在 beginAuthorizedRun 之前停手（授权决策未消费，装配好后可复用同一份 approval）`,
+      { detail: { actionKey: ctx.actionKey, sideEffect: 'outward', rollback: 'provider_native' } },
+    )
   }
 
   // ⑥ 🔴 原子领取「这个 run 的唯一执行权」。
@@ -364,6 +385,8 @@ export async function executeAuthorizedRun(
   if (!begun.ok) throw beginFailureToError(begun.reason)
 
   // ⑦ capability 必须有实现。没有 ≠ 跳过。
+  //    （非 outward 动作走这一段：既有 dead_letter + needs_human 行为，PM 处理。
+  //     outward + provider_native 已在上面 P1-2 修复分支拦下，走不到这里。）
   const capability = deps.capabilities[ctx.actionKey] as CapabilityImplementation | undefined
   if (!capability) {
     const claimed = await deps.requireRun(run.id)
@@ -1298,6 +1321,26 @@ async function invokeRollbackHandler(
   rollbackContext: RollbackContext,
 ): Promise<{ step: ActionRunStep | null; note: string }> {
   const { ctx, capability, verifiedRunInput, priorOutputs } = rollbackContext
+
+  // 🔴 A 级复审 P1-1 修复（魏征）：**在调 handler 之前先看有没有 lineage 行**。
+  //
+  //    真实场景：A 跑到 failRun → 调 capability.rollback() 成功 → insertRollbackStep
+  //    成功 → 但紧接着的 updateRunFenced 因为 B 已接管而 fence-lost 抛 STALE_CLAIM。
+  //    此刻 DB 上已有 rollback lineage 行（succeeded），run 状态却没被推到 dead_letter。
+  //    B 接管后若绕过 parkTakeoverForHuman（e.g. providerIdempotency='supported'）继续
+  //    执行、又 fail、再进 failRun → 若这里不查 lineage 就再次调 capability.rollback()。
+  //    Handler 层双调对幂等 provider 也许无害，但契约不假设所有 provider 都幂等 ——
+  //    要 fail-closed 挡在 handler 之前，不能只靠 UNIQUE (run_id, step_key) 挡 DB 行。
+  //
+  //    命中已有 lineage → 直接返回既有结果的 note，不重调 handler。
+  //    这是「rollback 只做一次」在**执行**层面的强制，跟 recovery gate 在 resume
+  //    层面的强制配对使用。
+  const existing = await getRollbackStep(deps.supabase, run.id)
+  if (existing && (existing.status === 'succeeded' || existing.status === 'failed' || existing.status === 'skipped')) {
+    const priorResult = rollbackResultFromStep(existing)
+    return { step: existing, note: composeRollbackNote(priorResult) }
+  }
+
   const rollbackStepContext = {
     ctx,
     stepKey: 'rollback',
@@ -1311,11 +1354,15 @@ async function invokeRollbackHandler(
   try {
     result = await capability.rollback!(rollbackStepContext, priorOutputs)
   } catch (e) {
+    // 🔴 A 级复审 P1-4 修复（魏征）：非 Error 对象用 String(e) 会变 "[object Object]"，
+    //    丢掉排错所需的结构信息（e.g. `throw { code: 'PROVIDER_FAILED', body: {...} }`）。
+    //    分三档：Error 走 .message；plain object 走 JSON.stringify（防循环）；其它 String()。
+    const reason = describeUnknownError(e)
     result = {
       ok: false,
       rollbackKind: 'provider_native',
-      detail: { thrown: e instanceof Error ? e.message : String(e) },
-      failure_reason: e instanceof Error ? e.message : String(e),
+      detail: { thrown: reason },
+      failure_reason: reason,
     }
   }
 
@@ -1331,6 +1378,36 @@ async function invokeRollbackHandler(
 
   const note = composeRollbackNote(result)
   return { step: inserted, note }
+}
+
+/** 从既有 rollback lineage 行反组回 OutwardRollbackResult（用于 P1-1 命中既有分支）。 */
+function rollbackResultFromStep(step: ActionRunStep): OutwardRollbackResult {
+  const output = (step.output ?? {}) as { rollback_kind?: unknown; detail?: unknown }
+  const rollbackKind: OutwardRollbackResult['rollbackKind'] =
+    output.rollback_kind === 'noop' ? 'noop' : 'provider_native'
+  const detail = (output.detail && typeof output.detail === 'object'
+    ? (output.detail as Record<string, unknown>)
+    : {}) as Readonly<Record<string, unknown>>
+  return {
+    ok: step.status === 'succeeded' || step.status === 'skipped',
+    rollbackKind,
+    detail,
+    ...(step.last_error ? { failure_reason: step.last_error } : {}),
+  }
+}
+
+/** 排错文本兜底：Error → .message；plain object → JSON.stringify（吞循环）；其它 → String()。 */
+function describeUnknownError(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (e !== null && typeof e === 'object') {
+    try {
+      return JSON.stringify(e)
+    } catch {
+      // 循环引用或 BigInt 等无法序列化 —— 兜底
+      return Object.prototype.toString.call(e)
+    }
+  }
+  return String(e)
 }
 
 function composeRollbackNote(result: OutwardRollbackResult): string {

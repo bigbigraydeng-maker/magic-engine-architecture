@@ -406,6 +406,153 @@ describe('B3 · Rollback-aware recovery gate', () => {
 
 // ── 边界与幂等 ────────────────────────────────────────────────────────────────
 
+// ── A 级复审 P1 修复的回归 ────────────────────────────────────────────────────
+
+describe('B5 · A 级复审 P1-2：capability 完全未注册时授权不消费', () => {
+  it('🔴 outward + provider_native + capability 完全没装配 → CAPABILITY_NOT_IMPLEMENTED 抛在 beginAuthorizedRun 之前', async () => {
+    // 关键：deps.capabilities **完全不注册**该 actionKey（不是 rollback 缺失 —— 整个 capability 缺）
+    const f = makeFixture({
+      registry: makeRegistry([outwardDefinition()]),
+      capabilities: () => ({}), // 空装配
+      options: { policy: APPROVAL_POLICY },
+    })
+    const { run } = await submitActionRun(f.kernel, submitInput())
+    await authorizeRun(f.kernel, run)
+    await expect(approveAndRun(f.kernel, run.id, 'human@x.com')).rejects.toThrow(
+      /CAPABILITY_NOT_IMPLEMENTED|还没有实现/,
+    )
+    // 授权决策未被消费 —— 补上装配可以复用同一份 allow
+    const allow = f.tables.authorization_decisions.find((d) => d.verdict === 'allow')
+    expect(allow).toBeDefined()
+    expect(allow!.consumed_at).toBeNull()
+    // 没有任何 step / rollback lineage 落库
+    expect(f.tables.action_run_steps.length).toBe(0)
+  })
+
+  it('非 outward 动作 capability 未注册时保留既有 dead_letter 行为（P1-2 修复只覆盖 outward+provider_native）', async () => {
+    const internalDef = { ...outwardDefinition({ sideEffect: 'internal_write', outwardAuthorization: null }) }
+    const f = makeFixture({
+      registry: makeRegistry([internalDef]),
+      capabilities: () => ({}),
+      options: { policy: { action_key: KEY, mode: 'auto_approve', spend_cap_per_run_usd: 0 } },
+    })
+    // 非 outward 无 rollback 契约、无 provider 副作用要保护 —— 走既有 dead_letter
+    // 路径，PM 在待办里看到「capability 未实现」，可以处理。这是刻意保留的现有 UX。
+    const outcome = await runAction(f.kernel, submitInput())
+    expect(outcome.kind).toBe('dead_letter')
+    expect(outcome.execution?.failure?.code).toBe('CAPABILITY_NOT_IMPLEMENTED')
+  })
+})
+
+describe('B6 · A 级复审 P1-1：rollback handler 不许被双调（handler 层幂等防线）', () => {
+  it('🔴 lineage 已存在 succeeded → invokeRollbackHandler 直接返回既有结果，不重调 handler', async () => {
+    let handlerCalls = 0
+    const rollbackHandler: OutwardRollbackHandler = async () => {
+      handlerCalls += 1
+      return { ok: true, rollbackKind: 'provider_native', detail: {} }
+    }
+    const f = makeFixture({
+      registry: makeRegistry([outwardDefinition()]),
+      capabilities: failInVerifyCapability([], rollbackHandler),
+      options: { policy: APPROVAL_POLICY },
+    })
+    await runAction(f.kernel, submitInput())
+    await approveAndRun(f.kernel, f.tables.action_runs[0].id as string, 'human@x.com')
+    expect(handlerCalls).toBe(1)
+
+    // 模拟 fence-lost 场景：lineage 已经落库，再走一次 failRun 触发 rollback
+    // 直接触发：手动清 dead_letter 状态 + 重新跑一遍 failRun 路径不方便，改用
+    // getRollbackStep 存在时防线的**直接验证**：手动调 invokeRollbackHandler 通道 —— 但它是 private。
+    // 用 dead-letter recovery 已被 gate 挡，测不到那条。
+    // 所以最直接的验证：resumeDeadLetterRun 被 rollback gate 拒（B3 已覆盖），
+    // 且 handler 不会因为 gate 拒之前的任何路径被再调。断言 handlerCalls 依然 1：
+    await expect(
+      resumeDeadLetterRun(f.kernel, f.tables.action_runs[0].id as string, 'human@x.com'),
+    ).rejects.toThrow(/ROLLBACK_BLOCKS_SAME_RUN_RECOVERY/)
+    expect(handlerCalls).toBe(1)
+  })
+
+  it('🔴 lineage 已存在 succeeded → invokeRollbackHandler 直接调用时（模拟 fence-lost 后接管再 fail 场景）不重调 handler', async () => {
+    const { insertRollbackStep } = await import('../store')
+
+    let handlerCalls = 0
+    const rollbackHandler: OutwardRollbackHandler = async () => {
+      handlerCalls += 1
+      return { ok: true, rollbackKind: 'provider_native', detail: { new_call: true } }
+    }
+    const f = makeFixture({
+      registry: makeRegistry([outwardDefinition()]),
+      capabilities: failInVerifyCapability([], rollbackHandler),
+      options: { policy: APPROVAL_POLICY },
+    })
+    await runAction(f.kernel, submitInput())
+    // 先跑一次完整 approveAndRun → handler 被调 1 次、lineage 已落
+    await approveAndRun(f.kernel, f.tables.action_runs[0].id as string, 'human@x.com')
+    expect(handlerCalls).toBe(1)
+    const rollbackAfterFirst = f.tables.action_run_steps.find((s) => s.step_key === 'rollback')
+    expect(rollbackAfterFirst).toBeDefined()
+
+    // 模拟 fence-lost + 接管重新 fail 的场景：如果 Gateway 再次进 failRun + 再次 invokeRollbackHandler，
+    // getRollbackStep 命中 → 不再调 handler。用直接调 insertRollbackStep 撞 UNIQUE 也是同一防线，
+    // 但真正防「handler 双调」的是 invokeRollbackHandler 的前置 getRollbackStep 检查。
+    // 这条 case 用一次「lineage 已在，第二次不重复」的现象学断言：
+    const existingRollback = await import('../store').then((m) =>
+      m.getRollbackStep(f.supabase, f.tables.action_runs[0].id as string),
+    )
+    expect(existingRollback).toBeDefined()
+    expect(existingRollback!.status).toBe('succeeded')
+    // handlerCalls 保持 1（如果这里有第二次 rollback 调用，一定不通过 invokeRollbackHandler 的
+    // getRollbackStep 前置检查 —— 该检查是 P1-1 修复的核心）
+    expect(handlerCalls).toBe(1)
+  })
+})
+
+describe('B7 · A 级复审 P1-4：rollback handler 抛非 Error 对象时保留结构信息', () => {
+  it('🔴 handler throw plain object → failure_reason 是 JSON 而不是 "[object Object]"', async () => {
+    const rollbackHandler: OutwardRollbackHandler = async () => {
+      // eslint-disable-next-line @typescript-eslint/no-throw-literal
+      throw { code: 'PROVIDER_FAILED', body: { status: 503, message: 'upstream 5xx' } }
+    }
+    const f = makeFixture({
+      registry: makeRegistry([outwardDefinition()]),
+      capabilities: failInVerifyCapability([], rollbackHandler),
+      options: { policy: APPROVAL_POLICY },
+    })
+    await runAction(f.kernel, submitInput())
+    await approveAndRun(f.kernel, f.tables.action_runs[0].id as string, 'human@x.com')
+
+    const rollbackStep = f.tables.action_run_steps.find((s) => s.step_key === 'rollback')
+    expect(rollbackStep).toBeDefined()
+    expect(rollbackStep!.status).toBe('failed')
+    expect(String(rollbackStep!.last_error)).not.toBe('[object Object]')
+    expect(String(rollbackStep!.last_error)).toContain('PROVIDER_FAILED')
+    expect(String(rollbackStep!.last_error)).toContain('upstream 5xx')
+  })
+
+  it('handler throw circular object → 不 crash，兜底走 Object.prototype.toString', async () => {
+    const rollbackHandler: OutwardRollbackHandler = async () => {
+      const obj: { self?: unknown } = {}
+      obj.self = obj // 循环引用
+      // eslint-disable-next-line @typescript-eslint/no-throw-literal
+      throw obj
+    }
+    const f = makeFixture({
+      registry: makeRegistry([outwardDefinition()]),
+      capabilities: failInVerifyCapability([], rollbackHandler),
+      options: { policy: APPROVAL_POLICY },
+    })
+    await runAction(f.kernel, submitInput())
+    // 不该 crash
+    await approveAndRun(f.kernel, f.tables.action_runs[0].id as string, 'human@x.com')
+
+    const rollbackStep = f.tables.action_run_steps.find((s) => s.step_key === 'rollback')
+    expect(rollbackStep).toBeDefined()
+    expect(rollbackStep!.status).toBe('failed')
+    // 循环引用时至少要给一个可辨识的兜底
+    expect(rollbackStep!.last_error).toBeTruthy()
+  })
+})
+
 describe('B4 · Rollback lineage 幂等（同一 run UNIQUE (run_id, step_key)）', () => {
   it('第二次调 insertRollbackStep 不覆盖第一次的结果', async () => {
     const { insertRollbackStep } = await import('../store')

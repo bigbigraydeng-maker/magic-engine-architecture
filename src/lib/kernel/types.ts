@@ -462,6 +462,14 @@ export interface OutwardRollbackResult {
  * · 返回 `OutwardRollbackResult` 三态，Gateway 按状态写 lineage。
  * · 抛异常 = failed（异常本身作 failure_reason）。handler 内部**不许**抛
  *    `RetryableCapabilityError` —— rollback 不重试（重试可能撤第二次）。
+ *
+ * 🔴 **幂等义务（A 级复审 P1-3 契约补充）**：handler 必须对同一 `run` 的重复调用
+ *    幂等。Gateway 的 `invokeRollbackHandler` 会先查 `action_run_steps(step_key='rollback')`
+ *    lineage 行 —— 命中 succeeded/failed/skipped 就跳过 handler，这是**第一道**防线。
+ *    但在 fence-lost 或崩溃 + 接管场景里存在一个理论窗口：A 已调 provider 撤回、
+ *    lineage 未落库前进程死掉，B 接管重新触发 rollback —— 此时 handler 会被真的
+ *    调用第二次。所以 handler 层面**也必须**幂等：例如 `close-PR-already-closed`
+ *    返回 404 时静默吞掉（视为「已撤」而不是失败）。
  */
 export type OutwardRollbackHandler = (
   step: CapabilityStepContext,
