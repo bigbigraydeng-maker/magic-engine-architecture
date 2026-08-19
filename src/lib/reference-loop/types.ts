@@ -122,11 +122,29 @@ export interface ReferenceLoopEvidenceRef {
 }
 
 /**
- * 可评审的准备结果——完整血缘 + 五段中间产物 + 验证定义 + provenance。
+ * 授权准备度——由 adapter 从 `validation.ok` 直接派生，**调用方不可注入**。
+ *
+ * 🔴 语义严格如下（Build Control 2026-08-19 木桶闭环）：
+ *    · `validation_passed` = 五段准备完成且验证判定通过；**仅允许**将
+ *      `preparation.request` 提交给下一环授权评估（Kernel）。**不代表已授权，
+ *      不代表 apply/publish 被允许。**
+ *    · `validation_failed` = 五段准备完成但验证判定失败；只允许作为 review
+ *      artifact 展示与解释，**不许进入授权候选队列**。
+ *
+ * 🔴 加这个字段不是为了替 Kernel 做决定，而是把「validation 判定」与「结果本身
+ *    ok:true」在类型面上明确区分开，防止下游只看 `result.ok` 就把 request 塞给
+ *    Kernel。Kernel 无论如何仍会依 WP07 政策二次校验，本字段是上游拦截。
+ */
+export type ReferenceLoopAuthorizationReadiness = 'validation_passed' | 'validation_failed'
+
+/**
+ * 可评审的准备结果——完整血缘 + 五段中间产物 + 验证定义 + provenance +
+ * 由 adapter 派生的授权准备度。
  *
  * 🔴 **本对象不携带任何授权字段**（`approved` / `authorized` / `actionKey` /
  *    `risk` / `sideEffect` / `policy`）。授权只能由 Kernel 依客户政策签发；
- *    这里只产出**候选**（WP00 §5.4）。
+ *    这里只产出**候选**（WP00 §5.4）。`authorizationReadiness` 只表示是否
+ *    「可以进入下一环授权评估」，不是授权本身。
  */
 export interface ReferenceLoopPreparation {
   readonly clientId: string
@@ -142,12 +160,42 @@ export interface ReferenceLoopPreparation {
   readonly validation: PageValidationResult
   readonly verification: GrowthVerificationDefinition
   readonly provenance: ReferenceLoopProvenance
+  /** 由 adapter 从 `validation.ok` 派生；不接受调用方注入。 */
+  readonly authorizationReadiness: ReferenceLoopAuthorizationReadiness
 }
 
 // ── Result (discriminated union) ────────────────────────────────────────────
 
-/** 失败发生在哪一段——`input` 覆盖调用方输入不合法，其余四段与 WP06 五段对齐。 */
+/** 失败发生在哪一段——`input` 覆盖调用方输入不合法，其余三段与 WP06 五段对齐。 */
 export type ReferenceLoopFailureStage = 'input' | 'resolve' | 'draft' | 'diff'
+
+/**
+ * 稳定的 machine-readable 失败码——**只覆盖当前实际产生失败的分支**，
+ * 不预测未来错误类别。下游按 `code` 分派 UI/retry 逻辑，不许解析中文 `reason`。
+ *
+ * 🔴 加新分支时同步加 code；删分支时同步删 code。code 是稳定 API 的一部分，
+ *    重命名等同破坏契约（同 WP00 §8.3 第 5 条）。
+ */
+export type ReferenceLoopFailureCode =
+  // stage = 'input'
+  | 'client_id_empty'
+  | 'target_page_url_empty'
+  | 'finding_invalid'
+  | 'prescription_invalid'
+  | 'verification_invalid'
+  | 'prescription_lineage_mismatch'
+  | 'finding_refs_empty'
+  | 'finding_refs_contains_invalid'
+  | 'intents_empty'
+  | 'intents_field_out_of_vocab'
+  | 'intents_proposed_value_invalid'
+  | 'intents_duplicate_field'
+  // stage = 'resolve'
+  | 'canonical_identity_unknown'
+  // stage = 'draft'
+  | 'draft_failed'
+  // stage = 'diff'
+  | 'diff_failed'
 
 /**
  * 顶层结果。
@@ -156,7 +204,15 @@ export type ReferenceLoopFailureStage = 'input' | 'resolve' | 'draft' | 'diff'
  *    产出的是一个判定（`PageValidationResult`），无论通过与否都被原样带回；
  *    preparation 本身不因 validate 判失败就变成 `ok:false`。这样调用方能同时
  *    拿到「准备做完了」和「不许 apply 的判定 + 违规清单」，用于评审与解释。
+ *    参见 `preparation.authorizationReadiness` —— 判定通过与否在那里表达。
+ *
+ * 🔴 失败分支必带 `code`（机读稳定）+ `reason`（人读，可本地化，**不作为 API**）。
  */
 export type ReferenceLoopResult =
   | { readonly ok: true; readonly preparation: ReferenceLoopPreparation }
-  | { readonly ok: false; readonly stage: ReferenceLoopFailureStage; readonly reason: string }
+  | {
+      readonly ok: false
+      readonly stage: ReferenceLoopFailureStage
+      readonly code: ReferenceLoopFailureCode
+      readonly reason: string
+    }

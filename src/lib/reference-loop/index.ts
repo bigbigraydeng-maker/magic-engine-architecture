@@ -11,7 +11,9 @@
  */
 
 export type {
+  ReferenceLoopAuthorizationReadiness,
   ReferenceLoopEvidenceRef,
+  ReferenceLoopFailureCode,
   ReferenceLoopFailureStage,
   ReferenceLoopInput,
   ReferenceLoopPreparation,

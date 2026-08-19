@@ -203,6 +203,9 @@ describe('happy path — finding + prescription → 合法 PageOptimizationReque
     expect(p.verification).toEqual(verification)
     expect(p.provenance.collectedAt).toBe(FIXTURE_ISO)
     expect(p.provenance.snapshotSource).toBe('test.fixture.github')
+
+    // adapter 派生的授权准备度：validation 通过 → validation_passed
+    expect(p.authorizationReadiness).toBe('validation_passed')
   })
 
   it('WordPress snapshot 同样能走通（触及 draft/diff 的 WP 分支）', () => {
@@ -228,99 +231,118 @@ describe('happy path — finding + prescription → 合法 PageOptimizationReque
 // ── stage: input ────────────────────────────────────────────────────────────
 
 describe('stage=input — 输入非法一律 typed 失败，不吞异常', () => {
-  it('clientId 为空 → input 失败', () => {
+  it('clientId 为空 → input 失败（code=client_id_empty）', () => {
     const r = prepareReferenceLoopChange(baseInput({ clientId: '' }))
-    expect(r).toMatchObject({ ok: false, stage: 'input' })
+    expect(r).toMatchObject({ ok: false, stage: 'input', code: 'client_id_empty' })
     if (!r.ok) expect(r.reason).toContain('clientId')
   })
 
-  it('targetPageUrl 为空 → input 失败', () => {
+  it('targetPageUrl 为空 → input 失败（code=target_page_url_empty）', () => {
     const r = prepareReferenceLoopChange(baseInput({ targetPageUrl: '' }))
-    expect(r).toMatchObject({ ok: false, stage: 'input' })
+    expect(r).toMatchObject({ ok: false, stage: 'input', code: 'target_page_url_empty' })
   })
 
-  it('findingRefs 为空 → input 失败（请求要能指回 Finding）', () => {
+  it('findingRefs 为空 → input 失败（code=finding_refs_empty）', () => {
     const r = prepareReferenceLoopChange(baseInput({ findingRefs: [] }))
-    expect(r).toMatchObject({ ok: false, stage: 'input' })
+    expect(r).toMatchObject({ ok: false, stage: 'input', code: 'finding_refs_empty' })
     if (!r.ok) expect(r.reason).toContain('findingRefs')
   })
 
-  it('intents 为空 → input 失败（没有字段提案就没有可起草的内容）', () => {
+  it('findingRefs 含空串 → input 失败（code=finding_refs_contains_invalid）', () => {
+    const r = prepareReferenceLoopChange(baseInput({ findingRefs: ['ok', ''] }))
+    expect(r).toMatchObject({ ok: false, stage: 'input', code: 'finding_refs_contains_invalid' })
+  })
+
+  it('intents 为空 → input 失败（code=intents_empty）', () => {
     const r = prepareReferenceLoopChange(baseInput({ intents: [] }))
-    expect(r).toMatchObject({ ok: false, stage: 'input' })
+    expect(r).toMatchObject({ ok: false, stage: 'input', code: 'intents_empty' })
     if (!r.ok) expect(r.reason).toContain('intents')
   })
 
-  it('intents 里字段不在冻结字段词汇内 → input 失败', () => {
+  it('intents 里字段不在冻结字段词汇内 → input 失败（code=intents_field_out_of_vocab）', () => {
     const bad = [{ field: 'og_image' as unknown as PageOptimizationIntent['field'], proposedValue: 'x', semanticIntent: { known: false, reason: 'not_applicable' } as const }]
     const r = prepareReferenceLoopChange(baseInput({ intents: bad }))
-    expect(r).toMatchObject({ ok: false, stage: 'input' })
+    expect(r).toMatchObject({ ok: false, stage: 'input', code: 'intents_field_out_of_vocab' })
     if (!r.ok) expect(r.reason).toContain('og_image')
   })
 
-  it('同字段两条 intent → input 失败', () => {
+  it('intents.proposedValue 为空 → input 失败（code=intents_proposed_value_invalid）', () => {
+    const bad: readonly PageOptimizationIntent[] = [
+      { field: 'meta_title', proposedValue: '', semanticIntent: { known: false, reason: 'not_applicable' } },
+    ]
+    const r = prepareReferenceLoopChange(baseInput({ intents: bad }))
+    expect(r).toMatchObject({ ok: false, stage: 'input', code: 'intents_proposed_value_invalid' })
+  })
+
+  it('同字段两条 intent → input 失败（code=intents_duplicate_field）', () => {
     const dup: readonly PageOptimizationIntent[] = [
       { field: 'meta_title', proposedValue: 'a', semanticIntent: { known: false, reason: 'not_applicable' } },
       { field: 'meta_title', proposedValue: 'b', semanticIntent: { known: false, reason: 'not_applicable' } },
     ]
     const r = prepareReferenceLoopChange(baseInput({ intents: dup }))
-    expect(r).toMatchObject({ ok: false, stage: 'input' })
+    expect(r).toMatchObject({ ok: false, stage: 'input', code: 'intents_duplicate_field' })
     if (!r.ok) expect(r.reason).toMatch(/不止一次/)
   })
 
-  it('prescription 不覆盖给定的 finding → input 失败（血缘对不上）', () => {
+  it('prescription 不覆盖给定的 finding → input 失败（code=prescription_lineage_mismatch）', () => {
     const otherFinding: GrowthFinding = { ...finding, statement: 'different statement' }
     const other: GrowthPrescription = { ...prescription, covers: [otherFinding] }
     const r = prepareReferenceLoopChange(baseInput({ prescription: other }))
-    expect(r).toMatchObject({ ok: false, stage: 'input' })
+    expect(r).toMatchObject({ ok: false, stage: 'input', code: 'prescription_lineage_mismatch' })
     if (!r.ok) expect(r.reason).toContain('血缘对不上')
   })
 
-  it('verification 非法（windowDays<=0）→ input 失败', () => {
+  it('verification 非法（windowDays<=0）→ input 失败（code=verification_invalid）', () => {
     const bad: GrowthVerificationDefinition = { ...verification, windowDays: 0 }
     const r = prepareReferenceLoopChange(baseInput({ verification: bad }))
-    expect(r).toMatchObject({ ok: false, stage: 'input' })
+    expect(r).toMatchObject({ ok: false, stage: 'input', code: 'verification_invalid' })
     if (!r.ok) expect(r.reason).toContain('verification')
   })
 
-  it('finding 缺 evidence（跨 JSON 边界的畸形对象）→ input 失败', () => {
+  it('finding 缺 evidence → input 失败（code=finding_invalid）', () => {
     const bad = { ...finding, evidence: [] as GrowthEvidence[] } as GrowthFinding
     const r = prepareReferenceLoopChange(baseInput({ finding: bad, prescription: { ...prescription, covers: [bad] } }))
-    expect(r).toMatchObject({ ok: false, stage: 'input' })
+    expect(r).toMatchObject({ ok: false, stage: 'input', code: 'finding_invalid' })
     if (!r.ok) expect(r.reason).toContain('finding')
+  })
+
+  it('prescription 本身畸形（orderingRationale 空）→ input 失败（code=prescription_invalid）', () => {
+    const bad = { ...prescription, orderingRationale: '' } as GrowthPrescription
+    const r = prepareReferenceLoopChange(baseInput({ prescription: bad }))
+    expect(r).toMatchObject({ ok: false, stage: 'input', code: 'prescription_invalid' })
   })
 })
 
 // ── stage: resolve ──────────────────────────────────────────────────────────
 
 describe('stage=resolve — client/target mismatch 一律 typed 失败', () => {
-  it('URL 域名不属于本客户 → resolve 失败（不落到别人的页）', () => {
+  it('URL 域名不属于本客户 → resolve 失败（code=canonical_identity_unknown）', () => {
     const r = prepareReferenceLoopChange(baseInput({ targetPageUrl: 'https://someone-else.test/pricing' }))
-    expect(r).toMatchObject({ ok: false, stage: 'resolve' })
+    expect(r).toMatchObject({ ok: false, stage: 'resolve', code: 'canonical_identity_unknown' })
     if (!r.ok) expect(r.reason).toContain('规范身份')
   })
 
-  it('clientDomain 为 null → resolve 失败（判不出归属就不放行）', () => {
+  it('clientDomain 为 null → resolve 失败（code=canonical_identity_unknown）', () => {
     const r = prepareReferenceLoopChange(baseInput({ clientDomain: null }))
-    expect(r).toMatchObject({ ok: false, stage: 'resolve' })
+    expect(r).toMatchObject({ ok: false, stage: 'resolve', code: 'canonical_identity_unknown' })
   })
 
-  it('targetPageUrl 不是合法 URL → resolve 失败', () => {
+  it('targetPageUrl 不是合法 URL → resolve 失败（code=canonical_identity_unknown）', () => {
     const r = prepareReferenceLoopChange(baseInput({ targetPageUrl: 'not-a-url' }))
-    expect(r).toMatchObject({ ok: false, stage: 'resolve' })
+    expect(r).toMatchObject({ ok: false, stage: 'resolve', code: 'canonical_identity_unknown' })
   })
 })
 
 // ── stage: draft ────────────────────────────────────────────────────────────
 
 describe('stage=draft — 快照不可用 / 起草失败 一律 typed 失败', () => {
-  it('snapshot ok:false → draft 失败，且 basedOnVersion 若走到会是 unknown（此路提前失败）', () => {
+  it('snapshot ok:false → draft 失败（code=draft_failed）', () => {
     const r = prepareReferenceLoopChange(baseInput({ snapshot: snapshotUnavailable }))
-    expect(r).toMatchObject({ ok: false, stage: 'draft' })
+    expect(r).toMatchObject({ ok: false, stage: 'draft', code: 'draft_failed' })
     if (!r.ok) expect(r.reason).toContain('快照不可用')
   })
 
-  it('GitHub snapshot 缺 <title> → draft 失败（无法安全起草）', () => {
+  it('GitHub snapshot 缺 <title> → draft 失败（code=draft_failed）', () => {
     const noTitle: GithubPageSnapshot = {
       ok: true,
       provider: 'github',
@@ -329,7 +351,7 @@ describe('stage=draft — 快照不可用 / 起草失败 一律 typed 失败', (
       versionToken: 'sha-no-title',
     }
     const r = prepareReferenceLoopChange(baseInput({ snapshot: noTitle }))
-    expect(r).toMatchObject({ ok: false, stage: 'draft' })
+    expect(r).toMatchObject({ ok: false, stage: 'draft', code: 'draft_failed' })
     if (!r.ok) expect(r.reason).toMatch(/<title>|meta description/)
   })
 })
@@ -353,7 +375,7 @@ describe('stage=draft — 提前 fail-closed；空 diff 在 WP06 契约下不可
       { field: 'content_html', proposedValue: '<h1>New</h1>', semanticIntent: { known: false, reason: 'not_applicable' } },
     ]
     const r = prepareReferenceLoopChange(baseInput({ snapshot: noManaged, intents: contentIntent }))
-    expect(r).toMatchObject({ ok: false, stage: 'draft' })
+    expect(r).toMatchObject({ ok: false, stage: 'draft', code: 'draft_failed' })
     if (!r.ok) {
       // 明确带回底层失败原因，不吞
       expect(r.reason.length).toBeGreaterThan(0)
@@ -364,7 +386,7 @@ describe('stage=draft — 提前 fail-closed；空 diff 在 WP06 契约下不可
 // ── validation preserved (not stage=validate) ───────────────────────────────
 
 describe('validation 不算 preparation 失败——判定被原样带回评审', () => {
-  it('providerCheck evaluated:false → validation.ok:false，但 preparation 仍是 ok:true', () => {
+  it('providerCheck evaluated:false → validation.ok:false + authorizationReadiness=validation_failed', () => {
     const r = prepareReferenceLoopChange(baseInput({ providerCheck: { evaluated: false, reason: 'not run in this fixture' } }))
     expect(r.ok, JSON.stringify(r)).toBe(true)
     if (!r.ok) return
@@ -372,16 +394,18 @@ describe('validation 不算 preparation 失败——判定被原样带回评审'
     if (!r.preparation.validation.ok) {
       expect(r.preparation.validation.reason).toContain('没算过')
     }
+    expect(r.preparation.authorizationReadiness).toBe('validation_failed')
   })
 
-  it('redline available:false → validation.ok:false（fail-closed，绝不当成「没有红线」）', () => {
+  it('redline available:false → validation.ok:false + authorizationReadiness=validation_failed', () => {
     const r = prepareReferenceLoopChange(baseInput({ redline: { available: false, reason: 'redlines table missing' } }))
     expect(r.ok).toBe(true)
     if (!r.ok) return
     expect(r.preparation.validation.ok).toBe(false)
+    expect(r.preparation.authorizationReadiness).toBe('validation_failed')
   })
 
-  it('命中红线短语 → validation.ok:false，违规清单原样带回', () => {
+  it('命中红线短语 → validation.ok:false + authorizationReadiness=validation_failed，违规清单原样带回', () => {
     const hitting: readonly PageOptimizationIntent[] = [
       { field: 'meta_title', proposedValue: 'This contains a forbidden phrase and other words', semanticIntent: { known: false, reason: 'not_applicable' } },
     ]
@@ -392,6 +416,55 @@ describe('validation 不算 preparation 失败——判定被原样带回评审'
     if (!r.preparation.validation.ok) {
       expect(r.preparation.validation.violations.join(' ')).toContain('forbidden phrase')
     }
+    expect(r.preparation.authorizationReadiness).toBe('validation_failed')
+  })
+})
+
+// ── ownership boundary (adapter-level) ──────────────────────────────────────
+
+describe('ownership boundary — adapter 只核对 target URL 属于传入 clientDomain', () => {
+  // 🔴 本 adapter 不核对 clientId ↔ clientDomain 归属；那必须由已鉴权的上游
+  //    client context 保证，Kernel/apply 层在授权时会再验一次。以下四条只测
+  //    「target URL vs clientDomain」这一条最小边界，不建新的 identity 抽象。
+
+  it('userinfo URL 不能欺骗 host —— 真实主机在 @ 之后（不是 clientDomain）→ 拒', () => {
+    // URL 语义：真实 host 是 attacker.test；userinfo 段的 example-fixture.test 只是伪装。
+    const r = prepareReferenceLoopChange(baseInput({
+      clientDomain: 'example-fixture.test',
+      targetPageUrl: 'https://example-fixture.test@attacker.test/pricing',
+    }))
+    expect(r).toMatchObject({ ok: false, stage: 'resolve', code: 'canonical_identity_unknown' })
+  })
+
+  it('相似域名不能冒充自家 —— example-fixture.test.evil.com ≠ example-fixture.test → 拒', () => {
+    const r = prepareReferenceLoopChange(baseInput({
+      targetPageUrl: 'https://example-fixture.test.evil.com/pricing',
+    }))
+    expect(r).toMatchObject({ ok: false, stage: 'resolve', code: 'canonical_identity_unknown' })
+  })
+
+  it('clientDomain 带 sc-domain: 前缀 —— 底层 bareHost 正确剥离 → 通过', () => {
+    const r = prepareReferenceLoopChange(baseInput({
+      clientDomain: 'sc-domain:example-fixture.test',
+    }))
+    expect(r.ok, JSON.stringify(r)).toBe(true)
+    if (!r.ok) return
+    expect(r.preparation.resolution.canonicalIdentity).toEqual({
+      known: true,
+      value: { domain: 'example-fixture.test', normalizedPath: '/pricing' },
+    })
+  })
+
+  it('subdomain 属于自家域 —— 底层规则允许 blog.<own> → 通过', () => {
+    const r = prepareReferenceLoopChange(baseInput({
+      targetPageUrl: 'https://blog.example-fixture.test/pricing',
+    }))
+    expect(r.ok, JSON.stringify(r)).toBe(true)
+    if (!r.ok) return
+    // canonicalIdentity 的 domain 字段返回的是 clientDomain（自家域），不是子域主机名——
+    // 这一点是 WP06 resolveCanonicalIdentity 的既有语义（bareHost(clientDomain)），
+    // 不属于本轮修改范围。
+    expect(r.preparation.resolution.canonicalIdentity.known).toBe(true)
   })
 })
 

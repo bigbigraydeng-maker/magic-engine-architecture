@@ -37,7 +37,9 @@ import {
   type GrowthPrescription,
 } from '@/lib/growth'
 import type {
+  ReferenceLoopAuthorizationReadiness,
   ReferenceLoopEvidenceRef,
+  ReferenceLoopFailureCode,
   ReferenceLoopFailureStage,
   ReferenceLoopInput,
   ReferenceLoopPreparation,
@@ -46,8 +48,12 @@ import type {
 
 const FIELD_SET: ReadonlySet<string> = new Set(PAGE_OPTIMIZATION_FIELDS)
 
-function fail(stage: ReferenceLoopFailureStage, reason: string): ReferenceLoopResult {
-  return { ok: false, stage, reason }
+function fail(
+  stage: ReferenceLoopFailureStage,
+  code: ReferenceLoopFailureCode,
+  reason: string,
+): ReferenceLoopResult {
+  return { ok: false, stage, code, reason }
 }
 
 function isSameFinding(a: GrowthFinding, b: GrowthFinding): boolean {
@@ -96,58 +102,78 @@ function buildRequest(input: ReferenceLoopInput): PageOptimizationRequest {
 export function prepareReferenceLoopChange(input: ReferenceLoopInput): ReferenceLoopResult {
   // ── stage: input ────────────────────────────────────────────────────────
   if (typeof input.clientId !== 'string' || input.clientId.length === 0) {
-    return fail('input', 'clientId 必须是非空字符串')
+    return fail('input', 'client_id_empty', 'clientId 必须是非空字符串')
   }
   if (typeof input.targetPageUrl !== 'string' || input.targetPageUrl.length === 0) {
-    return fail('input', 'targetPageUrl 必须是非空字符串')
+    return fail('input', 'target_page_url_empty', 'targetPageUrl 必须是非空字符串')
   }
 
   const findingCheck = validateGrowthFinding(input.finding)
   if (!findingCheck.ok) {
-    return fail('input', `finding 非法：${findingCheck.reason}`)
+    return fail('input', 'finding_invalid', `finding 非法：${findingCheck.reason}`)
   }
   const prescriptionCheck = validateGrowthPrescription(input.prescription)
   if (!prescriptionCheck.ok) {
-    return fail('input', `prescription 非法：${prescriptionCheck.reason}`)
+    return fail('input', 'prescription_invalid', `prescription 非法：${prescriptionCheck.reason}`)
   }
   const verificationCheck = validateGrowthVerificationDefinition(input.verification)
   if (!verificationCheck.ok) {
-    return fail('input', `verification 非法：${verificationCheck.reason}`)
+    return fail('input', 'verification_invalid', `verification 非法：${verificationCheck.reason}`)
   }
 
   const coversFinding = input.prescription.covers.some((f) => isSameFinding(f, input.finding))
   if (!coversFinding) {
     // 🔴 处方必须覆盖给定的 finding——否则拼出来的血缘对不上（把 A 的 finding 挂到
     //    B 的处方下面就等于伪造血缘）。fail-closed。
-    return fail('input', 'prescription.covers 里没有这条 finding（pillar/severity/statement 一致的都算），血缘对不上')
+    return fail(
+      'input',
+      'prescription_lineage_mismatch',
+      'prescription.covers 里没有这条 finding（pillar/severity/statement 一致的都算），血缘对不上',
+    )
   }
 
   if (input.findingRefs.length === 0) {
-    return fail('input', 'findingRefs 至少一条——请求要能指回具体 Finding')
+    return fail('input', 'finding_refs_empty', 'findingRefs 至少一条——请求要能指回具体 Finding')
   }
   for (const ref of input.findingRefs) {
     if (typeof ref !== 'string' || ref.length === 0) {
-      return fail('input', 'findingRefs 里出现空字符串或非字符串项')
+      return fail('input', 'finding_refs_contains_invalid', 'findingRefs 里出现空字符串或非字符串项')
     }
   }
   if (input.intents.length === 0) {
-    return fail('input', 'intents 至少一条——没有字段提案就没有可起草的内容')
+    return fail('input', 'intents_empty', 'intents 至少一条——没有字段提案就没有可起草的内容')
   }
   const seenField = new Set<string>()
   for (const intent of input.intents) {
     if (!FIELD_SET.has(intent.field)) {
-      return fail('input', `intents 里字段 "${intent.field}" 不在 v1 冻结字段集合内`)
+      return fail(
+        'input',
+        'intents_field_out_of_vocab',
+        `intents 里字段 "${intent.field}" 不在 v1 冻结字段集合内`,
+      )
     }
     if (typeof intent.proposedValue !== 'string' || intent.proposedValue.length === 0) {
-      return fail('input', `字段 "${intent.field}" 的 proposedValue 必须是非空字符串`)
+      return fail(
+        'input',
+        'intents_proposed_value_invalid',
+        `字段 "${intent.field}" 的 proposedValue 必须是非空字符串`,
+      )
     }
     if (seenField.has(intent.field)) {
-      return fail('input', `字段 "${intent.field}" 出现了不止一次意图`)
+      return fail(
+        'input',
+        'intents_duplicate_field',
+        `字段 "${intent.field}" 出现了不止一次意图`,
+      )
     }
     seenField.add(intent.field)
   }
 
   // ── stage: resolve ──────────────────────────────────────────────────────
+  // 🔴 本 adapter 只做 target URL 与传入 clientDomain 的归属判定；**不核对
+  //    clientId ↔ clientDomain 是否属于同一租户**——那必须由已鉴权的上游 client
+  //    context 保证，Kernel/apply 层在授权时会再验一次 client ownership。参见
+  //    types.ts 顶部 ReferenceLoopInput 的调用方约定。
   const resolution = resolvePage({
     pageUrl: input.targetPageUrl,
     clientDomain: input.clientDomain,
@@ -158,6 +184,7 @@ export function prepareReferenceLoopChange(input: ReferenceLoopInput): Reference
     //    （client/target mismatch），或 URL 本身解析不出来。**都不许猜。**
     return fail(
       'resolve',
+      'canonical_identity_unknown',
       `无法从 targetPageUrl=${input.targetPageUrl} + clientDomain=${input.clientDomain ?? 'null'} 解出规范身份（reason=${resolution.canonicalIdentity.reason}）`,
     )
   }
@@ -165,13 +192,13 @@ export function prepareReferenceLoopChange(input: ReferenceLoopInput): Reference
   // ── stage: draft ────────────────────────────────────────────────────────
   const draft = draftPageChange(input.snapshot, input.intents)
   if (!draft.ok) {
-    return fail('draft', draft.reason)
+    return fail('draft', 'draft_failed', draft.reason)
   }
 
   // ── stage: diff ─────────────────────────────────────────────────────────
   const diff = diffPageChange(input.snapshot, draft)
   if (!diff.ok) {
-    return fail('diff', diff.reason)
+    return fail('diff', 'diff_failed', diff.reason)
   }
   // 🔴 关于「空 diff」：在 WP06 现行契约下不可达 —— draftPageChange 成功时至少
   //    产出一条字段，diffPageChange 对每条 draft 字段产出一条 change。所以本层不再
@@ -183,6 +210,11 @@ export function prepareReferenceLoopChange(input: ReferenceLoopInput): Reference
 
   // ── stage: validate（不列在失败 stage 里；参见 types.ts 顶部注释）────────
   const validation = validatePageChange(request, diff, input.redline, input.providerCheck)
+
+  // 🔴 由 adapter 从 validation.ok 直接派生——**调用方不能注入这一位**。
+  //    validation_passed 仅表示「可交给下一环授权评估」，绝不代表已授权 / 可 apply。
+  const authorizationReadiness: ReferenceLoopAuthorizationReadiness =
+    validation.ok ? 'validation_passed' : 'validation_failed'
 
   const preparation: ReferenceLoopPreparation = {
     clientId: input.clientId,
@@ -198,6 +230,7 @@ export function prepareReferenceLoopChange(input: ReferenceLoopInput): Reference
     validation,
     verification: input.verification,
     provenance: input.provenance,
+    authorizationReadiness,
   }
   return { ok: true, preparation }
 }
