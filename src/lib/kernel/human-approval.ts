@@ -20,6 +20,7 @@ import type {
 import type { KernelDeps } from './deps'
 import { getDecision, resolvePendingApproval } from './store'
 import { KernelError } from './errors'
+import { canonicalHashOfInput } from './canonical-hash'
 import {
   mintContext,
   preflight,
@@ -364,6 +365,32 @@ async function commitApproval(
 ): Promise<AuthorizationOutcome> {
   const { run, approvedByUser, options, pending, definition, policy, costEstimate } = args
 
+  // 🔴 A · Human Approval hash 复核（spec §3.4b）：审批人打开审批页看到的 input
+  //    与最终允许执行的 input 必须逐字节一致 —— 挂起期间被人把 `action_runs.input`
+  //    换成另一份东西，就绝不能签放行。跟 Gateway 的执行时 hash-check 是同一套判据；
+  //    这里只是把它挪早到「签发」时刻，让被污染的授权**根本不签**（更早失败 = 更少下游）。
+  //
+  //    读的是**签发时刻**的 run.input（不经缓存），比对的是 pending 决策 pin 的 input_hash。
+  //    pending 决策没 hash（旧数据）→ 一律 fail-closed，跟 Gateway 的 old-decision 处置一致。
+  const pinnedInputHashAtPending = (pending.policy_snapshot as { input_hash?: unknown } | null | undefined)
+    ?.input_hash
+  const currentInputHash = canonicalHashOfInput(run.input)
+  if (typeof pinnedInputHashAtPending !== 'string' || pinnedInputHashAtPending !== currentInputHash) {
+    throw new KernelError(
+      'INPUT_TAMPERED_SINCE_AUTHORIZE',
+      `${approvedByUser} 点了同意，但这条动作的执行输入自从挂起审批以来被改过 —— ` +
+        `签放行会让实际执行的东西跟审批人看到的对不上，已停手（没有动过 run、没有签任何决策）。` +
+        `请重新提交这件事`,
+      {
+        detail: {
+          runId: run.id,
+          decisionId: pending.id,
+          hadPinnedHash: typeof pinnedInputHashAtPending === 'string',
+        },
+      },
+    )
+  }
+
   const resolved = await resolvePendingApproval(deps.supabase, {
     runId: run.id,
     pendingDecisionId: options.expectedDecisionId ?? pending.id,
@@ -372,7 +399,7 @@ async function commitApproval(
     reason:
       `${approvedByUser} 点了同意（规则自挂起以来没变过，仍是第 ${policy.policy_version} 版）` +
       (options.reason ? `：${options.reason}` : ''),
-    policySnapshot: snapshotOf(policy, definition),
+    policySnapshot: snapshotOf(policy, definition, run.input),
     costEstimateUsd: costEstimate,
   })
   if (!resolved.ok || !resolved.decisionId) {
@@ -477,7 +504,8 @@ export async function rejectRun(
     resolution: 'reject',
     resolvedBy: rejectedByUser,
     reason: `${rejectedByUser} 点了不做：${reason}`,
-    policySnapshot: snapshotOf(null, sameVersionDefinition(deps, run)),
+    // 🔴 拒绝决策不会被兑换成执行，input_hash 缺失也无害；传 null 保留旧兼容形状。
+    policySnapshot: snapshotOf(null, sameVersionDefinition(deps, run), null),
     costEstimateUsd: run.cost_estimate_usd,
   })
   if (!resolved.ok || !resolved.decisionId) {
