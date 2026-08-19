@@ -136,6 +136,156 @@ Build：npm run build 必须通过
 
 ---
 
+## GitHub Task Contract Protocol（所有 Codex 窗口强制）
+
+治理真相源见 GitHub Issue **#1100**：`[Build Control Governance] GitHub Task Contract Protocol — Issue = Contract, PR = Implementation`。
+
+### 1. 长工程任务禁止继续用聊天长提示词承载
+
+只要任务复杂到需要长工程提示词、跨多步实施、多个 runtime fact、安全边界或 STOP 条件，Codex 必须优先把完整合同落到 GitHub：
+
+1. **Issue = Task Contract / Work Package Contract**
+2. **Issue 最新 `BUILD CONTROL — ...` comment = 当前授权边界**
+3. **PR = Implementation Artifact / 实际 diff 与验证证据**
+4. **PR review threads = 实现 finding 与修复记录**
+5. Chat 只负责启动、澄清、PO 决策，不再作为长期工程合同
+
+如果当前任务还没有 Task Contract Issue，Codex 应先回 Build Control 要求建立 Issue；不要自己在聊天里继续堆几千字施工合同。
+
+### 2. Codex 给另一个窗口/Claude 的交接输出
+
+不要输出整份长提示词。默认只输出：
+
+```text
+Issue: #XXXX
+建议窗口名：<name>
+
+启动词：
+你负责 Magic Engine Issue #XXXX。
+开工前：
+1. git fetch origin main
+2. 完整读取 CLAUDE.md / AGENTS.md / docs/agents/CODEX.md（按执行方适用）
+3. 完整读取 Issue #XXXX 及全部评论
+4. 最新 BUILD CONTROL 评论是唯一授权边界
+
+一窗口 / 一 worktree / 一 PR。
+不扩大 scope。
+完成后开 Draft PR，回 Issue 汇报并停止。
+```
+
+除非用户明确要求“把完整提示词贴出来”，否则不要再把 Issue 正文复制回聊天。
+
+### 3. 每个 Codex 窗口的标准回报格式
+
+每次阶段性或最终工程回报都按下面顺序，避免不同窗口各说各话：
+
+```text
+remote fetched at: <timestamp> · exact main SHA: <full sha>
+
+## Scope / Contract
+- Task Contract Issue: #XXXX
+- 当前 BUILD CONTROL 决议：...
+- branch / worktree / PR: ...
+
+## 结论
+- GO / PATCH REQUIRED / DEFER / STOP / READY FOR REVIEW
+
+## 木桶自审
+- 本次解锁哪条完整闭环或哪一段
+- 当前最短板是什么
+- 本组件做到什么程度已经够用
+- 为避免局部过度开发主动推迟了什么
+
+## Exact changes
+- 精确 changed files
+- 没改什么（关键 non-goals）
+
+## Verification
+- targeted tests
+- architecture / mutation（按风险级别）
+- type-check
+- build
+- git diff --check
+- baseline failure 如有，明确 pre-existing 证据
+
+## Reuse Statement
+- reused what
+- new truly reusable capability
+- industry-specific?
+- client-specific?
+- deliberately not generalized?
+- production write?
+
+## Next gate
+- 下一步只写 Build Control 需要决策的一个 gate；不得自动开下一项施工
+```
+
+没有 repository SHA 的工程回报视为无效。
+
+### 4. Issue / PR 分工
+
+**Issue 负责 WHY / WHAT / BOUNDARY：**
+- 为什么现在做
+- 当前最短板
+- scope / non-goals
+- runtime facts
+- safety / authorization boundary
+- acceptance / STOP conditions
+
+**PR 负责 WHAT ACTUALLY CHANGED：**
+- exact changed files
+- implementation notes
+- tests / type-check / build / diff-check
+- review findings
+- Reuse Statement
+- production-write statement
+- head/base SHA
+
+PR 描述不得重新发明第二套架构 spec。
+
+### 5. 一窗口纪律
+
+默认：
+
+**one Codex window = one Task Contract Issue = one worktree = one branch = one PR**
+
+发现新的真实 blocker 但不在 Issue scope：
+
+```text
+DEFER — <real blocker>
+```
+
+然后停止，回 Build Control。不要在当前窗口顺手解决，也不要把第二个 WP 塞进同一 PR。
+
+### 6. 木桶原则
+
+每个 Codex 窗口必须优先回答：
+
+1. 当前阻止最小真实闭环跑通的最短板是什么？
+2. 本次改动是否直接补强最短板或紧邻下一环？
+3. 当前组件是否已满足本轮最小验收？满足就立即停止。
+4. 上游还提供不了、下游还消费不了、Measurement 还验证不了的精度，不提前建设。
+
+原则：**先跑通窄闭环，再逐段加深；只抬最短板，不继续加高最长板。**
+
+例外：安全、授权、法律合规、数据完整性、成本硬顶、幂等和失败恢复是结构板，不能用“避免过度开发”跳过。
+
+### 7. 默认生产红线
+
+除非最新 Build Control GitHub comment 明确授权：
+
+- NO merge
+- NO deploy
+- NO migration apply
+- NO production write
+- NO provider write
+- NO secret changes
+- NO irreversible operation
+
+默认停在 Draft PR。
+
+---
+
 ## 封装名对照（UI 层必须用封装名）
 
 | 真实服务 | 封装名 |
