@@ -45,15 +45,15 @@ import type { PlayKey, PlaySource } from '@/lib/ads-strategy/play-vocabulary'
  * metric-registry.ts 那套「加了字典 key 不登记拉取方就编译不过」的同一招:
  * 靠类型把「新增了却没接上」变成编译期错误,而不是三个月后才发现表是空的。
  */
-export type AdCreationPath = 'boost_post_api' | 'winner_reel_sync'
+export type AdCreationPath = 'boost_post_api' | 'winner_reel_sync' | 'me_ad_launch'
 
 /** 每条路径的出处。穷举 by construction —— 少一个 key 就编译不过。 */
 export const AD_CREATION_PATHS: Readonly<Record<AdCreationPath, string>> = {
   boost_post_api: 'src/app/api/clients/[id]/meta-ads/boost-post — 手动/脚本给某个帖子投流',
   winner_reel_sync: 'src/lib/winner-reel-sync/engine.ts — 把跑赢的自然帖子自动加进广告组',
-  // 待加:'me_ad_launch' —— 广告引擎的建广告入口（PM 2026-08-04「go 收口」）。
-  // **等那个路由真的存在了再加这一项**。本文件开头就写着「提前声明一个没人产出
-  // 的值正是 enum 漂移」,我 2026-08-04 差点犯这个错,被本模块自己的测试拦下。
+  // 2026-08-20 M3：那个「路由真的存在了」的时刻到了 —— ME2 广告中枢 v1 的
+  // Kernel action ads.meta_boost_sandbox_reel（src/lib/capabilities/ads/…）。
+  me_ad_launch: 'src/lib/capabilities/ads/meta-boost-sandbox-reel.ts — ME2 广告中枢 v1，经 Kernel 授权的建广告入口',
 }
 
 /**

@@ -93,8 +93,103 @@ const SEO_BUILD_PUBLISH_PACKAGE: ActionDefinition<'seo.build_publish_package'> =
   allowedPurposes: ['growth'],
 }
 
+/**
+ * `ads.meta_boost_sandbox_reel` —— Kernel v1 的第一条 outward 动作
+ * （ME2 广告中枢 v1，Build Control 木桶原则裁决）。
+ *
+ * ── 动作边界：只到「建成 PAUSED + 回读验证通过」，不含激活 ──────────────────
+ * 🔴 这不是偷懒省了一步，是 Kernel v1 结构性要求的：`outward-authorization.ts`
+ *    明文规定 `reversible !== true` 的对外动作**一律不放行**（"填 rollback
+ *    不能替代 reversible：撤回路径写得再清楚，也改不了它自称撤不回来这个
+ *    事实"）。真钱一旦花出去就撤不回来 —— 如果这个动作的范围包含"激活"，
+ *    那么诚实地说它就是不可逆的，会被 outwardBlockReason 直接拒绝注册。
+ *
+ *    解法不是找借口声明 reversible:true（那是 Codex 复审 BLOCKER #5 点名
+ *    的不诚实做法），而是把动作边界划在真正可逆的地方：guard（预留额度）→
+ *    publish_paused（建成暂停态，$0 花费，可随时删掉）→ gate（回读验证）→
+ *    link（记录归因，纯内部记账）。到这里为止，一切都能无痕撤销。
+ *
+ *    「激活」是一个**不属于这个 Kernel 动作**的独立操作 —— 跟 Build Control
+ *    "M7 真实 Meta 写入继续冻结，另等 go Meta paused dry-run；真钱激活仍需
+ *    再次独立 go" 的两道闸完全对应：本动作对应第一道闸（paused dry-run），
+ *    激活是第二道闸，走独立的、不经过 Kernel 自动化策略引擎的人工确认
+ *    （见 M6 的 approve/activate 两个不同的 API 路由）。
+ *
+ * ── 为什么 costModel 全 0 ────────────────────────────────────────────────
+ * 这个动作从设计上就不花钱 —— 不是估算出来的 0，是**结构性**的 0：
+ * 它做的每一件事（预留额度记录、建暂停广告、回读、记归因）都不产生 Meta
+ * 账单。真花钱的那一步（激活）不在这个动作的步骤列表里。
+ */
+const ADS_META_BOOST_SANDBOX_REEL: ActionDefinition<'ads.meta_boost_sandbox_reel'> = {
+  actionKey: 'ads.meta_boost_sandbox_reel',
+  version: 1,
+  title: '把一条 CTS 已发的帖子在 ME sandbox 建成暂停态广告（不激活）',
+
+  inputSchema: {
+    type: 'object',
+    required: ['object_story_id', 'draft', 'draft_summary_hash', 'reservation_amount_nzd'],
+    properties: {
+      object_story_id: { type: 'string' },
+      // 完整 AdDraft 形状；结构校验交给 validateDraft（capability 层），
+      // 注册表的 JsonSchemaLike 不支持嵌套 schema，这里只做"是个对象"的粗校验。
+      draft: { type: 'object' },
+      draft_summary_hash: { type: 'string' },
+      reservation_amount_nzd: { type: 'number' },
+    },
+    additionalProperties: false,
+  },
+  outputSchema: {
+    type: 'object',
+    required: ['campaign_id', 'ad_set_id', 'creative_id', 'ad_id'],
+    properties: {
+      campaign_id: { type: 'string' },
+      ad_set_id: { type: 'string' },
+      creative_id: { type: 'string' },
+      ad_id: { type: 'string' },
+      deterministic_tag: { type: 'string' },
+    },
+    additionalProperties: true,
+  },
+
+  capability: 'ads.meta_boost_sandbox_publisher',
+  risk: 'medium',
+  // 🔴 建的对象真实存在于 Meta 后台（哪怕暂停），是真外部写，不是 internal_write。
+  sideEffect: 'outward',
+  // 诚实：到这个动作结束时（PAUSED + 已验证），什么都没花，可以无痕撤销。
+  reversible: true,
+
+  outwardAuthorization: {
+    declaredIn: 'docs/adr/2026-08-20-me-ads-hub-v1-reversibility-recovery-contract.md',
+    requiresHumanApproval: true,
+    rollback: 'provider_native', // 删掉/保持暂停的 Meta 对象即撤回，零花费
+  },
+
+  // object_story_id + draft 摘要 → 同一条草案不会被重复建
+  idempotency: { keyFields: ['object_story_id', 'draft_summary_hash'], scope: 'client' },
+
+  costModel: {
+    kind: 'fixed',
+    estimate: () => 0,
+    stepCeilingUsd: { guard: 0, publish_paused: 0, gate: 0, link: 0 },
+  },
+
+  // 对外动作一定碰外部服务（Meta），Meta 的对象创建接口不认幂等键 ——
+  // 重试可能建出重复的 campaign/adset/ad，所以一律不自动重试（fail closed）。
+  providerIdempotency: 'unsupported',
+  retryPolicy: { maxAttempts: 1, backoff: 'fixed', baseMs: 0 },
+
+  verification: { method: 'meta_ad_boost_readback', delayMs: 0 },
+
+  requiredCapabilityTier: 'paid_client',
+
+  steps: ['guard', 'publish_paused', 'gate', 'link'],
+
+  allowedPurposes: ['growth'],
+}
+
 const DEFINITIONS: Readonly<Record<ActionKey, ActionDefinition>> = {
   'seo.build_publish_package': SEO_BUILD_PUBLISH_PACKAGE,
+  'ads.meta_boost_sandbox_reel': ADS_META_BOOST_SANDBOX_REEL,
 }
 
 export interface ActionRegistry {

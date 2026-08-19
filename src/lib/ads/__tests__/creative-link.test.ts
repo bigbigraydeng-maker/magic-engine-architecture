@@ -346,6 +346,7 @@ describe('AD_CREATION_PATHS', () => {
    * 「这条路径记不记素材 id」,而不是三个月后发现表又空了。
    */
   it('仓里每条建广告的路径都登记在案', () => {
-    expect(Object.keys(AD_CREATION_PATHS).sort()).toEqual(['boost_post_api', 'winner_reel_sync'])
+    // 2026-08-20 M3 新增 me_ad_launch：ME2 广告中枢 v1 经 Kernel 授权的建广告入口
+    expect(Object.keys(AD_CREATION_PATHS).sort()).toEqual(['boost_post_api', 'me_ad_launch', 'winner_reel_sync'])
   })
 })

@@ -24,9 +24,13 @@ import type { RawMetaAdSet, RawMetaAdCreative } from '@/lib/ads-strategy/meta-re
 
 const GRAPH_BASE = 'https://graph.facebook.com/v21.0'
 
-/** 广告组回读要的字段。targeting 必须整个拿回来 —— 我们要看的正是 Meta 补的那些。 */
+/**
+ * 广告组回读要的字段。targeting 必须整个拿回来 —— 我们要看的正是 Meta 补的那些。
+ * `daily_budget` 是 2026-08-20 M3 加的：boost_existing_post v1 的 gate 步骤要核对
+ * 回读到的预算跟批准的是不是一个数（Meta 分/元换算或四舍五入偶有偏差）。
+ */
 const ADSET_FIELDS =
-  'id,name,optimization_goal,destination_type,effective_status,campaign_id,targeting'
+  'id,name,optimization_goal,destination_type,effective_status,campaign_id,targeting,daily_budget'
 
 /**
  * 创意里所有**买家会看到**的文字。

@@ -39,7 +39,11 @@ describe('注册表是封闭的', () => {
 
   it('keys() 给得出完整清单（将来要反向注入 agent prompt 收口生成端）', () => {
     expect(ACTION_KEYS).toContain('seo.build_publish_package')
-    expect(ACTION_KEYS.length).toBe(Object.keys({ 'seo.build_publish_package': 1 }).length)
+    // 2026-08-20 M3 新增 ads.meta_boost_sandbox_reel —— Kernel v1 第一条 outward 动作
+    expect(ACTION_KEYS).toContain('ads.meta_boost_sandbox_reel')
+    expect(ACTION_KEYS.length).toBe(
+      Object.keys({ 'seo.build_publish_package': 1, 'ads.meta_boost_sandbox_reel': 1 }).length,
+    )
   })
 })
 

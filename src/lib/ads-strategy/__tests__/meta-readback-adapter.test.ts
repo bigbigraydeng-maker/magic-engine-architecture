@@ -61,6 +61,47 @@ describe('adaptMetaAdSet —— 按真实 Meta 形状，不按猜的', () => {
     expect(r.adSet.adSetName).toBe('AS1')
     expect(r.adSet.creatives[0].adName).toBe('ad1')
   })
+
+  // ── boost_existing_post v1 扩展（2026-08-20 M3，补 R2 遗留的半条链路）───
+  it('age_min/age_max 从 targeting 摘出来', () => {
+    const r = adaptMetaAdSet({ id: 'A', targeting: { age_min: 55, age_max: 65 } }, [])
+    expect(r.adSet.targeting.ageMin).toBe(55)
+    expect(r.adSet.targeting.ageMax).toBe(65)
+  })
+
+  it('age_min/age_max 缺失 → undefined，不是猜一个默认值', () => {
+    const r = adaptMetaAdSet({ id: 'A', targeting: {} }, [])
+    expect(r.adSet.targeting.ageMin).toBeUndefined()
+    expect(r.adSet.targeting.ageMax).toBeUndefined()
+  })
+
+  it('publisher_platforms 从 targeting 摘出来，非字符串元素过滤掉', () => {
+    const r = adaptMetaAdSet({ id: 'A', targeting: { publisher_platforms: ['facebook', 123, null] } }, [])
+    expect(r.adSet.targeting.publisherPlatforms).toEqual(['facebook'])
+  })
+
+  it('AdaptOptions 的 expected* 字段透传进 LaunchReadbackInput', () => {
+    const r = adaptMetaAdSet({ id: 'A', targeting: {} }, [], {
+      expectedAgeMin: 55, expectedAgeMax: 65,
+      expectedPublisherPlatforms: ['facebook'],
+      expectedAdvantageAudienceOff: true,
+    })
+    expect(r.expectedAgeMin).toBe(55)
+    expect(r.expectedAgeMax).toBe(65)
+    expect(r.expectedPublisherPlatforms).toEqual(['facebook'])
+    expect(r.expectedAdvantageAudienceOff).toBe(true)
+  })
+
+  it('端到端：真实 targeting 数据经 adapter 传给 checkLaunch，年龄对不上真的会拦', () => {
+    const r = adaptMetaAdSet(
+      { id: 'A', targeting: { age_min: 25, age_max: 65 } },
+      [],
+      { expectedAgeMin: 55 },
+    )
+    const report = checkLaunch(r)
+    expect(report.findings.map((f) => f.code)).toContain('age_min_mismatch')
+    expect(report.safeToActivate).toBe(false)
+  })
 })
 
 describe('nameClaimsRetargeting —— 启发式，宁可宽松命中', () => {

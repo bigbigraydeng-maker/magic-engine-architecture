@@ -33,6 +33,13 @@ export interface RawMetaTargeting {
   expanded_implicit_custom_audiences?: { id?: unknown }[]
   targeting_relaxation_types?: { custom_audience?: unknown; lookalike?: unknown }
   targeting_automation?: { advantage_audience?: unknown }
+  // ── boost_existing_post v1 扩展字段（2026-08-20 M3）───────────────────
+  // `readback.ts` 的 ADSET_FIELDS 把整个 targeting 对象拿回来，Meta 有设置
+  // 这三项时它们就在这里；R2 已经给 checkLaunch 建好了对照逻辑，但当时没人
+  // 把这几个字段从原始 targeting 里摘出来喂给它 —— 这里补上那半条链路。
+  age_min?: unknown
+  age_max?: unknown
+  publisher_platforms?: unknown[]
 }
 
 export interface RawMetaAdSet {
@@ -42,6 +49,10 @@ export interface RawMetaAdSet {
   /** MESSENGER / WHATSAPP / WEBSITE / ON_VIDEO… 缺失就是没回读到，别当成不是私信。 */
   destination_type?: unknown
   targeting?: RawMetaTargeting
+  /** PAUSED / ACTIVE / ... 状态核对用（2026-08-20 M3）。 */
+  effective_status?: unknown
+  /** 最小货币单位（分），状态核对用（2026-08-20 M3）。 */
+  daily_budget?: unknown
 }
 
 /** 一条广告的买家可见文案，由调用方从 creative 里摘出来。 */
@@ -59,6 +70,11 @@ function flag(v: unknown): boolean | undefined {
   if (typeof v === 'number') return v !== 0
   if (typeof v === 'string') return v === '1' || v.toLowerCase() === 'true'
   return undefined
+}
+
+/** Meta 的年龄字段是数字。缺失返回 undefined，不是猜一个默认值。 */
+function num(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
 }
 
 function strList(xs: unknown[] | undefined, pick: (x: unknown) => unknown): string[] {
@@ -100,6 +116,12 @@ export interface AdaptOptions {
    * 建广告走 ME 入口时应该显式给 —— 那一刻是知道的。
    */
   isRetargeting?: boolean
+  // ── boost_existing_post v1 扩展（2026-08-20 M3）────────────────────
+  /** 期望的年龄下限。给了就跟回读到的 targeting.age_min 对照。 */
+  expectedAgeMin?: number
+  expectedAgeMax?: number
+  expectedPublisherPlatforms?: readonly string[]
+  expectedAdvantageAudienceOff?: boolean
 }
 
 /**
@@ -130,6 +152,9 @@ export function adaptMetaAdSet(
       customAudienceIds:     strList(t?.custom_audiences, (a) => (a as { id?: unknown })?.id),
       implicitLookalikeIds:  strList(t?.expanded_implicit_custom_audiences, (a) => (a as { id?: unknown })?.id),
       geoNames:              geoNames(t),
+      ageMin:                num(t?.age_min),
+      ageMax:                num(t?.age_max),
+      publisherPlatforms:    t?.publisher_platforms?.filter((p): p is string => typeof p === 'string'),
     },
     creatives: creatives.map<CreativeReadback>((c) => ({
       adId: c.adId,
@@ -144,5 +169,9 @@ export function adaptMetaAdSet(
     adSet,
     claimsRetargeting: opts.isRetargeting ?? nameClaimsRetargeting(adSet.adSetName),
     expectedGeo: opts.expectedGeo ?? null,
+    expectedAgeMin: opts.expectedAgeMin,
+    expectedAgeMax: opts.expectedAgeMax,
+    expectedPublisherPlatforms: opts.expectedPublisherPlatforms,
+    expectedAdvantageAudienceOff: opts.expectedAdvantageAudienceOff,
   }
 }

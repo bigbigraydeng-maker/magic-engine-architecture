@@ -15,6 +15,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CapabilityImplementation } from '@/lib/kernel/types'
 import { createBuildPublishPackageCapability } from './seo/build-publish-package'
+import { createMetaBoostSandboxReelCapability } from './ads/meta-boost-sandbox-reel'
 
 /**
  * 装配这个进程能执行的全部能力。
@@ -28,6 +29,7 @@ export function createCapabilities(
 ): Readonly<Record<string, CapabilityImplementation>> {
   return {
     'seo.build_publish_package': createBuildPublishPackageCapability(sb),
+    'ads.meta_boost_sandbox_reel': createMetaBoostSandboxReelCapability(sb),
   }
 }
 
@@ -37,3 +39,8 @@ export {
   KERNEL_PRODUCER,
   KERNEL_PACKAGE_STATUS,
 } from './seo/build-publish-package'
+
+export {
+  V1_SANDBOX_LIFETIME_CAP_NZD,
+  scopeKeyFor as adsSandboxScopeKeyFor,
+} from './ads/meta-boost-sandbox-reel'

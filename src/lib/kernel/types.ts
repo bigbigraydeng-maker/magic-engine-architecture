@@ -23,7 +23,7 @@ import type { AccessTier } from '@/lib/auth/access-types'
  *    注册表建好之后必须把它反向注入 prompt，否则只会从「36 种自由文本」
  *    变成「36 种自由文本 + 一张对不上的表」。
  */
-export type ActionKey = 'seo.build_publish_package'
+export type ActionKey = 'seo.build_publish_package' | 'ads.meta_boost_sandbox_reel'
 
 /** 一个 run 为了什么而跑。决定它需不需要挂 Goal。 */
 export type ActionPurpose =
@@ -125,7 +125,7 @@ export interface OutwardAuthorization {
 }
 
 /** 验证方法键 —— 真去回读并断言，不是「写成功了所以算成功」。 */
-export type VerificationMethod = 'package_integrity'
+export type VerificationMethod = 'package_integrity' | 'meta_ad_boost_readback'
 
 export interface VerificationSpec {
   readonly method: VerificationMethod
