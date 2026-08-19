@@ -18,7 +18,7 @@
  *   (tracked as future work, see ROADMAP § Phase 22.E). The rules themselves
  *   are tested and ready.
  *
- * Reference: docs/seo-sop-implementation-design.md · ROADMAP § Phase 22.E
+ * Reference: docs/specs/2026-06-04-seo-patrol-implementation-design.md · ROADMAP § Phase 22.E
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'

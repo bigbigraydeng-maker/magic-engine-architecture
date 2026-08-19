@@ -306,7 +306,7 @@ FDE 点「发布到网站」
 ## 附录：与现有文档的关系
 
 - 本文件管**工程实施设计**（谁建什么、数据怎么流）
-- `clients/oztop/wp-me-seo-sop-2026-06-03.md` 管 **FDE 手动操作手册**（当 ME 自动化未建完时的人工流程）
+- `docs/clients/oztop/wp-me-seo-sop-2026-06-03.md` 管 **FDE 手动操作手册**（当 ME 自动化未建完时的人工流程）
 - `docs/agents/70-libai.md` 管**李白评分标准**（本文件 §6 引用它）
 - `docs/agents/00-architecture.md` 管**agent 总架构**（本文件 §9 据它做合规检查）
 

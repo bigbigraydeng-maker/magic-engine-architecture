@@ -9,7 +9,7 @@
  * metric DROPS in flywheel_metrics; this finds SEO OPPORTUNITIES from
  * per-keyword keyword_snapshots and per-page gsc_performance_snapshots.
  *
- * Reference: docs/seo-sop-implementation-design.md
+ * Reference: docs/specs/2026-06-04-seo-patrol-implementation-design.md
  */
 
 /** Rule identifiers. Keep in sync with the seo_patrol_rule enum in migration. */

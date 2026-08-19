@@ -7,6 +7,14 @@
 
 ---
 
+## 2026-08-20 · docs/ 根目录二次瘦身：9 个基石文档 + 1 个常驻架构参考，其余按 specs/history/roadmap 分类
+
+**决策**：`docs/` 根目录审计发现堆到 15 个 `.md`，其中 7 个（`DESIGN_SYSTEM.md` / `FILING.md` / `flywheel-architecture.md` / `me2-progress-map.md` / `media-inventory.md` / `production-package-rfc.md` / `seo-sop-implementation-design.md`）从未进 [CLAUDE.md 文档索引](../CLAUDE.md)，等于没人会主动点开。按内容性质分流：`production-package-rfc.md` → `specs/2026-05-19-production-package-rfc-v1.md`，`seo-sop-implementation-design.md` → `specs/2026-06-04-seo-patrol-implementation-design.md`（两者都是单功能设计文档，命中 `specs/` 既有约定）；`media-inventory.md` → `history/2026-08-03-media-inventory-snapshot.md`（时点快照，会过期）；`me2-progress-map.md` → `roadmap/2026-08-17-me2-progress-map.md`（跟平台化原则文档同属 ME2 路线追踪）；`FILING.md` 并入本文件（见下方 2026-08-03 条），原文件删除。`DESIGN_SYSTEM.md`（`/dashboard` 强制视觉规范）与 `flywheel-architecture.md`（飞轮子系统常驻架构参考，被 2 份 agent 人设文档实名引用）判定为真正全局适用，留在根目录，补进 CLAUDE.md 索引。
+
+**为什么**：这 4 份被搬走的文档要么零引用（`media-inventory.md` / `me2-progress-map.md`，移动零成本），要么只被 [已冻结的归档快照](../docs/archive/ROADMAP-full-2026-07-25.md) 引用（移动不破坏任何活链接）；`seo-sop-implementation-design.md` 例外——它被 3 处生产代码注释（`seo-patrol-daily/route.ts`、`seo-patrol/types.ts`、`seo-patrol/job.ts`）实名引用，移动时已同步改注释路径，不是零成本但是可控成本。判断标准不是「文件太多」，是「找不找得到」：能被 `CLAUDE.md` 索引表命中、或被其他活文档/代码实名引用的，才有资格留根目录；否则默认进 `specs/`（单功能设计）/`history/`（时点快照）/`roadmap/`（ME2 路线追踪），不新造分类目录。
+
+**影响**：`docs/` 根目录现为 10 个文件——9 个基石文档（`STATE` / `ROADMAP` / `ENV` / `DECISIONS` / `PITFALLS` / `ARCHITECTURE` / `PRODUCT` / `DESIGN_SYSTEM` / `ENGINEERING_QUALITY_GATES`）+ 1 个常驻子系统架构参考（`flywheel-architecture.md`）；`CLAUDE.md` 文档索引表同步补齐这 3 个此前遗漏的条目。历史归档（`docs/archive/`）里指向旧路径的引用**不回改**，按惯例视为冻结的时间点记录。
+
 ## 2026-08-19 · ai-tracker（系统 B）退役删除：AI 可见度判断归一到 M1，老诊断打分重做
 
 > **本条推翻同日早前版本**（原标题「三系统整合：判断层统一到 M1，ai-tracker 降级为采集层」，原结论是「降级保留 ai-tracker 采集层 + 五阶段小心迁移」）。PO **2026-08-19 追加授权做减法**（删老功能）：ai-tracker 不是降级保留，是**退役删除**。原判决的证据段（44% 抽取失败、子串匹配、`ai_visibility_score` 实读系统 C）全部成立、予以保留，只把结论从「保留采集层」改成「删」。
@@ -76,6 +84,18 @@ function buildEntityMatcher(aliases: readonly string[]): RegExp { /* 精确别�
 **为什么**：早期开发速度快但高风险边界缺少证明；近期安全与 Kernel 工作显著提高了质量，也暴露了范围扩张、反复完整 mutation 和无限 review 轮次带来的交付停滞。质量不足和质量过量都会伤害 Magic Engine 2.0。
 
 **影响**：A 级保留威胁/并发模型、真实边界集成、关键 mutation 和集中复审；B 级默认核心测试 + 少量集成 + 一次 review；C 级以 smoke/截图/build 为主。只实现当前调用方的最小契约；review 收敛与停止条件继续执行 GitHub #964。
+
+## 2026-08-03 · 文件/素材/文档该放哪：合同发票进 Dropbox by-client，素材进 MagicLab_Studio，文档进代码仓 docs/
+
+**决策**：三类东西三个地方——**合同 · 发票 · 报价单**放 `Dropbox/Magic Engine/by-client/<客户>/`；**素材**（视频/图片/音乐）放 `Dropbox/MagicLab_Studio/`，由系统读取入库；**文档**（策略/诊断/分析/SOP/规格）一律进代码仓 `docs/`。一句话：**能搜索能引用的文字 → 代码仓；有法律效力或很大的二进制 → Dropbox；系统真正要用的素材 → 最终进数据库。**
+
+**为什么**：合同发票含银行账号、电子签名、客户金额，代码仓会推到 GitHub，绝不能进；素材是几百 MB 二进制，进 git 会撑爆仓库且没有增量；文档要版本管理、要能被 agent 搜索、要跟代码一起演进，放 Dropbox 就搜不到也引用不了。
+
+**影响**：
+- Dropbox 现状是**两套客户目录**，命名不同——`Magic Engine/by-client/` 只装合同发票（`01_CTS_Tours` 带编号前缀），`MagicLab_Studio/` 只装素材（`CTS` 不带前缀）。**已出过事**：30 Kiteroa 的 12 条实拍视频被误放进合同库 `by-client/05_Kiteroa/`，系统读不到（素材只扫 `MagicLab_Studio`）；2026-08-03 已修正，素材移到 `MagicLab_Studio/Roman_HU/projects/30-Kiteroa/`，`05_Kiteroa/` 清空删除。判断很简单：PDF/DOCX 进 `by-client`，mp4/mov/jpg 进 `MagicLab_Studio`。
+- `MagicLab_Studio` 内部**目录即意图**，丢进哪个文件夹就决定系统怎么理解这份素材，不用填表不用改名：`<客户名>/footage/client_provided/` = 客户实拍/我们实拍（能打真实价格）；`footage/stock/` = 图库下载；`footage/ai/`、`library/i2v_out/` = AI 生成；`<客户名>/output/`、`projects/` = 成片与中间产物（不算素材）；`_shared/library/`、`_shared/music/` = 行业共用图库/音乐；`_shared/raw_intake/` = 待归属（拿不准就丢这里，系统看图猜客户后请人点一下确认，猜错的代价是确认不是数据泄漏）；`相机上传/` 等顶层目录不扫，避免混进私人内容。中介客户多一层楼盘：`MagicLab_Studio/<中介名>/projects/<楼盘名>/`，素材**绝不能跨楼盘串用**（背后往往是竞品开发商）；该楼盘合同发票仍按**开票公司名**走 `by-client/<开票主体>/`，跟素材目录不是同一维度（例：30 Kiteroa 开票主体是 Wei Works Ltd，发票在 `03_WeiWorks_Kiteroa/`）。
+- 代码仓 `docs/` 分层：根目录只放全局适用的基石文档；`specs/` 放单功能设计文档；`sops/` 放可复用操作手册；`clients/` 放客户交付物；`agents/` 放 agent 人设；`history/` 放完成日志与历史快照；`archive/` 放已作废但留档的内容。**新文档不要往根目录扔**——根目录该放多少个、都是谁，见 [2026-08-20 条](#2026-08-20-docs-根目录二次瘦身9-个基石文档-1-个常驻架构参考其余按-specshistoryroadmap-分类)。
+
 ## 2026-07-25 · 素材来源政策：不足就去全网抓
 
 **决策**：素材不足不是借口。抓取优先级按**合规性**排（不是按方便程度）：① Unsplash / Pexels（免费商用，零风险，首选）② Apify 各类 scraper（Pinterest / IG / FB，用于找参考定风格）③ 客户自己上传的真实素材（质量最高、唯一能打真价）。加工链路：好看的图 →(i2v)→ 视频，或 图 →(图转图换风格)→ 再转视频。

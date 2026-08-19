@@ -181,7 +181,10 @@ Claude Code 干：大范围重构 · 跨模块长链路 · 复杂调试 · 架�
 | [docs/PITFALLS.md](./docs/PITFALLS.md) | **动手前扫一眼** — 真实事故清单 |
 | [docs/ENGINEERING_QUALITY_GATES.md](./docs/ENGINEERING_QUALITY_GATES.md) | **每个 Issue / PR 开工前** — A/B/C 风险级别、对应验证强度、review 停止条件 |
 | [docs/roadmap/2026-08-19-me2-platformization-principle.md](./docs/roadmap/2026-08-19-me2-platformization-principle.md) | **所有开发窗口必读** — Reuse First、垂直版本共享底层、五道 Build Gate、Memory 泛化边界 |
+| [docs/roadmap/2026-08-17-me2-progress-map.md](./docs/roadmap/2026-08-17-me2-progress-map.md) | ME 2.0 每个组件到底做到哪了 — 拿证据反推的 M0–M5 成熟度，不看声称 |
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) · [docs/PRODUCT.md](./docs/PRODUCT.md) | 数据模型 / API 分域 · 产品愿景与商业模式 |
+| [docs/DESIGN_SYSTEM.md](./docs/DESIGN_SYSTEM.md) | **写 `/dashboard/**` 页面前必读** — 强制视觉规范，不合规会被 PM 拒收 |
+| [docs/flywheel-architecture.md](./docs/flywheel-architecture.md) | 飞轮数据闭环架构 — 三张表、端到端数据流、加新 adapter 的步骤 |
 | [docs/specs/](./docs/specs/) · [docs/sops/](./docs/sops/) | 单功能设计文档 · 可复用操作手册 |
 | [docs/agents/](./docs/agents/) · [docs/clients/](./docs/clients/) · [docs/history/](./docs/history/) | agent 人设（Codex 入口 `CODEX.md`）· 客户交付物 · 完成日志与历史快照 |
 

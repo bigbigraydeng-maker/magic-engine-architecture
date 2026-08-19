@@ -5,7 +5,7 @@
 > 判定标准（M0–M5、四问）是**稳定的**，取自代码 `src/lib/product-map/maturity.ts` 与 `operational-snapshot.ts`。
 > 快照部分是**时间点**数据，会过期，每份都标了 as-of 日期。
 >
-> 相关：[STATE.md](./STATE.md) · [ROADMAP.md](./ROADMAP.md) · WP00 契约冻结 [specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md](./specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md)
+> 相关：[STATE.md](../STATE.md) · [ROADMAP.md](../ROADMAP.md) · WP00 契约冻结 [specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md](../specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md)
 
 ---
 

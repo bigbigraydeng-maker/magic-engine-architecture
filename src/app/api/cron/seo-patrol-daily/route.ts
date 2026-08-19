@@ -28,7 +28,7 @@
  *   401 Unauthorized
  *   500 Server misconfiguration / unhandled error
  *
- * Reference: ROADMAP.md § Phase 22.E · docs/seo-sop-implementation-design.md
+ * Reference: ROADMAP.md § Phase 22.E · docs/specs/2026-06-04-seo-patrol-implementation-design.md
  */
 
 import { NextRequest, NextResponse } from 'next/server'
