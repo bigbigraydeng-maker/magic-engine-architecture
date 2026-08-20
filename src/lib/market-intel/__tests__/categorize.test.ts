@@ -27,9 +27,17 @@ describe('matchCategory', () => {
     expect(matchCategory(miss, ['meta_ads'])).toBeNull()
   })
 
-  it('passes through ungated categories (ai_startup / marketing) without a phrase check', () => {
+  it('passes through ungated categories (ai_startup / marketing / llm_news / chatgpt_ads / china_outbound) without a phrase check', () => {
     const anything = item('A small company announced something unrelated to ads')
     expect(matchCategory(anything, ['ai_startup'])).toBe('ai_startup')
+    expect(matchCategory(anything, ['llm_news'])).toBe('llm_news')
+    expect(matchCategory(anything, ['chatgpt_ads'])).toBe('chatgpt_ads')
+    expect(matchCategory(anything, ['china_outbound'])).toBe('china_outbound')
+  })
+
+  it('matches Instagram-specific ad phrases under meta_ads', () => {
+    const hit = item('Instagram Ads adds new carousel format for Reels')
+    expect(matchCategory(hit, ['meta_ads'])).toBe('meta_ads')
   })
 
   it('tries candidate categories in order and returns the first hit when both match', () => {
