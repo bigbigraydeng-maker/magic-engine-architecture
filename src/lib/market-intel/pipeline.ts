@@ -17,7 +17,8 @@ const SOURCE_FAIL_ALERT_THRESHOLD = 3
 const CATEGORY_ZERO_STREAK_ALERT_DAYS = 5
 
 const ALL_CATEGORIES: MarketIntelCategory[] = [
-  'ai_startup', 'marketing', 'meta_ads', 'google_ads', 'tiktok_ads', 'llm_pricing',
+  'ai_startup', 'marketing', 'meta_ads', 'google_ads', 'tiktok_ads',
+  'llm_news', 'chatgpt_ads', 'china_outbound',
 ]
 
 interface SourceRow {
@@ -244,20 +245,6 @@ async function checkCategoryHealth(digestDate: string): Promise<string[]> {
   const windowStart = new Date(
     Date.parse(`${digestDate}T00:00:00Z`) - (CATEGORY_ZERO_STREAK_ALERT_DAYS - 1) * 24 * 60 * 60 * 1000,
   ).toISOString()
-
-  // pipeline 自己都还没活满 N 天时，窗口内任何零命中都只是"还没攒够数据"，
-  // 不是真的连续 N 天零命中——用信源表最早的 created_at（首次 upsert 时写入）
-  // 当 pipeline 出生时间的锚点，不满窗口就先不报警，避免上线头几天全是假警报。
-  const { data: earliestRows, error: earliestError } = await supabaseAdmin
-    .from('market_intel_sources')
-    .select('created_at')
-    .order('created_at', { ascending: true })
-    .limit(1)
-  if (earliestError) throw new Error(`checkCategoryHealth earliest lookup failed: ${earliestError.message}`)
-  const earliestCreatedAt = earliestRows?.[0]?.created_at
-  if (earliestCreatedAt && Date.parse(earliestCreatedAt) > Date.parse(windowStart)) {
-    return []
-  }
 
   const { data, error } = await supabaseAdmin
     .from('market_intel_items')

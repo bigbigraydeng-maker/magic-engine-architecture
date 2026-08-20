@@ -4,7 +4,11 @@ export type MarketIntelCategory =
   | 'meta_ads'
   | 'google_ads'
   | 'tiktok_ads'
-  | 'llm_pricing'
+  // 2026-08-21 从 llm_pricing 改名放宽：原来只收定价新闻,PM 要看 Grok/DeepSeek/
+  // Claude/OpenAI 各家的动态,不该只窄到价格这一件事。
+  | 'llm_news'
+  | 'chatgpt_ads'
+  | 'china_outbound'
 
 export interface MarketIntelSourceConfig {
   name: string

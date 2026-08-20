@@ -2,21 +2,25 @@ import type { MarketIntelCategory, SummarizedItem } from './types'
 
 const CATEGORY_LABELS: Record<MarketIntelCategory, string> = {
   ai_startup: 'AI 创业动态',
-  marketing: '数字营销大盘',
-  meta_ads: 'Meta / Facebook 广告',
+  marketing: '数字营销大盘（含澳新/东南亚/中东）',
+  meta_ads: 'Meta / Facebook / Instagram 广告',
   google_ads: 'Google Ads',
   tiktok_ads: 'TikTok 广告',
-  llm_pricing: '大模型 Token 定价',
+  llm_news: '大模型动态（Grok / DeepSeek / Claude / OpenAI）',
+  chatgpt_ads: 'ChatGPT 广告',
+  china_outbound: '中国企业出海',
 }
 
 // 展示顺序按设计文档 §四表格的顺序，不是按当天条数排。
 const CATEGORY_ORDER: MarketIntelCategory[] = [
   'ai_startup',
+  'llm_news',
   'marketing',
   'meta_ads',
   'google_ads',
   'tiktok_ads',
-  'llm_pricing',
+  'chatgpt_ads',
+  'china_outbound',
 ]
 
 export function escapeHtml(text: string): string {
