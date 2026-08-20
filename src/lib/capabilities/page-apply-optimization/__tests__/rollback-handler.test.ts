@@ -468,6 +468,45 @@ describe('rollback · blocker 5 · receipt suffix spoof 拒绝', () => {
   })
 })
 
+// ── STOP WHEN (final micro-patch): listed candidate detail 404 / unknown state ─
+
+describe('rollback · listed candidate detail 404 → fail-closed 零写入', () => {
+  it('listPullRequestsByHead 返回 candidate，但 getPullRequestDetail 抛 404 → return fail', async () => {
+    const { gh, calls } = ghFake({
+      branchTipSha: BLOB_SHA,
+      listHeadPrs: [{ number: 999, html_url: 'x' }],
+      prByNumber: { 999: 404 }, // list 里出现，但 detail 404
+    })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown> }), {})
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/listed_candidate_detail_404|状态不可读/)
+    expect(calls.close).toEqual([])
+    expect(calls.del).toEqual([])
+  })
+})
+
+describe('rollback · unknown PR state → fail-closed 零写入', () => {
+  it('PR state 既非 open 也非 closed（provider 契约违约）+ matching receipt + draft=true → fail', async () => {
+    const { gh, calls } = ghFake({
+      branchTipSha: BLOB_SHA,
+      prByNumber: {
+        42: {
+          state: 'weird_new_value' as unknown as 'open',
+          merged: false, mergedAt: null, draft: true,
+          headRef: OWNED_BRANCH, baseRef: 'main', body: OUR_PR_BODY,
+        },
+      },
+    })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, open_pr: OPENED_OUTPUT }), {})
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/state 既非|pr_state_unknown/)
+    expect(calls.close).toEqual([])
+    expect(calls.del).toEqual([])
+  })
+})
+
 // ── Wiring ───────────────────────────────────────────────────────────────────
 
 describe('rollback wiring', () => {

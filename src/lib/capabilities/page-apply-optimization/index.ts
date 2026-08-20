@@ -834,9 +834,12 @@ async function rollbackHandler(
     const d = await gh.getPullRequestDetail(prep.repo_owner, prep.repo_name, n)
     return { number: d.number, state: d.state, merged: d.merged, mergedAt: d.mergedAt, draft: d.draft, headRef: d.headRef, baseRef: d.baseRef, body: d.body }
   }
-  type PrClass = 'merged' | 'owned_open_draft' | 'owned_open_ready_for_review' | 'owned_closed_unmerged' | 'not_owned'
+  type PrClass = 'merged' | 'owned_open_draft' | 'owned_open_ready_for_review' | 'owned_closed_unmerged' | 'not_owned' | 'unknown_state'
   const classify = (pd: OwnedPr): PrClass => {
     if (pd.merged === true) return 'merged'
+    // 🔴 runtime state 必须**严格**是 'open' 或 'closed'（provider 契约违约防御）——
+    //    禁止「不是 closed 就当 open」。任何未知值 → unknown_state → fail-closed。
+    if (pd.state !== 'open' && pd.state !== 'closed') return 'unknown_state'
     const receiptOk =
       pd.headRef === prep.branch_name &&
       pd.baseRef === liveDefaultBranch &&
@@ -844,7 +847,7 @@ async function rollbackHandler(
     if (!receiptOk) return 'not_owned'
     if (pd.state === 'closed') return 'owned_closed_unmerged'
     // state === 'open'
-    if (pd.draft !== true) return 'owned_open_ready_for_review' // blocker 2 fail-closed
+    if (pd.draft !== true) return 'owned_open_ready_for_review'
     return 'owned_open_draft'
   }
 
@@ -888,6 +891,13 @@ async function rollbackHandler(
         failure_reason: `拒绝 rollback：PR #${opened.pr_number} 已被人 mark ready-for-review (draft=false)，v1 不自动 close`,
       }
     }
+    if (cls === 'unknown_state') {
+      return {
+        ok: false, rollbackKind: 'provider_native',
+        detail: { ...detail, reason: 'pr_state_unknown', pr_number: pd.number, actual_state: pd.state },
+        failure_reason: `拒绝 rollback：PR #${opened.pr_number} state 既非 'open' 也非 'closed'（provider 契约违约）`,
+      }
+    }
     if (cls === 'owned_open_draft') prsToClose.push(pd)
     // owned_closed_unmerged → 跳过 PR 动作，稍后照常处理 owned branch
     return null
@@ -912,11 +922,21 @@ async function rollbackHandler(
     try {
       pd = await inspect(cand.number)
     } catch (e) {
-      if (e instanceof GitHubApiError && e.status === 404) continue // race: PR just deleted
+      // 🔴 blocker A：list 已枚举出的 candidate，随后 detail 读取任何错误
+      //    （**包括 404**）都必须立即 fail-closed。禁止 `continue` 忽略。
+      //    (opened.pr_number 的 404 幂等语义在 notedOpenedPr 里保留 —— 那是
+      //    prior output 明确记录的场景，语义不同。)
+      const isApi404 = e instanceof GitHubApiError && e.status === 404
       return {
         ok: false, rollbackKind: 'provider_native',
-        detail: { ...detail, reason: 'live_pr_read_failed', pr_number: cand.number },
-        failure_reason: `拒绝 rollback：读 PR #${cand.number} 失败：${e instanceof Error ? e.message : String(e)}`,
+        detail: {
+          ...detail,
+          reason: isApi404 ? 'listed_candidate_detail_404' : 'live_pr_read_failed',
+          pr_number: cand.number,
+        },
+        failure_reason: isApi404
+          ? `拒绝 rollback：listPullRequestsByHead 枚举出 PR #${cand.number}，但随后 detail 读取 404 —— 状态不可读，禁止 close/delete`
+          : `拒绝 rollback：读 PR #${cand.number} 失败：${e instanceof Error ? e.message : String(e)}`,
       }
     }
     seenPrNumbers.add(pd.number)
@@ -935,6 +955,13 @@ async function rollbackHandler(
         ok: false, rollbackKind: 'provider_native',
         detail: { ...detail, reason: 'pr_ready_for_review', pr_number: pd.number },
         failure_reason: `拒绝 rollback：owned head 上的 PR #${pd.number} 已被 mark ready-for-review`,
+      }
+    }
+    if (cls === 'unknown_state') {
+      return {
+        ok: false, rollbackKind: 'provider_native',
+        detail: { ...detail, reason: 'pr_state_unknown', pr_number: pd.number, actual_state: pd.state },
+        failure_reason: `拒绝 rollback：PR #${pd.number} state 既非 'open' 也非 'closed'（provider 契约违约）`,
       }
     }
     if (cls === 'owned_open_draft') prsToClose.push(pd)
