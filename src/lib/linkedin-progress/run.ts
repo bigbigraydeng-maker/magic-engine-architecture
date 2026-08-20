@@ -55,7 +55,12 @@ interface GenerationSnapshot {
   entry_count: number
   flagged_terms: string[]
   format_violations: string[]
-  reason?: 'sensitive_content_flagged' | 'format_violation' | 'linkedin_account_not_configured' | 'publish_failed'
+  reason?:
+    | 'sensitive_content_flagged'
+    | 'format_violation'
+    | 'linkedin_account_not_configured'
+    | 'publish_failed'
+    | 'published_but_db_sync_failed'
   publish_error?: string
 }
 
@@ -233,10 +238,36 @@ export async function runLinkedinProgressPost(cronRun: CronRunHandle, now: Date 
       throw new Error(`scheduleSocialPost failed: ${result.error}`)
     }
 
+    if (result.dbSyncError) {
+      // Publer already has this post live/queued — content_posts just
+      // doesn't know it yet. Best-effort mark this distinctly (separate
+      // write attempt, since the status/publer_post_id write is what just
+      // failed) so the manual-item check below never mistakes this for
+      // "failed to publish" and tells someone to retry — that would publish
+      // a real duplicate. If this write also fails, the console.error in
+      // scheduleSocialPost (with postId + publerJobId) is the fallback trail.
+      const { error: reconcileErr } = await supabaseAdmin
+        .from('content_posts')
+        .update({
+          generation_context_snapshot: {
+            ...baseSnapshot,
+            reason: 'published_but_db_sync_failed',
+            publish_error: result.dbSyncError,
+          } satisfies GenerationSnapshot,
+        })
+        .eq('id', post.id)
+      if (reconcileErr) {
+        console.error(
+          '[runLinkedinProgressPost] failed to record published_but_db_sync_failed marker:',
+          reconcileErr.message,
+        )
+      }
+    }
+
     await cronRun.finish({
       processed: 1,
       completed: 1,
-      summary: { published: true, publerJobId: result.publerJobId },
+      summary: { published: true, publerJobId: result.publerJobId, dbSyncError: result.dbSyncError },
     })
     return NextResponse.json({ ok: true, published: true, publerJobId: result.publerJobId })
   } catch (err) {

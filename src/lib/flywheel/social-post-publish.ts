@@ -38,6 +38,14 @@ export interface ScheduleSocialPostResult {
   scheduledAt:  string
   accountId:    string
   provider:     string
+  /**
+   * Set when Publer already accepted the post but writing status='scheduled'
+   * back to content_posts failed. The post IS live/queued externally — this
+   * is NOT a "safe to retry" failure, it's a local bookkeeping gap. Callers
+   * must surface this distinctly (never as a generic "publish failed" that
+   * invites a retry — that would publish a duplicate real post).
+   */
+  dbSyncError?: string
 }
 
 export interface ScheduleSocialPostError {
@@ -199,8 +207,13 @@ export async function scheduleSocialPost(
     return { ok: false, error: `Publer scheduling failed: ${msg}` }
   }
 
-  // 5. Update content_post to 'scheduled' + store publer_post_id
-  await supabaseAdmin
+  // 5. Update content_post to 'scheduled' + store publer_post_id.
+  //    Publer has ALREADY accepted this post at this point — if this write
+  //    fails, the post is live/queued externally but content_posts still
+  //    says 'approved'. That must not read as a silent success: left
+  //    unflagged, a later staleness check would see the stuck 'approved' row
+  //    and tell someone to retry publishing, producing a real duplicate post.
+  const { error: statusUpdateErr } = await supabaseAdmin
     .from('content_posts')
     .update({
       status:         'scheduled',
@@ -208,6 +221,14 @@ export async function scheduleSocialPost(
       scheduled_at:   scheduledAt,
     })
     .eq('id', postId)
+
+  if (statusUpdateErr) {
+    console.error(
+      `[scheduleSocialPost] Publer accepted postId=${postId} (job ${publerResult.job_id}) but the ` +
+        `content_posts status update failed — needs manual reconciliation, do NOT republish:`,
+      statusUpdateErr.message,
+    )
+  }
 
   // 6. Write flywheel_action (non-blocking — failure must not fail publish)
   supabaseAdmin
@@ -238,6 +259,7 @@ export async function scheduleSocialPost(
     scheduledAt,
     accountId:   account.id,
     provider:    account.provider,
+    ...(statusUpdateErr ? { dbSyncError: statusUpdateErr.message } : {}),
   }
 }
 

@@ -782,6 +782,23 @@ async function pushLinkedinProgressItems(
       if (Number.isNaN(updatedAt)) continue
       const hoursAgo = (now.getTime() - updatedAt) / 3_600_000
       if (hoursAgo < LINKEDIN_PUBLISH_FAILURE_STALE_HOURS) continue
+
+      // 这条其实已经真发到 LinkedIn 上了——只是发布成功后回写数据库那一步
+      // 失败了，本地状态没跟上。绝不能套用下面"没能发出去"那套话术：那会
+      // 引导人去重试/重新批准，而 Publer 那边已经真有一条了，重试 = 发出
+      // 重复的公开帖子。这里只能是"帮我手动改一下状态"，不是"帮我重试"。
+      if (row.generation_context_snapshot?.reason === 'published_but_db_sync_failed') {
+        items.push({
+          kind: 'linkedin_progress_needs_review',
+          client_id: LINKEDIN_PROGRESS_CLIENT_ID,
+          client_name: 'ME 产品动态（LinkedIn）',
+          what: '这条 LinkedIn 进度贴其实已经真的发出去了，只是系统记录状态没跟上——千万别在内容工厂看板里重新点"批准发布"，会发出重复的公开帖子',
+          how: '回我一句，我去手动把这条记录的状态改成"已发布"，不用你操作',
+          href: LINKEDIN_CONTENT_BOARD_URL,
+        })
+        continue
+      }
+
       const err = row.generation_context_snapshot?.publish_error
       items.push({
         kind: 'linkedin_progress_failed',
