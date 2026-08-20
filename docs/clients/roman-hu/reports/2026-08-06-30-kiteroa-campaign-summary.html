@@ -23,16 +23,11 @@
   .wrap{max-width:1000px;margin:0 auto;padding:0 24px}
 
   /* ── HERO ───────────────────────────────────── */
-  .hero{background:#101D2E;color:#fff;padding:64px 0 0;position:relative;overflow:hidden}
-  .hero::before{content:"";position:absolute;inset:-4%;z-index:0;
-    background-image:url('data:image/jpeg;base64,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');
-    background-size:cover;background-position:center 38%;
-    filter:blur(2px) brightness(.7) saturate(1.05)}
-  .hero-scrim{position:absolute;inset:0;z-index:0;pointer-events:none;
-    background:linear-gradient(165deg,rgba(30,58,95,.82) 0%,rgba(22,41,63,.87) 62%,rgba(16,29,46,.92) 100%)}
+  .hero{background:linear-gradient(165deg,#1E3A5F 0%,#16293F 62%,#101D2E 100%);
+    color:#fff;padding:64px 0 0;position:relative;overflow:hidden}
   .hero::after{content:"";position:absolute;right:-140px;top:-140px;width:460px;height:460px;
-    border-radius:50%;background:radial-gradient(circle,rgba(168,130,63,.22),transparent 68%);z-index:1}
-  .hero .wrap{position:relative;z-index:2}
+    border-radius:50%;background:radial-gradient(circle,rgba(168,130,63,.22),transparent 68%)}
+  .hero .wrap{position:relative;z-index:1}
   .kicker{font-size:11.5px;letter-spacing:.24em;text-transform:uppercase;
     color:var(--gold);font-weight:700}
   .hero h1{font-size:clamp(32px,5.4vw,52px);line-height:1.14;margin:16px 0 6px;
@@ -43,9 +38,8 @@
     display:inline-block;border:1px solid rgba(255,255,255,.22);
     border-radius:999px;padding:7px 16px}
 
-  /* hero stat band — 四格统一同一视觉权重，不给任何一项额外高亮，
-     避免读者第一眼就被引导去看"最好看"的那个数字 */
-  .band{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;
+  /* hero stat band */
+  .band{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;
     background:rgba(255,255,255,.14);margin-top:48px;
     border-radius:14px 14px 0 0;overflow:hidden}
   .band .b{background:rgba(255,255,255,.05);backdrop-filter:blur(6px);padding:24px 20px 26px}
@@ -53,6 +47,8 @@
   .band .b .v{font-size:clamp(26px,3.6vw,36px);font-weight:700;margin-top:6px;
     letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1}
   .band .b .n{font-size:11.5px;color:rgba(255,255,255,.45);margin-top:5px}
+  .band .b.hi{background:rgba(168,130,63,.22)}
+  .band .b.hi .v{color:#F2D9A4}
 
   /* ── SECTION ────────────────────────────────── */
   section{padding:60px 0}
@@ -62,8 +58,22 @@
   .sec-h h2{font-size:clamp(21px,3vw,28px);font-weight:700;margin:0;letter-spacing:-.015em}
   .lede{color:var(--ink-70);font-size:15.5px;max-width:70ch;margin:0 0 26px}
 
+  /* highlight card */
   .spot{background:var(--card);border:1px solid var(--line);border-radius:16px;
     padding:34px 36px;box-shadow:0 1px 2px rgba(21,24,28,.04),0 12px 32px -18px rgba(21,24,28,.18)}
+  .spot.gold{background:linear-gradient(180deg,#FFFDF8,#FFF);border-color:#E8DCC0}
+  .ring{display:flex;gap:34px;align-items:center;flex-wrap:wrap}
+  .donut{--p:48;width:132px;height:132px;border-radius:50%;flex:none;
+    background:conic-gradient(var(--gold) calc(var(--p)*1%),var(--line-soft) 0);
+    display:grid;place-items:center;position:relative}
+  .donut::before{content:"";position:absolute;inset:13px;background:var(--card);border-radius:50%}
+  .donut span{position:relative;font-size:30px;font-weight:800;letter-spacing:-.02em}
+  .donut small{position:relative;display:block;font-size:11px;font-weight:600;
+    color:var(--ink-45);margin-top:-4px;text-align:center}
+  .ring .txt{flex:1;min-width:260px}
+  .ring .txt h3{margin:0 0 10px;font-size:19px;font-weight:700}
+  .ring .txt p{margin:0 0 10px;color:var(--ink-70)}
+  .ring .txt p:last-child{margin:0}
 
   /* tables */
   .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;
@@ -81,6 +91,8 @@
   .p-gold{background:var(--gold-soft);color:#8A6A2C}
   .p-green{background:var(--green-soft);color:var(--green)}
   .p-navy{background:var(--navy-soft);color:var(--navy)}
+  .bar{height:5px;border-radius:3px;background:var(--line-soft);overflow:hidden;min-width:64px}
+  .bar i{display:block;height:100%;background:var(--gold);border-radius:3px}
 
   /* insight grid */
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
@@ -114,6 +126,7 @@
   footer strong{color:rgba(255,255,255,.85)}
 
   @media(max-width:760px){
+    .band{grid-template-columns:repeat(2,1fr)}
     .spot{padding:24px 22px}
     section{padding:44px 0}
   }
@@ -123,7 +136,6 @@
 <body>
 
 <div class="hero">
-  <div class="hero-scrim"></div>
   <div class="wrap">
     <div class="kicker">Magic Engine · 推广阶段报告</div>
     <h1>30 Kiteroa Terrace<b>推广数据总结</b></h1>
@@ -133,6 +145,8 @@
     <div class="band">
       <div class="b"><div class="k">触达人数</div><div class="v">12,440</div><div class="n">不重复的真人</div></div>
       <div class="b"><div class="k">广告展示</div><div class="v">24,178</div><div class="n">被看到的次数</div></div>
+      <div class="b"><div class="k">互动点击</div><div class="v">1,079</div><div class="n">主动点开了解</div></div>
+      <div class="b hi"><div class="k">有效观看视频</div><div class="v">3,813</div><div class="n">观看≥15秒的次数</div></div>
     </div>
   </div>
 </div>
@@ -145,56 +159,74 @@
   <p class="lede">
     这是 30 Kiteroa Terrace 的<strong>第一轮付费推广测试</strong>。目标不是一次性卖掉房子，
     而是用可控的预算把三件事测出来：哪种说法有人听、哪类人真的在看、以及能不能攒出一批
-    「已经认识这套房」的潜在买家。测试期间共投放了七个广告组、十余条不同版本的创意，
-    覆盖 Facebook、Instagram 与 Messenger 三个渠道，详细数据见下文。
+    「已经认识这套房」的潜在买家。
   </p>
+
+  <div class="spot gold">
+    <div class="ring">
+      <div class="donut" style="--p:48"><span>48%</span><small>有效观看率</small></div>
+      <div class="txt">
+        <h3>近一半的观看，认真看进去了</h3>
+        <p>
+          在信息流里，绝大多数视频广告的有效观看率在 <strong>10–20%</strong> 之间。
+          这一轮两条主力视频拿到的是 <strong>48%</strong> 和 <strong>42%</strong>。
+        </p>
+        <p>
+          累计 <strong>3,813 次有效观看</strong>（同一人反复观看或看多条创意会重复计数，
+          不等于 3,813 个不同的人）。但这些观看不是划过去的，
+          是有人停下来、认真看了、知道了这套房长什么样。
+        </p>
+      </div>
+    </div>
+  </div>
 </section>
 
 <!-- 02 ───────────────────────────────── -->
 <section>
-  <div class="sec-h"><span class="no">02</span><h2>视频完播情况</h2></div>
-  <p class="lede">
-    完播 = 观众把视频看到最后（Meta ThruPlay 口径）。测试期间投放的视频广告，
-    合计有 <strong>3,813 人次</strong>完整看完。逐条明细如下。
-  </p>
+  <div class="sec-h"><span class="no">02</span><h2>观看表现：逐条看</h2></div>
+  <p class="lede">有效观看 = 观众看满 15 秒,或把更短的视频看完（Meta ThruPlay 口径;超过 15 秒的视频不保证看到最后）。这是判断「内容有没有留住人」的核心指标。</p>
 
   <div class="scroll">
     <table>
       <thead><tr>
-        <th>视频广告</th><th class="n">展示</th><th class="n">看完</th><th class="n">完播率</th>
+        <th>视频广告</th><th class="n">展示</th><th class="n">有效观看</th><th class="n">有效观看率</th><th style="width:130px">　</th>
       </tr></thead>
       <tbody>
         <tr>
           <td>价格面议 · 英文版</td><td class="n">5,209</td><td class="n">2,498</td>
-          <td class="n">48%</td>
+          <td class="n"><strong>48%</strong></td>
+          <td><div class="bar"><i style="width:100%"></i></div></td>
         </tr>
         <tr>
           <td>Rangitoto 学区 · 中文版</td><td class="n">1,144</td><td class="n">484</td>
-          <td class="n">42%</td>
+          <td class="n"><strong>42%</strong></td>
+          <td><div class="bar"><i style="width:88%"></i></div></td>
         </tr>
         <tr>
           <td>Rangitoto 学区 · 中文（早期版）</td><td class="n">5,371</td><td class="n">428</td>
           <td class="n">8%</td>
+          <td><div class="bar"><i style="width:17%"></i></div></td>
         </tr>
         <tr>
           <td>价格面议 · 早期版</td><td class="n">2,358</td><td class="n">167</td>
           <td class="n">7%</td>
+          <td><div class="bar"><i style="width:15%"></i></div></td>
         </tr>
         <tr class="tot">
-          <td>累计完整观看</td><td class="n">—</td><td class="n">3,813</td><td class="n">—</td>
+          <td>累计有效观看</td><td class="n">—</td><td class="n">3,813</td><td class="n">—</td><td></td>
         </tr>
       </tbody>
     </table>
   </div>
   <p style="font-size:13px;color:var(--ink-45);margin-top:12px">
-    表中为完播数前四的视频广告；累计数含全部投放过的视频创意。
+    表中为有效观看数前四的视频广告；累计数含全部投放过的视频创意。
   </p>
 </section>
 
 <!-- 03 ───────────────────────────────── -->
 <section>
   <div class="sec-h"><span class="no">03</span><h2>哪种说法最抓人</h2></div>
-  <p class="lede">互动率 = 点击 ÷ 展示，用来比较不同创意主张之间的相对表现。</p>
+  <p class="lede">互动率 = 点击 ÷ 展示。同一套房、同一批预算，不同说法的差距接近 <strong>四倍</strong>。</p>
 
   <div class="scroll">
     <table>
@@ -203,7 +235,7 @@
       </tr></thead>
       <tbody>
         <tr><td>产权已下发 · 现在就能入住</td><td class="n">3,647</td><td class="n">403</td>
-            <td class="n">11.1%</td><td><span class="pill p-gold">最强主张</span></td></tr>
+            <td class="n"><strong>11.1%</strong></td><td><span class="pill p-gold">最强主张</span></td></tr>
         <tr><td>$10,000 礼卡 · 8/20 前签约</td><td class="n">624</td><td class="n">51</td>
             <td class="n">8.2%</td><td></td></tr>
         <tr><td>价格面议</td><td class="n">2,358</td><td class="n">174</td>
@@ -219,8 +251,8 @@
   </div>
 
   <blockquote class="quote">
-    互动率最高的创意，主打的是「产权已下发、现在能入住」这类具体、可核实的信息。<br>
-    <strong>买家在意的不是形容词，是确定性。</strong>
+    把「产权已下发、现在能入住」放在第一句的那条，互动率是最低那条的近四倍。<br>
+    <strong>买家最在意的不是形容词，是确定性。</strong>
     <cite>—— 本轮最可复用的一条结论</cite>
   </blockquote>
 </section>
@@ -271,7 +303,7 @@
       <tbody>
         <tr><td>Messenger 询盘 · Facebook</td><td>私信对话</td><td class="n">9,044</td><td class="n">4,042</td><td class="n">705</td><td class="n">1</td></tr>
         <tr><td>三语版本专测</td><td>私信对话</td><td class="n">5,976</td><td class="n">3,256</td><td class="n">219</td><td class="n">0</td></tr>
-        <tr><td>视频受众蓄水</td><td>视频完播</td><td class="n">6,353</td><td class="n">5,544</td><td class="n">54</td><td class="n">—</td></tr>
+        <tr><td>视频受众蓄水</td><td>视频有效观看</td><td class="n">6,353</td><td class="n">5,544</td><td class="n">54</td><td class="n">—</td></tr>
         <tr><td>预约表单 · 全域</td><td>表单留资</td><td class="n">1,503</td><td class="n">961</td><td class="n">33</td><td class="n">0</td></tr>
         <tr><td>Instagram 专投</td><td>私信对话</td><td class="n">944</td><td class="n">630</td><td class="n">47</td><td class="n">0</td></tr>
         <tr><td>暖池重定向</td><td>私信对话</td><td class="n">159</td><td class="n">113</td><td class="n">6</td><td class="n">0</td></tr>
@@ -299,8 +331,8 @@
       <div class="item now">
         <div class="when">已完成 · 测试轮</div>
         <h4>验证主张 + 蓄水受众</h4>
-        <p>测出「产权已下发、现在可入住」是最强主张；累计 3,813 人次完整看完视频，
-           形成第一批可重复触达的受众池。</p>
+        <p>测出「产权已下发、现在可入住」是最强主张；累计 3,813 次有效观看
+           （ThruPlay 口径,含重复计数，去重后的受众池规模尚待核实）。</p>
       </div>
 
       <div class="item next">
@@ -312,9 +344,9 @@
 
       <div class="item next">
         <div class="when">第二阶段 · 同步进行</div>
-        <h4>向已看完视频的人再次投放</h4>
-        <p>这批人已经完整看过视频、对这套房有基础印象。
-           第二阶段计划把这批受众也纳入投放范围，作为补充人群之一。</p>
+        <h4>向认真看过视频的人再次投放</h4>
+        <p>这批人已经认识这套房。第二次触达的成本远低于第一次，
+           转化意愿也高得多 —— 这是测试轮留下的最大资产。</p>
       </div>
 
       <div class="item next">

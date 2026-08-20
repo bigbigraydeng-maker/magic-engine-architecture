@@ -10,7 +10,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase'
-import { getAccounts, schedulePost, type PublerAccount } from '@/lib/publer/client'
+import { getAccounts, schedulePost } from '@/lib/publer/client'
 import { SOCIAL_ACTION_TYPE } from '@/lib/flywheel/vocabulary'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -20,16 +20,6 @@ export interface ScheduleSocialPostInput {
   clientId:     string
   /** ISO 8601 — defaults to 1 hour from now */
   scheduledAt?: string
-  /**
-   * When provided, skip this function's own (looser) account resolution
-   * entirely and publish to this exact account. Callers that already ran a
-   * strict resolution — e.g. resolveBoundPublerAccount() — MUST pass its
-   * result through here; otherwise this function re-resolves independently
-   * and can pick a different account (its fallback logic falls back to "any
-   * connected account" on a stale/ambiguous binding), silently publishing an
-   * unattended post to the wrong Publer account.
-   */
-  account?:     PublerAccount
 }
 
 export interface ScheduleSocialPostResult {
@@ -38,68 +28,11 @@ export interface ScheduleSocialPostResult {
   scheduledAt:  string
   accountId:    string
   provider:     string
-  /**
-   * Set when Publer already accepted the post but writing status='scheduled'
-   * back to content_posts failed. The post IS live/queued externally — this
-   * is NOT a "safe to retry" failure, it's a local bookkeeping gap. Callers
-   * must surface this distinctly (never as a generic "publish failed" that
-   * invites a retry — that would publish a duplicate real post).
-   */
-  dbSyncError?: string
 }
 
 export interface ScheduleSocialPostError {
   ok:    false
   error: string
-}
-
-// ── Strict account resolution (no fallback) ─────────────────────────────────────
-
-/**
- * Resolves the Publer account bound to a client for a given platform —
- * strictly. Returns null if there's no binding or the bound ID doesn't match
- * a currently-connected account of that exact provider.
- *
- * This deliberately does NOT fall back to "any connected account" the way
- * scheduleSocialPost's internal resolution does for AI Factory posts (that
- * fallback exists because AI Factory content always targets a platform the
- * client is known to be active on). Callers that need a hard guarantee they're
- * posting to the right account — e.g. anything posting to a non-client-owned
- * account sharing this Publer workspace — should use this instead of calling
- * schedulePost() directly.
- *
- * Throws on a genuine `client_connectors` query failure so callers don't
- * mistake "the DB lookup errored" for "nothing is configured yet" — those
- * need different PM-facing messaging (retry vs. go set up the connector).
- * Returns null only when the lookup succeeded and there's really no binding.
- */
-export async function resolveBoundPublerAccount(
-  clientId: string,
-  platform: string,
-): Promise<PublerAccount | null> {
-  const { data: connectorRow, error: connectorErr } = await supabaseAdmin
-    .from('client_connectors')
-    .select('config')
-    .eq('client_id', clientId)
-    .eq('anchor', 'publer')
-    .maybeSingle()
-
-  if (connectorErr) {
-    throw new Error(`client_connectors lookup failed: ${connectorErr.message}`)
-  }
-
-  const configuredIds = (connectorRow?.config as { publer_account_ids?: Record<string, string> } | null)
-    ?.publer_account_ids ?? {}
-  // Case-insensitive key lookup — the connectors settings UI writes this key
-  // straight from Publer's own `provider` field with no normalisation, so a
-  // platform's casing here isn't guaranteed to match callers' lowercase constants.
-  const platformLower = platform.toLowerCase()
-  const matchedKey = Object.keys(configuredIds).find((k) => k.toLowerCase() === platformLower)
-  const accountId = matchedKey ? configuredIds[matchedKey] : undefined
-  if (!accountId) return null
-
-  const accounts = await getAccounts()
-  return accounts.find((a) => a.id === accountId && a.provider?.toLowerCase() === platformLower) ?? null
 }
 
 // ── Main publish function ─────────────────────────────────────────────────────
@@ -131,50 +64,43 @@ export async function scheduleSocialPost(
     return { ok: false, error: `Post status is "${post.status}" — must be "approved" to publish` }
   }
 
-  // 2. Resolve Publer account — reuse an already-verified account when the
-  //    caller passed one (see ScheduleSocialPostInput.account); otherwise
-  //    fall back to this function's own (looser) resolution via connector
-  //    config.
-  let account: PublerAccount | undefined = input.account
+  // 2. Resolve Publer account via connector config
+  const { data: connectorRow } = await supabaseAdmin
+    .from('client_connectors')
+    .select('config')
+    .eq('client_id', clientId)
+    .eq('anchor', 'publer')
+    .maybeSingle()
 
-  if (!account) {
-    const { data: connectorRow } = await supabaseAdmin
-      .from('client_connectors')
-      .select('config')
-      .eq('client_id', clientId)
-      .eq('anchor', 'publer')
-      .maybeSingle()
+  const rawConfig = connectorRow?.config
+  const rawIds =
+    rawConfig && typeof rawConfig === 'object' && !Array.isArray(rawConfig)
+      ? (rawConfig as Record<string, unknown>).publer_account_ids
+      : undefined
+  const configuredIds: Record<string, string> =
+    rawIds && typeof rawIds === 'object' && !Array.isArray(rawIds)
+      ? (rawIds as Record<string, string>)
+      : {}
 
-    const rawConfig = connectorRow?.config
-    const rawIds =
-      rawConfig && typeof rawConfig === 'object' && !Array.isArray(rawConfig)
-        ? (rawConfig as Record<string, unknown>).publer_account_ids
-        : undefined
-    const configuredIds: Record<string, string> =
-      rawIds && typeof rawIds === 'object' && !Array.isArray(rawIds)
-        ? (rawIds as Record<string, string>)
-        : {}
+  const postPlatforms: string[] = Array.isArray(post.platforms)
+    ? (post.platforms as string[]).map(p => p.toLowerCase())
+    : []
 
-    const postPlatforms: string[] = Array.isArray(post.platforms)
-      ? (post.platforms as string[]).map(p => p.toLowerCase())
-      : []
+  const accounts = await getAccounts()
+  let account = accounts[0]
 
-    const accounts = await getAccounts()
-    account = accounts[0]
-
-    const configuredPlatform = postPlatforms.find(p => configuredIds[p])
-    if (configuredPlatform) {
-      const bound = accounts.find(a => a.id === configuredIds[configuredPlatform])
-      if (!bound) {
-        return {
-          ok: false,
-          error: `Publer account binding for "${configuredPlatform}" is stale. Please reconfigure the Publishing Hub connector.`,
-        }
+  const configuredPlatform = postPlatforms.find(p => configuredIds[p])
+  if (configuredPlatform) {
+    const bound = accounts.find(a => a.id === configuredIds[configuredPlatform])
+    if (!bound) {
+      return {
+        ok: false,
+        error: `Publer account binding for "${configuredPlatform}" is stale. Please reconfigure the Publishing Hub connector.`,
       }
-      account = bound
-    } else if (postPlatforms.length > 0) {
-      account = accounts.find(a => postPlatforms.includes(a.provider?.toLowerCase() ?? '')) ?? accounts[0]
     }
+    account = bound
+  } else if (postPlatforms.length > 0) {
+    account = accounts.find(a => postPlatforms.includes(a.provider?.toLowerCase() ?? '')) ?? accounts[0]
   }
 
   if (!account) {
@@ -207,13 +133,8 @@ export async function scheduleSocialPost(
     return { ok: false, error: `Publer scheduling failed: ${msg}` }
   }
 
-  // 5. Update content_post to 'scheduled' + store publer_post_id.
-  //    Publer has ALREADY accepted this post at this point — if this write
-  //    fails, the post is live/queued externally but content_posts still
-  //    says 'approved'. That must not read as a silent success: left
-  //    unflagged, a later staleness check would see the stuck 'approved' row
-  //    and tell someone to retry publishing, producing a real duplicate post.
-  const { error: statusUpdateErr } = await supabaseAdmin
+  // 5. Update content_post to 'scheduled' + store publer_post_id
+  await supabaseAdmin
     .from('content_posts')
     .update({
       status:         'scheduled',
@@ -221,14 +142,6 @@ export async function scheduleSocialPost(
       scheduled_at:   scheduledAt,
     })
     .eq('id', postId)
-
-  if (statusUpdateErr) {
-    console.error(
-      `[scheduleSocialPost] Publer accepted postId=${postId} (job ${publerResult.job_id}) but the ` +
-        `content_posts status update failed — needs manual reconciliation, do NOT republish:`,
-      statusUpdateErr.message,
-    )
-  }
 
   // 6. Write flywheel_action (non-blocking — failure must not fail publish)
   supabaseAdmin
@@ -259,7 +172,6 @@ export async function scheduleSocialPost(
     scheduledAt,
     accountId:   account.id,
     provider:    account.provider,
-    ...(statusUpdateErr ? { dbSyncError: statusUpdateErr.message } : {}),
   }
 }
 
