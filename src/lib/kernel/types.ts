@@ -23,7 +23,9 @@ import type { AccessTier } from '@/lib/auth/access-types'
  *    注册表建好之后必须把它反向注入 prompt，否则只会从「36 种自由文本」
  *    变成「36 种自由文本 + 一张对不上的表」。
  */
-export type ActionKey = 'seo.build_publish_package'
+export type ActionKey =
+  | 'seo.build_publish_package'
+  | 'page.apply_optimization_request'
 
 /** 一个 run 为了什么而跑。决定它需不需要挂 Goal。 */
 export type ActionPurpose =
@@ -125,7 +127,15 @@ export interface OutwardAuthorization {
 }
 
 /** 验证方法键 —— 真去回读并断言，不是「写成功了所以算成功」。 */
-export type VerificationMethod = 'package_integrity'
+export type VerificationMethod =
+  | 'package_integrity'
+  /**
+   * 🔴 execution-integrity only（见 `docs/specs/2026-08-19-me2-page-optimization-apply-action-v1.0.md` §8）。
+   *    只判「这次受授权的执行是否正确发生」（PR 是否真按批准的 diff/版本创建、`doNotTouch` 是否被守住、
+   *    receipt/lineage 是否可回读）—— **不判 Growth 结果是否变好**。
+   *    Growth 层的 matched remeasurement 走下游 Measurement/Verification 链，跟这个 method 无关。
+   */
+  | 'page_apply_integrity'
 
 export interface VerificationSpec {
   readonly method: VerificationMethod
