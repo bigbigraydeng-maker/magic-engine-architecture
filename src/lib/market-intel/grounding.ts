@@ -20,13 +20,15 @@ const MIN_ENTITY_LENGTH = 2
 
 export function extractLatinEntities(text: string): string[] {
   const matches = text.match(LATIN_ENTITY_RE) ?? []
-  return [...new Set(matches.filter((m) => m.length >= MIN_ENTITY_LENGTH))]
+  // Array.from 而不是 [...Set]——展开语法对 Set 的迭代需要 target es2015+，
+  // 这个仓库的 tsconfig 没设，Array.from 是普通方法调用，不受影响。
+  return Array.from(new Set(matches.filter((m) => m.length >= MIN_ENTITY_LENGTH)))
 }
 
 export function extractNumbers(text: string): string[] {
   const matches = text.match(NUMBER_RE) ?? []
   // 只保留 2 位数以上的数字——个位数太通用（"3 个功能"这种），核对意义不大。
-  return [...new Set(matches.filter((m) => m.replace(/[,.]/g, '').length >= 2))]
+  return Array.from(new Set(matches.filter((m) => m.replace(/[,.]/g, '').length >= 2)))
 }
 
 export interface GroundingResult {

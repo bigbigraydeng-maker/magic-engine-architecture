@@ -17,7 +17,9 @@ const STOPWORDS = new Set([
 export function normalizeTitle(title: string): string {
   return title
     .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ') // 去标点，保留字母数字空格（含非拉丁字符）
+    // 去标点，保留字母数字空格。信源全是英文 RSS，不用 Unicode 属性转义
+    // （\p{L}）——那个 u 标志要求 tsconfig target 到 es2015+，这个仓库没设。
+    .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
     .filter((token) => token.length > 0 && !STOPWORDS.has(token))
     .join(' ')

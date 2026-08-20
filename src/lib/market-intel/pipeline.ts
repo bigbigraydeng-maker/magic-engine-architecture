@@ -188,7 +188,9 @@ async function selectForDigest(
   }
 
   const selected: PersistedCandidate[] = []
-  for (const list of byCategory.values()) {
+  // Array.from 而不是直接 for...of Map.values()——Map 迭代器需要 target es2015+
+  // 才能免开 downlevelIteration，这个仓库的 tsconfig 没设；数组本身没有这个限制。
+  for (const list of Array.from(byCategory.values())) {
     const newestFirst = [...list].sort(
       (a, b) => (b.publishedAt ? Date.parse(b.publishedAt) : 0) - (a.publishedAt ? Date.parse(a.publishedAt) : 0),
     )
