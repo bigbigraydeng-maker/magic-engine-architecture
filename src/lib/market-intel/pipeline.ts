@@ -246,6 +246,25 @@ async function checkCategoryHealth(digestDate: string): Promise<string[]> {
     Date.parse(`${digestDate}T00:00:00Z`) - (CATEGORY_ZERO_STREAK_ALERT_DAYS - 1) * 24 * 60 * 60 * 1000,
   ).toISOString()
 
+  // pipeline 自己都还没活满 N 天时，窗口内任何零命中都只是"还没攒够数据"，
+  // 不是真的连续 N 天零命中——用信源表最早的 created_at（首次 upsert 时写入）
+  // 当 pipeline 出生时间的锚点，不满窗口就先不报警，避免上线头几天全是假警报。
+  // 已知局限（子牙 2026-08-21 复审指出，暂不处理）：这个锚点是"整个 pipeline
+  // 的年龄"，不是"每个分类各自的年龄"——如果几个月后才新加一个分类，它会
+  // 立刻套用老锚点、不再享受新分类的宽限期。当前所有分类（含这次新增的
+  // llm_news/chatgpt_ads/china_outbound）都是今天一起首次上线，不构成问题；
+  // 真出现"老 pipeline 加新分类"的场景再按需改成分类级锚点。
+  const { data: earliestRows, error: earliestError } = await supabaseAdmin
+    .from('market_intel_sources')
+    .select('created_at')
+    .order('created_at', { ascending: true })
+    .limit(1)
+  if (earliestError) throw new Error(`checkCategoryHealth earliest lookup failed: ${earliestError.message}`)
+  const earliestCreatedAt = earliestRows?.[0]?.created_at
+  if (earliestCreatedAt && Date.parse(earliestCreatedAt) > Date.parse(windowStart)) {
+    return []
+  }
+
   const { data, error } = await supabaseAdmin
     .from('market_intel_items')
     .select('matched_category')
