@@ -5,6 +5,20 @@
 
 ---
 
+### 2026-08-20（Magic Insight 上线 —— PM 每日全球 AI / 数字营销资讯雷达，PR [#1112](https://github.com/bigbigraydeng-maker/magic-engine/pull/1112)）
+
+**做了什么**：新增 `market-intel-daily` cron，每天从 12 个已验证的英文 RSS 信源（TechCrunch AI、VentureBeat AI、Search Engine Land/Journal、Marketing Dive、AdExchanger、Digiday、Social Media Today、HubSpot、PPC.org、OpenAI News 等）抓取 6 个类目（AI 创业 / 营销 / Meta 广告 / Google 广告 / TikTok 广告 / 大模型 Token 定价）的条目，AI 摘要成中文并做**事实核对**（摘要里的专有名词/数字必须能在原文摘录里找到，核对不过不进邮件、留表供人工翻查），跨信源去重，按类目健康度监控，每天发一封邮件到 `hello@`。四张表 `market_intel_*`（sources/items/digests/daily_notes）全部 `service_role`-only RLS，已 apply 到生产并独立验证。
+
+**范围演变（记录在案，供以后查证）**：2026-08-19 曾有一次通过 GitHub PR 评论触发 `claude[bot]` 的范围削减尝试（去掉建表和 AI 摘要，改成极简版）。PM 2026-08-20 明确拍板保留完整版，用 `git merge -s ours`（非 force-push）正式覆盖那次削减，保留完整提交历史。
+
+**未完成**：`render.yaml` 里 `market-intel-daily` 还没接 healthchecks.io 监控 ID，需要有 healthchecks.io 权限的人手动申请填入。
+
+**设计文档**：[docs/specs/2026-08-20-market-intel-digest-design.md](../specs/2026-08-20-market-intel-digest-design.md)（子牙+魏征设计审 v2，风险分级 B）。
+
+**Reuse Statement**：复用了本仓库既有的 cron 框架（`startCronRun`/`CronRunHandle`）、邮件发送封装（`meMailFrom`/`ME_MAIL_TO_ADDRESS`）、OpenAI handler-内初始化模式、`render.yaml` 的 `fromGroup` cron secret 模板。四张新表全部是 ME 自身内容资产（不挂 `client_id`），属于**平台共享**范畴——不是任何客户的私有数据，也不含行业/客户判断写进 shared runtime。没有可下沉的行业/客户维度（这是内部工具，不面向客户交付）。
+
+---
+
 ### 2026-08-17（WP05 GEO Module v1 上线 —— Roman AI 可见度首个诊断可读出）
 
 **发生了什么**：把 Roman 一个月前测出来的 GEO 基线（AI 答案样本），第一次真的读成「有支柱、有严重度、有处方」的诊断。之前只有原始答案 + 引用覆盖率，看不出「AI 是不是把 Roman 作为**人**在答案里提出来」。
