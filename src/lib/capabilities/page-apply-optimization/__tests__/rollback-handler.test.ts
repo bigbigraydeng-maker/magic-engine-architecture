@@ -345,6 +345,129 @@ describe('rollback · scenario 7 · 404 idempotent success', () => {
   })
 })
 
+// ── STOP WHEN blockers: PR discovery / PR lifecycle / receipt suffix ────────
+
+describe('rollback · blocker 1 · PR discovery fail-closed', () => {
+  it('listPullRequestsByHead(state=all) 失败 → 立即 fail，close/del 零调用', async () => {
+    const { gh, calls } = ghFake({ branchTipSha: BLOB_SHA })
+    gh.listPullRequestsByHead = async () => { throw new Error('provider 500') }
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown> }), {})
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/list_head_prs_failed|listPullRequestsByHead/)
+    expect(calls.close).toEqual([])
+    expect(calls.del).toEqual([])
+  })
+
+  it('candidate PR detail 读取失败 → 立即 fail，close/del 零调用', async () => {
+    const { gh, calls } = ghFake({
+      branchTipSha: BLOB_SHA,
+      listHeadPrs: [{ number: 500, html_url: 'x' }],
+    })
+    gh.getPullRequestDetail = async () => { throw new Error('provider 502') }
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown> }), {})
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/live_pr_read_failed|读 PR/)
+    expect(calls.close).toEqual([])
+    expect(calls.del).toEqual([])
+  })
+
+  it('候选 PR 无法证明属于本 run（head 上有 foreign PR）→ fail，不共享 branch 上删', async () => {
+    const { gh, calls } = ghFake({
+      branchTipSha: BLOB_SHA,
+      listHeadPrs: [{ number: 500, html_url: 'x' }],
+      prByNumber: {
+        500: { state: 'open', merged: false, mergedAt: null, draft: true, headRef: OWNED_BRANCH, baseRef: 'main', body: 'no receipt' },
+      },
+    })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown> }), {})
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/foreign_pr|不属于本 run/)
+    expect(calls.close).toEqual([])
+    expect(calls.del).toEqual([])
+  })
+
+  it('branch tip commit 读取失败 → 立即 fail（blocker 4：唯一 ownership 通路失败）', async () => {
+    const { gh, calls } = ghFake({ branchTipSha: 'some-sha' })
+    gh.getCommit = async () => { throw new Error('provider 500') }
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown> }), {})
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/tip_commit_read_failed|读 branch tip/)
+    expect(calls.del).toEqual([])
+  })
+})
+
+describe('rollback · blocker 2 · ready-for-review PR fail-closed', () => {
+  it('owned open PR draft=false（被人 mark ready-for-review）→ fail，close/del 零调用', async () => {
+    const { gh, calls } = ghFake({
+      branchTipSha: BLOB_SHA,
+      prByNumber: {
+        42: { state: 'open', merged: false, mergedAt: null, draft: false, headRef: OWNED_BRANCH, baseRef: 'main', body: OUR_PR_BODY },
+      },
+    })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, open_pr: OPENED_OUTPUT }), {})
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/ready-for-review|draft=false/)
+    expect(calls.close).toEqual([])
+    expect(calls.del).toEqual([])
+  })
+})
+
+describe('rollback · blocker 4 · prep-only 只走真实 commit marker（不比对 blob SHA）', () => {
+  it('branchTipSha === prep.page_version_token 但 commit 无 marker → fail-closed，不删 branch', async () => {
+    // 关键：即便 tip SHA 数值上等于 page_version_token（不可能但强制模拟），
+    // 也必须走 getCommit → marker 才能证明所有权。
+    const { gh, calls } = ghFake({
+      branchTipSha: BLOB_SHA, // == prep.page_version_token
+      commitMessage: 'unrelated commit',
+    })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown> }), {})
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/tampered|marker/)
+    expect(calls.del).toEqual([])
+  })
+})
+
+describe('rollback · blocker 5 · receipt suffix spoof 拒绝', () => {
+  it('body 里 `- kernel_run_id: run-1extra` 不算 receipt → not_owned → fail', async () => {
+    const spoofedBody =
+      `- kernel_run_id: ${RUN_ID}extra\n- authorization_decision_id: ${DECISION_ID}extra\n`
+    const { gh, calls } = ghFake({
+      branchTipSha: BLOB_SHA,
+      prByNumber: {
+        42: { state: 'open', merged: false, mergedAt: null, draft: true, headRef: OWNED_BRANCH, baseRef: 'main', body: spoofedBody },
+      },
+    })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, open_pr: OPENED_OUTPUT }), {})
+    expect(r.ok).toBe(false)
+    expect(r.failure_reason).toMatch(/receipt|not_owned|不属于本 run/)
+    expect(calls.close).toEqual([])
+    expect(calls.del).toEqual([])
+  })
+
+  it('body 里 receipt 前缀带空格（"-  kernel_run_id: run-1"）不算 → fail', async () => {
+    const spoofedBody =
+      `-  kernel_run_id: ${RUN_ID}\n-  authorization_decision_id: ${DECISION_ID}\n`
+    const { gh, calls } = ghFake({
+      branchTipSha: BLOB_SHA,
+      prByNumber: {
+        42: { state: 'open', merged: false, mergedAt: null, draft: true, headRef: OWNED_BRANCH, baseRef: 'main', body: spoofedBody },
+      },
+    })
+    const cap = makeCap(gh)
+    const r = await cap.rollback!(stepFor({ prepare: PREP_OUTPUT as unknown as Record<string, unknown>, open_pr: OPENED_OUTPUT }), {})
+    expect(r.ok).toBe(false)
+    expect(calls.close).toEqual([])
+    expect(calls.del).toEqual([])
+  })
+})
+
 // ── Wiring ───────────────────────────────────────────────────────────────────
 
 describe('rollback wiring', () => {

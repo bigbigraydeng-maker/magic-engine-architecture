@@ -286,6 +286,46 @@ export class GithubClient {
   }
 
   /**
+   * Atomically create a branch **AND** its identity-marker commit so the
+   * branch is never observable in a state where its tip is the shared base
+   * SHA. Used by page.apply_optimization_request to guarantee that same-run
+   * crash recovery has a provider-readable exact run marker via getCommit
+   * from the moment the branch first exists.
+   *
+   * Two-step Git Data API:
+   *   1. POST /git/commits — a marker commit reusing the base tree
+   *      (an "empty" commit), parent = fromSha; message carries the marker.
+   *   2. POST /git/refs — publish the branch pointing at that commit.
+   *
+   * If step 2 throws 422 ("Reference already exists"), the branch already
+   * existed —— caller MUST verify tip ownership before proceeding.
+   *
+   * Returns the marker commit SHA (branch tip after this call).
+   */
+  async createBranchWithMarker(
+    owner: string,
+    repo: string,
+    newBranch: string,
+    fromSha: string,
+    markerMessage: string,
+  ): Promise<string> {
+    const baseCommit = await this.request<{ tree: { sha: string } }>(
+      'GET',
+      `/repos/${owner}/${repo}/git/commits/${fromSha}`,
+    )
+    const markerCommit = await this.request<{ sha: string }>(
+      'POST',
+      `/repos/${owner}/${repo}/git/commits`,
+      { message: markerMessage, tree: baseCommit.tree.sha, parents: [fromSha] },
+    )
+    await this.request('POST', `/repos/${owner}/${repo}/git/refs`, {
+      ref: `refs/heads/${newBranch}`,
+      sha: markerCommit.sha,
+    })
+    return markerCommit.sha
+  }
+
+  /**
    * Close a pull request without merging.
    * Used by GEO-B+ Stage 1 B2: when re-publishing the same directive, the
    * previous still-open PR is closed and a fresh one opened, so review

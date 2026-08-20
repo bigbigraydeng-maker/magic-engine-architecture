@@ -101,14 +101,20 @@ interface OpenPrOutput {
 //    带着我们的 marker，否则一律 fail-closed。
 
 function commitMessageOwnedByRun(message: string, runId: string): boolean {
+  // 🔴 blocker 5: marker 是 `[kernel run <runId>]` —— 结尾的 `]` 是天然边界，
+  //    子字符串攻击 e.g. `[kernel run ${runId}extra]` 不会命中，因为 `<runId>]`
+  //    要求 runId 后紧跟 `]` 而不是 `extra`。
   return message.includes(`[kernel run ${runId}]`)
 }
 
 function prBodyOwnedByRun(body: string, runId: string, decisionId: string): boolean {
-  return (
-    body.includes(`- kernel_run_id: ${runId}`) &&
-    body.includes(`- authorization_decision_id: ${decisionId}`)
-  )
+  // 🔴 blocker 5: 必须**按独立完整行精确匹配**，禁 substring includes ——
+  //    否则 `- kernel_run_id: ${runId}extra` 会被 `.includes(...)` 命中。
+  //    按 \r\n / \n 双分隔 + trim `\r`，保证 CRLF/LF 兼容都做整行比较。
+  const runIdLine = `- kernel_run_id: ${runId}`
+  const decisionIdLine = `- authorization_decision_id: ${decisionId}`
+  const lines = body.split(/\r?\n/).map((l) => l.replace(/\r$/, ''))
+  return lines.includes(runIdLine) && lines.includes(decisionIdLine)
 }
 
 // ── Loading helpers (server-side only, ctx-scoped) ────────────────────────────
@@ -291,55 +297,53 @@ async function stepCommit(
       `读取 base 分支 SHA 失败：${e instanceof Error ? e.message : String(e)}`,
     )
   }
+  // 🔴 blocker 3：createBranch + identity marker commit 必须**原子**——
+  //    这样 branch 一旦被观察到，tip commit message 一定含 `[kernel run <runId>]`。
+  //    再也不能靠 `tip === baseSha` 单独证明所有权（即便匹配也可能是第三方巧合
+  //    从 main 建了同名空分支）。
+  const IDENTITY_MARKER_MSG = `chore(page): identity marker [kernel run ${args.runId}]`
   try {
-    await gh.createBranch(prep.repo_owner, prep.repo_name, prep.branch_name, baseSha)
+    await gh.createBranchWithMarker(
+      prep.repo_owner, prep.repo_name, prep.branch_name, baseSha, IDENTITY_MARKER_MSG,
+    )
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     if (!/422|already exists|Reference already exists/i.test(msg)) {
-      throw new RetryableCapabilityError(`createBranch 失败：${msg}`)
+      throw new RetryableCapabilityError(`createBranchWithMarker 失败：${msg}`)
     }
 
-    // 🔴 existing-ref 422 必须证明分支**属于本 run**。合法路径二选一：
-    //   (i) tip commit SHA === baseSha —— 本 run 上次 createBranch 成功但 commit
-    //       前挂了，或 commit 那一次网络模糊成功（同 run crash window）；
-    //   (ii) tip commit message 含 `[kernel run <runId>]` marker —— 本 run 上次
-    //        已经 commit 过，本次是安全 retry。
-    // 其它（第三方 branch、客户手工 branch、旧 run 残留 branch）→ fail-closed。
-    // rollback handler 会 live 验后清理，然后新 run 重试成功。
+    // existing-ref 422 recovery：唯一合法路径 = tip commit message 含本 run marker
+    //（identity marker commit **或** 后续 content commit 里带的同 marker）。
+    // 读 tip SHA 或 tip commit message 任一失败 → fail-closed。
     let existingTipSha = ''
     try {
       existingTipSha = await gh.getBranchSha(prep.repo_owner, prep.repo_name, prep.branch_name)
     } catch (readErr) {
       throw new KernelError(
         'INVALID_STATE',
-        `existing_branch_ownership_indeterminate：createBranch 422 但回读 tip SHA 失败：${readErr instanceof Error ? readErr.message : String(readErr)}`,
+        `existing_branch_ownership_indeterminate：createBranchWithMarker 422 但回读 tip SHA 失败：${readErr instanceof Error ? readErr.message : String(readErr)}`,
         { detail: { reason: 'existing_branch_ownership_indeterminate', createBranchError: msg } },
       )
     }
-    const isFreshFromBase = existingTipSha === baseSha
-    let hasOurCommitMarker = false
-    if (!isFreshFromBase) {
-      try {
-        const tip = await gh.getCommit(prep.repo_owner, prep.repo_name, existingTipSha)
-        hasOurCommitMarker = commitMessageOwnedByRun(tip.message, args.runId)
-      } catch {
-        hasOurCommitMarker = false
-      }
-    }
-    if (!isFreshFromBase && !hasOurCommitMarker) {
+    let tipMessage: string
+    try {
+      const tip = await gh.getCommit(prep.repo_owner, prep.repo_name, existingTipSha)
+      tipMessage = tip.message
+    } catch (commitErr) {
       throw new KernelError(
         'INVALID_STATE',
-        `existing_branch_not_owned_by_run：branch ${prep.branch_name} 已存在但 tip commit 既非 base HEAD 也不带本 run marker —— 不 adopt，rollback 后新 run 重试`,
-        {
-          detail: {
-            reason: 'existing_branch_not_owned_by_run',
-            branchTipSha: existingTipSha,
-            baseSha,
-          },
-        },
+        `existing_branch_ownership_indeterminate：读 tip commit 失败：${commitErr instanceof Error ? commitErr.message : String(commitErr)}`,
+        { detail: { reason: 'existing_branch_ownership_indeterminate', branchTipSha: existingTipSha } },
       )
     }
-    // isFreshFromBase 或 hasOurCommitMarker → 是我们的 branch，继续走 commit 步
+    if (!commitMessageOwnedByRun(tipMessage, args.runId)) {
+      throw new KernelError(
+        'INVALID_STATE',
+        `existing_branch_not_owned_by_run：branch ${prep.branch_name} 存在但 tip commit message 无本 run marker`,
+        { detail: { reason: 'existing_branch_not_owned_by_run', branchTipSha: existingTipSha } },
+      )
+    }
+    // tip 带本 run marker → 是我们的 branch（identity marker 或已 commit 的 content）
   }
 
   // commitFile 用旧 blob SHA 作乐观并发令牌。有两条正常路径需要区分：
@@ -793,107 +797,148 @@ async function rollbackHandler(
   }
   detail.live_branch_present = branchTipSha !== null
 
-  // ── (LIVE-3) branch 存在则验所有权 ─ tip === page_version_token 或 tip commit 带 run marker ─
+  // ── (LIVE-3) branch 存在则验所有权 ─ 只认 tip commit message 里的 run marker ─
+  //    🔴 blocker 4：**禁止** `branchTipSha === prep.page_version_token`。
+  //    branch tip commit SHA 与 page blob SHA 是**两种不同的 Git 对象**，即便偶然
+  //    相等也不构成所有权证明。ownership 只走 getCommit(tip).message → marker。
+  //    任一读取失败 → truthful failure（不允许猜测 noop 或 delete）。
   let branchOwnedByThisRun = false
   if (branchTipSha !== null) {
-    if (branchTipSha === prep.page_version_token) {
-      branchOwnedByThisRun = true
-      detail.branch_ownership = 'tip_equals_page_version_token'
-    } else {
-      try {
-        const tip = await gh.getCommit(prep.repo_owner, prep.repo_name, branchTipSha)
-        if (commitMessageOwnedByRun(tip.message, runId)) {
-          branchOwnedByThisRun = true
-          detail.branch_ownership = 'tip_has_run_marker'
-        } else {
-          detail.branch_ownership = 'tip_missing_run_marker'
-        }
-      } catch {
-        detail.branch_ownership = 'tip_commit_read_failed'
+    let tipMessage: string
+    try {
+      const tip = await gh.getCommit(prep.repo_owner, prep.repo_name, branchTipSha)
+      tipMessage = tip.message
+    } catch (e) {
+      return {
+        ok: false, rollbackKind: 'provider_native',
+        detail: { ...detail, branch_tip: branchTipSha, reason: 'tip_commit_read_failed' },
+        failure_reason: `拒绝 rollback：读 branch tip commit 失败：${e instanceof Error ? e.message : String(e)}`,
       }
+    }
+    if (commitMessageOwnedByRun(tipMessage, runId)) {
+      branchOwnedByThisRun = true
+      detail.branch_ownership = 'tip_has_run_marker'
+    } else {
+      detail.branch_ownership = 'tip_missing_run_marker'
     }
   }
 
   // ── (LIVE-4) 查 same-head PR 全部状态（open + closed + merged）─────────
+  //    🔴 blocker 1：任何 list / detail 读取失败 → 立即 fail-closed，禁止 close/delete。
+  //    🔴 blocker 1：任一候选 PR 无法证明属于本 run → 立即 fail-closed（不共享 branch 上删）。
+  //    🔴 blocker 2：只有 owned + open + draft=true 才 close；owned + open + draft=false 或
+  //                  merged 或状态未知 → fail-closed 零写入。
   interface OwnedPr { number: number; state: 'open' | 'closed'; merged: boolean; mergedAt: string | null; draft: boolean; headRef: string; baseRef: string; body: string }
-  const inspect = async (n: number): Promise<OwnedPr | 'notfound'> => {
-    try {
-      const d = await gh.getPullRequestDetail(prep.repo_owner, prep.repo_name, n)
-      return { number: d.number, state: d.state, merged: d.merged, mergedAt: d.mergedAt, draft: d.draft, headRef: d.headRef, baseRef: d.baseRef, body: d.body }
-    } catch (e) {
-      if (e instanceof GitHubApiError && e.status === 404) return 'notfound'
-      throw e
-    }
+  const inspect = async (n: number): Promise<OwnedPr> => {
+    // 不做 404 兜底：blocker 1 要求 detail 读取失败即 fail-closed。
+    const d = await gh.getPullRequestDetail(prep.repo_owner, prep.repo_name, n)
+    return { number: d.number, state: d.state, merged: d.merged, mergedAt: d.mergedAt, draft: d.draft, headRef: d.headRef, baseRef: d.baseRef, body: d.body }
   }
-  const classify = (pd: OwnedPr): 'merged' | 'owned_open' | 'owned_closed' | 'not_owned' => {
+  type PrClass = 'merged' | 'owned_open_draft' | 'owned_open_ready_for_review' | 'owned_closed_unmerged' | 'not_owned'
+  const classify = (pd: OwnedPr): PrClass => {
     if (pd.merged === true) return 'merged'
     const receiptOk =
       pd.headRef === prep.branch_name &&
       pd.baseRef === liveDefaultBranch &&
       prBodyOwnedByRun(pd.body, runId, decisionId)
     if (!receiptOk) return 'not_owned'
-    return pd.state === 'closed' ? 'owned_closed' : 'owned_open'
+    if (pd.state === 'closed') return 'owned_closed_unmerged'
+    // state === 'open'
+    if (pd.draft !== true) return 'owned_open_ready_for_review' // blocker 2 fail-closed
+    return 'owned_open_draft'
   }
 
   const prsToClose: OwnedPr[] = []
   const mergedBlockers: OwnedPr[] = []
   const seenPrNumbers = new Set<number>()
 
-  // opened priorOutput 优先查一次（如果存在）
-  if (opened) {
+  const notedOpenedPr = async (): Promise<OutwardRollbackResult | null> => {
+    if (!opened) return null
     detail.pr_number_by_opened = opened.pr_number
     detail.pr_url_by_opened = opened.pr_url
-    let pd
+    let pd: OwnedPr
     try {
       pd = await inspect(opened.pr_number)
     } catch (e) {
+      if (e instanceof GitHubApiError && e.status === 404) {
+        detail.pr_state_by_opened = '404_not_found'
+        return null // 404 幂等；不算失败
+      }
       return {
         ok: false, rollbackKind: 'provider_native',
-        detail: { ...detail, reason: 'live_pr_read_failed' },
+        detail: { ...detail, reason: 'live_pr_read_failed', pr_number: opened.pr_number },
         failure_reason: `拒绝 rollback：读 PR #${opened.pr_number} 失败：${e instanceof Error ? e.message : String(e)}`,
       }
     }
-    if (pd !== 'notfound') {
-      seenPrNumbers.add(pd.number)
-      const cls = classify(pd)
-      detail.pr_classification_by_opened = cls
-      if (cls === 'merged') mergedBlockers.push(pd)
-      else if (cls === 'owned_open') prsToClose.push(pd)
-      else if (cls === 'not_owned') {
-        return {
-          ok: false, rollbackKind: 'provider_native',
-          detail: { ...detail, reason: 'pr_not_owned_by_run', pr_head: pd.headRef, pr_base: pd.baseRef },
-          failure_reason: `拒绝 rollback：PR #${opened.pr_number} head/base/body receipt 不符本 run`,
-        }
+    seenPrNumbers.add(pd.number)
+    const cls = classify(pd)
+    detail.pr_classification_by_opened = cls
+    if (cls === 'merged') { mergedBlockers.push(pd); return null }
+    if (cls === 'not_owned') {
+      return {
+        ok: false, rollbackKind: 'provider_native',
+        detail: { ...detail, reason: 'pr_not_owned_by_run', pr_head: pd.headRef, pr_base: pd.baseRef },
+        failure_reason: `拒绝 rollback：PR #${opened.pr_number} head/base/body receipt 不符本 run`,
       }
-    } else {
-      detail.pr_state_by_opened = '404_not_found'
     }
+    if (cls === 'owned_open_ready_for_review') {
+      return {
+        ok: false, rollbackKind: 'provider_native',
+        detail: { ...detail, reason: 'pr_ready_for_review', pr_number: pd.number },
+        failure_reason: `拒绝 rollback：PR #${opened.pr_number} 已被人 mark ready-for-review (draft=false)，v1 不自动 close`,
+      }
+    }
+    if (cls === 'owned_open_draft') prsToClose.push(pd)
+    // owned_closed_unmerged → 跳过 PR 动作，稍后照常处理 owned branch
+    return null
   }
+  const openedResult = await notedOpenedPr()
+  if (openedResult) return openedResult
 
-  // 无论 opened 是否给了 pr_number，都按 head 全状态扫一次
-  // （网络模糊成功场景：opened 缺失或 pr_number 已 404 但同 head 有新 PR）
-  let candidates: Array<{ number: number }> = []
+  // list state=all；🔴 blocker 1：list 失败 → 立即 fail-closed
+  let candidates: Array<{ number: number }>
   try {
     candidates = await gh.listPullRequestsByHead(prep.repo_owner, prep.repo_name, prep.branch_name, 'all')
   } catch (e) {
-    detail.list_head_prs = `failed: ${e instanceof Error ? e.message : String(e)}`
+    return {
+      ok: false, rollbackKind: 'provider_native',
+      detail: { ...detail, reason: 'list_head_prs_failed' },
+      failure_reason: `拒绝 rollback：listPullRequestsByHead(state=all) 失败：${e instanceof Error ? e.message : String(e)}`,
+    }
   }
   for (const cand of candidates) {
     if (seenPrNumbers.has(cand.number)) continue
-    let pd
+    let pd: OwnedPr
     try {
       pd = await inspect(cand.number)
     } catch (e) {
-      detail[`pr_${cand.number}_read`] = `failed: ${e instanceof Error ? e.message : String(e)}`
-      continue
+      if (e instanceof GitHubApiError && e.status === 404) continue // race: PR just deleted
+      return {
+        ok: false, rollbackKind: 'provider_native',
+        detail: { ...detail, reason: 'live_pr_read_failed', pr_number: cand.number },
+        failure_reason: `拒绝 rollback：读 PR #${cand.number} 失败：${e instanceof Error ? e.message : String(e)}`,
+      }
     }
-    if (pd === 'notfound') continue
     seenPrNumbers.add(pd.number)
     const cls = classify(pd)
-    if (cls === 'merged') mergedBlockers.push(pd)
-    else if (cls === 'owned_open') prsToClose.push(pd)
-    // owned_closed / not_owned → 不动
+    if (cls === 'merged') { mergedBlockers.push(pd); continue }
+    if (cls === 'not_owned') {
+      // 🔴 blocker 1：候选 PR 无法证明属于本 run → 不能忽略后继续删共享 branch
+      return {
+        ok: false, rollbackKind: 'provider_native',
+        detail: { ...detail, reason: 'foreign_pr_on_owned_head', pr_number: pd.number, pr_head: pd.headRef, pr_base: pd.baseRef },
+        failure_reason: `拒绝 rollback：head=${prep.branch_name} 上挂着不属于本 run 的 PR #${pd.number}`,
+      }
+    }
+    if (cls === 'owned_open_ready_for_review') {
+      return {
+        ok: false, rollbackKind: 'provider_native',
+        detail: { ...detail, reason: 'pr_ready_for_review', pr_number: pd.number },
+        failure_reason: `拒绝 rollback：owned head 上的 PR #${pd.number} 已被 mark ready-for-review`,
+      }
+    }
+    if (cls === 'owned_open_draft') prsToClose.push(pd)
+    // owned_closed_unmerged → 已关闭，不动
   }
 
   // ── merged PR 撞到本 run 的 head → truthful failure，零 provider write ─
