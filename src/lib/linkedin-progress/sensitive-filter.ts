@@ -76,10 +76,16 @@ function includesTerm(haystack: string, haystackLower: string, term: string): bo
  * own content.
  */
 export async function loadClientKeywords(): Promise<string[]> {
-  const [{ data: clients }, { data: briefs }] = await Promise.all([
+  const [{ data: clients, error: clientsErr }, { data: briefs, error: briefsErr }] = await Promise.all([
     supabaseAdmin.from('clients').select('name, domain').neq('id', LINKEDIN_PROGRESS_CLIENT_ID),
     supabaseAdmin.from('master_briefs').select('brand_name, client_id').neq('client_id', LINKEDIN_PROGRESS_CLIENT_ID),
   ])
+
+  // Fail closed: this keyword list IS the hard safety backstop. A transient
+  // query error must abort the run, not silently continue with an empty (or
+  // partial) list — that would auto-publish with no client-name protection.
+  if (clientsErr) throw new Error(`loadClientKeywords: clients query failed: ${clientsErr.message}`)
+  if (briefsErr) throw new Error(`loadClientKeywords: master_briefs query failed: ${briefsErr.message}`)
 
   const keywords = new Set<string>()
   for (const c of (clients ?? []) as Array<{ name: string | null; domain: string | null }>) {

@@ -2,6 +2,8 @@ import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { enqueueRenderJob } from '@/lib/factory/render-queue'
+import { scheduleSocialPost } from '@/lib/flywheel/social-post-publish'
+import { LINKEDIN_PROGRESS_SOURCE } from '@/lib/linkedin-progress/constants'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,7 +38,7 @@ export async function PATCH(
       .update({ status })
       .eq('client_id', params.id)   // 双重限定，防越权改到别客户
       .eq('id', params.postId)
-      .select('id, status, format')
+      .select('id, status, format, source')
       .single()
 
     if (error) throw error
@@ -45,6 +47,21 @@ export async function PATCH(
     // 讲课式不在这里排做片——要先在单讲工作台选制作方式/传录像，直接排必失败(魏征 m2)
     if (body.action === 'confirm' && data.format === '讲课式') {
       return NextResponse.json({ post: data, render: { jobId: null, created: false, reason: '讲课式内容请进该讲的工作台开始做片' } })
+    }
+
+    // LinkedIn 进度贴是纯文本、没有做片环节——"确认"在这里就等于"批准发布"。
+    // 不能走下面通用的 enqueueRenderJob：那是视频流水线的入口，对一条没有
+    // 视频的文本贴只会 best-effort 失败或空转，PM 点了"确认"以为发出去了，
+    // 实际上这条贴会永远卡在 approved，从没真正调用过 scheduleSocialPost。
+    if (body.action === 'confirm' && data.source === LINKEDIN_PROGRESS_SOURCE) {
+      const result = await scheduleSocialPost({ postId: params.postId, clientId: params.id })
+      if (!result.ok) {
+        return NextResponse.json({ error: `发布失败：${result.error}` }, { status: 500 })
+      }
+      return NextResponse.json({
+        post: { ...data, status: 'scheduled' },
+        publish: { publerJobId: result.publerJobId, scheduledAt: result.scheduledAt },
+      })
     }
 
     // 确认 = 建做片任务(流水线入口)。best-effort：建任务失败不回滚确认，只回报。

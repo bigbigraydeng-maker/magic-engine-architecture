@@ -20,6 +20,16 @@ export interface ScheduleSocialPostInput {
   clientId:     string
   /** ISO 8601 — defaults to 1 hour from now */
   scheduledAt?: string
+  /**
+   * When provided, skip this function's own (looser) account resolution
+   * entirely and publish to this exact account. Callers that already ran a
+   * strict resolution — e.g. resolveBoundPublerAccount() — MUST pass its
+   * result through here; otherwise this function re-resolves independently
+   * and can pick a different account (its fallback logic falls back to "any
+   * connected account" on a stale/ambiguous binding), silently publishing an
+   * unattended post to the wrong Publer account.
+   */
+  account?:     PublerAccount
 }
 
 export interface ScheduleSocialPostResult {
@@ -113,43 +123,50 @@ export async function scheduleSocialPost(
     return { ok: false, error: `Post status is "${post.status}" — must be "approved" to publish` }
   }
 
-  // 2. Resolve Publer account via connector config
-  const { data: connectorRow } = await supabaseAdmin
-    .from('client_connectors')
-    .select('config')
-    .eq('client_id', clientId)
-    .eq('anchor', 'publer')
-    .maybeSingle()
+  // 2. Resolve Publer account — reuse an already-verified account when the
+  //    caller passed one (see ScheduleSocialPostInput.account); otherwise
+  //    fall back to this function's own (looser) resolution via connector
+  //    config.
+  let account: PublerAccount | undefined = input.account
 
-  const rawConfig = connectorRow?.config
-  const rawIds =
-    rawConfig && typeof rawConfig === 'object' && !Array.isArray(rawConfig)
-      ? (rawConfig as Record<string, unknown>).publer_account_ids
-      : undefined
-  const configuredIds: Record<string, string> =
-    rawIds && typeof rawIds === 'object' && !Array.isArray(rawIds)
-      ? (rawIds as Record<string, string>)
-      : {}
+  if (!account) {
+    const { data: connectorRow } = await supabaseAdmin
+      .from('client_connectors')
+      .select('config')
+      .eq('client_id', clientId)
+      .eq('anchor', 'publer')
+      .maybeSingle()
 
-  const postPlatforms: string[] = Array.isArray(post.platforms)
-    ? (post.platforms as string[]).map(p => p.toLowerCase())
-    : []
+    const rawConfig = connectorRow?.config
+    const rawIds =
+      rawConfig && typeof rawConfig === 'object' && !Array.isArray(rawConfig)
+        ? (rawConfig as Record<string, unknown>).publer_account_ids
+        : undefined
+    const configuredIds: Record<string, string> =
+      rawIds && typeof rawIds === 'object' && !Array.isArray(rawIds)
+        ? (rawIds as Record<string, string>)
+        : {}
 
-  const accounts = await getAccounts()
-  let account = accounts[0]
+    const postPlatforms: string[] = Array.isArray(post.platforms)
+      ? (post.platforms as string[]).map(p => p.toLowerCase())
+      : []
 
-  const configuredPlatform = postPlatforms.find(p => configuredIds[p])
-  if (configuredPlatform) {
-    const bound = accounts.find(a => a.id === configuredIds[configuredPlatform])
-    if (!bound) {
-      return {
-        ok: false,
-        error: `Publer account binding for "${configuredPlatform}" is stale. Please reconfigure the Publishing Hub connector.`,
+    const accounts = await getAccounts()
+    account = accounts[0]
+
+    const configuredPlatform = postPlatforms.find(p => configuredIds[p])
+    if (configuredPlatform) {
+      const bound = accounts.find(a => a.id === configuredIds[configuredPlatform])
+      if (!bound) {
+        return {
+          ok: false,
+          error: `Publer account binding for "${configuredPlatform}" is stale. Please reconfigure the Publishing Hub connector.`,
+        }
       }
+      account = bound
+    } else if (postPlatforms.length > 0) {
+      account = accounts.find(a => postPlatforms.includes(a.provider?.toLowerCase() ?? '')) ?? accounts[0]
     }
-    account = bound
-  } else if (postPlatforms.length > 0) {
-    account = accounts.find(a => postPlatforms.includes(a.provider?.toLowerCase() ?? '')) ?? accounts[0]
   }
 
   if (!account) {

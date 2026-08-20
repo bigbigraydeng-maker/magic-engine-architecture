@@ -167,6 +167,27 @@ export async function runLinkedinProgressPost(cronRun: CronRunHandle, now: Date 
     }
 
     // 5. Clean + account verified — publish for real.
+    //
+    // Re-check dedupe immediately before this insert (not just the coarse
+    // check in step 1). This does NOT make the check-then-insert atomic —
+    // that needs a DB unique constraint, which is a migration and out of
+    // scope for this pass — but it collapses the race window from "the
+    // entire function, including an LLM call" down to two adjacent queries,
+    // which is what actually matters for the realistic case (a manual test
+    // curl overlapping a real cron fire), not a theoretical guarantee.
+    const { data: raceCheck, error: raceCheckErr } = await supabaseAdmin
+      .from('content_posts')
+      .select('id')
+      .eq('client_id', LINKEDIN_PROGRESS_CLIENT_ID)
+      .eq('source', LINKEDIN_PROGRESS_SOURCE)
+      .gte('created_at', new Date(now.getTime() - DEDUPE_LOOKBACK_HOURS * 3_600_000).toISOString())
+      .limit(1)
+    if (raceCheckErr) throw new Error(`dedupe re-check failed: ${raceCheckErr.message}`)
+    if (raceCheck && raceCheck.length > 0) {
+      await cronRun.finish({ summary: { skipped: 'already_posted_this_window' } })
+      return NextResponse.json({ ok: true, skipped: 'already_posted_this_window' })
+    }
+
     const { data: post, error: insertErr } = await supabaseAdmin
       .from('content_posts')
       .insert({
@@ -183,7 +204,15 @@ export async function runLinkedinProgressPost(cronRun: CronRunHandle, now: Date 
       .single()
     if (insertErr || !post) throw new Error(`content_posts insert failed: ${insertErr?.message ?? 'no row'}`)
 
-    const result = await scheduleSocialPost({ postId: post.id, clientId: LINKEDIN_PROGRESS_CLIENT_ID })
+    // Pass the already strictly-verified account through — scheduleSocialPost's
+    // own internal resolution is looser (falls back to "any connected
+    // account" on a stale/ambiguous binding) and must not be allowed to
+    // re-resolve to a different account than the one just verified above.
+    const result = await scheduleSocialPost({
+      postId: post.id,
+      clientId: LINKEDIN_PROGRESS_CLIENT_ID,
+      account: boundAccount,
+    })
     if (!result.ok) {
       const { error: snapshotUpdateErr } = await supabaseAdmin
         .from('content_posts')
