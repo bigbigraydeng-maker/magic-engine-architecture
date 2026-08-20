@@ -39,12 +39,34 @@ function isAsciiWord(term: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9 .-]*$/.test(term)
 }
 
+/**
+ * Normalizes typographic quotes and common fullwidth punctuation to their
+ * ASCII equivalents before matching. A client name like "O'Brien's" still
+ * matches even if the LLM draft (or CHANGELOG source) renders the apostrophe
+ * as a curly quote — without this, that single character swap lets a
+ * flagged term slip past the filter undetected.
+ */
+function normalizePunctuation(text: string): string {
+  return text
+    .replace(/[‘’‚‛＇]/g, "'")
+    .replace(/[“”„‟＂]/g, '"')
+    .replace(/[，、]/g, ',')
+    .replace(/。/g, '.')
+    .replace(/！/g, '!')
+    .replace(/？/g, '?')
+    .replace(/；/g, ';')
+    .replace(/：/g, ':')
+    .replace(/（/g, '(')
+    .replace(/）/g, ')')
+}
+
 function includesTerm(haystack: string, haystackLower: string, term: string): boolean {
-  if (isAsciiWord(term)) {
-    const re = new RegExp(`\\b${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')
+  const normalizedTerm = normalizePunctuation(term)
+  if (isAsciiWord(normalizedTerm)) {
+    const re = new RegExp(`\\b${normalizedTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i')
     return re.test(haystack)
   }
-  return haystackLower.includes(term.toLowerCase())
+  return haystackLower.includes(normalizedTerm.toLowerCase())
 }
 
 /**
@@ -74,19 +96,20 @@ export async function loadClientKeywords(): Promise<string[]> {
 }
 
 export function findSensitiveMatches(text: string, clientKeywords: string[]): SensitiveMatch[] {
-  const lower = text.toLowerCase()
+  const normalizedText = normalizePunctuation(text)
+  const lower = normalizedText.toLowerCase()
   const matches: SensitiveMatch[] = []
 
   for (const kw of clientKeywords) {
-    if (includesTerm(text, lower, kw)) matches.push({ term: kw, kind: 'client' })
+    if (includesTerm(normalizedText, lower, kw)) matches.push({ term: kw, kind: 'client' })
   }
   for (const name of INTERNAL_CODENAMES) {
-    if (text.includes(name)) matches.push({ term: name, kind: 'internal_codename' })
+    if (normalizedText.includes(name)) matches.push({ term: name, kind: 'internal_codename' })
   }
   for (const term of INTERNAL_JARGON) {
-    if (includesTerm(text, lower, term)) matches.push({ term, kind: 'internal_jargon' })
+    if (includesTerm(normalizedText, lower, term)) matches.push({ term, kind: 'internal_jargon' })
   }
-  const phaseMatches = text.match(PHASE_ID_RE)
+  const phaseMatches = normalizedText.match(PHASE_ID_RE)
   if (phaseMatches) {
     for (const m of phaseMatches) matches.push({ term: m, kind: 'internal_jargon' })
   }

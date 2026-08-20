@@ -38,3 +38,52 @@ export async function draftLinkedinPost(entries: ChangelogEntry[]): Promise<stri
 
   return result.text.trim()
 }
+
+// ── Format backstop ──────────────────────────────────────────────────────────
+//
+// The length/hashtag/plain-text rules above (SYSTEM_PROMPT rules 6–7) are
+// prompt-level only — nothing stops the LLM from drifting on an off week.
+// This is a second, code-level check on the LLM's own output; a violation
+// routes the post to human review instead of auto-publishing, same as the
+// sensitive-content backstop in sensitive-filter.ts.
+
+export interface FormatViolation {
+  rule: 'length' | 'hashtag_count' | 'markdown'
+  detail: string
+}
+
+const MIN_LENGTH = 800
+const MAX_LENGTH = 1300
+const MAX_HASHTAGS = 3
+
+/** Headers, bold/italic markers, bullet/numbered lists, links, inline code. */
+const MARKDOWN_PATTERNS: RegExp[] = [
+  /^#{1,6}\s/m,
+  /\*\*[^*\n]+\*\*/,
+  /^[-*+]\s/m,
+  /^\d+\.\s/m,
+  /\[[^\]]+\]\([^)]+\)/,
+  /`[^`\n]+`/,
+]
+
+export function validateDraftFormat(text: string): FormatViolation[] {
+  const violations: FormatViolation[] = []
+
+  if (text.length < MIN_LENGTH || text.length > MAX_LENGTH) {
+    violations.push({
+      rule: 'length',
+      detail: `${text.length} chars (expected ${MIN_LENGTH}-${MAX_LENGTH})`,
+    })
+  }
+
+  const hashtagCount = (text.match(/#\w+/g) ?? []).length
+  if (hashtagCount > MAX_HASHTAGS) {
+    violations.push({ rule: 'hashtag_count', detail: `${hashtagCount} hashtags (max ${MAX_HASHTAGS})` })
+  }
+
+  if (MARKDOWN_PATTERNS.some((re) => re.test(text))) {
+    violations.push({ rule: 'markdown', detail: 'contains markdown syntax (header/bold/list/link/code)' })
+  }
+
+  return violations
+}

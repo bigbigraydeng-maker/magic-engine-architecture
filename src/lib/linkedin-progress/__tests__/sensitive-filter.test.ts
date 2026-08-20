@@ -47,4 +47,16 @@ describe('findSensitiveMatches', () => {
     const matches = findSensitiveMatches('这周帮陶瓷世界优化了页面', ['陶瓷世界'])
     expect(matches.some((m) => m.kind === 'client' && m.term === '陶瓷世界')).toBe(true)
   })
+
+  it('flags a client name even when the draft renders its apostrophe as a curly quote', () => {
+    // The keyword is stored with a straight apostrophe; an LLM draft commonly
+    // "smart-quotes" punctuation on output — a raw substring match would miss this.
+    const matches = findSensitiveMatches("O’Brien’s had a great week", ["O'Brien's"])
+    expect(matches.some((m) => m.kind === 'client' && m.term === "O'Brien's")).toBe(true)
+  })
+
+  it('flags a client name when the keyword itself is stored with a curly quote', () => {
+    const matches = findSensitiveMatches("O'Brien's had a great week", ['O’Brien’s'])
+    expect(matches.some((m) => m.kind === 'client')).toBe(true)
+  })
 })

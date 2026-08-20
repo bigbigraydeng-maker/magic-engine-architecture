@@ -49,17 +49,26 @@ export interface ScheduleSocialPostError {
  * posting to the right account — e.g. anything posting to a non-client-owned
  * account sharing this Publer workspace — should use this instead of calling
  * schedulePost() directly.
+ *
+ * Throws on a genuine `client_connectors` query failure so callers don't
+ * mistake "the DB lookup errored" for "nothing is configured yet" — those
+ * need different PM-facing messaging (retry vs. go set up the connector).
+ * Returns null only when the lookup succeeded and there's really no binding.
  */
 export async function resolveBoundPublerAccount(
   clientId: string,
   platform: string,
 ): Promise<PublerAccount | null> {
-  const { data: connectorRow } = await supabaseAdmin
+  const { data: connectorRow, error: connectorErr } = await supabaseAdmin
     .from('client_connectors')
     .select('config')
     .eq('client_id', clientId)
     .eq('anchor', 'publer')
     .maybeSingle()
+
+  if (connectorErr) {
+    throw new Error(`client_connectors lookup failed: ${connectorErr.message}`)
+  }
 
   const configuredIds = (connectorRow?.config as { publer_account_ids?: Record<string, string> } | null)
     ?.publer_account_ids ?? {}

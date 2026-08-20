@@ -34,7 +34,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import type { CronRunHandle } from '@/lib/cron/run-logger'
 import { scheduleSocialPost, resolveBoundPublerAccount } from '@/lib/flywheel/social-post-publish'
 import { loadChangelogWindow, nzDateString } from './changelog-window'
-import { draftLinkedinPost } from './draft-post'
+import { draftLinkedinPost, validateDraftFormat } from './draft-post'
 import { loadClientKeywords, findSensitiveMatches } from './sensitive-filter'
 import { LINKEDIN_PROGRESS_CLIENT_ID, LINKEDIN_PROGRESS_SOURCE, LINKEDIN_PROGRESS_PLATFORM } from './constants'
 
@@ -54,7 +54,8 @@ interface GenerationSnapshot {
   changelog_dates: string[]
   entry_count: number
   flagged_terms: string[]
-  reason?: 'sensitive_content_flagged' | 'linkedin_account_not_configured' | 'publish_failed'
+  format_violations: string[]
+  reason?: 'sensitive_content_flagged' | 'format_violation' | 'linkedin_account_not_configured' | 'publish_failed'
   publish_error?: string
 }
 
@@ -87,9 +88,10 @@ export async function runLinkedinProgressPost(cronRun: CronRunHandle, now: Date 
       return NextResponse.json({ ok: true, skipped: 'no_new_entries', cutoffDate })
     }
 
-    // 3. Draft + sensitive-content backstop (checked on BOTH the source
-    //    material and the LLM's own output — a clean prompt can still leak
-    //    a client detail it was told to omit).
+    // 3. Draft + two code-level backstops on the LLM's own output — a clean
+    //    prompt can still leak a client detail it was told to omit, or drift
+    //    on length/hashtags/markdown on an off week. Either backstop routes
+    //    to human review instead of auto-publishing.
     const clientKeywords = await loadClientKeywords()
     const sourceText = entries.map((e) => `${e.heading}\n${e.body}`).join('\n\n')
     const caption = await draftLinkedinPost(entries)
@@ -100,17 +102,20 @@ export async function runLinkedinProgressPost(cronRun: CronRunHandle, now: Date 
       ...findSensitiveMatches(caption, clientKeywords),
     ]
     const flaggedTerms = Array.from(new Set(matches.map((m) => `${m.kind}:${m.term}`)))
+    const formatViolations = validateDraftFormat(caption)
 
     const baseSnapshot: GenerationSnapshot = {
       cutoff_date: cutoffDate,
       changelog_dates: Array.from(new Set(entries.map((e) => e.date))),
       entry_count: entries.length,
       flagged_terms: flaggedTerms,
+      format_violations: formatViolations.map((v) => `${v.rule}:${v.detail}`),
     }
 
     const title = `ME product update — ${nzDateString(now)}`
 
-    if (flaggedTerms.length > 0) {
+    if (flaggedTerms.length > 0 || formatViolations.length > 0) {
+      const reason = flaggedTerms.length > 0 ? 'sensitive_content_flagged' : 'format_violation'
       const { error: insertErr } = await supabaseAdmin.from('content_posts').insert({
         client_id: LINKEDIN_PROGRESS_CLIENT_ID,
         title: `${title} (needs review)`,
@@ -119,12 +124,23 @@ export async function runLinkedinProgressPost(cronRun: CronRunHandle, now: Date 
         caption,
         source: LINKEDIN_PROGRESS_SOURCE,
         status: 'draft',
-        generation_context_snapshot: { ...baseSnapshot, reason: 'sensitive_content_flagged' },
+        generation_context_snapshot: { ...baseSnapshot, reason },
       })
       if (insertErr) throw new Error(`content_posts insert failed: ${insertErr.message}`)
 
-      await cronRun.finish({ summary: { flagged: true, terms: flaggedTerms } })
-      return NextResponse.json({ ok: true, flagged: true, terms: flaggedTerms })
+      await cronRun.finish({
+        summary: {
+          flagged: flaggedTerms.length > 0,
+          formatInvalid: formatViolations.length > 0,
+          terms: flaggedTerms,
+        },
+      })
+      return NextResponse.json({
+        ok: true,
+        flagged: flaggedTerms.length > 0,
+        formatInvalid: formatViolations.length > 0,
+        terms: flaggedTerms,
+      })
     }
 
     // 4. Resolve the LinkedIn account strictly — never fall back to "any
@@ -169,7 +185,7 @@ export async function runLinkedinProgressPost(cronRun: CronRunHandle, now: Date 
 
     const result = await scheduleSocialPost({ postId: post.id, clientId: LINKEDIN_PROGRESS_CLIENT_ID })
     if (!result.ok) {
-      await supabaseAdmin
+      const { error: snapshotUpdateErr } = await supabaseAdmin
         .from('content_posts')
         .update({
           generation_context_snapshot: {
@@ -179,6 +195,12 @@ export async function runLinkedinProgressPost(cronRun: CronRunHandle, now: Date 
           } satisfies GenerationSnapshot,
         })
         .eq('id', post.id)
+      if (snapshotUpdateErr) {
+        console.error(
+          '[runLinkedinProgressPost] failed to record publish_error on content_posts:',
+          snapshotUpdateErr.message,
+        )
+      }
       throw new Error(`scheduleSocialPost failed: ${result.error}`)
     }
 
