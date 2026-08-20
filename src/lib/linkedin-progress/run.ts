@@ -1,0 +1,196 @@
+/**
+ * Shared implementation for the two linkedin-progress-post cron routes
+ * (Monday + Thursday). Split into two physical routes — each with its own
+ * literal startCronRun string argument in its own route.ts — rather than one
+ * route with a computed job name, so each weekday is independently visible
+ * in cron_run_logs and to the CRON_REGISTRY health check (see
+ * src/lib/cron/registry.test.ts, which statically greps each route file for
+ * that literal argument).
+ *
+ * Turns this week's shipped CHANGELOG.md entries into one English LinkedIn
+ * post and publishes it, fully unattended, to the founder's personal
+ * LinkedIn (via the existing content_posts → Publer pipeline, piggybacked on
+ * the Magic Lab Class client record).
+ *
+ * Ships dark: no-ops unless LINKEDIN_PROGRESS_POST_ENABLED=true (PM turns it
+ * on after connecting the LinkedIn account in Publer and binding it on the
+ * Magic Lab Class connectors page).
+ *
+ * Two things never auto-publish, even when the switch is on — they land as a
+ * 'draft' content_post instead and surface through the PM-todo manual-item
+ * pipeline (see src/lib/pm-todo/manual-items.ts):
+ *   1. The LinkedIn account isn't bound yet (one-time setup not done).
+ *   2. The sensitive-content backstop trips on the source material or the
+ *      LLM's own draft (CHANGELOG.md genuinely contains real client names
+ *      and operational numbers — see sensitive-filter.ts).
+ *
+ * No "already posted" state is stored — dedupe is a lookback query on
+ * content_posts itself, and the changelog window is derived from NZ weekday,
+ * not from a stored pointer. See changelog-window.ts for why.
+ */
+
+import { NextResponse } from 'next/server'
+import { supabaseAdmin } from '@/lib/supabase'
+import type { CronRunHandle } from '@/lib/cron/run-logger'
+import { scheduleSocialPost, resolveBoundPublerAccount } from '@/lib/flywheel/social-post-publish'
+import { loadChangelogWindow, nzDateString } from './changelog-window'
+import { draftLinkedinPost } from './draft-post'
+import { loadClientKeywords, findSensitiveMatches } from './sensitive-filter'
+import { LINKEDIN_PROGRESS_CLIENT_ID, LINKEDIN_PROGRESS_SOURCE, LINKEDIN_PROGRESS_PLATFORM } from './constants'
+
+/** How far back the dedupe check looks for an already-created post this window. */
+/**
+ * Dedupe lookback for "did this fire already run". Deliberately much shorter
+ * than the 3–4 day gap between the two real cron fires (Mon→Thu is exactly 3
+ * days) — a window sized to match that gap would make the Thursday run see
+ * Monday's post as "already posted" and silently no-op every single week.
+ * This only needs to catch genuine duplicate fires (retry, overlapping
+ * deploy, a manual test curl) of the SAME scheduled run.
+ */
+const DEDUPE_LOOKBACK_HOURS = 20
+
+interface GenerationSnapshot {
+  cutoff_date: string
+  changelog_dates: string[]
+  entry_count: number
+  flagged_terms: string[]
+  reason?: 'sensitive_content_flagged' | 'linkedin_account_not_configured' | 'publish_failed'
+  publish_error?: string
+}
+
+export async function runLinkedinProgressPost(cronRun: CronRunHandle, now: Date = new Date()): Promise<NextResponse> {
+  if (process.env.LINKEDIN_PROGRESS_POST_ENABLED !== 'true') {
+    await cronRun.finish({ summary: { skipped: 'disabled' } })
+    return NextResponse.json({ ok: true, skipped: 'disabled' })
+  }
+
+  try {
+    // 1. Dedupe — a duplicate fire (retry, overlapping deploy, manual test
+    //    curl) must not produce a second post for the same window.
+    const { data: existing, error: existingErr } = await supabaseAdmin
+      .from('content_posts')
+      .select('id')
+      .eq('client_id', LINKEDIN_PROGRESS_CLIENT_ID)
+      .eq('source', LINKEDIN_PROGRESS_SOURCE)
+      .gte('created_at', new Date(now.getTime() - DEDUPE_LOOKBACK_HOURS * 3_600_000).toISOString())
+      .limit(1)
+    if (existingErr) throw new Error(`dedupe check failed: ${existingErr.message}`)
+    if (existing && existing.length > 0) {
+      await cronRun.finish({ summary: { skipped: 'already_posted_this_window' } })
+      return NextResponse.json({ ok: true, skipped: 'already_posted_this_window' })
+    }
+
+    // 2. This week's shipped work
+    const { cutoffDate, entries } = await loadChangelogWindow(now)
+    if (entries.length === 0) {
+      await cronRun.finish({ summary: { skipped: 'no_new_entries', cutoffDate } })
+      return NextResponse.json({ ok: true, skipped: 'no_new_entries', cutoffDate })
+    }
+
+    // 3. Draft + sensitive-content backstop (checked on BOTH the source
+    //    material and the LLM's own output — a clean prompt can still leak
+    //    a client detail it was told to omit).
+    const clientKeywords = await loadClientKeywords()
+    const sourceText = entries.map((e) => `${e.heading}\n${e.body}`).join('\n\n')
+    const caption = await draftLinkedinPost(entries)
+    if (!caption) throw new Error('LLM returned an empty draft')
+
+    const matches = [
+      ...findSensitiveMatches(sourceText, clientKeywords),
+      ...findSensitiveMatches(caption, clientKeywords),
+    ]
+    const flaggedTerms = Array.from(new Set(matches.map((m) => `${m.kind}:${m.term}`)))
+
+    const baseSnapshot: GenerationSnapshot = {
+      cutoff_date: cutoffDate,
+      changelog_dates: Array.from(new Set(entries.map((e) => e.date))),
+      entry_count: entries.length,
+      flagged_terms: flaggedTerms,
+    }
+
+    const title = `ME product update — ${nzDateString(now)}`
+
+    if (flaggedTerms.length > 0) {
+      const { error: insertErr } = await supabaseAdmin.from('content_posts').insert({
+        client_id: LINKEDIN_PROGRESS_CLIENT_ID,
+        title: `${title} (needs review)`,
+        route: 'route_c',
+        platforms: [LINKEDIN_PROGRESS_PLATFORM],
+        caption,
+        source: LINKEDIN_PROGRESS_SOURCE,
+        status: 'draft',
+        generation_context_snapshot: { ...baseSnapshot, reason: 'sensitive_content_flagged' },
+      })
+      if (insertErr) throw new Error(`content_posts insert failed: ${insertErr.message}`)
+
+      await cronRun.finish({ summary: { flagged: true, terms: flaggedTerms } })
+      return NextResponse.json({ ok: true, flagged: true, terms: flaggedTerms })
+    }
+
+    // 4. Resolve the LinkedIn account strictly — never fall back to "any
+    //    connected account" (scheduleSocialPost has a fallback branch for
+    //    that; we deliberately never let this flow reach it by verifying the
+    //    binding ourselves first).
+    const boundAccount = await resolveBoundPublerAccount(LINKEDIN_PROGRESS_CLIENT_ID, LINKEDIN_PROGRESS_PLATFORM)
+
+    if (!boundAccount) {
+      const { error: insertErr } = await supabaseAdmin.from('content_posts').insert({
+        client_id: LINKEDIN_PROGRESS_CLIENT_ID,
+        title: `${title} (needs LinkedIn account setup)`,
+        route: 'route_c',
+        platforms: [LINKEDIN_PROGRESS_PLATFORM],
+        caption,
+        source: LINKEDIN_PROGRESS_SOURCE,
+        status: 'draft',
+        generation_context_snapshot: { ...baseSnapshot, reason: 'linkedin_account_not_configured' },
+      })
+      if (insertErr) throw new Error(`content_posts insert failed: ${insertErr.message}`)
+
+      await cronRun.finish({ summary: { skipped: 'linkedin_account_not_configured' } })
+      return NextResponse.json({ ok: true, skipped: 'linkedin_account_not_configured' })
+    }
+
+    // 5. Clean + account verified — publish for real.
+    const { data: post, error: insertErr } = await supabaseAdmin
+      .from('content_posts')
+      .insert({
+        client_id: LINKEDIN_PROGRESS_CLIENT_ID,
+        title,
+        route: 'route_c',
+        platforms: [LINKEDIN_PROGRESS_PLATFORM],
+        caption,
+        source: LINKEDIN_PROGRESS_SOURCE,
+        status: 'approved',
+        generation_context_snapshot: baseSnapshot,
+      })
+      .select('id')
+      .single()
+    if (insertErr || !post) throw new Error(`content_posts insert failed: ${insertErr?.message ?? 'no row'}`)
+
+    const result = await scheduleSocialPost({ postId: post.id, clientId: LINKEDIN_PROGRESS_CLIENT_ID })
+    if (!result.ok) {
+      await supabaseAdmin
+        .from('content_posts')
+        .update({
+          generation_context_snapshot: {
+            ...baseSnapshot,
+            reason: 'publish_failed',
+            publish_error: result.error,
+          } satisfies GenerationSnapshot,
+        })
+        .eq('id', post.id)
+      throw new Error(`scheduleSocialPost failed: ${result.error}`)
+    }
+
+    await cronRun.finish({
+      processed: 1,
+      completed: 1,
+      summary: { published: true, publerJobId: result.publerJobId },
+    })
+    return NextResponse.json({ ok: true, published: true, publerJobId: result.publerJobId })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    await cronRun.finish({ error: msg })
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
+}

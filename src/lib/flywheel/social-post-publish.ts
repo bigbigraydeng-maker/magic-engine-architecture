@@ -10,7 +10,7 @@
  */
 
 import { supabaseAdmin } from '@/lib/supabase'
-import { getAccounts, schedulePost } from '@/lib/publer/client'
+import { getAccounts, schedulePost, type PublerAccount } from '@/lib/publer/client'
 import { SOCIAL_ACTION_TYPE } from '@/lib/flywheel/vocabulary'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -33,6 +33,46 @@ export interface ScheduleSocialPostResult {
 export interface ScheduleSocialPostError {
   ok:    false
   error: string
+}
+
+// ── Strict account resolution (no fallback) ─────────────────────────────────────
+
+/**
+ * Resolves the Publer account bound to a client for a given platform —
+ * strictly. Returns null if there's no binding or the bound ID doesn't match
+ * a currently-connected account of that exact provider.
+ *
+ * This deliberately does NOT fall back to "any connected account" the way
+ * scheduleSocialPost's internal resolution does for AI Factory posts (that
+ * fallback exists because AI Factory content always targets a platform the
+ * client is known to be active on). Callers that need a hard guarantee they're
+ * posting to the right account — e.g. anything posting to a non-client-owned
+ * account sharing this Publer workspace — should use this instead of calling
+ * schedulePost() directly.
+ */
+export async function resolveBoundPublerAccount(
+  clientId: string,
+  platform: string,
+): Promise<PublerAccount | null> {
+  const { data: connectorRow } = await supabaseAdmin
+    .from('client_connectors')
+    .select('config')
+    .eq('client_id', clientId)
+    .eq('anchor', 'publer')
+    .maybeSingle()
+
+  const configuredIds = (connectorRow?.config as { publer_account_ids?: Record<string, string> } | null)
+    ?.publer_account_ids ?? {}
+  // Case-insensitive key lookup — the connectors settings UI writes this key
+  // straight from Publer's own `provider` field with no normalisation, so a
+  // platform's casing here isn't guaranteed to match callers' lowercase constants.
+  const platformLower = platform.toLowerCase()
+  const matchedKey = Object.keys(configuredIds).find((k) => k.toLowerCase() === platformLower)
+  const accountId = matchedKey ? configuredIds[matchedKey] : undefined
+  if (!accountId) return null
+
+  const accounts = await getAccounts()
+  return accounts.find((a) => a.id === accountId && a.provider?.toLowerCase() === platformLower) ?? null
 }
 
 // ── Main publish function ─────────────────────────────────────────────────────
