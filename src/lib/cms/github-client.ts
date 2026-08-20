@@ -170,23 +170,22 @@ export class GithubClient {
   }
 
   /**
-   * List open PRs whose head is `head` branch (formatted `owner:branch`).
+   * List PRs whose head is `head` branch (formatted `owner:branch`).
    *
-   * Used by `page.apply_optimization_request` capability to recover from the
-   * 422 "A pull request already exists" case idempotently — that error is
-   * NEVER retryable (state won't change), so we look up the existing PR and
-   * return its number instead of letting Kernel burn retry budget.
+   * `state` default `'open'` — used by open_pr 422 idempotency recovery.
+   * `state: 'all'` — used by rollback to also see closed / merged PRs on the
+   * same head (rollback must refuse to write when a merged PR exists on the
+   * owned head).
    */
   async listPullRequestsByHead(
     owner: string,
     repo: string,
     headBranch: string,
+    state: 'open' | 'closed' | 'all' = 'open',
   ): Promise<GitHubPullRequest[]> {
-    // GitHub head filter is `owner:branch`; state=open covers our idempotency case
-    // (Draft PRs count as open until merged/closed).
     return this.request<GitHubPullRequest[]>(
       'GET',
-      `/repos/${owner}/${repo}/pulls?state=open&head=${owner}:${encodeURIComponent(headBranch)}`,
+      `/repos/${owner}/${repo}/pulls?state=${state}&head=${owner}:${encodeURIComponent(headBranch)}`,
     )
   }
 
@@ -213,6 +212,77 @@ export class GithubClient {
       merged: pr.merged === true,
       mergedAt: pr.merged_at,
     }
+  }
+
+  /**
+   * Read a PR's **full ownership shape** — draft/state/head/base/body/merged.
+   *
+   * Used by `page.apply_optimization_request` capability to prove the PR we're
+   * about to close (rollback) or the PR we just created (happy-path readback)
+   * actually belongs to the current run:
+   *   body contains `- kernel_run_id: <runId>` + `- authorization_decision_id: <decisionId>`,
+   *   head === owned branch, base === live default_branch,
+   *   draft === true, merged === false.
+   * Kept separate from `getPullRequestState` so existing pr-sync callers stay
+   * on the smaller return type.
+   */
+  async getPullRequestDetail(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<{
+    number: number
+    state: 'open' | 'closed'
+    merged: boolean
+    mergedAt: string | null
+    draft: boolean
+    headRef: string
+    baseRef: string
+    title: string
+    body: string
+    htmlUrl: string
+  }> {
+    const pr = await this.request<{
+      number: number
+      state: 'open' | 'closed'
+      merged: boolean
+      merged_at: string | null
+      draft?: boolean
+      head: { ref: string }
+      base: { ref: string }
+      title: string
+      body: string | null
+      html_url: string
+    }>('GET', `/repos/${owner}/${repo}/pulls/${prNumber}`)
+    return {
+      number: pr.number,
+      state: pr.state,
+      merged: pr.merged === true,
+      mergedAt: pr.merged_at,
+      draft: pr.draft === true,
+      headRef: pr.head.ref,
+      baseRef: pr.base.ref,
+      title: pr.title,
+      body: pr.body ?? '',
+      htmlUrl: pr.html_url,
+    }
+  }
+
+  /**
+   * Read a commit's message — used by page.apply rollback and stepCommit 422
+   * ownership check to look for the `[kernel run <runId>]` marker embedded in
+   * the commit convention. Minimal shape — only what ownership check needs.
+   */
+  async getCommit(
+    owner: string,
+    repo: string,
+    sha: string,
+  ): Promise<{ sha: string; message: string }> {
+    const commit = await this.request<{
+      sha: string
+      commit: { message: string }
+    }>('GET', `/repos/${owner}/${repo}/commits/${sha}`)
+    return { sha: commit.sha, message: commit.commit.message }
   }
 
   /**

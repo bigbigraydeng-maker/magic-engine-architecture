@@ -91,6 +91,26 @@ interface OpenPrOutput {
   readonly pr_url: string
 }
 
+// ── Run receipt markers（写进 commit message / PR body，用于**所有权证明**） ──
+//
+// 🔴 branch 名按 input 派生是**必要非充分**的所有权证明 —— 客户仓库里恰好有个
+//    同前缀分支就会被 422 幂等接管；同 head 上别人开个 PR 就会被 open_pr 422
+//    fallback 采用。真正的所有权凭据 = 我们在 commit message 与 PR body 里写的
+//    run receipt marker（`[kernel run <runId>]` + PR body 里的 `kernel_run_id` +
+//    `authorization_decision_id`）。任何 close / delete 前必须先证明目标 artefact
+//    带着我们的 marker，否则一律 fail-closed。
+
+function commitMessageOwnedByRun(message: string, runId: string): boolean {
+  return message.includes(`[kernel run ${runId}]`)
+}
+
+function prBodyOwnedByRun(body: string, runId: string, decisionId: string): boolean {
+  return (
+    body.includes(`- kernel_run_id: ${runId}`) &&
+    body.includes(`- authorization_decision_id: ${decisionId}`)
+  )
+}
+
 // ── Loading helpers (server-side only, ctx-scoped) ────────────────────────────
 
 /**
@@ -274,11 +294,52 @@ async function stepCommit(
   try {
     await gh.createBranch(prep.repo_owner, prep.repo_name, prep.branch_name, baseSha)
   } catch (e) {
-    // 422 = 已存在；其他错抛。GithubClient 不细分错误码，靠 message 判。
     const msg = e instanceof Error ? e.message : String(e)
     if (!/422|already exists|Reference already exists/i.test(msg)) {
       throw new RetryableCapabilityError(`createBranch 失败：${msg}`)
     }
+
+    // 🔴 existing-ref 422 必须证明分支**属于本 run**。合法路径二选一：
+    //   (i) tip commit SHA === baseSha —— 本 run 上次 createBranch 成功但 commit
+    //       前挂了，或 commit 那一次网络模糊成功（同 run crash window）；
+    //   (ii) tip commit message 含 `[kernel run <runId>]` marker —— 本 run 上次
+    //        已经 commit 过，本次是安全 retry。
+    // 其它（第三方 branch、客户手工 branch、旧 run 残留 branch）→ fail-closed。
+    // rollback handler 会 live 验后清理，然后新 run 重试成功。
+    let existingTipSha = ''
+    try {
+      existingTipSha = await gh.getBranchSha(prep.repo_owner, prep.repo_name, prep.branch_name)
+    } catch (readErr) {
+      throw new KernelError(
+        'INVALID_STATE',
+        `existing_branch_ownership_indeterminate：createBranch 422 但回读 tip SHA 失败：${readErr instanceof Error ? readErr.message : String(readErr)}`,
+        { detail: { reason: 'existing_branch_ownership_indeterminate', createBranchError: msg } },
+      )
+    }
+    const isFreshFromBase = existingTipSha === baseSha
+    let hasOurCommitMarker = false
+    if (!isFreshFromBase) {
+      try {
+        const tip = await gh.getCommit(prep.repo_owner, prep.repo_name, existingTipSha)
+        hasOurCommitMarker = commitMessageOwnedByRun(tip.message, args.runId)
+      } catch {
+        hasOurCommitMarker = false
+      }
+    }
+    if (!isFreshFromBase && !hasOurCommitMarker) {
+      throw new KernelError(
+        'INVALID_STATE',
+        `existing_branch_not_owned_by_run：branch ${prep.branch_name} 已存在但 tip commit 既非 base HEAD 也不带本 run marker —— 不 adopt，rollback 后新 run 重试`,
+        {
+          detail: {
+            reason: 'existing_branch_not_owned_by_run',
+            branchTipSha: existingTipSha,
+            baseSha,
+          },
+        },
+      )
+    }
+    // isFreshFromBase 或 hasOurCommitMarker → 是我们的 branch，继续走 commit 步
   }
 
   // commitFile 用旧 blob SHA 作乐观并发令牌。有两条正常路径需要区分：
@@ -363,45 +424,97 @@ async function stepOpenPr(
     `Draft PR. Do not auto-merge. See spec: docs/specs/2026-08-19-me2-page-optimization-apply-action-v1.0.md`,
   ].join('\n')
 
-  let pr
+  // 🔴 每一条路径（happy path 与 422 recovery）都必须通过 getPullRequestDetail
+  //    验证 draft/state/head/base/body receipt 全部符合本 run；不再"取
+  //    listPullRequestsByHead 第一个"。
+  let prNumber: number
+  let prUrl: string
   try {
-    pr = await gh.createPullRequest(prep.repo_owner, prep.repo_name, {
+    const created = await gh.createPullRequest(prep.repo_owner, prep.repo_name, {
       title: `chore(page): apply optimization on ${prep.content_path}`,
       body,
       head: prep.branch_name,
       base: prep.default_branch,
       draft: true,
     })
+    prNumber = created.number
+    prUrl = created.html_url
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    // 幂等恢复：同 head → base 上 PR 已存在时 GitHub 返回 422，且该状态**永远**不会
-    // 随时间改变（这不是可重试错误）。查已有 PR 复用其编号；查不到 = 真失败。
-    if (/422|already/i.test(msg)) {
-      let existing
-      try {
-        const list = await gh.listPullRequestsByHead(prep.repo_owner, prep.repo_name, prep.branch_name)
-        existing = list.find((p) => p.number) ?? null
-      } catch (lookupErr) {
-        throw new KernelError(
-          'INVALID_STATE',
-          `pr_open_failed：createPullRequest 报"已存在"但查询也失败：${lookupErr instanceof Error ? lookupErr.message : String(lookupErr)}`,
-          { detail: { originalError: msg } },
-        )
-      }
-      if (!existing) {
-        throw new KernelError(
-          'INVALID_STATE',
-          `pr_open_failed：createPullRequest 报"已存在"但按 head=${prep.branch_name} 找不到 —— provider 状态不自洽`,
-          { detail: { originalError: msg } },
-        )
-      }
-      pr = existing
-    } else {
+    if (!/422|already/i.test(msg)) {
       throw new RetryableCapabilityError(`pr_open_failed：${msg}`)
     }
+    // 422 recovery：网络模糊成功场景（同 run 已创建 PR 但 output 未持久化）——
+    // 查 open PRs by head，逐个用 getPullRequestDetail 核对 receipt 全对才 adopt。
+    let candidates: Array<{ number: number; html_url: string }>
+    try {
+      candidates = await gh.listPullRequestsByHead(prep.repo_owner, prep.repo_name, prep.branch_name)
+    } catch (lookupErr) {
+      throw new KernelError(
+        'INVALID_STATE',
+        `pr_open_failed：createPullRequest 报"已存在"但查询也失败：${lookupErr instanceof Error ? lookupErr.message : String(lookupErr)}`,
+        { detail: { originalError: msg } },
+      )
+    }
+    let adopted: { number: number; html_url: string } | null = null
+    for (const cand of candidates) {
+      let d
+      try {
+        d = await gh.getPullRequestDetail(prep.repo_owner, prep.repo_name, cand.number)
+      } catch {
+        continue
+      }
+      if (
+        d.draft === true && d.state === 'open' && d.merged === false &&
+        d.headRef === prep.branch_name && d.baseRef === prep.default_branch &&
+        prBodyOwnedByRun(d.body, args.runId, args.decisionId)
+      ) {
+        adopted = { number: d.number, html_url: d.htmlUrl }
+        break
+      }
+    }
+    if (!adopted) {
+      throw new KernelError(
+        'INVALID_STATE',
+        `pr_open_failed：createPullRequest 报"已存在"但按 head=${prep.branch_name} 找不到 draft+open+head+base+receipt 全对的 PR —— 拒绝 adopt 不属于本 run 的 PR`,
+        { detail: { originalError: msg, candidatesInspected: candidates.length } },
+      )
+    }
+    prNumber = adopted.number
+    prUrl = adopted.html_url
   }
 
-  const output: OpenPrOutput = { pr_number: pr.number, pr_url: pr.html_url }
+  // 🔴 happy-path 也再回读一次 detail 做**创建后自检**（同一份 receipt 校验）——
+  //    挡"createPullRequest 网络模糊成功但 GitHub 实际返回了别的 PR"或 provider
+  //    合约违约（draft 被剥离等）。
+  let detail
+  try {
+    detail = await gh.getPullRequestDetail(prep.repo_owner, prep.repo_name, prNumber)
+  } catch (readErr) {
+    throw new RetryableCapabilityError(
+      `pr_open_readback_failed：${readErr instanceof Error ? readErr.message : String(readErr)}`,
+    )
+  }
+  const receiptOk =
+    detail.draft === true && detail.state === 'open' && detail.merged === false &&
+    detail.headRef === prep.branch_name && detail.baseRef === prep.default_branch &&
+    prBodyOwnedByRun(detail.body, args.runId, args.decisionId)
+  if (!receiptOk) {
+    throw new KernelError(
+      'INVALID_STATE',
+      `pr_open_receipt_mismatch：PR #${prNumber} receipt 不符（draft=${detail.draft} state=${detail.state} merged=${detail.merged} head=${detail.headRef} base=${detail.baseRef}）`,
+      {
+        detail: {
+          reason: 'pr_receipt_mismatch', prNumber, prUrl,
+          expectedHead: prep.branch_name, expectedBase: prep.default_branch,
+          actualHead: detail.headRef, actualBase: detail.baseRef,
+          actualDraft: detail.draft, actualState: detail.state,
+        },
+      },
+    )
+  }
+
+  const output: OpenPrOutput = { pr_number: prNumber, pr_url: prUrl }
   return { costActualUsd: 0, output: output as unknown as Record<string, unknown> }
 }
 
@@ -581,54 +694,31 @@ async function stepRecord(
 async function rollbackHandler(
   deps: PageApplyOptimizationDeps,
   step: CapabilityStepContext,
-  priorOutputs: Readonly<Record<string, Record<string, unknown>>>,
+  _priorOutputsArg: Readonly<Record<string, Record<string, unknown>>>,
 ): Promise<OutwardRollbackResult> {
+  // 🔴 Gateway 传两次 priorOutputs（step.priorOutputs 与第二参数）—— 值相同，
+  //    永远以 step.priorOutputs 为准（跟 CapabilityStepHandler 一致）。
+  const priorOutputs = step.priorOutputs
   const prep = priorOutputs.prepare as unknown as PrepareOutput | undefined
   const opened = priorOutputs.open_pr as unknown as OpenPrOutput | undefined
-  const commit = priorOutputs.commit as unknown as CommitOutput | undefined
 
-  // ── noop 快速路径：从没跑到会产生 provider 副作用的位置 ─────────────────────
-  //    (a) 连 prepare 都没成 → 分支肯定没建
-  //    (b) prepare 成了但 commit 也没成（i.e. stepCommit 抛错的位置在 createBranch
-  //        之前）→ 分支未建。但 stepCommit 里 createBranch 是在 commit_created:true
-  //        之前的**必经步骤**，只要 commit 没成，branch 可能已建或未建 —— 保守起见：
-  //        没有 commit 记录 = 不去删可能不存在的分支（noop 更安全）。
-  //    这两条都对应 provider 实际零副作用；返回 noop 让 Gateway 落一行明确 lineage。
+  const runId = step.ctx.runId
+  const decisionId = step.ctx.decisionId
+
+  // prep 都没成 → provider 零副作用 → 真 noop
   if (!prep) {
-    return {
-      ok: true,
-      rollbackKind: 'noop',
-      detail: { reason: 'prepare 未完成，provider 零副作用' },
-    }
-  }
-  if (!commit) {
-    return {
-      ok: true,
-      rollbackKind: 'noop',
-      detail: {
-        reason: 'commit step 未完成，无法确认是否已创建 branch；保守 noop',
-        branch_name: prep.branch_name,
-      },
-    }
+    return { ok: true, rollbackKind: 'noop', detail: { reason: 'prepare 未完成' } }
   }
 
-  // ── 身份自检：防止 caller/attacker 塞入不属于本 run 的 branch/PR ───────────
-  //
-  // (1) branchName 必须是 `me/page-apply/<24-hex>` 形状。
-  //     branchNameForRun() 用 sha256(page_url|page_version_token|validated_diff_hash) 前 24 位派生 ——
-  //     可从 runInput 再算一次做严格自检。
+  // ── 静态身份闸（未开始 live 前）─────────────────────────────────────────
   const OWNED_BRANCH_RE = /^me\/page-apply\/[0-9a-f]{24}$/
   if (!OWNED_BRANCH_RE.test(prep.branch_name)) {
     return {
-      ok: false,
-      rollbackKind: 'provider_native',
-      detail: { branch_name: prep.branch_name },
-      failure_reason:
-        `拒绝 rollback：branch_name 不符合 me/page-apply/<24hex> —— ` +
-        `不属于本 capability owned 前缀，可能是 priorOutputs 被污染`,
+      ok: false, rollbackKind: 'provider_native',
+      detail: { branch_name: prep.branch_name, reason: 'branch_prefix_not_owned' },
+      failure_reason: `拒绝 rollback：branch_name 不符合 me/page-apply/<24hex>`,
     }
   }
-  // (2) branchName 派生必须与 ctx.runInput 重算一致（TOCTOU 二次防线）
   let expectedBranch: string
   try {
     const ri = parseRunInput(step.runInput)
@@ -636,39 +726,25 @@ async function rollbackHandler(
     expectedBranch = branchNameForRun(idKey)
   } catch (e) {
     return {
-      ok: false,
-      rollbackKind: 'provider_native',
-      detail: { thrown: e instanceof Error ? e.message : String(e) },
-      failure_reason: `拒绝 rollback：ctx.runInput 形状不对，无法自检 branch identity`,
+      ok: false, rollbackKind: 'provider_native',
+      detail: { thrown: e instanceof Error ? e.message : String(e), reason: 'run_input_shape_invalid' },
+      failure_reason: `拒绝 rollback：ctx.runInput 形状不对`,
     }
   }
   if (expectedBranch !== prep.branch_name) {
     return {
-      ok: false,
-      rollbackKind: 'provider_native',
-      detail: { prior_branch: prep.branch_name, expected: expectedBranch },
-      failure_reason:
-        `拒绝 rollback：prep.branch_name 跟 ctx.runInput 重算不一致 —— 不属于本 run`,
-    }
-  }
-  // (3) 绝不能删默认分支
-  if (prep.branch_name === prep.default_branch) {
-    return {
-      ok: false,
-      rollbackKind: 'provider_native',
-      detail: { branch_name: prep.branch_name, default_branch: prep.default_branch },
-      failure_reason: `拒绝 rollback：branch_name === default_branch，绝不能删`,
+      ok: false, rollbackKind: 'provider_native',
+      detail: { prior_branch: prep.branch_name, expected: expectedBranch, reason: 'branch_not_derived_from_runinput' },
+      failure_reason: `拒绝 rollback：prep.branch_name 跟 ctx.runInput 重算不一致`,
     }
   }
 
-  // ── 拿 provider client ──────────────────────────────────────────────────
   const conn = await deps.resolveGithubConnection(step.ctx.clientId)
   if (!conn) {
     return {
-      ok: false,
-      rollbackKind: 'provider_native',
-      detail: { clientId: step.ctx.clientId },
-      failure_reason: `拒绝 rollback：客户 GitHub 连接消失，无法执行 provider-native rollback`,
+      ok: false, rollbackKind: 'provider_native',
+      detail: { clientId: step.ctx.clientId, reason: 'connection_missing' },
+      failure_reason: `拒绝 rollback：客户 GitHub 连接消失`,
     }
   }
   const gh = deps.createGithubClient(conn.plainToken)
@@ -676,88 +752,217 @@ async function rollbackHandler(
   const detail: Record<string, unknown> = {
     branch_name: prep.branch_name,
     repo: `${prep.repo_owner}/${prep.repo_name}`,
+    kernel_run_id: runId,
   }
 
-  // ── (A) 如果有 PR：先 verify state → 未 merged 才可 close；merged 直接 fail-closed ──
-  let prClosed = false
-  if (opened) {
-    detail.pr_number = opened.pr_number
-    detail.pr_url = opened.pr_url
-
-    let prState: { state: 'open' | 'closed'; merged: boolean; mergedAt: string | null } | null = null
-    try {
-      prState = await gh.getPullRequestState(prep.repo_owner, prep.repo_name, opened.pr_number)
-    } catch (e) {
-      if (e instanceof GitHubApiError && e.status === 404) {
-        // PR 已不存在 —— 视为已撤，走 branch 清理
-        detail.pr_state = '404_not_found'
-        prClosed = true
-      } else {
-        return {
-          ok: false,
-          rollbackKind: 'provider_native',
-          detail,
-          failure_reason: `getPullRequestState 失败：${e instanceof Error ? e.message : String(e)}`,
-        }
-      }
-    }
-
-    if (prState) {
-      // 🔴 关键 fail-closed：PR 已 merge → 绝不 close、绝不 delete branch
-      if (prState.merged === true) {
-        return {
-          ok: false,
-          rollbackKind: 'provider_native',
-          detail: { ...detail, pr_state: 'merged', merged_at: prState.mergedAt },
-          failure_reason:
-            `拒绝 rollback：Draft PR #${opened.pr_number} 已被合并，v1 不做 post-merge revert；` +
-            `分支也**不**删（避免破坏 main 上已合的历史）；请人工判断`,
-        }
-      }
-      // 已 closed 且未 merge → 幂等成功；否则 close 掉
-      if (prState.state === 'closed') {
-        detail.pr_state = 'already_closed'
-        prClosed = true
-      } else {
-        try {
-          await gh.closePullRequest(prep.repo_owner, prep.repo_name, opened.pr_number)
-          detail.pr_state = 'closed_by_rollback'
-          prClosed = true
-        } catch (e) {
-          if (e instanceof GitHubApiError && e.status === 404) {
-            detail.pr_state = '404_on_close'
-            prClosed = true
-          } else {
-            return {
-              ok: false,
-              rollbackKind: 'provider_native',
-              detail,
-              failure_reason: `closePullRequest 失败：${e instanceof Error ? e.message : String(e)}`,
-            }
-          }
-        }
-      }
-    }
-  } else {
-    // 没有 open_pr priorOutput → 但 commit 已成 → 只需删分支
-    detail.pr_state = 'never_opened'
-  }
-
-  // ── (B) 删分支：404 视为幂等成功；其它错误 fail ──────────────────────────
+  // ── (LIVE-1) live default_branch ─ 绝不信 prep.default_branch ────────────
+  let liveDefaultBranch: string
   try {
-    await gh.deleteBranch(prep.repo_owner, prep.repo_name, prep.branch_name)
-    detail.branch_state = 'deleted_by_rollback'
+    const repoInfo = await gh.getRepo(prep.repo_owner, prep.repo_name)
+    liveDefaultBranch = repoInfo.default_branch
+    detail.live_default_branch = liveDefaultBranch
+  } catch (e) {
+    return {
+      ok: false, rollbackKind: 'provider_native',
+      detail: { ...detail, reason: 'live_default_read_failed' },
+      failure_reason: `拒绝 rollback：无法读 live default_branch：${e instanceof Error ? e.message : String(e)}`,
+    }
+  }
+  if (prep.branch_name === liveDefaultBranch) {
+    return {
+      ok: false, rollbackKind: 'provider_native',
+      detail: { ...detail, reason: 'branch_equals_live_default' },
+      failure_reason: `拒绝 rollback：branch_name === live default_branch (${liveDefaultBranch})`,
+    }
+  }
+
+  // ── (LIVE-2) branch 是否真实存在 ─ 决定 noop / cleanup ─────────────────
+  let branchTipSha: string | null = null
+  try {
+    branchTipSha = await gh.getBranchSha(prep.repo_owner, prep.repo_name, prep.branch_name)
   } catch (e) {
     if (e instanceof GitHubApiError && e.status === 404) {
-      detail.branch_state = '404_not_found'
+      branchTipSha = null
     } else {
       return {
-        ok: false,
-        rollbackKind: 'provider_native',
-        detail: { ...detail, pr_closed: prClosed },
-        failure_reason: `deleteBranch 失败：${e instanceof Error ? e.message : String(e)}`,
+        ok: false, rollbackKind: 'provider_native',
+        detail: { ...detail, reason: 'live_branch_read_failed' },
+        failure_reason: `拒绝 rollback：读 live branch SHA 失败：${e instanceof Error ? e.message : String(e)}`,
       }
     }
+  }
+  detail.live_branch_present = branchTipSha !== null
+
+  // ── (LIVE-3) branch 存在则验所有权 ─ tip === page_version_token 或 tip commit 带 run marker ─
+  let branchOwnedByThisRun = false
+  if (branchTipSha !== null) {
+    if (branchTipSha === prep.page_version_token) {
+      branchOwnedByThisRun = true
+      detail.branch_ownership = 'tip_equals_page_version_token'
+    } else {
+      try {
+        const tip = await gh.getCommit(prep.repo_owner, prep.repo_name, branchTipSha)
+        if (commitMessageOwnedByRun(tip.message, runId)) {
+          branchOwnedByThisRun = true
+          detail.branch_ownership = 'tip_has_run_marker'
+        } else {
+          detail.branch_ownership = 'tip_missing_run_marker'
+        }
+      } catch {
+        detail.branch_ownership = 'tip_commit_read_failed'
+      }
+    }
+  }
+
+  // ── (LIVE-4) 查 same-head PR 全部状态（open + closed + merged）─────────
+  interface OwnedPr { number: number; state: 'open' | 'closed'; merged: boolean; mergedAt: string | null; draft: boolean; headRef: string; baseRef: string; body: string }
+  const inspect = async (n: number): Promise<OwnedPr | 'notfound'> => {
+    try {
+      const d = await gh.getPullRequestDetail(prep.repo_owner, prep.repo_name, n)
+      return { number: d.number, state: d.state, merged: d.merged, mergedAt: d.mergedAt, draft: d.draft, headRef: d.headRef, baseRef: d.baseRef, body: d.body }
+    } catch (e) {
+      if (e instanceof GitHubApiError && e.status === 404) return 'notfound'
+      throw e
+    }
+  }
+  const classify = (pd: OwnedPr): 'merged' | 'owned_open' | 'owned_closed' | 'not_owned' => {
+    if (pd.merged === true) return 'merged'
+    const receiptOk =
+      pd.headRef === prep.branch_name &&
+      pd.baseRef === liveDefaultBranch &&
+      prBodyOwnedByRun(pd.body, runId, decisionId)
+    if (!receiptOk) return 'not_owned'
+    return pd.state === 'closed' ? 'owned_closed' : 'owned_open'
+  }
+
+  const prsToClose: OwnedPr[] = []
+  const mergedBlockers: OwnedPr[] = []
+  const seenPrNumbers = new Set<number>()
+
+  // opened priorOutput 优先查一次（如果存在）
+  if (opened) {
+    detail.pr_number_by_opened = opened.pr_number
+    detail.pr_url_by_opened = opened.pr_url
+    let pd
+    try {
+      pd = await inspect(opened.pr_number)
+    } catch (e) {
+      return {
+        ok: false, rollbackKind: 'provider_native',
+        detail: { ...detail, reason: 'live_pr_read_failed' },
+        failure_reason: `拒绝 rollback：读 PR #${opened.pr_number} 失败：${e instanceof Error ? e.message : String(e)}`,
+      }
+    }
+    if (pd !== 'notfound') {
+      seenPrNumbers.add(pd.number)
+      const cls = classify(pd)
+      detail.pr_classification_by_opened = cls
+      if (cls === 'merged') mergedBlockers.push(pd)
+      else if (cls === 'owned_open') prsToClose.push(pd)
+      else if (cls === 'not_owned') {
+        return {
+          ok: false, rollbackKind: 'provider_native',
+          detail: { ...detail, reason: 'pr_not_owned_by_run', pr_head: pd.headRef, pr_base: pd.baseRef },
+          failure_reason: `拒绝 rollback：PR #${opened.pr_number} head/base/body receipt 不符本 run`,
+        }
+      }
+    } else {
+      detail.pr_state_by_opened = '404_not_found'
+    }
+  }
+
+  // 无论 opened 是否给了 pr_number，都按 head 全状态扫一次
+  // （网络模糊成功场景：opened 缺失或 pr_number 已 404 但同 head 有新 PR）
+  let candidates: Array<{ number: number }> = []
+  try {
+    candidates = await gh.listPullRequestsByHead(prep.repo_owner, prep.repo_name, prep.branch_name, 'all')
+  } catch (e) {
+    detail.list_head_prs = `failed: ${e instanceof Error ? e.message : String(e)}`
+  }
+  for (const cand of candidates) {
+    if (seenPrNumbers.has(cand.number)) continue
+    let pd
+    try {
+      pd = await inspect(cand.number)
+    } catch (e) {
+      detail[`pr_${cand.number}_read`] = `failed: ${e instanceof Error ? e.message : String(e)}`
+      continue
+    }
+    if (pd === 'notfound') continue
+    seenPrNumbers.add(pd.number)
+    const cls = classify(pd)
+    if (cls === 'merged') mergedBlockers.push(pd)
+    else if (cls === 'owned_open') prsToClose.push(pd)
+    // owned_closed / not_owned → 不动
+  }
+
+  // ── merged PR 撞到本 run 的 head → truthful failure，零 provider write ─
+  if (mergedBlockers.length > 0) {
+    return {
+      ok: false, rollbackKind: 'provider_native',
+      detail: {
+        ...detail, reason: 'merged_pr_on_owned_head',
+        merged_prs: mergedBlockers.map((p) => ({ number: p.number, mergedAt: p.mergedAt })),
+      },
+      failure_reason: `拒绝 rollback：head=${prep.branch_name} 上挂着已 merge 的 PR (${mergedBlockers.map((p) => `#${p.number}`).join(',')})，v1 不做 post-merge revert；分支也不删`,
+    }
+  }
+
+  // ── branch 存在但被别人 commit 过（非本 run）→ 拒绝 delete ─────────────
+  if (branchTipSha !== null && !branchOwnedByThisRun) {
+    return {
+      ok: false, rollbackKind: 'provider_native',
+      detail: { ...detail, reason: 'branch_tampered_not_owned', branch_tip: branchTipSha },
+      failure_reason: `拒绝 rollback：branch ${prep.branch_name} 存在但 tip 既非 page_version_token 也不带本 run marker`,
+    }
+  }
+
+  // ── truthful noop：live 上确认 branch 不在 且 无本 run 相关 PR 需要动 ──
+  if (branchTipSha === null && prsToClose.length === 0) {
+    return {
+      ok: true, rollbackKind: 'noop',
+      detail: { ...detail, reason: 'live_check_shows_zero_side_effect' },
+    }
+  }
+
+  // ── close 所有 owned open PR；close 失败即返回 fail，不进入 delete ────
+  const closedPrs: number[] = []
+  for (const p of prsToClose) {
+    try {
+      await gh.closePullRequest(prep.repo_owner, prep.repo_name, p.number)
+      closedPrs.push(p.number)
+    } catch (e) {
+      if (e instanceof GitHubApiError && e.status === 404) {
+        closedPrs.push(p.number)
+      } else {
+        return {
+          ok: false, rollbackKind: 'provider_native',
+          detail: { ...detail, reason: 'close_pr_failed', pr_number: p.number, closed_so_far: closedPrs },
+          failure_reason: `closePullRequest #${p.number} 失败：${e instanceof Error ? e.message : String(e)}`,
+        }
+      }
+    }
+  }
+  detail.closed_prs = closedPrs
+
+  // ── delete branch：仅当 branch live 存在且 owned ─ 404 幂等 ok ──────────
+  if (branchTipSha !== null && branchOwnedByThisRun) {
+    try {
+      await gh.deleteBranch(prep.repo_owner, prep.repo_name, prep.branch_name)
+      detail.branch_state = 'deleted_by_rollback'
+    } catch (e) {
+      if (e instanceof GitHubApiError && e.status === 404) {
+        detail.branch_state = '404_at_delete'
+      } else {
+        return {
+          ok: false, rollbackKind: 'provider_native',
+          detail: { ...detail, reason: 'delete_branch_failed' },
+          failure_reason: `deleteBranch 失败：${e instanceof Error ? e.message : String(e)}`,
+        }
+      }
+    }
+  } else if (branchTipSha === null) {
+    detail.branch_state = 'already_absent'
   }
 
   return { ok: true, rollbackKind: 'provider_native', detail }

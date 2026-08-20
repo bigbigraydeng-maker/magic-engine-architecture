@@ -110,14 +110,91 @@ describe('commit step · stale-race defense', () => {
     expect(getFileCalls).toBe(0)
   })
 
-  it('createBranch 报"已存在"是正常路径（重试）', async () => {
+  // ── Scenario 2 (same-run crash/retry) —— 422 + tip 是本 run 建的 branch ──
+  it('scenario 2a · createBranch 422 + tip === baseSha (fresh branch from prior crash) → adopt + commit', async () => {
     const gh = {
-      async getBranchSha() { return 'base' },
+      async getBranchSha(_o: string, _r: string, branch: string) {
+        // main tip 与 branch tip 都是 'base'：branch 是空的 fresh createBranch
+        return 'base'
+      },
       async createBranch() { throw new Error('422 Reference already exists') },
+      async getCommit() { throw new Error('should not be called when isFreshFromBase') },
       async commitFile() { /* success */ },
       async getFileContent() { return { sha: 's', content: '', size: 0, decodedContent: PATCHED } },
     }
     const result = await runCommit(gh)
     expect(result.output.commit_created).toBe(true)
+  })
+
+  it('scenario 2b · createBranch 422 + tip commit 带本 run marker → adopt + commit', async () => {
+    let commitFileCalled = false
+    const gh = {
+      async getBranchSha(_o: string, _r: string, branch: string) {
+        if (branch === 'main') return 'base'
+        return 'newer-tip-sha' // owned branch tip !== base
+      },
+      async createBranch() { throw new Error('422 Reference already exists') },
+      async getCommit() { return { sha: 'newer-tip-sha', message: 'chore(page): apply [kernel run r]' } },
+      async commitFile() { commitFileCalled = true },
+      async getFileContent() { return { sha: 's', content: '', size: 0, decodedContent: PATCHED } },
+    }
+    const result = await runCommit(gh)
+    expect(result.output.commit_created).toBe(true)
+    expect(commitFileCalled).toBe(true)
+  })
+
+  // ── Scenario 3 (foreign / squatted branch) —— fail-closed 零写入 ─────────
+  it('scenario 3a · createBranch 422 + tip commit 不带本 run marker (客户手工建的) → INVALID_STATE 零写入', async () => {
+    let commitFileCalled = false
+    const gh = {
+      async getBranchSha(_o: string, _r: string, branch: string) {
+        if (branch === 'main') return 'base'
+        return 'foreign-sha'
+      },
+      async createBranch() { throw new Error('422 Reference already exists') },
+      async getCommit() { return { sha: 'foreign-sha', message: 'fix: someone else committed' } },
+      async commitFile() { commitFileCalled = true },
+      async getFileContent() { return { sha: 's', content: '', size: 0, decodedContent: PATCHED } },
+    }
+    await expect(runCommit(gh)).rejects.toMatchObject({
+      code: 'INVALID_STATE',
+      humanReason: expect.stringMatching(/existing_branch_not_owned_by_run/),
+    })
+    expect(commitFileCalled).toBe(false)
+  })
+
+  it('scenario 3b · createBranch 422 + branch tip 回读失败 → INVALID_STATE 零写入', async () => {
+    let commitFileCalled = false
+    const gh = {
+      async getBranchSha(_o: string, _r: string, branch: string) {
+        if (branch === 'main') return 'base'
+        throw new Error('branch read failed')
+      },
+      async createBranch() { throw new Error('422 Reference already exists') },
+      async commitFile() { commitFileCalled = true },
+    }
+    await expect(runCommit(gh)).rejects.toMatchObject({
+      code: 'INVALID_STATE',
+      humanReason: expect.stringMatching(/existing_branch_ownership_indeterminate/),
+    })
+    expect(commitFileCalled).toBe(false)
+  })
+
+  it('scenario 3c · createBranch 422 + getCommit 失败（保守视为未拥有）→ INVALID_STATE 零写入', async () => {
+    let commitFileCalled = false
+    const gh = {
+      async getBranchSha(_o: string, _r: string, branch: string) {
+        if (branch === 'main') return 'base'
+        return 'unknown-sha'
+      },
+      async createBranch() { throw new Error('422 Reference already exists') },
+      async getCommit() { throw new Error('cannot read commit') },
+      async commitFile() { commitFileCalled = true },
+    }
+    await expect(runCommit(gh)).rejects.toMatchObject({
+      code: 'INVALID_STATE',
+      humanReason: expect.stringMatching(/existing_branch_not_owned_by_run/),
+    })
+    expect(commitFileCalled).toBe(false)
   })
 })
