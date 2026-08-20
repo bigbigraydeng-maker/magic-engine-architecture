@@ -994,3 +994,24 @@ services:
     envVars:
       - key: CRON_SECRET
         sync: false
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Magic Insight（内部代号 market-intel）—— PM 每日全球 AI / 数字营销资讯雷达。
+  #
+  # 设计见 docs/specs/2026-08-20-market-intel-digest-design.md（v2，已过子牙 +
+  # 魏征设计审）。18:00 UTC ≈ 06:00 NZST / 07:00 NZDT，两季都落在清晨；PM 明确
+  # 不设硬性时间要求，可按体验微调。密钥直接走 fromGroup，不留"记得手动 link"
+  # 这一步——daily-cron-digest 就是靠人记住这件事，51 天没人发现地哑了。
+  #
+  # ⚠️ 尚未申请 healthchecks.io 监控 ID，先不接 ping；有账号权限的人申请后
+  #    在 startCommand 末尾按现有条目的格式加一行 `&& curl -fsS "https://hc-ping.com/<ID>"`。
+  - type: cron
+    name: market-intel-daily
+    env: node
+    schedule: "0 18 * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 180 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/market-intel-daily
+    envVars:
+      - fromGroup: me-shared-cron-secret
