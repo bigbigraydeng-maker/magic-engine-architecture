@@ -41,10 +41,14 @@ function adminAccess() {
   return { ok: true as const, user: { email: 'admin@test.com' }, role: 'admin' as const, allowedClientId: null }
 }
 
-function connectorRow(config: Record<string, unknown> | null) {
+function connectorRow(
+  config: Record<string, unknown> | null,
+  status: 'connected' | 'error' = 'connected',
+  error: { message: string } | null = null,
+) {
   const chain: Record<string, unknown> = {}
   ;['select', 'eq'].forEach((m) => { chain[m] = vi.fn().mockReturnValue(chain) })
-  chain.maybeSingle = vi.fn().mockResolvedValue({ data: config === null ? null : { config } })
+  chain.maybeSingle = vi.fn().mockResolvedValue({ data: config === null ? null : { status, config }, error })
   return chain
 }
 
@@ -79,7 +83,7 @@ describe('GET /api/clients/[id]/ga4-properties', () => {
     const res = await GET(makeGetRequest(), routeContext())
     const body = await res.json()
 
-    expect(body).toEqual({ connected: false, current: null, options: [] })
+    expect(body).toEqual({ connected: false, connector_status: null, current: null, options: [] })
   })
 
   it('is connected via the GSC-shared fallback token even with no client_connectors.ga4 row yet (#1052 root cause)', async () => {
@@ -91,6 +95,7 @@ describe('GET /api/clients/[id]/ga4-properties', () => {
     const body = await res.json()
 
     expect(body.connected).toBe(true)
+    expect(body.connector_status).toBeNull()
     expect(body.current).toBeNull()
   })
 
@@ -103,6 +108,28 @@ describe('GET /api/clients/[id]/ga4-properties', () => {
     const body = await res.json()
 
     expect(body.current).toBe('properties/550203806')
+    expect(body.connector_status).toBe('connected')
+  })
+
+  it('returns 503 and stops when the connector state cannot be read', async () => {
+    mocks.from.mockReturnValue(connectorRow(null, 'connected', { message: 'database unavailable' }))
+
+    const res = await GET(makeGetRequest(), routeContext())
+
+    expect(res.status).toBe(503)
+    expect(mocks.resolveAccessToken).not.toHaveBeenCalled()
+    expect(mocks.listGa4Properties).not.toHaveBeenCalled()
+  })
+
+  it('does not expose a malformed stored Property as the current selection', async () => {
+    mocks.from.mockReturnValue(connectorRow({ property_id: 'not-a-property' }))
+    mocks.resolveAccessToken.mockResolvedValue('token')
+    mocks.listGa4Properties.mockResolvedValue({ ok: true, properties: [] })
+
+    const body = await (await GET(makeGetRequest(), routeContext())).json()
+
+    expect(body.current).toBeNull()
+    expect(body.connector_status).toBe('connected')
   })
 
   it('returns google_unavailable when listGa4Properties itself fails (distinct from "zero properties")', async () => {
@@ -132,12 +159,28 @@ describe('GET /api/clients/[id]/ga4-properties', () => {
 
     expect(body).toEqual({
       connected: true,
+      connector_status: 'connected',
       current: 'properties/1',
       options: [
         { property: 'properties/1', display_name: 'Site A' },
         { property: 'properties/2', display_name: 'Site B' },
       ],
     })
+  })
+
+  it('keeps OAuth availability separate from a failed Property verification', async () => {
+    mocks.from.mockReturnValue(connectorRow(
+      { property_id: '550203806', error_reason: 'permission_denied' },
+      'error',
+    ))
+    mocks.resolveAccessToken.mockResolvedValue('token')
+    mocks.listGa4Properties.mockResolvedValue({ ok: true, properties: [] })
+
+    const body = await (await GET(makeGetRequest(), routeContext())).json()
+
+    expect(body.connected).toBe(true)
+    expect(body.connector_status).toBe('error')
+    expect(body.current).toBe('properties/550203806')
   })
 })
 
@@ -167,6 +210,15 @@ describe('PATCH /api/clients/[id]/ga4-properties', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.reason).toBe('invalid')
+  })
+
+  it('returns 503 instead of claiming success when the verified state cannot be stored', async () => {
+    mocks.setGa4Property.mockResolvedValue({ ok: false, reason: 'storage_error' })
+    const res = await PATCH(makePatchRequest({ property: 'properties/1' }), routeContext())
+    expect(res.status).toBe(503)
+    const body = await res.json()
+    expect(body.reason).toBe('storage_error')
+    expect(body.error).toMatch(/保存不了/)
   })
 
   it('returns success + status:connected on a verified bind', async () => {

@@ -20,7 +20,8 @@
  */
 
 import { getValidAccessToken } from '@/lib/google-oauth/client'
-import { getValidToken, PlatformConnectionNotFoundError } from '@/lib/platform-oauth/token-manager'
+import { getValidTokenForConnection } from '@/lib/platform-oauth/token-manager'
+import { supabaseAdmin } from '@/lib/supabase'
 import { toGa4ResourceName } from './property-id'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -97,19 +98,34 @@ export async function resolveAccessToken(
   clientId: string,
   opts?: { forceRefresh?: boolean },
 ): Promise<string | null> {
-  // 1. New encrypted path (platform_oauth_connections, provider='google_ga4')
-  try {
-    const token = await getValidToken(clientId, 'google_ga4', opts)
-    if (token) return token
-  } catch (err) {
-    if (!(err instanceof PlatformConnectionNotFoundError)) {
-      console.warn('[ga4/client] getValidToken error:', err instanceof Error ? err.message : err)
-    }
-    // Fall through to legacy path
+  const { data: rows, error } = await supabaseAdmin
+    .from('platform_oauth_connections')
+    .select('id, account_id, status')
+    .eq('client_id', clientId)
+    .eq('provider', 'google_ga4')
+    .order('updated_at', { ascending: false })
+
+  if (error) {
+    console.warn('[ga4/client] GA4 connection lookup failed:', error.message)
+    return null
   }
 
-  // 2. Legacy OAuth token (google_oauth_tokens table) — same underlying grant GSC uses
-  return getValidAccessToken(clientId, opts)
+  if ((rows?.length ?? 0) === 0) {
+    // Legacy fallback is only for clients that have never had a dedicated
+    // GA4 row. An error/revoked row is an explicit lifecycle state.
+    return getValidAccessToken(clientId, opts)
+  }
+
+  const activeRows = rows!.filter((row) => row.status === 'active')
+  const selected = activeRows.find((row) => row.account_id === clientId) ?? activeRows[0]
+  if (!selected) return null
+
+  try {
+    return await getValidTokenForConnection(selected.id, opts)
+  } catch (err) {
+    console.warn('[ga4/client] dedicated token resolution failed:', err instanceof Error ? err.message : err)
+    return null
+  }
 }
 
 // ─── Internal GA4 API shapes ─────────────────────────────────────────────────

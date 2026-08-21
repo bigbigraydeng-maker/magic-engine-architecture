@@ -28,6 +28,7 @@ interface PropertyOption {
 
 interface Payload {
   connected: boolean
+  connector_status: 'connected' | 'error' | null
   current: string | null
   options: PropertyOption[]
   error?: 'google_unavailable'
@@ -91,6 +92,7 @@ export function Ga4PropertyPanel({ clientId }: Props) {
       }
       setManualInput('')
       await load()
+      window.dispatchEvent(new CustomEvent('ga4-property-changed', { detail: { clientId } }))
     } catch (err) {
       setErrMsg(err instanceof Error ? err.message : String(err))
     } finally {
@@ -174,6 +176,12 @@ export function Ga4PropertyPanel({ clientId }: Props) {
         <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
           ⚠ 自动列不出 Property 列表（对方服务或权限问题）。已经选好的不受影响；
           下面可以手动填 Property ID 顶上。
+        </p>
+      )}
+
+      {data.connector_status === 'error' && data.error !== 'google_unavailable' && (
+        <p className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">
+          ⚠ 已保存的 Property 没有通过读取验证。请核对编号或重新授权后再试。
         </p>
       )}
 

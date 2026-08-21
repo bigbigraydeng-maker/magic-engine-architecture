@@ -272,7 +272,12 @@ export default function ClientSettingsPage() {
         {oauthStatus === 'success' && (
           <div className="mt-5 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
             <span className="text-xl">✅</span>
-            <p className="font-black text-emerald-800">Google 账号已连接</p>
+            <div>
+              <p className="font-black text-emerald-800">Google 账号已授权</p>
+              <p className="mt-0.5 text-sm text-emerald-700">
+                授权已经收到。GA4 还要在下方选定并验证 Property，验证通过后才会显示已连接。
+              </p>
+            </div>
           </div>
         )}
 
