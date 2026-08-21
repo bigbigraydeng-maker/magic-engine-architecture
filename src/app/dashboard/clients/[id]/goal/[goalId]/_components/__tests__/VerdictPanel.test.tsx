@@ -16,6 +16,7 @@ function makeGoal(primaryMetricKey: string): GoalRow {
     period_start: '2026-08-22', period_end: '2026-09-05', budget_amount: null,
     budget_currency: null, status: 'active', verdict: null, verdict_at: null,
     verdict_summary: null, fde_reasoning: null, is_beta: true,
+    current_value: null, current_value_fetched_at: null, current_value_source: null,
     created_at: '2026-08-22T00:00:00Z', updated_at: '2026-08-22T00:00:00Z', created_by: null,
   }
 }
