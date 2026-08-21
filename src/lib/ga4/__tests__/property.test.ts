@@ -26,28 +26,34 @@ function record(table: string, method: string, args: unknown[]) {
  * `null` (no prior connector row) matches every pre-existing test's assumed
  * starting state.
  */
-function connectorsTable(existingConnector: { status: string; config: Record<string, unknown> | null } | null) {
+function connectorsTable(
+  existingConnector: { status: string; config: Record<string, unknown> | null } | null,
+  opts: { readError?: { message: string }; writeError?: { message: string } } = {},
+) {
   const readChain: Record<string, unknown> = {}
   ;['select', 'eq'].forEach((m) => {
     readChain[m] = vi.fn((...args: unknown[]) => { record('client_connectors', m, args); return readChain })
   })
   readChain.maybeSingle = vi.fn(() => {
     record('client_connectors', 'maybeSingle', [])
-    return Promise.resolve({ data: existingConnector })
+    return Promise.resolve({ data: existingConnector, error: opts.readError ?? null })
   })
 
   return {
     select: readChain.select,
     upsert: vi.fn((...args: unknown[]) => {
       record('client_connectors', 'upsert', args)
-      return Promise.resolve({ error: null })
+      return Promise.resolve({ error: opts.writeError ?? null })
     }),
   }
 }
 
-function mockTables(existingConnector: { status: string; config: Record<string, unknown> | null } | null = null) {
+function mockTables(
+  existingConnector: { status: string; config: Record<string, unknown> | null } | null = null,
+  opts: { readError?: { message: string }; writeError?: { message: string } } = {},
+) {
   mocks.from.mockImplementation((table: string) => {
-    if (table === 'client_connectors') return connectorsTable(existingConnector)
+    if (table === 'client_connectors') return connectorsTable(existingConnector, opts)
     throw new Error(`unexpected table in test: ${table}`)
   })
 }
@@ -123,6 +129,16 @@ describe('setGa4Property', () => {
     expect(result).toEqual({ ok: true, status: 'connected', propertyId: '550203806' })
   })
 
+  it('returns storage_error when a verified connection cannot be persisted', async () => {
+    mockTables(null, { writeError: { message: 'database unavailable' } })
+    mocks.verifyGa4PropertyAccess.mockResolvedValue({ ok: true })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const result = await setGa4Property('client-1', '550203806')
+
+    expect(result).toEqual({ ok: false, reason: 'storage_error' })
+  })
+
   it('writes status:error with the reason + detail when there was no prior connector and the account has no permission', async () => {
     mockTables(null)
     mocks.verifyGa4PropertyAccess.mockResolvedValue({
@@ -164,6 +180,19 @@ describe('setGa4Property', () => {
   // tests pin the fix: the DB write must only happen when it can't destroy
   // a working connection for a DIFFERENT property.
   describe('does not clobber an existing working connector with a different failing property', () => {
+    it('fails closed without writing when the existing connector cannot be read', async () => {
+      mockTables(null, { readError: { message: 'database unavailable' } })
+      mocks.verifyGa4PropertyAccess.mockResolvedValue({
+        ok: false, reason: 'permission_denied', detail: 'no access',
+      })
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      const result = await setGa4Property('client-1', '999999999')
+
+      expect(result).toEqual({ ok: false, reason: 'storage_error' })
+      expect(mocks.calls.some(c => c.table === 'client_connectors' && c.method === 'upsert')).toBe(false)
+    })
+
     it('leaves the existing connected row untouched — no upsert call at all — when a different property fails verification', async () => {
       mockTables({ status: 'connected', config: { property_id: '111111111' } })
       mocks.verifyGa4PropertyAccess.mockResolvedValue({

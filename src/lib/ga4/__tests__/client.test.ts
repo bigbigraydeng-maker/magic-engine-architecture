@@ -7,21 +7,39 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // shaping logic, which is unchanged by PR3a.
 
 const mocks = vi.hoisted(() => ({
-  getValidToken:        vi.fn(),
+  getValidTokenForConnection: vi.fn(),
   getValidAccessToken:  vi.fn(),
+  dedicatedRows:        [] as Array<{ id: string; account_id: string; status: string }>,
+  existenceError:       null as { message: string } | null,
 }))
 
 vi.mock('@/lib/platform-oauth/token-manager', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/platform-oauth/token-manager')>()
-  return { ...actual, getValidToken: mocks.getValidToken }
+  return { ...actual, getValidTokenForConnection: mocks.getValidTokenForConnection }
 })
 
 vi.mock('@/lib/google-oauth/client', () => ({
   getValidAccessToken: mocks.getValidAccessToken,
 }))
 
+vi.mock('@/lib/supabase', () => ({
+  supabaseAdmin: {
+    from: vi.fn(() => ({
+      select: vi.fn(() => ({
+        eq: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            order: vi.fn(() => Promise.resolve({
+              data: mocks.dedicatedRows,
+              error: mocks.existenceError,
+            })),
+          })),
+        })),
+      })),
+    })),
+  },
+}))
+
 import { fetchGa4Snapshot, verifyGa4PropertyAccess } from '../client'
-import { PlatformConnectionNotFoundError } from '@/lib/platform-oauth/token-manager'
 
 const CLIENT_ID = 'client-1'
 const PROPERTY  = 'properties/123456789'
@@ -35,16 +53,18 @@ function emptyReport() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.dedicatedRows = [{ id: 'canonical-row', account_id: CLIENT_ID, status: 'active' }]
+  mocks.existenceError = null
 })
 
 describe('fetchGa4Snapshot — token resolution priority', () => {
   it('uses the new platform_oauth_connections token when available, never touches the legacy path', async () => {
-    mocks.getValidToken.mockResolvedValue('new-table-token')
+    mocks.getValidTokenForConnection.mockResolvedValue('new-table-token')
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(emptyReport()))
 
     await fetchGa4Snapshot(PROPERTY, CLIENT_ID)
 
-    expect(mocks.getValidToken).toHaveBeenCalledWith(CLIENT_ID, 'google_ga4', undefined)
+    expect(mocks.getValidTokenForConnection).toHaveBeenCalledWith('canonical-row', undefined)
     expect(mocks.getValidAccessToken).not.toHaveBeenCalled()
     const [, init] = fetchSpy.mock.calls[0]
     const headers = (init as RequestInit).headers as Record<string, string>
@@ -52,7 +72,7 @@ describe('fetchGa4Snapshot — token resolution priority', () => {
   })
 
   it('falls back to the legacy google_oauth_tokens path when the client has no new-table row yet', async () => {
-    mocks.getValidToken.mockRejectedValue(new PlatformConnectionNotFoundError(CLIENT_ID, 'google_ga4'))
+    mocks.dedicatedRows = []
     mocks.getValidAccessToken.mockResolvedValue('legacy-token')
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(emptyReport()))
 
@@ -65,7 +85,7 @@ describe('fetchGa4Snapshot — token resolution priority', () => {
   })
 
   it('returns null (not a thrown error) when neither the new nor the legacy path has a token', async () => {
-    mocks.getValidToken.mockRejectedValue(new PlatformConnectionNotFoundError(CLIENT_ID, 'google_ga4'))
+    mocks.dedicatedRows = []
     mocks.getValidAccessToken.mockResolvedValue(null)
 
     const result = await fetchGa4Snapshot(PROPERTY, CLIENT_ID)
@@ -73,18 +93,53 @@ describe('fetchGa4Snapshot — token resolution priority', () => {
     expect(result).toBeNull()
   })
 
-  it('a genuine (non-not-found) error from the new path is logged but still falls through to legacy', async () => {
+  it('fails closed on a genuine new-path error instead of hiding it with the legacy token', async () => {
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    mocks.getValidToken.mockRejectedValue(new Error('transient db error'))
+    mocks.getValidTokenForConnection.mockRejectedValue(new Error('transient db error'))
     mocks.getValidAccessToken.mockResolvedValue('legacy-token')
     vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(emptyReport()))
 
     const result = await fetchGa4Snapshot(PROPERTY, CLIENT_ID)
 
-    expect(result).not.toBeNull()
+    expect(result).toBeNull()
+    expect(mocks.getValidAccessToken).not.toHaveBeenCalled()
     expect(consoleWarn).toHaveBeenCalledWith(
-      '[ga4/client] getValidToken error:', 'transient db error',
+      '[ga4/client] dedicated token resolution failed:', 'transient db error',
     )
+  })
+
+  it('does not use the legacy token when a dedicated GA4 row exists but is not active', async () => {
+    mocks.dedicatedRows = [{ id: 'revoked-or-error-row', account_id: CLIENT_ID, status: 'error' }]
+    mocks.getValidAccessToken.mockResolvedValue('legacy-token')
+
+    const result = await fetchGa4Snapshot(PROPERTY, CLIENT_ID)
+
+    expect(result).toBeNull()
+    expect(mocks.getValidAccessToken).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when checking whether a dedicated GA4 row exists fails', async () => {
+    mocks.existenceError = { message: 'database unavailable' }
+    mocks.getValidAccessToken.mockResolvedValue('legacy-token')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await fetchGa4Snapshot(PROPERTY, CLIENT_ID)
+
+    expect(result).toBeNull()
+    expect(mocks.getValidAccessToken).not.toHaveBeenCalled()
+  })
+
+  it('prefers the canonical stable slot when a historical active row remains after cleanup failure', async () => {
+    mocks.dedicatedRows = [
+      { id: 'newer-historical-row', account_id: 'owner@example.com', status: 'active' },
+      { id: 'canonical-row', account_id: CLIENT_ID, status: 'active' },
+    ]
+    mocks.getValidTokenForConnection.mockResolvedValue('canonical-token')
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(emptyReport()))
+
+    await fetchGa4Snapshot(PROPERTY, CLIENT_ID)
+
+    expect(mocks.getValidTokenForConnection).toHaveBeenCalledWith('canonical-row', undefined)
   })
 })
 
@@ -97,7 +152,7 @@ describe('verifyGa4PropertyAccess', () => {
   }
 
   it('returns ok:true when the token has a working shared (GSC-fallback) grant, even with zero rows of traffic', async () => {
-    mocks.getValidToken.mockRejectedValue(new PlatformConnectionNotFoundError(CLIENT_ID, 'google_ga4'))
+    mocks.dedicatedRows = []
     mocks.getValidAccessToken.mockResolvedValue('gsc-shared-token')
     vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(emptyReport()))
 
@@ -107,7 +162,7 @@ describe('verifyGa4PropertyAccess', () => {
   })
 
   it('accepts a bare numeric property id and builds the properties/… resource name for the API call', async () => {
-    mocks.getValidToken.mockResolvedValue('token')
+    mocks.getValidTokenForConnection.mockResolvedValue('token')
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => Promise.resolve(emptyReport()))
 
     await verifyGa4PropertyAccess(CLIENT_ID, '550203806')
@@ -117,7 +172,7 @@ describe('verifyGa4PropertyAccess', () => {
   })
 
   it('returns reason:no_token when neither the GA4 nor the legacy/GSC-shared token resolves', async () => {
-    mocks.getValidToken.mockRejectedValue(new PlatformConnectionNotFoundError(CLIENT_ID, 'google_ga4'))
+    mocks.dedicatedRows = []
     mocks.getValidAccessToken.mockResolvedValue(null)
 
     const result = await verifyGa4PropertyAccess(CLIENT_ID, '550203806')
@@ -126,7 +181,7 @@ describe('verifyGa4PropertyAccess', () => {
   })
 
   it('returns reason:permission_denied on a 403 from the GA4 Data API', async () => {
-    mocks.getValidToken.mockResolvedValue('token')
+    mocks.getValidTokenForConnection.mockResolvedValue('token')
     vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
       Promise.resolve(errorResponse(403, 'PERMISSION_DENIED', 'User does not have sufficient permissions')),
     )
@@ -138,7 +193,7 @@ describe('verifyGa4PropertyAccess', () => {
   })
 
   it('returns reason:not_found on a 400 from the GA4 Data API (property does not exist)', async () => {
-    mocks.getValidToken.mockResolvedValue('token')
+    mocks.getValidTokenForConnection.mockResolvedValue('token')
     vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
       Promise.resolve(errorResponse(400, 'INVALID_ARGUMENT', 'Invalid property 550203806')),
     )
@@ -150,7 +205,7 @@ describe('verifyGa4PropertyAccess', () => {
   })
 
   it('returns reason:api_error on an unexpected 5xx / network failure', async () => {
-    mocks.getValidToken.mockResolvedValue('token')
+    mocks.getValidTokenForConnection.mockResolvedValue('token')
     vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
       Promise.resolve(errorResponse(500, 'INTERNAL', 'backend hiccup')),
     )
@@ -168,7 +223,7 @@ describe('verifyGa4PropertyAccess', () => {
   // become an unhandled 500 in the PATCH route; it must degrade to the same
   // structured api_error result every other failure path produces.
   it('degrades to reason:api_error instead of throwing when resolveAccessToken itself throws', async () => {
-    mocks.getValidToken.mockRejectedValue(new PlatformConnectionNotFoundError(CLIENT_ID, 'google_ga4'))
+    mocks.dedicatedRows = []
     mocks.getValidAccessToken.mockRejectedValue(new Error('supabase network failure'))
 
     const result = await verifyGa4PropertyAccess(CLIENT_ID, '550203806')
