@@ -80,13 +80,21 @@
 
 ## 近期待办（跨 Phase 汇总）
 
-### ME 产品动态自动发 LinkedIn（parking lot，2026-08-20 撤回自动化，改走手工验证）
+### ME 产品动态自动发 LinkedIn（2026-08-20 建成，默认关闭）
 
-之前把「CHANGELOG → LinkedIn 帖子」直接做成无人值守 cron + LLM 生成 + 自动发布，
-在真实 Publer/LinkedIn 发布路径跑通前就上了太多板子，已撤回全部代码。
-下一步不是继续写代码：手工挑 1 条已上线的 CHANGELOG 条目，临时写 1 条 LinkedIn 预览文案，
-PM 看一眼后通过现有 LinkedIn/Publer 界面手工发布，连续跑 2–3 次，记录真正反复出现的摩擦
-（文案质量 / 敏感信息 / 账号绑定 / 格式 / 发布动作）。只有真实失败反复出现后才补最小 helper。
+代码已完成并测试通过：`src/lib/linkedin-progress/`（取材/敏感词硬过滤/文案生成/发布编排）+
+`src/app/api/cron/linkedin-progress-post-{mon,thu}/`（每周一/四各一条 cron）+
+`src/lib/pm-todo/manual-items.ts` 的 `pushLinkedinProgressItems`（待审/账号未连/发布失败三种卡点接进日常待办）。
+只从 `docs/history/CHANGELOG.md` 已上线条目取材，完全自动发布，命中客户敏感信息才转人审。
+两轮 Codex 复审挑出的问题（敏感词表查询失败要 fail closed / 发布账号严格绑定 / 人工复审路径也要接上真正发布 /
+并发确认要原子认领 / 发布成功但状态没同步要能对账）均已修完并测试通过。
+
+- [ ] **上线前 PM 必做的一次性动作**：① 去 Publer 后台用自己的 LinkedIn 账号做一次性授权连接
+      ② 打开 ME 后台「Magic Lab Class」客户的 connectors 设置页，把出现的 LinkedIn 账号 ID 填进 Publer 绑定
+      ③ 在 Render 的 `crazycontent` 服务（不是 render.yaml 里那个不对外服务的 `magic-engine`）Environment 页手动加
+      `LINKEDIN_PROGRESS_POST_ENABLED=true`（未配置=默认禁用，这三步没做完之前功能保持休眠，不会误发）
+- [ ] 上线后先跑一次人工验证：确认 Publer 的 schedule 接口对 `provider='linkedin'` 真的认（目前只有代码推断，没有已连账号可实测），
+      建议先手工发 1-2 条真实验证一次发布路径，再考虑打开 cron 开关
 
 ### 广告引擎中心 — 已上线部分的收尾（2026-08-05）
 
