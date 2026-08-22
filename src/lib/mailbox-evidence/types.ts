@@ -10,6 +10,7 @@ export type MailboxSignalKind =
 export type EvidenceAssessmentState = 'PROVEN' | 'INFERRED' | 'UNKNOWN'
 
 export type EvidenceReasonCode =
+  | 'INVALID_OBSERVATION'
   | 'MISSING_SCOPE_BINDING'
   | 'ACCOUNT_REFERENCE_NOT_OPAQUE'
   | 'CROSS_BOUNDARY_IDENTITY'
@@ -38,6 +39,7 @@ export type MailboxEvidenceClaim =
   | 'BOOKING_CONFIRMATION_OBSERVED'
   | 'PASSPORT_RECEIPT_OBSERVED'
   | 'FOLLOW_UP_STATE_OBSERVED'
+  | 'UNKNOWN_OBSERVATION'
 
 export interface EvidenceBoundary {
   readonly tenantId: string
@@ -75,7 +77,7 @@ export interface NormalizedMailboxEvidenceObservation {
 }
 
 export interface MailboxEvidenceAssessment {
-  readonly signalKind: MailboxSignalKind
+  readonly signalKind: MailboxSignalKind | 'unknown'
   readonly claim: MailboxEvidenceClaim
   readonly state: EvidenceAssessmentState
   readonly reasonCodes: readonly EvidenceReasonCode[]

@@ -14,6 +14,7 @@ const DANGEROUS_CALLS = new Set([
   'insert', 'update', 'upsert', 'delete', 'rpc', 'send', 'reply', 'forward',
   'publish', 'execute', 'mutate',
 ])
+const FORBIDDEN_CONSTRUCTORS = new Set(['WebSocket', 'EventSource', 'XMLHttpRequest'])
 
 interface ArchitectureViolations {
   readonly nonLocalImports: string[]
@@ -43,13 +44,22 @@ function architectureViolationsOf(sourceFile: ts.SourceFile): ArchitectureViolat
     dynamicLoads: [],
     dangerousCalls: [],
   }
+  const aliases = new Set<string>()
   const visit = (node: ts.Node): void => {
+    collectDangerousAlias(node, aliases)
     collectModuleViolation(node, sourceFile, violations)
-    collectCallViolation(node, sourceFile, violations)
+    collectCallViolation(node, sourceFile, violations, aliases)
+    collectNewViolation(node, sourceFile, violations)
     ts.forEachChild(node, visit)
   }
   visit(sourceFile)
   return violations
+}
+
+function collectDangerousAlias(node: ts.Node, aliases: Set<string>): void {
+  if (!ts.isVariableDeclaration(node) || !node.initializer || !ts.isIdentifier(node.name)) return
+  const target = calledNameOf(node.initializer as ts.LeftHandSideExpression)
+  if (target && (DANGEROUS_CALLS.has(target) || aliases.has(target))) aliases.add(node.name.text)
 }
 
 function collectModuleViolation(
@@ -57,6 +67,10 @@ function collectModuleViolation(
   sourceFile: ts.SourceFile,
   violations: ArchitectureViolations,
 ): void {
+  if (ts.isImportEqualsDeclaration(node)) {
+    violations.nonLocalImports.push(node.getText(sourceFile))
+    return
+  }
   if (!ts.isImportDeclaration(node) && !ts.isExportDeclaration(node)) return
   if (!node.moduleSpecifier || !ts.isStringLiteral(node.moduleSpecifier)) return
   const imported = node.moduleSpecifier.text
@@ -66,10 +80,23 @@ function collectModuleViolation(
   }
 }
 
+function collectNewViolation(
+  node: ts.Node,
+  sourceFile: ts.SourceFile,
+  violations: ArchitectureViolations,
+): void {
+  if (!ts.isNewExpression(node)) return
+  const name = calledNameOf(node.expression)
+  if (name && FORBIDDEN_CONSTRUCTORS.has(name)) {
+    violations.dangerousCalls.push(node.getText(sourceFile))
+  }
+}
+
 function collectCallViolation(
   node: ts.Node,
   sourceFile: ts.SourceFile,
   violations: ArchitectureViolations,
+  aliases: ReadonlySet<string>,
 ): void {
   if (!ts.isCallExpression(node)) return
   if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
@@ -78,7 +105,7 @@ function collectCallViolation(
   }
   const callName = calledNameOf(node.expression)
   if (callName === 'require') violations.dynamicLoads.push(node.getText(sourceFile))
-  if (callName && DANGEROUS_CALLS.has(callName)) {
+  if (callName && (DANGEROUS_CALLS.has(callName) || aliases.has(callName))) {
     violations.dangerousCalls.push(node.getText(sourceFile))
   }
 }
@@ -95,13 +122,28 @@ function calledNameOf(expression: ts.LeftHandSideExpression): string | null {
 function propertyNamesOf(sourceFile: ts.SourceFile): string[] {
   const names: string[] = []
   const visit = (node: ts.Node): void => {
-    if ((ts.isPropertySignature(node) || ts.isPropertyDeclaration(node)) && node.name) {
+    if (isNamedPayloadNode(node) && node.name) {
       names.push(node.name.getText(sourceFile).replaceAll(/['"]/g, ''))
+    }
+    if (ts.isBindingElement(node)) {
+      names.push(node.propertyName?.getText(sourceFile) ?? node.name.getText(sourceFile))
+    }
+    if (ts.isMappedTypeNode(node)) names.push(node.typeParameter.name.getText(sourceFile))
+    if (ts.isIndexSignatureDeclaration(node) && node.parameters[0]) {
+      names.push(node.parameters[0].name.getText(sourceFile))
     }
     ts.forEachChild(node, visit)
   }
   visit(sourceFile)
   return names
+}
+
+function isNamedPayloadNode(node: ts.Node): node is ts.NamedDeclaration {
+  return ts.isPropertySignature(node) || ts.isPropertyDeclaration(node)
+    || ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)
+    || ts.isMethodDeclaration(node) || ts.isMethodSignature(node)
+    || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)
+    || ts.isIndexSignatureDeclaration(node)
 }
 
 describe('mailbox evidence architecture boundary', () => {
@@ -134,8 +176,23 @@ describe('mailbox evidence architecture boundary', () => {
     ['require', 'require("node:fs")', 'dynamicLoads'],
     ['global fetch', 'globalThis.fetch("https://example.test")', 'dangerousCalls'],
     ['computed I/O', 'storage["readFileSync"]("secret")', 'dangerousCalls'],
+    ['import equals', 'import fs = require("node:fs")', 'nonLocalImports'],
+    ['network constructor', 'new WebSocket("wss://example.test")', 'dangerousCalls'],
+    ['aliased call', 'const load = fetch; load("https://example.test")', 'dangerousCalls'],
   ] as const)('detects the %s bypass probe', (_name, source, violationKind) => {
     const probe = sourceFileFromText(join(MODULE_DIR, 'probe.ts'), source)
     expect(architectureViolationsOf(probe)[violationKind]).not.toEqual([])
+  })
+
+  it.each([
+    ['object property', 'const value = { body: "secret" }'],
+    ['destructuring', 'const { contentBytes } = value'],
+    ['method', 'class Value { attachmentId() {} }'],
+    ['accessor', 'class Value { get filename() { return "x" } }'],
+    ['mapped field', 'type Value = { [body in "body"]: string }'],
+    ['indexed field', 'interface Value { [content: string]: string }'],
+  ])('detects the %s payload probe', (_name, source) => {
+    const probe = sourceFileFromText(join(MODULE_DIR, 'probe.ts'), source)
+    expect(propertyNamesOf(probe).filter(name => FORBIDDEN_PAYLOAD_FIELDS.has(name))).not.toEqual([])
   })
 })
