@@ -1,40 +1,95 @@
 import { readFileSync, readdirSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
 
 const MODULE_DIR = join(dirname(__filename), '..')
-const RUNTIME_FILES = readdirSync(MODULE_DIR)
-  .filter(file => file.endsWith('.ts'))
-  .map(file => join(MODULE_DIR, file))
-
-const FORBIDDEN_IMPORTS = [
-  'supabase', 'database', 'microsoft', 'gmail', 'oauth', 'openai', 'anthropic',
-  'llm', 'fetch', 'axios', 'undici', 'kernel', 'flywheel', 'crm',
-]
-
 const FORBIDDEN_PAYLOAD_FIELDS = new Set([
   'raw', 'body', 'subject', 'address', 'filename', 'attachmentId', 'url',
   'download', 'ocr', 'bytes', 'base64', 'content', 'contentBytes',
 ])
+const DANGEROUS_CALLS = new Set([
+  'fetch', 'request', 'connect', 'createConnection', 'createClient', 'readFile',
+  'readFileSync', 'writeFile', 'writeFileSync', 'open', 'query', 'select',
+  'insert', 'update', 'upsert', 'delete', 'rpc', 'send', 'reply', 'forward',
+  'publish', 'execute', 'mutate',
+])
 
-function sourceFileOf(path: string): ts.SourceFile {
-  return ts.createSourceFile(
-    path,
-    readFileSync(path, 'utf8'),
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  )
+interface ArchitectureViolations {
+  readonly nonLocalImports: string[]
+  readonly dynamicLoads: string[]
+  readonly dangerousCalls: string[]
 }
 
-function importsOf(sourceFile: ts.SourceFile): string[] {
-  return sourceFile.statements.flatMap(statement => {
-    if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) return []
-    return statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)
-      ? [statement.moduleSpecifier.text]
-      : []
+function runtimeFilesUnder(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap(entry => {
+    const path = join(directory, entry.name)
+    if (entry.isDirectory()) return entry.name === '__tests__' ? [] : runtimeFilesUnder(path)
+    return entry.isFile() && entry.name.endsWith('.ts') ? [path] : []
   })
+}
+
+function sourceFileOf(path: string): ts.SourceFile {
+  return sourceFileFromText(path, readFileSync(path, 'utf8'))
+}
+
+function sourceFileFromText(path: string, source: string): ts.SourceFile {
+  return ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+}
+
+function architectureViolationsOf(sourceFile: ts.SourceFile): ArchitectureViolations {
+  const violations: ArchitectureViolations = {
+    nonLocalImports: [],
+    dynamicLoads: [],
+    dangerousCalls: [],
+  }
+  const visit = (node: ts.Node): void => {
+    collectModuleViolation(node, sourceFile, violations)
+    collectCallViolation(node, sourceFile, violations)
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return violations
+}
+
+function collectModuleViolation(
+  node: ts.Node,
+  sourceFile: ts.SourceFile,
+  violations: ArchitectureViolations,
+): void {
+  if (!ts.isImportDeclaration(node) && !ts.isExportDeclaration(node)) return
+  if (!node.moduleSpecifier || !ts.isStringLiteral(node.moduleSpecifier)) return
+  const imported = node.moduleSpecifier.text
+  const target = resolve(dirname(sourceFile.fileName), imported)
+  if (!imported.startsWith('.') || !target.startsWith(`${MODULE_DIR}/`)) {
+    violations.nonLocalImports.push(imported)
+  }
+}
+
+function collectCallViolation(
+  node: ts.Node,
+  sourceFile: ts.SourceFile,
+  violations: ArchitectureViolations,
+): void {
+  if (!ts.isCallExpression(node)) return
+  if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+    violations.dynamicLoads.push(node.getText(sourceFile))
+    return
+  }
+  const callName = calledNameOf(node.expression)
+  if (callName === 'require') violations.dynamicLoads.push(node.getText(sourceFile))
+  if (callName && DANGEROUS_CALLS.has(callName)) {
+    violations.dangerousCalls.push(node.getText(sourceFile))
+  }
+}
+
+function calledNameOf(expression: ts.LeftHandSideExpression): string | null {
+  if (ts.isIdentifier(expression)) return expression.text
+  if (ts.isPropertyAccessExpression(expression)) return expression.name.text
+  if (ts.isElementAccessExpression(expression) && ts.isStringLiteral(expression.argumentExpression)) {
+    return expression.argumentExpression.text
+  }
+  return null
 }
 
 function propertyNamesOf(sourceFile: ts.SourceFile): string[] {
@@ -50,26 +105,37 @@ function propertyNamesOf(sourceFile: ts.SourceFile): string[] {
 }
 
 describe('mailbox evidence architecture boundary', () => {
-  it('imports only its own pure local modules', () => {
-    for (const path of RUNTIME_FILES) {
-      for (const imported of importsOf(sourceFileOf(path))) {
-        expect(FORBIDDEN_IMPORTS.some(value => imported.toLowerCase().includes(value)),
-          `${basename(path)} imports forbidden dependency ${imported}`).toBe(false)
-        expect(imported.startsWith('.'), `${basename(path)} has non-local import ${imported}`).toBe(true)
-      }
+  const runtimeFiles = runtimeFilesUnder(MODULE_DIR)
+
+  it('recursively permits only static imports inside this pure module', () => {
+    for (const path of runtimeFiles) {
+      const violations = architectureViolationsOf(sourceFileOf(path))
+      expect(violations.nonLocalImports, basename(path)).toEqual([])
+      expect(violations.dynamicLoads, basename(path)).toEqual([])
     }
   })
 
   it('exposes no sensitive payload or attachment-content fields', () => {
-    for (const path of RUNTIME_FILES) {
+    for (const path of runtimeFiles) {
       const propertyNames = propertyNamesOf(sourceFileOf(path))
       expect(propertyNames.filter(name => FORBIDDEN_PAYLOAD_FIELDS.has(name)), basename(path)).toEqual([])
     }
   })
 
-  it('contains no I/O or mutation calls', () => {
-    const source = RUNTIME_FILES.map(path => readFileSync(path, 'utf8')).join('\n')
-    expect(source).not.toMatch(/\b(fetch|axios|createClient|from|insert|update|upsert|delete|rpc)\s*\(/)
-    expect(source).not.toMatch(/\b(send|reply|forward|publish|execute|mutate)\s*\(/)
+  it('contains no I/O, provider, persistence or mutation calls', () => {
+    for (const path of runtimeFiles) {
+      const violations = architectureViolationsOf(sourceFileOf(path))
+      expect(violations.dangerousCalls, basename(path)).toEqual([])
+    }
+  })
+
+  it.each([
+    ['dynamic import', 'void import("./internal/reader")', 'dynamicLoads'],
+    ['require', 'require("node:fs")', 'dynamicLoads'],
+    ['global fetch', 'globalThis.fetch("https://example.test")', 'dangerousCalls'],
+    ['computed I/O', 'storage["readFileSync"]("secret")', 'dangerousCalls'],
+  ] as const)('detects the %s bypass probe', (_name, source, violationKind) => {
+    const probe = sourceFileFromText(join(MODULE_DIR, 'probe.ts'), source)
+    expect(architectureViolationsOf(probe)[violationKind]).not.toEqual([])
   })
 })

@@ -8,7 +8,7 @@ import {
   type OpaqueProvenanceReference,
 } from './types'
 
-const OPAQUE_REF_PATTERN = /^[A-Za-z0-9_-]{12,128}$/
+const OPAQUE_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/
 
 const CLAIM_BY_SIGNAL = {
   payment: 'PAYMENT_CONFIRMATION_OBSERVED',
@@ -56,10 +56,11 @@ function scopeReasons(
   observation: NormalizedMailboxEvidenceObservation,
 ): EvidenceReasonCode[] {
   const { boundary } = observation
-  return [boundary.tenantId, boundary.clientId, boundary.provider, boundary.providerAccountId]
-    .every(value => value.trim().length > 0)
+  const required = [boundary.tenantId, boundary.clientId, boundary.provider]
+  if (!required.every(value => value.trim().length > 0)) return ['MISSING_SCOPE_BINDING']
+  return isOpaqueDigest(boundary.providerAccountRef)
     ? []
-    : ['MISSING_SCOPE_BINDING']
+    : ['ACCOUNT_REFERENCE_NOT_OPAQUE']
 }
 
 function identityReasons(
@@ -111,7 +112,10 @@ function provenanceReasons(
   observation: NormalizedMailboxEvidenceObservation,
 ): EvidenceReasonCode[] {
   if (observation.provenance.length === 0) return ['PROVENANCE_MISSING']
-  if (observation.provenance.some(reference => !isOpaque(reference.opaqueRef))) {
+  if (observation.provenance.some(reference => (
+    !isOpaqueDigest(reference.opaqueRef)
+    || !isOpaqueDigest(reference.providerAccountRef)
+  ))) {
     return ['PROVENANCE_NOT_OPAQUE']
   }
   return observation.provenance.every(reference => sameBoundary(observation, reference))
@@ -127,7 +131,7 @@ function sameBoundary(
   return reference.tenantId === boundary.tenantId
     && reference.clientId === boundary.clientId
     && reference.provider === boundary.provider
-    && reference.providerAccountId === boundary.providerAccountId
+    && reference.providerAccountRef === boundary.providerAccountRef
 }
 
 function assessmentStateFor(
@@ -154,10 +158,11 @@ function assessmentReasonsFor(
 function safeProvenance(
   observation: NormalizedMailboxEvidenceObservation,
 ): OpaqueProvenanceReference[] {
+  if (scopeReasons(observation).length > 0) return []
   if (provenanceReasons(observation).length > 0) return []
   return observation.provenance.map(reference => ({ ...reference }))
 }
 
-function isOpaque(value: string): boolean {
-  return OPAQUE_REF_PATTERN.test(value)
+function isOpaqueDigest(value: string): boolean {
+  return OPAQUE_DIGEST_PATTERN.test(value)
 }

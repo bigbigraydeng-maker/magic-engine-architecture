@@ -11,6 +11,7 @@ export type EvidenceAssessmentState = 'PROVEN' | 'INFERRED' | 'UNKNOWN'
 
 export type EvidenceReasonCode =
   | 'MISSING_SCOPE_BINDING'
+  | 'ACCOUNT_REFERENCE_NOT_OPAQUE'
   | 'CROSS_BOUNDARY_IDENTITY'
   | 'CROSS_BOUNDARY_PROVENANCE'
   | 'IDENTITY_AMBIGUOUS'
@@ -42,7 +43,8 @@ export interface EvidenceBoundary {
   readonly tenantId: string
   readonly clientId: string
   readonly provider: string
-  readonly providerAccountId: string
+  /** SHA-256 digest reference only; never a mailbox address or provider payload. */
+  readonly providerAccountRef: string
 }
 
 export interface ResolvedSubjectIdentity {
