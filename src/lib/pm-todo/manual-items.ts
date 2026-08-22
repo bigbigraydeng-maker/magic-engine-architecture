@@ -51,6 +51,8 @@ export type ManualItemKind =
   | 'video_credits_out'
   | 'cron_not_running'
   | 'cron_blind'
+  /** Publer 自动发布鉴权密钥（PUBLER_CREATE_POST_TOKEN）还没配 —— 上线后 webhook 会 fail closed，审批后自动发的帖子静默卡在 approved（#1149 P0） */
+  | 'publer_token_unset'
   | 'goal_baseline_mismatch'
   | 'diagnostic_findings'
   | 'prescription_updated'
@@ -197,6 +199,11 @@ export async function loadManualItems(
   await pushVideoCreditsItem(supabase, items, now)
   // 按时没跑 / 查不出跑没跑 —— PM 2026-08-03 要求「不能完成需要有报错」
   await pushCronHealthItems(supabase, items, now)
+  // Publer 自动发布鉴权密钥（#1149）还没配 —— 这次安全更新一上线，webhook 没密钥就 401，
+  // 审批后自动发的帖子会静默卡在 approved。只有人能配（Render + Zapier），代码做不了，
+  // 必须进同一个管道，不能只写在 PR / env 文档里等人翻（铁律 3 下半条）。
+  const publerTokenItem = publerTokenSetupItem(process.env.PUBLER_CREATE_POST_TOKEN)
+  if (publerTokenItem) items.push(publerTokenItem)
   // 目标数字口径对不上 —— 错的方向感比没数字更危险(2026-08-03 差点据此给出反向建议)
   await pushBaselineItems(supabase, items)
   // 出片工单排队但没人干活 —— 装配跑在一台 Mac 上，不开机就没人做，而队列里看不出来
@@ -524,6 +531,38 @@ async function pushCronHealthItems(
       how: '这条不用你动手 —— 是我们代码里的欠账（接口没接运行记录）。回我一句「补记录」我就去补，补完它们才进得了这套监控',
       href: RENDER_DASHBOARD_URL,
     })
+  }
+}
+
+
+/**
+ * Publer 自动发布 webhook 的鉴权密钥（PUBLER_CREATE_POST_TOKEN）还没配 → 下发人工任务。
+ *
+ * #1149 SECURITY P0：`/api/publer/create-post` 补了 Bearer 鉴权后，密钥未配置时 webhook
+ * 调用会 fail closed（401），Airtable 审批后自动发的帖子会静默卡在 approved 发不出去。
+ * 配置这一步只有人能做——在 Render 建生产环境变量、在 Zapier 的 webhook 加同一个 Bearer——
+ * 代码做不了。按铁律 3 下半条：确实做不了的第三方操作必须下发成人工任务、进同一个管道，
+ * 不能只写在 PR / env 文档里等人自己翻，否则一次漏配就让发布管道静默断头。
+ *
+ * 刻意做成通用的「配置健康」提示，不做 Publer 专属控制台 —— Publer 只是可替换的发布适配器。
+ * 判据 = 环境变量在不在：配好了这条自己消失，不落新状态、不加新表。
+ * 做成纯函数（不读 env、不碰 supabase）好让单测直接覆盖；env 在 loadManualItems 里读。
+ */
+export function publerTokenSetupItem(token: string | undefined): ManualItem | null {
+  if (token && token.trim() !== '') return null
+
+  return {
+    kind: 'publer_token_unset',
+    client_id: 'infra',
+    client_name: 'Magic Engine 后台',
+    what:
+      '自动发布通道的鉴权密钥还没配 —— 现在这条通道没有鉴权（拿到一条帖子的编号就能发到客户社媒）；' +
+      '这次安全更新一上线，会反过来因为没配密钥，让「审批后自动发出去」的帖子全部卡在「已审批」发不出去。',
+    how:
+      '两步，顺序不能反：① 在 Render 生产环境变量里加 PUBLER_CREATE_POST_TOKEN（生成一个长随机字符串即可）；' +
+      '② 到 Zapier 里触发自动发布的那一步，把 Authorization 这个 header 设成「Bearer 空格 加同一个字符串」。' +
+      '两步都配完，再让这次安全更新上线（反过来先上线会先把自动发布打断，直到 Zapier 也配上才恢复）。配完这条会自己消失。',
+    href: RENDER_DASHBOARD_URL,
   }
 }
 

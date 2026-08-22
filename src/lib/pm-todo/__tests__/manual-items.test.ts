@@ -4,7 +4,13 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { gscInspectUrl, daysAgo, loadManualItems, type ManualItem } from '../manual-items'
+import {
+  gscInspectUrl,
+  daysAgo,
+  loadManualItems,
+  publerTokenSetupItem,
+  type ManualItem,
+} from '../manual-items'
 import { buildTodoEmail, type TodoCounts } from '../daily-todo'
 
 describe('gscInspectUrl', () => {
@@ -90,5 +96,76 @@ describe('daysAgo → 文案年龄', () => {
     const age = (d: number | null) => (d !== null && d > 0 ? `（已 ${d} 天）` : '')
     expect(age(0)).toBe('')
     expect(age(9)).toBe('（已 9 天）')
+  })
+})
+
+/**
+ * #1149 P1（frozen HEAD 9d905e5 上 Codex 新提）：Publer 自动发布鉴权密钥
+ * （PUBLER_CREATE_POST_TOKEN）的外部配置依赖必须进人工任务管道，
+ * 不能只写在 PR / env 文档里等人翻，否则一次漏配就让发布管道静默断头。
+ */
+describe('publerTokenSetupItem — 外部密钥配置进人工任务管道', () => {
+  const SECRET = 'super-long-random-production-secret-value'
+
+  it('密钥未配置（undefined）→ 下发一条 infra 级人工任务，what/how/href 三件套齐全', () => {
+    const item = publerTokenSetupItem(undefined)
+    expect(item).not.toBeNull()
+    expect(item!.kind).toBe('publer_token_unset')
+    // infra 级：系统配置，与具体客户无关
+    expect(item!.client_id).toBe('infra')
+    expect(item!.client_name).toBe('Magic Engine 后台')
+    // 三件套都不能为空 —— 缺一条就是「没下发好」
+    expect(item!.what.trim().length).toBeGreaterThan(0)
+    expect(item!.how.trim().length).toBeGreaterThan(0)
+    expect(item!.href.trim().length).toBeGreaterThan(0)
+  })
+
+  it('what 说清问题和影响；how 给出可照做的两步；href 是可点的绝对链接', () => {
+    const item = publerTokenSetupItem(undefined)!
+    // what 必须说清「会怎样」——审批过的帖子会卡住发不出去
+    expect(item.what).toContain('已审批')
+    // how 必须具体到点哪里、按什么顺序，FDE 不用问第二遍
+    expect(item.how).toContain('PUBLER_CREATE_POST_TOKEN')
+    expect(item.how).toContain('Render')
+    expect(item.how).toContain('Zapier')
+    expect(item.how).toContain('Bearer')
+    expect(item.how).toContain('顺序不能反')
+    // href 必须是能过链接闸的绝对网址（相对路径会被判 broken 整条丢掉）
+    expect(() => new URL(item.href)).not.toThrow()
+    expect(item.href.startsWith('https://')).toBe(true)
+  })
+
+  it('密钥为空串 / 纯空白 → 视作未配置，照常下发', () => {
+    expect(publerTokenSetupItem('')).not.toBeNull()
+    expect(publerTokenSetupItem('   ')).not.toBeNull()
+  })
+
+  it('密钥已配置 → 不下发（这条自己消失，不刷屏）', () => {
+    expect(publerTokenSetupItem(SECRET)).toBeNull()
+  })
+
+  it('绝不把密钥值印进待办（配置好就返回 null，天然不泄露）', () => {
+    // 已配置 → null，无任何文本承载密钥
+    expect(publerTokenSetupItem(SECRET)).toBeNull()
+    // 未配置时下发的文本里也不该出现任何真实密钥值
+    const item = publerTokenSetupItem(undefined)!
+    expect(`${item.what}${item.how}${item.href}`).not.toContain(SECRET)
+  })
+
+  it('能被日报的人工栏正常渲染（what/how 都出现在 HTML 里）', () => {
+    const EMPTY: TodoCounts = {
+      draftsByClient: [],
+      findingsByClient: [],
+      recentCardsByClient: [],
+      reelsByClient: [],
+      manualItems: [],
+      setupTasks: [],
+      cronFailures24h: 0,
+    }
+    const item = publerTokenSetupItem(undefined)!
+    const { html } = buildTodoEmail(3, { ...EMPTY, manualItems: [item] }, '22 Aug')
+    expect(html).toContain('需要你动手')
+    expect(html).toContain('自动发布通道的鉴权密钥还没配')
+    expect(html).toContain('PUBLER_CREATE_POST_TOKEN')
   })
 })
