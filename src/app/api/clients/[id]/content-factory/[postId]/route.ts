@@ -39,14 +39,20 @@ export async function PATCH(
     // .eq('status','draft') 条件会让后续重试（账号连好后再点一次确认）永远
     // 抢不到这一行——草稿就卡死了。这里先只读查一次 source，不碰状态。
     let linkedinAccount: PublerAccount | null = null
+    let isLinkedinConfirm = false
     if (body.action === 'confirm') {
-      const { data: peek } = await supabaseAdmin
+      const { data: peek, error: peekErr } = await supabaseAdmin
         .from('content_posts')
         .select('source')
         .eq('client_id', params.id)
         .eq('id', params.postId)
         .maybeSingle()
-      if (peek?.source === LINKEDIN_PROGRESS_SOURCE) {
+      // fail closed：预读失败不能当成"不是 LinkedIn"往下走——那样会跳过严格
+      // 账号解析，最后把仍为 null 的账号交给 scheduleSocialPost 的宽松兜底，
+      // 可能发到错误账号。查询出错直接抛，让整个请求 500。
+      if (peekErr) throw peekErr
+      isLinkedinConfirm = peek?.source === LINKEDIN_PROGRESS_SOURCE
+      if (isLinkedinConfirm) {
         linkedinAccount = await resolveBoundPublerAccount(params.id, LINKEDIN_PROGRESS_PLATFORM)
         if (!linkedinAccount) {
           return NextResponse.json(
@@ -63,12 +69,15 @@ export async function PATCH(
       .eq('client_id', params.id)   // 双重限定，防越权改到别客户
       .eq('id', params.postId)
 
-    // 原子认领：confirm 只能从 'draft' 转 'approved'。没有这个条件，两个并
-    // 发的 confirm（双击、两个管理员同时点）会各自无条件把状态重写成
-    // approved，都读到一行，然后（对 LinkedIn 帖子）都各自调一次
-    // scheduleSocialPost —— 发出两条重复的公开帖子。加了这条件后，只有
-    // 真正抢到那一行 UPDATE 的请求才会拿到数据，另一个拿到空结果。
-    if (body.action === 'confirm') {
+    // 原子认领只对 LinkedIn 帖子加：confirm 只能从 'draft' 转 'approved'。
+    // 没有这个条件，两个并发的 confirm（双击、两个管理员同时点）会各自无条
+    // 件把状态重写成 approved，都读到一行，然后各自调一次 scheduleSocialPost
+    // —— 发出两条重复的公开帖子。只有 LinkedIn 帖子会在 confirm 时真发布、
+    // 才需要这道防重复认领；普通视频内容的 confirm 只是入队做片、不对外发，
+    // 而且它的选题段合法地包含 rejected（打回后重新确认要能从 rejected →
+    // approved），所以绝不能给它加 draft-only 限制，否则重新确认打回内容会
+    // 直接 404（真实回归，Codex round 3 P2 挑出）。
+    if (isLinkedinConfirm) {
       updateQuery = updateQuery.eq('status', 'draft')
     }
 
