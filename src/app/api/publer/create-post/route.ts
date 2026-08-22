@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getAccounts, uploadMediaFromUrl, schedulePost } from '@/lib/publer/client'
@@ -8,44 +7,19 @@ import { judgeOutgoingPost, priceGateMessage } from '@/lib/content/price-claim-g
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import '@/lib/flywheel/adapters/SocialContentAdapter'
 
-// Timing-safe 比较 Authorization header 与期望的 Bearer token。
-// - 服务端未配置 token（expected 为空）→ 一律返回 false：webhook 鉴权 fail
-//   closed，绝不因为漏配就默认放行，但也不直接抛错，好让 dashboard 会话兜底
-//   仍然可达（见 #1149 item 3 / Codex P2）。
-// - header 缺失 / 格式不对 / 长度不同 → false（不泄露具体哪里不对）。
-// - 只有完全相等才 true，且用 timingSafeEqual 避免按字节比较的计时侧信道
-//   （#1149 item 1）。
-function hasValidWebhookToken(header: string | null, expected: string | undefined): boolean {
-  if (!expected || !header) return false
-  const provided = Buffer.from(header)
-  const wanted = Buffer.from(`Bearer ${expected}`)
-  // timingSafeEqual 要求等长；长度不同直接 false（长度本身不是秘密）。
-  if (provided.length !== wanted.length) return false
-  return timingSafeEqual(provided, wanted)
-}
-
 // POST /api/publer/create-post
-// 自动化流程用：Airtable approved → webhook → 这里
-// 用 post_id 找最新 ready 素材，自动选第一个匹配平台的 Publer 账号
+// 用 post_id 找最新 ready 素材，自动选第一个匹配平台的 Publer 账号，排期发布。
 //
-// Auth: Bearer ${PUBLER_CREATE_POST_TOKEN}（webhook 调用）**或**登录态对该
-// post 所属客户有权限（dashboard 调用）。
+// Auth: 登录态且对该 post 所属客户有权限（dashboard 调用）。
 //
-// P21.J.SEC-2：这条接口至今无鉴权——任何人拿一个 post_id 就能把该客户的
-// 成片发到他的社媒账号。不能只加登录鉴权，因为这条同时被 Zapier/Airtable
-// webhook 调用（只带 body 的 post_id，没有会话）；也不能只加 Bearer 鉴权——
-// dashboard/content 页面「批量发布」也在调这条接口，走的是浏览器会话，不带
-// Bearer（密钥不能下发给浏览器）。所以两条路都留：Bearer 对了直接放行；
-// 没有 Bearer 或对不上，就退回去核对当前登录用户对这条 post 的客户有没有权限。
-// 同一个 Bearer 密钥要配进 Zapier/Airtable 那边的 webhook header，这一步需要
-// PM/知道 Zapier 后台的人动手配一次（代码这边做不了，见交接说明）。
+// #1149：这条接口原先无鉴权——任何人拿一个 post_id 就能把该客户的成片发到他的
+// 社媒账号。历史上曾设想它被 Zapier/Airtable webhook 调用，故一度补过 Bearer
+// token 旁路；但 docs/STATE.md、docs/DECISIONS.md 记录 Zapier/Airtable 自动化链路
+// 已完全退役、审核已搬进 ME 驾驶舱，仓库里唯一的活跃调用方是 dashboard/content
+// 页面的登录态请求。据此收窄：每个请求都必须走 dashboard 客户权限校验，授权绑定
+// 到 resolved post.client_id，光有 post_id 不算授权。Publer 只是 ME 鉴权、租户
+// 绑定的驾驶舱背后一个可替换的发布适配器。
 export async function POST(req: NextRequest) {
-  // 令牌未配置时不再直接 500：那样会连合法的 dashboard 登录会话一起挡掉
-  // （#1149 item 3 / Codex P2）。改为——webhook 令牌无效就 fail closed，然后
-  // 退回去核对登录会话对 post.client_id 的权限。没有任一条通过才拒绝。
-  const expectedToken = process.env.PUBLER_CREATE_POST_TOKEN
-  const webhookAuthorized = hasValidWebhookToken(req.headers.get('authorization'), expectedToken)
-
   try {
     const { post_id, schedule_at } = await req.json()
     if (!post_id) {
@@ -60,14 +34,12 @@ export async function POST(req: NextRequest) {
 
     if (!post) return NextResponse.json({ success: false, error: 'Post not found' }, { status: 404 })
 
-    // Webhook 令牌对了就放行；不对/没带/服务端漏配，退回去核对登录会话对这个
-    // post 的客户有没有权限——授权绑定到 resolved post.client_id，光有 post_id
-    // 不算授权（#1149 item 5）。
-    if (!webhookAuthorized) {
-      const access = await requireDashboardClientAccess(post.client_id)
-      if (!access.ok) {
-        return NextResponse.json({ success: false, error: access.error }, { status: access.status })
-      }
+    // 每个请求都必须是登录态且对这个 post 的客户有权限——授权绑定到 resolved
+    // post.client_id，光有 post_id 不算授权（#1149）。未登录 / 越租户的调用都在
+    // 这里被拒，到不了下面任何 Publer 写入。
+    const access = await requireDashboardClientAccess(post.client_id)
+    if (!access.ok) {
+      return NextResponse.json({ success: false, error: access.error }, { status: access.status })
     }
 
     if (post.status !== 'approved') {
