@@ -7,6 +7,16 @@
 
 ---
 
+## 2026-08-22 · 产品定位与 IMPACT v1.0 冻结：Digital Marketing Growth Intelligence System
+
+**决策**：Magic Engine 的正式产品类别冻结为 **Digital Marketing Growth Intelligence System（数字营销增长智能系统）**。唯一端到端产品闭环冻结为 **IMPACT = Inspect → Measure → Prescribe → Act → Check → Tune**。DAPE 保留为内部工作方法，主要服务 IMPACT 前四段，不能与 IMPACT 互换，也不能用执行完成代替 Check、Outcome 与 Tune。
+
+**产品边界**：ME 自建 Digital Marketing Growth State、Opportunity Intelligence、Next Best Digital Marketing Action、营销策略与资产 Intelligence、Measurement/Attribution、Outcome/Failure Intelligence、Learning Promotion 与 Governed Execution。CRM、预约、POS、库存、支付、旅游预订、移民/留学案件、通用 OAuth/Workflow/Observability 等成熟经营或基础设施能力默认通过 API、Webhook、MCP 或成熟外部产品连接，不重复建设系统本体。
+
+**权威来源**：[`docs/strategy/ME_PRODUCT_DEFINITION.md`](./strategy/ME_PRODUCT_DEFINITION.md)。该文件是产品定位、IMPACT、DAPE、Connector、Build vs Connect 和行业版本边界的最高优先级定义。代码、测试、Issue、PR 和部署只证明实现状态，不能反向改写产品定义；当前运行事实仍以 `STATE.md`、生产证据和最新 Build Control 为准。
+
+**影响**：`CLAUDE.md` 将本文件设为所有 Agent 必读入口。后续 Roadmap、WP、行业方案和客户交付必须说明所属 IMPACT 阶段、Build vs Connect 判断、Connector 边界、验证方法与 Outcome。旧文档若与本决定冲突，以产品权威文件为准，并分阶段修正，不一次性扩大 runtime 或迁移范围。
+
 ## 2026-08-19 · ai-tracker（系统 B）退役删除：AI 可见度判断归一到 M1，老诊断打分重做
 
 > **本条推翻同日早前版本**（原标题「三系统整合：判断层统一到 M1，ai-tracker 降级为采集层」，原结论是「降级保留 ai-tracker 采集层 + 五阶段小心迁移」）。PO **2026-08-19 追加授权做减法**（删老功能）：ai-tracker 不是降级保留，是**退役删除**。原判决的证据段（44% 抽取失败、子串匹配、`ai_visibility_score` 实读系统 C）全部成立、予以保留，只把结论从「保留采集层」改成「删」。
