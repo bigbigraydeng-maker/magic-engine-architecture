@@ -2,6 +2,7 @@
 
 **输出语言**：对话和说明**一律用中文**，无论用户用什么语言提问。代码 / 变量 / 注释保持英文。
 
+**产品定义必读**：[ME Product Definition](./docs/strategy/ME_PRODUCT_DEFINITION.md) —— **产品定位、IMPACT、DAPE、Connector、Build vs Connect 与行业版本的最高优先级定义；冲突时以它为准。**
 **每次开新会话先读**：[docs/STATE.md](./docs/STATE.md)（系统现状）→ [docs/ROADMAP.md](./docs/ROADMAP.md)（要做什么）。
 **平台化必读**：[ME2 Reuse & Platformization Principle](./docs/roadmap/2026-08-19-me2-platformization-principle.md) —— **所有开发窗口、Work Package、Claude Code/Codex 会话都受它约束。**
 **必读规则**：[`~/.claude/rules/coding-style.md`](~/.claude/rules/coding-style.md) · [`~/.claude/rules/development-workflow.md`](~/.claude/rules/development-workflow.md)
@@ -10,13 +11,16 @@
 
 ## 项目定位
 
-Magic Engine 是 Magic Lab 2026 旗舰产品 —— **以 Goal 为中心的生意指挥平台**（营销只是其中一条战线）。
-护城河不是数据（数据可以买），是**执行自动化**：诊断发现问题 → 平台自动生成并执行修复动作 → 结果回流归因 → 飞轮。
+Magic Engine 是 Magic Lab 2026 旗舰产品，是一个 **Digital Marketing Growth Intelligence System（数字营销增长智能系统）**。
+它通过唯一端到端产品闭环 **IMPACT = Inspect → Measure → Prescribe → Act → Check → Tune**，把营销证据转成下一步最有价值的动作，通过 Connector 受控执行，验证 Outcome，并让下一次决策更好。
+护城河不是数据或工具数量，而是可解释、可执行、可验证、会持续学习的 Digital Marketing Intelligence。
 目标市场 **AU / NZ**：AU/NZ 英语拼写、时区 NZST/AEST、SERP 带 `gl=au`/`gl=nz`、AI 问句带地域标签。
 
-### 核心引擎 = DAPE（不是 GIMPT）
+### 内部工作方法 = DAPE（不是产品级闭环）
 
 **D**iscovery 发现 → **A**nalysis 分析 → **P**rescription 处方 → **E**xecution 执行，四段循环 + AI 贯穿 + 6 大支柱矩阵。
+
+DAPE 服务于 IMPACT 前四段的一部分；没有进入 `Check` 和 `Tune` 的 DAPE Execution，只能称为执行完成，不能称为 IMPACT 完成。
 
 | 段 | 一句话 | 后台 agent |
 |---|---|---|
@@ -30,7 +34,7 @@ Magic Engine 是 Magic Lab 2026 旗舰产品 —— **以 Goal 为中心的生�
 **对外文案用大白话「发现-分析-处方-执行」，`DAPE` 字眼只在 ME 内部技术文档出现。**
 完整 spec：[`docs/specs/2026-06-08-me-dape-redefine-v0.2.md`](./docs/specs/2026-06-08-me-dape-redefine-v0.2.md)
 
-> **任何提案前先问**：跟 DAPE 哪一段对齐？跟 6 支柱哪一柱关联？self-serve 还是 FDE 轨？挂 AI memory 哪一层？
+> **任何提案前先问**：属于 IMPACT 哪一段？是否增强 Digital Marketing Intelligence？应该 Build 还是 Connect？跟 6 支柱哪一柱关联？Outcome 如何验证？学习挂 memory 哪一层？
 
 ### 第三方封装名（UI / 报告 / 客户交付物中禁止出现真实供应商名）
 
