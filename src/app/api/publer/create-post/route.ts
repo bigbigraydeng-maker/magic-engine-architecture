@@ -110,10 +110,26 @@ export async function POST(req: NextRequest) {
     }
 
     // requested platform 必须在客户连接器里有**非空显式**绑定。
-    const boundPlatform = platforms.find(
-      (p) => typeof configuredIds[p] === 'string' && configuredIds[p].trim() !== '',
-    )
-    if (!boundPlatform) {
+    // key 大小写不敏感匹配（#1149 P2）：连接器 settings UI 直接把 Publer 的 provider
+    // 字段原样写进这个 key、不做规范化，所以存进来的可能是 "Facebook"；而请求平台
+    // 已小写。若按精确 key 查会把有效绑定误判成 connector_unbound，让配置正确的客户
+    // 反而发不出去。按小写归一后再找非空绑定（与 resolveBoundPublerAccount 一致）。
+    const boundAccountIdFor = (platform: string): string | undefined => {
+      const key = Object.keys(configuredIds).find((k) => k.toLowerCase() === platform)
+      const id = key ? configuredIds[key] : undefined
+      return typeof id === 'string' && id.trim() !== '' ? id : undefined
+    }
+    let boundPlatform: string | undefined
+    let boundAccountId: string | undefined
+    for (const p of platforms) {
+      const id = boundAccountIdFor(p)
+      if (id) {
+        boundPlatform = p
+        boundAccountId = id
+        break
+      }
+    }
+    if (!boundPlatform || !boundAccountId) {
       return NextResponse.json(
         {
           success: false,
@@ -125,7 +141,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 绑定的账号 ID 必须解析成 Publer 当前真实返回的 live 账号（不是历史/失效 ID）。
-    const account = accounts.find(a => a.id === configuredIds[boundPlatform])
+    const account = accounts.find(a => a.id === boundAccountId)
     if (!account) {
       return NextResponse.json(
         {

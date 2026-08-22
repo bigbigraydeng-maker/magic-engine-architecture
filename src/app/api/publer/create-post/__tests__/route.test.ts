@@ -198,6 +198,24 @@ describe('POST /api/publer/create-post — 客户发布账号绑定 fail-closed'
     expect(schedulePost).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acc1', provider: 'facebook' }))
   })
 
+  it('🔴 大小写不敏感：连接器 key 存成 "Facebook"（原始大小写）→ 仍识别为已绑定并发出（#1149 P2）', async () => {
+    // settings UI 直接写 Publer 的 provider 字段，key 可能带原始大小写；
+    // 请求平台是小写 facebook，必须仍匹配，不能误判成 connector_unbound。
+    connectorRow = { config: { publer_account_ids: { Facebook: 'acc1' } } }
+    const res = await POST(req())
+    expect(res.status).toBe(200)
+    expect(schedulePost).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acc1', provider: 'facebook' }))
+  })
+
+  it('大小写不敏感 + provider 仍必须匹配：key "Facebook" 绑到一个 instagram 账号 → provider_mismatch，不发', async () => {
+    connectorRow = { config: { publer_account_ids: { Facebook: 'acc1' } } }
+    publerAccounts = [{ id: 'acc1', provider: 'instagram' }]
+    const res = await POST(req())
+    expect(res.status).toBe(400)
+    expect((await res.json()).code).toBe('provider_mismatch')
+    expectNoProviderWrite()
+  })
+
   it('没有连接器行（connectorRow=null）→ 400 connector_unbound，不触达 Publer write', async () => {
     connectorRow = null
     const res = await POST(req())
