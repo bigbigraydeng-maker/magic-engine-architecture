@@ -145,15 +145,25 @@ export default function ContentFactoryBoardPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action }),
       })
-      const data = (await r.json().catch(() => ({}))) as { error?: string; render?: { error?: string } }
+      const data = (await r.json().catch(() => ({}))) as {
+        error?: string
+        render?: { error?: string }
+        publish?: { publerJobId: string }
+      }
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`)
       setSelected(null)
       setError(null)
       // 给运营一句能安心的反馈（做片要 15-30 分钟，别让人以为丢了）
       if (action === 'confirm') {
-        setNotice(data.render?.error
-          ? `已确认，但建做片任务失败：${data.render.error}（可再点一次确认重试）`
-          : '已确认 · 正在做片，约 15-30 分钟后会出现在「出片」列')
+        if (data.publish) {
+          // LinkedIn 进度贴没有做片环节，"确认"这一步已经是真的发布了——
+          // 不能走下面视频那套"正在做片"的话术，那是假消息。
+          setNotice('已确认 · 已经发布，不需要做片')
+        } else {
+          setNotice(data.render?.error
+            ? `已确认，但建做片任务失败：${data.render.error}（可再点一次确认重试）`
+            : '已确认 · 正在做片，约 15-30 分钟后会出现在「出片」列')
+        }
       } else if (action === 'schedule') {
         setNotice('已通过 · 已进「发布」列')
       }

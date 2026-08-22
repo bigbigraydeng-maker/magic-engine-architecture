@@ -107,14 +107,25 @@ export function nzDateString(now: Date): string {
 
 /**
  * Days back to compute the (exclusive) cutoff date, keyed by NZ weekday.
- * Monday (1) → cutoff = last Thursday, covering Fri/Sat/Sun/Mon (Thursday
- * itself excluded — that day belonged to Thursday's own run). Thursday (4) →
- * cutoff = this Monday, covering Tue/Wed/Thu. Any other weekday (manual test
- * trigger, off-schedule curl) defaults to the Thursday window — the shorter
- * of the two.
+ *
+ * A run's window NEVER includes "today" (see changelogWindowEnd below) — an
+ * entry dated today might still be added later the same day, after this run
+ * has already fired. So the window one day is 4 days back (covers last
+ * Thursday through yesterday/Sunday), Thursday is 4 days back (covers this
+ * Monday through yesterday/Wednesday). Any other weekday (manual test
+ * trigger, off-schedule curl) defaults to the Thursday-sized window.
+ *
+ * These are +1 vs. a naive "cutoff = last run's date" because today is now
+ * excluded from BOTH sides of the boundary (see changelogWindowEnd) — the
+ * lower bound has to reach one day further back to stay gapless with the
+ * previous run's (also today-excluding) upper bound. See the "regression"
+ * test in changelog-window.test.ts for why: without this, an entry dated
+ * the run's own calendar day but added after that run fired would never be
+ * picked up by any run — excluded from today's (today isn't included) and
+ * excluded from the next run's (that day is now the next run's cutoff).
  */
 function lookbackDays(weekday: number): number {
-  return weekday === 1 ? 4 : 3
+  return weekday === 1 ? 5 : 4
 }
 
 export function changelogCutoffDate(now: Date): string {
@@ -124,18 +135,27 @@ export function changelogCutoffDate(now: Date): string {
 }
 
 /**
- * Entries with date STRICTLY AFTER cutoff (never >=), compared as ISO date
- * strings (safe: fixed YYYY-MM-DD width).
- *
- * The cutoff day itself must be excluded, not included: cutoffDate is always
- * the previous run's own "today" (Monday's cutoff = last Thursday, Thursday's
- * own run date; Thursday's cutoff = this Monday, Monday's own run date) —
- * that day was already reported by the run that owned it as "today". An
- * inclusive >= here would report that boundary day's entries twice, once in
- * each of two consecutive posts.
+ * Inclusive upper bound of a run's window: always yesterday, never today.
+ * Today isn't over yet — a CHANGELOG entry could still be added to it later
+ * the same day, after this run has already fired and drafted its post. If
+ * today were included, that later-added entry would be permanently lost:
+ * this run already ran and won't re-check, and the NEXT run's cutoff is
+ * keyed to this run's date, which would then exclude it as "already
+ * reported". Deferring today's entries to the next run (they're never more
+ * than 3-4 days late) is the tradeoff that keeps this feature migration-free.
  */
-export function entriesSince(entries: ChangelogEntry[], cutoffDate: string): ChangelogEntry[] {
-  return entries.filter((e) => e.date > cutoffDate)
+export function changelogWindowEnd(now: Date): string {
+  return nzDateString(new Date(now.getTime() - 86_400_000))
+}
+
+/**
+ * Entries with date STRICTLY AFTER cutoff and ON OR BEFORE windowEnd,
+ * compared as ISO date strings (safe: fixed YYYY-MM-DD width). Together with
+ * changelogCutoffDate/changelogWindowEnd, consecutive Monday/Thursday windows
+ * tile the calendar exactly — no gaps, no double-reported days.
+ */
+export function entriesSince(entries: ChangelogEntry[], cutoffDate: string, windowEnd: string): ChangelogEntry[] {
+  return entries.filter((e) => e.date > cutoffDate && e.date <= windowEnd)
 }
 
 export async function loadChangelogWindow(now: Date = new Date()): Promise<{
@@ -143,6 +163,7 @@ export async function loadChangelogWindow(now: Date = new Date()): Promise<{
   entries: ChangelogEntry[]
 }> {
   const cutoffDate = changelogCutoffDate(now)
+  const windowEnd = changelogWindowEnd(now)
   const all = await loadChangelogEntries()
-  return { cutoffDate, entries: entriesSince(all, cutoffDate) }
+  return { cutoffDate, entries: entriesSince(all, cutoffDate, windowEnd) }
 }

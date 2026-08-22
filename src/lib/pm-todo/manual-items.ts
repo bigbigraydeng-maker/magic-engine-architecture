@@ -754,7 +754,10 @@ async function pushLinkedinProgressItems(
         client_id: LINKEDIN_PROGRESS_CLIENT_ID,
         client_name: 'ME 产品动态（LinkedIn）',
         what: 'LinkedIn 自动发帖这条已经在跑了，但你的 LinkedIn 账号还没连到发布工具，该发的这条卡着没发出去',
-        how: '先去 Publer 后台用你自己的 LinkedIn 账号做一次性授权连接，连完之后打开这个链接，把出现的 LinkedIn 账号填进「Publer」这一项',
+        // 账号连好之后这条草稿不会自己重新尝试发布——没有额外的重试 cron，
+        // 得靠 PM 回内容工厂看板对这条草稿再点一次"确认"（那个按钮现在会
+        // 真的调发布，不是走视频那套），不写清楚这一步就是永久卡死。
+        how: '先去 Publer 后台用你自己的 LinkedIn 账号做一次性授权连接，连完之后打开这个链接，把出现的 LinkedIn 账号填进「Publer」这一项；填完再回内容工厂看板找到这条卡住的草稿，点一次"确认"，这条就会真的发出去，不用等下一次自动跑',
         href: LINKEDIN_CONNECTORS_URL,
       })
       continue

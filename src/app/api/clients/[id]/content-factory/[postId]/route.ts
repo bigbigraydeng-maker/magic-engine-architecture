@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { enqueueRenderJob } from '@/lib/factory/render-queue'
 import { scheduleSocialPost, resolveBoundPublerAccount } from '@/lib/flywheel/social-post-publish'
+import type { PublerAccount } from '@/lib/publer/client'
 import { LINKEDIN_PROGRESS_SOURCE, LINKEDIN_PROGRESS_PLATFORM } from '@/lib/linkedin-progress/constants'
 
 export const dynamic = 'force-dynamic'
@@ -31,6 +32,29 @@ export async function PATCH(
       : null
     if (!status) {
       return NextResponse.json({ error: "action 必须是 'confirm' / 'reject' / 'schedule'" }, { status: 400 })
+    }
+
+    // 对 LinkedIn 的 confirm，账号解析必须在下面"原子认领"之前完成：如果
+    // 解析放在认领之后，解析失败时这一行已经被改成了 approved，而认领用的
+    // .eq('status','draft') 条件会让后续重试（账号连好后再点一次确认）永远
+    // 抢不到这一行——草稿就卡死了。这里先只读查一次 source，不碰状态。
+    let linkedinAccount: PublerAccount | null = null
+    if (body.action === 'confirm') {
+      const { data: peek } = await supabaseAdmin
+        .from('content_posts')
+        .select('source')
+        .eq('client_id', params.id)
+        .eq('id', params.postId)
+        .maybeSingle()
+      if (peek?.source === LINKEDIN_PROGRESS_SOURCE) {
+        linkedinAccount = await resolveBoundPublerAccount(params.id, LINKEDIN_PROGRESS_PLATFORM)
+        if (!linkedinAccount) {
+          return NextResponse.json(
+            { error: 'LinkedIn 账号还没连到发布工具，先去连接器设置页完成一次性授权' },
+            { status: 409 },
+          )
+        }
+      }
     }
 
     let updateQuery = supabaseAdmin
@@ -68,16 +92,10 @@ export async function PATCH(
     // 视频的文本贴只会 best-effort 失败或空转，PM 点了"确认"以为发出去了，
     // 实际上这条贴会永远卡在 approved，从没真正调用过 scheduleSocialPost。
     if (body.action === 'confirm' && data.source === LINKEDIN_PROGRESS_SOURCE) {
-      // 严格解析账号，不能让 scheduleSocialPost 自己那套更松的逻辑兜底到
-      // "随便一个已连账号"——共享 Publer workspace 里有多个身份时会发错号。
-      const boundAccount = await resolveBoundPublerAccount(params.id, LINKEDIN_PROGRESS_PLATFORM)
-      if (!boundAccount) {
-        return NextResponse.json(
-          { error: 'LinkedIn 账号还没连到发布工具，先去连接器设置页完成一次性授权' },
-          { status: 409 },
-        )
-      }
-      const result = await scheduleSocialPost({ postId: params.postId, clientId: params.id, account: boundAccount })
+      // linkedinAccount 已经在认领这一行之前严格解析过了（见上面），这里
+      // 保证非空——不能再让 scheduleSocialPost 自己那套更松的逻辑兜底到
+      // "随便一个已连账号"，共享 Publer workspace 里有多个身份时会发错号。
+      const result = await scheduleSocialPost({ postId: params.postId, clientId: params.id, account: linkedinAccount! })
       if (!result.ok) {
         return NextResponse.json({ error: `发布失败：${result.error}` }, { status: 500 })
       }

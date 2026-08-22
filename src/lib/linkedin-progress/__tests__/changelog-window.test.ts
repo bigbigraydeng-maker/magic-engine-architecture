@@ -4,6 +4,7 @@ import {
   nzWeekday,
   nzDateString,
   changelogCutoffDate,
+  changelogWindowEnd,
   entriesSince,
 } from '../changelog-window'
 
@@ -90,63 +91,73 @@ describe('nzWeekday / nzDateString — NZ-local time, not server-local', () => {
   })
 })
 
-describe('changelogCutoffDate — lookback window keyed by NZ weekday', () => {
-  it('Monday NZ looks back 4 days (covers last Thursday through today)', () => {
+describe('changelogCutoffDate / changelogWindowEnd — lookback window keyed by NZ weekday', () => {
+  it('Monday NZ: cutoff = last Wednesday, window end = yesterday (Sunday)', () => {
     // 2026-08-17 08:30 NZST is a Monday (2026-08-16T20:30:00Z in UTC).
     const monday = new Date('2026-08-16T20:30:00Z')
     expect(nzWeekday(monday)).toBe(1)
-    expect(changelogCutoffDate(monday)).toBe('2026-08-13') // previous Thursday
+    expect(changelogCutoffDate(monday)).toBe('2026-08-12') // previous Wednesday
+    expect(changelogWindowEnd(monday)).toBe('2026-08-16') // yesterday = Sunday
   })
 
-  it('Thursday NZ looks back 3 days (covers last Monday through today)', () => {
+  it('Thursday NZ: cutoff = last Sunday, window end = yesterday (Wednesday)', () => {
     const thursday = new Date('2026-08-19T20:30:00Z') // 2026-08-20 08:30 NZST = Thursday
     expect(nzWeekday(thursday)).toBe(4)
-    expect(changelogCutoffDate(thursday)).toBe('2026-08-17') // previous Monday
+    expect(changelogCutoffDate(thursday)).toBe('2026-08-16') // previous Sunday
+    expect(changelogWindowEnd(thursday)).toBe('2026-08-19') // yesterday = Wednesday
   })
 })
 
 describe('entriesSince', () => {
-  it('keeps entries strictly after the cutoff and drops the cutoff day itself', () => {
-    // The cutoff day was already reported by the run that owned it as "today" —
-    // an inclusive >= here would double-report it across two consecutive posts.
+  it('keeps entries strictly after the cutoff and on or before the window end', () => {
     const entries = [
       { date: '2026-08-10', heading: 'a', body: 'a' },
-      { date: '2026-08-13', heading: 'b', body: 'b' },
-      { date: '2026-08-17', heading: 'c', body: 'c' },
+      { date: '2026-08-12', heading: 'b', body: 'b' },
+      { date: '2026-08-16', heading: 'c', body: 'c' },
+      { date: '2026-08-17', heading: 'd (today, not yet over)', body: 'd' },
     ]
-    const kept = entriesSince(entries, '2026-08-13')
-    expect(kept.map((e) => e.date)).toEqual(['2026-08-17'])
+    const kept = entriesSince(entries, '2026-08-12', '2026-08-16')
+    expect(kept.map((e) => e.date)).toEqual(['2026-08-16'])
   })
 
-  it('regression: consecutive Monday and Thursday windows never share a day', () => {
-    // Real bug caught in review: Monday's cutoff is last Thursday, and
-    // Thursday's cutoff is this Monday — with an inclusive boundary, the
-    // day that is simultaneously "this run's own today" and "the next run's
-    // cutoff" would be reported twice. Model the two runs as they'd actually
-    // happen: Monday's run only sees entries that exist as of Monday; new
-    // entries land in the days between the two runs, same as a real repo.
+  it('regression: consecutive Monday and Thursday windows tile the week exactly — no gaps, no overlaps', () => {
+    // Real bug caught in review: with the OLD boundary (window end = today,
+    // inclusive), an entry dated the run's own calendar day but added AFTER
+    // that run fired would be lost forever — excluded from that run (already
+    // ran) and excluded from the next run (its cutoff is keyed to that same
+    // date). Model both runs as they'd actually happen, with an entry landing
+    // on each run's own day.
     const monday = new Date('2026-08-16T20:30:00Z') // NZ Monday 2026-08-17
     const thursday = new Date('2026-08-19T20:30:00Z') // NZ Thursday 2026-08-20
 
     const mondayCutoff = changelogCutoffDate(monday)
+    const mondayWindowEnd = changelogWindowEnd(monday)
     const thursdayCutoff = changelogCutoffDate(thursday)
+    const thursdayWindowEnd = changelogWindowEnd(thursday)
 
     const entriesAsOfMonday = [
       { date: '2026-08-14', heading: 'fri', body: '' },
-      { date: '2026-08-17', heading: 'the boundary day (Monday itself)', body: '' },
+      { date: '2026-08-17', heading: 'monday itself, added after the cron fired', body: '' },
     ]
     const entriesAsOfThursday = [
       ...entriesAsOfMonday,
       { date: '2026-08-19', heading: 'wed', body: '' },
-      { date: '2026-08-20', heading: 'the boundary day (Thursday itself)', body: '' },
+      { date: '2026-08-20', heading: 'thursday itself, added after the cron fired', body: '' },
     ]
 
-    const mondayWindow = entriesSince(entriesAsOfMonday, mondayCutoff).map((e) => e.date)
-    const thursdayWindow = entriesSince(entriesAsOfThursday, thursdayCutoff).map((e) => e.date)
+    const mondayWindow = entriesSince(entriesAsOfMonday, mondayCutoff, mondayWindowEnd).map((e) => e.date)
+    const thursdayWindow = entriesSince(entriesAsOfThursday, thursdayCutoff, thursdayWindowEnd).map((e) => e.date)
 
-    expect(mondayWindow).toContain('2026-08-17')
-    expect(thursdayWindow).not.toContain('2026-08-17') // already reported by Monday's run
-    expect(thursdayWindow).toContain('2026-08-20')
+    // Monday's own date isn't final yet when Monday's cron fires — it rolls
+    // to Thursday's run instead of being lost.
+    expect(mondayWindow).not.toContain('2026-08-17')
+    expect(thursdayWindow).toContain('2026-08-17')
+    // Same story one cycle later: Thursday's own date isn't in Thursday's
+    // window, but would be picked up by the NEXT Monday run (not modelled
+    // here — this test only needs to show it's not silently dropped by
+    // Thursday's own run).
+    expect(thursdayWindow).not.toContain('2026-08-20')
+    // No day is ever claimed by both runs.
     expect(mondayWindow.filter((d) => thursdayWindow.includes(d))).toEqual([])
   })
 })
