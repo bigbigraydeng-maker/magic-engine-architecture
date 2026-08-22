@@ -78,11 +78,22 @@ export function DataSnapshotPanel({ anchor, clientId }: { anchor: 'gsc' | 'ga4';
 
   const fetchGa4Readiness = async () => {
     try {
-      const res = await fetch(`/api/clients/${clientId}/connectors/status`)
-      if (!res.ok) return
-      const data = await res.json() as { connectors?: Array<{ anchor: string; status: string }> }
-      const ga4 = data.connectors?.find((c) => c.anchor === 'ga4')
-      setGa4Ready(ga4?.status === 'connected')
+      const res = await fetch(`/api/clients/${clientId}/ga4-properties`)
+      if (!res.ok) {
+        setGa4Ready(false)
+        return
+      }
+      const data = await res.json() as {
+        connected?: boolean
+        connector_status?: string | null
+        current?: string | null
+      }
+      setGa4Ready(
+        data.connected === true &&
+        data.connector_status === 'connected' &&
+        typeof data.current === 'string' &&
+        /^properties\/\d{1,20}$/.test(data.current),
+      )
     } catch {
       setGa4Ready(false)
     }
@@ -90,7 +101,15 @@ export function DataSnapshotPanel({ anchor, clientId }: { anchor: 'gsc' | 'ga4';
 
   useEffect(() => {
     void fetchLatest()
-    if (anchor === 'ga4') void fetchGa4Readiness()
+    if (anchor !== 'ga4') return
+
+    void fetchGa4Readiness()
+    const refreshReadiness = (event: Event) => {
+      const detail = (event as CustomEvent<{ clientId?: string }>).detail
+      if (detail?.clientId === clientId) void fetchGa4Readiness()
+    }
+    window.addEventListener('ga4-property-changed', refreshReadiness)
+    return () => window.removeEventListener('ga4-property-changed', refreshReadiness)
   }, [clientId, anchor]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSync = async () => {

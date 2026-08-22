@@ -20,6 +20,7 @@ import type {
   ActionRunStep,
   AuthorizationDecision,
   ClientAutomationPolicy,
+  OutwardRollbackResult,
   RunStatus,
   StepStatus,
   VerificationResult,
@@ -694,6 +695,106 @@ export async function updateRunFenced(
     .select(RUN_COLUMNS)
   if (error) fail('更新执行实例（带代际守卫）', error)
   return ((data ?? [])[0] as unknown as ActionRun | undefined) ?? null
+}
+
+/**
+ * 🔴 B · Provider-native rollback lineage —— 落一行 `action_run_steps(step_key='rollback')`。
+ *
+ * 三态明确、都要落：
+ *   · succeeded + rollback_kind='provider_native' —— 外部资源真的撤了；
+ *   · failed    + rollback_kind='provider_native' —— 试图撤但失败，外部状态不明；
+ *   · skipped   + rollback_kind='noop'            —— handler 判定本次没有 side effect 要撤。
+ *
+ * 复用现有 `action_run_steps` 表 —— 每个 `(run_id, step_key)` 一条**可更新**行，
+ * UNIQUE 约束保住同一 failRun 重触发时不会写第二行；rollback 走 `step_key='rollback'`
+ * 的这条一行。**不是 append-only**（该表本身允许 UPDATE，见 `updateStepFenced`），
+ * 但对 rollback 这一行的策略是「第一次写入之后不覆盖」（`insertRollbackStep`
+ * 撞 UNIQUE → 读回既有行返回），把 rollback 结果冻在第一次观察上。
+ * 不新建 rollback_integrity VerificationMethod；不新建 rollback 独立表；不加 migration。
+ *
+ * 幂等：同一 run 的第二次 insert 会撞 UNIQUE，返回既有那行（rollback 结果不该被覆盖）。
+ */
+export async function insertRollbackStep(
+  sb: SupabaseClient,
+  args: {
+    runId: string
+    clientId: string
+    claimGeneration: number
+    stepIndex: number
+    result: OutwardRollbackResult
+    now: string
+  },
+): Promise<ActionRunStep | null> {
+  const status: StepStatus =
+    args.result.rollbackKind === 'noop'
+      ? 'skipped'
+      : args.result.ok
+      ? 'succeeded'
+      : 'failed'
+
+  const output = {
+    rollback_kind: args.result.rollbackKind,
+    detail: args.result.detail,
+  }
+
+  const insertRow: Partial<ActionRunStep> & Pick<ActionRunStep, 'run_id' | 'client_id' | 'step_key'> = {
+    run_id: args.runId,
+    client_id: args.clientId,
+    step_key: 'rollback',
+    step_index: args.stepIndex,
+    status,
+    attempt: 1,
+    reclaim_count: 0,
+    output,
+    verification: null,
+    cost_actual_usd: 0,
+    last_error: args.result.failure_reason ?? null,
+    claim_generation: args.claimGeneration,
+    started_at: args.now,
+    heartbeat_at: args.now,
+    finished_at: args.now,
+  }
+
+  const { data, error } = await sb
+    .from(TABLE_STEPS)
+    .insert(insertRow)
+    .select(STEP_COLUMNS)
+
+  if (error) {
+    // 🔴 UNIQUE (run_id, step_key) 冲突 = 已经写过一行 rollback，第二次不覆盖 ——
+    //    rollback 结果只该反映**第一次**的观察（外部资源那时到底撤了没）。
+    //    读回既有行返回，让调用方看到 lineage 存在。
+    if (isUniqueViolation(error)) {
+      const existing = await sb
+        .from(TABLE_STEPS)
+        .select(STEP_COLUMNS)
+        .eq('run_id', args.runId)
+        .eq('step_key', 'rollback')
+        .limit(1)
+      if (existing.error) fail('读取已有 rollback lineage', existing.error)
+      return ((existing.data ?? [])[0] as unknown as ActionRunStep | undefined) ?? null
+    }
+    fail('写入 rollback lineage', error)
+  }
+  return ((data ?? [])[0] as unknown as ActionRunStep | undefined) ?? null
+}
+
+/**
+ * 读本 run 的 rollback lineage 行（如果有）。runner 的 recovery gate 用它判断
+ * 「能不能 same-run recover」。查不到 = 从来没跑过 rollback，走原有 recovery。
+ */
+export async function getRollbackStep(
+  sb: SupabaseClient,
+  runId: string,
+): Promise<ActionRunStep | null> {
+  const { data, error } = await sb
+    .from(TABLE_STEPS)
+    .select(STEP_COLUMNS)
+    .eq('run_id', runId)
+    .eq('step_key', 'rollback')
+    .limit(1)
+  if (error) fail('读取 rollback lineage', error)
+  return ((data ?? [])[0] as unknown as ActionRunStep | undefined) ?? null
 }
 
 export async function updateStep(

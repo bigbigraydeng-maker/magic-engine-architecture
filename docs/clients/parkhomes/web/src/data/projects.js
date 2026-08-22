@@ -46,7 +46,7 @@ export const projects = [
     eyebrow: 'Howick · East Auckland',
     tagline: 'Modern Comfort in a Well-Established Community',
     cardLine: 'Five homes on Libby Lane, Howick.',
-    listLine: 'Five homes on Libby Lane, Howick. Three to four bedrooms, 130–149m².',
+    listLine: 'Five homes on Libby Lane, Howick. Three to four bedrooms, 125.5–150m².',
     price: 'From $900k',
     heading: 'Modern comfort in a well-established community',
     // Official copy — from parkhomes.nz/projects
@@ -55,10 +55,15 @@ export const projects = [
       'Spacious interiors, carefully selected materials, and thoughtful floorplans ensure each home delivers comfort, functionality, and lasting appeal.',
       'Built with precision and supported by a strong construction network, this boutique release reflects Park Homes’ commitment to excellence.',
     ],
+    // Facts cross-checked 2026-08-19 against the live TradeMe + Ray White listings
+    // (Roman Hu, Ray White Mission Bay) — those are treated as the source of truth
+    // over the earlier "Bulk Listings Extra Info Sheet", which had Lot 2 down as
+    // 3-bath; the live listing says 2-bath. Size range matches both portals'
+    // listing copy verbatim: "Approximately 125.5sqm-150sqm of floor area".
     facts: [
       ['Homes', '5'],
       ['Bedrooms', '3 – 4'],
-      ['Size', '130–149 m²'],
+      ['Size', '125.5–150 m²'],
       ['From', '$900k'],
     ],
     footerAddress: 'Howick · 3 Libby Lane, Howick, Auckland',
@@ -72,6 +77,20 @@ export const projects = [
       { src: '/img/howick/hw-slope.jpg',           alt: 'Howick — homes in their landscaped setting' },
       { src: '/img/howick/hw-context-aerial.jpg',  alt: 'Howick — the established East Auckland neighbourhood' },
     ],
+    // Individual floor plans, supplied by Roman Hu (Ray White Mission Bay) via the
+    // client. Specs cross-checked against the live TradeMe + Ray White listings
+    // 2026-08-19 — Lots 1–4 are currently listed for sale; Lot 5 is not (its specs
+    // come from the Bulk Listings sheet only, so it's kept unlisted-but-shown here).
+    floorPlans: [
+      { src: '/img/howick/floorplans/hw-fp-lot1.jpg', lot: 'Lot 1', beds: 3, baths: 3, floorArea: '132 m²', landArea: '179 m²', listingUrl: 'https://www.raywhite.co.nz/auckland/manukau-city/howick/MSB31981' },
+      { src: '/img/howick/floorplans/hw-fp-lot2.jpg', lot: 'Lot 2', beds: 4, baths: 2, floorArea: '150 m²', landArea: '145 m²', listingUrl: 'https://www.raywhite.co.nz/auckland/manukau-city/howick/MSB31982' },
+      { src: '/img/howick/floorplans/hw-fp-lot3.jpg', lot: 'Lot 3', beds: 3, baths: 2, floorArea: '125.5 m²', landArea: '130 m²', listingUrl: 'https://www.raywhite.co.nz/auckland/manukau-city/howick/MSB31983' },
+      { src: '/img/howick/floorplans/hw-fp-lot4.jpg', lot: 'Lot 4', beds: 3, baths: 2, floorArea: '125.7 m²', landArea: '134 m²', listingUrl: 'https://www.raywhite.co.nz/auckland/manukau-city/howick/MSB31980' },
+      { src: '/img/howick/floorplans/hw-fp-lot5.jpg', lot: 'Lot 5', beds: 4, baths: 2, floorArea: '142.7 m²', landArea: '386 m²', listingUrl: null },
+    ],
+    // Aggregate search — deliberately not one specific lot, since which lots are
+    // still available changes over time; this always reflects what's actually live.
+    listingsSearchUrl: 'https://www.raywhite.co.nz/listing?keywords=Libby%20Lane',
   },
   {
     slug: 'castor-bay',

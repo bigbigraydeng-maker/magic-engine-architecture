@@ -15,6 +15,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CapabilityImplementation } from '@/lib/kernel/types'
 import { createBuildPublishPackageCapability } from './seo/build-publish-package'
+import { createPageApplyOptimizationCapability } from './page-apply-optimization'
 
 /**
  * 装配这个进程能执行的全部能力。
@@ -28,6 +29,9 @@ export function createCapabilities(
 ): Readonly<Record<string, CapabilityImplementation>> {
   return {
     'seo.build_publish_package': createBuildPublishPackageCapability(sb),
+    // Page Optimization Apply v1 —— GitHub Draft PR path.
+    // spec: docs/specs/2026-08-19-me2-page-optimization-apply-action-v1.0.md
+    'page.apply_optimization_request': createPageApplyOptimizationCapability(sb),
   }
 }
 
