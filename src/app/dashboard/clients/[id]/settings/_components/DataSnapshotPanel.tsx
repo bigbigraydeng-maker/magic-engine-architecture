@@ -58,6 +58,11 @@ export function DataSnapshotPanel({ anchor, clientId }: { anchor: 'gsc' | 'ga4';
   const [loadingSnap, setLoadingSnap] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  // GA4-only gate (2026-08-18, #1052): a `client_connectors.ga4` row can now
+  // be 'error' (property saved but read-access verification failed) — the
+  // sync button must not look clickable in that state. GSC's gating is
+  // unchanged (existing behaviour predates this and isn't in scope here).
+  const [ga4Ready, setGa4Ready] = useState(anchor !== 'ga4')
 
   const fetchLatest = async () => {
     try {
@@ -71,7 +76,41 @@ export function DataSnapshotPanel({ anchor, clientId }: { anchor: 'gsc' | 'ga4';
     }
   }
 
-  useEffect(() => { void fetchLatest() }, [clientId, anchor]) // eslint-disable-line react-hooks/exhaustive-deps
+  const fetchGa4Readiness = async () => {
+    try {
+      const res = await fetch(`/api/clients/${clientId}/ga4-properties`)
+      if (!res.ok) {
+        setGa4Ready(false)
+        return
+      }
+      const data = await res.json() as {
+        connected?: boolean
+        connector_status?: string | null
+        current?: string | null
+      }
+      setGa4Ready(
+        data.connected === true &&
+        data.connector_status === 'connected' &&
+        typeof data.current === 'string' &&
+        /^properties\/\d{1,20}$/.test(data.current),
+      )
+    } catch {
+      setGa4Ready(false)
+    }
+  }
+
+  useEffect(() => {
+    void fetchLatest()
+    if (anchor !== 'ga4') return
+
+    void fetchGa4Readiness()
+    const refreshReadiness = (event: Event) => {
+      const detail = (event as CustomEvent<{ clientId?: string }>).detail
+      if (detail?.clientId === clientId) void fetchGa4Readiness()
+    }
+    window.addEventListener('ga4-property-changed', refreshReadiness)
+    return () => window.removeEventListener('ga4-property-changed', refreshReadiness)
+  }, [clientId, anchor]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSync = async () => {
     setSyncing(true)
@@ -87,6 +126,7 @@ export function DataSnapshotPanel({ anchor, clientId }: { anchor: 'gsc' | 'ga4';
         setSyncMsg({ ok: true, text: '✓ 同步成功' })
         setLoadingSnap(true)
         await fetchLatest()
+        if (anchor === 'ga4') await fetchGa4Readiness()
       } else {
         setSyncMsg({ ok: false, text: data.error ?? '同步失败，请检查连接配置' })
       }
@@ -104,11 +144,15 @@ export function DataSnapshotPanel({ anchor, clientId }: { anchor: 'gsc' | 'ga4';
           <p className="text-sm font-semibold text-slate-800">
             {anchor === 'gsc' ? '🔎 Search Console 数据快照' : '📈 Analytics 4 数据快照'}
           </p>
-          <p className="mt-0.5 text-xs text-slate-500">点击「立即同步」拉取最近 28 天数据</p>
+          <p className="mt-0.5 text-xs text-slate-500">
+            {anchor === 'ga4' && !ga4Ready
+              ? '还没有已验证的 GA4 Property —— 先在上面选一个并保存'
+              : '点击「立即同步」拉取最近 28 天数据'}
+          </p>
         </div>
         <button
           onClick={() => void handleSync()}
-          disabled={syncing}
+          disabled={syncing || (anchor === 'ga4' && !ga4Ready)}
           className="shrink-0 rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {syncing ? '同步中…' : '立即同步'}

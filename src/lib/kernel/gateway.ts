@@ -25,6 +25,7 @@ import type {
   CapabilityImplementation,
   CapabilityStepResult,
   ClientAutomationPolicy,
+  OutwardRollbackResult,
   RunStatus,
   VerificationResult,
 } from './types'
@@ -37,6 +38,8 @@ import {
   ensureSteps,
   getActivePolicy,
   getDecision,
+  getRollbackStep,
+  insertRollbackStep,
   listSteps,
   updateRun,
   updateRunFenced,
@@ -44,6 +47,7 @@ import {
   updateStep,
   updateStepFenced,
 } from './store'
+import { canonicalHashOfInput, deepFreezeVerifiedInput } from './canonical-hash'
 
 export interface ExecutionResult {
   status: Extract<RunStatus, 'succeeded' | 'dead_letter'>
@@ -189,6 +193,72 @@ function assertDecisionMatches(args: {
   }
 }
 
+/**
+ * 🔴 A · Authorized Input Pinning —— execution-time hash 复核。
+ *
+ * 每一次**新的 execution invocation**（首次 `executeAuthorizedRun` / lease
+ * takeover / dead-letter recovery）都从库里重读 `run.input`、重算 canonical
+ * SHA-256，跟 pinned hash 严格相等 —— 不等 = 授权（或 approval）签发之后
+ * 有人偷换了 input，一律 fail-closed，capability 一次都不调。
+ *
+ * 缺 pinned hash（旧 decision）= 一律 fail-closed。刻意不放 grace period ——
+ * 生产上只跑 `seo.build_publish_package` 一个动作，把老 decision 一律拦下比
+ * 「新代码放过一份该拦的旧决策」安全得多。
+ *
+ * 返回**深冻结**的 verified snapshot —— 传给 capability 之后任何一层都改不动，
+ * 从而在 handler 生命周期内也保护住 TOCTOU。
+ */
+function verifyPinnedInputForExecution(
+  run: ActionRun,
+  decision: AuthorizationDecision,
+): Readonly<Record<string, unknown>> {
+  const pinnedInputHash = (decision.policy_snapshot as { input_hash?: unknown } | null | undefined)
+    ?.input_hash
+  const currentInputHash = canonicalHashOfInput(run.input)
+  if (typeof pinnedInputHash !== 'string' || pinnedInputHash !== currentInputHash) {
+    throw new KernelError(
+      'INPUT_TAMPERED_SINCE_AUTHORIZE',
+      '这次执行的输入自从授权签发以来被改过（或授权是旧版本、没有 pin 输入指纹）—— ' +
+        '实际要跑的东西跟当初授权的对不上，已停手。请重新提交这件事',
+      {
+        detail: {
+          runId: run.id,
+          decisionId: decision.id,
+          hadPinnedHash: typeof pinnedInputHash === 'string',
+        },
+      },
+    )
+  }
+  return deepFreezeVerifiedInput(run.input)
+}
+
+/**
+ * 🔴 B · Rollback handler assembly-gate precondition。
+ *
+ * `outward + provider_native` 的 Action，capability 必须已注册 `rollback` handler。
+ * 缺 handler → `ROLLBACK_HANDLER_MISSING` fail-closed，且**在** `beginAuthorizedRun`
+ * **之前**：不创建 execution steps、不调 handler、不产生 provider 副作用、
+ * **授权决策不被消费**（补上 handler 后同一份 approval 可以再用）。
+ */
+function assertRollbackHandlerAssembled(
+  definition: ActionDefinition,
+  capability: CapabilityImplementation,
+): void {
+  if (
+    definition.sideEffect === 'outward' &&
+    definition.outwardAuthorization?.rollback === 'provider_native' &&
+    typeof capability.rollback !== 'function'
+  ) {
+    throw new KernelError(
+      'ROLLBACK_HANDLER_MISSING',
+      `动作「${definition.title}」声明了对外副作用 + provider-native rollback，` +
+        `但装配的 capability 没有提供 rollback handler —— 一旦出错没人撤外部资源，` +
+        `已在任何 provider 副作用发生之前停手（授权决策未消费，补上 handler 后可再用）`,
+      { detail: { actionKey: definition.actionKey } },
+    )
+  }
+}
+
 // ── 主流程 ────────────────────────────────────────────────────────────────────
 
 /**
@@ -245,6 +315,12 @@ export async function executeAuthorizedRun(
     now,
   })
 
+  // ④b 🔴 A · Authorized Input Pinning execution-time check（Hardening v1）：
+  //    重读 run.input + 重算 canonical SHA-256 + 严格相等 pinnedInputHash。
+  //    不等 or pinned 缺失 → INPUT_TAMPERED_SINCE_AUTHORIZE，capability 一次都不调。
+  //    通过后拿到的是深冻结的 snapshot —— capability 的 ctx.runInput 走它。
+  const verifiedRunInput = verifyPinnedInputForExecution(run, decision)
+
   // ⑤ run 的状态得允许执行
   if (run.status !== 'authorized' && run.status !== 'running') {
     throw new KernelError(
@@ -268,6 +344,38 @@ export async function executeAuthorizedRun(
         { detail: { expectedKey: definition.actionKey, expectedVersion: definition.version, actualKey: assembled.actionKey, actualVersion: assembled.version } },
       )
     }
+    // ⑤c 🔴 B · Rollback handler assembly gate（Hardening v1）：outward + provider_native
+    //    的 Action 装配时必须已经提供 rollback handler。缺就在这里 fail-closed，
+    //    绝不 beginAuthorizedRun、绝不消费授权 —— 补上 handler 后 approval 可以再用。
+    assertRollbackHandlerAssembled(definition, assembled)
+  } else if (definition.sideEffect === 'outward') {
+    // 🔴 A 级复审 P1-2 修复（子牙/魏征 二轮）：**outward + capability 完全未装配**
+    //    的死角。原来 `if (assembled)` 分支只在 assembled 非空时才验 rollback
+    //    handler，capability 整个没注册时 gate 被绕过 —— 流程走 beginAuthorizedRun
+    //    消费掉授权、再 fail CAPABILITY_NOT_IMPLEMENTED，违背「补上 handler 后
+    //    approval 可以再用」的 spec 承诺。
+    //
+    //    修复覆盖**所有 outward 动作**（不限 rollback mode）：
+    //    第一轮修复只覆盖 provider_native，魏征二轮指出 `snapshot_restore` +
+    //    capability 未装配同样漏授权消费。语义上这道闸的意图是「outward 动作
+    //    没装配就不许消费授权」，与具体 rollback 类型无关 —— 收窄成 provider_native
+    //    是画错了边界。
+    //
+    //    **非 outward 的动作保留既有 dead_letter + needs_human 行为**（PM 看到
+    //    待办可以处理），因为它们没有「rollback 装配契约」，也没有 provider
+    //    副作用要保护。
+    throw new KernelError(
+      'CAPABILITY_NOT_IMPLEMENTED',
+      `「${definition.title}」这个动作声明了对外副作用，但装配的 capability 整个没注册 —— ` +
+        `已在 beginAuthorizedRun 之前停手（授权决策未消费，装配好后可复用同一份 approval）`,
+      {
+        detail: {
+          actionKey: ctx.actionKey,
+          sideEffect: 'outward',
+          rollback: definition.outwardAuthorization?.rollback ?? null,
+        },
+      },
+    )
   }
 
   // ⑥ 🔴 原子领取「这个 run 的唯一执行权」。
@@ -285,6 +393,8 @@ export async function executeAuthorizedRun(
   if (!begun.ok) throw beginFailureToError(begun.reason)
 
   // ⑦ capability 必须有实现。没有 ≠ 跳过。
+  //    （非 outward 动作走这一段：既有 dead_letter + needs_human 行为，PM 处理。
+  //     outward + provider_native 已在上面 P1-2 修复分支拦下，走不到这里。）
   const capability = deps.capabilities[ctx.actionKey] as CapabilityImplementation | undefined
   if (!capability) {
     const claimed = await deps.requireRun(run.id)
@@ -310,7 +420,15 @@ export async function executeAuthorizedRun(
   // run 的状态已经由 RPC 原子地推到 running，这里只是把最新一行读回来
   const running = await deps.requireRun(run.id)
 
-  return runSteps(deps, { ctx, run: running, definition, capability, steps, fence })
+  return runSteps(deps, {
+    ctx,
+    run: running,
+    definition,
+    capability,
+    steps,
+    fence,
+    verifiedRunInput,
+  })
 }
 
 /**
@@ -655,9 +773,22 @@ async function runSteps(
     capability: CapabilityImplementation
     steps: ActionRunStep[]
     fence: ExecutionFence
+    /** 🔴 A · Hardening：深冻结的 verified snapshot；capability handler 从这里读，不回库。 */
+    verifiedRunInput: Readonly<Record<string, unknown>>
   },
 ): Promise<ExecutionResult> {
-  const { ctx, definition, capability, fence } = args
+  const { ctx, definition, capability, fence, verifiedRunInput } = args
+
+  /** 组装 failRun 需要的 rollback 上下文（definition + capability + ctx + verified input + priorOutputs）。 */
+  const makeRollbackContext = (
+    priorOutputsSnapshot: Readonly<Record<string, Record<string, unknown>>>,
+  ): RollbackContext => ({
+    ctx,
+    definition,
+    capability,
+    verifiedRunInput,
+    priorOutputs: priorOutputsSnapshot,
+  })
 
   /**
    * 🔴 F1：每一次推进性写入都出示代际。写不进去 = 我已经被接管了。
@@ -695,7 +826,7 @@ async function runSteps(
       return failRun(deps, args.run, steps, fence, new KernelError(
         'INVALID_STATE',
         `执行步骤「${stepKey}」的记录不见了`,
-      ))
+      ), makeRollbackContext(priorOutputs))
     }
     if (step.status === 'succeeded') continue
 
@@ -704,7 +835,7 @@ async function runSteps(
       return failRun(deps, args.run, steps, fence, new KernelError(
         'CAPABILITY_NOT_IMPLEMENTED',
         `「${definition.title}」缺少「${stepKey}」这一步的实现`,
-      ))
+      ), makeRollbackContext(priorOutputs))
     }
 
     // 🔴 **开跑前先看钱够不够**，而不是等 handler 跑完再判。
@@ -745,7 +876,9 @@ async function runSteps(
         )
         // 一次都还没跑过 → 保持原样：不把步骤写成死信，直接落 run
         if (attempt === firstAttemptNumber) {
-          return failRun(deps, args.run, steps, fence, blocked)
+          return failRun(
+            deps, args.run, steps, fence, blocked, makeRollbackContext(priorOutputs),
+          )
         }
         await writeStep(step.id, {
           status: 'dead_letter',
@@ -754,7 +887,9 @@ async function runSteps(
           finished_at: deps.now().toISOString(),
         })
         steps = await listSteps(deps.supabase, args.run.id)
-        return failRun(deps, args.run, steps, fence, blocked)
+        return failRun(
+          deps, args.run, steps, fence, blocked, makeRollbackContext(priorOutputs),
+        )
       }
 
       attempt += 1
@@ -790,6 +925,10 @@ async function runSteps(
             // 🔴 稳定的外部幂等键：跨重试、跨死信重跑、跨接管都不变。
             //    含 attempt 或代际就等于每次重试都换一张收据，provider 会做第二遍。
             idempotencyKey: stepIdempotencyKey(args.run, stepKey),
+            // 🔴 A · Hardening：深冻结的 verified input snapshot。
+            //    单次 execution 的 step + retry 都复用这一份；capability 禁止再回
+            //    action_runs.input 查询，否则 TOCTOU（有 architecture test 盯着）。
+            runInput: verifiedRunInput,
           })
         } finally {
           heartbeat.stop()
@@ -1003,7 +1142,9 @@ async function runSteps(
             finished_at: deps.now().toISOString(),
           })
           steps = await listSteps(deps.supabase, args.run.id)
-          return failRun(deps, args.run, steps, fence, lastError)
+          return failRun(
+            deps, args.run, steps, fence, lastError, makeRollbackContext(priorOutputs),
+          )
         }
 
         const delay =
@@ -1022,7 +1163,9 @@ async function runSteps(
 
     if (lastError) {
       steps = await listSteps(deps.supabase, args.run.id)
-      return failRun(deps, args.run, steps, fence, lastError)
+      return failRun(
+        deps, args.run, steps, fence, lastError, makeRollbackContext(priorOutputs),
+      )
     }
     steps = await listSteps(deps.supabase, args.run.id)
   }
@@ -1037,7 +1180,7 @@ async function runSteps(
       return failRun(deps, args.run, steps, fence, new KernelError(
         'VERIFICATION_FAILED',
         `这个动作要求做「${definition.verification.method}」验证，但整轮跑下来没有一条通过的验证记录 —— 不能算做成了`,
-      ))
+      ), makeRollbackContext(priorOutputs))
     }
   }
 
@@ -1047,7 +1190,7 @@ async function runSteps(
     return failRun(deps, args.run, steps, fence, new KernelError(
       'INVALID_OUTPUT',
       `这个动作的产物不符合它自己的契约：${outCheck.reason}`,
-    ))
+    ), makeRollbackContext(priorOutputs))
   }
 
   // 🔴 F1：把 run 判成 succeeded 同样是推进性写入 —— 过期的执行者写它，
@@ -1079,10 +1222,31 @@ async function runSteps(
 // ── 失败落地 ──────────────────────────────────────────────────────────────────
 
 /**
+ * 🔴 B · Rollback 上下文：把 `failRun` 触发 rollback 需要的一组东西打包。
+ *    只在 execution 已经进入过 capability（即 `runSteps` 内部）的失败路径提供 ——
+ *    执行前的失败（CAPABILITY_NOT_IMPLEMENTED 等）拿不到 capability，也不会有
+ *    provider 副作用，rollback 无从谈起。
+ */
+interface RollbackContext {
+  readonly ctx: AuthorizedExecutionContext
+  readonly definition: ActionDefinition
+  readonly capability: CapabilityImplementation
+  readonly verifiedRunInput: Readonly<Record<string, unknown>>
+  readonly priorOutputs: Readonly<Record<string, Record<string, unknown>>>
+}
+
+/**
  * 把一次失败落成 `dead_letter` 并**标记需要人处理**。
  *
  * 🔴 `needs_human = true` 不是装饰：`kernel/handoff.ts` 靠它把死信捞进今日待办。
  *    进了死信而没人知道 = 又一次「发现死在日志里」。
+ *
+ * 🔴 B · Provider-native rollback（Hardening v1）：如果这次失败发生在
+ *    execution 已经进入过 capability handler 之后（`anyHandlerInvocationAttempted`），
+ *    并且 Action 声明了 outward + provider_native rollback + capability 提供了
+ *    rollback handler —— 在落 dead_letter **之前**调 rollback、落一行 lineage。
+ *    rollback 结果**不改** run 的最终状态（永远还是 dead_letter），只把「撤没撤」
+ *    和后果如实记进 `last_error` 追加行 + `action_run_steps(step_key='rollback')`。
  */
 async function failRun(
   deps: KernelDeps,
@@ -1090,15 +1254,43 @@ async function failRun(
   steps: ActionRunStep[],
   fence: ExecutionFence,
   err: unknown,
+  /** rollback 上下文（可选）—— 执行前的失败路径没有这些东西。 */
+  rollbackContext?: RollbackContext,
 ): Promise<ExecutionResult> {
   const code = err instanceof KernelError ? err.code : 'EXECUTION_FAILED'
   const humanReason = humanReasonOf(err)
+
+  // 🔴 B · Rollback trigger（在落 dead_letter 之前）：
+  //    判据 = execution 已经**实际进入过任一 capability handler**（steps.some(s.attempt > 0)）。
+  //    不用「至少一个 succeeded」—— 那会漏掉「provider 已经写出、handler 在
+  //    返回 succeeded 之前网络断了」这种，`step.status=running/failed` 时不算 succeeded。
+  //
+  //    只在 rollbackContext 存在（definition + capability + verifiedInput + priorOutputs
+  //    都齐）且声明了 provider_native rollback + capability 提供了 handler 时才触发 ——
+  //    assembly gate 已经确保这两者齐全或提前 fail；这里只是 defensive 再验一次。
+  let rollbackNote: string | null = null
+  let rollbackStep: ActionRunStep | null = null
+  if (
+    rollbackContext &&
+    rollbackContext.definition.sideEffect === 'outward' &&
+    rollbackContext.definition.outwardAuthorization?.rollback === 'provider_native' &&
+    typeof rollbackContext.capability.rollback === 'function' &&
+    anyHandlerInvocationAttempted(steps)
+  ) {
+    const rollbackOutcome = await invokeRollbackHandler(deps, run, steps, fence, rollbackContext)
+    rollbackStep = rollbackOutcome.step
+    rollbackNote = rollbackOutcome.note
+  }
+
+  const composedError =
+    rollbackNote === null ? humanReason : `${humanReason}\n\n${rollbackNote}`
+
   // 🔴 F1：落死信也是一次推进性写入。过期的执行者不许把接管者正在跑的 run
   //    写成 dead_letter —— 那会直接毁掉一次正在进行的执行。
   const failed = await updateRunFenced(deps.supabase, run.id, fence.generation, {
     status: 'dead_letter',
     needs_human: true,
-    last_error: humanReason,
+    last_error: composedError,
     finished_at: deps.now().toISOString(),
   })
   if (!failed) {
@@ -1108,15 +1300,146 @@ async function failRun(
       { detail: { runId: run.id, generation: fence.generation, originalError: humanReason } },
     )
   }
+  const finalSteps = rollbackStep ? [...steps, rollbackStep] : steps
   return {
     status: 'dead_letter',
     run: failed,
-    steps,
+    steps: finalSteps,
     output: null,
     idempotentHit: false,
     verification: verificationOf(steps),
     failure: { code, humanReason },
   }
+}
+
+/**
+ * 触发 rollback handler、把结果落成 `action_run_steps(step_key='rollback')` 一行。
+ *
+ * 🔴 三种结果都**明确落一行**（succeeded / failed / skipped-noop）—— noop 也不例外。
+ *    「我们考察了要不要 rollback，结论是..」这件事永远可审计。
+ *
+ * 🔴 handler 抛异常 = failed（异常本身作 failure_reason）。rollback**不重试** ——
+ *    重试可能撤第二次（provider 那边就变成撤了一份不属于本次的资源）。
+ */
+async function invokeRollbackHandler(
+  deps: KernelDeps,
+  run: ActionRun,
+  steps: ActionRunStep[],
+  fence: ExecutionFence,
+  rollbackContext: RollbackContext,
+): Promise<{ step: ActionRunStep | null; note: string }> {
+  const { ctx, capability, verifiedRunInput, priorOutputs } = rollbackContext
+
+  // 🔴 A 级复审 P1-1 修复（魏征）：**在调 handler 之前先看有没有 lineage 行**。
+  //
+  //    真实场景：A 跑到 failRun → 调 capability.rollback() 成功 → insertRollbackStep
+  //    成功 → 但紧接着的 updateRunFenced 因为 B 已接管而 fence-lost 抛 STALE_CLAIM。
+  //    此刻 DB 上已有 rollback lineage 行（succeeded），run 状态却没被推到 dead_letter。
+  //    B 接管后若绕过 parkTakeoverForHuman（e.g. providerIdempotency='supported'）继续
+  //    执行、又 fail、再进 failRun → 若这里不查 lineage 就再次调 capability.rollback()。
+  //    Handler 层双调对幂等 provider 也许无害，但契约不假设所有 provider 都幂等 ——
+  //    要 fail-closed 挡在 handler 之前，不能只靠 UNIQUE (run_id, step_key) 挡 DB 行。
+  //
+  //    命中已有 lineage → 直接返回既有结果的 note，不重调 handler。
+  //    这是「rollback 只做一次」在**执行**层面的强制，跟 recovery gate 在 resume
+  //    层面的强制配对使用。
+  const existing = await getRollbackStep(deps.supabase, run.id)
+  if (existing && (existing.status === 'succeeded' || existing.status === 'failed' || existing.status === 'skipped')) {
+    const priorResult = rollbackResultFromStep(existing)
+    return { step: existing, note: composeRollbackNote(priorResult) }
+  }
+
+  const rollbackStepContext = {
+    ctx,
+    stepKey: 'rollback',
+    attempt: 1,
+    idempotencyKey: `${ctx.idempotencyKey}:rollback`,
+    priorOutputs,
+    runInput: verifiedRunInput,
+  }
+
+  let result: OutwardRollbackResult
+  try {
+    result = await capability.rollback!(rollbackStepContext, priorOutputs)
+  } catch (e) {
+    // 🔴 A 级复审 P1-4 修复（魏征）：非 Error 对象用 String(e) 会变 "[object Object]"，
+    //    丢掉排错所需的结构信息（e.g. `throw { code: 'PROVIDER_FAILED', body: {...} }`）。
+    //    分三档：Error 走 .message；plain object 走 JSON.stringify（防循环）；其它 String()。
+    const reason = describeUnknownError(e)
+    result = {
+      ok: false,
+      rollbackKind: 'provider_native',
+      detail: { thrown: reason },
+      failure_reason: reason,
+    }
+  }
+
+  const nextStepIndex = steps.reduce((max, s) => Math.max(max, s.step_index), -1) + 1
+  const inserted = await insertRollbackStep(deps.supabase, {
+    runId: run.id,
+    clientId: run.client_id,
+    claimGeneration: fence.generation,
+    stepIndex: nextStepIndex,
+    result,
+    now: deps.now().toISOString(),
+  })
+
+  const note = composeRollbackNote(result)
+  return { step: inserted, note }
+}
+
+/** 从既有 rollback lineage 行反组回 OutwardRollbackResult（用于 P1-1 命中既有分支）。 */
+function rollbackResultFromStep(step: ActionRunStep): OutwardRollbackResult {
+  const output = (step.output ?? {}) as { rollback_kind?: unknown; detail?: unknown }
+  const rollbackKind: OutwardRollbackResult['rollbackKind'] =
+    output.rollback_kind === 'noop' ? 'noop' : 'provider_native'
+  const detail = (output.detail && typeof output.detail === 'object'
+    ? (output.detail as Record<string, unknown>)
+    : {}) as Readonly<Record<string, unknown>>
+  return {
+    ok: step.status === 'succeeded' || step.status === 'skipped',
+    rollbackKind,
+    detail,
+    ...(step.last_error ? { failure_reason: step.last_error } : {}),
+  }
+}
+
+/**
+ * 排错文本兜底：Error → .message；plain object → JSON.stringify（BigInt-safe，吞循环）；其它 → String()。
+ *
+ * 🔴 A 级复审 P2-b 修复（魏征二轮）：JSON.stringify 遇 BigInt 值抛 TypeError → catch
+ *    走原兜底会返回 `"[object Object]"`，退化到修复前的问题。加 replacer 把 BigInt
+ *    转成字符串，保留数值信息。循环引用仍靠 catch 兜底。
+ */
+function describeUnknownError(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (e !== null && typeof e === 'object') {
+    try {
+      return JSON.stringify(e, bigIntSafeReplacer)
+    } catch {
+      // 循环引用或其它无法序列化 —— 兜底给一个可辨识但极简的字符串
+      return Object.prototype.toString.call(e)
+    }
+  }
+  return String(e)
+}
+
+function bigIntSafeReplacer(_key: string, value: unknown): unknown {
+  return typeof value === 'bigint' ? value.toString() : value
+}
+
+function composeRollbackNote(result: OutwardRollbackResult): string {
+  if (result.rollbackKind === 'noop') {
+    return '外部副作用未产生，无需撤回（rollback: noop）'
+  }
+  if (result.ok) return '外部副作用已按 provider-native rollback 撤回'
+  const why = result.failure_reason ? `：${result.failure_reason}` : ''
+  return `⚠️ 尝试撤回外部副作用**失败**${why} —— 请人工确认对方系统的实际状态`
+}
+
+/** 本次 execution 里有没有实际调用过任何 capability handler（判据来自 spec §4.3）。 */
+function anyHandlerInvocationAttempted(steps: ActionRunStep[]): boolean {
+  return steps.some((s) => s.step_key !== 'rollback' && s.attempt > 0)
 }
 
 // ── 小工具 ────────────────────────────────────────────────────────────────────

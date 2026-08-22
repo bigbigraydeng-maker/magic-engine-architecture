@@ -39,7 +39,9 @@ describe('注册表是封闭的', () => {
 
   it('keys() 给得出完整清单（将来要反向注入 agent prompt 收口生成端）', () => {
     expect(ACTION_KEYS).toContain('seo.build_publish_package')
-    expect(ACTION_KEYS.length).toBe(Object.keys({ 'seo.build_publish_package': 1 }).length)
+    expect(ACTION_KEYS).toContain('page.apply_optimization_request')
+    // 唯一性 = 名字不重复；不硬编数字，防止每加一条动作都要改一次
+    expect(new Set(ACTION_KEYS).size).toBe(ACTION_KEYS.length)
   })
 })
 

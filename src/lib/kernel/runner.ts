@@ -29,6 +29,7 @@ import {
   claimRunRecovery,
   findRunByIdempotencyKey,
   getDecision,
+  getRollbackStep,
   insertRun,
   listSteps,
   updateRun,
@@ -665,6 +666,25 @@ export async function resumeDeadLetterRun(
     throw new KernelError(
       'INVALID_STATE',
       `这条动作现在是「${run.status}」，不是停手待查的状态，不用重跑`,
+    )
+  }
+
+  // 🔴 B · Rollback-aware recovery gate（Hardening v1, spec §4.6）：
+  //    若本 run 已经跑过 provider-native rollback，same-run recovery 会让「DB 里
+  //    succeeded 的步骤」跟外部资源现状分裂（provider 那边被撤了 / 状态不明，
+  //    DB 上却仍写着 succeeded）。禁止 same-run recovery，让人开一条新的 run。
+  //    只有 rollback 结论是 skipped (noop) 或从未跑过 rollback 时保留现有 recovery 语义。
+  const rollback = await getRollbackStep(deps.supabase, runId)
+  if (rollback && (rollback.status === 'succeeded' || rollback.status === 'failed')) {
+    const detail = rollback.status === 'succeeded'
+      ? 'provider 那边的外部资源已经被撤回（rollback succeeded）'
+      : '尝试撤回 provider 那边的外部资源**失败**了（rollback failed，外部状态不明）'
+    throw new KernelError(
+      'ROLLBACK_BLOCKS_SAME_RUN_RECOVERY',
+      `这条 dead_letter 已经跑过外部副作用撤回（${detail}）—— 就地重跑会让数据库里` +
+        `之前 succeeded 的步骤跟外部现状对不上，也可能重复调用 provider。请**重新提交这件事**` +
+        `（新的 idempotency_key、新的授权、新的 input 指纹），原 run 保留作为审计`,
+      { detail: { runId, rollbackStatus: rollback.status } },
     )
   }
 

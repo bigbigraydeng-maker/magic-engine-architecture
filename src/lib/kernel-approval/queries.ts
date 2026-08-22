@@ -26,8 +26,8 @@ import { translateQueryError } from './errors'
  *    `SELECT *` 会把将来新加的列一起带出去 —— 审批接口是给人看的，
  *    多带出去的东西没人审过。
  */
-const RUN_COLUMNS =
-  'id, client_id, purpose, goal_id, action_key, action_version, input, rationale, evidence, ' +
+export const RUN_COLUMNS =
+  'id, client_id, purpose, goal_id, action_key, action_version, idempotency_key, input, rationale, evidence, ' +
   'status, authorization_decision_id, cost_cap_usd, cost_estimate_usd, updated_at, created_at'
 
 /**

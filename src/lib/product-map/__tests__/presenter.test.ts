@@ -210,6 +210,46 @@ describe('id 绝不出渲染层(板桥 M8:id 里带真实供应商名)', () => {
   })
 })
 
+describe('路线图(PM 二轮反馈:要看接下来该干什么,不是当下快照)', () => {
+  it('只含有 nextMilestone 的组件(还有认领的下一步)', () => {
+    const p = buildPresentation(input())
+    expect(p.roadmap.length).toBeGreaterThan(0)
+    expect(p.roadmap.every((r) => r.nextMilestoneLabel.length > 0)).toBe(true)
+  })
+
+  it('按依赖深度升序 —— 地基件排在依赖它的组件前面(同一套 depth,不另开口径)', () => {
+    const p = buildPresentation(input())
+    const kernelIdx = p.roadmap.findIndex((r) => r.name.includes('执行内核'))
+    const bridgeIdx = p.roadmap.findIndex((r) => r.name.includes('动作名字对表'))
+    expect(kernelIdx).toBeGreaterThanOrEqual(0)
+    expect(bridgeIdx).toBeGreaterThan(kernelIdx) // 内核是地基,必须排在依赖它的动作对表前面
+  })
+
+  it('卡点是已解析的人话摘要,不是裸 id(跟"一件件看"行展开同一份 nextMilestone.unlockedBy)', () => {
+    const p = buildPresentation(input())
+    const kernel = p.roadmap.find((r) => r.name.includes('执行内核'))
+    expect(kernel?.blockerSummaries.length).toBeGreaterThan(0)
+    for (const s of kernel?.blockerSummaries ?? []) {
+      expect(s).not.toMatch(/^[a-z0-9-]+$/) // 不是原始 blocker id 那种短横线 slug
+    }
+  })
+
+  it('needsYourCall 如实反映 poDecisionRequired 是否非空(不是猜的)', () => {
+    const p = buildPresentation(input())
+    const kernel = p.roadmap.find((r) => r.name.includes('执行内核'))
+    expect(kernel?.needsYourCall).toBe(true) // 执行内核有「回 go apply kernel」待拍板
+    const bridge = p.roadmap.find((r) => r.name.includes('动作名字对表'))
+    expect(bridge?.needsYourCall).toBe(false) // 动作名字对表没有待拍板项
+  })
+
+  it('不是日历:输出里没有任何具体日期/周数的编造字段', () => {
+    const p = buildPresentation(input())
+    const json = JSON.stringify(p.roadmap)
+    // 只应含 ISO 日期式样出现在 observedAt 之类的真实字段里 —— roadmap 本身不该有周期性推测词
+    expect(json).not.toMatch(/第\s*\d+\s*周|预计.*完成|ETA/)
+  })
+})
+
 describe('全局依赖图(谁垫着谁:横轴=先后)', () => {
   const nodeByName = (p: ReturnType<typeof buildPresentation>, needle: string) =>
     p.graph.nodes.find((n) => n.name.includes(needle))

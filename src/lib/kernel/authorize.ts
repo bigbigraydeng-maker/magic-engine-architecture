@@ -36,6 +36,7 @@ import {
   updateRunFenced,
 } from './store'
 import { KernelError } from './errors'
+import { canonicalHashOfInput } from './canonical-hash'
 
 /**
  * 🔴 `kernel_record_fenced_deny` 里**只读返回、一个字没写**的那几条原因。
@@ -66,8 +67,19 @@ export interface AuthorizationOutcome {
 export function snapshotOf(
   policy: ClientAutomationPolicy | null,
   definition: ActionDefinition | null,
+  /**
+   * 🔴 A · Authorized Input Pinning：授权时 pin 完整 input 的 canonical SHA-256
+   *    到 `policy_snapshot.input_hash`。Gateway 执行前会重读 `action_runs.input`、
+   *    重算一遍、严格相等 —— 不等 = `INPUT_TAMPERED_SINCE_AUTHORIZE` fail-closed。
+   *
+   *    传 `null` **仅**用于 rejectRun 的兼容路径：拒绝决策不会被兑换成执行，
+   *    hash 缺失也无害。allow / require_approval / deny（自动路径） 一律必须传 input。
+   *    Gateway 侧看 hash 缺失 = 一律 fail-closed，防止旧 decision 被再消费。
+   */
+  runInput: Record<string, unknown> | null,
 ): Record<string, unknown> {
   return {
+    ...(runInput === null ? {} : { input_hash: canonicalHashOfInput(runInput) }),
     policy: policy
       ? {
           id: policy.id,
@@ -189,7 +201,7 @@ export async function recordDeny(deps: KernelDeps, args: DenyArgs): Promise<Auth
       action_key: args.run.action_key,
       action_version: args.run.action_version,
       deny_code: args.code,
-      policy_snapshot: snapshotOf(args.policy, args.definition),
+      policy_snapshot: snapshotOf(args.policy, args.definition, args.run.input),
       policy_id: args.policy?.id ?? null,
       policy_version: args.policy?.policy_version ?? null,
       decided_by: 'policy',
@@ -462,7 +474,7 @@ export async function authorizeRun(
       verdict: 'require_approval',
       deny_code: null,
       reason: `按这个客户的规则，「${definition.title}」要你点头才做`,
-      policy_snapshot: snapshotOf(policy, definition),
+      policy_snapshot: snapshotOf(policy, definition, run.input),
       policy_id: policy.id,
       policy_version: policy.policy_version,
       decided_by: 'policy',
@@ -498,7 +510,7 @@ export async function authorizeRun(
     verdict: 'allow',
     deny_code: null,
     reason: `这个客户已经允许系统自己做「${definition.title}」，且这次不花钱、不对外`,
-    policy_snapshot: snapshotOf(policy, definition),
+    policy_snapshot: snapshotOf(policy, definition, run.input),
     policy_id: policy.id,
     policy_version: policy.policy_version,
     decided_by: 'policy',

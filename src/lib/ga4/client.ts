@@ -20,7 +20,9 @@
  */
 
 import { getValidAccessToken } from '@/lib/google-oauth/client'
-import { getValidToken, PlatformConnectionNotFoundError } from '@/lib/platform-oauth/token-manager'
+import { getValidTokenForConnection } from '@/lib/platform-oauth/token-manager'
+import { supabaseAdmin } from '@/lib/supabase'
+import { toGa4ResourceName } from './property-id'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -92,23 +94,38 @@ export interface Ga4SiteSnapshot {
 
 // ─── Token resolution ─────────────────────────────────────────────────────────
 
-async function resolveAccessToken(
+export async function resolveAccessToken(
   clientId: string,
   opts?: { forceRefresh?: boolean },
 ): Promise<string | null> {
-  // 1. New encrypted path (platform_oauth_connections, provider='google_ga4')
-  try {
-    const token = await getValidToken(clientId, 'google_ga4', opts)
-    if (token) return token
-  } catch (err) {
-    if (!(err instanceof PlatformConnectionNotFoundError)) {
-      console.warn('[ga4/client] getValidToken error:', err instanceof Error ? err.message : err)
-    }
-    // Fall through to legacy path
+  const { data: rows, error } = await supabaseAdmin
+    .from('platform_oauth_connections')
+    .select('id, account_id, status')
+    .eq('client_id', clientId)
+    .eq('provider', 'google_ga4')
+    .order('updated_at', { ascending: false })
+
+  if (error) {
+    console.warn('[ga4/client] GA4 connection lookup failed:', error.message)
+    return null
   }
 
-  // 2. Legacy OAuth token (google_oauth_tokens table) — same underlying grant GSC uses
-  return getValidAccessToken(clientId, opts)
+  if ((rows?.length ?? 0) === 0) {
+    // Legacy fallback is only for clients that have never had a dedicated
+    // GA4 row. An error/revoked row is an explicit lifecycle state.
+    return getValidAccessToken(clientId, opts)
+  }
+
+  const activeRows = rows!.filter((row) => row.status === 'active')
+  const selected = activeRows.find((row) => row.account_id === clientId) ?? activeRows[0]
+  if (!selected) return null
+
+  try {
+    return await getValidTokenForConnection(selected.id, opts)
+  } catch (err) {
+    console.warn('[ga4/client] dedicated token resolution failed:', err instanceof Error ? err.message : err)
+    return null
+  }
 }
 
 // ─── Internal GA4 API shapes ─────────────────────────────────────────────────
@@ -254,6 +271,90 @@ export async function fetchGa4PaidSearchMetrics(
   }
 }
 
+// ─── Public API (property verification) ───────────────────────────────────────
+
+export type Ga4VerifyFailureReason = 'no_token' | 'permission_denied' | 'not_found' | 'api_error'
+
+export type Ga4VerifyResult =
+  | { ok: true }
+  | { ok: false; reason: Ga4VerifyFailureReason; detail: string }
+
+/**
+ * Minimal read-only probe: can this client's Google token actually read this
+ * GA4 property? Used by ga4/property.ts's setGa4Property() before it commits
+ * a connector to `status: 'connected'` — a saved property_id that turns out
+ * to be wrong/inaccessible must not show up in the UI as if it worked.
+ *
+ * A 200 response with zero rows (property genuinely has no traffic yet) is
+ * `{ ok: true }` — "no data" and "no access" are different facts and must
+ * not be conflated (see docs/PITFALLS.md — treating an empty result as an
+ * error hides real properties that just haven't collected data yet).
+ */
+export async function verifyGa4PropertyAccess(
+  clientId: string,
+  propertyId: string,
+): Promise<Ga4VerifyResult> {
+  // 魏征 2026-08-18 复审：resolveAccessToken() 的兜底路径（legacy
+  // getValidAccessToken）在自己的 Supabase 查询上没有 try/catch —— 一次
+  // 瞬时网络故障会直接抛出，未包裹的话会一路冒到 setGa4Property 和 PATCH
+  // handler，Next.js 只能返回一个没有 reason 字段的裸 500，而不是这个函数本
+  // 该给出的「暂时联系不上，稍后重试」这类可读错误。跟下面 runReport 那段
+  // try/catch 走同一条「genuine error → api_error」路径。
+  let token: string | null
+  try {
+    token = await resolveAccessToken(clientId)
+  } catch (err) {
+    return {
+      ok: false,
+      reason: 'api_error',
+      detail: err instanceof Error ? err.message : String(err),
+    }
+  }
+  if (!token) {
+    return {
+      ok: false,
+      reason: 'no_token',
+      detail: '这个客户还没有可用的 Google 授权（GA4 专属或 GSC 共享的都没有）。',
+    }
+  }
+
+  const resource = toGa4ResourceName(propertyId)
+  try {
+    await runReport(token, resource, toIsoDate(daysAgo(1)), toIsoDate(new Date()), {
+      metrics: ['sessions'],
+      limit:   1,
+    })
+    return { ok: true }
+  } catch (err) {
+    if (err instanceof Ga4ApiError) {
+      if (err.httpStatus === 403 || err.httpStatus === 401) {
+        return {
+          ok: false,
+          reason: 'permission_denied',
+          detail: err.message || '这个 Google 账号对该 GA4 Property 没有权限，或授权已失效。',
+        }
+      }
+      if (err.httpStatus === 400) {
+        return {
+          ok: false,
+          reason: 'not_found',
+          detail: err.message || 'Property 编号对不上任何 GA4 资源，请确认编号。',
+        }
+      }
+      return {
+        ok: false,
+        reason: 'api_error',
+        detail: err.message || `Google Analytics 接口返回 HTTP ${err.httpStatus}`,
+      }
+    }
+    return {
+      ok: false,
+      reason: 'api_error',
+      detail: err instanceof Error ? err.message : String(err),
+    }
+  }
+}
+
 // ─── Internals ────────────────────────────────────────────────────────────────
 
 interface ReportOptions {
@@ -321,8 +422,11 @@ async function runReport(
   }
 }
 
+// Delegates to the shared canonical module (src/lib/ga4/property-id.ts) so
+// there is exactly one place that knows how to turn bare digits or a
+// `properties/…` string into the resource name Google's APIs expect.
 function normalizePropertyId(id: string): string {
-  return id.startsWith('properties/') ? id : `properties/${id}`
+  return toGa4ResourceName(id)
 }
 
 function daysAgo(n: number): Date {

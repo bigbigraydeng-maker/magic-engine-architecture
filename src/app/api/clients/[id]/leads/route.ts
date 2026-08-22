@@ -33,9 +33,11 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
+import { Resend } from 'resend'
 import { supabaseAdmin } from '@/lib/supabase'
-import { sanitizeLead, extractClientIp, type RawLeadInput } from '@/lib/leads/sanitize'
+import { sanitizeLead, extractClientIp, type RawLeadInput, type CleanLead } from '@/lib/leads/sanitize'
 import { mirrorWebFormLead } from '@/lib/crm/web-form-lead'
+import { meMailFrom } from '@/lib/email/sender'
 
 interface RouteContext {
   params: { id: string }
@@ -46,23 +48,35 @@ const RATE_WINDOW_SEC    = 60
 
 // ─── CORS helpers ─────────────────────────────────────────────────────────────
 
+interface ClientLeadContext {
+  origins: string[]
+  name: string | null
+  notifyEmails: string[]
+}
+
 /**
- * Look up the client's primary domain and build an Origin allowlist.
- * Returns an empty array if the client doesn't exist — the caller treats
- * an empty allowlist as "no client" and refuses to set any CORS headers.
+ * Look up the client's primary domain (for the Origin allowlist), display
+ * name, and lead-notification recipients in one query.
+ * Returns an empty origins array if the client doesn't exist — the caller
+ * treats an empty allowlist as "no client" and refuses to set any CORS
+ * headers.
  */
-async function resolveClientOrigins(clientId: string): Promise<string[]> {
+async function resolveClientContext(clientId: string): Promise<ClientLeadContext> {
   const { data } = await supabaseAdmin
     .from('clients')
-    .select('domain')
+    .select('domain, name, leads_config')
     .eq('id', clientId)
     .maybeSingle()
-  if (!data || typeof data.domain !== 'string') return []
+  if (!data || typeof data.domain !== 'string') return { origins: [], name: null, notifyEmails: [] }
   const host = data.domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '').trim().toLowerCase()
-  if (!host) return []
   // Allow both apex and www subdomain — covers the most common pair without
   // opening the door to arbitrary subdomains.
-  return [`https://${host}`, `https://www.${host}`]
+  const origins = host ? [`https://${host}`, `https://www.${host}`] : []
+  const cfg = (data.leads_config ?? {}) as Record<string, unknown>
+  const notifyEmails = Array.isArray(cfg.notify_emails)
+    ? cfg.notify_emails.filter((e): e is string => typeof e === 'string' && e.length > 0)
+    : []
+  return { origins, name: typeof data.name === 'string' ? data.name : null, notifyEmails }
 }
 
 function corsHeaders(allowOrigin: string | null): Record<string, string> {
@@ -100,7 +114,7 @@ function shape(body: Record<string, unknown>, init: { status?: number; headers?:
 
 export async function OPTIONS(req: NextRequest, { params }: RouteContext): Promise<NextResponse> {
   const reqOrigin = req.headers.get('origin')
-  const allowList = await resolveClientOrigins(params.id)
+  const { origins: allowList } = await resolveClientContext(params.id)
   const allow     = chooseAllowOrigin(reqOrigin, allowList)
   return new NextResponse(null, { status: 204, headers: corsHeaders(allow) })
 }
@@ -123,7 +137,7 @@ export async function POST(req: NextRequest, ctx: RouteContext): Promise<NextRes
 async function handlePost(req: NextRequest, { params }: RouteContext): Promise<NextResponse> {
   const clientId  = params.id
   const reqOrigin = req.headers.get('origin')
-  const allowList = await resolveClientOrigins(clientId)
+  const { origins: allowList, name: clientName, notifyEmails } = await resolveClientContext(clientId)
   if (allowList.length === 0) {
     return shape(
       { success: false, error: 'Client not found', code: 'CLIENT_NOT_FOUND' },
@@ -261,5 +275,50 @@ async function handlePost(req: NextRequest, { params }: RouteContext): Promise<N
     console.error('[leads POST] CRM mirror failed (lead saved, response unaffected):', err)
   }
 
+  // Best-effort email straight to the client's own inbox (leads_config.notify_emails).
+  // The lead is already saved in the CRM either way — this is purely so the client
+  // hears about it without having to log into the ME dashboard. Never allowed to
+  // fail the request.
+  if (notifyEmails.length > 0) {
+    try {
+      await notifyLeadEmail(clientName ?? 'Your website', notifyEmails, clean.lead)
+    } catch (err) {
+      console.error('[leads POST] notify email failed (lead saved, response unaffected):', err)
+    }
+  }
+
   return shape({ success: true, lead_id: inserted.id }, { headers })
+}
+
+// ─── Client notification email ────────────────────────────────────────────────
+
+async function notifyLeadEmail(clientName: string, to: string[], lead: CleanLead): Promise<void> {
+  const apiKey = process.env.RESEND_API_KEY
+  if (!apiKey) return
+  const resend = new Resend(apiKey)
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const row = (label: string, value: string | null) =>
+    value
+      ? `<tr><td style="padding:8px 12px;background:#f8fafc;font-weight:600;vertical-align:top;width:90px;color:#475569">${esc(label)}</td><td style="padding:8px 12px;border-left:3px solid #e2e8f0;white-space:pre-wrap">${esc(value)}</td></tr>`
+      : ''
+  // Resend is a JSON API (not raw SMTP text), so classic header injection via
+  // \r\n in the subject shouldn't actually work — stripping it anyway removes
+  // the question entirely, since lead.name is untrusted user input.
+  const safeName = lead.name.replace(/[\r\n]/g, ' ')
+  await resend.emails.send({
+    from: meMailFrom(`${clientName} Website`),
+    to,
+    ...(lead.email ? { replyTo: lead.email } : {}),
+    subject: `New enquiry from your website — ${safeName}`,
+    html: `<div style="font-family:sans-serif;max-width:560px;margin:0 auto;padding:24px">
+      <h2 style="margin:0 0 16px;font-size:18px;color:#0f172a">${esc(lead.name)} sent an enquiry through your website</h2>
+      <table style="width:100%;border-collapse:collapse;font-size:14px">
+        ${row('Name', lead.name)}
+        ${row('Phone', lead.phone)}
+        ${row('Email', lead.email)}
+        ${row('Message', lead.message)}
+      </table>
+      <p style="margin-top:16px;font-size:12px;color:#94a3b8">Reply to this email to reach them directly.</p>
+    </div>`,
+  })
 }

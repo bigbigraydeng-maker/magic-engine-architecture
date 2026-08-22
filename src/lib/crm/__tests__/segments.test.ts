@@ -10,7 +10,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   segmentContact, todayWorklist, segmentCounts, engagementFromMetadata, reachableChannel, isPhoneVerdict, isFailedReach,
-  type ContactLike, type TouchpointLike,
+  TOURISM_PLAYBOOK,
+  type ContactLike, type TouchpointLike, type IndustryPlaybook,
 } from '../segments'
 
 const NOW = new Date('2026-07-26T12:00:00Z')
@@ -986,5 +987,90 @@ describe('暂时不考虑的人交给系统跟，不是停掉', () => {
       NOW,
     )
     expect(r.segment).toBe('replied')
+  })
+})
+
+/**
+ * 行业剧本（`IndustryPlaybook`）—— CTS 用的规则（旅游）跟通用判断引擎拆开
+ * 之后新加的测试。目的不是重新测一遍分段规则本身（上面几百条已经测过了），
+ * 是钉住「拆分」这件事没有偷偷改变行为，也没有把旅游词汇留在通用引擎里。
+ */
+describe('行业剧本：通用引擎不该认识「旅游」这两个字', () => {
+  /** 不传第三参数 === 显式传 TOURISM_PLAYBOOK —— 默认值必须原样等价。 */
+  it('不传 playbook 等价于显式传 TOURISM_PLAYBOOK', () => {
+    const c = contact({
+      touchpoints: [call('2026-07-01T00:00:00Z', 'spoke', { travelWindow: '明年三月' })],
+    })
+    const withDefault = segmentContact(c, NOW)
+    const withExplicit = segmentContact(c, NOW, TOURISM_PLAYBOOK)
+    expect(withDefault).toEqual(withExplicit)
+  })
+
+  /**
+   * 通用引擎不该自己拼「才走」这类措辞 —— 理由文案必须逐字来自 playbook，
+   * 换一个行业剧本，文案跟着换，不用改 segmentContact 一个字。
+   */
+  it('nurture_future 的理由文案逐字来自 playbook，不是引擎自己拼的', () => {
+    const custom: IndustryPlaybook = {
+      resolveWaitSignal: () => ({
+        due: false,
+        nurtureReason: '自定义剧本的培育理由',
+        reengagedReason: '自定义剧本的重新联系理由',
+      }),
+    }
+    const c = contact({ touchpoints: [call('2026-07-20T00:00:00Z', 'spoke')] })
+    const r = segmentContact(c, NOW, custom)
+    expect(r.segment).toBe('nurture_future')
+    expect(r.reason).toBe('自定义剧本的培育理由')
+  })
+
+  /** 点了链接、还没到期 → 用 playbook 给的 reengagedReason，不是硬编码那句「以后才走」。 */
+  it('clicked_link（还没到期但点了链接）的理由同样来自 playbook', () => {
+    const custom: IndustryPlaybook = {
+      resolveWaitSignal: () => ({
+        due: false,
+        nurtureReason: 'x',
+        reengagedReason: '自定义剧本的重新联系理由',
+      }),
+    }
+    const clicked = {
+      channel: 'email', direction: 'outbound' as const,
+      occurredAt: '2026-07-20T00:00:00Z', engagement: 'click' as const,
+    }
+    const ourEmail = { channel: 'email', direction: 'outbound' as const, occurredAt: '2026-07-01T00:00:00Z' }
+    const c = contact({ touchpoints: [ourEmail, clicked] })
+    const r = segmentContact(c, NOW, custom)
+    expect(r.segment).toBe('clicked_link')
+    expect(r.reason).toBe('自定义剧本的重新联系理由')
+  })
+
+  /**
+   * 没实现 `resolveWaitSignal` 的剧本（比如还没写出行判断的新行业）—— 规则 4
+   * 整条跳过，不报错、不假装有信号，落到下一条普通规则。这是设计里明写的
+   * 「忘了实现不报错，但那条业务逻辑会悄悄消失」这句话的正面验证。
+   */
+  it('剧本没实现 resolveWaitSignal → 规则 4 整条跳过，不报错', () => {
+    const emptyPlaybook: IndustryPlaybook = {}
+    // 跟 segments.test.ts 里「聊过一轮没约下次」用的是同一个数据形状 ——
+    // 唯一变量是这条触点原本带着 travelWindow，但剧本不认它。
+    const c = contact({ touchpoints: [call('2026-07-20T00:00:00Z', 'spoke', { travelWindow: '明年三月' })] })
+    const r = segmentContact(c, NOW, emptyPlaybook)
+    // 用 TOURISM_PLAYBOOK 判会是 nurture_future（因为它认识 travelWindow）；
+    // 空剧本必须落到普通规则（聊过一轮就断了），不能因为不认识这个字段就崩溃，
+    // 也不能瞎猜着也判成 nurture_future。
+    expect(r.segment).toBe('stale_conversation')
+  })
+
+  /** clickWindowMs 也是剧本给的 —— 换一个更短的窗口，行为跟着变。 */
+  it('自定义 clickWindowMs 生效：60 天前的点击在旅游剧本下有效，在 1 天窗口的剧本下失效', () => {
+    const ourEmail = { channel: 'email', direction: 'outbound' as const, occurredAt: '2026-06-01T00:00:00Z' }
+    const oldClick = {
+      channel: 'email', direction: 'outbound' as const,
+      occurredAt: '2026-07-01T00:00:00Z', engagement: 'click' as const,
+    }
+    const c = contact({ touchpoints: [ourEmail, oldClick] }) // NOW 是 2026-07-26，点击是 25 天前
+    expect(segmentContact(c, NOW, TOURISM_PLAYBOOK).segment).toBe('clicked_link')
+    const shortWindow: IndustryPlaybook = { clickWindowMs: 1 * 86_400_000 }
+    expect(segmentContact(c, NOW, shortWindow).segment).not.toBe('clicked_link')
   })
 })
