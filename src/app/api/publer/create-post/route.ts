@@ -95,29 +95,58 @@ export async function POST(req: NextRequest) {
       : (post.platforms ? [post.platforms] : [])
 
     // Normalise platform strings to lowercase to match Publer's provider field
-    const platforms = postPlatforms.map(p => p.toLowerCase())
+    const platforms = postPlatforms.map(p => p.toLowerCase()).filter(Boolean)
 
-    let account: typeof accounts[0] | undefined
-
-    // If connector is configured, use the bound account — fail if it's stale
-    const configuredPlatform = platforms.find(p => configuredIds[p])
-    if (configuredPlatform) {
-      account = accounts.find(a => a.id === configuredIds[configuredPlatform])
-      if (!account) {
-        return NextResponse.json({
-          success: false,
-          error: `Publer account binding for "${configuredPlatform}" is stale. Please reconfigure the Publishing Hub connector for this client.`,
-        }, { status: 400 })
-      }
-    } else {
-      // Connector not yet configured — fall back to first platform match (backward compat)
-      account = platforms.length > 0
-        ? accounts.find(a => platforms.includes(a.provider?.toLowerCase() ?? '')) ?? accounts[0]
-        : accounts[0]
+    // 租户边界必须守到**最终外部落点**（#1149 P1）：只发到这个客户在连接器里
+    // 显式绑定、且能解析成 live 账号、且 provider 匹配的 Publer 账号。绝不回退到
+    // 工作区里的任意账号 / 第一个匹配平台 / accounts[0]——那会把本客户的内容发到
+    // 另一个客户的社媒账号。任一环节缺失 / 对不上都在 uploadMedia / schedulePost
+    // 之前 fail closed，并给出不含密钥的配置错误。
+    if (platforms.length === 0) {
+      return NextResponse.json(
+        { success: false, error: 'This post has no target platform, so no bound publishing account can be resolved.', code: 'no_platform' },
+        { status: 400 },
+      )
     }
 
+    // requested platform 必须在客户连接器里有**非空显式**绑定。
+    const boundPlatform = platforms.find(
+      (p) => typeof configuredIds[p] === 'string' && configuredIds[p].trim() !== '',
+    )
+    if (!boundPlatform) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'No Publishing Hub account is bound for this client on the requested platform. Configure the Publishing Hub connector for this client before publishing.',
+          code: 'connector_unbound',
+        },
+        { status: 400 },
+      )
+    }
+
+    // 绑定的账号 ID 必须解析成 Publer 当前真实返回的 live 账号（不是历史/失效 ID）。
+    const account = accounts.find(a => a.id === configuredIds[boundPlatform])
     if (!account) {
-      return NextResponse.json({ success: false, error: 'No Publer account found' }, { status: 400 })
+      return NextResponse.json(
+        {
+          success: false,
+          error: `The Publishing Hub account bound for "${boundPlatform}" is stale or no longer available. Reconfigure the Publishing Hub connector for this client.`,
+          code: 'account_stale',
+        },
+        { status: 400 },
+      )
+    }
+
+    // live 账号的 provider 必须与绑定/请求的平台一致——防止绑错账号把内容发到别的平台。
+    if ((account.provider?.toLowerCase() ?? '') !== boundPlatform) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `The bound Publishing Hub account does not match the requested platform "${boundPlatform}". Reconfigure the Publishing Hub connector for this client.`,
+          code: 'provider_mismatch',
+        },
+        { status: 400 },
+      )
     }
 
     const hashtags = post.hashtags ? `\n\n${post.hashtags}` : ''

@@ -23,16 +23,22 @@ const uploadMediaFromUrl = vi.fn(async (..._a: unknown[]) => ({}))
 
 let postStatus = 'approved'
 let priceVerdict: { blocked: boolean; source?: string } = { blocked: false }
+// post 请求的平台（测「空/无平台」用）
+let postPlatforms: unknown = ['facebook']
+// 客户 client_connectors 里 publer 那行（null = 没有连接器行）
+let connectorRow: { config: unknown } | null = { config: { publer_account_ids: { facebook: 'acc1' } } }
+// Publer 当前真实返回的 live 账号列表
+let publerAccounts: Array<{ id: string; provider: string }> = [{ id: 'acc1', provider: 'facebook' }]
 
 const POST_ROW = () => ({
   id: 'p1', client_id: 'client-a', caption: 'x', script: '', hashtags: '',
-  platforms: ['facebook'], status: postStatus,
+  platforms: postPlatforms, status: postStatus,
 })
 
-// 通用可链式 builder——这批测试只关心鉴权闸本身和几道回归闸，其余业务逻辑
-// （选 Publer 账号等）停在哪一步都行。content_posts 的 single() 要真返回
-// client_id（给鉴权用）；visual_assets 的 limit() 返回一个 ready 素材，好让
-// 放行的请求能一路走到 Publer write（否则会提前停在 "No ready asset"）。
+// 通用可链式 builder。content_posts 的 single() 返回 client_id（给鉴权用）；
+// visual_assets 的 limit() 返回一个 ready 素材，好让放行的请求能一路走到账号
+// 绑定校验（否则会提前停在 "No ready asset"）；client_connectors 的 maybeSingle()
+// 返回可控的 connectorRow（账号绑定 fail-closed 测试的输入）。
 function makeBuilder(table: string): Record<string, unknown> {
   const builder: Record<string, unknown> = {
     select: () => builder,
@@ -44,7 +50,7 @@ function makeBuilder(table: string): Record<string, unknown> {
         ? { data: [{ id: 'a1', storage_url: 'https://cdn/x.jpg', asset_type: 'image', is_final: true, current_version_num: 1 }], error: null }
         : { data: [], error: null },
     single: async () => (table === 'content_posts' ? { data: POST_ROW(), error: null } : { data: null, error: null }),
-    maybeSingle: async () => ({ data: null, error: null }),
+    maybeSingle: async () => (table === 'client_connectors' ? { data: connectorRow, error: null } : { data: null, error: null }),
   }
   return builder
 }
@@ -55,7 +61,7 @@ vi.mock('@/lib/auth/client-access', () => ({
   requirePaidClientAccess: (...a: unknown[]) => requirePaidClientAccess(...a),
 }))
 vi.mock('@/lib/publer/client', () => ({
-  getAccounts: async () => [{ id: 'acc1', provider: 'facebook' }],
+  getAccounts: async () => publerAccounts,
   uploadMediaFromUrl: (...a: unknown[]) => uploadMediaFromUrl(...a),
   schedulePost: (...a: unknown[]) => schedulePost(...a),
 }))
@@ -78,6 +84,11 @@ const req = (body: Record<string, unknown> = { post_id: 'p1' }) =>
 beforeEach(() => {
   postStatus = 'approved'
   priceVerdict = { blocked: false }
+  // happy 默认：请求 facebook、连接器显式绑定 facebook→acc1、Publer live 账号含
+  // acc1/facebook。账号绑定 fail-closed 用例各自覆盖这三个之一。
+  postPlatforms = ['facebook']
+  connectorRow = { config: { publer_account_ids: { facebook: 'acc1' } } }
+  publerAccounts = [{ id: 'acc1', provider: 'facebook' }]
   schedulePost.mockClear()
   uploadMediaFromUrl.mockClear()
   // 默认无登录会话——各用例按需覆盖。
@@ -160,5 +171,78 @@ describe('POST /api/publer/create-post — 已有业务闸回归（放行后仍�
     const res = await POST(req())
     expect(res.status).toBe(409)
     expect(schedulePost).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * #1149 P1（FAIL CLOSED ON CLIENT PUBLISHING ACCOUNT BINDING）：
+ * 租户边界必须守到最终外部落点。绝不回退到工作区任意账号 / 第一个匹配平台 /
+ * accounts[0]——否则会把本客户内容发到另一个客户的社媒。只发到客户连接器里显式
+ * 绑定、且解析成 live 账号、且 provider 匹配的账号；任一环节缺失都在 uploadMedia /
+ * schedulePost 之前 fail closed，给不含密钥的配置错误。
+ */
+describe('POST /api/publer/create-post — 客户发布账号绑定 fail-closed', () => {
+  beforeEach(() => {
+    // 鉴权 + approved + 价格闸都放行，把测试聚焦在账号绑定这一段。
+    requirePaidClientAccess.mockResolvedValue({ ok: true, tier: 'paid_client' })
+  })
+
+  const expectNoProviderWrite = () => {
+    expect(uploadMediaFromUrl).not.toHaveBeenCalled()
+    expect(schedulePost).not.toHaveBeenCalled()
+  }
+
+  it('happy：连接器显式绑定 + live 账号 + provider 匹配 → 发到绑定账号', async () => {
+    const res = await POST(req())
+    expect(res.status).toBe(200)
+    expect(schedulePost).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acc1', provider: 'facebook' }))
+  })
+
+  it('没有连接器行（connectorRow=null）→ 400 connector_unbound，不触达 Publer write', async () => {
+    connectorRow = null
+    const res = await POST(req())
+    expect(res.status).toBe(400)
+    expect((await res.json()).code).toBe('connector_unbound')
+    expectNoProviderWrite()
+  })
+
+  it('publer_account_ids 缺失 / 形状错误 → 400 connector_unbound，不触达 Publer write', async () => {
+    connectorRow = { config: { publer_account_ids: 'not-an-object' } }
+    const res = await POST(req())
+    expect(res.status).toBe(400)
+    expect((await res.json()).code).toBe('connector_unbound')
+    expectNoProviderWrite()
+  })
+
+  it('请求平台未绑定（绑了 instagram，帖子发 facebook）→ 400 connector_unbound，不触达 Publer write', async () => {
+    connectorRow = { config: { publer_account_ids: { instagram: 'acc9' } } }
+    const res = await POST(req())
+    expect(res.status).toBe(400)
+    expect((await res.json()).code).toBe('connector_unbound')
+    expectNoProviderWrite()
+  })
+
+  it('绑定账号 ID 已失效（不在 live 列表里）→ 400 account_stale，不触达 Publer write', async () => {
+    connectorRow = { config: { publer_account_ids: { facebook: 'acc-stale' } } }
+    const res = await POST(req())
+    expect(res.status).toBe(400)
+    expect((await res.json()).code).toBe('account_stale')
+    expectNoProviderWrite()
+  })
+
+  it('绑定账号 provider 与请求平台不符 → 400 provider_mismatch，不触达 Publer write', async () => {
+    publerAccounts = [{ id: 'acc1', provider: 'instagram' }]
+    const res = await POST(req())
+    expect(res.status).toBe(400)
+    expect((await res.json()).code).toBe('provider_mismatch')
+    expectNoProviderWrite()
+  })
+
+  it('帖子没有目标平台（空数组）→ 400 no_platform，不触达 Publer write', async () => {
+    postPlatforms = []
+    const res = await POST(req())
+    expect(res.status).toBe(400)
+    expect((await res.json()).code).toBe('no_platform')
+    expectNoProviderWrite()
   })
 })
