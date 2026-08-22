@@ -4,21 +4,22 @@ import { getAccounts, uploadMediaFromUrl, schedulePost } from '@/lib/publer/clie
 import { getAdapter } from '@/lib/flywheel/adapters/registry'
 import { SOCIAL_ACTION_TYPE } from '@/lib/flywheel/vocabulary'
 import { judgeOutgoingPost, priceGateMessage } from '@/lib/content/price-claim-gate'
-import { requireDashboardClientAccess } from '@/lib/auth/client-access'
+import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import '@/lib/flywheel/adapters/SocialContentAdapter'
 
 // POST /api/publer/create-post
 // 用 post_id 找最新 ready 素材，自动选第一个匹配平台的 Publer 账号，排期发布。
 //
-// Auth: 登录态且对该 post 所属客户有权限（dashboard 调用）。
+// Auth: 登录态、对该 post 所属客户有权限、且是**付费档**（paid_client 或 admin）。
+// 这是一条付费发布能力，挂在 ME 鉴权、租户绑定的驾驶舱控制面背后。
 //
 // #1149：这条接口原先无鉴权——任何人拿一个 post_id 就能把该客户的成片发到他的
 // 社媒账号。历史上曾设想它被 Zapier/Airtable webhook 调用，故一度补过 Bearer
 // token 旁路；但 docs/STATE.md、docs/DECISIONS.md 记录 Zapier/Airtable 自动化链路
 // 已完全退役、审核已搬进 ME 驾驶舱，仓库里唯一的活跃调用方是 dashboard/content
-// 页面的登录态请求。据此收窄：每个请求都必须走 dashboard 客户权限校验，授权绑定
-// 到 resolved post.client_id，光有 post_id 不算授权。Publer 只是 ME 鉴权、租户
-// 绑定的驾驶舱背后一个可替换的发布适配器。
+// 页面的登录态请求。据此收窄：每个请求都必须走付费档客户权限校验，授权绑定到
+// resolved post.client_id，光有 post_id 不算授权。Publer 只是这条控制面背后一个
+// 可替换的发布适配器。
 export async function POST(req: NextRequest) {
   try {
     const { post_id, schedule_at } = await req.json()
@@ -34,12 +35,18 @@ export async function POST(req: NextRequest) {
 
     if (!post) return NextResponse.json({ success: false, error: 'Post not found' }, { status: 404 })
 
-    // 每个请求都必须是登录态且对这个 post 的客户有权限——授权绑定到 resolved
-    // post.client_id，光有 post_id 不算授权（#1149）。未登录 / 越租户的调用都在
-    // 这里被拒，到不了下面任何 Publer 写入。
-    const access = await requireDashboardClientAccess(post.client_id)
+    // 每个请求都必须是登录态、对这个 post 的客户有权限、且是付费档——授权绑定到
+    // resolved post.client_id，光有 post_id 不算授权（#1149）。用付费档校验而非
+    // dashboard 版：/dashboard/content 页面本身被 middleware 限定为 paid_client，
+    // 若这里只查 dashboard 权限，self_serve 用户就能绕过页面闸、直接拿自己客户的
+    // approved post 打这条 API 触发真实发布（Codex P1）。未登录 / 越租户 / 非付费档
+    // 都在这里被拒，到不了下面任何 Publer 写入。
+    const access = await requirePaidClientAccess(post.client_id)
     if (!access.ok) {
-      return NextResponse.json({ success: false, error: access.error }, { status: access.status })
+      return NextResponse.json(
+        { success: false, error: access.error, ...(access.reason ? { reason: access.reason } : {}) },
+        { status: access.status },
+      )
     }
 
     if (post.status !== 'approved') {
