@@ -103,8 +103,10 @@
 `src/app/api/cron/linkedin-progress-post-{mon,thu}/`（每周一/四各一条 cron）+
 `src/lib/pm-todo/manual-items.ts` 的 `pushLinkedinProgressItems`（待审/账号未连/发布失败三种卡点接进日常待办）。
 只从 `docs/history/CHANGELOG.md` 已上线条目取材，完全自动发布，命中客户敏感信息才转人审。
-两轮 Codex 复审挑出的问题（敏感词表查询失败要 fail closed / 发布账号严格绑定 / 人工复审路径也要接上真正发布 /
-并发确认要原子认领 / 发布成功但状态没同步要能对账）均已修完并测试通过。
+前两轮 Codex 复审挑出的问题（敏感词表查询失败要 fail closed / 发布账号严格绑定 / 人工复审路径也要接上真正发布 /
+并发确认要原子认领 / 发布成功但状态没同步要能对账 / 窗口边界防同日条目丢失）均已修完并测试通过。
+第三轮挑出的 1 条回归（原子认领误伤视频内容重新确认）已修；另 4 条（下方 ⚠️ 清单）功能默认关闭时不触发，
+按 PM 决策登记成"开启前必关"的后续任务，不阻塞本次合并。
 
 - [ ] **上线前 PM 必做的一次性动作**：① 去 Publer 后台用自己的 LinkedIn 账号做一次性授权连接
       ② 打开 ME 后台「Magic Lab Class」客户的 connectors 设置页，把出现的 LinkedIn 账号 ID 填进 Publer 绑定
@@ -112,6 +114,13 @@
       `LINKEDIN_PROGRESS_POST_ENABLED=true`（未配置=默认禁用，这三步没做完之前功能保持休眠，不会误发）
 - [ ] 上线后先跑一次人工验证：确认 Publer 的 schedule 接口对 `provider='linkedin'` 真的认（目前只有代码推断，没有已连账号可实测），
       建议先手工发 1-2 条真实验证一次发布路径，再考虑打开 cron 开关
+
+**⚠️ 打开开关（第③步 `LINKEDIN_PROGRESS_POST_ENABLED=true`）之前必须先关掉的 4 条（Codex 第三轮复审，功能默认关闭时不会触发，所以不阻塞合并，但是"开启前"的硬门槛）：**
+
+- [ ] **[P1] 匿名客户业务数字漏过滤**（`src/lib/linkedin-progress/run.ts` 敏感过滤）：CHANGELOG 若只用匿名方式写客户指标（如「2099 条消息 / 658 个会话」），`findSensitiveMatches` 只认客户名/域名/代号/术语，完全不认运营数字，这类稿会绕过"不点名也不得披露客户数字"的要求自动发。要加代码级数字/联系方式检测，或含此类数据一律转人审。
+- [ ] **[P1] 人工确认路径没处理"发布成功但数据库没同步"**（`content-factory/[postId]/route.ts` LinkedIn 分支）：cron 的 `run.ts` 已消费 `dbSyncError` 并写 `published_but_db_sync_failed` 对账标记，但看板手工 confirm 这条分支还没有——Publer 已发但回写失败时，界面会误报失败稿，可能被当失败重发。要把 run.ts 那套对账逻辑同样接到这条分支。
+- [ ] **[P1] 发布失败后 approved 状态卡死、无重试入口**（同上文件 LinkedIn 分支）：Publer 调度超时/报错时，帖子已被原子认领改成 approved，这里只返 500 不回滚；无视频的 approved 帖子归"备料"段，确认按钮只在"选题"段显示，PM 修好连接后无法再确认，稿件永久卡住。要在确认外部未接受时回滚为 draft，或给 approved 提供幂等重试入口。
+- [ ] **[P2] 待办查询失败被当成"零条记录"**（`src/lib/pm-todo/manual-items.ts` `pushLinkedinProgressItems`）：那次 `content_posts` 查询若失败，Supabase 返回 `{data:null,error}` 不抛异常，这里只取 `data` 再 `?? []`，账号未连/敏感稿/已发未同步等卡点会全部静默从今日待办消失。要检查并抛 `error`。
 
 ### 广告引擎中心 — 已上线部分的收尾（2026-08-05）
 
