@@ -51,7 +51,7 @@ export type ManualItemKind =
   | 'video_credits_out'
   | 'cron_not_running'
   | 'cron_blind'
-  /** Publer 自动发布鉴权密钥（PUBLER_CREATE_POST_TOKEN）还没配 —— 上线后 webhook 会 fail closed，审批后自动发的帖子静默卡在 approved（#1149 P0） */
+  /** Publer 自动发布鉴权两端还没配齐（Render 的 PUBLER_CREATE_POST_TOKEN + Zapier caller 确认 PUBLER_WEBHOOK_CALLER_CONFIRMED）—— 缺任一端 webhook 都会 fail closed，审批后自动发的帖子静默卡在 approved（#1149 P0/P1） */
   | 'publer_token_unset'
   | 'goal_baseline_mismatch'
   | 'diagnostic_findings'
@@ -199,10 +199,14 @@ export async function loadManualItems(
   await pushVideoCreditsItem(supabase, items, now)
   // 按时没跑 / 查不出跑没跑 —— PM 2026-08-03 要求「不能完成需要有报错」
   await pushCronHealthItems(supabase, items, now)
-  // Publer 自动发布鉴权密钥（#1149）还没配 —— 这次安全更新一上线，webhook 没密钥就 401，
-  // 审批后自动发的帖子会静默卡在 approved。只有人能配（Render + Zapier），代码做不了，
-  // 必须进同一个管道，不能只写在 PR / env 文档里等人翻（铁律 3 下半条）。
-  const publerTokenItem = publerTokenSetupItem(process.env.PUBLER_CREATE_POST_TOKEN)
+  // Publer 自动发布鉴权（#1149）需要两端配置才算好 —— 只配 Render token、Zapier 那步还没配时，
+  // webhook 照样 401，审批后自动发的帖子会静默卡在 approved。所以两端都显式确认前持续下发：
+  // token 已配（Render）+ webhook 调用方已确认（Zapier，PUBLER_WEBHOOK_CALLER_CONFIRMED）。
+  // 只有人能配，代码做不了，必须进同一个管道，不能只写在 PR / env 文档里等人翻（铁律 3 下半条）。
+  const publerTokenItem = publerTokenSetupItem(
+    process.env.PUBLER_CREATE_POST_TOKEN,
+    isPublerWebhookCallerConfirmed(process.env.PUBLER_WEBHOOK_CALLER_CONFIRMED),
+  )
   if (publerTokenItem) items.push(publerTokenItem)
   // 目标数字口径对不上 —— 错的方向感比没数字更危险(2026-08-03 差点据此给出反向建议)
   await pushBaselineItems(supabase, items)
@@ -536,32 +540,70 @@ async function pushCronHealthItems(
 
 
 /**
- * Publer 自动发布 webhook 的鉴权密钥（PUBLER_CREATE_POST_TOKEN）还没配 → 下发人工任务。
+ * 授权的 webhook 调用方（Zapier）是否已被**显式确认**配好了同一个 Bearer。
  *
- * #1149 SECURITY P0：`/api/publer/create-post` 补了 Bearer 鉴权后，密钥未配置时 webhook
- * 调用会 fail closed（401），Airtable 审批后自动发的帖子会静默卡在 approved 发不出去。
- * 配置这一步只有人能做——在 Render 建生产环境变量、在 Zapier 的 webhook 加同一个 Bearer——
- * 代码做不了。按铁律 3 下半条：确实做不了的第三方操作必须下发成人工任务、进同一个管道，
- * 不能只写在 PR / env 文档里等人自己翻，否则一次漏配就让发布管道静默断头。
+ * 这是一次人工确认标记，不是对 provider 实际发布成功的探测 —— 后者属于独立的
+ * rollout gate（本模块刻意不做 Zapier API 集成 / provider probe）。默认 false：
+ * 只有把 `PUBLER_WEBHOOK_CALLER_CONFIRMED` 明确置成 true/1/yes/on（大小写、首尾空白
+ * 不敏感）才算确认；未配置、空串、`false`、任何其它值一律视作**未确认**（fail-closed）。
+ */
+export function isPublerWebhookCallerConfirmed(raw: string | undefined): boolean {
+  if (!raw) return false
+  return ['true', '1', 'yes', 'on'].includes(raw.trim().toLowerCase())
+}
+
+/**
+ * Publer 自动发布 webhook 的**两端配置健康** → 未两端确认前持续下发人工任务。
+ *
+ * #1149 SECURITY P0 + SECOND P1（frozen HEAD 2b7e56a 上 Codex 新提）：
+ * `/api/publer/create-post` 补了 Bearer 鉴权后，上线需要两端配置，缺一不可、顺序不能反：
+ *   ① ME/Render 侧配 `PUBLER_CREATE_POST_TOKEN`；
+ *   ② 授权的 webhook 调用方（Zapier）把 Authorization 设成同一个 Bearer。
+ * 初版只看①（token 非空即撤任务），于是操作员做完①、②还没配时这条任务就消失了，
+ * 而路由仍会 401 拒掉所有 Zapier 请求 —— 审批后自动发的帖子继续静默卡在 approved，
+ * 管道不再提示。这正是「一次漏配就让发布管道静默断头」，铁律 3 下半条禁止的那件事。
+ *
+ * 修正为 fail-closed：只有①的 token 已配置**且**②被显式确认
+ * （`isPublerWebhookCallerConfirmed` 默认 false）时，这条才消失；缺任一端都继续下发。
+ * ②的确认标记**只表示「有人确认过 Zapier 侧配好了」，不等于 provider 实际发布成功**，
+ * 真正的部署后非发布式鉴权验证是另一道独立 rollout gate。
  *
  * 刻意做成通用的「配置健康」提示，不做 Publer 专属控制台 —— Publer 只是可替换的发布适配器。
- * 判据 = 环境变量在不在：配好了这条自己消失，不落新状态、不加新表。
- * 做成纯函数（不读 env、不碰 supabase）好让单测直接覆盖；env 在 loadManualItems 里读。
+ * 判据 = 两个环境变量在不在 / 确认没确认，不落新状态、不加新表、不加 provider probe。
+ * 做成纯函数（不读 env、不碰 supabase）好让单测覆盖每一种半配置状态；env 在 loadManualItems 里读。
  */
-export function publerTokenSetupItem(token: string | undefined): ManualItem | null {
-  if (token && token.trim() !== '') return null
+export function publerTokenSetupItem(
+  token: string | undefined,
+  webhookCallerConfirmed: boolean,
+): ManualItem | null {
+  const tokenSet = !!token && token.trim() !== ''
+  // fail-closed：两端都确认才撤任务，缺任一端都继续下发。
+  if (tokenSet && webhookCallerConfirmed) return null
+
+  // token 还没配 → 从头说全两步（含①未配这种最危险的起点）；
+  // token 配了但②还没确认 → 正是初版漏掉的那一半，单独把话说清。
+  const what = tokenSet
+    ? 'Render 侧的自动发布密钥看着配好了，但还没确认 Zapier 那步也配了同一个 Bearer —— ' +
+      '只配了一半，审批后自动发出去的帖子照样会被拒、卡在「已审批」发不出去。'
+    : '自动发布通道的鉴权密钥还没配 —— 现在这条通道没有鉴权（拿到一条帖子的编号就能发到客户社媒）；' +
+      '这次安全更新一上线，会反过来因为没配密钥，让「审批后自动发出去」的帖子全部卡在「已审批」发不出去。'
+
+  const how = tokenSet
+    ? '就差最后一步确认：到 Zapier 里触发自动发布的那一步，确认 Authorization 这个 header 已设成' +
+      '「Bearer 空格 加 Render 里那个同样的字符串」。确认配好后，在 Render 环境变量里把' +
+      ' PUBLER_WEBHOOK_CALLER_CONFIRMED 设成 true —— 这条才会消失（在你确认前它会一直留着，' +
+      '免得只配了一半、帖子却在后台默默卡住没人知道）。'
+    : '两步，顺序不能反：① 在 Render 生产环境变量里加 PUBLER_CREATE_POST_TOKEN（生成一个长随机字符串即可）；' +
+      '② 到 Zapier 里触发自动发布的那一步，把 Authorization 这个 header 设成「Bearer 空格 加同一个字符串」。' +
+      '两步都配完，再在 Render 里把 PUBLER_WEBHOOK_CALLER_CONFIRMED 设成 true，这条才消失' +
+      '（先上线会先把自动发布打断，直到两端都配上才恢复）。'
 
   return {
     kind: 'publer_token_unset',
     client_id: 'infra',
     client_name: 'Magic Engine 后台',
-    what:
-      '自动发布通道的鉴权密钥还没配 —— 现在这条通道没有鉴权（拿到一条帖子的编号就能发到客户社媒）；' +
-      '这次安全更新一上线，会反过来因为没配密钥，让「审批后自动发出去」的帖子全部卡在「已审批」发不出去。',
-    how:
-      '两步，顺序不能反：① 在 Render 生产环境变量里加 PUBLER_CREATE_POST_TOKEN（生成一个长随机字符串即可）；' +
-      '② 到 Zapier 里触发自动发布的那一步，把 Authorization 这个 header 设成「Bearer 空格 加同一个字符串」。' +
-      '两步都配完，再让这次安全更新上线（反过来先上线会先把自动发布打断，直到 Zapier 也配上才恢复）。配完这条会自己消失。',
+    what,
+    how,
     href: RENDER_DASHBOARD_URL,
   }
 }

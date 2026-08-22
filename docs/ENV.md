@@ -109,6 +109,7 @@
 |---|---|---|---|
 | `PUBLER_API_KEY` / `PUBLER_WORKSPACE_ID` | 多平台排期发布 | Render-web | ✅ |
 | `PUBLER_CREATE_POST_TOKEN` | `/api/publer/create-post` webhook Bearer 鉴权（Zapier/Airtable 调用）；未配置时 webhook fail closed，dashboard 登录会话路径仍可用 | Render-web | ❌ 待配置 |
+| `PUBLER_WEBHOOK_CALLER_CONFIRMED` | 人工确认标记（默认 false）：token + Zapier webhook Bearer 两端都配好后置 `true/1/yes/on`，才撤掉今日待办里的 Publer 配置任务；只表示两端已配，非 provider 发布成功探测 | Render-web | ❌ 待配置 |
 | `CMS_TOKEN_ENCRYPTION_KEY` | 客户 WordPress / CMS token 加密 | Render-web | ✅ |
 | `CLOUDFLARE_MGMT_TOKEN` | 客户站点 DNS / Pages 管理 | Render-web | ✅ |
 | `GITHUB_TOKEN` / `GITHUB_WEBHOOK_SECRET` | GitHub CMS 执行闭环（P12.H） | Render-web | ✅ |

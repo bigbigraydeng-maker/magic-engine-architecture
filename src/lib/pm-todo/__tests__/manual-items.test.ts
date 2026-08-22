@@ -9,6 +9,7 @@ import {
   daysAgo,
   loadManualItems,
   publerTokenSetupItem,
+  isPublerWebhookCallerConfirmed,
   type ManualItem,
 } from '../manual-items'
 import { buildTodoEmail, type TodoCounts } from '../daily-todo'
@@ -103,12 +104,37 @@ describe('daysAgo → 文案年龄', () => {
  * #1149 P1（frozen HEAD 9d905e5 上 Codex 新提）：Publer 自动发布鉴权密钥
  * （PUBLER_CREATE_POST_TOKEN）的外部配置依赖必须进人工任务管道，
  * 不能只写在 PR / env 文档里等人翻，否则一次漏配就让发布管道静默断头。
+ *
+ * #1149 SECOND P1（frozen HEAD 2b7e56a 上 Codex 新提）：上线要两端配置——
+ * ① Render token ② Zapier caller 的 Bearer。初版只看①，操作员做完①、②还没配时
+ * 任务就消失，而路由仍会拒掉 Zapier、帖子继续卡住。修正为 fail-closed：
+ * 只有两端都显式确认（token 已配 + PUBLER_WEBHOOK_CALLER_CONFIRMED 置真）才撤任务。
  */
-describe('publerTokenSetupItem — 外部密钥配置进人工任务管道', () => {
+describe('isPublerWebhookCallerConfirmed — ② Zapier caller 确认标记（默认 false）', () => {
+  it('未配置 / 空串 / 纯空白 → 未确认（fail-closed 默认）', () => {
+    expect(isPublerWebhookCallerConfirmed(undefined)).toBe(false)
+    expect(isPublerWebhookCallerConfirmed('')).toBe(false)
+    expect(isPublerWebhookCallerConfirmed('   ')).toBe(false)
+  })
+
+  it('明确的真值（大小写 / 首尾空白不敏感）→ 已确认', () => {
+    for (const v of ['true', 'TRUE', ' True ', '1', 'yes', 'YES', 'on', 'On']) {
+      expect(isPublerWebhookCallerConfirmed(v)).toBe(true)
+    }
+  })
+
+  it('false / 0 / no / 其它任意值 → 未确认（只认白名单，绝不默认放行）', () => {
+    for (const v of ['false', 'False', '0', 'no', 'off', 'maybe', 'configured', 'x']) {
+      expect(isPublerWebhookCallerConfirmed(v)).toBe(false)
+    }
+  })
+})
+
+describe('publerTokenSetupItem — 两端配置进人工任务管道，未两端确认前持续下发', () => {
   const SECRET = 'super-long-random-production-secret-value'
 
-  it('密钥未配置（undefined）→ 下发一条 infra 级人工任务，what/how/href 三件套齐全', () => {
-    const item = publerTokenSetupItem(undefined)
+  it('①②都没配（undefined, false）→ 下发一条 infra 级人工任务，what/how/href 三件套齐全', () => {
+    const item = publerTokenSetupItem(undefined, false)
     expect(item).not.toBeNull()
     expect(item!.kind).toBe('publer_token_unset')
     // infra 级：系统配置，与具体客户无关
@@ -120,8 +146,8 @@ describe('publerTokenSetupItem — 外部密钥配置进人工任务管道', () 
     expect(item!.href.trim().length).toBeGreaterThan(0)
   })
 
-  it('what 说清问题和影响；how 给出可照做的两步；href 是可点的绝对链接', () => {
-    const item = publerTokenSetupItem(undefined)!
+  it('①②都没配：what 说清影响；how 给出可照做的两步 + 确认标记；href 是可点的绝对链接', () => {
+    const item = publerTokenSetupItem(undefined, false)!
     // what 必须说清「会怎样」——审批过的帖子会卡住发不出去
     expect(item.what).toContain('已审批')
     // how 必须具体到点哪里、按什么顺序，FDE 不用问第二遍
@@ -130,26 +156,52 @@ describe('publerTokenSetupItem — 外部密钥配置进人工任务管道', () 
     expect(item.how).toContain('Zapier')
     expect(item.how).toContain('Bearer')
     expect(item.how).toContain('顺序不能反')
+    // 两端确认机制必须写进 how，操作员才知道任务靠什么撤销
+    expect(item.how).toContain('PUBLER_WEBHOOK_CALLER_CONFIRMED')
     // href 必须是能过链接闸的绝对网址（相对路径会被判 broken 整条丢掉）
     expect(() => new URL(item.href)).not.toThrow()
     expect(item.href.startsWith('https://')).toBe(true)
   })
 
-  it('密钥为空串 / 纯空白 → 视作未配置，照常下发', () => {
-    expect(publerTokenSetupItem('')).not.toBeNull()
-    expect(publerTokenSetupItem('   ')).not.toBeNull()
+  it('token 为空串 / 纯空白（+未确认）→ 视作未配置，照常下发', () => {
+    expect(publerTokenSetupItem('', false)).not.toBeNull()
+    expect(publerTokenSetupItem('   ', false)).not.toBeNull()
   })
 
-  it('密钥已配置 → 不下发（这条自己消失，不刷屏）', () => {
-    expect(publerTokenSetupItem(SECRET)).toBeNull()
+  it('🔴 SECOND P1 正例：token 已配但 caller 未确认 → 仍下发（不能只做一半就撤任务）', () => {
+    const item = publerTokenSetupItem(SECRET, false)
+    expect(item).not.toBeNull()
+    expect(item!.kind).toBe('publer_token_unset')
+    // 文案要点出「只配了一半」，并指明差最后的确认步骤
+    expect(item!.what).toContain('一半')
+    expect(item!.how).toContain('Zapier')
+    expect(item!.how).toContain('PUBLER_WEBHOOK_CALLER_CONFIRMED')
+    // 仍不泄露密钥值
+    expect(`${item!.what}${item!.how}${item!.href}`).not.toContain(SECRET)
   })
 
-  it('绝不把密钥值印进待办（配置好就返回 null，天然不泄露）', () => {
-    // 已配置 → null，无任何文本承载密钥
-    expect(publerTokenSetupItem(SECRET)).toBeNull()
-    // 未配置时下发的文本里也不该出现任何真实密钥值
-    const item = publerTokenSetupItem(undefined)!
-    expect(`${item.what}${item.how}${item.href}`).not.toContain(SECRET)
+  it('token 未配但 caller 已确认（错配的怪状态）→ 仍下发（fail-closed，token 缺了照样断头）', () => {
+    const item = publerTokenSetupItem(undefined, true)
+    expect(item).not.toBeNull()
+    // 这种状态下仍从头指引配 token
+    expect(item!.how).toContain('PUBLER_CREATE_POST_TOKEN')
+  })
+
+  it('两端都确认（token 已配 + caller 已确认）→ 不下发（这条自己消失，不刷屏）', () => {
+    expect(publerTokenSetupItem(SECRET, true)).toBeNull()
+  })
+
+  it('绝不把密钥值印进待办（任一可见状态的文本都不承载密钥）', () => {
+    // 两端确认 → null，无任何文本承载密钥
+    expect(publerTokenSetupItem(SECRET, true)).toBeNull()
+    // 各可见状态下的文本里都不该出现任何真实密钥值
+    for (const item of [
+      publerTokenSetupItem(undefined, false)!,
+      publerTokenSetupItem(SECRET, false)!,
+      publerTokenSetupItem(undefined, true)!,
+    ]) {
+      expect(`${item.what}${item.how}${item.href}`).not.toContain(SECRET)
+    }
   })
 
   it('能被日报的人工栏正常渲染（what/how 都出现在 HTML 里）', () => {
@@ -162,7 +214,7 @@ describe('publerTokenSetupItem — 外部密钥配置进人工任务管道', () 
       setupTasks: [],
       cronFailures24h: 0,
     }
-    const item = publerTokenSetupItem(undefined)!
+    const item = publerTokenSetupItem(undefined, false)!
     const { html } = buildTodoEmail(3, { ...EMPTY, manualItems: [item] }, '22 Aug')
     expect(html).toContain('需要你动手')
     expect(html).toContain('自动发布通道的鉴权密钥还没配')
