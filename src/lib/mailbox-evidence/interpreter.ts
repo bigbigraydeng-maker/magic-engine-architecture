@@ -18,8 +18,10 @@ const CLAIM_BY_SIGNAL = {
 } as const satisfies Record<string, MailboxEvidenceClaim>
 
 export function interpretMailboxEvidence(
-  observation: NormalizedMailboxEvidenceObservation,
+  input: unknown,
 ): MailboxEvidenceAssessment {
+  if (!isObservation(input)) return invalidAssessment(input)
+  const observation = input
   const unknownReasons = collectUnknownReasons(observation)
   const state = unknownReasons.length > 0
     ? 'UNKNOWN'
@@ -159,8 +161,80 @@ function safeProvenance(
   observation: NormalizedMailboxEvidenceObservation,
 ): OpaqueProvenanceReference[] {
   if (scopeReasons(observation).length > 0) return []
+  if (identityReasons(observation).includes('CROSS_BOUNDARY_IDENTITY')) return []
+  if (referenceReasons(observation).includes('REFERENCE_CROSS_BOUNDARY')) return []
   if (provenanceReasons(observation).length > 0) return []
-  return observation.provenance.map(reference => ({ ...reference }))
+  const unique = new Map<string, OpaqueProvenanceReference>()
+  for (const reference of observation.provenance) {
+    unique.set(provenanceKey(reference), { ...reference })
+  }
+  return Array.from(unique.entries())
+    .sort(([first], [second]) => first.localeCompare(second))
+    .map(([, reference]) => reference)
+}
+
+function provenanceKey(reference: OpaqueProvenanceReference): string {
+  return [reference.tenantId, reference.clientId, reference.provider,
+    reference.providerAccountRef, reference.opaqueRef].join('\u0000')
+}
+
+function invalidAssessment(input: unknown): MailboxEvidenceAssessment {
+  const signalKind = isRecord(input) && SIGNAL_KINDS.has(input.signalKind as string)
+    ? input.signalKind as NormalizedMailboxEvidenceObservation['signalKind']
+    : 'unknown'
+  return {
+    signalKind,
+    claim: signalKind === 'unknown' ? 'UNKNOWN_OBSERVATION' : CLAIM_BY_SIGNAL[signalKind],
+    state: 'UNKNOWN',
+    reasonCodes: ['INVALID_OBSERVATION'],
+    provenance: [],
+    ruleId: MAILBOX_EVIDENCE_RULE_ID,
+    ruleVersion: MAILBOX_EVIDENCE_RULE_VERSION,
+  }
+}
+
+const SIGNAL_KINDS = new Set(['payment', 'booking', 'passport_receipt', 'follow_up'])
+const IDENTITY_STATES = new Set(['exact', 'ambiguous', 'unresolved', 'cross_boundary'])
+const REFERENCE_STATES = new Set(['exact', 'ambiguous', 'missing', 'cross_boundary'])
+const SOURCE_AUTHORITIES = new Set([
+  'trusted_structured', 'weak_assertion', 'safe_non_authoritative_observation', 'missing',
+])
+const STRUCTURED_STATUSES = new Set(['affirmed', 'denied', 'unknown'])
+const FRESHNESS_STATES = new Set(['fresh', 'stale'])
+const COMPLETENESS_STATES = new Set(['complete', 'incomplete', 'truncated'])
+const CONFLICT_STATES = new Set(['none', 'conflicted'])
+
+function isObservation(value: unknown): value is NormalizedMailboxEvidenceObservation {
+  if (!isRecord(value) || !SIGNAL_KINDS.has(value.signalKind as string)) return false
+  if (!isBoundary(value.boundary) || !isIdentity(value.subjectIdentity)) return false
+  if (!REFERENCE_STATES.has(value.businessReference as string)) return false
+  if (!SOURCE_AUTHORITIES.has(value.sourceAuthority as string)) return false
+  if (!STRUCTURED_STATUSES.has(value.structuredStatus as string)) return false
+  if (!FRESHNESS_STATES.has(value.freshness as string)) return false
+  if (!COMPLETENESS_STATES.has(value.completeness as string)) return false
+  if (!CONFLICT_STATES.has(value.conflict as string)) return false
+  return Array.isArray(value.provenance) && value.provenance.every(isProvenance)
+}
+
+function isBoundary(value: unknown): value is NormalizedMailboxEvidenceObservation['boundary'] {
+  return isRecord(value)
+    && ['tenantId', 'clientId', 'provider', 'providerAccountRef']
+      .every(field => typeof value[field] === 'string')
+}
+
+function isIdentity(value: unknown): value is NormalizedMailboxEvidenceObservation['subjectIdentity'] {
+  return isRecord(value)
+    && IDENTITY_STATES.has(value.state as string)
+    && typeof value.tenantId === 'string'
+    && typeof value.clientId === 'string'
+}
+
+function isProvenance(value: unknown): value is OpaqueProvenanceReference {
+  return isRecord(value) && isBoundary(value) && typeof value.opaqueRef === 'string'
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function isOpaqueDigest(value: string): boolean {

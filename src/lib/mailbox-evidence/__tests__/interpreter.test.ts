@@ -102,6 +102,42 @@ const ADDITIONAL_UNKNOWN_CASES: readonly FailClosedCase[] = [
 ]
 
 describe('interpretMailboxEvidence truth table', () => {
+  it.each([null, undefined, [], 'invalid', 1])('rejects non-object input %j', input => {
+    expect(interpretMailboxEvidence(input)).toMatchObject({
+      signalKind: 'unknown', state: 'UNKNOWN', reasonCodes: ['INVALID_OBSERVATION'], provenance: [],
+    })
+  })
+
+  it.each([
+    'signalKind', 'boundary', 'subjectIdentity', 'businessReference', 'sourceAuthority',
+    'structuredStatus', 'freshness', 'completeness', 'conflict', 'provenance',
+  ])('rejects missing top-level field %s', field => {
+    const input = { ...observation('payment') } as Record<string, unknown>
+    delete input[field]
+    expect(interpretMailboxEvidence(input)).toMatchObject({
+      state: 'UNKNOWN', reasonCodes: ['INVALID_OBSERVATION'], provenance: [],
+    })
+  })
+
+  it.each([
+    ['signalKind', 'future_signal'], ['businessReference', 'partial'],
+    ['sourceAuthority', 'future_source'], ['structuredStatus', 'pending'],
+    ['freshness', 'future_freshness'], ['completeness', 'partial'], ['conflict', 'future_conflict'],
+  ])('rejects unknown %s value', (field, value) => {
+    const input = { ...observation('payment'), [field]: value }
+    expect(interpretMailboxEvidence(input)).toMatchObject({
+      state: 'UNKNOWN', reasonCodes: ['INVALID_OBSERVATION'], provenance: [],
+    })
+  })
+
+  it.each(['state', 'tenantId', 'clientId'])('rejects invalid nested identity %s', field => {
+    const base = observation('payment')
+    const input = { ...base, subjectIdentity: { ...base.subjectIdentity, [field]: undefined } }
+    expect(interpretMailboxEvidence(input)).toMatchObject({
+      state: 'UNKNOWN', reasonCodes: ['INVALID_OBSERVATION'], provenance: [],
+    })
+  })
+
   it.each(SIGNALS)('%s: proves only fresh, complete, exact structured evidence', signalKind => {
     expect(interpretMailboxEvidence(observation(signalKind))).toMatchObject({
       signalKind,
@@ -132,6 +168,15 @@ describe('interpretMailboxEvidence truth table', () => {
     }))
     expect(result).toMatchObject({ state: 'UNKNOWN' })
     expect(result.reasonCodes).toContain('CROSS_BOUNDARY_IDENTITY')
+    expect(result.provenance).toEqual([])
+  })
+
+  it('cross-boundary reference suppresses provenance', () => {
+    const result = interpretMailboxEvidence(observation('booking', {
+      businessReference: 'cross_boundary',
+    }))
+    expect(result.reasonCodes).toContain('REFERENCE_CROSS_BOUNDARY')
+    expect(result.provenance).toEqual([])
   })
 
   it.each(SIGNALS)('cross-account %s provenance is UNKNOWN', signalKind => {
@@ -201,6 +246,17 @@ describe('provider neutrality, provenance and purity', () => {
       opaqueRef: EVIDENCE_REF,
     }])
     expect(JSON.stringify(result.provenance)).not.toMatch(/@|https?:|\s/)
+  })
+
+  it('sorts and deduplicates equivalent provenance', () => {
+    const base = observation('payment')
+    const second = { ...base.provenance[0], opaqueRef: `sha256:${'d'.repeat(64)}` }
+    const shuffled = interpretMailboxEvidence({
+      ...base, provenance: [second, base.provenance[0], second, base.provenance[0]],
+    })
+    const ordered = interpretMailboxEvidence({ ...base, provenance: [base.provenance[0], second] })
+    expect(shuffled.provenance).toEqual(ordered.provenance)
+    expect(shuffled.provenance).toHaveLength(2)
   })
 
   it('rejects provenance that is not structurally opaque', () => {
