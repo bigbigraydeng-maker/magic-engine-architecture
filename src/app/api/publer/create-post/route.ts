@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { getAccounts, uploadMediaFromUrl, schedulePost } from '@/lib/publer/client'
@@ -6,6 +7,22 @@ import { SOCIAL_ACTION_TYPE } from '@/lib/flywheel/vocabulary'
 import { judgeOutgoingPost, priceGateMessage } from '@/lib/content/price-claim-gate'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import '@/lib/flywheel/adapters/SocialContentAdapter'
+
+// Timing-safe 比较 Authorization header 与期望的 Bearer token。
+// - 服务端未配置 token（expected 为空）→ 一律返回 false：webhook 鉴权 fail
+//   closed，绝不因为漏配就默认放行，但也不直接抛错，好让 dashboard 会话兜底
+//   仍然可达（见 #1149 item 3 / Codex P2）。
+// - header 缺失 / 格式不对 / 长度不同 → false（不泄露具体哪里不对）。
+// - 只有完全相等才 true，且用 timingSafeEqual 避免按字节比较的计时侧信道
+//   （#1149 item 1）。
+function hasValidWebhookToken(header: string | null, expected: string | undefined): boolean {
+  if (!expected || !header) return false
+  const provided = Buffer.from(header)
+  const wanted = Buffer.from(`Bearer ${expected}`)
+  // timingSafeEqual 要求等长；长度不同直接 false（长度本身不是秘密）。
+  if (provided.length !== wanted.length) return false
+  return timingSafeEqual(provided, wanted)
+}
 
 // POST /api/publer/create-post
 // 自动化流程用：Airtable approved → webhook → 这里
@@ -23,14 +40,11 @@ import '@/lib/flywheel/adapters/SocialContentAdapter'
 // 同一个 Bearer 密钥要配进 Zapier/Airtable 那边的 webhook header，这一步需要
 // PM/知道 Zapier 后台的人动手配一次（代码这边做不了，见交接说明）。
 export async function POST(req: NextRequest) {
+  // 令牌未配置时不再直接 500：那样会连合法的 dashboard 登录会话一起挡掉
+  // （#1149 item 3 / Codex P2）。改为——webhook 令牌无效就 fail closed，然后
+  // 退回去核对登录会话对 post.client_id 的权限。没有任一条通过才拒绝。
   const expectedToken = process.env.PUBLER_CREATE_POST_TOKEN
-  if (!expectedToken) {
-    return NextResponse.json(
-      { success: false, error: 'Server misconfiguration: PUBLER_CREATE_POST_TOKEN not set' },
-      { status: 500 },
-    )
-  }
-  const hasValidWebhookToken = req.headers.get('authorization') === `Bearer ${expectedToken}`
+  const webhookAuthorized = hasValidWebhookToken(req.headers.get('authorization'), expectedToken)
 
   try {
     const { post_id, schedule_at } = await req.json()
@@ -46,9 +60,10 @@ export async function POST(req: NextRequest) {
 
     if (!post) return NextResponse.json({ success: false, error: 'Post not found' }, { status: 404 })
 
-    // Webhook 令牌对了就放行；不对/没带，退回去核对登录会话对这个 post 的
-    // 客户有没有权限——不能反过来先信登录态，那样等于给 Bearer 开了后门。
-    if (!hasValidWebhookToken) {
+    // Webhook 令牌对了就放行；不对/没带/服务端漏配，退回去核对登录会话对这个
+    // post 的客户有没有权限——授权绑定到 resolved post.client_id，光有 post_id
+    // 不算授权（#1149 item 5）。
+    if (!webhookAuthorized) {
       const access = await requireDashboardClientAccess(post.client_id)
       if (!access.ok) {
         return NextResponse.json({ success: false, error: access.error }, { status: access.status })

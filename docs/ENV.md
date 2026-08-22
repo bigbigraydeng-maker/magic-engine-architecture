@@ -108,6 +108,7 @@
 | 变量 | 用途 | 配在哪 | 登记 |
 |---|---|---|---|
 | `PUBLER_API_KEY` / `PUBLER_WORKSPACE_ID` | 多平台排期发布 | Render-web | ✅ |
+| `PUBLER_CREATE_POST_TOKEN` | `/api/publer/create-post` webhook Bearer 鉴权（Zapier/Airtable 调用）；未配置时 webhook fail closed，dashboard 登录会话路径仍可用 | Render-web | ❌ 待配置 |
 | `CMS_TOKEN_ENCRYPTION_KEY` | 客户 WordPress / CMS token 加密 | Render-web | ✅ |
 | `CLOUDFLARE_MGMT_TOKEN` | 客户站点 DNS / Pages 管理 | Render-web | ✅ |
 | `GITHUB_TOKEN` / `GITHUB_WEBHOOK_SECRET` | GitHub CMS 执行闭环（P12.H） | Render-web | ✅ |
