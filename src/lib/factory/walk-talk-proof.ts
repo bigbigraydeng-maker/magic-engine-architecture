@@ -213,12 +213,15 @@ export interface WhisperSegment {
 }
 
 /** 抽单声道 16k 低码音轨（Whisper 限 25MB，视频直传会爆）——同 lecture-render extractAudio。 */
-async function extractAudioForAsr(videoFile: string, outMp3: string): Promise<void> {
+export async function extractAudioForAsr(videoFile: string, outMp3: string): Promise<void> {
   await exec('ffmpeg', ['-y', '-loglevel', 'error', '-i', videoFile, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', outMp3])
 }
 
-/** OpenAI Whisper 听写，返回带时间戳分段——同 lecture-render whisperTranscribe 配方。 */
-async function transcribeAudio(audioFile: string, apiKey: string): Promise<WhisperSegment[]> {
+/**
+ * OpenAI Whisper 听写，返回带时间戳分段——同 lecture-render whisperTranscribe 配方。
+ * 恰好一次 provider 调用（一次 fetch）；失败即抛，调用方不得自行重试（#1162 seed 预算铁律）。
+ */
+export async function transcribeAudio(audioFile: string, apiKey: string): Promise<WhisperSegment[]> {
   const form = new FormData()
   const buf = await readFile(audioFile)
   form.append('file', new Blob([new Uint8Array(buf)], { type: 'audio/mpeg' }), 'audio.mp3')
@@ -378,7 +381,7 @@ export function segmentsToCaptionCues(
   return cues
 }
 
-async function ffprobeDuration(file: string): Promise<number> {
+export async function ffprobeDuration(file: string): Promise<number> {
   const { stdout } = await exec('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file])
   const d = parseFloat(stdout.trim())
   if (!Number.isFinite(d) || d <= 0) throw new Error(`无法读取时长：${file}`)
@@ -393,9 +396,42 @@ export interface RenderProofResult {
 }
 
 /**
- * 真跑一支样片：校验输入 → 求字幕轴 → PIL 画字幕 → ffmpeg 拼 → 落本地 MP4。无 DB / 无上传。
+ * 渲染尾段（cues → 本地 MP4）：校验字幕轴 → PIL 画字幕 → ffmpeg overlay → 落本地 MP4。
+ * **零 provider**：只吃已算好的 cues，不听写、不联网。script / asr / import(SRT) 三条路都汇到这里，
+ * 保证「同一份 cues → 同一支片」的确定性重出（#1162 import 模式复用此函数，不再调 whisper）。
+ */
+export async function renderCuesToVideo(opts: {
+  rawPath: string
+  cues: CaptionCue[]
+  durationSec: number
+  outPath: string
+  pythonBin: string // 隔离 venv 的 python（内含 Pillow）；不动系统 python
+  fontPath?: string
+}): Promise<void> {
+  const font = opts.fontPath || process.env.FACTORY_CJK_FONT || '/System/Library/Fonts/Supplemental/Arial Unicode.ttf'
+  validateCaptionCues(opts.cues, opts.durationSec)
+
+  const dir = await mkdtemp(join(tmpdir(), 'walktalk-'))
+  try {
+    const pyFile = join(dir, 'caps.py')
+    await writeFile(pyFile, CAPTION_PY)
+    const cuesArg = JSON.stringify(opts.cues.map((c) => c.runs.map((r) => [r.t, r.hi])))
+    await exec(opts.pythonBin, [
+      pyFile, font, dir, cuesArg,
+      String(FONT_SIZE), String(STROKE), String(CAPTION_TOP), String(SIDE_MARGIN),
+    ])
+    const capPngPaths = opts.cues.map((_, i) => join(dir, `cap${i}.png`))
+    const args = buildProofFfmpegArgs({ rawPath: opts.rawPath, capPngPaths, cues: opts.cues, outPath: opts.outPath })
+    await exec('ffmpeg', args, { maxBuffer: 1 << 26 })
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+/**
+ * 真跑一支样片：校验输入 → 求字幕轴 → 复用 renderCuesToVideo 出片。无 DB / 无上传。
  * mode='script'：字幕取自稿子，按字数确定性均摊（无 provider）。
- * mode='asr'：字幕取自**听写真实口播**、按真实时间戳上（复用 lecture Whisper 配方，需 apiKey）。
+ * mode='asr'：字幕取自**听写真实口播**、按真实时间戳上（复用 lecture Whisper 配方，需 apiKey，一次 provider）。
  */
 export async function renderWalkTalkProof(opts: {
   rawPath: string
@@ -410,7 +446,6 @@ export async function renderWalkTalkProof(opts: {
   cleanFiller?: boolean // asr 模式：去语气水词/口头禅（默认关）
 }): Promise<RenderProofResult> {
   const mode = opts.mode ?? 'script'
-  const font = opts.fontPath || process.env.FACTORY_CJK_FONT || '/System/Library/Fonts/Supplemental/Arial Unicode.ttf'
   await assertInputReadable(opts.rawPath, '原片')
   await assertInputReadable(opts.scriptPath, '口播稿')
   await assertInputReadable(opts.pythonBin, 'venv python')
@@ -418,32 +453,29 @@ export async function renderWalkTalkProof(opts: {
   const raw = await opts.readScript(opts.scriptPath)
   const durationSec = await ffprobeDuration(opts.rawPath)
 
-  const dir = await mkdtemp(join(tmpdir(), 'walktalk-'))
-  try {
-    let cues: CaptionCue[]
-    if (mode === 'asr') {
-      if (!opts.apiKey) throw new Error('ASR 模式需 apiKey（OPENAI_API_KEY）')
+  let cues: CaptionCue[]
+  if (mode === 'asr') {
+    if (!opts.apiKey) throw new Error('ASR 模式需 apiKey（OPENAI_API_KEY）')
+    const dir = await mkdtemp(join(tmpdir(), 'walktalk-asr-'))
+    try {
       const audio = join(dir, 'audio.mp3')
       await extractAudioForAsr(opts.rawPath, audio)
       const segments = await transcribeAudio(audio, opts.apiKey)
       cues = segmentsToCaptionCues(segments, durationSec, opts.maxCharsPerCue ?? 14, extractHighlightTerms(raw), opts.cleanFiller ?? false)
-    } else {
-      cues = buildCaptionCues(parseScriptLines(raw), durationSec)
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {})
     }
-    validateCaptionCues(cues, durationSec)
-
-    const pyFile = join(dir, 'caps.py')
-    await writeFile(pyFile, CAPTION_PY)
-    const cuesArg = JSON.stringify(cues.map((c) => c.runs.map((r) => [r.t, r.hi])))
-    await exec(opts.pythonBin, [
-      pyFile, font, dir, cuesArg,
-      String(FONT_SIZE), String(STROKE), String(CAPTION_TOP), String(SIDE_MARGIN),
-    ])
-    const capPngPaths = cues.map((_, i) => join(dir, `cap${i}.png`))
-    const args = buildProofFfmpegArgs({ rawPath: opts.rawPath, capPngPaths, cues, outPath: opts.outPath })
-    await exec('ffmpeg', args, { maxBuffer: 1 << 26 })
-    return { outPath: opts.outPath, durationSec, cueCount: cues.length, mode }
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {})
+  } else {
+    cues = buildCaptionCues(parseScriptLines(raw), durationSec)
   }
+
+  await renderCuesToVideo({
+    rawPath: opts.rawPath,
+    cues,
+    durationSec,
+    outPath: opts.outPath,
+    pythonBin: opts.pythonBin,
+    fontPath: opts.fontPath,
+  })
+  return { outPath: opts.outPath, durationSec, cueCount: cues.length, mode }
 }
