@@ -20,6 +20,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { verifyState, exchangeCode, exchangeForLongLivedToken, listPagesWithTokens, listGrantedScopes, META_PUBLISH_SCOPE } from '@/lib/meta-oauth/client'
 import { upsertConnection } from '@/lib/platform-oauth/connection-store'
 import { PLATFORM_PROVIDERS } from '@/lib/platform-oauth/vocabulary'
+import { projectFactoryConfig } from '@/lib/factory/client-config'
 
 /** Long-lived user tokens last ~60 days; Page tokens derived from them do not
  *  expire while the grant stands. We record 60 days so an expiry sweep has
@@ -31,6 +32,7 @@ type Outcome =
   | 'publish_ready'
   | 'publish_not_granted'
   | 'verify_failed'
+  | 'no_publish_target'
   | 'no_pages'
   | 'page_not_granted'
   | 'no_page_bound'
@@ -78,21 +80,38 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const pages = await listPagesWithTokens(longToken)
   if (pages.length === 0) return back(clientId, 'no_pages')
 
-  // Which Page is this client actually bound to? Without a binding we have no
-  // basis to pick one, and guessing would attach the wrong inbox.
+  // Which Page do we need a token for? These are two independent fields:
+  //   • inbox connect  → clients.facebook_page_id (the Messenger sync target)
+  //   • publishing      → factory_config.publish_target.page_id (what the
+  //                        Facebook Reel adapter actually posts to)
+  // Storing the inbox Page's token while claiming the publishing Page is ready
+  // is exactly the failure this reauth exists to end, so publishing resolves its
+  // own target — re-read here server-side (never from a client-supplied id or
+  // the signed state) so a config change mid-flow fails closed below.
   const { data } = await supabaseAdmin
     .from('clients')
-    .select('facebook_page_id')
+    .select('facebook_page_id, factory_config')
     .eq('id', clientId)
     .maybeSingle()
 
-  const boundPageId = (data as { facebook_page_id?: string | null } | null)?.facebook_page_id
-  if (!boundPageId) return back(clientId, 'no_page_bound')
+  let targetPageId: string | null
+  if (intent === 'publishing') {
+    const target = projectFactoryConfig((data as { factory_config?: unknown } | null)?.factory_config).publish_target
+    // A missing or non-Facebook publish target means there is nothing valid to
+    // authorise — fail closed rather than binding the wrong Page.
+    if (!target || target.platform !== 'facebook' || !target.page_id) {
+      return back(clientId, 'no_publish_target')
+    }
+    targetPageId = target.page_id
+  } else {
+    targetPageId = (data as { facebook_page_id?: string | null } | null)?.facebook_page_id ?? null
+    if (!targetPageId) return back(clientId, 'no_page_bound')
+  }
 
   // The consent may be genuine yet not cover the Page we need — the account
   // that authorised holds no role on it. Saying so beats storing a token that
   // will never work.
-  const match = pages.find((p) => p.pageId === boundPageId)
+  const match = pages.find((p) => p.pageId === targetPageId)
   if (!match) return back(clientId, 'page_not_granted')
 
   const expiry = new Date(Date.now() + TOKEN_LIFETIME_DAYS * 24 * 60 * 60 * 1000)

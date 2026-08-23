@@ -36,6 +36,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { getMetaTokenForClient } from '@/lib/meta/token-manager'
 import { listManagedPages, type ManagedPage } from '@/lib/meta/page-posts'
+import { projectFactoryConfig } from '@/lib/factory/client-config'
 
 /** Why the pick-list is unavailable — the UI turns each into a plain sentence. */
 type PagesError = 'no_token' | 'meta_rejected'
@@ -101,7 +102,7 @@ export async function GET(
 
   const { data, error } = await supabaseAdmin
     .from('clients')
-    .select('facebook_page_id')
+    .select('facebook_page_id, factory_config')
     .eq('id', clientId)
     .single()
 
@@ -112,12 +113,21 @@ export async function GET(
   const raw = (data as { facebook_page_id: unknown }).facebook_page_id
   const page_id = typeof raw === 'string' && raw.trim().length > 0 ? raw : null
 
+  // The Facebook Reel adapter publishes to factory_config.publish_target, which
+  // is configured independently of the inbox Page. Expose it so the UI can offer
+  // "Reauthorize Meta Publishing" whenever a valid Facebook publish target
+  // exists — even when facebook_page_id is unset or a different Page.
+  const publishTarget = projectFactoryConfig((data as { factory_config?: unknown }).factory_config).publish_target
+  const publish_target_page_id =
+    publishTarget && publishTarget.platform === 'facebook' ? publishTarget.page_id : null
+
   // Best-effort: a Meta outage must not stop someone reading or clearing the
   // binding, so a failed lookup degrades to "no pick-list" rather than a 500.
   const { pages, pages_error } = await readPages(clientId)
 
   return NextResponse.json({
     page_id,
+    publish_target_page_id,
     pages,
     pages_error,
     reachable: computeReachable(page_id, pages),

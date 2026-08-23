@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   upsertConnection:           vi.fn(),
   upsertCalls:                [] as Array<Record<string, unknown>>,
   boundPageId:                '1616575215312482' as string | null,
+  factoryConfig:              { publish_target: { platform: 'facebook', page_id: '1616575215312482' } } as unknown,
 }))
 
 vi.mock('@/lib/meta-oauth/client', async (importOriginal) => {
@@ -48,7 +49,10 @@ vi.mock('@/lib/supabase', () => ({
       select: vi.fn(() => ({
         eq: vi.fn(() => ({
           maybeSingle: vi.fn(() =>
-            Promise.resolve({ data: { facebook_page_id: mocks.boundPageId }, error: null }),
+            Promise.resolve({
+              data: { facebook_page_id: mocks.boundPageId, factory_config: mocks.factoryConfig },
+              error: null,
+            }),
           ),
         })),
       })),
@@ -96,6 +100,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.upsertCalls.length = 0
   mocks.boundPageId = PAGE_ID
+  mocks.factoryConfig = { publish_target: { platform: 'facebook', page_id: PAGE_ID } }
   process.env.NEXT_PUBLIC_APP_URL = 'https://app.magic-engine.com'
   process.env.FACEBOOK_APP_SECRET = 'app-secret-456'
   mocks.verifyState.mockReturnValue({ clientId: CLIENT_ID })
@@ -202,6 +207,85 @@ describe('publishing reauthorisation fails closed (#1152)', () => {
   it('an inbox connect (no intent) is unaffected — still lands on connected', async () => {
     const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
     expect(outcomeOf(res)).toBe('connected')
+  })
+})
+
+describe('publishing reauth binds to factory_config.publish_target, not the inbox Page (#1152 P1)', () => {
+  const PUBLISH_PAGE = '999888777'
+
+  beforeEach(() => {
+    mocks.verifyState.mockReturnValue({ clientId: CLIENT_ID, intent: 'publishing' })
+  })
+
+  it('stores the token for the publish target when it differs from the inbox Page', async () => {
+    mocks.boundPageId = PAGE_ID // inbox Page
+    mocks.factoryConfig = { publish_target: { platform: 'facebook', page_id: PUBLISH_PAGE } }
+    mocks.listPagesWithTokens.mockResolvedValue([
+      { pageId: PAGE_ID, pageName: 'Inbox Page', pageToken: 'inbox-token' },
+      { pageId: PUBLISH_PAGE, pageName: 'Publish Page', pageToken: 'publish-token' },
+    ])
+
+    const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+    expect(outcomeOf(res)).toBe('publish_ready')
+    // The persisted account_id + token must be the PUBLISH Page, never the inbox one.
+    expect(mocks.upsertCalls).toHaveLength(1)
+    expect(mocks.upsertCalls[0].accountId).toBe(PUBLISH_PAGE)
+    expect(mocks.upsertCalls[0].accessToken).toBe('publish-token')
+  })
+
+  it('works when only a publish target exists and the inbox binding is absent', async () => {
+    mocks.boundPageId = null // no inbox binding
+    mocks.factoryConfig = { publish_target: { platform: 'facebook', page_id: PUBLISH_PAGE } }
+    mocks.listPagesWithTokens.mockResolvedValue([
+      { pageId: PUBLISH_PAGE, pageName: 'Publish Page', pageToken: 'publish-token' },
+    ])
+
+    const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+    expect(outcomeOf(res)).toBe('publish_ready')
+    expect(mocks.upsertCalls[0].accountId).toBe(PUBLISH_PAGE)
+  })
+
+  it('when publish target equals the inbox Page, still binds to that Page', async () => {
+    mocks.boundPageId = PAGE_ID
+    mocks.factoryConfig = { publish_target: { platform: 'facebook', page_id: PAGE_ID } }
+
+    const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+    expect(outcomeOf(res)).toBe('publish_ready')
+    expect(mocks.upsertCalls[0].accountId).toBe(PAGE_ID)
+  })
+
+  it('fails closed with no_publish_target and writes nothing when no publish target is configured', async () => {
+    mocks.factoryConfig = {} // no publish_target
+
+    const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+    expect(outcomeOf(res)).toBe('no_publish_target')
+    expect(mocks.upsertCalls).toHaveLength(0)
+  })
+
+  it('fails closed with no_publish_target when the target is a non-Facebook platform', async () => {
+    mocks.factoryConfig = { publish_target: { platform: 'instagram', page_id: PUBLISH_PAGE } }
+
+    const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+    expect(outcomeOf(res)).toBe('no_publish_target')
+    expect(mocks.upsertCalls).toHaveLength(0)
+  })
+
+  it('fails closed (page_not_granted, no write) when the granted Meta Pages do not include the publish target', async () => {
+    mocks.factoryConfig = { publish_target: { platform: 'facebook', page_id: PUBLISH_PAGE } }
+    // Meta hands back only some OTHER page — not the configured publish target.
+    mocks.listPagesWithTokens.mockResolvedValue([
+      { pageId: PAGE_ID, pageName: 'Inbox Page', pageToken: 'inbox-token' },
+    ])
+
+    const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+    expect(outcomeOf(res)).toBe('page_not_granted')
+    expect(mocks.upsertCalls).toHaveLength(0)
   })
 })
 

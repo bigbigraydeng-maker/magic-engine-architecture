@@ -10,10 +10,25 @@ import { NextRequest } from 'next/server'
 
 const mocks = vi.hoisted(() => ({
   requireDashboardClientAccess: vi.fn(),
+  factoryConfig: { publish_target: { platform: 'facebook', page_id: '778899' } } as unknown,
 }))
 
 vi.mock('@/lib/auth/client-access', () => ({
   requireDashboardClientAccess: mocks.requireDashboardClientAccess,
+}))
+
+vi.mock('@/lib/supabase', () => ({
+  supabaseAdmin: {
+    from: vi.fn(() => ({
+      select: vi.fn(() => ({
+        eq: vi.fn(() => ({
+          maybeSingle: vi.fn(() =>
+            Promise.resolve({ data: { factory_config: mocks.factoryConfig }, error: null }),
+          ),
+        })),
+      })),
+    })),
+  },
 }))
 
 import { GET } from '../route'
@@ -38,6 +53,7 @@ beforeEach(() => {
   process.env.FACEBOOK_APP_SECRET = 'app-secret-456'
   process.env.NEXT_PUBLIC_APP_URL = 'https://app.magic-engine.com'
   mocks.requireDashboardClientAccess.mockResolvedValue(adminAccess())
+  mocks.factoryConfig = { publish_target: { platform: 'facebook', page_id: '778899' } }
 })
 
 describe('tenant isolation — no unauthenticated / cross-tenant reauthorisation', () => {
@@ -101,5 +117,44 @@ describe('publishing intent reaches the signed state and requests the publishing
     const authUrl = new URL(res.headers.get('location') ?? '')
     const state = authUrl.searchParams.get('state') ?? ''
     expect(verifyState(state)).toEqual({ clientId: CLIENT_ID })
+  })
+})
+
+describe('publishing reauth must not even start without a valid Facebook publish target (#1152 P1)', () => {
+  it('fails closed to the panel with no_publish_target when no publish target is configured — never reaches Meta', async () => {
+    mocks.factoryConfig = {} // no publish_target
+
+    const res = await GET(makeRequest({ clientId: CLIENT_ID, intent: 'publishing' }))
+
+    const url = new URL(res.headers.get('location') ?? '')
+    expect(url.hostname).not.toContain('facebook.com')
+    expect(url.pathname).toBe(`/dashboard/clients/${CLIENT_ID}`)
+    expect(url.searchParams.get('settings')).toBe('platform')
+    expect(url.searchParams.get('meta')).toBe('no_publish_target')
+  })
+
+  it('fails closed when the publish target is a non-Facebook platform', async () => {
+    mocks.factoryConfig = { publish_target: { platform: 'instagram', page_id: '778899' } }
+
+    const res = await GET(makeRequest({ clientId: CLIENT_ID, intent: 'publishing' }))
+
+    const url = new URL(res.headers.get('location') ?? '')
+    expect(url.hostname).not.toContain('facebook.com')
+    expect(url.searchParams.get('meta')).toBe('no_publish_target')
+  })
+
+  it('proceeds to Meta when a valid Facebook publish target exists', async () => {
+    mocks.factoryConfig = { publish_target: { platform: 'facebook', page_id: '778899' } }
+
+    const res = await GET(makeRequest({ clientId: CLIENT_ID, intent: 'publishing' }))
+
+    expect(new URL(res.headers.get('location') ?? '').hostname).toContain('facebook.com')
+  })
+
+  it('ordinary inbox connect never consults the publish target — not regressed', async () => {
+    mocks.factoryConfig = {} // even with no publish target...
+    const res = await GET(makeRequest({ clientId: CLIENT_ID }))
+    // ...a plain connect still proceeds to Meta (inbox anchored to facebook_page_id).
+    expect(new URL(res.headers.get('location') ?? '').hostname).toContain('facebook.com')
   })
 })

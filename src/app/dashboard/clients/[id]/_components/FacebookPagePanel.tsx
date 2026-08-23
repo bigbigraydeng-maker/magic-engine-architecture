@@ -30,6 +30,9 @@ type PagesError = 'no_token' | 'meta_rejected'
 
 interface Payload {
   page_id: string | null
+  /** factory_config.publish_target 里配的发布主页（platform=facebook）。跟收件箱
+   *  page_id 是两个独立字段：这个决定「重新授权发布」按钮能不能点。 */
+  publish_target_page_id: string | null
   pages: ManagedPage[] | null
   pages_error: PagesError | null
   /** Live答案：ME 现在读不读得到这个主页。false = 绑了但拉不到东西。 */
@@ -99,6 +102,9 @@ export function FacebookPagePanel({ clientId }: Props) {
         phase: 'ready',
         data: {
           page_id: json.page_id ?? null,
+          // PATCH only touches the inbox binding — the publish target is a
+          // separate field, so carry the last-loaded value through unchanged.
+          publish_target_page_id: state.phase === 'ready' ? state.data.publish_target_page_id : null,
           pages: json.pages ?? null,
           pages_error: json.pages_error ?? null,
           reachable: json.reachable ?? null,
@@ -136,7 +142,7 @@ export function FacebookPagePanel({ clientId }: Props) {
     )
   }
 
-  const { page_id, pages, pages_error, reachable } = state.data
+  const { page_id, publish_target_page_id, pages, pages_error, reachable } = state.data
   const dirty = draft.trim() !== (page_id ?? '').trim()
 
   return (
@@ -214,7 +220,7 @@ export function FacebookPagePanel({ clientId }: Props) {
         {!dirty && page_id === null && <span className="text-xs text-slate-400">未接私信</span>}
       </div>
 
-      <ConnectMeta clientId={clientId} pageId={page_id} />
+      <ConnectMeta clientId={clientId} pageId={page_id} publishTargetPageId={publish_target_page_id} />
 
       <p className="mt-4 border-t border-slate-100 pt-3 text-xs leading-relaxed text-slate-400">
         主页网址里的名字（facebook.com/<span className="font-mono">CTSTOURS</span>）不是 ID。
@@ -230,7 +236,11 @@ const META_RESULT: Record<string, { ok: boolean; text: string }> = {
   connected: { ok: true, text: '✓ 连接成功。下一个整点开始同步这个主页的私信。' },
   publish_ready: {
     ok: true,
-    text: '✓ 发布权限已授权。系统现在可以把内容作为草稿发到这个主页，等你在发布流程里逐条确认。',
+    // Meta granting the app-level scope is necessary but not sufficient: the
+    // Page token can still lack the Page-level task to actually post. So this
+    // states what was proven (scope granted) and what is not yet proven
+    // (Page-level publishing), left to the separately-authorised draft canary.
+    text: '✓ Meta 已授予发布权限（管理主页帖子）。能不能真正发到这个主页，还要靠之后单独授权的那次「试发草稿」来确认 —— 在那之前不代表已经能发。',
   },
   publish_not_granted: {
     ok: false,
@@ -239,6 +249,10 @@ const META_RESULT: Record<string, { ok: boolean; text: string }> = {
   verify_failed: {
     ok: false,
     text: '刚才没能跟 Meta 核实这次授权到底给了哪些权限，所以没有改动这个连接（避免记错状态）。请稍等一下再点一次。',
+  },
+  no_publish_target: {
+    ok: false,
+    text: '这个客户还没配好「发布到哪个 Facebook 主页」，所以没法发起发布授权。请先在「视频工厂配置」里把发布主页填好，再点「重新授权 Meta 发布权限」。',
   },
   denied: { ok: false, text: '授权取消了，没有任何改动。要接私信的话再点一次。' },
   no_pages: {
@@ -262,8 +276,20 @@ const META_RESULT: Record<string, { ok: boolean; text: string }> = {
  * 30 Kiteroa spent real money with its inbox unreachable. One consent here
  * stores the Page token for good.
  */
-function ConnectMeta({ clientId, pageId }: { clientId: string; pageId: string | null }) {
+function ConnectMeta({
+  clientId,
+  pageId,
+  publishTargetPageId,
+}: {
+  clientId: string
+  pageId: string | null
+  publishTargetPageId: string | null
+}) {
   const [outcome, setOutcome] = useState<string | null>(null)
+  // Publishing reauth targets factory_config.publish_target, so it is available
+  // whenever a valid Facebook publish target is configured — independent of the
+  // inbox binding (which may be unset or a different Page).
+  const canReauthPublish = Boolean(publishTargetPageId)
 
   // The callback hands its verdict back through the URL; read it once, then
   // strip it so a refresh does not replay a stale message.
@@ -308,11 +334,11 @@ function ConnectMeta({ clientId, pageId }: { clientId: string; pageId: string | 
         <a
           href={`/api/auth/facebook/connect?client_id=${clientId}&intent=publishing`}
           className={`inline-block rounded-lg border px-3 py-1.5 text-xs font-bold ${
-            pageId
+            canReauthPublish
               ? 'border-cyan-300 bg-white text-cyan-700 hover:bg-cyan-50'
               : 'pointer-events-none border-slate-200 bg-slate-50 text-slate-300'
           }`}
-          aria-disabled={!pageId}
+          aria-disabled={!canReauthPublish}
         >
           重新授权 Meta 发布权限
         </a>
@@ -320,8 +346,11 @@ function ConnectMeta({ clientId, pageId }: { clientId: string; pageId: string | 
 
       <p className="mt-2 text-xs leading-relaxed text-slate-400">
         {pageId
-          ? '用一个能在 Business Suite 里看到这个主页消息的账号授权一次，之后不用再管。要让系统能发内容到这个主页，用右边那个按钮，并在授权页勾上发帖权限。'
-          : '先选好主页并保存，才能连接。'}
+          ? '用一个能在 Business Suite 里看到这个主页消息的账号授权一次，之后不用再管。'
+          : '先选好主页并保存，才能连接私信。'}
+        {canReauthPublish
+          ? '「重新授权 Meta 发布权限」针对的是视频工厂配置里那个发布主页，授权时记得勾上发帖权限。'
+          : '要让系统能发内容，得先在「视频工厂配置」里配好发布主页，这个按钮才能点。'}
       </p>
     </div>
   )
