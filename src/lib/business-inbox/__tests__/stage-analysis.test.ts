@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/lib/supabase', () => ({ supabaseAdmin: { from: vi.fn() } }))
 
-import { resolveStageAnalysis } from '../stage-analysis'
+import { resolveStageAnalysis, StageAnalysisError } from '../stage-analysis'
 import { supabaseAdmin } from '@/lib/supabase'
 
 const mockFrom = vi.mocked(supabaseAdmin.from)
@@ -77,6 +77,24 @@ describe('resolveStageAnalysis', () => {
 
     expect(map.get('staged')).toMatchObject({ stage: 'quoted', stageLabel: '已报价' })
     expect(map.has('unstaged')).toBe(false)
+  })
+
+  it('throws (does not return empty) when the contacts query fails', async () => {
+    stubTables({
+      client_pipeline_stages: { data: [], error: null },
+      contacts: { data: null, error: { message: 'db down' } },
+    })
+
+    await expect(resolveStageAnalysis(CTS, ['c'])).rejects.toBeInstanceOf(StageAnalysisError)
+  })
+
+  it('throws when the stage-label query fails', async () => {
+    stubTables({
+      client_pipeline_stages: { data: null, error: { message: 'db down' } },
+      contacts: { data: [], error: null },
+    })
+
+    await expect(resolveStageAnalysis(CTS, ['c'])).rejects.toBeInstanceOf(StageAnalysisError)
   })
 
   it('falls back to the raw slug when the pipeline label was removed', async () => {

@@ -6,6 +6,8 @@
  *   2. 非法 id → 404 且不发查询；和「查不到 / 跨租户 / 非邮件」返回同一个 404。
  *   3. 取对话时同时绑 id + client_id + channel='email'；查不到不再查信。
  *   4. 信只 select 最小列，从不含 message_id / 附件字段。
+ *   5. 长线程按最新在前取、翻回正序显示 —— 最新邮件永远看得到，更旧的如实标 truncated。
+ *   6. stage 分析取数失败 → 500，不静默降级成「暂无分析」。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -46,9 +48,7 @@ function tableStub(result: TableResult) {
 
 function stubTables(map: Record<string, TableResult>) {
   const stubs: Record<string, ReturnType<typeof tableStub>> = {}
-  for (const [table, result] of Object.entries(map)) {
-    stubs[table] = tableStub(result)
-  }
+  for (const [table, result] of Object.entries(map)) stubs[table] = tableStub(result)
   mockFrom.mockImplementation((table: string) => {
     stubs[table] ??= tableStub({ data: [], error: null })
     return stubs[table] as never
@@ -74,6 +74,10 @@ function allow(clientId = CTS) {
     tier: 'paid_client',
     allowedClientId: clientId,
   } as never)
+}
+
+function msg(sentAt: string, over: Record<string, unknown> = {}) {
+  return { direction: 'inbound', sender_name: 'Chris', body: 'hi', sent_at: sentAt, ...over }
 }
 
 beforeEach(() => vi.clearAllMocks())
@@ -114,8 +118,6 @@ describe('business-inbox detail — no existence oracle', () => {
 
   it('returns 404 and never reads messages when the conversation is not visible to this client', async () => {
     allow()
-    // A real conversation that belongs to another tenant / another channel is
-    // filtered out by the query → maybeSingle → null → the same 404 as missing.
     stubTables({ conversations: { data: null, error: null } })
 
     const res = await GET(request(), params())
@@ -147,8 +149,9 @@ describe('business-inbox detail — content minimization', () => {
     expect(stubs.conversation_messages.eq).toHaveBeenCalledWith('conversation_id', CONV)
   })
 
-  it('returns the thread with minimal message fields and the stored analysis', async () => {
+  it('returns the thread oldest-first with minimal fields and the stored analysis', async () => {
     allow()
+    // DB 按最新在前返回；路由应翻成正序（旧→新）显示。
     stubTables({
       conversations: {
         data: { id: CONV, subject: 'Booking', participant_name: 'Chris', contact_id: 'contact-1' },
@@ -156,12 +159,8 @@ describe('business-inbox detail — content minimization', () => {
       },
       conversation_messages: {
         data: [
-          {
-            direction: 'inbound',
-            sender_name: 'Chris',
-            body: 'Hi, is the tour available?',
-            sent_at: '2026-08-01T00:00:00Z',
-          },
+          msg('2026-08-02T00:00:00Z', { body: 'newer' }),
+          msg('2026-08-01T00:00:00Z', { body: 'older' }),
         ],
         error: null,
       },
@@ -174,16 +173,44 @@ describe('business-inbox detail — content minimization', () => {
 
     const json = (await (await GET(request(), params())).json()) as {
       conversation: { id: string; subject: string | null }
-      messages: Array<Record<string, unknown>>
+      messages: Array<{ body: string | null }>
+      olderTruncated: boolean
       analysis: { stageLabel: string } | null
     }
 
     expect(json.conversation).toMatchObject({ id: CONV, subject: 'Booking' })
-    expect(json.messages).toHaveLength(1)
+    expect(json.messages.map((m) => m.body)).toEqual(['older', 'newer'])
     expect(Object.keys(json.messages[0]).sort()).toEqual(
       ['body', 'direction', 'senderName', 'sentAt'].sort(),
     )
+    expect(json.olderTruncated).toBe(false)
     expect(json.analysis).toMatchObject({ stageLabel: '已报价' })
+  })
+
+  it('keeps the newest mail visible and flags truncation on a very long thread (Codex P2)', async () => {
+    allow()
+    // 201 封（超过上限 200），DB 按最新在前返回。最新那封 sent_at 最大。
+    const rowsDesc = Array.from({ length: 201 }, (_, i) =>
+      msg(`2026-08-${String(201 - i).padStart(2, '0')}T00:00:00Z`, { body: `m${201 - i}` }),
+    )
+    stubTables({
+      conversations: {
+        data: { id: CONV, subject: null, participant_name: null, contact_id: null },
+        error: null,
+      },
+      conversation_messages: { data: rowsDesc, error: null },
+    })
+
+    const json = (await (await GET(request(), params())).json()) as {
+      messages: Array<{ body: string | null }>
+      olderTruncated: boolean
+    }
+
+    expect(json.olderTruncated).toBe(true)
+    expect(json.messages).toHaveLength(200)
+    // 显示的是正序里最后一封 = 最新的 m201；最旧的 m1 被截掉。
+    expect(json.messages[json.messages.length - 1].body).toBe('m201')
+    expect(json.messages.some((m) => m.body === 'm1')).toBe(false)
   })
 
   it('reports null analysis when the conversation has no linked contact', async () => {
@@ -199,5 +226,22 @@ describe('business-inbox detail — content minimization', () => {
     const json = (await (await GET(request(), params())).json()) as { analysis: unknown }
 
     expect(json.analysis).toBeNull()
+  })
+
+  it('returns 500 (not 暂无分析) when the stage query fails (Codex P2)', async () => {
+    allow()
+    stubTables({
+      conversations: {
+        data: { id: CONV, subject: null, participant_name: null, contact_id: 'contact-1' },
+        error: null,
+      },
+      conversation_messages: { data: [], error: null },
+      client_pipeline_stages: { data: [], error: null },
+      contacts: { data: null, error: { message: 'db down' } },
+    })
+
+    const res = await GET(request(), params())
+
+    expect(res.status).toBe(500)
   })
 })

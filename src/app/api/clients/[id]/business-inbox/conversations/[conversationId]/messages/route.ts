@@ -27,11 +27,24 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requirePaidClientAccess } from '@/lib/auth/client-access'
 import { supabaseAdmin } from '@/lib/supabase'
 import { isUuid } from '@/lib/validation-utils'
-import { resolveStageAnalysis, type StageAnalysis } from '@/lib/business-inbox/stage-analysis'
+import {
+  resolveStageAnalysis,
+  StageAnalysisError,
+  type StageAnalysis,
+} from '@/lib/business-inbox/stage-analysis'
 
 interface RouteParams {
   params: { id: string; conversationId: string }
 }
+
+/**
+ * 一条线程最多显示多少封（Codex PATCH1 P2/P4）。
+ *
+ * 按**最新在前**取这么多，再翻回正序显示 —— 最新的邮件永远看得到，不会被
+ * 早年的几百封信顶到看不见。窄分页，不是无限滚动框架；更旧的用 `olderTruncated`
+ * 如实标出来，不假装全给了。
+ */
+const MESSAGE_LIMIT = 200
 
 interface ConversationRow {
   id: string
@@ -58,6 +71,8 @@ export interface InboxMessage {
 export interface InboxConversationDetail {
   conversation: { id: string; subject: string | null; participantName: string | null }
   messages: InboxMessage[]
+  /** true = 这条线程更早的邮件没全给，只显示了最新的一批。 */
+  olderTruncated: boolean
   analysis: StageAnalysis | null
 }
 
@@ -98,30 +113,45 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
   }
   const conversation = conv as unknown as ConversationRow
 
+  // 按最新在前取 MESSAGE_LIMIT+1：多取一封只为判断「还有没有更旧的」。
   const { data: msgData, error: msgErr } = await supabaseAdmin
     .from('conversation_messages')
     .select('direction, sender_name, body, sent_at')
     .eq('conversation_id', conversation.id)
-    .order('sent_at', { ascending: true })
-    .limit(500)
+    .order('sent_at', { ascending: false })
+    .limit(MESSAGE_LIMIT + 1)
 
   if (msgErr) {
     return NextResponse.json({ error: 'Failed to load messages' }, { status: 500 })
   }
 
-  const messages: InboxMessage[] = ((msgData ?? []) as unknown as MessageRow[]).map((m) => ({
+  const rowsDesc = (msgData ?? []) as unknown as MessageRow[]
+  const olderTruncated = rowsDesc.length > MESSAGE_LIMIT
+  // 丢掉多取的那一封，翻回正序（旧→新）显示 —— 最新那封一定在里面。
+  const shown = (olderTruncated ? rowsDesc.slice(0, MESSAGE_LIMIT) : rowsDesc).slice().reverse()
+
+  const messages: InboxMessage[] = shown.map((m) => ({
     direction: m.direction,
     senderName: m.sender_name,
     body: m.body,
     sentAt: m.sent_at,
   }))
 
-  const analysis =
-    (conversation.contact_id
-      ? (await resolveStageAnalysis(clientId, [conversation.contact_id])).get(
+  let analysis: StageAnalysis | null = null
+  if (conversation.contact_id) {
+    // stage 分析取数失败要变成 500，不能静默降级成「暂无分析」。
+    try {
+      analysis =
+        (await resolveStageAnalysis(clientId, [conversation.contact_id])).get(
           conversation.contact_id,
-        )
-      : null) ?? null
+        ) ?? null
+    } catch (err) {
+      if (err instanceof StageAnalysisError) {
+        return NextResponse.json({ error: 'Failed to load analysis' }, { status: 500 })
+      }
+      throw err
+    }
+  }
 
   const payload: InboxConversationDetail = {
     conversation: {
@@ -130,6 +160,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
       participantName: conversation.participant_name,
     },
     messages,
+    olderTruncated,
     analysis,
   }
 

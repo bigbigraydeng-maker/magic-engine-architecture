@@ -12,6 +12,20 @@
 
 import { supabaseAdmin } from '@/lib/supabase'
 
+/**
+ * 取数失败专用错误。
+ *
+ * 关键：查询**失败**和「查成功但这个人本来就没阶段」是两回事。前者绝不能被
+ * 当成后者显示「暂无分析」—— 那会把一次数据库故障伪装成「客户没有分析」，
+ * 骗人。抛这个错，让路由据此返回 500，「暂无分析」只留给真的空。
+ */
+export class StageAnalysisError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'StageAnalysisError'
+  }
+}
+
 /** 一个联系人的已存 CRM 阶段分析。全部读自库，没有任何推断。 */
 export interface StageAnalysis {
   /** 稳定英文 slug（stage-infer 写的 `contacts.stage`）。 */
@@ -42,10 +56,12 @@ export async function resolveStageAnalysis(
 
   // 阶段 key → 中文标签。按客户取，是这个客户自己的流水线配置。
   const labelByKey = new Map<string, string>()
-  const { data: stageRows } = await supabaseAdmin
+  const { data: stageRows, error: stageErr } = await supabaseAdmin
     .from('client_pipeline_stages')
     .select('stage_key, label')
     .eq('client_id', clientId)
+  // 查失败要抛，不能静默当没标签 —— 否则所有人都会误显示成原始 slug。
+  if (stageErr) throw new StageAnalysisError('failed to load pipeline stage labels')
   for (const row of (stageRows ?? []) as Array<{ stage_key: string; label: string }>) {
     labelByKey.set(row.stage_key, row.label)
   }
@@ -53,11 +69,14 @@ export async function resolveStageAnalysis(
   // 联系人阶段。分块查，每块都按 client_id 收口 —— 不能只靠 id 猜同一个客户。
   for (let i = 0; i < unique.length; i += IN_CHUNK) {
     const chunk = unique.slice(i, i + IN_CHUNK)
-    const { data: rows } = await supabaseAdmin
+    const { data: rows, error: contactsErr } = await supabaseAdmin
       .from('contacts')
       .select('id, stage, stage_updated_at')
       .eq('client_id', clientId)
       .in('id', chunk)
+
+    // 查失败要抛：让路由返回 500，绝不把故障伪装成「这些人暂无分析」。
+    if (contactsErr) throw new StageAnalysisError('failed to load contact stages')
 
     for (const row of (rows ?? []) as Array<{
       id: string

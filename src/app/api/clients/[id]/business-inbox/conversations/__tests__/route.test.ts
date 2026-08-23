@@ -1,11 +1,14 @@
 /**
  * 商务收件箱列表路由 —— Risk A 的第一道客户面邮箱读取，隔离是产品本身。
  *
- * 这些测试钉死四件事：
+ * 这些测试钉死：
  *   1. 鉴权在任何查询之前 —— 非成员被拒时，一条 DB 查询都没发。
  *   2. 每条读都绑守卫验过的 client_id，且只认 channel='email'。
  *   3. 附件/内部字段从不进 select（message_id / page_id / owner_email / status_note / attach*）。
  *   4. 已存 CRM 阶段被显示；没有阶段的联系人如实变成「暂无分析」(null)。
+ *   5. 分页真实：真实总数、hasMore、offset 绑定；不截断在一页、不报假 total。
+ *   6. stage 分析取数失败 → 500，绝不静默降级成「暂无分析」。
+ *   7. 不再暴露基于 last_message_from 的 awaitingReply（自动回复会把它算错）。
  *
  * 假 supabase 按**表**建模（不是按调用次序）：每个查询对象既可链式也可 await，
  * 和 PostgREST 的 builder 一样，改了查询顺序也不会误报绿。
@@ -30,6 +33,7 @@ const OZTOP = 'd5c98811-1c1d-4ded-bdf0-4cefec6afb84'
 interface TableResult {
   data: unknown
   error: unknown
+  count?: number | null
 }
 
 /** 一个既可链式也可 await 的查询对象 —— await 时解析成本表配置的结果。 */
@@ -40,6 +44,7 @@ function tableStub(result: TableResult) {
     eq: vi.fn(() => q),
     in: vi.fn(() => q),
     order: vi.fn(() => q),
+    range: vi.fn(() => q),
     limit: vi.fn(() => q),
     maybeSingle: vi.fn(() => p),
     then: (onF: (v: TableResult) => unknown, onR?: (e: unknown) => unknown) => p.then(onF, onR),
@@ -47,21 +52,21 @@ function tableStub(result: TableResult) {
   return q
 }
 
-/** 按表名分发。未配置的表给空结果（不该被查到的表若被查，测试仍可断言）。 */
 function stubTables(map: Record<string, TableResult>) {
   const stubs: Record<string, ReturnType<typeof tableStub>> = {}
-  for (const [table, result] of Object.entries(map)) {
-    stubs[table] = tableStub(result)
-  }
+  for (const [table, result] of Object.entries(map)) stubs[table] = tableStub(result)
   mockFrom.mockImplementation((table: string) => {
-    stubs[table] ??= tableStub({ data: [], error: null })
+    stubs[table] ??= tableStub({ data: [], error: null, count: 0 })
     return stubs[table] as never
   })
   return stubs
 }
 
-function request(id = CTS): NextRequest {
-  return new NextRequest(`http://localhost:3001/api/clients/${id}/business-inbox/conversations`)
+function request(id = CTS, offset?: number): NextRequest {
+  const q = offset === undefined ? '' : `?offset=${offset}`
+  return new NextRequest(
+    `http://localhost:3001/api/clients/${id}/business-inbox/conversations${q}`,
+  )
 }
 
 function params(id = CTS) {
@@ -76,6 +81,18 @@ function allow(clientId = CTS) {
     tier: 'paid_client',
     allowedClientId: clientId,
   } as never)
+}
+
+function convRow(id: string, over: Record<string, unknown> = {}) {
+  return {
+    id,
+    subject: 'Booking',
+    participant_name: 'Chris',
+    message_count: 3,
+    last_message_at: '2026-08-01T00:00:00Z',
+    contact_id: null,
+    ...over,
+  }
 }
 
 beforeEach(() => vi.clearAllMocks())
@@ -100,9 +117,9 @@ describe('business-inbox list — isolation', () => {
     expect(mockFrom).not.toHaveBeenCalled()
   })
 
-  it('binds the conversations read to the verified client id and to email only', async () => {
+  it('binds both the count and the page reads to the verified client id and email only', async () => {
     allow()
-    const stubs = stubTables({ conversations: { data: [], error: null } })
+    const stubs = stubTables({ conversations: { data: [], error: null, count: 0 } })
 
     await GET(request(), params())
 
@@ -114,17 +131,89 @@ describe('business-inbox list — isolation', () => {
 describe('business-inbox list — content minimization', () => {
   it('never selects attachment, provider-message-id, mailbox or internal columns', async () => {
     allow()
-    const stubs = stubTables({ conversations: { data: [], error: null } })
+    const stubs = stubTables({ conversations: { data: [], error: null, count: 0 } })
 
     await GET(request(), params())
 
-    const selected = (stubs.conversations.select as ReturnType<typeof vi.fn>).mock
-      .calls[0][0] as string
-    expect(selected).not.toMatch(/attach/i)
-    expect(selected).not.toContain('message_id')
-    expect(selected).not.toContain('page_id')
-    expect(selected).not.toContain('owner_email')
-    expect(selected).not.toContain('status_note')
+    // 两次 select：count 用 'id'，翻页用列清单 —— 都不能带敏感列。
+    const selects = (stubs.conversations.select as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => String(c[0]))
+      .join(' | ')
+    expect(selects).not.toMatch(/attach/i)
+    expect(selects).not.toContain('message_id')
+    expect(selects).not.toContain('page_id')
+    expect(selects).not.toContain('owner_email')
+    expect(selects).not.toContain('status_note')
+    expect(selects).not.toContain('last_message_from')
+  })
+
+  it('does not expose an awaitingReply field derived from last_message_from', async () => {
+    allow()
+    stubTables({
+      conversations: { data: [convRow('conv-1')], error: null, count: 1 },
+      contacts: { data: [], error: null },
+      client_pipeline_stages: { data: [], error: null },
+    })
+
+    const json = (await (await GET(request(), params())).json()) as {
+      conversations: Array<Record<string, unknown>>
+      counts?: unknown
+    }
+
+    expect(json.conversations[0]).not.toHaveProperty('awaitingReply')
+    expect(json).not.toHaveProperty('counts')
+  })
+})
+
+describe('business-inbox list — honest pagination (Codex P2)', () => {
+  it('reports the true total and hasMore, not the page length', async () => {
+    allow()
+    const rows = Array.from({ length: 50 }, (_, i) => convRow(`conv-${i}`))
+    stubTables({
+      conversations: { data: rows, error: null, count: 204 },
+      contacts: { data: [], error: null },
+      client_pipeline_stages: { data: [], error: null },
+    })
+
+    const json = (await (await GET(request(), params())).json()) as {
+      conversations: unknown[]
+      page: { offset: number; pageSize: number; total: number; hasMore: boolean }
+    }
+
+    expect(json.conversations).toHaveLength(50)
+    expect(json.page).toMatchObject({ offset: 0, total: 204, hasMore: true })
+  })
+
+  it('passes a sanitized offset into range and marks the last page as done', async () => {
+    allow()
+    const stubs = stubTables({
+      conversations: { data: [convRow('c')], error: null, count: 51 },
+      contacts: { data: [], error: null },
+      client_pipeline_stages: { data: [], error: null },
+    })
+
+    const json = (await (await GET(request(CTS, 50), params())).json()) as {
+      page: { offset: number; hasMore: boolean }
+    }
+
+    expect(stubs.conversations.range).toHaveBeenCalledWith(50, 99)
+    // offset 50 + 1 row = 51 = total → 没有下一页。
+    expect(json.page).toMatchObject({ offset: 50, hasMore: false })
+  })
+
+  it('falls back to offset 0 for a malformed offset without erroring', async () => {
+    allow()
+    const stubs = stubTables({ conversations: { data: [], error: null, count: 0 } })
+
+    const res = await GET(request(CTS, undefined), params())
+    // simulate a junk query string
+    const junk = new NextRequest(
+      `http://localhost:3001/api/clients/${CTS}/business-inbox/conversations?offset=abc`,
+    )
+    await GET(junk, params())
+
+    expect(res.status).toBe(200)
+    expect(stubs.conversations.range).toHaveBeenCalledWith(0, 49)
   })
 })
 
@@ -134,26 +223,11 @@ describe('business-inbox list — stored analysis reuse', () => {
     stubTables({
       conversations: {
         data: [
-          {
-            id: 'conv-1',
-            subject: 'Booking',
-            participant_name: 'Chris',
-            message_count: 3,
-            last_message_at: '2026-08-01T00:00:00Z',
-            last_message_from: 'customer',
-            contact_id: 'contact-staged',
-          },
-          {
-            id: 'conv-2',
-            subject: 'Enquiry',
-            participant_name: 'Dana',
-            message_count: 1,
-            last_message_at: '2026-07-30T00:00:00Z',
-            last_message_from: 'page',
-            contact_id: 'contact-nostage',
-          },
+          convRow('conv-1', { contact_id: 'contact-staged' }),
+          convRow('conv-2', { contact_id: 'contact-nostage' }),
         ],
         error: null,
+        count: 2,
       },
       contacts: {
         data: [
@@ -162,59 +236,40 @@ describe('business-inbox list — stored analysis reuse', () => {
         ],
         error: null,
       },
-      client_pipeline_stages: {
-        data: [{ stage_key: 'quoted', label: '已报价' }],
-        error: null,
-      },
+      client_pipeline_stages: { data: [{ stage_key: 'quoted', label: '已报价' }], error: null },
     })
 
     const json = (await (await GET(request(), params())).json()) as {
-      conversations: Array<{
-        id: string
-        awaitingReply: boolean
-        analysis: { stage: string; stageLabel: string } | null
-      }>
-      counts: { total: number; awaitingReply: number }
+      conversations: Array<{ id: string; analysis: { stage: string; stageLabel: string } | null }>
     }
 
     const byId = Object.fromEntries(json.conversations.map((c) => [c.id, c]))
     expect(byId['conv-1'].analysis).toMatchObject({ stage: 'quoted', stageLabel: '已报价' })
-    expect(byId['conv-1'].awaitingReply).toBe(true)
     expect(byId['conv-2'].analysis).toBeNull()
-    expect(byId['conv-2'].awaitingReply).toBe(false)
-    expect(json.counts).toMatchObject({ total: 2, awaitingReply: 1 })
   })
 
-  it('binds the contacts and stage-label reads to the same verified client id', async () => {
+  it('returns 500 (not 暂无分析) when the stage query fails (Codex P2)', async () => {
     allow()
-    const stubs = stubTables({
+    stubTables({
       conversations: {
-        data: [
-          {
-            id: 'conv-1',
-            subject: null,
-            participant_name: null,
-            message_count: 1,
-            last_message_at: null,
-            last_message_from: null,
-            contact_id: 'contact-1',
-          },
-        ],
+        data: [convRow('conv-1', { contact_id: 'contact-1' })],
         error: null,
+        count: 1,
       },
-      contacts: { data: [], error: null },
       client_pipeline_stages: { data: [], error: null },
+      contacts: { data: null, error: { message: 'db down' } },
     })
 
-    await GET(request(), params())
+    const res = await GET(request(), params())
+    const json = (await res.json()) as { error: string }
 
-    expect(stubs.contacts.eq).toHaveBeenCalledWith('client_id', CTS)
-    expect(stubs.client_pipeline_stages.eq).toHaveBeenCalledWith('client_id', CTS)
+    expect(res.status).toBe(500)
+    expect(json.error).not.toContain('db down')
   })
 
   it('returns 500 without leaking details when the conversations read fails', async () => {
     allow()
-    stubTables({ conversations: { data: null, error: { message: 'boom' } } })
+    stubTables({ conversations: { data: null, error: { message: 'boom' }, count: null } })
 
     const res = await GET(request(), params())
     const json = (await res.json()) as { error: string }

@@ -115,6 +115,12 @@ export default function BusinessInboxDetailPage() {
             </p>
           </div>
 
+          {data.olderTruncated && (
+            <p className="mt-4 rounded-lg border border-me-stone bg-me-ivory px-3 py-2 text-center text-[11px] font-semibold text-me-charcoal/45">
+              这条线程太长，只显示最新的一批邮件 · 更早的请到邮箱里看
+            </p>
+          )}
+
           <div className="mt-4 space-y-3">
             {data.messages.length === 0 && (
               <p className="py-10 text-center text-sm text-me-charcoal/40">这条对话没有可显示的邮件。</p>
