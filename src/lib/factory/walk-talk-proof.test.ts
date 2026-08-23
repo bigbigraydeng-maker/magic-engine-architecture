@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   parseScriptLines,
+  stripMarks,
+  parseRuns,
   buildCaptionCues,
   validateCaptionCues,
   buildProofFfmpegArgs,
@@ -8,10 +10,34 @@ import {
   type CaptionCue,
 } from './walk-talk-proof'
 
+const cue = (index: number, start: number, end: number, text: string): CaptionCue => ({
+  index,
+  start,
+  end,
+  text,
+  runs: [{ t: text, hi: false }],
+})
+
 describe('parseScriptLines', () => {
-  it('每一非空行一条，剥掉 markdown 结构行与引用符', () => {
-    const raw = ['# 标题', '', '第一句。', '> 第二句。', '---', '| 表格 |', '```', '第三句。', '   '].join('\n')
-    expect(parseScriptLines(raw)).toEqual(['第一句。', '第二句。', '第三句。'])
+  it('每一非空行一条，剥掉 markdown 结构行、保留 ** 高亮标记', () => {
+    const raw = ['# 标题', '', '第一句。', '> 有 **106 条**。', '---', '| 表格 |', '```', '   '].join('\n')
+    expect(parseScriptLines(raw)).toEqual(['第一句。', '有 **106 条**。'])
+  })
+})
+
+describe('stripMarks / parseRuns', () => {
+  it('stripMarks 去掉 **', () => {
+    expect(stripMarks('有 **106 条** 客资')).toBe('有 106 条 客资')
+  })
+  it('parseRuns 拆出高亮段与普通段', () => {
+    expect(parseRuns('看 **GA4** 就够')).toEqual([
+      { t: '看 ', hi: false },
+      { t: 'GA4', hi: true },
+      { t: ' 就够', hi: false },
+    ])
+  })
+  it('parseRuns 无标记时整行普通', () => {
+    expect(parseRuns('没有高亮')).toEqual([{ t: '没有高亮', hi: false }])
   })
 })
 
@@ -22,9 +48,13 @@ describe('buildCaptionCues', () => {
     expect(cues[cues.length - 1].end).toBeCloseTo(100, 6)
     for (let i = 1; i < cues.length; i++) expect(cues[i].start).toBeCloseTo(cues[i - 1].end, 6)
   })
-  it('时长按字数加权：长句占更多时间', () => {
-    const [a, b] = buildCaptionCues(['短', '这是一句比较长的话'], 100)
-    expect(b.end - b.start).toBeGreaterThan(a.end - a.start)
+  it('计时权重用去标记后的长度（** 不计入时长）', () => {
+    const [a, b] = buildCaptionCues(['**a**', 'abc'], 100)
+    // 'a'(1) : 'abc'(3) → 25s : 75s
+    expect(a.end - a.start).toBeCloseTo(25, 4)
+    expect(b.end - b.start).toBeCloseTo(75, 4)
+    expect(a.runs).toEqual([{ t: 'a', hi: true }])
+    expect(a.text).toBe('a')
   })
   it('空稿 / 非法时长 fail-closed', () => {
     expect(() => buildCaptionCues([], 100)).toThrow()
@@ -39,22 +69,15 @@ describe('validateCaptionCues', () => {
     expect(() => validateCaptionCues(buildCaptionCues(['a', 'bb', 'ccc'], total), total)).not.toThrow()
   })
   it('end<=start / 越界 / 重叠 都抛', () => {
-    expect(() => validateCaptionCues([{ index: 0, start: 5, end: 5, text: 'x' }], total)).toThrow()
-    expect(() => validateCaptionCues([{ index: 0, start: 0, end: total + 5, text: 'x' }], total)).toThrow()
-    const overlap: CaptionCue[] = [
-      { index: 0, start: 0, end: 30, text: 'a' },
-      { index: 1, start: 10, end: 40, text: 'b' },
-    ]
-    expect(() => validateCaptionCues(overlap, total)).toThrow()
+    expect(() => validateCaptionCues([cue(0, 5, 5, 'x')], total)).toThrow()
+    expect(() => validateCaptionCues([cue(0, 0, total + 5, 'x')], total)).toThrow()
+    expect(() => validateCaptionCues([cue(0, 0, 30, 'a'), cue(1, 10, 40, 'b')], total)).toThrow()
     expect(() => validateCaptionCues([], total)).toThrow()
   })
 })
 
 describe('buildProofFfmpegArgs', () => {
-  const cues: CaptionCue[] = [
-    { index: 0, start: 0, end: 12.5, text: 'a' },
-    { index: 1, start: 12.5, end: 30, text: 'b' },
-  ]
+  const cues: CaptionCue[] = [cue(0, 0, 12.5, 'a'), cue(1, 12.5, 30, 'b')]
   const args = buildProofFfmpegArgs({
     rawPath: '/x/raw.MP4',
     capPngPaths: ['/x/cap0.png', '/x/cap1.png'],
@@ -70,8 +93,8 @@ describe('buildProofFfmpegArgs', () => {
     const fc = args[args.indexOf('-filter_complex') + 1]
     expect(fc).toContain('crop=1080:1920')
     expect((fc.match(/overlay=0:0:enable=/g) || []).length).toBe(2)
-    expect(fc).toContain("between(t,0.000,12.500)")
-    expect(fc).toContain("between(t,12.500,30.000)")
+    expect(fc).toContain('between(t,0.000,12.500)')
+    expect(fc).toContain('between(t,12.500,30.000)')
   })
   it('最终画面标签映射到最后一条 overlay 输出', () => {
     const mapIdx = args.indexOf('-map')

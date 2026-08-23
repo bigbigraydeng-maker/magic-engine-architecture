@@ -5,7 +5,8 @@
 //   · 不碰 Supabase / 数据库 / 上传 / provider；纯本地。
 //   · 字幕时间由稿子按字数**确定性均摊**得出（无 ASR / 无 Whisper / 无付费）——近似对轴，
 //     精确逐字对轴留作后续手工道。
-// 只暴露「命令构造 / 时间校验 / 缺输入 fail-closed」三块纯逻辑供单测，真跑不进单测。
+//   · 关键词高亮：稿子里用 **双星号** 标记高亮词（客户数据），本模块只认标记、保持通用。
+// 只暴露「命令构造 / 时间校验 / 缺输入 fail-closed」等纯逻辑供单测，真跑不进单测。
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -16,23 +17,29 @@ import { join } from 'node:path'
 
 const exec = promisify(execFile)
 
-// 画幅与安全区（复用 lecture-render / render-assemble 的竖屏与字幕位约定）。
+// 画幅与安全区（复用 lecture-render / render-assemble 的竖屏约定）。
 export const W = 1080
 export const H = 1920
-// 字幕落下三分之一：字块**底边**贴 SUB_BOTTOM，向上生长，整体压在安全区内（关键内容 y≤1248）。
-export const SUB_BOTTOM = 1240
+// 字幕放**顶部**：低机位自拍脸偏低，字幕压到嘴；顶部天空区最干净。字块**顶边**贴 CAPTION_TOP。
+export const CAPTION_TOP = 300
 export const FONT_SIZE = 72
 export const STROKE = 7
 export const SIDE_MARGIN = 70 // 字幕左右留白，折行按可用宽度 W-2*margin
+
+export interface CaptionRun {
+  t: string
+  hi: boolean // 是否高亮（黄色）
+}
 
 export interface CaptionCue {
   index: number
   start: number
   end: number
-  text: string
+  text: string // 去标记后的纯文本（计时权重/展示用）
+  runs: CaptionRun[] // 带高亮标记的分段
 }
 
-/** 从口播稿抽字幕条：每一非空行一条；剥掉 markdown 结构行（#、---、|、``` 、引用符 >）。 */
+/** 从口播稿抽字幕行：每一非空行一条；剥掉 markdown 结构行（#、---、|、``` 、引用符 >）。保留 ** 高亮标记。 */
 export function parseScriptLines(raw: string): string[] {
   return raw
     .split(/\r?\n/)
@@ -41,16 +48,37 @@ export function parseScriptLines(raw: string): string[] {
     .filter((l) => !/^#/.test(l) && !/^-{3,}$/.test(l) && !l.startsWith('|') && !l.startsWith('```'))
 }
 
+/** 去掉高亮标记，得纯展示文本。 */
+export function stripMarks(line: string): string {
+  return line.replace(/\*\*/g, '')
+}
+
+/** 把一行拆成分段：**...** 内为高亮段，其余为普通段。 */
+export function parseRuns(line: string): CaptionRun[] {
+  const runs: CaptionRun[] = []
+  const re = /\*\*([^*]+)\*\*/g
+  let last = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(line)) !== null) {
+    if (m.index > last) runs.push({ t: line.slice(last, m.index), hi: false })
+    runs.push({ t: m[1], hi: true })
+    last = re.lastIndex
+  }
+  if (last < line.length) runs.push({ t: line.slice(last), hi: false })
+  return runs.length > 0 ? runs : [{ t: line, hi: false }]
+}
+
 /**
  * 按字数把每条字幕**无缝**均摊到 [0, totalDurationSec]：确定性、无 provider。
- * 权重 = 该条字符数（至少 1）；start/end 由累计权重比例换算，保证 start0=0、end_last=total、单调。
+ * 权重 = 去标记后字符数（至少 1）；start/end 由累计权重比例换算，保证 start0=0、end_last=total、单调。
  */
 export function buildCaptionCues(lines: string[], totalDurationSec: number): CaptionCue[] {
   if (lines.length === 0) throw new Error('字幕为空：口播稿没有可用文本行')
   if (!Number.isFinite(totalDurationSec) || totalDurationSec <= 0) {
     throw new Error(`视频时长非法：${totalDurationSec}`)
   }
-  const weights = lines.map((t) => Math.max(t.length, 1))
+  const plain = lines.map(stripMarks)
+  const weights = plain.map((t) => Math.max(t.length, 1))
   const totalWeight = weights.reduce((a, b) => a + b, 0)
   const cues: CaptionCue[] = []
   let cum = 0
@@ -58,7 +86,7 @@ export function buildCaptionCues(lines: string[], totalDurationSec: number): Cap
     const start = (cum / totalWeight) * totalDurationSec
     cum += weights[i]
     const end = (cum / totalWeight) * totalDurationSec
-    cues.push({ index: i, start, end, text: lines[i] })
+    cues.push({ index: i, start, end, text: plain[i], runs: parseRuns(lines[i]) })
   }
   return cues
 }
@@ -88,45 +116,54 @@ export async function assertInputReadable(path: string, label: string): Promise<
 }
 
 // PIL 画一批全屏透明字幕 PNG：复用 render-assemble 的「大白字 + 黑描边 + 居中」配方，
-// 加：按可用宽度自动折行（ASCII 单词不拆）、多行字块底边贴 SUB_BOTTOM。仅需 Pillow。
+// 加：① 按可用宽度自动折行（ASCII 单词不拆、高亮词整体不拆）；② 高亮段画黄色；
+// ③ 字块顶边贴 CAPTION_TOP（顶部天空区，避开脸）。仅需 Pillow。
 export const CAPTION_PY = `
 import sys, json, re
 from PIL import Image, ImageDraw, ImageFont
-font_path, out_dir, cues_json, font_size, stroke, sub_bottom, side_margin = (
+font_path, out_dir, cues_json, font_size, stroke, cap_top, side_margin = (
     sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6]), int(sys.argv[7]))
 W, H = 1080, 1920
 usable = W - 2 * side_margin
+WHITE = (255, 255, 255, 255); HI = (255, 214, 0, 255); OUTLINE = (0, 0, 0, 235)
 font = ImageFont.truetype(font_path, font_size)
 scratch = ImageDraw.Draw(Image.new("RGBA", (W, H)))
-def tok(s):  # ASCII 字母数字连成词不拆，其余每字符一 token
-    return re.findall(r"[A-Za-z0-9]+|[^A-Za-z0-9]", s)
-def width(s):
-    b = scratch.textbbox((0, 0), s, font=font, stroke_width=stroke)
+def wadv(s):  # 排版宽度（不含描边），用于居中与步进，保持一致避免右漂
+    b = scratch.textbbox((0, 0), s, font=font, stroke_width=0)
     return b[2] - b[0]
-def wrap(text):
-    lines, cur = [], ""
-    for t in tok(text):
-        cand = cur + t
-        if cur and width(cand) > usable:
-            lines.append(cur); cur = t.lstrip() if t == " " else t
+def atoms(runs):  # 高亮段整体一个 atom；普通段拆成 ASCII 词 / 单字符供折行
+    out = []
+    for text, hi in runs:
+        if hi:
+            out.append((text, True))
         else:
-            cur = cand
-    if cur.strip():
+            for t in re.findall(r"[A-Za-z0-9]+|[^A-Za-z0-9]", text):
+                out.append((t, False))
+    return out
+def wrap(a):
+    lines, cur = [], []
+    for t, hi in a:
+        cand = "".join(x for x, _ in cur) + t
+        if cur and wadv(cand) > usable and t != " ":
+            lines.append(cur); cur = [] if t == " " else [(t, hi)]
+        else:
+            if not cur and t == " ":
+                continue
+            cur.append((t, hi))
+    if cur:
         lines.append(cur)
-    return lines or [text]
+    return lines or [[("", False)]]
 cues = json.loads(cues_json)
-for i, txt in enumerate(cues):
+asc, desc = font.getmetrics()
+lh = asc + desc + stroke * 2 + 14
+for i, runs in enumerate(cues):
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0)); d = ImageDraw.Draw(img)
-    if txt:
-        wrapped = wrap(txt)
-        asc, desc = font.getmetrics()
-        lh = asc + desc + stroke * 2 + 12
-        top = sub_bottom - lh * len(wrapped)
-        for j, ln in enumerate(wrapped):
-            b = d.textbbox((0, 0), ln, font=font, stroke_width=stroke)
-            x = (W - (b[2] - b[0])) // 2 - b[0]
-            d.text((x, top + j * lh), ln, font=font, fill=(255, 255, 255, 255),
-                   stroke_width=stroke, stroke_fill=(0, 0, 0, 235))
+    for j, line in enumerate(wrap(atoms(runs))):
+        lw = wadv("".join(x for x, _ in line))
+        x = (W - lw) // 2; y = cap_top + j * lh
+        for t, hi in line:
+            d.text((x, y), t, font=font, fill=(HI if hi else WHITE), stroke_width=stroke, stroke_fill=OUTLINE)
+            x += wadv(t)
     img.save(f"{out_dir}/cap{i}.png")
 `
 
@@ -202,9 +239,10 @@ export async function renderWalkTalkProof(opts: {
   try {
     const pyFile = join(dir, 'caps.py')
     await writeFile(pyFile, CAPTION_PY)
+    const cuesArg = JSON.stringify(cues.map((c) => c.runs.map((r) => [r.t, r.hi])))
     await exec(opts.pythonBin, [
-      pyFile, font, dir, JSON.stringify(cues.map((c) => c.text)),
-      String(FONT_SIZE), String(STROKE), String(SUB_BOTTOM), String(SIDE_MARGIN),
+      pyFile, font, dir, cuesArg,
+      String(FONT_SIZE), String(STROKE), String(CAPTION_TOP), String(SIDE_MARGIN),
     ])
     const capPngPaths = cues.map((_, i) => join(dir, `cap${i}.png`))
     const args = buildProofFfmpegArgs({ rawPath: opts.rawPath, capPngPaths, cues, outPath: opts.outPath })
