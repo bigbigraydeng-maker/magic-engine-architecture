@@ -80,6 +80,50 @@ function parseOffset(req: NextRequest): number {
   return Number.isInteger(n) && n >= 0 ? n : 0
 }
 
+/** 一页邮件对话 + 真实总数。两条读都按 client_id + channel='email' 收口。 */
+type PagedConversations =
+  | { ok: true; rows: ConversationRow[]; total: number }
+  | { ok: false }
+
+async function fetchEmailConversationPage(
+  clientId: string,
+  offset: number,
+): Promise<PagedConversations> {
+  // 真实总数：单独一条 count 查询，同样按 client_id + email 收口。
+  const { count, error: countErr } = await supabaseAdmin
+    .from('conversations')
+    .select('id', { count: 'exact', head: true })
+    .eq('client_id', clientId)
+    .eq('channel', 'email')
+  if (countErr) return { ok: false }
+
+  const { data, error } = await supabaseAdmin
+    .from('conversations')
+    .select('id, subject, participant_name, message_count, last_message_at, contact_id')
+    .eq('client_id', clientId)
+    .eq('channel', 'email')
+    .order('last_message_at', { ascending: false })
+    .range(offset, offset + PAGE_SIZE - 1)
+  if (error) return { ok: false }
+
+  return { ok: true, rows: (data ?? []) as unknown as ConversationRow[], total: count ?? 0 }
+}
+
+/** 把库行 + 已解析的阶段 Map 拼成对外的对话列表。纯函数。 */
+function mapConversations(
+  rows: ConversationRow[],
+  analysisByContact: Map<string, StageAnalysis>,
+): InboxConversation[] {
+  return rows.map((r) => ({
+    id: r.id,
+    subject: r.subject,
+    participantName: r.participant_name,
+    messageCount: r.message_count ?? 0,
+    lastMessageAt: r.last_message_at,
+    analysis: (r.contact_id ? analysisByContact.get(r.contact_id) : null) ?? null,
+  }))
+}
+
 export async function GET(req: NextRequest, { params }: RouteParams): Promise<NextResponse> {
   const clientId = params.id
 
@@ -91,32 +135,12 @@ export async function GET(req: NextRequest, { params }: RouteParams): Promise<Ne
 
   const offset = parseOffset(req)
 
-  // 真实总数：单独一条 count 查询，同样按 client_id + email 收口。
-  const { count, error: countErr } = await supabaseAdmin
-    .from('conversations')
-    .select('id', { count: 'exact', head: true })
-    .eq('client_id', clientId)
-    .eq('channel', 'email')
-
-  if (countErr) {
+  const paged = await fetchEmailConversationPage(clientId, offset)
+  if (!paged.ok) {
     return NextResponse.json({ error: 'Failed to load inbox' }, { status: 500 })
   }
 
-  const { data, error } = await supabaseAdmin
-    .from('conversations')
-    .select('id, subject, participant_name, message_count, last_message_at, contact_id')
-    .eq('client_id', clientId)
-    .eq('channel', 'email')
-    .order('last_message_at', { ascending: false })
-    .range(offset, offset + PAGE_SIZE - 1)
-
-  if (error) {
-    return NextResponse.json({ error: 'Failed to load inbox' }, { status: 500 })
-  }
-
-  const rows = (data ?? []) as unknown as ConversationRow[]
-
-  const contactIds = rows
+  const contactIds = paged.rows
     .map((r) => r.contact_id)
     .filter((v): v is string => typeof v === 'string')
 
@@ -131,25 +155,15 @@ export async function GET(req: NextRequest, { params }: RouteParams): Promise<Ne
     throw err
   }
 
-  const conversations: InboxConversation[] = rows.map((r) => ({
-    id: r.id,
-    subject: r.subject,
-    participantName: r.participant_name,
-    messageCount: r.message_count ?? 0,
-    lastMessageAt: r.last_message_at,
-    analysis: (r.contact_id ? analysisByContact.get(r.contact_id) : null) ?? null,
-  }))
-
-  const total = count ?? 0
   const page: InboxPage = {
     offset,
     pageSize: PAGE_SIZE,
-    total,
-    hasMore: offset + rows.length < total,
+    total: paged.total,
+    hasMore: offset + paged.rows.length < paged.total,
   }
 
   return NextResponse.json({
-    conversations,
+    conversations: mapConversations(paged.rows, analysisByContact),
     page,
     viewerEmail: access.user.email ?? null,
   })

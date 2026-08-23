@@ -81,6 +81,82 @@ function notFound(): NextResponse {
   return NextResponse.json({ error: 'Not found' }, { status: 404 })
 }
 
+/** 取这条对话本身，绑 id + client_id + channel='email'。跨租户/非邮件/不存在都判 notfound。 */
+type ConversationFetch =
+  | { status: 'ok'; conv: ConversationRow }
+  | { status: 'error' }
+  | { status: 'notfound' }
+
+async function fetchEmailConversation(
+  clientId: string,
+  conversationId: string,
+): Promise<ConversationFetch> {
+  const { data, error } = await supabaseAdmin
+    .from('conversations')
+    .select('id, subject, participant_name, contact_id')
+    .eq('id', conversationId)
+    .eq('client_id', clientId)
+    .eq('channel', 'email')
+    .maybeSingle()
+
+  if (error) return { status: 'error' }
+  // 属于别的客户 / 非邮件渠道 / 不存在 → 都是 null → 同一个 notfound，无预言机。
+  if (!data) return { status: 'notfound' }
+  return { status: 'ok', conv: data as unknown as ConversationRow }
+}
+
+/** 按最新在前取 MESSAGE_LIMIT+1 封 —— 多取一封只为判断还有没有更旧的。 */
+async function fetchLatestMessageRows(
+  conversationId: string,
+): Promise<{ ok: true; rowsDesc: MessageRow[] } | { ok: false }> {
+  const { data, error } = await supabaseAdmin
+    .from('conversation_messages')
+    .select('direction, sender_name, body, sent_at')
+    .eq('conversation_id', conversationId)
+    .order('sent_at', { ascending: false })
+    .limit(MESSAGE_LIMIT + 1)
+
+  if (error) return { ok: false }
+  return { ok: true, rowsDesc: (data ?? []) as unknown as MessageRow[] }
+}
+
+/** 把「最新在前」的库行翻成「旧→新」显示，并如实标出是否截断。纯函数。 */
+function toLatestWindow(rowsDesc: MessageRow[]): {
+  messages: InboxMessage[]
+  olderTruncated: boolean
+} {
+  const olderTruncated = rowsDesc.length > MESSAGE_LIMIT
+  // 丢掉多取的那一封，翻回正序（旧→新）—— 最新那封一定在里面。
+  const shown = (olderTruncated ? rowsDesc.slice(0, MESSAGE_LIMIT) : rowsDesc).slice().reverse()
+  return {
+    olderTruncated,
+    messages: shown.map((m) => ({
+      direction: m.direction,
+      senderName: m.sender_name,
+      body: m.body,
+      sentAt: m.sent_at,
+    })),
+  }
+}
+
+/**
+ * 取这个人的已存阶段分析；取数失败返回 { ok:false } 让路由变 500，
+ * 不静默降级成「暂无分析」。没有关联联系人就是 ok + null（真的没有）。
+ */
+async function resolveAnalysisSafe(
+  clientId: string,
+  contactId: string | null,
+): Promise<{ ok: true; analysis: StageAnalysis | null } | { ok: false }> {
+  if (!contactId) return { ok: true, analysis: null }
+  try {
+    const map = await resolveStageAnalysis(clientId, [contactId])
+    return { ok: true, analysis: map.get(contactId) ?? null }
+  } catch (err) {
+    if (err instanceof StageAnalysisError) return { ok: false }
+    throw err
+  }
+}
+
 export async function GET(_req: NextRequest, { params }: RouteParams): Promise<NextResponse> {
   const clientId = params.id
   const conversationId = params.conversationId
@@ -92,65 +168,24 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
   }
 
   // 非法 id 直接 404，不进库 —— 跟「查不到」返回一模一样，不暴露任何存在性。
-  if (!isUuid(conversationId)) {
-    return notFound()
-  }
+  if (!isUuid(conversationId)) return notFound()
 
-  const { data: conv, error: convErr } = await supabaseAdmin
-    .from('conversations')
-    .select('id, subject, participant_name, contact_id')
-    .eq('id', conversationId)
-    .eq('client_id', clientId)
-    .eq('channel', 'email')
-    .maybeSingle()
-
-  if (convErr) {
+  const convRes = await fetchEmailConversation(clientId, conversationId)
+  if (convRes.status === 'error') {
     return NextResponse.json({ error: 'Failed to load conversation' }, { status: 500 })
   }
-  // 属于别的客户 / 非邮件渠道 / 不存在 → 都是 null → 同一个 404，无预言机。
-  if (!conv) {
-    return notFound()
-  }
-  const conversation = conv as unknown as ConversationRow
+  if (convRes.status === 'notfound') return notFound()
+  const conversation = convRes.conv
 
-  // 按最新在前取 MESSAGE_LIMIT+1：多取一封只为判断「还有没有更旧的」。
-  const { data: msgData, error: msgErr } = await supabaseAdmin
-    .from('conversation_messages')
-    .select('direction, sender_name, body, sent_at')
-    .eq('conversation_id', conversation.id)
-    .order('sent_at', { ascending: false })
-    .limit(MESSAGE_LIMIT + 1)
-
-  if (msgErr) {
+  const msgRes = await fetchLatestMessageRows(conversation.id)
+  if (!msgRes.ok) {
     return NextResponse.json({ error: 'Failed to load messages' }, { status: 500 })
   }
+  const { messages, olderTruncated } = toLatestWindow(msgRes.rowsDesc)
 
-  const rowsDesc = (msgData ?? []) as unknown as MessageRow[]
-  const olderTruncated = rowsDesc.length > MESSAGE_LIMIT
-  // 丢掉多取的那一封，翻回正序（旧→新）显示 —— 最新那封一定在里面。
-  const shown = (olderTruncated ? rowsDesc.slice(0, MESSAGE_LIMIT) : rowsDesc).slice().reverse()
-
-  const messages: InboxMessage[] = shown.map((m) => ({
-    direction: m.direction,
-    senderName: m.sender_name,
-    body: m.body,
-    sentAt: m.sent_at,
-  }))
-
-  let analysis: StageAnalysis | null = null
-  if (conversation.contact_id) {
-    // stage 分析取数失败要变成 500，不能静默降级成「暂无分析」。
-    try {
-      analysis =
-        (await resolveStageAnalysis(clientId, [conversation.contact_id])).get(
-          conversation.contact_id,
-        ) ?? null
-    } catch (err) {
-      if (err instanceof StageAnalysisError) {
-        return NextResponse.json({ error: 'Failed to load analysis' }, { status: 500 })
-      }
-      throw err
-    }
+  const ana = await resolveAnalysisSafe(clientId, conversation.contact_id)
+  if (!ana.ok) {
+    return NextResponse.json({ error: 'Failed to load analysis' }, { status: 500 })
   }
 
   const payload: InboxConversationDetail = {
@@ -161,8 +196,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
     },
     messages,
     olderTruncated,
-    analysis,
+    analysis: ana.analysis,
   }
-
   return NextResponse.json(payload)
 }
