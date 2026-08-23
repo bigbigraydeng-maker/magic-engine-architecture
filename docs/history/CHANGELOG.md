@@ -5,6 +5,22 @@
 
 ---
 
+### 2026-08-23（AI Visibility Tracker OpenAI 引擎模型退役静默失效修复，PR [#1167](https://github.com/bigbigraydeng-maker/magic-engine/pull/1167)）
+
+**发生了什么**：闽商潜在客户批量诊断任务中意外发现，`src/lib/ai-tracker/runners/openai.ts` 写死的 `gpt-4o-search-preview`（AI Visibility Tracker 每周一 cron `ai-tracker-weekly` 的 OpenAI 侧模型）被 OpenAI 于 2026-07-23 整族退役，现场 canary 实测全系列变体（含带日期快照与滚动别名）一律 404。查生产 Supabase：openai 引擎最后一次成功记录停在 2026-08-17（上周一），2026-08-17 之后到发现时为止零记录——说明本周一（08-24 01:00 UTC）的 cron 还没跑过，是抢在下一次触发前修复的，**未真正命中生产**。cron 路由是 fire-and-forget（202 立即返回）+ orchestrator 对单次 runner 失败有 try/catch 兜底，healthchecks.io 只在 curl 拿到 202 时 ping 成功，不会因为下游任务失败报警——是本条铁律要求专门核实、单独排查的一类静默失效。
+
+**受影响客户**：核实后是 `client_status='active'` 且有启用 tracker 问句的 5 个：CTS Tours NZ / Roman HU / Oztop / Magic Lab / Magic Lab Class。（有 14 个客户有 `ai_visibility_queries.enabled=true` 记录，但另外 9 个是 `prospect` 或 `archived` 状态，cron 不会拉起，不受影响。）
+
+**修复**：`SEARCH_MODEL` 换成 `gpt-5-search-api`——现场 canary 验证（直连 OpenAI + 经生产实际的 Cloudflare AI Gateway 路径）确认可用，且返回的 `annotations[].url_citation` 结构与既有 `extractCitations()` 解析逻辑完全兼容，零解析代码改动。定价常量按 developers.openai.com 官方定价页同步更新（input $2.5/M → $1.25/M，output 维持 $10/M）。**未采信** WebFetch 摘要一度提到的候选替代模型 `gpt-5.6-terra`——现场 canary 实测该模型不支持 `web_search_options`（返回 400），确认是误导信息。
+
+**排查范围**：`runners/claude.ts`（Anthropic 侧，P7.1.13 限流下默认关闭）、`parser.ts`/`industry-ai-visibility/collector.ts`/`market-intel/summarize.ts` 用的 `gpt-4o-mini`、`geo-baseline/transport-openai.ts`（Roman GEO baseline v1，已冻结，`modelVersion` 来自 PM 冻结的外部 manifest，代码零硬编码）——canary/代码核查后确认均不受影响，未一并改动。
+
+**质量闸**：`npm run type-check`（改动文件零新增错误）· `npm run build` 通过 · `npx vitest run` 47 文件 786 用例全绿 · 子牙（架构）+ 魏征（挑刺，独立重跑 canary 与 Supabase 核实）两轮复审，均 APPROVE；魏征复审发现并修正了 PR 描述里"14 个客户受影响"的错误统计（应为 5 个 active）。PM `go merge` 后合并。
+
+**Reuse Statement**：复用既有 `getOpenAIClient()`（Cloudflare AI Gateway 工厂）、既有 `extractCitations()` 解析逻辑、既有 runner 契约（`RunnerInput`/`RunnerOutput`）——响应结构兼容，零新增能力，只换了模型名常量与单价常量。无客户/行业专属逻辑写入 shared runtime。
+
+---
+
 ### 2026-08-20（Magic Insight 上线 —— PM 每日全球 AI / 数字营销资讯雷达，PR [#1112](https://github.com/bigbigraydeng-maker/magic-engine/pull/1112)）
 
 **做了什么**：新增 `market-intel-daily` cron，每天从 12 个已验证的英文 RSS 信源（TechCrunch AI、VentureBeat AI、Search Engine Land/Journal、Marketing Dive、AdExchanger、Digiday、Social Media Today、HubSpot、PPC.org、OpenAI News 等）抓取 6 个类目（AI 创业 / 营销 / Meta 广告 / Google 广告 / TikTok 广告 / 大模型 Token 定价）的条目，AI 摘要成中文并做**事实核对**（摘要里的专有名词/数字必须能在原文摘录里找到，核对不过不进邮件、留表供人工翻查），跨信源去重，按类目健康度监控，每天发一封邮件到 `hello@`。四张表 `market_intel_*`（sources/items/digests/daily_notes）全部 `service_role`-only RLS，已 apply 到生产并独立验证。
