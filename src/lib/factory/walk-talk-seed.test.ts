@@ -182,7 +182,7 @@ describe('seedWalkTalkSrt 原子预留（PATCH2 fix1）', () => {
   })
 })
 
-describe('reserveOutputFile 失败清理按 inode 归属（FINAL DATA-LOSS PATCH）', () => {
+describe('reserveOutputFile 失败清理只关句柄、绝不删路径（PROVEN DATA-LOSS 最终修法）', () => {
   let dir: string
   const exists = async (p: string) => access(p).then(() => true).catch(() => false)
   beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'srt-reserve-')) })
@@ -195,31 +195,37 @@ describe('reserveOutputFile 失败清理按 inode 归属（FINAL DATA-LOSS PATCH
     expect(await readFile(p, 'utf8')).toBe('RAY 手改内容') // 原内容不变
   })
 
-  it('原预留仍在：discard 只删本次预留的文件', async () => {
+  it('失败清理绝不删除输出路径：discard 后占位仍在（交人工检查）', async () => {
     const p = join(dir, 'out.srt')
     const r = await reserveOutputFile(p)
     expect(await exists(p)).toBe(true)
     await r.discard()
-    expect(await exists(p)).toBe(false)
+    expect(await exists(p)).toBe(true) // 只关句柄、不删——残留可见占位
   })
 
-  it('失败前路径被另一进程替换：discard 保留替换物（不删刚保存的人工 SRT）', async () => {
+  it('失败前路径被另一进程替换：discard 保留替换物 byte-for-byte（不删刚保存的人工 SRT）', async () => {
     const p = join(dir, 'out.srt')
-    const r = await reserveOutputFile(p) // 本次预留（空文件，inode A）
-    // 模拟并发：另一进程 unlink 我们的预留，再在同路径写入人工 SRT（inode B）
+    const r = await reserveOutputFile(p) // 本次预留（空占位）
+    // 模拟并发：另一进程 unlink 我们的预留，再在同路径写入人工 SRT
     await unlink(p)
     await writeFile(p, 'RAY 刚保存的人工 SRT')
-    await r.discard() // 应识别 inode 不同 → 不删
+    await r.discard() // 只关句柄、不 stat/不 rm → 绝不触碰路径
     expect(await exists(p)).toBe(true)
     expect(await readFile(p, 'utf8')).toBe('RAY 刚保存的人工 SRT') // 替换物完好
   })
 
-  it('失败前路径已被移走：discard 不抛、无可删', async () => {
+  it('失败前路径已被移走：discard 不抛（只关句柄）', async () => {
     const p = join(dir, 'out.srt')
     const r = await reserveOutputFile(p)
     await unlink(p) // 路径已不在
     await expect(r.discard()).resolves.toBeUndefined()
-    expect(await exists(p)).toBe(false)
+  })
+
+  it('owned 句柄正确关闭：discard 后再 write 因句柄已关而拒', async () => {
+    const p = join(dir, 'out.srt')
+    const r = await reserveOutputFile(p)
+    await r.discard()
+    await expect(r.write('x')).rejects.toBeTruthy() // 句柄已关
   })
 
   it('commit 保留文件，写入内容可读', async () => {

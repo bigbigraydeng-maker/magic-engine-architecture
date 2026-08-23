@@ -14,7 +14,7 @@
  *   <outSrt> 必须是**尚不存在**的新路径。可选 WALKTALK_MAXCHARS（默认 14）、WALKTALK_CLEAN=0 关闭语气水词清洗（默认清洗）。
  */
 
-import { readFile, mkdtemp, rm } from 'node:fs/promises'
+import { readFile, mkdtemp, rm, access } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -67,7 +67,20 @@ async function main(): Promise<void> {
     },
   }
 
-  const res = await seedWalkTalkSrt({ rawPath, outSrtPath: outSrt, apiKey, deps })
+  let res
+  try {
+    res = await seedWalkTalkSrt({ rawPath, outSrtPath: outSrt, apiKey, deps })
+  } catch (e) {
+    // 失败清理只关句柄、不删路径（避免误删被替换的人工 SRT）——可能残留一个空占位，需人工处理。
+    if (await pathExists(outSrt)) {
+      // eslint-disable-next-line no-console
+      console.error(
+        `⚠️ 输出路径可能残留一个未完成的占位文件，需人工检查/删除后再重跑：${outSrt}\n` +
+          `   （本工具不自动删除，以免误删被其他进程替换写入的人工 SRT。）`,
+      )
+    }
+    throw e
+  }
   const hasClaude = /claude/i.test(res.srt)
   // eslint-disable-next-line no-console
   console.log(
@@ -75,6 +88,15 @@ async function main(): Promise<void> {
       `   字幕 ${res.cues.length} 条 · provider 调用 ${res.providerCalls} 次（whisper-1）· 估算成本 $${res.estimatedCostUsd.toFixed(4)}\n` +
       `   下一步：请 Ray 手改文字${hasClaude ? '（⚠️ 检测到 `Claude`，须改为 `Strategy Engine`）' : ''}，再跑 render-walk-talk-from-srt.ts 重出（零 provider）`,
   )
+}
+
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await access(p)
+    return true
+  } catch {
+    return false
+  }
 }
 
 main().catch((e) => {
