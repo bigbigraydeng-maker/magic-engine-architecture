@@ -11,6 +11,7 @@ import {
   splitByLength,
   applyHighlights,
   segmentsToCaptionCues,
+  cleanFiller,
   type CaptionCue,
 } from './walk-talk-proof'
 
@@ -115,9 +116,23 @@ describe('ASR 模式纯逻辑', () => {
   it('extractHighlightTerms 从 ** 收集去重词表', () => {
     expect(extractHighlightTerms('看 **GA4**，再看 **GA4** 和 **Submit**')).toEqual(['GA4', 'Submit'])
   })
-  it('splitByLength 按标点切、超长再硬切', () => {
+  it('splitByLength 按标点切、超长再切', () => {
     expect(splitByLength('第一句。第二句。', 20)).toEqual(['第一句。', '第二句。'])
     expect(splitByLength('一二三四五六', 3)).toEqual(['一二三', '四五六'])
+  })
+  it('splitByLength 不拦腰切断英文/数字单词', () => {
+    const pieces = splitByLength('然后点了Submit好了', 4)
+    expect(pieces).toContain('Submit')
+    expect(pieces.every((p) => !/Subm(?!it)|ubmit/.test(p) || p.includes('Submit'))).toBe(true)
+  })
+  it('cleanFiller 去语气水词，但不动实义的「这个」', () => {
+    expect(cleanFiller('刚刚跟这个一个客户开完会啊')).toBe('刚刚跟一个客户开完会')
+    expect(cleanFiller('这个功能很方便')).toBe('这个功能很方便')
+    expect(cleanFiller('嗯，我们才告诉 GA4')).toBe('我们才告诉 GA4')
+  })
+  it('segmentsToCaptionCues clean=true 时字幕不含语气词', () => {
+    const cues = segmentsToCaptionCues([{ start: 0, end: 3, text: '开完会啊聊到 GA4' }], 3, 20, ['GA4'], true)
+    expect(cues.map((c) => c.text).join('')).not.toContain('啊')
   })
   it('applyHighlights 最长优先标高亮', () => {
     expect(applyHighlights('拿到真正的 Lead 了', ['Lead', '真正的 Lead'])).toEqual([

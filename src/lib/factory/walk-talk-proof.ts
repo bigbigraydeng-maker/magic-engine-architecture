@@ -253,17 +253,40 @@ export function extractHighlightTerms(raw: string): string[] {
   return Array.from(terms)
 }
 
-/** 把一条转录文本按标点/长度切成短句大字；不超过 maxChars。 */
+// 语气水词：作为独立字符出现即视为噪声，清洗时删掉。保守清单，不动实义词。
+export const FILLER_PARTICLES = ['啊', '呃', '嗯', '唉', '哦', '噢', '诶', '呀']
+
+/** 清洗口播噪声：去语气水词 + 去「这个/那个」当口头禅（后面直接跟数词或又一个这个/那个）+ 折叠重复标点。 */
+export function cleanFiller(text: string): string {
+  let s = text
+  for (const f of FILLER_PARTICLES) s = s.split(f).join('')
+  s = s.replace(/(这|那)个(?=[一二两三四五六七八九十几这那])/g, '')
+  s = s.replace(/\s{2,}/g, ' ').replace(/，{2,}/g, '，').replace(/^[，、\s]+/, '').trim()
+  return s
+}
+
+/**
+ * 把一条转录文本按标点/长度切成短句大字；不超过 maxChars。
+ * 关键：英文/数字单词整体不切（按 token 打包），避免 Submit / GA4 被拦腰断开。
+ */
 export function splitByLength(text: string, maxChars: number): string[] {
   const out: string[] = []
   for (const sent of text.split(/(?<=[。！？；，、])/)) {
     const s = sent.trim()
     if (!s) continue
-    if (s.length <= maxChars) {
-      out.push(s)
-    } else {
-      for (let i = 0; i < s.length; i += maxChars) out.push(s.slice(i, i + maxChars))
+    const tokens = s.match(/[A-Za-z0-9]+|[^A-Za-z0-9]/g) || [s]
+    let cur = ''
+    for (const t of tokens) {
+      if (cur && cur.length + t.length > maxChars) {
+        out.push(cur)
+        cur = t === ' ' ? '' : t
+      } else if (cur === '' && t === ' ') {
+        continue
+      } else {
+        cur += t
+      }
     }
+    if (cur.trim()) out.push(cur)
   }
   return out.length > 0 ? out : [text]
 }
@@ -297,13 +320,16 @@ export function segmentsToCaptionCues(
   totalDurationSec: number,
   maxChars: number,
   keywords: string[],
+  clean = false,
 ): CaptionCue[] {
   if (segments.length === 0) throw new Error('听写分段为空')
   const cues: CaptionCue[] = []
   let idx = 0
   let prevEnd = 0
   for (const seg of segments) {
-    const pieces = splitByLength(seg.text, maxChars)
+    const segText = clean ? cleanFiller(seg.text) : seg.text
+    if (!segText.trim()) continue
+    const pieces = splitByLength(segText, maxChars)
     const span = Math.max(seg.end - seg.start, 0.001)
     const totalLen = pieces.reduce((a, p) => a + Math.max(p.length, 1), 0)
     let cum = 0
@@ -349,6 +375,7 @@ export async function renderWalkTalkProof(opts: {
   mode?: 'script' | 'asr'
   apiKey?: string
   maxCharsPerCue?: number
+  cleanFiller?: boolean // asr 模式：去语气水词/口头禅（默认关）
 }): Promise<RenderProofResult> {
   const mode = opts.mode ?? 'script'
   const font = opts.fontPath || process.env.FACTORY_CJK_FONT || '/System/Library/Fonts/Supplemental/Arial Unicode.ttf'
@@ -367,7 +394,7 @@ export async function renderWalkTalkProof(opts: {
       const audio = join(dir, 'audio.mp3')
       await extractAudioForAsr(opts.rawPath, audio)
       const segments = await transcribeAudio(audio, opts.apiKey)
-      cues = segmentsToCaptionCues(segments, durationSec, opts.maxCharsPerCue ?? 14, extractHighlightTerms(raw))
+      cues = segmentsToCaptionCues(segments, durationSec, opts.maxCharsPerCue ?? 14, extractHighlightTerms(raw), opts.cleanFiller ?? false)
     } else {
       cues = buildCaptionCues(parseScriptLines(raw), durationSec)
     }

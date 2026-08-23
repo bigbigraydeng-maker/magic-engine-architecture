@@ -33,6 +33,7 @@ async function main(): Promise<void> {
     pythonBin,
     mode,
     apiKey: process.env.OPENAI_API_KEY,
+    cleanFiller: process.env.WALKTALK_CLEAN !== '0', // 默认清洗语气水词；设 WALKTALK_CLEAN=0 关闭
     readScript: (p) => readFile(p, 'utf8'),
   })
   // eslint-disable-next-line no-console
