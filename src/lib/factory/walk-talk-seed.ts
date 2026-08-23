@@ -7,6 +7,7 @@
 //           竞态下也不会盖掉已存在文件。
 // 依赖全部注入，provider/IO 可在单测里替身；本模块自身零联网、零付费。
 
+import { open, stat, rm } from 'node:fs/promises'
 import type { WhisperSegment, CaptionCue } from './walk-talk-proof'
 
 /** whisper-1 计费费率（唯一、文档化）：US$0.006 / 分钟，按秒计。改费率=改这一个常量。 */
@@ -43,6 +44,33 @@ export interface OutputReservation {
   write: (data: string) => Promise<void>
   commit: () => Promise<void>
   discard: () => Promise<void>
+}
+
+/**
+ * 真实 fs 的原子输出预留：`open(path, 'wx')` 独占创建（已存在/并发抢先即 EEXIST 抛），
+ * 记录本次创建文件的 inode 身份。discard 只在路径**仍指向本次拥有的同一 inode**时删除——
+ * 若路径已被 unlink 或被另一进程原子替换成新文件（例如刚保存的人工 SRT），**绝不删替换物**（防数据丢失）。
+ * 不引入锁服务/队列/DB/文件事务框架；只用已打开句柄 + 路径 inode 元数据做最窄的归属判定。
+ */
+export async function reserveOutputFile(path: string): Promise<OutputReservation> {
+  const handle = await open(path, 'wx')
+  const owned = await handle.stat() // 本次创建文件的 dev+ino
+  return {
+    write: (data) => handle.writeFile(data, 'utf8'),
+    commit: () => handle.close(),
+    discard: async () => {
+      await handle.close().catch(() => {})
+      try {
+        const cur = await stat(path)
+        if (cur.dev === owned.dev && cur.ino === owned.ino) {
+          await rm(path, { force: true }).catch(() => {}) // 仍是本次预留的那个文件 → 删
+        }
+        // inode 不同 = 路径已被替换成别的文件 → 保留替换物，绝不误删
+      } catch {
+        // ENOENT：路径已不在（被移走/删除）→ 无可删，也不误删
+      }
+    },
+  }
 }
 
 /** seed 所需的外部能力（真跑注入 ffprobe/ffmpeg/whisper/fs；单测注入替身）。 */

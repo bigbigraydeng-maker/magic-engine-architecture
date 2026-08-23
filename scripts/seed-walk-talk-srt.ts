@@ -14,7 +14,7 @@
  *   <outSrt> 必须是**尚不存在**的新路径。可选 WALKTALK_MAXCHARS（默认 14）、WALKTALK_CLEAN=0 关闭语气水词清洗（默认清洗）。
  */
 
-import { readFile, mkdtemp, rm, open } from 'node:fs/promises'
+import { readFile, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -27,7 +27,7 @@ import {
   extractHighlightTerms,
 } from '../src/lib/factory/walk-talk-proof'
 import { cuesToSrt } from '../src/lib/factory/caption-srt'
-import { seedWalkTalkSrt, type SeedDeps } from '../src/lib/factory/walk-talk-seed'
+import { seedWalkTalkSrt, reserveOutputFile, type SeedDeps } from '../src/lib/factory/walk-talk-seed'
 
 async function main(): Promise<void> {
   const [rawPath, scriptPath, outSrt] = process.argv.slice(2)
@@ -47,18 +47,8 @@ async function main(): Promise<void> {
 
   let tmpDir: string | undefined
   const deps: SeedDeps = {
-    // 原子预留：fs open 'wx' 独占创建目标；已存在/并发抢先即 EEXIST 抛（早于抽音频/付费）。
-    reserveOutput: async (p) => {
-      const handle = await open(p, 'wx') // 原子独占创建
-      return {
-        write: (data) => handle.writeFile(data, 'utf8'),
-        commit: () => handle.close(),
-        discard: async () => {
-          await handle.close().catch(() => {})
-          await rm(p, { force: true }).catch(() => {}) // 只删本次预留的文件
-        },
-      }
-    },
+    // 原子预留：open 'wx' 独占创建目标（EEXIST 前置拒），失败清理按 inode 归属，绝不误删被替换的人工 SRT。
+    reserveOutput: reserveOutputFile,
     probeDuration: ffprobeDuration,
     extractAudio: extractAudioForAsr,
     transcribe: transcribeAudio,

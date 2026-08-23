@@ -1,8 +1,12 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mkdtemp, rm, writeFile, readFile, unlink, access } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   estimateWhisperCostUsd,
   assertWithinSeedBudget,
   seedWalkTalkSrt,
+  reserveOutputFile,
   SEED_CAP_USD,
   WHISPER_USD_PER_MIN,
   type SeedDeps,
@@ -175,5 +179,54 @@ describe('seedWalkTalkSrt 原子预留（PATCH2 fix1）', () => {
     expect(deps.spies.transcribe).not.toHaveBeenCalled() // extract 就崩了
     expect(myReservation.spies.discard).toHaveBeenCalledTimes(1)
     expect(myReservation.spies.commit).not.toHaveBeenCalled()
+  })
+})
+
+describe('reserveOutputFile 失败清理按 inode 归属（FINAL DATA-LOSS PATCH）', () => {
+  let dir: string
+  const exists = async (p: string) => access(p).then(() => true).catch(() => false)
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'srt-reserve-')) })
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }).catch(() => {}) })
+
+  it('目标已存在：open wx EEXIST，绝不触碰既有文件', async () => {
+    const p = join(dir, 'ray-edited.srt')
+    await writeFile(p, 'RAY 手改内容')
+    await expect(reserveOutputFile(p)).rejects.toMatchObject({ code: 'EEXIST' })
+    expect(await readFile(p, 'utf8')).toBe('RAY 手改内容') // 原内容不变
+  })
+
+  it('原预留仍在：discard 只删本次预留的文件', async () => {
+    const p = join(dir, 'out.srt')
+    const r = await reserveOutputFile(p)
+    expect(await exists(p)).toBe(true)
+    await r.discard()
+    expect(await exists(p)).toBe(false)
+  })
+
+  it('失败前路径被另一进程替换：discard 保留替换物（不删刚保存的人工 SRT）', async () => {
+    const p = join(dir, 'out.srt')
+    const r = await reserveOutputFile(p) // 本次预留（空文件，inode A）
+    // 模拟并发：另一进程 unlink 我们的预留，再在同路径写入人工 SRT（inode B）
+    await unlink(p)
+    await writeFile(p, 'RAY 刚保存的人工 SRT')
+    await r.discard() // 应识别 inode 不同 → 不删
+    expect(await exists(p)).toBe(true)
+    expect(await readFile(p, 'utf8')).toBe('RAY 刚保存的人工 SRT') // 替换物完好
+  })
+
+  it('失败前路径已被移走：discard 不抛、无可删', async () => {
+    const p = join(dir, 'out.srt')
+    const r = await reserveOutputFile(p)
+    await unlink(p) // 路径已不在
+    await expect(r.discard()).resolves.toBeUndefined()
+    expect(await exists(p)).toBe(false)
+  })
+
+  it('commit 保留文件，写入内容可读', async () => {
+    const p = join(dir, 'out.srt')
+    const r = await reserveOutputFile(p)
+    await r.write('字幕内容')
+    await r.commit()
+    expect(await readFile(p, 'utf8')).toBe('字幕内容')
   })
 })
