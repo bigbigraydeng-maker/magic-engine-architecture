@@ -17,11 +17,10 @@ import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import type { InboxConversationDetail } from '@/app/api/clients/[id]/business-inbox/conversations/[conversationId]/messages/route'
 import { isPaidOnly, PaidOnlyError } from '@/lib/auth/paid-only-handler'
-import { triggerFeatureLock } from '@/components/auth/FeatureLockGate'
 import { ConversationThread, ErrorBox } from '../_components/bits'
 
-/** 弹既有付费解锁弹窗时挂的功能名。 */
-const FEATURE = '商务收件箱'
+/** paid_only 时页面上给的明确中文提示（与列表页一致）。 */
+const PAID_MESSAGE = '商务收件箱是付费功能 · 请联系 Magic Lab 开通后查看。'
 
 interface DetailResponse extends InboxConversationDetail {
   error?: string
@@ -31,11 +30,9 @@ async function fetchDetail(clientId: string, conversationId: string): Promise<De
   const res = await fetch(
     `/api/clients/${clientId}/business-inbox/conversations/${conversationId}/messages`,
   )
-  // self_serve → 403 paid_only：弹既有解锁弹窗，与列表页同一契约。
-  if (await isPaidOnly(res)) {
-    triggerFeatureLock(FEATURE)
-    throw new PaidOnlyError(FEATURE)
-  }
+  // self_serve → 403 paid_only。与列表页同一契约：不靠弹窗（这些路由无监听器），
+  // 直接在页面上给明确付费提示（见 catch）。
+  if (await isPaidOnly(res)) throw new PaidOnlyError('商务收件箱')
   const json = (await res.json()) as DetailResponse
   if (!res.ok) {
     throw new Error(res.status === 404 ? '找不到这条对话。' : (json.error ?? '加载失败'))
@@ -54,8 +51,8 @@ function useConversationDetail(clientId: string, conversationId: string) {
     try {
       setData(await fetchDetail(clientId, conversationId))
     } catch (e) {
-      // paid_only 已弹解锁弹窗，这里不再叠一个报错块。
-      if (e instanceof PaidOnlyError) return
+      // paid_only：页面上给明确付费提示（不弹窗——这些路由没有弹窗监听器）。
+      if (e instanceof PaidOnlyError) { setError(PAID_MESSAGE); return }
       setError(e instanceof Error ? e.message : '加载失败，检查网络后再试。')
     } finally {
       setLoading(false)

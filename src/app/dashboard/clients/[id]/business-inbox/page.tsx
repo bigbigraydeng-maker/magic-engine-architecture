@@ -22,11 +22,10 @@ import type {
   InboxPage,
 } from '@/app/api/clients/[id]/business-inbox/conversations/route'
 import { isPaidOnly, PaidOnlyError } from '@/lib/auth/paid-only-handler'
-import { triggerFeatureLock } from '@/components/auth/FeatureLockGate'
 import { ConversationRow, EmptyInbox, ErrorBox } from './_components/bits'
 
-/** 弹既有付费解锁弹窗时挂的功能名。 */
-const FEATURE = '商务收件箱'
+/** paid_only 时页面上给的明确中文提示。 */
+const PAID_MESSAGE = '商务收件箱是付费功能 · 请联系 Magic Lab 开通后查看。'
 
 interface InboxResponse {
   conversations: InboxConversation[]
@@ -37,11 +36,10 @@ interface InboxResponse {
 
 async function fetchInboxPage(clientId: string, offset: number): Promise<InboxResponse> {
   const res = await fetch(`/api/clients/${clientId}/business-inbox/conversations?offset=${offset}`)
-  // self_serve → 403 paid_only：弹既有解锁弹窗，别把英文报错扔进通用错误块。
-  if (await isPaidOnly(res)) {
-    triggerFeatureLock(FEATURE)
-    throw new PaidOnlyError(FEATURE)
-  }
+  // self_serve → 403 paid_only。注意 triggerFeatureLock 的事件监听器只在
+  // FeatureLockGate 里，而 dashboard-shell 挂的是受控的 FeatureLockModal（不听事件），
+  // 这些路由上事件没有消费者。所以这里不靠弹窗，直接在页面上给明确付费提示（见 catch）。
+  if (await isPaidOnly(res)) throw new PaidOnlyError('商务收件箱')
   const json = (await res.json()) as InboxResponse
   if (!res.ok) throw new Error(json.error ?? '加载失败')
   return json
@@ -64,8 +62,8 @@ function useInbox(clientId: string) {
       setPage(json.page)
       setViewerEmail(json.viewerEmail)
     } catch (e) {
-      // paid_only 已弹解锁弹窗，这里不再叠一个报错块。
-      if (e instanceof PaidOnlyError) return
+      // paid_only：页面上给明确付费提示（不弹窗——这些路由没有弹窗监听器）。
+      if (e instanceof PaidOnlyError) { setError(PAID_MESSAGE); return }
       setError(e instanceof Error ? e.message : '加载失败，检查网络后再试。')
     } finally {
       setLoading(false)
@@ -81,7 +79,7 @@ function useInbox(clientId: string) {
       setConversations((prev) => [...prev, ...json.conversations])
       setPage(json.page)
     } catch (e) {
-      if (e instanceof PaidOnlyError) return
+      if (e instanceof PaidOnlyError) { setError(PAID_MESSAGE); return }
       setError(e instanceof Error ? e.message : '加载失败，检查网络后再试。')
     } finally {
       setLoadingMore(false)
