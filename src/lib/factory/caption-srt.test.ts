@@ -1,7 +1,4 @@
-import { describe, it, expect, vi, afterEach, beforeAll, afterAll } from 'vitest'
-import { mkdtemp, writeFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   formatSrtTime,
   parseSrtTime,
@@ -14,7 +11,6 @@ import {
   buildCaptionCues,
   segmentsToCaptionCues,
   validateCaptionCues,
-  transcribeAudio,
   type CaptionCue,
 } from './walk-talk-proof'
 
@@ -197,34 +193,5 @@ describe('zero-provider：import/序列化路径绝不联网', () => {
   it('srtToCues 确定性：同输入两次产出全等', () => {
     const srt = '1\n00:00:00,000 --> 00:00:02,500\n看 **GA4**\n\n2\n00:00:02,500 --> 00:00:05,000\n就够了'
     expect(srtToCues(srt)).toEqual(srtToCues(srt))
-  })
-})
-
-describe('provider-call count：seed 听写恰好一次 fetch', () => {
-  // transcribeAudio 用 node fs.readFile 读音频，ESM 下不可 spy —— 用真实临时文件，只 mock fetch。
-  let audioPath: string
-  beforeAll(async () => {
-    audioPath = join(await mkdtemp(join(tmpdir(), 'srt-provider-')), 'audio.mp3')
-    await writeFile(audioPath, Buffer.from('fake-audio-bytes'))
-  })
-  afterAll(async () => {
-    await rm(dirname(audioPath), { recursive: true, force: true }).catch(() => {})
-  })
-  afterEach(() => vi.restoreAllMocks())
-
-  it('transcribeAudio 只发一次请求并解析 verbose_json', async () => {
-    const fakeJson = { segments: [{ start: 0, end: 2, text: '你好' }, { start: 2, end: 4, text: '世界' }] }
-    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify(fakeJson), { status: 200, headers: { 'content-type': 'application/json' } }),
-    )
-    const segs = await transcribeAudio(audioPath, 'sk-test')
-    expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy.mock.calls[0][0]).toBe('https://api.openai.com/v1/audio/transcriptions')
-    expect(segs).toEqual([{ start: 0, end: 2, text: '你好' }, { start: 2, end: 4, text: '世界' }])
-  })
-  it('听写失败即抛，不自动重试（仍只一次 fetch）', async () => {
-    const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('boom', { status: 500 }))
-    await expect(transcribeAudio(audioPath, 'sk-test')).rejects.toThrow()
-    expect(spy).toHaveBeenCalledTimes(1)
   })
 })

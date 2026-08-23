@@ -245,15 +245,12 @@ export interface WhisperSegment {
 }
 
 /** 抽单声道 16k 低码音轨（Whisper 限 25MB，视频直传会爆）——同 lecture-render extractAudio。 */
-export async function extractAudioForAsr(videoFile: string, outMp3: string): Promise<void> {
+async function extractAudioForAsr(videoFile: string, outMp3: string): Promise<void> {
   await exec('ffmpeg', ['-y', '-loglevel', 'error', '-i', videoFile, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', outMp3])
 }
 
-/**
- * OpenAI Whisper 听写，返回带时间戳分段——同 lecture-render whisperTranscribe 配方。
- * 恰好一次 provider 调用（一次 fetch）；失败即抛，调用方不得自行重试（#1162 seed 预算铁律）。
- */
-export async function transcribeAudio(audioFile: string, apiKey: string): Promise<WhisperSegment[]> {
+/** OpenAI Whisper 听写，返回带时间戳分段——同 lecture-render whisperTranscribe 配方。 */
+async function transcribeAudio(audioFile: string, apiKey: string): Promise<WhisperSegment[]> {
   const form = new FormData()
   const buf = await readFile(audioFile)
   form.append('file', new Blob([new Uint8Array(buf)], { type: 'audio/mpeg' }), 'audio.mp3')
