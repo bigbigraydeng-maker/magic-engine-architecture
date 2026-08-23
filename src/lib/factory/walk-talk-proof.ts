@@ -10,7 +10,7 @@
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { access, mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { access, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -202,6 +202,124 @@ export function buildProofFfmpegArgs(params: {
   ]
 }
 
+// ---------- ASR 模式：听写真实口播 + 真实时间戳（复用 lecture-render 的 Whisper 配方） ----------
+// 稿子≠实际口播（自由发挥）时，确定性均摊对不上。此模式把字幕直接取自听写结果，按真实时间上。
+// 复用点：lecture-render.ts extractAudio + whisperTranscribe 的同款配方（OpenAI whisper-1, verbose_json）。
+
+export interface WhisperSegment {
+  start: number
+  end: number
+  text: string
+}
+
+/** 抽单声道 16k 低码音轨（Whisper 限 25MB，视频直传会爆）——同 lecture-render extractAudio。 */
+async function extractAudioForAsr(videoFile: string, outMp3: string): Promise<void> {
+  await exec('ffmpeg', ['-y', '-loglevel', 'error', '-i', videoFile, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '48k', outMp3])
+}
+
+/** OpenAI Whisper 听写，返回带时间戳分段——同 lecture-render whisperTranscribe 配方。 */
+async function transcribeAudio(audioFile: string, apiKey: string): Promise<WhisperSegment[]> {
+  const form = new FormData()
+  const buf = await readFile(audioFile)
+  form.append('file', new Blob([new Uint8Array(buf)], { type: 'audio/mpeg' }), 'audio.mp3')
+  form.append('model', 'whisper-1')
+  form.append('language', 'zh')
+  form.append('response_format', 'verbose_json')
+  form.append('timestamp_granularities[]', 'segment')
+  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form,
+    signal: AbortSignal.timeout(300000),
+  })
+  if (!res.ok) throw new Error(`Whisper 听写失败 ${res.status}: ${await res.text()}`)
+  const json = (await res.json()) as { segments?: { start: number; end: number; text: string }[] }
+  const segments = (json.segments ?? [])
+    .map((s) => ({ start: s.start, end: s.end, text: (s.text ?? '').trim() }))
+    .filter((s) => s.text)
+  if (segments.length === 0) throw new Error('听写结果为空（录像里没有可识别的语音？）')
+  return segments
+}
+
+/** 从稿子里的 **双星号** 收集高亮词表（客户数据；转录字幕据此上色，模块本身不含任何词）。 */
+export function extractHighlightTerms(raw: string): string[] {
+  const terms = new Set<string>()
+  const re = /\*\*([^*]+)\*\*/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(raw)) !== null) {
+    const t = m[1].trim()
+    if (t) terms.add(t)
+  }
+  return Array.from(terms)
+}
+
+/** 把一条转录文本按标点/长度切成短句大字；不超过 maxChars。 */
+export function splitByLength(text: string, maxChars: number): string[] {
+  const out: string[] = []
+  for (const sent of text.split(/(?<=[。！？；，、])/)) {
+    const s = sent.trim()
+    if (!s) continue
+    if (s.length <= maxChars) {
+      out.push(s)
+    } else {
+      for (let i = 0; i < s.length; i += maxChars) out.push(s.slice(i, i + maxChars))
+    }
+  }
+  return out.length > 0 ? out : [text]
+}
+
+/** 用词表把一行标成高亮/普通分段（最长优先匹配）。词表为空则整行普通。 */
+export function applyHighlights(text: string, keywords: string[]): CaptionRun[] {
+  const sorted = keywords.filter(Boolean).sort((a, b) => b.length - a.length)
+  const runs: CaptionRun[] = []
+  let i = 0
+  while (i < text.length) {
+    const hit = sorted.find((k) => text.startsWith(k, i))
+    if (hit) {
+      runs.push({ t: hit, hi: true })
+      i += hit.length
+    } else {
+      const last = runs[runs.length - 1]
+      if (last && !last.hi) last.t += text[i]
+      else runs.push({ t: text[i], hi: false })
+      i++
+    }
+  }
+  return runs.length > 0 ? runs : [{ t: text, hi: false }]
+}
+
+/**
+ * 把听写分段切成字幕轴（**真实时间戳**）：长段按标点/长度切成短句，段内按字数分时间；
+ * 跨段单调钳位、末端不超总时长。高亮由词表决定。
+ */
+export function segmentsToCaptionCues(
+  segments: WhisperSegment[],
+  totalDurationSec: number,
+  maxChars: number,
+  keywords: string[],
+): CaptionCue[] {
+  if (segments.length === 0) throw new Error('听写分段为空')
+  const cues: CaptionCue[] = []
+  let idx = 0
+  let prevEnd = 0
+  for (const seg of segments) {
+    const pieces = splitByLength(seg.text, maxChars)
+    const span = Math.max(seg.end - seg.start, 0.001)
+    const totalLen = pieces.reduce((a, p) => a + Math.max(p.length, 1), 0)
+    let cum = 0
+    for (const p of pieces) {
+      let start = seg.start + (cum / totalLen) * span
+      cum += Math.max(p.length, 1)
+      let end = seg.start + (cum / totalLen) * span
+      start = Math.max(start, prevEnd)
+      end = Math.min(Math.max(end, start + 0.05), totalDurationSec)
+      prevEnd = end
+      cues.push({ index: idx++, start, end, text: p, runs: applyHighlights(p, keywords) })
+    }
+  }
+  return cues
+}
+
 async function ffprobeDuration(file: string): Promise<number> {
   const { stdout } = await exec('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file])
   const d = parseFloat(stdout.trim())
@@ -213,9 +331,14 @@ export interface RenderProofResult {
   outPath: string
   durationSec: number
   cueCount: number
+  mode: 'script' | 'asr'
 }
 
-/** 真跑一支样片：校验输入 → 均摊字幕轴 → PIL 画字幕 → ffmpeg 拼 → 落本地 MP4。无 DB / 无上传。 */
+/**
+ * 真跑一支样片：校验输入 → 求字幕轴 → PIL 画字幕 → ffmpeg 拼 → 落本地 MP4。无 DB / 无上传。
+ * mode='script'：字幕取自稿子，按字数确定性均摊（无 provider）。
+ * mode='asr'：字幕取自**听写真实口播**、按真实时间戳上（复用 lecture Whisper 配方，需 apiKey）。
+ */
 export async function renderWalkTalkProof(opts: {
   rawPath: string
   scriptPath: string
@@ -223,20 +346,33 @@ export async function renderWalkTalkProof(opts: {
   pythonBin: string // 隔离 venv 的 python（内含 Pillow）；不动系统 python
   fontPath?: string
   readScript: (p: string) => Promise<string>
+  mode?: 'script' | 'asr'
+  apiKey?: string
+  maxCharsPerCue?: number
 }): Promise<RenderProofResult> {
+  const mode = opts.mode ?? 'script'
   const font = opts.fontPath || process.env.FACTORY_CJK_FONT || '/System/Library/Fonts/Supplemental/Arial Unicode.ttf'
   await assertInputReadable(opts.rawPath, '原片')
   await assertInputReadable(opts.scriptPath, '口播稿')
   await assertInputReadable(opts.pythonBin, 'venv python')
 
   const raw = await opts.readScript(opts.scriptPath)
-  const lines = parseScriptLines(raw)
   const durationSec = await ffprobeDuration(opts.rawPath)
-  const cues = buildCaptionCues(lines, durationSec)
-  validateCaptionCues(cues, durationSec)
 
   const dir = await mkdtemp(join(tmpdir(), 'walktalk-'))
   try {
+    let cues: CaptionCue[]
+    if (mode === 'asr') {
+      if (!opts.apiKey) throw new Error('ASR 模式需 apiKey（OPENAI_API_KEY）')
+      const audio = join(dir, 'audio.mp3')
+      await extractAudioForAsr(opts.rawPath, audio)
+      const segments = await transcribeAudio(audio, opts.apiKey)
+      cues = segmentsToCaptionCues(segments, durationSec, opts.maxCharsPerCue ?? 14, extractHighlightTerms(raw))
+    } else {
+      cues = buildCaptionCues(parseScriptLines(raw), durationSec)
+    }
+    validateCaptionCues(cues, durationSec)
+
     const pyFile = join(dir, 'caps.py')
     await writeFile(pyFile, CAPTION_PY)
     const cuesArg = JSON.stringify(cues.map((c) => c.runs.map((r) => [r.t, r.hi])))
@@ -247,7 +383,7 @@ export async function renderWalkTalkProof(opts: {
     const capPngPaths = cues.map((_, i) => join(dir, `cap${i}.png`))
     const args = buildProofFfmpegArgs({ rawPath: opts.rawPath, capPngPaths, cues, outPath: opts.outPath })
     await exec('ffmpeg', args, { maxBuffer: 1 << 26 })
-    return { outPath: opts.outPath, durationSec, cueCount: cues.length }
+    return { outPath: opts.outPath, durationSec, cueCount: cues.length, mode }
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {})
   }

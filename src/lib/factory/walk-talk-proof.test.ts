@@ -7,6 +7,10 @@ import {
   validateCaptionCues,
   buildProofFfmpegArgs,
   assertInputReadable,
+  extractHighlightTerms,
+  splitByLength,
+  applyHighlights,
+  segmentsToCaptionCues,
   type CaptionCue,
 } from './walk-talk-proof'
 
@@ -104,6 +108,38 @@ describe('buildProofFfmpegArgs', () => {
     expect(() =>
       buildProofFfmpegArgs({ rawPath: 'r', capPngPaths: ['only-one.png'], cues, outPath: 'o' }),
     ).toThrow()
+  })
+})
+
+describe('ASR 模式纯逻辑', () => {
+  it('extractHighlightTerms 从 ** 收集去重词表', () => {
+    expect(extractHighlightTerms('看 **GA4**，再看 **GA4** 和 **Submit**')).toEqual(['GA4', 'Submit'])
+  })
+  it('splitByLength 按标点切、超长再硬切', () => {
+    expect(splitByLength('第一句。第二句。', 20)).toEqual(['第一句。', '第二句。'])
+    expect(splitByLength('一二三四五六', 3)).toEqual(['一二三', '四五六'])
+  })
+  it('applyHighlights 最长优先标高亮', () => {
+    expect(applyHighlights('拿到真正的 Lead 了', ['Lead', '真正的 Lead'])).toEqual([
+      { t: '拿到', hi: false },
+      { t: '真正的 Lead', hi: true },
+      { t: ' 了', hi: false },
+    ])
+  })
+  it('segmentsToCaptionCues 用真实时间戳、跨段单调、末端不超总时长', () => {
+    const segs = [
+      { start: 0.5, end: 4.0, text: '刚刚和一个客户开完会。' },
+      { start: 4.0, end: 8.0, text: '聊到 GA4 的坑。' },
+    ]
+    const cues = segmentsToCaptionCues(segs, 8, 8, ['GA4'])
+    expect(cues[0].start).toBeCloseTo(0.5, 3)
+    expect(cues[cues.length - 1].end).toBeLessThanOrEqual(8 + 1e-6)
+    for (let i = 1; i < cues.length; i++) expect(cues[i].start).toBeGreaterThanOrEqual(cues[i - 1].end - 1e-6)
+    // 高亮词进了 runs
+    expect(cues.some((c) => c.runs.some((r) => r.hi && r.t === 'GA4'))).toBe(true)
+  })
+  it('空听写分段 fail-closed', () => {
+    expect(() => segmentsToCaptionCues([], 10, 12, [])).toThrow()
   })
 })
 

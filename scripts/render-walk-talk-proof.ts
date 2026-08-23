@@ -5,8 +5,12 @@
  * 先建隔离 venv 装 Pillow（不动系统 python）：
  *   python3 -m venv /tmp/walktalk-venv && /tmp/walktalk-venv/bin/pip install pillow
  *
- * Usage:
+ * Usage（script 模式，无 provider）：
  *   WALKTALK_PYTHON=/tmp/walktalk-venv/bin/python3 \
+ *   npx tsx scripts/render-walk-talk-proof.ts <rawMp4> <scriptTxt> <outMp4>
+ *
+ * Usage（asr 模式，听写真实口播 + 真实时间戳，需 OPENAI_API_KEY）：
+ *   WALKTALK_MODE=asr OPENAI_API_KEY=sk-... WALKTALK_PYTHON=... \
  *   npx tsx scripts/render-walk-talk-proof.ts <rawMp4> <scriptTxt> <outMp4>
  */
 
@@ -16,6 +20,7 @@ import { renderWalkTalkProof } from '../src/lib/factory/walk-talk-proof'
 async function main(): Promise<void> {
   const [rawPath, scriptPath, outPath] = process.argv.slice(2)
   const pythonBin = process.env.WALKTALK_PYTHON
+  const mode = process.env.WALKTALK_MODE === 'asr' ? 'asr' : 'script'
   if (!rawPath || !scriptPath || !outPath) {
     throw new Error('用法：render-walk-talk-proof.ts <rawMp4> <scriptTxt> <outMp4>')
   }
@@ -26,10 +31,12 @@ async function main(): Promise<void> {
     scriptPath,
     outPath,
     pythonBin,
+    mode,
+    apiKey: process.env.OPENAI_API_KEY,
     readScript: (p) => readFile(p, 'utf8'),
   })
   // eslint-disable-next-line no-console
-  console.log(`✅ 出片：${res.outPath}\n   时长 ${res.durationSec.toFixed(1)}s · 字幕 ${res.cueCount} 条`)
+  console.log(`✅ 出片[${res.mode}]：${res.outPath}\n   时长 ${res.durationSec.toFixed(1)}s · 字幕 ${res.cueCount} 条`)
 }
 
 main().catch((e) => {
