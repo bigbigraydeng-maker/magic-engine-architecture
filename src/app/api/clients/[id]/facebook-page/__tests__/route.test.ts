@@ -62,12 +62,15 @@ function allow() {
 }
 
 /** Stubs the clients table for both the read and the write path. */
-function stubClients(current: string | null) {
+function stubClients(current: string | null, factoryConfig: unknown = null) {
   const update = vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) })
   mockFrom.mockReturnValue({
     select: vi.fn().mockReturnValue({
       eq: vi.fn().mockReturnValue({
-        single: vi.fn().mockResolvedValue({ data: { facebook_page_id: current }, error: null }),
+        single: vi.fn().mockResolvedValue({
+          data: { facebook_page_id: current, factory_config: factoryConfig },
+          error: null,
+        }),
       }),
     }),
     update,
@@ -136,6 +139,47 @@ describe('facebook-page — is the binding actually live', () => {
     const json = (await res.json()) as { reachable: boolean | null }
 
     expect(json.reachable).toBeNull()
+  })
+})
+
+describe('facebook-page — exposes the publish target so the UI can offer publishing reauth (#1152)', () => {
+  it('returns the Facebook publish_target page id, independent of the inbox binding', async () => {
+    allow()
+    // inbox unset, but a Facebook publish target IS configured — the publishing
+    // reauth button must still be offerable.
+    stubClients(null, { publish_target: { platform: 'facebook', page_id: '778899' } })
+    mockToken.mockResolvedValue('user-token')
+    mockPages.mockResolvedValue([{ id: CTS_PAGE, name: 'CTS Tours' }] as never)
+
+    const json = (await (await GET(getRequest(), params())).json()) as {
+      page_id: string | null
+      publish_target_page_id: string | null
+    }
+
+    expect(json.page_id).toBeNull()
+    expect(json.publish_target_page_id).toBe('778899')
+  })
+
+  it('returns null publish target when it is configured for a non-Facebook platform', async () => {
+    allow()
+    stubClients(CTS_PAGE, { publish_target: { platform: 'instagram', page_id: '778899' } })
+    mockToken.mockResolvedValue('user-token')
+    mockPages.mockResolvedValue([{ id: CTS_PAGE, name: 'CTS Tours' }] as never)
+
+    const json = (await (await GET(getRequest(), params())).json()) as { publish_target_page_id: string | null }
+
+    expect(json.publish_target_page_id).toBeNull()
+  })
+
+  it('returns null publish target when none is configured', async () => {
+    allow()
+    stubClients(CTS_PAGE)
+    mockToken.mockResolvedValue('user-token')
+    mockPages.mockResolvedValue([{ id: CTS_PAGE, name: 'CTS Tours' }] as never)
+
+    const json = (await (await GET(getRequest(), params())).json()) as { publish_target_page_id: string | null }
+
+    expect(json.publish_target_page_id).toBeNull()
   })
 })
 

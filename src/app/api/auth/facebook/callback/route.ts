@@ -17,9 +17,10 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { verifyState, exchangeCode, exchangeForLongLivedToken, listPagesWithTokens, META_PAGE_SCOPES } from '@/lib/meta-oauth/client'
+import { verifyState, exchangeCode, exchangeForLongLivedToken, listPagesWithTokens, listGrantedScopes, META_PUBLISH_SCOPE } from '@/lib/meta-oauth/client'
 import { upsertConnection } from '@/lib/platform-oauth/connection-store'
 import { PLATFORM_PROVIDERS } from '@/lib/platform-oauth/vocabulary'
+import { projectFactoryConfig } from '@/lib/factory/client-config'
 
 /** Long-lived user tokens last ~60 days; Page tokens derived from them do not
  *  expire while the grant stands. We record 60 days so an expiry sweep has
@@ -28,6 +29,10 @@ const TOKEN_LIFETIME_DAYS = 60
 
 type Outcome =
   | 'connected'
+  | 'publish_ready'
+  | 'publish_not_granted'
+  | 'verify_failed'
+  | 'no_publish_target'
   | 'no_pages'
   | 'page_not_granted'
   | 'no_page_bound'
@@ -37,8 +42,17 @@ type Outcome =
 
 function back(clientId: string | null, outcome: Outcome): NextResponse {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3001'
-  const path = clientId ? `/dashboard/clients/${clientId}/settings` : '/dashboard'
-  return NextResponse.redirect(`${appUrl}${path}?meta=${outcome}`)
+  // The outcome message and the Reauthorize action live in FacebookPagePanel,
+  // which only renders inside the client-page settings drawer's "platform" tab
+  // (`?settings=platform` opens that drawer) — NOT on the /settings route, which
+  // does not mount the panel. Landing there would hide every publish_* /
+  // verify_failed result and the retry button. clientId comes from the
+  // HMAC-verified state, never a raw query param, so this is not an open redirect.
+  const query = new URLSearchParams({ settings: 'platform', meta: outcome })
+  const path = clientId
+    ? `/dashboard/clients/${clientId}?${query.toString()}`
+    : `/dashboard?meta=${outcome}`
+  return NextResponse.redirect(`${appUrl}${path}`)
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -53,7 +67,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const verified = verifyState(state)
   if (!verified) return back(null, 'bad_state')
-  const { clientId } = verified
+  const { clientId, intent } = verified
 
   const redirectUri = `${process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3001'}/api/auth/facebook/callback`
 
@@ -66,24 +80,54 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   const pages = await listPagesWithTokens(longToken)
   if (pages.length === 0) return back(clientId, 'no_pages')
 
-  // Which Page is this client actually bound to? Without a binding we have no
-  // basis to pick one, and guessing would attach the wrong inbox.
+  // Which Page do we need a token for? These are two independent fields:
+  //   • inbox connect  → clients.facebook_page_id (the Messenger sync target)
+  //   • publishing      → factory_config.publish_target.page_id (what the
+  //                        Facebook Reel adapter actually posts to)
+  // Storing the inbox Page's token while claiming the publishing Page is ready
+  // is exactly the failure this reauth exists to end, so publishing resolves its
+  // own target — re-read here server-side (never from a client-supplied id or
+  // the signed state) so a config change mid-flow fails closed below.
   const { data } = await supabaseAdmin
     .from('clients')
-    .select('facebook_page_id')
+    .select('facebook_page_id, factory_config')
     .eq('id', clientId)
     .maybeSingle()
 
-  const boundPageId = (data as { facebook_page_id?: string | null } | null)?.facebook_page_id
-  if (!boundPageId) return back(clientId, 'no_page_bound')
+  let targetPageId: string | null
+  if (intent === 'publishing') {
+    const target = projectFactoryConfig((data as { factory_config?: unknown } | null)?.factory_config).publish_target
+    // A missing or non-Facebook publish target means there is nothing valid to
+    // authorise — fail closed rather than binding the wrong Page.
+    if (!target || target.platform !== 'facebook' || !target.page_id) {
+      return back(clientId, 'no_publish_target')
+    }
+    targetPageId = target.page_id
+  } else {
+    targetPageId = (data as { facebook_page_id?: string | null } | null)?.facebook_page_id ?? null
+    if (!targetPageId) return back(clientId, 'no_page_bound')
+  }
 
   // The consent may be genuine yet not cover the Page we need — the account
   // that authorised holds no role on it. Saying so beats storing a token that
   // will never work.
-  const match = pages.find((p) => p.pageId === boundPageId)
+  const match = pages.find((p) => p.pageId === targetPageId)
   if (!match) return back(clientId, 'page_not_granted')
 
   const expiry = new Date(Date.now() + TOKEN_LIFETIME_DAYS * 24 * 60 * 60 * 1000)
+
+  // Store what Meta ACTUALLY granted, never what we requested. The user can
+  // approve a subset on the consent screen; recording the requested constant
+  // would mark a token publish-ready that cannot publish.
+  //
+  // `null` means the permissions read itself failed — NOT "zero granted". We
+  // must not fabricate facts on that path: writing the requested scopes would
+  // record a grant the user may never have given, and stamping last_synced_at
+  // would claim a verification that never happened. So we fail closed — leave
+  // the existing connection's known scope facts untouched by not upserting at
+  // all — and report a non-secret not-ready outcome for the operator to retry.
+  const granted = await listGrantedScopes(longToken)
+  if (granted === null) return back(clientId, 'verify_failed')
 
   await upsertConnection({
     clientId,
@@ -93,8 +137,17 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     tokenExpiry: expiry,
     accountId: match.pageId,
     displayName: match.pageName,
-    scopes: [...META_PAGE_SCOPES],
+    scopes: granted,
+    lastSyncedAt: new Date(),
   })
+
+  // The publishing reauthorisation fails closed: only report ready when the
+  // provider authoritatively confirmed pages_manage_posts. A declined grant
+  // (authoritative list without it) stays visibly not-ready and cannot be
+  // mistaken for success. Inbox connects (no intent) keep their existing outcome.
+  if (intent === 'publishing') {
+    return back(clientId, granted.includes(META_PUBLISH_SCOPE) ? 'publish_ready' : 'publish_not_granted')
+  }
 
   return back(clientId, 'connected')
 }
