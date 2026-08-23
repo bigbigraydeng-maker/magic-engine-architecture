@@ -103,6 +103,10 @@ async function fetchEmailConversationPage(
     .eq('client_id', clientId)
     .eq('channel', 'email')
     .order('last_message_at', { ascending: false })
+    // id 做同秒 tiebreaker：last_message_at 相同时也有确定顺序，翻页不再抖。
+    // 注：这只稳定了「同值边界」；后台同步改旧对话时间导致的跨页错位需要 keyset
+    // 游标才能根治，那超出 PATCH2「不建通用分页框架」的边界，留给 Build Control 定。
+    .order('id', { ascending: false })
     .range(offset, offset + PAGE_SIZE - 1)
   if (error) return { ok: false }
 
@@ -128,9 +132,14 @@ export async function GET(req: NextRequest, { params }: RouteParams): Promise<Ne
   const clientId = params.id
 
   // 鉴权在最前面：不通过就返回，下面一条查询都不会发。
+  // 带上 reason：self_serve 会拿到 403 reason='paid_only'，前端据此弹既有付费
+  // 解锁弹窗，而不是把英文报错扔进通用错误块（那会变成打不开也解不了的死路）。
   const access = await requirePaidClientAccess(clientId)
   if (!access.ok) {
-    return NextResponse.json({ error: access.error }, { status: access.status })
+    return NextResponse.json(
+      { error: access.error, reason: access.reason },
+      { status: access.status },
+    )
   }
 
   const offset = parseOffset(req)

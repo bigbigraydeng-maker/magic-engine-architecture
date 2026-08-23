@@ -117,6 +117,22 @@ describe('business-inbox list — isolation', () => {
     expect(mockFrom).not.toHaveBeenCalled()
   })
 
+  it('preserves paid_only reason so the page can trigger the upsell (Codex P2)', async () => {
+    mockAccess.mockResolvedValue({
+      ok: false,
+      status: 403,
+      error: 'This feature requires a paid plan.',
+      reason: 'paid_only',
+    } as never)
+
+    const res = await GET(request(), params())
+    const json = (await res.json()) as { reason?: string }
+
+    expect(res.status).toBe(403)
+    expect(json.reason).toBe('paid_only')
+    expect(mockFrom).not.toHaveBeenCalled()
+  })
+
   it('binds both the count and the page reads to the verified client id and email only', async () => {
     allow()
     const stubs = stubTables({ conversations: { data: [], error: null, count: 0 } })

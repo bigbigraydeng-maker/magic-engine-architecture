@@ -162,9 +162,13 @@ export async function GET(_req: NextRequest, { params }: RouteParams): Promise<N
   const conversationId = params.conversationId
 
   // 鉴权在最前面：不通过就返回，下面一条查询都不会发。
+  // 带上 reason，让详情路由与列表路由保持同一契约（paid_only 前端弹解锁）。
   const access = await requirePaidClientAccess(clientId)
   if (!access.ok) {
-    return NextResponse.json({ error: access.error }, { status: access.status })
+    return NextResponse.json(
+      { error: access.error, reason: access.reason },
+      { status: access.status },
+    )
   }
 
   // 非法 id 直接 404，不进库 —— 跟「查不到」返回一模一样，不暴露任何存在性。

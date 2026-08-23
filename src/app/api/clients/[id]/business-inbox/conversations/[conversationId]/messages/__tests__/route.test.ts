@@ -92,6 +92,22 @@ describe('business-inbox detail — auth before query', () => {
     expect(res.status).toBe(403)
     expect(mockFrom).not.toHaveBeenCalled()
   })
+
+  it('preserves paid_only reason and never queries (Codex P2)', async () => {
+    mockAccess.mockResolvedValue({
+      ok: false,
+      status: 403,
+      error: 'This feature requires a paid plan.',
+      reason: 'paid_only',
+    } as never)
+
+    const res = await GET(request(), params())
+    const json = (await res.json()) as { reason?: string }
+
+    expect(res.status).toBe(403)
+    expect(json.reason).toBe('paid_only')
+    expect(mockFrom).not.toHaveBeenCalled()
+  })
 })
 
 describe('business-inbox detail — no existence oracle', () => {
