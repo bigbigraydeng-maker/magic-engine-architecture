@@ -8,6 +8,7 @@ import {
   cueToEditableText,
   cuesToSrt,
   srtToCues,
+  parseHighlightRuns,
 } from './caption-srt'
 import {
   buildCaptionCues,
@@ -103,6 +104,46 @@ describe('srtToCues 解析', () => {
     expect(() => srtToCues('1\n00:00:00.000 --> 00:00:02,000\n点误用')).toThrow()
     expect(() => srtToCues('1\n00:00:03,000 --> 00:00:02,000\nend早于start')).toThrow()
     expect(() => srtToCues('1\n00:00:00,000 --> 00:00:02,000\n')).toThrow() // 文本空
+  })
+})
+
+describe('parseHighlightRuns（PATCH2 fix2：不成对标记 fail-closed）', () => {
+  it('成对标记正常解析', () => {
+    expect(parseHighlightRuns('看 **GA4** 就够')).toEqual([
+      { t: '看 ', hi: false },
+      { t: 'GA4', hi: true },
+      { t: ' 就够', hi: false },
+    ])
+    expect(parseHighlightRuns('没有高亮')).toEqual([{ t: '没有高亮', hi: false }])
+  })
+  it('孤立/不成对 ** 即抛', () => {
+    expect(() => parseHighlightRuns('看 **GA4')).toThrow(/不成对/)
+    expect(() => parseHighlightRuns('**GA4')).toThrow(/不成对/)
+    expect(() => parseHighlightRuns('a**b**c**d')).toThrow(/不成对/) // 3 个标记
+  })
+  it('空高亮 **** 即抛', () => {
+    expect(() => parseHighlightRuns('前****后')).toThrow(/空高亮/)
+  })
+})
+
+describe('srtToCues PATCH2 加固', () => {
+  it('fix2：Ray 误删一侧 ** 的块被拒（不渲染字面星号）', () => {
+    expect(() => srtToCues('1\n00:00:00,000 --> 00:00:02,000\n看 **GA4')).toThrow(/不成对/)
+  })
+  it('fix2：text 与 runs 出自同一次解析（去标记文本一致）', () => {
+    const [c] = srtToCues('1\n00:00:00,000 --> 00:00:02,000\n看 **GA4** 就够')
+    expect(c.text).toBe('看 GA4 就够')
+    expect(c.runs.map((r) => r.t).join('')).toBe(c.text)
+  })
+  it('fix3：缺空行导致两条 cue 并块 → 拒（不静默合并时间轴）', () => {
+    const merged = ['1', '00:00:00,000 --> 00:00:02,000', '第一条', '2', '00:00:02,000 --> 00:00:04,000', '第二条'].join('\n')
+    expect(() => srtToCues(merged)).toThrow(/多条时间行|缺空行/)
+  })
+  it('fix3：正确空行分隔的多条 cue 仍正常往返', () => {
+    const good = ['1', '00:00:00,000 --> 00:00:02,000', '第一条', '', '2', '00:00:02,000 --> 00:00:04,000', '第二条'].join('\n')
+    const cues = srtToCues(good)
+    expect(cues).toHaveLength(2)
+    expect(cues[1].text).toBe('第二条')
   })
 })
 

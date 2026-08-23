@@ -14,8 +14,7 @@
  *   <outSrt> 必须是**尚不存在**的新路径。可选 WALKTALK_MAXCHARS（默认 14）、WALKTALK_CLEAN=0 关闭语气水词清洗（默认清洗）。
  */
 
-import { readFile, writeFile, mkdtemp, rm, access } from 'node:fs/promises'
-import { constants as fsConstants } from 'node:fs'
+import { readFile, mkdtemp, rm, open } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -48,6 +47,18 @@ async function main(): Promise<void> {
 
   let tmpDir: string | undefined
   const deps: SeedDeps = {
+    // 原子预留：fs open 'wx' 独占创建目标；已存在/并发抢先即 EEXIST 抛（早于抽音频/付费）。
+    reserveOutput: async (p) => {
+      const handle = await open(p, 'wx') // 原子独占创建
+      return {
+        write: (data) => handle.writeFile(data, 'utf8'),
+        commit: () => handle.close(),
+        discard: async () => {
+          await handle.close().catch(() => {})
+          await rm(p, { force: true }).catch(() => {}) // 只删本次预留的文件
+        },
+      }
+    },
     probeDuration: ffprobeDuration,
     extractAudio: extractAudioForAsr,
     transcribe: transcribeAudio,
@@ -57,15 +68,6 @@ async function main(): Promise<void> {
       return cues
     },
     serialize: cuesToSrt,
-    destExists: async (p) => {
-      try {
-        await access(p, fsConstants.F_OK)
-        return true
-      } catch {
-        return false
-      }
-    },
-    writeExclusive: (p, data) => writeFile(p, data, { encoding: 'utf8', flag: 'wx' }),
     makeAudioPath: async () => {
       tmpDir = await mkdtemp(join(tmpdir(), 'walktalk-seed-'))
       return join(tmpDir, 'audio.mp3')

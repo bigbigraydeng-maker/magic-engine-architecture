@@ -35,8 +35,23 @@ export function assertWithinSeedBudget(durationSec: number, capUsd = SEED_CAP_US
   return est
 }
 
+/**
+ * 输出预留句柄（原子独占创建得到）：在任何付费/抽音频**之前**取得，把最终 SRT 通过同一句柄写出。
+ * commit=收尾保留文件；discard=关闭并只删除**本次执行**预留的那个文件（绝不碰他人/既有文件）。
+ */
+export interface OutputReservation {
+  write: (data: string) => Promise<void>
+  commit: () => Promise<void>
+  discard: () => Promise<void>
+}
+
 /** seed 所需的外部能力（真跑注入 ffprobe/ffmpeg/whisper/fs；单测注入替身）。 */
 export interface SeedDeps {
+  /**
+   * 原子预留输出：用单一原子机制（如 fs open 'wx'）独占创建目标路径并返回句柄。
+   * 目标已存在或被并发抢先即抛（早于任何抽音频/付费）；绝不覆盖已存在的 Ray 手改 SRT。
+   */
+  reserveOutput: (path: string) => Promise<OutputReservation>
   probeDuration: (rawPath: string) => Promise<number>
   extractAudio: (rawPath: string, outMp3: string) => Promise<void>
   /** 恰好一次 provider 调用；失败即抛，编排层**不重试**。 */
@@ -44,10 +59,6 @@ export interface SeedDeps {
   /** 把分段转成字幕轴（复用既有 segmentsToCaptionCues + 校验）。 */
   buildCues: (segments: WhisperSegment[], durationSec: number) => CaptionCue[]
   serialize: (cues: CaptionCue[]) => string
-  /** 目标路径是否已存在（守卫 2 前置检查）。 */
-  destExists: (path: string) => Promise<boolean>
-  /** 独占写（'wx' 语义）：目标已存在即抛，竞态下不覆盖。 */
-  writeExclusive: (path: string, data: string) => Promise<void>
   /** 临时音频路径工厂（真跑用 mkdtemp；测试给固定值）。 */
   makeAudioPath: () => Promise<string>
   cleanup?: () => Promise<void>
@@ -61,8 +72,9 @@ export interface SeedResult {
 }
 
 /**
- * seed 编排：守卫 1（预算前置）→ 守卫 2 前置（目标不存在）→ 抽音频 → 一次听写 → 建轴 → 独占写。
- * 任何守卫失败都在**付费/落文件之前**抛。provider 调用恰好一次，绝不重试、绝不第二次。
+ * seed 编排：**原子预留输出（付费前）** → 预算前置 → 抽音频 → 一次听写 → 建轴 → 经同一预留句柄写出。
+ * 竞态下第二个进程在预留处即失败（早于抽音频/付费）；任何失败只清理**本次预留**的文件，绝不动既有 SRT。
+ * provider 调用恰好一次，绝不重试、绝不第二次。
  */
 export async function seedWalkTalkSrt(opts: {
   rawPath: string
@@ -73,29 +85,29 @@ export async function seedWalkTalkSrt(opts: {
 }): Promise<SeedResult> {
   const { rawPath, outSrtPath, apiKey, deps } = opts
 
-  // —— 守卫 2 前置：目标 SRT 已存在，绝不在其上覆盖（在任何 extract/provider 前拒）——
-  if (await deps.destExists(outSrtPath)) {
-    throw new Error(
-      `覆盖闸拦截：目标 SRT 已存在，拒绝覆盖（可能是 Ray 已手改的版本）：${outSrtPath}。` +
-        `请指定一个新的输出路径。`,
-    )
-  }
+  // —— 原子预留输出：在任何抽音频/付费之前独占目标路径 ——
+  // 目标已存在或被并发抢先即在此抛（Ray 既有 SRT 不进 try、绝不被 discard 删）。
+  const reservation = await deps.reserveOutput(outSrtPath)
 
-  // —— 守卫 1：预算前置（在任何 extract/provider/落文件前）——
-  const durationSec = await deps.probeDuration(rawPath)
-  const estimatedCostUsd = assertWithinSeedBudget(durationSec, opts.capUsd)
-
-  const audioPath = await deps.makeAudioPath()
   let providerCalls = 0
   try {
+    // —— 预算前置（仍在抽音频/付费之前）——
+    const durationSec = await deps.probeDuration(rawPath)
+    const estimatedCostUsd = assertWithinSeedBudget(durationSec, opts.capUsd)
+
+    const audioPath = await deps.makeAudioPath()
     await deps.extractAudio(rawPath, audioPath)
     providerCalls++ // 恰好一次；失败下方不重试
     const segments = await deps.transcribe(audioPath, apiKey)
     const cues = deps.buildCues(segments, durationSec)
     const srt = deps.serialize(cues)
-    // —— 守卫 2 落地：独占创建，竞态下不覆盖 ——
-    await deps.writeExclusive(outSrtPath, srt)
+    await reservation.write(srt)
+    await reservation.commit()
     return { cues, srt, estimatedCostUsd, providerCalls }
+  } catch (err) {
+    // 只清理本次执行预留的空文件；既有文件不会走到这里。
+    await reservation.discard().catch(() => {})
+    throw err
   } finally {
     await deps.cleanup?.()
   }

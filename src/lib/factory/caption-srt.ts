@@ -6,7 +6,37 @@
 //   · 纯逻辑、零 provider、零联网：seed（一次听写）之后所有 edit/import/re-render 都不碰 provider。
 //   · fail-closed：时间戳格式非法 / 缺 `-->` / end<=start / 无可用块 一律抛，绝不静默产出坏轴。
 
-import { parseRuns, stripMarks, type CaptionCue } from './walk-talk-proof'
+import { type CaptionCue, type CaptionRun } from './walk-talk-proof'
+
+/**
+ * 严格解析一行带 `**高亮**` 标记的文本为 runs，text 与 runs 出自**同一次解析**（fail-closed）：
+ * · `**` 分隔符必须成对（奇数个=有孤立标记）→ 抛；
+ * · 空高亮 `****` → 抛；
+ * · 配对后仍残留 `**` → 抛（双保险，绝不把字面 `**` 渲进画面）。
+ * 供 srtToCues 用；不动 walk-talk-proof 的 parseRuns（script 模式仍用旧的宽松解析）。
+ */
+export function parseHighlightRuns(line: string): CaptionRun[] {
+  const markerCount = (line.match(/\*\*/g) || []).length
+  if (markerCount % 2 !== 0) {
+    throw new Error(`导入 SRT 失败：高亮标记 ** 不成对（有孤立标记）：${line}`)
+  }
+  const runs: CaptionRun[] = []
+  const re = /\*\*([\s\S]*?)\*\*/g
+  let last = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(line)) !== null) {
+    if (m.index > last) runs.push({ t: line.slice(last, m.index), hi: false })
+    if (m[1].length === 0) throw new Error(`导入 SRT 失败：空高亮标记 ****：${line}`)
+    runs.push({ t: m[1], hi: true })
+    last = re.lastIndex
+  }
+  if (last < line.length) {
+    const tail = line.slice(last)
+    if (tail.includes('**')) throw new Error(`导入 SRT 失败：残留未配对 ** 标记：${line}`)
+    runs.push({ t: tail, hi: false })
+  }
+  return runs.length > 0 ? runs : [{ t: line, hi: false }]
+}
 
 /** 秒 → SRT 时间戳 `HH:MM:SS,mmm`（毫秒三位，四舍五入到毫秒）。 */
 export function formatSrtTime(sec: number): string {
@@ -69,6 +99,10 @@ export function srtToCues(srt: string): CaptionCue[] {
 
   const cues: CaptionCue[] = []
   for (const block of blocks) {
+    // 缺分隔符检测：一个 block 里出现第二条时间行（-->）说明少了空行、两条 cue 被并进一块 → 拒。
+    if ((block.match(/-->/g) || []).length > 1) {
+      throw new Error(`导入 SRT 失败：一个字幕块内出现多条时间行（疑似缺空行分隔，多条 cue 被合并）：${block.replace(/\n/g, '⏎')}`)
+    }
     const lines = block.split('\n').map((l) => l.trimEnd())
     // 首行若是纯数字块号则丢弃（SRT 惯例）；否则整块从时间行起。
     let cursor = 0
@@ -92,12 +126,14 @@ export function srtToCues(srt: string): CaptionCue[] {
       .trim()
     if (!textLine) throw new Error(`导入 SRT 失败：字幕文本为空（时间 ${timeLine}）`)
 
+    // text 与 runs 出自同一次严格解析（不成对/残留 ** 直接 fail-closed）。
+    const runs = parseHighlightRuns(textLine)
     cues.push({
       index: cues.length,
       start,
       end,
-      text: stripMarks(textLine),
-      runs: parseRuns(textLine),
+      text: runs.map((r) => r.t).join(''),
+      runs,
     })
   }
   return cues
