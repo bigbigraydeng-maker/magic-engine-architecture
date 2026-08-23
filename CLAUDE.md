@@ -72,6 +72,26 @@ Magic Engine 的目标是**一个共享平台 + 多个垂直版本**。真实客
 
 完整冻结原则见：[docs/roadmap/2026-08-19-me2-platformization-principle.md](./docs/roadmap/2026-08-19-me2-platformization-principle.md)。
 
+### 0.5 FAST DELIVERY MODE V1（#1100，2026-08-23 生效，强制）
+
+Ray Product Owner 决策：Magic Engine 必须按 AI 速度交付。真相源：GitHub Issue [#1100](https://github.com/bigbigraydeng-maker/magic-engine/issues/1100) comments `5385687885` + `5385784440`。Codex 侧完整版见 [docs/agents/CODEX.md](./docs/agents/CODEX.md#fast-delivery-mode-v11100202608-23-生效强制)。
+
+1. **交付速度**：小修 30–90 分钟 / 常规 MVP 2–4 小时；超过 4 小时立即 STOP 并向 Build Control 证明 P0/P1 blocker，否则窄化 scope 继续。
+2. **默认单窗口生命周期**：一个 Issue = 一个 IMPLEMENT writer/window/worktree/branch/PR = 一次集中 review + 一次集中 remediation + 一份 final receipt。**禁止** PATCH1/2/3 式多轮循环。
+3. **Blocking 阈值**：只有 P0/P1（安全 / 隔离 / 隐私 / 鉴权 / 错客户 / 错 provider / 错落点 / 数据损坏 / false success / 核心路径断 / CI 失败 / 直接违契约）才能 reopen 代码；普通 P2、外观、架构打磨、未来优化一律 deferred。
+4. **风险分级 review 强度**：Risk A（租户 / 隐私 / 鉴权 / 付款 / 发布 / 生产写入 / provider 花费 / 错落点）= 一次 review + 一次 remediation + 敏感边界一次窄终审；Risk B（只读客户页 / 编辑 / 展示）= writer 自测 + 一次独立集中 review，无 blocker 即 merge-ready；Risk C（本地 proof / 内部工具）= 测试通过 + 人工验收，不套 Risk A 全礼节。不因一小段敏感边界把整个 PR 升级成 Risk A。
+5. **Claude 窗口数量**：默认最多一个当前 P0 IMPLEMENT 窗口；HEAD 冻结时才可加一个独立只读 REVIEW 窗口；remediation 复用同一 writer；SCOUT 默认 Build Control / Codex 只读完成。新开 Claude 窗口前必须说明现有为什么不能复用 + 碰撞边界 + 必要性——「更快并行」不是充分理由。
+6. **Relay / IMPLEMENT 提示词前置四条款**（缺一条视为合同不完整，须补齐后再动手）：
+
+```text
+开工前先完整读取 #1100 最新 FAST DELIVERY MODE 及本 Issue 最新 Build Control 合同，并严格遵守。
+不要过度开发。若范围扩大，立即停止、撤回或收窄并回报 Build Control；不得自行继续。
+优先复用现有窗口、worktree、branch 和 PR。未经 Build Control 明确证明必要，不得新开 Claude 窗口、SCOUT、第二 reviewer、第二 branch 或第二 PR。
+本轮最多一次集中 review、一次集中 remediation；普通 P2/架构打磨/未来优化一律 deferred，不得重新打开代码循环。
+```
+
+**边界不变**：本节不改变现有安全红线——未授权不得 merge / deploy / migration；不得生产写入 / provider 调用 / 花费；租户隔离、隐私、数据完整性仍必须阻断。只降流程冗余，不弱化结构安全。
+
 ### 1. 跟 PM 说话（PM 是非技术 PM）
 
 一次只问一件事 · 问题必须一句话能回（给明确回法如「回 `go merge` 就行」）· **零黑话**（禁止裸用 migration / rebase / schema / enum / cron / RLS / P1-P5 阶段号）· 先结论再原因（结论一行，原因最多两行）· 报告用他能验证的话（「文档写完了 / 广告停了」，不是「PR merged / verdict 落库」）。
