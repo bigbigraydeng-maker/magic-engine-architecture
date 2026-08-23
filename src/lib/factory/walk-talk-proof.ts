@@ -253,21 +253,39 @@ export function extractHighlightTerms(raw: string): string[] {
   return Array.from(terms)
 }
 
-// 语气水词：作为独立字符出现即视为噪声，清洗时删掉。保守清单，不动实义词。
+// 语气水词清单（保守）。仅当**独立出现**时删——见 cleanFiller 的边界判定。
 export const FILLER_PARTICLES = ['啊', '呃', '嗯', '唉', '哦', '噢', '诶', '呀']
 
-/** 清洗口播噪声：去语气水词 + 去「这个/那个」当口头禅（后面直接跟数词或又一个这个/那个）+ 折叠重复标点。 */
-export function cleanFiller(text: string): string {
-  let s = text
-  for (const f of FILLER_PARTICLES) s = s.split(f).join('')
-  s = s.replace(/(这|那)个(?=[一二两三四五六七八九十几这那])/g, '')
-  s = s.replace(/\s{2,}/g, ' ').replace(/，{2,}/g, '，').replace(/^[，、\s]+/, '').trim()
-  return s
-}
+// 边界字符：标点 / 空白 / ASCII / 字符串两端。语气词只有紧挨边界时才算「独立」。
+const FILLER_BOUNDARY = /[\s，。！？；、：""''（）《》【】…—·~,.!?;:"'()]/
 
 /**
- * 把一条转录文本按标点/长度切成短句大字；不超过 maxChars。
- * 关键：英文/数字单词整体不切（按 token 打包），避免 Submit / GA4 被拦腰断开。
+ * 清洗口播噪声：**只删独立语气词**，绝不删合法词语内部的匹配字符。
+ * 「独立」= 该语气词左右至少一侧是边界（标点/空白/ASCII/句首句尾）；
+ * 例：句末「…开完会啊」→ 删啊；但「不要唉声叹气」中的「唉」两侧都是汉字 → 保留。
+ */
+export function cleanFiller(text: string): string {
+  const chars = Array.from(text)
+  const isBoundary = (c: string | undefined): boolean =>
+    c === undefined || FILLER_BOUNDARY.test(c) || /[A-Za-z0-9]/.test(c)
+  const kept: string[] = []
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i]
+    if (FILLER_PARTICLES.includes(c) && (isBoundary(chars[i - 1]) || isBoundary(chars[i + 1]))) {
+      continue // 独立语气词，删
+    }
+    kept.push(c)
+  }
+  return kept.join('').replace(/\s{2,}/g, ' ').replace(/，{2,}/g, '，').replace(/^[，、\s]+/, '').trim()
+}
+
+// 标点类 token：不得作为一段的开头（否则会形成「只有标点」的字幕帧）。
+const PUNCT_TOKEN = /^[。！？；，、：）】」』》…—·”’%,.!?;:)\]]+$/
+
+/**
+ * 把一条转录文本按标点/长度切成短句大字；尽量不超过 maxChars。
+ * 关键：① 英文/数字单词整体不切（按 token 打包），避免 Submit / GA4 被拦腰断开；
+ *       ② 句末/尾随标点**始终附到当前段**（哪怕因此略超一字），绝不单独成帧。
  */
 export function splitByLength(text: string, maxChars: number): string[] {
   const out: string[] = []
@@ -277,9 +295,10 @@ export function splitByLength(text: string, maxChars: number): string[] {
     const tokens = s.match(/[A-Za-z0-9]+|[^A-Za-z0-9]/g) || [s]
     let cur = ''
     for (const t of tokens) {
-      if (cur && cur.length + t.length > maxChars) {
+      const isPunct = PUNCT_TOKEN.test(t)
+      if (cur && cur.length + t.length > maxChars && !isPunct && t !== ' ') {
         out.push(cur)
-        cur = t === ' ' ? '' : t
+        cur = t
       } else if (cur === '' && t === ' ') {
         continue
       } else {
@@ -288,7 +307,16 @@ export function splitByLength(text: string, maxChars: number): string[] {
     }
     if (cur.trim()) out.push(cur)
   }
-  return out.length > 0 ? out : [text]
+  // 兜底：任何「纯标点」碎片并回上一段（句末标点不得单独成帧）。
+  const merged: string[] = []
+  for (const p of out) {
+    if (merged.length > 0 && PUNCT_TOKEN.test(p.trim())) {
+      merged[merged.length - 1] += p.trim()
+    } else {
+      merged.push(p)
+    }
+  }
+  return merged.length > 0 ? merged : [text]
 }
 
 /** 用词表把一行标成高亮/普通分段（最长优先匹配）。词表为空则整行普通。 */

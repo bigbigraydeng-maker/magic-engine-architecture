@@ -125,13 +125,22 @@ describe('ASR 模式纯逻辑', () => {
     expect(pieces).toContain('Submit')
     expect(pieces.every((p) => !/Subm(?!it)|ubmit/.test(p) || p.includes('Submit'))).toBe(true)
   })
-  it('cleanFiller 去语气水词，但不动实义的「这个」', () => {
-    expect(cleanFiller('刚刚跟这个一个客户开完会啊')).toBe('刚刚跟一个客户开完会')
-    expect(cleanFiller('这个功能很方便')).toBe('这个功能很方便')
-    expect(cleanFiller('嗯，我们才告诉 GA4')).toBe('我们才告诉 GA4')
+  it('splitByLength 句末标点附前段、不单独成帧（P2#1）', () => {
+    expect(splitByLength('一二三，', 3)).toEqual(['一二三，'])
+    const pieces = splitByLength('一二三四五，六七八', 5)
+    expect(pieces.every((p) => !/^[，。！？；、：]+$/.test(p))).toBe(true)
   })
-  it('segmentsToCaptionCues clean=true 时字幕不含语气词', () => {
-    const cues = segmentsToCaptionCues([{ start: 0, end: 3, text: '开完会啊聊到 GA4' }], 3, 20, ['GA4'], true)
+  it('cleanFiller 只删独立语气词，不删合法词内部字符（P2#2）', () => {
+    // 末尾「啊」独立 → 删；「这个」是正常词 → 保留
+    expect(cleanFiller('刚刚跟这个一个客户开完会啊')).toBe('刚刚跟这个一个客户开完会')
+    // 「唉」在合法词「唉声叹气」内部，两侧都是汉字 → 保留
+    expect(cleanFiller('不要唉声叹气')).toBe('不要唉声叹气')
+    // 句首「嗯」+「，」→ 删
+    expect(cleanFiller('嗯，我们才告诉 GA4')).toBe('我们才告诉 GA4')
+    expect(cleanFiller('这个功能很方便')).toBe('这个功能很方便')
+  })
+  it('segmentsToCaptionCues clean=true 删独立语气词', () => {
+    const cues = segmentsToCaptionCues([{ start: 0, end: 3, text: '啊，聊到 GA4' }], 3, 20, ['GA4'], true)
     expect(cues.map((c) => c.text).join('')).not.toContain('啊')
   })
   it('applyHighlights 最长优先标高亮', () => {
