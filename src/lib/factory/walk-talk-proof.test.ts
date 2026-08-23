@@ -130,6 +130,16 @@ describe('ASR 模式纯逻辑', () => {
     const pieces = splitByLength('一二三四五，六七八', 5)
     expect(pieces.every((p) => !/^[，。！？；、：]+$/.test(p))).toBe(true)
   })
+  it('splitByLength 丢弃句首孤儿标点、不产生纯标点字幕帧（PATCH5）', () => {
+    expect(splitByLength('。然后我们看 GA4', 14)).toEqual(['然后我们看 GA4'])
+    expect(splitByLength('。', 14)).toEqual([]) // 整段只剩标点 → 不出帧
+    expect(splitByLength('一二三，', 3)).toEqual(['一二三，']) // 句末标点保护不变
+  })
+  it('segmentsToCaptionCues 清洗后不产生纯标点字幕（PATCH5 端到端）', () => {
+    const cues = segmentsToCaptionCues([{ start: 0, end: 4, text: '嗯。然后我们看 GA4' }], 4, 14, ['GA4'], true)
+    expect(cues.length).toBeGreaterThan(0)
+    expect(cues.every((c) => c.text.trim() !== '。' && !/^[。！？；，、：]/.test(c.text.trim()))).toBe(true)
+  })
   it('cleanFiller 只删完整独立语气词；仅串首/串尾不足（PATCH4）', () => {
     // Codex 明例：句首合法词——「唉」右侧是汉字 → 保留整句（不得只凭串首判独立）
     expect(cleanFiller('唉声叹气并不能解决问题')).toBe('唉声叹气并不能解决问题')

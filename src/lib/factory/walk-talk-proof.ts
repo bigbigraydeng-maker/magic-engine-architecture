@@ -308,16 +308,19 @@ export function splitByLength(text: string, maxChars: number): string[] {
     }
     if (cur.trim()) out.push(cur)
   }
-  // 兜底：任何「纯标点」碎片并回上一段（句末标点不得单独成帧）。
+  // 兜底：纯标点碎片不得单独成帧——有上一段就并回上一段；开头的孤儿标点（前面无段可并入，
+  // 常见于清洗掉句首语气词后残留的「。」）直接丢弃。句末标点与合法词字符的保护不受影响。
   const merged: string[] = []
   for (const p of out) {
-    if (merged.length > 0 && PUNCT_TOKEN.test(p.trim())) {
-      merged[merged.length - 1] += p.trim()
+    const t = p.trim()
+    if (PUNCT_TOKEN.test(t)) {
+      if (merged.length > 0) merged[merged.length - 1] += t
+      // else：开头孤儿标点 → 丢弃
     } else {
       merged.push(p)
     }
   }
-  return merged.length > 0 ? merged : [text]
+  return merged
 }
 
 /** 用词表把一行标成高亮/普通分段（最长优先匹配）。词表为空则整行普通。 */
