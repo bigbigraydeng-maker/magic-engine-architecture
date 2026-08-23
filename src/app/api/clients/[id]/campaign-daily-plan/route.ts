@@ -79,10 +79,10 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       getCampaignById(clientId, campaignId), // fail-closed: null on wrong-client campaign
       resolveActiveMasterBrief(clientId),
     ])
-    const grounding = computeGrounding(campaign, masterBrief)
 
     if (!campaign) {
       const emptyBundle: CampaignDailyBundle | null = null
+      const grounding = computeGrounding(campaign, masterBrief)
       return NextResponse.json({
         success: true,
         campaign: null,
@@ -110,6 +110,17 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const planData = (planRow?.plan_data ?? null) as CampaignDailyPlanData | null
     const bundle = planData?.current_bundle ?? null
     const days = planData?.days ?? buildEmptyDays(todayIso())
+
+    // Grounding must reflect what the SAVED plan was actually grounded in,
+    // not "does an active brief happen to exist right now" — otherwise a plan
+    // saved with no brief (or against an older brief) reads as freshly
+    // grounded the moment someone later adds/changes the active Master Brief,
+    // which is a false claim about content nobody re-validated.
+    // Only when nothing has been saved yet do we fall back to the live brief,
+    // to describe "would a save right now be grounded".
+    const grounding = planData
+      ? computeGrounding(campaign, planData.master_brief_ref)
+      : computeGrounding(campaign, masterBrief)
 
     // Asset provenance — fail-closed: only assets that resolve under THIS
     // client's rows are surfaced; a cross-client id is silently excluded.

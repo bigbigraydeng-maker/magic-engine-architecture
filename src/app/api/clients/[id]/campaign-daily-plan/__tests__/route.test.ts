@@ -176,6 +176,69 @@ describe('campaign-daily-plan GET — grounding', () => {
     expect(json.readiness.master_brief_grounding).toBe(false)
   })
 
+  // Regression (#1159 remediation, Build Control finding 2): grounding for a
+  // SAVED plan must reflect what it was actually grounded in at save time
+  // (plan_data.master_brief_ref), not "does any active brief happen to exist
+  // right now". Otherwise a plan saved with master_brief_ref: null falsely
+  // reads as OK the moment someone later adds an active brief, even though
+  // nobody re-validated that content against it.
+  it('reports NEEDS_BRIEF for a saved plan whose master_brief_ref was null, even though an active brief exists NOW', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    const savedWithoutBrief = {
+      plan_kind: 'campaign_daily_v1',
+      campaign_id: CAMPAIGN_ID,
+      master_brief_ref: null, // saved before any brief existed
+      days: sevenDays(),
+      current_bundle: { date: '2026-08-24', post: null, story: null, reel: null },
+      command_meta: { source: 'conversation_command', received_at: '2026-08-01T00:00:00.000Z', raw_summary: null },
+    }
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        // an active brief exists NOW — but the saved plan predates it
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
+      }
+      if (table === 'social_plans') {
+        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: savedWithoutBrief }] }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+
+    expect(json.grounding.status).toBe('NEEDS_BRIEF')
+    expect(json.readiness.master_brief_grounding).toBe(false)
+  })
+
+  it('reports OK for a saved plan grounded in a brief that has since been superseded — the saved ref still stands', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    const savedWithOldBrief = {
+      plan_kind: 'campaign_daily_v1',
+      campaign_id: CAMPAIGN_ID,
+      master_brief_ref: { id: 'old-brief-id', version: 1 },
+      days: sevenDays(),
+      current_bundle: { date: '2026-08-24', post: null, story: null, reel: null },
+      command_meta: { source: 'conversation_command', received_at: '2026-08-01T00:00:00.000Z', raw_summary: null },
+    }
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        // a DIFFERENT, newer brief is active now
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'new-brief-id', version: 2 } }) }) as never
+      }
+      if (table === 'social_plans') {
+        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: savedWithOldBrief }] }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+
+    // Saved plan WAS grounded (in the old brief) — that fact does not become
+    // false just because the active brief has since changed.
+    expect(json.grounding.status).toBe('OK')
+  })
+
   it('reports NEEDS_CAMPAIGN — and never invents a plan — when the campaign does not resolve for this client', async () => {
     allow()
     mockGetCampaign.mockResolvedValue(null) // wrong-client or nonexistent — getCampaignById already scopes by client_id
@@ -306,6 +369,26 @@ describe('campaign-daily-plan POST — persistence seam authorisation', () => {
 
     expect(res.status).toBe(400)
     expect(mockFrom).not.toHaveBeenCalled()
+  })
+
+  // Regression (#1159 remediation, Build Control finding 3): the server must
+  // never persist a caller-declared media_status of READY — WP1 has no real
+  // output to verify it against, so trusting the claim would let a reviewer
+  // see "可用成片（READY）" for a Reel that is still just a script.
+  it('rejects a command that declares the Reel media_status is READY, before touching the database', async () => {
+    allow()
+    const cmd = validCommand({
+      current_bundle: {
+        ...validCommand().current_bundle,
+        reel: { ...(validCommand().current_bundle.reel as object), media_status: 'READY' },
+      },
+    })
+
+    const res = await POST(postRequest(cmd), params())
+
+    expect(res.status).toBe(400)
+    expect(mockFrom).not.toHaveBeenCalled()
+    expect(mockGetCampaign).not.toHaveBeenCalled()
   })
 })
 

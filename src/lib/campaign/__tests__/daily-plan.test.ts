@@ -137,4 +137,39 @@ describe('CampaignDailyCommandSchema', () => {
     })
     expect(parsed.success).toBe(false)
   })
+
+  // Regression (#1159 remediation, Build Control finding 3): a command must
+  // never be able to assert a Reel is READY — WP1 has no way to verify a
+  // real output exists, so accepting the claim would let the UI show
+  // "可用成片" for a reel that is still just a script. Reject at the schema
+  // boundary rather than trusting-then-filtering downstream.
+  it('rejects a Reel command that declares media_status READY — WP1 cannot verify a real output', () => {
+    const parsed = CampaignDailyCommandSchema.safeParse({
+      campaign_id: CAMPAIGN_ID,
+      days,
+      current_bundle: {
+        date: '2026-08-24',
+        post: null,
+        story: null,
+        reel: { brief: 'b', script: 's', caption: 'c', source_asset_ids: [], media_status: 'READY' },
+      },
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  it('still accepts the honest NO_MEDIA / DRAFT_MEDIA statuses', () => {
+    for (const media_status of ['NO_MEDIA', 'DRAFT_MEDIA']) {
+      const parsed = CampaignDailyCommandSchema.safeParse({
+        campaign_id: CAMPAIGN_ID,
+        days,
+        current_bundle: {
+          date: '2026-08-24',
+          post: null,
+          story: null,
+          reel: { brief: 'b', script: 's', caption: 'c', source_asset_ids: [], media_status },
+        },
+      })
+      expect(parsed.success).toBe(true)
+    }
+  })
 })

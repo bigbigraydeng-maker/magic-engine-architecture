@@ -110,7 +110,13 @@ export const CampaignDailyCommandSchema = z.object({
         script: z.string().min(1),
         caption: z.string().min(1),
         source_asset_ids: z.array(uuidLike).default([]),
-        media_status: z.enum(['NO_MEDIA', 'DRAFT_MEDIA', 'READY']),
+        // WP1 has no real-output verification path (no render job linkage
+        // wired up), so the command may never assert READY — the server has
+        // no way to check it and would just be relaying an unverified claim
+        // to a reviewer who reads "READY" as "there is a real file". A
+        // future WP that wires up verified output can derive READY
+        // server-side; it must never come from caller input.
+        media_status: z.enum(['NO_MEDIA', 'DRAFT_MEDIA']),
       })
       .nullable(),
   }),
