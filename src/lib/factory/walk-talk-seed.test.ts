@@ -17,13 +17,14 @@ import type { CaptionCue, WhisperSegment } from './walk-talk-proof'
 const fakeCue = (): CaptionCue => ({ index: 0, start: 0, end: 1, text: 'x', runs: [{ t: 'x', hi: false }] })
 
 /** 造一个可监视的预留句柄。 */
-function makeReservation(): OutputReservation & { spies: Record<string, ReturnType<typeof vi.fn>> } {
+function makeReservation(over?: Partial<OutputReservation>): OutputReservation & { spies: Record<string, ReturnType<typeof vi.fn>> } {
   const spies = {
     write: vi.fn(async () => {}),
+    verify: vi.fn(async () => {}),
     commit: vi.fn(async () => {}),
     discard: vi.fn(async () => {}),
   }
-  return { ...spies, spies }
+  return { ...spies, ...over, spies }
 }
 
 /** 造一套可监视的 deps；默认预留成功、时长可配、听写返回一条分段。 */
@@ -89,15 +90,29 @@ describe('seedWalkTalkSrt 预算前置', () => {
     expect(deps.reservation.spies.commit).not.toHaveBeenCalled()
     expect(deps.reservation.spies.discard).toHaveBeenCalledTimes(1) // 只清理本次预留的空文件
   })
-  it('边界内（180s）：恰好一次 provider 调用、无重试、write+commit 各一次', async () => {
+  it('边界内（180s）：恰好一次 provider 调用、无重试、write→verify→commit 各一次', async () => {
     const deps = makeDeps({ duration: 180 })
     const res = await seedWalkTalkSrt({ rawPath: 'r.mp4', outSrtPath: 'out.srt', apiKey: 'sk', deps })
     expect(deps.spies.transcribe).toHaveBeenCalledTimes(1)
     expect(res.providerCalls).toBe(1)
     expect(deps.reservation.spies.write).toHaveBeenCalledTimes(1)
+    expect(deps.reservation.spies.verify).toHaveBeenCalledTimes(1)
     expect(deps.reservation.spies.commit).toHaveBeenCalledTimes(1)
     expect(deps.reservation.spies.discard).not.toHaveBeenCalled()
     expect(res.estimatedCostUsd).toBeCloseTo((180 / 60) * 0.006, 6)
+  })
+
+  it('写后校验失败（路径被移走/替换）：不 commit、不报成功、走 discard', async () => {
+    const verify = vi.fn(async () => { throw new Error('seed 校验失败：输出路径已被替换') })
+    const reservation = makeReservation({ verify })
+    const deps = makeDeps({ duration: 60, reservation })
+    await expect(
+      seedWalkTalkSrt({ rawPath: 'r.mp4', outSrtPath: 'out.srt', apiKey: 'sk', deps }),
+    ).rejects.toThrow(/校验失败/)
+    expect(reservation.spies.write).toHaveBeenCalledTimes(1)
+    expect(verify).toHaveBeenCalledTimes(1)
+    expect(reservation.spies.commit).not.toHaveBeenCalled() // 绝不报假成功
+    expect(reservation.spies.discard).toHaveBeenCalledTimes(1) // discard=只关句柄、不删替换物
   })
   it('听写失败：抛且不重试（仍只一次 transcribe），不 commit，discard 清理本次预留', async () => {
     const deps = makeDeps({ duration: 60, transcribe: vi.fn(async () => { throw new Error('whisper 500') }) })
@@ -234,5 +249,31 @@ describe('reserveOutputFile 失败清理只关句柄、绝不删路径（PROVEN 
     await r.write('字幕内容')
     await r.commit()
     expect(await readFile(p, 'utf8')).toBe('字幕内容')
+  })
+
+  it('verify：路径仍是本次预留对象 → 通过', async () => {
+    const p = join(dir, 'out.srt')
+    const r = await reserveOutputFile(p)
+    await r.write('内容')
+    await expect(r.verify()).resolves.toBeUndefined()
+    await r.commit()
+  })
+
+  it('verify：写后路径被移走 → 抛（不报假成功）', async () => {
+    const p = join(dir, 'out.srt')
+    const r = await reserveOutputFile(p)
+    await r.write('内容')
+    await unlink(p) // 路径没了：内容写进了已 unlink 的旧 inode
+    await expect(r.verify()).rejects.toThrow(/校验失败/)
+  })
+
+  it('verify：写后路径被替换成别的 inode → 抛（保留替换物）', async () => {
+    const p = join(dir, 'out.srt')
+    const r = await reserveOutputFile(p)
+    await r.write('本次内容')
+    await unlink(p)
+    await writeFile(p, 'RAY 刚保存的人工 SRT') // 新 inode
+    await expect(r.verify()).rejects.toThrow(/校验失败/)
+    expect(await readFile(p, 'utf8')).toBe('RAY 刚保存的人工 SRT') // 替换物完好
   })
 })

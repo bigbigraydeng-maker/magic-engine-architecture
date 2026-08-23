@@ -16,6 +16,7 @@ import {
   assertInputReadable,
   ffprobeDuration,
   renderCuesToVideo,
+  assertOutputPathDistinct,
 } from '../src/lib/factory/walk-talk-proof'
 import { srtToCues } from '../src/lib/factory/caption-srt'
 
@@ -30,6 +31,8 @@ async function main(): Promise<void> {
   await assertInputReadable(rawPath, '原片')
   await assertInputReadable(srtPath, 'SRT 字幕')
   await assertInputReadable(pythonBin, 'venv python')
+  // 输出别名闸：ffmpeg -y 会覆盖输出，绝不能让输出 MP4 指向原片或编辑后的 SRT（否则销毁源）。
+  await assertOutputPathDistinct(outPath, [rawPath, srtPath])
 
   const srt = await readFile(srtPath, 'utf8')
   const cues = srtToCues(srt) // fail-closed：SRT 坏了不出片

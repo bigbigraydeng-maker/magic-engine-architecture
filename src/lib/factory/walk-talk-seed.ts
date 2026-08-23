@@ -7,7 +7,7 @@
 //           竞态下也不会盖掉已存在文件。
 // 依赖全部注入，provider/IO 可在单测里替身；本模块自身零联网、零付费。
 
-import { open } from 'node:fs/promises'
+import { open, stat } from 'node:fs/promises'
 import type { WhisperSegment, CaptionCue } from './walk-talk-proof'
 
 /** whisper-1 计费费率（唯一、文档化）：US$0.006 / 分钟，按秒计。改费率=改这一个常量。 */
@@ -42,6 +42,8 @@ export function assertWithinSeedBudget(durationSec: number, capUsd = SEED_CAP_US
  */
 export interface OutputReservation {
   write: (data: string) => Promise<void>
+  /** 报成功前只读校验：预留对象是否仍可达于原请求路径；被移走/替换即抛（绝不删、非破坏性）。 */
+  verify: () => Promise<void>
   commit: () => Promise<void>
   discard: () => Promise<void>
 }
@@ -55,11 +57,27 @@ export interface OutputReservation {
  * 失败后残留一个**可见的空占位文件、交人工检查/删除**，远比自动清理误删 Ray 字幕安全。
  * 残留占位也顺带保留了「不覆盖」保证：下次重跑会在该占位上 EEXIST 前置拒。
  * 不引入锁服务/锁文件/队列/事务/retry/清理守护/新输出体系。
+ *
+ * verify（报成功前只读校验）：记录 open 时本次文件的 dev+ino；写完后比对 `stat(path)`——
+ * 若路径已被移走或被另一进程原子替换成别的 inode，说明我们其实写进了已 unlink 的旧 inode，
+ * 目标路径并没有本次内容 → 抛，绝不报假成功。verify 只读、不删、非破坏性。
  */
 export async function reserveOutputFile(path: string): Promise<OutputReservation> {
   const handle = await open(path, 'wx')
+  const owned = await handle.stat() // 本次创建文件的 dev+ino（仅用于只读校验）
   return {
     write: (data) => handle.writeFile(data, 'utf8'),
+    verify: async () => {
+      let cur
+      try {
+        cur = await stat(path)
+      } catch {
+        throw new Error(`seed 校验失败：输出路径已不在，本次内容写进了已被移除的占位，未真正落到 ${path}（不报假成功）`)
+      }
+      if (cur.dev !== owned.dev || cur.ino !== owned.ino) {
+        throw new Error(`seed 校验失败：输出路径已被另一进程替换（inode 变化），本次内容未落到 ${path}（不报假成功；保留替换物）`)
+      }
+    },
     commit: () => handle.close(),
     // 只关句柄，绝不删路径——保留任何被替换写入的内容。
     discard: () => handle.close().catch(() => {}),
@@ -123,6 +141,7 @@ export async function seedWalkTalkSrt(opts: {
     const cues = deps.buildCues(segments, durationSec)
     const srt = deps.serialize(cues)
     await reservation.write(srt)
+    await reservation.verify() // 报成功前校验：目标路径仍是本次预留对象，否则抛（不报假成功）
     await reservation.commit()
     return { cues, srt, estimatedCostUsd, providerCalls }
   } catch (err) {

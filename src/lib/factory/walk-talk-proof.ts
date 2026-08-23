@@ -10,10 +10,10 @@
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { access, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises'
+import { access, mkdtemp, writeFile, readFile, rm, realpath, stat } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 const exec = promisify(execFile)
 
@@ -112,6 +112,38 @@ export async function assertInputReadable(path: string, label: string): Promise<
     await access(path, fsConstants.R_OK)
   } catch {
     throw new Error(`${label}不存在或不可读：${path}`)
+  }
+}
+
+/**
+ * 输出路径别名闸（fail-closed）：ffmpeg 用 `-y` 会覆盖输出，若输出路径其实指向某个输入
+ * （原片 / 编辑后的 SRT），就会把源文件销毁。渲染前必须拒。
+ * 最窄本地判定：① 解析后的绝对路径相等；② 若输出已存在，再按 realpath + inode(dev+ino)
+ * 抓 symlink/hardlink 别名。输入文件必存在（上游已 assertInputReadable）。
+ */
+export async function assertOutputPathDistinct(outPath: string, inputPaths: string[]): Promise<void> {
+  const outAbs = resolve(outPath)
+  for (const inp of inputPaths) {
+    if (resolve(inp) === outAbs) {
+      throw new Error(`输出路径不能与输入相同（ffmpeg -y 会覆盖销毁源文件）：${outPath}`)
+    }
+  }
+  let outStat
+  try {
+    outStat = await stat(outPath)
+  } catch {
+    return // 输出尚不存在 → 无 symlink/hardlink 别名风险
+  }
+  const outReal = await realpath(outPath).catch(() => outAbs)
+  for (const inp of inputPaths) {
+    const inReal = await realpath(inp).catch(() => resolve(inp))
+    if (inReal === outReal) {
+      throw new Error(`输出路径经 realpath 解析后与输入是同一文件（会被 ffmpeg -y 覆盖销毁）：${outPath}`)
+    }
+    const inStat = await stat(inp).catch(() => null)
+    if (inStat && inStat.dev === outStat.dev && inStat.ino === outStat.ino) {
+      throw new Error(`输出路径与输入是同一 inode（硬链接，会被 ffmpeg -y 覆盖销毁）：${outPath}`)
+    }
   }
 }
 
