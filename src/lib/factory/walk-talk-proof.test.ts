@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { mkdtemp, rm, writeFile, link } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   parseScriptLines,
   stripMarks,
@@ -7,6 +10,7 @@ import {
   validateCaptionCues,
   buildProofFfmpegArgs,
   assertInputReadable,
+  assertOutputPathDistinct,
   extractHighlightTerms,
   splitByLength,
   applyHighlights,
@@ -187,5 +191,44 @@ describe('assertInputReadable', () => {
   })
   it('存在文件通过', async () => {
     await expect(assertInputReadable(__filename, '本测试文件')).resolves.toBeUndefined()
+  })
+})
+
+describe('assertOutputPathDistinct（输出别名闸：防 ffmpeg -y 覆盖销毁源）', () => {
+  let dir: string
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'walktalk-alias-')) })
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }).catch(() => {}) })
+
+  it('输出与原片同路径 → 抛', async () => {
+    const raw = join(dir, 'reel.MP4')
+    const srt = join(dir, 'cap.srt')
+    await writeFile(raw, 'RAW'); await writeFile(srt, 'SRT')
+    await expect(assertOutputPathDistinct(raw, [raw, srt])).rejects.toThrow(/不能与输入相同|同一/)
+  })
+  it('输出与 SRT 同路径 → 抛', async () => {
+    const raw = join(dir, 'reel.MP4')
+    const srt = join(dir, 'cap.srt')
+    await writeFile(raw, 'RAW'); await writeFile(srt, 'SRT')
+    await expect(assertOutputPathDistinct(srt, [raw, srt])).rejects.toThrow(/不能与输入相同|同一/)
+  })
+  it('相对/绝对混写但解析后相同 → 抛', async () => {
+    const raw = join(dir, 'reel.MP4')
+    const srt = join(dir, 'cap.srt')
+    await writeFile(raw, 'RAW'); await writeFile(srt, 'SRT')
+    await expect(assertOutputPathDistinct(join(dir, '.', 'reel.MP4'), [raw, srt])).rejects.toThrow()
+  })
+  it('输出是原片的硬链接（同 inode）→ 抛', async () => {
+    const raw = join(dir, 'reel.MP4')
+    const srt = join(dir, 'cap.srt')
+    const out = join(dir, 'out.mp4')
+    await writeFile(raw, 'RAW'); await writeFile(srt, 'SRT')
+    await link(raw, out) // out 与 raw 同 inode
+    await expect(assertOutputPathDistinct(out, [raw, srt])).rejects.toThrow(/inode|同一/)
+  })
+  it('输出为全新不同路径 → 通过', async () => {
+    const raw = join(dir, 'reel.MP4')
+    const srt = join(dir, 'cap.srt')
+    await writeFile(raw, 'RAW'); await writeFile(srt, 'SRT')
+    await expect(assertOutputPathDistinct(join(dir, 'out.mp4'), [raw, srt])).resolves.toBeUndefined()
   })
 })

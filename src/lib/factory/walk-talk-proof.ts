@@ -10,10 +10,10 @@
 
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { access, mkdtemp, writeFile, readFile, rm } from 'node:fs/promises'
+import { access, mkdtemp, writeFile, readFile, rm, realpath, stat } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 const exec = promisify(execFile)
 
@@ -112,6 +112,38 @@ export async function assertInputReadable(path: string, label: string): Promise<
     await access(path, fsConstants.R_OK)
   } catch {
     throw new Error(`${label}不存在或不可读：${path}`)
+  }
+}
+
+/**
+ * 输出路径别名闸（fail-closed）：ffmpeg 用 `-y` 会覆盖输出，若输出路径其实指向某个输入
+ * （原片 / 编辑后的 SRT），就会把源文件销毁。渲染前必须拒。
+ * 最窄本地判定：① 解析后的绝对路径相等；② 若输出已存在，再按 realpath + inode(dev+ino)
+ * 抓 symlink/hardlink 别名。输入文件必存在（上游已 assertInputReadable）。
+ */
+export async function assertOutputPathDistinct(outPath: string, inputPaths: string[]): Promise<void> {
+  const outAbs = resolve(outPath)
+  for (const inp of inputPaths) {
+    if (resolve(inp) === outAbs) {
+      throw new Error(`输出路径不能与输入相同（ffmpeg -y 会覆盖销毁源文件）：${outPath}`)
+    }
+  }
+  let outStat
+  try {
+    outStat = await stat(outPath)
+  } catch {
+    return // 输出尚不存在 → 无 symlink/hardlink 别名风险
+  }
+  const outReal = await realpath(outPath).catch(() => outAbs)
+  for (const inp of inputPaths) {
+    const inReal = await realpath(inp).catch(() => resolve(inp))
+    if (inReal === outReal) {
+      throw new Error(`输出路径经 realpath 解析后与输入是同一文件（会被 ffmpeg -y 覆盖销毁）：${outPath}`)
+    }
+    const inStat = await stat(inp).catch(() => null)
+    if (inStat && inStat.dev === outStat.dev && inStat.ino === outStat.ino) {
+      throw new Error(`输出路径与输入是同一 inode（硬链接，会被 ffmpeg -y 覆盖销毁）：${outPath}`)
+    }
   }
 }
 
@@ -378,7 +410,7 @@ export function segmentsToCaptionCues(
   return cues
 }
 
-async function ffprobeDuration(file: string): Promise<number> {
+export async function ffprobeDuration(file: string): Promise<number> {
   const { stdout } = await exec('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file])
   const d = parseFloat(stdout.trim())
   if (!Number.isFinite(d) || d <= 0) throw new Error(`无法读取时长：${file}`)
@@ -393,9 +425,42 @@ export interface RenderProofResult {
 }
 
 /**
- * 真跑一支样片：校验输入 → 求字幕轴 → PIL 画字幕 → ffmpeg 拼 → 落本地 MP4。无 DB / 无上传。
+ * 渲染尾段（cues → 本地 MP4）：校验字幕轴 → PIL 画字幕 → ffmpeg overlay → 落本地 MP4。
+ * **零 provider**：只吃已算好的 cues，不听写、不联网。script / asr / import(SRT) 三条路都汇到这里，
+ * 保证「同一份 cues → 同一支片」的确定性重出（#1162 import 模式复用此函数，不再调 whisper）。
+ */
+export async function renderCuesToVideo(opts: {
+  rawPath: string
+  cues: CaptionCue[]
+  durationSec: number
+  outPath: string
+  pythonBin: string // 隔离 venv 的 python（内含 Pillow）；不动系统 python
+  fontPath?: string
+}): Promise<void> {
+  const font = opts.fontPath || process.env.FACTORY_CJK_FONT || '/System/Library/Fonts/Supplemental/Arial Unicode.ttf'
+  validateCaptionCues(opts.cues, opts.durationSec)
+
+  const dir = await mkdtemp(join(tmpdir(), 'walktalk-'))
+  try {
+    const pyFile = join(dir, 'caps.py')
+    await writeFile(pyFile, CAPTION_PY)
+    const cuesArg = JSON.stringify(opts.cues.map((c) => c.runs.map((r) => [r.t, r.hi])))
+    await exec(opts.pythonBin, [
+      pyFile, font, dir, cuesArg,
+      String(FONT_SIZE), String(STROKE), String(CAPTION_TOP), String(SIDE_MARGIN),
+    ])
+    const capPngPaths = opts.cues.map((_, i) => join(dir, `cap${i}.png`))
+    const args = buildProofFfmpegArgs({ rawPath: opts.rawPath, capPngPaths, cues: opts.cues, outPath: opts.outPath })
+    await exec('ffmpeg', args, { maxBuffer: 1 << 26 })
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+/**
+ * 真跑一支样片：校验输入 → 求字幕轴 → 复用 renderCuesToVideo 出片。无 DB / 无上传。
  * mode='script'：字幕取自稿子，按字数确定性均摊（无 provider）。
- * mode='asr'：字幕取自**听写真实口播**、按真实时间戳上（复用 lecture Whisper 配方，需 apiKey）。
+ * mode='asr'：字幕取自**听写真实口播**、按真实时间戳上（复用 lecture Whisper 配方，需 apiKey，一次 provider）。
  */
 export async function renderWalkTalkProof(opts: {
   rawPath: string
@@ -410,7 +475,6 @@ export async function renderWalkTalkProof(opts: {
   cleanFiller?: boolean // asr 模式：去语气水词/口头禅（默认关）
 }): Promise<RenderProofResult> {
   const mode = opts.mode ?? 'script'
-  const font = opts.fontPath || process.env.FACTORY_CJK_FONT || '/System/Library/Fonts/Supplemental/Arial Unicode.ttf'
   await assertInputReadable(opts.rawPath, '原片')
   await assertInputReadable(opts.scriptPath, '口播稿')
   await assertInputReadable(opts.pythonBin, 'venv python')
@@ -418,32 +482,29 @@ export async function renderWalkTalkProof(opts: {
   const raw = await opts.readScript(opts.scriptPath)
   const durationSec = await ffprobeDuration(opts.rawPath)
 
-  const dir = await mkdtemp(join(tmpdir(), 'walktalk-'))
-  try {
-    let cues: CaptionCue[]
-    if (mode === 'asr') {
-      if (!opts.apiKey) throw new Error('ASR 模式需 apiKey（OPENAI_API_KEY）')
+  let cues: CaptionCue[]
+  if (mode === 'asr') {
+    if (!opts.apiKey) throw new Error('ASR 模式需 apiKey（OPENAI_API_KEY）')
+    const dir = await mkdtemp(join(tmpdir(), 'walktalk-asr-'))
+    try {
       const audio = join(dir, 'audio.mp3')
       await extractAudioForAsr(opts.rawPath, audio)
       const segments = await transcribeAudio(audio, opts.apiKey)
       cues = segmentsToCaptionCues(segments, durationSec, opts.maxCharsPerCue ?? 14, extractHighlightTerms(raw), opts.cleanFiller ?? false)
-    } else {
-      cues = buildCaptionCues(parseScriptLines(raw), durationSec)
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {})
     }
-    validateCaptionCues(cues, durationSec)
-
-    const pyFile = join(dir, 'caps.py')
-    await writeFile(pyFile, CAPTION_PY)
-    const cuesArg = JSON.stringify(cues.map((c) => c.runs.map((r) => [r.t, r.hi])))
-    await exec(opts.pythonBin, [
-      pyFile, font, dir, cuesArg,
-      String(FONT_SIZE), String(STROKE), String(CAPTION_TOP), String(SIDE_MARGIN),
-    ])
-    const capPngPaths = cues.map((_, i) => join(dir, `cap${i}.png`))
-    const args = buildProofFfmpegArgs({ rawPath: opts.rawPath, capPngPaths, cues, outPath: opts.outPath })
-    await exec('ffmpeg', args, { maxBuffer: 1 << 26 })
-    return { outPath: opts.outPath, durationSec, cueCount: cues.length, mode }
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {})
+  } else {
+    cues = buildCaptionCues(parseScriptLines(raw), durationSec)
   }
+
+  await renderCuesToVideo({
+    rawPath: opts.rawPath,
+    cues,
+    durationSec,
+    outPath: opts.outPath,
+    pythonBin: opts.pythonBin,
+    fontPath: opts.fontPath,
+  })
+  return { outPath: opts.outPath, durationSec, cueCount: cues.length, mode }
 }
