@@ -1,0 +1,94 @@
+import { describe, it, expect } from 'vitest'
+import {
+  parseScriptLines,
+  buildCaptionCues,
+  validateCaptionCues,
+  buildProofFfmpegArgs,
+  assertInputReadable,
+  type CaptionCue,
+} from './walk-talk-proof'
+
+describe('parseScriptLines', () => {
+  it('每一非空行一条，剥掉 markdown 结构行与引用符', () => {
+    const raw = ['# 标题', '', '第一句。', '> 第二句。', '---', '| 表格 |', '```', '第三句。', '   '].join('\n')
+    expect(parseScriptLines(raw)).toEqual(['第一句。', '第二句。', '第三句。'])
+  })
+})
+
+describe('buildCaptionCues', () => {
+  it('无缝均摊：首条 start=0、末条 end=总时长、单调递增', () => {
+    const cues = buildCaptionCues(['短', '这是一句比较长的话'], 100)
+    expect(cues[0].start).toBeCloseTo(0, 6)
+    expect(cues[cues.length - 1].end).toBeCloseTo(100, 6)
+    for (let i = 1; i < cues.length; i++) expect(cues[i].start).toBeCloseTo(cues[i - 1].end, 6)
+  })
+  it('时长按字数加权：长句占更多时间', () => {
+    const [a, b] = buildCaptionCues(['短', '这是一句比较长的话'], 100)
+    expect(b.end - b.start).toBeGreaterThan(a.end - a.start)
+  })
+  it('空稿 / 非法时长 fail-closed', () => {
+    expect(() => buildCaptionCues([], 100)).toThrow()
+    expect(() => buildCaptionCues(['x'], 0)).toThrow()
+    expect(() => buildCaptionCues(['x'], NaN)).toThrow()
+  })
+})
+
+describe('validateCaptionCues', () => {
+  const total = 60
+  it('正常轴通过', () => {
+    expect(() => validateCaptionCues(buildCaptionCues(['a', 'bb', 'ccc'], total), total)).not.toThrow()
+  })
+  it('end<=start / 越界 / 重叠 都抛', () => {
+    expect(() => validateCaptionCues([{ index: 0, start: 5, end: 5, text: 'x' }], total)).toThrow()
+    expect(() => validateCaptionCues([{ index: 0, start: 0, end: total + 5, text: 'x' }], total)).toThrow()
+    const overlap: CaptionCue[] = [
+      { index: 0, start: 0, end: 30, text: 'a' },
+      { index: 1, start: 10, end: 40, text: 'b' },
+    ]
+    expect(() => validateCaptionCues(overlap, total)).toThrow()
+    expect(() => validateCaptionCues([], total)).toThrow()
+  })
+})
+
+describe('buildProofFfmpegArgs', () => {
+  const cues: CaptionCue[] = [
+    { index: 0, start: 0, end: 12.5, text: 'a' },
+    { index: 1, start: 12.5, end: 30, text: 'b' },
+  ]
+  const args = buildProofFfmpegArgs({
+    rawPath: '/x/raw.MP4',
+    capPngPaths: ['/x/cap0.png', '/x/cap1.png'],
+    cues,
+    outPath: '/x/out.mp4',
+  })
+  it('原声保留：映射 0:a 且音频 copy', () => {
+    expect(args).toContain('0:a')
+    const i = args.indexOf('-c:a')
+    expect(args[i + 1]).toBe('copy')
+  })
+  it('竖屏裁切 + 每条字幕一个 overlay/enable(between)，时间保留三位', () => {
+    const fc = args[args.indexOf('-filter_complex') + 1]
+    expect(fc).toContain('crop=1080:1920')
+    expect((fc.match(/overlay=0:0:enable=/g) || []).length).toBe(2)
+    expect(fc).toContain("between(t,0.000,12.500)")
+    expect(fc).toContain("between(t,12.500,30.000)")
+  })
+  it('最终画面标签映射到最后一条 overlay 输出', () => {
+    const mapIdx = args.indexOf('-map')
+    expect(args[mapIdx + 1]).toBe('[v1]')
+  })
+  it('字幕图数与轴数不符 fail-closed', () => {
+    expect(() =>
+      buildProofFfmpegArgs({ rawPath: 'r', capPngPaths: ['only-one.png'], cues, outPath: 'o' }),
+    ).toThrow()
+  })
+})
+
+describe('assertInputReadable', () => {
+  it('缺文件即抛（fail-closed）', async () => {
+    await expect(assertInputReadable('/no/such/file-xyz.MP4', '原片')).rejects.toThrow('原片')
+  })
+  it('存在文件通过', async () => {
+    await expect(assertInputReadable(__filename, '本测试文件')).resolves.toBeUndefined()
+  })
+})
