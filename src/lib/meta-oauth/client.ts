@@ -48,8 +48,25 @@ export const META_PAGE_SCOPES = [
   'pages_manage_posts',
 ] as const
 
+/**
+ * The one Meta permission that lets a stored Page token publish (Reel/贴文) —
+ * everything else in META_PAGE_SCOPES is read/inbox. Publishing readiness keys
+ * on this single name, so it lives here as the shared source of truth rather
+ * than a string literal repeated across the callback and the settings UI.
+ */
+export const META_PUBLISH_SCOPE = 'pages_manage_posts'
+
+/**
+ * Why a connect flow was started. `publishing` marks the "Reauthorize Meta
+ * Publishing" path so the callback can fail closed with a publishing-specific,
+ * actionable message when Meta declines `pages_manage_posts`. Absent = the
+ * existing inbox-sync connect, whose outcomes are unchanged.
+ */
+export type MetaConnectIntent = 'publishing'
+
 export interface VerifiedState {
   clientId: string
+  intent?: MetaConnectIntent
 }
 
 function appSecret(): string {
@@ -71,9 +88,12 @@ function appId(): string {
  * caller cannot swap in another client's id on the way back and attach their
  * token to someone else's account.
  */
-export function buildState(clientId: string): string {
+export function buildState(clientId: string, intent?: MetaConnectIntent): string {
+  // `intent` is only added when set, so an inbox connect keeps producing the
+  // exact same payload shape it always has — no behaviour change for callers
+  // that never pass it.
   const payload = Buffer.from(
-    JSON.stringify({ clientId, exp: Date.now() + STATE_TTL_MS }),
+    JSON.stringify({ clientId, exp: Date.now() + STATE_TTL_MS, ...(intent ? { intent } : {}) }),
   ).toString('base64url')
   const sig = createHmac('sha256', appSecret()).update(payload).digest('base64url')
   return `${payload}.${sig}`
@@ -92,10 +112,12 @@ export function verifyState(state: string): VerifiedState | null {
     const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
       clientId?: unknown
       exp?: unknown
+      intent?: unknown
     }
     if (typeof data.clientId !== 'string' || typeof data.exp !== 'number') return null
     if (Date.now() > data.exp) return null
-    return { clientId: data.clientId }
+    const intent = data.intent === 'publishing' ? 'publishing' : undefined
+    return intent ? { clientId: data.clientId, intent } : { clientId: data.clientId }
   } catch {
     return null
   }
@@ -192,5 +214,44 @@ export async function listPagesWithTokens(userToken: string): Promise<MetaPageTo
       .map((p) => ({ pageId: p.id, pageName: p.name ?? p.id, pageToken: p.access_token }))
   } catch {
     return []
+  }
+}
+
+/**
+ * The scopes Meta *actually granted* for this token, straight from the provider.
+ *
+ * The user can approve a subset on the consent screen — decline publishing,
+ * keep inbox — and the only authoritative record of what came back is
+ * `/me/permissions`, where each row carries `status: granted | declined`. We
+ * return the granted names only.
+ *
+ * WHY THIS MATTERS: the callback previously stored the *requested* scope
+ * constant, which records a grant the user may never have given — a token that
+ * cannot publish looks publish-ready in the database. Reading the granted set
+ * here is what lets persistence stay honest and publishing readiness fail
+ * closed.
+ *
+ * Returns `null` (not `[]`) when the permissions call itself fails, so the
+ * caller can tell "provider says zero permissions" apart from "we could not
+ * ask" and avoid clobbering a good connection's scopes on a transient error.
+ */
+export async function listGrantedScopes(userToken: string): Promise<string[] | null> {
+  const url = `${GRAPH_BASE}/me/permissions?access_token=${encodeURIComponent(userToken)}`
+
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const body = (await res.json()) as {
+      data?: Array<{ permission?: string; status?: string }>
+    }
+    if (!Array.isArray(body.data)) return null
+    return body.data
+      .filter(
+        (p): p is { permission: string; status: string } =>
+          typeof p.permission === 'string' && p.status === 'granted',
+      )
+      .map((p) => p.permission)
+  } catch {
+    return null
   }
 }

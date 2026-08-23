@@ -228,6 +228,14 @@ export function FacebookPagePanel({ clientId }: Props) {
 /** What the callback redirected back with, said the way the operator needs it. */
 const META_RESULT: Record<string, { ok: boolean; text: string }> = {
   connected: { ok: true, text: '✓ 连接成功。下一个整点开始同步这个主页的私信。' },
+  publish_ready: {
+    ok: true,
+    text: '✓ 发布权限已授权。系统现在可以把内容作为草稿发到这个主页，等你在发布流程里逐条确认。',
+  },
+  publish_not_granted: {
+    ok: false,
+    text: '连接成功了，但这次授权没有勾选「管理主页帖子」，所以还不能发内容（私信同步不受影响）。请再点一次「重新授权 Meta 发布权限」，在 Meta 授权页把发帖权限一起勾上。',
+  },
   denied: { ok: false, text: '授权取消了，没有任何改动。要接私信的话再点一次。' },
   no_pages: {
     ok: false,
@@ -276,21 +284,39 @@ function ConnectMeta({ clientId, pageId }: { clientId: string; pageId: string | 
         </p>
       )}
 
-      <a
-        href={`/api/auth/facebook/connect?client_id=${clientId}`}
-        className={`inline-block rounded-lg border px-3 py-1.5 text-xs font-bold ${
-          pageId
-            ? 'border-cyan-300 bg-white text-cyan-700 hover:bg-cyan-50'
-            : 'pointer-events-none border-slate-200 bg-slate-50 text-slate-300'
-        }`}
-        aria-disabled={!pageId}
-      >
-        连接 Meta
-      </a>
+      <div className="flex flex-wrap items-center gap-2">
+        <a
+          href={`/api/auth/facebook/connect?client_id=${clientId}`}
+          className={`inline-block rounded-lg border px-3 py-1.5 text-xs font-bold ${
+            pageId
+              ? 'border-cyan-300 bg-white text-cyan-700 hover:bg-cyan-50'
+              : 'pointer-events-none border-slate-200 bg-slate-50 text-slate-300'
+          }`}
+          aria-disabled={!pageId}
+        >
+          连接 Meta
+        </a>
+
+        {/* Same OAuth flow, but carries intent=publishing so the callback fails
+            closed with a publishing-specific message if 管理主页帖子 isn't granted.
+            Needed for clients (e.g. inbox-only connects made before publishing
+            scope existed) whose stored grant lacks pages_manage_posts. */}
+        <a
+          href={`/api/auth/facebook/connect?client_id=${clientId}&intent=publishing`}
+          className={`inline-block rounded-lg border px-3 py-1.5 text-xs font-bold ${
+            pageId
+              ? 'border-cyan-300 bg-white text-cyan-700 hover:bg-cyan-50'
+              : 'pointer-events-none border-slate-200 bg-slate-50 text-slate-300'
+          }`}
+          aria-disabled={!pageId}
+        >
+          重新授权 Meta 发布权限
+        </a>
+      </div>
 
       <p className="mt-2 text-xs leading-relaxed text-slate-400">
         {pageId
-          ? '用一个能在 Business Suite 里看到这个主页消息的账号授权一次，之后不用再管。'
+          ? '用一个能在 Business Suite 里看到这个主页消息的账号授权一次，之后不用再管。要让系统能发内容到这个主页，用右边那个按钮，并在授权页勾上发帖权限。'
           : '先选好主页并保存，才能连接。'}
       </p>
     </div>

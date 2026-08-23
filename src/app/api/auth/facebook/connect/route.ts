@@ -31,10 +31,15 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: access.error }, { status: access.status })
   }
 
+  // `intent=publishing` marks the "Reauthorize Meta Publishing" action so the
+  // callback can fail closed with a publishing-specific message. Any other
+  // value is ignored — the flow itself, scopes and guards are identical.
+  const intent = req.nextUrl.searchParams.get('intent') === 'publishing' ? 'publishing' : undefined
+
   let authUrl: string
   try {
     const redirectUri = `${appUrl()}/api/auth/facebook/callback`
-    authUrl = buildAuthUrl(buildState(clientId), redirectUri)
+    authUrl = buildAuthUrl(buildState(clientId, intent), redirectUri)
   } catch (err) {
     // Missing app credentials — say which knob is missing rather than 500ing.
     return NextResponse.json(
