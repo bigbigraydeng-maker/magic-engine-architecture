@@ -253,26 +253,27 @@ export function extractHighlightTerms(raw: string): string[] {
   return Array.from(terms)
 }
 
-// 语气水词清单（保守）。仅当**独立出现**时删——见 cleanFiller 的边界判定。
+// 语气水词清单（保守）。仅当**完整独立**出现时删——见 cleanFiller 的边界判定。
 export const FILLER_PARTICLES = ['啊', '呃', '嗯', '唉', '哦', '噢', '诶', '呀']
 
-// 边界字符：标点 / 空白 / ASCII / 字符串两端。语气词只有紧挨边界时才算「独立」。
-const FILLER_BOUNDARY = /[\s，。！？；、：""''（）《》【】…—·~,.!?;:"'()]/
+// 词字符 = 汉字。语气词只有当**左右两侧都不是汉字**（被标点/空白/ASCII/串首尾这类真边界隔开）
+// 才算完整独立可删。仅靠串首/串尾一侧**不够**——另一侧是汉字就说明它黏在词里，必须保留。
+const WORD_CHAR = /[㐀-鿿]/
 
 /**
- * 清洗口播噪声：**只删独立语气词**，绝不删合法词语内部的匹配字符。
- * 「独立」= 该语气词左右至少一侧是边界（标点/空白/ASCII/句首句尾）；
- * 例：句末「…开完会啊」→ 删啊；但「不要唉声叹气」中的「唉」两侧都是汉字 → 保留。
+ * 清洗口播噪声：**只删完整独立的语气词**，绝不删合法词语内部/句首句尾的黏连字符。
+ * 判据：该语气词左右两侧都不是汉字。
+ * 例：「嗯，我们…」删嗯（两侧非汉字）；但「唉声叹气…」句首的「唉」右侧是汉字 → 保留整句；
+ *     「不要唉声叹气」「…开完会啊」中黏在汉字旁的字符同样保留。
  */
 export function cleanFiller(text: string): string {
   const chars = Array.from(text)
-  const isBoundary = (c: string | undefined): boolean =>
-    c === undefined || FILLER_BOUNDARY.test(c) || /[A-Za-z0-9]/.test(c)
+  const isWord = (c: string | undefined): boolean => c !== undefined && WORD_CHAR.test(c)
   const kept: string[] = []
   for (let i = 0; i < chars.length; i++) {
     const c = chars[i]
-    if (FILLER_PARTICLES.includes(c) && (isBoundary(chars[i - 1]) || isBoundary(chars[i + 1]))) {
-      continue // 独立语气词，删
+    if (FILLER_PARTICLES.includes(c) && !isWord(chars[i - 1]) && !isWord(chars[i + 1])) {
+      continue // 完整独立语气词，删
     }
     kept.push(c)
   }

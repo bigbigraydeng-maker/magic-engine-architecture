@@ -130,13 +130,17 @@ describe('ASR 模式纯逻辑', () => {
     const pieces = splitByLength('一二三四五，六七八', 5)
     expect(pieces.every((p) => !/^[，。！？；、：]+$/.test(p))).toBe(true)
   })
-  it('cleanFiller 只删独立语气词，不删合法词内部字符（P2#2）', () => {
-    // 末尾「啊」独立 → 删；「这个」是正常词 → 保留
-    expect(cleanFiller('刚刚跟这个一个客户开完会啊')).toBe('刚刚跟这个一个客户开完会')
-    // 「唉」在合法词「唉声叹气」内部，两侧都是汉字 → 保留
+  it('cleanFiller 只删完整独立语气词；仅串首/串尾不足（PATCH4）', () => {
+    // Codex 明例：句首合法词——「唉」右侧是汉字 → 保留整句（不得只凭串首判独立）
+    expect(cleanFiller('唉声叹气并不能解决问题')).toBe('唉声叹气并不能解决问题')
+    // 句中合法词（回归）
     expect(cleanFiller('不要唉声叹气')).toBe('不要唉声叹气')
-    // 句首「嗯」+「，」→ 删
+    // 句尾黏在汉字后的 filler 字符——不再因串尾就删
+    expect(cleanFiller('开完会啊')).toBe('开完会啊')
+    // 被真边界（标点/空白）隔开的独立语气词仍删（保留既有能力）
     expect(cleanFiller('嗯，我们才告诉 GA4')).toBe('我们才告诉 GA4')
+    expect(cleanFiller('啊 好的')).toBe('好的')
+    // 正常词不动
     expect(cleanFiller('这个功能很方便')).toBe('这个功能很方便')
   })
   it('segmentsToCaptionCues clean=true 删独立语气词', () => {
