@@ -40,8 +40,17 @@ type Outcome =
 
 function back(clientId: string | null, outcome: Outcome): NextResponse {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3001'
-  const path = clientId ? `/dashboard/clients/${clientId}/settings` : '/dashboard'
-  return NextResponse.redirect(`${appUrl}${path}?meta=${outcome}`)
+  // The outcome message and the Reauthorize action live in FacebookPagePanel,
+  // which only renders inside the client-page settings drawer's "platform" tab
+  // (`?settings=platform` opens that drawer) — NOT on the /settings route, which
+  // does not mount the panel. Landing there would hide every publish_* /
+  // verify_failed result and the retry button. clientId comes from the
+  // HMAC-verified state, never a raw query param, so this is not an open redirect.
+  const query = new URLSearchParams({ settings: 'platform', meta: outcome })
+  const path = clientId
+    ? `/dashboard/clients/${clientId}?${query.toString()}`
+    : `/dashboard?meta=${outcome}`
+  return NextResponse.redirect(`${appUrl}${path}`)
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {

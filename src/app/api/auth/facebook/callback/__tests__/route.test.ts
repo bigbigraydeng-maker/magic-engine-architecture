@@ -73,9 +73,23 @@ function makeRequest(params: { code?: string; state?: string; error?: string }) 
   return new NextRequest(url)
 }
 
+function locationOf(res: NextResponse): URL {
+  return new URL(res.headers.get('location') ?? '')
+}
+
 function outcomeOf(res: NextResponse): string | null {
-  const loc = res.headers.get('location') ?? ''
-  return new URL(loc).searchParams.get('meta')
+  return locationOf(res).searchParams.get('meta')
+}
+
+/** FacebookPagePanel — which renders every meta= outcome and the retry button —
+ *  only mounts inside the client-page settings drawer opened by ?settings=platform.
+ *  A callback that lands anywhere else hides the whole self-service loop. */
+function landsOnMetaPanel(res: NextResponse, clientId: string): boolean {
+  const url = locationOf(res)
+  return (
+    url.pathname === `/dashboard/clients/${clientId}` &&
+    url.searchParams.get('settings') === 'platform'
+  )
 }
 
 beforeEach(() => {
@@ -188,6 +202,44 @@ describe('publishing reauthorisation fails closed (#1152)', () => {
   it('an inbox connect (no intent) is unaffected — still lands on connected', async () => {
     const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
     expect(outcomeOf(res)).toBe('connected')
+  })
+})
+
+describe('every outcome returns to the surface that renders FacebookPagePanel (#1152 P1-2)', () => {
+  it('all three publishing outcomes land on the ?settings=platform drawer, not the panel-less /settings route', async () => {
+    const cases: Array<{ granted: string[] | null; expect: string }> = [
+      { granted: ['pages_show_list', 'pages_manage_posts'], expect: 'publish_ready' },
+      { granted: ['pages_show_list'], expect: 'publish_not_granted' },
+      { granted: null, expect: 'verify_failed' },
+    ]
+
+    for (const c of cases) {
+      mocks.verifyState.mockReturnValue({ clientId: CLIENT_ID, intent: 'publishing' })
+      mocks.listGrantedScopes.mockResolvedValue(c.granted)
+
+      const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+      expect(outcomeOf(res)).toBe(c.expect)
+      // Must land where the panel + retry button actually render.
+      expect(landsOnMetaPanel(res, CLIENT_ID)).toBe(true)
+    }
+  })
+
+  it('the ordinary inbox connect also lands on the panel surface — behaviour not regressed', async () => {
+    const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+    expect(outcomeOf(res)).toBe('connected')
+    expect(landsOnMetaPanel(res, CLIENT_ID)).toBe(true)
+  })
+
+  it('the redirect client id is the one from the verified signed state, never a raw request param', async () => {
+    const stateClient = '22222222-2222-2222-2222-222222222222'
+    mocks.verifyState.mockReturnValue({ clientId: stateClient, intent: 'publishing' })
+
+    const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+
+    // Path is built from the HMAC-verified clientId — this is what keeps it from
+    // being an open redirect.
+    expect(locationOf(res).pathname).toBe(`/dashboard/clients/${stateClient}`)
   })
 })
 
