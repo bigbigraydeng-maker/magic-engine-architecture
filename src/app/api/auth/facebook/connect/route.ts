@@ -39,7 +39,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   let authUrl: string
   try {
     const redirectUri = `${appUrl()}/api/auth/facebook/callback`
-    authUrl = buildAuthUrl(buildState(clientId, intent), redirectUri)
+    // Publishing reauth uses auth_type=rerequest so a previously declined
+    // pages_manage_posts is actually shown again (Meta hides it otherwise).
+    authUrl = buildAuthUrl(buildState(clientId, intent), redirectUri, intent === 'publishing')
   } catch (err) {
     // Missing app credentials — say which knob is missing rather than 500ing.
     return NextResponse.json(

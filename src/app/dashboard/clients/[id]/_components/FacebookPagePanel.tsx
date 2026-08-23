@@ -236,6 +236,10 @@ const META_RESULT: Record<string, { ok: boolean; text: string }> = {
     ok: false,
     text: '连接成功了，但这次授权没有勾选「管理主页帖子」，所以还不能发内容（私信同步不受影响）。请再点一次「重新授权 Meta 发布权限」，在 Meta 授权页把发帖权限一起勾上。',
   },
+  verify_failed: {
+    ok: false,
+    text: '刚才没能跟 Meta 核实这次授权到底给了哪些权限，所以没有改动这个连接（避免记错状态）。请稍等一下再点一次。',
+  },
   denied: { ok: false, text: '授权取消了，没有任何改动。要接私信的话再点一次。' },
   no_pages: {
     ok: false,

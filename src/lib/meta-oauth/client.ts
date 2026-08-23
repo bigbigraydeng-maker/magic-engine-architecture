@@ -125,7 +125,14 @@ export function verifyState(state: string): VerifiedState | null {
 
 // ─── Consent URL ──────────────────────────────────────────────────────────────
 
-export function buildAuthUrl(state: string, redirectUri: string): string {
+/**
+ * @param rerequest When true, adds `auth_type=rerequest`. Meta suppresses a
+ *   permission the user already declined once — the consent screen simply omits
+ *   it — so a plain re-consent can never recover `pages_manage_posts`. Only
+ *   `rerequest` forces Meta to show the declined permission again. Reserved for
+ *   the publishing reauthorisation path; the ordinary connect never sets it.
+ */
+export function buildAuthUrl(state: string, redirectUri: string, rerequest = false): string {
   const params = new URLSearchParams({
     client_id: appId(),
     redirect_uri: redirectUri,
@@ -133,6 +140,7 @@ export function buildAuthUrl(state: string, redirectUri: string): string {
     scope: META_PAGE_SCOPES.join(','),
     state,
   })
+  if (rerequest) params.set('auth_type', 'rerequest')
   return `${AUTH_URL}?${params.toString()}`
 }
 

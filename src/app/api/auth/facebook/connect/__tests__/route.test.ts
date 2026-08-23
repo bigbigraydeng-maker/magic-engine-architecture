@@ -71,22 +71,26 @@ describe('tenant isolation — no unauthenticated / cross-tenant reauthorisation
 })
 
 describe('publishing intent reaches the signed state and requests the publishing scope', () => {
-  it('intent=publishing round-trips into the state and the consent URL still asks for pages_manage_posts', async () => {
+  it('intent=publishing round-trips into the state, asks for pages_manage_posts, and forces rerequest', async () => {
     const res = await GET(makeRequest({ clientId: CLIENT_ID, intent: 'publishing' }))
 
     expect(res.status).toBe(307)
     const authUrl = new URL(res.headers.get('location') ?? '')
     expect(authUrl.hostname).toContain('facebook.com')
     expect(authUrl.searchParams.get('scope')).toContain('pages_manage_posts')
+    // Without rerequest, a permission the user already declined once is silently
+    // omitted from the consent screen — reauth could never recover publishing.
+    expect(authUrl.searchParams.get('auth_type')).toBe('rerequest')
 
     const state = authUrl.searchParams.get('state') ?? ''
     expect(verifyState(state)).toEqual({ clientId: CLIENT_ID, intent: 'publishing' })
   })
 
-  it('a plain connect (no intent) carries no intent in its state — inbox flow unchanged', async () => {
+  it('a plain connect (no intent) carries no intent and no rerequest — inbox flow unchanged', async () => {
     const res = await GET(makeRequest({ clientId: CLIENT_ID }))
 
     const authUrl = new URL(res.headers.get('location') ?? '')
+    expect(authUrl.searchParams.get('auth_type')).toBeNull()
     const state = authUrl.searchParams.get('state') ?? ''
     expect(verifyState(state)).toEqual({ clientId: CLIENT_ID })
   })

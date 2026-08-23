@@ -17,7 +17,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
-import { verifyState, exchangeCode, exchangeForLongLivedToken, listPagesWithTokens, listGrantedScopes, META_PAGE_SCOPES, META_PUBLISH_SCOPE } from '@/lib/meta-oauth/client'
+import { verifyState, exchangeCode, exchangeForLongLivedToken, listPagesWithTokens, listGrantedScopes, META_PUBLISH_SCOPE } from '@/lib/meta-oauth/client'
 import { upsertConnection } from '@/lib/platform-oauth/connection-store'
 import { PLATFORM_PROVIDERS } from '@/lib/platform-oauth/vocabulary'
 
@@ -30,6 +30,7 @@ type Outcome =
   | 'connected'
   | 'publish_ready'
   | 'publish_not_granted'
+  | 'verify_failed'
   | 'no_pages'
   | 'page_not_granted'
   | 'no_page_bound'
@@ -87,15 +88,18 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
   const expiry = new Date(Date.now() + TOKEN_LIFETIME_DAYS * 24 * 60 * 60 * 1000)
 
-  // Store what Meta ACTUALLY granted, not what we requested. The user can
+  // Store what Meta ACTUALLY granted, never what we requested. The user can
   // approve a subset on the consent screen; recording the requested constant
-  // would mark a token publish-ready that cannot publish. `null` means the
-  // permissions call failed (not "zero granted") — in that case we fall back to
-  // the requested constant so a transient error does not wipe a good grant,
-  // exactly as the TikTok callback does, and publishing stays unproven below.
+  // would mark a token publish-ready that cannot publish.
+  //
+  // `null` means the permissions read itself failed — NOT "zero granted". We
+  // must not fabricate facts on that path: writing the requested scopes would
+  // record a grant the user may never have given, and stamping last_synced_at
+  // would claim a verification that never happened. So we fail closed — leave
+  // the existing connection's known scope facts untouched by not upserting at
+  // all — and report a non-secret not-ready outcome for the operator to retry.
   const granted = await listGrantedScopes(longToken)
-  const grantedAuthoritative = granted !== null
-  const scopes = granted && granted.length > 0 ? granted : [...META_PAGE_SCOPES]
+  if (granted === null) return back(clientId, 'verify_failed')
 
   await upsertConnection({
     clientId,
@@ -105,18 +109,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     tokenExpiry: expiry,
     accountId: match.pageId,
     displayName: match.pageName,
-    scopes,
+    scopes: granted,
     lastSyncedAt: new Date(),
   })
 
-  // The publishing reauthorisation must fail closed: only report ready when the
+  // The publishing reauthorisation fails closed: only report ready when the
   // provider authoritatively confirmed pages_manage_posts. A declined grant
-  // (authoritative list without it) or an unproven one (list read failed) both
-  // stay visibly not-ready and cannot be mistaken for success. Inbox connects
-  // (no intent) keep their existing outcome unchanged.
+  // (authoritative list without it) stays visibly not-ready and cannot be
+  // mistaken for success. Inbox connects (no intent) keep their existing outcome.
   if (intent === 'publishing') {
-    const publishGranted = grantedAuthoritative && granted.includes(META_PUBLISH_SCOPE)
-    return back(clientId, publishGranted ? 'publish_ready' : 'publish_not_granted')
+    return back(clientId, granted.includes(META_PUBLISH_SCOPE) ? 'publish_ready' : 'publish_not_granted')
   }
 
   return back(clientId, 'connected')

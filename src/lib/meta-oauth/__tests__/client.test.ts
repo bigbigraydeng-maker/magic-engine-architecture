@@ -116,6 +116,14 @@ describe('meta-oauth consent url', () => {
   it('never puts the app secret in the URL the browser will visit', () => {
     expect(buildAuthUrl('s', 'https://me.test/cb')).not.toContain('app-secret-456')
   })
+
+  it('adds auth_type=rerequest only when asked — Meta hides an already-declined permission otherwise (#1152 P1)', () => {
+    const ordinary = new URL(buildAuthUrl('s', 'https://me.test/cb'))
+    expect(ordinary.searchParams.get('auth_type')).toBeNull()
+
+    const rerequest = new URL(buildAuthUrl('s', 'https://me.test/cb', true))
+    expect(rerequest.searchParams.get('auth_type')).toBe('rerequest')
+  })
 })
 
 describe('listGrantedScopes — the provider-authoritative record of what was actually granted', () => {

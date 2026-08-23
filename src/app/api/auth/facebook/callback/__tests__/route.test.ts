@@ -134,14 +134,16 @@ describe('scope persistence — provider-authoritative, never the requested cons
     expect(mocks.upsertCalls[0].scopes).toEqual(full)
   })
 
-  it('falls back to the requested constant only when the permissions read fails (transient) — never wipes a good grant', async () => {
-    mocks.listGrantedScopes.mockResolvedValue(null) // read failed
+  it('writes NOTHING and stamps no timestamp when the permissions read fails — never fabricates a grant (#1152 P2)', async () => {
+    mocks.listGrantedScopes.mockResolvedValue(null) // read failed / unparseable
 
-    await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
+    const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
 
-    // Fallback preserves the connection rather than storing [] and breaking inbox.
-    expect((mocks.upsertCalls[0].scopes as string[]).length).toBeGreaterThan(0)
-    expect(mocks.upsertCalls[0].scopes).toContain('pages_show_list')
+    // No upsert at all: the existing connection's known scope facts and its
+    // last_synced_at must be left untouched rather than overwritten with the
+    // requested constant + a false "just verified" timestamp.
+    expect(mocks.upsertCalls).toHaveLength(0)
+    expect(outcomeOf(res)).toBe('verify_failed')
   })
 })
 
@@ -173,13 +175,14 @@ describe('publishing reauthorisation fails closed (#1152)', () => {
     expect(mocks.upsertCalls[0].scopes).not.toContain('pages_manage_posts')
   })
 
-  it('reports publish_not_granted when the permissions read failed — an unproven grant is not a granted one', async () => {
+  it('a publishing reauth with a failed permissions read is not-ready AND writes nothing — no false success or timestamp', async () => {
     mocks.verifyState.mockReturnValue({ clientId: CLIENT_ID, intent: 'publishing' })
     mocks.listGrantedScopes.mockResolvedValue(null)
 
     const res = await GET(makeRequest({ code: 'auth-code', state: 'sig.state' }))
 
-    expect(outcomeOf(res)).toBe('publish_not_granted')
+    expect(outcomeOf(res)).toBe('verify_failed')
+    expect(mocks.upsertCalls).toHaveLength(0)
   })
 
   it('an inbox connect (no intent) is unaffected — still lands on connected', async () => {
