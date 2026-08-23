@@ -15,15 +15,29 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 
+vi.mock('@/lib/auth/client-access', () => ({ requireDashboardClientAccess: vi.fn() }))
 vi.mock('@/lib/supabase', () => ({ supabaseAdmin: { from: vi.fn() } }))
 
 import { GET } from '../route'
+import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { supabaseAdmin } from '@/lib/supabase'
 
+const mockAccess = vi.mocked(requireDashboardClientAccess)
 const mockFrom = vi.mocked(supabaseAdmin.from)
 
 const CTS = 'c0000000-0000-0000-0000-000000000000'
+const OZTOP = 'd5c98811-1c1d-4ded-bdf0-4cefec6afb84'
 const CAMPAIGN_ID = 'aaaaaaaa-0000-0000-0000-000000000001'
+
+function allow() {
+  mockAccess.mockResolvedValue({
+    ok: true,
+    user: { email: 'bdm@ctstours.co.nz' } as never,
+    role: 'client-viewer',
+    tier: 'paid_client',
+    allowedClientId: CTS,
+  } as never)
+}
 
 function getRequest(campaignId?: string): NextRequest {
   const url = new URL(`http://localhost:3001/api/clients/${CTS}/social-plan`)
@@ -46,8 +60,29 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+describe('social-plan GET — authorisation (#1159 Build Control finding, P1)', () => {
+  it('rejects an unauthenticated caller with 401 and never touches the database', async () => {
+    mockAccess.mockResolvedValue({ ok: false, status: 401, error: 'Unauthorized' } as never)
+
+    const res = await GET(getRequest(CAMPAIGN_ID), { params: { id: CTS } })
+
+    expect(res.status).toBe(401)
+    expect(mockFrom).not.toHaveBeenCalled()
+  })
+
+  it('rejects a caller who is not a member of this client with the helper status and never touches the database', async () => {
+    mockAccess.mockResolvedValue({ ok: false, status: 403, error: 'Forbidden' } as never)
+
+    const res = await GET(getRequest(CAMPAIGN_ID), { params: { id: OZTOP } })
+
+    expect(res.status).toBe(403)
+    expect(mockFrom).not.toHaveBeenCalled()
+  })
+})
+
 describe('social-plan GET — isolates campaign_daily_v1 rows from the legacy plan-history query', () => {
   it('applies an is-null-or-not-campaign_daily_v1 filter, not a bare not.eq (which would silently drop every legacy row too)', async () => {
+    allow()
     const legacyRow = { id: 'p1', campaign_id: CAMPAIGN_ID, plan_data: { strategy: { theme: 'x' }, reels: [], posts: [], stories: [] } }
     const stub = socialPlansStub([legacyRow])
     mockFrom.mockReturnValue(stub as never)
@@ -68,6 +103,7 @@ describe('social-plan GET — isolates campaign_daily_v1 rows from the legacy pl
   })
 
   it('never calls the bare .not(...) form of the filter — a stub without it must not throw', async () => {
+    allow()
     // stub deliberately has no `.not` method: if route.ts ever regresses to
     // `.not('plan_data->>plan_kind', 'eq', …)` this call becomes a
     // TypeError instead of a silent NULL-propagation bug — confirmed

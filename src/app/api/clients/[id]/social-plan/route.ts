@@ -112,6 +112,14 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   const clientId = params.id
+
+  // Authz — was missing entirely before. Anyone with a session (or none at
+  // all) could read another client's plan history.
+  const access = await requireDashboardClientAccess(clientId)
+  if (!access.ok) {
+    return NextResponse.json({ success: false, error: access.error }, { status: access.status })
+  }
+
   const { searchParams } = new URL(req.url)
   const executionItemId = searchParams.get('execution_item_id')
   const campaignId      = searchParams.get('campaign_id')
