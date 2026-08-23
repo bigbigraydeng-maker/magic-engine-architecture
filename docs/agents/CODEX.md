@@ -136,6 +136,39 @@ Build：npm run build 必须通过
 
 ---
 
+## FAST DELIVERY MODE V1（#1100，2026-08-23 生效，强制）
+
+Ray Product Owner 决策：Magic Engine 必须按 AI 速度交付。Codex 每个窗口在开工前必须遵守，与既有约定冲突时以此为准。真相源：GitHub Issue [#1100](https://github.com/bigbigraydeng-maker/magic-engine/issues/1100) comments `5385687885` + `5385784440`。
+
+**1. 交付速度目标**：小修 30–90 分钟；常规 MVP 2–4 小时；超过 4 小时立即 STOP，回 Build Control 证明 P0/P1 blocker；否则窄化 scope、defer 非阻断项、按小切片继续。
+
+**2. 默认单窗口生命周期**：一个 Issue = 一个 IMPLEMENT writer / window / worktree / branch / PR；一次完整实现 + writer 自测；一次集中 whole-PR review；一次集中 remediation；一份 final receipt（含 HEAD / tests / checks / unresolved blockers / deferred items / production writes / spend）；敏感边界必要时 + 一次窄的 final risk confirmation。**禁止**拆成 PATCH1 / PATCH2 / PATCH3 / closeout / reconciliation / final receipt 多轮循环。
+
+**3. Blocking 阈值（reopen 代码的唯一条件）**：仅 P0/P1 — 安全 / 隔离 / 隐私 / 鉴权失败 · 错客户 / 错 provider / 错落点 · 数据损坏、丢失、假成功、假 Outcome · 核心客户旅程断 · required checks 失败 · 直接违 Task Contract。恢复性 P2、外观、行数打磨、架构偏好、罕见并发 UX、未来规模优化：一律记 accepted deferred。一次 remediation 之后，新 P2 finding 不自动再开一轮代码；只有新 P0/P1 才能 reopen。Codex 必须主动挡下试图借新 P2 finding 反复重开代码的行为。
+
+**4. 风险分级 review 强度**（不因一小段敏感边界就把整个 PR 升级到 Risk A）：
+
+- **Risk A**（安全 / 隔离 / 隐私 / 鉴权 / 付款 / 发布 / 生产 / provider 花费 / 错落点）：一次集中 review + 一次 remediation + 敏感边界一次窄终审；
+- **Risk B**（只读客户 UI / 编辑 / 展示 / 下载）：writer 自测 + 一次独立集中 review；无实证 blocker 不加第二次终审；
+- **Risk C**（本地 / 内部非生产 proof）：tests + 必要人工/视觉验收；**禁止套 Risk A 全礼节**。
+
+与「风险分级质量闸」并行：本条设 review 轮次上限，质量闸设测试与验证强度。
+
+**5. Claude 窗口数量上限**（PM 不管窗口舰队）：默认最多一个当前最短板 lane 的 active Claude IMPLEMENT 窗口；HEAD 冻结到 review 时机时才可加一个独立只读 REVIEW 窗口；SCOUT 优先走 Build Control / Codex 只读检查，不新开 Claude 窗口；remediation 复用同一 writer；完成的窗口先 close / HOLD 再申请新窗口。申请新 Claude 窗口必须回答：现有为什么不能复用？精确碰撞边界？为什么必要？「throughput 更快」不算充分理由。**Codex 是首选的只读 SCOUT 通道，不要建议 Ray 为普通 audit / discovery 新开 Claude 窗口。**
+
+**6. Relay / IMPLEMENT 提示词前置四条款**（Codex 收到派活提示词时必须验证已包含；缺一条即视为合同不完整，回 Build Control 补齐后再动手）：
+
+```text
+开工前先完整读取 #1100 最新 FAST DELIVERY MODE 及本 Issue 最新 Build Control 合同，并严格遵守。
+不要过度开发。若范围扩大，立即停止、撤回或收窄并回报 Build Control；不得自行继续。
+优先复用现有窗口、worktree、branch 和 PR。未经 Build Control 明确证明必要，不得新开 Claude 窗口、SCOUT、第二 reviewer、第二 branch 或第二 PR。
+本轮最多一次集中 review、一次集中 remediation；普通 P2/架构打磨/未来优化一律 deferred，不得重新打开代码循环。
+```
+
+**边界不变**：本规则不授权 merge / deploy / migration / 生产写 / provider 写 / 客户接触 / spend；只降流程冗余，不弱化结构安全。默认停在 Draft PR。
+
+---
+
 ## GitHub Task Contract Protocol（所有 Codex 窗口强制）
 
 治理真相源见 GitHub Issue **#1100**：`[Build Control Governance] GitHub Task Contract Protocol — Issue = Contract, PR = Implementation`。
