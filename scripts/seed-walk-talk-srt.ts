@@ -3,14 +3,19 @@
  * 仅此一步允许 provider —— 恰好一次 OpenAI whisper-1 调用（Ray 授权，上限 US$0.02）。
  * 失败即退出，**不自动重试**（预算铁律）。产出 SRT 后，所有 edit/import/re-render 走 render-walk-talk-from-srt.ts，零 provider。
  *
+ * 两道 fail-closed 守卫（PATCH1，实现在 walk-talk-seed.ts，付费/落文件前生效）：
+ *   ① 预算前置：先测时长→估算 whisper 成本，超 US$0.02 上限即在抽音频/调 provider 前抛（报时长+估算）。
+ *   ② 绝不覆盖：目标 SRT 已存在即拒；最终写用 'wx' 独占创建，竞态下不盖 Ray 已手改的版本。
+ *
  * 不出片、不上传、不写库；只落一个本地 .srt 文件供 Ray 手改（含把 `Claude` 改成 `Strategy Engine`）。
  *
  * Usage：
  *   OPENAI_API_KEY=sk-... npx tsx scripts/seed-walk-talk-srt.ts <rawMp4> <scriptTxt> <outSrt>
- *   可选 WALKTALK_MAXCHARS（默认 14）、WALKTALK_CLEAN=0 关闭语气水词清洗（默认清洗）。
+ *   <outSrt> 必须是**尚不存在**的新路径。可选 WALKTALK_MAXCHARS（默认 14）、WALKTALK_CLEAN=0 关闭语气水词清洗（默认清洗）。
  */
 
-import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises'
+import { readFile, writeFile, mkdtemp, rm, access } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -23,6 +28,7 @@ import {
   extractHighlightTerms,
 } from '../src/lib/factory/walk-talk-proof'
 import { cuesToSrt } from '../src/lib/factory/caption-srt'
+import { seedWalkTalkSrt, type SeedDeps } from '../src/lib/factory/walk-talk-seed'
 
 async function main(): Promise<void> {
   const [rawPath, scriptPath, outSrt] = process.argv.slice(2)
@@ -36,33 +42,47 @@ async function main(): Promise<void> {
   await assertInputReadable(scriptPath, '口播稿')
 
   const rawScript = await readFile(scriptPath, 'utf8')
-  const durationSec = await ffprobeDuration(rawPath)
   const maxChars = Number(process.env.WALKTALK_MAXCHARS ?? 14)
   const clean = process.env.WALKTALK_CLEAN !== '0'
+  const keywords = extractHighlightTerms(rawScript)
 
-  const dir = await mkdtemp(join(tmpdir(), 'walktalk-seed-'))
-  let providerCalls = 0
-  try {
-    const audio = join(dir, 'audio.mp3')
-    await extractAudioForAsr(rawPath, audio)
-    // —— 唯一 provider 调用（恰好一次；失败不重试）——
-    providerCalls++
-    const segments = await transcribeAudio(audio, apiKey)
-    const cues = segmentsToCaptionCues(segments, durationSec, maxChars, extractHighlightTerms(rawScript), clean)
-    validateCaptionCues(cues, durationSec)
-    const srt = cuesToSrt(cues)
-    await writeFile(outSrt, srt, 'utf8')
-
-    const hasClaude = /claude/i.test(srt)
-    // eslint-disable-next-line no-console
-    console.log(
-      `✅ seed SRT 写出：${outSrt}\n` +
-        `   时长 ${durationSec.toFixed(1)}s · 字幕 ${cues.length} 条 · provider 调用 ${providerCalls} 次（whisper-1）\n` +
-        `   下一步：请 Ray 手改文字${hasClaude ? '（⚠️ 检测到 `Claude`，须改为 `Strategy Engine`）' : ''}，再跑 render-walk-talk-from-srt.ts 重出（零 provider）`,
-    )
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {})
+  let tmpDir: string | undefined
+  const deps: SeedDeps = {
+    probeDuration: ffprobeDuration,
+    extractAudio: extractAudioForAsr,
+    transcribe: transcribeAudio,
+    buildCues: (segments, durationSec) => {
+      const cues = segmentsToCaptionCues(segments, durationSec, maxChars, keywords, clean)
+      validateCaptionCues(cues, durationSec)
+      return cues
+    },
+    serialize: cuesToSrt,
+    destExists: async (p) => {
+      try {
+        await access(p, fsConstants.F_OK)
+        return true
+      } catch {
+        return false
+      }
+    },
+    writeExclusive: (p, data) => writeFile(p, data, { encoding: 'utf8', flag: 'wx' }),
+    makeAudioPath: async () => {
+      tmpDir = await mkdtemp(join(tmpdir(), 'walktalk-seed-'))
+      return join(tmpDir, 'audio.mp3')
+    },
+    cleanup: async () => {
+      if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+    },
   }
+
+  const res = await seedWalkTalkSrt({ rawPath, outSrtPath: outSrt, apiKey, deps })
+  const hasClaude = /claude/i.test(res.srt)
+  // eslint-disable-next-line no-console
+  console.log(
+    `✅ seed SRT 写出：${outSrt}\n` +
+      `   字幕 ${res.cues.length} 条 · provider 调用 ${res.providerCalls} 次（whisper-1）· 估算成本 $${res.estimatedCostUsd.toFixed(4)}\n` +
+      `   下一步：请 Ray 手改文字${hasClaude ? '（⚠️ 检测到 `Claude`，须改为 `Strategy Engine`）' : ''}，再跑 render-walk-talk-from-srt.ts 重出（零 provider）`,
+  )
 }
 
 main().catch((e) => {
