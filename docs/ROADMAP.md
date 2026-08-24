@@ -90,7 +90,7 @@
 
 **运维泳道（也不并入本链，等 PM 拍板）**：
 - [ ] [#911](https://github.com/bigbigraydeng-maker/magic-engine/issues/911) / PR [#912](https://github.com/bigbigraydeng-maker/magic-engine/pull/912) OPS03 事件驱动 Issue 中继试点 —— ⚠️ 它写死的唯一标的 #910 **已关闭**，试点要么改标的要么归档
-- [ ] PR [#931](https://github.com/bigbigraydeng-maker/magic-engine/pull/931) OPS02「Codex 复审干净就自动合并」—— ⚠️ 前置未成立：唯一能给出「复审干净」信号的 `handle-review` 流水线**现在是坏的**（[#939](https://github.com/bigbigraydeng-maker/magic-engine/issues/939)：`.github/workflows/ops-codex-to-claude-fix.yml` 没传 `allowed_bots`，Codex 机器人一提意见就必挂，#935 / #936 均实测复现）。
+- [ ] PR [#931](https://github.com/bigbigraydeng-maker/magic-engine/pull/931) OPS02「Codex 复审干净就自动合并」—— ⚠️ 前置有变化：原引用的 [#939](https://github.com/bigbigraydeng-maker/magic-engine/issues/939) 已于 2026-08-16 关闭修复，不再是阻塞点。2026-08-24 在 PR [#1174](https://github.com/bigbigraydeng-maker/magic-engine/pull/1174) 上实测确认 `ops-codex-to-claude-fix.yml` 这套「Codex 复审→Claude 自动修复」循环本身跑得通（Codex 审出问题打 P2 标签 → 自动触发修复 → Claude 推送修复 commit，全链路验证成功）。真正的前置缺口在别处：`tools/ops-review-loop/src/fix-scope.mjs` 的 `GUARDED_BRANCH_PREFIXES`（与 workflow 的 `if:` 守卫同步）把生效分支范围焊死在 `claude/me2-` 前缀，而团队实际工作分支命名是 `claude/<issue号>-<slug>`（如 `claude/1169-todo-reconciliation-wp1-khz`），从不匹配这个前缀 —— 这套循环目前只在专门起的 `claude/me2-*` 分支上验证过，还没覆盖到日常工作分支。
       ✅ **兜底闸门这一条不是问题**：2026-08-12 实查，`main` 上有 **active 的 ruleset「Protect main」** —— 禁删、禁 force push、只许 merge commit、**所有复审线程必须解决**、`ai-orchestrator-tests` 必须过。（旧说法「GitHub Free 私有仓库开不了分支保护」已作废，ruleset 已对私有仓库开放。）
 
 ---
