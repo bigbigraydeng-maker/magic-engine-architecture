@@ -5,6 +5,22 @@
 
 ---
 
+### 2026-08-24（ME2-OPS02 自动修复循环范围放宽到全部 claude/\*，PR [#1175](https://github.com/bigbigraydeng-maker/magic-engine/pull/1175)）
+
+**发生了什么**：PM 要开发一个"Codex 审代码意见自动接给 Claude 去改"的功能，排查发现这套东西（`tools/ops-review-loop`，代号 ME2-OPS02）早就建好了，但 `ops-codex-to-claude-fix.yml` 最近 100 次运行全是 `skipped`——不是 ROADMAP.md 里记的 issue [#939](https://github.com/bigbigraydeng-maker/magic-engine/issues/939)（那个已经 2026-08-16 修好了，文档没更新），真正原因是自动修复腿的生效分支范围被写死在 `claude/me2-*` 前缀，而团队实际工作分支都叫 `claude/<issue号>-<slug>`，从不匹配。
+
+**验证**：开了专门的测试 PR [#1174](https://github.com/bigbigraydeng-maker/magic-engine/pull/1174)（分支命名匹配旧前缀，故意留一个数组越界 bug），确认全链路真的跑通——Codex 5 分钟内审出 bug 打 P2 标签，自动修复流程当场触发，Claude 推了一个正确的修复 commit。验证完关闭（未合并，未删分支）。
+
+**放宽范围前的风险**：这条腿之所以窄，是因为本仓库"一分支一窗口"（CLAUDE.md §6）——放宽到所有 `claude/*` 会有跟真人/别的窗口正在改的分支抢推送的风险。子牙（架构）与魏征（挑刺）两个独立 agent 在设计阶段都卡在这一点，不建议裸放宽。
+
+**修复**：把 `GUARDED_BRANCH_PREFIXES` 从 `['claude/me2-']` 放宽到 `['claude/']`，同时在 `handle-review.mjs` 加一道新鲜度检测——自动触发修复前重新拉一次 PR 头部 sha，如果已经比 Codex 审查时的那个 commit 新（说明有人在这期间又推了代码），就跳过这一轮，不拿旧审查意见强推到新代码上。**已知未完全覆盖的窗口**：这道检测只在 job 启动时查一次，不覆盖 Claude 实际改代码、推送那几分钟的窗口，那段窗口的保护退化为 git 自身的非快进推送拒绝（未独立验证 `claude-code-action` 的推送行为），已在 PR 描述里如实披露。
+
+**质量闸**：`npx vitest run tools/ops-review-loop` 131/131 通过（含 4 个新增 `isStale` 用例）；`npx tsc --noEmit` 改动文件零新增错误。子牙+魏征各审两轮（设计阶段一次、实施完成后再审一次，共 4 次独立审查）。PM `go pr merge` 后合并。
+
+**Reuse Statement**：复用已有的 `tools/ops-review-loop` 全部基础设施（`plan.mjs` 决策函数、`github.mjs` 的 `getPullRequest`、marker/dedup 机制、`decideStage` 的测试框架）——没有新建任何模块或新依赖，只放宽一个常量、加一个基于既有 `getPullRequest` 的判断分支。属于纯 OPS 内部工具，不涉及任何客户/行业维度，不写任何客户名或客户私有事实进 shared runtime。
+
+---
+
 ### 2026-08-23（AI Visibility Tracker OpenAI 引擎模型退役静默失效修复，PR [#1167](https://github.com/bigbigraydeng-maker/magic-engine/pull/1167)）
 
 **发生了什么**：闽商潜在客户批量诊断任务中意外发现，`src/lib/ai-tracker/runners/openai.ts` 写死的 `gpt-4o-search-preview`（AI Visibility Tracker 每周一 cron `ai-tracker-weekly` 的 OpenAI 侧模型）被 OpenAI 于 2026-07-23 整族退役，现场 canary 实测全系列变体（含带日期快照与滚动别名）一律 404。查生产 Supabase：openai 引擎最后一次成功记录停在 2026-08-17（上周一），2026-08-17 之后到发现时为止零记录——说明本周一（08-24 01:00 UTC）的 cron 还没跑过，是抢在下一次触发前修复的，**未真正命中生产**。cron 路由是 fire-and-forget（202 立即返回）+ orchestrator 对单次 runner 失败有 try/catch 兜底，healthchecks.io 只在 curl 拿到 202 时 ping 成功，不会因为下游任务失败报警——是本条铁律要求专门核实、单独排查的一类静默失效。
