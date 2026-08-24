@@ -115,7 +115,7 @@ describe('CampaignDailyCommandSchema', () => {
     const parsed = CampaignDailyCommandSchema.safeParse({
       campaign_id: 'c0000000-0000-0000-0000-000000000000', // CTS's real id shape
       days,
-      current_bundle: { date: '2026-08-24', post: null, story: null, reel: null },
+      bundles: [{ date: '2026-08-24', post: null, story: null, reel: null }],
     })
     expect(parsed.success).toBe(true)
   })
@@ -124,16 +124,37 @@ describe('CampaignDailyCommandSchema', () => {
     const parsed = CampaignDailyCommandSchema.safeParse({
       campaign_id: CAMPAIGN_ID,
       days: days.slice(0, 6),
-      current_bundle: { date: '2026-08-24', post: null, story: null, reel: null },
+      bundles: [{ date: '2026-08-24', post: null, story: null, reel: null }],
     })
     expect(parsed.success).toBe(false)
+  })
+
+  it('rejects a plan with zero bundles', () => {
+    const parsed = CampaignDailyCommandSchema.safeParse({
+      campaign_id: CAMPAIGN_ID,
+      days,
+      bundles: [],
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  it('accepts a plan with 1-7 bundles (not every day needs to be filled at once)', () => {
+    const parsed = CampaignDailyCommandSchema.safeParse({
+      campaign_id: CAMPAIGN_ID,
+      days,
+      bundles: [
+        { date: '2026-08-24', post: null, story: null, reel: null },
+        { date: '2026-08-25', post: null, story: null, reel: null },
+      ],
+    })
+    expect(parsed.success).toBe(true)
   })
 
   it('rejects a story bundle with zero frames', () => {
     const parsed = CampaignDailyCommandSchema.safeParse({
       campaign_id: CAMPAIGN_ID,
       days,
-      current_bundle: { date: '2026-08-24', post: null, story: { frames: [] }, reel: null },
+      bundles: [{ date: '2026-08-24', post: null, story: { frames: [] }, reel: null }],
     })
     expect(parsed.success).toBe(false)
   })
@@ -147,12 +168,12 @@ describe('CampaignDailyCommandSchema', () => {
     const parsed = CampaignDailyCommandSchema.safeParse({
       campaign_id: CAMPAIGN_ID,
       days,
-      current_bundle: {
+      bundles: [{
         date: '2026-08-24',
         post: null,
         story: null,
         reel: { brief: 'b', script: 's', caption: 'c', source_asset_ids: [], media_status: 'READY' },
-      },
+      }],
     })
     expect(parsed.success).toBe(false)
   })
@@ -162,12 +183,12 @@ describe('CampaignDailyCommandSchema', () => {
       const parsed = CampaignDailyCommandSchema.safeParse({
         campaign_id: CAMPAIGN_ID,
         days,
-        current_bundle: {
+        bundles: [{
           date: '2026-08-24',
           post: null,
           story: null,
           reel: { brief: 'b', script: 's', caption: 'c', source_asset_ids: [], media_status },
-        },
+        }],
       })
       expect(parsed.success).toBe(true)
     }

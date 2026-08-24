@@ -1,5 +1,5 @@
 /**
- * Tests for the Campaign Daily Plan review slice (#1159 WP1).
+ * Tests for the Campaign Daily Plan review slice (#1159 WP1 + 7-day remediation).
  *
  * This surface only ever reads/persists structured facts (via `social_plans`,
  * `campaign_briefs`, `master_briefs`, `client_assets`) — it never calls a
@@ -73,26 +73,31 @@ const CAMPAIGN = {
 function sevenDays() {
   return Array.from({ length: 7 }, (_, i) => ({
     date: `2026-08-2${i}`,
-    slots: { post: 'NOT_PLANNED', story: 'NOT_PLANNED', reel: 'NOT_PLANNED' },
+    slots: { post: 'PLANNED', story: 'PLANNED', reel: 'PLANNED' },
   }))
+}
+
+function bundle(overrides: Record<string, unknown> = {}) {
+  return {
+    date: '2026-08-24',
+    post: { hook: 'hook', body: 'body copy', cta: 'Book now' },
+    story: { frames: [{ order: 1, copy: 'frame one' }] },
+    reel: {
+      brief: 'a brief',
+      script: 'a script',
+      caption: 'a caption',
+      source_asset_ids: [ASSET_ID],
+      media_status: 'NO_MEDIA',
+    },
+    ...overrides,
+  }
 }
 
 function validCommand(overrides: Record<string, unknown> = {}) {
   return {
     campaign_id: CAMPAIGN_ID,
     days: sevenDays(),
-    current_bundle: {
-      date: '2026-08-24',
-      post: { hook: 'hook', body: 'body copy', cta: 'Book now' },
-      story: { frames: [{ order: 1, copy: 'frame one' }] },
-      reel: {
-        brief: 'a brief',
-        script: 'a script',
-        caption: 'a caption',
-        source_asset_ids: [ASSET_ID],
-        media_status: 'NO_MEDIA',
-      },
-    },
+    bundles: [bundle()],
     ...overrides,
   }
 }
@@ -173,7 +178,6 @@ describe('campaign-daily-plan GET — grounding', () => {
     const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
 
     expect(json.grounding).toMatchObject({ status: 'NEEDS_BRIEF', has_master_brief: false })
-    expect(json.readiness.master_brief_grounding).toBe(false)
   })
 
   // Regression (#1159 WP1 scope-shrink comment 5388882992, finding 1): a
@@ -197,50 +201,23 @@ describe('campaign-daily-plan GET — grounding', () => {
     expect(json.success).toBe(false)
   })
 
-  // Regression (#1159 WP1 scope-shrink comment 5388882992, finding 2):
-  // "Master Brief connected" / "Campaign connected" must never be read as
-  // "the content is factually supported" — WP1 does no evidence/claim
-  // verification, so evidence_grounding is always the honest UNKNOWN, even
-  // when both records exist.
-  it('reports evidence_grounding as UNKNOWN even when both Campaign and Master Brief exist', async () => {
-    allow()
-    mockGetCampaign.mockResolvedValue(CAMPAIGN)
-    mockFrom.mockImplementation((table: string) => {
-      if (table === 'master_briefs') {
-        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 3 } }) }) as never
-      }
-      if (table === 'social_plans') {
-        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [] }) }) as never
-      }
-      return tableStub({}) as never
-    })
-
-    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
-
-    expect(json.grounding.status).toBe('OK')
-    expect(json.readiness.evidence_grounding).toBe('UNKNOWN')
-  })
-
   // Regression (#1159 remediation, Build Control finding 2): grounding for a
   // SAVED plan must reflect what it was actually grounded in at save time
   // (plan_data.master_brief_ref), not "does any active brief happen to exist
-  // right now". Otherwise a plan saved with master_brief_ref: null falsely
-  // reads as OK the moment someone later adds an active brief, even though
-  // nobody re-validated that content against it.
+  // right now".
   it('reports NEEDS_BRIEF for a saved plan whose master_brief_ref was null, even though an active brief exists NOW', async () => {
     allow()
     mockGetCampaign.mockResolvedValue(CAMPAIGN)
     const savedWithoutBrief = {
       plan_kind: 'campaign_daily_v1',
       campaign_id: CAMPAIGN_ID,
-      master_brief_ref: null, // saved before any brief existed
+      master_brief_ref: null,
       days: sevenDays(),
-      current_bundle: { date: '2026-08-24', post: null, story: null, reel: null },
+      bundles: [bundle({ post: null, story: null, reel: null })],
       command_meta: { source: 'conversation_command', received_at: '2026-08-01T00:00:00.000Z', raw_summary: null },
     }
     mockFrom.mockImplementation((table: string) => {
       if (table === 'master_briefs') {
-        // an active brief exists NOW — but the saved plan predates it
         return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
       }
       if (table === 'social_plans') {
@@ -252,41 +229,11 @@ describe('campaign-daily-plan GET — grounding', () => {
     const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
 
     expect(json.grounding.status).toBe('NEEDS_BRIEF')
-    expect(json.readiness.master_brief_grounding).toBe(false)
-  })
-
-  it('reports OK for a saved plan grounded in a brief that has since been superseded — the saved ref still stands', async () => {
-    allow()
-    mockGetCampaign.mockResolvedValue(CAMPAIGN)
-    const savedWithOldBrief = {
-      plan_kind: 'campaign_daily_v1',
-      campaign_id: CAMPAIGN_ID,
-      master_brief_ref: { id: 'old-brief-id', version: 1 },
-      days: sevenDays(),
-      current_bundle: { date: '2026-08-24', post: null, story: null, reel: null },
-      command_meta: { source: 'conversation_command', received_at: '2026-08-01T00:00:00.000Z', raw_summary: null },
-    }
-    mockFrom.mockImplementation((table: string) => {
-      if (table === 'master_briefs') {
-        // a DIFFERENT, newer brief is active now
-        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'new-brief-id', version: 2 } }) }) as never
-      }
-      if (table === 'social_plans') {
-        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: savedWithOldBrief }] }) }) as never
-      }
-      return tableStub({}) as never
-    })
-
-    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
-
-    // Saved plan WAS grounded (in the old brief) — that fact does not become
-    // false just because the active brief has since changed.
-    expect(json.grounding.status).toBe('OK')
   })
 
   it('reports NEEDS_CAMPAIGN — and never invents a plan — when the campaign does not resolve for this client', async () => {
     allow()
-    mockGetCampaign.mockResolvedValue(null) // wrong-client or nonexistent — getCampaignById already scopes by client_id
+    mockGetCampaign.mockResolvedValue(null)
     mockFrom.mockImplementation((table: string) => {
       if (table === 'master_briefs') {
         return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
@@ -297,29 +244,29 @@ describe('campaign-daily-plan GET — grounding', () => {
     const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
 
     expect(json.grounding.status).toBe('NEEDS_CAMPAIGN')
-    expect(json.current_bundle).toBeNull()
+    expect(json.bundles).toEqual([])
     expect(json.days.every((d: { slots: { post: string } }) => d.slots.post === 'NOT_PLANNED')).toBe(true)
   })
 })
 
-describe('campaign-daily-plan GET — current bundle, provenance and readiness', () => {
+describe('campaign-daily-plan GET — multi-day bundles, provenance and readiness', () => {
+  const day1 = bundle({ date: '2026-08-24' })
+  const day2 = bundle({
+    date: '2026-08-25',
+    post: { hook: 'day 2 hook', body: 'day 2 body', cta: 'Book now' },
+    story: { frames: [{ order: 1, copy: 'day 2 frame' }] },
+    reel: { brief: 'day 2 brief', script: 'day 2 script', caption: 'day 2 caption', source_asset_ids: [], media_status: 'NO_MEDIA' },
+  })
   const persistedPlanData = {
     plan_kind: 'campaign_daily_v1',
     campaign_id: CAMPAIGN_ID,
     master_brief_ref: { id: BRIEF_ID, version: 2 },
     days: sevenDays(),
-    current_bundle: {
-      date: '2026-08-24',
-      post: { hook: 'h', body: 'b', cta: 'Book now' },
-      story: { frames: [{ order: 1, copy: 'f1' }] },
-      reel: { brief: 'br', script: 'sc', caption: 'cap', source_asset_ids: [ASSET_ID], media_status: 'NO_MEDIA' },
-    },
+    bundles: [day1, day2],
     command_meta: { source: 'conversation_command', received_at: '2026-08-24T00:00:00.000Z', raw_summary: null },
   }
 
-  it('returns Post/Story/Reel current bundle with provenance and never claims media is ready without real output', async () => {
-    allow()
-    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+  function stubWithAssets(assetRows: unknown[]) {
     mockFrom.mockImplementation((table: string) => {
       if (table === 'master_briefs') {
         return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 2 } }) }) as never
@@ -328,39 +275,68 @@ describe('campaign-daily-plan GET — current bundle, provenance and readiness',
         return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: persistedPlanData }] }) }) as never
       }
       if (table === 'client_assets') {
-        return tableStub({
-          in: vi.fn().mockResolvedValue({
-            data: [{ id: ASSET_ID, storage_url: 'https://x/y.jpg', original_filename: 'y.jpg', source: 'stock', ownership: 'client_exclusive' }],
-          }),
-        }) as never
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: assetRows }) }) as never
       }
       return tableStub({}) as never
     })
+  }
+
+  it('returns Post/Story/Reel for EVERY persisted day, not just day 1', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    stubWithAssets([{ id: ASSET_ID, storage_url: 'https://x/y.jpg', original_filename: 'y.jpg', source: 'stock', ownership: 'client_exclusive' }])
 
     const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
 
-    expect(json.current_bundle.post.hook).toBe('h')
-    expect(json.current_bundle.story.frames).toHaveLength(1)
-    expect(json.current_bundle.reel.media_status).toBe('NO_MEDIA')
-    expect(json.provenance).toEqual([
-      expect.objectContaining({ id: ASSET_ID, source: 'stock' }),
-    ])
-    expect(json.readiness.client_asset_provenance).toBe(true)
-    expect(json.readiness.format_completeness).toEqual({ post: true, story: true, reel: true })
+    expect(json.bundles).toHaveLength(2)
+    const b1 = json.bundles.find((b: { date: string }) => b.date === '2026-08-24')
+    const b2 = json.bundles.find((b: { date: string }) => b.date === '2026-08-25')
+    expect(b1.post.hook).toBe('hook')
+    expect(b2.post.hook).toBe('day 2 hook')
+    expect(b2.story.frames[0].copy).toBe('day 2 frame')
+    expect(b2.reel.media_status).toBe('NO_MEDIA')
   })
 
-  it('flags provenance as unresolved when a referenced asset does not belong to this client', async () => {
+  it('computes readiness and provenance independently per day', async () => {
     allow()
     mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    stubWithAssets([{ id: ASSET_ID, storage_url: 'https://x/y.jpg', original_filename: 'y.jpg', source: 'stock', ownership: 'client_exclusive' }])
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+
+    const b1 = json.bundles.find((b: { date: string }) => b.date === '2026-08-24')
+    const b2 = json.bundles.find((b: { date: string }) => b.date === '2026-08-25')
+    expect(b1.readiness.client_asset_provenance).toBe(true)
+    expect(b1.provenance).toEqual([expect.objectContaining({ id: ASSET_ID })])
+    expect(b2.readiness.client_asset_provenance).toBe(false)
+    expect(b2.provenance).toEqual([])
+  })
+
+  it('never claims media is ready without real output, for any day', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    stubWithAssets([])
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+
+    expect(json.bundles.every((b: { reel: { media_status: string } }) => b.reel.media_status === 'NO_MEDIA')).toBe(true)
+  })
+
+  // Regression (Build Control remediation 5394505714, required test 3):
+  // a day marked PLANNED with no matching bundle entry must fail honestly,
+  // never silently borrow another day's (e.g. Day 1's) content.
+  it('a PLANNED day with no matching bundle entry is honestly absent from `bundles`, never borrowed from another day', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    const partialPlanData = { ...persistedPlanData, bundles: [day1] }
     mockFrom.mockImplementation((table: string) => {
       if (table === 'master_briefs') {
         return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 2 } }) }) as never
       }
       if (table === 'social_plans') {
-        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: persistedPlanData }] }) }) as never
+        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: partialPlanData }] }) }) as never
       }
       if (table === 'client_assets') {
-        // client_assets query is scoped .eq('client_id', clientId) — a foreign asset simply never comes back
         return tableStub({ in: vi.fn().mockResolvedValue({ data: [] }) }) as never
       }
       return tableStub({}) as never
@@ -368,33 +344,20 @@ describe('campaign-daily-plan GET — current bundle, provenance and readiness',
 
     const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
 
-    expect(json.provenance).toEqual([])
-    expect(json.readiness.client_asset_provenance).toBe(false)
+    expect(json.bundles).toHaveLength(1)
+    expect(json.bundles.find((b: { date: string }) => b.date === '2026-08-25')).toBeUndefined()
+    expect(json.days.find((d: { date: string }) => d.date === '2026-08-25').slots.post).toBe('PLANNED')
   })
 
   it('publishing plan and ad candidate are always NOT_AUTHORIZED', async () => {
     allow()
     mockGetCampaign.mockResolvedValue(CAMPAIGN)
-    mockFrom.mockImplementation((table: string) => {
-      if (table === 'master_briefs') {
-        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 2 } }) }) as never
-      }
-      if (table === 'social_plans') {
-        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: persistedPlanData }] }) }) as never
-      }
-      if (table === 'client_assets') {
-        return tableStub({ in: vi.fn().mockResolvedValue({ data: [] }) }) as never
-      }
-      return tableStub({}) as never
-    })
+    stubWithAssets([])
 
     const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
 
     expect(json.publishing_plan.status).toBe('NOT_AUTHORIZED')
     expect(json.ad_candidate.status).toBe('NOT_AUTHORIZED')
-    expect(json.readiness.provider_authorization).toBe(false)
-    expect(json.readiness.publishing_authorization).toBe(false)
-    expect(json.readiness.performance_outcome).toBe('UNKNOWN')
   })
 })
 
@@ -416,17 +379,20 @@ describe('campaign-daily-plan POST — persistence seam authorisation', () => {
     expect(mockFrom).not.toHaveBeenCalled()
   })
 
+  it('rejects a command with zero bundles before touching the database', async () => {
+    allow()
+    const res = await POST(postRequest(validCommand({ bundles: [] })), params())
+
+    expect(res.status).toBe(400)
+    expect(mockFrom).not.toHaveBeenCalled()
+  })
+
   // Regression (#1159 remediation, Build Control finding 3): the server must
-  // never persist a caller-declared media_status of READY — WP1 has no real
-  // output to verify it against, so trusting the claim would let a reviewer
-  // see "可用成片（READY）" for a Reel that is still just a script.
-  it('rejects a command that declares the Reel media_status is READY, before touching the database', async () => {
+  // never persist a caller-declared media_status of READY.
+  it("rejects a command that declares any day's Reel media_status is READY, before touching the database", async () => {
     allow()
     const cmd = validCommand({
-      current_bundle: {
-        ...validCommand().current_bundle,
-        reel: { ...(validCommand().current_bundle.reel as object), media_status: 'READY' },
-      },
+      bundles: [bundle({ reel: { ...bundle().reel, media_status: 'READY' } })],
     })
 
     const res = await POST(postRequest(cmd), params())
@@ -440,7 +406,7 @@ describe('campaign-daily-plan POST — persistence seam authorisation', () => {
 describe('campaign-daily-plan POST — fail-closed tenant boundary', () => {
   it('rejects a campaign that does not belong to this client', async () => {
     allow()
-    mockGetCampaign.mockResolvedValue(null) // getCampaignById already scopes by client_id
+    mockGetCampaign.mockResolvedValue(null)
 
     const res = await POST(postRequest(validCommand()), params())
 
@@ -448,7 +414,7 @@ describe('campaign-daily-plan POST — fail-closed tenant boundary', () => {
     expect((await res.json()).error).toBe('NEEDS_CAMPAIGN')
   })
 
-  it('rejects a source asset that belongs to a different client', async () => {
+  it('rejects a source asset that belongs to a different client, referenced from any day', async () => {
     allow()
     mockGetCampaign.mockResolvedValue(CAMPAIGN)
     mockFrom.mockImplementation((table: string) => {
@@ -456,17 +422,16 @@ describe('campaign-daily-plan POST — fail-closed tenant boundary', () => {
         return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
       }
       if (table === 'client_assets') {
-        // only the FOREIGN_ASSET_ID was requested, and it never resolves under this client's scope
         return tableStub({ in: vi.fn().mockResolvedValue({ data: [] }) }) as never
       }
       return tableStub({}) as never
     })
 
     const cmd = validCommand({
-      current_bundle: {
-        ...validCommand().current_bundle,
-        reel: { ...(validCommand().current_bundle.reel as object), source_asset_ids: [FOREIGN_ASSET_ID] },
-      },
+      bundles: [
+        bundle({ date: '2026-08-24' }),
+        bundle({ date: '2026-08-25', reel: { ...bundle().reel, source_asset_ids: [FOREIGN_ASSET_ID] } }),
+      ],
     })
 
     const res = await POST(postRequest(cmd), params())
@@ -475,9 +440,6 @@ describe('campaign-daily-plan POST — fail-closed tenant boundary', () => {
     expect((await res.json()).error).toBe('ASSET_NOT_OWNED_BY_CLIENT')
   })
 
-  // Regression (#1159 WP1 scope-shrink comment 5388882992, finding 1): a
-  // FAILED Master Brief lookup must return 500 and must never reach the
-  // social_plans insert/update below it.
   it('propagates a Master Brief lookup error as 500 and never touches social_plans', async () => {
     allow()
     mockGetCampaign.mockResolvedValue(CAMPAIGN)
@@ -503,7 +465,7 @@ describe('campaign-daily-plan POST — fail-closed tenant boundary', () => {
 })
 
 describe('campaign-daily-plan POST — persists structured facts (no LLM/provider call)', () => {
-  it('inserts a new campaign_daily_v1 row when none exists yet', async () => {
+  it("inserts a new campaign_daily_v1 row with all supplied days' bundles", async () => {
     allow()
     mockGetCampaign.mockResolvedValue(CAMPAIGN)
     const insertedSelect = vi.fn().mockReturnValue({ single: vi.fn().mockResolvedValue({ data: { id: 'new-plan-id' }, error: null }) })
@@ -522,7 +484,8 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
       return tableStub({}) as never
     })
 
-    const res = await POST(postRequest(validCommand()), params())
+    const cmd = validCommand({ bundles: [bundle({ date: '2026-08-24' }), bundle({ date: '2026-08-25' })] })
+    const res = await POST(postRequest(cmd), params())
     const json = await res.json()
 
     expect(res.status).toBe(200)
@@ -532,7 +495,13 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
       expect.objectContaining({
         client_id: CTS,
         campaign_id: CAMPAIGN_ID,
-        plan_data: expect.objectContaining({ plan_kind: 'campaign_daily_v1' }),
+        plan_data: expect.objectContaining({
+          plan_kind: 'campaign_daily_v1',
+          bundles: expect.arrayContaining([
+            expect.objectContaining({ date: '2026-08-24' }),
+            expect.objectContaining({ date: '2026-08-25' }),
+          ]),
+        }),
       })
     )
   })

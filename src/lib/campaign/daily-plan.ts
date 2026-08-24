@@ -62,7 +62,13 @@ export interface CampaignDailyPlanData {
   campaign_id: string
   master_brief_ref: { id: string; version: number | null } | null
   days: CampaignDailyDay[]
-  current_bundle: CampaignDailyBundle | null
+  /**
+   * One entry per day that has real content — may be 1 to 7 entries.
+   * A day present in `days` with PLANNED slots but no matching entry here
+   * is a data-shape bug (route.ts fails closed to an honest empty bundle
+   * for that date), not silently borrowed from another day.
+   */
+  bundles: CampaignDailyBundle[]
   command_meta: {
     source: 'conversation_command'
     received_at: string
@@ -84,42 +90,48 @@ const uuidLike = z
   .string()
   .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, 'invalid id')
 
+const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+
+const bundleSchema = z.object({
+  date: dateStringSchema,
+  post: z
+    .object({ hook: z.string().min(1), body: z.string().min(1), cta: z.string().min(1) })
+    .nullable(),
+  story: z
+    .object({
+      frames: z.array(z.object({ order: z.number().int(), copy: z.string().min(1) })).min(1),
+    })
+    .nullable(),
+  reel: z
+    .object({
+      brief: z.string().min(1),
+      script: z.string().min(1),
+      caption: z.string().min(1),
+      source_asset_ids: z.array(uuidLike).default([]),
+      // WP1 has no real-output verification path (no render job linkage
+      // wired up), so the command may never assert READY — the server has
+      // no way to check it and would just be relaying an unverified claim
+      // to a reviewer who reads "READY" as "there is a real file". A
+      // future WP that wires up verified output can derive READY
+      // server-side; it must never come from caller input.
+      media_status: z.enum(['NO_MEDIA', 'DRAFT_MEDIA']),
+    })
+    .nullable(),
+})
+
 export const CampaignDailyCommandSchema = z.object({
   campaign_id: uuidLike,
   days: z
     .array(
       z.object({
-        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        date: dateStringSchema,
         slots: z.object({ post: slotStatusSchema, story: slotStatusSchema, reel: slotStatusSchema }),
       })
     )
     .length(7),
-  current_bundle: z.object({
-    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    post: z
-      .object({ hook: z.string().min(1), body: z.string().min(1), cta: z.string().min(1) })
-      .nullable(),
-    story: z
-      .object({
-        frames: z.array(z.object({ order: z.number().int(), copy: z.string().min(1) })).min(1),
-      })
-      .nullable(),
-    reel: z
-      .object({
-        brief: z.string().min(1),
-        script: z.string().min(1),
-        caption: z.string().min(1),
-        source_asset_ids: z.array(uuidLike).default([]),
-        // WP1 has no real-output verification path (no render job linkage
-        // wired up), so the command may never assert READY — the server has
-        // no way to check it and would just be relaying an unverified claim
-        // to a reviewer who reads "READY" as "there is a real file". A
-        // future WP that wires up verified output can derive READY
-        // server-side; it must never come from caller input.
-        media_status: z.enum(['NO_MEDIA', 'DRAFT_MEDIA']),
-      })
-      .nullable(),
-  }),
+  // 1-7 entries — a command does not have to fill every day at once, but
+  // must supply at least the day(s) it is actually setting.
+  bundles: z.array(bundleSchema).min(1).max(7),
   raw_summary: z.string().optional().nullable(),
 })
 

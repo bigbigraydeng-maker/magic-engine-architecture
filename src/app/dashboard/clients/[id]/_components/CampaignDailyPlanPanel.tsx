@@ -1,10 +1,39 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo } from 'react'
 
 interface Props {
   clientId: string
   campaignId: string
+}
+
+interface AssetRef {
+  id: string
+  storage_url: string
+  original_filename: string | null
+  source: string
+  ownership: string
+}
+
+interface BundleReadiness {
+  master_brief_grounding: boolean
+  campaign_grounding: boolean
+  evidence_grounding: 'UNKNOWN'
+  client_asset_provenance: boolean
+  format_completeness: { post: boolean; story: boolean; reel: boolean }
+  human_approval: boolean
+  provider_authorization: false
+  publishing_authorization: false
+  performance_outcome: 'UNKNOWN'
+}
+
+interface DailyBundle {
+  date: string
+  post: { hook: string; body: string; cta: string } | null
+  story: { frames: Array<{ order: number; copy: string }> } | null
+  reel: { brief: string; script: string; caption: string; source_asset_ids: string[]; media_status: 'NO_MEDIA' | 'DRAFT_MEDIA' | 'READY' } | null
+  readiness: BundleReadiness
+  provenance: AssetRef[]
 }
 
 interface DailyPlanResponse {
@@ -12,24 +41,7 @@ interface DailyPlanResponse {
   campaign: { id: string; title: string; offer: string | null; primary_cta: string | null } | null
   grounding: { status: 'OK' | 'NEEDS_BRIEF' | 'NEEDS_CAMPAIGN'; has_master_brief: boolean; has_campaign: boolean }
   days: Array<{ date: string; slots: { post: 'PLANNED' | 'NOT_PLANNED'; story: 'PLANNED' | 'NOT_PLANNED'; reel: 'PLANNED' | 'NOT_PLANNED' } }>
-  current_bundle: {
-    date: string
-    post: { hook: string; body: string; cta: string } | null
-    story: { frames: Array<{ order: number; copy: string }> } | null
-    reel: { brief: string; script: string; caption: string; source_asset_ids: string[]; media_status: 'NO_MEDIA' | 'DRAFT_MEDIA' | 'READY' } | null
-  } | null
-  provenance: Array<{ id: string; storage_url: string; original_filename: string | null; source: string; ownership: string }>
-  readiness: {
-    master_brief_grounding: boolean
-    campaign_grounding: boolean
-    evidence_grounding: 'UNKNOWN'
-    client_asset_provenance: boolean
-    format_completeness: { post: boolean; story: boolean; reel: boolean }
-    human_approval: boolean
-    provider_authorization: false
-    publishing_authorization: false
-    performance_outcome: 'UNKNOWN'
-  }
+  bundles: DailyBundle[]
   publishing_plan: { destination: string | null; status: 'NOT_AUTHORIZED' }
   ad_candidate: { creative_ref: string | null; goal: string; audience: string; destination: string; budget: string; status: 'NOT_AUTHORIZED' } | null
 }
@@ -46,10 +58,16 @@ const MEDIA_STATUS_LABEL: Record<string, string> = {
   READY: '✅ 可用成片（READY）',
 }
 
+function isDaySelectable(day: DailyPlanResponse['days'][number]): boolean {
+  return day.slots.post === 'PLANNED' || day.slots.story === 'PLANNED' || day.slots.reel === 'PLANNED'
+}
+
 export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
   const [data, setData] = useState<DailyPlanResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [selectedDate, setSelectedDate] = useState<string | null>(null)
+  const [postExpanded, setPostExpanded] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -59,6 +77,10 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
       const json = await res.json()
       if (!json.success) throw new Error(json.error ?? '加载失败')
       setData(json)
+      // Default to the first selectable day so Ray always lands on real content when it exists.
+      const firstSelectable = (json.days as DailyPlanResponse['days'])?.find(isDaySelectable)
+      setSelectedDate(firstSelectable?.date ?? json.days?.[0]?.date ?? null)
+      setPostExpanded(false)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -67,6 +89,11 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
   }, [clientId, campaignId])
 
   useEffect(() => { load() }, [load])
+
+  const selectedBundle = useMemo(
+    () => data?.bundles.find(b => b.date === selectedDate) ?? null,
+    [data, selectedDate]
+  )
 
   if (loading) {
     return <p className="text-xs text-me-charcoal/45 animate-pulse py-3">加载每日计划…</p>
@@ -88,46 +115,71 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
       </div>
 
       <div className="px-4 py-4 space-y-5">
-        {/* 7-day grid */}
+        {/* 7-day grid — every day with content is selectable */}
         <div>
           <p className="text-xs font-semibold text-me-charcoal/55 uppercase tracking-wide mb-2">七日排期</p>
           <div className="grid grid-cols-7 gap-1.5">
-            {data.days.map(day => (
-              <div key={day.date} className="bg-me-ivory rounded-lg px-1.5 py-2 text-center">
-                <p className="text-[10px] text-me-charcoal/55 mb-1">{day.date.slice(5)}</p>
-                <div className="flex justify-center gap-0.5">
-                  <SlotDot label="帖" planned={day.slots.post === 'PLANNED'} />
-                  <SlotDot label="故" planned={day.slots.story === 'PLANNED'} />
-                  <SlotDot label="片" planned={day.slots.reel === 'PLANNED'} />
-                </div>
-              </div>
-            ))}
+            {data.days.map(day => {
+              const selectable = isDaySelectable(day)
+              const isSelected = day.date === selectedDate
+              return (
+                <button
+                  key={day.date}
+                  type="button"
+                  disabled={!selectable}
+                  onClick={() => { setSelectedDate(day.date); setPostExpanded(false) }}
+                  className={`rounded-lg px-1.5 py-2 text-center transition-colors ${
+                    isSelected
+                      ? 'bg-me-ochre text-white'
+                      : selectable
+                        ? 'bg-me-ivory hover:bg-me-ochre/15 cursor-pointer'
+                        : 'bg-me-ivory/60 cursor-not-allowed'
+                  }`}
+                >
+                  <p className={`text-[10px] mb-1 ${isSelected ? 'text-white/85' : 'text-me-charcoal/55'}`}>{day.date.slice(5)}</p>
+                  <div className="flex justify-center gap-0.5">
+                    <SlotDot label="帖" planned={day.slots.post === 'PLANNED'} selected={isSelected} />
+                    <SlotDot label="故" planned={day.slots.story === 'PLANNED'} selected={isSelected} />
+                    <SlotDot label="片" planned={day.slots.reel === 'PLANNED'} selected={isSelected} />
+                  </div>
+                </button>
+              )
+            })}
           </div>
         </div>
 
-        {/* Current bundle */}
+        {/* Selected day's bundle */}
         <div>
           <p className="text-xs font-semibold text-me-charcoal/55 uppercase tracking-wide mb-2">
-            当前 Bundle{data.current_bundle ? ` · ${data.current_bundle.date}` : ''}
+            当前 Bundle{selectedDate ? ` · ${selectedDate}` : ''}
           </p>
-          {!data.current_bundle ? (
-            <p className="text-xs text-me-charcoal/45 italic">暂无排定内容</p>
+          {!selectedBundle ? (
+            <p className="text-xs text-me-charcoal/45 italic">该日暂无排定内容（NOT_PLANNED）</p>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               <BundleCard title="📝 Post">
-                {data.current_bundle.post ? (
+                {selectedBundle.post ? (
                   <>
-                    <p className="text-xs font-medium text-me-charcoal/80">{data.current_bundle.post.hook}</p>
-                    <p className="text-xs text-me-charcoal/60 mt-1 line-clamp-3">{data.current_bundle.post.body}</p>
-                    <p className="text-xs text-me-ochre mt-1">CTA: {data.current_bundle.post.cta}</p>
+                    <p className="text-xs font-medium text-me-charcoal/80">{selectedBundle.post.hook}</p>
+                    <p className={`text-xs text-me-charcoal/60 mt-1 ${postExpanded ? '' : 'line-clamp-3'}`}>
+                      {selectedBundle.post.body}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setPostExpanded(v => !v)}
+                      className="text-[11px] text-me-ochre hover:underline mt-1"
+                    >
+                      {postExpanded ? '收起' : '展开全文'}
+                    </button>
+                    <p className="text-xs text-me-ochre mt-1">CTA: {selectedBundle.post.cta}</p>
                   </>
                 ) : <EmptySlot />}
               </BundleCard>
 
               <BundleCard title="🎬 Story">
-                {data.current_bundle.story ? (
+                {selectedBundle.story ? (
                   <ol className="space-y-1">
-                    {data.current_bundle.story.frames.map(f => (
+                    {selectedBundle.story.frames.map(f => (
                       <li key={f.order} className="text-xs text-me-charcoal/70">
                         <span className="text-me-charcoal/40">#{f.order}</span> {f.copy}
                       </li>
@@ -137,12 +189,12 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
               </BundleCard>
 
               <BundleCard title="🎥 Reel">
-                {data.current_bundle.reel ? (
+                {selectedBundle.reel ? (
                   <>
-                    <p className="text-xs text-me-charcoal/60 line-clamp-2">{data.current_bundle.reel.brief}</p>
-                    <p className="text-xs text-me-charcoal/45 mt-1 line-clamp-2 italic">{data.current_bundle.reel.script}</p>
+                    <p className="text-xs text-me-charcoal/60 line-clamp-2">{selectedBundle.reel.brief}</p>
+                    <p className="text-xs text-me-charcoal/45 mt-1 line-clamp-2 italic">{selectedBundle.reel.script}</p>
                     <p className="text-[11px] mt-1.5 font-medium">
-                      {MEDIA_STATUS_LABEL[data.current_bundle.reel.media_status]}
+                      {MEDIA_STATUS_LABEL[selectedBundle.reel.media_status]}
                     </p>
                   </>
                 ) : <EmptySlot />}
@@ -151,14 +203,14 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
           )}
         </div>
 
-        {/* Provenance */}
+        {/* Provenance — for the selected day only */}
         <div>
           <p className="text-xs font-semibold text-me-charcoal/55 uppercase tracking-wide mb-2">素材来源 / Provenance</p>
-          {data.provenance.length === 0 ? (
+          {!selectedBundle || selectedBundle.provenance.length === 0 ? (
             <p className="text-xs text-me-charcoal/45 italic">未引用素材，或素材归属未通过校验</p>
           ) : (
             <div className="flex flex-wrap gap-2">
-              {data.provenance.map(a => (
+              {selectedBundle.provenance.map(a => (
                 <div key={a.id} className="flex items-center gap-2 bg-me-ivory rounded-lg px-2 py-1.5 border border-black/[.06]">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={a.storage_url} alt={a.original_filename ?? ''} className="w-8 h-8 rounded object-cover" />
@@ -169,22 +221,26 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
           )}
         </div>
 
-        {/* Readiness */}
+        {/* Readiness — for the selected day only */}
         <div>
           <p className="text-xs font-semibold text-me-charcoal/55 uppercase tracking-wide mb-2">就绪检查</p>
-          <ul className="grid grid-cols-2 gap-x-4 gap-y-1">
-            <ReadinessRow label="Master Brief 已连接" ok={data.readiness.master_brief_grounding} />
-            <ReadinessRow label="Campaign 已连接" ok={data.readiness.campaign_grounding} />
-            <ReadinessRow label="证据 / Claim 支撑" ok={false} forceLabel="UNKNOWN" />
-            <ReadinessRow label="素材归属校验" ok={data.readiness.client_asset_provenance} />
-            <ReadinessRow label="Post 草稿完整" ok={data.readiness.format_completeness.post} />
-            <ReadinessRow label="Story 草稿完整" ok={data.readiness.format_completeness.story} />
-            <ReadinessRow label="Reel 草稿完整" ok={data.readiness.format_completeness.reel} />
-            <ReadinessRow label="人工审核" ok={data.readiness.human_approval} />
-            <ReadinessRow label="Provider 授权" ok={false} forceLabel="NOT_AUTHORIZED" />
-            <ReadinessRow label="发布授权" ok={false} forceLabel="NOT_AUTHORIZED" />
-            <ReadinessRow label="效果 / Outcome" ok={false} forceLabel="UNKNOWN" />
-          </ul>
+          {!selectedBundle ? (
+            <p className="text-xs text-me-charcoal/45 italic">该日暂无排定内容，无就绪状态可显示</p>
+          ) : (
+            <ul className="grid grid-cols-2 gap-x-4 gap-y-1">
+              <ReadinessRow label="Master Brief 已连接" ok={selectedBundle.readiness.master_brief_grounding} />
+              <ReadinessRow label="Campaign 已连接" ok={selectedBundle.readiness.campaign_grounding} />
+              <ReadinessRow label="证据 / Claim 支撑" ok={false} forceLabel="UNKNOWN" />
+              <ReadinessRow label="素材归属校验" ok={selectedBundle.readiness.client_asset_provenance} />
+              <ReadinessRow label="Post 草稿完整" ok={selectedBundle.readiness.format_completeness.post} />
+              <ReadinessRow label="Story 草稿完整" ok={selectedBundle.readiness.format_completeness.story} />
+              <ReadinessRow label="Reel 草稿完整" ok={selectedBundle.readiness.format_completeness.reel} />
+              <ReadinessRow label="人工审核" ok={selectedBundle.readiness.human_approval} />
+              <ReadinessRow label="Provider 授权" ok={false} forceLabel="NOT_AUTHORIZED" />
+              <ReadinessRow label="发布授权" ok={false} forceLabel="NOT_AUTHORIZED" />
+              <ReadinessRow label="效果 / Outcome" ok={false} forceLabel="UNKNOWN" />
+            </ul>
+          )}
         </div>
 
         {/* Publishing + Ad preview */}
@@ -212,12 +268,14 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
   )
 }
 
-function SlotDot({ label, planned }: { label: string; planned: boolean }) {
+function SlotDot({ label, planned, selected }: { label: string; planned: boolean; selected: boolean }) {
   return (
     <span
       title={planned ? 'PLANNED' : 'NOT_PLANNED'}
       className={`w-4 h-4 rounded-full text-[9px] leading-4 font-medium ${
-        planned ? 'bg-me-ochre text-white' : 'bg-black/[.06] text-me-charcoal/35'
+        planned
+          ? selected ? 'bg-white text-me-ochre' : 'bg-me-ochre text-white'
+          : selected ? 'bg-white/25 text-white/70' : 'bg-black/[.06] text-me-charcoal/35'
       }`}
     >
       {label}
