@@ -1,21 +1,30 @@
 # ME2-OPS02 — Claude ↔ Codex review loop
 
 Removes the manual "Claude pushes → PM types `@codex review` → PM copies findings
-back to Claude → repeat" cycle for `claude/me2-*` PRs against `main`. OPS-only:
+back to Claude → repeat" cycle for `claude/*` PRs against `main`. OPS-only:
 touches no ME2 runtime, Kernel, migration, product doc, or client file. It never
 merges, deploys, applies a migration, queries or writes production data, bypasses
 required CI, or marks a PR ready for review — the Product Owner stays the only
 merge authority.
 
+The auto-fix leg (step 4 below) originally stayed pinned to a narrow
+`claude/me2-*` pilot lane, separate from this leg's `claude/*` scope, so an
+unattended push could never land on a branch a live window was holding
+(CLAUDE.md §6, one window per branch). It validated end-to-end on that lane
+(PR #1174: Codex flagged a seeded bug P2, the dispatch fired, Claude pushed a
+correct fix) before widening to match. The collision risk that scoping used to
+prevent is now handled at dispatch time instead — see the staleness check
+in step 4.
+
 ## State diagram (plain language)
 
-1. Claude pushes a commit to a `claude/me2-*` branch, PR targets `main`, same repo (not a fork).
+1. Claude pushes a commit to a `claude/*` branch, PR targets `main`, same repo (not a fork).
 2. **`ops-codex-request-review.yml`** fires on that push. If this exact head sha
    has not already been asked, it posts one PR comment: `@codex review`.
 3. The native Codex GitHub App (`chatgpt-codex-connector`) reviews and submits a
    GitHub PR review.
 4. **`ops-codex-to-claude-fix.yml`** fires on that review, but only if the
-   reviewer login is the Codex connector, the PR is same-repo/`main`/`claude/me2-*`/open,
+   reviewer login is the Codex connector, the PR is same-repo/`main`/`claude/*`/open,
    and this head sha has not already been handled for the stage about to run.
    It aggregates every review comment (and the review summary) that contains a
    `P0`/`P1`/`P2` tag:
@@ -29,6 +38,10 @@ merge authority.
      comment), so as not to claim readiness prematurely.
    - **No actionable findings, required CI green** → posts
      `READY FOR PRODUCT OWNER`. Still never merges.
+   - **Findings exist, but the PR's head has moved past the sha Codex reviewed**
+     (someone pushed while the review was in flight) → skips silently. The
+     newer push already triggers its own `@codex review` at step 2, which
+     re-enters this same decision later against the current head.
 
 Nothing here resolves a review conversation. Nothing here can push to
 `.github/workflows/**` or `tools/ai-orchestrator/**` (the fix prompt explicitly

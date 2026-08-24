@@ -16,7 +16,7 @@
  * this file is the I/O glue around it.
  */
 import { readFileSync } from 'node:fs'
-import { createIssueComment, listCheckRunsForRef, listIssueComments, listReviewComments } from './github.mjs'
+import { createIssueComment, getPullRequest, listCheckRunsForRef, listIssueComments, listReviewComments } from './github.mjs'
 import { buildMarker, parseMarkers } from './markers.mjs'
 import { decideStage } from './plan.mjs'
 import { setOutput } from './output.mjs'
@@ -58,6 +58,17 @@ const findingCandidates = [
 ]
 const actionableFindings = findingCandidates.filter((f) => isActionable(f.body))
 const hasActionableFindings = actionableFindings.length > 0
+
+// Concurrency guard for the dispatch path only (the only path that pushes).
+// The auto-fix leg used to stay pinned to the narrow `claude/me2-*` lane
+// specifically so it would never land on a branch a live window was holding
+// (CLAUDE.md §6, one window per branch). Now that it shares the same
+// `claude/*` scope as the review-request leg, this re-fetch is what stands
+// in for that: if the PR's head has moved past the sha Codex reviewed by the
+// time this job actually runs, someone pushed while the review was in
+// flight, and dispatching now would push a fix for code that is no longer
+// current. Only worth the extra API call when there is something to dispatch.
+const isStale = hasActionableFindings ? (await getPullRequest(token, owner, repo, pr)).head.sha !== sha : false
 
 function checkSucceeded(run) {
   return run?.status === 'completed' && run?.conclusion === 'success'
@@ -101,6 +112,7 @@ const plan = decideStage({
   markers,
   sha,
   hasActionableFindings,
+  isStale,
   ciSuccess,
   maxRounds: MAX_ROUNDS,
 })

@@ -12,8 +12,17 @@
  * posted for this PR (across all shas) — not from severities or arbitrary
  * event counts, so a duplicate-delivered event never inflates it, since
  * duplicates are already caught by the dedup check above.
+ *
+ * Staleness: only checked on the dispatch path, because it is the only path
+ * that pushes. `isStale` means the caller re-fetched the PR right before this
+ * decision and found a head sha newer than the one Codex reviewed — someone
+ * pushed while this event was in flight. Dispatching anyway would base a fix
+ * on findings for code that is no longer current, and could push on top of
+ * work in progress on a branch this repo's convention says only one window
+ * holds at a time (CLAUDE.md §6). Skipping is free: the newer push already
+ * triggers its own review-request, which re-enters this same decision later.
  */
-export function decideStage({ markers, sha, hasActionableFindings, ciSuccess, maxRounds }) {
+export function decideStage({ markers, sha, hasActionableFindings, ciSuccess, maxRounds, isStale = false }) {
   const hasMarkerForSha = (stage) => markers.some((m) => m.stage === stage && m.sha === sha)
 
   if (hasMarkerForSha('fix-dispatched') || hasMarkerForSha('needs-human') || hasMarkerForSha('ready')) {
@@ -21,6 +30,9 @@ export function decideStage({ markers, sha, hasActionableFindings, ciSuccess, ma
   }
 
   if (hasActionableFindings) {
+    if (isStale) {
+      return { action: 'skip', reason: `head moved past ${sha} before this round could dispatch` }
+    }
     const round = markers.filter((m) => m.stage === 'fix-dispatched').length + 1
     if (round > maxRounds) {
       return { action: 'needs-human', round }
