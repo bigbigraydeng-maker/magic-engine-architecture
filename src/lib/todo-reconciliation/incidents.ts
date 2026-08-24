@@ -213,9 +213,17 @@ export function aggregateIncidents(
       const validInstant = withInstant.filter(
         (x): x is { o: CronOccurrence; instant: number } => x.instant !== null,
       )
+      // An invalid occurrence's true time is unknowable — it might be later
+      // than every valid occurrence we CAN parse. Discarding it and trusting
+      // only the valid ones would let a receipt newer than those valid ones
+      // claim RECOVERED while the real latest failure is unproven. So if
+      // ANY occurrence in this incident has an invalid time, the whole
+      // incident fails closed to RECOVERY_UNKNOWN — regardless of how many
+      // other occurrences parsed fine.
+      const hasInvalidOccurrence = withInstant.length !== validInstant.length
       // If nothing parses, fall back to the first raw value purely for
-      // display — deriveStatus() independently re-parses it and fails closed
-      // to RECOVERY_UNKNOWN, so this never contributes to a false RECOVERED.
+      // display — status below is already forced to RECOVERY_UNKNOWN in that
+      // case, so this never contributes to a false RECOVERED.
       const latestFailureAt =
         validInstant.length > 0
           ? validInstant.reduce((a, b) => (a.instant >= b.instant ? a : b)).o.occurredAt
@@ -230,7 +238,9 @@ export function aggregateIncidents(
         occurrenceCount: g.occ.length,
         affectedJobs: Array.from(new Set(g.occ.map((o) => o.jobName || '(missing job name)'))),
         latestFailureAt,
-        status: deriveStatus(g.rootCauseId, g.scopeKey, latestFailureAt, receipts),
+        status: hasInvalidOccurrence
+          ? 'RECOVERY_UNKNOWN'
+          : deriveStatus(g.rootCauseId, g.scopeKey, latestFailureAt, receipts),
         itemIds: g.occ.map((o) => o.id),
       }
     })

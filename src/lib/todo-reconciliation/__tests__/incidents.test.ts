@@ -202,6 +202,25 @@ describe('aggregateIncidents — malformed timestamps fail closed, never RECOVER
     const valid: RecoveryReceipt[] = [{ rootCauseId: 'c1', scopeKey: 's1', verifiedAt: '2026-08-24T10:00:00.000Z' }]
     expect(aggregateIncidents(occurrences, evidence, valid).incidents[0].status).toBe('RECOVERED')
   })
+
+  // Narrow correction (Build Control comment 5392714113): a valid occurrence
+  // must not let the aggregator silently discard a co-occurring invalid one
+  // and still claim RECOVERED — the invalid occurrence's true time is
+  // unknowable and might be the real latest failure.
+  it('one valid + one invalid occurrence in the SAME incident, with an otherwise-closing valid receipt, stays RECOVERY_UNKNOWN', () => {
+    const occurrences: CronOccurrence[] = [
+      { id: '1', jobName: 'job-a', occurredAt: '2026-08-24T10:00:00.000Z' }, // valid
+      { id: '2', jobName: 'job-a', occurredAt: 'not-a-real-timestamp' }, // invalid
+    ]
+    const receipts: RecoveryReceipt[] = [
+      { rootCauseId: 'c1', scopeKey: 's1', verifiedAt: '2026-08-24T23:59:59.000Z' }, // after the valid occurrence — would otherwise close it
+    ]
+    const result = aggregateIncidents(occurrences, evidence, receipts)
+
+    expect(result.incidents).toHaveLength(1)
+    expect(result.incidents[0].status).toBe('RECOVERY_UNKNOWN')
+    expect(result.incidents[0].occurrenceCount).toBe(2) // both still accounted for
+  })
 })
 
 // ─── Test 3: same identity combines occurrences, dedupes affected jobs ──────
