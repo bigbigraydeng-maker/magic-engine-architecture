@@ -39,7 +39,7 @@ interface ActiveMasterBriefRef {
 }
 
 async function resolveActiveMasterBrief(clientId: string): Promise<ActiveMasterBriefRef | null> {
-  const { data } = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from('master_briefs')
     .select('id, version')
     .eq('client_id', clientId)
@@ -48,6 +48,9 @@ async function resolveActiveMasterBrief(clientId: string): Promise<ActiveMasterB
     .limit(1)
     .maybeSingle()
 
+  // A failed lookup must never read as "no active brief" (NEEDS_BRIEF) — that
+  // would be a false success. Propagate so GET/POST return 500 instead.
+  if (error) throw error
   return data ? { id: data.id, version: data.version ?? null } : null
 }
 

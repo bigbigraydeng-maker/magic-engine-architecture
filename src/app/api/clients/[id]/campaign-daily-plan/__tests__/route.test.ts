@@ -176,6 +176,51 @@ describe('campaign-daily-plan GET — grounding', () => {
     expect(json.readiness.master_brief_grounding).toBe(false)
   })
 
+  // Regression (#1159 WP1 scope-shrink comment 5388882992, finding 1): a
+  // FAILED Master Brief lookup must never be read as "no active brief" —
+  // that silently reports NEEDS_BRIEF (false success) instead of surfacing
+  // the real error.
+  it('propagates a Master Brief lookup error as 500, never as a fabricated NEEDS_BRIEF', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: 'connection reset' } }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const res = await GET(getRequest(CAMPAIGN_ID), params())
+    const json = await res.json()
+
+    expect(res.status).toBe(500)
+    expect(json.success).toBe(false)
+  })
+
+  // Regression (#1159 WP1 scope-shrink comment 5388882992, finding 2):
+  // "Master Brief connected" / "Campaign connected" must never be read as
+  // "the content is factually supported" — WP1 does no evidence/claim
+  // verification, so evidence_grounding is always the honest UNKNOWN, even
+  // when both records exist.
+  it('reports evidence_grounding as UNKNOWN even when both Campaign and Master Brief exist', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 3 } }) }) as never
+      }
+      if (table === 'social_plans') {
+        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [] }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+
+    expect(json.grounding.status).toBe('OK')
+    expect(json.readiness.evidence_grounding).toBe('UNKNOWN')
+  })
+
   // Regression (#1159 remediation, Build Control finding 2): grounding for a
   // SAVED plan must reflect what it was actually grounded in at save time
   // (plan_data.master_brief_ref), not "does any active brief happen to exist
@@ -428,6 +473,32 @@ describe('campaign-daily-plan POST — fail-closed tenant boundary', () => {
 
     expect(res.status).toBe(403)
     expect((await res.json()).error).toBe('ASSET_NOT_OWNED_BY_CLIENT')
+  })
+
+  // Regression (#1159 WP1 scope-shrink comment 5388882992, finding 1): a
+  // FAILED Master Brief lookup must return 500 and must never reach the
+  // social_plans insert/update below it.
+  it('propagates a Master Brief lookup error as 500 and never touches social_plans', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    const socialPlansSpy = vi.fn()
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: 'connection reset' } }) }) as never
+      }
+      if (table === 'social_plans') {
+        socialPlansSpy()
+        return tableStub({}) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const res = await POST(postRequest(validCommand()), params())
+    const json = await res.json()
+
+    expect(res.status).toBe(500)
+    expect(json.success).toBe(false)
+    expect(socialPlansSpy).not.toHaveBeenCalled()
   })
 })
 

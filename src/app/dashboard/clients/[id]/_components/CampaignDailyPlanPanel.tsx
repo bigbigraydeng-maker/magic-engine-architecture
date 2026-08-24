@@ -22,6 +22,7 @@ interface DailyPlanResponse {
   readiness: {
     master_brief_grounding: boolean
     campaign_grounding: boolean
+    evidence_grounding: 'UNKNOWN'
     client_asset_provenance: boolean
     format_completeness: { post: boolean; story: boolean; reel: boolean }
     human_approval: boolean
@@ -172,8 +173,9 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
         <div>
           <p className="text-xs font-semibold text-me-charcoal/55 uppercase tracking-wide mb-2">就绪检查</p>
           <ul className="grid grid-cols-2 gap-x-4 gap-y-1">
-            <ReadinessRow label="Master Brief 支撑" ok={data.readiness.master_brief_grounding} />
-            <ReadinessRow label="Campaign 事实支撑" ok={data.readiness.campaign_grounding} />
+            <ReadinessRow label="Master Brief 已连接" ok={data.readiness.master_brief_grounding} />
+            <ReadinessRow label="Campaign 已连接" ok={data.readiness.campaign_grounding} />
+            <ReadinessRow label="证据 / Claim 支撑" ok={false} forceLabel="UNKNOWN" />
             <ReadinessRow label="素材归属校验" ok={data.readiness.client_asset_provenance} />
             <ReadinessRow label="Post 草稿完整" ok={data.readiness.format_completeness.post} />
             <ReadinessRow label="Story 草稿完整" ok={data.readiness.format_completeness.story} />

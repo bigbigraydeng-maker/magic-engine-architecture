@@ -151,6 +151,11 @@ export function computeGrounding(
 export interface CampaignDailyReadiness {
   master_brief_grounding: boolean
   campaign_grounding: boolean
+  // Master Brief / Campaign grounding above means only "a record is
+  // connected" — WP1 does no website crawling, evidence storage or claim
+  // extraction, so whether the bundle's claims are factually supported is
+  // always UNKNOWN, never inferred from record existence.
+  evidence_grounding: 'UNKNOWN'
   client_asset_provenance: boolean
   format_completeness: { post: boolean; story: boolean; reel: boolean }
   human_approval: boolean
@@ -172,6 +177,7 @@ export function computeReadiness(params: {
   return {
     master_brief_grounding: grounding.has_master_brief,
     campaign_grounding: grounding.has_campaign,
+    evidence_grounding: 'UNKNOWN',
     client_asset_provenance: assetProvenanceOk,
     format_completeness: {
       post: !!bundle?.post,
