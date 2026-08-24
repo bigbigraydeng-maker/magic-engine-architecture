@@ -250,9 +250,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     // the whole array with `cmd.bundles` would permanently delete every
     // other day's already-saved content.
     const existingPlanData = (existing?.plan_data ?? null) as CampaignDailyPlanData | null
+    // Back-compat: rows written before the `bundles[]` migration only have a
+    // singular `current_bundle`. Without normalising it into `bundles[]` here
+    // too (mirroring the GET fallback), a partial-day write on such a row
+    // would merge against an empty array and permanently drop that legacy
+    // day's only content.
+    // TODO(#1159): remove once the data backfill to `bundles[]` has run.
+    const legacyExistingBundle = (existingPlanData as unknown as { current_bundle?: CampaignDailyPlanData['bundles'][number] | null })
+      ?.current_bundle
+    const existingBundles = existingPlanData?.bundles ?? (legacyExistingBundle ? [legacyExistingBundle] : [])
     const incomingDates = new Set(cmd.bundles.map(b => b.date))
     const mergedBundles = [
-      ...(existingPlanData?.bundles ?? []).filter(b => !incomingDates.has(b.date)),
+      ...existingBundles.filter(b => !incomingDates.has(b.date)),
       ...cmd.bundles,
     ]
 
