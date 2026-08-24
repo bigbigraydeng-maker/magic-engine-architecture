@@ -37,8 +37,17 @@
 /**
  * Head-branch prefixes the auto-fix leg is allowed to push to. Kept in sync
  * with the `if:` guard in ops-codex-to-claude-fix.yml by a test.
+ *
+ * Was `['claude/me2-']` — a narrow pilot lane, kept separate from the
+ * review-request leg's `claude/*` scope specifically to avoid an unattended
+ * push landing on a branch a live window was holding (CLAUDE.md §6, one
+ * window per branch). Validated end-to-end on that lane (PR #1174:
+ * Codex flagged a seeded bug P2, the dispatch fired, Claude pushed a correct
+ * fix) before widening. The collision risk this used to sidestep by scope
+ * alone is now handled by the staleness check in handle-review.mjs — see the
+ * comment on `isStale` there.
  */
-export const GUARDED_BRANCH_PREFIXES = ['claude/me2-']
+export const GUARDED_BRANCH_PREFIXES = ['claude/']
 
 /**
  * Paths the auto-fix lane must never modify.
