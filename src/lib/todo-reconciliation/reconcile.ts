@@ -21,21 +21,39 @@ import type {
 } from './types'
 import { KEPT_REASON_CODES } from './types'
 
+/** Renders an ISO instant as its Pacific/Auckland calendar date (YYYY-MM-DD). */
+function nzCalendarDate(iso: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Pacific/Auckland',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(iso))
+}
+
 function isSameNzCalendarDay(fromIso: string, toIso: string): boolean {
-  // Both fixture and production timestamps are UTC ISO strings; a same-day
-  // check only needs to agree with itself deterministically, not track NZ
-  // midnight exactly — the fixture's "same day" rows share the same date.
-  return fromIso.slice(0, 10) === toIso.slice(0, 10)
+  // AU/NZ target market — a "same day" boundary crossed in UTC (NZST is
+  // UTC+12/+13) must not silently shift a same-day discovery into GENUINE_UNRESOLVED
+  // a day early/late. Compare actual Auckland calendar dates, not UTC substrings.
+  return nzCalendarDate(fromIso) === nzCalendarDate(toIso)
 }
 
 /** Reel statuses that mean "a human still needs to look at this" (mirrors REEL_REVIEW_STATUSES in src/lib/pm-todo/daily-todo.ts). */
 const OPEN_REEL_STATUSES = new Set(['video_ready', 'images_ready', 'in_review'])
 
+/**
+ * Reel statuses this fixture/current source is known to actually emit for
+ * "already done" — an explicit allowlist, not an else-branch. A missing,
+ * malformed or unrecognised status must never fall through to "done" by
+ * default; that is exactly the false-suppression bug this fixes.
+ */
+const TERMINAL_REEL_STATUSES = new Set(['published', 'approved', 'rejected'])
+
 interface Verdict {
   reason: ReasonCode
 }
 
-function classify(item: RawWorkItem, asOf: string): Verdict {
+function classify(item: RawWorkItem, asOf: string, blogDraftClientNames: ReadonlySet<string>): Verdict {
   switch (item.source) {
     case 'cron_failure':
       // Every occurrence of the same job name is the same unresolved
@@ -51,9 +69,15 @@ function classify(item: RawWorkItem, asOf: string): Verdict {
       return { reason: 'GENUINE_UNRESOLVED' }
 
     case 'reel_review':
-      return item.reelStatus && OPEN_REEL_STATUSES.has(item.reelStatus)
-        ? { reason: 'GENUINE_UNRESOLVED' }
-        : { reason: 'TERMINAL_COMPLETED' }
+      if (item.reelStatus && OPEN_REEL_STATUSES.has(item.reelStatus)) {
+        return { reason: 'GENUINE_UNRESOLVED' }
+      }
+      if (item.reelStatus && TERMINAL_REEL_STATUSES.has(item.reelStatus)) {
+        return { reason: 'TERMINAL_COMPLETED' }
+      }
+      // Missing, malformed, or a status this source has never been vetted to
+      // emit — never assume "done"; a reviewer must look at it.
+      return { reason: 'CHECK_FAILED_UNRESOLVED' }
 
     case 'execution_card':
       // me_auto cards describe machine-executable work — they belong to the
@@ -63,23 +87,31 @@ function classify(item: RawWorkItem, asOf: string): Verdict {
         : { reason: 'GENUINE_UNRESOLVED' }
 
     case 'manual_item':
-      return classifyManualItem(item, asOf)
+      return classifyManualItem(item, asOf, blogDraftClientNames)
 
     default:
       return { reason: 'GENUINE_UNRESOLVED' }
   }
 }
 
-function classifyManualItem(item: RawWorkItem, asOf: string): Verdict {
+function classifyManualItem(
+  item: RawWorkItem,
+  asOf: string,
+  blogDraftClientNames: ReadonlySet<string>,
+): Verdict {
   switch (item.category) {
     case 'url_indexing':
       return classifyUrlIndexing(item, asOf)
 
     // Same content already appears as a real blog-draft row (source:
     // 'blog_draft') — this manual-lane summary of it is a second count of
-    // the same work.
+    // the same work. Only suppress when THIS input actually contains that
+    // proof (a blog_draft row for the same client); otherwise we cannot
+    // tell duplicate from genuinely-unresolved and must not guess.
     case 'blog_draft_summary':
-      return { reason: 'DUPLICATE_WORK_ITEM' }
+      return item.clientName && blogDraftClientNames.has(item.clientName)
+        ? { reason: 'DUPLICATE_WORK_ITEM' }
+        : { reason: 'CHECK_FAILED_UNRESOLVED' }
 
     case 'dnc_ambiguity':
       return { reason: 'HUMAN_DECISION_REQUIRED' }
@@ -123,8 +155,17 @@ export function reconcile(items: RawWorkItem[], asOf: string): ReconciliationRes
   const clusterMap = new Map<string, { items: RawWorkItem[]; reason: ReasonCode }>()
   const suppressedMap = new Map<ReasonCode, RawWorkItem[]>()
 
+  // Same-input proof set for the blog_draft_summary dedupe check above —
+  // deliberately just client names actually present as real blog_draft rows
+  // in THIS call's items, not a persistent identity/lookup framework.
+  const blogDraftClientNames = new Set(
+    items
+      .filter((i): i is RawWorkItem & { clientName: string } => i.source === 'blog_draft' && !!i.clientName)
+      .map((i) => i.clientName),
+  )
+
   for (const item of items) {
-    const verdict = classify(item, asOf)
+    const verdict = classify(item, asOf, blogDraftClientNames)
 
     if (!KEPT_REASON_CODES.has(verdict.reason)) {
       const bucket = suppressedMap.get(verdict.reason) ?? []

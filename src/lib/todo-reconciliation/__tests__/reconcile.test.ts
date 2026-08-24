@@ -196,3 +196,133 @@ describe('reconcile — empty input', () => {
     expect(result.suppressed).toEqual([])
   })
 })
+
+// ─── Remediation (#1169, Build Control finding 1): Reel status fail-closed ────
+
+describe('reconcile — Reel status must fail closed, not default to "done"', () => {
+  function reel(reelStatus: string | undefined): import('../types').RawWorkItem {
+    return {
+      id: 'reel-x',
+      source: 'reel_review',
+      category: 'reel_review',
+      clientId: null,
+      clientName: 'oztop',
+      rootCauseKey: 'reel:x',
+      label: 'Social reel awaiting review',
+      reelStatus,
+    }
+  }
+
+  it('keeps a reel with a MISSING status visible as CHECK_FAILED_UNRESOLVED, never TERMINAL_COMPLETED', () => {
+    const result = reconcile([reel(undefined)], AUDITED_280_ASOF)
+    expect(result.suppressed).toEqual([])
+    expect(result.unresolvedClusters).toHaveLength(1)
+    expect(result.unresolvedClusters[0].reason).toBe('CHECK_FAILED_UNRESOLVED')
+  })
+
+  it('keeps a reel with an UNKNOWN/unvetted status visible as CHECK_FAILED_UNRESOLVED, never TERMINAL_COMPLETED', () => {
+    const result = reconcile([reel('some_future_status_nobody_vetted')], AUDITED_280_ASOF)
+    expect(result.suppressed).toEqual([])
+    expect(result.unresolvedClusters).toHaveLength(1)
+    expect(result.unresolvedClusters[0].reason).toBe('CHECK_FAILED_UNRESOLVED')
+  })
+
+  it('still suppresses the explicit terminal allowlist (published/approved/rejected)', () => {
+    for (const status of ['published', 'approved', 'rejected']) {
+      const result = reconcile([reel(status)], AUDITED_280_ASOF)
+      expect(result.unresolvedClusters).toEqual([])
+      expect(result.suppressed[0]?.reason).toBe('TERMINAL_COMPLETED')
+    }
+  })
+
+  it('still keeps known open statuses GENUINE_UNRESOLVED', () => {
+    const result = reconcile([reel('in_review')], AUDITED_280_ASOF)
+    expect(result.unresolvedClusters[0].reason).toBe('GENUINE_UNRESOLVED')
+  })
+})
+
+// ─── Remediation (#1169, Build Control finding 2): blog_draft_summary proof ───
+
+describe('reconcile — blog_draft_summary dedupe must be proven by same-input evidence', () => {
+  function summary(clientName: string | null): import('../types').RawWorkItem {
+    return {
+      id: 'summary-x',
+      source: 'manual_item',
+      category: 'blog_draft_summary',
+      clientId: null,
+      clientName,
+      rootCauseKey: 'manual:blog_draft_summary:x',
+      label: 'Blog draft awaiting review (summary card)',
+    }
+  }
+  function blogDraft(clientName: string): import('../types').RawWorkItem {
+    return {
+      id: 'blog-x',
+      source: 'blog_draft',
+      category: 'blog_draft',
+      clientId: null,
+      clientName,
+      rootCauseKey: 'blog_draft:x',
+      label: `${clientName} blog draft awaiting review`,
+    }
+  }
+
+  it('suppresses the summary as DUPLICATE_WORK_ITEM when a same-client blog_draft row is present in the same input', () => {
+    const result = reconcile([summary('CTS'), blogDraft('CTS')], AUDITED_280_ASOF)
+    const dup = result.suppressed.find((g) => g.reason === 'DUPLICATE_WORK_ITEM')
+    expect(dup?.count).toBe(1)
+    expect(dup?.itemIds).toEqual(['summary-x'])
+  })
+
+  it('keeps the summary visible as CHECK_FAILED_UNRESOLVED when no matching blog_draft detail exists in the input', () => {
+    const result = reconcile([summary('CTS')], AUDITED_280_ASOF)
+    expect(result.suppressed).toEqual([])
+    expect(result.unresolvedClusters[0].reason).toBe('CHECK_FAILED_UNRESOLVED')
+  })
+
+  it('keeps the summary visible when the only blog_draft evidence present is for a DIFFERENT client', () => {
+    const result = reconcile([summary('CTS'), blogDraft('oztop')], AUDITED_280_ASOF)
+    expect(result.suppressed).toEqual([])
+    const summaryCluster = result.unresolvedClusters.find((c) => c.category === 'blog_draft_summary')
+    expect(summaryCluster?.reason).toBe('CHECK_FAILED_UNRESOLVED')
+  })
+
+  it('the frozen audited-280 fixture still suppresses both summaries — real evidence exists for both CTS and oztop', () => {
+    const items = buildAudited280()
+    const result = reconcile(items, AUDITED_280_ASOF)
+    const dup = result.suppressed.find((g) => g.reason === 'DUPLICATE_WORK_ITEM')
+    expect(dup?.count).toBe(2)
+  })
+})
+
+// ─── Remediation (#1169, Build Control finding 3): Pacific/Auckland same-day ──
+
+describe('reconcile — same-day check must use Pacific/Auckland, not UTC date slicing', () => {
+  function unknownToGoogleRow(createdAt: string): import('../types').RawWorkItem {
+    return {
+      id: 'url-x',
+      source: 'manual_item',
+      category: 'url_indexing',
+      clientId: null,
+      clientName: 'oztop',
+      rootCauseKey: 'url_indexing:oztop:unknown_to_google:x',
+      label: 'oztop URL indexing verdict: unknown_to_google',
+      verdict: 'unknown_to_google',
+      createdAt,
+    }
+  }
+
+  it('treats different UTC dates as the SAME day when they fall on the same Auckland calendar date (August = NZST, UTC+12)', () => {
+    // 2026-08-23T13:00:00Z -> 2026-08-24 01:00 NZST (Aug 24 NZ)
+    // 2026-08-24T00:00:00Z -> 2026-08-24 12:00 NZST (Aug 24 NZ) — same NZ day, different UTC date
+    const result = reconcile([unknownToGoogleRow('2026-08-23T13:00:00.000Z')], '2026-08-24T00:00:00.000Z')
+    expect(result.suppressed[0]?.reason).toBe('NOT_YET_DUE')
+  })
+
+  it('treats the same UTC date as DIFFERENT days when they fall on different Auckland calendar dates', () => {
+    // 2026-08-24T20:00:00Z -> 2026-08-25 08:00 NZST (Aug 25 NZ)
+    // 2026-08-24T01:00:00Z -> 2026-08-24 13:00 NZST (Aug 24 NZ) — same UTC date, different NZ day
+    const result = reconcile([unknownToGoogleRow('2026-08-24T20:00:00.000Z')], '2026-08-24T01:00:00.000Z')
+    expect(result.unresolvedClusters[0]?.reason).toBe('GENUINE_UNRESOLVED')
+  })
+})
