@@ -235,28 +235,39 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       }
     }
 
-    const planData: CampaignDailyPlanData = {
-      plan_kind: CAMPAIGN_DAILY_PLAN_KIND,
-      campaign_id: cmd.campaign_id,
-      master_brief_ref: masterBrief,
-      days: cmd.days,
-      bundles: cmd.bundles,
-      command_meta: {
-        source: 'conversation_command',
-        received_at: new Date().toISOString(),
-        raw_summary: cmd.raw_summary ?? null,
-      },
-    }
-
     const { data: existing } = await supabaseAdmin
       .from('social_plans')
-      .select('id')
+      .select('id, plan_data')
       .eq('client_id', clientId)
       .eq('campaign_id', cmd.campaign_id)
       .contains('plan_data', { plan_kind: CAMPAIGN_DAILY_PLAN_KIND })
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
+
+    // Merge into the previously saved bundles by date — the command contract
+    // only requires the day(s) actually being set (1-7 of 7), so replacing
+    // the whole array with `cmd.bundles` would permanently delete every
+    // other day's already-saved content.
+    const existingPlanData = (existing?.plan_data ?? null) as CampaignDailyPlanData | null
+    const incomingDates = new Set(cmd.bundles.map(b => b.date))
+    const mergedBundles = [
+      ...(existingPlanData?.bundles ?? []).filter(b => !incomingDates.has(b.date)),
+      ...cmd.bundles,
+    ]
+
+    const planData: CampaignDailyPlanData = {
+      plan_kind: CAMPAIGN_DAILY_PLAN_KIND,
+      campaign_id: cmd.campaign_id,
+      master_brief_ref: masterBrief,
+      days: cmd.days,
+      bundles: mergedBundles,
+      command_meta: {
+        source: 'conversation_command',
+        received_at: new Date().toISOString(),
+        raw_summary: cmd.raw_summary ?? null,
+      },
+    }
 
     let planId: string
     if (existing?.id) {

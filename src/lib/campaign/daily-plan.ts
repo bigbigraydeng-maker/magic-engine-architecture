@@ -119,28 +119,44 @@ const bundleSchema = z.object({
     .nullable(),
 })
 
-export const CampaignDailyCommandSchema = z.object({
-  campaign_id: uuidLike,
-  days: z
-    .array(
-      z.object({
-        date: dateStringSchema,
-        slots: z.object({ post: slotStatusSchema, story: slotStatusSchema, reel: slotStatusSchema }),
-      })
-    )
-    .length(7),
-  // 1-7 entries — a command does not have to fill every day at once, but
-  // must supply at least the day(s) it is actually setting.
-  bundles: z
-    .array(bundleSchema)
-    .min(1)
-    .max(7)
-    .refine(
-      bundles => new Set(bundles.map(b => b.date)).size === bundles.length,
-      { message: 'duplicate date in bundles — one entry per day only' }
-    ),
-  raw_summary: z.string().optional().nullable(),
-})
+export const CampaignDailyCommandSchema = z
+  .object({
+    campaign_id: uuidLike,
+    days: z
+      .array(
+        z.object({
+          date: dateStringSchema,
+          slots: z.object({ post: slotStatusSchema, story: slotStatusSchema, reel: slotStatusSchema }),
+        })
+      )
+      .length(7),
+    // 1-7 entries — a command does not have to fill every day at once, but
+    // must supply at least the day(s) it is actually setting.
+    bundles: z
+      .array(bundleSchema)
+      .min(1)
+      .max(7)
+      .refine(
+        bundles => new Set(bundles.map(b => b.date)).size === bundles.length,
+        { message: 'duplicate date in bundles — one entry per day only' }
+      ),
+    raw_summary: z.string().optional().nullable(),
+  })
+  // Every bundle date must be one of the seven scheduled days — otherwise it
+  // gets persisted and returned by GET but the 7-day grid only ever renders
+  // buttons from `days`, so the bundle would have no selectable entry point.
+  .superRefine((val, ctx) => {
+    const dayDates = new Set(val.days.map(d => d.date))
+    val.bundles.forEach((b, i) => {
+      if (!dayDates.has(b.date)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['bundles', i, 'date'],
+          message: `bundle date ${b.date} is not one of the seven scheduled days`,
+        })
+      }
+    })
+  })
 
 export type CampaignDailyCommand = z.infer<typeof CampaignDailyCommandSchema>
 
