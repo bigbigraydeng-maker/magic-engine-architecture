@@ -58,8 +58,13 @@ const MEDIA_STATUS_LABEL: Record<string, string> = {
   READY: '✅ 可用成片（READY）',
 }
 
-function isDaySelectable(day: DailyPlanResponse['days'][number]): boolean {
-  return day.slots.post === 'PLANNED' || day.slots.story === 'PLANNED' || day.slots.reel === 'PLANNED'
+function isDaySelectable(day: DailyPlanResponse['days'][number], bundleDates: Set<string>): boolean {
+  return (
+    day.slots.post === 'PLANNED' ||
+    day.slots.story === 'PLANNED' ||
+    day.slots.reel === 'PLANNED' ||
+    bundleDates.has(day.date)
+  )
 }
 
 export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
@@ -78,7 +83,8 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
       if (!json.success) throw new Error(json.error ?? '加载失败')
       setData(json)
       // Default to the first selectable day so Ray always lands on real content when it exists.
-      const firstSelectable = (json.days as DailyPlanResponse['days'])?.find(isDaySelectable)
+      const bundleDates = new Set((json.bundles as DailyBundle[] | undefined)?.map(b => b.date) ?? [])
+      const firstSelectable = (json.days as DailyPlanResponse['days'])?.find(day => isDaySelectable(day, bundleDates))
       setSelectedDate(firstSelectable?.date ?? json.days?.[0]?.date ?? null)
       setPostExpanded(false)
     } catch (err) {
@@ -94,6 +100,7 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
     () => data?.bundles.find(b => b.date === selectedDate) ?? null,
     [data, selectedDate]
   )
+  const bundleDates = useMemo(() => new Set(data?.bundles.map(b => b.date) ?? []), [data])
 
   if (loading) {
     return <p className="text-xs text-me-charcoal/45 animate-pulse py-3">加载每日计划…</p>
@@ -120,7 +127,7 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
           <p className="text-xs font-semibold text-me-charcoal/55 uppercase tracking-wide mb-2">七日排期</p>
           <div className="grid grid-cols-7 gap-1.5">
             {data.days.map(day => {
-              const selectable = isDaySelectable(day)
+              const selectable = isDaySelectable(day, bundleDates)
               const isSelected = day.date === selectedDate
               return (
                 <button

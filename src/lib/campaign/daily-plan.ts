@@ -131,7 +131,14 @@ export const CampaignDailyCommandSchema = z.object({
     .length(7),
   // 1-7 entries — a command does not have to fill every day at once, but
   // must supply at least the day(s) it is actually setting.
-  bundles: z.array(bundleSchema).min(1).max(7),
+  bundles: z
+    .array(bundleSchema)
+    .min(1)
+    .max(7)
+    .refine(
+      bundles => new Set(bundles.map(b => b.date)).size === bundles.length,
+      { message: 'duplicate date in bundles — one entry per day only' }
+    ),
   raw_summary: z.string().optional().nullable(),
 })
 

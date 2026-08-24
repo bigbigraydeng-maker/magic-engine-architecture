@@ -108,7 +108,13 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
     const planRow = rows?.[0] ?? null
     const planData = (planRow?.plan_data ?? null) as CampaignDailyPlanData | null
-    const bundles = planData?.bundles ?? []
+    // Back-compat: rows written before the `bundles[]` migration only have a
+    // singular `current_bundle`. Without this fallback the 7-day grid still
+    // shows PLANNED slots but the only real content silently disappears.
+    // TODO(#1159): remove once the data backfill to `bundles[]` has run.
+    const legacyBundle = (planData as unknown as { current_bundle?: CampaignDailyPlanData['bundles'][number] | null })
+      ?.current_bundle
+    const bundles = planData?.bundles ?? (legacyBundle ? [legacyBundle] : [])
     const days = planData?.days ?? buildEmptyDays(todayIso())
 
     // Grounding must reflect what the SAVED plan was actually grounded in,
