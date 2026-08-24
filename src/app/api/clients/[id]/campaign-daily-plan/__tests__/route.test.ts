@@ -81,7 +81,14 @@ function bundle(overrides: Record<string, unknown> = {}) {
   return {
     date: '2026-08-24',
     post: { hook: 'hook', body: 'body copy', cta: 'Book now' },
-    story: { frames: [{ order: 1, copy: 'frame one' }] },
+    story: {
+      frames: [
+        { order: 1, copy: 'frame one' },
+        { order: 2, copy: 'frame two' },
+        { order: 3, copy: 'frame three' },
+        { order: 4, copy: 'frame four' },
+      ],
+    },
     reel: {
       brief: 'a brief',
       script: 'a script',
@@ -93,11 +100,18 @@ function bundle(overrides: Record<string, unknown> = {}) {
   }
 }
 
+/** A full seven-day snapshot (one bundle per scheduled day) — the new
+ * complete-snapshot contract for POST after Build Control scope shrink
+ * 5395216001. Partial commands are rejected at the schema boundary. */
+function fullSevenDays() {
+  return sevenDays().map(d => bundle({ date: d.date }))
+}
+
 function validCommand(overrides: Record<string, unknown> = {}) {
   return {
     campaign_id: CAMPAIGN_ID,
     days: sevenDays(),
-    bundles: [bundle()],
+    bundles: fullSevenDays(),
     ...overrides,
   }
 }
@@ -213,7 +227,9 @@ describe('campaign-daily-plan GET — grounding', () => {
       campaign_id: CAMPAIGN_ID,
       master_brief_ref: null,
       days: sevenDays(),
-      bundles: [bundle({ post: null, story: null, reel: null })],
+      // A legacy row with a stored bundle that has no real content — GET must
+      // still surface the plan's saved master_brief_ref, not fabricate one.
+      bundles: [bundle()],
       command_meta: { source: 'conversation_command', received_at: '2026-08-01T00:00:00.000Z', raw_summary: null },
     }
     mockFrom.mockImplementation((table: string) => {
@@ -254,7 +270,14 @@ describe('campaign-daily-plan GET — multi-day bundles, provenance and readines
   const day2 = bundle({
     date: '2026-08-25',
     post: { hook: 'day 2 hook', body: 'day 2 body', cta: 'Book now' },
-    story: { frames: [{ order: 1, copy: 'day 2 frame' }] },
+    story: {
+      frames: [
+        { order: 1, copy: 'day 2 frame' },
+        { order: 2, copy: 'day 2 f2' },
+        { order: 3, copy: 'day 2 f3' },
+        { order: 4, copy: 'day 2 f4' },
+      ],
+    },
     reel: { brief: 'day 2 brief', script: 'day 2 script', caption: 'day 2 caption', source_asset_ids: [], media_status: 'NO_MEDIA' },
   })
   const persistedPlanData = {
@@ -379,21 +402,44 @@ describe('campaign-daily-plan POST — persistence seam authorisation', () => {
     expect(mockFrom).not.toHaveBeenCalled()
   })
 
-  it('rejects a command with zero bundles before touching the database', async () => {
+  // Regression (Build Control scope shrink 5395216001): partial snapshots
+  // are rejected — the seam is now complete-seven-day only.
+  it('rejects a partial snapshot (bundles.length < 7) before touching the database', async () => {
     allow()
-    const res = await POST(postRequest(validCommand({ bundles: [] })), params())
+    const bundles = fullSevenDays().slice(0, 3)
+    const res = await POST(postRequest(validCommand({ bundles })), params())
 
     expect(res.status).toBe(400)
     expect(mockFrom).not.toHaveBeenCalled()
   })
 
-  // Regression (#1159 remediation, Build Control finding 3): the server must
-  // never persist a caller-declared media_status of READY.
+  it('rejects a snapshot with duplicate bundle dates before touching the database', async () => {
+    allow()
+    const bundles = fullSevenDays()
+    bundles[1] = { ...bundles[0] } // two entries for the same date
+    const res = await POST(postRequest(validCommand({ bundles })), params())
+
+    expect(res.status).toBe(400)
+    expect(mockFrom).not.toHaveBeenCalled()
+  })
+
+  it('rejects a snapshot where a bundle date is not one of the seven scheduled days', async () => {
+    allow()
+    const bundles = fullSevenDays()
+    bundles[0] = bundle({ date: '2026-09-15' }) // outside the seven scheduled days
+    const res = await POST(postRequest(validCommand({ bundles })), params())
+
+    expect(res.status).toBe(400)
+    expect(mockFrom).not.toHaveBeenCalled()
+  })
+
+  // Regression (#1159 earlier remediation, Build Control finding 3): the
+  // server must never persist a caller-declared media_status of READY.
   it("rejects a command that declares any day's Reel media_status is READY, before touching the database", async () => {
     allow()
-    const cmd = validCommand({
-      bundles: [bundle({ reel: { ...bundle().reel, media_status: 'READY' } })],
-    })
+    const bundles = fullSevenDays()
+    bundles[0] = bundle({ reel: { ...bundle().reel, media_status: 'READY' } })
+    const cmd = validCommand({ bundles })
 
     const res = await POST(postRequest(cmd), params())
 
@@ -427,12 +473,12 @@ describe('campaign-daily-plan POST — fail-closed tenant boundary', () => {
       return tableStub({}) as never
     })
 
-    const cmd = validCommand({
-      bundles: [
-        bundle({ date: '2026-08-24' }),
-        bundle({ date: '2026-08-25', reel: { ...bundle().reel, source_asset_ids: [FOREIGN_ASSET_ID] } }),
-      ],
+    const bundles = fullSevenDays()
+    bundles[1] = bundle({
+      date: bundles[1].date,
+      reel: { ...bundle().reel, source_asset_ids: [FOREIGN_ASSET_ID] },
     })
+    const cmd = validCommand({ bundles })
 
     const res = await POST(postRequest(cmd), params())
 
@@ -465,7 +511,7 @@ describe('campaign-daily-plan POST — fail-closed tenant boundary', () => {
 })
 
 describe('campaign-daily-plan POST — persists structured facts (no LLM/provider call)', () => {
-  it("inserts a new campaign_daily_v1 row with all supplied days' bundles", async () => {
+  it('inserts a new campaign_daily_v1 row with all seven days\' bundles', async () => {
     allow()
     mockGetCampaign.mockResolvedValue(CAMPAIGN)
     const insertedSelect = vi.fn().mockReturnValue({ single: vi.fn().mockResolvedValue({ data: { id: 'new-plan-id' }, error: null }) })
@@ -484,26 +530,18 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
       return tableStub({}) as never
     })
 
-    const cmd = validCommand({ bundles: [bundle({ date: '2026-08-24' }), bundle({ date: '2026-08-25' })] })
-    const res = await POST(postRequest(cmd), params())
+    const res = await POST(postRequest(validCommand()), params())
     const json = await res.json()
 
     expect(res.status).toBe(200)
     expect(json.success).toBe(true)
     expect(json.plan_id).toBe('new-plan-id')
-    expect(insert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        client_id: CTS,
-        campaign_id: CAMPAIGN_ID,
-        plan_data: expect.objectContaining({
-          plan_kind: 'campaign_daily_v1',
-          bundles: expect.arrayContaining([
-            expect.objectContaining({ date: '2026-08-24' }),
-            expect.objectContaining({ date: '2026-08-25' }),
-          ]),
-        }),
-      })
-    )
+    // Insert payload must contain all seven days' bundles, matching days[].
+    const insertArg = insert.mock.calls[0][0] as { plan_data: { plan_kind: string; bundles: Array<{ date: string }>; days: Array<{ date: string }> } }
+    expect(insertArg.plan_data.plan_kind).toBe('campaign_daily_v1')
+    expect(insertArg.plan_data.bundles).toHaveLength(7)
+    expect(insertArg.plan_data.bundles.map(b => b.date).sort())
+      .toEqual(insertArg.plan_data.days.map(d => d.date).sort())
   })
 
   it('updates the existing campaign_daily_v1 row instead of duplicating it', async () => {
@@ -530,5 +568,90 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
     expect(res.status).toBe(200)
     expect(json.plan_id).toBe('existing-plan-id')
     expect(update).toHaveBeenCalled()
+  })
+
+  // Regression (Build Control scope shrink 5395216001, required test 6):
+  // a complete-snapshot UPDATE must REPLACE the stored bundles wholesale —
+  // no preserved-old bundles carrying the new save's master_brief_ref can
+  // sneak through. This removes the false-grounding and stale-window
+  // risks the scope shrink is designed to eliminate.
+  it('replaces the stored bundles on UPDATE — no preserved-old bundles from a previous save survive', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    const update = vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) })
+
+    // The old stored row includes a bundle for a date OUTSIDE the new seven-
+    // day window. After a wholesale replace this old bundle must be gone.
+    const previouslyStoredPlan = {
+      plan_kind: 'campaign_daily_v1',
+      campaign_id: CAMPAIGN_ID,
+      master_brief_ref: { id: 'OLD_BRIEF_ID', version: 99 },
+      days: sevenDays().map(d => ({ ...d, date: `2026-07-${(Number(d.date.slice(-1)) + 20).toString().padStart(2, '0')}` })),
+      bundles: [bundle({ date: '2026-07-20' })], // outside the incoming window
+      command_meta: { source: 'conversation_command', received_at: '2026-07-20T00:00:00Z', raw_summary: null },
+    }
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
+      }
+      if (table === 'client_assets') {
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: [{ id: ASSET_ID }] }) }) as never
+      }
+      if (table === 'social_plans') {
+        return tableStub({
+          maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'existing-plan-id', plan_data: previouslyStoredPlan } }),
+          update,
+        }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const res = await POST(postRequest(validCommand()), params())
+    expect(res.status).toBe(200)
+
+    const updateArg = update.mock.calls[0][0] as { plan_data: { bundles: Array<{ date: string }>, days: Array<{ date: string }> } }
+    expect(updateArg.plan_data.bundles).toHaveLength(7)
+    // Old preserved date is GONE.
+    expect(updateArg.plan_data.bundles.find(b => b.date === '2026-07-20')).toBeUndefined()
+    // Persisted bundles exactly equal the incoming days set — no elevation
+    // of previously-ungrounded old bundles under the new master_brief_ref.
+    expect(updateArg.plan_data.bundles.map(b => b.date).sort())
+      .toEqual(updateArg.plan_data.days.map(d => d.date).sort())
+  })
+
+  // Regression (Build Control scope shrink 5395216001, required test 5):
+  // GET still honours the legacy singular current_bundle field on rows
+  // written before the bundles[] migration — so pre-existing production
+  // rows do not silently disappear before an authorised full rewrite.
+  it('GET still surfaces a legacy current_bundle row (no bundles[]) as a single-entry bundles array', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    const legacyPlanData = {
+      plan_kind: 'campaign_daily_v1',
+      campaign_id: CAMPAIGN_ID,
+      master_brief_ref: { id: BRIEF_ID, version: 2 },
+      days: sevenDays(),
+      // NO bundles[] — only the pre-migration singular field.
+      current_bundle: bundle({ date: '2026-08-24' }),
+      command_meta: { source: 'conversation_command', received_at: '2026-08-24T00:00:00.000Z', raw_summary: null },
+    }
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 2 } }) }) as never
+      }
+      if (table === 'social_plans') {
+        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'legacy-plan-1', plan_data: legacyPlanData }] }) }) as never
+      }
+      if (table === 'client_assets') {
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: [{ id: ASSET_ID, storage_url: 'https://x/y.jpg', original_filename: 'y.jpg', source: 'stock', ownership: 'client_exclusive' }] }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+
+    expect(json.bundles).toHaveLength(1)
+    expect(json.bundles[0].date).toBe('2026-08-24')
+    expect(json.bundles[0].post.hook).toBe('hook')
   })
 })

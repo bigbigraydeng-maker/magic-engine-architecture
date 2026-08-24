@@ -104,91 +104,151 @@ describe('buildPublishingPlan / buildAdCandidate — always plan-only', () => {
   })
 })
 
-describe('CampaignDailyCommandSchema', () => {
+describe('CampaignDailyCommandSchema — complete seven-day snapshot only', () => {
   const CAMPAIGN_ID = 'aaaaaaaa-0000-0000-0000-000000000001'
   const days = Array.from({ length: 7 }, (_, i) => ({
     date: `2026-08-2${i}`,
-    slots: { post: 'NOT_PLANNED' as const, story: 'NOT_PLANNED' as const, reel: 'NOT_PLANNED' as const },
+    slots: { post: 'PLANNED' as const, story: 'PLANNED' as const, reel: 'PLANNED' as const },
   }))
 
-  it('accepts a well-formed command using this repo\'s loose (non-RFC4122) id shape', () => {
+  function completeBundle(date: string, overrides: Record<string, unknown> = {}) {
+    return {
+      date,
+      post: { hook: 'h', body: 'b', cta: 'c' },
+      story: {
+        frames: [
+          { order: 1, copy: 'f1' },
+          { order: 2, copy: 'f2' },
+          { order: 3, copy: 'f3' },
+          { order: 4, copy: 'f4' },
+        ],
+      },
+      reel: {
+        brief: 'br', script: 'sc', caption: 'cp', source_asset_ids: [], media_status: 'NO_MEDIA',
+      },
+      ...overrides,
+    }
+  }
+
+  function fullBundles() {
+    return days.map(d => completeBundle(d.date))
+  }
+
+  it('accepts a full seven-day snapshot with every day complete (Post + 4-frame Story + Reel)', () => {
     const parsed = CampaignDailyCommandSchema.safeParse({
       campaign_id: 'c0000000-0000-0000-0000-000000000000', // CTS's real id shape
       days,
-      bundles: [{ date: '2026-08-24', post: null, story: null, reel: null }],
+      bundles: fullBundles(),
     })
+    if (!parsed.success) console.error(parsed.error.issues)
     expect(parsed.success).toBe(true)
+  })
+
+  // Regression (Build Control scope shrink 5395216001, required test 1):
+  // partial snapshots must be rejected — the seam no longer supports
+  // per-day writes, so accepting a 1-6-bundle command would either merge
+  // (deferred) or drop the other days' content silently.
+  it('rejects a partial snapshot (bundles.length < 7)', () => {
+    const parsed = CampaignDailyCommandSchema.safeParse({
+      campaign_id: CAMPAIGN_ID,
+      days,
+      bundles: fullBundles().slice(0, 3),
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  it('rejects a snapshot with more than 7 bundles', () => {
+    const parsed = CampaignDailyCommandSchema.safeParse({
+      campaign_id: CAMPAIGN_ID,
+      days,
+      bundles: [...fullBundles(), completeBundle('2026-09-01')],
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  // Regression (Build Control scope shrink 5395216001, required test 2):
+  // duplicate dates in bundles must be rejected — otherwise the last write
+  // for a date silently overwrites the earlier one in the same snapshot.
+  it('rejects a snapshot with duplicate bundle dates', () => {
+    const bundles = fullBundles()
+    bundles[1] = completeBundle(bundles[0].date) // two entries for the same date
+    const parsed = CampaignDailyCommandSchema.safeParse({
+      campaign_id: CAMPAIGN_ID,
+      days,
+      bundles,
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  // Regression (Build Control scope shrink 5395216001, required test 3):
+  // bundle date set must exactly equal day date set — a bundle date not in
+  // days, or a scheduled day with no matching bundle, is a mismatch that
+  // renders nothing selectable in the 7-day grid.
+  it('rejects a snapshot where bundle dates do not exactly match day dates (bundle outside window)', () => {
+    const bundles = fullBundles()
+    bundles[0] = completeBundle('2026-09-15') // outside the seven scheduled days
+    const parsed = CampaignDailyCommandSchema.safeParse({
+      campaign_id: CAMPAIGN_ID,
+      days,
+      bundles,
+    })
+    expect(parsed.success).toBe(false)
   })
 
   it('rejects a plan with fewer or more than 7 days', () => {
     const parsed = CampaignDailyCommandSchema.safeParse({
       campaign_id: CAMPAIGN_ID,
       days: days.slice(0, 6),
-      bundles: [{ date: '2026-08-24', post: null, story: null, reel: null }],
+      bundles: fullBundles().slice(0, 6),
     })
     expect(parsed.success).toBe(false)
   })
 
-  it('rejects a plan with zero bundles', () => {
+  it('rejects a bundle whose Story does not have exactly 4 frames', () => {
+    const bundles = fullBundles()
+    bundles[0] = {
+      ...bundles[0],
+      story: { frames: [{ order: 1, copy: 'only one frame' }] },
+    }
     const parsed = CampaignDailyCommandSchema.safeParse({
       campaign_id: CAMPAIGN_ID,
       days,
-      bundles: [],
+      bundles,
     })
     expect(parsed.success).toBe(false)
   })
 
-  it('accepts a plan with 1-7 bundles (not every day needs to be filled at once)', () => {
+  it('rejects a bundle whose Post is missing (partial-day content)', () => {
+    const bundles = fullBundles()
+    bundles[0] = { ...bundles[0], post: null as never }
     const parsed = CampaignDailyCommandSchema.safeParse({
       campaign_id: CAMPAIGN_ID,
       days,
-      bundles: [
-        { date: '2026-08-24', post: null, story: null, reel: null },
-        { date: '2026-08-25', post: null, story: null, reel: null },
-      ],
-    })
-    expect(parsed.success).toBe(true)
-  })
-
-  it('rejects a story bundle with zero frames', () => {
-    const parsed = CampaignDailyCommandSchema.safeParse({
-      campaign_id: CAMPAIGN_ID,
-      days,
-      bundles: [{ date: '2026-08-24', post: null, story: { frames: [] }, reel: null }],
+      bundles,
     })
     expect(parsed.success).toBe(false)
   })
 
-  // Regression (#1159 remediation, Build Control finding 3): a command must
-  // never be able to assert a Reel is READY — WP1 has no way to verify a
-  // real output exists, so accepting the claim would let the UI show
-  // "可用成片" for a reel that is still just a script. Reject at the schema
-  // boundary rather than trusting-then-filtering downstream.
+  // Regression (#1159 earlier remediation, Build Control finding 3): a
+  // command must never be able to assert a Reel is READY.
   it('rejects a Reel command that declares media_status READY — WP1 cannot verify a real output', () => {
+    const bundles = fullBundles()
+    bundles[0] = { ...bundles[0], reel: { ...bundles[0].reel, media_status: 'READY' as never } }
     const parsed = CampaignDailyCommandSchema.safeParse({
       campaign_id: CAMPAIGN_ID,
       days,
-      bundles: [{
-        date: '2026-08-24',
-        post: null,
-        story: null,
-        reel: { brief: 'b', script: 's', caption: 'c', source_asset_ids: [], media_status: 'READY' },
-      }],
+      bundles,
     })
     expect(parsed.success).toBe(false)
   })
 
-  it('still accepts the honest NO_MEDIA / DRAFT_MEDIA statuses', () => {
+  it('still accepts the honest NO_MEDIA / DRAFT_MEDIA statuses for every day', () => {
     for (const media_status of ['NO_MEDIA', 'DRAFT_MEDIA']) {
+      const bundles = fullBundles().map(b => ({ ...b, reel: { ...b.reel, media_status } }))
       const parsed = CampaignDailyCommandSchema.safeParse({
         campaign_id: CAMPAIGN_ID,
         days,
-        bundles: [{
-          date: '2026-08-24',
-          post: null,
-          story: null,
-          reel: { brief: 'b', script: 's', caption: 'c', source_asset_ids: [], media_status },
-        }],
+        bundles,
       })
       expect(parsed.success).toBe(true)
     }

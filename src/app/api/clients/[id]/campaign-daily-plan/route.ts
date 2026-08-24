@@ -237,7 +237,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     const { data: existing } = await supabaseAdmin
       .from('social_plans')
-      .select('id, plan_data')
+      .select('id')
       .eq('client_id', clientId)
       .eq('campaign_id', cmd.campaign_id)
       .contains('plan_data', { plan_kind: CAMPAIGN_DAILY_PLAN_KIND })
@@ -245,32 +245,21 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       .limit(1)
       .maybeSingle()
 
-    // Merge into the previously saved bundles by date — the command contract
-    // only requires the day(s) actually being set (1-7 of 7), so replacing
-    // the whole array with `cmd.bundles` would permanently delete every
-    // other day's already-saved content.
-    const existingPlanData = (existing?.plan_data ?? null) as CampaignDailyPlanData | null
-    // Back-compat: rows written before the `bundles[]` migration only have a
-    // singular `current_bundle`. Without normalising it into `bundles[]` here
-    // too (mirroring the GET fallback), a partial-day write on such a row
-    // would merge against an empty array and permanently drop that legacy
-    // day's only content.
-    // TODO(#1159): remove once the data backfill to `bundles[]` has run.
-    const legacyExistingBundle = (existingPlanData as unknown as { current_bundle?: CampaignDailyPlanData['bundles'][number] | null })
-      ?.current_bundle
-    const existingBundles = existingPlanData?.bundles ?? (legacyExistingBundle ? [legacyExistingBundle] : [])
-    const incomingDates = new Set(cmd.bundles.map(b => b.date))
-    const mergedBundles = [
-      ...existingBundles.filter(b => !incomingDates.has(b.date)),
-      ...cmd.bundles,
-    ]
-
+    // Complete-snapshot contract: the incoming command IS the new stored
+    // seven-day plan; previously stored bundles are replaced wholesale, not
+    // merged. Merging previously stored bundles into a new snapshot was
+    // valid but reintroduced two risks the scope shrink is designed to
+    // eliminate — preserved-old bundles carry the current save's
+    // `master_brief_ref` (false grounding), and old dates outside the new
+    // window leak into the render (stale window). Rejecting partial writes
+    // and replacing wholesale removes both without adding per-bundle
+    // grounding, migrations, or a merge/version framework.
     const planData: CampaignDailyPlanData = {
       plan_kind: CAMPAIGN_DAILY_PLAN_KIND,
       campaign_id: cmd.campaign_id,
       master_brief_ref: masterBrief,
       days: cmd.days,
-      bundles: mergedBundles,
+      bundles: cmd.bundles,
       command_meta: {
         source: 'conversation_command',
         received_at: new Date().toISOString(),
