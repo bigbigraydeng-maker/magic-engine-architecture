@@ -83,6 +83,28 @@ type ReconciliationState =
   | { phase: 'error' }
   | { phase: 'ready'; data: ReconciliationPreviewPayload }
 
+interface Incident {
+  incidentKey: string
+  rootCause: string
+  affectedScope: string
+  occurrenceCount: number
+  affectedJobs: string[]
+  status: 'OPEN' | 'RECOVERED' | 'RECOVERY_UNKNOWN'
+}
+
+interface IncidentPreviewPayload {
+  fixture: string
+  live: boolean
+  totalRawOccurrences: number
+  incidents: Incident[]
+  totalAccountedOccurrences: number
+}
+
+type IncidentState =
+  | { phase: 'loading' }
+  | { phase: 'error' }
+  | { phase: 'ready'; data: IncidentPreviewPayload }
+
 type PageState =
   | { phase: 'loading' }
   | { phase: 'error'; message: string }
@@ -210,9 +232,62 @@ function ReconciliationPreviewCard({ state }: { state: ReconciliationState }) {
   )
 }
 
+const INCIDENT_STATUS_LABEL: Record<Incident['status'], string> = {
+  OPEN: '🔴 未恢复',
+  RECOVERED: '✅ 已验证恢复',
+  RECOVERY_UNKNOWN: '⚪ 恢复状态未知（本预览未接入恢复核验）',
+}
+
+/**
+ * #1169 WP3 — incident aggregation preview. Runs on the FROZEN audited-77
+ * cron-failure fixture, not live data: one card per root-cause × affected
+ * scope instead of 77 raw run rows. No retry/fix button — this slice only
+ * proves the incident truth, it does not execute or heal anything.
+ */
+function IncidentPreviewCard({ state }: { state: IncidentState }) {
+  if (state.phase === 'loading') {
+    return <div className="mb-6 text-xs text-slate-400">加载 Incident Aggregation 预览…</div>
+  }
+  if (state.phase === 'error') {
+    return null
+  }
+
+  const { data } = state
+  const incidentsSorted = [...data.incidents].sort((a, b) => b.occurrenceCount - a.occurrenceCount)
+
+  return (
+    <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50 p-4">
+      <p className="mb-1 text-sm font-black text-amber-900">
+        🧯 Incident Aggregation 预览（#1169 WP3 · 冻结审计样本 / 非实时数据）
+      </p>
+      <p className="mb-3 text-xs text-amber-700">
+        原始失败记录 <b>{data.totalRawOccurrences}</b> 条 → 按根因×影响范围聚合成 <b>{data.incidents.length}</b> 个事件
+        （每条记录都算了一次，共 {data.totalAccountedOccurrences} 条，不多不少）
+      </p>
+
+      <div className="space-y-2">
+        {incidentsSorted.map((i) => (
+          <div key={i.incidentKey} className="rounded-lg bg-white p-2.5">
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-xs font-bold text-slate-800">{i.rootCause}</p>
+              <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800">
+                {INCIDENT_STATUS_LABEL[i.status]}
+              </span>
+            </div>
+            <p className="mt-1 text-[11px] text-slate-500">
+              影响范围：{i.affectedScope} · 发生 {i.occurrenceCount} 次 · 涉及任务：{i.affectedJobs.join('、')}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function TodayPage() {
   const [state, setState] = useState<PageState>({ phase: 'loading' })
   const [reconciliation, setReconciliation] = useState<ReconciliationState>({ phase: 'loading' })
+  const [incidents, setIncidents] = useState<IncidentState>({ phase: 'loading' })
 
   const load = useCallback(async () => {
     setState({ phase: 'loading' })
@@ -241,8 +316,21 @@ export default function TodayPage() {
     }
   }, [])
 
+  const loadIncidents = useCallback(async () => {
+    setIncidents({ phase: 'loading' })
+    try {
+      const res = await fetch('/api/workbench/today/incident-preview')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = (await res.json()) as IncidentPreviewPayload
+      setIncidents({ phase: 'ready', data })
+    } catch {
+      setIncidents({ phase: 'error' })
+    }
+  }, [])
+
   useEffect(() => { load() }, [load])
   useEffect(() => { loadReconciliation() }, [loadReconciliation])
+  useEffect(() => { loadIncidents() }, [loadIncidents])
 
   if (state.phase === 'loading') {
     return <div className="p-8 text-sm text-slate-400">加载今日待办...</div>
@@ -289,6 +377,7 @@ export default function TodayPage() {
       </div>
 
       <ReconciliationPreviewCard state={reconciliation} />
+      <IncidentPreviewCard state={incidents} />
 
       {total === 0 ? (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-6 text-sm font-bold text-emerald-700">
