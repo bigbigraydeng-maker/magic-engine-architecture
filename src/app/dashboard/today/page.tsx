@@ -239,6 +239,28 @@ const INCIDENT_STATUS_LABEL: Record<Incident['status'], string> = {
 }
 
 /**
+ * Small local presentation mapping for the seven job names this frozen
+ * fixture is known to emit — PM-facing Chinese label first, raw technical id
+ * kept as secondary text for anyone who needs to grep the actual cron job.
+ * Not a generic i18n framework: any job name outside this fixture just shows
+ * its raw id unchanged.
+ */
+const JOB_LABEL_ZH: Record<string, string> = {
+  'social-comment-autoreply': '社媒评论自动回复',
+  'meta-leads-sync': 'Meta 留资同步',
+  'market-intel-daily': '市场情报日报',
+  'winner-reel-sync-daily': '爆款短视频同步',
+  'ad-readback-sweep': '广告回读巡检',
+  'google-data-pullback-daily': 'Google 数据回拉',
+  'cms-connection-retest': 'CMS 连接复测',
+}
+
+function jobLabel(jobName: string): string {
+  const zh = JOB_LABEL_ZH[jobName]
+  return zh ? `${zh}（${jobName}）` : jobName
+}
+
+/**
  * #1169 WP3 — incident aggregation preview. Runs on the FROZEN audited-77
  * cron-failure fixture, not live data: one card per root-cause × affected
  * scope instead of 77 raw run rows. No retry/fix button — this slice only
@@ -275,7 +297,8 @@ function IncidentPreviewCard({ state }: { state: IncidentState }) {
               </span>
             </div>
             <p className="mt-1 text-[11px] text-slate-500">
-              影响范围：{i.affectedScope} · 发生 {i.occurrenceCount} 次 · 涉及任务：{i.affectedJobs.join('、')}
+              影响范围：{i.affectedScope} · 发生 {i.occurrenceCount} 次 · 涉及任务：
+              {i.affectedJobs.map(jobLabel).join('、')}
             </p>
           </div>
         ))}

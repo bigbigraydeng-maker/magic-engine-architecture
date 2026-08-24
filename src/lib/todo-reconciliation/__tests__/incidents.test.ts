@@ -23,22 +23,22 @@ describe('aggregateIncidents — frozen audited-77', () => {
     expect(result.totalRawOccurrences).toBe(77)
     expect(result.totalAccountedOccurrences).toBe(77)
 
-    const byId = new Map(result.incidents.map((i) => [i.incidentKey, i]))
+    const byRootCause = new Map(result.incidents.map((i) => [i.rootCauseId, i]))
 
-    const meta = byId.get('meta-credential-token::cross-client-meta-connected')
+    const meta = byRootCause.get('meta-credential-token')
     expect(meta?.occurrenceCount).toBe(72) // 48 + 24
     expect(meta?.affectedJobs.sort()).toEqual(['meta-leads-sync', 'social-comment-autoreply'])
 
-    const marketIntel = byId.get('market-intel-feed-403::system-market-intel-feed')
+    const marketIntel = byRootCause.get('market-intel-feed-403')
     expect(marketIntel?.occurrenceCount).toBe(1)
 
-    const cms = byId.get('cms-cross-client-connector::cross-client-cms-connected')
+    const cms = byRootCause.get('cms-cross-client-connector')
     expect(cms?.occurrenceCount).toBe(1)
 
     // Not named in the audit body's 3 categories -> each is its own
     // self-evidenced, single-job incident, not merged or invented.
     for (const job of ['winner-reel-sync-daily', 'ad-readback-sweep', 'google-data-pullback-daily']) {
-      const standalone = byId.get(`job:${job}::job:${job}`)
+      const standalone = byRootCause.get(`job:${job}`)
       expect(standalone?.occurrenceCount).toBe(1)
       expect(standalone?.affectedJobs).toEqual([job])
     }
@@ -51,6 +51,31 @@ describe('aggregateIncidents — frozen audited-77', () => {
     const occurrences = buildAudited77CronOccurrences()
     const result = aggregateIncidents(occurrences, AUDITED_77_CORRELATION_EVIDENCE)
     expect(result.incidents.every((i) => i.status === 'RECOVERY_UNKNOWN')).toBe(true)
+  })
+
+  // B1 — PM-facing text must be Chinese, not an internal English diagnostic sentence.
+  it('every incident\'s PM-facing rootCause is Chinese, and the payload still says fixture/non-live', () => {
+    const occurrences = buildAudited77CronOccurrences()
+    const result = aggregateIncidents(occurrences, AUDITED_77_CORRELATION_EVIDENCE)
+    const CJK = /[一-鿿]/
+    for (const incident of result.incidents) {
+      expect(incident.rootCause).toMatch(CJK)
+      expect(incident.affectedScope).toMatch(CJK)
+    }
+  })
+
+  // B4 — the audit body proves a shared cause across jobs, not a specific
+  // affected-customer set; the fixture must never claim a universal scope.
+  it('named incidents never claim a specific/universal affected-customer set the audit did not prove', () => {
+    const occurrences = buildAudited77CronOccurrences()
+    const result = aggregateIncidents(occurrences, AUDITED_77_CORRELATION_EVIDENCE)
+    const overclaimPatterns = [/every client/i, /所有客户/, /全部客户/, /每一个/, /every .* connected/i]
+    for (const incident of result.incidents) {
+      for (const pattern of overclaimPatterns) {
+        expect(incident.affectedScope).not.toMatch(pattern)
+      }
+      expect(incident.affectedScope).toMatch(/UNKNOWN|未知/)
+    }
   })
 })
 
@@ -69,10 +94,113 @@ describe('aggregateIncidents — identity is rootCause × scope, not rootCause a
     const result = aggregateIncidents(occurrences, evidence)
 
     expect(result.incidents).toHaveLength(2)
-    expect(result.incidents.map((i) => i.incidentKey).sort()).toEqual([
-      'shared-cause::scope-a',
-      'shared-cause::scope-b',
-    ])
+    expect(new Set(result.incidents.map((i) => i.incidentKey)).size).toBe(2)
+    expect(result.incidents.every((i) => i.rootCauseId === 'shared-cause')).toBe(true)
+    expect(result.incidents.map((i) => i.scopeKey).sort()).toEqual(['scope-a', 'scope-b'])
+  })
+})
+
+// ─── Test B3: composite key must not collide when an id contains "::" ───────
+
+describe('aggregateIncidents — incident key cannot collide across "::"-containing ids (B3)', () => {
+  it('keeps ("a::b","c") and ("a","b::c") as two distinct incidents, not one merged incident', () => {
+    const evidence: IncidentCorrelationEvidence[] = [
+      { rootCauseId: 'a::b', rootCause: 'X', scopeKey: 'c', affectedScope: 'A', jobNames: ['job-x'] },
+      { rootCauseId: 'a', rootCause: 'Y', scopeKey: 'b::c', affectedScope: 'B', jobNames: ['job-y'] },
+    ]
+    const occurrences: CronOccurrence[] = [
+      { id: '1', jobName: 'job-x', occurredAt: '2026-08-24T00:00:00.000Z' },
+      { id: '2', jobName: 'job-y', occurredAt: '2026-08-24T00:00:00.000Z' },
+    ]
+    const result = aggregateIncidents(occurrences, evidence)
+
+    expect(result.incidents).toHaveLength(2)
+    const keys = new Set(result.incidents.map((i) => i.incidentKey))
+    expect(keys.size).toBe(2) // the two composite tuples must not serialise to the same key
+    expect(result.incidents.find((i) => i.rootCauseId === 'a::b')?.occurrenceCount).toBe(1)
+    expect(result.incidents.find((i) => i.rootCauseId === 'a' && i.scopeKey === 'b::c')?.occurrenceCount).toBe(1)
+  })
+})
+
+// ─── Test B2: conflicting evidence for the same job must fail closed ────────
+
+describe('aggregateIncidents — conflicting correlation evidence fails closed (B2)', () => {
+  it('does not silently pick the last mapping when the same job appears in two contradictory evidence rows', () => {
+    const evidence: IncidentCorrelationEvidence[] = [
+      { rootCauseId: 'cause-1', rootCause: 'X', scopeKey: 's1', affectedScope: 'A', jobNames: ['job-a'] },
+      { rootCauseId: 'cause-2', rootCause: 'Y', scopeKey: 's2', affectedScope: 'B', jobNames: ['job-a'] },
+    ]
+    const occurrences: CronOccurrence[] = [
+      { id: '1', jobName: 'job-a', occurredAt: '2026-08-24T00:00:00.000Z' },
+      { id: '2', jobName: 'job-a', occurredAt: '2026-08-24T01:00:00.000Z' },
+    ]
+    const result = aggregateIncidents(occurrences, evidence)
+
+    expect(result.incidents).toHaveLength(1)
+    const incident = result.incidents[0]
+    expect(incident.rootCauseId).not.toBe('cause-1')
+    expect(incident.rootCauseId).not.toBe('cause-2')
+    expect(incident.affectedScope).toContain('UNKNOWN')
+    expect(incident.occurrenceCount).toBe(2) // both occurrences of the conflicted job still accounted for, together
+  })
+
+  it('a conflicted job cannot consume a recovery receipt aimed at either of the contradictory mappings', () => {
+    const evidence: IncidentCorrelationEvidence[] = [
+      { rootCauseId: 'cause-1', rootCause: 'X', scopeKey: 's1', affectedScope: 'A', jobNames: ['job-a'] },
+      { rootCauseId: 'cause-2', rootCause: 'Y', scopeKey: 's2', affectedScope: 'B', jobNames: ['job-a'] },
+    ]
+    const occurrences: CronOccurrence[] = [{ id: '1', jobName: 'job-a', occurredAt: '2026-08-24T00:00:00.000Z' }]
+    const receipts: RecoveryReceipt[] = [
+      { rootCauseId: 'cause-1', scopeKey: 's1', verifiedAt: '2026-08-24T01:00:00.000Z' },
+      { rootCauseId: 'cause-2', scopeKey: 's2', verifiedAt: '2026-08-24T01:00:00.000Z' },
+    ]
+    const result = aggregateIncidents(occurrences, evidence, receipts)
+    expect(result.incidents[0].status).toBe('RECOVERY_UNKNOWN')
+  })
+
+  it('does not treat identical duplicate evidence for the same job as a conflict', () => {
+    const evidence: IncidentCorrelationEvidence[] = [
+      { rootCauseId: 'cause-1', rootCause: 'X', scopeKey: 's1', affectedScope: 'A', jobNames: ['job-a'] },
+      { rootCauseId: 'cause-1', rootCause: 'X', scopeKey: 's1', affectedScope: 'A', jobNames: ['job-a'] },
+    ]
+    const occurrences: CronOccurrence[] = [{ id: '1', jobName: 'job-a', occurredAt: '2026-08-24T00:00:00.000Z' }]
+    const result = aggregateIncidents(occurrences, evidence)
+
+    expect(result.incidents).toHaveLength(1)
+    expect(result.incidents[0].rootCauseId).toBe('cause-1')
+  })
+})
+
+// ─── Test B5: malformed timestamps must never produce a false RECOVERED ─────
+
+describe('aggregateIncidents — malformed timestamps fail closed, never RECOVERED (B5)', () => {
+  const evidence: IncidentCorrelationEvidence[] = [
+    { rootCauseId: 'c1', rootCause: 'cause', scopeKey: 's1', affectedScope: 'scope', jobNames: ['job-a'] },
+  ]
+
+  it('an invalid occurrence timestamp keeps the incident RECOVERY_UNKNOWN even with a receipt that would otherwise close it', () => {
+    const occurrences: CronOccurrence[] = [{ id: '1', jobName: 'job-a', occurredAt: 'not-a-real-timestamp' }]
+    const receipts: RecoveryReceipt[] = [
+      { rootCauseId: 'c1', scopeKey: 's1', verifiedAt: '2026-08-24T23:59:59.000Z' },
+    ]
+    const result = aggregateIncidents(occurrences, evidence, receipts)
+    expect(result.incidents[0].status).toBe('RECOVERY_UNKNOWN')
+  })
+
+  it('an invalid receipt verifiedAt is ignored, not treated as a closing recovery', () => {
+    const occurrences: CronOccurrence[] = [{ id: '1', jobName: 'job-a', occurredAt: '2026-08-24T10:00:00.000Z' }]
+    const receipts: RecoveryReceipt[] = [{ rootCauseId: 'c1', scopeKey: 's1', verifiedAt: 'also-not-a-timestamp' }]
+    const result = aggregateIncidents(occurrences, evidence, receipts)
+    expect(result.incidents[0].status).toBe('RECOVERY_UNKNOWN')
+  })
+
+  it('a valid stale receipt still leaves the incident OPEN, and a valid at/after receipt still closes it (unaffected by the parsing change)', () => {
+    const occurrences: CronOccurrence[] = [{ id: '1', jobName: 'job-a', occurredAt: '2026-08-24T10:00:00.000Z' }]
+    const stale: RecoveryReceipt[] = [{ rootCauseId: 'c1', scopeKey: 's1', verifiedAt: '2026-08-24T05:00:00.000Z' }]
+    expect(aggregateIncidents(occurrences, evidence, stale).incidents[0].status).toBe('OPEN')
+
+    const valid: RecoveryReceipt[] = [{ rootCauseId: 'c1', scopeKey: 's1', verifiedAt: '2026-08-24T10:00:00.000Z' }]
+    expect(aggregateIncidents(occurrences, evidence, valid).incidents[0].status).toBe('RECOVERED')
   })
 })
 
@@ -106,8 +234,8 @@ describe('aggregateIncidents — missing/invalid evidence fails closed', () => {
 
     expect(result.totalAccountedOccurrences).toBe(1)
     expect(result.incidents).toHaveLength(1)
-    expect(result.incidents[0].rootCause).toContain('CHECK_FAILED')
-    expect(result.incidents[0].affectedScope).toBe('UNKNOWN')
+    expect(result.incidents[0].rootCause).toContain('核实失败')
+    expect(result.incidents[0].affectedScope).toContain('UNKNOWN')
   })
 
   it('does not merge two different malformed occurrences into one incident', () => {

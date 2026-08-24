@@ -41,4 +41,19 @@ describe('GET /api/workbench/today/incident-preview', () => {
     expect(json.retry).toBeUndefined()
     expect(json.fix).toBeUndefined()
   })
+
+  // B1 (Build Control remediation) — the JSON payload itself, not just the
+  // client rendering, must already carry PM-readable Chinese text.
+  it('the raw API payload — not just client rendering — already carries PM-readable Chinese incident text', async () => {
+    mocks.guardAdmin.mockResolvedValue(null)
+
+    const json = await (await GET()).json()
+    const CJK = /[一-鿿]/
+
+    expect(json.incidents.length).toBeGreaterThan(0)
+    for (const incident of json.incidents as Array<{ rootCause: string; affectedScope: string }>) {
+      expect(incident.rootCause).toMatch(CJK)
+      expect(incident.affectedScope).toMatch(CJK)
+    }
+  })
 })

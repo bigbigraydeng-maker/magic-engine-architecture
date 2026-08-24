@@ -5,12 +5,25 @@
  * evidence for `aggregateIncidents()`.
  *
  * The three named groupings below are NOT inferred from job-name similarity
- * — they are copied from the #1169 issue body's own "Cron reconciliation"
- * finding ("They collapse mainly to: 1. one Meta credential/page-token
- * incident … 2. one market-intelligence feed 403/source incident …
- * 3. one CMS cross-client connector incident."). Any job not named there
- * gets no fabricated correlation — `aggregateIncidents()` falls back to a
- * single-job, self-evidenced incident for it.
+ * — the fact that these particular jobs share one cause is copied from the
+ * #1169 issue body's own "Cron reconciliation" finding ("They collapse
+ * mainly to: 1. one Meta credential/page-token incident … 2. one
+ * market-intelligence feed 403/source incident … 3. one CMS cross-client
+ * connector incident."). Any job not named there gets no fabricated
+ * correlation — `aggregateIncidents()` falls back to a single-job,
+ * self-evidenced incident for it.
+ *
+ * `affectedScope` deliberately does NOT name a specific customer set. The
+ * audit body proves "these jobs share one root cause" — it does not prove
+ * which exact customers are affected, so claiming e.g. "every Meta-connected
+ * client" would be an invented fact the source evidence never established
+ * (Build Control finding, B4). Every scope here reads UNKNOWN with only the
+ * category of evidence that IS proven.
+ *
+ * All PM-facing text (rootCause / affectedScope) is plain Chinese — this
+ * fixture feeds directly into the /dashboard/today card Ray reads, and the
+ * house rule is zero-jargon PM-readable text, not internal English
+ * diagnostic sentences (Build Control finding, B1).
  *
  * No per-occurrence failure timestamp exists in the source fixture (cron
  * rows never set `createdAt`) — every occurrence here is honestly stamped
@@ -26,23 +39,23 @@ import type { CronOccurrence, IncidentCorrelationEvidence } from '../incidents'
 export const AUDITED_77_CORRELATION_EVIDENCE: IncidentCorrelationEvidence[] = [
   {
     rootCauseId: 'meta-credential-token',
-    rootCause: 'One Meta credential/page-token incident affecting several jobs',
-    scopeKey: 'cross-client-meta-connected',
-    affectedScope: 'Cross-client — every client with an active Meta connection',
+    rootCause: 'Meta 凭证 / Page Token 故障 — 多个任务共享同一个根因',
+    scopeKey: 'meta-shared-cause-jobs',
+    affectedScope: '受影响客户范围未知（UNKNOWN）——审计只证明这几个任务共享同一根因，未证明具体受影响的客户名单',
     jobNames: ['social-comment-autoreply', 'meta-leads-sync'],
   },
   {
     rootCauseId: 'market-intel-feed-403',
-    rootCause: 'One market-intelligence feed 403/source incident',
-    scopeKey: 'system-market-intel-feed',
-    affectedScope: 'System-wide — market intelligence data feed, not client-scoped',
+    rootCause: '市场情报数据源 403 / 拉取故障',
+    scopeKey: 'market-intel-feed-cause',
+    affectedScope: '受影响客户范围未知（UNKNOWN）——这是系统级数据源故障，审计未证明具体受影响的客户名单',
     jobNames: ['market-intel-daily'],
   },
   {
     rootCauseId: 'cms-cross-client-connector',
-    rootCause: 'One CMS cross-client connector incident',
-    scopeKey: 'cross-client-cms-connected',
-    affectedScope: 'Cross-client — every CMS-connected client',
+    rootCause: 'CMS 跨客户连接器故障',
+    scopeKey: 'cms-connector-cause',
+    affectedScope: '受影响客户范围未知（UNKNOWN）——审计只证明这是跨客户类别的故障，未证明具体受影响的客户名单',
     jobNames: ['cms-connection-retest'],
   },
 ]

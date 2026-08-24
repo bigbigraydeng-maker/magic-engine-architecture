@@ -65,31 +65,67 @@ export interface IncidentAggregationResult {
   totalAccountedOccurrences: number
 }
 
-const UNCLASSIFIED_ROOT_CAUSE =
-  "No cross-job correlation evidence — this job's own failures are the entire evidenced incident."
-const CHECK_FAILED_ROOT_CAUSE = 'CHECK_FAILED — occurrence is missing a job name and cannot be classified.'
+// PM-facing fallback text (B1) — every string a reader sees without opening
+// the fixture source must already be plain Chinese, never an internal
+// diagnostic sentence in English.
+const UNCLASSIFIED_ROOT_CAUSE = '未归类故障 — 目前只有这一个任务本身的失败记录，没有证据证明它和别的任务共享同一个根因。'
+const CHECK_FAILED_ROOT_CAUSE = '核实失败 — 这条记录缺少任务名称，无法归类，予以保留可见。'
+const CONFLICT_ROOT_CAUSE = '证据冲突 — 同一个任务被两条互相矛盾的根因证据同时引用，人工核实前不判定归属，也不会用来关闭任何一边的故障。'
+const AFFECTED_SCOPE_UNKNOWN_ZH = '影响范围未知（UNKNOWN）'
 
+// ─── B3 — structurally unambiguous composite identity ───────────────────────
+//
+// A plain `${rootCauseId}::${scopeKey}` template collides whenever either id
+// itself contains "::" — e.g. ('a::b','c') and ('a','b::c') both produce
+// "a::b::c". JSON-encoding the tuple keeps string boundaries (quoting +
+// escaping) intact, so two different tuples can never serialise the same way.
 function incidentKeyOf(rootCauseId: string, scopeKey: string): string {
-  return `${rootCauseId}::${scopeKey}`
+  return JSON.stringify([rootCauseId, scopeKey])
 }
 
-/** Builds a `jobName -> evidence` lookup; fails closed (undefined) for anything not explicitly evidenced. */
-function indexEvidenceByJob(
-  evidence: IncidentCorrelationEvidence[],
-): Map<string, IncidentCorrelationEvidence> {
-  const byJob = new Map<string, IncidentCorrelationEvidence>()
+type EvidenceLookup = IncidentCorrelationEvidence | 'CONFLICT'
+
+/**
+ * Builds a `jobName -> evidence` lookup — fails closed to `'CONFLICT'` when a
+ * job name appears in two evidence rows with a genuinely different
+ * (rootCauseId, scopeKey) (B2). Repeated *identical* evidence for the same
+ * job is a safe duplicate, not a conflict.
+ */
+function indexEvidenceByJob(evidence: IncidentCorrelationEvidence[]): Map<string, EvidenceLookup> {
+  const byJob = new Map<string, EvidenceLookup>()
   for (const e of evidence) {
-    for (const jobName of e.jobNames) byJob.set(jobName, e)
+    for (const jobName of e.jobNames) {
+      const existing = byJob.get(jobName)
+      if (existing === 'CONFLICT') continue
+      if (existing && (existing.rootCauseId !== e.rootCauseId || existing.scopeKey !== e.scopeKey)) {
+        byJob.set(jobName, 'CONFLICT')
+      } else {
+        byJob.set(jobName, e)
+      }
+    }
   }
   return byJob
 }
 
+// ─── B5 — parse timestamps before comparing; never trust raw string order ───
+
+function parseInstant(iso: string): number | null {
+  const t = Date.parse(iso)
+  return Number.isFinite(t) ? t : null
+}
+
 /**
- * Verified recovery closes an incident only when the LATEST receipt for its
- * rootCauseId×scopeKey is at or after the incident's latest failure. A
- * receipt older than the latest failure is stale and cannot close it. A new
- * failure after a closing receipt makes that receipt stale again — the
- * incident reopens automatically, with no separate "reopen" branch needed.
+ * Verified recovery closes an incident only when the LATEST valid receipt
+ * for its rootCauseId×scopeKey is at or after the incident's latest valid
+ * failure. A receipt older than the latest failure is stale and cannot close
+ * it. A new failure after a closing receipt makes that receipt stale again —
+ * the incident reopens automatically, with no separate "reopen" branch
+ * needed.
+ *
+ * Any invalid timestamp — the incident's own latest-failure instant, or a
+ * candidate receipt's `verifiedAt` — is excluded before comparison rather
+ * than compared as a raw string; an unparseable instant can never produce a
+ * false RECOVERED.
  */
 function deriveStatus(
   rootCauseId: string,
@@ -97,11 +133,18 @@ function deriveStatus(
   latestFailureAt: string,
   receipts: RecoveryReceipt[],
 ): IncidentStatus {
-  const matching = receipts.filter((r) => r.rootCauseId === rootCauseId && r.scopeKey === scopeKey)
-  if (matching.length === 0) return 'RECOVERY_UNKNOWN'
+  const latestFailureInstant = parseInstant(latestFailureAt)
+  if (latestFailureInstant === null) return 'RECOVERY_UNKNOWN' // cannot safely order failures — never claim RECOVERED
 
-  const latestReceipt = matching.reduce((a, b) => (a.verifiedAt > b.verifiedAt ? a : b))
-  return latestReceipt.verifiedAt >= latestFailureAt ? 'RECOVERED' : 'OPEN'
+  const validReceipts = receipts
+    .filter((r) => r.rootCauseId === rootCauseId && r.scopeKey === scopeKey)
+    .map((r) => ({ receipt: r, instant: parseInstant(r.verifiedAt) }))
+    .filter((x): x is { receipt: RecoveryReceipt; instant: number } => x.instant !== null)
+
+  if (validReceipts.length === 0) return 'RECOVERY_UNKNOWN'
+
+  const latest = validReceipts.reduce((a, b) => (a.instant >= b.instant ? a : b))
+  return latest.instant >= latestFailureInstant ? 'RECOVERED' : 'OPEN'
 }
 
 export function aggregateIncidents(
@@ -123,15 +166,24 @@ export function aggregateIncidents(
     let affectedScope: string
 
     if (!occ.jobName) {
-      // Missing/invalid evidence must fail closed and stay visible — never
-      // silently dropped, never merged with another malformed occurrence.
+      // Missing evidence must fail closed and stay visible — never silently
+      // dropped, never merged with another malformed occurrence.
       rootCauseId = `invalid:${occ.id}`
       rootCause = CHECK_FAILED_ROOT_CAUSE
       scopeKey = 'UNKNOWN'
-      affectedScope = 'UNKNOWN'
+      affectedScope = AFFECTED_SCOPE_UNKNOWN_ZH
     } else {
       const matched = evidenceByJob.get(occ.jobName)
-      if (matched) {
+      if (matched === 'CONFLICT') {
+        // Keyed per job name (not per raw evidence row), so every occurrence
+        // of this job's conflict merges into one incident — and because its
+        // rootCauseId/scopeKey match neither of the two real evidence rows,
+        // no recovery receipt for either mapping can ever close it.
+        rootCauseId = `conflict:${occ.jobName}`
+        rootCause = CONFLICT_ROOT_CAUSE
+        scopeKey = 'UNKNOWN'
+        affectedScope = AFFECTED_SCOPE_UNKNOWN_ZH
+      } else if (matched) {
         rootCauseId = matched.rootCauseId
         rootCause = matched.rootCause
         scopeKey = matched.scopeKey
@@ -142,7 +194,7 @@ export function aggregateIncidents(
         rootCauseId = `job:${occ.jobName}`
         rootCause = UNCLASSIFIED_ROOT_CAUSE
         scopeKey = `job:${occ.jobName}`
-        affectedScope = 'UNKNOWN'
+        affectedScope = AFFECTED_SCOPE_UNKNOWN_ZH
       }
     }
 
@@ -157,7 +209,18 @@ export function aggregateIncidents(
 
   const incidents: Incident[] = Array.from(groups.entries())
     .map(([incidentKey, g]) => {
-      const latestFailureAt = g.occ.reduce((a, b) => (a.occurredAt > b.occurredAt ? a : b)).occurredAt
+      const withInstant = g.occ.map((o) => ({ o, instant: parseInstant(o.occurredAt) }))
+      const validInstant = withInstant.filter(
+        (x): x is { o: CronOccurrence; instant: number } => x.instant !== null,
+      )
+      // If nothing parses, fall back to the first raw value purely for
+      // display — deriveStatus() independently re-parses it and fails closed
+      // to RECOVERY_UNKNOWN, so this never contributes to a false RECOVERED.
+      const latestFailureAt =
+        validInstant.length > 0
+          ? validInstant.reduce((a, b) => (a.instant >= b.instant ? a : b)).o.occurredAt
+          : g.occ[0].occurredAt
+
       return {
         incidentKey,
         rootCauseId: g.rootCauseId,
