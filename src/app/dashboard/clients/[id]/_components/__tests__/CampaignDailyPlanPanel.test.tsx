@@ -162,6 +162,56 @@ describe('CampaignDailyPlanPanel — missing bundle fails honestly, never borrow
   })
 })
 
+describe('CampaignDailyPlanPanel — seven distinct Post thumbnails + clickable CTA (Ray remediation 5405438962)', () => {
+  it('renders each day\'s own post_image thumbnail (unique preview URLs) and an anchor with the exact CTA URL', async () => {
+    const dates = ['2026-08-24', '2026-08-25', '2026-08-26', '2026-08-27', '2026-08-28', '2026-08-29', '2026-08-30']
+    const CTA = 'https://www.ctstours.co.nz/tours/china/discovery/china-icons-collection'
+    mockFetchOnce({
+      success: true,
+      campaign: { id: CAMPAIGN_ID, title: 'Christmas Campaign', offer: null, primary_cta: 'Enquire Now' },
+      grounding: { status: 'OK', has_master_brief: true, has_campaign: true },
+      days: daysGrid(dates),
+      bundles: dates.map((d, i) => ({
+        date: d,
+        post: { hook: `Day ${i + 1} hook`, body: `Day ${i + 1} body`, cta: 'Enquire Now', image_asset_id: `asset-${i}`, cta_url: CTA },
+        story: { frames: [{ order: 1, copy: `f${i}` }, { order: 2, copy: `f${i}` }, { order: 3, copy: `f${i}` }, { order: 4, copy: `f${i}` }] },
+        reel: { brief: `r${i}`, script: 's', caption: 'c', source_asset_ids: [], media_status: 'NO_MEDIA' },
+        readiness: readiness(),
+        provenance: [],
+        post_image: {
+          id: `asset-${i}`,
+          preview_url: `https://cts-assets.test/day${i}.jpg`,
+          filename: `day${i}.jpg`,
+          source: 'client_provided',
+          ownership: 'client_exclusive',
+        },
+      })),
+      publishing_plan: { destination: null, status: 'NOT_AUTHORIZED' },
+      ad_candidate: null,
+    })
+
+    render(<CampaignDailyPlanPanel clientId={CLIENT_ID} campaignId={CAMPAIGN_ID} />)
+
+    // Day 1: correct thumbnail src + Enquire Now anchor with the exact CTA URL.
+    await screen.findByText('Day 1 hook')
+    const day1Img = document.querySelector('img[alt="day0.jpg"]') as HTMLImageElement | null
+    expect(day1Img).not.toBeNull()
+    expect(day1Img!.src).toBe('https://cts-assets.test/day0.jpg')
+    const day1Cta = document.querySelector('a[href="' + CTA + '"]') as HTMLAnchorElement | null
+    expect(day1Cta).not.toBeNull()
+    expect(day1Cta!.target).toBe('_blank')
+    expect(day1Cta!.rel).toBe('noopener noreferrer')
+
+    // Switch to Day 4: thumbnail must be a DIFFERENT src.
+    fireEvent.click(screen.getByText('08-27'))
+    await screen.findByText('Day 4 hook')
+    const day4Img = document.querySelector('img[alt="day3.jpg"]') as HTMLImageElement | null
+    expect(day4Img).not.toBeNull()
+    expect(day4Img!.src).toBe('https://cts-assets.test/day3.jpg')
+    expect(day4Img!.src).not.toBe('https://cts-assets.test/day0.jpg')
+  })
+})
+
 describe('CampaignDailyPlanPanel — complete route must not omit Chongqing/Guangzhou', () => {
   it('renders the full 5-city route text on the recap day without dropping Chongqing or Guangzhou', async () => {
     const recapStory = 'The full journey: Shanghai → Beijing → Xi\'an → Chongqing → Guangzhou'

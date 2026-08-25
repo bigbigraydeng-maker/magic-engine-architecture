@@ -132,9 +132,16 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     // client's rows are surfaced; a cross-client id is silently excluded.
     // Resolved once across every day's bundle, not per-day, since the same
     // reference asset is often reused across multiple days.
-    const referencedAssetIds = Array.from(
-      new Set(bundles.flatMap(b => b.reel?.source_asset_ids ?? []))
-    )
+    //
+    // We now also resolve the Post `image_asset_id` here so GET returns the
+    // authoritative preview URL/filename/source/ownership. The stored plan
+    // never carries a caller-supplied preview URL — this is the only place
+    // the review UI gets image data from.
+    const reelAssetIds = bundles.flatMap(b => b.reel?.source_asset_ids ?? [])
+    const postImageIds = bundles
+      .map(b => (b as unknown as { post?: { image_asset_id?: string } }).post?.image_asset_id)
+      .filter((x): x is string => typeof x === 'string' && x.length > 0)
+    const referencedAssetIds = Array.from(new Set([...reelAssetIds, ...postImageIds]))
     let resolvedAssets: Array<{
       id: string
       storage_url: string
@@ -157,13 +164,34 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     // a PLANNED slot with no matching bundle entry is a data-shape bug, and
     // fails closed to an honest null rather than silently borrowing another
     // day's content.
-    const bundlesWithReadiness = bundles.map(bundle => ({
-      ...bundle,
-      readiness: computeReadiness({ grounding, bundle, resolvedAssetIds }),
-      provenance: (bundle.reel?.source_asset_ids ?? [])
-        .map(id => assetById.get(id))
-        .filter((a): a is NonNullable<typeof a> => !!a),
-    }))
+    //
+    // For each day's Post, attach a `post_image` block resolved from the
+    // authoritative `client_assets` row, or null when the asset cannot be
+    // resolved under this client (legacy row without image_asset_id, or a
+    // stale id that no longer exists). Legacy rows produce null — GET
+    // must never fabricate an image or CTA when the data is not proven.
+    const bundlesWithReadiness = bundles.map(bundle => {
+      const postField = (bundle as unknown as { post?: { image_asset_id?: string; cta_url?: string } | null }).post
+      const imgId = postField?.image_asset_id
+      const asset = imgId ? assetById.get(imgId) : undefined
+      const postImage = asset
+        ? {
+            id: asset.id,
+            preview_url: asset.storage_url,
+            filename: asset.original_filename,
+            source: asset.source,
+            ownership: asset.ownership,
+          }
+        : null
+      return {
+        ...bundle,
+        post_image: postImage,
+        readiness: computeReadiness({ grounding, bundle, resolvedAssetIds }),
+        provenance: (bundle.reel?.source_asset_ids ?? [])
+          .map(id => assetById.get(id))
+          .filter((a): a is NonNullable<typeof a> => !!a),
+      }
+    })
 
     // Ad candidate stays scoped to the earliest day that actually has a
     // Reel — WP1 previews at most one candidate, never one per day.
@@ -214,23 +242,67 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     const masterBrief = await resolveActiveMasterBrief(clientId)
     const grounding = computeGrounding(campaign, masterBrief)
 
-    // Fail-closed: every referenced source asset, across every day in this
-    // command, must belong to this client.
-    const referencedAssetIds = Array.from(
-      new Set(cmd.bundles.flatMap(b => b.reel?.source_asset_ids ?? []))
-    )
+    // CTA hard-binding — every Post's cta_url must EXACTLY equal the
+    // campaign's persisted source URL. No arbitrary caller destination.
+    // A campaign_briefs row with zero source_urls means the campaign is not
+    // yet valid for a public CTA — fail closed rather than fall back.
+    const campaignSourceUrl = (campaign.source_urls ?? [])[0] ?? null
+    if (!campaignSourceUrl) {
+      return NextResponse.json(
+        { success: false, error: 'CAMPAIGN_HAS_NO_CTA_SOURCE_URL' },
+        { status: 400 }
+      )
+    }
+    const ctaMismatches = cmd.bundles
+      .filter(b => b.post.cta_url !== campaignSourceUrl)
+      .map(b => ({ date: b.date, provided: b.post.cta_url }))
+    if (ctaMismatches.length > 0) {
+      return NextResponse.json(
+        { success: false, error: 'CTA_URL_MISMATCH', expected: campaignSourceUrl, mismatches: ctaMismatches },
+        { status: 400 }
+      )
+    }
+
+    // Every referenced asset (both Reel `source_asset_ids` and every Post's
+    // `image_asset_id`) must belong to this client AND be a valid, usable,
+    // non-archived image. Server re-resolves ownership + MIME + status from
+    // the authoritative `client_assets` row — the caller does not supply
+    // URL/ownership/preview, so a spoofed payload can never override real
+    // asset data.
+    const reelAssetIds = cmd.bundles.flatMap(b => b.reel?.source_asset_ids ?? [])
+    const postImageIds = cmd.bundles.map(b => b.post.image_asset_id)
+    const referencedAssetIds = Array.from(new Set([...reelAssetIds, ...postImageIds]))
     if (referencedAssetIds.length > 0) {
-      const { data: owned } = await supabaseAdmin
+      const { data: assets } = await supabaseAdmin
         .from('client_assets')
-        .select('id')
+        .select('id, mime_type, status, archived_at')
         .eq('client_id', clientId)
         .in('id', referencedAssetIds)
-      const ownedIds = new Set((owned ?? []).map(a => a.id))
-      const foreign = referencedAssetIds.filter(id => !ownedIds.has(id))
-      if (foreign.length > 0) {
+      const byId = new Map((assets ?? []).map(a => [a.id, a]))
+      const foreignReel = reelAssetIds.filter(id => !byId.has(id))
+      if (foreignReel.length > 0) {
         return NextResponse.json(
-          { success: false, error: 'ASSET_NOT_OWNED_BY_CLIENT', foreign_asset_ids: foreign },
+          { success: false, error: 'ASSET_NOT_OWNED_BY_CLIENT', foreign_asset_ids: foreignReel },
           { status: 403 }
+        )
+      }
+      // Post image-specific gates: exists (client-scoped), analyzed status,
+      // not archived, image MIME. Reject on any failure with the exact per-day
+      // reason so a reviewer can act.
+      const invalidPostImages = cmd.bundles.map(b => {
+        const a = byId.get(b.post.image_asset_id)
+        if (!a) return { date: b.date, id: b.post.image_asset_id, reason: 'not_owned_by_client' }
+        if (a.archived_at) return { date: b.date, id: b.post.image_asset_id, reason: 'archived' }
+        if (a.status !== 'analyzed') return { date: b.date, id: b.post.image_asset_id, reason: `status_${a.status}` }
+        if (!(a.mime_type ?? '').startsWith('image/')) {
+          return { date: b.date, id: b.post.image_asset_id, reason: 'not_an_image' }
+        }
+        return null
+      }).filter((x): x is { date: string; id: string; reason: string } => x !== null)
+      if (invalidPostImages.length > 0) {
+        return NextResponse.json(
+          { success: false, error: 'POST_IMAGE_INVALID', invalid: invalidPostImages },
+          { status: 400 }
         )
       }
     }

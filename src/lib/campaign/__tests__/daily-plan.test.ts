@@ -111,10 +111,26 @@ describe('CampaignDailyCommandSchema — complete seven-day snapshot only', () =
     slots: { post: 'PLANNED' as const, story: 'PLANNED' as const, reel: 'PLANNED' as const },
   }))
 
+  const POST_ASSET_IDS = [
+    'e0000001-0000-0000-0000-000000000001',
+    'e0000002-0000-0000-0000-000000000002',
+    'e0000003-0000-0000-0000-000000000003',
+    'e0000004-0000-0000-0000-000000000004',
+    'e0000005-0000-0000-0000-000000000005',
+    'e0000006-0000-0000-0000-000000000006',
+    'e0000007-0000-0000-0000-000000000007',
+  ]
+  const CTA_URL = 'https://example-cts.test/tours/christmas'
+
   function completeBundle(date: string, overrides: Record<string, unknown> = {}) {
+    const idx = Math.max(0, days.findIndex(d => d.date === date))
     return {
       date,
-      post: { hook: 'h', body: 'b', cta: 'c' },
+      post: {
+        hook: 'h', body: 'b', cta: 'Enquire Now',
+        image_asset_id: POST_ASSET_IDS[idx] ?? POST_ASSET_IDS[0],
+        cta_url: CTA_URL,
+      },
       story: {
         frames: [
           { order: 1, copy: 'f1' },
@@ -252,5 +268,53 @@ describe('CampaignDailyCommandSchema — complete seven-day snapshot only', () =
       })
       expect(parsed.success).toBe(true)
     }
+  })
+
+  // Regression (Ray-authorised remediation 5405438962, Post visual contract):
+  // duplicate Post image_asset_id across days must be rejected — this is
+  // exactly the "one image for seven days" review-blocker.
+  it('rejects a snapshot where two days share the same Post image_asset_id', () => {
+    const bundles = fullBundles()
+    bundles[3] = { ...bundles[3], post: { ...bundles[3].post, image_asset_id: bundles[0].post.image_asset_id } }
+    const parsed = CampaignDailyCommandSchema.safeParse({
+      campaign_id: CAMPAIGN_ID,
+      days,
+      bundles,
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  it('rejects a Post with a missing image_asset_id', () => {
+    const bundles = fullBundles()
+    const { image_asset_id: _drop, ...postWithoutImage } = bundles[0].post as { image_asset_id: string } & Record<string, unknown>
+    bundles[0] = { ...bundles[0], post: postWithoutImage as never }
+    const parsed = CampaignDailyCommandSchema.safeParse({
+      campaign_id: CAMPAIGN_ID,
+      days,
+      bundles,
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  it('rejects a Post with a non-HTTPS cta_url', () => {
+    const bundles = fullBundles()
+    bundles[0] = { ...bundles[0], post: { ...bundles[0].post, cta_url: 'http://insecure.test/tours' } }
+    const parsed = CampaignDailyCommandSchema.safeParse({
+      campaign_id: CAMPAIGN_ID,
+      days,
+      bundles,
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  it('rejects a Post with a malformed cta_url', () => {
+    const bundles = fullBundles()
+    bundles[0] = { ...bundles[0], post: { ...bundles[0].post, cta_url: 'not-a-url' } }
+    const parsed = CampaignDailyCommandSchema.safeParse({
+      campaign_id: CAMPAIGN_ID,
+      days,
+      bundles,
+    })
+    expect(parsed.success).toBe(false)
   })
 })

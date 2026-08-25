@@ -31,6 +31,14 @@ export interface CampaignDailyPostDraft {
   hook: string
   body: string
   cta: string
+  /** Exact CTS-client-scoped asset ID for the Post image. Never trusted from
+   *  caller-supplied URL/ownership — the server re-resolves both from the
+   *  authoritative `client_assets` row. */
+  image_asset_id: string
+  /** HTTPS destination for the Post's Enquire Now link. Must exactly match
+   *  the selected Campaign's persisted source URL — no arbitrary caller
+   *  destination is accepted (route.ts enforces). */
+  cta_url: string
 }
 
 export interface CampaignDailyStoryFrame {
@@ -98,12 +106,29 @@ const dateStringSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 // (deferred) or leave the stored snapshot ambiguous. GET keeps rendering
 // null Post/Story/Reel entries from legacy rows honestly; that read
 // tolerance does not extend to the write contract.
+// HTTPS-only URL check for the Post CTA — an http:// destination on a
+// public-facing customer button would strip TLS mid-click.
+const httpsUrl = z
+  .string()
+  .refine((v) => {
+    try {
+      const u = new URL(v)
+      return u.protocol === 'https:'
+    } catch {
+      return false
+    }
+  }, { message: 'must be a well-formed HTTPS URL' })
+
 const bundleSchema = z.object({
   date: dateStringSchema,
   post: z.object({
     hook: z.string().min(1),
     body: z.string().min(1),
     cta: z.string().min(1),
+    // Server re-resolves ownership/preview from client_assets — caller does
+    // NOT supply URL, MIME, or ownership here. Just the ID.
+    image_asset_id: uuidLike,
+    cta_url: httpsUrl,
   }),
   story: z.object({
     frames: z
@@ -184,6 +209,22 @@ export const CampaignDailyCommandSchema = z
         })
       }
     })
+
+    // Every day's Post image must be a DISTINCT asset — "one image for all
+    // seven days" is exactly the review-blocker this contract closes.
+    const imageIds = val.bundles.map((b) => b.post.image_asset_id)
+    if (new Set(imageIds).size !== imageIds.length) {
+      val.bundles.forEach((b, i) => {
+        const firstIdx = imageIds.indexOf(b.post.image_asset_id)
+        if (firstIdx !== i) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['bundles', i, 'post', 'image_asset_id'],
+            message: `duplicate Post image_asset_id — day ${b.date} reuses the same asset as an earlier day`,
+          })
+        }
+      })
+    }
   })
 
 export type CampaignDailyCommand = z.infer<typeof CampaignDailyCommandSchema>

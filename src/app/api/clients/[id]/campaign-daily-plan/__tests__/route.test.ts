@@ -32,6 +32,18 @@ const CAMPAIGN_ID = 'aaaaaaaa-0000-0000-0000-000000000001'
 const BRIEF_ID = 'bbbbbbbb-0000-0000-0000-000000000001'
 const ASSET_ID = 'cccccccc-0000-0000-0000-000000000001'
 const FOREIGN_ASSET_ID = 'dddddddd-0000-0000-0000-000000000001'
+const CAMPAIGN_URL = 'https://www.example-cts.test/tours/christmas'
+/** Seven distinct image asset IDs — the Post-diversity contract requires
+ * each day pick a different asset, so tests build a full snapshot from these. */
+const POST_ASSET_IDS = [
+  'e0000001-0000-0000-0000-000000000001',
+  'e0000002-0000-0000-0000-000000000002',
+  'e0000003-0000-0000-0000-000000000003',
+  'e0000004-0000-0000-0000-000000000004',
+  'e0000005-0000-0000-0000-000000000005',
+  'e0000006-0000-0000-0000-000000000006',
+  'e0000007-0000-0000-0000-000000000007',
+]
 
 function params(id = CTS) {
   return { params: { id } }
@@ -68,6 +80,7 @@ const CAMPAIGN = {
   title: 'CTS Facebook Daily',
   offer: null,
   primary_cta: 'Book now',
+  source_urls: [CAMPAIGN_URL],
 } as never
 
 function sevenDays() {
@@ -78,9 +91,20 @@ function sevenDays() {
 }
 
 function bundle(overrides: Record<string, unknown> = {}) {
+  const dateOverride = (overrides as { date?: string }).date ?? '2026-08-24'
+  const idx = Math.max(
+    0,
+    sevenDays().findIndex(d => d.date === dateOverride)
+  )
   return {
-    date: '2026-08-24',
-    post: { hook: 'hook', body: 'body copy', cta: 'Book now' },
+    date: dateOverride,
+    post: {
+      hook: 'hook',
+      body: 'body copy',
+      cta: 'Enquire Now',
+      image_asset_id: POST_ASSET_IDS[idx] ?? POST_ASSET_IDS[0],
+      cta_url: CAMPAIGN_URL,
+    },
     story: {
       frames: [
         { order: 1, copy: 'frame one' },
@@ -100,9 +124,9 @@ function bundle(overrides: Record<string, unknown> = {}) {
   }
 }
 
-/** A full seven-day snapshot (one bundle per scheduled day) — the new
- * complete-snapshot contract for POST after Build Control scope shrink
- * 5395216001. Partial commands are rejected at the schema boundary. */
+/** A full seven-day snapshot (one bundle per scheduled day) with seven
+ * distinct Post image_asset_id values — the complete-snapshot contract
+ * plus the Post-diversity contract. */
 function fullSevenDays() {
   return sevenDays().map(d => bundle({ date: d.date }))
 }
@@ -114,6 +138,12 @@ function validCommand(overrides: Record<string, unknown> = {}) {
     bundles: fullSevenDays(),
     ...overrides,
   }
+}
+
+/** Helper: stub the client_assets .in() query with valid CTS-owned image
+ * rows for a given set of ids. Used by tests that expect POST to succeed. */
+function validAssetsIn(ids: string[]) {
+  return ids.map(id => ({ id, mime_type: 'image/jpeg', status: 'analyzed', archived_at: null }))
 }
 
 /** Minimal chainable Supabase query builder stub for a single table. */
@@ -382,6 +412,87 @@ describe('campaign-daily-plan GET — multi-day bundles, provenance and readines
     expect(json.publishing_plan.status).toBe('NOT_AUTHORIZED')
     expect(json.ad_candidate.status).toBe('NOT_AUTHORIZED')
   })
+
+  // Regression (Ray-authorised remediation 5405438962): GET resolves each
+  // Post image from the authoritative client_assets row and never fabricates
+  // a preview. A legacy plan whose Post has no image_asset_id returns
+  // post_image: null — not an invented URL.
+  it('GET returns a resolved post_image per day when image_asset_id resolves under CTS, and null for legacy Post without image_asset_id', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    // Day 1 has image_asset_id (from bundle() default). Day 2's post override
+    // above drops image_asset_id, so it's a legacy-shape Post — post_image
+    // must be null (honest), not fabricated.
+    const day1AssetId = day1.post.image_asset_id
+    stubWithAssets([{
+      id: day1AssetId,
+      storage_url: 'https://x/day1.jpg',
+      original_filename: 'day1.jpg',
+      source: 'client_provided',
+      ownership: 'client_exclusive',
+    }])
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+
+    const b1 = json.bundles.find((b: { date: string }) => b.date === '2026-08-24')
+    const b2 = json.bundles.find((b: { date: string }) => b.date === '2026-08-25')
+    expect(b1.post_image).toEqual({
+      id: day1AssetId,
+      preview_url: 'https://x/day1.jpg',
+      filename: 'day1.jpg',
+      source: 'client_provided',
+      ownership: 'client_exclusive',
+    })
+    expect(b2.post_image).toBeNull()
+  })
+
+  it('caller-supplied preview_url stored inside plan_data cannot override the resolved asset row', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    // A malicious plan_data that tries to stuff a spoofed preview URL into
+    // the Post — the route reads image data ONLY from the resolved
+    // client_assets row keyed by image_asset_id, ignoring any field the
+    // caller stuck alongside it.
+    const evilPersistedPlan = {
+      plan_kind: 'campaign_daily_v1',
+      campaign_id: CAMPAIGN_ID,
+      master_brief_ref: { id: BRIEF_ID, version: 2 },
+      days: sevenDays(),
+      bundles: [
+        {
+          ...day1,
+          post: { ...day1.post, preview_url: 'https://evil.example/steal.jpg', ownership: 'industry_shared' },
+        },
+      ],
+      command_meta: { source: 'conversation_command', received_at: '2026-08-24T00:00:00.000Z', raw_summary: null },
+    }
+    const day1AssetId = day1.post.image_asset_id
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 2 } }) }) as never
+      }
+      if (table === 'social_plans') {
+        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-x', plan_data: evilPersistedPlan }] }) }) as never
+      }
+      if (table === 'client_assets') {
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: [{
+          id: day1AssetId,
+          storage_url: 'https://legit-cts/authoritative.jpg',
+          original_filename: 'authoritative.jpg',
+          source: 'client_provided',
+          ownership: 'client_exclusive',
+        }] }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+
+    const b1 = json.bundles.find((b: { date: string }) => b.date === '2026-08-24')
+    // Preview URL, ownership come from the authoritative asset row — not from the plan JSON.
+    expect(b1.post_image.preview_url).toBe('https://legit-cts/authoritative.jpg')
+    expect(b1.post_image.ownership).toBe('client_exclusive')
+  })
 })
 
 describe('campaign-daily-plan POST — persistence seam authorisation', () => {
@@ -468,7 +579,9 @@ describe('campaign-daily-plan POST — fail-closed tenant boundary', () => {
         return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
       }
       if (table === 'client_assets') {
-        return tableStub({ in: vi.fn().mockResolvedValue({ data: [] }) }) as never
+        // Post images ARE valid CTS-owned; only the Reel foreign asset is
+        // missing from the returned rows.
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: validAssetsIn(POST_ASSET_IDS) }) }) as never
       }
       return tableStub({}) as never
     })
@@ -484,6 +597,135 @@ describe('campaign-daily-plan POST — fail-closed tenant boundary', () => {
 
     expect(res.status).toBe(403)
     expect((await res.json()).error).toBe('ASSET_NOT_OWNED_BY_CLIENT')
+  })
+
+  // Regressions (Ray-authorised remediation 5405438962, Post visual contract).
+
+  it('rejects a snapshot with a wrong-client Post image_asset_id', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
+      }
+      if (table === 'client_assets') {
+        // Only 6 of the 7 Post assets are owned by CTS — day 4's image is
+        // missing. ASSET_ID (the Reel asset) IS present so the Post-specific
+        // gate is reached before the reel-foreign 403.
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: validAssetsIn([ASSET_ID, ...POST_ASSET_IDS.filter((_, i) => i !== 3)]) }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const res = await POST(postRequest(validCommand()), params())
+    const json = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(json.error).toBe('POST_IMAGE_INVALID')
+    expect(json.invalid[0].reason).toBe('not_owned_by_client')
+  })
+
+  it('rejects a snapshot with an archived Post image', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
+      }
+      if (table === 'client_assets') {
+        // Include ASSET_ID for the Reel side so the Post-specific gate is
+        // reached (else the earlier reel-foreign check would 403 first).
+        const rows = validAssetsIn([ASSET_ID, ...POST_ASSET_IDS])
+        // Post asset row for day 1 (POST_ASSET_IDS[0]) is at index 1 after
+        // prepending ASSET_ID for the Reel; mark it archived.
+        rows[1] = { ...rows[1], archived_at: '2026-07-01T00:00:00Z' as never as null }
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: rows }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const res = await POST(postRequest(validCommand()), params())
+    const json = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(json.error).toBe('POST_IMAGE_INVALID')
+    expect(json.invalid.some((i: { reason: string }) => i.reason === 'archived')).toBe(true)
+  })
+
+  it('rejects a snapshot with a non-image Post asset (e.g. a video mime)', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
+      }
+      if (table === 'client_assets') {
+        // Include ASSET_ID for the Reel side so the Post-specific gate is
+        // reached (else the earlier reel-foreign check would 403 first).
+        const rows = validAssetsIn([ASSET_ID, ...POST_ASSET_IDS])
+        // rows[0] is the ASSET_ID (Reel); rows[1] is day-1's Post asset.
+        rows[1] = { ...rows[1], mime_type: 'video/mp4' }
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: rows }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const res = await POST(postRequest(validCommand()), params())
+    const json = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(json.error).toBe('POST_IMAGE_INVALID')
+    expect(json.invalid.some((i: { reason: string }) => i.reason === 'not_an_image')).toBe(true)
+  })
+
+  it('rejects a snapshot with a Post asset in error/analyzing status', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
+      }
+      if (table === 'client_assets') {
+        // Include ASSET_ID for the Reel side so the Post-specific gate is
+        // reached (else the earlier reel-foreign check would 403 first).
+        const rows = validAssetsIn([ASSET_ID, ...POST_ASSET_IDS])
+        // rows[0]=ASSET_ID (Reel); rows[1]=day1 Post; rows[3]=day3's Post.
+        rows[3] = { ...rows[3], status: 'error' }
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: rows }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const res = await POST(postRequest(validCommand()), params())
+    const json = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(json.error).toBe('POST_IMAGE_INVALID')
+    expect(json.invalid.some((i: { reason: string }) => i.reason === 'status_error')).toBe(true)
+  })
+
+  it('rejects a snapshot whose Post cta_url differs from the campaign source URL', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    // No DB call needed — CTA mismatch is rejected before the asset lookup.
+    const bundles = fullSevenDays()
+    bundles[0] = { ...bundles[0], post: { ...bundles[0].post, cta_url: 'https://example-cts.test/some-other-page' } }
+    const res = await POST(postRequest(validCommand({ bundles })), params())
+    const json = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(json.error).toBe('CTA_URL_MISMATCH')
+    expect(json.expected).toBe(CAMPAIGN_URL)
+  })
+
+  it('rejects a POST when the campaign has no source_urls to bind CTA against', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue({ ...(CAMPAIGN as Record<string, unknown>), source_urls: [] } as never)
+    const res = await POST(postRequest(validCommand()), params())
+    const json = await res.json()
+
+    expect(res.status).toBe(400)
+    expect(json.error).toBe('CAMPAIGN_HAS_NO_CTA_SOURCE_URL')
   })
 
   it('propagates a Master Brief lookup error as 500 and never touches social_plans', async () => {
@@ -522,7 +764,7 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
         return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
       }
       if (table === 'client_assets') {
-        return tableStub({ in: vi.fn().mockResolvedValue({ data: [{ id: ASSET_ID }] }) }) as never
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: validAssetsIn([ASSET_ID, ...POST_ASSET_IDS]) }) }) as never
       }
       if (table === 'social_plans') {
         return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: null }), insert }) as never
@@ -554,7 +796,7 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
         return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
       }
       if (table === 'client_assets') {
-        return tableStub({ in: vi.fn().mockResolvedValue({ data: [{ id: ASSET_ID }] }) }) as never
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: validAssetsIn([ASSET_ID, ...POST_ASSET_IDS]) }) }) as never
       }
       if (table === 'social_plans') {
         return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: 'existing-plan-id' } }), update }) as never
@@ -595,7 +837,7 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
         return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 1 } }) }) as never
       }
       if (table === 'client_assets') {
-        return tableStub({ in: vi.fn().mockResolvedValue({ data: [{ id: ASSET_ID }] }) }) as never
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: validAssetsIn([ASSET_ID, ...POST_ASSET_IDS]) }) }) as never
       }
       if (table === 'social_plans') {
         return tableStub({

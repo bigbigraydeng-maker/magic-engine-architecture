@@ -27,13 +27,22 @@ interface BundleReadiness {
   performance_outcome: 'UNKNOWN'
 }
 
+interface PostImage {
+  id: string
+  preview_url: string
+  filename: string | null
+  source: string
+  ownership: string
+}
+
 interface DailyBundle {
   date: string
-  post: { hook: string; body: string; cta: string } | null
+  post: { hook: string; body: string; cta: string; image_asset_id?: string; cta_url?: string } | null
   story: { frames: Array<{ order: number; copy: string }> } | null
   reel: { brief: string; script: string; caption: string; source_asset_ids: string[]; media_status: 'NO_MEDIA' | 'DRAFT_MEDIA' | 'READY' } | null
   readiness: BundleReadiness
   provenance: AssetRef[]
+  post_image: PostImage | null
 }
 
 interface DailyPlanResponse {
@@ -167,6 +176,24 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
               <BundleCard title="📝 Post">
                 {selectedBundle.post ? (
                   <>
+                    {selectedBundle.post_image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={selectedBundle.post_image.preview_url}
+                        alt={selectedBundle.post_image.filename ?? 'Post image'}
+                        className="w-full h-32 object-cover rounded mb-2"
+                      />
+                    ) : (
+                      <div className="w-full h-32 rounded mb-2 bg-me-ivory flex items-center justify-center">
+                        <span className="text-[10px] text-me-charcoal/40 italic">未绑定 Post 图片</span>
+                      </div>
+                    )}
+                    {selectedBundle.post_image && (
+                      <p className="text-[10px] text-me-charcoal/50 mb-1 truncate">
+                        {selectedBundle.post_image.filename ?? selectedBundle.post_image.id}
+                        <span className="text-me-charcoal/35"> · {selectedBundle.post_image.source}</span>
+                      </p>
+                    )}
                     <p className="text-xs font-medium text-me-charcoal/80">{selectedBundle.post.hook}</p>
                     <p className={`text-xs text-me-charcoal/60 mt-1 ${postExpanded ? '' : 'line-clamp-3'}`}>
                       {selectedBundle.post.body}
@@ -178,7 +205,19 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
                     >
                       {postExpanded ? '收起' : '展开全文'}
                     </button>
-                    <p className="text-xs text-me-ochre mt-1">CTA: {selectedBundle.post.cta}</p>
+                    {selectedBundle.post.cta_url ? (
+                      <a
+                        href={selectedBundle.post.cta_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block text-xs text-me-ochre mt-1 hover:underline break-all"
+                      >
+                        {selectedBundle.post.cta} →{' '}
+                        <span className="text-me-charcoal/45">{selectedBundle.post.cta_url}</span>
+                      </a>
+                    ) : (
+                      <p className="text-xs text-me-charcoal/45 mt-1 italic">CTA: {selectedBundle.post.cta}（未绑定链接）</p>
+                    )}
                   </>
                 ) : <EmptySlot />}
               </BundleCard>
