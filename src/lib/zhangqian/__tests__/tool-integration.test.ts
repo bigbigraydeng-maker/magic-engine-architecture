@@ -76,6 +76,9 @@ vi.mock('../serp-coverage', () => ({
     report,
     result: { applied: false, queriesAdded: 0, serpCallsAdded: 0, estimatedExtraCostUsd: 0, errors: [] },
   }),
+  // 真模块导出的"最坏耗时"—— agent 用它对自己的 deadline。假件必须跟着真模块走,
+  // 否则这里静默漏掉一个 export,整片测试会以"mock 缺导出"的形式炸掉。
+  SERP_COVERAGE_WORST_CASE_MS: 120_000,
 }))
 
 // ─── Import subject under test ────────────────────────────────────────────────

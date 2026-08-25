@@ -13,7 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
-import { runZhangqian } from '@/lib/zhangqian/agent'
+import { runZhangqian, ZhangqianRunError } from '@/lib/zhangqian/agent'
 import {
   createDiscoveryJob,
   updateJobProgress,
@@ -214,7 +214,12 @@ async function executeDiscoveryJob(
     }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
-    await failJob(supabaseAdmin, jobId, `Agent error: ${message}`)
+    // 跑挂之前已经花掉的钱要写回账,否则失败记录永远是 cost_usd = 0(见 failJob 头注)。
+    const spend =
+      err instanceof ZhangqianRunError
+        ? { costUsd: err.costUsd, toolCalls: err.toolCalls }
+        : undefined
+    await failJob(supabaseAdmin, jobId, `Agent error: ${message}`, undefined, spend)
     if (projectedMtc > 0) {
       await refundOnFail(clientId, ZHANGQIAN_SERVICE_KEY, projectedMtc, {
         referenceId: jobId,
