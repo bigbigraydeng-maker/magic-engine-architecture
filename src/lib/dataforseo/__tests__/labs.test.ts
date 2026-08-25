@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { getKeywordsForSite, getKeywordIdeas } from '../labs'
+import { getKeywordsForSite, getKeywordIdeas, bulkKeywordVolume } from '../labs'
 
 vi.mock('@/lib/validation-utils', () => ({ validateEnvVar: () => 'test' }))
 
@@ -73,5 +73,43 @@ describe('getKeywordIdeas — real parser (no mock of the fn itself)', () => {
   it('throws on a non-ok response so callers can degrade', async () => {
     mockFetch.mockReturnValue(Promise.resolve({ ok: false, status: 402 } as Response))
     await expect(getKeywordIdeas('spc flooring', 2036)).rejects.toThrow('402')
+  })
+})
+
+describe('bulkKeywordVolume — 端点必须是真实存在的那个', () => {
+  beforeEach(() => mockFetch.mockReset())
+
+  // 2026-08-26 实测：原来打的 bulk_keyword_search_volume 在 DataForSEO 恒定 404，
+  // 而唯一调用方把它包在空 catch 里，于是"静默永远失败"——历史上每份 discovery
+  // 报告的关键词 volume/KD/CPC 全是 null。这条锁住端点，别再改回去。
+  it('打的是 keyword_overview，不是那个不存在的 bulk_keyword_search_volume', async () => {
+    mockFetch.mockReturnValue(mockItems([
+      { keyword: 'hbay water', keyword_info: { search_volume: 260, cpc: 0.08, competition: 0.2 }, keyword_properties: { keyword_difficulty: 12 } },
+    ]))
+
+    await bulkKeywordVolume(['hbay water'], 2554)
+
+    const url = String(mockFetch.mock.calls[0][0])
+    expect(url).toContain('/dataforseo_labs/google/keyword_overview/live')
+    expect(url).not.toContain('bulk_keyword_search_volume')
+  })
+
+  // keyword_overview 把难度放在 keyword_properties 下，不是顶层。
+  // 读错层级不会报错，只会让 KD 静默变成 null —— 正是本次要修的那类毛病。
+  it('难度从 keyword_properties 读，不是顶层', async () => {
+    mockFetch.mockReturnValue(mockItems([
+      { keyword: 'bottled water nz', keyword_info: { search_volume: 320, cpc: 0.45, competition: 0.7 }, keyword_properties: { keyword_difficulty: 34 } },
+    ]))
+
+    const r = await bulkKeywordVolume(['bottled water nz'], 2554)
+
+    expect(r).toHaveLength(1)
+    expect(r[0]).toMatchObject({ keyword: 'bottled water nz', search_volume: 320, keyword_difficulty: 34, cpc: 0.45 })
+  })
+
+  it('空数组直接返回，不发请求', async () => {
+    const r = await bulkKeywordVolume([], 2554)
+    expect(r).toEqual([])
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 })

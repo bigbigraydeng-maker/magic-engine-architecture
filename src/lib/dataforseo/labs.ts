@@ -271,7 +271,15 @@ export async function getBulkTrafficEstimation(
  * Batch search volume + difficulty for a list of keywords.
  * Replaces: SEMrush batchKeywordOverview
  *
- * DataForSEO endpoint: /dataforseo_labs/google/bulk_keyword_search_volume/live
+ * DataForSEO endpoint: /dataforseo_labs/google/keyword_overview/live
+ *
+ * ⚠️ 2026-08-26：这里原本打的是 `/dataforseo_labs/google/bulk_keyword_search_volume/live`,
+ * 而**该端点在 DataForSEO 根本不存在**（实测恒定 404）。唯一的调用方
+ * （zhangqian/discover 路由的关键词补数据）把它包在空 catch 里当作"非致命"，
+ * 于是这个函数**从上线起就没有成功过一次** —— 历史上每一份 discovery 报告的
+ * seed_keywords 里 volume / KD / CPC 全是 null，客户看到的报告满屏是「—」。
+ * 换成实测可用的 keyword_overview/live；注意它把 KD 放在 keyword_properties 下，
+ * 不是顶层。改端点前请先用真实凭据打一次，不要只看文档。
  *
  * @param keywords     Up to 1 000 keywords
  * @param locationCode DataForSEO location_code (default 2036 = AU)
@@ -283,7 +291,7 @@ export async function bulkKeywordVolume(
   if (keywords.length === 0) return []
 
   const res = await fetch(
-    `${DATAFORSEO_API_BASE}/dataforseo_labs/google/bulk_keyword_search_volume/live`,
+    `${DATAFORSEO_API_BASE}/dataforseo_labs/google/keyword_overview/live`,
     {
       method:  'POST',
       headers: { Authorization: authHeader(), 'Content-Type': 'application/json' },
@@ -297,7 +305,7 @@ export async function bulkKeywordVolume(
     },
   )
 
-  if (!res.ok) throw new Error(`DataForSEO bulk_keyword_search_volume error: ${res.status}`)
+  if (!res.ok) throw new Error(`DataForSEO keyword_overview error: ${res.status}`)
 
   const json = await res.json() as {
     tasks?: Array<{
@@ -309,7 +317,10 @@ export async function bulkKeywordVolume(
             cpc?:           number | null
             competition?:   number | null
           }
-          keyword_difficulty?: number | null
+          // keyword_overview 把难度放在这里，不是顶层
+          keyword_properties?: {
+            keyword_difficulty?: number | null
+          }
         }>
       }>
     }>
@@ -324,7 +335,7 @@ export async function bulkKeywordVolume(
       return {
         keyword:            it.keyword ?? '',
         search_volume:      it.keyword_info?.search_volume ?? null,
-        keyword_difficulty: it.keyword_difficulty ?? null,
+        keyword_difficulty: it.keyword_properties?.keyword_difficulty ?? null,
         cpc,
         competition:        it.keyword_info?.competition ?? null,
         intent:             deriveIntent(cpc),
