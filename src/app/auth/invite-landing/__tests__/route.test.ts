@@ -45,6 +45,10 @@ vi.mock('@/lib/auth/resolve-redirect', async () => {
 import { GET, POST } from '../route'
 
 const CANONICAL_ORIGIN = 'https://app.magicengine.com.au'
+// Realistic UUID shapes — matches the CLIENT_ID_RE in the route. Using the
+// old `'client-b'` short-string fixtures would (correctly) now be rejected.
+const CLIENT_B = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb'
+const CLIENT_REVOKED = 'dddddddd-dddd-4ddd-dddd-dddddddddddd'
 
 function getReq(query: Record<string, string>): NextRequest {
   const url = new URL(`${CANONICAL_ORIGIN}/auth/invite-landing`)
@@ -89,14 +93,17 @@ describe('/auth/invite-landing CSRF gates', () => {
     mocks.verifyOtp.mockReset()
     mocks.verifyOtp.mockResolvedValue({ data: {}, error: null })
     mocks.getUser.mockReset()
+    // Default: verifyOtp attaches a readable identity. Individual tests
+    // override this to prove the fail-closed guard runs before landing.
+    mocks.getUser.mockResolvedValue({ data: { user: { email: 'staff@cts.co.nz' } } })
     mocks.resolveRedirectForSession.mockReset()
-    mocks.resolveRedirectForSession.mockResolvedValue('/dashboard/clients/client-b')
+    mocks.resolveRedirectForSession.mockResolvedValue(`/dashboard/clients/${CLIENT_B}`)
   })
 
   // ── GET: mint nonce; do NOT verifyOtp ─────────────────────────────────
 
   it('GET renders the confirm page with a hidden nonce field AND sets the nonce cookie, WITHOUT verifying the OTP', async () => {
-    const res = await GET(getReq({ token_hash: 'th', type: 'invite', client_id: 'client-b' }))
+    const res = await GET(getReq({ token_hash: 'th', type: 'invite', client_id: CLIENT_B }))
     expect(res.status).toBe(200)
     const html = await res.text()
     const setCookie = readSetCookieNonce(res)
@@ -123,11 +130,11 @@ describe('/auth/invite-landing CSRF gates', () => {
   it('POST accepts a valid same-origin + matching nonce and lands the invitee', async () => {
     cookieState.store.set('me-invite-nonce', 'nonce-abc')
     const res = await POST(postReq({
-      fields: { token_hash: 'th', type: 'invite', client_id: 'client-b', nonce: 'nonce-abc' },
+      fields: { token_hash: 'th', type: 'invite', client_id: CLIENT_B, nonce: 'nonce-abc' },
     }))
     expect(mocks.verifyOtp).toHaveBeenCalledOnce()
     expect(res.status).toBe(303)
-    expect(res.headers.get('location')).toBe(`${CANONICAL_ORIGIN}/dashboard/clients/client-b`)
+    expect(res.headers.get('location')).toBe(`${CANONICAL_ORIGIN}/dashboard/clients/${CLIENT_B}`)
     // The nonce is burned on success too — one confirmation click, one session.
     expect(res.headers.get('set-cookie') ?? '').toMatch(/me-invite-nonce=;.*(Max-Age=0|Expires=Thu, 01 Jan 1970)/i)
   })
@@ -135,7 +142,7 @@ describe('/auth/invite-landing CSRF gates', () => {
   it('POST rejects a cross-origin request BEFORE verifyOtp — attacker.com Origin header', async () => {
     cookieState.store.set('me-invite-nonce', 'nonce-abc')
     const res = await POST(postReq({
-      fields: { token_hash: 'th', type: 'invite', client_id: 'client-b', nonce: 'nonce-abc' },
+      fields: { token_hash: 'th', type: 'invite', client_id: CLIENT_B, nonce: 'nonce-abc' },
       originHeader: 'https://attacker.example',
     }))
     expect(mocks.verifyOtp).not.toHaveBeenCalled()
@@ -148,7 +155,7 @@ describe('/auth/invite-landing CSRF gates', () => {
   it('POST rejects when the Origin header is missing entirely (unsafe / stripped)', async () => {
     cookieState.store.set('me-invite-nonce', 'nonce-abc')
     const res = await POST(postReq({
-      fields: { token_hash: 'th', type: 'invite', client_id: 'client-b', nonce: 'nonce-abc' },
+      fields: { token_hash: 'th', type: 'invite', client_id: CLIENT_B, nonce: 'nonce-abc' },
       originHeader: null,
     }))
     expect(mocks.verifyOtp).not.toHaveBeenCalled()
@@ -159,7 +166,7 @@ describe('/auth/invite-landing CSRF gates', () => {
   it('POST rejects when the nonce cookie is missing (fresh browser, no GET first)', async () => {
     // cookieState.store deliberately empty.
     const res = await POST(postReq({
-      fields: { token_hash: 'th', type: 'invite', client_id: 'client-b', nonce: 'nonce-abc' },
+      fields: { token_hash: 'th', type: 'invite', client_id: CLIENT_B, nonce: 'nonce-abc' },
     }))
     expect(mocks.verifyOtp).not.toHaveBeenCalled()
     expect(res.status).toBe(303)
@@ -169,7 +176,7 @@ describe('/auth/invite-landing CSRF gates', () => {
   it('POST rejects when the form nonce does not match the cookie nonce (constant-time mismatch)', async () => {
     cookieState.store.set('me-invite-nonce', 'nonce-abc')
     const res = await POST(postReq({
-      fields: { token_hash: 'th', type: 'invite', client_id: 'client-b', nonce: 'guessed-wrong' },
+      fields: { token_hash: 'th', type: 'invite', client_id: CLIENT_B, nonce: 'guessed-wrong' },
     }))
     expect(mocks.verifyOtp).not.toHaveBeenCalled()
     expect(res.status).toBe(303)
@@ -180,7 +187,7 @@ describe('/auth/invite-landing CSRF gates', () => {
     cookieState.store.set('me-invite-nonce', 'nonce-abc')
     // First submission succeeds and burns the cookie.
     const first = await POST(postReq({
-      fields: { token_hash: 'th', type: 'invite', client_id: 'client-b', nonce: 'nonce-abc' },
+      fields: { token_hash: 'th', type: 'invite', client_id: CLIENT_B, nonce: 'nonce-abc' },
     }))
     expect(first.status).toBe(303)
     expect(mocks.verifyOtp).toHaveBeenCalledOnce()
@@ -188,7 +195,7 @@ describe('/auth/invite-landing CSRF gates', () => {
     cookieState.store.delete('me-invite-nonce')
     // Replay: same form nonce, no cookie now.
     const replay = await POST(postReq({
-      fields: { token_hash: 'th', type: 'invite', client_id: 'client-b', nonce: 'nonce-abc' },
+      fields: { token_hash: 'th', type: 'invite', client_id: CLIENT_B, nonce: 'nonce-abc' },
     }))
     expect(replay.status).toBe(303)
     expect(replay.headers.get('location')).toContain('error=invite_invalid')
@@ -203,7 +210,7 @@ describe('/auth/invite-landing CSRF gates', () => {
     const { INVITE_INVALID_REDIRECT } = await import('@/lib/auth/resolve-redirect')
     mocks.resolveRedirectForSession.mockResolvedValueOnce(INVITE_INVALID_REDIRECT)
     const res = await POST(postReq({
-      fields: { token_hash: 'th', type: 'invite', client_id: 'client-revoked', nonce: 'nonce-abc' },
+      fields: { token_hash: 'th', type: 'invite', client_id: CLIENT_REVOKED, nonce: 'nonce-abc' },
     }))
     expect(res.status).toBe(303)
     expect(res.headers.get('location')).toContain('error=invite_invalid')
@@ -217,9 +224,99 @@ describe('/auth/invite-landing CSRF gates', () => {
   it('POST rejects malformed body (missing token_hash) even when CSRF is satisfied', async () => {
     cookieState.store.set('me-invite-nonce', 'nonce-abc')
     const res = await POST(postReq({
-      fields: { type: 'invite', client_id: 'client-b', nonce: 'nonce-abc' },
+      fields: { type: 'invite', client_id: CLIENT_B, nonce: 'nonce-abc' },
     }))
     expect(mocks.verifyOtp).not.toHaveBeenCalled()
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location')).toContain('error=invite_invalid')
+  })
+
+  // ── Contract V2 §1: client_id shape ─────────────────────────────────
+
+  it('GET fails closed on missing client_id (undefined) — no nonce, no verifyOtp', async () => {
+    const res = await GET(getReq({ token_hash: 'th', type: 'invite' }))
+    expect(res.status).toBe(307)
+    expect(res.headers.get('location')).toContain('error=invite_invalid')
+    // No nonce cookie must be minted on the reject path.
+    expect(readSetCookieNonce(res).value).toBeUndefined()
+    expect(mocks.verifyOtp).not.toHaveBeenCalled()
+  })
+
+  it('GET fails closed on empty client_id', async () => {
+    const res = await GET(getReq({ token_hash: 'th', type: 'invite', client_id: '' }))
+    expect(res.status).toBe(307)
+    expect(res.headers.get('location')).toContain('error=invite_invalid')
+    expect(readSetCookieNonce(res).value).toBeUndefined()
+    expect(mocks.verifyOtp).not.toHaveBeenCalled()
+  })
+
+  it('GET fails closed on malformed client_id (not a UUID — e.g. truncated or injected)', async () => {
+    const res = await GET(getReq({ token_hash: 'th', type: 'invite', client_id: 'not-a-uuid' }))
+    expect(res.status).toBe(307)
+    expect(res.headers.get('location')).toContain('error=invite_invalid')
+    expect(readSetCookieNonce(res).value).toBeUndefined()
+    expect(mocks.verifyOtp).not.toHaveBeenCalled()
+  })
+
+  it('POST fails closed on missing client_id BEFORE verifyOtp, and burns the nonce', async () => {
+    cookieState.store.set('me-invite-nonce', 'nonce-abc')
+    const res = await POST(postReq({
+      fields: { token_hash: 'th', type: 'invite', nonce: 'nonce-abc' },
+    }))
+    expect(mocks.verifyOtp).not.toHaveBeenCalled()
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location')).toContain('error=invite_invalid')
+    expect(res.headers.get('set-cookie') ?? '').toMatch(/me-invite-nonce=;.*(Max-Age=0|Expires=Thu, 01 Jan 1970)/i)
+  })
+
+  it('POST fails closed on empty client_id', async () => {
+    cookieState.store.set('me-invite-nonce', 'nonce-abc')
+    const res = await POST(postReq({
+      fields: { token_hash: 'th', type: 'invite', client_id: '', nonce: 'nonce-abc' },
+    }))
+    expect(mocks.verifyOtp).not.toHaveBeenCalled()
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location')).toContain('error=invite_invalid')
+  })
+
+  it('POST fails closed on malformed client_id (short string, not a UUID)', async () => {
+    cookieState.store.set('me-invite-nonce', 'nonce-abc')
+    const res = await POST(postReq({
+      fields: { token_hash: 'th', type: 'invite', client_id: 'not-a-uuid', nonce: 'nonce-abc' },
+    }))
+    expect(mocks.verifyOtp).not.toHaveBeenCalled()
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location')).toContain('error=invite_invalid')
+  })
+
+  // ── Contract V2 §2: verifyOtp succeeded but no session identity ─────
+
+  it('POST fails closed when verifyOtp returns success but getUser gives NO user (fallback to /dashboard would leak)', async () => {
+    cookieState.store.set('me-invite-nonce', 'nonce-abc')
+    mocks.verifyOtp.mockResolvedValueOnce({ data: {}, error: null })
+    mocks.getUser.mockResolvedValueOnce({ data: { user: null } })
+    const res = await POST(postReq({
+      fields: { token_hash: 'th', type: 'invite', client_id: CLIENT_B, nonce: 'nonce-abc' },
+    }))
+    expect(mocks.verifyOtp).toHaveBeenCalledOnce()
+    // Landing decision must NEVER run when identity is unreadable.
+    expect(mocks.resolveRedirectForSession).not.toHaveBeenCalled()
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location')).toContain('error=invite_invalid')
+    const setCookie = res.headers.get('set-cookie') ?? ''
+    // Nonce burned, and no session cookies (sb-*) applied.
+    expect(setCookie).toMatch(/me-invite-nonce=;.*(Max-Age=0|Expires=Thu, 01 Jan 1970)/i)
+    expect(setCookie).not.toMatch(/sb-.*=/i)
+  })
+
+  it('POST fails closed when verifyOtp returns success but getUser gives a user WITHOUT email', async () => {
+    cookieState.store.set('me-invite-nonce', 'nonce-abc')
+    mocks.verifyOtp.mockResolvedValueOnce({ data: {}, error: null })
+    mocks.getUser.mockResolvedValueOnce({ data: { user: { email: null } } })
+    const res = await POST(postReq({
+      fields: { token_hash: 'th', type: 'invite', client_id: CLIENT_B, nonce: 'nonce-abc' },
+    }))
+    expect(mocks.resolveRedirectForSession).not.toHaveBeenCalled()
     expect(res.status).toBe(303)
     expect(res.headers.get('location')).toContain('error=invite_invalid')
   })

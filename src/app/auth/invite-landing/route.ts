@@ -48,6 +48,16 @@ const ALLOWED_TYPES = new Set(['invite', 'magiclink'])
 const NONCE_COOKIE = 'me-invite-nonce'
 const NONCE_MAX_AGE_SECONDS = 600 // 10 min; the confirmation is a single click
 
+// client_id must be a UUID — the ONLY shape our clients table issues. A blank
+// or malformed value would earlier flow through as `expectedClientId=undefined`
+// and let the invite land wherever the email happened to have membership
+// (wrong-customer break). Reject those in both GET and POST before any
+// verifyOtp / session work runs.
+const CLIENT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+function isValidClientId(v: unknown): v is string {
+  return typeof v === 'string' && CLIENT_ID_RE.test(v)
+}
+
 function timingSafeEqualStrings(a: string, b: string): boolean {
   const bufA = Buffer.from(a)
   const bufB = Buffer.from(b)
@@ -92,7 +102,10 @@ export async function GET(request: NextRequest) {
 
   const failedUrl = `${origin}/portal/login?error=invite_invalid`
 
-  if (!tokenHash || !type || !ALLOWED_TYPES.has(type)) {
+  if (!tokenHash || !type || !ALLOWED_TYPES.has(type) || !isValidClientId(clientId)) {
+    // No nonce cookie is set on this reject path — a malformed GET must
+    // consume nothing (no token verify, no bound cookie), so a scanner or
+    // typo cannot seed a usable confirmation state for anyone else.
     return NextResponse.redirect(failedUrl)
   }
 
@@ -160,8 +173,15 @@ export async function POST(request: NextRequest) {
 
   // Shape validation happens AFTER CSRF gates so an attacker probing shape
   // errors can't distinguish "your CSRF failed" from "your payload was
-  // malformed" — both fail closed identically.
-  if (typeof tokenHash !== 'string' || !tokenHash || typeof type !== 'string' || !ALLOWED_TYPES.has(type)) {
+  // malformed" — both fail closed identically. client_id must be a UUID:
+  // a missing/blank/truncated value would collapse expectedClientId to
+  // undefined downstream and let the invite land in whichever other client
+  // this email happens to hold (wrong-customer break).
+  if (
+    typeof tokenHash !== 'string' || !tokenHash ||
+    typeof type !== 'string' || !ALLOWED_TYPES.has(type) ||
+    !isValidClientId(clientId)
+  ) {
     return failResponse()
   }
 
@@ -192,12 +212,24 @@ export async function POST(request: NextRequest) {
     return failResponse()
   }
 
+  // verifyOtp succeeded, but explicitly confirm we can read the session
+  // identity BEFORE trusting downstream landing logic. If getUser can't
+  // return a user/email (transient auth error, revoked mid-flight, edge
+  // cookie desync), resolveRedirectForSession would fall through to the
+  // safePath /dashboard and middleware could route to some OTHER client
+  // this email happens to hold membership in. Fail closed here instead.
+  const { data: { user: verifiedUser } } = await supabase.auth.getUser()
+  if (!verifiedUser?.email) {
+    console.warn('[auth/invite-landing] fail-closed: verifyOtp returned no user/email')
+    return failResponse()
+  }
+
   // Reuse the exact same landing decision the OTP + Google flows use — so
   // an invite from a portal client goes to /portal/<id>, dashboard client
   // goes to /dashboard/clients/<id>, admins go to /dashboard, etc. Scoped to
-  // this invite's client_id (when present) so the email's other client
-  // memberships can't hijack the redirect.
-  const expectedClientId = typeof clientId === 'string' && clientId ? clientId : undefined
+  // this invite's client_id (validated as UUID above) so the email's other
+  // client memberships can't hijack the redirect.
+  const expectedClientId = clientId as string
   const destination = await resolveRedirectForSession(supabase, '/dashboard', expectedClientId)
 
   if (destination === INVITE_INVALID_REDIRECT) {
