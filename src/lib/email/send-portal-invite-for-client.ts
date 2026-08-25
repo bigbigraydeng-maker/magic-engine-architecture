@@ -37,7 +37,17 @@ export async function sendPortalInviteForClient(args: SendInviteArgs): Promise<S
   }
 
   try {
-    const linkResult = await generateInviteLink(args.email, `${appUrl}/auth/invite-landing`, {
+    // Supabase generateLink validates redirectTo against the project's Auth
+    // Redirect Allow-List BEFORE it will mint hashed_token. Only /auth/callback
+    // is on the recorded production allow-list; passing our newer
+    // /auth/invite-landing would 400 and leave the invitee with a DB row but
+    // no email. We ask Supabase to *nominally* redirect to the allowlisted
+    // callback, then throw away the returned action_link and build our OWN
+    // /auth/invite-landing?...&client_id=... URL from properties.hashed_token
+    // for the email. The callback URL never actually loads — the invitee
+    // hits our route directly — but the allow-list check on generateLink
+    // passes.
+    const linkResult = await generateInviteLink(args.email, `${appUrl}/auth/callback`, {
       client: supabaseAdmin,
     })
     if (!linkResult.ok || !linkResult.hashedToken || !linkResult.type) {
