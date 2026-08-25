@@ -118,6 +118,19 @@ describe('resolveRedirectForSession', () => {
     expect(redirect).toBe('/dashboard/clients/client-b')
   })
 
+  it('preserves a deep dashboard link for a plain login (no expectedClientId)', async () => {
+    mocks.from
+      .mockReturnValueOnce(accessRows([
+        { client_id: 'client-a', access_type: 'dashboard' },
+      ]))
+      .mockReturnValueOnce(scanJobRow(null))
+    const redirect = await resolveRedirectForSession(
+      authClient('staff@biz.com'),
+      '/dashboard/clients/client-a/execution',
+    )
+    expect(redirect).toBe('/dashboard/clients/client-a/execution')
+  })
+
   it('routes a prospect (scan job, no access) to /prospect', async () => {
     mocks.from
       .mockReturnValueOnce(accessRows([]))

@@ -82,8 +82,13 @@ export async function resolveRedirectForSession(
   // A dashboard/fde/client invite must land in the invited client's own
   // dashboard — otherwise middleware falls back to the unsorted first row
   // in client_portal_users, which can be a *different* client when the same
-  // email holds access to more than one.
-  if (dashboardUser?.client_id) {
+  // email holds access to more than one. Only force this override for the
+  // expectedClientId invite flow: a plain magic-link/OTP login's safePath
+  // (e.g. /dashboard/clients/<id>/execution) has already passed the
+  // /dashboard/:path* middleware's per-client access check, so overriding
+  // it here would silently drop the deep link and bounce the user to their
+  // client's home page instead.
+  if (dashboardUser?.client_id && expectedClientId) {
     return `/dashboard/clients/${dashboardUser.client_id}`
   }
 
