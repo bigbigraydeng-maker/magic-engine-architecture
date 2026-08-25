@@ -12,6 +12,8 @@ function captureSender(): { sender: EmailSender; sent: Array<Parameters<EmailSen
   return { sender, sent }
 }
 
+const OK_LINK = 'https://xyz.supabase.co/auth/v1/verify?token=abc&type=invite&redirect_to=https://app.magicengine.com.au/auth/callback'
+
 describe('sendPortalInvite', () => {
   it('refuses to send when neither an API key nor an injected sender is available', async () => {
     const { RESEND_API_KEY } = process.env
@@ -20,8 +22,7 @@ describe('sendPortalInvite', () => {
       const result = await sendPortalInvite({
         email: 'staff@cts.co.nz',
         clientName: 'CTS Tours NZ',
-        accessType: 'portal',
-        appUrl: 'https://magicengine.cloud',
+        actionLink: OK_LINK,
       })
       expect(result.sent).toBe(false)
       expect(result.reason).toMatch(/RESEND_API_KEY/)
@@ -30,49 +31,42 @@ describe('sendPortalInvite', () => {
     }
   })
 
-  it('sends portal-tier invitees to /portal/login', async () => {
+  it('renders the one-time action link in both text and HTML bodies', async () => {
     const { sender, sent } = captureSender()
     const result = await sendPortalInvite(
       {
         email: 'staff@cts.co.nz',
         clientName: 'CTS Tours NZ',
         displayName: '小李',
-        accessType: 'portal',
-        appUrl: 'https://magicengine.cloud/',
+        actionLink: OK_LINK,
       },
       { sender },
     )
     expect(result.sent).toBe(true)
     expect(sent).toHaveLength(1)
     expect(sent[0].to).toBe('staff@cts.co.nz')
-    expect(sent[0].text).toContain('https://magicengine.cloud/portal/login')
-    expect(sent[0].html).toContain('https://magicengine.cloud/portal/login')
+    expect(sent[0].text).toContain(OK_LINK)
+    // In HTML the URL's `&` gets HTML-escaped, so match on the escaped form.
+    expect(sent[0].html).toContain(OK_LINK.replace(/&/g, '&amp;'))
     expect(sent[0].subject).toContain('CTS Tours NZ')
-    expect(sent[0].text).toContain('CTS Tours NZ')
+    // Chinese copy anchors: no "sign in" / "log in", we explicitly say no password.
+    expect(sent[0].text).toContain('无需注册')
+    expect(sent[0].text).toContain('无需密码')
     expect(sent[0].text).toContain('小李')
-    // The invite must show the invitee which email to use for OTP.
-    expect(sent[0].text).toContain('staff@cts.co.nz')
   })
 
-  it('sends dashboard-tier invitees (incl. self_serve) to /login, not /portal/login', async () => {
-    // self_serve is classified as a /dashboard user by tierForAccessType —
-    // routing it to /portal/login would land them in the wrong shell.
-    const { sender, sent } = captureSender()
-    for (const accessType of ['dashboard', 'fde', 'both', 'client', 'self_serve'] as const) {
-      sent.length = 0
-      const result = await sendPortalInvite(
-        {
-          email: 'op@cts.co.nz',
-          clientName: 'CTS Tours NZ',
-          accessType,
-          appUrl: 'https://magicengine.cloud',
-        },
-        { sender },
-      )
-      expect(result.sent).toBe(true)
-      expect(sent[0].text).toContain('https://magicengine.cloud/login')
-      expect(sent[0].text).not.toContain('/portal/login')
-    }
+  it('rejects an empty actionLink instead of sending a broken invite', async () => {
+    const { sender } = captureSender()
+    const result = await sendPortalInvite(
+      {
+        email: 'x@y.com',
+        clientName: 'CTS Tours NZ',
+        actionLink: '',
+      },
+      { sender },
+    )
+    expect(result.sent).toBe(false)
+    expect(result.reason).toMatch(/actionLink/)
   })
 
   it('propagates Resend errors as sent:false with the reason', async () => {
@@ -85,8 +79,7 @@ describe('sendPortalInvite', () => {
       {
         email: 'staff@cts.co.nz',
         clientName: 'CTS Tours NZ',
-        accessType: 'portal',
-        appUrl: 'https://magicengine.cloud',
+        actionLink: OK_LINK,
       },
       { sender },
     )
@@ -94,21 +87,22 @@ describe('sendPortalInvite', () => {
     expect(result.reason).toBe('domain not verified')
   })
 
-  it('escapes HTML in client name and display name to avoid injection', async () => {
+  it('escapes HTML in client name, display name and action link', async () => {
     const { sender, sent } = captureSender()
     await sendPortalInvite(
       {
         email: 'x@y.com',
         clientName: '<script>alert(1)</script>',
         displayName: '"O\'Neil"',
-        accessType: 'portal',
-        appUrl: 'https://magicengine.cloud',
+        actionLink: 'https://x.co/callback?a=1&b=2',
       },
       { sender },
     )
     expect(sent[0].html).not.toContain('<script>alert(1)</script>')
     expect(sent[0].html).toContain('&lt;script&gt;')
     expect(sent[0].html).toContain('&quot;O&#39;Neil&quot;')
+    // Ampersand in URL must be escaped so the anchor href stays a single param string.
+    expect(sent[0].html).toContain('a=1&amp;b=2')
   })
 
   it('strips CRLF from client name in the Subject line to block header injection', async () => {
@@ -117,14 +111,10 @@ describe('sendPortalInvite', () => {
       {
         email: 'x@y.com',
         clientName: 'CTS Tours NZ\r\nBcc: attacker@evil.com',
-        accessType: 'portal',
-        appUrl: 'https://magicengine.cloud',
+        actionLink: OK_LINK,
       },
       { sender },
     )
-    // The real attack surface is CRLF — without a newline the extra "Bcc:"
-    // characters can't be spliced into a new SMTP header, they're just text
-    // in the subject line.
     expect(sent[0].subject).not.toMatch(/[\r\n]/)
     expect(sent[0].subject).toContain('CTS Tours NZ')
   })
@@ -136,27 +126,10 @@ describe('sendPortalInvite', () => {
         email: 'staff@cts.co.nz',
         clientName: 'CTS Tours NZ',
         displayName: '   ',
-        accessType: 'portal',
-        appUrl: 'https://magicengine.cloud',
+        actionLink: OK_LINK,
       },
       { sender },
     )
-    // First line of the body is the greeting — should carry the email, not the whitespace.
     expect(sent[0].text.split('\n')[0]).toContain('staff@cts.co.nz')
-  })
-
-  it('rejects an empty appUrl instead of building a bare-path login link', async () => {
-    const { sender } = captureSender()
-    const result = await sendPortalInvite(
-      {
-        email: 'x@y.com',
-        clientName: 'CTS Tours NZ',
-        accessType: 'portal',
-        appUrl: '',
-      },
-      { sender },
-    )
-    expect(result.sent).toBe(false)
-    expect(result.reason).toMatch(/appUrl/)
   })
 })

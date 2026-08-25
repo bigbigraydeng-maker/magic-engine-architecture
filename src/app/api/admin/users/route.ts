@@ -10,7 +10,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { guardAdmin } from '@/lib/auth/require-admin'
 import { getUserPermissions } from '@/lib/auth/whitelist'
 import { ACCESS_TYPE_VALUES, type AccessType } from '@/lib/auth/access-types'
-import { sendPortalInvite } from '@/lib/email/portal-invite'
+import { sendPortalInviteForClient } from '@/lib/email/send-portal-invite-for-client'
 
 // Reuse the canonical list of access_type values + 'all' filter sentinel
 // used by the FDE user-management UI.
@@ -64,6 +64,16 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (!body.access_type || !ACCESS_TYPE_VALUES.includes(body.access_type as AccessType)) {
       return NextResponse.json({ error: `access_type must be one of: ${ACCESS_TYPE_VALUES.join(' | ')}.` }, { status: 400 })
     }
+    // self_serve is the free-signup tier — the /auth/callback path grants a
+    // 500 MTC welcome bonus on first sign-in for that access_type. Letting an
+    // admin invite someone as self_serve would silently mint the bonus for
+    // an invitee they never intended to gift. Refuse it here.
+    if (body.access_type === 'self_serve') {
+      return NextResponse.json(
+        { error: 'self_serve access_type cannot be granted via invite — use portal / dashboard / fde / both / client.' },
+        { status: 400 },
+      )
+    }
 
     email        = body.email.trim().toLowerCase()
     client_id    = body.client_id as string
@@ -109,17 +119,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  const appUrl = (process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '')
-  const invite = await sendPortalInvite({
+  const invite = await sendPortalInviteForClient({
     email,
     clientName: client.name ?? '',
     displayName: display_name,
-    accessType: access_type,
-    appUrl,
-  }).catch((err: unknown) => ({
-    sent: false,
-    reason: err instanceof Error ? err.message : String(err),
-  }))
+  })
   if (!invite.sent) {
     console.warn('[api/admin/users] invite email not sent:', invite.reason)
   }
