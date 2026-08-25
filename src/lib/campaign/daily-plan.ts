@@ -277,26 +277,34 @@ export function computeReadiness(params: {
 
   // Every REQUIRED asset reference on this bundle must resolve under the
   // current client for `client_asset_provenance` to be true. Required set:
-  //   - Post `image_asset_id` (when a Post exists) — new-format Posts always
-  //     carry one; legacy Posts without an image cannot pass provenance.
-  //   - Reel `source_asset_ids` — only required when the Reel actually lists
-  //     source assets. A Reel with no listed sources is not by itself a
-  //     provenance failure (the Reel-completeness gate is separate).
+  //   - Post `image_asset_id` — MANDATORY when a Post exists. A Post with
+  //     no image_asset_id is itself a provenance failure; a valid Reel
+  //     source CANNOT compensate for a missing Post image (Codex thread
+  //     PRRT_kwDOSTHiF86cEPbS — "legacy Post + valid Reel" false-truthful
+  //     readiness). Only when the bundle has no Post at all is Post
+  //     unrequired.
+  //   - Reel `source_asset_ids` — only required when the Reel actually
+  //     lists source assets. A Reel with no listed sources is not by
+  //     itself a provenance failure (Reel-completeness is separate).
   //
   // Deduped by asset id so a Post + Reel referencing the same asset count
   // once (matches the GET `provenance` output).
-  const requiredIds: string[] = []
   const postImageId = bundle?.post?.image_asset_id
-  if (bundle?.post) {
-    if (postImageId) requiredIds.push(postImageId)
-  }
+  // Fail-closed short-circuit: Post exists but its image_asset_id is
+  // missing → provenance false, regardless of Reel state.
+  const postExistsButMissingImage = !!bundle?.post && !postImageId
+
+  const requiredIds: string[] = []
+  if (postImageId) requiredIds.push(postImageId)
   for (const id of bundle?.reel?.source_asset_ids ?? []) requiredIds.push(id)
   const dedupedRequired = Array.from(new Set(requiredIds))
-  // A bundle with no required references at all (legacy Post w/o image AND
-  // no Reel source assets) cannot demonstrate client-scoped provenance —
-  // fail closed rather than silently declaring an unproven bundle authentic.
+  // A bundle with no required references at all cannot demonstrate
+  // client-scoped provenance — fail closed rather than silently declaring
+  // an unproven bundle authentic.
   const assetProvenanceOk =
-    dedupedRequired.length > 0 && dedupedRequired.every(id => resolvedAssetIds.has(id))
+    !postExistsButMissingImage &&
+    dedupedRequired.length > 0 &&
+    dedupedRequired.every(id => resolvedAssetIds.has(id))
 
   // Post is COMPLETE only when copy + CTA text + image_asset_id + cta_url are
   // all present AND the image resolves under this client. Legacy Posts that

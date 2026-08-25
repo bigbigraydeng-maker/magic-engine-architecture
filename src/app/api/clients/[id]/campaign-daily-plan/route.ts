@@ -150,12 +150,29 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
       ownership: string
     }> = []
     if (referencedAssetIds.length > 0) {
+      // Read the same usable-image gate columns POST enforces at write
+      // time (status='analyzed', archived_at IS NULL, mime_type image/*).
+      // A row whose status/mime_type/archived_at changed AFTER save must
+      // NOT read back as truthful provenance — filter it out here so it
+      // never enters resolvedAssetIds or assetById.
       const { data: assets } = await supabaseAdmin
         .from('client_assets')
-        .select('id, storage_url, original_filename, source, ownership')
+        .select('id, storage_url, original_filename, source, ownership, status, archived_at, mime_type')
         .eq('client_id', clientId)
         .in('id', referencedAssetIds)
-      resolvedAssets = assets ?? []
+      resolvedAssets = (assets ?? [])
+        .filter(a =>
+          a.archived_at == null &&
+          a.status === 'analyzed' &&
+          typeof a.mime_type === 'string' &&
+          a.mime_type.startsWith('image/'))
+        .map(a => ({
+          id: a.id,
+          storage_url: a.storage_url,
+          original_filename: a.original_filename,
+          source: a.source,
+          ownership: a.ownership,
+        }))
     }
     const resolvedAssetIds = new Set(resolvedAssets.map(a => a.id))
     const assetById = new Map(resolvedAssets.map(a => [a.id, a]))

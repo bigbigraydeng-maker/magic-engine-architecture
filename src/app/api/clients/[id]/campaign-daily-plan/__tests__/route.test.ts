@@ -146,6 +146,28 @@ function validAssetsIn(ids: string[]) {
   return ids.map(id => ({ id, mime_type: 'image/jpeg', status: 'analyzed', archived_at: null }))
 }
 
+/** GET also reads the same usable-image gate columns and drops rows that
+ * fail them (see route.ts). GET-side asset stubs must therefore carry
+ * status/archived_at/mime_type; this helper stamps a full-shape row so
+ * existing GET-side fixtures stay valid under the tightened boundary. */
+function usableGetAsset(row: {
+  id: string
+  storage_url: string
+  original_filename: string | null
+  source: string
+  ownership: string
+  status?: string
+  archived_at?: string | null
+  mime_type?: string
+}) {
+  return {
+    status: 'analyzed',
+    archived_at: null,
+    mime_type: 'image/jpeg',
+    ...row,
+  }
+}
+
 /** Minimal chainable Supabase query builder stub for a single table. */
 function tableStub(handlers: Record<string, unknown>) {
   const chain: Record<string, unknown> = {}
@@ -337,7 +359,7 @@ describe('campaign-daily-plan GET — multi-day bundles, provenance and readines
   it('returns Post/Story/Reel for EVERY persisted day, not just day 1', async () => {
     allow()
     mockGetCampaign.mockResolvedValue(CAMPAIGN)
-    stubWithAssets([{ id: ASSET_ID, storage_url: 'https://x/y.jpg', original_filename: 'y.jpg', source: 'stock', ownership: 'client_exclusive' }])
+    stubWithAssets([usableGetAsset({ id: ASSET_ID, storage_url: 'https://x/y.jpg', original_filename: 'y.jpg', source: 'stock', ownership: 'client_exclusive' })])
 
     const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
 
@@ -359,8 +381,8 @@ describe('campaign-daily-plan GET — multi-day bundles, provenance and readines
     // image_asset_id and Reel has no source ids, so its required-set is
     // empty and provenance fails closed.
     stubWithAssets([
-      { id: ASSET_ID, storage_url: 'https://x/reel.jpg', original_filename: 'reel.jpg', source: 'stock', ownership: 'client_exclusive' },
-      { id: day1PostAssetId, storage_url: 'https://x/day1.jpg', original_filename: 'day1.jpg', source: 'client_provided', ownership: 'client_exclusive' },
+      usableGetAsset({ id: ASSET_ID, storage_url: 'https://x/reel.jpg', original_filename: 'reel.jpg', source: 'stock', ownership: 'client_exclusive' }),
+      usableGetAsset({ id: day1PostAssetId, storage_url: 'https://x/day1.jpg', original_filename: 'day1.jpg', source: 'client_provided', ownership: 'client_exclusive' }),
     ])
 
     const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
@@ -456,13 +478,13 @@ describe('campaign-daily-plan GET — multi-day bundles, provenance and readines
     // above drops image_asset_id, so it's a legacy-shape Post — post_image
     // must be null (honest), not fabricated.
     const day1AssetId = day1.post.image_asset_id
-    stubWithAssets([{
+    stubWithAssets([usableGetAsset({
       id: day1AssetId,
       storage_url: 'https://x/day1.jpg',
       original_filename: 'day1.jpg',
       source: 'client_provided',
       ownership: 'client_exclusive',
-    }])
+    })])
 
     const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
 
@@ -507,13 +529,13 @@ describe('campaign-daily-plan GET — multi-day bundles, provenance and readines
         return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-x', plan_data: evilPersistedPlan }] }) }) as never
       }
       if (table === 'client_assets') {
-        return tableStub({ in: vi.fn().mockResolvedValue({ data: [{
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: [usableGetAsset({
           id: day1AssetId,
           storage_url: 'https://legit-cts/authoritative.jpg',
           original_filename: 'authoritative.jpg',
           source: 'client_provided',
           ownership: 'client_exclusive',
-        }] }) }) as never
+        })] }) }) as never
       }
       return tableStub({}) as never
     })
@@ -553,7 +575,7 @@ describe('campaign-daily-plan GET — multi-day bundles, provenance and readines
         return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: plan }] }) }) as never
       }
       if (table === 'client_assets') {
-        return tableStub({ in: vi.fn().mockResolvedValue({ data: [{ id: postId, storage_url: 'https://x/only.jpg', original_filename: 'only.jpg', source: 'client_provided', ownership: 'client_exclusive' }] }) }) as never
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: [usableGetAsset({ id: postId, storage_url: 'https://x/only.jpg', original_filename: 'only.jpg', source: 'client_provided', ownership: 'client_exclusive' })] }) }) as never
       }
       return tableStub({}) as never
     })
@@ -595,7 +617,7 @@ describe('campaign-daily-plan GET — multi-day bundles, provenance and readines
         return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: plan }] }) }) as never
       }
       if (table === 'client_assets') {
-        return tableStub({ in: vi.fn().mockResolvedValue({ data: [{ id: shared, storage_url: 'https://x/shared.jpg', original_filename: 'shared.jpg', source: 'client_provided', ownership: 'client_exclusive' }] }) }) as never
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: [usableGetAsset({ id: shared, storage_url: 'https://x/shared.jpg', original_filename: 'shared.jpg', source: 'client_provided', ownership: 'client_exclusive' })] }) }) as never
       }
       return tableStub({}) as never
     })
@@ -605,6 +627,177 @@ describe('campaign-daily-plan GET — multi-day bundles, provenance and readines
     expect(b.provenance).toHaveLength(1)
     expect(b.provenance[0].id).toBe(shared)
     expect(b.readiness.client_asset_provenance).toBe(true)
+  })
+})
+
+// ── Regression (Build Control final narrow patch, threads
+// PRRT_kwDOSTHiF86cEPbL / PRRT_kwDOSTHiF86cEPbS): the GET-side asset
+// read-back must apply the SAME usable-image gate POST uses at write
+// time; and Post-required semantics must not let a valid Reel compensate
+// for a missing Post image. ────────────────────────────────────────────
+describe('campaign-daily-plan GET — usable-image read-back boundary (post-save asset changes)', () => {
+  const persistedPlan = {
+    plan_kind: 'campaign_daily_v1',
+    campaign_id: CAMPAIGN_ID,
+    master_brief_ref: { id: BRIEF_ID, version: 2 },
+    days: sevenDays(),
+    bundles: [bundle({ date: '2026-08-24' })],
+    command_meta: { source: 'conversation_command', received_at: '2026-08-24T00:00:00.000Z', raw_summary: null },
+  }
+  const postId = persistedPlan.bundles[0].post.image_asset_id
+
+  function stubReadBack(assetRow: Record<string, unknown>) {
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 2 } }) }) as never
+      }
+      if (table === 'social_plans') {
+        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: persistedPlan }] }) }) as never
+      }
+      if (table === 'client_assets') {
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: [assetRow] }) }) as never
+      }
+      return tableStub({}) as never
+    })
+  }
+
+  it('an ARCHIVED asset read back after save is excluded from resolvedAssetIds — provenance false, Post incomplete, post_image null', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    stubReadBack({
+      id: postId,
+      storage_url: 'https://x/archived.jpg',
+      original_filename: 'archived.jpg',
+      source: 'client_provided',
+      ownership: 'client_exclusive',
+      status: 'analyzed',
+      archived_at: '2026-08-25T00:00:00Z',
+      mime_type: 'image/jpeg',
+    })
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+    const b = json.bundles.find((x: { date: string }) => x.date === '2026-08-24')
+    expect(b.readiness.client_asset_provenance).toBe(false)
+    expect(b.readiness.format_completeness.post).toBe(false)
+    expect(b.post_image).toBeNull()
+    expect(b.provenance).toEqual([])
+  })
+
+  it('a PENDING/analyzing asset read back after save is excluded (status !== analyzed)', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    stubReadBack({
+      id: postId,
+      storage_url: 'https://x/pending.jpg',
+      original_filename: 'pending.jpg',
+      source: 'client_provided',
+      ownership: 'client_exclusive',
+      status: 'analyzing',
+      archived_at: null,
+      mime_type: 'image/jpeg',
+    })
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+    const b = json.bundles.find((x: { date: string }) => x.date === '2026-08-24')
+    expect(b.readiness.client_asset_provenance).toBe(false)
+    expect(b.readiness.format_completeness.post).toBe(false)
+    expect(b.post_image).toBeNull()
+  })
+
+  it('an ERROR-status asset read back after save is excluded', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    stubReadBack({
+      id: postId,
+      storage_url: 'https://x/err.jpg',
+      original_filename: 'err.jpg',
+      source: 'client_provided',
+      ownership: 'client_exclusive',
+      status: 'error',
+      archived_at: null,
+      mime_type: 'image/jpeg',
+    })
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+    const b = json.bundles.find((x: { date: string }) => x.date === '2026-08-24')
+    expect(b.readiness.client_asset_provenance).toBe(false)
+    expect(b.readiness.format_completeness.post).toBe(false)
+    expect(b.post_image).toBeNull()
+  })
+
+  it('a NON-IMAGE mime asset (e.g. video/mp4 sneaked in later) is excluded from provenance and post_image', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    stubReadBack({
+      id: postId,
+      storage_url: 'https://x/notimg.mp4',
+      original_filename: 'notimg.mp4',
+      source: 'client_provided',
+      ownership: 'client_exclusive',
+      status: 'analyzed',
+      archived_at: null,
+      mime_type: 'video/mp4',
+    })
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+    const b = json.bundles.find((x: { date: string }) => x.date === '2026-08-24')
+    expect(b.readiness.client_asset_provenance).toBe(false)
+    expect(b.readiness.format_completeness.post).toBe(false)
+    expect(b.post_image).toBeNull()
+  })
+
+  it('LEGACY Post without image_asset_id + Reel with a VALID resolved asset → client_asset_provenance is FALSE (Reel cannot compensate)', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    const legacyReelId = 'ffffffff-0000-0000-0000-00000000abcd'
+    const legacyPlan = {
+      plan_kind: 'campaign_daily_v1',
+      campaign_id: CAMPAIGN_ID,
+      master_brief_ref: { id: BRIEF_ID, version: 2 },
+      days: sevenDays(),
+      bundles: [{
+        date: '2026-08-24',
+        // Legacy Post: hook/body/cta only — no image_asset_id.
+        post: { hook: 'h', body: 'b', cta: 'Enquire Now' },
+        story: { frames: [
+          { order: 1, copy: 'f1' }, { order: 2, copy: 'f2' },
+          { order: 3, copy: 'f3' }, { order: 4, copy: 'f4' },
+        ]},
+        reel: { brief: 'br', script: 'sc', caption: 'cp', source_asset_ids: [legacyReelId], media_status: 'NO_MEDIA' },
+      }],
+      command_meta: { source: 'conversation_command', received_at: '2026-08-24T00:00:00.000Z', raw_summary: null },
+    }
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 2 } }) }) as never
+      }
+      if (table === 'social_plans') {
+        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: legacyPlan }] }) }) as never
+      }
+      if (table === 'client_assets') {
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: [{
+          id: legacyReelId,
+          storage_url: 'https://x/reel-valid.jpg',
+          original_filename: 'reel-valid.jpg',
+          source: 'client_provided',
+          ownership: 'client_exclusive',
+          status: 'analyzed',
+          archived_at: null,
+          mime_type: 'image/jpeg',
+        }] }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+    const b = json.bundles.find((x: { date: string }) => x.date === '2026-08-24')
+    // Reel asset IS resolved — but Post is present without image_asset_id,
+    // so provenance and Post-completeness must both be false regardless.
+    expect(b.readiness.client_asset_provenance).toBe(false)
+    expect(b.readiness.format_completeness.post).toBe(false)
+    // Reel's own asset is still surfaced for the reviewer to see, but does
+    // not by itself satisfy the truthful-readiness contract for this bundle.
+    expect(b.provenance.map((a: { id: string }) => a.id)).toEqual([legacyReelId])
   })
 })
 
@@ -998,7 +1191,7 @@ describe('campaign-daily-plan POST — persists structured facts (no LLM/provide
         return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'legacy-plan-1', plan_data: legacyPlanData }] }) }) as never
       }
       if (table === 'client_assets') {
-        return tableStub({ in: vi.fn().mockResolvedValue({ data: [{ id: ASSET_ID, storage_url: 'https://x/y.jpg', original_filename: 'y.jpg', source: 'stock', ownership: 'client_exclusive' }] }) }) as never
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: [usableGetAsset({ id: ASSET_ID, storage_url: 'https://x/y.jpg', original_filename: 'y.jpg', source: 'stock', ownership: 'client_exclusive' })] }) }) as never
       }
       return tableStub({}) as never
     })

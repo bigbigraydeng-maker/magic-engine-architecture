@@ -136,6 +136,20 @@ describe('computeReadiness — TRUTHFUL READINESS (Post image, dedup, 4-frame St
     expect(r.client_asset_provenance).toBe(false)
   })
 
+  // Regression (Build Control final narrow patch, thread
+  // PRRT_kwDOSTHiF86cEPbS): a legacy Post missing image_asset_id must
+  // fail provenance even when Reel presents a valid resolved asset —
+  // Reel cannot compensate for a missing Post image.
+  it('Legacy Post without image_asset_id + VALID resolved Reel asset → provenance=false (Reel cannot compensate)', () => {
+    const legacyWithValidReel = completeBundle({
+      post: { hook: 'h', body: 'b', cta: 'Enquire Now' } as never,
+      reel: { brief: 'br', script: 'sc', caption: 'cp', source_asset_ids: ['reel-good'], media_status: 'NO_MEDIA' },
+    })
+    const r = computeReadiness({ grounding, bundle: legacyWithValidReel, resolvedAssetIds: new Set(['reel-good']) })
+    expect(r.client_asset_provenance).toBe(false)
+    expect(r.format_completeness.post).toBe(false)
+  })
+
   it('Post + Reel BOTH must resolve for provenance=true; missing one is false', () => {
     const withReel = completeBundle({
       reel: { brief: 'br', script: 'sc', caption: 'cp', source_asset_ids: ['a1'], media_status: 'NO_MEDIA' },
