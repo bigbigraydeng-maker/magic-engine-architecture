@@ -21,6 +21,7 @@ import {
   failJob,
 } from '@/lib/zhangqian/persistor'
 import { getDomainMetrics, getKeywordsForSite, bulkKeywordVolume } from '@/lib/dataforseo/labs'
+import { locationCodeFor } from '@/lib/dataforseo/client'
 import { loadMemoryForClient } from '@/lib/memory'
 import { precheckCharge, commitCharge, refundOnFail } from '@/lib/mtc/charge'
 
@@ -44,9 +45,9 @@ export async function POST(
     // Resolve domain from clients table
     const { data: client, error: clientErr } = await supabaseAdmin
       .from('clients')
-      .select('id, domain')
+      .select('id, domain, semrush_db')
       .eq('id', clientId)
-      .single<{ id: string; domain: string }>()
+      .single<{ id: string; domain: string; semrush_db: string | null }>()
 
     if (clientErr || !client) {
       return NextResponse.json({ success: false, error: 'Client not found' }, { status: 404 })
@@ -77,7 +78,7 @@ export async function POST(
     // Fire-and-forget background execution. The worker handles MTC commit on
     // success and refund-on-fail; we pass projectedMtc=0 for admin runs so the
     // worker becomes a no-op for billing.
-    void executeDiscoveryJob(jobId, clientId, client.domain, projectedMtc).catch((err: unknown) => {
+    void executeDiscoveryJob(jobId, clientId, client.domain, projectedMtc, client.semrush_db).catch((err: unknown) => {
       console.error('[zhangqian/discover] background failure', err)
     })
 
@@ -101,6 +102,8 @@ async function executeDiscoveryJob(
   clientId: string,
   domain: string,
   projectedMtc: number,
+  /** clients.semrush_db —— 决定预取用哪个国家的数据。null 时按 au 兜底。 */
+  semrushDb: string | null,
 ): Promise<void> {
   await updateJobProgress(supabaseAdmin, jobId, {
     status: 'running',
@@ -108,12 +111,16 @@ async function executeDiscoveryJob(
     progress_note: '正在预取域名数据…',
   })
 
-  // Pre-fetch domain data before starting the agent — never block on failure
+  // Pre-fetch domain data before starting the agent — never block on failure.
+  // ⚠️ 2026-08-26：这里原本把 location_code 写死成 2036（澳洲），不看客户在哪个国家。
+  // 于是所有新西兰客户（CTS、Roman、Park Homes、HBay…）拿到的预取上下文都是澳洲
+  // 搜索数据。agent 自己的工具是按 location 正确切 2554 的，所以只污染预取这一段，
+  // 但那正是喂给模型的第一手材料。改用现成的 locationCodeFor(clients.semrush_db)。
   let semrushContext: string | undefined
   try {
     const [metricsResult, keywordsResult] = await Promise.allSettled([
       getDomainMetrics(domain),
-      getKeywordsForSite(domain, 2036, 20),
+      getKeywordsForSite(domain, locationCodeFor(semrushDb), 20),
     ])
 
     const metrics  = metricsResult.status  === 'fulfilled' ? metricsResult.value  : null

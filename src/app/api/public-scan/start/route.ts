@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { runZhangqian } from '@/lib/zhangqian/agent'
 import { getDomainMetrics, getKeywordsForSite } from '@/lib/dataforseo/labs'
+import { locationCodeFor } from '@/lib/dataforseo/client'
 import {
   consumeScanRateLimits,
   getDomainCache,
@@ -105,6 +106,18 @@ const SCAN_HARD_TIMEOUT_MS = 9 * 60 * 1000
 // 前置 DataForSEO 抓取的时限。它跟 agent 共用同一个 9 分钟硬顶,不夹住它
 // 就等于让 agent 的预算随它波动。
 const PREFETCH_TIMEOUT_MS = 45_000
+
+/**
+ * 公开扫描没有客户档案，只能从域名后缀判断市场。
+ *
+ * 原本这里把 location_code 写死成 2036（澳洲），于是 `.co.nz` 域名也按澳洲取数。
+ * 说清楚这个判断的边界：只有 `.nz` 结尾能判成 NZ，**新西兰企业用 `.com` 的
+ * 仍会落到 au**（nzmiracle.com 就是这种）。这是无客户档案时能做到的最好程度，
+ * 不是完备判断；真正准确的市场归属在 clients.semrush_db，走后台 discovery 那条路。
+ */
+function marketOf(domain: string): 'au' | 'nz' {
+  return /\.nz$/i.test(domain.replace(/\/+$/, '')) ? 'nz' : 'au'
+}
 // 硬顶触发前留给"写库 + 收尾"的余量。agent 的 deadline 会被夹在这条线之内,
 // 这样 agent 正常跑完时不会反被硬顶判成失败。
 const SCAN_WRAPUP_RESERVE_MS = 20_000
@@ -153,7 +166,7 @@ async function runScan(jobId: string, domain: string): Promise<void> {
     // 它们慢一分钟,后面正常跑完的扫描就会被判失败。(Codex 复审 #1186 P1)
     const [metricsRes, kwRes] = await Promise.allSettled([
       withScanTimeout(getDomainMetrics(domain), PREFETCH_TIMEOUT_MS),
-      withScanTimeout(getKeywordsForSite(domain, 2036, 20), PREFETCH_TIMEOUT_MS),
+      withScanTimeout(getKeywordsForSite(domain, locationCodeFor(marketOf(domain)), 20), PREFETCH_TIMEOUT_MS),
     ])
 
     const metrics = metricsRes.status === 'fulfilled' ? metricsRes.value : null
