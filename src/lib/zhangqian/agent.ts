@@ -60,26 +60,65 @@ const MAX_COST_USD = 1.50
 const MAX_OUTPUT_TOKENS = 24_000
 const FETCH_URL_TIMEOUT_MS = 15_000
 const LOCAL_REVIEWS_TIMEOUT_MS = 45_000
-// Per-turn Anthropic call cap for tool-use iterations. Anthropic SDK default
-// is 10 min, which can blow past our global wall-clock when a single tool turn
-// stalls server-side. 150 s covers web_search turns where Anthropic searches
-// multiple queries server-side; 90 s was too tight and caused spurious failures.
-const CLAUDE_CALL_TIMEOUT_MS = 150_000
-// Separate timeout for the final synthesis call (no tools, pure JSON output).
-// Without a diagnosis block the output is much smaller (~8-12 K), so 90 s is
-// generous and keeps total agent runtime well under the 6-min watchdog.
-const CLAUDE_FINAL_TIMEOUT_MS = 90_000
-// Hard wall-clock cap: 5 min wall-clock for the loop so the full round-trip
-// (final Claude call + overhead) lands well under the 9-min Render hard-timeout.
-// Buffer is 30 s — just enough to detect the deadline before starting another
-// tool turn; the final synthesis already has its own CLAUDE_FINAL_TIMEOUT_MS.
-const GLOBAL_TIMEOUT_MS = 300_000
+// ── Call budget: derived from output length, NOT a hand-picked round number ──
+//
+// 2026-08-25 取证:旧的 150 s 上限杀掉了 3 次 discovery(见 issue 描述)。
+// Cloudflare AI Gateway 日志(2026-07-01~08-25,26 次长输出采样)显示
+// claude-sonnet-4-6 的输出吞吐稳定在 55-62 tokens/s,耗时几乎是输出长度的线性
+// 函数。而"写最终报告"这一步实测:
+//     shopfive  6,418 tokens → 109.5 s
+//     parkhomes 7,574 tokens → 127.4 s
+//     romanhu   6,899 tokens → 129.0 s
+// 三次成功里最险的一次只剩 21 s 余量;报告一旦超过约 8,800 tokens 就必然超时。
+// 所以超时**必须**按预期输出反推。改这里之前先看 docs/PITFALLS.md。
+const OUTPUT_TOKENS_PER_SEC = 45          // 实测下限 55 打 0.8 折,吸收抖动
+const CALL_OVERHEAD_MS = 20_000           // 排队 + 首 token 延迟 + 网络往返
+// 报告实测 6.4K-10.6K tokens。按 12K 给预算(比历史最大值多 13%);
+// MAX_OUTPUT_TOKENS 仍保持 24K —— 那是防截断的天花板,不是预期值。
+const EXPECTED_REPORT_TOKENS = 12_000
+// ≈ 287 s。每一轮都用同一个预算:模型可能在任意一轮 end_turn 直接交报告,
+// 所以"工具轮"和"写报告轮"无法预先区分,给两个不同的数字必然有一个是错的。
+const CLAUDE_CALL_TIMEOUT_MS =
+  Math.ceil(EXPECTED_REPORT_TOKENS / OUTPUT_TOKENS_PER_SEC) * 1000 + CALL_OVERHEAD_MS
+// 强制收尾那一次调用用同一个预算。旧值 90 s 比实测最快的 109.5 s 还短 ——
+// 也就是说这条"安全网"以前永远兜不住,发现于同一次取证。
+const CLAUDE_FINAL_TIMEOUT_MS = CLAUDE_CALL_TIMEOUT_MS
+// 写一份报告实测最少要 109.5 s。低于这个数就别开工了 —— 旧代码的 90 s 安全网
+// 就是这么变成摆设的。循环剩余时间不足这个数时,直接退出去做强制收尾。
+const MIN_REPORT_MS = 140_000
+// 总墙钟 6 min 20 s。最坏路径 = 用满 GLOBAL(380 s)+ 强制收尾兜底(140 s)
+// = 520 s,仍落在 public-scan 的 9 min(540 s)硬顶之内(见 api/public-scan/start)。
+// 每一次调用的超时都会再被"剩余时间"夹一次,所以没有单次调用能捅穿 deadline。
+const GLOBAL_TIMEOUT_MS = 380_000
 
 // Sonnet 4.5 pricing per million tokens (must match anthropic/client.ts)
 const PRICE_INPUT_PER_M = 3.0
 const PRICE_OUTPUT_PER_M = 15.0
 // Web search tool surcharge per call (Anthropic billing, approx)
 const PRICE_WEB_SEARCH_PER_CALL = 0.01
+
+/**
+ * 跑挂了,但钱已经花了。
+ *
+ * 2026-08-24 三次失败在 `client_discovery_jobs` 里都记成 `cost_usd = 0`、
+ * `tool_call_count = 0`,而实际每次已经跑了 8 轮、真金白银烧掉约 $0.6-1.2。
+ * 失败路径必须把已花成本带出去,否则账面上永远看不到这笔钱。
+ */
+export class ZhangqianRunError extends Error {
+  constructor(
+    message: string,
+    readonly costUsd: number,
+    readonly toolCalls: number,
+  ) {
+    super(message)
+    this.name = 'ZhangqianRunError'
+  }
+}
+
+function toRunError(err: unknown, costUsd: number, toolCalls: number): ZhangqianRunError {
+  const message = err instanceof Error ? err.message : String(err)
+  return new ZhangqianRunError(message, Number(costUsd.toFixed(4)), toolCalls)
+}
 
 // ─── Tool definitions ────────────────────────────────────────────────────────
 
@@ -435,54 +474,79 @@ export async function runZhangqian(
   let apifyCalls = 0
   let truncated = false
 
+  // 失败路径要用到的"到目前为止花了多少"。成功路径由 finalizeReport 另算一份
+  // (它还要写进 meta),两边用的是同一个公式。
+  const partialCostUsd = (): number =>
+    (totalInputTokens / 1_000_000) * PRICE_INPUT_PER_M +
+    (totalOutputTokens / 1_000_000) * PRICE_OUTPUT_PER_M +
+    webSearchCalls * PRICE_WEB_SEARCH_PER_CALL
+  const partialToolCalls = (): number =>
+    webSearchCalls + fetchUrlCalls + connectorCalls + apifyCalls
+
   await onProgress('张骞已派遣 — 抓取主页…')
 
   for (let iteration = 0; iteration < maxToolCalls; iteration++) {
     // ── Cost gate + deadline gate ──────────────────────────────────────────
-    const costSoFar =
-      (totalInputTokens / 1_000_000) * PRICE_INPUT_PER_M +
-      (totalOutputTokens / 1_000_000) * PRICE_OUTPUT_PER_M +
-      webSearchCalls * PRICE_WEB_SEARCH_PER_CALL
-
-    if (costSoFar >= maxCostUsd) {
+    if (partialCostUsd() >= maxCostUsd) {
       truncated = true
       break
     }
 
-    // Leave 30 s before the deadline before triggering forced finalization.
-    // The final synthesis call has its own CLAUDE_FINAL_TIMEOUT_MS (240 s);
-    // 30 s is enough to detect the boundary without cutting the loop early.
-    if (Date.now() + 30_000 >= deadline) {
+    // 剩余时间不够写完一份报告了 —— 别再开新一轮,退出去用现有材料强制收尾。
+    if (deadline - Date.now() < MIN_REPORT_MS) {
       truncated = true
       break
     }
 
     // ── Progress heartbeat before each Anthropic call ─────────────────────
-    // Each Claude turn can take up to 150 s; this keeps the live feed moving.
+    // 单轮最长可能跑满 CLAUDE_CALL_TIMEOUT_MS,这行让前端的实时进度不至于假死。
     await onProgress(iteration === 0 ? '张骞已出发 — 开始多维扫描…' : `第 ${iteration + 1} 轮分析中…`)
 
     // ── Call Claude ────────────────────────────────────────────────────────
-    const response = await client.messages.create(
-      {
-        model: MODEL_SONNET,
-        max_tokens: MAX_OUTPUT_TOKENS,
-        system: ZHANGQIAN_SYSTEM_PROMPT,
-        tools: [
-          WEB_SEARCH_TOOL,
-          FETCH_URL_TOOL,
-          VERIFY_BUSINESS_REGISTRATION_TOOL,
-          FETCH_LOCAL_REVIEWS_TOOL,
-          FETCH_SERP_RESULTS_TOOL,
-          FETCH_ONPAGE_AUDIT_TOOL,
-          FETCH_KEYWORD_DATA_TOOL,
-          FETCH_COMPETITORS_TOOL,
-          FETCH_DOMAIN_TECHNOLOGIES_TOOL,
-          FETCH_DOMAIN_WHOIS_TOOL,
-        ],
-        messages,
-      },
-      { timeout: CLAUDE_CALL_TIMEOUT_MS },
-    )
+    // 两处刻意为之,别"顺手优化"掉:
+    // 1. 超时再被剩余时间夹一次 —— 任何一轮都不可能捅穿 deadline。
+    // 2. maxRetries: 0 —— SDK 默认重试 2 次,但"报告太长写不完"重试必然再超时,
+    //    只会把一次失败放大成 3 倍等待(2026-08-24 实测 450 s)然后整单丢弃。
+    //    真正的补救是下面的降级,不是重试。
+    let response: Anthropic.Messages.Message
+    try {
+      response = await client.messages.create(
+        {
+          model: MODEL_SONNET,
+          max_tokens: MAX_OUTPUT_TOKENS,
+          system: ZHANGQIAN_SYSTEM_PROMPT,
+          tools: [
+            WEB_SEARCH_TOOL,
+            FETCH_URL_TOOL,
+            VERIFY_BUSINESS_REGISTRATION_TOOL,
+            FETCH_LOCAL_REVIEWS_TOOL,
+            FETCH_SERP_RESULTS_TOOL,
+            FETCH_ONPAGE_AUDIT_TOOL,
+            FETCH_KEYWORD_DATA_TOOL,
+            FETCH_COMPETITORS_TOOL,
+            FETCH_DOMAIN_TECHNOLOGIES_TOOL,
+            FETCH_DOMAIN_WHOIS_TOOL,
+          ],
+          messages,
+        },
+        {
+          timeout: Math.min(CLAUDE_CALL_TIMEOUT_MS, deadline - Date.now()),
+          maxRetries: 0,
+        },
+      )
+    } catch (err) {
+      // 第 0 轮就挂 = 连主页都没抓到,没有任何材料可降级,原样抛出(带上已花成本)。
+      if (iteration === 0) throw toRunError(err, partialCostUsd(), partialToolCalls())
+      // 已经采到料了就绝不能整单丢弃 —— 退出循环,用手上的东西强制收尾。
+      // 这正是 2026-08-24 三次失败丢掉 8 轮采集成果的那个缺口。
+      console.warn(
+        `[zhangqian] 第 ${iteration + 1} 轮调用失败,改用已采集材料收尾:`,
+        err instanceof Error ? err.message : String(err),
+      )
+      await onProgress('这一步没走通 — 正在用已采集的材料生成报告…')
+      truncated = true
+      break
+    }
 
     totalInputTokens += response.usage.input_tokens
     totalOutputTokens += response.usage.output_tokens
@@ -624,17 +688,29 @@ export async function runZhangqian(
       'using whatever you have gathered. Set `notes` to flag any incomplete sections.',
   })
 
-  // Use the longer synthesis timeout — no tools means one big JSON response.
-  const finalResponse = await client.messages.create(
-    {
-      model: MODEL_SONNET,
-      max_tokens: MAX_OUTPUT_TOKENS,
-      system: ZHANGQIAN_SYSTEM_PROMPT,
-      // Omit tools on the final call so Claude can't loop again
-      messages,
-    },
-    { timeout: CLAUDE_FINAL_TIMEOUT_MS },
+  // 收尾这一次给"至少够写完一份报告"的时间:即使 deadline 已经用光,也要给满
+  // MIN_REPORT_MS —— 否则这条安全网又会变成旧代码里那个永远兜不住的 90 s。
+  // 最坏总时长因此是 GLOBAL_TIMEOUT_MS + MIN_REPORT_MS = 520 s,仍在 9 min 硬顶内。
+  const finalTimeoutMs = Math.min(
+    CLAUDE_FINAL_TIMEOUT_MS,
+    Math.max(MIN_REPORT_MS, deadline - Date.now()),
   )
+  let finalResponse: Anthropic.Messages.Message
+  try {
+    finalResponse = await client.messages.create(
+      {
+        model: MODEL_SONNET,
+        max_tokens: MAX_OUTPUT_TOKENS,
+        system: ZHANGQIAN_SYSTEM_PROMPT,
+        // Omit tools on the final call so Claude can't loop again
+        messages,
+      },
+      { timeout: finalTimeoutMs, maxRetries: 0 },
+    )
+  } catch (err) {
+    // 连收尾都写不出来 —— 这次是真没救了,但把已花的钱带出去,别再记成 0。
+    throw toRunError(err, partialCostUsd(), partialToolCalls())
+  }
 
   totalInputTokens += finalResponse.usage.input_tokens
   totalOutputTokens += finalResponse.usage.output_tokens

@@ -132,11 +132,19 @@ export async function completeJob(
 
 // ─── failJob ─────────────────────────────────────────────────────────────────
 
+export interface FailJobSpend {
+  /** 跑挂之前已经真金白银烧掉的钱。 */
+  costUsd: number
+  /** 跑挂之前已经发生的工具调用次数。 */
+  toolCalls: number
+}
+
 export async function failJob(
   supabase: SupabaseClient,
   jobId: string,
   errorMessage: string,
   rawOutput?: string,
+  spend?: FailJobSpend,
 ): Promise<void> {
   const patch: Record<string, unknown> = {
     status: 'failed',
@@ -144,6 +152,12 @@ export async function failJob(
     completed_at: new Date().toISOString(),
   }
   if (rawOutput !== undefined) patch.raw_output = rawOutput
+  // 失败也要记账。2026-08-24 三次超时都写成 cost_usd = 0 / tool_call_count = 0,
+  // 实际每次已经烧掉约 $0.6-1.2 —— 花掉的钱在账面上完全看不见。
+  if (spend) {
+    patch.cost_usd = spend.costUsd
+    patch.tool_call_count = spend.toolCalls
+  }
   await supabase.from('client_discovery_jobs').update(patch).eq('id', jobId)
 }
 
