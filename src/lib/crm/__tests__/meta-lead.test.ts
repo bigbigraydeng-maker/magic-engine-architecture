@@ -1,12 +1,16 @@
 /**
- * Facebook 表单 lead → 联系人 + 触点的测试。
+ * Facebook 表单 lead → 联系人 + 触点 + Mailchimp 出口的测试。
  *
- * 钉住的四件事，每一件错了都会在生产里变成「看不见的漏人」或「弄脏干净的表」：
+ * 钉住的事，每一件错了都会在生产里变成「看不见的漏人」或「弄脏干净的表」或
+ * 「把没同意的人发进 Welcome journey」：
  *   1. 幂等键 = Meta 的 lead id —— 跟人手导入脚本对齐，回补时不会写出第二份
  *   2. 电话邮箱都不成形就不建人 —— contacts 被垃圾提交灌脏比漏一条 lead 贵得多
  *   3. 归因照实写，拿不到就 NULL —— 自然贴文的表单本来就没有广告
  *      （含素材：ad_id 回查 ad_creative_links，查不到照样 NULL，不猜）
  *   4. 「感兴趣的团」只认问题名带 tour 的自定义问题 —— 不是随便抓第一个自定义答案
+ *   5. Mailchimp 出口只在**有 provable consent** 时才打 provider（Issue #1188）
+ *   6. Provider 失败**不能**把 lead 接入回滚 —— 主管道优先
+ *   7. `mailchimp_synced_at` 只在 subscribed / 明确 already_member 时才写
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -15,11 +19,23 @@ vi.mock('@/lib/supabase', () => ({
   supabaseAdmin: { from: vi.fn() },
 }))
 
+vi.mock('@/lib/mailchimp/client', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/mailchimp/client')>(
+    '@/lib/mailchimp/client',
+  )
+  return {
+    ...actual,
+    subscribeMember: vi.fn(),
+  }
+})
+
 import { supabaseAdmin } from '@/lib/supabase'
+import { subscribeMember } from '@/lib/mailchimp/client'
 import { ingestMetaLead, parseLeadAnswers } from '../meta-lead'
 import type { MetaLead } from '@/lib/meta/lead-forms'
 
 const CLIENT = 'client-cts'
+const subscribeMock = subscribeMember as unknown as ReturnType<typeof vi.fn>
 
 const lead = (over: Partial<MetaLead> = {}): MetaLead => ({
   leadId: 'lead-1',
@@ -42,15 +58,30 @@ const lead = (over: Partial<MetaLead> = {}): MetaLead => ({
 let contactInserts: Record<string, unknown>[]
 let touchpointUpserts: Record<string, unknown>[]
 let upsertOptions: Record<string, unknown>[]
+let contactUpdates: Record<string, unknown>[]
 
-function mockDb(
-  identityHits: { contact_id: string; kind: string; value: string }[] = [],
+interface MockDbOptions {
+  identityHits?: { contact_id: string; kind: string; value: string }[]
   /** ad_creative_links 里这条广告对应的片子；null = 这条广告不是 ME 建的。 */
-  creativeLinkRow: { creative_ref: string } | null = null,
-) {
+  creativeLinkRow?: { creative_ref: string } | null
+  /** clients.mailchimp_audience_id；undefined = 客户不存在，null/'' = 未配置。 */
+  audienceId?: string | null
+  clientReadError?: string | null
+  contactUpdateError?: string | null
+}
+
+function mockDb(opts: MockDbOptions = {}) {
+  const {
+    identityHits = [],
+    creativeLinkRow = null,
+    audienceId = null,
+    clientReadError = null,
+    contactUpdateError = null,
+  } = opts
   contactInserts = []
   touchpointUpserts = []
   upsertOptions = []
+  contactUpdates = []
   ;(supabaseAdmin.from as ReturnType<typeof vi.fn>).mockImplementation((table: string) => {
     if (table === 'ad_creative_links') {
       return {
@@ -70,6 +101,20 @@ function mockDb(
         upsert: () => Promise.resolve({ error: null }),
       }
     }
+    if (table === 'clients') {
+      return {
+        select: () => ({
+          eq: () => ({
+            maybeSingle: () =>
+              Promise.resolve(
+                clientReadError
+                  ? { data: null, error: { message: clientReadError } }
+                  : { data: { mailchimp_audience_id: audienceId }, error: null },
+              ),
+          }),
+        }),
+      }
+    }
     if (table === 'contacts') {
       return {
         insert: (payload: Record<string, unknown>) => {
@@ -79,9 +124,23 @@ function mockDb(
           }
         },
         select: () => ({ in: () => ({ order: () => Promise.resolve({ data: [] }) }) }),
-        update: () => ({
-          eq: () => Object.assign(Promise.resolve({ error: null }), { is: () => Promise.resolve({ error: null }) }),
-        }),
+        update: (payload: Record<string, unknown>) => {
+          contactUpdates.push(payload)
+          return {
+            eq: () =>
+              Object.assign(
+                Promise.resolve(
+                  contactUpdateError ? { error: { message: contactUpdateError } } : { error: null },
+                ),
+                {
+                  is: () =>
+                    Promise.resolve(
+                      contactUpdateError ? { error: { message: contactUpdateError } } : { error: null },
+                    ),
+                },
+              ),
+          }
+        },
       }
     }
     if (table === 'contact_touchpoints') {
@@ -101,6 +160,12 @@ function mockDb(
 beforeEach(() => {
   vi.clearAllMocks()
   vi.spyOn(console, 'error').mockImplementation(() => {})
+  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  subscribeMock.mockReset()
+  // Default: 出口没配 audience —— 上游看到 skipped: no_audience_config，
+  // subscribeMember 不该被调用。测试要打 provider 的用例自行覆写。
+  subscribeMock.mockResolvedValue({ status: 'skipped', reason: 'no_audience_config' })
+  process.env.MAILCHIMP_API_KEY = 'test-key-us19'
 })
 
 describe('parseLeadAnswers', () => {
@@ -151,11 +216,46 @@ describe('parseLeadAnswers', () => {
     expect(p.email).toBeNull()
     expect(p.custom).toEqual({})
   })
+
+  it('consent 类问题被识别 —— provable consent 只在有明确同意字段时成立', () => {
+    const p = parseLeadAnswers([
+      { name: 'consent_to_marketing_emails', value: 'Yes, please' },
+    ])
+    expect(p.consentEvidence).toBe('consent_to_marketing_emails')
+  })
+
+  it('consent 字段答 "no" → 不算 provable consent', () => {
+    const p = parseLeadAnswers([
+      { name: 'subscribe_to_newsletter', value: 'No' },
+      { name: 'opt_in', value: 'false' },
+    ])
+    expect(p.consentEvidence).toBeNull()
+  })
+
+  it('没有 consent 类问题 → consentEvidence 为 null（不猜）', () => {
+    const p = parseLeadAnswers([{ name: 'budget', value: '$5000' }])
+    expect(p.consentEvidence).toBeNull()
+  })
+
+  it('full_name → firstName/lastName 按第一个空格拆一次', () => {
+    const p = parseLeadAnswers([{ name: 'full_name', value: 'Chris van der Berg' }])
+    expect(p.firstName).toBe('Chris')
+    expect(p.lastName).toBe('van der Berg')
+  })
+
+  it('first_name + last_name 显式给出 → 直接用，不重拼', () => {
+    const p = parseLeadAnswers([
+      { name: 'first_name', value: 'Chris' },
+      { name: 'last_name', value: 'Brown' },
+    ])
+    expect(p.firstName).toBe('Chris')
+    expect(p.lastName).toBe('Brown')
+  })
 })
 
 describe('ingestMetaLead', () => {
   it('新 lead 建人 + 写一条 inbound 触点', async () => {
-    mockDb()
+    mockDb({})
     const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
 
     expect(res).toMatchObject({ contactId: 'person-new', createdContact: true, skipped: null })
@@ -178,7 +278,7 @@ describe('ingestMetaLead', () => {
   })
 
   it('幂等键就是 Meta 的 lead id —— 跟人手导入脚本对齐，回补不会写第二份', async () => {
-    mockDb()
+    mockDb({})
     await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
 
     expect(touchpointUpserts[0].source_ref).toBe('lead-1')
@@ -189,7 +289,7 @@ describe('ingestMetaLead', () => {
   })
 
   it('电话邮箱都不成形 → 不建人（不能让垃圾提交灌脏 contacts）', async () => {
-    mockDb()
+    mockDb({})
     const res = await ingestMetaLead({
       clientId: CLIENT,
       defaultCountry: 'NZ',
@@ -202,7 +302,7 @@ describe('ingestMetaLead', () => {
   })
 
   it('自然贴文的表单：platform 仍是 meta，广告字段照实留 NULL', async () => {
-    mockDb()
+    mockDb({})
     await ingestMetaLead({
       clientId: CLIENT,
       defaultCountry: 'NZ',
@@ -222,7 +322,7 @@ describe('ingestMetaLead', () => {
    * 建广告那一刻记下的对应关系。这条钉住「查到了就写进人和触点两处」。
    */
   it('拿 ad_id 回查得到片子 → 人和触点两处都写上 attr_creative_ref', async () => {
-    mockDb([], { creative_ref: 'wo-1' })
+    mockDb({ creativeLinkRow: { creative_ref: 'wo-1' } })
     await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
 
     expect(touchpointUpserts[0]).toMatchObject({ attr_ad_id: 'ad1', attr_creative_ref: 'wo-1' })
@@ -231,14 +331,14 @@ describe('ingestMetaLead', () => {
 
   /** 这条广告不是 ME 建的（或者建的时候就没认出片子）→ 照实留白，绝不拿别的片子顶上。 */
   it('回查不到片子 → attr_creative_ref 留 NULL', async () => {
-    mockDb([], null)
+    mockDb({ creativeLinkRow: null })
     await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
 
     expect(touchpointUpserts[0]).toMatchObject({ attr_ad_id: 'ad1', attr_creative_ref: null })
   })
 
   it('「感兴趣的团」进 metadata.tour_interest_raw（CRM 横表那一列读它）', async () => {
-    mockDb()
+    mockDb({})
     await ingestMetaLead({
       clientId: CLIENT,
       defaultCountry: 'NZ',
@@ -256,7 +356,7 @@ describe('ingestMetaLead', () => {
   })
 
   it('AU 客户的本地号码补 +61，不是 +64', async () => {
-    mockDb()
+    mockDb({})
     await ingestMetaLead({
       clientId: CLIENT,
       defaultCountry: 'AU',
@@ -268,12 +368,243 @@ describe('ingestMetaLead', () => {
   })
 
   it('单条炸掉不抛异常，如实回报 error（一条脏 lead 不能停掉整批）', async () => {
-    mockDb()
+    mockDb({})
     ;(supabaseAdmin.from as ReturnType<typeof vi.fn>).mockImplementation(() => {
       throw new Error('db down')
     })
 
     const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
-    expect(res).toMatchObject({ contactId: null, skipped: 'error' })
+    expect(res).toMatchObject({ contactId: null, skipped: 'error', mailchimp: null })
+  })
+})
+
+// ── Mailchimp 出口 ──────────────────────────────────────────────────────────
+// 这些用例照着 Issue #1188 的 required regressions 逐条钉，每一条对应一种
+// 真的会在生产里出现的形态。
+
+/** Meta 表单里带一个 marketing consent 类型答案的 lead —— provable consent。 */
+const consented = () =>
+  lead({
+    answers: [
+      { name: 'full_name', value: 'Chris Brown' },
+      { name: 'email', value: 'chris@example.com' },
+      { name: 'phone_number', value: 'p:+6421363598' },
+      {
+        name: 'consent_to_marketing_emails',
+        value: 'Yes, I would like to receive tour updates',
+      },
+    ],
+  })
+
+describe('ingestMetaLead → Mailchimp 出口', () => {
+  it('R1 valid + consented + audience 已配 → 触发 subscribeMember，写 mailchimp_synced_at', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    subscribeMock.mockResolvedValueOnce({ status: 'subscribed' })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    expect(subscribeMock).toHaveBeenCalledTimes(1)
+    expect(subscribeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audienceId: 'dda97b7e61',
+        email: 'chris@example.com',
+        firstName: 'Chris',
+        lastName: 'Brown',
+        source: 'Meta Lead Form',
+      }),
+    )
+    expect(res.mailchimp).toEqual({ status: 'subscribed' })
+
+    // mailchimp_result 落进触点 metadata（不是新表）
+    const meta = touchpointUpserts[0].metadata as Record<string, unknown>
+    expect(meta.mailchimp_result).toEqual({ status: 'subscribed' })
+
+    // contacts.mailchimp_synced_at 被写上，且是 ISO 字符串
+    expect(contactUpdates).toHaveLength(1)
+    expect(typeof contactUpdates[0].mailchimp_synced_at).toBe('string')
+    expect(contactUpdates[0].mailchimp_synced_at).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+  })
+
+  it('R2 Member Exists → 触点上如实记录，contacts.mailchimp_synced_at 也写，绝不重订阅', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    subscribeMock.mockResolvedValueOnce({ status: 'already_member' })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    expect(subscribeMock).toHaveBeenCalledTimes(1)
+    // 只调用了一次 —— 不会为 already_member 再 PATCH 一次去重新订阅
+    expect(res.mailchimp).toEqual({ status: 'already_member' })
+    expect(contactUpdates).toHaveLength(1)
+  })
+
+  it('R3 provider 5xx → 主管道照常写入，synced_at 不写，触点里如实留 failed', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    subscribeMock.mockResolvedValueOnce({
+      status: 'failed',
+      reason: 'provider_5xx',
+      providerStatus: 503,
+    })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    // 主管道成了 —— 触点写了、contact 建了
+    expect(touchpointUpserts).toHaveLength(1)
+    expect(res.contactId).toBe('person-new')
+    // 但 synced_at 没被碰 —— failed 不算「同步成功」
+    expect(contactUpdates).toHaveLength(0)
+    // 失败原因如实进 metadata
+    const meta = touchpointUpserts[0].metadata as Record<string, unknown>
+    expect(meta.mailchimp_result).toMatchObject({
+      status: 'failed',
+      reason: 'provider_5xx',
+      providerStatus: 503,
+    })
+  })
+
+  it('R4 客户没配 audience → 触点照常写，零 provider 调用', async () => {
+    mockDb({ audienceId: null })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(touchpointUpserts).toHaveLength(1)
+    expect(contactUpdates).toHaveLength(0)
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'no_audience_config' })
+  })
+
+  it('R5 lead 没邮箱（只有电话） → 触点照常写，零 provider 调用', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+
+    await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: lead({
+        answers: [
+          { name: 'full_name', value: 'Chris Brown' },
+          { name: 'phone_number', value: '+6421363598' },
+          { name: 'consent', value: 'yes' },
+        ],
+      }),
+    })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    const meta = touchpointUpserts[0].metadata as Record<string, unknown>
+    expect(meta.mailchimp_result).toEqual({ status: 'skipped', reason: 'no_email' })
+  })
+
+  it('R7 没有 consent 类问答 → 零 provider 调用，reason=no_consent_evidence', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+
+    // lead() 默认的 answers 里没有 consent 字段
+    const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'no_consent_evidence' })
+    expect(contactUpdates).toHaveLength(0)
+  })
+
+  it('consent 问题在但答案是「No」→ 视为未同意，零 provider 调用', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+
+    await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: lead({
+        answers: [
+          { name: 'full_name', value: 'Chris Brown' },
+          { name: 'email', value: 'chris@example.com' },
+          { name: 'subscribe_to_newsletter', value: 'No' },
+        ],
+      }),
+    })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+  })
+
+  it('MAILCHIMP_API_KEY 未配置 → 零 provider 调用，reason=no_api_key', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    delete process.env.MAILCHIMP_API_KEY
+
+    await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    const meta = touchpointUpserts[0].metadata as Record<string, unknown>
+    expect(meta.mailchimp_result).toEqual({ status: 'skipped', reason: 'no_api_key' })
+  })
+
+  /**
+   * 隐私红线：Mailchimp 出口的观测栏**不能**回显邮箱、provider body 或 API key。
+   * 只允许 status + reason（+ 数字 providerStatus）。
+   */
+  it('触点 metadata 里的 mailchimp_result 不含邮箱或 provider body', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    subscribeMock.mockResolvedValueOnce({
+      status: 'failed',
+      reason: 'validation',
+      providerStatus: 400,
+    })
+
+    await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    const meta = touchpointUpserts[0].metadata as Record<string, unknown>
+    const mc = meta.mailchimp_result as Record<string, unknown>
+    const asString = JSON.stringify(mc)
+    expect(asString).not.toContain('@')
+    expect(asString).not.toContain('chris')
+    expect(asString).not.toContain('test-key')
+  })
+
+  it('subscribeMember 意外抛异常时不会拖挂主管道', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    subscribeMock.mockRejectedValueOnce(new Error('boom'))
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    expect(res.contactId).toBe('person-new')
+    expect(res.skipped).toBeNull()
+    expect(res.mailchimp).toEqual({ status: 'failed', reason: 'unexpected_exception' })
+    expect(contactUpdates).toHaveLength(0)
+  })
+
+  it('查客户配置本身失败 → 出口 skipped: client_config_read_failed，不拖挂主管道', async () => {
+    mockDb({ audienceId: null, clientReadError: 'timeout' })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'client_config_read_failed' })
+    expect(res.contactId).toBe('person-new')
   })
 })
