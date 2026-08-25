@@ -21,7 +21,7 @@
 
 ---
 
-## 团（Group Tour）管理工具 —— CTS 上传解析发布，代码已写完待合并
+## 团（Group Tour）管理工具 —— 已提交待开 PR 合并进 main
 
 **触发**：CTS 给了一份新团资料（`Golden China 12 days 16 Nov 2026.docx`），旧流程要人工把 Word 抄进 CTS 网站代码。已在 worktree `1159-auth-guard-patch-23ac3b` 建完"上传团资料 → AI 解析 → 人工审核确认 → 提交发布申请（开 Draft PR）"全链路，方案经子牙+魏征+板桥三路设计复审后落地。方案文档：`/Users/raydeng/.claude/plans/dreamy-sauteeing-beaver.md`（含完整 Reuse Statement 和复审记录）。
 
@@ -36,11 +36,22 @@
 - **heroImage 反复试错记录（供以后同类任务参考，别重蹈覆辙）**：先后试了 Muapi AI 生成三合一、真实照片直接裁剪拼接、OpenAI 纯生成、OpenAI 对真实照片 img2img 大片风格重绘，PM 全部打回（"很假"/"很丑"/"不符合旅游调性"）。最后**去查 CTS 网站上其他真实团（essentials/shanghai-surroundings 等）实际在用的 hero 图，发现调性统一是"一张干净的真实单张照片，不拼接不 AI 处理"**——换成一张真实长城照片（Unsplash，晴天蓝天绿树）后过审。**教训：调性类反馈别自己瞎猜着改版本，先去找同一个产品里已经被认可的参考物做基准。**
 - **PM 2026-08-24 显式 `go`，PR #139 已 merge 进 `bigbigraydeng-maker/chinatravel` main 分支**（squash merge + 删分支），`group_tours` 行状态已同步为 `published`。Render 走标准 `git push` 触发自动部署，通常几分钟内上线，具体以 `ctstours.co.nz/tours/china/discovery/golden-china` 实际能打开为准。
 
+- **已上线核实**：`https://www.ctstours.co.nz/tours/china/discovery/golden-china` 实测 HTTP 200、内容渲染正确（12 天、返程 11/27、NZD$4,999）。团页同时进了首页 Spotlight 和 `/campaigns/spotlight`。
+- **代码已 commit**（`8e868d29`，分支 `claude/priceless-shtern-596ba3`），36 个测试全绿。
+
+### 2026-08-25 追加：Best of China 售罄换期 + `/china-tours` 改版（CTS 网站，已上线）
+
+PM 两条指示，合并成 [PR #141](https://github.com/bigbigraydeng-maker/chinatravel/pull/141)（已 merge、已上线核实）：
+1. **Best of China 11/3 团期售罄 → 全站改卖 2027/3/11**：改了 23 个文件。除数据源外，团页横幅（原文案还在劝"选 11 月更便宜"）、两处 spotlight、印刷品 QR 海报页、campaign 组件、两篇长博客（整篇框架就是 11 月 vs 3 月比价）、**询价表单下拉（原本还能选已售罄的团）** 都得手工改。JSON-LD 保留 11 月 offer 但标 `SoldOut` 而不是删掉。
+2. **`/china-tours` 改版**：Flagship 四卡改成主推 Best of China / Golden China / 圣诞团；南岛（基督城直飞）圣诞团原本埋在自动生成的"全部团"网格第 7 位、卡片上完全没提"直飞基督城"这个唯一卖点，现在单拉一个专属区块放在 Flagship 下方。
+
+**⚠️ 顺带查出并修掉的既有数据错误**：两篇博客（含 JSON-LD 结构化数据）把 Best of China 的 3 月团期写成 **25 March**，而 `tours.ts` 写 **11 March**。PM 拍板确认是「**11 号出发、25 号回**」——即那两篇博客一直把**回程日期当出发日期**对外发布。已全站统一。**教训：改文案前先 grep 全站同一事实的所有副本，副本之间可能早就不一致了。**
+
 **还没做完**：
 1. **没有真实登录浏览器点过 ME 后台 UI**——需要 Ray 的账号密码/Google 登录，我不能替他输入凭据。建议 `npm run dev` 后手工走一遍：`/dashboard/clients/c0000000-0000-0000-0000-000000000000/tours`
-2. **团管理工具本身的代码还没 commit / 没开 PR**——都在 worktree 工作区里，等 Ray 看过再决定怎么合到 Magic Engine 的 main。CTS 网站那边 PR #139 是完全独立的真实交付，已经合并上线，不受本条影响
-3. **确认 Render 部署真的完成、页面真的能访问**——合并后自动部署通常几分钟，建议稍后访问 `https://www.ctstours.co.nz/tours/china/discovery/golden-china` 核实
-4. **CTS 自己网站仓库里那个 `/admin/tour-parser` 半成品原型没有清理**——不影响新工具，留着无害，后续单独顺手清
+2. **团管理工具代码还没开 PR 合进 Magic Engine main**——已 commit 在 `claude/priceless-shtern-596ba3`，等 Ray 决定怎么合。CTS 网站那三个 PR（#139/#140/#141）是独立的真实交付，都已合并上线，不受本条影响
+3. **CTS 自己网站仓库里那个 `/admin/tour-parser` 半成品原型没有清理**——不影响新工具，留着无害，后续单独顺手清
+4. **`price` 顶层字段与 `departurePricing` 的关系没有收口**——目前售罄换期要手工同步两个地方（这次就是手工改的 `$3,880`→`$4,080`）。下次再遇到售罄换期，值得考虑让 `price` 从 `departurePricing` 里自动取最早在售团期，避免漏改
 
 **关键文件**：`src/lib/group-tours/`、`src/app/api/clients/[id]/group-tours/`、`src/app/dashboard/clients/[id]/tours/`；改动过的既有文件见方案文档「关键文件清单」。
 
