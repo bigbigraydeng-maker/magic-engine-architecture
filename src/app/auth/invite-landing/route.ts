@@ -31,7 +31,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { getPublicOrigin } from '@/lib/auth/public-origin'
-import { resolveRedirectForSession } from '@/lib/auth/resolve-redirect'
+import { resolveRedirectForSession, INVITE_INVALID_REDIRECT } from '@/lib/auth/resolve-redirect'
 
 export const dynamic = 'force-dynamic'
 
@@ -130,6 +130,21 @@ export async function POST(request: NextRequest) {
   // memberships can't hijack the redirect.
   const expectedClientId = typeof clientId === 'string' && clientId ? clientId : undefined
   const destination = await resolveRedirectForSession(supabase, '/dashboard', expectedClientId)
+
+  if (destination === INVITE_INVALID_REDIRECT) {
+    // The token verified fine, but this email has no membership row for the
+    // invited client_id anymore (revoked, or the invite predates a schema
+    // change). Do NOT apply the pending session cookies — leaving the
+    // invitee unauthenticated is the fail-closed behaviour required by
+    // Build Control. Skipping the setAll means verifyOtp's server-side
+    // confirm side effects stay, but no browser cookie is minted, so no
+    // downstream middleware can decide to land them in another client.
+    console.warn(
+      '[auth/invite-landing] fail-closed: no membership for invited client_id',
+      { clientId: expectedClientId },
+    )
+    return NextResponse.redirect(failedUrl, 303)
+  }
 
   const response = NextResponse.redirect(`${origin}${destination}`, 303)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

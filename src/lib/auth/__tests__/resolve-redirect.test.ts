@@ -23,7 +23,7 @@ vi.mock('@/lib/auth/self-serve-routing', () => ({
   resolveSelfServeLanding: mocks.resolveSelfServeLanding,
 }))
 
-import { resolveRedirectForSession } from '../resolve-redirect'
+import { resolveRedirectForSession, INVITE_INVALID_REDIRECT } from '../resolve-redirect'
 
 function authClient(email: string | null) {
   return {
@@ -145,6 +145,72 @@ describe('resolveRedirectForSession', () => {
       .mockReturnValueOnce(accessRows([]))
       .mockReturnValueOnce(scanJobRow(null))
     const redirect = await resolveRedirectForSession(authClient('nobody@biz.com'), '/dashboard')
+    expect(redirect).toBe('/dashboard')
+  })
+
+  // ── Fail-closed regressions (Build Control PR #1185 wrong-customer patch) ──
+
+  it('FAILS CLOSED when the invite targets a client this email no longer holds, EVEN when it holds another client', async () => {
+    // Wrong-customer break: invitee has membership only for client-a, but
+    // the invite was for client-b (revoked mid-flight, or an older invite).
+    // Must NOT return /dashboard (which middleware could redirect to
+    // client-a) — must return the invite_invalid sentinel so the caller
+    // refuses to persist the session.
+    mocks.from.mockReturnValueOnce(accessRows([
+      { client_id: 'client-a', access_type: 'dashboard' },
+    ]))
+    const redirect = await resolveRedirectForSession(
+      authClient('staff@biz.com'),
+      '/dashboard',
+      'client-b',
+    )
+    expect(redirect).toBe(INVITE_INVALID_REDIRECT)
+    // Fail-closed must not silently mint a self_serve bonus either.
+    expect(mocks.grantSignupBonus).not.toHaveBeenCalled()
+  })
+
+  it('FAILS CLOSED when the invite targets a client and this email holds NO memberships at all', async () => {
+    // Row deleted between "invite sent" and "invite clicked". No fallback
+    // to the safePath, no scan-job lookup, no /dashboard drift.
+    mocks.from.mockReturnValueOnce(accessRows([]))
+    const redirect = await resolveRedirectForSession(
+      authClient('staff@biz.com'),
+      '/dashboard',
+      'client-b',
+    )
+    expect(redirect).toBe(INVITE_INVALID_REDIRECT)
+  })
+
+  it('still returns the exact target client when the email DOES hold that membership', async () => {
+    // Valid invite path stays green — this is the guardrail against
+    // regressing the happy path with the fail-closed check.
+    mocks.from.mockReturnValueOnce(accessRows([
+      { client_id: 'client-a', access_type: 'dashboard' },
+      { client_id: 'client-b', access_type: 'dashboard' },
+    ]))
+    const redirect = await resolveRedirectForSession(
+      authClient('staff@biz.com'),
+      '/dashboard',
+      'client-b',
+    )
+    expect(redirect).toBe('/dashboard/clients/client-b')
+  })
+
+  it('does NOT fail closed for an ordinary login (no expectedClientId) with the same shape', async () => {
+    // Same accessRows as the first fail-closed test, but no expectedClientId
+    // — this is a plain magic-link/OTP flow, must keep its existing
+    // behaviour (dashboard-tier row for the single client this email holds).
+    mocks.from
+      .mockReturnValueOnce(accessRows([
+        { client_id: 'client-a', access_type: 'dashboard' },
+      ]))
+      .mockReturnValueOnce(scanJobRow(null))
+    const redirect = await resolveRedirectForSession(
+      authClient('staff@biz.com'),
+      '/dashboard',
+    )
+    expect(redirect).not.toBe(INVITE_INVALID_REDIRECT)
+    // No expectedClientId → the pre-existing generic dashboard fallback stays.
     expect(redirect).toBe('/dashboard')
   })
 })

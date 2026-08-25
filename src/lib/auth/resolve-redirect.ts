@@ -4,6 +4,15 @@ import { grantSignupBonus } from '@/lib/mtc/grant-signup-bonus'
 import { resolveSelfServeLanding } from '@/lib/auth/self-serve-routing'
 
 /**
+ * Sentinel returned when an invite specifies expectedClientId but the
+ * authenticated email has no matching membership row for it. Callers MUST
+ * detect this and refuse to complete the redirect — otherwise middleware
+ * downstream would land the invitee inside whichever other client this
+ * email happens to belong to.
+ */
+export const INVITE_INVALID_REDIRECT = '__INVITE_INVALID__' as const
+
+/**
  * Minimal shape of a Supabase auth client we depend on. Both the SSR server
  * client (cookie-backed) and any future client satisfy this — we only call
  * getUser().
@@ -59,6 +68,16 @@ export async function resolveRedirectForSession(
   const candidateRows = expectedClientId
     ? accessRows?.filter(row => row.client_id === expectedClientId)
     : accessRows
+
+  // Fail closed for invites whose target membership is missing. The token
+  // may have verified fine, but between "invite sent" and "invite clicked"
+  // the client_portal_users row can be revoked (or the invite was for a
+  // different client_id than any row this email holds). Falling through to
+  // `/dashboard` here would let /dashboard middleware pick some OTHER
+  // client this email happens to belong to — a wrong-customer break.
+  if (expectedClientId && (!candidateRows || candidateRows.length === 0)) {
+    return INVITE_INVALID_REDIRECT
+  }
 
   const selfServeUser = candidateRows?.find(row => row.access_type === 'self_serve')
   const portalUser = candidateRows?.find(row =>
