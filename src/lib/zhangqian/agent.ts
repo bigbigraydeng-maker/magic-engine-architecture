@@ -32,7 +32,7 @@ import type { MemoryContext } from '@/lib/memory/types'
 import type { DiscoveryReport } from './types'
 import { ZHANGQIAN_SYSTEM_PROMPT, buildUserPrompt } from './prompts'
 import { validateDiscoveryReport } from './validators'
-import { ensureSerpCoverage } from './serp-coverage'
+import { ensureSerpCoverage, SERP_COVERAGE_WORST_CASE_MS } from './serp-coverage'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -54,10 +54,14 @@ import { ensureSerpCoverage } from './serp-coverage'
 //   Total per client        ≈ $0.57 (one-time onboarding cost)
 const MAX_TOOL_CALLS = 18
 const MAX_COST_USD = 1.50
-// 24K covers full discovery JSON (business + 15 keywords + competitors + AI
-// questions + diagnosis + actions, including long-form Chinese descriptions).
-// 8096 was hitting truncation at ~14K chars, leaving JSON unparseable mid-string.
-const MAX_OUTPUT_TOKENS = 24_000
+// 输出上限必须 = 超时预算写得完的量(见下面 EXPECTED_REPORT_TOKENS)。
+// 2026-08-26 Codex 复审 #1186 P2:原值 24K 比预算能完成的量大一倍,模型一旦写出
+// 15K-24K 的报告就会先撞超时;而非流式调用超时后**一个字都拿不到**,连截断的
+// 半份 JSON 都没有。收到 12K 之后,超长报告会以 stop_reason=max_tokens 结束,
+// 走既有的"截断"分支留下部分文本和明确的 validation_error —— 失败得便宜且看得见。
+// 实测历史报告 6.4K-10.6K tokens,12K 仍有约 13% 余量。
+// (历史注记:8096 会在 ~14K 字符处截断,JSON 从中间断掉,所以不能再往下调。)
+const MAX_OUTPUT_TOKENS = 12_000
 const FETCH_URL_TIMEOUT_MS = 15_000
 const LOCAL_REVIEWS_TIMEOUT_MS = 45_000
 // ── Call budget: derived from output length, NOT a hand-picked round number ──
@@ -73,9 +77,9 @@ const LOCAL_REVIEWS_TIMEOUT_MS = 45_000
 // 所以超时**必须**按预期输出反推。改这里之前先看 docs/PITFALLS.md。
 const OUTPUT_TOKENS_PER_SEC = 45          // 实测下限 55 打 0.8 折,吸收抖动
 const CALL_OVERHEAD_MS = 20_000           // 排队 + 首 token 延迟 + 网络往返
-// 报告实测 6.4K-10.6K tokens。按 12K 给预算(比历史最大值多 13%);
-// MAX_OUTPUT_TOKENS 仍保持 24K —— 那是防截断的天花板,不是预期值。
-const EXPECTED_REPORT_TOKENS = 12_000
+// 预算按"模型最多被允许写多少"来算,跟 MAX_OUTPUT_TOKENS 是同一个数 ——
+// 两者一旦脱钩,就会出现"允许写的比写得完的多"这种必然超时的组合。
+const EXPECTED_REPORT_TOKENS = MAX_OUTPUT_TOKENS
 // ≈ 287 s。每一轮都用同一个预算:模型可能在任意一轮 end_turn 直接交报告,
 // 所以"工具轮"和"写报告轮"无法预先区分,给两个不同的数字必然有一个是错的。
 const CLAUDE_CALL_TIMEOUT_MS =
@@ -83,10 +87,16 @@ const CLAUDE_CALL_TIMEOUT_MS =
 // 写一份报告实测最少要 109.5 s。低于这个数就别开工了 —— 旧代码的 90 s 安全网
 // 就是这么变成摆设的。循环剩余时间不足这个数时,直接退出去做强制收尾。
 const MIN_REPORT_MS = 140_000
-// 总墙钟 6 min 20 s。最坏路径 = 用满 GLOBAL(380 s)+ 强制收尾兜底(140 s)
-// = 520 s,仍落在 public-scan 的 9 min(540 s)硬顶之内(见 api/public-scan/start)。
-// 每一次调用的超时都会再被"剩余时间"夹一次,所以没有单次调用能捅穿 deadline。
-const GLOBAL_TIMEOUT_MS = 380_000
+// 总墙钟 5 min 30 s。2026-08-26 Codex 复审 #1186 P1 指出上一版算漏了两段
+// 非 Claude 时间,原来写的 520 s 最坏值不成立。重算(全部对 public-scan 的
+// 540 s 硬顶取齐,见 api/public-scan/start):
+//   ① 循环闸要求剩余 ≥ MIN_REPORT_MS,所以最后一轮最晚在 t=190 s 起跑;
+//   ② 该轮被 deadline 夹住,最晚 t=330 s 结束;
+//   ③ 它的客户端工具并行跑,最慢一个是 LOCAL_REVIEWS_TIMEOUT_MS(45 s)→ t≤375 s;
+//   ④ 下一次闸判定剩余不足,转强制收尾,兜底 140 s → t≤515 s;
+//   ⑤ 后处理(SERP 补跑)按剩余时间夹,此时已无剩余 → 跳过。
+// 最坏 515 s,留 25 s 余量。改这里必须重算这五步。
+const GLOBAL_TIMEOUT_MS = 330_000
 
 // Sonnet 4.5 pricing per million tokens (must match anthropic/client.ts)
 const PRICE_INPUT_PER_M = 3.0
@@ -591,7 +601,7 @@ export async function runZhangqian(
         apifyCalls,
         truncated,
         startedAt,
-      }), onProgress)
+      }), onProgress, deadline)
     }
 
     if (response.stop_reason !== 'tool_use') {
@@ -612,7 +622,7 @@ export async function runZhangqian(
         apifyCalls,
         truncated,
         startedAt,
-      }), onProgress)
+      }), onProgress, deadline)
     }
 
     // ── Resolve client-side tool calls (fetch_url) ─────────────────────────
@@ -730,7 +740,7 @@ export async function runZhangqian(
     apifyCalls,
     truncated,
     startedAt,
-  }), onProgress)
+  }), onProgress, deadline)
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
@@ -801,8 +811,17 @@ function finalizeReport(args: FinalizeArgs): RunZhangqianResult {
 async function applyPostProcessing(
   result: RunZhangqianResult,
   onProgress: ProgressFn,
+  deadline: number,
 ): Promise<RunZhangqianResult> {
   if (result.validation_error) return result
+
+  // SERP 补跑是串行的,最坏能再吃 SERP_COVERAGE_WORST_CASE_MS(2 × 60 s)。
+  // 报告已经拿到手了,补几条 SERP 不值得为它捅穿 public-scan 的 9 分钟硬顶 ——
+  // 时间不够就跳过,报告照常返回。(Codex 复审 #1186 P1)
+  if (deadline - Date.now() < SERP_COVERAGE_WORST_CASE_MS) {
+    console.warn('[zhangqian/postProcess] 剩余时间不足,跳过 SERP 覆盖率补跑')
+    return result
+  }
 
   await onProgress('检查 SERP 覆盖率…')
   const { report: coveredReport, result: cov } = await ensureSerpCoverage(result.report)

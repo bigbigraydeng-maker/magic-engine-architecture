@@ -97,8 +97,9 @@ describe('张骞调用预算与降级', () => {
       // 重试是这次事故的放大器:一次超时被放大成三次(实测 450 s)
       expect(call.opts.maxRetries).toBe(0)
       expect(call.opts.timeout).toBeGreaterThan(0)
-      // 全局墙钟 380 s + 收尾兜底 140 s,任何单次调用都不该超过这个量级
-      expect(call.opts.timeout).toBeLessThanOrEqual(380_000)
+      // 单次调用永远不该超过全局墙钟(330 s)。这条同时锁住 GLOBAL_TIMEOUT_MS:
+      // 谁把它调大而没重算 public-scan 9 分钟硬顶的五步路径,这里就会红。
+      expect(call.opts.timeout).toBeLessThanOrEqual(330_000)
     }
   })
 

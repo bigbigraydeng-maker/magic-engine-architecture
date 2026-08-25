@@ -55,7 +55,8 @@ export async function GET(
     }
 
     if (isStaleRunningJob(job)) {
-      const error = 'Discovery timed out after 6 minutes. Please retry.'
+      // 文案由同一个阈值派生 —— 写死的数字会跟阈值脱钩(Codex 复审 #1186 P2)。
+      const error = `Discovery timed out after ${Math.round(STALE_JOB_TIMEOUT_MS / 60_000)} minutes. Please retry.`
       await failJob(supabaseAdmin, job.id, error)
       return NextResponse.json({
         success: true,
