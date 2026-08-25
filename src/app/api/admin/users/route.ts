@@ -10,6 +10,7 @@ import { supabaseAdmin } from '@/lib/supabase'
 import { guardAdmin } from '@/lib/auth/require-admin'
 import { getUserPermissions } from '@/lib/auth/whitelist'
 import { ACCESS_TYPE_VALUES, type AccessType } from '@/lib/auth/access-types'
+import { sendPortalInvite } from '@/lib/email/portal-invite'
 
 // Reuse the canonical list of access_type values + 'all' filter sentinel
 // used by the FDE user-management UI.
@@ -78,10 +79,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'Super-admin emails do not need portal/FDE rows.' }, { status: 400 })
   }
 
-  // Verify client exists
+  // Verify client exists (and grab display name for the invite email)
   const { data: client } = await supabaseAdmin
     .from('clients')
-    .select('id')
+    .select('id, name')
     .eq('id', client_id)
     .maybeSingle()
 
@@ -108,5 +109,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
-  return NextResponse.json({ user: data }, { status: 201 })
+  const appUrl = (process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '')
+  const invite = await sendPortalInvite({
+    email,
+    clientName: client.name ?? '',
+    displayName: display_name,
+    accessType: access_type,
+    appUrl,
+  }).catch((err: unknown) => ({
+    sent: false,
+    reason: err instanceof Error ? err.message : String(err),
+  }))
+  if (!invite.sent) {
+    console.warn('[api/admin/users] invite email not sent:', invite.reason)
+  }
+
+  return NextResponse.json({ user: data, invite }, { status: 201 })
 }
