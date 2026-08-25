@@ -80,9 +80,6 @@ const EXPECTED_REPORT_TOKENS = 12_000
 // 所以"工具轮"和"写报告轮"无法预先区分,给两个不同的数字必然有一个是错的。
 const CLAUDE_CALL_TIMEOUT_MS =
   Math.ceil(EXPECTED_REPORT_TOKENS / OUTPUT_TOKENS_PER_SEC) * 1000 + CALL_OVERHEAD_MS
-// 强制收尾那一次调用用同一个预算。旧值 90 s 比实测最快的 109.5 s 还短 ——
-// 也就是说这条"安全网"以前永远兜不住,发现于同一次取证。
-const CLAUDE_FINAL_TIMEOUT_MS = CLAUDE_CALL_TIMEOUT_MS
 // 写一份报告实测最少要 109.5 s。低于这个数就别开工了 —— 旧代码的 90 s 安全网
 // 就是这么变成摆设的。循环剩余时间不足这个数时,直接退出去做强制收尾。
 const MIN_REPORT_MS = 140_000
@@ -691,8 +688,10 @@ export async function runZhangqian(
   // 收尾这一次给"至少够写完一份报告"的时间:即使 deadline 已经用光,也要给满
   // MIN_REPORT_MS —— 否则这条安全网又会变成旧代码里那个永远兜不住的 90 s。
   // 最坏总时长因此是 GLOBAL_TIMEOUT_MS + MIN_REPORT_MS = 520 s,仍在 9 min 硬顶内。
+  // 用的就是每轮那个预算(旧代码在这里另设 90 s,比实测最快的 109.5 s 还短 ——
+  // 这条"安全网"因此从来没兜住过)。
   const finalTimeoutMs = Math.min(
-    CLAUDE_FINAL_TIMEOUT_MS,
+    CLAUDE_CALL_TIMEOUT_MS,
     Math.max(MIN_REPORT_MS, deadline - Date.now()),
   )
   let finalResponse: Anthropic.Messages.Message

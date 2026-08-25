@@ -132,19 +132,13 @@ export async function completeJob(
 
 // ─── failJob ─────────────────────────────────────────────────────────────────
 
-export interface FailJobSpend {
-  /** 跑挂之前已经真金白银烧掉的钱。 */
-  costUsd: number
-  /** 跑挂之前已经发生的工具调用次数。 */
-  toolCalls: number
-}
-
 export async function failJob(
   supabase: SupabaseClient,
   jobId: string,
   errorMessage: string,
   rawOutput?: string,
-  spend?: FailJobSpend,
+  /** 跑挂之前已经烧掉的钱 + 已发生的工具调用次数。 */
+  spend?: { costUsd: number; toolCalls: number },
 ): Promise<void> {
   const patch: Record<string, unknown> = {
     status: 'failed',
