@@ -20,6 +20,7 @@ import { sendPortalInvite } from '@/lib/email/portal-invite'
 
 export interface SendInviteArgs {
   email: string
+  clientId: string
   clientName: string
   displayName: string
 }
@@ -46,6 +47,7 @@ export async function sendPortalInviteForClient(args: SendInviteArgs): Promise<S
     const landing = new URL(`${appUrl}/auth/invite-landing`)
     landing.searchParams.set('token_hash', linkResult.hashedToken)
     landing.searchParams.set('type', linkResult.type)
+    landing.searchParams.set('client_id', args.clientId)
 
     return await sendPortalInvite({
       email: args.email,

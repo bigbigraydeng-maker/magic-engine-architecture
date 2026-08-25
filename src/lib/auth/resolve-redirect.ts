@@ -30,6 +30,7 @@ interface AuthCapableClient {
 export async function resolveRedirectForSession(
   supabase: AuthCapableClient,
   safePath: string,
+  expectedClientId?: string,
 ): Promise<string> {
   const { data: { user } } = await supabase.auth.getUser()
 
@@ -51,8 +52,16 @@ export async function resolveRedirectForSession(
     .select('client_id, access_type')
     .eq('email', email)
 
-  const selfServeUser = accessRows?.find(row => row.access_type === 'self_serve')
-  const portalUser = accessRows?.find(row =>
+  // A specific-client invite (e.g. /auth/invite-landing) must only land the
+  // invitee in the client it actually invited them to — the same email can
+  // hold rows for several clients ((email, client_id) is not unique per
+  // email), so without this an invite to client B could land in client A.
+  const candidateRows = expectedClientId
+    ? accessRows?.filter(row => row.client_id === expectedClientId)
+    : accessRows
+
+  const selfServeUser = candidateRows?.find(row => row.access_type === 'self_serve')
+  const portalUser = candidateRows?.find(row =>
     row.access_type === 'portal' || row.access_type === 'both'
   )
 

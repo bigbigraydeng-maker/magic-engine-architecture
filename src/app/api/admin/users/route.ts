@@ -121,6 +121,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   const invite = await sendPortalInviteForClient({
     email,
+    clientId: client_id,
     clientName: client.name ?? '',
     displayName: display_name,
   })
