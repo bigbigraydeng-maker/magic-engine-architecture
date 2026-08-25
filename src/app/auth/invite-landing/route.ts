@@ -30,6 +30,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { randomUUID, timingSafeEqual } from 'crypto'
 import { getPublicOrigin } from '@/lib/auth/public-origin'
 import { resolveRedirectForSession, INVITE_INVALID_REDIRECT } from '@/lib/auth/resolve-redirect'
 
@@ -37,13 +38,30 @@ export const dynamic = 'force-dynamic'
 
 const ALLOWED_TYPES = new Set(['invite', 'magiclink'])
 
+// Short-lived, one-time same-site nonce cookie. Prevents a login-CSRF where
+// an attacker's cross-origin form POSTs their own invite token into a
+// victim's browser and mints a session under the attacker's account. The
+// cookie is scoped to /auth/invite-landing so no other route can read it,
+// SameSite=Strict so it never rides a cross-site POST, HttpOnly so page JS
+// can't leak it, and one-time — it is deleted on every POST response,
+// success or failure.
+const NONCE_COOKIE = 'me-invite-nonce'
+const NONCE_MAX_AGE_SECONDS = 600 // 10 min; the confirmation is a single click
+
+function timingSafeEqualStrings(a: string, b: string): boolean {
+  const bufA = Buffer.from(a)
+  const bufB = Buffer.from(b)
+  if (bufA.length !== bufB.length) return false
+  return timingSafeEqual(bufA, bufB)
+}
+
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (ch) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] as string
   ))
 }
 
-function confirmPage(tokenHash: string, type: string, clientId: string): string {
+function confirmPage(tokenHash: string, type: string, clientId: string, nonce: string): string {
   return `<!doctype html>
 <html lang="zh"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>确认邀请</title>
@@ -59,6 +77,7 @@ button{margin-top:16px;padding:12px 24px;border:none;border-radius:8px;backgroun
 <input type="hidden" name="token_hash" value="${escapeHtml(tokenHash)}"/>
 <input type="hidden" name="type" value="${escapeHtml(type)}"/>
 <input type="hidden" name="client_id" value="${escapeHtml(clientId)}"/>
+<input type="hidden" name="nonce" value="${escapeHtml(nonce)}"/>
 <button type="submit">进入工作区</button>
 </form>
 </div></body></html>`
@@ -77,9 +96,26 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(failedUrl)
   }
 
-  return new NextResponse(confirmPage(tokenHash, type, clientId), {
+  // Mint a fresh nonce and bind it to the response — the POST handler will
+  // require both the form-field copy and the cookie copy to match. GET does
+  // NOT verifyOtp: mail security scanners can prefetch this URL, but all
+  // they get is an HTML page and a nonce cookie THEY cannot forward to the
+  // POST handler across an origin boundary.
+  const nonce = randomUUID()
+  const response = new NextResponse(confirmPage(tokenHash, type, clientId, nonce), {
     headers: { 'content-type': 'text/html; charset=utf-8' },
   })
+  response.cookies.set(NONCE_COOKIE, nonce, {
+    httpOnly: true,
+    sameSite: 'strict',
+    // In dev over http the browser drops Secure attribute; in prod (https)
+    // it enforces it. Derive from the resolved public origin so localhost
+    // testing still works while production keeps the strict cookie.
+    secure: origin.startsWith('https://'),
+    path: '/auth/invite-landing',
+    maxAge: NONCE_MAX_AGE_SECONDS,
+  })
+  return response
 }
 
 export async function POST(request: NextRequest) {
@@ -88,14 +124,47 @@ export async function POST(request: NextRequest) {
   const tokenHash = form.get('token_hash')
   const type = form.get('type')
   const clientId = form.get('client_id')
+  const submittedNonce = form.get('nonce')
 
   const failedUrl = `${origin}/portal/login?error=invite_invalid`
 
-  if (typeof tokenHash !== 'string' || !tokenHash || typeof type !== 'string' || !ALLOWED_TYPES.has(type)) {
-    return NextResponse.redirect(failedUrl, 303)
+  // Build a fail-closed response that also burns the nonce cookie so a
+  // second attempt cannot replay it. Always call this on any reject path.
+  const failResponse = () => {
+    const r = NextResponse.redirect(failedUrl, 303)
+    r.cookies.delete({ name: NONCE_COOKIE, path: '/auth/invite-landing' })
+    return r
   }
 
+  // ── CSRF gate 1: same-origin. Modern browsers always send Origin on
+  // POST; a missing Origin is unsafe (older client / stripped by proxy)
+  // and rejected. Canonical origin comes from APP_URL via getPublicOrigin,
+  // NOT from any request header, so a spoofed Host can't win.
+  const canonical = origin.replace(/\/$/, '')
+  const requestOrigin = request.headers.get('origin')
+  if (!requestOrigin || requestOrigin.replace(/\/$/, '') !== canonical) {
+    return failResponse()
+  }
+
+  // ── CSRF gate 2: one-time same-site nonce issued by the GET above.
+  // Compared in constant time to defeat timing side-channels.
   const cookieStore = cookies()
+  const cookieNonce = cookieStore.get(NONCE_COOKIE)?.value
+  if (
+    typeof submittedNonce !== 'string' || !submittedNonce ||
+    !cookieNonce ||
+    !timingSafeEqualStrings(submittedNonce, cookieNonce)
+  ) {
+    return failResponse()
+  }
+
+  // Shape validation happens AFTER CSRF gates so an attacker probing shape
+  // errors can't distinguish "your CSRF failed" from "your payload was
+  // malformed" — both fail closed identically.
+  if (typeof tokenHash !== 'string' || !tokenHash || typeof type !== 'string' || !ALLOWED_TYPES.has(type)) {
+    return failResponse()
+  }
+
   const pendingCookies: Array<{ name: string; value: string; options?: Record<string, unknown> }> = []
 
   const supabase = createServerClient(
@@ -120,7 +189,7 @@ export async function POST(request: NextRequest) {
 
   if (error) {
     console.error('[auth/invite-landing] verifyOtp:', error.message)
-    return NextResponse.redirect(failedUrl, 303)
+    return failResponse()
   }
 
   // Reuse the exact same landing decision the OTP + Google flows use — so
@@ -143,11 +212,13 @@ export async function POST(request: NextRequest) {
       '[auth/invite-landing] fail-closed: no membership for invited client_id',
       { clientId: expectedClientId },
     )
-    return NextResponse.redirect(failedUrl, 303)
+    return failResponse()
   }
 
   const response = NextResponse.redirect(`${origin}${destination}`, 303)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   pendingCookies.forEach(({ name, value, options }) => response.cookies.set(name, value, options as any))
+  // Burn the nonce on success too — one confirmation click, one session.
+  response.cookies.delete({ name: NONCE_COOKIE, path: '/auth/invite-landing' })
   return response
 }
