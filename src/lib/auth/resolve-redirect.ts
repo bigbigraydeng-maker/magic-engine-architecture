@@ -64,6 +64,9 @@ export async function resolveRedirectForSession(
   const portalUser = candidateRows?.find(row =>
     row.access_type === 'portal' || row.access_type === 'both'
   )
+  const dashboardUser = candidateRows?.find(row =>
+    row.access_type === 'dashboard' || row.access_type === 'fde' || row.access_type === 'client'
+  )
 
   if (selfServeUser?.client_id) {
     // Grant 500 MTC welcome bonus on first verification for self_serve clients.
@@ -74,6 +77,14 @@ export async function resolveRedirectForSession(
 
   if (portalUser?.client_id) {
     return `/portal/${portalUser.client_id}`
+  }
+
+  // A dashboard/fde/client invite must land in the invited client's own
+  // dashboard — otherwise middleware falls back to the unsorted first row
+  // in client_portal_users, which can be a *different* client when the same
+  // email holds access to more than one.
+  if (dashboardUser?.client_id) {
+    return `/dashboard/clients/${dashboardUser.client_id}`
   }
 
   // Honour explicit /prospect next param (magic link from /discover)

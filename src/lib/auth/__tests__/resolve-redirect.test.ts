@@ -105,6 +105,19 @@ describe('resolveRedirectForSession', () => {
     expect(mocks.grantSignupBonus).not.toHaveBeenCalled()
   })
 
+  it('routes a dashboard-tier invite to the invited client, not the first row', async () => {
+    mocks.from.mockReturnValueOnce(accessRows([
+      { client_id: 'client-a', access_type: 'dashboard' },
+      { client_id: 'client-b', access_type: 'fde' },
+    ]))
+    const redirect = await resolveRedirectForSession(
+      authClient('staff@biz.com'),
+      '/dashboard',
+      'client-b',
+    )
+    expect(redirect).toBe('/dashboard/clients/client-b')
+  })
+
   it('routes a prospect (scan job, no access) to /prospect', async () => {
     mocks.from
       .mockReturnValueOnce(accessRows([]))
