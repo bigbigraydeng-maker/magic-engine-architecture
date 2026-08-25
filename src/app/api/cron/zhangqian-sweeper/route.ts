@@ -16,7 +16,11 @@ import { startCronRun } from '@/lib/cron/run-logger'
 
 // Match the status route's stale threshold so the UI-driven and cron-driven
 // timeouts agree. If you change one, change the other.
-const STALE_JOB_TIMEOUT_MS = 6 * 60 * 1000
+// ⚠️ 必须 > 张骞的最坏运行时长(GLOBAL_TIMEOUT_MS 380 s + 收尾 MIN_REPORT_MS 140 s
+// = 520 s),否则会把还在正常干活的任务判成卡死。2026-08-25 之前这里是 6 min,
+// 比当时的最坏时长还短 —— 只因为 sweeper 每小时才跑一次才没真出事。
+// 改这个数之前先看 src/lib/zhangqian/agent.ts 的 call budget 段。
+const STALE_JOB_TIMEOUT_MS = 12 * 60 * 1000
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   const authHeader = req.headers.get('authorization')

@@ -32,7 +32,7 @@ import type { MemoryContext } from '@/lib/memory/types'
 import type { DiscoveryReport } from './types'
 import { ZHANGQIAN_SYSTEM_PROMPT, buildUserPrompt } from './prompts'
 import { validateDiscoveryReport } from './validators'
-import { ensureSerpCoverage } from './serp-coverage'
+import { ensureSerpCoverage, SERP_COVERAGE_WORST_CASE_MS } from './serp-coverage'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -54,32 +54,95 @@ import { ensureSerpCoverage } from './serp-coverage'
 //   Total per client        ≈ $0.57 (one-time onboarding cost)
 const MAX_TOOL_CALLS = 18
 const MAX_COST_USD = 1.50
-// 24K covers full discovery JSON (business + 15 keywords + competitors + AI
-// questions + diagnosis + actions, including long-form Chinese descriptions).
-// 8096 was hitting truncation at ~14K chars, leaving JSON unparseable mid-string.
-const MAX_OUTPUT_TOKENS = 24_000
+// 输出上限必须 = 超时预算写得完的量(见下面 EXPECTED_REPORT_TOKENS)。
+// 2026-08-26 Codex 复审 #1186 P2:原值 24K 比预算能完成的量大一倍,模型一旦写出
+// 15K-24K 的报告就会先撞超时;而非流式调用超时后**一个字都拿不到**,连截断的
+// 半份 JSON 都没有。收到 12K 之后,超长报告会以 stop_reason=max_tokens 结束,
+// 走既有的"截断"分支留下部分文本和明确的 validation_error —— 失败得便宜且看得见。
+// 实测历史报告 6.4K-10.6K tokens,12K 仍有约 13% 余量。
+// (历史注记:8096 会在 ~14K 字符处截断,JSON 从中间断掉,所以不能再往下调。)
+const MAX_OUTPUT_TOKENS = 12_000
 const FETCH_URL_TIMEOUT_MS = 15_000
 const LOCAL_REVIEWS_TIMEOUT_MS = 45_000
-// Per-turn Anthropic call cap for tool-use iterations. Anthropic SDK default
-// is 10 min, which can blow past our global wall-clock when a single tool turn
-// stalls server-side. 150 s covers web_search turns where Anthropic searches
-// multiple queries server-side; 90 s was too tight and caused spurious failures.
-const CLAUDE_CALL_TIMEOUT_MS = 150_000
-// Separate timeout for the final synthesis call (no tools, pure JSON output).
-// Without a diagnosis block the output is much smaller (~8-12 K), so 90 s is
-// generous and keeps total agent runtime well under the 6-min watchdog.
-const CLAUDE_FINAL_TIMEOUT_MS = 90_000
-// Hard wall-clock cap: 5 min wall-clock for the loop so the full round-trip
-// (final Claude call + overhead) lands well under the 9-min Render hard-timeout.
-// Buffer is 30 s — just enough to detect the deadline before starting another
-// tool turn; the final synthesis already has its own CLAUDE_FINAL_TIMEOUT_MS.
-const GLOBAL_TIMEOUT_MS = 300_000
+// ── Call budget: derived from output length, NOT a hand-picked round number ──
+//
+// 2026-08-25 取证:旧的 150 s 上限杀掉了 3 次 discovery(见 issue 描述)。
+// Cloudflare AI Gateway 日志(2026-07-01~08-25,26 次长输出采样)显示
+// claude-sonnet-4-6 的输出吞吐稳定在 55-62 tokens/s,耗时几乎是输出长度的线性
+// 函数。而"写最终报告"这一步实测:
+//     shopfive  6,418 tokens → 109.5 s
+//     parkhomes 7,574 tokens → 127.4 s
+//     romanhu   6,899 tokens → 129.0 s
+// 三次成功里最险的一次只剩 21 s 余量;报告一旦超过约 8,800 tokens 就必然超时。
+// 所以超时**必须**按预期输出反推。改这里之前先看 docs/PITFALLS.md。
+const OUTPUT_TOKENS_PER_SEC = 45          // 实测下限 55 打 0.8 折,吸收抖动
+const CALL_OVERHEAD_MS = 20_000           // 排队 + 首 token 延迟 + 网络往返
+// 预算按"模型最多被允许写多少"来算,跟 MAX_OUTPUT_TOKENS 是同一个数 ——
+// 两者一旦脱钩,就会出现"允许写的比写得完的多"这种必然超时的组合。
+const EXPECTED_REPORT_TOKENS = MAX_OUTPUT_TOKENS
+// ≈ 287 s。每一轮都用同一个预算:模型可能在任意一轮 end_turn 直接交报告,
+// 所以"工具轮"和"写报告轮"无法预先区分,给两个不同的数字必然有一个是错的。
+const CLAUDE_CALL_TIMEOUT_MS =
+  Math.ceil(EXPECTED_REPORT_TOKENS / OUTPUT_TOKENS_PER_SEC) * 1000 + CALL_OVERHEAD_MS
+// 一份还算有用的报告的下限。低于这个数不如不写。
+const MIN_REPORT_TOKENS = 4_000
+
+/**
+ * 这段时间按保守吞吐写得完多少 token。
+ *
+ * **超时和 max_tokens 必须成对推导**:只夹超时不夹输出上限,等于允许模型写一份
+ * 注定写不完的报告,而非流式调用超时后一个字都拿不到。降级收尾只拿得到
+ * MIN_REPORT_MS(140 s)时尤其致命 —— 历史样本上限 10.6K tokens 光写就要 180 s,
+ * 于是"救场"的那一步会再次超时,把已采集的材料原样丢掉,正是本 PR 要修的那个 bug
+ * 在兜底路径上复活。(Codex 复审 #1186 P1)
+ */
+function tokensThatFitIn(ms: number): number {
+  const usable = Math.max(0, ms - CALL_OVERHEAD_MS)
+  const fits = Math.floor((usable / 1000) * OUTPUT_TOKENS_PER_SEC)
+  return Math.max(MIN_REPORT_TOKENS, Math.min(MAX_OUTPUT_TOKENS, fits))
+}
+// 写一份报告实测最少要 109.5 s。低于这个数就别开工了 —— 旧代码的 90 s 安全网
+// 就是这么变成摆设的。循环剩余时间不足这个数时,直接退出去做强制收尾。
+const MIN_REPORT_MS = 140_000
+// 总墙钟 5 min 30 s。2026-08-26 Codex 复审 #1186 P1 指出上一版算漏了两段
+// 非 Claude 时间,原来写的 520 s 最坏值不成立。重算(全部对 public-scan 的
+// 540 s 硬顶取齐,见 api/public-scan/start):
+//   ① 循环闸要求剩余 ≥ MIN_REPORT_MS,所以最后一轮最晚在 t=190 s 起跑;
+//   ② 该轮被 deadline 夹住,最晚 t=330 s 结束;
+//   ③ 它的客户端工具并行跑,最慢一个是 LOCAL_REVIEWS_TIMEOUT_MS(45 s)→ t≤375 s;
+//   ④ 下一次闸判定剩余不足,转强制收尾,兜底 140 s → t≤515 s;
+//   ⑤ 后处理(SERP 补跑)按剩余时间夹,此时已无剩余 → 跳过。
+// 最坏 515 s,留 25 s 余量。改这里必须重算这五步。
+const GLOBAL_TIMEOUT_MS = 330_000
 
 // Sonnet 4.5 pricing per million tokens (must match anthropic/client.ts)
 const PRICE_INPUT_PER_M = 3.0
 const PRICE_OUTPUT_PER_M = 15.0
 // Web search tool surcharge per call (Anthropic billing, approx)
 const PRICE_WEB_SEARCH_PER_CALL = 0.01
+
+/**
+ * 跑挂了,但钱已经花了。
+ *
+ * 2026-08-24 三次失败在 `client_discovery_jobs` 里都记成 `cost_usd = 0`、
+ * `tool_call_count = 0`,而实际每次已经跑了 8 轮、真金白银烧掉约 $0.6-1.2。
+ * 失败路径必须把已花成本带出去,否则账面上永远看不到这笔钱。
+ */
+export class ZhangqianRunError extends Error {
+  constructor(
+    message: string,
+    readonly costUsd: number,
+    readonly toolCalls: number,
+  ) {
+    super(message)
+    this.name = 'ZhangqianRunError'
+  }
+}
+
+function toRunError(err: unknown, costUsd: number, toolCalls: number): ZhangqianRunError {
+  const message = err instanceof Error ? err.message : String(err)
+  return new ZhangqianRunError(message, Number(costUsd.toFixed(4)), toolCalls)
+}
 
 // ─── Tool definitions ────────────────────────────────────────────────────────
 
@@ -381,6 +444,15 @@ export interface RunZhangqianOptions {
   /** Pre-fetched SEMrush context string to include in the user prompt. */
   semrushContext?: string
   /**
+   * 调用方的**绝对**截止时刻(epoch ms)。
+   *
+   * agent 自己的 GLOBAL_TIMEOUT_MS 只从 runZhangqian 进门那一刻起算,看不见调用方
+   * 在这之前已经烧掉多少(public-scan 会先并行抓 DataForSEO,而它的 9 分钟硬顶是
+   * 从更早就开始计时的)。传这个值可以把 agent 夹进调用方的整单时限里。
+   * 不传就退回"进门时刻 + GLOBAL_TIMEOUT_MS"。(Codex 复审 #1186 P1)
+   */
+  deadlineAt?: number
+  /**
    * Phase 23.D.2 — Optional L3 memory snapshot. Only meaningful for
    * re-discovery on an existing client. Absent for cold-start scans.
    */
@@ -413,7 +485,11 @@ export async function runZhangqian(
 
   const client = getAnthropicClient()
   const startedAt = Date.now()
-  const deadline = startedAt + GLOBAL_TIMEOUT_MS
+  // 两个时限取更早的那个:自己的预算,和调用方给的整单绝对时限。
+  const deadline = Math.min(
+    startedAt + GLOBAL_TIMEOUT_MS,
+    options.deadlineAt ?? Number.POSITIVE_INFINITY,
+  )
 
   // Phase 23.D.2: render memory once (empty when no context/no content)
   // Scout doesn't need recent_decisions — those are about strategy choices,
@@ -435,54 +511,78 @@ export async function runZhangqian(
   let apifyCalls = 0
   let truncated = false
 
+  // 失败路径要用到的"到目前为止花了多少"。成功路径由 finalizeReport 另算一份
+  // (它还要写进 meta),两边用的是同一个公式。
+  const partialCostUsd = (): number =>
+    (totalInputTokens / 1_000_000) * PRICE_INPUT_PER_M +
+    (totalOutputTokens / 1_000_000) * PRICE_OUTPUT_PER_M +
+    webSearchCalls * PRICE_WEB_SEARCH_PER_CALL
+  const partialToolCalls = (): number =>
+    webSearchCalls + fetchUrlCalls + connectorCalls + apifyCalls
+
   await onProgress('张骞已派遣 — 抓取主页…')
 
   for (let iteration = 0; iteration < maxToolCalls; iteration++) {
     // ── Cost gate + deadline gate ──────────────────────────────────────────
-    const costSoFar =
-      (totalInputTokens / 1_000_000) * PRICE_INPUT_PER_M +
-      (totalOutputTokens / 1_000_000) * PRICE_OUTPUT_PER_M +
-      webSearchCalls * PRICE_WEB_SEARCH_PER_CALL
-
-    if (costSoFar >= maxCostUsd) {
+    if (partialCostUsd() >= maxCostUsd) {
       truncated = true
       break
     }
 
-    // Leave 30 s before the deadline before triggering forced finalization.
-    // The final synthesis call has its own CLAUDE_FINAL_TIMEOUT_MS (240 s);
-    // 30 s is enough to detect the boundary without cutting the loop early.
-    if (Date.now() + 30_000 >= deadline) {
+    // 剩余时间不够写完一份报告了 —— 别再开新一轮,退出去用现有材料强制收尾。
+    if (deadline - Date.now() < MIN_REPORT_MS) {
       truncated = true
       break
     }
 
     // ── Progress heartbeat before each Anthropic call ─────────────────────
-    // Each Claude turn can take up to 150 s; this keeps the live feed moving.
+    // 单轮最长可能跑满 CLAUDE_CALL_TIMEOUT_MS,这行让前端的实时进度不至于假死。
     await onProgress(iteration === 0 ? '张骞已出发 — 开始多维扫描…' : `第 ${iteration + 1} 轮分析中…`)
 
     // ── Call Claude ────────────────────────────────────────────────────────
-    const response = await client.messages.create(
-      {
-        model: MODEL_SONNET,
-        max_tokens: MAX_OUTPUT_TOKENS,
-        system: ZHANGQIAN_SYSTEM_PROMPT,
-        tools: [
-          WEB_SEARCH_TOOL,
-          FETCH_URL_TOOL,
-          VERIFY_BUSINESS_REGISTRATION_TOOL,
-          FETCH_LOCAL_REVIEWS_TOOL,
-          FETCH_SERP_RESULTS_TOOL,
-          FETCH_ONPAGE_AUDIT_TOOL,
-          FETCH_KEYWORD_DATA_TOOL,
-          FETCH_COMPETITORS_TOOL,
-          FETCH_DOMAIN_TECHNOLOGIES_TOOL,
-          FETCH_DOMAIN_WHOIS_TOOL,
-        ],
-        messages,
-      },
-      { timeout: CLAUDE_CALL_TIMEOUT_MS },
-    )
+    // 两处刻意为之,别"顺手优化"掉:
+    // 1. 超时再被剩余时间夹一次 —— 任何一轮都不可能捅穿 deadline。
+    // 2. maxRetries: 0 —— SDK 默认重试 2 次,但"报告太长写不完"重试必然再超时,
+    //    只会把一次失败放大成 3 倍等待(2026-08-24 实测 450 s)然后整单丢弃。
+    //    真正的补救是下面的降级,不是重试。
+    // 超时与输出上限成对推导 —— 只夹一头等于允许模型写一份注定写不完的报告。
+    const callTimeoutMs = Math.min(CLAUDE_CALL_TIMEOUT_MS, deadline - Date.now())
+    let response: Anthropic.Messages.Message
+    try {
+      response = await client.messages.create(
+        {
+          model: MODEL_SONNET,
+          max_tokens: tokensThatFitIn(callTimeoutMs),
+          system: ZHANGQIAN_SYSTEM_PROMPT,
+          tools: [
+            WEB_SEARCH_TOOL,
+            FETCH_URL_TOOL,
+            VERIFY_BUSINESS_REGISTRATION_TOOL,
+            FETCH_LOCAL_REVIEWS_TOOL,
+            FETCH_SERP_RESULTS_TOOL,
+            FETCH_ONPAGE_AUDIT_TOOL,
+            FETCH_KEYWORD_DATA_TOOL,
+            FETCH_COMPETITORS_TOOL,
+            FETCH_DOMAIN_TECHNOLOGIES_TOOL,
+            FETCH_DOMAIN_WHOIS_TOOL,
+          ],
+          messages,
+        },
+        { timeout: callTimeoutMs, maxRetries: 0 },
+      )
+    } catch (err) {
+      // 第 0 轮就挂 = 连主页都没抓到,没有任何材料可降级,原样抛出(带上已花成本)。
+      if (iteration === 0) throw toRunError(err, partialCostUsd(), partialToolCalls())
+      // 已经采到料了就绝不能整单丢弃 —— 退出循环,用手上的东西强制收尾。
+      // 这正是 2026-08-24 三次失败丢掉 8 轮采集成果的那个缺口。
+      console.warn(
+        `[zhangqian] 第 ${iteration + 1} 轮调用失败,改用已采集材料收尾:`,
+        err instanceof Error ? err.message : String(err),
+      )
+      await onProgress('这一步没走通 — 正在用已采集的材料生成报告…')
+      truncated = true
+      break
+    }
 
     totalInputTokens += response.usage.input_tokens
     totalOutputTokens += response.usage.output_tokens
@@ -530,7 +630,7 @@ export async function runZhangqian(
         apifyCalls,
         truncated,
         startedAt,
-      }), onProgress)
+      }), onProgress, deadline)
     }
 
     if (response.stop_reason !== 'tool_use') {
@@ -551,7 +651,7 @@ export async function runZhangqian(
         apifyCalls,
         truncated,
         startedAt,
-      }), onProgress)
+      }), onProgress, deadline)
     }
 
     // ── Resolve client-side tool calls (fetch_url) ─────────────────────────
@@ -617,24 +717,41 @@ export async function runZhangqian(
   truncated = true
   await onProgress('工具预算用尽 — 生成最终报告…')
 
+  const finalTimeoutMs = Math.min(
+    CLAUDE_CALL_TIMEOUT_MS,
+    Math.max(MIN_REPORT_MS, deadline - Date.now()),
+  )
+  const finalMaxTokens = tokensThatFitIn(finalTimeoutMs)
+
   messages.push({
     role: 'user',
     content:
       'You have reached the tool-call budget. Stop using tools and emit the final JSON report now, ' +
-      'using whatever you have gathered. Set `notes` to flag any incomplete sections.',
+      'using whatever you have gathered. Set `notes` to flag any incomplete sections. ' +
+      // 把预算讲明白,模型自己会收着写。留 10% 余量给 JSON 结构本身。
+      `Hard limit: your entire reply must fit in ${Math.floor(finalMaxTokens * 0.9)} output tokens — ` +
+      'keep every description terse and drop optional prose rather than risk an unfinished JSON object.',
   })
 
-  // Use the longer synthesis timeout — no tools means one big JSON response.
-  const finalResponse = await client.messages.create(
-    {
-      model: MODEL_SONNET,
-      max_tokens: MAX_OUTPUT_TOKENS,
-      system: ZHANGQIAN_SYSTEM_PROMPT,
-      // Omit tools on the final call so Claude can't loop again
-      messages,
-    },
-    { timeout: CLAUDE_FINAL_TIMEOUT_MS },
-  )
+  // 收尾即使在 deadline 已经用光时也要给满 MIN_REPORT_MS —— 否则这条安全网又会
+  // 变成旧代码里那个永远兜不住的 90 s。但拿到多少时间就只许写多少字(见上面
+  // finalMaxTokens),不然救场的这一步会照样超时。
+  let finalResponse: Anthropic.Messages.Message
+  try {
+    finalResponse = await client.messages.create(
+      {
+        model: MODEL_SONNET,
+        max_tokens: finalMaxTokens,
+        system: ZHANGQIAN_SYSTEM_PROMPT,
+        // Omit tools on the final call so Claude can't loop again
+        messages,
+      },
+      { timeout: finalTimeoutMs, maxRetries: 0 },
+    )
+  } catch (err) {
+    // 连收尾都写不出来 —— 这次是真没救了,但把已花的钱带出去,别再记成 0。
+    throw toRunError(err, partialCostUsd(), partialToolCalls())
+  }
 
   totalInputTokens += finalResponse.usage.input_tokens
   totalOutputTokens += finalResponse.usage.output_tokens
@@ -655,7 +772,7 @@ export async function runZhangqian(
     apifyCalls,
     truncated,
     startedAt,
-  }), onProgress)
+  }), onProgress, deadline)
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
@@ -726,8 +843,17 @@ function finalizeReport(args: FinalizeArgs): RunZhangqianResult {
 async function applyPostProcessing(
   result: RunZhangqianResult,
   onProgress: ProgressFn,
+  deadline: number,
 ): Promise<RunZhangqianResult> {
   if (result.validation_error) return result
+
+  // SERP 补跑是串行的,最坏能再吃 SERP_COVERAGE_WORST_CASE_MS(2 × 60 s)。
+  // 报告已经拿到手了,补几条 SERP 不值得为它捅穿 public-scan 的 9 分钟硬顶 ——
+  // 时间不够就跳过,报告照常返回。(Codex 复审 #1186 P1)
+  if (deadline - Date.now() < SERP_COVERAGE_WORST_CASE_MS) {
+    console.warn('[zhangqian/postProcess] 剩余时间不足,跳过 SERP 覆盖率补跑')
+    return result
+  }
 
   await onProgress('检查 SERP 覆盖率…')
   const { report: coveredReport, result: cov } = await ensureSerpCoverage(result.report)
