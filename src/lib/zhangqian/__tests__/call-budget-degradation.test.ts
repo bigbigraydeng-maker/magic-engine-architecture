@@ -13,7 +13,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
 interface RecordedCall {
-  body: { tools?: unknown[]; messages: unknown[] }
+  body: { tools?: unknown[]; messages: unknown[]; max_tokens: number }
   opts: { timeout?: number; maxRetries?: number }
 }
 
@@ -101,6 +101,53 @@ describe('张骞调用预算与降级', () => {
       // 谁把它调大而没重算 public-scan 9 分钟硬顶的五步路径,这里就会红。
       expect(call.opts.timeout).toBeLessThanOrEqual(330_000)
     }
+  })
+
+  it('超时与输出上限必须成对:不许出现"允许写的比写得完的多"', async () => {
+    // Codex 复审 #1186 P1 抓到的正是这个矛盾:降级收尾只拿到 140 s,
+    // 却仍允许写 12K tokens(光写就要 287 s)—— 救场那一步会再次超时,
+    // 把已采集的材料原样丢掉,等于本 PR 要修的 bug 在兜底路径上复活。
+    script = [pauseTurn(), TIMEOUT_ERROR, unparseableFinal()]
+
+    await runZhangqian('example.co.nz').catch(() => undefined)
+
+    expect(recorded.length).toBeGreaterThan(0)
+    for (const call of recorded) {
+      const timeout = call.opts.timeout ?? 0
+      // 用代码里同一套保守参数反推:45 tokens/s + 20 s 开销
+      const needMs = (call.body.max_tokens / 45) * 1000 + 20_000
+      expect(needMs).toBeLessThanOrEqual(timeout + 1)
+    }
+  })
+
+  it('deadline 已耗尽时收尾:输出上限必须跟着缩,不能还按 12K 写', async () => {
+    // 上一条用的是"假响应立即返回",时间根本没流逝,所以 finalTimeoutMs 仍是满额
+    // 287 s —— 那种情况下即使把 max_tokens 写死成 12K 也不会露馅(Codex 已提醒)。
+    // 这里把 deadline 直接设成"马上到期",逼出真正的时间矛盾:收尾只拿得到
+    // 兜底的 140 s,若仍允许写 12K(光写就要 287 s),救场那一步必然再次超时。
+    script = [unparseableFinal()]
+
+    await runZhangqian('example.co.nz', { deadlineAt: Date.now() + 1_000 })
+      .catch(() => undefined)
+
+    // 循环闸立刻判定时间不够,直接进强制收尾,所以只有这一次调用
+    expect(recorded).toHaveLength(1)
+    const finalCall = recorded[0]
+    expect(finalCall.body.tools).toBeUndefined()
+    const needMs = (finalCall.body.max_tokens / 45) * 1000 + 20_000
+    expect(needMs).toBeLessThanOrEqual((finalCall.opts.timeout ?? 0) + 1)
+  })
+
+  it('调用方传进来的绝对 deadline 会夹住预算', async () => {
+    // public-scan 的 9 分钟硬顶从它自己开始计时,agent 看不见前置抓取烧掉的时间。
+    script = [unparseableFinal()]
+
+    // 只给 200 s:比 agent 自己的 GLOBAL_TIMEOUT_MS(330 s)紧
+    await runZhangqian('example.co.nz', { deadlineAt: Date.now() + 200_000 })
+      .catch(() => undefined)
+
+    expect(recorded).toHaveLength(1)
+    expect(recorded[0].opts.timeout).toBeLessThanOrEqual(200_000)
   })
 
   it('第一轮就挂:没有任何材料可降级,抛出带成本的错误', async () => {

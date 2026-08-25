@@ -84,6 +84,23 @@ const EXPECTED_REPORT_TOKENS = MAX_OUTPUT_TOKENS
 // 所以"工具轮"和"写报告轮"无法预先区分,给两个不同的数字必然有一个是错的。
 const CLAUDE_CALL_TIMEOUT_MS =
   Math.ceil(EXPECTED_REPORT_TOKENS / OUTPUT_TOKENS_PER_SEC) * 1000 + CALL_OVERHEAD_MS
+// 一份还算有用的报告的下限。低于这个数不如不写。
+const MIN_REPORT_TOKENS = 4_000
+
+/**
+ * 这段时间按保守吞吐写得完多少 token。
+ *
+ * **超时和 max_tokens 必须成对推导**:只夹超时不夹输出上限,等于允许模型写一份
+ * 注定写不完的报告,而非流式调用超时后一个字都拿不到。降级收尾只拿得到
+ * MIN_REPORT_MS(140 s)时尤其致命 —— 历史样本上限 10.6K tokens 光写就要 180 s,
+ * 于是"救场"的那一步会再次超时,把已采集的材料原样丢掉,正是本 PR 要修的那个 bug
+ * 在兜底路径上复活。(Codex 复审 #1186 P1)
+ */
+function tokensThatFitIn(ms: number): number {
+  const usable = Math.max(0, ms - CALL_OVERHEAD_MS)
+  const fits = Math.floor((usable / 1000) * OUTPUT_TOKENS_PER_SEC)
+  return Math.max(MIN_REPORT_TOKENS, Math.min(MAX_OUTPUT_TOKENS, fits))
+}
 // 写一份报告实测最少要 109.5 s。低于这个数就别开工了 —— 旧代码的 90 s 安全网
 // 就是这么变成摆设的。循环剩余时间不足这个数时,直接退出去做强制收尾。
 const MIN_REPORT_MS = 140_000
@@ -427,6 +444,15 @@ export interface RunZhangqianOptions {
   /** Pre-fetched SEMrush context string to include in the user prompt. */
   semrushContext?: string
   /**
+   * 调用方的**绝对**截止时刻(epoch ms)。
+   *
+   * agent 自己的 GLOBAL_TIMEOUT_MS 只从 runZhangqian 进门那一刻起算,看不见调用方
+   * 在这之前已经烧掉多少(public-scan 会先并行抓 DataForSEO,而它的 9 分钟硬顶是
+   * 从更早就开始计时的)。传这个值可以把 agent 夹进调用方的整单时限里。
+   * 不传就退回"进门时刻 + GLOBAL_TIMEOUT_MS"。(Codex 复审 #1186 P1)
+   */
+  deadlineAt?: number
+  /**
    * Phase 23.D.2 — Optional L3 memory snapshot. Only meaningful for
    * re-discovery on an existing client. Absent for cold-start scans.
    */
@@ -459,7 +485,11 @@ export async function runZhangqian(
 
   const client = getAnthropicClient()
   const startedAt = Date.now()
-  const deadline = startedAt + GLOBAL_TIMEOUT_MS
+  // 两个时限取更早的那个:自己的预算,和调用方给的整单绝对时限。
+  const deadline = Math.min(
+    startedAt + GLOBAL_TIMEOUT_MS,
+    options.deadlineAt ?? Number.POSITIVE_INFINITY,
+  )
 
   // Phase 23.D.2: render memory once (empty when no context/no content)
   // Scout doesn't need recent_decisions — those are about strategy choices,
@@ -515,12 +545,14 @@ export async function runZhangqian(
     // 2. maxRetries: 0 —— SDK 默认重试 2 次,但"报告太长写不完"重试必然再超时,
     //    只会把一次失败放大成 3 倍等待(2026-08-24 实测 450 s)然后整单丢弃。
     //    真正的补救是下面的降级,不是重试。
+    // 超时与输出上限成对推导 —— 只夹一头等于允许模型写一份注定写不完的报告。
+    const callTimeoutMs = Math.min(CLAUDE_CALL_TIMEOUT_MS, deadline - Date.now())
     let response: Anthropic.Messages.Message
     try {
       response = await client.messages.create(
         {
           model: MODEL_SONNET,
-          max_tokens: MAX_OUTPUT_TOKENS,
+          max_tokens: tokensThatFitIn(callTimeoutMs),
           system: ZHANGQIAN_SYSTEM_PROMPT,
           tools: [
             WEB_SEARCH_TOOL,
@@ -536,10 +568,7 @@ export async function runZhangqian(
           ],
           messages,
         },
-        {
-          timeout: Math.min(CLAUDE_CALL_TIMEOUT_MS, deadline - Date.now()),
-          maxRetries: 0,
-        },
+        { timeout: callTimeoutMs, maxRetries: 0 },
       )
     } catch (err) {
       // 第 0 轮就挂 = 连主页都没抓到,没有任何材料可降级,原样抛出(带上已花成本)。
@@ -688,28 +717,31 @@ export async function runZhangqian(
   truncated = true
   await onProgress('工具预算用尽 — 生成最终报告…')
 
-  messages.push({
-    role: 'user',
-    content:
-      'You have reached the tool-call budget. Stop using tools and emit the final JSON report now, ' +
-      'using whatever you have gathered. Set `notes` to flag any incomplete sections.',
-  })
-
-  // 收尾这一次给"至少够写完一份报告"的时间:即使 deadline 已经用光,也要给满
-  // MIN_REPORT_MS —— 否则这条安全网又会变成旧代码里那个永远兜不住的 90 s。
-  // 最坏总时长因此是 GLOBAL_TIMEOUT_MS + MIN_REPORT_MS = 520 s,仍在 9 min 硬顶内。
-  // 用的就是每轮那个预算(旧代码在这里另设 90 s,比实测最快的 109.5 s 还短 ——
-  // 这条"安全网"因此从来没兜住过)。
   const finalTimeoutMs = Math.min(
     CLAUDE_CALL_TIMEOUT_MS,
     Math.max(MIN_REPORT_MS, deadline - Date.now()),
   )
+  const finalMaxTokens = tokensThatFitIn(finalTimeoutMs)
+
+  messages.push({
+    role: 'user',
+    content:
+      'You have reached the tool-call budget. Stop using tools and emit the final JSON report now, ' +
+      'using whatever you have gathered. Set `notes` to flag any incomplete sections. ' +
+      // 把预算讲明白,模型自己会收着写。留 10% 余量给 JSON 结构本身。
+      `Hard limit: your entire reply must fit in ${Math.floor(finalMaxTokens * 0.9)} output tokens — ` +
+      'keep every description terse and drop optional prose rather than risk an unfinished JSON object.',
+  })
+
+  // 收尾即使在 deadline 已经用光时也要给满 MIN_REPORT_MS —— 否则这条安全网又会
+  // 变成旧代码里那个永远兜不住的 90 s。但拿到多少时间就只许写多少字(见上面
+  // finalMaxTokens),不然救场的这一步会照样超时。
   let finalResponse: Anthropic.Messages.Message
   try {
     finalResponse = await client.messages.create(
       {
         model: MODEL_SONNET,
-        max_tokens: MAX_OUTPUT_TOKENS,
+        max_tokens: finalMaxTokens,
         system: ZHANGQIAN_SYSTEM_PROMPT,
         // Omit tools on the final call so Claude can't loop again
         messages,
