@@ -18,7 +18,7 @@
  */
 
 /** 行业专属功能。加新功能前先问：这东西对别的行业有意义吗？有就别加进来。 */
-export type IndustryFeature = 'listings' | 'projects' | 'tailor_made'
+export type IndustryFeature = 'listings' | 'projects' | 'tailor_made' | 'group_tours'
 
 /**
  * 归一化：下划线/连字符/多余空格统一，大小写拉平。
@@ -46,6 +46,8 @@ const FEATURE_KEYWORDS: Record<IndustryFeature, string[]> = {
   // 这是 Magic Engine 海外地产版的独有工具,别的行业不该看到)
   projects: REAL_ESTATE_KEYWORDS,
   tailor_made: ['travel', 'tour', 'tourism', 'sightseeing', 'cruise', '旅游', '旅行', '观光', '行程'],
+  // 团管理跟行程单是同一批客户（旅行社），关键词共用同一份列表。
+  group_tours: ['travel', 'tour', 'tourism', 'sightseeing', 'cruise', '旅游', '旅行', '观光', '行程'],
 }
 
 /**
@@ -68,5 +70,6 @@ export function industryFeatureFlags(industry: string | null | undefined): Recor
     listings: hasIndustryFeature(industry, 'listings'),
     projects: hasIndustryFeature(industry, 'projects'),
     tailor_made: hasIndustryFeature(industry, 'tailor_made'),
+    group_tours: hasIndustryFeature(industry, 'group_tours'),
   }
 }

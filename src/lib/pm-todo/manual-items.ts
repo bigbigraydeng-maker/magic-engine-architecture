@@ -46,6 +46,7 @@ const CRAWL_STALE_DAYS = 14
 
 export type ManualItemKind =
   | 'blog_pr_open'
+  | 'tour_pr_open'
   | 'not_indexed'
   | 'meta_stuck'
   | 'crawl_stale'
@@ -297,10 +298,15 @@ export async function loadManualItems(
       .map((c) => [c.client_id, c.config!.site_url!]),
   )
 
-  const [prOpen, notIndexed, metaPending, crawlRows] = await Promise.all([
+  const [prOpen, tourPrOpen, notIndexed, metaPending, crawlRows] = await Promise.all([
     supabase
       .from('blog_posts')
       .select('client_id, title, topic, pr_url, pr_number')
+      .eq('status', 'pr_open')
+      .in('client_id', ids),
+    supabase
+      .from('group_tours')
+      .select('client_id, title, pr_url, pr_number')
       .eq('status', 'pr_open')
       .in('client_id', ids),
     supabase
@@ -337,6 +343,24 @@ export async function loadManualItems(
       client_name: nameOf(row.client_id),
       what: `文章《${row.title ?? row.topic ?? '未命名'}》已写好并提交到网站，还没上线`,
       how: '打开这个链接，检查通过后点 Merge —— 合并后系统会自动催谷歌收录',
+      href: row.pr_url,
+    })
+  }
+
+  // 1b. Group tour PRs waiting on a human merge — 板桥意见5 / 魏征 B5：
+  //     Draft PR 开出来之后不能只靠隔天 cron 巡检才被发现，直接进今日待办。
+  for (const row of (tourPrOpen.data ?? []) as Array<{
+    client_id: string
+    title: string | null
+    pr_url: string | null
+  }>) {
+    if (!row.pr_url) continue
+    items.push({
+      kind: 'tour_pr_open',
+      client_id: row.client_id,
+      client_name: nameOf(row.client_id),
+      what: `团《${row.title ?? '未命名'}》资料已提交，还没上线`,
+      how: '打开这个链接，检查通过后点 Merge —— 合并后团页会自动出现在官网',
       href: row.pr_url,
     })
   }

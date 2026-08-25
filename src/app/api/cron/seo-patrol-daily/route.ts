@@ -37,6 +37,7 @@ import { expireStaleDrafts } from '@/lib/blog/draft-expiry'
 import { runIndexCheckBatch } from '@/lib/seo-patrol/index-check'
 import { syncPrOpenPosts } from '@/lib/blog/pr-sync'
 import { syncPageUpgradePullRequests } from '@/lib/cms/page-upgrade-pr-sync'
+import { syncTourPrOpenPosts } from '@/lib/group-tours/pr-sync'
 import { supersedeStaleZhugeCards } from '@/lib/zhuge/card-expiry'
 import { startCronRun } from '@/lib/cron/run-logger'
 import { supabaseAdmin } from '@/lib/supabase'
@@ -107,20 +108,23 @@ export async function GET(
           cards_superseded: number
           pr_sync: { checked: number; published: number; rejected: number; errors: number }
           page_upgrade_pr_sync: { checked: number; live: number; rejected: number; errors: number }
+          tour_pr_sync: { checked: number; published: number; reverted: number; errors: number }
         }
       | { error: string }
     try {
-      const [drafts, cards, prSync, pageUpgradePrSync] = await Promise.all([
+      const [drafts, cards, prSync, pageUpgradePrSync, tourPrSync] = await Promise.all([
         expireStaleDrafts(supabaseAdmin),
         supersedeStaleZhugeCards(supabaseAdmin),
         syncPrOpenPosts(supabaseAdmin),
         syncPageUpgradePullRequests(supabaseAdmin),
+        syncTourPrOpenPosts(supabaseAdmin),
       ])
       hygiene = {
         drafts_expired: drafts.expired,
         cards_superseded: cards.superseded,
         pr_sync: prSync,
         page_upgrade_pr_sync: pageUpgradePrSync,
+        tour_pr_sync: tourPrSync,
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

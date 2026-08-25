@@ -682,6 +682,14 @@ export default function ClientDetailPage() {
                   badge="in_house"
                 />
               )}
+              {industryFeatureFlags(client?.industry).group_tours && (
+                <ToolCard
+                  href={`/dashboard/clients/${clientId}/tours`}
+                  title="团管理"
+                  desc="上传团资料 → AI 解析 → 人工确认 → 提交发布申请到官网"
+                  badge="in_house"
+                />
+              )}
               {industryFeatureFlags(client?.industry).projects && (
                 <ToolCard
                   href={`/dashboard/clients/${clientId}/projects`}

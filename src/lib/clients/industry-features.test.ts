@@ -41,7 +41,7 @@ describe('hasIndustryFeature —— 库里的真实取值', () => {
 
   it('🔴 行业为空 → 一个都不给（默认隐藏，不是默认显示）', () => {
     // 库里 15 个客户行业是空的。默认显示就等于把地产按钮塞给所有人 —— 正是现在的 bug
-    for (const f of ['listings', 'projects', 'tailor_made'] as const) {
+    for (const f of ['listings', 'projects', 'tailor_made', 'group_tours'] as const) {
       expect(hasIndustryFeature(null, f)).toBe(false)
       expect(hasIndustryFeature('', f)).toBe(false)
       expect(hasIndustryFeature('Healthcare — Physiotherapy', f)).toBe(false)
@@ -58,18 +58,27 @@ describe('hasIndustryFeature —— 库里的真实取值', () => {
   it('中文行业也认', () => {
     expect(hasIndustryFeature('房地产中介', 'listings')).toBe(true)
     expect(hasIndustryFeature('旅游运营商', 'tailor_made')).toBe(true)
+    expect(hasIndustryFeature('旅游运营商', 'group_tours')).toBe(true)
   })
 
   it('不会互相串味 —— 地产不给行程单，旅游不给房子', () => {
     expect(hasIndustryFeature('real_estate', 'tailor_made')).toBe(false)
     expect(hasIndustryFeature('travel', 'listings')).toBe(false)
   })
+
+  it('团管理跟行程单是同一批客户（旅行社）——关键词共用同一份列表', () => {
+    expect(hasIndustryFeature('travel', 'group_tours')).toBe(true)
+    expect(hasIndustryFeature('Travel — Tour Operator', 'group_tours')).toBe(true)
+    expect(hasIndustryFeature('real_estate', 'group_tours')).toBe(false)
+    expect(hasIndustryFeature('flooring', 'group_tours')).toBe(false)
+    expect(hasIndustryFeature(null, 'group_tours')).toBe(false)
+  })
 })
 
 describe('industryFeatureFlags', () => {
   it('一次拿全部开关', () => {
-    expect(industryFeatureFlags('real_estate')).toEqual({ listings: true, projects: true, tailor_made: false })
-    expect(industryFeatureFlags('travel')).toEqual({ listings: false, projects: false, tailor_made: true })
-    expect(industryFeatureFlags(null)).toEqual({ listings: false, projects: false, tailor_made: false })
+    expect(industryFeatureFlags('real_estate')).toEqual({ listings: true, projects: true, tailor_made: false, group_tours: false })
+    expect(industryFeatureFlags('travel')).toEqual({ listings: false, projects: false, tailor_made: true, group_tours: true })
+    expect(industryFeatureFlags(null)).toEqual({ listings: false, projects: false, tailor_made: false, group_tours: false })
   })
 })

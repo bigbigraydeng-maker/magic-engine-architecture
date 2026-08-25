@@ -21,6 +21,31 @@
 
 ---
 
+## 团（Group Tour）管理工具 —— CTS 上传解析发布，代码已写完待合并
+
+**触发**：CTS 给了一份新团资料（`Golden China 12 days 16 Nov 2026.docx`），旧流程要人工把 Word 抄进 CTS 网站代码。已在 worktree `1159-auth-guard-patch-23ac3b` 建完"上传团资料 → AI 解析 → 人工审核确认 → 提交发布申请（开 Draft PR）"全链路，方案经子牙+魏征+板桥三路设计复审后落地。方案文档：`/Users/raydeng/.claude/plans/dreamy-sauteeing-beaver.md`（含完整 Reuse Statement 和复审记录）。
+
+**已完成且已验证**：
+- 新表 `group_tours`（migration `20260824000001_group_tours.sql`）**已 apply 到生产** Supabase（glbdnayojixmexgofbsd）
+- CTS 的 `cms_connections.content_paths` **已补上** `["src/lib/data/tours.ts"]`（原来是空数组，发布用不了）
+- 解析链路（`src/lib/group-tours/{schema,extract,read-source}.ts`）用真实 Golden China 文档跑通，AI 抽取质量核对准确（价格/日期/单房差全对，还主动抓出源文档里两处真实的日期标注混乱、一处酒店名拼写错误，写进 confidenceNotes）
+- 最高风险的"安全改写 CTS `tours.ts`"逻辑（`tour-object-writer.ts`）改成 AST 定位 + 纯字面量检测 + TS 真语法校验，23 个单元测试全绿（含用真实 payload 数据的端到端序列化测试）
+- `npm run build` / `npm run type-check` 全过，没有新增错误
+- **PM 2026-08-24 已授权跑真实发布测试**：拿真实 Golden China 数据走完整链路，对 CTS 生产仓库 `bigbigraydeng-maker/chinatravel` 真的开出了一个 Draft PR：[#139](https://github.com/bigbigraydeng-maker/chinatravel/pull/139)。测试过程中发现并修复一处真实 bug：新插入对象的内部属性缩进跟外层花括号平级、没有多缩进一层（`insertBeforeArrayClose` 之前只给多行文本的第一行垫缩进，没有逐行垫）——已修复并补了回归测试。
+- **PM 当场追加修正**：团名统一为「Golden China」+配套 SEO 字段；exclusions 换成跟 essentials/beijing-xian/shanghai-surroundings/yunnan-explorer 四个真实 Discovery 团一致的标准条款；最后一天按"客户实际落地奥克兰的日期"计算（源文档表面 12/13 天的日期标注混乱，统一算成 11 天）——**这条规则 PM 确认对所有团通用**，以后遇到同样情况按这个口径处理。
+- **heroImage 反复试错记录（供以后同类任务参考，别重蹈覆辙）**：先后试了 Muapi AI 生成三合一、真实照片直接裁剪拼接、OpenAI 纯生成、OpenAI 对真实照片 img2img 大片风格重绘，PM 全部打回（"很假"/"很丑"/"不符合旅游调性"）。最后**去查 CTS 网站上其他真实团（essentials/shanghai-surroundings 等）实际在用的 hero 图，发现调性统一是"一张干净的真实单张照片，不拼接不 AI 处理"**——换成一张真实长城照片（Unsplash，晴天蓝天绿树）后过审。**教训：调性类反馈别自己瞎猜着改版本，先去找同一个产品里已经被认可的参考物做基准。**
+- **PM 2026-08-24 显式 `go`，PR #139 已 merge 进 `bigbigraydeng-maker/chinatravel` main 分支**（squash merge + 删分支），`group_tours` 行状态已同步为 `published`。Render 走标准 `git push` 触发自动部署，通常几分钟内上线，具体以 `ctstours.co.nz/tours/china/discovery/golden-china` 实际能打开为准。
+
+**还没做完**：
+1. **没有真实登录浏览器点过 ME 后台 UI**——需要 Ray 的账号密码/Google 登录，我不能替他输入凭据。建议 `npm run dev` 后手工走一遍：`/dashboard/clients/c0000000-0000-0000-0000-000000000000/tours`
+2. **团管理工具本身的代码还没 commit / 没开 PR**——都在 worktree 工作区里，等 Ray 看过再决定怎么合到 Magic Engine 的 main。CTS 网站那边 PR #139 是完全独立的真实交付，已经合并上线，不受本条影响
+3. **确认 Render 部署真的完成、页面真的能访问**——合并后自动部署通常几分钟，建议稍后访问 `https://www.ctstours.co.nz/tours/china/discovery/golden-china` 核实
+4. **CTS 自己网站仓库里那个 `/admin/tour-parser` 半成品原型没有清理**——不影响新工具，留着无害，后续单独顺手清
+
+**关键文件**：`src/lib/group-tours/`、`src/app/api/clients/[id]/group-tours/`、`src/app/dashboard/clients/[id]/tours/`；改动过的既有文件见方案文档「关键文件清单」。
+
+---
+
 ## ME2 — Roman GEO / AI 可见度参考闭环（史诗 [#872](https://github.com/bigbigraydeng-maker/magic-engine/issues/872)）🔄 GEO 测量线已跑出首个生产 baseline（WP08）
 
 > **新窗口开工前必读**：[WP00 契约冻结 v1.0](./specs/2026-08-10-me2-wp00-contract-freeze-v1.0.md)。
