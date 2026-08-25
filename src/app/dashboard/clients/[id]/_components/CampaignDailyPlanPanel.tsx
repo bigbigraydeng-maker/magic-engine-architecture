@@ -51,7 +51,7 @@ interface DailyPlanResponse {
   grounding: { status: 'OK' | 'NEEDS_BRIEF' | 'NEEDS_CAMPAIGN'; has_master_brief: boolean; has_campaign: boolean }
   days: Array<{ date: string; slots: { post: 'PLANNED' | 'NOT_PLANNED'; story: 'PLANNED' | 'NOT_PLANNED'; reel: 'PLANNED' | 'NOT_PLANNED' } }>
   bundles: DailyBundle[]
-  publishing_plan: { destination: string | null; status: 'NOT_AUTHORIZED' }
+  publishing_plan: { conversion_goal: string | null; destination: 'UNKNOWN'; status: 'NOT_AUTHORIZED' }
   ad_candidate: { creative_ref: string | null; goal: string; audience: string; destination: string; budget: string; status: 'NOT_AUTHORIZED' } | null
 }
 
@@ -280,7 +280,7 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
               <ReadinessRow label="素材归属校验" ok={selectedBundle.readiness.client_asset_provenance} />
               <ReadinessRow label="Post 草稿完整" ok={selectedBundle.readiness.format_completeness.post} />
               <ReadinessRow label="Story 草稿完整" ok={selectedBundle.readiness.format_completeness.story} />
-              <ReadinessRow label="Reel 草稿完整" ok={selectedBundle.readiness.format_completeness.reel} />
+              <ReadinessRow label="Reel 脚本草稿完整" ok={selectedBundle.readiness.format_completeness.reel} />
               <ReadinessRow label="人工审核" ok={selectedBundle.readiness.human_approval} />
               <ReadinessRow label="Provider 授权" ok={false} forceLabel="NOT_AUTHORIZED" />
               <ReadinessRow label="发布授权" ok={false} forceLabel="NOT_AUTHORIZED" />
@@ -292,11 +292,25 @@ export function CampaignDailyPlanPanel({ clientId, campaignId }: Props) {
         {/* Publishing + Ad preview */}
         <div className="border-t border-black/[.06] pt-3">
           <p className="text-xs font-semibold text-me-charcoal/55 uppercase tracking-wide mb-2">发布计划 / 广告预览</p>
-          <div className="flex flex-wrap gap-2 items-center text-xs">
-            <span className="text-me-charcoal/60">目的地：{data.publishing_plan.destination ?? 'UNKNOWN'}</span>
-            <span className="bg-me-charcoal/10 text-me-charcoal/60 px-2 py-0.5 rounded-full font-medium">
-              {data.publishing_plan.status}
-            </span>
+          <div className="space-y-1 text-xs text-me-charcoal/60">
+            <p>
+              <span className="text-me-charcoal/45">转化目标：</span>
+              <span className="font-medium">{data.publishing_plan.conversion_goal ?? 'UNKNOWN'}</span>
+              {data.publishing_plan.conversion_goal === 'lead_form_submit' && (
+                <span className="text-me-charcoal/45"> · 用户在落地页提交表单即算转化</span>
+              )}
+            </p>
+            <p>
+              <span className="text-me-charcoal/45">发布目的地：</span>
+              <span className="font-medium">UNKNOWN / 未连接</span>
+              <span className="text-me-charcoal/40"> · 尚未绑定 Facebook Page / Instagram 账号</span>
+            </p>
+            <p className="flex items-center gap-2">
+              <span className="text-me-charcoal/45">发布授权：</span>
+              <span className="bg-me-charcoal/10 text-me-charcoal/60 px-2 py-0.5 rounded-full font-medium">
+                {data.publishing_plan.status}
+              </span>
+            </p>
           </div>
           {data.ad_candidate && (
             <div className="mt-2 flex flex-wrap gap-3 text-xs text-me-charcoal/55">

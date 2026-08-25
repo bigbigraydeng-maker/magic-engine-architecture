@@ -274,9 +274,54 @@ export function computeReadiness(params: {
   resolvedAssetIds: Set<string>
 }): CampaignDailyReadiness {
   const { grounding, bundle, resolvedAssetIds } = params
-  const referencedIds = bundle?.reel?.source_asset_ids ?? []
+
+  // Every REQUIRED asset reference on this bundle must resolve under the
+  // current client for `client_asset_provenance` to be true. Required set:
+  //   - Post `image_asset_id` (when a Post exists) — new-format Posts always
+  //     carry one; legacy Posts without an image cannot pass provenance.
+  //   - Reel `source_asset_ids` — only required when the Reel actually lists
+  //     source assets. A Reel with no listed sources is not by itself a
+  //     provenance failure (the Reel-completeness gate is separate).
+  //
+  // Deduped by asset id so a Post + Reel referencing the same asset count
+  // once (matches the GET `provenance` output).
+  const requiredIds: string[] = []
+  const postImageId = bundle?.post?.image_asset_id
+  if (bundle?.post) {
+    if (postImageId) requiredIds.push(postImageId)
+  }
+  for (const id of bundle?.reel?.source_asset_ids ?? []) requiredIds.push(id)
+  const dedupedRequired = Array.from(new Set(requiredIds))
+  // A bundle with no required references at all (legacy Post w/o image AND
+  // no Reel source assets) cannot demonstrate client-scoped provenance —
+  // fail closed rather than silently declaring an unproven bundle authentic.
   const assetProvenanceOk =
-    referencedIds.length > 0 && referencedIds.every(id => resolvedAssetIds.has(id))
+    dedupedRequired.length > 0 && dedupedRequired.every(id => resolvedAssetIds.has(id))
+
+  // Post is COMPLETE only when copy + CTA text + image_asset_id + cta_url are
+  // all present AND the image resolves under this client. Legacy Posts that
+  // predate the image/CTA-URL contract fail closed here — they must not read
+  // as "ready to publish" because the reviewer can no longer verify the
+  // rendered image or the destination they are pushing traffic to.
+  const post = bundle?.post
+  const postComplete =
+    !!post &&
+    !!post.hook &&
+    !!post.body &&
+    !!post.cta &&
+    !!post.image_asset_id &&
+    !!post.cta_url &&
+    resolvedAssetIds.has(post.image_asset_id)
+
+  // Story requires exactly 4 frames — matches the write-contract enforced
+  // in `CampaignDailyCommandSchema` (`.length(4)`), so a legacy row with
+  // fewer than 4 frames reads as incomplete rather than as "ready".
+  const storyComplete = !!(bundle?.story && bundle.story.frames.length === 4)
+
+  // Reel completeness here means the SCRIPT draft is present — media_status
+  // is displayed separately (NO_MEDIA / DRAFT_MEDIA / READY) so a
+  // script-only Reel never reads as "there is a real file".
+  const reelComplete = !!(bundle?.reel && bundle.reel.script.length > 0)
 
   return {
     master_brief_grounding: grounding.has_master_brief,
@@ -284,9 +329,9 @@ export function computeReadiness(params: {
     evidence_grounding: 'UNKNOWN',
     client_asset_provenance: assetProvenanceOk,
     format_completeness: {
-      post: !!bundle?.post,
-      story: !!(bundle?.story && bundle.story.frames.length > 0),
-      reel: !!bundle?.reel,
+      post: postComplete,
+      story: storyComplete,
+      reel: reelComplete,
     },
     // WP1 ships no approval workflow yet — always honestly false, never inferred.
     human_approval: false,
@@ -299,7 +344,20 @@ export function computeReadiness(params: {
 // ─── Publishing / ad preview — always plan-only in WP1 ───────────────────────
 
 export interface CampaignDailyPublishingPlan {
-  destination: string | null
+  /**
+   * Campaign-level conversion goal (e.g. `lead_form_submit`). Sourced from
+   * `campaigns.primary_cta` — it describes WHAT the campaign converts on,
+   * NOT the Facebook Page/account the content would be posted to.
+   */
+  conversion_goal: string | null
+  /**
+   * Publishing destination — always `'UNKNOWN'` in WP1. This slice does not
+   * bind any Facebook Page/Instagram account/Publer channel; showing a
+   * primary CTA (`lead_form_submit`) here would misread as "this is where
+   * it will publish". A future WP that reads a proven connected account
+   * can flip this to that account's identifier — never a CTA/URL/goal.
+   */
+  destination: 'UNKNOWN'
   status: 'NOT_AUTHORIZED'
 }
 
@@ -313,7 +371,11 @@ export interface CampaignDailyAdCandidate {
 }
 
 export function buildPublishingPlan(campaign: CampaignBrief | null): CampaignDailyPublishingPlan {
-  return { destination: campaign?.primary_cta ?? null, status: 'NOT_AUTHORIZED' }
+  return {
+    conversion_goal: campaign?.primary_cta ?? null,
+    destination: 'UNKNOWN',
+    status: 'NOT_AUTHORIZED',
+  }
 }
 
 export function buildAdCandidate(bundle: CampaignDailyBundle | null): CampaignDailyAdCandidate | null {

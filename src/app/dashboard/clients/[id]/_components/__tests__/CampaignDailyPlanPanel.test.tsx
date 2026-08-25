@@ -78,7 +78,7 @@ describe('CampaignDailyPlanPanel — date selection shows that day\'s three form
           provenance: [],
         },
       ],
-      publishing_plan: { destination: null, status: 'NOT_AUTHORIZED' },
+      publishing_plan: { conversion_goal: null, destination: 'UNKNOWN', status: 'NOT_AUTHORIZED' },
       ad_candidate: null,
     })
 
@@ -114,7 +114,7 @@ describe('CampaignDailyPlanPanel — Post full text can be expanded and collapse
           provenance: [],
         },
       ],
-      publishing_plan: { destination: null, status: 'NOT_AUTHORIZED' },
+      publishing_plan: { conversion_goal: null, destination: 'UNKNOWN', status: 'NOT_AUTHORIZED' },
       ad_candidate: null,
     })
 
@@ -147,7 +147,7 @@ describe('CampaignDailyPlanPanel — missing bundle fails honestly, never borrow
           provenance: [],
         },
       ],
-      publishing_plan: { destination: null, status: 'NOT_AUTHORIZED' },
+      publishing_plan: { conversion_goal: null, destination: 'UNKNOWN', status: 'NOT_AUTHORIZED' },
       ad_candidate: null,
     })
 
@@ -186,7 +186,7 @@ describe('CampaignDailyPlanPanel — seven distinct Post thumbnails + clickable 
           ownership: 'client_exclusive',
         },
       })),
-      publishing_plan: { destination: null, status: 'NOT_AUTHORIZED' },
+      publishing_plan: { conversion_goal: null, destination: 'UNKNOWN', status: 'NOT_AUTHORIZED' },
       ad_candidate: null,
     })
 
@@ -230,7 +230,7 @@ describe('CampaignDailyPlanPanel — complete route must not omit Chongqing/Guan
           provenance: [],
         },
       ],
-      publishing_plan: { destination: null, status: 'NOT_AUTHORIZED' },
+      publishing_plan: { conversion_goal: null, destination: 'UNKNOWN', status: 'NOT_AUTHORIZED' },
       ad_candidate: null,
     })
 
@@ -242,5 +242,77 @@ describe('CampaignDailyPlanPanel — complete route must not omit Chongqing/Guan
     expect(recap.textContent).toContain('Guangzhou')
     expect(recap.textContent).toContain('Shanghai')
     expect(recap.textContent).toContain('Beijing')
+  })
+})
+
+
+describe('CampaignDailyPlanPanel — Reel readiness is script-only, media_status stays separate (Build Control TRUTHFUL READINESS)', () => {
+  it('shows "Reel 脚本草稿完整" (not "Reel 草稿完整") AND still shows 暂无成片 for a NO_MEDIA Reel', async () => {
+    mockFetchOnce({
+      success: true,
+      campaign: { id: CAMPAIGN_ID, title: 'Christmas Campaign', offer: null, primary_cta: 'Enquire Now' },
+      grounding: { status: 'OK', has_master_brief: true, has_campaign: true },
+      days: daysGrid(['2026-08-24']),
+      bundles: [
+        {
+          date: '2026-08-24',
+          post: { hook: 'hook', body: 'body', cta: 'Enquire Now' },
+          story: { frames: [{ order: 1, copy: 'f1' }, { order: 2, copy: 'f2' }, { order: 3, copy: 'f3' }, { order: 4, copy: 'f4' }] },
+          reel: { brief: 'the reel brief', script: 'the script', caption: 'c', source_asset_ids: [], media_status: 'NO_MEDIA' },
+          readiness: readiness({ format_completeness: { post: true, story: true, reel: true } }),
+          provenance: [],
+        },
+      ],
+      publishing_plan: { conversion_goal: null, destination: 'UNKNOWN', status: 'NOT_AUTHORIZED' },
+      ad_candidate: null,
+    })
+
+    render(<CampaignDailyPlanPanel clientId={CLIENT_ID} campaignId={CAMPAIGN_ID} />)
+
+    // Script-complete label, not the old "Reel 草稿完整".
+    await screen.findByText('Reel 脚本草稿完整')
+    expect(screen.queryByText('Reel 草稿完整')).not.toBeInTheDocument()
+    // NO_MEDIA banner stays visible so the reviewer never confuses a script
+    // draft with a real video file.
+    expect(screen.getByText(/暂无成片/)).toBeInTheDocument()
+  })
+})
+
+describe('CampaignDailyPlanPanel — conversion goal vs publishing destination (Build Control TRUTHFUL READINESS)', () => {
+  it('shows lead_form_submit as 转化目标 with a Chinese explainer; destination reads UNKNOWN / 未连接, never the CTA', async () => {
+    mockFetchOnce({
+      success: true,
+      campaign: { id: CAMPAIGN_ID, title: 'Christmas Campaign', offer: null, primary_cta: 'lead_form_submit' },
+      grounding: { status: 'OK', has_master_brief: true, has_campaign: true },
+      days: daysGrid(['2026-08-24']),
+      bundles: [
+        {
+          date: '2026-08-24',
+          post: { hook: 'h', body: 'b', cta: 'Enquire Now' },
+          story: { frames: [{ order: 1, copy: 'f1' }, { order: 2, copy: 'f2' }, { order: 3, copy: 'f3' }, { order: 4, copy: 'f4' }] },
+          reel: { brief: 'br', script: 'sc', caption: 'c', source_asset_ids: [], media_status: 'NO_MEDIA' },
+          readiness: readiness(),
+          provenance: [],
+        },
+      ],
+      publishing_plan: { conversion_goal: 'lead_form_submit', destination: 'UNKNOWN', status: 'NOT_AUTHORIZED' },
+      ad_candidate: null,
+    })
+
+    render(<CampaignDailyPlanPanel clientId={CLIENT_ID} campaignId={CAMPAIGN_ID} />)
+
+    // Conversion goal row surfaces lead_form_submit with a plain-Chinese explainer.
+    await screen.findByText(/转化目标/)
+    expect(screen.getByText('lead_form_submit')).toBeInTheDocument()
+    expect(screen.getByText(/用户在落地页提交表单即算转化/)).toBeInTheDocument()
+
+    // Destination row explicitly says UNKNOWN / 未连接; the primary_cta must
+    // NOT be echoed as a destination.
+    expect(screen.getByText(/发布目的地/)).toBeInTheDocument()
+    expect(screen.getByText(/UNKNOWN \/ 未连接/)).toBeInTheDocument()
+    expect(screen.getByText(/尚未绑定 Facebook Page/)).toBeInTheDocument()
+
+    // Publish authorisation stays NOT_AUTHORIZED.
+    expect(screen.getByText('NOT_AUTHORIZED')).toBeInTheDocument()
   })
 })

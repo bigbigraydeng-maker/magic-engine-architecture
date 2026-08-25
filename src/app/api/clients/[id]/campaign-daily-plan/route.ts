@@ -183,13 +183,23 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
             ownership: asset.ownership,
           }
         : null
+      // Provenance surfaces every RESOLVED asset actually referenced by
+      // this day's bundle — Post image + Reel source assets — deduped by
+      // asset id so a Post and a Reel referencing the same file are shown
+      // once. This matches the `client_asset_provenance` required-set in
+      // `computeReadiness`; a reviewer sees exactly the assets that were
+      // checked, in the order Post-then-Reel.
+      const referencedIdsForDay: string[] = []
+      if (imgId) referencedIdsForDay.push(imgId)
+      for (const rid of bundle.reel?.source_asset_ids ?? []) referencedIdsForDay.push(rid)
+      const provenance = Array.from(new Set(referencedIdsForDay))
+        .map(id => assetById.get(id))
+        .filter((a): a is NonNullable<typeof a> => !!a)
       return {
         ...bundle,
         post_image: postImage,
         readiness: computeReadiness({ grounding, bundle, resolvedAssetIds }),
-        provenance: (bundle.reel?.source_asset_ids ?? [])
-          .map(id => assetById.get(id))
-          .filter((a): a is NonNullable<typeof a> => !!a),
+        provenance,
       }
     })
 

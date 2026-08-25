@@ -350,17 +350,28 @@ describe('campaign-daily-plan GET — multi-day bundles, provenance and readines
     expect(b2.reel.media_status).toBe('NO_MEDIA')
   })
 
-  it('computes readiness and provenance independently per day', async () => {
+  it('computes readiness and provenance independently per day (Post image + Reel source both required when present)', async () => {
     allow()
     mockGetCampaign.mockResolvedValue(CAMPAIGN)
-    stubWithAssets([{ id: ASSET_ID, storage_url: 'https://x/y.jpg', original_filename: 'y.jpg', source: 'stock', ownership: 'client_exclusive' }])
+    const day1PostAssetId = day1.post.image_asset_id
+    // Stub the Reel asset AND day 1's Post image — day 1 must resolve
+    // provenance across BOTH refs. Day 2 in this fixture dropped
+    // image_asset_id and Reel has no source ids, so its required-set is
+    // empty and provenance fails closed.
+    stubWithAssets([
+      { id: ASSET_ID, storage_url: 'https://x/reel.jpg', original_filename: 'reel.jpg', source: 'stock', ownership: 'client_exclusive' },
+      { id: day1PostAssetId, storage_url: 'https://x/day1.jpg', original_filename: 'day1.jpg', source: 'client_provided', ownership: 'client_exclusive' },
+    ])
 
     const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
 
     const b1 = json.bundles.find((b: { date: string }) => b.date === '2026-08-24')
     const b2 = json.bundles.find((b: { date: string }) => b.date === '2026-08-25')
     expect(b1.readiness.client_asset_provenance).toBe(true)
-    expect(b1.provenance).toEqual([expect.objectContaining({ id: ASSET_ID })])
+    // Provenance surfaces BOTH the Post image and the Reel source, deduped
+    // by asset id — Post first (referenced-order stable).
+    expect(b1.provenance).toHaveLength(2)
+    expect(b1.provenance.map((a: { id: string }) => a.id)).toEqual([day1PostAssetId, ASSET_ID])
     expect(b2.readiness.client_asset_provenance).toBe(false)
     expect(b2.provenance).toEqual([])
   })
@@ -411,6 +422,27 @@ describe('campaign-daily-plan GET — multi-day bundles, provenance and readines
 
     expect(json.publishing_plan.status).toBe('NOT_AUTHORIZED')
     expect(json.ad_candidate.status).toBe('NOT_AUTHORIZED')
+  })
+
+  // Regression (Build Control TRUTHFUL READINESS remediation): the review
+  // page must NOT read the campaign's primary_cta as a publishing
+  // destination. `lead_form_submit` is a conversion goal — the current
+  // Campaign carries no proven Facebook Page/account, so destination
+  // remains UNKNOWN while conversion_goal surfaces the primary_cta.
+  it("surfaces lead_form_submit as conversion_goal (never as destination); destination stays UNKNOWN while no FB Page/account is bound", async () => {
+    allow()
+    // Rebuild a Campaign whose primary_cta is exactly `lead_form_submit` —
+    // this was the production case Ray hit that misread as a destination.
+    const campaignWithFormGoal = { ...(CAMPAIGN as Record<string, unknown>), primary_cta: 'lead_form_submit' } as never
+    mockGetCampaign.mockResolvedValue(campaignWithFormGoal)
+    stubWithAssets([])
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+
+    expect(json.publishing_plan.conversion_goal).toBe('lead_form_submit')
+    // Destination must NOT echo the conversion goal — no proven FB Page.
+    expect(json.publishing_plan.destination).toBe('UNKNOWN')
+    expect(json.publishing_plan.status).toBe('NOT_AUTHORIZED')
   })
 
   // Regression (Ray-authorised remediation 5405438962): GET resolves each
@@ -492,6 +524,87 @@ describe('campaign-daily-plan GET — multi-day bundles, provenance and readines
     // Preview URL, ownership come from the authoritative asset row — not from the plan JSON.
     expect(b1.post_image.preview_url).toBe('https://legit-cts/authoritative.jpg')
     expect(b1.post_image.ownership).toBe('client_exclusive')
+  })
+
+  // Regression (Build Control TRUTHFUL READINESS): provenance must include
+  // the Post image asset even when the Reel lists no source assets, and
+  // client_asset_provenance is true in that case.
+  it('Post image resolves + Reel has no source_asset_ids → provenance contains the Post image; provenance = true', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    const only = bundle({
+      date: '2026-08-24',
+      reel: { brief: 'br', script: 'sc', caption: 'cp', source_asset_ids: [], media_status: 'NO_MEDIA' },
+    })
+    const plan = {
+      plan_kind: 'campaign_daily_v1',
+      campaign_id: CAMPAIGN_ID,
+      master_brief_ref: { id: BRIEF_ID, version: 2 },
+      days: sevenDays(),
+      bundles: [only],
+      command_meta: { source: 'conversation_command', received_at: '2026-08-24T00:00:00.000Z', raw_summary: null },
+    }
+    const postId = only.post.image_asset_id
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 2 } }) }) as never
+      }
+      if (table === 'social_plans') {
+        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: plan }] }) }) as never
+      }
+      if (table === 'client_assets') {
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: [{ id: postId, storage_url: 'https://x/only.jpg', original_filename: 'only.jpg', source: 'client_provided', ownership: 'client_exclusive' }] }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+    const b = json.bundles.find((x: { date: string }) => x.date === '2026-08-24')
+    expect(b.provenance).toHaveLength(1)
+    expect(b.provenance[0].id).toBe(postId)
+    expect(b.readiness.client_asset_provenance).toBe(true)
+    expect(b.readiness.format_completeness.post).toBe(true)
+  })
+
+  // Regression (Build Control TRUTHFUL READINESS): when a Post and a Reel
+  // reference THE SAME asset id, provenance must include that asset only
+  // once — dedup keyed by asset id, matching the required-set used by
+  // client_asset_provenance.
+  it('Post + Reel reference the same asset id → provenance contains that asset once (deduped)', async () => {
+    allow()
+    mockGetCampaign.mockResolvedValue(CAMPAIGN)
+    const shared = 'ffffffff-0000-0000-0000-000000000001'
+    const b1 = bundle({
+      date: '2026-08-24',
+      post: { hook: 'h', body: 'b', cta: 'Enquire Now', image_asset_id: shared, cta_url: CAMPAIGN_URL },
+      reel: { brief: 'br', script: 'sc', caption: 'cp', source_asset_ids: [shared], media_status: 'NO_MEDIA' },
+    })
+    const plan = {
+      plan_kind: 'campaign_daily_v1',
+      campaign_id: CAMPAIGN_ID,
+      master_brief_ref: { id: BRIEF_ID, version: 2 },
+      days: sevenDays(),
+      bundles: [b1],
+      command_meta: { source: 'conversation_command', received_at: '2026-08-24T00:00:00.000Z', raw_summary: null },
+    }
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'master_briefs') {
+        return tableStub({ maybeSingle: vi.fn().mockResolvedValue({ data: { id: BRIEF_ID, version: 2 } }) }) as never
+      }
+      if (table === 'social_plans') {
+        return tableStub({ limit: vi.fn().mockResolvedValue({ data: [{ id: 'plan-1', plan_data: plan }] }) }) as never
+      }
+      if (table === 'client_assets') {
+        return tableStub({ in: vi.fn().mockResolvedValue({ data: [{ id: shared, storage_url: 'https://x/shared.jpg', original_filename: 'shared.jpg', source: 'client_provided', ownership: 'client_exclusive' }] }) }) as never
+      }
+      return tableStub({}) as never
+    })
+
+    const json = await (await GET(getRequest(CAMPAIGN_ID), params())).json()
+    const b = json.bundles.find((x: { date: string }) => x.date === '2026-08-24')
+    expect(b.provenance).toHaveLength(1)
+    expect(b.provenance[0].id).toBe(shared)
+    expect(b.readiness.client_asset_provenance).toBe(true)
   })
 })
 

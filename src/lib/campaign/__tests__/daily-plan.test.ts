@@ -84,10 +84,114 @@ describe('computeReadiness', () => {
   })
 })
 
+// Regressions (Build Control TRUTHFUL READINESS — #1159): computeReadiness
+// must now cover BOTH the Post image_asset_id and Reel source_asset_ids,
+// deduped by asset id, and Post/Story completeness must reflect the current
+// contracts (image resolved + CTA URL + 4-frame Story).
+describe('computeReadiness — TRUTHFUL READINESS (Post image, dedup, 4-frame Story)', () => {
+  const grounding = { status: 'OK' as const, has_master_brief: true, has_campaign: true }
+
+  function completeBundle(overrides: Partial<CampaignDailyBundle> = {}): CampaignDailyBundle {
+    return {
+      date: '2026-08-24',
+      post: {
+        hook: 'h', body: 'b', cta: 'Enquire Now',
+        image_asset_id: 'p1',
+        cta_url: 'https://cts.test/tour',
+      },
+      story: {
+        frames: [
+          { order: 1, copy: 'f1' },
+          { order: 2, copy: 'f2' },
+          { order: 3, copy: 'f3' },
+          { order: 4, copy: 'f4' },
+        ],
+      },
+      reel: { brief: 'br', script: 'sc', caption: 'cp', source_asset_ids: [], media_status: 'NO_MEDIA' },
+      ...overrides,
+    }
+  }
+
+  it('Post image resolves + Reel has no sources → provenance=true, post-complete=true', () => {
+    const r = computeReadiness({ grounding, bundle: completeBundle(), resolvedAssetIds: new Set(['p1']) })
+    expect(r.client_asset_provenance).toBe(true)
+    expect(r.format_completeness.post).toBe(true)
+    expect(r.format_completeness.story).toBe(true)
+    expect(r.format_completeness.reel).toBe(true)
+  })
+
+  it('Post image not resolvable under this client → provenance=false and post-complete=false', () => {
+    const r = computeReadiness({ grounding, bundle: completeBundle(), resolvedAssetIds: new Set() })
+    expect(r.client_asset_provenance).toBe(false)
+    expect(r.format_completeness.post).toBe(false)
+  })
+
+  it('Legacy Post without image_asset_id → post-complete=false; provenance still requires SOMETHING to resolve', () => {
+    const legacy = completeBundle({
+      post: { hook: 'h', body: 'b', cta: 'Enquire Now' } as never,
+    })
+    const r = computeReadiness({ grounding, bundle: legacy, resolvedAssetIds: new Set() })
+    expect(r.format_completeness.post).toBe(false)
+    // No required refs at all → fail closed (never silently declare unproven authentic).
+    expect(r.client_asset_provenance).toBe(false)
+  })
+
+  it('Post + Reel BOTH must resolve for provenance=true; missing one is false', () => {
+    const withReel = completeBundle({
+      reel: { brief: 'br', script: 'sc', caption: 'cp', source_asset_ids: ['a1'], media_status: 'NO_MEDIA' },
+    })
+    // Post resolved, Reel not resolved → false
+    expect(computeReadiness({ grounding, bundle: withReel, resolvedAssetIds: new Set(['p1']) }).client_asset_provenance).toBe(false)
+    // Both resolved → true
+    expect(computeReadiness({ grounding, bundle: withReel, resolvedAssetIds: new Set(['p1', 'a1']) }).client_asset_provenance).toBe(true)
+  })
+
+  it('Post + Reel referencing the SAME asset id counts once; a single resolved id is enough', () => {
+    const same = completeBundle({
+      post: { hook: 'h', body: 'b', cta: 'Enquire Now', image_asset_id: 'shared', cta_url: 'https://cts.test/tour' },
+      reel: { brief: 'br', script: 'sc', caption: 'cp', source_asset_ids: ['shared'], media_status: 'NO_MEDIA' },
+    })
+    expect(computeReadiness({ grounding, bundle: same, resolvedAssetIds: new Set(['shared']) }).client_asset_provenance).toBe(true)
+  })
+
+  it('Story with fewer than 4 frames → story-complete=false (even if Post/Reel are fine)', () => {
+    const shortStory = completeBundle({
+      story: { frames: [{ order: 1, copy: 'only-one' }] },
+    })
+    const r = computeReadiness({ grounding, bundle: shortStory, resolvedAssetIds: new Set(['p1']) })
+    expect(r.format_completeness.story).toBe(false)
+    expect(r.format_completeness.post).toBe(true)
+  })
+
+  it('Post missing cta_url → post-complete=false even with a resolved image', () => {
+    const noCta = completeBundle({
+      post: { hook: 'h', body: 'b', cta: 'Enquire Now', image_asset_id: 'p1' } as never,
+    })
+    expect(computeReadiness({ grounding, bundle: noCta, resolvedAssetIds: new Set(['p1']) }).format_completeness.post).toBe(false)
+  })
+})
+
 describe('buildPublishingPlan / buildAdCandidate — always plan-only', () => {
   it('publishing plan is always NOT_AUTHORIZED', () => {
     expect(buildPublishingPlan(CAMPAIGN).status).toBe('NOT_AUTHORIZED')
     expect(buildPublishingPlan(null).status).toBe('NOT_AUTHORIZED')
+  })
+
+  // Regression (Build Control TRUTHFUL READINESS — #1159): the Campaign's
+  // `primary_cta` is a CONVERSION GOAL and must never be surfaced as a
+  // publishing destination. WP1 binds no Facebook Page/Instagram account,
+  // so destination is always the string `'UNKNOWN'`.
+  it('surfaces primary_cta as conversion_goal; destination is always UNKNOWN in WP1', () => {
+    const camp = { id: 'c', client_id: 'cts', title: 't', primary_cta: 'lead_form_submit' } as never
+    const plan = buildPublishingPlan(camp)
+    expect(plan.conversion_goal).toBe('lead_form_submit')
+    expect(plan.destination).toBe('UNKNOWN')
+    expect(plan.status).toBe('NOT_AUTHORIZED')
+
+    const noCampaign = buildPublishingPlan(null)
+    expect(noCampaign.conversion_goal).toBeNull()
+    expect(noCampaign.destination).toBe('UNKNOWN')
+    expect(noCampaign.status).toBe('NOT_AUTHORIZED')
   })
 
   it('ad candidate is null without a reel draft, and NOT_AUTHORIZED with one', () => {
