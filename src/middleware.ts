@@ -76,7 +76,19 @@ export async function middleware(request: NextRequest) {
         requestHeaders.set('x-user-role', 'client-viewer')
         requestHeaders.set('x-user-tier', 'portal_only')
         requestHeaders.set('x-allowed-client-id', clientId)
-        return NextResponse.next({ request: { headers: requestHeaders } })
+        // Preserve any Set-Cookie headers createMiddlewareSupabaseClient
+        // wrote onto the original middleware response — most importantly
+        // rotated Supabase session tokens from a token refresh. Returning
+        // a fresh NextResponse.next without copying them means the browser
+        // never receives the rotated cookies and the next navigation
+        // bounces to /portal/login. Use raw Set-Cookie headers via
+        // getSetCookie() so full cookie attributes (HttpOnly, SameSite,
+        // Path, Max-Age, Secure) survive intact.
+        const portalResponse = NextResponse.next({ request: { headers: requestHeaders } })
+        for (const setCookie of response.headers.getSetCookie()) {
+          portalResponse.headers.append('set-cookie', setCookie)
+        }
+        return portalResponse
       }
     }
 
