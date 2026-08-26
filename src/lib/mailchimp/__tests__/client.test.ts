@@ -229,13 +229,13 @@ describe('subscribeMember —— 唯一的写路径', () => {
     })
   })
 
-  it('fetch 抛异常（网络/超时）→ failed:network_error，不抛出', async () => {
+  it('fetch 抛异常（网络/超时）→ failed:network_error retryable，不抛出', async () => {
     const fake = vi.fn(async () => {
       throw new Error('ETIMEDOUT')
     }) as unknown as typeof fetch
 
     const res = await subscribeMember(baseInput({ fetchImpl: fake }))
-    expect(res).toEqual({ status: 'failed', reason: 'network_error' })
+    expect(res).toEqual({ status: 'failed', reason: 'network_error', retryable: true })
   })
 
   it('缺 apiKey → skipped:no_api_key（一次 provider 调用都不发起）', async () => {
@@ -274,5 +274,78 @@ describe('subscribeMember —— 唯一的写路径', () => {
     const body = JSON.parse(calls[0].init.body as string) as Record<string, unknown>
     expect(body.merge_fields).toEqual({ SOURCE: 'Meta Lead Form' })
     expect(body).not.toHaveProperty('tags')
+  })
+
+  // ── Remediation V2：POST 超时 + retryable 分类 ─────────────────────────
+
+  it('POST 挂起 → AbortSignal 拉起 TimeoutError → failed:timeout + retryable=true', async () => {
+    // AbortSignal.timeout 触发时 fetch 抛出 name==='TimeoutError' 的错误。
+    // 这里我们直接模拟被 abort：等 signal 触发后按 TimeoutError reject。
+    const hungFetch = ((_url: string | URL, init: RequestInit = {}) =>
+      new Promise((_, reject) => {
+        const signal = init.signal
+        if (!signal) return
+        if (signal.aborted) {
+          const err = new Error('The operation timed out.')
+          err.name = 'TimeoutError'
+          reject(err)
+          return
+        }
+        signal.addEventListener('abort', () => {
+          const err = new Error('The operation timed out.')
+          err.name = 'TimeoutError'
+          reject(err)
+        })
+      })) as unknown as typeof fetch
+
+    const res = await subscribeMember(baseInput({ fetchImpl: hungFetch, timeoutMs: 30 }))
+    expect(res).toEqual({ status: 'failed', reason: 'timeout', retryable: true })
+  })
+
+  it('POST fetch 抛 AbortError → 也归成 timeout（同一根因，不同引擎/版本命名不同）', async () => {
+    const abortFetch = (async () => {
+      const err = new Error('The operation was aborted.')
+      err.name = 'AbortError'
+      throw err
+    }) as unknown as typeof fetch
+
+    const res = await subscribeMember(baseInput({ fetchImpl: abortFetch, timeoutMs: 100 }))
+    expect(res).toMatchObject({ status: 'failed', reason: 'timeout', retryable: true })
+  })
+
+  it('429 / 5xx / network_error 全部带 retryable=true；auth / 校验 / 404 带 retryable=false', async () => {
+    // 429
+    let { fake } = mockFetch([{ status: 429 }])
+    expect(await subscribeMember(baseInput({ fetchImpl: fake }))).toMatchObject({
+      retryable: true,
+    })
+    // 503
+    ;({ fake } = mockFetch([{ status: 503 }]))
+    expect(await subscribeMember(baseInput({ fetchImpl: fake }))).toMatchObject({
+      retryable: true,
+    })
+    // network error
+    const netFail = (async () => {
+      throw new Error('ECONNRESET')
+    }) as unknown as typeof fetch
+    expect(await subscribeMember(baseInput({ fetchImpl: netFail }))).toMatchObject({
+      reason: 'network_error',
+      retryable: true,
+    })
+    // 401
+    ;({ fake } = mockFetch([{ status: 401 }]))
+    expect(await subscribeMember(baseInput({ fetchImpl: fake }))).toMatchObject({
+      retryable: false,
+    })
+    // 404
+    ;({ fake } = mockFetch([{ status: 404 }]))
+    expect(await subscribeMember(baseInput({ fetchImpl: fake }))).toMatchObject({
+      retryable: false,
+    })
+    // 400 validation
+    ;({ fake } = mockFetch([{ status: 400, body: { title: 'Invalid Resource' } }]))
+    expect(await subscribeMember(baseInput({ fetchImpl: fake }))).toMatchObject({
+      retryable: false,
+    })
   })
 })

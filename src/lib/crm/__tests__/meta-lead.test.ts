@@ -59,6 +59,10 @@ let contactInserts: Record<string, unknown>[]
 let touchpointUpserts: Record<string, unknown>[]
 let upsertOptions: Record<string, unknown>[]
 let contactUpdates: Record<string, unknown>[]
+/** Phase C 触点 receipt UPDATE 的 payload —— 每条对应一次 `.update(...)` 调用。 */
+let touchpointUpdates: Record<string, unknown>[]
+/** subscribeMock 被调用**当时**看到的 touchpointUpserts 数量。用来钉「provider 之前一定已经落了触点」。 */
+let touchpointsAtProviderCall: number[]
 
 interface MockDbOptions {
   identityHits?: { contact_id: string; kind: string; value: string }[]
@@ -76,6 +80,11 @@ interface MockDbOptions {
   contactReadError?: string | null
   /** 读 contact_touchpoints 的 select 失败；默认 null（成功）。 */
   touchpointReadError?: string | null
+  /**
+   * Phase C 触点 receipt UPDATE 是否报错。默认 null（成功）。
+   * 用来测「provider 已落地但 DB receipt 更新失败」的路径。
+   */
+  touchpointUpdateError?: string | null
 }
 
 function mockDb(opts: MockDbOptions = {}) {
@@ -89,11 +98,14 @@ function mockDb(opts: MockDbOptions = {}) {
     existingDncTouches = [],
     contactReadError = null,
     touchpointReadError = null,
+    touchpointUpdateError = null,
   } = opts
   contactInserts = []
   touchpointUpserts = []
   upsertOptions = []
   contactUpdates = []
+  touchpointUpdates = []
+  touchpointsAtProviderCall = []
   ;(supabaseAdmin.from as ReturnType<typeof vi.fn>).mockImplementation((table: string) => {
     if (table === 'ad_creative_links') {
       return {
@@ -172,10 +184,12 @@ function mockDb(opts: MockDbOptions = {}) {
       }
     }
     if (table === 'contact_touchpoints') {
-      // 两种 select 形态：
+      // 三种 write / read 形态：
       //   • evaluateDnc 走 .select('metadata,occurred_at').eq('contact_id', …)
       //     —— thenable，直接 await 拿 { data, error }
-      //   • 其它读方（若将来有）走既有链式；本文件目前只有 upsert / update
+      //   • 老 helper 有 .update(...).in(...)（保留 no-op 兜底）
+      //   • Phase C 走 .update({metadata}).eq('client_id').eq('source').eq('source_ref')
+      //     —— 三次 .eq() 后 thenable 一次
       const dncData = existingDncTouches.map((t) => ({
         metadata: {
           outcome: t.outcome ?? null,
@@ -183,8 +197,32 @@ function mockDb(opts: MockDbOptions = {}) {
         },
         occurred_at: t.occurred_at,
       }))
+      // Phase C 的 .update(payload).eq().eq().eq() —— 支持任意长度链式 .eq()
+      const buildTpUpdateBuilder = () => {
+        const builder: {
+          eq: () => typeof builder
+          then: <T>(onFulfilled: (v: { error: { message: string } | null }) => T) => Promise<T>
+        } = {
+          eq: () => builder,
+          then: (onFulfilled) =>
+            Promise.resolve(
+              touchpointUpdateError
+                ? { error: { message: touchpointUpdateError } }
+                : { error: null },
+            ).then(onFulfilled),
+        }
+        return builder
+      }
       return {
-        update: () => ({ in: () => Promise.resolve({ error: null }) }),
+        update: (payload: Record<string, unknown>) => {
+          // Phase C receipt update：payload 包含 metadata 字段。老 helper 用
+          // .update(...).in(...) 我们兜底，但 metadata-shaped 才计入 receipt。
+          if (payload && Object.prototype.hasOwnProperty.call(payload, 'metadata')) {
+            touchpointUpdates.push(payload)
+            return buildTpUpdateBuilder()
+          }
+          return { in: () => Promise.resolve({ error: null }) }
+        },
         select: () => ({
           eq: () =>
             Promise.resolve(
@@ -214,6 +252,30 @@ beforeEach(() => {
   subscribeMock.mockResolvedValue({ status: 'skipped', reason: 'no_audience_config' })
   process.env.MAILCHIMP_API_KEY = 'test-key-us19'
 })
+
+/**
+ * subscribeMember 的一次性覆写，同时把「provider 被调时已经落盘的触点数」
+ * 记进 `touchpointsAtProviderCall`。用来钉「Phase A 早于 Phase B」的硬顺序。
+ */
+function provideOnce(result: import('@/lib/mailchimp/client').SubscribeMemberResult) {
+  subscribeMock.mockImplementationOnce(async () => {
+    touchpointsAtProviderCall.push(touchpointUpserts.length)
+    return result
+  })
+}
+
+/**
+ * 最终触点 metadata：优先看 Phase C 的 receipt update（有则代表已被替换成
+ * provider 真实结果），否则回落到 Phase A 的 upsert（例如 upsert 之前就 throw
+ * 掉了的路径）。
+ */
+function finalTouchpointMeta(): Record<string, unknown> {
+  const last = touchpointUpdates[touchpointUpdates.length - 1]
+  if (last && typeof last.metadata === 'object' && last.metadata !== null) {
+    return last.metadata as Record<string, unknown>
+  }
+  return (touchpointUpserts[0]?.metadata ?? {}) as Record<string, unknown>
+}
 
 describe('parseLeadAnswers', () => {
   it('标准字段各归各位', () => {
@@ -521,7 +583,7 @@ describe('ingestMetaLead → Mailchimp 出口', () => {
     expect(res.mailchimp).toEqual({ status: 'subscribed' })
 
     // mailchimp_result 落进触点 metadata（不是新表）
-    const meta = touchpointUpserts[0].metadata as Record<string, unknown>
+    const meta = finalTouchpointMeta()
     expect(meta.mailchimp_result).toEqual({ status: 'subscribed' })
 
     // contacts.mailchimp_synced_at 被写上，且是 ISO 字符串
@@ -566,7 +628,7 @@ describe('ingestMetaLead → Mailchimp 出口', () => {
     // 但 synced_at 没被碰 —— failed 不算「同步成功」
     expect(contactUpdates).toHaveLength(0)
     // 失败原因如实进 metadata
-    const meta = touchpointUpserts[0].metadata as Record<string, unknown>
+    const meta = finalTouchpointMeta()
     expect(meta.mailchimp_result).toMatchObject({
       status: 'failed',
       reason: 'provider_5xx',
@@ -605,7 +667,7 @@ describe('ingestMetaLead → Mailchimp 出口', () => {
     })
 
     expect(subscribeMock).not.toHaveBeenCalled()
-    const meta = touchpointUpserts[0].metadata as Record<string, unknown>
+    const meta = finalTouchpointMeta()
     expect(meta.mailchimp_result).toEqual({ status: 'skipped', reason: 'no_email' })
   })
 
@@ -649,7 +711,7 @@ describe('ingestMetaLead → Mailchimp 出口', () => {
     })
 
     expect(subscribeMock).not.toHaveBeenCalled()
-    const meta = touchpointUpserts[0].metadata as Record<string, unknown>
+    const meta = finalTouchpointMeta()
     expect(meta.mailchimp_result).toEqual({ status: 'skipped', reason: 'no_api_key' })
   })
 
@@ -671,7 +733,7 @@ describe('ingestMetaLead → Mailchimp 出口', () => {
       lead: consented(),
     })
 
-    const meta = touchpointUpserts[0].metadata as Record<string, unknown>
+    const meta = finalTouchpointMeta()
     const mc = meta.mailchimp_result as Record<string, unknown>
     const asString = JSON.stringify(mc)
     expect(asString).not.toContain('@')
@@ -858,5 +920,178 @@ describe('ingestMetaLead → 统一 DNC 判据 fail-closed', () => {
 
     expect(subscribeMock).not.toHaveBeenCalled()
     expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'contact_dnc' })
+  })
+})
+
+// ── Remediation V2：POST 硬超时 + Phase A/B/C 顺序 + receipt 替换 ─────────
+// 全部对应 Build Control 合同 5425039661 指定的 focused regressions。
+
+describe('ingestMetaLead → durable receipt order + receipt replacement', () => {
+  it('provider 被调时，contact + source touchpoint（含 consent 证据）已耐久落盘', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    provideOnce({ status: 'subscribed' })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    // provider 被调 1 次
+    expect(subscribeMock).toHaveBeenCalledTimes(1)
+    // 那一刻已经有 1 条触点落盘 —— 硬顺序 Phase A → Phase B
+    expect(touchpointsAtProviderCall).toEqual([1])
+    // Phase A 上的触点带完整 consent 证据（判据字段名，不带原答案）
+    const upsertMeta = touchpointUpserts[0].metadata as Record<string, unknown>
+    expect(upsertMeta.consent_evidence).toBe('consent_to_marketing_emails')
+    expect(upsertMeta.opt_out_evidence).toBeNull()
+    // Phase A 期占位 = pending；Phase C 才替换成 subscribed
+    expect((upsertMeta.mailchimp_result as Record<string, unknown>).status).toBe('pending')
+    expect(finalTouchpointMeta().mailchimp_result).toEqual({ status: 'subscribed' })
+
+    expect(res.mailchimp).toEqual({ status: 'subscribed' })
+  })
+
+  it('同一 source_ref 上一轮 failed → 这一轮 subscribed，receipt 被替换，无重复触点', async () => {
+    // 第一次：provider 失败
+    mockDb({ audienceId: 'dda97b7e61' })
+    provideOnce({ status: 'failed', reason: 'provider_5xx', providerStatus: 503, retryable: true })
+
+    const res1 = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    expect(res1.mailchimp).toMatchObject({ status: 'failed', reason: 'provider_5xx' })
+    expect(touchpointUpserts).toHaveLength(1)
+    expect(touchpointUpdates).toHaveLength(1)
+    // Phase C 已经把 pending 换成 failed
+    expect((touchpointUpdates[0].metadata as Record<string, unknown>).mailchimp_result).toMatchObject({
+      status: 'failed',
+      reason: 'provider_5xx',
+    })
+    // 第一次的 mailchimp_synced_at 不写
+    expect(contactUpdates).toHaveLength(0)
+
+    // 第二次：同一 lead 再来一次，provider 成功。**不重开 mockDb** —— 保留
+    // 累积数组，好断言「触点没多写一条」。
+    provideOnce({ status: 'subscribed' })
+
+    const res2 = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    expect(res2.mailchimp).toEqual({ status: 'subscribed' })
+    // Phase A 又跑了一次（幂等键相同，实际库里不会真的多一条 —— upsert
+    // ignoreDuplicates=true 的语义；这里只钉「代码逻辑没绕开幂等键」）
+    expect(touchpointUpserts).toHaveLength(2)
+    expect(touchpointUpserts[1].source_ref).toBe(touchpointUpserts[0].source_ref)
+    expect(upsertOptions[1]).toMatchObject({
+      onConflict: 'client_id,source,source_ref',
+      ignoreDuplicates: true,
+    })
+    // Phase C 第二次把 failed 覆盖成 subscribed
+    expect(touchpointUpdates).toHaveLength(2)
+    expect((touchpointUpdates[1].metadata as Record<string, unknown>).mailchimp_result).toEqual({
+      status: 'subscribed',
+    })
+    // 现在才动 mailchimp_synced_at —— receipt 和 synced_at 语义一致
+    expect(contactUpdates).toHaveLength(1)
+    expect(typeof contactUpdates[0].mailchimp_synced_at).toBe('string')
+  })
+
+  it('receipt UPDATE 失败 → 主管道保留 contact/consent，不写 mailchimp_synced_at，不声称投递', async () => {
+    mockDb({ audienceId: 'dda97b7e61', touchpointUpdateError: 'db timeout' })
+    provideOnce({ status: 'subscribed' })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    // Phase A（contact + touchpoint + consent 证据）已经落盘
+    expect(contactInserts).toHaveLength(1)
+    expect(touchpointUpserts).toHaveLength(1)
+    expect((touchpointUpserts[0].metadata as Record<string, unknown>).consent_evidence).toBe(
+      'consent_to_marketing_emails',
+    )
+    // Phase B provider 也跑了
+    expect(subscribeMock).toHaveBeenCalledTimes(1)
+    // Phase C 尝试了 update 但失败 —— touchpointUpdates 依然记到了 payload 尝试
+    expect(touchpointUpdates).toHaveLength(1)
+    // 关键：mailchimp_synced_at 不写（不能声称已投递 / 已同步）
+    expect(contactUpdates).toHaveLength(0)
+    // 返回值保留 provider 的真实结果 —— 上游看得见 provider 说了 subscribed，
+    // 但 DB 那边 receipt 没落上，本地状态与远端可能暂时不一致
+    expect(res.mailchimp).toEqual({ status: 'subscribed' })
+    // 主管道 skipped=null 说明 lead 依然接进来了
+    expect(res.skipped).toBeNull()
+    expect(res.contactId).toBe('person-new')
+  })
+
+  it('零重复触点 —— 幂等键还是 (client_id, source, source_ref)', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    provideOnce({ status: 'subscribed' })
+
+    await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    // Phase A upsert 一次，upsertOptions 带 ignoreDuplicates=true。
+    expect(touchpointUpserts).toHaveLength(1)
+    expect(upsertOptions[0]).toMatchObject({
+      onConflict: 'client_id,source,source_ref',
+      ignoreDuplicates: true,
+    })
+    // Phase C 是 UPDATE 不是 INSERT / 不是 UPSERT —— 不会绕过幂等键。
+    expect(touchpointUpdates).toHaveLength(1)
+  })
+
+  it('subscribe POST 挂起 → 内置 AbortSignal 在 timeoutMs 内 abort，返回 retryable failed 且不阻塞主管道', async () => {
+    // 这条只测客户端函数本身；用它检查生产代码里 syncMailchimp 出的调用
+    // 也有超时兜底的路径能力（timeoutMs 参数在 SubscribeMemberInput 上）。
+    const { subscribeMember: realSubscribe } = await vi.importActual<
+      typeof import('@/lib/mailchimp/client')
+    >('@/lib/mailchimp/client')
+
+    // 只有 signal.aborted 才让 promise 落地 —— 模拟连接建了但对方不回。
+    const hungFetch = ((_url: string | URL, init: RequestInit = {}) =>
+      new Promise((_, reject) => {
+        const signal = init.signal
+        if (!signal) return // 没 signal 就永远挂 —— 测试到这就出错
+        if (signal.aborted) {
+          reject(new DOMException('The operation was aborted.', 'AbortError'))
+          return
+        }
+        signal.addEventListener('abort', () => {
+          const reason = (signal as AbortSignal & { reason?: unknown }).reason
+          const err =
+            reason instanceof Error
+              ? reason
+              : new DOMException('The operation was aborted.', 'AbortError')
+          reject(err)
+        })
+      })) as unknown as typeof fetch
+
+    const t0 = performance.now()
+    const res = await realSubscribe({
+      apiKey: 'key123-us19',
+      audienceId: 'dda97b7e61',
+      email: 'chris@example.com',
+      source: 'Meta Lead Form',
+      timeoutMs: 50,
+      fetchImpl: hungFetch,
+    })
+    const elapsed = performance.now() - t0
+
+    expect(res).toMatchObject({ status: 'failed', reason: 'timeout', retryable: true })
+    // 有明确上限：不能被拖到默认 20s。留 2s 缓冲扛调度抖动。
+    expect(elapsed).toBeLessThan(2000)
   })
 })

@@ -286,7 +286,7 @@ export type SubscribeMemberResult =
   | { status: 'subscribed' }
   | { status: 'already_member' }
   | { status: 'skipped'; reason: string }
-  | { status: 'failed'; reason: string; providerStatus?: number }
+  | { status: 'failed'; reason: string; providerStatus?: number; retryable?: boolean }
 
 export interface SubscribeMemberInput {
   apiKey: string
@@ -308,6 +308,12 @@ export interface SubscribeMemberInput {
    * 覆盖 fetch，测试用（默认走 globalThis.fetch）。生产不传。
    */
   fetchImpl?: typeof fetch
+  /**
+   * POST 的硬超时（毫秒）。生产走 `REQUEST_TIMEOUT_MS`（20s）—— 挂住的会员写
+   * 请求会拖住整个串行 leads-sync；给一个明确上限，超时归成 retryable failed。
+   * 测试可以传小值验证 abort 生效。
+   */
+  timeoutMs?: number
 }
 
 /**
@@ -355,6 +361,7 @@ export async function subscribeMember(input: SubscribeMemberInput): Promise<Subs
 
   const url = `https://${dc}.api.mailchimp.com/${API_VERSION}/lists/${encodeURIComponent(input.audienceId)}/members`
   const doFetch = input.fetchImpl ?? fetch
+  const timeoutMs = input.timeoutMs ?? REQUEST_TIMEOUT_MS
 
   let res: Response
   try {
@@ -365,10 +372,21 @@ export async function subscribeMember(input: SubscribeMemberInput): Promise<Subs
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
+      // 硬上限：连着不回、DNS 掐、TLS 卡都被 AbortSignal 拉起来 —— leads-sync
+      // 是串行遍历所有客户/表单的，一条 POST 卡住 = 之后全被拖走。
+      signal: AbortSignal.timeout(timeoutMs),
     })
-  } catch {
-    // 网络/超时/DNS —— Mailchimp 那头是不是收到不重要，语义就是「没确认成功」
-    return { status: 'failed', reason: 'network_error' }
+  } catch (err) {
+    // 用鸭子测 name —— DOMException 在部分运行时不是 `instanceof Error`，
+    // 只用 `err instanceof Error` 会漏掉 AbortSignal.timeout 抛出的 TimeoutError。
+    const name = (err as { name?: unknown } | null)?.name
+    if (name === 'TimeoutError' || name === 'AbortError') {
+      // 超时 = 我们主动拉断了，Mailchimp 那头可能收到也可能没收到；语义上
+      // 「未确认」，可重试。上层看到 retryable=true 时可以在下一次窗口内再打一次。
+      return { status: 'failed', reason: 'timeout', retryable: true }
+    }
+    // 网络/DNS —— Mailchimp 那头是不是收到不重要，语义就是「没确认成功」
+    return { status: 'failed', reason: 'network_error', retryable: true }
   }
 
   if (res.status === 200 || res.status === 201) {
@@ -381,25 +399,26 @@ export async function subscribeMember(input: SubscribeMemberInput): Promise<Subs
     if (title === 'Member Exists') {
       return { status: 'already_member' }
     }
-    // 缺 SOURCE / 无效 merge field / 邮箱被 Mailchimp 拒 / …
-    return { status: 'failed', reason: classify400(title), providerStatus: 400 }
+    // 缺 SOURCE / 无效 merge field / 邮箱被 Mailchimp 拒 / … —— 数据本身的错，
+    // 重试也没用，`retryable=false` 让上层不要盲刷。
+    return { status: 'failed', reason: classify400(title), providerStatus: 400, retryable: false }
   }
 
   if (res.status === 401 || res.status === 403) {
-    return { status: 'failed', reason: 'auth', providerStatus: res.status }
+    return { status: 'failed', reason: 'auth', providerStatus: res.status, retryable: false }
   }
   if (res.status === 404) {
     // audience id 不存在
-    return { status: 'failed', reason: 'audience_not_found', providerStatus: 404 }
+    return { status: 'failed', reason: 'audience_not_found', providerStatus: 404, retryable: false }
   }
   if (res.status === 429) {
-    return { status: 'failed', reason: 'rate_limited', providerStatus: 429 }
+    return { status: 'failed', reason: 'rate_limited', providerStatus: 429, retryable: true }
   }
   if (res.status >= 500) {
-    return { status: 'failed', reason: 'provider_5xx', providerStatus: res.status }
+    return { status: 'failed', reason: 'provider_5xx', providerStatus: res.status, retryable: true }
   }
 
-  return { status: 'failed', reason: 'unexpected_status', providerStatus: res.status }
+  return { status: 'failed', reason: 'unexpected_status', providerStatus: res.status, retryable: false }
 }
 
 /**

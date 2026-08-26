@@ -266,15 +266,26 @@ export async function ingestMetaLead(input: IngestMetaLeadInput): Promise<Ingest
       attribution,
     })
 
-    // Mailchimp 出口：先跑 provider（`syncMailchimp` 自己吞异常，永远返回一个
-    // 结果对象），把结果写进本条触点的 metadata —— 一个动作产生一次记录，不用
-    // 新表也不用二次 update。provider 成败**不影响**下面的触点 upsert。
-    const mailchimp = await syncMailchimp({
-      clientId,
-      contactId,
-      parsed,
-      leadId: lead.leadId,
-    })
+    // ── 触点 Phase A：**在任何 Mailchimp 调用之前**先把 contact + source
+    //    touchpoint（含 consent 证据）落盘。这条硬顺序保证：如果稍后 provider
+    //    的副作用触发了 Welcome 邮件，本地一定已经有一份耐用回执可以对得上；
+    //    也保证「已经落进 lead 表」跟「已经打了 Mailchimp」不会互相取反。
+    //
+    //    metadata 里先写 `mailchimp_result: { status: 'pending' }` 占位 —— 便于
+    //    Phase C 的 UPDATE 用同一份 metadata 结构直接替换；也让「provider 打完
+    //    但 Phase C UPDATE 失败」的情况有可观测证据（pending 会一直挂在那儿）。
+    const baseMetadata = {
+      tour_interest_raw: parsed.tourInterest,
+      ad_name: lead.adName,
+      form_id: lead.formId,
+      meta_platform: lead.platform,
+      is_organic: lead.isOrganic,
+      custom_answers: parsed.custom,
+      ingested_by: 'meta-leads-sync',
+      /** consent 证据 —— 判据用的问题名，永远不落原答案（可能含 PII）。 */
+      consent_evidence: parsed.consentEvidence,
+      opt_out_evidence: parsed.optOutEvidence,
+    }
 
     const { error } = await supabaseAdmin.from('contact_touchpoints').upsert(
       {
@@ -288,17 +299,9 @@ export async function ingestMetaLead(input: IngestMetaLeadInput): Promise<Ingest
         summary: `填了 Facebook 表单${parsed.tourInterest ? ` · ${parsed.tourInterest}` : ''}`,
         raw: null,
         metadata: {
-          tour_interest_raw: parsed.tourInterest,
-          ad_name: lead.adName,
-          form_id: lead.formId,
-          meta_platform: lead.platform,
-          is_organic: lead.isOrganic,
-          custom_answers: parsed.custom,
-          ingested_by: 'meta-leads-sync',
-          // 观测：这条 lead 的 Mailchimp 出口跑成了什么。**只落 status + reason**
-          // —— 不落邮箱、不落 provider body、不落 audience id（不是敏感但也没
-          // 必要复读）。
-          mailchimp_result: mailchimp,
+          ...baseMetadata,
+          // Phase A 占位：还没打 provider。Phase C 会替换成真实结果。
+          mailchimp_result: { status: 'pending' },
         },
         // 触点也存一份归因：同一个人可能被两条不同的广告分别捞到过，只看 contacts
         // 上那份 first-touch 会让第二条广告的贡献永远看不见。
@@ -310,8 +313,42 @@ export async function ingestMetaLead(input: IngestMetaLeadInput): Promise<Ingest
     )
     if (error) throw new Error(error.message)
 
-    // 只在明确成功或安全确认已存在时，才动 contacts.mailchimp_synced_at。
-    // 该列的语义是「audience 会员关系已确认」，不承担「Welcome 邮件已投递」。
+    // ── 触点 Phase B：现在（且仅在触点已落盘之后）调 Mailchimp。provider 自己
+    //    吞异常，永远返回 `SubscribeMemberResult`；有 AbortSignal 硬超时兜底。
+    const mailchimp = await syncMailchimp({
+      clientId,
+      contactId,
+      parsed,
+      leadId: lead.leadId,
+    })
+
+    // ── 触点 Phase C：把**同一条**（client_id + source + source_ref 唯一）触点的
+    //    metadata.mailchimp_result 从 pending / 上一轮的 failed/skipped 替换成
+    //    本轮 provider 的真实结果。**用 UPDATE 而不是二次 upsert** —— upsert 走
+    //    ignoreDuplicates=true 会保留旧 metadata，正是这次要修的病根。
+    const receiptMetadata = {
+      ...baseMetadata,
+      mailchimp_result: mailchimp,
+    }
+    const { error: receiptErr } = await supabaseAdmin
+      .from('contact_touchpoints')
+      .update({ metadata: receiptMetadata })
+      .eq('client_id', clientId)
+      .eq('source', 'meta_lead_form')
+      .eq('source_ref', lead.leadId)
+
+    if (receiptErr) {
+      // provider 结果没能写回本地。**不**声称邮件已投递，**不**动
+      // mailchimp_synced_at；主管道（Phase A）已经成，联系人 + consent 证据都在。
+      console.warn(
+        `[meta-lead] lead ${lead.leadId} receipt update failed (${sanitizeErr(receiptErr.message)}); mailchimp_synced_at withheld`,
+      )
+      return { contactId, createdContact: created, skipped: null, mailchimp }
+    }
+
+    // 只在明确成功或安全确认已存在**且**回执写回成功时，才动
+    // contacts.mailchimp_synced_at。该列的语义是「audience 会员关系已确认」，
+    // 不承担「Welcome 邮件已投递」；与 receipt 语义永远保持一致。
     if (mailchimp.status === 'subscribed' || mailchimp.status === 'already_member') {
       const { error: syncErr } = await supabaseAdmin
         .from('contacts')
@@ -320,7 +357,7 @@ export async function ingestMetaLead(input: IngestMetaLeadInput): Promise<Ingest
       if (syncErr) {
         // 观测列没写上不影响主管道；如实 warn，不 throw。
         console.warn(
-          `[meta-lead] contact ${contactId} mailchimp_synced_at 更新失败: ${syncErr.message}`,
+          `[meta-lead] contact ${contactId} mailchimp_synced_at 更新失败: ${sanitizeErr(syncErr.message)}`,
         )
       }
     }
@@ -330,6 +367,15 @@ export async function ingestMetaLead(input: IngestMetaLeadInput): Promise<Ingest
     console.error(`[meta-lead] lead ${lead.leadId} 接入失败:`, err)
     return { contactId: null, createdContact: false, skipped: 'error', mailchimp: null }
   }
+}
+
+/** 把 DB / provider 错误里可能带的邮箱、URL 截断，落日志只留骨架。 */
+function sanitizeErr(msg: string): string {
+  if (!msg) return ''
+  return msg
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+/g, '<email>')
+    .replace(/(https?:\/\/[^\s]+)/g, '<url>')
+    .slice(0, 200)
 }
 
 // ── Mailchimp 出口 ──────────────────────────────────────────────────────────
