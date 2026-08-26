@@ -1363,3 +1363,88 @@ describe('ingestMetaLead → PM override: form_disclosure_attested consent basis
     expect(contactUpdates).toHaveLength(0)
   })
 })
+
+// ── 合同 5426843158：Persistent opt-out via unified DNC signal ────────────────
+// 明确 opt-out 必须留下**判据读得懂**的耐久标记，同一联系人未来的 lead
+// 也会被同一份 DNC 判据继续拦。不加 schema / 表 / DNC framework / provider
+// 行为 / settings —— 只在既有 metadata 里补一位布尔。
+
+describe('ingestMetaLead → persistent opt-out via metadata.do_not_contact', () => {
+  it('lead A 明确 opt-out → 零 provider 调用 + metadata 同时携带 opt_out_evidence 和 do_not_contact:true', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+
+    const resA = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: lead({
+        answers: [
+          { name: 'full_name', value: 'Chris Brown' },
+          { name: 'email', value: 'chris@example.com' },
+          { name: 'marketing_opt_out', value: 'Yes' },
+        ],
+      }),
+    })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(resA.mailchimp).toEqual({ status: 'skipped', reason: 'explicit_opt_out' })
+
+    // 主管道照常写触点；metadata **同时** 有 audit-truth 和 DNC 判据读位
+    expect(touchpointUpserts).toHaveLength(1)
+    const metaA = touchpointUpserts[0].metadata as Record<string, unknown>
+    expect(metaA.opt_out_evidence).toBe('marketing_opt_out')
+    expect(metaA.do_not_contact).toBe(true)
+    // Phase B pre-provider UPDATE 上的 metadata 也带上耐久 DNC 位
+    const phaseBMeta = touchpointUpdates[0].metadata as Record<string, unknown>
+    expect(phaseBMeta.do_not_contact).toBe(true)
+    expect(phaseBMeta.opt_out_evidence).toBe('marketing_opt_out')
+  })
+
+  it('同一联系人后续 lead B **不再勾 opt-out** → 仍被统一 DNC 判据拦：零 provider 调用', async () => {
+    // 场景：lead A 已经把 metadata.do_not_contact=true 落进了触点。后来 lead B
+    // 进来时，evaluateDnc() 读 contact_touchpoints 会看到那条持久 DNC 信号。
+    mockDb({
+      audienceId: 'dda97b7e61',
+      existingDncTouches: [
+        // 模拟 lead A 那条触点在库里的样子：只有 metadata.do_not_contact=true，
+        // outcome 空。这正是本次补丁写入的最小信号。
+        { do_not_contact: true, occurred_at: '2026-07-28T04:19:48.000Z' },
+      ],
+    })
+
+    // Lead B：默认 lead()，**没有** opt-out 答案
+    const resB = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: lead({ leadId: 'lead-B' }),
+    })
+
+    // 关键：零 Mailchimp 调用；skipped 原因 contact_dnc
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(resB.mailchimp).toEqual({ status: 'skipped', reason: 'contact_dnc' })
+    // synced_at 绝不写
+    expect(contactUpdates).toHaveLength(0)
+  })
+
+  it('已存在明确 dnc_cleared 判决（时间晚于 opt-out 触点）→ 依旧放行，既有行为不变', async () => {
+    mockDb({
+      audienceId: 'dda97b7e61',
+      existingDncTouches: [
+        // 早前 lead A 留下的持久 DNC 位
+        { do_not_contact: true, occurred_at: '2026-07-01T10:00:00Z' },
+        // 后来人明确纠正过一次
+        { outcome: 'dnc_cleared', occurred_at: '2026-08-15T10:00:00Z' },
+      ],
+    })
+    provideOnce({ status: 'subscribed' })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: lead({ leadId: 'lead-C' }),
+    })
+
+    // dnc_cleared 晚于持久 DNC 位 —— isDoNotContact() 认最后一次判决 → 放行
+    expect(subscribeMock).toHaveBeenCalledTimes(1)
+    expect(res.mailchimp).toEqual({ status: 'subscribed' })
+  })
+})

@@ -334,6 +334,18 @@ export async function ingestMetaLead(input: IngestMetaLeadInput): Promise<Ingest
        */
       consent_evidence: parsed.consentEvidence,
       opt_out_evidence: parsed.optOutEvidence,
+      /**
+       * ⚠️ Persistent opt-out（合同 5426843158）：这条 lead 明确 opt-out 时，
+       * 把统一 DNC 判据能读到的 `do_not_contact: true` 也写进 metadata。
+       * `evaluateDnc()` 已经在读 `metadata.do_not_contact`（见 dnc.ts 的
+       * `flagged` 字段），所以这一位一亮 → 同一联系人**未来任何** lead 都会
+       * 被同一 DNC 判据拦下来，即使那条 lead 本身没有再勾 opt-out。
+       * `opt_out_evidence` 继续保留作审计事实；这里只补一位「判据读得懂」的
+       * 布尔，不加 schema、不加表、不动 DNC framework。
+       * dnc_cleared 的既有解除路径保持不变 —— isDoNotContact() 看最后一次判决，
+       * 后写的 dnc_cleared 触点仍然可以推翻这里的 true。
+       */
+      ...(parsed.optOutEvidence ? { do_not_contact: true } : {}),
     }
 
     const { error } = await supabaseAdmin.from('contact_touchpoints').upsert(
