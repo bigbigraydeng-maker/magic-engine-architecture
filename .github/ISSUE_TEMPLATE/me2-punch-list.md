@@ -69,8 +69,8 @@ label 说明:
 
 ## 关联
 
-- 登记表: [docs/registry/platform-candidates.md](../../docs/registry/platform-candidates.md)
-- 张良 skill: [.claude/skills/me-platform-tier-gate/SKILL.md](../../.claude/skills/me-platform-tier-gate/SKILL.md)
+- 登记表: [docs/registry/platform-candidates.md](https://github.com/bigbigraydeng-maker/magic-engine/blob/main/docs/registry/platform-candidates.md)
+- 张良 skill: [.claude/skills/me-platform-tier-gate/SKILL.md](https://github.com/bigbigraydeng-maker/magic-engine/blob/main/.claude/skills/me-platform-tier-gate/SKILL.md)
 - 触发本判定的会话 / PR: <!-- 链接或摘要 -->
 - 相关 PR (实现落地): <!-- 关闭 issue 前必填 -->
 

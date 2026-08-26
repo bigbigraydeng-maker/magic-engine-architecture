@@ -260,7 +260,7 @@ Industry Playbook / Profile / Version 只能装：行业级 / 版本级的 6 支
 3 句话完成，融入正常对话不打断节奏：
 
 ```
-> [跟班 · Tier] 这是 L3（KOL 撮合），挂在既有社媒 / 口碑支柱下 · 不新增能力线 · 不用登记 candidates。
+> [跟班 · Tier] 这是 L3（KOL 撮合，Agent 实现——信号 A 命中"独立处理需求"），挂在既有社媒 / 口碑支柱下 · 不新增能力线 · 不用登记 candidates。
 > [跟班 · 红线] 保持 ME 不从 MCN 抽佣的一贯原则。
 > [跟班 · 继续吗？] 判定完了，你 `继续` 我就走下一步。
 ```
@@ -271,8 +271,8 @@ Industry Playbook / Profile / Version 只能装：行业级 / 版本级的 6 支
 - 明显归属既有能力线时
 - 判定为 L3 Connector 且不占用候选名额时（按红线 3 直接归位）
 
-**Inline 三句话结构**：
-1. **[跟班 · Tier]**：层级判定 + 挂在哪 + 要不要登记
+**Inline 三句话结构**（v2.2 起第 1 句必须同时给出层级与实现形态两条轴——不得只出 Tier）：
+1. **[跟班 · Tier]**：层级判定 + 挂在哪 + **实现形态（Skill / Agent / Hybrid，附一句 4 问判据里命中的信号）** + 要不要登记
 2. **[跟班 · 红线 / 判据]**：关键红线是哪条 · 或者用了哪条判据
 3. **[跟班 · 继续吗？]**：等 PM 明确 `继续`
 
@@ -558,6 +558,7 @@ Full Report 模式完整格式：
 
 ## 版本
 
+- **v2.2.3 · 2026-08-27** · Codex PR #1201 第 3 轮复审修正：Inline 三句话结构第 1 句补齐实现形态输出（之前默认路径只给层级判定，导致日常单客户判定 / 已有能力挂载 / L3 Connector 判定这些绝大多数走 Inline 的场景永远拿不到 Skill/Agent/Hybrid 结论）· 关联登记表 issue template 的登记表 / 张良 skill 链接改为仓库根目录可解析的绝对 GitHub URL（原相对路径 `../../` 在 GitHub Issue 页面上下文里会指向仓库外部，无法打开）
 - **v2.2.2 · 2026-08-27** · Codex PR #1201 第 2 轮复审修正：Low bar 登记（PM 回 `记`）补齐同步生成 GitHub Issue Draft，不再只有 Full Report 才派生 draft，避免 L1/L2 候选走 Inline 路径时永远进不了 `me2.0-punch-list` 标签筛选与冲刺跟踪 · Full Report "建议实现形态"必填范围从 L1/L2/L3 扩到含 L4，修复最常见的单客户配置场景反而拿不到 v2.2 新增实现形态结论的漏洞
 - **v2.2.1 · 2026-08-27** · Codex PR #1201 第 1 轮复审修正：4 问判据补全为互斥且完备的信号 A/B 矩阵（修复"仅第 1 条为真但不需融入主对话"无法判定的漏洞）· L3 Skill 示例把不符合外部系统边界判据的"HBay VI 生成模板"换成"Publer 发布格式映射规则"（HBay VI 已在 L4 正确归位，避免误导 agent 把客户专属模板登记成 Connector）· Full Report 结论行改为"Issue draft 待 PM 批准"，禁止在 PM 授权创建前声称已关联具体 issue 编号
 - **v2.2 · 2026-08-27** · 加"实现形态判定"（第二独立轴 · Skill/Agent/Hybrid · 4 问判据 · 4×2 落点矩阵）· Full Report 加实现形态字段 · 新增 GitHub Issue 自动生成规则（ME 2.0 punch list 机制 · me2.0-punch-list label 系统 · issue template 落地文件 · L1/L2 候选自动派生 issue draft · candidates.md 加 GitHub Issue 列）· 别名张良正式登记（PM 可从任意窗口用 `@张良` `召张良` `张良判定` 等自然语言召唤）
