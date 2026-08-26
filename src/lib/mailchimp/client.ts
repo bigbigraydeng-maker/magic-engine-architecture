@@ -43,6 +43,8 @@ export class MailchimpError extends Error {
   constructor(
     message: string,
     readonly status?: number,
+    /** 超时/网络类失败可以重试；认证失败、格式错误这类不该重试。 */
+    readonly retryable = false,
   ) {
     super(message)
     this.name = 'MailchimpError'
@@ -138,18 +140,38 @@ export function mergeActivity(
 
 // ── HTTP ────────────────────────────────────────────────────────────────────
 
+/**
+ * Mailchimp 接了连接但迟迟不回应时，没有超时的 fetch 会一直 pending ——
+ * leads-sync 之类的调用方是逐条串行等的，一个卡住的请求会拖住其后所有
+ * 客户/表单，直到整个定时任务被平台杀掉。必须给个硬上限。
+ */
+const REQUEST_TIMEOUT_MS = 20_000
+
 async function call<T>(apiKey: string, path: string, params?: Record<string, string>): Promise<T> {
   const dc = datacenterFromKey(apiKey)
   const url = new URL(`https://${dc}.api.mailchimp.com/${API_VERSION}${path}`)
   for (const [k, v] of Object.entries(params ?? {})) url.searchParams.set(k, v)
 
-  const res = await fetch(url, {
-    headers: {
-      // Mailchimp 认 Basic，用户名随便填。
-      Authorization: `Basic ${Buffer.from(`me:${apiKey}`).toString('base64')}`,
-      'Content-Type': 'application/json',
-    },
-  })
+  let res: Response
+  try {
+    res = await fetch(url, {
+      headers: {
+        // Mailchimp 认 Basic，用户名随便填。
+        Authorization: `Basic ${Buffer.from(`me:${apiKey}`).toString('base64')}`,
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    })
+  } catch (err) {
+    if (err instanceof Error && err.name === 'TimeoutError') {
+      throw new MailchimpError(`Mailchimp 请求超过 ${REQUEST_TIMEOUT_MS / 1000}s 没响应，先跳过`, undefined, true)
+    }
+    throw new MailchimpError(
+      `Mailchimp 连不上：${err instanceof Error ? err.message : String(err)}`,
+      undefined,
+      true,
+    )
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => '')
