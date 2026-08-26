@@ -311,7 +311,7 @@ Inline 判定后建议登记时，用轻量条目：
 ```
 
 **PM 响应**：
-- `记` / `记下` / `mark it` → agent 追加进 `docs/registry/platform-candidates.md`，走 Low bar schema（可以先只填 5 个字段，其余等后续），并同步登记进 [`src/lib/pm-todo/platform-candidate-reviews.ts`](../../../src/lib/pm-todo/platform-candidate-reviews.ts) 让复查日到期自动下发待办
+- `记` / `记下` / `mark it` → agent 追加进 `docs/registry/platform-candidates.md`，走 Low bar schema（可以先只填 5 个字段，其余等后续），并同步登记进 [`src/lib/pm-todo/platform-candidate-reviews.ts`](../../../src/lib/pm-todo/platform-candidate-reviews.ts) 让复查日到期自动下发待办 —— **同时**必须按下方"GitHub Issue 自动生成规则"派生一份精简版 Issue Draft（沿用 Low bar 已有的 5 个字段，缺的字段标 TBD，不得因为是 Inline 判定就跳过 draft），等 PM 说 `开 issue` 再创建，保证 L1/L2 候选不论走 Low bar 还是 High bar 都能进 `me2.0-punch-list` 标签筛选与冲刺跟踪
 - `不记` / `skip` → 跳过登记，继续原任务
 - `跑 full` → 升级到 Full Report + High bar 完整登记
 
@@ -387,7 +387,7 @@ Full Report 模式完整格式：
 - [ ] 平台基础设施：[Kernel / Measurement Contract / Attribution / Memory / Verification / 其他]
 - [ ] 都不是 → 强制降为 L2 或 PM 拍板"是否新增支柱 / 版本"
 
-**建议实现形态**（若声明 L1/L2/L3，必填一项 · v2.2 新增）:
+**建议实现形态**（不论声明 L1/L2/L3/L4，必填一项 · 层级与实现形态是独立轴 · v2.2 新增）:
 - [ ] Skill · 规则型：融入主对话 · 无独立进程
 - [ ] Agent · 服务型：独立 context · 可 spawn
 - [ ] Hybrid · Skill 触发 + Agent 深度
@@ -431,7 +431,7 @@ Full Report 模式完整格式：
 
 ## GitHub Issue 自动生成规则（v2.2 新增 · ME 2.0 Punch List 机制）
 
-当 Full Report 判定为 **L1 / L2 候选**（含 L1 潜在候选）时，agent **必须**同时输出 GitHub Issue Draft：
+当 **Full Report 判定为 L1 / L2 候选**（含 L1 潜在候选），**或 Inline 模式下 PM 回复 `记` 确认 Low bar 登记**时，agent **必须**同时输出 GitHub Issue Draft（Low bar 场景字段不全时用 TBD 占位，不得省略 draft 本身）：
 
 ```
 ## GitHub Issue Draft（等 PM 一句"开 issue"执行）
@@ -558,6 +558,7 @@ Full Report 模式完整格式：
 
 ## 版本
 
+- **v2.2.2 · 2026-08-27** · Codex PR #1201 第 2 轮复审修正：Low bar 登记（PM 回 `记`）补齐同步生成 GitHub Issue Draft，不再只有 Full Report 才派生 draft，避免 L1/L2 候选走 Inline 路径时永远进不了 `me2.0-punch-list` 标签筛选与冲刺跟踪 · Full Report "建议实现形态"必填范围从 L1/L2/L3 扩到含 L4，修复最常见的单客户配置场景反而拿不到 v2.2 新增实现形态结论的漏洞
 - **v2.2.1 · 2026-08-27** · Codex PR #1201 第 1 轮复审修正：4 问判据补全为互斥且完备的信号 A/B 矩阵（修复"仅第 1 条为真但不需融入主对话"无法判定的漏洞）· L3 Skill 示例把不符合外部系统边界判据的"HBay VI 生成模板"换成"Publer 发布格式映射规则"（HBay VI 已在 L4 正确归位，避免误导 agent 把客户专属模板登记成 Connector）· Full Report 结论行改为"Issue draft 待 PM 批准"，禁止在 PM 授权创建前声称已关联具体 issue 编号
 - **v2.2 · 2026-08-27** · 加"实现形态判定"（第二独立轴 · Skill/Agent/Hybrid · 4 问判据 · 4×2 落点矩阵）· Full Report 加实现形态字段 · 新增 GitHub Issue 自动生成规则（ME 2.0 punch list 机制 · me2.0-punch-list label 系统 · issue template 落地文件 · L1/L2 候选自动派生 issue draft · candidates.md 加 GitHub Issue 列）· 别名张良正式登记（PM 可从任意窗口用 `@张良` `召张良` `张良判定` 等自然语言召唤）
 - **v2.1 · 2026-08-27** · Codex 第 4 轮复审修正：停等 PM 的硬约束分档（日常触发 Inline 后可继续 · 只有登记候选 / 商业决策 / 新支柱 / 红线冲突 / 升 Full 才停等）· 避免普通代码 review 出现 `module` / `interface` / `service` 等日常词也硬停 PM（违反 CLAUDE.md §2 PM 不决策架构与接口）
