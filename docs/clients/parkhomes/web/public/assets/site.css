@@ -4,7 +4,7 @@
 :root{
   --navy:#1C1C1C; --navy-deep:#141414; --navy-soft:#242424; --navy-card:#232323;
   --paper:#FFFFFF; --paper-2:#F1E6D4; --paper-3:#EADCC5;
-  --ink:#1C1C1C; --slate:#4A4843; --mute:#8B887E;
+  --ink:#1C1C1C; --slate:#4A4843; --mute:#625E56;
   --line:#E7DDCB; --line-2:#DACFBB; --line-d:rgba(255,255,255,.12); --line-d2:rgba(255,255,255,.24);
   --accent:#44512F; --accent-2:#33401F; --ice:#EDE3D1; --ice-dim:#B7AE9B;
   --sans:'Inter',system-ui,-apple-system,'Segoe UI','PingFang SC',Arial,sans-serif;
@@ -57,6 +57,7 @@ img{max-width:100%;display:block}
 .ph-dark::after{color:rgba(255,255,255,.5);border-color:rgba(255,255,255,.24)}
 /* filled example image panel */
 .shot{position:relative;overflow:hidden;background-size:cover;background-position:center;background-color:#111a25}
+.shot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .shot.pending{background:repeating-linear-gradient(45deg,#F1E6D4,#F1E6D4 14px,#ECE0CC 14px,#ECE0CC 28px);display:flex;align-items:center;justify-content:center}
 .shot.pending::after{content:attr(data-label);font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:#9a8f78;text-align:center;padding:8px 14px;border:1px dashed #cbbfa6;border-radius:2px;max-width:82%;background:rgba(255,255,255,.55)}
 
@@ -260,6 +261,12 @@ section{padding:clamp(56px,8vw,110px) 0}
 .post a{color:var(--accent-2);font-weight:600}
 .post hr{border:0;border-top:1px solid var(--line);margin:36px 0}
 .post blockquote{margin:28px 0;padding:4px 0 4px 22px;border-left:3px solid var(--accent);font-size:19px;color:var(--ink)}
+.post img{width:100%;height:auto;border-radius:3px;margin:30px 0 8px;display:block}
+.post .img-cap{font-size:13px;color:var(--mute);margin:0 0 30px;font-style:italic}
+.post .further-reading{margin:40px 0;padding:20px 22px;background:var(--paper-2);border-radius:3px}
+.post .further-reading p{margin:0 0 10px;font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--slate)}
+.post .further-reading ul{margin:0;padding-left:20px}
+.post .further-reading li{margin-bottom:6px}
 
 /* card image wrapper must be block, or aspect-ratio collapses inside inline <a> */
 .card > a{display:block}

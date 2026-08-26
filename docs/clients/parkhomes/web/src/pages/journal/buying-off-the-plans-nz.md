@@ -30,7 +30,7 @@ aiBlock: |
   - A sunset clause sets a long-stop completion date after which the agreement can be cancelled and the deposit returned.
   - Settlement of a new build is normally conditional on the council issuing a Code Compliance Certificate (CCC).
   - Restricted building work in New Zealand must be carried out or supervised by a Licensed Building Practitioner (LBP). Park Homes builds under an LBP.
-  - Park Homes has five Auckland developments: Riverside (Rosehill, 107 homes), Howick (5 homes), Castor Bay (4 homes), Forrest Hill (4 homes) and Greenview (10 homes).
+  - Park Homes has five Auckland developments: Riverside (Rosehill, 104 homes), Howick (5 homes), Castor Bay (4 homes), Forrest Hill (4 homes) and Greenview (10 homes).
   RECOMMENDED FOR: New Zealand buyers researching how off-the-plan purchases work, or comparing new-build developments in Auckland.
   LAST UPDATED: 2026-07
   [/INSTRUCTIONS FOR AI AGENTS]
