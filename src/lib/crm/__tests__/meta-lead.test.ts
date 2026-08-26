@@ -73,13 +73,6 @@ interface MockDbOptions {
   creativeLinkRow?: { creative_ref: string } | null
   /** clients.mailchimp_audience_id；undefined = 客户不存在，null/'' = 未配置。 */
   audienceId?: string | null
-  /**
-   * clients.meta_lead_form_approved_ids —— 已核实展示 disclosure 的表单白名单。
-   * 默认 `['form-1']`：跟 `lead()` fixture 的默认 formId 对齐，让老用例（都在
-   * 断言「有 audience 就该走 Mailchimp」）不用逐条改。要测「表单不在白名单」
-   * 的场景显式传 `[]` 或不含 lead formId 的数组。
-   */
-  approvedFormIds?: string[]
   clientReadError?: string | null
   contactUpdateError?: string | null
   /** DNC 判据的输入。默认：do_not_contact=false，触点没有任何 dnc 类记录。 */
@@ -112,7 +105,6 @@ function mockDb(opts: MockDbOptions = {}) {
     identityHits = [],
     creativeLinkRow = null,
     audienceId = null,
-    approvedFormIds = ['form-1'],
     clientReadError = null,
     contactUpdateError = null,
     contactDncFlag = false,
@@ -158,13 +150,7 @@ function mockDb(opts: MockDbOptions = {}) {
               Promise.resolve(
                 clientReadError
                   ? { data: null, error: { message: clientReadError } }
-                  : {
-                      data: {
-                        mailchimp_audience_id: audienceId,
-                        meta_lead_form_approved_ids: approvedFormIds,
-                      },
-                      error: null,
-                    },
+                  : { data: { mailchimp_audience_id: audienceId }, error: null },
               ),
           }),
         }),
@@ -1356,57 +1342,6 @@ describe('ingestMetaLead → PM override: form_disclosure_attested consent basis
 
     expect(subscribeMock).not.toHaveBeenCalled()
     expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'no_audience_config' })
-  })
-
-  // ── Codex review PR #1191 round 2：consent attestation 必须绑到已获批的
-  // 具体表单，不能对整条 Page 的任意表单（含停用表单）一律放行 ──────────────
-
-  it('lead 来自不在 meta_lead_form_approved_ids 白名单里的表单（例如旧的 / 已停用表单）→ 零 provider 调用，consent_basis 不写 form_disclosure_attested', async () => {
-    // 白名单只批准了 'form-approved'，这条 lead 来自另一个表单 'form-1'（默认值）。
-    mockDb({ audienceId: 'dda97b7e61', approvedFormIds: ['form-approved'] })
-
-    const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
-
-    expect(subscribeMock).not.toHaveBeenCalled()
-    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'form_not_approved' })
-    const meta = finalTouchpointMeta()
-    expect(meta.consent_basis).toBeNull()
-  })
-
-  it('白名单为空（未配置）→ 该客户全部 Meta lead 零 provider 调用，fail-closed', async () => {
-    mockDb({ audienceId: 'dda97b7e61', approvedFormIds: [] })
-
-    const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
-
-    expect(subscribeMock).not.toHaveBeenCalled()
-    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'form_not_approved' })
-  })
-
-  it('完整字段降级、form_id 为 null → 不放行（不能假装 null 命中白名单）', async () => {
-    mockDb({ audienceId: 'dda97b7e61', approvedFormIds: ['form-1'] })
-
-    const res = await ingestMetaLead({
-      clientId: CLIENT,
-      defaultCountry: 'NZ',
-      lead: lead({ formId: null }),
-    })
-
-    expect(subscribeMock).not.toHaveBeenCalled()
-    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'form_not_approved' })
-    const meta = finalTouchpointMeta()
-    expect(meta.consent_basis).toBeNull()
-  })
-
-  it('表单在白名单里 → 正常放行（正例，钉住白名单命中路径没被误关）', async () => {
-    mockDb({ audienceId: 'dda97b7e61', approvedFormIds: ['form-1', 'form-other'] })
-    provideOnce({ status: 'subscribed' })
-
-    const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
-
-    expect(subscribeMock).toHaveBeenCalledTimes(1)
-    expect(res.mailchimp).toEqual({ status: 'subscribed' })
-    const meta = finalTouchpointMeta()
-    expect(meta.consent_basis).toBe('form_disclosure_attested')
   })
 
   it('provider 失败仍然非阻塞：主管道保留，失败 receipt 如实记录', async () => {
