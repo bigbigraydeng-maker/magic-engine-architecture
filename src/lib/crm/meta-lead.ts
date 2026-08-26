@@ -304,6 +304,15 @@ export async function ingestMetaLead(input: IngestMetaLeadInput): Promise<Ingest
       attribution,
     })
 
+    // 客户配置：audience id + 「哪些表单已核实展示 disclosure」白名单。一次查询，
+    // 结果既用来算 consent_basis（下面），也直接传给 Phase C 的 syncMailchimp
+    // 用来做同一份判据的 gate —— 避免两处各查一次、判据可能不一致。
+    const { config: clientConfig, error: clientConfigError } =
+      await readClientMetaLeadConfig(clientId)
+    const formApproved = Boolean(
+      clientConfig && lead.formId && clientConfig.approvedFormIds.includes(lead.formId),
+    )
+
     // ── 触点 Phase A：**在任何 Mailchimp 调用之前**先 create-if-not-exists 一条
     //    contact + source touchpoint。用 upsert(ignoreDuplicates=true) 保幂等：
     //    历史 CSV 导入过的同一 lead 不会被这里再写第二条。
@@ -320,12 +329,14 @@ export async function ingestMetaLead(input: IngestMetaLeadInput): Promise<Ingest
       custom_answers: parsed.custom,
       ingested_by: 'meta-leads-sync',
       /**
-       * Consent 依据。PM 决定（2026-08-27）：CTS 已批准的 Meta Lead Form 在
-       * Submit 之前展示了 form-level disclosure，提交本身就是 consent 事件；
-       * 这条路径不再要求自定义 consent 问答字段。
-       * 值恒为 `'form_disclosure_attested'` —— 让下游审计一眼看到「依据是什么」。
+       * Consent 依据。PM 决定（2026-08-27）：**已核实展示了 form-level
+       * disclosure 的表单**上的提交本身就是 consent 事件，不再要求自定义
+       * consent 问答字段。但这是按表单成立的事实，不是按 Page —— 只有
+       * `lead.formId` 命中 `clients.meta_lead_form_approved_ids` 白名单时才
+       * 写 `'form_disclosure_attested'`；否则 null（Codex review PR #1191
+       * round 2：不能把 CTS 单个获批表单的事实当成整个 Page 的平台规则）。
        */
-      consent_basis: 'form_disclosure_attested' as const,
+      consent_basis: formApproved ? ('form_disclosure_attested' as const) : null,
       /**
        * 如果表单**碰巧**带了明确的营销订阅字段（例如 CTS 未来改版加了
        * 'consent_to_marketing_emails'），这里如实记下问题名；否则 null。
@@ -388,10 +399,12 @@ export async function ingestMetaLead(input: IngestMetaLeadInput): Promise<Ingest
     //    Mailchimp。provider 自己吞异常，永远返回 `SubscribeMemberResult`；有
     //    AbortSignal 硬超时兜底。
     const mailchimp = await syncMailchimp({
-      clientId,
       contactId,
       parsed,
       leadId: lead.leadId,
+      clientConfig,
+      clientConfigError,
+      formApproved,
     })
 
     // ── 触点 Phase D：把**同一条**（client_id + source + source_ref 唯一）触点的
@@ -470,48 +483,79 @@ async function updateTouchpointMetadata(args: {
 
 // ── Mailchimp 出口 ──────────────────────────────────────────────────────────
 
+interface ClientMetaLeadConfig {
+  audienceId: string
+  /** 已核实在 Submit 前展示营销 disclosure 的表单 id 白名单（见迁移文件）。 */
+  approvedFormIds: string[]
+}
+
+/**
+ * 一次查出 Mailchimp 出口需要的两列客户配置：audience id + 表单白名单。
+ * **只 select 这两列**，别顺手拉全表。consent_basis 计算和 Phase C 的
+ * Mailchimp gate 共用同一次读取结果，避免两处各查一次、判据可能不一致。
+ */
+async function readClientMetaLeadConfig(
+  clientId: string,
+): Promise<{ config: ClientMetaLeadConfig | null; error: string | null }> {
+  const { data, error } = await supabaseAdmin
+    .from('clients')
+    .select('mailchimp_audience_id, meta_lead_form_approved_ids')
+    .eq('id', clientId)
+    .maybeSingle()
+  if (error) {
+    // 查配置失败 = 不该猜「有」也不该猜「没有」，如实回报：cron 日志能看见。
+    return { config: null, error: error.message }
+  }
+  const audienceId =
+    typeof data?.mailchimp_audience_id === 'string' ? data.mailchimp_audience_id.trim() : ''
+  const approvedFormIds = Array.isArray(data?.meta_lead_form_approved_ids)
+    ? data.meta_lead_form_approved_ids.filter((id): id is string => typeof id === 'string')
+    : []
+  return { config: { audienceId, approvedFormIds }, error: null }
+}
+
 interface SyncMailchimpInput {
-  clientId: string
   contactId: string
   parsed: ParsedLeadAnswers
   leadId: string
+  clientConfig: ClientMetaLeadConfig | null
+  clientConfigError: string | null
+  /** `lead.formId` 是否命中该客户的 `meta_lead_form_approved_ids` 白名单。 */
+  formApproved: boolean
 }
 
 /**
  * 把一个 lead → Mailchimp audience。**永远返回结果对象**，绝不 throw。
  *
- * gate 顺序（Issue #1188 硬约束 + PM override 5425996255）：
- *   1. 客户是否配置了 audience id —— 没配 → skipped: no_audience_config
+ * gate 顺序（Issue #1188 硬约束 + PM override 5425996255 + Codex review
+ * PR #1191 round 2）：
+ *   1. 客户配置 —— 查询报错 → skipped: client_config_read_failed；
+ *      没配 audience id → skipped: no_audience_config
  *   2. 是否有邮箱 —— 没有 → skipped: no_email
  *   3. 是否拿到 API key —— 没有 → skipped: no_api_key
- *   4. 表单里是否明确 opt-out —— 是 → skipped: explicit_opt_out
- *   5. **统一 DNC 判据**（复用 `@/lib/crm/dnc`，读镜像列 + 不可变触点）——
+ *   4. **表单是否在该客户的 disclosure 白名单里** —— 不在 → skipped:
+ *      form_not_approved（不能把 Page 下任意表单都当成已获批表单）
+ *   5. 表单里是否明确 opt-out —— 是 → skipped: explicit_opt_out
+ *   6. **统一 DNC 判据**（复用 `@/lib/crm/dnc`，读镜像列 + 不可变触点）——
  *      拒联或查询失败 → skipped: contact_dnc / dnc_check_failed
- *   6. 满足以上，才调 subscribeMember
+ *   7. 满足以上，才调 subscribeMember
  *
- * ⚠️ 已批准的 CTS Meta Lead Form 的 form-level disclosure 就是 consent 事件；
- *    这条路径不再要求自定义 consent 字段（PM 决定 2026-08-27，合同 5425996255）。
- *    真相通过 `consent_basis: 'form_disclosure_attested'` 记进触点 metadata。
+ * ⚠️ 已核实展示 disclosure 的表单上提交本身就是 consent 事件；这条路径不再
+ *    要求自定义 consent 字段（PM 决定 2026-08-27，合同 5425996255）。但这是
+ *    **按表单**成立的事实，不是按 Page —— 门禁在 `formApproved`（对应
+ *    `clients.meta_lead_form_approved_ids`），真相通过
+ *    `consent_basis: 'form_disclosure_attested'` 记进触点 metadata。
  *
  * ⚠️ 新 lead consent 不能自动覆盖历史拒联 —— `isDoNotContact` 已经保证「只有
  *    明确的 dnc_cleared 触点晚于最后一条拒联证据」才认为解除；本函数不会写
  *    任何 dnc_cleared 触点（那是「人明确纠正」的强信号，跟表单勾选是两回事）。
  */
 async function syncMailchimp(input: SyncMailchimpInput): Promise<SubscribeMemberResult> {
-  // 1. 客户配置。**只 select 出口需要的那一列**，别顺手拉全表。
-  const { data: clientRow, error: clientErr } = await supabaseAdmin
-    .from('clients')
-    .select('mailchimp_audience_id')
-    .eq('id', input.clientId)
-    .maybeSingle()
-  if (clientErr) {
-    // 查配置失败 = 不该猜「有」也不该猜「没有」，如实 skipped：cron 日志能看见。
+  // 1. 客户配置。
+  if (input.clientConfigError) {
     return { status: 'skipped', reason: 'client_config_read_failed' }
   }
-  const audienceId =
-    typeof clientRow?.mailchimp_audience_id === 'string'
-      ? clientRow.mailchimp_audience_id.trim()
-      : ''
+  const audienceId = input.clientConfig?.audienceId ?? ''
   if (!audienceId) {
     return { status: 'skipped', reason: 'no_audience_config' }
   }
@@ -528,13 +572,20 @@ async function syncMailchimp(input: SyncMailchimpInput): Promise<SubscribeMember
     return { status: 'skipped', reason: 'no_api_key' }
   }
 
-  // 4. 明确 opt-out 优先级最高 —— 反面提问 / 退订选项不能被 form-level
+  // 4. 表单是否在该客户的 disclosure 白名单里 —— fail-closed：没配置白名单，
+  //    或这条 lead 来自白名单之外的表单，一律不发（宁可漏发，不能凭空认定
+  //    未展示 disclosure 的表单也算 consent）。
+  if (!input.formApproved) {
+    return { status: 'skipped', reason: 'form_not_approved' }
+  }
+
+  // 5. 明确 opt-out 优先级最高 —— 反面提问 / 退订选项不能被 form-level
   //    disclosure 覆盖。
   if (input.parsed.optOutEvidence) {
     return { status: 'skipped', reason: 'explicit_opt_out' }
   }
 
-  // 5. 统一 DNC 判据 —— 拉镜像列 + 不可变触点，交给 dnc.ts 判。任何一处查询
+  // 6. 统一 DNC 判据 —— 拉镜像列 + 不可变触点，交给 dnc.ts 判。任何一处查询
   //    失败都 fail-closed（宁可少发一次，也不能发给明确说过别联系的人）。
   const dnc = await evaluateDnc(input.contactId)
   if (dnc === 'unknown') {
