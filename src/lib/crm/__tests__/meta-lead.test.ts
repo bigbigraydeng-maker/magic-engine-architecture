@@ -61,8 +61,11 @@ let upsertOptions: Record<string, unknown>[]
 let contactUpdates: Record<string, unknown>[]
 /** Phase C 触点 receipt UPDATE 的 payload —— 每条对应一次 `.update(...)` 调用。 */
 let touchpointUpdates: Record<string, unknown>[]
-/** subscribeMock 被调用**当时**看到的 touchpointUpserts 数量。用来钉「provider 之前一定已经落了触点」。 */
-let touchpointsAtProviderCall: number[]
+/**
+ * subscribeMock 被调用**当时**看到的 (Phase A upserts, Phase B/D updates) 数量。
+ * 用来钉「provider 之前一定已经落了触点 + pre-provider evidence UPDATE」。
+ */
+let providerCallState: Array<{ upserts: number; updates: number }>
 
 interface MockDbOptions {
   identityHits?: { contact_id: string; kind: string; value: string }[]
@@ -81,10 +84,20 @@ interface MockDbOptions {
   /** 读 contact_touchpoints 的 select 失败；默认 null（成功）。 */
   touchpointReadError?: string | null
   /**
-   * Phase C 触点 receipt UPDATE 是否报错。默认 null（成功）。
-   * 用来测「provider 已落地但 DB receipt 更新失败」的路径。
+   * @deprecated 用 preProviderUpdateError / postProviderUpdateError 替代。
+   * 保留只为让老用例编译不报错；行为等同 postProviderUpdateError。
    */
   touchpointUpdateError?: string | null
+  /**
+   * Phase B（pre-provider evidence UPDATE）是否报错。默认 null（成功）。
+   * mock 靠 metadata.mailchimp_result.status === 'pending' 识别这次 UPDATE。
+   */
+  preProviderUpdateError?: string | null
+  /**
+   * Phase D（post-provider receipt UPDATE）是否报错。默认 null（成功）。
+   * mock 靠 metadata.mailchimp_result.status !== 'pending' 识别这次 UPDATE。
+   */
+  postProviderUpdateError?: string | null
 }
 
 function mockDb(opts: MockDbOptions = {}) {
@@ -99,13 +112,17 @@ function mockDb(opts: MockDbOptions = {}) {
     contactReadError = null,
     touchpointReadError = null,
     touchpointUpdateError = null,
+    preProviderUpdateError = null,
+    postProviderUpdateError = null,
   } = opts
+  // Legacy alias：旧用例传 touchpointUpdateError 时保持「post-provider 失败」语义。
+  const effectivePostErr = postProviderUpdateError ?? touchpointUpdateError
   contactInserts = []
   touchpointUpserts = []
   upsertOptions = []
   contactUpdates = []
   touchpointUpdates = []
-  touchpointsAtProviderCall = []
+  providerCallState = []
   ;(supabaseAdmin.from as ReturnType<typeof vi.fn>).mockImplementation((table: string) => {
     if (table === 'ad_creative_links') {
       return {
@@ -197,29 +214,33 @@ function mockDb(opts: MockDbOptions = {}) {
         },
         occurred_at: t.occurred_at,
       }))
-      // Phase C 的 .update(payload).eq().eq().eq() —— 支持任意长度链式 .eq()
-      const buildTpUpdateBuilder = () => {
+      // Phase B/D 的 .update(payload).eq().eq().eq() —— 支持任意长度链式 .eq()。
+      // 按 payload.metadata.mailchimp_result.status 分辨是 pre-provider（pending）
+      // 还是 post-provider（真实结果），从而选择性触发失败。
+      const buildTpUpdateBuilder = (errMsg: string | null) => {
         const builder: {
           eq: () => typeof builder
           then: <T>(onFulfilled: (v: { error: { message: string } | null }) => T) => Promise<T>
         } = {
           eq: () => builder,
           then: (onFulfilled) =>
-            Promise.resolve(
-              touchpointUpdateError
-                ? { error: { message: touchpointUpdateError } }
-                : { error: null },
-            ).then(onFulfilled),
+            Promise.resolve(errMsg ? { error: { message: errMsg } } : { error: null }).then(
+              onFulfilled,
+            ),
         }
         return builder
       }
       return {
         update: (payload: Record<string, unknown>) => {
-          // Phase C receipt update：payload 包含 metadata 字段。老 helper 用
+          // Phase B/D receipt update：payload 包含 metadata 字段。老 helper 用
           // .update(...).in(...) 我们兜底，但 metadata-shaped 才计入 receipt。
           if (payload && Object.prototype.hasOwnProperty.call(payload, 'metadata')) {
             touchpointUpdates.push(payload)
-            return buildTpUpdateBuilder()
+            const meta = payload.metadata as Record<string, unknown> | undefined
+            const mc = (meta?.mailchimp_result ?? {}) as Record<string, unknown>
+            const isPending = mc.status === 'pending'
+            const err = isPending ? preProviderUpdateError : effectivePostErr
+            return buildTpUpdateBuilder(err)
           }
           return { in: () => Promise.resolve({ error: null }) }
         },
@@ -259,7 +280,10 @@ beforeEach(() => {
  */
 function provideOnce(result: import('@/lib/mailchimp/client').SubscribeMemberResult) {
   subscribeMock.mockImplementationOnce(async () => {
-    touchpointsAtProviderCall.push(touchpointUpserts.length)
+    providerCallState.push({
+      upserts: touchpointUpserts.length,
+      updates: touchpointUpdates.length,
+    })
     return result
   })
 }
@@ -939,14 +963,20 @@ describe('ingestMetaLead → durable receipt order + receipt replacement', () =>
 
     // provider 被调 1 次
     expect(subscribeMock).toHaveBeenCalledTimes(1)
-    // 那一刻已经有 1 条触点落盘 —— 硬顺序 Phase A → Phase B
-    expect(touchpointsAtProviderCall).toEqual([1])
+    // 那一刻已经有 1 条 upsert（Phase A）+ 1 条 UPDATE（Phase B pre-provider
+    // evidence）落盘 —— 硬顺序 Phase A → Phase B → Phase C
+    expect(providerCallState).toEqual([{ upserts: 1, updates: 1 }])
     // Phase A 上的触点带完整 consent 证据（判据字段名，不带原答案）
     const upsertMeta = touchpointUpserts[0].metadata as Record<string, unknown>
     expect(upsertMeta.consent_evidence).toBe('consent_to_marketing_emails')
     expect(upsertMeta.opt_out_evidence).toBeNull()
-    // Phase A 期占位 = pending；Phase C 才替换成 subscribed
+    // Phase A 期占位 = pending；Phase D 才替换成 subscribed
     expect((upsertMeta.mailchimp_result as Record<string, unknown>).status).toBe('pending')
+    // Phase B 也是 pending（同样的 evidence，只是通过 UPDATE 强制持久化一次）
+    const phaseBMeta = touchpointUpdates[0].metadata as Record<string, unknown>
+    expect(phaseBMeta.consent_evidence).toBe('consent_to_marketing_emails')
+    expect((phaseBMeta.mailchimp_result as Record<string, unknown>).status).toBe('pending')
+    // Phase D 才是真实结果
     expect(finalTouchpointMeta().mailchimp_result).toEqual({ status: 'subscribed' })
 
     expect(res.mailchimp).toEqual({ status: 'subscribed' })
@@ -965,9 +995,10 @@ describe('ingestMetaLead → durable receipt order + receipt replacement', () =>
 
     expect(res1.mailchimp).toMatchObject({ status: 'failed', reason: 'provider_5xx' })
     expect(touchpointUpserts).toHaveLength(1)
-    expect(touchpointUpdates).toHaveLength(1)
-    // Phase C 已经把 pending 换成 failed
-    expect((touchpointUpdates[0].metadata as Record<string, unknown>).mailchimp_result).toMatchObject({
+    // 第一轮：Phase B (pending) + Phase D (failed) = 2 次 UPDATE
+    expect(touchpointUpdates).toHaveLength(2)
+    // Phase D 已经把 pending 换成 failed
+    expect((touchpointUpdates[1].metadata as Record<string, unknown>).mailchimp_result).toMatchObject({
       status: 'failed',
       reason: 'provider_5xx',
     })
@@ -993,9 +1024,10 @@ describe('ingestMetaLead → durable receipt order + receipt replacement', () =>
       onConflict: 'client_id,source,source_ref',
       ignoreDuplicates: true,
     })
-    // Phase C 第二次把 failed 覆盖成 subscribed
-    expect(touchpointUpdates).toHaveLength(2)
-    expect((touchpointUpdates[1].metadata as Record<string, unknown>).mailchimp_result).toEqual({
+    // 第二轮又 2 次 UPDATE（Phase B pending + Phase D subscribed）—— 共 4 条
+    expect(touchpointUpdates).toHaveLength(4)
+    // 最后一条 UPDATE 覆盖成 subscribed
+    expect((touchpointUpdates[3].metadata as Record<string, unknown>).mailchimp_result).toEqual({
       status: 'subscribed',
     })
     // 现在才动 mailchimp_synced_at —— receipt 和 synced_at 语义一致
@@ -1003,8 +1035,8 @@ describe('ingestMetaLead → durable receipt order + receipt replacement', () =>
     expect(typeof contactUpdates[0].mailchimp_synced_at).toBe('string')
   })
 
-  it('receipt UPDATE 失败 → 主管道保留 contact/consent，不写 mailchimp_synced_at，不声称投递', async () => {
-    mockDb({ audienceId: 'dda97b7e61', touchpointUpdateError: 'db timeout' })
+  it('post-provider receipt UPDATE 失败 → 主管道保留 contact/consent，不写 mailchimp_synced_at，不声称投递', async () => {
+    mockDb({ audienceId: 'dda97b7e61', postProviderUpdateError: 'db timeout' })
     provideOnce({ status: 'subscribed' })
 
     const res = await ingestMetaLead({
@@ -1013,16 +1045,16 @@ describe('ingestMetaLead → durable receipt order + receipt replacement', () =>
       lead: consented(),
     })
 
-    // Phase A（contact + touchpoint + consent 证据）已经落盘
+    // Phase A + Phase B（contact + touchpoint + consent 证据）已经落盘
     expect(contactInserts).toHaveLength(1)
     expect(touchpointUpserts).toHaveLength(1)
     expect((touchpointUpserts[0].metadata as Record<string, unknown>).consent_evidence).toBe(
       'consent_to_marketing_emails',
     )
-    // Phase B provider 也跑了
+    // provider 也跑了
     expect(subscribeMock).toHaveBeenCalledTimes(1)
-    // Phase C 尝试了 update 但失败 —— touchpointUpdates 依然记到了 payload 尝试
-    expect(touchpointUpdates).toHaveLength(1)
+    // 两次 UPDATE 都被尝试记录了 —— Phase B 成，Phase D 失败
+    expect(touchpointUpdates).toHaveLength(2)
     // 关键：mailchimp_synced_at 不写（不能声称已投递 / 已同步）
     expect(contactUpdates).toHaveLength(0)
     // 返回值保留 provider 的真实结果 —— 上游看得见 provider 说了 subscribed，
@@ -1049,8 +1081,9 @@ describe('ingestMetaLead → durable receipt order + receipt replacement', () =>
       onConflict: 'client_id,source,source_ref',
       ignoreDuplicates: true,
     })
-    // Phase C 是 UPDATE 不是 INSERT / 不是 UPSERT —— 不会绕过幂等键。
-    expect(touchpointUpdates).toHaveLength(1)
+    // Phase B (pending) + Phase D (subscribed) 各一次；两次都是 UPDATE，不是
+    // INSERT / UPSERT —— 幂等键不会被绕开，实际库里不会多出一条触点。
+    expect(touchpointUpdates).toHaveLength(2)
   })
 
   it('subscribe POST 挂起 → 内置 AbortSignal 在 timeoutMs 内 abort，返回 retryable failed 且不阻塞主管道', async () => {
@@ -1093,5 +1126,184 @@ describe('ingestMetaLead → durable receipt order + receipt replacement', () =>
     expect(res).toMatchObject({ status: 'failed', reason: 'timeout', retryable: true })
     // 有明确上限：不能被拖到默认 20s。留 2s 缓冲扛调度抖动。
     expect(elapsed).toBeLessThan(2000)
+  })
+})
+
+// ── Remediation V3：consent 字段名 allowlist + pre-provider evidence 耐久 ────
+// 对应 Build Control 合同 5425312107 逐条 focused regression。
+
+describe('parseLeadAnswers → 只允许精确的营销订阅字段名', () => {
+  it('consent_to_terms_and_conditions=Yes → NOT provable consent（条款同意 ≠ 营销同意）', () => {
+    const p = parseLeadAnswers([
+      { name: 'consent_to_terms_and_conditions', value: 'Yes' },
+    ])
+    expect(p.consentEvidence).toBeNull()
+  })
+
+  it('consent_to_privacy_policy=Yes → NOT provable consent', () => {
+    const p = parseLeadAnswers([
+      { name: 'consent_to_privacy_policy', value: 'Yes' },
+    ])
+    expect(p.consentEvidence).toBeNull()
+  })
+
+  it('have_you_received_our_marketing_before=Yes → NOT provable consent（历史问题不是订阅）', () => {
+    const p = parseLeadAnswers([
+      { name: 'have_you_received_our_marketing_before', value: 'Yes' },
+    ])
+    expect(p.consentEvidence).toBeNull()
+  })
+
+  it('generic "consent"=Yes → NOT provable consent（问题名不够具体）', () => {
+    const p = parseLeadAnswers([{ name: 'consent', value: 'Yes' }])
+    expect(p.consentEvidence).toBeNull()
+  })
+
+  it('generic "marketing_updates"=Yes → NOT provable consent', () => {
+    const p = parseLeadAnswers([{ name: 'marketing_updates', value: 'Yes' }])
+    expect(p.consentEvidence).toBeNull()
+  })
+
+  it('精确的营销订阅字段名 + 明确肯定 → provable consent', () => {
+    for (const name of [
+      'consent_to_marketing_emails',
+      'consent_to_receive_marketing_emails',
+      'subscribe_to_newsletter',
+      'subscribe_to_marketing_emails',
+      'newsletter_signup',
+      'receive_marketing_emails',
+      'opt_in_to_marketing_emails',
+    ]) {
+      const p = parseLeadAnswers([{ name, value: 'Yes' }])
+      expect(p.consentEvidence, `${name} should be provable`).toBe(name)
+    }
+  })
+
+  it('字段名的分隔符 / 大小写差异会被归一（`Consent-To-Marketing-Emails` = `consent_to_marketing_emails`）', () => {
+    const p = parseLeadAnswers([{ name: 'Consent-To-Marketing-Emails', value: 'Yes' }])
+    expect(p.consentEvidence).toBe('Consent-To-Marketing-Emails') // 保留原名给审计
+  })
+})
+
+describe('ingestMetaLead → allowlist + pre-provider evidence durability', () => {
+  it('consent_to_terms_and_conditions=Yes → 零 provider 调用', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: lead({
+        answers: [
+          { name: 'full_name', value: 'Chris Brown' },
+          { name: 'email', value: 'chris@example.com' },
+          { name: 'consent_to_terms_and_conditions', value: 'Yes' },
+        ],
+      }),
+    })
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(finalTouchpointMeta().mailchimp_result).toEqual({
+      status: 'skipped',
+      reason: 'no_consent_evidence',
+    })
+  })
+
+  it('have_you_received_our_marketing_before=Yes → 零 provider 调用', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: lead({
+        answers: [
+          { name: 'full_name', value: 'Chris Brown' },
+          { name: 'email', value: 'chris@example.com' },
+          { name: 'have_you_received_our_marketing_before', value: 'Yes' },
+        ],
+      }),
+    })
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(finalTouchpointMeta().mailchimp_result).toEqual({
+      status: 'skipped',
+      reason: 'no_consent_evidence',
+    })
+  })
+
+  it('unknown/general consent field + Yes → 零 provider 调用', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: lead({
+        answers: [
+          { name: 'full_name', value: 'Chris Brown' },
+          { name: 'email', value: 'chris@example.com' },
+          { name: 'consent', value: 'Yes' },
+        ],
+      }),
+    })
+    expect(subscribeMock).not.toHaveBeenCalled()
+  })
+
+  it('精确 marketing-email consent field + Yes → 允许（在 DNC 判据放行时）', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    provideOnce({ status: 'subscribed' })
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: lead({
+        answers: [
+          { name: 'full_name', value: 'Chris Brown' },
+          { name: 'email', value: 'chris@example.com' },
+          { name: 'consent_to_marketing_emails', value: 'Yes' },
+        ],
+      }),
+    })
+    expect(subscribeMock).toHaveBeenCalledTimes(1)
+    expect(res.mailchimp).toEqual({ status: 'subscribed' })
+  })
+
+  it('pre-existing 触点也会在 provider 调用前被 Phase B UPDATE 上本次 consent 证据', async () => {
+    // mock 里的 upsert 无论存不存在都记录 —— 关键断言是「Phase B UPDATE 在
+    // provider 调用之前发生，且带着本次的 consent_evidence」。
+    mockDb({ audienceId: 'dda97b7e61' })
+    provideOnce({ status: 'subscribed' })
+
+    await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    // provider 被调时至少已经有 1 次 UPDATE（Phase B）落盘
+    expect(providerCallState).toHaveLength(1)
+    expect(providerCallState[0].updates).toBeGreaterThanOrEqual(1)
+    // 第一次 UPDATE 就带了 consent_evidence + pending，证明「哪怕历史触点已存在，
+    // 本次 consent 也已经在 provider 调用前耐久写回」
+    const phaseB = touchpointUpdates[0].metadata as Record<string, unknown>
+    expect(phaseB.consent_evidence).toBe('consent_to_marketing_emails')
+    expect((phaseB.mailchimp_result as Record<string, unknown>).status).toBe('pending')
+  })
+
+  it('pre-provider evidence UPDATE 失败 → 零 provider 调用，mailchimp=skipped:evidence_persist_failed，主管道保留', async () => {
+    mockDb({ audienceId: 'dda97b7e61', preProviderUpdateError: 'db timeout' })
+    provideOnce({ status: 'subscribed' }) // 不应被消耗
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    // 核心：**零** Mailchimp 调用
+    expect(subscribeMock).not.toHaveBeenCalled()
+    // 返回 sanitized skipped，reason=evidence_persist_failed
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'evidence_persist_failed' })
+    // 主管道仍然成 —— contact + touchpoint 已经落盘
+    expect(res.skipped).toBeNull()
+    expect(res.contactId).toBe('person-new')
+    expect(contactInserts).toHaveLength(1)
+    expect(touchpointUpserts).toHaveLength(1)
+    // 只有 Phase B 那次尝试；没有 Phase D
+    expect(touchpointUpdates).toHaveLength(1)
+    // mailchimp_synced_at 绝不写（不能声称已订阅 / 已投递）
+    expect(contactUpdates).toHaveLength(0)
   })
 })

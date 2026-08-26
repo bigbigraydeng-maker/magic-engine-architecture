@@ -76,14 +76,51 @@ export interface ParsedLeadAnswers {
 }
 
 /**
- * 「订阅 / 同意」类问题名。命中这里 + 答案在 AFFIRMATIVE_ANSWERS 白名单里
- * = provable consent。
+ * **明确的营销邮件订阅字段名** —— 只有这几个名字命中且答案在
+ * AFFIRMATIVE_ANSWERS 白名单里，才算 provable marketing-email consent。
  *
- * ⚠️ 只匹配这一批**语义清楚**的问题名。别一遇到 "email" 就当 consent —— email
- * 字段本身只是联系方式，不是同意接收营销的证据。
+ * ⚠️ 这是**完整名等值匹配**（trim + lowercase 后），不是 token 匹配。
+ *    上一版用正则匹配 "consent / marketing" 等 token 会把
+ *    `consent_to_terms_and_conditions=Yes`、`consent_to_privacy_policy=Yes`、
+ *    `have_you_received_our_marketing_before=Yes` 这些无关问题当成订阅同意，
+ *    直接违反 provable consent 语义（Issue #1188 合同 5425312107 第 1 条）。
+ *
+ * 表单如果需要新的字段名，先在这里加进去。**宁可漏发一批人**，也不能把没
+ * 明确同意营销的人拉进 Welcome journey。
+ *
+ * 命名归一化：为了扛表单里 `-`/`_`/空格/大小写的写法差异，只把这三种分隔符
+ * 归一成 `_`；除此之外一律**精确等值匹配**。
  */
-const CONSENT_IN_QUESTION_PATTERN =
-  /(?:^|[_\s-])(consent|subscribe|newsletter|opt.?in|marketing|email.*update)(?:$|[_\s-])/i
+const EMAIL_MARKETING_CONSENT_FIELDS: ReadonlySet<string> = new Set([
+  // 显式「同意接收营销邮件」
+  'consent_to_marketing_emails',
+  'consent_to_receive_marketing_emails',
+  'agree_to_marketing_emails',
+  'agree_to_receive_marketing_emails',
+  // 显式「订阅营销邮件 / newsletter」
+  'subscribe_to_marketing_emails',
+  'subscribe_to_newsletter',
+  'subscribe_to_email_updates',
+  'subscribe_to_our_newsletter',
+  'newsletter_signup',
+  'newsletter_subscription',
+  'email_newsletter_signup',
+  'receive_marketing_emails',
+  'receive_email_updates',
+  // 显式 opt-in 类（opt-out 由 OPT_OUT_QUESTION_PATTERN 单独反面拦）
+  'opt_in_to_marketing_emails',
+  'opt_in_to_newsletter',
+  'marketing_email_opt_in',
+  'email_marketing_opt_in',
+])
+
+/** `Some Field-Name` → `some_field_name`。只归一分隔符 + 大小写，不做别的。 */
+function normalizeConsentFieldName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
+}
 
 /**
  * 「拒收 / 退订」类问题名。命中这里 + 答案在 AFFIRMATIVE_ANSWERS 白名单里
@@ -166,10 +203,11 @@ export function parseLeadAnswers(answers: MetaLeadAnswer[]): ParsedLeadAnswers {
     if (optOutEvidence === null && OPT_OUT_QUESTION_PATTERN.test(question) && isAffirmative(value)) {
       optOutEvidence = question
     }
-    // 正向：问题名 + 答案 必须两侧都在白名单里 —— fail-closed，未知不算同意。
+    // 正向：问题名**完整匹配**白名单 + 答案在肯定值白名单里 —— 缺一即 fail-closed。
+    // 通用 consent / 条款同意 / 历史营销问题一律不算 marketing-email consent。
     if (
       consentEvidence === null &&
-      CONSENT_IN_QUESTION_PATTERN.test(question) &&
+      EMAIL_MARKETING_CONSENT_FIELDS.has(normalizeConsentFieldName(question)) &&
       !OPT_OUT_QUESTION_PATTERN.test(question) &&
       isAffirmative(value)
     ) {
@@ -266,14 +304,13 @@ export async function ingestMetaLead(input: IngestMetaLeadInput): Promise<Ingest
       attribution,
     })
 
-    // ── 触点 Phase A：**在任何 Mailchimp 调用之前**先把 contact + source
-    //    touchpoint（含 consent 证据）落盘。这条硬顺序保证：如果稍后 provider
-    //    的副作用触发了 Welcome 邮件，本地一定已经有一份耐用回执可以对得上；
-    //    也保证「已经落进 lead 表」跟「已经打了 Mailchimp」不会互相取反。
+    // ── 触点 Phase A：**在任何 Mailchimp 调用之前**先 create-if-not-exists 一条
+    //    contact + source touchpoint。用 upsert(ignoreDuplicates=true) 保幂等：
+    //    历史 CSV 导入过的同一 lead 不会被这里再写第二条。
     //
     //    metadata 里先写 `mailchimp_result: { status: 'pending' }` 占位 —— 便于
-    //    Phase C 的 UPDATE 用同一份 metadata 结构直接替换；也让「provider 打完
-    //    但 Phase C UPDATE 失败」的情况有可观测证据（pending 会一直挂在那儿）。
+    //    Phase B/D 用同一份 metadata 结构直接替换；也让「provider 打完但回执
+    //    UPDATE 失败」的情况有可观测证据（pending 会一直挂在那儿）。
     const baseMetadata = {
       tour_interest_raw: parsed.tourInterest,
       ad_name: lead.adName,
@@ -300,7 +337,7 @@ export async function ingestMetaLead(input: IngestMetaLeadInput): Promise<Ingest
         raw: null,
         metadata: {
           ...baseMetadata,
-          // Phase A 占位：还没打 provider。Phase C 会替换成真实结果。
+          // Phase A 占位：还没打 provider。Phase B/D 会替换成真实结果。
           mailchimp_result: { status: 'pending' },
         },
         // 触点也存一份归因：同一个人可能被两条不同的广告分别捞到过，只看 contacts
@@ -313,8 +350,31 @@ export async function ingestMetaLead(input: IngestMetaLeadInput): Promise<Ingest
     )
     if (error) throw new Error(error.message)
 
-    // ── 触点 Phase B：现在（且仅在触点已落盘之后）调 Mailchimp。provider 自己
-    //    吞异常，永远返回 `SubscribeMemberResult`；有 AbortSignal 硬超时兜底。
+    // ── 触点 Phase B：**pre-provider evidence UPDATE**。哪怕 Phase A 因幂等键
+    //    冲突没写（比如这条 lead 已经被 CSV 导过），也强制把**本次**判据得到的
+    //    consent_evidence / opt_out_evidence / pending receipt 写回同一条触点。
+    //    若这一步失败 → **零 provider 调用**：宁可漏发一次，也不能在没有耐用
+    //    consent 证据的情况下产生邮件副作用（合同 5425312107 第 2/3 条）。
+    const evidenceMetadata = {
+      ...baseMetadata,
+      mailchimp_result: { status: 'pending' },
+    }
+    const preErr = await updateTouchpointMetadata({
+      clientId,
+      leadId: lead.leadId,
+      metadata: evidenceMetadata,
+    })
+    if (preErr) {
+      console.warn(
+        `[meta-lead] lead ${lead.leadId} pre-provider evidence UPDATE failed (${sanitizeErr(preErr)}); zero Mailchimp call`,
+      )
+      const skipped: SubscribeMemberResult = { status: 'skipped', reason: 'evidence_persist_failed' }
+      return { contactId, createdContact: created, skipped: null, mailchimp: skipped }
+    }
+
+    // ── 触点 Phase C：现在（且仅在触点 + 本次 consent 证据均已落盘之后）调
+    //    Mailchimp。provider 自己吞异常，永远返回 `SubscribeMemberResult`；有
+    //    AbortSignal 硬超时兜底。
     const mailchimp = await syncMailchimp({
       clientId,
       contactId,
@@ -322,26 +382,25 @@ export async function ingestMetaLead(input: IngestMetaLeadInput): Promise<Ingest
       leadId: lead.leadId,
     })
 
-    // ── 触点 Phase C：把**同一条**（client_id + source + source_ref 唯一）触点的
-    //    metadata.mailchimp_result 从 pending / 上一轮的 failed/skipped 替换成
-    //    本轮 provider 的真实结果。**用 UPDATE 而不是二次 upsert** —— upsert 走
-    //    ignoreDuplicates=true 会保留旧 metadata，正是这次要修的病根。
+    // ── 触点 Phase D：把**同一条**（client_id + source + source_ref 唯一）触点的
+    //    metadata.mailchimp_result 从 pending 替换成本轮 provider 的真实结果。
+    //    **用 UPDATE 而不是二次 upsert** —— upsert 走 ignoreDuplicates=true 会
+    //    保留旧 metadata，正是当初 Phase B 也要修的病根。
     const receiptMetadata = {
       ...baseMetadata,
       mailchimp_result: mailchimp,
     }
-    const { error: receiptErr } = await supabaseAdmin
-      .from('contact_touchpoints')
-      .update({ metadata: receiptMetadata })
-      .eq('client_id', clientId)
-      .eq('source', 'meta_lead_form')
-      .eq('source_ref', lead.leadId)
+    const receiptErr = await updateTouchpointMetadata({
+      clientId,
+      leadId: lead.leadId,
+      metadata: receiptMetadata,
+    })
 
     if (receiptErr) {
       // provider 结果没能写回本地。**不**声称邮件已投递，**不**动
-      // mailchimp_synced_at；主管道（Phase A）已经成，联系人 + consent 证据都在。
+      // mailchimp_synced_at；主管道（Phase A + Phase B evidence）已经成。
       console.warn(
-        `[meta-lead] lead ${lead.leadId} receipt update failed (${sanitizeErr(receiptErr.message)}); mailchimp_synced_at withheld`,
+        `[meta-lead] lead ${lead.leadId} receipt update failed (${sanitizeErr(receiptErr)}); mailchimp_synced_at withheld`,
       )
       return { contactId, createdContact: created, skipped: null, mailchimp }
     }
@@ -376,6 +435,25 @@ function sanitizeErr(msg: string): string {
     .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+/g, '<email>')
     .replace(/(https?:\/\/[^\s]+)/g, '<url>')
     .slice(0, 200)
+}
+
+/**
+ * 用 (client_id, source='meta_lead_form', source_ref) 精确定位同一条触点，覆盖
+ * 它的 `metadata`。返回错误消息（成功 = null）。**不 upsert**，只 UPDATE —— 上
+ * 游用 Phase A 的 upsert 负责 create-if-not-exists，本函数只负责 overwrite。
+ */
+async function updateTouchpointMetadata(args: {
+  clientId: string
+  leadId: string
+  metadata: Record<string, unknown>
+}): Promise<string | null> {
+  const { error } = await supabaseAdmin
+    .from('contact_touchpoints')
+    .update({ metadata: args.metadata })
+    .eq('client_id', args.clientId)
+    .eq('source', 'meta_lead_form')
+    .eq('source_ref', args.leadId)
+  return error ? error.message : null
 }
 
 // ── Mailchimp 出口 ──────────────────────────────────────────────────────────
