@@ -1,13 +1,14 @@
-# Spec：ME Commerce 客户 Onboarding Playbook v0.2.1
+# Spec：ME Commerce 客户 Onboarding Playbook v0.2.2
 
-- **日期**：2026-08-25（v0.1 → v0.2 → v0.2.1 收敛版）
+- **日期**：2026-08-25（v0.1 → v0.2 → v0.2.1 收敛版）· 2026-08-26 v0.2.2（Codex PR #1192 review round 1 修订）
 - **owner**：Claude Code 主导编排；提炼自 Ray 与 Claude Code 就 Jing's Pick 转椅 SKU 的实操会话
 - **首个跑通对象**：Jing's Pick（`71b5ec11-…`，client status: prospect → active 待 PM GO）— 作为 ME Commerce Customer Zero
 - **风险级别**：**B 级**（新平台能力设计，无 schema 破坏性变更，无对外新 endpoint 上线；具体 capability 实施走各自的 A/B/C 风险闸）
-- **审阅状态**：DRAFT v0.2.1 · 待 Codex/构建控制在 [#1137](https://github.com/bigbigraydeng-maker/magic-engine/issues/1137) triage → 若 promote 后开正式任务合同并送子牙（架构）+ 魏征（挑刺）2 审
+- **审阅状态**：DRAFT v0.2.2 · 待 Codex/构建控制在 [#1137](https://github.com/bigbigraydeng-maker/magic-engine/issues/1137) triage → 若 promote 后开正式任务合同并送子牙（架构）+ 魏征（挑刺）2 审
 - **Implementation Authorized**：**NO**（本文档只是 spec，不动 code / schema / migration / 部署）
 - **v0.2 变更**：修 v0.1 自审出的 W1-W5 五个结构性漏洞。
 - **v0.2.1 变更**（过度开发体检后收敛）：v0.2 的 W2/W3 fix 属"为想象未来需求提前抽象，零 caller"，撤回；W5 的 capability 命名撤回，保留 expiry 检查 SQL；W1/W4 fix 有真实 caller（多价段 + 多 tier SKU 都在当前讨论），保留。详见 §10 变更历史 + [docs/history/over-eng-log.md](../history/over-eng-log.md)。
+- **v0.2.2 变更**（PR #1192 Codex review round 1）：① 共享金额契约改币种无关——`FulfillmentConfig`/`UnitEconomics`/`OutcomeRecord` 新增 `currency` 字段，`tax_rate`/`gate_baseline`/`min_margin_pct` 全部移入 industry profile，不再硬编码 NZD/15% GST；② Stage 00 改用仓库现有 `clients.client_status`（active/prospect/archived），移除不存在的 `status`/`declined`/`activation_note`，拒绝原因存储位置明确为待建列 `qualification_note`；③ Stage 10 Shopify 订单接入改列为 `capability: shopify-order-ingestion`（❌ 待建，仓库无 webhook 路由/orders 表）；④ Stage 10 完成判据拆两级，首单回流只算 Level A「数据管道就绪」，Level B「Outcome Loop 完成」需真实影响下一次排序/预算/停止决策。详见 §10。
 
 ---
 
@@ -44,6 +45,7 @@
 | `capability: marketplace-adapter`（Trade Me / FBM 内容包）| ❌ 待建 | 本 spec 首次提出 |
 | `capability: fulfillment-model-configurator` | ❌ 待建 | 本 spec 首次提出 |
 | `capability: multi-channel-order-aggregator` | ❌ 待建 | 本 spec 首次提出 |
+| `capability: shopify-order-ingestion`（webhook 路由 + 鉴权 + 幂等 + `orders` 表） | ❌ 待建 | 仓库现状：`src/app/api` 无 Shopify webhook 路由，`src/lib/cms/shopify-client.ts` 只处理 blog/page，无独立 `orders` 表。Stage 10 §3.10 point 1 之前误写"现有"，已订正 |
 
 **platform-shared**：10 段流程结构、capability 契约、Stage 完成硬判据、gate 逻辑。
 **industry-specific**（`industry-playbook/commerce-*`）：
@@ -65,13 +67,14 @@
 **Purpose**：判断这个客户是否适合走 ME 电商版。
 **Inputs**：客户来源（自助注册 / FDE 引入 / 自营 Customer Zero）· 预算 · 目标市场 · 团队资源。
 **Actions**：
-1. 客户在 `clients` 表登记，`status = 'prospect'`
+1. 客户在 `clients` 表登记，`client_status = 'prospect'`（表默认值）
 2. FDE / PM 面谈，判断是否满足最低门槛（月广告预算 ≥ NZ$500 · 有客服 · 有决策人）
-3. 通过 → status = 'active'；不通过 → status = 'declined' + 原因
+3. 通过 → `client_status = 'active'`；不通过 → `client_status = 'archived'` + `qualification_note` 写明原因（该列为待建，见下）
 
-**完成判据**：`clients` 表 status = 'active'，`activation_note` 有明确原因。
+**完成判据**：`clients.client_status = 'active'`（现有字段，见 `20260801120000_clients_client_status.sql`，枚举只有 `active` / `prospect` / `archived`，**没有** `declined`）。
+**拒绝流转**：现有 enum 没有"拒绝"态，不通过的客户回落 `client_status = 'archived'`（语义最接近"不再推进"，不得发明枚举外的值）。拒绝原因目前**无处存**——`clients` 表没有通用备注列。本 spec 待建：新增 `clients.qualification_note text` 列（独立 migration，走正常 schema 变更 review），Stage 00 落地前必须先加这列，否则拒绝原因只能记在 spec/会议纪要里，不算完成判据。
 **失败模式**：把 prospect 当 active 用 → 后续 stage 全跑通但客户根本没准备好履约。
-**ME 能力**：现有 `clients` 表，可能加一列 `commerce_readiness_score`。
+**ME 能力**：现有 `clients` 表 `client_status` 字段；`qualification_note` 列为待建依赖。
 
 ### Stage 01 · 供应链模型 tag（Supply Mode Tagging）
 
@@ -140,35 +143,39 @@
 ### Stage 04 · 单品经济性 gate（Unit Economics）
 
 **Purpose**：这个 SKU 卖出去到底赚不赚钱。不看毛利率百分比或净利绝对值单一维度 —— **两者都要 pass**。
-**Inputs**：进价 / 头程物流 / 售价含 GST / 广告费预估 / 支付通道费率 / 固定运营成本 · industry profile 的 gate 参数。
+**Inputs**：进价 / 头程物流 / 售价含税 / 广告费预估 / 支付通道费率 / 固定运营成本 · industry profile 的 gate 参数（含币种、税率、阈值）。
+**币种边界**（本节修正）：净利公式、gate 阈值、outcome 金额字段**一律币种无关**——money 契约只携带数值 + `currency` code，具体币种、税种/税率、阈值数字全部来自 industry profile，**不得**在 shared 类型或公式里硬编码 `nzd` 后缀或 15% GST。同一 playbook 切到 AU/SG/MY market profile 时只换 profile 参数，代码 / 类型不变。
 **Actions**：
 1. 按 `supply_mode` 展开对应模型：
    - `dropshipping`：进价 + 直送客户家（无内陆）→ 最好经济性
    - `self-procured` + 自提：进价（含 landed to 客户仓库）+ 无派送
    - `self-procured` + 内陆送：进价 + 派送费
    - `self-procured` + 非本地客户付运费：进价 + 客户付
-2. 公式：`净利 = 售价 - GST(15/115) - 货成本 - 派送 - 支付通道 - 固定运营 - 广告费`
-3. **Profit Gate 公式**（v0.2 改为函数式，不再 flat）：
+2. 公式（税率从 industry profile 取，不写死）：`净利 = 售价 - 税(tax_rate) - 货成本 - 派送 - 支付通道 - 固定运营 - 广告费`
+3. **Profit Gate 公式**（v0.2 函数式，v0.2.2 改币种无关）：
    ```
-   PROFIT_GATE(price) = max(BASELINE_NZD, price × MIN_MARGIN_PCT)
+   PROFIT_GATE(price) = max(BASELINE, price × MIN_MARGIN_PCT)
    ```
-   由 industry profile 承载具体数值。**NZ 市场 v1 profile**：
+   `BASELINE` / `MIN_MARGIN_PCT` / `tax_rate` / `currency` 均由 industry profile 承载。**NZ 市场 v1 profile**（示例，非唯一值）：
    ```
    commerce-market-nz:
-     baseline_nzd: 15      # 绝对底线（防止 $30 品也能过 12% 但只赚 $3.6）
+     currency: NZD
+     tax_rate: 0.15        # GST，NZ 特有，其他市场税种/税率不同
+     baseline: 15          # 绝对底线（防止 $30 品也能过 12% 但只赚 $3.6）
      min_margin_pct: 12    # 相对底线（防止 $500 品只赚 $15 但风险巨大）
    ```
-   实际门槛：`max($15, price × 0.12)` —— NZ$45 品需过 $15、NZ$120 品需过 $15、NZ$300 品需过 $36、NZ$500 品需过 $60。
-4. 输出：每 SKU × 每 fulfillment 组合的**具体数字**（不是"大概能赚"），带 `gate_baseline_pass` + `gate_margin_pass` 两个布尔
-5. Web 版计算器（已建，需加"大件模式" `Task #5`）供人工现场测算，UI 显示"过 $ gate + 过 % gate + 综合过 gate"三个徽章
+   实际门槛（NZD 示例）：`max(15, price × 0.12)` —— NZ$45 品需过 15、NZ$120 品需过 15、NZ$300 品需过 36、NZ$500 品需过 60。**AU/SG/MY profile** 各自定义 `currency`/`tax_rate`/`baseline`/`min_margin_pct`，不复用 NZ 数值。
+4. 输出：每 SKU × 每 fulfillment 组合的**具体数字**（不是"大概能赚"），带 `gate_baseline_pass` + `gate_margin_pass` 两个布尔，金额附带 `currency`
+5. Web 版计算器（已建，需加"大件模式" `Task #5`）供人工现场测算，UI 显示"过 $ gate + 过 % gate + 综合过 gate"三个徽章，币种符号跟 profile 走
 
 **完成判据**：候选 SKU 至少一种 fulfillment 组合满足 `gate_baseline_pass AND gate_margin_pass`（两个都必须过）。不过就打回 Stage 03 找更便宜供应商 / 或打回客户谈涨价。
 
 **失败模式**：
-- 忽略 GST / payment gateway 费 / 广告费只看毛利 → 上线才发现单件亏钱
-- 只用 flat 门槛（v0.1 的错） → $30 品刚过 $15 gate 但 margin 只有 3%，一次退货就赔穿；$500 品被 $15 gate 放行但需 3% margin 是极大风险
+- 忽略税 / payment gateway 费 / 广告费只看毛利 → 上线才发现单件亏钱
+- 只用 flat 门槛（v0.1 的错） → $30 品刚过 15 gate 但 margin 只有 3%，一次退货就赔穿；$500 品被 15 gate 放行但需 3% margin 是极大风险
+- 把 NZ 的 `tax_rate=0.15` / `baseline=15` 当成全局常量写进公式或代码 → 切到 AU/SG/MY profile 时仍按 NZD + 15% GST 算，误放行或误拒绝 SKU（v0.2.1 的错，v0.2.2 已修）
 
-**ME 能力**：计算器逻辑嵌入 `score.ts`；industry profile 承载 `baseline_nzd` + `min_margin_pct` 两个参数，未来 AU/SG/MY 换 profile 即可。
+**ME 能力**：计算器逻辑嵌入 `score.ts`；industry profile 承载 `currency` + `tax_rate` + `baseline` + `min_margin_pct` 四个参数，未来 AU/SG/MY 换 profile 即可，代码不动。
 
 ### Stage 05 · 履约模型设计（Fulfillment）
 
@@ -267,10 +274,10 @@ Expiry 探测与续期任务下发的具体实现（cron 频率、任务派发�
 
 ### Stage 10 · 闭环运营（Outcome Loop）
 
-**Purpose**：把订单结果回流 ME，反哺明天的选品打分与广告分配。
+**Purpose**：把订单结果回流 ME，反哺明天的选品打分与广告分配。**注意**：本 Stage 分两级完成判据（见下）——首单回流只算"数据管道就绪"，不能称为"Outcome Loop 完成"。
 **Inputs**：三渠道订单数据。
 **Actions**：
-1. **Shopify webhooks** → orders table（现有）
+1. **Shopify webhooks** → orders table（❌ 待建：无 webhook 路由、无鉴权/幂等设计、无独立 `orders` 表 —— 见 `capability: shopify-order-ingestion`，需单独任务合同，不在本 spec 范围内实现）
 2. **Trade Me webhooks** → orders table（新增）
 3. **FBM 订单**：客户运营手工录入（无 API）→ orders table
 4. 每日 cron 聚合三渠道 → `outcomes` 表
@@ -280,17 +287,25 @@ Expiry 探测与续期任务下发的具体实现（cron 频率、任务派发�
    - Creative 权重（高转化 creative 加投）
    - Fulfillment option 使用率（发现"上门送 $25"没人选就下掉）
 
-**完成判据**：
+**完成判据分两级，不得混用**（首单回流 ≠ 闭环跑通，两者是不同的完成状态）：
+
+**Level A · 数据管道就绪**（首单即可达成，只证明"数据能进来"）：
 - ≥1 单订单从 Shopify / Trade Me / FBM 任一渠道回流到 `outcomes` 表
 - Outcome 字段完整（channel / creative_ref / fulfillment_option / net_profit_actual）
 - 数据链路验证：可从 outcome 记录反查到 creative → campaign → SKU → supplier
 
-**反哺打分启用条件**：等 outcomes 累积到"能得出统计意义信号"再定 —— 门槛（≥N 单、跨 ≥M channel、时间跨度）、`enable_score_feedback` 开关、单单极端值防护策略，全部等真实数据积累到 20-50 单时基于**观察**制定，不现在拍脑袋写死双 gate 抽象。
+**Level B · Outcome Loop 完成**（本 Stage Purpose 所述"反哺明天的选品打分与广告分配"真正达成，Level A 不能替代）：
+- outcomes 累积到统计意义信号阈值（20-50 单，见下方启用条件）
+- `enable_score_feedback` 开关已打开，且**至少一次**真实发生：某次 SKU 打分排序 / 广告预算分配 / fulfillment option 下架决策，因为反哺数据而与"仅按人工判断"不同 —— 需留痕（决策前后对比记录），不能只凭"理论上会生效"判定
+- 未达到 Level B 前，不得对外或对 PM 报告"闭环已跑通"，只能报"数据管道已就绪，等待样本量"
+
+**反哺打分启用条件**（Level B 的前置门槛）：等 outcomes 累积到"能得出统计意义信号"再定 —— 门槛（≥N 单、跨 ≥M channel、时间跨度）、`enable_score_feedback` 开关、单单极端值防护策略，全部等真实数据积累到 20-50 单时基于**观察**制定，不现在拍脑袋写死双 gate 抽象。
 
 **失败模式**：
 - 只有 Shopify 订单回流，Trade Me / FBM 订单成孤岛 → 打分反哺失真 → AI 越推越错
+- 把 Level A（首单回流）误报成 Level B（闭环完成）→ PM 以为反哺已生效，实际排序/预算/停止决策还是纯人工
 
-**ME 能力**：`capability: multi-channel-order-aggregator`。
+**ME 能力**：`capability: multi-channel-order-aggregator` + `capability: shopify-order-ingestion`（❌ 待建，见 §2）。
 反哺算法本身（含启用门槛设计）留到 outcomes 累积后单独 spec，避免为零数据的场景过早写死抽象。
 
 ---
@@ -346,21 +361,24 @@ interface DemandSignal {
 interface FulfillmentConfig {
   sku_id: string
   supply_mode: SupplyMode
+  currency: string            // v0.2.2 新增，ISO 4217，来自 industry profile
   options: Array<{
     option: FulfillmentOption
     label: string
-    fee_nzd: number   // 0 for pickup
+    fee: number   // 0 for pickup；单位 = FulfillmentConfig.currency
     availability: 'all' | { region: string[] }
   }>
   warehouse_address?: string  // 若 self-procured
   pickup_hours?: string       // 若 local-pickup 启用
 }
 
-// v0.2 改：dual-gate profit check
+// v0.2 改：dual-gate profit check；v0.2.2 改：币种无关，税率/阈值全部来自 industry profile
 interface UnitEconomics {
   sku_id: string
   fulfillment_option: FulfillmentOption
-  price_incl_gst: number
+  currency: string                       // v0.2.2 新增，ISO 4217，来自 industry profile
+  tax_rate: number                       // v0.2.2 新增，from industry profile（NZ GST=0.15，其他市场不同）
+  price_incl_tax: number                 // v0.2.2 改名，原 price_incl_gst（GST 是 NZ 特有税种名）
   cost_landed: number
   freight_per_unit: number
   payment_fee: number
@@ -368,9 +386,9 @@ interface UnitEconomics {
   ad_cost_estimated: number
   net_profit: number
   net_margin_pct: number                 // v0.2 新增
-  gate_baseline_nzd: number              // from industry profile
+  gate_baseline: number                  // v0.2.2 改名，原 gate_baseline_nzd；from industry profile
   gate_min_margin_pct: number            // from industry profile
-  gate_baseline_pass: boolean            // net_profit >= gate_baseline_nzd
+  gate_baseline_pass: boolean            // net_profit >= gate_baseline
   gate_margin_pass: boolean              // net_margin_pct >= gate_min_margin_pct
   passes_gate: boolean                   // baseline_pass AND margin_pass
   computed_at: string
@@ -383,7 +401,7 @@ interface Positioning {
   moat_type: 'physical-presence' | 'community' | 'category-narrative' | 'price-tier' | 'other'
 }
 
-// v0.2 改：outcome 用 ChannelKind enum
+// v0.2 改：outcome 用 ChannelKind enum；v0.2.2 改：金额字段币种无关
 interface OutcomeRecord {
   order_id: string
   client_id: string
@@ -391,8 +409,9 @@ interface OutcomeRecord {
   channel: ChannelKind
   creative_ref: string | null
   fulfillment_option: FulfillmentOption
-  gross_revenue_nzd: number
-  net_profit_actual_nzd: number
+  currency: string            // v0.2.2 新增，ISO 4217
+  gross_revenue: number       // v0.2.2 改名，原 gross_revenue_nzd
+  net_profit_actual: number   // v0.2.2 改名，原 net_profit_actual_nzd
   fulfilled_at: string
 }
 
@@ -410,7 +429,7 @@ interface OutcomeRecord {
 
 | Stage | 硬判据 | 检查 SQL / 命令 |
 |---|---|---|
-| 00 | `clients.status = 'active'` + `activation_note` 非空 | `select status, activation_note from clients where id = ?` |
+| 00 | `clients.client_status = 'active'`（拒绝案例 = `'archived'` + `qualification_note` 非空，该列待建） | `select client_status, qualification_note from clients where id = ?`（`qualification_note` 需先补 migration 才能跑） |
 | 01 | 每候选 SKU 有 `supply_mode` + `sku_commodity_tier` 值 | `select sku_id, supply_mode, sku_commodity_tier from products where client_id = ? and supply_mode is not null and sku_commodity_tier is not null` |
 | 02 | `demand_signals` 表有 ≥3 source 记录 + 本地竞对已识别 | `select count(distinct source) from demand_signals where sku_id = ?` |
 | 03 | 按 SKU tier 满足最低供应商数 + exclusive 有 backup_procurement_note | v0.2 见下方 §5.1 分档 SQL |
@@ -420,7 +439,7 @@ interface OutcomeRecord {
 | 07 | `master_briefs` 6 必答栏无 UNKNOWN | `select * from master_briefs where client_id = ? and target_audience is not null and ...` |
 | 08 | 三 channel listing HTTP 200 + 未过期（Trade Me/FBM 剩余 >7 天 · Shopify 非 archived/draft） | v0.2 见下方 §5.2 SQL |
 | 09 | 每 channel ≥1 active campaign · 每 SKU ≥3 creative variant | `select count(*) from ad_campaigns where sku_id = ? and status = 'ACTIVE'` |
-| 10 | outcomes ≥1 单管道通 · 反哺算法启用条件等真实数据后单独 spec | `select count(*) from outcomes where client_id = ? and creative_ref is not null and net_profit_actual_nzd is not null` |
+| 10 | Level A（数据管道就绪）：outcomes ≥1 单管道通 · Level B（Outcome Loop 完成）：需 20-50 单 + 至少一次真实反哺决策留痕，见 §3 Stage 10 | `select count(*) from outcomes where client_id = ? and creative_ref is not null and net_profit_actual is not null`（字段名随 §4.2 币种无关改动同步，见下） |
 
 ### 5.1 Stage 03 分档判据 SQL（v0.2 新增）
 
@@ -531,6 +550,15 @@ Stop hook 触发过度开发红灯后（净新增 1549 行 > 1500 阈值），�
 | **W4** · SkuCommodityTier 分档 | 转椅(commodity) + 12生肖手串(exclusive) + 韩系护肤(specialty) 三档都在当前讨论 scope | ✅ **保留**：Stage 03 分档判据 + `SkuCommodityTier` enum + `backup_procurement_note` 字段 |
 | **W5** · listing-health-monitor + expiry | **零 listing 存在** · cron 监控 + 任务派发是想象 · 但 expiry 判据本身是硬约束 | 🔀 **部分保留**：删除 `ListingHealth` type + `ListingStatus` enum + capability 命名 · **保留** Stage 08 完成判据里的 expiry 检查逻辑（Trade Me 21d 是硬约束） |
 
+### v0.2.1 → v0.2.2 变更（Codex PR #1192 review round 1，4 个可执行 finding）
+
+| # | 问题 | 处置 |
+|---|---|---|
+| **F1**（P1）· 共享金额契约硬编码 NZD/15% GST | `FulfillmentConfig` / `UnitEconomics` / `OutcomeRecord` 新增 `currency` 字段（`fee_nzd`→`fee`、`gate_baseline_nzd`→`gate_baseline`、`price_incl_gst`→`price_incl_tax`、`gross_revenue_nzd`/`net_profit_actual_nzd`→去 `_nzd` 后缀）；`UnitEconomics` 新增 `tax_rate`，与 `gate_baseline`/`gate_min_margin_pct` 一样全部来自 industry profile。Stage 04 公式改写为通用税率，NZ 具体数值只出现在 `commerce-market-nz` profile 示例里 |
+| **F2**（P2）· Stage 00 用了不存在的 `status`/`declined`/`activation_note` | 改用仓库现有 `clients.client_status`（`20260801120000_clients_client_status.sql` 定义，枚举 active/prospect/archived）；拒绝态映射到 `archived`；拒绝原因列 `qualification_note` 明确标为待建（需独立 migration），不假装已存在 |
+| **F3**（P2）· Stage 10 把 Shopify 订单接入当"现有"能力 | 改列 `capability: shopify-order-ingestion`（❌ 待建），写明仓库现状（无 webhook 路由 / `shopify-client.ts` 只处理 blog-page / 无 `orders` 表），要求单独任务合同覆盖 webhook + 鉴权 + 幂等 + 建表 |
+| **F4**（P2）· 单笔订单就宣称 Outcome Loop 完成 | Stage 10 完成判据拆两级：Level A「数据管道就绪」（首单回流即可，即原判据）· Level B「Outcome Loop 完成」（需 20-50 单样本 + 至少一次真实反哺决策留痕），未达 Level B 不得对外称"闭环已跑通" |
+
 ### v0.3 待处理（W6-W9）· 首个 WP 开完再看
 
 - **W6**：`demand-signal-adapter` 内含 5 source —— capability 拆分粒度是"每 source 独立" vs "1 adapter + strategy pattern"？影响 WP 拆分节奏。
@@ -542,27 +570,29 @@ Stop hook 触发过度开发红灯后（净新增 1549 行 > 1500 阈值），�
 
 - **v0.1**：够送 triage，不够开 build
 - **v0.2**：够开 build 但含超前抽象 → 体检红灯
-- **v0.2.1**：**够开 build 且已收敛**（W1/W4 保留、W2/W3 撤回、W5 部分保留 · W6-W9 次要不阻塞首个 WP）
+- **v0.2.1**：够开 build 且已收敛（W1/W4 保留、W2/W3 撤回、W5 部分保留 · W6-W9 次要不阻塞首个 WP）
+- **v0.2.2**：**修完 Codex round 1 的 4 个可执行 finding**（币种契约、client_status 字段、Shopify 订单接入待建标注、Outcome Loop 两级判据）
 - **v0.3**：完善所有 W1-W9，成为稳定 baseline，进 `docs/history/CHANGELOG.md`
 
 ---
 
-## 11. Reuse Statement（最终 · v0.2.1）
+## 11. Reuse Statement（最终 · v0.2.2）
 
 - **复用**：`scan.ts` / `daily-plan.ts` / `master_briefs` / `clients` / Meta Ads MCP / Shopify MCP
-- **platform-shared 新增**（v0.2.1 收敛后）：
-  - 10 段 flow 结构 · 每段硬完成判据（Stage 03/08 部分依赖首次实施时的 API shape 落细）
-  - **7 个 capability 契约**（v0.1 的 6 个 + v0.2 保留 1 个 · v0.2.1 撤回 3 个）：
-    - Existing: `supply-mode-tagger` · `demand-signal-adapter` · `product-catalog-adapter` · `fulfillment-model-configurator` · `positioning-differentiator` · `marketplace-adapter` · `multi-channel-order-aggregator`
+- **platform-shared 新增**（v0.2.2 收敛后）：
+  - 10 段 flow 结构 · 每段硬完成判据（Stage 03/08 部分依赖首次实施时的 API shape 落细；Stage 10 拆 Level A/B 两级）
+  - **8 个 capability 契约**（v0.1 的 6 个 + v0.2 保留 1 个 + v0.2.2 新增 1 个 · v0.2.1 撤回 3 个）：
+    - Existing/待建: `supply-mode-tagger` · `demand-signal-adapter` · `product-catalog-adapter` · `fulfillment-model-configurator` · `positioning-differentiator` · `marketplace-adapter` · `multi-channel-order-aggregator` · `shopify-order-ingestion`（v0.2.2 新增，❌ 待建，见 §2）
     - v0.2.1 撤回（零 caller，等触发条件出现再引入）：~~`storefront-adapter`~~ · ~~`listing-health-monitor`~~ · ~~`score-feedback-orchestrator`~~
   - **6 个 enum**（v0.1 的 4 + v0.2.1 保留 2）：`SupplyMode` · `FulfillmentOption` · `SignalSource` · `SupplierVerification` · `SkuCommodityTier`(W4) · `ChannelKind`
     - v0.2.1 撤回：~~`StorefrontKind`~~(W2) · ~~`ListingStatus`~~(W5) · ~~`OutcomeGateLevel`~~(W3)
-  - **6 个数据类型**（v0.1 的 6 + v0.2 改 2）：`NormalizedProductRecord`（+ sku_commodity_tier + backup_procurement_note W4）· `DemandSignal` · `FulfillmentConfig` · `UnitEconomics`（dual-gate 改 W1）· `Positioning` · `OutcomeRecord`（用 ChannelKind）
+  - **6 个数据类型**（v0.1 的 6 + v0.2 改 2 + v0.2.2 改 3）：`NormalizedProductRecord`（+ sku_commodity_tier + backup_procurement_note W4）· `DemandSignal` · `FulfillmentConfig`（+ currency，v0.2.2）· `UnitEconomics`（dual-gate 改 W1 + 币种无关改 v0.2.2）· `Positioning` · `OutcomeRecord`（用 ChannelKind + 币种无关改 v0.2.2）
     - v0.2.1 撤回：~~`StorefrontConfig`~~(W2) · ~~`ListingHealth`~~(W5) · ~~`ScoreFeedbackState`~~(W3)
 - **industry-specific 新增**：
-  - `commerce-market-nz`（GST 15% · CPC 基线 · 季节反季 · **profit-gate 参数** `baseline_nzd=15, min_margin_pct=12`）
+  - `commerce-market-nz`（`currency=NZD` · `tax_rate=0.15` GST · CPC 基线 · 季节反季 · **profit-gate 参数** `baseline=15, min_margin_pct=12`）—— v0.2.2 起币种/税率/阈值全归 profile，shared 类型不再硬编码
+  - `commerce-market-au` / `-sg` / `-my`：各自定义 `currency`/`tax_rate`/`baseline`/`min_margin_pct`，复用同一 `UnitEconomics`/`OutcomeRecord` 类型
   - `commerce-source-cn`（中国供应源）· `commerce-source-premium`（精品源）
 - **client-specific**：Jing's Pick 供应商合作记录、私价、SKU 库存 —— 落 `client_configuration` 与 `client_private_memory`
 - **红线**：无客户名 / 客户 ID / 华人叙事 / NZ 独有判断进 shared runtime；未来 ME Commerce AU / SG / MY 复用同 flow 只换 profile
 
-—— END v0.2.1 —— 
+—— END v0.2.2 —— 
