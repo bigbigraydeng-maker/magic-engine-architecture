@@ -21,6 +21,7 @@ import { attributionColumns, attributionFromMetaLeadRow } from '@/lib/crm/attrib
 import { lookupCreativeRefByAdId } from '@/lib/ads/creative-link'
 import { subscribeMember, type SubscribeMemberResult } from '@/lib/mailchimp/client'
 import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
+import { fetchAll } from '@/lib/supabase-paginate'
 import type { MetaLead, MetaLeadAnswer } from '@/lib/meta/lead-forms'
 
 /**
@@ -624,28 +625,34 @@ async function syncMailchimp(input: SyncMailchimpInput): Promise<SubscribeMember
  *
  * 触点 select 跟 `messenger-stop-signal.ts` 那份保持同款字段
  * (`metadata`, `occurred_at`)，判据入口是全仓唯一的 `isDoNotContact`。
+ *
+ * ⚠️ 不能只查一页：PostgREST 单次硬顶 1000 行（见 `fetchAll` 头注释），
+ * 一个联系人的触点数超过 1000 就会静默截断。`isDoNotContact` 判的是
+ * **不可变的历史全量**，截断意味着唯一的一条拒联证据可能恰好落在被截掉的
+ * 那一段 —— 镜像列 `contacts.do_not_contact` 又可能写失败，于是这里会照样
+ * 联系一个明确拒联过的人。分页拉全，拉不全就 fail-closed 到 unknown。
  */
 type DncCheck = 'blocked' | 'ok' | 'unknown'
 
 async function evaluateDnc(contactId: string): Promise<DncCheck> {
-  const [contactRes, touchesRes] = await Promise.all([
+  const [contactRes, rawTouches] = await Promise.all([
     supabaseAdmin.from('contacts').select('do_not_contact').eq('id', contactId).maybeSingle(),
-    supabaseAdmin
-      .from('contact_touchpoints')
-      .select('metadata, occurred_at')
-      .eq('contact_id', contactId),
+    fetchAll<{ metadata: Record<string, unknown> | null; occurred_at: string }>((from, to) =>
+      supabaseAdmin
+        .from('contact_touchpoints')
+        .select('metadata, occurred_at')
+        .eq('contact_id', contactId)
+        .order('id', { ascending: true })
+        .range(from, to),
+    ).catch(() => null),
   ])
 
-  if (contactRes.error || touchesRes.error) return 'unknown'
+  if (contactRes.error || rawTouches === null) return 'unknown'
   // 联系人主记录消失（例如竞态被合并）—— 保守 unknown。
   if (!contactRes.data) return 'unknown'
 
   const flag = contactRes.data.do_not_contact === true
 
-  const rawTouches = (touchesRes.data ?? []) as Array<{
-    metadata: Record<string, unknown> | null
-    occurred_at: string
-  }>
   const touches: DncTouch[] = rawTouches.map((t) => {
     const meta = t.metadata ?? {}
     const outcome = typeof meta.outcome === 'string' ? (meta.outcome as string) : null

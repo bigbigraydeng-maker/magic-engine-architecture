@@ -159,7 +159,13 @@ const LEAD_FIELDS_FULL =
 /** 兜底字段。只要 Graph 还认这三个，人就丢不了（归因为空是可接受的降级）。 */
 const LEAD_FIELDS_MINIMAL = 'id,created_time,field_data'
 
-function parseLead(raw: RawLead): MetaLead | null {
+/**
+ * @param knownFormId 这批 lead 是从 `/{knownFormId}/leads` 这条边翻出来的 ——
+ *   哪个表单不是猜的，是调用方已经知道的事实。`LEAD_FIELDS_MINIMAL` 兜底时
+ *   Graph 根本不返回 `form_id`，若不回填就会让已获批表单的 lead 在下游
+ *   consent 白名单判断里丢失表单归属，被误判成「表单未获批」。
+ */
+function parseLead(raw: RawLead, knownFormId: string): MetaLead | null {
   if (!raw.id) return null
   const createdTime = normaliseGraphTime(raw.created_time)
   if (!createdTime) return null
@@ -175,7 +181,7 @@ function parseLead(raw: RawLead): MetaLead | null {
   return {
     leadId: raw.id,
     createdTime,
-    formId: raw.form_id ?? null,
+    formId: raw.form_id ?? knownFormId,
     adId: raw.ad_id ?? null,
     adName: raw.ad_name ?? null,
     adsetId: raw.adset_id ?? null,
@@ -207,7 +213,7 @@ interface LeadWalk extends GraphRead<MetaLead> {
   truncated: boolean
 }
 
-async function walkLeads(firstUrl: string): Promise<LeadWalk> {
+async function walkLeads(firstUrl: string, formId: string): Promise<LeadWalk> {
   let url: string | undefined = firstUrl
   const rows: MetaLead[] = []
 
@@ -216,7 +222,7 @@ async function walkLeads(firstUrl: string): Promise<LeadWalk> {
     if (got.error !== null) return { rows, error: got.error, truncated: false }
 
     for (const raw of got.json.data ?? []) {
-      const lead = parseLead(raw)
+      const lead = parseLead(raw, formId)
       if (lead) rows.push(lead)
     }
     url = got.json.paging?.next
@@ -243,13 +249,16 @@ export async function fetchFormLeads(
 ): Promise<GraphRead<MetaLead>> {
   const sinceUnix = Math.floor(since.getTime() / 1000)
 
-  const full = await walkLeads(leadsUrl(formId, pageAccessToken, sinceUnix, LEAD_FIELDS_FULL))
+  const full = await walkLeads(leadsUrl(formId, pageAccessToken, sinceUnix, LEAD_FIELDS_FULL), formId)
   // 翻页截断换字段也救不了（结果太多，不是请求写错），原样回报即可。
   if (!full.error || full.truncated) return { rows: full.rows, error: full.error }
 
   console.warn(`[meta/lead-forms] 表单 ${formId} 完整字段失败，退回最小字段集：${full.error}`)
 
-  const minimal = await walkLeads(leadsUrl(formId, pageAccessToken, sinceUnix, LEAD_FIELDS_MINIMAL))
+  const minimal = await walkLeads(
+    leadsUrl(formId, pageAccessToken, sinceUnix, LEAD_FIELDS_MINIMAL),
+    formId,
+  )
   if (minimal.error) {
     return { rows: minimal.rows, error: `${full.error} / 兜底也失败: ${minimal.error}` }
   }
