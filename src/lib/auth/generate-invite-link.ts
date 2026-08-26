@@ -19,8 +19,17 @@
 export interface InviteLinkResult {
   ok: boolean
   hashedToken?: string
-  /** The EmailOtpType to pass into `verifyOtp` on the landing side. */
-  type?: 'invite' | 'magiclink'
+  /**
+   * The EmailOtpType to pass into `verifyOtp` on the landing side. Sourced
+   * from Supabase's OWN `properties.verification_type` on the generateLink
+   * response — NOT the `type` we requested. GoTrue does not always mint a
+   * token whose verification type matches the request (e.g. an
+   * already-registered-user `magiclink` request has been observed minting a
+   * token that GoTrue only accepts back under a different type string).
+   * Falls back to the requested type when Supabase's response omits the
+   * field, so older/mocked responses keep working.
+   */
+  type?: string
   /** Set when ok:false — safe-to-log message describing what failed. */
   reason?: string
 }
@@ -32,7 +41,7 @@ interface GenerateLinkParams {
 }
 
 interface GenerateLinkResponse {
-  data: { properties?: { hashed_token?: string } | null } | null
+  data: { properties?: { hashed_token?: string; verification_type?: string } | null } | null
   error: { message?: string; status?: number; code?: string } | null
 }
 
@@ -47,6 +56,17 @@ export interface InviteLinkDeps {
 function extractHash(properties: unknown): string | undefined {
   if (properties && typeof properties === 'object') {
     const t = (properties as { hashed_token?: unknown }).hashed_token
+    if (typeof t === 'string' && t.length > 0) return t
+  }
+  return undefined
+}
+
+// GoTrue reports the type it will actually accept back in verifyOtp via
+// `properties.verification_type` — trust that over the `type` we asked
+// generateLink for, which is not guaranteed to match (see InviteLinkResult).
+function extractVerificationType(properties: unknown): string | undefined {
+  if (properties && typeof properties === 'object') {
+    const t = (properties as { verification_type?: unknown }).verification_type
     if (typeof t === 'string' && t.length > 0) return t
   }
   return undefined
@@ -78,7 +98,11 @@ export async function generateInviteLink(
 
   const inviteHash = extractHash(invite.data?.properties)
   if (!invite.error && inviteHash) {
-    return { ok: true, hashedToken: inviteHash, type: 'invite' }
+    return {
+      ok: true,
+      hashedToken: inviteHash,
+      type: extractVerificationType(invite.data?.properties) ?? 'invite',
+    }
   }
 
   if (isAlreadyRegistered(invite.error)) {
@@ -89,7 +113,11 @@ export async function generateInviteLink(
     })
     const magicHash = extractHash(magic.data?.properties)
     if (!magic.error && magicHash) {
-      return { ok: true, hashedToken: magicHash, type: 'magiclink' }
+      return {
+        ok: true,
+        hashedToken: magicHash,
+        type: extractVerificationType(magic.data?.properties) ?? 'magiclink',
+      }
     }
     return {
       ok: false,

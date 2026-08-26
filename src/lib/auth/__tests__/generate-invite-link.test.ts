@@ -112,6 +112,44 @@ describe('generateInviteLink', () => {
     expect(result.reason).toMatch(/hashed_token/)
   })
 
+  // ── CONTRACT (hotfix 2026-08-27 #2): trust GoTrue's own verification_type ──
+
+  it('CONTRACT: uses properties.verification_type from Supabase, not the requested type, when the two differ', async () => {
+    // Production canary 2026-08-27 04:41:04 NZST: an already-registered-user
+    // invite fell back to `admin.generateLink({type:'magiclink'})`, but the
+    // token GoTrue actually minted was only accepted by verifyOtp under a
+    // DIFFERENT type string than 'magiclink' (and, separately, than the
+    // hardcoded 'email' guess the first hotfix tried). GoTrue reports the
+    // type it will actually accept back via `properties.verification_type` —
+    // this must win over whatever type we requested.
+    const { admin } = stubAdmin({
+      invite: () => ({
+        data: null,
+        error: { message: 'Email address already exists', status: 422, code: 'email_exists' },
+      }),
+      magiclink: () => ({
+        data: { properties: { hashed_token: 'xyz789', verification_type: 'email' } },
+        error: null,
+      }),
+    })
+    const result = await generateInviteLink('existing@cts.co.nz', REDIRECT, { client: { auth: { admin } } })
+    expect(result.ok).toBe(true)
+    expect(result.hashedToken).toBe('xyz789')
+    expect(result.type).toBe('email')
+  })
+
+  it('CONTRACT: same trust applies on the primary invite path', async () => {
+    const { admin } = stubAdmin({
+      invite: () => ({
+        data: { properties: { hashed_token: 'abc123', verification_type: 'signup' } },
+        error: null,
+      }),
+    })
+    const result = await generateInviteLink('new@cts.co.nz', REDIRECT, { client: { auth: { admin } } })
+    expect(result.ok).toBe(true)
+    expect(result.type).toBe('signup')
+  })
+
   it('reports the magic-link error when the fallback also fails', async () => {
     const { admin } = stubAdmin({
       invite: () => ({ data: null, error: { message: 'User already registered', status: 422 } }),
