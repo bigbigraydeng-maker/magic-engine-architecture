@@ -1,16 +1,17 @@
-# Spec：ME Commerce 客户 Onboarding Playbook v0.2.4
+# Spec：ME Commerce 客户 Onboarding Playbook v0.2.5
 
-- **日期**：2026-08-25（v0.1 → v0.2 → v0.2.1 收敛版）· 2026-08-26 v0.2.2（Codex PR #1192 review round 1 修订）· 2026-08-26 v0.2.3（Codex PR #1192 review round 2 修订）· 2026-08-26 v0.2.4（Codex PR #1192 review round 3 修订）
+- **日期**：2026-08-25（v0.1 → v0.2 → v0.2.1 收敛版）· 2026-08-26 v0.2.2（Codex PR #1192 review round 1 修订）· 2026-08-26 v0.2.3（Codex PR #1192 review round 2 修订）· 2026-08-26 v0.2.4（Codex PR #1192 review round 3 修订）· 2026-08-27 v0.2.5（Codex PR #1192 review round 4 修订）
 - **owner**：Claude Code 主导编排；提炼自 Ray 与 Claude Code 就 Jing's Pick 转椅 SKU 的实操会话
 - **首个跑通对象**：Jing's Pick（`71b5ec11-…`，client status: prospect → active 待 PM GO）— 作为 ME Commerce Customer Zero
 - **风险级别**：**B 级**（新平台能力设计，无 schema 破坏性变更，无对外新 endpoint 上线；具体 capability 实施走各自的 A/B/C 风险闸）
-- **审阅状态**：DRAFT v0.2.2 · 待 Codex/构建控制在 [#1137](https://github.com/bigbigraydeng-maker/magic-engine/issues/1137) triage → 若 promote 后开正式任务合同并送子牙（架构）+ 魏征（挑刺）2 审
+- **审阅状态**：DRAFT v0.2.5 · 已过 4 轮 Codex auto-review + 1 轮 PM 手动授权（超 CLAUDE.md 铁律"最多 2 轮" · PM 2026-08-27 显式授权本轮 4→5）· 待 [#1137](https://github.com/bigbigraydeng-maker/magic-engine/issues/1137) triage → 若 promote 后开正式任务合同并送子牙（架构）+ 魏征（挑刺）2 审
 - **Implementation Authorized**：**NO**（本文档只是 spec，不动 code / schema / migration / 部署）
 - **v0.2 变更**：修 v0.1 自审出的 W1-W5 五个结构性漏洞。
 - **v0.2.1 变更**（过度开发体检后收敛）：v0.2 的 W2/W3 fix 属"为想象未来需求提前抽象，零 caller"，撤回；W5 的 capability 命名撤回，保留 expiry 检查 SQL；W1/W4 fix 有真实 caller（多价段 + 多 tier SKU 都在当前讨论），保留。详见 §10 变更历史 + [docs/history/over-eng-log.md](../history/over-eng-log.md)。
 - **v0.2.2 变更**（PR #1192 Codex review round 1）：① 共享金额契约改币种无关——`FulfillmentConfig`/`UnitEconomics`/`OutcomeRecord` 新增 `currency` 字段，`tax_rate`/`gate_baseline`/`min_margin_pct` 全部移入 industry profile，不再硬编码 NZD/15% GST；② Stage 00 改用仓库现有 `clients.client_status`（active/prospect/archived），移除不存在的 `status`/`declined`/`activation_note`，拒绝原因存储位置明确为待建列 `qualification_note`；③ Stage 10 Shopify 订单接入改列为 `capability: shopify-order-ingestion`（❌ 待建，仓库无 webhook 路由/orders 表）；④ Stage 10 完成判据拆两级，首单回流只算 Level A「数据管道就绪」，Level B「Outcome Loop 完成」需真实影响下一次排序/预算/停止决策。详见 §10。
 - **v0.2.3 变更**（PR #1192 Codex review round 2）：① Stage 00 准入门槛的最低月广告预算与币种移入 industry profile（`min_monthly_ad_budget` + `currency`），不再硬编码 `NZ$500`；② 新增 §2.1 表结构待建声明，逐一确认 `products`/`demand_signals`/`normalized_product_records`/`unit_economics`/`fulfillment_configs`/`client_positioning`/`ad_campaigns`/`outcomes` 均为待建表（仓库现状无一存在），避免各 capability 合同遗漏持久化工作；③ Stage 08 FBM 人工发布任务补齐 `what`/逐步 `how`/直达 `href` 三件套，对齐 CLAUDE.md §3 人工任务下发铁律；④ Stage 03 供应商 gate SQL 补齐 `verification_level != 'unknown'` 与 MOQ/price/dropship 非 null 的必填字段校验，不再只统计记录数。详见 §10。
 - **v0.2.4 变更**（PR #1192 Codex review round 3）：① 撤回"score.ts/landed-cost.ts 只换 profile、代码不动"的承诺——全仓核实 `landed-cost.ts`/`scan-request.ts`/`score.ts` 现状均是 NZ/NZD-only 硬编码实现（`SUPPORTED_MARKETS=['NZ']`、字段名 `xxxNzd`、`gstRatePct` 按百分数 10-20 校验、AU/NZ 专属需求闸），本 spec 的 `tax_rate` 契约改口径对齐现有代码（百分数而非小数），并把 Stage 04 "ME 能力"改列为 NZ profile 专用实现 + 待建 market-adapter；② 统一供应商验证枚举——`SupplierVerification` 无 `unknown` 成员，§5.1 SQL 与 Stage 03 文字改用正向名单 `IN ('gold','verified','audited')`，不再用会报错/误放行的 `!= 'unknown'`；③ Stage 09 creative variant 补稳定身份——复用已合的 `ad_creative_links` 表（`supabase/migrations/20260801000001_ad_creative_links.sql`），要求 `daily-plan.ts` 等各生成入口把 `creative_ref` 落成真实内容 id（如 `content_work_orders.id`）而不是日期字符串，使同日多变体各自可归因；④ Stage 08 库存同步 cron 补首次上架之后的持续人工闭环——每次库存变化都要下发带三件套的 FBM 调整任务，不能只在首次发布时下发；⑤ Stage 10 新增 `capability: fbm-order-entry`（待建，客户/FDE 用的订单录入页面 + 持久化 + 幂等契约），FBM 订单不再只写"手工录入 orders 表"这句无落地路径的话。详见 §10。
+- **v0.2.5 变更**（PR #1192 Codex review round 4，5 个可执行 finding）：① Stage 01 `capability: supply-mode-tagger` 显式引用 §2.1 声明 `products` 表待建，避免读者假设已存在；② `DemandSignal` 契约新增 `sku_id: string | null` 字段，与 Stage 02 判据 SQL `where sku_id = ?` 对齐（探索期未绑 SKU 的品类信号用 null + `keyword_or_category` 聚合，判据 SQL 用 or 变体）；③ Stage 07 Master Brief 6 必答栏对现有 `master_briefs` 表逐列实测——3 栏（价格带 / 广告预算 / 客服负责人）无对应列，明确列出待加 migration，Stage 07 实施合同必须先跑扩表 migration；④ `OutcomeRecord` 粒度从 order 降到 line-item——新增 `order_line_id` 主键、`qty` 字段，`gross_revenue`/`net_profit_actual` 改为 `line_` 前缀，同步 Stage 10 完成判据字段名，反哺聚合口径同步在 type 注释中给出；⑤ 供应商 gate SQL（§5.1）v0.2.4 已在 join 条件里加了 `verification_level IN ('gold','verified','audited')` + MOQ/price/dropship 非 null 的完整必填字段过滤——Codex round 4 该 P2 finding 属于对同一位置的重复提出，v0.2.4 已解决，v0.2.5 保留原实现并在 §10 记录说明。详见 §10。
 
 ---
 
@@ -114,7 +115,7 @@
 
 **完成判据**：每个候选 SKU 数据库有 `supply_mode` 字段值 ∈ {dropshipping, self-procured, hybrid}。
 **失败模式**：客户口头说自采购但实际没进货 → 广告投出去客户下单当天无货可发。
-**ME 能力**：`capability: supply-mode-tagger`（SKU 级，与 `products` 表关联）。
+**ME 能力**：`capability: supply-mode-tagger`（SKU 级，与 `products` 表关联；**`products` 表待建**，见 §2.1——Stage 01 的完成判据 SQL `select ... from products where ...` 假设该表已存在，实施必须先落建表 migration，否则本 Stage 无法起步）。
 
 ### Stage 02 · 需求信号验证（Demand Signal）
 
@@ -253,8 +254,24 @@
 
 **完成判据**：`master_briefs` 记录存在 + 6 个必答栏无 UNKNOWN + 客户签字（PM 代签）确认。
 
-**失败模式**：AI 编答案没跟客户对齐 → 广告出来客户觉得"不是他们的品牌" → 需大改重投。
-**ME 能力**：现有 `master_briefs` 表 + Master Brief AI 起草器 + 人审 UI。
+**v0.2.5 现有表实测 · 6 必答栏落列映射**（对 `master_briefs` 表逐列 grep，2026-08-27）：
+
+| 必答栏 | 现有列 | 状态 |
+|---|---|---|
+| 目标客户 | `primary_audience` (text) + `target_audience` (jsonb) | ✅ 已有 |
+| 品牌调性 | `tone` (text) + `brand_voice` (jsonb) | ✅ 已有 |
+| 避雷品类 | `content_avoid` (text[]) + `excluded_topics` (text[]) | ✅ 已有（复用 content 避雷字段承载 product 避雷，语义可扩展） |
+| **价格带** | — | ❌ 无对应列，Stage 07 实施前必须先加 migration：`price_band_min numeric` + `price_band_max numeric` + `price_band_currency text`，或统一 `price_band_json jsonb` 承载区间 + 币种 |
+| **广告预算** | — | ❌ 无对应列，实施前必须先加 `ad_budget_monthly numeric` + `ad_budget_currency text`；注意 Stage 00 的 `clients.min_monthly_ad_budget`（待建，见 §3 Stage 00 ME 能力）是"准入门槛"，与 Stage 07 的"客户实际承诺预算"不同，不能混用一列 |
+| **客服负责人** | — | ❌ 无对应列，实施前必须先加 `customer_service_owner text`（联系人姓名/邮箱/电话建议独立列，或复用 `clients.contact_*` 走外键） |
+
+**结论**：6 栏中 3 栏（价格带 / 广告预算 / 客服负责人）在现有 `master_briefs` **无对应存储**——若不先补 migration 就走完成判据 SQL，会因列不存在直接报错；若靠 AI 塞进现有 `brief_story_md` 之类自由文本列，无法结构化查询、无法 gate 通过。Stage 07 实施合同必须先跑扩表 migration（走正常 A 级 schema review），否则本 Stage 无法起步。
+
+**失败模式**：
+- AI 编答案没跟客户对齐 → 广告出来客户觉得"不是他们的品牌" → 需大改重投
+- 上表 3 个缺失列未先补 migration → 完成判据 SQL 直接报"column does not exist"，或退化成"塞进自由文本，人肉审"的伪结构化
+
+**ME 能力**：现有 `master_briefs` 表 + Master Brief AI 起草器 + 人审 UI；**Stage 07 前置 migration** 见上表 3 个待加列。
 
 ### Stage 08 · 销售渠道矩阵上架（Sales Channels）
 
@@ -333,7 +350,7 @@ Expiry 探测与续期任务下发的具体实现（cron 频率、任务派发�
 
 **Level A · 数据管道就绪**（首单即可达成，只证明"数据能进来"）：
 - ≥1 单订单从 Shopify / Trade Me / FBM 任一渠道回流到 `outcomes` 表
-- Outcome 字段完整（channel / creative_ref / fulfillment_option / net_profit_actual）
+- Outcome 字段完整（channel / creative_ref / fulfillment_option / `line_net_profit_actual`——v0.2.5 起 outcomes 以订单行粒度落，见 §4.2）
 - 数据链路验证：可从 outcome 记录反查到 creative → campaign → SKU → supplier
 
 **Level B · Outcome Loop 完成**（本 Stage Purpose 所述"反哺明天的选品打分与广告分配"真正达成，Level A 不能替代）：
@@ -398,6 +415,10 @@ interface DemandSignal {
   magnitude: number
   top_advertisers?: string[]
   fetched_at: string
+  // v0.2.5 新增：Stage 02 判据 SQL 用 `where sku_id = ?` 聚合，此字段必须存在
+  //   - 已绑定 SKU 的信号（品类研究通过后的正式验证）：sku_id 必填
+  //   - 探索期未绑 SKU 的品类信号（Stage 02 早段品类扫描）：sku_id 留 null，此时通过 keyword_or_category 聚合，判据 SQL 需按 `where sku_id = ? or (sku_id is null and keyword_or_category = ?)` 变体查询
+  sku_id: string | null
 }
 
 interface FulfillmentConfig {
@@ -444,18 +465,26 @@ interface Positioning {
 }
 
 // v0.2 改：outcome 用 ChannelKind enum；v0.2.2 改：金额字段币种无关
+// v0.2.5 改：粒度从 order 降到 line-item —— 一笔订单含多 SKU 时，原契约只能记 1 个
+// sku_id / net_profit，多 SKU 订单必然错归因。改为每一行订单行一条 OutcomeRecord。
 interface OutcomeRecord {
-  order_id: string
+  order_id: string                     // 承运订单号（同一订单多行共享）
+  order_line_id: string                // v0.2.5 新增，主键（订单行级别唯一）
   client_id: string
-  sku_id: string
+  sku_id: string                       // 该行的 SKU
+  qty: number                          // v0.2.5 新增，该行成交件数
   channel: ChannelKind
-  creative_ref: string | null
+  creative_ref: string | null          // 该行所属订单的最后一次触达 creative
   fulfillment_option: FulfillmentOption
-  currency: string            // v0.2.2 新增，ISO 4217
-  gross_revenue: number       // v0.2.2 改名，原 gross_revenue_nzd
-  net_profit_actual: number   // v0.2.2 改名，原 net_profit_actual_nzd
+  currency: string                     // v0.2.2 新增，ISO 4217
+  line_gross_revenue: number           // v0.2.5 改名，原 gross_revenue（订单级），现为该行小计
+  line_net_profit_actual: number       // v0.2.5 改名，同上
   fulfilled_at: string
 }
+// 反哺聚合口径（Stage 10 反哺算法启用时用）：
+//   - SKU 级：sum(line_net_profit_actual) group by sku_id
+//   - Creative 级：join at order_id → sum group by creative_ref
+//   - 单件订单退化：qty=1、order_line_id 用 `${order_id}#1`，兼容单 SKU 订单
 
 // v0.2.1 撤回（无当前 caller）:
 //   - StorefrontConfig: Shopify-only for v0.x，storefront 抽象等真第二个客户
@@ -481,7 +510,7 @@ interface OutcomeRecord {
 | 07 | `master_briefs` 6 必答栏无 UNKNOWN | `select * from master_briefs where client_id = ? and target_audience is not null and ...` |
 | 08 | 三 channel listing HTTP 200 + 未过期（Trade Me/FBM 剩余 >7 天 · Shopify 非 archived/draft） | v0.2 见下方 §5.2 SQL |
 | 09 | 每 channel ≥1 active campaign · 每 SKU ≥3 creative variant | `select count(*) from ad_campaigns where sku_id = ? and status = 'ACTIVE'` |
-| 10 | Level A（数据管道就绪）：outcomes ≥1 单管道通 · Level B（Outcome Loop 完成）：需 20-50 单 + 至少一次真实反哺决策留痕，见 §3 Stage 10 | `select count(*) from outcomes where client_id = ? and creative_ref is not null and net_profit_actual is not null`（字段名随 §4.2 币种无关改动同步，见下） |
+| 10 | Level A（数据管道就绪）：outcomes ≥1 行管道通 · Level B（Outcome Loop 完成）：需 20-50 行 + 至少一次真实反哺决策留痕，见 §3 Stage 10 | `select count(*) from outcomes where client_id = ? and creative_ref is not null and line_net_profit_actual is not null`（字段名随 §4.2 v0.2.5 line-item 粒度改动同步；单笔多 SKU 订单每行独立算一条） |
 
 ### 5.1 Stage 03 分档判据 SQL（v0.2 新增，v0.2.4 修正过滤条件）
 
@@ -639,6 +668,16 @@ Stop hook 触发过度开发红灯后（净新增 1549 行 > 1500 阈值），�
 | **H3**（P1）· creative variant 缺稳定身份 | Stage 09 新增"Creative variant 稳定身份"小节：复用已合的 `ad_creative_links` 表（`(client_id, platform, ad_id)` 唯一键 → `creative_ref`），要求各生成入口（`daily-plan.ts` 等）把 `creative_ref` 落成真实内容 id 而非 `bundle.date` 日期字符串；完成判据补上"每个 variant 有独立 `ad_id → creative_ref` 行"这一条 |
 | **H4**（P1）· FBM 库存同步无持续人工闭环 | Stage 08 新增"FBM 库存持续闭环"小节：库存同步 cron 每次检测到差异 >1 都必须下发独立三件套任务（不只首次发布时下发一次），或改用渠道预留库存模型；完成判据/失败模式/ME 能力同步补充 |
 | **H5**（P1）· FBM 订单录入无产品入口 | §2 新增 `capability: fbm-order-entry`（❌ 待建）；Stage 10 Action 3 与"ME 能力"行同步指向该 capability，不再只写"手工录入"这句无落地路径的话 |
+
+### v0.2.4 → v0.2.5 变更（Codex PR #1192 review round 4，5 个可执行 finding）
+
+| # | 问题 | 处置 |
+|---|---|---|
+| **I1**（P1）· Stage 01 `products` 表假设已存在 | Stage 01 "ME 能力"行显式加"（**`products` 表待建**，见 §2.1——Stage 01 完成判据 SQL 假设该表已存在，实施必须先落建表 migration，否则本 Stage 无法起步）"，与 §2.1 表结构待建声明打通引用 |
+| **I2**（P1）· `DemandSignal` 契约缺 `sku_id` | 契约新增 `sku_id: string | null`——已绑 SKU 的正式验证信号必填、探索期品类扫描留 null 靠 `keyword_or_category` 聚合；Stage 02 判据 SQL 的 `where sku_id = ?` 需按 `where sku_id = ? or (sku_id is null and keyword_or_category = ?)` 变体查询（避免品类级信号被漏计） |
+| **I3**（P1）· Master Brief 6 必答栏现有表存不下 | 对 `master_briefs` 表逐列实测（2026-08-27）：3 栏（**价格带 / 广告预算 / 客服负责人**）无对应列。Stage 07 完成判据下方新增映射表 + 3 个待加 migration 列（`price_band_*`、`ad_budget_monthly + ad_budget_currency`、`customer_service_owner`），说明"完成判据 SQL 直接跑会报 column does not exist、退化成塞自由文本无法结构化 gate"两种失败模式；Stage 07 实施合同必须先跑扩表 migration |
+| **I4**（P1）· `OutcomeRecord` 缺 line-item 粒度 | 一笔订单多 SKU 时原契约必然错归因（只能记 1 个 `sku_id` / `net_profit`）。契约改造：新增 `order_line_id`（订单行级主键）+ `qty`；`gross_revenue`/`net_profit_actual` 改为 `line_` 前缀；反哺聚合口径写在 type 注释里（SKU 级 sum group by sku_id、Creative 级 join order_id → group by creative_ref、单件订单退化 qty=1 + `${order_id}#1` 兼容单 SKU 订单）。Stage 10 完成判据 SQL 与 §3 完成判据文字同步用新字段名 |
+| **I5**（P2）· 供应商 gate SQL 缺字段校验 | v0.2.4 已在 §5.1 的 join 条件里加了 `verification_level IN ('gold','verified','audited')` + `moq is not null` + `price_range->>'min'/'max' is not null` + `dropship_supported is not null` 的完整必填字段过滤，且 v0.2.3 已在 §5.1 前置说明段落解释了该改动。Round 4 Codex 对同一位置重复提出，判定为已解决 finding 的重复报，v0.2.5 保留 v0.2.4 现有实现不动，并在本表明确记录以避免下轮再被误报 |
 
 ### v0.3 待处理（W6-W9）· 首个 WP 开完再看
 
