@@ -28,6 +28,15 @@ import { getSerpPage } from '../dataforseo/serp'
 const TARGET_SERP_QUERIES = 2
 const PER_QUERY_TIMEOUT_MS = 60_000
 
+/**
+ * 本模块最坏能吃掉多少墙钟:查询是串行跑的,所以是次数 × 单次超时。
+ *
+ * 调用方(agent.ts 的 applyPostProcessing)必须拿这个数去对自己的 deadline ——
+ * 否则报告写完之后这里还能再跑两分钟,把整单捅穿 public-scan 的 9 分钟硬顶。
+ * 2026-08-26 Codex 复审 #1186 P1 指出的就是这个缺口。
+ */
+export const SERP_COVERAGE_WORST_CASE_MS = TARGET_SERP_QUERIES * PER_QUERY_TIMEOUT_MS
+
 // ─── 选词逻辑 ────────────────────────────────────────────────────────────────
 
 /**

@@ -102,8 +102,25 @@ function translateNote(note: string): { icon: string; message: string } {
 // This prevents jobs from staying in 'running' forever if the agent hangs or
 // if the process is recycled mid-scan.
 const SCAN_HARD_TIMEOUT_MS = 9 * 60 * 1000
+// 前置 DataForSEO 抓取的时限。它跟 agent 共用同一个 9 分钟硬顶,不夹住它
+// 就等于让 agent 的预算随它波动。
+const PREFETCH_TIMEOUT_MS = 45_000
+// 硬顶触发前留给"写库 + 收尾"的余量。agent 的 deadline 会被夹在这条线之内,
+// 这样 agent 正常跑完时不会反被硬顶判成失败。
+const SCAN_WRAPUP_RESERVE_MS = 20_000
+
+function withScanTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms),
+    ),
+  ])
+}
 
 async function runScan(jobId: string, domain: string): Promise<void> {
+  // 整单硬顶从这一刻起算 —— agent 必须被夹进同一条线里,而不是从它自己进门时算起。
+  const scanStartedAt = Date.now()
   // Promote queued → running once. addLog() deliberately no longer writes
   // `status`, so this is the sole running-state transition.
   await supabaseAdmin
@@ -132,9 +149,11 @@ async function runScan(jobId: string, domain: string): Promise<void> {
 
   let semrushContext: string | undefined
   try {
+    // 这两个请求原本没有任何时限,却和 agent 共用同一个 9 分钟硬顶 ——
+    // 它们慢一分钟,后面正常跑完的扫描就会被判失败。(Codex 复审 #1186 P1)
     const [metricsRes, kwRes] = await Promise.allSettled([
-      getDomainMetrics(domain),
-      getKeywordsForSite(domain, 2036, 20),
+      withScanTimeout(getDomainMetrics(domain), PREFETCH_TIMEOUT_MS),
+      withScanTimeout(getKeywordsForSite(domain, 2036, 20), PREFETCH_TIMEOUT_MS),
     ])
 
     const metrics = metricsRes.status === 'fulfilled' ? metricsRes.value : null
@@ -184,6 +203,8 @@ async function runScan(jobId: string, domain: string): Promise<void> {
     heartbeatMsg = 'Deep scanning your brand…'
     const { report, validation_error } = await runZhangqian(domain, {
       semrushContext,
+      // 把整单的绝对时限交给 agent,让它把前置抓取已经烧掉的时间算进去。
+      deadlineAt: scanStartedAt + SCAN_HARD_TIMEOUT_MS - SCAN_WRAPUP_RESERVE_MS,
       onProgress: async (note) => {
         const { icon, message } = translateNote(note)
         heartbeatMsg = message  // keep heartbeat label in sync with latest phase

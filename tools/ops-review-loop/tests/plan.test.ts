@@ -60,4 +60,24 @@ describe('decideStage', () => {
     const markers = [{ stage: 'ready', pr: 1, sha: 'sha-0' }]
     expect(decideStage({ ...base, sha: 'sha-1', markers }).action).toBe('ready')
   })
+
+  it('skips instead of dispatching when the head has moved past the sha Codex reviewed', () => {
+    const result = decideStage({ ...base, hasActionableFindings: true, isStale: true })
+    expect(result.action).toBe('skip')
+  })
+
+  it('dispatches normally when there are actionable findings and the head is not stale', () => {
+    expect(decideStage({ ...base, hasActionableFindings: true, isStale: false })).toEqual({
+      action: 'dispatch-fix',
+      round: 1,
+    })
+  })
+
+  it('ignores staleness on the ready path — only the push path needs the guard', () => {
+    expect(decideStage({ ...base, isStale: true })).toEqual({ action: 'ready' })
+  })
+
+  it('ignores staleness on the wait-ci path — only the push path needs the guard', () => {
+    expect(decideStage({ ...base, ciSuccess: false, isStale: true })).toEqual({ action: 'wait-ci' })
+  })
 })

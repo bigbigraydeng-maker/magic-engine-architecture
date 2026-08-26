@@ -56,6 +56,33 @@ interface TodayPayload {
   }
 }
 
+interface ReconciliationCluster {
+  rootCauseKey: string
+  clientName: string | null
+  label: string
+  occurrenceCount: number
+  reason: string
+}
+
+interface ReconciliationSuppressedGroup {
+  reason: string
+  count: number
+  sample: string
+}
+
+interface ReconciliationPreviewPayload {
+  fixture: string
+  before: number
+  after: number
+  unresolvedClusters: ReconciliationCluster[]
+  suppressed: ReconciliationSuppressedGroup[]
+}
+
+type ReconciliationState =
+  | { phase: 'loading' }
+  | { phase: 'error' }
+  | { phase: 'ready'; data: ReconciliationPreviewPayload }
+
 type PageState =
   | { phase: 'loading' }
   | { phase: 'error'; message: string }
@@ -109,8 +136,83 @@ function ClientRow({
   )
 }
 
+const REASON_LABEL: Record<string, string> = {
+  GENUINE_UNRESOLVED: '真实未解决',
+  HUMAN_DECISION_REQUIRED: '需要人工决策',
+  CHECK_FAILED_UNRESOLVED: '核实失败（保留可见）',
+  INTENTIONAL_STATE: '系统故意状态（非问题）',
+  NOT_YET_DUE: '太新，还不到检查时间',
+  CONNECTOR_ALREADY_CONNECTED: '其实已连接（误报）',
+  DUPLICATE_WORK_ITEM: '和别处重复计数',
+  TERMINAL_COMPLETED: '已经结束，只是没摘下来',
+  AUTO_EXECUTABLE_NOT_HUMAN_WORK: '系统能自己做，不该算人工活',
+}
+
+/**
+ * #1169 WP1 — reconciliation preview. Runs on the FROZEN audited-280
+ * fixture, not live data (see the route's own comment): this proves the
+ * reconciliation logic before it is wired to the real counts above.
+ */
+function ReconciliationPreviewCard({ state }: { state: ReconciliationState }) {
+  if (state.phase === 'loading') {
+    return <div className="mb-6 text-xs text-slate-400">加载 Todo Reconciliation 预览…</div>
+  }
+  if (state.phase === 'error') {
+    return null
+  }
+
+  const { data } = state
+  const suppressedSorted = [...data.suppressed].sort((a, b) => b.count - a.count)
+  const clustersSorted = [...data.unresolvedClusters].sort((a, b) => b.occurrenceCount - a.occurrenceCount)
+
+  return (
+    <div className="mb-6 rounded-xl border border-violet-200 bg-violet-50 p-4">
+      <p className="mb-1 text-sm font-black text-violet-900">
+        🧮 Todo Reconciliation Gate 预览（#1169 WP1 · 基于冻结审计样本，非实时数据）
+      </p>
+      <p className="mb-3 text-xs text-violet-700">
+        原始记录 <b>{data.before}</b> 条 → 去重合并后真正未解决 <b>{data.after}</b> 组
+        （被抑制 {data.suppressed.reduce((s, g) => s + g.count, 0)} 条，每条都带原因码，不会静默消失）
+      </p>
+
+      <p className="mb-1 text-xs font-bold text-violet-800">未解决（{clustersSorted.length} 组）</p>
+      <div className="mb-3 space-y-1">
+        {clustersSorted.slice(0, 8).map((c) => (
+          <div key={c.rootCauseKey} className="flex items-center justify-between text-xs text-slate-700">
+            <span className="truncate">
+              {c.clientName ? `${c.clientName} · ` : ''}
+              {c.label}
+              {c.occurrenceCount > 1 ? ` ×${c.occurrenceCount}` : ''}
+            </span>
+            <span className="ml-2 shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-violet-700">
+              {REASON_LABEL[c.reason] ?? c.reason}
+            </span>
+          </div>
+        ))}
+        {clustersSorted.length > 8 && (
+          <p className="text-[11px] text-violet-500">还有 {clustersSorted.length - 8} 组未展示…</p>
+        )}
+      </div>
+
+      <p className="mb-1 text-xs font-bold text-violet-800">被抑制的原因分布</p>
+      <div className="flex flex-wrap gap-1.5">
+        {suppressedSorted.map((g) => (
+          <span
+            key={g.reason}
+            title={g.sample}
+            className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-600"
+          >
+            {REASON_LABEL[g.reason] ?? g.reason} × {g.count}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function TodayPage() {
   const [state, setState] = useState<PageState>({ phase: 'loading' })
+  const [reconciliation, setReconciliation] = useState<ReconciliationState>({ phase: 'loading' })
 
   const load = useCallback(async () => {
     setState({ phase: 'loading' })
@@ -127,7 +229,20 @@ export default function TodayPage() {
     }
   }, [])
 
+  const loadReconciliation = useCallback(async () => {
+    setReconciliation({ phase: 'loading' })
+    try {
+      const res = await fetch('/api/workbench/today/reconciliation-preview')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = (await res.json()) as ReconciliationPreviewPayload
+      setReconciliation({ phase: 'ready', data })
+    } catch {
+      setReconciliation({ phase: 'error' })
+    }
+  }, [])
+
   useEffect(() => { load() }, [load])
+  useEffect(() => { loadReconciliation() }, [loadReconciliation])
 
   if (state.phase === 'loading') {
     return <div className="p-8 text-sm text-slate-400">加载今日待办...</div>
@@ -172,6 +287,8 @@ export default function TodayPage() {
           </p>
         )}
       </div>
+
+      <ReconciliationPreviewCard state={reconciliation} />
 
       {total === 0 ? (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-6 text-sm font-bold text-emerald-700">

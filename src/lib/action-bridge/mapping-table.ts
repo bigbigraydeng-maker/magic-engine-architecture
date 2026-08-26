@@ -24,4 +24,12 @@ export interface CandidateMappingEntry {
   readonly actionKey: ActionKey
 }
 
-export const MAPPING_TABLE: readonly CandidateMappingEntry[] = []
+export const MAPPING_TABLE: readonly CandidateMappingEntry[] = [
+  // GEO Module (WP05) → Page Optimization Apply (v1).
+  // spec: docs/specs/2026-08-19-me2-page-optimization-apply-action-v1.0.md §12
+  {
+    domain: 'geo',
+    intent: 'optimize_page_answerability',
+    actionKey: 'page.apply_optimization_request',
+  },
+]

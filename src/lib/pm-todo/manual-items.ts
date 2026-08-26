@@ -25,6 +25,7 @@ import { isHtmlPageUrl } from '@/lib/seo/url-kind'
 import { findMessengerStopSignals } from '@/lib/crm/messenger-stop-signal'
 import { AUTO_LANDED_AGENT } from '@/lib/diagnostic/auto-prescribe'
 import { isHandAddedItem } from '@/lib/diagnostic/prescription-landing'
+import { LINKEDIN_PROGRESS_CLIENT_ID, LINKEDIN_PROGRESS_SOURCE } from '@/lib/linkedin-progress/constants'
 
 /**
  * 这些条目**链接坏了也照样下发**。
@@ -71,6 +72,9 @@ export type ManualItemKind =
   | 'kernel_needs_human'
   | AttributionItemKind
   | ClientRosterItemKind
+  | 'linkedin_progress_needs_review'
+  | 'linkedin_progress_needs_setup'
+  | 'linkedin_progress_failed'
 
 export interface ManualItem {
   kind: ManualItemKind
@@ -206,6 +210,10 @@ export async function loadManualItems(
   // 正在花钱的广告撞上了已知的坑 —— 每天扫一遍的结果，不下发就等于没扫
   await pushAdReadbackItems(supabase, items, now).catch((e) =>
     console.warn('[manual-items] 广告闸门结果读取失败（不阻塞其他待办）:', e),
+  )
+  // ME 产品动态自动发 LinkedIn —— 敏感内容待审 / 账号未连 / 发布失败三种卡点
+  await pushLinkedinProgressItems(supabase, items, now).catch((e) =>
+    console.warn('[manual-items] LinkedIn 进度贴待办检查失败（不阻塞其他待办）:', e),
   )
   if (clientsError) {
     items.push(clientListUnreadableItem(clientsError.message))
@@ -689,6 +697,123 @@ async function pushBaselineItems(supabase: SupabaseClient, items: ManualItem[]):
   }
 }
 
+const LINKEDIN_CONTENT_BOARD_URL = `https://app.magicengine.com.au/dashboard/clients/${LINKEDIN_PROGRESS_CLIENT_ID}/content-factory`
+const LINKEDIN_CONNECTORS_URL = `https://app.magicengine.com.au/dashboard/clients/${LINKEDIN_PROGRESS_CLIENT_ID}/connectors/publer`
+
+/** A post stuck at 'approved' this long after creation means the publish call itself failed. */
+const LINKEDIN_PUBLISH_FAILURE_STALE_HOURS = 2
+
+/**
+ * ME 产品动态自动发 LinkedIn（P24 新建）—— 三种"这条本该自动完成却没完成"的状态，
+ * 全部要下发,不能只写进 cron_run_logs：
+ *   1. 敏感内容命中硬过滤,转人审草稿(status='draft', reason='sensitive_content_flagged')
+ *   2. LinkedIn 账号还没连(status='draft', reason='linkedin_account_not_configured')
+ *   3. 账号已连但发布调用本身失败(status 卡在 'approved' 超过 2 小时)
+ * 三种原因给不同的 how —— 同一句话应付三种原因,FDE/PM 会点错地方白跑一趟。
+ *
+ * "cron 该跑没跑"不在这里报 —— pushCronHealthItems 已经通过 CRON_REGISTRY
+ * 通用覆盖了 linkedin-progress-post-mon/-thu 这两个 job，不用再单独登记。
+ */
+async function pushLinkedinProgressItems(
+  supabase: SupabaseClient,
+  items: ManualItem[],
+  now: Date,
+): Promise<void> {
+  const { data } = await supabase
+    .from('content_posts')
+    .select('id, status, updated_at, generation_context_snapshot')
+    .eq('client_id', LINKEDIN_PROGRESS_CLIENT_ID)
+    .eq('source', LINKEDIN_PROGRESS_SOURCE)
+    .in('status', ['draft', 'approved'])
+    .order('updated_at', { ascending: false })
+    .limit(20)
+
+  for (const row of (data ?? []) as Array<{
+    id: string
+    status: string
+    updated_at: string
+    generation_context_snapshot: { reason?: string; publish_error?: string } | null
+  }>) {
+    const reason = row.generation_context_snapshot?.reason
+
+    if (row.status === 'draft' && reason === 'sensitive_content_flagged') {
+      items.push({
+        kind: 'linkedin_progress_needs_review',
+        client_id: LINKEDIN_PROGRESS_CLIENT_ID,
+        client_name: 'ME 产品动态（LinkedIn）',
+        what: '这周的 LinkedIn 进度贴草稿里可能带了客户敏感信息，系统没敢自动发，等你看一眼',
+        how: '打开内容工厂看板，找到标题带「(needs review)」的那条草稿，读一遍确认没问题就批准发布；不想发就直接拒绝，下周照常自动生成新的',
+        href: LINKEDIN_CONTENT_BOARD_URL,
+      })
+      continue
+    }
+
+    if (row.status === 'draft' && reason === 'linkedin_account_not_configured') {
+      items.push({
+        kind: 'linkedin_progress_needs_setup',
+        client_id: LINKEDIN_PROGRESS_CLIENT_ID,
+        client_name: 'ME 产品动态（LinkedIn）',
+        what: 'LinkedIn 自动发帖这条已经在跑了，但你的 LinkedIn 账号还没连到发布工具，该发的这条卡着没发出去',
+        // 账号连好之后这条草稿不会自己重新尝试发布——没有额外的重试 cron，
+        // 得靠 PM 回内容工厂看板对这条草稿再点一次"确认"（那个按钮现在会
+        // 真的调发布，不是走视频那套），不写清楚这一步就是永久卡死。
+        how: '先去 Publer 后台用你自己的 LinkedIn 账号做一次性授权连接，连完之后打开这个链接，把出现的 LinkedIn 账号填进「Publer」这一项；填完再回内容工厂看板找到这条卡住的草稿，点一次"确认"，这条就会真的发出去，不用等下一次自动跑',
+        href: LINKEDIN_CONNECTORS_URL,
+      })
+      continue
+    }
+
+    // 草稿但 reason 不认识(未来 run.ts 加了新原因、或者字段意外为空)——
+    // 兜底也要有一条,不能让它三个分支都不落、悄悄消失在待办之外。
+    if (row.status === 'draft') {
+      items.push({
+        kind: 'linkedin_progress_needs_review',
+        client_id: LINKEDIN_PROGRESS_CLIENT_ID,
+        client_name: 'ME 产品动态（LinkedIn）',
+        what: '有一条 LinkedIn 进度贴草稿卡在待处理，系统没能说清具体原因',
+        how: '打开内容工厂看板看一眼这条草稿，读一遍决定发不发',
+        href: LINKEDIN_CONTENT_BOARD_URL,
+      })
+      continue
+    }
+
+    if (row.status === 'approved') {
+      // 用 updated_at 不用 created_at —— 一条被拦下转人审的草稿，PM 点"批准"那一刻
+      // 只会刷新 updated_at，created_at 还是它被生成那天。按 created_at 算的话，
+      // PM 前脚刚批准，下一次巡检马上就会误报"没能发出去"，而系统根本还没试着发。
+      const updatedAt = Date.parse(row.updated_at)
+      if (Number.isNaN(updatedAt)) continue
+      const hoursAgo = (now.getTime() - updatedAt) / 3_600_000
+      if (hoursAgo < LINKEDIN_PUBLISH_FAILURE_STALE_HOURS) continue
+
+      // 这条其实已经真发到 LinkedIn 上了——只是发布成功后回写数据库那一步
+      // 失败了，本地状态没跟上。绝不能套用下面"没能发出去"那套话术：那会
+      // 引导人去重试/重新批准，而 Publer 那边已经真有一条了，重试 = 发出
+      // 重复的公开帖子。这里只能是"帮我手动改一下状态"，不是"帮我重试"。
+      if (row.generation_context_snapshot?.reason === 'published_but_db_sync_failed') {
+        items.push({
+          kind: 'linkedin_progress_needs_review',
+          client_id: LINKEDIN_PROGRESS_CLIENT_ID,
+          client_name: 'ME 产品动态（LinkedIn）',
+          what: '这条 LinkedIn 进度贴其实已经真的发出去了，只是系统记录状态没跟上——千万别在内容工厂看板里重新点"批准发布"，会发出重复的公开帖子',
+          how: '回我一句，我去手动把这条记录的状态改成"已发布"，不用你操作',
+          href: LINKEDIN_CONTENT_BOARD_URL,
+        })
+        continue
+      }
+
+      const err = row.generation_context_snapshot?.publish_error
+      items.push({
+        kind: 'linkedin_progress_failed',
+        client_id: LINKEDIN_PROGRESS_CLIENT_ID,
+        client_name: 'ME 产品动态（LinkedIn）',
+        what: `这周的 LinkedIn 进度贴生成好了但没能发出去${err ? `(系统报的原因: ${err})` : ''}`,
+        how: '打开 Publer 连接器设置页，看看 LinkedIn 账号是不是掉线了；账号看起来没问题的话，回我一句，我来查具体原因',
+        href: LINKEDIN_CONNECTORS_URL,
+      })
+    }
+  }
+}
 
 /**
  * 「客资数」这个目标指标值不值得信 —— 不值得就说清为什么。

@@ -112,10 +112,11 @@ services:
   # whose UI was closed mid-run would otherwise sit running forever.
   # healthchecks.io: zhangqian-sweeper (071910fe-b9b7-435d-8b72-f141818eb03d)
   # 2026-08-03 降频 */15 → */30：24h 内 96 次运行全部零产出。纯超时兜底，从不干活。
-  # 只降到 30 分钟而非每小时：超时阈值是 6 分钟，每小时跑会让真卡住的任务在界面上
-  # 「运行中」挂最多 66 分钟，FDE 会误判系统坏了；30 分钟档最坏 36 分钟。
+  # 只降到 30 分钟而非每小时：超时阈值是 12 分钟（2026-08-25 从 6 分钟上调，见
+  # src/lib/zhangqian/agent.ts 的 call budget 段），每小时跑会让真卡住的任务在
+  # 界面上「运行中」挂最多 72 分钟，FDE 会误判系统坏了；30 分钟档最坏 42 分钟。
   # ⚠️ 2026-08-16 [OPS] 降频 */30 → 每小时第 35 分 —— 上面那句「不降到每小时」被 PM
-  #    在省钱盘点里显式推翻。代价照旧成立：真卡住的发现任务在界面上最坏挂 66 分钟。
+  #    在省钱盘点里显式推翻。代价照旧成立：真卡住的发现任务在界面上最坏挂 72 分钟。
   #    工厂 / 发现线开工后若 FDE 反馈「看着像坏了」，第一步就是把这条改回去。
   #    回滚：schedule 改回 "*/30 * * * *"。
   - type: cron
@@ -994,3 +995,59 @@ services:
     envVars:
       - key: CRON_SECRET
         sync: false
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # ME product progress → LinkedIn — Monday + Thursday, ~9am NZ time
+  #
+  # No-ops unless LINKEDIN_PROGRESS_POST_ENABLED=true — this repo's web
+  # service isn't Blueprint-managed (real prod is `crazycontent`, created by
+  # hand in the Render dashboard), so this flag can't be declared here.
+  # Absent = undefined !== 'true' = disabled by default, no dashboard action
+  # needed to ship dark. PM sets LINKEDIN_PROGRESS_POST_ENABLED=true directly
+  # on crazycontent's Environment tab when ready to turn it on.
+  #
+  # Schedule note: NZ is UTC+12/+13 (DST), so "Monday/Thursday 9am NZ" falls on
+  # the PREVIOUS UTC calendar day (Sunday/Wednesday). 20:30 UTC lands at
+  # roughly 8:30am NZDT–9:30am NZST year-round — good enough for a personal
+  # LinkedIn post, not worth DST-exact scheduling for this.
+  - type: cron
+    name: linkedin-progress-post-mon
+    env: node
+    schedule: "30 20 * * 0"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 60 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/linkedin-progress-post-mon
+    envVars:
+      - fromGroup: me-shared-cron-secret
+
+  - type: cron
+    name: linkedin-progress-post-thu
+    env: node
+    schedule: "30 20 * * 3"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 60 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/linkedin-progress-post-thu
+    envVars:
+      - fromGroup: me-shared-cron-secret
+
+  # Magic Insight（内部代号 market-intel）—— PM 每日全球 AI / 数字营销资讯雷达。
+  #
+  # 设计见 docs/specs/2026-08-20-market-intel-digest-design.md（v2，已过子牙 +
+  # 魏征设计审）。18:00 UTC ≈ 06:00 NZST / 07:00 NZDT，两季都落在清晨；PM 明确
+  # 不设硬性时间要求，可按体验微调。密钥直接走 fromGroup，不留"记得手动 link"
+  # 这一步——daily-cron-digest 就是靠人记住这件事，51 天没人发现地哑了。
+  #
+  # ⚠️ 尚未申请 healthchecks.io 监控 ID，先不接 ping；有账号权限的人申请后
+  #    在 startCommand 末尾按现有条目的格式加一行 `&& curl -fsS "https://hc-ping.com/<ID>"`。
+  - type: cron
+    name: market-intel-daily
+    env: node
+    schedule: "0 18 * * *"
+    buildCommand: ""
+    startCommand: |
+      curl -fsS --max-time 180 -H "Authorization: Bearer $CRON_SECRET" \
+        https://app.magicengine.com.au/api/cron/market-intel-daily
+    envVars:
+      - fromGroup: me-shared-cron-secret

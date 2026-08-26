@@ -33,6 +33,7 @@ export default function UserManagementTab({ accessType, title, description, addL
   const [displayName, setDisplayName] = useState('')
   const [adding, setAdding]       = useState(false)
   const [addError, setAddError]   = useState('')
+  const [addNotice, setAddNotice] = useState('')
 
   const fetchUsers = useCallback(async () => {
     setLoading(true)
@@ -64,17 +65,26 @@ export default function UserManagementTab({ accessType, title, description, addL
     }
     setAdding(true)
     setAddError('')
+    setAddNotice('')
     try {
       const res = await fetch('/api/admin/users', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), client_id: clientId, access_type: accessType, display_name: displayName.trim() }),
       })
-      const data = await res.json() as { error?: string }
+      const data = await res.json() as { error?: string; invite?: { sent: boolean; reason?: string } }
       if (!res.ok) throw new Error(data.error ?? 'Failed to add')
+      const invitee = email.trim()
       setEmail('')
       setClientId('')
       setDisplayName('')
+      if (data.invite?.sent) {
+        setAddNotice(`已加入并发送邀请邮件到 ${invitee}`)
+      } else {
+        setAddNotice(
+          `已加入 ${invitee}，但邀请邮件未发出（${data.invite?.reason ?? '未知原因'}），请手工通知登录地址。`
+        )
+      }
       await fetchUsers()
     } catch (e) {
       setAddError(e instanceof Error ? e.message : 'Failed to add user')
@@ -153,6 +163,9 @@ export default function UserManagementTab({ accessType, title, description, addL
           </button>
         </form>
         {addError && <p className="text-[#C2453A] text-xs mt-2">{addError}</p>}
+        {addNotice && !addError && (
+          <p className="text-me-charcoal/70 text-xs mt-2">{addNotice}</p>
+        )}
       </div>
 
       {/* User table */}

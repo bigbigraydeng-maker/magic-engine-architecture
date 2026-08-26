@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { CampaignBrief, CampaignKeywordSnapshot } from '@/types/magic-engine'
+import { CampaignDailyPlanPanel } from './CampaignDailyPlanPanel'
 
 interface Props {
   clientId: string
@@ -557,6 +558,9 @@ function CampaignCard({
             clientId={clientId}
             onUpdated={onUpdated}
           />
+
+          {/* ── Daily Plan (#1159 WP1) ───────────────────────── */}
+          <CampaignDailyPlanPanel clientId={clientId} campaignId={campaign.id} />
 
           {msg && (
             <p className={`text-xs ${msg.startsWith('✓') ? 'text-[#5C8A4A]' : 'text-[#C2453A]'}`}>

@@ -11,11 +11,20 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
+import { supabaseAdmin } from '@/lib/supabase'
 import { requireDashboardClientAccess } from '@/lib/auth/client-access'
 import { buildState, buildAuthUrl } from '@/lib/meta-oauth/client'
+import { projectFactoryConfig } from '@/lib/factory/client-config'
 
 function appUrl(): string {
   return process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3001'
+}
+
+/** Send the operator back to the settings-drawer panel with a non-secret result,
+ *  used when publishing reauth must not even start (no valid publish target). */
+function backToPanel(clientId: string, outcome: string): NextResponse {
+  const query = new URLSearchParams({ settings: 'platform', meta: outcome })
+  return NextResponse.redirect(`${appUrl()}/dashboard/clients/${clientId}?${query.toString()}`)
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
@@ -31,10 +40,36 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: access.error }, { status: access.status })
   }
 
+  // `intent=publishing` marks the "Reauthorize Meta Publishing" action so the
+  // callback can fail closed with a publishing-specific message. Any other
+  // value is ignored — the flow itself, scopes and guards are identical.
+  const intent = req.nextUrl.searchParams.get('intent') === 'publishing' ? 'publishing' : undefined
+
+  // Publishing reauth authorises the Facebook Reel adapter's target Page
+  // (factory_config.publish_target), NOT the inbox Page. Resolve it server-side
+  // from the verified client and fail closed BEFORE starting Meta consent if
+  // there is no valid Facebook publish target — starting would be a misleading
+  // authorisation that stores a token for the wrong (or no) Page. The callback
+  // re-reads the same config, so a config change after this point still fails
+  // closed there.
+  if (intent === 'publishing') {
+    const { data } = await supabaseAdmin
+      .from('clients')
+      .select('factory_config')
+      .eq('id', clientId)
+      .maybeSingle()
+    const target = projectFactoryConfig((data as { factory_config?: unknown } | null)?.factory_config).publish_target
+    if (!target || target.platform !== 'facebook' || !target.page_id) {
+      return backToPanel(clientId, 'no_publish_target')
+    }
+  }
+
   let authUrl: string
   try {
     const redirectUri = `${appUrl()}/api/auth/facebook/callback`
-    authUrl = buildAuthUrl(buildState(clientId), redirectUri)
+    // Publishing reauth uses auth_type=rerequest so a previously declined
+    // pages_manage_posts is actually shown again (Meta hides it otherwise).
+    authUrl = buildAuthUrl(buildState(clientId, intent), redirectUri, intent === 'publishing')
   } catch (err) {
     // Missing app credentials — say which knob is missing rather than 500ing.
     return NextResponse.json(

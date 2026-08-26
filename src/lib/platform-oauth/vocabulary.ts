@@ -127,4 +127,7 @@ export interface UpsertConnectionInput {
   locationName?: string
   displayName:   string
   scopes:        string[]
+  /** When set, records that the connection's grant was just re-verified against
+   *  the provider. Omit to leave any existing last_synced_at untouched. */
+  lastSyncedAt?: Date
 }

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { requireDashboardClientAccess, requirePaidClientAccess } from '@/lib/auth/client-access'
-import { ACCESS_TYPE_VALUES } from '@/lib/auth/access-types'
+import { ACCESS_TYPE_VALUES, type AccessType } from '@/lib/auth/access-types'
+import { sendPortalInvite } from '@/lib/email/portal-invite'
 
 type Params = { params: { id: string } }
 
@@ -42,6 +43,17 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ success: false, error: '无效的 access_type' }, { status: 400 })
   }
 
+  // Was this email already a member of this client? Only send an invite
+  // email when we're actually adding someone new — an admin tweaking a
+  // display_name shouldn't spam the person with "you've been invited" again.
+  const { data: existing } = await supabaseAdmin
+    .from('client_portal_users')
+    .select('id')
+    .eq('email', email)
+    .eq('client_id', params.id)
+    .maybeSingle()
+  const isNew = !existing
+
   const { data, error } = await supabaseAdmin
     .from('client_portal_users')
     .upsert(
@@ -52,7 +64,31 @@ export async function POST(req: NextRequest, { params }: Params) {
     .single()
 
   if (error) return NextResponse.json({ success: false, error: error.message }, { status: 500 })
-  return NextResponse.json({ success: true, user: data })
+
+  let invite: { sent: boolean; reason?: string } | undefined
+  if (isNew) {
+    const { data: client } = await supabaseAdmin
+      .from('clients')
+      .select('name')
+      .eq('id', params.id)
+      .maybeSingle()
+    const appUrl = (process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/$/, '')
+    invite = await sendPortalInvite({
+      email,
+      clientName: client?.name ?? '',
+      displayName: display_name,
+      accessType: access_type as AccessType,
+      appUrl,
+    }).catch((err: unknown) => ({
+      sent: false,
+      reason: err instanceof Error ? err.message : String(err),
+    }))
+    if (!invite.sent) {
+      console.warn('[api/clients/[id]/users] invite email not sent:', invite.reason)
+    }
+  }
+
+  return NextResponse.json({ success: true, user: data, invite })
 }
 
 // DELETE /api/clients/[id]/users — remove a user by email. Paid only.

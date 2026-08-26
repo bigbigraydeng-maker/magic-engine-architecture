@@ -51,6 +51,7 @@ export function UsersPanel({ clientId }: { clientId: string }) {
       })
       const json = await res.json()
       if (!json.success) throw new Error(json.error)
+      const invitee = email
       setUsers(prev => {
         const exists = prev.find(u => u.email === json.user.email)
         return exists
@@ -59,7 +60,14 @@ export function UsersPanel({ clientId }: { clientId: string }) {
       })
       setEmail('')
       setDisplayName('')
-      setMsg('✓ 已添加')
+      const invite = json.invite as { sent: boolean; reason?: string } | undefined
+      if (!invite) {
+        setMsg('✓ 已添加')
+      } else if (invite.sent) {
+        setMsg(`✓ 已加入并发送邀请邮件到 ${invitee}`)
+      } else {
+        setMsg(`✓ 已加入 ${invitee}，但邀请邮件未发出（${invite.reason ?? '未知原因'}），请手工通知登录地址`)
+      }
     } catch (err) {
       setMsg(`✗ ${(err as Error).message}`)
     } finally {
