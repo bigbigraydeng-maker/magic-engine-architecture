@@ -319,7 +319,19 @@ export async function ingestMetaLead(input: IngestMetaLeadInput): Promise<Ingest
       is_organic: lead.isOrganic,
       custom_answers: parsed.custom,
       ingested_by: 'meta-leads-sync',
-      /** consent 证据 —— 判据用的问题名，永远不落原答案（可能含 PII）。 */
+      /**
+       * Consent 依据。PM 决定（2026-08-27）：CTS 已批准的 Meta Lead Form 在
+       * Submit 之前展示了 form-level disclosure，提交本身就是 consent 事件；
+       * 这条路径不再要求自定义 consent 问答字段。
+       * 值恒为 `'form_disclosure_attested'` —— 让下游审计一眼看到「依据是什么」。
+       */
+      consent_basis: 'form_disclosure_attested' as const,
+      /**
+       * 如果表单**碰巧**带了明确的营销订阅字段（例如 CTS 未来改版加了
+       * 'consent_to_marketing_emails'），这里如实记下问题名；否则 null。
+       * **不**用来门禁 Mailchimp 调用 —— 门禁在 `consent_basis` 层。
+       * 也**绝不**把 `form_disclosure_attested` 冒充成一个不存在的 checkbox 答案。
+       */
       consent_evidence: parsed.consentEvidence,
       opt_out_evidence: parsed.optOutEvidence,
     }
@@ -468,15 +480,18 @@ interface SyncMailchimpInput {
 /**
  * 把一个 lead → Mailchimp audience。**永远返回结果对象**，绝不 throw。
  *
- * gate 顺序（Issue #1188 硬约束）：
+ * gate 顺序（Issue #1188 硬约束 + PM override 5425996255）：
  *   1. 客户是否配置了 audience id —— 没配 → skipped: no_audience_config
  *   2. 是否有邮箱 —— 没有 → skipped: no_email
  *   3. 是否拿到 API key —— 没有 → skipped: no_api_key
  *   4. 表单里是否明确 opt-out —— 是 → skipped: explicit_opt_out
- *   5. lead 里是否携带 provable consent 证据 —— 没有 → skipped: no_consent_evidence
- *   6. **统一 DNC 判据**（复用 `@/lib/crm/dnc`，读镜像列 + 不可变触点）——
+ *   5. **统一 DNC 判据**（复用 `@/lib/crm/dnc`，读镜像列 + 不可变触点）——
  *      拒联或查询失败 → skipped: contact_dnc / dnc_check_failed
- *   7. 满足以上，才调 subscribeMember
+ *   6. 满足以上，才调 subscribeMember
+ *
+ * ⚠️ 已批准的 CTS Meta Lead Form 的 form-level disclosure 就是 consent 事件；
+ *    这条路径不再要求自定义 consent 字段（PM 决定 2026-08-27，合同 5425996255）。
+ *    真相通过 `consent_basis: 'form_disclosure_attested'` 记进触点 metadata。
  *
  * ⚠️ 新 lead consent 不能自动覆盖历史拒联 —— `isDoNotContact` 已经保证「只有
  *    明确的 dnc_cleared 触点晚于最后一条拒联证据」才认为解除；本函数不会写
@@ -513,17 +528,13 @@ async function syncMailchimp(input: SyncMailchimpInput): Promise<SubscribeMember
     return { status: 'skipped', reason: 'no_api_key' }
   }
 
-  // 4. 明确 opt-out 优先级最高 —— 反面提问不能被别处的正向字段覆盖。
+  // 4. 明确 opt-out 优先级最高 —— 反面提问 / 退订选项不能被 form-level
+  //    disclosure 覆盖。
   if (input.parsed.optOutEvidence) {
     return { status: 'skipped', reason: 'explicit_opt_out' }
   }
 
-  // 5. Consent 证据
-  if (!input.parsed.consentEvidence) {
-    return { status: 'skipped', reason: 'no_consent_evidence' }
-  }
-
-  // 6. 统一 DNC 判据 —— 拉镜像列 + 不可变触点，交给 dnc.ts 判。任何一处查询
+  // 5. 统一 DNC 判据 —— 拉镜像列 + 不可变触点，交给 dnc.ts 判。任何一处查询
   //    失败都 fail-closed（宁可少发一次，也不能发给明确说过别联系的人）。
   const dnc = await evaluateDnc(input.contactId)
   if (dnc === 'unknown') {

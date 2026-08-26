@@ -703,34 +703,10 @@ describe('ingestMetaLead → Mailchimp 出口', () => {
     expect(meta.mailchimp_result).toEqual({ status: 'skipped', reason: 'no_email' })
   })
 
-  it('R7 没有 consent 类问答 → 零 provider 调用，reason=no_consent_evidence', async () => {
-    mockDb({ audienceId: 'dda97b7e61' })
-
-    // lead() 默认的 answers 里没有 consent 字段
-    const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
-
-    expect(subscribeMock).not.toHaveBeenCalled()
-    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'no_consent_evidence' })
-    expect(contactUpdates).toHaveLength(0)
-  })
-
-  it('consent 问题在但答案是「No」→ 视为未同意，零 provider 调用', async () => {
-    mockDb({ audienceId: 'dda97b7e61' })
-
-    await ingestMetaLead({
-      clientId: CLIENT,
-      defaultCountry: 'NZ',
-      lead: lead({
-        answers: [
-          { name: 'full_name', value: 'Chris Brown' },
-          { name: 'email', value: 'chris@example.com' },
-          { name: 'subscribe_to_newsletter', value: 'No' },
-        ],
-      }),
-    })
-
-    expect(subscribeMock).not.toHaveBeenCalled()
-  })
+  // R7 老用例（没 consent 字段 → 零调用）已被 PM override 5425996255 取代 ——
+  // 现在没有 consent 字段的 lead 也会走 Mailchimp，依据是 form-level disclosure。
+  // 相反方向的新回归 = form_disclosure_attested 路径正例，见后面
+  // `PM override: form_disclosure_attested` describe 块。
 
   it('MAILCHIMP_API_KEY 未配置 → 零 provider 调用，reason=no_api_key', async () => {
     mockDb({ audienceId: 'dda97b7e61' })
@@ -974,14 +950,19 @@ describe('ingestMetaLead → durable receipt order + receipt replacement', () =>
     // 那一刻已经有 1 条 upsert（Phase A）+ 1 条 UPDATE（Phase B pre-provider
     // evidence）落盘 —— 硬顺序 Phase A → Phase B → Phase C
     expect(providerCallState).toEqual([{ upserts: 1, updates: 1 }])
-    // Phase A 上的触点带完整 consent 证据（判据字段名，不带原答案）
+    // Phase A 上的触点带**真相 consent basis**（form_disclosure_attested）+
+    // form_id + 存在的话的 consent_evidence（此 fixture 里恰好有）+ 无 opt-out。
     const upsertMeta = touchpointUpserts[0].metadata as Record<string, unknown>
+    expect(upsertMeta.consent_basis).toBe('form_disclosure_attested')
+    expect(upsertMeta.form_id).toBe('form-1')
     expect(upsertMeta.consent_evidence).toBe('consent_to_marketing_emails')
     expect(upsertMeta.opt_out_evidence).toBeNull()
     // Phase A 期占位 = pending；Phase D 才替换成 subscribed
     expect((upsertMeta.mailchimp_result as Record<string, unknown>).status).toBe('pending')
     // Phase B 也是 pending（同样的 evidence，只是通过 UPDATE 强制持久化一次）
     const phaseBMeta = touchpointUpdates[0].metadata as Record<string, unknown>
+    expect(phaseBMeta.consent_basis).toBe('form_disclosure_attested')
+    expect(phaseBMeta.form_id).toBe('form-1')
     expect(phaseBMeta.consent_evidence).toBe('consent_to_marketing_emails')
     expect((phaseBMeta.mailchimp_result as Record<string, unknown>).status).toBe('pending')
     // Phase D 才是真实结果
@@ -1194,61 +1175,11 @@ describe('parseLeadAnswers → 只允许精确的营销订阅字段名', () => {
 })
 
 describe('ingestMetaLead → allowlist + pre-provider evidence durability', () => {
-  it('consent_to_terms_and_conditions=Yes → 零 provider 调用', async () => {
-    mockDb({ audienceId: 'dda97b7e61' })
-    await ingestMetaLead({
-      clientId: CLIENT,
-      defaultCountry: 'NZ',
-      lead: lead({
-        answers: [
-          { name: 'full_name', value: 'Chris Brown' },
-          { name: 'email', value: 'chris@example.com' },
-          { name: 'consent_to_terms_and_conditions', value: 'Yes' },
-        ],
-      }),
-    })
-    expect(subscribeMock).not.toHaveBeenCalled()
-    expect(finalTouchpointMeta().mailchimp_result).toEqual({
-      status: 'skipped',
-      reason: 'no_consent_evidence',
-    })
-  })
-
-  it('have_you_received_our_marketing_before=Yes → 零 provider 调用', async () => {
-    mockDb({ audienceId: 'dda97b7e61' })
-    await ingestMetaLead({
-      clientId: CLIENT,
-      defaultCountry: 'NZ',
-      lead: lead({
-        answers: [
-          { name: 'full_name', value: 'Chris Brown' },
-          { name: 'email', value: 'chris@example.com' },
-          { name: 'have_you_received_our_marketing_before', value: 'Yes' },
-        ],
-      }),
-    })
-    expect(subscribeMock).not.toHaveBeenCalled()
-    expect(finalTouchpointMeta().mailchimp_result).toEqual({
-      status: 'skipped',
-      reason: 'no_consent_evidence',
-    })
-  })
-
-  it('unknown/general consent field + Yes → 零 provider 调用', async () => {
-    mockDb({ audienceId: 'dda97b7e61' })
-    await ingestMetaLead({
-      clientId: CLIENT,
-      defaultCountry: 'NZ',
-      lead: lead({
-        answers: [
-          { name: 'full_name', value: 'Chris Brown' },
-          { name: 'email', value: 'chris@example.com' },
-          { name: 'consent', value: 'Yes' },
-        ],
-      }),
-    })
-    expect(subscribeMock).not.toHaveBeenCalled()
-  })
+  // 三条 custom-consent-field 门禁老用例（terms / historical-marketing / generic
+  // consent → 零 provider 调用）已被 PM override 5425996255 取代 —— 现在这些
+  // 字段的存在与否都不再决定是否调用 Mailchimp；决定权在 form-level disclosure
+  // + opt-out + DNC + audience config。对应正向路径见后面
+  // `PM override: form_disclosure_attested` describe 块。
 
   it('精确 marketing-email consent field + Yes → 允许（在 DNC 判据放行时）', async () => {
     mockDb({ audienceId: 'dda97b7e61' })
@@ -1312,6 +1243,123 @@ describe('ingestMetaLead → allowlist + pre-provider evidence durability', () =
     // 只有 Phase B 那次尝试；没有 Phase D
     expect(touchpointUpdates).toHaveLength(1)
     // mailchimp_synced_at 绝不写（不能声称已订阅 / 已投递）
+    expect(contactUpdates).toHaveLength(0)
+  })
+})
+
+// ── PM override 5425996255：form-level disclosure 就是 consent ───────────────
+// CTS 已批准的 Meta Lead Form 在 Submit 之前展示 disclosure；提交 = consent。
+// 这条路径不再要求自定义 consent 字段；opt-out / DNC / audience config /
+// evidence persistence / provider failure 继续拦。
+
+describe('ingestMetaLead → PM override: form_disclosure_attested consent basis', () => {
+  it('configured audience + valid email + 没有 custom consent 字段 → provider 被调用', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    provideOnce({ status: 'subscribed' })
+
+    // 默认 lead() 里没有任何 consent 字段
+    const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
+
+    expect(subscribeMock).toHaveBeenCalledTimes(1)
+    expect(res.mailchimp).toEqual({ status: 'subscribed' })
+    // synced_at 也如实写上
+    expect(contactUpdates).toHaveLength(1)
+  })
+
+  it('configured audience + valid email + 只有 unrelated custom 字段 → provider 被调用', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    provideOnce({ status: 'subscribed' })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: lead({
+        answers: [
+          { name: 'full_name', value: 'Chris Brown' },
+          { name: 'email', value: 'chris@example.com' },
+          { name: 'which_tour_interests_you_most?', value: 'Best of China' },
+          { name: 'budget', value: '$5000' },
+        ],
+      }),
+    })
+
+    expect(subscribeMock).toHaveBeenCalledTimes(1)
+    expect(res.mailchimp).toEqual({ status: 'subscribed' })
+  })
+
+  it('pre-provider 持久化的 metadata 记 consent_basis=form_disclosure_attested + form_id + null consent_evidence', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    provideOnce({ status: 'subscribed' })
+
+    await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
+
+    // Phase A upsert 上真相
+    const upsertMeta = touchpointUpserts[0].metadata as Record<string, unknown>
+    expect(upsertMeta.consent_basis).toBe('form_disclosure_attested')
+    expect(upsertMeta.form_id).toBe('form-1')
+    // 没有 checkbox 就是 null，绝不 invent
+    expect(upsertMeta.consent_evidence).toBeNull()
+    // Phase B pre-provider UPDATE 也同款 metadata
+    const phaseB = touchpointUpdates[0].metadata as Record<string, unknown>
+    expect(phaseB.consent_basis).toBe('form_disclosure_attested')
+    expect(phaseB.form_id).toBe('form-1')
+    expect(phaseB.consent_evidence).toBeNull()
+  })
+
+  it('explicit opt-out（marketing_opt_out=Yes）→ 即使新规也拦下：零 provider 调用', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: lead({
+        answers: [
+          { name: 'full_name', value: 'Chris Brown' },
+          { name: 'email', value: 'chris@example.com' },
+          { name: 'marketing_opt_out', value: 'Yes' },
+        ],
+      }),
+    })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'explicit_opt_out' })
+  })
+
+  it('DNC（contacts.do_not_contact=true）→ 即使新规也拦下：零 provider 调用', async () => {
+    mockDb({ audienceId: 'dda97b7e61', contactDncFlag: true })
+
+    // 默认 lead() 没有 consent 字段；DNC 仍然优先拦
+    const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'contact_dnc' })
+  })
+
+  it('no audience config → 零 provider 调用', async () => {
+    mockDb({ audienceId: null })
+
+    const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'no_audience_config' })
+  })
+
+  it('provider 失败仍然非阻塞：主管道保留，失败 receipt 如实记录', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+    provideOnce({ status: 'failed', reason: 'provider_5xx', providerStatus: 503, retryable: true })
+
+    const res = await ingestMetaLead({ clientId: CLIENT, defaultCountry: 'NZ', lead: lead() })
+
+    // 主管道成
+    expect(res.skipped).toBeNull()
+    expect(res.contactId).toBe('person-new')
+    expect(contactInserts).toHaveLength(1)
+    // Provider 结果如实回到触点 metadata
+    expect(finalTouchpointMeta().mailchimp_result).toMatchObject({
+      status: 'failed',
+      reason: 'provider_5xx',
+    })
+    // synced_at 不写 —— receipt 与投递语义分开
     expect(contactUpdates).toHaveLength(0)
   })
 })
