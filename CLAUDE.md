@@ -5,6 +5,7 @@
 **产品定义必读**：[ME Product Definition](./docs/strategy/ME_PRODUCT_DEFINITION.md) —— **产品定位、IMPACT、DAPE、Connector、Build vs Connect 与行业版本的最高优先级定义；冲突时以它为准。**
 **每次开新会话先读**：[docs/STATE.md](./docs/STATE.md)（系统现状）→ [docs/ROADMAP.md](./docs/ROADMAP.md)（要做什么）。
 **平台化必读**：[ME2 Reuse & Platformization Principle](./docs/roadmap/2026-08-19-me2-platformization-principle.md) —— **所有开发窗口、Work Package、Claude Code/Codex 会话都受它约束。**
+**平台层级门必挂 skill**：[`.claude/skills/me-platform-tier-gate/`](./.claude/skills/me-platform-tier-gate/SKILL.md) —— **每次会话开工前必先调用 `Skill me-platform-tier-gate` 加载**；任何提议新增能力线 / 支柱 / capability / 智能层 / 分析层 / Build vs Connect vs Buy 决策 / 客户新需求判断"ME 要不要自己做"，都必须先输出 Tier Classification Report 再继续。跳过 = 治理失职。
 **必读规则**：[`~/.claude/rules/coding-style.md`](~/.claude/rules/coding-style.md) · [`~/.claude/rules/development-workflow.md`](~/.claude/rules/development-workflow.md)
 
 ---

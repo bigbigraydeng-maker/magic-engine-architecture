@@ -742,3 +742,14 @@ chunked 绕过 OOM 闸 · 闸门没接在花钱那条线上 · 归档入口（�
 - [ ] CRM adapter（接外部 CRM，现只内置权威）
 - [ ] 全自动外呼 campaign（批量）+ suppression 逻辑
 - [ ] 生产级知识库（OpenAI 向量库语义检索，替代关键词版）
+
+---
+
+## 平台治理层 · me-platform-tier-gate 后续跟进 📋 2026-08-27 登记
+
+> 背景：2026-08-27 因 HBay KOL 事故设立 [`me-platform-tier-gate`](../.claude/skills/me-platform-tier-gate/SKILL.md) skill，约束 agent 在提议新增 ME 能力线时的思考边界。经魏征（对抗挑刺）+ 子牙（架构）两轮复审，v1 落仓时已修必改项 owner 责任链（问题 1）与候选清单载体（问题 2，见 [`docs/registry/platform-candidates.md`](./registry/platform-candidates.md)）。以下 4 条子牙终审时提出、v1 未修、进本 ROADMAP 分批跟进。
+
+- [ ] **P.G.1** 补 harness 层挂载 hook —— 子牙终审问题 3。当前挂载靠 agent 自觉读 CLAUDE.md，跟事故根因（agent 没自认为在做平台决策）同构。方案：`.claude/settings.local.json` 加 Stop hook，扫本轮产出文本命中 `能力线|智能层|分析层|新增支柱|XX Intelligence|加一条(能力|支柱|柱)` 且未见 `Platform Tier Classification` 章节时输出提醒（先不阻断）。硬约束只有 harness 层能给。
+- [ ] **P.G.2** 改名 skill 避免与 `src/lib/kernel-approval/tier-gate.test.ts` 语义碰撞 —— 子牙终审问题 4。同仓库 "tier-gate" 缩写会永久混淆平台层级与 kernel 权限档位两套概念。建议改成 `me-capability-layer-gate` 或 `me-platform-layer-gate`。改点：SKILL.md 目录名、CLAUDE.md 第 8 行、`docs/registry/platform-candidates.md` 里对 skill 的引用。
+- [ ] **P.G.3** 澄清 skill 在五道 Build Gate 中的位置为 Gate 0 / Pre-Gate —— 子牙终审问题 5。SKILL.md 现在"红线 6"与"与既有治理机制的关系"表两处对 skill 从属关系的表述矛盾（一说是 Gate 4 前置子步骤，一说强化 Gate 2）。改成"Gate 0 / Pre-Gate，不替代任何后续 Gate，分歧走 owner 仲裁"。
+- [ ] **P.G.4** 抽 `docs/registry/pillars.md` 作为 6 支柱唯一名单来源 —— 子牙终审问题 6。当前 SKILL.md、CLAUDE.md 两处硬编码"SEO / 社媒 / 广告 / 口碑 / AI 可见度 / 竞品"，跟 skill 自己声明的"支柱数量是 PM 拍板项"直接冲突。建仓后 skill、CLAUDE.md、其他引用点全部改成引用 registry 文件。同类还有五道 Build Gate 顺序 / 客户名单，可一并统一到 `docs/registry/` 下。
