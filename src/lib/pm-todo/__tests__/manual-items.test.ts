@@ -8,6 +8,7 @@ import {
   gscInspectUrl,
   daysAgo,
   loadManualItems,
+  pushPlatformCandidateReviewItems,
   type ManualItem,
 } from '../manual-items'
 import { buildTodoEmail, type TodoCounts } from '../daily-todo'
@@ -84,6 +85,37 @@ describe('buildTodoEmail — manual lane', () => {
     const email = buildTodoEmail(3, EMPTY, '1 Aug')
     expect(email.html).not.toContain('需要你动手')
     expect(email.html).toContain('今天没有待办')
+  })
+})
+
+describe('pushPlatformCandidateReviewItems — 平台候选复查不靠日历记忆', () => {
+  const now = new Date('2026-09-27T00:00:00Z')
+
+  it('复查日已到 → 下发待办，不用等人记起来', () => {
+    const items: ManualItem[] = []
+    pushPlatformCandidateReviewItems(items, now, [
+      { name: '跨客户舆情监控引擎', reviewDate: '2026-09-27' },
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0].kind).toBe('platform_candidate_review_due')
+    expect(items[0].what).toContain('跨客户舆情监控引擎')
+    expect(items[0].href).toContain('platform-candidates.md')
+  })
+
+  it('复查日还没到 → 不下发', () => {
+    const items: ManualItem[] = []
+    pushPlatformCandidateReviewItems(items, now, [
+      { name: '还没到期的候选', reviewDate: '2026-10-27' },
+    ])
+    expect(items).toHaveLength(0)
+  })
+
+  it('日期格式坏了 → 跳过而不是抛错（不阻塞其他待办）', () => {
+    const items: ManualItem[] = []
+    expect(() =>
+      pushPlatformCandidateReviewItems(items, now, [{ name: '坏日期', reviewDate: 'not-a-date' }]),
+    ).not.toThrow()
+    expect(items).toHaveLength(0)
   })
 })
 
