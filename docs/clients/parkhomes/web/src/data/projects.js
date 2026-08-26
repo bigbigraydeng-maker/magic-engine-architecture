@@ -48,6 +48,11 @@ export const projects = [
     // PM-confirmed live listing 2026-08-21, one of many lots in this development.
     listingsSearchUrl: 'https://www.raywhite.co.nz/auckland/papakura/papakura/MSB31949',
     listingsLabel: 'View a current listing on Ray White →',
+    relatedArticles: [
+      { title: 'Drury-Opāheke Growth and What It Means for Rosehill Property Buyers', href: '/journal/drury-growth-rosehill-papakura-property/' },
+      { title: 'Papakura rental yields: why investors are looking south of Auckland', href: '/journal/papakura-rental-yield-investment-guide/' },
+      { title: "Rosehill and Papakura, Auckland: a buyer's data guide", href: '/journal/rosehill-papakura-suburb-data-guide/' },
+    ],
   },
   {
     slug: 'howick',
@@ -104,6 +109,11 @@ export const projects = [
     // Aggregate search — deliberately not one specific lot, since which lots are
     // still available changes over time; this always reflects what's actually live.
     listingsSearchUrl: 'https://www.raywhite.co.nz/listing?keywords=Libby%20Lane',
+    relatedArticles: [
+      { title: "Howick's population growth: what it means for the property market", href: '/journal/howick-population-growth-property-market/' },
+      { title: 'Why Howick commands some of Auckland’s highest rents', href: '/journal/howick-rental-market-new-build-buyers/' },
+      { title: "East Auckland's infrastructure and growth outlook: what it means for Howick buyers", href: '/journal/howick-infrastructure-growth-outlook/' },
+    ],
   },
   {
     slug: 'castor-bay',

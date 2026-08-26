@@ -94,6 +94,20 @@ const serviceSchema = {
     </section>
   )}
 
+  {p.relatedArticles && p.relatedArticles.length > 0 && (
+    <section class="tint">
+      <div class="wrap">
+        <p class="eyebrow sec-eyebrow">Journal</p>
+        <h2 class="sec-h" style="margin-bottom:24px">Learn more about the area</h2>
+        <div style="display:grid;gap:14px;max-width:640px">
+          {p.relatedArticles.map((a) => (
+            <a href={a.href} class="link-p" style="display:block;padding:16px 20px;border:1px solid var(--line);border-radius:3px;background:var(--paper)">{a.title} →</a>
+          ))}
+        </div>
+      </div>
+    </section>
+  )}
+
   <section id="register" class="dark">
     <div class="wrap" style="max-width:760px">
       <p class="eyebrow sec-eyebrow">Register your interest</p>

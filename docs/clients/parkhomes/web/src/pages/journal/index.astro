@@ -18,6 +18,11 @@ posts.sort((a, b) => new Date(b.frontmatter.date) - new Date(a.frontmatter.date)
       <div class="cards">
         {posts.map((p) => (
           <article class="card">
+            {p.frontmatter.card && (
+              <a href={p.url + '/'}>
+                <div class="shot"><img src={p.frontmatter.card} alt={p.frontmatter.title} loading="lazy" /></div>
+              </a>
+            )}
             <div class="cbody">
               <p class="eyebrow" style="margin-bottom:12px">{p.frontmatter.category}</p>
               <h3 style="font-size:22px"><a href={p.url + '/'} style="text-decoration:none;color:inherit">{p.frontmatter.title}</a></h3>

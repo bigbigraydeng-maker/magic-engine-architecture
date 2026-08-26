@@ -261,6 +261,12 @@ section{padding:clamp(56px,8vw,110px) 0}
 .post a{color:var(--accent-2);font-weight:600}
 .post hr{border:0;border-top:1px solid var(--line);margin:36px 0}
 .post blockquote{margin:28px 0;padding:4px 0 4px 22px;border-left:3px solid var(--accent);font-size:19px;color:var(--ink)}
+.post img{width:100%;height:auto;border-radius:3px;margin:30px 0 8px;display:block}
+.post .img-cap{font-size:13px;color:var(--mute);margin:0 0 30px;font-style:italic}
+.post .further-reading{margin:40px 0;padding:20px 22px;background:var(--paper-2);border-radius:3px}
+.post .further-reading p{margin:0 0 10px;font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--slate)}
+.post .further-reading ul{margin:0;padding-left:20px}
+.post .further-reading li{margin-bottom:6px}
 
 /* card image wrapper must be block, or aspect-ratio collapses inside inline <a> */
 .card > a{display:block}

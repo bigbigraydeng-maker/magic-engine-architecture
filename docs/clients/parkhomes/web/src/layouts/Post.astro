@@ -48,6 +48,8 @@ const faqSchema = f.faq && f.faq.length
 
   <section>
     <div class="wrap"><article class="post">
+      {f.hero && <img src={f.hero} alt={f.heroAlt || f.title} loading="lazy" />}
+      {f.hero && f.heroCaption && <p class="img-cap">{f.heroCaption}</p>}
       <slot />
     </article></div>
   </section>
