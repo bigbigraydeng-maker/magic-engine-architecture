@@ -20,6 +20,7 @@ import { buildIdentities, resolveContact } from '@/lib/crm/identity'
 import { attributionColumns, attributionFromMetaLeadRow } from '@/lib/crm/attribution'
 import { lookupCreativeRefByAdId } from '@/lib/ads/creative-link'
 import { subscribeMember, type SubscribeMemberResult } from '@/lib/mailchimp/client'
+import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
 import type { MetaLead, MetaLeadAnswer } from '@/lib/meta/lead-forms'
 
 /**
@@ -54,24 +55,89 @@ export interface ParsedLeadAnswers {
    */
   tourInterest: string | null
   /**
-   * marketing 同意证据。**在 Meta 表单的答案里**必须找到一个问题名匹配
-   * consent / subscribe / newsletter / opt-in / marketing 的自定义问题，
-   * 且值不是 "no/false/0"。缺这一条 = 没有 provable consent，Mailchimp 出口
-   * 一律 skip（Issue #1188 consent gate 1/2/7）。
+   * marketing 同意证据。**只有当客户答案完全命中一份「明确肯定」白名单**时，
+   * 才把找到的问题名放这里；未知值 / 长句 / 否定句 / 未识别问题 一律 null ——
+   * fail-closed（Issue #1188 remediation P1 `PRRT_kwDOSTHiF86cIG3N`）。
    *
-   * 这里存的是「找到的问题名」，不是 boolean —— 方便回查具体是哪个字段做的
-   * 判断，将来审计不会两眼一抹黑。找不到就 null。
+   * 找不到肯定证据就 null。存的是「找到的问题名」，不是 boolean —— 方便回查
+   * 具体是哪个字段做的判断，将来审计不会两眼一抹黑。
    */
   consentEvidence: string | null
+  /**
+   * 明确的**拒收**证据。命中 opt-out / unsubscribe / do-not-contact 类问题且
+   * 答案是白名单里的「明确肯定」值时，视为客人主动拒绝营销 —— 出口一律 skip，
+   * 不管别处是否也有一个 consent 字段（refuse 优先）。
+   *
+   * 找不到就 null。
+   */
+  optOutEvidence: string | null
   /** 全部自定义问答，原样保留，将来加列不用重跑历史。 */
   custom: Record<string, string>
 }
 
-/** 匹配 marketing consent 类问题名的模式。宽松一点，Meta 表单的表述五花八门。 */
-const CONSENT_QUESTION_PATTERN = /consent|subscribe|newsletter|opt.?in|marketing|email.*update/i
+/**
+ * 「订阅 / 同意」类问题名。命中这里 + 答案在 AFFIRMATIVE_ANSWERS 白名单里
+ * = provable consent。
+ *
+ * ⚠️ 只匹配这一批**语义清楚**的问题名。别一遇到 "email" 就当 consent —— email
+ * 字段本身只是联系方式，不是同意接收营销的证据。
+ */
+const CONSENT_IN_QUESTION_PATTERN =
+  /(?:^|[_\s-])(consent|subscribe|newsletter|opt.?in|marketing|email.*update)(?:$|[_\s-])/i
 
-/** consent 值里明确表达「不同意」的写法。命中这些就不算 provable consent。 */
-const CONSENT_DECLINE_PATTERN = /^(no|false|0|n|拒绝|不同意|no thanks)$/i
+/**
+ * 「拒收 / 退订」类问题名。命中这里 + 答案在 AFFIRMATIVE_ANSWERS 白名单里
+ * = 明确拒绝，出口一律 skip（不管别处是否有 consent）。
+ *
+ * 这条独立存在是因为 Meta 表单允许用**反面提问**（"opt out of marketing"）——
+ * 上一版按「不是短否定就当同意」会把 `marketing_opt_out=Yes` 认成同意，
+ * 直接违反 provable consent 语义。
+ */
+const OPT_OUT_QUESTION_PATTERN = /opt.?out|unsubscribe|do.?not.?contact|no.?marketing/i
+
+/**
+ * 「明确肯定」白名单 —— **完整值匹配**（trim + lowercase 后）。
+ *
+ * 有意保守：只放**语义无歧义**的短肯定值。任何长句（例如 "No, I do not
+ * consent"）、任何未见过的写法（例如 "OK maybe" 或空字符串）都 fail-closed
+ * 落到 no_consent_evidence，Mailchimp 出口 skip。
+ *
+ * 中文那几个是给未来同一套代码接手 CN 表单留的入口，跟英文一样只认完整值。
+ */
+const AFFIRMATIVE_ANSWERS: ReadonlySet<string> = new Set([
+  'yes',
+  'y',
+  'true',
+  '1',
+  'checked',
+  'on',
+  'agree',
+  'agreed',
+  'i agree',
+  'i accept',
+  'accept',
+  'accepted',
+  'confirm',
+  'confirmed',
+  'subscribe',
+  'subscribe me',
+  'sign me up',
+  'sign up',
+  'opt in',
+  'opt-in',
+  'opt_in',
+  'yes please',
+  'yes, please',
+  '是',
+  '同意',
+  '订阅',
+  '我同意',
+  '愿意',
+])
+
+function isAffirmative(value: string): boolean {
+  return AFFIRMATIVE_ANSWERS.has(value.trim().toLowerCase())
+}
 
 /** 一次提交的问答 → 结构化字段。纯函数，不碰数据库。 */
 export function parseLeadAnswers(answers: MetaLeadAnswer[]): ParsedLeadAnswers {
@@ -91,14 +157,21 @@ export function parseLeadAnswers(answers: MetaLeadAnswer[]): ParsedLeadAnswers {
 
   let tourInterest: string | null = null
   let consentEvidence: string | null = null
+  let optOutEvidence: string | null = null
   for (const [question, value] of Object.entries(custom)) {
     if (tourInterest === null && /tour/i.test(question)) {
       tourInterest = value
     }
+    // opt-out 先判 —— 反面提问优先级最高，压过任何看起来像同意的字段。
+    if (optOutEvidence === null && OPT_OUT_QUESTION_PATTERN.test(question) && isAffirmative(value)) {
+      optOutEvidence = question
+    }
+    // 正向：问题名 + 答案 必须两侧都在白名单里 —— fail-closed，未知不算同意。
     if (
       consentEvidence === null &&
-      CONSENT_QUESTION_PATTERN.test(question) &&
-      !CONSENT_DECLINE_PATTERN.test(value.trim())
+      CONSENT_IN_QUESTION_PATTERN.test(question) &&
+      !OPT_OUT_QUESTION_PATTERN.test(question) &&
+      isAffirmative(value)
     ) {
       consentEvidence = question
     }
@@ -124,6 +197,7 @@ export function parseLeadAnswers(answers: MetaLeadAnswer[]): ParsedLeadAnswers {
     phone: std.get('phone_number') ?? std.get('phone') ?? null,
     tourInterest,
     consentEvidence,
+    optOutEvidence,
     custom,
   }
 }
@@ -274,8 +348,15 @@ interface SyncMailchimpInput {
  *   1. 客户是否配置了 audience id —— 没配 → skipped: no_audience_config
  *   2. 是否有邮箱 —— 没有 → skipped: no_email
  *   3. 是否拿到 API key —— 没有 → skipped: no_api_key
- *   4. lead 里是否携带 provable consent 证据 —— 没有 → skipped: no_consent_evidence
- *   5. 满足以上，才调 subscribeMember
+ *   4. 表单里是否明确 opt-out —— 是 → skipped: explicit_opt_out
+ *   5. lead 里是否携带 provable consent 证据 —— 没有 → skipped: no_consent_evidence
+ *   6. **统一 DNC 判据**（复用 `@/lib/crm/dnc`，读镜像列 + 不可变触点）——
+ *      拒联或查询失败 → skipped: contact_dnc / dnc_check_failed
+ *   7. 满足以上，才调 subscribeMember
+ *
+ * ⚠️ 新 lead consent 不能自动覆盖历史拒联 —— `isDoNotContact` 已经保证「只有
+ *    明确的 dnc_cleared 触点晚于最后一条拒联证据」才认为解除；本函数不会写
+ *    任何 dnc_cleared 触点（那是「人明确纠正」的强信号，跟表单勾选是两回事）。
  */
 async function syncMailchimp(input: SyncMailchimpInput): Promise<SubscribeMemberResult> {
   // 1. 客户配置。**只 select 出口需要的那一列**，别顺手拉全表。
@@ -308,12 +389,27 @@ async function syncMailchimp(input: SyncMailchimpInput): Promise<SubscribeMember
     return { status: 'skipped', reason: 'no_api_key' }
   }
 
-  // 4. Consent 证据
+  // 4. 明确 opt-out 优先级最高 —— 反面提问不能被别处的正向字段覆盖。
+  if (input.parsed.optOutEvidence) {
+    return { status: 'skipped', reason: 'explicit_opt_out' }
+  }
+
+  // 5. Consent 证据
   if (!input.parsed.consentEvidence) {
     return { status: 'skipped', reason: 'no_consent_evidence' }
   }
 
-  // 5. 打出去
+  // 6. 统一 DNC 判据 —— 拉镜像列 + 不可变触点，交给 dnc.ts 判。任何一处查询
+  //    失败都 fail-closed（宁可少发一次，也不能发给明确说过别联系的人）。
+  const dnc = await evaluateDnc(input.contactId)
+  if (dnc === 'unknown') {
+    return { status: 'skipped', reason: 'dnc_check_failed' }
+  }
+  if (dnc === 'blocked') {
+    return { status: 'skipped', reason: 'contact_dnc' }
+  }
+
+  // 7. 打出去
   try {
     return await subscribeMember({
       apiKey,
@@ -330,4 +426,48 @@ async function syncMailchimp(input: SyncMailchimpInput): Promise<SubscribeMember
     // subscribeMember 应该永远不 throw，兜底防御。
     return { status: 'failed', reason: 'unexpected_exception' }
   }
+}
+
+/**
+ * 拉出 `isDoNotContact` 需要的两份原料，返回三态：
+ *
+ * - `'blocked'` = 拒联成立
+ * - `'ok'`      = 明确没拒联
+ * - `'unknown'` = 任一读取失败 —— fail-closed，出口按拒联处理
+ *
+ * 触点 select 跟 `messenger-stop-signal.ts` 那份保持同款字段
+ * (`metadata`, `occurred_at`)，判据入口是全仓唯一的 `isDoNotContact`。
+ */
+type DncCheck = 'blocked' | 'ok' | 'unknown'
+
+async function evaluateDnc(contactId: string): Promise<DncCheck> {
+  const [contactRes, touchesRes] = await Promise.all([
+    supabaseAdmin.from('contacts').select('do_not_contact').eq('id', contactId).maybeSingle(),
+    supabaseAdmin
+      .from('contact_touchpoints')
+      .select('metadata, occurred_at')
+      .eq('contact_id', contactId),
+  ])
+
+  if (contactRes.error || touchesRes.error) return 'unknown'
+  // 联系人主记录消失（例如竞态被合并）—— 保守 unknown。
+  if (!contactRes.data) return 'unknown'
+
+  const flag = contactRes.data.do_not_contact === true
+
+  const rawTouches = (touchesRes.data ?? []) as Array<{
+    metadata: Record<string, unknown> | null
+    occurred_at: string
+  }>
+  const touches: DncTouch[] = rawTouches.map((t) => {
+    const meta = t.metadata ?? {}
+    const outcome = typeof meta.outcome === 'string' ? (meta.outcome as string) : null
+    return {
+      outcome,
+      flagged: meta.do_not_contact === true,
+      occurredAt: t.occurred_at,
+    }
+  })
+
+  return isDoNotContact(flag, touches) ? 'blocked' : 'ok'
 }

@@ -68,6 +68,14 @@ interface MockDbOptions {
   audienceId?: string | null
   clientReadError?: string | null
   contactUpdateError?: string | null
+  /** DNC 判据的输入。默认：do_not_contact=false，触点没有任何 dnc 类记录。 */
+  contactDncFlag?: boolean
+  /** 触点里已存在的 DNC 类记录（用来测跨渠道拒联）。默认 `[]`。 */
+  existingDncTouches?: Array<{ outcome?: string | null; do_not_contact?: boolean; occurred_at: string }>
+  /** 读 contacts.do_not_contact 失败；默认 null（成功）。 */
+  contactReadError?: string | null
+  /** 读 contact_touchpoints 的 select 失败；默认 null（成功）。 */
+  touchpointReadError?: string | null
 }
 
 function mockDb(opts: MockDbOptions = {}) {
@@ -77,6 +85,10 @@ function mockDb(opts: MockDbOptions = {}) {
     audienceId = null,
     clientReadError = null,
     contactUpdateError = null,
+    contactDncFlag = false,
+    existingDncTouches = [],
+    contactReadError = null,
+    touchpointReadError = null,
   } = opts
   contactInserts = []
   touchpointUpserts = []
@@ -116,6 +128,22 @@ function mockDb(opts: MockDbOptions = {}) {
       }
     }
     if (table === 'contacts') {
+      // 两种 select 形态：
+      //   • resolveContact 走 .in(...).order(...) —— 返回 []（新人）
+      //   • syncMailchimp/evaluateDnc 走 .eq('id',…).maybeSingle() —— 返回单条
+      const selectApi = () => ({
+        // 给 resolveContact 用（.in().order()）
+        in: () => ({ order: () => Promise.resolve({ data: [] }) }),
+        // 给 evaluateDnc 用（.eq().maybeSingle()）
+        eq: () => ({
+          maybeSingle: () =>
+            Promise.resolve(
+              contactReadError
+                ? { data: null, error: { message: contactReadError } }
+                : { data: { do_not_contact: contactDncFlag }, error: null },
+            ),
+        }),
+      })
       return {
         insert: (payload: Record<string, unknown>) => {
           contactInserts.push(payload)
@@ -123,7 +151,7 @@ function mockDb(opts: MockDbOptions = {}) {
             select: () => ({ single: () => Promise.resolve({ data: { id: 'person-new' } }) }),
           }
         },
-        select: () => ({ in: () => ({ order: () => Promise.resolve({ data: [] }) }) }),
+        select: selectApi,
         update: (payload: Record<string, unknown>) => {
           contactUpdates.push(payload)
           return {
@@ -144,8 +172,27 @@ function mockDb(opts: MockDbOptions = {}) {
       }
     }
     if (table === 'contact_touchpoints') {
+      // 两种 select 形态：
+      //   • evaluateDnc 走 .select('metadata,occurred_at').eq('contact_id', …)
+      //     —— thenable，直接 await 拿 { data, error }
+      //   • 其它读方（若将来有）走既有链式；本文件目前只有 upsert / update
+      const dncData = existingDncTouches.map((t) => ({
+        metadata: {
+          outcome: t.outcome ?? null,
+          do_not_contact: t.do_not_contact === true,
+        },
+        occurred_at: t.occurred_at,
+      }))
       return {
         update: () => ({ in: () => Promise.resolve({ error: null }) }),
+        select: () => ({
+          eq: () =>
+            Promise.resolve(
+              touchpointReadError
+                ? { data: null, error: { message: touchpointReadError } }
+                : { data: dncData, error: null },
+            ),
+        }),
         upsert: (row: Record<string, unknown>, opts: Record<string, unknown>) => {
           touchpointUpserts.push(row)
           upsertOptions.push(opts)
@@ -217,14 +264,15 @@ describe('parseLeadAnswers', () => {
     expect(p.custom).toEqual({})
   })
 
-  it('consent 类问题被识别 —— provable consent 只在有明确同意字段时成立', () => {
+  it('consent 类问题 + 明确肯定短值 → provable consent', () => {
     const p = parseLeadAnswers([
-      { name: 'consent_to_marketing_emails', value: 'Yes, please' },
+      { name: 'consent_to_marketing_emails', value: 'Yes' },
     ])
     expect(p.consentEvidence).toBe('consent_to_marketing_emails')
+    expect(p.optOutEvidence).toBeNull()
   })
 
-  it('consent 字段答 "no" → 不算 provable consent', () => {
+  it('consent 字段答 "No" → 不算 provable consent', () => {
     const p = parseLeadAnswers([
       { name: 'subscribe_to_newsletter', value: 'No' },
       { name: 'opt_in', value: 'false' },
@@ -234,6 +282,61 @@ describe('parseLeadAnswers', () => {
 
   it('没有 consent 类问题 → consentEvidence 为 null（不猜）', () => {
     const p = parseLeadAnswers([{ name: 'budget', value: '$5000' }])
+    expect(p.consentEvidence).toBeNull()
+  })
+
+  // ── Remediation P1 `PRRT_kwDOSTHiF86cIG3N`：consent = 明确肯定白名单 ────────
+
+  it('长句拒绝 "No, I do not consent" → consentEvidence 为 null（fail-closed）', () => {
+    const p = parseLeadAnswers([
+      { name: 'consent_to_marketing_emails', value: 'No, I do not consent' },
+    ])
+    expect(p.consentEvidence).toBeNull()
+  })
+
+  it('长句拒绝 "I don\'t want updates" → consentEvidence 为 null', () => {
+    const p = parseLeadAnswers([
+      { name: 'marketing_updates', value: "I don't want updates" },
+    ])
+    expect(p.consentEvidence).toBeNull()
+  })
+
+  it('未知短值 "OK maybe" → consentEvidence 为 null（未知不当同意）', () => {
+    const p = parseLeadAnswers([
+      { name: 'consent', value: 'OK maybe' },
+    ])
+    expect(p.consentEvidence).toBeNull()
+  })
+
+  it('opt-out 问题 + 明确肯定 "Yes" → optOutEvidence 命中，consentEvidence 保持 null', () => {
+    const p = parseLeadAnswers([
+      { name: 'marketing_opt_out', value: 'Yes' },
+    ])
+    expect(p.optOutEvidence).toBe('marketing_opt_out')
+    expect(p.consentEvidence).toBeNull()
+  })
+
+  it('opt-out 问题 + 别的 consent 问题同时存在 —— optOutEvidence 保留，供上游 fail-closed', () => {
+    const p = parseLeadAnswers([
+      { name: 'subscribe_to_newsletter', value: 'Yes' },
+      { name: 'marketing_opt_out', value: 'Yes' },
+    ])
+    // opt-out 命中；上游 syncMailchimp 会看到 optOutEvidence 后直接 skip
+    expect(p.optOutEvidence).toBe('marketing_opt_out')
+    expect(p.consentEvidence).toBe('subscribe_to_newsletter')
+  })
+
+  it('unsubscribe 问题 + "Yes" → optOutEvidence 命中', () => {
+    const p = parseLeadAnswers([
+      { name: 'unsubscribe_from_emails', value: 'Yes' },
+    ])
+    expect(p.optOutEvidence).toBe('unsubscribe_from_emails')
+  })
+
+  it('email 字段本身不算 consent（就算 email 值非空）', () => {
+    const p = parseLeadAnswers([
+      { name: 'email', value: 'chris@example.com' },
+    ])
     expect(p.consentEvidence).toBeNull()
   })
 
@@ -389,10 +492,8 @@ const consented = () =>
       { name: 'full_name', value: 'Chris Brown' },
       { name: 'email', value: 'chris@example.com' },
       { name: 'phone_number', value: 'p:+6421363598' },
-      {
-        name: 'consent_to_marketing_emails',
-        value: 'Yes, I would like to receive tour updates',
-      },
+      // 明确肯定短值 —— 命中新的白名单（Yes / I agree / Subscribe / …）
+      { name: 'consent_to_marketing_emails', value: 'Yes' },
     ],
   })
 
@@ -606,5 +707,156 @@ describe('ingestMetaLead → Mailchimp 出口', () => {
     expect(subscribeMock).not.toHaveBeenCalled()
     expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'client_config_read_failed' })
     expect(res.contactId).toBe('person-new')
+  })
+})
+
+// ── Remediation P1 `PRRT_kwDOSTHiF86cIG3H`：统一 DNC 判据 fail-closed ────────
+// 每条都要保证：主管道（contact + touchpoint）仍然写成功；只有出口被拦。
+
+describe('ingestMetaLead → 统一 DNC 判据 fail-closed', () => {
+  it('明确 opt-out 表单答案 → 出口 skipped: explicit_opt_out，零 provider 调用；主管道照常', async () => {
+    mockDb({ audienceId: 'dda97b7e61' })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: lead({
+        answers: [
+          { name: 'full_name', value: 'Chris Brown' },
+          { name: 'email', value: 'chris@example.com' },
+          { name: 'consent', value: 'Yes' },
+          { name: 'marketing_opt_out', value: 'Yes' },
+        ],
+      }),
+    })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'explicit_opt_out' })
+    // 主管道成了
+    expect(touchpointUpserts).toHaveLength(1)
+    expect(contactInserts).toHaveLength(1)
+    // synced_at 不写
+    expect(contactUpdates).toHaveLength(0)
+  })
+
+  it('contacts.do_not_contact=true → 出口 skipped: contact_dnc，零 provider 调用', async () => {
+    mockDb({ audienceId: 'dda97b7e61', contactDncFlag: true })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'contact_dnc' })
+    expect(touchpointUpserts).toHaveLength(1) // 主管道照常
+    expect(contactUpdates).toHaveLength(0)
+  })
+
+  it('镜像列 false 但触点里有跨渠道拒联证据 → 出口 skipped: contact_dnc', async () => {
+    mockDb({
+      audienceId: 'dda97b7e61',
+      contactDncFlag: false,
+      // 电话渠道上有人明确说别再联系 —— 跨渠道，Mailchimp 出口也得拦
+      existingDncTouches: [
+        { outcome: 'do_not_contact', occurred_at: '2026-08-01T10:00:00Z' },
+      ],
+    })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'contact_dnc' })
+  })
+
+  it('触点里 metadata.do_not_contact=true 也算（不是只看 outcome）', async () => {
+    mockDb({
+      audienceId: 'dda97b7e61',
+      existingDncTouches: [
+        { do_not_contact: true, occurred_at: '2026-08-01T10:00:00Z' },
+      ],
+    })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'contact_dnc' })
+  })
+
+  it('DNC 触点读失败 → 出口 skipped: dnc_check_failed（fail-closed，不猜「没有」）', async () => {
+    mockDb({ audienceId: 'dda97b7e61', touchpointReadError: 'timeout' })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'dnc_check_failed' })
+    // 主管道照常
+    expect(touchpointUpserts).toHaveLength(1)
+  })
+
+  it('DNC contact 读失败 → 出口 skipped: dnc_check_failed', async () => {
+    mockDb({ audienceId: 'dda97b7e61', contactReadError: 'db down' })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'dnc_check_failed' })
+  })
+
+  it('历史 do_not_contact 触点已被明确 dnc_cleared 判决晚于其后 → 出口正常放行', async () => {
+    mockDb({
+      audienceId: 'dda97b7e61',
+      contactDncFlag: true, // 镜像列可能还是旧值 —— 判据看的是最后一次判决
+      existingDncTouches: [
+        { outcome: 'do_not_contact', occurred_at: '2026-07-01T10:00:00Z' },
+        { outcome: 'dnc_cleared', occurred_at: '2026-08-15T10:00:00Z' },
+      ],
+    })
+    subscribeMock.mockResolvedValueOnce({ status: 'subscribed' })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    expect(subscribeMock).toHaveBeenCalledTimes(1)
+    expect(res.mailchimp).toEqual({ status: 'subscribed' })
+  })
+
+  it('新 lead consent 不自动覆盖历史 DNC —— 没有 dnc_cleared 触点时照样拦', async () => {
+    // 表单里的 consent = Yes；触点里有陈年 do_not_contact；但从没被人明确纠正过
+    mockDb({
+      audienceId: 'dda97b7e61',
+      existingDncTouches: [
+        { outcome: 'do_not_contact', occurred_at: '2026-06-01T10:00:00Z' },
+      ],
+    })
+
+    const res = await ingestMetaLead({
+      clientId: CLIENT,
+      defaultCountry: 'NZ',
+      lead: consented(),
+    })
+
+    expect(subscribeMock).not.toHaveBeenCalled()
+    expect(res.mailchimp).toEqual({ status: 'skipped', reason: 'contact_dnc' })
   })
 })
