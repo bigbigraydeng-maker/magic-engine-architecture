@@ -20,6 +20,10 @@ import type { NextRequest } from 'next/server'
 
 const getUserMock = vi.fn()
 const mockSupabaseIn = vi.fn()
+// Portal-tier lookup: from().select('access_type').eq(email).eq(client_id).maybeSingle()
+// added when /portal/<clientId>/* needed to serve portal-tier users directly
+// instead of 308-ing them to /dashboard/*.
+const mockPortalMaybeSingle = vi.fn()
 
 vi.mock('@/lib/supabase-server', () => ({
   createMiddlewareSupabaseClient: () => ({
@@ -33,6 +37,9 @@ vi.mock('@/lib/supabase', () => ({
       select: vi.fn(() => ({
         eq: vi.fn(() => ({
           in: mockSupabaseIn,
+          eq: vi.fn(() => ({
+            maybeSingle: mockPortalMaybeSingle,
+          })),
         })),
       })),
     })),
@@ -67,6 +74,8 @@ describe('dashboard auth middleware', () => {
     getUserMock.mockReset()
     mockSupabaseIn.mockReset()
     mockSupabaseIn.mockResolvedValue({ data: [], error: null })
+    mockPortalMaybeSingle.mockReset()
+    mockPortalMaybeSingle.mockResolvedValue({ data: null, error: null })
   })
 
   afterEach(() => {
@@ -141,6 +150,49 @@ describe('dashboard auth middleware', () => {
     expect(res.status).toBe(308)
     const url = new URL(res.headers.get('location')!)
     expect(url.pathname).toBe('/dashboard/clients/client-x-uuid/report')
+  })
+
+  // ── Contract V3 §A: portal-tier invitees reach their real workspace ────
+
+  it('lets a portal-tier user through to /portal/<their-clientId> WITHOUT bouncing to /unauthorized', async () => {
+    // Regression: pre-V3 the /portal/* branch 308ed unconditionally to
+    // /dashboard/clients/<id>, and the dashboard branch rejects portal-tier
+    // (ACCESS_TYPES_DASHBOARD excludes 'portal') → /unauthorized. Portal
+    // invitees were effectively dead-ended. Fix: /portal/<own-client>/*
+    // now serves for access_type='portal' users.
+    getUserMock.mockResolvedValue({ data: { user: { email: 'staff@cts.co.nz' } } })
+    mockPortalMaybeSingle.mockResolvedValueOnce({
+      data: { access_type: 'portal' },
+      error: null,
+    })
+
+    const res = await middleware(buildRequest('/portal/client-b-uuid'))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('location')).toBeNull()
+    expect(res.headers.get('x-middleware-request-x-user-role')).toBe('client-viewer')
+    expect(res.headers.get('x-middleware-request-x-user-tier')).toBe('portal_only')
+    expect(res.headers.get('x-middleware-request-x-allowed-client-id')).toBe('client-b-uuid')
+  })
+
+  it('scopes the portal grant to the exact clientId — same email holding portal for A cannot enter /portal/B', async () => {
+    // Same-email/two-clients invariant on the portal path: if the email
+    // has portal access only for client-a, hitting /portal/<client-b> must
+    // NOT be served (the .eq('client_id', clientId) filter returns null).
+    // It falls through to the 308-to-dashboard path, where dashboard
+    // middleware will reject them for client-b (no ACCESS_TYPES_DASHBOARD
+    // row for client-b) — never mixes clients.
+    getUserMock.mockResolvedValue({ data: { user: { email: 'staff@cts.co.nz' } } })
+    // No portal row for THIS target clientId → maybeSingle returns null.
+    mockPortalMaybeSingle.mockResolvedValueOnce({ data: null, error: null })
+
+    const res = await middleware(buildRequest('/portal/client-b-uuid'))
+    expect(res.status).toBe(308)
+    const url = new URL(res.headers.get('location')!)
+    expect(url.pathname).toBe('/dashboard/clients/client-b-uuid')
+    // The 200/next branch must NOT have set the portal_only tier for a
+    // request whose portal row was for a different client.
+    expect(res.headers.get('x-middleware-request-x-user-tier')).toBeNull()
   })
 
   it('redirects to /unauthorized when user is not on the whitelist', async () => {

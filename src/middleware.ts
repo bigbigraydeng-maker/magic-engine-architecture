@@ -56,6 +56,30 @@ export async function middleware(request: NextRequest) {
     const parts = path.split('/')
     const clientId = parts[2]
     const rest = parts.slice(3).join('/')
+
+    // Portal-tier (access_type='portal') users have NO dashboard access, so
+    // 308-ing them to /dashboard/clients/<id> ends at /unauthorized. For a
+    // user who actually holds a portal row for THIS exact clientId, serve
+    // the pre-existing /portal/<clientId>/* pages instead. Scoped to the
+    // exact target clientId so a portal row for client A cannot open the
+    // portal for client B. 'both'-tier users still get the 308 — they have
+    // dashboard access, and the phased-out portal UI is not their home.
+    if (clientId) {
+      const email = (user.email ?? '').toLowerCase()
+      const { data: portalRow } = await supabaseAdmin
+        .from('client_portal_users')
+        .select('access_type')
+        .eq('email', email)
+        .eq('client_id', clientId)
+        .maybeSingle()
+      if ((portalRow as { access_type?: string } | null)?.access_type === 'portal') {
+        requestHeaders.set('x-user-role', 'client-viewer')
+        requestHeaders.set('x-user-tier', 'portal_only')
+        requestHeaders.set('x-allowed-client-id', clientId)
+        return NextResponse.next({ request: { headers: requestHeaders } })
+      }
+    }
+
     const dest = clientId
       ? `/dashboard/clients/${clientId}${rest ? '/' + rest : ''}`
       : '/dashboard'

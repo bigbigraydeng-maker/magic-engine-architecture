@@ -44,7 +44,14 @@ export async function resolveRedirectForSession(
   const { data: { user } } = await supabase.auth.getUser()
 
   if (!user?.email) {
-    // Session not readable — let middleware handle the unauthenticated redirect.
+    // Directed invite whose second-read (this getUser) sees no identity
+    // MUST fail closed. Falling through to safePath (`/dashboard` for the
+    // invite-landing flow) would let /dashboard middleware pick whichever
+    // OTHER client this email happens to hold membership in — a wrong-
+    // customer break. Ordinary non-invite flows (no expectedClientId) keep
+    // the pre-existing behaviour of returning safePath and letting
+    // middleware handle the unauthenticated redirect.
+    if (expectedClientId) return INVITE_INVALID_REDIRECT
     return safePath
   }
 

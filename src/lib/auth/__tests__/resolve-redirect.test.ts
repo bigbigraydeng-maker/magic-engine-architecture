@@ -196,6 +196,48 @@ describe('resolveRedirectForSession', () => {
     expect(redirect).toBe('/dashboard/clients/client-b')
   })
 
+  // ── Contract V3 §B: resolver's internal getUser fail-closed on invites ─
+
+  it('FAILS CLOSED when the resolver internal getUser returns NO user, IF expectedClientId is present', async () => {
+    // Defence-in-depth: even if some future caller skips the outer
+    // invite-landing getUser gate, the resolver itself must never leak an
+    // authenticated-but-identity-less invite into safePath = /dashboard.
+    const redirect = await resolveRedirectForSession(
+      authClient(null),
+      '/dashboard',
+      'client-b',
+    )
+    expect(redirect).toBe(INVITE_INVALID_REDIRECT)
+    expect(mocks.from).not.toHaveBeenCalled()
+    expect(mocks.grantSignupBonus).not.toHaveBeenCalled()
+  })
+
+  it('preserves the safe-path behaviour for an ordinary session with no user (non-invite)', async () => {
+    // The old contract for non-invite callers (session-route/verify-otp
+    // that pass no expectedClientId) is to return safePath and let
+    // middleware handle the redirect. That must not regress.
+    const redirect = await resolveRedirectForSession(authClient(null), '/dashboard')
+    expect(redirect).toBe('/dashboard')
+    expect(mocks.from).not.toHaveBeenCalled()
+  })
+
+  // ── Contract V3 §A: portal-tier invite routes to the invited client ─
+
+  it('routes a portal-tier invite to the invited client (not the first row) — mirror of dashboard-tier invariant', async () => {
+    // Same-email/two-clients invariant on the portal path: an invite for
+    // client-b must land in /portal/client-b, never /portal/client-a.
+    mocks.from.mockReturnValueOnce(accessRows([
+      { client_id: 'client-a', access_type: 'portal' },
+      { client_id: 'client-b', access_type: 'portal' },
+    ]))
+    const redirect = await resolveRedirectForSession(
+      authClient('viewer@biz.com'),
+      '/dashboard',
+      'client-b',
+    )
+    expect(redirect).toBe('/portal/client-b')
+  })
+
   it('does NOT fail closed for an ordinary login (no expectedClientId) with the same shape', async () => {
     // Same accessRows as the first fail-closed test, but no expectedClientId
     // — this is a plain magic-link/OTP flow, must keep its existing
