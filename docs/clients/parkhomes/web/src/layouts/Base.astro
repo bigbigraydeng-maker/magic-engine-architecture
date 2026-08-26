@@ -60,9 +60,19 @@ LAST UPDATED: 2026-08
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Google tag (gtag.js) — GA4 property "Park Homes", Magic Engine-managed Analytics account -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-Q181F0Z3L8"></script>
+  <script is:inline>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-Q181F0Z3L8');
+  </script>
   <title>{title}</title>
   <meta name="description" content={desc} />
   <link rel="canonical" href={canonical} />
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="stylesheet" href="/assets/site.css" />
   <script type="application/ld+json" set:html={JSON.stringify(orgSchema)} />
   <script type="application/ld+json" set:html={JSON.stringify(localBusinessSchema)} />

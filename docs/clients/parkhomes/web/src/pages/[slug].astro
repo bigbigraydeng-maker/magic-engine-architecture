@@ -25,7 +25,7 @@ const serviceSchema = {
   description: p.tagline,
 };
 ---
-<Base title={`${p.name} — Park Homes`} desc={p.tagline} active="projects">
+<Base title={`${p.name} — Park Homes`} desc={p.metaDescription || p.tagline} active="projects">
   <script type="application/ld+json" set:html={JSON.stringify(serviceSchema)} />
 
   <section class="hero" style={heroStyle}>
@@ -80,11 +80,16 @@ const serviceSchema = {
             </div>
           ))}
         </div>
-        {p.listingsSearchUrl && (
-          <p style="margin-top:26px">
-            <a class="btn btn-ghost" href={p.listingsSearchUrl} target="_blank" rel="noopener">See all current listings on Ray White →</a>
-          </p>
-        )}
+      </div>
+    </section>
+  )}
+
+  {p.listingsSearchUrl && (
+    <section>
+      <div class="wrap">
+        <p>
+          <a class="btn btn-ghost" href={p.listingsSearchUrl} target="_blank" rel="noopener">{p.listingsLabel || 'See all current listings on Ray White →'}</a>
+        </p>
       </div>
     </section>
   )}
@@ -94,9 +99,9 @@ const serviceSchema = {
       <p class="eyebrow sec-eyebrow">Register your interest</p>
       <h2 style="color:#fff;font-size:clamp(26px,4vw,40px);margin-bottom:22px">Enquire on {p.name}</h2>
       <form class="reg" id="reg-form" novalidate>
-        <div><label>Name</label><input type="text" name="name" placeholder="Your name" required /></div>
-        <div><label>Phone</label><input type="text" name="phone" placeholder="Your phone" required /></div>
-        <div class="full"><label>Email</label><input type="email" name="email" placeholder="you@email.com" /></div>
+        <div><label for="reg-name">Name</label><input type="text" id="reg-name" name="name" placeholder="Your name" required /></div>
+        <div><label for="reg-phone">Phone</label><input type="text" id="reg-phone" name="phone" placeholder="Your phone" required /></div>
+        <div class="full"><label for="reg-email">Email</label><input type="email" id="reg-email" name="email" placeholder="you@email.com" /></div>
         <div style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden" aria-hidden="true">
           <label>Company<input type="text" name="company_hp" tabindex="-1" autocomplete="off" /></label>
         </div>
@@ -168,6 +173,7 @@ const serviceSchema = {
             if (!r.ok) throw new Error('HTTP ' + r.status);
             form.style.display = 'none';
             okEl.style.display = 'block';
+            if (typeof gtag === 'function') gtag('event', 'generate_lead', { form_id: 'reg-form', project: projectName });
           })
           .catch(function () {
             errorEl.textContent = 'Something went wrong sending that — please call or email our agent directly (details above).';

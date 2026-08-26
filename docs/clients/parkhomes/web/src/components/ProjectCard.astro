@@ -1,12 +1,13 @@
 ---
 const { p, line = 'cardLine' } = Astro.props;
 const img = p.card || (p.images && p.images.length ? p.images[0].src : null);
+const imgAlt = (p.images && p.images.find((im) => im.src === img)?.alt) || `${p.name} — ${p.eyebrow}`;
 const href = `/${p.slug}/`;
 ---
 <article class="card">
   <a href={href}>
     {img
-      ? <div class="shot" style={`background-image:url('${img}')`}><span class={`pill ${p.pill}`}>{p.status}</span></div>
+      ? <div class="shot"><img src={img} alt={imgAlt} loading="lazy" /><span class={`pill ${p.pill}`}>{p.status}</span></div>
       : <div class="shot pending" data-label="Render — pending"><span class={`pill ${p.pill}`}>{p.status}</span></div>}
   </a>
   <div class="cbody">
