@@ -68,10 +68,10 @@ description: Magic Engine 平台层级门。当出现以下任一情况时必须
 
 | 层 | 提案 owner | 复审 owner | 分歧仲裁 |
 |---|---|---|---|
-| **L1 Capability** | 提案 agent | **子牙（架构）+ 魏征（挑刺）** 双审 | PM |
-| **L2 Playbook / Profile** | 行业负责 FDE | **华佗（分析视角）** | PM |
-| **L3 Connector** | 提案 agent | **鲁班（执行视角）** + 该 Connector 域负责人 | 该 Connector 域负责人 → PM |
-| **L4 Client Configuration** | 当值 FDE | 无强制复审（客户配置属客户私域）| 当值 FDE → PM（若涉及跨客户共享风险）|
+| **L1 Capability** | 提案 agent | **子牙（架构）+ 魏征（挑刺）** 双审 | 子牙 + 魏征联合拍板；仅涉及商业决策或新增支柱时升级 PM |
+| **L2 Playbook / Profile** | 行业负责 FDE | **华佗（分析视角）** | 华佗拍板；仅涉及商业决策或新增支柱时升级 PM |
+| **L3 Connector** | 提案 agent | **鲁班（执行视角）** + 该 Connector 域负责人 | 该 Connector 域负责人拍板；仅涉及商业决策或新增支柱时升级 PM |
+| **L4 Client Configuration** | 当值 FDE | 无强制复审（客户配置属客户私域）| 当值 FDE 拍板；仅涉及跨客户共享风险或商业决策时升级 PM |
 
 **分歧仲裁链**（写死流程）：
 
@@ -82,7 +82,9 @@ agent 提案层级 X
      ↓
 该层 owner 拍板（agent 与复审 owner 之间的分歧由 owner 断）
      ↓
-owner 也拿不准 / 涉及商业决策 / 涉及新支柱
+纯技术分类不确定（架构落点拿不准）→ 该层技术 owner（子牙 / 魏征 / 华佗 / 鲁班 / 该 Connector 域负责人）继续仲裁到底，不升级 PM——PM 不决策架构与接口（见 CLAUDE.md §2 PM 角色边界）
+     ↓
+涉及商业决策 / 涉及新增支柱
      ↓
 抛 PM
 ```
@@ -107,13 +109,14 @@ owner 也拿不准 / 涉及商业决策 / 涉及新支柱
 ### 红线 2 · 禁止客户 / 行业事实进 shared runtime
 客户名、客户 ID、客户业务数字、行业硬编码判断，禁止进 `src/lib/` 共享代码路径、shared prompt template、平台默认权重。只能进 Playbook / Profile / Configuration / private memory。
 
-### 红线 3 · 单客户需求默认落 L4/L2，禁止**直接**升 L1
-- 单客户需求默认落 L4 或 L2 实现 + **登记为"L1 候选"**进入 [`docs/registry/platform-candidates.md`](../../../docs/registry/platform-candidates.md)（不是 console.log，进入可复查的管道，遵循 "管道不许断头"）
+### 红线 3 · 单客户提出的 Capability/Playbook 语义默认落 L4/L2，禁止**直接**升 L1（不含符合 L3 判据的 Connector）
+- 本红线只约束单客户提出的 **Capability / Playbook 语义**——即声称"ME 智能层该新增/扩展一种判断规则、打分权重、决策逻辑"的需求。**符合 L3 判据（§L3 判据）的 Connector 需求不适用本红线**：provider-specific adapter 挂在既有 Capability 下、不同客户用不同 Connector 组合，本就是 L3 判据允许的常态，不需要先落 L4/L2 再登记候选，也不占用"L1 候选"名额
+- 命中本红线的单客户 Capability/Playbook 需求，默认落 L4 或 L2 实现 + **登记为"L1 候选"**进入 [`docs/registry/platform-candidates.md`](../../../docs/registry/platform-candidates.md)（不是 console.log，进入可复查的管道，遵循 "管道不许断头"）
 - **禁止的是"跳过 L4/L2 直接建 L1"**——不是禁止发现管道本身
 - L1 晋升硬证据白名单：≥2 个**已付费**客户分属不同行业提出同一需求，或某 L2/L4 实现已在 ≥3 客户处出现事实复制
 - L1 升级提案强制走"大任务 2 审"：子牙（架构）+ 魏征（挑刺），"我自己审过了"不算
 
-*为什么*：ME 的方法论是 Customer Zero——真正该建的能力，出生时总是只有一个客户在要。全禁会杀死发现管道；允许直建又会打开污染平台的口子。中间路是"先落低层 + 登记候选 + 硬证据升级"。
+*为什么*：ME 的方法论是 Customer Zero——真正该建的能力，出生时总是只有一个客户在要。全禁会杀死发现管道；允许直建又会打开污染平台的口子。中间路是"先落低层 + 登记候选 + 硬证据升级"，但这条路只该拦"能力/剧本"级野心，不该误伤本就该走 L3 的 Connector 接入（见下方 HBay 自检示范：判定为 L3 时不进候选表）。
 
 ### 红线 4 · 换客户测试（语义级）
 问句必须严格版：**"换客户后，这段代码的默认行为、权重、prompt、判断规则，有没有一条只对首客户成立？"**
