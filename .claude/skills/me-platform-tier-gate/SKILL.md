@@ -124,7 +124,7 @@ PM 在对话里说 `tier` / `层级门` / `分层` / `跟班` / `跑 gate` 等�
 |---|---|---|
 | **L1 Capability** | 6 支柱打分规范 · 归因公式 | AI 可见度追踪引擎 · 竞品监控 |
 | **L2 Playbook** | 瓶装水行业内容模板 | 地产版 GEO 全流程 |
-| **L3 Connector** | HBay VI 生成模板 | DataForSEO 数据拉取 |
+| **L3 Connector** | Publer 发布格式映射规则 | DataForSEO 数据拉取 |
 | **L4 Client Config** | 客户品牌调性指引 | 客户专属自动化 workflow |
 
 ### 4 问判据（判"用 Skill 还是 Agent"）
@@ -136,10 +136,16 @@ PM 在对话里说 `tier` / `层级门` / `分层` / `跟班` / `跑 gate` 等�
 3. **是可复用工种被反复召唤吗**？（多场景反复调用同一角色 · 如子牙每次架构审）
 4. **必须融入主对话节奏吗**？（跟班式 · 3 句话说完继续 · 不能跳出去）
 
-**判定规则**：
-- 只满足第 4 条（融入节奏），或全不满足 → **Skill 实现**
-- 满足 3 条或以上（1-3） → **Agent 实现**
-- 满足 1-2 条 + 有时也需要融入节奏 → **Hybrid 实现**：Skill 触发 + spawn Agent 深度
+**判定规则**（Codex 复审修正：把 4 问压缩成两个独立信号，穷举覆盖全部组合，互斥且完备）：
+- **信号 A · 独立处理需求** = 第 1/2/3 条**任一**为 ✓（哪怕只中一条，也说明这件事需要脱离主对话独立处理，例如"只需要一次性深度架构分析、不反复召唤、也不用融入对话"就命中第 1 条）
+- **信号 B · 主对话融入需求** = 第 4 条是否为 ✓
+
+| 信号 A（1/2/3 任一 ✓） | 信号 B（第 4 条） | 判定 |
+|---|---|---|
+| ✗（1/2/3 全否） | ✗ | **Skill 实现** —— 无独立处理需求也不强求融入节奏，默认走最省资源的 Skill |
+| ✗（1/2/3 全否） | ✓ | **Skill 实现** —— 融入节奏是唯一诉求 |
+| ✓（1/2/3 任一） | ✗ | **Agent 实现** —— 有独立处理需求且不强求嵌在主对话，走独立进程（含"仅第 1 条为真的一次性复杂分析"这类场景） |
+| ✓（1/2/3 任一） | ✓ | **Hybrid 实现** —— 既要独立深度处理，又要嵌进主对话节奏：Skill 触发 + spawn Agent 深度 |
 
 ### 三种形态的典型场景
 
@@ -417,7 +423,7 @@ Full Report 模式完整格式：
 - 原本想法层级 / 形态：[X]
 - Skill 判定层级 / 形态：[Y]
 - 若 X ≠ Y：改口话术为 "[具体如何重新表述]"
-- 若判定 L1 / L2 候选：已登记进 `docs/registry/platform-candidates.md` + 关联 GitHub Issue [#N]
+- 若判定 L1 / L2 候选：已登记进 `docs/registry/platform-candidates.md`；GitHub Issue draft 待 PM 批准（PM 说 `开 issue` 后创建，创建成功后回填实际 issue 编号，创建前不得声称已关联具体 issue 号）
 - 下一步：[继续原任务 / 走五道 Build Gate / 抛 PM 拍板 / 拒]
 ```
 
@@ -552,6 +558,7 @@ Full Report 模式完整格式：
 
 ## 版本
 
+- **v2.2.1 · 2026-08-27** · Codex PR #1201 第 1 轮复审修正：4 问判据补全为互斥且完备的信号 A/B 矩阵（修复"仅第 1 条为真但不需融入主对话"无法判定的漏洞）· L3 Skill 示例把不符合外部系统边界判据的"HBay VI 生成模板"换成"Publer 发布格式映射规则"（HBay VI 已在 L4 正确归位，避免误导 agent 把客户专属模板登记成 Connector）· Full Report 结论行改为"Issue draft 待 PM 批准"，禁止在 PM 授权创建前声称已关联具体 issue 编号
 - **v2.2 · 2026-08-27** · 加"实现形态判定"（第二独立轴 · Skill/Agent/Hybrid · 4 问判据 · 4×2 落点矩阵）· Full Report 加实现形态字段 · 新增 GitHub Issue 自动生成规则（ME 2.0 punch list 机制 · me2.0-punch-list label 系统 · issue template 落地文件 · L1/L2 候选自动派生 issue draft · candidates.md 加 GitHub Issue 列）· 别名张良正式登记（PM 可从任意窗口用 `@张良` `召张良` `张良判定` 等自然语言召唤）
 - **v2.1 · 2026-08-27** · Codex 第 4 轮复审修正：停等 PM 的硬约束分档（日常触发 Inline 后可继续 · 只有登记候选 / 商业决策 / 新支柱 / 红线冲突 / 升 Full 才停等）· 避免普通代码 review 出现 `module` / `interface` / `service` 等日常词也硬停 PM（违反 CLAUDE.md §2 PM 不决策架构与接口）
 - **v2 · 2026-08-27** · 跟班式 PM 模式升级：语言级触发扩面 · Inline / Full 双输出 · Low / High 双门槛登记 · 分档式对话协议 · 版本词从 registry 动态推导 · 吸收 Codex 复审 3 轮修正（L3 Connector 与 ME_PRODUCT_DEFINITION §7 对齐 · 纯技术分歧不升 PM · 红线 3 显式排除 L3 · 复查日接入 pm-daily-todo 自动待办）
