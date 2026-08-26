@@ -196,3 +196,41 @@ describe('REEL_HARD_CAP_SEC 与业务事实同步', () => {
     expect(REEL_HARD_CAP_SEC).toBe(15)
   })
 })
+
+// ─── 视频剪辑（v2 iteration，viral-上片后新加 kind='clip' 路径）───────────────
+
+describe('kind="clip" — 真视频剪辑本格链', () => {
+  it('validateShots 接受 clip / 拒非法 kind', () => {
+    expect(() => validateShots([{ kind: 'clip', imagePath: '/tmp/v.mp4', durationSec: 3, caption: '' }])).not.toThrow()
+    expect(() => validateShots([{ kind: 'x' as unknown as 'clip', imagePath: '/tmp/v.mp4', durationSec: 3, caption: '' }])).toThrow(/kind 非法/)
+  })
+
+  it('validateShots 拒 clipStartSec 负数', () => {
+    expect(() => validateShots([{ kind: 'clip', imagePath: '/tmp/v.mp4', durationSec: 3, caption: '', clipStartSec: -1 }])).toThrow(/clipStartSec 非法/)
+  })
+
+  it('mixed still + clip 顺序稳定，ffmpeg 输入组织符合预期', () => {
+    const shots: ShotSpec[] = [
+      { kind: 'still', imagePath: '/tmp/a.jpg', durationSec: 2, caption: 'A' },
+      { kind: 'clip', imagePath: '/tmp/b.mp4', durationSec: 3, caption: 'B', clipStartSec: 2 },
+      { kind: 'still', imagePath: '/tmp/c.jpg', durationSec: 2, caption: 'C' },
+    ]
+    const cues = shotsToCues(shots)
+    const args = buildStillsSlideshowFfmpegArgs({
+      shots, capPngPaths: ['/tmp/c0.png', '/tmp/c1.png', '/tmp/c2.png'], cues, outPath: '/tmp/out.mp4',
+    })
+    // still 用 -loop 1 -t d -i；clip 只有 -i
+    const argsStr = args.join(' ')
+    expect(argsStr).toContain('-loop 1 -t 2.000 -i /tmp/a.jpg')
+    expect(argsStr).toContain('-loop 1 -t 2.000 -i /tmp/c.jpg')
+    // clip 不能带 -loop 1
+    expect(argsStr).toMatch(/-i \/tmp\/b\.mp4/)
+    expect(argsStr).not.toMatch(/-loop 1 -t 3\.000 -i \/tmp\/b\.mp4/)
+    // filter_complex 里第二格用 clip 链（含 trim start），其余用 ken-burns（含 zoompan）
+    const fc = args[args.indexOf('-filter_complex') + 1]
+    expect(fc).toMatch(/\[0:v\]scale=2160:3840/)          // still #0 → ken-burns
+    expect(fc).toMatch(/\[1:v\]trim=start=2\.000/)         // clip #1 → trim 从 2s 起
+    expect(fc).toMatch(/\[2:v\]scale=2160:3840/)          // still #2 → ken-burns
+    expect(fc).toContain('concat=n=3:v=1:a=0[base]')
+  })
+})

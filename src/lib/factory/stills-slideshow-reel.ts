@@ -33,13 +33,24 @@ export const SHOT_MIN_SEC = 1.5
 /** 输出帧率：与 walk-talk-proof 一致；zoompan d 参数按此换算。 */
 export const FPS = 30
 
+/**
+ * 一格素材类型：
+ *   `still` — 静图（loop + ken-burns 慢推）
+ *   `clip`  — 真视频片段（scale/crop 到 1080×1920，按 durationSec 截）；从 clipStartSec 起截
+ */
+export type ShotKind = 'still' | 'clip'
+
 export interface ShotSpec {
-  /** 静图绝对路径（真实照片，非 AI 生成）。 */
+  /** 素材类型；不填默认 `still`（向后兼容 v1 的纯静图签名）。 */
+  kind?: ShotKind
+  /** 素材绝对路径（真实照片或真视频剪辑；均须客户可用许可下的真实素材）。 */
   imagePath: string
   /** 本格在成片里的持续时长（秒）。所有格总和必须 ≤ REEL_HARD_CAP_SEC。 */
   durationSec: number
   /** 本格烧的一行字幕；`**...**` 之间为高亮词。空串 = 本格无字。 */
   caption: string
+  /** clip 模式：起始时间（秒），默认 0；用于从长片截关键秒。still 模式忽略。 */
+  clipStartSec?: number
 }
 
 export interface StillsSlideshowReelInput {
@@ -81,6 +92,12 @@ export function validateShots(shots: ShotSpec[]): void {
     }
     if (typeof s.caption !== 'string') {
       throw new Error(`shot #${i}: caption 必须为字符串（可空）`)
+    }
+    if (s.kind !== undefined && s.kind !== 'still' && s.kind !== 'clip') {
+      throw new Error(`shot #${i}: kind 非法（${s.kind}），只能是 'still' 或 'clip'`)
+    }
+    if (s.clipStartSec !== undefined && (!Number.isFinite(s.clipStartSec) || s.clipStartSec < 0)) {
+      throw new Error(`shot #${i}: clipStartSec 非法（${s.clipStartSec}）`)
     }
   }
   const total = shots.reduce((a, s) => a + s.durationSec, 0)
@@ -131,6 +148,20 @@ export function buildKenburnsChain(inputIndex: number, durationSec: number, outL
 }
 
 /**
+ * 真视频剪辑本格链：从 clipStartSec 起，截 durationSec；scale/crop 到 1080×1920；30fps；SAR=1；PTS 归零。
+ * 不做 ken-burns（原片已有真运动）；不落原声（音轨走 BGM 通道，避免多段音轨拼接的相位/断音）。
+ */
+export function buildClipChain(inputIndex: number, durationSec: number, clipStartSec: number, outLabel: string): string {
+  return [
+    `[${inputIndex}:v]trim=start=${clipStartSec.toFixed(3)}:duration=${durationSec.toFixed(3)}`,
+    `scale=${W}:${H}:force_original_aspect_ratio=increase`,
+    `crop=${W}:${H}`,
+    `fps=${FPS}`,
+    `setpts=PTS-STARTPTS,setsar=1[${outLabel}]`,
+  ].join(',')
+}
+
+/**
  * 构造 ffmpeg 命令行（不真跑）：N 张静图（每张 -loop 1 -t d）→ ken-burns → concat →
  *   逐条字幕 overlay+enable → mux 音轨（真 BGM or 合成 bed）→ 1080×1920 H.264 + AAC。
  */
@@ -148,10 +179,14 @@ export function buildStillsSlideshowFfmpegArgs(params: {
   }
   const totalDur = shots.reduce((a, s) => a + s.durationSec, 0)
 
-  // 图片输入：每张 -loop 1 -t d，视频流独立
+  // 素材输入：still → -loop 1 -t d -i；clip → 只 -i（原始时长走 trim 截）
   const inputs: string[] = []
   shots.forEach((s) => {
-    inputs.push('-loop', '1', '-t', s.durationSec.toFixed(3), '-i', s.imagePath)
+    if ((s.kind ?? 'still') === 'clip') {
+      inputs.push('-i', s.imagePath)
+    } else {
+      inputs.push('-loop', '1', '-t', s.durationSec.toFixed(3), '-i', s.imagePath)
+    }
   })
   // 字幕 PNG 输入（无循环，透明层，overlay 用 enable 控时窗）
   capPngPaths.forEach((p) => {
@@ -161,23 +196,27 @@ export function buildStillsSlideshowFfmpegArgs(params: {
   if (bgmPath) {
     inputs.push('-i', bgmPath)
   } else {
-    // 内联合成 ambient bed：两个正弦 A3(220) + E4(330) 叠加（纯五度，柔和），44.1k stereo，长度=总时长。
-    // 极低音量（~5% 之后再被 volume 拉低）——放这只是给成片一个音轨占位，让 FB 不当无声视频对待。
+    // 内联合成 ambient pad：C 大调五声音阶的三音叠加（C4 262 · E4 330 · G4 392），44.1k stereo。
+    // 极低基础音量 + 慢速振幅调制模拟呼吸感——不当真乐用，只做「有音轨」的合规占位。
     inputs.push(
       '-f', 'lavfi',
       '-t', totalDur.toFixed(3),
-      '-i', `aevalsrc=0.10*sin(2*PI*220*t)+0.06*sin(2*PI*330*t):s=44100:c=stereo`,
+      '-i', `aevalsrc=(0.09*sin(2*PI*262*t)+0.07*sin(2*PI*330*t)+0.06*sin(2*PI*392*t))*(0.85+0.15*sin(2*PI*0.25*t)):s=44100:c=stereo`,
     )
   }
 
   // ── filter_complex ──
   const filters: string[] = []
 
-  // 每一格 ken-burns
+  // 每一格：static 走 ken-burns；clip 走 scale/crop/trim
   const kenLabels: string[] = []
   shots.forEach((s, i) => {
     const label = `k${i}`
-    filters.push(buildKenburnsChain(i, s.durationSec, label))
+    if ((s.kind ?? 'still') === 'clip') {
+      filters.push(buildClipChain(i, s.durationSec, s.clipStartSec ?? 0, label))
+    } else {
+      filters.push(buildKenburnsChain(i, s.durationSec, label))
+    }
     kenLabels.push(label)
   })
 

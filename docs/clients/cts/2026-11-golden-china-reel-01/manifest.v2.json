@@ -1,0 +1,44 @@
+{
+  "_notes": [
+    "Reel v2 — viral 库指导下重出",
+    "Hook 模式: Instagram-vs-Reality (viral_reference_library travel/brand 类目 top-3 之一,",
+    "  代表参考: 'Instagram 🥰 Vs Reality 😨' 234M 观看)",
+    "混编 5 格 = 3 静图（ken-burns）+ 2 真视频（Pixabay Videos, 直链下载, Pixabay Content License）",
+    "总时长 15.00s 恰好卡硬顶（Ray FB 实测线索率 <15s）",
+    "零 provider 调用 / 零 spend / 零 DB / 零上传"
+  ],
+  "shots": [
+    {
+      "kind": "still",
+      "path": "stills/01-great-wall-autumn.jpg",
+      "durationSec": 1.8,
+      "caption": "What you post"
+    },
+    {
+      "kind": "clip",
+      "path": "clips/267748_large.mp4",
+      "clipStartSec": 2.0,
+      "durationSec": 2.7,
+      "caption": "What **CTS** gets you"
+    },
+    {
+      "kind": "clip",
+      "path": "clips/1542-148219696_medium.mp4",
+      "clipStartSec": 5.0,
+      "durationSec": 3.5,
+      "caption": "Beijing to Xi'an. Real China."
+    },
+    {
+      "kind": "still",
+      "path": "stills/03-terracotta-warriors.jpg",
+      "durationSec": 3.5,
+      "caption": "**12 days** · zero visa for NZ passports"
+    },
+    {
+      "kind": "still",
+      "path": "stills/04-forbidden-city-rooftops.jpg",
+      "durationSec": 3.5,
+      "caption": "Depart 16 Nov · from **NZ$4,999** · Link in bio"
+    }
+  ]
+}
