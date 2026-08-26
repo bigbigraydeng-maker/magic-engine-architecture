@@ -595,15 +595,23 @@ describe('ingestMetaLead → Mailchimp 出口', () => {
     })
 
     expect(subscribeMock).toHaveBeenCalledTimes(1)
+    // ⚠️ SOURCE 和 tag 必须是**精确字符串** `facebook_leadgen` —— 跟原 #1188
+    // Task Contract 客户 audience 自动化/分组条款硬绑。改动 = 打断客户
+    // segmentation。合同 5425534006 明确锁定这两个精确值。
     expect(subscribeMock).toHaveBeenCalledWith(
       expect.objectContaining({
         audienceId: 'dda97b7e61',
         email: 'chris@example.com',
         firstName: 'Chris',
         lastName: 'Brown',
-        source: 'Meta Lead Form',
+        source: 'facebook_leadgen',
+        tag: 'facebook_leadgen',
       }),
     )
+    // 再显式钉一次两个精确值，绝不放过。
+    const passedInput = subscribeMock.mock.calls[0][0] as { source: string; tag: string }
+    expect(passedInput.source).toBe('facebook_leadgen')
+    expect(passedInput.tag).toBe('facebook_leadgen')
     expect(res.mailchimp).toEqual({ status: 'subscribed' })
 
     // mailchimp_result 落进触点 metadata（不是新表）

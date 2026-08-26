@@ -541,10 +541,11 @@ async function syncMailchimp(input: SyncMailchimpInput): Promise<SubscribeMember
       email,
       firstName: input.parsed.firstName,
       lastName: input.parsed.lastName,
-      // SOURCE merge field —— Mailchimp 后台分组用。写死 Meta Lead Form 表明
-      // 这个人是从 Facebook 表单进来的，不是网站 newsletter。
-      source: 'Meta Lead Form',
-      tag: 'meta-lead',
+      // SOURCE merge field + tag —— Mailchimp 后台分组用。**精确字符串**
+      // `facebook_leadgen`，跟原 #1188 合同里客户自动化 / 分组条款硬绑；两处
+      // 都不许再改（改动 = 打断客户 audience 自动化 segment）。
+      source: 'facebook_leadgen',
+      tag: 'facebook_leadgen',
     })
   } catch {
     // subscribeMember 应该永远不 throw，兜底防御。
