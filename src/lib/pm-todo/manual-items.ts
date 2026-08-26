@@ -695,15 +695,32 @@ async function pushPriceGateItems(
  * 平台候选到了复查日期 —— 接入既有 pm-daily-todo 管道（NZ 工作日早晨已在跑,
  * render.yaml 已排班,不需要新开 cron)，而不是只靠"当值 FDE 记得每月第一个
  * 周一"这句日历式 SOP。见 platform-candidate-reviews.ts 头注。
+ *
+ * 🔴 日期判断走 Pacific/Auckland 时区，不能用 `Date.parse('YYYY-MM-DD')`：
+ * 后者把日期解释为 UTC 零点，而 cron 在 19:00 UTC 跑（次日 07:00/08:00 NZDT），
+ * 复查日为 2026-09-28 时，周一 08:00 NZDT 的运行时刻仍是 2026-09-27T19:00Z，
+ * 判据 `now.getTime() < due` 就跳过，提醒直到周二才出现（周五到期拖到下周一）。
  */
+function nzDateStr(now: Date): string {
+  // en-CA 输出 'YYYY-MM-DD' 便于字符串比较（同 formatted YYYY-MM-DD reviewDate）
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Pacific/Auckland',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now)
+}
+
 export function pushPlatformCandidateReviewItems(
   items: ManualItem[],
   now: Date,
   reviews: PlatformCandidateReview[] = PLATFORM_CANDIDATE_REVIEWS,
 ): void {
+  const nzToday = nzDateStr(now)
   for (const c of reviews) {
-    const due = Date.parse(c.reviewDate)
-    if (Number.isNaN(due) || now.getTime() < due) continue
+    // reviewDate 必须是 'YYYY-MM-DD' 格式（platform-candidate-reviews.ts 类型约束）
+    // YYYY-MM-DD 字符串按字典序比较即等于日期比较；nzToday >= reviewDate 即"NZ 当天或已过期"
+    if (nzToday < c.reviewDate) continue
     items.push({
       kind: 'platform_candidate_review_due',
       client_id: 'infra',

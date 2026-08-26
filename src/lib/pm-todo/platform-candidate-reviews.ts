@@ -24,4 +24,10 @@ export interface PlatformCandidateReview {
 export const PLATFORM_CANDIDATE_REGISTRY_URL =
   'https://github.com/bigbigraydeng-maker/magic-engine/blob/main/docs/registry/platform-candidates.md'
 
-export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = []
+export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
+  {
+    // 必须与 docs/registry/platform-candidates.md 里的候选名完全一致
+    name: '借助 Claude Design 生成品牌 VI 视觉资产（logo · 品牌手册 · 视觉规范）',
+    reviewDate: '2026-09-27',
+  },
+]
