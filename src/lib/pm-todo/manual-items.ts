@@ -67,6 +67,8 @@ export type ManualItemKind =
   | 'dnc_maybe_wrong'
   /** 客人在 Facebook 私信里像是说了「别再联系」，而判据从来读不到私信 —— 只提示，不自动封 */
   | 'dm_maybe_stop'
+  /** 平台候选（docs/registry/platform-candidates.md）到了复查日期 —— 见 me-platform-tier-gate skill */
+  | 'platform_candidate_review_due'
   | CommentScopeTodoKind
   /** 执行内核停手 / 等审批 / 被规则挡下 —— 必须有人看见，不许死在日志里 */
   | 'kernel_needs_human'
@@ -138,6 +140,11 @@ import { containsPriceClaim } from '@/lib/content/price-claim'
 import { judgeOutgoingPost } from '@/lib/content/price-claim-gate'
 import { SOURCE_LABELS } from '@/lib/assets/provenance'
 import { isDoNotContact, type DncTouch } from '@/lib/crm/dnc'
+import {
+  PLATFORM_CANDIDATE_REVIEWS,
+  PLATFORM_CANDIDATE_REGISTRY_URL,
+  type PlatformCandidateReview,
+} from './platform-candidate-reviews'
 
 export function daysAgo(iso: string | null, now: Date): number | null {
   if (!iso) return null
@@ -201,6 +208,8 @@ export async function loadManualItems(
   await pushVideoCreditsItem(supabase, items, now)
   // 按时没跑 / 查不出跑没跑 —— PM 2026-08-03 要求「不能完成需要有报错」
   await pushCronHealthItems(supabase, items, now)
+  // 平台候选到了复查日期 —— 不落库、不查表，纯本地日期判断
+  pushPlatformCandidateReviewItems(items, now)
   // 目标数字口径对不上 —— 错的方向感比没数字更危险(2026-08-03 差点据此给出反向建议)
   await pushBaselineItems(supabase, items)
   // 出片工单排队但没人干活 —— 装配跑在一台 Mac 上，不开机就没人做，而队列里看不出来
@@ -678,6 +687,47 @@ async function pushPriceGateItems(
         '两条路选一条：① 最快 —— 把价格从文案里去掉；' +
         '② 如果那张图确实是客户实拍，去素材库点开它，把来源改成「客户实拍（已确认）」，再回来重发。',
       href: `https://app.magicengine.com.au/dashboard/clients/${post.client_id}/assets`,
+    })
+  }
+}
+
+/**
+ * 平台候选到了复查日期 —— 接入既有 pm-daily-todo 管道（NZ 工作日早晨已在跑,
+ * render.yaml 已排班,不需要新开 cron)，而不是只靠"当值 FDE 记得每月第一个
+ * 周一"这句日历式 SOP。见 platform-candidate-reviews.ts 头注。
+ *
+ * 🔴 日期判断走 Pacific/Auckland 时区，不能用 `Date.parse('YYYY-MM-DD')`：
+ * 后者把日期解释为 UTC 零点，而 cron 在 19:00 UTC 跑（次日 07:00/08:00 NZDT），
+ * 复查日为 2026-09-28 时，周一 08:00 NZDT 的运行时刻仍是 2026-09-27T19:00Z，
+ * 判据 `now.getTime() < due` 就跳过，提醒直到周二才出现（周五到期拖到下周一）。
+ */
+function nzDateStr(now: Date): string {
+  // en-CA 输出 'YYYY-MM-DD' 便于字符串比较（同 formatted YYYY-MM-DD reviewDate）
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Pacific/Auckland',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now)
+}
+
+export function pushPlatformCandidateReviewItems(
+  items: ManualItem[],
+  now: Date,
+  reviews: PlatformCandidateReview[] = PLATFORM_CANDIDATE_REVIEWS,
+): void {
+  const nzToday = nzDateStr(now)
+  for (const c of reviews) {
+    // reviewDate 必须是 'YYYY-MM-DD' 格式（platform-candidate-reviews.ts 类型约束）
+    // YYYY-MM-DD 字符串按字典序比较即等于日期比较；nzToday >= reviewDate 即"NZ 当天或已过期"
+    if (nzToday < c.reviewDate) continue
+    items.push({
+      kind: 'platform_candidate_review_due',
+      client_id: 'infra',
+      client_name: 'Magic Engine 平台治理',
+      what: `平台候选「${c.name}」到了复查日期（${c.reviewDate}），该扫一遍有没有新客户/新行业的硬证据了`,
+      how: '打开候选登记表，看这条候选的「硬证据进度」列要不要更新；凑齐晋升判据就走 2 审提案，没有就把「复查日」列往后推一个月（同时更新 platform-candidate-reviews.ts 里的日期，否则这条提醒下次不会再出现）',
+      href: PLATFORM_CANDIDATE_REGISTRY_URL,
     })
   }
 }
