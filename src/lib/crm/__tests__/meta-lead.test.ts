@@ -259,19 +259,12 @@ function mockDb(opts: MockDbOptions = {}) {
           return { in: () => Promise.resolve({ error: null }) }
         },
         select: () => ({
-          // evaluateDnc 走 fetchAll 分页：.eq().order().range() 才落到 promise。
-          eq: () => {
-            const builder = {
-              order: () => builder,
-              range: () =>
-                Promise.resolve(
-                  touchpointReadError
-                    ? { data: null, error: { message: touchpointReadError } }
-                    : { data: dncData, error: null },
-                ),
-            }
-            return builder
-          },
+          eq: () =>
+            Promise.resolve(
+              touchpointReadError
+                ? { data: null, error: { message: touchpointReadError } }
+                : { data: dncData, error: null },
+            ),
         }),
         upsert: (row: Record<string, unknown>, opts: Record<string, unknown>) => {
           touchpointUpserts.push(row)
