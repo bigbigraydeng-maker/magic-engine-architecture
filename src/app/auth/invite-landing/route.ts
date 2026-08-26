@@ -202,9 +202,17 @@ export async function POST(request: NextRequest) {
     },
   )
 
+  // Use the unified `type: 'email'` — the same call the shipped
+  // /api/auth/verify-otp path uses in production (see its inline comment:
+  // 'email' matches both signup-issued and magiclink-issued tokens that
+  // GoTrue can emit). Passing the URL's raw 'invite' / 'magiclink' rejected
+  // production tokens with "Email link is invalid or has expired"
+  // (Ray canary 2026-08-27 03:27:09 NZST). The URL `type` is still
+  // validated against ALLOWED_TYPES above for shape; it just doesn't
+  // determine the verifyOtp discriminator any more.
   const { error } = await supabase.auth.verifyOtp({
     token_hash: tokenHash,
-    type: type as 'invite' | 'magiclink',
+    type: 'email',
   })
 
   if (error) {

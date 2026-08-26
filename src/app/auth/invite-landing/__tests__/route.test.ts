@@ -127,6 +127,40 @@ describe('/auth/invite-landing CSRF gates', () => {
 
   // ── POST CSRF gates ──────────────────────────────────────────────────
 
+  // ── CONTRACT (hotfix 2026-08-27): verifyOtp type must be the unified 'email' ──
+
+  it('CONTRACT: passes type "email" to verifyOtp regardless of the URL type (both invite- and magiclink-issued tokens redeem)', async () => {
+    // Production canary at 03:27:09 NZST 2026-08-27 failed here: the
+    // email link carried `type=magiclink`, POST reached verifyOtp with
+    // `type: 'magiclink'`, and Supabase GoTrue rejected it with
+    //   "Email link is invalid or has expired"
+    // The shipped, working /api/auth/verify-otp path uses the unified
+    // `type: 'email'` for exactly this reason (its inline comment
+    // documents that 'email' matches both signup- and magiclink-issued
+    // tokens). This regression locks that same contract for the
+    // one-click invite landing.
+    cookieState.store.set('me-invite-nonce', 'nonce-abc')
+
+    await POST(postReq({
+      fields: { token_hash: 'H_MAGIC', type: 'magiclink', client_id: CLIENT_B, nonce: 'nonce-abc' },
+    }))
+    expect(mocks.verifyOtp).toHaveBeenCalledWith({
+      token_hash: 'H_MAGIC',
+      type: 'email',
+    })
+
+    mocks.verifyOtp.mockClear()
+    cookieState.store.set('me-invite-nonce', 'nonce-abc')
+
+    await POST(postReq({
+      fields: { token_hash: 'H_INVITE', type: 'invite', client_id: CLIENT_B, nonce: 'nonce-abc' },
+    }))
+    expect(mocks.verifyOtp).toHaveBeenCalledWith({
+      token_hash: 'H_INVITE',
+      type: 'email',
+    })
+  })
+
   it('POST accepts a valid same-origin + matching nonce and lands the invitee', async () => {
     cookieState.store.set('me-invite-nonce', 'nonce-abc')
     const res = await POST(postReq({
