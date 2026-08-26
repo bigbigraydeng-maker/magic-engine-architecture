@@ -51,9 +51,9 @@ description: Magic Engine 平台层级门。当出现以下任一情况时必须
 - **例**：Beverage Playbook（瓶装水行业的 6 支柱权重 + 内容模板 + 决策规则）、Real Estate Playbook
 
 ### L3 Connector（外部连接）
-- **是什么**：外部执行手，作为 adapter 挂在既有 Capability 下；ME 不控制执行、不做中介
-- **判据**：是外部执行 + ME 只是接入 / 不控制过程 + 可挂可摘（不同客户可以有不同 connector 组合）
-- **例**：DataForSEO Connector、Meta Ads Connector、Publer Connector、KOL agency 名单库
+- **是什么**：ME 与外部系统之间受治理、可插拔的 Read / Act / Listen / Verify 边界，作为 adapter 挂在既有 Capability 下（定义见 [ME_PRODUCT_DEFINITION.md §7](../../../docs/strategy/ME_PRODUCT_DEFINITION.md)）
+- **判据**：对接外部系统的 Discover / Read / Act / Listen / Verify / Govern 中至少一项 + provider-specific 逻辑留在 adapter 内、不泄漏进 shared runtime + 可挂可摘（不同客户可以有不同 connector 组合）——不要求"不受 ME 控制"，受治理的执行 / 验证同样属于 L3
+- **例**：DataForSEO Connector（受治理只读）、Meta Ads Connector（执行获授权动作）、Publer Connector、KOL agency 名单库
 
 ### L4 Client Configuration（客户配置）
 - **是什么**：单客户独有；通过配置注入既有 Capability 或 Playbook
