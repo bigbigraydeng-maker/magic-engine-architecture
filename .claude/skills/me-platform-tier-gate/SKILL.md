@@ -7,7 +7,12 @@ description: Magic Engine 平台层级门 · 跟班式产品经理。**任何时
 
 ## 存在的原因
 
-**原始事故（2026-08-27 · 触发 v1 建立）**：主 agent 在给 HBay 客户做方案时，因客户提了 KOL 种草需求，就提议给 ME 新增"第七条能力线 · KOL 智能层"——把外部执行连接抬到与 SEO / AI 可见度同级的平台底层能力。PM 抓住，v1 skill 设立。
+**原始事故（2026-08-27 · 触发 v1 建立）**：主 agent 在给 HBay 客户做方案时，因客户提了 KOL 种草需求，就提议给 ME 新增"第七条能力线 · KOL 智能层"——把外部执行连接（KOL/agency）抬到与 SEO / AI 可见度同级的平台底层能力。PM 抓住，v1 skill 设立。
+
+事故的根因不是分类错，是**默认方向错 + 触发时机失灵 + 话术能绕过既有约束**：
+- agent 没自认为在做"平台决策"，只是顺手写"能力线"；既有的 Domain Semantics Gate / Reuse Statement 在决策时刻没被触发
+- 一旦包装成"智能层""XX Intelligence"，任何外部执行域都能"通过"既有的软性判据
+- 分类拿不准时缺省选择往上抬（听起来更 impressive），而不是往下压（更保守 / 更 reuse-friendly）
 
 **v1 → v2 升级动机（2026-08-27 同日）**：v1 落仓半天内 PM 发现更深层问题——开发过程中会**持续**遇到能力边界 / 新增能力 / module / adaptor 归属问题，而 v1 只在"提议新增能力线"这一刻触发。真实开发节奏是**边讨论边推进**，不是"某一刻停下来做决策"——所以事故会以"顺手写下去"的形式反复发生。
 
@@ -66,13 +71,13 @@ PM 在对话里说 `tier` / `层级门` / `分层` / `跟班` / `跑 gate` 等�
 
 ---
 
-## 四级分层（v1 结构保留）
+## 四级分层（含判据）
 
 ### L1 Capability（平台能力，进 ME 底盘）
 - **是什么**：ME 智能层底盘，跨所有客户 / 所有行业复用；垂直版本共享
 - **判据**（必须全部通过）：
-  1. 换客户测试通过
-  2. 换行业测试通过
+  1. 换客户测试通过（语义级 · 见红线 4）
+  2. 换行业测试通过（语义级 · 见红线 5）
   3. 是 ME 智能层输出，不是外部执行手
   4. 归属明确：ME 6 支柱之一（SEO / 社媒 / 广告 / 口碑 / AI 可见度 / 竞品）——支柱名从 [`docs/registry/pillars.md`](../../../docs/registry/pillars.md) 动态读取（未来 PM 加第 7 支柱时 skill 自动跟进），或平台基础设施（Kernel / Measurement Contract / Growth Contract / Attribution / Memory / Verification 机制）
 - **例**：AI 可见度追踪、竞品监控引擎、内容归因引擎、6 支柱打分器、Measurement Contract、Client-scoped Memory
@@ -80,50 +85,99 @@ PM 在对话里说 `tier` / `层级门` / `分层` / `跟班` / `跑 gate` 等�
 ### L2 Industry Playbook / Profile / Version（行业剧本 / 垂直版本）
 - **是什么**：一个行业 / 一个 ME 垂直版本内所有客户复用；跨行业 / 跨版本不复用
 - **判据**：换客户测试通过 + 换行业测试**不通过**
-- **禁止装的东西**：单客户事实、单客户名、单客户业务数字——一律下沉 L4
+- **禁止装的东西**：单客户事实、单客户名、单客户业务数字——一律下沉 L4（见红线 7）
 - **绑定 ME 垂直版本**：ME 地产版 / ME 旅游版 / ME 电商版 都属于 L2 Playbook 一种具体形态。归属的版本从 [`docs/registry/product-versions.md`](../../../docs/registry/product-versions.md) 里选择或申请新增（新增是 PM 拍板项）
-- **例**：Beverage Playbook（瓶装水行业 6 支柱权重 + 内容模板）、ME 地产版核心引擎、ME 旅游版核心引擎
+- **例**：Beverage Playbook（瓶装水行业 6 支柱权重 + 内容模板 + 决策规则）、ME 地产版核心引擎、ME 旅游版核心引擎
 
-### L3 Connector（外部连接）
-- **是什么**：外部执行手，作为 adapter 挂在既有 Capability 下；ME 不控制执行、不做中介
-- **判据**：是外部执行 + ME 只是接入 / 不控制过程 + 可挂可摘
-- **例**：DataForSEO Connector、Meta Ads Connector、Publer Connector、KOL / MCN agency 名单库
+### L3 Connector（外部连接 · Codex 复审修正 · 与 ME_PRODUCT_DEFINITION §7 对齐）
+- **是什么**：ME 与外部系统之间受治理、可插拔的 Read / Act / Listen / Verify 边界，作为 adapter 挂在既有 Capability 下（定义见 [ME_PRODUCT_DEFINITION.md §7](../../../docs/strategy/ME_PRODUCT_DEFINITION.md)）
+- **判据**：对接外部系统的 Discover / Read / Act / Listen / Verify / Govern 中至少一项 + provider-specific 逻辑留在 adapter 内、不泄漏进 shared runtime + 可挂可摘（不同客户可以有不同 connector 组合）——不要求"不受 ME 控制"，受治理的执行 / 验证同样属于 L3
+- **例**：DataForSEO Connector（受治理只读）、Meta Ads Connector（执行获授权动作）、Publer Connector、KOL agency 名单库
 
 ### L4 Client Configuration（客户配置）
 - **是什么**：单客户独有；通过配置注入既有 Capability 或 Playbook
 - **判据**：只服务一个客户 + 通过配置 / approved evidence / private memory 注入
-- **例**：HBay 的 "25 万年" 表述、CTS 6 城 baker IP、Roman 的 30 天 rebrand 红线、HBay VI 视觉手册 v1（单客户先做 · 未来跨客户升 L2 候选）
+- **例**：HBay 的 "25 万年" 表述（未证实需下架）、CTS 6 城 baker IP、Roman 的 30 天 rebrand 红线、HBay VI 视觉手册 v1（单客户先做 · 未来跨客户升 L2 候选）
 
 ---
 
-## 每层 owner 与仲裁链（v1 保留）
+## 每层 owner 与仲裁链（Codex 复审修正 · 纯技术分歧不升 PM）
+
+分类系统没有 owner = 分类没有落点 = 每次分歧要现场重新协商 = 治理只在无争议时生效。为此显式绑定每层 owner：
 
 | 层 | 提案 owner | 复审 owner | 分歧仲裁 |
 |---|---|---|---|
-| **L1 Capability** | 提案 agent | **子牙（架构）+ 魏征（挑刺）** 双审 | PM |
-| **L2 Playbook / Profile / Version** | 行业负责 FDE | **华佗（分析视角）** | PM |
-| **L3 Connector** | 提案 agent | **鲁班（执行视角）** + 该 Connector 域负责人 | 该 Connector 域负责人 → PM |
-| **L4 Client Configuration** | 当值 FDE | 无强制复审 | 当值 FDE → PM（若涉及跨客户共享风险）|
+| **L1 Capability** | 提案 agent | **子牙（架构）+ 魏征（挑刺）** 双审 | 子牙 + 魏征联合拍板；仅涉及商业决策或新增支柱时升级 PM |
+| **L2 Playbook / Profile / Version** | 行业负责 FDE | **华佗（分析视角）** | 华佗拍板；仅涉及商业决策或新增支柱时升级 PM |
+| **L3 Connector** | 提案 agent | **鲁班（执行视角）** + 该 Connector 域负责人 | 该 Connector 域负责人拍板；仅涉及商业决策或新增支柱时升级 PM |
+| **L4 Client Configuration** | 当值 FDE | 无强制复审（客户配置属客户私域）| 当值 FDE 拍板；仅涉及跨客户共享风险或商业决策时升级 PM |
 
-**分歧仲裁链**：`agent 提案 → 复审 owner 判 Y ≠ X → 该层 owner 拍板 → 拿不准 → 抛 PM`
+**分歧仲裁链**（写死流程）：
 
-**每层 owner 职责**：定期扫本层实现、L1 owner 额外扫 `platform-candidates.md` 评估晋升成熟度、写不出 owner 的层承认今天治理不起来。
+```
+agent 提案层级 X
+     ↓
+复审 owner 判定 Y ≠ X
+     ↓
+该层 owner 拍板（agent 与复审 owner 之间的分歧由 owner 断）
+     ↓
+纯技术分类不确定（架构落点拿不准）→ 该层技术 owner（子牙 / 魏征 / 华佗 / 鲁班 / 该 Connector 域负责人）继续仲裁到底，不升级 PM——PM 不决策架构与接口（见 CLAUDE.md §2 PM 角色边界）
+     ↓
+涉及商业决策 / 涉及新增支柱
+     ↓
+抛 PM
+```
+
+**每层 owner 的职责**：
+- 定期扫本层实际实现，看有没有本该属于其他层的东西溜进来
+- L1 owner 额外负责扫 [`docs/registry/platform-candidates.md`](../../../docs/registry/platform-candidates.md)，评估晋升成熟度
+- 写不出 owner 的层 = 承认这层今天治理不起来，要么先删要么标 TODO 记进 ROADMAP
 
 ---
 
-## 红线（v1 保留 · 触碰即拒 / 必改层）
+## 红线（触碰即拒 / 必改层，不接受"下不为例"）
 
-1. **禁止"包装升级"**：禁止以任何名义（"智能层""分析层""XX Intelligence""XX Engine""XX 能力线""XX 支柱"）为**单一执行域**新设平台级能力
-2. **禁止客户 / 行业事实进 shared runtime**：只能进 Playbook / Profile / Configuration
-3. **单客户需求默认落 L4/L2**，禁止**直接**升 L1；登记进 [`docs/registry/platform-candidates.md`](../../../docs/registry/platform-candidates.md)；L1 晋升硬证据 ≥2 已付费客户跨行业或 ≥3 客户事实复制；L1 提案强制 2 审
-4. **换客户测试（语义级）**：`换客户后代码的默认行为 / 权重 / prompt / 判断规则有没有一条只对首客户成立？`不接受"clientId 是参数"作为答案
-5. **换行业测试（语义级）**：`换行业后有没有一条只对首行业成立？`
-6. **新增 L1 Capability 必须走五道 Build Gate**：本 skill 是 Gate 4（Architecture/Reuse Gate）的前置子步骤，不替代任何后续 Gate
-7. **L2 Playbook 只装行业级 / 版本级判断**：单客户事实一律下沉 L4
+### 红线 1 · 禁止"包装升级"
+禁止以任何名义——包括"智能层""分析层""XX Intelligence""XX Engine""XX 能力线""XX 支柱"——为**单一执行域**新设平台级能力。执行域上的智能需求默认归入：
+- 既有 6 支柱的能力扩展（如 KOL discovery 挂在"社媒"或"口碑"能力下作为分析场景）
+- 或 L2 Industry Playbook
+- 新设独立 L1 能力线一律标记为 PM 拍板项，不由 agent 自己决定
+
+*为什么*：HBay 事故用的正是"KOL 智能层"的包装，绕过了"禁止 Connector 升 Capability" 的字面禁令。防的必须是动作不是名词。
+
+### 红线 2 · 禁止客户 / 行业事实进 shared runtime
+客户名、客户 ID、客户业务数字、行业硬编码判断，禁止进 `src/lib/` 共享代码路径、shared prompt template、平台默认权重。只能进 Playbook / Profile / Configuration / private memory。
+
+### 红线 3 · 单客户 Capability/Playbook 语义默认落 L4/L2，禁止**直接**升 L1（Codex 复审修正 · 不含符合 L3 判据的 Connector）
+- 本红线只约束单客户提出的 **Capability / Playbook 语义**——即声称"ME 智能层该新增/扩展一种判断规则、打分权重、决策逻辑"的需求。**符合 L3 判据的 Connector 需求不适用本红线**：provider-specific adapter 挂在既有 Capability 下、不同客户用不同 Connector 组合，本就是 L3 判据允许的常态，不需要先落 L4/L2 再登记候选，也不占用"L1 候选"名额
+- 命中本红线的单客户 Capability/Playbook 需求，默认落 L4 或 L2 实现 + **登记为"L1 候选"**进入 [`docs/registry/platform-candidates.md`](../../../docs/registry/platform-candidates.md)（不是 console.log，进入可复查的管道，遵循 "管道不许断头"）
+- **禁止的是"跳过 L4/L2 直接建 L1"**——不是禁止发现管道本身
+- L1 晋升硬证据白名单：≥2 个**已付费**客户分属不同行业提出同一需求，或某 L2/L4 实现已在 ≥3 客户处出现事实复制
+- L1 升级提案强制走"大任务 2 审"：子牙（架构）+ 魏征（挑刺），"我自己审过了"不算
+
+*为什么*：ME 的方法论是 Customer Zero——真正该建的能力，出生时总是只有一个客户在要。全禁会杀死发现管道；允许直建又会打开污染平台的口子。中间路是"先落低层 + 登记候选 + 硬证据升级"，但这条路只该拦"能力/剧本"级野心，不该误伤本就该走 L3 的 Connector 接入（见下方 HBay 自检示范：判定为 L3 时不进候选表）。
+
+### 红线 4 · 换客户测试（语义级）
+问句必须严格版：**"换客户后，这段代码的默认行为、权重、prompt、判断规则，有没有一条只对首客户成立？"**
+
+不接受回答"clientId 是参数"——参数化不等于语义通用。必须列举 ≥2 个具体反例客户（如从 HBay 换到 CTS 换到 Roman），逐条推演默认行为是否需要改。
+
+### 红线 5 · 换行业测试（语义级）
+问句：**"换行业后（如从瓶装水换到地产换到旅游），这段代码的默认行为、权重、prompt、判断规则，有没有一条只对首行业成立？"**
+
+同样列举 ≥2 个具体反例行业逐条推演。
+
+### 红线 6 · 新增 L1 Capability 必须走五道 Build Gate
+本 skill 是**五道 Build Gate 里 Architecture/Reuse Gate 的前置子步骤**（不是并列第六道）。冲突时以后续 gate 为准。tier-gate 判定为 L1 候选后，仍需完整走 Repository Fact → Domain Semantics → Product → Architecture/Reuse → GO BUILD 五道 gate。tier-gate 不替任何后续 gate 背书。
+
+### 红线 7 · L2 Playbook 只装行业级 / 版本级判断
+Industry Playbook / Profile / Version 只能装：行业级 / 版本级的 6 支柱权重、内容模板、决策规则、默认参数。**单客户事实一律下沉 L4**——即使这个客户是这个行业的第一个 / 唯一一个，也不能把它的事实硬编码进 Playbook。
 
 ---
 
-## PM 拍板项（v1 保留 · 商业模式 / 产品战略）
+## PM 拍板项（不进红线，明确交回 PM）
+
+以下决策属**商业模式 / 产品战略**，不由 skill 冻结，遇到时明确标记"PM 待拍板"抛回：
 
 - ME 是否从 Connector 抽佣 / 是否做外部执行中介
 - ME 是否新增第 7 支柱（`docs/registry/pillars.md` 未来更新）
@@ -131,7 +185,7 @@ PM 在对话里说 `tier` / `层级门` / `分层` / `跟班` / `跑 gate` 等�
 - L1 升级候选进入正式提案的时机
 - 定价 / 服务档位 / setup fee 结构
 
-**规则**：agent 不能替 PM 做以上决策，也不能借"技术上更好"名义把商业选择包装成技术判据。
+规则：**agent 不能替 PM 做以上决策，也不能借"技术上更好"名义把商业选择包装成技术判据**。
 
 ---
 
@@ -150,6 +204,7 @@ PM 在对话里说 `tier` / `层级门` / `分层` / `跟班` / `跑 gate` 等�
 - 单客户判定 / 日常代码 review / 讨论已有能力的挂载点
 - 不涉及新增 L1 / 不涉及跨 3+ 客户共享逻辑 / 不涉及新支柱或新版本
 - 明显归属既有能力线时
+- 判定为 L3 Connector 且不占用候选名额时（按红线 3 直接归位）
 
 **Inline 三句话结构**：
 1. **[跟班 · Tier]**：层级判定 + 挂在哪 + 要不要登记
@@ -165,32 +220,7 @@ PM 在对话里说 `tier` / `层级门` / `分层` / `跟班` / `跑 gate` 等�
 - Reuse Statement 里出现新 Capability 名
 - PM 明说 `跑一次 full`
 
-Full Report 完整格式：
-
-```
-## Platform Tier Classification（Full）
-
-**被判定对象**: [一句话描述]
-**建议层级**: [L1 / L2 / L3 / L4]
-**归属**（若声明 L1，必填一项）:
-- [ ] ME 6 支柱之一：[哪一柱]
-- [ ] 平台基础设施：[Kernel / Contract / Attribution / Memory / Verification / 其他]
-- [ ] 都不是 → 强制降为 L2 或 PM 拍板"是否新增支柱 / 版本"
-**换客户测试**: ✓/✗
-- 反例客户 1（[名字]）: [推演]
-- 反例客户 2（[名字]）: [推演]
-**换行业测试**: ✓/✗
-- 反例行业 1（[名字]）: [推演]
-- 反例行业 2（[名字]）: [推演]
-**智能层 or 执行手**: [判断]
-**红线检查**（7 条逐条 ✓/✗）
-**PM 待拍板项**（若涉及）
-**结论**:
-- 原本想法层级 → Skill 判定层级
-- 若不一致：改口话术
-- 若 L1/L2 候选：登记 candidates 的 commit SHA / PR 链接
-- 下一步：[Inline 继续 / 走五道 Build Gate / 抛 PM / 拒]
-```
+Full Report 完整格式见下方"强制输出格式"段。
 
 ### 模式选择判据（agent 自决）
 从 Inline 开始，触及以下任一 → 升 Full：
@@ -216,7 +246,7 @@ Inline 判定后建议登记时，用轻量条目：
 ```
 
 **PM 响应**：
-- `记` / `记下` / `mark it` → agent 追加进 `docs/registry/platform-candidates.md`，走 Low bar schema（可以先只填 5 个字段，其余等后续）
+- `记` / `记下` / `mark it` → agent 追加进 `docs/registry/platform-candidates.md`，走 Low bar schema（可以先只填 5 个字段，其余等后续），并同步登记进 [`src/lib/pm-todo/platform-candidate-reviews.ts`](../../../src/lib/pm-todo/platform-candidate-reviews.ts) 让复查日到期自动下发待办
 - `不记` / `skip` → 跳过登记，继续原任务
 - `跑 full` → 升级到 Full Report + High bar 完整登记
 
@@ -256,51 +286,115 @@ agent **必须**按以下顺序执行：
 
 ---
 
-## Reuse Statement 对账（v1 保留）
+## Reuse Statement 对账（防止决策与实现漂移）
 
-本 skill 决策时刻运行；Reuse Statement 交付时刻填写。中间隔实现过程易漂移。
+本 skill 在**决策时刻**运行，Reuse Statement 在**交付时刻**填写。中间隔着实现过程，容易出现"决策时归 L4 / 实现时写进 shared runtime"的漂移。
 
-**强制对账行**：
-> 本次实现落点与 tier-gate 决策时的分类是否一致？若不一致，列出差异并说明为何。
+强制对账行（每份 Reuse Statement 必答）：
+> **本次实现落点与 tier-gate 决策时的分类是否一致？若不一致，列出差异并说明为何。**
 
-禁止直接粘贴决策时分类文字应付了事。
+禁止直接粘贴决策时的分类文字应付了事。
 
 ---
 
-## 默认降级 · 强制候选登记（v1 保留 + v2 加双门槛）
+## 默认降级 · 强制候选登记
 
-分类拿不准时——**一律先归更低层**。同时强制：
+分类拿不准时——**一律先归更低层**（拿不准是 L1 还是 L2，先归 L2；拿不准是 L2 还是 L4，先归 L4；拿不准是 L1 还是 L3，先归 L3）。
+
+**同时强制**：
 - 登记进 [`docs/registry/platform-candidates.md`](../../../docs/registry/platform-candidates.md)（Low bar / High bar 按情况）
-- 复查节奏：月度扫描 + 季度 PM 审阅
-- 凑齐硬证据 → 自动触发晋升提案 → 走 2 审 → 进 Build Gate
+- 同步登记进 [`src/lib/pm-todo/platform-candidate-reviews.ts`](../../../src/lib/pm-todo/platform-candidate-reviews.ts)，让复查日到期自动下发"需要你动手"待办
+- 凑齐红线 3 的硬证据 → 自动触发晋升提案 → 走 2 审 → 进 Build Gate
+
+*为什么*：默认降级如果没有晋升车道，会制造"同一段逻辑在 N 个客户配置里各复制一份"的平行系统——那正是平台化原则禁止的。
 
 ---
 
-## 与既有治理机制的关系（v1 保留）
+## 强制输出格式（Full Report · Tier Classification Report）
+
+Full Report 模式完整格式：
+
+```
+## Platform Tier Classification（Full）
+
+**被判定对象**: [用一句话描述]
+
+**建议层级**: [L1 Capability / L2 Playbook / L3 Connector / L4 Configuration]
+
+**归属**（若声明 L1，必填一项）:
+- [ ] ME 6 支柱之一：[哪一柱]
+- [ ] 平台基础设施：[Kernel / Measurement Contract / Attribution / Memory / Verification / 其他]
+- [ ] 都不是 → 强制降为 L2 或 PM 拍板"是否新增支柱 / 版本"
+
+**换客户测试**: ✓/✗
+- 反例客户 1（[名字]）: [默认行为 / 权重 / prompt / 规则是否需改]
+- 反例客户 2（[名字]）: [同上]
+
+**换行业测试**: ✓/✗
+- 反例行业 1（[名字]）: [同上]
+- 反例行业 2（[名字]）: [同上]
+
+**智能层 or 执行手**: [判断 + 一句话原因]
+
+**红线检查**（逐条 ✓/✗）:
+- 红线 1（禁包装升级）: 
+- 红线 2（禁客户/行业事实进 shared runtime）: 
+- 红线 3（禁直建 L1）: 
+- 红线 4（换客户测试语义级）: 
+- 红线 5（换行业测试语义级）: 
+- 红线 6（若 L1，将走五道 Build Gate）: 
+- 红线 7（L2 只装行业级 / 版本级）: 
+
+**PM 待拍板项**（若涉及）: [列出]
+
+**结论**:
+- 原本想法层级：[X]
+- Skill 判定层级：[Y]
+- 若 X ≠ Y：改口话术为 "[具体如何重新表述]"
+- 若判定 L1 / L2 候选：已登记进 `docs/registry/platform-candidates.md`（填写 commit SHA 或 PR 链接：___）
+- 下一步：[继续原任务 / 走五道 Build Gate / 抛 PM 拍板 / 拒]
+```
+
+---
+
+## 与既有治理机制的关系（防止推诿 / 重复）
 
 | 机制 | 何时运行 | 关注点 | 与本 skill 的关系 |
 |---|---|---|---|
-| 五道 Build Gate | 提议动手前 | 全流程审核 | 本 skill 是 Gate 4 前置子步骤（v2 = Pre-Gate 待 P.G.3 澄清）|
-| Domain Semantics Gate | Build Gate 第 2 步 | 语义通用性 | 本 skill 强化"换客户测试"到语义级 |
-| Reuse Statement | 交付时 | 事后声明落点 | 本 skill 用于事前预判，交付时强制对账 |
+| 五道 Build Gate | 提议动手前 | 全流程审核 | 本 skill 是其中 Architecture/Reuse Gate 的**前置子步骤** |
+| Domain Semantics Gate | Build Gate 第 2 步 | 语义通用性 | 本 skill 强化其中的"换客户测试"到语义级 |
+| Reuse Statement | 交付时 | 事后声明落点 | 本 skill 输出用于事前预判，交付时强制对账 |
 | 大任务 2 审 | 大任务开工前 + 完工后 | 架构 + 挑刺 | L1 晋升提案强制走 2 审 |
 | memory 分层 | 记录事实时 | 客户 / 行业 / 全局分层 | 遵循同一"默认更低层 + 有证据才升级"原则 |
 
-**冲突时优先级**：产品定义 > 平台化原则 > 五道 Build Gate > 本 skill > 其他。
+**冲突时优先级**：产品定义（`ME_PRODUCT_DEFINITION.md`）> 平台化原则（`2026-08-19-me2-platformization-principle.md`）> 五道 Build Gate > 本 skill > 其他。
 
 ---
 
 ## 自检示范
 
-### 示范 1 · HBay KOL 事故复盘（v1）
-**判定**：`KOL 智能层作为 ME 第七条能力线` → **L3 Connector**（挂在既有社媒 / 口碑支柱下）
-**换客户测试**：✗（HBay / CTS / Roman 的 KOL 场景权重不同）
-**换行业测试**：✗（瓶装水 / 地产 / 旅游 的 KOL 差异巨大）
-**红线检查**：红线 1 ✗ 包装升级、红线 3 ✗ 单客户直建 L1、红线 7 ✗ 想装单客户到平台层
-**改口话术**：`ME 的社媒 / 口碑能力扩展一个 KOL 场景 · discovery + brief + ROI 归因由 ME 智能层做 · 执行由客户自选 agency`
+### 示范 1 · HBay KOL 事故复盘（Full Report · v1 原示范）
+**被判定对象**：KOL discovery + brief + ROI 归因作为 ME 新"第七条能力线 · KOL 智能层"
+
+**归属**：都不是（6 支柱无 KOL 柱，也不是平台基础设施）→ 强制降为 L2 或 PM 拍板"是否新增支柱"
+
+**换客户测试**：✗ —— HBay 的 KOL 场景权重（澳新华人 + 英文 KOL 并行）跟 CTS（旅游社群）、Roman（地产 KOC）都不同
+
+**换行业测试**：✗ —— 瓶装水 / 地产 / 旅游 三个行业的 KOL 场景差异巨大，无一套通用规则
+
+**智能层 or 执行手**：本质是外部执行手（KOL agency + 内容发布），套上"智能"包装
+
+**红线检查**：红线 1 ✗ 包装升级 · 红线 3 ✗ 单客户直建 L1 · 红线 7 ✗ 想装单客户到平台层
+
+**结论**：
+- 原本想法层级：L1 Capability
+- Skill 判定层级：**L3 Connector（KOL agency 名单库）+ 挂在既有"社媒"/"口碑"L1 能力下的场景应用**
+- 改口话术：不说"ME 新增 KOL 智能层"，说"ME 的社媒 / 口碑能力扩展一个 KOL 场景：discovery + brief + ROI 归因由 ME 智能层做，执行由客户自选 agency"
+- 登记：**不进 `platform-candidates.md`** —— 判定为 L3 Connector 不占用候选名额（红线 3 显式排除 L3）
+- 下一步：继续原任务（在客户方案里挂在既有能力线下）
 
 ### 示范 2 · Inline 模式 · HBay VI 判定（v2）
-**触发词**：`VI 视觉手册` `品牌调性`（能力 + 边界追问）
+**触发词**：`VI 视觉手册` `品牌调性`（能力名词 + 边界追问）
 
 ```
 > [跟班 · Tier] 这是 L4 · HBay 单客户先做起来 · 建议 Low bar 登记 candidates（VI 生成能力有跨客户复用潜力，未来 3+ 客户需要就升 L1）。
@@ -321,5 +415,5 @@ agent **必须**按以下顺序执行：
 
 ## 版本
 
-- **v2 · 2026-08-27** · 跟班式 PM 模式升级：语言级触发扩面 · Inline / Full 双输出 · Low / High 双门槛登记 · "先谈清 · 后登记 · PM 说继续才继续" 对话协议 · 版本词从 registry 动态推导
+- **v2 · 2026-08-27** · 跟班式 PM 模式升级：语言级触发扩面 · Inline / Full 双输出 · Low / High 双门槛登记 · "先谈清 · 后登记 · PM 说继续才继续" 对话协议 · 版本词从 registry 动态推导 · 吸收 Codex 复审 3 轮修正（L3 Connector 与 ME_PRODUCT_DEFINITION §7 对齐 · 纯技术分歧不升 PM · 红线 3 显式排除 L3 · 复查日接入 pm-daily-todo 自动待办）
 - **v1 · 2026-08-27** · 因 HBay KOL 事故设立；经魏征对抗性复审 + 子牙架构复审后修正 3 条必改项落地
