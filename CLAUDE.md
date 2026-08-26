@@ -5,7 +5,7 @@
 **产品定义必读**：[ME Product Definition](./docs/strategy/ME_PRODUCT_DEFINITION.md) —— **产品定位、IMPACT、DAPE、Connector、Build vs Connect 与行业版本的最高优先级定义；冲突时以它为准。**
 **每次开新会话先读**：[docs/STATE.md](./docs/STATE.md)（系统现状）→ [docs/ROADMAP.md](./docs/ROADMAP.md)（要做什么）。
 **平台化必读**：[ME2 Reuse & Platformization Principle](./docs/roadmap/2026-08-19-me2-platformization-principle.md) —— **所有开发窗口、Work Package、Claude Code/Codex 会话都受它约束。**
-**平台层级门必挂 skill**：[`.claude/skills/me-platform-tier-gate/`](./.claude/skills/me-platform-tier-gate/SKILL.md) —— **Claude Code 会话每次开工前必先调用 `Skill me-platform-tier-gate` 加载**（`Skill` 调用接口仅 Claude Code 提供）；**Codex 会话没有 `Skill` 调用接口，改为直接阅读 `SKILL.md` 全文并遵循其判据 / 红线 / 输出格式**。两种入口下，任何提议新增能力线 / 支柱 / capability / 智能层 / 分析层 / Build vs Connect vs Buy 决策 / 客户新需求判断"ME 要不要自己做"，都必须先输出 Tier Classification Report 再继续。跳过 = 治理失职。
+**平台层级门必挂 skill · 别名张良**：[`.claude/skills/me-platform-tier-gate/`](./.claude/skills/me-platform-tier-gate/SKILL.md) —— **Claude Code 会话每次开工前必先调用 `Skill me-platform-tier-gate` 加载**（`Skill` 调用接口仅 Claude Code 提供）；**Codex 会话没有 `Skill` 调用接口，改为直接阅读 `SKILL.md` 全文并遵循其判据 / 红线 / 输出格式**。PM 或其他 agent 用 `@张良` `召张良` `张良判定` `跑一次张良` `张良看看` 等自然语言召唤本 skill · 效果等同 Skill 加载。任何提议新增能力线 / 支柱 / capability / 智能层 / 分析层 / Build vs Connect vs Buy 决策 / "Skill vs Agent 实现形态" 讨论 / 客户新需求判断"ME 要不要自己做"，都必须先输出 Tier Classification Report（含层级 + 实现形态判定）再继续。判定为 L1 / L2 候选时自动生成 GitHub Issue draft（label `me2.0-punch-list`），PM 一句"开 issue"即建入 ME 2.0 打磨清单。跳过 = 治理失职。
 **必读规则**：[`~/.claude/rules/coding-style.md`](~/.claude/rules/coding-style.md) · [`~/.claude/rules/development-workflow.md`](~/.claude/rules/development-workflow.md)
 
 ---

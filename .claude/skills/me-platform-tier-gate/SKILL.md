@@ -1,9 +1,9 @@
 ---
 name: me-platform-tier-gate
-description: Magic Engine 平台层级门 · 跟班式产品经理。**任何时候**出现下列语言信号必须立即介入（不问上下文是编码 / 设计 / 讨论 / 客户方案 / 纯对话）：(a) 出现 `module` `adaptor` `connector` `capability` `SDK` `component` `interface` `service` `library` `pillar` `支柱` `能力线` `智能层` `分析层` `XX Intelligence` 等能力名词；(b) 出现 `复用` `抽象` `通用化` `边界` `拆出来` `合进去` `新加一个` `我们能不能做 X` `要不要有 Y 能力` `这个属于` `这是 [xxx] 层的东西吗` 等边界追问；(c) 出现 `ME 通用` `平台通用` `跨行业` `ME 地产版` `ME 旅游版` `ME 电商版` `ME XX 版` 等垂直版本词（版本名从 `docs/registry/product-versions.md` 动态推导）；(d) 客户新需求判断 "ME 要不要自己做"；(e) Build vs Connect vs Buy 决策；(f) 讨论 ME 底层 / kernel / 共享 runtime 变动；(g) 客户方案 / 交付文档 / PR 描述里出现能力名词；(h) 动 `src/lib/` 共享目录、新增无 `client_id` 语义的表 / schema；(i) 讨论 KOL / agency / 中介 / 外包等外部执行域。命中任一 → **必须先介入判定层级 · 登记候选 · PM 明确"继续"才能进入下一步**（禁止边谈边写代码 / 边讨论边写方案）。输出可选 Inline 模式（3 句话轻量）或 Full Report（8 段完整 Tier Classification）。
+description: Magic Engine 平台层级门 · 跟班式产品经理（**别名：张良** · PM 可以用 `@张良` `召张良` `张良判定` `跑一次张良` `张良看看` 等自然语言从任意窗口召唤本 skill · 效果等同 Skill 加载）。**任何时候**出现下列语言信号必须立即介入（不问上下文是编码 / 设计 / 讨论 / 客户方案 / 纯对话）：(a) 出现 `module` `adaptor` `connector` `capability` `SDK` `component` `interface` `service` `library` `pillar` `支柱` `能力线` `智能层` `分析层` `XX Intelligence` 等能力名词；(b) 出现 `复用` `抽象` `通用化` `边界` `拆出来` `合进去` `新加一个` `我们能不能做 X` `要不要有 Y 能力` `这个属于` `这是 [xxx] 层的东西吗` 等边界追问；(c) 出现 `ME 通用` `平台通用` `跨行业` `ME 地产版` `ME 旅游版` `ME 电商版` `ME XX 版` 等垂直版本词（版本名从 `docs/registry/product-versions.md` 动态推导）；(d) 客户新需求判断 "ME 要不要自己做"；(e) Build vs Connect vs Buy 决策；(f) 讨论 ME 底层 / kernel / 共享 runtime 变动；(g) 客户方案 / 交付文档 / PR 描述里出现能力名词；(h) 动 `src/lib/` 共享目录、新增无 `client_id` 语义的表 / schema；(i) 讨论 KOL / agency / 中介 / 外包等外部执行域；(j) **出现 `张良` 别名**（PM 或其他 agent 直接召唤）；(k) 讨论 "这该用 Skill 还是 Agent 实现" · "实现形态" 等载体判定（v2.2 新增维度）。命中任一 → **必须先介入判定层级 + 建议实现形态 · 登记候选 · PM 明确"继续"才能进入下一步**（禁止边谈边写代码 / 边讨论边写方案）。输出可选 Inline 模式（3 句话轻量）或 Full Report（判定层级 + 实现形态 + GitHub Issue Draft）。
 ---
 
-# Magic Engine 平台层级门（me-platform-tier-gate · v2 跟班式 PM 模式）
+# Magic Engine 平台层级门（me-platform-tier-gate · v2.2 跟班式 PM · 别名张良）
 
 ## 存在的原因
 
@@ -109,6 +109,54 @@ PM 在对话里说 `tier` / `层级门` / `分层` / `跟班` / `跑 gate` 等�
 - **是什么**：单客户独有；通过配置注入既有 Capability 或 Playbook
 - **判据**：只服务一个客户 + 通过配置 / approved evidence / private memory 注入
 - **例**：HBay 的 "25 万年" 表述（未证实需下架）、CTS 6 城 baker IP、Roman 的 30 天 rebrand 红线、HBay VI 视觉手册 v1（单客户先做 · 未来跨客户升 L2 候选）
+
+---
+
+## 实现形态判定（v2.2 新增 · 独立于层级的第二轴）
+
+**"实现形态"跟"层级"是两个独立的判定轴**，不是从属关系：
+- **层级** = 归属问题（L1/L2/L3/L4 · 这东西属于什么）
+- **实现形态** = 载体问题（Skill / Agent / Hybrid · 用什么机制实现）
+
+四种载体 × 四层归属都合理：
+
+|  | Skill 实现 | Agent 实现 |
+|---|---|---|
+| **L1 Capability** | 6 支柱打分规范 · 归因公式 | AI 可见度追踪引擎 · 竞品监控 |
+| **L2 Playbook** | 瓶装水行业内容模板 | 地产版 GEO 全流程 |
+| **L3 Connector** | HBay VI 生成模板 | DataForSEO 数据拉取 |
+| **L4 Client Config** | 客户品牌调性指引 | 客户专属自动化 workflow |
+
+### 4 问判据（判"用 Skill 还是 Agent"）
+
+依次问：
+
+1. **需要独立 context 深度想吗**？（复杂判断 / 大量分析 / 长思考链）
+2. **中间产物会不会挤爆主对话**？（大量搜索结果 / 多轮工具调用 / 长报告）
+3. **是可复用工种被反复召唤吗**？（多场景反复调用同一角色 · 如子牙每次架构审）
+4. **必须融入主对话节奏吗**？（跟班式 · 3 句话说完继续 · 不能跳出去）
+
+**判定规则**：
+- 只满足第 4 条（融入节奏），或全不满足 → **Skill 实现**
+- 满足 3 条或以上（1-3） → **Agent 实现**
+- 满足 1-2 条 + 有时也需要融入节奏 → **Hybrid 实现**：Skill 触发 + spawn Agent 深度
+
+### 三种形态的典型场景
+
+**Skill 实现**（融入主对话）：
+- 规则型：coding-style · workflow · 张良自己
+- 一致性守护：写作风格 · 品牌调性
+- 3 句话判定：日常触发的跟班介入
+
+**Agent 实现**（独立进程）：
+- 深度分析：子牙架构审 · 魏征挑刺
+- 大规模搜索：Explore 跨仓库定位
+- 对抗性视角：狄仁杰安全测试
+- 长任务：AI 可见度追踪引擎（14 问 × 4 引擎 × 月度）
+
+**Hybrid 实现**（Skill 触发 + spawn Agent 深度）：
+- 张良自己就是范例：Inline 3 句话（Skill 部分）· Full Report 8 段涉及跨 3+ 客户时可 spawn Agent 做深度判定（Agent 部分）
+- 判据规则轻量、深度分析重的场景
 
 ---
 
@@ -317,7 +365,7 @@ agent **必须**按以下顺序执行：
 
 ---
 
-## 强制输出格式（Full Report · Tier Classification Report）
+## 强制输出格式（Full Report · Tier Classification Report · v2.2 加实现形态）
 
 Full Report 模式完整格式：
 
@@ -332,6 +380,17 @@ Full Report 模式完整格式：
 - [ ] ME 6 支柱之一：[哪一柱]
 - [ ] 平台基础设施：[Kernel / Measurement Contract / Attribution / Memory / Verification / 其他]
 - [ ] 都不是 → 强制降为 L2 或 PM 拍板"是否新增支柱 / 版本"
+
+**建议实现形态**（若声明 L1/L2/L3，必填一项 · v2.2 新增）:
+- [ ] Skill · 规则型：融入主对话 · 无独立进程
+- [ ] Agent · 服务型：独立 context · 可 spawn
+- [ ] Hybrid · Skill 触发 + Agent 深度
+
+**实现形态判据**（4 问）:
+- 需要独立 context 深度想吗？ ✓/✗
+- 中间产物会挤爆主对话吗？ ✓/✗
+- 是可复用工种被反复召唤吗？ ✓/✗
+- 必须融入主对话节奏吗？ ✓/✗
 
 **换客户测试**: ✓/✗
 - 反例客户 1（[名字]）: [默认行为 / 权重 / prompt / 规则是否需改]
@@ -355,12 +414,83 @@ Full Report 模式完整格式：
 **PM 待拍板项**（若涉及）: [列出]
 
 **结论**:
-- 原本想法层级：[X]
-- Skill 判定层级：[Y]
+- 原本想法层级 / 形态：[X]
+- Skill 判定层级 / 形态：[Y]
 - 若 X ≠ Y：改口话术为 "[具体如何重新表述]"
-- 若判定 L1 / L2 候选：已登记进 `docs/registry/platform-candidates.md`（填写 commit SHA 或 PR 链接：___）
+- 若判定 L1 / L2 候选：已登记进 `docs/registry/platform-candidates.md` + 关联 GitHub Issue [#N]
 - 下一步：[继续原任务 / 走五道 Build Gate / 抛 PM 拍板 / 拒]
 ```
+
+---
+
+## GitHub Issue 自动生成规则（v2.2 新增 · ME 2.0 Punch List 机制）
+
+当 Full Report 判定为 **L1 / L2 候选**（含 L1 潜在候选）时，agent **必须**同时输出 GitHub Issue Draft：
+
+```
+## GitHub Issue Draft（等 PM 一句"开 issue"执行）
+
+**Title**: [me2.0-punch-list] <候选名·一句话>
+
+**Labels**: 
+- me2.0-punch-list
+- platform-candidate
+- l1-candidate | l2-candidate
+- skill-form | agent-form | hybrid-form
+- （层级归属对应的支柱名，如 seo / geo / social / paid-ads / word-of-mouth / competitor）
+
+**Assignees**: [该层 owner 的 GitHub 用户名，默认 @bigbigraydeng-maker]
+
+**Body**: 
+（从 Full Report 派生 · 见下方 body 模板 · issue template 在 `.github/ISSUE_TEMPLATE/me2-punch-list.md`）
+```
+
+**Body 模板**（issue template 落地文件里已有）：
+
+```markdown
+## 候选信息
+
+- 建议层级: L?
+- 建议实现形态: Skill / Agent / Hybrid
+- 归属: 6 支柱哪一柱 or 平台基础设施
+- 来源客户: 
+- 来源行业: 
+- 首次登记日: YYYY-MM-DD
+- 首次复查日: YYYY-MM-DD（+30 天）
+
+## 判定过程
+
+（Full Report 摘要 · 关键判据）
+
+## 硬证据进度
+
+- [ ] 客户 1（____ 行业）: 已提出 / 尚未
+- [ ] 客户 2（____ 行业）: 已提出 / 尚未
+- [ ] 或 ≥3 客户处出现事实复制: 未
+
+## 晋升条件（复述红线 3）
+
+- L1: ≥2 已付费客户跨行业提出同一需求，或 ≥3 客户处出现事实复制
+- L2: 同行业 ≥2 客户出现事实复制
+
+## 关联
+
+- 登记表: docs/registry/platform-candidates.md#<锚点>
+- 张良判定: <本次会话链接或摘要>
+- 相关 PR: 
+```
+
+**执行时机**：
+- PM 说 `开 issue` / `create issue` / `落 issue` → agent 用 `gh issue create` 执行
+- 执行完成后 · agent 把 issue URL 追加到 `docs/registry/platform-candidates.md` 对应行的 "GitHub Issue" 列
+- issue 关闭时（PM 或 owner 关）· 需要同步把 candidates.md 的状态改为 `promoted` / `abandoned`
+
+**为什么走 issue**：
+- GitHub issue = ME 2.0 punch list 的**唯一权威跟踪面**
+- 按 label filter · 一眼看到所有待打磨点
+- 关联 milestone 组织 sprint
+- 天然可评论 / 可指派 / 可关闭 / 可搜索
+- 客户候选 → issue → PR 关联 → 合入 · 完整闭环
 
 ---
 
@@ -422,6 +552,7 @@ Full Report 模式完整格式：
 
 ## 版本
 
+- **v2.2 · 2026-08-27** · 加"实现形态判定"（第二独立轴 · Skill/Agent/Hybrid · 4 问判据 · 4×2 落点矩阵）· Full Report 加实现形态字段 · 新增 GitHub Issue 自动生成规则（ME 2.0 punch list 机制 · me2.0-punch-list label 系统 · issue template 落地文件 · L1/L2 候选自动派生 issue draft · candidates.md 加 GitHub Issue 列）· 别名张良正式登记（PM 可从任意窗口用 `@张良` `召张良` `张良判定` 等自然语言召唤）
 - **v2.1 · 2026-08-27** · Codex 第 4 轮复审修正：停等 PM 的硬约束分档（日常触发 Inline 后可继续 · 只有登记候选 / 商业决策 / 新支柱 / 红线冲突 / 升 Full 才停等）· 避免普通代码 review 出现 `module` / `interface` / `service` 等日常词也硬停 PM（违反 CLAUDE.md §2 PM 不决策架构与接口）
 - **v2 · 2026-08-27** · 跟班式 PM 模式升级：语言级触发扩面 · Inline / Full 双输出 · Low / High 双门槛登记 · 分档式对话协议 · 版本词从 registry 动态推导 · 吸收 Codex 复审 3 轮修正（L3 Connector 与 ME_PRODUCT_DEFINITION §7 对齐 · 纯技术分歧不升 PM · 红线 3 显式排除 L3 · 复查日接入 pm-daily-todo 自动待办）
 - **v1 · 2026-08-27** · 因 HBay KOL 事故设立；经魏征对抗性复审 + 子牙架构复审后修正 3 条必改项落地

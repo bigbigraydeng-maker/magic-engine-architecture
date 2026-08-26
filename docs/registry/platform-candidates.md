@@ -39,6 +39,7 @@
 |---|---|
 | 候选名 | 一句话描述这个候选能力是什么 |
 | 建议层级 | L1 Capability / L2 Playbook |
+| 建议实现形态 | Skill / Agent / Hybrid（v2.2 加 · [判据见 skill](../../.claude/skills/me-platform-tier-gate/SKILL.md#实现形态判定v22-新增--独立于层级的第二轴)）|
 | 归属 | ME 6 支柱哪一柱 / 平台基础设施 / 待定 |
 | 来源客户 | 首次提出的客户 |
 | 来源行业 | 首次出现的行业 |
@@ -46,6 +47,7 @@
 | 当前状态 | `candidate` / `promotion_proposed` / `promoted` / `abandoned` |
 | 首次登记日 | YYYY-MM-DD |
 | 复查日 | YYYY-MM-DD（下次复查时间）|
+| GitHub Issue | ME 2.0 punch list issue URL（v2.2 加 · 跟踪面在 GitHub）|
 | 登记人 | 哪个 worktree / agent / PM 登的 |
 | 备注 | 关键上下文（PR 链接、事故链接、判据讨论链接）|
 
@@ -58,9 +60,9 @@
 第一行示例已注释。
 -->
 
-| 候选名 | 建议层级 | 归属 | 来源客户 | 来源行业 | 硬证据进度 | 当前状态 | 首次登记日 | 复查日 | 登记人 | 备注 |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 借助 Claude Design 生成品牌 VI 视觉资产（logo · 品牌手册 · 视觉规范）| L1 Capability（候选 · 需硬证据）| 待定 · VI 不在 6 支柱 · **PM 拍板项** | HBay Water | 瓶装水 / FMCG | 1/2 行业（仅 HBay）| candidate | 2026-08-27 | 2026-09-27 | happy-cori-796b21 worktree | HBay Deploy 档扩展；PM 明确 ME 借助 Claude Design 做；未来 CTS / Roman / 其他客户若也用同类能力则可升 L1；Low bar 登记（skill v2 首例）|
+| 候选名 | 建议层级 | 建议实现形态 | 归属 | 来源客户 | 来源行业 | 硬证据进度 | 当前状态 | 首次登记日 | 复查日 | GitHub Issue | 登记人 | 备注 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 借助 Claude Design 生成品牌 VI 视觉资产（logo · 品牌手册 · 视觉规范）| L1 Capability（候选 · 需硬证据）| Hybrid（Skill 规范 + Agent 深度生成）| 待定 · VI 不在 6 支柱 · **PM 拍板项** | HBay Water | 瓶装水 / FMCG | 1/2 行业（仅 HBay）| candidate | 2026-08-27 | 2026-09-27 | [#1200](https://github.com/bigbigraydeng-maker/magic-engine/issues/1200) | happy-cori-796b21 worktree | HBay Deploy 档扩展；PM 明确 ME 借助 Claude Design 做；未来 CTS / Roman / 其他客户若也用同类能力则可升 L1；me2.0-punch-list 首例（张良 v2.2 落地） |
 
 <!--
 示例（不作为真实条目）：
@@ -89,3 +91,4 @@
 
 - 2026-08-27 · 建仓，为落地 [me-platform-tier-gate](../../.claude/skills/me-platform-tier-gate/SKILL.md) 的候选管道。子牙架构复审的必改问题 2。
 - 2026-08-27 · 补两处：明确本表不约束 L3 Connector；月度复查接入 `pm-daily-todo` 自动待办（`src/lib/pm-todo/platform-candidate-reviews.ts`），不再只靠"当值 FDE 记日历"。Codex 复审必改。
+- 2026-08-27 · 张良 v2.2 升级配套：加"建议实现形态"列（Skill/Agent/Hybrid）· 加"GitHub Issue"列（ME 2.0 punch list 唯一权威跟踪面）· HBay VI 候选 append 首个 me2.0-punch-list issue。
