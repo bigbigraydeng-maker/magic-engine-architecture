@@ -20,11 +20,34 @@ import type { NextRequest } from 'next/server'
 
 const getUserMock = vi.fn()
 const mockSupabaseIn = vi.fn()
+// Portal-tier lookup: from().select('access_type').eq(email).eq(client_id).maybeSingle()
+// added when /portal/<clientId>/* needed to serve portal-tier users directly
+// instead of 308-ing them to /dashboard/*.
+const mockPortalMaybeSingle = vi.fn()
+
+// Toggle whether the mocked createMiddlewareSupabaseClient should simulate
+// a Supabase token refresh — the real helper writes rotated sb-* cookies
+// onto the middleware response via its cookies adapter when getUser()
+// discovers an expired access token. Tests that care about cookie
+// preservation set this to true in beforeEach; others leave it false so
+// existing redirect assertions stay untouched.
+let simulateRefresh = false
 
 vi.mock('@/lib/supabase-server', () => ({
-  createMiddlewareSupabaseClient: () => ({
-    auth: { getUser: getUserMock },
-  }),
+  createMiddlewareSupabaseClient: (_req: unknown, res: { headers?: Headers } | undefined) => {
+    if (simulateRefresh && res?.headers?.append) {
+      // Two-cookie rotation the real Supabase adapter emits: access + refresh.
+      res.headers.append(
+        'set-cookie',
+        'sb-access-token=REFRESHED-abc; Path=/; HttpOnly; SameSite=Lax',
+      )
+      res.headers.append(
+        'set-cookie',
+        'sb-refresh-token=REFRESHED-xyz; Path=/; HttpOnly; SameSite=Lax',
+      )
+    }
+    return { auth: { getUser: getUserMock } }
+  },
 }))
 
 vi.mock('@/lib/supabase', () => ({
@@ -33,6 +56,9 @@ vi.mock('@/lib/supabase', () => ({
       select: vi.fn(() => ({
         eq: vi.fn(() => ({
           in: mockSupabaseIn,
+          eq: vi.fn(() => ({
+            maybeSingle: mockPortalMaybeSingle,
+          })),
         })),
       })),
     })),
@@ -67,6 +93,9 @@ describe('dashboard auth middleware', () => {
     getUserMock.mockReset()
     mockSupabaseIn.mockReset()
     mockSupabaseIn.mockResolvedValue({ data: [], error: null })
+    mockPortalMaybeSingle.mockReset()
+    mockPortalMaybeSingle.mockResolvedValue({ data: null, error: null })
+    simulateRefresh = false
   })
 
   afterEach(() => {
@@ -141,6 +170,142 @@ describe('dashboard auth middleware', () => {
     expect(res.status).toBe(308)
     const url = new URL(res.headers.get('location')!)
     expect(url.pathname).toBe('/dashboard/clients/client-x-uuid/report')
+  })
+
+  // ── Contract V3 §A: portal-tier invitees reach their real workspace ────
+
+  it('lets a portal-tier user through to /portal/<their-clientId> WITHOUT bouncing to /unauthorized', async () => {
+    // Regression: pre-V3 the /portal/* branch 308ed unconditionally to
+    // /dashboard/clients/<id>, and the dashboard branch rejects portal-tier
+    // (ACCESS_TYPES_DASHBOARD excludes 'portal') → /unauthorized. Portal
+    // invitees were effectively dead-ended. Fix: /portal/<own-client>/*
+    // now serves for access_type='portal' users.
+    getUserMock.mockResolvedValue({ data: { user: { email: 'staff@cts.co.nz' } } })
+    mockPortalMaybeSingle.mockResolvedValueOnce({
+      data: { access_type: 'portal' },
+      error: null,
+    })
+
+    const res = await middleware(buildRequest('/portal/client-b-uuid'))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('location')).toBeNull()
+    expect(res.headers.get('x-middleware-request-x-user-role')).toBe('client-viewer')
+    expect(res.headers.get('x-middleware-request-x-user-tier')).toBe('portal_only')
+    expect(res.headers.get('x-middleware-request-x-allowed-client-id')).toBe('client-b-uuid')
+  })
+
+  // ── Contract V6: portal-only allow response must carry Supabase refresh cookies ──
+
+  it('preserves rotated Supabase session cookies on the portal-only allow response (token refresh survives)', async () => {
+    // Regression for the P1 that unmerged V5: the portal-only branch
+    // returned a fresh NextResponse.next without copying the Set-Cookie
+    // headers createMiddlewareSupabaseClient wrote onto the original
+    // middleware response. A token refresh would render this request
+    // fine, then the next navigation would find no rotated cookies and
+    // bounce to /portal/login. Fix: copy raw Set-Cookie headers via
+    // getSetCookie(); this test proves both rotated cookies survive.
+    simulateRefresh = true
+    getUserMock.mockResolvedValue({ data: { user: { email: 'staff@cts.co.nz' } } })
+    mockPortalMaybeSingle.mockResolvedValueOnce({
+      data: { access_type: 'portal' },
+      error: null,
+    })
+
+    const res = await middleware(buildRequest('/portal/client-b-uuid'))
+
+    // Both rotated cookies survive with their full attributes intact.
+    const setCookies = res.headers.getSetCookie()
+    expect(setCookies.some(sc => sc.startsWith('sb-access-token=REFRESHED-abc'))).toBe(true)
+    expect(setCookies.some(sc => sc.startsWith('sb-refresh-token=REFRESHED-xyz'))).toBe(true)
+    // Attributes (HttpOnly, SameSite, Path) preserved — proves we did NOT
+    // round-trip through cookies.getAll()/set() which drops options.
+    const accessCookie = setCookies.find(sc => sc.startsWith('sb-access-token='))!
+    expect(accessCookie).toMatch(/HttpOnly/i)
+    expect(accessCookie).toMatch(/SameSite=Lax/i)
+    expect(accessCookie).toMatch(/Path=\//)
+  })
+
+  it('preserves the portal-only tier + exact allowedClientId headers alongside the rotated cookies', async () => {
+    // The two contracts must hold simultaneously: refresh cookies AND
+    // the request-echo headers the portal layout reads to decide whether
+    // to render. Without both, either the session dies or the layout
+    // falls back to its dashboard permanentRedirect.
+    simulateRefresh = true
+    getUserMock.mockResolvedValue({ data: { user: { email: 'staff@cts.co.nz' } } })
+    mockPortalMaybeSingle.mockResolvedValueOnce({
+      data: { access_type: 'portal' },
+      error: null,
+    })
+
+    const res = await middleware(buildRequest('/portal/client-b-uuid'))
+
+    expect(res.status).toBe(200)
+    expect(res.headers.get('x-middleware-request-x-user-role')).toBe('client-viewer')
+    expect(res.headers.get('x-middleware-request-x-user-tier')).toBe('portal_only')
+    expect(res.headers.get('x-middleware-request-x-allowed-client-id')).toBe('client-b-uuid')
+    expect(res.headers.getSetCookie().length).toBeGreaterThan(0)
+  })
+
+  it('emits each rotated cookie exactly once (no duplicate Set-Cookie on the portal-only allow response)', async () => {
+    // Copying via headers.append must not re-emit whatever the fresh
+    // NextResponse.next already carried. Regressing to
+    // `set-cookie: sb-access-token=REFRESHED-abc, sb-access-token=REFRESHED-abc`
+    // would silently break the invitee's session on some browsers /
+    // clients that only honour the first occurrence.
+    simulateRefresh = true
+    getUserMock.mockResolvedValue({ data: { user: { email: 'staff@cts.co.nz' } } })
+    mockPortalMaybeSingle.mockResolvedValueOnce({
+      data: { access_type: 'portal' },
+      error: null,
+    })
+
+    const res = await middleware(buildRequest('/portal/client-b-uuid'))
+
+    const setCookies = res.headers.getSetCookie()
+    const accessCount = setCookies.filter(sc => sc.startsWith('sb-access-token=')).length
+    const refreshCount = setCookies.filter(sc => sc.startsWith('sb-refresh-token=')).length
+    expect(accessCount).toBe(1)
+    expect(refreshCount).toBe(1)
+  })
+
+  it('unauthenticated /portal/<clientId> hit still redirects even when the supabase helper would emit cookies (no leak on the deny path)', async () => {
+    // The refresh path only fires when there's actually a user to
+    // refresh; unauth callers hit the earlier `if (!user)` branch which
+    // must keep redirecting to /login. Assert the deny path is unchanged
+    // even in the presence of the cookie-emitting mock.
+    simulateRefresh = true
+    getUserMock.mockResolvedValue({ data: { user: null } })
+
+    const res = await middleware(buildRequest('/portal/client-b-uuid/report'))
+
+    expect(res.status).toBe(307)
+    const url = new URL(res.headers.get('location')!)
+    expect(url.pathname).toBe('/login')
+    // Deny path uses the pre-existing NextResponse.redirect built from a
+    // fresh URL; portal-only cookie preservation is scoped to the ALLOW
+    // path only and must not accidentally spill into the deny path.
+    expect(res.headers.get('x-middleware-request-x-user-tier')).toBeNull()
+  })
+
+  it('scopes the portal grant to the exact clientId — same email holding portal for A cannot enter /portal/B', async () => {
+    // Same-email/two-clients invariant on the portal path: if the email
+    // has portal access only for client-a, hitting /portal/<client-b> must
+    // NOT be served (the .eq('client_id', clientId) filter returns null).
+    // It falls through to the 308-to-dashboard path, where dashboard
+    // middleware will reject them for client-b (no ACCESS_TYPES_DASHBOARD
+    // row for client-b) — never mixes clients.
+    getUserMock.mockResolvedValue({ data: { user: { email: 'staff@cts.co.nz' } } })
+    // No portal row for THIS target clientId → maybeSingle returns null.
+    mockPortalMaybeSingle.mockResolvedValueOnce({ data: null, error: null })
+
+    const res = await middleware(buildRequest('/portal/client-b-uuid'))
+    expect(res.status).toBe(308)
+    const url = new URL(res.headers.get('location')!)
+    expect(url.pathname).toBe('/dashboard/clients/client-b-uuid')
+    // The 200/next branch must NOT have set the portal_only tier for a
+    // request whose portal row was for a different client.
+    expect(res.headers.get('x-middleware-request-x-user-tier')).toBeNull()
   })
 
   it('redirects to /unauthorized when user is not on the whitelist', async () => {

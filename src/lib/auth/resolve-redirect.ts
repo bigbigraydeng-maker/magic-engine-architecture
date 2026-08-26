@@ -4,6 +4,15 @@ import { grantSignupBonus } from '@/lib/mtc/grant-signup-bonus'
 import { resolveSelfServeLanding } from '@/lib/auth/self-serve-routing'
 
 /**
+ * Sentinel returned when an invite specifies expectedClientId but the
+ * authenticated email has no matching membership row for it. Callers MUST
+ * detect this and refuse to complete the redirect — otherwise middleware
+ * downstream would land the invitee inside whichever other client this
+ * email happens to belong to.
+ */
+export const INVITE_INVALID_REDIRECT = '__INVITE_INVALID__' as const
+
+/**
  * Minimal shape of a Supabase auth client we depend on. Both the SSR server
  * client (cookie-backed) and any future client satisfy this — we only call
  * getUser().
@@ -30,11 +39,19 @@ interface AuthCapableClient {
 export async function resolveRedirectForSession(
   supabase: AuthCapableClient,
   safePath: string,
+  expectedClientId?: string,
 ): Promise<string> {
   const { data: { user } } = await supabase.auth.getUser()
 
   if (!user?.email) {
-    // Session not readable — let middleware handle the unauthenticated redirect.
+    // Directed invite whose second-read (this getUser) sees no identity
+    // MUST fail closed. Falling through to safePath (`/dashboard` for the
+    // invite-landing flow) would let /dashboard middleware pick whichever
+    // OTHER client this email happens to hold membership in — a wrong-
+    // customer break. Ordinary non-invite flows (no expectedClientId) keep
+    // the pre-existing behaviour of returning safePath and letting
+    // middleware handle the unauthenticated redirect.
+    if (expectedClientId) return INVITE_INVALID_REDIRECT
     return safePath
   }
 
@@ -51,9 +68,30 @@ export async function resolveRedirectForSession(
     .select('client_id, access_type')
     .eq('email', email)
 
-  const selfServeUser = accessRows?.find(row => row.access_type === 'self_serve')
-  const portalUser = accessRows?.find(row =>
+  // A specific-client invite (e.g. /auth/invite-landing) must only land the
+  // invitee in the client it actually invited them to — the same email can
+  // hold rows for several clients ((email, client_id) is not unique per
+  // email), so without this an invite to client B could land in client A.
+  const candidateRows = expectedClientId
+    ? accessRows?.filter(row => row.client_id === expectedClientId)
+    : accessRows
+
+  // Fail closed for invites whose target membership is missing. The token
+  // may have verified fine, but between "invite sent" and "invite clicked"
+  // the client_portal_users row can be revoked (or the invite was for a
+  // different client_id than any row this email holds). Falling through to
+  // `/dashboard` here would let /dashboard middleware pick some OTHER
+  // client this email happens to belong to — a wrong-customer break.
+  if (expectedClientId && (!candidateRows || candidateRows.length === 0)) {
+    return INVITE_INVALID_REDIRECT
+  }
+
+  const selfServeUser = candidateRows?.find(row => row.access_type === 'self_serve')
+  const portalUser = candidateRows?.find(row =>
     row.access_type === 'portal' || row.access_type === 'both'
+  )
+  const dashboardUser = candidateRows?.find(row =>
+    row.access_type === 'dashboard' || row.access_type === 'fde' || row.access_type === 'client'
   )
 
   if (selfServeUser?.client_id) {
@@ -65,6 +103,19 @@ export async function resolveRedirectForSession(
 
   if (portalUser?.client_id) {
     return `/portal/${portalUser.client_id}`
+  }
+
+  // A dashboard/fde/client invite must land in the invited client's own
+  // dashboard — otherwise middleware falls back to the unsorted first row
+  // in client_portal_users, which can be a *different* client when the same
+  // email holds access to more than one. Only force this override for the
+  // expectedClientId invite flow: a plain magic-link/OTP login's safePath
+  // (e.g. /dashboard/clients/<id>/execution) has already passed the
+  // /dashboard/:path* middleware's per-client access check, so overriding
+  // it here would silently drop the deep link and bounce the user to their
+  // client's home page instead.
+  if (dashboardUser?.client_id && expectedClientId) {
+    return `/dashboard/clients/${dashboardUser.client_id}`
   }
 
   // Honour explicit /prospect next param (magic link from /discover)
