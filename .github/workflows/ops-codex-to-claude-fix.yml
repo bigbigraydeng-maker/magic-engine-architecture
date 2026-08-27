@@ -1,16 +1,13 @@
 name: OPS — Codex Review to Claude Fix
 
-# Part of the ME2-OPS02 Claude <-> Codex review loop, extended by ME2-OPS03
-# PR2 with a risk-based round budget and a real delivery-quality gate. See
+# Part of the ME2-OPS02 Claude <-> Codex review loop. See
 # tools/ops-review-loop/README.md for the full state diagram.
 #
 # This is the "review" leg: when Codex submits a review on a qualifying PR,
 # decide (in tools/ops-review-loop/src/handle-review.mjs, unit-tested offline
 # in tools/ops-review-loop/tests/) whether to dispatch one aggregated Claude
-# fix task, evaluate delivery quality and post READY FOR PRODUCT OWNER or
-# BLOCKED (quality.mjs), post NEEDS HUMAN REVIEW once the round budget for
-# this PR's risk level is used up (maxRoundsForRisk: A=2, B=1, C=1), or do
-# nothing (dedup).
+# fix task, post READY FOR PRODUCT OWNER, post NEEDS HUMAN REVIEW after 3
+# rounds, or do nothing (dedup).
 #
 # It never merges, deploys, applies a migration, queries or modifies
 # production, bypasses required CI, or marks a PR ready for review. It never
