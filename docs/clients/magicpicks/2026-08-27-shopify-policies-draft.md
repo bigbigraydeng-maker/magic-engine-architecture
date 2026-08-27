@@ -5,17 +5,19 @@
 - **P1，必须进日常任务管道**：本文档只是草稿来源，不是任务本身 —— 已同步登记到 [docs/ROADMAP.md「近期待办」](../../ROADMAP.md#近期待办跨-phase-汇总) 的 Magic Picks 条目，并接进了今日待办管道（`src/lib/pm-todo/manual-items.ts` 的 `pushMagicPicksPolicyReplacementItem`），粘贴完成前不会死在这份 Markdown 里；PM 粘贴完成后要把 ROADMAP 条目和 `manual-items.ts` 里这一条一起删掉，否则待办会一直下发
 - **目的**：清理店里 3 个 Homara 遗留政策（Brisbane / QLD / ABC Plus Home / AUD），发布干净主题前必须完成
 - **市场**：NZ only（Consumer Guarantees Act 1993 · Privacy Act 2020 · Fair Trading Act 1986）
-- **待 PM 填入的占位**（8 个）：
-  - `[LEGAL_ENTITY]` — NZ 注册法人名（例："Magic Picks Ltd" 或个人 sole trader 名）
-  - `[NZBN]` — New Zealand Business Number
-  - `[GST_NUMBER]` — 若 GST 已注册（年营业额 ≥ NZD 60K 强制注册）
-  - `[STREET_ADDRESS]` — Mt Wellington 仓库街道地址
-  - `[SUPPORT_EMAIL]` — Magic Picks/Jing's Pick 客户确认的客服/隐私联系邮箱（**不能用 `hello@magicengine.cloud`** —— 那是 Magic Engine 代理商共享邮箱，不是客户自己的客服邮箱，发布前必须先跟客户确认真实地址）
-  - `[STANDARD_SHIPPING_RATE_TBD]` — 标准运费金额（草稿之前写死 NZ$10.00，未核实是否与 Shopify 结账页一致，发布前必须到 `Settings → Shipping and delivery` 查真实费率再填）
-  - `[FREE_THRESHOLD_TBD]` — 免运门槛金额（当前 Shopify 有 NZ$0 rate 但阈值不明）
-  - `[DATE]` — Last updated 日期，PM 粘贴当天填
+- **占位状态**（2026-08-27）：
+  - ✅ **LEGAL_ENTITY** → `VITOL TRADING LIMITED`（Ray 敲定 · NZ 现有 Ltd · Company # 8374464 · Magic Picks 是其 trade name）
+  - ✅ **NZBN** → `9429050577675`（Ray 敲定）
+  - ✅ **GST_NUMBER** → `136-124-412`（Ray 敲定，已注册 15% GST）
+  - ⚠️ **STREET_ADDRESS** → 暂用 `Mt Wellington`（无街号 · Ray 后补 · 后补后回本文件全局替换）
+  - ✅ **STANDARD_SHIPPING_RATE** → `NZ$10.00`（从 Shopify `deliveryProfiles` API 实读 · methodConditions 为空的 Standard rate）
+  - ✅ **FREE_THRESHOLD** → `NZ$110`（从同一 rate 反查：另一档 Standard NZ$0 · condition `TOTAL_PRICE ≥ 110 NZD`）
+  - ⏳ **SUPPORT_EMAIL** = **未定** —— Codex round 1 抓到：**不能用 `hello@magicengine.cloud`**（Magic Engine 代理商共享邮箱），Magic Picks 需自建独立邮箱（如 `hello@magicpicks.co.nz`）或用 Ray 私人邮箱。粘贴前必须填
+  - ⏳ **DATE** = Last updated，PM 粘贴当天填（例 "27 August 2026"）
 
-> 8 个占位替换完再粘。GST 若未注册就删掉那一行。
+⚠️ **VITOL 商标风险提示**：VITOL SA 是国际 commodities trader，NZ 小规模零售短期极可能不惹眼，长远若做大有商标 pushback 可能。**Trade name = Magic Picks 完全没问题**，policy 页对客户展示的主标签也是 Magic Picks，VITOL 只在"About us / Legal Notice"作为运营法人露出。
+
+> **粘之前**：先在下方策略文本内把剩余 `[SUPPORT_EMAIL]` 和 `[DATE]` 全局替换完。GST 本店已注册无需删。
 
 ---
 
@@ -27,9 +29,9 @@ Shopify Admin 路径：`Settings → Policies → Contact information → Edit`
 Trade name: Magic Picks
 Phone number:
 Email: [SUPPORT_EMAIL]
-Physical address: [STREET_ADDRESS], Auckland, New Zealand
-NZBN: [NZBN]
-GST number: [GST_NUMBER]
+Physical address: Mt Wellington, Auckland, New Zealand
+NZBN: 9429050577675
+GST number: 136-124-412
 ```
 
 ---
@@ -143,7 +145,7 @@ Shopify Admin 路径：`Settings → Policies → Terms of service → Edit`
 <p>These terms apply to every purchase you make from Magic Picks. By placing an order, you agree to these terms.</p>
 
 <h3>1. About us</h3>
-<p>Magic Picks is a New Zealand online store operated by [LEGAL_ENTITY] (NZBN: [NZBN]). Contact: [SUPPORT_EMAIL].</p>
+<p>Magic Picks is a New Zealand online store operated by VITOL TRADING LIMITED (NZBN: 9429050577675). Contact: [SUPPORT_EMAIL].</p>
 
 <h3>2. Orders</h3>
 <p>Your order is an offer to buy. A contract forms when we send you an order confirmation email. We may decline or cancel an order (e.g. pricing error, stock issue, suspected fraud). If we cancel, we refund you in full.</p>
@@ -201,8 +203,8 @@ Shopify Admin 路径：`Settings → Policies → Shipping policy → Edit`
 
 <h3>Shipping cost</h3>
 <ul>
-  <li>Standard NZ shipping: NZ$[STANDARD_SHIPPING_RATE_TBD] flat</li>
-  <li>Free shipping on orders over NZ$[FREE_THRESHOLD_TBD]</li>
+  <li>Standard NZ shipping: NZ$10.00 flat</li>
+  <li>Free shipping on orders over NZ$110</li>
 </ul>
 
 <h3>How fast</h3>
@@ -252,8 +254,8 @@ Magic Picks 当前**无订阅业务**（一次性买椅子/腰垫/太阳能等�
 - [ ] **中午前下单当天发货** —— 需 PM 向仓库核实截单流程确实能保证中午前订单当天出库，做不到必须改承诺或删掉这句
 - [ ] **Auckland metro 次日达 / South Island 3-5 天** —— 假设 NZ Couriers 或类似档次。若 Magic Picks 用更慢的服务需改
 - [ ] **每单必有追踪链接** —— 需 PM 核实所用的配送服务/流程确实为每一单生成追踪链接，不是只有部分订单有追踪，做不到必须改承诺或删掉这句
-- [ ] **标准运费金额** —— 草稿之前写死 NZ$10.00，没有核实过是否与结账页一致，PM 到 `Settings → Shipping and delivery` 里查现有标准费率 → 反填进 shipping policy，跟结账页对不上绝对不能发布
-- [ ] **免运门槛数字** —— 现在 Shopify 里的 NZ$0 rate 阈值我没查到，PM 到 `Settings → Shipping and delivery` 里查现有值 → 反填进 shipping policy
+- [x] **标准运费金额** = NZ$10.00（从 Shopify `deliveryProfiles` API 实读 · methodConditions 为空档的 Standard rate · 已填入 Shipping policy）
+- [x] **免运门槛** = NZ$110（同一 API 反查 · Standard NZ$0 档的 condition `TOTAL_PRICE ≥ 110 NZD` · 已填入）
 
 ---
 
@@ -261,14 +263,14 @@ Magic Picks 当前**无订阅业务**（一次性买椅子/腰垫/太阳能等�
 
 粘之前先在文档头部把 5 个占位替换完，然后按顺序粘 5 段（Subscription 跳过）：
 
-- [ ] `[LEGAL_ENTITY]` 替换（Magic Picks 的 NZ 注册主体名）
-- [ ] `[NZBN]` 替换
-- [ ] `[GST_NUMBER]` 替换（未注册就把整行删了）
-- [ ] `[STREET_ADDRESS]` 替换
-- [ ] `[SUPPORT_EMAIL]` 替换（先跟 Magic Picks/Jing's Pick 确认客服/隐私联系邮箱，**不能用** `hello@magicengine.cloud`）
-- [ ] `[STANDARD_SHIPPING_RATE_TBD]` 替换（去 Shopify Admin → Settings → Shipping and delivery 查现有标准运费费率，跟结账页核对一致）
-- [ ] `[FREE_THRESHOLD_TBD]` 替换（去 Shopify Admin → Settings → Shipping and delivery 查现有 NZ$0 rate 的门槛）
-- [ ] `[DATE]` 替换（粘贴当天）
+- [x] `[LEGAL_ENTITY]` → `VITOL TRADING LIMITED`（Ray 2026-08-27 敲定）
+- [x] `[NZBN]` → `9429050577675`（Ray 2026-08-27 敲定）
+- [x] `[GST_NUMBER]` → `136-124-412`（Ray 2026-08-27 敲定；已注册无需删行）
+- [x] `[STREET_ADDRESS]` → `Mt Wellington`（Ray 敲定占位，街号后补 → 拿到后回本文件全局替换）
+- [x] `[STANDARD_SHIPPING_RATE_TBD]` → `10.00`（从 Shopify `deliveryProfiles` API 实读 · methodConditions 为空档）
+- [x] `[FREE_THRESHOLD_TBD]` → `110`（同一 API 反查 · 另一档 condition `TOTAL_PRICE ≥ 110 NZD`）
+- [ ] `[SUPPORT_EMAIL]` 替换（**必须**先跟 Magic Picks 确认真实客服/隐私联系邮箱，**不能用** `hello@magicengine.cloud`）
+- [ ] `[DATE]` 替换（粘贴当天填如 "27 August 2026"，4 处 policy 底部各一处）
 - [ ] Contact info 粘贴（`Settings → Policies → Contact information`）
 - [ ] Refund policy 粘贴
 - [ ] Privacy policy 粘贴
