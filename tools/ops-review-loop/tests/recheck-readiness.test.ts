@@ -11,14 +11,14 @@ const listCheckRunsForRef = vi.fn()
 const listPullRequestFiles = vi.fn()
 const createIssueComment = vi.fn().mockResolvedValue({})
 vi.mock('../src/github.mjs', () => ({
-  getPullRequest: (...args) => getPullRequest(...args),
-  listIssueComments: (...args) => listIssueComments(...args),
-  listCheckRunsForRef: (...args) => listCheckRunsForRef(...args),
-  listPullRequestFiles: (...args) => listPullRequestFiles(...args),
-  createIssueComment: (...args) => createIssueComment(...args),
+  getPullRequest: (...args: unknown[]) => getPullRequest(...args),
+  listIssueComments: (...args: unknown[]) => listIssueComments(...args),
+  listCheckRunsForRef: (...args: unknown[]) => listCheckRunsForRef(...args),
+  listPullRequestFiles: (...args: unknown[]) => listPullRequestFiles(...args),
+  createIssueComment: (...args: unknown[]) => createIssueComment(...args),
 }))
 
-function withEnv(overrides, run) {
+function withEnv(overrides: Record<string, string>, run: () => Promise<unknown>) {
   const original = { ...process.env }
   Object.assign(process.env, overrides)
   return run().finally(() => {
@@ -26,7 +26,7 @@ function withEnv(overrides, run) {
   })
 }
 
-function shaSampledAs(pr, wantSampled) {
+function shaSampledAs(pr: number, wantSampled: boolean) {
   for (let i = 0; i < 10000; i++) {
     const sha = i.toString(16).padStart(40, '0')
     if (isSampled({ pr, sha }) === wantSampled) return sha
@@ -37,20 +37,45 @@ function shaSampledAs(pr, wantSampled) {
 const OWNER_REPO = 'bigbigraydeng-maker/magic-engine'
 const BASE = 'b'.repeat(40)
 
-function eventFile(dir, checkRun) {
+function eventFile(dir: string, checkRun: Record<string, unknown>) {
   const eventPath = join(dir, 'event.json')
   writeFileSync(eventPath, JSON.stringify({ check_run: checkRun }))
   return eventPath
 }
 
-function gateMarker({ base = BASE, head, risk, score, decision }) {
-  const payload = { v: 1, base, head, risk }
+function gateMarker({
+  base = BASE,
+  head,
+  risk,
+  score,
+  decision,
+}: {
+  base?: string
+  head: string
+  risk: string
+  score?: number
+  decision?: string
+}) {
+  const payload: { v: number; base: string; head: string; risk: string; score?: number; decision?: string } = {
+    v: 1,
+    base,
+    head,
+    risk,
+  }
   if (score !== undefined) payload.score = score
   if (decision !== undefined) payload.decision = decision
   return `<!-- me-dev-gate:${JSON.stringify(payload)} -->`
 }
 
-const openPr = (overrides = {}) => ({
+interface PrFixture {
+  number: number
+  base: { ref: string; sha: string }
+  head: { ref: string; sha: string; repo: { full_name: string } }
+  state: string
+  body: string
+}
+
+const openPr = (overrides: Partial<PrFixture> = {}): PrFixture => ({
   number: 5,
   base: { ref: 'main', sha: BASE },
   head: { ref: 'claude/issue-5', sha: 'c'.repeat(40), repo: { full_name: OWNER_REPO } },
@@ -60,7 +85,7 @@ const openPr = (overrides = {}) => ({
 })
 
 describe('recheck-readiness', () => {
-  let dir
+  let dir: string
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'ops-loop-recheck-'))
@@ -300,7 +325,7 @@ describe('recheck-readiness', () => {
       conclusion: 'success',
       pull_requests: [{ number: 40 }, { number: 41 }],
     })
-    getPullRequest.mockImplementation((_t, _o, _r, n) =>
+    getPullRequest.mockImplementation((_t: unknown, _o: unknown, _r: unknown, n: number) =>
       Promise.resolve(openPr({ number: n, head: { ref: `claude/issue-${n}`, sha: `${n}`.padStart(40, '0'), repo: { full_name: OWNER_REPO } } })),
     )
     listIssueComments.mockResolvedValue([])

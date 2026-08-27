@@ -1,13 +1,17 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { parseGateMarkers } from '../src/gate-marker.mjs'
 
 const listPullRequestFiles = vi.fn()
 vi.mock('../src/github.mjs', () => ({
-  listPullRequestFiles: (...args) => listPullRequestFiles(...args),
+  listPullRequestFiles: (...args: unknown[]) => listPullRequestFiles(...args),
 }))
 
-const { buildVerdictComment } = await import('../src/verdict.mjs')
+let buildVerdictComment: (typeof import('../src/verdict.mjs'))['buildVerdictComment']
+
+beforeAll(async () => {
+  ;({ buildVerdictComment } = await import('../src/verdict.mjs'))
+})
 
 const BASE = 'b'.repeat(40)
 const SHA = 'c'.repeat(40)

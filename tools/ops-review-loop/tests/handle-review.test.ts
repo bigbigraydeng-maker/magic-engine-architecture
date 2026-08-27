@@ -10,15 +10,15 @@ const listIssueComments = vi.fn()
 const listPullRequestFiles = vi.fn()
 const listReviewComments = vi.fn()
 vi.mock('../src/github.mjs', () => ({
-  createIssueComment: (...args) => createIssueComment(...args),
-  getPullRequest: (...args) => getPullRequest(...args),
-  listCheckRunsForRef: (...args) => listCheckRunsForRef(...args),
-  listIssueComments: (...args) => listIssueComments(...args),
-  listPullRequestFiles: (...args) => listPullRequestFiles(...args),
-  listReviewComments: (...args) => listReviewComments(...args),
+  createIssueComment: (...args: unknown[]) => createIssueComment(...args),
+  getPullRequest: (...args: unknown[]) => getPullRequest(...args),
+  listCheckRunsForRef: (...args: unknown[]) => listCheckRunsForRef(...args),
+  listIssueComments: (...args: unknown[]) => listIssueComments(...args),
+  listPullRequestFiles: (...args: unknown[]) => listPullRequestFiles(...args),
+  listReviewComments: (...args: unknown[]) => listReviewComments(...args),
 }))
 
-function withEnv(overrides, run) {
+function withEnv(overrides: Record<string, string>, run: () => Promise<unknown>) {
   const original = { ...process.env }
   Object.assign(process.env, overrides)
   return run().finally(() => {
@@ -29,13 +29,19 @@ function withEnv(overrides, run) {
 const OWNER_REPO = 'bigbigraydeng-maker/magic-engine'
 const BASE = 'b'.repeat(40)
 const SHA = 'c'.repeat(40)
+// Distinct historical SHAs for round-budget markers: fix-dispatched rounds are
+// counted across all SHAs on the PR (see plan.mjs), not scoped to the current
+// head, so these must be valid 7-40 hex chars per markers.mjs's MARKER_RE but
+// different from SHA/BASE and from each other.
+const OLD_SHA_1 = 'd'.repeat(40)
+const OLD_SHA_2 = 'e'.repeat(40)
 const GREEN_CI = { name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'success' }
 
-function gateMarker({ head, risk }) {
+function gateMarker({ head, risk }: { head: string; risk: string }) {
   return `<!-- me-dev-gate:${JSON.stringify({ v: 1, base: BASE, head, risk })} -->`
 }
 
-function eventFile(dir, { body = 'clean review', findings = [] } = {}) {
+function eventFile(dir: string, { body = 'clean review' }: { body?: string } = {}) {
   const eventPath = join(dir, 'event.json')
   writeFileSync(
     eventPath,
@@ -51,14 +57,14 @@ function eventFile(dir, { body = 'clean review', findings = [] } = {}) {
 // every plan.action branch in handle-review.mjs calls it. A real GITHUB_OUTPUT
 // path is required or appendFileSync(undefined, ...) throws before any
 // assertion runs. Same pattern as wait-ci-visible.test.ts's outPath.
-function outputFile(dir) {
+function outputFile(dir: string) {
   const outPath = join(dir, 'out.txt')
   writeFileSync(outPath, '')
   return outPath
 }
 
 describe('handle-review: round budget follows risk', () => {
-  let dir
+  let dir: string
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'ops-loop-hr-round-'))
@@ -79,8 +85,8 @@ describe('handle-review: round budget follows risk', () => {
     const eventPath = eventFile(dir, { body: 'P1 fix this' })
     // Two prior fix-dispatched rounds already on record for this PR (any sha) —
     // the third actionable review should hit the A-level cap of 2.
-    const priorRounds = [1, 2]
-      .map((round) => `<!-- ops-codex-loop:stage=fix-dispatched pr=7 sha=old${round} round=${round} -->`)
+    const priorRounds = [OLD_SHA_1, OLD_SHA_2]
+      .map((sha, index) => `<!-- ops-codex-loop:stage=fix-dispatched pr=7 sha=${sha} round=${index + 1} -->`)
       .join('\n')
     listIssueComments.mockResolvedValue([
       { user: { login: 'github-actions[bot]' }, body: `${gateMarker({ head: SHA, risk: 'A' })}\n${priorRounds}` },
@@ -102,7 +108,7 @@ describe('handle-review: round budget follows risk', () => {
 
   it('caps a C-level (or unrated) PR at 1 round', async () => {
     const eventPath = eventFile(dir, { body: 'P1 fix this' })
-    const priorRound = `<!-- ops-codex-loop:stage=fix-dispatched pr=7 sha=old1 round=1 -->`
+    const priorRound = `<!-- ops-codex-loop:stage=fix-dispatched pr=7 sha=${OLD_SHA_1} round=1 -->`
     listIssueComments.mockResolvedValue([
       { user: { login: 'github-actions[bot]' }, body: `${gateMarker({ head: SHA, risk: 'C' })}\n${priorRound}` },
     ])
@@ -121,7 +127,7 @@ describe('handle-review: round budget follows risk', () => {
 
   it('gives an unrated PR the smallest budget, not the largest', async () => {
     const eventPath = eventFile(dir, { body: 'P1 fix this' })
-    const priorRound = `<!-- ops-codex-loop:stage=fix-dispatched pr=7 sha=old1 round=1 -->`
+    const priorRound = `<!-- ops-codex-loop:stage=fix-dispatched pr=7 sha=${OLD_SHA_1} round=1 -->`
     // No trusted gate marker at all this time.
     listIssueComments.mockResolvedValue([{ user: { login: 'github-actions[bot]' }, body: priorRound }])
     listReviewComments.mockResolvedValue([])
@@ -140,7 +146,7 @@ describe('handle-review: round budget follows risk', () => {
 })
 
 describe('handle-review: the ready case runs the real quality gate', () => {
-  let dir
+  let dir: string
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'ops-loop-hr-ready-'))

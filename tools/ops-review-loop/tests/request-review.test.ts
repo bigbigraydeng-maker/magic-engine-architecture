@@ -10,13 +10,13 @@ const listIssueComments = vi.fn()
 const listPullRequestFiles = vi.fn()
 const listCheckRunsForRef = vi.fn()
 vi.mock('../src/github.mjs', () => ({
-  createIssueComment: (...args) => createIssueComment(...args),
-  listIssueComments: (...args) => listIssueComments(...args),
-  listPullRequestFiles: (...args) => listPullRequestFiles(...args),
-  listCheckRunsForRef: (...args) => listCheckRunsForRef(...args),
+  createIssueComment: (...args: unknown[]) => createIssueComment(...args),
+  listIssueComments: (...args: unknown[]) => listIssueComments(...args),
+  listPullRequestFiles: (...args: unknown[]) => listPullRequestFiles(...args),
+  listCheckRunsForRef: (...args: unknown[]) => listCheckRunsForRef(...args),
 }))
 
-function withEnv(overrides, run) {
+function withEnv(overrides: Record<string, string>, run: () => Promise<unknown>) {
   const original = { ...process.env }
   Object.assign(process.env, overrides)
   return run().finally(() => {
@@ -25,7 +25,7 @@ function withEnv(overrides, run) {
 }
 
 /** A sha (hex-shaped) that samples the given way for this PR number under the default 20% rate. */
-function shaSampledAs(pr, wantSampled) {
+function shaSampledAs(pr: number, wantSampled: boolean) {
   for (let i = 0; i < 10000; i++) {
     const sha = i.toString(16).padStart(40, '0')
     if (isSampled({ pr, sha }) === wantSampled) return sha
@@ -47,7 +47,7 @@ function resetMocks() {
 }
 
 describe('request-review: rating', () => {
-  let dir
+  let dir: string
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'ops-loop-rate-'))
@@ -105,7 +105,7 @@ describe('request-review: rating', () => {
 
     const ratingCall = createIssueComment.mock.calls.find(([, , , , body]) => body.includes('风险自动定级'))
     expect(ratingCall).toBeDefined()
-    expect(ratingCall[4]).toContain('PR 风险自动定级：A')
+    expect(ratingCall![4]).toContain('PR 风险自动定级：A')
   })
 
   it('does not re-post the rating when a trusted current gate marker already exists', async () => {
@@ -153,7 +153,7 @@ describe('request-review: rating', () => {
 })
 
 describe('request-review: Codex sampling', () => {
-  let dir
+  let dir: string
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'ops-loop-sample-'))
@@ -183,7 +183,7 @@ describe('request-review: Codex sampling', () => {
 
     const reviewCall = createIssueComment.mock.calls.find(([, , , , body]) => body.includes('@codex review'))
     expect(reviewCall).toBeDefined()
-    expect(reviewCall[0]).toBe('pat')
+    expect(reviewCall![0]).toBe('pat')
     // A always needs a review, so the CI-status short-circuit must never run.
     expect(listCheckRunsForRef).not.toHaveBeenCalled()
   })
@@ -253,7 +253,7 @@ describe('request-review: Codex sampling', () => {
 })
 
 describe('request-review: closes the race for unsampled C when CI is already green', () => {
-  let dir
+  let dir: string
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'ops-loop-race-'))

@@ -34,6 +34,7 @@ interface WorkflowStep {
 }
 interface WorkflowJob {
   if?: string
+  name?: string
   steps?: WorkflowStep[]
   permissions?: Record<string, string>
 }

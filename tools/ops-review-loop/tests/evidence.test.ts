@@ -137,6 +137,11 @@ describe('observedSpecializedEvidence', () => {
   })
 
   it('ignores an entry with no usable id', () => {
-    expect(observedSpecializedEvidence('- [x] whatever (x)', [{ id: '' }, { id: 42 }])).toEqual([])
+    // id: 42 is a deliberately illegal runtime value (the contract says
+    // `id: string`) — cast through `unknown` to bypass the compile-time
+    // contract without widening the production signature.
+    expect(
+      observedSpecializedEvidence('- [x] whatever (x)', [{ id: '' }, { id: 42 as unknown as string }]),
+    ).toEqual([])
   })
 })
