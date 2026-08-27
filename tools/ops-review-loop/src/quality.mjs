@@ -300,6 +300,82 @@ export function scoreDelivery({ signals = [] } = {}) {
 }
 
 /**
+ * Describe one missing evidence item, without trusting its shape.
+ *
+ * The blocker text is the only thing a human gets to act on. Interpolating
+ * `${m.id}（${m.label}）` on an item that has neither prints
+ * `undefined（undefined）` — a blocker that names nothing and cannot be
+ * cleared. Reporting "an item we cannot describe" is at least honest about
+ * what happened.
+ *
+ * @param {unknown} item
+ * @returns {string}
+ */
+function describeEvidenceItem(item) {
+  const id = item && typeof item.id === 'string' && item.id !== '' ? item.id : null
+  const label = item && typeof item.label === 'string' && item.label !== '' ? item.label : null
+  if (id && label) return `${id}（${label}）`
+  if (id) return id
+  return '一条说不出名字的证据项（评估结果结构不合法）'
+}
+
+/**
+ * Why an A-level PR's specialised-evidence evaluation does not clear the gate,
+ * or `null` if it genuinely does.
+ *
+ * 🔴 Codex finding on PR #1205 round 2. The previous shape asked the question
+ * backwards: it blocked only when it could *prove* something was missing, and
+ * passed by default otherwise. Three malformed evaluation objects therefore
+ * sailed a score-100 A-level PR straight to READY with zero blockers:
+ *
+ *   { readable: true }                              // no `missing` at all
+ *   { readable: true, missing: 'not-an-array' }     // `Array.isArray` false
+ *   { readable: true, missing: [], complete: false } // says so itself
+ *
+ * The first two are what a partially-built or partially-deserialised object
+ * looks like; the third is an evaluation openly reporting it did not finish.
+ * All three read as "nothing to report" to a check written as `else if
+ * (Array.isArray(x.missing) && x.missing.length > 0)`, because an absent or
+ * mistyped field makes that condition false — the same shape as success.
+ *
+ * So the question is asked the other way round. The gate clears only on a
+ * *positive* assertion of completeness from a structurally valid result:
+ * `readable === true`, `required` and `missing` both real arrays, `missing`
+ * empty, and `complete === true`. Anything else — malformed, inconsistent, or
+ * merely not-positively-complete — is a blocker. This is the same fail-closed
+ * rule `risk.mjs` applies to an unreadable file list, applied to the evidence
+ * side: "we could not tell" must never render as "there was nothing wrong".
+ *
+ * @param {unknown} specialized
+ * @returns {string|null}
+ */
+function specializedEvidenceProblem(specialized) {
+  if (!specialized || typeof specialized !== 'object') {
+    return 'A 级：命中风险对应的专项证据压根没算过 —— 按缺失处理'
+  }
+  if (specialized.readable !== true) {
+    return 'A 级：命中风险对应的专项证据读不到 —— 按缺失处理'
+  }
+  if (!Array.isArray(specialized.required) || !Array.isArray(specialized.missing)) {
+    return 'A 级：专项证据评估结果结构不合法（required / missing 不是数组）—— 按缺失处理'
+  }
+  if (specialized.missing.length > 0) {
+    return `A 级缺少命中风险对应的专项证据：${specialized.missing.map(describeEvidenceItem).join('、')}`
+  }
+  // Reached only when nothing is listed as missing. That is not the same as
+  // "everything required was found" — an evaluation that stopped early reports
+  // exactly this. Require it to say so itself.
+  if (specialized.complete !== true) {
+    return 'A 级：专项证据评估没有给出「已完成」的结论 —— 缺项列表为空不等于查全了，按缺失处理'
+  }
+  // A `missing.length > required.length` consistency check was written here and
+  // removed: by this point `missing` is empty, so it can never fire. The
+  // inverse inconsistency — `complete: true` alongside a non-empty `missing` —
+  // is already caught above, and correctly, by the missing-items branch.
+  return null
+}
+
+/**
  * Collect every hard-gate blocker. Returns all of them, not the first: a report
  * that names one blocker invites a fix-and-retry cycle that discovers the next
  * one only after another full round.
@@ -335,16 +411,10 @@ function hardGateBlockers({ risk, gates, observedSignals }) {
     if (missing.length > 0) {
       blockers.push(`A 级缺少必备证据：${missing.join('、')}`)
     }
-    // The category-matched half. `specialized` is required for an A-level PR:
-    // not passing it is "we did not check what this change owes", which fails
-    // closed rather than passing for free.
-    const specialized = g.specialized
-    if (!specialized || specialized.readable !== true) {
-      blockers.push('A 级：命中风险对应的专项证据读不到 —— 按缺失处理')
-    } else if (Array.isArray(specialized.missing) && specialized.missing.length > 0) {
-      const names = specialized.missing.map((m) => `${m.id}（${m.label}）`).join('、')
-      blockers.push(`A 级缺少命中风险对应的专项证据：${names}`)
-    }
+    // The category-matched half. The gate clears only on a positive, valid
+    // assertion of completeness — see `specializedEvidenceProblem`.
+    const problem = specializedEvidenceProblem(g.specialized)
+    if (problem) blockers.push(problem)
   }
   return blockers
 }

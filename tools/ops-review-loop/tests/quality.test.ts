@@ -304,6 +304,9 @@ describe('the A-level specialised-evidence hard gate', () => {
     expect(result.blockers.join('\n')).toContain('拒绝')
   })
 
+  // "Never evaluated" and "evaluated but unreadable" are different facts and get
+  // different diagnoses, for the same reason `risk.mjs` refuses to collapse
+  // "no files" into "read no files": they send a human to fix different things.
   it('blocks an A-level PR whose specialised evidence was never evaluated', () => {
     const { specialized: _dropped, ...withoutSpecialized } = cleanGates
     const result = decideReadiness({
@@ -313,7 +316,7 @@ describe('the A-level specialised-evidence hard gate', () => {
       observedSignals: ALL_SIGNALS,
     })
     expect(result.ready).toBe(false)
-    expect(result.blockers.join('\n')).toContain('专项证据读不到')
+    expect(result.blockers.join('\n')).toContain('压根没算过')
   })
 
   it('blocks an A-level PR whose specialised evidence could not be read', () => {
@@ -338,6 +341,130 @@ describe('the A-level specialised-evidence hard gate', () => {
       observedSignals: ALL_SIGNALS,
     })
     expect(result.blockers).toEqual([])
+  })
+
+  /**
+   * Codex round-2 finding on PR #1205, head d0c12486.
+   *
+   * The gate used to ask the question backwards: it blocked only when it could
+   * *prove* an item was missing, and passed by default otherwise. An absent or
+   * mistyped `missing` field makes `Array.isArray(x.missing) && x.missing.length
+   * > 0` false — which is the same answer success gives. So a partially-built,
+   * partially-deserialised, or openly-unfinished evaluation object took a
+   * score-100 A-level PR to READY with zero blockers.
+   *
+   * These are the three objects from that review, verbatim, plus the shapes
+   * around them. Each must block.
+   */
+  describe.each([
+    ['{readable:true} — no missing field at all', { readable: true }],
+    ['{readable:true, missing:"not-an-array"}', { readable: true, missing: 'not-an-array' }],
+    ['{readable:true, missing:[], complete:false}', { readable: true, missing: [], complete: false }],
+  ])('malformed evaluation: %s', (_label, specialized) => {
+    it('never reaches READY, even at 100 points with every other gate clean', () => {
+      const result = decideReadiness({
+        risk: 'A',
+        score: { total: 100 },
+        gates: { ...cleanGates, specialized },
+        observedSignals: ALL_SIGNALS,
+      })
+      expect(result.ready).toBe(false)
+      expect(result.decision).toBe('BLOCKED')
+      expect(result.blockers.length).toBeGreaterThan(0)
+    })
+  })
+
+  it.each([
+    ['required is not an array', { readable: true, required: 'nope', missing: [], complete: true }],
+    ['missing is not an array', { readable: true, required: [], missing: null, complete: true }],
+    ['both fields absent', { readable: true, complete: true }],
+  ])('blocks when the result is structurally invalid: %s', (_label, specialized) => {
+    const result = decideReadiness({
+      risk: 'A',
+      score: { total: 100 },
+      gates: { ...cleanGates, specialized },
+      observedSignals: ALL_SIGNALS,
+    })
+    expect(result.ready).toBe(false)
+    expect(result.blockers.join('\n')).toContain('结构不合法')
+  })
+
+  it.each([
+    ['complete: false', { readable: true, required: [], missing: [], complete: false }],
+    ['complete absent', { readable: true, required: [], missing: [] }],
+    ['complete: "true" as a string', { readable: true, required: [], missing: [], complete: 'true' }],
+    ['complete: 1', { readable: true, required: [], missing: [], complete: 1 }],
+  ])('requires a positive completion claim, not merely an empty missing list: %s', (_label, specialized) => {
+    // Structurally valid and nothing listed as missing — yet still blocked.
+    // "We found no missing items" and "we finished checking" are different
+    // claims, and an evaluation that stopped early reports exactly this shape.
+    const result = decideReadiness({
+      risk: 'A',
+      score: { total: 100 },
+      gates: { ...cleanGates, specialized },
+      observedSignals: ALL_SIGNALS,
+    })
+    expect(result.ready).toBe(false)
+    expect(result.blockers.join('\n')).toContain('已完成')
+  })
+
+  it('clears only on a structurally valid, positively complete result', () => {
+    const result = decideReadiness({
+      risk: 'A',
+      score: { total: 100 },
+      gates: { ...cleanGates, specialized: { readable: true, required: [], missing: [], complete: true } },
+      observedSignals: ALL_SIGNALS,
+    })
+    expect(result.blockers).toEqual([])
+    expect(result.decision).toBe('READY_FOR_PRODUCT_OWNER')
+  })
+
+  it('names an undescribable missing item honestly instead of printing "undefined（undefined）"', () => {
+    // Same boundary, found while reproducing the above: the blocker text is the
+    // only thing a human can act on, and interpolating id/label on an item that
+    // has neither produced a blocker naming nothing and clearable by nobody.
+    const result = decideReadiness({
+      risk: 'A',
+      score: { total: 100 },
+      gates: {
+        ...cleanGates,
+        specialized: { readable: true, required: [{}], missing: [{}], complete: true },
+      },
+      observedSignals: ALL_SIGNALS,
+    })
+    expect(result.ready).toBe(false)
+    expect(result.blockers.join('\n')).not.toContain('undefined')
+    expect(result.blockers.join('\n')).toContain('说不出名字')
+  })
+
+  it('still names a well-formed missing item by id and label', () => {
+    const result = decideReadiness({
+      risk: 'A',
+      score: { total: 100 },
+      gates: {
+        ...cleanGates,
+        specialized: evaluateSpecializedEvidence({
+          categories: [RISK_CATEGORY.MONEY],
+          observed: [],
+        }),
+      },
+      observedSignals: ALL_SIGNALS,
+    })
+    expect(result.blockers.join('\n')).toContain('money-evidence（')
+  })
+
+  it('accepts what evaluateSpecializedEvidence actually produces — the gate is not unpassable', () => {
+    // The other failure direction: a boundary this strict is worthless if the
+    // real producer cannot satisfy it. Every category, evaluated for real.
+    for (const category of Object.values(RISK_CATEGORY) as string[]) {
+      const result = decideReadiness({
+        risk: 'A',
+        score: { total: 90 },
+        gates: { ...cleanGates, specialized: allEvidenceFor([category]) },
+        observedSignals: ALL_SIGNALS,
+      })
+      expect(result.blockers, `${category} must be satisfiable`).toEqual([])
+    }
   })
 
   it('does not apply the specialised gate to B or C', () => {

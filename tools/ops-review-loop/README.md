@@ -50,7 +50,7 @@ forbids it, on top of whatever the Claude GitHub App's own token permits).
 ## Risk rating and delivery scoring — present, NOT yet wired
 
 `risk.mjs`, `sampling.mjs`, `quality.mjs` and `gate-marker.mjs` are in `src/`
-with 215 offline tests. **No workflow calls any of them yet.** They are on
+with 229 offline tests. **No workflow calls any of them yet.** They are on
 `main` first, on purpose: both loop workflows run `actions/checkout ref: main`,
 so a step that calls a brand-new module fails on the PR that introduces it,
 every time, until both halves are on main — the exact trap the inline
@@ -84,9 +84,21 @@ So `classifyRisk` reports categories, `SPECIALIZED_EVIDENCE` says what each one
 owes (`db-migration` → migration evidence, `control-plane` → control-plane
 evidence, `supply-chain` → dependency justification, and so on), and
 `evaluateSpecializedEvidence` compares required against observed. A category the
-table does not recognise owes an explicit manual sign-off rather than nothing,
-and *not having evaluated it at all* counts as missing — the caller cannot skip
-the check by omitting the input.
+table does not recognise owes an explicit manual sign-off rather than nothing.
+
+The gate clears **only on a positive, structurally valid claim of
+completeness**: `readable === true`, `required` and `missing` both real arrays,
+`missing` empty, and `complete === true`. Everything else blocks — not
+evaluated, unreadable, malformed, or merely not-positively-complete.
+
+That asymmetry is the whole point, and it was Codex's round-2 finding on
+PR #1205. The check used to block only when it could *prove* an item was
+missing; an absent or mistyped `missing` field made that condition false, which
+is the same answer success gives. Three malformed objects — `{readable: true}`,
+`{readable: true, missing: 'not-an-array'}`, and
+`{readable: true, missing: [], complete: false}` — therefore took a score-100
+A-level PR to READY with zero blockers. An empty missing list is not a claim
+that anything was checked.
 
 Two facts worth keeping, because both were measured rather than assumed:
 
