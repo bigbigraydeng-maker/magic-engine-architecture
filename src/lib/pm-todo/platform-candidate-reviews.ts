@@ -30,4 +30,8 @@ export const PLATFORM_CANDIDATE_REVIEWS: PlatformCandidateReview[] = [
     name: '借助 Claude Design 生成品牌 VI 视觉资产（logo · 品牌手册 · 视觉规范）',
     reviewDate: '2026-09-27',
   },
+  {
+    name: '从爆款库反推的客户级钩子生成器（读 viral_reference_library 类目 hook 类型分布 + 客户 brand voice + master_brief 卖点 → 生 3 条候选 hook 脚本 + 依据）',
+    reviewDate: '2026-09-28',
+  },
 ]

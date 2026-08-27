@@ -61,13 +61,14 @@
 | 候选名 | 建议层级 | 归属 | 来源客户 | 来源行业 | 硬证据进度 | 当前状态 | 首次登记日 | 复查日 | 登记人 | 备注 |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 借助 Claude Design 生成品牌 VI 视觉资产（logo · 品牌手册 · 视觉规范）| L1 Capability（候选 · 需硬证据）| 待定 · VI 不在 6 支柱 · **PM 拍板项** | HBay Water | 瓶装水 / FMCG | 1/2 行业（仅 HBay）| candidate | 2026-08-27 | 2026-09-27 | happy-cori-796b21 worktree | HBay Deploy 档扩展；PM 明确 ME 借助 Claude Design 做；未来 CTS / Roman / 其他客户若也用同类能力则可升 L1；Low bar 登记（skill v2 首例）|
+| 从爆款库反推的客户级钩子生成器（读 viral_reference_library 类目 hook 类型分布 + 客户 brand voice + master_brief 卖点 → 生 3 条候选 hook 脚本 + 依据）| L1 Capability（候选 · 需硬证据）| 社媒 + 广告 支柱 | CTS Tours NZ | 旅游 | 1/2 行业（仅 CTS）| candidate | 2026-08-28 | 2026-09-28 | elated-chebyshev-bd8da5 worktree · PM 拍板于 #1159 讨论 | 承接 #1159/#1199；CTS Golden China v2 用了 IG-vs-Reality 钩子验证过路子对；ME 现有 5 个 factory 模块都没读过 viral 库 hook 层；实现 Issue #1206；跨行业验证前先落 L2 旅游 Playbook 或 L4 CTS |
 
 <!--
 示例（不作为真实条目）：
 | 跨客户舆情监控引擎 | L1 Capability | AI 可见度 + 竞品 支柱 | CTS | 旅游 | 1/2 行业（仅 CTS） | candidate | 2026-08-27 | 2026-09-27 | happy-cori-796b21 worktree | 来自 HBay 诊断报告能力线 04 |
 -->
 
-*（第一条候选：HBay VI 视觉资产生成。Low bar 登记 · 待复查日 2026-09-27 由 L1 owner 评估晋升成熟度。）*
+*（候选 1：HBay VI 视觉资产生成 · 复查日 2026-09-27。候选 2：客户级钩子生成器 · 复查日 2026-09-28。）*
 
 ---
 
