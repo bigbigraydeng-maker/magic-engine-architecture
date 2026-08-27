@@ -53,6 +53,20 @@ forbids it, on top of whatever the Claude GitHub App's own token permits).
 ME2-OPS03 PR1 as pure, offline-tested modules with no workflow calling them.
 This PR (PR2) is the wiring:
 
+> ⚠️ **`.github/workflows/**` changes could not be pushed in this session.**
+> The Claude Code GitHub App installation used here has no `workflows`
+> permission, so the push of `ai-orchestrator-ci.yml` (adds this directory's
+> suite to the required check), `ops-fix-scope-guard.yml` (adds
+> `name: ops-fix-scope-guard`), the new `ops-dev-gate-recheck.yml`, and
+> `claude-code-review.yml`'s removal were all rejected — see the PR
+> description for the exact error and what is/isn't live as a result. The two
+> workflow files that only needed comment updates
+> (`ops-codex-request-review.yml`, `ops-codex-to-claude-fix.yml`) needed no
+> functional change, so `request-review.mjs` / `handle-review.mjs`'s new
+> behaviour below **is** live once this PR merges — only the CI-suite wiring,
+> the scope-guard check name, the unsampled-C recheck leg, and the dead
+> workflow's removal are waiting on that permission.
+
 - `request-review.mjs` (the push leg) rates every PR from its actual changed
   files, posts the rating once per base+head pair, then decides — via
   `sampling.mjs` — whether this head still needs a Codex review before asking
