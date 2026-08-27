@@ -122,6 +122,19 @@
 - [ ] **[P1] 发布失败后 approved 状态卡死、无重试入口**（同上文件 LinkedIn 分支）：Publer 调度超时/报错时，帖子已被原子认领改成 approved，这里只返 500 不回滚；无视频的 approved 帖子归"备料"段，确认按钮只在"选题"段显示，PM 修好连接后无法再确认，稿件永久卡住。要在确认外部未接受时回滚为 draft，或给 approved 提供幂等重试入口。
 - [ ] **[P2] 待办查询失败被当成"零条记录"**（`src/lib/pm-todo/manual-items.ts` `pushLinkedinProgressItems`）：那次 `content_posts` 查询若失败，Supabase 返回 `{data:null,error}` 不抛异常，这里只取 `data` 再 `?? []`，账号未连/敏感稿/已发未同步等卡点会全部静默从今日待办消失。要检查并抛 `error`。
 
+### Magic Picks Shopify 政策页替换（2026-08-27 登记，P1）
+
+草稿见 [docs/clients/magicpicks/2026-08-27-shopify-policies-draft.md](./clients/magicpicks/2026-08-27-shopify-policies-draft.md)。
+店里现存 3 个 Homara 遗留政策（主体名 / 币种 AUD / 地区 Brisbane-QLD 全部写错），发布干净主题前必须清理干净；
+ME 目前没有能直写 Shopify 店铺政策的接口（`write_legal_policies` 只是未来 capability 的候选名，还没实现），
+只能由 PM 手工到 Shopify Admin 逐段粘贴。
+
+- [ ] **PM 手工粘贴 6 段政策**（Contact / Refund / Privacy / Terms / Shipping，Subscription 留空）：
+      先跟客户确认 `[SUPPORT_EMAIL]` 等占位（草稿开头有清单），替换完照文档末尾的粘贴 checklist 逐段粘到
+      `Shopify Admin → Settings → Policies`，完成后勾掉这一条并从本清单删除
+- [ ] **确认业务承诺再发布**：14 天退货 / 12 个月保修 / 中午前当天发货 / 每单必有追踪，这几条会变成
+      对外合同条款，草稿里的「PM 业务承诺确认 checklist」必须逐条核实符合 Magic Picks 实际能力才能粘贴
+
 ### 广告引擎中心 — 已上线部分的收尾（2026-08-05）
 
 已上线（见 CHANGELOG）：每天扫在投广告的闸门 · ME 起草→建成暂停→过闸门→人点头才花钱 · `/dashboard/ad-approval`。

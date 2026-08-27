@@ -1,18 +1,20 @@
 # Magic Picks — Shopify 6 段政策页草稿 v1
 
 - **日期**：2026-08-27
-- **owner**：Claude Code 起草 · PM 到 Shopify Admin `/settings/legal` 逐段粘贴（无 Magic Engine Ops backend 集成前只能手工）
+- **owner**：Claude Code 起草 · PM 到 Shopify Admin `/settings/legal` 逐段粘贴（ME 目前没有能直接写 Shopify 店铺政策的接口 —— `write_legal_policies` 只是未来 ME Ops backend 上线后的目标 capability 名，现在还没实现，不能当成已有的自动执行入口）
+- **P1，必须进日常任务管道**：本文档只是草稿来源，不是任务本身 —— 已同步登记到 [docs/ROADMAP.md「近期待办」](../../ROADMAP.md#近期待办跨-phase-汇总) 的 Magic Picks 条目，粘贴完成前每次会话开工核对 ROADMAP 都会看到这条，不会死在这份 Markdown 里
 - **目的**：清理店里 3 个 Homara 遗留政策（Brisbane / QLD / ABC Plus Home / AUD），发布干净主题前必须完成
 - **市场**：NZ only（Consumer Guarantees Act 1993 · Privacy Act 2020 · Fair Trading Act 1986）
-- **待 PM 填入的占位**（4 个）：
+- **待 PM 填入的占位**（5 个）：
   - `[LEGAL_ENTITY]` — NZ 注册法人名（例："Magic Picks Ltd" 或个人 sole trader 名）
   - `[NZBN]` — New Zealand Business Number
   - `[GST_NUMBER]` — 若 GST 已注册（年营业额 ≥ NZD 60K 强制注册）
   - `[STREET_ADDRESS]` — Mt Wellington 仓库街道地址
+  - `[SUPPORT_EMAIL]` — Magic Picks/Jing's Pick 客户确认的客服/隐私联系邮箱（**不能用 `hello@magicengine.cloud`** —— 那是 Magic Engine 代理商共享邮箱，不是客户自己的客服邮箱，发布前必须先跟客户确认真实地址）
   - `[FREE_THRESHOLD_TBD]` — 免运门槛金额（当前 Shopify 有 NZ$0 rate 但阈值不明）
   - `[DATE]` — Last updated 日期，PM 粘贴当天填
 
-> 4 个占位替换完再粘。GST 若未注册就删掉那一行。
+> 5 个占位替换完再粘。GST 若未注册就删掉那一行。
 
 ---
 
@@ -23,7 +25,7 @@ Shopify Admin 路径：`Settings → Policies → Contact information → Edit`
 ```
 Trade name: Magic Picks
 Phone number:
-Email: hello@magicengine.cloud
+Email: [SUPPORT_EMAIL]
 Physical address: [STREET_ADDRESS], Auckland, New Zealand
 NZBN: [NZBN]
 GST number: [GST_NUMBER]
@@ -41,10 +43,10 @@ Shopify Admin 路径：`Settings → Policies → Refund policy → Edit`
 <p>We want you to love what you buy from Magic Picks. If you don't, here's how it works.</p>
 
 <h3>14-day returns on unopened items</h3>
-<p>Received an item and haven't opened the box? You have 14 days from delivery to send it back for a full refund. Email us first at hello@magicengine.cloud so we can arrange the return.</p>
+<p>Received an item and haven't opened the box? You have 14 days from delivery to send it back for a full refund. Email us first at [SUPPORT_EMAIL] so we can arrange the return.</p>
 
 <h3>Damaged in transit</h3>
-<p>If your order arrives damaged, message us within 48 hours with photos of the package and the item. We'll replace or refund — no debate.</p>
+<p>If your order arrives damaged, message us as soon as possible — ideally within 48 hours — with photos of the package and the item, so we can lodge a claim with the courier while it's fresh. This 48-hour window is a target for reporting, not a deadline that limits your rights: even if you notice the damage later, we'll still replace or refund a genuinely damaged item, and nothing here overrides your statutory remedies under the Consumer Guarantees Act 1993 (see below).</p>
 
 <h3>Manufacturing defects (12-month warranty)</h3>
 <p>Every product Magic Picks stocks comes with a 12-month warranty against manufacturing defects. If something breaks in normal use within that window, contact us with a photo or video and we'll replace or refund.</p>
@@ -56,7 +58,7 @@ Shopify Admin 路径：`Settings → Policies → Refund policy → Edit`
 <p>Nothing in this policy limits your rights under the Consumer Guarantees Act 1993. If a product isn't of acceptable quality, isn't fit for purpose, or doesn't match the description, you have statutory remedies regardless of what this policy says.</p>
 
 <h3>How to start a return</h3>
-<p>Email hello@magicengine.cloud with your order number and reason. We reply within 1-2 business days.</p>
+<p>Email [SUPPORT_EMAIL] with your order number and reason. We reply within 1-2 business days.</p>
 
 <h3>Who pays return shipping</h3>
 <ul>
@@ -114,7 +116,7 @@ Shopify Admin 路径：`Settings → Policies → Privacy policy → Edit`
   <li>Correct anything that's wrong</li>
   <li>Delete your information (subject to legal record-keeping requirements)</li>
 </ul>
-<p>Email hello@magicengine.cloud to make any of these requests.</p>
+<p>Email [SUPPORT_EMAIL] to make any of these requests.</p>
 
 <h3>Cookies</h3>
 <p>We use cookies to keep your cart working, remember your login, and understand how visitors use the site. You can disable cookies in your browser settings — some parts of the site may not work properly if you do.</p>
@@ -140,7 +142,7 @@ Shopify Admin 路径：`Settings → Policies → Terms of service → Edit`
 <p>These terms apply to every purchase you make from Magic Picks. By placing an order, you agree to these terms.</p>
 
 <h3>1. About us</h3>
-<p>Magic Picks is a New Zealand online store operated by [LEGAL_ENTITY] (NZBN: [NZBN]). Contact: hello@magicengine.cloud.</p>
+<p>Magic Picks is a New Zealand online store operated by [LEGAL_ENTITY] (NZBN: [NZBN]). Contact: [SUPPORT_EMAIL].</p>
 
 <h3>2. Orders</h3>
 <p>Your order is an offer to buy. A contract forms when we send you an order confirmation email. We may decline or cancel an order (e.g. pricing error, stock issue, suspected fraud). If we cancel, we refund you in full.</p>
@@ -221,10 +223,10 @@ Shopify Admin 路径：`Settings → Policies → Shipping policy → Edit`
 <p>If our courier tries to deliver and no one's home, they'll leave a card. Follow the instructions on the card to arrange redelivery or pickup.</p>
 
 <h3>Damaged in transit</h3>
-<p>Message us within 48 hours with photos of the package and item. See our Returns & Refund Policy for how we handle this.</p>
+<p>Message us as soon as possible — ideally within 48 hours — with photos of the package and item, so we can lodge a claim with the courier while it's fresh. See our Returns & Refund Policy for how we handle this and for your rights if you notice damage later.</p>
 
 <h3>Questions</h3>
-<p>Email hello@magicengine.cloud</p>
+<p>Email [SUPPORT_EMAIL]</p>
 
 <p><em>Last updated: [DATE]</em></p>
 ```
@@ -239,25 +241,29 @@ Magic Picks 当前**无订阅业务**（一次性买椅子/腰垫/太阳能等�
 
 ## PM 业务承诺确认 checklist（粘之前）
 
-草稿里内嵌了 4 个业务承诺（跟本 session 早前写进产品描述的 landing content 保持一致）。**如与实际 Magic Picks 商业模型不符必须先改**，否则粘贴后就变成合同条款：
+草稿里内嵌了 6 个业务承诺（跟本 session 早前写进产品描述的 landing content 保持一致）。**如与实际 Magic Picks 商业模型 / 仓库能力不符必须先改**，否则粘贴后就变成合同条款：
 
 - [ ] **14 天未拆封退货** —— 沿用 Jing 主理人叙事的承诺。若 Magic Picks 想 30 天或不接受 change-of-mind 退货必须改
 - [ ] **12 个月生产缺陷保修** —— 若供应商保修短于 12 个月，Magic Picks 得自吃差额或改承诺
-- [ ] **48 小时报损** —— 客户收到破损必须 48 小时内报，否则拒付。工业标准，可保留
+- [ ] **48 小时报损通知目标**（不是拒付门槛）—— 现在的措辞已改成「尽快、最好 48 小时内」报损方便我们跟承运商索赔，**不取消 CGA 下的法定权利**；晚报的破损索赔仍然有效，只是核实起来慢一点。确认这个措辞符合 Magic Picks 的实际处理方式
 - [ ] **1-2 个工作日邮件回复** —— 客服 SLA，人手够就保留
+- [ ] **[SUPPORT_EMAIL] 客服/隐私联系邮箱** —— 必须是 Magic Picks/Jing's Pick 自己的邮箱，不能用 Magic Engine 共享邮箱 `hello@magicengine.cloud`；退货资料、订单号、照片、隐私访问请求会直接发到这个地址，客户没确认前不能粘贴发布
+- [ ] **中午前下单当天发货** —— 需 PM 向仓库核实截单流程确实能保证中午前订单当天出库，做不到必须改承诺或删掉这句
 - [ ] **Auckland metro 次日达 / South Island 3-5 天** —— 假设 NZ Couriers 或类似档次。若 Magic Picks 用更慢的服务需改
+- [ ] **每单必有追踪链接** —— 需 PM 核实所用的配送服务/流程确实为每一单生成追踪链接，不是只有部分订单有追踪，做不到必须改承诺或删掉这句
 - [ ] **免运门槛数字** —— 现在 Shopify 里的 NZ$0 rate 阈值我没查到，PM 到 `Settings → Shipping and delivery` 里查现有值 → 反填进 shipping policy
 
 ---
 
 ## PM 粘贴 checklist
 
-粘之前先在文档头部把 4 个占位替换完，然后按顺序粘 5 段（Subscription 跳过）：
+粘之前先在文档头部把 5 个占位替换完，然后按顺序粘 5 段（Subscription 跳过）：
 
 - [ ] `[LEGAL_ENTITY]` 替换（Magic Picks 的 NZ 注册主体名）
 - [ ] `[NZBN]` 替换
 - [ ] `[GST_NUMBER]` 替换（未注册就把整行删了）
 - [ ] `[STREET_ADDRESS]` 替换
+- [ ] `[SUPPORT_EMAIL]` 替换（先跟 Magic Picks/Jing's Pick 确认客服/隐私联系邮箱，**不能用** `hello@magicengine.cloud`）
 - [ ] `[FREE_THRESHOLD_TBD]` 替换（去 Shopify Admin → Settings → Shipping and delivery 查现有 NZ$0 rate 的门槛）
 - [ ] `[DATE]` 替换（粘贴当天）
 - [ ] Contact info 粘贴（`Settings → Policies → Contact information`）
@@ -276,5 +282,5 @@ Magic Picks 当前**无订阅业务**（一次性买椅子/腰垫/太阳能等�
 
 - **platform-shared**：这套 6 段结构（Contact / Refund / Privacy / Terms / Shipping / Subscription）+ NZ 法律引用（CGA 1993 / Privacy Act 2020 / Fair Trading Act 1986）→ 未来所有 ME Commerce NZ 客户可复用模板，只换 trade name / legal entity / address / GST
 - **industry-specific**（`industry-playbook/commerce-market-nz`）：NZ GST 15% · 免运门槛 · 派送时效表 · 消费者权益引用
-- **client-specific**：Magic Picks 品牌名 · hello@magicengine.cloud 邮箱 · Mt Wellington 仓地址 · 12 月保修承诺
-- **未来 Magic Engine Ops backend 上线后**：这份草稿成为 ME `write_legal_policies` capability 的模板源 → 一键推送到任何 ME Commerce 客户店（`playbook Stage 07` 的 `master_briefs` → `capability: policy-page-writer` → Shopify Admin API）
+- **client-specific**：Magic Picks 品牌名 · 客户自己的客服/隐私联系邮箱（`[SUPPORT_EMAIL]`，需客户确认，不用 ME 共享邮箱）· Mt Wellington 仓地址 · 12 月保修承诺
+- **未来 Magic Engine Ops backend 上线后**（`write_legal_policies` 尚未实现，只是候选名）：这份草稿可以成为 ME 政策写入 capability 的模板源 → 一键推送到任何 ME Commerce 客户店（`playbook Stage 07` 的 `master_briefs` → `capability: policy-page-writer` → Shopify Admin API）；在此之前仍按本文档开头的「P1，必须进日常任务管道」处理，不当成已经能自动执行
