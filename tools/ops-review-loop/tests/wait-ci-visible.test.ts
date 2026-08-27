@@ -24,13 +24,17 @@ vi.mock('../src/github.mjs', () => ({
 }))
 
 const SHA = 'c'.repeat(40)
+const BASE = 'b'.repeat(40)
 
 function run(dir: string) {
   const eventPath = join(dir, 'event.json')
   writeFileSync(
     eventPath,
     JSON.stringify({
-      pull_request: { number: 931, head: { sha: SHA } },
+      // handle-review.mjs (ME2-OPS03 PR2) reads pull_request.base.sha at
+      // module load, for every plan.action branch — not just 'ready' — so
+      // this fixture needs it even though the wait-ci path never scores risk.
+      pull_request: { number: 931, head: { sha: SHA }, base: { sha: BASE }, body: '' },
       review: { id: 1, body: 'Codex Review: no findings worth flagging.' },
     }),
   )

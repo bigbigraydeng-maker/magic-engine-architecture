@@ -47,6 +47,16 @@ function eventFile(dir, { body = 'clean review', findings = [] } = {}) {
   return eventPath
 }
 
+// setOutput() (src/output.mjs) appends to $GITHUB_OUTPUT unconditionally —
+// every plan.action branch in handle-review.mjs calls it. A real GITHUB_OUTPUT
+// path is required or appendFileSync(undefined, ...) throws before any
+// assertion runs. Same pattern as wait-ci-visible.test.ts's outPath.
+function outputFile(dir) {
+  const outPath = join(dir, 'out.txt')
+  writeFileSync(outPath, '')
+  return outPath
+}
+
 describe('handle-review: round budget follows risk', () => {
   let dir
 
@@ -80,7 +90,7 @@ describe('handle-review: round budget follows risk', () => {
     getPullRequest.mockResolvedValue({ head: { sha: SHA } })
 
     await withEnv(
-      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputFile(dir) },
       () => import('../src/handle-review.mjs'),
     )
 
@@ -101,7 +111,7 @@ describe('handle-review: round budget follows risk', () => {
     getPullRequest.mockResolvedValue({ head: { sha: SHA } })
 
     await withEnv(
-      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputFile(dir) },
       () => import('../src/handle-review.mjs'),
     )
 
@@ -119,7 +129,7 @@ describe('handle-review: round budget follows risk', () => {
     getPullRequest.mockResolvedValue({ head: { sha: SHA } })
 
     await withEnv(
-      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputFile(dir) },
       () => import('../src/handle-review.mjs'),
     )
 
@@ -157,7 +167,7 @@ describe('handle-review: the ready case runs the real quality gate', () => {
     listPullRequestFiles.mockResolvedValue([{ filename: 'docs/x.md', status: 'modified' }])
 
     await withEnv(
-      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputFile(dir) },
       () => import('../src/handle-review.mjs'),
     )
 
@@ -200,7 +210,7 @@ describe('handle-review: the ready case runs the real quality gate', () => {
     ])
 
     await withEnv(
-      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath },
+      { GITHUB_TOKEN: 'tok', GITHUB_REPOSITORY: OWNER_REPO, GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: outputFile(dir) },
       () => import('../src/handle-review.mjs'),
     )
 

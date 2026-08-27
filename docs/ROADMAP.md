@@ -92,8 +92,6 @@
 - [ ] [#911](https://github.com/bigbigraydeng-maker/magic-engine/issues/911) / PR [#912](https://github.com/bigbigraydeng-maker/magic-engine/pull/912) OPS03 事件驱动 Issue 中继试点 —— ⚠️ 它写死的唯一标的 #910 **已关闭**，试点要么改标的要么归档
 - [ ] PR [#931](https://github.com/bigbigraydeng-maker/magic-engine/pull/931) OPS02「Codex 复审干净就自动合并」—— ⚠️ 前置未成立：唯一能给出「复审干净」信号的 `handle-review` 流水线**现在是坏的**（[#939](https://github.com/bigbigraydeng-maker/magic-engine/issues/939)：`.github/workflows/ops-codex-to-claude-fix.yml` 没传 `allowed_bots`，Codex 机器人一提意见就必挂，#935 / #936 均实测复现）。
       ✅ **兜底闸门这一条不是问题**：2026-08-12 实查，`main` 上有 **active 的 ruleset「Protect main」** —— 禁删、禁 force push、只许 merge commit、**所有复审线程必须解决**、`ai-orchestrator-tests` 必须过。（旧说法「GitHub Free 私有仓库开不了分支保护」已作废，ruleset 已对私有仓库开放。）
-- [ ] [#1208](https://github.com/bigbigraydeng-maker/magic-engine/issues/1208) ME2-OPS03 PR1（`risk.mjs`/`sampling.mjs`/`quality.mjs`/`gate-marker.mjs` 四个纯规则模块，PR #1205，**已合并**）→ [#1210](https://github.com/bigbigraydeng-maker/magic-engine/issues/1210) PR2 把它们接入 Claude→Codex→Claude 闭环（自动定级 · Codex 抽样 · 按风险限返修轮次 · 质量硬门禁 · `claude-code-review.yml` 停用 · `tools/ops-review-loop` 测试并入必过检查）——代码已在分支 `claude/issue-1210-20260827-1403` 完成，**待 Codex 对冻结 head 做一次 A 级集中复审 + PM 走 PR 流程合并**。本会话沙箱无出网权限，`npm ci`/`vitest`/`tsc`/`npm run build` 均未能在本地实际跑过，需要合并前有人在有网络的环境验证。
-
 ---
 
 ## 近期待办（跨 Phase 汇总）
