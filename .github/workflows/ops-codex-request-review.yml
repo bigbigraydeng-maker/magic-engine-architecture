@@ -41,13 +41,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  # Same literal group ops-dev-gate-recheck.yml uses for the same head sha
-  # (pinned by tools/ops-review-loop/tests/workflow-guards.test.ts). This
-  # leg's own CI-green fallback (see request-review.mjs's `else` branch) can
-  # write the exact same readiness verdict the recheck leg writes for an
-  # unsampled C-level PR; sharing the group serialises the two instead of
-  # relying on a read-before-write race that has no atomicity behind it.
-  group: ops-dev-gate-${{ github.event.pull_request.head.sha }}
+  group: ops-codex-review-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
