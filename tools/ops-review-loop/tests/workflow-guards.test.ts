@@ -420,10 +420,18 @@ describe('the dev-gate recheck workflow (unsampled C-level PRs)', () => {
   const RECHECK_PATH = join(ROOT, 'ops-dev-gate-recheck.yml')
   const recheck = load(RECHECK_PATH)
 
-  it('parses as YAML with a check_run trigger', () => {
+  it('parses as YAML with a workflow_run trigger scoped to ai-orchestrator CI', () => {
+    // Codex A-level finding on PR #1211: GitHub does not deliver `check_run`
+    // events for check suites GitHub Actions itself created (a deliberate
+    // anti-recursion rule), and ai-orchestrator-tests is exactly such a
+    // suite — a `check_run` trigger here would never fire in production.
+    // `workflow_run` has no such exclusion. Pinned here so nobody "simplifies"
+    // this back to check_run without re-reading why it was dead on arrival.
     expect(recheck.doc).toBeTruthy()
-    expect(Object.keys(recheck.triggers)).toEqual(['check_run'])
-    expect((recheck.triggers.check_run as { types: string[] }).types).toEqual(['completed'])
+    expect(Object.keys(recheck.triggers)).toEqual(['workflow_run'])
+    const trigger = recheck.triggers.workflow_run as { workflows: string[]; types: string[] }
+    expect(trigger.workflows).toEqual(['ai-orchestrator CI'])
+    expect(trigger.types).toEqual(['completed'])
   })
 
   it('never grants a forbidden write scope', () => {
@@ -449,9 +457,35 @@ describe('the dev-gate recheck workflow (unsampled C-level PRs)', () => {
     expect(checkout?.with?.ref).toBe('main')
   })
 
+  it('pins actions/checkout to a full commit SHA, never a moveable tag', () => {
+    // A-level control plane — no long-lived tag reference, same standard
+    // ai-orchestrator-ci.yml already holds itself to.
+    const checkout = recheck.steps.find((s) => s.uses?.startsWith('actions/checkout'))
+    const [, version] = (checkout?.uses ?? '').split('@')
+    expect(version, `${checkout?.uses} must be pinned to a 40-character commit SHA`).toMatch(/^[0-9a-f]{40}$/)
+  })
+
   it('runs recheck-readiness.mjs', () => {
     const step = recheck.steps.find((s) => s.run?.includes('recheck-readiness.mjs'))
     expect(step).toBeDefined()
+  })
+
+  it('shares its concurrency group literal with the request-review workflow for the same head sha', () => {
+    // Codex A-level finding on PR #1211: request-review.mjs's CI-green
+    // fallback and this recheck leg can both write the same PR's readiness
+    // verdict for the same head sha. Read-before-write is not atomic on its
+    // own; what makes it safe is the two workflows sharing one concurrency
+    // group so GitHub serialises them. Pinned as an exact string match (with
+    // each workflow's own event field substituted) so the two cannot drift
+    // apart silently.
+    const recheckGroup = recheck.doc.concurrency?.group ?? ''
+    const requestGroup = request.doc.concurrency?.group ?? ''
+    expect(recheckGroup).toBe('ops-dev-gate-${{ github.event.workflow_run.head_sha }}')
+    expect(requestGroup).toBe('ops-dev-gate-${{ github.event.pull_request.head.sha }}')
+    expect(recheck.doc.concurrency?.['cancel-in-progress']).toBe(false)
+    expect(request.doc.concurrency?.['cancel-in-progress']).toBe(false)
+    const literalPrefix = (group: string) => group.replace(/\$\{\{[^}]*\}\}/, '<head-sha>')
+    expect(literalPrefix(recheckGroup)).toBe(literalPrefix(requestGroup))
   })
 })
 
