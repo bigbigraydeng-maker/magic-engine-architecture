@@ -35,8 +35,15 @@ function shaSampledAs(pr: number, wantSampled: boolean) {
 
 const OWNER_REPO = 'bigbigraydeng-maker/magic-engine'
 const BASE = 'b'.repeat(40)
-const CI_NOT_GREEN_YET = []
-const CI_GREEN = [{ name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'success' }]
+
+interface CheckRun {
+  name: string
+  status: string
+  conclusion: string | null
+}
+
+const CI_NOT_GREEN_YET: CheckRun[] = []
+const CI_GREEN: CheckRun[] = [{ name: 'ai-orchestrator-tests', status: 'completed', conclusion: 'success' }]
 
 function resetMocks() {
   createIssueComment.mockClear()
