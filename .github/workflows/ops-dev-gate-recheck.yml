@@ -1,0 +1,55 @@
+name: OPS — Dev Gate Recheck
+
+# Part of ME2-OPS03 PR2. See tools/ops-review-loop/src/recheck-readiness.mjs
+# for the full reasoning; summary:
+#
+# The review-triggered leg (ops-codex-to-claude-fix.yml) only posts a
+# READY/BLOCKED verdict when a Codex review actually lands. A C-level PR the
+# stable 20% sample (sampling.mjs) does not select never receives one, so
+# nothing would otherwise re-evaluate it once required CI goes green — the
+# "skip Codex and nobody ever re-triggers it" outcome the spec forbids.
+#
+# This workflow closes that gap: on every completed check run in the repo, it
+# hands off to the script, which does all the real filtering (required-check
+# name, PR eligibility, whether a Codex review is actually owed). Every A/B
+# PR and every sampled C is left entirely to the review-triggered leg — see
+# the script's header comment for why the two never race.
+#
+# check_run fires for every workflow's check runs repo-wide, so this job
+# starts often and exits immediately for anything that is not the required
+# check. That is a deliberate trade of a few seconds of runner time per
+# irrelevant check run for not needing any additional trigger wiring.
+#
+# It never merges, deploys, applies a migration, or touches production. Its
+# only possible write is one PR comment.
+
+on:
+  check_run:
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: read
+
+concurrency:
+  group: ops-dev-gate-recheck-${{ github.event.check_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  recheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Checked out from main, not any PR head, for the same reason as the
+      # sibling loop workflows: this control-plane script must not be
+      # influenced by the PR it is evaluating.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Re-evaluate readiness for unsampled C-level PRs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node tools/ops-review-loop/src/recheck-readiness.mjs
