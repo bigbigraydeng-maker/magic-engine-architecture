@@ -5,26 +5,47 @@
  *   dispatch-fix  -> the workflow invokes claude-code-action directly with
  *                    the aggregated findings as its prompt, then a separate
  *                    step (mark-fix-outcome.mjs) records success/failure
- *   needs-human   -> post "NEEDS HUMAN REVIEW" and stop (3 rounds already used)
- *   ready         -> post "READY FOR PRODUCT OWNER" (no actionable findings, CI green)
+ *   needs-human   -> post "NEEDS HUMAN REVIEW" and stop (round budget used up)
+ *   ready         -> no actionable findings, CI green: evaluate delivery
+ *                    quality (quality.mjs) and post READY FOR PRODUCT OWNER
+ *                    or BLOCKED — see the `case 'ready'` handler below
  *   wait-ci       -> no actionable findings, and required CI still hasn't
  *                    gone green after polling within this run
  *   skip          -> this head sha already has a marker for the stage we'd write
  *
  * It never merges, deploys, applies a migration, or resolves a review thread.
- * `plan.mjs` holds the actual decision logic and is unit-tested in isolation;
- * this file is the I/O glue around it.
+ * `plan.mjs` holds the dispatch/round-cap decision logic and is unit-tested
+ * in isolation; this file is the I/O glue around it.
+ *
+ * Round budget (ME2-OPS03 PR2): replaces the flat `MAX_ROUNDS = 3` with
+ * `maxRoundsForRisk(risk)` (A=2, B=1, C=1), where `risk` is read off the
+ * current trusted `me-dev-gate` marker — the same one `request-review.mjs`
+ * posts on every push. No current trusted marker for this exact head (should
+ * not happen in normal operation, since rating runs on every push before a
+ * review can land, but a marker can be missing, stale, or untrusted) means
+ * `risk` is `undefined`, and `maxRoundsForRisk` gives that the smallest
+ * budget rather than the largest — fail closed, an unrated PR must not buy
+ * more unattended pushes than a known-A one gets.
  */
 import { readFileSync } from 'node:fs'
-import { createIssueComment, getPullRequest, listCheckRunsForRef, listIssueComments, listReviewComments } from './github.mjs'
+import {
+  createIssueComment,
+  getPullRequest,
+  listCheckRunsForRef,
+  listIssueComments,
+  listReviewComments,
+} from './github.mjs'
 import { buildMarker, parseMarkers } from './markers.mjs'
 import { decideStage } from './plan.mjs'
 import { setOutput } from './output.mjs'
 import { buildFixPrompt } from './prompt.mjs'
 import { waitForRequiredCheck } from './poll.mjs'
 import { isActionable } from './severity.mjs'
+import { maxRoundsForRisk } from './risk.mjs'
+import { isGateCurrent, selectTrustedGateMarkers } from './gate-marker.mjs'
+import { buildVerdictComment } from './verdict.mjs'
+import { TRUSTED_GATE_AUTHORS } from './trust.mjs'
 
-const MAX_ROUNDS = 3
 // Matches the job name in ai-orchestrator-ci.yml ("ai-orchestrator-tests") or
 // the workflow name shown in the Checks tab ("ai-orchestrator CI") — whichever
 // GitHub surfaces as the check-run `name`.
@@ -42,6 +63,8 @@ const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/')
 const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'))
 const pr = event.pull_request.number
 const sha = event.pull_request.head.sha
+const base = event.pull_request.base.sha
+const prBody = event.pull_request.body ?? ''
 const review = event.review
 
 const [issueComments, reviewComments, initialCheckRuns] = await Promise.all([
@@ -51,6 +74,17 @@ const [issueComments, reviewComments, initialCheckRuns] = await Promise.all([
 ])
 
 const markers = parseMarkers(issueComments.map((c) => c.body))
+
+// The risk this PR is rated at, from the same trusted-marker mechanism
+// request-review.mjs writes to. Bound to THIS exact head — a rating for an
+// older sha does not count (`isGateCurrent`).
+const trustedGates = selectTrustedGateMarkers({
+  sources: issueComments.map((c) => ({ author: c.user?.login ?? null, body: c.body })),
+  trustedAuthors: TRUSTED_GATE_AUTHORS,
+})
+const currentGate = trustedGates.find((g) => isGateCurrent(g, { base, head: sha }))
+const risk = currentGate?.risk
+const MAX_ROUNDS = maxRoundsForRisk(risk)
 
 const findingCandidates = [
   { source: 'review summary', body: review.body ?? '' },
@@ -130,7 +164,7 @@ switch (plan.action) {
       owner,
       repo,
       pr,
-      `**NEEDS HUMAN REVIEW**\n\nCodex has raised actionable findings for ${MAX_ROUNDS} automated fix rounds without a clean review. Stopping automation here — please review manually.\n\n${marker}`
+      `**NEEDS HUMAN REVIEW**\n\nCodex has raised actionable findings for ${MAX_ROUNDS} automated fix round(s) (risk level ${risk ?? 'unknown'}) without a clean review. Stopping automation here — please review manually.\n\n${marker}`
     )
     setOutput('action', 'needs-human')
     break
@@ -202,15 +236,39 @@ switch (plan.action) {
     break
   }
   case 'ready': {
-    const marker = buildMarker({ stage: 'ready', pr, sha })
-    await createIssueComment(
+    // ME2-OPS03 PR2: no actionable Codex findings and required CI is green is
+    // no longer enough on its own to say READY. Score delivery quality
+    // (quality.mjs, via the shared verdict.mjs) and run the hard gates — the
+    // same wiring recheck-readiness.mjs uses for the unsampled-C path — and
+    // post whichever of READY FOR PRODUCT OWNER / BLOCKED the evidence
+    // actually supports. A missing/stale trusted gate marker (`risk` is
+    // `undefined`, `currentGate` is falsy) is not special-cased away here —
+    // it flows into `shaMatches: false`, which is itself a hard-gate blocker.
+    const { decision, comment } = await buildVerdictComment({
       token,
       owner,
       repo,
-      pr,
-      `**READY FOR PRODUCT OWNER**\n\nCodex reports no actionable P0/P1/P2 findings and required CI is green. This automation never merges — a human must take it from here.\n\n${marker}`
-    )
-    setOutput('action', 'ready')
+      prNumber: pr,
+      prBody,
+      base,
+      sha,
+      risk: risk ?? null,
+      shaMatches: Boolean(currentGate),
+      checkRuns: latestCheckRuns,
+      requiredCiPassed: ciSuccess,
+      openBlockerCount: actionableFindings.length,
+    })
+    // Terminal for this sha either way (READY or BLOCKED): a future push
+    // creates a new sha and this whole evaluation runs fresh. Reusing the
+    // 'ready' stage name for both outcomes keeps plan.mjs's dedup
+    // (`hasMarkerForSha('ready')`) untouched — that marker means "a readiness
+    // verdict was posted for this sha", not literally "approved". It is a
+    // different marker family from the `me-dev-gate` one `buildVerdictComment`
+    // already embeds (that one carries the score/decision payload; this one is
+    // what plan.mjs's dedup actually parses), so both are appended below.
+    const stageMarker = buildMarker({ stage: 'ready', pr, sha })
+    await createIssueComment(token, owner, repo, pr, `${comment}\n${stageMarker}`)
+    setOutput('action', decision.decision === 'READY_FOR_PRODUCT_OWNER' ? 'ready' : 'blocked')
     break
   }
   case 'dispatch-fix': {

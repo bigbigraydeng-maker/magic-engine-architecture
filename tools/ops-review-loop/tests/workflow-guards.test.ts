@@ -389,9 +389,72 @@ describe('the smoke-test workflow', () => {
   })
 })
 
-describe('the round cap is 3 in the source that actually enforces it', () => {
-  it('handle-review.mjs defines MAX_ROUNDS = 3', () => {
+describe('the round cap follows risk, not a flat number (ME2-OPS03 PR2)', () => {
+  it('handle-review.mjs no longer hard-codes MAX_ROUNDS = 3', () => {
     const source = readFileSync(join(process.cwd(), 'tools/ops-review-loop/src/handle-review.mjs'), 'utf8')
-    expect(source).toMatch(/const MAX_ROUNDS = 3\b/)
+    expect(source).not.toMatch(/const MAX_ROUNDS = 3\b/)
+  })
+
+  it('handle-review.mjs derives its round budget from maxRoundsForRisk, not a literal', () => {
+    const source = readFileSync(join(process.cwd(), 'tools/ops-review-loop/src/handle-review.mjs'), 'utf8')
+    expect(source).toMatch(/import \{[^}]*maxRoundsForRisk[^}]*\} from '\.\/risk\.mjs'/)
+    expect(source).toContain('maxRoundsForRisk(risk)')
+  })
+})
+
+describe('the required check now also runs tools/ops-review-loop (ME2-OPS03 PR2)', () => {
+  it('ai-orchestrator-ci.yml runs this tool\'s test suite too, in the same required job', () => {
+    // Deliberately in the SAME step as tools/ai-orchestrator's own suite, not a
+    // second workflow: a separate, unrequired workflow running the same tests
+    // would let the exact scenario workflow-guards.test.ts's "guard script must
+    // exist" assertion cares about (deleting check-fix-scope.mjs from main) pass
+    // silently. See ops-fix-scope-guard.yml and this file's own header comment.
+    const ciSource = readFileSync(join(process.cwd(), '.github/workflows/ai-orchestrator-ci.yml'), 'utf8')
+    expect(ciSource).toContain('npx vitest run tools/ai-orchestrator tools/ops-review-loop')
+  })
+})
+
+describe('the dev-gate recheck workflow (unsampled C-level PRs)', () => {
+  const RECHECK_PATH = join(ROOT, 'ops-dev-gate-recheck.yml')
+  const recheck = load(RECHECK_PATH)
+
+  it('parses as YAML with a check_run trigger', () => {
+    expect(recheck.doc).toBeTruthy()
+    expect(Object.keys(recheck.triggers)).toEqual(['check_run'])
+    expect((recheck.triggers.check_run as { types: string[] }).types).toEqual(['completed'])
+  })
+
+  it('never grants a forbidden write scope', () => {
+    expect(recheck.doc.permissions).toBeDefined()
+    for (const scope of FORBIDDEN_WRITE_SCOPES) {
+      expect(recheck.doc.permissions?.[scope]).not.toBe('write')
+    }
+  })
+
+  it('has no contents: write', () => {
+    expect(recheck.doc.permissions?.contents).not.toBe('write')
+  })
+
+  it('contains no merge, deploy, or migration operation', () => {
+    const lower = recheck.source.toLowerCase()
+    for (const term of DANGEROUS_SUBSTRINGS) {
+      expect(lower, `${recheck.path} must not contain "${term}"`).not.toContain(term)
+    }
+  })
+
+  it('checks out the control-plane script from main, not any PR head', () => {
+    const checkout = recheck.steps.find((s) => s.uses?.startsWith('actions/checkout'))
+    expect(checkout?.with?.ref).toBe('main')
+  })
+
+  it('runs recheck-readiness.mjs', () => {
+    const step = recheck.steps.find((s) => s.run?.includes('recheck-readiness.mjs'))
+    expect(step).toBeDefined()
+  })
+})
+
+describe('the fix-scope-guard job carries a stable check name verdict.mjs relies on', () => {
+  it('ops-fix-scope-guard.yml names its job ops-fix-scope-guard', () => {
+    expect(scope.doc.jobs?.['fix-scope']?.name).toBe('ops-fix-scope-guard')
   })
 })
